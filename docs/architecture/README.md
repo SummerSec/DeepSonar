@@ -1,7 +1,7 @@
 # DeepSonar 系统架构设计
 
 > 状态：**v0.6.3 集成分支 as-built 与规范索引**。覆盖根工作树已实现边界；质量缺口及待验收范围单独列出，不表示全部 issue 或当前组合已交付。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 面向内部开发者和编码 Agent。先读 [DESIGN](../../DESIGN.md) 摘要，再按需求或主题定位；本目录不改变产品行为。需求组织参考 ISO/IEC/IEEE 29148，视图借鉴 arc42 / C4，关注点分离参考 ISO/IEC/IEEE 42010；这不是标准符合性认证。
 
@@ -10,7 +10,7 @@
 #757 凭据先行解析已同步到 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时视图](06-runtime-view.md#凭据与-cli-解析757)、[数据架构](08-data-architecture.md)、[接口规范](09-interface-specs.md)及追溯矩阵；测试入口表示可复验方法，运行结果以 PR 验收记录为准。
 
 
-#770 A 来源幂等与不可变历史对应 FR-FIND-002；#819 操作员见证身份 manifest/mapping CAS、有界一致查询及持久关系计算对应 FR-FIND-009 与 [ADR 0014](adr/0014-operator-finding-identity.md)。工程已接线，独立外部官方真实性未认证；受治理质量评估/独立评审/晋升撤销与公开发布路径尚缺，真实标签、家族/资产隔离调参/留出及预冻结阈值也缺失，强关系质量和生产建议未交付。见[数据架构](08-data-architecture.md)、[质量属性](04-quality-attributes.md)及[风险](12-risks-and-tech-debt.md)。
+#770 A 来源幂等与不可变历史对应 FR-FIND-002；#819 操作员见证身份 manifest/mapping CAS、有界一致查询及持久关系计算对应 FR-FIND-009 与 [ADR 0014](adr/0014-operator-finding-identity.md)。工程已接线，独立外部官方真实性未认证；受治理质量评估/独立评审/晋升撤销与公开发布路径尚缺，真实标签、家族/资产隔离调参/留出及预冻结阈值也缺失，强关系质量和生产建议未交付。见[数据架构](08-data-architecture.md)、[质量属性](04-quality-attributes.md)及[风险](12-risks-and-tech-debt.md)。 2026-11-01: the [shared deployed raw-SQL selector](../../apps/scheduler/src/domains/project-finding-research/strong-candidate-selector.ts) is extracted and reused by the worker; this is only an engineering prerequisite, not the missing [governed actual-SQL quality evaluator/protocol/review/promotion/revoke or genuine independent inputs](../PROJECT_FINDING_EVALUATION.md).
 
 
 #767 可选任务下发契约已同步到 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)、接口/运行时/数据视图及追溯矩阵；可选自由文本、未知条件拒绝与质量评测限制见[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
@@ -20,6 +20,8 @@
 #815 Pi 会话观测记忆的注册/冻结、Gateway workload/账本与 wrapper/RPC 工程已进入根工作树，见 FR-CAP-009 和 [ADR 0013](adr/0013-governed-pi-memory.md)。有限总额必须显式分配，不推导百分比。实际本地 base 镜像的 canonical RPC、独立生产内容 guard 正负例及封装/OM 专属版本准入/适配器回归已通过，完整身份、场景和分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；历史 Session HTTP 脱敏与 Gateway 已知请求前 transport/持久结算、防冒充也已核验，见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。最终组合 CI、发布通道/平台及 registry/catalog 证据未完成，不能以本地 image ID 宣称发布或质量/成本收益。
 
 #830 将[注意力原则](../../DESIGN.md#核心理念优化人的注意力)集中定义在 DESIGN；开发入口和贡献指引复用[工程评审与示例](11-engineering-specs.md#11-注意力成本评审830)，映射 NFR-UX-001、03/04/11 与追溯矩阵。仅落实设计/开发约束，不新增运行时、UI、权限或收益承诺。
+
+OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/10 and the [upgrade record](../OPENSANDBOX_1_2_UPGRADE.md): explicit SDK `wakeRetryEnabled=false`, unchanged direct deployment and kernel recovery; local SDK unit verification is not pinned-server/live/native or final-SHA CI acceptance.
 
 ## 1. 阅读路径与目录
 
@@ -60,13 +62,14 @@
 | API 与修复 | 09；[OpenAPI](../../apps/scheduler/src/openapi.ts) / shared-types | §7、§8 控制通道 | 已迁入；字段由机器契约维护 |
 | CLI 与运行上下文 | [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[runtime context](../AGENT_RUNTIME_CONTEXT.md)、[profiles](../AGENT_RUNTIME_PROFILES.md) | §8.1–8.2 | 专题保留权威，03/05/09 引用 |
 | 镜像与部署 | 07；[镜像目录契约](../RUNTIME_IMAGE_REGISTRY_CONTRACT.md)、[部署](../ONE_CLICK_DEPLOYMENT.md) | §8.3、§9 资源 | 已迁入概览，专题保留细则 |
+| OpenSandbox upgrade | IR-001/003; 06/07/10; [upgrade record](../OPENSANDBOX_1_2_UPGRADE.md), [canonical pins](../../packages/runtime-sandbox/src/opensandbox-version.ts) | Historical versions retained | SDK/images updated; direct ingress and Scheduler recovery unchanged; local unit vs actual server/live/native/final-SHA proof separated |
 | 资源阈值与性能 | 04；[config](../../apps/scheduler/src/config.ts) | §9.2、§12 | 已迁入；不沿用旧默认值清单 |
 | 安全与隔离 | 10；[设备边界](../DEVICE_ACCESS.md)、[共享资产](../SHARED_ASSET_BLOB_STORE.md) | §9.1 | 概览已迁入，专题保留细则 |
 | 项目 Memory / Skill | 01 中 FR-KNOW；05–10 相关视图；[项目知识专题](../PROJECT_KNOWLEDGE.md) | 本期新增 | #752 分支实现与验证范围分开记录；专题拥有工作流和字段细则 |
 | 可信目标执行授权 | FR-TASK-006；06/09/10；[ADR-0011](adr/0011-trusted-target-authorization.md)、[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md) | 本期新增 | 只读 authority、immutable grant、中央继承、实时重核；不执行目标动作 |
 | Plan v2 有界执行 | FR-CAP-006、FR-HUB-002/003/005；06/08/09；[ADR-0012](adr/0012-plan-v2-execution.md)、[Plan 专题](../PLAN_GAP_PROJECTION.md) | 本期新增 | 当前写入只接收 v2；objective CAS、lifetime 预算与实际输出来源；writer 已物理删除（2026-10-31），本地 replay/negative gate 已验，最终组合 CI 与精确 HEAD 报告仍待验 |
 | Pi 会话观测记忆 | FR-CAP-009、FR-IMG-003、FR-JOB-009/013、FR-CRED-003/004；05/07/10/12；[ADR-0013](adr/0013-governed-pi-memory.md)、[集成专题](../PI_OBSERVATIONAL_MEMORY_INTEGRATION.md)、[镜像/RPC 证据](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收) | 本期新增 | 与项目知识分责；本地实际镜像 RPC、独立生产内容守卫与 OM 专属版本准入已验，最终 CI/发布通道/平台与收益另计 |
-| 操作员身份与强关系工程 | FR-FIND-007/009；04/08/09/12；[ADR-0014](adr/0014-operator-finding-identity.md)、[研究专题](../PROJECT_FINDING_RESEARCH.md) | 本期新增 | 来源登记/CAS/失效与持久计算已接线，外部官方真实性和独立质量不由管理员准入证明 |
+| 操作员身份与强关系工程 | FR-FIND-007/009；04/08/09/12；[ADR-0014](adr/0014-operator-finding-identity.md)、[研究专题](../PROJECT_FINDING_RESEARCH.md) | 本期新增 | 来源登记/CAS/失效与持久计算已接线，外部官方真实性和独立质量不由管理员准入证明; shared raw-SQL selector reuse is an engineering prerequisite only; governed actual-SQL quality software and independent inputs remain missing |
 | 独立程序资格 | FR-FIND-008；08/09/10；[资格专题](../PROGRAM_ELIGIBILITY.md)、[ADR-0010](adr/0010-program-eligibility-authority.md) | 本期新增 | 操作员材料准入、评审与当前投影；不代替技术 Verify 或目标执行授权 |
 | 风险、路线与取舍 | 12、ADR；[长期提案](../AI_NATIVE_TRUSTED_KERNEL.md) | §10、§13–16 | 旧开工顺序与 MVP 结论只作历史 |
 | 工程与发布 | 11；[发布硬门](../RELEASE_RUNTIME_IMAGES.md)、AGENTS 执行摘要 | §17.5 | 入口已迁入，发布专题与执行红线保持有效 |

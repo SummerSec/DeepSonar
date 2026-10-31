@@ -47,6 +47,8 @@ function connectionConfig(connection: OpenSandboxConnection): ConnectionConfig {
     protocol: connection.protocol ?? "http",
     useServerProxy: connection.useServerProxy ?? true,
     disableMetrics: true,
+    // Scheduler owns recovery; do not silently replay SDK requests.
+    wakeRetryEnabled: false,
     requestTimeoutSeconds: 180,
   });
 }

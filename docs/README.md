@@ -1,7 +1,7 @@
 # DeepSonar 文档索引
 
 > 状态：v0.6.3 集成文档索引；根工作树实现、历史验证和当前验收缺口分别记录。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 > **注意力原则（#830）**：单一权威定义见 [DESIGN](../DESIGN.md#核心理念优化人的注意力)，开发与贡献入口引用同一[工程评审及正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)。NFR-UX-001 登记约束与验证范围；本次只落实设计/评审依据，不改变运行时、UI 或授权，也不宣称注意力收益。
 
@@ -10,7 +10,7 @@
 > **任务下发（2026-10-29，#767）**：可选版本化契约、共享场景模板、结构化补充建议及派发前复核见[下发指南](../skills/deepsonar-management/references/task-dispatch.md)与 [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。结构化一致性与真实模型质量收益分开验收；未知身份/写权限不当作已授权。
 > **Plan v2（#775）**：当前执行接口只接收 v2，v1 的目标边界是不可变历史只读；普通 Hub 的 v1 writer 已在 2026-10-31 物理删除，历史 `hub_intent_adapter` audit 仍只读。用户 objective CAS、有限 lifetime 预算、多轮路线及留存输出检查复用既有 Intent admission；当前 owner/Canvas/项目绑定的 continue 事件消费水位防止终态和重启重计，单元回归已验、新 SQL 场景最终 SHA CI 待验；工程 complete 和输出关联不授予语义完成 authority，仍需全判据当前正向操作员授权。根本地回放已完成 normal→all7negative→normal 三次退出 0，当前 v2 SQL/HTTP fixture 的 17 个 outcomes/traces 与七个注入故障门禁匹配；artifact 报告 provenance 不是 `5619154f` 的精确 SHA，最终组合 CI 仍未验收。见 [ADR 0012](architecture/adr/0012-plan-v2-execution.md)、[运行时](architecture/06-runtime-view.md)与 [Plan 专题](PLAN_GAP_PROJECTION.md)。
 
-> **Finding 身份与关系（2026-10-31，#770/#819）**：来源幂等、不可变历史、词法检索与弱候选已实现。#819 又接通操作员见证身份 manifest、不变 revision、mapping CAS/freshness/撤销、有界一致读取与 durable worker；管理员准入不认证外部官方真实性。强关系发布关闭，quality=unknown / not_evaluated；真实人工标签、问题家族/资产隔离调参/留出及预冻结阈值仍缺失，质量与生产建议未交付，不能把 #819 记为全部完成。见 [FR-FIND-007](architecture/01-system-specification.md#fr-find-007-可重建特征与关联质量边界)、[FR-FIND-009](architecture/01-system-specification.md#fr-find-009-操作员见证身份与跨任务关联)、[ADR 0014](architecture/adr/0014-operator-finding-identity.md)及[风险](architecture/12-risks-and-tech-debt.md)。
+> **Finding 身份与关系（2026-11-01，#770/#819）**：来源幂等、不可变历史、词法检索与弱候选已实现。#819 又接通操作员见证身份 manifest、不变 revision、mapping CAS/freshness/撤销、有界一致读取与 durable worker；管理员准入不认证外部官方真实性。强关系发布关闭，quality=unknown / not_evaluated；真实人工标签、问题家族/资产隔离调参/留出及预冻结阈值仍缺失，质量与生产建议未交付，不能把 #819 记为全部完成。见 [FR-FIND-007](architecture/01-system-specification.md#fr-find-007-可重建特征与关联质量边界)、[FR-FIND-009](architecture/01-system-specification.md#fr-find-009-操作员见证身份与跨任务关联)、[ADR 0014](architecture/adr/0014-operator-finding-identity.md)及[风险](architecture/12-risks-and-tech-debt.md)。 2026-11-01: the [shared deployed raw-SQL selector](../apps/scheduler/src/domains/project-finding-research/strong-candidate-selector.ts) is extracted and reused by the worker; this is only an engineering prerequisite, not the missing [governed actual-SQL quality evaluator/protocol/review/promotion/revoke or genuine independent inputs](PROJECT_FINDING_EVALUATION.md).
 
 > **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
@@ -54,7 +54,7 @@
 
 | 文档 | 状态 | 说明 |
 |------|------|------|
-| [architecture/README.md](architecture/README.md) | **v0.6.3 集成核对（2026-10-31）** | 十二视图、主题归属、[追溯矩阵](architecture/traceability.md)与开发 Skill；实现、规范、当前验证和未交付质量分开 |
+| [architecture/README.md](architecture/README.md) | **v0.6.3 集成核对（2026-11-01）** | 十二视图、主题归属、[追溯矩阵](architecture/traceability.md)与开发 Skill；实现、规范、当前验证和未交付质量分开 |
 | [architecture/adr/README.md](architecture/adr/README.md) | **历史与当前决策索引** | 0009 保持提议、0010 保持已采纳；0011–0014 分别记录目标授权、Plan v2、Pi 记忆、操作员身份，验收缺口见正文 |
 
 ---
@@ -86,6 +86,7 @@
 | [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布** | `v*` tag / release.yml；v0.6.0 正式 Release 与附件已核对，镜像验签和部署验收分别留证；双架构缓存复用须证明 runnable payload 一致 |
 | [runtime-image-pull-partial-failure.md](runbooks/runtime-image-pull-partial-failure.md) | **运维 runbook**（#724） | 拉取部分失败：真实尝试计数、定向重拉、本地对账/修复与远端 unsupported 边界、readiness 复核 |
 | [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md) | **运维/发布** | Compose 一键部署、真实 readiness 门禁与有界失败诊断；实机兼容性需单独验证 |
+| [OPENSANDBOX_1_2_UPGRADE.md](OPENSANDBOX_1_2_UPGRADE.md) | **Source upgrade + local unit verification (2026-11-01)** | Canonical SDK/images, unchanged direct/isolation/recovery boundaries, explicit `wakeRetryEnabled=false`; pinned-server parsing/live/native and exact-SHA CI remain separate |
 | [RELEASE_READINESS_POST_v0.4.4.md](RELEASE_READINESS_POST_v0.4.4.md) | **运维/发布** | v0.4.4→当前 main 升级/部署/合并后验收闭环（#582）；区分代码/CI 已核实与实机延期 |
 
 ---

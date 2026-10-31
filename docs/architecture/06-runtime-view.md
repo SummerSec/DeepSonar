@@ -1,7 +1,7 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -85,6 +85,10 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 Attempt 的 `job_attempt_effects` 先 `effect_pending` 后 settlement，只有代码明确标记为安全的清理效果可重放；未知效果始终需要对账或人工。控制流和清理路径必须写审计并释放设备租约、共享资产卷、token 和沙箱资源。
 
 Gateway 503 仅在内核明确证明请求尚未启动时可降级；`unknown` 或 `pending` 必须硬失败，provider 5xx 文案不构成外部效果 authority。
+
+## OpenSandbox upgrade and recovery boundary (IR-001/003)
+
+The 2026-11-01 [SDK binding](../../packages/runtime-sandbox/src/opensandbox-sdk-client.ts) explicitly disables SDK 1.2 implicit wake retry. The actual installed-constructor create/connect/fresh-transport regression is locally verified, but it does not delegate Job/Attempt/effect recovery to the SDK or prove live execution. Unknown/pending effects remain Scheduler-owned and are not replayable merely because an upstream wake marker appears. PTY/hosts mapping, frozen resources/network/volume input and create TTL remain unchanged; detailed source gates and unverified pinned-server/live/native/final-SHA results are owned by the [upgrade record](../OPENSANDBOX_1_2_UPGRADE.md).
 
 ## 有界读取和语义事件
 

@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
@@ -145,9 +145,15 @@ Control `event_id` / Idempotency-Key 保持提交幂等；来源 Finding 使用 
 
 强关系是 Scheduler-owned 的可重建派生数据，不是 Finding/Artifact 的第二事实源。`project_finding_relation_work` 按 project/generation 保存 cursor、attempt、error 和状态；`project_finding_relation_sources` 保存每个 Finding 的 source/identity fingerprint、检查数量、pair truncation 和 read reason；`project_finding_relations` 保存有序双端关系、匹配/差异字段、rule version、quality gate 和 `published`。source/mapping 变化会创建新的 generation；worker 在维护身份 fence、repeatable-read 与 savepoint 内以有界批次计算，失败保留 checkpoint，不改写来源事实。
 
-查询和计算的 Finding/page/pair/Canvas response 上限均由 [`relation-read.ts`](../../apps/scheduler/src/domains/project-finding-research/relation-read.ts) 与 [`relation-computation.ts`](../../apps/scheduler/src/domains/project-finding-research/relation-computation.ts) 的命名常量维护；mapping history 由上方 store 常量维护。文档不复制这些可变数值，调用方必须使用响应中的 `read_status`、`read_reason`、`pair_truncated` 和 `query_budget` 判断是否完整。
+2026-11-01 核对：[relation-computation.ts](../../apps/scheduler/src/domains/project-finding-research/relation-computation.ts) 在同一事务内调用 [strong-candidate-selector.ts](../../apps/scheduler/src/domains/project-finding-research/strong-candidate-selector.ts)，共用部署原始 SQL，而不是另一套词法召回或质量评估器。主体 `root_cause.status` 非 `valid` 或 digest 为空时不查询。
 
-当前实现固定 `quality_gate_status=not_evaluated`、`published=false`，且公开管理读响应的 `items` 为空；`includeSuppressed` 等未知查询字段按 strict schema 拒绝。即使 worker 已完成，读侧仍按当前 Finding/source/identity fingerprint 再核验，旧 generation 或失效关系只作为 stale/omitted 处理。独立人工标签、问题家族/资产隔离的调参和留出集、查看留出结果前冻结的阈值均未提供，故强关系质量和生产建议保持 unknown/withheld。
+SQL 只取同项目 `field=root_cause` 的 mapping，按 project/source/finding 连接 source 和不可变 revision，且 `r.revision=m.source_revision=s.current_revision`；mapping 与 source 均未撤销，revision 的根因摘要匹配主体摘要，`r.freshness_until > now()` 使用调用方当前事务时间。只取 `m.finding_id > 主体UUID`，DISTINCT 后按 UUID ASC 排序；不增加词法/top25、标签、split 或同 Job 条件，也没有历史时间 override。有界选择中的无向规范对仅按 lower UUID → higher UUID 方向计一次，不能用离线有向词法窗口加倍分母；未进窗口不等于明确不同。
+
+查询最多 `RELATION_PAIR_LIMIT + 1` 项，`peerIds` 只交付前 `RELATION_PAIR_LIMIT` 项进入比较；上限定义归共用选择器，原 worker 保留常量 re-export。内部 `observedCount` 只表示包含哨兵的本次有界返回数量；出现哨兵时 `truncated=true`、`countKind=lower_bound`，否则为 `exact`，不推算全语料总数或 rank，哨兵不执行。它不新增公开质量响应或 schema 列；后续六字段/authority version 判定、指纹复查及维护/generation fence 不变。
+
+查询和计算的 Finding/page/pair/Canvas response 上限均由 [`relation-read.ts`](../../apps/scheduler/src/domains/project-finding-research/relation-read.ts) 与 [`relation-computation.ts`](../../apps/scheduler/src/domains/project-finding-research/relation-computation.ts) 以及 [strong-candidate-selector.ts](../../apps/scheduler/src/domains/project-finding-research/strong-candidate-selector.ts) 的命名常量维护；mapping history 由上方 store 常量维护。文档不复制这些可变数值，调用方必须使用响应中的 `read_status`、`read_reason`、`pair_truncated` 和 `query_budget` 判断是否完整。
+
+当前实现固定 `quality_gate_status=not_evaluated`、`published=false`，且公开管理读响应的 `items` 为空；`includeSuppressed` 等未知查询字段按 strict schema 拒绝。即使 worker 已完成，读侧仍按当前 Finding/source/identity fingerprint 再核验，旧 generation 或失效关系只作为 stale/omitted 处理。独立人工标签、问题家族/资产隔离的调参和留出集、查看留出结果前冻结的阈值均未提供，受治理的版本化协议、首次留出访问前阈值预注册、独立证据评审/评估准入、实际 SQL 质量评估器、通过门 CAS 晋升/撤销与受控非空发布软件也仍未实现；不是仅缺数据。共用选择器只是未来评估必须复用的前置条件，离线身份重放/词法模拟与合成 SQL 夹具都不认证部署 worker 质量。故强关系质量和生产建议保持 unknown/withheld；缺口与有界 trace/合成回归证据见[评估专题](../PROJECT_FINDING_EVALUATION.md)。此次抽取未改 schema 基线、API、公开数组或质量/发布常量。
 
 #776 的修正限额冻结在首个 control_receipt 的 repair_token_limit；Gateway effect intent 保存宿主 repair_receipt_ref/repair_reserved_tokens。实际用量仍只在 job_usage_ledger 一次写入，按 Attempt/effect 联结投影累计，无新增表或 schema 版本变更。未知/缺报与已知零分开；详见 [修正预算](../REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 

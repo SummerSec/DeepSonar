@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { assertOpenSandboxSdkPin, commandWithEnv, installedOpenSandboxSdkVersion, isOpenSandboxGoneError, classifyOpenSandboxUploadFault, isOpenSandboxUploadFailureMessage, isTransientOpenSandboxUploadError, joinCommandLogText, writeFilesWithRetry } from "./opensandbox-sdk-client.js";
+import { ConnectionConfig, Sandbox } from "@alibaba-group/opensandbox";
+import { createSdkOpenSandboxClient, assertOpenSandboxSdkPin, commandWithEnv, installedOpenSandboxSdkVersion, isOpenSandboxGoneError, classifyOpenSandboxUploadFault, isOpenSandboxUploadFailureMessage, isTransientOpenSandboxUploadError, joinCommandLogText, writeFilesWithRetry } from "./opensandbox-sdk-client.js";
 import { OPENSANDBOX_SDK_VERSION } from "./opensandbox-version.js";
 import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
 
@@ -10,6 +11,38 @@ test("OpenSandbox SDK pin matches the installed package and rejects drift", () =
   assert.equal(assertOpenSandboxSdkPin(OPENSANDBOX_SDK_VERSION), OPENSANDBOX_SDK_VERSION);
   assert.throws(() => assertOpenSandboxSdkPin("0.0.1"), /OPENSANDBOX_SDK_PIN_MISMATCH/);
   assert.throws(() => assertOpenSandboxSdkPin("latest"), /OPENSANDBOX_SDK_UNPINNED/);
+});
+
+test("OpenSandbox SDK connections disable implicit wake retry on create and reconnect", async (t) => {
+  const configs: ConnectionConfig[] = [];
+  const capture = (config?: ConnectionConfig) => {
+    assert.ok(config instanceof ConnectionConfig, "exercise the installed SDK constructor");
+    configs.push(config);
+    throw new Error("unit SDK operation stopped before network");
+  };
+  t.mock.method(Sandbox, "create", async (options: { connectionConfig?: ConnectionConfig }) => capture(options.connectionConfig));
+  t.mock.method(Sandbox, "connect", async (options: { connectionConfig?: ConnectionConfig }) => capture(options.connectionConfig));
+  const client = createSdkOpenSandboxClient({ domain: "127.0.0.1:1", apiKey: "" });
+  try {
+    await assert.rejects(client.create({
+      image: `registry.invalid/unit@sha256:${"a".repeat(64)}`,
+      env: {}, metadata: {}, resource: { cpu: "1", memory: "128Mi" },
+      timeoutSeconds: null, networkPolicy: { defaultAction: "deny", egress: [] }, volumes: [],
+    }), /unit SDK operation stopped before network/);
+    assert.equal(await client.connect("unit-sandbox"), undefined);
+    assert.equal(configs.length, 2);
+    for (const config of configs) {
+      assert.equal(config.wakeRetry.enabled, false);
+      assert.equal(config.disableMetrics, true);
+      assert.equal(config.useServerProxy, true);
+      assert.equal(config.requestTimeoutSeconds, 180);
+      const fresh = config.withFreshTransport();
+      assert.equal(fresh.wakeRetry.enabled, false, "transport replacement cannot opt into replay");
+      await fresh.closeTransport();
+    }
+  } finally {
+    for (const config of configs) await config.closeTransport();
+  }
 });
 
 test("OpenSandbox destroy treats already-gone sandboxes as success", () => {

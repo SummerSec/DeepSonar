@@ -11,12 +11,13 @@ import {
 import { loadCurrentIdentitySnapshot } from "./identity-mapping-store.js";
 import { fail } from "./relation-errors.js";
 import { requestStrongRelationRebuild } from "./relation-work.js";
+import { selectStrongRelationCandidates } from "./strong-candidate-selector.js";
 
 type Db = typeof sql;
 
 export const RELATION_BATCH_SIZE = 5;
 export const RELATION_PROJECT_SCAN_SIZE = 25;
-export const RELATION_PAIR_LIMIT = 256;
+export { RELATION_PAIR_LIMIT } from "./strong-candidate-selector.js";
 
 export interface FindingEnvelope {
   id: string;
@@ -111,29 +112,12 @@ async function computeRelationSource(
     return;
   }
 
-  const root = snapshot.fields.root_cause;
-  let candidates: Array<{ finding_id: string }> = [];
-  if (root.status === "valid" && root.identity_digest) {
-    candidates = await tx`SELECT DISTINCT m.finding_id
-      FROM project_finding_identity_mappings m
-      JOIN project_finding_identity_sources s
-        ON s.project_id = m.project_id AND s.source_id = m.source_id
-       AND s.finding_id = m.finding_id
-      JOIN project_finding_identity_source_revisions r
-        ON r.project_id = m.project_id AND r.source_id = m.source_id
-       AND r.finding_id = m.finding_id AND r.revision = m.source_revision
-      WHERE m.project_id = ${projectId}::uuid AND m.field = 'root_cause'
-        AND r.identity_fields_json ->> 'root_cause' = ${root.identity_digest}
-        AND m.revoked_at IS NULL AND s.revoked_at IS NULL
-        AND s.current_revision = m.source_revision AND r.freshness_until > now()
-        AND m.finding_id > ${findingId}::uuid
-      ORDER BY m.finding_id LIMIT ${RELATION_PAIR_LIMIT + 1}` as Array<{ finding_id: string }>;
-  }
-  const pairTruncated = candidates.length > RELATION_PAIR_LIMIT;
+  const selection = await selectStrongRelationCandidates(tx, {
+    projectId, findingId, rootCause: snapshot.fields.root_cause,
+  });
   const peers = new Map<string, FindingEnvelope>();
   const peerSnapshots = new Map<string, CurrentIdentitySnapshot>();
-  for (const candidate of candidates.slice(0, RELATION_PAIR_LIMIT)) {
-    const peerId = String(candidate.finding_id);
+  for (const peerId of selection.peerIds) {
     const peerEnvelope = await loadFindingEnvelope(tx, peerId, projectId);
     if (!peerEnvelope) continue;
     const peerSnapshot = await loadCurrentIdentitySnapshot(peerId, projectId, tx);
@@ -182,8 +166,8 @@ async function computeRelationSource(
   ) VALUES (
     ${projectId}::uuid, ${generation}::uuid, ${findingId}::uuid,
     ${envelope.source_fingerprint}, ${snapshot.fingerprint},
-    ${STRONG_RELATION_RULE_VERSION}, ${Math.min(candidates.length, RELATION_PAIR_LIMIT)},
-    ${pairTruncated}, 'complete', NULL
+    ${STRONG_RELATION_RULE_VERSION}, ${selection.peerIds.length},
+    ${selection.truncated}, 'complete', NULL
   ) ON CONFLICT(project_id, generation, finding_id) DO UPDATE SET
     source_fingerprint=EXCLUDED.source_fingerprint, identity_fingerprint=EXCLUDED.identity_fingerprint,
     rule_version=EXCLUDED.rule_version, examined=EXCLUDED.examined,

@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -45,6 +45,10 @@ flowchart LR
 | Canvas/Evidence → Verify/Report | 结构化 Fact、Artifact、Evidence manifest、输入 hash、验证门和权限 | 缺证据进入 waiting/rework/needs_human；投影失败不改写事实 |
 | Plane（未实现占位） → Scheduler | 当前没有外部调用、配置、事件 dedup 或回执路径；未来集成须单独定义来源标识、作用域和审计 | 当前不存在集成失败路径；不得把占位描述解释为 as-built 外部边界 |
 | Scheduler → Web/WS | 一次性 ticket、Job/project scope、本地 Evidence 可见性、消息大小和背压 | 不可见时 `visibility=unavailable`；关闭流而不伪造补读 |
+
+## OpenSandbox SDK replay boundary (IR-001/003)
+
+The 2026-11-01 upgrade preserves Scheduler authority: [connectionConfig](../../packages/runtime-sandbox/src/opensandbox-sdk-client.ts) sets wakeRetryEnabled=false and disables metrics while preserving existing proxy/timeout. An upstream OpenSandbox-Wake marker is not platform settlement authority and cannot authorize replay of unknown effects. No new lifecycle/autoPause/Vault integration, gateway deployment, resources/privileges, hosts-binding or PTY transport is enabled; frozen Job/Attempt and cleanup rules remain. Installed-SDK regression is local engineering evidence, not actual new pinned-server parsing, native execution or final-SHA CI; see the [upgrade record](../OPENSANDBOX_1_2_UPGRADE.md).
 
 ## 秘密、资源和审计
 

@@ -11,7 +11,7 @@ level = "INFO"
 
 [runtime]
 type = "docker"
-execd_image = "docker.io/opensandbox/execd@sha256:e11fdd6fa641329a1fe5298e71c8dd2afca742674fe48bc855b2ff6715512829"
+execd_image = "docker.io/opensandbox/execd@sha256:c75836c46ef4302afccec182d5d7339eb2f905f51e3d73b7aa17bb76c832526c"
 
 [docker]
 network_mode = "bridge"
@@ -27,16 +27,16 @@ drop_capabilities = ["ALL"]
 no_new_privileges = true
 pids_limit = 4096
 
-# Docker default must stay direct until the pinned OpenSandbox server implements
-# gateway ingress on the Docker backend (#556). mode=gateway requires a [gateway]
-# block and is only wired on the K8s path today. #548's lasting value is the
-# scheduler-side upload retry / provision classification / NUL scrub, which works
-# under direct; renew_intent stays disabled.
+# This deployment remains direct; upgrading the pinned SDK/server does not
+# enable gateway. Any gateway change needs nested ingress.gateway/route
+# preflight plus independent pinned-server/backend validation (#556).
+# Scheduler upload retry / provision classification / NUL scrub still work
+# under direct (#548); renew_intent stays disabled.
 [ingress]
 mode = "direct"
 
 [egress]
-image = "docker.io/opensandbox/egress@sha256:56429c89b7175c2a24af62ca93a99776f03ea67a0beb74d63c8ddb34ff16fd97"
+image = "docker.io/opensandbox/egress@sha256:a3d30246e557525f3fa44d16226258268cea175532e652822bd1eb4e83e0f54d"
 mode = "dns"
 disable_ipv6 = true
 readiness_timeout_seconds = 30.0

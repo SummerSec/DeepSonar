@@ -1,7 +1,7 @@
 # 07 部署视图
 
 > 状态：**as-built**（#741）。描述生产 Compose、运行时网络、镜像准入、远程 Worker/设备和多副本限制；地址与凭据由部署环境提供。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 部署事实来自 `deploy/` 下的 Compose 文件、运行时包和镜像准入代码。下图省略了环境变量值、镜像摘要和密钥，只保留拓扑和连接方向。当前 Compose 的 Scheduler、Web、image-admission 平台服务各由一个 Release 同步的完整不可变引用选择（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:...`，#740 P1 第 3 片），部署版本由显式 `DEEPSONAR_VERSION` 声明；`DEEPSONAR_IMAGE_TAG` 已删除，`deploy.sh` / `deploy.ps1` 对旧变量与非 digest 引用 fail closed。OpenSandbox/Worker 的基础服务同样由 Compose 使用摘要固定。Job runtime image 则必须经过准入并在快照中保存解析后的不可变 digest，二者不能混为一谈。#745 的 `platform` catalog 用于版本发现；发布路径还提供经 inspect 校验的平台 digest，宿主升级据此选择目标。原同 schema 路径保留，维护升级的身份隔离、候选库和受管节点路径已接线，不能由模块存在推定真实部署验收通过。
 
@@ -53,6 +53,10 @@ flowchart LR
 ```
 
 镜像准入按 `DEEPSONAR_COSIGN_*` 配置检查签名或 keyless identity/issuer、扫描结果、不可变摘要和运行时工具手册契约；未启用签名策略时，官方 catalog 可记录 `signature: skipped`，这不等于已完成签名验证。第三方镜像的 critical/secret 扫描失败会阻止信任；官方镜像的结果也会记录和告警。`image-admission` 直接拉取并检查 Registry，然后把 digest、扫描和 trust 状态写入 PostgreSQL；Scheduler 读取这些管理表，创建 Job 时把可用镜像选择冻结。Agent、Hub、导入包和任意管理文本不能提交新的 OCI 源。实现参考 [`trust-policy.ts`](../../apps/image-admission/src/trust-policy.ts)、[`cosign-verify.ts`](../../apps/image-admission/src/cosign-verify.ts) 和 [`runtime-manual-contract`](../../packages/runtime-manual-contract/src/index.ts)。
+
+## OpenSandbox upgrade deployment baseline (IR-001/003)
+
+2026-11-01: installed SDK and server/execd/egress indices are pinned by [version facts](../../packages/runtime-sandbox/src/opensandbox-version.ts), with [package](../../packages/runtime-sandbox/package.json)/[lockfile](../../pnpm-lock.yaml), Compose/config and fixtures upgraded together. All deployed Docker/Kubernetes/external-cluster TOMLs remain direct; a pin upgrade does not opt into gateway. Future gateway changes need nested ingress.gateway/route preflight and independent target-backend validation, not an obsolete unsupported-backend claim. Existing capabilities/no-new-privileges/resources, create TTL null, renewfalse, DNS/IPv6 and Kata/PVC policy are unchanged. Artifact descriptor inspection and local units do not prove pinned-server parsing, native/live/actual PTY or exact-SHA CI; see the [single upgrade record](../OPENSANDBOX_1_2_UPGRADE.md).
 
 ## Pi 扩展部署与观测内存准入（#815）
 

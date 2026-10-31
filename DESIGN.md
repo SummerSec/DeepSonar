@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -235,7 +235,7 @@ Research 是报告前的只读辅助层：Scheduler 按有界批次对 Finding �
 
 Research 失败必须显式记录并保留候选 Finding。与 Finding/报告写入同一事务时，Research 使用 savepoint 隔离；研究写失败不能回滚已经接受的 Finding 或报告主路径。读取入口为 `GET /canvases/:id/finding-research`。模型、prompt revision、批次边界和运行状态进入 research run 账本。
 
-跨任务身份与关系工程（#819）已接入不可变操作员见证身份 manifest、mapping CAS、freshness/撤销失效、有界一致读取与持久 worker 计算。操作员准入不认证外部官方来源；强关系发布仍由 `STRONG_RELATIONS_PUBLISHED=false` 关闭，质量为 unknown / not_evaluated。受治理质量协议/阈值预注册、独立评审/评估准入及晋升撤销、受控公开发布的软件路径仍缺；真实人工标签、问题家族/资产隔离调参及留出、预冻结阈值与历史身份来源复核材料也未提供。离线强指标区分身份比较与词法窗口模拟，不是实际 SQL worker 质量；仅补数据或 CI 通过不能启用建议，强关系质量与生产建议未交付。见 [FR-FIND-009](docs/architecture/01-system-specification.md#fr-find-009-操作员见证身份与跨任务关联)及 [ADR 0014](docs/architecture/adr/0014-operator-finding-identity.md)。
+跨任务身份与关系工程（#819）已接入不可变操作员见证身份 manifest、mapping CAS、freshness/撤销失效、有界一致读取与持久 worker 计算。操作员准入不认证外部官方来源；强关系发布仍由 `STRONG_RELATIONS_PUBLISHED=false` 关闭，质量为 unknown / not_evaluated。受治理质量协议/阈值预注册、独立评审/评估准入及晋升撤销、受控公开发布的软件路径仍缺；真实人工标签、问题家族/资产隔离调参及留出、预冻结阈值与历史身份来源复核材料也未提供。离线强指标区分身份比较与词法窗口模拟，不是实际 SQL worker 质量；仅补数据或 CI 通过不能启用建议，强关系质量与生产建议未交付。见 [FR-FIND-009](docs/architecture/01-system-specification.md#fr-find-009-操作员见证身份与跨任务关联)及 [ADR 0014](docs/architecture/adr/0014-operator-finding-identity.md)。 2026-11-01: the [shared deployed raw-SQL selector](apps/scheduler/src/domains/project-finding-research/strong-candidate-selector.ts) is extracted and reused by the worker; this is only an engineering prerequisite, not the missing [governed actual-SQL quality evaluator/protocol/review/promotion/revoke or genuine independent inputs](docs/PROJECT_FINDING_EVALUATION.md).
 
 ### 6.3 Projection
 
@@ -286,6 +286,8 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 旧库升级不能从 CLI 值猜测种子来源：本地 `db:rebuild` 对版本未知或低于 v60、目标至少 v60 且需复制旧角色身份的库执行身份复核；需要重置时，只有管理员显式 `--reset-role-identity` 才丢弃旧角色 CLI/项目模型并保留全局模型和历史 Job，须有备份或明确保留 staging。宿主维护升级另按目标计划审批身份重置风险。详见[数据库升级说明](database/README.md#v60-角色身份复核757)及[维护升级说明](deploy/README.md)。
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
+
+OpenSandbox upgrade baseline (2026-11-01): installed SDK 1.2 and canonical server/execd/egress pins are updated, with explicit SDK `wakeRetryEnabled=false` preserving Scheduler recovery. All deployed TOMLs remain direct; existing isolation/resources/TTL/renew/DNS/IPv6/PVC policy is unchanged. Local SDK regression does not prove new pinned-server parsing, actual PTY, native execution or final-SHA CI; see the [single upgrade record](docs/OPENSANDBOX_1_2_UPGRADE.md).
 
 **DSH 当前 as-built（2026-10-10）：** 新执行版本是官方 `@deepseek-ai/dsh@0.2.1-rc.2`，选择官方 [`dsh-v0.2.1-rc.2`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-rc.2)；`0.2.1-alpha.2`（Oct 9）未选。版本与完整 npm closure 锁在 `agent-harness/dsh-runtime/package-lock.json`，镜像在 `/opt/deepsonar/dsh` 以 `npm ci --omit=dev --ignore-scripts --no-audit --no-fund` 安装，唯一 launcher 是官方 `dsh --profile`。`packages/runtime-sandbox/src/dsh-profile.ts` 为 `deepsonar` profile 写入 `bundles: []` 和显式 plugin allowlist，移除 spine、UI/web、settings/credential discovery、native DeepSeek routes、plugin-manager、telemetry 与 home overrides；安装包内 dormant UI 依赖不会启动服务。Standard 使用 native tools，PTC 使用 `ptc` 与 `@deepseek-ai/dsh-ptc-runtime-node` 的 `run_code`。Provider route/model 强制经 Model Gateway，沙箱只得到短期 token；skills 只从 Scheduler home 的 `${DSH_HOME}/skills` 根发现。`session.v4.jsonl` 是当前精确归档路径，历史 v0–v3 仅供 viewer 读取。父会话 idle 时只要受认证谱系下仍有活跃子代理就不催促或关闭；子代理 finished 后等待父处理回传并再次 idle 才进入完成门。官方 JSON-RPC 只提供 initialize/prompt/shutdown；同进程 follow-up 可用，跨进程持久 resume 不支持，adapter 以 `persistentSessionResume: false` 返回 `CONTEXT_RESUME_UNSUPPORTED`，不静默新建或重试。
 

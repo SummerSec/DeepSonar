@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import test from "node:test";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -109,7 +109,7 @@ test("resolves the manifest-declared bundled Pi executable and rejects another e
     const found = resolvePiPackage(bin);
     assert.equal(found.metadata.version, "1.4.0");
     assert.equal(found.versionOutput, "1.4.0");
-    assert.equal(found.packageJson, path.join(root, "package.json"));
+    assert.equal(found.packageJson, realpathSync(path.join(root, "package.json")));
     writeFileSync(path.join(root, "dist/bundle/other.js"), 'console.log("1.4.0");');
     assert.throws(() => resolvePiPackage(path.join(root, "dist/bundle/other.js")), /declared bin/u);
   } finally {

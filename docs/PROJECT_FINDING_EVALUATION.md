@@ -1,8 +1,8 @@
 # Finding 离线标注评估与积压测量（#770）
 
-> 状态：**离线工具已合入；#819 独立强关系指标及管理 API 抑制测试已在工作分支接线；受治理质量评估/审核/发布路径尚缺，独立人工质量验收未完成**。
+> 状态：**离线工具已合入；#819 共用原始 SQL 选择器与合成工程回归已接线；受治理实际 SQL 质量评估/独立评审/晋升撤销及发布路径尚缺，独立人工质量验收未完成**。
 > 收口（2026-10-31）：随 #770 按已交付切片关闭，强关系由 [#819](https://github.com/SummerSec/DeepSonar/issues/819) 独立实现。生产执行按 AGENTS.md「验收边界」豁免，但**不覆盖本文的人工质量验收**：人工质量评估仍记为未执行，工具与合成夹具不因此被解释为质量门通过；阈值提案仍为「待审阅」而非已批准。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 本文承接[特征与候选专题](PROJECT_FINDING_RESEARCH.md)。本切片补充非模型验收工具：本地标注导入/校验、可追溯质量报告、字段覆盖/不足率、强关系摘要映射输入与后台积压资源测量。不导入生产数据库，不调用模型。命令成功只表示报告生成成功，不表示候选算法或强关系满足上线质量。
 
@@ -24,6 +24,8 @@ pnpm --silent research:evaluate:offline -- --input ../../docs/evidence/770-offli
 
 标注对通过两端ID引用来源，label为 suspected_same_issue、same_problem、same_root_cause_different_instance、similar、distinct、insufficient_information 或显式 null。null 表示缺标注，不等于信息不足类别，更不等于明确不同。非法类别、重复/反向对、缺失来源、跨项目或同Job评估对均拒绝。跨 tuning/holdout 的同来源、同资产组或同问题家族拒绝；缺少隔离组也拒绝出具隔离评估。校验只针对提交的标识，不能发现被错误改名或伪造的家族。
 
+同 Job 评估对的拒绝与 tuning/holdout 隔离检查是上述**离线导入契约**，不是部署 SQL 选择条件；同 Job Finding 不因此从实际强关系选择器语料中排除。
+
 ## 预测与报告口径
 
 离线程序复用现有确定性词法提取、排名与逐对规则，身份字段仍按生产行为保持未知。标签不参与提取、排名或判定。窗口是本地样本语料的模拟，不是 PostgreSQL 实际项目召回；报告必须保留该范围。支持单次预声明 K=1..50 与扫描预算<=128，生产候选当前为 K=25 / 128。K=10/25/50 可在调参集比较，但程序不会扫描多个配置后用留出分数挑最佳配置。predeclared 是提供者声明，工具不证明配置在时间上先于留出集查看。
@@ -31,12 +33,24 @@ pnpm --silent research:evaluate:offline -- --input ../../docs/evidence/770-offli
 报告分别展示：
 
 - **逐对规则**：所有已标注对的各类 TP/FP/FN 与 precision/recall。
-- **候选流水线**：有向查询机会的召回和后续分类，未召回不能从分母中消失，相关关系的漏召回计 FN。
+- **候选流水线**：词法样本窗口的有向查询机会的召回和后续分类，未召回不能从分母中消失，相关关系的漏召回计 FN。
 - **缺失标签**：计数单列；未标注的返回候选不得算 FP。recall@K 仅对该标注集内的正例成立，不是全项目真实召回率。
 - **不足与覆盖**：预测信息不足、人工信息不足、未标注和未召回分开；文本与身份声明字段覆盖率报告分子/分母，提供者声明与当前可用权威映射分开。
 - **强关系工程重放**：若提供摘要映射，逐对增加 `strong_relation_prediction` 与规则原因；`strong_pair_rule_metrics` 独立使用强预测统计无向标注对，`strong_candidate_pipeline_metrics` 则统计有向词法样本窗口检索后再判强关系的机会，不是实际 SQL identity/root-cause worker 召回。`suspected_same_issue` 与 `same_problem` 显式统一到 `same_problem`；只有同问题、同根因不同实例与 distinct 真值进入强关系评分分母，null、弱 similar 和人工 insufficient 单列而不猜作负例。缺失/过期映射的弃权及窗口漏召回仍是已知强正例的 FN；返回强预测但标签未知的数量单列，不能据条件精确率宣称全语料质量通过。强结果不改变原词法指标、不生成生产建议，也不表示来源映射已独立认证。评估器/强规则/指标版本纳入配置摘要；2026-10-31 合成回归只支持这些工程行为。
 
 所有零分母为 null，不伪造0或1。强关系有真值而当前规则没有可用摘要映射时 recall 为0；没有该类真值时为null。规范化输入、配置与规则版本绑定摘要，逐对输出通过来源ID和摘要追溯；报告不复制原始文本、证据URI或身份声明内容。source.digest/revision 是提交者提供的来源引用，工具没有访问原始系统独立核验；sources[].input_digest 则是本次实际读取的规范化来源行摘要。摘要不是匿名化保证，应按原样本权限保存报告。工具不发布 `passed` 质量结论。
+
+## 共用部署 SQL 选择器的评估边界（2026-11-01）
+
+[持久 worker](../apps/scheduler/src/domains/project-finding-research/relation-computation.ts) 现在调用共用的 [strong-candidate-selector.ts](../apps/scheduler/src/domains/project-finding-research/strong-candidate-selector.ts)，不是另写查询。原始选择条件见[数据架构](architecture/08-data-architecture.md#强关系计算与投影)：有效且有摘要的主体 root cause、同项目 DISTINCT 的当前未撤销 mapping/source 与新鲜 revision 中匹配的根因摘要、仅取更大 UUID 并升序排序。
+
+该选择器不按词法/top25、标签、split 或同 Job 预筛，也不接受历史评估时间；freshness 使用调用方事务的 SQL `now()`。有界选择机会按无向规范对的 lower UUID → higher UUID 方向记录一次；不能把反向查询再计一次、按离线有向词法窗口加倍强关系分母，或让未知标签先改变选择语料。未来实际 SQL 质量评估器必须调用此共用选择器，而不是复制 SQL 或沿用本工具的词法窗口模拟；该评估器目前仍未实现。
+
+内部 trace 只记录本次有界机会：`peerIds` 是 UUID 升序的前256项，查询最多257项包含哨兵（本节2026-11-01 核对基线；上限归共用选择器的 `RELATION_PAIR_LIMIT`）。`observedCount` 包含哨兵，哨兵出现时 `truncated=true`、`countKind=lower_bound`，不是完整语料精确总数或排名；哨兵不进入比较，未进窗口不等于明确不同。无有效主体根因时不查询，空选择不等于人工负例或质量通过。trace 是内部工程结构，不是新增公开质量响应。
+
+[选择器单元夹具](../apps/scheduler/src/domains/project-finding-research/strong-candidate-selector.test.ts) 验证不查询条件、SQL/参数原样性、边界与错误传播；[隔离 SQL 夹具](../apps/scheduler/src/domains/project-finding-research/strong-candidate-selector.integration.test.ts) 设计包含270 peers、两组 Job/Canvas 与不同 Job 状态、活跃重复 mapping、较小 UUID、外项目、过期、mapping/source 撤销、旧 revision、不同根因/字段及规范尾部对。它们只检验工程行为，不认证见证来源真实性、人工标签、独立分区或阈值，也不构成质量数据集。
+
+2026-11-01 核对的本地已接线结果：`pnpm ci:unit:finding-research` 58通过、0跳过，包含新增选择器4项；`pnpm ci:integration:finding-research` 8个 SQL suite 全部因 `TEST_DATABASE_URL` 未设置而跳过，不是实际 SQL 通过。两入口已在[根脚本](../package.json) 纳入新测试，并由 [CI workflow](../.github/workflows/ci.yml) 的 unit / PostgreSQL integration 步骤调用；这不证明最终组合 SHA 的 Actions 已通过。选择器抽取只是后续实际 SQL 质量评估的共用前置条件，不补齐下述受治理软件与真实独立材料。
 
 ## 待审阅的验收建议（不是已批准阈值）
 
@@ -53,7 +67,7 @@ pnpm --silent research:evaluate:offline -- --input ../../docs/evidence/770-offli
 
 ## 最小外部输入与剩余工作
 
-仍需两类工作。软件侧：版本化有界协议、可审计的首次留出访问前阈值预注册、独立证据评审与评估准入、当前通过门的晋升/撤销，以及 SQL/public schema/read 的受控非空发布路径尚未实现；本工具的独立强指标只提供离线身份/词法窗口模拟，不是实际 SQL identity/root-cause worker 的质量度量。真实输入侧：脱敏历史身份 crosswalk/修订与许可来源、独立人工标注及争议裁决、经复核的资产/问题家族双重隔离调参/留出集，以及首次查看留出前冻结且可检查的阈值/协议记录仍缺失。仅供应数据或声明 predeclared 不能启用生产建议，不能以 synthetic 工程通过替代真实独立质量。现有 schema 的 sources/pairs 可生成离线报告，但阈值、独立复核及预注册记录需要另供配套证据，不得给严格导入 JSON 添加未知字段。无需真实模型调用、模型成本试验或生产访问。
+仍需两类工作。软件侧：复用共用选择器且绑定当前项目/来源与规则的实际 SQL 质量评估器、版本化有界协议、可审计的首次留出访问前阈值预注册、独立证据评审与评估准入、带 CAS/审计的当前通过门晋升/撤销，以及 SQL/public schema/read 的受控非空发布路径尚未实现；本工具的独立强指标只提供离线身份/词法窗口模拟，不是实际 SQL identity/root-cause worker 的质量度量。真实输入侧：脱敏历史身份 crosswalk/修订与许可来源、独立人工标注及争议裁决、经复核的资产/问题家族双重隔离调参/留出集，以及首次查看留出前冻结且可检查的阈值/协议记录仍缺失。仅供应数据或声明 predeclared 不能启用生产建议，不能以 synthetic 工程通过替代真实独立质量。现有 schema 的 sources/pairs 可生成离线报告，但阈值、独立复核及预注册记录需要另供配套证据，不得给严格导入 JSON 添加未知字段。无需真实模型调用、模型成本试验或生产访问。
 
 人工纠正、语义向量召回、项目分组、自动知识晋升不在本次范围。schema66、生产规则、候选工作调度和现有权限保持原状。
 
