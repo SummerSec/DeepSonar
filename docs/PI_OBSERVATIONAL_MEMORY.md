@@ -14,7 +14,7 @@
 | 4 | RPC 纯净性判定标准与验证方法 | §6 |
 | 5 | 与现有上下文治理（compaction / context window / 流截断）的关系 | §7 |
 
-结论先行：**A 片可以否决整个接入，但不能被跳过。** §8 列出必须先由人拍板的 7 个决策点；§9 是尚未验证项。
+结论先行：**A 片可以否决整个接入，但不能被跳过。** §8 列出必须先由人拍板的 7 个决策点；§9 把静态已核事实与仍需实测项分开。
 
 ## 1. 动机与现状事实
 
@@ -90,7 +90,7 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 | # | 出口 | 具体内容（发布包 3.1.4 核实） | as-built 行为 | 目标语义 |
 | --- | --- | --- | --- | --- |
 | E1 | session 文件与 evidence archive | 全部会话行，含 L1/L2 与工具结果 | 读全文 → `redactRuntimeSecrets`（密钥精确值）→ 归档；无内容分类过滤 | 持久化前按结构化条目过滤；密钥精确值脱敏不得当作内容分类脱敏 |
-| E2 | recall 工具结果正文 | 工具名 `recall`，返回 observation/reflection 正文；`details.sourceEntries[].content` **默认就带**（`includeSourceContent` 默认 `true`）：上游 `src/tools/recall-observation.ts:152,263` | 作为普通 tool result 进入 session 与 RPC 帧；无专门过滤 | 与 E1 同策略；默认关闭或受限 `content` 需先改冻结配置并验收 |
+| E2 | recall 工具结果正文 | 工具名 `recall`，参数只有 `id`；`details.sourceEntries[].content` 为**整条源条目正文且无截断**（`renderSourceEntryContentOnly`），唯一调用点未传第二参数 → `includeSourceContent` **恒为 `true`**（上游 `src/tools/recall-observation.ts:126-141,291`） | 作为普通 tool result 进入 session 与 RPC 帧；无专门过滤 | **无法靠调用参数关闭**；只能靠冻结配置或改上游；与 E1 同策略 |
 | E3 | compaction summary / fold | `session_before_compact` hook 产出的压缩结果与 memory fold | 作为 session 内容与 `context.compacted` 身份链的一部分 | 按 E1 过滤；身份字段不得因过滤而失真（否则降级为 `context.compaction_unknown`） |
 | E4 | 大 RPC 事件的落盘副本 | 超 1 MiB 帧投影后写入 `/workspace/.deepsonar-rpc-output/*.json` 并归档为 runtime artifact（[pi-rpc-output.ts](../packages/runtime-sandbox/src/pi-rpc-output.ts)） | 已有密钥脱敏；但只对固定 payload 键做 4 KiB 预览，`content` 不在其中 | 与 E1 同策略；新增出口时必须显式声明保留/过滤规则（见 §6.3） |
 | E5 | 普通工具结果在 Web viewer 的展示 | 现有 `parseAgentSession` 就把 tool result 渲染出来（[parseAgentSession.ts](../apps/web/src/session-viewer/parseAgentSession.ts)） | 已展示会话内 tool 结果 | **不开 memory 面板 ≠ 正文不显示**；E1/E2 的过滤规则必须先落地，不靠「不新增 UI」代替 |
@@ -282,19 +282,37 @@ Web 与质量投影仍以 `context.compacted` / `context.compaction_unknown` 为
 | 6 | 压缩身份链与 om 的关系 | 以 DeepSonar 身份为准并在无法表达时降级 / 扩展新 policy 表达 om | 先降级（诚实），有真实需求再扩契约 |
 | 7 | observer 是否允许独立模型（见 §5.4） | 只允许冻结模型 / 允许但受白名单与额度约束 | 首版只允许冻结模型；放宽需 D 片单独评审，不得放宽 `enforce_frozen_model` |
 
-## 9. 未验证项（不得当作已通过）
+## 9. 审查状态：静态已核 vs 仍需实测
 
-1. 沙箱 `--mode rpc` 下 om 是否真正可用：原设计曾报告本机 TUI 可加载，本次未复现，不能替代固定发布产物与 RPC 验收；**rpc 模式未跑**。
-2. debug 默认关且开启写 NDJSON 文件已静态核对；RPC 下通知/错误实际出口及 C5 仍未验证。
-3. om 是否会触发 `extension_error`（C2 的实际结论）。
-4. om 的 compaction hook 是否产出与 pi 原生一致的 `compaction_end` 结果（C3）。
-5. 后台 worker 的请求量级与对上游限流的影响（上游默认轮数不等于请求总量，fallback/catch-up/retry 也需计数）。
-6. memory ledger 对 session 体积、32 MiB 归档上限与 `BLOB_DIR` 的挤压程度。
-7. 剪贴板路径在无 X/Wayland 沙箱中的失败是否只影响 TUI 命令（不影响 rpc）。
-8. npm tarball/integrity（现已核 3.1.4 的发布物内容与 integrity；**canonical 来源仍未证实**，npmmirror 副本自算哈希一致不等于 canonical 已验）、宿主兼容、升级到下一版的 `entry` 及 §1 接口面（工具 schema / hooks / 配置键 / 导入 API）仍未验；完整配置覆盖隔离、passive 恢复 catch-up、无限额度适配、可信归因均未验证。
-9. 后台 worker 实际发出的模型是否可能落在冻结白名单外，以及 `GATEWAY_FROZEN_MODEL_MISMATCH` 到 Job 终态的传播路径（§5.4）尚未实测。
-10. C7 的 1.1 MiB `details…content` 反例是**代码静态推演**，未在 rpc 会话中复现；`includeSourceContent` 默认 `true` 已从发布包源码核实，但默认值是否被冻结配置改变、以及 Web viewer 是否实际渲染大块 `content`（E5）未验。
-11. 质量收益：压缩效果、上下文丢失率、`context_window_exceeded` 发生率——需冻结数据集与对照试验，本 issue 不做承诺。
+本节把「已能从固定发布物 3.1.4 tarball 或本仓代码静态判定」与「必须实测才能定论」分开。**静态已核不等于运行验证**；它只是把不可测的模糊项收敛成可判定的具体命题。
+
+### 9.1 静态已核（可从发布包 / 仓库代码直接判定）
+
+| # | 结论 | 证据 |
+| --- | --- | --- |
+| S1 | om 自身**不发 HTTP**，模型请求只能经宿主 `streamSimple` → 支持 §4 的 `requires_gateway` 论证 | 全仓无 `fetch` / `undici` / `node:http` |
+| S2 | 子进程 `spawn` **只出现在剪贴板**，且只被 `om:view` 使用 → rpc 模式不受影响 | `src/clipboard.ts:1,49`、`src/commands/view.ts` |
+| S3 | 所有 UI 通知都同时受 `ctx.hasUI` 约束；`showWorkerNotifications` 只是额外开关，不是唯一门 | `runtime.ts:132,306,316-324`、`consolidation-trigger.ts:113,146` |
+| S4 | 后台 worker 错误被捕获并记录，**不向宿主抛出** | `runtime.ts:310-329` `launchTrackedTask` 全程 try/catch |
+| S5 | `passive` 只关闭 `agent_start` / `turn_end` 触发，**不关闭 `session_before_compact`** → passive 仍可能触发 catch-up 模型调用 | `compaction-trigger.ts:11`、`consolidation-trigger.ts:175` 有 passive 早退；`compaction-hook.ts` 无 |
+| S6 | 压缩 hook 在 summary 为空时**主动让出所有权**交回 pi 原生摘要，在并发压缩时返回 `{cancel:true}` | `compaction-hook.ts:26-45` |
+| S7 | memory 对会话正文的体积贡献受 `observationsPoolMaxTokens`（默认 20k）约束，不是无界增长 | `compaction-hook.ts:14-22`、`buildCompactionProjection` 参数 |
+| S8 | `recall` 的源正文**无法通过调用参数关闭**（参数只有 `id`，唯一调用点用默认 `true`） | `recall-observation.ts:126-141,291` |
+| S9 | 大帧 4 KiB 预览只覆盖固定 payload 键，`content` 不在其中；超限抛错不降级 | `pi-rpc-output.ts:4,6,60`、`runtime-agent.ts:1531-1532` |
+
+### 9.2 仍需实测（不得当作已通过）
+
+1. **rpc 模式下 `ctx.hasUI` 的取值**：S3 已收窄为这一条——通知是否会出现只取决于 hasUI；`--mode rpc` 下的实际取值与 `pi.on(...)` 回调中 UI 之外的输出仍未验。
+2. **`extension_error` 的实际触发面**：S4 排除了 worker 失败路径；仍待验的是 `session_before_compact` hook 自身抛错、注册期错误，以及 pi 是否把扩展内部 rejected promise 映射为 `extension_error`（映射为 `failRuntime` 即整 Job 失败）。
+3. **compaction 契约一致性（C3/C6）**：S6 表明 om 要么让出、要么给自定义 summary；未验的是它给出 summary 时的结构与 adapter 期望的 `context.compacted` 身份字段是否兼容，以及 `compaction_end.result === null` 是否会被 native fallback 触发。
+4. **数据出口过滤实现**：S8 说明 recall 正文不可关；E1–E6 的过滤规则均未实现，也未验收（含 Web viewer 实际渲染大块 `content`）。
+5. **C7 反例的可复现性**：S9 已确认代码条件成立；未在 rpc 会话中复现，也未确认 3.1.4 在真实会话中会产生体积压在 `content` 上的 >1 MiB 帧。
+6. **canonical 来源**：npmmirror 副本自算哈希与 integrity 一致只证明**该副本**一致，canonical registry 未核；宿主兼容与升级到下一版的 `entry` 形态也未验（master 已改 `dist/`）。
+7. **配置覆盖隔离**：项目 `.pi/settings.json` 与环境变量覆盖链未隔离，也未证明冻结值不可覆盖。
+8. **额度与归因**：无限额度适配、有限总额保底契约、可信 workload 归因的具体方案均未实现。
+9. **后台请求量级**：上游默认轮数（16）不等于请求总量，fallback / catch-up / retry 也需计数；对上游限流的影响未测。
+10. **session 体积**：S7 给出 memory 部分的上界，但长 Job 下与 32 MiB 归档上限、`BLOB_DIR` 压边的实际余量未测。
+11. **质量收益**：压缩效果、上下文丢失率、`context_window_exceeded` 发生率——需冻结数据集与对照试验，本 issue 不做承诺。
 
 ## 10. A 片验收
 
