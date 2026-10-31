@@ -32,10 +32,13 @@ let events: EventEnvelopeInput[] = [];
 let runnerCalls = 0;
 let omitRunnerDispose = false;
 let gate: (() => boolean) | undefined;
-const fakeSql = Object.assign(async (strings: TemplateStringsArray) => {
+const fakeSql = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
   const query = strings.join("?").replace(/\s+/g, " ").trim();
   if (query.startsWith("SELECT * FROM jobs")) return [job];
-  if (query.startsWith("SELECT target_json FROM canvases")) return [{ target_json: { effective_finding_protocol: DEFAULT_FINDING_PROTOCOL } }];
+  if (query === "SELECT c.target_json FROM jobs j JOIN canvases c ON c.id = j.canvas_id AND c.project_id = j.project_id WHERE j.id = ? AND j.canvas_id = ? AND c.id = ?") {
+    assert.deepEqual(values, [jobId, canvasId, canvasId]);
+    return [{ target_json: { effective_finding_protocol: DEFAULT_FINDING_PROTOCOL } }];
+  }
   if (query.startsWith("SELECT id, attempt_no, snapshot_identity_json FROM job_attempts")) return [{ id: attemptId, attempt_no: 1 }];
   if (query.startsWith("UPDATE jobs SET payload_json") || query.startsWith("UPDATE jobs SET transcript_uri")) return [];
   throw new Error(`Unexpected executor database access: ${query}`);
