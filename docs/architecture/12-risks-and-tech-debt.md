@@ -60,6 +60,14 @@ P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspec
 
 当前目录发现和 Skill 拉取受 Job token、快照、预算、网络和审计约束；任务级或会话级 Pack 持久化、评估晋升和跨任务推荐仍属于长期阶段。暂缓期间，Skill 只能影响当前任务的方法，不能改变 Job 快照、项目范围、镜像、凭据或平台工具权限。
 
+### 3.5 项目级 Finding 强关系关联（#770）
+
+项目查询增强、特征投影、词法检索与持久弱候选已 as-built：`project_finding_features` 保存可重建特征，`project_finding_candidate_*` 保存 canonical 双端弱候选，读端按当前来源与活动代核对，离线评估与积压探针已接线。跨任务**强关系**（疑似同一问题 / 同根因不同实例）暂缓；2026-10-31 随 #770 按已交付切片收口，强关系拆出独立跟踪。
+
+暂缓原因是输入缺口而非实现缺口：`FindingPayload` 没有 asset / tenant / environment / version / parameter / root-cause 字段，权威身份一律 `null`；仓库没有独立人工标注集，也没有预先约定的质量阈值。当前候选 `kind` 只可能为 `similar` 或 `insufficient_information`，`suspected_same_issue` 与 `same_root_cause_different_instance` 保留类型但永不产生。
+
+解除暂缓需要：可证明的历史资产/版本/租户映射与来源修订、脱敏且按问题家族/资产分离的独立人工标注调参/留出集、在查看留出结果前冻结的阈值。在此之前不得把文本相似或弱候选宣称为同问题结论，不得传播 Verify / 处置状态，也不得用「未自动合并」充当质量指标。用户已豁免生产执行与真实人工标注质量门验收，该豁免不补足上述输入。
+
 ## 4. 已收口边界（不作为待办）
 
 下列结论已有代码和测试支撑，本节用于防止历史计划或旧 issue 把已完成能力重新写成债务：

@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### 验收边界与 #770 范围收口
+
+- 仓库验收不再要求生产测试部署（见 AGENTS.md「验收边界」）。后续开发以 GitHub Actions 实际通过的门禁为准；未执行的生产重跑、真实模型试验和人工标注仍须如实标注为未验证，不能用离线或合成证据替代效果、容量与 SLA 结论。
+- #770 按已交付切片收口：切片 A 独立来源身份、切片 B 项目查询增强、切片 C 特征投影、切片 D 词法检索与持久弱候选，以及离线评估与积压测量工具均纳入 as-built。跨任务**强关系**（疑似同一问题 / 同根因不同实例）不在本 issue 内交付，按暂缓设计登记到风险文档并独立跟踪。
+- 用户 2026-10-31 明确豁免 #770 的生产执行与真实人工标注质量门验收。豁免不代表强关系质量已通过，也不代表权威资产映射已具备：`FindingPayload` 仍无 asset / tenant / environment / version / root-cause 字段，当前实现只输出 `similar` / `insufficient_information`，`suspected_same_issue` 与 `same_root_cause_different_instance` 保留类型但永不产生。本版不宣称跨任务关联闭环完成。
+
 ## [0.6.1] - 2026-10-31
 
 ### 发布与升级边界
