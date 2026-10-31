@@ -1,0 +1,25 @@
+{
+  "contract": "deepsonar.clickhouse.runtime.sources/v1",
+  "debianSnapshot": "20260731T162426Z",
+  "debianSecuritySnapshot": "20260731T162426Z",
+  "clickhouse": {
+    "repository": "https://github.com/ClickHouse/ClickHouse",
+    "tag": "v26.3.28.5-lts",
+    "version": "26.3.28.5",
+    "package": "clickhouse-common-static",
+    "binary": "/opt/deepsonar/bin/clickhouse",
+    "note": "Official unmodified LTS static binary from ClickHouse GitHub Releases. Bugcrowd reproduction must use this binary or a later official pin; sanitizer rebuilds can help find issues but do not qualify.",
+    "architectures": {
+      "amd64": {
+        "url": "https://github.com/ClickHouse/ClickHouse/releases/download/v26.3.28.5-lts/clickhouse-common-static-26.3.28.5-amd64.tgz",
+        "sha256": "63d4e4e4b72d9859f1f3ef93f37202e7428c110ea7f6ba090c564c5419b729b7",
+        "size_bytes": 223679600
+      },
+      "arm64": {
+        "url": "https://github.com/ClickHouse/ClickHouse/releases/download/v26.3.28.5-lts/clickhouse-common-static-26.3.28.5-arm64.tgz",
+        "sha256": "4e30ba7a669b417b89901fae4f3743cacf12d332297edcebb3cef1a1f4c65a3f",
+        "size_bytes": 203846722
+      }
+    }
+  }
+}

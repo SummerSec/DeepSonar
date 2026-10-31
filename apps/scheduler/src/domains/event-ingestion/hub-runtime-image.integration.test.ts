@@ -1,0 +1,277 @@
+import assert from "node:assert/strict";
+import { createHash, randomUUID } from "node:crypto";
+import test from "node:test";
+import { deleteProjectsLeavingAuditShells } from "../../test-project-teardown.js";
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
+
+if (!testDatabaseUrl) {
+  test("hub runtime image integration (set TEST_DATABASE_URL to run)", {
+    skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
+  }, () => {});
+} else {
+  test("Hub intent runtime_image_key is validated against the project catalog and frozen into the Worker snapshot", async () => {
+    // Install the explicit URL before importing db/core so a developer .env
+    // cannot redirect this integration run to an existing database.
+    process.env.DATABASE_URL = testDatabaseUrl;
+    process.env.AGENT_MODE = "fake";
+    process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
+
+    const { migrate, sql } = await import("../../db.js");
+    const { ingestEvent, preflightDeferredSemanticEvent } = await import("../../core.js");
+    const { ControlInputError } = await import("../../control-input.js");
+    const { resolveCurrentSnapshotForExistingJob } = await import("../job-control/rerun.js");
+    const { listHubRuntimeImageCatalog } = await import("../../runtime-images.js");
+    await migrate();
+
+    const projectId = randomUUID();
+    const credentialId = randomUUID();
+    const canvasId = `hub-runtime-image-${randomUUID()}`;
+    const kaliDigest = `sha256:${createHash("sha256").update(`fixture:${canvasId}:kali`).digest("hex")}`;
+    const kaliRef = `cr.example.invalid/deepsonar-kali-minimal@${kaliDigest}`;
+
+    // Fixture-owned trusted version row id, captured for finally cleanup. The
+    // CI gate runs every integration step against one shared Postgres; leaving
+    // running/pending Jobs or trusted version fixtures behind would poison
+    // later global-claim assertions (e.g. convergence-recovery sets
+    // maxGlobalJobs=4 and expects an empty active set before claiming).
+    let kaliVersionId: string | null = null;
+    let chromeVersionId: string | null = null;
+    try {
+      await sql`
+        INSERT INTO projects (id, name, config_json)
+        VALUES (${projectId}, 'hub-runtime-image', ${sql.json({ rules: { hubEnabled: false } })})`;
+      await sql`
+        INSERT INTO canvases (id, project_id, title, target_json)
+        VALUES (${canvasId}, ${projectId}, 'hub-runtime-image', ${sql.json({ network_policy: { allow_egress: false } })})`;
+      const [root] = await sql<{ id: string }[]>`
+        INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+        VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})
+        RETURNING id`;
+
+      // Baseline catalog rows come from schema.sql; only the executable trusted
+      // version + selected-channel ref are fixture-owned. deepsonar-chrome-fuzz
+      // has no trusted version yet, so it must be absent from the Hub catalog
+      // (official specialty is default-on once a trusted version exists).
+      const [kaliVersion] = await sql<{ id: string }[]>`
+        INSERT INTO runtime_image_versions (runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at)
+        SELECT id, ${`0.1.0-${randomUUID().slice(0, 8)}`}, ${kaliRef}, ${kaliRef}, ${kaliDigest},
+               ${sql.json(["linux/amd64", "linux/arm64"] as never)}, 'trusted', now()
+        FROM runtime_images WHERE image_key = 'deepsonar-kali-minimal'
+        RETURNING id`;
+      assert.ok(kaliVersion, "baseline deepsonar-kali-minimal row must exist");
+      kaliVersionId = kaliVersion?.id ?? null;
+      await sql`
+        INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest)
+        VALUES (${kaliVersion.id}, 'aliyun-acr', ${kaliRef}, ${kaliRef}, ${kaliDigest})`;
+
+      const hubSnapshot = {
+        name: "hub_reason",
+        role_kind: "hub",
+        platform_tools: ["list_available_roles", "list_available_runtime_images", "emit_progress", "submit_hub_decision", "mark_job_done"],
+      };
+      const makeHubJob = async () => {
+        const id = randomUUID();
+        await sql`
+          INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+          VALUES (${id}, ${projectId}, ${canvasId}, 'hub_reason', 'running', ${sql.json(hubSnapshot)}, ${sql.json({})})`;
+        return id;
+      };
+      const intent = (description: string, runtimeImageKey?: string, agentCli?: string) => ({
+        from: [root.id],
+        role: "review",
+        description,
+        prompt: "Review the referenced root goal and report durable evidence for this fixture.",
+        ...(runtimeImageKey ? { runtime_image_key: runtimeImageKey } : {}),
+        ...(agentCli ? { agent_cli: agentCli } : {}),
+      });
+
+      // 1) A catalog image_key is accepted and frozen into the derived Worker snapshot.
+      const hubWithImage = await makeHubJob();
+      const accepted = await ingestEvent(hubWithImage, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "hub_decision",
+        payload: { intents: [intent("dispatch review on kali runtime", "deepsonar-kali-minimal")] },
+      });
+      assert.deepEqual(accepted, { deduped: false, seq: 1 });
+      const [kaliJob] = await sql<{
+        id: string;
+        snapshot: { runtime_image?: { image_key?: string }; runtime_image_key?: string | null };
+      }[]>`
+        SELECT id, agent_snapshot_json AS snapshot FROM jobs
+        WHERE canvas_id = ${canvasId} AND type = 'review' AND parent_job_id = ${hubWithImage}`;
+      assert.equal(kaliJob?.snapshot.runtime_image?.image_key, "deepsonar-kali-minimal");
+      assert.equal(kaliJob?.snapshot.runtime_image_key, "deepsonar-kali-minimal");
+      const [kaliRow] = await sql`SELECT * FROM jobs WHERE id = ${kaliJob!.id}`;
+      const current = await resolveCurrentSnapshotForExistingJob(sql, kaliRow as Record<string, unknown>);
+      assert.equal(current.runtime_image.image_key, "deepsonar-kali-minimal");
+      const catalog = await listHubRuntimeImageCatalog(sql, projectId);
+      const kaliEntry = catalog.find((entry) => entry.image_key === "deepsonar-kali-minimal");
+      assert.ok(kaliEntry?.compatible_agent_clis.includes("dsh"));
+      assert.equal(kaliEntry?.readiness, "ready");
+      assert.equal("image_ref" in (kaliEntry ?? {}), false);
+      assert.equal("digest" in (kaliEntry ?? {}), false);
+      assert.equal(catalog.some((entry) => entry.image_key === "deepsonar-chrome-fuzz"), false);
+
+      // 2) Omitting the key keeps the role default resolution (review -> deepsonar-base).
+      const hubDefault = await makeHubJob();
+      await ingestEvent(hubDefault, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "hub_decision",
+        payload: { intents: [intent("dispatch review on default runtime")] },
+      });
+      const [defaultJob] = await sql<{ snapshot: { runtime_image?: { image_key?: string } } }[]>`
+        SELECT agent_snapshot_json AS snapshot FROM jobs
+        WHERE canvas_id = ${canvasId} AND type = 'review' AND parent_job_id = ${hubDefault}`;
+      assert.equal(defaultJob?.snapshot.runtime_image?.image_key, "deepsonar-base");
+
+      // 3) An official specialty image without a trusted executable version is still rejected.
+      const hubNoTrusted = await makeHubJob();
+      await assert.rejects(
+        preflightDeferredSemanticEvent(hubNoTrusted, "hub_decision", {
+          intents: [intent("dispatch review on chrome fuzz", "deepsonar-chrome-fuzz")],
+        }),
+        (error: unknown) => error instanceof ControlInputError && error.code === "invalid_runtime_image" && error.retryable,
+      );
+      await assert.rejects(
+        ingestEvent(hubNoTrusted, {
+          v: 1,
+          event_id: randomUUID(),
+          type: "hub_decision",
+          payload: { intents: [intent("dispatch review on chrome fuzz apply", "deepsonar-chrome-fuzz")] },
+        }),
+        (error: unknown) => error instanceof ControlInputError && error.code === "invalid_runtime_image",
+      );
+      const [noTrustedJob] = await sql<{ count: number }[]>`
+        SELECT COUNT(*)::int AS count FROM jobs
+        WHERE canvas_id = ${canvasId} AND type = 'review' AND parent_job_id = ${hubNoTrusted}`;
+      assert.equal(noTrustedJob?.count, 0, "rejected image proposal must not create a Worker Job");
+
+      // 4) Unknown market keys are rejected by the catalog check (not by shape).
+      const hubUnknown = await makeHubJob();
+      await assert.rejects(
+        preflightDeferredSemanticEvent(hubUnknown, "hub_decision", {
+          intents: [intent("dispatch review on ghost image", "deepsonar-ghost")],
+        }),
+        (error: unknown) => error instanceof ControlInputError && error.code === "invalid_runtime_image",
+      );
+
+      // 5) OCI references / tags never reach the catalog check: the strict schema rejects them.
+      const hubOci = await makeHubJob();
+      await assert.rejects(
+        preflightDeferredSemanticEvent(hubOci, "hub_decision", {
+          intents: [intent("dispatch review on raw oci ref", "ghcr.io/summersec/deepsonar-base:latest")],
+        }),
+        (error: unknown) => error instanceof ControlInputError && error.code === "invalid_payload",
+      );
+
+      // 6) Catalog membership is not enough: dsh cannot freeze a Chrome fuzz image.
+      const chromeDigest = `sha256:${createHash("sha256").update(`fixture:${canvasId}:chrome`).digest("hex")}`;
+      const chromeRef = `cr.example.invalid/deepsonar-chrome-fuzz@${chromeDigest}`;
+      const [chromeVersion] = await sql<{ id: string }[]>`
+        INSERT INTO runtime_image_versions (runtime_image_id, version, image_ref, resolved_ref, digest, platforms_json, trust_status, promoted_at)
+        SELECT id, ${`0.1.0-${randomUUID().slice(0, 8)}`}, ${chromeRef}, ${chromeRef}, ${chromeDigest},
+               ${sql.json(["linux/amd64", "linux/arm64"] as never)}, 'trusted', now()
+        FROM runtime_images WHERE image_key = 'deepsonar-chrome-fuzz'
+        RETURNING id`;
+      assert.ok(chromeVersion, "baseline deepsonar-chrome-fuzz row must exist");
+      chromeVersionId = chromeVersion.id;
+      await sql`
+        INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest)
+        VALUES (${chromeVersion.id}, 'aliyun-acr', ${chromeRef}, ${chromeRef}, ${chromeDigest})`;
+      // Official specialty: no project_runtime_images row → default ON in Hub catalog.
+      const catalogDefaultOn = await listHubRuntimeImageCatalog(sql, projectId);
+      assert.ok(
+        catalogDefaultOn.some((entry) => entry.image_key === "deepsonar-chrome-fuzz"),
+        "official chrome-fuzz with trusted version must appear without project opt-in row",
+      );
+      await sql`
+        INSERT INTO project_runtime_images (project_id, runtime_image_id, enabled)
+        SELECT ${projectId}, id, false FROM runtime_images WHERE image_key = 'deepsonar-chrome-fuzz'`;
+      const catalogDisabled = await listHubRuntimeImageCatalog(sql, projectId);
+      assert.equal(
+        catalogDisabled.some((entry) => entry.image_key === "deepsonar-chrome-fuzz"),
+        false,
+        "explicit project disable must hide official specialty from Hub catalog",
+      );
+      await sql`
+        UPDATE project_runtime_images SET enabled = true
+        WHERE project_id = ${projectId}
+          AND runtime_image_id = (SELECT id FROM runtime_images WHERE image_key = 'deepsonar-chrome-fuzz')`;
+      // Composition model: Hub 可显式提案 agent_cli；项目软缺省优先于 RoleConfig。
+      // 本用例直接提案 dsh，并写入白名单，验证 chrome-fuzz×dsh 在冻快照时收成 invalid_runtime_image。
+      // #757: provide a valid project-owned DSH credential so this proposal
+      // reaches the image admission gate; never mutate shared global RoleConfig.
+      const { encryptSecret } = await import("../../credentials.js");
+      const { legacySettingsConfig } = await import("../../provider-settings.js");
+      const encrypted = encryptSecret("fixture-dsh-secret");
+      const settings = legacySettingsConfig({ provider: "openai", secret: "fixture-dsh-secret",
+        agentCli: "dsh", model: "grok-4.6", metadata: { base_url: "http://127.0.0.1:9" } });
+      await sql`INSERT INTO credentials (id, name, kind, provider, project_id,
+        ciphertext, nonce, auth_tag, fingerprint, last4, status, agent_cli, settings_config_json)
+        VALUES (${credentialId}, 'hub image dsh fixture', 'llm_provider', 'openai', ${projectId},
+        ${encrypted.ciphertext}, ${encrypted.nonce}, ${encrypted.auth_tag}, ${credentialId}, 'fake',
+        'active', 'dsh', ${sql.json(settings as never)})`;
+      await sql`
+        UPDATE projects SET config_json = config_json || ${sql.json({
+          enabled_agent_clis: ["claude-code", "pi", "dsh"],
+          default_agent_cli: "dsh",
+        })}
+        WHERE id = ${projectId}`;
+      const catalogWithChrome = await listHubRuntimeImageCatalog(sql, projectId);
+      assert.ok(
+        catalogWithChrome.some((entry) => entry.image_key === "deepsonar-chrome-fuzz"),
+        "official chrome-fuzz with trusted version must appear in Hub catalog before the CLI gate",
+      );
+      const hubCli = await makeHubJob();
+      await assert.rejects(
+        preflightDeferredSemanticEvent(hubCli, "hub_decision", {
+          intents: [intent("dispatch review on chrome fuzz for dsh", "deepsonar-chrome-fuzz", "dsh")],
+        }),
+        (error: unknown) => error instanceof ControlInputError && error.code === "invalid_runtime_image" && error.retryable,
+      );
+      await assert.rejects(
+        ingestEvent(hubCli, {
+          v: 1,
+          event_id: randomUUID(),
+          type: "hub_decision",
+          payload: { intents: [intent("dispatch review on chrome fuzz for dsh apply", "deepsonar-chrome-fuzz", "dsh")] },
+        }),
+        (error: unknown) => error instanceof ControlInputError && error.code === "invalid_runtime_image",
+      );
+      const [cliJob] = await sql<{ count: number }[]>`
+        SELECT COUNT(*)::int AS count FROM jobs
+        WHERE canvas_id = ${canvasId} AND type = 'review' AND parent_job_id = ${hubCli}`;
+      assert.equal(cliJob?.count, 0, "CLI-incompatible image proposal must not create a Worker Job");
+    } finally {
+      // The gate runs every Postgres integration step against one shared DB, and
+      // dispatcher claims are global: 5 'running' hub Jobs left behind would
+      // consume the maxGlobalJobs budget of later tests (dispatchSlots clamps at
+      // max(0, cap - active)), and a leftover trusted kali version + derived
+      // pending review Jobs would bleed into runtime-image and claim assertions.
+      if (kaliVersionId) {
+        await sql`DELETE FROM runtime_image_version_refs WHERE version_id = ${kaliVersionId}`;
+        await sql`DELETE FROM runtime_image_versions WHERE id = ${kaliVersionId}`;
+      }
+      if (chromeVersionId) {
+        await sql`DELETE FROM runtime_image_version_refs WHERE version_id = ${chromeVersionId}`;
+        await sql`DELETE FROM runtime_image_versions WHERE id = ${chromeVersionId}`;
+      }
+      // events.job_id and canvas_nodes.job_id reference jobs without ON DELETE
+      // CASCADE, so rows that point at this canvas' Jobs must go first. The
+      // accepted hub decisions also write semantic events for the derived
+      // Worker Jobs, so the subquery covers both hub and worker ids.
+      await sql`DELETE FROM events WHERE job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})`;
+      await sql`DELETE FROM canvas_edges WHERE canvas_id = ${canvasId}`;
+      await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
+      await sql`UPDATE jobs SET parent_job_id = NULL WHERE canvas_id = ${canvasId}`;
+      await sql`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
+      await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
+      await sql`DELETE FROM credentials WHERE id = ${credentialId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
+      await sql.end({ timeout: 5 });
+    }
+  });
+}

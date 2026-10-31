@@ -1,0 +1,77 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { cursorErrorHttpStatus, decodeCursor, encodeCursor, pageLimit, QueryParameterError } from "./pagination.js";
+
+function rawCursor(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}
+
+test("pagination cursors are opaque and kind scoped", () => {
+  const cursor = encodeCursor({ kind: "jobs", id: "abc", created_at: "2026-08-04T00:00:00.000Z" });
+  assert.equal(decodeCursor(cursor, "jobs"), null);
+  assert.equal(decodeCursor(cursor, "findings"), null);
+  assert.equal(decodeCursor("not-a-cursor", "jobs"), null);
+});
+
+test("database keyset cursors reject decodable invalid casts before SQL", () => {
+  const stamp = "2026-08-04T00:00:00.000Z";
+  assert.equal(
+    decodeCursor(rawCursor({ v: 1, kind: "jobs", id: "not-a-uuid", created_at: stamp }), "jobs"),
+    null,
+  );
+  assert.equal(
+    decodeCursor(rawCursor({ v: 1, kind: "findings", id: "00000000-0000-0000-0000-000000000001", created_at: "not-a-time" }), "findings"),
+    null,
+  );
+  assert.equal(
+    decodeCursor(rawCursor({ v: 1, kind: "events", id: "0", created_at: stamp }), "events"),
+    null,
+  );
+  assert.equal(
+    decodeCursor(rawCursor({ v: 1, kind: "events", id: "-1", created_at: stamp }), "events"),
+    null,
+  );
+  assert.equal(
+    decodeCursor(rawCursor({ v: 1, kind: "events", id: Number.MAX_SAFE_INTEGER + 1, created_at: stamp }), "events"),
+    null,
+  );
+  assert.equal(
+    decodeCursor(rawCursor({ v: 1, kind: "events", id: "9223372036854775808", created_at: stamp }), "events"),
+    null,
+  );
+  assert.equal(
+    decodeCursor(rawCursor({ v: 1, kind: "events", id: "9223372036854775807", created_at: stamp }), "events")?.id,
+    "9223372036854775807",
+  );
+});
+
+test("valid cursors use canonical UUID and timestamp forms", () => {
+  const cursor = encodeCursor({
+    kind: "jobs",
+    id: "00000000-0000-0000-0000-000000000001",
+    created_at: "2026-08-04T00:00:00.000Z",
+  });
+  assert.equal(decodeCursor(cursor, "jobs")?.id, "00000000-0000-0000-0000-000000000001");
+});
+test("page limit is capped for bounded list endpoints", () => {
+  assert.equal(pageLimit("5000"), 50);
+  assert.equal(pageLimit("7"), 7);
+  assert.equal(pageLimit(undefined), 50);
+  // #490: malformed / non-positive limits are a client error, not a silent fallback.
+  assert.throws(() => pageLimit("0"), QueryParameterError);
+  assert.throws(() => pageLimit("abc"), QueryParameterError);
+  assert.throws(() => pageLimit("-1"), QueryParameterError);
+});
+
+test("cursor errors use bad-request for malformed cursors and conflict for gaps", () => {
+  assert.equal(cursorErrorHttpStatus("INVALID_CURSOR"), 400);
+  assert.equal(cursorErrorHttpStatus("CURSOR_GAP"), 409);
+});
+
+
+test("finding cursors retain PostgreSQL microseconds and reject invalid calendar dates", () => {
+  const id = "00000000-0000-0000-0000-000000000001";
+  const stamp = "2026-08-04T00:00:00.123456Z";
+  assert.equal(decodeCursor(encodeCursor({ kind: "findings", id, created_at: stamp }), "findings")?.created_at, stamp);
+  assert.equal(decodeCursor(encodeCursor({ kind: "findings", id, created_at: "2026-02-30T00:00:00.123456Z" }), "findings"), null);
+});

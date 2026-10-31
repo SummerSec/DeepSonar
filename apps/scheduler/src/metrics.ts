@@ -1,0 +1,152 @@
+/**
+ * 指标（§13.1）：进程内计数器 + 抓取时 DB 聚合 gauge，Prometheus 文本格式。
+ * Level A 单节点设计：无外部依赖；多实例时需换 pushgateway/OTel。
+ */
+import { sql } from "./db.js";
+
+const counters = new Map<string, number>();
+const processGauges = new Map<string, number>();
+
+function key(name: string, labels?: Record<string, string>): string {
+  if (!labels) return name;
+  const l = Object.entries(labels)
+    .map(([k, v]) => `${k}="${v.replace(/"/g, '\\"')}"`)
+    .join(",");
+  return `${name}{${l}}`;
+}
+
+/** 计数器 +n（默认 +1）；labels 仅放低基数值（reason/provider 等），禁止放 job_id */
+export function inc(name: string, labels?: Record<string, string>, n = 1): void {
+  const k = key(name, labels);
+  counters.set(k, (counters.get(k) ?? 0) + n);
+}
+
+/** 更新由后台对账维护的进程内 gauge；抓取路径不得在这里访问 Docker 等外部系统。 */
+export function setGauge(name: string, value: number): void {
+  if (!Number.isFinite(value) || value < 0) throw new Error(`无效的 gauge 值：${name}`);
+  processGauges.set(name, value);
+}
+
+interface Gauge {
+  help: string;
+  query: () => Promise<number>;
+}
+
+/** 抓取时现算的 gauge（DB 是唯一真相，进程重启不丢） */
+const GAUGES: Record<string, Gauge> = {
+  deepsonar_jobs_active: {
+    help: "Jobs in non-terminal states",
+    query: async () =>
+      (await sql<[{ n: number }]>`
+        SELECT COUNT(*)::int AS n FROM jobs
+        WHERE status IN ('pending','claimed','provisioning','running','waiting_human')`)[0].n,
+  },
+  deepsonar_queue_depth: {
+    help: "Pending jobs waiting to be claimed",
+    query: async () =>
+      (await sql<[{ n: number }]>`
+        SELECT COUNT(*)::int AS n FROM jobs WHERE status = 'pending'`)[0].n,
+  },
+  deepsonar_sandbox_active: {
+    help: "Running jobs with a live sandbox_id",
+    query: async () =>
+      (await sql<[{ n: number }]>`
+        SELECT COUNT(*)::int AS n FROM jobs
+        WHERE status = 'running' AND sandbox_id IS NOT NULL`)[0].n,
+  },
+  deepsonar_platform_claims_paused: {
+    help: "1 when an admin paused platform-wide Job claims (#740), else 0; missing state fails closed as 1",
+    query: async () => {
+      const [row] = await sql<{ paused: boolean | null }[]>`
+        SELECT claims_paused AS paused FROM global_settings WHERE id = 'global'`;
+      return row?.paused === false ? 0 : 1;
+    },
+  },
+  deepsonar_audit_logs_total: {
+    help: "Audit log rows (append-only)",
+    query: async () =>
+      (await sql<[{ n: number }]>`
+        SELECT COUNT(*)::int AS n FROM audit_logs`)[0].n,
+  },
+};
+
+const HELP: Record<string, string> = {
+  deepsonar_jobs_created_total: "Jobs created",
+  deepsonar_jobs_failed_total: "Jobs reaching failed/timeout terminal states, by reason",
+  deepsonar_jobs_orphan_total: "Jobs marked orphan",
+  deepsonar_job_duration_seconds_sum: "Sum of finished job durations (succeeded/failed)",
+  deepsonar_job_duration_seconds_count: "Count of finished jobs with duration",
+  deepsonar_model_requests_total: "Model gateway forwarded requests",
+  deepsonar_model_tokens_total: "Model gateway usage tokens (best-effort from usage fields)",
+  deepsonar_provider_errors_total: "Model gateway upstream/provider errors",
+  deepsonar_gateway_upstream_attempts_total: "Model gateway upstream attempts",
+  deepsonar_gateway_upstream_retries_total: "Model gateway upstream retries by reason",
+  deepsonar_gateway_upstream_exhausted_total: "Model gateway upstream retry exhaustion by reason",
+  deepsonar_api_auth_failed_total: "API auth failures (401/403)",
+  deepsonar_sandbox_provision_seconds_sum: "Sum of sandbox provision durations by provider",
+  deepsonar_sandbox_provision_seconds_count: "Count of successful sandbox provisions by provider",
+  deepsonar_sandbox_provision_failed_total: "Sandbox provision failures by provider",
+  deepsonar_sandbox_provision_retry_total: "Automatic sandbox provision retries",
+  deepsonar_pi_stream_truncation_retry_total: "Automatic Job retries after Pi Anthropic stream truncation",
+  deepsonar_agent_context_window_exceeded_total: "Agent runs that hit provider context window limits (Prompt is too long)",
+  deepsonar_context_window_exceeded_retry_total: "Automatic Job retries after context_window_exceeded with prompt compaction",
+  deepsonar_sandbox_cleanup_failed_total: "Sandbox destroy/cleanup failures",
+  deepsonar_shared_assets_cleanup_failed_total: "共享资产卷清理失败次数",
+  deepsonar_desired_state_cleanup_failures_total: "Desired-state cleanup failures by managed resource type",
+  deepsonar_runtime_image_gc_removed_total: "Runtime image references removed by safe GC",
+  deepsonar_runtime_image_gc_already_absent_total: "Runtime image GC candidates whose known refs were already absent (idempotent success)",
+  deepsonar_runtime_image_gc_failures_total: "Runtime image GC failures by reason",
+  deepsonar_runtime_image_tools_manifest_overwrite_total: "Registry sync overwrote a non-empty tools_manifest_sha256 with a different catalog value",
+  deepsonar_host_disk_check_failures_total: "Host filesystem statfs failures",
+  deepsonar_graph_snapshots_total: "Bounded graph prompt projections by scope and truncation",
+  deepsonar_graph_yaml_chars_total: "Total characters injected through bounded graph projections by scope",
+  deepsonar_control_input_warnings_total: "Malformed runtime lines and forbidden control-file attempts",
+  deepsonar_event_rate_limited_total: "Semantic events rejected by the persistent per-Job rate limiter, by bucket",
+  deepsonar_usage_ledger_write_failures_total: "Model Gateway usage ledger write failures, by source",
+  deepsonar_finding_no_progress_total: "Findings settled as inconclusive because the fact-first gate conclusion did not change",
+  deepsonar_hub_budget_exhausted_total: "Hub self-drive stopped because the optional round-count guardrail was exhausted",
+  deepsonar_report_auto_retry_total: "Task report jobs automatically re-dispatched after a terminal failure",
+  deepsonar_report_root_settled_total: "Canvases whose root left reporting after report retry budget exhaustion",
+  deepsonar_opensandbox_upload_failures_total: "OpenSandbox worker upload failures matching the transient-upload classifier after per-call retries",
+  deepsonar_opensandbox_upload_circuit_trips_total: "OpenSandbox upload circuit trips (persistent upload-5xx waves)",
+  deepsonar_opensandbox_upload_alerts_total: "Ops alerts emitted for persistent OpenSandbox upload failures",
+  deepsonar_opensandbox_upload_self_heal_total: "OpenSandbox upload circuit self-heal attempts by result",
+  deepsonar_opensandbox_upload_probe_failures_total: "OpenSandbox pre-dispatch upload probe failures",
+};
+
+const PROCESS_GAUGE_HELP: Record<string, string> = {
+  deepsonar_shared_assets_orphan_volumes: "对应 Job 已非活跃状态的受管共享资产卷数量",
+  deepsonar_shared_assets_orphan_volume_age_seconds: "对应 Job 已非活跃状态的受管共享资产卷最大年龄秒数",
+  deepsonar_cleanup_residual_containers: "Desired-state cleanup 后残留的非活跃受管容器数量",
+  deepsonar_cleanup_residual_volumes: "Desired-state cleanup 后残留的非活跃受管卷数量",
+  deepsonar_cleanup_consecutive_failures: "Desired-state cleanup 连续失败轮次",
+  deepsonar_runtime_image_gc_candidates: "最近一次安全 GC 判定的可删除 runtime image 版本数量",
+  deepsonar_runtime_image_gc_retained_in_use: "最近一次安全 GC 因容器引用而保留的版本数量",
+  deepsonar_host_disk_used_percent: "Scheduler 监控的宿主文件系统已用百分比",
+  deepsonar_host_disk_pressure: "宿主文件系统水位：0=ok, 1=warning, 2=error/unknown",
+  deepsonar_opensandbox_upload_circuit_open: "OpenSandbox upload circuit state: 0=closed, 1=half_open, 2=open",
+};
+
+/** Prometheus text exposition */
+export async function renderMetrics(): Promise<string> {
+  const out: string[] = [];
+  for (const [name, help] of Object.entries(HELP)) {
+    out.push(`# HELP ${name} ${help}`, `# TYPE ${name} counter`);
+    for (const [k, v] of counters) {
+      if (k === name || k.startsWith(`${name}{`)) out.push(`${k} ${v}`);
+    }
+  }
+  for (const [name, g] of Object.entries(GAUGES)) {
+    out.push(`# HELP ${name} ${g.help}`, `# TYPE ${name} gauge`);
+    try {
+      out.push(`${name} ${await g.query()}`);
+    } catch {
+      out.push(`${name} 0`);
+    }
+  }
+  for (const [name, help] of Object.entries(PROCESS_GAUGE_HELP)) {
+    out.push(`# HELP ${name} ${help}`, `# TYPE ${name} gauge`);
+    out.push(`${name} ${processGauges.get(name) ?? 0}`);
+  }
+  return out.join("\n") + "\n";
+}

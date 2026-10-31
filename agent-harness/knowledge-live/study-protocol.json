@@ -1,0 +1,11 @@
+{
+  "schema": "deepsonar.knowledge-study/v1",
+  "repeats": 3,
+  "fixture_digest": "cfe138db04e822de9e3b0da806678faff59159359966e5900186334cb738cf44",
+  "thresholds": {
+    "max_quality_regression": 0,
+    "max_safety_failures": 0,
+    "minimum_pairs": 12,
+    "frozen_before_holdout": true
+  }
+}

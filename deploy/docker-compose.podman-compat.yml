@@ -1,0 +1,36 @@
+# Controlled Compose depends_on overlay for Podman / healthcheck-stuck providers (#726).
+# deploy.sh attaches this only when DEEPSONAR_COMPOSE_DEPENDS_ON=started or auto-detects Podman.
+# It weakens service_healthy → service_started for infra deps so Compose does not hang forever
+# when health status stays "starting". Final readiness probes in deploy.sh still gate success.
+# silo-init retries until Silo accepts connections (see docker-compose.prod.yml).
+# Do NOT use this to report success without /api/health on the configured entry port.
+
+services:
+  backup:
+    depends_on:
+      postgres:
+        condition: service_started
+
+  silo-init:
+    depends_on:
+      silo:
+        condition: service_started
+
+  scheduler:
+    depends_on:
+      postgres:
+        condition: service_started
+      silo:
+        condition: service_started
+      silo-init:
+        condition: service_completed_successfully
+
+  image-admission:
+    depends_on:
+      postgres:
+        condition: service_started
+
+  web:
+    depends_on:
+      scheduler:
+        condition: service_started

@@ -1,0 +1,21 @@
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.env
+data/
+*.log
+.DS_Store
+.playwright-cli/
+deploy/.env
+deploy/master.key
+.deepsonar-master-key
+
+# 本地引导 admin token（敏感临时文件，勿提交）
+.deepsonar-admin-token*
+.workbuddy-ai/
+
+# Host upgrade journal and database recovery backups
+deploy/.upgrade/
+
+/artifacts/plan-replay/

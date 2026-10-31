@@ -1,0 +1,136 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "kalilinux/kali-last-release@sha256:01a402ec78a2b3bd86394f34f8c3d6adefe3c593ae259ac0779c4d1f971c8ff5",
+  "aptSource": "kali:2026.2-last-release",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "apt": {
+    "ca-certificates": { "version": "dpkg", "license": "MPL-2.0", "capabilities": ["tls"] },
+    "curl": { "version": "dpkg", "license": "curl", "capabilities": ["http-client"] },
+    "git": { "version": "dpkg", "license": "GPL-2.0-only", "capabilities": ["source-control"] },
+    "ripgrep": { "version": "dpkg", "license": "MIT OR Unlicense", "capabilities": ["search"] },
+    "jq": { "version": "dpkg", "license": "MIT", "capabilities": ["json"] },
+    "file": { "version": "dpkg", "license": "BSD-2-Clause", "capabilities": ["file-identification"] },
+    "unzip": { "version": "dpkg", "license": "Info-ZIP", "capabilities": ["archive"] },
+    "xz-utils": { "version": "dpkg", "license": "0BSD AND LGPL-2.1-or-later AND GPL-2.0-or-later", "capabilities": ["archive"] },
+    "python3": { "version": "dpkg", "license": "PSF-2.0", "capabilities": ["python-runtime"] },
+    "python3-venv": { "version": "dpkg", "license": "PSF-2.0", "capabilities": ["python-runtime"] },
+    "binutils": { "version": "dpkg", "license": "GPL-3.0-or-later", "capabilities": ["binary-analysis"] },
+    "build-essential": { "version": "dpkg", "license": "GPL-2.0-or-later", "capabilities": ["native-build"] },
+    "pkg-config": { "version": "dpkg", "license": "GPL-2.0-or-later", "capabilities": ["native-build"] },
+    "golang-go": { "version": "dpkg", "license": "BSD-3-Clause", "capabilities": ["go-runtime", "go-compiler"] },
+    "rustc": { "version": "dpkg", "license": "Apache-2.0 OR MIT", "capabilities": ["rust-compiler"] },
+    "cargo": { "version": "dpkg", "license": "Apache-2.0 OR MIT", "capabilities": ["rust-package-manager"] }
+  },
+  "npm": {
+    "@anthropic-ai/claude-code": {"version": "2.1.312", "integrity": "sha512-/gx8byG8VOm4YoNuT5tal/Ov5Z5oydJzZkmHCJcBFLbNGGpyYDbKA/CNdB+iIKwcLQC8pVwBoj6Dt7H3L2J5bw==", "license": "Commercial", "capabilities": ["agent-runtime"], "agent_cli": "claude-code", "compatible_image_keys": ["deepsonar-kali-minimal"]},
+    "@earendil-works/pi-coding-agent": {"version": "1.4.0", "integrity": "sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==", "license": "MIT", "capabilities": ["agent-runtime", "rpc", "platform-control-api"], "agent_cli": "pi", "compatible_image_keys": ["deepsonar-kali-minimal"]},
+    "@deepseek-ai/dsh": {"version": "0.2.1-rc.2", "integrity": "sha512-tvY+yhfKRifthbqPe/OK0AYxM5ZkvqfYq/jMYgJcEUxiRRL1Vwra3Ti5TB6AXgSWQdiPHYh/Vp6SJa9yHwMNuw==", "license": "MIT", "capabilities": ["agent-runtime", "json-rpc", "platform-control-api"], "agent_cli": "dsh", "compatible_image_keys": ["deepsonar-kali-minimal"]},
+    "@deepseek-ai/dsh-sdk-jsonrpc-server": {"version": "0.2.1-rc.2", "integrity": "sha512-adbG5QfH9q+/OiFbyaQZvZ7KReLlsUTauiKZUT2nhu4wHJ62PkLuuDx+c7tWezKLYd3MwzeDO0TY1IJIAjw3bQ==", "license": "MIT", "capabilities": ["json-rpc-runtime"]},
+    "@deepseek-ai/dsh-sdk-protocol": {"version": "0.2.1-rc.2", "integrity": "sha512-fdWcBdaf2zUs3MIS817tIUodTVLiB/Qjaibg+iKGdGawAYgj68p6q1AidqQJGJz5NGOWH7UJXk6re3qQUikzvA==", "license": "MIT", "capabilities": ["json-rpc-runtime"]},
+    "@deepseek-ai/dsh-skill": {"version": "0.2.1-rc.2", "integrity": "sha512-lB9mB0zG+H6oUSvDllF3QJ5yHIm+QAlCu8/nsWdvQV0APAjBJDrwH/u7A0n9La5T2VbsoGEIjWivmLcJmMFg7w==", "license": "MIT", "capabilities": ["skill-registry"]},
+    "@deepseek-ai/dsh-skill-filesystem": {"version": "0.2.1-rc.2", "integrity": "sha512-bFCzvYC4sm6yiEiQboG9ERFaYAkxHUr4Y3qYWH9Rh8843r9Y4firT9Bde2sKJd8dSl+9P6Lgql6gtCRdP0r2WQ==", "license": "MIT", "capabilities": ["skill-discovery"]},
+    "@deepseek-ai/dsh-tool-skill": {"version": "0.2.1-rc.2", "integrity": "sha512-QlDOfoOrr1NY9gk1ebOBcmuk9SKHEbX9Qw3Dc17UWlQqWTXGdFce/fAnJAo+6xgpBMqA8PvfXrD6r94wCHmYSQ==", "license": "MIT", "capabilities": ["skill-tool"]},
+    "@deepseek-ai/dsh-llm-pi-ai": {"version": "0.2.1-rc.2", "integrity": "sha512-sauT3s9LwRtJTuHJL6mIZSmMjy5S1o2u9qb/MFuo1VYc8CJwTL74/RxXYLX0vpRP2Hk7TFJkJFilx5jagMecsw==", "license": "MIT", "capabilities": ["llm-provider", "multi-provider"]},
+    "@deepseek-ai/dsh-sandbox-local": {"version": "0.2.1-rc.2", "integrity": "sha512-3xBoHVko6ggqi2hZq28Z05GeESS51PednjfL62TfSCzZktpDU+f12fiFwoQ1N2R1xHGDA5c+vYWVIe8qB9ndIA==", "license": "MIT", "capabilities": ["sandbox"]},
+    "@deepseek-ai/dsh-sandbox-policy": {"version": "0.2.1-rc.2", "integrity": "sha512-fBb8zQ13CLKM60ynl3EHvFmO8F0GARofQYf7CXUkqJEuBcjxXUG14rzDKRS/PhE8oJ023lEvd5HJjE6qUjslhw==", "license": "MIT", "capabilities": ["sandbox"]},
+    "@deepseek-ai/dsh-subprocess-local": {"version": "0.2.1-rc.2", "integrity": "sha512-z1mF0pVwcmroARNSxWGFU98BDMt0lXGG+JCYZ0yHBvtHGdMbasivbQ9SvAvTdnsXJtuudjWndeMJetcfPFQXgw==", "license": "MIT", "capabilities": ["subprocess"]},
+    "@deepseek-ai/dsh-bash-local": {"version": "0.2.1-rc.2", "integrity": "sha512-B8NunknFEBqqZK8hc7kWM+Qh6IMX03pydwKone4ZfxjtlcHctoeCewm8XAvYBcBMlXJycnM7ZOBw01fFZTZIqw==", "license": "MIT", "capabilities": ["shell"]},
+    "@deepseek-ai/dsh-fs-local": {"version": "0.2.1-rc.2", "integrity": "sha512-IZPJ12/EpV6fu3CCWtW4w4GthXAKLFjplm4Feoep2HAum7J1aGzHZwiw7ipsPCZiA5/TyK3lDUUAGZ/pcXgRcw==", "license": "MIT", "capabilities": ["filesystem"]},
+    "@deepseek-ai/dsh-fs-observation-policy": {"version": "0.2.1-rc.2", "integrity": "sha512-wUyr/SKcnz5PLXaXcChCHdzpRq+7zVB/AMv1zC4wNFMk51uDGahQ8SF4YqIijMTdm1HpKQ6v/A3Nqyhum3or0A==", "license": "MIT", "capabilities": ["filesystem"]},
+    "@deepseek-ai/dsh-tool-fs": {"version": "0.2.1-rc.2", "integrity": "sha512-hd3LmMFiOa4TTFL9+oabTe26CjzGUbflCMm8TcXm9jHN1tIhB8el1cyzaQ2x4A15G/jIlAsGZyuwuf5/FFJIOQ==", "license": "MIT", "capabilities": ["filesystem"]},
+    "@deepseek-ai/dsh-tool-fs-search": {"version": "0.2.1-rc.2", "integrity": "sha512-CSXZmqZ1ujAyoouesbeprgpb6RBL7RdhvlRy08VMZ09gQckeUQWusekrZtD29leIiojhMb7HGEgSGUunBcPfOw==", "license": "MIT", "capabilities": ["filesystem", "search"]},
+    "@deepseek-ai/dsh-jobs-local": {"version": "0.2.1-rc.2", "integrity": "sha512-BulpejqgXBj83f/tvft8vPe6rNEb9U//0ykxOVpWBnyr6147hUEd0B1e1shU2Ui53DOgLy+YKfnVQk5m3TMzYw==", "license": "MIT", "capabilities": ["jobs"]},
+    "@deepseek-ai/dsh-scope": {"version": "0.2.1-rc.2", "integrity": "sha512-CVGPI4lzmUy7O3zg8X1LavUSmD3JKFkUdykfHN7VkyWXG5oAXSvig9s5PLnIb+sxRItmSpiqPXGnT/48X1T1qg==", "license": "MIT", "capabilities": ["scope"]},
+    "@deepseek-ai/dsh-tool-bash": {"version": "0.2.1-rc.2", "integrity": "sha512-TwHTe7WTbvkcH9d5mTW8X7FviWEVbDCjfbi6bvsleFSsvPJoWCHdn14XXYlc0hOCpfVWoTxaW2bhryykh/W7+g==", "license": "MIT", "capabilities": ["shell"]},
+    "@deepseek-ai/dsh-tool-str-replace-editor": {"version": "0.2.1-rc.2", "integrity": "sha512-9F4fQjyCORpO7NABEmAIEVCB3ApZcpf6GyPTwHmh//oJxC9Rg1RHEZFLiXMnsUv78JFj+OihxQaEiz/fjBspmw==", "license": "MIT", "capabilities": ["filesystem"]},
+    "@deepseek-ai/dsh-session-persistence-jsonl": {"version": "0.2.1-rc.2", "integrity": "sha512-M/3Q0x7EyH6aF7VRUoJBwNj+wg4u93HXWm/isXDVU+DES9lmoHNS1qszoBwpNhsCBSXjicQingRfhKnN9QctJw==", "license": "MIT", "capabilities": ["session"]},
+    "@deepseek-ai/dsh-session-projection": {"version": "0.2.1-rc.2", "integrity": "sha512-GBGgIAaC+Cw1rV7tpyGy9aaENUOkQCosP+LJHcmzqPWg64Ufts36mDEU3f0lC/nyGb0z66Ov+RbyaLLsCnZMwA==", "license": "MIT", "capabilities": ["session"]},
+    "@deepseek-ai/dsh-session-checkpoint-policy": {"version": "0.2.1-rc.2", "integrity": "sha512-cIdh754W7ceIcESQaOnFw0JSb3xC6zd3b50Xo6UCgw0Dkzi3hPKeZE4suW12DVsxHq20dLO8qs3a2Al43r78FQ==", "license": "MIT", "capabilities": ["session"]},
+    "@deepseek-ai/dsh-token-meter": {"version": "0.2.1-rc.2", "integrity": "sha512-ObJQBb8fbFtw4oAPBTpAcbEdYH6Yqf2cnG5V2RShKmFQeMkuKv9uYCRqflnmimIhgslWO2kdOeg1ACDBYHemvQ==", "license": "MIT", "capabilities": ["token-meter"]},
+    "@deepseek-ai/dsh-ptc-runtime": {"version": "0.2.1-rc.2", "integrity": "sha512-e81rbNwp3YNIpzIbkFI4NsWQzTD3uAP8zXU16diL9wLmITUWjMS+kvrWEXtrkWAWp5cnK2Pgn4xCbqVZ6n4I8w==", "license": "MIT", "capabilities": ["code-runtime-contract"]},
+    "@deepseek-ai/dsh-ptc-runtime-node": {"version": "0.2.1-rc.2", "integrity": "sha512-/B3hwzZV/mBE+h8Us5wfstALY1Qd6v8kRzk8SzZt8s0xa1z/srwACK+5feNpnbZuP47Umn04tsmcpqGfW+ustQ==", "license": "MIT", "capabilities": ["code-runtime", "ptc"]},
+    "@deepseek-ai/dsh-workflow-ptc": {"version": "0.2.1-rc.2", "integrity": "sha512-JlD0bGtv/K0y1nFPcwc7XhJqlnf6AnKer/BdBc6ctFK2fwmwyWtieOyIPx6pi911oQKsOKAqIcVqZ0BnKwj3kg==", "license": "MIT", "capabilities": ["workflow", "ptc"]},
+    "@deepseek-ai/dsh-compaction-basic": {"version": "0.2.1-rc.2", "integrity": "sha512-nx3uY0auC4JP7dEQDlQ6bQAtsDgrcCu/gPPDqKy3iM9ZpJTi2BE7pObuqhIeRIUpIodByX4QHU0N9p7kFxi4Ng==", "license": "MIT", "capabilities": ["compaction"]},
+    "@deepseek-ai/dsh-sdk-app": {"version": "0.2.1-rc.2", "integrity": "sha512-+EZnbOrUMamyXVhXcQ2y/AOJ46NwvXDVF2pj7hhukvzkdGmskpDYYPcTpUD1aJY5H0n/mYS4DxJ58RErchR/SA==", "license": "MIT", "capabilities": ["agent-runtime"]},
+    "@deepseek-ai/dsh-llm": {"version": "0.2.1-rc.2", "integrity": "sha512-3xfoMDHEpUJGcH2Lu+lNXUJYRBclYfBkdCG9Au02VzIjYAm9BrFmc/MNuaVTg0vwgvPpTsd6Fx1IeGtfmQFvlg==", "license": "MIT", "capabilities": ["llm"]},
+    "@deepseek-ai/dsh-session": {"version": "0.2.1-rc.2", "integrity": "sha512-WDA4lIrXtG5nf1dn2wrA4UzEr7D6e8T3AdPpVSZ7eY4N4ICMDZ0RYuD4GkM+iSb7WkLojdO8ljr0etiIMEbqJg==", "license": "MIT", "capabilities": ["session"]},
+    "@deepseek-ai/dsh-agent": {"version": "0.2.1-rc.2", "integrity": "sha512-e96Tnq8g/RNCDDUW7kAypY/4cho5QxjLHMhk86BGGIEu9b31XEkSFqwqQIwtYXQez3cDR5z7LZpAM8Uqx9Y8KA==", "license": "MIT", "capabilities": ["agent-runtime"]},
+    "@deepseek-ai/dsh-llm-retry": {"version": "0.2.1-rc.2", "integrity": "sha512-6nnM6y2eTz2gHPu9MVG5aABafMqQLPQ4u3K/csQG5WLr91ABOlAZomM0IN9BdmDBIyf+Kr7F9cQCYQUbADl3SA==", "license": "MIT", "capabilities": ["llm"]},
+    "@deepseek-ai/dsh-mcp-resources": {"version": "0.2.1-rc.2", "integrity": "sha512-QG6kI8UgnJCeQFt11f+7fmihGhSjsGfpWvJFbZNM7flgs6pVFiJOPb1/LWjYv4huImojlFjsEDjUJC9OtFI0Vg==", "license": "MIT", "capabilities": ["mcp"]},
+    "@deepseek-ai/dsh-system-prompt": {"version": "0.2.1-rc.2", "integrity": "sha512-X1WG2FMyfZapAkcCYyTl0UO5vVqDcCsA9wECJY7eeDTLHJDsqrilQJg2DRgHQzM+2/7T01QyzFZhKd7hfALJxg==", "license": "MIT", "capabilities": ["system-prompt"]},
+    "@deepseek-ai/dsh-tools": {"version": "0.2.1-rc.2", "integrity": "sha512-K3gET3VPbtxM66pkeRsEGrZ+bQKiBqrTbNXiIreBKu0hP+qPvlSwhiSI5MTnFp2tMFK5rpuYMZosRIdbfrbJ/g==", "license": "MIT", "capabilities": ["tools"]},
+    "@deepseek-ai/dsh-agent-loop": {"version": "0.2.1-rc.2", "integrity": "sha512-dM0tvxTywkTPtXGCQS/FMhigW37JS4g4ChjQFiaBqrMYet8FDbQbMJb8uFFPPpcRnQufzdq7NqJziYwpsaQBOw==", "license": "MIT", "capabilities": ["agent-loop"]},
+    "@deepseek-ai/dsh-shell-env": {"version": "0.2.1-rc.2", "integrity": "sha512-IUwtEZL0DPv7tzE7KnOugD4dUF53SokJQgzDhlCBT1YJX5L71JFMyiBdRaGeQBUuZDnl9YIM+rtNUizUkwM5RA==", "license": "MIT", "capabilities": ["shell"]},
+    "@deepseek-ai/dsh-subagent": {"version": "0.2.1-rc.2", "integrity": "sha512-c2Zw5qiHm5X2C778tAoAGVirZtsuOZ0ikgdnrQKe2lvKdo0z0Q19StHX8ghu4J5RXrsfg5cRrNgVN9ZO4jlLxw==", "license": "MIT", "capabilities": ["subagent"]},
+    "@deepseek-ai/dsh-subagent-spawn-in-process": {"version": "0.2.1-rc.2", "integrity": "sha512-odjH+gYSGIpW/UWZjzVy67aH+8IAMt4AU7AsVt11bhB07jIDK9NNQopHRyGJja1KzaqKaGYmlCjWDj1Kr4bzHA==", "license": "MIT", "capabilities": ["subagent"]},
+    "@deepseek-ai/dsh-subagent-fork-in-process": {"version": "0.2.1-rc.2", "integrity": "sha512-zBMdnqmzQYpLiMg1K8rvlRCUsFFPmSgTTqBoO8o7UquqPdtxNpgUMyxJfAwJStrUmkWUp5GhwAdXXQE6DeeG3w==", "license": "MIT", "capabilities": ["subagent"]},
+    "@deepseek-ai/dsh-tool-subagent": {"version": "0.2.1-rc.2", "integrity": "sha512-VxIhRFSVyUg6i4imonbPhfjgfxqmSM0jkGt8jE9bswqC1+53qjVACcyEMGirWalqvNaTaiLO+c7d3u3Y9KGQIA==", "license": "MIT", "capabilities": ["subagent"]},
+    "@deepseek-ai/dsh-tool-subagent-control": {"version": "0.2.1-rc.2", "integrity": "sha512-u/TvDbBtKPh5khrmNcSPc8B7kEg28m8z/KkHfysnLcIe7iHY18rGseFV55cGdGnd+vj7KMUuxi0Lhlb27AH0Ug==", "license": "MIT", "capabilities": ["subagent-control"]}
+  },
+  "piExtensions": {
+    "pi-web-access": {
+      "package": "pi-web-access",
+      "version": "0.29.0",
+      "integrity": "sha512-1l4sAWYkFhiBynJf/mXuxmCHxjhiAyWJ4rfQVFu8UPa0JQhCS9oXAmNXcL0Q1SfrO00plmb6L4IkypJ3n1Q4Kg==",
+      "license": "MIT",
+      "capabilities": ["web-search", "content-extract", "url-fetch"],
+      "requires_egress": true,
+      "compatible_image_keys": ["deepsonar-kali-minimal"],
+      "entry": "index.ts"
+    }
+  },
+  "downloads": {
+    "node": {
+      "version": "22.23.2",
+      "license": "MIT",
+      "capabilities": ["node-runtime", "node-package-manager"],
+      "assets": {
+        "amd64": { "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz", "sha256": "d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307" },
+        "arm64": { "url": "https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-arm64.tar.xz", "sha256": "fff4078c5def658577f92c88db7db3bc0072924bfb93fe52c1e744a54e94abb8" }
+      }
+    },
+    "uv": {
+      "version": "0.11.32",
+      "source": "github-release",
+      "license": "Apache-2.0 OR MIT",
+      "capabilities": ["python-version-manager", "python-package-manager"],
+      "assets": {
+        "amd64": { "url": "https://github.com/astral-sh/uv/releases/download/0.11.32/uv-x86_64-unknown-linux-gnu.tar.gz", "sha256": "aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967" },
+        "arm64": { "url": "https://github.com/astral-sh/uv/releases/download/0.11.32/uv-aarch64-unknown-linux-gnu.tar.gz", "sha256": "4d4fa08d95b06642e5800df6a22bd71455f23f988269e18da2847971d8c0bf31" }
+      }
+    },
+    "maven": {
+      "version": "3.9.16",
+      "source": "Apache Maven distribution",
+      "license": "Apache-2.0",
+      "capabilities": ["java-build", "maven-build"],
+      "assets": {
+        "all": { "url": "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz", "sha512": "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6" }
+      }
+    }
+  },
+  "managed": {
+    "python": {
+      "source": "astral/python-build-standalone",
+      "manager": "uv@0.11.32",
+      "versions": ["3.10.20", "3.11.15", "3.12.13", "3.13.14", "3.14.6"],
+      "default": "3.14.6",
+      "license": "PSF-2.0",
+      "capabilities": ["python-runtime", "python-multi-version"]
+    },
+    "jdk": {
+      "source": "Eclipse Temurin OCI",
+      "versions": [
+        { "major": "8", "version": "8u492-b09", "image": "eclipse-temurin:8-jdk@sha256:9fd5233e39b963aad25dae3ca002c5a1b435c378f6d484c24f0c68be34b54b72" },
+        { "major": "11", "version": "11.0.31+11", "image": "eclipse-temurin:11-jdk@sha256:51cad80517b1e18e289460e0a48657374d17711c83270263054a4a22cc1a992a" },
+        { "major": "17", "version": "17.0.19+10", "image": "eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a" }
+      ],
+      "default": "17",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "capabilities": ["java-runtime", "java-compiler", "java-multi-version"]
+    }
+  },
+  "toolsets": {
+    "kali-minimal": { "imageKey": "deepsonar-kali-minimal", "description": "Kali test runtime with common language toolchains, without Kali metapackages or GUI", "maxSizeMiB": 1600 }
+  }
+}

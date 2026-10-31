@@ -1,0 +1,194 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import test from "node:test";
+import postgres from "postgres";
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
+
+if (!testDatabaseUrl) {
+  test("catalog probe soft-degrade (set TEST_DATABASE_URL to run)", {
+    skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
+  }, () => {});
+} else {
+  test("unreachable /models still saves credential; RoleConfig upsert without bindings", async () => {
+    const adminUrl = new URL(testDatabaseUrl);
+    adminUrl.pathname = "/postgres";
+    const admin = postgres(adminUrl.toString(), { max: 1 });
+    const databaseName = `deepsonar_catalog_soft_${process.pid}_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const targetUrl = new URL(testDatabaseUrl);
+    targetUrl.pathname = `/${databaseName}`;
+    targetUrl.search = "";
+
+    let databaseCreated = false;
+    let closeApp: (() => Promise<unknown>) | null = null;
+    let endSql: (() => Promise<unknown>) | null = null;
+    const originalFetch = globalThis.fetch;
+    try {
+      await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
+      databaseCreated = true;
+      process.env.DATABASE_URL = targetUrl.toString();
+      process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
+      process.env.AGENT_MODE = "fake";
+      process.env.DEEPSONAR_AUTH_REQUIRED = "false";
+
+      const [fastifyModule, websocketModule, dbModule, routesModule] = await Promise.all([
+        import("fastify"),
+        import("@fastify/websocket"),
+        import("./db.js"),
+        import("./routes.js"),
+      ]);
+      const { default: Fastify } = fastifyModule;
+      const { default: websocket } = websocketModule;
+      const { migrate, sql } = dbModule;
+      const { registerRoutes } = routesModule;
+      endSql = () => sql.end({ timeout: 5 });
+      await migrate();
+
+      const app = Fastify({ logger: false });
+      await app.register(websocket);
+      registerRoutes(app);
+      await app.ready();
+      closeApp = () => app.close();
+
+      type InjectResponse = { statusCode: number; payload: string };
+      const request = async (method: "GET" | "POST" | "PATCH" | "PUT", url: string, payload?: unknown): Promise<InjectResponse> =>
+        await (app.inject({
+          method,
+          url,
+          headers: payload === undefined ? undefined : { "content-type": "application/json" },
+          payload: payload === undefined ? undefined : JSON.stringify(payload),
+        }) as unknown as Promise<InjectResponse>);
+      const json = (response: InjectResponse) => JSON.parse(response.payload) as Record<string, any>;
+
+      globalThis.fetch = (async () => {
+        throw Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8088"), { code: "ECONNREFUSED" });
+      }) as typeof fetch;
+
+      const settings = {
+        env: {
+          ANTHROPIC_AUTH_TOKEN: "local-gateway-key",
+          ANTHROPIC_BASE_URL: "http://127.0.0.1:8088",
+          ANTHROPIC_MODEL: "grok-4.6",
+        },
+      };
+      const created = await request("POST", "/credentials", {
+        name: "local-anthropic-gateway",
+        kind: "llm_provider",
+        provider: "anthropic",
+        secret: "local-gateway-key",
+        metadata: { base_url: "http://127.0.0.1:8088" },
+        agent_cli: "claude-code",
+        settings_config: settings,
+      });
+      assert.equal(created.statusCode, 201, created.payload);
+      const createdBody = json(created);
+      const credentialId = String(createdBody.id);
+      assert.deepEqual(createdBody.model_catalog_json, []);
+      assert.equal(createdBody.health?.model_catalog_fetched_at ?? null, null);
+
+      const [createdRow] = await sql<{ model_catalog_json: unknown; model_catalog_fetched_at: string | null }[]>`
+        SELECT model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${credentialId}`;
+      assert.deepEqual(createdRow?.model_catalog_json, []);
+      assert.equal(createdRow?.model_catalog_fetched_at, null);
+
+      const patched = await request("PATCH", `/credentials/${credentialId}`, {
+        settings_config: {
+          ...settings,
+          env: { ...settings.env, ANTHROPIC_MODEL: "grok-4.6" },
+        },
+        metadata: { base_url: "http://127.0.0.1:8088" },
+      });
+      assert.equal(patched.statusCode, 200, patched.payload);
+      assert.deepEqual(json(patched).model_catalog_json, []);
+      const [patchedRow] = await sql<{ model_catalog_json: unknown; model_catalog_fetched_at: string | null }[]>`
+        SELECT model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${credentialId}`;
+      assert.deepEqual(patchedRow?.model_catalog_json, []);
+      assert.equal(patchedRow?.model_catalog_fetched_at, null);
+
+      const roles = await request("GET", "/agent-roles");
+      assert.equal(roles.statusCode, 200, roles.payload);
+      const explore = (json(roles) as unknown as Array<{ id: string; name: string }>).find((role) => role.name === "explore");
+      assert.ok(explore, "schema seeds the explore role");
+
+      // #690: RoleConfig no longer accepts credential bindings; catalog soft-degrade
+      // must still allow RoleConfig upsert with a model string.
+      const rejectedBind = await request("PUT", `/role-configs/global/${explore.id}`, {
+        agent_cli: "claude-code",
+        model: "grok-4.6",
+        credentials: [{ credential_id: credentialId, purpose: "llm" }],
+      });
+      assert.equal(rejectedBind.statusCode, 400, rejectedBind.payload);
+      const roleConfig = await request("PUT", `/role-configs/global/${explore.id}`, {
+        agent_cli: "claude-code",
+        model: "grok-4.6",
+      });
+      assert.equal(roleConfig.statusCode, 200, roleConfig.payload);
+      const roleBody = json(roleConfig);
+      assert.equal(roleBody.model, "grok-4.6");
+      assert.equal(roleBody.credentials, undefined);
+
+      const refresh = await request("POST", `/credentials/${credentialId}/models`, {});
+      assert.equal(refresh.statusCode, 200, refresh.payload);
+      assert.deepEqual(json(refresh).models, []);
+      assert.equal(json(refresh).fetched_at, null);
+      const [refreshed] = await sql<{
+        health_status: string;
+        model_catalog_json: unknown;
+        model_catalog_fetched_at: string | null;
+      }[]>`
+        SELECT health_status, model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${credentialId}`;
+      assert.deepEqual(refreshed?.model_catalog_json, []);
+      assert.equal(refreshed?.model_catalog_fetched_at, null);
+      assert.equal(refreshed?.health_status, "error");
+
+      // #748: 推理 403（模型无权限）保留脱敏上游正文，并补一次目录发现回填 model_catalog_json。
+      globalThis.fetch = (async (_input, init) => {
+        if (init?.method === "POST") {
+          return new Response(JSON.stringify({
+            error: { message: "该令牌无权访问模型 grok-4.6 key=local-gateway-key", type: "new_api_error" },
+          }), { status: 403 });
+        }
+        return Response.json({ data: [{ id: "model-c" }, { id: "model-b" }] });
+      }) as typeof fetch;
+      const forbidden = await request("POST", `/credentials/${credentialId}/test`, {});
+      assert.equal(forbidden.statusCode, 200, forbidden.payload);
+      assert.equal(json(forbidden).ok, false);
+      assert.equal(json(forbidden).category, "model_unavailable");
+      assert.deepEqual(json(forbidden).model_catalog, ["model-b", "model-c"]);
+      assert.equal(forbidden.payload.includes("local-gateway-key"), false);
+      const [forbiddenRow] = await sql<{
+        health_error_category: string;
+        health_detail: string;
+        model_catalog_json: unknown;
+        model_catalog_fetched_at: string | null;
+      }[]>`
+        SELECT health_error_category, health_detail, model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${credentialId}`;
+      assert.equal(forbiddenRow?.health_error_category, "model_unavailable");
+      assert.match(forbiddenRow?.health_detail ?? "", /new_api_error：该令牌无权访问模型 grok-4\.6/u);
+      assert.match(forbiddenRow?.health_detail ?? "", /当前模型 grok-4\.6 不可用，可用：model-b、model-c/u);
+      assert.equal(forbiddenRow?.health_detail.includes("local-gateway-key"), false);
+      assert.deepEqual(forbiddenRow?.model_catalog_json, ["model-b", "model-c"]);
+      assert.notEqual(forbiddenRow?.model_catalog_fetched_at, null);
+
+      // 402 配额耗尽写入 schema 约束的 quota_exhausted 类别。
+      globalThis.fetch = (async (_input, init) => (init?.method === "POST"
+        ? new Response(JSON.stringify({ error: { message: "Budget pool quota has been exhausted", type: "bad_response_status_code" } }), { status: 402 })
+        : new Response("down", { status: 503 }))) as typeof fetch;
+      const quota = await request("POST", `/credentials/${credentialId}/test`, {});
+      assert.equal(quota.statusCode, 200, quota.payload);
+      assert.equal(json(quota).category, "quota_exhausted");
+      // 目录发现失败不清空上一次成功的目录。
+      const [quotaRow] = await sql<{ health_error_category: string; model_catalog_json: unknown; model_catalog_fetched_at: string | null }[]>`
+        SELECT health_error_category, model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${credentialId}`;
+      assert.equal(quotaRow?.health_error_category, "quota_exhausted");
+      assert.deepEqual(quotaRow?.model_catalog_json, ["model-b", "model-c"]);
+      assert.equal(String(quotaRow?.model_catalog_fetched_at), String(forbiddenRow?.model_catalog_fetched_at));
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (closeApp) await closeApp().catch(() => undefined);
+      if (endSql) await endSql().catch(() => undefined);
+      if (databaseCreated) await admin.unsafe(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`).catch(() => undefined);
+      await admin.end().catch(() => undefined);
+    }
+  });
+}

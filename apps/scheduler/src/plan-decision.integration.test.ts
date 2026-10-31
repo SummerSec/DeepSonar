@@ -1,0 +1,327 @@
+import assert from 'node:assert/strict';
+import {randomUUID,createHash} from 'node:crypto';
+import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import test from 'node:test';
+import {Plan} from '@deepsonar/shared-types';
+import {recordPlanReplay} from './plan-replay-recorder.js';
+
+const databaseUrl=process.env.TEST_DATABASE_URL;
+test('Plan-aware Control API dispatch is transactional, bounded and refuses unproven completion', {skip:!databaseUrl},async()=>{
+  const postgres=(await import('postgres')).default;
+  const adminUrl=new URL(databaseUrl!);adminUrl.pathname='/postgres';
+  const admin=postgres(adminUrl.toString(),{max:1});
+  const name=`plan_decision_${process.pid}_${Date.now()}`;
+  const target=new URL(databaseUrl!);target.pathname=`/${name}`;
+  const blob=await mkdtemp(path.join(os.tmpdir(),'bounded-plan-'));
+  process.env.BLOB_DIR=blob;
+  let close:(()=>Promise<unknown>)|undefined,end:(()=>Promise<unknown>)|undefined;
+  try{
+    await admin.unsafe(`CREATE DATABASE "${name}"`);
+    process.env.DATABASE_URL=target.toString();process.env.AGENT_MODE='fake';process.env.DEEPSONAR_MASTER_KEY='00'.repeat(32);
+    const [{default:Fastify},{sql,migrate},api,core,{executeGraphQuery},{ControlInputError},decision]=await Promise.all([
+      import('fastify'),import('./db.js'),import('./domains/platform-api/index.js'),import('./core.js'),
+      import('./graph-query.js'),import('./control-input.js'),import('./domains/plan-protocol/decision.js'),
+    ]);
+    end=()=>sql.end({timeout:5});await migrate();
+    const app=Fastify({logger:false});api.registerPlatformControlRoutes(app);await app.ready();close=()=>app.close();
+    for(const mode of ['inline','file'] as const){
+    let filePayload:unknown;
+    const project=randomUUID(),canvas=randomUUID(),hub=randomUUID();
+    const operations=['submit_plan','graph_query','submit_hub_decision','mark_job_done','request_human','emit_fact'];
+    await sql`INSERT INTO projects(id,name,config_json) VALUES(${project},'Bounded Plan fixture',${sql.json({rules:{hubEnabled:false}})})`;
+    await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvas},${project},'Scoped objective',${sql.json({network_policy:{allow_egress:false}})})`;
+    const [root]=await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status,body_json) VALUES(${canvas},'root','Scoped objective','active','{}') RETURNING id`;
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
+      VALUES(${hub},${project},${canvas},'hub_reason','provisioning',${sql.json({name:'hub_reason',role_kind:'hub',platform_tools:operations})},'{}')`;
+    const {createAttempt}=await import("./domains/job-attempt/application.js");
+    await createAttempt(sql,hub);
+    const grant=await api.mintJobCapabilityToken(hub);
+    await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '5 minutes' WHERE id=${hub}`;
+    await api.activateProvisionedJobCapabilityTokens(hub);
+    let activeJob:string=hub, token=grant.token;
+    const planCommits=new Map<string,number>();
+    let failPlanCommit=true;
+    const handler: import("./domains/platform-api/index.js").PlatformRuntimeHandler = async (context: import("./domains/platform-api/index.js").PlatformRuntimeHandlerContext)=>{
+      if(context.planPhase==='resolve') return {resolved_plan_input:filePayload};
+      if(context.planPhase==='abort') return {};
+      if(context.planPhase==='prepare') return {plan_prepared:true};
+      // Completion prepare holds the Job lock: it must not ingest or settle.
+      if(context.operationId==='mark_job_done' && context.completionPhase!=='commit') return {completion_prepared:context.completionPhase==='prepare'};
+      if(context.operationId==='graph_query') return executeGraphQuery({jobId:context.jobId,canvasId:canvas,payload:context.input,maxCalls:100,maxBytes:1024*1024});
+      const type=({submit_plan:'plan',submit_hub_decision:'hub_decision',mark_job_done:'done',request_human:'human',emit_fact:'fact'} as const)[context.operationId as 'submit_plan'|'submit_hub_decision'|'mark_job_done'|'request_human'|'emit_fact'];
+      try{
+        // Fault injection is confined to this isolated test handler.
+        const faultyCompletion=process.env.PLAN_REPLAY_FAULT==='unproven_completion_accepted'
+          && type==='hub_decision' && context.input && typeof context.input==='object' && 'complete' in context.input;
+        if(type==='hub_decision' || type==='human') {
+          if(faultyCompletion && context.planPhase==='validate') return {};
+          if(context.planPhase!=='commit') await core.preflightDeferredSemanticEvent(context.jobId,type,context.input);
+          if(context.planPhase==='validate') return {};
+          if(context.planPhase==='commit'){
+            if(failPlanCommit && !faultyCompletion) throw new Error('Fixture lost executor before semantic ingestion');
+            planCommits.set(context.jobId,(planCommits.get(context.jobId)??0)+1);
+          }
+        }
+        await core.ingestEvent(context.jobId,{v:1,event_id:context.eventId,type,payload:context.input} as never);
+        return {accepted:true,event_id:context.eventId};
+      }catch(error){
+        if(error instanceof ControlInputError) throw new api.PlatformRuntimeHandlerError('OPERATION_REJECTED',error.message,{statusCode:error.retryable?422:409,errorCode:error.code,retryable:error.retryable,path:error.path});
+        throw error;
+      }
+    };
+    api.registerRuntimeHandler(hub,handler,operations);
+    const invoke=(operation:string,payload:unknown,key=randomUUID())=>app.inject({method:'POST',url:`/control/v1/jobs/${activeJob}/operations/${operation}`,headers:{authorization:`Bearer ${token}`,'idempotency-key':key,...(operation==='mark_job_done'?{'x-deepsonar-proposal-revision':'0'}:{})},payload:payload as never});
+    const plan=Plan.parse({v:1,goal:'Verify scoped behavior',tasks:[{id:'sample',title:'Collect evidence',role:'review',description:'Scoped review',prompt:'Review only the saved scope and retain execution evidence.',expected_outputs:['Execution record']}],completion:{mode:'explicit_result',description:'Scoped behavior verified',required_outputs:[]}});
+    const submitted=await invoke('submit_plan',{plan});assert.equal(submitted.statusCode,200,submitted.payload);
+    const read=async()=>{
+      const response=await invoke('graph_query',{kind:'plan_gap'});assert.equal(response.statusCode,200,response.payload);
+      const body=response.json();return (body.items ?? body.result?.items)?.[0];
+    };
+    const basis=(gap:any,outcome='continue')=>({v:1,plan_job_id:hub,plan_sha256:gap.plan_sha256,criterion_id:'completion',expected_revision:gap.revision,
+      expected_task_input_sha256:gap.task_input_sha256,expected_projection_sha256:gap.projection_sha256,source_refs:[],outcome,rationale:'Current evidence does not authorize completion',...(outcome==='continue'?{expected_gain:'Retain the missing scoped execution record'}:{})});
+    const intent={from:[root.id],role:'review',description:'Collect scoped execution evidence',prompt:'Review the saved scope and retain a concrete execution record.'};
+    const gap=await read();assert.ok(gap);assert.equal(gap.criteria[0].state,'unbound');
+    const bypass=await invoke('submit_hub_decision',{intents:[intent]});
+    assert.equal(bypass.statusCode,422,bypass.payload);assert.equal(bypass.json().error_code,'plan_context_required');
+    assert.deepEqual(await decision.planCompletionBlockers(sql,canvas),['plan_criteria_unproven'],'explicit Plan gates automatic completion before any basis decision');
+    const complete=await invoke('submit_hub_decision',{complete:{from:[root.id],description:'Claim completion without evidence'},plan_basis:basis(gap,'complete')});
+    await recordPlanReplay(mode,'unproven_completion',{http_status:complete.statusCode,error_code:complete.json().error_code ?? null});
+    assert.equal(complete.statusCode,422,complete.payload);assert.equal(complete.json().error_code,'plan_completion_unproven');
+    const rejected=await invoke('submit_hub_decision',{intents:[{...intent,role:'not-admitted-role'}],plan_basis:basis(gap)});
+    assert.equal(rejected.statusCode,422,rejected.payload);
+    assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,0);
+    const uncertainJob=randomUUID(),uncertainAttempt=randomUUID();
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json) VALUES(${uncertainJob},${project},${canvas},'review','orphan','{}','{}')`;
+    await sql`INSERT INTO job_attempts(id,job_id,attempt_no,status,phase) VALUES(${uncertainAttempt},${uncertainJob},1,'unknown','terminal')`;
+    await sql`INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status) VALUES(${uncertainAttempt},${uncertainJob},'uncertain-execution','execution','unknown')`;
+    const unknown=await invoke('submit_hub_decision',{intents:[intent],plan_basis:basis(gap)});
+    assert.equal(unknown.statusCode,409,unknown.payload);assert.equal(unknown.json().error_code,'plan_unknown_effect');
+    assert.equal(unknown.json().repair.category,'unknown_external_effect');
+    await sql`UPDATE job_attempt_effects SET status='settled' WHERE attempt_id=${uncertainAttempt}`;
+    const keys=[randomUUID(),randomUUID()],proposal={intents:[intent],plan_basis:basis(gap)};
+    filePayload=proposal;
+    const requestProposal=mode==='file'?{payload_file:'plan.json'}:proposal;
+    const raced=await Promise.all(keys.map(key=>invoke('submit_hub_decision',requestProposal,key)));
+    assert.deepEqual(raced.map(r=>r.statusCode).sort(),[200,409],raced.map(r=>r.payload).join('\n'));
+    assert.equal(raced.find(r=>r.statusCode===409)!.json().error_code,'PLAN_DECISION_ALREADY_ACCEPTED');
+    const key=keys[raced.findIndex(r=>r.statusCode===200)];
+    const original=raced.find(r=>r.statusCode===200)!.json();
+    assert.equal(original.receipt_status,'persisted_deferred');
+    assert.equal(original.operation,'submit_hub_decision');
+    const pendingGap=await read();
+    await recordPlanReplay(mode,'pending_receipt',{state:pendingGap.supplementation_execution.state,child_count:(await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length});
+    assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,0,'durable acceptance alone creates no child');
+    assert.equal(pendingGap.supplementation_execution.state,'not_dispatched','receipt alone is not committed dispatch');
+    const cached=await invoke('submit_hub_decision',requestProposal,key);assert.equal(cached.statusCode,200,cached.payload);
+    assert.deepEqual(cached.json(),original);
+    api.clearPlatformApiIdempotencyCache();api.unregisterRuntimeHandler(hub);
+    const beforeRecovery=planCommits.get(hub);
+    const repeated=await invoke('submit_hub_decision',requestProposal,key);assert.equal(repeated.statusCode,200,repeated.payload);
+    assert.deepEqual(repeated.json(),original,'cache loss and absent executor preserve the original durable success response');
+    assert.equal(planCommits.get(hub),beforeRecovery,'receipt recovery must not launch or invoke an absent executor');
+    const lookup=await app.inject({method:'GET',url:`/control/v1/jobs/${hub}/operations/submit_hub_decision?receipt_key=${key}`,headers:{authorization:`Bearer ${token}`}});
+    assert.equal(lookup.statusCode,200,lookup.payload);assert.deepEqual(lookup.json(),original);
+    assert.equal(planCommits.get(hub),beforeRecovery,'GET receipt is read-only');
+    await assert.rejects(core.ingestEvent(hub,{v:1,event_id:key,type:'progress',payload:{message:'Ordinary event must not take the accepted Plan key'}}),
+      (error:unknown)=>error instanceof ControlInputError && error.code==='invalid_payload');
+    assert.equal((await sql`SELECT id FROM events WHERE job_id=${hub} AND event_id=${key} AND type='hub_decision'`).length,0,'pending receipt has not applied its semantic event');
+    assert.equal((await sql`SELECT id FROM events WHERE job_id=${hub} AND event_id=${key} AND type='progress'`).length,0);
+    const conflict=await invoke('submit_hub_decision',{...proposal,intents:[{...intent,description:'Different input under accepted key'}]},key);
+    assert.equal(conflict.statusCode,409,conflict.payload);assert.equal(conflict.json().error_code,'IDEMPOTENCY_KEY_CONFLICT');
+    api.registerRuntimeHandler(hub,handler,operations);
+    if(mode==='file'){
+      filePayload={...proposal,intents:[{...intent,description:'Changed workspace file under the same key'}]};
+      const changedFile=await invoke('submit_hub_decision',requestProposal,key);
+      assert.equal(changedFile.statusCode,409,changedFile.payload);
+      assert.equal(changedFile.json().error_code,'IDEMPOTENCY_KEY_CONFLICT');
+      assert.equal(planCommits.get(hub),beforeRecovery,'changed file cannot replay a committed decision');
+      filePayload={intents:[intent]};
+      const removedBasis=await invoke('submit_hub_decision',requestProposal,key);
+      assert.equal(removedBasis.statusCode,409,removedBasis.payload);
+      assert.equal(removedBasis.json().error_code,'IDEMPOTENCY_KEY_CONFLICT');
+      filePayload=proposal;
+    }
+    const differentOperation=await invoke('request_human',{reason:'Cannot reuse a Hub receipt for human escalation',subject:{type:'platform_blocker',kind:'business_decision'},plan_basis:basis(gap,'needs_human')},key);
+    assert.equal(differentOperation.statusCode,409,differentOperation.payload);
+    assert.equal(differentOperation.json().error_code,'IDEMPOTENCY_KEY_CONFLICT');
+    const wrongCompletion=await invoke('mark_job_done',{summary:'Wrong operation must not poison the Plan receipt'},key);
+    assert.equal(wrongCompletion.statusCode,409,wrongCompletion.payload);
+    assert.equal(wrongCompletion.json().error_code,'IDEMPOTENCY_KEY_CONFLICT');
+    failPlanCommit=false;
+    await sql`UPDATE job_attempt_effects SET status='unknown' WHERE attempt_id=${uncertainAttempt}`;
+    const unknownRecovery=await invoke('submit_hub_decision',requestProposal,key);
+    assert.equal(unknownRecovery.statusCode,200,unknownRecovery.payload);assert.deepEqual(unknownRecovery.json(),original);
+    assert.equal(planCommits.get(hub),beforeRecovery,'unknown effects allow receipt reads but forbid restoring execution');
+    await sql`UPDATE job_attempt_effects SET status='settled' WHERE attempt_id=${uncertainAttempt}`;
+    assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,0,'unknown effect blocks pending receipt execution');
+    const restored=await invoke('submit_hub_decision',requestProposal,key);
+    assert.equal(restored.statusCode,200,restored.payload);assert.deepEqual(restored.json(),original);
+    assert.equal(planCommits.get(hub),1,'same Attempt restores the pending semantic decision exactly once');
+    const settledReplay=await invoke('submit_hub_decision',requestProposal,key);
+    assert.equal(settledReplay.statusCode,200,settledReplay.payload);assert.deepEqual(settledReplay.json(),original);
+    assert.equal(planCommits.get(hub),1,'settled receipt never repeats semantic execution');
+    const children=await sql`SELECT * FROM jobs WHERE parent_job_id=${hub}`;assert.equal(children.length,1);
+    assert.equal(children[0].payload_json.plan_context.plan_job_id,hub);
+    assert.equal(children[0].agent_snapshot_json.runtime_image.image_key,'deepsonar-base');
+    // Execution lifecycle is an independently sourced projection, never criterion authority.
+    const {loadPlanExecution}=await import('./domains/plan-protocol/execution-projection.js');
+    const {loadPlanGapReport}=await import('./domains/plan-protocol/gap-report.js');
+    const {contentSha256}=await import('./domains/plan-protocol/criterion-model.js');
+    const childId=String(children[0].id);
+    const execution=()=>loadPlanExecution(sql,canvas,project,hub,gap.plan_sha256);
+    const queuedGap=await read();
+    assert.equal(queuedGap.supplementation_execution.state,'queued');
+    assert.equal(queuedGap.supplementation_execution.source.job_id,childId);
+    assert.equal(queuedGap.supplementation_execution.source.decision_event_id,key);
+    assert.equal(queuedGap.supplementation_execution.completion_assessment,'unknown');
+    const frozenReport=await loadPlanGapReport(sql,canvas,project);
+    const frozenHash=contentSha256(frozenReport);
+    assert.equal(contentSha256(await loadPlanGapReport(sql,canvas,project)),frozenHash,'same lifecycle facts yield stable report input');
+    const historicalAttempt=randomUUID(),latestAttempt=randomUUID();
+    await sql`INSERT INTO job_attempts(id,job_id,attempt_no,status,phase) VALUES
+      (${historicalAttempt},${childId},1,'failed','terminal'),(${latestAttempt},${childId},2,'active','preparing')`;
+    for(const [jobStatus,attemptStatus,phase,expected] of [
+      ['claimed','active','preparing','queued'],['provisioning','active','provisioned','preparing'],
+      ['running','active','agent.ready','running'],['waiting_human','active','agent.suspended','waiting_human'],
+      ['succeeded','succeeded','terminal','succeeded'],['failed','failed','terminal','failed'],
+      ['cancelled','cancelled','terminal','cancelled'],['timeout','timeout','terminal','timeout'],
+      ['running','succeeded','terminal','unknown'],['orphan','orphan','terminal','unknown'],
+    ] as const){
+      await sql`UPDATE jobs SET status=${jobStatus} WHERE id=${childId}`;
+      await sql`UPDATE job_attempts SET status=${attemptStatus},phase=${phase} WHERE id=${latestAttempt}`;
+      const projected=await execution();
+      await recordPlanReplay(mode,`lifecycle_${jobStatus}_${attemptStatus}`,{state:projected.state,completion_assessment:projected.completion_assessment});
+      assert.equal(projected.state,expected,`${jobStatus}/${attemptStatus}`);
+      assert.equal(projected.source?.attempt_id,latestAttempt);
+      assert.equal(projected.completion_assessment,'unknown');
+    }
+    await sql`UPDATE jobs SET status='waiting_human' WHERE id=${childId}`;
+    await sql`UPDATE job_attempts SET status='active',phase='agent.suspended' WHERE id=${latestAttempt}`;
+    const humanEvent=randomUUID();
+    await sql`INSERT INTO events(job_id,event_id,attempt_id,job_seq,type,payload_json)
+      VALUES(${childId},${humanEvent},${latestAttempt},1,'human',${sql.json({reason:'Credential unavailable; do not expose this free-form reason',subject:{type:'platform_blocker',kind:'credential'}})})`;
+    const waiting=await execution();
+    await recordPlanReplay(mode,'credential_report',{state:waiting.state,blocker_kind:waiting.reported_blocker?.kind,authority:waiting.reported_blocker?.authority});
+    assert.deepEqual(waiting.reported_blocker,{event_id:humanEvent,authority:'agent_report',kind:'credential'});
+    assert.ok(!JSON.stringify(waiting).includes('free-form'));
+    await sql`DELETE FROM events WHERE event_id=${humanEvent}`;
+    await sql`UPDATE jobs SET status='succeeded' WHERE id=${childId}`;
+    await sql`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${latestAttempt}`;
+    await sql`INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status)
+      VALUES(${historicalAttempt},${childId},'historical-unresolved','execution','unknown')`;
+    const historicalUnknown=await execution();
+    await recordPlanReplay(mode,'historical_unknown',{state:historicalUnknown.state,reason:historicalUnknown.reason});
+    assert.equal((await execution()).state,'unknown','a later success cannot hide historical unknown effects');
+    assert.equal((await execution()).reason,'unknown_external_effect');
+    await sql`UPDATE jobs SET status='running' WHERE id=${childId}`;
+    await sql`UPDATE job_attempts SET status='active',phase='agent.ready' WHERE id=${latestAttempt}`;
+    await sql`UPDATE job_attempt_effects SET status='effect_pending' WHERE attempt_id=${historicalAttempt}`;
+    assert.equal((await execution()).state,'unknown','terminal historical Attempt with an unclosed effect remains unknown while a later Attempt runs');
+    await sql`UPDATE jobs SET status='succeeded' WHERE id=${childId}`;
+    await sql`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${latestAttempt}`;
+    await sql`UPDATE job_attempt_effects SET status='settled' WHERE attempt_id=${historicalAttempt}`;
+    assert.equal((await execution()).state,'succeeded');
+    const successGap=await read();
+    assert.equal(successGap.projection_sha256,queuedGap.projection_sha256,'lifecycle projection does not change criterion authorization identity');
+    const refreshed=await loadPlanGapReport(sql,canvas,project);
+    assert.notEqual(contentSha256(refreshed),frozenHash,'execution change refreshes report input');
+    assert.equal(contentSha256(frozenReport),frozenHash,'previous report input stays frozen');
+    const refreshedEntry=refreshed.entries.find(entry=>entry.job_id===hub);
+    assert.ok(refreshedEntry);
+    assert.equal(refreshedEntry.supplementation_execution?.state,'succeeded');
+    assert.ok(refreshedEntry.audit?.criteria.every(criterion=>criterion.state==='unbound'),'execution success is not positive criterion authority');
+    const wrongChild=randomUUID();
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,parent_job_id,type,status,agent_snapshot_json,payload_json)
+      SELECT ${wrongChild},project_id,canvas_id,parent_job_id,type,'pending',agent_snapshot_json,
+        jsonb_set(payload_json,'{plan_context,decision_event_id}',${sql.json(randomUUID())}) FROM jobs WHERE id=${childId}`;
+    assert.equal((await execution()).source?.job_id,childId,'wrong decision context cannot attach another child');
+    assert.equal((await execution()).state,'succeeded');
+    await sql`UPDATE jobs SET payload_json=${sql.json(children[0].payload_json)} WHERE id=${wrongChild}`;
+    const duplicate=await execution();assert.equal(duplicate.state,'unknown');assert.equal(duplicate.truncated,true);
+    await sql`UPDATE jobs SET canvas_id=NULL WHERE id=${wrongChild}`;
+    assert.equal((await execution()).source?.job_id,childId,'cross-Canvas context never joins');
+    await sql`UPDATE job_attempt_effects SET job_id=${wrongChild},status='unknown' WHERE attempt_id=${historicalAttempt}`;
+    assert.equal((await execution()).reason,'unknown_external_effect','mismatched effect ownership is not silently ignored');
+    await sql`DELETE FROM job_attempt_effects WHERE attempt_id=${historicalAttempt}`;
+    assert.equal((await loadPlanExecution(sql,canvas,project,hub,'f'.repeat(64))).state,'unknown','different Plan version is not unexecuted');
+    await sql`UPDATE jobs SET payload_json=jsonb_set(payload_json,'{plan_context,scheduler_owned}','false') WHERE id=${childId}`;
+    assert.equal((await execution()).reason,'dispatch_link_unavailable');
+    await sql`UPDATE jobs SET payload_json=${sql.json(children[0].payload_json)} WHERE id=${childId}`;
+    await sql`DELETE FROM jobs WHERE id=${wrongChild}`;
+    await sql`DELETE FROM job_attempts WHERE job_id=${childId}`;
+    await sql`UPDATE jobs SET status='pending' WHERE id=${childId}`;
+    assert.equal((await execution()).state,'queued');
+    // A second Job exercises final revision CAS without the first Job's terminal-history guard.
+    const contender=randomUUID();
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json,started_at,lease_expires_at)
+      SELECT ${contender},project_id,canvas_id,type,'running',agent_snapshot_json,payload_json,now(),now()+interval '5 minutes' FROM jobs WHERE id=${hub}`;
+    await createAttempt(sql,contender);
+    await assert.rejects(core.ingestEvent(contender,{v:1,event_id:randomUUID(),type:'hub_decision',payload:proposal}),
+      (error:unknown)=>error instanceof ControlInputError && error.code==='plan_stale_revision');
+    const next=await read();assert.equal(next.supplementation_remaining,0);
+    await assert.rejects(core.preflightDeferredSemanticEvent(contender,'hub_decision',{intents:[{...intent,description:'Different title cannot reset budget'}],plan_basis:basis(next)}),
+      (error:unknown)=>error instanceof ControlInputError && error.code==='plan_budget_exhausted');
+    assert.equal((await sql`SELECT id FROM events WHERE job_id=${contender} AND type='hub_decision'`).length,0);
+    await sql`UPDATE jobs SET status='cancelled' WHERE id=${contender}`;
+    await sql`UPDATE job_attempts SET status='cancelled',phase='terminal' WHERE job_id=${contender}`;
+    const omitted=await invoke('submit_hub_decision',{intents:[intent]});assert.equal(omitted.statusCode,422,omitted.payload);assert.equal(omitted.json().error_code,'plan_context_required');
+    assert.deepEqual(await decision.planCompletionBlockers(sql,canvas),['plan_criteria_unproven']);
+    // Fake executor lifecycle on the actual derived Intent Job, with real evidence and ingestion.
+    const parentDone=await invoke('mark_job_done',{summary:'Dispatched one scoped supplementation'});
+    assert.equal(parentDone.statusCode,200,parentDone.payload);
+    assert.equal(parentDone.json().receipt_status,'persisted_deferred');
+    assert.equal((await sql`SELECT id FROM events WHERE job_id=${hub} AND type='done'`).length,1);
+    const worker=String(children[0].id);
+    const attempt=String((await createAttempt(sql,worker)).id);
+    await sql`UPDATE jobs SET status='provisioning' WHERE id=${worker}`;
+    const workerGrant=await api.mintJobCapabilityToken(worker);
+    await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '5 minutes' WHERE id=${worker}`;
+    await api.activateProvisionedJobCapabilityTokens(worker);api.registerRuntimeHandler(worker,handler,operations);
+    activeJob=worker;token=workerGrant.token;
+    const uri=`attempts/${attempt}/execution.txt`,bytes=Buffer.from('Scoped fake execution retained; this is not real model evidence');
+    const sha=createHash('sha256').update(bytes).digest('hex');
+    await mkdir(path.join(blob,'jobs',worker,`attempts/${attempt}`),{recursive:true});
+    await writeFile(path.join(blob,'jobs',worker,uri),bytes);
+    await writeFile(path.join(blob,'jobs',worker,'manifest.json'),JSON.stringify({job_id:worker,finalized_at:new Date().toISOString(),files:[{path:uri,bytes:bytes.length,sha256:sha}]}));
+    const observed=await invoke('emit_fact',{title:'Scoped fake execution record',description:'The fixture retained a bounded execution record without invoking a model.',artifact:{artifact_key:'bounded-execution',kind:'fact',evidence:[{statement:'Retained scoped execution record',uri,sha256:sha}]}});
+    assert.equal(observed.statusCode,200,observed.payload);
+    const [observedFact]=await sql`SELECT node_id FROM artifacts WHERE job_id=${worker} AND kind='fact'`;
+    assert.ok(observedFact);
+    await sql`UPDATE projects SET config_json=${sql.json({rules:{hubEnabled:true,maxHubRounds:5}})} WHERE id=${project}`;
+    const workerDone=await invoke('mark_job_done',{summary:'Retained scoped execution evidence for operator assessment'});
+    assert.equal(workerDone.statusCode,200,workerDone.payload);
+    assert.equal(workerDone.json().receipt_status,'persisted_deferred');
+    assert.equal((await sql`SELECT id FROM events WHERE job_id=${worker} AND type='done'`).length,1);
+    const [derivedHub]=await sql`SELECT id,payload_json FROM jobs WHERE canvas_id=${canvas} AND type='hub_reason' AND id<>${hub} ORDER BY created_at DESC LIMIT 1`;
+    assert.ok(derivedHub,'worker terminal must use existing idle Hub wakeup');
+    assert.equal(derivedHub.payload_json.plan_context.plan_job_id,hub);
+    const followup=String(derivedHub.id);
+    await sql`UPDATE jobs SET status='provisioning' WHERE id=${followup}`;
+    await createAttempt(sql,followup);
+    const followupGrant=await api.mintJobCapabilityToken(followup);
+    await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '5 minutes' WHERE id=${followup}`;
+    await api.activateProvisionedJobCapabilityTokens(followup);api.registerRuntimeHandler(followup,handler,operations);
+    activeJob=followup;token=followupGrant.token;
+    const sourced=await invoke('graph_query',{kind:'plan_gap',ids:[observedFact.node_id]});
+    await recordPlanReplay(mode,'post_execution_unbound',{criterion_state:sourced.json()?.items?.[0]?.criteria?.[0]?.state ?? null,eligible:sourced.json()?.items?.[0]?.source_refs?.[0]?.eligible ?? null});
+    assert.equal(sourced.statusCode,200,sourced.payload);assert.equal(sourced.json().items[0].source_refs[0].eligible,true);
+    assert.equal(sourced.json().items[0].criteria[0].state,'unbound','execution alone is not semantic authority');
+    await sql`UPDATE canvases SET title='Changed saved objective' WHERE id=${canvas}`;
+    const changed=await read();assert.equal(changed.stale_objective,true);
+    await sql`UPDATE job_attempt_effects SET status='unknown' WHERE attempt_id=${uncertainAttempt}`;
+    const stop=await invoke('request_human',{reason:'Single-step budget is exhausted and current criteria require operator assessment',subject:{type:'platform_blocker',kind:'business_decision'},plan_basis:basis(changed,'needs_human')});
+    await recordPlanReplay(mode,'safe_human_stop',{http_status:stop.statusCode,job_status:(await sql`SELECT status FROM jobs WHERE id=${followup}`)[0].status,child_count:(await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length});
+    assert.equal(stop.statusCode,200,stop.payload);
+    assert.equal(stop.json().receipt_status,'persisted_deferred');
+    assert.equal(stop.json().operation,'request_human');
+    assert.equal((await sql`SELECT status FROM jobs WHERE id=${followup}`)[0].status,'waiting_human','unknown effects do not block safe human escalation');
+    assert.equal((await sql`SELECT id FROM jobs WHERE parent_job_id=${hub}`).length,1);
+    assert.equal((await sql`SELECT id FROM events WHERE job_id=${hub} AND type='hub_decision'`).length,1);
+    api.unregisterRuntimeHandler(hub);api.unregisterRuntimeHandler(followup);api.unregisterRuntimeHandler(worker);
+    }
+  }finally{
+    await close?.();await end?.();await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);await admin.end();await rm(blob,{recursive:true,force:true});
+  }
+});

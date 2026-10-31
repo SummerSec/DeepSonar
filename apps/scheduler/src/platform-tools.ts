@@ -1,0 +1,235 @@
+import { SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/catalog.js";
+
+const PLATFORM_TOOL_USAGE: Record<string, string> = {
+  list_available_roles: [
+    "### `list_available_roles` — 查询 Hub 当前可派发角色",
+    "- 参数：无参数，调用时传空对象 `{}`。",
+    "- 时机：Hub 判断需要派发 Worker 时先调用；返回本 Job 从数据库冻结的角色 name、title、description。只允许原样使用返回的 name。",
+    "- 边界：结果只含 `kind=role` 且当前项目启用的角色，不含 verify、report、hub_reason 或其他 system/hub 角色。不得用记忆补充角色名。",
+    "- 示例：`{}`",
+  ].join("\n"),
+  list_available_agent_clis: [
+    "### `list_available_agent_clis` — 查询 Hub 当前可提案的 Agent CLI",
+    "- 参数：无参数，调用时传空对象 `{}`。",
+    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用的 Agent CLI（claude-code / pi / dsh）及软缺省标记。",
+    "- 边界：intent 可选字段 `agent_cli` 只能原样使用返回值；省略时平台用项目软缺省或 RoleConfig 回退。不得猜测或使用未启用 CLI（`invalid_agent_cli`）。CLI×Provider×镜像在已启用集合内可自由组合。",
+    "- 示例：`{}`",
+  ].join("\n"),
+  list_available_providers: [
+    "### `list_available_providers` — 查询 Hub 当前可提案的 Provider 账号",
+    "- 参数：无参数，调用时传空对象 `{}`。",
+    "- 时机：Hub 派发 Worker 前调用；返回本项目已启用且 active 的 LLM Provider（credential_id、provider、compatible_agent_clis、models 能力目录、max_concurrent / model_concurrency 摘要）。",
+    "- 边界：intent 可选字段 `credential_id` / `model_ref` 只能原样使用返回的值；model_requirements 会在 Scheduler 冻结前复核。省略时平台用项目软缺省或 RoleConfig 绑定回退。并发门禁读 Provider 配额，不在角色上配并发。目录外或未启用账号拒绝（`invalid_credential` / `invalid_model`）。",
+    "- 示例：`{}`",
+  ].join("\n"),
+  list_available_skill_sources: [
+    "### `list_available_skill_sources` — 查询 Hub 当前可提案的 Skill 源",
+    "- 参数：无参数，调用时传空对象 `{}`。",
+    "- 时机：Hub 需要按任务组合 Skill/模块时先调用；返回本项目已启用且平台 trusted+enabled 的 Skill 源摘要（id/name/module_count/content hash）。",
+    "- 返回平台 trusted+enabled 的 Skill 源摘要；业务 Skill 不会因 RoleConfig.modules_json 为空而自动注入。需要能力时由 Agent 调用 list_available_skills/search_skills，再用返回的 selector/content_hash 调用 pull_skill。",
+    "- 示例：`{}`",
+  ].join("\n"),
+  list_available_skills: [
+    "### list_available_skills - list business Skills the Agent can pull",
+    "- Return concrete selectors, names, descriptions, plugins, commit_sha and content_hash from platform trusted+enabled Skill sources.",
+    "- Use a selector and content_hash returned by this operation with pull_skill; do not guess selectors.",
+  ].join("\n"),
+  search_skills: [
+    "### search_skills - search business Skills the Agent can pull",
+    "- Search selectors, names, plugins and descriptions; use the returned selector and content_hash with pull_skill.",
+  ].join("\n"),
+  pull_skill: [
+    "### pull_skill - let the Agent pull one business Skill",
+    "- Pass a selector and content_hash returned by list_available_skills or search_skills; success returns bounded files.",
+    "- Read SKILL.md and referenced files. Hash changes, missing modules and invalid selectors are rejected; do not use package installers.",
+  ].join("\n"),
+  list_available_runtime_images: [
+    "### `list_available_runtime_images` — 查询 Hub 当前可提案的运行镜像",
+    "- 参数：无参数，调用时传空对象 `{}`。",
+    "- 时机：**凡派发 Worker 且任务可能需要非缺省工具链时必须先调用**（移动端 APK、浏览器 CDP、ClickHouse、OpenHarmony、多语言动态 PoC 等）；不要凭记忆猜 image_key。",
+    "- 返回每条含：`image_key`、`name`、`description`、`compatible_agent_clis`、`purpose`（用途）、`tool_summary`（预装工具）、`not_included`（明确不包含）、`suited_roles`、`suited_evidence`、`selection_hints`（任务→镜像匹配提示）、`capabilities`（能力标签），以及实时 `readiness`（ready/preparing/unavailable/error）、`preparing`、`error_code`、脱敏 `error`、`checked_at`。",
+    "- 选择纪律：按本轮任务证据需求匹配 `purpose` / `capabilities` / `selection_hints`（例：APK→mobile，Chromium/CDP→chrome-test，官方 ClickHouse SQL→clickhouse-test，hdc 设备→openharmony-test，Java/Python/Go/Rust PoC→kali-minimal）；再核对角色 CLI ∈ `compatible_agent_clis` 且 `readiness=ready`。intent.`runtime_image_key` 只能原样复制返回的 image_key；省略则按角色缺省镜像。不得填写 OCI/digest/目录外 key（`invalid_runtime_image`）；非 ready 整单拒绝（`runtime_image_not_ready`）。",
+    "- 示例：`{}`",
+  ].join("\n"),
+  list_capabilities: [
+    "### `list_capabilities` — 查询本 Job 可见的 Capability Pack 摘要",
+    "- 参数（均可选）：`scope`（builtin|global|project|task|session）、`limit`、`offset`。",
+    "- 返回 id、version、digest、scope、summary。不要把摘要当成完整契约；需要输入/输出/权限/预算时再 describe_capability。",
+    "- 边界：结果只含内置 Pack、已信任模块源和当前 Job 的 RoleConfig 投影；不能扩大冻结权限。",
+    '- 示例：`{}` 或 `{"scope":"builtin","limit":20}`',
+  ].join("\n"),
+  search_capabilities: [
+    "### `search_capabilities` — 按任务搜索可用 Capability Pack",
+    "- 参数：`query`（必填，1-200 字符）；可选 `scope`、`limit`。",
+    "- 时机：不知道 RoleConfig 内部 selector 时，先搜索再 describe。",
+    '- 示例：`{"query":"surface map"}`',
+  ].join("\n"),
+  describe_capability: [
+    "### `describe_capability` — 读取一个 Pack 的机器契约",
+    "- 参数：`id`（必填）；可选 `version` 或 `digest` 以钉住已发现条目。",
+    "- 返回完整 Manifest（inputs/outputs/permissions/budget/failure_policy）。未知 id 返回 RepairFeedback，不要猜测。",
+    '- 示例：`{"id":"repository.surface_map"}`',
+  ].join("\n"),
+  validate_composition: [
+    "### `validate_composition` — 校验 Pack 组合是否可被当前 Job 接受",
+    "- 参数：`pack_manifest`（必填，deepsonar.capability-pack/v1 草案，不要带 digest）；可选 `selectors`。",
+    "- 不能新增 platform_tools、凭据、镜像或把 allow_egress 从 false 改成 true。缺失/冲突/未信任模块返回 RepairFeedback。",
+    '- 示例：`{"pack_manifest":{"schema":"deepsonar.capability-pack/v1","id":"task.surface","version":"0.1.0","scope":"task","summary":"组合已准入的入口梳理","capabilities":["repository.surface_map"],"inputs":[{"name":"target","schema":"string","required":true}],"outputs":[{"name":"surface_map","artifact_schema":"fact.surface_map"}],"permissions":{"platform_tools":["emit_fact"],"allow_egress":false},"budget":{"max_attempts":3},"failure_policy":{"correctable":true,"replay":"same_session"}}}`',
+  ].join("\n"),
+  preview_materialization: [
+    "### `preview_materialization` — 预览 Pack 物化与冻结 digest",
+    "- 参数与 `validate_composition` 相同；成功时返回冻结 digest、解析后的 selectors/modules 和权限投影。",
+    "- 这是 dry-run，不会改 RoleConfig，也不会激活 task Pack。",
+    '- 示例：`{"pack_manifest":{...},"selectors":["<source-uuid>:whitebox/authz"]}`',
+  ].join("\n"),
+  emit_progress: [
+    "### `emit_progress` — 上报过程进度",
+    "- 参数：`message`（必填，当前动作或阶段结论，1-2000 字符）；`percent`（可选，0-100）。",
+    "- 时机：开始关键阶段、获得阶段结论或遇到耗时步骤时调用；可以多次调用，但不要用它提交最终结果。",
+    '- 示例：`{"message":"已定位认证入口，正在追踪会话校验链路","percent":35}`',
+  ].join("\n"),
+  emit_fact: [
+    "### `emit_fact` — 增量提交可验证事实",
+    "- 无 Finding 的工程交付或有界阴性结果用 artifact.task_result：schema_version:1、kind(delivery/negative_result/blocked/not_executed)、task_contract_sha256、target、与契约一致的baseline、criterion_ids、method、observed、limitations、evidence_refs。先保存本 Job/Attempt 含留存文件 URI/hash 的原始证据，再引用其 Fact；delivery/negative_result 必须有证据，未执行或受阻写对应 kind 和限制。结果是待评声明，不是成功；不得将预算耗尽、工具失败写成阴性，也不必创建假 Finding。不能混用 goal_review/verification 或自选 artifact_key。",
+    "- 独立目标评审使用冻结 task_goal_review 指派，通过 artifact.goal_review 提交整个指定判据的 expected/actual/rationale、限制和本 Job Fact 引用；先保存含本 Attempt 保留文件 URI/hash 的独立证据。没有指派不能自评，satisfied 不等于整体完成或赏金资格。",
+    "- 直接参数：`title`（至少 2 个非空白字符）；`description`（至少 16 个非空白字符）；`quantities`（可选，最多 20 条 `{value, unit, basis, ref?}` 数值口径，承重数字必须声明）；`artifact`（可选，通用 Artifact：kind/schema_version/claims/evidence/relations/extensions）；`verification`（可选，仅 Hub 回弹补证 Job 接受）。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
+    "- 长内容或收到 HTTP 错误响应/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",
+    "- `verification` 字段：`finding_id`、`evidence_kind`（review|test）、`outcome`（supports|refutes|inconclusive）、`subject_revision` 必填；test 还应含 `steps`、`expected`、`actual`（或 artifact_refs）。review/test 用 `attempted_refutation` 字符串数组记录实际尝试的反例或阴性对照；不得从 limitations 推断反证尝试。没有目标 Finding 的普通测试提交普通 Fact，不传 verification、不编造 finding_id。",
+    "- 时机：每得到一个不在画布中的原子事实立即调用；单 Job 最多 100 条。description 写明证据、来源、推理边界和仍未知内容。",
+    '- 普通示例：`{"title":"登录接口使用独立限流键","description":"证据：apps/api/login.ts:42 以 IP 生成键；来源：本地源码；未知：反向代理是否覆盖客户端 IP。"}`',
+    '- 补证示例：`{"title":"实测复现未授权读取","description":"步骤与响应见 verification","verification":{"finding_id":"<uuid>","evidence_kind":"test","outcome":"supports","subject_revision":"app@abc123","steps":["构造请求","观察响应"],"expected":"拒绝","actual":"返回其他租户数据","attempted_refutation":["同一身份访问自己的记录作为阴性对照，跨租户仍可读取"]}}`',
+  ].join("\n"),
+  emit_finding: [
+    "### `emit_finding` — 增量提交通用 Finding",
+    "- 已冻结任务契约时，先 emit_fact 保存观察，再提交 outcome_claim（schema_version:1、task_contract_sha256、target、可选baseline、criterion_assessments、evidence_refs；赏金附加rule_assessments）。criterion_assessments 使用 criterion_id、result(matches/does_not_match/unknown) 和同任务 Fact UUID。目标、范围、证据及排除项必须评估，至少关联一项 acceptance 判据；matches 仅表示贡献关联，不代表完成全部判据。未知补证，无关或排除只留观察；准入仅产生研究候选。高置信提交资格另需独立复核、可复现证据、攻击链和已知问题适用性，不能用分数替代。",
+    "- 来源身份限定在本 Job 的 profile/title/location/rule_id；相同来源重复提交须保持内容一致，内容冲突明确拒绝。当前不支持修订，补充验证证据请用 emit_fact 引用已有 Finding；不要改标题伪造修订或继承其它 Job 的验证状态。",
+    "- 直接参数：`title` 至少 8 个非空白字符、`summary` 至少 32 个非空白字符；severity 只能是 `low|medium|high|critical`。`location`、`rule_id`、`quantities`（可选数值口径）可选。安全 Finding 确认需要结构化 `impact`（attacker_entry / victim_resource / impact_flow 或有依据的 impact_waiver），不能只把影响写进 summary。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
+    "- 长内容或收到 HTTP 错误响应/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",
+    "- 时机：有具体位置、触发路径和证据的安全问题一经确认就调用；单 Job 最多 20 条。是否派生 verify 由调度器按冻结规则决定，请求里不要带建议字段。",
+    '- 示例：`{"title":"重置令牌可重复使用","severity":"high","location":"src/auth/reset.ts:88","summary":"成功重置密码后令牌仍未失效，使用同一令牌再次提交请求可修改目标账户密码，导致账户可被重复接管。","rule_id":"AUTH-RESET-REPLAY","impact":{"attacker_entry":"持有已使用重置令牌的攻击者","victim_resource":"目标账户密码与会话","impact_flow":"重放未失效令牌再次修改密码并接管账户"}}`',
+  ].join("\n"),
+  submit_hub_decision: [
+    "Optional role_prompt overrides the selected Worker's business instructions for that Job only; it never mutates persistent RoleConfig or expands platform permissions.",
+    "Omit role_prompt to inherit the selected role's RoleConfig instructions; when supplied, it is frozen into the newly created Worker Job snapshot.",
+    "### `submit_hub_decision` — 提交 Hub 决策",
+    "- 参数只能三选一：`complete: {from, description}`，或 `intents: [{from, role, description, prompt}]`，或 `payload_file: \"相对路径\"`（读取 /workspace 下预先 Write 的 JSON）。",
+    "- `from` 只能填写本 Job 已投影的 root/fact/finding id（YAML 注入或 `graph_query` 返回的 `referable_ids`）；`role` 只能原样选择本轮 `list_available_roles` 的 name（英文 id）；可选 `runtime_image_key` / `agent_cli` / `credential_id` 只能原样来自本轮对应 list_available_* 目录；`description` ≥8 字符；`prompt` ≥32 字符且必须让全新 Worker 可独立执行。",
+    '- 多意图或长 prompt 时**必须**用 `payload_file`：先 Write 完整 JSON（根对象含 complete 或 intents），再 `{"payload_file":"hub_decision_payload.json"}`。直接塞大 JSON 可能截断并返回 HTTP 错误响应。',
+    "- 成功提交后每个 Job 只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可重试。不要在成功后为“补全”再次调用；不要与 `request_human` 混用。",
+    '- 完成示例：`{"complete":{"from":["<fact-id>"],"description":"目标已由引用证据完整覆盖。"}}`',
+    '- 派发示例：`{"intents":[{"from":["<root-id>"],"role":"explore","description":"确认目标材料与版本","prompt":"定位任务目标的权威材料，记录版本、来源和仍缺失的信息；只提交新增事实。"}]}`',
+    '- 大 payload 示例：Write `/workspace/hub_decision_payload.json` 后调用 `{"payload_file":"hub_decision_payload.json"}`',
+  ].join("\n"),
+  submit_plan: [
+    "### `submit_plan` — 提交版本化执行计划（Plan 协议）",
+    "- 参数：`plan`（必填）。`plan.v` 必须是 `1`；包含 `goal`、`tasks`、`completion`；可选 `assumptions`、`budget`、`open_questions`。",
+    "- 每个 task 需要稳定 `id`、`title`、`role`、`description`、`prompt`；可用 `from` 引用当前画布 UUID，`depends_on` 只能指向本计划内其它 task id。",
+    "- Scheduler 会保存计划原文，并按任务预算裁剪后写入审计；本阶段不会用 Plan 直接派发 Worker，现有 Hub intent 路径不变。",
+    "- 示例：`{\"plan\":{\"v\":1,\"goal\":\"确认认证入口与会话校验\",\"tasks\":[{\"id\":\"explore-auth\",\"title\":\"梳理登录入口\",\"role\":\"explore\",\"description\":\"定位登录与会话校验\",\"prompt\":\"定位任务目标的权威材料并记录仍缺失的信息。\"}],\"completion\":{\"mode\":\"explicit_result\",\"description\":\"由后续 PlanResult 声明是否继续\"}}}`",
+  ].join("\n"),
+  submit_plan_result: [
+    "### `submit_plan_result` — 提交计划执行结果",
+    "- 参数：`v=1`、`outcome`（continue|complete|blocked|needs_human）、`summary`；`complete`/`blocked`/`needs_human` 必须带 `termination_reason`。",
+    "- 可选 `execution`（按 task_id 记录执行状态）和 `open_questions`。必须先有本 Job 的计划原文或 Hub Intent 适配记录。",
+    "- 本阶段只记账，不替代 Hub complete / request_human，也不改变画布收敛门。",
+    '- 示例：`{"v":1,"outcome":"continue","summary":"入口已定位，下一步需要动态验证会话。","execution":[{"task_id":"explore-auth","status":"done"}]}`',
+  ].join("\n"),
+  mark_job_done: [
+    "### `mark_job_done` — 正常结束 Job",
+    "- 普通 Worker 参数：`summary`（必填，至少 8 个非空白字符，最多 8192 UTF-8 字节）；不得传 `verdict`。",
+    "- report 的 `summary` 最多 8192 UTF-8 字节；可容纳完整正文时，使用五类状态的二级标题，每个 Finding ID 在正确章节恰好出现一次。长报告只提交有界摘要；Scheduler 从冻结输入生成完整确定性模板，保留全部 Finding ID 和数值口径，不要求把全部 Finding 压进 summary。",
+    "- verify 参数：`summary` 与 `verdict` 均必填；verdict 只能是 `confirmed|rework|needs_human|refuted`。",
+    "- `confirmed` 仍须通过 Scheduler 硬门（成功来源 Job、finding_id / subject_revision / ownership / expected / actual / outcome，以及冻结策略要求的独立 review/test、attempted_refutation 和安全 Finding impact）；普通文本不算验证。不满足时会记为 rework 并回弹 Hub。",
+    "- `rework` 必须提供非空 `missing_evidence` 字符串数组，逐项列出缺失证据，并在 summary 解释补证目标。",
+    "- 时机：所有增量 fact/finding 已提交且任务确实收尾后只调用一次。Hub 必须先调用 `submit_hub_decision`。",
+    '- 普通示例：`{"summary":"完成入口梳理并提交 3 条新增事实；未覆盖移动端客户端。"}`',
+    '- verify 示例：`{"summary":"在受影响版本复现未授权读取，响应包含其他租户记录。","verdict":"confirmed"}`',
+    '- rework 示例：`{"summary":"缺少运行时复现；仅有同源静态描述。","verdict":"rework","missing_evidence":["runtime_test"]}`',
+  ].join("\n"),
+  request_human: [
+    "### `request_human` — 请求人工介入并结束本轮",
+    "- 参数：`reason`（必填，8-2000 字符）与结构化 `subject`（必填）；服务端不会从 reason 推断目标。",
+    "- Finding 阻塞：`subject={type:\"finding\",finding_id,subject_revision}`；只允许当前项目、当前画布且未被最低严重度策略豁免的 canonical Finding。",
+    "- 平台阻塞：`subject={type:\"platform_blocker\",kind}`；kind 只能是 authorization|credential|high_risk_action|business_decision。",
+    "- 调用后停止执行，不再调用 `mark_job_done` 或 `submit_hub_decision`。",
+    '- Finding 示例：`{"reason":"需要人工确认风险接受边界和目标版本。","subject":{"type":"finding","finding_id":"<uuid>","subject_revision":"app@abc123"}}`',
+    '- 平台阻塞示例：`{"reason":"缺少隔离测试账号，无法继续动态验证。","subject":{"type":"platform_blocker","kind":"credential"}}`',
+  ].join("\n"),
+  graph_query: [
+    "### `graph_query` — 按需读取本 Job 画布（有界只读）",
+    "- 参数：`kind` 必填，只能是 `overview|index|node|edges|findings|evidence|intents`。先用 `overview` 定位，再 `index`/`node`；不要试图一次拉全图。",
+    "- `index`：可选 `node_type`、`status`、`since`、`cursor`、`limit`（≤50）。`node`：`ids`（≤20）。`edges`：`id` 与可选 `direction`/`edge_type`/`limit`（≤200）。`findings`：可选 `verify_status`、`unconverged_only`、`limit`（≤30）。`evidence`：`finding_id`。`intents`：可选 `status`/`limit`（≤50）。",
+    "- 画布与项目只能来自当前 Job 快照；不要传 `canvas_id` 或 `project_id`（未知字段会被拒绝）。返回含 `referable_ids`、`truncated`、`omitted`、`budget`。`submit_hub_decision` 的 `from` 只能引用本 Job 已经投影过（注入或本次查询）的 id。",
+    "- 单 Job 默认最多 40 次、累计 512 KB；超限返回 RepairFeedback `graph_query_budget_exceeded`。",
+    '- 示例：`{"kind":"overview"}` 或 `{"kind":"index","node_type":"fact","limit":50}` 或 `{"kind":"node","ids":["<uuid>"]}`',
+  ].join("\n"),
+  list_shared_assets: [
+    "### `list_shared_assets` — 查询本 Job 冻结的只读共享资产目录",
+    "- 参数（均可选）：`scope`（platform|project|finding）、`prefix`（逻辑 key 前缀）、`limit`、`offset`。",
+    "- **没有单独的下载工具。** 返回的每条资产含 `mount_path` / `read_path`：用普通 Read/cat 直接打开该路径读取内容；需要改写时先 `cp` 到 `/workspace` 普通工作区。",
+    `- 字节由 Scheduler 在 Job 启动时从 BlobStore（本地盘或任意 S3 兼容存储）预挂载到 \`${SHARED_ASSETS_READONLY_ROOT}\`；Agent 不得用 HTTP/S3/curl 拉取，也没有对象存储凭据。`,
+    "- 时机：需要复用平台/项目/Finding 资产、PoC 脚本或基线材料时先 list 再按路径读取。",
+    '- 示例：`{}` 或 `{"scope":"project","prefix":"scripts/","limit":50}`',
+  ].join("\n"),
+  publish_shared_asset: [
+    "### `publish_shared_asset` — 发布工作区文件为不可变共享资产",
+    "- 参数：`scope`（project|finding）、`source_path`（必填，必须是 `/workspace/` 下的普通工作文件，不能位于平台运行目录或 CLI 用户/配置目录）、`key`（逻辑路径）、`content_type`、可选 `labels`。",
+    "- 时机：产出可被后续 Job 复用的脚本、PoC、基线或工件后调用；Scheduler 读取工作区文件并经 BlobStore 写入（本地或 S3 兼容存储），Agent 不接触存储后端。",
+    "- 边界：仅 running Job 可发布；不能覆盖 human/platform key；Finding scope 仅当本 Job 绑定 finding_id。",
+    "- 文件类型/格式不限制：任意扩展名与 MIME 均可（未知类型用 application/octet-stream）；仍受路径安全与大小配额约束。",
+    '- 示例：`{"scope":"project","source_path":"/workspace/dist/repro.sh","key":"scripts/repro.sh","content_type":"text/x-shellscript"}`',
+    '- 二进制/PoC 示例：`{"scope":"finding","source_path":"/workspace/poc/harness","key":"openharmony/poc/harness.bin","content_type":"application/octet-stream"}`',
+  ].join("\n"),
+  ack_human_message: [
+    "### `ack_human_message` — 确认已收到并纳入处理一条人工消息",
+    "- 参数：`message_id`（必填，UUID，必须来自注入到本 Job 的人工消息）；`summary`（可选，最多 500 字符，简述如何纳入当前工作）。",
+    "- 时机：阅读并纳入该人工消息后调用；平台只有在此 ACK 后才把消息标为「Agent 已确认」。普通文本回复、Session 内容或节点标题都不会被视为确认。",
+    "- 边界：只能确认当前 Job 收件箱中的消息；不得猜测 message_id 或确认其他 Job 的消息。每个 message_id 成功 ACK 一次即可。",
+    '- 示例：`{"message_id":"<uuid>","summary":"已按补充范围调整探索重点"}`',
+  ].join("\n"),
+};
+
+/** 生成本 Job 实际授权的平台工具说明；不会向 Worker 展示未授权工具。 */
+const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
+  list_available_roles: "注意：Hub 派发前调用，并原样复制返回的角色 name；不得猜测、缩写或使用已禁用及 system 角色。",
+  list_available_runtime_images: "注意：按返回的 purpose/capabilities/selection_hints 匹配任务后原样复制 image_key；只提案 readiness=ready；不得猜测 key 或填写 OCI 引用；无专项需求可省略字段走角色缺省。",
+  list_available_agent_clis: "注意：Hub 派发前调用，并原样复制返回的 agent_cli；只能提案项目已启用的 CLI。",
+  list_available_providers: "注意：Hub 派发前调用，并原样复制返回的 credential_id 与 models.model_id；模型必须满足本轮 model_requirements；只能提案项目已启用且 active 的 Provider；并发以 Provider 为准。",
+  list_available_skill_sources: "Only trusted and enabled Skill source summaries are returned; use list_available_skills/search_skills plus pull_skill to let the Agent pull a business Skill.",
+  list_available_skills: "Use only selector/content_hash returned by this operation; empty RoleConfig.modules_json does not preload business Skills.",
+  search_skills: "The query must be non-empty; select only a selector returned in this response.",
+  pull_skill: "The selector/content_hash must come from the current list/search response; read the returned SKILL.md and references after a successful pull.",
+  list_capabilities: "注意：只使用返回的 id/digest；需要完整契约时再 describe_capability，不要注入或猜测 SKILL.md 全文。",
+  search_capabilities: "注意：query 必须非空；只从本轮结果选择 Pack，不得使用记忆中的 RoleConfig selector。",
+  describe_capability: "注意：id 必须来自本轮 list/search；version/digest 不匹配会返回 RepairFeedback。",
+  validate_composition: "注意：组合不能扩大冻结 Job 的 platform_tools、凭据、镜像或出网；失败时按 RepairFeedback 修正后重提。",
+  preview_materialization: "注意：只预览冻结 digest 与模块集合；成功预览不等于已经激活 Pack。",
+  emit_progress: "注意：只用于增量进度，可按需多次调用；不能代替最终结果，仅在 HTTP 请求失败或参数校验失败后修正并重试。",
+  emit_fact: "注意：每个新增可验证事实提交一次，禁止用故意缩短的内容重试；遇到 HTTP 错误响应或截断时，写入完整 JSON 后使用 payload_file。",
+  emit_finding: "注意：只提交有证据支撑的 Finding；验证是否派生由 Scheduler 决定；遇到 HTTP 错误响应或截断时用 payload_file 提交完整内容。",
+  submit_hub_decision: "注意：Hub 在 mark_job_done 前调用，complete、intents、payload_file 必须三选一；成功后只允许一次，仅在 HTTP 请求失败或参数校验失败后重试。",
+  submit_plan: "注意：只提交结构化 Plan；Scheduler 会保存原文并裁剪，本阶段不派发 Worker。仅在 HTTP 请求失败或参数校验失败后重试。",
+  submit_plan_result: "注意：outcome 只能是 continue|complete|blocked|needs_human；非 continue 必须提供 termination_reason。本阶段只审计，不改变 Hub 收敛。",
+  mark_job_done: "注意：仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，因此只调用一次，成功后不得重试。",
+  request_human: "注意：这是终态人工阻塞请求；调用一次后停止，不得再调用 mark_job_done 或 submit_hub_decision，仅在 HTTP 请求失败或参数校验失败后重试。",
+  graph_query: "注意：先 overview 再收窄；不要用多次查询拼回全图。from 只能引用返回的 referable_ids。超限后收窄查询或改用 overview，不要换 canvas。",
+  list_shared_assets: "注意：只读取返回的冻结挂载路径；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取。",
+  publish_shared_asset: "注意：只发布普通 /workspace 工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在 HTTP 请求失败或参数校验失败后重试。",
+  ack_human_message: "注意：只有显式 ACK 才算已确认；message_id 必须来自注入文本，不得用自然语言替代；仅在 HTTP 请求失败或参数校验失败后重试。",
+};
+
+/**
+ * Worker 面向的短调用规则——唯一短文案源。传输/发现/幂等/修复细节见 DEEPSONAR_CONTROL_SKILL。
+ */
+export const PLATFORM_CONTROL_CALLING_RULES =
+  "调用规则：只能按静态 `deepsonar-control` Skill，通过 Agent 自身 HTTP 工具直接调用本 Job 已声明并注入的 Job-scoped control API（Runtime Adapter 不代发 HTTP）。决策/Finding/事实/摘要仅以实际 API 调用为准，普通文本不算提交。不得使用其他控制通道、shell 写控制文件或猜测管理路由，也不得在 API 失败后回退。API 返回 `accepted` 只表示 Scheduler 已接收，仍会重验并记账；HTTP/参数错误须修正后重试，不得把失败当作已上报。结束前核对契约要求的每次调用都已返回 accepted。详情见 deepsonar-control Skill。";
+
+export function platformToolGuide(toolNames: string[]): string {
+  const enabled = new Set(toolNames);
+  const incremental = ["emit_progress", "emit_fact", "emit_finding"].filter((name) => enabled.has(name));
+  return [
+    PLATFORM_CONTROL_CALLING_RULES,
+    `生命周期：${incremental.length > 0 ? `${incremental.map((name) => `\`${name}\``).join("、")} 可增量调用；` : ""}正常完成以一次 \`mark_job_done\` 或 API 对应 operation 结束${enabled.has("request_human") ? "，人工阻塞以一次 `request_human` 结束，二者不要同时调用" : ""}。平台收到事件后负责实时入库、画布更新、派生与终态处理。`,
+    ...toolNames.flatMap((name) => [PLATFORM_TOOL_USAGE[name], PLATFORM_TOOL_CAUTIONS[name]]).filter((entry): entry is string => Boolean(entry)),
+  ].join("\n\n");
+}

@@ -1,0 +1,37 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "deepsonar-base:local",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "project_opt_in": true,
+  "toolset": "clickhouse-fuzz",
+  "sources": "deploy/clickhouse-runtime-sources.json",
+  "aptSource": "snapshot.debian.org/archive/debian/20260731T162426Z",
+  "aptSecuritySource": "snapshot.debian.org/archive/debian-security/20260731T162426Z",
+  "apt": {
+    "pkg-config": { "version": "snapshot", "capabilities": ["native-build"] },
+    "clang": { "version": "snapshot", "capabilities": ["native-build", "instrumentation"] },
+    "llvm": { "version": "snapshot", "capabilities": ["llvm-tools"] },
+    "lld": { "version": "snapshot", "capabilities": ["linker"] },
+    "libclang-rt-16-dev": { "version": "16.0.6-15~deb12u1", "capabilities": ["compiler-rt", "sanitizer-runtime"] },
+    "libfuzzer-16-dev": { "version": "16.0.6-15~deb12u1", "capabilities": ["libfuzzer"] },
+    "afl++": { "version": "snapshot", "capabilities": ["afl-fuzz", "afl-compiler"] },
+    "binutils": { "version": "snapshot", "capabilities": ["binary-analysis"] },
+    "ninja-build": { "version": "snapshot", "capabilities": ["native-build"] },
+    "cmake": { "version": "snapshot", "capabilities": ["native-build"] }
+  },
+  "clickhouse": {
+    "version": "26.3.28.5",
+    "tag": "v26.3.28.5-lts",
+    "package": "clickhouse-common-static",
+    "target": "clickhouse-local",
+    "required": true,
+    "honesty": "The image fails its build smoke if the official clickhouse-local binary is unavailable; no toy harness fallback exists."
+  },
+  "toolsets": {
+    "clickhouse-fuzz": {
+      "imageKey": "deepsonar-clickhouse-fuzz",
+      "description": "Project-opt-in official ClickHouse LTS plus Clang/LLVM sanitizer and fuzz toolchain",
+      "maxSizeMiB": 2800
+    }
+  }
+}

@@ -1,0 +1,749 @@
+import { sql } from "../../db.js";
+import { planContext } from "../plan-protocol/objective.js";
+import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
+import { extractDispatchPrompt } from "../../job-dispatch-prompt.js";
+import { inc } from "../../metrics.js";
+import {
+  formatVerifyUnclosedPausedReason,
+  hubRoundLimitLabel,
+  INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS,
+  isHubRoundWithinBudget,
+  shouldConsiderHubTrigger,
+  shouldEscalateUnclosedVerify,
+  shouldWakeEvidenceHub,
+} from "./policy.js";
+import type {
+  HubCanvasConvergence,
+  HubCanvasJobTerminalStatus,
+  HubJobRecord,
+  HubOrchestrationDatabase,
+  HubOrchestrationPorts,
+  HubOrchestrationTransaction,
+} from "./ports.js";
+
+export type {
+  HubCanvasConvergence,
+  HubCanvasJobTerminalStatus,
+  HubJobRecord,
+  HubOrchestrationDatabase,
+  HubOrchestrationPorts,
+  HubOrchestrationTransaction,
+} from "./ports.js";
+export {
+  formatVerifyUnclosedPausedReason,
+  hubRoundLimitLabel,
+  INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS,
+  isHubRoundWithinBudget,
+  parseHubMaxRounds,
+  parseHubMaxRoundsEnv,
+  shouldConsiderHubTrigger,
+  shouldEscalateUnclosedVerify,
+  shouldWakeEvidenceHub,
+  UNLIMITED_HUB_ROUNDS,
+} from "./policy.js";
+
+export interface HubTriggerOptions {
+  force?: boolean;
+  sourceNodeIds?: string[];
+  trigger?: Record<string, unknown>;
+  /** 人工 run-hub-now：忽略 hub_paused / auto_stopped */
+  manual?: boolean;
+  /** 画布空闲唤醒：无待跑 job 时入队 Hub。 */
+  idleWake?: boolean;
+}
+
+export interface HubHumanCommentInput {
+  findingId: string;
+  commentId: string;
+  commentBody: string;
+  authorName: string;
+}
+
+export interface HubHumanCommentResult {
+  hub_queued: boolean;
+  reason?: string;
+  canvas_id?: string;
+  hub_job_id?: string;
+}
+
+export interface HubOrchestrationApplication {
+  maybeTriggerHub(
+    tx: HubOrchestrationTransaction,
+    job: HubJobRecord | undefined,
+    options?: HubTriggerOptions,
+  ): Promise<void>;
+  advanceCanvasAfterTerminalJob(
+    tx: HubOrchestrationTransaction,
+    job: HubJobRecord,
+    terminalStatus: HubCanvasJobTerminalStatus,
+    opts?: Pick<HubTriggerOptions, "sourceNodeIds" | "trigger">,
+  ): Promise<"report" | "hub" | "noop">;
+  triggerHubFromHumanComment(input: HubHumanCommentInput): Promise<HubHumanCommentResult>;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * Build the Hub application around explicit ports.  The caller owns the
+ * transaction and supplies the same Canvas-first lock boundary used by the
+ * legacy core implementation; this application never starts a nested
+ * transaction for a terminal/recovery path.
+ */
+export function createHubOrchestrationApplication(
+  db: HubOrchestrationDatabase = sql,
+  ports: HubOrchestrationPorts,
+): HubOrchestrationApplication {
+  async function hasActiveBlockingVerify(
+    tx: HubOrchestrationTransaction,
+    canvasId: string,
+    severities: string[],
+  ): Promise<boolean> {
+    if (severities.length === 0) {
+      const rows = await tx`
+        SELECT 1 FROM jobs
+        WHERE canvas_id = ${canvasId} AND type = 'verify_finding'
+          AND status IN ('pending','claimed','provisioning','running')
+        LIMIT 1`;
+      return rows.length > 0;
+    }
+    const rows = await tx`
+      SELECT 1 FROM jobs j
+      JOIN findings f ON f.id = j.finding_id
+      WHERE j.canvas_id = ${canvasId} AND j.type = 'verify_finding'
+        AND j.status IN ('pending','claimed','provisioning','running')
+        AND lower(f.severity) = ANY(${severities})
+      LIMIT 1`;
+    return rows.length > 0;
+  }
+
+  async function hasActiveRoleJobs(tx: HubOrchestrationTransaction, canvasId: string): Promise<boolean> {
+    const rows = await tx`
+      SELECT 1 FROM jobs
+      WHERE canvas_id = ${canvasId}
+        AND type NOT IN ('hub_reason', 'verify_finding', 'report')
+        AND status IN ('pending','claimed','provisioning','running','waiting_human')
+      LIMIT 1`;
+    return rows.length > 0;
+  }
+
+  async function waitingEvidenceRound(tx: HubOrchestrationTransaction, canvasId: string): Promise<{
+    id: string;
+    finding_id: string;
+    origin_job_id: string | null;
+    missing: string[];
+    evidence_signature: string;
+    hub_evidence_signature: string | null;
+    gate_fingerprint: string | null;
+    hub_gate_fingerprint: string | null;
+    hub_wake_attempts: number;
+    never_verified: boolean;
+    node_id: string | null;
+  } | null> {
+    const rows = await tx`
+      SELECT r.id, r.finding_id, r.requirements_json, r.evidence_snapshot_json,
+             f.job_id AS origin_job_id, f.node_id
+      FROM finding_verification_rounds r
+      JOIN findings f ON f.id = r.finding_id
+      JOIN jobs origin ON origin.id = f.job_id
+      WHERE origin.canvas_id = ${canvasId}
+        AND r.status = 'pending'
+        AND r.verify_job_id IS NULL
+        AND r.requirements_json->>'eligibility' = 'waiting_evidence'
+      ORDER BY r.created_at ASC, r.id ASC
+      FOR UPDATE OF r`;
+    for (const row of rows) {
+      const req = asRecord(row.requirements_json);
+      const snap = asRecord(row.evidence_snapshot_json);
+      const ids = (key: string) =>
+        Array.isArray(snap[key])
+          ? (snap[key] as Array<Record<string, unknown>>)
+              .map((item) => String(item.node_id ?? ""))
+              .filter(Boolean)
+              .sort()
+          : [];
+      const missing = Array.isArray(req.missing)
+        ? (req.missing as unknown[]).map(String).filter(Boolean).sort()
+        : [];
+      const reviewIds = ids("review");
+      const testIds = ids("test");
+      const never_verified = reviewIds.length === 0 && testIds.length === 0;
+      const hub_wake_attempts = Math.max(0, Number(req.hub_wake_attempts ?? 0) || 0);
+      const evidence_signature = JSON.stringify({ review: reviewIds, test: testIds, missing });
+      const hub_evidence_signature = (req.hub_evidence_signature as string | null) ?? null;
+      const gate_fingerprint =
+        typeof req.gate_fingerprint === "string" && req.gate_fingerprint.trim().length > 0
+          ? req.gate_fingerprint
+          : null;
+      const hub_gate_fingerprint =
+        typeof req.hub_gate_fingerprint === "string" && req.hub_gate_fingerprint.trim().length > 0
+          ? req.hub_gate_fingerprint
+          : null;
+      // Never-verified pending stays wakeable until escalate floor (#574).
+      // Otherwise skip a consumed evidence edge so an older stalled finding
+      // cannot starve a newer waiting round. Gate fingerprint unchanged = no progress (#519).
+      const allowNeverVerifiedWake =
+        never_verified && !shouldEscalateUnclosedVerify(hub_wake_attempts);
+      if (
+        !shouldWakeEvidenceHub(hub_evidence_signature, evidence_signature, {
+          lastGateFingerprint: hub_gate_fingerprint,
+          gateFingerprint: gate_fingerprint,
+          neverVerified: allowNeverVerifiedWake,
+        })
+      ) {
+        continue;
+      }
+      return {
+        id: row.id as string,
+        finding_id: row.finding_id as string,
+        origin_job_id: (row.origin_job_id as string | null) ?? null,
+        missing,
+        evidence_signature,
+        hub_evidence_signature,
+        gate_fingerprint,
+        hub_gate_fingerprint,
+        hub_wake_attempts,
+        never_verified,
+        node_id: (row.node_id as string | null) ?? null,
+      };
+    }
+    return null;
+  }
+
+  async function hasWaitingEvidenceRound(tx: HubOrchestrationTransaction, canvasId: string): Promise<boolean> {
+    const rows = await tx`
+      SELECT 1
+      FROM finding_verification_rounds r
+      JOIN findings f ON f.id = r.finding_id
+      JOIN jobs origin ON origin.id = f.job_id
+      WHERE origin.canvas_id = ${canvasId}
+        AND r.status = 'pending'
+        AND r.verify_job_id IS NULL
+        AND r.requirements_json->>'eligibility' = 'waiting_evidence'
+      LIMIT 1`;
+    return rows.length > 0;
+  }
+
+  /**
+   * #574: when evidence-wait rounds exist but none are wakeable (signature
+   * unchanged / escalate floor hit), do not silent-return. Escalate care-scope
+   * inconclusive + never-verified pending to needs_human (human Action) and
+   * record paused_reason so the canvas is observable.
+   */
+  async function stopHubForUnclosedVerify(
+    tx: HubOrchestrationTransaction,
+    canvasId: string,
+    severities: string[],
+  ): Promise<void> {
+    if (severities.length === 0) return;
+
+    const [{ hub_rounds }] = await tx<[{ hub_rounds: number }]>`
+      SELECT COUNT(*)::int AS hub_rounds FROM jobs
+      WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'succeeded'`;
+    const hubRounds = Number(hub_rounds);
+
+    const rows = await tx`
+      SELECT f.id, f.verify_status, f.title, f.severity,
+             r.requirements_json, r.evidence_snapshot_json
+      FROM findings f
+      JOIN jobs origin ON origin.id = f.job_id
+      LEFT JOIN LATERAL (
+        SELECT requirements_json, evidence_snapshot_json
+        FROM finding_verification_rounds
+        WHERE finding_id = f.id AND status = 'pending' AND verify_job_id IS NULL
+          AND requirements_json->>'eligibility' = 'waiting_evidence'
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+      ) r ON true
+      WHERE origin.canvas_id = ${canvasId}
+        AND lower(f.severity) = ANY(${severities})
+        AND f.verify_status IN ('inconclusive', 'pending')
+        AND COALESCE(f.raw_json->'verification_state'->>'eligibility', '') <> 'below_min_verify_severity'`;
+
+    let inconclusive = 0;
+    let pending = 0;
+    const pendingEscalate: Array<{ id: string; reason: string }> = [];
+    const inconclusiveIds: string[] = [];
+
+    for (const row of rows) {
+      const status = String(row.verify_status ?? "");
+      const req = asRecord(row.requirements_json);
+      const snap = asRecord(row.evidence_snapshot_json);
+      const reviewLen = Array.isArray(snap.review) ? snap.review.length : 0;
+      const testLen = Array.isArray(snap.test) ? snap.test.length : 0;
+      const neverVerified = reviewLen === 0 && testLen === 0;
+      const hubWakeAttempts = Math.max(0, Number(req.hub_wake_attempts ?? 0) || 0);
+
+      if (status === "inconclusive") {
+        inconclusive += 1;
+        inconclusiveIds.push(row.id as string);
+        continue;
+      }
+
+      pending += 1;
+      // Stall path: never-verified / waiting_evidence pending cannot wake again.
+      pendingEscalate.push({
+        id: row.id as string,
+        reason: neverVerified
+          ? "pending_never_verified_stalled"
+          : shouldEscalateUnclosedVerify(hubWakeAttempts)
+            ? "pending_waiting_evidence_stalled"
+            : "pending_waiting_evidence_signature_stale",
+      });
+    }
+
+    if (inconclusive + pending === 0) return;
+
+    const escalateInconclusive =
+      hubRounds >= INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS || pendingEscalate.length > 0;
+    const escalateIds: Array<{ id: string; reason: string }> = [...pendingEscalate];
+    if (escalateInconclusive) {
+      for (const id of inconclusiveIds) {
+        escalateIds.push({
+          id,
+          reason: `inconclusive_escalate_after_${INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS}_hub_rounds`,
+        });
+      }
+    }
+
+    // Only inconclusive, below N hub rounds, and no pending stall → keep waiting.
+    if (escalateIds.length === 0) return;
+
+    for (const item of escalateIds) {
+      await ports.markFindingNeedsHuman(tx, item.id, item.reason).catch((e) =>
+        console.error(`[hub] escalate finding ${item.id} failed:`, e),
+      );
+    }
+
+    const pausedReason = formatVerifyUnclosedPausedReason({ inconclusive, pending });
+    await ports.patchCanvasConvergence(tx, canvasId, {
+      auto_stopped: true,
+      paused_reason: pausedReason,
+      paused_at: new Date().toISOString(),
+    });
+    await tx`
+      UPDATE canvas_nodes SET
+        body_json = body_json || ${tx.json({
+          paused_reason: pausedReason,
+          hub_stop: "verify_unclosed",
+          unclosed_verify: { inconclusive, pending, escalated: escalateIds.length },
+        } as never)},
+        updated_at = now()
+      WHERE canvas_id = ${canvasId} AND node_type = 'root'`;
+    console.warn(
+      `[hub] 画布 ${canvasId} 停止自驱：${pausedReason} escalated=${escalateIds.length} (N=${INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS})`,
+    );
+  }
+
+  async function hasActiveRunnableJobs(
+    tx: HubOrchestrationTransaction,
+    canvasId: string,
+    excludeJobId?: string | null,
+  ): Promise<boolean> {
+    if (excludeJobId) {
+      const rows = await tx`
+        SELECT 1 FROM jobs
+        WHERE canvas_id = ${canvasId}
+          AND id <> ${excludeJobId}
+          AND status IN ('pending','claimed','provisioning','running','waiting_human')
+        LIMIT 1`;
+      return rows.length > 0;
+    }
+    const rows = await tx`
+      SELECT 1 FROM jobs
+      WHERE canvas_id = ${canvasId}
+        AND status IN ('pending','claimed','provisioning','running','waiting_human')
+      LIMIT 1`;
+    return rows.length > 0;
+  }
+
+  async function rootAnalysisFinished(tx: HubOrchestrationTransaction, canvasId: string): Promise<boolean> {
+    const [root] = await tx`
+      SELECT status FROM canvas_nodes
+      WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+    return ["analysis_complete", "reporting", "succeeded"].includes(String(root?.status ?? ""));
+  }
+
+  async function maybeTriggerHub(
+    tx: HubOrchestrationTransaction,
+    job: HubJobRecord | undefined,
+    options: HubTriggerOptions = {},
+  ): Promise<void> {
+    if (!job?.canvas_id) return;
+    if (!shouldConsiderHubTrigger(job.type, options)) return;
+
+    const canvasId = job.canvas_id as string;
+    const projectId = job.project_id as string | undefined;
+    if (!projectId) return;
+
+    const rules = await ports.rulesForProject(tx, projectId);
+    if (!rules.hubEnabled && !options.force && !options.manual) return;
+
+    // Serialize the eligibility check and INSERT per canvas. This is the
+    // same Canvas-first lock boundary used by terminal/recovery callers.
+    if (!(await ports.lockCanvasForConvergence(tx, canvasId))) return;
+    if (await rootAnalysisFinished(tx, canvasId)) return;
+
+    const convergence = await ports.readCanvasConvergence(tx, canvasId);
+    if (!options.manual) {
+      if (convergence.hub_paused) {
+        console.info(`[hub] 画布 ${canvasId} 已暂停决策（hub_paused），跳过`);
+        return;
+      }
+      if (convergence.auto_stopped && !options.force && !options.idleWake) {
+        console.info(`[hub] 画布 ${canvasId} 已自动停止自驱（auto_stopped），跳过`);
+        return;
+      }
+      if (convergence.auto_stopped && (options.force || options.idleWake)) {
+        await ports.patchCanvasConvergence(tx, canvasId, {
+          auto_stopped: false,
+          paused_reason: undefined,
+          paused_at: undefined,
+        });
+      }
+    }
+
+    const activeHub = await tx`
+      SELECT 1 FROM jobs
+      WHERE canvas_id = ${canvasId} AND type = 'hub_reason'
+        AND status IN ('pending', 'claimed', 'provisioning', 'running')
+      LIMIT 1`;
+    if (activeHub.length > 0) return;
+
+    if (options.idleWake) {
+      if (await hasActiveRunnableJobs(tx, canvasId, (job.id as string) ?? null)) return;
+    } else if (!options.manual && !options.force) {
+      if (await hasActiveRoleJobs(tx, canvasId)) return;
+    }
+
+    const waitSeverities = ports.careSeverities(rules.minVerifySeverity);
+    const waiting = await waitingEvidenceRound(tx, canvasId);
+    let waitingWake: {
+      id: string;
+      evidence_signature: string;
+      gate_fingerprint: string | null;
+      hub_wake_attempts: number;
+    } | null = null;
+    let trigger = options.trigger ?? {
+      kind: options.idleWake ? "canvas_idle" : "graph_progress",
+    };
+    if (waiting && !options.manual) {
+      const allowNeverVerifiedWake =
+        waiting.never_verified && !shouldEscalateUnclosedVerify(waiting.hub_wake_attempts);
+      if (
+        !shouldWakeEvidenceHub(waiting.hub_evidence_signature, waiting.evidence_signature, {
+          lastGateFingerprint: waiting.hub_gate_fingerprint,
+          gateFingerprint: waiting.gate_fingerprint,
+          neverVerified: allowNeverVerifiedWake,
+        })
+      ) {
+        // Signature-stale (or escalate floor): stop observably instead of silent return (#574).
+        await stopHubForUnclosedVerify(tx, canvasId, waitSeverities);
+        return;
+      }
+      trigger = {
+        kind: "verify_rework",
+        finding_id: waiting.finding_id,
+        missing_evidence: waiting.missing,
+        summary: "Verify 缺少独立 review/test 证据，先派发补证工作",
+        evidence_signature: waiting.evidence_signature,
+        gate_fingerprint: waiting.gate_fingerprint,
+      };
+      waitingWake = {
+        id: waiting.id,
+        evidence_signature: waiting.evidence_signature,
+        gate_fingerprint: waiting.gate_fingerprint,
+        hub_wake_attempts: waiting.hub_wake_attempts,
+      };
+    } else if (!waiting && !options.manual && (await hasWaitingEvidenceRound(tx, canvasId))) {
+      // All waiting_evidence rounds failed the wake gate — escalate + paused_reason (#574).
+      await stopHubForUnclosedVerify(tx, canvasId, waitSeverities);
+      return;
+    }
+
+    if (!options.manual && !options.force) {
+      if (await hasActiveBlockingVerify(tx, canvasId, waitSeverities)) return;
+    }
+
+    const [{ count }] = await tx<[{ count: number }]>`
+      SELECT COUNT(*)::int AS count FROM jobs
+      WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'succeeded'`;
+    if (!isHubRoundWithinBudget(Number(count), rules.maxHubRounds)) {
+      const limitLabel = hubRoundLimitLabel(rules.maxHubRounds);
+      console.warn(`[hub] 画布 ${canvasId} 已达 hub 决策轮次上限 ${limitLabel}，停止自驱`);
+      inc("deepsonar_hub_budget_exhausted_total", { limit: limitLabel });
+      await ports.settleCanvasFindingsAtGuardrail(tx, canvasId, "budget_exhausted").catch((e) =>
+        console.error(`[hub] settle findings at maxHubRounds failed:`, e),
+      );
+      const gate = await ports.evaluateAnalysisCompleteGate(tx, canvasId, {
+        excludeJobId: (job.id as string) ?? null,
+      });
+      if (gate.ok) {
+        await tx`
+          UPDATE canvas_nodes SET status = 'analysis_complete',
+            body_json = body_json || ${tx.json({
+              conclusion: `Hub 决策轮次达上限 ${limitLabel}；未完成 Finding 已收口为 needs_human，自动进入报告。`,
+              guardrail: "budget_exhausted",
+              hub_rounds_used: Number(count),
+              hub_round_limit: limitLabel,
+              blockers: gate.blockers,
+            })},
+            updated_at = now()
+          WHERE canvas_id = ${canvasId} AND node_type = 'root'
+            AND status IS DISTINCT FROM 'succeeded'
+            AND status IS DISTINCT FROM 'reporting'`;
+        await ports.maybeDispatchReport(tx, canvasId).catch((e) =>
+          console.error(`[hub] auto report after maxHubRounds failed:`, e),
+        );
+      } else {
+        const noRole = !(await ports.hasSucceededRoleWork(tx, canvasId));
+        await ports.patchCanvasConvergence(tx, canvasId, {
+          auto_stopped: true,
+          paused_reason: noRole
+            ? `budget_exhausted:no_role_work:${limitLabel}`
+            : `budget_exhausted:incomplete:${limitLabel}`,
+          paused_at: new Date().toISOString(),
+        });
+        console.warn(
+          `[hub] maxHubRounds 后未过完成门 (${gate.blockers.join(",")})，auto_stopped，不派发 Report`,
+        );
+      }
+      return;
+    }
+
+    if (waitingWake) {
+      await tx`
+        UPDATE finding_verification_rounds
+        SET requirements_json = requirements_json || ${tx.json({
+          hub_evidence_signature: waitingWake.evidence_signature,
+          hub_gate_fingerprint: waitingWake.gate_fingerprint,
+          hub_wake_attempts: waitingWake.hub_wake_attempts + 1,
+        } as never)}
+        WHERE id = ${waitingWake.id}`;
+    }
+
+    const triggerFindingId = typeof trigger.finding_id === "string" ? trigger.finding_id : null;
+    const snapshot = await freezeAgentSnapshotNetworkPolicy(
+      tx,
+      canvasId,
+      await ports.resolveAgentSnapshotForJob(tx, projectId, "hub_reason", triggerFindingId ? [triggerFindingId] : []) as object,
+    );
+    const [canvas] = await tx`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
+    const plan=await planContext(tx as unknown as typeof sql,canvasId,projectId);
+    const hubPayload = { trigger, scheduling_purpose: "hub", ...(plan?{plan_context:{plan_job_id:plan.plan_job_id,plan_sha256:plan.plan_sha256,scheduler_owned:true}}:{}) };
+    const [hubJob] = await tx`
+      INSERT INTO jobs ${tx({
+        project_id: projectId,
+        canvas_id: canvasId,
+        agent_snapshot_json: snapshot as never,
+        type: "hub_reason",
+        priority: ports.fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
+        payload_json: {
+          ...hubPayload,
+          dispatched_prompt: extractDispatchPrompt("hub_reason", hubPayload, canvas?.target_json),
+        } as never,
+        timeout_sec: rules.auditTimeoutSec,
+        followup_depth: 0,
+      })}
+      RETURNING id`;
+    await ports.recordJobSharedAssets(tx, hubJob.id as string, snapshot);
+
+    const [{ next_x }] = await tx<[{ next_x: number }]>`
+      SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes
+      WHERE canvas_id = ${canvasId}`;
+    const title =
+      options.force || options.manual
+        ? "Hub 风险验收"
+        : options.idleWake
+          ? "Hub 空闲唤醒"
+          : "Hub 决策";
+    const [hubNode] = await tx`
+      INSERT INTO canvas_nodes ${tx({
+        canvas_id: canvasId,
+        job_id: hubJob.id as string,
+        node_type: "job",
+        title,
+        body_json: { type: "hub_reason", trigger } as never,
+        x: next_x,
+        y: 300,
+        status: "pending",
+      })}
+      RETURNING id`;
+
+    let sourceNodeIds = options.sourceNodeIds ?? [];
+    if (sourceNodeIds.length === 0 && job.id) {
+      const sources = await tx`
+        SELECT id FROM canvas_nodes
+        WHERE canvas_id = ${canvasId} AND job_id = ${job.id as string}
+          AND node_type = ANY(${["fact", "finding", "intent", "job"]})`;
+      sourceNodeIds = sources.map((source) => source.id as string);
+    }
+    if (sourceNodeIds.length === 0) {
+      const [root] = await tx`
+        SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+      if (root) sourceNodeIds = [root.id as string];
+    }
+    for (const sourceNodeId of sourceNodeIds) {
+      await ports.insertEdgeIfAbsent(tx, canvasId, sourceNodeId, hubNode.id as string, "next");
+    }
+
+    console.info(
+      `[hub] 画布 ${canvasId} 入队 Hub ${hubJob.id} trigger=${String((trigger as { kind?: string }).kind ?? "graph_progress")}` +
+        (options.idleWake ? " (idleWake)" : "") +
+        (options.force ? " (force)" : ""),
+    );
+  }
+
+  async function advanceCanvasAfterTerminalJob(
+    tx: HubOrchestrationTransaction,
+    job: HubJobRecord,
+    terminalStatus: HubCanvasJobTerminalStatus,
+    opts: Pick<HubTriggerOptions, "sourceNodeIds" | "trigger"> = {},
+  ): Promise<"report" | "hub" | "noop"> {
+    const canvasId = (job.canvas_id as string | null) ?? null;
+    if (!canvasId || job.type === "report") return "noop";
+    if (!(await ports.lockCanvasForConvergence(tx, canvasId))) return "noop";
+
+    const [root] = await tx`
+      SELECT status FROM canvas_nodes
+      WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+    // report_failed 是报告终态收口，禁止空闲 Hub 再拉一轮。
+    if (root?.status === "report_failed") return "noop";
+    if (root?.status === "analysis_complete" || root?.status === "reporting") {
+      await ports.maybeDispatchReport(tx, canvasId);
+      return "report";
+    }
+
+    if (job.type === "hub_reason" && terminalStatus !== "succeeded") {
+      await tx`
+        UPDATE finding_verification_rounds r
+        SET requirements_json = (requirements_json - 'hub_evidence_signature') - 'hub_gate_fingerprint'
+        FROM findings f
+        JOIN jobs origin ON origin.id = f.job_id
+        WHERE r.finding_id = f.id
+          AND origin.canvas_id = ${canvasId}
+          AND r.status = 'pending'
+          AND r.requirements_json->>'eligibility' = 'waiting_evidence'`;
+      return "noop";
+    }
+
+    await maybeTriggerHub(tx, job, {
+      force: false,
+      sourceNodeIds: opts.sourceNodeIds ?? [],
+      trigger: opts.trigger ?? {
+        kind: "canvas_idle",
+        after_job_id: job.id,
+        after_job_type: job.type,
+        after_job_status: terminalStatus,
+      },
+      idleWake: true,
+    });
+    return "hub";
+  }
+
+  async function triggerHubFromHumanComment(input: HubHumanCommentInput): Promise<HubHumanCommentResult> {
+    const [finding] = await db`
+      SELECT f.id, f.project_id, f.verify_status, f.disposition, f.title, f.node_id, f.job_id,
+             j.canvas_id, j.priority
+      FROM findings f
+      JOIN jobs j ON j.id = f.job_id
+      WHERE f.id = ${input.findingId}`;
+    if (!finding) return { hub_queued: false, reason: "finding_not_found" };
+
+    const confirmed = finding.verify_status === "confirmed" || finding.disposition === "confirmed_vuln";
+    if (!confirmed) {
+      return { hub_queued: false, reason: "not_confirmed", canvas_id: finding.canvas_id as string };
+    }
+    if (!finding.canvas_id) return { hub_queued: false, reason: "no_canvas" };
+
+    const canvasId = finding.canvas_id as string;
+    const projectId = finding.project_id as string;
+    const preview = input.commentBody.trim().slice(0, 500);
+    let hubJobId: string | undefined;
+
+    await db.begin(async (rawTx) => {
+      const tx = rawTx as unknown as HubOrchestrationTransaction;
+      const [findingNode] = finding.node_id
+        ? await tx`SELECT id, x, y FROM canvas_nodes WHERE id = ${finding.node_id as string}`
+        : [null];
+      const x = findingNode ? (findingNode.x as number) + 40 : 200;
+      const y = findingNode ? (findingNode.y as number) + 160 : 400;
+      const [humanNode] = await tx`
+        INSERT INTO canvas_nodes ${tx({
+          canvas_id: canvasId,
+          job_id: null,
+          node_type: "human",
+          title: `人工评论：${String(finding.title).slice(0, 80)}`,
+          body_json: {
+            reason: preview,
+            kind: "finding_comment",
+            finding_id: input.findingId,
+            comment_id: input.commentId,
+            author: input.authorName,
+          } as never,
+          x,
+          y,
+          status: "open",
+        })}
+        RETURNING id`;
+      if (findingNode) {
+        await ports.insertEdgeIfAbsent(tx, canvasId, findingNode.id as string, humanNode.id as string, "next");
+      }
+
+      await ports.patchCanvasConvergence(tx, canvasId, {
+        auto_stopped: false,
+        paused_reason: undefined,
+        paused_at: undefined,
+      });
+
+      const before = await tx`
+        SELECT id FROM jobs WHERE canvas_id = ${canvasId} AND type = 'hub_reason'
+          AND status IN ('pending','claimed','provisioning','running') LIMIT 1`;
+      await maybeTriggerHub(
+        tx,
+        {
+          id: finding.job_id,
+          project_id: projectId,
+          canvas_id: canvasId,
+          type: "human_comment",
+          priority: ports.fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
+        },
+        {
+          force: true,
+          sourceNodeIds: [humanNode.id as string, ...(findingNode ? [findingNode.id as string] : [])],
+          trigger: {
+            kind: "human_comment",
+            finding_id: input.findingId,
+            comment_id: input.commentId,
+            author: input.authorName,
+            comment_preview: preview,
+            finding_title: finding.title,
+          },
+        },
+      );
+
+      const after = await tx`
+        SELECT id FROM jobs WHERE canvas_id = ${canvasId} AND type = 'hub_reason'
+          AND status IN ('pending','claimed','provisioning','running')
+        ORDER BY created_at DESC LIMIT 1`;
+      if (after[0] && (!before[0] || before[0].id !== after[0].id)) {
+        hubJobId = after[0].id as string;
+        await tx`
+          UPDATE canvas_nodes SET title = 'Hub 人工反馈决策', updated_at = now()
+          WHERE job_id = ${hubJobId} AND node_type = 'job'`;
+      }
+    });
+
+    if (!hubJobId) {
+      const conv = await ports.readCanvasConvergence(db, canvasId);
+      if (conv.hub_paused) return { hub_queued: false, reason: "hub_paused", canvas_id: canvasId };
+      return { hub_queued: false, reason: "hub_not_queued", canvas_id: canvasId };
+    }
+    return { hub_queued: true, canvas_id: canvasId, hub_job_id: hubJobId };
+  }
+
+  return { maybeTriggerHub, advanceCanvasAfterTerminalJob, triggerHubFromHumanComment };
+}

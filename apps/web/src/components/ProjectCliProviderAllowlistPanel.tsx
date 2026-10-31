@@ -1,0 +1,283 @@
+import { FloppyDisk } from "@phosphor-icons/react";
+import { useEffect, useMemo, useState } from "react";
+import { api, type ProviderCredential } from "../api";
+import { isCurrentAgentCli } from "@deepsonar/shared-types";
+import { formatActiveConcurrencyQuota } from "../provider-account-concurrency";
+import { credentialSelectionPatch, defaultCredentialUnavailable } from "../project-provider-selection";
+import { HelpTip } from "../ui";
+import { showToast } from "../toast";
+
+const AGENT_CLIS = ["claude-code", "pi", "dsh"] as const;
+type AgentCli = (typeof AGENT_CLIS)[number];
+
+/**
+ * Saved-account CLI compatibility is exclusive (#658): `credential.agent_cli`
+ * is the only source. Do not expand via ADAPTER_CLIS / descriptor multi-CLI
+ * lists. Missing or non-current agent_cli → empty (fail-closed).
+ * Provider protocol catalogs may still list multiple CLIs for create-time
+ * provider picker filtering (CredentialConfigEditor).
+ */
+export function compatibleAgentClisForCredential(credential: ProviderCredential): AgentCli[] {
+  return isCurrentAgentCli(credential.agent_cli) ? [credential.agent_cli] : [];
+}
+
+export function credentialSupportsCli(credential: ProviderCredential, cli: AgentCli): boolean {
+  return compatibleAgentClisForCredential(credential).includes(cli);
+}
+
+export function credentialHealthMessage(credential: ProviderCredential): string {
+  if (credential.provider_valid === false) return "Provider 映射待修复";
+  if (credential.status !== "active") return `账号状态：${credential.status}`;
+  if (credential.health?.status === "error") {
+    const detail = credential.health.detail?.trim();
+    return `连接失败${credential.health.error_category ? `（${credential.health.error_category}）` : ""}${detail ? `：${detail}` : ""}`;
+  }
+  if (credential.health?.status === "ok") return "最近一次连接测试成功";
+  return "尚未完成连接测试";
+}
+
+function concurrencySummary(credential: ProviderCredential): string {
+  const meta = (credential.public_metadata_json ?? {}) as Record<string, unknown>;
+  const models = meta.model_concurrency && typeof meta.model_concurrency === "object" && !Array.isArray(meta.model_concurrency)
+    ? Object.keys(meta.model_concurrency as Record<string, unknown>).length
+    : 0;
+  const parts: string[] = [`占用 ${formatActiveConcurrencyQuota(credential)}`];
+  if (models > 0) parts.push(`模型并发 ${models} 项`);
+  if (isCurrentAgentCli(credential.agent_cli)) parts.push(`只能给 ${credential.agent_cli} 使用`);
+  return parts.join(" · ");
+}
+
+function compatibleClis(credential: ProviderCredential): string {
+  const clis = compatibleAgentClisForCredential(credential);
+  return clis.length > 0 ? clis.join(" / ") : "无已注册 CLI 兼容能力";
+}
+
+export function ProjectCliProviderAllowlistPanel({
+  projectId,
+  credentials,
+  enabledAgentClis,
+  enabledCredentialIds,
+  credentialIdsConfigured,
+  defaultCredentialId,
+  onSaved,
+}: {
+  projectId: string;
+  credentials: ProviderCredential[];
+  enabledAgentClis: AgentCli[];
+  enabledCredentialIds: string[];
+  credentialIdsConfigured: boolean;
+  defaultCredentialId: string | null;
+  onSaved: () => void;
+}) {
+  const [clis, setClis] = useState<AgentCli[]>(enabledAgentClis.length ? enabledAgentClis : ["claude-code"]);
+  const [credIds, setCredIds] = useState<string[]>(enabledCredentialIds);
+  const [credentialSelectionChanged, setCredentialSelectionChanged] = useState(false);
+  const [clearDefaultCredential, setClearDefaultCredential] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [probeAction, setProbeAction] = useState<{ id: string; kind: "test" } | null>(null);
+  const [probeError, setProbeError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setClis(enabledAgentClis.length ? enabledAgentClis : ["claude-code"]);
+    setCredIds(enabledCredentialIds);
+    setCredentialSelectionChanged(false);
+    setClearDefaultCredential(false);
+  }, [enabledAgentClis, enabledCredentialIds, credentialIdsConfigured, defaultCredentialId]);
+
+  const llmCredentials = useMemo(
+    () => credentials.filter((c) => c.kind === "llm_provider" && (c.project_id == null || c.project_id === projectId)),
+    [credentials, projectId],
+  );
+
+  const unavailableDefault = defaultCredentialUnavailable(defaultCredentialId, llmCredentials);
+  const unavailableIds = credIds.filter((id) => !llmCredentials.some((credential) => credential.id === id && credential.status === "active"));
+  const removeUnavailableReferences = () => {
+    setCredIds((current) => current.filter((id) => !unavailableIds.includes(id)));
+    setCredentialSelectionChanged(true);
+  };
+
+  const filteredByCli = useMemo(() => {
+    if (clis.length === 0) return [];
+    return llmCredentials.filter((credential) => clis.some((cli) => credentialSupportsCli(credential, cli)));
+  }, [llmCredentials, clis]);
+
+  const probeCredential = async (credential: ProviderCredential) => {
+    setProbeAction({ id: credential.id, kind: "test" });
+    setProbeError(null);
+    try {
+      const result = await api.testCredential(credential.id);
+      if (!result.ok) {
+        setProbeError(`${credential.name || credential.provider}：连接测试失败${result.category ? `（${result.category}）` : ""}${result.detail ? `：${result.detail}` : ""}`);
+      } else {
+        showToast(`${credential.name || credential.provider}：连接测试成功`, "ok");
+      }
+      onSaved();
+    } catch (error) {
+      setProbeError(`${credential.name || credential.provider}：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setProbeAction(null);
+    }
+  };
+
+  const toggleCli = (cli: AgentCli) => {
+    setClis((current) => {
+      if (current.includes(cli)) {
+        if (current.length === 1) return current;
+        return current.filter((item) => item !== cli);
+      }
+      return [...current, cli];
+    });
+  };
+
+  const toggleCred = (id: string) => {
+    const current = credentialIdsConfigured || credentialSelectionChanged
+      ? credIds : llmCredentials.filter((credential) => credential.status === "active").map((credential) => credential.id);
+    setCredIds(current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+    setCredentialSelectionChanged(true);
+  };
+
+  const save = async () => {
+    if (clis.length === 0) {
+      showToast("至少启用一种 Agent CLI", "error");
+      return;
+    }
+    setBusy(true);
+    setSaved(false);
+    setFailed(false);
+    try {
+      await api.patchSettings(projectId, {
+        enabled_agent_clis: clis,
+        ...credentialSelectionPatch({ credentialSelectionChanged, credIds, defaultCredentialId, clearDefaultCredential }),
+      });
+      showToast("已保存，下一 Job 生效", "ok");
+      setSaved(true);
+      window.setTimeout(() => setSaved(false), 2000);
+      onSaved();
+    } catch (error) {
+      setFailed(true);
+      showToast(`保存失败：${error instanceof Error ? error.message : error}`, "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
+      <div className="border-b border-white/[.055] px-4 py-3">
+        <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
+          <span>CLI / Provider 启用</span>
+          <HelpTip>
+            启用边界；Hub 从已启用项组合 CLI×Provider×镜像。模型 / CLI 选择由 Hub 与 RoleConfig 负责；账号并发在凭据页。
+          </HelpTip>
+        </div>
+      </div>
+      <div className="space-y-4 px-4 py-4">
+        <div>
+          <div className="mb-2 text-[12px] text-zinc-400">启用 Agent 类型</div>
+          <div className="flex flex-wrap gap-2">
+            {AGENT_CLIS.map((cli) => {
+              const on = clis.includes(cli);
+              return (
+                <label
+                  key={cli}
+                  className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[13px] ${
+                    on ? "border-acc-400/50 bg-acc-400/[.06] text-zinc-100" : "border-ink-700 text-zinc-400"
+                  }`}
+                >
+                  <input type="checkbox" checked={on} onChange={() => toggleCli(cli)} className="accent-emerald-500" />
+                  <span className="font-mono">{cli}</span>
+                </label>
+              );
+            })}
+          </div>
+          {clis.length === 0 && (
+            <div className="mt-2 text-[12px] text-amber-400/90">请至少启用一种 CLI。</div>
+          )}
+        </div>
+
+        <div>
+          <div className="mb-2 text-[12px] text-zinc-400">启用 Provider 账号</div>
+          {filteredByCli.length === 0 ? (
+            <div className="rounded-md border border-dashed border-ink-700 px-3 py-4 text-[12px] text-zinc-500">
+              暂无兼容的 LLM Provider，请先在「凭据」页配置。
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {filteredByCli.map((credential) => {
+                const on = credentialIdsConfigured || credentialSelectionChanged
+                  ? credIds.includes(credential.id) : credential.status === "active";
+                const action = probeAction?.id === credential.id ? probeAction.kind : null;
+                return (
+                  <div
+                    key={credential.id}
+                    className={`rounded-md border px-3 py-2 ${
+                      on ? "border-acc-400/50 bg-acc-400/[.06]" : "border-ink-700"
+                    }`}
+                  >
+                    <div className="flex items-start gap-2">
+                      <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2">
+                        <input type="checkbox" checked={on} onChange={() => toggleCred(credential.id)} className="mt-1 accent-emerald-500" />
+                        <span className="min-w-0 flex-1">
+                          <strong className="block text-[13px] text-zinc-200">
+                            {credential.name || "未命名"} · {credential.provider}
+                          </strong>
+                          <small className="block font-mono text-[11px] leading-5 text-zinc-500">
+                            #{credential.id.slice(0, 8)} · 兼容 {compatibleClis(credential)} · {concurrencySummary(credential)}
+                            {credential.status !== "active" ? ` · 状态 ${credential.status}` : ""}
+                          </small>
+                          <small className="mt-0.5 block text-[11px] leading-5 text-zinc-500">{credentialHealthMessage(credential)}</small>
+                        </span>
+                      </label>
+                      <div className="flex shrink-0 gap-1">
+                        <button
+                          type="button"
+                          className="rounded border border-ink-700 px-2 py-1 text-[10px] text-zinc-400 hover:border-acc-400/40 hover:text-acc-300 disabled:opacity-50"
+                          disabled={probeAction !== null || busy}
+                          onClick={() => void probeCredential(credential)}
+                        >
+                          {action === "test" ? "测试中…" : "测试"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {(credentialIdsConfigured || credentialSelectionChanged) && unavailableIds.length > 0 && (
+            <div role="alert" className="mt-2 text-[12px] text-amber-400/90">
+              白名单中有 {unavailableIds.length} 个账号已删除、停用或不再可访问；请修复引用后保存。
+              <button type="button" onClick={removeUnavailableReferences} disabled={busy}
+                className="ml-2 underline">移除失效引用</button>
+            </div>
+          )}
+          {unavailableDefault && (
+            <div role="alert" className="mt-2 text-[12px] text-amber-400/90">
+              默认账号已删除、停用或不再可访问。
+              <button type="button" onClick={() => setClearDefaultCredential(true)} disabled={busy || clearDefaultCredential}
+                className="ml-2 underline">{clearDefaultCredential ? "默认引用将在保存时清除" : "清除失效默认引用"}</button>
+            </div>
+          )}
+          {probeError && <div role="alert" className="mt-2 rounded-md border border-red-400/20 bg-red-400/[.06] px-3 py-2 text-[11px] leading-5 text-red-200">{probeError}</div>}
+          {!credentialIdsConfigured && !credentialSelectionChanged && (
+            <p className="mt-2 text-[12px] text-zinc-400">未收紧凭据范围：自动使用项目可访问的有效账号。勾选变更后保存会建立显式白名单。</p>
+          )}
+          {(credentialIdsConfigured || credentialSelectionChanged) && credIds.length === 0 && (
+            <div className="mt-2 text-[12px] text-amber-400/90">请至少启用一个 Provider。</div>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={save}
+          disabled={busy}
+          className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-wait disabled:opacity-60"
+        >
+          <FloppyDisk size={13} /> {busy ? "保存中…" : saved ? "已保存" : failed ? "保存失败" : "保存"}
+        </button>
+      </div>
+    </section>
+  );
+}

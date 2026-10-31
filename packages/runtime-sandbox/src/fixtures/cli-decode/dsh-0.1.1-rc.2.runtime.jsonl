@@ -1,0 +1,11 @@
+{"jsonrpc":"2.0","id":"deepsonar-initialize-1","result":{"serverInfo":{"name":"deepseek-harness-sdk-runtime","version":"0.1.1-rc.2"}}}
+{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"session-dsh-011rc2","event":{"type":"assistant/chunk","data":{"chunk":{"type":"text-delta","text":"先检查入口"}}}}}
+{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"session-dsh-011rc2","event":{"type":"assistant/chunk","data":{"chunk":{"type":"reasoning-delta","text":"定位认证"}}}}}
+{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"session-dsh-011rc2","event":{"type":"tool/call","data":{"id":"t1","name":"bash","arguments":{"command":"pwd"}}}}}
+{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"session-dsh-011rc2","event":{"type":"tool/result","data":{"id":"t1","name":"bash","message":{"content":[{"type":"text","text":"/workspace"}]},"isError":false}}}}
+{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"session-dsh-011rc2","event":{"type":"assistant/message","data":{"message":{"id":"m1","content":[{"type":"text","text":"完成"}],"usage":{"input_tokens":40,"output_tokens":12}}}}}}
+{"jsonrpc":"2.0","id":"1","error":{"message":"OpenAI API error (401): {\"message\":\"unauthorized client detected\"}"}}
+{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"session-dsh-011rc2","event":{"type":"turn/start","data":{}}}}
+{"jsonrpc":"2.0","method":"session.status","params":{"sessionId":"session-dsh-011rc2","status":"idle"}}
+{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"session-dsh-011rc2","event":{"type":"future/unknown","data":{"note":"should-diagnose"}}}}
+{"jsonrpc":"2.0","method":"future.method","params":{"sessionId":"session-dsh-011rc2"}}

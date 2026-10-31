@@ -1,0 +1,131 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { buildOpenApiDocument } from "./openapi.js";
+
+test("canvas delta OpenAPI exposes a required since query parameter", () => {
+  const document = buildOpenApiDocument();
+  const operation = (document.paths as Record<string, Record<string, unknown>>)["/canvases/{id}/delta"]?.get as Record<string, unknown>;
+  const parameters = operation.parameters as Array<Record<string, unknown>>;
+  const since = parameters.find((parameter) => parameter.name === "since");
+  assert.deepEqual(since, {
+    name: "since",
+    in: "query",
+    required: true,
+    schema: { type: "string", pattern: "^[0-9]+$" },
+  });
+  assert.equal(parameters.some((parameter) => parameter.name === "type"), false);
+});
+
+test("credential OpenAPI exposes safe metadata, health and impact/model APIs", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, unknown>>;
+  assert.ok(paths["/credentials/{id}"]?.get);
+  assert.ok(paths["/credentials/{id}/impact"]?.get);
+  assert.ok(paths["/credentials/{id}/models"]?.get);
+  assert.ok(paths["/credentials/{id}/compatibility"]?.get);
+  const schemas = (document.components as Record<string, unknown>).schemas as Record<string, Record<string, unknown>>;
+  assert.equal(schemas.CredentialMetadata?.additionalProperties, false);
+  assert.deepEqual(schemas.CredentialHealth?.properties && (schemas.CredentialHealth.properties as Record<string, unknown>).status, {
+    type: "string",
+    enum: ["unknown", "ok", "error"],
+  });
+});
+
+test("credential batch and picker OpenAPI contracts are strict and typed", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, unknown>>;
+  const providers = paths["/credentials/providers"]?.get as Record<string, any>;
+  const bindable = paths["/role-configs/bindable"]?.get as Record<string, any>;
+  assert.equal(providers.responses["200"].content["application/json"].schema.type, "array");
+  assert.equal(bindable.responses["200"].content["application/json"].schema.type, "array");
+  const schemas = (document.components as Record<string, unknown>).schemas as Record<string, Record<string, any>>;
+  assert.equal(schemas.ProviderAccountCatalogItem.additionalProperties, false);
+});
+
+test("RoleConfig and role registry OpenAPI documents project-scope boundaries", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const schemas = (document.components as Record<string, unknown>).schemas as Record<string, Record<string, any>>;
+  assert.ok(schemas.Error?.properties?.error_code);
+  for (const [path, method] of [
+    ["/role-configs/global/{roleId}", "put"],
+    ["/agent-roles", "post"],
+    ["/agent-roles/{id}", "patch"],
+    ["/agent-roles/{id}", "delete"],
+  ] as const) {
+    assert.match(String(paths[path]?.[method]?.description), /PROJECT_SCOPE_FORBIDDEN/);
+  }
+  assert.match(String(paths["/role-configs/global"]?.get?.description), /#690/);
+  assert.match(String(paths["/role-configs/bindable"]?.get?.description), /can_bind/);
+  assert.match(String(paths["/role-configs/global"]?.get?.description), /凭据绑定/);
+  const globalPut = paths["/role-configs/global/{roleId}"]?.put;
+  const roleIdParam = (globalPut.parameters as Array<Record<string, any>>).find((parameter) => parameter.name === "roleId");
+  assert.deepEqual(roleIdParam?.schema, { type: "string", format: "uuid" });
+  assert.match(String(globalPut.description), /INVALID_ROLE_ID/);
+  assert.match(String(globalPut.description), /不是角色名/);
+  assert.match(String(paths["/role-configs/{id}/agent-cli"]?.patch?.description), /INVALID_ROLE_CONFIG_ID/);
+  assert.match(String(paths["/projects/{id}/role-configs/{roleId}"]?.put?.description), /INVALID_ROLE_ID/);
+  assert.match(String(paths["/projects/{id}/role-configs/{roleId}"]?.delete?.description), /INVALID_ROLE_ID/);
+});
+
+test("/health OpenAPI includes deploy version", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const health = paths["/health"]?.get as Record<string, any>;
+  const schema = health.responses["200"].content["application/json"].schema;
+  assert.deepEqual(schema.required, ["ok", "ready", "version"]);
+  assert.deepEqual(schema.oneOf, [
+    { required: ["git_revision", "runtime_images", "dispatcher", "opensandbox", "ts"] },
+    { required: ["maintenance", "maintenance_ready", "upgrade_phase", "upgrade_generation", "upgrade_runtime_role", "upgrade_target_version"] },
+  ]);
+  assert.deepEqual(schema.properties.maintenance.enum, [true]);
+  assert.equal(schema.properties.git_revision.type, "string");
+  assert.deepEqual(schema.properties.opensandbox.required, ["level", "domain", "ready"]);
+  assert.equal(schema.properties.version.type, "string");
+});
+
+test("runtime registry channel OpenAPI is strict and project-scope aware", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const registry = paths["/runtime-images/registry"]?.get as Record<string, any>;
+  const channel = paths["/runtime-images/registry/channel"]?.patch as Record<string, any>;
+  const pull = paths["/runtime-images/registry/pull"]?.post as Record<string, any>;
+  const channels = ["github", "dockerhub", "aliyun-acr"];
+
+  assert.deepEqual(registry.responses["200"].content["application/json"].schema.required, ["schema", "images", "selected_channel"]);
+  assert.deepEqual(registry.responses["200"].content["application/json"].schema.properties.selected_channel, {
+    type: "string",
+    enum: channels,
+  });
+  assert.equal(channel["x-deepsonar-scope"], "images:manage");
+  assert.deepEqual(channel.requestBody.content["application/json"].schema, {
+    type: "object",
+    additionalProperties: false,
+    required: ["channel"],
+    properties: { channel: { type: "string", enum: channels } },
+  });
+  assert.match(String(channel.description), /PROJECT_SCOPE_FORBIDDEN/);
+  assert.match(String(channel.description), /github.*dockerhub.*aliyun-acr/);
+  assert.match(String(channel.description), /in-flight|pull-status|runtime_image_preparation_busy/);
+  assert.equal(channel.responses["202"].content["application/json"].schema.properties.saved.enum[0], false);
+  assert.match(String(channel.responses["403"].content["application/json"].schema.properties.error_code.enum), /PROJECT_SCOPE_FORBIDDEN/);
+  assert.match(String(channel.responses["500"].content["application/json"].schema.properties.error_code.enum), /RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED/);
+  assert.match(String(pull.description), /PROJECT_SCOPE_FORBIDDEN/);
+  assert.match(String(pull.description), /RUNTIME_IMAGE_CHANNEL_UNAVAILABLE/);
+  assert.match(String(paths["/tokens"]?.post?.description), /SCOPE_EXCEEDS_ACTOR|PROJECT_MISMATCH/);
+  assert.match(String(paths["/runtime-image-versions/{id}/usage"]?.get?.description), /自身项目/);
+  assert.deepEqual(
+    pull.responses["409"].content["application/json"].schema.properties.error_code.enum,
+    ["RUNTIME_IMAGE_CHANNEL_UNAVAILABLE"],
+  );
+});
+
+test("RoleConfigInput no longer accepts credentials or pi_extensions (#690)", () => {
+  const document = buildOpenApiDocument();
+  const schemas = (document.components as Record<string, unknown>).schemas as Record<string, Record<string, any>>;
+  const props = schemas.RoleConfigInput?.properties ?? {};
+  assert.equal(props.credentials, undefined);
+  assert.equal(props.pi_extensions, undefined);
+  assert.equal((document.paths as Record<string, unknown>)["/credentials/batch-bind"], undefined);
+  assert.equal(schemas.CredentialBatchBindingRequest, undefined);
+});

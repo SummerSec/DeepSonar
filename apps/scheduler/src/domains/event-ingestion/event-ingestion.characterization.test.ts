@@ -1,0 +1,67 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+
+const coreSource = readFileSync(new URL("../../core.ts", import.meta.url), "utf8");
+const sideEffectSource = readFileSync(new URL("./side-effects.ts", import.meta.url), "utf8");
+const applicationSource = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
+
+test("event-ingestion owns semantic side effects behind explicit ports", () => {
+  const facade = coreSource.match(/export async function applySideEffects\([\s\S]*?\n}\n/)?.[0];
+  assert.ok(facade, "core composition root must keep applySideEffects wiring");
+  assert.match(facade, /eventIngestionSideEffectApplication\.applySideEffects/);
+  assert.ok(facade.length < 700, "core must not retain the semantic side-effect implementation");
+
+  assert.doesNotMatch(coreSource, /SEMANTIC_TOOL_BY_EVENT|semanticJobContract|assertTerminalEventHistory/);
+  assert.match(sideEffectSource, /assertTerminalEventHistory/);
+  assert.match(
+    sideEffectSource,
+    /created_at >= COALESCE\([\s\S]*job_attempts[\s\S]*status = 'active'/,
+    "terminal mutex must be scoped to the current Attempt, not the whole Job ledger",
+  );
+  assert.match(
+    sideEffectSource,
+    /jobStatusAtLock \?\? job\.status/,
+    "running guard must use ingest lock-time status so same-turn follow-ups do not roll back a close",
+  );
+  assert.match(applicationSource, /orderSemanticIngestBundle/);
+  assert.match(applicationSource, /attempt_id: ingest\.attemptId/);
+  assert.match(applicationSource, /status = 'active'/);
+  assert.match(applicationSource, /finalizedInThisIngest && envelope\.type === "done"/);
+  assert.match(applicationSource, /shouldSkipTerminalAfterAcceptedHuman/);
+  assert.match(applicationSource, /acceptedHumanInThisIngest/);
+  assert.match(sideEffectSource, /createEventIngestionSideEffectApplication/);
+  assert.match(sideEffectSource, /SET heartbeat_at = now\(\)/);
+  assert.match(
+    sideEffectSource,
+    /SET lease_expires_at = now\(\) \+ \(\$\{config\.timeouts\.leaseTtlSec\}::int \* interval '1 second'\)[\s\S]*WHERE id = \$\{jobId\} AND status = 'running'/,
+  );
+  assert.match(sideEffectSource, /persistArtifact/);
+  assert.match(sideEffectSource, /findingProposalToArtifact/);
+  assert.match(sideEffectSource, /factProposalToArtifact/);
+  assert.match(sideEffectSource, /findingVerification/);
+  assert.match(sideEffectSource, /resolveAgentSnapshotForJob/);
+  assert.doesNotMatch(sideEffectSource, /assertFrozenRuntimeImageLocal|blockHubOnMissingLocalImage/);
+  assert.match(sideEffectSource, /isHubRuntimeImageResolutionError/);
+  assert.match(
+    sideEffectSource,
+    /phase === "preflight" \? `intents\.\$\{index\}\.runtime_image_key` : "intents\.runtime_image_key"/,
+    "preflight must report the per-intent path while apply keeps the shared path (#684)",
+  );
+  assert.match(
+    sideEffectSource,
+    /if \(key && !allowedImageKeySet\.has\(key\)\)[\s\S]{0,120}invalidRuntimeImage\(path, allowedImageKeys\)/,
+    "a proposed runtime_image_key must be rejected before apply instead of failing at provision (#684)",
+  );
+  assert.match(sideEffectSource, /invalidRuntimeImage\(`intents\.\$\{index\}\.runtime_image_key`/);
+  assert.match(
+    sideEffectSource,
+    /UPDATE canvas_nodes SET status = 'waiting_human'[\s\S]*node_type IN \('job', 'intent', 'report'\)/,
+  );
+  assert.match(sideEffectSource, /finalizeJob/);
+  assert.doesNotMatch(sideEffectSource, /from ["'](?:\.\.\/)+core\.js["']/);
+  assert.doesNotMatch(sideEffectSource, /import\(/);
+  assert.match(applicationSource, /MAX_INGEST_LOCK_ATTEMPTS = 3/);
+  assert.match(applicationSource, /isRetryableCanvasLockError\(error\) && attempt < MAX_INGEST_LOCK_ATTEMPTS - 1/);
+  assert.match(applicationSource, /code === "40P01" \|\| code === "55P03"/);
+});

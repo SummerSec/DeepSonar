@@ -1,0 +1,8 @@
+# OpenSandbox half of the Podman compat overlay (#726).
+# Only attached together with docker-compose.opensandbox.prod.yml.
+
+services:
+  scheduler:
+    depends_on:
+      opensandbox:
+        condition: service_started

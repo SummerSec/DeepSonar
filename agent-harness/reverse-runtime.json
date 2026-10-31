@@ -1,0 +1,117 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "deepsonar-base:local",
+  "platforms": [
+    "linux/amd64",
+    "linux/arm64"
+  ],
+  "project_opt_in": true,
+  "toolset": "reverse",
+  "downloads": {
+    "jdk": {
+      "major": "21",
+      "version": "21 (Temurin full JDK)",
+      "image": "eclipse-temurin:21-jdk@sha256:3e3c176ffed168beb42c607be9bc1639b466cf00261a0fb04425562c9d0c5c2b",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "capabilities": [
+        "java-runtime",
+        "java-compiler",
+        "ghidra-runtime"
+      ]
+    },
+    "ghidra": {
+      "version": "12.1.4",
+      "license": "Apache-2.0",
+      "capabilities": [
+        "native-decompile",
+        "native-disassemble",
+        "native-xrefs"
+      ],
+      "source": "official NSA Ghidra_12.1.4_build PUBLIC zip",
+      "assets": {
+        "all": {
+          "url": "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip",
+          "sha256": "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db"
+        }
+      }
+    }
+  },
+  "managed": {
+    "npm": {
+      "rea-agents": {
+        "version": "6.4.0",
+        "gitHead": "a56f7bb668ab23fec8d33f7af353ac7ed2fe1895",
+        "integrity": "sha512-Vj1zWfSlna5bphGoaoI/TcVBuYvze9u+OyPC3Shz8YkBqaCTqB4COnnRoX7XDwMpwI24ZlFEel2yEj0k8LTWEQ==",
+        "engines": "^22.19.0 || ^24.11.0 || >=26.0.0",
+        "license": "SEE LICENSE IN package",
+        "capabilities": [
+          "rea-cli",
+          "native-analyze",
+          "native-decompile",
+          "native-xrefs",
+          "native-trace-values"
+        ],
+        "notes": "CLI-only in DeepSonar; do not register MCP or install Hopper/IDA in this image"
+      }
+    },
+    "node": {
+      "minimum": "22.19.0",
+      "inherited_from": "deepsonar-base",
+      "verify_at_build": true,
+      "engines": "^22.19.0 || ^24.11.0 || >=26.0.0"
+    }
+  },
+  "skill": {
+    "id": "deepsonar-rea-cli",
+    "path": "skills/deepsonar-rea-cli/SKILL.md",
+    "content_hash": "sha256:8c104178b67bd2abb207e3b932e2d35309eb88920328e023ee9c1eba6c44c01a"
+  },
+  "toolsets": {
+    "reverse": {
+      "imageKey": "deepsonar-reverse",
+      "description": "Project-opt-in deep native binary analysis via pinned REA CLI + Ghidra 12.1.4 + full JDK 21. Not the global default; never added to deepsonar-mobile.",
+      "capabilities": [
+        "rea-cli",
+        "ghidra-headless",
+        "native-decompile",
+        "native-disassemble",
+        "native-xrefs",
+        "native-trace-values"
+      ],
+      "not_included": [
+        "MCP server registration",
+        "resident REA service",
+        "Hopper",
+        "IDA",
+        "dynamic debugging",
+        "device execution"
+      ],
+      "maxSizeMiB": 2800,
+      "job_resource_recommendation": {
+        "memory_mib": 4096,
+        "cpu": 2,
+        "timeout_sec": 600,
+        "source": "agent-harness/reverse-amd64-measurements.json",
+        "ghidra_headless_maxmem": "1536m"
+      }
+    }
+  },
+  "measurements": {
+    "amd64": "agent-harness/reverse-amd64-measurements.json",
+    "arm64": "pending"
+  },
+  "validation": {
+    "workflow": ".github/workflows/reverse-runtime.yml",
+    "native_runners": {
+      "amd64": "ubuntu-24.04",
+      "arm64": "ubuntu-24.04-arm"
+    },
+    "image_smoke": "agent-harness/reverse-native-smoke.mjs",
+    "job_e2e": "agent-harness/opensandbox/opensandbox-rea-job.e2e.ts",
+    "evidence_artifacts": [
+      "reverse-native-evidence-<arch>",
+      "reverse-job-evidence-<arch>"
+    ],
+    "status": "gates_defined_execution_and_first_publication_required"
+  }
+}

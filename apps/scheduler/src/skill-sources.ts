@@ -1,0 +1,1167 @@
+/**
+ * Git 模块源（§8.2）：Agent 的插件/skill 集中托管在 Git 仓库（如 SumSec-Skills）
+ * - sync：浅克隆 → 扫描 SKILL.md / commands → 目录（含文件内容）落库
+ * - 下发：RoleConfig 勾选模块，快照时展开为沙箱 embedded skills/commands
+ *   （内容在 sync 时缓存，运行 job 不再访问 Git —— 断网/私有网络也能跑）
+ */
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import {
+  parseModuleSelector,
+  type ParsedModuleSelector,
+  validateModuleSelectors,
+} from "@deepsonar/shared-types";
+import { recordSystemAudit } from "./audit.js";
+import { config } from "./config.js";
+import { sql } from "./db.js";
+import { persistSkillSourceManifest } from "./job-skill-catalog.js";
+
+export {
+  parseModuleSelector,
+  validateModuleSelectors,
+  type ParsedModuleSelector,
+} from "@deepsonar/shared-types";
+
+const execFileP = promisify(execFile);
+
+function abortReason(signal: AbortSignal, label: string): Error {
+  const reason = signal.reason;
+  return reason instanceof Error ? reason : new Error(`${label} 已中止`);
+}
+
+function assertSyncNotAborted(signal: AbortSignal | undefined, label: string): void {
+  if (signal?.aborted) throw abortReason(signal, label);
+}
+
+/** 仓库 URL 校验（§5.1 安全要求）：仅 https（host 白名单复用 DEEPSONAR_GIT_ALLOWED_HOSTS）；禁 file://、本地路径、内嵌凭据 */
+export function validateSourceUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`repo_url 非法: ${url}`);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`模块源仅允许 https:// Git URL（收到 ${parsed.protocol}）`);
+  }
+  if (parsed.username || parsed.password) throw new Error("repo_url 不允许内嵌凭据");
+  const allowed = config.skillSources.allowedGitHosts.split(",").map((s) => s.trim()).filter(Boolean);
+  if (allowed.length > 0 && !allowed.includes(parsed.host)) {
+    throw new Error(`git host 不在允许列表: ${parsed.host}`);
+  }
+}
+
+export interface SourceModule {
+  /** 模块 id = 仓库内相对路径（skill 目录 / command 文件） */
+  id: string;
+  kind: "skill" | "command";
+  /** 所属插件（含 .claude-plugin/plugin.json 的最近祖先目录名；无则 "(root)"） */
+  plugin: string;
+  name: string;
+  description: string;
+  /** skill: 相对模块目录的文件 → 内容；command: { "command.md": 模板 } */
+  files: Record<string, string>;
+}
+
+export interface SkillSourceCatalogView {
+  id: string;
+  last_commit_sha?: string | null;
+  catalog: SourceModule[];
+}
+
+export interface AvailableSkill {
+  selector: string;
+  source_id: string;
+  module_id: string;
+  plugin: string;
+  name: string;
+  description: string;
+  content_hash: string;
+  commit_sha: string | null;
+}
+
+export function availableSkillEntries(sources: readonly SkillSourceCatalogView[]): AvailableSkill[] {
+  return sources
+    .flatMap((source) => source.catalog
+      .filter((module) => module.kind === "skill")
+      .map((module) => ({
+        selector: `${source.id}:${module.id}`,
+        source_id: source.id,
+        module_id: module.id,
+        plugin: module.plugin,
+        name: module.name,
+        description: module.description,
+        content_hash: contentHashOf([module]),
+        commit_sha: source.last_commit_sha ?? null,
+      })))
+    .sort((left, right) => left.selector.localeCompare(right.selector));
+}
+
+export function listAvailableSkillsFromCatalog(
+  sources: readonly SkillSourceCatalogView[],
+  input: { limit?: number; offset?: number; query?: string } = {},
+): { skills: AvailableSkill[]; total: number; limit: number; offset: number; next_offset: number | null } {
+  const query = input.query?.trim().toLowerCase();
+  const matched = availableSkillEntries(sources).filter((skill) => !query || [
+    skill.selector,
+    skill.name,
+    skill.description,
+    skill.plugin,
+  ].join(" ").toLowerCase().includes(query));
+  const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
+  const offset = Math.max(0, input.offset ?? 0);
+  const skills = matched.slice(offset, offset + limit);
+  return {
+    skills,
+    total: matched.length,
+    limit,
+    offset,
+    next_offset: offset + skills.length < matched.length ? offset + skills.length : null,
+  };
+}
+
+export type PullSkillResult =
+  | { ok: true; skill: AvailableSkill & { files: Record<string, string> } }
+  | { ok: false; error_code: "SKILL_NOT_FOUND" | "SKILL_SELECTOR_INVALID" | "SKILL_HASH_MISMATCH"; message: string };
+
+export function pullSkillFromCatalog(
+  sources: readonly SkillSourceCatalogView[],
+  selector: string,
+  expectedContentHash: string,
+): PullSkillResult {
+  let parsed: ParsedModuleSelector;
+  try {
+    parsed = parseModuleSelector(selector);
+  } catch {
+    return { ok: false, error_code: "SKILL_SELECTOR_INVALID", message: "Skill selector 无效，必须使用 source_uuid:module_path。" };
+  }
+  if (parsed.kind !== "module" || !parsed.module_id) {
+    return { ok: false, error_code: "SKILL_SELECTOR_INVALID", message: "pull_skill 只接受单个 Skill module selector。" };
+  }
+  const source = sources.find((item) => item.id.toLowerCase() === parsed.source_id);
+  const module = source?.catalog.find((item) => item.id === parsed.module_id && item.kind === "skill");
+  if (!source || !module) {
+    return { ok: false, error_code: "SKILL_NOT_FOUND", message: "找不到当前受信任 Skill 源中的目标 Skill。" };
+  }
+  const contentHash = contentHashOf([module]);
+  if (contentHash.toLowerCase() !== expectedContentHash.toLowerCase()) {
+    return { ok: false, error_code: "SKILL_HASH_MISMATCH", message: "Skill 内容已变化，请重新搜索后再拉取。" };
+  }
+  return {
+    ok: true,
+    skill: {
+      selector: `${source.id}:${module.id}`,
+      source_id: source.id,
+      module_id: module.id,
+      plugin: module.plugin,
+      name: module.name,
+      description: module.description,
+      content_hash: contentHash,
+      commit_sha: source.last_commit_sha ?? null,
+      files: module.files,
+    },
+  };
+}
+
+const FILE_CAP = 64 * 1024;
+const MODULE_CAP = 512 * 1024;
+const BINARY_EXT = new Set([".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".zip", ".woff", ".woff2", ".pyc"]);
+
+/** SKILL.md frontmatter 提取（不引 yaml 依赖，key: value 足够） */
+function frontmatter(content: string): Record<string, string> {
+  const m = content.match(/^---\n([\s\S]*?)\n---/);
+  const out: Record<string, string> = {};
+  if (!m) return out;
+  for (const line of m[1].split("\n")) {
+    const kv = line.match(/^(\w[\w-]*)\s*:\s*(.+)$/);
+    if (kv) out[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, "");
+  }
+  return out;
+}
+
+function* walk(dir: string): Generator<string> {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === ".git" || e.name === "node_modules") continue;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) yield* walk(full);
+    else yield full;
+  }
+}
+
+/** 收集目录下所有文本文件（相对路径 → 内容），超限即截断跳过 */
+function collectFiles(root: string): Record<string, string> {
+  const files: Record<string, string> = {};
+  let total = 0;
+  for (const full of walk(root)) {
+    if (statSync(full).size > FILE_CAP) continue;
+    if (BINARY_EXT.has(path.extname(full).toLowerCase())) continue;
+    const rel = path.relative(root, full).split(path.sep).join("/");
+    const content = readFileSync(full, "utf8");
+    if (content.includes("\0")) continue; // 二进制兜底
+    if (total + content.length > MODULE_CAP) break;
+    files[rel] = content;
+    total += content.length;
+  }
+  return files;
+}
+
+/** 找最近祖先插件目录（含 .claude-plugin/plugin.json），返回相对仓库根的路径 */
+function pluginOf(repoRoot: string, dir: string): string {
+  let cur = dir;
+  while (cur.startsWith(repoRoot) && cur !== repoRoot) {
+    try {
+      statSync(path.join(cur, ".claude-plugin", "plugin.json"));
+      return path.relative(repoRoot, cur).split(path.sep).join("/");
+    } catch {
+      cur = path.dirname(cur);
+    }
+  }
+  return "(root)";
+}
+
+/** 目录内容哈希（§5.1：不使用不可复现的 branch HEAD 作执行版本——记录 commit + 内容哈希）。
+ * Catalog metadata is observable in the frozen component manifest, so a
+ * plugin/name/description-only change must invalidate the evidence hash too.
+ */
+export function contentHashOf(catalog: SourceModule[]): string {
+  const h = createHash("sha256");
+  for (const m of [...catalog].sort((a, b) => a.id.localeCompare(b.id))) {
+    h.update(m.id).update("\0").update(m.kind).update("\0");
+    h.update(m.plugin).update("\0").update(m.name).update("\0").update(m.description).update("\0");
+    for (const k of Object.keys(m.files).sort()) {
+      h.update(k).update("\0").update(m.files[k]).update("\0");
+    }
+  }
+  return h.digest("hex");
+}
+
+/** 单个展开模块的内容证据；不含可变 catalog 引用。 */
+export interface ExpandedModuleSnapshot {
+  source_id: string;
+  module_id: string;
+  kind: SourceModule["kind"];
+  plugin: string;
+  name: string;
+  description: string;
+  content_hash: string;
+}
+
+export type ModuleMissingReason =
+  | "source-not-found"
+  | "source-not-trusted"
+  | "catalog-empty"
+  | "plugin-not-found"
+  | "module-not-found"
+  | "manual-override"
+  | "name-conflict";
+
+/** Structured missing-module evidence frozen into the Job snapshot. */
+export interface MissingModule {
+  selector: string;
+  source_id: string;
+  reason: ModuleMissingReason;
+  plugin?: string;
+  module_id?: string;
+  kind?: SourceModule["kind"];
+  name?: string;
+  conflicts_with?: Array<{
+    source_id: string;
+    module_id: string;
+    kind: SourceModule["kind"];
+    name: string;
+  }>;
+}
+
+function missingModuleText(missing: MissingModule): string {
+  if (missing.reason === "name-conflict") {
+    return `${missing.selector}(name-conflict:${missing.kind}:${missing.name})`;
+  }
+  if (missing.reason === "manual-override") {
+    return `${missing.selector}(manual-override:${missing.kind}:${missing.name})`;
+  }
+  return `${missing.selector}(${missing.reason})`;
+}
+
+function missingForSelector(
+  selector: ParsedModuleSelector,
+  reason: Exclude<ModuleMissingReason, "name-conflict">,
+): MissingModule {
+  return {
+    selector: selector.raw,
+    source_id: selector.source_id,
+    reason,
+    ...(selector.plugin ? { plugin: selector.plugin } : {}),
+    ...(selector.module_id ? { module_id: selector.module_id } : {}),
+  };
+}
+
+type SelectedModule = { source_id: string; module: SourceModule };
+
+type GitExecFile = (
+  file: string,
+  args: string[],
+  options: { timeout: number; signal?: AbortSignal },
+) => Promise<{ stdout: string | Buffer }>;
+
+/**
+ * Materializer paths are namespace-specific: skill names and command names can
+ * coexist, but duplicate names within either namespace would silently overwrite
+ * one another. Exclude every member of a conflict group deterministically.
+ */
+export function resolveModuleNameConflicts(entries: SelectedModule[]): {
+  modules: SelectedModule[];
+  missing_modules: MissingModule[];
+} {
+  const groups = new Map<string, SelectedModule[]>();
+  for (const entry of entries) {
+    const key = `${entry.module.kind}:${entry.module.name}`;
+    const group = groups.get(key) ?? [];
+    group.push(entry);
+    groups.set(key, group);
+  }
+
+  const conflictKeys = new Set<string>();
+  const missing_modules: MissingModule[] = [];
+  for (const [key, group] of groups) {
+    if (group.length < 2) continue;
+    conflictKeys.add(key);
+    const ordered = [...group].sort((a, b) => {
+      const ak = `${a.source_id}:${a.module.id}`;
+      const bk = `${b.source_id}:${b.module.id}`;
+      return ak.localeCompare(bk);
+    });
+    for (const entry of ordered) {
+      missing_modules.push({
+        selector: `${entry.source_id}:${entry.module.id}`,
+        source_id: entry.source_id,
+        reason: "name-conflict",
+        module_id: entry.module.id,
+        kind: entry.module.kind,
+        name: entry.module.name,
+        conflicts_with: ordered
+          .filter((other) => other !== entry)
+          .map((other) => ({
+            source_id: other.source_id,
+            module_id: other.module.id,
+            kind: other.module.kind,
+            name: other.module.name,
+          })),
+      });
+    }
+  }
+
+  // Preserve catalog/selector order for the materializer; collision decisions
+  // and evidence ordering above remain deterministic independent of that order.
+  const modules = entries.filter((entry) => !conflictKeys.has(`${entry.module.kind}:${entry.module.name}`));
+  missing_modules.sort((a, b) =>
+    `${a.kind}:${a.name}:${a.source_id}:${a.module_id}`.localeCompare(`${b.kind}:${b.name}:${b.source_id}:${b.module_id}`),
+  );
+  return { modules, missing_modules };
+}
+
+export function contentHashOfSelected(entries: SelectedModule[]): string {
+  const h = createHash("sha256");
+  for (const entry of [...entries].sort((a, b) => {
+    const ak = `${a.source_id}:${a.module.id}`;
+    const bk = `${b.source_id}:${b.module.id}`;
+    return ak.localeCompare(bk);
+  })) {
+    h.update(entry.source_id).update("\0").update(entry.module.id).update("\0");
+    h.update(entry.module.kind).update("\0");
+    h.update(entry.module.plugin).update("\0").update(entry.module.name).update("\0").update(entry.module.description).update("\0");
+    for (const key of Object.keys(entry.module.files).sort()) {
+      h.update(key).update("\0").update(entry.module.files[key]).update("\0");
+    }
+  }
+  return h.digest("hex");
+}
+
+export interface ModuleExpansionOverrides {
+  /** Names from RoleConfig.skills_json that take precedence over catalog skills. */
+  skill_names?: Iterable<string>;
+  /** Names from RoleConfig.commands_json that take precedence over catalog commands. */
+  command_names?: Iterable<string>;
+}
+
+function filterManualOverrides(
+  entries: SelectedModule[],
+  overrides: ModuleExpansionOverrides | undefined,
+): { modules: SelectedModule[]; missing_modules: MissingModule[] } {
+  const manualNames = new Set<string>([
+    ...[...(overrides?.skill_names ?? [])].filter((name) => typeof name === "string" && name.length > 0).map((name) => `skill:${name}`),
+    ...[...(overrides?.command_names ?? [])].filter((name) => typeof name === "string" && name.length > 0).map((name) => `command:${name}`),
+  ]);
+  if (manualNames.size === 0) return { modules: entries, missing_modules: [] };
+
+  const modules: SelectedModule[] = [];
+  const missing_modules: MissingModule[] = [];
+  for (const entry of entries) {
+    const key = `${entry.module.kind}:${entry.module.name}`;
+    if (!manualNames.has(key)) {
+      modules.push(entry);
+      continue;
+    }
+    missing_modules.push({
+      selector: `${entry.source_id}:${entry.module.id}`,
+      source_id: entry.source_id,
+      reason: "manual-override",
+      module_id: entry.module.id,
+      kind: entry.module.kind,
+      name: entry.module.name,
+    });
+  }
+  return { modules, missing_modules };
+}
+
+/**
+ * 在一个已经读取的 trusted catalog 上展开 selector。这个纯函数同时被测试和
+ * DB-backed expandModules 使用，确保 plugin/source 与显式 module 的去重规则一致。
+ */
+function expandCatalogSelectorsRaw(
+  sourceId: string,
+  catalog: SourceModule[],
+  selectors: ParsedModuleSelector[],
+): { modules: SelectedModule[]; missing_modules: MissingModule[] } {
+  const byId = new Map(catalog.map((module) => [module.id, module]));
+  const selected = new Map<string, SourceModule>();
+  const missing_modules: MissingModule[] = [];
+  for (const selector of selectors) {
+    let matches: SourceModule[];
+    if (selector.kind === "source") {
+      matches = catalog;
+    } else if (selector.kind === "plugin") {
+      matches = catalog.filter((module) => module.plugin === selector.plugin);
+    } else {
+      const module = selector.module_id ? byId.get(selector.module_id) : undefined;
+      matches = module ? [module] : [];
+    }
+    if (matches.length === 0) {
+      const reason = selector.kind === "source"
+        ? "catalog-empty"
+        : selector.kind === "plugin"
+          ? "plugin-not-found"
+          : "module-not-found";
+      missing_modules.push(missingForSelector(selector, reason));
+      continue;
+    }
+    for (const module of matches) selected.set(module.id, module);
+  }
+  return {
+    modules: [...selected.values()].map((module) => ({ source_id: sourceId, module })),
+    missing_modules,
+  };
+}
+
+export function expandCatalogSelectors(
+  sourceId: string,
+  catalog: SourceModule[],
+  selectors: ParsedModuleSelector[],
+): { modules: SelectedModule[]; missing: string[]; missing_modules: MissingModule[] } {
+  const raw = expandCatalogSelectorsRaw(sourceId, catalog, selectors);
+  const conflicts = resolveModuleNameConflicts(raw.modules);
+  const missing_modules = [...raw.missing_modules, ...conflicts.missing_modules];
+  return {
+    modules: conflicts.modules,
+    missing_modules,
+    missing: missing_modules.map(missingModuleText),
+  };
+}
+
+function isCatalogModule(value: unknown): value is SourceModule {
+  if (!value || typeof value !== "object") return false;
+  const module = value as Record<string, unknown>;
+  return (
+    typeof module.id === "string" &&
+    module.id.length > 0 &&
+    (module.kind === "skill" || module.kind === "command") &&
+    typeof module.plugin === "string" &&
+    typeof module.name === "string" &&
+    typeof module.description === "string" &&
+    Boolean(module.files) &&
+    typeof module.files === "object" &&
+    !Array.isArray(module.files) &&
+    Object.values(module.files as Record<string, unknown>).every((content) => typeof content === "string")
+  );
+}
+
+const MODULE_COUNT_CAP = 200;
+
+/**
+ * Scan a checked-out skill repo. Module id = relative directory of SKILL.md
+ * (bare `<plugin>/SKILL.md` → `plugin`; wrapped `<plugin>/skills/<name>/SKILL.md`
+ * → `plugin/skills/name`). Never invents a `skills/` segment.
+ */
+export function scanSkillSourceRepo(repoRoot: string): SourceModule[] {
+  const modules: SourceModule[] = [];
+  const seenSkills = new Set<string>();
+
+  for (const full of walk(repoRoot)) {
+    if (modules.length >= MODULE_COUNT_CAP) break;
+    const rel = path.relative(repoRoot, full).split(path.sep).join("/");
+    const dir = path.dirname(full);
+
+    if (path.basename(full) === "SKILL.md") {
+      const skillDir = path.relative(repoRoot, dir).split(path.sep).join("/");
+      if (seenSkills.has(skillDir)) continue;
+      seenSkills.add(skillDir);
+      const content = readFileSync(full, "utf8");
+      const fm = frontmatter(content);
+      modules.push({
+        id: skillDir,
+        kind: "skill",
+        plugin: pluginOf(repoRoot, dir),
+        name: fm.name ?? path.basename(dir),
+        description: fm.description ?? "",
+        files: collectFiles(dir),
+      });
+    } else if (path.basename(full).endsWith(".md") && path.basename(dir) === "commands") {
+      // 插件的 commands/*.md → slash 命令模板
+      const content = readFileSync(full, "utf8");
+      const fm = frontmatter(content);
+      const name = path.basename(full, ".md");
+      modules.push({
+        id: rel,
+        kind: "command",
+        plugin: pluginOf(repoRoot, dir),
+        name,
+        description: fm.description ?? (content.match(/^#\s+(.+)$/m)?.[1] ?? name),
+        files: { "command.md": content.replace(/^---\n[\s\S]*?\n---\n?/, "") },
+      });
+    }
+  }
+  return modules;
+}
+
+/** 克隆指定分支；只有真实分支错误才允许回退默认分支，取消必须原样中止。 */
+export async function cloneSkillSource(input: {
+  repoUrl: string;
+  branch: string;
+  destination: string;
+  signal?: AbortSignal;
+  execFile?: GitExecFile;
+}): Promise<void> {
+  const run = input.execFile ?? execFileP;
+  try {
+    await run(
+      "git",
+      ["clone", "--depth", "1", "--branch", input.branch, input.repoUrl, input.destination],
+      { timeout: 120_000, signal: input.signal },
+    );
+  } catch (error) {
+    // Abort 只表示本次同步已取消，不能把取消误判成分支不存在而切到默认分支。
+    if (input.signal?.aborted) throw error;
+    await run(
+      "git",
+      ["clone", "--depth", "1", input.repoUrl, input.destination],
+      { timeout: 120_000, signal: input.signal },
+    );
+  }
+}
+
+
+/** Suggest a replacement module id when an old selector no longer exists in catalog (#664). */
+export function suggestMigratedModuleId(
+  oldId: string,
+  newIds: ReadonlySet<string>,
+): string | null {
+  if (newIds.has(oldId)) return oldId;
+
+  // Wrapped → bare: `foo/skills/foo` or `foo/skills/bar` → `foo` when bare plugin dir exists.
+  const skillsMatch = oldId.match(/^(.*)\/skills\/([^/]+)$/);
+  if (skillsMatch) {
+    const parent = skillsMatch[1]!;
+    if (newIds.has(parent)) return parent;
+  }
+
+  // Unique basename match (e.g. stale `…/skills/wb-authz` → `whitebox/authz/skills/wb-authz`).
+  const leaf = oldId.includes("/") ? oldId.slice(oldId.lastIndexOf("/") + 1) : oldId;
+  if (!leaf) return null;
+  const matches = [...newIds].filter((id) => {
+    const base = id.includes("/") ? id.slice(id.lastIndexOf("/") + 1) : id;
+    return base === leaf;
+  });
+  if (matches.length === 1) return matches[0]!;
+  return null;
+}
+
+export interface ModuleSelectorRewrite {
+  selectors: string[];
+  migrated: Array<{ from: string; to: string }>;
+  removed: string[];
+  changed: boolean;
+}
+
+/**
+ * Rewrite RoleConfig.modules_json selectors for one skill source after catalog resync.
+ * Only module-kind selectors are migrated/removed; plugin:/source:* left intact.
+ */
+export function rewriteModuleSelectorsForCatalog(
+  selectors: string[],
+  sourceId: string,
+  newIds: ReadonlySet<string>,
+): ModuleSelectorRewrite {
+  const normalizedSource = sourceId.toLowerCase();
+  const migrated: Array<{ from: string; to: string }> = [];
+  const removed: string[] = [];
+  const out: string[] = [];
+  const seenCanonical = new Set<string>();
+
+  const pushUnique = (raw: string, canonical: string) => {
+    if (seenCanonical.has(canonical)) return;
+    seenCanonical.add(canonical);
+    out.push(raw);
+  };
+
+  for (const raw of selectors) {
+    let parsed: ParsedModuleSelector;
+    try {
+      parsed = parseModuleSelector(raw);
+    } catch {
+      pushUnique(raw, raw);
+      continue;
+    }
+    if (parsed.source_id !== normalizedSource || parsed.kind !== "module" || !parsed.module_id) {
+      pushUnique(raw, parsed.canonical);
+      continue;
+    }
+    if (newIds.has(parsed.module_id)) {
+      pushUnique(raw, parsed.canonical);
+      continue;
+    }
+    const nextId = suggestMigratedModuleId(parsed.module_id, newIds);
+    if (nextId) {
+      const nextRaw = `${parsed.source_id}:${nextId}`;
+      const nextCanonical = `${parsed.source_id}:${nextId}`;
+      migrated.push({ from: raw, to: nextRaw });
+      pushUnique(nextRaw, nextCanonical);
+    } else {
+      removed.push(raw);
+    }
+  }
+
+  const changed = migrated.length > 0 || removed.length > 0
+    || out.length !== selectors.length
+    || out.some((value, index) => value !== selectors[index]);
+  return { selectors: out, migrated, removed, changed };
+}
+
+export interface SkillSourceSelectorCleanupSummary {
+  role_configs_updated: number;
+  migrated: Array<{ role_config_id: string; from: string; to: string }>;
+  removed: Array<{ role_config_id: string; selector: string }>;
+}
+
+/** Persist RoleConfig selector migrations/removals after a successful catalog write (#664). */
+export async function healRoleConfigSelectorsAfterSync(input: {
+  sourceId: string;
+  newCatalogIds: ReadonlySet<string>;
+  db?: typeof sql;
+  recordAudit?: (entry: {
+    action: string;
+    resourceType: string;
+    resourceId: string;
+    projectId?: string | null;
+    after: unknown;
+  }) => Promise<void>;
+}): Promise<SkillSourceSelectorCleanupSummary> {
+  const db = input.db ?? sql;
+  const sourceId = input.sourceId.toLowerCase();
+  const rows = await db`
+    SELECT id, project_id, modules_json FROM role_configs
+    WHERE modules_json IS NOT NULL
+      AND jsonb_typeof(modules_json) = 'array'
+      AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements_text(modules_json) AS sel(value)
+        WHERE lower(split_part(sel.value, ':', 1)) = ${sourceId}
+      )` as Array<{ id: string; project_id: string | null; modules_json: unknown }>;
+
+  const summary: SkillSourceSelectorCleanupSummary = {
+    role_configs_updated: 0,
+    migrated: [],
+    removed: [],
+  };
+
+  for (const row of rows) {
+    const current = Array.isArray(row.modules_json)
+      ? row.modules_json.filter((value): value is string => typeof value === "string")
+      : [];
+    const rewritten = rewriteModuleSelectorsForCatalog(current, sourceId, input.newCatalogIds);
+    if (!rewritten.changed) continue;
+
+    await db`
+      UPDATE role_configs
+      SET modules_json = ${db.json(rewritten.selectors as never)}, updated_at = now()
+      WHERE id = ${row.id}`;
+
+    summary.role_configs_updated += 1;
+    for (const item of rewritten.migrated) {
+      summary.migrated.push({ role_config_id: String(row.id), from: item.from, to: item.to });
+    }
+    for (const selector of rewritten.removed) {
+      summary.removed.push({ role_config_id: String(row.id), selector });
+    }
+
+    if (input.recordAudit) {
+      await input.recordAudit({
+        action: "skill_source.resync_selector_cleanup",
+        resourceType: "role_config",
+        resourceId: String(row.id),
+        projectId: row.project_id,
+        after: {
+          source_id: sourceId,
+          migrated: rewritten.migrated,
+          removed: rewritten.removed,
+          modules_json: rewritten.selectors,
+        },
+      });
+    }
+  }
+
+  return summary;
+}
+
+export interface SkillSourceSyncResult {
+  modules: number;
+  changed: boolean;
+  previous_commit_sha: string | null;
+  last_commit_sha: string | null;
+  previous_content_hash: string | null;
+  last_content_hash: string | null;
+  synced_at: string;
+  /** Present after catalog write: RoleConfig selector migrate/remove vs new catalog (#664). */
+  selector_cleanup: SkillSourceSelectorCleanupSummary;
+}
+
+/** 目录是否真的变了：只比 commit sha / 内容哈希，synced_at 刷新不算更新。 */
+export function skillSourceCatalogChanged(input: {
+  previousCommitSha?: string | null;
+  previousContentHash?: string | null;
+  lastCommitSha?: string | null;
+  lastContentHash?: string | null;
+}): boolean {
+  return (input.previousCommitSha ?? "") !== (input.lastCommitSha ?? "")
+    || (input.previousContentHash ?? "") !== (input.lastContentHash ?? "");
+}
+
+/** 同步一个模块源：浅克隆 → 扫描 → catalog + commit sha + 内容哈希落库。 */
+export async function syncSkillSource(
+  sourceId: string,
+  syncedBy?: string | null,
+  signal?: AbortSignal,
+): Promise<SkillSourceSyncResult> {
+  if (signal?.aborted) throw abortReason(signal, `skill source ${sourceId} sync`);
+  const [src] = await sql`SELECT * FROM skill_sources WHERE id = ${sourceId}`;
+  if (!src) throw new Error(`skill source ${sourceId} 不存在`);
+  if ((src.trust_status as string) === "disabled") throw new Error("模块源已禁用，不能同步");
+  const previousCommitSha = typeof src.last_commit_sha === "string" && src.last_commit_sha.trim()
+    ? src.last_commit_sha.trim()
+    : null;
+  const previousContentHash = typeof src.last_content_hash === "string" && src.last_content_hash.trim()
+    ? src.last_content_hash.trim()
+    : null;
+
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "deepsonar-src-"));
+  try {
+    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
+    await cloneSkillSource({
+      repoUrl: src.repo_url as string,
+      branch: src.branch as string,
+      destination: tmp,
+      signal,
+      execFile: execFileP,
+    });
+    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
+    const { stdout: commitSha } = await execFileP(
+      "git",
+      ["-C", tmp, "rev-parse", "HEAD"],
+      { timeout: 15_000, signal },
+    );
+    const catalog = scanSkillSourceRepo(tmp);
+    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
+    const lastCommitSha = commitSha.trim() || null;
+    const lastContentHash = contentHashOf(catalog);
+    const catalogSnapshotHash = await persistSkillSourceManifest(sql as never, {
+      sourceId, commitSha: lastCommitSha, catalog,
+    });
+    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
+    const previousCatalog = Array.isArray(src.catalog_json)
+      ? (src.catalog_json as unknown[]).filter(isCatalogModule)
+      : [];
+    const previousIds = new Set(previousCatalog.map((module) => module.id));
+    const newIds = new Set(catalog.map((module) => module.id));
+    // Diff retained for audit/observability; healing keys off absences in newIds.
+    const removedCatalogIds = [...previousIds].filter((id) => !newIds.has(id));
+    const addedCatalogIds = [...newIds].filter((id) => !previousIds.has(id));
+
+    const [updated] = await sql`
+      UPDATE skill_sources SET
+        catalog_json = ${sql.json(catalog as never)},
+        synced_at = now(),
+        last_commit_sha = ${lastCommitSha},
+        last_content_hash = ${lastContentHash},
+        catalog_snapshot_hash = ${catalogSnapshotHash},
+        synced_by = ${syncedBy ?? null}
+      WHERE id = ${sourceId}
+      RETURNING synced_at`;
+
+    const selectorCleanup = await healRoleConfigSelectorsAfterSync({
+      sourceId,
+      newCatalogIds: newIds,
+      db: sql,
+      recordAudit: async (entry) => {
+        await recordSystemAudit({
+          ...entry,
+          actorId: syncedBy ?? "skill-source-sync",
+        });
+      },
+    });
+    if (removedCatalogIds.length > 0 || addedCatalogIds.length > 0 || selectorCleanup.role_configs_updated > 0) {
+      await recordSystemAudit({
+        action: "skill_source.catalog_diff",
+        resourceType: "skill_source",
+        resourceId: sourceId,
+        actorId: syncedBy ?? "skill-source-sync",
+        after: {
+          added_module_ids: addedCatalogIds,
+          removed_module_ids: removedCatalogIds,
+          selector_cleanup: selectorCleanup,
+        },
+      });
+    }
+
+    return {
+      modules: catalog.length,
+      changed: skillSourceCatalogChanged({
+        previousCommitSha,
+        previousContentHash,
+        lastCommitSha,
+        lastContentHash,
+      }),
+      previous_commit_sha: previousCommitSha,
+      last_commit_sha: lastCommitSha,
+      previous_content_hash: previousContentHash,
+      last_content_hash: lastContentHash,
+      synced_at: updated?.synced_at instanceof Date
+        ? updated.synced_at.toISOString()
+        : String(updated?.synced_at ?? new Date().toISOString()),
+      selector_cleanup: selectorCleanup,
+    };
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/** 模块来源的版本证据（随 Job 快照冻结，§5.1：Job 历史只读快照不受后续同步覆盖） */
+export interface SkillRevisionRef {
+  source_id: string;
+  commit_sha: string | null;
+  content_hash: string | null;
+}
+
+/**
+ * Platform-level trust inventory: every skill_source with enabled=true &&
+ * trust_status='trusted', as `<uuid>:source:*` selectors (stable order).
+ * This is a discovery/catalog helper only; it is never an implicit Job grant.
+ */
+export async function listTrustedEnabledModuleSelectors(
+  db: typeof sql = sql,
+): Promise<string[]> {
+  const rows = await db`
+    SELECT id FROM skill_sources
+    WHERE enabled = true AND trust_status = 'trusted'
+    ORDER BY created_at ASC, id ASC`;
+  return rows.map((row) => `${String(row.id).toLowerCase()}:source:*`);
+}
+
+/** Runtime Agent pull catalog: only platform-trusted and enabled sources are visible.
+ * RoleConfig/project selectors are a legacy snapshot path; runtime pulls use this
+ * catalog through the Job-scoped operation allowlist and content hash check. */
+export async function loadTrustedEnabledSkillSourceCatalogs(
+  db: typeof sql = sql,
+): Promise<SkillSourceCatalogView[]> {
+  const rows = await db`
+    SELECT id, last_commit_sha, catalog_json
+    FROM skill_sources
+    WHERE enabled = true AND trust_status = 'trusted'
+    ORDER BY created_at ASC, id ASC` as Array<{
+      id: string;
+      last_commit_sha: string | null;
+      catalog_json: unknown;
+    }>;
+  return rows.map((row) => ({
+    id: String(row.id),
+    last_commit_sha: row.last_commit_sha,
+    catalog: Array.isArray(row.catalog_json) ? row.catalog_json.filter(isCatalogModule) : [],
+  }));
+}
+
+/**
+ * Resolve the effective module selector list for snapshot assembly:
+ * - non-empty RoleConfig.modules_json → explicit selectors（调用方仍过项目 Skill 源 allowlist）
+ * - empty / unset → `[]`：业务 Skill 不预注入。Agent 通过 Job-scoped
+ *   list_available_skills / search_skills → pull_skill 自主拉取（#691/#699 口径）。
+ */
+export async function resolveEffectiveModuleSelectors(
+  modules: string[] | null | undefined,
+): Promise<string[]> {
+  return Array.isArray(modules) ? modules : [];
+}
+
+/**
+ * 展开 RoleConfig 的模块选择器（历史 module、plugin、source 三种语法）
+ * → 沙箱 embedded skills / commands，与 RoleConfig 手写 JSON 合并去重（按 name）
+ * 非 trusted 或已禁用来源的模块一律跳过（§5.1：quarantined 未经审批不得下发）
+ */
+export async function expandModules(
+  modules: string[],
+  db: typeof sql = sql,
+  overrides?: ModuleExpansionOverrides,
+): Promise<{
+  skills: Record<string, unknown>[];
+  commands: Record<string, unknown>[];
+  missing: string[];
+  missing_modules: MissingModule[];
+  revisions: SkillRevisionRef[];
+  resolved_modules: ExpandedModuleSnapshot[];
+  content_hash: string;
+}> {
+  const skills: Record<string, unknown>[] = [];
+  const commands: Record<string, unknown>[] = [];
+  const missing_modules: MissingModule[] = [];
+  const revisions: SkillRevisionRef[] = [];
+  const selectedModules: SelectedModule[] = [];
+  if (modules.length === 0) {
+    return {
+      skills,
+      commands,
+      missing: [],
+      missing_modules,
+      revisions,
+      resolved_modules: [],
+      content_hash: contentHashOfSelected([]),
+    };
+  }
+
+  // Parse before touching the database: malformed selectors must be an explicit
+  // RoleConfig/Job error, never a silently ignored module.
+  const parsed = validateModuleSelectors(modules, "RoleConfig.modules")
+    .map((selector) => parseModuleSelector(selector));
+  const bySource = new Map<string, ParsedModuleSelector[]>();
+  for (const selector of parsed) {
+    const list = bySource.get(selector.source_id) ?? [];
+    list.push(selector);
+    bySource.set(selector.source_id, list);
+  }
+
+  for (const [sourceId, selectors] of bySource) {
+    const [src] = await db`
+      SELECT catalog_json, trust_status, enabled, last_commit_sha, last_content_hash
+      FROM skill_sources WHERE id = ${sourceId}`;
+    if (!src) {
+      for (const selector of selectors) missing_modules.push(missingForSelector(selector, "source-not-found"));
+      continue;
+    }
+    if ((src.trust_status as string) !== "trusted" || !src.enabled) {
+      // 未信任/已禁用来源：整组拒绝下发
+      for (const selector of selectors) missing_modules.push(missingForSelector(selector, "source-not-trusted"));
+      continue;
+    }
+    revisions.push({
+      source_id: sourceId,
+      commit_sha: (src.last_commit_sha as string) ?? null,
+      content_hash: (src.last_content_hash as string) ?? null,
+    });
+    const catalog = Array.isArray(src.catalog_json)
+      ? src.catalog_json.filter(isCatalogModule)
+      : [];
+    if (catalog.length === 0) {
+      for (const selector of selectors) missing_modules.push(missingForSelector(selector, "catalog-empty"));
+      continue;
+    }
+    const expanded = expandCatalogSelectorsRaw(sourceId, catalog, selectors);
+    missing_modules.push(...expanded.missing_modules);
+    for (const selected of expanded.modules) {
+      selectedModules.push(selected);
+    }
+  }
+  // Apply the deterministic collision policy across all selected sources, not
+  // just within each catalog. Skill/command names use separate namespaces.
+  const resolved = resolveModuleNameConflicts(selectedModules);
+  missing_modules.push(...resolved.missing_modules);
+  const manualFiltered = filterManualOverrides(resolved.modules, overrides);
+  missing_modules.push(...manualFiltered.missing_modules);
+  for (const selected of manualFiltered.modules) {
+    const mod = selected.module;
+    if (mod.kind === "skill") {
+      skills.push({ source: "embedded", name: mod.name, files: mod.files });
+    } else {
+      commands.push({ name: mod.name, description: mod.description, template: mod.files["command.md"] ?? "" });
+    }
+  }
+  const missing = missing_modules.map(missingModuleText);
+  return {
+    skills,
+    commands,
+    missing,
+    missing_modules,
+    revisions,
+    resolved_modules: manualFiltered.modules.map(({ source_id, module }) => ({
+      source_id,
+      module_id: module.id,
+      kind: module.kind,
+      plugin: module.plugin,
+      name: module.name,
+      description: module.description,
+      content_hash: contentHashOf([module]),
+    })),
+    content_hash: contentHashOfSelected(manualFiltered.modules),
+  };
+}
+
+export const SKILL_SOURCE_BOOT_SYNC_TIMEOUT_MS = 20_000;
+
+export async function runWithTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  label: string,
+  parentSignal?: AbortSignal,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let removeParentAbort: (() => void) | undefined;
+  const controller = new AbortController();
+  const timeoutError = new Error(`${label} 在 ${timeoutMs}ms 后超时`);
+  if (parentSignal?.aborted) {
+    controller.abort(parentSignal.reason);
+    throw abortReason(parentSignal, label);
+  }
+  try {
+    let abortError: Error | undefined;
+    const abort = (error: Error, reason: unknown = error) => {
+      if (!abortError) abortError = error;
+      if (!controller.signal.aborted) controller.abort(reason);
+    };
+    if (parentSignal) {
+      const onAbort = () => abort(abortReason(parentSignal, label), parentSignal.reason);
+      removeParentAbort = () => parentSignal.removeEventListener("abort", onAbort);
+      parentSignal.addEventListener("abort", onAbort, { once: true });
+      if (parentSignal.aborted) onAbort();
+    }
+    const operationPromise = Promise.resolve().then(() => operation(controller.signal));
+    timer = setTimeout(() => abort(timeoutError), timeoutMs);
+    try {
+      const result = await operationPromise;
+      if (abortError) throw abortError;
+      return result;
+    } catch (error) {
+      if (abortError) throw abortError;
+      throw error;
+    }
+  } finally {
+    if (timer) clearTimeout(timer);
+    removeParentAbort?.();
+  }
+}
+
+export async function syncTrustedSkillSourcesOnce(deps: {
+  listSources: () => Promise<Array<{ id: string; name: string }>>;
+  sync: (id: string, signal: AbortSignal) => Promise<{ modules: number }>;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const sources = await deps.listSources();
+  if (deps.signal?.aborted) throw abortReason(deps.signal, "skill-source boot sync");
+  if (sources.length === 0) {
+    console.log("[boot] 无已信任模块源，跳过启动同步");
+    return;
+  }
+  const failures: Array<{ source: string; error: unknown }> = [];
+  for (const src of sources) {
+    if (deps.signal?.aborted) throw abortReason(deps.signal, "skill-source boot sync");
+    try {
+      const result = await runWithTimeout(
+        (signal) => deps.sync(src.id, signal),
+        deps.timeoutMs,
+        `skill-source ${src.name} boot sync`,
+        deps.signal,
+      );
+      console.log(`[boot] 模块源 ${src.name} 同步完成：${result.modules} 个模块`);
+    } catch (error) {
+      if (deps.signal?.aborted) throw error;
+      console.warn(
+        `[boot] 模块源 ${src.name} 同步失败（不阻塞启动）:`,
+        error instanceof Error ? error.message : error,
+      );
+      failures.push({ source: src.name, error });
+    }
+  }
+  if (failures.length > 0) {
+    const detail = failures
+      .map(({ source, error }) => `${source}: ${error instanceof Error ? error.message : String(error)}`)
+      .join("; ");
+    throw new AggregateError(failures.map(({ error }) => error), `模块源启动同步失败: ${detail}`);
+  }
+}
+
+/**
+ * 启动同步不阻塞 listen。GitHub 不可达时有界超时并后台重试。
+ */
+export function startSkillSourceBootSync(deps: {
+  enabled?: boolean;
+  listSources?: () => Promise<Array<{ id: string; name: string }>>;
+  sync?: (id: string, signal: AbortSignal) => Promise<{ modules: number }>;
+  timeoutMs?: number;
+  retryDelaysMs?: readonly number[];
+  sleep?: (ms: number) => Promise<void>;
+} = {}): () => void {
+  const enabled = deps.enabled ?? config.skillSources.bootSync;
+  if (!enabled) {
+    console.log("[boot] 跳过模块源启动同步（DEEPSONAR_SKILL_SOURCE_BOOT_SYNC=false）");
+    return () => {};
+  }
+  const timeoutMs = deps.timeoutMs ?? config.skillSources.bootSyncTimeoutSec * 1000;
+  const delays = deps.retryDelaysMs ?? [5_000, 15_000, 30_000];
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  }));
+  const listSources = deps.listSources ?? (async () => {
+    const rows = await sql`
+      SELECT id, name FROM skill_sources
+      WHERE enabled = true AND trust_status = 'trusted'
+      ORDER BY created_at ASC`;
+    return rows.map((row) => ({ id: String(row.id), name: String(row.name) }));
+  });
+  const sync = deps.sync ?? ((id: string, signal: AbortSignal) => syncSkillSource(id, "boot", signal));
+  let stopped = false;
+  let currentController: AbortController | undefined;
+  void (async () => {
+    let attempt = 0;
+    while (!stopped) {
+      attempt += 1;
+      const controller = new AbortController();
+      currentController = controller;
+      try {
+        await syncTrustedSkillSourcesOnce({ listSources, sync, timeoutMs, signal: controller.signal });
+        return;
+      } catch (error) {
+        if (stopped || controller.signal.aborted) return;
+        const delay = delays[Math.min(attempt - 1, delays.length - 1)] ?? 30_000;
+        console.warn(
+          `[boot] 模块源启动同步失败（attempt ${attempt}，${delay}ms 后后台重试）:`,
+          error instanceof Error ? error.message : error,
+        );
+        await sleep(delay);
+      } finally {
+        if (currentController === controller) currentController = undefined;
+      }
+    }
+  })();
+  return () => {
+    stopped = true;
+    currentController?.abort(new Error("模块源启动同步已停止"));
+  };
+}

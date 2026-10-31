@@ -1,0 +1,51 @@
+# Out-of-cluster OpenSandbox Kubernetes server (#162 Phase 3).
+# In-cluster production uses config.k8s.toml (kubeconfig_path unset).
+# This overlay talks to an existing cluster; it does not replace project/Job auth.
+# Do not stop the Phase 2 Docker OpenSandbox server (port 8080).
+
+[server]
+host = "0.0.0.0"
+port = 18084
+max_sandbox_timeout_seconds = 86400
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "kubernetes"
+execd_image = "docker.io/opensandbox/execd@sha256:e11fdd6fa641329a1fe5298e71c8dd2afca742674fe48bc855b2ff6715512829"
+
+[secure_runtime]
+type = "kata"
+k8s_runtime_class = "kata-qemu"
+
+[kubernetes]
+kubeconfig_path = "/etc/opensandbox/kubeconfig"
+namespace = "deepsonar-opensandbox"
+workload_provider = "batchsandbox"
+image_pull_policy = "IfNotPresent"
+batchsandbox_template_file = "/etc/opensandbox/batchsandbox-template.yaml"
+informer_enabled = true
+informer_resync_seconds = 300
+informer_watch_timeout_seconds = 60
+snapshot_create_timeout_seconds = 900
+
+[ingress]
+mode = "direct"
+
+[egress]
+image = "docker.io/opensandbox/egress@sha256:56429c89b7175c2a24af62ca93a99776f03ea67a0beb74d63c8ddb34ff16fd97"
+mode = "dns"
+disable_ipv6 = true
+readiness_timeout_seconds = 30.0
+
+[storage]
+allowed_host_paths = []
+volume_default_size = "1Gi"
+
+[store]
+type = "sqlite"
+path = "/var/lib/opensandbox/opensandbox.db"
+
+[renew_intent]
+enabled = false

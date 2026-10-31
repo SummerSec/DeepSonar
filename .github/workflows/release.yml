@@ -1,0 +1,3613 @@
+name: release
+
+# v* tag 发布调度器、前端、准入服务和官方运行时镜像；也支持手动触发。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "匹配当前正式 tag 的版本号；留空使用当前 tag"
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: "当前正式 tag 或其固定 SHA；必须从该 tag 触发 workflow"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-runtime-images-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  DOCKERHUB_IMAGE: docker.io/sumsec/deepsonar
+
+# Slice B release evidence: record-runtime-image-digest.mjs writes canonical
+# `registry_records` only after inspecting each available channel.  The
+# DOCKERHUB_CONFIGURED/ACR_CONFIGURED flags and *_UNAVAILABLE_REASON values
+# make skipped optional channels explicit; an available-channel publish
+# failure sets CHANNEL_PUBLISH_FAILED and aborts catalog generation.
+
+jobs:
+  base-image:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      owner: ${{ steps.release.outputs.owner }}
+      # 下游 job 统一 checkout 已验证正式 tag 的固定 commit sha
+      checkout_ref: ${{ steps.release.outputs.checkout_ref }}
+      # base 镜像 digest（openharmony 指纹与 BASE_IMAGE 钉死用）
+      digest: ${{ steps.image.outputs.digest }}
+      previous_version: ${{ steps.changelog.outputs.previous_version }}
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - name: Reject non-stable-tag publisher before checkout or builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == 'SummerSec/DeepSonar' ]]
+          [[ "$GITHUB_REF" =~ ^refs/tags/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$GITHUB_WORKFLOW_REF" == "SummerSec/DeepSonar/.github/workflows/release.yml@${GITHUB_REF}" ]]
+      - uses: actions/checkout@v4
+        with:
+          # 拉全量 tags 验证正式 tag 与触发 commit 一致。
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ github.sha }}
+      - id: release
+        name: Bind stable tag, source commit and publisher identity
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: node agent-harness/platform-signature-publication.mjs identity
+      - id: changelog
+        name: 校验 tag 与 CHANGELOG
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          CHECKOUT_REF: ${{ steps.release.outputs.checkout_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          TAG_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_tag="v${VERSION}"
+          checkout_commit="$(git rev-parse "${CHECKOUT_REF}^{commit}")"
+          tag_commit="$(git rev-parse -q --verify "refs/tags/${release_tag}^{commit}" || true)"
+          if [[ -z "$tag_commit" ]]; then
+            echo "目标 release tag 不存在：${release_tag}" >&2
+            exit 1
+          fi
+          if [[ "$tag_commit" != "$checkout_commit" ]]; then
+            echo "release tag ${release_tag} 不指向 checkout ref ${CHECKOUT_REF}" >&2
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" == "push" && "$TAG_NAME" != "$release_tag" ]]; then
+            echo "触发 tag ${TAG_NAME} 与版本 ${release_tag} 不匹配" >&2
+            exit 1
+          fi
+          previous_tag="$(git tag -l 'v[0-9]*' --sort=-v:refname | while IFS= read -r candidate; do
+            if [[ "$candidate" != "$release_tag" ]]; then
+              printf '%s' "$candidate"
+              break
+            fi
+          done)"
+          if [[ -z "$previous_tag" ]]; then
+            echo "未找到 ${release_tag} 的 previous v* tag" >&2
+            exit 1
+          fi
+          previous_version="${previous_tag#v}"
+          node agent-harness/validate-changelog.mjs \
+            --file CHANGELOG.md \
+            --version "$VERSION" \
+            --previous-version "$previous_version" \
+            --tag "$release_tag" \
+            --output release-notes.md
+          printf 'previous_version=%s\n' "$previous_version" >> "$GITHUB_OUTPUT"
+          echo "CHANGELOG validated for ${release_tag} against ${previous_tag}" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-changelog
+          path: release-notes.md
+          if-no-files-found: error
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR/Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Docker Hub 凭据未配置
+        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
+          labels: |
+            org.opencontainers.image.title=DeepSonar Base
+            org.opencontainers.image.description=Explore、Analyze、Code、Hub、Verify 与系统沙箱使用的 DeepSonar 官方最小运行时。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=DeepSonar Base
+            org.opencontainers.image.description=Explore、Analyze、Code、Hub、Verify 与系统沙箱使用的 DeepSonar 官方最小运行时。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=base-{{version}}
+            type=sha,prefix=base-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-base
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: node agent-harness/image-build-fingerprint.mjs --preset deepsonar-base
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base,push-by-digest=true,name-canonical=true,push=true
+          platforms: linux/amd64,linux/arm64
+          build-args: TOOLSET=base
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          # Registry cache 扛大层；GHA 作补充命中。buildcache 标签仅 CI 用，不进市场清单。
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:buildcache
+            type=gha,scope=base
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base:buildcache,mode=max
+            type=gha,mode=max,scope=base
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: 按 Registry 发布标签
+        id: publish
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          PLATFORMS: linux/amd64,linux/arm64
+        run: |
+          set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: 保存 base manifest digest
+        env:
+          IMAGE_KEY: deepsonar-base
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ steps.release.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+        run: |
+          set -euo pipefail
+          bash agent-harness/write-release-runtime-descriptor.sh release-digests/base.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-base
+          path: release-digests/base.json
+          if-no-files-found: error
+
+  images:
+    needs: base-image
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { name: scheduler, dockerfile: deploy/Dockerfile.scheduler, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "", title: "DeepSonar Scheduler", description: "DeepSonar 调度器与唯一副作用执行服务。" }
+          - { name: web, dockerfile: deploy/Dockerfile.web, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "", title: "DeepSonar Web", description: "DeepSonar Loop Graph 工程平台 Web 控制台。" }
+          - { name: image-admission, dockerfile: deploy/Dockerfile.image-admission, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "", title: "DeepSonar Image Admission", description: "DeepSonar 第三方运行镜像准入与安全扫描 Worker。" }
+          - { name: assets-helper, dockerfile: deploy/Dockerfile.assets-helper, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "", title: "DeepSonar Assets Helper", description: "DeepSonar 共享资产只读卷写入 helper（busybox 根文件系统的官方再发布）。" }
+          - { name: silo, dockerfile: deploy/Dockerfile.silo, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "", title: "DeepSonar Silo", description: "DeepSonar 共享资产 S3 服务（官方再发布的 PGSTY Silo）。" }
+          - { name: audit, dockerfile: deploy/Dockerfile.agent, platforms: "linux/amd64,linux/arm64", dockerhub_tag: "audit", title: "DeepSonar Audit", description: "DeepSonar Audit 的官方审计运行时。" }
+          # kali-minimal 体量大，amd64+arm64 同作业并行导出易 ENOSPC；独立 job 顺序构建
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: 预检锁文件
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR/Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ matrix.dockerhub_tag != '' && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Docker Hub 凭据未配置
+        if: ${{ matrix.dockerhub_tag != '' && (env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '') }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: ${{ matrix.name == 'audit' && 'manifest,index' || 'manifest' }}
+      - id: dockerhub-meta
+        if: ${{ matrix.dockerhub_tag != '' && env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=${{ matrix.dockerhub_tag }}-{{version}}
+            type=sha,prefix=${{ matrix.dockerhub_tag }}-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: node agent-harness/image-build-fingerprint.mjs --preset deepsonar-${{ matrix.name }}
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }},push-by-digest=true,name-canonical=true,push=true
+          platforms: ${{ matrix.platforms }}
+          build-args: ${{ matrix.name == 'audit' && 'TOOLSET=audit' || '' }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache
+            type=gha,scope=${{ matrix.name }}
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache,mode=max
+            type=gha,mode=max,scope=${{ matrix.name }}
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: 按 Registry 发布标签
+        id: publish
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ matrix.name == 'audit' && steps.resolve.outputs.skip == 'true' }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          PLATFORMS: ${{ matrix.platforms }}
+        run: |
+          set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: 保存运行时 manifest digest
+        env:
+          IMAGE_KEY: deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          PLATFORMS: ${{ matrix.platforms }}
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ needs.base-image.outputs.version }}
+          SKIP: ${{ matrix.name == 'audit' && steps.resolve.outputs.skip == 'true' }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}" bash agent-harness/write-release-runtime-descriptor.sh "release-digests/${{ matrix.name }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-${{ matrix.name }}
+          path: release-digests/${{ matrix.name }}.json
+          if-no-files-found: error
+
+  # Chrome Audit/Test 按架构原生构建。Chrome Fuzz arm64 使用固定的 x86_64
+  # Clang 交叉编译，QEMU 只组装目标运行时；arm64 fuzz 冒烟在下方独立原生门禁执行。
+  chrome-image-builds:
+    needs: base-image
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: chrome-audit
+            toolset: chrome-audit
+            config: agent-harness/chrome-audit-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-audit
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            title: DeepSonar Chrome Audit
+            description: Project-opt-in Chrome/C++ static-analysis runtime with partial clone, Semgrep, Clang/LLVM and binutils.
+          - name: chrome-audit
+            toolset: chrome-audit
+            config: agent-harness/chrome-audit-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-audit
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            title: DeepSonar Chrome Audit
+            description: Project-opt-in Chrome/C++ static-analysis runtime with partial clone, Semgrep, Clang/LLVM and binutils.
+          - name: chrome-test
+            toolset: chrome-test
+            config: agent-harness/chrome-test-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-test
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            title: DeepSonar Chrome Test
+            description: Project-opt-in pinned Chromium headless/CDP runtime with a governed no-sandbox wrapper and Playwright path.
+          - name: chrome-test
+            toolset: chrome-test
+            config: agent-harness/chrome-test-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-test
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            title: DeepSonar Chrome Test
+            description: Project-opt-in pinned Chromium headless/CDP runtime with a governed no-sandbox wrapper and Playwright path.
+          - name: chrome-fuzz
+            toolset: chrome-fuzz
+            config: agent-harness/chrome-fuzz-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-fuzz
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            title: DeepSonar Chrome Fuzz
+            description: Project-opt-in V8 fuzz runtime built from pinned source with real d8, compiler-rt, libFuzzer and AFL++.
+          - name: chrome-fuzz
+            toolset: chrome-fuzz
+            config: agent-harness/chrome-fuzz-runtime.json
+            dockerfile: deploy/Dockerfile.agent-chrome-fuzz
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-latest
+            title: DeepSonar Chrome Fuzz
+            description: Project-opt-in V8 fuzz runtime built from pinned source with real d8, compiler-rt, libFuzzer and AFL++.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: Resolve registry namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+        if: ${{ matrix.name == 'chrome-fuzz' && matrix.arch == 'arm64' }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check ACR configuration
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR credentials are incomplete; the release will record ACR as unavailable.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Login Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=${{ matrix.name }}-{{version}}
+            type=sha,prefix=${{ matrix.name }}-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs \
+            --preset "deepsonar-${{ matrix.toolset }}" \
+            --platforms "${{ matrix.platform }}" \
+            --build-arg "BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Record reused Chrome image
+        if: ${{ steps.resolve.outputs.skip == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "${{ matrix.name }} build unchanged: reused immutable src cache; version kept" >> "$GITHUB_STEP_SUMMARY"
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }},push-by-digest=true,name-canonical=true,push=true
+          platforms: ${{ matrix.platform }}
+          build-args: BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache-${{ matrix.arch }}
+            type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache-${{ matrix.arch }},mode=max
+            type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
+      - id: image
+        name: Final digest and pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Smoke native Chrome child from immutable digest
+        if: ${{ matrix.name != 'chrome-fuzz' || matrix.arch != 'arm64' }}
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image_ref="${IMAGE_NAME}@${DIGEST}"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull --platform "${{ matrix.platform }}" "$image_ref"
+          node agent-harness/test-chrome-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}" "${{ matrix.platform }}"
+      - name: Save native Chrome child digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+        run: |
+          set -euo pipefail
+          mkdir -p chrome-arch
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          node -e 'const fs=require("node:fs"); const digest=process.env.DIGEST; const unchanged=process.env.SKIP==="true"; fs.writeFileSync("chrome-arch/${{ matrix.name }}-${{ matrix.arch }}.json", JSON.stringify({image_key:"deepsonar-${{ matrix.name }}",platform:"${{ matrix.platform }}",digest,unchanged})+"\n")'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chrome-arch-${{ matrix.name }}-${{ matrix.arch }}
+          path: chrome-arch/${{ matrix.name }}-${{ matrix.arch }}.json
+          if-no-files-found: error
+
+  # QEMU 可以组装交叉构建的 fuzz 镜像，但不是 ASan 插桩 V8 冒烟的可靠运行环境。
+  # 在原生环境校验不可变子镜像。
+  chrome-fuzz-arm64-smoke:
+    needs: [base-image, chrome-image-builds]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$owner" ]]
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          name: chrome-arch-chrome-fuzz-arm64
+          path: chrome-arch
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 原生执行 Chrome Fuzz 不可变 digest 冒烟
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-chrome-fuzz
+        run: |
+          set -euo pipefail
+          digest="$(jq -r '.digest' chrome-arch/chrome-fuzz-arm64.json)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image_ref="${IMAGE_NAME}@${digest}"
+          docker pull --platform linux/arm64 "$image_ref"
+          node agent-harness/test-chrome-runtime.mjs "$image_ref" chrome-fuzz agent-harness/chrome-fuzz-runtime.json linux/arm64
+
+  # 汇总 Audit/Test 的原生子镜像与 Fuzz 的交叉构建子镜像（其 arm64 已通过上方
+  # 原生冒烟门禁），发布各配置 registry 的 canonical index 并记录 inspect 证据。
+  chrome-images:
+    needs: [base-image, chrome-image-builds, chrome-fuzz-arm64-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: chrome-audit
+            platforms: linux/amd64,linux/arm64
+            title: DeepSonar Chrome Audit
+            description: Project-opt-in Chrome/C++ static-analysis runtime with partial clone, Semgrep, Clang/LLVM and binutils.
+          - name: chrome-test
+            platforms: linux/amd64,linux/arm64
+            title: DeepSonar Chrome Test
+            description: Project-opt-in pinned Chromium headless/CDP runtime with a governed no-sandbox wrapper and Playwright path.
+          - name: chrome-fuzz
+            platforms: linux/amd64,linux/arm64
+            title: DeepSonar Chrome Fuzz
+            description: Project-opt-in V8 fuzz runtime built from pinned source with real d8, compiler-rt, libFuzzer and AFL++.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: Resolve registry namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" && -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: chrome-arch-${{ matrix.name }}-*
+          path: chrome-arch
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check ACR configuration
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR credentials are incomplete; the release will record ACR as unavailable.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Login Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=${{ matrix.name }}-{{version}}
+            type=sha,prefix=${{ matrix.name }}-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: image
+        name: Assemble and publish Chrome multi-arch index
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          amd64_digest="$(jq -r '.digest' "chrome-arch/${{ matrix.name }}-amd64.json")"
+          arm64_digest="$(jq -r '.digest' "chrome-arch/${{ matrix.name }}-arm64.json")"
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          platform_args=(
+            --source "linux/amd64=${IMAGE_NAME}@${amd64_digest}"
+            --source "linux/arm64=${IMAGE_NAME}@${arm64_digest}"
+          )
+          # Resolve before reuse; command substitution preserves inspect failures.
+          selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"
+          mapfile -t source_refs <<< "$selected_sources_text"
+          [[ ${#source_refs[@]} -eq 2 ]]
+          amd64_unchanged="$(jq -r '.unchanged // false' "chrome-arch/${{ matrix.name }}-amd64.json")"
+          arm64_unchanged="$(jq -r '.unchanged // false' "chrome-arch/${{ matrix.name }}-arm64.json")"
+          if [[ "$amd64_unchanged" == "true" && "$arm64_unchanged" == "true" ]]; then
+            if node agent-harness/reuse-catalog-descriptor.mjs \
+              --image-key "deepsonar-${{ matrix.name }}" \
+              "${platform_args[@]}" \
+              --out "release-digests/${{ matrix.name }}.json"; then
+              echo "image build unchanged; tested platform manifests match; version kept" >> "$GITHUB_STEP_SUMMARY"
+              digest="$(jq -r '.digest' "release-digests/${{ matrix.name }}.json")"
+              [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+              printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+              printf 'unchanged=true\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            else
+              reuse_status=$?
+              # Only a proven identity miss may publish; inspect/errors abort.
+              [[ "$reuse_status" -eq 2 ]] || exit "$reuse_status"
+            fi
+            echo "cached children differ from previous catalog; assembling tested platform manifests" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          annotation_args=(
+            --annotation "index:org.opencontainers.image.title=${{ matrix.title }}"
+            --annotation "index:org.opencontainers.image.description=${{ matrix.description }}"
+            --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar"
+            --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md"
+            --annotation "index:org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary"
+          )
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
+                return 1
+              fi
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          tag_args() {
+            local tags="$1"; local -n output=$2; output=()
+            while IFS= read -r tag; do [[ -n "$tag" ]] && output+=(-t "$tag"); done <<< "$tags"
+            [[ ${#output[@]} -gt 0 ]]
+          }
+          tag_args "$GHCR_TAGS" ghcr_tag_args
+          docker buildx imagetools create "${annotation_args[@]}" "${ghcr_tag_args[@]}" "${source_refs[@]}"
+          primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
+          digest="$(docker buildx imagetools inspect "$primary" | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' | head -n1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          clean_source="${IMAGE_NAME}@${digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then
+            tag_args "$ACR_TAGS" acr_tag_args
+            retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "$clean_source"
+          fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
+            tag_args "$DOCKERHUB_TAGS" dockerhub_tag_args
+            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$clean_source"; then
+              echo '::warning::Docker Hub tag publication failed; refusing an unchecked Chrome release record'
+              exit 1
+            fi
+          fi
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Save Chrome manifest digest
+        env:
+          IMAGE_KEY: deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          PLATFORMS: ${{ matrix.platforms }}
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ needs.base-image.outputs.version }}
+          SKIP: ${{ steps.image.outputs.unchanged }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}" bash agent-harness/write-release-runtime-descriptor.sh "release-digests/${{ matrix.name }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-${{ matrix.name }}
+          path: release-digests/${{ matrix.name }}.json
+          if-no-files-found: error
+
+  # ClickHouse Audit/Test/Fuzz 按架构原生构建并冒烟。Fuzz 只装官方
+  # clickhouse-common-static，不从源码编译，因此无需 V8 交叉编译特例。
+  clickhouse-image-builds:
+    needs: base-image
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: clickhouse-audit
+            toolset: clickhouse-audit
+            config: agent-harness/clickhouse-audit-runtime.json
+            dockerfile: deploy/Dockerfile.agent-clickhouse-audit
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            title: DeepSonar ClickHouse Audit
+            description: Project-opt-in ClickHouse/C++ toolchain runtime with git, CMake/Ninja, Clang/LLVM and binutils.
+          - name: clickhouse-audit
+            toolset: clickhouse-audit
+            config: agent-harness/clickhouse-audit-runtime.json
+            dockerfile: deploy/Dockerfile.agent-clickhouse-audit
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            title: DeepSonar ClickHouse Audit
+            description: Project-opt-in ClickHouse/C++ toolchain runtime with git, CMake/Ninja, Clang/LLVM and binutils.
+          - name: clickhouse-test
+            toolset: clickhouse-test
+            config: agent-harness/clickhouse-test-runtime.json
+            dockerfile: deploy/Dockerfile.agent-clickhouse-test
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            title: DeepSonar ClickHouse Test
+            description: Project-opt-in pinned official ClickHouse LTS runtime with clickhouse-local, a governed localhost server wrapper, and HTTP smoke.
+          - name: clickhouse-test
+            toolset: clickhouse-test
+            config: agent-harness/clickhouse-test-runtime.json
+            dockerfile: deploy/Dockerfile.agent-clickhouse-test
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            title: DeepSonar ClickHouse Test
+            description: Project-opt-in pinned official ClickHouse LTS runtime with clickhouse-local, a governed localhost server wrapper, and HTTP smoke.
+          - name: clickhouse-fuzz
+            toolset: clickhouse-fuzz
+            config: agent-harness/clickhouse-fuzz-runtime.json
+            dockerfile: deploy/Dockerfile.agent-clickhouse-fuzz
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+            title: DeepSonar ClickHouse Fuzz
+            description: Project-opt-in official ClickHouse LTS clickhouse-local plus Clang/LLVM sanitizer and AFL++ toolchain.
+          - name: clickhouse-fuzz
+            toolset: clickhouse-fuzz
+            config: agent-harness/clickhouse-fuzz-runtime.json
+            dockerfile: deploy/Dockerfile.agent-clickhouse-fuzz
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            title: DeepSonar ClickHouse Fuzz
+            description: Project-opt-in official ClickHouse LTS clickhouse-local plus Clang/LLVM sanitizer and AFL++ toolchain.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: Resolve registry namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check ACR configuration
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR credentials are incomplete; the release will record ACR as unavailable.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Login Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=${{ matrix.name }}-{{version}}
+            type=sha,prefix=${{ matrix.name }}-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs \
+            --preset "deepsonar-${{ matrix.toolset }}" \
+            --platforms "${{ matrix.platform }}" \
+            --build-arg "BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Record reused ClickHouse image
+        if: ${{ steps.resolve.outputs.skip == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "${{ matrix.name }} build unchanged: reused immutable src cache; version kept" >> "$GITHUB_STEP_SUMMARY"
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }},push-by-digest=true,name-canonical=true,push=true
+          platforms: ${{ matrix.platform }}
+          build-args: BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache-${{ matrix.arch }}
+            type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache-${{ matrix.arch }},mode=max
+            type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
+      - id: image
+        name: Final digest and pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Smoke native ClickHouse child from immutable digest
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image_ref="${IMAGE_NAME}@${DIGEST}"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull --platform "${{ matrix.platform }}" "$image_ref"
+          node agent-harness/test-clickhouse-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}" "${{ matrix.platform }}"
+      - name: Save native ClickHouse child digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+        run: |
+          set -euo pipefail
+          mkdir -p clickhouse-arch
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          node -e 'const fs=require("node:fs"); const digest=process.env.DIGEST; const unchanged=process.env.SKIP==="true"; fs.writeFileSync("clickhouse-arch/${{ matrix.name }}-${{ matrix.arch }}.json", JSON.stringify({image_key:"deepsonar-${{ matrix.name }}",platform:"${{ matrix.platform }}",digest,unchanged})+"\n")'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clickhouse-arch-${{ matrix.name }}-${{ matrix.arch }}
+          path: clickhouse-arch/${{ matrix.name }}-${{ matrix.arch }}.json
+          if-no-files-found: error
+
+  clickhouse-images:
+    needs: [base-image, clickhouse-image-builds]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: clickhouse-audit
+            platforms: linux/amd64,linux/arm64
+            title: DeepSonar ClickHouse Audit
+            description: Project-opt-in ClickHouse/C++ toolchain runtime with git, CMake/Ninja, Clang/LLVM and binutils.
+          - name: clickhouse-test
+            platforms: linux/amd64,linux/arm64
+            title: DeepSonar ClickHouse Test
+            description: Project-opt-in pinned official ClickHouse LTS runtime with clickhouse-local, a governed localhost server wrapper, and HTTP smoke.
+          - name: clickhouse-fuzz
+            platforms: linux/amd64,linux/arm64
+            title: DeepSonar ClickHouse Fuzz
+            description: Project-opt-in official ClickHouse LTS clickhouse-local plus Clang/LLVM sanitizer and AFL++ toolchain.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: Resolve registry namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" && -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: clickhouse-arch-${{ matrix.name }}-*
+          path: clickhouse-arch
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check ACR configuration
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR credentials are incomplete; the release will record ACR as unavailable.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Login Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=${{ matrix.name }}-{{version}}
+            type=sha,prefix=${{ matrix.name }}-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: image
+        name: Assemble and publish ClickHouse multi-arch index
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          amd64_digest="$(jq -r '.digest' "clickhouse-arch/${{ matrix.name }}-amd64.json")"
+          arm64_digest="$(jq -r '.digest' "clickhouse-arch/${{ matrix.name }}-arm64.json")"
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          platform_args=(
+            --source "linux/amd64=${IMAGE_NAME}@${amd64_digest}"
+            --source "linux/arm64=${IMAGE_NAME}@${arm64_digest}"
+          )
+          # Resolve before reuse; command substitution preserves inspect failures.
+          selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"
+          mapfile -t source_refs <<< "$selected_sources_text"
+          [[ ${#source_refs[@]} -eq 2 ]]
+          amd64_unchanged="$(jq -r '.unchanged // false' "clickhouse-arch/${{ matrix.name }}-amd64.json")"
+          arm64_unchanged="$(jq -r '.unchanged // false' "clickhouse-arch/${{ matrix.name }}-arm64.json")"
+          if [[ "$amd64_unchanged" == "true" && "$arm64_unchanged" == "true" ]]; then
+            if node agent-harness/reuse-catalog-descriptor.mjs \
+              --image-key "deepsonar-${{ matrix.name }}" \
+              "${platform_args[@]}" \
+              --out "release-digests/${{ matrix.name }}.json"; then
+              echo "image build unchanged; tested platform manifests match; version kept" >> "$GITHUB_STEP_SUMMARY"
+              digest="$(jq -r '.digest' "release-digests/${{ matrix.name }}.json")"
+              [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+              printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+              printf 'unchanged=true\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            else
+              reuse_status=$?
+              # Only a proven identity miss may publish; inspect/errors abort.
+              [[ "$reuse_status" -eq 2 ]] || exit "$reuse_status"
+            fi
+            echo "cached children differ from previous catalog; assembling tested platform manifests" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          annotation_args=(
+            --annotation "index:org.opencontainers.image.title=${{ matrix.title }}"
+            --annotation "index:org.opencontainers.image.description=${{ matrix.description }}"
+            --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar"
+            --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md"
+            --annotation "index:org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary"
+          )
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
+                return 1
+              fi
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          tag_args() {
+            local tags="$1"; local -n output=$2; output=()
+            while IFS= read -r tag; do [[ -n "$tag" ]] && output+=(-t "$tag"); done <<< "$tags"
+            [[ ${#output[@]} -gt 0 ]]
+          }
+          tag_args "$GHCR_TAGS" ghcr_tag_args
+          docker buildx imagetools create "${annotation_args[@]}" "${ghcr_tag_args[@]}" "${source_refs[@]}"
+          primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
+          digest="$(docker buildx imagetools inspect "$primary" | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' | head -n1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          clean_source="${IMAGE_NAME}@${digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then
+            tag_args "$ACR_TAGS" acr_tag_args
+            retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "$clean_source"
+          fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
+            tag_args "$DOCKERHUB_TAGS" dockerhub_tag_args
+            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$clean_source"; then
+              echo '::warning::Docker Hub tag publication failed; refusing an unchecked ClickHouse release record'
+              exit 1
+            fi
+          fi
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Save ClickHouse manifest digest
+        env:
+          IMAGE_KEY: deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          PLATFORMS: ${{ matrix.platforms }}
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ needs.base-image.outputs.version }}
+          SKIP: ${{ steps.image.outputs.unchanged }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}" bash agent-harness/write-release-runtime-descriptor.sh "release-digests/${{ matrix.name }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-${{ matrix.name }}
+          path: release-digests/${{ matrix.name }}.json
+          if-no-files-found: error
+
+  kali-minimal:
+    needs: base-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+          printf 'image_name=ghcr.io/%s/deepsonar-kali-minimal\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR/Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.release.outputs.image_name }}
+          labels: |
+            org.opencontainers.image.title=DeepSonar Kali Test
+            org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=DeepSonar Kali Test
+            org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=kali-minimal-{{version}}
+            type=sha,prefix=kali-minimal-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-kali-minimal
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: node agent-harness/image-build-fingerprint.mjs --preset deepsonar-kali-minimal
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ steps.release.outputs.image_name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Free disk for Kali multi-arch build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        run: |
+          set -euo pipefail
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /usr/local/share/boost \
+            /usr/share/swift \
+            /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL \
+            /opt/hostedtoolcache/go \
+            /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk \
+            "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          sudo docker system prune -af || true
+          df -h /
+      - id: build-amd64
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        name: Build linux/amd64 (push by digest)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-kali-minimal
+          platforms: linux/amd64
+          outputs: type=image,name=${{ steps.release.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          provenance: false
+          sbom: false
+          cache-from: |
+            type=registry,ref=${{ steps.release.outputs.image_name }}:buildcache-amd64
+            type=gha,scope=kali-minimal-amd64
+          cache-to: |
+            type=registry,ref=${{ steps.release.outputs.image_name }}:buildcache-amd64,mode=max
+            type=gha,mode=max,scope=kali-minimal-amd64
+      - name: Reclaim disk before arm64
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        run: |
+          set -euo pipefail
+          docker builder prune -af || true
+          docker system prune -af || true
+          sudo rm -rf /tmp/* || true
+          df -h /
+      - id: build-arm64
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        name: Build linux/arm64 (push by digest)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-kali-minimal
+          platforms: linux/arm64
+          outputs: type=image,name=${{ steps.release.outputs.image_name }},push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          provenance: false
+          sbom: false
+          cache-from: |
+            type=registry,ref=${{ steps.release.outputs.image_name }}:buildcache-arm64
+            type=gha,scope=kali-minimal-arm64
+          cache-to: |
+            type=registry,ref=${{ steps.release.outputs.image_name }}:buildcache-arm64,mode=max
+            type=gha,mode=max,scope=kali-minimal-arm64
+      - name: Create multi-arch tags
+        id: merge
+        env:
+          IMAGE_NAME: ${{ steps.release.outputs.image_name }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          SOURCE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          AMD64_DIGEST: ${{ steps.build-amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ steps.build-arm64.outputs.digest }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+        run: |
+          set -euo pipefail
+          retry_imagetools_create() {
+            local attempt=1
+            local max_attempts=4
+            local delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then
+                return 0
+              fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_from_source() {
+            local source="$1"
+            annotation_args=(
+              --annotation "index:org.opencontainers.image.title=DeepSonar Kali Test"
+              --annotation "index:org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。"
+              --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar"
+              --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md"
+              --annotation "index:org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary"
+            )
+            if [[ "$ACR_CONFIGURED" == "true" ]]; then
+              acr_tag_args=()
+              while IFS= read -r tag; do
+                [[ -n "$tag" ]] || continue
+                acr_tag_args+=(-t "$tag")
+              done <<< "${ACR_TAGS:-}"
+              [[ ${#acr_tag_args[@]} -gt 0 ]]
+              retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "$source"
+            fi
+            ghcr_tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              ghcr_tag_args+=(-t "$tag")
+            done <<< "$GHCR_TAGS"
+            [[ ${#ghcr_tag_args[@]} -gt 0 ]]
+            docker buildx imagetools create "${annotation_args[@]}" "${ghcr_tag_args[@]}" "$source"
+            primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
+            digest="$(docker buildx imagetools inspect "$primary" \
+              | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
+              | head -n1)"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            immutable_primary="${primary}@${digest}"
+            if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
+              dockerhub_tag_args=()
+              while IFS= read -r tag; do
+                [[ -n "$tag" ]] || continue
+                dockerhub_tag_args+=(-t "$tag")
+              done <<< "$DOCKERHUB_TAGS"
+              [[ ${#dockerhub_tag_args[@]} -gt 0 ]]
+              if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"; then
+                echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+                echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+                exit 1
+              fi
+            fi
+            printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+            {
+              printf 'primary=%s\n' "$primary"
+              printf 'digest=%s\n' "$digest"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
+          if [[ "$SKIP" == "true" ]]; then
+            source_refs=("${IMAGE_NAME}@${SOURCE_DIGEST}")
+          else
+            source_refs=(
+              "${IMAGE_NAME}@${AMD64_DIGEST}"
+              "${IMAGE_NAME}@${ARM64_DIGEST}"
+            )
+          fi
+          annotation_args=(
+            --annotation "index:org.opencontainers.image.title=DeepSonar Kali Test"
+            --annotation "index:org.opencontainers.image.description=DeepSonar Test 默认使用的精简 Kali 多语言工具链；不安装 Kali metapackage 或 GUI。"
+            --annotation "index:org.opencontainers.image.source=https://github.com/SummerSec/DeepSonar"
+            --annotation "index:org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md"
+            --annotation "index:org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary"
+          )
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then
+            acr_tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              acr_tag_args+=(-t "$tag")
+            done <<< "${ACR_TAGS:-}"
+            [[ ${#acr_tag_args[@]} -gt 0 ]]
+            retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"
+          fi
+          ghcr_tag_args=()
+          while IFS= read -r tag; do
+            [[ -n "$tag" ]] || continue
+            ghcr_tag_args+=(-t "$tag")
+          done <<< "$GHCR_TAGS"
+          [[ ${#ghcr_tag_args[@]} -gt 0 ]]
+          docker buildx imagetools create "${annotation_args[@]}" "${ghcr_tag_args[@]}" "${source_refs[@]}"
+          # 取 GHCR 首个标签的 multi-arch index digest
+          primary="$(printf '%s\n' "$GHCR_TAGS" | sed '/^$/d' | head -n1)"
+          # Inspect the GHCR destination before copying to another registry.
+          # The Docker Hub source must be immutable; a mutable tag could move
+          # between the GHCR publish and the cross-registry copy.
+          digest="$(docker buildx imagetools inspect "$primary" \
+            | sed -nE 's/^[[:space:]]*Digest:[[:space:]]*(sha256:[0-9a-f]{64}).*/\1/p' \
+            | head -n1)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          immutable_primary="${primary}@${digest}"
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]]; then
+            dockerhub_tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              dockerhub_tag_args+=(-t "$tag")
+            done <<< "$DOCKERHUB_TAGS"
+            [[ ${#dockerhub_tag_args[@]} -gt 0 ]]
+            if ! retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"; then
+              echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+              echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          fi
+          if [[ "$SKIP" != "true" ]]; then
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          {
+            printf 'primary=%s\n' "$primary"
+            printf 'digest=%s\n' "$digest"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: 保存运行时 manifest digest
+        env:
+          IMAGE_KEY: deepsonar-kali-minimal
+          DIGEST: ${{ steps.merge.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-kali-minimal
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ needs.base-image.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}" bash agent-harness/write-release-runtime-descriptor.sh release-digests/kali-minimal.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-kali-minimal
+          path: release-digests/kali-minimal.json
+          if-no-files-found: error
+
+  openharmony-test:
+    needs: base-image
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Docker Hub 凭据未配置
+        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
+          labels: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Test
+            org.opencontainers.image.description=OpenHarmony 官方源码同步、构建验证与钉死 hdc 设备协议；不包含全量源码或特定开发板固件。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Test
+            org.opencontainers.image.description=OpenHarmony 官方源码同步、构建验证与钉死 hdc 设备协议；不包含全量源码或特定开发板固件。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-test
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=openharmony-test-{{version}}
+            type=sha,prefix=openharmony-test-sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs --preset deepsonar-openharmony-test \
+            --build-arg "BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-openharmony
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test,push-by-digest=true,name-canonical=true,push=true
+          platforms: linux/amd64,linux/arm64
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test:buildcache
+            type=gha,scope=openharmony-test
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test:buildcache,mode=max
+            type=gha,mode=max,scope=openharmony-test
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: 按 Registry 发布标签
+        id: publish
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          PLATFORMS: linux/amd64,linux/arm64
+        run: |
+          set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: 保存 OpenHarmony manifest digest
+        env:
+          IMAGE_KEY: deepsonar-openharmony-test
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ steps.release.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+        run: |
+          set -euo pipefail
+          bash agent-harness/write-release-runtime-descriptor.sh release-digests/openharmony-test.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-openharmony-test
+          path: release-digests/openharmony-test.json
+          if-no-files-found: error
+
+  openharmony-audit:
+    needs: base-image
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Docker Hub 凭据未配置
+        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
+          labels: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Audit
+            org.opencontainers.image.description=OpenHarmony 高危静态审计环境：Clang/clang-tidy/cppcheck/sparse 与 ASan/UBSan 工具链；不含全量源码或固件。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Audit
+            org.opencontainers.image.description=OpenHarmony 高危静态审计环境：Clang/clang-tidy/cppcheck/sparse 与 ASan/UBSan 工具链；不含全量源码或固件。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-audit
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=openharmony-audit-{{version}}
+            type=sha,prefix=openharmony-audit-sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs --preset deepsonar-openharmony-audit \
+            --build-arg "BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-openharmony-audit
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit,push-by-digest=true,name-canonical=true,push=true
+          platforms: linux/amd64,linux/arm64
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit:buildcache
+            type=gha,scope=openharmony-audit
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit:buildcache,mode=max
+            type=gha,mode=max,scope=openharmony-audit
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: 按 Registry 发布标签
+        id: publish
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          PLATFORMS: linux/amd64,linux/arm64
+        run: |
+          set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: 保存 OpenHarmony Audit manifest digest
+        env:
+          IMAGE_KEY: deepsonar-openharmony-audit
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ steps.release.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+        run: |
+          set -euo pipefail
+          bash agent-harness/write-release-runtime-descriptor.sh release-digests/openharmony-audit.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-openharmony-audit
+          path: release-digests/openharmony-audit.json
+          if-no-files-found: error
+
+  openharmony-fuzz:
+    needs: base-image
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Docker Hub 凭据未配置
+        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
+          labels: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Fuzz
+            org.opencontainers.image.description=OpenHarmony 动态验证与 Fuzz 环境：libFuzzer、AFL++、ASan/UBSan；不含全量源码或固件。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Fuzz
+            org.opencontainers.image.description=OpenHarmony 动态验证与 Fuzz 环境：libFuzzer、AFL++、ASan/UBSan；不含全量源码或固件。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-openharmony-fuzz
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=openharmony-fuzz-{{version}}
+            type=sha,prefix=openharmony-fuzz-sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs --preset deepsonar-openharmony-fuzz \
+            --build-arg "BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-openharmony-fuzz
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz,push-by-digest=true,name-canonical=true,push=true
+          platforms: linux/amd64,linux/arm64
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz:buildcache
+            type=gha,scope=openharmony-fuzz
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz:buildcache,mode=max
+            type=gha,mode=max,scope=openharmony-fuzz
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: 按 Registry 发布标签
+        id: publish
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          PLATFORMS: linux/amd64,linux/arm64
+        run: |
+          set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: 保存 OpenHarmony Fuzz manifest digest
+        env:
+          IMAGE_KEY: deepsonar-openharmony-fuzz
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ steps.release.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+        run: |
+          set -euo pipefail
+          bash agent-harness/write-release-runtime-descriptor.sh release-digests/openharmony-fuzz.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-openharmony-fuzz
+          path: release-digests/openharmony-fuzz.json
+          if-no-files-found: error
+
+  mobile:
+    needs: base-image
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: 检查 ACR 配置
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR 凭据未完整配置，将只发布 GHCR。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: 登录 Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Docker Hub 凭据未配置
+        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+        run: |
+          set -euo pipefail
+          echo 'Docker Hub 凭据未配置，将跳过 Docker Hub。' >> "$GITHUB_STEP_SUMMARY"
+      - name: 登录阿里云 ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
+          labels: |
+            org.opencontainers.image.title=DeepSonar Mobile
+            org.opencontainers.image.description=移动端审计运行时：Android JADX/apktool/bundletool/apkeep/androguard/ApkCheckPack/ADB/Frida、.so 用 binutils/radare2/LIEF、iOS libimobiledevice、OpenHarmony HAP/hdc；不预装 MobSF/GUI/Ghidra/IDA/DevEco/MCP。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=DeepSonar Mobile
+            org.opencontainers.image.description=移动端审计运行时：Android JADX/apktool/bundletool/apkeep/androguard/ApkCheckPack/ADB/Frida、.so 用 binutils/radare2/LIEF、iOS libimobiledevice、OpenHarmony HAP/hdc；不预装 MobSF/GUI/Ghidra/IDA/DevEco/MCP。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-mobile
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=mobile-{{version}}
+            type=sha,prefix=mobile-sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs --preset deepsonar-mobile \
+            --build-arg "BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-mobile
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile,push-by-digest=true,name-canonical=true,push=true
+          platforms: linux/amd64,linux/arm64
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile:buildcache
+            type=gha,scope=mobile
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile:buildcache,mode=max
+            type=gha,mode=max,scope=mobile
+      - id: image
+        name: Final digest + pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: 按 Registry 发布标签
+        id: publish
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
+          SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          PLATFORMS: linux/amd64,linux/arm64
+        run: |
+          set -euo pipefail
+          if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi
+          retry_imagetools_create() {
+            local attempt=1 max_attempts=4 delay_seconds=5
+            while true; do
+              if GODEBUG=http2client=0 timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create "$@"; then return 0; fi
+              if (( attempt >= max_attempts )); then
+                echo "imagetools create 在 ${max_attempts} 次尝试后仍失败。" >&2
+                echo 'CHANNEL_PUBLISH_FAILED=true' >> "$GITHUB_ENV"
+                return 1
+              fi
+              echo "imagetools create 第 ${attempt} 次失败，${delay_seconds} 秒后重试。" >&2
+              sleep "$delay_seconds"
+              attempt=$((attempt + 1))
+              delay_seconds=$((delay_seconds * 2))
+            done
+          }
+          publish_tags() {
+            local use_retry="$1" tags="$2"
+            shift 2
+            local sources=("$@")
+            local tag_args=()
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] || continue
+              tag_args+=(-t "$tag")
+            done <<< "$tags"
+            [[ ${#tag_args[@]} -gt 0 ]]
+            if [[ "$use_retry" == "true" ]]; then
+              retry_imagetools_create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            else
+              docker buildx imagetools create --prefer-index=false "${tag_args[@]}" "${sources[@]}"
+            fi
+          }
+          source_ref="${IMAGE_NAME}@${SOURCE_DIGEST}"
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$source_ref" "$PLATFORMS")"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -gt 0 ]]
+          publish_tags false "$GHCR_TAGS" "${selected_sources[@]}"
+          canonical_tag="$(printf '%s\n' "$GHCR_TAGS" | sed -n '1p')"
+          clean_digest="$(docker buildx imagetools inspect "$canonical_tag" --format '{{.Manifest.Digest}}')"
+          [[ "$clean_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$clean_digest" >> "$GITHUB_OUTPUT"
+          clean_source="${IMAGE_NAME}@${clean_digest}"
+          if [[ "$ACR_CONFIGURED" == "true" ]]; then publish_tags true "$ACR_TAGS" "$clean_source"; fi
+          if [[ -n "${DOCKERHUB_TAGS:-}" ]] && ! publish_tags true "$DOCKERHUB_TAGS" "$clean_source"; then
+            echo "::warning::Docker Hub 标签发布失败；记录步骤将把本次 release 标记为失败。"
+            echo "Docker Hub 标签复制重试耗尽；record-runtime-image-digest 将拒绝生成未验证清单。" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: 保存 Mobile manifest digest
+        env:
+          IMAGE_KEY: deepsonar-mobile
+          DIGEST: ${{ steps.publish.outputs.digest }}
+          PLATFORMS: linux/amd64,linux/arm64
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-mobile
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ steps.release.outputs.version }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+        run: |
+          set -euo pipefail
+          bash agent-harness/write-release-runtime-descriptor.sh release-digests/mobile.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-mobile
+          path: release-digests/mobile.json
+          if-no-files-found: error
+
+  # Reverse native execution is required on both architectures before any
+  # version/index/catalog publication; cached children run identical gates.
+  reverse-image-builds:
+    needs: base-image
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: reverse
+            toolset: reverse
+            dockerfile: deploy/Dockerfile.agent-reverse
+            platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+            title: DeepSonar Reverse
+            description: Project-opt-in pinned REA CLI and Ghidra deep native analysis runtime.
+          - name: reverse
+            toolset: reverse
+            dockerfile: deploy/Dockerfile.agent-reverse
+            platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            title: DeepSonar Reverse
+            description: Project-opt-in pinned REA CLI and Ghidra deep native analysis runtime.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: deepsonar-ci-pass
+          POSTGRES_DB: deepsonar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U deepsonar -d deepsonar"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install Job integration dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @deepsonar/shared-types build
+          pnpm --filter @deepsonar/runtime-manual-contract build
+          pnpm --filter @deepsonar/runtime-sandbox build
+      - id: release
+        name: Resolve registry namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check ACR configuration
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR credentials are incomplete; the release will record ACR as unavailable.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Login Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern=${{ matrix.name }}-{{version}}
+            type=sha,prefix=${{ matrix.name }}-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=sha-
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs \
+            --preset "deepsonar-${{ matrix.toolset }}" \
+            --platforms "${{ matrix.platform }}" \
+            --build-arg "BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - name: Record reused Reverse image
+        if: ${{ steps.resolve.outputs.skip == 'true' }}
+        run: |
+          set -euo pipefail
+          echo "${{ matrix.name }} build unchanged: reused immutable src cache; version kept" >> "$GITHUB_STEP_SUMMARY"
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }},push-by-digest=true,name-canonical=true,push=true
+          platforms: ${{ matrix.platform }}
+          build-args: BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache-${{ matrix.arch }}
+            type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}:buildcache-${{ matrix.arch }},mode=max
+            type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
+      - id: image
+        name: Final digest and pin src
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ "$SKIP" == "true" ]]; then
+            digest="$REUSE_DIGEST"
+          else
+            digest="$BUILD_DIGEST"
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Install native sample compilers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc gcc-mingw-w64-x86-64
+      - name: Smoke native Reverse child from immutable digest
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          image_ref="${IMAGE_NAME}@${DIGEST}"
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker pull --platform "${{ matrix.platform }}" "$image_ref"
+          node agent-harness/test-runtime-manuals-runtime.mjs "$image_ref" --image-key deepsonar-reverse --platform "${{ matrix.platform }}"
+          node agent-harness/reverse-native-smoke.mjs --image "$image_ref" --arch "${{ matrix.arch }}" --evidence-dir "reverse-evidence/${{ matrix.arch }}"
+      - name: Start pinned OpenSandbox for real Job acceptance
+        env:
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/docker-compose.opensandbox.yml up -d
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18081/health; then exit 0; fi
+            sleep 2
+          done
+          echo "Pinned OpenSandbox server did not become healthy" >&2
+          exit 1
+      - name: Real dispatched REA Job, Evidence, Fact and independent Verify
+        env:
+          TEST_DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/postgres
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+          OPEN_SANDBOX_DOMAIN: 127.0.0.1:18081
+          REA_JOB_REPORT_DIR: ${{ github.workspace }}/reverse-job-evidence/${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          export REA_JOB_IMAGE="${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-reverse@${{ steps.image.outputs.digest }}"
+          pnpm ci:integration:rea-job
+      - name: Pin verified native Reverse src cache
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-reverse
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: bash agent-harness/resolve-image-src-cache.sh pin
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: reverse-native-evidence-${{ matrix.arch }}
+          path: reverse-evidence/${{ matrix.arch }}
+          if-no-files-found: error
+      - name: Save native Reverse child digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+          SKIP: ${{ steps.resolve.outputs.skip }}
+        run: |
+          set -euo pipefail
+          mkdir -p reverse-arch
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          node -e 'const fs=require("node:fs"); const digest=process.env.DIGEST; const unchanged=process.env.SKIP==="true"; fs.writeFileSync("reverse-arch/${{ matrix.name }}-${{ matrix.arch }}.json", JSON.stringify({image_key:"deepsonar-${{ matrix.name }}",platform:"${{ matrix.platform }}",digest,unchanged})+"\n")'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reverse-arch-${{ matrix.name }}-${{ matrix.arch }}
+          path: reverse-arch/${{ matrix.name }}-${{ matrix.arch }}.json
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: reverse-job-evidence-${{ matrix.arch }}
+          path: reverse-job-evidence/${{ matrix.arch }}
+          if-no-files-found: error
+      - name: Clean real Job acceptance services
+        if: ${{ always() }}
+        env:
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+        run: docker compose -f deploy/docker-compose.opensandbox.yml down -v
+
+  reverse-images:
+    needs: [base-image, reverse-image-builds]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: reverse
+            platforms: linux/amd64,linux/arm64
+            title: DeepSonar Reverse
+            description: Project-opt-in pinned REA CLI and Ghidra deep native analysis runtime.
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: Resolve registry namespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" && -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reverse-arch-${{ matrix.name }}-*
+          path: reverse-arch
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check ACR configuration
+        id: acr-config
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "$ALIYUN_REGISTRY" && -n "$ALIYUN_REGISTRY_NAMESPACE" && -n "$ALIYUN_REGISTRY_USERNAME" && -n "$ALIYUN_REGISTRY_PASSWORD" ]]; then
+            echo 'configured=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'configured=false' >> "$GITHUB_OUTPUT"
+            echo 'ACR credentials are incomplete; the release will record ACR as unavailable.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Login Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=raw,value=${{ needs.base-image.outputs.version }}
+            type=sha,prefix=sha-
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: dockerhub-meta
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=reverse-${{ needs.base-image.outputs.version }}
+            type=sha,prefix=${{ matrix.name }}-sha-
+      - id: acr-meta
+        if: ${{ steps.acr-config.outputs.configured == 'true' }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.ALIYUN_REGISTRY }}/${{ env.ALIYUN_REGISTRY_NAMESPACE }}/deepsonar-${{ matrix.name }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.base-image.outputs.version }}
+            type=sha,prefix=sha-
+      - id: image
+        name: Assemble and publish Reverse multi-arch index
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          GHCR_TAGS: ${{ steps.meta.outputs.tags }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          amd64_digest="$(jq -r '.digest' "reverse-arch/${{ matrix.name }}-amd64.json")"
+          arm64_digest="$(jq -r '.digest' "reverse-arch/${{ matrix.name }}-arm64.json")"
+          [[ "$amd64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$arm64_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          platform_args=(
+            --source "linux/amd64=${IMAGE_NAME}@${amd64_digest}"
+            --source "linux/arm64=${IMAGE_NAME}@${arm64_digest}"
+          )
+          # Resolve before reuse; command substitution preserves inspect failures.
+          selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"
+          mapfile -t source_refs <<< "$selected_sources_text"
+          [[ ${#source_refs[@]} -eq 2 ]]
+          amd64_unchanged="$(jq -r '.unchanged // false' "reverse-arch/${{ matrix.name }}-amd64.json")"
+          arm64_unchanged="$(jq -r '.unchanged // false' "reverse-arch/${{ matrix.name }}-arm64.json")"
+          if [[ "$amd64_unchanged" == "true" && "$arm64_unchanged" == "true" ]]; then
+            if node agent-harness/reuse-catalog-descriptor.mjs \
+              --image-key "deepsonar-${{ matrix.name }}" \
+              "${platform_args[@]}" \
+              --out "release-digests/${{ matrix.name }}.json"; then
+              echo "image build unchanged; tested platform manifests match; version kept" >> "$GITHUB_STEP_SUMMARY"
+              digest="$(jq -r '.digest' "release-digests/${{ matrix.name }}.json")"
+              [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+              printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+              printf 'unchanged=true\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            else
+              reuse_status=$?
+              # Only a proven identity miss may publish; inspect/errors abort.
+              [[ "$reuse_status" -eq 2 ]] || exit "$reuse_status"
+            fi
+            echo "cached children differ from previous catalog; assembling tested platform manifests" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          node agent-harness/publish-reverse-runtime.mjs "${platform_args[@]}"
+      - name: Save Reverse manifest digest
+        env:
+          IMAGE_KEY: deepsonar-${{ matrix.name }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+          PLATFORMS: ${{ matrix.platforms }}
+          GHCR_REF: ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
+          ACR_CONFIGURED: ${{ steps.acr-config.outputs.configured }}
+          ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
+          DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
+          DOCKERHUB_CONFIGURED: ${{ steps.dockerhub-meta.outputs.tags != '' }}
+          DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
+          ACR_UNAVAILABLE_REASON: credentials_missing
+          VERSION: ${{ needs.base-image.outputs.version }}
+          SKIP: ${{ steps.image.outputs.unchanged }}
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}" bash agent-harness/write-release-runtime-descriptor.sh "release-digests/${{ matrix.name }}.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-digest-${{ matrix.name }}
+          path: release-digests/${{ matrix.name }}.json
+          if-no-files-found: error
+
+  prepare-release:
+    outputs:
+      freeze_sha256: ${{ steps.freeze.outputs.freeze_sha256 }}
+    needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images, clickhouse-images, mobile, reverse-images]
+    runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+      ALIYUN_REGISTRY: ${{ secrets.ALIYUN_REGISTRY }}
+      ALIYUN_REGISTRY_NAMESPACE: ${{ secrets.ALIYUN_REGISTRY_NAMESPACE }}
+      ALIYUN_REGISTRY_USERNAME: ${{ secrets.ALIYUN_REGISTRY_USERNAME }}
+      ALIYUN_REGISTRY_PASSWORD: ${{ secrets.ALIYUN_REGISTRY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 需要 fetch 默认分支以便把发布清单回写进仓库（bundled 回退用）
+          fetch-depth: 0
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-image-digest-*
+          path: release-digests
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: chrome-arch-*
+          path: chrome-arch
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: clickhouse-arch-*
+          path: clickhouse-arch
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reverse-arch-*
+          path: reverse-arch
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reverse-*-evidence-*
+          path: reverse-release-evidence
+      - name: Bind Reverse measurements to this release's native-tested children
+        run: |
+          set -euo pipefail
+          node agent-harness/verify-reverse-release-evidence.mjs \
+            "$(git rev-parse HEAD)" "ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-reverse" \
+            reverse-arch reverse-release-evidence reverse-release-evidence/summary.json
+      - uses: docker/setup-buildx-action@v3
+      - name: Login GHCR for final payload verification
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Login Docker Hub for final payload verification
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
+      - name: Login Aliyun ACR for final payload verification
+        if: ${{ env.ALIYUN_REGISTRY != '' && env.ALIYUN_REGISTRY_NAMESPACE != '' && env.ALIYUN_REGISTRY_USERNAME != '' && env.ALIYUN_REGISTRY_PASSWORD != '' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ALIYUN_REGISTRY }}
+          username: ${{ env.ALIYUN_REGISTRY_USERNAME }}
+          password: ${{ env.ALIYUN_REGISTRY_PASSWORD }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-changelog
+          path: release-changelog
+      - name: 验收最终运行镜像离线手册
+        shell: bash
+        run: |
+          set -euo pipefail
+          for descriptor in release-digests/*.json; do
+            read -r image_key image_ref < <(node -e '
+              const fs = require("node:fs");
+              const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              if (!value.image_key || !value.ghcr_ref) process.exit(2);
+              process.stdout.write(`${value.image_key} ${value.ghcr_ref}\n`);
+            ' "$descriptor")
+            case "$image_key" in
+              deepsonar-base|deepsonar-audit|deepsonar-kali-minimal|deepsonar-chrome-test|deepsonar-chrome-audit|deepsonar-chrome-fuzz|deepsonar-clickhouse-test|deepsonar-clickhouse-audit|deepsonar-clickhouse-fuzz|deepsonar-openharmony-test|deepsonar-openharmony-audit|deepsonar-openharmony-fuzz|deepsonar-mobile|deepsonar-reverse) ;;
+              *) continue ;;
+            esac
+            docker pull --platform linux/amd64 "$image_ref"
+            node agent-harness/test-runtime-manuals-runtime.mjs "$image_ref" --image-key "$image_key" --platform linux/amd64
+            runtime_metadata="$(docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+              --platform linux/amd64 "$image_ref" node -e '
+                const fs = require("node:fs");
+                const manifest = JSON.parse(fs.readFileSync("/opt/deepsonar/tool-manifest.json", "utf8"));
+                process.stdout.write(JSON.stringify({ manual: manifest.manual, tools_manifest_sha256: manifest.sha256 }));
+              ')"
+            DESCRIPTOR="$descriptor" RUNTIME_METADATA="$runtime_metadata" EXPECTED_IMAGE_KEY="$image_key" node -e '
+              const fs = require("node:fs");
+              const descriptor = JSON.parse(fs.readFileSync(process.env.DESCRIPTOR, "utf8"));
+              const metadata = JSON.parse(process.env.RUNTIME_METADATA);
+              if (descriptor.image_key !== process.env.EXPECTED_IMAGE_KEY || !metadata.manual || !metadata.tools_manifest_sha256) process.exit(2);
+              descriptor.manual = metadata.manual;
+              descriptor.tools_manifest_sha256 = metadata.tools_manifest_sha256;
+              fs.writeFileSync(process.env.DESCRIPTOR, `${JSON.stringify(descriptor, null, 2)}\n`);
+            '
+            docker image rm "$image_ref" >/dev/null 2>&1 || true
+          done
+      - name: 生成 runtime 镜像清单
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+          OWNER: ${{ steps.release.outputs.owner }}
+        run: |
+          set -euo pipefail
+          export PLATFORM_RELEASE_COMMIT="$(git rev-parse HEAD)"
+          node agent-harness/generate-runtime-image-registry.mjs release-digests deploy/runtime-image-registry.json
+      - name: 校验发布清单
+        run: |
+          set -euo pipefail
+          node agent-harness/generate-runtime-image-registry.mjs --check deploy/runtime-image-registry.json
+      - name: Verify final catalog matches native-smoke platform manifests
+        env:
+          REPOSITORY_PREFIX: ghcr.io/${{ steps.release.outputs.owner }}
+        run: |
+          set -euo pipefail
+          node agent-harness/check-runtime-catalog-platforms.mjs \
+            --catalog deploy/runtime-image-registry.json \
+            --repository-prefix "$REPOSITORY_PREFIX" \
+            --artifacts chrome-arch --artifacts clickhouse-arch --artifacts reverse-arch
+      - name: Verify platform release payloads
+        run: node agent-harness/check-platform-release.mjs --check deploy/runtime-image-registry.json
+      - name: 准备 v2 Release asset
+        run: |
+          set -euo pipefail
+          cp deploy/runtime-image-registry.json runtime-image-registry-v2.json
+          node agent-harness/generate-runtime-image-registry.mjs --check runtime-image-registry-v2.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-image-registry
+          path: |
+            deploy/runtime-image-registry.json
+            runtime-image-registry-v2.json
+          if-no-files-found: error
+      - name: Preserve Reverse acceptance evidence in release assets
+        env:
+          VERSION: ${{ needs.base-image.outputs.version }}
+        run: tar -czf "deepsonar-reverse-evidence-${VERSION}.tar.gz" -C reverse-release-evidence .
+      - name: 打包 Management Skill
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.base-image.outputs.version }}"
+          tar -czf "deepsonar-management-skill-${VERSION}.tar.gz" -C skills deepsonar-management
+      - name: 生成 Release 正文
+        env:
+          VERSION: ${{ needs.base-image.outputs.version }}
+          PREVIOUS_VERSION: ${{ needs.base-image.outputs.previous_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -s release-changelog/release-notes.md ]]
+          {
+            cat <<EOF
+          > **License notice:** This release contains proprietary DeepSonar source code. Prior written authorization from SummerSec is required before use. Earlier versions lawfully released under MIT keep their original terms. Third-party components retain their own licenses. See [LICENSE](https://github.com/SummerSec/DeepSonar/blob/v${VERSION}/LICENSE) and [THIRD_PARTY_NOTICES.md](https://github.com/SummerSec/DeepSonar/blob/v${VERSION}/THIRD_PARTY_NOTICES.md).
+
+          EOF
+            cat release-changelog/release-notes.md
+            printf '\n[Full Changelog](https://github.com/SummerSec/DeepSonar/compare/v%s...v%s)\n' "$PREVIOUS_VERSION" "$VERSION"
+          } > release-body.md
+      - id: freeze
+        name: Freeze exact validated release payload
+        run: node agent-harness/platform-signature-publication.mjs freeze .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-release-payload
+          path: |
+            platform-release-freeze.json
+            deploy/runtime-image-registry.json
+            runtime-image-registry-v2.json
+            release-body.md
+            deepsonar-reverse-evidence-*.tar.gz
+            deepsonar-management-skill-*.tar.gz
+          if-no-files-found: error
+
+  platform-signatures:
+    needs: [base-image, prepare-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      receipt_sha256: ${{ steps.sign.outputs.receipt_sha256 }}
+    env:
+      FREEZE_SHA256: ${{ needs.prepare-release.outputs.freeze_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: platform-release-payload
+          path: frozen-release
+      - name: Prepare private registry credentials directory
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/platform-signatures-docker"
+          printf 'DOCKER_CONFIG=%s\n' "$RUNNER_TEMP/platform-signatures-docker" >> "$GITHUB_ENV"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: sign
+        name: Sign frozen GHCR indexes and verify positive and tampered metadata
+        run: node agent-harness/platform-signature-publication.mjs sign frozen-release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-signature-evidence
+          path: platform-signature-evidence.json
+          if-no-files-found: error
+
+  release:
+    needs: [base-image, prepare-release, platform-signatures]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      FREEZE_SHA256: ${{ needs.prepare-release.outputs.freeze_sha256 }}
+      RECEIPT_SHA256: ${{ needs.platform-signatures.outputs.receipt_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: platform-release-payload
+          path: frozen-release
+      - uses: actions/download-artifact@v4
+        with:
+          name: platform-signature-evidence
+          path: signature-evidence
+      - name: Require signed frozen payload before publication or bundled writeback
+        run: node agent-harness/platform-signature-publication.mjs gate frozen-release
+      - name: Refuse to overwrite an existing public Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              await github.rest.repos.getReleaseByTag({...context.repo, tag: context.ref.replace('refs/tags/', '')});
+              core.setFailed('Release already exists; refusing overwrite');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+      - name: 回写 bundled 清单到默认分支
+        env:
+          VERSION: ${{ needs.base-image.outputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          registry_file="deploy/runtime-image-registry.json"
+          env_file="deploy/.env.example"
+          cp frozen-release/deploy/runtime-image-registry.json "$registry_file"
+          [[ -f "$registry_file" ]]
+          [[ -f "$env_file" ]]
+          [[ "$VERSION" =~ ^[0-9][^[:space:]]*$ ]]
+          node agent-harness/generate-runtime-image-registry.mjs --check "$registry_file"
+          # Preserve generated files before checking out the default branch.
+          tmp_registry="$(mktemp)"
+          tmp_env="$(mktemp)"
+          cp "$registry_file" "$tmp_registry"
+          cp "$env_file" "$tmp_env"
+          node agent-harness/check-platform-release.mjs --write-env "$tmp_registry" "$tmp_env"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$DEFAULT_BRANCH"
+          git show "origin/${DEFAULT_BRANCH}:$env_file" > "$tmp_env"
+          node agent-harness/check-platform-release.mjs --write-env "$tmp_registry" "$tmp_env"
+          git checkout -f -B "bot/sync-runtime-registry-v${VERSION}" "origin/${DEFAULT_BRANCH}"
+          cp "$tmp_registry" "$registry_file"
+          cp "$tmp_env" "$env_file"
+          rm -f "$tmp_registry" "$tmp_env"
+          git add -- "$registry_file" "$env_file"
+          if git diff --cached --quiet -- "$registry_file" "$env_file"; then
+            echo "默认分支上的 $registry_file 和 $env_file 已是本次发布内容，跳过回写"
+            exit 0
+          fi
+          git commit -m "chore(release): sync runtime-image-registry.json and platform digests for v${VERSION}"
+          # 只更新清单文件；推到默认分支不会再次触发本 workflow（仅 tag 触发）
+          git push origin "HEAD:${DEFAULT_BRANCH}"
+          echo "已将 $registry_file 和 $env_file 回写到 origin/${DEFAULT_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
+      - name: Create Release and frozen assets without updating an existing Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.base-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+            --notes-file frozen-release/release-body.md \
+            "frozen-release/deepsonar-reverse-evidence-${VERSION}.tar.gz" \
+            "frozen-release/deepsonar-management-skill-${VERSION}.tar.gz" \
+            frozen-release/deploy/runtime-image-registry.json \
+            frozen-release/runtime-image-registry-v2.json \
+            signature-evidence/platform-signature-evidence.json

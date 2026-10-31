@@ -1,0 +1,1001 @@
+import type { ContextIdentity } from "./context-contract.js";
+import { buildDshProfilePatch, DSH_BIN, DSH_HOME, DSH_PROFILE, DSH_PROFILE_MANIFEST, DSH_VERSION } from "./dsh-profile.js";
+import { buildDshPiAiRuntimeProjection, type DshPiAiRuntimeProjection } from "./dsh-pi-ai.js";
+import { DSH_PI_COMPAT_SYSTEM_PROMPT, formatDshTurnError, projectDshSystemPrompt } from "./dsh-request-frame.js";
+import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
+import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
+
+export type AgentCliId = "claude-code" | "dsh" | "pi";
+
+export type AgentCliOutputMode = "jsonl" | "plain-final";
+
+/** How an adapter keeps a long-running non-interactive session bounded. */
+export type AgentCliContextCompactionPolicy = "automatic" | "bounded-session-summary" | "unsupported";
+
+export interface AgentCliCapabilities {
+  streamEvents: boolean;
+  /** 平台向该运行时提供 Job 级 HTTP 控制 API；请求由 Agent 自己的 HTTP 工具发起。 */
+  platformControlApi: boolean;
+  incrementalMessages: boolean;
+  completionGate: boolean;
+  sessionCapture: boolean;
+  contextCompaction: boolean;
+  contextCompactionPolicy: AgentCliContextCompactionPolicy;
+  reasoningEffort: boolean;
+  interactiveTerminal: boolean;
+}
+
+export interface DshProviderRuntimeConfig {
+  provider: string;
+  model: string;
+  config: { providers: Record<string, Record<string, unknown>> };
+  /** Optional already-projected first system message. Adapter still enforces the pi-compatible prefix. */
+  systemPrompt?: string;
+}
+
+/** Scheduler-owned Gateway/token inputs; adapter owns vendor YAML and profile rewrite. */
+export interface AgentRuntimeProjectionInput {
+  settingsConfig: unknown;
+  credentialProvider: string;
+  gatewayBaseUrl: string;
+  model?: string | null;
+  contextWindowTokens?: number | null;
+  reasoning?: string | null;
+  platformSystemPrompt?: string | null;
+}
+
+/** Split `provider/model` on the first slash. OpenRouter-style ids stay in `modelId`. */
+export function splitPiModelRef(model: string): { provider?: string; modelId: string } {
+  const trimmed = model.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0) return { modelId: trimmed };
+  return { provider: trimmed.slice(0, slash), modelId: trimmed.slice(slash + 1) };
+}
+
+/**
+ * Pi `--model` looks up the catalog `id` (e.g. `grok-4.6`), not a provider
+ * route (`deepsonar/grok-4.6`). Leftover namespaced snapshot values must be
+ * mapped here so already-frozen Jobs can start.
+ */
+export function resolvePiCliModelId(model: string | undefined | null): string | undefined {
+  if (!model?.trim()) return undefined;
+  return splitPiModelRef(model).modelId || undefined;
+}
+
+/**
+ * Pi rejects a bare catalog id when it exists on multiple built-in
+ * providers. Pass `--provider <route> --model <id>` (not `--model provider/id`).
+ */
+export function resolvePiCliLaunchFlags(
+  model?: string | null,
+  modelProvider?: string | null,
+): { cliModel?: string; provider?: string } {
+  const provider = modelProvider?.trim() || undefined;
+  if (provider) {
+    const cliModel = model?.trim() || undefined;
+    return { ...(cliModel ? { cliModel } : {}), provider };
+  }
+  const split = model?.trim() ? splitPiModelRef(model) : { modelId: "" };
+  const cliModel = split.modelId || undefined;
+  return { ...(cliModel ? { cliModel } : {}), ...(split.provider ? { provider: split.provider } : {}) };
+}
+
+export interface AdapterStartContext {
+  host: RuntimeHost;
+  env: Record<string, string>;
+  cwd: string;
+  model?: string;
+  /** Frozen Pi models.json route; required when the catalog id is multi-provider. */
+  modelProvider?: string;
+  reasoning?: string;
+  /** Frozen llm-pi-ai route/profile selected from the Provider account. */
+  dshProvider?: DshProviderRuntimeConfig;
+  /** DSH preset selection; ignored by other adapters. */
+  dshTaskMode?: "standard" | "ptc";
+  input: string;
+  mcpConfigPath: string;
+  systemPromptPath?: string;
+  /** Scheduler 冻结的上下文身份；适配器不得自行生成或替换。 */
+  contextIdentity?: ContextIdentity;
+  /** 仅允许加载已由 Scheduler 冻结的 Pi Extension 绝对路径。 */
+  piExtensions?: readonly string[];
+}
+
+export interface AdapterResumeContext extends AdapterStartContext {
+  sessionId: string;
+  /** Pi 必须使用 get_state 返回的精确 Session 文件恢复。 */
+  sessionFile?: string;
+}
+
+export interface AdapterRuntimeState {
+  sessionId?: string;
+  sessionFile?: string;
+  finalText?: string;
+  /** Text/reasoning already observed from provider delta events. */
+  streamedText?: string;
+  streamedReasoning?: string;
+  /** 当前 Job 的上下文身份，仅用于验证明确的压缩事件。 */
+  contextIdentity?: ContextIdentity;
+  model?: string;
+  modelProvider?: string;
+  cwd?: string;
+  dshRequestSerial?: number;
+  dshInitializeRequestId?: string;
+  dshTurnError?: string;
+  dshInitialInput?: string;
+  dshChildSessionIds?: Set<string>;
+  dshChildParents?: Map<string, string>;
+  dshActiveChildren?: Set<string>;
+  failed?: boolean;
+  errorDetail?: string;
+}
+
+export interface RuntimeAdapter {
+  readonly id: AgentCliId;
+  readonly version: string;
+  readonly outputMode: AgentCliOutputMode;
+  readonly capabilities: Readonly<AgentCliCapabilities>;
+  readonly compatibleImageKeys: readonly string[];
+  start(context: AdapterStartContext): Promise<RuntimeProcess>;
+  /** Whether the public protocol can reopen persisted state after process exit. */
+  persistentSessionResume: boolean;
+  resume(context: AdapterResumeContext): Promise<RuntimeProcess>;
+  materialize?(context: AdapterStartContext): Promise<void>;
+  /** Vendor dialect → frozen runtime config. Only DSH implements this today. */
+  projectRuntime?(input: AgentRuntimeProjectionInput): DshPiAiRuntimeProjection;
+  encodeInput(content: string, state?: AdapterRuntimeState): string;
+  /** 多消息模式运行时可选的显式 RPC 排队命令。 */
+  encodeSteer?(content: string, state?: AdapterRuntimeState): string;
+  encodeFollowUp?(content: string, state?: AdapterRuntimeState): string;
+  encodeShutdown?(state?: AdapterRuntimeState): string;
+  /** 可选的会话状态查询命令。 */
+  encodeGetState?(): string;
+  decodeOutput(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[];
+}
+
+export const REQUIRED_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities)[] = [
+  "streamEvents",
+  "completionGate",
+  "sessionCapture",
+  "contextCompaction",
+  "interactiveTerminal",
+];
+
+export const CONTROL_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities)[] = [
+  "platformControlApi",
+];
+
+/**
+ * 单个 Pi RPC 事件的字节上限（#765）。
+ *
+ * 1MB 的旧上限会让 `cat large.js` / `curl` 整页 / `rg` 全仓这类大输出把 Job 直接判失败
+ * （`PI_RPC_MESSAGE_TOO_LARGE`），而这正是审计最需要证据的维度。默认放宽到 8MB，
+ * 并允许 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1MB–64MB 之间覆盖。
+ */
+export const PI_RPC_MAX_EVENT_BYTES_DEFAULT = 8 * 1024 * 1024;
+export const PI_RPC_MAX_EVENT_BYTES_LIMIT = 64 * 1024 * 1024;
+
+export function piRpcMaxEventBytes(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.DEEPSONAR_PI_RPC_MAX_EVENT_BYTES?.trim();
+  if (!raw) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  if (!/^\d+$/.test(raw)) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  if (value < 1024 * 1024 || value > PI_RPC_MAX_EVENT_BYTES_LIMIT) return PI_RPC_MAX_EVENT_BYTES_DEFAULT;
+  return value;
+}
+
+export { PiJsonlFramer } from "./pi-jsonl-framer.js";
+
+const PI_RPC_EVENT_TYPES = new Set([
+  "response",
+  "context.compacted",
+  "context.compaction",
+  "agent_start",
+  "agent_end",
+  "agent_settled",
+  "turn_start",
+  "turn_end",
+  "message_start",
+  "message_update",
+  "message_end",
+  "bash_execution_update",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+  "compaction_start",
+  "compaction_end",
+  "auto_retry_start",
+  "auto_retry_end",
+  "summarization_retry_scheduled",
+  "summarization_retry_attempt_start",
+  "summarization_retry_finished",
+  "queue_update",
+  "error",
+  "extension_error",
+  "before_agent_start",
+  "session_start",
+  "session_switch",
+  "session_fork",
+  "branch_summary_generation_start",
+  "branch_summary_generation_end",
+  "model_select",
+  "model_change",
+  "steering_delta",
+  "follow_up",
+]);
+
+export function parsePiJsonlRecord(line: string, maxBytes = piRpcMaxEventBytes()): Record<string, unknown> {
+  if (Buffer.byteLength(line, "utf8") > maxBytes) throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
+  if (!line) throw new Error("PI_RPC_EMPTY_FRAME");
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    throw new Error("PI_RPC_INVALID_JSON");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("PI_RPC_RECORD_NOT_OBJECT");
+  const record = value as Record<string, unknown>;
+  if (typeof record.type !== "string" || !PI_RPC_EVENT_TYPES.has(record.type)) {
+    throw new Error("PI_RPC_UNEXPECTED_EVENT");
+  }
+  return record;
+}
+
+const ALL_IMAGE_KEYS = Object.freeze([
+  "deepsonar-base",
+  "deepsonar-audit",
+  "deepsonar-kali-minimal",
+  "deepsonar-openharmony-test",
+  "deepsonar-openharmony-audit",
+  "deepsonar-openharmony-fuzz",
+  "deepsonar-chrome-audit",
+  "deepsonar-chrome-test",
+  "deepsonar-chrome-fuzz",
+  "deepsonar-clickhouse-audit",
+  "deepsonar-clickhouse-test",
+  "deepsonar-clickhouse-fuzz",
+  "deepsonar-mobile",
+  "deepsonar-reverse",
+] as const);
+
+function unknownRuntimeEvent(): Record<string, unknown>[] {
+  // Keep provider-specific metadata out of host telemetry.
+  return [{ type: "unknown_runtime" }];
+}
+
+function contextEventFromLine(
+  line: Record<string, unknown>,
+  state: AdapterRuntimeState,
+): Record<string, unknown>[] {
+  const raw = line.context && typeof line.context === "object" && !Array.isArray(line.context)
+    ? { ...(line.context as Record<string, unknown>), type: "context.compacted" }
+    : line;
+  if (raw.type !== "context.compacted") return [];
+  const identity = state.contextIdentity;
+  const required = [
+    "event_id",
+    "context_id",
+    "context_revision",
+    "adapter_id",
+    "adapter_version",
+    "runtime_identity",
+    "transform_chain_digest",
+    "policy",
+    "boundary",
+    "input_digest",
+    "output_digest",
+  ];
+  if (!identity || required.some((key) => raw[key] === undefined)) {
+    return [{ type: "context.compaction_unknown", source: "adapter", reason: "压缩事件缺少完整上下文身份或摘要" }];
+  }
+  const event: Record<string, unknown> = {
+    ...raw,
+    type: "context.compacted",
+    source: raw.source === "provider" ? "provider" : "adapter",
+  };
+  return [event as unknown as Record<string, unknown>];
+}
+
+function contextObservationFromProviderLine(line: Record<string, unknown>): Record<string, unknown>[] {
+  const type = String(line.type ?? line.event ?? "");
+  if (!["compaction_start", "compaction_end", "context.compaction", "context.compacting"].includes(type)) return [];
+  return [{ type: "context.compaction_unknown", source: "provider", reason: `provider_event:${type}` }];
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `\'"'"'`)}'`;
+}
+
+function textFrom(value: unknown): string | undefined {
+  if (typeof value === "string" && value) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  for (const key of ["text", "delta", "content", "message", "output", "result", "summary"]) {
+    if (typeof record[key] === "string" && record[key]) return record[key] as string;
+  }
+  return undefined;
+}
+
+function runtimeErrorResult(raw: string | undefined, fallback: string): Record<string, unknown> {
+  const parsed = preferInnerJsonErrorMessage(raw && raw.trim() ? raw : fallback);
+  return {
+    type: "result",
+    subtype: "error",
+    is_error: true,
+    result: parsed.message,
+    ...(parsed.detail ? { detail: parsed.detail } : {}),
+  };
+}
+
+function rememberStreamDelta(
+  state: AdapterRuntimeState,
+  kind: "text" | "reasoning",
+  delta: string,
+): void {
+  const key = kind === "text" ? "streamedText" : "streamedReasoning";
+  // Provider output is untrusted. Keep the dedupe ledger bounded; if it is
+  // truncated, complete-frame handling below prefers emitting content over
+  // silently losing the final answer.
+  const next = `${state[key] ?? ""}${delta}`;
+  state[key] = next.length > 64_000 ? next.slice(-64_000) : next;
+}
+
+/**
+ * Provider item events may repeat the complete content already sent as deltas.
+ * Return only the part not seen in the preceding delta stream.
+ */
+function unseenCompleteText(
+  state: AdapterRuntimeState,
+  kind: "text" | "reasoning",
+  value: string,
+): string | undefined {
+  const key = kind === "text" ? "streamedText" : "streamedReasoning";
+  const streamed = state[key] ?? "";
+  if (!streamed) {
+    state[key] = value;
+    return value;
+  }
+  if (value === streamed) return undefined;
+  if (value.startsWith(streamed)) {
+    state[key] = value;
+    return value.slice(streamed.length) || undefined;
+  }
+  state[key] = value;
+  return value;
+}
+
+function fixedCapabilities(input: Partial<AgentCliCapabilities>): Readonly<AgentCliCapabilities> {
+  return Object.freeze({
+    streamEvents: false,
+    platformControlApi: false,
+    incrementalMessages: false,
+    completionGate: false,
+    sessionCapture: false,
+    contextCompaction: false,
+    contextCompactionPolicy: "unsupported",
+    reasoningEffort: false,
+    interactiveTerminal: false,
+    ...input,
+  });
+}
+
+function sandboxClaude(
+  host: RuntimeHost,
+  context: AdapterStartContext,
+  sessionId?: string,
+): Promise<RuntimeProcess> {
+  // Claude Code 恢复会话时仍接受相同的 stream-json 输入协议。恢复进程
+  // 建立后由 runner 向 stdin 写入恢复消息，因此固定命令只需携带 session ID。
+  let command = `claude -p`;
+  if (sessionId) command += ` --resume ${shellQuote(sessionId)}`;
+  command += ` --input-format stream-json --output-format stream-json --include-partial-messages --verbose --mcp-config ${shellQuote(context.mcpConfigPath)} --permission-mode bypassPermissions`;
+  if (context.model) command += ` --model ${shellQuote(context.model)}`;
+  if (context.reasoning) command += ` --effort ${shellQuote(context.reasoning)}`;
+  if (context.systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(context.systemPromptPath)})"`;
+  return host.runAsync(command, {
+    cwd: context.cwd,
+    env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "70", ...context.env },
+  });
+}
+
+const claude = Object.freeze<RuntimeAdapter>({
+  id: "claude-code",
+  version: "2.1.312",
+  outputMode: "jsonl",
+  capabilities: fixedCapabilities({ streamEvents: true, platformControlApi: true, incrementalMessages: true, completionGate: true, sessionCapture: true, contextCompaction: true, contextCompactionPolicy: "automatic", reasoningEffort: true, interactiveTerminal: true }),
+  compatibleImageKeys: ALL_IMAGE_KEYS,
+  // Claude Code 2.1.312 is the governed pin (npm latest). That
+  // contract supports partial stream-json frames; do not pass this flag to
+  // an adapter whose pinned minimum does not support it.
+  start: (context) => sandboxClaude(context.host, context),
+  persistentSessionResume: true,
+  resume: (context) => sandboxClaude(context.host, context, context.sessionId),
+  encodeInput: (content) => JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n",
+  decodeOutput: (line, state) => {
+    const contextEvents = contextEventFromLine(line, state);
+    if (contextEvents.length > 0) return contextEvents;
+    const contextObservation = contextObservationFromProviderLine(line);
+    if (contextObservation.length > 0) return contextObservation;
+    return [line];
+  },
+});
+
+function piTextFromMessageEvent(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
+  const event = line.assistantMessageEvent && typeof line.assistantMessageEvent === "object" && !Array.isArray(line.assistantMessageEvent)
+    ? line.assistantMessageEvent as Record<string, unknown>
+    : {};
+  const type = String(event.type ?? "");
+  const delta = typeof event.delta === "string" ? event.delta : "";
+  if (type === "text_delta" && delta) {
+    rememberStreamDelta(state, "text", delta);
+    state.finalText = `${state.finalText ?? ""}${delta}`;
+    return [{ type: "assistant", message: { content: [{ type: "text", text: delta }] } }];
+  }
+  if ((type === "thinking_delta" || type === "reasoning_delta") && delta) {
+    rememberStreamDelta(state, "reasoning", delta);
+    return [{ type: "assistant", message: { content: [{ type: "thinking", thinking: delta }] } }];
+  }
+  if (type === "text_end" && typeof event.content === "string") {
+    const unseen = unseenCompleteText(state, "text", event.content);
+    if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
+    return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
+  }
+  if (type === "thinking_end" && typeof event.content === "string") {
+    const unseen = unseenCompleteText(state, "reasoning", event.content);
+    return unseen ? [{ type: "assistant", message: { content: [{ type: "thinking", thinking: unseen }] } }] : [];
+  }
+  if (type === "toolcall_end") {
+    const toolCall = event.toolCall;
+    if (toolCall && typeof toolCall === "object" && !Array.isArray(toolCall)) {
+      const record = toolCall as Record<string, unknown>;
+      const id = String(record.id ?? "");
+      const name = String(record.name ?? "");
+      const args = record.arguments ?? {};
+      return id && name
+        ? [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: args }] } }]
+        : [{ type: "unknown_runtime" }];
+    }
+  }
+  return [];
+}
+
+function piSessionState(line: Record<string, unknown>, state: AdapterRuntimeState): void {
+  const data = line.data && typeof line.data === "object" && !Array.isArray(line.data)
+    ? line.data as Record<string, unknown>
+    : {};
+  if (typeof data.sessionId === "string" && data.sessionId) state.sessionId = data.sessionId;
+  if (typeof data.sessionFile === "string" && data.sessionFile) state.sessionFile = data.sessionFile;
+}
+
+function piMessageText(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string" && record.text) return record.text;
+  if (!Array.isArray(record.content)) return undefined;
+  const text = record.content
+    .map((item) => item && typeof item === "object" && !Array.isArray(item) ? (item as Record<string, unknown>).text : undefined)
+    .filter((item): item is string => typeof item === "string" && item.length > 0)
+    .join("");
+  return text || undefined;
+}
+
+function piUsageTokens(value: unknown): { input: number; output: number } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { input: 0, output: 0 };
+  const record = value as Record<string, unknown>;
+  const usage = record.usage && typeof record.usage === "object" && !Array.isArray(record.usage)
+    ? record.usage as Record<string, unknown>
+    : record;
+  const num = (key: string) => {
+    const raw = usage[key];
+    return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+  };
+  return {
+    input: num("input") || num("inputTokens") || num("input_tokens"),
+    output: num("output") || num("outputTokens") || num("output_tokens"),
+  };
+}
+
+function isEmptyPiModelResponse(message: unknown, state: AdapterRuntimeState): boolean {
+  if (state.finalText || state.streamedText) return false;
+  const text = piMessageText(message);
+  if (text) return false;
+  if (message && typeof message === "object" && !Array.isArray(message)) {
+    const content = (message as Record<string, unknown>).content;
+    if (Array.isArray(content) && content.length > 0) return false;
+  }
+  const usage = piUsageTokens(message);
+  return usage.input === 0 && usage.output === 0;
+}
+
+/** Pi 在 stopReason=error|aborted 时把上游失败写在 AssistantMessage.errorMessage。 */
+function piMessageEndErrorRaw(line: Record<string, unknown>, message?: Record<string, unknown>): string | undefined {
+  for (const candidate of [message?.errorMessage, line.errorMessage, message?.error, line.error]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return undefined;
+}
+
+function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
+  const type = String(line.type ?? "");
+  const fail = (detail: string): Record<string, unknown>[] => {
+    state.failed = true;
+    state.errorDetail = detail;
+    return [{ type: "result", subtype: "error", is_error: true, result: detail }];
+  };
+  const failRuntime = (raw: string | undefined, fallback: string): Record<string, unknown>[] => {
+    const event = runtimeErrorResult(raw, fallback);
+    state.failed = true;
+    state.errorDetail = typeof event.result === "string" && event.result ? event.result : fallback;
+    return [event];
+  };
+  if (type === "compaction_end" && line.result === null) {
+    return fail("Pi context compaction failed");
+  }
+  const contextEvents = contextEventFromLine(line, state);
+  if (contextEvents.length > 0) return contextEvents;
+  const contextObservation = contextObservationFromProviderLine(line);
+  if (contextObservation.length > 0) return contextObservation;
+  if (type === "response") {
+    if (line.command === "get_state" && line.success === true) piSessionState(line, state);
+    if (line.success === false) {
+      const error = typeof line.error === "string" ? line.error : undefined;
+      return failRuntime(error, "Pi RPC command failed");
+    }
+    return [];
+  }
+  if (type === "agent_start") return [{ type: "system", subtype: "init", ...(state.sessionId ? { session_id: state.sessionId } : {}) }];
+  if (type === "message_update") {
+    const event = line.assistantMessageEvent && typeof line.assistantMessageEvent === "object" && !Array.isArray(line.assistantMessageEvent)
+      ? line.assistantMessageEvent as Record<string, unknown>
+      : {};
+    if (String(event.type ?? "") === "error") return fail(textFrom(event.error ?? event.message) ?? "Pi assistant message failed");
+    return piTextFromMessageEvent(line, state);
+  }
+  if (type === "message_end") {
+    const message = line.message && typeof line.message === "object" && !Array.isArray(line.message)
+      ? line.message as Record<string, unknown>
+      : undefined;
+    if (message?.role && message.role !== "assistant") return [];
+    const stopReason = String(message?.stopReason ?? line.stopReason ?? "");
+    if (stopReason === "error" || stopReason === "aborted") {
+      const raw = piMessageEndErrorRaw(line, message);
+      const fallback = `Pi message ended: ${stopReason}`;
+      return failRuntime(raw ? `${fallback}: ${raw}` : undefined, fallback);
+    }
+    const text = piMessageText(message);
+    const unseen = text ? unseenCompleteText(state, "text", text) : undefined;
+    if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
+    if (!unseen && isEmptyPiModelResponse(message, state)) {
+      return fail("PI_EMPTY_MODEL_RESPONSE");
+    }
+    return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
+  }
+  if (type === "agent_settled") {
+    if (line.aborted === true) return fail("Pi agent aborted");
+    if (state.failed) return [{ type: "result", subtype: "error", is_error: true, result: state.errorDetail ?? "Pi runtime failed" }];
+    return [{ type: "agent_settled", session_id: state.sessionId, session_file: state.sessionFile, result: state.finalText ?? "" }];
+  }
+  if (type === "agent_end") return [{ type: "agent_end" }];
+  if (type === "error" || type === "extension_error") {
+    return failRuntime(textFrom(line.error ?? line.message ?? line.errorMessage), "Pi runtime failed");
+  }
+  if (["tool_execution_start", "tool_execution_update", "tool_execution_end"].includes(type)) {
+    const tool = line.toolCall && typeof line.toolCall === "object" && !Array.isArray(line.toolCall)
+      ? line.toolCall as Record<string, unknown>
+      : line;
+    const id = String(line.toolCallId ?? tool.toolCallId ?? tool.id ?? tool.callId ?? "");
+    const name = String(line.toolName ?? tool.toolName ?? tool.name ?? "");
+    if (!id || !name) return [{ type: "unknown_runtime" }];
+    if (type === "tool_execution_start") {
+      return [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: line.args ?? tool.args ?? tool.arguments ?? {} }] } }];
+    }
+    if (type === "tool_execution_update") {
+      return [{ type: "tool_progress", tool_use_id: id, tool_name: name, content: line.partialResult ?? tool.partialResult ?? "" }];
+    }
+    return [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: Boolean(line.isError ?? tool.isError ?? tool.error), content: line.result ?? tool.result ?? tool.output ?? "" }] } }];
+  }
+  if (type === "auto_retry_end" && line.success === false) return fail("Pi automatic retry exhausted");
+  return ["turn_start", "turn_end", "queue_update", "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end", "model_select", "model_change"].includes(type)
+    ? []
+    : unknownRuntimeEvent();
+}
+
+function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessionFile?: string): Promise<RuntimeProcess> {
+  const extensions = (context.piExtensions ?? []).map((extension) => {
+    if (!extension.startsWith("/workspace/.deepsonar-home/.pi/agent/extensions/") || extension.includes("/../") || extension.includes("\0")) {
+      throw new Error("PI_EXTENSION_PATH_INVALID");
+    }
+    return ` -e ${shellQuote(extension)}`;
+  }).join("");
+  let command = `pi --mode rpc --no-approve --no-extensions${extensions}`;
+  if (sessionFile) command += ` --session ${shellQuote(sessionFile)}`;
+  const launch = resolvePiCliLaunchFlags(context.model, context.modelProvider);
+  if (launch.cliModel) command += ` --model ${shellQuote(launch.cliModel)}`;
+  if (launch.provider) command += ` --provider ${shellQuote(launch.provider)}`;
+  if (context.reasoning) command += ` --thinking ${shellQuote(context.reasoning)}`;
+  if (context.systemPromptPath) command += ` --append-system-prompt \"$(cat ${shellQuote(context.systemPromptPath)})\"`;
+  return host.runAsync(command, { cwd: context.cwd, env: context.env });
+}
+
+const pi = Object.freeze<RuntimeAdapter>({
+  id: "pi",
+  version: "1.4.0",
+  outputMode: "jsonl",
+  capabilities: fixedCapabilities({
+    streamEvents: true,
+    platformControlApi: true,
+    incrementalMessages: true,
+    completionGate: true,
+    sessionCapture: true,
+    contextCompaction: true,
+    contextCompactionPolicy: "automatic",
+    reasoningEffort: true,
+    interactiveTerminal: true,
+  }),
+  compatibleImageKeys: ALL_IMAGE_KEYS,
+  start: (context) => sandboxPi(context.host, context),
+  persistentSessionResume: true,
+  resume: async (context) => {
+    if (!context.sessionFile) throw new Error("PI_SESSION_FILE_MISSING");
+    const check = await context.host.run(`test -s ${shellQuote(context.sessionFile)}`, { timeoutMs: 10_000 });
+    if (check.exitCode !== 0) throw new Error("PI_SESSION_FILE_MISSING_OR_EMPTY");
+    return sandboxPi(context.host, context, context.sessionFile);
+  },
+  encodeInput: (content) => `${JSON.stringify({ type: "prompt", message: content })}\n`,
+  encodeSteer: (content) => `${JSON.stringify({ type: "steer", message: content })}\n`,
+  encodeFollowUp: (content) => `${JSON.stringify({ type: "follow_up", message: content })}\n`,
+  encodeGetState: () => `${JSON.stringify({ type: "get_state" })}\n`,
+  decodeOutput: decodePi,
+});
+
+function dshSystemPromptAssignment(systemPromptPath?: string, projectedPrompt?: string): string {
+  if (projectedPrompt?.trim()) return `DSH_SYSTEM_PROMPT=${shellQuote(projectDshSystemPrompt(projectedPrompt))} `;
+  const leading = shellQuote(DSH_PI_COMPAT_SYSTEM_PROMPT);
+  if (!systemPromptPath) return `DSH_SYSTEM_PROMPT=${leading} `;
+  return `DSH_SYSTEM_PROMPT="$( { printf '%s\\n\\n' ${leading}; cat ${shellQuote(systemPromptPath)}; } )" `;
+}
+
+function sandboxDsh(host: RuntimeHost, context: AdapterStartContext): Promise<RuntimeProcess> {
+  if (!context.dshProvider) throw new Error("DSH_PROVIDER_CONFIG_MISSING");
+  const command = `${dshSystemPromptAssignment(context.systemPromptPath, context.dshProvider.systemPrompt)}node ${DSH_BIN} --profile ${DSH_PROFILE}`;
+  return host.runAsync(command, {
+    cwd: context.cwd,
+    env: {
+      ...context.env,
+      DSH_HOME: "/workspace/.deepsonar-home/.dsh",
+      DSH_SESSION_ROOT: "/workspace/.deepsonar-home/.dsh/sessions",
+      DSH_CWD: context.cwd,
+      DSH_MODEL: context.dshProvider.model,
+      DSH_TASK_MODE: context.dshTaskMode ?? "standard",
+      DSH_TELEMETRY_DISABLED: "1",
+      DSH_PERMISSION_MODE: "danger-full-access",
+    },
+  });
+}
+
+async function materializeDsh(context: AdapterStartContext): Promise<void> {
+  if (!context.dshProvider) throw new Error("DSH_PROVIDER_CONFIG_MISSING");
+  const profilePath = `${DSH_HOME}/profiles/${DSH_PROFILE}`;
+  await context.host.uploadFile(DSH_PROFILE_MANIFEST, `${profilePath}/package.json`);
+  await context.host.uploadFile(buildDshProfilePatch({
+    providerConfig: context.dshProvider.config,
+    taskMode: context.dshTaskMode,
+    cwd: context.cwd,
+  }), `${profilePath}/cordis.patch.yml`);
+  // Re-materialize every launch so an old home-level override cannot augment the
+  // frozen Job composition. The profile itself has no inherited bundles.
+  await context.host.uploadFile("[]\n", `${DSH_HOME}/cordis.patch.yml`);
+  await context.host.uploadFile("", `${DSH_HOME}/.env`);
+}
+
+function dshSessionId(state?: AdapterRuntimeState): string {
+  if (state?.sessionId) return state.sessionId;
+  const contextId = state?.contextIdentity?.context_id;
+  if (!contextId || !/^[A-Za-z0-9_-]{1,96}$/u.test(contextId)) throw new Error("DSH_SESSION_IDENTITY_MISSING");
+  state.sessionId = `session-${contextId}`;
+  return state.sessionId;
+}
+
+function dshRequest(method: string, params: Record<string, unknown>, state?: AdapterRuntimeState): string {
+  if (!state) throw new Error("DSH_RUNTIME_STATE_MISSING");
+  state.dshRequestSerial = (state.dshRequestSerial ?? 0) + 1;
+  const id = `deepsonar-${method.replaceAll("/", "-")}-${state.dshRequestSerial}`;
+  if (method === "initialize") state.dshInitializeRequestId = id;
+  return `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
+}
+
+function dshPrompt(content: string, state?: AdapterRuntimeState): string {
+  return dshRequest("session/prompt", {
+    sessionId: dshSessionId(state),
+    contentBlocks: [{ type: "text", text: content }],
+  }, state);
+}
+
+function dshContentBlocks(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item))) : [];
+}
+
+function dshToolInput(value: unknown): unknown {
+  if (typeof value !== "string") return value ?? {};
+  if (!value.trim()) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+const DSH_SILENT_SESSION_EVENTS = new Set(["turn/start", "turn/end"]);
+
+function dshToolCallId(data: Record<string, unknown>): string {
+  for (const key of ["toolCallId", "callId", "callID", "toolCallID", "call_id", "tool_call_id", "id"]) {
+    const value = data[key];
+    if (typeof value === "string" && value) return value;
+  }
+  if (data.message && typeof data.message === "object" && !Array.isArray(data.message)) {
+    return dshToolCallId(data.message as Record<string, unknown>);
+  }
+  return "";
+}
+
+function dshToolResultContent(data: Record<string, unknown>): unknown {
+  const message = data.message && typeof data.message === "object" && !Array.isArray(data.message)
+    ? data.message as Record<string, unknown>
+    : undefined;
+  if (message) {
+    if (typeof message.text === "string") return message.text;
+    if (message.content !== undefined) return message.content;
+  }
+  if (typeof data.message === "string") return data.message;
+  return data.content ?? data.result ?? "";
+}
+
+function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
+  if (Object.prototype.hasOwnProperty.call(line, "id") && !line.method) {
+    if (line.error && typeof line.error === "object") {
+      const error = line.error as Record<string, unknown>;
+      const raw = typeof error.message === "string" ? error.message : undefined;
+      return [runtimeErrorResult(raw, "DSH JSON-RPC request failed")];
+    }
+    if (line.id === state.dshInitializeRequestId) {
+      const result = line.result && typeof line.result === "object" ? line.result as Record<string, unknown> : {};
+      const serverInfo = result.serverInfo && typeof result.serverInfo === "object" ? result.serverInfo as Record<string, unknown> : {};
+      if (serverInfo.name !== "deepseek-harness-sdk-runtime") {
+        return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SERVER_IDENTITY_INVALID" }];
+      }
+      return [{ type: "runtime_outbound", content: dshPrompt(state.dshInitialInput ?? "", state) }];
+    }
+    if (String(line.id).startsWith("deepsonar-shutdown-")) return [{ type: "runtime_shutdown_ack" }];
+    return [];
+  }
+  const method = String(line.method ?? "");
+  const params = line.params && typeof line.params === "object" && !Array.isArray(line.params) ? line.params as Record<string, unknown> : {};
+  const sessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+  if (method === "subagent.started") {
+    const parent = params.parentSessionId, child = params.childSessionId;
+    if (typeof child !== "string" || !child || child === dshSessionId(state) || child === parent || (parent !== dshSessionId(state) && !state.dshChildSessionIds?.has(String(parent)))) {
+      return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
+    }
+    if (state.dshChildParents?.has(child) && state.dshChildParents.get(child) !== parent) {
+      return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
+    }
+    if (!state.dshChildSessionIds?.has(child)) (state.dshActiveChildren ??= new Set()).add(child);
+    (state.dshChildSessionIds ??= new Set()).add(child);
+    (state.dshChildParents ??= new Map()).set(child, String(parent));
+    return [];
+  }
+  if (method === "subagent.finished") {
+    const child = params.childSessionId;
+    if (typeof child !== "string" || !state.dshChildParents?.has(child) || state.dshChildParents.get(child) !== params.parentSessionId) {
+      return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
+    }
+    state.dshActiveChildren?.delete(child);
+    // Completion is delivered to the parent by DSH. Wait for its next idle;
+    // a finished child alone must not settle the parent's previous turn.
+    return [];
+  }
+  if (method === "session.event" || method === "session.status") {
+    // The official server broadcasts child sessions too. Only a preceding
+    // authenticated lineage notification admits their non-authoritative stream.
+    if (sessionId && state.dshChildSessionIds?.has(sessionId)) {
+      // Continuable children can start another epoch without session/created.
+      if (method === "session.status" && params.status === "running") (state.dshActiveChildren ??= new Set()).add(sessionId);
+      return unknownRuntimeEvent();
+    }
+    if (!sessionId || sessionId !== dshSessionId(state)) {
+      return [{ type: "result", subtype: "error", is_error: true, result: "DSH_JSONRPC_SESSION_MISMATCH" }];
+    }
+  }
+  if (method === "session.event") {
+    const event = params.event && typeof params.event === "object" && !Array.isArray(params.event) ? params.event as Record<string, unknown> : {};
+    const data = event.data && typeof event.data === "object" && !Array.isArray(event.data) ? event.data as Record<string, unknown> : {};
+    if (event.type === "assistant/chunk") {
+      const chunk = data.chunk && typeof data.chunk === "object" && !Array.isArray(data.chunk) ? data.chunk as Record<string, unknown> : {};
+      if (chunk.type === "text-delta" && typeof chunk.text === "string") return [{ type: "assistant", message: { content: [{ type: "text", text: chunk.text }] } }];
+      if (chunk.type === "reasoning-delta" && typeof chunk.text === "string") return [{ type: "assistant", message: { content: [{ type: "thinking", thinking: chunk.text }] } }];
+      return chunk.type ? unknownRuntimeEvent() : [];
+    }
+    if (event.type === "assistant/message" || event.type === "user/message") {
+      const message = event.type === "user/message" ? data
+        : data.message && typeof data.message === "object" && !Array.isArray(data.message) ? data.message as Record<string, unknown> : {};
+      const content = dshContentBlocks(message.content).map((block) => {
+        if (block.type === "tool-call") return { type: "tool_use", id: block.id, name: block.name, input: dshToolInput(block.arguments) };
+        if (block.type === "tool-result") return { type: "tool_result", tool_use_id: block.toolCallId, content: block.content, is_error: block.isError === true };
+        if (block.type === "reasoning") return { type: "thinking", thinking: block.text };
+        return block;
+      });
+      if (event.type === "assistant/message") {
+        state.finalText = content.filter((block) => block.type === "text" && typeof (block as Record<string, unknown>).text === "string").map((block) => String((block as Record<string, unknown>).text)).join("") || state.finalText;
+        return [{ type: "assistant", message: { id: message.id, content } }];
+      }
+      return [{ type: "user", message: { id: message.id, content } }];
+    }
+    if (event.type === "tool/call") {
+      const id = dshToolCallId(data);
+      const name = String(data.name ?? data.toolName ?? "");
+      return id && name
+        ? [{ type: "assistant", message: { content: [{ type: "tool_use", id, name, input: dshToolInput(data.arguments ?? data.input) }] } }]
+        : unknownRuntimeEvent();
+    }
+    if (event.type === "tool/result") {
+      const id = dshToolCallId(data);
+      if (!id) return unknownRuntimeEvent();
+      const isError = (data.error != null && !(typeof data.error === "string" && !data.error.trim()))
+        || data.isError === true
+        || data.is_error === true
+        || (data.message && typeof data.message === "object" && (data.message as Record<string, unknown>).isError === true);
+      return [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: isError, content: dshToolResultContent(data) }] } }];
+    }
+    if (event.type === "turn/end") {
+      const reason = data.reason && typeof data.reason === "object" && !Array.isArray(data.reason) ? data.reason as Record<string, unknown> : {};
+      if (reason.kind !== "completed" && reason.kind !== "max-tokens") state.dshTurnError = formatDshTurnError(reason);
+    }
+    return DSH_SILENT_SESSION_EVENTS.has(String(event.type ?? "")) ? [] : unknownRuntimeEvent();
+  }
+  if (method === "session.status") {
+    if (params.status === "idle") {
+      if (state.dshTurnError) return [{ type: "result", subtype: "error", is_error: true, result: state.dshTurnError }];
+      // Parent idle is a pause while descendants run, not a completion-gate
+      // attempt. Child idle precedes parent delivery; only finished clears it.
+      if (state.dshActiveChildren?.size) return [];
+      return [{ type: "agent_settled", session_id: dshSessionId(state), result: state.finalText ?? "" }];
+    }
+    return [];
+  }
+  return unknownRuntimeEvent();
+}
+
+const dsh = Object.freeze<RuntimeAdapter>({
+  id: "dsh",
+  version: DSH_VERSION,
+  outputMode: "jsonl",
+  capabilities: fixedCapabilities({
+    streamEvents: true,
+    platformControlApi: true,
+    incrementalMessages: true,
+    completionGate: true,
+    sessionCapture: true,
+    contextCompaction: true,
+    contextCompactionPolicy: "automatic",
+    reasoningEffort: true,
+    interactiveTerminal: true,
+  }),
+  compatibleImageKeys: ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
+  start: (context) => sandboxDsh(context.host, context),
+  materialize: materializeDsh,
+  projectRuntime: buildDshPiAiRuntimeProjection,
+  persistentSessionResume: false,
+  resume: async () => {
+    throw new Error("CONTEXT_RESUME_UNSUPPORTED: DSH SDK JSON-RPC cannot reopen a persisted session after process exit; start a new Job explicitly.");
+  },
+  encodeInput: (content, state) => {
+    if (!state) throw new Error("DSH_RUNTIME_STATE_MISSING");
+    state.dshInitialInput = content;
+    state.finalText = undefined;
+    if (!state.modelProvider || !state.model) throw new Error("DSH_PROVIDER_IDENTITY_MISSING");
+    dshSessionId(state);
+    return dshRequest("initialize", { cwd: state.cwd ?? "/workspace", provider: state.modelProvider, model: state.model }, state);
+  },
+  encodeSteer: dshPrompt,
+  encodeFollowUp: dshPrompt,
+  encodeShutdown: (state) => dshRequest("shutdown", {}, state),
+  decodeOutput: decodeDsh,
+});
+
+export const AGENT_CLI_RUNTIME_ADAPTERS: Readonly<Record<AgentCliId, RuntimeAdapter>> = Object.freeze({
+  "claude-code": claude,
+  dsh,
+  pi,
+});
+
+export function getAgentCliRuntimeAdapter(id: unknown): RuntimeAdapter | undefined {
+  return typeof id === "string" && Object.prototype.hasOwnProperty.call(AGENT_CLI_RUNTIME_ADAPTERS, id)
+    ? AGENT_CLI_RUNTIME_ADAPTERS[id as AgentCliId]
+    : undefined;
+}
+
+/** Hub catalog / 决策用：哪些治理 CLI 能在该市场 image_key 里启动。未知 key 返回空数组。 */
+export function agentCliIdsCompatibleWithImage(imageKey: string): AgentCliId[] {
+  return (Object.keys(AGENT_CLI_RUNTIME_ADAPTERS) as AgentCliId[])
+    .filter((id) => AGENT_CLI_RUNTIME_ADAPTERS[id].compatibleImageKeys.includes(imageKey))
+    .sort();
+}
+
+export function requireAgentCliRuntimeAdapter(id: unknown, imageKey?: string): RuntimeAdapter {
+  const adapter = getAgentCliRuntimeAdapter(id);
+  if (!adapter) throw new Error(`AGENT_CLI_UNREGISTERED: ${String(id)}`);
+  if (imageKey && !adapter.compatibleImageKeys.includes(imageKey)) {
+    throw new Error(`AGENT_CLI_IMAGE_INCOMPATIBLE: ${adapter.id} cannot run in ${imageKey}`);
+  }
+  for (const capability of REQUIRED_RUNTIME_CAPABILITIES) {
+    if (!adapter.capabilities[capability]) throw new Error(`AGENT_CLI_CAPABILITY_MISSING: ${adapter.id}.${capability}`);
+  }
+  for (const capability of CONTROL_RUNTIME_CAPABILITIES) {
+    if (!adapter.capabilities[capability]) throw new Error(`AGENT_CLI_CONTROL_CAPABILITY_MISSING: ${adapter.id}.${capability}`);
+  }
+  if (adapter.capabilities.contextCompactionPolicy === "unsupported") {
+    throw new Error(`AGENT_CLI_CONTEXT_COMPACTION_UNSUPPORTED: ${adapter.id}`);
+  }
+  if (typeof adapter.resume !== "function") {
+    throw new Error(`AGENT_CLI_RESUME_UNSUPPORTED: ${adapter.id}`);
+  }
+  return adapter;
+}
+
+export function freezeAgentCliRuntime(adapter: RuntimeAdapter): {
+  adapter_id: AgentCliId;
+  adapter_version: string;
+  capabilities: AgentCliCapabilities;
+} {
+  return {
+    adapter_id: adapter.id,
+    adapter_version: adapter.version,
+    capabilities: { ...adapter.capabilities },
+  };
+}
+
+export type AgentCliRuntimeSnapshot = ReturnType<typeof freezeAgentCliRuntime>;
+
+function captureSessionIdentity(item: Record<string, unknown>, state: AdapterRuntimeState): void {
+  const id = item.sessionID ?? item.session_id ?? item.thread_id;
+  if (typeof id === "string" && id) state.sessionId = id;
+  const file = item.sessionFile ?? item.session_file;
+  if (typeof file === "string" && file) state.sessionFile = file;
+  const data = item.data;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const record = data as Record<string, unknown>;
+    if (typeof record.sessionId === "string" && record.sessionId) state.sessionId = record.sessionId;
+    if (typeof record.sessionFile === "string" && record.sessionFile) state.sessionFile = record.sessionFile;
+  }
+}
+
+/** Decode one CLI JSONL object and persist session identity onto `state`. */
+export function applyRuntimeOutput(
+  adapter: RuntimeAdapter,
+  line: Record<string, unknown>,
+  state: AdapterRuntimeState,
+): Record<string, unknown>[] {
+  const events = adapter.decodeOutput(line, state);
+  captureSessionIdentity(line, state);
+  for (const event of events) captureSessionIdentity(event, state);
+  return events;
+}
+
+/** Walk mixed CLI stdout and keep the last observed session identity. */
+export function applyRuntimeOutputText(
+  adapter: RuntimeAdapter,
+  text: string,
+  state: AdapterRuntimeState,
+): void {
+  for (const raw of text.split(/\r?\n/)) {
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith("{")) continue;
+    try {
+      applyRuntimeOutput(adapter, JSON.parse(trimmed) as Record<string, unknown>, state);
+    } catch {
+      // ignore non-JSON fragments mixed into CLI stdout
+    }
+  }
+}

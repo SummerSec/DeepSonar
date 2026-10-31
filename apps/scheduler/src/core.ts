@@ -1,0 +1,1601 @@
+import { freezeGoalReviewAssignment } from "./task-goal-review-source.js";
+import { TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { invalidControlPayload } from "./control-input.js";
+import { LEFTOVER_RULE_ALIAS_KEYS } from "./settings-validation.js";
+import { persistPreparedJob } from "./job-creation.js";
+import { freezeProjectKnowledgeCatalog } from "./domains/project-knowledge/catalog-snapshot.js";
+import { onKnowledgeJobTerminal } from "./domains/project-knowledge/recovery.js";
+import path from "node:path";
+import { createHash } from "node:crypto";
+import {
+  FindingProtocolConfig as FindingProtocolConfigSchema,
+  CANONICAL_UUID_PATTERN,
+  SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
+  isCurrentAgentCli,
+  type EventEnvelopeInput,
+  type EffectiveFindingProtocol,
+} from "@deepsonar/shared-types";
+import { config } from "./config.js";
+import {
+  RUNTIME_KNOB_BOUNDS,
+  asBoundedInt,
+  freezeRuntimeKnobs,
+  mergeRoleRuntimeKnobOverrides,
+  resolveRuntimeKnobs,
+} from "./runtime-knobs.js";
+import { isProviderKnown } from "./credentials.js";
+import { sql } from "./db.js";
+import { inc } from "./metrics.js";
+import { recordSystemAudit } from "./audit.js";
+import {
+  createRoleRuntimeSnapshotApplication,
+  freezeAgentSnapshotNetworkPolicy,
+  scrubStoredProjectImagePolicy,
+  type AgentRuntimeSnapshot,
+} from "./domains/role-runtime-snapshot/index.js";
+import { transitionJob as applyJobTransition } from "./domains/job-lifecycle/index.js";
+import { freezeSnapshotDeviceRequirement } from "./domains/device/index.js";
+import {
+  createEventIngestionApplication,
+  createEventIngestionSideEffectApplication,
+  type EventIngestionResult,
+  type EventSideEffectServices,
+} from "./domains/event-ingestion/index.js";
+import {
+  createHubOrchestrationApplication,
+  parseHubMaxRounds,
+  type HubHumanCommentInput,
+  type HubHumanCommentResult,
+  type HubJobRecord,
+  type HubTriggerOptions,
+  type HubCanvasJobTerminalStatus,
+  type HubAnalysisCompleteGate,
+} from "./domains/hub-orchestration/index.js";
+import { parseFrozenFindingProtocol, resolveFindingProtocol, rewriteFindingProtocolMode } from "./finding-protocol.js";
+import { canonicalizeRoleRuntimeKnobsJson } from "./runtime-knobs.js";
+import * as findingVerification from "./verify.js";
+import * as reportConvergence from "./report.js";
+import { revokeJobTokens } from "./gateway.js";
+import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
+import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
+import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
+import { freezeTaskSeedTarget, insertTaskSeedProjections } from "./task-compose.js";
+
+const roleRuntimeSnapshotApplication = createRoleRuntimeSnapshotApplication();
+
+type Tx = typeof sql;
+export type IngestResult = EventIngestionResult;
+
+/**
+ * Atomic status transition.  A null result still means a race or illegal
+ * source state; callers must not continue provisioning or terminal side
+ * effects when the guarded update did not win.
+ */
+export async function transitionJob(jobId: string, to: string, patch: Record<string, unknown> = {}) {
+  return applyJobTransition(jobId, to, patch);
+}
+
+/**
+ * The publish callback is host-authorized, but the sandbox can still deliver
+ * a late event after cancellation or lease expiry. Keep the check on the
+ * scheduler connection and bind it to the execution's current sandbox.
+ */
+export async function assertJobCanPublishSharedAsset(jobId: string, sandboxId: string | null): Promise<void> {
+  const [row] = await sql`
+    SELECT id
+      FROM jobs
+     WHERE id = ${jobId}
+       AND status = 'running'
+       AND lease_expires_at IS NOT NULL
+       AND lease_expires_at > now()
+       AND sandbox_id IS NOT NULL
+       AND sandbox_id = ${sandboxId}
+     FOR UPDATE
+  `;
+  if (!row) throw new Error("shared_asset_publish_job_not_running");
+}
+
+// Event-ingestion owns append/dedup/sequence ordering. Semantic event writes
+// are composed through the event-ingestion bounded context's typed ports.
+const eventIngestionSideEffectApplication = createEventIngestionSideEffectApplication({
+  findingVerification,
+  // SAFETY: 以下四个适配器都把 postgres.js 事务句柄透传给同接口的 `sql` 实现。
+  rulesForProject: async (tx, projectId) => rulesForProject(tx as unknown as typeof sql, projectId),
+  rolesForProject: async (tx, projectId) => rolesForProject(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql. */ tx as unknown as typeof sql, projectId),
+  resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = [], options) =>
+    resolveAgentSnapshotForJob(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, projectId, type, findingIds, options),
+  recordJobSharedAssets: async (tx, jobId, assets) => recordJobSharedAssets(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql. */ tx as unknown as typeof sql, jobId, assets),
+  fixedPriorityForJob,
+  insertEdgeIfAbsent: async (tx, canvasId, fromId, toId, edgeType) =>
+    insertEdgeIfAbsent(tx as Tx, canvasId, fromId, toId, edgeType),
+  insertEdgesIfAbsentBatch: async (tx, edges) => insertEdgesIfAbsentBatch(tx as Tx, edges),
+  findingProtocolForJob: async (tx, job) => findingProtocolForJob(tx as Tx, job),
+  finalizeJob: async (tx, jobId, status, result) => finalizeJob(tx as Tx, jobId, status, result),
+});
+
+const eventIngestionApplication = createEventIngestionApplication(
+  sql,
+  async (tx, jobId, envelope, ingest) => {
+    await eventIngestionSideEffectApplication.applySideEffects(tx as Tx, jobId, envelope.type, envelope.payload, {
+      jobStatusAtLock: ingest?.jobStatusAtLock,
+      attemptId: ingest?.attemptId,
+      eventId: envelope.event_id,
+    });
+  },
+  {
+    maxPayloadBytes: SEMANTIC_EVENT_PAYLOAD_MAX_BYTES,
+    rateLimit: {
+      windowSeconds: config.events.rateLimitWindowSec,
+      progressPerWindow: config.events.rateLimitProgressPerWindow,
+      standardPerWindow: config.events.rateLimitStandardPerWindow,
+      terminalPerWindow: config.events.rateLimitTerminalPerWindow,
+    },
+    onRateLimited: (error) => {
+      inc("deepsonar_event_rate_limited_total", { bucket: error.bucket });
+    },
+  },
+);
+
+export async function preflightDeferredSemanticEvent(
+  jobId: string,
+  type: "hub_decision" | "human",
+  payload: unknown,
+): Promise<void> {
+  await sql.begin(async (tx) => {
+    // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as Tx.
+    await eventIngestionSideEffectApplication.preflightDeferredSideEffects(tx as unknown as Tx, jobId, type, payload);
+  });
+}
+
+// ---------- 项目规则（决策层）：projects.config_json.rules 覆盖 + env 兜底 ----------
+//
+// 第一性原理：用户只配「最低关注级别」一件事。
+// 派生（写死，不暴露配置）：
+//   · 达到 minVerifySeverity 的 Finding 才进入自动 Verify 生命周期
+//   · 低于阈值的 Finding 保持 pending 并记录策略标记，且不阻塞收敛
+//   · Hub 等 care verify 跑完再决策（含 confirmed）
+//   · verify 调度永远 critical > high > …
+
+/** 严重度从高到低；minVerifySeverity=high 表示 critical+high */
+export const SEVERITY_RANK = ["critical", "high", "medium", "low", "info"] as const;
+export type SeverityRank = (typeof SEVERITY_RANK)[number];
+export type ConcurrentJobsSource = "project" | "global";
+
+export interface ProjectRules {
+  /**
+   * 关注级别旋钮：控制自动 Verify 范围、队列优先级与 Hub 等待门（≥ 该级别）。
+   * info 表示对所有带 severity 的 Finding 启用严格全量 Verify。
+   */
+  minVerifySeverity: SeverityRank;
+  maxFollowupsPerJob: number;
+  maxFollowupDepth: number;
+  maxAutoRetries: number;
+  /** Finding 业务验证轮次上限（与 maxAutoRetries 基础设施重试分离）；默认 0 不限。 */
+  maxVerificationRounds: number;
+  /**
+   * wait_evidence 路径上「门禁结论不变」的连续轮次上限（#519）。
+   * 默认 2；0 关闭该刹车并回退旧行为。范围 0..5。
+   */
+  maxNoProgressRounds: number;
+  auditTimeoutSec: number;
+  verifyTimeoutSec: number;
+  /** running Job 无语义事件且无在飞 tool.call 超过此时长则判失败；0 关闭。 */
+  stallSec: number;
+  /** Job Token 请求上限；0 = 不限制。 */
+  jobTokenMaxRequests: number;
+  /** provision（起沙箱）超时；项目可覆盖，Reaper/Dispatcher 热读。 */
+  provisionTimeoutSec: number;
+  hubEnabled: boolean;
+  maxHubRounds: number;
+  maxIntentsPerDecision: number;
+  allowEgress: boolean;
+  /** Scheduler-wide active job cap. The persisted global rule is authoritative; env is bootstrap fallback. */
+  maxGlobalJobs: number;
+  /** Scheduler-wide per-project active job cap. The persisted global rule is authoritative; env is bootstrap fallback. */
+  maxJobsPerProject: number;
+  /**
+   * Claim-time effective active-job cap for this project.
+   * `min(global.maxJobsPerProject, project.maxConcurrentJobs ?? global.maxJobsPerProject)`.
+   */
+  maxConcurrentJobs: number;
+  /** Whether the effective project job cap came from a project override or the global default. */
+  maxConcurrentJobsSource: ConcurrentJobsSource;
+  /** Scheduler 全局 provisioning admission 上限，项目规则不得覆盖。 */
+  maxConcurrentProvisioning: number;
+  /** 全局 Provider 总并发；优先于 Credential / 模型 / Agent CLI 配额。 */
+  maxConcurrentByProvider: Record<string, number>;
+  /** 全局按 Agent CLI 的并发配额；项目层不得覆盖。 */
+  maxConcurrentByAgentCli: Record<string, number>;
+}
+
+/** 画布收敛控制态（落在 canvases.target_json.convergence，免 schema 迁移） */
+export interface CanvasConvergence {
+  hub_paused: boolean;
+  paused_reason?: string;
+  paused_at?: string;
+  auto_stopped: boolean;
+  pending_confirmed_ids?: string[];
+}
+
+function asSeverityRank(v: unknown, fallback: SeverityRank): SeverityRank {
+  const s = String(v ?? "")
+    .trim()
+    .toLowerCase();
+  return (SEVERITY_RANK as readonly string[]).includes(s) ? (s as SeverityRank) : fallback;
+}
+
+export { LEFTOVER_RULE_ALIAS_KEYS } from "./settings-validation.js";
+
+/** 物理删除已停用的规则别名，以及 leftover CLI 并发键；当前 CLI 配额保留。 */
+export function scrubLeftoverRulesJson(rules: unknown): {
+  rules: Record<string, unknown>;
+  removedKeys: string[];
+} {
+  const source = rules && typeof rules === "object" && !Array.isArray(rules)
+    ? (rules as Record<string, unknown>)
+    : {};
+  const out: Record<string, unknown> = { ...source };
+  const removedKeys: string[] = [];
+  for (const key of LEFTOVER_RULE_ALIAS_KEYS) {
+    if (!Object.hasOwn(out, key)) continue;
+    delete out[key];
+    removedKeys.push(key);
+  }
+  const cli = out.maxConcurrentByAgentCli;
+  if (cli && typeof cli === "object" && !Array.isArray(cli)) {
+    const next: Record<string, unknown> = {};
+    let stripped = false;
+    for (const [key, value] of Object.entries(cli as Record<string, unknown>)) {
+      if (isCurrentAgentCli(key)) next[key] = value;
+      else {
+        stripped = true;
+        removedKeys.push(`maxConcurrentByAgentCli.${key}`);
+      }
+    }
+    if (stripped) out.maxConcurrentByAgentCli = next;
+  }
+  return { rules: out, removedKeys };
+}
+
+function asCliLimits(v: unknown, fallback: Record<string, number>): Record<string, number> {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return fallback;
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
+    if (!isCurrentAgentCli(key)) continue;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000) return fallback;
+    out[key] = value;
+  }
+  return out;
+}
+
+/**
+ * Normalize a scheduler concurrency cap. Caps are deliberately bounded so a
+ * malformed value in JSONB cannot disable resource protection. A value of 0
+ * is reserved for Agent CLI limits (pause that CLI); global/project caps must
+ * remain positive.
+ */
+export function asConcurrencyLimit(v: unknown, fallback: number): number {
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 1000 ? v : fallback;
+}
+
+/** 0 pauses new claims for that project; omit/invalid inherits the global per-project cap. */
+export function parseProjectJobQuota(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1000 ? v : undefined;
+}
+
+export function effectiveProjectJobLimit(
+  globalMaxJobsPerProject: number,
+  projectMaxConcurrentJobs: unknown,
+): { limit: number; source: ConcurrentJobsSource } {
+  const parsed = parseProjectJobQuota(projectMaxConcurrentJobs);
+  if (parsed === undefined) return { limit: globalMaxJobsPerProject, source: "global" };
+  return { limit: Math.min(globalMaxJobsPerProject, parsed), source: "project" };
+}
+
+export function projectJobQuotaFromConfig(
+  configJson: unknown,
+  globalMaxJobsPerProject: number,
+): { limit: number; source: ConcurrentJobsSource } {
+  const cfg = configJson && typeof configJson === "object" && !Array.isArray(configJson)
+    ? (configJson as Record<string, unknown>)
+    : {};
+  const rules = cfg.rules && typeof cfg.rules === "object" && !Array.isArray(cfg.rules)
+    ? (cfg.rules as Record<string, unknown>)
+    : {};
+  return effectiveProjectJobLimit(globalMaxJobsPerProject, rules.maxConcurrentJobs);
+}
+
+function asProviderLimits(v: unknown, fallback: Record<string, number>): Record<string, number> {
+  if (v === null || typeof v !== "object" || Array.isArray(v)) return fallback;
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(v as Record<string, unknown>)) {
+    if (!isProviderKnown(key) || typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 1000)
+      return fallback;
+    out[key] = value;
+  }
+  return out;
+}
+
+/** ≥ min 的全部 severity（自动验 / Hub 等待 / 停自驱 共用） */
+export function careSeverities(min: string): string[] {
+  const idx = SEVERITY_RANK.indexOf(asSeverityRank(min, "high"));
+  return SEVERITY_RANK.slice(0, idx + 1) as string[];
+}
+
+/**
+ * 判断 Finding 是否在自动 Verify / 收敛门范围内。
+ * severity 是可选协议字段；未评分 Finding 不属于“低于阈值”，保留在
+ * 自动验证范围内，避免因缺失严重度而被静默丢弃。
+ */
+export function isSeverityInVerifyScope(min: string, severity: unknown): boolean {
+  const normalized = String(severity ?? "").trim().toLowerCase();
+  if (normalized.length === 0) return true;
+  if (!(SEVERITY_RANK as readonly string[]).includes(normalized)) return true;
+  return careSeverities(min).includes(normalized);
+}
+
+/**
+ * Scheduling purpose is frozen into a Job payload at creation time.  It is
+ * deliberately a small vocabulary: it explains why a Job exists without
+ * letting an Agent invent a numeric queue score.
+ */
+export type SchedulingPurpose = "hub" | "convergence_evidence" | "discovery" | "verify" | "report" | "manual";
+
+/** Fixed, documented queue classes.  FIFO is provided by created_at/id within
+ * a class; these numbers never inherit a parent or Hub round. */
+export const FIXED_PRIORITY = Object.freeze({
+  hub: 500,
+  report: 450,
+  verifyCritical: 320,
+  verifyHigh: 310,
+  convergenceEvidence: 220,
+  role: 200,
+  verifyMedium: 120,
+  verifyLow: 110,
+  verifyInfo: 100,
+});
+
+const SCHEDULING_PURPOSES = new Set<SchedulingPurpose>([
+  "hub",
+  "convergence_evidence",
+  "discovery",
+  "verify",
+  "report",
+  "manual",
+]);
+
+export function asSchedulingPurpose(value: unknown, fallback: SchedulingPurpose = "manual"): SchedulingPurpose {
+  const purpose = String(value ?? "")
+    .trim()
+    .toLowerCase() as SchedulingPurpose;
+  return SCHEDULING_PURPOSES.has(purpose) ? purpose : fallback;
+}
+
+export interface SchedulingPriorityInput {
+  type: string;
+  severity?: unknown;
+  purpose?: unknown;
+  payload?: Record<string, unknown> | null;
+}
+
+/** Resolve a Job's immutable semantic purpose from its type/payload. */
+export function schedulingPurposeForJob(input: SchedulingPriorityInput): SchedulingPurpose {
+  const type = String(input.type ?? "").toLowerCase();
+  if (type === "hub_reason") return "hub";
+  if (type === "verify_finding" || type === "verify") return "verify";
+  if (type === "report") return "report";
+  const explicit = input.purpose ?? input.payload?.scheduling_purpose;
+  if (explicit !== undefined) {
+    const purpose = asSchedulingPurpose(explicit, "discovery");
+    // Custom roles may only choose between the two role lanes.  System
+    // classes (Hub/Verify/Report) are selected from the immutable type above.
+    return purpose === "convergence_evidence" ? purpose : "discovery";
+  }
+  return "discovery";
+}
+
+/**
+ * Pure fixed-priority resolver used by every Job creation path. Severity is
+ * consulted only for Verify ordering; the Verify scope gate is applied before
+ * this helper when a Finding is automatically derived.
+ */
+export function fixedPriorityForJob(input: SchedulingPriorityInput): number {
+  const purpose = schedulingPurposeForJob(input);
+  if (purpose === "report") return FIXED_PRIORITY.report;
+  if (purpose === "hub") return FIXED_PRIORITY.hub;
+  if (purpose === "convergence_evidence") return FIXED_PRIORITY.convergenceEvidence;
+  if (purpose === "verify") {
+    switch (asSeverityRank(input.severity, "medium")) {
+      case "critical":
+        return FIXED_PRIORITY.verifyCritical;
+      case "high":
+        return FIXED_PRIORITY.verifyHigh;
+      case "medium":
+        return FIXED_PRIORITY.verifyMedium;
+      case "low":
+        return FIXED_PRIORITY.verifyLow;
+      case "info":
+        return FIXED_PRIORITY.verifyInfo;
+    }
+  }
+  return FIXED_PRIORITY.role;
+}
+
+/** A PATCH may only write the class-derived value, never an arbitrary score. */
+export function priorityMatchesJob(input: SchedulingPriorityInput, priority: number): boolean {
+  return Number.isInteger(priority) && priority === fixedPriorityForJob(input);
+}
+
+const SCHEDULER_SYSTEM_JOB_TYPES = new Set(["hub_reason", "verify_finding", "verify", "report"]);
+
+export function isSchedulerOwnedVerificationFollowup(payload: Record<string, unknown>, parentJobType?: unknown): boolean {
+  const followup = payload.verification_followup;
+  if (!followup || typeof followup !== "object" || Array.isArray(followup)) return false;
+  const value = followup as Record<string, unknown>;
+  const trustedOrigin = (
+    String(parentJobType ?? "").trim().toLowerCase() === "hub_reason"
+    || value.manual_override === true
+  );
+  return (
+    value.scheduler_owned === true &&
+    trustedOrigin &&
+    typeof value.finding_id === "string" &&
+    value.finding_id.trim().length > 0 &&
+    Array.isArray(value.required_evidence)
+  );
+}
+
+export function schedulerPurposeForPendingNormalization(
+  type: string,
+  payload: Record<string, unknown>,
+  parentJobType?: unknown,
+): SchedulingPurpose {
+  const normalizedType = String(type ?? "")
+    .trim()
+    .toLowerCase();
+  if (SCHEDULER_SYSTEM_JOB_TYPES.has(normalizedType)) {
+    // System lanes are derived from the immutable type. Persisted payload
+    // purpose is never trusted during boot/resume repair.
+    return schedulingPurposeForJob({
+      type: normalizedType,
+      payload: { ...payload, scheduling_purpose: undefined },
+    });
+  }
+  // Hub 或 operator 端点生成的 verification followup 是 Scheduler 拥有的
+  // 非系统收敛 lane；公共 createJob 会剥离两个可信标记。
+  return isSchedulerOwnedVerificationFollowup(payload, parentJobType) ? "convergence_evidence" : "discovery";
+}
+
+/** 公共 Job 入口不得伪造 Scheduler 拥有的收敛 lane。 */
+export function stripPublicSchedulingMarkers(payload: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = { ...payload };
+  delete sanitized.scheduling_purpose;
+  delete sanitized.scheduler_owned;
+  delete sanitized.manual_override;
+  if (
+    sanitized.verification_followup &&
+    typeof sanitized.verification_followup === "object" &&
+    !Array.isArray(sanitized.verification_followup)
+  ) {
+    const followup = { ...(sanitized.verification_followup as Record<string, unknown>) };
+    delete followup.scheduler_owned;
+    delete followup.manual_override;
+    sanitized.verification_followup = followup;
+  }
+  return sanitized;
+}
+
+function priorityNormalization(row: Record<string, unknown>): {
+  priority: number;
+  payload: Record<string, unknown>;
+  changed: boolean;
+} {
+  const payload =
+    row.payload_json && typeof row.payload_json === "object" && !Array.isArray(row.payload_json)
+      ? { ...(row.payload_json as Record<string, unknown>) }
+      : {};
+  const purpose = schedulerPurposeForPendingNormalization(row.type as string, payload, row.parent_job_type);
+  const priority = fixedPriorityForJob({
+    type: row.type as string,
+    purpose,
+    severity:
+      row.finding_severity ?? payload.severity ?? (payload.finding as Record<string, unknown> | undefined)?.severity,
+    payload,
+  });
+  const changed = Number(row.priority) !== priority || payload.scheduling_purpose !== purpose;
+  if (payload.scheduling_purpose !== purpose) payload.scheduling_purpose = purpose;
+  return { priority, payload, changed };
+}
+
+/**
+ * Normalize only runnable pending Jobs after boot reconciliation. Historical
+ * terminal priorities remain untouched; reset claimed/provisioning Jobs are
+ * included because reconcileOnBoot has already returned them to pending.
+ */
+export async function normalizePendingJobPriorities(
+  db: typeof sql = sql,
+): Promise<{ examined: number; updated: number }> {
+  const rows = await db`
+    SELECT j.id, j.type, j.priority, j.payload_json, j.finding_id, j.parent_job_id,
+           parent.type AS parent_job_type,
+           f.severity AS finding_severity
+    FROM jobs j
+    LEFT JOIN findings f ON f.id = j.finding_id
+    LEFT JOIN jobs parent ON parent.id = j.parent_job_id
+    WHERE j.status = 'pending'
+    ORDER BY j.created_at ASC, j.id ASC`;
+  let updated = 0;
+  // SAFETY: 上面的 SELECT 列清单固定，行形状就是 Record<string, unknown>。
+  for (const row of /* SAFETY: 行/投影形状由本文件固定 SELECT 列清单决定。 */ rows as unknown as Record<string, unknown>[]) {
+    const normalized = priorityNormalization(row);
+    if (!normalized.changed) continue;
+    const [result] = await db`
+      UPDATE jobs SET
+        priority = ${normalized.priority},
+        payload_json = ${db.json(normalized.payload as never)}
+      WHERE id = ${row.id as string} AND status = 'pending'
+      RETURNING id`;
+    if (result) updated += 1;
+  }
+  return { examined: rows.length, updated };
+}
+
+/** Re-apply the same scheduler-owned class when a historical Job is resumed. */
+export async function normalizePendingJobPriority(jobId: string, db: typeof sql = sql): Promise<boolean> {
+  const [row] = await db`
+    SELECT j.id, j.type, j.priority, j.payload_json, j.finding_id, j.parent_job_id,
+           parent.type AS parent_job_type,
+           f.severity AS finding_severity
+    FROM jobs j
+    LEFT JOIN findings f ON f.id = j.finding_id
+    LEFT JOIN jobs parent ON parent.id = j.parent_job_id
+    WHERE j.id = ${jobId} AND j.status = 'pending'`;
+  if (!row) return false;
+  const normalized = priorityNormalization(row as Record<string, unknown>);
+  if (!normalized.changed) return false;
+  const [result] = await db`
+    UPDATE jobs SET
+      priority = ${normalized.priority},
+      payload_json = ${db.json(normalized.payload as never)}
+    WHERE id = ${jobId} AND status = 'pending'
+    RETURNING id`;
+  return Boolean(result);
+}
+
+function defaultMinVerifySeverity(): SeverityRank {
+  return asSeverityRank(config.rules.minVerifySeverity, "high");
+}
+
+/** env 兜底默认值（全局规则未配置时的最终回落） */
+function envDefaultRules(): ProjectRules {
+  return {
+    minVerifySeverity: defaultMinVerifySeverity(),
+    maxFollowupsPerJob: config.limits.maxFollowupsPerJob,
+    maxFollowupDepth: config.limits.maxFollowupDepth,
+    maxAutoRetries: config.limits.maxAutoRetries,
+    maxVerificationRounds: 0,
+    maxNoProgressRounds: config.rules.maxNoProgressRounds,
+    auditTimeoutSec: config.timeouts.auditSec,
+    verifyTimeoutSec: config.timeouts.verifySec,
+    stallSec: config.timeouts.stallSec,
+    jobTokenMaxRequests: config.gateway.maxRequests,
+    provisionTimeoutSec: config.timeouts.provisionSec,
+    hubEnabled: config.hub.enabled,
+    maxHubRounds: config.hub.maxRounds,
+    maxIntentsPerDecision: config.hub.maxIntents,
+    allowEgress: true,
+    maxGlobalJobs: asConcurrencyLimit(config.limits.maxGlobalJobs, 20),
+    maxJobsPerProject: asConcurrencyLimit(config.limits.maxJobsPerProject, 5),
+    maxConcurrentJobs: asConcurrencyLimit(config.limits.maxJobsPerProject, 5),
+    maxConcurrentJobsSource: "global",
+    maxConcurrentProvisioning: asConcurrencyLimit(config.limits.maxConcurrentProvisioning, 2),
+    maxConcurrentByProvider: {},
+    maxConcurrentByAgentCli: {},
+  };
+}
+
+function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): ProjectRules {
+  let min = base.minVerifySeverity;
+  if (raw.minVerifySeverity != null) min = asSeverityRank(raw.minVerifySeverity, min);
+
+  const maxVerificationRounds = raw.maxVerificationRounds;
+  if (maxVerificationRounds !== undefined && (typeof maxVerificationRounds !== "number" || !Number.isInteger(maxVerificationRounds) || maxVerificationRounds < 0 || maxVerificationRounds > 20)) throw new Error("Invalid maxVerificationRounds: expected integer 0-20 (0 unlimited)");
+  const maxHubRounds = parseHubMaxRounds(raw.maxHubRounds);
+  if (Object.hasOwn(raw, "maxHubRounds") && maxHubRounds === null) throw new Error("Invalid maxHubRounds");
+  const maxNoProgressRounds = Number(raw.maxNoProgressRounds);
+  const maxGlobalJobs = asConcurrencyLimit(raw.maxGlobalJobs, base.maxGlobalJobs);
+  const maxJobsPerProject = Math.min(maxGlobalJobs, asConcurrencyLimit(raw.maxJobsPerProject, base.maxJobsPerProject));
+  const maxConcurrentProvisioning = asConcurrencyLimit(raw.maxConcurrentProvisioning, base.maxConcurrentProvisioning);
+  return {
+    minVerifySeverity: min,
+    maxFollowupsPerJob: (raw.maxFollowupsPerJob as number) ?? base.maxFollowupsPerJob,
+    maxFollowupDepth: (raw.maxFollowupDepth as number) ?? base.maxFollowupDepth,
+    maxAutoRetries: (raw.maxAutoRetries as number) ?? base.maxAutoRetries,
+    maxVerificationRounds: typeof maxVerificationRounds === "number" ? maxVerificationRounds : base.maxVerificationRounds,
+    maxNoProgressRounds:
+      Number.isInteger(maxNoProgressRounds) && maxNoProgressRounds >= 0 && maxNoProgressRounds <= 5
+        ? maxNoProgressRounds
+        : base.maxNoProgressRounds,
+    auditTimeoutSec: asBoundedInt(raw.auditTimeoutSec, base.auditTimeoutSec, RUNTIME_KNOB_BOUNDS.timeoutSec.min, RUNTIME_KNOB_BOUNDS.timeoutSec.max),
+    verifyTimeoutSec: asBoundedInt(raw.verifyTimeoutSec, base.verifyTimeoutSec, RUNTIME_KNOB_BOUNDS.timeoutSec.min, RUNTIME_KNOB_BOUNDS.timeoutSec.max),
+    stallSec: asBoundedInt(raw.stallSec, base.stallSec, RUNTIME_KNOB_BOUNDS.stallSec.min, RUNTIME_KNOB_BOUNDS.stallSec.max),
+    jobTokenMaxRequests: asBoundedInt(
+      raw.jobTokenMaxRequests,
+      base.jobTokenMaxRequests,
+      RUNTIME_KNOB_BOUNDS.jobTokenMaxRequests.min,
+      RUNTIME_KNOB_BOUNDS.jobTokenMaxRequests.max,
+    ),
+    provisionTimeoutSec: asBoundedInt(
+      raw.provisionTimeoutSec,
+      base.provisionTimeoutSec,
+      RUNTIME_KNOB_BOUNDS.provisionTimeoutSec.min,
+      RUNTIME_KNOB_BOUNDS.provisionTimeoutSec.max,
+    ),
+    hubEnabled: (raw.hubEnabled as boolean) ?? base.hubEnabled,
+    maxHubRounds: maxHubRounds ?? base.maxHubRounds,
+    maxIntentsPerDecision: (raw.maxIntentsPerDecision as number) ?? base.maxIntentsPerDecision,
+    allowEgress: (raw.allowEgress as boolean) ?? base.allowEgress,
+    maxGlobalJobs,
+    maxJobsPerProject,
+    maxConcurrentJobs: maxJobsPerProject,
+    maxConcurrentJobsSource: "global",
+    maxConcurrentProvisioning,
+    maxConcurrentByProvider: asProviderLimits(raw.maxConcurrentByProvider, base.maxConcurrentByProvider),
+    maxConcurrentByAgentCli: asCliLimits(raw.maxConcurrentByAgentCli, base.maxConcurrentByAgentCli),
+  };
+}
+
+/**
+ * Merge a global settings patch without replacing existing quota maps. Rule
+ * fields are declaration-style scalars, while provider/CLI quota maps are
+ * incremental so an operator can change one key without dropping siblings.
+ */
+export function mergeGlobalRulesPatch(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...current, ...patch };
+  for (const key of ["maxConcurrentByAgentCli", "maxConcurrentByProvider"]) {
+    const incoming = patch[key];
+    if (incoming === null || typeof incoming !== "object" || Array.isArray(incoming)) continue;
+    const previous = current[key];
+    const previousMap =
+      previous && typeof previous === "object" && !Array.isArray(previous) ? (previous as Record<string, unknown>) : {};
+    merged[key] = { ...previousMap, ...(incoming as Record<string, unknown>) };
+  }
+  return scrubLeftoverRulesJson(merged).rules;
+}
+
+/** 启动 / 写入前物理清扫已停用规则键，不再保留「存着但不生效」的第二真相。 */
+export async function scrubLeftoverStoredRules(
+  db: typeof sql,
+): Promise<{ global: number; projects: number }> {
+  const [g] = await db`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+  let global = 0;
+  const globalScrub = scrubLeftoverRulesJson(g?.rules_json ?? {});
+  if (globalScrub.removedKeys.length > 0) {
+    await db`UPDATE global_settings SET rules_json = ${db.json(globalScrub.rules as never)}, updated_at = now() WHERE id = 'global'`;
+    global = 1;
+  }
+
+  const projects = await db`SELECT id, config_json FROM projects` as { id: string; config_json?: unknown }[];
+  let projectCount = 0;
+  for (const project of projects ?? []) {
+    const cfg = { ...((project.config_json ?? {}) as Record<string, unknown>) };
+    const rules = cfg.rules && typeof cfg.rules === "object" && !Array.isArray(cfg.rules)
+      ? (cfg.rules as Record<string, unknown>)
+      : null;
+    if (!rules) continue;
+    const next = scrubLeftoverRulesJson(rules);
+    const stripped = stripFindingProtocolFromRules(next.rules);
+    const removedProtocol = Object.keys(stripped).length !== Object.keys(next.rules).length;
+    if (next.removedKeys.length === 0 && !removedProtocol) continue;
+    cfg.rules = stripped;
+    await db`UPDATE projects SET config_json = ${db.json(cfg as never)} WHERE id = ${project.id}`;
+    projectCount += 1;
+  }
+  return { global, projects: projectCount };
+}
+
+/** 物理清扫已删除的配置别名：agent_choice、rules 内协议投影残留、脏 image_strategy、RoleConfig knobs snake_case。 */
+export async function scrubRedundantConfigSurface(
+  db: typeof sql,
+): Promise<{ protocols: number; imagePolicies: number; roleKnobs: number }> {
+  let protocols = 0;
+  let imagePolicies = 0;
+  let roleKnobs = 0;
+
+  const [g] = await db`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+  const globalRules = { ...(((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>) };
+  const globalProtocol = rewriteFindingProtocolMode(globalRules.finding_protocol);
+  if (globalProtocol.changed) {
+    globalRules.finding_protocol = globalProtocol.next;
+    await db`UPDATE global_settings SET rules_json = ${db.json(globalRules as never)}, updated_at = now() WHERE id = 'global'`;
+    protocols += 1;
+  }
+
+  const projects = await db`SELECT id, config_json FROM projects` as { id: string; config_json?: unknown }[];
+  for (const project of projects ?? []) {
+    const cfg = { ...((project.config_json ?? {}) as Record<string, unknown>) };
+    let changed = false;
+    const protocol = rewriteFindingProtocolMode(cfg.finding_protocol);
+    if (protocol.changed) {
+      cfg.finding_protocol = protocol.next;
+      changed = true;
+      protocols += 1;
+    }
+    if (scrubStoredProjectImagePolicy(cfg)) {
+      changed = true;
+      imagePolicies += 1;
+    }
+    if (changed) await db`UPDATE projects SET config_json = ${db.json(cfg as never)} WHERE id = ${project.id}`;
+  }
+
+  const canvases = await db`
+    SELECT id, target_json FROM canvases
+    WHERE target_json ? 'effective_finding_protocol'` as { id: string; target_json?: unknown }[];
+  for (const canvas of canvases ?? []) {
+    const target = { ...((canvas.target_json ?? {}) as Record<string, unknown>) };
+    const protocol = rewriteFindingProtocolMode(target.effective_finding_protocol);
+    if (!protocol.changed) continue;
+    target.effective_finding_protocol = protocol.next;
+    await db`UPDATE canvases SET target_json = ${db.json(target as never)} WHERE id = ${canvas.id}`;
+    protocols += 1;
+  }
+
+  const roleConfigs = await db`
+    SELECT id, runtime_knobs_json FROM role_configs` as { id: string; runtime_knobs_json?: unknown }[];
+  for (const row of roleConfigs ?? []) {
+    const knobs = canonicalizeRoleRuntimeKnobsJson(row.runtime_knobs_json);
+    if (!knobs.changed) continue;
+    await db`UPDATE role_configs SET runtime_knobs_json = ${db.json(knobs.next as never)} WHERE id = ${row.id}`;
+    roleKnobs += 1;
+  }
+
+  return { protocols, imagePolicies, roleKnobs };
+}
+
+/** 全局规则（global_settings 单例行 → env 兜底；§8.1 所有配置落库） */
+export async function globalRules(db: typeof sql): Promise<ProjectRules> {
+  const [g] = await db`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+  const gr = ((g?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
+  return mergeRulesLayer(gr, envDefaultRules());
+}
+
+/** 项目规则：项目 config_json.rules → 全局 global_settings → env 三级回落 */
+export async function rulesForProject(db: typeof sql, projectId: string): Promise<ProjectRules> {
+  const [p, g] = await Promise.all([
+    db`SELECT config_json FROM projects WHERE id = ${projectId}`,
+    db`SELECT rules_json FROM global_settings WHERE id = 'global'`,
+  ]);
+  const r = (((p[0]?.config_json as Record<string, unknown>)?.rules ?? {}) ?? {}) as Record<string, unknown>;
+  const gr = ((g[0]?.rules_json ?? {}) ?? {}) as Record<string, unknown>;
+  const global = mergeRulesLayer(gr, envDefaultRules());
+  const quota = effectiveProjectJobLimit(global.maxJobsPerProject, r.maxConcurrentJobs);
+  // Global scheduler hard caps stay visible, but a project may only tighten
+  // its own claim-time job budget. Provider/CLI maps remain global-only.
+  return {
+    ...mergeRulesLayer(r, global),
+    maxGlobalJobs: global.maxGlobalJobs,
+    maxJobsPerProject: global.maxJobsPerProject,
+    maxConcurrentJobs: quota.limit,
+    maxConcurrentJobsSource: quota.source,
+    maxConcurrentProvisioning: global.maxConcurrentProvisioning,
+    provisionTimeoutSec: global.provisionTimeoutSec,
+    maxConcurrentByProvider: global.maxConcurrentByProvider,
+    maxConcurrentByAgentCli: global.maxConcurrentByAgentCli,
+  };
+}
+
+export function parseCanvasConvergence(targetJson: unknown): CanvasConvergence {
+  const tj = (targetJson ?? {}) as Record<string, unknown>;
+  const conv = (tj.convergence ?? {}) as Record<string, unknown>;
+  return {
+    hub_paused: Boolean(conv.hub_paused),
+    paused_reason: typeof conv.paused_reason === "string" ? conv.paused_reason : undefined,
+    paused_at: typeof conv.paused_at === "string" ? conv.paused_at : undefined,
+    auto_stopped: Boolean(conv.auto_stopped),
+    pending_confirmed_ids: Array.isArray(conv.pending_confirmed_ids)
+      ? conv.pending_confirmed_ids.map(String)
+      : undefined,
+  };
+}
+
+export async function readCanvasConvergence(db: typeof sql, canvasId: string): Promise<CanvasConvergence> {
+  const [c] = await db`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
+  return parseCanvasConvergence(c?.target_json);
+}
+
+export async function patchCanvasConvergence(
+  db: typeof sql,
+  canvasId: string,
+  patch: Partial<CanvasConvergence>,
+): Promise<CanvasConvergence> {
+  const [c] = await db`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
+  if (!c) throw new Error(`canvas not found: ${canvasId}`);
+  const tj = { ...((c.target_json ?? {}) as Record<string, unknown>) };
+  const prev = parseCanvasConvergence(tj);
+  const next: CanvasConvergence = {
+    hub_paused: patch.hub_paused ?? prev.hub_paused,
+    paused_reason: "paused_reason" in patch ? patch.paused_reason : prev.paused_reason,
+    paused_at: "paused_at" in patch ? patch.paused_at : prev.paused_at,
+    auto_stopped: patch.auto_stopped ?? prev.auto_stopped,
+    pending_confirmed_ids: "pending_confirmed_ids" in patch ? patch.pending_confirmed_ids : prev.pending_confirmed_ids,
+  };
+  // 清理 undefined 键，避免 jsonb 噪音
+  const stored: Record<string, unknown> = {
+    hub_paused: next.hub_paused,
+    auto_stopped: next.auto_stopped,
+  };
+  if (next.paused_reason) stored.paused_reason = next.paused_reason;
+  if (next.paused_at) stored.paused_at = next.paused_at;
+  if (next.pending_confirmed_ids?.length) stored.pending_confirmed_ids = next.pending_confirmed_ids;
+  tj.convergence = stored;
+  await db`UPDATE canvases SET target_json = ${db.json(tj as never)} WHERE id = ${canvasId}`;
+  return next;
+}
+
+// ---------- 角色注册表（§8.3 Phase ②）：全局 agent_roles + 项目级启用清单 ----------
+
+export interface RoleDef {
+  id: string;
+  name: string; // 即 job.type
+  title: string;
+  description: string;
+  builtin: boolean;
+  ui_color: string | null;
+}
+
+/**
+ * 项目可用的角色清单（hub 可下发的 agent）：
+ * 每次调用都实时查询 agent_roles；schema 中的内置模板不是运行时固定清单。
+ * All platform roles and project-owned roles are available to the Hub. The
+ * Hub chooses which governed role to dispatch; project role enablement lists
+ * are retained only as legacy configuration and are not an authorization gate.
+ */
+export async function rolesForProject(db: typeof sql, projectId: string): Promise<RoleDef[]> {
+  const all = await db`SELECT id, name, title, description, builtin, ui_color FROM agent_roles
+      WHERE kind = 'role'
+        AND (project_id IS NULL OR project_id = ${projectId})
+      ORDER BY project_id NULLS FIRST, builtin DESC, name`;
+  // Legacy project role enablement is intentionally ignored. Project-owned
+  // roles are scoped by the owning project_id on the registry row.
+  // SAFETY: 上面的 SELECT 列清单固定，行形状就是 RoleDef。
+  return all as unknown as RoleDef[];
+}
+
+// ---------- Job 创建 ----------
+
+export interface CreateJobInput {
+  projectId: string;
+  canvasId?: string;
+  parentJobId?: string;
+  findingId?: string;
+  type: string;
+  priority?: number;
+  payload?: Record<string, unknown>;
+  timeoutSec?: number;
+  stallSec?: number;
+  maxRequests?: number;
+  followupDepth?: number;
+  /** 外部入口幂等键；仅入口 job 使用。 */
+  ingressKey?: string;
+  /** Task/Job-level runtime profile overlay, frozen at Job creation. */
+  runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null;
+}
+
+export const MAX_RELATED_FINDING_IDS = 8;
+const canonicalUuid = new RegExp(CANONICAL_UUID_PATTERN, "i");
+
+/** Parse the untrusted payload declaration used to widen a Job's Finding scope. */
+export function parseRelatedFindingIds(payload: Record<string, unknown>): string[] {
+  if (!Object.hasOwn(payload, "related_finding_ids")) return [];
+  const raw = payload.related_finding_ids;
+  if (!Array.isArray(raw) || raw.length > MAX_RELATED_FINDING_IDS) {
+    throw new Error(`related_finding_ids_invalid: expected at most ${MAX_RELATED_FINDING_IDS} canonical UUIDs`);
+  }
+  const ids = raw.map((value, index) => {
+    if (typeof value !== "string" || !canonicalUuid.test(value)) {
+      throw new Error(`related_finding_ids_invalid: index ${index}`);
+    }
+    return value.toLowerCase();
+  });
+  if (new Set(ids).size !== ids.length) throw new Error("related_finding_ids_duplicate");
+  return ids;
+}
+
+export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assignment?: import("@deepsonar/shared-types").KnowledgeJobAssignment) {
+  const requestedPayload = { ...(input.payload ?? {}) };
+  const systemType = SCHEDULER_SYSTEM_JOB_TYPES.has(String(input.type ?? "").toLowerCase());
+  const schedulingPayload = systemType
+    ? { ...requestedPayload }
+    : stripPublicSchedulingMarkers(requestedPayload);
+  const reviewRequest = schedulingPayload.goal_review === undefined ? undefined : TaskGoalReviewRequest.safeParse(schedulingPayload.goal_review);
+  if (reviewRequest && !reviewRequest.success) throw invalidControlPayload("goal_review 请求结构无效。", "payload.goal_review");
+  if (reviewRequest && (!input.canvasId || systemType)) throw invalidControlPayload("目标评审必须使用同 Canvas 的普通受治理 Job。", "payload.goal_review");
+  const relatedFindingIds = parseRelatedFindingIds(schedulingPayload);
+  if (reviewRequest?.success && reviewRequest.data.finding_id) {
+    relatedFindingIds.push(reviewRequest.data.finding_id.toLowerCase());
+    schedulingPayload.related_finding_ids = [...new Set(relatedFindingIds)];
+    if (new Set(relatedFindingIds).size > MAX_RELATED_FINDING_IDS) throw invalidControlPayload("评审候选不能扩大既有 Finding 关联数量上限。", "payload.related_finding_ids");
+  }
+  const snapshotFindingIds = [
+    ...new Set([...(input.findingId ? [input.findingId.toLowerCase()] : []), ...relatedFindingIds]),
+  ];
+  const purpose = schedulingPurposeForJob({
+    type: input.type,
+    // Custom/public Job creation never accepts a caller-selected convergence
+    // lane. Scheduler-owned role INSERT paths use fixedPriorityForJob
+    // directly and freeze their purpose there.
+    purpose: systemType ? requestedPayload.scheduling_purpose : undefined,
+    payload: schedulingPayload,
+  });
+  const priority = fixedPriorityForJob({
+    type: input.type,
+    purpose,
+    severity:
+      schedulingPayload.severity ?? (schedulingPayload.finding as Record<string, unknown> | undefined)?.severity,
+    payload: schedulingPayload,
+  });
+  if (input.priority !== undefined && input.priority !== priority) {
+    throw new Error(`job priority is fixed for ${input.type}: expected ${priority}`);
+  }
+  const payload = {
+    ...schedulingPayload,
+    scheduling_purpose: purpose,
+    ...(input.runtimeProfile ? { runtime_profile: input.runtimeProfile } : {}),
+  };
+  // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
+  let snapshot = await freezeSnapshotDeviceRequirement(
+    tx as unknown as typeof sql,
+    input.projectId,
+    input.canvasId,
+    await freezeAgentSnapshotNetworkPolicy(
+      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
+      tx as unknown as typeof sql,
+      input.canvasId,
+      await resolveAgentSnapshotForJob(
+        // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
+        tx as unknown as typeof sql,
+        input.projectId,
+        input.type,
+        snapshotFindingIds,
+        { runtimeProfile: input.runtimeProfile ?? null },
+      ),
+    ),
+  );
+  if (reviewRequest?.success) snapshot = await freezeGoalReviewAssignment(tx, input.projectId, input.canvasId!, snapshot, reviewRequest.data);
+  return persistPreparedJob(tx, input, { snapshot, payload, priority, assignment });
+}
+
+export async function createJob(input: CreateJobInput) {
+  try {
+    const job = await sql.begin((tx) => createJobInTransaction(tx as unknown as Tx, input));
+    inc("deepsonar_jobs_created_total", { type: input.type });
+    const providerModel = job.snapshotWithKnobs && typeof job.snapshotWithKnobs === "object"
+      ? (job.snapshotWithKnobs as { provider_model?: { passthrough?: boolean; upstream_model_id?: string | null; cli_model_id?: string | null; catalog_revision?: string | null; model_descriptor?: { health_status?: string } | null } }).provider_model
+      : undefined;
+    if (providerModel?.passthrough === true) {
+      void recordSystemAudit({
+        action: "job.model_catalog_passthrough",
+        projectId: input.projectId,
+        resourceType: "job",
+        resourceId: String(job.created.id),
+        after: {
+          passthrough: true,
+          upstream_model_id: providerModel.upstream_model_id ?? null,
+          cli_model_id: providerModel.cli_model_id ?? null,
+          catalog_revision: providerModel.catalog_revision ?? null,
+          health_status: providerModel.model_descriptor?.health_status ?? "passthrough_allowed",
+          job_type: input.type,
+        },
+      });
+    }
+    return { job: job.created, duplicated: false };
+  } catch (e: unknown) {
+    // ingress_key / 活跃 Verify 等唯一约束：已有冲突 Job
+    if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
+      return { job: null, duplicated: true };
+    }
+    throw e;
+  }
+}
+
+// ---------- 任务画布（一任务一画布，§3.2）：认领时铸造 canvas_id ----------
+
+export interface EnsureCanvasInput {
+  projectId: string;
+  title: string;
+  target: Record<string, unknown>;
+  triggerSource?: string;
+  triggerEventId?: string;
+  triggerPayload?: Record<string, unknown>;
+  /** Scheduler-only authority: only the human task route may select project history. */
+  allowComposeSeeds?: boolean;
+}
+
+function parseStoredFindingProtocolConfig(value: unknown) {
+  if (value === undefined || value === null) return undefined;
+  return FindingProtocolConfigSchema.parse(value);
+}
+
+export function stripFindingProtocolFromRules(rules: Record<string, unknown>): Record<string, unknown> {
+  if (!Object.hasOwn(rules, "finding_protocol")) return rules;
+  const { finding_protocol: _protocol, ...rest } = rules;
+  return rest;
+}
+
+/**
+ * 为任务确保一个画布：同一 trigger 复用，否则新建；
+ * 新建时同事务写 root 节点（body_json 带目标）。返回 canvas_id。
+ */
+export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<string> {
+  return sql.begin((tx) => ensureCanvasForTaskInTransaction(tx as unknown as Tx, input));
+}
+
+export async function ensureCanvasForTaskInTransaction(tx: Tx, input: EnsureCanvasInput): Promise<string> {
+  const requestedPolicy = (input.target.network_policy ?? {}) as Record<string, unknown>;
+  const effectiveRules = await rulesForProject(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, input.projectId);
+  const [globalSettings] = await tx`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+  const [project] = await tx`SELECT config_json FROM projects WHERE id = ${input.projectId}`;
+  if (!project) throw new Error(`project ${input.projectId} 不存在`);
+  const globalConfig = parseStoredFindingProtocolConfig(
+    ((globalSettings?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
+  );
+  const projectConfig = parseStoredFindingProtocolConfig(
+    ((project.config_json ?? {}) as Record<string, unknown>).finding_protocol,
+  );
+  const taskConfig = parseStoredFindingProtocolConfig(input.target.finding_protocol);
+  const effectiveFindingProtocol = resolveFindingProtocol(globalConfig, projectConfig, taskConfig);
+  const target = await freezeTaskSeedTarget(
+    /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
+    input.projectId,
+    {
+      ...input.target,
+      effective_finding_protocol: effectiveFindingProtocol,
+      network_policy: {
+        allow_egress:
+          typeof requestedPolicy.allow_egress === "boolean" ? requestedPolicy.allow_egress : effectiveRules.allowEgress,
+      },
+    },
+    input.allowComposeSeeds === true,
+  );
+  let canvasId: string | null = null;
+  let created = false;
+
+  if (input.triggerSource && input.triggerEventId) {
+    const inserted = await tx`
+      INSERT INTO canvases ${tx({
+        project_id: input.projectId,
+        title: input.title,
+        target_json: target as never,
+        trigger_source: input.triggerSource,
+        trigger_event_id: input.triggerEventId,
+        trigger_payload_json: (input.triggerPayload ?? {}) as never,
+      })}
+      ON CONFLICT (project_id, trigger_source, trigger_event_id)
+        WHERE trigger_event_id IS NOT NULL DO NOTHING
+      RETURNING id`;
+    if (inserted.length > 0) {
+      canvasId = inserted[0].id as string;
+      created = true;
+    } else {
+      const [existing] = await tx`
+        SELECT id FROM canvases
+        WHERE project_id = ${input.projectId}
+          AND trigger_source = ${input.triggerSource}
+          AND trigger_event_id = ${input.triggerEventId}`;
+      canvasId = existing.id as string;
+    }
+  } else {
+    const [row] = await tx`
+      INSERT INTO canvases ${tx({
+        project_id: input.projectId,
+        title: input.title,
+        target_json: target as never,
+      })}
+      RETURNING id`;
+    canvasId = row.id as string;
+    created = true;
+  }
+
+  if (created) {
+    // root 节点：任务目标挂在 body_json.target；canvas_nodes_root_uniq 保证并发安全
+    const [rootNode] = await tx`
+      INSERT INTO canvas_nodes ${tx({
+        canvas_id: canvasId,
+        job_id: null,
+        node_type: "root",
+        title: input.title,
+        body_json: { target } as never,
+        x: 100,
+        y: 100,
+        status: "active",
+      })}
+      ON CONFLICT DO NOTHING
+      RETURNING id`;
+    if (rootNode) {
+      await insertTaskSeedProjections(
+        /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
+        canvasId,
+        rootNode.id as string,
+        target,
+      );
+    }
+  }
+  return canvasId;
+}
+
+async function findingProtocolForJob(tx: Tx, job: Record<string, unknown>): Promise<EffectiveFindingProtocol> {
+  if (job.canvas_id) {
+    const [canvas] = await tx`SELECT target_json FROM canvases WHERE id = ${job.canvas_id as string}`;
+    const target = (canvas?.target_json ?? {}) as Record<string, unknown>;
+    const frozen = parseFrozenFindingProtocol(target.effective_finding_protocol);
+    if (frozen) return frozen;
+  }
+  throw new Error("FROZEN_FINDING_PROTOCOL_MISSING");
+}
+
+// ---------- 事件摄入（幂等 + job_seq + 按类型落地副作用） ----------
+
+export async function ingestEvent(jobId: string, envelope: EventEnvelopeInput): Promise<IngestResult> {
+  return eventIngestionApplication.ingestEvent(jobId, envelope);
+}
+
+/**
+ * Append deferred terminal semantic events as one same-Job transaction.  Hub
+ * decision side effects and the corresponding Job done therefore cannot be
+ * observed as a partially committed bundle.
+ */
+export async function ingestEventBundle(
+  jobId: string,
+  envelopes: readonly EventEnvelopeInput[],
+): Promise<IngestResult[]> {
+  return eventIngestionApplication.ingestEventBundle(jobId, envelopes);
+}
+
+/** Composition root wiring for semantic event application; ownership lives in event-ingestion. */
+export async function applySideEffects(
+  tx: Tx,
+  jobId: string,
+  type: string,
+  payload: unknown,
+  services: EventSideEffectServices = {},
+): Promise<void> {
+  return eventIngestionSideEffectApplication.applySideEffects(tx, jobId, type, payload, services);
+}
+
+/**
+ * Shared dispatcher/retry serialization key.  The dispatcher holds this
+ * transaction advisory lock while claiming pending jobs; destructive canvas
+ * retry acquires the same key before it checks and wipes runtime rows.
+ */
+export const DISPATCH_CLAIM_ADVISORY_KEY = "deepsonar_dispatch_claim";
+
+/**
+ * Every path that mutates convergence state takes the canvas row first.  The
+ * finding/verification-round locks are always acquired underneath this lock,
+ * so terminal/recovery paths cannot deadlock with Hub eligibility.
+ */
+export async function lockCanvasForConvergence(tx: Tx, canvasId: string | null | undefined): Promise<boolean> {
+  if (!canvasId) return true;
+  const [canvas] = await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+  return Boolean(canvas);
+}
+
+/** canvas_edges 无唯一约束：from/to 边幂等插入 */
+async function insertEdgeIfAbsent(tx: Tx, canvasId: string, fromId: string, toId: string, edgeType: string) {
+  const existing = await tx`
+    SELECT 1 FROM canvas_edges
+    WHERE canvas_id = ${canvasId} AND from_node_id = ${fromId} AND to_node_id = ${toId} AND edge_type = ${edgeType}
+    LIMIT 1`;
+  if (existing.length > 0) return;
+  await tx`
+    INSERT INTO canvas_edges ${tx({
+      canvas_id: canvasId,
+      from_node_id: fromId,
+      to_node_id: toId,
+      edge_type: edgeType,
+    })}`;
+}
+
+/**
+ * Hub orchestration application.  Core remains the composition root for this
+ * slice: the bounded context owns eligibility/trigger/round-budget SQL while
+ * these adapters preserve the existing Scheduler lock and side-effect seams.
+ */
+const hubOrchestrationApplication = createHubOrchestrationApplication(sql, {
+  rulesForProject: async (tx, projectId) => rulesForProject(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, projectId),
+  lockCanvasForConvergence,
+  readCanvasConvergence: async (tx, canvasId) => readCanvasConvergence(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql. */ tx as unknown as typeof sql, canvasId),
+  patchCanvasConvergence: async (tx, canvasId, patch) =>
+    patchCanvasConvergence(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, canvasId, patch),
+  careSeverities,
+  resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = []) =>
+    resolveAgentSnapshotForJob(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, projectId, type, findingIds),
+  recordJobSharedAssets: async (tx, jobId, snapshot) =>
+    recordJobSharedAssets(
+      /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
+      jobId,
+      (
+        snapshot as {
+          shared_assets?: Parameters<typeof recordJobSharedAssets>[2];
+        }
+      ).shared_assets ?? [],
+    ),
+  fixedPriorityForJob: (input) => fixedPriorityForJob(input),
+  insertEdgeIfAbsent,
+  settleCanvasFindingsAtGuardrail: findingVerification.settleCanvasFindingsAtGuardrail,
+  evaluateAnalysisCompleteGate: async (tx, canvasId, options) => {
+    return findingVerification.evaluateAnalysisCompleteGate(
+      tx,
+      canvasId,
+      options,
+    ) as Promise<HubAnalysisCompleteGate>;
+  },
+  hasSucceededRoleWork: findingVerification.hasSucceededRoleWork,
+  maybeDispatchReport: reportConvergence.maybeDispatchReport,
+  markFindingNeedsHuman: async (tx, findingId, reason) =>
+    findingVerification.markFindingNeedsHuman(tx, findingId, reason),
+});
+
+type CanvasEdgeInput = {
+  canvasId: string;
+  fromId: string;
+  toId: string;
+  edgeType: string;
+};
+
+
+function dedupeCanvasEdges(edges: readonly CanvasEdgeInput[]): CanvasEdgeInput[] {
+  const unique = new Map<string, CanvasEdgeInput>();
+  for (const edge of edges) {
+    const key = `${edge.canvasId}\u0000${edge.fromId}\u0000${edge.toId}\u0000${edge.edgeType}`;
+    unique.set(key, edge);
+  }
+  return [...unique.values()];
+}
+
+/**
+ * Insert a deduplicated edge batch without reading each candidate edge. The
+ * event-ingestion transaction already serializes a canvas, and the NOT EXISTS
+ * guard preserves the idempotency of insertEdgeIfAbsent for earlier events.
+ */
+export async function insertEdgesIfAbsentBatch(tx: Tx, edges: readonly CanvasEdgeInput[]) {
+  const values = dedupeCanvasEdges(edges);
+  if (values.length === 0) return;
+
+  let rows = tx`(${values[0]!.canvasId}, ${values[0]!.fromId}::uuid, ${values[0]!.toId}::uuid, ${values[0]!.edgeType})`;
+  for (const edge of values.slice(1)) {
+    rows = tx`${rows}, (${edge.canvasId}, ${edge.fromId}::uuid, ${edge.toId}::uuid, ${edge.edgeType})`;
+  }
+  await tx`
+    INSERT INTO canvas_edges (canvas_id, from_node_id, to_node_id, edge_type)
+    SELECT candidate.canvas_id, candidate.from_node_id, candidate.to_node_id, candidate.edge_type
+    FROM (VALUES ${rows}) AS candidate(canvas_id, from_node_id, to_node_id, edge_type)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM canvas_edges existing
+      WHERE existing.canvas_id = candidate.canvas_id
+        AND existing.from_node_id = candidate.from_node_id
+        AND existing.to_node_id = candidate.to_node_id
+        AND existing.edge_type = candidate.edge_type
+    )`;
+}
+
+// ---------- 结束处理 ----------
+
+type TerminalCanvasNodeSnapshot = { id: string; canvas_id: string | null };
+
+function sameTerminalCanvasNodes(left: TerminalCanvasNodeSnapshot[], right: TerminalCanvasNodeSnapshot[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every(
+    (node, index) =>
+      String(node.id) === String(right[index]?.id) &&
+      ((node.canvas_id as string | null) ?? null) === ((right[index]?.canvas_id as string | null) ?? null),
+  );
+}
+
+/**
+ * 结束处理（§8.2）：done/failed 只能把 running 改为终态。
+ * 语义事件入口在同一摄入事务提交前拒绝「开始时」非 running 的 Job（稳定
+ * `job_not_running`，对外全事务回滚）。同一摄入里更早的事件已经成功
+ * 终态时，后续 mark_job_done 视为幂等，不得整笔回滚。仅相同 event_id
+ * 的 dedup replay 会在该门槛前直接返回。
+ * 终态永不被迟到事件覆盖。
+ */
+export async function finalizeJob(
+  tx: Tx,
+  jobId: string,
+  status: "succeeded" | "failed",
+  result?: { summary?: string; error?: string; verdict?: string },
+) {
+  // Terminal convergence is Canvas-first. Read the immutable canvas target
+  // without a lock, acquire Canvas, then take the Job row through the guarded
+  // update. A concurrent repair that changes canvas_id aborts this transaction
+  // instead of acquiring a second Canvas after Job.
+  const [candidate] = await tx<{ canvas_id: string | null }[]>`
+    SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
+  if (!candidate) return false;
+  const candidateJobCanvasId = (candidate.canvas_id as string | null) ?? null;
+  const candidateNodes = await tx<TerminalCanvasNodeSnapshot[]>`
+    SELECT id, canvas_id FROM canvas_nodes
+    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})
+    ORDER BY id`;
+  const candidateNodeCanvasIds = [...new Set(candidateNodes.map((node) => (node.canvas_id as string | null) ?? null))];
+  if (candidateNodes.some((node) => !node.canvas_id)) {
+    throw new Error(`job ${jobId} has a Job/Intent/Report node without a Canvas`);
+  }
+  if (candidateNodeCanvasIds.length > 1) {
+    throw new Error(`job ${jobId} has multiple convergence canvases`);
+  }
+  if (candidateJobCanvasId && candidateNodeCanvasIds.some((canvasId) => canvasId !== candidateJobCanvasId)) {
+    throw new Error(`job ${jobId} has a job node outside canvas ${candidateJobCanvasId}`);
+  }
+  const candidateCanvasId = candidateJobCanvasId ?? (candidateNodeCanvasIds[0] as string | null | undefined) ?? null;
+  if (!(await lockCanvasForConvergence(tx, candidateCanvasId))) return false;
+
+  const [lockedJob] = await tx<{ id: string; canvas_id: string | null }[]>`
+    SELECT id, canvas_id FROM jobs WHERE id = ${jobId} FOR UPDATE`;
+  if (!lockedJob) return false;
+  if (((lockedJob.canvas_id as string | null) ?? null) !== candidateJobCanvasId) {
+    throw new Error(`job ${jobId} canvas changed while finalizing`);
+  }
+  const lockedNodes = await tx<TerminalCanvasNodeSnapshot[]>`
+    SELECT id, canvas_id FROM canvas_nodes
+    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})
+    ORDER BY id
+    FOR UPDATE`;
+  if (!sameTerminalCanvasNodes(candidateNodes, lockedNodes)) {
+    throw new Error(`job ${jobId} Canvas nodes changed while finalizing`);
+  }
+  if (lockedNodes.some((node) => ((node.canvas_id as string | null) ?? null) !== candidateCanvasId)) {
+    throw new Error(`job ${jobId} Canvas nodes are outside the finalization Canvas`);
+  }
+
+  const [updated] = await tx<{ id: string; canvas_id: string | null }[]>`
+    UPDATE jobs SET status = ${status}, finished_at = now(), error = ${result?.error ?? null}
+    WHERE id = ${jobId} AND status = 'running'
+    RETURNING id, canvas_id`;
+  if (!updated) {
+    console.warn(`[finalize] job ${jobId} 已不在 running，跳过重复 ${status} 终态提交`);
+    return false;
+  }
+  // Job 与 Attempt 的终态必须在同一事务提交；Attempt 没有活动行时兼容
+  // 早期手工/导入 Job，但不会凭空创建第二套生命周期。
+  await settleAttemptTerminal(
+    tx,
+    jobId,
+    status === "succeeded" ? "succeeded" : "failed",
+    {
+      job_status: status,
+      ...(result?.summary === undefined
+        ? {}
+        : {
+            summary_sha256: createHash("sha256").update(result.summary, "utf8").digest("hex"),
+            summary_bytes: Buffer.byteLength(result.summary, "utf8"),
+          }),
+    },
+    result?.error,
+  );
+  if (((updated.canvas_id as string | null) ?? null) !== candidateJobCanvasId) {
+    throw new Error(`job ${jobId} canvas changed while finalizing`);
+  }
+  await tx`
+    UPDATE canvas_nodes SET status = ${status}, body_json = body_json || ${tx.json({ summary: result?.summary ?? null })}, updated_at = now()
+    WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
+
+  // §6.3：job 终态立即吊销短期模型 Token（容器残留也调不动模型；网关另按 job 状态逐请求兜底）
+  await revokeJobTokens(jobId, `job_${status}`).catch(() => {});
+  await revokeJobCapabilityTokens(jobId, `job_${status}`).catch(() => {});
+
+  const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
+  // §13.1 指标：终态计数 + 时长
+  // Canvas is already held as the outer lock for this terminal path. Verify
+  // close/recovery and Hub eligibility take Finding/Round locks underneath it.
+  if (status === "failed") inc("deepsonar_jobs_failed_total", { reason: "failed" });
+  if (job?.started_at) {
+    const dur = (Date.now() - new Date(job.started_at as string).getTime()) / 1000;
+    if (dur > 0) {
+      inc("deepsonar_job_duration_seconds_sum", undefined, Math.round(dur));
+      inc("deepsonar_job_duration_seconds_count");
+    }
+  }
+
+  if (job && await onKnowledgeJobTerminal(tx as unknown as typeof sql, job as { id: unknown }, status)) return true;
+
+  // Report Job：成功写产物并把 Root 置 succeeded；失败走有界再派或 Root report_failed
+  if (job?.type === "report") {
+    if (status === "succeeded") {
+      await reportConvergence.finalizeReportJob(tx, jobId, {
+        summary: result?.summary ?? null,
+      });
+    } else {
+      await reportConvergence.finalizeReportJob(tx, jobId, {
+        failed: true,
+        error: result?.error ?? "report_failed",
+      });
+    }
+    return true;
+  }
+
+  let forceHubReview = false;
+  let hubSourceNodeIds: string[] = [];
+  let hubTrigger: Record<string, unknown> | undefined;
+  const completedPayload = (job?.payload_json ?? {}) as Record<string, unknown>;
+  const isVerificationFollowup = Boolean(
+    (completedPayload.verification_followup as { finding_id?: string } | undefined)?.finding_id,
+  );
+  // 补证 Job 禁止 hub_followup force；由 maybeReverifyAfterFollowup 统一收口
+  if (completedPayload.hub_followup === true && job?.type !== "verify_finding" && !isVerificationFollowup) {
+    forceHubReview = true;
+    hubTrigger = { kind: "risk_acceptance_followup" };
+  }
+
+  // verify_finding：统一收口（证据硬门 + 回弹 / needs_human / confirmed）
+  if (job?.type === "verify_finding" && job.finding_id) {
+    const closed = await findingVerification.closeVerifyRound(tx, jobId, {
+      jobStatus: status === "succeeded" ? "succeeded" : "failed",
+      proposedVerdict: result?.verdict,
+      summary: result?.summary,
+      error: result?.error,
+    });
+    if (closed.forceHub) {
+      forceHubReview = true;
+      hubTrigger = closed.hubTrigger;
+      hubSourceNodeIds = closed.sourceNodeIds ?? [];
+    }
+  } else if (job && isVerificationFollowup) {
+    // 补证成功或失败：等同组全部终态后再验 / 再回弹（不 force Hub）
+    await findingVerification.maybeReverifyAfterFollowup(tx, job);
+  }
+
+  // hub 循环（§8.3）：
+  // - 成功 / verify 回弹：按既有 trigger 唤醒
+  // - 非 Hub 终态后若画布已无待跑工作：canvas_idle 自动唤醒 Hub
+  // - Hub 失败由 advanceCanvasAfterTerminalJob 留在 idle，等待人工恢复
+  if (status === "succeeded" || forceHubReview) {
+    await maybeTriggerHub(tx, job, {
+      force: forceHubReview,
+      sourceNodeIds: hubSourceNodeIds,
+      trigger: hubTrigger,
+    });
+  }
+  // 无论成功失败：统一推进画布终态。
+  // Root 已 analysis_complete 时优先派 Report；否则按 canvas_idle 规则推进非 Hub 终态。
+  // 这也覆盖 Hub 已提交 complete、但随后 failed 的窗口，避免 Root 永久卡住。
+  if (job?.canvas_id) {
+    await advanceCanvasAfterTerminalJob(tx, job, status, {
+      sourceNodeIds: hubSourceNodeIds,
+      trigger: hubTrigger,
+    });
+  }
+  return true;
+}
+
+/**
+ * Verify Job 在非 finalize 路径（reaper / dispatcher catch）进入终态时调用。
+ * 幂等恢复 Finding，需要时 force Hub。
+ */
+export async function recoverVerifyJobTerminal(
+  jobId: string,
+  jobStatus: "failed" | "timeout" | "orphan" | "cancelled",
+  error?: string | null,
+): Promise<void> {
+  await sql.begin(async (txRaw) => {
+    const tx = /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ txRaw as unknown as Tx;
+    const [job] = await tx`SELECT type, finding_id, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
+    if (!job || job.type !== "verify_finding" || !job.finding_id) return;
+    if (!(await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null))) return;
+    const closed = await findingVerification.closeVerifyRound(tx, jobId, {
+      jobStatus,
+      error: error ?? null,
+      summary: null,
+    });
+    if (closed.forceHub) {
+      await maybeTriggerHub(
+        tx,
+        {
+          id: job.id,
+          project_id: job.project_id,
+          canvas_id: job.canvas_id,
+          type: "verify_finding",
+          priority: fixedPriorityForJob({
+            type: "verify_finding",
+            purpose: "verify",
+            severity: "medium",
+          }),
+        },
+        {
+          force: true,
+          sourceNodeIds: closed.sourceNodeIds,
+          trigger: closed.hubTrigger,
+        },
+      );
+    }
+  });
+}
+
+export type CanvasJobTerminalStatus = HubCanvasJobTerminalStatus;
+
+export async function advanceCanvasAfterTerminalJob(
+  tx: Tx,
+  job: HubJobRecord,
+  terminalStatus: CanvasJobTerminalStatus,
+  opts: { sourceNodeIds?: string[]; trigger?: Record<string, unknown> } = {},
+): Promise<"report" | "hub" | "noop"> {
+  if (await onKnowledgeJobTerminal(tx as unknown as typeof sql, job as { id: unknown }, terminalStatus)) return "noop";
+  return hubOrchestrationApplication.advanceCanvasAfterTerminalJob(tx, job, terminalStatus, opts);
+}
+
+export async function maybeTriggerHub(
+  tx: Tx,
+  job: HubJobRecord | undefined,
+  options: HubTriggerOptions = {},
+): Promise<void> {
+  return hubOrchestrationApplication.maybeTriggerHub(tx, job, options);
+}
+
+export async function triggerHubFromHumanComment(input: HubHumanCommentInput): Promise<HubHumanCommentResult> {
+  return hubOrchestrationApplication.triggerHubFromHumanComment(input);
+}
+
+/** 取消画布上非门控 severity 的 pending verify（drain-priority） */
+export async function drainNonGateVerifies(
+  db: typeof sql,
+  canvasId: string,
+  waitSeverities: string[],
+): Promise<{ cancelled: number }> {
+  const gate = waitSeverities.map((s) => s.toLowerCase());
+  const rows = await db`
+    UPDATE jobs j SET status = 'cancelled', finished_at = now(),
+      error = 'drain-priority: 非门控 severity，人工清理'
+    FROM findings f
+    WHERE j.canvas_id = ${canvasId}
+      AND j.type = 'verify_finding'
+      AND j.status = 'pending'
+      AND f.id = j.finding_id
+      AND NOT (lower(f.severity) = ANY(${gate}))
+    RETURNING j.id, j.finding_id`;
+  for (const row of rows) {
+    await revokeJobCapabilityTokens(row.id as string, "drain-priority").catch(() => {});
+    await db`
+      UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
+      WHERE job_id = ${row.id as string} AND node_type = ANY(${["job", "intent"]})`;
+    if (row.finding_id) {
+      await db`
+        UPDATE findings SET verify_status = 'pending' WHERE id = ${row.finding_id as string}
+          AND verify_status = 'verifying'`;
+      await db`
+        UPDATE canvas_nodes n SET status = 'open', updated_at = now()
+        FROM findings f
+        WHERE f.id = ${row.finding_id as string} AND n.id = f.node_id AND n.status = 'verifying'`;
+    }
+  }
+  return { cancelled: rows.length };
+}
+
+// ---------- RoleConfig 安全校验（§7.2/§7.3） ----------
+
+export { RESERVED_ENV_KEYS, CONFIG_FILE_PATHS, CONFIG_FILE_MAX_COUNT, CONFIG_FILE_MAX_BYTES, CONFIG_FILE_MAX_TOTAL, validateEnvVars, validateConfigFilePath, scanConfigContent } from "./role-config-validation.js";
+
+export async function resolveAgentSnapshotForJob(
+  db: typeof sql,
+  projectId: string,
+  jobType: string,
+  findingIds: string[] = [],
+  options?: { runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
+): Promise<AgentRuntimeSnapshot> {
+  const snapshot = (await roleRuntimeSnapshotApplication.resolveAgentSnapshotForJob(
+    db as never,
+    projectId,
+    jobType,
+    options,
+  )) as AgentRuntimeSnapshot;
+  const selection = await resolveSharedAssetSelection(db, projectId, findingIds);
+  return {
+    ...snapshot,
+    shared_assets_revision: selection.revision,
+    shared_assets: selection.assets,
+    project_knowledge_catalog: await freezeProjectKnowledgeCatalog(db, projectId),
+  };
+}

@@ -1,0 +1,475 @@
+import { ControlToolInputSchemasJson, RepairFeedbackJsonSchema } from "@deepsonar/shared-types";
+
+/** JSON Schema shape used by the dynamic Job-scoped OpenAPI projection. */
+export type ControlJsonSchema = Record<string, unknown>;
+
+export interface PlatformOperationDefinition {
+  operationId: string;
+  summary: string;
+  description: string;
+  inputSchema: ControlJsonSchema;
+  readOnly: boolean;
+  eventType: string | null;
+}
+
+const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: string; readOnly: boolean; eventType: string | null }> = {
+  suggest_project_skills: { summary: "Suggest conditional project Skills", description: "Match exact authorized Skill versions against author declarations and current Job observations. Target is caller-declared; effectiveness and exposure remain unknown.", readOnly: true, eventType: null },
+  record_skill_choice: { summary: "Record an agent Skill choice declaration", description: "Recompute authorized suggestions and persist a selection/rejection declaration with a durable receipt. This neither pulls a Skill nor proves execution or benefit.", readOnly: false, eventType: "knowledge" },
+  request_project_knowledge: { summary: "Request bounded project knowledge work", description: "Freeze authorized current-Job sources and enqueue durable governance work.", readOnly: false, eventType: "knowledge" },
+  search_project_knowledge: { summary: "Search the frozen authorized knowledge catalog", description: "Return only Job-frozen metadata intersected with current revocations, before pagination.", readOnly: true, eventType: null },
+  read_project_memory: { summary: "Read one frozen Memory version", description: "Read exact hash and version in this project's Job snapshot.", readOnly: true, eventType: null },
+  read_knowledge_input: { summary: "Read an assigned governance input", description: "Read only the frozen manifest for the current work and stage.", readOnly: true, eventType: null },
+  propose_project_knowledge: { summary: "Propose a knowledge change", description: "Assigned maker only. Creates immutable candidate content and a durable receipt.", readOnly: false, eventType: "knowledge" },
+  submit_knowledge_evaluation: { summary: "Submit isolated trial evaluation", description: "Assigned evaluator only; results bind exact case, arm, Job, Attempt and evidence.", readOnly: false, eventType: "knowledge" },
+  review_project_knowledge: { summary: "Review and settle a proposal", description: "Independent assigned reviewer; activation requires complete evaluations and stable baseline.", readOnly: false, eventType: "knowledge" },
+  record_knowledge_feedback: { summary: "Record feedback on an actual usage", description: "Bind feedback to this Job's persistent usage reference and enqueue bounded work.", readOnly: false, eventType: "knowledge" },
+  get_knowledge_receipt: { summary: "Read a durable knowledge receipt", description: "Read only this Job's receipts; terminal-history access uses project management authentication.", readOnly: true, eventType: null },
+  list_available_roles: {
+    summary: "List roles available to the current Hub Job",
+    description: "Return the Scheduler-governed role catalog visible to this Job.",
+    readOnly: true,
+    eventType: null,
+  },
+  list_available_runtime_images: {
+    summary: "List runtime images available to the current Hub Job",
+    description: "Return the live platform-enabled, trusted runtime image catalog visible to this Hub Job: image_key, display fields, compatible_agent_clis, purpose/tool_summary/not_included/suited_roles/suited_evidence/selection_hints/capabilities, and readiness. Entries never include executable OCI refs or digests. Hub must match task needs to these fields and copy image_key verbatim.",
+    readOnly: true,
+    eventType: null,
+  },
+  list_available_agent_clis: {
+    summary: "List Agent CLIs available to the current Hub Job",
+    description: "Return the project-enabled Agent CLI allowlist (claude-code / pi / dsh) with soft-default markers. Hub may propose agent_cli from this catalog; omitting lets authorized provider/model candidates determine the CLI, with explicit project/global preferences used only to resolve cross-CLI ambiguity.",
+    readOnly: true,
+    eventType: null,
+  },
+  list_available_providers: {
+    summary: "List Providers available to the current Hub Job",
+    description: "Return project-enabled, active LLM Provider credentials (credential_id, provider, compatible_agent_clis, concurrency summary). Hub may propose only the provider plugin and model requirements, never credential_id; Scheduler resolves credentials and owns concurrency gates.",
+    readOnly: true,
+    eventType: null,
+  },
+  list_available_skill_sources: {
+    summary: "List Skill sources available to the current Hub Job",
+    description: "Return trusted and enabled Skill source summaries. Agents use list_available_skills/search_skills followed by pull_skill to fetch a selected business Skill during the Job; RoleConfig.modules_json does not preload business Skills.",
+    readOnly: true,
+    eventType: null,
+  },
+  list_available_skills: {
+    summary: "List business Skills the current Job can pull",
+    description: "Return concrete Skill selectors, descriptions, commit hashes, and content hashes from platform-trusted and enabled Skill sources. This is the Agent pull catalog, not a RoleConfig preload.",
+    readOnly: true,
+    eventType: null,
+  },
+  search_skills: {
+    summary: "Search business Skills the current Job can pull",
+    description: "Search concrete Skill modules by selector, name, plugin, or description. Use a returned selector and content hash with pull_skill.",
+    readOnly: true,
+    eventType: null,
+  },
+  pull_skill: {
+    summary: "Pull one business Skill for the current Agent",
+    description: "Fetch the bounded Skill files for a selector returned by list_available_skills or search_skills. The content hash must match; the Agent then reads SKILL.md and any referenced files. This does not install packages or grant platform permissions.",
+    readOnly: true,
+    eventType: null,
+  },
+  list_capabilities: {
+    summary: "List Capability Packs visible to the current Job",
+    description: "Return summaries of builtin, trusted-module, and RoleConfig-projected Capability Packs. Results are id/version/digest/scope/summary only; call describe_capability for the full machine contract.",
+    readOnly: true,
+    eventType: null,
+  },
+  search_capabilities: {
+    summary: "Search Capability Packs visible to the current Job",
+    description: "Return Capability Pack summaries matching a query against id, summary, capabilities, or selector. Does not inject SKILL.md bodies.",
+    readOnly: true,
+    eventType: null,
+  },
+  describe_capability: {
+    summary: "Describe one Capability Pack machine contract",
+    description: "Return the frozen Capability Pack manifest for an id, optionally pinned by version or digest. Unknown ids return RepairFeedback instead of a contract.",
+    readOnly: true,
+    eventType: null,
+  },
+  validate_composition: {
+    summary: "Validate a Capability Pack composition",
+    description: "Lint a pack_manifest and optional module selectors against the current Job freeze. Rejects permission or egress expansion and returns RepairFeedback for missing, conflicting, or untrusted modules.",
+    readOnly: true,
+    eventType: null,
+  },
+  preview_materialization: {
+    summary: "Preview Capability Pack materialization",
+    description: "Resolve selectors, compute the frozen digest, and project permissions without activating a pack or changing RoleConfig.",
+    readOnly: true,
+    eventType: null,
+  },
+  list_shared_assets: {
+    summary: "List shared assets available to the current Job",
+    description: "Return the frozen read-only shared asset catalog for this Job.",
+    readOnly: true,
+    eventType: null,
+  },
+  graph_query: {
+    summary: "Query the current Job canvas graph on demand",
+    description: "Return a bounded read-only projection of this Job's canvas (overview, index, node, edges, findings, evidence, intents, or plan_gap). plan_gap reads a current explicit Plan by id, up to four criteria per page and four Fact ids; supplementation_execution separately describes the single linked Job/Attempt lifecycle, never criterion satisfaction or whole-goal execution coverage; use its revision/content hashes in optional plan_basis on one existing Intent or complete proposal. Scope is frozen to the Job snapshot; canvas_id and project_id are not accepted. Use overview first, then index/node; do not try to pull the whole graph in one call.",
+    readOnly: true,
+    eventType: null,
+  },
+  publish_shared_asset: {
+    summary: "Publish a shared asset proposal",
+    description: "Submit a shared asset proposal for Scheduler validation and persistence.",
+    readOnly: false,
+    eventType: "shared_asset_publish",
+  },
+  emit_progress: {
+    summary: "Emit incremental progress",
+    description: "Submit an incremental progress event to the current Job.",
+    readOnly: false,
+    eventType: "progress",
+  },
+  emit_fact: {
+    summary: "Emit a fact proposal",
+    description: "Submit a fact proposal to the current Job canvas.",
+    readOnly: false,
+    eventType: "fact",
+  },
+  emit_finding: {
+    summary: "Emit a finding proposal",
+    description: "Submit a finding proposal to the current Job canvas.",
+    readOnly: false,
+    eventType: "finding",
+  },
+  submit_hub_decision: {
+    summary: "Submit a Hub decision proposal",
+    description: "Submit the current Hub round's complete or intent decision. With plan_basis (including payload_file), acceptance returns a durable persisted_deferred receipt. GET receipt_key reads it without execution; unchanged POST may restore only the original active Attempt.",
+    readOnly: false,
+    eventType: "hub_decision",
+  },
+  submit_plan: {
+    summary: "Submit a versioned execution plan",
+    description: "Submit an initial Plan audit, or an explicit v1 route revision with owner, expected event revision, Plan SHA and task-input SHA. Route revisions only change tasks/open questions before supplementation dispatch; goal/completion/assumptions/budget stay identical, no trimming or budget reset. A committed revision is recoverable by the same key or GET receipt_key. This operation never dispatches workers.",
+    readOnly: false,
+    eventType: "plan",
+  },
+  submit_plan_result: {
+    summary: "Submit a plan execution result",
+    description: "Submit a PlanResult outcome: continue, complete, blocked, or needs_human. Scheduler records execution and termination_reason. Phase 1 does not change Hub convergence.",
+    readOnly: false,
+    eventType: "plan_result",
+  },
+  mark_job_done: {
+    summary: "Mark the current Job done",
+    description: "Submit the final Job summary and optional verification verdict with X-DeepSonar-Proposal-Revision (initial 0). Corrected semantics require a new key and next revision; transport retries retain key/revision/payload. Acceptance returns a durable persisted_deferred receipt, not settlement. Query this operation with receipt_key while the original Job capability remains active.",
+    readOnly: false,
+    eventType: "done",
+  },
+  request_human: {
+    summary: "Request human intervention",
+    description: "Request human intervention for an authorization or high-risk block.",
+    readOnly: false,
+    eventType: "human",
+  },
+  ack_human_message: {
+    summary: "Acknowledge an injected human message",
+    description: "Explicitly acknowledge a human message targeted to the current Job. Text output never implies acknowledgement.",
+    readOnly: false,
+    eventType: "human_message_ack",
+  },
+};
+
+function cloneSchema(value: ControlJsonSchema): ControlJsonSchema {
+  // The shared JSON schemas are also used by the local MCP server. Never hand
+  // those objects to an HTTP response where a caller could mutate the module
+  // singleton and change a later Job's projection.
+  return JSON.parse(JSON.stringify(value)) as ControlJsonSchema;
+}
+
+const definitions = Object.fromEntries(
+  Object.entries(ControlToolInputSchemasJson).map(([operationId, inputSchema]) => {
+    const metadata = OPERATION_DESCRIPTIONS[operationId] ?? {
+      summary: operationId,
+      description: "DeepSonar platform control operation.",
+      readOnly: false,
+      eventType: null,
+    };
+    return [
+      operationId,
+      Object.freeze({
+        operationId,
+        summary: metadata.summary,
+        description: metadata.description,
+        inputSchema: cloneSchema(inputSchema as ControlJsonSchema),
+        readOnly: metadata.readOnly,
+        eventType: metadata.eventType,
+      } satisfies PlatformOperationDefinition),
+    ];
+  }),
+) as Record<string, PlatformOperationDefinition>;
+
+/** Canonical API operation registry. It is intentionally independent of the
+ * existing MCP server implementation; both consume shared-types schemas. */
+export const PLATFORM_OPERATION_REGISTRY: Readonly<Record<string, PlatformOperationDefinition>> = Object.freeze(definitions);
+
+export const PLATFORM_OPERATION_IDS = Object.freeze(Object.keys(PLATFORM_OPERATION_REGISTRY));
+
+export function getPlatformOperation(operationId: string): PlatformOperationDefinition | null {
+  const definition = PLATFORM_OPERATION_REGISTRY[operationId];
+  if (!definition) return null;
+  return {
+    ...definition,
+    inputSchema: cloneSchema(definition.inputSchema),
+  };
+}
+
+export function isReadOnlyPlatformOperation(operationId: string): boolean {
+  return PLATFORM_OPERATION_REGISTRY[operationId]?.readOnly === true;
+}
+
+export function operationIdsFromSnapshot(snapshot: unknown): string[] {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return [];
+  const values = (snapshot as Record<string, unknown>).platform_tools;
+  if (!Array.isArray(values) || values.some((value) => typeof value !== "string")) return [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (!PLATFORM_OPERATION_REGISTRY[value] || seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
+}
+
+export interface PlatformCapabilitiesProjection {
+  job_id: string;
+  project_id: string;
+  canvas_id: string | null;
+  expires_at: string;
+  operation_ids: string[];
+  operations: Array<{
+    operation_id: string;
+    summary: string;
+    description: string;
+    read_only: boolean;
+    event_type: string | null;
+    input_schema: ControlJsonSchema;
+    input_schema_url: string;
+    invoke_url: string;
+  }>;
+  openapi_url: string;
+}
+
+const JOB_PATH = "/control/v1/jobs/{jobId}";
+const CAPABILITIES_PATH = `${JOB_PATH}/capabilities`;
+const OPENAPI_PATH = `${JOB_PATH}/openapi.json`;
+
+function errorSchema() {
+  return {
+    type: "object",
+    additionalProperties: true,
+    properties: {
+      accepted: { type: "boolean" },
+      error: { type: "string" },
+      error_code: { type: "string" },
+      retryable: { type: "boolean" },
+      path: { type: "string" },
+      repair: RepairFeedbackJsonSchema,
+    },
+    required: ["error"],
+  };
+}
+
+function operationSummarySchema() {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["operation_id", "summary", "description", "read_only", "input_schema", "input_schema_url", "invoke_url"],
+    properties: {
+      operation_id: { type: "string" },
+      summary: { type: "string" },
+      description: { type: "string" },
+      read_only: { type: "boolean" },
+      event_type: { type: "string", nullable: true },
+      input_schema: { type: "object", additionalProperties: true },
+      input_schema_url: { type: "string" },
+      invoke_url: { type: "string" },
+    },
+  };
+}
+
+export function buildCapabilitiesProjection(input: {
+  jobId: string;
+  projectId: string;
+  canvasId: string | null;
+  expiresAt: Date | string;
+  operationIds: readonly string[];
+}): PlatformCapabilitiesProjection {
+  const base = `/control/v1/jobs/${encodeURIComponent(input.jobId)}`;
+  const operations = input.operationIds
+    .map((operationId) => getPlatformOperation(operationId))
+    .filter((definition): definition is PlatformOperationDefinition => definition !== null)
+    .map((definition) => ({
+      operation_id: definition.operationId,
+      summary: definition.summary,
+      description: definition.description,
+      read_only: definition.readOnly,
+      event_type: definition.eventType,
+      input_schema: cloneSchema(definition.inputSchema),
+      input_schema_url: `${base}/operations/${encodeURIComponent(definition.operationId)}`,
+      invoke_url: `${base}/operations/${encodeURIComponent(definition.operationId)}`,
+    }));
+  return {
+    job_id: input.jobId,
+    project_id: input.projectId,
+    canvas_id: input.canvasId,
+    expires_at: new Date(input.expiresAt).toISOString(),
+    operation_ids: operations.map((operation) => operation.operation_id),
+    operations,
+    openapi_url: `${base}/openapi.json`,
+  };
+}
+
+export function buildPlatformOpenApiDocument(input: {
+  jobId: string;
+  operationIds: readonly string[];
+}): Record<string, unknown> {
+  const allowed = input.operationIds
+    .map((operationId) => getPlatformOperation(operationId))
+    .filter((definition): definition is PlatformOperationDefinition => definition !== null);
+  const operationSchemas = Object.fromEntries(
+    allowed.map((definition) => [definition.operationId, definition.inputSchema]),
+  );
+  const paths: Record<string, unknown> = {
+    [CAPABILITIES_PATH]: {
+      get: {
+        operationId: "discoverJobCapabilities",
+        summary: "Discover the current Job capability projection",
+        security: [{ capabilityBearer: [] }],
+        responses: {
+          "200": {
+            description: "Allowed operations for this Job",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["job_id", "project_id", "expires_at", "operation_ids", "operations", "openapi_url"],
+                  properties: {
+                    job_id: { type: "string", format: "uuid" },
+                    project_id: { type: "string", format: "uuid" },
+                    canvas_id: { type: "string", nullable: true },
+                    expires_at: { type: "string", format: "date-time" },
+                    operation_ids: { type: "array", items: { type: "string" } },
+                    operations: { type: "array", items: operationSummarySchema() },
+                    openapi_url: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          "401": { description: "Capability token is missing, invalid, expired, or revoked", content: { "application/json": { schema: errorSchema() } } },
+          "409": { description: "Job is no longer active", content: { "application/json": { schema: errorSchema() } } },
+        },
+      },
+    },
+    [OPENAPI_PATH]: {
+      get: {
+        operationId: "discoverJobOpenApi",
+        summary: "Discover the current Job OpenAPI projection",
+        security: [{ capabilityBearer: [] }],
+        responses: {
+          "200": { description: "Dynamic Job-scoped OpenAPI document", content: { "application/json": { schema: { type: "object" } } } },
+        },
+      },
+    },
+  };
+
+  for (const definition of allowed) {
+    const concretePath = `${JOB_PATH}/operations/${definition.operationId}`;
+    paths[concretePath] = {
+      get: {
+        operationId: `describe_${definition.operationId}`,
+        summary: `Describe ${definition.operationId}`,
+        security: [{ capabilityBearer: [] }],
+        parameters: [
+          { name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          ...(["mark_job_done", "submit_hub_decision", "request_human"].includes(definition.operationId) ? [{ name: "receipt_key", in: "query", required: false, schema: { type: "string", format: "uuid" }, description: "Read the original durable result only; this does not restore live state. After response loss and persisted_deferred lookup, POST the unchanged original key/payload (and completion revision when applicable) to restore only the original active Attempt handler. Plan receipts require plan_basis on the accepted proposal. Requires the active Job capability." }] : []),
+        ],
+        responses: {
+          "200": {
+            description: ["mark_job_done", "submit_hub_decision", "request_human"].includes(definition.operationId) ? "Operation contract without receipt_key; original accepted/rejected result with receipt_key" : "Operation contract",
+            content: {
+              "application/json": {
+                schema: ["mark_job_done", "submit_hub_decision", "request_human"].includes(definition.operationId) ? { type: "object", additionalProperties: true } : {
+                  type: "object",
+                  required: ["operation_id", "summary", "description", "input_schema", "read_only"],
+                  properties: {
+                    operation_id: { type: "string", const: definition.operationId },
+                    summary: { type: "string" },
+                    description: { type: "string" },
+                    read_only: { type: "boolean" },
+                    event_type: { type: "string", nullable: true },
+                    input_schema: definition.inputSchema,
+                  },
+                },
+              },
+            },
+          },
+          "403": { description: "Operation is not in the token allowlist", content: { "application/json": { schema: errorSchema() } } },
+        },
+      },
+      post: {
+        // The POST operationId is deliberately identical to the existing MCP
+        // tool name so adapters can choose either transport by logical name.
+        operationId: definition.operationId,
+        summary: definition.summary,
+        description: definition.description,
+        security: [{ capabilityBearer: [] }],
+        parameters: [
+          { name: "jobId", in: "path", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "Idempotency-Key", in: "header", required: true, schema: { type: "string", format: "uuid" } },
+          { name: "X-DeepSonar-Event-Id", in: "header", required: false, schema: { type: "string", format: "uuid" }, description: "For mark_job_done and Plan decisions this must equal Idempotency-Key when supplied." },
+          ...(definition.operationId === "mark_job_done" ? [{ name: "X-DeepSonar-Proposal-Revision", in: "header", required: true, schema: { type: "integer", minimum: 0, maximum: 9999 }, description: "Initial 0; use the next revision from rejection feedback for corrected semantics, retaining the original revision for transport retries." }] : []),
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: definition.inputSchema,
+            },
+          },
+        },
+        responses: {
+          "200": { description: definition.operationId === "mark_job_done" ? "Durable completion receipt: accepted, operation, receipt_ref, receipt_status=persisted_deferred, proposal_revision. This is not effect settlement." : "Handler result", content: { "application/json": { schema: { type: "object", additionalProperties: true } } } },
+          "400": { description: "Input or idempotency key is invalid", content: { "application/json": { schema: errorSchema() } } },
+          "403": { description: "Operation is not in the token allowlist", content: { "application/json": { schema: errorSchema() } } },
+          "409": { description: "Idempotency key conflicts or Job is no longer active", content: { "application/json": { schema: errorSchema() } } },
+          "422": { description: "Scheduler semantic validation rejected the operation", content: { "application/json": { schema: errorSchema() } } },
+          "429": { description: "Scheduler semantic-event budget is temporarily exhausted", content: { "application/json": { schema: errorSchema() } } },
+          "500": { description: "Runtime handler failed without a business rejection", content: { "application/json": { schema: errorSchema() } } },
+          "503": { description: "Runtime handler is not registered", content: { "application/json": { schema: errorSchema() } } },
+        },
+      },
+    };
+  }
+
+  // The operation schema is only reachable through the allowlisted operation
+  // path. Keep a compact vendor extension for clients that want to inspect all
+  // schemas without exposing a management API.
+  return {
+    openapi: "3.0.3",
+    info: { title: "DeepSonar Job Control API", version: "1" },
+    paths,
+    components: {
+      securitySchemes: {
+        capabilityBearer: { type: "http", scheme: "bearer", bearerFormat: "deepsonarcap_*" },
+      },
+      schemas: operationSchemas,
+    },
+    "x-deepsonar-job-id": input.jobId,
+    "x-deepsonar-allowed-operation-ids": [...input.operationIds].filter((operationId) => Boolean(PLATFORM_OPERATION_REGISTRY[operationId])),
+  };
+}
+
+export const PLATFORM_CONTROL_ROUTE_PATHS = Object.freeze({
+  capabilities: "/control/v1/jobs/:jobId/capabilities",
+  openapi: "/control/v1/jobs/:jobId/openapi.json",
+  operation: "/control/v1/jobs/:jobId/operations/:operationId",
+});

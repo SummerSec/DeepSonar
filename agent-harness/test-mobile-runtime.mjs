@@ -1,0 +1,364 @@
+#!/usr/bin/env node
+import { mkdtempSync, writeFileSync, chmodSync, mkdirSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
+
+function toBashPath(value) {
+  if (process.platform !== "win32") return value;
+  const match = String(value).match(/^([A-Za-z]):[\\/](.*)$/);
+  if (!match) return String(value).replaceAll("\\", "/");
+  return `/mnt/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
+}
+
+function spawnWsl(args, options = {}) {
+  let result;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    result = spawnSync("wsl.exe", args, options);
+    const transient = result.status === -1 || result.status === 0xffffffff
+      || /Wsl\/Service\/0x8007274c/i.test(`${result.stdout ?? ""}${result.stderr ?? ""}`);
+    if (!transient) return result;
+  }
+  return result;
+}
+
+function runHelper(helper, args, env) {
+  const pathKeys = new Set(["ADB_BIN", "HDC_BIN", "IDEVICE_ID_BIN", "APKCHECKPACK_BIN", "MOBILE_PYTHON", "RUST_ASC_BIN"]);
+  const pathDirs = [bashSupportDir, ...String(env.BASH_PATH_DIRS ?? "").split(";").filter(Boolean)].map(toBashPath);
+  const normalizedEnv = Object.fromEntries(Object.entries(env)
+    .filter(([key]) => key !== "PATH" && key !== "BASH_PATH_DIRS")
+    .map(([key, value]) => [key, pathKeys.has(key) ? toBashPath(value) : value]));
+  const bashPath = [...pathDirs, "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"].join(":");
+  if (process.platform === "win32") {
+    const envArgs = Object.entries({ ...normalizedEnv, PATH: bashPath }).map(([key, value]) => `${key}=${value}`);
+    return spawnWsl([
+      "--exec", "env", ...envArgs, "bash", toBashPath(join(root, helper)),
+      ...args.map((value) => /^[A-Za-z]:[\\/]/.test(value) ? toBashPath(value) : value),
+    ], { encoding: "utf8" });
+  }
+  return spawnSync("bash", [join(root, helper), ...args], {
+    encoding: "utf8",
+    env: { ...process.env, ...normalizedEnv, ...(pathDirs.length > 0 ? { PATH: bashPath } : {}) },
+  });
+}
+
+function writeFake(dirPrefix, name, script) {
+  const dir = mkdtempSync(join(tmpdir(), dirPrefix));
+  const bin = join(dir, name);
+  writeFileSync(bin, script);
+  chmodSync(bin, 0o755);
+  if (process.platform === "win32") spawnWsl(["--exec", "chmod", "+x", toBashPath(bin)]);
+  return bin;
+}
+
+const jqShim = writeFake("mobile-support-", "jq", `#!/usr/bin/env python3
+import json, sys
+text = sys.stdin.read()
+program = " ".join(sys.argv[1:])
+protocol = "usbmuxd" if "usbmuxd" in program else "hdc"
+targets = [line.strip() for line in text.splitlines() if line.strip()]
+print(json.dumps({"protocol": protocol, "status": "ok", "targets": targets}, separators=(",", ":")))
+`);
+const bashSupportDir = dirname(jqShim);
+
+const versionAdb = writeFake("mobile-adb-", "adb", `#!/usr/bin/env bash
+if [[ "$1" == "version" ]]; then
+  echo 'Android Debug Bridge version 1.0.41'
+  echo 'Version 36.0.0-13206524'
+  exit 0
+fi
+if [[ "$1" == "devices" ]]; then
+  echo 'List of devices attached'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const version = runHelper("deploy/mobile-adb.sh", ["--check"], { ADB_BIN: versionAdb });
+if (version.status !== 0 || !version.stdout.includes("Android Debug Bridge version")) {
+  throw new Error(`adb version smoke failed: status=${version.status}\n${version.stdout}\n${version.stderr}`);
+}
+if (!version.stdout.includes("no_adb_target") || !version.stdout.includes("needs_human") || !version.stdout.includes("inconclusive")) {
+  throw new Error(`empty adb devices must emit structured no-target evidence\n${version.stdout}`);
+}
+
+const attachedAdb = writeFake("mobile-adb-", "adb", `#!/usr/bin/env bash
+if [[ "$1" == "version" ]]; then
+  echo 'Android Debug Bridge version 1.0.41'
+  exit 0
+fi
+if [[ "$1" == "devices" ]]; then
+  printf 'List of devices attached\\nemulator-5554\\tdevice\\n'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const attached = runHelper("deploy/mobile-adb.sh", ["--check"], { ADB_BIN: attachedAdb });
+if (attached.status !== 0 || attached.stdout.includes("no_adb_target")) {
+  throw new Error(`attached device must not request human\n${attached.stdout}\n${attached.stderr}`);
+}
+
+const missingVersion = writeFake("mobile-adb-", "adb", `#!/usr/bin/env bash
+echo 'cannot connect'
+exit 1
+`);
+const missing = runHelper("deploy/mobile-adb.sh", ["--check"], { ADB_BIN: missingVersion });
+if (missing.status === 0) {
+  throw new Error("adb without a version line must fail closed");
+}
+
+const hdcVersion = writeFake("mobile-hdc-", "hdc", `#!/usr/bin/env bash
+if [[ "$1" == "version" || "$1" == "-v" ]]; then
+  echo 'Ver: 3.2.0b'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const hdcCheck = runHelper("deploy/mobile-hdc.sh", ["--check"], { HDC_BIN: hdcVersion });
+if (hdcCheck.status !== 0 || !hdcCheck.stdout.includes("Ver: 3.2.0b")) {
+  throw new Error(`hdc version smoke failed: status=${hdcCheck.status}\n${hdcCheck.stdout}\n${hdcCheck.stderr}`);
+}
+
+const qemuSplitHdc = writeFake("mobile-hdc-", "hdc", `#!/usr/bin/env bash
+if [[ "$1" == "version" ]]; then
+  echo 'Connect server failed'
+  exit 1
+fi
+if [[ "$1" == "-v" ]]; then
+  echo 'Ver: 3.2.0b'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const qemuSplit = runHelper("deploy/mobile-hdc.sh", ["--check"], { HDC_BIN: qemuSplitHdc });
+if (qemuSplit.status !== 0 || !qemuSplit.stdout.includes("Ver: 3.2.0b")) {
+  throw new Error(`qemu split hdc version/-v must pass: status=${qemuSplit.status}\n${qemuSplit.stdout}\n${qemuSplit.stderr}`);
+}
+
+const emptyHdc = writeFake("mobile-hdc-", "hdc", `#!/usr/bin/env bash
+if [[ "$1" == "list" && "$2" == "targets" ]]; then
+  printf '[Empty]\\n'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const empty = runHelper("deploy/mobile-hdc.sh", ["targets"], { HDC_BIN: emptyHdc });
+if (empty.status !== 2) throw new Error(`empty hdc targets must exit 2, got ${empty.status}\n${empty.stdout}\n${empty.stderr}`);
+const emptyJson = JSON.parse(empty.stdout);
+if (emptyJson.status !== "needs_human" || emptyJson.verdict !== "inconclusive" || emptyJson.reason !== "no_hdc_target") {
+  throw new Error(`empty hdc targets JSON contract drift: ${empty.stdout}`);
+}
+
+const noiseOnlyHdc = writeFake("mobile-hdc-", "hdc", `#!/usr/bin/env bash
+if [[ "$1" == "list" && "$2" == "targets" ]]; then
+  printf 'Connect server failed\\n'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const noiseOnly = runHelper("deploy/mobile-hdc.sh", ["targets"], { HDC_BIN: noiseOnlyHdc });
+if (noiseOnly.status !== 2) throw new Error(`hdc server noise must be treated as no target, got ${noiseOnly.status}\n${noiseOnly.stdout}`);
+const noiseOnlyJson = JSON.parse(noiseOnly.stdout);
+if (noiseOnlyJson.reason !== "no_hdc_target") throw new Error(`hdc server noise JSON drift: ${noiseOnly.stdout}`);
+
+const noisyHdc = writeFake("mobile-hdc-", "hdc", `#!/usr/bin/env bash
+if [[ "$1" == "list" && "$2" == "targets" ]]; then
+  printf 'Connect server failed\\n127.0.0.1:5555\\n'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const noisy = runHelper("deploy/mobile-hdc.sh", ["targets"], { HDC_BIN: noisyHdc });
+if (noisy.status !== 0) throw new Error(`noisy hdc targets failed: ${noisy.status}\n${noisy.stdout}\n${noisy.stderr}`);
+const noisyJson = JSON.parse(noisy.stdout);
+if (noisyJson.status !== "ok" || noisyJson.targets?.[0] !== "127.0.0.1:5555" || noisyJson.targets.length !== 1) {
+  throw new Error(`noisy hdc stderr must not become a target: ${noisy.stdout}`);
+}
+
+const presentHdc = writeFake("mobile-hdc-", "hdc", `#!/usr/bin/env bash
+if [[ "$1" == "list" && "$2" == "targets" ]]; then
+  printf '127.0.0.1:5555\\n'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const present = runHelper("deploy/mobile-hdc.sh", ["targets"], { HDC_BIN: presentHdc });
+if (present.status !== 0) throw new Error(`present hdc targets failed: ${present.status}\n${present.stdout}\n${present.stderr}`);
+const presentJson = JSON.parse(present.stdout);
+if (presentJson.status !== "ok" || presentJson.targets?.[0] !== "127.0.0.1:5555") {
+  throw new Error(`present hdc targets JSON drift: ${present.stdout}`);
+}
+
+const emptyIos = writeFake("mobile-ios-", "idevice_id", `#!/usr/bin/env bash
+exit 0
+`);
+const iosDir = dirname(emptyIos);
+for (const name of ["ideviceinstaller", "plistutil", "iproxy"]) {
+  writeFileSync(join(iosDir, name), "#!/usr/bin/env bash\nexit 0\n");
+  chmodSync(join(iosDir, name), 0o755);
+  if (process.platform === "win32") spawnWsl(["--exec", "chmod", "+x", toBashPath(join(iosDir, name))]);
+}
+const iosCheck = runHelper("deploy/mobile-ios.sh", ["--check"], {
+  IDEVICE_ID_BIN: emptyIos,
+  BASH_PATH_DIRS: iosDir,
+});
+if (iosCheck.status !== 0 || !iosCheck.stdout.includes("no_ios_target") || !iosCheck.stdout.includes("needs_human")) {
+  throw new Error(`empty idevice_id must emit structured no-target evidence\n${iosCheck.stdout}\n${iosCheck.stderr}`);
+}
+
+const iosDevices = runHelper("deploy/mobile-ios.sh", ["devices"], {
+  IDEVICE_ID_BIN: emptyIos,
+  BASH_PATH_DIRS: iosDir,
+});
+if (iosDevices.status !== 2) throw new Error(`empty ios devices must exit 2, got ${iosDevices.status}\n${iosDevices.stdout}`);
+const iosJson = JSON.parse(iosDevices.stdout);
+if (iosJson.status !== "needs_human" || iosJson.reason !== "no_ios_target") {
+  throw new Error(`empty ios devices JSON contract drift: ${iosDevices.stdout}`);
+}
+
+const hapDir = mkdtempSync(join(tmpdir(), "mobile-hap-"));
+const hapInner = join(hapDir, "app");
+mkdirSync(hapInner);
+writeFileSync(join(hapInner, "pack.info"), '{"app":{"bundleName":"com.example.hap"}}\n');
+writeFileSync(join(hapInner, "module.json"), '{"module":{"name":"entry"}}\n');
+const hapFile = join(hapDir, "sample.hap");
+const zip = spawnSync("python3", ["-c", `
+import zipfile
+z = zipfile.ZipFile(${JSON.stringify(hapFile)}, "w")
+z.write(${JSON.stringify(join(hapInner, "pack.info"))}, "pack.info")
+z.write(${JSON.stringify(join(hapInner, "module.json"))}, "module.json")
+z.close()
+`], { encoding: "utf8" });
+if (zip.status !== 0) throw new Error(`failed to write sample HAP: ${zip.stderr}`);
+const hapCheck = runHelper("deploy/mobile-hap.sh", ["--check"], {});
+if (hapCheck.status !== 0) throw new Error(`hap --check failed: ${hapCheck.stderr}`);
+const hapInspect = runHelper("deploy/mobile-hap.sh", ["inspect", hapFile], {});
+if (hapInspect.status !== 0 || !hapInspect.stdout.includes("pack.info") || !hapInspect.stdout.includes("com.example.hap")) {
+  throw new Error(`hap inspect must print pack.info\n${hapInspect.stdout}\n${hapInspect.stderr}`);
+}
+
+const soDir = mkdtempSync(join(tmpdir(), "mobile-so-"));
+const soBin = writeFake("mobile-so-", "r2", `#!/usr/bin/env bash
+if [[ "$1" == "-qv" ]]; then
+  echo '6.2.0'
+  exit 0
+fi
+echo 'ELF header'
+echo 'iI'
+exit 0
+`);
+for (const [name, script] of [
+  ["readelf", "#!/usr/bin/env bash\necho 'ELF Header'\nexit 0\n"],
+  ["objdump", "#!/usr/bin/env bash\necho 'GNU objdump 2.40'\nexit 0\n"],
+  ["nm", "#!/usr/bin/env bash\nexit 0\n"],
+  ["file", "#!/usr/bin/env bash\necho \"$1: ELF 64-bit LSB shared object\"\nexit 0\n"],
+  ["python", "#!/usr/bin/env bash\necho '1.0.0'\nexit 0\n"],
+]) {
+  writeFileSync(join(soDir, name), script);
+  chmodSync(join(soDir, name), 0o755);
+  if (process.platform === "win32") spawnWsl(["--exec", "chmod", "+x", toBashPath(join(soDir, name))]);
+}
+const soCheck = runHelper("deploy/mobile-so.sh", ["--check"], {
+  BASH_PATH_DIRS: [soDir, dirname(soBin)].join(";"),
+  MOBILE_PYTHON: join(soDir, "python"),
+});
+if (soCheck.status !== 0 || !soCheck.stdout.includes("binutils + radare2 + LIEF")) {
+  throw new Error(`so --check failed: ${soCheck.status}\n${soCheck.stdout}\n${soCheck.stderr}`);
+}
+const soFile = join(soDir, "libdemo.so");
+writeFileSync(soFile, "not-a-real-elf");
+const soInspect = runHelper("deploy/mobile-so.sh", ["inspect", soFile], {
+  BASH_PATH_DIRS: [soDir, dirname(soBin)].join(";"),
+  MOBILE_PYTHON: join(soDir, "python"),
+});
+if (soInspect.status !== 0 || !soInspect.stdout.includes("readelf") || !soInspect.stdout.includes("LIEF")) {
+  throw new Error(`so inspect must print readelf/LIEF sections\n${soInspect.stdout}\n${soInspect.stderr}`);
+}
+
+const apkcheckpack = writeFake("mobile-apkcheckpack-", "ApkCheckPack", `#!/usr/bin/env bash
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+  echo 'APK检测工具 - 用于检测APK文件中的特征'
+  exit 0
+fi
+echo "unexpected $*" >&2
+exit 1
+`);
+const apkHelp = runHelper("deploy/mobile-apkcheckpack-bin.sh", ["-h"], { APKCHECKPACK_BIN: apkcheckpack });
+if (apkHelp.status !== 0 || !apkHelp.stdout.includes("APK检测工具")) {
+  throw new Error(`apkcheckpack -h smoke failed: status=${apkHelp.status}\n${apkHelp.stdout}\n${apkHelp.stderr}`);
+}
+const apkMissing = runHelper("deploy/mobile-apkcheckpack-bin.sh", ["-h"], {
+  APKCHECKPACK_BIN: join(tmpdir(), "missing-apkcheckpack-binary"),
+});
+if (apkMissing.status !== 127) {
+  throw new Error(`missing apkcheckpack must exit 127, got ${apkMissing.status}\n${apkMissing.stdout}\n${apkMissing.stderr}`);
+}
+
+
+const mobileRuntime = JSON.parse(readFileSync(join(root, "agent-harness/mobile-runtime.json"), "utf8"));
+const droidascPin = mobileRuntime.managed?.pip?.droidasc;
+if (droidascPin?.version !== "0.1.1.post1" || droidascPin?.license !== "Apache-2.0") {
+  throw new Error(`mobile-runtime.json must pin installable droidasc 0.1.1.post1 Apache-2.0, got ${JSON.stringify(droidascPin)}`);
+}
+if (!Array.isArray(droidascPin.capabilities) || !droidascPin.capabilities.includes("apk-xref-search")) {
+  throw new Error(`droidasc capabilities must include apk-xref-search: ${JSON.stringify(droidascPin.capabilities)}`);
+}
+const mobileDockerfile = readFileSync(join(root, "deploy/Dockerfile.agent-mobile"), "utf8");
+if (!mobileDockerfile.includes("ARG DROIDASC_VERSION=0.1.1.post1") || !mobileDockerfile.includes("droidasc==${DROIDASC_VERSION}")) {
+  throw new Error("Dockerfile.agent-mobile must pin and install droidasc==${DROIDASC_VERSION}");
+}
+if (!mobileDockerfile.includes("/opt/deepsonar/bin/droidasc")) {
+  throw new Error("Dockerfile.agent-mobile must symlink /opt/deepsonar/bin/droidasc");
+}
+const livePresent = spawnSync("bash", ["-lc", "command -v droidasc"], { encoding: "utf8" });
+if (livePresent.status === 0) {
+  const live = spawnSync("bash", ["-lc", "droidasc --help"], { encoding: "utf8" });
+  if (live.status !== 0 || !live.stdout.includes("getclass") || !live.stdout.includes("findrefs")) {
+    throw new Error(`installed droidasc help failed: ${live.status}\n${live.stdout}\n${live.stderr}`);
+  }
+} else {
+  console.log("SKIP installed ASC check: absent on host; adapter tests below use mocks, not APK validation");
+}
+const asc = writeFake("mobile-asc-", "rust_ASC", `#!/usr/bin/env bash
+if [[ $# == 0 ]]; then echo 'getclass getmanifest findrefs'; exit 0; fi
+if [[ "$1" == fail ]]; then echo 'backend failure' >&2; exit 23; fi
+printf '<%s>\\n' "$@"
+`);
+const ascApk = join(mkdtempSync(join(tmpdir(), "asc-apk-")), "a.apk");
+writeFileSync(ascApk, Buffer.from("504b0304140000000000f843545d21e7d7880f0000000f00000008000000746573742e747874616461707465722066697874757265504b01021403140000000000f843545d21e7d7880f0000000f000000080000000000000000000000800100000000746573742e747874504b0506000000000100010036000000350000000000", "hex"));
+const callAsc = (args, bin = asc) => runHelper("deploy/mobile-asc.sh", args, { RUST_ASC_BIN: bin });
+for (const args of [[], ["-h"], ["--help"]]) {
+  const result = callAsc(args);
+  if (result.status !== 0 || !result.stdout.includes("findrefs")) throw new Error("ASC help adapter failed");
+}
+for (const [args, expected] of [
+  [["getclass", ascApk, "Ltest/Main;", "--threads", "2"], "<--thread>\n<2>"],
+  [["getclass", "--threads=2", ascApk, "test.Main"], "<--thread=2>"],
+  [["findrefs", ascApk, "string", "--", "--threads"], "<-->\n<--threads>"],
+  [["getclass", ascApk, "test.Main", "-o", "--threads"], "<-o>\n<--threads>"],
+]) {
+  const result = callAsc(args);
+  if (result.status !== 0 || !result.stdout.includes(expected)) throw new Error(`ASC args failed: ${result.stdout}`);
+}
+const brokenApk = join(dirname(ascApk), "broken.apk");
+writeFileSync(brokenApk, "not a ZIP");
+const brokenResult = callAsc(["findrefs", brokenApk, "string", "token"]);
+if (brokenResult.status !== 2 || !brokenResult.stderr.includes("corrupt APK")) throw new Error("ASC accepted corrupt input as no matches");
+const fail = callAsc(["fail", "--help"]);
+if (fail.status !== 23 || !fail.stderr.includes("backend failure")) throw new Error("ASC hid backend failure");
+if (callAsc(["--help"], join(tmpdir(), "absent-rust-asc")).status !== 127) throw new Error("ASC hid missing binary");
+if (!callAsc(["--version"]).stdout.includes("rust_ASC v0.1.1")) throw new Error("ASC version identity missing");
+const rustPin = mobileRuntime.downloads["rust-asc"];
+if (rustPin.commit !== "236dd096669c99eb30f6e1af0b24e668eff55dd5" || !rustPin.build_flags.includes("--no-default-features")) throw new Error("Rust source/CLI-only pin missing");
+
+console.log("mobile runtime helper smoke ok");

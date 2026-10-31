@@ -1,0 +1,12 @@
+# Isolate official prod+real+opensandbox resources so a smoke project cannot
+# steal or hijack the production Gateway upstream socket volume (#685) or the
+# admission scan volume.
+services:
+  scheduler:
+    environment:
+      DEEPSONAR_GATEWAY_UPSTREAM_SOCKET_VOLUME: ${OPEN_SANDBOX_POC_GATEWAY_UPSTREAM_VOL:-os-poc-gateway-upstream}
+volumes:
+  gateway_upstream:
+    name: ${OPEN_SANDBOX_POC_GATEWAY_UPSTREAM_VOL:-os-poc-gateway-upstream}
+  admission_scan:
+    name: ${OPEN_SANDBOX_POC_ADMISSION_VOL:-os-poc-admission-scan}

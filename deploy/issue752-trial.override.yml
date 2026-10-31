@@ -1,0 +1,14 @@
+# Reference for a dedicated, empty Linux trial host only.
+# Runtime-managed gateway networks/proxy still use fixed names; do not share a host.
+services:
+  image-admission:
+    environment:
+      DEEPSONAR_IMAGE_SCAN_VOLUME: ${ISSUE752_ADMISSION_VOLUME:?set trial admission volume}
+
+volumes:
+  admission_scan:
+    name: ${ISSUE752_ADMISSION_VOLUME:?set trial admission volume}
+
+networks:
+  deepsonar:
+    name: ${ISSUE752_BUSINESS_NETWORK:?set trial business network}

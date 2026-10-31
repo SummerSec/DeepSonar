@@ -1,0 +1,1163 @@
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync as fsStatSync } from "node:fs";
+import { Script } from "node:vm";
+import { COMMON_FINGERPRINT_PATHS, FINGERPRINT_SCHEMA_VERSION, PRESETS } from "./image-build-fingerprint.mjs";
+
+// Git preserves the executable bit in the repository, but Windows reports a
+// checkout's mode as 0644 regardless of that index bit. Keep the Linux gate
+// strict while comparing against the git baseline on Windows.
+const statSync = process.platform === "win32" ? (() => ({ mode: 0o755 })) : fsStatSync;
+
+const config = JSON.parse(readFileSync(new URL("./runtime-images.json", import.meta.url), "utf8"));
+const dockerfile = readFileSync(new URL("../deploy/Dockerfile.agent", import.meta.url), "utf8");
+const localDefinition = readFileSync(new URL("./image.mjs", import.meta.url), "utf8");
+const kaliConfig = JSON.parse(readFileSync(new URL("./kali-minimal-runtime.json", import.meta.url), "utf8"));
+const kaliDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-kali-minimal", import.meta.url), "utf8");
+await import("./check-dsh-runtime.mjs");
+const openHarmonyDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony", import.meta.url), "utf8");
+const openHarmonyAuditDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony-audit", import.meta.url), "utf8");
+const openHarmonyFuzzDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony-fuzz", import.meta.url), "utf8");
+const chromeAuditConfig = JSON.parse(readFileSync(new URL("./chrome-audit-runtime.json", import.meta.url), "utf8"));
+const chromeTestConfig = JSON.parse(readFileSync(new URL("./chrome-test-runtime.json", import.meta.url), "utf8"));
+const chromeFuzzConfig = JSON.parse(readFileSync(new URL("./chrome-fuzz-runtime.json", import.meta.url), "utf8"));
+const chromeSources = JSON.parse(readFileSync(new URL("../deploy/chrome-runtime-sources.json", import.meta.url), "utf8"));
+const chromeAuditDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-chrome-audit", import.meta.url), "utf8");
+const chromeTestDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-chrome-test", import.meta.url), "utf8");
+const chromeFuzzDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-chrome-fuzz", import.meta.url), "utf8");
+const chromeAuditEnv = readFileSync(new URL("../deploy/chrome-audit-env.sh", import.meta.url), "utf8");
+const chromeHeadless = readFileSync(new URL("../deploy/chrome-headless.sh", import.meta.url), "utf8");
+const chromeTestEnv = readFileSync(new URL("../deploy/chrome-test-env.sh", import.meta.url), "utf8");
+const chromeTestSmoke = readFileSync(new URL("./chrome-test-smoke.mjs", import.meta.url), "utf8");
+const chromeFuzzEnv = readFileSync(new URL("../deploy/chrome-fuzz-env.sh", import.meta.url), "utf8");
+const chromeFuzzSmoke = readFileSync(new URL("../deploy/chrome-fuzz-smoke.sh", import.meta.url), "utf8");
+const chromeFuzzPreflight = readFileSync(new URL("../deploy/chrome-fuzz-toolchain-preflight.sh", import.meta.url), "utf8");
+const openHarmonyRepo = readFileSync(new URL("../deploy/vendor/gitcode-repo-py3", import.meta.url));
+const normalizedOpenHarmonyRepo = Buffer.from(openHarmonyRepo.toString("utf8").replace(/\r\n/g, "\n"));
+const openHarmonyEnv = readFileSync(new URL("../deploy/openharmony-env.sh", import.meta.url), "utf8");
+const openHarmonyHdc = readFileSync(new URL("../deploy/openharmony-hdc.sh", import.meta.url), "utf8");
+const openHarmonyHdcBin = readFileSync(new URL("../deploy/openharmony-hdc-bin.sh", import.meta.url), "utf8");
+const openHarmonyTestConfig = JSON.parse(readFileSync(new URL("./openharmony-test-runtime.json", import.meta.url), "utf8"));
+const openHarmonyHdcSmoke = readFileSync(new URL("./test-openharmony-hdc.mjs", import.meta.url), "utf8");
+const openHarmonyInit = readFileSync(new URL("../deploy/openharmony-init.sh", import.meta.url), "utf8");
+const openHarmonyBuild = readFileSync(new URL("../deploy/openharmony-build.sh", import.meta.url), "utf8");
+const openHarmonyAuditEnv = readFileSync(new URL("../deploy/openharmony-audit-env.sh", import.meta.url), "utf8");
+const openHarmonyAuditScan = readFileSync(new URL("../deploy/openharmony-audit-scan.sh", import.meta.url), "utf8");
+const openHarmonyFuzzEnv = readFileSync(new URL("../deploy/openharmony-fuzz-env.sh", import.meta.url), "utf8");
+const openHarmonyFuzzBuild = readFileSync(new URL("../deploy/openharmony-fuzz-build.sh", import.meta.url), "utf8");
+const openHarmonyRegistry = JSON.parse(readFileSync(new URL("../deploy/runtime-image-registry.json", import.meta.url), "utf8"));
+const prepareScript = readFileSync(new URL("../deploy/prepare-runtime-images.sh", import.meta.url), "utf8");
+const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+const deploySh = readFileSync(new URL("../deploy/deploy.sh", import.meta.url), "utf8");
+const descriptorScript = readFileSync(new URL("./record-runtime-image-digest.mjs", import.meta.url), "utf8");
+const recordContractScript = readFileSync(new URL("./runtime-image-record.mjs", import.meta.url), "utf8");
+const registryScript = readFileSync(new URL("./generate-runtime-image-registry.mjs", import.meta.url), "utf8");
+const writeReleaseDescriptor = readFileSync(new URL("./write-release-runtime-descriptor.sh", import.meta.url), "utf8");
+const maybeSkipRuntimeVersionTags = readFileSync(new URL("./maybe-skip-runtime-version-tags.sh", import.meta.url), "utf8");
+const reuseCatalogDescriptor = readFileSync(new URL("./reuse-catalog-descriptor.mjs", import.meta.url), "utf8");
+const schedulerRegistryContract = readFileSync(new URL("../apps/scheduler/src/runtime-image-registry-contract.ts", import.meta.url), "utf8");
+const schedulerRuntimeImages = readFileSync(new URL("../apps/scheduler/src/runtime-images.ts", import.meta.url), "utf8");
+/** #761：抓取层已从 runtime-images.ts 抽出，官方 URL/重试策略的断言改为读该模块。 */
+const schedulerRegistryFetch = readFileSync(new URL("../apps/scheduler/src/runtime-image-registry-fetch.ts", import.meta.url), "utf8");
+const schedulerRuntimeImageRoutes = readFileSync(
+  new URL("../apps/scheduler/src/domains/runtime-image/routes.ts", import.meta.url),
+  "utf8",
+);
+const runtimeSmoke = readFileSync(new URL("./test-runtime-image.mjs", import.meta.url), "utf8");
+const chromeRuntimeSmoke = readFileSync(new URL("./test-chrome-runtime.mjs", import.meta.url), "utf8");
+const clickhouseAuditConfig = JSON.parse(readFileSync(new URL("./clickhouse-audit-runtime.json", import.meta.url), "utf8"));
+const clickhouseTestConfig = JSON.parse(readFileSync(new URL("./clickhouse-test-runtime.json", import.meta.url), "utf8"));
+const clickhouseFuzzConfig = JSON.parse(readFileSync(new URL("./clickhouse-fuzz-runtime.json", import.meta.url), "utf8"));
+const clickhouseSources = JSON.parse(readFileSync(new URL("../deploy/clickhouse-runtime-sources.json", import.meta.url), "utf8"));
+const clickhouseAuditDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-clickhouse-audit", import.meta.url), "utf8");
+const clickhouseTestDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-clickhouse-test", import.meta.url), "utf8");
+const clickhouseFuzzDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-clickhouse-fuzz", import.meta.url), "utf8");
+const clickhouseAuditEnv = readFileSync(new URL("../deploy/clickhouse-audit-env.sh", import.meta.url), "utf8");
+const clickhouseInstall = readFileSync(new URL("../deploy/clickhouse-install-static.sh", import.meta.url), "utf8");
+const clickhouseServer = readFileSync(new URL("../deploy/clickhouse-server.sh", import.meta.url), "utf8");
+const clickhouseSandboxConfig = readFileSync(new URL("../deploy/clickhouse-sandbox-config.sh", import.meta.url), "utf8");
+const clickhouseTestEnv = readFileSync(new URL("../deploy/clickhouse-test-env.sh", import.meta.url), "utf8");
+const clickhouseTestSmoke = readFileSync(new URL("./clickhouse-test-smoke.mjs", import.meta.url), "utf8");
+const clickhouseFuzzEnv = readFileSync(new URL("../deploy/clickhouse-fuzz-env.sh", import.meta.url), "utf8");
+const clickhouseFuzzSmoke = readFileSync(new URL("../deploy/clickhouse-fuzz-smoke.sh", import.meta.url), "utf8");
+const clickhouseRuntimeSmoke = readFileSync(new URL("./test-clickhouse-runtime.mjs", import.meta.url), "utf8");
+const clickhouseWorkflow = readFileSync(new URL("../.github/workflows/clickhouse-runtime.yml", import.meta.url), "utf8");
+const mobileConfig = JSON.parse(readFileSync(new URL("./mobile-runtime.json", import.meta.url), "utf8"));
+const mobileDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-mobile", import.meta.url), "utf8");
+const reverseConfig = JSON.parse(readFileSync(new URL("./reverse-runtime.json", import.meta.url), "utf8"));
+const reverseDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-reverse", import.meta.url), "utf8");
+const mobileEnv = readFileSync(new URL("../deploy/mobile-env.sh", import.meta.url), "utf8");
+const mobileAdb = readFileSync(new URL("../deploy/mobile-adb.sh", import.meta.url), "utf8");
+const mobileAdbBin = readFileSync(new URL("../deploy/mobile-adb-bin.sh", import.meta.url), "utf8");
+const mobileHdc = readFileSync(new URL("../deploy/mobile-hdc.sh", import.meta.url), "utf8");
+const mobileIos = readFileSync(new URL("../deploy/mobile-ios.sh", import.meta.url), "utf8");
+const mobileHap = readFileSync(new URL("../deploy/mobile-hap.sh", import.meta.url), "utf8");
+const mobileSo = readFileSync(new URL("../deploy/mobile-so.sh", import.meta.url), "utf8");
+const mobileApkCheckPackBin = readFileSync(new URL("../deploy/mobile-apkcheckpack-bin.sh", import.meta.url), "utf8");
+const mobileSmoke = readFileSync(new URL("./test-mobile-runtime.mjs", import.meta.url), "utf8");
+const mobileWorkflow = readFileSync(new URL("../.github/workflows/mobile-runtime.yml", import.meta.url), "utf8");
+const reverseEnv = readFileSync(new URL("../deploy/reverse-env.sh", import.meta.url), "utf8");
+const reverseSmoke = readFileSync(new URL("./test-reverse-runtime.mjs", import.meta.url), "utf8");
+const mavenSmoke = readFileSync(new URL("./test-maven-package.mjs", import.meta.url), "utf8");
+const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const schedulerRuntimeSnapshot = [
+  readFileSync(
+    new URL("../apps/scheduler/src/domains/role-runtime-snapshot/application.ts", import.meta.url),
+    "utf8",
+  ),
+  readFileSync(
+    new URL("../apps/scheduler/src/domains/role-runtime-snapshot/runtime-image-boundary-policy.ts", import.meta.url),
+    "utf8",
+  ),
+].join("\n");
+const schedulerDispatcher = readFileSync(new URL("../apps/scheduler/src/dispatcher.ts", import.meta.url), "utf8");
+const schema = readFileSync(new URL("../database/schema.sql", import.meta.url), "utf8");
+const roleSmoke = readFileSync(new URL("./test-runtime-images-api.py", import.meta.url), "utf8");
+const dockerIgnore = readFileSync(new URL("../.dockerignore", import.meta.url), "utf8");
+const chromeWorkflow = readFileSync(new URL("../.github/workflows/chrome-runtime.yml", import.meta.url), "utf8");
+const openHarmonyWorkflow = readFileSync(new URL("../.github/workflows/openharmony-runtime.yml", import.meta.url), "utf8");
+const runtimeManualStatic = readFileSync(new URL("./test-runtime-manuals.mjs", import.meta.url), "utf8");
+const runtimeManualRuntime = readFileSync(new URL("./test-runtime-manuals-runtime.mjs", import.meta.url), "utf8");
+const runtimeManualMaterializer = readFileSync(new URL("./materialize-runtime-manuals.mjs", import.meta.url), "utf8");
+
+const failures = [];
+const expect = (condition, message) => { if (!condition) failures.push(message); };
+const DOCKERFILE_INSTRUCTIONS = new Set([
+  "FROM", "RUN", "CMD", "LABEL", "MAINTAINER", "EXPOSE", "ENV", "ADD", "COPY",
+  "ENTRYPOINT", "VOLUME", "USER", "WORKDIR", "ARG", "ONBUILD", "STOPSIGNAL",
+  "HEALTHCHECK", "SHELL",
+]);
+const expectDockerfileParse = (source, label) => {
+  let continued = false;
+  for (const [index, line] of source.split(/\r?\n/).entries()) {
+    const trimmed = line.replace(/\s+$/, "");
+    if (continued) {
+      continued = trimmed.endsWith("\\");
+      continue;
+    }
+    const body = trimmed.trim();
+    if (!body || body.startsWith("#")) continue;
+    const word = body.split(/\s+/, 1)[0];
+    expect(DOCKERFILE_INSTRUCTIONS.has(word.toUpperCase()), `${label} line ${index + 1}: unknown instruction: ${word}`);
+    continued = trimmed.endsWith("\\");
+  }
+  expect(!continued, `${label} ends with a dangling line continuation`);
+  const joined = source.replace(/\\\r?\n/g, " ");
+  for (const [index, line] of joined.split(/\r?\n/).entries()) {
+    if (/\bfor\b/.test(line) && /\bdo\b/.test(line) && !/;\s*do\b/.test(line)) {
+      expect(false, `${label} joined line ${index + 1}: for-list must use '; do' because Dockerfile continuations collapse to one /bin/sh line`);
+    }
+  }
+  const evalSnippets = [...joined.matchAll(/node -e '([^']*)'/g)].map((match) => match[1]);
+  for (const [index, snippet] of evalSnippets.entries()) {
+    try {
+      new Script(snippet);
+    } catch (error) {
+      expect(false, `${label} node -e snippet ${index + 1} is invalid JS: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+};
+expect(FINGERPRINT_SCHEMA_VERSION === "v2", "fingerprint schema version must be bumped deliberately when semantics change");
+expect(COMMON_FINGERPRINT_PATHS.length === 1 && COMMON_FINGERPRINT_PATHS[0] === ".dockerignore", "all image fingerprints must include the shared .dockerignore input");
+expect(dockerIgnore.trim().length > 0, ".dockerignore must remain present for image-context fingerprinting");
+expect(runtimeManualStatic.includes("deepsonar-base") && runtimeManualStatic.includes("deepsonar-mobile") && runtimeManualStatic.includes("deepsonar-reverse"), "runtime manual static gate must enumerate official images");
+expect(runtimeManualRuntime.includes('"--network", "none"') && runtimeManualRuntime.includes("manual_sha256"), "runtime manual smoke must verify offline files and hash");
+expect(runtimeManualMaterializer.includes("tool manifest entries without documentation") && runtimeManualMaterializer.includes("manual_sha256"), "runtime manual materializer must fail closed on coverage and emit integrity metadata");
+for (const [imageKey, source] of [
+  ["deepsonar-base", dockerfile], ["deepsonar-audit", dockerfile], ["deepsonar-kali-minimal", kaliDockerfile],
+  ["deepsonar-openharmony-test", openHarmonyDockerfile], ["deepsonar-openharmony-audit", openHarmonyAuditDockerfile], ["deepsonar-openharmony-fuzz", openHarmonyFuzzDockerfile],
+  ["deepsonar-chrome-audit", chromeAuditDockerfile], ["deepsonar-chrome-test", chromeTestDockerfile], ["deepsonar-chrome-fuzz", chromeFuzzDockerfile],
+  ["deepsonar-clickhouse-audit", clickhouseAuditDockerfile], ["deepsonar-clickhouse-test", clickhouseTestDockerfile], ["deepsonar-clickhouse-fuzz", clickhouseFuzzDockerfile],
+  ["deepsonar-mobile", mobileDockerfile],
+  ["deepsonar-reverse", reverseDockerfile],
+]) {
+  expect(source.includes("agent-harness/runtime-manuals") && source.includes("materialize-runtime-manuals.mjs"), `${imageKey} must materialize the canonical manual catalog`);
+  expect(source.includes('io.deepsonar.manuals="/opt/deepsonar/manuals/index.json"'), `${imageKey} must publish the OCI manual label`);
+}
+for (const imageKey of [
+  "deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal", "deepsonar-openharmony-test", "deepsonar-openharmony-audit", "deepsonar-openharmony-fuzz",
+  "deepsonar-chrome-audit", "deepsonar-chrome-test", "deepsonar-chrome-fuzz", "deepsonar-clickhouse-audit", "deepsonar-clickhouse-test", "deepsonar-clickhouse-fuzz", "deepsonar-mobile", "deepsonar-reverse",
+]) {
+  expect(PRESETS[imageKey]?.paths?.includes("agent-harness/runtime-manuals"), `${imageKey} fingerprint must include canonical manual sources`);
+  expect(PRESETS[imageKey]?.paths?.includes("agent-harness/materialize-runtime-manuals.mjs"), `${imageKey} fingerprint must include materializer`);
+}
+const assertSpecialistWorkflow = (workflow, label, paths) => {
+  expect(workflow.includes("pull_request:\n    paths:"), `${label} workflow must use a pull_request path filter`);
+  expect(workflow.includes("push:\n    branches: [main]\n    paths:"), `${label} workflow must use a main push path filter`);
+  expect(workflow.includes("workflow_dispatch:"), `${label} workflow must support workflow_dispatch`);
+  expect(workflow.includes("concurrency:\n  group:") && workflow.includes("cancel-in-progress: true"), `${label} workflow must have independent cancellable concurrency`);
+  for (const path of paths) expect(workflow.includes(`      - "${path}"`), `${label} workflow path filter missing ${path}`);
+  expect(workflow.includes("image-build-fingerprint.mjs"), `${label} workflow must calculate an image fingerprint`);
+  expect(workflow.includes("resolve-image-src-cache.sh resolve"), `${label} workflow must resolve immutable src-* cache tags`);
+  expect(workflow.includes("SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}"), `${label} workflow must pass the fingerprint src tag to cache resolution`);
+  expect(workflow.includes("steps.resolve.outputs.skip != 'true'") && workflow.includes("steps.resolve.outputs.skip == 'true'"), `${label} workflow must skip unchanged rebuilds`);
+  expect(workflow.includes('docker push "${IMAGE_NAME}:${SRC_TAG}"'), `${label} workflow must pin newly built src-* cache tags`);
+};
+assertSpecialistWorkflow(chromeWorkflow, "Chrome", [
+  "deploy/Dockerfile.agent-chrome-*", "deploy/chrome-*", "agent-harness/chrome-*-runtime.json",
+  "agent-harness/chrome-*.mjs", "agent-harness/test-chrome-runtime.mjs", ".dockerignore",
+  "agent-harness/runtime-manuals/**", "agent-harness/materialize-runtime-manuals.mjs",
+  "agent-harness/test-runtime-manuals.mjs", "agent-harness/test-runtime-manuals-runtime.mjs",
+  "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/chrome-runtime.yml",
+]);
+assertSpecialistWorkflow(clickhouseWorkflow, "ClickHouse", [
+  "deploy/Dockerfile.agent-clickhouse-*", "deploy/clickhouse-*", "agent-harness/clickhouse-*-runtime.json",
+  "agent-harness/clickhouse-*.mjs", "agent-harness/test-clickhouse-runtime.mjs", ".dockerignore",
+  "agent-harness/runtime-manuals/**", "agent-harness/materialize-runtime-manuals.mjs",
+  "agent-harness/test-runtime-manuals.mjs", "agent-harness/test-runtime-manuals-runtime.mjs",
+  "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/clickhouse-runtime.yml",
+]);
+assertSpecialistWorkflow(openHarmonyWorkflow, "OpenHarmony", [
+  "deploy/Dockerfile.agent-openharmony", "deploy/Dockerfile.agent-openharmony-*", "deploy/openharmony-*.sh",
+  "deploy/vendor/gitcode-repo-py3", "deploy/vendor/openharmony-hdc/**", "agent-harness/openharmony-test-runtime.json",
+  "agent-harness/test-openharmony-hdc.mjs", ".dockerignore",
+  "agent-harness/runtime-manuals/**", "agent-harness/materialize-runtime-manuals.mjs",
+  "agent-harness/test-runtime-manuals.mjs", "agent-harness/test-runtime-manuals-runtime.mjs",
+  "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/openharmony-runtime.yml",
+]);
+assertSpecialistWorkflow(mobileWorkflow, "Mobile", [
+  "deploy/Dockerfile.agent-mobile", "deploy/mobile-*.sh", "deploy/vendor/openharmony-hdc/**",
+  "agent-harness/mobile-runtime.json",
+  "agent-harness/test-mobile-runtime.mjs", ".dockerignore",
+  "agent-harness/runtime-manuals/**", "agent-harness/materialize-runtime-manuals.mjs",
+  "agent-harness/test-runtime-manuals.mjs", "agent-harness/test-runtime-manuals-runtime.mjs",
+  "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/mobile-runtime.yml",
+]);
+
+expect(!ciWorkflow.includes("chrome-runtime-images"), "core ci workflow must not contain the Chrome specialist job");
+expect(!ciWorkflow.includes("clickhouse-runtime-images"), "core ci workflow must not contain the ClickHouse specialist job");
+expect(!ciWorkflow.includes("openharmony-runtime-images"), "core ci workflow must not contain the OpenHarmony specialist job");
+expect(!ciWorkflow.includes("mobile-runtime-images"), "core ci workflow must not contain the Mobile specialist job");
+expect(!ciWorkflow.includes("android-runtime-images"), "core ci workflow must not contain a leftover Android specialist job");
+expect(ciWorkflow.includes("toolset: base") && ciWorkflow.includes("toolset: audit") && ciWorkflow.includes("toolset: kali-minimal"), "core ci workflow must retain base/audit/kali runtime jobs");
+expect(chromeWorkflow.includes("chrome-runtime-images:") && chromeWorkflow.includes("timeout-minutes: 240") && chromeWorkflow.includes("platforms: linux/amd64") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome workflow must retain its cold-build allowance, amd64 matrix, and smoke");
+expect(chromeWorkflow.includes("test-runtime-manuals-runtime.mjs"), "Chrome workflow must run the offline runtime manual smoke");
+expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(chromeWorkflow), "Chrome manual smoke must also run on cache hits");
+expect(chromeWorkflow.includes('docker pull "${{ steps.resolve.outputs.src_ref }}"'), "Chrome workflow must pull immutable src-* images before cache-hit smoke");
+expect(clickhouseWorkflow.includes("clickhouse-runtime-images:") && clickhouseWorkflow.includes("timeout-minutes: 90") && clickhouseWorkflow.includes("platforms: linux/amd64") && clickhouseWorkflow.includes("test-clickhouse-runtime.mjs"), "ClickHouse workflow must retain its amd64 matrix and smoke");
+expect(clickhouseWorkflow.includes("test-runtime-manuals-runtime.mjs"), "ClickHouse workflow must run the offline runtime manual smoke");
+expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(clickhouseWorkflow), "ClickHouse manual smoke must also run on cache hits");
+expect(clickhouseWorkflow.includes('docker pull "${{ steps.resolve.outputs.src_ref }}"'), "ClickHouse workflow must pull immutable src-* images before cache-hit smoke");
+expect(openHarmonyWorkflow.includes("openharmony-runtime-images:") && openHarmonyWorkflow.includes("setup-qemu-action@v3"), "OpenHarmony workflow must retain its QEMU-backed specialist job");
+expect(openHarmonyWorkflow.includes("test-runtime-manuals-runtime.mjs"), "OpenHarmony workflow must run the offline runtime manual smoke");
+expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(openHarmonyWorkflow), "OpenHarmony manual smoke must also run on cache hits");
+expect(openHarmonyWorkflow.includes('docker pull --platform "${{ matrix.platform }}" "${{ steps.resolve.outputs.src_ref }}"'), "OpenHarmony workflow must pull immutable cache-hit images before manual smoke");
+expect((openHarmonyWorkflow.match(/toolset: openharmony-test/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two test matrix entries");
+expect((openHarmonyWorkflow.match(/toolset: openharmony-audit/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two audit matrix entries");
+expect((openHarmonyWorkflow.match(/toolset: openharmony-fuzz/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two fuzz matrix entries");
+expect((openHarmonyWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 3 && (openHarmonyWorkflow.match(/platform: linux\/arm64/g) ?? []).length === 3, "OpenHarmony workflow must retain amd64/arm64 matrix coverage for test/audit/fuzz");
+expect(openHarmonyWorkflow.includes("check_args: --check --static") && openHarmonyWorkflow.includes("matrix.check_args"), "OpenHarmony Fuzz CI must use static mode for arm64 smoke");
+expect(openHarmonyWorkflow.includes("check_args: --check --hdc"), "OpenHarmony Test CI must smoke hdc version without requiring a device");
+expect(localDefinition.includes('runtime-images.json'), "agent-harness/image.mjs must consume runtime-images.json");
+expect(dockerfile.includes(`ARG BASE_IMAGE=${config.baseImage}`), "Dockerfile.agent base image differs from runtime-images.json");
+expect(dockerfile.includes("FROM ${BASE_IMAGE}"), "Dockerfile.agent must consume the pinned BASE_IMAGE arg");
+expect(dockerfile.includes(`ARG CLAUDE_CODE_VERSION=${config.npm["@anthropic-ai/claude-code"].version}`), "Claude Code version drift");
+for (const [packageName, entry] of Object.entries(config.npm)) {
+  if (!entry.agent_cli) continue;
+  expect(Array.isArray(entry.compatible_image_keys) && entry.compatible_image_keys.includes("deepsonar-base"), `${packageName} base compatibility missing`);
+  expect(Array.isArray(kaliConfig.npm[packageName]?.compatible_image_keys) && kaliConfig.npm[packageName].compatible_image_keys.includes("deepsonar-kali-minimal"), `${packageName} Kali compatibility missing`);
+}
+for (const leftover of ["@openai/codex", "opencode-ai"]) {
+  expect(!config.npm[leftover], `${leftover} leftover CLI must not remain in official base/audit manifest`);
+  expect(!kaliConfig.npm[leftover], `${leftover} leftover CLI must not remain in official Kali manifest`);
+}
+expect(!dockerfile.includes("CODEX_VERSION") && !dockerfile.includes("@openai/codex") && !dockerfile.includes("opencode-ai"), "Dockerfile.agent must not install leftover Codex/OpenCode");
+expect(!kaliDockerfile.includes("CODEX_VERSION") && !kaliDockerfile.includes("@openai/codex") && !kaliDockerfile.includes("opencode-ai"), "Dockerfile.agent-kali-minimal must not install leftover Codex/OpenCode");
+const claudePackage = "@anthropic-ai/claude-code";
+const claudeManifest = config.npm[claudePackage];
+expect(claudeManifest?.version === "2.1.312", "Claude Code version must remain pinned");
+expect(claudeManifest?.integrity === "sha512-/gx8byG8VOm4YoNuT5tal/Ov5Z5oydJzZkmHCJcBFLbNGGpyYDbKA/CNdB+iIKwcLQC8pVwBoj6Dt7H3L2J5bw==", "Claude Code integrity drift");
+expect(kaliConfig.npm[claudePackage]?.integrity === claudeManifest?.integrity, "base/Kali Claude Code integrity must match");
+for (const imageDockerfile of [dockerfile, kaliDockerfile]) {
+  expect(imageDockerfile.includes(`ARG CLAUDE_CODE_INTEGRITY=${claudeManifest.integrity}`), "Claude Code integrity must be pinned in Docker ARG");
+  expect(imageDockerfile.includes("npm view @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} dist.integrity"), "Claude Code integrity must be verified during the image build");
+}
+const piPackage = "@earendil-works/pi-coding-agent";
+const piManifest = config.npm[piPackage];
+expect(piManifest?.version === "1.4.0", "Pi Coding Agent version must remain pinned");
+expect(piManifest?.integrity === "sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==", "Pi Coding Agent integrity drift");
+const piInstallRef = `${piPackage}@\${PI_CODING_AGENT_VERSION}`;
+const piIntegrityCheck = `npm view ${piInstallRef} dist.integrity`;
+expect(dockerfile.includes("ARG PI_CODING_AGENT_VERSION=1.4.0") && dockerfile.includes(piInstallRef), "Pi Coding Agent must be installed from the pinned Docker ARG");
+expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_VERSION=1.4.0") && kaliDockerfile.includes(piInstallRef), "Kali Pi Coding Agent must be installed from the pinned Docker ARG");
+expect(dockerfile.includes("ARG PI_CODING_AGENT_INTEGRITY=sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==") && dockerfile.includes(piIntegrityCheck), "Pi Coding Agent integrity must be verified during the base image build");
+expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_INTEGRITY=sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==") && kaliDockerfile.includes(piIntegrityCheck), "Kali Pi Coding Agent integrity must be verified during the image build");
+const sharedPiExtensions = readFileSync(new URL("../packages/shared-types/src/pi-extensions.ts", import.meta.url), "utf8");
+const basePiWeb = config.piExtensions?.["pi-web-access"];
+const kaliPiWeb = kaliConfig.piExtensions?.["pi-web-access"];
+expect(basePiWeb?.version === "0.29.0" && kaliPiWeb?.version === "0.29.0", "pi-web-access version must stay pinned");
+expect(basePiWeb?.integrity === "sha512-1l4sAWYkFhiBynJf/mXuxmCHxjhiAyWJ4rfQVFu8UPa0JQhCS9oXAmNXcL0Q1SfrO00plmb6L4IkypJ3n1Q4Kg==", "pi-web-access integrity drift");
+expect(basePiWeb?.integrity === kaliPiWeb?.integrity, "base/kali pi-web-access integrity must match");
+expect(Array.isArray(basePiWeb?.toolsets) && basePiWeb.toolsets.length === 1 && basePiWeb.toolsets[0] === "audit", "pi-web-access preinstall is audit-only to stay inside the base size budget");
+expect(Array.isArray(basePiWeb?.compatible_image_keys) && basePiWeb.compatible_image_keys.includes("deepsonar-audit") && !basePiWeb.compatible_image_keys.includes("deepsonar-base"), "pi-web-access stays off the size-gated base image");
+expect(Array.isArray(kaliPiWeb?.compatible_image_keys) && kaliPiWeb.compatible_image_keys.includes("deepsonar-kali-minimal"), "pi-web-access Kali compatibility missing");
+expect(dockerfile.includes('if [ "$TOOLSET" != audit ]; then exit 0; fi'), "Dockerfile.agent must skip Pi extension preinstall on TOOLSET=base");
+expect(sharedPiExtensions.includes('id: "pi-web-access"') && sharedPiExtensions.includes(basePiWeb.version) && sharedPiExtensions.includes(basePiWeb.integrity), "shared-types Pi extension registry drifted from runtime-images.json");
+expect(dockerfile.includes(`ARG PI_WEB_ACCESS_VERSION=${basePiWeb.version}`) && dockerfile.includes(`ARG PI_WEB_ACCESS_INTEGRITY=${basePiWeb.integrity}`), "Dockerfile.agent must pin pi-web-access");
+expect(kaliDockerfile.includes(`ARG PI_WEB_ACCESS_VERSION=${kaliPiWeb.version}`) && kaliDockerfile.includes(`ARG PI_WEB_ACCESS_INTEGRITY=${kaliPiWeb.integrity}`), "Kali Dockerfile must pin pi-web-access");
+expect(dockerfile.includes("npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity") && dockerfile.includes("--prefix /opt/deepsonar/pi-extensions"), "Dockerfile.agent must integrity-check and prefix-install Pi extensions");
+expect(kaliDockerfile.includes("npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity") && kaliDockerfile.includes("--prefix /opt/deepsonar/pi-extensions"), "Kali Dockerfile must integrity-check and prefix-install Pi extensions");
+expect(localDefinition.includes("piExtensions") && localDefinition.includes("/opt/deepsonar/pi-extensions"), "image.mjs must preinstall registered Pi extensions to the fixed prefix");
+expect(dockerfile.includes("jq=${JQ_VERSION} libjq1=${JQ_VERSION}"), "base/audit must pin jq and its exact-version libjq1 dependency together");
+const aptArgs = {
+  git: "GIT", python3: "PYTHON", "ca-certificates": "CA_CERTIFICATES",
+  curl: "CURL", ripgrep: "RIPGREP", jq: "JQ", file: "FILE", unzip: "UNZIP", "xz-utils": "XZ", binutils: "BINUTILS",
+};
+for (const [name, entry] of Object.entries(config.apt)) {
+  expect(dockerfile.includes(`ARG ${aptArgs[name]}_VERSION=${entry.version}`), `${name} Debian version drift`);
+}
+for (const [name, entry] of Object.entries(config.downloads)) {
+  expect(dockerfile.includes(`ARG ${name.toUpperCase()}_VERSION=${entry.version}`), `${name} version drift`);
+  for (const asset of Object.values(entry.assets)) {
+    const checksum = asset.sha256 ?? asset.sha512;
+    expect(checksum, `${name} asset must declare sha256 or sha512`);
+    expect(dockerfile.includes(checksum), `${name} asset checksum missing: ${checksum}`);
+  }
+}
+for (const required of ["io.deepsonar.contract", "io.deepsonar.toolset", "io.deepsonar.tools-manifest", "org.opencontainers.image.source"]) {
+  expect(dockerfile.includes(required), `Dockerfile.agent missing OCI label ${required}`);
+  expect(kaliDockerfile.includes(required), `Dockerfile.agent-kali-minimal missing OCI label ${required}`);
+}
+for (const required of ["org.opencontainers.image.title", "org.opencontainers.image.description", "org.opencontainers.image.licenses"]) {
+  expect(dockerfile.includes(required), `Dockerfile.agent missing package metadata ${required}`);
+  expect(kaliDockerfile.includes(required), `Dockerfile.agent-kali-minimal missing package metadata ${required}`);
+  expect(openHarmonyDockerfile.includes(required), `Dockerfile.agent-openharmony missing package metadata ${required}`);
+  expect(openHarmonyAuditDockerfile.includes(required), `Dockerfile.agent-openharmony-audit missing package metadata ${required}`);
+  expect(openHarmonyFuzzDockerfile.includes(required), `Dockerfile.agent-openharmony-fuzz missing package metadata ${required}`);
+  expect(mobileDockerfile.includes(required), `Dockerfile.agent-mobile missing package metadata ${required}`);
+}
+expect(kaliDockerfile.includes(`ARG BASE_IMAGE=${kaliConfig.baseImage}`), "Kali minimal base image digest drift");
+expect(kaliDockerfile.includes("FROM ${BASE_IMAGE}"), "Kali minimal Dockerfile must consume the pinned BASE_IMAGE arg");
+const kaliMirror = "https://kali.download/kali";
+const kaliAptSuite = "kali-last-snapshot main contrib non-free non-free-firmware";
+expect(kaliDockerfile.includes(`ARG KALI_MIRROR=${kaliMirror}`), "Kali minimal APT mirror must use the pinned HTTPS default");
+expect(kaliDockerfile.includes("rm -f /etc/apt/sources.list.d/kali.sources"), "Kali minimal APT sources must disable the base image's mutable mirror");
+expect(kaliDockerfile.includes(`printf 'deb %s ${kaliAptSuite}\\n' "\${KALI_MIRROR}" > /etc/apt/sources.list`), "Kali minimal APT sources must use the stable snapshot suite");
+const kaliCaImage = "debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818";
+expect(kaliDockerfile.includes(`ARG CA_IMAGE=${kaliCaImage}`), "Kali minimal CA bootstrap image digest drift");
+expect(kaliDockerfile.includes("FROM ${CA_IMAGE} AS ca-bootstrap"), "Kali minimal CA bootstrap stage must consume the pinned image");
+expect(kaliDockerfile.includes("apt-get install -y --no-install-recommends ca-certificates"), "Kali minimal CA bootstrap must install ca-certificates");
+expect(kaliDockerfile.includes("COPY --from=ca-bootstrap /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt"), "Kali minimal HTTPS APT must use the pinned CA bootstrap");
+expect(kaliDockerfile.includes("COPY --from=ca-bootstrap /usr/lib/ssl/ /usr/lib/ssl/"), "Kali minimal HTTPS APT must include the pinned OpenSSL trust paths");
+expect(!kaliDockerfile.includes("http://http.kali.org/kali"), "Kali minimal APT sources must not fall back to the mutable HTTP mirror");
+expect(kaliDockerfile.includes(`ARG CLAUDE_CODE_VERSION=${kaliConfig.npm["@anthropic-ai/claude-code"].version}`), "Kali minimal Claude Code version drift");
+for (const [name, entry] of Object.entries(kaliConfig.downloads)) {
+  expect(kaliDockerfile.includes(`ARG ${name.toUpperCase()}_VERSION=${entry.version}`), `Kali minimal ${name} version drift`);
+  for (const asset of Object.values(entry.assets)) {
+    const checksum = asset.sha256 ?? asset.sha512;
+    expect(checksum, `Kali minimal ${name} asset must declare sha256 or sha512`);
+    expect(kaliDockerfile.includes(checksum), `Kali minimal ${name} checksum missing: ${checksum}`);
+  }
+}
+const maven = kaliConfig.downloads.maven;
+const mavenAsset = maven?.assets?.all;
+expect(mavenAsset, "Kali minimal runtime must define the Maven all-platform asset");
+if (mavenAsset) {
+  expect(kaliDockerfile.includes(`ARG MAVEN_URL=${mavenAsset.url}`), "Kali minimal Maven URL drift");
+  expect(kaliDockerfile.includes("sha512sum -c -"), "Kali minimal Maven download must use sha512sum");
+}
+expect(kaliDockerfile.includes("MAVEN_HOME=/opt/deepsonar/maven"), "Kali minimal Maven home is not exported");
+expect(kaliDockerfile.includes("/opt/deepsonar/maven/bin"), "Kali minimal Maven bin directory is not on PATH");
+expect(kaliDockerfile.includes("ln -s /opt/deepsonar/maven/bin/mvn /usr/local/bin/mvn"), "Kali minimal Maven must expose a stable /usr/local/bin/mvn symlink");
+expect(kaliDockerfile.includes("ln -s /opt/deepsonar/jdks/17/bin/jar /usr/local/bin/jar"), "Kali minimal JDK must expose a stable /usr/local/bin/jar symlink");
+expect(kaliDockerfile.includes("/root/.m2"), "Kali minimal image cleanup must remove Maven's .m2 cache");
+expect(runtimeSmoke.includes("mvn -v"), "Kali minimal offline smoke must run mvn -v");
+expect(runtimeSmoke.includes("command -v mvn"), "Kali minimal offline smoke must verify mvn PATH");
+expect(runtimeSmoke.includes("readlink -f"), "Kali minimal offline smoke must resolve mvn to the immutable Maven home");
+expect(runtimeSmoke.includes("command -v jar"), "Kali minimal offline smoke must verify jar PATH");
+expect(runtimeSmoke.includes("jar --version"), "Kali minimal offline smoke must run jar --version");
+expect(mavenSmoke.includes("mvn -q"), "Kali minimal online smoke must run a Maven package");
+expect(mavenSmoke.includes("maven.repo.local=/tmp/maven-repository"), "Maven smoke must keep the repository outside .m2");
+expect(mavenSmoke.includes("commons_jar=/tmp/maven-repository/org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.jar"), "Maven smoke must locate the downloaded commons-lang3 dependency");
+expect(mavenSmoke.includes('test -s \\\"$commons_jar\\\"'), "Maven smoke must assert the local commons-lang3 jar exists");
+expect(mavenSmoke.includes('target/classes:$commons_jar'), "Maven smoke must run with target classes and the local dependency jar");
+expect(ciWorkflow.includes("test-maven-package.mjs"), "CI must run the Maven package smoke");
+expect(schedulerRuntimeImages.includes('test: "deepsonar-kali-minimal"'), "Scheduler Test default must resolve to Kali Test");
+expect(schedulerRuntimeImages.includes('verify: "deepsonar-base"'), "Scheduler Verify default must remain Base");
+expect(schedulerRuntimeSnapshot.includes("Runtime test toolchain (Scheduler policy)"), "Test snapshots must carry the prebuilt toolchain policy");
+expect(schedulerRuntimeSnapshot.includes("OpenHarmony hdc device protocol (Scheduler policy)"), "OH Test snapshots must require official hdc device evidence");
+expect(readFileSync(new URL("../package.json", import.meta.url), "utf8").includes("test-openharmony-hdc.mjs"), "ci:images must run the OpenHarmony hdc helper smoke");
+expect(schedulerRuntimeSnapshot.includes("Do **not** install or download JDK, Maven"), "Test snapshots must prohibit runtime JDK/Maven bootstrap");
+expect(schedulerDispatcher.includes("禁止 apt-get、下载 JDK/Maven"), "runtime_test intents must prohibit JDK/Maven downloads");
+expect(schema.includes("WHEN r.name = 'test' THEN 'deepsonar-kali-minimal'"), "schema Test RoleConfig default must select Kali Test");
+expect(schema.includes("Runtime test 工具链纪律"), "schema Test instructions must document prebuilt toolchain policy");
+expect(roleSmoke.includes("project_image_policy_removed"), "API smoke must reject removed project image_strategy writes");
+expect(roleSmoke.includes("assert verify_role[\"runtime_image_key\"] is None"), "API smoke must preserve global Verify Base default");
+for (const version of kaliConfig.managed.python.versions) {
+  expect(kaliDockerfile.includes(version), `Kali minimal managed Python version drift: ${version}`);
+}
+for (const jdk of kaliConfig.managed.jdk.versions) {
+  expect(kaliDockerfile.includes(jdk.image), `Kali minimal JDK ${jdk.major} image digest drift`);
+}
+for (const forbidden of ["kali-linux-core", "kali-linux-headless", "kali-linux-default", "kali-linux-large", "kali-linux-everything", "kali-tools-"]) {
+  expect(!kaliDockerfile.match(new RegExp(`apt-get install[^;]*${forbidden}`, "s")), `Kali minimal must not install metapackage ${forbidden}`);
+}
+expect(kaliDockerfile.includes("--no-install-recommends"), "Kali minimal apt install must disable recommends");
+const openHarmonyImages = [
+  { key: "deepsonar-openharmony-test", role: "test", dockerfile: openHarmonyDockerfile },
+  { key: "deepsonar-openharmony-audit", role: "audit", dockerfile: openHarmonyAuditDockerfile },
+  { key: "deepsonar-openharmony-fuzz", role: "test", dockerfile: openHarmonyFuzzDockerfile },
+];
+for (const item of openHarmonyImages) {
+  const image = openHarmonyRegistry.images?.find((entry) => entry.image_key === item.key);
+  expect(image, `registry 缺少 ${item.key}`);
+  if (image) {
+    expect(image.source_kind === "official", `${item.key} 必须是 official`);
+    expect(image.project_opt_in === true, `${item.key} 必须启用 project_opt_in`);
+    expect(image.default_role === item.role, `${item.key} default_role 必须是 ${item.role}`);
+    expect(Array.isArray(image.versions), `${item.key} registry versions 必须是数组`);
+  }
+}
+const chromeImages = [
+  { key: "deepsonar-chrome-audit", role: "audit", config: chromeAuditConfig, dockerfile: chromeAuditDockerfile },
+  { key: "deepsonar-chrome-test", role: "test", config: chromeTestConfig, dockerfile: chromeTestDockerfile },
+  { key: "deepsonar-chrome-fuzz", role: "test", config: chromeFuzzConfig, dockerfile: chromeFuzzDockerfile },
+];
+for (const item of chromeImages) {
+  const image = openHarmonyRegistry.images?.find((entry) => entry.image_key === item.key);
+  expect(image, `registry 缺少 ${item.key}`);
+  if (image) {
+    expect(image.source_kind === "official", `${item.key} 必须是 official`);
+    expect(image.project_opt_in === true, `${item.key} 必须启用 project_opt_in`);
+    expect(image.default_role === item.role, `${item.key} default_role 必须是 ${item.role}`);
+    expect(Array.isArray(image.versions), `${item.key} registry versions 必须是数组`);
+  }
+  expect(item.config.contract === "deepsonar.runtime.contract/v1", `${item.key} runtime contract drift`);
+  expect(item.config.project_opt_in === true, `${item.key} config must remain project_opt_in`);
+  expect(item.config.platforms?.join(",") === "linux/amd64,linux/arm64", `${item.key} must declare both release platforms`);
+  expect(item.dockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), `${item.key} must default to local governed base`);
+  expect(item.dockerfile.includes("FROM ${BASE_IMAGE}"), `${item.key} must consume BASE_IMAGE`);
+  expect(item.dockerfile.includes("apt-get install -y --no-install-recommends"), `${item.key} apt install must disable recommends`);
+  expect(item.dockerfile.includes("USER deepsonar"), `${item.key} must run as non-root`);
+  expect(item.dockerfile.includes("/opt/deepsonar/tool-manifest.json"), `${item.key} must generate tool-manifest.json`);
+  expect(item.dockerfile.includes("io.deepsonar.contract") && item.dockerfile.includes("org.opencontainers.image.description"), `${item.key} OCI metadata missing`);
+}
+const clickhouseImages = [
+  { key: "deepsonar-clickhouse-audit", role: "audit", config: clickhouseAuditConfig, dockerfile: clickhouseAuditDockerfile },
+  { key: "deepsonar-clickhouse-test", role: "test", config: clickhouseTestConfig, dockerfile: clickhouseTestDockerfile },
+  { key: "deepsonar-clickhouse-fuzz", role: "test", config: clickhouseFuzzConfig, dockerfile: clickhouseFuzzDockerfile },
+];
+for (const item of clickhouseImages) {
+  const image = openHarmonyRegistry.images?.find((entry) => entry.image_key === item.key);
+  expect(image, `registry 缺少 ${item.key}`);
+  if (image) {
+    expect(image.source_kind === "official", `${item.key} 必须是 official`);
+    expect(image.project_opt_in === true, `${item.key} 必须启用 project_opt_in`);
+    expect(image.default_role === item.role, `${item.key} default_role 必须是 ${item.role}`);
+    expect(Array.isArray(image.versions), `${item.key} registry versions 必须是数组`);
+  }
+  expect(item.config.contract === "deepsonar.runtime.contract/v1", `${item.key} runtime contract drift`);
+  expect(item.config.project_opt_in === true, `${item.key} config must remain project_opt_in`);
+  expect(item.config.platforms?.join(",") === "linux/amd64,linux/arm64", `${item.key} must declare both release platforms`);
+  expect(item.dockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), `${item.key} must default to local governed base`);
+  expect(item.dockerfile.includes("FROM ${BASE_IMAGE}"), `${item.key} must consume BASE_IMAGE`);
+  expect(item.dockerfile.includes("apt-get install -y --no-install-recommends"), `${item.key} apt install must disable recommends`);
+  expect(item.dockerfile.includes("USER deepsonar"), `${item.key} must run as non-root`);
+  expect(item.dockerfile.includes("/opt/deepsonar/tool-manifest.json"), `${item.key} must generate tool-manifest.json`);
+  expect(item.dockerfile.includes("io.deepsonar.contract") && item.dockerfile.includes("org.opencontainers.image.description"), `${item.key} OCI metadata missing`);
+}
+const mobileImage = openHarmonyRegistry.images?.find((entry) => entry.image_key === "deepsonar-mobile");
+expect(mobileImage, "registry 缺少 deepsonar-mobile");
+if (mobileImage) {
+  expect(mobileImage.source_kind === "official", "deepsonar-mobile 必须是 official");
+  expect(mobileImage.project_opt_in === true, "deepsonar-mobile 必须启用 project_opt_in");
+  expect(mobileImage.default_role === "audit", "deepsonar-mobile default_role 必须是 audit");
+  expect(Array.isArray(mobileImage.versions), "deepsonar-mobile registry versions 必须是数组");
+}
+const reverseImage = openHarmonyRegistry.images?.find((entry) => entry.image_key === "deepsonar-reverse");
+expect(reverseImage, "registry 缺少 deepsonar-reverse");
+if (reverseImage) {
+  expect(reverseImage.source_kind === "official", "deepsonar-reverse 必须是 official");
+  expect(reverseImage.project_opt_in === true, "deepsonar-reverse 必须启用 project_opt_in");
+  expect(reverseImage.default_role === "audit", "deepsonar-reverse default_role 必须是 audit");
+  expect(Array.isArray(reverseImage.versions), "deepsonar-reverse registry versions 必须是数组");
+}
+expect(reverseConfig.contract === "deepsonar.runtime.contract/v1", "Reverse runtime contract drift");
+expect(
+  /\('deepsonar-reverse', 'DeepSonar Reverse', '[^']+', 'SummerSec', 'https:\/\/github\.com\/SummerSec\/DeepSonar', 'official', true, true, true\)/.test(schema),
+  "schema.sql 必须以 official/project_opt_in/enabled 种子 deepsonar-reverse（#718 PR3）",
+);
+expect(reverseConfig.project_opt_in === true, "Reverse config must remain project_opt_in");
+expect(reverseConfig.platforms?.join(",") === "linux/amd64,linux/arm64", "Reverse must declare both release platforms");
+expect(reverseConfig.downloads?.ghidra?.version === "12.1.4", "Reverse must pin Ghidra 12.1.4");
+expect(reverseConfig.downloads?.ghidra?.assets?.all?.sha256 === "ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db", "Reverse Ghidra SHA256 drift");
+expect(reverseConfig.managed?.npm?.["rea-agents"]?.version === "6.4.0", "Reverse must pin rea-agents 6.4.0");
+expect(reverseConfig.managed?.npm?.["rea-agents"]?.gitHead === "a56f7bb668ab23fec8d33f7af353ac7ed2fe1895", "Reverse rea-agents gitHead drift");
+expect(reverseConfig.toolsets?.reverse?.maxSizeMiB === 2800, "Reverse size budget must be provisional 2800 MiB pending first OCI docker save");
+expect(reverseConfig.toolsets?.reverse?.job_resource_recommendation?.memory_mib === 4096, "Reverse Job memory recommendation must be 4096 MiB");
+expect(reverseConfig.skill?.id === "deepsonar-rea-cli", "Reverse must declare governed skill id");
+expect(typeof reverseConfig.skill?.content_hash === "string" && reverseConfig.skill.content_hash.startsWith("sha256:"), "Reverse skill content_hash required");
+expect(reverseDockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), "Reverse must default to local governed base");
+expect(reverseDockerfile.includes("REA_AGENTS_VERSION=6.4.0"), "Reverse Dockerfile must pin rea-agents 6.4.0");
+expect(reverseDockerfile.includes("GHIDRA_VERSION=12.1.4"), "Reverse Dockerfile must pin Ghidra 12.1.4");
+expect(reverseDockerfile.includes("NODE_MIN_VERSION=22.19.0"), "Reverse Dockerfile must enforce Node >= 22.19");
+expect(reverseDockerfile.includes("USER deepsonar"), "Reverse must run as non-root");
+expect(reverseDockerfile.includes("linux_x86_64") && reverseDockerfile.includes("linux_arm_64"), "Reverse must require arch-matching native decompiler");
+expect(reverseEnv.includes("deepsonar-reverse"), "reverse-env must target deepsonar-reverse");
+expect(reverseSmoke.includes("content_hash"), "reverse smoke must verify skill content hash");
+expect(PRESETS["deepsonar-reverse"]?.paths?.includes("agent-harness/reverse-runtime.json"), "Reverse fingerprint must include the runtime manifest");
+expect(PRESETS["deepsonar-reverse"]?.paths?.includes("deploy/reverse-env.sh"), "Reverse fingerprint must include reverse-env");
+expect(PRESETS["deepsonar-reverse"]?.paths?.includes("skills/deepsonar-rea-cli/SKILL.md"), "Reverse fingerprint must include governed skill");
+expect(readFileSync(new URL("../package.json", import.meta.url), "utf8").includes("test-reverse-runtime.mjs"), "ci:images must run the Reverse helper smoke");
+expect(prepareScript.includes("deepsonar-reverse") && prepareScript.includes("Dockerfile.agent-reverse"), "prepare 脚本必须接入 Reverse 镜像");
+
+expect(mobileConfig.contract === "deepsonar.runtime.contract/v1", "Mobile runtime contract drift");
+expect(mobileConfig.project_opt_in === true, "Mobile config must remain project_opt_in");
+expect(mobileConfig.platforms?.join(",") === "linux/amd64,linux/arm64", "Mobile must declare both release platforms");
+expect(mobileConfig.downloads?.jadx?.version === "1.5.6", "Mobile must pin JADX 1.5.6");
+expect(mobileConfig.downloads?.apktool?.version === "3.0.3", "Mobile must pin apktool 3.0.3");
+expect(mobileConfig.downloads?.bundletool?.version === "1.18.3", "Mobile must pin bundletool 1.18.3");
+expect(mobileConfig.downloads?.apkeep?.version === "1.0.0", "Mobile must pin apkeep 1.0.0");
+expect(mobileConfig.managed?.pip?.androguard?.version === "4.1.4", "Mobile must pin androguard 4.1.4");
+const ascSource = mobileConfig.downloads?.["rust-asc"];
+expect(ascSource?.version === "0.1.1" && ascSource?.license === "Apache-2.0", "Mobile Rust ASC source/version/license required");
+for (const field of ["commit", "radguard_commit", "cargo_lock_sha256"]) {
+  expect(mobileDockerfile.includes(ascSource?.[field]), `Mobile ASC ${field} must match Dockerfile`);
+}
+expect(mobileDockerfile.includes("--locked --no-default-features"), "Mobile ASC must build locked CLI without MCP");
+expect(mobileDockerfile.includes("/opt/deepsonar/bin/droidasc-python"), "Mobile Python ASC must remain explicit");
+expect(PRESETS["deepsonar-mobile"].paths.includes("deploy/mobile-asc.sh"), "ASC adapter must affect image fingerprint");
+expect(mobileConfig.managed?.pip?.droidasc?.version === "0.1.1.post1", "Mobile must pin droidasc 0.1.1.post1");
+expect(mobileConfig.managed?.pip?.droidasc?.license === "Apache-2.0", "Mobile droidasc must be Apache-2.0");
+expect(mobileConfig.managed?.pip?.droidasc?.capabilities?.includes("apk-xref-search"), "Mobile droidasc must declare apk-xref-search");
+expect(mobileConfig.downloads?.apkcheckpack?.version === "20260618", "Mobile must pin ApkCheckPack 20260618");
+expect(mobileConfig.downloads?.apkcheckpack?.assets?.all?.sha256 === "c045efb53ca016c047e0efd0dffbdaa56508585a9aaaedfd9abe4336a12c697b", "Mobile ApkCheckPack SHA256 drift");
+expect(mobileConfig.downloads?.apkcheckpack?.license === "NOASSERTION", "Mobile ApkCheckPack must record upstream has no SPDX license");
+expect(mobileConfig.managed?.pip?.lief?.version === "1.0.0", "Mobile must pin LIEF 1.0.0");
+expect(mobileConfig.managed?.apt?.binutils?.version === "2.40-2", "Mobile must pin binutils 2.40-2");
+expect(mobileConfig.downloads?.radare2?.version === "6.2.0", "Mobile must pin radare2 6.2.0");
+expect(mobileConfig.downloads?.["platform-tools"]?.version === "36.0.0", "Mobile must pin platform-tools 36.0.0");
+expect(mobileConfig.downloads?.hdc?.version === "3.2.0b", "Mobile must pin official hdc 3.2.0b");
+expect(mobileConfig.downloads?.jadx?.assets?.all?.sha256 === "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974", "Mobile JADX SHA256 drift");
+expect(mobileConfig.downloads?.apktool?.assets?.all?.sha256 === "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423", "Mobile apktool SHA256 drift");
+expect(mobileConfig.downloads?.bundletool?.assets?.all?.sha256 === "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29", "Mobile bundletool SHA256 drift");
+expect(mobileConfig.downloads?.apkeep?.assets?.amd64?.sha256 === "a23579a3ba366d25a6d69848189b983d65662f4ecf4b9e11e16510811659de4e", "Mobile apkeep amd64 SHA256 drift");
+expect(mobileConfig.downloads?.apkeep?.assets?.arm64?.sha256 === "5410acebd1b69427adcf98ccfdda6fa4dd3201e0540e5e2c01037b68e0a84049", "Mobile apkeep arm64 SHA256 drift");
+expect(mobileConfig.downloads?.radare2?.assets?.amd64?.sha256 === "eb82324e83315887fbee6f5d8632c982c593e056a87180f1bec5ccb06c463aeb", "Mobile radare2 amd64 SHA256 drift");
+expect(mobileConfig.downloads?.radare2?.assets?.arm64?.sha256 === "e866525e9874588d478d536cca38cf9a7562896725efb4119b886101fd93f1ec", "Mobile radare2 arm64 SHA256 drift");
+expect(mobileConfig.downloads?.["platform-tools"]?.assets?.all?.sha256 === "0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8", "Mobile platform-tools SHA256 drift");
+expect(mobileConfig.downloads?.hdc?.assets?.amd64?.sha256 === "a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e", "Mobile hdc SHA256 drift");
+expect(mobileDockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), "Mobile must default to local governed base");
+expect(mobileDockerfile.includes("FROM ${BASE_IMAGE}"), "Mobile must consume BASE_IMAGE");
+expect(mobileDockerfile.includes("install -y --no-install-recommends"), "Mobile apt install must disable recommends");
+expect(mobileDockerfile.includes("USER deepsonar"), "Mobile must run as non-root");
+expect(mobileDockerfile.includes("/opt/deepsonar/tool-manifest.json"), "Mobile must generate tool-manifest.json");
+expect(mobileDockerfile.includes("io.deepsonar.contract") && mobileDockerfile.includes("org.opencontainers.image.description"), "Mobile OCI metadata missing");
+expect(mobileDockerfile.includes("ARG JADX_SHA256=545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974"), "Mobile Dockerfile JADX checksum drift");
+expect(mobileDockerfile.includes("ARG APKTOOL_SHA256=dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423"), "Mobile Dockerfile apktool checksum drift");
+expect(mobileDockerfile.includes("ARG BUNDLETOOL_SHA256=a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29"), "Mobile Dockerfile bundletool checksum drift");
+expect(mobileDockerfile.includes("ARG APKEEP_AMD64_SHA256=a23579a3ba366d25a6d69848189b983d65662f4ecf4b9e11e16510811659de4e"), "Mobile Dockerfile apkeep amd64 checksum drift");
+expect(mobileDockerfile.includes("ARG APKEEP_ARM64_SHA256=5410acebd1b69427adcf98ccfdda6fa4dd3201e0540e5e2c01037b68e0a84049"), "Mobile Dockerfile apkeep arm64 checksum drift");
+expect(mobileDockerfile.includes("frida==${FRIDA_SERVER_VERSION}"), "Mobile must pin frida Python binding to the same version as frida-server");
+expect(mobileConfig.managed?.pip?.frida?.version === "17.17.0", "Mobile manifest must pin frida 17.17.0");
+expect(mobileConfig.toolsets?.mobile?.maxSizeMiB === 2400, "Mobile size budget must leave margin for JDK/venv/frida-server");
+expect(mobileDockerfile.includes("androguard==${ANDROGUARD_VERSION}"), "Mobile Dockerfile must install pinned androguard");
+expect(mobileDockerfile.includes("ARG DROIDASC_VERSION=0.1.1.post1"), "Mobile Dockerfile must pin DROIDASC_VERSION=0.1.1.post1");
+expect(mobileDockerfile.includes("droidasc==${DROIDASC_VERSION}"), "Mobile Dockerfile must install pinned droidasc");
+expect(mobileDockerfile.includes("/opt/deepsonar/bin/droidasc"), "Mobile must install /opt/deepsonar/bin/droidasc");
+expect(mobileDockerfile.includes('"droidasc"') && mobileDockerfile.includes('tools:["java"'), "Mobile tool-manifest must list droidasc");
+expect(mobileDockerfile.includes("ARG APKCHECKPACK_SHA256=c045efb53ca016c047e0efd0dffbdaa56508585a9aaaedfd9abe4336a12c697b"), "Mobile Dockerfile ApkCheckPack checksum drift");
+expect(mobileDockerfile.includes("APKCHECKPACK_URL") && mobileDockerfile.includes("moyuwa/ApkCheckPack"), "Mobile Dockerfile must download pinned ApkCheckPack from GitHub Release");
+expect(mobileDockerfile.includes("mobile-apkcheckpack-bin.sh") && mobileDockerfile.includes("/opt/deepsonar/bin/apkcheckpack"), "Mobile must install the ApkCheckPack qemu wrapper");
+expect(
+  /"claude"\],device:\{/.test(mobileDockerfile) && !/"claude"\]\},device:\{/.test(mobileDockerfile),
+  "Mobile tool-manifest node -e must keep tools as an object field, not close const m before device",
+);
+expect(!existsSync(new URL("../deploy/mobile-apkcheckpack-scan.sh", import.meta.url)), "Mobile must not add a platform-prescribed ApkCheckPack scan entry");
+expect(!mobileDockerfile.includes("apkcheckpack-scan.sh") && !mobileEnv.includes("apkcheckpack-scan.sh"), "Mobile must not install an ApkCheckPack scan script");
+expect(mobileDockerfile.includes("lief==${LIEF_VERSION}"), "Mobile Dockerfile must install pinned LIEF");
+expect(mobileDockerfile.includes("ARG RADARE2_AMD64_SHA256=eb82324e83315887fbee6f5d8632c982c593e056a87180f1bec5ccb06c463aeb"), "Mobile Dockerfile radare2 amd64 checksum drift");
+expect(mobileDockerfile.includes("ARG RADARE2_ARM64_SHA256=e866525e9874588d478d536cca38cf9a7562896725efb4119b886101fd93f1ec"), "Mobile Dockerfile radare2 arm64 checksum drift");
+expect(mobileDockerfile.includes("binutils=${BINUTILS_VERSION}"), "Mobile Dockerfile must pin binutils");
+expect(mobileDockerfile.includes("ARG PLATFORM_TOOLS_SHA256=0ead642c943ffe79701fccca8f5f1c69c4ce4f43df2eefee553f6ccb27cbfbe8"), "Mobile Dockerfile platform-tools checksum drift");
+expect(mobileDockerfile.includes("ARG HDC_SHA256=a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e"), "Mobile Dockerfile hdc checksum drift");
+expect(mobileDockerfile.includes("ca-certificates curl unzip xz-utils libatomic1"), "Mobile must install libatomic1 on both architectures for official hdc");
+expect(mobileConfig.managed?.apt?.libatomic1, "Mobile manifest must name libatomic1 for official hdc");
+expect(mobileDockerfile.includes("libimobiledevice-utils") && mobileDockerfile.includes("ideviceinstaller"), "Mobile must install iOS host protocol tools");
+expect(mobileDockerfile.includes("libplist-utils") && !mobileDockerfile.includes("libplist3-utils"), "Mobile must install Debian libplist-utils, not the nonexistent libplist3-utils");
+expect(mobileConfig.managed?.apt?.["libplist-utils"] && !mobileConfig.managed?.apt?.["libplist3-utils"], "Mobile manifest must name Debian libplist-utils");
+expect(mobileDockerfile.includes("qemu-user-static") && mobileAdbBin.includes("qemu-x86_64-static"), "Mobile arm64 must run official linux-x64 adb via qemu-user-static");
+expect(mobileDockerfile.includes("openharmony-hdc-bin.sh") && mobileDockerfile.includes("vendor/openharmony-hdc/hdc"), "Mobile must reuse vendored official hdc");
+expect(!mobileDockerfile.includes("jadx-gui") || mobileDockerfile.includes("rm -f") && mobileDockerfile.includes("jadx-gui"), "Mobile must not keep jadx-gui");
+expect(!/apt-get install[^\n]*(mobsf|MobSF|burp|Burp|ida64|deveco)/i.test(mobileDockerfile), "Mobile must not apt-install MobSF/Burp/IDA/DevEco");
+expect(!/jadx-ai-mcp|apktool-mcp|firerpa|quark-engine/i.test(mobileDockerfile), "Mobile must not bake awesome-ai-reverse MCP wrappers or decision scanners");
+expect(mobileDockerfile.includes("bundletool") && mobileDockerfile.includes("apkeep") && mobileDockerfile.includes("androguard"), "Mobile must install bundletool/apkeep/androguard");
+expect(mobileDockerfile.includes("mobile-so.sh") && mobileDockerfile.includes("radare2") && !mobileDockerfile.includes("ghidra_"), "Mobile must install lightweight SO tools and must not bake Ghidra");
+expect(mobileDockerfile.includes("不预装") && mobileDockerfile.includes("MobSF") && mobileDockerfile.includes("Burp"), "Mobile must document that MobSF/Burp/IDA stay out");
+expect(mobileEnv.includes("jadx --version") && mobileEnv.includes("apktool --version") && mobileEnv.includes("bundletool version") && mobileEnv.includes("apkeep --help") && mobileEnv.includes("androguard --help") && mobileEnv.includes("droidasc --help") && mobileEnv.includes("apkcheckpack -h") && mobileEnv.includes("adb version"), "Mobile env check must smoke JADX/apktool/bundletool/apkeep/androguard/droidasc/apkcheckpack/adb");
+expect(mobileApkCheckPackBin.includes("qemu-x86_64-static") && mobileApkCheckPackBin.includes("ApkCheckPack"), "Mobile ApkCheckPack wrapper must run the official linux-x64 binary via qemu on arm64");
+expect(mobileEnv.includes("frida --version") && mobileEnv.includes("objection version"), "Mobile env check must smoke Frida/Objection");
+expect(!mobileEnv.includes("mitmdump --version"), "Mobile env check must not require mitmdump");
+expect(mobileEnv.includes("idevice_id") && mobileEnv.includes("plistutil") && mobileEnv.includes("hdc"), "Mobile env check must smoke iOS host tools and hdc");
+expect(mobileEnv.includes("for command_name in semgrep gitleaks shellcheck mobsf jadx-gui burpsuite mitmdump mitmproxy ida64 ghidra analyzeHeadless cutter deveco"), "Mobile env check must fail if decision scanners, GUI, Ghidra, mitmproxy, or commercial tools reappear");
+expect(!mobileDockerfile.includes("mitmproxy==") && !mobileDockerfile.includes("bin/mitmdump"), "Mobile must not install mitmproxy");
+expect(
+  mobileDockerfile.includes('"android-x86_64:${FRIDA_SERVER_X64_SHA256}"; \\'),
+  "Mobile Frida server loop last item must end with '; \\' so dash sees a valid for-list after line joining",
+);
+expectDockerfileParse(dockerfile, "Dockerfile.agent");
+expectDockerfileParse(kaliDockerfile, "Dockerfile.agent-kali-minimal");
+expectDockerfileParse(openHarmonyDockerfile, "Dockerfile.agent-openharmony");
+expectDockerfileParse(openHarmonyAuditDockerfile, "Dockerfile.agent-openharmony-audit");
+expectDockerfileParse(openHarmonyFuzzDockerfile, "Dockerfile.agent-openharmony-fuzz");
+expectDockerfileParse(chromeAuditDockerfile, "Dockerfile.agent-chrome-audit");
+expectDockerfileParse(chromeTestDockerfile, "Dockerfile.agent-chrome-test");
+expectDockerfileParse(chromeFuzzDockerfile, "Dockerfile.agent-chrome-fuzz");
+expectDockerfileParse(clickhouseAuditDockerfile, "Dockerfile.agent-clickhouse-audit");
+expectDockerfileParse(clickhouseTestDockerfile, "Dockerfile.agent-clickhouse-test");
+expectDockerfileParse(clickhouseFuzzDockerfile, "Dockerfile.agent-clickhouse-fuzz");
+expectDockerfileParse(mobileDockerfile, "Dockerfile.agent-mobile");
+expectDockerfileParse(reverseDockerfile, "Dockerfile.agent-reverse");
+expect(mobileEnv.includes("r2 -qv") && mobileEnv.includes("mobile-so.sh --check"), "Mobile env check must smoke radare2 and SO helper");
+expect(mobileSo.includes("readelf") && mobileSo.includes("r2 -qq") && mobileSo.includes("lief"), "Mobile SO helper must inspect ELF with readelf/r2/LIEF");
+expect(mobileAdb.includes("needs_human") && mobileAdb.includes("inconclusive") && mobileAdb.includes("no_adb_target"), "Mobile adb helper must emit structured no-target evidence");
+expect(mobileHdc.includes("needs_human") && mobileHdc.includes("no_hdc_target") && mobileIos.includes("no_ios_target"), "Mobile hdc/ios helpers must emit structured no-target evidence");
+expect(mobileHdc.includes("[Cc]onnect server") && mobileSmoke.includes("noisy hdc"), "Mobile hdc helper must drop server noise from target lines");
+expect(mobileHap.includes("pack.info") && mobileHap.includes("module.json"), "Mobile HAP helper must inspect pack.info/module.json");
+expect(mobileSmoke.includes("adb version smoke") || mobileSmoke.includes("Android Debug Bridge version"), "Mobile unit smoke must cover adb version");
+expect(mobileSmoke.includes("no_adb_target") && mobileSmoke.includes("needs_human"), "Mobile unit smoke must cover empty adb devices without a device");
+expect(mobileSmoke.includes("no_hdc_target") && mobileSmoke.includes("no_ios_target") && mobileSmoke.includes("pack.info"), "Mobile unit smoke must cover hdc, iOS, and HAP helpers");
+expect(mobileSmoke.includes("so --check") && mobileSmoke.includes("libdemo.so"), "Mobile unit smoke must cover SO helper");
+expect(mobileSmoke.includes("apkcheckpack") && mobileSmoke.includes("APK检测工具"), "Mobile unit smoke must cover ApkCheckPack wrapper help");
+expect(mobileSmoke.includes("droidasc") && mobileSmoke.includes("apk-xref-search"), "Mobile unit smoke must cover droidasc pin/presence");
+expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/mobile-so.sh"), "Mobile fingerprint must include the SO helper");
+expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/mobile-apkcheckpack-bin.sh"), "Mobile fingerprint must include the ApkCheckPack wrapper");
+expect(mobileWorkflow.includes("mobile-runtime-images:") && mobileWorkflow.includes("setup-qemu-action@v3"), "Mobile workflow must retain its QEMU-backed specialist job");
+expect(mobileWorkflow.includes("test-runtime-manuals-runtime.mjs"), "Mobile workflow must run the offline runtime manual smoke");
+expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(mobileWorkflow), "Mobile manual smoke must also run on cache hits");
+expect(mobileWorkflow.includes('docker pull --platform "${{ matrix.platform }}" "${{ steps.resolve.outputs.src_ref }}"'), "Mobile workflow must pull immutable cache-hit images before manual smoke");
+expect((mobileWorkflow.match(/toolset: mobile/g) ?? []).length === 2, "Mobile workflow must retain exactly two matrix entries");
+expect((mobileWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 1 && (mobileWorkflow.match(/platform: linux\/arm64/g) ?? []).length === 1, "Mobile workflow must retain amd64/arm64 matrix coverage");
+expect(PRESETS["deepsonar-mobile"]?.paths?.includes("agent-harness/mobile-runtime.json"), "Mobile fingerprint must include the runtime manifest");
+expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/vendor/openharmony-hdc/hdc"), "Mobile fingerprint must include vendored hdc");
+expect(schedulerRuntimeSnapshot.includes("Mobile device protocols (Scheduler policy)"), "Mobile snapshots must require official adb/hdc/ios device evidence");
+expect(schedulerRuntimeSnapshot.includes("droidasc") && schedulerRuntimeSnapshot.includes("Never invent device, traffic, or native/OLLVM results from JADX, droidasc, or apkcheckpack"), "Mobile policy must describe droidasc vs JADX and forbid inventing device results from ASC");
+expect(readFileSync(new URL("../package.json", import.meta.url), "utf8").includes("test-mobile-runtime.mjs"), "ci:images must run the Mobile helper smoke");
+expect(ciWorkflow.includes("test-runtime-manuals-runtime.mjs"), "core CI must run the offline runtime manual smoke");
+expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(ciWorkflow), "core CI manual smoke must also run on cache hits");
+expect(ciWorkflow.includes("Load reused runtime for offline validation"), "core CI must load immutable cache-hit images before manual smoke");
+expect(releaseWorkflow.includes("test-runtime-manuals-runtime.mjs"), "release workflow must run the offline runtime manual smoke");
+expect(chromeSources.contract === "deepsonar.chrome.runtime.sources/v1", "Chrome source metadata contract drift");
+expect(chromeSources.chromium.version === "151.0.7922.71-1~deb12u1", "Chrome Chromium version must remain pinned");
+expect(chromeSources.debianSecuritySnapshot === "20260731T162426Z", "Chrome Debian security snapshot must remain pinned");
+expect(chromeSources.v8.commit === "792d9716fea48312ad7ce4413c538e00628b1d50" && chromeSources.v8.version === "15.1.206.10", "Chrome Fuzz V8 revision/version must remain pinned");
+for (const arch of ["amd64", "arm64"]) {
+  const asset = chromeSources.chromium.architectures?.[arch];
+  expect(asset?.url?.startsWith("https://snapshot.debian.org/archive/debian-security/"), `Chrome ${arch} package must use pinned Debian security snapshot`);
+  expect(asset?.common_url?.startsWith("https://snapshot.debian.org/archive/debian-security/"), `Chrome ${arch} common package must use pinned Debian security snapshot`);
+  expect(asset?.url?.includes(chromeSources.chromium.version) && asset?.common_url?.includes(chromeSources.chromium.version), `Chrome ${arch} package URLs must match the pinned version`);
+  expect(/^[0-9a-f]{64}$/.test(asset?.sha256 ?? ""), `Chrome ${arch} package must carry a SHA256 checksum`);
+  expect(/^[0-9a-f]{64}$/.test(asset?.common_sha256 ?? ""), `Chrome ${arch} common package must carry a SHA256 checksum`);
+  expect(chromeTestDockerfile.includes(asset?.sha256 ?? "") && chromeTestDockerfile.includes(asset?.common_sha256 ?? ""), `Chrome ${arch} package checksums missing from Dockerfile`);
+}
+expect(chromeAuditEnv.includes("git --version") && chromeAuditDockerfile.includes("git"), "Chrome Audit must keep git as a base tool");
+expect(!existsSync(new URL("../deploy/chrome-audit-rules.yml", import.meta.url)), "Chrome Audit 不得捆绑平台扫描规则包");
+expect(!existsSync(new URL("../deploy/chrome-audit-scan.sh", import.meta.url)), "Chrome Audit 不得提供平台固定扫描入口");
+expect(!chromeAuditDockerfile.includes("chrome-audit-rules.yml") && !chromeAuditDockerfile.includes("chrome-audit-scan.sh") && !chromeAuditEnv.includes("chrome-audit-scan.sh"), "Chrome Audit 不得安装固定扫描脚本或规则包");
+expect(chromeAuditDockerfile.includes("clang") && chromeAuditDockerfile.includes("clang-tools") && chromeAuditDockerfile.includes("clang-tidy") && chromeAuditDockerfile.includes("clangd") && chromeAuditDockerfile.includes("binutils"), "Chrome Audit must bundle Clang tooling and binutils");
+expect(!chromeAuditDockerfile.includes("depot_tools"), "Chrome Audit must not include depot_tools");
+expect(chromeTestDockerfile.includes(`ARG PLAYWRIGHT_CORE_VERSION=${chromeSources.playwright.version}`) && chromeTestDockerfile.includes(`ARG PLAYWRIGHT_CORE_INTEGRITY=${chromeSources.playwright.integrity}`) && chromeTestDockerfile.includes("playwright-core@${PLAYWRIGHT_CORE_VERSION}") && chromeTestDockerfile.includes("CHROMIUM_VERSION") && chromeTestDockerfile.includes("chromium-common"), "Chrome Test must pin Playwright, Chromium, and chromium-common versions");
+expect(chromeHeadless.includes("--no-sandbox") && chromeHeadless.includes("--headless=new") && chromeHeadless.includes("--remote-debugging-port"), "Chrome Test wrapper must enforce headless no-sandbox CDP flags");
+expect(chromeTestEnv.includes("connectOverCDP") && chromeTestSmoke.includes("connectOverCDP"), "Chrome Test must expose a Playwright/CDP path");
+expect(chromeFuzzDockerfile.includes(chromeSources.v8.commit) && chromeFuzzDockerfile.includes(chromeSources.v8.compiler_rt_commit) && chromeFuzzDockerfile.includes(chromeSources.v8.compiler_rt_repository) && chromeFuzzDockerfile.includes("gclient sync") && chromeFuzzDockerfile.includes("autoninja") && chromeFuzzDockerfile.includes("d8") && chromeFuzzDockerfile.includes("v8_json_libfuzzer") && chromeFuzzDockerfile.includes("use_libfuzzer=true") && chromeFuzzDockerfile.includes("-fsanitize=fuzzer-no-link") && chromeFuzzDockerfile.includes('v8_source_set("deepsonar_libfuzzer")') && chromeFuzzDockerfile.includes("FuzzerMain.cpp") && chromeFuzzDockerfile.includes("remove_configs = [") && chromeFuzzDockerfile.includes("configs = [") && chromeFuzzDockerfile.includes("default_sanitizer_flags_but_coverage") && chromeFuzzDockerfile.includes("v8_enable_fuzztest=false") && chromeFuzzDockerfile.includes("FROM v8-build-rootfs AS v8-builder") && chromeFuzzDockerfile.includes("libsanitizer_shared_hooks.so") && chromeFuzzDockerfile.includes("LD_LIBRARY_PATH=/opt/deepsonar/lib"), "Chrome Fuzz must compile an instrumented pinned V8 target and ship its matching libFuzzer and sanitizer runtime closure through the V8 GN template contract");
+expect(chromeFuzzDockerfile.indexOf("export DEPOT_TOOLS_UPDATE=0;") > 0 && chromeFuzzDockerfile.indexOf("export DEPOT_TOOLS_UPDATE=0;") < chromeFuzzDockerfile.indexOf("gclient config"), "Chrome Fuzz must disable depot_tools auto-update before gclient so the pinned revision cannot drift");
+expect(chromeFuzzDockerfile.indexOf("/opt/depot_tools/ensure_bootstrap;") > chromeFuzzDockerfile.indexOf("export DEPOT_TOOLS_UPDATE=0;") && chromeFuzzDockerfile.indexOf("/opt/depot_tools/ensure_bootstrap;") < chromeFuzzDockerfile.indexOf("gclient config") && chromeFuzzDockerfile.includes("test -f /opt/depot_tools/python3_bin_reldir.txt") && chromeFuzzDockerfile.indexOf("test -f /opt/depot_tools/python3_bin_reldir.txt") < chromeFuzzDockerfile.indexOf("gclient config"), "Chrome Fuzz must bootstrap pinned depot_tools (python3_bin_reldir.txt) without auto-updating before gclient");
+expect(chromeFuzzDockerfile.includes("pkg-config") && chromeFuzzDockerfile.includes("clang-16") && chromeFuzzDockerfile.includes("lld-16") && chromeFuzzDockerfile.includes("libclang-rt-16-dev") && chromeFuzzDockerfile.includes("libfuzzer-16-dev") && chromeFuzzDockerfile.includes("afl++"), "Chrome Fuzz Debian toolchain package closure incomplete");
+expect(chromeFuzzDockerfile.includes("FROM --platform=$BUILDPLATFORM ${BASE_IMAGE} AS v8-build-rootfs") && !chromeFuzzDockerfile.includes("clang_base_path=\"/usr/lib/llvm-16\"") && chromeFuzzDockerfile.includes("target_cpu=arm64") && chromeFuzzDockerfile.includes("install-sysroot.py --arch=arm64") && chromeFuzzDockerfile.includes("debian_bullseye_arm64-sysroot") && chromeFuzzPreflight.includes("third_party/llvm-build/Release+Asserts/bin/clang++") && chromeFuzzPreflight.includes("--target=aarch64-linux-gnu") && chromeFuzzPreflight.includes("/usr/bin/ninja") && chromeFuzzPreflight.includes("file -Lb") && chromeFuzzPreflight.includes("libclang_rt[.]builtins"), "Chrome Fuzz arm64 must use V8's pinned x86_64 Clang, sysroot, and compiler runtime as a checked cross-toolchain");
+expect(chromeFuzzConfig.apt["libclang-rt-16-dev"]?.version === "16.0.6-15~deb12u1" && chromeFuzzConfig.apt["libfuzzer-16-dev"]?.version === "16.0.6-15~deb12u1", "Chrome Fuzz must declare verified Bookworm compiler-rt/libFuzzer package names");
+expect(chromeFuzzEnv.includes(".fuzz.actual == true") && chromeFuzzSmoke.includes("actual V8 d8") && chromeFuzzSmoke.includes("-runs=1") && !chromeFuzzDockerfile.includes("toy"), "Chrome Fuzz must fail closed without real d8/libFuzzer");
+const chromeFuzzRuntimeFinal = chromeFuzzDockerfile.slice(chromeFuzzDockerfile.indexOf("FROM runtime-rootfs AS runtime-final"));
+const chromeFuzzRuntimeChecks = chromeFuzzRuntimeFinal.slice(chromeFuzzRuntimeFinal.indexOf('case "$TARGETARCH" in'), chromeFuzzRuntimeFinal.lastIndexOf("esac") + 4);
+const chromeFuzzAmd64Checks = chromeFuzzRuntimeChecks.slice(chromeFuzzRuntimeChecks.indexOf("amd64)"), chromeFuzzRuntimeChecks.indexOf("arm64)"));
+const chromeFuzzArm64Checks = chromeFuzzRuntimeChecks.slice(chromeFuzzRuntimeChecks.indexOf("arm64)"), chromeFuzzRuntimeChecks.lastIndexOf("*)"));
+expect(
+  /FROM runtime-rootfs AS runtime-final\r?\nARG TARGETARCH/.test(chromeFuzzRuntimeFinal) &&
+    chromeFuzzAmd64Checks.includes("/opt/deepsonar/bin/d8 --version") &&
+    chromeFuzzAmd64Checks.includes("/opt/deepsonar/bin/chrome-fuzz-env.sh --check") &&
+    chromeFuzzArm64Checks.includes("file -Lb /opt/deepsonar/bin/d8") &&
+    chromeFuzzArm64Checks.includes("test -x /opt/deepsonar/bin/d8") &&
+    chromeFuzzArm64Checks.includes("test -x /opt/deepsonar/bin/v8_json_libfuzzer") &&
+    chromeFuzzArm64Checks.includes("test -f /opt/deepsonar/lib/libsanitizer_shared_hooks.so") &&
+    !chromeFuzzArm64Checks.includes("/opt/deepsonar/bin/d8 --version") &&
+    !chromeFuzzArm64Checks.includes("/opt/deepsonar/bin/chrome-fuzz-env.sh --check"),
+  "Chrome Fuzz build-time checks must run dynamically on amd64 and use gated static checks on arm64",
+);
+for (const [file, content] of [
+  ["chrome-audit-env.sh", chromeAuditEnv],
+  ["chrome-headless.sh", chromeHeadless], ["chrome-test-env.sh", chromeTestEnv],
+  ["chrome-fuzz-env.sh", chromeFuzzEnv], ["chrome-fuzz-smoke.sh", chromeFuzzSmoke],
+  ["chrome-fuzz-toolchain-preflight.sh", chromeFuzzPreflight],
+]) {
+  const mode = statSync(new URL(`../deploy/${file}`, import.meta.url)).mode;
+  expect((mode & 0o111) !== 0, `${file} 必须可执行`);
+  expect(content.includes("set -euo pipefail"), `${file} 必须启用严格 shell 模式`);
+}
+expect(prepareScript.includes("deepsonar-chrome-audit") && prepareScript.includes("deepsonar-chrome-test") && prepareScript.includes("deepsonar-chrome-fuzz"), "prepare 脚本必须接入 Chrome 三项镜像");
+expect(prepareScript.includes("deepsonar-clickhouse-audit") && prepareScript.includes("deepsonar-clickhouse-test") && prepareScript.includes("deepsonar-clickhouse-fuzz"), "prepare 脚本必须接入 ClickHouse 三项镜像");
+expect(prepareScript.includes("deepsonar-mobile") && prepareScript.includes("Dockerfile.agent-mobile"), "prepare 脚本必须接入 Mobile 镜像");
+expect(chromeWorkflow.includes("chrome-runtime-images") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome CI must build and smoke Chrome runtime images");
+expect(chromeRuntimeSmoke.includes('const targetPlatform = process.argv[5] ?? "linux/amd64"') && chromeRuntimeSmoke.includes('"--platform", targetPlatform') && chromeRuntimeSmoke.includes("linux/amd64") && chromeRuntimeSmoke.includes("linux/arm64"), "Chrome runtime smoke must validate a target platform and pass it to every Docker run");
+expect(clickhouseSources.contract === "deepsonar.clickhouse.runtime.sources/v1", "ClickHouse source metadata contract drift");
+expect(clickhouseSources.clickhouse.version === "26.3.28.5" && clickhouseSources.clickhouse.tag === "v26.3.28.5-lts", "ClickHouse must remain pinned to official LTS 26.3.28.5");
+expect(clickhouseSources.clickhouse.package === "clickhouse-common-static", "ClickHouse must install official clickhouse-common-static");
+expect(clickhouseSources.debianSnapshot === "20260731T162426Z", "ClickHouse Debian snapshot must remain pinned");
+expect(clickhouseSources.clickhouse.architectures?.amd64?.sha256 === "63d4e4e4b72d9859f1f3ef93f37202e7428c110ea7f6ba090c564c5419b729b7", "ClickHouse amd64 SHA256 drift");
+expect(clickhouseSources.clickhouse.architectures?.arm64?.sha256 === "4e30ba7a669b417b89901fae4f3743cacf12d332297edcebb3cef1a1f4c65a3f", "ClickHouse arm64 SHA256 drift");
+for (const arch of ["amd64", "arm64"]) {
+  const asset = clickhouseSources.clickhouse.architectures?.[arch];
+  expect(asset?.url === `https://github.com/ClickHouse/ClickHouse/releases/download/v26.3.28.5-lts/clickhouse-common-static-26.3.28.5-${arch}.tgz`, `ClickHouse ${arch} tarball must use the official GitHub Release`);
+  expect(/^[0-9a-f]{64}$/.test(asset?.sha256 ?? ""), `ClickHouse ${arch} tarball must carry a SHA256 checksum`);
+  expect(clickhouseTestDockerfile.includes(asset?.url ?? "") && clickhouseTestDockerfile.includes(asset?.sha256 ?? ""), `ClickHouse ${arch} pin missing from Test Dockerfile`);
+  expect(clickhouseFuzzDockerfile.includes(asset?.url ?? "") && clickhouseFuzzDockerfile.includes(asset?.sha256 ?? ""), `ClickHouse ${arch} pin missing from Fuzz Dockerfile`);
+}
+// v0.5.1 release 实测（apt exit 100，chrome-fuzz / clickhouse-fuzz 四条构建全挂、release job
+// 随之被跳过）：base 镜像的 python3.11 家族跟随 Debian 安全更新前移，而这两个镜像把 APT 源钉在
+// 快照上；afl++ 依赖 libpython3.11，快照中的它严格要求同点版本的 libpython3.11-stdlib，而 base
+// 已装的是更新的点版本 → apt 无法同时满足（No downgrade）→ 构建失败。故 python 家族必须显式
+// 钉到快照点版本并允许降级，保证镜像内部自洽。
+for (const [label, fuzzDockerfile] of [["Chrome Fuzz", chromeFuzzDockerfile], ["ClickHouse Fuzz", clickhouseFuzzDockerfile]]) {
+  expect(fuzzDockerfile.includes("ARG PYTHON_SNAPSHOT_VERSION="), `${label} must pin the snapshot python point release`);
+  expect(fuzzDockerfile.includes("--allow-downgrades"), `${label} must allow downgrading the python family to the pinned snapshot version`);
+  for (const pythonPackage of ["python3.11", "python3.11-minimal", "libpython3.11", "libpython3.11-stdlib", "libpython3.11-minimal"]) {
+    expect(fuzzDockerfile.includes(`${pythonPackage}=\${PYTHON_SNAPSHOT_VERSION}`), `${label} must pin ${pythonPackage} to the snapshot point release`);
+  }
+}
+expect(clickhouseInstall.includes("https://github.com/ClickHouse/ClickHouse/releases/download/") && clickhouseInstall.includes("sha256sum -c -") && clickhouseInstall.includes("*/usr/bin/clickhouse") && clickhouseInstall.includes("file -Lb"), "ClickHouse install must accept only official GitHub Release URLs, verify SHA256, and install the ELF usr/bin/clickhouse");
+expect(!clickhouseInstall.includes("packages.clickhouse.com") && !clickhouseInstall.includes("repo.clickhouse.com"), "ClickHouse install must not use the apt/repo mirror");
+expect(clickhouseAuditEnv.includes("git --version") && clickhouseAuditDockerfile.includes("git") && clickhouseAuditDockerfile.includes("cmake") && clickhouseAuditDockerfile.includes("ninja-build") && clickhouseAuditDockerfile.includes("clang") && clickhouseAuditDockerfile.includes("binutils"), "ClickHouse Audit must keep git, CMake/Ninja, Clang and binutils");
+expect(clickhouseAuditEnv.includes("claude --version") && clickhouseAuditEnv.includes('index("claude")') && clickhouseAuditDockerfile.includes('"claude"'), "ClickHouse Audit must verify inherited Claude Code like OpenHarmony");
+expect(clickhouseTestEnv.includes("claude --version") && clickhouseTestEnv.includes('index("claude")') && clickhouseTestDockerfile.includes('"claude"'), "ClickHouse Test must verify inherited Claude Code like OpenHarmony");
+expect(clickhouseFuzzEnv.includes("claude --version") && clickhouseFuzzEnv.includes('index("claude")') && clickhouseFuzzDockerfile.includes('"claude"'), "ClickHouse Fuzz must verify inherited Claude Code like OpenHarmony");
+expect(!existsSync(new URL("../deploy/clickhouse-audit-rules.yml", import.meta.url)), "ClickHouse Audit 不得捆绑平台扫描规则包");
+expect(!existsSync(new URL("../deploy/clickhouse-audit-scan.sh", import.meta.url)), "ClickHouse Audit 不得提供平台固定扫描入口");
+expect(!clickhouseAuditDockerfile.includes("clickhouse-audit-rules.yml") && !clickhouseAuditDockerfile.includes("clickhouse-audit-scan.sh") && !clickhouseAuditEnv.includes("clickhouse-audit-scan.sh"), "ClickHouse Audit 不得安装固定扫描脚本或规则包");
+expect(!/semgrep|gitleaks|shellcheck/i.test(clickhouseAuditDockerfile) && clickhouseAuditEnv.includes("for command_name in semgrep gitleaks shellcheck"), "ClickHouse Audit must fail if decision scanners reappear");
+expect(clickhouseServer.includes("clickhouse-sandbox-config.sh") && clickhouseServer.includes("/workspace/*") && clickhouseServer.includes("CLICKHOUSE_WATCHDOG_ENABLE=0") && clickhouseServer.includes("--config-file"), "ClickHouse Test wrapper must bind localhost via sandbox config and keep data under /workspace");
+expect(clickhouseSandboxConfig.includes("<listen_host>127.0.0.1</listen_host>") && clickhouseSandboxConfig.includes("uncompressed_cache_size>0") && clickhouseSandboxConfig.includes("page_cache_max_size>0") && clickhouseSandboxConfig.includes("mlock_executable") && clickhouseSandboxConfig.includes("background_schedule_pool_size") && clickhouseSandboxConfig.includes("max_thread_pool_size>32") && clickhouseSandboxConfig.includes("number_of_free_entries_in_pool_to_execute_mutation"), "ClickHouse sandbox config must bind localhost, cap caches/thread pools, and keep merge-tree pool settings consistent");
+expect(clickhouseTestDockerfile.includes("clickhouse-sandbox-config.sh") && clickhouseFuzzDockerfile.includes("clickhouse-sandbox-config.sh"), "ClickHouse Test/Fuzz images must install the sandbox config helper");
+expect(clickhouseTestDockerfile.includes("git") && clickhouseTestEnv.includes("git"), "ClickHouse Test must keep git so agents can clone in-scope source");
+expect(clickhouseTestSmoke.includes("request") && clickhouseTestSmoke.includes("/ping") && clickhouseTestSmoke.includes("SELECT%2040%20%2B%202") && clickhouseTestSmoke.includes("/workspace"), "ClickHouse Test smoke must use HTTP /ping and SELECT 40+2 against a /workspace data dir");
+expect(clickhouseTestEnv.includes("26.3.28.5") && clickhouseTestDockerfile.includes("ARG CLICKHOUSE_VERSION=26.3.28.5"), "ClickHouse Test must pin official 26.3.28.5");
+expect(clickhouseFuzzDockerfile.includes("pkg-config") && clickhouseFuzzDockerfile.includes("clang-16") && clickhouseFuzzDockerfile.includes("lld-16") && clickhouseFuzzDockerfile.includes("libclang-rt-16-dev") && clickhouseFuzzDockerfile.includes("libfuzzer-16-dev") && clickhouseFuzzDockerfile.includes("afl++") && clickhouseFuzzDockerfile.includes("/usr/lib/llvm-16/bin"), "ClickHouse Fuzz Debian toolchain package closure incomplete");
+expect(clickhouseFuzzConfig.apt["libclang-rt-16-dev"]?.version === "16.0.6-15~deb12u1" && clickhouseFuzzConfig.apt["libfuzzer-16-dev"]?.version === "16.0.6-15~deb12u1", "ClickHouse Fuzz must declare verified Bookworm compiler-rt/libFuzzer package names");
+expect(clickhouseFuzzEnv.includes(".fuzz.actual == true") && clickhouseFuzzSmoke.includes("refusing toy fallback") && clickhouseFuzzSmoke.includes("SELECT 40 + 2") && clickhouseFuzzSmoke.includes("--config-file") && clickhouseFuzzSmoke.includes("SELECT 1;") && !clickhouseFuzzDockerfile.includes("toy"), "ClickHouse Fuzz must fail closed without the official clickhouse-local binary");
+expect(!clickhouseFuzzDockerfile.includes("gclient") && !clickhouseFuzzDockerfile.includes("autoninja"), "ClickHouse Fuzz must not compile ClickHouse from source");
+for (const [file, content] of [
+  ["clickhouse-audit-env.sh", clickhouseAuditEnv],
+  ["clickhouse-install-static.sh", clickhouseInstall],
+  ["clickhouse-sandbox-config.sh", clickhouseSandboxConfig],
+  ["clickhouse-server.sh", clickhouseServer],
+  ["clickhouse-test-env.sh", clickhouseTestEnv],
+  ["clickhouse-fuzz-env.sh", clickhouseFuzzEnv],
+  ["clickhouse-fuzz-smoke.sh", clickhouseFuzzSmoke],
+]) {
+  const mode = statSync(new URL(`../deploy/${file}`, import.meta.url)).mode;
+  expect((mode & 0o111) !== 0, `${file} 必须可执行`);
+  expect(content.includes("set -euo pipefail"), `${file} 必须启用严格 shell 模式`);
+}
+expect(clickhouseWorkflow.includes("clickhouse-runtime-images") && clickhouseWorkflow.includes("test-clickhouse-runtime.mjs"), "ClickHouse CI must build and smoke ClickHouse runtime images");
+expect(clickhouseRuntimeSmoke.includes('const targetPlatform = process.argv[5] ?? "linux/amd64"') && clickhouseRuntimeSmoke.includes('"--platform", targetPlatform') && clickhouseRuntimeSmoke.includes('"--hostname", "localhost"') && clickhouseRuntimeSmoke.includes("linux/amd64") && clickhouseRuntimeSmoke.includes("linux/arm64"), "ClickHouse runtime smoke must validate a target platform, pin hostname localhost, and pass both to every Docker run");
+expect(PRESETS["deepsonar-clickhouse-audit"]?.paths?.includes("deploy/clickhouse-audit-env.sh"), "ClickHouse Audit fingerprint must include the env helper");
+expect(PRESETS["deepsonar-clickhouse-test"]?.paths?.includes("deploy/clickhouse-install-static.sh") && PRESETS["deepsonar-clickhouse-test"]?.paths?.includes("deploy/clickhouse-sandbox-config.sh") && PRESETS["deepsonar-clickhouse-test"]?.paths?.includes("agent-harness/clickhouse-test-smoke.mjs"), "ClickHouse Test fingerprint must include the official installer, sandbox config and HTTP smoke");
+expect(PRESETS["deepsonar-clickhouse-fuzz"]?.paths?.includes("deploy/clickhouse-fuzz-smoke.sh") && PRESETS["deepsonar-clickhouse-fuzz"]?.paths?.includes("deploy/clickhouse-sandbox-config.sh"), "ClickHouse Fuzz fingerprint must include the local smoke and sandbox config");
+expect(ciWorkflow.includes("chrome-fuzz-arm64-build:") && ciWorkflow.includes("chrome-fuzz-arm64:") && ciWorkflow.includes("needs: chrome-fuzz-arm64-build") && ciWorkflow.includes("runs-on: ubuntu-24.04-arm") && ciWorkflow.includes("steps.image.outputs.digest") && ciWorkflow.includes("docker/setup-qemu-action@v3") && ciWorkflow.includes("platforms: linux/arm64") && ciWorkflow.includes('docker pull --platform linux/arm64 "$image_ref"') && ciWorkflow.includes("test-chrome-runtime.mjs") && ciWorkflow.includes("agent-harness/chrome-fuzz-runtime.json linux/arm64"), "核心 CI 必须交叉构建 Chrome Fuzz arm64，并在原生 ARM64 runner 上执行不可变镜像冒烟");
+expect(releaseWorkflow.includes("chrome-images:") && releaseWorkflow.includes("chrome-fuzz-arm64-smoke:") && releaseWorkflow.includes("needs: [base-image, chrome-image-builds]") && releaseWorkflow.includes("chrome-images:\n    needs: [base-image, chrome-image-builds, chrome-fuzz-arm64-smoke]") && releaseWorkflow.includes("Dockerfile.agent-chrome-audit") && releaseWorkflow.includes("Dockerfile.agent-chrome-test") && releaseWorkflow.includes("Dockerfile.agent-chrome-fuzz") && releaseWorkflow.includes("matrix.name == 'chrome-fuzz' && matrix.arch == 'arm64'") && releaseWorkflow.includes("matrix.name != 'chrome-fuzz' || matrix.arch != 'arm64'") && releaseWorkflow.includes("runs-on: ubuntu-24.04-arm"), "Release 必须在发布多架构 index 前，将 Chrome Fuzz arm64 冒烟延后到原生 ARM64 门禁");
+expect(releaseWorkflow.includes('docker pull --platform "${{ matrix.platform }}" "$image_ref"') && releaseWorkflow.includes('test-chrome-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}" "${{ matrix.platform }}"'), "release Chrome smoke must pull and run the matrix target platform");
+for (const [file, content] of [
+  ["openharmony-env.sh", openHarmonyEnv],
+  ["openharmony-hdc.sh", openHarmonyHdc],
+  ["openharmony-hdc-bin.sh", openHarmonyHdcBin],
+  ["openharmony-init.sh", openHarmonyInit],
+  ["openharmony-build.sh", openHarmonyBuild],
+  ["openharmony-audit-env.sh", openHarmonyAuditEnv],
+  ["openharmony-audit-scan.sh", openHarmonyAuditScan],
+  ["openharmony-fuzz-env.sh", openHarmonyFuzzEnv],
+  ["openharmony-fuzz-build.sh", openHarmonyFuzzBuild],
+  ["mobile-env.sh", mobileEnv],
+  ["mobile-adb.sh", mobileAdb],
+  ["mobile-adb-bin.sh", mobileAdbBin],
+  ["mobile-hdc.sh", mobileHdc],
+  ["mobile-ios.sh", mobileIos],
+  ["mobile-hap.sh", mobileHap],
+  ["mobile-so.sh", mobileSo],
+  ["mobile-apkcheckpack-bin.sh", mobileApkCheckPackBin],
+]) {
+  const mode = statSync(new URL(`../deploy/${file}`, import.meta.url)).mode;
+  expect((mode & 0o111) !== 0, `${file} 必须可执行`);
+  expect(content.includes("set -euo pipefail"), `${file} 必须启用严格 shell 模式`);
+}
+const openHarmonyRepoSha256 = "2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020";
+expect(createHash("sha256").update(normalizedOpenHarmonyRepo).digest("hex") === openHarmonyRepoSha256, "OpenHarmony vendored repo launcher checksum 不匹配");
+for (const item of openHarmonyImages) {
+  const df = item.dockerfile;
+  const label = item.key;
+  expect(df.includes("ARG BASE_IMAGE=deepsonar-base:local"), `${label} 必须默认依赖本地 base 镜像`);
+  expect(df.includes("apt-get install -y --no-install-recommends"), `${label} apt 安装必须禁用 recommends`);
+  expect(df.includes("USER deepsonar"), `${label} 必须使用非 root 用户`);
+  expect(df.includes("WORKDIR /workspace"), `${label} 工作目录必须是 /workspace`);
+  expect(df.includes("/opt/deepsonar/tool-manifest.json"), `${label} 必须生成 tool-manifest.json`);
+  expect(df.includes("COPY deploy/vendor/gitcode-repo-py3 /tmp/repo"), `${label} 必须使用仓库内受控 repo launcher`);
+  expect(df.includes(openHarmonyRepoSha256), `${label} repo checksum 不匹配`);
+  expect(df.includes("sha256sum -c -"), `${label} repo 安装前必须执行 sha256sum 校验`);
+  expect(!/curl[^\n]*(raw\.gitcode\.com|storage\.googleapis\.com|google\.com)/s.test(df), `${label} 构建期不得 curl GitCode Raw 或 Google`);
+  expect(!df.includes("raw.gitcode.com"), `${label} 构建期不得依赖 GitCode Raw`);
+  expect(!df.includes("storage.googleapis.com"), `${label} 不得从 storage.googleapis.com 下载 repo`);
+  expect(!df.includes("google.com"), `${label} 构建期不得依赖 Google`);
+  expect(df.includes("gitcode.com/openharmony/manifest.git"), `${label} 必须使用官方 GitCode manifest 默认地址`);
+}
+for (const tool of ["build-essential", "ccache", "cmake", "ninja-build", "repo", "git-lfs", "python3", "python3-requests", "python-is-python3", "hdc"]) {
+  expect(openHarmonyDockerfile.includes(tool), `OpenHarmony Test 镜像缺少工具：${tool}`);
+}
+expect(openHarmonyTestConfig.contract === "deepsonar.runtime.contract/v1", "OpenHarmony Test runtime contract drift");
+expect(openHarmonyTestConfig.project_opt_in === true, "OpenHarmony Test config must remain project_opt_in");
+expect(openHarmonyTestConfig.toolset === "openharmony-test", "OpenHarmony Test toolset drift");
+expect(openHarmonyTestConfig.downloads?.hdc?.version === "3.2.0b", "OpenHarmony Test must pin official hdc 3.2.0b");
+expect(openHarmonyTestConfig.downloads?.hdc?.sdk?.url === "https://repo.huaweicloud.com/openharmony/os/6.0-Release/ohos-sdk-windows_linux-public.tar.gz", "OpenHarmony Test hdc must use the official OpenHarmony SDK URL");
+expect(openHarmonyTestConfig.downloads?.hdc?.sdk?.sha256 === "a315834ac133625efc912bd078f3e2b2550868d04aef1b5aa4f9679c8b3c9d8e", "OpenHarmony Test official SDK SHA256 drift");
+expect(!JSON.stringify(openHarmonyTestConfig).includes("harmonyos/os"), "OpenHarmony Test must not pin HarmonyOS proprietary SDK paths");
+expect(!openHarmonyDockerfile.includes("DevEco") && !openHarmonyHdc.includes("DevEco"), "OpenHarmony Test must not install DevEco");
+expect(!openHarmonyDockerfile.includes("nmap") && !openHarmonyHdc.includes("nmap"), "OpenHarmony Test must not default-on nmap");
+const hdcAsset = openHarmonyTestConfig.downloads?.hdc?.assets;
+for (const arch of ["amd64", "arm64"]) {
+  expect(hdcAsset?.[arch]?.url === openHarmonyTestConfig.downloads.hdc.sdk.url, `OpenHarmony ${arch} hdc URL must match the official SDK`);
+  expect(/^[0-9a-f]{64}$/.test(hdcAsset?.[arch]?.sha256 ?? ""), `OpenHarmony ${arch} hdc must carry a SHA256 checksum`);
+  expect(hdcAsset?.[arch]?.sha256 === "a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e", `OpenHarmony ${arch} hdc SHA256 drift`);
+  expect(hdcAsset?.[arch]?.libusbSharedSha256 === "431e69ebe2f87ac693c3dae032ec82baa3196b9d403139ae9775ccbaf9227887", `OpenHarmony ${arch} libusb_shared SHA256 drift`);
+  expect(openHarmonyDockerfile.includes(hdcAsset?.[arch]?.sha256 ?? ""), `OpenHarmony Test Dockerfile missing hdc checksum for ${arch}`);
+  expect(openHarmonyDockerfile.includes(hdcAsset[arch].libusbSharedSha256), `OpenHarmony Test Dockerfile missing libusb_shared checksum for ${arch}`);
+}
+expect(createHash("sha256").update(readFileSync(new URL("../deploy/vendor/openharmony-hdc/hdc", import.meta.url))).digest("hex") === hdcAsset.amd64.sha256, "vendored hdc SHA256 must match the runtime manifest");
+expect(createHash("sha256").update(readFileSync(new URL("../deploy/vendor/openharmony-hdc/libusb_shared.so", import.meta.url))).digest("hex") === hdcAsset.amd64.libusbSharedSha256, "vendored libusb_shared SHA256 must match the runtime manifest");
+expect(PRESETS["deepsonar-openharmony-test"]?.paths?.includes("agent-harness/openharmony-test-runtime.json"), "OpenHarmony Test fingerprint must include the hdc runtime manifest");
+expect(PRESETS["deepsonar-openharmony-test"]?.paths?.includes("deploy/vendor/openharmony-hdc/hdc"), "OpenHarmony Test fingerprint must include vendored hdc");
+expect(openHarmonyDockerfile.includes("openharmony-hdc.sh") && openHarmonyDockerfile.includes("device") && openHarmonyDockerfile.includes('"protocol":"hdc"'), "OpenHarmony Test must declare hdc as the device protocol");
+expect(openHarmonyDockerfile.includes("qemu-user-static") && openHarmonyHdcBin.includes("qemu-x86_64-static"), "OpenHarmony Test arm64 must run official linux-x64 hdc via qemu-user-static");
+expect(openHarmonyEnv.includes("hdc version") && openHarmonyEnv.includes("hdc -v") && openHarmonyEnv.includes("--hdc"), "OpenHarmony Test env smoke must expect hdc version / hdc -v");
+expect(openHarmonyEnv.includes("${hdc_version}${hdc_verbose}") && openHarmonyEnv.includes("*Ver:*"), "OpenHarmony Test env smoke must accept Ver: from either hdc version or hdc -v");
+expect(openHarmonyHdc.includes("hdc version") && openHarmonyHdc.includes("hdc -v") && openHarmonyHdc.includes("needs_human") && openHarmonyHdc.includes("inconclusive") && openHarmonyHdc.includes("[Empty]"), "OpenHarmony hdc helper must smoke version and emit structured no-target evidence");
+expect(openHarmonyHdc.includes("${version}${verbose}") && openHarmonyHdc.includes("*Ver:*"), "OpenHarmony hdc helper must accept Ver: from either hdc version or hdc -v");
+expect(openHarmonyHdcSmoke.includes("hdc version smoke") && openHarmonyHdcSmoke.includes("no_hdc_target") && openHarmonyHdcSmoke.includes("needs_human"), "OpenHarmony hdc unit smoke must cover version and empty targets without a device");
+expect(openHarmonyHdcSmoke.includes("Connect server failed") && openHarmonyHdcSmoke.includes("Ver: 3.2.0b") && openHarmonyHdcSmoke.includes("--check --hdc") && openHarmonyHdcSmoke.includes("qemu split"), "OpenHarmony hdc unit smoke must accept qemu split version output without a device");
+expect(!openHarmonyDockerfile.includes("ohos-sdk-windows_linux-public.tar.gz") || openHarmonyDockerfile.includes("HDC_SDK_URL"), "OpenHarmony Test may document the official SDK URL but must not bake the full SDK tree");
+expect(!openHarmonyAuditDockerfile.includes("openharmony-hdc") && !openHarmonyFuzzDockerfile.includes("openharmony-hdc"), "hdc is the Test device protocol; do not copy it into audit/fuzz as a Kali-style process tool");
+for (const tool of ["clang", "clang-tidy", "clang-tools", "libclang-rt-dev", "sparse", "cppcheck", "bear", "libasan8", "libubsan1", "gdb"]) {
+  expect(openHarmonyAuditDockerfile.includes(tool), `OpenHarmony Audit 镜像缺少工具：${tool}`);
+}
+for (const tool of ["clang", "libclang-rt-dev", "afl++", "libasan8", "libubsan1", "gdb", "llvm"]) {
+  expect(openHarmonyFuzzDockerfile.includes(tool), `OpenHarmony Fuzz 镜像缺少工具：${tool}`);
+}
+expect(openHarmonyFuzzDockerfile.includes('"compiler-rt","libfuzzer"'), "OpenHarmony Fuzz manifest must declare compiler-rt and libfuzzer");
+expect(openHarmonyFuzzEnv.includes("clang -print-resource-dir"), "OpenHarmony Fuzz check must probe Clang's resource dir dynamically");
+expect(openHarmonyFuzzEnv.includes("clang -print-target-triple"), "OpenHarmony Fuzz check must derive the runtime architecture from Clang");
+expect(openHarmonyFuzzEnv.includes("fuzzer_interceptors"), "OpenHarmony Fuzz check must verify the libFuzzer interceptor archive");
+expect(openHarmonyFuzzEnv.includes("ubsan_standalone"), "OpenHarmony Fuzz check must verify the UBSan compiler-rt archive");
+expect(openHarmonyFuzzEnv.includes("-fsanitize=fuzzer,address,undefined"), "OpenHarmony Fuzz check must compile with the production sanitizer set");
+expect(openHarmonyFuzzEnv.includes("--static"), "OpenHarmony Fuzz check must expose a static cross-architecture mode");
+expect(openHarmonyFuzzEnv.includes("readelf -h") && openHarmonyFuzzEnv.includes("readelf -Ws") && openHarmonyFuzzEnv.includes("file \"$smoke_binary\""), "OpenHarmony Fuzz static mode must inspect ELF metadata");
+expect(openHarmonyFuzzEnv.includes("__asan_init") && openHarmonyFuzzEnv.includes("LLVMFuzzerRunDriver"), "OpenHarmony Fuzz static mode must prove ASan/libFuzzer instrumentation");
+expect(openHarmonyFuzzEnv.includes("tool-manifest.json") && openHarmonyFuzzEnv.includes("deepsonar.runtime.contract/v1"), "OpenHarmony Fuzz check must validate its runtime manifest");
+expect(openHarmonyFuzzEnv.includes('if [[ "$check_mode" == "static" ]]'), "OpenHarmony Fuzz static mode must branch before sanitizer execution");
+expect(openHarmonyFuzzEnv.includes("ASAN_OPTIONS=detect_leaks=0") && openHarmonyFuzzEnv.includes('"$smoke_binary" -runs=1'), "OpenHarmony Fuzz amd64 mode must run the sanitizer/libFuzzer smoke binary");
+expect(openHarmonyFuzzDockerfile.includes("ARG TARGETARCH") && openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check --static"), "OpenHarmony Fuzz image build must use static mode for arm64 targets");
+expect(openHarmonyWorkflow.includes("check_args: --check --static") && openHarmonyWorkflow.includes("matrix.check_args"), "OpenHarmony Fuzz CI must use static mode for arm64 smoke");
+expect(openHarmonyDockerfile.includes("openharmony-env.sh --check --hdc"), "OpenHarmony Test 必须在构建时执行含 hdc version 的环境 smoke check");
+expect(openHarmonyAuditDockerfile.includes("openharmony-audit-env.sh --check"), "OpenHarmony Audit 必须在构建时执行环境 smoke check");
+expect(openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check"), "OpenHarmony Fuzz 必须在构建时执行环境 smoke check");
+const decisionScanners = ["semgrep", "gitleaks", "shellcheck"];
+const officialRuntimeSources = [
+  ["runtime-images.json", JSON.stringify(config)],
+  ["kali-minimal-runtime.json", JSON.stringify(kaliConfig)],
+  ["chrome-audit-runtime.json", JSON.stringify(chromeAuditConfig)],
+  ["chrome-test-runtime.json", JSON.stringify(chromeTestConfig)],
+  ["chrome-fuzz-runtime.json", JSON.stringify(chromeFuzzConfig)],
+  ["openharmony-test-runtime.json", JSON.stringify(openHarmonyTestConfig)],
+  ["mobile-runtime.json", JSON.stringify(mobileConfig)],
+  ["reverse-runtime.json", JSON.stringify(reverseConfig)],
+  ["Dockerfile.agent", dockerfile],
+  ["Dockerfile.agent-kali-minimal", kaliDockerfile],
+  ["Dockerfile.agent-chrome-audit", chromeAuditDockerfile],
+  ["Dockerfile.agent-chrome-test", chromeTestDockerfile],
+  ["Dockerfile.agent-chrome-fuzz", chromeFuzzDockerfile],
+  ["Dockerfile.agent-openharmony", openHarmonyDockerfile],
+  ["Dockerfile.agent-openharmony-audit", openHarmonyAuditDockerfile],
+  ["Dockerfile.agent-openharmony-fuzz", openHarmonyFuzzDockerfile],
+  ["Dockerfile.agent-mobile", mobileDockerfile],
+  ["Dockerfile.agent-reverse", reverseDockerfile],
+  ["agent-harness/image.mjs", localDefinition],
+];
+for (const [label, source] of officialRuntimeSources) {
+  for (const scanner of decisionScanners) {
+    expect(!source.includes(scanner), `${label} 不得安装决策扫描器 ${scanner}`);
+  }
+}
+expect(runtimeSmoke.includes("! command -v semgrep") && runtimeSmoke.includes("! command -v gitleaks") && runtimeSmoke.includes("! command -v shellcheck"), "offline smoke must fail if decision scanners reappear");
+expect(!runtimeSmoke.includes("semgrep --version") && !runtimeSmoke.includes("gitleaks version") && !runtimeSmoke.includes("shellcheck --version"), "offline smoke must not require decision scanners");
+expect(chromeAuditEnv.includes("for command_name in semgrep gitleaks shellcheck") && chromeAuditEnv.includes("不得预装决策扫描器"), "Chrome Audit env check must fail if decision scanners reappear");
+expect(!chromeAuditEnv.includes("semgrep --version") && !chromeAuditEnv.includes("semgrep --config"), "Chrome Audit env check must not run semgrep");
+expect(openHarmonyInit.includes("[[ \"$manifest\" == https://* ]]"), "OpenHarmony manifest 必须限制为 HTTPS");
+expect(!openHarmonyInit.includes("eval ") && !openHarmonyBuild.includes("eval "), "OpenHarmony 入口不得使用 eval");
+expect(!openHarmonyAuditScan.includes("eval ") && !openHarmonyFuzzBuild.includes("eval "), "OpenHarmony audit/fuzz 入口不得使用 eval");
+expect(openHarmonyBuild.includes('exec ./build.sh --product-name "$product_name" "${build_args[@]}"'), "OpenHarmony 构建参数必须严格传递");
+expect(prepareScript.includes("deepsonar-openharmony-test"), "prepare 脚本必须接入 OpenHarmony Test 镜像");
+expect(prepareScript.includes("deepsonar-openharmony-audit"), "prepare 脚本必须接入 OpenHarmony Audit 镜像");
+expect(prepareScript.includes("deepsonar-openharmony-fuzz"), "prepare 脚本必须接入 OpenHarmony Fuzz 镜像");
+expect(prepareScript.includes("Dockerfile.agent-openharmony"), "prepare 脚本必须使用 OpenHarmony Test Dockerfile");
+expect(prepareScript.includes("Dockerfile.agent-openharmony-audit"), "prepare 脚本必须使用 OpenHarmony Audit Dockerfile");
+expect(prepareScript.includes("Dockerfile.agent-openharmony-fuzz"), "prepare 脚本必须使用 OpenHarmony Fuzz Dockerfile");
+expect(prepareScript.includes('"deepsonar-base:local"'), "OpenHarmony 构建必须在 base 流程之后使用本地 base");
+expect(releaseWorkflow.includes("openharmony-test:"), "release workflow 缺少 OpenHarmony Test 独立 job");
+expect(releaseWorkflow.includes("openharmony-audit:"), "release workflow 缺少 OpenHarmony Audit 独立 job");
+expect(releaseWorkflow.includes("openharmony-fuzz:"), "release workflow 缺少 OpenHarmony Fuzz 独立 job");
+expect(releaseWorkflow.includes("needs: base-image"), "OpenHarmony job 必须依赖 base-image job");
+expect(releaseWorkflow.includes("Dockerfile.agent-openharmony"), "release workflow 未发布 OpenHarmony Test Dockerfile");
+expect(releaseWorkflow.includes("Dockerfile.agent-openharmony-audit"), "release workflow 未发布 OpenHarmony Audit Dockerfile");
+expect(releaseWorkflow.includes("Dockerfile.agent-openharmony-fuzz"), "release workflow 未发布 OpenHarmony Fuzz Dockerfile");
+expect(releaseWorkflow.includes("steps.image.outputs.digest"), "release workflow 必须用统一 image digest（build 或 skip-reuse）");
+expect(releaseWorkflow.includes("image-build-fingerprint.mjs"), "release workflow 必须计算构建指纹以支持未变更跳过");
+expect(releaseWorkflow.includes("name: assets-helper") && releaseWorkflow.includes("Dockerfile.assets-helper"), "release workflow 必须按 app 镜像矩阵发布 deepsonar-assets-helper");
+expect(releaseWorkflow.includes("name: silo") && releaseWorkflow.includes("Dockerfile.silo"), "release workflow 必须按 app 镜像矩阵发布 deepsonar-silo");
+expect(PRESETS["deepsonar-assets-helper"]?.dockerfile === "deploy/Dockerfile.assets-helper" && PRESETS["deepsonar-assets-helper"]?.platforms === "linux/amd64", "assets-helper fingerprint preset 必须与 app 镜像一致");
+expect(PRESETS["deepsonar-silo"]?.dockerfile === "deploy/Dockerfile.silo" && PRESETS["deepsonar-silo"]?.platforms === "linux/amd64", "silo fingerprint preset 必须与 app 镜像一致");
+const assetsHelperDockerfile = readFileSync(new URL("../deploy/Dockerfile.assets-helper", import.meta.url), "utf8");
+const siloDockerfile = readFileSync(new URL("../deploy/Dockerfile.silo", import.meta.url), "utf8");
+expectDockerfileParse(assetsHelperDockerfile, "Dockerfile.assets-helper");
+expectDockerfileParse(siloDockerfile, "Dockerfile.silo");
+const sharedAssetsVolume = readFileSync(new URL("../packages/runtime-sandbox/src/shared-assets-volume.ts", import.meta.url), "utf8");
+const deployScript = readFileSync(new URL("../deploy/deploy.sh", import.meta.url), "utf8");
+const busyboxHelperPin = "docker.io/library/busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23";
+const siloPinTag = "docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z";
+const siloPinDigest = "docker.io/pgsty/silo@sha256:29a498b24669cae1fed11c1a2fb2b3d73c68829a0a9c0b14e71b386671d38fac";
+expect(assetsHelperDockerfile.includes(`FROM ${busyboxHelperPin}`), "assets-helper Dockerfile 必须 FROM 当前 busybox pin");
+expect(siloDockerfile.includes(`FROM ${siloPinDigest}`) && siloDockerfile.includes(siloPinTag), "silo Dockerfile 必须 FROM 已解析的上游 pin，并注明对应 Release tag");
+expect(sharedAssetsVolume.includes(busyboxHelperPin), "runtime 默认 helper 在官方 digest 发布前必须仍是 busybox pin");
+expect(deployScript.includes("${IMAGE_REGISTRY}/deepsonar-assets-helper:${PLATFORM_VERSION}") && deployScript.includes(busyboxHelperPin), "deploy.sh 必须按 DEEPSONAR_VERSION 优先拉官方 helper 并在缺失时回退 busybox pin");
+expect(deployScript.includes("${IMAGE_REGISTRY}/deepsonar-silo:${PLATFORM_VERSION}") && deployScript.includes(siloPinTag), "deploy.sh 必须按 DEEPSONAR_VERSION 优先拉官方 Silo 并在缺失时回退当前 pgsty tag");
+expect(releaseWorkflow.includes("resolve-image-src-cache.sh"), "release workflow 必须解析 GHCR src-* 内容寻址缓存");
+expect(releaseWorkflow.includes("steps.resolve.outputs.skip"), "release workflow 必须在构建输入未变时跳过 rebuild");
+expect(releaseWorkflow.includes("record-runtime-image-digest.mjs"), "release workflow 缺少 digest artifact 记录脚本");
+expect(ciWorkflow.includes("image-build-fingerprint.mjs"), "ci workflow 必须计算构建指纹以支持未变更跳过");
+expect(ciWorkflow.includes("resolve-image-src-cache.sh"), "ci workflow 必须解析 GHCR src-* 内容寻址缓存");
+expect(releaseWorkflow.includes("DOCKER_METADATA_ANNOTATIONS_LEVELS"), "release workflow 必须生成 OCI manifest/index annotations");
+expect(releaseWorkflow.includes("steps.meta.outputs.annotations"), "release workflow 必须把 metadata annotations 传给 build-push-action");
+expect((releaseWorkflow.match(/^\s{10}annotations: \|$/gm) ?? []).length >= 6, "runtime metadata 必须显式生成镜像专属 OCI annotations");
+expect(releaseWorkflow.includes("index:org.opencontainers.image.description=DeepSonar Test"), "Kali multi-arch index 缺少 GHCR 包说明 annotation");
+expect(descriptorScript.includes("inspectPublishedImageSize"), "release descriptor 必须采集 OCI 多架构镜像大小");
+expect(descriptorScript.includes("platform_size_bytes"), "release descriptor 必须保留各平台大小证据");
+expect(descriptorScript.includes("platform_digests"), "release descriptor 必须保留各平台 child digest");
+expect(registryScript.includes("expandDescriptorVersions") || registryScript.includes("一平台一版本"), "runtime registry 必须按平台展开版本");
+expect(registryScript.includes("platforms.length !== 1") || registryScript.includes("恰好包含一个 platform"), "runtime registry 校验必须要求一平台一版本");
+expect(schedulerRegistryFetch.includes("releases/latest/download/runtime-image-registry.json"), "Scheduler 必须从固定官方 latest Release 同步清单");
+expect(schedulerRegistryFetch.includes("AbortSignal.timeout(timeoutMs)") && schedulerRegistryFetch.includes("DEFAULT_REGISTRY_FETCH_ATTEMPTS = 3"), "清单抓取必须保留有界超时与重试（#761）");
+expect(!schedulerRuntimeImages.includes("releases/latest/download/"), "runtime-images.ts 不得再内联官方 URL（#761 已抽到抓取层）");
+expect(schedulerRuntimeImages.includes("image.versions.length > 0"), "正式清单已有版本时不能被环境变量旧版本覆盖");
+expect(schedulerRuntimeImages.includes("SET promoted_at = NULL"), "同步最新版本后必须取消旧版本默认 promoted 状态");
+const runtimeImageListRoute = schedulerRuntimeImageRoutes.slice(
+  schedulerRuntimeImageRoutes.indexOf('app.get("/runtime-images"'),
+  schedulerRuntimeImageRoutes.indexOf('app.get("/runtime-images/registry"'),
+);
+const trustPriorityIndex = runtimeImageListRoute.indexOf("ORDER BY CASE v.trust_status");
+const platformPriorityIndex = runtimeImageListRoute.indexOf("WHEN v.platforms_json @>");
+expect(trustPriorityIndex >= 0 && platformPriorityIndex > trustPriorityIndex, "/runtime-images 最新版本必须先按可信状态排序，再优先 Scheduler 宿主平台");
+expect(releaseWorkflow.includes("actions/upload-artifact@v4"), "release workflow 缺少 digest/registry artifact");
+expect(releaseWorkflow.includes("generate-runtime-image-registry.mjs"), "release workflow 缺少 runtime registry 合并脚本");
+expect(releaseWorkflow.includes("deploy/runtime-image-registry.json"), "release workflow 未发布 runtime registry");
+expect(releaseWorkflow.includes("回写 bundled 清单到默认分支"), "release workflow 必须在发布后回写 deploy/runtime-image-registry.json");
+expect(releaseWorkflow.includes('env_file="deploy/.env.example"'), "release workflow 必须同步 deploy/.env.example");
+expect(!releaseWorkflow.includes("DEEPSONAR_IMAGE_TAG"), "release workflow 不得引用已删除的平台镜像 tag 变量");
+expect(releaseWorkflow.includes('[[ "$VERSION" =~ ^[0-9][^[:space:]]*$ ]]'), "release workflow 必须校验 ACR 标签使用无 v 的数字版本");
+expect(releaseWorkflow.includes('check-platform-release.mjs --write-env "$tmp_registry" "$tmp_env"'), "release workflow 必须回写经过校验的平台版本和完整 digest 引用");
+expect(releaseWorkflow.includes('git add -- "$registry_file" "$env_file"'), "release workflow 必须同时暂存 runtime registry 和 deploy/.env.example");
+expect(releaseWorkflow.includes("group: release-runtime-images-${{ github.repository }}"), "release workflow 必须跨 tag 串行执行");
+expect(releaseWorkflow.includes("cancel-in-progress: false"), "release workflow 不得取消正在执行的旧发布");
+expect((releaseWorkflow.match(/timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create/g) ?? []).length >= 6, "所有跨 Registry imagetools 重试必须设置单次 20 分钟超时，并在 TERM 后 1 分钟强制结束");
+expect((releaseWorkflow.match(/::warning::Docker Hub 标签发布失败/g) ?? []).length >= 6, "所有运行时镜像发布必须把 Docker Hub 复制失败降级为警告");
+expect(
+  (releaseWorkflow.match(/agent-harness\/select-runtime-platform-sources\.sh/g) ?? []).length >= 5 &&
+    releaseWorkflow.includes('selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh') &&
+    releaseWorkflow.includes('mapfile -t selected_sources') &&
+    !releaseWorkflow.includes('platform_args+=(--platform "$target_platforms")') &&
+    !releaseWorkflow.includes('retry_imagetools_create --prefer-index=false "${platform_args[@]}"') &&
+    (releaseWorkflow.match(/publish_tags false "\$GHCR_TAGS" "\$\{selected_sources\[@\]\}"/g) ?? []).length >= 5 &&
+    (releaseWorkflow.match(/clean_digest="\$\(docker buildx imagetools inspect "\$canonical_tag"/g) ?? []).length >= 5 &&
+    (releaseWorkflow.match(/publish_tags true "\$ACR_TAGS" "\$clean_source"/g) ?? []).length >= 5 &&
+    (releaseWorkflow.match(/DIGEST: \$\{\{ steps\.publish\.outputs\.digest \}\}/g) ?? []).length >= 5,
+  "version tags must share one clean runnable canonical digest while src tags retain provenance",
+);
+const chromeReleaseBlock = releaseWorkflow.slice(
+  releaseWorkflow.indexOf("  chrome-images:"),
+  releaseWorkflow.indexOf("  clickhouse-image-builds:"),
+);
+expect(
+  chromeReleaseBlock.includes('selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"') &&
+    chromeReleaseBlock.includes('--source "linux/amd64=${IMAGE_NAME}@${amd64_digest}"') &&
+    chromeReleaseBlock.includes('--source "linux/arm64=${IMAGE_NAME}@${arm64_digest}"') &&
+    chromeReleaseBlock.includes('mapfile -t source_refs <<< "$selected_sources_text"') &&
+    chromeReleaseBlock.includes('[[ "$reuse_status" -eq 2 ]] || exit "$reuse_status"') &&
+    chromeReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "$clean_source"') &&
+    chromeReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$clean_source"') &&
+    !chromeReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"'),
+  "Chrome release must strip per-architecture attestations before canonical assembly and cross-registry copy",
+);
+const clickhouseReleaseBlock = releaseWorkflow.slice(
+  releaseWorkflow.indexOf("  clickhouse-images:"),
+  releaseWorkflow.indexOf("  kali-minimal:"),
+);
+expect(
+  clickhouseReleaseBlock.includes('selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"') &&
+    clickhouseReleaseBlock.includes('--source "linux/amd64=${IMAGE_NAME}@${amd64_digest}"') &&
+    clickhouseReleaseBlock.includes('--source "linux/arm64=${IMAGE_NAME}@${arm64_digest}"') &&
+    clickhouseReleaseBlock.includes('mapfile -t source_refs <<< "$selected_sources_text"') &&
+    clickhouseReleaseBlock.includes('[[ "$reuse_status" -eq 2 ]] || exit "$reuse_status"') &&
+    clickhouseReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "$clean_source"') &&
+    clickhouseReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$clean_source"') &&
+    !clickhouseReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"'),
+  "ClickHouse release must strip per-architecture attestations before canonical assembly and cross-registry copy",
+);
+expect(
+  releaseWorkflow.includes("clickhouse-images:") &&
+    releaseWorkflow.includes("clickhouse-image-builds:") &&
+    releaseWorkflow.includes("clickhouse-images:\n    needs: [base-image, clickhouse-image-builds]") &&
+    !releaseWorkflow.includes("clickhouse-fuzz-arm64-smoke") &&
+    releaseWorkflow.includes("Dockerfile.agent-clickhouse-audit") &&
+    releaseWorkflow.includes("Dockerfile.agent-clickhouse-test") &&
+    releaseWorkflow.includes("Dockerfile.agent-clickhouse-fuzz") &&
+    releaseWorkflow.includes("test-clickhouse-runtime.mjs") &&
+    releaseWorkflow.includes("runs-on: ubuntu-24.04-arm"),
+  "Release 必须按架构原生构建 ClickHouse 三项镜像并在组装 index 前完成冒烟",
+);
+expect(releaseWorkflow.includes('test-clickhouse-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}" "${{ matrix.platform }}"'), "release ClickHouse smoke must pull and run the matrix target platform");
+expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || releaseWorkflow.includes("git push origin \"HEAD:${DEFAULT_BRANCH}\""), "release workflow 必须把清单推送到默认分支");
+expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");
+expect(releaseWorkflow.includes("kali-minimal:"), "release workflow 缺少 Kali 独立 job（避免多架构同作业 ENOSPC）");
+expect(releaseWorkflow.includes("  mobile:") && releaseWorkflow.includes("Dockerfile.agent-mobile"), "release workflow 必须发布 Mobile 专项镜像");
+// #718: Reverse must execute real native Ghidra and dispatched Job gates
+// before assembling an index; CI validation never replaces release evidence.
+const reverseWorkflow = readFileSync(new URL("../.github/workflows/reverse-runtime.yml", import.meta.url), "utf8");
+const reverseReleaseBlock = releaseWorkflow.slice(releaseWorkflow.indexOf("  reverse-image-builds:"), releaseWorkflow.indexOf("\n  release:"));
+expect(reverseWorkflow.includes("ubuntu-24.04-arm") && reverseWorkflow.includes("ubuntu-24.04") &&
+  !reverseWorkflow.includes("setup-qemu-action") && !reverseWorkflow.includes("packages: write") &&
+  reverseWorkflow.includes("reverse-native-smoke.mjs") && reverseWorkflow.includes("pnpm ci:integration:rea-job"),
+  "Reverse PR CI must use both native runners, real REA and dispatched Job tests without publishing");
+expect(reverseReleaseBlock.includes("needs: [base-image, reverse-image-builds]") &&
+  reverseReleaseBlock.includes("BASE_IMAGE=ghcr.io/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}") &&
+  reverseReleaseBlock.includes("reverse-native-smoke.mjs") && reverseReleaseBlock.includes("pnpm ci:integration:rea-job") &&
+  reverseReleaseBlock.includes("test-runtime-manuals-runtime.mjs") &&
+  reverseReleaseBlock.indexOf("Smoke native Reverse child") < reverseReleaseBlock.indexOf("Pin verified native Reverse src cache") &&
+  !reverseReleaseBlock.includes("setup-qemu-action"),
+  "Reverse release must derive from this release base and pass native/manual/Job gates before cache/index publication");
+expect(
+  /mobile:[\s\S]*setup-qemu-action@v3[\s\S]*Dockerfile\.agent-mobile/.test(releaseWorkflow),
+  "release mobile job must set up QEMU before the multi-arch build",
+);
+expect(releaseWorkflow.includes("needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images, clickhouse-images, mobile, reverse-images]"), "runtime registry 与 Release 必须由同一个最终 job 发布");
+for (const name of ["ALIYUN_REGISTRY", "ALIYUN_REGISTRY_NAMESPACE", "ALIYUN_REGISTRY_USERNAME", "ALIYUN_REGISTRY_PASSWORD"]) {
+  expect(releaseWorkflow.includes(`secrets.${name}`), `release workflow 缺少 ACR Secret：${name}`);
+}
+expect(releaseWorkflow.includes("docker/login-action@v3"), "release workflow 缺少 registry 登录动作");
+expect(releaseWorkflow.includes("set -euo pipefail"), "release workflow shell 必须启用严格模式");
+expect(releaseWorkflow.includes('owner="${GITHUB_REPOSITORY_OWNER,,}"'), "release workflow 必须输出小写 repository owner");
+expect(releaseWorkflow.includes("owner: ${{ steps.release.outputs.owner }}"), "base-image 必须暴露小写 owner job output");
+expect(!releaseWorkflow.includes("needs.base-image.outputs.owner"), "依赖 job 不得使用可能为空的 base-image owner job output");
+expect(releaseWorkflow.includes("steps.release.outputs.owner"), "各发布 job 必须在本 job 内使用小写 owner step output");
+expect(releaseWorkflow.includes("解析 registry 命名空间"), "依赖 job 必须本地解析 registry 命名空间");
+expect(releaseWorkflow.includes("steps.release.outputs.image_name"), "Kali job 必须在本 job 内生成完整 GHCR image_name");
+expect(!releaseWorkflow.includes("github.repository_owner"), "release workflow 不得直接使用 github.repository_owner 拼接 OCI 引用");
+// Issue #70 Slice B release/catalog gates.  Keep these checks static and
+// credential-free so CI can prove the workflow cannot publish unchecked refs.
+expect(openHarmonyRegistry.schema === "deepsonar.registry/v2" && openHarmonyRegistry.schema_version === 2, "bundled runtime catalog must be v2");
+expect(typeof openHarmonyRegistry.platform_version === "string" && /^\d+\.\d+\.\d+$/.test(openHarmonyRegistry.platform_version), "bundled catalog must declare platform_version");
+expect(openHarmonyRegistry.min_runtime_image?.version && /^\d+\.\d+\.\d+$/.test(openHarmonyRegistry.min_runtime_image.version), "bundled catalog must declare min_runtime_image.version");
+expect(registryScript.includes("image build unchanged; version kept"), "generator must reuse unchanged fingerprint versions");
+expect(registryScript.includes("platform_version") && registryScript.includes("min_runtime_image"), "generator must emit split platform/runtime version axes");
+expect(releaseWorkflow.includes("maybe-skip-runtime-version-tags.sh"), "unchanged runtime products must skip new platform-version tags");
+expect(releaseWorkflow.includes("write-release-runtime-descriptor.sh"), "unchanged runtime products must reuse the previous catalog descriptor");
+const kaliReleaseBlock = releaseWorkflow.slice(
+  releaseWorkflow.indexOf("  kali-minimal:"),
+  releaseWorkflow.indexOf("  openharmony-test:"),
+);
+const kaliCacheGateIndex = kaliReleaseBlock.indexOf("if bash agent-harness/maybe-skip-runtime-version-tags.sh; then exit 0; fi");
+const kaliPublishIndex = kaliReleaseBlock.indexOf("source_refs=(");
+expect(
+  kaliCacheGateIndex >= 0
+    && kaliPublishIndex > kaliCacheGateIndex
+    && kaliReleaseBlock.includes("SOURCE_DIGEST: ${{ steps.resolve.outputs.digest }}")
+    && kaliReleaseBlock.includes('source_refs=("${IMAGE_NAME}@${SOURCE_DIGEST}")')
+    && kaliReleaseBlock.includes('"${IMAGE_NAME}@${AMD64_DIGEST}"')
+    && kaliReleaseBlock.includes('"${IMAGE_NAME}@${ARM64_DIGEST}"')
+    && kaliReleaseBlock.includes('if [[ "$SKIP" != "true" ]]')
+    && kaliReleaseBlock.includes('DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin')
+    && !kaliReleaseBlock.slice(kaliCacheGateIndex).includes('echo "image build unchanged; version kept" >> "$GITHUB_STEP_SUMMARY"'),
+  "Kali cache hits must prove catalog reuse before deciding whether to publish version tags",
+);
+expect(
+  writeReleaseDescriptor.includes("reuse-catalog-descriptor.mjs")
+    && writeReleaseDescriptor.includes("record-runtime-image-digest.mjs")
+    && writeReleaseDescriptor.includes("inspecting published channels")
+    && writeReleaseDescriptor.includes("reuse_status")
+    && !writeReleaseDescriptor.includes("registry_evidence"),
+  "SKIP must reuse a catalog row when the digest exists, then inspect published channels on miss",
+);
+expect(
+  maybeSkipRuntimeVersionTags.includes("reuse-catalog-descriptor.mjs")
+    && maybeSkipRuntimeVersionTags.includes("--probe")
+    && maybeSkipRuntimeVersionTags.includes("publishing version tags"),
+  "version-tag skip must prove the previous catalog already has the src-cache digest",
+);
+expect(
+  reuseCatalogDescriptor.includes("CATALOG_REUSE_MISS_EXIT")
+    && reuseCatalogDescriptor.includes("CatalogReuseMiss")
+    && reuseCatalogDescriptor.includes("process.exitCode = CATALOG_REUSE_MISS_EXIT"),
+  "catalog reuse miss must be distinguishable from a broken catalog row",
+);
+expect(
+  !reuseCatalogDescriptor.includes("versions[0]") && reuseCatalogDescriptor.includes("samePlatformDigests(actual, expected)") &&
+    releaseWorkflow.includes("agent-harness/check-runtime-catalog-platforms.mjs") &&
+    releaseWorkflow.includes("--artifacts chrome-arch --artifacts clickhouse-arch --artifacts reverse-arch"),
+  "catalog reuse and final release must prove equality with native-smoke platform manifests",
+);
+const finalReleaseBlock = releaseWorkflow.slice(releaseWorkflow.indexOf("\n  prepare-release:"), releaseWorkflow.indexOf("\n  platform-signatures:"));
+expect(
+  finalReleaseBlock.includes("Login GHCR for final payload verification") &&
+    finalReleaseBlock.includes("Login Docker Hub for final payload verification") &&
+    finalReleaseBlock.includes("Login Aliyun ACR for final payload verification") &&
+    finalReleaseBlock.includes("DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}") &&
+    finalReleaseBlock.indexOf("Login Aliyun ACR for final payload verification") <
+      finalReleaseBlock.indexOf("agent-harness/check-runtime-catalog-platforms.mjs"),
+  "final payload verification must authenticate configured registries in its own job",
+);
+expect(!releaseWorkflow.includes("release still republishes and inspects every configured channel"), "unchanged runtime products must not republish platform-version tags");
+expect(!releaseWorkflow.includes("Kali build unchanged; retag"), "unchanged Kali must keep its existing version instead of retagging");
+expect(schedulerRegistryContract.includes("min_runtime_image") && schedulerRegistryContract.includes("RUNTIME_IMAGE_BELOW_PLATFORM_MIN") === false, "catalog parser owns min_runtime_image; HTTP error code lives in runtime-images");
+expect(schedulerRuntimeImages.includes("RUNTIME_IMAGE_BELOW_PLATFORM_MIN"), "Scheduler must fail closed with RUNTIME_IMAGE_BELOW_PLATFORM_MIN");
+expect(!/DEEPSONAR_IMAGE_TAG=|\$\{IMAGE_TAG\}/.test(deploySh) && deploySh.includes("ds_check_platform_image_contract"), "deploy.sh must not resolve or write DEEPSONAR_IMAGE_TAG; platform images use digest refs (#740)");
+expect(!deploySh.includes('/"version"[[:space:]]*:/'), "deploy.sh must not take the first catalog version as the platform tag");
+expect(openHarmonyRegistry.images.every((image) => image.versions.every((version) => Array.isArray(version.platforms) && version.platforms.length >= 2 || image.versions.length === 0)), "bundled v2 catalog must consolidate platforms");
+expect(registryScript.includes("registry_records") && registryScript.includes("inspect_digest"), "v2 generator must require destination inspect evidence");
+expect(registryScript.includes("registry_records must include ${channel} evidence"), "every release descriptor must carry all three channel outcomes");
+expect(registryScript.includes("registry_evidence must contain exactly all three channels"), "v2 generator must require exactly three channel evidence entries");
+expect(registryScript.includes("must contain exactly the official image keys"), "release/bundled registry checks must require all official products");
+expect(schedulerRegistryContract.includes("assertKnownKeys") && schedulerRegistryContract.includes("project_opt_in must be boolean"), "Scheduler catalog parser must reject unknown fields and invalid project_opt_in types");
+expect(schedulerRegistryContract.includes("RUNTIME_IMAGE_REGISTRY_AVAILABLE_PROVENANCE") && schedulerRegistryContract.includes("UNAVAILABLE_REASON_RE"), "Scheduler catalog parser must bound provenance and unavailable reasons");
+expect(recordContractScript.includes("AVAILABLE_PROVENANCE") && recordContractScript.includes("REASON_RE"), "release record verifier must use fixed provenance and bounded reasons");
+expect(descriptorScript.includes("inspectPublishedImageDigest") && descriptorScript.includes("canonical"), "release descriptor must gate every destination against canonical digest");
+expect(descriptorScript.includes("buildRegistryRecord") && recordContractScript.includes("inspectedDigest"), "release descriptor must use the pure inspected-digest evidence contract");
+expect(!releaseWorkflow.includes("crypto.createHash(\"sha256\").update(s)"), "release workflow must not hash raw JSON as a registry digest");
+expect(releaseWorkflow.includes("DOCKERHUB_CONFIGURED") && releaseWorkflow.includes("ACR_CONFIGURED"), "release workflow must record optional channel availability explicitly");
+expect(releaseWorkflow.includes("DOCKERHUB_UNAVAILABLE_REASON") && releaseWorkflow.includes("ACR_UNAVAILABLE_REASON"), "release workflow must summarize missing optional channels");
+expect(releaseWorkflow.includes("inspectPublishedImageDigest") || releaseWorkflow.includes("imagetools inspect"), "release workflow must inspect destination digests");
+expect(releaseWorkflow.includes("registry_records"), "release workflow must archive channel evidence");
+expect((releaseWorkflow.match(/publish_tags true/g) ?? []).length >= 6, "cross-registry publish must use bounded retry");
+expect((releaseWorkflow.match(/CHANNEL_PUBLISH_FAILED=true/g) ?? []).length >= 6, "every release image publish retry must fail closed");
+expect((releaseWorkflow.match(/warning::Docker Hub/g) ?? []).length >= 6 && (releaseWorkflow.match(/exit 1/g) ?? []).length >= 6, "configured Docker Hub failure must fail the release");
+expect(releaseWorkflow.includes("runtime-image-registry-v2.json"), "release must attach the validated v2 catalog asset");
+expect(!openHarmonyRegistry.fallback && !openHarmonyRegistry.error && !openHarmonyRegistry.checked_at, "bundled catalog must not accept Scheduler-owned fallback/error/checked_at metadata");
+const kaliDigestInspectIndex = releaseWorkflow.indexOf('digest="$(docker buildx imagetools inspect "$primary"');
+const kaliImmutableCopyIndex = releaseWorkflow.indexOf('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$immutable_primary"');
+expect(kaliDigestInspectIndex >= 0 && kaliImmutableCopyIndex > kaliDigestInspectIndex, "Kali Docker Hub copy must use a GHCR digest inspected before the cross-registry copy");
+expect(!releaseWorkflow.includes('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$primary"'), "Kali Docker Hub copy must not use the mutable GHCR tag");
+
+
+if (failures.length) {
+  console.error(failures.map((item) => `- ${item}`).join("\n"));
+  process.exit(1);
+}
+console.log(`运行时镜像定义一致（${[...Object.keys(config.toolsets), ...Object.keys(kaliConfig.toolsets), "openharmony-test", "openharmony-audit", "openharmony-fuzz", "chrome-audit", "chrome-test", "chrome-fuzz", "clickhouse-audit", "clickhouse-test", "clickhouse-fuzz", "mobile", "reverse"].join("、")}）`);

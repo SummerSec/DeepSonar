@@ -1,0 +1,159 @@
+/**
+ * Agent CLI 原始 Session 发现适配器；不同 CLI 不共享目录假设。
+ *
+ * 新增 CLI 时：在此扩展 SupportedAgentCli + CLI_SESSION_ADAPTERS，并同步
+ * apps/web/src/session-viewer/parseAgentSession.ts（Job Session 时间线/统计）。
+ * 完整清单：docs/AGENT_CLI_RUNTIME_ADAPTERS.md「Session 归档 + Web 查看器」。
+ */
+
+export type SupportedAgentCli = "claude-code" | "pi" | "dsh";
+
+export interface SessionDiscoveryRuntime {
+  run(command: string): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  readText(path: string): Promise<string | null>;
+}
+
+export interface SessionArtifact {
+  name: string;
+  sourcePath: string;
+  content: string;
+  kind: "main" | "subagent" | "vendor_export";
+}
+
+export interface SessionBundle {
+  cli: SupportedAgentCli;
+  sessionId: string;
+  artifacts: SessionArtifact[];
+  captureError?: string;
+}
+
+export interface AgentCliSessionAdapter {
+  cli: SupportedAgentCli;
+  exportSession(runtime: SessionDiscoveryRuntime, sessionId: string, sessionFile?: string): Promise<SessionBundle>;
+}
+
+const MAX_SESSION_BYTES = 32 * 1024 * 1024;
+
+function sh(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function safeName(filePath: string, sessionId: string, index: number): string {
+  const base = filePath.split("/").filter(Boolean).pop() ?? `${sessionId}-${index}.jsonl`;
+  return base.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+async function readDiscovered(
+  runtime: SessionDiscoveryRuntime,
+  cli: SupportedAgentCli,
+  sessionId: string,
+  paths: string[],
+): Promise<SessionBundle> {
+  const unique = [...new Set(paths.map((p) => p.trim()).filter(Boolean))];
+  const artifacts: SessionArtifact[] = [];
+  let total = 0;
+  for (let i = 0; i < unique.length; i++) {
+    const sourcePath = unique[i]!;
+    const content = await runtime.readText(sourcePath);
+    if (content === null) continue;
+    total += Buffer.byteLength(content);
+    if (total > MAX_SESSION_BYTES) {
+      return { cli, sessionId, artifacts, captureError: "Session 文件合计超过 32 MiB，已停止归档" };
+    }
+    const subagent = sourcePath.includes("/subagents/");
+    artifacts.push({
+      name: subagent ? `subagents/${safeName(sourcePath, sessionId, i)}` : safeName(sourcePath, sessionId, i),
+      sourcePath,
+      content,
+      kind: subagent ? "subagent" : "main",
+    });
+  }
+  return {
+    cli,
+    sessionId,
+    artifacts,
+    ...(artifacts.length === 0 ? { captureError: `未找到 ${cli} session ${sessionId}` } : {}),
+  };
+}
+
+const claudeAdapter: AgentCliSessionAdapter = {
+  cli: "claude-code",
+  async exportSession(runtime, sessionId) {
+    const command =
+      `base="\${HOME:-/root}/.claude/projects"; ` +
+      `if [ -d "$base" ]; then find "$base" -type f \\( -name ${sh(`${sessionId}.jsonl`)} ` +
+      `-o -path ${sh(`*/${sessionId}/subagents/*.jsonl`)} \\) -print 2>/dev/null; fi`;
+    const result = await runtime.run(command);
+    if (result.exitCode !== 0 && !result.stdout.trim()) {
+      return { cli: "claude-code", sessionId, artifacts: [], captureError: result.stderr.trim() || "Claude Session 扫描失败" };
+    }
+    return readDiscovered(runtime, "claude-code", sessionId, result.stdout.split("\n"));
+  },
+};
+
+const piAdapter: AgentCliSessionAdapter = {
+  cli: "pi",
+  async exportSession(runtime, sessionId, sessionFile) {
+    if (!sessionFile || !sessionFile.startsWith("/workspace/.deepsonar-home/.pi/agent/")) {
+      return { cli: "pi", sessionId, artifacts: [], captureError: "Pi 未返回受治理的 sessionFile，拒绝猜测会话路径" };
+    }
+    const normalized = sessionFile.replaceAll("\\", "/");
+    if (normalized.includes("/../") || normalized.endsWith("/..")) {
+      return { cli: "pi", sessionId, artifacts: [], captureError: "Pi sessionFile 路径越界，拒绝归档" };
+    }
+    const content = await runtime.readText(normalized);
+    if (content === null) {
+      return { cli: "pi", sessionId, artifacts: [], captureError: `未找到 Pi sessionFile ${sessionId}` };
+    }
+    if (Buffer.byteLength(content) > MAX_SESSION_BYTES) {
+      return { cli: "pi", sessionId, artifacts: [], captureError: "Pi Session 文件超过 32 MiB，已停止归档" };
+    }
+    return {
+      cli: "pi",
+      sessionId,
+      artifacts: [{
+        name: safeName(normalized, sessionId, 0),
+        sourcePath: normalized,
+        content,
+        kind: "main",
+      }],
+    };
+  },
+};
+
+const dshAdapter: AgentCliSessionAdapter = {
+  cli: "dsh",
+  async exportSession(runtime, sessionId) {
+    if (!/^[A-Za-z0-9_-]{1,128}$/u.test(sessionId)) {
+      return { cli: "dsh", sessionId, artifacts: [], captureError: "DSH session ID 非法，拒绝扫描" };
+    }
+    const root = "/workspace/.deepsonar-home/.dsh/sessions";
+    // Live RC runtime discovery is intentionally pinned to the current v4
+    // generation. Historical v0-v3 files remain readable by the detached web
+    // archive viewer, but must never be resumed as a live Agent session.
+    const command =
+      `base=${sh(root)}; if [ -d "$base" ]; then find "$base" -type f ` +
+      `-path ${sh(`*/${sessionId}/session.v4.jsonl`)} -print 2>/dev/null; fi`;
+    const result = await runtime.run(command);
+    if (result.exitCode !== 0 && !result.stdout.trim()) {
+      return { cli: "dsh", sessionId, artifacts: [], captureError: result.stderr.trim() || "DSH Session 扫描失败" };
+    }
+    const paths = [...new Set(result.stdout.split("\n").map((value) => value.trim()).filter(Boolean))]
+      .filter((path) => {
+        if (!path.startsWith(`${root}/`)) return false;
+        const parts = path.slice(root.length + 1).split("/");
+        return parts.length === 3 && Boolean(parts[0]) && ![".", ".."].includes(parts[0]!)
+          && parts[1] === sessionId && parts[2] === "session.v4.jsonl";
+      });
+    if (paths.length > 1) {
+      return { cli: "dsh", sessionId, artifacts: [], captureError: `DSH session ${sessionId} 出现在多个项目目录，拒绝猜测` };
+    }
+    return readDiscovered(runtime, "dsh", sessionId, paths);
+  },
+};
+
+export const CLI_SESSION_ADAPTERS: Record<SupportedAgentCli, AgentCliSessionAdapter> = {
+  "claude-code": claudeAdapter,
+  pi: piAdapter,
+  dsh: dshAdapter,
+};

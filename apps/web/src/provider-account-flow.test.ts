@@ -1,0 +1,797 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import {
+  buildSettingsConfigFromEditor,
+  CLAUDE_CODE_MODEL_KEYS,
+  claudeModelKeyMismatches,
+  CredentialConfigEditor,
+  editorModelPatch,
+  editorModelTextFromRaw,
+  editorModelTextFromSettings,
+  hasStructuredModelField,
+  effectiveEditorSecret,
+  extractBaseUrlFromSettingsClient,
+  extractModelsFromSettingsClient,
+  extractSecretFromSettings,
+  extractModelIdFromSettings,
+  extractPiModelIdsFromSettings,
+  MASKED_SECRET_PLACEHOLDER,
+  parseCredentialConcurrency,
+  patchProviderModelId,
+  patchProviderModelIds,
+  parsePiSettingsText,
+  resolveCredentialBaseUrl,
+} from "./CredentialConfigEditor";
+import {
+  boundCredentialLabel,
+  resolvedUpstreamModel,
+  roleModelLabel,
+  sameLast4CredentialCount,
+} from "./ProviderAccountFlow";
+import { claudeMainModelPatch } from "./CcSwitchClaudeFields";
+
+test("bound credential label disambiguates scope, id, and another selected account", () => {
+  const role = {
+    credential_id: "11111111-2222-4333-8444-555555555555",
+    credential_name: "same-name",
+    credential_project_id: "99999999-2222-4333-8444-555555555555",
+    credential_project_name: "red-team",
+  };
+  assert.equal(boundCredentialLabel(role, role.credential_id), "same-name · 项目 red-team #11111111");
+  assert.match(boundCredentialLabel(role, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"), /已绑定另一账号/);
+});
+
+test("same-last4 warning catches different credentials in the same provider and CLI", () => {
+  const selected = { provider: "anthropic", agent_cli: "claude-code" as const, last4: "abcd" };
+  assert.equal(sameLast4CredentialCount(selected, [
+    selected,
+    { provider: "anthropic", agent_cli: "claude-code", last4: "abcd" },
+    { provider: "openai", agent_cli: "codex", last4: "abcd" },
+  ]), 2);
+});
+
+test("structured Provider quota and native model helpers preserve governed settings", () => {
+  assert.equal(parseCredentialConcurrency("12"), 12);
+  assert.equal(parseCredentialConcurrency(""), null);
+  assert.throws(() => parseCredentialConcurrency("1001"), /并发限制/);
+
+  const claude = patchProviderModelId({ env: {
+    ANTHROPIC_BASE_URL: "https://provider.test",
+    CLAUDE_CODE_EFFORT_LEVEL: "high",
+  } }, "claude-code", "model-x");
+  assert.equal(extractModelIdFromSettings(claude, "claude-code"), "model-x");
+  const env = claude.env as Record<string, string>;
+  for (const key of [
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL_NAME",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL_NAME",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+  ]) assert.equal(env[key], "model-x", key);
+  assert.equal(env.CLAUDE_CODE_EFFORT_LEVEL, "high");
+
+  const pi = {
+    "llm-pi-ai": { providers: { team: { models: [{ id: "native-a", reasoningEfforts: { low: {} } }, { id: "native-b", contextWindow: 128000 }] } } },
+    "agent-default-model": { provider: "team", model: "native-a" },
+  };
+  assert.deepEqual(extractPiModelIdsFromSettings(pi), ["native-a", "native-b"]);
+  const patched = patchProviderModelIds(pi, ["native-b", "new-model"]);
+  const profile = ((patched["llm-pi-ai"] as Record<string, unknown>).providers as Record<string, unknown>).team as Record<string, unknown>;
+  assert.deepEqual((profile.models as Array<Record<string, unknown>>).map((model) => model.id), ["native-b", "new-model"]);
+  assert.equal((profile.models as Array<Record<string, unknown>>)[0].contextWindow, 128000);
+});
+
+test("unchanged structured model fields do not rewrite native model routing", () => {
+  assert.deepEqual(editorModelPatch("claude-code", "main-model", "main-model"), {});
+  assert.deepEqual(editorModelPatch("claude-code", "new-model", "main-model"), { modelId: "new-model" });
+  assert.deepEqual(editorModelPatch("pi", "model-a, model-b", "model-a,model-b"), {});
+  assert.deepEqual(editorModelPatch("pi", "model-a, model-c", "model-a,model-b"), { modelIds: ["model-a", "model-c"] });
+});
+
+test("changing Claude main model preserves explicit Fable and subagent mappings", () => {
+  assert.deepEqual(
+    claudeMainModelPatch({
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "custom-fable",
+      CLAUDE_CODE_SUBAGENT_MODEL: "custom-subagent",
+    }, "old-main", "new-main"),
+    { ANTHROPIC_MODEL: "new-main", ANTHROPIC_SMALL_FAST_MODEL: null },
+  );
+  assert.deepEqual(
+    claudeMainModelPatch({
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "old-main",
+      CLAUDE_CODE_SUBAGENT_MODEL: "old-main",
+    }, "old-main", "new-main"),
+    {
+      ANTHROPIC_MODEL: "new-main",
+      ANTHROPIC_SMALL_FAST_MODEL: null,
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "new-main",
+      CLAUDE_CODE_SUBAGENT_MODEL: "new-main",
+    },
+  );
+});
+
+test("role model display separates the Claude CLI alias from the upstream model", () => {
+  const settings = {
+    env: {
+      ANTHROPIC_MODEL: "grok-4.6",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "grok-4.5",
+    },
+  };
+  assert.equal(resolvedUpstreamModel("claude-code", "fable", settings), "grok-4.5");
+  assert.match(
+    roleModelLabel(
+      { agent_cli: "claude-code", model: "fable" },
+      { settings_config_json: settings },
+    ),
+    /fable.*grok-4\.5.*由别名映射决定/,
+  );
+});
+
+test("inherit_global project RoleConfig no longer labels leftover stored models", () => {
+  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(flow, /inheritIgnoresLeftoverProjectModel|leftoverProjectModelBindNote|行上遗留|leftover_project_models_unchanged/);
+});
+
+const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+const panel = readFileSync(new URL("./CredentialsPanel.tsx", import.meta.url), "utf8");
+const binding = "";
+
+test("Provider account flow is account CRUD only and does not own binding or effect", () => {
+  for (const marker of [
+    "createCredential",
+    "testCredential",
+    "authMe",
+    "supports_base_url",
+    "原始遗留值不会展示或回传",
+    "settings_config",
+    "agent_cli",
+    "saveEditedConfig",
+    "CredentialConfigEditor",
+    "openEditCredential",
+    "provider-flow-credential-list",
+    "buildSettingsConfigFromEditor",
+    "credentialImpact",
+  ]) {
+    assert.ok(flow.includes(marker), `flow should expose ${marker}`);
+  }
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const settingsHelpers = readFileSync(new URL("./credential-config-settings.ts", import.meta.url), "utf8");
+  const credentialSurface = `${editor}\n${settingsHelpers}`;
+  for (const marker of ["auth.json", "CcSwitchClaudeFields", "CcSwitchCodexFields", "CcSwitchOpenCodeFields", "ANTHROPIC_AUTH_TOKEN"]) {
+    assert.ok(credentialSurface.includes(marker), `editor should expose ${marker}`);
+  }
+  assert.ok(
+    editor.indexOf('ariaLabel="Agent CLI 类型"') < editor.indexOf('ariaLabel="Provider"'),
+    "Agent CLI must be selected before Provider",
+  );
+  assert.ok(editor.includes("item.compatible_agent_cli.includes(agentCli)"));
+  assert.match(flow, /setCreateSecret\(\"\"\)/);
+  assert.match(flow, /项目作用域账号只能在本项目内创建 Provider 账号/);
+  assert.match(flow, /testCredential\(created\.id\)/);
+  assert.doesNotMatch(flow, /bindCredentialsBatch/);
+  assert.doesNotMatch(flow, /bindableRoleConfigs/);
+  assert.doesNotMatch(flow, /FlowStep|goToStep|canEnterRoles/);
+  assert.doesNotMatch(flow, /02 \/ 角色配置/);
+  assert.doesNotMatch(flow, /03 \/ 生效策略/);
+  assert.doesNotMatch(flow, /01 \/ 账号列表/);
+  assert.doesNotMatch(flow, /请先选择 Provider 账号，再进入/);
+  assert.doesNotMatch(flow, /接入账号，再完成绑定闭环/);
+  assert.doesNotMatch(flow, /02 \/ 模型门槛/);
+  assert.doesNotMatch(flow, /02 \/ 模型映射/);
+  assert.doesNotMatch(flow, /选择统一模型/);
+  assert.doesNotMatch(flow, /绑定需要非空的当前模型目录|绑定需要模型目录/);
+  assert.doesNotMatch(flow, /模型映射/);
+  assert.doesNotMatch(flow, /一键设置/);
+  assert.doesNotMatch(flow, /声明支持 1M/);
+  assert.doesNotMatch(flow, /当前被哪些角色引用（只读）/);
+  assert.doesNotMatch(flow, /ROLE_BINDING_HREF|去凭据绑定/);
+  const claudeFields = readFileSync(new URL("./CcSwitchClaudeFields.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(claudeFields, /获取模型列表|模型配置|Fable|Haiku|Sonnet|Opus/);
+});
+
+test("Provider create/edit persists the top-level context window budget while RoleConfig delegates it", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const settingsHelpers = readFileSync(new URL("./credential-config-settings.ts", import.meta.url), "utf8");
+  const credentialSurface = `${editor}\n${settingsHelpers}`;
+  const roleEditor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
+  const jobDetail = readFileSync(new URL("./JobDetailPanel.tsx", import.meta.url), "utf8");
+  for (const marker of [
+    "contextWindowTokens: string",
+    "patchProviderOverrides",
+    "settings.context_window_tokens = contextWindowTokens",
+    "delete settings.context_window_tokens",
+    "1_024",
+    "10_000_000",
+  ]) {
+    assert.ok(credentialSurface.includes(marker), `credential editor should preserve context budget contract: ${marker}`);
+  }
+  assert.match(flow, /setEditContextWindowTokens\(extractContextWindowTokens\(settings\)\)/);
+  assert.match(flow, /contextWindowTokens: createContextWindowTokens/);
+  assert.match(flow, /contextWindowTokens: editContextWindowTokens/);
+  assert.doesNotMatch(roleEditor, /context_window_tokens|contextWindowTokensFromForm/);
+  assert.match(jobDetail, /snapStr\(snapshot, "context_window_tokens"\)/);
+  assert.match(jobDetail, /CLI 客户端上下文预算/);
+  assert.doesNotMatch(editor, /CLI 客户端上下文预算（tokens，可选）/);
+});
+
+test("settings builder patches or removes the top-level context budget for every CLI shape", () => {
+  const common = {
+    settingsJson: "{}",
+    tomlText: "model = \"gpt-5\"",
+    authJson: "{}",
+    secret: "secret",
+    baseUrl: "http://127.0.0.1/v1",
+    provider: "openai",
+    reasoning: "",
+  };
+  for (const agentCli of ["claude-code", "pi", "dsh"] as const) {
+    const added = buildSettingsConfigFromEditor({ ...common, agentCli, contextWindowTokens: "1000000" });
+    assert.equal(added.ok, true);
+    if (added.ok) assert.equal(added.settings.context_window_tokens, 1_000_000);
+    const removed = buildSettingsConfigFromEditor({
+      ...common,
+      agentCli,
+      settingsJson: '{"context_window_tokens":1000000}',
+      contextWindowTokens: "",
+    });
+    assert.equal(removed.ok, true);
+    if (removed.ok) assert.equal("context_window_tokens" in removed.settings, false);
+  }
+  for (const contextWindowTokens of ["1023", "10000001", "1024.5", "not-a-number"]) {
+    const invalid = buildSettingsConfigFromEditor({ ...common, agentCli: "claude-code", contextWindowTokens });
+    assert.equal(invalid.ok, false);
+    if (!invalid.ok) assert.match(invalid.error, /1024.*10000000/);
+  }
+});
+
+test("Claude Code accepts only official effortLevel values", () => {
+  const common = { agentCli: "claude-code" as const, settingsJson: "{}", tomlText: "", authJson: "", secret: "secret", baseUrl: "https://api.anthropic.com", provider: "anthropic", contextWindowTokens: "" };
+  const valid = buildSettingsConfigFromEditor({ ...common, reasoning: "xhigh" });
+  assert.equal(valid.ok, true);
+  if (valid.ok) assert.equal(valid.settings.reasoning, "xhigh");
+  const invalid = buildSettingsConfigFromEditor({ ...common, reasoning: "max" });
+  assert.equal(invalid.ok, false);
+  if (!invalid.ok) assert.match(invalid.error, /Claude Code/);
+});
+
+test("Pi uses its native reasoning controls", () => {
+  const common = { settingsJson: "{}", tomlText: "model = \"gpt-5\"", authJson: "{}", secret: "secret", baseUrl: "http://127.0.0.1/v1", provider: "openai", contextWindowTokens: "" };
+  assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "pi", reasoning: "max" }).ok, true);
+  assert.equal(buildSettingsConfigFromEditor({ ...common, agentCli: "pi", reasoning: "thinking-v2.5" }).ok, false);
+});
+
+test("new RoleConfig CLI options exclude leftover CLIs", () => {
+  const helpers = readFileSync(new URL("./provider-account-helpers.ts", import.meta.url), "utf8");
+  assert.match(helpers, /value: "claude-code"/);
+  assert.match(helpers, /value: "pi"/);
+  assert.match(helpers, /value: "dsh"/);
+  assert.doesNotMatch(helpers, /AGENT_CLI_OPTIONS[\s\S]*value: "codex"/);
+  assert.doesNotMatch(helpers, /AGENT_CLI_OPTIONS[\s\S]*value: "open-code"/);
+});
+
+test("credential save no longer silently strips leftover allowed_model_ids", () => {
+  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(flow, /delete metadata\.allowed_model_ids/);
+});
+
+const officialLlmPiAiYaml = `llm-pi-ai:
+  providers:
+    xxxx:
+      api: openai-responses
+      baseURL: http://127.0.0.1/v1
+      apiKey: sk-official-pi
+      models:
+        - id: gpt-5.6
+agent-default-model:
+  provider: xxxx
+  model: gpt-5.6
+`;
+
+const officialLlmPiAiJson = `{
+  "llm-pi-ai": {
+    "providers": {
+      "xxxx": {
+        "api": "openai-responses",
+        "baseURL": "http://127.0.0.1/v1",
+        "apiKey": "sk-official-pi",
+        "models": [{ "id": "gpt-5.6" }]
+      }
+    }
+  },
+  "agent-default-model": { "provider": "xxxx", "model": "gpt-5.6" }
+}`;
+
+test("Pi settings box accepts official llm-pi-ai YAML and JSON and extracts baseURL/model/key", () => {
+  const yaml = parsePiSettingsText(officialLlmPiAiYaml);
+  assert.equal(yaml.ok, true);
+  if (yaml.ok && !yaml.empty) {
+    assert.equal(extractBaseUrlFromSettingsClient(yaml.value), "http://127.0.0.1/v1");
+    assert.deepEqual(extractModelsFromSettingsClient(yaml.value), ["gpt-5.6"]);
+    assert.equal(extractSecretFromSettings(yaml.value), "sk-official-pi");
+  }
+  const json = parsePiSettingsText(officialLlmPiAiJson);
+  assert.equal(json.ok, true);
+  if (json.ok && !json.empty) {
+    assert.equal(extractBaseUrlFromSettingsClient(json.value), "http://127.0.0.1/v1");
+    assert.deepEqual(extractModelsFromSettingsClient(json.value), ["gpt-5.6"]);
+    assert.equal(extractSecretFromSettings(json.value), "sk-official-pi");
+  }
+  const builtYaml = buildSettingsConfigFromEditor({
+    agentCli: "pi",
+    settingsJson: officialLlmPiAiYaml,
+    tomlText: "",
+    authJson: "",
+    secret: "",
+    baseUrl: "",
+    provider: "openai",
+    contextWindowTokens: "",
+    reasoning: "",
+  });
+  assert.equal(builtYaml.ok, true);
+  if (builtYaml.ok) {
+    assert.equal(extractBaseUrlFromSettingsClient(builtYaml.settings), "http://127.0.0.1/v1");
+    assert.deepEqual(extractModelsFromSettingsClient(builtYaml.settings), ["gpt-5.6"]);
+    assert.equal(extractSecretFromSettings(builtYaml.settings), "sk-official-pi");
+  }
+  const builtJson = buildSettingsConfigFromEditor({
+    agentCli: "pi",
+    settingsJson: officialLlmPiAiJson,
+    tomlText: "",
+    authJson: "",
+    secret: "",
+    baseUrl: "",
+    provider: "openai",
+    contextWindowTokens: "",
+    reasoning: "",
+  });
+  assert.equal(builtJson.ok, true);
+  if (builtJson.ok) {
+    assert.equal(extractBaseUrlFromSettingsClient(builtJson.settings), "http://127.0.0.1/v1");
+    assert.deepEqual(extractModelsFromSettingsClient(builtJson.settings), ["gpt-5.6"]);
+    assert.equal(extractSecretFromSettings(builtJson.settings), "sk-official-pi");
+  }
+});
+
+test("DSH provider editor exposes machine configuration without TUI surface", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /DeepSeek Harness（JSON-RPC）/u);
+  assert.match(editor, /Pi \/ llm-pi-ai 配置（YAML 或 JSON）/u);
+  assert.match(editor, /providers/);
+  assert.match(editor, /openai-responses/);
+  assert.doesNotMatch(editor, /dsh-cc-tui|dsh-app-tui|dsh-app-web/);
+  const settings = buildSettingsConfigFromEditor({
+    agentCli: "dsh",
+    settingsJson: "",
+    tomlText: "",
+    authJson: "",
+    secret: "secret",
+    baseUrl: "https://api.deepseek.com/",
+    provider: "openai",
+    contextWindowTokens: "128000",
+    reasoning: "high",
+  });
+  assert.equal(settings.ok, true);
+  if (settings.ok) {
+    assert.equal(typeof settings.settings.config, "string");
+    assert.match(String(settings.settings.config), /llm-pi-ai:/);
+    assert.match(String(settings.settings.config), /agent-default-model:/);
+    assert.match(String(settings.settings.config), /api: openai-responses/);
+    assert.ok(String(settings.settings.config).includes("baseURL: https://api.deepseek.com"));
+    assert.equal(settings.settings.context_window_tokens, 128000);
+    assert.equal(settings.settings.reasoning, "high");
+    assert.doesNotMatch(JSON.stringify(settings.settings), /secret/);
+  }
+  const invalidEffort = buildSettingsConfigFromEditor({
+    agentCli: "dsh", settingsJson: String(settings.ok ? settings.settings.config : ""), tomlText: "", authJson: "", secret: "secret",
+    baseUrl: "https://api.deepseek.com", provider: "openai", contextWindowTokens: "", reasoning: "thinking-v2.5",
+  });
+  assert.equal(invalidEffort.ok, false);
+  if (!invalidEffort.ok) assert.match(invalidEffort.error, /reasoningEfforts/);
+});
+
+test("reasoning is configured on Provider accounts, not RoleConfig", () => {
+  const providerEditor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const roleEditor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(providerEditor, /模型思考强度（Provider 默认）|自定义模型 token/);
+  assert.match(providerEditor, /reasoningValid|onReasoningChange/);
+  assert.doesNotMatch(roleEditor, /模型思考强度/);
+});
+
+test("项目 RoleConfig 镜像只读跟随平台目录缺省 (#691)", () => {
+  const editor = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
+  // #690: RoleCredentialBindingPanel removed; project RoleConfig still cannot write runtime_image_key.
+  assert.match(editor, /runtime_image_key: projectId \? null : form\.runtime_image_key\.trim\(\) \|\| null/);
+});
+
+test("Provider account flow user-facing copy is Chinese", () => {
+  for (const chinese of [
+    "测试连接",
+    "保存配置并添加账号",
+  ]) {
+    assert.ok(flow.includes(chinese), `flow should show Chinese copy: ${chinese}`);
+  }
+  assert.doesNotMatch(flow, /刷新模型目录/);
+  assert.doesNotMatch(flow, /应用到所选角色配置/);
+  assert.doesNotMatch(flow, /仅新 Job/);
+  assert.doesNotMatch(flow, /刷新 pending/);
+  assert.doesNotMatch(flow, /Connect an account, then close the loop/);
+  assert.doesNotMatch(flow, /Encrypt and add account/);
+  assert.doesNotMatch(flow, /Test connection/);
+  assert.doesNotMatch(flow, /Apply to selected RoleConfigs/);
+});
+
+test("#689 edit hydrate reveals saved API Key plaintext; empty still means unchanged", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  const claude = readFileSync(new URL("./CcSwitchClaudeFields.tsx", import.meta.url), "utf8");
+  const codex = readFileSync(new URL("./CcSwitchCodexFields.tsx", import.meta.url), "utf8");
+  const openCode = readFileSync(new URL("./CcSwitchOpenCodeFields.tsx", import.meta.url), "utf8");
+  const login = readFileSync(new URL("./pages/LoginPage.tsx", import.meta.url), "utf8");
+  // Advanced native editors stay type=password; structured Provider field owns eye-toggle reveal.
+  for (const source of [claude, codex, openCode, editor, flow]) {
+    assert.doesNotMatch(source, /显示明文|显示 API Token|showKey|setShowKey/iu);
+  }
+  assert.match(claude, /id="cc-switch-api-key"\s+type="password"/u);
+  assert.match(codex, /id="cc-switch-codex-key" type="password"/u);
+  assert.match(openCode, /id="cc-switch-opencode-key" type="password"/u);
+  assert.match(editor, /type=\{showSecret \? "text" : "password"\}/u);
+  assert.match(editor, /setShowSecret/);
+  assert.match(editor, /查看 API Key|隐藏 API Key/u);
+  // Login page may offer an explicit show/hide toggle; default remains hidden.
+  assert.match(login, /显示密码|隐藏密码|显示 Token|隐藏 Token/u);
+  assert.match(login, /type=\{revealed \? "text" : "password"\}/u);
+  assert.match(login, /authFormErrorMessage|LOGIN_RATE_LIMITED|过于频繁/u);
+  // Hydrate from settings plaintext — not the redacted-only marker.
+  assert.match(flow, /setEditApiKey\(savedApiKey\)/u);
+  assert.match(flow, /extractSecretFromSettings\(settings\)/u);
+  assert.doesNotMatch(flow, /setEditApiKey\(credential\.last4 \? MASKED_SECRET_PLACEHOLDER/u);
+  assert.match(flow, /effectiveEditorSecret\(editApiKey\)/u);
+  assert.match(flow, /rotatedSecret !== previousSecret/u);
+  assert.match(editor, /已保存（留空不修改）/u);
+  assert.match(editor, /MASKED_SECRET_PLACEHOLDER|effectiveEditorSecret/u);
+  assert.doesNotMatch(editor, /return entries\.length > 0 \? entries : .*anthropic/u);
+
+  const settings = {
+    env: {
+      ANTHROPIC_AUTH_TOKEN: "sk-live-reveal",
+      ANTHROPIC_API_KEY: "sk-live-reveal",
+      ANTHROPIC_BASE_URL: "https://api.example/v1",
+    },
+  };
+  assert.equal(extractSecretFromSettings(settings), "sk-live-reveal");
+  assert.equal(effectiveEditorSecret(""), "");
+  assert.equal(effectiveEditorSecret(MASKED_SECRET_PLACEHOLDER), "");
+  assert.equal(effectiveEditorSecret(" sk-new "), "sk-new");
+});
+
+test("provider UI exposes only protocol labels and the two supported OpenCode protocols", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const openCode = readFileSync(new URL("./CcSwitchOpenCodeFields.tsx", import.meta.url), "utf8");
+  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.match(editor, /providerProtocolLabel/);
+  assert.doesNotMatch(editor, /<option key=\{item\.provider\} value=\{item\.provider\}>\{item\.label\}/u);
+  assert.match(openCode, /Anthropic Messages/);
+  assert.match(openCode, /OpenAI Responses/);
+  assert.doesNotMatch(openCode, /OpenAI Compatible|OpenRouter|Google/);
+  assert.match(flow, /providerProtocolLabel/);
+});
+
+test("#624 edit mode allows Provider protocol migration and persists provider", () => {
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  const flowSource = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(editor, /fieldset disabled=\{mode === "edit"\}[\s\S]*?ariaLabel="Provider"/);
+  assert.match(flowSource, /provider:\s*editProvider/);
+  assert.match(flowSource, /api\.updateCredential\(editingCredential\.id/);
+});
+
+test("deleteAccount hard-blocks only pending/active jobs; recoverable is a confirm warning", () => {
+  const start = flow.indexOf("const deleteAccount = async");
+  const end = flow.indexOf("const testConnection = async", start);
+  assert.ok(start >= 0 && end > start);
+  const handler = flow.slice(start, end);
+  assert.match(handler, /pending > 0 \|\| active > 0/);
+  assert.doesNotMatch(handler, /pending > 0 \|\| active > 0 \|\| recoverable > 0/);
+  assert.match(handler, /有 \$\{recoverable\} 条可恢复历史，删除后不能再按原快照 resume/);
+  assert.doesNotMatch(handler, /请等待结束、取消或完成恢复后再删/);
+});
+
+test("CredentialsPanel only hosts ProviderAccountFlow (no duplicate card grid)", () => {
+  assert.match(panel, /<ProviderAccountFlow credentials=\{creds\}/);
+  assert.doesNotMatch(panel, /登记 Credential/);
+  assert.doesNotMatch(panel, />\s*加密登记\s*</);
+  assert.doesNotMatch(panel, /const create = async/);
+  // Legacy three-column credential cards removed.
+  assert.doesNotMatch(panel, /credential-row/);
+  assert.doesNotMatch(panel, /credential-toolbar/);
+  assert.doesNotMatch(panel, /模型 未限制|个已启用/);
+  assert.doesNotMatch(panel, /最近用/);
+});
+
+
+test("#677 connection Base URL patches into non-empty Claude settings and edit hydrate falls back to metadata", () => {
+  const pasted = buildSettingsConfigFromEditor({
+    agentCli: "claude-code",
+    settingsJson: JSON.stringify({ env: { ANTHROPIC_API_KEY: "sk-x", ANTHROPIC_AUTH_TOKEN: "sk-x" } }),
+    tomlText: "",
+    authJson: "",
+    secret: "sk-x",
+    baseUrl: "https://custom.example/v1",
+    provider: "anthropic",
+    contextWindowTokens: "",
+    reasoning: "",
+    allowEmptyDefault: true,
+  });
+  assert.equal(pasted.ok, true);
+  if (!pasted.ok) return;
+  assert.equal(extractBaseUrlFromSettingsClient(pasted.settings), "https://custom.example/v1");
+
+  const edited = buildSettingsConfigFromEditor({
+    agentCli: "claude-code",
+    settingsJson: JSON.stringify({
+      env: {
+        ANTHROPIC_API_KEY: MASKED_SECRET_PLACEHOLDER,
+        ANTHROPIC_AUTH_TOKEN: MASKED_SECRET_PLACEHOLDER,
+        ANTHROPIC_BASE_URL: "https://old.example/v1",
+      },
+    }),
+    tomlText: "",
+    authJson: "",
+    secret: MASKED_SECRET_PLACEHOLDER,
+    baseUrl: "https://new.example/v1",
+    provider: "anthropic",
+    contextWindowTokens: "",
+    reasoning: "",
+    allowEmptyDefault: true,
+  });
+  assert.equal(edited.ok, true);
+  if (!edited.ok) return;
+  assert.equal(extractBaseUrlFromSettingsClient(edited.settings), "https://new.example/v1");
+  assert.equal(extractSecretFromSettings(edited.settings), MASKED_SECRET_PLACEHOLDER);
+
+  assert.equal(effectiveEditorSecret(""), "");
+  assert.equal(effectiveEditorSecret(MASKED_SECRET_PLACEHOLDER), "");
+  assert.equal(effectiveEditorSecret(" sk-live "), "sk-live");
+
+  assert.equal(resolveCredentialBaseUrl({
+    settings_config_json: { env: {} },
+    public_metadata_json: { base_url: "https://meta.example/v1/" },
+  }), "https://meta.example/v1");
+  assert.equal(resolveCredentialBaseUrl({
+    settings_config_json: { env: { ANTHROPIC_BASE_URL: "https://settings.example/v1" } },
+    public_metadata_json: { base_url: "https://meta.example/v1" },
+  }), "https://settings.example/v1");
+});
+
+test("#677 DSH / Pi Base URL connection field stays authoritative on rebuild", () => {
+  const dsh = buildSettingsConfigFromEditor({
+    agentCli: "dsh",
+    settingsJson: `llm-pi-ai:
+  providers:
+    openai:
+      api: openai-responses
+      baseURL: https://old.example/v1
+      models:
+        - id: gpt-5
+agent-default-model:
+  provider: openai
+  model: gpt-5
+`,
+    tomlText: "",
+    authJson: "",
+    secret: "",
+    baseUrl: "https://new-dsh.example/v1",
+    provider: "openai",
+    contextWindowTokens: "",
+    reasoning: "",
+    allowEmptyDefault: true,
+  });
+  assert.equal(dsh.ok, true);
+  if (!dsh.ok) return;
+  assert.equal(extractBaseUrlFromSettingsClient(dsh.settings), "https://new-dsh.example/v1");
+
+  const flow = readFileSync(new URL("./ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.match(flow, /resolveCredentialBaseUrl\(credential\)/);
+  assert.match(flow, /extractSecretFromSettings\(settings\)/);
+  assert.match(flow, /effectiveEditorSecret\(editApiKey\)/);
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  assert.match(editor, /已保存（留空不修改）/);
+});
+
+
+test("#689 empty secret on rebuild leaves existing Claude keys intact", () => {
+  const edited = buildSettingsConfigFromEditor({
+    agentCli: "claude-code",
+    settingsJson: JSON.stringify({
+      env: {
+        ANTHROPIC_API_KEY: "sk-keep",
+        ANTHROPIC_AUTH_TOKEN: "sk-keep",
+        ANTHROPIC_BASE_URL: "https://old.example/v1",
+      },
+    }),
+    tomlText: "",
+    authJson: "",
+    secret: "",
+    baseUrl: "https://new.example/v1",
+    provider: "anthropic",
+    contextWindowTokens: "",
+    reasoning: "",
+    allowEmptyDefault: true,
+  });
+  assert.equal(edited.ok, true);
+  if (!edited.ok) return;
+  assert.equal(extractBaseUrlFromSettingsClient(edited.settings), "https://new.example/v1");
+  assert.equal(extractSecretFromSettings(edited.settings), "sk-keep");
+});
+
+import {
+  formatActiveConcurrencyQuota,
+  modelConcurrencyDraftFromMetadata,
+  parseModelConcurrencyDraft,
+} from "./provider-account-concurrency";
+
+test("active concurrency quota formats 占用/上限", () => {
+  assert.equal(
+    formatActiveConcurrencyQuota({
+      active_concurrency: { in_use: 2, max_concurrent: 4 },
+      public_metadata_json: {},
+    }),
+    "2/4",
+  );
+  assert.equal(
+    formatActiveConcurrencyQuota({
+      active_concurrency: { in_use: 0, max_concurrent: null },
+      public_metadata_json: {},
+    }),
+    "0/不限",
+  );
+});
+
+test("model_concurrency draft validates against account model list", () => {
+  assert.deepEqual(modelConcurrencyDraftFromMetadata({ model_concurrency: { "m-a": 2 } }), [
+    { model: "m-a", limit: "2" },
+  ]);
+  assert.deepEqual(parseModelConcurrencyDraft([{ model: "m-a", limit: "3" }], ["m-a", "m-b"]), { "m-a": 3 });
+  assert.equal(parseModelConcurrencyDraft([], ["m-a"]), null);
+  assert.throws(() => parseModelConcurrencyDraft([{ model: "other", limit: "1" }], ["m-a"]), /已配置模型清单/);
+  assert.throws(() => parseModelConcurrencyDraft([{ model: "m-a", limit: "1001" }], ["m-a"]), /并发限制/);
+});
+
+test("#749 structured model field syncs every Claude Code model key on create and edit", () => {
+  const settingsJson = JSON.stringify({ env: {
+    ANTHROPIC_BASE_URL: "https://relay.test",
+    ANTHROPIC_MODEL: "old-main",
+    ANTHROPIC_DEFAULT_SONNET_MODEL: "edited-sonnet",
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: "old-main",
+    CLAUDE_CODE_SUBAGENT_MODEL: "old-main",
+  } });
+  assert.equal(CLAUDE_CODE_MODEL_KEYS.length, 14);
+  assert.equal(editorModelTextFromRaw("claude-code", settingsJson), "old-main");
+  assert.deepEqual(claudeModelKeyMismatches(settingsJson, "new-main"), [
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+  ]);
+  assert.deepEqual(claudeModelKeyMismatches(settingsJson, "old-main", "old-main"), []);
+  assert.deepEqual(claudeModelKeyMismatches(settingsJson, "new-main", "old-main"), [
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+  ]);
+  assert.deepEqual(claudeModelKeyMismatches(settingsJson, ""), []);
+  const built = buildSettingsConfigFromEditor({
+    agentCli: "claude-code",
+    settingsJson,
+    tomlText: "",
+    authJson: "",
+    secret: "sk-test",
+    baseUrl: "https://relay.test",
+    provider: "anthropic",
+    contextWindowTokens: "",
+    reasoning: "",
+    ...editorModelPatch("claude-code", "  new-main  "),
+  });
+  assert.equal(built.ok, true);
+  if (!built.ok) return;
+  const env = built.settings.env as Record<string, string>;
+  for (const key of CLAUDE_CODE_MODEL_KEYS) assert.equal(env[key], "new-main", key);
+  assert.equal(extractModelIdFromSettings(built.settings, "claude-code"), "new-main");
+  assert.equal(env.ANTHROPIC_BASE_URL, "https://relay.test");
+
+  // Empty field leaves the native model keys untouched instead of deleting them.
+  assert.deepEqual(editorModelPatch("claude-code", "   "), {});
+  const untouched = buildSettingsConfigFromEditor({
+    agentCli: "claude-code", settingsJson, tomlText: "", authJson: "", secret: "", baseUrl: "https://relay.test",
+    provider: "anthropic", contextWindowTokens: "", reasoning: "", ...editorModelPatch("claude-code", ""),
+  });
+  assert.equal(untouched.ok, true);
+  if (untouched.ok) assert.equal((untouched.settings.env as Record<string, string>).ANTHROPIC_DEFAULT_SONNET_MODEL, "edited-sonnet");
+});
+
+test("#749 structured model field maps DSH to modelId and Pi to modelIds; codex/open-code stay native", () => {
+  assert.deepEqual(editorModelPatch("pi", "a, b，a\nc"), { modelIds: ["a", "b", "c"] });
+  assert.deepEqual(editorModelPatch("dsh", "deepseek-chat"), { modelId: "deepseek-chat" });
+  assert.deepEqual(editorModelPatch("codex", "gpt-5"), {});
+  assert.deepEqual(editorModelPatch("open-code", "gpt-5"), {});
+  assert.equal(hasStructuredModelField("codex"), false);
+
+  const dsh = buildSettingsConfigFromEditor({
+    agentCli: "dsh", settingsJson: "", tomlText: "", authJson: "", secret: "", baseUrl: "https://api.deepseek.test/v1",
+    provider: "openai", contextWindowTokens: "", reasoning: "", ...editorModelPatch("dsh", "deepseek-chat"),
+  });
+  assert.equal(dsh.ok, true);
+  if (dsh.ok) {
+    assert.equal(extractModelIdFromSettings(dsh.settings, "dsh"), "deepseek-chat");
+    assert.equal(editorModelTextFromSettings(dsh.settings, "dsh"), "deepseek-chat");
+  }
+
+  const piText = [
+    "llm-pi-ai:",
+    "  providers:",
+    "    team:",
+    "      baseURL: https://pi.test/v1",
+    "      models:",
+    "        - id: native-a",
+    "          contextWindow: 128000",
+    "agent-default-model:",
+    "  provider: team",
+    "  model: native-a",
+    "",
+  ].join("\n");
+  assert.equal(editorModelTextFromRaw("pi", piText), "native-a");
+  const pi = buildSettingsConfigFromEditor({
+    agentCli: "pi", settingsJson: piText, tomlText: "", authJson: "", secret: "", baseUrl: "https://pi.test/v1",
+    provider: "openai", contextWindowTokens: "", reasoning: "", ...editorModelPatch("pi", "native-a, native-b"),
+  });
+  assert.equal(pi.ok, true);
+  if (pi.ok) {
+    assert.deepEqual(extractPiModelIdsFromSettings(pi.settings), ["native-a", "native-b"]);
+    assert.equal(editorModelTextFromSettings(pi.settings, "pi"), "native-a, native-b");
+  }
+});
+
+test("#749 create and edit pass the structured model into buildSettingsConfigFromEditor and prefill on edit", () => {
+  assert.match(flow, /\.\.\.editorModelPatch\(createAgentCli, createModelId\)/);
+  assert.match(flow, /\.\.\.editorModelPatch\(\s*editAgentCli,\s*editModelId/);
+  assert.match(flow, /setEditModelId\(editorModelTextFromSettings\(settings, cli\)\)/);
+  assert.match(flow, /modelId=\{createModelId\}\s+onModelIdChange=\{setCreateModelId\}/);
+  assert.match(flow, /modelId=\{editModelId\}\s+onModelIdChange=\{setEditModelId\}/);
+  assert.match(flow, /setCreateModelId\(""\)/);
+  const editor = readFileSync(new URL("./CredentialConfigEditor.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(editor, /showModelFields=\{false\}/);
+});
+
+test("#749 CredentialConfigEditor renders the model input for every CLI", () => {
+  const base = {
+    name: "acct", onNameChange: () => {}, provider: "anthropic", onProviderChange: () => {}, onAgentCliChange: () => {},
+    projectId: "", onProjectIdChange: () => {}, projects: [], actorProjectId: null, providerCatalog: [], secret: "",
+    onSecretChange: () => {}, baseUrl: "", onBaseUrlChange: () => {}, maxConcurrent: "", onMaxConcurrentChange: () => {},
+    onSettingsJsonChange: () => {}, tomlText: 'model = "gpt-5"\n', onTomlTextChange: () => {}, authJson: "", onAuthJsonChange: () => {},
+    contextWindowTokens: "", onContextWindowTokensChange: () => {}, reasoning: "", onReasoningChange: () => {},
+    onModelIdChange: () => {}, onSubmit: () => {},
+  };
+  const render = (props: Partial<Parameters<typeof CredentialConfigEditor>[0]>) => renderToStaticMarkup(
+    createElement(CredentialConfigEditor, { ...base, mode: "edit", agentCli: "claude-code", settingsJson: "", modelId: "", ...props }),
+  );
+  const claude = render({
+    settingsJson: JSON.stringify({ env: { ANTHROPIC_MODEL: "old-main", ANTHROPIC_DEFAULT_SONNET_MODEL: "old-main" } }),
+    modelId: "new-main",
+  });
+  assert.match(claude, /aria-label="Provider 模型"/);
+  assert.match(claude, /value="new-main"/);
+  assert.match(claude, /全部 14 个模型键/);
+  assert.match(claude, /有 2 个模型键与此不一致/);
+  assert.match(render({ agentCli: "pi", modelId: "a, b" }), /模型 ID（多个用逗号分隔）/);
+  assert.match(render({ agentCli: "dsh", modelId: "deepseek-chat" }), /aria-label="Provider 模型"/);
+  assert.match(render({ agentCli: "codex" }), /id="cc-switch-codex-model"/);
+  assert.match(render({ agentCli: "open-code", settingsJson: "{}" }), /cc-switch-opencode-models-url/);
+});

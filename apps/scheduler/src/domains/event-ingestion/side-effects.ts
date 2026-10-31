@@ -1,0 +1,1510 @@
+import { freezeGoalReviewAssignment } from "../../task-goal-review-source.js";
+import { prepareTaskGoalReview } from "../../task-goal-review.js";
+import { assertNoGoalReviewAuthority } from "../../task-goal-review-input.js";
+import { prepareTaskResult } from "../../task-result-ingestion.js";
+import { analysisCompleteGateExpected } from "./completion-feedback.js";
+import { createHash } from "node:crypto";
+import { findingSourceDigest } from "../artifacts/model.js";
+import { admitTaskOutcomeCandidate } from "../../task-outcome-admission.js";
+import {
+  DonePayload,
+  FactPayload,
+  FindingPayload,
+  HumanPayload,
+  ProgressPayload,
+  SubmitPlanPayload,
+  SubmitPlanResultPayload,
+  allowedPlatformTools,
+  type PlatformToolName,
+  type VerificationEvidence,
+  type EffectiveFindingProtocol,
+  type HubRoleDefinitionPayload,
+} from "@deepsonar/shared-types";
+import { validatePlanDecision } from "../plan-protocol/decision.js";
+import { applyHubPlanAdapter, applySubmitPlan, applySubmitPlanResult } from "../plan-protocol/index.js";
+import type { SharedAssetSelection } from "../shared-assets/index.js";
+import {
+  freezeAgentSnapshotNetworkPolicy,
+  roleNameForJobType,
+  type AgentRuntimeSnapshot,
+} from "../role-runtime-snapshot/index.js";
+import type { EventIngestionTransaction } from "./application.js";
+import {
+  assertHubDecisionCanvasReferences,
+  parseHubDecisionPayload,
+  type HubDecision,
+  type HubReferenceLookup,
+} from "../../graph.js";
+import {
+  ControlInputError,
+  invalidControlPayload,
+  invalidRole,
+  invalidRuntimeImage,
+  invalidAgentCli,
+  invalidCredential,
+  invalidModel,
+  invalidVerification,
+  isHubRuntimeImageResolutionError,
+} from "../../control-input.js";
+import { jobNotRunningError } from "../../event-attribution.js";
+import {
+  assertHubRuntimeImageReady,
+  defaultRuntimeImageKey,
+  listHubRuntimeImageCatalog,
+} from "../../runtime-images.js";
+import {
+  listHubAgentCliCatalog,
+  listHubProviderCatalog,
+} from "../project-agent-allowlist/index.js";
+import { normalizeFindingProposal } from "../../finding-protocol.js";
+import {
+  assertComposeFindingInScope,
+  assertComposeScopedHubIntent,
+  composeBoundWorkerPrompt,
+} from "../../compose-scope.js";
+import { frozenTaskSeeds, TaskSeedInputError } from "../../task-compose.js";
+import {
+  bindArtifactNode,
+  factProposalToArtifact,
+  findingArtifactKey,
+  findingProposalToArtifact,
+  persistArtifact,
+} from "../artifacts/index.js";
+import { runFindingResearchBestEffort } from "../finding-research/index.js";
+import { config } from "../../config.js";
+import { selectModelsForRequirements } from "../provider-adapter/index.js";
+
+export interface EventSideEffectServices {
+  hubReferenceLookup?: HubReferenceLookup;
+  hubEdgeBatchInsert?: HubEdgeBatchInsert;
+  /**
+   * Job.status when the ingest transaction locked the row. Same-turn follow-up
+   * events after this ingest already finalized must not use the post-finalize
+   * status to fail-and-rollback the close.
+   */
+  jobStatusAtLock?: string;
+  attemptId?: string | null;
+  eventId?: string;
+}
+
+export interface EventIngestionSideEffectApplication {
+  preflightDeferredSideEffects(
+    tx: EventIngestionTransaction,
+    jobId: string,
+    type: "hub_decision" | "human",
+    payload: unknown,
+    services?: EventSideEffectServices,
+  ): Promise<void>;
+  applySideEffects(
+    tx: EventIngestionTransaction,
+    jobId: string,
+    type: string,
+    payload: unknown,
+    services?: EventSideEffectServices,
+  ): Promise<void>;
+}
+
+export type SchedulingPurpose = "manual" | "discovery" | "convergence_evidence" | "verify" | "report";
+
+export interface EventProjectRules {
+  minVerifySeverity: string;
+  maxIntentsPerDecision: number;
+  auditTimeoutSec: number;
+}
+
+export interface EventRole {
+  name: string;
+}
+
+export interface HubFindingBinding {
+  id: string;
+  node_id: string;
+  severity: unknown;
+  imported?: boolean;
+  location?: string | null;
+}
+
+export function resolveHubFindingIntent(
+  role: string,
+  from: readonly string[],
+  referenceNodes: ReadonlyMap<string, { node_type: string }>,
+  findingByNodeId: ReadonlyMap<string, HubFindingBinding>,
+  ambiguousFindingNodeIds: ReadonlySet<string>,
+): { finding: HubFindingBinding | null; error?: string } {
+  if (role !== "review" && role !== "test") return { finding: null };
+  const findingNodeIds = [...new Set(from.filter((id) => referenceNodes.get(id)?.node_type === "finding"))];
+  if (findingNodeIds.length === 0) return { finding: null };
+  if (findingNodeIds.length > 1) {
+    return { finding: null, error: "review/test intent 只能绑定一个 canonical Finding 节点。" };
+  }
+  const nodeId = findingNodeIds[0];
+  if (ambiguousFindingNodeIds.has(nodeId)) {
+    return { finding: null, error: "canonical Finding 节点对应多个 Finding 记录，无法安全绑定验证目标。" };
+  }
+  const finding = findingByNodeId.get(nodeId);
+  return {
+    finding: finding ?? null,
+    error: finding ? undefined : "canonical Finding 节点没有当前项目画布内的 Finding 记录。",
+  };
+}
+
+export type EventFinalizeResult = {
+  summary?: string;
+  error?: string;
+  verdict?: string;
+};
+
+/** Methods event-ingestion actually calls on verify.ts. */
+export interface EventFindingVerification {
+  isSeverityInVerifyScope(minSeverity: string, severity: unknown): boolean;
+  evaluateAnalysisCompleteGate(
+    tx: EventIngestionTransaction,
+    canvasId: string,
+    options?: Record<string, unknown>,
+  ): Promise<{
+    ok: boolean;
+    blockers: string[];
+    problems: Array<{
+      finding_id?: string;
+      severity?: string;
+      title?: string;
+      verify_status?: string;
+      issue?: string;
+    }>;
+  }>;
+  evaluateFollowup(
+    tx: EventIngestionTransaction,
+    job: Record<string, unknown>,
+    finding: Record<string, unknown>,
+  ): Promise<void>;
+  attachVerificationEvidence(
+    tx: EventIngestionTransaction,
+    job: Record<string, unknown>,
+    nodeId: string,
+    canvasId: string,
+    verification: unknown,
+  ): Promise<boolean>;
+  buildVerificationFollowupPayload(
+    trigger: Record<string, unknown> | undefined,
+    from: string[],
+    role: string,
+  ): Record<string, unknown> | null;
+}
+
+export interface EventIngestionSideEffectPorts {
+  findingVerification: EventFindingVerification;
+  rulesForProject: (tx: EventIngestionTransaction, projectId: string) => Promise<EventProjectRules>;
+  rolesForProject: (tx: EventIngestionTransaction, projectId: string) => Promise<readonly EventRole[]>;
+  resolveAgentSnapshotForJob: (
+    tx: EventIngestionTransaction,
+    projectId: string,
+    jobType: string,
+    findingIds?: string[],
+    options?: { runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; taskPromptOverride?: string | null; roleDefinition?: HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
+  ) => Promise<AgentRuntimeSnapshot>;
+  recordJobSharedAssets: (
+    tx: EventIngestionTransaction,
+    jobId: string,
+    assets: SharedAssetSelection[],
+  ) => Promise<void>;
+  fixedPriorityForJob: (input: { type: string; purpose?: SchedulingPurpose }) => number;
+  insertEdgeIfAbsent: (
+    tx: EventIngestionTransaction,
+    canvasId: string,
+    fromId: string,
+    toId: string,
+    edgeType: string,
+  ) => Promise<void>;
+  insertEdgesIfAbsentBatch: (tx: EventIngestionTransaction, edges: readonly EventCanvasEdgeInput[]) => Promise<void>;
+  findingProtocolForJob: (
+    tx: EventIngestionTransaction,
+    job: Record<string, unknown>,
+  ) => Promise<EffectiveFindingProtocol>;
+  finalizeJob: (
+    tx: EventIngestionTransaction,
+    jobId: string,
+    status: "succeeded" | "failed",
+    result?: EventFinalizeResult,
+  ) => Promise<unknown>;
+}
+
+export type EventCanvasEdgeInput = {
+  canvasId: string;
+  fromId: string;
+  toId: string;
+  edgeType: string;
+};
+
+export type EventHubEdgeBatchInsert = (
+  tx: EventIngestionTransaction,
+  edges: readonly EventCanvasEdgeInput[],
+) => Promise<void>;
+
+type HubEdgeBatchInsert = EventHubEdgeBatchInsert;
+
+function dedupeCanvasEdges(edges: readonly EventCanvasEdgeInput[]): EventCanvasEdgeInput[] {
+  const unique = new Map<string, EventCanvasEdgeInput>();
+  for (const edge of edges) {
+    const key = `${edge.canvasId}\u0000${edge.fromId}\u0000${edge.toId}\u0000${edge.edgeType}`;
+    unique.set(key, edge);
+  }
+  return [...unique.values()];
+}
+
+export function sha16(s: string): string {
+  return createHash("sha256").update(s).digest("hex").slice(0, 16);
+}
+
+async function markJobWaitingHuman(tx: EventIngestionTransaction, jobId: string): Promise<void> {
+  await tx`
+    UPDATE jobs SET status = 'waiting_human'
+    WHERE id = ${jobId} AND status = 'running'`;
+  await tx`
+    UPDATE canvas_nodes SET status = 'waiting_human', updated_at = now()
+    WHERE job_id = ${jobId} AND node_type IN ('job', 'intent', 'report')`;
+}
+
+export function createEventIngestionSideEffectApplication(
+  ports: EventIngestionSideEffectPorts,
+): EventIngestionSideEffectApplication {
+  const SEMANTIC_TOOL_BY_EVENT: Readonly<Record<string, PlatformToolName>> = {
+    progress: "emit_progress",
+    finding: "emit_finding",
+    fact: "emit_fact",
+    hub_decision: "submit_hub_decision",
+    plan: "submit_plan",
+    plan_result: "submit_plan_result",
+    done: "mark_job_done",
+    human: "request_human",
+  };
+
+  type SemanticRoleKind = "role" | "hub" | "system";
+
+  const RESERVED_SNAPSHOT_NAMES: Readonly<Record<string, SemanticRoleKind>> = {
+    hub_reason: "hub",
+    verify: "system",
+    verify_finding: "system",
+    report: "system",
+  };
+
+  // Current built-in Job types may omit `name` and infer it from type.
+  // Leftover aliases (`audit_module`, `hub`) are not current identities.
+  // Unknown/custom roles must carry their frozen canonical name.
+  const SNAPSHOT_NAME_FALLBACK_TYPES = new Set([
+    "explore",
+    "analyze",
+    "review",
+    "test",
+    "code",
+    "audit",
+    "hub_reason",
+    "verify",
+    "verify_finding",
+    "report",
+  ]);
+
+  function isSemanticRoleKind(value: unknown): value is SemanticRoleKind {
+    return value === "role" || value === "hub" || value === "system";
+  }
+
+  function semanticJobContract(job: Record<string, unknown>): {
+    name: string;
+    kind: SemanticRoleKind;
+    platformTools: string[] | null;
+  } {
+    const rawSnapshot = job.agent_snapshot_json;
+    if (!rawSnapshot || typeof rawSnapshot !== "object" || Array.isArray(rawSnapshot)) {
+      throw new ControlInputError("tool_not_allowed", "Job 快照必须是 JSON object。", "agent_snapshot_json");
+    }
+    const snapshot = rawSnapshot as Record<string, unknown>;
+    const jobType = String(job.type ?? "")
+      .trim()
+      .toLowerCase();
+    if (!jobType) {
+      throw new ControlInputError("tool_not_allowed", "Job type 不能为空。", "type");
+    }
+    if (jobType === "audit_module" || jobType === "hub") {
+      throw new ControlInputError("tool_not_allowed", "leftover Job type 已停用，不再映射为当前身份。", "type");
+    }
+    const typeName = roleNameForJobType(jobType);
+    // The persisted Job type is the Scheduler's authority for the role kind.
+    // Snapshot role_kind/name are checked against it, never allowed to upgrade a
+    // normal worker (for example, `review`) into a Hub.
+    const kind: SemanticRoleKind = RESERVED_SNAPSHOT_NAMES[typeName] ?? "role";
+    const hasSnapshotName = Object.prototype.hasOwnProperty.call(snapshot, "name");
+    if (hasSnapshotName && (typeof snapshot.name !== "string" || !snapshot.name.trim())) {
+      throw new ControlInputError("tool_not_allowed", "Job 快照 name 必须是非空字符串。", "name");
+    }
+    const rawName = hasSnapshotName ? roleNameForJobType((snapshot.name as string).trim().toLowerCase()) : null;
+    const canFallbackSnapshotName = SNAPSHOT_NAME_FALLBACK_TYPES.has(jobType);
+    if (!rawName && !canFallbackSnapshotName) {
+      throw new ControlInputError("tool_not_allowed", "未知 Job type 必须在冻结快照中提供 canonical name。", "name");
+    }
+    if (!canFallbackSnapshotName && !Object.prototype.hasOwnProperty.call(snapshot, "role_kind")) {
+      throw new ControlInputError("tool_not_allowed", "未知 Job type 必须在冻结快照中提供 role_kind。", "role_kind");
+    }
+    if (!canFallbackSnapshotName && !Object.prototype.hasOwnProperty.call(snapshot, "platform_tools")) {
+      throw new ControlInputError(
+        "tool_not_allowed",
+        "未知 Job type 必须在冻结快照中提供 platform_tools。",
+        "platform_tools",
+      );
+    }
+    if (rawName && rawName !== typeName) {
+      throw new ControlInputError("tool_not_allowed", "Job 快照角色名称与 Scheduler Job 类型不一致。", "name");
+    }
+    const snapshotReservedKind = rawName ? RESERVED_SNAPSHOT_NAMES[rawName] : undefined;
+    if (snapshotReservedKind && snapshotReservedKind !== kind) {
+      throw new ControlInputError("tool_not_allowed", "Job 快照角色与 Scheduler Job 类型不一致。", "role_kind");
+    }
+    if (Object.prototype.hasOwnProperty.call(snapshot, "role_kind")) {
+      if (!isSemanticRoleKind(snapshot.role_kind) || snapshot.role_kind !== kind) {
+        throw new ControlInputError(
+          "tool_not_allowed",
+          "Job 快照 role_kind 与 Scheduler Job 类型不一致。",
+          "role_kind",
+        );
+      }
+    }
+    const name = kind === "hub" || kind === "system" ? typeName : (rawName ?? typeName);
+    let platformTools: string[] | null = null;
+    if (Object.prototype.hasOwnProperty.call(snapshot, "platform_tools")) {
+      if (!Array.isArray(snapshot.platform_tools) || snapshot.platform_tools.some((tool) => typeof tool !== "string")) {
+        throw new ControlInputError("tool_not_allowed", "Job 快照 platform_tools 格式无效。", "platform_tools");
+      }
+      platformTools = snapshot.platform_tools as string[];
+    }
+    return { name, kind, platformTools };
+  }
+
+  /**
+   * Re-apply the frozen Job tool contract at the authoritative ingest boundary.
+   * The real executor performs the same check while buffering MCP events, but
+   * direct/fake/recovery callers must not be able to skip it.
+   */
+  function assertSemanticToolAuthority(job: Record<string, unknown>, type: string): void {
+    const requiredTool = SEMANTIC_TOOL_BY_EVENT[type];
+    if (!requiredTool) return;
+    const contract = semanticJobContract(job);
+    // 授权只认：平台工具全集是否包含该工具 + Job 冻结快照是否启用。
+    // 不再按 role name/kind 硬编码裁剪（配置层已对所有 Agent 开放可选 list）。
+    const staticAllowed = allowedPlatformTools(contract.name, contract.kind).includes(requiredTool);
+    const snapshotAllowed = contract.platformTools === null || contract.platformTools.includes(requiredTool);
+    if (!staticAllowed || !snapshotAllowed) {
+      throw new ControlInputError("tool_not_allowed", `${requiredTool} is not authorized for this Job`, requiredTool);
+    }
+  }
+
+  /** Semantic events are accepted only while the Scheduler still owns a
+   * running Job.  The event-ingestion transaction has already locked this row;
+   * a late callback against a Job that was already terminal *before* this
+   * ingest still rolls back. A follow-up in the same ingest after an earlier
+   * event finalized the Job uses the lock-time status so it cannot wipe the
+   * successful close. */
+  function assertSemanticJobRunning(
+    job: Record<string, unknown>,
+    type: string,
+    services: EventSideEffectServices = {},
+  ): void {
+    if (!SEMANTIC_TOOL_BY_EVENT[type]) return;
+    const statusAtIngest = services.jobStatusAtLock ?? job.status;
+    if (statusAtIngest !== "running") {
+      throw jobNotRunningError({
+        job_id: String(job.id ?? ""),
+        job_status: String(statusAtIngest ?? ""),
+        attempt_id: services.attemptId ?? null,
+        job_seq: null,
+        linearization: "job_status_at_lock",
+        accepted: false,
+        canvas_mutated: false,
+      });
+    }
+  }
+
+  /**
+   * Terminal/control events are serialized by the Job lock acquired upstream.
+   * Mutex is per current Attempt: a Hub decision may be followed by exactly
+   * one done event; human is mutually exclusive with both; each type is
+   * single-shot. Prior-attempt rows stay on the Job ledger after resume and
+   * must not poison the new Attempt. No active Attempt (tests / recovery)
+   * keeps the Job-wide count.
+   */
+  async function assertTerminalEventHistory(tx: EventIngestionTransaction, jobId: string, type: string): Promise<void> {
+    if (!(type in SEMANTIC_TOOL_BY_EVENT) || !["done", "human", "hub_decision"].includes(type)) return;
+    const rows = await tx<{ type: string }[]>`
+    SELECT type FROM events
+    WHERE job_id = ${jobId} AND type IN ('done', 'human', 'hub_decision')
+      AND created_at >= COALESCE(
+        (
+          SELECT created_at FROM job_attempts
+          WHERE job_id = ${jobId} AND status = 'active'
+          ORDER BY attempt_no DESC
+          LIMIT 1
+        ),
+        '-infinity'::timestamptz
+      )
+    ORDER BY job_seq`;
+    const doneCount = rows.filter((row) => row.type === "done").length;
+    const humanCount = rows.filter((row) => row.type === "human").length;
+    const hubCount = rows.filter((row) => row.type === "hub_decision").length;
+    if (doneCount > 1 || humanCount > 1 || hubCount > 1) {
+      throw new ControlInputError("duplicate_tool_call", "同一 Attempt 的终态工具每类只能提交一次。", type);
+    }
+    if (humanCount > 0 && (doneCount > 0 || hubCount > 0)) {
+      throw new ControlInputError(
+        "duplicate_tool_call",
+        "request_human 不得与 mark_job_done 或 submit_hub_decision 同时提交。",
+        type,
+      );
+    }
+    const hubIndex = rows.findIndex((row) => row.type === "hub_decision");
+    const doneIndex = rows.findIndex((row) => row.type === "done");
+    if (hubIndex >= 0 && doneIndex >= 0 && hubIndex > doneIndex) {
+      throw new ControlInputError("duplicate_tool_call", "Hub 决策必须先于 mark_job_done 提交。", type);
+    }
+  }
+
+  async function validateHumanSubject(
+    tx: EventIngestionTransaction,
+    job: Record<string, unknown>,
+    p: HumanPayload,
+  ): Promise<void> {
+    if (p.subject.type !== "finding") return;
+    const canvasId = (job.canvas_id as string | null) ?? null;
+    if (!canvasId) throw new ControlInputError("invalid_human", "Finding 人工请求必须绑定当前 Job 的画布。", "subject.finding_id");
+    const [finding] = await tx`
+      SELECT f.id, f.severity
+      FROM findings f
+      JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
+      JOIN canvas_nodes source ON source.id = f.node_id
+        AND source.canvas_id = ${canvasId} AND source.node_type = 'finding'
+      WHERE f.id = ${p.subject.finding_id}
+        AND f.project_id = ${job.project_id as string}
+        AND origin.canvas_id = ${canvasId}`;
+    if (!finding) throw new ControlInputError("invalid_human", "Finding 人工请求只能绑定当前项目、当前画布的 canonical Finding。", "subject.finding_id");
+    const rules = await ports.rulesForProject(tx, job.project_id as string);
+    if (!ports.findingVerification.isSeverityInVerifyScope(rules.minVerifySeverity, finding.severity)) {
+      throw new ControlInputError("invalid_human", "该 Finding 低于当前 Verify 最低关注级别，不得以 Finding 阻塞任务。", "subject.finding_id");
+    }
+  }
+
+  type HubDecisionTrigger = {
+    kind?: string;
+    finding_id?: string;
+    missing_evidence?: string[];
+  };
+
+  async function validateHubDecision(
+    tx: EventIngestionTransaction,
+    jobId: string,
+    job: Record<string, unknown>,
+    payload: unknown,
+    services: EventSideEffectServices,
+    phase: "preflight" | "apply",
+    parsedDecision?: HubDecision,
+  ) {
+    const decision = parsedDecision ?? parseHubDecisionPayload(payload);
+    const canvasId = (job.canvas_id as string | null) ?? null;
+    if (!canvasId) {
+      if (phase === "apply") return null;
+      throw new ControlInputError("invalid_payload", "Hub 决策必须绑定当前 Job 的画布。", "canvas_id");
+    }
+    const referenceNodes = await assertHubDecisionCanvasReferences(tx, canvasId, decision, services.hubReferenceLookup);
+    const rules = await ports.rulesForProject(tx, job.project_id as string);
+    const roles = decision.complete ? [] : await ports.rolesForProject(tx, job.project_id as string);
+    const submittedIntents = decision.intents ?? [];
+    await validatePlanDecision(tx,jobId,job,decision.plan_basis,'hub_decision',{
+      eventId:services.eventId,final:phase==='apply',maxIntents:rules.maxIntentsPerDecision,
+      references:decision.complete?.from ?? submittedIntents[0]?.from ?? [],
+    });
+    const decisionTrigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as HubDecisionTrigger;
+    const findingByNodeId = new Map<string, HubFindingBinding>();
+    const ambiguousFindingNodeIds = new Set<string>();
+
+    if (decision.complete) {
+      const gate = await ports.findingVerification.evaluateAnalysisCompleteGate(tx, canvasId, { excludeJobId: jobId });
+      if (!gate.ok) {
+        throw new ControlInputError(
+          "invalid_payload",
+          "Hub complete 尚未满足当前画布收敛门；请按 expected 补充工作、验证证据或请求人工处理。",
+          "complete",
+          { expected: analysisCompleteGateExpected(gate) },
+        );
+      }
+      return {
+        decision,
+        canvasId,
+        referenceNodes,
+        rules,
+        roles,
+        submittedIntents,
+        decisionTrigger,
+        findingByNodeId,
+        ambiguousFindingNodeIds,
+        composeCanvas: false,
+        allowedImageKeys: [] as string[],
+      };
+    }
+
+    const enabledNames = new Set(roles.map((role) => role.name));
+    for (const [index, intent] of submittedIntents.entries()) {
+      if (!enabledNames.has(intent.role)) {
+        throw invalidRole(intent.role, phase === "preflight" ? `intents.${index}.role` : "intents.role");
+      }
+      if (intent.role_definition && intent.role_prompt) {
+        throw new ControlInputError(
+          "invalid_payload",
+          "role_definition 与 role_prompt 不能同时提交。",
+          phase === "preflight" ? `intents.${index}.role_definition` : "intents.role_definition",
+        );
+      }
+    }
+    // Hub 可提案本轮可选运行镜像（image_key），但只允许平台可见且项目未排除、
+    // 存在可信版本、且至少一种治理 CLI 能跑的市场产品。省略时按平台目录与
+    // RoleConfig 缺省解析（#691）。preflight 与 apply 都做目录成员校验；提案了 key 时 preflight
+    // 再冻一次快照，把 CLI 不兼容收成 invalid_runtime_image，避免 apply 变成 500。
+    const catalog = await listHubRuntimeImageCatalog(tx as never, job.project_id as string);
+    const allowedImageKeys = catalog.map((entry) => entry.image_key);
+    const allowedImageKeySet = new Set(allowedImageKeys);
+    const catalogByKey = new Map(catalog.map((entry) => [entry.image_key, entry]));
+    const agentCliCatalog = await listHubAgentCliCatalog(tx as never, job.project_id as string);
+    const allowedAgentClis = agentCliCatalog.map((entry) => entry.agent_cli);
+    const allowedAgentCliSet = new Set<string>(allowedAgentClis);
+    const providerCatalog = await listHubProviderCatalog(tx as never, job.project_id as string);
+    const allowedProviders = [...new Set(providerCatalog.map((entry) => entry.provider))];
+    const allowedProviderSet = new Set(allowedProviders);
+    const providersByName = new Map<string, typeof providerCatalog>();
+    for (const entry of providerCatalog) {
+      const list = providersByName.get(entry.provider) ?? [];
+      list.push(entry);
+      providersByName.set(entry.provider, list);
+    }
+    for (const [index, intent] of submittedIntents.entries()) {
+      const key = intent.runtime_image_key;
+      const path = phase === "preflight" ? `intents.${index}.runtime_image_key` : "intents.runtime_image_key";
+      if (key && !allowedImageKeySet.has(key)) {
+        throw invalidRuntimeImage(path, allowedImageKeys);
+      }
+      const selected = catalogByKey.get(key ?? defaultRuntimeImageKey(intent.role));
+      if (selected) assertHubRuntimeImageReady(selected, path);
+      const intentCli = intent.agent_cli;
+      const cliPath = phase === "preflight" ? `intents.${index}.agent_cli` : "intents.agent_cli";
+      if (intentCli && !allowedAgentCliSet.has(intentCli)) {
+        throw invalidAgentCli(cliPath, allowedAgentClis);
+      }
+      const intentProvider = typeof intent.provider === "string" ? intent.provider.trim() : "";
+      const providerPath = phase === "preflight" ? `intents.${index}.provider` : "intents.provider";
+      if (intentProvider && !allowedProviderSet.has(intentProvider)) {
+        throw invalidCredential(providerPath, allowedProviders);
+      }
+      if (intentCli && intentProvider) {
+        const matches = providersByName.get(intentProvider) ?? [];
+        if (!matches.some((entry) => entry.compatible_agent_clis.includes(intentCli as typeof entry.compatible_agent_clis[number]))) {
+          throw invalidCredential(providerPath, allowedProviders);
+        }
+      }
+      if (intent.model_ref || intent.model_requirements) {
+        const providerEntries = intentProvider
+          ? (providersByName.get(intentProvider) ?? [])
+          : providerCatalog.filter((entry) => entry.is_default);
+        const provider = providerEntries[0];
+        const requirements = intent.model_requirements && typeof intent.model_requirements === "object"
+          ? intent.model_requirements as Record<string, unknown>
+          : {};
+        const normalizedRequirements = {
+          agent_cli: intentCli ?? undefined,
+          min_context_window: typeof requirements.min_context_window === "number"
+            ? requirements.min_context_window
+            : typeof requirements.context_window_tokens === "number" ? requirements.context_window_tokens : undefined,
+          require_tools: requirements.require_tools === true || requirements.supports_tools === true ? true : undefined,
+          require_streaming: requirements.require_streaming === true || requirements.supports_streaming === true ? true : undefined,
+          require_structured_output: requirements.require_structured_output === true || requirements.supports_structured_output === true ? true : undefined,
+          reasoning_effort: typeof requirements.reasoning_effort === "string" ? requirements.reasoning_effort : undefined,
+          max_input_cost_per_1m_usd: typeof requirements.max_input_cost_per_1m_usd === "number"
+            ? requirements.max_input_cost_per_1m_usd
+            : typeof requirements.max_input_cost_per_million === "number" ? requirements.max_input_cost_per_million : undefined,
+          max_output_cost_per_1m_usd: typeof requirements.max_output_cost_per_1m_usd === "number"
+            ? requirements.max_output_cost_per_1m_usd
+            : typeof requirements.max_output_cost_per_million === "number" ? requirements.max_output_cost_per_million : undefined,
+          allow_unverified: requirements.allow_unverified === true,
+          allow_passthrough: provider?.passthrough_allowed === true || requirements.allow_passthrough === true,
+        };
+        const selected = provider
+          ? selectModelsForRequirements(provider.models, normalizedRequirements as never)
+              .some((model) => intent.model_ref ? model.model_id === intent.model_ref : true)
+          : false;
+        if (!provider || (!selected && provider.passthrough_allowed !== true)) {
+          throw invalidModel(`intents.${index}.model_ref`, provider?.models.map((entry) => entry.model_id));
+        }
+      }
+      const intentLs = typeof intent.language_server_capability_id === "string"
+        ? intent.language_server_capability_id.trim()
+        : "";
+      const intentCliCaps = Array.isArray(intent.cli_capability_ids)
+        ? intent.cli_capability_ids.map((id: unknown) => String(id).trim()).filter(Boolean)
+        : [];
+      const intentPiExt = Array.isArray(intent.pi_extension_ids)
+        ? intent.pi_extension_ids.map((id: unknown) => String(id).trim()).filter(Boolean)
+        : [];
+      if (phase === "preflight" && (key || intentCli || intentProvider || intent.model_ref || intent.model_requirements || intent.role_prompt || intent.role_definition || intentLs || intentCliCaps.length > 0 || intentPiExt.length > 0)) {
+        try {
+          await ports.resolveAgentSnapshotForJob(
+            tx,
+            job.project_id as string,
+            intent.role,
+            [],
+            {
+              runtimeImageKey: key,
+              agentCli: intentCli ?? null,
+              provider: intentProvider || null,
+              modelRef: intent.model_ref ?? null,
+              modelRequirements: intent.model_requirements ?? null,
+              taskPromptOverride: intent.role_prompt ?? null,
+              roleDefinition: intent.role_definition ?? null,
+              baseRoleName: intent.role_definition ? intent.role : null,
+              languageServerCapabilityId: intentLs || null,
+              cliCapabilityIds: intentCliCaps.length > 0 ? intentCliCaps : null,
+              piExtensionIds: intentPiExt.length > 0 ? intentPiExt : null,
+            },
+          );
+        } catch (error) {
+          if (error instanceof ControlInputError) throw error;
+          if (isHubRuntimeImageResolutionError(error)) {
+            throw invalidRuntimeImage(`intents.${index}.runtime_image_key`, allowedImageKeys);
+          }
+          throw error;
+        }
+      }
+    }
+    if (["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")) {
+      for (const [index, intent] of submittedIntents.entries()) {
+        if (intent.role !== "review" && intent.role !== "test") {
+          throw invalidRole(
+            intent.role,
+            phase === "preflight" ? `intents.${index}.role` : "intents.role",
+            ["review", "test"],
+          );
+        }
+      }
+    }
+
+    const findingNodeIds = [
+      ...new Set(
+        [...referenceNodes.values()]
+          .filter((node) => node.node_type === "finding")
+          .map((node) => node.id),
+      ),
+    ];
+    const findingRows = findingNodeIds.length
+      ? (await tx<HubFindingBinding[]>`
+          SELECT f.id, f.node_id, f.severity, false AS imported, f.location
+          FROM findings f
+          JOIN jobs origin ON origin.id = f.job_id AND origin.project_id = f.project_id
+          JOIN canvas_nodes source ON source.id = f.node_id
+            AND source.canvas_id = ${canvasId}
+            AND source.node_type = 'finding'
+          WHERE f.project_id = ${job.project_id as string}
+            AND origin.canvas_id = ${canvasId}
+            AND f.node_id = ANY(${findingNodeIds}::uuid[])
+          UNION ALL
+          SELECT f.id, source.id AS node_id,
+                 COALESCE(source.body_json->>'severity', f.severity) AS severity,
+                 true AS imported,
+                 COALESCE(source.body_json->>'location', f.location) AS location
+          FROM canvas_nodes source
+          JOIN findings f ON f.id = (source.body_json->>'finding_id')::uuid
+          WHERE source.canvas_id = ${canvasId}
+            AND source.node_type = 'finding'
+            AND source.id = ANY(${findingNodeIds}::uuid[])
+            AND source.body_json->>'origin' = 'seed'
+            AND source.body_json->>'readonly' = 'true'
+            AND f.project_id = ${job.project_id as string}`) as HubFindingBinding[]
+      : [];
+    for (const finding of findingRows) {
+      if (findingByNodeId.has(finding.node_id)) {
+        ambiguousFindingNodeIds.add(finding.node_id);
+        continue;
+      }
+      findingByNodeId.set(finding.node_id, finding);
+    }
+    const [canvas] = await tx<{ target_json: unknown }[]>`
+      SELECT target_json FROM canvases WHERE id = ${canvasId}`;
+    const composeCanvas = ((canvas?.target_json ?? {}) as Record<string, unknown>).kind === "compose";
+    const importedSeedNodeIds = new Set(
+      [...findingByNodeId.values()].filter((finding) => finding.imported).map((finding) => finding.node_id),
+    );
+    for (const [index, intent] of submittedIntents.entries()) {
+      if (composeCanvas) {
+        assertComposeScopedHubIntent(
+          intent.role,
+          intent.from,
+          importedSeedNodeIds,
+          `intents.${index}.from`,
+        );
+      }
+      const resolution = resolveHubFindingIntent(
+        intent.role,
+        intent.from,
+        referenceNodes,
+        findingByNodeId,
+        ambiguousFindingNodeIds,
+      );
+      if (resolution.error) throw invalidVerification(resolution.error, `intents.${index}.from`);
+      const finding = resolution.finding;
+      if (
+        ["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")
+        && (!finding || decisionTrigger.finding_id !== finding.id)
+      ) {
+        throw invalidVerification(
+          "Verify trigger 必须与 review/test intent 的 canonical Finding 一致，无法绑定验证目标。",
+          `intents.${index}.from`,
+        );
+      }
+      if (
+        finding
+        && !finding.imported
+        && !ports.findingVerification.isSeverityInVerifyScope(rules.minVerifySeverity, finding.severity)
+      ) {
+        throw invalidVerification(
+          phase === "preflight"
+            ? "该 Finding 低于当前 Verify 最低关注级别，已豁免自动验证。"
+            : "该 Finding 低于当前 Verify 最低关注级别，已豁免自动验证；请 complete 或仅处理范围内 Finding。",
+          `intents.${index}.from`,
+        );
+      }
+    }
+    return {
+      decision,
+      canvasId,
+      referenceNodes,
+      rules,
+      roles,
+      submittedIntents,
+      decisionTrigger,
+      findingByNodeId,
+      ambiguousFindingNodeIds,
+      composeCanvas,
+      allowedImageKeys,
+    };
+  }
+
+  async function preflightDeferredSideEffects(
+    tx: EventIngestionTransaction,
+    jobId: string,
+    type: "hub_decision" | "human",
+    payload: unknown,
+    services: EventSideEffectServices = {},
+  ): Promise<void> {
+    const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
+    if (!job) throw new ControlInputError("job_not_running", "Job 不存在或已不可接受控制输入。", "status");
+    assertSemanticJobRunning(job as Record<string, unknown>, type, services);
+    assertSemanticToolAuthority(job as Record<string, unknown>, type);
+    await assertTerminalEventHistory(tx, jobId, type);
+    if (type === "human") {
+      const parsed = HumanPayload.safeParse(payload);
+      if (!parsed.success) throw new ControlInputError("invalid_human", "request_human 参数不符合严格契约。");
+      await validateHumanSubject(tx, job as Record<string, unknown>, parsed.data);
+      await validatePlanDecision(tx,jobId,job,parsed.data.plan_basis,'human',{eventId:services.eventId});
+      return;
+    }
+    await validateHubDecision(tx, jobId, job as Record<string, unknown>, payload, services, "preflight");
+  }
+
+  async function applySideEffects(
+    tx: EventIngestionTransaction,
+    jobId: string,
+    type: string,
+    payload: unknown,
+    services: EventSideEffectServices = {},
+  ) {
+    // Re-parse every payload at the side-effect boundary.  Callers normally
+    // arrive through EventEnvelope, but tests, recovery and future adapters may
+    // invoke this function directly; no untrusted shape may reach SQL.
+    const parsePayload = <T>(
+      schema: {
+        safeParse(value: unknown): { success: true; data: T } | { success: false };
+      },
+      value: unknown,
+      code: string,
+      label: string,
+    ): T => {
+      const parsed = schema.safeParse(value);
+      if (!parsed.success) throw new ControlInputError(code as never, `${label} 参数不符合严格契约。`);
+      return parsed.data;
+    };
+    const validatedPayload =
+      type === "progress"
+        ? parsePayload(ProgressPayload, payload, "invalid_progress", "emit_progress")
+        : type === "finding"
+          ? parsePayload(FindingPayload, payload, "invalid_payload", "emit_finding")
+          : type === "fact"
+            ? parsePayload(FactPayload, payload, "invalid_payload", "emit_fact")
+            : type === "done"
+              ? parsePayload(DonePayload, payload, "invalid_done", "mark_job_done")
+              : type === "human"
+                ? parsePayload(HumanPayload, payload, "invalid_human", "request_human")
+                : type === "plan"
+                  ? parsePayload(SubmitPlanPayload, payload, "invalid_payload", "submit_plan")
+                  : type === "plan_result"
+                    ? parsePayload(SubmitPlanResultPayload, payload, "invalid_payload", "submit_plan_result")
+                    : payload;
+    // Preserve the fail-fast parse boundary before taking the Job row lock.
+    const hubDecision = type === "hub_decision" ? parseHubDecisionPayload(payload) : undefined;
+    const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId} FOR UPDATE`;
+    if (!job) throw new Error(`job ${jobId} 不存在`);
+    assertSemanticJobRunning(job as Record<string, unknown>, type, services);
+    assertSemanticToolAuthority(job as Record<string, unknown>, type);
+    // Late mark_job_done after this ingest already finalized successfully is
+    // idempotent: keep the accepted event, skip a second finalize, and do not
+    // fail-and-rollback the close.
+    if (
+      type === "done"
+      && job.status === "succeeded"
+      && services.jobStatusAtLock === "running"
+    ) {
+      return;
+    }
+    await assertTerminalEventHistory(tx, jobId, type);
+
+    if (type === "plan") {
+      const rules = await ports.rulesForProject(tx, job.project_id as string);
+      await applySubmitPlan(tx, jobId, job as Record<string, unknown>, validatedPayload, rules.maxIntentsPerDecision, services.eventId);
+      return;
+    }
+
+    if (type === "plan_result") {
+      await applySubmitPlanResult(tx, jobId, job as Record<string, unknown>, validatedPayload);
+      return;
+    }
+
+    if (type === "done") {
+      // The real executor performs the same check before buffering terminal
+      // state, but ingestion is the authority for direct/recovery callers too.
+      // Keep verify's verdict contract and non-verify's clean terminal payload
+      // enforced inside the outer event transaction.
+      const done = validatedPayload as {
+        verdict?: string;
+        missing_evidence?: string[];
+      };
+      const isVerifyJob = job.type === "verify_finding" || job.type === "verify";
+      if (isVerifyJob && !done.verdict) {
+        throw new ControlInputError("invalid_done", "verify Job 的 mark_job_done 必须提供 verdict。", "verdict");
+      }
+      if (!isVerifyJob && (done.verdict !== undefined || done.missing_evidence !== undefined)) {
+        throw new ControlInputError(
+          "invalid_done",
+          "非 verify Job 的 mark_job_done 不得提供 verdict 或 missing_evidence。",
+          done.verdict !== undefined ? "verdict" : "missing_evidence",
+        );
+      }
+      if (isVerifyJob && done.verdict === "rework" && (!done.missing_evidence || done.missing_evidence.length === 0)) {
+        throw new ControlInputError(
+          "invalid_done",
+          "verdict=rework 必须列出至少一项 missing_evidence。",
+          "missing_evidence",
+        );
+      }
+      if (isVerifyJob && done.verdict !== "rework" && done.missing_evidence !== undefined) {
+        throw new ControlInputError(
+          "invalid_done",
+          "只有 verdict=rework 才能提供 missing_evidence。",
+          "missing_evidence",
+        );
+      }
+    }
+
+    if (type === "progress") {
+      const raw = validatedPayload as { message: string; percent?: number };
+      // Scrub control bytes before jsonb write — corrupted CLI/proxy frames can embed NUL (22P05) (#548).
+      const p = {
+        ...raw,
+        message: raw.message.replace(/[\u0000-\u001f\u007f]/gu, " "),
+      };
+      await tx`
+      UPDATE canvas_nodes SET body_json = body_json || ${tx.json({ last_progress: p })}, updated_at = now()
+      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
+      await tx`
+        UPDATE jobs
+        SET heartbeat_at = now()
+        WHERE id = ${jobId}`;
+      await tx`
+        UPDATE jobs
+        SET lease_expires_at = now() + (${config.timeouts.leaseTtlSec}::int * interval '1 second')
+        WHERE id = ${jobId} AND status = 'running'`;
+      return;
+    }
+
+    if (type === "finding") {
+      const f = validatedPayload as FindingPayload;
+      const outcomeAdmission = await admitTaskOutcomeCandidate(tx, job, f.outcome_claim);
+      const protocol = await ports.findingProtocolForJob(tx, job as Record<string, unknown>);
+      let normalized: ReturnType<typeof normalizeFindingProposal>;
+      try {
+        normalized = normalizeFindingProposal({ ...f, ...(outcomeAdmission ? { outcome_claim: outcomeAdmission.claim } : {}) }, protocol);
+      } catch (error) {
+        throw new ControlInputError(
+          "invalid_payload",
+          `Finding 不符合任务冻结协议：${error instanceof Error ? error.message : "invalid finding protocol"}`,
+          f.scoring ? "scoring" : "profile",
+        );
+      }
+      const severity =
+        normalized.scoring?.status === "supported"
+          ? normalized.scoring.base_severity === "none"
+            ? null
+            : normalized.scoring.base_severity
+          : (normalized.severity ?? null);
+      const canvasId = (job.canvas_id as string | null) ?? null;
+      if (canvasId) {
+        const [canvas] = await tx<{ target_json: unknown }[]>`
+          SELECT target_json FROM canvases WHERE id = ${canvasId}`;
+        const target = (canvas?.target_json ?? {}) as Record<string, unknown>;
+        if (target.kind === "compose") {
+          try {
+            assertComposeFindingInScope(normalized.location, frozenTaskSeeds(target));
+          } catch (error) {
+            if (error instanceof TaskSeedInputError) {
+              throw invalidControlPayload(error.message, "location");
+            }
+            throw error;
+          }
+        }
+      }
+      const fingerprint = sha16(
+        [
+          normalized.profile,
+          normalized.title.trim().toLowerCase(),
+          (normalized.location ?? "").trim(),
+          (normalized.rule_id ?? "").trim(),
+        ].join("|"),
+      );
+      const sourceDigest = findingSourceDigest(normalized);
+      // The Job row is locked above: same-source submissions serialize before artifacts.
+      const [existingFinding] = await tx<{ id: string; source_digest: string | null }[]>`
+        SELECT id, source_digest FROM findings WHERE job_id = ${jobId} AND fingerprint = ${fingerprint}`;
+      if (existingFinding) {
+        if (existingFinding.source_digest !== sourceDigest) {
+          throw invalidControlPayload("Finding 来源身份已存在但内容不同或历史来源摘要不可用；emit_finding 不支持修订，请保留原记录并在独立 Job 提交新来源。", "title");
+        }
+        return;
+      }
+
+      const artifact = await persistArtifact(tx, {
+        projectId: job.project_id as string,
+        canvasId,
+        jobId,
+        sourceEventId: services.eventId ?? null,
+        sourceOperation: "emit_finding",
+        artifactKey: findingArtifactKey(jobId, fingerprint),
+        document: findingProposalToArtifact(normalized, outcomeAdmission),
+      });
+      const { task_outcome_admission: _untrustedAdmission, ...sourceRaw } = normalized.raw ?? {};
+      const [finding] = await tx`
+      INSERT INTO findings ${tx({
+        project_id: job.project_id,
+        job_id: jobId,
+        artifact_id: artifact.id,
+        fingerprint,
+        source_digest: sourceDigest,
+        title: normalized.title,
+        severity,
+        profile: normalized.profile,
+        category: normalized.category ?? null,
+        tags_json: (normalized.tags ?? []) as never,
+        evidence_refs_json: (normalized.evidence_refs ?? []) as never,
+        scoring_json: (normalized.scoring ?? {}) as never,
+        location: normalized.location ?? null,
+        summary: normalized.summary ?? null,
+        raw_json: {
+          ...sourceRaw,
+          ...(outcomeAdmission ? { task_outcome_admission: outcomeAdmission } : {}),
+          impact: normalized.impact ?? null,
+          ...(normalized.quantities && normalized.quantities.length > 0 ? { quantities: normalized.quantities } : {}),
+        } as never,
+      })}
+      RETURNING *`;
+      if (!finding) throw new Error("Finding source insert returned no row");
+
+      // 画布：finding 节点挂在 job 节点下，坐标服务端分配（§3.2）
+      const [jobNode] = await tx`
+      SELECT id, canvas_id, x, y FROM canvas_nodes
+      WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
+      if (jobNode) {
+        const [{ count }] = await tx<[{ count: number }]>`
+        SELECT COUNT(*)::int AS count FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'finding'`;
+        const [node] = await tx`
+        INSERT INTO canvas_nodes ${tx({
+          canvas_id: jobNode.canvas_id,
+          job_id: jobId,
+          node_type: "finding",
+          title: normalized.title,
+          body_json: {
+            artifact_id: artifact.id,
+            profile: normalized.profile,
+            category: normalized.category,
+            severity,
+            score: normalized.scoring?.base_score ?? null,
+            score_version: normalized.scoring?.version ?? null,
+            location: normalized.location,
+            summary: normalized.summary,
+            ...(normalized.quantities && normalized.quantities.length > 0 ? { quantities: normalized.quantities } : {}),
+          } as never,
+          x: jobNode.x + 300,
+          y: jobNode.y + count * 140,
+          status: "open",
+        })}
+        RETURNING id`;
+        await tx`
+        INSERT INTO canvas_edges ${tx({
+          canvas_id: jobNode.canvas_id,
+          from_node_id: jobNode.id,
+          to_node_id: node.id,
+          edge_type: "produces",
+        })}`;
+        await tx`UPDATE findings SET node_id = ${node.id} WHERE id = ${finding.id}`;
+        await bindArtifactNode(tx, artifact.id, node.id as string);
+      }
+
+      // 规则引擎：达到最低关注级别或未评分的 Finding 自动进入 Verify。
+      await ports.findingVerification.evaluateFollowup(tx, job, finding);
+      if (canvasId) {
+        await runFindingResearchBestEffort(tx, {
+          canvasId,
+          projectId: job.project_id as string,
+          kind: "dedupe",
+        });
+      }
+      return;
+    }
+
+    if (type === "fact") {
+      // 角色 agent 的发现 → fact 节点（§8.3：agent 只负责把发现写入画布）
+      const p = validatedPayload as {
+        intent_node_id?: string;
+        title?: string;
+        description?: string;
+        quantities?: FactPayload["quantities"];
+        verification?: VerificationEvidence;
+        artifact?: FactPayload["artifact"];
+      };
+      if (!p.description) return;
+      let canvasId = (job.canvas_id as string) ?? null;
+      let intentNode: Record<string, unknown> | null = null;
+      if (p.intent_node_id) {
+        const [n] = await tx`SELECT * FROM canvas_nodes WHERE id = ${p.intent_node_id}`;
+        if (n) {
+          intentNode = n;
+          canvasId = (n.canvas_id as string) ?? canvasId;
+        }
+      }
+      if (!canvasId) {
+        const [jobNode] = await tx`
+        SELECT canvas_id FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
+        canvasId = (jobNode?.canvas_id as string) ?? null;
+      }
+      if (!canvasId) return;
+
+      assertNoGoalReviewAuthority(p.artifact);
+      if (p.artifact?.task_result && p.verification) throw invalidControlPayload("任务结果不能混用 Finding Verify 结论。", "artifact.task_result");
+      const taskResult = p.artifact?.task_result ? await prepareTaskResult(tx, job, services.attemptId ?? null, services.eventId ?? null, p.artifact.task_result) : undefined;
+      const review = p.artifact?.goal_review ? await prepareTaskGoalReview(tx, job, services.attemptId ?? null, p.artifact.goal_review) : undefined;
+      if (review?.duplicate) return;
+      const document = factProposalToArtifact({ title: p.title ?? p.description.slice(0, 60), description: p.description,
+        quantities: p.quantities, verification: p.verification, artifact: p.artifact });
+      if (review) {
+        document.kind = "task.goal_evaluation";
+        document.extensions.task_goal_review = { ...review.extension };
+      }
+      if (taskResult) {
+        document.kind = "task.result";
+        document.extensions.task_result = { ...taskResult.extension };
+      }
+      const [{ count }] = await tx<[{ count: number }]>`
+      SELECT COUNT(*)::int AS count FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'fact'`;
+      const artifact = await persistArtifact(tx, {
+        projectId: job.project_id as string,
+        canvasId,
+        jobId,
+        sourceEventId: services.eventId ?? null,
+        sourceOperation: "emit_fact",
+        ...(review ? { artifactKey: review.artifactKey } : {}),
+        ...(taskResult ? { artifactKey: taskResult.artifactKey } : {}),
+        document,
+      });
+      const [node] = await tx`
+      INSERT INTO canvas_nodes ${tx({
+        canvas_id: canvasId,
+        job_id: jobId,
+        node_type: "fact",
+        title: (p.title ?? p.description.slice(0, 60)).slice(0, 200),
+        body_json: {
+          description: p.description,
+          artifact_id: artifact.id,
+          ...(review ? { goal_review: p.artifact?.goal_review } : {}),
+          ...(taskResult ? { task_result: taskResult.extension } : {}),
+          ...(p.quantities && p.quantities.length > 0 ? { quantities: p.quantities } : {}),
+        } as never,
+        x: ((intentNode?.x as number) ?? 100) + 340,
+        y: ((intentNode?.y as number) ?? 100) + count * 140,
+        status: "open",
+        verification_status: "unverified",
+      })}
+      RETURNING id`;
+      await bindArtifactNode(tx, artifact.id, node.id as string);
+      // 'to' 边：意图 → 产出的事实（Cairn Intent.to）
+      if (intentNode) {
+        await ports.insertEdgeIfAbsent(tx, canvasId, intentNode.id as string, node.id as string, "to");
+      }
+      // 结构化验证证据：仅 Hub 回弹补证 Job 绑定 finding 时接受
+      if (p.verification) {
+        const attached = await ports.findingVerification.attachVerificationEvidence(
+          tx,
+          job,
+          node.id as string,
+          canvasId,
+          p.verification,
+        );
+        if (!attached) {
+          throw invalidVerification("verification 证据未能附着到当前绑定 Finding；本次 fact 已拒绝。", "verification");
+        }
+      }
+      return;
+    }
+
+    if (type === "hub_decision") {
+      // hub 读图后的决策：complete=目标达成；intents=派发角色 job（§8.3）
+      // Re-run the same read-only authority checks inside the final locked
+      // transaction so state drift after preflight cannot authorize effects.
+      const validation = await validateHubDecision(
+        tx,
+        jobId,
+        job as Record<string, unknown>,
+        payload,
+        services,
+        "apply",
+        hubDecision,
+      );
+      if (!validation) return;
+      const {
+        decision: p,
+        canvasId,
+        referenceNodes,
+        rules,
+        roles,
+        submittedIntents,
+        decisionTrigger,
+        findingByNodeId,
+        ambiguousFindingNodeIds,
+        composeCanvas,
+        allowedImageKeys,
+      } = validation;
+      const insertHubEdges: HubEdgeBatchInsert = async (edgeTx, edges) => {
+        const uniqueEdges = dedupeCanvasEdges(edges);
+        if (uniqueEdges.length === 0) return;
+        await (services.hubEdgeBatchInsert ?? ports.insertEdgesIfAbsentBatch)(edgeTx, uniqueEdges);
+      };
+
+      if (!p.plan_basis) await applyHubPlanAdapter(
+        tx,
+        jobId,
+        job as Record<string, unknown>,
+        {
+          complete: p.complete,
+          intents: submittedIntents,
+        },
+        rules.maxIntentsPerDecision,
+      );
+
+      if (p.complete?.description) {
+        // Hub complete 只是提案：统一完成门（排除当前仍 running 的 Hub 做门检）
+        // **不在此处派 Report**：当前 Hub 尚未 mark_job_done；由 finalizeJob 在 Hub succeeded 后派发，
+        // 避免 exclude 后抢跑 Report，也避免 Hub 崩溃时报告先于 Hub 终态。
+        const [root] = await tx`
+        SELECT id FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+        if (root) {
+          await tx`
+          UPDATE canvas_nodes SET status = 'analysis_complete',
+            body_json = body_json || ${tx.json({ conclusion: p.complete.description })}, updated_at = now()
+          WHERE id = ${root.id}`;
+          const edges: EventCanvasEdgeInput[] = [];
+          for (const fid of p.complete.from) {
+            const src = referenceNodes.get(fid);
+            if (src)
+              edges.push({
+                canvasId,
+                fromId: src.id,
+                toId: root.id as string,
+                edgeType: "to",
+              });
+          }
+          await insertHubEdges(tx, edges);
+        }
+        return;
+      }
+
+      const hubEdges: EventCanvasEdgeInput[] = [];
+
+      const intents = submittedIntents.slice(0, rules.maxIntentsPerDecision);
+      const preparedIntents: Array<{
+        it: (typeof intents)[number];
+        role: string;
+        title: string;
+        snapshot: AgentRuntimeSnapshot;
+        workerPrompt: string;
+        relatedImportedIds: string[];
+        applyHubFollowup: boolean;
+        verificationFollowup: ReturnType<EventFindingVerification["buildVerificationFollowupPayload"]>;
+        followupFindingId: string | null;
+        schedulingPurpose: SchedulingPurpose;
+      }> = [];
+
+      for (const it of intents) {
+        if (roles.length === 0) {
+          throw invalidRole(it.role, "intents.role");
+        }
+        const title = it.description.trim().slice(0, 120);
+        // 去重：同画布已有同标题的未结论 intent → 跳过（hub 重复派发护栏）
+        const dup = await tx`
+        SELECT 1 FROM canvas_nodes
+        WHERE canvas_id = ${canvasId} AND node_type = 'intent' AND title = ${title}
+          AND status NOT IN ('succeeded', 'failed', 'cancelled')
+        LIMIT 1`;
+        if (dup.length > 0) continue;
+
+        // `role` is the governed platform role contract. role_definition is
+        // Job-scoped only (#691): frozen into this Job snapshot, never persisted
+        // as project agent_roles / RoleConfig. Cross-task reuse goes through Skills.
+        const baseRole = it.role!;
+        const role = baseRole;
+        const sourceFinding = resolveHubFindingIntent(
+          baseRole,
+          it.from,
+          referenceNodes,
+          findingByNodeId,
+          ambiguousFindingNodeIds,
+        ).finding;
+        const boundImported = [...new Map(
+          it.from.flatMap((id) => {
+            const finding = findingByNodeId.get(id);
+            return finding?.imported ? [[finding.node_id, finding] as const] : [];
+          }),
+        ).values()];
+        const relatedImportedIds = boundImported.map((finding) => finding.id);
+        const boundLocations = boundImported
+          .map((finding) => finding.location)
+          .filter((value): value is string => Boolean(value));
+        const importedSeedFindingId = sourceFinding?.imported ? sourceFinding.id : relatedImportedIds[0] ?? null;
+        const workerPrompt = composeCanvas && boundLocations.length > 0
+          ? composeBoundWorkerPrompt(it.prompt, boundLocations)
+          : it.prompt.trim();
+        const trigger = sourceFinding && !sourceFinding.imported
+          ? {
+              ...decisionTrigger,
+              kind: ["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")
+                ? decisionTrigger.kind
+                : "hub_finding",
+              finding_id: sourceFinding.id,
+            }
+          : decisionTrigger;
+        // verify_rework/verify_failed 补证不得 hub_followup：否则每个补证成功都会 force Hub，
+        // 与「全部补证终态后 maybeReverifyAfterFollowup」冲突。
+        const hubFollowup = ["confirmed_finding", "risk_acceptance_followup", "human_comment"].includes(
+          trigger.kind ?? "",
+        );
+        const verificationFollowup = importedSeedFindingId && sourceFinding?.imported
+          ? null
+          : ports.findingVerification.buildVerificationFollowupPayload(trigger, it.from, baseRole);
+        const followupFindingId =
+          typeof verificationFollowup?.finding_id === "string" ? verificationFollowup.finding_id : null;
+        const snapshotFindingIds = [...new Set([
+          ...(followupFindingId ? [followupFindingId] : relatedImportedIds),
+          ...(it.goal_review?.finding_id ? [it.goal_review.finding_id.toLowerCase()] : []),
+        ])];
+        if (it.goal_review && snapshotFindingIds.length > 8) throw invalidControlPayload("评审候选不能扩大既有 Finding 关联数量上限。", "intents.goal_review");
+        let snapshot;
+        try {
+          snapshot = await freezeAgentSnapshotNetworkPolicy(
+            tx,
+            canvasId,
+            await ports.resolveAgentSnapshotForJob(
+              tx,
+              job.project_id as string,
+              role,
+              snapshotFindingIds,
+              {
+                runtimeImageKey: it.runtime_image_key ?? null,
+                agentCli: it.agent_cli ?? null,
+                provider: it.provider ?? null,
+                modelRef: it.model_ref ?? null,
+                modelRequirements: it.model_requirements ?? null,
+                taskPromptOverride: it.role_prompt ?? null,
+                roleDefinition: it.role_definition ?? null,
+                baseRoleName: baseRole,
+                languageServerCapabilityId: it.language_server_capability_id ?? null,
+                cliCapabilityIds: Array.isArray(it.cli_capability_ids) ? it.cli_capability_ids : null,
+                piExtensionIds: Array.isArray(it.pi_extension_ids) ? it.pi_extension_ids : null,
+              },
+            ),
+          );
+        } catch (error) {
+          if (error instanceof ControlInputError) throw error;
+          if (isHubRuntimeImageResolutionError(error)) {
+            throw invalidRuntimeImage("intents.runtime_image_key", allowedImageKeys);
+          }
+          throw error;
+        }
+        if (it.goal_review) snapshot = await freezeGoalReviewAssignment(tx, String(job.project_id), canvasId, snapshot, it.goal_review);
+        // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
+        const applyHubFollowup = hubFollowup && !verificationFollowup;
+        const schedulingPurpose: SchedulingPurpose = verificationFollowup ? "convergence_evidence" : "discovery";
+        preparedIntents.push({
+          it,
+          role,
+          title,
+          snapshot,
+          workerPrompt,
+          relatedImportedIds,
+          applyHubFollowup,
+          verificationFollowup,
+          followupFindingId,
+          schedulingPurpose,
+        });
+      }
+
+      if (p.plan_basis && preparedIntents.length!==1) throw new ControlInputError('plan_budget_exhausted','单步补证不得被重复 Intent 跳过或部分派发；请重读当前工作。','intents');
+      for (const prepared of preparedIntents) {
+        const {
+          it,
+          role,
+          title,
+          snapshot,
+          workerPrompt,
+          relatedImportedIds,
+          applyHubFollowup,
+          verificationFollowup,
+          followupFindingId,
+          schedulingPurpose,
+        } = prepared;
+        const [roleJob] = await tx`
+        INSERT INTO jobs ${tx({
+          project_id: job.project_id as string,
+          canvas_id: canvasId,
+          parent_job_id: job.id as string,
+          finding_id: followupFindingId,
+          agent_snapshot_json: snapshot as never,
+          type: role,
+          priority: ports.fixedPriorityForJob({
+            type: role,
+            purpose: schedulingPurpose,
+          }),
+          payload_json: {
+            ...(p.plan_basis ? {plan_context:{plan_job_id:p.plan_basis.plan_job_id,plan_sha256:p.plan_basis.plan_sha256,decision_event_id:services.eventId,scheduler_owned:true}} : {}),
+            scheduling_purpose: schedulingPurpose,
+            intent: {
+              description: it.description,
+              prompt: workerPrompt,
+              from: it.from,
+              ...(it.role_definition ? { role_definition: it.role_definition } : {}),
+              ...(it.role_prompt ? { role_prompt: it.role_prompt } : {}),
+              ...(it.model_ref ? { model_ref: it.model_ref } : {}),
+              ...(it.model_requirements ? { model_requirements: it.model_requirements } : {}),
+            },
+            ...(applyHubFollowup ? { hub_followup: true } : {}),
+            ...((relatedImportedIds.length > 0 || it.goal_review?.finding_id) ? { related_finding_ids: [...new Set([...relatedImportedIds, ...(it.goal_review?.finding_id ? [it.goal_review.finding_id.toLowerCase()] : [])])] } : {}),
+            ...(verificationFollowup
+              ? {
+                  verification_followup: {
+                    ...verificationFollowup,
+                    scheduler_owned: true,
+                  },
+                }
+              : {}),
+          } as never,
+          timeout_sec: rules.auditTimeoutSec,
+          followup_depth: 0,
+        })}
+        RETURNING id`;
+        await ports.recordJobSharedAssets(tx, roleJob.id as string, snapshot.shared_assets ?? []);
+        // intent 节点与角色 job 1:1（节点即任务卡：pending=未认领 running=进行中 succeeded=已结论）
+        const [{ next_y }] = await tx<[{ next_y: number }]>`
+        SELECT COALESCE(MAX(y), 60) + 140 AS next_y FROM canvas_nodes
+        WHERE canvas_id = ${canvasId} AND node_type = 'intent'`;
+        const [intentNode] = await tx`
+        INSERT INTO canvas_nodes ${tx({
+          canvas_id: canvasId,
+          job_id: roleJob.id as string,
+          node_type: "intent",
+          title,
+          // Freeze the scheduler-selected worker color with the intent so
+          // historical canvases do not change when a role is later edited or
+          // deleted.  System/Hub snapshots intentionally carry null here.
+          body_json: {
+            role,
+            description: it.description,
+            ...(snapshot.ui_color ? { ui_color: snapshot.ui_color } : {}),
+          } as never,
+          x: 1220,
+          y: next_y,
+          status: "pending",
+        })}
+        RETURNING id`;
+        await tx`
+        UPDATE jobs SET payload_json = payload_json || ${tx.json({ intent_node_id: intentNode.id })}
+        WHERE id = ${roleJob.id}`;
+        // 'from' 边：被引用事实 → 新意图（Cairn Intent.from）
+        for (const fid of it.from) {
+          const src = referenceNodes.get(fid);
+          if (src)
+            hubEdges.push({
+              canvasId,
+              fromId: src.id,
+              toId: intentNode.id as string,
+              edgeType: "from",
+            });
+        }
+      }
+      await insertHubEdges(tx, hubEdges);
+      return;
+    }
+
+    if (type === "done") {
+      await ports.finalizeJob(
+        tx,
+        jobId,
+        "succeeded",
+        validatedPayload as {
+          summary?: string;
+          verdict?: string;
+          missing_evidence?: string[];
+        },
+      );
+      return;
+    }
+
+    if (type === "human") {
+      const p = validatedPayload as HumanPayload;
+      const canvasId = (job.canvas_id as string | null) ?? null;
+      await validateHumanSubject(tx, job as Record<string, unknown>, p);
+      await validatePlanDecision(tx,jobId,job,p.plan_basis,'human',{eventId:services.eventId,final:true});
+      await markJobWaitingHuman(tx, jobId);
+      const [jobNode] = await tx`
+      SELECT id, canvas_id, x, y FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
+      if (jobNode) {
+        await tx`
+        INSERT INTO canvas_nodes ${tx({
+          canvas_id: jobNode.canvas_id,
+          job_id: jobId,
+          node_type: "human",
+          title: p.reason.slice(0, 200),
+          body_json: { reason: p.reason, subject: p.subject } as never,
+          x: jobNode.x + 150,
+          y: jobNode.y - 160,
+          status: "open",
+        })}`;
+      }
+      return;
+    }
+  }
+
+  return { preflightDeferredSideEffects, applySideEffects };
+}

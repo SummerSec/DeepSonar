@@ -1,0 +1,100 @@
+# DeepSonar official Agent runtime. Build with TOOLSET=base or TOOLSET=audit.
+ARG BASE_IMAGE=node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46
+FROM ${BASE_IMAGE} AS runtime-rootfs
+
+ARG TOOLSET=base
+ARG GIT_VERSION=1:2.39.5-0+deb12u3
+ARG PYTHON_VERSION=3.11.2-1+b1
+ARG CA_CERTIFICATES_VERSION=20230311+deb12u1
+ARG CURL_VERSION=7.88.1-10+deb12u15
+ARG RIPGREP_VERSION=13.0.0-4+b2
+ARG JQ_VERSION=1.6-2.1+deb12u3
+ARG FILE_VERSION=1:5.44-3
+ARG UNZIP_VERSION=6.0-28
+ARG XZ_VERSION=5.4.1-1+deb12u2
+ARG BINUTILS_VERSION=2.40-2
+ARG CLAUDE_CODE_VERSION=2.1.312
+ARG CLAUDE_CODE_INTEGRITY=sha512-/gx8byG8VOm4YoNuT5tal/Ov5Z5oydJzZkmHCJcBFLbNGGpyYDbKA/CNdB+iIKwcLQC8pVwBoj6Dt7H3L2J5bw==
+ARG PI_CODING_AGENT_VERSION=1.4.0
+ARG PI_CODING_AGENT_INTEGRITY=sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==
+ARG DSH_VERSION=0.2.1-rc.2
+ARG DSH_INTEGRITY=sha512-tvY+yhfKRifthbqPe/OK0AYxM5ZkvqfYq/jMYgJcEUxiRRL1Vwra3Ti5TB6AXgSWQdiPHYh/Vp6SJa9yHwMNuw==
+ARG PI_WEB_ACCESS_VERSION=0.29.0
+ARG PI_WEB_ACCESS_INTEGRITY=sha512-1l4sAWYkFhiBynJf/mXuxmCHxjhiAyWJ4rfQVFu8UPa0JQhCS9oXAmNXcL0Q1SfrO00plmb6L4IkypJ3n1Q4Kg==
+
+RUN set -eu; \
+  test "$TOOLSET" = base -o "$TOOLSET" = audit; \
+  packages="git=${GIT_VERSION} python3=${PYTHON_VERSION} ca-certificates=${CA_CERTIFICATES_VERSION} curl=${CURL_VERSION} ripgrep=${RIPGREP_VERSION} jq=${JQ_VERSION} libjq1=${JQ_VERSION} file=${FILE_VERSION} unzip=${UNZIP_VERSION} xz-utils=${XZ_VERSION}"; \
+  if [ "$TOOLSET" = audit ]; then packages="$packages binutils=${BINUTILS_VERSION}"; fi; \
+  for attempt in 1 2 3; do \
+    if apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends $packages; then break; fi; \
+    if [ "$attempt" = 3 ]; then exit 1; fi; \
+    rm -rf /var/lib/apt/lists/*; sleep 2; \
+  done; \
+  rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+    /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*
+
+COPY agent-harness/dsh-runtime/package.json /opt/deepsonar/dsh/package.json
+COPY agent-harness/dsh-runtime/package-lock.json /opt/deepsonar/dsh/package-lock.json
+
+RUN set -eu; \
+  test "$(npm view @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} dist.integrity)" = "$CLAUDE_CODE_INTEGRITY"; \
+  test "$(npm view @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} dist.integrity)" = "$PI_CODING_AGENT_INTEGRITY"; \
+  test "$(node -e 'const p=require("/opt/deepsonar/dsh/package-lock.json").packages["node_modules/@deepseek-ai/dsh"]; process.stdout.write(p?.version ?? "")')" = "$DSH_VERSION"; \
+  test "$(node -e 'const p=require("/opt/deepsonar/dsh/package-lock.json").packages["node_modules/@deepseek-ai/dsh"]; process.stdout.write(p?.integrity ?? "")')" = "$DSH_INTEGRITY"; \
+  cd /opt/deepsonar/dsh; \
+  npm ci --omit=dev --ignore-scripts --no-audit --no-fund; \
+  npm install -g --omit=dev --no-audit --no-fund \
+    @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+    @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}; \
+  test -x node_modules/@deepseek-ai/dsh/lib/bin.js; \
+  ln -sf /opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh; \
+  npm cache clean --force
+
+RUN set -eu; \
+  test "$TOOLSET" = base -o "$TOOLSET" = audit; \
+  if [ "$TOOLSET" != audit ]; then exit 0; fi; \
+  test "$(npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity)" = "$PI_WEB_ACCESS_INTEGRITY"; \
+  mkdir -p /opt/deepsonar/pi-extensions; \
+  npm install --omit=dev --no-audit --no-fund --prefix /opt/deepsonar/pi-extensions \
+    pi-web-access@${PI_WEB_ACCESS_VERSION}; \
+  npm cache clean --force
+
+COPY agent-harness/runtime-images.json /opt/deepsonar/runtime-images.json
+COPY agent-harness/write-tool-manifest.mjs /opt/deepsonar/write-tool-manifest.mjs
+RUN node /opt/deepsonar/write-tool-manifest.mjs /opt/deepsonar/runtime-images.json "$TOOLSET" /opt/deepsonar/tool-manifest.json \
+  && rm /opt/deepsonar/runtime-images.json /opt/deepsonar/write-tool-manifest.mjs
+
+COPY agent-harness/runtime-manuals /opt/deepsonar/runtime-manuals
+COPY agent-harness/materialize-runtime-manuals.mjs /opt/deepsonar/materialize-runtime-manuals.mjs
+RUN node /opt/deepsonar/materialize-runtime-manuals.mjs \
+  --catalog /opt/deepsonar/runtime-manuals/catalog.json \
+  --source-root /opt/deepsonar/runtime-manuals \
+  --tool-manifest /opt/deepsonar/tool-manifest.json \
+  --output /opt/deepsonar/manuals \
+  --image-key "deepsonar-$TOOLSET" \
+  && rm -rf /opt/deepsonar/runtime-manuals /opt/deepsonar/materialize-runtime-manuals.mjs
+
+WORKDIR /workspace
+
+# Collapse the finished rootfs into one runtime layer. This removes bytes hidden
+# behind package upgrades/deletions in earlier layers, so the enforced size
+# budget reflects what users actually pull and store.
+FROM scratch
+ARG TOOLSET=base
+ARG OCI_TITLE="DeepSonar Runtime"
+ARG OCI_DESCRIPTION="DeepSonar official governed Agent sandbox runtime."
+LABEL io.deepsonar.contract="deepsonar.runtime.contract/v1" \
+      io.deepsonar.toolset="${TOOLSET}" \
+      io.deepsonar.image-key="deepsonar-${TOOLSET}" \
+      io.deepsonar.tools-manifest="/opt/deepsonar/tool-manifest.json" \
+      io.deepsonar.manuals="/opt/deepsonar/manuals/index.json" \
+      org.opencontainers.image.title="${OCI_TITLE}" \
+      org.opencontainers.image.description="${OCI_DESCRIPTION}" \
+      org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.documentation="https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md" \
+      org.opencontainers.image.licenses="LicenseRef-DeepSonar-Proprietary"
+ENV IS_SANDBOX=1
+COPY --from=runtime-rootfs / /
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

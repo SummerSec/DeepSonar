@@ -1,0 +1,36 @@
+export {
+  BASE_CLI_COMPATIBLE_IMAGES,
+  CLI_CAPABILITY_MANIFESTS,
+  PHASE1_CLI_CAPABILITY_IDS,
+  availableCliCapabilityIdsForImage,
+  cliCapabilityPackDigest,
+  cliCapabilityPackRecords,
+  cliConfigFingerprint,
+  cliPackFingerprint,
+  findCliCapability,
+  freezeCliCapability,
+  freezeCliCapabilityPack,
+  listCliCapabilities,
+} from "./catalog.js";
+export {
+  admitCliCapabilities,
+  admitCliCapability,
+  type CliAdmitRequest,
+  type CliAdmitResult,
+  type CliAdmitSetRequest,
+  type CliAdmitSetResult,
+} from "./admit.js";
+
+export {
+  REA_CLI_ARTIFACT_EXTENSION,
+  REA_CLI_CAPABILITY_ID,
+  REA_TOOL,
+  REA_TOOL_VERSION,
+  buildReaCliCapabilityResult,
+  buildReaCliFactProposal,
+  isReaCliImageAdmitted,
+  planReaCliCleanup,
+  type ReaCliCleanupPlan,
+  type ReaCliFactContext,
+  type ReaCliObservationInput,
+} from "./rea-cli-evidence.js";

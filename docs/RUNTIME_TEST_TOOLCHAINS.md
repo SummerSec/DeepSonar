@@ -1,0 +1,54 @@
+# Runtime-test 工具链与证据边界
+
+> **状态：as-built**。索引：[`README.md`](README.md)。角色×官方镜像权威矩阵见 [`RUNTIME_ROLE_IMAGE_MATRIX.md`](RUNTIME_ROLE_IMAGE_MATRIX.md)（#565）。
+
+DeepSonar 把“读代码找问题”和“启动目标、发送请求、观察实际结果”分成两类工作。`audit` 提供基础工具让 Agent 自行阅读与假设，**不是**“规则匹配通常足够”的固定 SAST 路径；需要 `runtime_test` 的 `test` Job 默认使用受治理的 `deepsonar-kali-minimal`（Kali Test），Job 创建时由 Scheduler 冻结可信 digest。系统 `verify` 全局默认仍是 Base（未绑定 RoleConfig 时使用 Base 系统沙箱）；只有目标确实需要动态复现时，项目级 RoleConfig 才显式选择一个已准入、可信且具备目标工具链的镜像。
+
+## 语言能力矩阵
+
+| 场景 | Java | Python | Go | Rust |
+| --- | --- | --- | --- | --- |
+| 只读代码、读构建产物、Agent 自选启发式 | `deepsonar-audit`（git / ripgrep / binutils 等基础工具；不预装 SAST/密钥扫描器） | 同左 | 同左 | 同左 |
+| `test` 动态 PoC / 小服务 | Kali Test：Temurin JDK 8/11/17 + Maven 3.9.16 | Kali Test：Python 3.10–3.14 + `uv` | Kali Test：Go 编译器与运行时 | Kali Test：`rustc` + `cargo` |
+| `verify` 动态复现 | 默认 Base；项目显式覆盖为可信动态镜像 | 同左 | 同左 | 同左 |
+| 多服务、数据库、Compose 全家桶 | 默认镜像均不保证；另行设计专项环境 | 同左 | 同左 | 同左 |
+
+Base 刻意不包含 JDK、Maven、Go、Rust 和完整多版本 Python。Kali Test 也不安装 Kali metapackage、GUI 或 Docker-in-Docker；不要把它当成任意目标的完整开发环境。
+
+## Runtime-test 纪律
+
+- 所有官方镜像先读取 `/opt/deepsonar/manuals/index.json`，再按任务选择具体工具章节；手册给出调用和证据边界，但不扩大冻结权限。缺少章节或摘要不一致是镜像交付错误，不能靠联网查官网绕过。
+- 先读取冻结 runtime manifest，按目标语言检查相关预装工具：Java 用 `command -v java`、`java -version`；Maven 项目再用 `command -v mvn`、`mvn -v`（必要时使用 `java8` / `java11` / `java17`）；Python 用目标所需的 `python3.x` / `uv`；Go 用 `command -v go`、`go version`；Rust 用 `command -v rustc`、`rustc --version`、`command -v cargo`、`cargo --version`，并记录镜像 key、digest 和版本。
+- 不在 Job 内用 `apt-get`、JDK/Maven 压缩包、SDKMAN、`./mvnw` 或其它 bootstrap fallback 安装或下载工具链。项目依赖是否可下载仍由冻结的 `DEEPSONAR_ALLOW_EGRESS` 决定。
+- 工具缺失时停止动态尝试；绑定目标 Finding 的普通补证 Worker 提交 `emit_fact.verification.outcome=inconclusive`，没有目标 Finding 的普通 Test 提交普通 Fact（title/description），不传 verification、不编造 finding_id。Verify 只消费证据，缺口通过 `mark_job_done(verdict=rework, missing_evidence=[...])` 提案，人工授权/凭据/业务判断阻塞通过 `mark_job_done(verdict=needs_human)`；Verify 不调用 `emit_fact` 或 `request_human`。普通 Worker 的人工阻塞才用带 reason 与显式 subject 的 `request_human`。不得用静态叙述冒充运行时结果。
+- OpenHarmony Test 的设备协议是官方 `hdc`（`list targets` / `shell` / `file send|recv` / `install` / `hilog` / `fport` / `tconn`）。无 target 时必须按上述角色边界报告缺口，禁止把主机构建日志或源码叙述写成设备结果。audit/fuzz 仍可使用主机 Clang/ASan/libFuzzer；不要把 gdb/strace 或 Kali 进程工具当成 OH 的设备协议。
+- 移动端专项镜像 `deepsonar-mobile`：Android 设备协议是官方 `adb`；iOS Linux 宿主是 `idevice_id` / `ideviceinstaller` / `iproxy`（无 Xcode/Simulator）；OpenHarmony 设备协议是官方 `hdc`（与 OH Test 同一 vendor 二进制），HAP 静态检查用 unzip + `pack.info` / `module.json`。Android 静态检查：Java/Kotlin 用 JADX CLI、apktool、bundletool、apkeep、androguard、钉死的 `rust-asc`（rust_ASC v0.1.1：默认按需 `getclass`/`getmanifest`/`findrefs`，`droidasc` 为薄兼容入口，`droidasc-python` 显式选择 Python 回退；与 JADX 互补；禁止 `--gui` 和 MCP），以及 Agent 可调用的钉死 `apkcheckpack`（加固/SDK 指纹，不是平台扫描入口）；`.so` 用 `readelf`/`objdump`/`nm`、radare2 与 LIEF（`mobile-so.sh inspect`）。运行时插桩用 Frida/Objection 与 `/opt/deepsonar/frida-server`。不预装 mitmproxy/Burp。无 adb / hdc / idevice 目标时必须按上述角色边界报告缺口，禁止把 JADX/droidasc 反编译或 HAP/IPA 解压叙述写成设备、流量或原生结果。不预装 MobSF / jadx-gui / Burp / IDA / Ghidra / DevEco / 第三方 MCP。
+- 合格计入配对库存的 test 证据至少要有 `subject_revision`、完整 `steps`、`expected`，以及 `actual` 或 `artifact_refs`，来源 Job 必须成功结束，且 test 与 review 来自不同 Job 时才算配对完整；该配对在 Fact-first v1 下对 CTF/general 为 advisory；对 security.vulnerability 等安全 profile（#590）升为 confirmed 必需项，不得抹空 missing 放行。
+
+## 冒烟与真实证据
+
+- `node agent-harness/test-mobile-runtime.mjs` 用假 adb / hdc / idevice_id 与样本 HAP 检查版本冒烟与空设备 `needs_human` / `inconclusive`，不要求真机。
+- `node agent-harness/test-runtime-image.mjs <image> kali-minimal agent-harness/kali-minimal-runtime.json` 在断网、丢弃 capabilities 和资源限制下检查预装 Java/Go/Rust/Python/Maven；其中 `mvn -v` 只验证工具存在，不下载依赖。
+- `node agent-harness/test-maven-package.mjs <image>` 使用联网最小 POM 构建并运行一个 Java 类，仓库放在临时目录，不写入镜像的 `.m2`。
+- `python agent-harness/test-runtime-images-api.py` 检查 Test 默认 Kali、Verify 默认 Base、显式项目级 Verify 动态覆盖和 Job 不可变 snapshot。
+
+这些是运行时能力和配置门禁，不是对 `java-sec-code` 或任何具体漏洞的确认。Scheduler 确认硬门是可版本化的 Fact-first 策略（当前 `fact_first` v1）：合格的结构化 supporting Fact（含 `subject_revision` / ownership / `expected` / `actual` / `outcome=supports`）即可确认；独立 review + runtime_test 配对对 CTF/general 是 **advisory** 完整度提示；对 security.vulnerability 等安全 profile（#590）是 confirmed 必需门禁；冻结策略要求的 attempted_refutation 直接读取结构化反证尝试，不能从 limitations 推断，安全 Finding 还需结构化 impact。`confirmed` 时 `missing_evidence` 必须为空（必需项），advisory 另列。本地冒烟本身永远不会生成 Finding。
+
+运行证明与文本 expected/actual 的边界（#577）：策略若要求 runtime proof，须持久化目标 revision、steps、environment 或 runtime_digest、exit_code，以及带内容摘要的产物引用；仅有文本 expected/actual 不构成已复现证明。内容完整性摘要与 Hub 唤醒用 evidence_signature / gate_fingerprint 分离——修改完整性不得引入重复 Hub 唤醒。确认记录可通过 fact_evidence_trace 按 used_fact_ids（canvas Fact 节点）回放到来源 Job/Attempt 与可复查产物；无生产库样本时不预断言悬空数量。
+
+
+安全漏洞证明契约（#578）：profile `security.vulnerability` 可启用 `security.vulnerability.proof` v1。静态路径保留文件位置、片段摘要与可达路径依据；动态路径须满足运行证明（revision + steps + environment/runtime_digest + exit_code/产物摘要）。TODO/注释/危险函数存在/单纯行号命中不能单独过门；缺工具/目标/设备按上述角色边界报告缺口，不得用源码叙述冒充执行观察。该契约默认不启用；fact_first v1 仍是通用确认硬门。
+
+## ASC 默认实现与验证边界（#754）
+
+`rust-asc` 默认使用 [rust_ASC v0.1.1](https://github.com/MG1937/rust_ASC/tree/236dd096669c99eb30f6e1af0b24e668eff55dd5)，源码固定为 `236dd096669c99eb30f6e1af0b24e668eff55dd5`；构建固定 submodule 与 Cargo.lock，并使用 `--no-default-features` 禁用上游默认 MCP。`droidasc` 提供 CLI 兼容入口，将 `--threads` 映射到 Rust 的 `--thread`，并将顶层 `--help` 转为上游成功的无参数帮助（子命令帮助仍保留上游退出码 1）；分析命令的真实失败不得被忽略。
+
+`droidasc-python` 显式调用保留的 Python Droid ASC `0.1.1.post1`。Rust 失败后不自动重跑 Python；Agent 若需要回退，应明确记录所选实现、版本、APK 哈希、参数、stdout/stderr、退出码与输出文件。JADX、apktool 继续承担完整反编译及资源/smali 工作。Python 仍供 Frida、Objection、androguard、LIEF 等工具使用，本次迁移不意味着可移除全部 Python。
+
+实现契约与验收证据分开：`--help` 或 mock 通过不证明 APK 兼容。需用已获许可的 fixture 验证 Manifest、类查询、引用搜索、模糊匹配、文件输出、多 DEX、无结果、非法类名和损坏文件，并逐项保留输出和退出码。amd64/arm64 的构建与实际运行应分别报告，QEMU 运行不能标为原生运行；[已记录的验收证据](../agent-harness/fixtures/asc/validation.md)覆盖最终 amd64 和 arm64（QEMU）镜像，各通过 59 次真实命令检查；不代表原生 arm64、复杂 APK 的普遍兼容或性能提升已验证。
+
+已发布 registry 的 immutable digest 保持原样，不把源码工具迁移伪写为既有镜像内容。新镜像须独立构建验收后再经发布流程登记；本 PR 不发布镜像。
+
+## 留存完整性不等于执行认证
+
+结构化 runtimeProof 的目标 revision、steps、environment/runtime_digest、exit_code 与产物摘要仍由 Agent 声明，不能仅凭字段齐全称为宿主执行认证。管理 evidence-trace 本片重读实际字节，runtime_proof=false、execution_assurance=not_attested，replay 仅 evidence_integrity_check，不运行命令；实现与待验收边界见[证据追踪](EVIDENCE_TRACE.md)。knownness helper 尚未接入运行时，不能作为 novel 权威。

@@ -1,0 +1,436 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+import {
+  OPENSANDBOX_EGRESS_IMAGE,
+  OPENSANDBOX_EXECD_IMAGE,
+  OPENSANDBOX_SERVER_IMAGE,
+} from "./opensandbox-version.js";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "../../..");
+
+function parseTomlInt(toml: string, key: string): number | undefined {
+  const match = toml.match(new RegExp(`^${key}\\s*=\\s*(-?\\d+)\\s*$`, "m"));
+  return match ? Number(match[1]) : undefined;
+}
+
+function assertDockerHostPortPool(toml: string, label: string): void {
+  const docker = toml.match(/\[docker\]([\s\S]*?)(?=\n\[|$)/);
+  assert.ok(docker, `${label}: [docker] section must exist`);
+  const min = parseTomlInt(docker[1], "port_range_min");
+  const max = parseTomlInt(docker[1], "port_range_max");
+  assert.equal(typeof min, "number", `${label}: docker.port_range_min must be set`);
+  assert.equal(typeof max, "number", `${label}: docker.port_range_max must be set`);
+  assert.ok(min! < max!, `${label}: port_range_min must be less than port_range_max`);
+  assert.ok(max! - min! >= 100, `${label}: official schema requires a range of at least 100 ports`);
+  assert.notDeepEqual({ min, max }, { min: 40000, max: 60000 }, `${label}: must not regress to the OpenSandbox default 40000-60000 pool`);
+  assert.ok(max! <= 49000, `${label}: must stay below Windows ephemeral / Hyper-V excluded ports`);
+}
+
+test("OpenSandbox deploy pins official schema and immutable digests", () => {
+  const toml = readFileSync(join(root, "deploy/opensandbox/config.toml"), "utf8");
+  const compose = readFileSync(join(root, "deploy/docker-compose.opensandbox.yml"), "utf8");
+  assert.match(toml, /network_mode = "bridge"/);
+  assert.match(toml, /no_new_privileges = true/);
+  assert.match(toml, /drop_capabilities = \["ALL"\]/);
+  assert.match(toml, /type = "sqlite"/);
+  assert.match(toml, /\[ingress\][\s\S]*?mode = "direct"/);
+  assert.doesNotMatch(toml, /\[ingress\][\s\S]*?mode = "gateway"/);
+  assert.doesNotMatch(toml, /(?:^|\s)latest(?:\s|$)|network_mode = "host"|api_key_env|^\s*driver\s*=/m);
+  assert.match(toml, new RegExp(OPENSANDBOX_EXECD_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(toml, new RegExp(OPENSANDBOX_EGRESS_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(compose, new RegExp(OPENSANDBOX_SERVER_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(compose, /OPENSANDBOX_SERVER_API_KEY/);
+  assert.match(compose, /127\.0\.0\.1:18081:8080/);
+  assert.doesNotMatch(compose, /127\.0\.0\.1:8080:8080/);
+  assert.match(compose, /driver: bridge/);
+  assert.doesNotMatch(compose, /:latest|network_mode:\s*host/);
+});
+
+
+test("OpenSandbox Docker ingress defaults to direct until server supports docker gateway (#556)", () => {
+  const toml = readFileSync(join(root, "deploy/opensandbox/config.toml"), "utf8");
+  const ingress = toml.match(/\[ingress\]([\s\S]*?)(?=\n\[|$)/);
+  assert.ok(ingress, "missing [ingress]");
+  assert.match(ingress[1], /mode = "direct"/);
+  assert.doesNotMatch(ingress[1], /mode = "gateway"/);
+  assert.match(toml, /#556/);
+  assert.match(toml, /#548/);
+});
+
+test("OpenSandbox compose mounts /.dockerenv so Podman in-container detection matches Docker", () => {
+  const files = [
+    "deploy/docker-compose.opensandbox.yml",
+    "deploy/docker-compose.opensandbox.prod.yml",
+    "deploy/docker-compose.worker.yml",
+  ];
+  for (const file of files) {
+    const compose = readFileSync(join(root, file), "utf8");
+    assert.match(compose, /opensandbox\/dockerenv:\/\.dockerenv:ro/, file);
+  }
+  const marker = readFileSync(join(root, "deploy/opensandbox/dockerenv"), "utf8");
+  assert.match(marker, /#422/);
+});
+
+test("OpenSandbox Docker host port pool stays below the Windows excluded band", () => {
+  assertDockerHostPortPool(readFileSync(join(root, "deploy/opensandbox/config.toml"), "utf8"), "deploy/opensandbox/config.toml");
+});
+
+test("OpenSandbox Docker host port pool assertion rejects missing keys and the default 40000-60000 range", () => {
+  assert.throws(
+    () => assertDockerHostPortPool("[docker]\nnetwork_mode = \"bridge\"\n", "missing-keys"),
+    /port_range_min must be set/,
+  );
+  assert.throws(
+    () => assertDockerHostPortPool("[docker]\nport_range_min = 40000\nport_range_max = 60000\n", "default-pool"),
+    /must not regress to the OpenSandbox default 40000-60000 pool/,
+  );
+});
+
+
+test("deploy.sh bounds compose up and keeps final readiness gate (#726)", () => {
+  const deploySh = readFileSync(join(root, "deploy/deploy.sh"), "utf8");
+  const bounded = readFileSync(join(root, "deploy/bounded-wait.sh"), "utf8");
+  const compat = readFileSync(join(root, "deploy/docker-compose.podman-compat.yml"), "utf8");
+  const prod = readFileSync(join(root, "deploy/docker-compose.prod.yml"), "utf8");
+  assert.match(deploySh, /bounded-wait\.sh/);
+  assert.match(deploySh, /ds_run_bounded/);
+  assert.match(deploySh, /ds_wait_entry_ready/);
+  assert.match(deploySh, /refusing success via service_started alone/);
+  assert.match(bounded, /ds_dump_deploy_diagnostics/);
+  assert.match(compat, /condition: service_started/);
+  // Default prod path still uses service_healthy; compat is opt-in / Podman auto.
+  assert.match(prod, /condition: service_healthy/);
+  assert.match(prod, /silo-init: silo not ready after 120s/);
+});
+
+test("OpenSandbox production overlay is the default real deploy path", () => {
+  const overlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod.yml"), "utf8");
+  const deploySh = readFileSync(join(root, "deploy/deploy.sh"), "utf8");
+  const deployPs1 = readFileSync(join(root, "deploy/deploy.ps1"), "utf8");
+  assert.match(overlay, new RegExp(OPENSANDBOX_SERVER_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(overlay, /SANDBOX_PROVIDER: opensandbox/);
+  assert.match(overlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-opensandbox:8080\}/);
+  assert.match(deploySh, /network connect bridge/);
+  assert.match(overlay, /OPEN_SANDBOX_HOST_PORT:-18081/);
+  assert.match(overlay, /condition: service_healthy/);
+  assert.match(overlay, /127\.0\.0\.1:8080\/health/);
+  assert.match(overlay, /OPENSANDBOX_SERVER_API_KEY/);
+  // #685: business network only; the managed proxy reaches Scheduler over the
+  // gateway_upstream socket volume. Full topology lint: compose-network-topology.test.ts.
+  assert.match(overlay, /networks: \[deepsonar\]/);
+  assert.doesNotMatch(overlay, /sandbox_gateway/);
+  const prodCompose = readFileSync(join(root, "deploy/docker-compose.prod.yml"), "utf8");
+  assert.match(prodCompose, /networks: \[deepsonar\]\n/);
+  assert.doesNotMatch(prodCompose, /sandbox_gateway/);
+  assert.match(prodCompose, /DEEPSONAR_GATEWAY_UPSTREAM_SOCKET_VOLUME/);
+  assert.match(prodCompose, /#685/);
+  assert.doesNotMatch(overlay, /:latest|network_mode:\s*host/);
+  assert.doesNotMatch(overlay, /127\.0\.0\.1:8080:8080/);
+  assert.match(deploySh, /SANDBOX_PROVIDER:-opensandbox/);
+  assert.match(deploySh, /docker-compose.opensandbox.prod.yml/);
+  assert.match(deploySh, /up\)[\s\S]*relax_bridge_forward/);
+  assert.match(deploySh, /relax_bridge_forward[\s\S]*iptables-legacy -P FORWARD ACCEPT/);
+  assert.match(deploySh, /down\/logs\/status\/check\/pull must not/);
+  assert.match(deployPs1, /IsNullOrWhiteSpace\(\$env:SANDBOX_PROVIDER\)/);
+  assert.match(deployPs1, /docker-compose.opensandbox.prod.yml/);
+  const pkg = readFileSync(join(root, "package.json"), "utf8");
+  const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  assert.match(pkg, /ci:smoke:opensandbox-prod-stack/);
+  // After #588, smoke scripts build runtime-manual-contract before runtime-sandbox.
+  const smokeBuildPrefix = /pnpm --filter @deepsonar\/runtime-manual-contract build && pnpm --filter @deepsonar\/runtime-sandbox build/;
+  for (const script of [
+    "ci:smoke:opensandbox-prod-compose",
+    "ci:smoke:opensandbox-prod-official",
+    "ci:smoke:opensandbox-reconcile",
+    "ci:smoke:opensandbox-reaper",
+    "ci:smoke:opensandbox-dispatch",
+    "ci:smoke:opensandbox-api",
+    "ci:smoke:opensandbox-cli-control",
+    "ci:smoke:opensandbox-gvisor",
+    "ci:smoke:opensandbox-k8s-assets",
+  ]) {
+    assert.match(pkg, new RegExp(`${script}": ".*${smokeBuildPrefix.source}`));
+  }
+  const isolate = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod-isolated.yml"), "utf8");
+  assert.match(isolate, /name: \$\{OPEN_SANDBOX_POC_GATEWAY_UPSTREAM_VOL:-os-poc-gateway-upstream\}/);
+  assert.doesNotMatch(isolate, /deepsonar-gateway-upstream/);
+  const hostOverlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.host.yml"), "utf8");
+  assert.match(hostOverlay, /SANDBOX_PROVIDER: opensandbox/);
+  assert.match(hostOverlay, /DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL: \$\{DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL:-http:\/\/host\.docker\.internal:\$\{SCHEDULER_HOST_PORT:-13100\}\/gateway\}/);
+  assert.doesNotMatch(hostOverlay, /127\.0\.0\.1:13100\/gateway/);
+  assert.match(hostOverlay, /DEEPSONAR_ADMIN_TOKEN: \$\{DEEPSONAR_ADMIN_TOKEN:\?set DEEPSONAR_ADMIN_TOKEN\}/);
+  assert.doesNotMatch(hostOverlay, /poc-admin-token/);
+  assert.match(hostOverlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-127\.0\.0\.1:18081\}/);
+  assert.match(hostOverlay, /network_mode: host/);
+  assert.match(hostOverlay, /host\.docker\.internal:host-gateway/);
+  assert.match(hostOverlay, /BLOB_STORE: s3/);
+  assert.match(hostOverlay, /127\.0\.0\.1:\$\{SILO_API_PORT:-19000\}/);
+  assert.match(hostOverlay, /^\s+silo:/m);
+  assert.match(hostOverlay, /^\s+silo-init:/m);
+  assert.match(hostOverlay, /\/var\/run\/docker\.sock/);
+  assert.match(hostOverlay, /Dockerfile\.scheduler/);
+  assert.match(hostOverlay, /Dockerfile\.web/);
+  assert.doesNotMatch(hostOverlay, /container_name:/);
+  assert.match(ci, /OpenSandbox production compose merge/);
+  assert.match(ci, /published: "18081"/);
+  assert.match(ci, /OpenSandbox host overlay gateway upstream/);
+  assert.match(ci, /host\.docker\.internal:14100\/gateway/);
+  assert.match(ci, /127\.0\.0\.1:13100\/gateway/);
+});
+
+test("OpenSandbox Kubernetes overlay pins Kata BatchSandbox and official schema", () => {
+  const toml = readFileSync(join(root, "deploy/opensandbox/config.k8s.toml"), "utf8");
+  const template = readFileSync(join(root, "deploy/opensandbox/batchsandbox-template.yaml"), "utf8");
+  const runtimeClass = readFileSync(join(root, "deploy/opensandbox/runtimeclass-kata.yaml"), "utf8");
+  const namespace = readFileSync(join(root, "deploy/opensandbox/namespace.yaml"), "utf8");
+  const quota = readFileSync(join(root, "deploy/opensandbox/resourcequota.yaml"), "utf8");
+  const kustomization = readFileSync(join(root, "deploy/opensandbox/kustomization.yaml"), "utf8");
+  assert.match(toml, /type = "kubernetes"/);
+  assert.match(toml, /type = "kata"/);
+  assert.match(toml, /k8s_runtime_class = "kata-qemu"/);
+  assert.match(toml, /workload_provider = "batchsandbox"/);
+  assert.match(toml, /namespace = "deepsonar-opensandbox"/);
+  assert.match(toml, /mode = "direct"/);
+  assert.doesNotMatch(toml, /(?:^|\s)latest(?:\s|$)|workload_provider = "agent-sandbox"|type = "gvisor"/m);
+  assert.match(toml, new RegExp(OPENSANDBOX_EXECD_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(toml, new RegExp(OPENSANDBOX_EGRESS_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(template, /restartPolicy: Never/);
+  assert.doesNotMatch(template, /^\s*runtimeClassName:/m);
+  assert.match(runtimeClass, /name: kata-qemu/);
+  assert.match(runtimeClass, /handler: kata-qemu/);
+  assert.match(namespace, /name: deepsonar-opensandbox/);
+  assert.match(quota, /kind: ResourceQuota/);
+  assert.match(quota, /kind: LimitRange/);
+  assert.match(quota, /namespace: deepsonar-opensandbox/);
+  assert.match(quota, /pods: "32"/);
+  assert.match(quota, /defaultRequest:/);
+  assert.match(template, /requests:/);
+  assert.match(template, /limits:/);
+  assert.match(template, /drop: \["ALL"\]/);
+  assert.match(template, /allowPrivilegeEscalation: false/);
+  assert.match(kustomization, /namespace\.yaml/);
+  assert.match(kustomization, /runtimeclass-kata\.yaml/);
+  assert.match(kustomization, /resourcequota\.yaml/);
+  assert.match(kustomization, /gateway-service\.yaml/);
+  assert.doesNotMatch(kustomization, /batchsandbox-template\.yaml/);
+  const gatewayService = readFileSync(join(root, "deploy/opensandbox/gateway-service.yaml"), "utf8");
+  assert.match(gatewayService, /name: deepsonar-gateway-proxy/);
+  assert.match(gatewayService, /port: 3100/);
+  assert.match(gatewayService, /targetPort: 3100/);
+  assert.doesNotMatch(gatewayService, /selector:/);
+  assert.doesNotMatch(gatewayService, /port: 80/);
+  const schedulerDockerfile = readFileSync(join(root, "deploy/Dockerfile.scheduler"), "utf8");
+  assert.match(schedulerDockerfile, /KUBECTL_VERSION=v1\.36\.4/);
+  assert.match(schedulerDockerfile, /\/usr\/local\/bin\/kubectl/);
+  assert.match(schedulerDockerfile, /sha256sum -c/);
+  const external = readFileSync(join(root, "deploy/opensandbox/config.k8s.external.toml"), "utf8");
+  const k8sCompose = readFileSync(join(root, "deploy/docker-compose.opensandbox.k8s.yml"), "utf8");
+  assert.match(external, /type = "kubernetes"/);
+  assert.match(external, /type = "kata"/);
+  assert.match(external, /k8s_runtime_class = "kata-qemu"/);
+  assert.match(external, /kubeconfig_path = "\/etc\/opensandbox\/kubeconfig"/);
+  assert.match(external, /port = 18084/);
+  assert.doesNotMatch(external, /(?:^|\s)latest(?:\s|$)|workload_provider = "agent-sandbox"|type = "gvisor"/m);
+  assert.match(k8sCompose, /config\.k8s\.external\.toml/);
+  assert.match(k8sCompose, /OPEN_SANDBOX_KUBECONFIG/);
+  assert.match(k8sCompose, /OPEN_SANDBOX_KUBERNETES=1/);
+  assert.match(k8sCompose, /deepsonar-opensandbox-k8s/);
+  assert.match(k8sCompose, /127\.0\.0\.1:18084\/health/);
+  assert.doesNotMatch(k8sCompose, /docker\.sock|:latest/);
+  assert.doesNotMatch(k8sCompose, /container_name: deepsonar-opensandbox$/m);
+  const assetsPoc = readFileSync(join(root, "packages/runtime-sandbox/poc/opensandbox-k8s-assets-poc.ts"), "utf8");
+  const runtime = readFileSync(join(root, "apps/scheduler/src/runtime.ts"), "utf8");
+  assert.match(assetsPoc, /OPEN_SANDBOX_POC_K8S_ASSETS/);
+  assert.match(assetsPoc, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(assetsPoc, /sharedAssetsMount/);
+  assert.match(assetsPoc, /OPENSANDBOX_POC_K8S_ASSETS_WRITABLE/);
+  assert.match(assetsPoc, /OPENSANDBOX_POC_K8S_PVC_LEFTOVER/);
+  assert.match(runtime, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(runtime, /OPEN_SANDBOX_KUBECONFIG/);
+});
+
+test("OpenSandbox vendor CLI PoC routes models through Scheduler Gateway", () => {
+  const poc = readFileSync(join(root, "agent-harness/opensandbox/opensandbox-cli-control.poc.ts"), "utf8");
+  assert.match(poc, /registerGateway/);
+  assert.match(poc, /mintJobToken/);
+  assert.match(poc, /encryptSecret/);
+  assert.match(poc, /DEEPSONAR_GATEWAY_TOKEN/);
+  assert.match(poc, /network: "restricted"/);
+  assert.match(poc, /DEEPSONAR_ALLOW_EGRESS: "0"/);
+  assert.doesNotMatch(poc, /network: "egress"/);
+  assert.match(poc, /vendor key leaked into OpenSandbox worker env/);
+  assert.match(poc, /vendor key leaked into OpenSandbox worker workspace/);
+  assert.match(poc, /runtimeCliEnv/);
+  assert.match(poc, /nudgesLeft/);
+  assert.match(poc, /completion gate missing session/);
+  assert.match(poc, /skillMaterializationPath/);
+  assert.match(poc, /DEEPSONAR_CONTROL_SKILL/);
+  assert.match(poc, /PLATFORM_SYSTEM_PROMPT/);
+  assert.match(poc, /systemPromptPath/);
+  assert.match(poc, /submit_hub_decision/);
+  assert.match(poc, /for \(const selectedCli of selectedClis\)/);
+  assert.match(poc, /vendor CLI PoC needs 0\.0\.0\.0:3100/);
+  assert.match(poc, /vendor CLI E2E requires all current CLIs/);
+  assert.match(poc, /vendor CLI E2E needs host docker access for Gateway bind/);
+  assert.match(poc, /assertVendorUpstreamPayload/);
+  assert.match(poc, /assertVendorUpstreamStatus/);
+  assert.match(poc, /assertVendorOfficialOrigin/);
+  assert.match(poc, /VENDOR_OFFICIAL_ORIGINS/);
+  assert.match(poc, /VENDOR_UPSTREAM_NOT_JSON|assertVendorPlanReachable/);
+  assert.match(poc, /180_000/);
+  assert.match(poc, /CLI_SESSION_ADAPTERS/);
+  assert.match(poc, /parseAgentSession/);
+  assert.match(poc, /encodeSteer/);
+  assert.match(poc, /adapter\.resume/);
+  assert.match(poc, /adapter\.materialize/);
+  assert.match(poc, /legacySettingsConfig/);
+  assert.match(poc, /splitPiModelRef/);
+  assert.match(poc, /encodeGetState/);
+  assert.match(poc, /delete process\.env\.OPEN_SANDBOX_KUBERNETES/);
+  assert.match(poc, /deepsonar-home/);
+  assert.doesNotMatch(poc, /ANTHROPIC_API_KEY: vendorKey|ANTHROPIC_API_KEY: vendorSecret/);
+  assert.doesNotMatch(poc, /OPENAI_API_KEY: vendorKey|DEEPSEEK_API_KEY: vendorKey/);
+});
+
+test("OpenSandbox live harness pins arch image separately from contract-fail busybox", () => {
+  const harness = readFileSync(join(root, "agent-harness/test-opensandbox-poc.ts"), "utf8");
+  assert.match(harness, /OPEN_SANDBOX_POC_ARCH_IMAGE/);
+  assert.match(harness, /runOpenSandboxArchPoc/);
+  assert.match(harness, /--case must be all, arch, images, prod-config, prod-up, k8s, or k8s-assets/);
+  assert.match(harness, /runOpenSandboxOfficialImagesPoc/);
+  assert.match(harness, /listOfficialOpenSandboxRuntimeImages/);
+  assert.match(harness, /prod-config/);
+  assert.match(harness, /prod-up/);
+  assert.match(harness, /runOpenSandboxK8sPoc/);
+  assert.match(harness, /runOpenSandboxK8sAssetsPoc/);
+  assert.match(harness, /envClean/);
+  assert.match(harness, /docker-compose.real.yml/);
+  const k8sPoc = readFileSync(join(root, "packages/runtime-sandbox/poc/opensandbox-k8s-poc.ts"), "utf8");
+  const k8sGateway = readFileSync(join(root, "packages/runtime-sandbox/src/kubernetes-gateway.ts"), "utf8");
+  const adapter = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox.ts"), "utf8");
+  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_NETWORK_NOT_ISOLATED/);
+  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_GATEWAY_BLOCKED/);
+  assert.match(k8sPoc, /bindGatewayProxyToKubernetesService/);
+  assert.match(k8sPoc, /http:\/\/\$\{GATEWAY_PROBE_SERVICE\}:3100\//);
+  assert.match(k8sPoc, /name: gateway[\s\S]*port: 3100/);
+  assert.match(k8sGateway, /OPENSANDBOX_POC_KATA_GATEWAY_SERVICE_IP/);
+  assert.match(k8sGateway, /port: 3100/);
+  assert.match(k8sGateway, /targetPort: 3100/);
+  assert.doesNotMatch(k8sGateway, /port: 80/);
+  assert.match(adapter, /\/etc\/hosts/);
+  assert.match(adapter, /uid: GATEWAY_HOSTS_ROOT_UID/);
+  assert.match(adapter, /bootstrap\.execd\.isolation/);
+  assert.match(adapter, /openSandboxCreateExtensions/);
+  assert.match(adapter, /injectGatewayHostsViaDockerExec/);
+  assert.match(adapter, /method=docker-exec|docker-exec/);
+  assert.match(adapter, /GatewayHostsBindError/);
+  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_DENY_LEAK/);
+  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HOST_ESCAPE/);
+  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_ENV_LEAK/);
+  assert.match(k8sPoc, /OPENSANDBOX_POC_KATA_HARD_LIMITS/);
+  assert.match(k8sPoc, /OPENSANDBOX_POC_AGENT_SANDBOX_PRESENT/);
+  const gvisorPoc = readFileSync(join(root, "packages/runtime-sandbox/poc/opensandbox-gvisor-poc.ts"), "utf8");
+  assert.match(gvisorPoc, /OPENSANDBOX_POC_GVISOR_EGRESS_UNEXPECTED/);
+  assert.match(gvisorPoc, /Failed to initialize nft/);
+  assert.match(gvisorPoc, /release\/20251006\/x86_64\/runsc/);
+  assert.doesNotMatch(gvisorPoc, /storage\.googleapis\.com\/gvisor\/releases\/release\/latest/);
+  assert.match(k8sPoc, /kubernetesResources: true/);
+  assert.match(harness, /--project-directory/);
+});
+
+test("OpenSandbox adapter does not import Agentbox SDK types", () => {
+  const adapter = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox.ts"), "utf8");
+  const shared = readFileSync(join(root, "packages/runtime-sandbox/src/runtime-shared.ts"), "utf8");
+  const agent = readFileSync(join(root, "packages/runtime-sandbox/src/runtime-agent.ts"), "utf8");
+  const gateway = readFileSync(join(root, "packages/runtime-sandbox/src/runtime-gateway.ts"), "utf8");
+  const docker = readFileSync(join(root, "packages/runtime-sandbox/src/runtime-docker.ts"), "utf8");
+  assert.doesNotMatch(adapter, /from ["']\.\/agentbox\.js["']/);
+  assert.doesNotMatch(adapter, /from ["']agentbox-sdk["']/);
+  assert.doesNotMatch(agent, /from ["']\.\/agentbox\.js["']/);
+  assert.doesNotMatch(agent, /from ["']agentbox-sdk["']/);
+  assert.doesNotMatch(gateway, /from ["']\.\/agentbox\.js["']/);
+  assert.doesNotMatch(gateway, /from ["']agentbox-sdk["']/);
+  assert.doesNotMatch(docker, /from ["']\.\/agentbox\.js["']/);
+  assert.doesNotMatch(docker, /from ["']agentbox-sdk["']/);
+  assert.match(docker, /export async function readDockerWorkspaceFile/);
+  assert.match(docker, /export async function writeDockerHumanInboxFile/);
+  const assetsIntegration = readFileSync(join(root, "packages/runtime-sandbox/src/shared-assets-volume.integration.test.ts"), "utf8");
+  assert.doesNotMatch(assetsIntegration, /from ["']\.\/agentbox\.js["']/);
+  assert.match(assetsIntegration, /from ["']\.\/runtime-docker\.js["']/);
+  assert.match(adapter, /from ["']\.\/runtime-shared\.js["']/);
+  assert.match(adapter, /inspectPreparedSharedAssetsVolume/);
+  assert.match(adapter, /assertSharedAssetsVolumeOwnership/);
+  assert.match(agent, /export async function runRealAgent/);
+  assert.match(shared, /export const SHARED_ASSETS_MOUNT_PATH/);
+  assert.match(shared, /export function parseToolManifest/);
+});
+
+test("real runner is OpenSandbox only and Agentbox is deleted", () => {
+  const barrel = readFileSync(join(root, "packages/runtime-sandbox/src/index.ts"), "utf8");
+  const runtime = readFileSync(join(root, "apps/scheduler/src/runtime.ts"), "utf8");
+  const pkg = JSON.parse(readFileSync(join(root, "packages/runtime-sandbox/package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+    exports?: Record<string, { types?: string; default?: string }>;
+  };
+  assert.doesNotMatch(barrel, /from ["']\.\/agentbox\.js["']/);
+  assert.doesNotMatch(barrel, /AgentboxRunner|createAgentboxRuntimeHost|wrapAgentboxProcess|agentbox-sdk/);
+  assert.equal(pkg.exports?.["./agentbox"], undefined);
+  assert.equal(pkg.dependencies?.["agentbox-sdk"], undefined);
+  assert.doesNotMatch(runtime, /AgentboxRunner|runtime-sandbox\/agentbox/);
+  assert.match(runtime, /provider !== ["']opensandbox["']/);
+  assert.match(runtime, /kubernetesResources: config\.runtime\.openSandbox\.kubernetes/);
+  assert.match(runtime, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(runtime, /bindGatewayProxyToKubernetesService/);
+  const config = readFileSync(join(root, "apps/scheduler/src/config.ts"), "utf8");
+  assert.match(config, /SANDBOX_PROVIDER", "opensandbox"/);
+  assert.match(config, /OPEN_SANDBOX_DOMAIN", "127.0.0.1:18081"/);
+  assert.match(config, /OPEN_SANDBOX_KUBERNETES/);
+  assert.match(runtime, /createWorkerPlaneOpenSandboxClient/);
+});
+
+test("worker-join compose keeps server-proxy and does not change single-host prod overlay", () => {
+  const worker = readFileSync(join(root, "deploy/docker-compose.worker.yml"), "utf8");
+  const deploySh = readFileSync(join(root, "deploy/deploy.sh"), "utf8");
+  const deployPs1 = readFileSync(join(root, "deploy/deploy.ps1"), "utf8");
+  const overlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod.yml"), "utf8");
+  assert.match(worker, new RegExp(OPENSANDBOX_SERVER_IMAGE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(worker, /worker-register\.mjs/);
+  assert.match(worker, /DEEPSONAR_CONTROL_PLANE/);
+  assert.match(worker, /DEEPSONAR_WORKER_BOOTSTRAP_TOKEN/);
+  assert.match(worker, /DEEPSONAR_WORKER_ENDPOINT/);
+  assert.match(worker, /worker-agent-state/);
+  const register = readFileSync(join(root, "deploy/worker-register.mjs"), "utf8");
+  assert.match(register, /DEEPSONAR_WORKER_TOKEN_FILE/);
+  assert.match(register, /WORKER_NODE_EXISTS/);
+  assert.match(register, /reuse the persisted node token with the current generation credentials for re-enrollment/);
+  assert.doesNotMatch(register, /DELETE \/workers\//);
+  const heartbeatFn = register.match(/async function heartbeat\([\s\S]*?\n\}/);
+  assert.ok(heartbeatFn);
+  assert.doesNotMatch(heartbeatFn[0], /\bendpoint\b/);
+  assert.doesNotMatch(worker, /:latest|network_mode:\s*host/);
+  assert.match(overlay, /OPEN_SANDBOX_DOMAIN: \$\{OPEN_SANDBOX_DOMAIN:-opensandbox:8080\}/);
+  assert.match(deploySh, /worker-join/);
+  assert.match(deploySh, /docker-compose.worker.yml/);
+  assert.match(deploySh, /--control-plane/);
+  assert.match(deployPs1, /worker-join/);
+  assert.match(deployPs1, /docker-compose.worker.yml/);
+});
+
+test("OpenSandbox config schema gate is wired into unit and CI gates (#583)", () => {
+  const pkg = readFileSync(join(root, "package.json"), "utf8");
+  const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const gate = readFileSync(join(root, "packages/runtime-sandbox/src/opensandbox-config-schema-gate.ts"), "utf8");
+  assert.match(pkg, /ci:gate:opensandbox-config-schema/);
+  assert.match(pkg, /opensandbox-config-schema-gate\.test\.ts/);
+  // Dedicated workflow step needs `workflow` token scope; gate still runs via runtime-sandbox unit.
+  assert.match(ci, /pnpm ci:unit:runtime-sandbox/);
+  assert.match(gate, /load_config\("\/etc\/opensandbox\/config\.toml"\)/);
+  assert.match(gate, /OPENSANDBOX_SERVER_IMAGE|pinnedOpenSandboxServerImage/);
+  assert.match(gate, /--network[\s\S]*none/);
+  assert.doesNotMatch(gate, /\/var\/run\/docker\.sock/);
+  assert.match(gate, /No docker\.sock/);
+  assert.match(gate, /OPENSANDBOX_SCHEMA_GATE_REQUIRED|schemaGateRequiredInThisEnvironment/);
+});

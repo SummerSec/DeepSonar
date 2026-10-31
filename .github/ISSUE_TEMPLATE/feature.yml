@@ -1,0 +1,46 @@
+name: 功能需求
+description: 新功能、交互改进或现有能力不够用
+title: "[Feat] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先写要解决的问题，再写建议方案。能指出影响的页面或组件更好。
+  - type: dropdown
+    id: component
+    attributes:
+      label: 主要影响
+      multiple: true
+      options:
+        - Web 控制台
+        - Scheduler
+        - Image Admission
+        - Model Gateway
+        - 部署 / Compose
+        - 数据库
+        - 运行时镜像
+        - 共享资产 / Silo
+        - 文档
+        - 其他
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: 现在的问题
+      description: 谁在什么场景下被挡住
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+      description: 可以不完美，写清期望结果即可
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 已经试过或排除的做法
+      description: 可选

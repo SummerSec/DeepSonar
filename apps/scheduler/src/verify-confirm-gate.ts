@@ -1,0 +1,211 @@
+/**
+ * Confirm hard-gate composition (#576 Fact-first + #577 integrity + optional #578 vuln proof).
+ * Verify only consumes Facts; vuln proof is opt-in for security.vulnerability.
+ */
+import {
+  evaluateVerificationStrategy,
+  isStructuredVerificationFact,
+  strategyActionableMissing,
+  profileRequiresEvidencePair,
+  type FactFirstGateResult,
+  type FactFirstRecord,
+  type VerificationStrategyDecision,
+} from "./verify-fact-gate.js";
+import {
+  evaluateEvidenceIntegrityForConfirm,
+  factNodeSnapshotsFromEvidenceRows,
+  mergeStrategyWithEvidenceIntegrity,
+} from "./verify-evidence-chain.js";
+import {
+  VULN_PROOF_PROFILE,
+  evaluateVulnProofContract,
+  extractVulnProofClaimFromRows,
+  mergeStrategyWithVulnProof,
+  vulnProofAuditFields,
+  type VulnProofClaim,
+} from "./vuln-proof-contract.js";
+import {
+  evaluateImpactForConfirm,
+  normalizeFindingImpact,
+  type FindingImpact,
+} from "./finding-impact.js";
+
+/** Minimal evidence shape needed by the confirm gate (mirrors verify.EvidenceSnapshot). */
+export type ConfirmGateEvidence = {
+  missing: string[];
+  conflicting_node_ids: string[];
+  review: Array<Record<string, unknown>>;
+  test: Array<Record<string, unknown>>;
+  facts?: FactFirstRecord[] | Array<Record<string, unknown>>;
+  gate?: FactFirstGateResult;
+};
+
+export type ConfirmGateOptions = {
+  findingId?: string | null;
+  subjectRevision?: string | null;
+  originJobId?: string | null;
+  /** Strategies that require reproduced runtime proof (not fact_first v1 default). */
+  requireRuntimeProof?: boolean;
+  requireObservedDigests?: boolean;
+  /**
+   * Opt-in security.vulnerability proof contract (#578).
+   * Default false — does not change fact_first v1 for CTF / non-vuln profiles.
+   */
+  requireVulnProof?: boolean;
+  /** Explicit claim; when omitted and requireVulnProof, extracted from evidence rows. */
+  vulnProof?: VulnProofClaim | null;
+  /** When set and not security.vulnerability, requireVulnProof is ignored. */
+  findingProfile?: string | null;
+  /** #590: force review/test pair as required (defaults from profileRequiresEvidencePair). */
+  requireEvidencePair?: boolean;
+  impact?: FindingImpact | null;
+  attemptedRefutation?: readonly string[] | null;
+  declaredUsedFactIds?: readonly string[];
+  factsById?: ReadonlyMap<string, FactFirstRecord>;
+};
+
+export type ConfirmGateResult = {
+  ok: boolean;
+  missing: string[];
+  gate: FactFirstGateResult;
+  strategy: VerificationStrategyDecision;
+  vuln_proof?: ReturnType<typeof vulnProofAuditFields> | null;
+};
+
+function evidenceRows(evidence: ConfirmGateEvidence): Array<Record<string, unknown>> {
+  const facts = Array.isArray(evidence.facts) ? (evidence.facts as Array<Record<string, unknown>>) : [];
+  return [...facts, ...evidence.review, ...evidence.test];
+}
+
+function factFirstRecordsFromSnapshot(evidence: ConfirmGateEvidence): FactFirstRecord[] {
+  if (Array.isArray(evidence.facts) && evidence.facts.length > 0) {
+    return evidence.facts as FactFirstRecord[];
+  }
+  return [...evidence.review, ...evidence.test].map((row) => ({
+    node_id: String(row.node_id ?? row.id ?? ""),
+    finding_id: (row.finding_id as string | null | undefined) ?? null,
+    job_id: (row.job_id as string | null | undefined) ?? null,
+    job_type: (row.job_type as string | null | undefined) ?? null,
+    job_status: (row.job_status as string | null | undefined) ?? null,
+    source_job_id:
+      (row.source_job_id as string | null | undefined) ??
+      (row.job_id as string | null | undefined) ??
+      null,
+    source_role:
+      (row.source_role as string | null | undefined) ??
+      (row.job_type as string | null | undefined) ??
+      null,
+    outcome: (row.outcome as string | null | undefined) ?? null,
+    subject_revision: (row.subject_revision as string | null | undefined) ?? null,
+    expected: (row.expected as string | null | undefined) ?? null,
+    actual: (row.actual as string | null | undefined) ?? null,
+    limitations: row.limitations,
+  }));
+}
+
+/**
+ * Shared confirm hard gate. Vuln proof merges only when requireVulnProof and
+ * (findingProfile is absent or security.vulnerability).
+ */
+export function evaluateConfirmGate(
+  evidence: ConfirmGateEvidence,
+  opts?: ConfirmGateOptions,
+): ConfirmGateResult {
+  const facts = factFirstRecordsFromSnapshot(evidence);
+  const eligible = (row: Record<string, unknown>) =>
+    (!opts?.findingId || row.finding_id === opts.findingId) &&
+    (!opts?.subjectRevision || row.subject_revision === opts.subjectRevision) &&
+    row.job_status === "succeeded" &&
+    isStructuredVerificationFact(row as FactFirstRecord) &&
+    (!opts?.originJobId || (row.source_job_id ?? row.job_id) !== opts.originJobId);
+  const review = evidence.review.filter(eligible);
+  const test = evidence.test.filter(eligible);
+  const requirePair = opts?.requireEvidencePair ?? profileRequiresEvidencePair(opts?.findingProfile);
+  const pairMissing = requirePair ? [
+    ...(review.length ? [] : ["independent_review"]),
+    ...(test.length ? [] : ["runtime_test"]),
+    ...(review.length && test.length && !review.some((r) => test.some((t) => r.job_id !== t.job_id)) ? ["independent_jobs"] : []),
+    ...(test.length && !test.some((row) => row.outcome === "supports") ? ["supporting_test"] : []),
+    ...([...review, ...test].some((row) => row.outcome === "refutes") ? ["unresolved_conflict"] : []),
+  ] : evidence.missing;
+  const strategy = evaluateVerificationStrategy(facts, {
+    findingId: opts?.findingId ?? "",
+    subjectRevision: opts?.subjectRevision,
+    originJobId: opts?.originJobId,
+    pairMissing,
+    conflictingNodeIds: evidence.conflicting_node_ids,
+    findingProfile: opts?.findingProfile,
+    requireEvidencePair: opts?.requireEvidencePair,
+    declaredUsedFactIds: opts?.declaredUsedFactIds,
+    factsById: opts?.factsById,
+  });
+  const usedFactIds = new Set(strategy.used_fact_ids);
+  const usedRows = evidenceRows(evidence).filter((row) => usedFactIds.has(String(row.node_id ?? row.id ?? "")));
+  const integrity = evaluateEvidenceIntegrityForConfirm(
+    factNodeSnapshotsFromEvidenceRows(usedRows),
+    {
+      requireRuntimeProof: opts?.requireRuntimeProof === true,
+      requireObservedDigests: opts?.requireObservedDigests === true,
+    },
+  );
+  let merged = mergeStrategyWithEvidenceIntegrity(strategy, integrity);
+  // Corrupted evidence cannot justify a semantic terminal (including refuted).
+  if (!integrity.ok) merged = { ...merged, result: "insufficient" };
+
+  let vulnAudit: ReturnType<typeof vulnProofAuditFields> | null = null;
+  const profile = (opts?.findingProfile ?? "").trim();
+  const profileOk = !profile || profile === VULN_PROOF_PROFILE;
+  if (opts?.requireVulnProof === true && profileOk) {
+    const claim = opts.vulnProof ?? extractVulnProofClaimFromRows(evidenceRows(evidence));
+    const vuln = evaluateVulnProofContract(claim, { requireClaim: true });
+    vulnAudit = vulnProofAuditFields(vuln);
+    merged = mergeStrategyWithVulnProof(merged, vuln);
+  }
+
+  if (merged.require_evidence_pair) {
+    const extra: string[] = [];
+    const reasons: string[] = [];
+    const impactDecision = evaluateImpactForConfirm(
+      opts?.findingProfile,
+      opts?.impact ?? normalizeFindingImpact(null),
+    );
+    if (!impactDecision.ok) {
+      extra.push(...impactDecision.required_missing);
+      reasons.push(...impactDecision.reasons);
+    }
+    const attempted = (opts?.attemptedRefutation ?? usedRows.filter(eligible).flatMap((row) =>
+      Array.isArray(row.attempted_refutation) ? row.attempted_refutation : [],
+    )).filter((value): value is string => typeof value === "string").map((s) => s.trim()).filter(Boolean);
+    if (attempted.length === 0) {
+      extra.push("attempted_refutation");
+      reasons.push("confirmed 必须附带 attempted_refutation");
+    }
+    const used = new Set(merged.used_fact_ids);
+    const tests = test.filter((row) => used.has(String(row.node_id ?? "")));
+    if (tests.some((row) => !Array.isArray(row.artifact_refs) || row.artifact_refs.length === 0)) {
+      extra.push("qualified_test_artifact_refs");
+      reasons.push("合格 test 缺少 artifact_refs");
+    }
+    if (extra.length > 0) {
+      merged = {
+        ...merged,
+        ok: false,
+        result: merged.result === "passed" ? "insufficient" : merged.result,
+        required_missing: [...new Set([...merged.required_missing, ...extra])],
+        reasons: [...merged.reasons, ...reasons],
+        confirm_reason: null,
+      };
+    }
+  }
+
+  if (!merged.ok && merged.result === "passed") merged = { ...merged, result: "insufficient" };
+  return {
+    ok: merged.ok,
+    missing: merged.ok ? [] : strategyActionableMissing(merged),
+    gate: merged.gate,
+    strategy: merged,
+    vuln_proof: vulnAudit,
+  };
+}
+
+export { profileRequiresEvidencePair };

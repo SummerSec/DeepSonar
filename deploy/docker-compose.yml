@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: deepsonar-postgres
+    environment:
+      POSTGRES_USER: deepsonar
+      POSTGRES_PASSWORD: deepsonar
+      POSTGRES_DB: deepsonar
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deepsonar -d deepsonar"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

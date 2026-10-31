@@ -1,0 +1,55 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { AuthMe } from "./api";
+import { nextEnabledRoleNames, resolveSettingsSectionTab, resolveSettingsTab, settingsSectionDataNeeds, settingsTabsForActor } from "./SettingsPanel";
+
+test("project role can be disabled and enabled again", () => {
+  const roles = [
+    { name: "test", enabled: true },
+    { name: "audit", enabled: true },
+  ] as Parameters<typeof nextEnabledRoleNames>[0];
+  assert.deepEqual(nextEnabledRoleNames(roles, "test"), ["audit"]);
+  const disabled = roles.map((role) => ({ ...role, enabled: role.name !== "test" }));
+  assert.deepEqual(nextEnabledRoleNames(disabled, "test"), ["test", "audit"]);
+});
+
+test("global settings accepts repair tabs from the URL", () => {
+  assert.equal(resolveSettingsTab(null, "credentials"), "credentials");
+  assert.equal(resolveSettingsTab(null, "roles"), "roles");
+  assert.equal(resolveSettingsTab(null, "bindings"), "roles");
+  assert.equal(resolveSettingsTab(null, "rules"), "rules");
+});
+
+test("project settings only accepts project-owned tabs and falls back safely", () => {
+  assert.equal(resolveSettingsTab("11111111-1111-4111-8111-111111111111", "roles"), "roles");
+  assert.equal(resolveSettingsTab("11111111-1111-4111-8111-111111111111", "rules"), "rules");
+  assert.equal(resolveSettingsTab("11111111-1111-4111-8111-111111111111", "credentials"), "roles");
+  assert.equal(resolveSettingsTab("11111111-1111-4111-8111-111111111111", "bindings"), "roles");
+  assert.equal(resolveSettingsTab("11111111-1111-4111-8111-111111111111", "unknown-tab"), "roles");
+  assert.equal(resolveSettingsTab("11111111-1111-4111-8111-111111111111", "missing"), "roles");
+});
+
+test("global settings sections cannot expose another governance domain", () => {
+  assert.equal(resolveSettingsSectionTab("agents", "credentials"), "roles");
+  assert.equal(resolveSettingsSectionTab("agents", "bindings"), "roles");
+  assert.equal(resolveSettingsSectionTab("credentials", "roles"), "credentials");
+  assert.equal(resolveSettingsSectionTab("access", "tokens"), "tokens");
+  assert.equal(resolveSettingsSectionTab("platform", "transfer"), "transfer");
+});
+
+test("global settings sections load only their owned data domains", () => {
+  assert.deepEqual(settingsSectionDataNeeds(null, "credentials"), { agent: false, modules: false, roleCredentialBindings: false });
+  assert.deepEqual(settingsSectionDataNeeds(null, "modules"), { agent: false, modules: true, roleCredentialBindings: false });
+  assert.deepEqual(settingsSectionDataNeeds(null, "platform"), { agent: false, modules: false, roleCredentialBindings: false });
+  assert.deepEqual(settingsSectionDataNeeds("project-id", "agents"), { agent: true, modules: true, roleCredentialBindings: false });
+});
+
+test("global settings tabs follow the scheduler permission model", () => {
+  const viewer: AuthMe = { auth_required: true, authenticated: true, actor: { type: "user", name: "viewer", role: "viewer", scopes: ["projects:read", "agents:read", "exports:read"] }, user: null };
+  const operator: AuthMe = { auth_required: true, authenticated: true, actor: { type: "user", name: "operator", role: "operator", scopes: ["projects:read", "agents:read", "agents:write"] }, user: null };
+  assert.deepEqual(settingsTabsForActor("access", viewer), ["account"]);
+  assert.deepEqual(settingsTabsForActor("access", operator), ["account"]);
+  assert.deepEqual(settingsTabsForActor("platform", viewer), ["rules", "transfer"]);
+  assert.deepEqual(settingsTabsForActor("credentials", viewer), ["credentials"]);
+  assert.deepEqual(settingsTabsForActor("agents", viewer), ["roles"]);
+});

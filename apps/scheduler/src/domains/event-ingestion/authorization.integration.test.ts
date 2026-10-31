@@ -1,0 +1,544 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import test from "node:test";
+import { deleteProjectsLeavingAuditShells } from "../../test-project-teardown.js";
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
+
+if (!testDatabaseUrl) {
+  test("semantic event authorization integration (set TEST_DATABASE_URL to run)", {
+    skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
+  }, () => {});
+} else {
+  test("semantic event authority rejects stale/malformed Jobs and preserves terminal ordering", async () => {
+    process.env.DATABASE_URL = testDatabaseUrl;
+    process.env.AGENT_MODE = "fake";
+
+    const { migrate, sql } = await import("../../db.js");
+    const { ingestEvent, ingestEventBundle } = await import("../../core.js");
+    const { ControlInputError } = await import("../../control-input.js");
+    const { createAttempt, markAttemptInterrupted } = await import("../job-attempt/application.js");
+    await migrate();
+
+    const projectId = randomUUID();
+    const canvasId = `event-authority-${randomUUID()}`;
+    const jobIds: string[] = [];
+    const workerSnapshot = {
+      name: "review",
+      role_kind: "role",
+      platform_tools: ["emit_progress", "emit_fact", "mark_job_done", "request_human"],
+    };
+    const auditSnapshot = {
+      name: "audit",
+      role_kind: "role",
+      platform_tools: ["emit_progress", "emit_finding", "mark_job_done"],
+    };
+    const hubSnapshot = {
+      name: "hub_reason",
+      role_kind: "hub",
+      platform_tools: ["list_available_roles", "emit_progress", "submit_hub_decision", "mark_job_done"],
+    };
+
+    await sql`
+      INSERT INTO projects (id, name, config_json)
+      VALUES (${projectId}, 'event-authority', ${sql.json({ rules: { hubEnabled: false } })})`;
+    await sql`
+      INSERT INTO canvases (id, project_id, title, target_json)
+      VALUES (
+        ${canvasId}, ${projectId}, 'event-authority',
+        ${sql.json({ network_policy: { allow_egress: false } })}
+      )`;
+    await sql`
+      INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
+      VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})`;
+
+    const makeJob = async (
+      type: string,
+      status: string,
+      snapshot: unknown,
+    ): Promise<string> => {
+      const id = randomUUID();
+      jobIds.push(id);
+      const encodedSnapshot = snapshot === null ? sql.unsafe("'null'::jsonb") : sql.json(snapshot as never);
+      await sql`
+        INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+        VALUES (${id}, ${projectId}, ${canvasId}, ${type}, ${status}, ${encodedSnapshot}, ${sql.json({})})`;
+      await sql`
+        INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+        VALUES (${canvasId}, ${id}, 'job', ${`${type}-${id.slice(0, 8)}`}, ${status}, ${sql.json({ baseline: true })})`;
+      return id;
+    };
+
+    const payloadFor = (type: string): unknown => {
+      switch (type) {
+        case "progress": return { message: "late event" };
+        case "fact": return { title: "late fact", description: "late description" };
+        case "finding": return {
+          title: "late finding",
+          summary: "late finding remains valid before authorization",
+          severity: "low",
+        };
+        case "hub_decision": return { complete: { from: [], description: "late decision" } };
+        case "plan": return {
+          plan: {
+            v: 1,
+            goal: "late plan goal",
+            tasks: [{
+              id: "late-task",
+              title: "late task title",
+              role: "explore",
+              description: "late task description",
+              prompt: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+            }],
+            completion: { mode: "explicit_result", description: "late completion policy" },
+          },
+        };
+        case "plan_result": return {
+          v: 1,
+          outcome: "continue",
+          summary: "late plan result summary",
+        };
+        case "human": return {
+          reason: "late operator decision",
+          subject: { type: "platform_blocker", kind: "business_decision" },
+        };
+        case "done": return { summary: "late completion" };
+        default: throw new Error(`unknown test event type ${type}`);
+      }
+    };
+
+    const assertRejectedWithoutWrites = async (jobId: string, type: string, code: string) => {
+      const eventId = randomUUID();
+      const [before] = await sql<{ events: number; dedup: number; limits: number; nodes: number; findings: number }[]>`
+        SELECT
+          (SELECT COUNT(*)::int FROM events WHERE job_id = ${jobId}) AS events,
+          (SELECT COUNT(*)::int FROM event_dedup WHERE job_id = ${jobId}) AS dedup,
+          (SELECT COUNT(*)::int FROM job_event_rate_limits WHERE job_id = ${jobId}) AS limits,
+          (SELECT COUNT(*)::int FROM canvas_nodes WHERE job_id = ${jobId}) AS nodes,
+          (SELECT COUNT(*)::int FROM findings WHERE job_id = ${jobId}) AS findings`;
+      await assert.rejects(
+        ingestEvent(jobId, { v: 1, event_id: eventId, type: type as never, payload: payloadFor(type) as never }),
+        (error: unknown) => {
+          assert.ok(error instanceof ControlInputError, `${type}: expected ControlInputError`);
+          assert.equal(error.code, code, `${type}: stable error code`);
+          return true;
+        },
+      );
+      const [after] = await sql<{ events: number; dedup: number; limits: number; nodes: number; findings: number }[]>`
+        SELECT
+          (SELECT COUNT(*)::int FROM events WHERE job_id = ${jobId}) AS events,
+          (SELECT COUNT(*)::int FROM event_dedup WHERE job_id = ${jobId}) AS dedup,
+          (SELECT COUNT(*)::int FROM job_event_rate_limits WHERE job_id = ${jobId}) AS limits,
+          (SELECT COUNT(*)::int FROM canvas_nodes WHERE job_id = ${jobId}) AS nodes,
+          (SELECT COUNT(*)::int FROM findings WHERE job_id = ${jobId}) AS findings`;
+      assert.deepEqual(after, before, `${type}: rejected event must roll back dedup/quota/event/Canvas writes`);
+      const [dedup] = await sql`SELECT 1 FROM event_dedup WHERE event_id = ${eventId}`;
+      assert.equal(dedup, undefined, `${type}: rejected event id must remain retryable`);
+    };
+
+    try {
+      const staleJobs = ["succeeded", "waiting_human", "cancelled", "timeout", "orphan"].map(async (status) => ({
+        status,
+        jobId: await makeJob("review", status, workerSnapshot),
+      }));
+      const stale = await Promise.all(staleJobs);
+      for (const { jobId } of stale) {
+        for (const type of ["progress", "fact", "finding", "hub_decision", "plan", "plan_result", "human", "done"]) {
+          await assertRejectedWithoutWrites(jobId, type, "job_not_running");
+        }
+      }
+
+      const auditJob = await makeJob("audit", "running", auditSnapshot);
+      await assertRejectedWithoutWrites(auditJob, "fact", "tool_not_allowed");
+      const workerJob = await makeJob("review", "running", workerSnapshot);
+      await assertRejectedWithoutWrites(workerJob, "finding", "tool_not_allowed");
+      const restrictedJob = await makeJob("review", "running", {
+        name: "review",
+        role_kind: "role",
+        platform_tools: ["emit_progress", "mark_job_done"],
+      });
+      await assertRejectedWithoutWrites(restrictedJob, "fact", "tool_not_allowed");
+
+      const legacyAuditJob = await makeJob("audit_module", "running", {
+        name: "audit_module",
+        agent_cli: "claude-code",
+        credential_id: null,
+        model: null,
+      });
+      await assertRejectedWithoutWrites(legacyAuditJob, "progress", "tool_not_allowed");
+
+      const customJob = await makeJob("explore", "running", {
+        agent_cli: "claude-code",
+        credential_id: null,
+        model: null,
+      });
+      const customAccepted = await ingestEvent(customJob, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "fact",
+        payload: { title: "custom role fact", description: "custom role is still a role" },
+      });
+      assert.equal(customAccepted.deduped, false);
+
+      for (const [type, snapshot] of [
+        ["verify_finding", { name: "verify", role_kind: "role" }],
+        ["hub_reason", { name: "hub_reason", role_kind: "role" }],
+        ["audit", { name: "audit", role_kind: "hub" }],
+      ] as const) {
+        const malformedJob = await makeJob(type, "running", snapshot);
+        const eventType = type === "verify_finding" ? "progress" : type === "hub_reason" ? "hub_decision" : "progress";
+        await assertRejectedWithoutWrites(malformedJob, eventType, "tool_not_allowed");
+      }
+      const reviewAsAuditJob = await makeJob("review", "running", { name: "audit", role_kind: "role" });
+      await assertRejectedWithoutWrites(reviewAsAuditJob, "finding", "tool_not_allowed");
+      const auditAsReviewJob = await makeJob("audit", "running", { name: "review", role_kind: "role" });
+      await assertRejectedWithoutWrites(auditAsReviewJob, "progress", "tool_not_allowed");
+      const hubNameMismatchJob = await makeJob("hub_reason", "running", { name: "review", role_kind: "hub" });
+      await assertRejectedWithoutWrites(hubNameMismatchJob, "hub_decision", "tool_not_allowed");
+      for (const snapshot of [null, ["not-an-object"], "not-an-object", 42]) {
+        const malformedJsonJob = await makeJob("review", "running", snapshot);
+        await assertRejectedWithoutWrites(malformedJsonJob, "progress", "tool_not_allowed");
+      }
+      const emptyTypeJob = await makeJob("", "running", {});
+      await assertRejectedWithoutWrites(emptyTypeJob, "progress", "tool_not_allowed");
+      const unknownWithoutNameJob = await makeJob("custom_missing_name", "running", {});
+      await assertRejectedWithoutWrites(unknownWithoutNameJob, "progress", "tool_not_allowed");
+      const customType = "custom_authorized_role";
+      const customMatchingJob = await makeJob(customType, "running", {
+        name: customType,
+        role_kind: "role",
+        platform_tools: ["emit_progress", "emit_fact", "mark_job_done"],
+      });
+      const customFact = await ingestEvent(customMatchingJob, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "fact",
+        payload: { title: "custom authorized fact", description: "custom snapshot contract" },
+      });
+      assert.equal(customFact.deduped, false);
+      const customDone = await ingestEvent(customMatchingJob, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "done",
+        payload: { summary: "custom authorized done" },
+      });
+      assert.equal(customDone.deduped, false);
+      const customMismatchJob = await makeJob("custom_name_mismatch", "running", {
+        name: "different_custom_role",
+        role_kind: "role",
+        platform_tools: ["emit_progress", "emit_fact", "mark_job_done"],
+      });
+      await assertRejectedWithoutWrites(customMismatchJob, "fact", "tool_not_allowed");
+      const customMissingToolsJob = await makeJob("custom_missing_tools", "running", {
+        name: "custom_missing_tools",
+        role_kind: "role",
+      });
+      await assertRejectedWithoutWrites(customMissingToolsJob, "fact", "tool_not_allowed");
+
+      const verifyHumanJob = await makeJob("verify_finding", "running", {
+        name: "verify",
+        role_kind: "system",
+        platform_tools: ["emit_progress", "mark_job_done"],
+      });
+      await assertRejectedWithoutWrites(verifyHumanJob, "human", "tool_not_allowed");
+      const reportHumanJob = await makeJob("report", "running", {
+        name: "report",
+        role_kind: "system",
+        platform_tools: ["emit_progress", "mark_job_done"],
+      });
+      await assertRejectedWithoutWrites(reportHumanJob, "human", "tool_not_allowed");
+      const workerHubJob = await makeJob("review", "running", workerSnapshot);
+      await assertRejectedWithoutWrites(workerHubJob, "hub_decision", "tool_not_allowed");
+
+      // The Hub complete gate is intentionally independent of authorization:
+      // close the helper Jobs used above so only the legal Hub under test is
+      // active on this Canvas.
+      await sql`
+        UPDATE jobs SET status = 'succeeded'
+        WHERE project_id = ${projectId}
+          AND status IN ('pending', 'claimed', 'provisioning', 'running', 'waiting_human')`;
+      await sql`
+        UPDATE canvas_nodes SET status = 'succeeded'
+        WHERE canvas_id = ${canvasId} AND job_id IS NOT NULL AND status = 'running'`;
+
+      const hubJob = await makeJob("hub_reason", "running", {
+        ...hubSnapshot,
+        name: "hub_reason",
+      });
+      const hubDecisionEventId = randomUUID();
+      const hubDecision = await ingestEvent(hubJob, {
+        v: 1,
+        event_id: hubDecisionEventId,
+        type: "hub_decision",
+        payload: { complete: { from: [], description: "legal Hub decision" } },
+      });
+      assert.equal(hubDecision.deduped, false);
+      const hubDone = await ingestEvent(hubJob, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "done",
+        payload: { summary: "legal Hub completion" },
+      });
+      assert.equal(hubDone.deduped, false);
+      const [hubState] = await sql<{ status: string; events: number }[]>`
+        SELECT status, (SELECT COUNT(*)::int FROM events WHERE job_id = ${hubJob}) AS events
+        FROM jobs WHERE id = ${hubJob}`;
+      assert.deepEqual(hubState, { status: "succeeded", events: 2 });
+      const hubReplay = await ingestEvent(hubJob, {
+        v: 1,
+        event_id: hubDecisionEventId,
+        type: "hub_decision",
+        payload: { complete: { from: [], description: "replayed after terminal" } },
+      });
+      assert.deepEqual(hubReplay, { deduped: true }, "dedup must win before status/history on a terminal replay");
+
+      const humanPayload = {
+        reason: "operator review",
+        subject: { type: "platform_blocker", kind: "business_decision" },
+      };
+      const ingestHuman = (jobId: string) => ingestEvent(jobId, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "human",
+        payload: humanPayload,
+      });
+      const ingestDone = (jobId: string, summary: string) => ingestEvent(jobId, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "done",
+        payload: { summary },
+      });
+      const resumeFrozenAttempt = async (jobId: string) => {
+        await markAttemptInterrupted(sql, jobId, "使用旧冻结快照重新执行");
+        const attempt = await createAttempt(sql, jobId, { agent_cli: "claude-code" });
+        await sql`
+          UPDATE jobs
+          SET status = 'running', error = NULL, finished_at = NULL
+          WHERE id = ${jobId}`;
+        return attempt;
+      };
+
+      const humanJob = await makeJob("review", "running", workerSnapshot);
+      await ingestHuman(humanJob);
+      await sql`UPDATE jobs SET status = 'running' WHERE id = ${humanJob}`;
+      await assertRejectedWithoutWrites(humanJob, "done", "duplicate_tool_call");
+
+      const sameAttemptHumanJob = await makeJob("review", "running", workerSnapshot);
+      await createAttempt(sql, sameAttemptHumanJob, { agent_cli: "claude-code" });
+      await ingestHuman(sameAttemptHumanJob);
+      await sql`UPDATE jobs SET status = 'running' WHERE id = ${sameAttemptHumanJob}`;
+      await assertRejectedWithoutWrites(sameAttemptHumanJob, "done", "duplicate_tool_call");
+
+      const sameIngestHumanJob = await makeJob("review", "running", workerSnapshot);
+      await createAttempt(sql, sameIngestHumanJob, { agent_cli: "claude-code" });
+      const lateDoneAfterHumanId = randomUUID();
+      const sameIngestHuman = await ingestEventBundle(sameIngestHumanJob, [
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "human",
+          payload: humanPayload,
+        },
+        {
+          v: 1,
+          event_id: lateDoneAfterHumanId,
+          type: "done",
+          payload: { summary: "late mark_job_done after request_human" },
+        },
+      ]);
+      assert.equal(sameIngestHuman[0]?.deduped, false);
+      assert.equal(sameIngestHuman[1]?.deduped, true, "same-ingest done after accepted request_human is a no-op");
+      const [sameIngestHumanState] = await sql<{ status: string; human_events: number; done_events: number; late_done: number }[]>`
+        SELECT
+          status,
+          (SELECT COUNT(*)::int FROM events WHERE job_id = ${sameIngestHumanJob} AND type = 'human') AS human_events,
+          (SELECT COUNT(*)::int FROM events WHERE job_id = ${sameIngestHumanJob} AND type = 'done') AS done_events,
+          (SELECT COUNT(*)::int FROM events WHERE event_id = ${lateDoneAfterHumanId}) AS late_done
+        FROM jobs WHERE id = ${sameIngestHumanJob}`;
+      assert.deepEqual(sameIngestHumanState, {
+        status: "waiting_human",
+        human_events: 1,
+        done_events: 0,
+        late_done: 0,
+      });
+
+      const sameIngestHubJob = await makeJob("hub_reason", "running", {
+        ...hubSnapshot,
+        name: "hub_reason",
+        platform_tools: ["list_available_roles", "emit_progress", "submit_hub_decision", "mark_job_done", "request_human"],
+      });
+      await createAttempt(sql, sameIngestHubJob, { agent_cli: "claude-code" });
+      const lateHubAfterHumanId = randomUUID();
+      const sameIngestHub = await ingestEventBundle(sameIngestHubJob, [
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "human",
+          payload: humanPayload,
+        },
+        {
+          v: 1,
+          event_id: lateHubAfterHumanId,
+          type: "hub_decision",
+          payload: { complete: { from: [], description: "late hub after request_human" } },
+        },
+      ]);
+      assert.equal(sameIngestHub[0]?.deduped, false);
+      assert.equal(sameIngestHub[1]?.deduped, true, "same-ingest hub after accepted request_human is a no-op");
+      const [sameIngestHubState] = await sql<{ status: string; late_hub: number }[]>`
+        SELECT
+          status,
+          (SELECT COUNT(*)::int FROM events WHERE event_id = ${lateHubAfterHumanId}) AS late_hub
+        FROM jobs WHERE id = ${sameIngestHubJob}`;
+      assert.deepEqual(sameIngestHubState, { status: "waiting_human", late_hub: 0 });
+
+      const resumedHumanJob = await makeJob("review", "running", workerSnapshot);
+      await createAttempt(sql, resumedHumanJob, { agent_cli: "claude-code" });
+      await ingestHuman(resumedHumanJob);
+      await resumeFrozenAttempt(resumedHumanJob);
+      const resumedDone = await ingestDone(resumedHumanJob, "resume after request_human");
+      assert.equal(resumedDone.deduped, false);
+      const [resumedState] = await sql<{ status: string }[]>`
+        SELECT status FROM jobs WHERE id = ${resumedHumanJob}`;
+      assert.equal(resumedState.status, "succeeded");
+
+      await sql`
+        UPDATE jobs SET status = 'succeeded'
+        WHERE project_id = ${projectId}
+          AND status IN ('pending', 'claimed', 'provisioning', 'running', 'waiting_human')`;
+      const hubResumeSnapshot = {
+        ...hubSnapshot,
+        name: "hub_reason",
+        platform_tools: ["list_available_roles", "emit_progress", "submit_hub_decision", "mark_job_done", "request_human"],
+      };
+      const resumedHubJob = await makeJob("hub_reason", "running", hubResumeSnapshot);
+      await createAttempt(sql, resumedHubJob, { agent_cli: "claude-code" });
+      await ingestHuman(resumedHubJob);
+      await resumeFrozenAttempt(resumedHubJob);
+      const resumedHubDecision = await ingestEvent(resumedHubJob, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "hub_decision",
+        payload: { complete: { from: [], description: "resume after request_human" } },
+      });
+      assert.equal(resumedHubDecision.deduped, false);
+      const resumedHubDone = await ingestDone(resumedHubJob, "hub resume completion");
+      assert.equal(resumedHubDone.deduped, false);
+      const [resumedHubState] = await sql<{ status: string }[]>`
+        SELECT status FROM jobs WHERE id = ${resumedHubJob}`;
+      assert.equal(resumedHubState.status, "succeeded");
+
+      await sql`
+        UPDATE jobs SET status = 'succeeded'
+        WHERE project_id = ${projectId}
+          AND status IN ('pending', 'claimed', 'provisioning', 'running', 'waiting_human')`;
+      const humanCloseSnapshot = {
+        ...hubSnapshot,
+        name: "hub_reason",
+        platform_tools: ["list_available_roles", "emit_progress", "submit_hub_decision", "mark_job_done", "request_human"],
+      };
+      const sameTurnCloseJob = await makeJob("hub_reason", "running", humanCloseSnapshot);
+      await createAttempt(sql, sameTurnCloseJob, { agent_cli: "claude-code" });
+      await sql`
+        INSERT INTO events (job_id, event_id, job_seq, type, payload_json)
+        VALUES (
+          ${sameTurnCloseJob}, ${randomUUID()}, 1, 'human_message_acknowledged',
+          ${sql.json({ message_id: randomUUID(), summary: "ack close instruction" })}
+        )`;
+      const sameTurnClose = await ingestEventBundle(sameTurnCloseJob, [
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "hub_decision",
+          payload: { complete: { from: [], description: "human asked to close the audit" } },
+        },
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "done",
+          payload: { summary: "closed after human message" },
+        },
+      ]);
+      assert.deepEqual(sameTurnClose.map((result) => result.deduped), [false, false]);
+      const [sameTurnState] = await sql<{ status: string; events: number }[]>`
+        SELECT status, (SELECT COUNT(*)::int FROM events WHERE job_id = ${sameTurnCloseJob} AND type IN ('hub_decision', 'done')) AS events
+        FROM jobs WHERE id = ${sameTurnCloseJob}`;
+      assert.deepEqual(sameTurnState, { status: "succeeded", events: 2 });
+
+      const doneFirstCloseJob = await makeJob("hub_reason", "running", humanCloseSnapshot);
+      await createAttempt(sql, doneFirstCloseJob, { agent_cli: "claude-code" });
+      const lateDoneId = randomUUID();
+      const doneFirstClose = await ingestEventBundle(doneFirstCloseJob, [
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "done",
+          payload: { summary: "first terminal in the same turn" },
+        },
+        {
+          v: 1,
+          event_id: randomUUID(),
+          type: "hub_decision",
+          payload: { complete: { from: [], description: "decision after mark_job_done in the same turn" } },
+        },
+        {
+          v: 1,
+          event_id: lateDoneId,
+          type: "done",
+          payload: { summary: "late mark_job_done after successful close" },
+        },
+      ]);
+      assert.equal(doneFirstClose[0]?.deduped, false);
+      assert.equal(doneFirstClose[1]?.deduped, false);
+      assert.equal(doneFirstClose[2]?.deduped, true, "late same-ingest mark_job_done is a no-op");
+      const [doneFirstState] = await sql<{ status: string; events: number; late_done: number }[]>`
+        SELECT
+          status,
+          (SELECT COUNT(*)::int FROM events WHERE job_id = ${doneFirstCloseJob} AND type IN ('hub_decision', 'done')) AS events,
+          (SELECT COUNT(*)::int FROM events WHERE event_id = ${lateDoneId}) AS late_done
+        FROM jobs WHERE id = ${doneFirstCloseJob}`;
+      assert.deepEqual(doneFirstState, { status: "succeeded", events: 2, late_done: 0 });
+
+      const priorTerminalJob = await makeJob("hub_reason", "succeeded", humanCloseSnapshot);
+      await assertRejectedWithoutWrites(priorTerminalJob, "done", "job_not_running");
+      await assertRejectedWithoutWrites(priorTerminalJob, "hub_decision", "job_not_running");
+
+      const duplicateDoneJob = await makeJob("review", "running", workerSnapshot);
+      await ingestEvent(duplicateDoneJob, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "done",
+        payload: { summary: "first done" },
+      });
+      await sql`UPDATE jobs SET status = 'running' WHERE id = ${duplicateDoneJob}`;
+      await assertRejectedWithoutWrites(duplicateDoneJob, "done", "duplicate_tool_call");
+
+      const doneThenHubJob = await makeJob("hub_reason", "running", hubSnapshot);
+      await ingestEvent(doneThenHubJob, {
+        v: 1,
+        event_id: randomUUID(),
+        type: "done",
+        payload: { summary: "done before Hub" },
+      });
+      // A recovery/status repair can temporarily restore running. The history
+      // guard must still reject the impossible done -> hub order after the
+      // current event has been appended in the outer transaction.
+      await sql`UPDATE jobs SET status = 'running' WHERE id = ${doneThenHubJob}`;
+      await assertRejectedWithoutWrites(doneThenHubJob, "hub_decision", "duplicate_tool_call");
+    } finally {
+      await sql`DELETE FROM canvas_edges WHERE canvas_id = ${canvasId}`;
+      await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
+      await sql`DELETE FROM task_reports WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM finding_verification_rounds WHERE finding_id IN (SELECT id FROM findings WHERE project_id = ${projectId})`;
+      await sql`DELETE FROM findings WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM artifacts WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM event_dedup WHERE job_id IN (SELECT id FROM jobs WHERE project_id = ${projectId})`;
+      await sql`DELETE FROM events WHERE job_id IN (SELECT id FROM jobs WHERE project_id = ${projectId})`;
+      await sql`UPDATE jobs SET parent_job_id = NULL WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
+      await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
+      await deleteProjectsLeavingAuditShells(sql, [projectId]);
+      await sql.end({ timeout: 5 });
+    }
+  });
+}

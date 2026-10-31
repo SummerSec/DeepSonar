@@ -1,0 +1,44 @@
+export {
+  PROVIDER_ADAPTER_MANIFESTS,
+  listProviderAdapters,
+  findProviderAdapter,
+  findProviderAdapterById,
+  registerProviderAdapter,
+  validateProviderAdapterManifest,
+  adapterValidateCredentialShape,
+  adapterEmptyCatalogDiscovery,
+  adapterDeclaresCliCompatible,
+  resetProviderAdapterRegistryForTests,
+} from "./catalog.js";
+export {
+  descriptorsFromStringCatalog,
+  resolveModelDescriptorCatalog,
+  validateModelDescriptor,
+  selectModelsForRequirements,
+  findDescriptorForModel,
+  freezeDescriptorOrNull,
+  defaultHealthWhenMissing,
+  selectModelDescriptors,
+  freezeModelDescriptor,
+} from "./descriptors.js";
+export { freezeProviderModelSnapshot } from "./freeze.js";
+export {
+  GATEWAY_FROZEN_MODEL_MISMATCH,
+  GatewayFrozenModelMismatchError,
+  assertGatewayRequestModelAllowed,
+  gatewayRequestModelFromBody,
+} from "./gateway-guard.js";
+
+export {
+  MODEL_NOT_IN_CATALOG,
+  MODEL_PASSTHROUGH_DISABLED,
+  MODEL_ALLOWLIST_UNCONFIGURED,
+  admitModelAgainstCatalog,
+  gatewayFrozenModelRepair,
+} from "./model-catalog-admit.js";
+export {
+  resolveProviderCredentialForJob,
+  ProviderCredentialResolveError,
+  type ResolveProviderCredentialInput,
+  type ResolvedProviderCredential,
+} from "./resolve-credential.js";

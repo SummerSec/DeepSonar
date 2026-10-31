@@ -1,0 +1,34 @@
+{
+  "name": "@deepsonar/runtime-sandbox",
+  "version": "0.1.11",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@deepsonar/runtime-manual-contract": "workspace:*",
+    "@alibaba-group/opensandbox": "1.1.0",
+    "@deepsonar/shared-types": "workspace:*",
+    "undici": "^7.29.0",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^5.9.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./poc": {
+      "types": "./poc/index.ts",
+      "default": "./poc/index.ts"
+    }
+  }
+}

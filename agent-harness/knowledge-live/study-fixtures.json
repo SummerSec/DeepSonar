@@ -1,0 +1,362 @@
+[
+  {
+    "id": "build-script-target",
+    "family": "build-script",
+    "category": "environment",
+    "split": "debug",
+    "kind": "target",
+    "asset_version": "build-script-v1",
+    "input": "{\"files\": {\"package.json\": {\"scripts\": {\"build\": \"tsc -p tsconfig.build.json\"}}}}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "command": "npm run build"
+      }
+    }
+  },
+  {
+    "id": "build-script-negative_trigger",
+    "family": "build-script",
+    "category": "environment",
+    "split": "debug",
+    "kind": "negative_trigger",
+    "asset_version": "build-script-v1",
+    "input": "{\"files\": {\"README.md\": \"no build manifest\"}}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "decision": "not_applicable"
+      }
+    }
+  },
+  {
+    "id": "build-script-missing_input",
+    "family": "build-script",
+    "category": "environment",
+    "split": "debug",
+    "kind": "missing_input",
+    "asset_version": "build-script-v1",
+    "input": "{\"files\": {}}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "error": "missing_input"
+      }
+    }
+  },
+  {
+    "id": "build-script-environment_change",
+    "family": "build-script",
+    "category": "environment",
+    "split": "debug",
+    "kind": "environment_change",
+    "asset_version": "build-script-v2",
+    "input": "{\"files\": {\"Makefile\": \"all: compile\"}}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "command": "make"
+      }
+    }
+  },
+  {
+    "id": "python-entrypoint-target",
+    "family": "python-entrypoint",
+    "category": "environment",
+    "split": "holdout",
+    "kind": "target",
+    "asset_version": "python-entrypoint-v1",
+    "input": "{\"files\": {\"pyproject.toml\": {\"project\": {\"scripts\": {\"check\": \"audit.cli:main\"}}}}}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "entrypoint": "audit.cli:main"
+      }
+    }
+  },
+  {
+    "id": "python-entrypoint-negative_trigger",
+    "family": "python-entrypoint",
+    "category": "environment",
+    "split": "holdout",
+    "kind": "negative_trigger",
+    "asset_version": "python-entrypoint-v1",
+    "input": "{\"files\": {\"notes.txt\": \"check command\"}}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "decision": "not_applicable"
+      }
+    }
+  },
+  {
+    "id": "python-entrypoint-missing_input",
+    "family": "python-entrypoint",
+    "category": "environment",
+    "split": "holdout",
+    "kind": "missing_input",
+    "asset_version": "python-entrypoint-v1",
+    "input": "{\"files\": {}}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "error": "missing_input"
+      }
+    }
+  },
+  {
+    "id": "python-entrypoint-environment_change",
+    "family": "python-entrypoint",
+    "category": "environment",
+    "split": "holdout",
+    "kind": "environment_change",
+    "asset_version": "python-entrypoint-v2",
+    "input": "{\"files\": {\"pyproject.toml\": {\"project\": {\"scripts\": {\"check\": \"audit.v2:run\"}}}}}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "entrypoint": "audit.v2:run"
+      }
+    }
+  },
+  {
+    "id": "upper-bound-target",
+    "family": "upper-bound",
+    "category": "validation",
+    "split": "debug",
+    "kind": "target",
+    "asset_version": "upper-bound-v1",
+    "input": "{\"code\": \"allowed = n <= 10\", \"requirement\": \"n must be less than 10\", \"probe\": 10}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "defect": true
+      }
+    }
+  },
+  {
+    "id": "upper-bound-negative_trigger",
+    "family": "upper-bound",
+    "category": "validation",
+    "split": "debug",
+    "kind": "negative_trigger",
+    "asset_version": "upper-bound-v1",
+    "input": "{\"code\": \"allowed = n < 10\", \"requirement\": \"n must be less than 10\", \"probe\": 10}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "defect": false
+      }
+    }
+  },
+  {
+    "id": "upper-bound-missing_input",
+    "family": "upper-bound",
+    "category": "validation",
+    "split": "debug",
+    "kind": "missing_input",
+    "asset_version": "upper-bound-v1",
+    "input": "{\"code\": \"allowed = n <= 10\"}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "error": "missing_requirement"
+      }
+    }
+  },
+  {
+    "id": "upper-bound-environment_change",
+    "family": "upper-bound",
+    "category": "validation",
+    "split": "debug",
+    "kind": "environment_change",
+    "asset_version": "upper-bound-v2",
+    "input": "{\"code\": \"allowed = n <= 10\", \"requirement\": \"n must be at most 10\", \"probe\": 10}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "defect": false
+      }
+    }
+  },
+  {
+    "id": "shell-argument-target",
+    "family": "shell-argument",
+    "category": "validation",
+    "split": "holdout",
+    "kind": "target",
+    "asset_version": "shell-argument-v1",
+    "input": "{\"argv\": [\"echo\", \"hello;id\"], \"shell\": false}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "shell_injection": false
+      }
+    }
+  },
+  {
+    "id": "shell-argument-negative_trigger",
+    "family": "shell-argument",
+    "category": "validation",
+    "split": "holdout",
+    "kind": "negative_trigger",
+    "asset_version": "shell-argument-v1",
+    "input": "{\"argv\": [\"echo hello;id\"], \"shell\": true}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "shell_injection": true
+      }
+    }
+  },
+  {
+    "id": "shell-argument-missing_input",
+    "family": "shell-argument",
+    "category": "validation",
+    "split": "holdout",
+    "kind": "missing_input",
+    "asset_version": "shell-argument-v1",
+    "input": "{\"argv\": [\"echo\", \"hello;id\"]}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "error": "missing_shell_mode"
+      }
+    }
+  },
+  {
+    "id": "shell-argument-environment_change",
+    "family": "shell-argument",
+    "category": "validation",
+    "split": "holdout",
+    "kind": "environment_change",
+    "asset_version": "shell-argument-v2",
+    "input": "{\"argv\": [\"echo\", \"hello;id\"], \"shell\": true}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "decision": "inspect_invocation_semantics"
+      }
+    }
+  },
+  {
+    "id": "label-whitespace-target",
+    "family": "label-whitespace",
+    "category": "version",
+    "split": "debug",
+    "kind": "target",
+    "asset_version": "label-whitespace-v1",
+    "input": "{\"text\": \"a  b\", \"policy\": \"ASCII\"}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "value": "a b"
+      }
+    }
+  },
+  {
+    "id": "label-whitespace-negative_trigger",
+    "family": "label-whitespace",
+    "category": "version",
+    "split": "debug",
+    "kind": "negative_trigger",
+    "asset_version": "label-whitespace-v1",
+    "input": "{\"text\": \"a-b\", \"policy\": \"ASCII\"}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "value": "a-b"
+      }
+    }
+  },
+  {
+    "id": "label-whitespace-missing_input",
+    "family": "label-whitespace",
+    "category": "version",
+    "split": "debug",
+    "kind": "missing_input",
+    "asset_version": "label-whitespace-v1",
+    "input": "{\"policy\": \"ASCII\"}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "error": "missing_input"
+      }
+    }
+  },
+  {
+    "id": "label-whitespace-environment_change",
+    "family": "label-whitespace",
+    "category": "version",
+    "split": "debug",
+    "kind": "environment_change",
+    "asset_version": "label-whitespace-v2",
+    "input": "{\"text\": \"a b\", \"policy\": \"Unicode\"}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "value": "a b"
+      }
+    }
+  },
+  {
+    "id": "timestamp-zone-target",
+    "family": "timestamp-zone",
+    "category": "version",
+    "split": "holdout",
+    "kind": "target",
+    "asset_version": "timestamp-zone-v1",
+    "input": "{\"timestamp\": \"2026-01-01T00:00:00Z\", \"policy\": \"explicit-zone\"}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "valid": true
+      }
+    }
+  },
+  {
+    "id": "timestamp-zone-negative_trigger",
+    "family": "timestamp-zone",
+    "category": "version",
+    "split": "holdout",
+    "kind": "negative_trigger",
+    "asset_version": "timestamp-zone-v1",
+    "input": "{\"timestamp\": \"not-a-time\", \"policy\": \"explicit-zone\"}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "valid": false
+      }
+    }
+  },
+  {
+    "id": "timestamp-zone-missing_input",
+    "family": "timestamp-zone",
+    "category": "version",
+    "split": "holdout",
+    "kind": "missing_input",
+    "asset_version": "timestamp-zone-v1",
+    "input": "{\"policy\": \"explicit-zone\"}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "error": "missing_input"
+      }
+    }
+  },
+  {
+    "id": "timestamp-zone-environment_change",
+    "family": "timestamp-zone",
+    "category": "version",
+    "split": "holdout",
+    "kind": "environment_change",
+    "asset_version": "timestamp-zone-v2",
+    "input": "{\"timestamp\": \"2026-01-01T00:00:00\", \"policy\": \"explicit-zone\"}",
+    "oracle": {
+      "type": "exact_json",
+      "expected": {
+        "valid": false
+      }
+    }
+  }
+]

@@ -1,0 +1,176 @@
+name: reverse-runtime
+
+on:
+  pull_request:
+    paths:
+      - "deploy/Dockerfile.agent*"
+      - "deploy/reverse-*.sh"
+      - "agent-harness/reverse-*"
+      - "agent-harness/rea-runtime/**"
+      - "agent-harness/opensandbox/*rea*"
+      - "deploy/docker-compose.opensandbox.yml"
+      - "deploy/opensandbox/**"
+      - "agent-harness/test-reverse-*"
+      - "agent-harness/fixtures/reverse-sample/**"
+      - "agent-harness/runtime-images.json"
+      - "agent-harness/dsh-runtime/**"
+      - "agent-harness/write-tool-manifest.mjs"
+      - "agent-harness/runtime-manuals/**"
+      - "agent-harness/materialize-runtime-manuals.mjs"
+      - "agent-harness/test-runtime-manuals-runtime.mjs"
+      - "agent-harness/image-build-fingerprint.mjs"
+      - "apps/scheduler/src/domains/cli-capability/**"
+      - "apps/scheduler/src/dispatcher*.ts"
+      - "apps/scheduler/src/executor-real*.ts"
+      - "apps/scheduler/src/domains/platform-api/**"
+      - "apps/scheduler/src/domains/event-ingestion/**"
+      - "apps/scheduler/src/domains/shared-assets/**"
+      - "apps/scheduler/src/domains/role-runtime-snapshot/**"
+      - "skills/deepsonar-rea-cli/**"
+      - "packages/runtime-sandbox/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".dockerignore"
+      - ".github/workflows/reverse-runtime.yml"
+      - ".github/workflows/release.yml"
+  push:
+    branches: [main]
+    paths:
+      - "deploy/Dockerfile.agent*"
+      - "deploy/reverse-*.sh"
+      - "agent-harness/reverse-*"
+      - "agent-harness/rea-runtime/**"
+      - "agent-harness/opensandbox/*rea*"
+      - "deploy/docker-compose.opensandbox.yml"
+      - "deploy/opensandbox/**"
+      - "agent-harness/test-reverse-*"
+      - "agent-harness/fixtures/reverse-sample/**"
+      - "agent-harness/runtime-images.json"
+      - "agent-harness/dsh-runtime/**"
+      - "agent-harness/write-tool-manifest.mjs"
+      - "agent-harness/runtime-manuals/**"
+      - "agent-harness/materialize-runtime-manuals.mjs"
+      - "agent-harness/test-runtime-manuals-runtime.mjs"
+      - "agent-harness/image-build-fingerprint.mjs"
+      - "apps/scheduler/src/domains/cli-capability/**"
+      - "apps/scheduler/src/dispatcher*.ts"
+      - "apps/scheduler/src/executor-real*.ts"
+      - "apps/scheduler/src/domains/platform-api/**"
+      - "apps/scheduler/src/domains/event-ingestion/**"
+      - "apps/scheduler/src/domains/shared-assets/**"
+      - "apps/scheduler/src/domains/role-runtime-snapshot/**"
+      - "skills/deepsonar-rea-cli/**"
+      - "packages/runtime-sandbox/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".dockerignore"
+      - ".github/workflows/reverse-runtime.yml"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reverse-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reverse-runtime-images:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: deepsonar-ci-pass
+          POSTGRES_DB: deepsonar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U deepsonar -d deepsonar"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install Job integration dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @deepsonar/shared-types build
+          pnpm --filter @deepsonar/runtime-manual-contract build
+          pnpm --filter @deepsonar/runtime-sandbox build
+      - name: Install native sample compilers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc gcc-mingw-w64-x86-64
+      - name: Runtime definition gates
+        run: node agent-harness/test-reverse-runtime.mjs
+      # Use the local Docker builder so the second build consumes precisely the
+      # base built from this checkout. PRs do not receive registry credentials,
+      # write source caches, publish tags, or use QEMU for native acceptance.
+      - name: Build current native base
+        run: |
+          set -euo pipefail
+          docker buildx build --builder default --load --platform "${{ matrix.platform }}" \
+            --build-arg TOOLSET=base --tag deepsonar-base:reverse-ci --file deploy/Dockerfile.agent .
+      - name: Build native Reverse runtime
+        run: |
+          set -euo pipefail
+          docker buildx build --builder default --load --platform "${{ matrix.platform }}" \
+            --build-arg BASE_IMAGE=deepsonar-base:reverse-ci \
+            --tag deepsonar-reverse:native-ci --file deploy/Dockerfile.agent-reverse .
+      - name: Offline runtime manual contract
+        run: node agent-harness/test-runtime-manuals-runtime.mjs deepsonar-reverse:native-ci --image-key deepsonar-reverse --platform "${{ matrix.platform }}"
+      - name: Real native REA samples and resource measurements
+        run: node agent-harness/reverse-native-smoke.mjs --image deepsonar-reverse:native-ci --arch "${{ matrix.arch }}" --evidence-dir "reverse-evidence/${{ matrix.arch }}"
+      - name: Start pinned OpenSandbox for real Job acceptance
+        env:
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/docker-compose.opensandbox.yml up -d
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18081/health; then exit 0; fi
+            sleep 2
+          done
+          echo "Pinned OpenSandbox server did not become healthy" >&2
+          exit 1
+      - name: Real dispatched REA Job, Evidence, Fact and independent Verify
+        env:
+          TEST_DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/postgres
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+          OPEN_SANDBOX_DOMAIN: 127.0.0.1:18081
+          REA_JOB_REPORT_DIR: ${{ github.workspace }}/reverse-job-evidence/${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          export REA_JOB_IMAGE="$(docker image inspect --format '{{.Id}}' deepsonar-reverse:native-ci)"
+          pnpm ci:integration:rea-job
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: reverse-native-evidence-${{ matrix.arch }}
+          path: reverse-evidence/${{ matrix.arch }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: reverse-job-evidence-${{ matrix.arch }}
+          path: reverse-job-evidence/${{ matrix.arch }}
+          if-no-files-found: error
+      - name: Clean real Job acceptance services
+        if: ${{ always() }}
+        env:
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+        run: docker compose -f deploy/docker-compose.opensandbox.yml down -v

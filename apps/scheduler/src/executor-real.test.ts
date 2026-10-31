@@ -1,0 +1,774 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync, readdirSync } from "node:fs";
+import { ControlEventEnvelope, DonePayload, EventEnvelope, WORKSPACE_PAYLOAD_FILE_MAX_BYTES } from "@deepsonar/shared-types";
+import {
+  ingestFactSemanticEvent,
+  assertSemanticTerminalExclusivity,
+  moduleEvidenceFromSnapshot,
+  reconstructAgentRunError,
+  recordFirstSemanticDone,
+  buildDeferredSemanticTerminalEvents,
+  isFinalAgentRunnerError,
+  isSemanticAgentRunError,
+  runtimeCredentialProviderError,
+  hasMaterializedProviderConfig,
+  credentialAuthorizationModel,
+  buildInstructionWorkspaceFiles,
+  expandWorkspacePayloadFile,
+  sharedAssetPublishControlError,
+  sharedAssetSourceReadControlError,
+} from "./executor-real.js";
+import { ControlInputError } from "./control-input.js";
+import { expandModules } from "./skill-sources.js";
+import { platformToolGuide, PLATFORM_CONTROL_CALLING_RULES } from "./platform-tools.js";
+
+const findingId = "00000000-0000-4000-8000-000000000011";
+const intentNodeId = "00000000-0000-4000-8000-000000000012";
+
+test("payload_file expansion uses the semantic byte ceiling and returns stable retryable input errors", async () => {
+  let requestedMax = 0;
+  const expanded = await expandWorkspacePayloadFile("emit_fact", { payload_file: "fact.json" }, {
+    async readWorkspaceFile(path, maxBytes) {
+      assert.equal(path, "/workspace/fact.json");
+      requestedMax = maxBytes;
+      return Buffer.from(JSON.stringify({ title: "事实", description: "这是一个完整且可验证的事实描述。" }));
+    },
+  });
+  assert.equal(requestedMax, WORKSPACE_PAYLOAD_FILE_MAX_BYTES);
+  assert.deepEqual(expanded, { title: "事实", description: "这是一个完整且可验证的事实描述。" });
+
+  await assert.rejects(
+    expandWorkspacePayloadFile("emit_finding", { payload_file: "finding.json" }, {
+      async readWorkspaceFile(_path, maxBytes) {
+        assert.equal(maxBytes, WORKSPACE_PAYLOAD_FILE_MAX_BYTES);
+        throw new Error("file_too_large");
+      },
+    }),
+    (error: unknown) => error instanceof ControlInputError
+      && error.code === "invalid_payload"
+      && error.retryable
+      && error.path === "payload_file",
+  );
+});
+
+test("共享资产已知业务与唯一冲突转换为可重试控制错误，基础设施故障保持失败关闭", () => {
+  for (const error of [
+    new Error("immutable_asset_key_exists"),
+    new Error("asset_content_version_exists"),
+    new Error("invalid_asset_key"),
+    new Error("asset_quota_exceeded"),
+    Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505", constraint: "shared_asset_versions_asset_id_content_sha256_key" }),
+    Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505", constraint: "shared_assets_active_project_key_uniq" }),
+  ]) {
+    const classified = sharedAssetPublishControlError(error);
+    assert.ok(classified instanceof ControlInputError);
+    assert.equal(classified.code, "invalid_payload");
+    assert.equal(classified.retryable, true);
+  }
+  for (const error of [
+    new Error("shared_asset_publish_job_not_running"),
+    new Error("shared_asset_container_unavailable"),
+    new Error("asset_store_unavailable"),
+    new Error("database connection closed"),
+    Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505", constraint: "other_table_unique_key" }),
+    Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505" }),
+  ]) {
+    assert.equal(sharedAssetPublishControlError(error), null);
+  }
+});
+
+test("source_path 普通读取失败仍返回不回显底层详情的可重试错误", () => {
+  const error = sharedAssetSourceReadControlError(new Error("ENOENT: /workspace/private/secret.txt"));
+  assert.ok(error instanceof ControlInputError);
+  assert.equal(error.code, "invalid_payload");
+  assert.equal(error.retryable, true);
+  assert.equal(error.path, "source_path");
+  assert.doesNotMatch(error.message, /ENOENT|secret\.txt/);
+});
+
+test("real executor round-trips only controlled rate-limit details after string failure", () => {
+  const error = reconstructAgentRunError("语义事件处理失败: [event_rate_limited]", {
+    code: "event_rate_limited",
+    metadata: {
+      bucket: "progress",
+      retry_after_sec: 4,
+      limit: 30,
+      window_seconds: 60,
+      secret: "drop",
+    },
+  });
+  assert.equal((error as Error & { code?: string }).code, "event_rate_limited");
+  assert.deepEqual((error as Error & { metadata?: unknown }).metadata, {
+    bucket: "progress",
+    retry_after_sec: 4,
+    limit: 30,
+    window_seconds: 60,
+  });
+  assert.doesNotMatch(JSON.stringify(error), /secret|drop/i);
+  assert.equal((reconstructAgentRunError("ordinary failure", { code: "invalid_node_ref" }) as Error & { code?: string }).code, undefined);
+});
+
+// 以下 OpenSandbox 用例只核对 PoC 源文本契约，不启动 server，也不算 live smoke。
+test("OpenSandbox CLI control PoC source-text contract is vendor-key gated", () => {
+  const source = readFileSync(new URL("../../../agent-harness/opensandbox/opensandbox-cli-control.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /ANTHROPIC_API_KEY/);
+  assert.match(source, /ANTHROPIC_AUTH_TOKEN/);
+  assert.match(source, /ANTHROPIC_BASE_URL/);
+  assert.match(source, /ANTHROPIC_MODEL/);
+  assert.doesNotMatch(source, /air-outer|agentrouter|ai\.feei/);
+  assert.match(source, /OPENAI_API_KEY/);
+  assert.match(source, /DEEPSEEK_API_KEY/);
+  assert.match(source, /needs ANTHROPIC_API_KEY, OPENAI_API_KEY, or DEEPSEEK_API_KEY for vendor-model E2E/);
+  assert.match(source, /vendor CLI E2E requires all current CLIs/);
+  assert.match(source, /vendor CLI E2E incomplete/);
+  assert.match(source, /vendor CLI E2E needs host docker access for Gateway bind/);
+  assert.match(source, /assertVendorUpstreamPayload/);
+  assert.match(source, /assertVendorUpstreamStatus/);
+  assert.match(source, /assertVendorOfficialOrigin/);
+  assert.match(source, /VENDOR_OFFICIAL_ORIGINS/);
+  assert.match(source, /assertVendorPlanReachable/);
+  assert.match(source, /for \(const selectedCli of selectedClis\)/);
+  assert.match(source, /AGENT_CLI_RUNTIME_ADAPTERS\[selectedCli\]/);
+  assert.match(source, /encodeSteer/);
+  assert.match(source, /CLI_SESSION_ADAPTERS\[selectedCli\]\.exportSession/);
+  assert.match(source, /parseAgentSession/);
+  assert.match(source, /adapter\.resume/);
+  assert.match(source, /steered=true archived=true viewed=true resumed=true leftover=0/);
+  assert.match(source, /clis=\$\{ran\.join\(/);
+  assert.match(source, /preparePlatformCapability/);
+  assert.match(source, /submit_hub_decision/);
+  assert.match(source, /adapter\.start/);
+  assert.match(source, /adapter\.materialize/);
+  assert.match(source, /legacySettingsConfig/);
+  assert.match(source, /routeMaterializedProviderFilesThroughGateway/);
+  assert.match(source, /splitPiModelRef/);
+  assert.match(source, /encodeGetState/);
+  assert.match(source, /delete process\.env\.OPEN_SANDBOX_KUBERNETES/);
+  assert.match(source, /const vendorCliIds = \["claude-code", "pi", "dsh"\] as const/);
+  assert.doesNotMatch(source, /["']codex["']|["']open-code["']/);
+  assert.match(source, /network: "restricted"/);
+  assert.match(source, /DEEPSONAR_ALLOW_EGRESS: "0"/);
+  assert.doesNotMatch(source, /network: "egress"/);
+  assert.doesNotMatch(source, /mintJobCapabilityToken\(/);
+  assert.doesNotMatch(source, /127\.0\.0\.1:8765|mock Anthropic/);
+});
+
+test("OpenSandbox reconcile PoC source-text contract orphans unknown effects", () => {
+  const source = readFileSync(new URL("../../../agent-harness/opensandbox/opensandbox-reconcile.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /reconcileOnBoot\(\)/);
+  assert.match(source, /effect_pending/);
+  assert.match(source, /leftover=0 replay=0/);
+  assert.match(source, /OPEN_SANDBOX_KUBERNETES=1/);
+  assert.match(source, /kubernetes \? 0\.4 : 1/);
+  assert.match(source, /OPENSANDBOX_POC_DIRTY/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
+});
+
+test("OpenSandbox Kata shared-assets PoC source-text contract is independent of isolation smoke", () => {
+  const source = readFileSync(new URL("../../../packages/runtime-sandbox/poc/opensandbox-k8s-assets-poc.ts", import.meta.url), "utf8");
+  const harness = readFileSync(new URL("../../../agent-harness/test-opensandbox-poc.ts", import.meta.url), "utf8");
+  assert.match(source, /OPEN_SANDBOX_POC_K8S_ASSETS/);
+  assert.match(source, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(source, /sharedAssetsMount/);
+  assert.match(source, /OPENSANDBOX_POC_K8S_ASSETS_WRITABLE/);
+  assert.match(source, /leftoverPvcs/);
+  assert.match(harness, /caseName === "k8s-assets"/);
+  assert.doesNotMatch(source, /runOpenSandboxK8sPoc\(/);
+});
+
+test("OpenSandbox gVisor PoC source-text contract fail-closes a working iptables nat table", () => {
+  const source = readFileSync(new URL("../../../agent-harness/opensandbox/opensandbox-gvisor.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /shouldRunOpenSandboxGvisorPoc/);
+  assert.match(source, /runOpenSandboxGvisorPoc/);
+  assert.match(source, /OPEN_SANDBOX_POC_GVISOR=1/);
+  assert.match(source, /compatible=false/);
+  assert.match(source, /natUnsupported=true/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
+});
+
+test("OpenSandbox reaper PoC source-text contract times out and orphans leftovers", () => {
+  const source = readFileSync(new URL("../../../agent-harness/opensandbox/opensandbox-reaper.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /reapOnce\(\)/);
+  assert.match(source, /isAlive/);
+  assert.match(source, /timeout=1 orphan=1/);
+  assert.match(source, /mintJobCapabilityToken/);
+  assert.match(source, /UPDATE jobs SET timeout_sec = 1/);
+  assert.match(source, /UPDATE jobs SET lease_expires_at/);
+  assert.match(source, /openTerminal/);
+  assert.match(source, /sharedAssetsVolumeManager/);
+  assert.match(source, /tokens=revoked pty=closed assets=0/);
+  assert.match(source, /OPEN_SANDBOX_KUBERNETES=1/);
+  assert.match(source, /kubernetes \? 0\.3 : 1/);
+  assert.match(source, /OPENSANDBOX_POC_DIRTY/);
+  assert.match(source, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(source, /reaped jobs must lose shared assets volumes/);
+  assert.doesNotMatch(source, /if \(kubernetes\) return null/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(/);
+});
+
+test("OpenSandbox dispatch PoC source-text contract uses dispatcher claim/provision/cancel", () => {
+  const source = readFileSync(new URL("../../../agent-harness/opensandbox/opensandbox-dispatch.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /dispatchOnce\(\)/);
+  assert.match(source, /cancelJob\(jobId/);
+  assert.match(source, /createSharedAsset/);
+  assert.match(source, /tokens=revoked assets=0/);
+  assert.match(source, /OPEN_SANDBOX_KUBERNETES=1/);
+  assert.match(source, /kubernetes \? 0\.3 : 1/);
+  assert.match(source, /KubernetesSharedAssetsVolumeManager/);
+  assert.match(source, /gatewayServiceManifest/);
+  assert.doesNotMatch(source, /await executeReal|mintJobCapabilityToken\(|host\.run\(/);
+});
+
+test("OpenSandbox prod-stack PoC source-text contract hits Scheduler /readiness", () => {
+  const source = readFileSync(new URL("../../../agent-harness/opensandbox/opensandbox-prod-stack.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /registerSettingsRoutes/);
+  assert.match(source, /GET \/readiness/);
+  assert.match(source, /OPENSANDBOX_SERVER_READY/);
+  assert.match(source, /opensandbox\?\.level !== "ok"/);
+  assert.doesNotMatch(source, /dispatchOnce\(|executeReal\(|provision\(/);
+});
+
+test("scheduler production tree has no live OpenSandbox PoC harnesses", () => {
+  const files = readdirSync(new URL("./", import.meta.url)).filter((name) => name.endsWith(".poc.ts"));
+  assert.deepEqual(files, []);
+});
+
+test("OpenSandbox official prod PoC source-text contract uses prod+real+overlay compose", () => {
+  const source = readFileSync(new URL("../../../agent-harness/opensandbox/opensandbox-prod-official.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /docker-compose.prod.yml/);
+  assert.match(source, /docker-compose.real.yml/);
+  assert.match(source, /docker-compose.opensandbox.prod.yml/);
+  assert.match(source, /iptables-legacy/);
+  assert.match(source, /FORWARD/);
+  assert.match(source, /ACCEPT/);
+  assert.match(source, /deepsonar-opensandbox must stay running/);
+  assert.match(source, /runOpenSandboxInfrastructurePoc/);
+  assert.match(source, /runOpenSandboxImageContractPoc/);
+  assert.match(source, /runOpenSandboxOfficialImagesPoc/);
+  assert.match(source, /listOfficialOpenSandboxRuntimeImages/);
+  assert.match(source, /OPEN_SANDBOX_POC_RUNTIME_IMAGE/);
+  assert.match(source, /OPEN_SANDBOX_POC_IMAGE_KEYS/);
+  assert.match(source, /OPEN_SANDBOX_DOMAIN=opensandbox:8080/);
+  assert.match(source, /network", "connect", "bridge"/);
+  assert.match(source, /provision=true leftover=0/);
+  assert.match(source, /official overlay runtime CLI missing/);
+  assert.doesNotMatch(source, /docker", "stop", "deepsonar-opensandbox/);
+  assert.doesNotMatch(source, /network_mode: host/);
+});
+
+test("OpenSandbox prod-compose PoC source-text contract builds against Phase 2 server", () => {
+  const source = readFileSync(new URL("../../../agent-harness/opensandbox/opensandbox-prod-compose.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /docker-compose.opensandbox.host.yml/);
+  assert.match(source, /127\.0\.0\.1:18081/);
+  assert.match(source, /network_mode: host|host network/);
+  assert.match(source, /\/api\/health/);
+  assert.match(source, /deepsonar-opensandbox must stay running/);
+  assert.match(source, /BLOB_STORE=s3/);
+  assert.match(source, /silo=ready blob=s3/);
+  assert.match(source, /host\.docker\.internal:\$\{schedulerPort\}\/gateway/);
+  assert.match(source, /GATEWAY_PROXY_SCRIPT/);
+  assert.match(source, /OPEN_SANDBOX_POC_RUNTIME_IMAGE/);
+  assert.match(source, /_deepsonar_health/);
+  assert.match(source, /sidecar \/gateway forward failed/);
+  assert.match(source, /prod-compose started extra OpenSandbox/);
+  assert.doesNotMatch(source, /expected exactly one OpenSandbox container/);
+  assert.doesNotMatch(source, /docker", "stop", "deepsonar-opensandbox/);
+  assert.doesNotMatch(source, /provision\(|executeReal\(/);
+  assert.doesNotMatch(source, /127\.0\.0\.1:\$\{schedulerPort\}\/gateway/);
+});
+
+test("OpenSandbox real runner source-text contract does not load Agentbox", () => {
+  const source = readFileSync(new URL("./runtime.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /AgentboxRunner|runtime-sandbox\/agentbox/);
+  assert.match(source, /provider !== ["']opensandbox["']/);
+});
+
+test("OpenSandbox Platform API PoC source-text contract injects capability env at provision", () => {
+  const source = readFileSync(new URL("../../../agent-harness/opensandbox/opensandbox-platform-api.poc.ts", import.meta.url), "utf8");
+  assert.match(source, /process\.env\.AGENT_MODE = "real"/);
+  assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
+  assert.match(source, /import\("\.\.\/\.\.\/apps\/scheduler\/src\/runtime\.js"\)/);
+  assert.match(source, /preparePlatformCapability\(jobId, snapshot/);
+  assert.match(source, /\.\.\.capability\.env/);
+  assert.match(source, /host\.run\("python3 \/workspace\/poc-emit-fact\.py"/);
+  assert.doesNotMatch(source, /mintJobCapabilityToken/);
+  assert.doesNotMatch(source, /host\.run\([\s\S]*DEEPSONAR_API_TOKEN/);
+  assert.match(source, /os\.environ\["DEEPSONAR_API_TOKEN"\]/);
+  assert.match(source, /submit_hub_decision/);
+});
+
+test("real executor passes the reserved Skill to the sandbox without putting the API token in the manifest", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  const dispatcher = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  assert.match(source, /skills:\s*runtimeSkills as never/);
+  assert.match(source, /preparePlatformCapability[\s\S]*mintJobCapabilityToken\(jobId, \{ operationIds \}\)/);
+  assert.match(source, /DEEPSONAR_API_BASE_URL: baseUrl/);
+  assert.match(source, /DEEPSONAR_API_TOKEN: grant\.token/);
+  assert.match(source, /DEEPSONAR_JOB_ID: jobId/);
+  assert.match(dispatcher, /platformCapability = await preparePlatformCapability\(jobId, snapshot\)/);
+  assert.match(dispatcher, /DEEPSONAR_ALLOW_EGRESS:[\s\S]*\.\.\.platformCapability!\.env/);
+  assert.match(dispatcher, /transitionJob\(jobId, "running"[\s\S]*activateProvisionedJobCapabilityTokens\(jobId\)/);
+  assert.match(dispatcher, /finally \{[\s\S]*revokeJobTokens\(jobId, "dispatcher_cleanup"\)/);
+  assert.match(dispatcher, /finally \{[\s\S]*revokeJobCapabilityTokens\(jobId\)/);
+  assert.doesNotMatch(source, /env\.DEEPSONAR_API_TOKEN\s*=\s*platformToken/);
+  assert.match(source, /from "\.\/platform-control\.js"/);
+  assert.doesNotMatch(source, /control-mcp/);
+  assert.match(source, /const controlTransport = "job_scoped_control_api" as const/);
+  assert.doesNotMatch(source, /semanticToolEvents/);
+  assert.doesNotMatch(source, /DEFAULT_SEMANTIC_TOOL_EVENTS/);
+  assert.match(source, /Job-scoped control API 仍可按 deepsonar-control Skill 通过 HTTP 工具调用/);
+  assert.match(source, /verify_required=false.*不得为它派 review\/test 或 request_human/);
+  const manifestStart = source.indexOf("const componentManifest = {");
+  const manifestEnd = source.indexOf("const sharedAssetCatalog", manifestStart);
+  assert.ok(manifestStart >= 0 && manifestEnd > manifestStart);
+  const manifestSource = source.slice(manifestStart, manifestEnd);
+  assert.match(manifestSource, /env_names:/);
+  assert.match(manifestSource, /DEEPSONAR_API_TOKEN/);
+  assert.doesNotMatch(manifestSource, /platformToken/);
+  assert.doesNotMatch(manifestSource, /DEEPSONAR_API_TOKEN\s*:/);
+  assert.match(manifestSource, /system_mcp:\s*null/);
+  assert.match(manifestSource, /semantic_event_transport:\s*controlTransport/);
+  assert.doesNotMatch(manifestSource, /control-mcp\.mjs|local_mcp/);
+});
+
+test("平台工具说明只引导 Agent 直接调用 Job-scoped HTTP API", () => {
+  const guide = platformToolGuide(["emit_fact", "mark_job_done"]);
+  assert.match(guide, /只能按静态 `deepsonar-control` Skill/);
+  assert.match(guide, /Agent 自身 HTTP 工具直接调用/);
+  assert.match(guide, /API 返回 `accepted`/);
+  assert.match(guide, /HTTP\/参数错误/);
+  assert.doesNotMatch(guide, /schema_validated|pending_scheduler_validation|MCP/);
+});
+
+test("PLATFORM_SYSTEM_PROMPT 与 platformToolGuide 共用 PLATFORM_CONTROL_CALLING_RULES", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(source, /PLATFORM_CONTROL_CALLING_RULES/);
+  assert.match(source, /\$\{PLATFORM_CONTROL_CALLING_RULES\}/);
+  assert.doesNotMatch(source, /关键纪律：/);
+  assert.doesNotMatch(source, /对当前授权 operation，只能使用静态/);
+  const guide = platformToolGuide(["emit_fact"]);
+  assert.ok(guide.startsWith(PLATFORM_CONTROL_CALLING_RULES));
+  assert.doesNotMatch(PLATFORM_CONTROL_CALLING_RULES, /\[1m\]|dual-hash|tools_manifest|frozen_model|上下文标注/);
+});
+
+test("deferred Hub terminal events preserve decision-before-done ordering", () => {
+  const intent = {
+    from: [intentNodeId],
+    role: "code",
+    description: "Implement the verified remediation change.",
+    prompt: "Implement the verified remediation change and report the exact test evidence.",
+  };
+  const events = buildDeferredSemanticTerminalEvents({
+    state: {
+      hub: { eventId: "00000000-0000-4000-8000-000000000021", payload: { intents: [intent] } },
+      done: { eventId: "00000000-0000-4000-8000-000000000022", summary: "Hub completed" },
+      human: null,
+    },
+    isHub: true,
+    isVerify: false,
+    hubDecision: { intents: [intent] },
+    maxIntentsPerDecision: 10,
+    factCount: 0,
+    findingCount: 0,
+  });
+
+  assert.deepEqual(events.map((event) => event.type), ["hub_decision", "done"]);
+  assert.deepEqual((events[0]?.payload as { intents?: unknown[] }).intents, [intent]);
+  assert.equal((events[1]?.payload as { summary?: string }).summary, "Hub completed");
+});
+
+test("deferred Hub and Worker terminal events preserve an exact 8192-byte summary", () => {
+  const summary = `${"界".repeat(2730)}ab`;
+  const intent = { from: [], role: "code", description: "Implement remediation", prompt: "Implement the complete remediation and verify the result." };
+  for (const input of [
+    { isHub: true, hub: { eventId: "00000000-0000-4000-8000-000000000031", payload: { intents: [intent] } }, hubDecision: { intents: [intent] }, factCount: 0, findingCount: 0 },
+    { isHub: false, hub: null, hubDecision: null, factCount: 100, findingCount: 20 },
+  ]) {
+    const events = buildDeferredSemanticTerminalEvents({
+      state: { hub: input.hub, done: { eventId: "00000000-0000-4000-8000-000000000032", summary }, human: null },
+      isHub: input.isHub,
+      isVerify: false,
+      hubDecision: input.hubDecision,
+      maxIntentsPerDecision: 10,
+      factCount: input.factCount,
+      findingCount: input.findingCount,
+    });
+    const done = events.at(-1)?.payload as { summary: string };
+    assert.equal(done.summary, summary);
+    assert.equal(Buffer.byteLength(done.summary, "utf8"), 8192);
+    assert.equal(DonePayload.safeParse(done).success, true);
+  }
+});
+
+test("Hub and Human authoritative preflight runs before claiming the deferred slot", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.ok(
+    source.indexOf('preflightDeferredSemanticEvent(jobId, "hub_decision", event.payload)')
+      < source.indexOf("semanticState.hub = { eventId, payload: event.payload }"),
+  );
+  assert.ok(
+    source.indexOf('preflightDeferredSemanticEvent(jobId, "human", p)')
+      < source.indexOf("semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject,"),
+  );
+});
+
+test("deferred Verify terminal event preserves verdict and missing evidence", () => {
+  const events = buildDeferredSemanticTerminalEvents({
+    state: {
+      hub: null,
+      done: {
+        eventId: "00000000-0000-4000-8000-000000000023",
+        summary: "Verification needs a rework pass",
+        verdict: "rework",
+        missingEvidence: ["reproduction transcript"],
+      },
+      human: null,
+    },
+    isHub: false,
+    isVerify: true,
+    hubDecision: null,
+    maxIntentsPerDecision: 10,
+    factCount: 0,
+    findingCount: 0,
+  });
+
+  assert.deepEqual(events.map((event) => event.type), ["done"]);
+  assert.deepEqual(events[0]?.payload, {
+    summary: "Verification needs a rework pass",
+    verdict: "rework",
+    missing_evidence: ["reproduction transcript"],
+  });
+});
+
+test("accepted request_human is ingested before runner errors so the wait gate survives", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  const dispatcher = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  assert.ok(
+    source.indexOf("if (semanticState.human)")
+      < source.indexOf("if (isSemanticAgentRunError(result))"),
+    "request_human must persist before semantic/runner errors fail the Job",
+  );
+  assert.match(
+    dispatcher,
+    /if \(current\?\.status === "waiting_human"\) \{\s*[\s\S]*?return;/,
+    "dispatcher must not fail an already accepted human wait",
+  );
+});
+
+test("host semantic failures remain fail-closed while ordinary runner errors are distinct", () => {
+  assert.equal(isSemanticAgentRunError({ errorKind: "semantic", error: "ordinary" }), true);
+  assert.equal(isSemanticAgentRunError({ error: "语义事件处理失败: invalid control" }), true);
+  assert.equal(isSemanticAgentRunError({ errorKind: "runner", error: "Provider 429" }), false);
+  assert.equal(isFinalAgentRunnerError({ errorKind: "runner", error: "last retry failed", terminalOutcome: "failure" }), true);
+  assert.equal(isFinalAgentRunnerError({ errorKind: "runner", error: "stale 429", terminalOutcome: "success" }), false);
+});
+
+test("real executor generates identical AGENTS.md and CLAUDE.md instructions", () => {
+  const files = buildInstructionWorkspaceFiles("platform rules\n");
+  assert.equal(files["/workspace/AGENTS.md"], "platform rules\n");
+  assert.equal(files["/workspace/CLAUDE.md"], files["/workspace/AGENTS.md"]);
+});
+
+test("ControlEventEnvelope rejects Scheduler-owned fact and Finding fields", () => {
+  const base = { v: 1 as const, event_id: "00000000-0000-4000-8000-000000000013" };
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "fact",
+    payload: { title: "事实", description: "证据", intent_node_id: intentNodeId },
+  }).success, false);
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "finding",
+    payload: { title: "Finding", severity: "high", raw: { secret: "do-not-forward" } },
+  }).success, false);
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "fact",
+    payload: { title: "事实", description: "证据描述已达到平台要求的最小长度" },
+  }).success, true);
+  assert.equal(ControlEventEnvelope.safeParse({
+    ...base,
+    type: "finding",
+    payload: { title: "Finding title", severity: "high", summary: "evidence summary with enough durable context" },
+  }).success, true);
+});
+
+test("module evidence carries structured omissions and defaults old snapshots to []", () => {
+  const missing = [{
+    selector: "source:plugin:one",
+    source_id: "00000000-0000-4000-8000-000000000010",
+    reason: "name-conflict" as const,
+    kind: "skill" as const,
+    name: "one",
+  }];
+  const current = moduleEvidenceFromSnapshot({
+    modules: ["source:plugin:one"],
+    module_selectors: ["source:plugin:one"],
+    expanded_modules: [],
+    missing_modules: missing,
+    module_content_hash: "hash",
+    skill_revisions: [],
+  });
+  assert.deepEqual(current.missing_modules, missing);
+  assert.deepEqual(moduleEvidenceFromSnapshot({}).missing_modules, []);
+});
+
+test("manual catalog override is reflected in the frozen evidence set", async () => {
+  const sourceId = "11111111-1111-4111-8111-111111111111";
+  const catalog = [
+    {
+      id: "plugin-a/skill",
+      kind: "skill" as const,
+      plugin: "plugin-a",
+      name: "shared",
+      description: "catalog skill",
+      files: { "SKILL.md": "catalog skill bytes" },
+    },
+    {
+      id: "plugin-a/command",
+      kind: "command" as const,
+      plugin: "plugin-a",
+      name: "shared",
+      description: "catalog command",
+      files: { "command.md": "catalog command bytes" },
+    },
+  ];
+  const fakeDb = (async () => [{
+    catalog_json: catalog,
+    trust_status: "trusted",
+    enabled: true,
+    last_commit_sha: "abc123",
+    last_content_hash: "catalog-hash",
+  }]) as unknown as Parameters<typeof expandModules>[1];
+  const expanded = await expandModules([`${sourceId}:source:*`], fakeDb, { skill_names: ["shared"] });
+  const evidence = moduleEvidenceFromSnapshot({
+    modules: [`${sourceId}:source:*`],
+    module_selectors: [`${sourceId}:source:*`],
+    expanded_modules: expanded.resolved_modules,
+    missing_modules: expanded.missing_modules,
+    module_content_hash: expanded.content_hash,
+    skill_revisions: expanded.revisions,
+  });
+  assert.deepEqual(evidence.expanded_modules.map((module) => module.kind), ["command"]);
+  assert.equal(evidence.module_content_hash, expanded.content_hash);
+  assert.equal(evidence.missing_modules[0]?.reason, "manual-override");
+});
+
+function factEvent(payload: unknown): EventEnvelope {
+  return EventEnvelope.parse({
+    v: 1,
+    event_id: "00000000-0000-4000-8000-000000000013",
+    type: "fact",
+    payload,
+  });
+}
+
+test("real fact ingress forwards normalized verification to Scheduler convergence", async () => {
+  const accepted: EventEnvelope[] = [];
+  await ingestFactSemanticEvent(
+    factEvent({
+      title: "  Reproduction result  ",
+      description: "  The isolated request still returns the protected record.  ",
+      verification: {
+        finding_id: findingId,
+        evidence_kind: "test",
+        outcome: "supports",
+        subject_revision: "app@abc123",
+        steps: ["Send the isolated request"],
+        expected: "The request is rejected",
+        actual: "The protected record is returned",
+      },
+    }),
+    intentNodeId,
+    async (event) => {
+      accepted.push(event);
+    },
+  );
+
+  assert.equal(accepted.length, 1);
+  assert.deepEqual(accepted[0]?.payload, {
+    intent_node_id: intentNodeId,
+    title: "Reproduction result",
+    description: "The isolated request still returns the protected record.",
+    verification: {
+      finding_id: findingId,
+      evidence_kind: "test",
+      outcome: "supports",
+      subject_revision: "app@abc123",
+      steps: ["Send the isolated request"],
+      expected: "The request is rejected",
+      actual: "The protected record is returned",
+    },
+  });
+});
+
+test("real fact ingress preserves ordinary fact behavior and outer intent association", async () => {
+  const accepted: EventEnvelope[] = [];
+  await ingestFactSemanticEvent(
+    factEvent({ title: "  Discovery  ", description: "  A new fact with enough evidence context.  " }),
+    intentNodeId,
+    async (event) => {
+      accepted.push(event);
+    },
+  );
+
+  assert.deepEqual(accepted[0]?.payload, {
+    intent_node_id: intentNodeId,
+    title: "Discovery",
+    description: "A new fact with enough evidence context.",
+  });
+});
+
+test("real fact ingress forwards Artifact input to Scheduler convergence", async () => {
+  const accepted: EventEnvelope[] = [];
+  const artifact = {
+    kind: "quality.observation",
+    claims: [{ statement: "登录限流键只绑定客户端 IP。", status: "supported" as const }],
+    evidence: [
+      { statement: "源码以 req.ip 生成限流键。", polarity: "supports" as const },
+      { statement: "未验证反向代理覆盖。", polarity: "unknown" as const },
+    ],
+  };
+  await ingestFactSemanticEvent(
+    factEvent({
+      title: "限流键",
+      description: "源码以客户端 IP 生成限流键，代理覆盖仍未知。",
+      artifact,
+    }),
+    intentNodeId,
+    async (event) => {
+      accepted.push(event);
+    },
+  );
+  assert.deepEqual((accepted[0]?.payload as { artifact?: unknown }).artifact, artifact);
+});
+
+test("real fact ingress rejects malformed verification before convergence", async () => {
+  let accepted = 0;
+  await assert.rejects(
+    () =>
+      ingestFactSemanticEvent(
+        {
+          v: 1,
+          event_id: "00000000-0000-4000-8000-000000000014",
+          type: "fact",
+          payload: {
+          title: "Malformed evidence",
+          description: "This must not be ingested.",
+          verification: {
+            finding_id: findingId,
+            evidence_kind: "runtime",
+            outcome: "supports",
+            subject_revision: "app@abc123",
+          },
+          },
+        },
+        intentNodeId,
+        async () => {
+          accepted++;
+        },
+      ),
+    /emit_fact 参数非法/,
+  );
+  assert.equal(accepted, 0);
+});
+
+test("runtime rejects stale or incompatible credential providers", () => {
+  assert.equal(runtimeCredentialProviderError("claude-code", "anthropic", "anthropic"), null);
+  assert.match(
+    runtimeCredentialProviderError("claude-code", "openai", "anthropic") ?? "",
+    /Job 快照已过期/,
+  );
+  assert.match(
+    runtimeCredentialProviderError("claude-code", "openai", "openai") ?? "",
+    /claude-code.*anthropic/,
+  );
+});
+
+test("runtime recognizes materialized Provider settings for Gateway routing", () => {
+  assert.equal(hasMaterializedProviderConfig({ env: { ANTHROPIC_MODEL: "model-id" } }), true);
+  assert.equal(hasMaterializedProviderConfig({}), false);
+  assert.equal(hasMaterializedProviderConfig(null), false);
+});
+
+test("credential authorization uses upstream model but legacy snapshots fall back to the CLI model", () => {
+  assert.equal(credentialAuthorizationModel({ model: "fable", upstream_model: "grok-4.5" }), "grok-4.5");
+  assert.equal(credentialAuthorizationModel({ model: "legacy-model" }), "legacy-model");
+});
+
+test("late sub-agent completion keeps the first accepted mark_job_done proposal", () => {
+  const first = { eventId: "first", summary: "parent completion" };
+  const late = { eventId: "late", summary: "sub-agent completion" };
+  const state: { done: typeof first | null } = { done: null };
+
+  assert.equal(recordFirstSemanticDone(state, first), true);
+  assert.equal(recordFirstSemanticDone(state, late), false);
+  assert.equal(state.done, first);
+});
+
+test("tool.call.started/completed are mapped into stall-visible progress activity", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(source, /recordToolCallActivity\("started"/);
+  assert.match(source, /recordToolCallActivity\("completed"/);
+  assert.match(source, /toolCallProgressMessage/);
+  assert.match(source, /payload_json = payload_json \|\| \$\{sql\.json\(toolCallActivityPatch/);
+  assert.match(source, /dispatched_prompt: dispatchedPrompt/);
+  assert.match(source, /operatorVisibleDispatchPrompt\(initialInput, graph\?\.yaml/);
+});
+
+test("shared-asset publish is gated by frozen platform_tools, not leftover role-kind helpers", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /canRolePublishSharedAsset|@deprecated 发布权限/);
+  assert.match(source, /授权只认冻结快照 platform_tools/);
+});
+
+test("request_human 与 done/hub 终态双向互斥且重复 human 稳定拒绝", () => {
+  const empty = () => ({ done: null, hub: null, human: null });
+  assert.doesNotThrow(() => assertSemanticTerminalExclusivity(empty(), "human"));
+  assert.throws(
+    () => assertSemanticTerminalExclusivity({ done: null, hub: null, human: {} }, "human"),
+    (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+  );
+  for (const eventType of ["done", "hub_decision"] as const) {
+    assert.throws(
+      () => assertSemanticTerminalExclusivity({ done: null, hub: null, human: {} }, eventType),
+      (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+    );
+  }
+  assert.throws(
+    () => assertSemanticTerminalExclusivity({ done: {}, hub: null, human: null }, "human"),
+    (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+  );
+  assert.throws(
+    () => assertSemanticTerminalExclusivity({ done: null, hub: {}, human: null }, "human"),
+    (error: unknown) => error instanceof Error && error.message.startsWith("[duplicate_tool_call]"),
+  );
+});
+
+test("verify executor input uses blind-verify prompt and frozen subject", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(source, /buildVerifyJobPrompt/);
+  assert.match(source, /freezeVerifyFindingSubject/);
+  assert.match(source, /projectVerifyEvidenceForPrompt/);
+  const verifyBlock = source.slice(source.indexOf("} else if (isVerify)"));
+  assert.doesNotMatch(verifyBlock.slice(0, verifyBlock.indexOf("} else if (isReport)")), /finding\.title|finding\.summary|标题：|严重度：|描述：/);
+});
+
+
+test("all executor roles preserve the frozen task contract independently of retry trimming", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  const commonInput = source.slice(source.indexOf("  const compactRetry = readContextWindowCompactRetryMarker(payload);"), source.indexOf("  const roleDescription = snapshot.role_description;"));
+  assert.match(commonInput, /compactPromptForContextWindowRetry\(\s*initialInput,\s*snapshot\.context_window_tokens \?\? null,\s*taskContractPrompt\(snapshot\),/);
+  assert.match(commonInput, /initialInput = contextWindowCompactMeta\.prompt;/);
+  assert.match(commonInput, /if \(!compactRetry\) initialInput \+= taskContractPrompt\(snapshot\);/);
+  assert.equal((source.match(/initialInput \+= taskContractPrompt\(snapshot\)/g) ?? []).length, 1);
+});

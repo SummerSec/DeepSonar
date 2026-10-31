@@ -1,0 +1,37 @@
+{
+  "name": "@deepsonar/scheduler",
+  "version": "0.1.11",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:migrations": "tsx --test src/migration-runner.test.ts src/db.test.ts src/schema-rebuild.test.ts src/schema-rebuild.integration.test.ts",
+    "db:rebuild": "tsx src/schema-rebuild-cli.ts"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1104.0",
+    "@deepsonar/runtime-sandbox": "workspace:*",
+    "@deepsonar/shared-types": "workspace:*",
+    "@fastify/websocket": "^11.3.0",
+    "ae-cvss-calculator": "1.0.13",
+    "fastify": "^5.11.0",
+    "jszip": "^3.10.1",
+    "postgres": "^3.4.9",
+    "smol-toml": "^1.7.1",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3"
+  },
+  "description": "",
+  "main": "index.js",
+  "keywords": [],
+  "author": ""
+}

@@ -1,0 +1,42 @@
+# Illegal Docker fixture for #583: ingress.mode=gateway without nested gateway block.
+# Pinned OpenSandbox server schema must reject this before deploy.
+[server]
+host = "0.0.0.0"
+port = 8080
+max_sandbox_timeout_seconds = 86400
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "docker"
+execd_image = "docker.io/opensandbox/execd@sha256:e11fdd6fa641329a1fe5298e71c8dd2afca742674fe48bc855b2ff6715512829"
+
+[docker]
+network_mode = "bridge"
+api_timeout = 180
+host_ip = "host.docker.internal"
+port_range_min = 40000
+port_range_max = 49000
+drop_capabilities = ["ALL"]
+no_new_privileges = true
+pids_limit = 4096
+
+[ingress]
+mode = "gateway"
+
+[egress]
+image = "docker.io/opensandbox/egress@sha256:56429c89b7175c2a24af62ca93a99776f03ea67a0beb74d63c8ddb34ff16fd97"
+mode = "dns"
+disable_ipv6 = true
+readiness_timeout_seconds = 30.0
+
+[storage]
+allowed_host_paths = []
+
+[store]
+type = "sqlite"
+path = "/tmp/opensandbox-schema-gate-illegal.db"
+
+[renew_intent]
+enabled = false

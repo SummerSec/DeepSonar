@@ -1,0 +1,1838 @@
+import { TaskGoalReviewRequest, TaskGoalReviewResult } from "./task-goal-review.js";
+export * from "./task-goal-review.js";
+import { TaskResultProposal } from "./task-result.js";
+export * from "./task-result.js";
+import { z } from "zod";
+import { CandidateOutcomeClaim } from "./task-outcome.js";
+export * from "./task-outcome.js";
+import { KnowledgeControlPayloadSchemas, KNOWLEDGE_OPERATION_IDS, KnowledgeMutationPayload } from "./project-knowledge.js";
+export * from "./project-knowledge.js";
+import { RepairFeedback as ReadinessRepairFeedback } from "./repair-feedback.js";
+import {
+  DescribeCapabilityPayload,
+  ListCapabilitiesPayload,
+  PreviewMaterializationPayload,
+  SearchCapabilitiesPayload,
+  ValidateCompositionPayload,
+} from "./capability-pack.js";
+
+export {
+  LANGUAGE_SERVER_CAPABILITY_SCHEMA,
+  LANGUAGE_SERVER_OPERATIONS,
+  LANGUAGE_SERVER_UNAVAILABLE_CODE,
+  LanguageServerCapabilityId,
+  LanguageServerCapabilityManifest,
+  LanguageServerLimits,
+  LanguageServerOperation,
+  LanguageServerUnavailableReason,
+  LanguageServerFileRange,
+  LanguageServerQueryResult,
+  FrozenLanguageServerCapability,
+} from "./language-server-capability.js";
+export type { LanguageServerOperation as LanguageServerOperationName } from "./language-server-capability.js";
+export {
+  CLI_CAPABILITY_SCHEMA,
+  CLI_UNAVAILABLE_CODE,
+  CliCapabilityId,
+  CliCapabilityManifest,
+  CliLimits,
+  CliNetworkMode,
+  CliPermission,
+  CliUnavailableReason,
+  CliCapabilityResult,
+  FrozenCliCapability,
+  FrozenCliCapabilityPack,
+} from "./cli-capability.js";
+export {
+  EXTENSION_MATERIALIZATION_SCHEMA,
+  EXTENSION_MATERIALIZATION_PACK_SCHEMA,
+  COMPONENT_MATERIALIZATION_FAILED,
+  FORBIDDEN_RUNTIME_INSTALL_PATTERNS,
+  MaterializationComponentId,
+  MaterializationComponentManifest,
+  MaterializationComponentType,
+  MaterializationSourceKind,
+  MaterializationSecurityLevel,
+  MaterializationMaintStatus,
+  FrozenMaterializationComponent,
+  FrozenMaterializationPack,
+  ComponentMaterializationFailureReason,
+  isForbiddenRuntimeInstallCommand,
+} from "./extension-materialization.js";
+export {
+  PROVIDER_ADAPTER_SCHEMA,
+  MODEL_DESCRIPTOR_SCHEMA,
+  FROZEN_PROVIDER_MODEL_SNAPSHOT_SCHEMA,
+  DEFAULT_MODEL_CATALOG_HEALTH,
+  CREDENTIAL_AGENT_CLI_BINDING_NOTE,
+  ModelCatalogHealthStatus,
+  ModelModality,
+  ModelCostDescriptor,
+  ModelRateLimits,
+  ModelDescriptor,
+  FrozenModelDescriptor,
+  ProviderCredentialValidateResult,
+  ProviderCatalogDiscoveryResult,
+  ProviderCliCompatibility,
+  ProviderGatewayTransformSpec,
+  ProviderAdapterManifest,
+  FrozenProviderModelSnapshot,
+  ModelSelectionRequirements,
+  isSelectableModelHealth,
+  selectModelDescriptors,
+  freezeModelDescriptor,
+} from "./provider-adapter.js";
+export type {
+  ModelCatalogHealthStatus as ModelCatalogHealthStatusName,
+  ModelModality as ModelModalityName,
+  ModelCostDescriptor as ModelCostDescriptorType,
+  ModelRateLimits as ModelRateLimitsType,
+  ModelDescriptor as ModelDescriptorType,
+  FrozenModelDescriptor as FrozenModelDescriptorType,
+  ProviderCredentialValidateResult as ProviderCredentialValidateResultType,
+  ProviderCatalogDiscoveryResult as ProviderCatalogDiscoveryResultType,
+  ProviderCliCompatibility as ProviderCliCompatibilityType,
+  ProviderGatewayTransformSpec as ProviderGatewayTransformSpecType,
+  ProviderAdapterManifest as ProviderAdapterManifestType,
+  FrozenProviderModelSnapshot as FrozenProviderModelSnapshotType,
+  ModelSelectionRequirements as ModelSelectionRequirementsType,
+} from "./provider-adapter.js";
+export {
+  AGENT_RUNTIME_PROFILE_SCHEMA,
+  AGENT_RUNTIME_PROFILE_UNSUPPORTED_CONFIG,
+  AgentRuntimeProfile,
+  RuntimeProfileEnvRef,
+  RuntimeProfileExtensionRef,
+  RuntimeProfileNativeOptions,
+  RuntimeProfileProviderRef,
+  RuntimeProfileResolutionOrder,
+  RuntimeProfileSystemPromptRef,
+  RuntimeProfileOverridePayload,
+} from "./agent-runtime-profile.js";
+export type {
+  AgentRuntimeProfile as FrozenAgentRuntimeProfile,
+  RuntimeProfileEnvRef as RuntimeProfileEnvRefType,
+  RuntimeProfileExtensionRef as RuntimeProfileExtensionRefType,
+  RuntimeProfileNativeOptions as RuntimeProfileNativeOptionsType,
+  RuntimeProfileProviderRef as RuntimeProfileProviderRefType,
+  RuntimeProfileSystemPromptRef as RuntimeProfileSystemPromptRefType,
+  RuntimeProfileOverridePayload as RuntimeProfileOverridePayloadType,
+} from "./agent-runtime-profile.js";
+import { PlanDecisionBasis, SubmitPlanPayload, SubmitPlanResultPayload } from "./plan.js";
+
+const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);
+
+/** Model/provider-owned reasoning profile token. The platform stores and forwards it without a fixed vocabulary. */
+export const REASONING_VALUE_MAX_LENGTH = 64;
+export const REASONING_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export const ReasoningValue = z.string().trim().min(1).max(REASONING_VALUE_MAX_LENGTH).regex(REASONING_VALUE_PATTERN);
+export type ReasoningValue = z.infer<typeof ReasoningValue>;
+export function isReasoningValue(value: unknown): value is ReasoningValue {
+  return typeof value === "string" && REASONING_VALUE_PATTERN.test(value);
+}
+
+/** Canonical DSH/pi-ai reasoning levels. Provider-specific wire values live in model.reasoningEfforts. */
+export const DSH_REASONING_EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type DshReasoningEffort = (typeof DSH_REASONING_EFFORTS)[number];
+export function isDshReasoningEffort(value: unknown): value is DshReasoningEffort {
+  return typeof value === "string" && DSH_REASONING_EFFORTS.some((effort) => effort === value);
+}
+
+/** Claude Code settings.json effortLevel values. Thinking enablement is a separate setting. */
+export const CLAUDE_CODE_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+export type ClaudeCodeReasoningEffort = (typeof CLAUDE_CODE_REASONING_EFFORTS)[number];
+export function isClaudeCodeReasoningEffort(value: unknown): value is ClaudeCodeReasoningEffort {
+  return typeof value === "string" && CLAUDE_CODE_REASONING_EFFORTS.some((effort) => effort === value);
+}
+
+/** Codex model_reasoning_effort values kept for leftover historical archives/credentials. */
+export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+export type CodexReasoningEffort = (typeof CODEX_REASONING_EFFORTS)[number];
+export function isCodexReasoningEffort(value: unknown): value is CodexReasoningEffort {
+  return typeof value === "string" && CODEX_REASONING_EFFORTS.some((effort) => effort === value);
+}
+
+/** Current write/run Agent CLIs. The adapter registry stays open for later additions. */
+export const CURRENT_AGENT_CLIS = ["claude-code", "pi", "dsh"] as const;
+export type CurrentAgentCli = (typeof CURRENT_AGENT_CLIS)[number];
+export const CURRENT_AGENT_CLI_DEFAULT = "claude-code" as const;
+/** Retired from new RoleConfig/Job writes; leftover rows and archives stay readable. */
+export const LEFTOVER_AGENT_CLIS = ["codex", "open-code"] as const;
+export type LeftoverAgentCli = (typeof LEFTOVER_AGENT_CLIS)[number];
+export const CurrentAgentCliSchema = z.enum(CURRENT_AGENT_CLIS);
+export function isCurrentAgentCli(value: unknown): value is CurrentAgentCli {
+  return typeof value === "string" && (CURRENT_AGENT_CLIS as readonly string[]).includes(value);
+}
+export function isLeftoverAgentCli(value: unknown): value is LeftoverAgentCli {
+  return typeof value === "string" && (LEFTOVER_AGENT_CLIS as readonly string[]).includes(value);
+}
+export function leftoverAgentCliMigrationHint(cli: string): string {
+  return `agent_cli=${cli} 已不再支持新配置。请迁移到 claude-code（默认）、pi 或 dsh 之一后再保存；系统不会自动改写存量配置。`;
+}
+export function rejectNonCurrentAgentCli(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return `未知 agent_cli，当前仅支持 ${CURRENT_AGENT_CLIS.join(" / ")}`;
+  if (isLeftoverAgentCli(value)) return leftoverAgentCliMigrationHint(value);
+  if (!isCurrentAgentCli(value)) return `未知 agent_cli，当前仅支持 ${CURRENT_AGENT_CLIS.join(" / ")}`;
+  return null;
+}
+export const AgentCliWriteSchema = z.string().superRefine((value, ctx) => {
+  const error = rejectNonCurrentAgentCli(value);
+  if (error) ctx.addIssue({ code: "custom", message: error });
+});
+
+/** Pi --thinking values; Pi and DSH share the same canonical vocabulary. */
+export const PI_REASONING_EFFORTS = DSH_REASONING_EFFORTS;
+export type PiReasoningEffort = DshReasoningEffort;
+export const isPiReasoningEffort = isDshReasoningEffort;
+
+/** Bounds and path syntax for large Agent control payloads stored in /workspace. */
+export const SEMANTIC_EVENT_PAYLOAD_MAX_BYTES = 256 * 1024;
+export const WORKSPACE_PAYLOAD_FILE_MAX_BYTES = SEMANTIC_EVENT_PAYLOAD_MAX_BYTES;
+export const WORKSPACE_PAYLOAD_FILE_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/;
+export function isSafeWorkspacePayloadFile(value: unknown): value is string {
+  return typeof value === "string" && value.length >= 1 && value.length <= 200 && WORKSPACE_PAYLOAD_FILE_PATTERN.test(value);
+}
+
+/** Final summaries are duplicated into durable event/node storage, so bound
+ * the Agent-controlled text by its actual UTF-8 storage size, not JS chars.
+ * Max is 8192 UTF-8 bytes (not a character count). */
+export const DONE_SUMMARY_MAX_BYTES = 8 * 1024;  // 8192 UTF-8 bytes
+const utf8ByteLength = (value: string) => new TextEncoder().encode(value).byteLength;
+
+/** Scheduler-governed role colors.  Keep this palette in the shared package
+ * so the API, canvas renderer, and transfer surfaces agree on the same
+ * syntax and reserved semantic colors. */
+export const ROLE_UI_COLOR_PATTERN = /^#[0-9a-f]{6}$/i;
+export const ROLE_UI_COLOR_RESERVED = [
+  "#2dd4bf", // task
+  "#38bdf8", // intent
+  "#a78bfa", // hub
+  "#fb7185", // finding
+  "#f59e0b", // legacy subagent fallback
+  "#34d399", // verify
+  "#22d3ee", // fact
+  "#818cf8", // report
+  "#f97316", // human
+  "#94a3b8", // note
+] as const;
+export const ROLE_UI_COLOR_ASSIGNABLE = [
+  "#e879f9",
+  "#facc15",
+  "#a3e635",
+  "#4ade80",
+  "#fb923c",
+  "#f472b6",
+  "#c084fc",
+  "#93c5fd",
+  "#bef264",
+  "#67e8f9",
+  "#fda4af",
+  "#d8b4fe",
+  "#fdba74",
+  "#86efac",
+  "#fde047",
+  "#5eead4",
+  "#c4b5fd",
+  "#f9a8d4",
+  "#7dd3fc",
+  "#d9f99d",
+  "#f0abfc",
+  "#fed7aa",
+  "#bbf7d0",
+  "#fef08a",
+] as const;
+
+/** 通用客户端上下文预算；不会提升上游模型能力。 */
+export const CONTEXT_WINDOW_TOKENS_MIN = 1024;
+export const CONTEXT_WINDOW_TOKENS_MAX = 10_000_000;
+export const ContextWindowTokens = z.number().int().safe().min(CONTEXT_WINDOW_TOKENS_MIN).max(CONTEXT_WINDOW_TOKENS_MAX).nullable();
+export type ContextWindowTokens = z.infer<typeof ContextWindowTokens>;
+// ---------- 枚举（一律字符串，不用 DB enum，见 ARCHITECTURE §17.1） ----------
+
+export const JobStatus = z.enum([
+  "pending",
+  "claimed",
+  "provisioning",
+  "running",
+  "succeeded",
+  "failed",
+  "timeout",
+  "cancelled",
+  "orphan",
+  "waiting_human",
+]);
+export type JobStatus = z.infer<typeof JobStatus>;
+
+/** Job 类型是数据库角色名或调度器系统类型，不在共享类型中维护第二份角色枚举。 */
+export const JobType = z.string().min(1);
+export type JobType = z.infer<typeof JobType>;
+
+export const EventType = z.enum(["progress", "finding", "done", "human", "fact", "hub_decision", "plan", "plan_result", "knowledge", "control_receipt"]);
+export type EventType = z.infer<typeof EventType>;
+
+export const Severity = z.enum(["low", "medium", "high", "critical"]);
+export type Severity = z.infer<typeof Severity>;
+
+const findingProfileName = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[a-z][a-z0-9_-]*(?:\.[a-z][a-z0-9_-]*)*$/);
+
+export const FindingProtocolMode = z.enum(["fixed", "hybrid"]);
+export type FindingProtocolMode = z.infer<typeof FindingProtocolMode>;
+
+export const FindingScoringPolicy = z
+  .object({
+    default_standard: z.literal("CVSS").default("CVSS"),
+    default_version: z.string().min(1).max(20).default("3.1"),
+    accepted_versions: z.array(z.string().min(1).max(20)).min(1).max(10).default(["3.1", "4.0"]),
+    require_scoring_for_profiles: z.array(findingProfileName).max(50).default([]),
+  })
+  .strict();
+export type FindingScoringPolicy = z.infer<typeof FindingScoringPolicy>;
+
+/** Partial policy stored at a configuration layer. Lists replace inherited
+ * lists so a task can narrow policy without a lower layer widening it. */
+export const FindingProtocolConfig = z
+  .object({
+    mode: FindingProtocolMode.optional(),
+    default_profile: findingProfileName.optional(),
+    allowed_profiles: z.array(findingProfileName).min(1).max(50).optional(),
+    scoring: FindingScoringPolicy.partial().strict().optional(),
+    display_name: nonEmptyText(100).optional(),
+  })
+  .strict();
+export type FindingProtocolConfig = z.infer<typeof FindingProtocolConfig>;
+
+export const EffectiveFindingProtocol = z
+  .object({
+    mode: FindingProtocolMode,
+    default_profile: findingProfileName,
+    allowed_profiles: z.array(findingProfileName).min(1).max(50),
+    scoring: FindingScoringPolicy,
+    display_name: nonEmptyText(100),
+    source: z.enum(["global", "project", "task"]),
+  })
+  .strict();
+export type EffectiveFindingProtocol = z.infer<typeof EffectiveFindingProtocol>;
+
+export const FindingScoringProposal = z
+  .object({
+    standard: z.literal("CVSS"),
+    version: z.string().min(1).max(20),
+    vector: z.string().min(1).max(1000),
+    metrics: z.record(z.string(), z.unknown()).optional(),
+    /** Accepted only for comparison/audit; Scheduler always recomputes. */
+    base_score: z.number().min(0).max(10).optional(),
+  })
+  .strict();
+export type FindingScoringProposal = z.infer<typeof FindingScoringProposal>;
+
+export const VerifyStatus = z.enum([
+  "pending",
+  "verifying",
+  "confirmed",
+  "false_positive",
+  "needs_human",
+  "refuted",
+  "inconclusive",
+]);
+export type VerifyStatus = z.infer<typeof VerifyStatus>;
+
+/** Verify Agent 提交的 verdict 提案。历史 Finding `verify_status=false_positive` 仍可读，不能再作为输入。 */
+export const VerifyVerdict = z.enum(["confirmed", "rework", "needs_human", "refuted"]);
+export type VerifyVerdict = z.infer<typeof VerifyVerdict>;
+
+/** 绑定到 Finding 的独立复核 / 实测证据（emit_fact 可选字段）。 */
+export const VerificationEvidence = z
+  .object({
+  finding_id: z.string().uuid(),
+  evidence_kind: z.enum(["review", "test"]),
+  outcome: z.enum(["supports", "refutes", "inconclusive"]),
+  subject_revision: nonEmptyText(500),
+  environment: z.string().max(1000).regex(/\S/).optional(),
+  steps: z.array(z.string().max(2000).regex(/\S/)).max(50).optional(),
+  expected: z.string().max(5000).regex(/\S/).optional(),
+  actual: z.string().max(5000).regex(/\S/).optional(),
+  artifact_refs: z
+    .array(
+      z
+        .object({
+          uri: z.string().min(1).max(2000),
+          sha256: z.string().max(128).optional(),
+        })
+        .strict(),
+    )
+    .max(20)
+    .optional(),
+  /** Runtime/env integrity digest (#577). Distinct from Hub wake evidence_signature / gate_fingerprint. */
+  runtime_digest: z.string().max(128).regex(/\S/).optional(),
+  /** Process exit code for runtime proof (#577). Text expected/actual alone is not reproduced proof. */
+  exit_code: z.number().int().min(-2147483648).max(2147483647).optional(),
+  attempted_refutation: z.array(nonEmptyText(2000)).max(20).optional(),
+  limitations: z.array(z.string().max(1000).regex(/\S/)).max(20).optional(),
+  })
+  .strict();
+export type VerificationEvidence = z.infer<typeof VerificationEvidence>;
+
+export const NodeType = z.enum(["root", "job", "finding", "note", "human", "intent", "fact", "report"]);
+export type NodeType = z.infer<typeof NodeType>;
+
+/**
+ * 画布 Fact 的证据信任态（#387）。Owner 是人工收口，不是 Finding Verify。
+ * 与 `findings.verify_status` / disposition / human 节点相互独立：不共用迁移，也不从证据 outcome 推断。
+ * 报告数量门禁只认 `verified`；`confirmed` 不是 Fact 状态。
+ */
+export const FactVerificationStatus = z.enum([
+  "unverified",
+  "verifying",
+  "verified",
+  "rejected",
+  "needs_human",
+]);
+export type FactVerificationStatus = z.infer<typeof FactVerificationStatus>;
+
+/**
+ * Authoritative task/canvas lifecycle rollup returned by every canvas
+ * projection.  The Scheduler owns these values; clients must overwrite them
+ * on every delta, including explicit zero/null values.
+ */
+export const CanvasLifecycleRollup = z.object({
+  active_count: z.number().int().nonnegative(),
+  job_count: z.number().int().nonnegative(),
+  started_at: z.string().nullable(),
+  ended_at: z.string().nullable(),
+  root_status: z.string().nullable(),
+  report_status: z.string().nullable(),
+});
+export type CanvasLifecycleRollup = z.infer<typeof CanvasLifecycleRollup>;
+
+/** Canvas-level drain pause. Pending Jobs are durable queue entries, not work
+ * that still needs to drain, so they are projected separately. */
+export const TaskExecutionState = z.enum(["pausing", "paused", "running"]);
+export type TaskExecutionState = z.infer<typeof TaskExecutionState>;
+
+export const TaskExecutionControl = z.object({
+  paused: z.boolean(),
+  paused_at: z.string().nullable(),
+  paused_by: z.string().nullable(),
+  reason: z.string().nullable(),
+});
+export type TaskExecutionControl = z.infer<typeof TaskExecutionControl>;
+
+export const TaskExecutionControlResult = z.object({
+  canvas_id: z.string().uuid(),
+  execution_state: TaskExecutionState,
+  active_count: z.number().int().nonnegative(),
+  pending_count: z.number().int().nonnegative(),
+  changed: z.boolean(),
+});
+export type TaskExecutionControlResult = z.infer<typeof TaskExecutionControlResult>;
+
+export const EdgeType = z.enum([
+  "child",
+  "produces",
+  "verifies",
+  "next",
+  "from",
+  "to",
+  "reviewed_by",
+  "tested_by",
+]);
+export type EdgeType = z.infer<typeof EdgeType>;
+
+// ---------- Finding payload（SARIF 2.1.0 子集，见 ARCHITECTURE §6.1） ----------
+
+const meaningfulText = (min: number, max: number) =>
+  z.string().min(min).max(max).regex(/\S/).refine((value) => value.trim().length >= min, `must contain at least ${min} nonblank characters`);
+const meaningfulFindingTitle = meaningfulText(8, 500);
+const meaningfulFindingSummary = meaningfulText(32, 10000);
+const meaningfulFactTitle = meaningfulText(2, 200);
+const meaningfulFactDescription = meaningfulText(16, 10000);
+
+/** Optional numeric anchors on fact/finding. Undeclared prose numbers stay unprotected. */
+export const QUANTITY_ANCHOR_MAX = 20;
+export const QuantityAnchor = z
+  .object({
+    value: z.number().finite(),
+    /** Count-basis declaration (tool + transform), not a bare unit symbol. */
+    unit: meaningfulText(2, 400),
+    /** Alternate-basis note so a folded count cannot stand alone. */
+    basis: meaningfulText(2, 400),
+    /** Recomputable evidence ref; optional. */
+    ref: nonEmptyText(2000).optional(),
+  })
+  .strict();
+export type QuantityAnchor = z.infer<typeof QuantityAnchor>;
+export const QuantityAnchors = z.array(QuantityAnchor).max(QUANTITY_ANCHOR_MAX);
+export type QuantityAnchors = z.infer<typeof QuantityAnchors>;
+export function parseDeclaredQuantities(value: unknown): QuantityAnchor[] {
+  const parsed = QuantityAnchors.safeParse(value);
+  return parsed.success ? parsed.data : [];
+}
+
+const optionalQuantities = QuantityAnchors.optional();
+
+/** Impact semantics for security findings (#590). */
+export const FindingImpact = z
+  .object({
+    attacker_entry: z.string().max(2000).regex(/\S/).optional(),
+    victim_resource: z.string().max(2000).regex(/\S/).optional(),
+    impact_flow: z.string().max(8000).regex(/\S/).optional(),
+    preconditions: z.array(nonEmptyText(500)).max(32).optional(),
+    known_issue_refs: z.array(nonEmptyText(300)).max(32).optional(),
+    impact_waiver: z.string().max(2000).regex(/\S/).optional(),
+  })
+  .strict();
+export type FindingImpact = z.infer<typeof FindingImpact>;
+
+export const FindingPayload = z
+  .object({
+    title: meaningfulFindingTitle,
+    profile: findingProfileName.optional(),
+    category: findingProfileName.optional(),
+    tags: z.array(nonEmptyText(100)).max(50).optional(),
+    evidence_refs: z.array(nonEmptyText(2000)).max(50).optional(),
+    severity: Severity.optional(),
+    scoring: FindingScoringProposal.optional(),
+    location: z.string().max(1000).regex(/\S/).optional(), // "auth/login.php:42" ← SARIF artifactLocation + region
+    summary: meaningfulFindingSummary.optional(),
+    rule_id: z.string().max(200).regex(/\S/).optional(), // SARIF ruleId
+    quantities: optionalQuantities,
+    impact: FindingImpact.optional(),
+    outcome_claim: CandidateOutcomeClaim.optional(),
+    raw: z.record(z.string(), z.unknown()).optional(), // SARIF result 原文
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.summary === undefined) {
+      ctx.addIssue({ code: "custom", path: ["summary"], message: "Finding summary is required and must contain at least 32 nonblank characters" });
+    }
+  });
+export type FindingPayload = z.infer<typeof FindingPayload>;
+
+/** Agent-facing Finding contract.  SARIF/raw is Scheduler-owned internal data
+ * and is intentionally not writable through the Job control API. */
+export const EmitFindingDirectPayload = z
+  .object({
+    title: meaningfulFindingTitle,
+    profile: findingProfileName.optional(),
+    category: findingProfileName.optional(),
+    tags: z.array(nonEmptyText(100)).max(50).optional(),
+    evidence_refs: z.array(nonEmptyText(2000)).max(50).optional(),
+    severity: Severity.optional(),
+    scoring: FindingScoringProposal.optional(),
+    location: z.string().max(1000).regex(/\S/).optional(),
+    summary: meaningfulFindingSummary,
+    rule_id: z.string().max(200).regex(/\S/).optional(),
+    quantities: optionalQuantities,
+    impact: FindingImpact.optional(),
+    outcome_claim: CandidateOutcomeClaim.optional(),
+  })
+  .strict();
+export type EmitFindingDirectPayload = z.infer<typeof EmitFindingDirectPayload>;
+
+export const EmitFindingPayload = z
+  .object({
+    title: meaningfulFindingTitle.optional(),
+    profile: findingProfileName.optional(),
+    category: findingProfileName.optional(),
+    tags: z.array(nonEmptyText(100)).max(50).optional(),
+    evidence_refs: z.array(nonEmptyText(2000)).max(50).optional(),
+    severity: Severity.optional(),
+    scoring: FindingScoringProposal.optional(),
+    location: z.string().max(1000).regex(/\S/).optional(),
+    summary: meaningfulFindingSummary.optional(),
+    rule_id: z.string().max(200).regex(/\S/).optional(),
+    quantities: optionalQuantities,
+    impact: FindingImpact.optional(),
+    outcome_claim: CandidateOutcomeClaim.optional(),
+    payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasFile = value.payload_file !== undefined;
+    const hasDirect = Object.keys(value).some((key) => key !== "payload_file");
+    if (hasFile === hasDirect) {
+      ctx.addIssue({ code: "custom", path: hasFile ? ["payload_file"] : [], message: "emit_finding must provide exactly one of direct fields or payload_file" });
+      return;
+    }
+    if (!hasFile && value.title === undefined) {
+      ctx.addIssue({ code: "custom", path: ["title"], message: "Finding title is required" });
+    }
+    if (!hasFile && value.summary === undefined) {
+      ctx.addIssue({ code: "custom", path: ["summary"], message: "Finding summary is required" });
+    }
+  });
+export type EmitFindingPayload = z.infer<typeof EmitFindingPayload>;
+
+/** Artifact identity kind / namespaced extension keys (#444). Same syntax as Finding profile. */
+export const ArtifactKind = findingProfileName;
+export type ArtifactKind = z.infer<typeof ArtifactKind>;
+
+export const ArtifactSchemaVersion = z.string().min(1).max(20).regex(/^[0-9]+(?:\.[0-9]+)*$/);
+export type ArtifactSchemaVersion = z.infer<typeof ArtifactSchemaVersion>;
+
+export const ArtifactClaimStatus = z.enum(["supported", "contradicted", "unknown"]);
+export type ArtifactClaimStatus = z.infer<typeof ArtifactClaimStatus>;
+
+export const ArtifactEvidencePolarity = z.enum(["supports", "contradicts", "unknown"]);
+export type ArtifactEvidencePolarity = z.infer<typeof ArtifactEvidencePolarity>;
+
+export const ArtifactRelationType = z.enum([
+  "supports",
+  "contradicts",
+  "depends_on",
+  "derived_from",
+  "related",
+  "hypothesis_of",
+]);
+export type ArtifactRelationType = z.infer<typeof ArtifactRelationType>;
+
+export const ArtifactKey = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$/);
+export type ArtifactKey = z.infer<typeof ArtifactKey>;
+
+export const ArtifactSubject = z
+  .object({
+    type: nonEmptyText(80).optional(),
+    id: z.string().uuid().optional(),
+    location: z.string().max(1000).regex(/\S/).optional(),
+    label: nonEmptyText(500).optional(),
+  })
+  .strict();
+export type ArtifactSubject = z.infer<typeof ArtifactSubject>;
+
+export const ArtifactClaimInput = z
+  .object({
+    statement: nonEmptyText(10000),
+    subject: ArtifactSubject.optional(),
+    expected: z.string().max(5000).regex(/\S/).optional(),
+    actual: z.string().max(5000).regex(/\S/).optional(),
+    status: ArtifactClaimStatus.optional(),
+    evidence_refs: z.array(nonEmptyText(2000)).max(50).optional(),
+  })
+  .strict();
+export type ArtifactClaimInput = z.infer<typeof ArtifactClaimInput>;
+
+export const ArtifactEvidenceInput = z
+  .object({
+    kind: ArtifactKind.optional(),
+    statement: nonEmptyText(10000),
+    polarity: ArtifactEvidencePolarity.optional(),
+    uri: z.string().min(1).max(2000).optional(),
+    sha256: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+export type ArtifactEvidenceInput = z.infer<typeof ArtifactEvidenceInput>;
+
+export const ArtifactRelationInput = z
+  .object({
+    to_artifact_id: z.string().uuid(),
+    relation_type: ArtifactRelationType,
+  })
+  .strict();
+export type ArtifactRelationInput = z.infer<typeof ArtifactRelationInput>;
+
+export const ARTIFACT_CLAIM_MAX = 50;
+export const ARTIFACT_EVIDENCE_MAX = 50;
+export const ARTIFACT_RELATION_MAX = 20;
+
+export const ArtifactInput = z
+  .object({
+    goal_review: TaskGoalReviewResult.optional(),
+    task_result: TaskResultProposal.optional(),
+    kind: ArtifactKind.optional(),
+    schema_version: ArtifactSchemaVersion.optional(),
+    artifact_key: ArtifactKey.optional(),
+    claims: z.array(ArtifactClaimInput).max(ARTIFACT_CLAIM_MAX).optional(),
+    evidence: z.array(ArtifactEvidenceInput).max(ARTIFACT_EVIDENCE_MAX).optional(),
+    relations: z.array(ArtifactRelationInput).max(ARTIFACT_RELATION_MAX).optional(),
+    extensions: z.record(ArtifactKind, z.record(z.string(), z.unknown())).optional(),
+  })
+  .strict();
+export type ArtifactInput = z.infer<typeof ArtifactInput>;
+
+const optionalArtifact = ArtifactInput.optional();
+
+/** 角色 agent 的 fact 提案；verification 仅在 Hub 回弹补证 Job 上被接受。 */
+export const FactPayload = z
+  .object({
+    title: meaningfulFactTitle,
+    description: meaningfulFactDescription,
+    quantities: optionalQuantities,
+    /** Scheduler-owned association; Agent input is ignored and overwritten. */
+    intent_node_id: z.string().uuid().nullable().optional(),
+    verification: VerificationEvidence.optional(),
+    artifact: optionalArtifact,
+  })
+  .strict();
+export type FactPayload = z.infer<typeof FactPayload>;
+
+/** Control-tool input contracts.  These schemas are the single source used by
+ * the Scheduler boundary and the generated in-sandbox MCP JSON Schema. */
+export const EmitFactDirectPayload = z
+  .object({
+    title: meaningfulFactTitle,
+    description: meaningfulFactDescription,
+    quantities: optionalQuantities,
+    verification: VerificationEvidence.optional(),
+    artifact: optionalArtifact,
+  })
+  .strict();
+export type EmitFactDirectPayload = z.infer<typeof EmitFactDirectPayload>;
+
+export const EmitFactPayload = z
+  .object({
+    title: meaningfulFactTitle.optional(),
+    description: meaningfulFactDescription.optional(),
+    quantities: optionalQuantities,
+    verification: VerificationEvidence.optional(),
+    artifact: optionalArtifact,
+    payload_file: z.string().min(1).max(200).regex(/^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._/-]+$/).optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasFile = value.payload_file !== undefined;
+    const hasDirect = Object.keys(value).some((key) => key !== "payload_file");
+    if (hasFile === hasDirect) {
+      ctx.addIssue({ code: "custom", path: hasFile ? ["payload_file"] : [], message: "emit_fact must provide exactly one of direct fields or payload_file" });
+      return;
+    }
+    if (!hasFile && value.title === undefined) {
+      ctx.addIssue({ code: "custom", path: ["title"], message: "Fact title is required" });
+    }
+    if (!hasFile && value.description === undefined) {
+      ctx.addIssue({ code: "custom", path: ["description"], message: "Fact description is required" });
+    }
+  });
+export type EmitFactPayload = z.infer<typeof EmitFactPayload>;
+
+export const ProgressPayload = z
+  .object({
+    message: nonEmptyText(2000),
+    percent: z.number().min(0).max(100).optional(),
+  })
+  .strict();
+export type ProgressPayload = z.infer<typeof ProgressPayload>;
+
+export const HumanPayload = z
+  .object({
+    reason: meaningfulText(8, 2000),
+    plan_basis: PlanDecisionBasis.optional(),
+    subject: z.discriminatedUnion("type", [
+      z
+        .object({
+          type: z.literal("finding"),
+          finding_id: z.string().uuid(),
+          subject_revision: nonEmptyText(500),
+        })
+        .strict(),
+      z
+        .object({
+          type: z.literal("platform_blocker"),
+          kind: z.enum(["authorization", "credential", "high_risk_action", "business_decision"]),
+        })
+        .strict(),
+    ]),
+  })
+  .strict().superRefine((value, ctx) => {
+    if (value.plan_basis && (!['blocked', 'needs_human'].includes(value.plan_basis.outcome)
+      || value.subject.type !== 'platform_blocker' || value.subject.kind !== 'business_decision')) {
+      ctx.addIssue({ code: "custom", path: ["plan_basis"], message: "Plan stops require blocked/needs_human and a business_decision subject" });
+    }
+  });
+export type HumanPayload = z.infer<typeof HumanPayload>;
+
+export const DonePayload = z
+  .object({
+    summary: meaningfulText(8, DONE_SUMMARY_MAX_BYTES).refine(
+      (value) => utf8ByteLength(value) <= DONE_SUMMARY_MAX_BYTES,
+      `summary must not exceed ${DONE_SUMMARY_MAX_BYTES} UTF-8 bytes`,
+    ),
+    verdict: VerifyVerdict.optional(),
+    // Keep evidence labels canonical at the shared boundary: surrounding
+    // whitespace is removed, while blank/whitespace-only entries are rejected.
+    missing_evidence: z.array(z.string().trim().min(1).max(200).regex(/\S/)).max(8).optional(),
+  })
+  .strict();
+export type DonePayload = z.infer<typeof DonePayload>;
+
+export const ListAvailableRolesPayload = z.object({}).strict();
+export type ListAvailableRolesPayload = z.infer<typeof ListAvailableRolesPayload>;
+
+export const ListAvailableRuntimeImagesPayload = z.object({}).strict();
+export type ListAvailableRuntimeImagesPayload = z.infer<typeof ListAvailableRuntimeImagesPayload>;
+
+export const ListAvailableAgentClisPayload = z.object({}).strict();
+export type ListAvailableAgentClisPayload = z.infer<typeof ListAvailableAgentClisPayload>;
+
+export const ListAvailableProvidersPayload = z.object({}).strict();
+export type ListAvailableProvidersPayload = z.infer<typeof ListAvailableProvidersPayload>;
+
+export const ListAvailableSkillSourcesPayload = z.object({}).strict();
+export type ListAvailableSkillSourcesPayload = z.infer<typeof ListAvailableSkillSourcesPayload>;
+
+export const ListAvailableSkillsPayload = z.object({
+  limit: z.number().int().min(1).max(100).optional(),
+  offset: z.number().int().min(0).max(1_000_000).optional(),
+}).strict();
+export type ListAvailableSkillsPayload = z.infer<typeof ListAvailableSkillsPayload>;
+
+export const SearchSkillsPayload = z.object({
+  query: z.string().trim().min(1).max(200),
+  limit: z.number().int().min(1).max(50).optional(),
+}).strict();
+export type SearchSkillsPayload = z.infer<typeof SearchSkillsPayload>;
+
+export const PullSkillPayload = z.object({
+  selector: z.string().trim().min(1).max(1024),
+  expected_content_hash: z.string().regex(/^[a-f0-9]{64}$/i),
+}).strict();
+export type PullSkillPayload = z.infer<typeof PullSkillPayload>;
+
+export {
+  DEVICE_LEASE_ERROR_CODES,
+  DEVICE_LEASE_TOKEN_VERSION,
+  DEVICE_SANDBOX_ENV_KEYS,
+  DEVICE_TRANSPORTS,
+  IMPLEMENTED_DEVICE_TRANSPORTS,
+  DEVICE_STATUS_ACTIONS,
+  DEVICE_STATUSES,
+  DeviceRegistration,
+  DEFAULT_DEVICE_RIG_ID,
+  DeviceRigId,
+  DeviceStatusAction,
+  DeviceLeaseEndpoint,
+  DeviceLeaseGrant,
+  DeviceLeaseTokenPayload,
+  DeviceRequirement,
+  deviceSandboxEnv,
+  deviceIsRigEligible,
+  deviceStatusForAction,
+  isImplementedDeviceTransport,
+  mintDeviceLeaseToken,
+  verifyDeviceLeaseToken,
+  type DeviceLeaseErrorCode,
+  type DeviceTransport,
+  type DeviceStatus,
+  type ImplementedDeviceTransport,
+} from "./device.js";
+
+export {
+  CAPABILITY_DISCOVERY_TOOLS_LIST,
+  CAPABILITY_PACK_SCHEMA,
+  CapabilityPackBudget,
+  CapabilityPackDigest,
+  CapabilityPackDraft,
+  CapabilityPackFailurePolicy,
+  CapabilityPackId,
+  CapabilityPackInput,
+  CapabilityPackManifest,
+  CapabilityPackOutput,
+  CapabilityPackPermissions,
+  CapabilityPackScope,
+  CapabilityPackSummary,
+  CapabilityPackVersion,
+  DescribeCapabilityPayload,
+  ListCapabilitiesPayload,
+  PreviewMaterializationPayload,
+  SearchCapabilitiesPayload,
+  ValidateCompositionPayload,
+  type CapabilityDiscoveryToolName,
+} from "./capability-pack.js";
+
+export const ListSharedAssetsPayload = z.object({
+  scope: z.enum(["platform", "project", "finding"]).optional(),
+  prefix: z.string().trim().min(1).max(120).optional(),
+  // Host listSharedAssets caps at 100.
+  limit: z.number().int().min(1).max(100).optional(),
+  offset: z.number().int().min(0).max(1_000_000).optional(),
+}).strict();
+export type ListSharedAssetsPayload = z.infer<typeof ListSharedAssetsPayload>;
+
+/** Per-kind hard caps for the Job-scoped `graph_query` Control API (#538). */
+export const GRAPH_QUERY_LIMITS = {
+  index: 50,
+  nodeIds: 20,
+  nodeBodyChars: 8_192,
+  edges: 200,
+  findings: 30,
+  evidenceChars: 8_192,
+  intents: 50,
+  overviewChars: 2_048,
+} as const;
+
+export const GraphQueryKind = z.enum([
+  "plan_gap",
+  "overview",
+  "index",
+  "node",
+  "edges",
+  "findings",
+  "evidence",
+  "intents",
+]);
+export type GraphQueryKind = z.infer<typeof GraphQueryKind>;
+
+export const GraphQueryEdgeDirection = z.enum(["out", "in", "both"]);
+export type GraphQueryEdgeDirection = z.infer<typeof GraphQueryEdgeDirection>;
+
+/**
+ * Single-object + kind discriminant. Top-level anyOf/oneOf is rejected by
+ * Anthropic MCP tools/list; unused kind fields stay optional and are gated
+ * by superRefine. `canvas_id` / `project_id` are forbidden (unknown_field).
+ */
+export const GraphQueryPayload = z
+  .object({
+    kind: GraphQueryKind,
+    node_type: z.string().trim().min(1).max(40).optional(),
+    status: z.string().trim().min(1).max(40).optional(),
+    since: z.string().trim().min(1).max(40).optional(),
+    cursor: z.string().trim().min(1).max(120).optional(),
+    limit: z.number().int().min(1).max(GRAPH_QUERY_LIMITS.edges).optional(),
+    ids: z.array(z.string().uuid()).max(GRAPH_QUERY_LIMITS.nodeIds).optional(),
+    id: z.string().uuid().optional(),
+    direction: GraphQueryEdgeDirection.optional(),
+    edge_type: z.string().trim().min(1).max(40).optional(),
+    verify_status: z.string().trim().min(1).max(40).optional(),
+    unconverged_only: z.boolean().optional(),
+    finding_id: z.string().uuid().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const add = (path: string[], message: string) => {
+      ctx.addIssue({ code: "custom", path, message });
+    };
+    if (value.kind === "plan_gap") {
+      for (const key of ["node_type","status","since","direction","edge_type","verify_status","unconverged_only","finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `plan_gap does not accept ${key}`);
+      }
+      if (value.limit !== undefined && value.limit > 4) add(["limit"], "plan_gap limit must be <= 4");
+      if (value.ids && value.ids.length > 4) add(["ids"], "plan_gap accepts at most 4 source Facts");
+      if (value.cursor !== undefined && !/^(?:0|[1-9][0-9]?)$/.test(value.cursor)) add(["cursor"], "plan_gap cursor must be a bounded criterion offset");
+      return;
+    }
+    if (value.kind === "overview") {
+      for (const key of ["node_type", "status", "since", "cursor", "limit", "ids", "id", "direction", "edge_type", "verify_status", "unconverged_only", "finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `overview does not accept ${key}`);
+      }
+      return;
+    }
+    if (value.kind === "index") {
+      if (value.ids !== undefined) add(["ids"], "index does not accept ids");
+      if (value.id !== undefined) add(["id"], "index does not accept id");
+      if (value.direction !== undefined) add(["direction"], "index does not accept direction");
+      if (value.edge_type !== undefined) add(["edge_type"], "index does not accept edge_type");
+      if (value.verify_status !== undefined) add(["verify_status"], "index does not accept verify_status");
+      if (value.unconverged_only !== undefined) add(["unconverged_only"], "index does not accept unconverged_only");
+      if (value.finding_id !== undefined) add(["finding_id"], "index does not accept finding_id");
+      if (value.limit !== undefined && value.limit > GRAPH_QUERY_LIMITS.index) {
+        add(["limit"], `index limit must be <= ${GRAPH_QUERY_LIMITS.index}`);
+      }
+      return;
+    }
+    if (value.kind === "node") {
+      if (!value.ids || value.ids.length === 0) add(["ids"], "node requires ids");
+      else if (value.ids.length > GRAPH_QUERY_LIMITS.nodeIds) {
+        add(["ids"], `node ids must be <= ${GRAPH_QUERY_LIMITS.nodeIds}`);
+      }
+      for (const key of ["node_type", "status", "since", "cursor", "limit", "id", "direction", "edge_type", "verify_status", "unconverged_only", "finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `node does not accept ${key}`);
+      }
+      return;
+    }
+    if (value.kind === "edges") {
+      if (!value.id) add(["id"], "edges requires id");
+      if (value.ids !== undefined) add(["ids"], "edges does not accept ids");
+      if (value.node_type !== undefined) add(["node_type"], "edges does not accept node_type");
+      if (value.status !== undefined) add(["status"], "edges does not accept status");
+      if (value.since !== undefined) add(["since"], "edges does not accept since");
+      if (value.cursor !== undefined) add(["cursor"], "edges does not accept cursor");
+      if (value.limit !== undefined && value.limit > GRAPH_QUERY_LIMITS.edges) {
+        add(["limit"], `edges limit must be <= ${GRAPH_QUERY_LIMITS.edges}`);
+      }
+      if (value.verify_status !== undefined) add(["verify_status"], "edges does not accept verify_status");
+      if (value.unconverged_only !== undefined) add(["unconverged_only"], "edges does not accept unconverged_only");
+      if (value.finding_id !== undefined) add(["finding_id"], "edges does not accept finding_id");
+      return;
+    }
+    if (value.kind === "findings") {
+      if (value.limit !== undefined && value.limit > GRAPH_QUERY_LIMITS.findings) {
+        add(["limit"], `findings limit must be <= ${GRAPH_QUERY_LIMITS.findings}`);
+      }
+      for (const key of ["node_type", "status", "since", "ids", "id", "direction", "edge_type", "finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `findings does not accept ${key}`);
+      }
+      return;
+    }
+    if (value.kind === "evidence") {
+      if (!value.finding_id) add(["finding_id"], "evidence requires finding_id");
+      for (const key of ["node_type", "status", "since", "cursor", "limit", "ids", "id", "direction", "edge_type", "verify_status", "unconverged_only"] as const) {
+        if (value[key] !== undefined) add([key], `evidence does not accept ${key}`);
+      }
+      return;
+    }
+    if (value.kind === "intents") {
+      if (value.limit !== undefined && value.limit > GRAPH_QUERY_LIMITS.intents) {
+        add(["limit"], `intents limit must be <= ${GRAPH_QUERY_LIMITS.intents}`);
+      }
+      for (const key of ["node_type", "since", "ids", "id", "direction", "edge_type", "verify_status", "unconverged_only", "finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `intents does not accept ${key}`);
+      }
+    }
+  });
+export type GraphQueryPayload = z.infer<typeof GraphQueryPayload>;
+
+export const PublishSharedAssetPayload = z.object({
+  scope: z.enum(["project", "finding"]),
+  source_path: z.string().min(1).max(320).regex(
+    /^\/workspace\/(?!\.(?:deepsonar(?:-home)?|claude|codex|opencode|pi)(?:\/|$)).+/,
+  ),
+  key: z.string().trim().min(1).max(240),
+  content_type: z.string().trim().min(1).max(160).default("application/octet-stream"),
+  labels: z.record(z.string().min(1).max(60), z.string().max(200)).optional(),
+}).strict();
+export type PublishSharedAssetPayload = z.infer<typeof PublishSharedAssetPayload>;
+
+export const VerifyFindingPayload = z.object({
+  finding: z.object({
+    fingerprint: z.string(),
+    title: z.string(),
+    location: z.string().optional(),
+    summary: z.string().optional(),
+  }),
+});
+export type VerifyFindingPayload = z.infer<typeof VerifyFindingPayload>;
+
+// ---------- Hub 下发与任务网络策略 ----------
+
+/**
+ * 任务唯一需要声明的运行边界：Worker 是否可以访问模型网关之外的网络。
+ * 目标是什么、是否下载代码、使用 git/curl/浏览器或完全离线，均由 Agent 根据 prompt 决定。
+ */
+export const TaskNetworkPolicy = z.object({
+  allow_egress: z.boolean(),
+});
+export type TaskNetworkPolicy = z.infer<typeof TaskNetworkPolicy>;
+
+// ---------- Scheduler readiness / preflight projection (#35/#36) ----------
+
+/** Stable severity used by the management-plane preflight contract. */
+export const ReadinessSeverity = z.enum(["info", "warning", "error"]);
+export type ReadinessSeverity = z.infer<typeof ReadinessSeverity>;
+
+/** How a readiness check resolved.  `attention` is non-blocking guidance. */
+export const ReadinessState = z.enum(["pass", "attention", "fail"]);
+export type ReadinessState = z.infer<typeof ReadinessState>;
+
+export const ReadinessRoleSummary = z.object({
+  role_id: z.string().uuid(),
+  name: z.string().min(1),
+  title: z.string(),
+  kind: z.enum(["role", "hub", "system"]),
+  config_id: z.string().uuid().nullable(),
+  config_scope: z.enum(["project", "global", "platform_default"]),
+  agent_cli: z.string().nullable(),
+  model: z.string().nullable(),
+  runtime_image_key: z.string().nullable(),
+});
+export type ReadinessRoleSummary = z.infer<typeof ReadinessRoleSummary>;
+
+/** Non-sensitive credential identity.  Secrets, env names and ciphertext are never part of this type. */
+export const ReadinessCredentialSummary = z.object({
+  credential_id: z.string().uuid(),
+  name: z.string(),
+  kind: z.enum(["llm_provider", "git", "oci_registry"]),
+  provider: z.string(),
+  provider_valid: z.boolean(),
+  project_id: z.string().uuid().nullable(),
+  status: z.enum(["active", "disabled", "rotation_required"]),
+});
+export type ReadinessCredentialSummary = z.infer<typeof ReadinessCredentialSummary>;
+
+/** Server-owned Provider account catalog. Secrets and environment variable names
+ * are intentionally absent; the scheduler decides the auth mapping. */
+export const ProviderAccountCatalogItem = z.object({
+  provider: z.string().min(1).max(50),
+  label: z.string().min(1).max(120),
+  kind: z.enum(["llm_provider", "git", "oci_registry"]),
+  auth_methods: z.array(z.enum(["api_key", "oauth", "cli_login"])).min(1),
+  compatible_agent_cli: z.array(z.string().min(1).max(50)),
+  supports_base_url: z.boolean(),
+}).strict();
+export type ProviderAccountCatalogItem = z.infer<typeof ProviderAccountCatalogItem>;
+
+
+/** Trusted image identity only; mutable refs and arbitrary OCI text are intentionally omitted. */
+export const ReadinessRuntimeImageSummary = z.object({
+  image_key: z.string(),
+  version_id: z.string().uuid().nullable(),
+  digest: z.string().regex(/^sha256:[0-9a-f]{64}$/).nullable(),
+  source_kind: z.enum(["official", "third_party"]).nullable(),
+  official: z.boolean().nullable(),
+  trust_status: z.string().nullable(),
+  project_enabled: z.boolean().nullable(),
+  admission_scan_id: z.string().uuid().nullable(),
+  runtime_image_id: z.string().uuid().nullable().optional(),
+  selected_version_id: z.string().uuid().nullable().optional(),
+  selected_version: z.string().nullable().optional(),
+  latest_version_id: z.string().uuid().nullable().optional(),
+  latest_version: z.string().nullable().optional(),
+  pin_stale: z.boolean().optional(),
+  /** Immutable digest reference the host must already have locally. */
+  image_ref: z.string().nullable().optional(),
+  /** Executable catalog version label (not necessarily the project pin). */
+  version: z.string().nullable().optional(),
+  /** Official selected version is below the platform min_runtime_image floor. */
+  below_platform_min: z.boolean().optional(),
+});
+export type ReadinessRuntimeImageSummary = z.infer<typeof ReadinessRuntimeImageSummary>;
+
+export const ReadinessEvidenceSummary = z.object({
+  kind: z.enum(["credential_test", "model_discovery", "allowlist", "none"]),
+  status: z.enum(["ok", "error", "missing", "stale"]),
+  at: z.string().datetime().nullable(),
+  age_seconds: z.number().nonnegative().nullable(),
+  model_count: z.number().int().nonnegative().nullable(),
+  source: z.enum(["audit_log", "credential_metadata", "not_recorded"]),
+});
+export type ReadinessEvidenceSummary = z.infer<typeof ReadinessEvidenceSummary>;
+
+/** Stable repair intent consumed by the web console.  Keep href/target for
+ * older clients, but never require them to infer a route from presentation
+ * text.  Scheduler responses always include action/scope/project_id. */
+export const ReadinessFixAction = z.enum([
+  "credentials",
+  "role_config",
+  "rules",
+  "runtime_images",
+]);
+export type ReadinessFixAction = z.infer<typeof ReadinessFixAction>;
+
+export const ReadinessFix = z.object({
+  action: ReadinessFixAction.optional(),
+  scope: z.enum(["global", "project"]).optional(),
+  project_id: z.string().uuid().nullable().optional(),
+  href: z.string().min(1),
+  target: z.string().min(1),
+});
+export type ReadinessFix = z.infer<typeof ReadinessFix>;
+
+export const ReadinessCheck = z.object({
+  code: z.string().regex(/^[A-Z][A-Z0-9_]{2,80}$/),
+  state: ReadinessState,
+  severity: ReadinessSeverity,
+  message: z.string().min(1),
+  fix: ReadinessFix.nullish(),
+  role: ReadinessRoleSummary.nullish(),
+  credential: ReadinessCredentialSummary.nullish(),
+  runtime_image: ReadinessRuntimeImageSummary.nullish(),
+  evidence: ReadinessEvidenceSummary.nullish(),
+  repair: ReadinessRepairFeedback.optional(),
+});
+export type ReadinessCheck = z.infer<typeof ReadinessCheck>;
+
+export const ReadinessNetworkPolicy = z.object({
+  allow_egress: z.boolean(),
+  source: z.enum(["global", "project", "task_override"]),
+  material_source: z.enum(["workspace_or_offline", "external_or_workspace", "declared", "unspecified"]),
+});
+export type ReadinessNetworkPolicy = z.infer<typeof ReadinessNetworkPolicy>;
+
+export const ReadinessScope = z.object({
+  kind: z.enum(["global", "project"]),
+  project_id: z.string().uuid().nullable(),
+});
+export type ReadinessScope = z.infer<typeof ReadinessScope>;
+
+export const ReadinessResponse = z.object({
+  schema: z.literal("deepsonar.readiness/v1"),
+  ready: z.boolean(),
+  execution_mode: z.enum(["fake", "real"]),
+  scope: ReadinessScope,
+  network_policy: ReadinessNetworkPolicy,
+  checks: z.array(ReadinessCheck),
+  summary: z.object({
+    errors: z.number().int().nonnegative(),
+    warnings: z.number().int().nonnegative(),
+    infos: z.number().int().nonnegative(),
+  }),
+  generated_at: z.string().datetime(),
+});
+export type ReadinessResponse = z.infer<typeof ReadinessResponse>;
+
+/** Canonical UUID used for graph node references crossing the Agent boundary. */
+export const CANONICAL_UUID_PATTERN = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
+export const GraphNodeReference = z
+  .string()
+  .uuid()
+  .regex(new RegExp(CANONICAL_UUID_PATTERN, "i"));
+export type GraphNodeReference = z.infer<typeof GraphNodeReference>;
+
+/**
+ * Hard limits for references crossing the Hub/Scheduler boundary. A limit on
+ * each `from` list prevents one intent from creating an unexpectedly large
+ * query, while the total unique limit prevents many small intents from
+ * bypassing that protection.
+ */
+export const HUB_REFERENCE_LIMITS = {
+  perFrom: 64,
+  totalUnique: 256,
+} as const;
+
+export interface HubReferenceBudgetViolation {
+  path: Array<string | number>;
+  count: number;
+  limit: number;
+  kind: "per_from" | "total_unique";
+}
+
+/** Find the first reference-budget violation without assuming valid payload shape. */
+export function hubReferenceBudgetViolation(value: unknown): HubReferenceBudgetViolation | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const input = value as Record<string, unknown>;
+  const groups: Array<{ path: Array<string | number>; refs: unknown[] }> = [];
+  const complete = input.complete;
+  if (complete && typeof complete === "object" && !Array.isArray(complete)) {
+    const from = (complete as Record<string, unknown>).from;
+    if (Array.isArray(from)) groups.push({ path: ["complete", "from"], refs: from });
+  }
+  const intents = input.intents;
+  if (Array.isArray(intents)) {
+    for (const [index, intent] of intents.entries()) {
+      if (!intent || typeof intent !== "object" || Array.isArray(intent)) continue;
+      const from = (intent as Record<string, unknown>).from;
+      if (Array.isArray(from)) groups.push({ path: ["intents", index, "from"], refs: from });
+    }
+  }
+  for (const group of groups) {
+    if (group.refs.length > HUB_REFERENCE_LIMITS.perFrom) {
+      return {
+        path: group.path,
+        count: group.refs.length,
+        limit: HUB_REFERENCE_LIMITS.perFrom,
+        kind: "per_from",
+      };
+    }
+  }
+  const unique = new Set<string>();
+  for (const group of groups) {
+    for (const ref of group.refs) {
+      if (typeof ref === "string") unique.add(ref);
+    }
+  }
+  if (unique.size > HUB_REFERENCE_LIMITS.totalUnique) {
+    return {
+      path: ["intents"],
+      count: unique.size,
+      limit: HUB_REFERENCE_LIMITS.totalUnique,
+      kind: "total_unique",
+    };
+  }
+  return null;
+}
+
+const HubReferenceList = z.array(GraphNodeReference).max(HUB_REFERENCE_LIMITS.perFrom);
+
+/**
+ * Hub may compose a role profile for one Worker Job only (#691).
+ * Cross-task reuse goes through governed Skill sources (search_skills → pull_skill),
+ * not project-scoped agent_roles / RoleConfig clones. The selected `role` remains
+ * the governed platform role contract; this definition can only supply business
+ * identity/instructions frozen into the Job snapshot.
+ */
+export const HubRoleDefinitionPayload = z.object({
+  scope: z.literal("job"),
+  name: z.string().trim().regex(/^[a-z][a-z0-9_]{0,30}$/u),
+  title: z.string().trim().min(1).max(120).regex(/\S/u),
+  description: z.string().trim().min(1).max(2_000).regex(/\S/u),
+  instructions_markdown: z.string().trim().min(1).max(100_000).regex(/\S/u),
+}).strict();
+export type HubRoleDefinitionPayload = z.infer<typeof HubRoleDefinitionPayload>;
+
+/**
+ * Hub 对一个 Worker 的结构化下发。prompt 是真正注入 CLI 的本轮用户消息。
+ *
+ * description/prompt 设有最小长度：拦截模型流式 tool_use 被截断后仍通过
+ * schema_validated 的半截意图（实战中曾出现 description="拉"、prompt="你"）。
+ */
+export const HubIntentPayload = z
+  .object({
+    goal_review: TaskGoalReviewRequest.optional(),
+    from: HubReferenceList,
+    role: nonEmptyText(64),
+    description: z.string().min(8).max(2_000).regex(/\S/),
+    prompt: z.string().min(32).max(20_000).regex(/\S/),
+    // Task-level business instructions for this Worker Job; never persisted to RoleConfig.
+    role_prompt: z.string().trim().min(1).max(100_000).regex(/\S/u).optional(),
+    // Optional Hub-composed role profile. `role` remains the platform role contract.
+    role_definition: HubRoleDefinitionPayload.optional(),
+    // Hub 本轮可选的运行镜像提案：只能来自 list_available_runtime_images 返回的
+    // 市场 image_key（与 runtime_images.image_key 的 CHECK 同形），不是 OCI 引用。
+    // 省略时 Scheduler 按平台目录与 RoleConfig 缺省解析（#691：无项目镜像策略）。
+    runtime_image_key: z.string().regex(/^[a-z][a-z0-9-]{1,62}$/).optional(),
+    // Hub 可选提案 Agent CLI / Provider 插件：只能来自本轮 list_available_agent_clis /
+    // list_available_providers 的 provider 字段；禁止提交 credential/account UUID（#690）。
+    // 省略时 Scheduler 在项目授权目录内按缺省/唯一匹配解析凭据。
+    agent_cli: CurrentAgentCliSchema.optional(),
+    provider: z.string().trim().min(1).max(50).regex(/^[a-z][a-z0-9_-]{0,49}$/i).optional(),
+    // Optional model proposal from the current Provider capability catalog.
+    // Scheduler revalidates this selection and freezes the resolved model.
+    model_ref: z.string().trim().min(1).max(240).regex(/^\S+$/u).optional(),
+    /** Capability requirements used by Hub model selection; all fields are rechecked at Job freeze. */
+    model_requirements: z.object({
+      min_context_window: z.number().int().min(1024).max(10_000_000).optional(),
+      context_window_tokens: z.number().int().min(1024).max(10_000_000).optional(),
+      require_tools: z.boolean().optional(),
+      supports_tools: z.boolean().optional(),
+      require_streaming: z.boolean().optional(),
+      supports_streaming: z.boolean().optional(),
+      require_structured_output: z.boolean().optional(),
+      supports_structured_output: z.boolean().optional(),
+      reasoning_effort: z.string().trim().min(1).max(64).optional(),
+      max_input_cost_per_1m_usd: z.number().finite().nonnegative().optional(),
+      max_output_cost_per_1m_usd: z.number().finite().nonnegative().optional(),
+      max_input_cost_per_million: z.number().finite().nonnegative().optional(),
+      max_output_cost_per_million: z.number().finite().nonnegative().optional(),
+      allow_unverified: z.boolean().optional(),
+      allow_passthrough: z.boolean().optional(),
+    }).strict().optional(),
+    // Hub 可选提案语言服务器能力：只能来自 list_capabilities / describe_capability
+    // 返回的已登记 id（首期 language-server.clangd）。省略则不冻结 language_server。
+    language_server_capability_id: z
+      .string()
+      .min(3)
+      .max(160)
+      .regex(/^[a-z][a-z0-9_.-]*$/)
+      .optional(),
+    // Hub 可选提案通用 CLI 能力集合：只能来自 list_capabilities / describe_capability
+    // 返回的已登记 id（#611 phase 1）。省略则不冻结 cli_capabilities。
+    cli_capability_ids: z
+      .array(
+        z
+          .string()
+          .min(3)
+          .max(160)
+          .regex(/^[a-z][a-z0-9_.-]*$/),
+      )
+      .max(32)
+      .optional(),
+    // Hub 可选提案已注册 Pi 扩展（#690）：只能来自平台注册表；Scheduler 校验 trust/CLI/镜像并冻结。
+    pi_extension_ids: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .max(64)
+          .regex(/^[a-z][a-z0-9-]{0,62}$/),
+      )
+      .max(8)
+      .optional(),
+  })
+  .strict();
+export type HubIntentPayload = z.infer<typeof HubIntentPayload>;
+
+export const HubCompletePayload = z
+  .object({
+    from: HubReferenceList,
+    description: z.string().min(8).max(10_000).regex(/\S/),
+  })
+  .strict();
+export type HubCompletePayload = z.infer<typeof HubCompletePayload>;
+
+/**
+ * Relative workspace path for large hub decisions that do not fit tool_use args.
+ * Must stay under /workspace; no absolute paths, drive letters, or `..` segments.
+ */
+export const HubDecisionPayloadFile = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(WORKSPACE_PAYLOAD_FILE_PATTERN, "payload_file must be a safe relative path under /workspace");
+export type HubDecisionPayloadFile = z.infer<typeof HubDecisionPayloadFile>;
+
+/**
+ * Hub decision payload.
+ *
+ * Must stay a **single object** schema (not z.union): Claude Code / Anthropic MCP
+ * skips tools whose inputSchema uses top-level anyOf/oneOf
+ * ("its input schema uses top-level anyOf, which the Anthropic API does not accept").
+ * Mutual exclusivity of complete vs intents vs payload_file is enforced in superRefine
+ * and again by the Job control API host. `payload_file` is a temporary bypass for tool_use
+ * truncation of large multi-intent JSON: write the full decision under /workspace
+ * then pass only the relative path.
+ */
+export const HubDecisionPayload = z
+  .object({
+    complete: HubCompletePayload.optional(),
+    intents: z.array(HubIntentPayload).min(1).max(100).optional(),
+    payload_file: HubDecisionPayloadFile.optional(),
+    plan_basis: PlanDecisionBasis.optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const hasComplete = value.complete !== undefined;
+    const hasIntents = value.intents !== undefined;
+    const hasFile = value.payload_file !== undefined;
+    if ((hasComplete ? 1 : 0) + (hasIntents ? 1 : 0) + (hasFile ? 1 : 0) !== 1) {
+      ctx.addIssue({
+        code: "custom",
+        path: hasComplete && hasIntents ? ["complete"] : hasFile ? ["payload_file"] : [],
+        message: "submit_hub_decision must provide exactly one of complete, intents, or payload_file",
+      });
+      return;
+    }
+    if (value.plan_basis) {
+      if (hasFile || (hasIntents && (value.plan_basis.outcome !== "continue" || value.intents!.length !== 1))
+        || (hasComplete && value.plan_basis.outcome !== "complete")) {
+        ctx.addIssue({ code: "custom", path: ["plan_basis"], message: "Plan decisions require exactly one continue Intent or one complete proposal; file basis belongs inside the file" });
+      }
+    }
+    if (hasFile) return;
+    const violation = hubReferenceBudgetViolation(value);
+    if (!violation || violation.kind !== "total_unique") return;
+    ctx.addIssue({
+      code: "custom",
+      path: violation.path,
+      message: `Hub reference count exceeds the total unique limit of ${violation.limit}`,
+      params: { kind: violation.kind, limit: violation.limit, count: violation.count },
+    });
+  });
+export type HubDecisionPayload = z.infer<typeof HubDecisionPayload>;
+
+export const AckHumanMessagePayload = z.object({
+  message_id: z.string().uuid(),
+  summary: z.string().max(500).regex(/\S/u).optional(),
+}).strict();
+export type AckHumanMessagePayload = z.infer<typeof AckHumanMessagePayload>;
+
+export const ControlToolPayloadSchemas = {
+  ...KnowledgeControlPayloadSchemas,
+  list_available_roles: ListAvailableRolesPayload,
+  list_available_runtime_images: ListAvailableRuntimeImagesPayload,
+  list_available_agent_clis: ListAvailableAgentClisPayload,
+  list_available_providers: ListAvailableProvidersPayload,
+  list_available_skill_sources: ListAvailableSkillSourcesPayload,
+  list_available_skills: ListAvailableSkillsPayload,
+  search_skills: SearchSkillsPayload,
+  pull_skill: PullSkillPayload,
+  list_capabilities: ListCapabilitiesPayload,
+  search_capabilities: SearchCapabilitiesPayload,
+  describe_capability: DescribeCapabilityPayload,
+  validate_composition: ValidateCompositionPayload,
+  preview_materialization: PreviewMaterializationPayload,
+  list_shared_assets: ListSharedAssetsPayload,
+  graph_query: GraphQueryPayload,
+  publish_shared_asset: PublishSharedAssetPayload,
+  emit_progress: ProgressPayload,
+  emit_fact: EmitFactPayload,
+  emit_finding: EmitFindingPayload,
+  submit_hub_decision: HubDecisionPayload,
+  submit_plan: SubmitPlanPayload,
+  submit_plan_result: SubmitPlanResultPayload,
+  mark_job_done: DonePayload,
+  request_human: HumanPayload,
+  ack_human_message: AckHumanMessagePayload,
+} as const;
+export type ControlToolPayload = {
+  [K in keyof typeof ControlToolPayloadSchemas]: z.infer<(typeof ControlToolPayloadSchemas)[K]>;
+};
+
+/**
+ * Normalize Zod → JSON Schema for MCP tools/list.
+ * Anthropic / Claude Code reject tools when inputSchema:
+ * - lacks top-level type: "object", or
+ * - uses top-level anyOf / oneOf (even with type: object).
+ */
+export function toMcpToolInputSchema(schema: z.ZodType): Record<string, unknown> {
+  const json = z.toJSONSchema(schema, { target: "draft-7" }) as Record<string, unknown>;
+  if (json.type !== "object") {
+    throw new Error(
+      `MCP inputSchema must serialize to type:object (got type=${String(json.type)}; keys=${Object.keys(json).join(",")})`,
+    );
+  }
+  if (Array.isArray(json.anyOf) || Array.isArray(json.oneOf)) {
+    throw new Error(
+      "MCP inputSchema must not use top-level anyOf/oneOf (Anthropic API rejects them; restructure the Zod contract to a single object)",
+    );
+  }
+  return json;
+}
+
+/** JSON Schema emitted for MCP tools/list from the same Zod contracts. */
+// SAFETY: Object.fromEntries 丢失键字面量类型；键集合直接来自 ControlToolPayloadSchemas。
+export const ControlToolInputSchemasJson = Object.fromEntries(
+  Object.entries(ControlToolPayloadSchemas).map(([name, schema]) => [
+    name,
+    toMcpToolInputSchema(schema),
+  ]),
+) as unknown as Record<keyof typeof ControlToolPayloadSchemas, Record<string, unknown>>;
+
+// ---------- 事件 envelope（§17.3 版本化） ----------
+
+/** Internal Hub envelope shape. Graph references stay opaque here so the
+ * Scheduler can turn malformed values into stable invalid_node_ref errors
+ * before any PostgreSQL UUID cast. */
+const HubDecisionEnvelopeInput = z
+  .object({
+    complete: z.unknown().optional(),
+    intents: z.unknown().optional(),
+    plan_basis: PlanDecisionBasis.optional(),
+  })
+  .strict();
+
+/** Agent-facing envelope. Scheduler-owned fact intent_node_id and Finding raw
+ * SARIF data are deliberately unavailable at this boundary. */
+export const ControlEventEnvelope = z.discriminatedUnion("type", [
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("progress"), payload: ProgressPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("finding"), payload: EmitFindingDirectPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("done"), payload: DonePayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human"), payload: HumanPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: EmitFactDirectPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human_message_ack"), payload: AckHumanMessagePayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("plan"), payload: SubmitPlanPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("plan_result"), payload: SubmitPlanResultPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("shared_asset_publish"), payload: PublishSharedAssetPayload }).strict(),
+]);
+export type ControlEventEnvelope = z.infer<typeof ControlEventEnvelope>;
+
+/** Internal payloads may carry scheduler-owned fields, but every side effect
+ * revalidates the corresponding strict schema before writing. */
+export const EventEnvelope = z.discriminatedUnion("type", [
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("knowledge"), payload: KnowledgeMutationPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("progress"), payload: ProgressPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("finding"), payload: FindingPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("done"), payload: DonePayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("human"), payload: HumanPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("fact"), payload: FactPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("hub_decision"), payload: HubDecisionEnvelopeInput }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("plan"), payload: SubmitPlanPayload }).strict(),
+  z.object({ v: z.literal(1), event_id: z.string().uuid(), type: z.literal("plan_result"), payload: SubmitPlanResultPayload }).strict(),
+]);
+export type EventEnvelope = z.infer<typeof EventEnvelope>;
+/** Broad producer input; `EventEnvelope.parse` is the runtime gate before
+ * ingestion and side effects. */
+export type EventEnvelopeInput = {
+  v: 1;
+  event_id: string;
+  type: EventType;
+  payload: unknown;
+};
+
+// ---------- DeepSonar 平台工具（RoleConfig 可按 Job 开关） ----------
+
+export const PlatformToolName = z.enum([
+  ...KNOWLEDGE_OPERATION_IDS,
+  "list_available_roles",
+  "list_available_runtime_images",
+  "list_available_agent_clis",
+  "list_available_providers",
+  "list_available_skill_sources",
+  "list_available_skills",
+  "search_skills",
+  "pull_skill",
+  "list_capabilities",
+  "search_capabilities",
+  "describe_capability",
+  "validate_composition",
+  "preview_materialization",
+  "emit_progress",
+  "emit_fact",
+  "emit_finding",
+  "submit_hub_decision",
+  "submit_plan",
+  "submit_plan_result",
+  "mark_job_done",
+  "request_human",
+  "list_shared_assets",
+  "graph_query",
+  "publish_shared_asset",
+  "ack_human_message",
+]);
+export type PlatformToolName = z.infer<typeof PlatformToolName>;
+export type PlatformToolConfig = Partial<Record<PlatformToolName, boolean>>;
+
+// ---------- RoleConfig 模块选择器（Issue #33，向后兼容） ----------
+
+/** 模块源 UUID 的固定格式。源 id 在数据库中是 uuid，固定长度让 selector 可无歧义解析。 */
+export const MODULE_SELECTOR_SOURCE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export type ModuleSelectorKind = "module" | "plugin" | "source";
+
+export interface ParsedModuleSelector {
+  /** 用户提交的原始字符串；快照和 transfer 必须保留它。 */
+  raw: string;
+  source_id: string;
+  kind: ModuleSelectorKind;
+  module_id?: string;
+  plugin?: string;
+  /** 用于比较/去重的规范形式，不替换 raw。 */
+  canonical: string;
+}
+
+/**
+ * 规范化仓库相对路径。模块源扫描结果来自 POSIX 路径；统一斜杠并去掉无害的
+ * 重复分隔符/`.`，但在归一化前拒绝 `..`、绝对路径和控制字符，避免逃出 catalog 边界。
+ */
+export function normalizeModuleSelectorPath(value: string, field = "module path"): string {
+  if (typeof value !== "string") throw new Error(`${field} 必须是字符串`);
+  if (!value || value !== value.trim()) throw new Error(`${field} 不能为空或包含首尾空白`);
+  if (value.includes("\0") || value.includes(":")) throw new Error(`${field} 含非法路径字符`);
+  const slashed = value.replaceAll("\\", "/");
+  if (slashed.startsWith("/") || /^[A-Za-z]:\//.test(slashed)) throw new Error(`${field} 不能是绝对路径`);
+  const segments = slashed.split("/");
+  if (segments.some((segment) => segment === "..")) throw new Error(`${field} 不得包含 ..`);
+  let decoded = slashed;
+  try {
+    decoded = decodeURIComponent(slashed).replaceAll("\\", "/");
+  } catch {
+    throw new Error(`${field} 含非法 URL 编码`);
+  }
+  if (
+    decoded.startsWith("/") ||
+    decoded.includes(":") ||
+    /^[A-Za-z]:\//.test(decoded) ||
+    decoded.split("/").some((segment) => segment === "..")
+  ) {
+    throw new Error(`${field} 归一化后越界`);
+  }
+  if (segments.some((segment) => /[\u0000-\u001f\u007f]/.test(segment)) || /[\u0000-\u001f\u007f]/.test(decoded)) {
+    throw new Error(`${field} 含控制字符`);
+  }
+  const normalized = segments.filter((segment) => segment && segment !== ".").join("/");
+  if (!normalized) throw new Error(`${field} 不能为空`);
+  return normalized;
+}
+
+/**
+ * 解析 RoleConfig.modules_json 中的 selector：
+ * - <source_uuid>:<module_path>（历史格式）
+ * - <source_uuid>:plugin:<plugin_path>
+ * - <source_uuid>:source:*
+ */
+export function parseModuleSelector(value: string): ParsedModuleSelector {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1024) {
+    throw new Error("模块 selector 必须是 1-1024 个字符的字符串");
+  }
+  if (value !== value.trim()) throw new Error("模块 selector 不能包含首尾空白");
+  if (value.length < 37 || value[36] !== ":") throw new Error(`模块 selector 缺少合法 source UUID: ${value}`);
+  const sourceId = value.slice(0, 36);
+  if (!MODULE_SELECTOR_SOURCE_ID_RE.test(sourceId)) {
+    throw new Error(`模块 selector 的 source UUID 非法: ${sourceId}`);
+  }
+  const rest = value.slice(37);
+  const normalizedSourceId = sourceId.toLowerCase();
+  if (rest === "source:*") {
+    return { raw: value, source_id: normalizedSourceId, kind: "source", canonical: `${normalizedSourceId}:source:*` };
+  }
+  if (rest.startsWith("source:")) throw new Error(`模块源 selector 必须是 ${normalizedSourceId}:source:*`);
+  if (rest.startsWith("plugin:")) {
+    const plugin = normalizeModuleSelectorPath(rest.slice("plugin:".length), "plugin path");
+    return {
+      raw: value,
+      source_id: normalizedSourceId,
+      kind: "plugin",
+      plugin,
+      canonical: `${normalizedSourceId}:plugin:${plugin}`,
+    };
+  }
+  if (rest.includes(":")) throw new Error(`模块 selector 含未知保留前缀: ${value}`);
+  const moduleId = normalizeModuleSelectorPath(rest, "module path");
+  return {
+    raw: value,
+    source_id: normalizedSourceId,
+    kind: "module",
+    module_id: moduleId,
+    canonical: `${normalizedSourceId}:${moduleId}`,
+  };
+}
+
+/** 校验并原样返回合法 selector，供 RoleConfig / transfer 复用。 */
+export function validateModuleSelectors(values: unknown, field = "modules"): string[] {
+  if (!Array.isArray(values)) throw new Error(`${field} 必须是字符串数组`);
+  const selectors: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") throw new Error(`${field} 只能包含字符串 selector`);
+    parseModuleSelector(value);
+    selectors.push(value);
+  }
+  return selectors;
+}
+
+/**
+ * 平台工具全集（顺序固定，供 UI / 快照 / 校验共用）。
+ * 每个 Agent 默认都可勾选其中任意项；是否真正注入以 RoleConfig 开关 + Job 快照为准。
+ */
+export const ALL_PLATFORM_TOOLS: PlatformToolName[] = [
+  ...KNOWLEDGE_OPERATION_IDS,
+  "list_available_roles",
+  "list_available_runtime_images",
+  "list_available_agent_clis",
+  "list_available_providers",
+  "list_available_skill_sources",
+  "list_available_skills",
+  "search_skills",
+  "pull_skill",
+  "list_capabilities",
+  "search_capabilities",
+  "describe_capability",
+  "validate_composition",
+  "preview_materialization",
+  "list_shared_assets",
+  "graph_query",
+  "publish_shared_asset",
+  "emit_progress",
+  "emit_fact",
+  "emit_finding",
+  "submit_hub_decision",
+  "submit_plan",
+  "submit_plan_result",
+  "mark_job_done",
+  "request_human",
+  "ack_human_message",
+];
+
+/**
+ * verify / report 系统角色的严格平台工具白名单。
+ * 空 `platform_tools_json` 只在本集合内展开，不得拿到 emit_fact / emit_finding / request_human 等。
+ */
+export const VERIFY_REPORT_PLATFORM_TOOLS: PlatformToolName[] = [
+  "emit_progress",
+  "mark_job_done",
+  "ack_human_message",
+  "list_available_skills",
+  "search_skills",
+  "pull_skill",
+];
+
+/**
+ * 一个角色有资格启用的工具。
+ * 普通 / Hub 角色：平台工具 list 全开放；未列出的名字仍拒绝。
+ * verify / report 系统角色：仅 VERIFY_REPORT_PLATFORM_TOOLS（代码硬限制）。
+ */
+export function allowedPlatformTools(
+  roleName: string,
+  _roleKind: "role" | "hub" | "system",
+): PlatformToolName[] {
+  if (roleName === "verify" || roleName === "report") {
+    return VERIFY_REPORT_PLATFORM_TOOLS.slice();
+  }
+  return ALL_PLATFORM_TOOLS.slice();
+}
+
+/** These Job-wide control capabilities cannot be disabled by RoleConfig. */
+export function requiredPlatformTools(roleKind: "role" | "hub" | "system"): PlatformToolName[] {
+  if (roleKind === "hub") return ["mark_job_done", "ack_human_message", "graph_query"];
+  return ["mark_job_done", "ack_human_message"];
+}
+
+/** Ordinary optional tools default on; experimental Skill suggestions require explicit opt-in. */
+export function resolvePlatformTools(
+  roleName: string,
+  roleKind: "role" | "hub" | "system",
+  config: PlatformToolConfig,
+): PlatformToolName[] {
+  const required = new Set(requiredPlatformTools(roleKind));
+  return allowedPlatformTools(roleName, roleKind).filter((name) => required.has(name)
+    || (name === "suggest_project_skills" || name === "record_skill_choice"
+      ? config[name] === true : config[name] !== false));
+}
+
+/**
+ * #697：项目 platform_tools 相对全局解析结果只减不加。
+ * 空项目行不得相对全局收紧结果重新全开（AND / 仅允许追加 false）。
+ */
+export function resolvePlatformToolsTightened(
+  roleName: string,
+  roleKind: "role" | "hub" | "system",
+  globalConfig: PlatformToolConfig = {},
+  projectConfig?: PlatformToolConfig | null,
+): PlatformToolName[] {
+  const globalTools = resolvePlatformTools(roleName, roleKind, globalConfig ?? {});
+  if (projectConfig == null) return globalTools;
+  // An absent project override inherits the global opt-in; an override can only tighten it.
+  const projectAllowed = new Set(resolvePlatformTools(roleName, roleKind, { ...globalConfig, ...projectConfig }));
+  return globalTools.filter((name) => projectAllowed.has(name));
+}
+
+// fingerprint 计算：title + location + rule_id 归一化后的 sha256 前 16 位
+export {
+  CompletionPolicy,
+  PLAN_PROTOCOL_VERSION,
+  PLAN_TASK_LIMITS,
+  Plan,
+  PlanAuditRecord,
+  PlanAuditSource,
+  PlanBudget,
+  PlanResult,
+  PlanResultOutcome,
+  PlanTask,
+  PlanTaskExecution,
+  PlanTaskId,
+  PlanVerificationStrategy,
+  PlanDecisionBasis,
+  PlanCriterionId,
+  SubmitPlanPayload,
+  SubmitPlanResultPayload,
+  adaptHubCompleteToPlanResult,
+  adaptHubIntentsToPlan,
+  adaptIntentToPlanTask,
+  mergePlanAudit,
+  planTaskGraphHasCycle,
+  trimPlan,
+  type HubCompleteLike,
+  type HubIntentLike,
+  type PlanTrimLimits,
+} from "./plan.js";
+
+export {
+  PI_EXTENSION_IMAGE_ROOT,
+  PI_EXTENSION_MAX_PER_ROLE,
+  PI_EXTENSION_REGISTRY,
+  PI_EXTENSION_SANDBOX_PREFIX,
+  PI_EXTENSION_WORKSPACE_DIR,
+  PiExtensionId,
+  isRegisteredPiExtensionId,
+  parsePiExtensionIds,
+  piExtensionImageEntryPath,
+  piExtensionSandboxPath,
+  piExtensionWorkspacePath,
+  registeredPiExtension,
+  validatePiExtensionIds,
+  type PiExtensionRegistration,
+  type RegisteredPiExtensionId,
+} from "./pi-extensions.js";
+export {
+  DEFAULT_MODEL_REPAIR_ATTEMPT_BUDGET,
+  REPAIR_FEEDBACK_CATEGORIES,
+  REPAIR_FEEDBACK_SCHEMA_VERSION,
+  RepairFeedback,
+  RepairFeedbackAcceptedEffect,
+  RepairFeedbackJsonSchema,
+  RepairFeedbackRemainingBudget,
+  buildRepairFeedback,
+  describeObservedShape,
+  repairCategoryForControlFailure,
+  repairFeedbackFromControlRejection,
+  repairFeedbackFromZodIssues,
+  type RepairFeedbackCategory,
+  type RepairFeedbackInput,
+} from "./repair-feedback.js";
+
+export async function computeFingerprint(
+  input: { title: string; location?: string; rule_id?: string },
+  digest: (s: string) => Promise<string> | string,
+): Promise<string> {
+  const norm = [input.title.trim().toLowerCase(), (input.location ?? "").trim(), (input.rule_id ?? "").trim()].join(
+    "|",
+  );
+  return digest(norm);
+}
+
+export * from "./task-contract.js";

@@ -1,0 +1,691 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+
+process.env.AGENT_MODE = "fake";
+
+type SnapshotDb = ((strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>) & {
+  json?: (value: unknown) => unknown;
+};
+
+const {
+  resolveAgentSnapshotForJob,
+  SnapshotUnresolvableError,
+  persistableProjectRoleConfigModel,
+  parseProjectImagePolicy,
+  scrubIgnoredProjectRoleConfigIdentity,
+  scrubStoredProjectImagePolicy,
+} = await import("./application.js");
+
+function snapshotDb(input: {
+  projectConfig?: unknown;
+  projectCfg: Record<string, unknown> | undefined;
+  globalCfg: Record<string, unknown> | undefined;
+  credential?: Record<string, unknown>;
+}): SnapshotDb {
+  const query = async (strings: TemplateStringsArray) => {
+    const sql = strings.join("?");
+    if (sql.includes("FROM agent_roles")) {
+      return [{ id: "role-audit", name: "audit", description: "audit", kind: "role", ui_color: "#f59e0b" }];
+    }
+    if (sql.includes("FROM projects")) {
+      return [{ config_json: input.projectConfig }];
+    }
+    if (sql.includes("FROM role_configs") && sql.includes("project_id IS NULL")) {
+      return input.globalCfg ? [input.globalCfg] : [];
+    }
+    if (sql.includes("FROM role_configs")) {
+      return input.projectCfg ? [input.projectCfg] : [];
+    }
+    if (sql.includes("FROM credentials") && (sql.includes("kind") || sql.includes("llm_provider"))) {
+      if (!input.credential) return [];
+      const row = input.credential;
+      return [{
+        ...row,
+        project_id: row.cred_project_id ?? row.project_id ?? null,
+        health_status: row.health_status ?? "ok",
+      }];
+    }
+    if (sql.includes("FROM role_config_files")) return [];
+    return [];
+  };
+  return Object.assign(query, { json: (value: unknown) => value });
+}
+
+test("#674 scrubIgnoredProjectRoleConfigIdentity 清空项目遗留镜像与 model", async () => {
+  const seen: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = strings.join("?");
+    seen.push(sql);
+    if (sql.includes("SET runtime_image_key = NULL") && sql.includes("project_id = ?")) {
+      assert.equal(values[0], "project-1");
+      return [{ id: "cfg-image" }];
+    }
+    if (sql.includes("SET model = NULL") && sql.includes("project_id = ?") && !sql.includes("FROM projects")) {
+      assert.equal(values[0], "project-1");
+      return [{ id: "cfg-model" }];
+    }
+    throw new Error(`unexpected scrub sql: ${sql}`);
+  }, { json: (value: unknown) => value });
+  const result = await scrubIgnoredProjectRoleConfigIdentity(db, "project-1");
+  assert.deepEqual(result, { runtime_image_keys: 1, inherit_global_models: 1 });
+  assert.equal(seen.length, 2);
+  assert.match(seen[1]!, /agent_cli = NULL/);
+  assert.equal(persistableProjectRoleConfigModel(parseProjectImagePolicy({}), "kept"), null);
+});
+
+test("#674 image_strategy and role_runtime_images are physically removed", () => {
+  const dirty = { image_strategy: "whatever", role_runtime_images: { audit: "deepsonar-audit" }, rules: { hubEnabled: true } };
+  assert.equal(scrubStoredProjectImagePolicy(dirty), true);
+  assert.deepEqual(dirty, { rules: { hubEnabled: true } });
+  assert.equal(parseProjectImagePolicy(dirty).image_strategy, "inherit_global");
+
+  const inherit = { image_strategy: "inherit_global", role_runtime_images: { audit: "deepsonar-audit" } };
+  assert.equal(scrubStoredProjectImagePolicy(inherit), true);
+  assert.deepEqual(inherit, {});
+
+  const managed = { image_strategy: "project_managed", role_runtime_images: { audit: "deepsonar-audit" } };
+  assert.equal(scrubStoredProjectImagePolicy(managed), true);
+  assert.deepEqual(managed, {});
+  assert.deepEqual(parseProjectImagePolicy(managed), { image_strategy: "inherit_global", role_runtime_images: {} });
+});
+
+
+test("Hub taskPromptOverride replaces business instructions only in the new snapshot", async () => {
+  const globalCfg = {
+    id: "global-audit-cfg",
+    project_id: null,
+    agent_cli: "claude-code",
+    model: null,
+    version: 4,
+    instructions_markdown: "Base role instructions",
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const snapshot = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectCfg: undefined, globalCfg }),
+    "project-1",
+    "audit",
+    { taskPromptOverride: "Hub-specific role instructions for this Job" },
+  );
+  assert.match(snapshot.instructions_markdown ?? "", /Hub-specific role instructions for this Job/);
+  assert.equal(snapshot.role_config_id, "global-audit-cfg");
+  assert.equal(snapshot.role_config_version, 4);
+  assert.match(snapshot.runtime_profile.system_prompt_ref?.sha256 ?? "", /^sha256:[a-f0-9]{64}$/);
+  assert.equal(snapshot.platform_tools.includes("emit_finding"), true);
+});
+
+test("inherit_global leftover project RoleConfig.model does not steal snapshot model", async () => {
+  const leftoverProject = {
+    id: "project-audit-cfg",
+    project_id: "project-1",
+    agent_cli: "claude-code",
+    model: "grok-4.5",
+    version: 3,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const globalCfg = {
+    id: "global-audit-cfg",
+    project_id: null,
+    agent_cli: "claude-code",
+    model: "grok-4.6",
+    version: 8,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "claude-code",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+
+  for (const projectConfig of [undefined, {}, { image_strategy: "inherit_global" }, { image_strategy: "dirty" }]) {
+    const snapshot = await resolveAgentSnapshotForJob(
+      snapshotDb({ projectConfig, projectCfg: leftoverProject, globalCfg, credential }),
+      "project-1",
+      "audit",
+    );
+    assert.equal(snapshot.model, "grok-4.6", `model under ${JSON.stringify(projectConfig)}`);
+    assert.equal(snapshot.upstream_model, "grok-4.6", `upstream_model under ${JSON.stringify(projectConfig)}`);
+    assert.equal(snapshot.agent_cli, "claude-code");
+    assert.equal(snapshot.capability_pack?.id, "role.audit");
+    assert.equal(snapshot.capability_pack?.scope, "task");
+    assert.match(snapshot.capability_pack?.digest ?? "", /^sha256:[a-f0-9]{64}$/);
+  }
+});
+
+test("#757 单凭据覆盖软偏好，Hub 显式 CLI 冲突仍 fail-closed", async () => {
+  const projectCfg = {
+    id: "project-hub-cfg",
+    project_id: "project-1",
+    agent_cli: "pi",
+    model: "grok-4.6",
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "claude-code",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  const snapshot = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg: projectCfg, credential }),
+    "project-1", "audit",
+  );
+  assert.equal(snapshot.agent_cli, "claude-code");
+  const unconfigured = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg: { ...projectCfg, agent_cli: null }, credential }),
+    "project-1", "audit",
+  );
+  assert.equal(unconfigured.agent_cli, "claude-code");
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({
+        projectConfig: {},
+        projectCfg: undefined,
+        globalCfg: projectCfg,
+        credential,
+      }),
+      "project-1",
+      "audit",
+      { agentCli: "pi" },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof SnapshotUnresolvableError);
+      assert.match(error.message, /独占绑定|agent_cli=claude-code.*pi/);
+      return true;
+    },
+  );
+});
+
+test("Pi snapshot freezes the CLI model id when RoleConfig stores a deepsonar/ prefix", async () => {
+  const projectCfg = {
+    id: "project-hub-cfg",
+    project_id: "project-1",
+    agent_cli: "pi",
+    model: "deepsonar/grok-4.6",
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "openai",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "pi",
+    settings_config_json: {
+      provider: "openai",
+      baseUrl: "http://127.0.0.1/v1",
+      api: "openai-responses",
+      models: [{ id: "grok-4.6" }],
+    },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  const snapshot = await resolveAgentSnapshotForJob(
+    snapshotDb({
+      projectConfig: {},
+      projectCfg: undefined,
+      globalCfg: projectCfg,
+      credential,
+    }),
+    "project-1",
+    "audit",
+  );
+  assert.equal(snapshot.agent_cli, "pi");
+  assert.equal(snapshot.model, "grok-4.6");
+  assert.equal(snapshot.upstream_model, "grok-4.6");
+  assert.equal(snapshot.pi_provider, "deepsonar");
+  assert.notEqual(snapshot.model, "deepsonar/grok-4.6");
+});
+
+test("Hub pi_extension_ids 冻结已注册扩展，未注册 id 使快照不可解析", async () => {
+  const projectCfg = {
+    id: "project-hub-cfg",
+    project_id: "project-1",
+    agent_cli: "pi",
+    model: "grok-4.6",
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "pi",
+    // #679: Pi dialect allowlist is models[].id (not Claude Code ANTHROPIC_MODEL env).
+    settings_config_json: {
+      provider: "anthropic",
+      models: [{ id: "grok-4.6" }],
+    },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  const snapshot = await resolveAgentSnapshotForJob(
+    snapshotDb({
+      projectConfig: {},
+      projectCfg: undefined,
+      globalCfg: projectCfg,
+      credential,
+    }),
+    "project-1",
+    "audit",
+    { piExtensionIds: ["pi-web-access"] },
+  );
+  assert.equal(snapshot.pi_extensions.length, 1);
+  assert.equal(snapshot.pi_extensions[0]?.id, "pi-web-access");
+  assert.equal(snapshot.pi_extensions[0]?.workspace_path, ".pi/agent/extensions/pi-web-access.ts");
+
+  // pi-web-access 不兼容 base；显式 base 时应 fail-closed。
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({
+        projectConfig: {},
+        projectCfg: undefined,
+        globalCfg: { ...projectCfg, runtime_image_key: "deepsonar-base" },
+        credential,
+      }),
+      "project-1",
+      "audit",
+      { piExtensionIds: ["pi-web-access"] },
+    ),
+    (error: unknown) => error instanceof SnapshotUnresolvableError && /不兼容|扩展/.test(error.message),
+  );
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({
+        projectConfig: {},
+        projectCfg: undefined,
+        globalCfg: projectCfg,
+        credential,
+      }),
+      "project-1",
+      "audit",
+      { piExtensionIds: ["not-registered"] },
+    ),
+    (error: unknown) => error instanceof SnapshotUnresolvableError && /未注册/.test(error.message),
+  );
+});
+
+test("#681 模型不在账号名单时 SnapshotUnresolvableError 保留可用的模型列表", async () => {
+  const globalCfg = {
+    id: "global-hub-cfg",
+    project_id: null,
+    agent_cli: "claude-code",
+    model: null,
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "claude-code",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "model-a" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg, credential }),
+      "project-1",
+      "audit",
+      // Hub-proposed model outside the account list: must fail before dispatch.
+      { modelRef: "model-unchosen" },
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof SnapshotUnresolvableError);
+      // 结构化 repair 必须穿过 snapshot 包装，否则 HTTP 层只剩 500 字符的中文串。
+      assert.equal(error.repair?.category, "model_correctable");
+      assert.equal(error.repair?.path, "model_ref");
+      assert.match(JSON.stringify(error.repair), /model-a/);
+      assert.equal(typeof error.repair?.next_action, "string");
+      return true;
+    },
+  );
+});
+
+test("凭据 Provider 与角色 CLI 不兼容时是 SnapshotUnresolvableError", async () => {
+  const projectCfg = {
+    id: "project-hub-cfg",
+    project_id: "project-1",
+    agent_cli: "claude-code",
+    model: "grok-4.6",
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "openai",
+    status: "active",
+    cred_project_id: null,
+    // #707: pin 必须与角色 CLI 一致才会进入协议校验；claude-code × openai 在候选层挡掉。
+    agent_cli: "claude-code",
+    settings_config_json: {
+      env: { ANTHROPIC_MODEL: "grok-4.6" },
+    },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({
+        projectConfig: { image_strategy: "project_managed" },
+        projectCfg,
+        globalCfg: undefined,
+        credential,
+      }),
+      "project-1",
+      "audit",
+    ),
+    (error: unknown) => {
+      assert.ok(error instanceof SnapshotUnresolvableError);
+      assert.match(
+        error.message,
+        /协议不兼容|claude-code 仅兼容 anthropic|不能使用 provider openai/,
+      );
+      assert.equal(error.code, "provider_credential_protocol_incompatible");
+      assert.equal(error.repair?.category, "model_correctable");
+      return true;
+    },
+  );
+});
+
+test("Hub runtime_image_key 提案压过角色缺省，省略时跟随平台/全局 RoleConfig", async () => {
+  const globalCfg = {
+    id: "global-audit-cfg",
+    project_id: null,
+    agent_cli: "claude-code",
+    model: "grok-4.6",
+    version: 8,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "claude-code",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  // #674: 无项目策略后缺省跟随全局；Hub 提案必须能压过它。
+  const overridden = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg, credential }),
+    "project-1",
+    "audit",
+    { runtimeImageKey: "deepsonar-kali-minimal" },
+  );
+  assert.equal(overridden.runtime_image_key, "deepsonar-kali-minimal");
+  assert.equal(overridden.runtime_image.image_key, "deepsonar-kali-minimal");
+
+  const fallback = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg, credential }),
+    "project-1",
+    "audit",
+  );
+  // #674: 无项目策略时跟随平台/全局解析（audit 官方缺省为 deepsonar-audit）。
+  assert.equal(fallback.runtime_image.image_key, "deepsonar-audit");
+
+  const nullOverride = await resolveAgentSnapshotForJob(
+    snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg, credential }),
+    "project-1",
+    "audit",
+    { runtimeImageKey: null },
+  );
+  assert.equal(nullOverride.runtime_image.image_key, "deepsonar-audit");
+});
+
+test("dsh cannot freeze a Hub chrome-fuzz override", async () => {
+  const globalCfg = {
+    id: "global-audit-cfg",
+    project_id: null,
+    agent_cli: "dsh",
+    model: null,
+    version: 8,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(
+      snapshotDb({ projectConfig: {}, projectCfg: undefined, globalCfg }),
+      "project-1",
+      "audit",
+      { runtimeImageKey: "deepsonar-chrome-fuzz" },
+    ),
+    (error: unknown) => error instanceof SnapshotUnresolvableError
+      && (/AGENT_CLI_IMAGE_INCOMPATIBLE|DSH |不兼容|chrome-fuzz/.test(error.message)),
+  );
+});
+
+const TRUSTED_SOURCE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const UNTRUSTED_SOURCE = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+test("empty modules_json leaves business skills empty; explicit list unchanged", async () => {
+  const catalog = [
+    {
+      id: "whitebox/authz",
+      plugin: "whitebox",
+      kind: "skill",
+      name: "authz",
+      description: "authz skill",
+      files: { "SKILL.md": "# authz" },
+    },
+  ];
+  const projectCfg = {
+    id: "project-audit-cfg",
+    project_id: "project-1",
+    agent_cli: "claude-code",
+    model: "grok-4.6",
+    version: 1,
+    env_vars_json: {},
+    env_keys: [],
+    modules_json: [] as string[],
+    skills_json: [],
+    commands_json: [],
+    mcps_json: [],
+    subagents_json: [],
+  };
+  const credential = {
+    id: "cred-local",
+    name: "local",
+    provider: "anthropic",
+    status: "active",
+    cred_project_id: null,
+    agent_cli: "claude-code",
+    settings_config_json: { env: { ANTHROPIC_MODEL: "grok-4.6" } },
+    meta_json: {},
+    public_metadata_json: {},
+  };
+  let projectConfig: Record<string, unknown> = {};
+  const projectSkillSources = new Map<string, boolean>();
+
+  const query = async (strings: TemplateStringsArray | Record<string, unknown>, ...values: unknown[]) => {
+    // postgres.js helper form: sql({ col: value }) used inside INSERT fragments
+    if (!Array.isArray(strings)) return strings;
+    const sql = strings.join("?");
+    if (sql.includes("FROM agent_roles")) {
+      return [{ id: "role-audit", name: "audit", description: "audit", kind: "role", ui_color: "#f59e0b" }];
+    }
+    if (sql.includes("UPDATE projects SET config_json")) {
+      projectConfig = { ...(values[0] as Record<string, unknown>) };
+      return [];
+    }
+    if (sql.includes("FROM projects")) {
+      return [{ config_json: projectConfig }];
+    }
+    if (sql.includes("FROM role_configs") && sql.includes("project_id IS NULL")) return [];
+    if (sql.includes("FROM role_configs")) return [projectCfg];
+    if (sql.includes("FROM credentials") && (sql.includes("kind") || sql.includes("llm_provider"))) {
+      return [{ ...credential, project_id: null, health_status: "ok" }];
+    }
+    if (sql.includes("FROM role_config_files")) return [];
+    if (sql.includes("FROM project_skill_sources") && sql.includes("LIMIT 1")) {
+      return projectSkillSources.size > 0 ? [{ ok: 1 }] : [];
+    }
+    // #691: availability = trusted baseline minus explicit disables
+    if (sql.includes("FROM project_skill_sources") && sql.includes("enabled = false")) {
+      return [...projectSkillSources.entries()]
+        .filter(([, enabled]) => enabled === false)
+        .map(([skill_source_id]) => ({ skill_source_id }));
+    }
+    if (sql.includes("INSERT INTO project_skill_sources")) {
+      const row = values[0] as { skill_source_id?: string; enabled?: boolean } | undefined;
+      if (row?.skill_source_id) projectSkillSources.set(String(row.skill_source_id), row.enabled !== false);
+      return [];
+    }
+    if (sql.includes("FROM skill_sources") && sql.includes("WHERE enabled = true") && sql.includes("trust_status")) {
+      return [{ id: TRUSTED_SOURCE }];
+    }
+    if (sql.includes("FROM skill_sources") && sql.includes("WHERE id")) {
+      const id = String(values[0] ?? "");
+      if (id === TRUSTED_SOURCE) {
+        return [{
+          catalog_json: catalog,
+          trust_status: "trusted",
+          enabled: true,
+          last_commit_sha: "abc",
+          last_content_hash: "hash-1",
+        }];
+      }
+      if (id === UNTRUSTED_SOURCE) {
+        return [{
+          catalog_json: catalog,
+          trust_status: "quarantined",
+          enabled: true,
+          last_commit_sha: "abc",
+          last_content_hash: "hash-2",
+        }];
+      }
+      return [];
+    }
+    return [];
+  };
+  const db = Object.assign(query, { json: (value: unknown) => value });
+
+  const defaulted = await resolveAgentSnapshotForJob(db as never, "project-1", "audit");
+  assert.deepEqual(defaulted.modules, []);
+  assert.equal(defaulted.skills.some((s) => (s as { name?: string }).name === "authz"), false);
+
+  // #691: trusted sources need no project opt-in row
+  projectConfig = { skill_source_allowlist_configured: false };
+  projectSkillSources.clear();
+  projectCfg.modules_json = [`${TRUSTED_SOURCE}:whitebox/authz`];
+  const explicit = await resolveAgentSnapshotForJob(db as never, "project-1", "audit");
+  assert.deepEqual(explicit.modules, [`${TRUSTED_SOURCE}:whitebox/authz`]);
+  assert.equal(explicit.skills.some((s) => (s as { name?: string }).name === "authz"), true);
+
+  // Explicit project disable of a trusted source fail-closes RoleConfig selectors
+  projectSkillSources.set(TRUSTED_SOURCE, false);
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(db as never, "project-1", "audit"),
+    (error: unknown) => error instanceof SnapshotUnresolvableError
+      && /不在本项目可用 Skill 源集合内/.test(String((error as Error).message)),
+  );
+
+  // Non-trusted sources are outside the trust baseline even if a project row enables them
+  projectSkillSources.clear();
+  projectSkillSources.set(UNTRUSTED_SOURCE, true);
+  projectCfg.modules_json = [`${UNTRUSTED_SOURCE}:whitebox/authz`];
+  await assert.rejects(
+    () => resolveAgentSnapshotForJob(db as never, "project-1", "audit"),
+    (error: unknown) => error instanceof SnapshotUnresolvableError
+      && /不在本项目可用 Skill 源集合内/.test(String((error as Error).message)),
+  );
+});
+
+test("#757 Hub model selectors use the same normalization for credential and capability admission", async () => {
+  const globalCfg = { id: "global-audit-cfg", version: 1, agent_cli: null, model: null, modules_json: [] };
+  for (const [cli, modelRef, settings] of [
+    ["claude-code", "sonnet", { env: { ANTHROPIC_DEFAULT_SONNET_MODEL: "model-a" } }],
+    ["pi", "deepsonar/model-a", { provider: "anthropic", models: [{ id: "model-a" }] }],
+  ] as const) {
+    const credential = {
+      id: "cred-model", name: "model", provider: "anthropic", status: "active",
+      project_id: null, agent_cli: cli, settings_config_json: settings,
+      meta_json: {}, public_metadata_json: {},
+    };
+    const result = await resolveAgentSnapshotForJob(
+      snapshotDb({ projectCfg: undefined, globalCfg, credential }),
+      "project-1", "audit", { modelRef },
+    );
+    assert.equal(result.agent_cli, cli);
+    assert.equal(result.credential_id, "cred-model");
+  }
+});

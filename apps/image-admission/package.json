@@ -1,0 +1,21 @@
+{
+  "name": "@deepsonar/image-admission",
+  "version": "0.1.11",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "start": "node dist/index.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:registry-ref": "pnpm run build && node --test dist/maintenance.test.js dist/registry-ref.test.js dist/scanner-config.test.js dist/trust-policy.test.js dist/cosign-verify.test.js dist/runtime-manual.test.js dist/deleted-columns-guard.test.js # src/deleted-columns-guard.test.ts"
+  },
+  "dependencies": {
+    "@deepsonar/runtime-manual-contract": "workspace:*",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "typescript": "^5.9.3"
+  }
+}

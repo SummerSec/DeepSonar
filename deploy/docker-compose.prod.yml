@@ -1,0 +1,226 @@
+# 平台镜像（scheduler / web / image-admission）只按 Release 同步的不可变 digest 引用（#740）：
+#   DEEPSONAR_SCHEDULER_IMAGE / DEEPSONAR_WEB_IMAGE / DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:<digest>
+#   DEEPSONAR_VERSION=X.Y.Z（/health.version 唯一来源）
+# 已删除 DEEPSONAR_IMAGE_TAG；缺任一变量 Compose 直接失败，deploy.sh / deploy.ps1 另拒绝旧变量与非 digest 引用。
+# 本地源码构建：./deploy/deploy.sh up real build（脚本临时把平台镜像标记为 *:local-build）
+
+services:
+  postgres:
+    # 基础库镜像可用 POSTGRES_IMAGE 覆盖（国内可改 DaoCloud 等镜像加速）
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: deepsonar
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 deploy/.env 中设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: deepsonar
+    ports:
+      - "${POSTGRES_BIND:-127.0.0.1:5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deepsonar -d deepsonar"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: &default-logging
+      driver: json-file
+      options: { max-size: "50m", max-file: "5" }
+    networks: [deepsonar]
+
+  # 每日 pg_dump + 7 天保留（§12.3；恢复演练见 docs/ONE_CLICK_DEPLOYMENT.md）
+  backup:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${DEEPSONAR_DATABASE_PASSWORD:-${POSTGRES_PASSWORD:?}}
+      PGUSER: ${DEEPSONAR_DATABASE_USER:-deepsonar}
+      PGDATABASE: ${DEEPSONAR_DATABASE_NAME:-deepsonar}
+    volumes:
+      - backup_data:/backups
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        while true; do
+          pg_dump -h postgres | gzip > "/backups/deepsonar-$$(date +%Y%m%d-%H%M%S).sql.gz"
+          echo "[backup] done $$(date)"
+          find /backups -name 'deepsonar-*.sql.gz' -mtime +7 -delete
+          sleep 86400
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *default-logging
+    networks: [deepsonar]
+
+  silo:
+    image: ${SILO_IMAGE:-docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z}
+    command: ["server", "/data", "--console-address", ":9001"]
+    restart: unless-stopped
+    environment:
+      # Silo preserves the upstream MINIO_* environment contract.
+      MINIO_ROOT_USER: ${BLOB_S3_ACCESS_KEY_ID:?请在 deploy/.env 中设置 BLOB_S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${BLOB_S3_SECRET_ACCESS_KEY:?请在 deploy/.env 中设置 BLOB_S3_SECRET_ACCESS_KEY}
+    ports:
+      - "${SILO_API_BIND:-127.0.0.1:9000}:9000"
+      - "${SILO_CONSOLE_BIND:-127.0.0.1:9001}:9001"
+    volumes:
+      - silo_data:/data
+    healthcheck:
+      test: ["CMD", "silo", "healthcheck", "ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *default-logging
+    networks: [deepsonar]
+
+  silo-init:
+    image: ${SILO_IMAGE:-docker.io/pgsty/silo:RELEASE.2026-08-06T00-00-00Z}
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    # Must be a one-element list so `sh -c` receives the whole script (string form gets word-split by Compose).
+    # Retry loop: service_started / stuck healthcheck paths still need Silo to accept mcli (#726).
+    command:
+      - |
+        set -eu
+        i=0
+        while [ "$$i" -lt 60 ]; do
+          if mcli alias set local http://silo:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}" \
+            && mcli mb --ignore-existing "local/$${BLOB_S3_BUCKET}"; then
+            exit 0
+          fi
+          i=$$((i + 1))
+          sleep 2
+        done
+        echo "silo-init: silo not ready after 120s" >&2
+        exit 1
+    environment:
+      MINIO_ROOT_USER: ${BLOB_S3_ACCESS_KEY_ID:?请在 deploy/.env 中设置 BLOB_S3_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${BLOB_S3_SECRET_ACCESS_KEY:?请在 deploy/.env 中设置 BLOB_S3_SECRET_ACCESS_KEY}
+      BLOB_S3_BUCKET: ${BLOB_S3_BUCKET:-deepsonar}
+    depends_on:
+      silo:
+        condition: service_healthy
+    logging: *default-logging
+    networks: [deepsonar]
+
+  scheduler:
+    # 默认按 digest 拉已发布镜像；仅在 deploy.sh 传 build 时本地构建
+    image: ${DEEPSONAR_SCHEDULER_IMAGE:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_SCHEDULER_IMAGE（registry/deepsonar-scheduler@sha256 digest 引用）}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.scheduler
+      args:
+        GIT_REVISION: ${DEEPSONAR_GIT_REVISION:-}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DEEPSONAR_UPGRADE_GENERATION: ${DEEPSONAR_UPGRADE_GENERATION:-}
+      DATABASE_URL: postgres://${DEEPSONAR_DATABASE_USER:-deepsonar}:${DEEPSONAR_DATABASE_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${DEEPSONAR_DATABASE_NAME:-deepsonar}
+      SCHEDULER_HOST: 0.0.0.0
+      SCHEDULER_PORT: 3100
+      DEEPSONAR_AUTH_REQUIRED: "true"
+      BLOB_STORE: ${BLOB_STORE:-s3}
+      BLOB_S3_ENDPOINT: ${BLOB_S3_ENDPOINT:-http://silo:9000}
+      BLOB_S3_REGION: ${BLOB_S3_REGION:-us-east-1}
+      BLOB_S3_BUCKET: ${BLOB_S3_BUCKET:-deepsonar}
+      BLOB_S3_PREFIX: ${BLOB_S3_PREFIX:-}
+      BLOB_S3_ACCESS_KEY_ID: ${BLOB_S3_ACCESS_KEY_ID:?请在 deploy/.env 中设置 BLOB_S3_ACCESS_KEY_ID}
+      BLOB_S3_SECRET_ACCESS_KEY: ${BLOB_S3_SECRET_ACCESS_KEY:?请在 deploy/.env 中设置 BLOB_S3_SECRET_ACCESS_KEY}
+      BLOB_S3_FORCE_PATH_STYLE: ${BLOB_S3_FORCE_PATH_STYLE:-true}
+      BLOB_S3_CACHE_DIR: /app/data/blobs
+      # 必须落在 blob_data volume 内。默认相对 cwd 会写成 /app/apps/scheduler/data（容器可写层，重建即丢）。
+      BLOB_DIR: /app/data/blobs
+      # real mode: sandboxes call the managed proxy; the proxy reaches Scheduler through
+      # the Unix socket on the gateway_upstream volume (#685), never via DNS. The URL
+      # host below is only the Host header / path prefix; it is not resolved.
+      DEEPSONAR_GATEWAY_SANDBOX_URL: ${DEEPSONAR_GATEWAY_SANDBOX_URL:-http://deepsonar-gateway-proxy:3100/gateway}
+      DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL: ${DEEPSONAR_GATEWAY_PROXY_UPSTREAM_URL:-http://scheduler:3100/gateway}
+      DEEPSONAR_GATEWAY_UPSTREAM_SOCKET_VOLUME: ${DEEPSONAR_GATEWAY_UPSTREAM_SOCKET_VOLUME:-deepsonar-gateway-upstream}
+      DEEPSONAR_GATEWAY_UPSTREAM_SOCKET_DIR: /run/deepsonar-gateway
+      # vfs/rootless cold create can take 4-8 minutes; keep the runtime timeout explicit.
+      PROVISION_TIMEOUT_SEC: ${PROVISION_TIMEOUT_SEC:-900}
+      # /health.version 只认 DEEPSONAR_VERSION（不再回退镜像 tag）。
+      DEEPSONAR_VERSION: ${DEEPSONAR_VERSION:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_VERSION}
+      # /health.git_revision：镜像构建戳；可用环境变量覆盖以便对照目标 commit（#636）。
+      DEEPSONAR_GIT_REVISION: ${DEEPSONAR_GIT_REVISION:-}
+      # stop_grace_period 配合优雅退出（dispatcher drain + fastify close）
+    stop_grace_period: 30s
+    volumes:
+      - blob_data:/app/data
+      - ./master.key:/run/secrets/deepsonar_master_key:ro
+      - gateway_upstream:/run/deepsonar-gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+      silo:
+        condition: service_healthy
+      silo-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    logging: *default-logging
+    # Business network only (#685). Every name Scheduler resolves (postgres, silo,
+    # opensandbox) lives on this single network, so there is exactly one DNS view.
+    # Sandboxes never reach Scheduler directly: the managed deepsonar-gateway-proxy
+    # sits on the sandbox side and forwards /gateway + /control/v1 over the
+    # gateway_upstream socket. packages/runtime-sandbox/src/compose-network-topology.test.ts enforces this.
+    networks: [deepsonar]
+
+  # 第三方镜像只在独立准入 Worker 中执行自检；Scheduler 只管理状态与审批。
+  image-admission:
+    image: ${DEEPSONAR_IMAGE_ADMISSION_IMAGE:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_IMAGE_ADMISSION_IMAGE（registry/deepsonar-image-admission@sha256 digest 引用）}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.image-admission
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DEEPSONAR_UPGRADE_GENERATION: ${DEEPSONAR_UPGRADE_GENERATION:-}
+      DATABASE_URL: postgres://${DEEPSONAR_DATABASE_USER:-deepsonar}:${DEEPSONAR_DATABASE_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${DEEPSONAR_DATABASE_NAME:-deepsonar}
+      DEEPSONAR_IMAGE_REGISTRY: ${DEEPSONAR_IMAGE_REGISTRY:-crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec}
+      DEEPSONAR_IMAGE_SCAN_VOLUME: deepsonar_admission_scan
+    volumes:
+      # Rootless Podman: set DEEPSONAR_DOCKER_SOCK to the user podman.sock path.
+      - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
+      - ./master.key:/run/secrets/deepsonar_master_key:ro
+      - admission_scan:/scan
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *default-logging
+    networks: [deepsonar]
+
+  web:
+    image: ${DEEPSONAR_WEB_IMAGE:?请在 deploy/.env 中设置由 Release 同步的 DEEPSONAR_WEB_IMAGE（registry/deepsonar-web@sha256 digest 引用）}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    restart: unless-stopped
+    ports:
+      - "${DEEPSONAR_WEB_PORT:-8080}:8080"
+    depends_on:
+      scheduler:
+        condition: service_healthy
+    logging: *default-logging
+    networks: [deepsonar]
+
+volumes:
+  postgres_data:
+  blob_data:
+  silo_data:
+  backup_data:
+  admission_scan:
+    name: deepsonar_admission_scan
+  # Fixed name: Scheduler mounts it here and the managed proxy mounts it read-only
+  # by the same name through the container runtime (#685).
+  gateway_upstream:
+    name: ${DEEPSONAR_GATEWAY_UPSTREAM_SOCKET_VOLUME:-deepsonar-gateway-upstream}
+
+# deepsonar-sandbox-gateway / deepsonar-restricted are created by Scheduler for
+# the managed proxy and sandboxes; no compose service joins them (#685).
+networks:
+  deepsonar:
+    driver: bridge

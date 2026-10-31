@@ -1,0 +1,1131 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  GATEWAY_HOSTS_ROOT_GID,
+  GATEWAY_HOSTS_ROOT_UID,
+  GatewayHostsBindError,
+  OPENSANDBOX_EXECD_ISOLATION_ENABLE,
+  OPENSANDBOX_EXECD_ISOLATION_KEY,
+  OpenSandboxRunner,
+  openSandboxCreateExtensions,
+  evaluateOpenSandboxAlive,
+  formatGatewayHostsBindFailure,
+  gatewayHostsBindCommand,
+  gatewayHostsDockerExecArgs,
+  injectGatewayHostsViaDockerExec,
+  isGatewayHostsRootRun,
+  mapOpenSandboxCreateInput,
+  mapOpenSandboxNetworkPolicy,
+  openSandboxDockerContainerName,
+  repairSharedAssetsParentViaDockerExec,
+  requireOpenSandboxLimits,
+  SHARED_ASSETS_PARENT_PATH,
+  sharedAssetsParentDockerExecArgs,
+  sharedAssetsParentRepairCommand,
+  sharedAssetsParentWritableProbeCommand,
+  type GatewayHostsInjectResult,
+  type OpenSandboxClient,
+  type OpenSandboxCreateInput,
+  type OpenSandboxRunOptions,
+  type OpenSandboxSession,
+} from "./opensandbox.js";
+import { RUNTIME_MANUAL_CONTRACT, RUNTIME_MANUAL_INDEX_PATH, RuntimeImageContractError } from "./runtime-shared.js";
+import { isManagedRuntimeResource } from "./opensandbox-version.js";
+
+function fakeSession(id = "sbx-1"): OpenSandboxSession & {
+  commands: string[];
+  runs: Array<{ command: string; options?: OpenSandboxRunOptions }>;
+  files: Array<{ path: string; bytes: number }>;
+} {
+  const commands: string[] = [];
+  const runs: Array<{ command: string; options?: OpenSandboxRunOptions }> = [];
+  const files: Array<{ path: string; bytes: number }> = [];
+  return {
+    id,
+    commands,
+    runs,
+    files,
+    async run(command, options) {
+      commands.push(command);
+      runs.push({ command, options });
+      if (command.includes(">>") && command.includes("/etc/hosts") && !isGatewayHostsRootRun(options)) {
+        return { exitCode: 1, stdout: "", stderr: "Permission denied" };
+      }
+      if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+        return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1" }), stderr: "" };
+      }
+      if (command.includes("sha256sum")) return { exitCode: 0, stdout: "aa".repeat(32), stderr: "" };
+      if (command === "true") return { exitCode: 0, stdout: "", stderr: "" };
+      if (command.includes("getent hosts") || (command.includes("grep -F") && command.includes("/etc/hosts") && !command.includes(">>"))) {
+        return { exitCode: 0, stdout: "172.19.0.9\tdeepsonar-gateway-proxy\n", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+    async runAsync(command) {
+      commands.push(command);
+      return {
+        async write() {},
+        async closeStdin() {},
+        async kill() {},
+        async resize() {},
+        async *[Symbol.asyncIterator]() {},
+      };
+    },
+    async writeFile(destPath, content) {
+      files.push({ path: destPath, bytes: typeof content === "string" ? Buffer.byteLength(content) : content.byteLength });
+    },
+    async readFile() {
+      return Buffer.from("ok");
+    },
+    async getState() {
+      return "Running";
+    },
+    async kill() {},
+    async close() {},
+  };
+}
+
+function fakeClient(session = fakeSession()): OpenSandboxClient & { created: OpenSandboxCreateInput[]; listed: number; session: ReturnType<typeof fakeSession> } {
+  const created: OpenSandboxCreateInput[] = [];
+  return {
+    session,
+    created,
+    listed: 0,
+    async create(input) {
+      created.push(input);
+      return session;
+    },
+    async connect(id) {
+      return id === session.id ? session : undefined;
+    },
+    async list() {
+      this.listed += 1;
+      return [{ resourceId: session.id, jobId: "11111111-1111-4111-8111-111111111111", attemptId: "22222222-2222-4222-8222-222222222222", state: "Running" }];
+    },
+  };
+}
+
+const limits = { cpu: 2, memoryMiB: 2048, pidsLimit: 512, capDropAll: true, noNewPrivileges: true };
+
+test("OpenSandbox mapping fail-closes on missing or insecure limits", () => {
+  assert.throws(() => requireOpenSandboxLimits(undefined), /SANDBOX_LIMITS_MISSING: cpu/);
+  assert.throws(() => requireOpenSandboxLimits({ cpu: 2 }), /memoryMiB/);
+  assert.throws(() => requireOpenSandboxLimits({ cpu: 2, memoryMiB: 1024, pidsLimit: 1, capDropAll: false }), /capDropAll/);
+  assert.deepEqual(requireOpenSandboxLimits(limits), { cpu: 2, memoryMiB: 2048, pidsLimit: 512 });
+});
+
+test("OpenSandbox maps none/restricted/egress without host-network", () => {
+  assert.deepEqual(mapOpenSandboxNetworkPolicy("none"), { defaultAction: "deny", egress: [] });
+  assert.deepEqual(mapOpenSandboxNetworkPolicy("egress"), { defaultAction: "allow", egress: [] });
+  assert.deepEqual(
+    mapOpenSandboxNetworkPolicy("restricted", "http://host.docker.internal:3100/gateway"),
+    { defaultAction: "deny", egress: [{ action: "allow", target: "deepsonar-gateway-proxy" }] },
+  );
+  assert.throws(() => mapOpenSandboxNetworkPolicy("restricted"), /Gateway/);
+});
+
+test("OpenSandbox create input freezes job/attempt identity and Scheduler TTL", () => {
+  const input = mapOpenSandboxCreateInput({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "deepsonar-base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    sharedAssetsMount: { volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111" },
+  });
+  assert.equal(input.timeoutSeconds, null);
+  assert.equal(input.metadata["deepsonar.job"], "11111111-1111-4111-8111-111111111111");
+  assert.equal(input.metadata["deepsonar.attempt"], "22222222-2222-4222-8222-222222222222");
+  assert.deepEqual(input.resource, { cpu: "2", memory: "2048Mi", pids: "512" });
+  const k8s = mapOpenSandboxCreateInput({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "deepsonar-base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    kubernetesResources: true,
+    limits,
+  });
+  assert.deepEqual(k8s.resource, { cpu: "2", memory: "2048Mi" });
+  const k8sFractional = mapOpenSandboxCreateInput({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "deepsonar-base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    kubernetesResources: true,
+    limits: { ...limits, cpu: 0.4 },
+  });
+  assert.deepEqual(k8sFractional.resource, { cpu: "400m", memory: "2048Mi" });
+  assert.equal(requireOpenSandboxLimits(limits).pidsLimit, 512);
+  assert.equal(input.volumes[0]?.readOnly, true);
+  assert.equal(input.volumes[0]?.pvc.claimName, "deepsonar-assets-11111111-1111-4111-8111-111111111111");
+  assert.equal(input.volumes[0]?.pvc.createIfNotExists, false);
+  assert.ok(!Object.values(input.env).some((value) => /api[_-]?key/i.test(value)));
+  assert.equal(input.platform, undefined);
+  assert.equal(input.extensions, undefined);
+  assert.equal(input.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], undefined);
+  assert.equal(k8s.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], OPENSANDBOX_EXECD_ISOLATION_ENABLE);
+  assert.deepEqual(k8s.extensions, openSandboxCreateExtensions(undefined, { kubernetes: true }));
+});
+
+test("OpenSandbox create extensions request execd isolation only on Kubernetes", () => {
+  assert.equal(openSandboxCreateExtensions(), undefined);
+  assert.deepEqual(openSandboxCreateExtensions({ other: "x", [OPENSANDBOX_EXECD_ISOLATION_KEY]: "off" }), {
+    other: "x",
+  });
+  assert.deepEqual(openSandboxCreateExtensions(undefined, { kubernetes: true }), {
+    [OPENSANDBOX_EXECD_ISOLATION_KEY]: OPENSANDBOX_EXECD_ISOLATION_ENABLE,
+  });
+  assert.deepEqual(
+    openSandboxCreateExtensions({ other: "x", [OPENSANDBOX_EXECD_ISOLATION_KEY]: "off" }, { kubernetes: true }),
+    { other: "x", [OPENSANDBOX_EXECD_ISOLATION_KEY]: OPENSANDBOX_EXECD_ISOLATION_ENABLE },
+  );
+});
+
+test("Docker create input must not request bootstrap.execd.isolation", () => {
+  const docker = mapOpenSandboxCreateInput({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "deepsonar-base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+  });
+  assert.equal(docker.extensions, undefined);
+  assert.ok(!Object.hasOwn(docker, "extensions"));
+  assert.equal(docker.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], undefined);
+});
+
+test("Kubernetes create input must request bootstrap.execd.isolation=enable", () => {
+  const k8s = mapOpenSandboxCreateInput({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "deepsonar-base@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    kubernetesResources: true,
+    limits,
+  });
+  assert.equal(k8s.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], OPENSANDBOX_EXECD_ISOLATION_ENABLE);
+  assert.deepEqual(k8s.extensions, {
+    [OPENSANDBOX_EXECD_ISOLATION_KEY]: OPENSANDBOX_EXECD_ISOLATION_ENABLE,
+  });
+});
+
+test("OpenSandbox runner constructor omits pids when kubernetesResources is set", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client, undefined, { kubernetesResources: true });
+  await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+  });
+  assert.deepEqual(client.created[0]?.resource, { cpu: "2", memory: "2048Mi" });
+  const docker = fakeClient();
+  const dockerRunner = new OpenSandboxRunner(docker);
+  await dockerRunner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+  });
+  assert.deepEqual(docker.created[0]?.resource, { cpu: "2", memory: "2048Mi", pids: "512" });
+  assert.equal(client.created[0]?.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], OPENSANDBOX_EXECD_ISOLATION_ENABLE);
+  assert.equal(docker.created[0]?.extensions?.[OPENSANDBOX_EXECD_ISOLATION_KEY], undefined);
+  assert.ok(!Object.hasOwn(docker.created[0] ?? {}, "extensions"));
+});
+
+test("OpenSandbox runner provisions, exposes host, and verifies contract", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client);
+  const handle = await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+    expectedToolsManifestSha256: "aa".repeat(32),
+  });
+  assert.equal(handle.sandboxId, "sbx-1");
+  assert.equal(client.created[0]?.timeoutSeconds, null);
+  const host = runner.hostOf(handle);
+  assert.ok(host);
+  await host.uploadFile("hello", "/workspace/note.txt");
+  assert.deepEqual(client.session.files, [{ path: "/workspace/note.txt", bytes: 5 }]);
+  assert.equal(await runner.isAlive(handle), true);
+});
+
+test("OpenSandbox provision accepts embedded manifest.sha256 when file hash differs (#629)", async () => {
+  const session = fakeSession();
+  const embedded = "bb".repeat(32);
+  const fileHash = "cc".repeat(32);
+  const originalRun = session.run.bind(session);
+  session.run = async (command, options) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      session.commands.push(command);
+      session.runs.push({ command, options });
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({ contract: "deepsonar.runtime/v1", sha256: embedded }),
+        stderr: "",
+      };
+    }
+    if (command.includes("sha256sum")) {
+      session.commands.push(command);
+      session.runs.push({ command, options });
+      return { exitCode: 0, stdout: fileHash, stderr: "" };
+    }
+    return originalRun(command, options);
+  };
+  const client = fakeClient(session);
+  const runner = new OpenSandboxRunner(client);
+  const handle = await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+    expectedToolsManifestSha256: embedded,
+  });
+  assert.equal(handle.sandboxId, "sbx-1");
+});
+
+test("OpenSandbox provision rejects when neither file nor embedded tool-manifest hash matches (#629)", async () => {
+  const session = fakeSession();
+  const embedded = "bb".repeat(32);
+  const fileHash = "cc".repeat(32);
+  const expected = "dd".repeat(32);
+  const originalRun = session.run.bind(session);
+  session.run = async (command, options) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      session.commands.push(command);
+      session.runs.push({ command, options });
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({ contract: "deepsonar.runtime/v1", sha256: embedded }),
+        stderr: "",
+      };
+    }
+    if (command.includes("sha256sum")) {
+      session.commands.push(command);
+      session.runs.push({ command, options });
+      return { exitCode: 0, stdout: fileHash, stderr: "" };
+    }
+    return originalRun(command, options);
+  };
+  const client = fakeClient(session);
+  const runner = new OpenSandboxRunner(client);
+  await assert.rejects(
+    runner.provision({
+      jobId: "11111111-1111-4111-8111-111111111111",
+      attemptId: "22222222-2222-4222-8222-222222222222",
+      image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      network: "none",
+      limits,
+      expectedContract: "deepsonar.runtime/v1",
+      expectedToolsManifestSha256: expected,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof RuntimeImageContractError);
+      assert.match(error.message, /tool manifest sha256 mismatch/);
+      return true;
+    },
+  );
+});
+
+test("OpenSandbox official provision reads and verifies the offline runtime manual", async () => {
+  const session = fakeSession();
+  const manualHash = "b".repeat(64);
+  const metadata = {
+    contract: RUNTIME_MANUAL_CONTRACT,
+    path: RUNTIME_MANUAL_INDEX_PATH,
+    version: "2026.09.17",
+    sha256: manualHash,
+    count: 1,
+  };
+  const originalRun = session.run.bind(session);
+  session.run = async (command, options) => {
+    session.commands.push(command);
+    session.runs.push({ command, options });
+    if (command.includes(`cat ${RUNTIME_MANUAL_INDEX_PATH}`)) {
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          contract: RUNTIME_MANUAL_CONTRACT,
+          image_key: "deepsonar-base",
+          manual_version: metadata.version,
+          path: RUNTIME_MANUAL_INDEX_PATH,
+          entries: [{ id: "jq", doc: "tools/jq.md" }],
+          manual_sha256: manualHash,
+        }),
+        stderr: "",
+      };
+    }
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1", manual: metadata }), stderr: "" };
+    }
+    return originalRun(command, options);
+  };
+  const client = fakeClient(session);
+  const runner = new OpenSandboxRunner(client);
+  const handle = await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+    expectedToolsManifestSha256: "aa".repeat(32),
+    requireRuntimeManual: true,
+    expectedRuntimeManual: metadata,
+    expectedRuntimeImageKey: "deepsonar-base",
+  });
+  assert.equal(handle.sandboxId, "sbx-1");
+  assert.ok(session.commands.some((command) => command.includes(`cat ${RUNTIME_MANUAL_INDEX_PATH}`)));
+});
+
+test("OpenSandbox official provision rejects a missing manual index", async () => {
+  const session = fakeSession();
+  const manualHash = "c".repeat(64);
+  const metadata = {
+    contract: RUNTIME_MANUAL_CONTRACT,
+    path: RUNTIME_MANUAL_INDEX_PATH,
+    version: "2026.09.17",
+    sha256: manualHash,
+    count: 1,
+  };
+  const originalRun = session.run.bind(session);
+  session.run = async (command, options) => {
+    session.commands.push(command);
+    session.runs.push({ command, options });
+    if (command.includes(`cat ${RUNTIME_MANUAL_INDEX_PATH}`)) return { exitCode: 1, stdout: "", stderr: "missing" };
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1", manual: metadata }), stderr: "" };
+    }
+    return originalRun(command, options);
+  };
+  const runner = new OpenSandboxRunner(fakeClient(session));
+  await assert.rejects(
+    runner.provision({
+      jobId: "11111111-1111-4111-8111-111111111111",
+      attemptId: "22222222-2222-4222-8222-222222222222",
+      image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      network: "none",
+      limits,
+      expectedContract: "deepsonar.runtime/v1",
+      requireRuntimeManual: true,
+      expectedRuntimeManual: metadata,
+      expectedRuntimeImageKey: "deepsonar-base",
+    }),
+    (error) => error instanceof RuntimeImageContractError && /missing readable runtime manual index/.test(error.message),
+  );
+});
+
+test("OpenSandbox official provision rejects Jobs that omit frozen manual metadata", async () => {
+  const session = fakeSession();
+  const runner = new OpenSandboxRunner(fakeClient(session));
+  await assert.rejects(
+    runner.provision({
+      jobId: "11111111-1111-4111-8111-111111111111",
+      attemptId: "22222222-2222-4222-8222-222222222222",
+      image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      network: "none",
+      limits,
+      expectedContract: "deepsonar.runtime/v1",
+      requireRuntimeManual: true,
+    }),
+    (error) => error instanceof RuntimeImageContractError && /missing frozen runtime manual metadata/.test(error.message),
+  );
+});
+
+function okDockerInject(): GatewayHostsInjectResult {
+  return {
+    method: "docker-exec",
+    exitCode: 0,
+    uid: GATEWAY_HOSTS_ROOT_UID,
+    gid: GATEWAY_HOSTS_ROOT_GID,
+    stdout: "",
+    stderr: "",
+  };
+}
+
+function assertNoExecdHostsWrite(session: ReturnType<typeof fakeSession>) {
+  assert.equal(session.runs.some((run) => (
+    run.command.includes(">>") && run.command.includes("/etc/hosts")
+  )), false);
+}
+
+function assertGuestGatewayResolve(session: ReturnType<typeof fakeSession>, hostname: string) {
+  assert.ok(session.commands.some((command) => (
+    command.includes("getent hosts") && command.includes(hostname)
+  )));
+}
+
+function assertRootGatewayHostsBind(
+  session: ReturnType<typeof fakeSession>,
+  bind: { hostname: string; ip: string },
+) {
+  const write = session.runs.find((run) => run.command.includes(">>") && run.command.includes("/etc/hosts"));
+  assert.ok(write);
+  assert.equal(write.command, gatewayHostsBindCommand(bind));
+  assert.equal(isGatewayHostsRootRun(write.options), true);
+  assert.equal(write.options?.uid, GATEWAY_HOSTS_ROOT_UID);
+  assert.equal(write.options?.gid, GATEWAY_HOSTS_ROOT_GID);
+  assert.equal(session.runs.some((run) => (
+    run.command.includes(">>") && run.command.includes("/etc/hosts") && !isGatewayHostsRootRun(run.options)
+  )), false);
+  assertGuestGatewayResolve(session, bind.hostname);
+}
+
+test("OpenSandbox restricted provision binds the Gateway hostname via docker exec, not execd", async () => {
+  const client = fakeClient();
+  const injected: Array<{ sandboxId: string; bind: { hostname: string; ip: string } }> = [];
+  const runner = new OpenSandboxRunner(client, {
+    bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
+  }, {
+    injectGatewayHosts: async (input) => {
+      injected.push(input);
+      return okDockerInject();
+    },
+  });
+  await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "restricted",
+    gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  });
+  assert.equal(
+    client.created[0]?.networkPolicy.egress[0]?.target,
+    "deepsonar-gateway-proxy",
+  );
+  assert.deepEqual(injected, [{
+    sandboxId: "sbx-1",
+    bind: { hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" },
+  }]);
+  assertNoExecdHostsWrite(client.session);
+  assertGuestGatewayResolve(client.session, "deepsonar-gateway-proxy");
+});
+
+test("OpenSandbox Kubernetes restricted provision binds the Gateway Service ClusterIP as root", async () => {
+  const client = fakeClient();
+  let bound = 0;
+  const runner = new OpenSandboxRunner(client, {
+    bind: async () => {
+      bound += 1;
+      return { hostname: "deepsonar-gateway-proxy", ip: "10.43.0.10" };
+    },
+  }, { kubernetesResources: true });
+  await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "restricted",
+    gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  });
+  assert.equal(bound, 1);
+  assertRootGatewayHostsBind(client.session, { hostname: "deepsonar-gateway-proxy", ip: "10.43.0.10" });
+});
+
+test("OpenSandbox provision completes gateway hosts bind for a non-root guest", async () => {
+  const session = fakeSession();
+  const client = fakeClient(session);
+  const injected: string[] = [];
+  const runner = new OpenSandboxRunner(client, {
+    bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
+  }, {
+    injectGatewayHosts: async () => {
+      injected.push("docker-exec");
+      return okDockerInject();
+    },
+  });
+  for (const network of ["restricted", "egress"] as const) {
+    session.commands.length = 0;
+    session.runs.length = 0;
+    client.created.length = 0;
+    await runner.provision({
+      jobId: "11111111-1111-4111-8111-111111111111",
+      attemptId: "22222222-2222-4222-8222-222222222222",
+      image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      network,
+      gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+      limits,
+      expectedContract: "deepsonar.runtime/v1",
+    });
+    assertNoExecdHostsWrite(session);
+    assertGuestGatewayResolve(session, "deepsonar-gateway-proxy");
+  }
+  assert.deepEqual(injected, ["docker-exec", "docker-exec"]);
+});
+
+test("OpenSandbox gateway sidecar bind failure is reported as hosts/gateway bind, not chromium", async () => {
+  const runner = new OpenSandboxRunner(fakeClient(), {
+    bind: async () => {
+      throw new Error("sidecar has no IPv4");
+    },
+  });
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "egress",
+    gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  }), (error: unknown) => {
+    assert.ok(error instanceof GatewayHostsBindError);
+    assert.match(error.message, /gateway sidecar before hosts injection/);
+    assert.doesNotMatch(error.message, /chromium/i);
+    return true;
+  });
+});
+
+test("OpenSandbox gateway hosts bind failure is not a missing-chromium contract error", async () => {
+  const session = fakeSession();
+  session.run = async (command, options) => {
+    session.commands.push(command);
+    session.runs.push({ command, options });
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1" }), stderr: "" };
+    }
+    if (command.includes(">>") && command.includes("/etc/hosts")) {
+      return { exitCode: 1, stdout: "", stderr: "" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const runner = new OpenSandboxRunner(fakeClient(session), {
+    bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.19.0.9" }),
+  }, { kubernetesResources: true });
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "restricted",
+    gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  }), (error: unknown) => {
+    assert.ok(error instanceof GatewayHostsBindError);
+    assert.equal(error instanceof RuntimeImageContractError, false);
+    assert.match(error.message, /gateway hostname in sandbox hosts/);
+    assert.match(error.message, /method=execd exit=1 uid=0 gid=0/);
+    assert.equal(error.method, "execd");
+    assert.equal(error.exitCode, 1);
+    assert.equal(error.uid, 0);
+    assert.doesNotMatch(error.message, /chromium/i);
+    return true;
+  });
+});
+
+test("Docker gateway hosts bind failure includes method/exit/uid when streams are empty", async () => {
+  const runner = new OpenSandboxRunner(fakeClient(), {
+    bind: async () => ({ hostname: "deepsonar-gateway-proxy", ip: "172.17.0.2" }),
+  }, {
+    injectGatewayHosts: async () => ({
+      method: "docker-exec",
+      exitCode: 1,
+      uid: 0,
+      gid: 0,
+      stdout: "",
+      stderr: "",
+    }),
+  });
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "egress",
+    gatewayUpstreamUrl: "http://host.docker.internal:3100/gateway",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  }), (error: unknown) => {
+    assert.ok(error instanceof GatewayHostsBindError);
+    assert.equal(error.code, "OPENSANDBOX_GATEWAY_HOSTS_BIND");
+    assert.match(error.message, /172\.17\.0\.2/);
+    assert.match(error.message, /method=docker-exec exit=1 uid=0 gid=0/);
+    assert.equal(error.method, "docker-exec");
+    assert.equal(error.exitCode, 1);
+    return true;
+  });
+});
+
+test("docker exec hosts injection uses Engine uid=0 and keeps the bind command", async () => {
+  const bind = { hostname: "deepsonar-gateway-proxy", ip: "172.17.0.2" };
+  const args = gatewayHostsDockerExecArgs("sandbox-sbx-1", bind);
+  assert.deepEqual(args.slice(0, 6), ["exec", "-u", "0:0", "sandbox-sbx-1", "sh", "-c"]);
+  assert.equal(args[6], gatewayHostsBindCommand(bind));
+  assert.equal(openSandboxDockerContainerName("sbx-1"), "sandbox-sbx-1");
+  const calls: string[][] = [];
+  const ok = await injectGatewayHostsViaDockerExec({
+    sandboxId: "sbx-1",
+    bind,
+    exec: async (...next) => {
+      calls.push(next);
+      return "";
+    },
+  });
+  assert.equal(ok.method, "docker-exec");
+  assert.equal(ok.exitCode, 0);
+  assert.deepEqual(calls[0], args);
+  const failed = await injectGatewayHostsViaDockerExec({
+    sandboxId: "sbx-1",
+    bind,
+    exec: async () => {
+      throw new Error("permission denied");
+    },
+  });
+  assert.equal(failed.exitCode, 1);
+  assert.match(failed.stderr, /permission denied/);
+  assert.match(formatGatewayHostsBindFailure({
+    headline: "failed to bind gateway hostname in sandbox hosts as root (guest user is unchanged)",
+    hostname: bind.hostname,
+    ip: bind.ip,
+    method: "docker-exec",
+    exitCode: 1,
+    uid: 0,
+    gid: 0,
+  }), /method=docker-exec exit=1 uid=0 gid=0/);
+});
+
+test("OpenSandbox isAlive retries a transient exec probe while lifecycle stays Running", async () => {
+  let probes = 0;
+  assert.equal(await evaluateOpenSandboxAlive({
+    getState: async () => "Running",
+    probe: async () => {
+      probes += 1;
+      if (probes < 2) throw new Error("execd blip");
+      return { exitCode: 0 };
+    },
+  }), true);
+  assert.equal(probes, 2);
+  assert.equal(await evaluateOpenSandboxAlive({
+    getState: async () => "Paused",
+    probe: async () => {
+      throw new Error("must not probe a non-running sandbox");
+    },
+  }), false);
+  assert.equal(await evaluateOpenSandboxAlive({
+    getState: async () => { throw new Error("api down"); },
+    probe: async () => ({ exitCode: 0 }),
+  }), false);
+});
+
+test("OpenSandbox listResources keeps only dual canonical-UUID labels", async () => {
+  const client = fakeClient();
+  client.list = async () => [
+    { resourceId: "foreign", jobId: "", attemptId: "", state: "Running" },
+    { resourceId: "partial", jobId: "11111111-1111-4111-8111-111111111111", attemptId: "not-a-uuid", state: "Running" },
+    { resourceId: "managed", jobId: "11111111-1111-4111-8111-111111111111", attemptId: "22222222-2222-4222-8222-222222222222", state: "Running" },
+  ];
+  const runner = new OpenSandboxRunner(client);
+  const listed = await runner.listResources();
+  assert.deepEqual(listed.map((item) => item.resourceId), ["managed"]);
+  assert.equal(isManagedRuntimeResource({ jobId: "", attemptId: "" }), false);
+  assert.equal(isManagedRuntimeResource({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+  }), true);
+});
+
+test("OpenSandbox provision fail-closes when the shared assets volume is not Scheduler-owned", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client, undefined, {
+    inspectSharedAssetsVolume: async () => {
+      throw new Error("shared assets volume is not a local Scheduler-managed volume for this Job");
+    },
+  });
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    sharedAssetsMount: { volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111" },
+  }), /Scheduler-managed volume/);
+  assert.equal(client.created.length, 0);
+});
+
+test("OpenSandbox Kubernetes provision skips Docker volume inspect", async () => {
+  const session = fakeSession();
+  session.run = async (command) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1" }), stderr: "" };
+    }
+    if (command === "cat /proc/mounts") {
+      return { exitCode: 0, stdout: "/dev/sda /workspace/.deepsonar/shared ext4 ro 0 0\n", stderr: "" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  let inspected = 0;
+  const client = fakeClient(session);
+  const runner = new OpenSandboxRunner(client, undefined, {
+    kubernetesResources: true,
+    inspectSharedAssetsVolume: async () => {
+      inspected += 1;
+      throw new Error("docker inspect must not run on Kubernetes");
+    },
+  });
+  await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    sharedAssetsMount: { volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111" },
+  });
+  assert.equal(inspected, 0);
+  assert.equal(client.created.length, 1);
+});
+
+test("OpenSandbox provision fail-closes when the shared assets volume is not mounted", async () => {
+  const session = fakeSession();
+  session.run = async (command) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "deepsonar.runtime/v1" }), stderr: "" };
+    }
+    if (command === "cat /proc/mounts") return { exitCode: 0, stdout: "overlay / overlay rw 0 0\n", stderr: "" };
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const runner = new OpenSandboxRunner(fakeClient(session), undefined, {
+    inspectSharedAssetsVolume: async () => {},
+  });
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    sharedAssetsMount: { volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111" },
+  }), /shared assets volume was not mounted/);
+});
+
+function sharedAssetsSession(options: { writableAfterRepair: boolean; initiallyWritable?: boolean }) {
+  const session = fakeSession();
+  let writable = Boolean(options.initiallyWritable);
+  const base = session.run.bind(session);
+  session.run = async (command, runOptions) => {
+    if (command === sharedAssetsParentWritableProbeCommand()) {
+      session.commands.push(command);
+      session.runs.push({ command, options: runOptions });
+      return { exitCode: writable ? 0 : 1, stdout: "", stderr: "" };
+    }
+    if (command === "id -u && id -g") {
+      session.commands.push(command);
+      session.runs.push({ command, options: runOptions });
+      return { exitCode: 0, stdout: "1001\n1001\n", stderr: "" };
+    }
+    if (command.includes("chmod 1777")) {
+      session.commands.push(command);
+      session.runs.push({ command, options: runOptions });
+      if (isGatewayHostsRootRun(runOptions) && options.writableAfterRepair) writable = true;
+      return { exitCode: isGatewayHostsRootRun(runOptions) ? 0 : 1, stdout: "", stderr: "" };
+    }
+    if (command === "cat /proc/mounts") {
+      session.commands.push(command);
+      return { exitCode: 0, stdout: "/dev/sda /workspace/.deepsonar/shared ext4 ro 0 0\n", stderr: "" };
+    }
+    return base(command, runOptions);
+  };
+  return { session, markWritable: () => { writable = true; } };
+}
+
+const sharedProvisionInput = {
+  jobId: "11111111-1111-4111-8111-111111111111",
+  attemptId: "22222222-2222-4222-8222-222222222222",
+  image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  network: "none" as const,
+  limits,
+  sharedAssetsMount: { volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111" },
+};
+
+test("shared assets parent repair targets only the mount parent and tolerates dropped CAP_CHOWN", () => {
+  assert.equal(SHARED_ASSETS_PARENT_PATH, "/workspace/.deepsonar");
+  const command = sharedAssetsParentRepairCommand({ uid: 1001, gid: 1001 });
+  assert.match(command, /test ! -L '\/workspace\/\.deepsonar'/);
+  assert.match(command, /chown 1001:1001 '\/workspace\/\.deepsonar' 2>\/dev\/null \|\| chmod 1777 '\/workspace\/\.deepsonar'/);
+  assert.doesNotMatch(command, /-R|\/workspace\/\.deepsonar\/shared/);
+  assert.throws(() => sharedAssetsParentRepairCommand({ uid: Number.NaN, gid: 0 }), RuntimeImageContractError);
+  assert.deepEqual(sharedAssetsParentDockerExecArgs("sandbox-sbx-1", "true"), ["exec", "-u", "0:0", "sandbox-sbx-1", "sh", "-c", "true"]);
+});
+
+test("Docker shared assets repair runs through Engine docker exec as root", async () => {
+  const calls: string[][] = [];
+  const ok = await repairSharedAssetsParentViaDockerExec({
+    sandboxId: "sbx-1",
+    command: "true",
+    exec: async (...args) => { calls.push(args); return ""; },
+  });
+  assert.equal(ok.exitCode, 0);
+  assert.deepEqual(calls[0], ["exec", "-u", "0:0", "sandbox-sbx-1", "sh", "-c", "true"]);
+  const failed = await repairSharedAssetsParentViaDockerExec({
+    sandboxId: "sbx-1",
+    command: "true",
+    exec: async () => { throw new Error("chmod: Operation not permitted"); },
+  });
+  assert.equal(failed.exitCode, 1);
+  assert.match(failed.stderr, /Operation not permitted/);
+});
+
+test("OpenSandbox Docker provision makes the root-created shared assets parent writable for a non-root guest", async () => {
+  const { session, markWritable } = sharedAssetsSession({ writableAfterRepair: false });
+  const repairs: Array<{ sandboxId: string; command: string }> = [];
+  const runner = new OpenSandboxRunner(fakeClient(session), undefined, {
+    inspectSharedAssetsVolume: async () => {},
+    repairSharedAssetsParent: async (input) => {
+      repairs.push(input);
+      markWritable();
+      return { method: "docker-exec", exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+  assert.deepEqual(await runner.provision(sharedProvisionInput), { sandboxId: "sbx-1" });
+  assert.equal(repairs.length, 1);
+  assert.equal(repairs[0]!.sandboxId, "sbx-1");
+  assert.match(repairs[0]!.command, /chown 1001:1001 .* \|\| chmod 1777/);
+  const probes = session.runs.filter((run) => run.command === sharedAssetsParentWritableProbeCommand());
+  assert.equal(probes.length, 2, "probe as guest before and after repair");
+  assert.ok(probes.every((run) => run.options?.uid === undefined), "writability is proven for the guest user");
+});
+
+test("OpenSandbox provision skips repair when the guest can already write the shared assets parent", async () => {
+  const { session } = sharedAssetsSession({ writableAfterRepair: false, initiallyWritable: true });
+  let repaired = 0;
+  const runner = new OpenSandboxRunner(fakeClient(session), undefined, {
+    inspectSharedAssetsVolume: async () => {},
+    repairSharedAssetsParent: async () => {
+      repaired += 1;
+      return { method: "docker-exec", exitCode: 0, stdout: "", stderr: "" };
+    },
+  });
+  await runner.provision(sharedProvisionInput);
+  assert.equal(repaired, 0);
+  assert.ok(!session.commands.includes("id -u && id -g"));
+});
+
+test("OpenSandbox provision fail-closes with a contract error when the shared assets parent stays unwritable", async () => {
+  const { session } = sharedAssetsSession({ writableAfterRepair: false });
+  const client = fakeClient(session);
+  let destroyed = 0;
+  client.destroy = async () => { destroyed += 1; };
+  const runner = new OpenSandboxRunner(client, undefined, {
+    inspectSharedAssetsVolume: async () => {},
+    repairSharedAssetsParent: async () => ({ method: "docker-exec", exitCode: 1, stdout: "", stderr: "chmod: Operation not permitted" }),
+  });
+  await assert.rejects(runner.provision(sharedProvisionInput), (error: unknown) => {
+    assert.ok(error instanceof RuntimeImageContractError);
+    assert.match(String((error as Error).message), /\/workspace\/\.deepsonar is not writable by the sandbox user .*uid=1001 gid=1001 .*Operation not permitted/);
+    return true;
+  });
+  assert.ok(destroyed >= 1, "failed provision must destroy the sandbox");
+});
+
+test("OpenSandbox Kubernetes provision repairs the shared assets parent through execd uid 0", async () => {
+  const { session } = sharedAssetsSession({ writableAfterRepair: true });
+  const runner = new OpenSandboxRunner(fakeClient(session), undefined, {
+    kubernetesResources: true,
+    repairSharedAssetsParent: async () => {
+      throw new Error("Docker repair must not run on Kubernetes");
+    },
+  });
+  await runner.provision(sharedProvisionInput);
+  const repair = session.runs.find((run) => run.command.includes("chmod 1777"));
+  assert.ok(repair && isGatewayHostsRootRun(repair.options));
+});
+
+test("OpenSandbox isAlive requires lifecycle Running and a healthy exec probe", async () => {
+  const session = fakeSession();
+  session.getState = async () => "Paused";
+  const runner = new OpenSandboxRunner(fakeClient(session));
+  await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+  });
+  assert.equal(await runner.isAlive({ sandboxId: "sbx-1" }), false);
+});
+
+test("OpenSandbox cancelProvision destroys labeled leftovers", async () => {
+  const client = fakeClient();
+  let killed = 0;
+  client.session.kill = async () => {
+    killed += 1;
+  };
+  const runner = new OpenSandboxRunner(client);
+  await runner.cancelProvision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+  });
+  assert.equal(client.listed, 1);
+  assert.equal(killed, 1);
+});
+
+test("OpenSandbox ensureHost reconnects after process-local cache miss", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client);
+  assert.equal(runner.hostOf({ sandboxId: "sbx-1" }), undefined);
+  const host = await runner.ensureHost({ sandboxId: "sbx-1" });
+  assert.ok(host);
+  assert.ok(runner.hostOf({ sandboxId: "sbx-1" }));
+  await assert.rejects(runner.ensureHost({ sandboxId: "missing" }), /不在注册表/);
+});
+
+test("OpenSandbox openTerminal reconnects through ensureHost", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client);
+  const terminal = await runner.openTerminal({ sandboxId: "sbx-1" }, { cols: 80, rows: 24 });
+  assert.ok(terminal.id);
+  assert.match(client.session.commands.join("\n"), /sh -c .*bash -il/);
+  await terminal.close();
+});
+
+test("OpenSandbox provision abort rejects in-flight create and kills late sessions", async () => {
+  const session = fakeSession();
+  let killed = 0;
+  session.kill = async () => {
+    killed += 1;
+  };
+  let release: ((value: OpenSandboxSession) => void) | undefined;
+  const client = fakeClient(session);
+  client.create = () => new Promise((resolve) => {
+    release = resolve;
+  });
+  const abort = new AbortController();
+  const runner = new OpenSandboxRunner(client);
+  const pending = runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    signal: abort.signal,
+  });
+  abort.abort();
+  await assert.rejects(pending, /已取消/);
+  release?.(session);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.ok(killed >= 1);
+});
+
+test("OpenSandbox contract mismatch destroys the created session", async () => {
+  const session = fakeSession();
+  let killed = 0;
+  session.kill = async () => {
+    killed += 1;
+  };
+  session.run = async (command) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "wrong" }), stderr: "" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const runner = new OpenSandboxRunner(fakeClient(session));
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  }), /contract mismatch/);
+  assert.equal(killed >= 1, true);
+});
+
+test("OpenSandbox host rejects reserved workspace reads and inbox path traversal", async () => {
+  const client = fakeClient();
+  const runner = new OpenSandboxRunner(client);
+  const handle = await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+  });
+  const host = runner.hostOf(handle)!;
+  await assert.rejects(host.readWorkspaceFile("/workspace/.deepsonar/secret", 100), /forbidden/);
+  await assert.rejects(
+    host.writeHumanInboxFile("/workspace/.deepsonar/inbox/not-a-uuid/file.bin", Buffer.from("x")),
+    /path_forbidden/,
+  );
+});
+
+test("OpenSandbox destroy waits until the sandbox disappears from list", async () => {
+  const client = fakeClient();
+  let present = 2;
+  client.destroy = async () => {
+    present -= 1;
+  };
+  client.list = async () => (present > 0
+    ? [{
+        resourceId: "sbx-1",
+        jobId: "11111111-1111-4111-8111-111111111111",
+        attemptId: "22222222-2222-4222-8222-222222222222",
+        state: "Running",
+      }]
+    : []);
+  const runner = new OpenSandboxRunner(client);
+  await runner.destroy({ sandboxId: "sbx-1" });
+  assert.equal(present, 0);
+});
+
+test("OpenSandbox provision then destroy still calls client.destroy after a sessions-cache hit", async () => {
+  const client = fakeClient();
+  let destroyed = 0;
+  let present = true;
+  client.destroy = async () => {
+    destroyed += 1;
+    present = false;
+  };
+  client.list = async () => (present
+    ? [{
+        resourceId: "sbx-1",
+        jobId: "11111111-1111-4111-8111-111111111111",
+        attemptId: "22222222-2222-4222-8222-222222222222",
+        state: "Running",
+      }]
+    : []);
+  const runner = new OpenSandboxRunner(client);
+  const handle = await runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+  });
+  assert.ok(runner.hostOf(handle));
+  await runner.destroy(handle);
+  assert.ok(destroyed >= 1, "cached destroyResource must call client.destroy so worker-plane leases release");
+  assert.equal(present, false);
+  assert.equal(runner.hostOf(handle), undefined);
+});
+
+test("OpenSandbox contract mismatch still calls client.destroy", async () => {
+  const session = fakeSession();
+  const client = fakeClient(session);
+  let destroyed = 0;
+  client.destroy = async () => {
+    destroyed += 1;
+  };
+  session.run = async (command) => {
+    if (command.includes("tool-manifest.json") && command.includes("cat ")) {
+      return { exitCode: 0, stdout: JSON.stringify({ contract: "wrong" }), stderr: "" };
+    }
+    return { exitCode: 0, stdout: "", stderr: "" };
+  };
+  const runner = new OpenSandboxRunner(client);
+  await assert.rejects(runner.provision({
+    jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222",
+    image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    network: "none",
+    limits,
+    expectedContract: "deepsonar.runtime/v1",
+  }), /contract mismatch/);
+  assert.ok(destroyed >= 1);
+});

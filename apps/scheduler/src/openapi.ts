@@ -1,0 +1,3663 @@
+/**
+ * DeepSonar HTTP API OpenAPI 3 文档（机器可读 schema）。
+ * 端点：GET /openapi.json、GET /schema（同源）、GET /schema.md（人类可读摘要）。
+ * 与 skills/deepsonar-management/references/api.md 对齐；改路由时请同步更新本文件与该 md。
+ */
+import { existsSync, readFileSync } from "node:fs";
+import { z } from "zod";
+import { TaskContract, TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { PlanGoalReviewBinding } from "./domains/plan-protocol/criterion-model.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { ALL_SCOPES } from "./auth.js";
+import { config } from "./config.js";
+import { FINDING_DISPOSITIONS } from "./finding-disposition.js";
+import { RUNTIME_IMAGE_REGISTRY_CHANNELS } from "./runtime-image-registry-contract.js";
+import { KNOWLEDGE_MANAGEMENT_OPERATIONS } from "./domains/project-knowledge/openapi.js";
+
+const TaskContractFeedbackSchema = {
+  type: "object",
+  required: ["code", "path", "message", "suggestion"],
+  properties: {
+    code: { type: "string" }, path: { type: "string" },
+    message: { type: "string" }, suggestion: { type: "string" },
+  },
+};
+const TaskContractFeedbackListSchema = { type: "array", items: TaskContractFeedbackSchema };
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+/** 尝试定位仓库内 Management Skill 的 api.md */
+export function resolveApiMarkdownPath(): string | null {
+  const candidates = [
+    path.resolve(HERE, "../../../skills/deepsonar-management/references/api.md"),
+    path.resolve(process.cwd(), "skills/deepsonar-management/references/api.md"),
+    path.resolve(process.cwd(), "../../skills/deepsonar-management/references/api.md"),
+  ];
+  return candidates.find((p) => existsSync(p)) ?? null;
+}
+
+export function loadApiMarkdown(): string | null {
+  const p = resolveApiMarkdownPath();
+  if (!p) return null;
+  return readFileSync(p, "utf8");
+}
+
+type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
+
+export interface Op {
+  method: HttpMethod;
+  path: string;
+  summary: string;
+  description?: string;
+  scope?: string | null; // null = 豁免鉴权
+  tags: string[];
+  body?: Record<string, unknown>;
+  bodyContentType?: string;
+  query?: Record<string, unknown>;
+  requiredQuery?: readonly string[];
+  headers?: Record<string, unknown>;
+  responses?: Record<string, unknown>;
+  successStatus?: "200" | "201" | "202";
+}
+
+const ErrorSchema = {
+  type: "object",
+  properties: {
+    error: { type: "string", description: "人类可读错误信息" },
+    error_code: { type: "string", description: "稳定机器可读错误代码（若该错误提供）" },
+  },
+  required: ["error"],
+};
+
+const TaskExecutionControlResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["canvas_id", "execution_state", "active_count", "pending_count", "changed"],
+  properties: {
+    canvas_id: { type: "string", format: "uuid" },
+    execution_state: { type: "string", enum: ["pausing", "paused", "running"] },
+    active_count: {
+      type: "integer",
+      minimum: 0,
+      description: "仍在安全收尾的 claimed/provisioning/running/waiting_human Job 数；pending 不计入",
+    },
+    pending_count: { type: "integer", minimum: 0 },
+    changed: { type: "boolean" },
+  },
+};
+
+
+const PlatformUpdateStatusSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "checked_at", "current_version", "available_version", "available_commit_sha",
+    "available_schema_version", "changelog_url", "update_available", "schema_rebuild_needed",
+    "check_error", "registry_source", "missing",
+  ],
+  properties: {
+    checked_at: { type: "string", format: "date-time", nullable: true },
+    current_version: { type: "string", description: "当前部署版本核心（X.Y.Z）；只来自 DEEPSONAR_VERSION" },
+    available_version: { type: "string", nullable: true, description: "清单中的可升级平台版本；无更新或检查失败时为 null" },
+    available_commit_sha: { type: "string", nullable: true },
+    available_schema_version: { type: "integer", nullable: true, minimum: 1, description: "目标 Release 的 DeepSonar SCHEMA_VERSION" },
+    changelog_url: { type: "string", nullable: true, maxLength: 500 },
+    update_available: { type: "boolean", description: "仅当可用版本严格大于当前版本时为 true" },
+    schema_rebuild_needed: { type: "boolean", description: "有可用更新且目标 schema_version 大于当前 SCHEMA_VERSION" },
+    check_error: { type: "string", nullable: true, maxLength: 500, description: "GitHub 不可达等检查错误；不影响领取与业务" },
+    registry_source: { type: "string", nullable: true, description: "remote / bundled / upload" },
+    missing: { type: "boolean", description: "尚未写入过检查结果" },
+  },
+};
+
+const PlatformClaimsStatusSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "claims_paused", "reason", "note", "paused_by", "paused_at", "state", "drained",
+    "in_flight", "pending", "waiting_human", "effect_pending_attempts", "unknown_effect_attempts",
+  ],
+  properties: {
+    changed: { type: "boolean", description: "仅 pause / resume 返回：本次请求是否改变了持久化状态" },
+    claims_paused: { type: "boolean" },
+    reason: { type: "string", nullable: true, enum: ["platform_upgrade", "maintenance", null] },
+    note: { type: "string", nullable: true, maxLength: 500 },
+    paused_by: { type: "string", nullable: true, description: "操作者标签（主体类型:名称），不含凭据" },
+    paused_at: { type: "string", format: "date-time", nullable: true },
+    state: {
+      type: "string",
+      enum: ["running", "pausing", "paused"],
+      description: "running=未暂停；pausing=已暂停但仍有在途 Job 或未结算外部效果；paused=已暂停且排空",
+    },
+    drained: { type: "boolean", description: "in_flight.total、effect_pending_attempts、unknown_effect_attempts 均为 0" },
+    in_flight: {
+      type: "object",
+      additionalProperties: false,
+      required: ["claimed", "provisioning", "running", "total"],
+      properties: {
+        claimed: { type: "integer", minimum: 0 },
+        provisioning: { type: "integer", minimum: 0 },
+        running: { type: "integer", minimum: 0 },
+        total: { type: "integer", minimum: 0 },
+      },
+    },
+    pending: { type: "integer", minimum: 0, description: "已入队、暂停期间不会被领取的 Job 数" },
+    waiting_human: { type: "integer", minimum: 0, description: "等待人工的 Job 数；不计入排空判定" },
+    effect_pending_attempts: { type: "integer", minimum: 0 },
+    unknown_effect_attempts: { type: "integer", minimum: 0 },
+  },
+};
+
+const FactVerificationSchema = {
+  type: "object",
+  nullable: true,
+  additionalProperties: false,
+  required: ["finding_id", "evidence_kind", "outcome", "subject_revision"],
+  properties: {
+    finding_id: { type: "string", format: "uuid" },
+    evidence_kind: { type: "string", enum: ["review", "test"] },
+    outcome: { type: "string", enum: ["supports", "refutes", "inconclusive"] },
+    subject_revision: { type: "string", maxLength: 500 },
+  },
+};
+
+const FactFindingSchema = {
+  type: "object",
+  nullable: true,
+  additionalProperties: false,
+  required: ["id", "node_id", "title", "severity", "verify_status"],
+  properties: {
+    id: { type: "string", format: "uuid" },
+    node_id: { type: "string", format: "uuid" },
+    title: { type: "string" },
+    severity: { type: "string", nullable: true },
+    verify_status: { type: "string" },
+  },
+};
+
+const FactJobSchema = {
+  type: "object",
+  nullable: true,
+  additionalProperties: false,
+  required: ["id", "type", "status"],
+  properties: {
+    id: { type: "string", format: "uuid" },
+    type: { type: "string" },
+    status: { type: "string" },
+  },
+};
+
+const FactSummarySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["id", "canvas_id", "title", "description", "verification_status", "job_id", "created_at", "updated_at", "verification", "finding", "job"],
+  properties: {
+    id: { type: "string", format: "uuid" },
+    canvas_id: { type: "string", format: "uuid" },
+    title: { type: "string" },
+    description: { type: "string", maxLength: 500 },
+    verification_status: { type: "string", enum: ["unverified", "verifying", "verified", "rejected", "needs_human"] },
+    job_id: { type: "string", format: "uuid", nullable: true },
+    created_at: { type: "string", format: "date-time" },
+    updated_at: { type: "string", format: "date-time" },
+    verification: FactVerificationSchema,
+    finding: FactFindingSchema,
+    job: FactJobSchema,
+  },
+};
+
+const TaskResumeJobSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["id", "status"],
+  properties: {
+    id: { type: "string", format: "uuid" },
+    type: { type: "string" },
+    status: { type: "string" },
+  },
+};
+
+const TaskResumeResponseSchema = {
+  type: "object",
+  additionalProperties: true,
+  required: ["canvas_id", "action"],
+  properties: {
+    canvas_id: { type: "string", format: "uuid" },
+    action: {
+      type: "string",
+      enum: ["already_running", "rerun_interrupted_jobs", "resume_job", "wake_hub", "start_now"],
+    },
+    jobs: {
+      type: "array",
+      description: "实际重新入队或已活动的 Job。rerun_interrupted_jobs 返回全部启动中断 Worker。",
+      items: TaskResumeJobSchema,
+    },
+    job: { ...TaskResumeJobSchema, nullable: true },
+    effects_replayed: {
+      type: "boolean",
+      description: "批量重跑固定为 false；旧 Attempt 的 unknown/never effect 不自动重放。",
+    },
+    message: { type: "string" },
+    convergence: { type: "object", additionalProperties: true },
+  },
+};
+
+const EvidenceFileSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["name", "path", "kind", "bytes", "sha256"],
+  properties: {
+    name: { type: "string" },
+    path: { type: "string" },
+    kind: { type: "string", enum: ["main", "subagent", "vendor_export", "stream", "otlp"] },
+    bytes: { type: "integer", minimum: 0 },
+    sha256: {
+      type: "string",
+      nullable: true,
+      description: "inflight mutable stream 为 null；finalized 文件为完整 SHA-256。",
+    },
+    inflight: { type: "boolean" },
+  },
+};
+
+const JobEvidenceResponseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["transcript_uri", "manifest"],
+  properties: {
+    transcript_uri: { type: "string", nullable: true },
+    manifest: {
+      type: "object",
+      additionalProperties: false,
+      required: ["v", "job_id", "cli", "session_id", "created_at", "finalized_at", "files"],
+      properties: {
+        v: { type: "integer", enum: [1] },
+        job_id: { type: "string", format: "uuid" },
+        cli: { type: "string" },
+        session_id: { type: "string", nullable: true },
+        created_at: { type: "string", format: "date-time" },
+        finalized_at: { type: "string", format: "date-time", nullable: true },
+        files: { type: "array", items: EvidenceFileSchema },
+        capture_error: {
+          type: "string",
+          description: "Session 无法从已销毁沙箱归档时的明确原因；不代表存在伪造 Session。",
+        },
+        synthetic: { type: "boolean" },
+        inflight: { type: "boolean" },
+        truncated: { type: "boolean" },
+      },
+    },
+  },
+};
+
+const RuntimeRegistryChannelErrorSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["error", "error_code"],
+  properties: {
+    error: { type: "string", minLength: 1 },
+    error_code: {
+      type: "string",
+      enum: ["RUNTIME_REGISTRY_CHANNEL_INVALID", "RUNTIME_REGISTRY_CHANNEL_UPDATE_FAILED", "PROJECT_SCOPE_FORBIDDEN"],
+    },
+    details: { type: "array", items: { type: "object", additionalProperties: true } },
+  },
+};
+
+const RuntimeImageChannelUnavailableSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["error", "error_code", "channel", "task"],
+  properties: {
+    error: { type: "string", minLength: 1 },
+    error_code: { type: "string", enum: ["RUNTIME_IMAGE_CHANNEL_UNAVAILABLE"] },
+    channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+    image_key: { type: "string", minLength: 1 },
+    task: { type: "object", nullable: true, additionalProperties: true },
+  },
+};
+
+/** 核心 API 操作表（OpenAPI paths 的单一来源） */
+const OPS: Op[] = [
+  ...KNOWLEDGE_MANAGEMENT_OPERATIONS,
+  // 设备准入与管理面（#505 阶段 1）：平台是权威，写操作后把期望集合整集推给 rig broker。
+  { method: "get", path: "/devices", summary: "设备登记列表（含在途租约与 rig 准入状态；不返回租约 token）", scope: "tasks:read", tags: ["Devices"] },
+  { method: "post", path: "/devices", summary: "登记/更新一台真实设备（key = broker 侧设备句柄；登记后下发给 rig）", scope: "admin", tags: ["Devices"] },
+  { method: "patch", path: "/devices/{id}", summary: "设备管理动作（enable / maintenance / revoke）；有在途租约时 revoke 返回 409", scope: "admin", tags: ["Devices"] },
+  { method: "delete", path: "/devices/{id}", summary: "删除设备登记（有在途租约时 409，需先强制释放）", scope: "admin", tags: ["Devices"] },
+  { method: "get", path: "/device-leases", summary: "设备租约列表（按 job / project / device / state 过滤）", scope: "tasks:read", tags: ["Devices"] },
+  { method: "post", path: "/device-leases/{id}/release", summary: "强制释放租约（人工抢回设备；设备回 idle 并同步 rig）", scope: "admin", tags: ["Devices"] },
+  { method: "get", path: "/devices/{id}/events", summary: "设备控制面事件时间线（append-only）", scope: "tasks:read", tags: ["Devices"] },
+  // meta
+  {
+    method: "get",
+    path: "/health",
+    summary: "存活检查（含产品版本、runtime image、dispatcher 与 OpenSandbox readiness）",
+    scope: null,
+    tags: ["Meta"],
+    responses: {
+      "200": {
+        type: "object",
+        additionalProperties: false,
+        required: ["ok", "ready", "version"],
+        oneOf: [
+          { required: ["git_revision", "runtime_images", "dispatcher", "opensandbox", "ts"] },
+          { required: ["maintenance", "maintenance_ready", "upgrade_phase", "upgrade_generation", "upgrade_runtime_role", "upgrade_target_version"] },
+        ],
+        properties: {
+          ok: { type: "boolean" },
+          ready: { type: "boolean" },
+          maintenance: { type: "boolean", enum: [true] },
+          maintenance_ready: { type: "boolean", description: "候选启动检查完成；不表示已接受业务写入" },
+          upgrade_phase: { type: "string" },
+          upgrade_generation: { type: "string" },
+          upgrade_runtime_role: { type: "string" },
+          upgrade_target_version: { type: "string" },
+          version: {
+            type: "string",
+            description: "部署版本：只认 DEEPSONAR_VERSION（不回退镜像 tag）；未设置时为空字符串，不用 workspace package.json",
+          },
+          git_revision: {
+            type: "string",
+            description: "运行中 scheduler 的 git revision（DEEPSONAR_GIT_REVISION / OPENCONTAINERS_IMAGE_REVISION）；用于对照目标 commit 是否已部署生效（#636）",
+          },
+          runtime_images: { type: "object", additionalProperties: true },
+          dispatcher: { type: "object", additionalProperties: true },
+          opensandbox: {
+            type: "object",
+            additionalProperties: false,
+            required: ["level", "domain", "ready"],
+            properties: {
+              level: { type: "string", enum: ["ok", "error", "unconfigured", "skipped"] },
+              domain: { type: "string" },
+              ready: { type: "boolean" },
+              upload_circuit: { type: "object", additionalProperties: true },
+            },
+          },
+          ts: { type: "integer" },
+        },
+      },
+    },
+  },
+  { method: "get", path: "/openapi.json", summary: "OpenAPI 3 JSON schema", scope: null, tags: ["Meta"] },
+  { method: "get", path: "/schema", summary: "API schema（默认 OpenAPI JSON；?format=markdown 返回 Markdown）", scope: null, tags: ["Meta"] },
+  { method: "get", path: "/schema.md", summary: "API Markdown 文档", scope: null, tags: ["Meta"] },
+  { method: "get", path: "/metrics", summary: "Prometheus 指标文本", scope: "authenticated", tags: ["Meta"] },
+  {
+    method: "get",
+    path: "/workers",
+    summary: "执行面 worker 节点注册表（不含凭据）",
+    scope: "admin",
+    tags: ["Runtime"],
+  },
+  {
+    method: "post",
+    path: "/workers/register",
+    summary: "Worker 持 bootstrap 与升级准入凭据注册；同 identity 重登记必须验证原节点 token 并保留租约",
+    headers: {
+      "X-DeepSonar-Worker-Generation-Token": { type: "string", description: "受管 generation 非空时必需；独立于 bootstrap token，只由宿主分发" },
+      "X-DeepSonar-Worker-Node-Token": { type: "string", description: "同 node_id 重新准入时必需，不能改 endpoint/protocol/kind" },
+    },
+    scope: null,
+    tags: ["Runtime"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["node_id", "endpoint", "opensandbox_api_key", "capacity", "protocol_version", "platform_version", "deployment_generation"],
+      properties: {
+        node_id: { type: "string", description: "非保留 id；已有节点重新准入须提供原节点 token" },
+        protocol_version: { type: "integer", minimum: 1, description: "注册 agent 协议版本，不是 OpenSandbox 版本" },
+        platform_version: { type: "string", description: "注册 agent 所属平台 Release 版本" },
+        deployment_generation: { type: "string", description: "宿主分发的升级 generation，初始部署为空" },
+        endpoint: {
+          type: "string",
+          description: "host:port，无 scheme。拒绝 loopback / link-local / 169.254.0.0/16 / 不可路由地址；可选 CIDR/hostname allowlist",
+        },
+        protocol: { type: "string", enum: ["http", "https"] },
+        opensandbox_api_key: { type: "string" },
+        capacity: {
+          type: "object",
+          additionalProperties: false,
+          required: ["max_sandboxes", "memory_mib", "cpu"],
+          properties: {
+            max_sandboxes: { type: "integer", minimum: 1 },
+            memory_mib: { type: "integer", minimum: 256 },
+            cpu: { type: "integer", minimum: 1 },
+          },
+        },
+        labels: { type: "object", additionalProperties: { type: "string" } },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/workers/heartbeat",
+    summary: "Worker 持节点 token 心跳；旧版本/generation 仅记存活并保持 unavailable，不得自行解除 fence",
+    description: "请求可带 protocol_version、platform_version、deployment_generation。受管代次心跳还须携当前 generation token；缺失或不匹配不得新领任务。公开版本/代次与旧节点 token 不能冒充新代。恢复准入必须携原节点 token 与当前 generation token 显式重新注册。",
+    headers: { "X-DeepSonar-Worker-Generation-Token": { type: "string", maxLength: 512 } },
+    scope: null,
+    tags: ["Runtime"],
+  },
+  {
+    method: "delete",
+    path: "/workers/{id}",
+    summary: "管理员显式 forget 无租约节点；仍有租约返回 409，不得级联删除执行证据",
+    scope: "admin",
+    tags: ["Runtime"],
+  },
+
+  // human authentication (API Token auth remains separate)
+  {
+    method: "get",
+    path: "/auth/status",
+    summary: "用户认证状态与首次种子状态",
+    scope: null,
+    tags: ["Auth"],
+    responses: {
+      "200": {
+        description: "认证与默认管理员提示状态",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["auth_required", "has_users", "bootstrap_available", "default_admin_credentials_active"],
+              properties: {
+                auth_required: { type: "boolean" },
+                has_users: { type: "boolean" },
+                bootstrap_available: { type: "boolean" },
+                default_admin_credentials_active: { type: "boolean" },
+                session_ttl_days: { type: "integer" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/auth/login",
+    summary: "用户名密码登录",
+    description:
+      "任意密码校验（含成功）按规范化用户名+客户端 IP 限制 5 次/5 分钟，并按 IP 限制 20 次/5 分钟。超限返回 429 LOGIN_RATE_LIMITED，不泄露用户是否存在。成功登录占额且不清桶。",
+    scope: null,
+    tags: ["Auth"],
+    body: {
+      type: "object",
+      required: ["username", "password"],
+      properties: { username: { type: "string" }, password: { type: "string", format: "password" } },
+    },
+    responses: {
+      "429": {
+        description: "登录校验次数超限",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["error", "error_code"],
+              properties: {
+                error: { type: "string" },
+                error_code: { type: "string", enum: ["LOGIN_RATE_LIMITED"] },
+                retry_after_sec: { type: "integer", minimum: 1 },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/auth/bootstrap",
+    summary: "兼容旧版的首次管理员引导（默认管理员种子后返回 409）",
+    scope: null,
+    tags: ["Auth"],
+    body: {
+      type: "object",
+      required: ["username", "password"],
+      properties: { username: { type: "string" }, password: { type: "string", format: "password" }, display_name: { type: "string" } },
+    },
+  },
+  { method: "post", path: "/auth/logout", summary: "注销当前用户会话", scope: "projects:read", tags: ["Auth"] },
+  {
+    method: "get",
+    path: "/auth/me",
+    summary: "当前认证主体",
+    scope: "authenticated",
+    tags: ["Auth"],
+    responses: {
+      "200": {
+        description: "Current actor and user projection",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              properties: {
+                auth_required: { type: "boolean" },
+                authenticated: { type: "boolean" },
+                actor: {
+                  type: "object",
+                  nullable: true,
+                  properties: {
+                    type: { type: "string" },
+                    name: { type: "string" },
+                    role: { type: "string", nullable: true },
+                    project_id: { type: "string", format: "uuid", nullable: true },
+                    scopes: { type: "array", items: { type: "string" } },
+                  },
+                },
+                user: { type: "object", nullable: true, additionalProperties: true },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/auth/change-password",
+    summary: "修改当前用户密码并刷新会话",
+    scope: "projects:read",
+    tags: ["Auth"],
+    body: {
+      type: "object",
+      required: ["current_password", "new_password"],
+      properties: { current_password: { type: "string", format: "password" }, new_password: { type: "string", format: "password" } },
+    },
+  },
+  {
+    method: "post",
+    path: "/auth/change-username",
+    summary: "修改当前用户登录名并刷新会话",
+    scope: "projects:read",
+    tags: ["Auth"],
+    body: {
+      type: "object",
+      required: ["current_password", "new_username"],
+      properties: { current_password: { type: "string", format: "password" }, new_username: { type: "string" } },
+    },
+  },
+
+  // dashboard
+  {
+    method: "get",
+    path: "/dashboard/overview",
+    summary: "态势运营总览聚合",
+    description:
+      "P0 运营看板只读聚合：项目/任务/Job/Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建/完成任务与新增 Finding、活跃项目 Top N 与最近活动。列表上限不足以做总量时不要前端全量拉取。项目级 token 只看到本项目。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    responses: {
+      "200": {
+        description: "运营总览",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["generated_at", "calendar_timezone", "totals", "distributions", "periods", "trend_7d", "active_projects", "recent_activity"],
+              properties: {
+                generated_at: { type: "string", format: "date-time" },
+                calendar_timezone: { type: "string", enum: ["Asia/Shanghai"] },
+                totals: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["projects", "tasks", "jobs", "findings"],
+                  properties: {
+                    projects: { type: "integer", minimum: 0 },
+                    tasks: { type: "integer", minimum: 0 },
+                    jobs: { type: "integer", minimum: 0 },
+                    findings: { type: "integer", minimum: 0 },
+                  },
+                },
+                distributions: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["projects", "tasks", "jobs", "findings"],
+                  properties: {
+                    projects: { type: "array", items: { $ref: "#/components/schemas/DashboardStatusBucket" } },
+                    tasks: { type: "array", items: { $ref: "#/components/schemas/DashboardStatusBucket" } },
+                    jobs: { type: "array", items: { $ref: "#/components/schemas/DashboardStatusBucket" } },
+                    findings: { type: "array", items: { $ref: "#/components/schemas/DashboardStatusBucket" } },
+                  },
+                },
+                periods: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["today", "last_7d"],
+                  properties: {
+                    today: { $ref: "#/components/schemas/DashboardPeriodCounts" },
+                    last_7d: { $ref: "#/components/schemas/DashboardPeriodCounts" },
+                  },
+                },
+                trend_7d: {
+                  type: "array",
+                  items: {
+                    allOf: [
+                      { $ref: "#/components/schemas/DashboardPeriodCounts" },
+                      { type: "object", required: ["date"], properties: { date: { type: "string", format: "date" } } },
+                    ],
+                  },
+                },
+                active_projects: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["id", "name", "status", "active_jobs", "task_count", "finding_count", "last_activity_at"],
+                    properties: {
+                      id: { type: "string", format: "uuid" },
+                      name: { type: "string" },
+                      status: { type: "string", enum: ["active", "archived"] },
+                      active_jobs: { type: "integer", minimum: 0 },
+                      task_count: { type: "integer", minimum: 0 },
+                      finding_count: { type: "integer", minimum: 0 },
+                      last_activity_at: { type: "string", format: "date-time", nullable: true },
+                    },
+                  },
+                },
+                recent_activity: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["id", "kind", "title", "at", "project_id", "project_name", "canvas_id"],
+                    properties: {
+                      id: { type: "string" },
+                      kind: { type: "string", enum: ["task", "job", "finding"] },
+                      title: { type: "string" },
+                      at: { type: "string", format: "date-time" },
+                      project_id: { type: "string", format: "uuid" },
+                      project_name: { type: "string" },
+                      canvas_id: { type: "string", nullable: true },
+                      status: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/dashboard/ops",
+    summary: "态势运营指标（P1/P2 服务端契约）",
+    description:
+      "只读运营聚合，不替代 GET /dashboard/overview。snapshot 走 current 平面（Finding severity/disposition/verify 分布、高风险未闭环、项目/任务覆盖、并发水位）；throughput 走 history 平面（近 7 日 Asia/Shanghai 终态成功率、耗时、角色对比、失败原因）。成功率分母为 succeeded|failed|timeout|orphan|cancelled；waiting_human 不算失败。confirmed_vuln 不是高风险未闭环。项目级 token 只看到本项目。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    responses: {
+      "200": {
+        description: "运营指标",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["generated_at", "calendar_timezone", "query_planes", "totals", "findings", "jobs"],
+              properties: {
+                generated_at: { type: "string", format: "date-time" },
+                calendar_timezone: { type: "string", enum: ["Asia/Shanghai"] },
+                query_planes: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["snapshot", "throughput"],
+                  properties: {
+                    snapshot: { type: "string", enum: ["current"] },
+                    throughput: { type: "string", enum: ["history"] },
+                  },
+                },
+                totals: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["projects", "tasks", "jobs", "findings"],
+                  properties: {
+                    projects: { type: "integer", minimum: 0 },
+                    tasks: { type: "integer", minimum: 0 },
+                    jobs: { type: "integer", minimum: 0 },
+                    findings: { type: "integer", minimum: 0 },
+                  },
+                },
+                findings: { type: "object" },
+                jobs: { type: "object" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/dashboard/usage",
+    summary: "用量账本看板",
+    description:
+      "聚合 job_usage_ledger（含缓存读/写 token）。period=day|week|month 为 Asia/Shanghai 滚动窗口；period=custom 时 from/to 为含首尾的日历日或 ISO 时刻，跨度最长 366 天。可选 project_id / canvas_id。不定价。项目级 token 只看到本项目。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    query: {
+      period: { type: "string", enum: ["day", "week", "month", "custom"] },
+      from: { type: "string", description: "自定义起点：YYYY-MM-DD（上海日历日）或 ISO 时刻" },
+      to: { type: "string", description: "自定义终点：YYYY-MM-DD（含当日）或 ISO 时刻" },
+      project_id: { type: "string", format: "uuid" },
+      canvas_id: { type: "string", format: "uuid" },
+    },
+    responses: {
+      "200": { description: "用量账本聚合" },
+      "400": { description: "period 不是 day/week/month/custom，或自定义时间非法、倒序、超长或缺失" },
+    },
+  },
+  {
+    method: "get",
+    path: "/dashboard/quality",
+    summary: "质量指标（#445 Phase 1）",
+    description:
+      "只读派生确认率、误报率、Verify 分歧率、人工介入率与单 Finding 成本信号。从 Job / Finding / Verify / Usage Ledger 聚合，不改变 Hub 决策。可选 project_id / canvas_id 收窄到项目或任务；项目级 token 只看到本项目。query_plane=current。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    query: {
+      project_id: { type: "string", format: "uuid" },
+      canvas_id: { type: "string", format: "uuid" },
+    },
+    responses: {
+      "200": { description: "质量指标快照" },
+    },
+  },
+  {
+    method: "get",
+    path: "/dashboard/quality/replay",
+    summary: "Hub 回放基线（#445 Phase 1）",
+    description:
+      "按固定 hub_replay schema_version=1 从现有 hub_reason Job / hub_decision 事件派生回放记录。recalled_experiences 在 Phase 1 恒为空。不改变 Hub 决策。可选 project_id / canvas_id / limit（默认 50，最大 200）。query_plane=history。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    query: {
+      project_id: { type: "string", format: "uuid" },
+      canvas_id: { type: "string", format: "uuid" },
+      limit: { type: "integer", minimum: 1, maximum: 200 },
+    },
+    responses: {
+      "200": { description: "Hub 回放基线" },
+    },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/quality",
+    summary: "项目质量指标",
+    description: "与 GET /dashboard/quality?project_id= 相同的只读质量快照，固定项目范围。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    responses: {
+      "200": { description: "项目质量指标" },
+      "404": { description: "项目不存在" },
+    },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/quality/replay",
+    summary: "项目 Hub 回放基线",
+    description: "与 GET /dashboard/quality/replay?project_id= 相同的固定格式回放记录。",
+    scope: "projects:read",
+    tags: ["Dashboard"],
+    query: {
+      limit: { type: "integer", minimum: 1, maximum: 200 },
+    },
+    responses: {
+      "200": { description: "项目 Hub 回放基线" },
+      "404": { description: "项目不存在" },
+    },
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/quality",
+    summary: "任务质量指标",
+    description: "与 GET /dashboard/quality?canvas_id= 相同的只读质量快照，固定任务画布范围。",
+    scope: "tasks:read",
+    tags: ["Dashboard"],
+    responses: {
+      "200": { description: "任务质量指标" },
+      "404": { description: "画布不存在" },
+    },
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/quality/replay",
+    summary: "任务 Hub 回放基线",
+    description: "与 GET /dashboard/quality/replay?canvas_id= 相同的固定格式回放记录。",
+    scope: "tasks:read",
+    tags: ["Dashboard"],
+    query: {
+      limit: { type: "integer", minimum: 1, maximum: 200 },
+    },
+    responses: {
+      "200": { description: "任务 Hub 回放基线" },
+      "404": { description: "画布不存在" },
+    },
+  },
+
+  // projects
+  { method: "get", path: "/projects", summary: "项目列表", scope: "projects:read", tags: ["Projects"] },
+  {
+    method: "post",
+    path: "/projects",
+    summary: "创建项目",
+    scope: "projects:write",
+    tags: ["Projects"],
+    body: {
+      type: "object",
+      required: ["name"],
+      properties: {
+        name: { type: "string" },
+        description: { type: "string" },
+      },
+    },
+  },
+  { method: "get", path: "/projects/{id}", summary: "项目详情", scope: "projects:read", tags: ["Projects"] },
+  {
+    method: "get",
+    path: "/projects/{id}/findings/summary",
+    summary: "项目风险聚合（不受 Finding 列表窗口截断）",
+    description: "与 Finding 列表共用筛选，按严重度、verify_status、disposition、profile 与来源任务计数。total 为匹配数；project_total 为项目全量。聚合在同一数据库快照计算。",
+    scope: "findings:read",
+    tags: ["Findings"],
+    query: {
+      canvas_id: { type: "string", description: "逗号分隔的来源画布 UUID，收窄聚合范围" },
+      severity: { type: "string" },
+      profile: { type: "string" },
+      category: { type: "string" },
+      verify_status: { type: "string" },
+      disposition: { type: "string" },
+      q: { type: "string", maxLength: 200 },
+    },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/reports",
+    summary: "项目报告聚合（任务总报告版本 + 各 confirmed Finding 独立报告）",
+    description: "只读编组已有 task_reports 与 finding_reports；不派发、不改版本。可选 canvas_id 收窄到单个任务。",
+    scope: "tasks:read",
+    tags: ["Reports"],
+    query: {
+      canvas_id: { type: "string", format: "uuid", description: "只返回该任务画布的报告编组" },
+    },
+  },
+  {
+    method: "patch",
+    path: "/projects/{id}",
+    summary: "更新项目",
+    scope: "projects:write",
+    tags: ["Projects"],
+    body: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        description: { type: "string" },
+        status: { type: "string", enum: ["active", "archived"] },
+      },
+    },
+  },
+  { method: "post", path: "/projects/{id}/archive", summary: "归档项目", scope: "projects:write", tags: ["Projects"] },
+
+  // shared assets
+  { method: "get", path: "/projects/{id}/shared-assets", summary: "项目共享资产目录", scope: "assets:read", tags: ["Shared Assets"] },
+  { method: "post", path: "/projects/{id}/shared-assets", summary: "上传项目共享资产（x-asset-key 指定逻辑路径）", scope: "assets:write", tags: ["Shared Assets"], bodyContentType: "application/octet-stream", body: { type: "string", format: "binary" } },
+  { method: "get", path: "/projects/{id}/shared-assets/policy", summary: "项目共享资产策略", scope: "assets:read", tags: ["Shared Assets"] },
+  { method: "patch", path: "/projects/{id}/shared-assets/policy", summary: "更新平台资产 opt-in", scope: "assets:write", tags: ["Shared Assets"], body: { type: "object", required: ["platform_enabled"], additionalProperties: false, properties: { platform_enabled: { type: "boolean" } } } },
+  { method: "get", path: "/findings/{id}/shared-assets", summary: "Finding 只读工作包目录", scope: "assets:read", tags: ["Shared Assets"] },
+  { method: "post", path: "/findings/{id}/shared-assets", summary: "上传 Finding 共享资产", scope: "assets:write", tags: ["Shared Assets"], bodyContentType: "application/octet-stream", body: { type: "string", format: "binary" } },
+  { method: "get", path: "/platform/shared-assets", summary: "平台共享资产目录（管理员）", scope: "assets:manage", tags: ["Shared Assets"] },
+  { method: "post", path: "/platform/shared-assets", summary: "上传平台共享资产（管理员）", scope: "assets:manage", tags: ["Shared Assets"], bodyContentType: "application/octet-stream", body: { type: "string", format: "binary" } },
+  { method: "post", path: "/shared-assets/{id}/archive", summary: "归档共享资产（保留历史版本）", scope: "assets:write", tags: ["Shared Assets"] },
+  { method: "get", path: "/shared-assets/{id}/content", summary: "下载共享资产内容", scope: "assets:read", tags: ["Shared Assets"] },
+
+  // tasks / canvases
+  {
+    method: "post",
+    path: "/projects/{id}/tasks",
+    summary: "创建任务（铸画布 + 入口 job）",
+    description: "可选 task_contract 使用共享版本化 schema；原始 content 保留。非安全缺项返回字段级 warning，必要条件阻塞返回 409 且不创建 Canvas/Job；派发前重新核验当前边界。自由文本未提供契约时返回未评估提示，不按 Markdown 标题拒绝。",
+    successStatus: "201",
+    responses: {
+      "201": {
+        description: "任务已创建；warning 不表示失败，不应因此重复创建",
+        content: { "application/json": { schema: {
+          type: "object", required: ["canvas_id", "job", "task_contract_warnings"],
+          properties: {
+            canvas_id: { type: "string" }, job: { type: "object" },
+            scheduled_start_at: { type: "string", format: "date-time", nullable: true },
+            task_contract_warnings: TaskContractFeedbackListSchema,
+          },
+        } } },
+      },
+      "409": {
+        description: "必要契约条件阻塞或既有任务/配置冲突；task_contract_blocked 时未创建任务",
+        content: { "application/json": { schema: {
+          type: "object", properties: {
+            error: { type: "string" }, error_code: { type: "string" },
+            task_contract_warnings: TaskContractFeedbackListSchema,
+            task_contract_blockers: TaskContractFeedbackListSchema,
+          },
+        } } },
+      },
+    },
+    scope: "tasks:write",
+    tags: ["Tasks"],
+    body: {
+      type: "object",
+      required: ["title", "content"],
+      properties: {
+        title: { type: "string" },
+        content: { type: "string" },
+        task_contract: {
+          ...z.toJSONSchema(TaskContract, { target: "openapi-3.0", io: "input" }),
+          description: "可选结构化契约；JSON UTF-8 最多 20,000 字节，prerequisites.id 必须唯一。已提供契约不论 outcome 省略/task_defined/bounty_submission，都要求目标、资产、范围、证据和验收判据完整；缺项阻塞创建/派发。研究候选须引用同任务 Fact、整个冻结契约摘要与目标判据。赏金仅附加规则：unknown 可补证但拒绝候选，supplied 来源为 operator_supplied，不认证官方真实性。研究候选不等于技术确认、高置信提交资格或任务成功。模板建议不自动成为验收承诺；权限仅能收窄，凭据仅引用，预算为规划字段。",
+        },
+        allow_egress: { type: "boolean", description: "省略时继承项目默认值" },
+        kind: {
+          type: "string",
+          enum: ["standard", "compose"],
+          default: "standard",
+          description: "普通任务从空画布开始；组合续挖任务必须显式选择历史 Finding",
+        },
+        seed_finding_ids: {
+          type: "array",
+          minItems: 1,
+          maxItems: 8,
+          uniqueItems: true,
+          items: { type: "string", format: "uuid" },
+          description: "仅 compose 可用；同项目、未否定处置的具体 Finding UUID（含 pending 等未确认状态）",
+        },
+        scheduled_start_at: {
+          type: "string",
+          format: "date-time",
+          description: "定时开始（ISO-8601）；到点前 Job 保持 pending。与 schedule_beijing_8am 同时给出时以本字段为准",
+        },
+        schedule_beijing_8am: {
+          type: "boolean",
+          description: "为 true 时在下一北京时间 08:00（Asia/Shanghai）开始；scheduled_start_at 优先",
+        },
+        device: {
+          type: "object",
+          additionalProperties: false,
+          description:
+            "真实设备接入（#495 / #504）：声明设备需求，冻结进 Job 快照；需要项目先 PATCH /projects/{id}/settings device_access_enabled=true，否则 409 device_not_authorized。已实现 transport=adb / hdc 且 exclusive=true；设备数据面由沙箱直连 rig 端点，因此设备任务必须允许出网（network_policy.allow_egress=true），否则同样 409 device_not_authorized（#506）。",
+          properties: {
+            transport: { type: "string", enum: ["adb", "hdc", "serial", "ssh", "net"], description: "已实现 adb 与 hdc（需 DEEPSONAR_DEVICE_TRANSPORTS 开启）；其余取值在契约中保留，传入会被拒（409 device_not_authorized）" },
+            key: { type: "string", description: "指定具体设备 key（默认由 broker 分配匹配设备）" },
+            model: { type: "string" },
+            exclusive: { type: "boolean", default: true },
+            ttl_sec: { type: "integer", minimum: 60, maximum: 86400, default: 1800 },
+            roles: {
+              type: "array",
+              items: { type: "string" },
+              default: ["test"],
+              description: "需要设备租约的角色名（缺省只给 test）；Hub/report/verify 不占用设备",
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/projects/{id}/events",
+    summary: "注入外部事件（source+event_id 幂等）",
+    scope: "tasks:write",
+    tags: ["Tasks"],
+    body: {
+      type: "object",
+      required: ["source", "event_id", "event_type"],
+      properties: {
+        source: { type: "string" },
+        event_id: { type: "string" },
+        event_type: { type: "string" },
+        title: { type: "string" },
+        content: { type: "string" },
+        data: { type: "object", additionalProperties: true },
+      },
+    },
+  },
+  { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", description: "每项投影 execution_state、execution_active_count 与 pending_count。", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/canvases/{id}", summary: "画布节点与边", description: "canvas 投影 execution_state、execution_active_count 与 pending_count。", scope: "tasks:read", tags: ["Tasks"] },
+  {
+    method: "get",
+    path: "/canvases/{id}/broadcasts",
+    summary: "Fact/Finding 广播投递账本",
+    description: "返回广播计划及注入 Agent 会话的投递状态；injected 不表示 Agent 已阅读或处理。响应不含广播正文、摘要或哈希。",
+    scope: "tasks:read",
+    tags: ["Tasks"],
+    query: { limit: { type: "integer", minimum: 1, maximum: 1000, default: 500 } },
+    responses: {
+      "200": {
+        type: "object",
+        additionalProperties: false,
+        required: ["canvas_id", "items", "total", "truncated"],
+        properties: {
+          canvas_id: { type: "string" },
+          total: { type: "integer", minimum: 0 },
+          truncated: { type: "boolean" },
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["id", "source_job_id", "source_node_id", "source_node_type", "target_job_id", "target_node_id", "target_node_type", "target_node_title", "target_role", "target_role_kind", "attempt", "delivery_status", "title", "error", "planned_at", "delivered_at"],
+              properties: {
+                id: { type: "string", format: "uuid" },
+                source_job_id: { type: "string", format: "uuid" },
+                source_node_id: { type: "string", format: "uuid" },
+                source_node_type: { type: "string", enum: ["fact", "finding"] },
+                target_job_id: { type: "string", format: "uuid" },
+                target_node_id: { type: "string", format: "uuid", nullable: true },
+                target_node_type: { type: "string", enum: ["intent", "job", "report"], nullable: true },
+                target_node_title: { type: "string", nullable: true },
+                target_role: { type: "string", nullable: true },
+                target_role_kind: { type: "string", nullable: true },
+                attempt: { type: "integer", minimum: 1 },
+                delivery_status: { type: "string", enum: ["planned", "injected", "failed", "unknown"] },
+                title: { type: "string" },
+                error: { type: "string", nullable: true },
+                planned_at: { type: "string", format: "date-time" },
+                delivered_at: { type: "string", format: "date-time", nullable: true },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/messages",
+    summary: "人工消息投递账本",
+    description: "返回人工消息的传输与显式确认状态。injected 仅表示已注入 Agent 会话；只有 acknowledged 表示 Agent 调用了 ack_human_message。",
+    scope: "tasks:read",
+    tags: ["Tasks"],
+    query: { limit: { type: "integer", minimum: 1, maximum: 500, default: 100 } },
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/messages",
+    summary: "向 Hub 或运行节点发送人工消息",
+    description: "message_id 是客户端 UUID 幂等键。无附件只需 tasks:write；attachment_version_ids 非空时还需 assets:read（assets:manage/admin 隐式满足），且只接受同项目 active project-scope 资产。消息先持久化；sendMessage 前确定失败记 failed，sendMessage 已尝试后的不确定结果记 unknown 且不会自动重发。",
+    scope: "tasks:write",
+    tags: ["Tasks"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["message_id", "target", "body"],
+      properties: {
+        message_id: { type: "string", format: "uuid" },
+        target: {
+          type: "object",
+          additionalProperties: false,
+          required: ["kind"],
+          properties: {
+            kind: { type: "string", enum: ["hub", "job"] },
+            node_id: { type: "string", format: "uuid", description: "kind=job 时必填" },
+          },
+        },
+        body: { type: "string", minLength: 1, maxLength: 8000 },
+        attachment_version_ids: { type: "array", maxItems: 20, uniqueItems: true, items: { type: "string", format: "uuid" }, default: [], description: "同项目、scope_type=project、status=active 的附件版本；非空时调用者还必须拥有 assets:read（assets:manage/admin 隐式满足）" },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/human-nodes/{nodeId}/ignore",
+    summary: "忽略未处理的人工介入",
+    description: "将 open 的 human 节点标为 ignored。若对应 Job 仍为 waiting_human，则关闭旧 Attempt 并恢复为 pending，让 Agent 在图上看到忽略决议后继续推进。已忽略的请求幂等返回。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+  },
+  { method: "get", path: "/canvases/{id}/summary", summary: "画布 L0 骨架（带 durable revision）", scope: "tasks:read", tags: ["Tasks"] },
+  {
+    method: "get",
+    path: "/canvases/{id}/delta",
+    summary: "按 durable revision 读取画布 L0 增量（过旧游标返回 CURSOR_GAP）",
+    scope: "tasks:read",
+    tags: ["Tasks"],
+    query: { since: { type: "string", pattern: "^[0-9]+$" } },
+    requiredQuery: ["since"],
+  },
+  { method: "get", path: "/canvases/{id}/nodes/{nodeId}", summary: "画布节点 L1 详情", scope: "tasks:read", tags: ["Tasks"] },
+  {
+    method: "get",
+    path: "/canvases/{id}/facts",
+    summary: "画布 Fact 分页列表",
+    description: "按 created_at,id 降序 keyset 分页；四类筛选支持逗号分隔多值，同一参数内按 OR 匹配。Finding 关联仅来自同项目、同画布 canonical Finding 与直接结构化证据边。",
+    scope: "tasks:read",
+    tags: ["Tasks"],
+    query: {
+      limit: { type: "integer", minimum: 1, maximum: 50, default: 50 },
+      after: { type: "string", maxLength: 512 },
+      verification_status: { type: "string", description: "逗号分隔，最多 20 个；值为 unverified|verifying|verified|rejected|needs_human" },
+      evidence_kind: { type: "string", description: "逗号分隔，最多 20 个；值为 review|test" },
+      finding_id: { type: "string", description: "逗号分隔，最多 50 个 Finding UUID" },
+      job_id: { type: "string", description: "逗号分隔，最多 50 个 Job UUID" },
+    },
+    responses: {
+      "200": {
+        type: "object",
+        additionalProperties: false,
+        required: ["items", "after", "next_cursor", "has_more", "watermark", "live"],
+        properties: {
+          items: { type: "array", items: FactSummarySchema },
+          after: { type: "string", nullable: true },
+          next_cursor: { type: "string", nullable: true },
+          has_more: { type: "boolean" },
+          watermark: { type: "string" },
+          live: { type: "boolean" },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/facts/{nodeId}",
+    summary: "画布 Fact 完整详情与直接证据链路",
+    scope: "tasks:read",
+    tags: ["Tasks"],
+    responses: {
+      "200": {
+        type: "object",
+        additionalProperties: false,
+        required: ["fact", "finding", "job", "trace"],
+        properties: {
+          fact: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "canvas_id", "title", "description", "body_json", "verification_status", "job_id", "created_at", "updated_at", "verification"],
+            properties: {
+              id: { type: "string", format: "uuid" },
+              canvas_id: { type: "string", format: "uuid" },
+              title: { type: "string" },
+              description: { type: "string" },
+              body_json: { type: "object", additionalProperties: true },
+              verification_status: { type: "string", enum: ["unverified", "verifying", "verified", "rejected", "needs_human"] },
+              job_id: { type: "string", format: "uuid", nullable: true },
+              created_at: { type: "string", format: "date-time" },
+              updated_at: { type: "string", format: "date-time" },
+              verification: FactVerificationSchema,
+            },
+          },
+          finding: FactFindingSchema,
+          job: FactJobSchema,
+          plan_criterion_source: { type: "object", nullable: true, additionalProperties: true, description: "当前 Artifact/Job/Attempt 与留存文件内容版本、eligible 和不可用原因；不包含文件原文。" },
+          plan_bindings: { type: "object", additionalProperties: true, description: "最近 32 条操作员判据绑定审计及 truncated；完整决策留在 append-only audit_logs。" },
+          goal_review_options: { type: "object", additionalProperties: true, description: "最多20条可显式关联的目标评审身份、判据、expected_review_sha256及阻塞原因；与证据来源共享8MiB预算。可选项不是操作员授权。" },
+          trace: {
+            type: "object",
+            additionalProperties: false,
+            required: ["nodes", "edges"],
+            properties: {
+              nodes: { type: "array", maxItems: 101, items: { type: "object", additionalProperties: true } },
+              edges: { type: "array", maxItems: 100, items: { type: "object", additionalProperties: true } },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "patch",
+    path: "/canvases/{id}/facts/{nodeId}/verification",
+    summary: "人工更新 Fact 验证态",
+    description: "证据信任收口，不改写 Finding verify_status/disposition。人可写 verified|rejected|needs_human；不能写 unverified/verifying。rejected→verified 必须先 reopen 到 needs_human。数量门禁只认 verified。可选 plan_binding 必须同时提供 verified 和 note；它是明确操作员判据评价，不改变派发或 Finding 状态。来源必须为同 Canvas 的成功 Job/Attempt、当前 Artifact 和实际留存证据；版本冲突返回 409。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status"],
+      properties: {
+        status: { type: "string", enum: ["verified", "rejected", "needs_human"] },
+        note: { type: "string", minLength: 1, maxLength: 2000 },
+        plan_binding: {
+          type: "object", additionalProperties: false,
+          required: ["plan_job_id", "plan_sha256", "criterion_id", "expected_source_sha256", "expected_binding_id", "assessment", "observation"],
+          properties: {
+            plan_job_id: { type: "string", format: "uuid" },
+            plan_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+            criterion_id: { type: "string", pattern: "^(completion|output-(?:[0-9]|[12][0-9]|3[01]))$" },
+            expected_source_sha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
+            expected_binding_id: { type: "string", format: "uuid", nullable: true },
+            assessment: { type: "string", enum: ["satisfies", "contradicts", "inconclusive"] },
+            observation: { type: "string", enum: ["positive", "negative", "unspecified"] },
+            goal_review: { ...z.toJSONSchema(PlanGoalReviewBinding, { target: "openapi-3.0", io: "input" }),
+              description: "可选的显式附加证明。操作员确认目标判据如何覆盖当前Plan判据；Plan必须冻结同一任务契约，关联评审与原始证据持续重验，不授予新的完成authority。" },
+          },
+        },
+      },
+    },
+    responses: {
+      "200": {
+        type: "object",
+        additionalProperties: false,
+        required: ["fact"],
+        properties: { fact: FactSummarySchema },
+      },
+      "409": {
+        description: "非 Fact 节点、非法迁移、Plan/证据版本过期、来源不可用或绑定修订冲突",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/finding-research",
+    summary: "画布语义去重与相对优先级账本",
+    description: "只读投影 finding_research_runs / clusters / members。排序与归并不改写 verify_status、severity 或报告门禁；失败 run 显式保留 error。",
+    scope: "findings:read",
+    tags: ["Findings"],
+  },
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/pause",
+    summary: "暂停任务领取新 Job（已运行 Job 安全收尾）",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    responses: { "200": TaskExecutionControlResponseSchema },
+  },
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/start",
+    summary: "解除任务暂停并唤醒调度",
+    description: "不清除定时计划，也不重试 failed/orphan/cancelled Job；归档任务返回 409。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    responses: { "200": TaskExecutionControlResponseSchema },
+  },
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/resume-session",
+    summary: "继续任务：优先使用旧冻结快照批量重跑启动中断 Worker（同 Job ID、新 Attempt）",
+    description:
+      "画布无活动 Job 时，先将全部启动中断的 role Worker 原地重新入队；旧 Attempt 与 unknown/never effect 保留且不自动重放。批次或单 Job 中任一冻结快照相对当前受治理身份过期时返回 409 SNAPSHOT_STALE 与 job_ids，不会静默使用旧模型；调用方应逐 Job 使用 rerun-current。无中断批次时才恢复单个可恢复 Job或唤醒 Hub。唤醒 Hub 时若当前 RoleConfig/Credential 无法解析，同样返回 409 SNAPSHOT_STALE。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    responses: { "200": TaskResumeResponseSchema },
+  },
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/retry",
+    summary: "重试任务（清空历史后从意图重跑）",
+    description: "清空本画布运行数据后按当前 RoleConfig/Credential 重冻入口 Hub。当前配置无法解析时返回 409 SNAPSHOT_STALE 且不清空现有数据。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+  },
+  {
+    method: "patch",
+    path: "/tasks/{canvasId}",
+    summary: "更新任务标题与内容（不改写已冻结 Job 快照）",
+    description:
+      "同步 canvases.title 与 target_json.title/content/goal，并更新 root 节点标题/body。只影响后续 Hub 读图、新派生 Job 与显式重试；不改写已在跑或已结束 Job 的 agent_snapshot_json。归档任务返回 409 TASK_ARCHIVED。",
+    scope: "tasks:write",
+    tags: ["Tasks"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 200 },
+        content: { type: "string", minLength: 1, maxLength: 20000, description: "必要背景、边界与完成标准；同步写入 target_json.content 与 goal" },
+      },
+    },
+    responses: {
+      "200": {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "title", "target_json", "has_active_jobs", "snapshot_rewritten", "message"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          project_id: { type: "string", format: "uuid" },
+          title: { type: "string" },
+          status: { type: "string" },
+          archived_at: { type: ["string", "null"] },
+          target_json: { type: "object", additionalProperties: true },
+          has_active_jobs: { type: "boolean" },
+          snapshot_rewritten: { type: "boolean", enum: [false] },
+          message: { type: "string" },
+        },
+      },
+    },
+  },
+  // jobs
+  {
+    method: "post",
+    path: "/jobs",
+    summary: "直接创建 job",
+    scope: "tasks:write",
+    tags: ["Jobs"],
+    body: {
+      type: "object",
+      required: ["project_id", "type"],
+      properties: {
+        project_id: { type: "string", format: "uuid" },
+        type: {
+          type: "string",
+          description:
+            "Registered public role name. Public POST rejects scheduler-owned hub_reason, verify_finding, and report (409). leftover audit_module / hub aliases are not current identities. verify is compatibility-only for runtime-image smoke; its scheduling purpose cannot be spoofed. Canonical system jobs are created by the Scheduler.",
+        },
+        title: { type: "string" },
+        payload: { type: "object", additionalProperties: true, properties: {
+          goal_review: { ...z.toJSONSchema(TaskGoalReviewRequest, { target: "openapi-3.0", io: "input" }),
+            oneOf: [{ required: ["finding_id"], not: { required: ["fact_id"] } }, { required: ["fact_id"], not: { required: ["finding_id"] } }],
+            description: "Independent execution-source goal review request. Exactly one finding_id or task-result fact_id with candidate_artifact_id. Reuses the source Canvas in this project; the host freezes source/contract/evidence versions. This does not grant permissions or submission eligibility." },
+        } },
+        priority: { type: "integer", description: "可选；必须等于系统固定调度档位" },
+        timeout_sec: { type: "integer" },
+        stall_sec: { type: "integer", minimum: 0, description: "本 Job 产出停滞窗口；0 关闭。优先于角色/项目/平台。" },
+        max_requests: { type: "integer", minimum: 0, description: "本 Job Token 请求上限；0 不限制。" },
+      },
+    },
+    responses: {
+      "409": {
+        description: "运行镜像尚未准备完成时返回稳定 runtime_image_not_ready，可轮询 pull-status；不是 500 HANDLER_FAILED",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["error", "error_code"],
+              properties: {
+                error: { type: "string" },
+                error_code: { type: "string", enum: ["runtime_image_not_ready"] },
+                image_key: { type: "string", nullable: true },
+                readiness: { type: "string", enum: ["ready", "preparing", "unavailable", "error"] },
+                preparing: { type: "boolean" },
+                task_id: { type: "string", nullable: true },
+                checked_at: { type: "string", format: "date-time" },
+                poll: {
+                  type: "object",
+                  properties: { path: { type: "string", enum: ["/runtime-images/registry/pull-status"] } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/jobs",
+    summary: "Job 列表",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    query: { project_id: { type: "string", format: "uuid" }, status: { type: "string" } },
+  },
+  {
+    method: "get",
+    path: "/jobs/{id}",
+    summary: "Job 详情（含事件）",
+    description:
+      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。plan_gaps 提供当前 Plan 内容 SHA、判据 ID 与文本（未加载绑定）；权威绑定状态由冻结报告与 Fact 详情读取。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+  },
+  {
+    method: "get",
+    path: "/jobs/{id}/events",
+    summary: "Job 语义事件分页",
+    description:
+      "history 平面：accepted 语义事件按 (created_at, id) 追加分页；含 attempt_id（导入历史可空）。迟到事件不入账本。不是 live 旁路，不能当作实时流。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    query: {
+      cursor: { type: "string" },
+      after: { type: "string" },
+      limit: { type: "integer", minimum: 1 },
+    },
+  },
+  {
+    method: "get",
+    path: "/jobs/{id}/evidence",
+    summary: "Job 原始证据 manifest（含有界 synthetic inflight 回退）",
+    description:
+      "finalized manifest 缺失但 attempts/*/stream.ndjson 存在时返回有界 synthetic/inflight manifest。已销毁沙箱中的 Session 不会伪造，原因通过 capture_error 返回。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    responses: { "200": JobEvidenceResponseSchema },
+  },
+  {
+    method: "get",
+    path: "/jobs/{id}/evidence/session",
+    summary: "查看 Agent CLI 原始 Session",
+    description:
+      "默认返回主 Session / vendor export。query path 选择 manifest 中的 main / subagent / vendor_export 文件。在线预览最多 8 MiB，超限 truncated=true；完整字节走 download。artifacts 列出全部可切换归档。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    query: {
+      path: { type: "string", description: "manifest 中的 Session 归档相对路径" },
+    },
+  },
+  {
+    method: "get",
+    path: "/jobs/{id}/evidence/session/download",
+    summary: "下载 Agent CLI 原始 Session",
+    description: "下载所选 Session 归档全文。query path 与查看接口相同，默认主 Session。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    query: {
+      path: { type: "string", description: "manifest 中的 Session 归档相对路径" },
+    },
+  },
+  {
+    method: "get",
+    path: "/jobs/{id}/evidence/stream",
+    summary: "读取已确认的过程流",
+    description:
+      "只读本机 BLOB_DIR 上的 evidence NDJSON/manifest。信封为 items；source 恒为 evidence。持久化确认点为 appendNormalized 落盘后；游标/去重键为 attempt_id:seq。本副本看不到文件时 visibility=unavailable，不把空页当成零丢失。未落盘窗口标 unpersisted。WS /ws 在 unavailable 时以 4415 STREAM_UNAVAILABLE 关闭。stream-bus 只作非权威投递，不是补读源，也不从过程流重放控制副作用。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+  },
+  {
+    method: "patch",
+    path: "/jobs/{id}/priority",
+    summary: "校验并写入 pending Job 的固定调度档位",
+    scope: "jobs:control",
+    tags: ["Jobs"],
+    body: {
+      type: "object",
+      required: ["priority"],
+      properties: { priority: { type: "integer", description: "不得跨越固定语义档位" } },
+    },
+  },
+  { method: "post", path: "/jobs/{id}/cancel", summary: "取消 job", scope: "jobs:control", tags: ["Jobs"] },
+  {
+    method: "post",
+    path: "/jobs/{id}/resume",
+    summary: "使用旧冻结快照重新执行（同 Job、新 Attempt）",
+    description:
+      "仅 failed/timeout/orphan/waiting_human。导入时由活动状态归档的 cancelled Job 返回 409 JOB_IMPORTED_READONLY，不可续跑。可恢复的导入 Job 仍须过当前治理 admission；身份漂移或当前配置无法解析时返回 409 SNAPSHOT_STALE，并提示调用 rerun-current。成功时保留画布和旧 Attempt/effect，清理执行元数据并原子转 pending。响应含 provenance。",
+    scope: "jobs:control",
+    tags: ["Jobs"],
+  },
+  {
+    method: "post",
+    path: "/jobs/{id}/rerun-current",
+    summary: "按当前配置重新执行（同 Job、新 Attempt、保留画布）",
+    description:
+      "仅 failed/timeout/orphan/waiting_human。导入 cancelled（活动归档）返回 409 JOB_IMPORTED_READONLY。可恢复的导入 Job 按当前治理完整重冻后再入队，不恢复历史 token/沙箱/密钥。持有 Dispatcher admission lock，并按 Canvas→Job 加锁。payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect 保持不变。响应含 provenance。",
+    scope: "jobs:control",
+    tags: ["Jobs"],
+  },
+
+  // findings / reports
+  {
+    method: "get",
+    path: "/findings",
+    summary: "Finding 列表（SARIF 对齐）",
+    description: "筛选字段支持逗号分隔多选；不同维度 AND。带 limit/cursor 返回游标页，按 created_at/id 降序，列表为当前可变视图。技术验证、严重度与语义研究排序分列返回：research / dedupe_cluster_id / canonical_finding_id / priority_score 不改写 verify_status。",
+    scope: "findings:read",
+    tags: ["Findings"],
+    query: {
+      project_id: { type: "string", description: "逗号分隔的项目 UUID（同维度 OR）" },
+      canvas_id: { type: "string" },
+      severity: { type: "string" },
+      profile: { type: "string" },
+      category: { type: "string" },
+      verify_status: { type: "string" },
+      disposition: { type: "string", description: `逗号分隔的处置状态：${FINDING_DISPOSITIONS.join(", ")}` },
+      q: { type: "string", maxLength: 200, description: "标题、位置、摘要、指纹的不区分大小写字面子串；%/_ 不作通配符" },
+      limit: { type: "integer", minimum: 1, maximum: 50 },
+      cursor: { type: "string" },
+    },
+  },
+  {
+    method: "get",
+    path: "/findings/{id}",
+    summary: "Finding 完整详情与结构化验证追踪",
+    description: "project_research_features 仅显示当前来源匹配的特征计算状态/字段覆盖；权威身份不足且关系质量门未验收，不返回跨任务同问题建议。trace 仅投影同画布的结构化来源、review/test 证据、Fact/Intent 有向流、Verify 轮次与 exact Hub 关联；不从 prompt 推断关系。research / cluster_members / last_research_run 是语义去重与相对优先级，不改写 verify_status、severity 或报告门禁。",
+    scope: "findings:read",
+    tags: ["Findings"],
+  },
+  {
+    method: "get",
+    path: "/findings/{id}/candidates",
+    summary: "当前有效的持久词法候选",
+    description: "只读活动代的规范双端词法候选；每次复核当前来源摘要与权限，隐藏过期端点。25条关系窗口加1条lookahead，失效过滤后不补扫；next_cursor推进原关系窗口。游标绑定主体与活动代/规则，变化409要求刷新。明确pending/running/succeeded/failed/stale与重建中；没有同问题/同根因、传递分组或自动处置。内部证据元信息摘要只用于失效，不返回证据内容或证据摘要；声明哈希仍读取原文，行数预算不是严格字节上限。",
+    scope: "findings:read",
+    tags: ["Findings"],
+    query: { cursor: { type: "string", maxLength: 2048, description: "前页游标；省略从当前活动代首窗口读取" } },
+  },
+  {
+    method: "get",
+    path: "/findings/{id}/lexical-search",
+    summary: "跨任务 Finding 有界词法检索",
+    description: "仅对当前项目按 UUID seek 的128条来源窗口排名，另读1条判断后续窗口，返回最多25项；不是全项目top-K或持久关系。相似仅为声明文本线索，身份/版本/根因仍未知；不读取Evidence或共享资产。每次请求重新鉴权。cursor绑定主体声明摘要与规则，主体变化返回409 CURSOR_GAP，需刷新。rank_truncated标记窗口内结果截断；无结果不表示明确不同。",
+    scope: "findings:read",
+    tags: ["Findings"],
+    query: { cursor: { type: "string", maxLength: 2048, description: "上一窗口返回的不透明游标；省略从头扫描" } },
+  },
+  {
+    method: "get",
+    path: "/findings/{id}/evidence-trace",
+    summary: "Finding Fact↔Evidence 只读溯源（确认依据可复查）",
+    description: "按 used_fact_ids 解析 canvas Fact 节点（非 artifact_evidence FK）；诊断缺失引用、错误类型、跨项目/画布、来源失败、修订不符；source_event 绑定真实当前成功 Attempt，精确 URI 以共享 8 MiB 预算重读保留字节，不以 manifest 摘要或后缀匹配冒充观测。facts.retained_bytes_verified 仅表示字节核验；runtime_claim_structured 表示 Agent 声明形状，execution_assurance 固定 not_attested，runtime_proof=false。replay.kind=evidence_integrity_check，不运行命令，也不改写 Verify、Plan 或提交资格。content_integrity_digest 为历史冻结摘要，与 Hub gate_fingerprint / evidence_signature 分离。不扩大 findings:read 权限。",
+    scope: "findings:read",
+    tags: ["Findings"],
+  },
+  {
+    method: "patch",
+    path: "/findings/{id}/disposition",
+    summary: "人工更新 Finding 处置态",
+    description: "disposition 为人工业务闭环；confirmed_vuln 仍要求 verify_status=confirmed，不得旁路技术确认。",
+    scope: "findings:write",
+    tags: ["Findings"],
+    body: {
+      type: "object",
+      required: ["disposition"],
+      additionalProperties: false,
+      properties: {
+        disposition: { type: "string", enum: [...FINDING_DISPOSITIONS] },
+        note: { type: "string", maxLength: 2000 },
+      },
+    },
+  },
+  {
+    method: "patch",
+    path: "/findings/{id}/verify-status",
+    summary: "人工将等待中的 Finding 收口为 needs_human",
+    description: "仅允许同画布存在 waiting_human Hub Job 且尚未 confirmed 的 Finding；confirmed 只能由 Scheduler Verify 收口。",
+    scope: "findings:write",
+    tags: ["Findings"],
+    body: {
+      type: "object",
+      required: ["verify_status"],
+      additionalProperties: false,
+      properties: {
+        verify_status: { type: "string", enum: ["needs_human"] },
+        reason: { type: "string", minLength: 1, maxLength: 2000 },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/findings/{id}/verify",
+    summary: "人工强制创建下一轮 Verify",
+    description: "显式人工动作可绕过严重度与已有证据门，但不绕过活动 Verify 唯一约束、最大轮次、画布归属和锁序。",
+    scope: "jobs:control",
+    tags: ["Findings"],
+    successStatus: "202",
+    body: {
+      type: "object",
+      additionalProperties: false,
+      properties: { reason: { type: "string", minLength: 1, maxLength: 2000 } },
+    },
+    responses: {
+      "202": {
+        type: "object",
+        additionalProperties: false,
+        required: ["finding_id", "verify_job_id", "round_id", "attempt", "resumed_job_id"],
+        properties: {
+          finding_id: { type: "string", format: "uuid" },
+          verify_job_id: { type: "string", format: "uuid" },
+          round_id: { type: "string", format: "uuid" },
+          attempt: { type: "integer", minimum: 1 },
+          resumed_job_id: { type: "string", format: "uuid", nullable: true },
+        },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/findings/{id}/evidence-jobs",
+    summary: "人工创建结构化补证 Job",
+    description: "Scheduler 创建全新的 review/test Job，并冻结 finding_id、runtime snapshot、priority 与 verification_followup。",
+    scope: "jobs:control",
+    tags: ["Findings"],
+    successStatus: "202",
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["role"],
+      properties: { role: { type: "string", enum: ["review", "test"] } },
+    },
+    responses: {
+      "202": {
+        type: "object",
+        additionalProperties: false,
+        required: ["finding_id", "job_id", "role", "resumed_job_id"],
+        properties: {
+          finding_id: { type: "string", format: "uuid" },
+          job_id: { type: "string", format: "uuid" },
+          role: { type: "string", enum: ["review", "test"] },
+          resumed_job_id: { type: "string", format: "uuid", nullable: true },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/findings/{id}/report",
+    summary: "读取最新单 Finding 报告元数据",
+    scope: "findings:read",
+    tags: ["Reports"],
+  },
+  {
+    method: "post",
+    path: "/findings/{id}/report",
+    summary: "为 confirmed Finding 生成或刷新版本化报告",
+    description: "同一 Finding 最多一个活动报告；刷新追加版本，不改写 Finding 技术状态。",
+    scope: "jobs:control",
+    tags: ["Reports"],
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/report",
+    summary: "画布最新任务报告元数据",
+    description: "新任务报告的冻结输入包含有界 Plan 审计缺口，Markdown 附带只读说明；模型完成声明不构成判据满足，缺少证据绑定为 unknown。历史报告不回写。",
+    scope: "tasks:read",
+    tags: ["Reports"],
+    responses: {
+      "200": {
+        type: "object",
+        required: ["id", "canvas_id", "project_id", "version", "status", "input_uri", "input_sha256"],
+        properties: {
+          id: { type: "string", format: "uuid" },
+          canvas_id: { type: "string" },
+          project_id: { type: "string", format: "uuid" },
+          version: { type: "integer", minimum: 1 },
+          status: { type: "string", enum: ["pending", "generating", "succeeded", "failed"] },
+          input_uri: { type: "string" },
+          input_sha256: { type: "string" },
+          markdown_uri: { type: "string", nullable: true },
+          sarif_uri: { type: "string", nullable: true },
+          summary_json: { type: "object", additionalProperties: true },
+          error: { type: "string", nullable: true },
+        },
+      },
+      "404": {
+        description: "任务报告尚未生成，返回当前服务端完成门阻塞原因",
+        type: "object",
+        required: ["error", "reason", "blocking_findings"],
+        properties: {
+          error: { type: "string" },
+          reason: {
+            type: "string",
+            enum: [
+              "canvas_not_found",
+              "root_not_found",
+              "root_not_ready",
+              "active_work",
+              "no_role_work",
+              "plan_not_ready",
+              "findings_not_converged",
+              "report_not_dispatched",
+              "report_failed",
+            ],
+          },
+          root_status: { type: "string", nullable: true },
+          min_verify_severity: { type: "string", nullable: true },
+          blockers: { type: "array", items: { type: "string" } },
+          blocking_findings: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["finding_id", "title", "verify_status", "issue"],
+              properties: {
+                finding_id: { type: "string" },
+                title: { type: "string" },
+                severity: { type: "string", nullable: true },
+                verify_status: { type: "string" },
+                issue: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/reports",
+    summary: "按版本倒序读取画布任务报告历史",
+    scope: "tasks:read",
+    tags: ["Reports"],
+  },
+  {
+    method: "get",
+    path: "/canvases/{id}/report/availability",
+    summary: "读取任务报告完成门状态",
+    description: "报告尚未生成时返回服务端权威的 Root、活跃工作、阈值和阻塞 Finding 状态；不修改任务状态。",
+    scope: "tasks:read",
+    tags: ["Reports"],
+    responses: {
+      "200": {
+        type: "object",
+        required: ["reason", "blocking_findings"],
+        properties: {
+          reason: { type: "string" },
+          root_status: { type: "string", nullable: true },
+          min_verify_severity: { type: "string", nullable: true },
+          blockers: { type: "array", items: { type: "string" } },
+          blocking_findings: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["finding_id", "title", "verify_status", "issue"],
+              properties: {
+                finding_id: { type: "string" },
+                title: { type: "string" },
+                severity: { type: "string", nullable: true },
+                verify_status: { type: "string" },
+                issue: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/reports/{id}/markdown",
+    summary: "下载 Markdown 报告",
+    description: "仅返回服务端已生成的 Markdown 文件；响应为 attachment，不是 JSON。",
+    scope: "tasks:read | findings:read",
+    tags: ["Reports"],
+    responses: {
+      "200": {
+        description: "Markdown attachment",
+        headers: {
+          "Content-Disposition": {
+            description: "安全的 report-<id>.md 下载文件名",
+            schema: { type: "string" },
+          },
+        },
+        content: { "text/markdown": { schema: { type: "string", format: "binary" } } },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/reports/{id}/sarif",
+    summary: "下载 SARIF 报告",
+    description: "仅返回服务端已生成的 SARIF 2.1.0 文件；响应为 attachment，不是 JSON。",
+    scope: "tasks:read",
+    tags: ["Reports"],
+    responses: {
+      "200": {
+        description: "SARIF attachment",
+        headers: {
+          "Content-Disposition": {
+            description: "安全的 report-<id>.sarif 下载文件名",
+            schema: { type: "string" },
+          },
+        },
+        content: { "application/sarif+json": { schema: { type: "string", format: "binary" } } },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/report/retry",
+    summary: "失败报告重试",
+    scope: "jobs:control",
+    tags: ["Reports"],
+    responses: {
+      "200": {
+        type: "object",
+        required: ["ok"],
+        properties: { ok: { type: "boolean" }, report_id: { type: "string", format: "uuid" } },
+      },
+      "409": {
+        description: "报告尚未失败、已经成功或不满足重试门禁",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/report/refresh",
+    summary: "按当前收敛输入刷新任务报告",
+    description: "输入摘要不变时幂等返回；发生变化时追加版本，不覆盖历史报告。",
+    scope: "jobs:control",
+    tags: ["Reports"],
+  },
+
+  // settings
+  { method: "get", path: "/global-settings", summary: "全局规则", scope: "agents:read", tags: ["Settings"] },
+  {
+    method: "patch",
+    path: "/global-settings",
+    summary: "合并更新全局规则",
+    scope: "agents:write",
+    tags: ["Settings"],
+    body: {
+      type: "object",
+      required: ["rules"],
+      properties: {
+        rules: {
+          type: "object",
+          additionalProperties: true,
+          description: "全局规则。maxGlobalJobs / maxJobsPerProject / maxConcurrentProvisioning 为 1–1000；stallSec / jobTokenMaxRequests 为 0–上限（0=不限制）；auditTimeoutSec / verifyTimeoutSec / provisionTimeoutSec 为配置中心第一批；maxConcurrentJobs 只能写在项目设置。",
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/platform/updates",
+    summary: "平台版本发现：最近一次清单同步检查结果",
+    description: "#740 P1 第 2 片：只读。比较当前部署版本与 runtime-image-registry.json 的 platform 段（或 legacy platform_version）。GitHub 不可达时只返回 check_error。项目级 token 拒绝（403 PLATFORM_UPDATE_PROJECT_TOKEN_FORBIDDEN）。不提供升级 apply。",
+    scope: "admin",
+    tags: ["Settings"],
+    responses: { "200": PlatformUpdateStatusSchema },
+  },
+  {
+    method: "get",
+    path: "/platform/claims",
+    summary: "平台级全局暂停领取状态与在途数量",
+    description: "#740：持久化在 PostgreSQL，所有 Scheduler 副本在 claim advisory lock 内读取；重启后保持。项目级 token 拒绝（403 PLATFORM_CLAIMS_PROJECT_TOKEN_FORBIDDEN）。",
+    scope: "tasks:read",
+    tags: ["Settings"],
+    responses: { "200": PlatformClaimsStatusSchema },
+  },
+  {
+    method: "post",
+    path: "/platform/claims/pause",
+    summary: "开启平台级全局暂停领取（新 Job 仍可入队但不领取）",
+    description: "只阻止新的 pending → claimed，不取消、不杀、不重放在途 Job。同一原因重复调用幂等（changed=false）；已因其他原因暂停返回 409 PLATFORM_CLAIMS_ALREADY_PAUSED。写审计 platform.claims_pause。",
+    scope: "admin",
+    tags: ["Settings"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["reason"],
+      properties: {
+        reason: { type: "string", enum: ["platform_upgrade", "maintenance"] },
+        note: { type: "string", minLength: 1, maxLength: 500 },
+      },
+    },
+    responses: {
+      "200": PlatformClaimsStatusSchema,
+      "409": { description: "已因其他原因暂停", content: { "application/json": { schema: ErrorSchema } } },
+    },
+  },
+  {
+    method: "post",
+    path: "/platform/claims/resume",
+    summary: "解除平台级全局暂停领取并唤醒调度",
+    description: "未暂停时幂等（changed=false）。可选 reason：仅当当前暂停原因一致时解除，否则 409 PLATFORM_CLAIMS_PAUSE_REASON_MISMATCH。写审计 platform.claims_resume。",
+    scope: "admin",
+    tags: ["Settings"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        reason: { type: "string", enum: ["platform_upgrade", "maintenance"] },
+      },
+    },
+    responses: {
+      "200": PlatformClaimsStatusSchema,
+      "409": { description: "暂停原因不一致，未解除", content: { "application/json": { schema: ErrorSchema } } },
+    },
+  },
+  { method: "get", path: "/projects/{id}/settings", summary: "项目规则与 Agent 配置", description: "credential_ids_configured 表示 enabled_credential_ids 是否显式收紧；false 时数组为空但范围动态继承项目可访问凭据，读取不写入配置。", scope: "agents:read", tags: ["Settings"] },
+  {
+    method: "get",
+    path: "/readiness",
+    summary: "Global task readiness/preflight",
+    description: "Read-only checks for governed Hub/Worker RoleConfig, Credential and CLI/model compatibility, connection/model evidence, trusted real-mode runtime images, and network/material policy. Secrets, env names and arbitrary OCI refs are never returned.",
+    scope: "agents:read",
+    tags: ["Settings"],
+    query: {
+      allow_egress: { type: "string", enum: ["true", "false"], description: "Optional task network override; does not persist or create a task." },
+      material_source: { type: "string", enum: ["workspace_or_offline", "external_or_workspace", "declared", "unspecified"] },
+    },
+    responses: { "200": { $ref: "#/components/schemas/ReadinessResponse" } },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/readiness",
+    summary: "Project task readiness/preflight",
+    description: "Uses the project role enablement list and effective network default; allow_egress simulates one task override only.",
+    scope: "agents:read",
+    tags: ["Settings"],
+    query: {
+      allow_egress: { type: "string", enum: ["true", "false"], description: "Optional task network override; does not persist or create a task." },
+      material_source: { type: "string", enum: ["workspace_or_offline", "external_or_workspace", "declared", "unspecified"] },
+    },
+    responses: { "200": { $ref: "#/components/schemas/ReadinessResponse" } },
+  },
+  {
+    method: "patch",
+    path: "/projects/{id}/settings",
+    summary: "更新项目规则与 Agent 配置",
+    scope: "agents:write",
+    tags: ["Settings"],
+    body: {
+      type: "object",
+      properties: {
+        enabled_agent_clis: { type: "array", minItems: 1, items: { type: "string", enum: ["claude-code", "pi", "dsh"] } },
+        enabled_credential_ids: { type: "array", items: { type: "string", format: "uuid" }, description: "显式收紧凭据范围；省略不改变，空数组禁止所有凭据。" },
+        default_agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], nullable: true, description: "仅跨CLI候选的明确偏好；null清除" },
+        default_credential_id: { type: "string", format: "uuid", nullable: true },
+        default_model_ref: { type: "string", nullable: true },
+        rules: {
+          type: "object",
+          additionalProperties: true,
+          description: "项目规则覆盖。maxConcurrentJobs 为 0–1000 或 null（清除后继承全局 maxJobsPerProject）；不得修改全局并发键。",
+        },
+        device_access_enabled: {
+          type: "boolean",
+          nullable: true,
+          description: "真实设备接入（#495）项目级 opt-in；默认关，null 清除。未 opt-in 的项目无法为任务申请设备租约（409 device_not_authorized）。",
+        },
+      },
+    },
+  },
+
+  // roles
+  {
+    method: "get",
+    path: "/agent-roles",
+    summary: "角色注册表（含调度器分配色）",
+    description: "读取全局角色注册表。项目限定 token 可读取注册表，但不能创建、修改或删除角色（写操作返回 403 PROJECT_SCOPE_FORBIDDEN）。",
+    scope: "agents:read",
+    tags: ["Roles"],
+  },
+  {
+    method: "post",
+    path: "/agent-roles",
+    summary: "创建角色（颜色由调度器分配）",
+    description: "仅 unscoped/admin actor 可修改全局角色注册表；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "agents:write",
+    tags: ["Roles"],
+    body: {
+      type: "object",
+      required: ["name"],
+      properties: {
+        name: { type: "string", description: "即 job.type" },
+        title: { type: "string" },
+        description: { type: "string" },
+      },
+    },
+  },
+  {
+    method: "patch",
+    path: "/agent-roles/{id}",
+    summary: "更新角色（name 不可改）",
+    description: "{id} 是 agent_roles.id UUID，不是角色名。非 UUID 返回 400 INVALID_ROLE_ID。仅 unscoped/admin actor 可修改全局角色注册表；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "agents:write",
+    tags: ["Roles"],
+  },
+  {
+    method: "delete",
+    path: "/agent-roles/{id}",
+    summary: "删除 Hub 可下发角色（系统/Hub 角色 409）",
+    description: "{id} 是 agent_roles.id UUID，不是角色名。非 UUID 返回 400 INVALID_ROLE_ID。仅 unscoped/admin actor 可修改全局角色注册表；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "agents:write",
+    tags: ["Roles"],
+  },
+  { method: "get", path: "/projects/{id}/roles", summary: "项目视角角色启用清单", scope: "agents:read", tags: ["Roles"] },
+
+  // role-configs
+  {
+    method: "get",
+    path: "/role-configs/global",
+    summary: "全局 RoleConfig 清单",
+    description: "项目限定 token 可读取全局 RoleConfig（#690：响应不再含凭据绑定；credentials 恒为空数组）。",
+    scope: "agents:read",
+    tags: ["RoleConfig"],
+  },
+  {
+    method: "get",
+    path: "/role-configs/bindable",
+    summary: "RoleConfig 元数据清单（全局/项目）",
+    description: "项目限定 token 只能看到全局与本项目 RoleConfig。#690：can_bind 恒为 false，不再返回凭据绑定字段。",
+    scope: "agents:read",
+    tags: ["RoleConfig", "Credentials"],
+    responses: {
+      "200": {
+        description: "Bindable RoleConfig metadata",
+        content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/BindableRoleConfig" } } } },
+      },
+    },
+  },
+  {
+    method: "patch",
+    path: "/role-configs/{id}/agent-cli",
+    summary: "仅更新全局 RoleConfig 的 CLI 偏好（null 清除）",
+    description: "{id} 是 role_configs.id UUID（GET /role-configs/bindable 的 id），不是角色名。非 UUID 返回 400 INVALID_ROLE_CONFIG_ID。项目 RoleConfig 返回 400 PROJECT_ROLE_IDENTITY_FORBIDDEN。不改写配置文件。#690：RoleConfig 不再绑定凭据。",
+    scope: "agents:write",
+    tags: ["RoleConfig"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["agent_cli"],
+      properties: {
+        agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], nullable: true },
+      },
+    },
+  },
+  {
+    method: "patch",
+    path: "/role-configs/{id}/runtime-image",
+    summary: "仅更新全局 RoleConfig 的 runtime_image_key（Provider 绑定列表用）",
+    description: "{id} 是 role_configs.id UUID（GET /role-configs/bindable 的 id），不是角色名。非 UUID 返回 400 INVALID_ROLE_CONFIG_ID。项目 RoleConfig 返回 400，项目不得写入 runtime_image_key；镜像由平台目录与 Hub 提案决定；全局配置的 null 表示系统默认底座（deepsonar-base）。",
+    scope: "agents:write",
+    tags: ["RoleConfig", "RuntimeImages"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["runtime_image_key"],
+      properties: {
+        runtime_image_key: { type: "string", nullable: true },
+      },
+    },
+  },
+  {
+    method: "put",
+    path: "/role-configs/global/{roleId}",
+    summary: "全局 RoleConfig upsert（声明式全量替换）",
+    description: "{roleId} 是 agent_roles.id UUID（GET /agent-roles 的 id，或 GET /role-configs/bindable 的 role_id），不是角色名（如 explore）。非 UUID 返回 400 INVALID_ROLE_ID。仅 unscoped/admin actor 可写全局 RoleConfig；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。#690：不再接受 credentials / pi_extensions。",
+    scope: "agents:write",
+    tags: ["RoleConfig"],
+    body: { $ref: "#/components/schemas/RoleConfigInput" },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/role-configs",
+    summary: "项目 RoleConfig 来源清单",
+    description: "项目限定 token 只能读取所属项目。#690：RoleConfig 响应不再含凭据绑定。",
+    scope: "agents:read",
+    tags: ["RoleConfig"],
+  },
+  {
+    method: "put",
+    path: "/projects/{id}/role-configs/{roleId}",
+    summary: "项目 RoleConfig 覆盖 upsert",
+    description: "{roleId} 是 agent_roles.id UUID（不是角色名）。非 UUID 的项目 id 返回 400 INVALID_ID，非 UUID 的 roleId 返回 400 INVALID_ROLE_ID。项目限定 token 只能写所属项目 RoleConfig；runtime_image_key 非 null 返回 400，项目不得写入 runtime_image_key；镜像由平台目录与 Hub 提案决定；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。#757：不接受 agent_cli / model；请使用项目 Agent 偏好。#690：不再接受 credentials / pi_extensions。",
+    scope: "agents:write",
+    tags: ["RoleConfig"],
+    body: { allOf: [{ $ref: "#/components/schemas/RoleConfigInput" }, { not: { anyOf: [{ required: ["agent_cli"] }, { required: ["model"] }] } }] },
+  },
+  {
+    method: "delete",
+    path: "/projects/{id}/role-configs/{roleId}",
+    summary: "删除项目覆盖，回落全局",
+    description: "{roleId} 是 agent_roles.id UUID（不是角色名）。非 UUID 的项目 id 返回 400 INVALID_ID，非 UUID 的 roleId 返回 400 INVALID_ROLE_ID。项目限定 token 只能删除所属项目 RoleConfig 覆盖；跨项目访问返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "agents:write",
+    tags: ["RoleConfig"],
+  },
+
+  // trusted runtime image catalog / marketplace
+  {
+    method: "get",
+    path: "/runtime-images",
+    summary: "镜像市场列表（可按项目和关键字过滤）。#691：项目不再钉版本；返回 project_enabled / visible_project_ids，版本跟随平台 channel 最新 trusted。",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+    query: { project_id: { type: "string", format: "uuid" }, search: { type: "string" } },
+  },
+  {
+    method: "get",
+    path: "/runtime-images/contract-selftest",
+    summary: "只读自检：catalog tools_manifest_sha256 与本地镜像双哈希比对",
+    description: "对当前目录每个 image key 的当前版本，尝试在本机 Docker 比对 catalog 登记的 tools_manifest_sha256 与镜像内 /opt/deepsonar/tool-manifest.json 的文件字节哈希及内嵌 manifest.sha256。双口径接受规则与 #633 / OpenSandbox provision 一致（任一匹配即通过）。本地不存在的镜像返回 skipped_not_local，不使整次自检失败。ok 仅在所有非 skipped 项 match 时为 true。禁止把手工 UPDATE tools_manifest_sha256 当作长期缓解。",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+    responses: {
+      "200": {
+        description: "自检结果",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["ok", "checked_at", "results"],
+              additionalProperties: false,
+              properties: {
+                ok: { type: "boolean" },
+                checked_at: { type: "string", format: "date-time" },
+                results: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    required: ["image_key", "catalog_sha256", "match", "status"],
+                    additionalProperties: false,
+                    properties: {
+                      image_key: { type: "string" },
+                      version: { type: "string", nullable: true },
+                      digest: { type: "string", nullable: true },
+                      image_ref: { type: "string", nullable: true },
+                      catalog_sha256: { type: "string", nullable: true },
+                      file_bytes_sha256: { type: "string", nullable: true },
+                      embedded_sha256: { type: "string", nullable: true },
+                      match: { type: "boolean", nullable: true },
+                      status: {
+                        type: "string",
+                        enum: ["ok", "mismatch", "skipped_not_local", "skipped_no_catalog_hash", "error"],
+                      },
+                      detail: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/runtime-images/registry",
+    summary: "获取静态注册表及官方环境覆盖的最新清单",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+    description: "仅返回经过解析校验的不可变 @sha256:64hex 版本；未核实的官方 digest 不会被静态清单伪造。响应保留 schema/images 字段，并附 selected_channel=github|dockerhub|aliyun-acr、source=remote|bundled、fallback、error（脱敏）、checked_at 与按 image_key 关联的 image_status（readiness/preparing/error_code/task_id/phase，操作员可见 immutable_ref）。selected_channel 由平台全局设置决定，不接受 query、env 或请求体覆盖。私有 GitHub Release 可通过 DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN 读取；凭据只发往 github.com/api.github.com。",
+    responses: {
+      "200": {
+        description: "注册表清单与平台选中的官方分发通道",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["schema", "images", "selected_channel"],
+              properties: {
+                schema: { type: "string", enum: ["deepsonar.registry/v1", "deepsonar.registry/v2"] },
+                schema_version: { type: "integer", enum: [1, 2] },
+                images: { type: "array", items: { type: "object", additionalProperties: true } },
+                selected_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+                source: { type: "string", enum: ["remote", "bundled", "upload"] },
+                fallback: { type: "boolean" },
+                error: { type: "string", nullable: true },
+                stale: { type: "boolean", description: "#761：本次拉取瞬时失败，响应仍为上次成功清单；不单独触发平台更新失败提示。" },
+                consecutive_failures: { type: "integer", minimum: 0, description: "#761：连续拉取失败次数。" },
+                last_success_at: { type: "string", format: "date-time", description: "#761：最近一次成功拉取时间。" },
+                checked_at: { type: "string", format: "date-time" },
+                image_status: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["image_key", "readiness", "preparing", "checked_at", "phase"],
+                    properties: {
+                      image_key: { type: "string" },
+                      immutable_ref: { type: "string", nullable: true },
+                      readiness: { type: "string", enum: ["ready", "preparing", "unavailable", "error"] },
+                      preparing: { type: "boolean" },
+                      error_code: { type: "string", nullable: true },
+                      error: { type: "string", nullable: true },
+                      checked_at: { type: "string", format: "date-time" },
+                      task_id: { type: "string", nullable: true },
+                      phase: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "patch",
+    path: "/runtime-images/registry/channel",
+    summary: "切换官方运行时镜像分发通道",
+    description: "仅 unscoped/admin actor 可在 github、dockerhub、aliyun-acr 间修改平台全局通道；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。先异步准备全局默认与现存项目有效镜像；缺图时把引用加入本机拉取队列并返回 202 preparing/saved:false 与当前整队列 pull-status，旧通道保持有效，准备完成后重试才提交。与项目启用共用同一队列，不抢占以免丢掉已入队项。绝不跨通道回退，历史 Job 快照不改写。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      additionalProperties: false,
+      required: ["channel"],
+      properties: {
+        channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+      },
+    },
+    responses: {
+      "200": {
+        description: "通道已切换",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["selected_channel", "previous_channel"],
+              properties: {
+                selected_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+                previous_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+              },
+            },
+          },
+        },
+      },
+      "202": {
+        description: "镜像尚未就绪或已有准备任务，通道未落库",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["status", "saved", "selected_channel", "proposed_channel", "task"],
+              properties: {
+                status: { type: "string", enum: ["preparing"] },
+                saved: { type: "boolean", enum: [false] },
+                selected_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+                proposed_channel: { type: "string", enum: [...RUNTIME_IMAGE_REGISTRY_CHANNELS] },
+                task: { type: "object", additionalProperties: true },
+              },
+            },
+          },
+        },
+      },
+      "400": { description: "通道请求体无效", content: { "application/json": { schema: RuntimeRegistryChannelErrorSchema } } },
+      "403": { description: "项目限定 token 不得修改全局通道", content: { "application/json": { schema: RuntimeRegistryChannelErrorSchema } } },
+      "500": { description: "全局通道更新失败", content: { "application/json": { schema: RuntimeRegistryChannelErrorSchema } } },
+    },
+  },
+  {
+    method: "post",
+    path: "/runtime-images/registry/sync",
+    summary: "同步当前部署内置镜像市场文件",
+    description: "重新读取并校验当前部署内的注册表文件与环境变量覆盖，幂等同步官方产品和版本到本地数据库；不会联网获取任意 URL。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+  },
+  {
+    method: "post",
+    path: "/runtime-images/registry/pull",
+    summary: "异步拉取同步后的远程不可变镜像",
+    description: "仅按平台当前 selected_channel 后台执行无 shell 的 docker pull；默认每个官方产品只拉最新一条可用版本（历史 trusted digest 保留给 pin/Job 快照，不批量预热）。缺少该通道引用时返回 409 RUNTIME_IMAGE_CHANNEL_UNAVAILABLE，绝不跨通道降级。本地 raw image ID 不会进入任务。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+    responses: {
+      "409": {
+        description: "所选官方镜像通道没有可用的可信不可变引用",
+        content: { "application/json": { schema: RuntimeImageChannelUnavailableSchema } },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/runtime-images/registry/reconcile",
+    summary: "对账运行时镜像在各节点的本地版本",
+    description: "默认只读：从受信 Worker registry 枚举远端节点（含离线/过期节点），本地节点检查平台当前所需的不可变 digest；远端尚无镜像 inspect 平面，明确返回 unsupported，不用 Scheduler 宿主结果冒充。请求体 `repair: true` 仅对本地缺失 digest 发起受治理的定向拉取（digest 不变，返回 202 与拉取任务）；远端检查与修复尚未实现。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+  },
+  {
+    method: "get",
+    path: "/runtime-images/registry/pull-status",
+    summary: "查询运行时镜像异步拉取状态",
+    description: "返回当前或最近一次持久化的拉取任务（queued/running/succeeded/failed/interrupted）。Scheduler 重启把 in-flight 标为 interrupted（error_code=scheduler_restarted），不自动 resume；无历史时返回 idle。条目可按 image_key / immutable ref、task_id、phase、error_code 与时间戳关联。",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+    responses: {
+      "200": {
+        description: "当前或最近一次拉取任务；无历史时为 idle",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["task_id", "status", "phase", "total", "completed", "items", "checked_at"],
+              properties: {
+                task_id: { type: "string", nullable: true },
+                purpose: { type: "string" },
+                status: { type: "string", enum: ["idle", "queued", "running", "succeeded", "failed", "interrupted"] },
+                phase: { type: "string" },
+                started_at: { type: "string", format: "date-time", nullable: true },
+                finished_at: { type: "string", format: "date-time", nullable: true },
+                interrupted_at: { type: "string", format: "date-time", nullable: true },
+                interrupt_reason: { type: "string", nullable: true },
+                error_code: { type: "string", nullable: true },
+                error: { type: "string", nullable: true },
+                total: { type: "integer" },
+                completed: { type: "integer" },
+                checked_at: { type: "string", format: "date-time" },
+                items: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    required: ["image_key", "image_ref", "status"],
+                    properties: {
+                      image_key: { type: "string" },
+                      image_ref: { type: "string" },
+                      status: { type: "string", enum: ["queued", "running", "succeeded", "failed"] },
+                      phase: { type: "string" },
+                      error: { type: "string", nullable: true },
+                      error_code: { type: "string", nullable: true },
+                      started_at: { type: "string", format: "date-time", nullable: true },
+                      finished_at: { type: "string", format: "date-time", nullable: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/runtime-images/{id}/detect-local",
+    summary: "只读检测本地 Docker 运行时镜像",
+    description: "输入 runtime image product UUID 与 image_ref（可为本地 tag）；服务端使用无 shell docker image inspect 返回存在性、Id、RepoDigests、os/arch、契约/产品/工具清单标签、不可变采用引用与 reasons。检测不会写库，也不会因 mutable tag 自动信任。",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["image_ref"],
+      properties: { image_ref: { type: "string", description: "本地 tag、digest 或完整 sha256 image ID" } },
+    },
+  },
+  {
+    method: "post",
+    path: "/runtime-images/{id}/adopt-local",
+    summary: "管理员显式采用已检测的本地运行时镜像",
+    description: "仅适用于官方产品；第三方镜像仍须走导入、准入扫描与批准。接口再次 inspect 防 TOCTOU，要求 expected_image_id 与当前 Id 一致，并通过 contract、产品 image-key/toolset 兼容标签、/opt/deepsonar/tool-manifest.json 门禁。优先采用匹配产品仓库 RepoDigest，否则使用完整 sha256 image ID；写入 trusted/local-only 与审计，不自动授权项目。",
+    scope: "images:approve",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["image_ref", "expected_image_id"],
+      properties: {
+        image_ref: { type: "string" },
+        expected_image_id: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        version: { type: "string" },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/runtime-images/{id}/official-digest",
+    summary: "登记官方镜像 registry 或本地构建 digest",
+    description: "默认 source=registry，仅接受 allowlist 内的 name@sha256:64hex；source=local-build 时仅允许 local-docker、官方产品和完整 sha256:64hex 本地 image ID，服务端通过无 shell docker image inspect 校验 contract、产品 image-key/toolset 兼容标签与工具清单路径后直接 trusted，不创建扫描记录，不进入 registry 导出清单。旧版 tools-manifest/toolset 标签仍受兼容门禁约束。",
+    scope: "images:approve",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["image_ref"],
+      properties: {
+        image_ref: { type: "string", description: "registry: name@sha256:64hex；local-build: sha256:64hex" },
+        version: { type: "string" },
+        source: { type: "string", enum: ["registry", "local-build"], default: "registry" },
+      },
+    },
+  },
+  { method: "get", path: "/runtime-images/{id}", summary: "镜像、不可变版本与准入扫描证据", scope: "images:read", tags: ["Runtime Images"] },
+  {
+    method: "post",
+    path: "/runtime-images/import",
+    summary: "导入第三方 OCI 镜像到隔离区",
+    description: "平台级目录写入。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["image_key", "name", "publisher", "image_ref"],
+      properties: {
+        image_key: { type: "string" },
+        name: { type: "string" },
+        description: { type: "string" },
+        publisher: { type: "string" },
+        source_url: { type: "string", format: "uri" },
+        image_ref: { type: "string", description: "受 registry allowlist 限制；tag 将由准入 Worker 解析为 digest" },
+        version: { type: "string" },
+        registry_credential_id: { type: "string", format: "uuid" },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/runtime-images/manual-digest",
+    summary: "管理员手动登记非官方镜像 digest 并直接信任",
+    description: "需要 images:approve（admin 隐式拥有）。仅允许 registry allowlist 内的不可变 @sha256:64hex；不创建准入扫描记录，调用方必须自行承担绕过扫描的供应链风险。官方产品不能通过此接口绕过官方约束，非官方镜像仍需项目显式启用。",
+    scope: "images:approve",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["image_key", "name", "publisher", "image_ref"],
+      properties: {
+        image_key: { type: "string", description: "非官方产品 key" },
+        name: { type: "string" },
+        description: { type: "string" },
+        publisher: { type: "string" },
+        source_url: { type: "string", format: "uri" },
+        image_ref: { type: "string", description: "必须是 registry/path@sha256:64hex，且 registry 在 allowlist 内" },
+        version: { type: "string" },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/runtime-image-versions/{id}/rescan",
+    summary: "将镜像版本重新送入准入扫描",
+    description: "平台级准入操作。仅 unscoped/admin actor；项目限定 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+  },
+  {
+    method: "post",
+    path: "/runtime-image-versions/{id}/status",
+    summary: "批准、拒绝、禁用或撤销镜像版本",
+    scope: "images:approve",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["status"],
+      properties: {
+        status: { type: "string", enum: ["trusted", "rejected", "disabled", "revoked"] },
+        reason: { type: "string" },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/runtime-image-versions/{id}/usage",
+    summary: "反向查询使用该镜像版本的 Job、项目与 Finding 数量",
+    description: "平台管理员看全局 usage；项目限定 actor 只返回自身项目的 Job/项目/Finding 元数据。",
+    scope: "images:read",
+    tags: ["Runtime Images"],
+  },
+  {
+    method: "put",
+    path: "/projects/{id}/runtime-images/{imageId}",
+    summary: "项目排除/启用可信镜像（#691）。拒绝 version_id / pin_policy。deepsonar-base 不可停用；第三方须在 visible_project_ids 内。本机缺层时把不可变引用入队，返回 202 preparing/saved:false 与整队列 pull-status。该项就绪后才落库；Job 执行期仍只 inspect。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["enabled"],
+      properties: {
+        enabled: { type: "boolean" },
+        version_id: { type: ["string", "null"], format: "uuid", description: "#691 已拒绝：提交此字段返回 RUNTIME_IMAGE_PROJECT_PIN_FORBIDDEN" },
+        pin_policy: { type: "string", enum: ["follow", "hold"], description: "#691 已拒绝：提交此字段返回 RUNTIME_IMAGE_PROJECT_PIN_FORBIDDEN" },
+      },
+    },
+  },
+
+
+  {
+    method: "patch",
+    path: "/runtime-images/{id}/visibility",
+    summary: "平台设置第三方镜像可见项目集合（#691）。官方镜像拒绝；变更写 audit_logs。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+    body: {
+      type: "object",
+      required: ["visible_project_ids"],
+      properties: {
+        visible_project_ids: { type: "array", items: { type: "string", format: "uuid" }, maxItems: 200 },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/skill-sources",
+    summary: "项目 Skill 源可用性（#691：trust 源默认可用，仅可显式停用）",
+    description: "返回平台 Skill 源及本项目启用态；首次读取会把历史 RoleConfig modules_json 引用的源种子为启用（#603）。",
+    scope: "skills:read",
+    tags: ["Skills"],
+  },
+  {
+    method: "put",
+    path: "/projects/{id}/skill-sources/{sourceId}",
+    summary: "启用/停用项目 Skill 源",
+    description: "项目控制面白名单；未启用源不可进入本项目 Job 快照（#603）。",
+    scope: "skills:write",
+    tags: ["Skills"],
+    body: {
+      type: "object",
+      required: ["enabled"],
+      properties: {
+        enabled: { type: "boolean" },
+      },
+    },
+  },
+
+  // skill sources
+  { method: "get", path: "/skill-sources", summary: "模块源列表", scope: "skills:read", tags: ["Skills"] },
+  { method: "get", path: "/skill-sources/{id}", summary: "模块源目录详情", scope: "skills:read", tags: ["Skills"] },
+  {
+    method: "post",
+    path: "/skill-sources",
+    summary: "登记模块源",
+    scope: "skills:write",
+    tags: ["Skills"],
+    body: {
+      type: "object",
+      required: ["name", "repo_url"],
+      properties: {
+        name: { type: "string" },
+        repo_url: { type: "string", description: "仅 https，host 受 DEEPSONAR_GIT_ALLOWED_HOSTS 约束" },
+        branch: { type: "string", default: "main" },
+      },
+    },
+  },
+  { method: "post", path: "/skill-sources/{id}/sync", summary: "同步模块源（浅克隆；返回 changed 与新旧 commit）", scope: "skills:write", tags: ["Skills"] },
+  {
+    method: "post",
+    path: "/skill-sources/{id}/trust",
+    summary: "信任审批",
+    scope: "skills:write",
+    tags: ["Skills"],
+    body: {
+      type: "object",
+      required: ["trust_status"],
+      properties: {
+        trust_status: { type: "string", enum: ["quarantined", "trusted", "disabled"] },
+        enabled: { type: "boolean" },
+      },
+    },
+  },
+  { method: "delete", path: "/skill-sources/{id}", summary: "删除模块源", scope: "skills:write", tags: ["Skills"] },
+
+  // credentials
+  { method: "get", path: "/credentials", summary: "凭据列表（settings_config 含明文 API Key；ciphertext 不返回；含 active_concurrency 占用）", scope: "agents:read", tags: ["Credentials"] },
+  {
+    method: "get",
+    path: "/credentials/providers",
+    summary: "Server-owned Provider/account catalog",
+    scope: "agents:read",
+    tags: ["Credentials"],
+    responses: {
+      "200": {
+        description: "Authoritative provider catalog",
+        content: { "application/json": { schema: { type: "array", items: { $ref: "#/components/schemas/ProviderAccountCatalogItem" } } } },
+      },
+    },
+  },
+  { method: "get", path: "/credentials/{id}", summary: "凭据详情（健康、模型目录、绑定影响与 active_concurrency；settings_config 含明文 API Key）", scope: "agents:read", tags: ["Credentials"] },
+  {
+    method: "get",
+    path: "/credentials/{id}/impact",
+    summary: "凭据只读影响投影（RoleConfig / pending / active / recoverable / historical Job / 活动扫描）",
+    scope: "agents:read",
+    tags: ["Credentials"],
+    responses: {
+      "200": {
+        description: "有界影响投影。recoverable = failed/timeout/orphan（可被 resume 原地恢复）；scans.active = queued/claimed/running 的镜像准入扫描。",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/CredentialImpact" } } },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/credentials",
+    summary: "登记凭据（AES-GCM 加密）",
+    scope: "agents:write",
+    tags: ["Credentials"],
+    body: {
+      type: "object",
+      required: ["name", "provider", "secret"],
+      properties: {
+        name: { type: "string" },
+        kind: { type: "string", enum: ["llm_provider", "git", "oci_registry"] },
+        provider: { type: "string", description: "LLM 仅允许协议 ID anthropic（Anthropic Messages）或 openai（OpenAI Responses）；OCI 使用 registry host" },
+        secret: { type: "string" },
+        project_id: { type: "string", format: "uuid", nullable: true },
+        agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], description: "llm_provider 必填；不可显式置 null（#707）" },
+        settings_config: { type: "object", additionalProperties: true, description: "完整 CLI 配置；运行时物化为 Agent 沙箱配置文件" },
+        meta: { type: "object", additionalProperties: true },
+        metadata: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            base_url: { type: "string", format: "uri", description: "仅 http/https；不得含 userinfo/query/fragment" },
+            model_concurrency: { type: "object", additionalProperties: { type: "integer", minimum: 0, maximum: 1000 } },
+            max_concurrent: { type: "integer", minimum: 0, maximum: 1000 },
+            registry: { type: "string", description: "OCI registry host/path（不含 scheme/userinfo/query/fragment）" },
+            username: { type: "string", maxLength: 200, description: "OCI registry account name（非密钥）" },
+          },
+          description: "服务器拥有固定字段白名单；未知或 secret-like key 一律拒绝",
+        },
+      },
+    },
+  },
+  {
+    method: "patch",
+    path: "/credentials/{id}",
+    summary: "更新 Credential 配置（空密钥 / [已保存密钥] 表示不修改已有 API Key）",
+    scope: "agents:write",
+    tags: ["Credentials"],
+    body: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        provider: { type: "string" },
+        project_id: { type: "string", format: "uuid", nullable: true },
+        metadata: { $ref: "#/components/schemas/CredentialMetadata" },
+        agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], description: "llm_provider 必填；不可显式置 null（#707）" },
+        settings_config: { type: "object", additionalProperties: true, description: "完整 CLI 配置（可含明文 API Key）；空字段或 [已保存密钥] 表示保留原值" },
+        meta: { type: "object", additionalProperties: true },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/credentials/{id}/rotate",
+    summary: "轮换密钥",
+    scope: "agents:write",
+    tags: ["Credentials"],
+    body: { type: "object", required: ["secret"], properties: { secret: { type: "string" } } },
+  },
+  {
+    method: "delete",
+    path: "/credentials/{id}",
+    summary: "删除已保存的 Provider 账号",
+    description: "有 pending 或 active/frozen Job（claimed/provisioning/running/waiting_human）时返回 409 CREDENTIAL_IN_USE。failed/timeout/orphan 可恢复历史不阻挡删除，影响投影仍列出。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。吊销并删除 job_tokens；不改写历史 Job 快照（#690：无 RoleConfig 凭据绑定）。响应与审计不含密文；项目凭据审计保留 project_id。",
+    scope: "agents:write",
+    tags: ["Credentials"],
+    query: {
+    },
+    responses: {
+      "200": {
+        description: "已删除",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              required: ["ok", "id"],
+              properties: {
+                ok: { type: "boolean" },
+                id: { type: "string", format: "uuid" },
+                unbound_role_config_count: { type: "integer" },
+                revoked_job_token_count: { type: "integer" },
+              },
+            },
+          },
+        },
+      },
+      "409": {
+        description: "仍被 RoleConfig 绑定、pending/active Job 或活动镜像准入扫描引用",
+        content: {
+          "application/json": {
+            schema: {
+              allOf: [
+                { $ref: "#/components/schemas/Error" },
+                {
+                  type: "object",
+                  properties: {
+                    error_code: {
+                      type: "string",
+                      enum: ["CREDENTIAL_IN_USE", "CREDENTIAL_SCAN_IN_USE", "CREDENTIAL_CHANGED"],
+                    },
+                    impact: { $ref: "#/components/schemas/CredentialImpact" },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/credentials/{id}/status",
+    summary: "启用/禁用凭据",
+    scope: "agents:write",
+    tags: ["Credentials"],
+    body: {
+      type: "object",
+      required: ["status"],
+      properties: { status: { type: "string", enum: ["active", "disabled", "rotation_required"] } },
+    },
+  },
+  { method: "post", path: "/credentials/{id}/test", summary: "连接测试", description: "推理失败返回脱敏、有界的上游错误摘要，清理 C0/C1 控制字符。可补充模型目录；回写核对密钥版本、settings、CLI 与项目，探测期间配置变化返回 409。", scope: "agents:write", tags: ["Credentials"] },
+  { method: "post", path: "/credentials/{id}/models", summary: "从 Provider 实时获取模型目录", scope: "agents:write", tags: ["Credentials"] },
+  {
+    method: "post",
+    path: "/credentials/models/preview",
+    summary: "预览未保存 Credential 的模型目录（不落库）",
+    scope: "agents:write",
+    tags: ["Credentials"],
+    body: {
+      type: "object",
+      required: ["agent_cli", "provider", "secret"],
+      properties: {
+        agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"] },
+        provider: { type: "string", enum: ["anthropic", "openai"] },
+        secret: { type: "string", minLength: 1, maxLength: 4096 },
+        base_url: { type: "string", format: "uri" },
+        metadata: { $ref: "#/components/schemas/CredentialMetadata" },
+        settings_config: { type: "object", additionalProperties: true },
+      },
+    },
+  },
+  { method: "get", path: "/credentials/{id}/models", summary: "读取已持久化的安全模型目录", scope: "agents:read", tags: ["Credentials"] },
+  {
+    method: "get",
+    path: "/credentials/{id}/compatibility",
+    summary: "校验 Credential 与 Agent CLI/模型兼容性",
+    scope: "agents:read",
+    tags: ["Credentials"],
+    query: {
+      agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"] },
+      model: { type: "string", minLength: 1, maxLength: 200 },
+    },
+  },
+
+  // tokens
+  {
+    method: "get",
+    path: "/tokens",
+    summary: "API Token 列表",
+    description: "仅返回调用者可以管理的 Token。项目限定 actor 只看见本项目且 scopes 不超过自身的 Token。",
+    scope: "tokens:manage",
+    tags: ["Tokens"],
+  },
+  {
+    method: "post",
+    path: "/tokens",
+    summary: "创建 API Token（明文仅返回一次）",
+    description: "scopes 必须是调用者有效 scopes 的子集；非管理员不能授予 admin。项目限定 actor 只能创建本项目 Token，忽略或拒绝空/跨项目 project_id（403 SCOPE_EXCEEDS_ACTOR / PROJECT_MISMATCH）。",
+    scope: "tokens:manage",
+    tags: ["Tokens"],
+    body: {
+      type: "object",
+      required: ["name", "scopes"],
+      properties: {
+        name: { type: "string" },
+        scopes: { type: "array", items: { type: "string" } },
+        project_id: { type: "string", format: "uuid", nullable: true },
+        expires_in_days: { type: "integer" },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/tokens/{id}/revoke",
+    summary: "吊销 Token",
+    description: "按项目归属与 scope 子集过滤；跨项目 403 PROJECT_MISMATCH，超出调用者权限 403 SCOPE_EXCEEDS_ACTOR。",
+    scope: "tokens:manage",
+    tags: ["Tokens"],
+  },
+  {
+    method: "post",
+    path: "/tokens/{id}/rotate",
+    summary: "轮换 Token",
+    description: "沿用旧 Token 的 scope/project，权限不会扩大。跨项目或超出调用者权限分别返回 PROJECT_MISMATCH / SCOPE_EXCEEDS_ACTOR。",
+    scope: "tokens:manage",
+    tags: ["Tokens"],
+  },
+
+  // audit
+  { method: "get", path: "/audit-logs", summary: "审计日志", scope: "admin", tags: ["Admin"] },
+
+  // ---------- 平台导入导出（.deepsonarpack） ----------
+  {
+    method: "post",
+    path: "/projects/{id}/exports",
+    summary: "创建项目导出",
+    description:
+      "preset=configuration|project_full|evidence_archive|custom。未知模块、或存在活动 Job 且未勾选 allow_active_jobs 时返回 400（带稳定 error_code）。产物落盘后用 GET /exports/:id/download 下载。",
+    scope: "exports:write",
+    tags: ["Transfer"],
+    successStatus: "201",
+    body: {
+      type: "object",
+      properties: {
+        preset: { type: "string", enum: ["configuration", "project_full", "evidence_archive", "custom"] },
+        modules: { type: "array", items: { type: "string" } },
+        include_blobs: { type: "boolean" },
+        allow_active_jobs: { type: "boolean" },
+        credentials: {
+          type: "object",
+          properties: { mode: { type: "string", enum: ["excluded", "metadata"] } },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/projects/{id}/exports",
+    summary: "项目导出列表（最近 50 条）",
+    scope: "exports:read",
+    tags: ["Transfer"],
+  },
+  {
+    method: "post",
+    path: "/platform/exports",
+    summary: "创建平台导出（跨项目配置）",
+    description:
+      "preset=platform_full|custom。项目作用域的 token 返回 403 PROJECT_SCOPE_FORBIDDEN。凭据默认排除，仅可选 metadata 模式。",
+    scope: "exports:write",
+    tags: ["Transfer"],
+    successStatus: "201",
+    body: {
+      type: "object",
+      properties: {
+        preset: { type: "string", enum: ["platform_full", "custom"] },
+        modules: { type: "array", items: { type: "string" } },
+        credentials: {
+          type: "object",
+          properties: { mode: { type: "string", enum: ["excluded", "metadata"] } },
+        },
+      },
+    },
+  },
+  {
+    method: "get",
+    path: "/platform/exports",
+    summary: "平台导出列表（最近 50 条）",
+    description: "项目作用域的 token 返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "exports:read",
+    tags: ["Transfer"],
+  },
+  { method: "get", path: "/exports/{id}", summary: "导出详情", scope: "exports:read", tags: ["Transfer"] },
+  {
+    method: "get",
+    path: "/exports/{id}/download",
+    summary: "下载导出包",
+    description:
+      "content-type: application/x-deepsonarpack，响应头 x-content-sha256 为产物摘要。未成功 409，已过期 410；下载会写 audit。",
+    scope: "exports:read",
+    tags: ["Transfer"],
+  },
+  {
+    method: "post",
+    path: "/exports/{id}/cancel",
+    summary: "取消导出",
+    description: "仅 pending/collecting/packaging 可取消，其他状态 409。无 body。",
+    scope: "exports:write",
+    tags: ["Transfer"],
+  },
+  {
+    method: "delete",
+    path: "/exports/{id}",
+    summary: "删除导出记录与产物",
+    scope: "exports:write",
+    tags: ["Transfer"],
+  },
+  {
+    method: "post",
+    path: "/imports",
+    summary: "上传 .deepsonarpack",
+    description:
+      "请求体就是包本体（Content-Type: application/zip 或 application/x-deepsonarpack）；空体或非二进制 400。包内格式为 platform 时需平台权限，项目作用域 token 上传平台包返回 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "imports:write",
+    tags: ["Transfer"],
+    successStatus: "201",
+    body: { type: "string", format: "binary" },
+    bodyContentType: "application/x-deepsonarpack",
+  },
+  { method: "get", path: "/imports/{id}", summary: "导入详情", scope: "imports:read", tags: ["Transfer"] },
+  {
+    method: "post",
+    path: "/imports/{id}/preview",
+    summary: "导入预检",
+    description: "无 body。预检失败写 data_imports.status=failed 与 error_code，并返回 400。",
+    scope: "imports:write",
+    tags: ["Transfer"],
+  },
+  {
+    method: "post",
+    path: "/imports/{id}/apply",
+    summary: "应用导入",
+    description:
+      "mode=create_new|merge_configuration|merge_platform。项目作用域 token 只能 merge_configuration 到自己的项目，否则 403 PROJECT_SCOPE_FORBIDDEN / PROJECT_MISMATCH。",
+    scope: "imports:write",
+    tags: ["Transfer"],
+    body: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["create_new", "merge_configuration", "merge_platform"] },
+        project_name: { type: "string" },
+        target_project_id: { type: "string", format: "uuid" },
+        modules: { type: "array", items: { type: "string" } },
+        conflict_policy: { type: "string", enum: ["rename", "keep_target", "use_source"] },
+        credential_mappings: { type: "object", additionalProperties: { type: "string" } },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/imports/{id}/cancel",
+    summary: "取消导入",
+    description: "仅 uploaded/validating/preview_ready 可取消，其他状态 409。无 body。",
+    scope: "imports:write",
+    tags: ["Transfer"],
+  },
+  {
+    method: "delete",
+    path: "/imports/{id}",
+    summary: "删除导入记录与产物",
+    scope: "imports:write",
+    tags: ["Transfer"],
+  },
+
+  // ---------- Finding 评论 / 关联 ----------
+  {
+    method: "post",
+    path: "/findings/{id}/comments",
+    summary: "新增 Finding 评论",
+    description:
+      "request_hub 默认 true：已 confirmed 的 Finding 评论后会按人工消息唤醒 Hub 再决策；响应 hub 字段回报是否入队及原因（not_confirmed / request_hub_false）。",
+    scope: "findings:write",
+    tags: ["Findings"],
+    successStatus: "201",
+    body: {
+      type: "object",
+      required: ["body"],
+      properties: {
+        body: { type: "string", minLength: 1, maxLength: 8000 },
+        request_hub: { type: "boolean" },
+      },
+    },
+  },
+  {
+    method: "delete",
+    path: "/findings/{id}/comments/{commentId}",
+    summary: "删除 Finding 评论",
+    description: "评论必须属于该 Finding，否则 404。",
+    scope: "findings:write",
+    tags: ["Findings"],
+  },
+  {
+    method: "post",
+    path: "/findings/{id}/links",
+    summary: "新增 Finding 关联链接",
+    description: "link_type=related|ticket|pr|doc|evidence；url 必须合法且不超过 2000 字符。",
+    scope: "findings:write",
+    tags: ["Findings"],
+    successStatus: "201",
+    body: {
+      type: "object",
+      required: ["url"],
+      properties: {
+        url: { type: "string", maxLength: 2000 },
+        title: { type: "string", maxLength: 200 },
+        link_type: { type: "string", enum: ["related", "ticket", "pr", "doc", "evidence"] },
+      },
+    },
+  },
+  {
+    method: "delete",
+    path: "/findings/{id}/links/{linkId}",
+    summary: "删除 Finding 关联链接",
+    description: "链接必须属于该 Finding，否则 404。",
+    scope: "findings:write",
+    tags: ["Findings"],
+  },
+
+  // ---------- 任务归档 / 硬删除 / 活动 Job 批量取消 ----------
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/archive",
+    summary: "归档任务（软删除）",
+    description:
+      "取消画布上活动 Job、吊销 Job Token、暂停 Hub，历史数据保留；已归档再调用幂等返回 cancelled_jobs=0。无 body。",
+    scope: "tasks:write",
+    tags: ["Tasks"],
+  },
+  {
+    method: "post",
+    path: "/tasks/{canvasId}/unarchive",
+    summary: "取消归档任务",
+    description: "恢复为 active，不自动唤醒 Hub（需显式继续执行）。所属项目已归档时 409。",
+    scope: "tasks:write",
+    tags: ["Tasks"],
+  },
+  {
+    method: "delete",
+    path: "/tasks/{canvasId}",
+    summary: "硬删除任务数据",
+    description:
+      "先取消活动 Job，再删除画布与 jobs/findings/events/报告/图节点；不可恢复。无 body。",
+    scope: "tasks:write",
+    tags: ["Tasks"],
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/jobs/cancel-active",
+    summary: "取消画布上全部活动 Job",
+    description: "reason 可选（默认“强制退出全部活动 Job”）；逐 Job 回收沙箱、吊销 Job Token 并标记已取消节点。",
+    scope: "jobs:control",
+    tags: ["Jobs"],
+    body: {
+      type: "object",
+      properties: { reason: { type: "string", maxLength: 500 } },
+    },
+  },
+
+  // ---------- 画布收敛控制 ----------
+  {
+    method: "get",
+    path: "/canvases/{id}/convergence",
+    summary: "读取画布收敛状态",
+    description: "返回 convergence、项目规则（minVerifySeverity / maxVerificationRounds / maxNoProgressRounds）与 careSeverities（收效门要关心的严重度）。",
+    scope: "tasks:read",
+    tags: ["Tasks"],
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/convergence/pause",
+    summary: "暂停画布 Hub 收敛",
+    description: "body 可选 {reason}；暂停后不再自动开新 Hub 轮次，已入队 Job 不受影响。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    body: { type: "object", properties: { reason: { type: "string" } } },
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/convergence/resume",
+    summary: "恢复画布 Hub 收敛",
+    description: "body 可选 {force_hub}；force_hub=true 时同事务内强制唤醒一轮 Hub。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+    body: { type: "object", properties: { force_hub: { type: "boolean" } } },
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/convergence/stop-after-gate",
+    summary: "收敛门外停止（本轮回合跑完即停）",
+    description: "no body；返回 convergence 与项目规则。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/convergence/drain-priority",
+    summary: "排空当前优先级层",
+    description: "no body；返回画布责任严重度与各优先级剩余计数。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+  },
+  {
+    method: "post",
+    path: "/canvases/{id}/convergence/run-hub-now",
+    summary: "立即唤醒一轮 Hub",
+    description: "no body；已有活动 Hub 时不重复入队，返回 ok 与最新 convergence。",
+    scope: "jobs:control",
+    tags: ["Tasks"],
+  },
+
+  // ---------- 用户管理（仅 admin） ----------
+  {
+    method: "get",
+    path: "/users",
+    summary: "用户列表",
+    description: "只返回公开字段（无密码 hash / 会话）。",
+    scope: "admin",
+    tags: ["Users"],
+  },
+  {
+    method: "post",
+    path: "/users",
+    summary: "创建用户",
+    description: "role=admin|operator|viewer（默认 operator）；用户名冲突等失败返回 400 与稳定 error_code。",
+    scope: "admin",
+    tags: ["Users"],
+    successStatus: "201",
+    body: {
+      type: "object",
+      required: ["username", "password"],
+      properties: {
+        username: { type: "string", minLength: 2, maxLength: 64 },
+        password: { type: "string", minLength: 8, maxLength: 200 },
+        display_name: { type: "string", maxLength: 100 },
+        role: { type: "string", enum: ["admin", "operator", "viewer"] },
+      },
+    },
+  },
+  {
+    method: "patch",
+    path: "/users/{id}",
+    summary: "更新用户资料 / 角色 / 状态",
+    description: "status=disabled 会阻止登录；不存在返回 404。",
+    scope: "admin",
+    tags: ["Users"],
+    body: {
+      type: "object",
+      properties: {
+        display_name: { type: "string", maxLength: 100 },
+        role: { type: "string", enum: ["admin", "operator", "viewer"] },
+        status: { type: "string", enum: ["active", "disabled"] },
+      },
+    },
+  },
+  {
+    method: "post",
+    path: "/users/{id}/password",
+    summary: "重置用户密码",
+    description: "密码长度 8..200；成功后不返回密码。",
+    scope: "admin",
+    tags: ["Users"],
+    body: {
+      type: "object",
+      required: ["password"],
+      properties: { password: { type: "string", minLength: 8, maxLength: 200 } },
+    },
+  },
+
+  // ---------- 运行时镜像本地流程 / 浏览器实时流票据 ----------
+  {
+    method: "post",
+    path: "/runtime-images/registry/apply",
+    summary: "应用上传的镜像市场清单",
+    description:
+      "body 直接是清单对象，或包一层 {registry}。写入记录来源标记为 upload；项目作用域 token 403 PROJECT_SCOPE_FORBIDDEN。",
+    scope: "images:manage",
+    tags: ["Runtime Images"],
+    body: { type: "object", additionalProperties: true },
+  },
+  {
+    method: "post",
+    path: "/auth/ws-ticket",
+    summary: "签发一次性浏览器 WS 票据",
+    description:
+      "purpose=stream|terminal（默认 stream）。terminal 需要 admin 或 jobs:control。票据绑定单个 Job、秒级过期，只能消费一次；Job 不在可流式状态返回 409 JOB_NOT_RUNNING，跨项目返回 403 PROJECT_MISMATCH。长期 Token 不会进入 WebSocket URL。",
+    scope: "tasks:read",
+    tags: ["Auth"],
+    body: {
+      type: "object",
+      required: ["job_id"],
+      properties: {
+        job_id: { type: "string", format: "uuid" },
+        purpose: { type: "string", enum: ["stream", "terminal"] },
+      },
+    },
+  },
+];
+
+function pathParams(p: string): Array<{ name: string; in: "path"; required: true; schema: { type: string; format?: string } }> {
+  const names = [...p.matchAll(/\{(\w+)\}/g)].map((m) => m[1]);
+  return names.map((name) => {
+    const useUuid =
+      name === "id" ||
+      name === "roleId" ||
+      (name.endsWith("Id") && !name.toLowerCase().includes("canvas"));
+    return {
+      name,
+      in: "path" as const,
+      required: true as const,
+      schema: useUuid ? { type: "string", format: "uuid" } : { type: "string" },
+    };
+  });
+}
+
+function isFullResponse(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  // A JSON Schema may itself carry `description`; only response-specific
+  // members distinguish a complete OpenAPI Response Object here.
+  return "content" in record || "headers" in record;
+}
+
+/** 构建 OpenAPI 3.0 文档对象 */
+export function buildOpenApiDocument(): Record<string, unknown> {
+  const paths: Record<string, Record<string, unknown>> = {};
+
+  for (const op of OPS) {
+    const item = paths[op.path] ?? (paths[op.path] = {});
+    const parameters = [
+      ...pathParams(op.path),
+      ...Object.entries(op.headers ?? {}).map(([name, schema]) => ({name, in: "header" as const, required: false, schema})),
+      ...Object.entries(op.query ?? {}).map(([name, schema]) => ({
+        name,
+        in: "query" as const,
+        required: op.requiredQuery?.includes(name) ?? false,
+        schema,
+      })),
+    ];
+    const declaredResponses = op.responses ?? {};
+    const successStatus = op.successStatus ?? "200";
+    const declaredSuccess = declaredResponses[successStatus];
+    const successResponse = isFullResponse(declaredSuccess)
+      ? declaredSuccess
+      : {
+          description: "成功",
+          content: {
+            "application/json": {
+              schema: declaredSuccess ?? { type: "object", additionalProperties: true },
+            },
+          },
+        };
+    const operation: Record<string, unknown> = {
+      summary: op.summary,
+      description: op.description,
+      tags: op.tags,
+      operationId: `${op.method}_${op.path.replace(/[{}/]/g, "_").replace(/_+/g, "_")}`,
+      parameters: parameters.length ? parameters : undefined,
+      security: op.scope === null ? [] : [{ bearerAuth: [] }],
+      "x-deepsonar-scope": op.scope === null ? "exempt" : op.scope,
+      responses: {
+        [successStatus]: successResponse,
+        "400": { description: "参数错误", content: { "application/json": { schema: ErrorSchema } } },
+        "401": { description: "未认证", content: { "application/json": { schema: ErrorSchema } } },
+        "403": { description: "权限不足", content: { "application/json": { schema: ErrorSchema } } },
+        "404": { description: "不存在", content: { "application/json": { schema: ErrorSchema } } },
+        "409": { description: "冲突", content: { "application/json": { schema: ErrorSchema } } },
+        "503": { description: "维护模式拒绝业务访问（PLATFORM_MAINTENANCE）；GET /health 返回维护状态", content: { "application/json": { schema: ErrorSchema } } },
+        ...Object.fromEntries(Object.entries(declaredResponses).filter(([status]) => status !== successStatus)),
+      },
+    };
+    if (op.body) {
+      operation.requestBody = {
+        required: true,
+        content: { [op.bodyContentType ?? "application/json"]: { schema: op.body } },
+      };
+    }
+    item[op.method] = operation;
+  }
+
+  return {
+    openapi: "3.0.3",
+    info: {
+      title: "DeepSonar Scheduler API",
+      version: "0.0.1",
+      description:
+        "多项目代码审计调度平台 HTTP API。Agent 只提案，调度器是唯一有副作用的执行者。" +
+        " `x-deepsonar-scope`：具体 scope 名 = 需要该 scope；`authenticated` = 任意已认证主体；`exempt` = 豁免鉴权。" +
+        " 人类可读摘要见 GET /schema.md；Management Skill 契约见 skills/deepsonar-management/references/api.md。" +
+        " 运行时镜像官方目录支持 DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN（仅向 github.com/api.github.com 发送，重定向到 release-assets/objects 时丢弃）。",
+    },
+    servers: [
+      {
+        url: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`,
+        description: "当前调度器实例",
+      },
+    ],
+    tags: [
+      { name: "Meta" },
+      { name: "Devices" },
+      { name: "Auth" },
+      { name: "Dashboard" },
+      { name: "Projects" },
+      { name: "Tasks" },
+      { name: "Jobs" },
+      { name: "Findings" },
+      { name: "Reports" },
+      { name: "Settings" },
+      { name: "Roles" },
+      { name: "RoleConfig" },
+      { name: "Runtime Images" },
+      { name: "Skills" },
+      { name: "Credentials" },
+      { name: "Transfer" },
+      { name: "Users" },
+      { name: "Tokens" },
+      { name: "Profiles" },
+      { name: "Admin" },
+    ],
+    paths,
+    "x-deepsonar-environment": {
+      DEEPSONAR_RUNTIME_REGISTRY_GITHUB_TOKEN: {
+        description: "可选的私有 GitHub Release 只读凭据；Scheduler 仅访问固定 SummerSec/DeepSonar 目录，绝不在 API 响应中返回。",
+        secret: true,
+        used_by: ["GET /runtime-images/registry", "POST /runtime-images/registry/sync"],
+      },
+    },
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "deepsonar_<env>_<prefix>_<secret>",
+          description: "平台 API Token；DEEPSONAR_AUTH_REQUIRED=false 时本地回环可省略",
+        },
+      },
+      schemas: {
+        Error: ErrorSchema,
+        DashboardStatusBucket: {
+          type: "object",
+          additionalProperties: false,
+          required: ["key", "count"],
+          properties: {
+            key: { type: "string" },
+            count: { type: "integer", minimum: 0 },
+          },
+        },
+        DashboardPeriodCounts: {
+          type: "object",
+          additionalProperties: false,
+          required: ["new_tasks", "completed_tasks", "new_findings"],
+          properties: {
+            new_tasks: { type: "integer", minimum: 0 },
+            completed_tasks: { type: "integer", minimum: 0 },
+            new_findings: { type: "integer", minimum: 0 },
+          },
+        },
+        RuntimeRegistryChannelError: RuntimeRegistryChannelErrorSchema,
+        CredentialImpact: {
+          type: "object",
+          required: ["credential_id", "role_configs", "jobs", "scans"],
+          properties: {
+            credential_id: { type: "string", format: "uuid" },
+            role_configs: {
+              type: "object",
+              required: ["count", "items"],
+              properties: {
+                count: { type: "integer", minimum: 0 },
+                items: { type: "array", items: { type: "object", additionalProperties: true } },
+              },
+            },
+            jobs: {
+              type: "object",
+              required: ["pending_unclaimed", "active_frozen", "recoverable", "terminal_historical"],
+              properties: {
+                pending_unclaimed: { $ref: "#/components/schemas/CredentialImpactJobBucket" },
+                active_frozen: { $ref: "#/components/schemas/CredentialImpactJobBucket" },
+                recoverable: {
+                  allOf: [
+                    { $ref: "#/components/schemas/CredentialImpactJobBucket" },
+                    { description: "failed / timeout / orphan；可被 /jobs/:id/resume 或 resume-session 原地恢复为 pending；不阻挡删除，删除后不能再按原快照 resume" },
+                  ],
+                },
+                terminal_historical: {
+                  allOf: [
+                    { $ref: "#/components/schemas/CredentialImpactJobBucket" },
+                    { description: "succeeded / cancelled；不可恢复，不阻挡删除" },
+                  ],
+                },
+              },
+            },
+            scans: {
+              type: "object",
+              required: ["active"],
+              properties: {
+                active: {
+                  type: "object",
+                  description: "queued / claimed / running 的 runtime_image_scans，result_json.registry_credential_id 指向该凭据",
+                  required: ["count", "items"],
+                  properties: {
+                    count: { type: "integer", minimum: 0 },
+                    items: { type: "array", items: { type: "object", additionalProperties: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+        CredentialImpactJobBucket: {
+          type: "object",
+          required: ["count", "items"],
+          properties: {
+            count: { type: "integer", minimum: 0 },
+            items: { type: "array", items: { type: "object", additionalProperties: true } },
+          },
+        },
+        CredentialActiveConcurrency: {
+          type: "object",
+          required: ["in_use", "max_concurrent"],
+          additionalProperties: false,
+          properties: {
+            in_use: { type: "integer", minimum: 0, description: "claimed/provisioning/running Job 占用（与 dispatcher claim 同口径）" },
+            max_concurrent: { type: "integer", minimum: 0, maximum: 1000, nullable: true, description: "账号 max_concurrent；null=未设上限" },
+            model_in_use: {
+              type: "object",
+              additionalProperties: { type: "integer", minimum: 0 },
+              description: "upstream_model → 占用；无占用时省略",
+            },
+          },
+          description: "凭据并发可观测（#707 Phase 2）",
+        },
+        CredentialMetadata: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            base_url: { type: "string", format: "uri" },
+            model_concurrency: { type: "object", additionalProperties: { type: "integer", minimum: 0, maximum: 1000 } },
+            max_concurrent: { type: "integer", minimum: 0, maximum: 1000 },
+            registry: { type: "string" },
+            username: { type: "string", maxLength: 200 },
+          },
+          description: "Server-owned metadata allowlist; secret-like/unknown keys are rejected.",
+        },
+        CredentialHealth: {
+          type: "object",
+          required: ["status", "last_tested_at", "error_category", "detail", "model_catalog", "model_catalog_fetched_at"],
+          properties: {
+            status: { type: "string", enum: ["unknown", "ok", "error"] },
+            last_tested_at: { type: "string", format: "date-time", nullable: true },
+            error_category: { type: "string", nullable: true },
+            detail: { type: "string", nullable: true, maxLength: 300 },
+            model_catalog: { type: "array", maxItems: 200, items: { type: "string", maxLength: 200 } },
+            model_catalog_fetched_at: { type: "string", format: "date-time", nullable: true },
+          },
+        },
+        ProviderAccountCatalogItem: {
+          type: "object",
+          additionalProperties: false,
+          required: ["provider", "label", "kind", "auth_methods", "compatible_agent_cli", "supports_base_url"],
+          properties: {
+            provider: { type: "string", maxLength: 50 },
+            label: { type: "string" },
+            kind: { type: "string", enum: ["llm_provider", "git", "oci_registry"] },
+            auth_methods: { type: "array", items: { type: "string", enum: ["api_key", "oauth", "cli_login"] } },
+            compatible_agent_cli: { type: "array", items: { type: "string" } },
+            supports_base_url: { type: "boolean" },
+          },
+        },
+        BindableRoleConfig: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id", "role_id", "role_name", "role_title", "project_id", "project_name", "dsh_task_mode", "version",
+            "runtime_image_key", "sandbox_limits_json", "context_window_tokens",
+            "credential_id", "credential_name", "credential_kind", "credential_provider", "credential_status", "credential_project_id", "credential_project_name", "scope", "can_bind",
+            "credential_provider_valid", "role_kind", "role_builtin",
+          ],
+          properties: {
+            id: { type: "string", format: "uuid" },
+            role_id: { type: "string", format: "uuid" },
+            role_name: { type: "string" },
+            role_title: { type: "string", nullable: true },
+            role_kind: { type: "string", enum: ["hub", "system", "role"] },
+            role_builtin: { type: "boolean" },
+            role_ui_color: { type: "string", nullable: true },
+            project_id: { type: "string", format: "uuid", nullable: true },
+            project_name: { type: "string", nullable: true },
+            agent_cli: { type: "string", nullable: true, description: "仅全局 RoleConfig 暴露；null 表示未指定偏好" },
+            dsh_task_mode: { type: "string", enum: ["standard", "ptc"], description: "DSH tool presentation preset; ignored by other CLIs" },
+            model: { type: "string", nullable: true },
+            context_window_tokens: { type: "integer", minimum: 1024, maximum: 10000000, nullable: true, description: "通用客户端预算，不会提升上游模型能力；Claude 仅冻结展示" },
+            runtime_image_key: { type: "string", nullable: true },
+            sandbox_limits_json: { $ref: "#/components/schemas/SandboxLimitsOverride" },
+            version: { type: "integer" },
+            credential_id: { type: "string", format: "uuid", nullable: true },
+            credential_name: { type: "string", nullable: true },
+            credential_kind: { type: "string", nullable: true },
+            credential_provider: { type: "string", nullable: true },
+            credential_status: { type: "string", nullable: true },
+            credential_project_id: { type: "string", format: "uuid", nullable: true },
+            credential_project_name: { type: "string", nullable: true },
+            scope: { type: "string", enum: ["global", "project"] },
+            image_strategy: { type: "string", nullable: true, description: "#674 removed; always null" },
+            can_bind: { type: "boolean" },
+            credential_provider_valid: { type: "boolean", nullable: true },
+          },
+        },
+        RuntimeKnobOverride: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            stallSec: { type: "integer", minimum: 0, maximum: 172800, nullable: true, description: "角色覆盖的产出停滞窗口（秒）；0 关闭；省略继承上层" },
+            jobTokenMaxRequests: { type: "integer", minimum: 0, maximum: 1000000, nullable: true, description: "角色覆盖的 Job Token 请求上限；0 不限制" },
+            timeoutSec: { type: "integer", minimum: 60, maximum: 172800, nullable: true, description: "角色覆盖的 Job 超时（秒）" },
+          },
+        },
+        SandboxLimitsOverride: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            cpu: { type: "number", minimum: 0.25, maximum: 64 },
+            memoryMiB: { type: "integer", minimum: 256, maximum: 131072 },
+            pidsLimit: { type: "integer", minimum: 64, maximum: 32768 },
+          },
+        },
+        RoleConfigInput: {
+          type: "object",
+          properties: {
+            agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], nullable: true, description: "仅全局；null/省略清除显式CLI偏好" },
+            dsh_task_mode: { type: "string", enum: ["standard", "ptc"], default: "standard" },
+            model: { type: "string", nullable: true, description: "仅全局模型偏好；项目 RoleConfig 不接受" },
+            context_window_tokens: { type: "integer", minimum: 1024, maximum: 10000000, nullable: true, description: "客户端预算，不会提升上游模型能力；Claude 仅冻结展示" },
+            env_vars: { type: "object", additionalProperties: { type: "string" } },
+            modules: {
+              type: "array",
+              items: { type: "string" },
+              description: "原始 selector：<source_uuid>:<module_id>、<source_uuid>:plugin:<plugin_path> 或 <source_uuid>:source:*",
+            },
+            skills: { type: "array", items: { type: "object", additionalProperties: true } },
+            commands: { type: "array", items: { type: "object", additionalProperties: true } },
+            mcps: { type: "array", items: { type: "object", additionalProperties: true } },
+            subagents: { type: "array", items: { type: "object", additionalProperties: true } },
+            platform_tools: {
+              type: "object",
+              additionalProperties: { type: "boolean" },
+              description: "平台工具启用开关（全量 list 对每个 Agent 可选）；未声明默认启用。仅 mark_job_done 不可关闭。",
+            },
+            instructions_markdown: { type: "string", nullable: true },
+            runtime_image_key: { type: "string", nullable: true, description: "仅全局 RoleConfig 使用；项目覆盖必须传 null，并由平台目录与 Hub 提案选择" },
+            sandbox_limits: { $ref: "#/components/schemas/SandboxLimitsOverride" },
+            runtime_knobs: { $ref: "#/components/schemas/RuntimeKnobOverride" },
+            config_files: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["path", "content"],
+                properties: {
+                  path: { type: "string" },
+                  content: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        ReadinessResponse: {
+          type: "object",
+          required: ["schema", "ready", "execution_mode", "scope", "network_policy", "checks", "summary", "generated_at"],
+          properties: {
+            schema: { type: "string", const: "deepsonar.readiness/v1" },
+            ready: { type: "boolean" },
+            execution_mode: { type: "string", enum: ["fake", "real"] },
+            scope: {
+              type: "object",
+              required: ["kind", "project_id"],
+              properties: {
+                kind: { type: "string", enum: ["global", "project"] },
+                project_id: { type: "string", format: "uuid", nullable: true },
+              },
+            },
+            network_policy: {
+              type: "object",
+              required: ["allow_egress", "source", "material_source"],
+              properties: {
+                allow_egress: { type: "boolean" },
+                source: { type: "string", enum: ["global", "project", "task_override"] },
+                material_source: { type: "string", enum: ["workspace_or_offline", "external_or_workspace", "declared", "unspecified"] },
+              },
+            },
+            checks: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["code", "state", "severity", "message"],
+                properties: {
+                  code: { type: "string", description: "Stable machine-readable check code" },
+                  state: { type: "string", enum: ["pass", "attention", "fail"] },
+                  severity: { type: "string", enum: ["info", "warning", "error"] },
+                  message: { type: "string" },
+                  fix: {
+                    type: "object",
+                    nullable: true,
+                    properties: {
+                      action: { type: "string", enum: ["credentials", "role_config", "rules", "runtime_images"] },
+                      scope: { type: "string", enum: ["global", "project"] },
+                      project_id: { type: "string", format: "uuid", nullable: true },
+                      href: { type: "string" },
+                      target: { type: "string" },
+                    },
+                  },
+                  role: { type: "object", nullable: true, additionalProperties: true },
+                  credential: { type: "object", nullable: true, additionalProperties: true, description: "Non-sensitive identity only" },
+                  runtime_image: { type: "object", nullable: true, additionalProperties: true, description: "Trusted image key/digest summary only" },
+                  evidence: { type: "object", nullable: true, additionalProperties: true },
+                },
+              },
+            },
+            summary: {
+              type: "object",
+              required: ["errors", "warnings", "infos"],
+              properties: {
+                errors: { type: "integer", minimum: 0 },
+                warnings: { type: "integer", minimum: 0 },
+                infos: { type: "integer", minimum: 0 },
+              },
+            },
+            generated_at: { type: "string", format: "date-time" },
+          },
+        },
+        Scopes: {
+          type: "array",
+          items: { type: "string", enum: [...ALL_SCOPES] },
+          description: "平台 API Token 可用 scope 全集",
+        },
+      },
+    },
+    "x-deepsonar-scopes": [...ALL_SCOPES],
+    "x-deepsonar-auth-exempt": [
+      "/health",
+      "/openapi.json",
+      "/schema",
+      "/schema.md",
+      "/auth/status",
+      "/auth/login",
+      "/auth/bootstrap",
+      "/workers/register",
+      "/workers/heartbeat",
+      "/gateway/*",
+    ],
+  };
+}
+
+/** 端点摘要（给 /schema?format=summary 用） */
+export function buildSchemaSummary(): Record<string, unknown> {
+  return {
+    title: "DeepSonar Scheduler API",
+    version: "0.0.1",
+    base_url: `http://${config.host === "0.0.0.0" ? "127.0.0.1" : config.host}:${config.port}`,
+    auth: {
+      header: "Authorization: Bearer <session or API Token>",
+      required_when: "DEEPSONAR_AUTH_REQUIRED=true",
+      scopes: [...ALL_SCOPES],
+      exempt: [
+        "/health",
+        "/openapi.json",
+        "/schema",
+        "/schema.md",
+        "/auth/status",
+        "/auth/login",
+        "/auth/bootstrap",
+        "/workers/register",
+        "/workers/heartbeat",
+        "/gateway/*",
+      ],
+    },
+    documents: {
+      openapi_json: "/openapi.json",
+      schema: "/schema",
+      schema_markdown: "/schema.md",
+      management_skill_api_md: "skills/deepsonar-management/references/api.md",
+    },
+    endpoints: OPS.map((op) => ({
+      method: op.method.toUpperCase(),
+      path: op.path.replace(/\{(\w+)\}/g, ":$1"),
+      summary: op.summary,
+      scope: op.scope === null ? "exempt" : op.scope,
+      tags: op.tags,
+    })),
+    errors: {
+      "400": "参数/校验失败",
+      "401": "未认证或 Token 无效",
+      "403": "Scope 不足",
+      "404": "资源不存在",
+      "409": "冲突",
+      "429": "限流",
+      "502": "上游失败（Git 等）",
+    },
+  };
+}

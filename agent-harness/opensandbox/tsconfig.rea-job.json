@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "typeRoots": [
+      "../../apps/scheduler/node_modules/@types"
+    ]
+  },
+  "include": [
+    "opensandbox-rea-job.e2e.ts",
+    "rea-job-model.ts",
+    "../../apps/scheduler/src/auth.ts"
+  ]
+}

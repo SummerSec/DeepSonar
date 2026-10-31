@@ -1,0 +1,1320 @@
+## [Unreleased]
+
+### 验收边界与 #770 范围收口
+
+- 仓库验收不再要求生产测试部署（见 AGENTS.md「验收边界」）。后续开发以 GitHub Actions 实际通过的门禁为准；豁免只覆盖生产执行，**非模型质量验收不在豁免范围**——独立人工标注集、按问题家族/资产隔离的调参/留出集、查看留出结果前冻结的阈值仍按各自 issue 执行，取不到就记为未交付或暂缓。未执行的生产重跑、真实模型试验和人工标注仍须如实标注为未验证，不能用离线或合成证据替代效果、容量与 SLA 结论。
+- #770 按已交付切片收口：切片 A 独立来源身份、切片 B 项目查询增强、切片 C 特征投影、切片 D 词法检索与持久弱候选，以及离线评估与积压测量工具均纳入 as-built。跨任务**强关系**（疑似同一问题 / 同根因不同实例）不在本 issue 内交付，登记为暂缓设计，独立跟踪见 #819。
+- 用户 2026-10-31 明确的豁免范围是**生产执行**（生产测试部署、生产重跑、生产数据验证），**不覆盖** #770 的离线非模型质量验收：独立人工标注、留出集与预先冻结的阈值仍未取得，质量结论保持 `unknown`。强关系未交付也不是单一输入缺口——`compareFindingFeatures` 没有强关系输出分支，身份字段全部匹配时仍返回 `similar` / `lexical_overlap_only`；`FindingPayload` 同时缺少 asset / tenant / environment / version / root-cause 字段。本版不宣称跨任务关联闭环完成。
+
+## [0.6.1] - 2026-10-31
+
+### 发布与升级边界
+
+- 本版发布已合入并通过门禁的功能切片，不代表 #767、#770、#775 整体完成；这些 issue 的外部可信输入、独立标签或后续规划闭环仍按各自验收记录保留。#765 的生产重跑验收已按用户要求豁免并关闭，修复纳入本版；豁免不代表实际生产重跑通过。真实模型效果、恢复率、质量和成本收益未验证，不用离线协议测试代替效果数据。
+- 产品版本由不可变 `v0.6.1` tag 唯一确定；数据库基线由 v0.6.0 的 schema 62 更新到 **65**，包含独立 Finding 来源身份、特征和候选派生状态。已有非空库版本不匹配时拒绝启动；升级须先备份、排空/对账未结算效果，按维护计划、显式审批与候选库重建流程执行。没有增量 ALTER 链，不支持无人值守跨 schema 升级。本次不部署生产系统。
+- 修正模型调用需要管理员显式配置 `DEEPSONAR_REPAIR_MAX_TOKENS`；未设置或非法时不允许新增修正模型请求。首个持久拒绝回执冻结额度，重启不重置；用量未知必须对账，不能记为零。该机制是累计结算后的熔断，输入/缓存成本仍可能使单次已准入请求超出剩余额度，不承诺精确调用前总成本上限。
+- 发布准备不提前改写 bundled 镜像 digest、部署示例或私有 package 版本。镜像、双架构原生验证、配置通道 inspect、三张平台 GHCR index 的 keyless 签名与最终附件必须由本 tag 的 Release workflow 实际成功产生；本节本身不证明发布已完成。
+
+### 新增
+
+- 项目 Finding 查询支持服务端筛选、游标分页及一致汇总；跨 Job 相同文本保留独立来源身份与 Artifact，不补造历史身份。新增持久特征扫描、代际重建、词法检索和有界弱候选；来源变更与权限重新校验，不改 Verify、人工处置或报告结论。离线评估/积压测量工具保留真实分母，尚无权威资产映射及独立质量标签，不发布同问题/同根因强关系或自动处置。
+- 可选任务契约、场景模板、派发前复核、结果评审与判据证据绑定复用既有权限和完成门；无法证明身份、写权限或外部效果时拒绝执行。研究候选、技术验证和目标达标分开记录，契约不授予权限，也不自动认证赏金资格。
+- Plan 增加冻结缺口投影、持久接纳回执、一次补证 Intent 与执行状态投影，以及 32 例冻结离线控制回放和故意错误接纳的负向产物验证。 未派发路线可通过显式 revision 调整 tasks/open_questions，以事件 head、Plan SHA 和冻结用户输入做锁内 CAS；目标、判据、假设与预算不变，已派发/待结算/未知效果拒绝修订，历史 Plan 不补造基线。同 key 结果从既有语义事件恢复，路线改变使旧判据绑定失效并须重新评价。Job 成功不等于目标达标；用户目标修订、依赖图执行及完整自适应规划仍未完成。
+- 当前项目 Job 支持精确版本 Skill 条件建议、选择声明的持久回执与证据回放；保持 opt-in 和当前权限重校验，不自动启用能力。导出保留冻结目录用于摘要复验，不是公共脱敏分享制品。新增能力适用性、证据覆盖和知识研究离线工具；不把合成样本解释为模型质量或收益。
+- 完成提案支持持久 revision/key、可查询回执、有界修正次数、可信 token 用量累计和 scoped 引用反馈，复用现有 Attempt effect/usage ledger。接受回执不等于终态结算；丢响应先查询，需恢复时使用同 key/revision/payload，未知效果不自动重放。
+
+### 生命周期与并发修复
+
+- 保留 DSH 可信父子谱系；父 idle 有活动子任务时不提前结算，子 finish 后等待父会话处理。实际 executor 的人工消息/Hub 完成预留竞态、取消和迟到回调均受既有完成门保护。
+- 修复 Control 完成、Plan 与知识写入之间的 key 归属互斥、终态保留事件配额和已知限流反馈；CLI 协议回放覆盖 Claude/Pi/DSH 的成功、修正、丢响应、次数耗尽、无进展拒绝和退出。替身 runner 异常覆盖实际 executor finally 清理；不声称完整进程崩溃或模型理解已验收。
+
+
+
+### 变更
+
+- Agent CLI 治理 pin 抬到当前上游版本（无数据库变更）：Claude Code `2.1.296` → `2.1.312`、Pi Coding Agent `1.1.0` → `1.4.0`、官方 DSH `0.2.0-rc.2` → `0.2.1-rc.2`。base / kali-minimal 两个 Dockerfile 的 ARG 与 npm `sha512` integrity 同步更新；`agent-harness/dsh-runtime` 冻结 lockfile 重生成（新版上游移除了 `@deepseek-ai/dsh-invariants`，清单与 runtime manual 目录一并删除该条目）；`agent-harness/runtime-images.json`、`kali-minimal-runtime.json` 与 `runtime-manuals/catalog.json` 跟着重建，adapter 声明的 `version` 与夹具用例断言同步。Pi 1.4.0 要求 node ≥ 22.19.0，base 镜像的 `node:22-bookworm-slim` 满足。Pi rpc 模式与 DSH `lib/bin.js` 入口在新版本中仍存在；旧夹具录制于 Pi 1.1.0 / DSH 0.2.0-rc.2，仅作格式证据，新版本的 live 解码需真机 Job 复核。治理 profile 同步去掉上游已删除的 invariant 插件族，并补上 0.2.1-rc.2 起独立出来的 `working-directory` 插件（`workingDirectory` 服务原来的提供者不再顺带提供它）（`@deepseek-ai/dsh-invariants` 与 dsh-{session,agent,scope,agent-loop} 的 `./invariant` 子路径），否则 DSH 启动即报 required plugin did not activate（base 镜像的 DSH Cordis 真实容器启动门禁发现）。
+
+### 修复
+
+- Pi RPC 大输出按完整 JSON 处理（#765）：按 LF 独立计数，修复合批字节误计、跨帧前缀残留和嵌套 type 误判；不再截断 JSON 或跳过控制帧。默认硬上限 8MiB，可通过 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1–64MiB 配置。额度内超过 1MiB 的事件先保存完整脱敏 JSON 到 Job workspace 和 Attempt evidence，再将已知文本字段投影为 UTF-8 安全预览；保留响应 ID、身份、错误和生命周期字段。诊断仅含 original_bytes、retained_bytes、sha256（redacted_json）、path/evidence_path 与 capture_complete，不含原始 preview。每次运行含恢复共用 128MiB 保存额度；超硬上限、结构不可安全投影、写盘失败或额度耗尽明确失败，不能报告阴性/成功。该修复自身无需 schema 变更；生产 17 个 Job 未重跑，其生产验收已获豁免，#765 于 2026-10-31 关闭（[收口记录](https://github.com/SummerSec/DeepSonar/issues/765#issuecomment-6537343628)）。不声称生产审计覆盖已经验证。
+
+
+- 官方运行时镜像清单拉取不再因单次链路抖动失败（#761）：`github.com/.../releases/latest/download` 会 302 到 `release-assets.githubusercontent.com`，部分网络下首跳常超过 10s；原先每次请求只有一次 10s 硬超时且零重试，表现为 `remote registry request timed out` 反复出现。现在：① 仅对瞬时错误（超时/连接重置/429/5xx）做有界重试（默认 3 次，`DEEPSONAR_RUNTIME_REGISTRY_FETCH_ATTEMPTS` 可调 1–5），鉴权/主机/载荷/体积错误立即失败；② 无 token 时公开通道失败后回退 `api.github.com` 的 release asset；③ 瞬时失败**保留上次成功清单**（`stale`/`consecutive_failures`/`last_success_at`），连续 3 次才降级到 bundled，`stale` 期间不写平台更新检查，横幅不再随单次抖动翻转。不 bump schema。
+- 收口 #761 的两处消抖缺口（#763）：① 清单缓存命中与失败分支改为共用同一个「是否可服务 last-known-good」判断，否则连续失败达到降级阈值后，缓存有效期内的普通读取会把已降级的清单重新放行（`source=remote`/`fallback=false`），与强制刷新结论矛盾；现在降级后缓存命中直接按 bundled 处理且不额外抓取，成功刷新即清零失败次数恢复 remote。② `runtimeImageRegistryWithOverrides` 与 `registryWithEnvOverrides` 两份投影改为只替换 `images`，保留 `stale`/`consecutive_failures`/`last_success_at` 与 `platform`/`platform_version`/`min_runtime_image`——此前 `stale` 在同步链路上被丢弃，导致 stale 清单仍会覆盖上一条平台更新检查记录，`GET /runtime-images/registry` 也无法向前端暴露「沿用上次成功清单」状态。新增 4 个回归用例，反向验证旧实现全红。不 bump schema。
+
+## [0.6.0] - 2026-10-22
+
+### 发布与升级边界
+
+- 正式稳定 tag 的平台发布增加 GHCR keyless 签名门禁：在最终清单和双架构摘要核验后，独立 `platform-signatures` job 使用 GitHub 短期 OIDC/Fulcio/Rekor，仅签 scheduler、web、image-admission 三个不可变 index。精确 workflow/tag/commit、版本、schema 与完整目标集合均须验签通过，才可发布 Release 和回写 bundled 清单；不创建长期密钥或新增全局权限。
+- 产品版本由 `v0.6.0` tag 唯一确定，目标数据库基线为 schema 62，包含凭据优先解析、项目知识结构与维护世代；跨 schema 升级使用计划审批、数据库写入隔离及候选重建，不原地恢复旧备份覆盖新写入。角色身份重置仍须显式选择，`--force` 不隐含重置。
+- 项目知识支持 Job 冻结目录、Memory/Skill 生命周期、幂等治理回执及后台应用；凭据配置成为 CLI/provider/model 默认解析的优先来源，保留历史 Job 快照。本轮仅做隔离行为与数据安全验收，不做真实模型效果验收。
+- 宿主无人值守升级仍默认关闭，仅管理员明确配置策略、信任根及调度后才可运行；签名不是部署授权。P3 Web 发起升级为可选且未实现。正式签名正例、镜像通道与最终 payload 的运行结果以本版本 Release 证据为准，准备提交和 CI 通过不等于发布完成。
+
+
+### 平台部署安全修复（#740 / #747）
+
+- 修复 CI OpenSandbox Compose 的 digest 环境夹具、`.env` 重复/非规范赋值校验和 Release 四行 digest 回写；发布清单生成与逐通道双架构 inspect 已接通，保留既有部署通道。
+- 升级恢复记录绑定 Compose 项目、文件内容与 Docker 目标，拒绝误用其他部署的记录；补隔离双源码版本真实容器演练入口和备份恢复验收。
+- 修复原生 Reverse 构建的 jq/libjq1 版本冲突：两包共同固定到 Debian 安全更新；工具清单与一致性门禁同步。
+- 目标配置预检复用凭据优先的运行时解析，阻止默认凭据、CLI 与模型组合不兼容；同时验证主密钥文件内容及全部已存凭据的 AES-GCM 认证。密钥和密文仅经 stdin 传入断网目标容器，不写入升级记录或诊断；外部认证和模型实际可用性仍不属于离线检查。
+- 排空包括所有终态 Attempt 的未结算/未知效果。共享宿主 `upgrade` 已接只读计划和风险审批、目标配置离线预检、旧数据库身份隔离、备份校验、独立候选库跨 schema 重建、同目标中断续做及显式清单绑定的受管 SSH 控制面/worker 升级。worker 登记、心跳和领取共同校验版本/generation，换代登记及心跳另需当前代秘密，旧身份不能凭公开版本信息恢复执行权。激活前回滚保全源库并保持暂停；激活已发生或结果不明时不自动切回旧数据。最终 schema 61 → 62 的 16 项 Compose 演练及独立知识后台停写场景已通过并清理；Windows 原生锁、私有 ACL 与文件后端已实现并通过原生 CI，但 Windows Docker 完整升级和断电测试未运行，preflight 的 `not_checked` 不算兼容性通过。具体证据与边界见 [升级演练](deploy/UPGRADE_REHEARSAL.md)。
+
+### 修复
+
+
+### 变更
+
+- **平台镜像改按不可变 digest 部署（#740 P1 第 3 片，不兼容）**：`deploy/docker-compose.prod.yml` 与 `docker-compose.opensandbox.host.yml` 的 scheduler / web / image-admission 改为每个镜像一个完整引用变量 `DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:<digest>`，缺失即 Compose 失败；删除 `DEEPSONAR_IMAGE_TAG`，不保留兼容。`/health.version` 与版本发现只认显式 `DEEPSONAR_VERSION`，不再回退镜像 tag。`deploy.sh`（新增共享校验 `deploy/platform-images.sh`）与 `deploy.ps1` 发现 `deploy/.env` 或进程环境中的旧变量、可变 tag、仓库名不符的 digest、缺失或带 `v` 前缀的 `DEEPSONAR_VERSION` 时 fail closed，逐项列出问题并打印应从 `deploy/.env.example` 复制的四行；不自动补写、不回退 tag。`worker-join` 不运行平台镜像，只拒绝旧变量；`up real build` 临时把平台镜像标记为 `deepsonar-*:local-build`，不改写 `.env`。官方 helper / Silo 改按 `DEEPSONAR_VERSION` 标签解析后固定为 RepoDigest。`deploy/.env.example` 写入 v0.5.6 的真实 index digest（ACR / GHCR 一致）。新增 `deploy/deploy-platform-images.test.mjs`，对 sh 与 PowerShell 两侧用假 docker 端到端覆盖首次生成、按 digest 拉取与各类拒绝路径；OpenSandbox PoC 夹具改读 `.env.example` 的 digest 行。当前维护升级与验收边界见本区安全修复条目。
+### 修复
+
+- **Windows 数据库基线重建**：角色提示词回填在匹配 SQL 模板前统一 CRLF/LF，避免 v58 → v59 重建在 Windows 检出时中断；新增跨换行回归并验证真实 PostgreSQL 回填。
+
+- **凭据推理探测保留上游错误并补做模型目录发现（#748）**：`credential-test.ts` 推理探测失败时用有界前缀（`ERROR_BODY_PREFIX_MAX_BYTES = 4096`）读取上游正文，提取 `error.type` / `error.message`（兼容 OpenAI / Anthropic / new-api 与纯文本正文，截断 JSON 尽力解析），清理 C0/C1 控制字符、截断并对主密钥、原生配置中的其他秘密值、`Bearer` / `sk-` 类 token、密钥赋值以及 URL 用户信息/查询串脱敏后写入 `health_detail` 与 `upstream_error`。`CredentialHealthErrorCategory` 新增 `model_unavailable`（403 且上游指向模型，或目录中不含当前模型）与 `quota_exhausted`（402，或 403 / 429 正文带 quota / budget / 余额等额度信号）；以往 403 一律 `authorization`、402 落 `unknown`。推理因 402 / 403 / 额度耗尽失败时仍补一次 `GET /v1/models` 目录发现，成功即回填 `model_catalog_json` / `model_catalog_fetched_at` 并在明细中提示「当前模型不可用，可用：…」；目录发现失败不清空已有目录。路由侧类别白名单改为复用 `CREDENTIAL_HEALTH_ERROR_CATEGORIES`；探测回写同时核对 settings、CLI 与项目，配置变更后拒绝陈旧结果。
+
+### 新增
+
+- **Mobile ASC 默认 Rust（#754）**：固定 rust_ASC v0.1.1 源码、radguard 修订与 Cargo.lock，CLI-only 编译；`rust-asc` / `droidasc` 默认 Rust，保留 `--threads` 参数转换和显式 `droidasc-python`。损坏 ZIP 拒绝作为空引用结果；保留 JADX/apktool 和其它工具所需 Python。新增自建双 DEX APK 行为验收；最终 amd64 / arm64（QEMU）镜像各通过 59 次真实命令检查，不宣称原生双架构验证、全面兼容或性能提升。
+
+- **平台版本发现与管理端提示（#740 P1 第 2 片）**：扩展 `runtime-image-registry.json` 契约，新增可选 `platform` 段（`version` / `commit_sha` / `schema_version` / 可选 changelog URL，以及 scheduler、web、image-admission 在 GHCR / ACR / Docker Hub 的 index digest + `linux/amd64` / `linux/arm64` child digest 与通道证据；缺省保持向后兼容）。Scheduler 在官方清单同步路径上比较当前部署版本（`DEEPSONAR_VERSION`）与清单版本，结果写入 `platform_update_checks` 单例（schema **v58**）；版本只前进才标「可更新」；GitHub 不可达只记 `check_error`，不影响领取。新增只读 `GET /platform/updates`（admin，项目级 token 拒绝）。Web 仅平台管理员显示新版本 / 检查失败提示；不提供升级 apply UI。Release 平台 digests 与最终 inspect 门禁已补齐；受控升级限制见本区安全修复条目。
+
+- **平台级全局暂停领取（#740 P1 第一片）**：新增持久化在 `global_settings` 单例行的 `claims_paused`（`reason=platform_upgrade|maintenance`、说明、操作者、时间）。所有 Scheduler 副本在 dispatch claim advisory lock 内读取，暂停与领取严格线性化，重启后保持；单例行缺失 fail closed。暂停只阻止新的 `pending → claimed`，不取消、不杀、不重放在途 Job，新任务仍可入队。新增管理 API `GET /platform/claims`（状态、`running` / `pausing` / `paused`、claimed / provisioning / running 在途数、所有 Attempt（包括终态）上 `effect_pending` / `unknown` 效果数）、`POST /platform/claims/pause`、`POST /platform/claims/resume`（可按原因解除，唤醒调度）；暂停 / 恢复仅平台管理员，项目级 token 拒绝，写审计。Web 所有页面在暂停期间显示全局横幅；新增指标 `deepsonar_platform_claims_paused`。本条记录第一片的暂停领取语义；当前维护升级还会拒绝业务写入，见本区安全修复条目。
+
+### 修复
+
+- **凭据页恢复模型输入入口（#749）**：账号管理新建 / 编辑 Provider 账号时，「Provider 连接与模型路由」区新增结构化「模型」字段（Claude Code / DSH 单模型，Pi 为逗号分隔的模型 ID 列表），编辑时按已保存配置预填；粘贴或修改原生配置中的主模型时自动回填。`createAccount` / `saveEditedConfig` 现把 `modelId`（Pi 为 `modelIds`）传给 `buildSettingsConfigFromEditor`，`patchProviderModelId()` / `patchProviderModelIds()` 不再是死代码：Claude Code 显式修改主模型时把 `ANTHROPIC_MODEL`、`ANTHROPIC_DEFAULT_{FABLE,SONNET,OPUS,HAIKU}_*` 与 `CLAUDE_CODE_SUBAGENT_MODEL` 全部 14 个模型键统一为该模型，原生配置中存在不一致键且显式改模时页面提示将被统一；普通编辑保留独立 tier 与 subagent 路由；字段留空则保留原生配置的模型键不变。Codex / OpenCode 高级配置恢复内置模型字段（直接写入原生配置）。不改 schema、OpenAPI 与 Scheduler 行为。
+
+### 文档
+
+- **系统规格与追溯矩阵首批（#741 PR 2）**：新增 `docs/architecture/01-system-specification.md`（首批贯通任务→Hub→Job/Attempt→报告、非法提案→RepairFeedback、超时/崩溃/未知效果→对账清理三条链路；条目结构为规范要求 / 决策来源 / 实现状态 / 代码入口 / 验证证据）与 `traceability.md`（仅关系矩阵）。`README.md` 明确 Canvas / Fact / Artifact / Device / 资产的前缀归属，并更新实施进度。`docs-freshness` 修复 Windows 下 `path.join` 反斜杠导致必需文件误报缺失的问题，并新增需求定义唯一、矩阵覆盖与悬空引用机检。不改 schema、OpenAPI 与运行时行为；其余视图与 ADR 由后续 PR 补齐。
+- **系统架构设计目录骨架（#741 PR 1）**：新增 `docs/architecture/`，`README.md` 定义目录索引、阅读路径、文档状态（文首「状态 + 同步日期」）、文件 / 需求 ID（`FR-<域>-NNN` / `NFR-<属性>-NNN` / `IR-NNN` / `CON-NNN`）编号规则与维护流程；`adr/README.md` 给出 ADR 模板（背景 / 决策 / 状态 / 后果 / 替代方案）、四位编号与状态规则及首批 6 条回填索引。`docs/README.md` 新增「系统架构设计」分区；`pnpm ci:unit:docs-freshness` 新增断言：新目录纳入相对链接 / 脚本 / 已删机制扫描，且每个文件文首标注状态与同步日期。不改代码、schema、OpenAPI 与运行时行为；系统规格、视图与 ADR 正文由 #741 后续 PR 补齐。
+
+### 部署 / 升级说明
+
+- **维护升级基线（#740 / #747）**：新增维护世代、运行身份与 worker 准入字段；最终唯一基线以 [`schema-version.ts`](apps/scheduler/src/schema-version.ts) 和 [`schema.sql`](database/schema.sql) 为准。下述 v57 → v58 / v58 → v59 是历史分片，不是本 PR 最终升级目标；本轮已集成 schema 62 并完成隔离目标镜像演练；未来并行变更仍须重新核对编号和 DDL 指纹。
+
+- **平台镜像引用契约变更（#740 P1 第 3 片）**：已有部署升级前须删除 `deploy/.env` 中的 `DEEPSONAR_IMAGE_TAG`，并从目标版本的 `deploy/.env.example` 复制 `DEEPSONAR_VERSION` 与三条 `DEEPSONAR_*_IMAGE` digest 引用（不要删除整个 `deploy/.env`，其中保存数据库密码与密钥）；否则 `deploy.sh` / `deploy.ps1` 与 Compose 直接拒绝启动。不改数据库 schema。Release 回写 `deploy/.env.example` 同步改为写入 `DEEPSONAR_VERSION` 与按 inspect 得到的 digest 引用。
+- **历史分片：#740 P1 第 2 片**修改数据库 schema **v57 → v58**（新增 `platform_update_checks` 单例表）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。Compose 镜像引用契约见上一条（#740 第 3 片）；受控升级与剩余限制见本区安全修复条目。
+- **历史分片：#748** 修改数据库 schema **v58 → v59**（`credentials_health_error_category_check` 新增 `model_unavailable` / `quota_exhausted`）。已有数据库须先停 Scheduler，再执行 `pnpm db:rebuild -- --plan` / `--apply`（无增量 ALTER 链，旧库 fail closed）。
+
+## [0.5.6] - 2026-10-15
+
+### 发布状态
+
+- **发布说明**：本节在打 `v0.5.6` tag 前写定，本身不证明 GitHub Release 或镜像已发布完成。上一版 `v0.5.5` 的 tag 触发 Release（run `38506851988`）已全部成功，并把 `deepsonar-reverse` `0.5.5` 与 canonical digest 回写 bundled registry。本版剩余硬门不变：本 tag 触发的 Release 实际成功，产出真实不可变 digest、各配置通道 inspect 证据，并通过最终 catalog 双平台 payload 门禁后由 workflow 回写 `deploy/runtime-image-registry.json` 与部署 tag。以上任一未完成即不得宣称发布完成，也不得伪造 digest / inspect 证据、用空 descriptor 或从必需产品集合静默删除产品来绕过阻塞。
+
+### 修复
+
+- **Anthropic Messages 探测携带 Claude CLI 客户端指纹（#736）**：部分 new-api 架构第三方中转在 Anthropic Messages 路径只按 `User-Agent` 是否以 `claude-cli` 开头识别客户端，否则返回 401 `unauthorized client detected`；真实沙箱 Job 因 Claude CLI 自带 UA 不受影响，但账号管理页「测试连接」的推理探测与模型目录发现会被误报为 `authentication`。`credential-test.ts` 与网关 `upstreamAuthHeaders` 的 anthropic 认证头现统一注入 `user-agent: claude-cli/2.1.296 (external, cli)` + `x-app: cli`，版本取受治理的 claude-code adapter pin（新增 `claude-cli-fingerprint.ts`），不会与运行时 CLI 静默漂移；网关仍优先透传真实 CLI 请求头。推理探测 401 正文含 `unauthorized client` 时，结果明细标注「按客户端指纹拒绝，不一定是凭据无效」；READINESS 对 Anthropic 凭据的认证失败提示重新测试。与 #321（OpenAI-responses 按 `input[0]` 识别）相互独立，已在 `docs/AGENT_CLI_RUNTIME_ADAPTERS.md` 记录。
+- **部署就绪门禁与运行镜像恢复统计（#730）**：部署侧修复普通启动与 worker-join 的 `if ! command` 退出码丢失（保留失败与超时语义，不把失败误报为成功）；入口就绪判定改为顶层布尔 `ok=true` 且 `ready=true`，HTTP 200 或容器 `Running` 都不能替代真实就绪；postgres / silo 探针、状态查询与诊断子命令改用真实截止时间与独立超时，覆盖无 `setsid` 时的子孙进程回收；受控续启必须等 `silo-init` 成功退出才启动后续应用；PowerShell 侧对齐依赖与容器检查、参数引用和日志脱敏。运行镜像侧：`prepare` 返回真实 `attempts` / `retry_count` / `timeout_budget_sec`，本地命中为零次 pull、共享 in-flight 观察同一操作、post-pull digest 校验失败仍保留已消耗预算；对账默认从真实 Worker registry 枚举远端节点（含离线 / 过期），registry 失败不静默执行 repair；远端 inspect / repair 尚未实现时明确返回 `unsupported`，不用 Scheduler 宿主状态冒充远端。同步 OpenAPI、runbook 与设计索引。
+
+### 文档
+
+- #718：确认 v0.5.5 已发布 `deepsonar-reverse`（canonical `sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8`，GHCR / Docker Hub / ACR 三通道 inspect + registry 回写；Release 附件含双架构 native 与 `published-manifest` Job evidence）。同步 REA / 发布 / 矩阵 / 架构文档状态；增加 hermetic 准入单测，绑定 bundled `0.5.5` digest → `selectRuntimeImageRef` 与 `static-registry` trusted 契约。关闭 #718。全局默认镜像不变，reverse 仍为 `project_opt_in`。
+- **失败发布同名 tag 恢复守则（#734）**：`AGENTS.md` 发版硬门后新增失败发布恢复流程——仅适用于**尚未成功正式发布**且取得用户明确授权的失败版本，且必须先保留旧 tag 对象 SHA、解引用 commit SHA、失败 run 链接与已产出镜像证据。修复必须先走 review / merge；删除及重建 tag 前重新 `git fetch origin main`，新 tag 必须指向最新且已验收的 main commit，已有更高版本 tag、版本文档不匹配或并行发布进行中时先协调，不得降级 changelog 门禁。删除 Git tag 不会清理 GHCR / ACR / Docker Hub 镜像；Reverse 既有 immutable index / payload 与本轮原生验收的 runnable manifest 匹配时保留原 index bytes 仅补缺失通道，不匹配则 fail closed，不得强制覆盖不可变镜像掩盖差异。新 tag 触发新 release run 并核对 `head_sha` / checkout SHA / tag 解引用 SHA；旧 run 的 rerun 不代表采用最新脚本。收口必须完成双架构与真实 Job 验收、descriptor / catalog / 部署 tag 回写和正式 Release，部分成功不等于发布完成。
+
+### 部署 / 升级说明
+
+- 本版不修改数据库 schema，主线保持 v56，无需数据库重建；`database/schema.sql` 未变。
+- 本版不改变运行镜像输入或 fingerprint，命中不可变 `src-*` 缓存时复用既有构建，仍执行规定的原生冒烟；控制面镜像因 Scheduler 源码变更（#736 / #730）随本次发布重建。
+- `deploy/deploy.sh` 与 `deploy/deploy.ps1` 的改动只影响就绪判定、有界等待与诊断输出，不改变服务拓扑、凭据面或操作权限；远端节点镜像 inspect / repair 仍为明确后续范围，未扩大节点网络或凭据权限。
+- 准备期间不手写 bundled 清单中的运行镜像 digest，也不提前改写仍指向上一份已验证发行物的 bundled 清单；`deploy/runtime-image-registry.json` 与 `deploy/.env.example` 的 `DEEPSONAR_IMAGE_TAG` 仅由本 tag 的 Release 实际发布证据通过后由 workflow 回写。
+
+## [0.5.5] - 2026-10-14
+
+### 发布状态
+
+- **发布说明**：本节在打 `v0.5.5` tag 前写定，本身不证明 GitHub Release 或镜像已发布完成。`v0.5.4` tag 触发的 Release（run `38492699161`）中 `reverse-images` 已把 `deepsonar-reverse:0.5.4` canonical index 推到 GHCR，但向 ACR / Docker Hub 发布失败；最终 Release job 强制依赖 reverse descriptor，截至本节写定时该 run 未产出 GitHub Release；`v0.5.4` tag 不移动、不重写。本版只带上 reverse 发布通道的重试修复，剩余硬门不变：本 tag 触发的 Release 实际成功，产出真实不可变 digest、`reverse.json`、各配置通道 inspect 证据，并由 workflow 把 `deepsonar-reverse` 版本回写 `deploy/runtime-image-registry.json`（此前 `versions: []`）。以上任一未完成即不得宣称发布完成，也不得伪造 digest / inspect 证据或静默排除 reverse；#718 在首个已发布并准入的 reverse digest 及其证据落地后关闭。
+
+### 修复
+
+- **Reverse 发布通道重试（#718，#732）**：`v0.5.4` Release 中 `reverse-images` 已把 canonical index 推到 GHCR（`deepsonar-reverse:0.5.4` → `sha256:45b538274f513933135bd895d7350d51c7c0a557e5784a77e74b4be9b82820b8`），但向 ACR / Docker Hub 跨 registry 复制多 GiB 层时 `docker buildx imagetools create` 失败且日志只有一句“registry index publication failed”。`agent-harness/publish-reverse-runtime.mjs` 现与其他发布 job 对齐：强制 `GODEBUG=http2client=0`、每次尝试 15 分钟上限、最多 3 次指数退避重试，并输出 registry 错误尾部便于诊断；重试同源同字节、幂等，写入后仍重新 inspect digest，失败依旧 fail closed，不产出 descriptor。
+
+### 部署 / 升级说明
+
+- 本版不修改数据库 schema，主线保持 v56；不改变运行镜像输入或 fingerprint，命中不可变 `src-*` 缓存时复用既有构建，仍执行规定的原生冒烟。准备期间不手写 bundled 清单中的运行镜像 digest，仅由本 tag 的 Release 实际发布证据通过后由 workflow 回写。
+
+## [0.5.4] - 2026-10-14
+
+### 发布状态
+
+- **发布说明**：本节在打 `v0.5.4` tag 前写定，本身不证明 GitHub Release 或镜像已发布完成。`deepsonar-reverse` 的发布路径已在 main 接线（#723）：`release.yml` 含 `reverse-image-builds`（原生 amd64 / arm64 构建、REA/Ghidra 冒烟与真实 OpenSandbox Job）与 `reverse-images`（canonical index、各配置通道发布与 inspect、`reverse.json`），最终 Release job 依赖 reverse 并强制要求其 descriptor；打 tag 前 main（`ee5a9d38`）的 `ci` 与 `reverse-runtime` 双架构已通过。剩余硬门是本 tag 触发的 Release 实际成功：产出真实不可变 digest、`reverse.json`、各通道 inspect 证据，并由 workflow 把 `deepsonar-reverse` 版本回写 `deploy/runtime-image-registry.json`（此前 `versions: []`）。以上任一未完成即不得宣称发布完成，也不得伪造 digest / inspect 证据或静默排除 reverse；#718 在首个已发布并准入的 reverse digest 及其证据落地后关闭。
+
+### 修复
+
+- REA Job 验收的 cancel 路径改为对齐生产 `POST /jobs/:id/cancel` 副作用（#718）：lifecycle `cancelJob` 只改库状态；验收在取消后立即 `runner.destroy` 并吊销模型/capability token，否则 OpenSandbox 仍被 300s sleep 的 REA actor 占用，`drainInFlight` 超时后被误判为 sandbox leaked。timeout 仍走 Reaper（本就会销毁沙箱）。
+- 修复 Dispatcher 在 executor 异常终态（例如 Agent 未调用 `mark_job_done` 走 `failExecution`）只吊销平台 capability token、不吊销模型网关短期 `job_tokens` 的问题（#718）：`finalizeJob` 成功路径本来会成对吊销两者，但失败路径此前仅在 `finally` 里吊销 capability。现于 attempt `finally` 中无条件调用 `revokeJobTokens(..., "dispatcher_cleanup")`，与 capability 吊销配对；重复吊销对已非 active 的 token 是幂等的。同步强化 `job-capability-revocation` / `executor-real` 源码契约测试，并将前者接入 `ci:unit:executor-real`。
+- 修复非 root 运行镜像（如 `deepsonar-reverse`，`USER deepsonar`）挂载共享资产后 Job 在写入 workspace 文件时报 `Upload failed (status=500)` 的问题（#718）：Docker / kubelet 为只读挂载点 `/workspace/.deepsonar/shared` 自动创建的父目录 `/workspace/.deepsonar` 属 root:root 0755，guest 无法写入 `runtime-manifest.json` 与 `shared-assets-catalog.json`。OpenSandbox provision 现以 guest 身份探测该父目录可写性，不可写时仅对该目录做 root 修复（Docker 走 Engine `docker exec -u 0`，Kubernetes 走 execd uid 0；先尝试 chown 到 guest uid/gid，`drop_capabilities=ALL` 下回退为属主可执行的 `chmod 1777`），修复后复测失败则以 `RuntimeImageContractError` fail closed，不再暴露为误导性的上传 5xx。共享资产挂载本身保持只读、root 所有，root 镜像与已自带可写父目录的镜像不触发修复。
+- REA Job 验收（`opensandbox-rea-job.e2e.ts`）的一次性画布通过生产收敛控制 `hub_paused` 暂停 Hub：Verify rework / 失败会强制唤醒 Hub，而隔离验收库不准入 Hub 运行镜像 `deepsonar-base`；不伪造镜像准入，并在 `does_not_prove` 中声明 `hub-wake-after-verify`，断言验收期间未派发 Hub。
+- 修复 Chrome / ClickHouse Audit、Test、Fuzz 两个架构同时命中 source-cache 时直接复用旧 catalog 首行、导致最终发布 digest 与本轮测试 payload 不一致的问题：先将本轮 amd64 / arm64 wrapper 解析为各平台唯一可运行 manifest，再按候选 catalog 的不可变 digest 比较精确平台 → manifest digest 映射，忽略 attestation descriptor；只有 payload 完全相同才复用旧 version + canonical digest。source-cache 命中本身不是复用证明。payload 不同或 catalog 无匹配行时，使用已测试缓存子镜像重新组装 index，并重新发布、inspect 各配置通道，收集真实 registry evidence；解析或 inspect 错误仍 fail closed。其他调用方按精确 canonical digest 复用的契约保持有效。
+- 新增最终清单 payload 门禁 `check-runtime-catalog-platforms.mjs`：要求六个产品 × 两个平台的全部 12 份 native-smoke artifact，重新 inspect 生成清单中的 GHCR 与每个 available 可选通道的不可变 index，逐个平台核对实际测试子 manifest；缺件、重复、解析失败或任意通道 mismatch 均阻断 Release asset 上传与 bundled 回写。运行镜像输入与 fingerprint 不变。
+- runtime image GC 把“目标镜像已不存在”归为幂等成功（#725）：Docker `No such image` / `reference does not exist` 与 Podman `image not known` 在每条错误行都能确认时计入 `alreadyAbsent`，不再计入 `failed`；检查后被并发删除、ancestor 过滤因镜像缺失报错、多引用中其余引用已随首个引用移除的场景同样幂等，重复执行 GC 不再累积失败。权限不足、运行时不可达、CLI 缺失/超时与多错误汇总中混入的未知错误仍 fail closed 计入 `failed` 并保留诊断（日志带分类）；Podman 的 `image is in use by a container` 与 Docker 占用冲突一样计入 `retainedInUse`。汇总改为 `deleted` / `alreadyAbsent` / `retainedInUse` / `failed` / `unsafeRef`，仅有 `alreadyAbsent` 时降为 debug 级别；新增计数器 `deepsonar_runtime_image_gc_already_absent_total`。引用保护、GC 选择规则与非 force 删除不变。
+- 避免 Podman 部署被 `service_healthy` 无限阻塞（#726）：`deploy.sh` / `deploy.ps1` 为 `compose up` 增加有界等待（`DEEPSONAR_COMPOSE_UP_TIMEOUT_SEC`，默认 600s），超时非零退出并输出脱敏诊断（容器状态、健康、最近日志、Docker/Podman/Compose 版本）。启动后以 postgres/silo 真实探测与入口 `/api/health` 作为成功门禁（`DEEPSONAR_READY_TIMEOUT_SEC`，默认 180s）。检测到 Podman 或显式 `DEEPSONAR_COMPOSE_DEPENDS_ON=started` 时附加受控 `docker-compose.podman-compat*.yml`（`service_started`），`silo-init` 增加有界重试；依赖真实不可用时不会因 `service_started` 误报成功。默认 Docker 路径仍保留 `service_healthy`。与 #101（silo-init 命令拆词）根因不同。
+
+### 新增
+
+- #724：完善 runtime image 拉取超时、按项状态与定向恢复——自适应有界超时（`size_bytes` + 历史有效下载速度，自动估算 ≥300s 且 ≤3600s；`DEEPSONAR_RUNTIME_IMAGE_PULL_TIMEOUT_SEC` 可覆盖，合法范围 60..7200）、统一重试预算（可重试的 timeout/transport 最多追加 1 次，同 digest fallback 占用该名额；auth / digest_missing / disk_full 不可重试）、pull-status 增加 `succeeded`/`failed` 计数与 per-item `target_digest`/重试/失败分类；`POST /runtime-images/registry/pull` 支持可选 `image_keys` 与精确 `items` 定向恢复；新增本地执行节点对账 `POST /runtime-images/registry/reconcile`（含 Job 冻结旧 digest，`repair` 走受治理拉取；远端无 inspect 平面时显式 `unsupported`）；Web 展示计数与「仅重拉失败项」；runbook 见 `docs/runbooks/runtime-image-pull-partial-failure.md`。远端 worker 镜像 inspect 平面仍 follow-up。
+- 接入 project opt-in 深度二进制解析镜像 `deepsonar-reverse`（#718 PR1）：从 `deepsonar-base` 派生，钉死 `rea-agents@6.4.0`（gitHead `a56f7bb…` + npm integrity）、Ghidra 12.1.4（checksum）与完整 JDK 21；构建期校验 Node ≥ 22.19 与 arch 匹配 native decompiler。CLI-only（无 MCP/Hopper/IDA/常驻服务），不改变全局默认，也不把 Ghidra 塞进 `deepsonar-mobile`。同步 runtime manifest、离线手册、fingerprint、registry（首发 `versions: []`）、Image Admission 一致性门禁、Hub 能力表、Scheduler 专项边界、受治理 CLI 能力 `binary.rea.cli` 与 Skill `deepsonar-rea-cli`（content hash）。
+- #718 PR2：amd64 实跑钉死 REA CLI + Ghidra（公开可复现 ELF/.so 样本），记录冷启动/重复查询/峰值 RSS/取消响应，并设定镜像压缩预算暂定 2800 MiB 与 Job 内存建议 ≥4 GiB（见 `agent-harness/reverse-amd64-measurements.json`）。新增 `binary.rea.cli` Evidence 归一化与行为单测（成功/非零/截断/部分 JSON/超时/取消/清理、缺失能力与未准入镜像拒绝），接入 `pnpm ci:unit:cli-capability`。同步 Skill/手册/矩阵/DESIGN/文档索引。arm64、OCI digest 实测、reverse-runtime workflow 与 Job 端到端闭环仍 follow-up；**不**默认启用任何项目镜像。
+- #718 PR3：在 `database/schema.sql` 官方目录种子中加入 `deepsonar-reverse`（official、project_opt_in、enabled；描述与 registry 一致），重建回填同步带上该行；Image Admission 一致性门禁与 `test-reverse-runtime.mjs` 校验种子。补齐受治理 Job 路径门禁（不依赖 docker）：Skill `deepsonar-rea-cli` 发现/拉取（selector + content hash，钉死 SKILL.md 字节）→ `binary.rea.cli` 仅在 `deepsonar-reverse` 准入冻结 → Evidence 归一化 → `emit_fact` 提案（新增 `buildReaCliFactProposal`，claim/evidence 一律 `unknown`、不带 `verification`）→ Verify 独立（REA 观察 Fact 不是结构化验证 Fact，也不是 runtime proof）。项目侧覆盖全局作用域 `RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED`、项目作用域默认可用与显式排除 `RUNTIME_IMAGE_PROJECT_NOT_ENABLED`、启动 warmup 跳过与 Hub 目录投影；全局默认镜像（base/audit/kali-minimal）不变。arm64 实测、reverse workflow/release job 与首个 OCI digest 仍 follow-up。
+- #718 PR4（#723）：为 `deepsonar-reverse` 补齐 REA 6.4.0 / Ghidra 12.1.4 原生 amd64 / arm64 运行时（arm64 从同一校验过的 Ghidra zip 原生构建 decompiler，不用 QEMU 代替），新增 `.github/workflows/reverse-runtime.yml`（ELF / `.so` / PE 冒烟、`docker save` 压缩体积、cgroup / 取消测量与 `pnpm ci:integration:rea-job` 真实 OpenSandbox Job 验收，含失败、取消、超时与出网隔离证明），`binary.rea-cli` Evidence 经 `publish_shared_asset` + `emit_fact` 接入；`release.yml` 新增 `reverse-image-builds` / `reverse-images` 与 `verify-reverse-release-evidence.mjs`，最终 catalog payload 门禁覆盖 reverse。同时并入 #722 的 catalog payload 一致性修复。PR2 / PR3 中“arm64 实测、reverse workflow / release job 仍 follow-up”的部分已由本项接线；首个实际发布的 OCI digest 以本版 Release 证据为准。
+
+### 部署 / 升级说明
+
+- 仅本次 catalog 正确性修正不改变运行镜像输入或 fingerprint；本版同时包含的 #718 已改动共享运行时手册输入，不能据此承诺 v0.5.4 全部命中缓存。以实际 fingerprint / 不可变缓存解析及原生冒烟结果为准。
+- 本次缓存复用修正不改变数据库 schema，主线保持 v56；历史 Job 的冻结 digest / 快照不改写。准备期间不手写现有 bundled 清单中的运行镜像 digest；v0.5.3 的这六个产品选择已知陈旧，只能在新 Release 的真实发布证据通过后由 workflow 回写纠正。
+
+## [0.5.3] - 2026-10-12
+
+### 修复
+
+- 修复 Kali 运行时镜像命中内容缓存、但旧 catalog 尚无该 digest 时错误跳过版本 tag 的问题（#716）：catalog 命中继续复用版本行；仅缓存命中时改用 src-cache digest 发布各配置 registry 的版本 tag，并通过真实 inspect 记录 canonical digest；缓存命中路径不重新 pin src-cache，配置的 registry channel 发布或校验失败仍 fail closed。
+
+### 部署 / 升级说明
+
+- 本版不修改数据库 schema，保持 schema v56，无需数据库重建。
+
+## [0.5.2] - 2026-10-12
+
+### 修复
+
+- 修复 fuzz 运行时镜像构建退出 100（#713 follow-up）：`chrome-fuzz` / `clickhouse-fuzz` 把 `python3.11`、`python3.11-minimal`、`libpython3.11`、`libpython3.11-stdlib`、`libpython3.11-minimal` 按 `ARG PYTHON_SNAPSHOT_VERSION` 显式钉到 Debian 快照点版本并允许降级。base 镜像的 python3.11 家族跟随 Debian 安全更新前移，而这两个镜像把 APT 源钉在快照上：`afl++` 依赖 `libpython3.11`，快照中的该包严格要求同点版本的 `libpython3.11-stdlib`，与 base 已装的更新点版本互斥 → `apt-get install` 以 `Unable to correct problems, you have held broken packages` 失败。v0.5.1 release 中这两条构建（各 amd64/arm64）因此全挂，`chrome-images` / `clickhouse-images` 与 `release` job 随之被跳过，未生成 GitHub Release 与镜像清单。修复后镜像内部按快照自洽；`check-runtime-image-consistency.mjs` 增加断言，缺钉死或缺 `--allow-downgrades` 时直接失败。不 bump schema，控制面镜像与其他运行时镜像定义未变。
+
+## [0.5.1] - 2026-10-10
+
+### 新增
+
+- Provider 账号并发可观测与配置面收口（#707 Phase 2）：凭据列表/详情返回与 dispatcher claim 同口径的 `active_concurrency`（`in_use` / `max_concurrent` / 可选 `model_in_use`）；Web 账号卡片显示占用/上限，表单可编辑 `model_concurrency`；设置页补「Provider 协议全局并发」入口（账号 `max_concurrent` 之外的额外收紧）；文案标明账号 CLI 独占。
+
+### 变更
+
+- 治理 CLI 版本更新（#714）：Pi **1.1.0**、Claude Code **2.1.296**；DeepSeek Harness 迁移到官方 **`@deepseek-ai/dsh@0.2.0-rc.2`**，用隔离 lockfile 冻结完整 npm 依赖，替换旧 demo launcher 为官方 `dsh --profile`。同步 npm 完整性校验、官方镜像清单和离线手册。
+- DSH 受治理 profile（#714）：显式 `bundles: []` 与 plugin allowlist；Standard 使用 native tools，PTC 使用 `run_code`；原生子代理继承 Gateway/model/reasoning。模型访问仅经 Scheduler Model Gateway 与短期 token，Skill 只从 Scheduler 物化根发现，不启动 UI/web、settings/credential discovery、native DeepSeek routes、plugin-manager 或 telemetry。当前 Session 归档与查看器使用 v4，历史 v0–v3 仅只读。
+- Provider 账号 CLI 归属与并发文档收口（#707 Phase 3）：`ARCHITECTURE` 写明六档优先级链、CLI 排他 ⇒ 凭据级 `max_concurrent` 即 CLI 级并发、Provider 档先于 Credential；`DESIGN` 把账号 × CLI 1:1 与使用期四层同口径 fail-closed 写入内核凭据边界。不 bump schema：`credentials.agent_cli` 列保持可空（`git` / `oci_registry` 无 CLI 归属）；`llm_provider` 空值已由 Phase 1 API fail-closed，不做列级 `NOT NULL` / `SCHEMA_VERSION` 重建。
+
+### 修复
+
+- Verify 自动确认、补证确认、显式提案与状态摘要统一消费完整确认门；安全 profile 的独立证据、impact 与结构化反证尝试贯通摄入、快照和校验。失败来源、修订不匹配和证据完整性不再被内部 Fact gate 绕过。
+- Pi 空闲催促与恢复输入使用可启动新回合的 RPC prompt，核验实际 session 身份并有界等待 ACK/启动；错误状态按回合隔离，终态错误不会被 settled 覆盖。新增真实 Pi 离线恢复冒烟。
+- Report 按 Finding ID 和冻结状态章节逐项核对覆盖，缺失时使用确定性完整模板；大报告不再要求模型在 summary 字节上限内枚举所有条目。动态工具示例、rework 缺项要求与角色/镜像策略同步机器契约。
+- 角色证据协议与镜像策略统一（#714）：Verify 只读已有结构化证据，缺口使用 `rework` 与非空 `missing_evidence`，人工阻塞使用 `needs_human`；普通 Test/review 只有绑定真实 Finding 才提交 verification，无目标时提交普通 Fact。Report/Hub 不因镜像手册扩大写入权限，角色种子与动态工具说明补齐 `impact`、`attempted_refutation` 和正确示例。
+- Image Admission 删除对 schema v55 已移除 `selected_version_id` 的查询（#704 / #706），修复 tracked-tag 检查与连续复扫在 v55+ 数据库上的列不存在错误。
+- 任务总览长目标默认折叠为单行预览，按实际截断状态提供展开/收起并保留换行（#709 / #710）。
+- 官方 Agent 镜像刷新 Bookworm `xz-utils` pin，修复旧精确版本不可用导致的构建失败（#714）。
+- 网络拓扑消除服务发现歧义（#685 方案 4）：bridge 部署下 Scheduler 只挂业务网 `deepsonar`，`opensandbox` 撤回 #687 的沙箱网双挂；受管 `deepsonar-gateway-proxy` 改经命名卷 `deepsonar-gateway-upstream` 上的 Unix socket 回连 Scheduler，不再解析 `scheduler` 服务名，Podman 多 aardvark nameserver / musl 并行查询不再能让 Gateway 或 OpenSandbox / PostgreSQL / Silo 间歇 `ENOTFOUND`。代理路径白名单（`/gateway`、`/control/v1`）、Job token 鉴权与拒绝管理 API / CONNECT 不变，且代理不在业务网上。host 部署保持经 `host.docker.internal`（`/etc/hosts`）回连。新增 compose 拓扑自检 `compose-network-topology.test.ts`；健康探测有界重试仅保留为瞬态保护。
+- Provider 账号 CLI 归属贯通到候选解析层（#707 Phase 1 / 方案 A）：`resolve-credential` 删除软回退与 `default_credential_id` 侧路；CLI 不匹配返回 `provider_credential_cli_mismatch`（`permanent_failure`）；协议不兼容返回 `provider_credential_protocol_incompatible`（`model_correctable`）。凭据 create/PATCH 拒绝空 `agent_cli`（`CREDENTIAL_CLI_REQUIRED`）；在跑 Job 持有账号时禁止改 `agent_cli`/`provider`（`CREDENTIAL_IN_USE_BY_RUNNING_JOBS`）。
+
+### 工程
+
+- 补齐 Verify 完整安全证据生命周期、PostgreSQL 补证确认、并发收敛与角色镜像策略回归；fake Agent 证据与真实确认契约一致（#714）。真实 Pi 离线 RPC 恢复、DSH 官方 SDK profile 的 native/PTC/子代理、v4 归档、同进程 follow-up 和跨进程恢复拒绝均有专门冒烟/回归。
+- 发版文档保鲜：校正产品 Git tag 与私有 workspace package 版本的边界、账号已配置模型选型事实，以及 Release 自动回写 registry/部署 tag、纯文档最终 main CI 的操作说明。
+
+### 部署 / 升级说明
+
+- 本版相对 v0.4.11 **保持 schema v56，不要求数据库重建**。`database/schema.sql` 的角色提示词改动是新库种子；正常升级不会自动覆盖已有 RoleConfig 提示词，历史 Job 快照也不重写。需要采用新种子文案的现有配置，应由管理员检查后显式更新；运行期 Scheduler 策略与确认硬门会随新版代码生效。不要为了刷新文案直接执行重建，重建流程会重写内置全局角色提示词。
+- Pi / Claude Code / DSH 的新版本只有本次官方运行镜像发布后才会进入真实沙箱。控制面和官方运行时均应更新到本次已验证发行物；新 Job 冻结新镜像 digest，历史 Job 保留原快照。
+- **DSH 跨进程持久 JSON-RPC Session resume 不受支持**：同进程 `session/prompt` follow-up 可用；跨进程恢复以 `CONTEXT_RESUME_UNSUPPORTED` fail closed，不静默新建会话或自动重试。旧 0.1.1-rc.2 demo 路径也未实现持久 resume，本版纠正此前描述，并非保留旧恢复兼容路径。
+- Provider 账号必须配置唯一 `agent_cli` 且与 Job CLI 匹配；运行中的账号不能改 CLI/协议归属。升级前核对项目授权账号和账号 settings 的模型名单，空 CLI 或错配会提前失败；显式模型配空名单也不会回退到探测目录。
+- bridge 部署请按新版 Compose 重建服务拓扑：Scheduler/OpenSandbox 留在业务网，受管 Gateway proxy 经命名卷 Unix socket 回连 Scheduler；不要照旧版双挂网说明手工保留冲突拓扑。host 部署仍经 `host.docker.internal` 回连。
+
+## [0.4.11] - 2026-09-24
+
+### 变更
+
+- 按角色能力插件重构运行配置（#690 / #701）：删除 `role_credentials`、`RoleConfig.pi_extensions`、`POST /credentials/batch-bind` 与 Agent「凭据绑定」页。Hub 只提案 `provider` / `model_ref` / `pi_extension_ids` 等能力需求（禁止提交账号 UUID）；Scheduler 在项目授权目录内按健康度、CLI/模型兼容与缺省策略解析凭据并 fail closed。Pi 扩展仅经已注册可信能力组合冻结进 Job。Schema **v56**。历史 Job 快照保持不可变，不作新 Job 兼容输入。
+- 清除项目级能力配置面（#691 / #699 / #700）：运行镜像由平台 `visible_project_ids` 绑定第三方可见范围，项目只可排除非 base / 启用已绑定第三方，`deepsonar-base` 永不可停用；拒绝项目 `version_id` / `pin_policy`，Job 恒跟平台 channel 最新 digest。Hub 删除 `materializeHubProjectRole` 与 `scope=project`（跨任务复用走 Skill）。Skill：`trusted+enabled` 源默认可用，`project_skill_sources` 仅保留显式停用。Schema **v55**。#700 对齐 residual CI（Skill mock / SCHEMA / 文案 / marketplace 冒烟）。
+- 项目 RoleConfig 只减不加（#697 / #698 / #695）：`sandbox_limits` / `platform_tools` / `runtime_knobs` 相对平台或全局取 min/AND；停写停认 `allow_model_catalog_passthrough`；transfer 导出补 `instructions_markdown` 并 clamp 导入。
+- 架构层写入「禁止向后兼容」硬规则（#693）：新设计不得加双读双写 / fallback / shim / 兼容模式 / 自动配置转换；历史冻结 Job 与 Evidence 只作不可变记录，不作运行时兼容输入。
+- #679 follow-up：短暂落地 trust Skill 源默认下发 opt-in 开关（`DEEPSONAR_SKILL_SOURCE_DEFAULT_INJECT`，5c819c2a）后撤回（02fd06d5）；生产默认本为关闭，行为不变——Skill 仍由 Agent `search_skills` → `pull_skill` 自主拉取，不预注入角色提示词 / RoleConfig。
+
+### 新增
+
+- Provider API Key 已保存后支持明文回显（#689 / #692）：管理 API `settings_config_json` 不再脱敏为「已保存密钥」，编辑表单 hydrate 真实值，眼睛按钮可查看/隐藏；留空保存仍表示不修改，未改动的明文不会触发 rotate。Job 快照等非编辑面继续脱敏。
+
+### 修复
+
+- 收口过程流持久化边界与拓扑可恢复性（#388 / #702 / #359）：确认点为 evidence `appendNormalized` 落盘；补读只认可见 `BLOB_DIR`；跨副本无共享卷时 `visibility=unavailable` 且 WS `4415`；`stream-bus` 仅非权威投递；不承诺零丢失。单 Scheduler + 本地卷为默认支持拓扑。
+- 任务总览改为行动导向（#694）：目标与优先待办置顶；用响应式任务阶段摘要替换合成执行轨迹时间线；去掉重复「下一步」投影；补键盘焦点指示。
+
+### 工程
+
+- 发版文档保鲜硬门落地（#696）：校正 as-built 漂移；`AGENTS.md` / `DESIGN.md` / `ARCHITECTURE` 写入保鲜清单；新增 `ci:unit:docs-freshness`（schema 主线字面量、文档 `pnpm` 脚本存在性、相对链接、已删机制残留）并挂入 CI。
+
+### 部署 / 升级说明
+
+- **须重建 / 对齐数据库**：自 v0.4.10 起 schema 经 **v55**（#691）再到 **v56**（#690）。先 `pnpm db:rebuild -- --plan`，再 `--apply`。**无自动迁移。**
+- **v56 破坏性变更（#690）**：`role_credentials` 表已删除；旧账号↔角色绑定与 `RoleConfig.pi_extensions` / `pi_extensions_json` **全部失效**，不会被自动转换。请通过**项目 CLI / Provider 白名单**授权账号目录，并由 **Hub 组合**提案 `provider` / `model_ref` / `pi_extension_ids`；Scheduler 在授权目录内解析凭据。已删 `POST /credentials/batch-bind` 与 Agent「凭据绑定」UI——不要再调用。
+- **v55 配置面收敛（#691）**：项目侧不可再钉镜像版本 / 维护项目角色 / 以 opt-in 白名单打开 Skill 源；第三方镜像可见性改由平台 `PATCH /runtime-images/:id/visibility`；Skill 源默认信任可用，项目仅可显式停用。升级后按平台目录与项目排除清单重新核对。
+- **RoleConfig 收紧（#697）**：项目不可再放宽平台 `sandbox_limits` / `platform_tools` / `runtime_knobs`；超平台默认会 400。导入包会被 clamp。
+- opensandbox 双挂网（#685 / #687）已含于 **v0.4.10**；若现网仍停在更早版本，升级到本版时一并 `compose` 重新 pull/重建，确保 `opensandbox` 接入 `sandbox_gateway`。
+
+## [0.4.10] - 2026-09-23
+
+### 修复
+
+- Provider 模型权威校验与悬挂凭据解耦（#679 / #680）：凭据 `settings_config_json` 的模型名单成为选模 SSOT，并按 Agent CLI 方言解析（Claude Code `env.ANTHROPIC_*`、Pi `models[].id` / `providers.*.models`、DSH）。`RoleConfig.model` 必须命中该凭据的名单，**空名单 + 显式模型在派发前 fail-fast**（`model_allowlist_unconfigured` / `model_not_in_catalog`，返回含可用模型列表的 RepairFeedback），不再拖到 Worker 起来后整批 `unrecognized_model`；角色/项目缺省为空时自动取账号已配置模型首个。`allow_model_catalog_passthrough` 开启写专用审计（`project.*` / `role_config.*` / `job.model_catalog_passthrough`）。RoleConfig PUT 引用已删除凭据改为丢弃悬挂绑定 + `upsert_warnings`（`credential_binding_missing`），不再 400 阻断其它字段保存。
+- 模型准入失败保留结构化 RepairFeedback（#681 / #682 / #683）：`SnapshotUnresolvableError` 沿 `cause` 链保留 `repair`，`currentSnapshotUnresolvableBody` additive 增补可选 `repair` 字段（`error_code` / `stale_fields` / `next_action` 语义不变），409 响应体可直接取到候选模型列表，不再只剩被截断到 500 字符的中文串。
+- opensandbox 双挂网与健康探测有界重试（#685 / #687）：scheduler 必须留在 `sandbox_gateway`（`deepsonar-gateway-proxy` 只挂该网、上游为 `http://scheduler:3100/gateway`），而 `opensandbox` 只挂 `deepsonar` 网时该网 aardvark 对它返回 NXDOMAIN，双 nameserver 下间歇 `getaddrinfo ENOTFOUND` → dispatcher 整轮暂停领取、reaper 清理失败。修复：`opensandbox` 一并接入 `sandbox_gateway`（两张网的 aardvark 都能解析），并在探测路径加有界重试，单次解析失败不再立刻暂停领取；compose 内注明不要摘掉 scheduler 的 `sandbox_gateway`。
+- Provider 账号编辑回显与密钥脱敏（#677 / #678）：连接字段 Base URL 在 `settingsJson` 非空时也写回 settings（Claude / DSH / OpenCode），编辑 hydrate 优先 settings、回退 `public_metadata.base_url`；API Key 编辑态显示「已保存密钥」，留空或占位不会轮换、不会覆盖既有密钥。
+
+### 工程
+
+- 测试接线棘轮（#681 / #682）：新增 `ci:unit:ci-test-hook`——未被任何 script / workflow 引用的 `*.test.ts` 必须出现在 allowlist 内，新增未挂测试直接失败，`--update` 只允许缩小基线；同时把漏网的 `model-catalog-admit` / `provider-model-catalog` / `passthrough-audit` / `skill-pull` / `model-catalog-health` 挂入对应 `ci:unit:*`。
+- 守则套件真正进 CI（#684 / #686 / #688）：`ci:unit:bounded-contexts` 与 `ci:unit:ci-test-hook` 挂入 `ci.yml`（此前只有脚本定义、没有任何 workflow 调用，棘轮从未执行）；`event-ingestion` 的源码形状断言（`phase === "preflight" && key`）改为守住不变量（preflight 报 per-intent 路径、提案的 `runtime_image_key` 在 apply 前即被拒），该套件此前在 main 上持续失败。
+
+## [0.4.9] - 2026-09-23
+
+### 变更
+- 平台镜像目录成为运行时镜像的唯一准入来源，Hub 组合角色并由平台镜像直接下发 Job。
+- Hub Agent 可覆盖项目角色提示词，并创建临时角色或项目级角色。
+- 所有角色默认启用，由 Hub 中枢 Agent 决策是否启用以及派发哪个角色。
+
+### 修复
+- RoleConfig 提示词不再内置平台控制 Skill，业务 Skill 保持可插拔并通过受治理的 Job 操作拉取。
+- 更新 Roles API smoke 语义，校验角色默认启用与 Hub 派发决策。
+
+## [0.4.8] - 2026-09-22
+
+### 变更
+- 升级 OpenSandbox 至统一发行线 1.1.0（#661 / #663）：`@alibaba-group/opensandbox` 与 `OPENSANDBOX_SDK_VERSION` 钉到 `1.1.0`；server/execd/egress 改为 Docker Hub `release-1.1.0` 多架构 index digest；compose / `deploy/opensandbox/*.toml` 与单测夹具默认同步。部署须重新 pull 新 digest 镜像后再起 overlay。
+- 账号选定的 Agent CLI 独占绑定（#658 / #659）：`credential.agent_cli` 为已保存账号的唯一兼容来源；Web 兼容列表 / 角色绑定与 Scheduler 准入、Hub Provider 目录、readiness 均不再按 Provider 协议矩阵扩到其他 CLI；缺省或非法 fail-closed。Provider 级 catalog 仍仅用于创建时协议选择过滤。
+- 选模 SSOT 改为账号已填写的 provider 模型 id（#656 / #657）：Web `modelIds`/`rawModelCatalog` 不再合并探测目录；账号流选模列表与文案、角色直通说明、目录健康摘要改为「探测仅诊断」。Scheduler 准入与项目缺省模型校验改为对照 `settings_config_json` 已配置模型名单；空名单仍软降级，应急直通语义改为绕过已配置名单。
+- 上下文窗口超限可分类并一次压缩重试（#654 / #655）：`Prompt is too long` / `context_length_exceeded` / `maximum context length` / `context window` 稳定归类为 `context_window_exceeded`（不再落 `exception`）。Dispatcher 在沙箱已起来时按预算一次 `retryContextWindowExceeded`（payload 标记 `context_window_compact_retry`，下轮 executor 截断 prompt 中段）；预算耗尽则 fail-closed 并给出含 `estimated_tokens` / `context_window_tokens` 的可操作错误。runtime `classifyCliSessionResumeError` 可识别该原因但不盲续跑（`compaction_required` 跳过）。指标 `deepsonar_agent_context_window_exceeded_total` / `deepsonar_context_window_exceeded_retry_total` + `audit_logs`。同会话真正 compact+resume 仍为 follow-up hook。
+
+### 修复
+- Skill Source catalog 与仓库 HEAD 布局对齐 + resync 悬挂 selector 自愈（#664 / #665）：`scanSkillSourceRepo` 以 SKILL.md 相对目录为 module id（裸 `plugin/SKILL.md` → `plugin`，包装 `plugin/skills/name/SKILL.md` → `plugin/skills/name`，不臆造 `skills/`）；sync 成功后对 RoleConfig `modules_json` 做 catalog diff，可推断则迁移（如 `foo/skills/foo` → `foo`、唯一 basename），否则移除悬挂项并写 `skill_source.resync_selector_cleanup` / `skill_source.catalog_diff` 审计。种子改为裸路径 `vuln-definitions`。`auto_follow_head` 无 schema 钩子，延期。
+- 全局信任 Skill Source 默认注入 Worker（#660 / #662）：`RoleConfig.modules_json` 未设置或为空时，快照组装默认展开全部 `enabled=true && trust_status='trusted'` 源的 `source:*` 模块；非空列表仍按显式绑定（兼容已 PUT 的项目）。项目 Skill 白名单（#603）仅门禁显式绑定；Hub `list_available_skill_sources` 投影全局信任源清单；无历史绑定时白名单种子改为平台信任源。
+- 去重 Worker 调用规则并收敛为单一短文案源（#650 / #651 / #653）：抽取 `PLATFORM_CONTROL_CALLING_RULES` 作为唯一短文案源，压缩 system prompt / guide / seed 中重叠「调用规则」；control-api 与 Roles API 冒烟对齐短指针契约。
+- 对齐角色提示词与证据契约 / 工具白名单（#648 / #649）：Verify 回弹仅 `review`/`test`；终态语义与 outcome 枚举对齐；verify/report 平台工具硬白名单；schema seed 覆盖内置全局 RoleConfig，避免漂移。
+- 项目调度配额独立保存入口（#644 / #647）：「项目调度配额」增加独立保存按钮与反馈；其他设置刷新不再覆盖未保存草稿；保存后刷新有效上限。
+- 项目设置去掉 CLI/Provider/模型软缺省控件（#645）：保留启用白名单与探测；保存时清空软缺省字段，选型交给 Hub / RoleConfig。
+- 镜像角色缺省改为三列网格（#643）：设置页「镜像启用与角色缺省」角色列表改为响应式 `lg:grid-cols-3` / `sm:grid-cols-2`。
+- Provider Base URL 编辑时不再剥尾斜杠（#641 / #642）：受控输入 onChange 不再 `trim` + 剥尾 `/`，逐字输入 `/v1` 可保留；保存阶段仍规范化尾斜杠。
+
+## [0.4.7] - 2026-09-20
+
+### 变更
+- 精简 Web 常驻说明文案（#638）：去掉「项目策略」页头与各主页面过长 subtitle，压缩 CLI/Provider 启用面板提示；HelpTip 内说明保留。
+- Provider 账号配置流理顺（#639）：统一账号名 / Base URL / API Key（可显隐）与并发上限；去掉重复角色引用与冗余模型/预算面；高级区保留 Agent 原生配置。Scheduler 同步 Claude 主模型别名/子代理模型并物化上下文 token 环境变量；保留 Pi 原生多模型描述符。
+- 拆开账号管理、角色绑定与生效策略（#626 / #628）：凭据 CRUD 与角色绑定解耦，不再绑成同一闭环；生效策略独立配置面。
+- 模型目录 SSOT + RoleConfig.credentials 弃用首片（#632 / #634）：平台模型目录为单一事实源；RoleConfig 仅声明能力，凭据绑定面收敛；配套 RepairFeedback。
+
+### 新增
+
+- Web 模型目录健康态与应急透传可见（#614）：凭据账号流区分「连接探测」与「模型目录 health_status」，按模型展示已验证 / 目录过期 / 探测失败 / 不支持 / 应急透传徽章；透传使用醒目 callout，不与已验证混淆。Job 运行配置展示冻结 `provider_model` 健康、catalog_revision 与透传标记。GET `/credentials/:id/models` 返回 `catalog_health_status` / `connection_health`（additive）。Job 创建在 `provider_model.passthrough=true` 时写入系统审计 `job.model_catalog_passthrough`。补齐 #619 phase-1 延期的 Web 验收。
+
+### 修复
+
+- 运行时镜像契约自检与 sync 可观测性（#636）：新增只读 `GET /runtime-images/contract-selftest`（`images:read`），对本机存在的当前 catalog 版本比对 catalog `tools_manifest_sha256` 与镜像内文件字节哈希 / 内嵌 `manifest.sha256`（双口径与 #633 一致；本地缺失为 `skipped_not_local`）。registry sync upsert 在非空 `tools_manifest_sha256` 被不同 catalog 值覆盖时打结构化告警与指标；单测锁定 `COALESCE(EXCLUDED, existing)`。废弃手工 `UPDATE tools_manifest_sha256`。scheduler 镜像可戳 `org.opencontainers.image.revision`，`GET /health` 暴露 `git_revision` 便于对照部署。详见 `docs/RUNTIME_IMAGE_CONTRACT_DEPLOY.md`。
+- 官方镜像 tool-manifest 双哈希校验：catalog 期望值可匹配 `sha256sum` 文件哈希 **或** 嵌入的 `manifest.sha256`，避免定义漂移导致 provision fail-closed（#629）。
+- Gateway 冻结模型门禁：`bareUpstreamModelId` 剥离 Claude Code 尾部上下文标注（如 `[1m]`），请求裸 id 与冻结带标注 id 可互认，修复误报 `GATEWAY_FROZEN_MODEL_MISMATCH` 403（#630）。
+- RoleConfig PUT：`credentials` 改为可选（省略则保留既有绑定，显式 `[]` 才清空）；项目 `inherit_global` 丢弃 model 时在响应中返回 `dropped_fields` / `upsert_warnings`；Web 编辑器保存时不再误发空 `credentials`（#631）。架构层跟踪见 #632（本 PR 不改写）。
+- Credential 健康探测按 wire protocol 选路径（#624 / #625）：避免协议错配导致误报不健康。
+
+## [0.4.6] - 2026-09-19
+
+### 新增
+
+- 受治理 Agent Runtime Profile 首片（#613 / #617 / #621）：统一 Agent CLI、Provider/模型引用、推理强度、上下文预算、扩展与严格 `native_options` 命名空间；固定优先级全局默认 → 项目 → 角色 → 任务 → Job 临时覆盖，Job 启动前解析并冻结 fingerprint，运行中配置变更不影响在途 Job；Claude Code / Pi / DSH 各自 Adapter 负责校验、物化原生配置与启动参数，不支持字段返回稳定 `unsupported_config`（禁止静默忽略）；项目侧补齐模型 allow/default/fallback 与 catalog passthrough 策略（#621），与 Provider Adapter / Model Descriptor（#614）协同。
+
+- 可插拔 Provider Adapter 与结构化 Model Descriptor 首片（#614）：新增契约 `deepsonar.provider-adapter/v1` / `deepsonar.model-descriptor/v1` / `deepsonar.provider-model-snapshot/v1`（context_window、tools/streaming/structured_output、reasoning、modalities、cost、rate_limits、compatible_agent_clis、health_status、catalog_revision）；Scheduler 登记 anthropic/openai/git 适配器（凭据校验钩子形状、目录发现形状、CLI 兼容声明、Gateway transform stub）；Hub/选型侧提供基于 Descriptor 字段的筛选 helper；Job 快照冻结 `provider_model`（adapter 版本 + descriptor + catalog revision）；Gateway 在 adapter `enforce_frozen_model` 时拒绝快照外模型（passthrough 非默认）。Credential.agent_cli 文档化为软提示（RoleConfig 才是绑定面）；停止 RoleConfig 回写 Credential.agent_cli、全量 Provider 接入、Web 健康态展示与真实 catalog probe 迁入 Adapter 为 follow-up。
+
+- 扩展 / 工具物化注册表首片（#615）：新增统一契约 `deepsonar.extension-materialization/v1`（component_id / type / source / version / digest / 兼容 CLI·镜像 / 网络与说明书等）；Scheduler 登记并冻结组件包进 Job 快照；默认拒绝 Job 内 `npx`/`npm`/`pip`/远程脚本动态安装，失败返回稳定码 `component_materialization_failed`；物化路径仅允许快照已冻结组件。本切片以 Pi Extension 种子目录 + 运行时安装门禁 + 单测为主；UI 展示、全量 Skill 迁入、镜像构建期物化与更多组件类型 follow-up。
+
+- 通用 CLI 基础能力包（#611）：登记 `deepsonar.cli-capability/v1` 十项 phase-1 能力（`text.search.rg` / `file.discovery.fd` / `json.query.jq` / `yaml.query.yq` / `source.control.git` / `file.inspect.file` / `evidence.hash.sha256sum` / `patch.diff` / `execution.timeout` / `archive.extract`）；`list_capabilities` / `describe_capability` 可发现并附带 `cli_capability` 元数据；Scheduler `admitCliCapability(ies)` 拒绝未登记 / 镜像不兼容 / 工具未上架 / 运行时安装；Hub Intent `cli_capability_ids` 可冻结进 Job 快照（含 pack fingerprint）；结果固定 `is_finding: false`。`fd` / `yq` / `diff`/`patch` 本切片仅目录登记（镜像 apt 钉死与手册扩写 follow-up）；不含 curl/binutils 专项。
+- 语言服务器能力模块（#604）：登记受治理的 `language-server.clangd`（C/C++，兼容 chrome/clickhouse audit，只读、禁网、需 `compile_commands.json`，含调用/超时/响应限额）；Scheduler 准入拒绝未登记/镜像不兼容/缺前置/运行时安装；Hub 可通过 `language_server_capability_id` 提案并冻结进 Job 快照；`list_capabilities` / `describe_capability` 可发现完整元数据；受控 Adapter（`agent-harness/language-server-adapter.mjs`）提供有界只读查询与证据形状（非 Finding）；Chrome/ClickHouse Audit 离线手册已更新。其它语言服务器与镜像内 Adapter 安装不在本切片。
+- 项目 Skill 源启用白名单与 fail-closed 展开（#603 首片）：新增 `project_skill_sources`（schema **v53**），项目设置提供启用清单（对标运行时镜像 / CLI·Provider）；首次读取时把历史 RoleConfig `modules_json` 引用的源种子为启用，禁止静默丢配置。`expandModules` / role-runtime-snapshot 在项目范围拒绝未启用源。Hub 增加只读 `list_available_skill_sources` 目录 stub（后续 Intent 选型）。Web RoleConfig 模块候选过滤到项目白名单，并标注 RoleConfig 勾选为过渡态。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v52 → **v53**（#603：`project_skill_sources`）。先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+
+### 修复
+
+- OpenSandbox 上传 5xx：纠正 #608 自愈目标并回收 undici 传输（#609，跟进 #605）：根因是长驻 scheduler 内 SDK `ConnectionConfig` 的 undici keep-alive 池腐蚀（同 sandbox 可先 200 再同秒连 500；独立一次性 SDK 进程始终通过；`docker restart` opensandbox 无效、重启 scheduler 有效）。瞬态上传失败重试前 `closeTransport()`，并用**新** `ConnectionConfig` + `Sandbox.connect` 刷新本地适配器（SDK `close()` 不清已关闭 dispatcher 引用）。熔断 / 告警 / 探针保留；进程级自愈改为重启 scheduler（`DEEPSONAR_SCHEDULER_CONTAINER_NAME`，默认 `deepsonar-scheduler-1`）；`DEEPSONAR_OPENSANDBOX_AUTO_RESTART` 开关名保留以免破坏部署，语义改为 scheduler 重启。
+- OpenSandbox Worker 上传持续性 5xx 熔断与自愈（#605）：在 #548 瞬态重试之上按 canvas/project 统计上传失败波次；连续 ≥2 波全灭或 30 分钟窗口 ≥6 次命中上传 5xx 分类器时打开熔断并暂停新派发；Docker 单机默认 `DEEPSONAR_OPENSANDBOX_AUTO_RESTART=true`（K8s 默认关）；可选 `DEEPSONAR_OPENSANDBOX_UPLOAD_PROBE_IMAGE` 做派发前 1KB 上传探针（失败 fail-closed）；告警写入结构化日志 + `audit_logs`（`opensandbox.upload_circuit.alert`）与 Prometheus 指标；readiness/`/health` 暴露熔断状态。自愈目标见上条 #609 更正。
+- Chrome Fuzz 镜像构建：浅克隆钉死的 depot_tools 后显式 `ensure_bootstrap`（保持 `DEPOT_TOOLS_UPDATE=0`），补齐 `python3_bin_reldir.txt`，避免 `gclient sync` 钩子失败（#588 / PR #602）。
+- 官方 `deepsonar-mobile` 将 `droidasc` 钉到 PyPI 已发布版本 `0.1.1.post1`（`0.1.1` 不存在）；v0.4.5 tag 仍为旧 pin，镜像发布需自修复后的 main 重跑或后续补丁发行（#564 / PR #602）。
+- 官方镜像 fail-closed 说明书元数据后，promotion 集成夹具与 env override / 信任合并路径同步要求 `manual`，避免 gate 假失败与不可解析版本进入注册表视图（#588 / PR #602）。
+
+## [0.4.5] - 2026-09-17
+
+
+### 文档
+
+- 发布验收闭环清单（#582）：新增 `docs/RELEASE_READINESS_POST_v0.4.4.md`，覆盖 v0.4.4→当前 main 的 Docker/OpenSandbox、schema v52、模型目录、CLI/Provider、mobile、UI、收敛与确认门禁、发行元数据；每项区分「已核实（代码/CI）」与「延期（需实机）」并附 PR/SHA。同步 README / DESIGN / `database/README` 的 schema 字面量为 **v52**。注明 v0.4.4 Release 中 Docker `gateway` 指引的勘误（现默认 `direct`，见 #559）。
+
+### 修复
+
+- Verify 硬门悬空引用与 confirmed 断言（#590）：`used_fact_ids` 必须 EXISTS 解析到真实 Fact（finding 归属 + 来源 Job ≠ Finding 原始 Job）；悬空 → `gate.ok=false` → rework。`security.vulnerability`（及 misconfig/secret）确认路径将 independent_review / runtime_test 等配对缺口提升为 **required_missing**，不得再把 missing 抹空后放行 confirmed；CTF/general 仍保持 #576 advisory。新增 `impact`（attacker_entry / victim_resource / impact_flow / preconditions / known_issue_refs / impact_waiver）与 confirmed 钩子；缺 impact_flow 且无 waiver 时阻断。建议项目协议将 `security.vulnerability` 列入 `require_scoring_for_profiles`（默认仍为空以兼容现有 Agent）；location/summary 自动抽取 TODO/crbug/CVE 打 `known_issue` 标签；confirmed 需 `attempted_refutation`，合格 test 需 `artifact_refs`。文档同步 DESIGN / RUNTIME_TEST_TOOLCHAINS。
+- Fact 确认依据可复查链路（#577）：新增只读 `GET /findings/:id/evidence-trace`（`findings:read`），`GET /findings/:id` 亦附带 `fact_evidence_trace`；按 `used_fact_ids`（canvas Fact 节点，非 artifact_evidence FK）解析存在性/归属/来源 Job·Attempt/修订/可读取性。确认态在 `verification_state.confirm_trace` 写入 `content_integrity_digest` 与 `used_fact_replay`（含 `text_only_not_reproduction_proof`），与 Hub 唤醒指纹分离。VerificationEvidence 可选 `runtime_digest`/`exit_code`；观测摘要不符阻断确认；`requireRuntimeProof` 可选收紧运行证明，默认不回归 fact_first v1；不强制全部 Fact 映射 artifact_evidence。
+- 统一 Fact-first 确认策略与 `missing_evidence`（#576）：引入可冻结 `strategy_id=fact_first` / `strategy_version=1`，门禁、必需缺项、advisory 缺项与确认理由同一路径计算；直接确认与 Verify Job 收口共用。`confirmed` 时 `missing_evidence` 只反映必需项（通过则为空），review/test 配对缺口写入 `advisory_missing`，不再出现「已确认却仍列 independent_review 等必需缺项」。冲突 / 来源失败 / 错误 finding-revision 仍阻断；CTF 单 Fact 直通保留。历史无策略版本的确认标记 `legacy_unversioned_strategy`，不静默重写。文档同步 DESIGN / RUNTIME_TEST_TOOLCHAINS。
+- Hub verify 收敛门静默停机（#574）：`waiting_evidence` 在证据签名未变时不再 silent return；从未验证的 pending 可唤醒；关注级别内持久 `inconclusive` / stalled pending 在 N=`INCONCLUSIVE_ESCALATE_AFTER_HUB_ROUNDS`（2）后升级 `needs_human`+human Action，并写入 `paused_reason=verify_unclosed:…`（Web 总览副标题透出）。
+- 角色未指定 model 时 Job 快照不再空白，并避免 usage 台账把 CLI 默认名误当成凭据目录模型（#570）：
+  - provision：解析模型（角色 → settings → CLI 默认）后与凭据 `model_catalog_json` 比对；目录非空且未命中则 fail-closed（中文列出可选项）。RoleConfig `allow_model_catalog_passthrough` 或平台 `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH` 可显式放行 alias 直通。
+  - 快照：未指定时冻结 `upstream_model = cli-default:<name>`；详情页展示「未指定 → CLI 默认 …」。
+  - 台账：`model` 保持请求协议值；新增 `model_catalog_match` / 可选 `upstream_reporting_model`（schema v52）；Session 明细对未匹配打标。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v51 → **v52**（#570：`job_usage_ledger.model_catalog_match` / `upstream_reporting_model`，`role_configs.allow_model_catalog_passthrough`）。先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+
+### 新增
+
+- 提示词组合与预览首片（#594）：新增可冻结策略 `prompt.composition` v1。统一平台协议 / 角色默认 / 项目覆盖 / 任务派发 / 镜像手册索引 / 上下文摘要的来源与版本；业务覆盖顺序为任务 → 项目 → 角色（不可覆盖平台协议与授权）。预览输出层级溯源、遮蔽关系、组装摘要与 Attempt 冻结记录；不支持的 CLI 注入通道 fail-closed，禁止把 user_message 静默冒充 system_prompt 替换。业务文本越权措辞校验；出网/工具授权仍由内核 `allow_egress` 与工具列表决定。区分「修订重派」「原输入重跑」「当前配置重跑」「Hub 重新规划」。后续切片接入派发修订 API 与 Attempt 落库。
+- 安全漏洞证明契约（#578）：为 profile `security.vulnerability` 增加可冻结策略 `security.vulnerability.proof` v1（静态/动态双路径）。TODO/注释/危险函数存在/单纯行号命中不能单独过门；可达/不可达、受保护/可绕过、已证实影响/仅假设影响成对样本有单测。缺工具/目标/设备 → inconclusive；要求动态复现的类型不能只用静态叙述过门，静态可成立类型不被强制动态 PoC 阻断。Verify 只消费 Fact；`requireVulnProof` 可选接入确认硬门（默认不回归 fact_first v1）。文档同步 DESIGN / RUNTIME_TEST_TOOLCHAINS。
+- 上游 review/test 独立反证与有界假设修正闭环（#579）：新增 `research.hypothesis_loop` v1。「未找到反证」不能自动 confirmed；相同输入指纹停止重复派发；反驳后派生子假设须保留父命题链接且禁止原文复活；预算耗尽 → request_human（不回归 #575 paused_reason）；Hub 可回放下一步决策；Verify 仍只消费 Fact。
+- 人工标注审计回归集与模型/策略变更质量门禁（#580）：新增 `audit.regression_gate` v1 与 `fixtures/audit-regression/samples.v1.json`。标签须含人工理由与适用修订；争议样本不进准确率分母；禁止用平台 confirmed 当独立真值；缺少 PoC 不得自动标误报。门禁相对冻结基线做逐样本对比，区分质量退化 / 环境失败 / 评估未完成，不以 confirmed 率或反驳数作为单一优化目标。
+- 已知性/版本适用性与可解释审计覆盖（#581 首片）：`research.knownness_coverage` v1。命中公开问题且 pinned revision 仍受影响时禁止自动降为 hardening；HEAD 复查追加适用性不覆盖历史；检索失败标 unknown；CVSS 向量正确 ≠ 影响已证实；无解释分母则拒报覆盖率。
+- 官方运行镜像工具说明书交付与验收门禁（#588）：13 个官方运行镜像由 `agent-harness/runtime-manuals/catalog.json` 生成完整离线说明书（使用场景、选型、前置、调用、输出、失败分类、组合、证据、版本限制），构建安装到 `/opt/deepsonar/manuals/` 并与最终工具清单及镜像版本绑定；静态、断网运行、准入与 provision 门禁缺一即拒收。Scheduler 对官方镜像注入 manuals 发现要求。
+
+- 项目配置：CLI / Provider 白名单选型与 Hub 运行时组合（#568）。项目设置新增「CLI / Provider 启用与缺省」面板（对标镜像启用）；`config_json` 持久化 `enabled_agent_clis` / `enabled_credential_ids` 与可选软缺省。Hub 新增 `list_available_agent_clis` / `list_available_providers`，intent 可提案 `agent_cli` / `credential_id`（目录外 fail-closed）；省略时走项目软缺省或 RoleConfig 回退。并发仍归 Provider（`max_concurrent` / `model_concurrency`）。迁移：首次读设置时把现有 RoleConfig 绑定种子进白名单，避免静默丢配置。平台只做启用/配额/审计控制面，不在角色上锁死完整身份。
+- 官方 `deepsonar-mobile` 钉入 Droid ASC（PyPI `droidasc==0.1.1`，Apache-2.0，MG1937/ASC）：与 JADX/apktool/androguard 互补的按需 `getclass`/`getmanifest`/`findrefs` CLI；禁止 `--gui`；不得把 ASC 叙述冒充设备/流量结果（#564）。
+- Hub 运行镜像选型能力目录（#565）：`list_available_runtime_images` 每条返回 `purpose` / `tool_summary` / `not_included` / `suited_roles` / `suited_evidence` / `selection_hints` / `capabilities`，供 Hub 按任务匹配后原样复制 `image_key`（禁止猜 key）。平台工具说明与 Hub prompt/种子指令同步。Worker 侧对 chrome/clickhouse/OH/mobile 专项镜像在任意角色注入能力边界；矩阵文档 `docs/RUNTIME_ROLE_IMAGE_MATRIX.md` 与目录同源说明。
+
+### 修复
+
+- 登录页密码 / API Token 可一键显示或隐藏（默认仍隐藏）；限流 `429 LOGIN_RATE_LIMITED` 展示含重试时长的中文提示，不再只抛 `POST /auth/login -> 429: …`（#560）。Credential / Provider API Key 仍禁止浏览器内 reveal。服务端登录限流（5/5min 用户名+IP、20/5min IP）本已存在，本变更核对其 Web→Scheduler IP 转发与 migration，并补前端体验。
+
+### 变更
+
+- 控制面镜像多架构发布（#598）：`scheduler` / `web` / `image-admission` 与再发布 `assets-helper` / `silo` 的 Release 矩阵改为 `linux/amd64,linux/arm64`；控制面 Dockerfile 换用含 amd64+arm64 的 `node:24-alpine` OCI index digest；scheduler 继续按 `TARGETARCH` 校验 kubectl；文档补充控制面 vs 运行时平台矩阵；静态门禁 `pnpm ci:unit:control-plane-platforms`。
+- 过程画布筛选坞、左下角图例与用量账本默认折叠，减少首屏占位（#572）。
+- 合并项目侧「项目风险」与「项目报告」为统一「风险与报告」交付台（#561）：侧栏单一入口，主路径 `/projects/:id/findings`，`?panel=reports` 切报告区；旧 `/projects/:id/reports` redirect。全局 `/findings` 与任务工作台报告 tab 不变。
+
+## [0.4.4] - 2026-09-15
+
+### 新增
+
+- Hub 阶段 1 有界只读 `graph_query`（#538 / #549）：按需读 overview / index / node / edges / findings / evidence / intents；scope 冻结到 Job 快照；预算 40 次 / 512KB，超限返回 `graph_query_budget_exceeded`；不改 48k YAML 注入，不发明 Job `blocked` 状态。`submit_hub_decision` 的 `from` 改为本 Job 已投影 id 并集。
+
+### 变更
+
+- 治理 CLI 升级（#540 / #547）：Pi `0.85.1`、Claude Code `2.1.258`、pi-web-access `0.29.0`（integrity 以 npm `dist.integrity` 为准）。会改 runtime fingerprint，需重建 `deepsonar-base` / `audit` / `kali-minimal`；chrome / openharmony / mobile 专项镜像不在本变更范围。
+- CI 文件体量棘轮门禁（#544 / #552）：`file-size-gate.ts` + `file-size.manifest.json`，经 `ci:unit:authz` / `ci:unit:file-size` 执行；grandfathered 文件只许降 `maxLines`，相对 `origin/main` 抬天花板失败。
+
+### 修复
+
+- 平台可写 verify 终态 `refuted` / `inconclusive`（#537 / #550）：预算类 / conflict / rejected / no_progress 等不再落 `needs_human`；仅真需人时建 human blocker。Agent 不可提案 `inconclusive`；SARIF 仍只导出 `confirmed`。
+- 专项镜像 provision 上传 500 / `UNEXPECTED_RESPONSE`（#548 / #551）：OpenSandbox `writeFiles` 对瞬态代理/上传失败有界重试；dispatcher 纳入 `isRetryableProvisionFailure`；Docker `deploy/opensandbox/config.toml` 默认 `[ingress] mode = "gateway"`。写库前清洗 NUL/控制字符，防止次生 `22P05`。
+- provision 创建失败账本（#541 / #545）：观察到创建失败且从未绑 `sandbox_id` → `never_started` / `external_effect: false`，避免 RepairFeedback 误判需人工确认。
+- RepairFeedback 未决效果语义（#542 / #546）：按 kind 聚合说明；全 settled 不再误报 `unknown_external_effect`；确认后重跑出口接到面板。
+- 评审跟进（#553）：unknown provision 文案不再宣称「无外部后果 / 可放心重试」；provision 超时若见过 late sandbox handle（或 late destroy 失败）fail closed 留在 `unknown`，不得假 `never_started`。
+- `waiting_human` 独立超时与 dangling human 投影收口（#536 部分 / #554）：默认 `DEEPSONAR_WAITING_HUMAN_TIMEOUT_SEC=1800`（`0` 关闭），超时 Job → `failed(human_timeout)` 并释放 Attempt/sandbox/lease/token；不改 Finding `verify_status`；只 expire 无处理入口的 dangling 节点。选项式提问 / `HUMAN_NOTIFY_URL` 未做。
+- 任务工作台「总览」无法滚动（#539 / #543）：`TaskOverview` 与 `ReportPanel` 对齐 `h-full min-h-0 overflow-y-auto` 高度链。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v50 → **v51**（#550 verify 四终态）。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。部署后对 leftover `needs_human` 做一次 repair。
+- OpenSandbox：Docker 部署确认 `[ingress] mode = "gateway"` 并重启服务；专项镜像（chrome-audit/fuzz/test、openharmony-test）回归 provision 上传。
+- 重建官方 runtime 镜像 `deepsonar-base` / `audit` / `kali-minimal`（#547 CLI 指纹变更）；平台镜像打 `0.4.4` tag。
+- 若现网 `.env` 未设 `DEEPSONAR_WAITING_HUMAN_TIMEOUT_SEC`，升级后默认 1800s。
+
+## [0.4.3] - 2026-09-15
+
+### 变更
+
+- Hub 轮次预算默认改为 unlimited（#521）：未设置、`0` 或 `unlimited` 不再按轮次停（内部仍用 `0` 表示无限）；正整数才是可选 runaway 护栏，非法值不再静默换成 20。预算耗尽 reason 改为 `budget_exhausted:*`，与完成门、验证分类、`no_progress:*`、fact-first 常规终止可区分。Root 写入 `hub_rounds_used` / `hub_round_limit` / `blockers`，指标 `deepsonar_hub_budget_exhausted_total{limit=...}`。Settings PATCH 接受 `0` / `unlimited` / 1..10000。已有部署若显式写了 `DEEPSONAR_HUB_MAX_ROUNDS=20` 仍保持 20。
+
+### 修复
+
+- 收口 `waiting_evidence` 无进展与 Canvas-first 锁顺序（#516–#522 / #528）：
+  - dispatcher / reaper / reconcile / cancel 写 `canvas_nodes` 改为 Canvas-first；ingest 对 `40P01` / `55P03` 有界重试（最多 3 次）。
+  - `subject_revision` 别名不再把匹配的 supports 当 mismatch。
+  - fact-first `conflict` / `rejected` 直接 `needs_human`，不再停在 `waiting_evidence`。
+  - 门禁指纹 `gateFingerprint(result + sorted missing)`；证据签名变化且指纹变化才唤醒 Hub；`maxNoProgressRounds` 默认 2（`0` 关闭）。同指纹被 Hub 消费后 settle，避免画布停在 `waiting_evidence`。
+  - `hub_reason` stall 地板 5400s；失败轮仍不占 `maxHubRounds`。
+  - 空 `Error.message` 回落到 `name` / `code` / `exception`，失败可观测、可按针。
+  - provision 自动重试分类补上 `SANDBOX_START_FAILED`、sidecar `did not become ready`、健康检查 30s 超时文案。
+  - Gateway 认 Pi anthropic `x-api-key` / `anthropic-api-key`；物化 `anthropic-messages` 时写 `authHeader`。
+- Report Job 终态失败后有界再派并收口 Root（#523）：自动再派预算为 1，不看 error 文本；预算耗尽后 Root 进入 `report_failed`（Web 投影为 failed）。人工 `POST /canvases/:id/report/retry` 接受该状态并重置自动重试计数；Hub 在 Root=`report_failed` 时不再空闲唤醒；迟到的旧 Job finalize 不再覆盖已换绑的新报告 Job。
+- sidecar / `CONTAINER_START_FAILED` 自动重试预算改为按本 Job 已结算的 `provision_retry` 次数计，上限仍是 1（#524）。40P01 或人工 `rerun-current` 把下一轮变成 attempt 2 后，sidecar 仍可自动重试一次；非 provision 失败不占这笔预算。
+- Pi + Anthropic Messages 流截断有界再入队新 Attempt（#525）：失败分类稳定为 `pi_stream_truncated`；沙箱已起来时走 `retryTruncatedExecution`（`running` + `started_at IS NOT NULL` → `pending`，新 Attempt、新 provision）。预算按已结算的 `pi_stream_truncated` 次数计，`MAX=1`。schema / 401 / `PI_EMPTY_MODEL_RESPONSE` / `aborted` 仍 fail closed；不复用同会话 CLI resume，不自动重放 `replay_policy=never` 的未知效果。
+- lease Reaper 尊重心跳与语义事件（#529）：过期 lease 且 `heartbeat_at` 与最近 `events.created_at` 都早于 `lease_expires_at` 才 orphan。`emit_progress` 在 Job 仍 `running` 时同时刷新 `heartbeat_at` 和 `lease_expires_at`（TTL = `LEASE_TTL_SEC`），且不写 `jobs.status`。不改 `isAlive` 语义，不把 lease orphan 改成 stall failed。
+
+### 部署 / 升级说明
+
+- 无需重建数据库（仍为 schema v50）。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build。平台镜像仍打 `0.4.3` tag。
+- Hub 轮次默认 unlimited。若现网 `.env` 已显式设置 `DEEPSONAR_HUB_MAX_ROUNDS`，升级后保持该值，不会被本版默认覆盖。
+
+## [0.4.2] - 2026-09-13
+
+### 新增
+
+- 多 rig 支持（#505 后续，schema v50）：平台从"单一 broker URL"扩展为 rig 注册表 —— 默认 rig 仍是 `DEEPSONAR_DEVICE_BROKER_URL`（id `default`），其余由 `DEEPSONAR_DEVICE_RIGS`（`;` 分隔的 `id=http(s)://host:port|token`，非法条目整条丢弃并在管理面 `rig.invalid_entries` 暴露）声明。设备归属进新列 `devices.rig_id`（`CHECK` + 索引，定列只存标识；端点与入站凭据只来自平台配置，不进 evidence）。准入推送改为**按 rig 分组整集替换**：每个 rig 用自己的 token 推自己的集合（空集也显式推，否则下架/删除不生效），读回各自 broker 的 revision 后再 PUT，结果逐 rig 回报 `rig_pushes`（替代原 `rig_push`）——某个 rig 不可达不影响其它 rig，也不回滚平台侧写入。租约获取按需求里的 `rig_id`（缺省 `default`）选 broker，未配置的 rig 在授权阶段 fail closed，绝不回落其它 rig；`DeviceRequirement` / `DeviceRegistration` 相应新增可选 `rig_id`。Web 设备页显示 rig 列、登记时可选目标 rig、逐 rig 展示准入摘要与推送结果。
+
+- 设备准入管理面板（#505 阶段 1 后续）：新增平台级 `/devices` 页面（`apps/web/src/pages/DevicesPage.tsx`）——展示 rig 准入摘要（未启用 / 未配置 / 不可达 / 已同步 四种状态如实呈现，不假装同步）、设备登记列表（key / transport / model / 状态 / 在途租约 / 更新时间）与设备租约列表，并支持登记、启用 / 转维护 / 下架、二次确认删除和强制释放租约。写操作仅 `admin` 可用（与后端 `ROUTE_SCOPES` 一致，只读角色只看列表），409 冲突按稳定错误码给补救提示（`DEVICE_HAS_ACTIVE_LEASE` → 先强制释放；`DEVICE_HAS_LEASE_HISTORY` → 改用下架，因为租约历史是 append-only 审计）。导航新增「设备」入口（scope `tasks:read`）。
+
+## [0.4.1] - 2026-09-13
+
+### 新增
+
+- 设备接入支持 hdc（#504）：`packages/shared-types/src/device.ts` 增加 `IMPLEMENTED_DEVICE_TRANSPORTS`（`adb` / `hdc`）与 `isImplementedDeviceTransport()`，作为 broker 与调度器判断「已实现 / 未授权」的唯一事实来源（`serial` / `ssh` / `net` 仍在契约中保留，传入即 403 / 409 `device_not_authorized`）。broker 新增 hdc 枚举（`hdc list targets`，过滤 `[Empty]` / `Connect server failed` / `[Fail]` 等噪声，目标 key 必须是单 token）与独立端点配置（`DEVICE_BROKER_HDC_HOST` / `DEVICE_BROKER_HDC_PORT`（默认 8710）/ `DEVICE_BROKER_HDC_BIN`），租约绑定 transport 且不跨 transport 匹配，单路枚举失败只让该 transport 无设备。调度器按 `DEEPSONAR_DEVICE_TRANSPORTS`（默认仅 `adb`）逐 transport 开启，并校验 broker 返回的 transport 与冻结需求一致（不一致即退回租约并按 `device_not_available` 失败）。hdc 沙箱侧消费通用变量 `DEEPSONAR_DEVICE_ENDPOINT`（`hdc -s <endpoint>` / `hdc tconn <endpoint>`），原生变量映射待真机验证后另议。
+- broker 新增平台准入（#505 阶段 1）：`PUT /rig/devices` 整集替换期望集合（revision 必须单调、同 revision 幂等重放、回退 409 `stale_revision`）、`GET /rig/devices` 返回生效集合与 `mode`，状态落 `DEVICE_BROKER_STATE_FILE` 供重启续用（缺失/损坏则空集合 fail closed）；默认 `trust platform`，显式设置 `DEVICE_BROKER_ALLOWED_KEYS` 时它作为硬上限（与平台集合取交集），从未 push 时沿用 #495 的 env 行为。平台侧管理面见下条。
+- 平台侧设备准入与管理面（#505 阶段 1）：新增 7 个管理端点 —— `GET /devices`（登记列表 + 在途租约 + rig 准入状态）、`POST /devices`（登记/更新，`key` 为 broker 侧设备句柄，`UNIQUE(key)` 幂等 upsert）、`PATCH /devices/:id`（`enable` / `maintenance` / `revoke`）、`DELETE /devices/:id`、`GET /device-leases`、`POST /device-leases/:id/release`（人工抢回并同步 rig）、`GET /devices/:id/events`（append-only 时间线）。读操作 scope 为 `tasks:read`、写操作为 `admin`；项目主体只能管理本项目设备，`project_id` 为空的平台共享池仅平台主体可改。每次写操作后把期望集合**整集**推给 rig broker（先 `GET /rig/devices` 读回 revision 再 PUT；推送不参与事务，失败只作为 `rig_push` 上报，由操作者重试，不假装成功）。有在途租约时 `revoke` / `DELETE` 返回 409 `DEVICE_HAS_ACTIVE_LEASE`；有租约历史时 `DELETE` 返回 409 `DEVICE_HAS_LEASE_HISTORY`（租约历史是 append-only 审计且 `device_leases.device_id` 有外键，只能下架不能删除）。同时修正 `devices.broker_ref` 的语义：它是 broker 侧设备句柄（序列号），不是 rig 标识，因此删除 #509 中按 rig 分组的 `groupDesiredByRig` / `desiredForRig`（多 rig 需按 rig 配置 broker 端点，当前 `DEEPSONAR_DEVICE_BROKER_URL` 为单一 URL）。
+- 设备管理面集成测试（#505）：`device-management.integration.test.ts` 在 scratch DB + 假 broker 上覆盖注册/重复登记、非法 transport 与项目（400）、跨项目与 scope 拒绝（403）、在途租约冲突（409）、租约列表与强制释放、维护态不进 rig 期望集合、事件链与删除规则。
+
+### 修复
+
+- 设备 Job 缺少 `allow_egress` 前置校验（#506）：此前授权链路（功能开关 + broker 配置、`transport`、`exclusive`、项目 opt-in）都不检查出网，而设备端点是沙箱**直连** rig（`restricted` 网络策略为 deny-by-default，只放行 Gateway 代理主机），于是「授权通过 → broker 发租约 → 沙箱内 `adb`/`hdc` 必然连不上」会晚失败，真机被白占到 TTL / Reaper 兜底，且错误不是两个稳定码之一。现按 fail closed 处理：新增 `assertDeviceEgressAllowed()`，在**建 Job（冻结画布设备需求）**与**申请租约（校验冻结快照）**两处生效，返回 409 `device_not_authorized`（不进重试链）；冻结策略缺失视为不允许。`docs/DEVICE_ACCESS.md` §3.3 同步标注「固定目标 sidecar 转发」与「租约 token 保护数据面」尚未落地，避免把设计目标当成 as-built。
+
+## [0.4.0] - 2026-09-13
+
+### 新增
+
+- 真实设备接入 Phase 1（#494 / #495）：沙箱不直连物理设备，新增 device broker（独立服务，跑在可抛弃的 device rig 上）把物理设备暴露为可租借网络端点。Scheduler 在 provision 前申请**设备租约**（绑 Attempt、短期 token、TTL 过期可回收），把端点与 `ANDROID_ADB_SERVER_ADDRESS` / `ANDROID_ADB_SERVER_PORT` / `ANDROID_SERIAL` 注入沙箱，沙箱内 `adb devices` / `adb shell` 免改脚本可用。新增 `devices` / `device_leases` / `device_events` 三表与「一设备同刻最多一个未结束租约」的部分唯一索引（schema v49）；项目级 opt-in（`PATCH /projects/:id/settings` 的 `device_access_enabled`）+ 任务级 `device` 需求冻结进 Job 快照（按角色命中才占设备，Hub/report/verify 不占）；稳定错误码 `device_not_available`（可重试）/ `device_not_authorized`（不可重试）。设计见 `docs/DEVICE_ACCESS.md`。
+- OpenAPI 覆盖补齐（#492）：`GET /openapi.json` 从 150 个 operation 补到 184 个，新增平台导入导出整族、Finding 评论/关联、任务归档/硬删除/活动 Job 批量取消、画布收敛控制、用户管理、`POST /runtime-images/registry/apply`、`POST /auth/ws-ticket`；并加上「已注册路由 ⊆ OpenAPI ∪ 显式内部清单」与「operation 的 `x-deepsonar-scope` 必须等于强制 scope」两条断言，防止再次漂移。`GET /schema.md` 在仓库契约不可用时回退为运行时端点摘要，不再返回 404 占位。
+
+### 变更
+
+- Credential 连接测试改判推理路径（#491）：`POST /credentials/:id/test` 先按 vendor 口径做最小推理调用（`POST /v1/chat/completions`，Anthropic 为 `POST /v1/messages`，`max_tokens=8`），`2xx` 与 `400` 视为账号可用，只有推理路径 `401/403` 才是认证失败；模型目录路径的 `401/403/404/405` 记为 `unknown` 并单独文案。`/readiness` 的 `CREDENTIAL_TEST_FAILED` 只在权威 category 下判 error，探测路径限制降级为 warning，不再把可用的第三方中转判成不可用。响应新增 `probe_path` 标明结论来源。
+- 补齐若干端点的强制 scope（#492）：`GET /canvases/:id/convergence` 为 `tasks:read`，`pause` / `resume` / `stop-after-gate` / `drain-priority` / `run-hub-now` 为 `jobs:control`（此前未登记，非 GET 落到默认 `admin`，operator 会话在 Web UI 上会 403）；`POST /auth/logout` 登记为 `projects:read`（此前落到默认 `admin`，operator/viewer 无法注销）；`/metrics` 与 `/auth/me` 的文档 scope 对齐为任意已认证主体。
+
+### 修复
+
+- 统一输入校验与错误契约（#490）：非法 `limit` / `period` / `project_id` / `canvas_id` 一律返回 `400`（`invalid_payload` / `INVALID_ID` / `USAGE_PERIOD_INVALID`），不再静默按缺省范围返回另一个结果集；共享资产端点改用 `invalid_payload` 信封，不再回显原始 Zod issue 与 `x-asset-labels` 解析原文；终止 Job 的 cancel/priority 与归档任务的 retry/resume 补稳定 `error_code`（`JOB_NOT_CANCELLABLE` / `PRIORITY_FIXED` / `TASK_ARCHIVED`）。
+- 管理端点不再把非 UUID 路径/查询参数交给 Postgres（#489）：`GET|PATCH /projects/:id`、`/credentials/:id`、`/skill-sources/:id`、`/runtime-images/:id` 等返回 `400` 与稳定 `error_code`，不回显 `22P02` 等数据库细节。
+- 文档与实现对齐（#492）：`skills/deepsonar-management/references/api.md` 增加「OpenAPI 覆盖边界」与收敛控制条目，修正错误契约描述与若干表格渲染。
+
+### 部署 / 升级说明
+
+- **需要重建数据库**：schema v48 → v49（新增 `devices` / `device_leases` / `device_events`）。用 `pnpm db:rebuild -- --plan` / `--apply` 备份后按列交集回填；非空库版本或结构不符时 Scheduler fail closed，没有增量 ALTER 链。
+- 设备接入**默认关闭**：未配置 `DEEPSONAR_DEVICE_*` 时设备需求 fail closed（`device_not_authorized`），既有项目与任务行为不变。启用需在 device rig 上部署 broker（`deploy/docker-compose.device-broker.yml` + `deploy/Dockerfile.device-broker`），配置 `DEEPSONAR_DEVICE_ENABLED` / `DEEPSONAR_DEVICE_BROKER_URL` / `DEEPSONAR_DEVICE_BROKER_TOKEN` / `DEEPSONAR_DEVICE_LEASE_SECRET`，并为项目打开 `device_access_enabled`；见 `.env.example` 与 `docs/DEVICE_ACCESS.md`。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build。平台镜像仍打 `0.4.0` tag。
+
+## [0.3.3] - 2026-09-12
+
+### 新增
+
+- 项目报告页 Phase 1：统一交付物投影（#484 / #486）。从按任务默认展开的折叠列表改为交付物优先：任务总报告与 Finding 独立报告统一为 `ReportDeliverable`，状态映射为可阅读 / 生成中 / 失败 / 尚未生成 / 已过时；默认排序为失败 → 尚未生成 → 生成中 → 新近可阅读 → 已过时；任务仅作折叠上下文。不改报告实体、版本、下载接口和后端状态机。
+
+### 变更
+
+- 控制台品牌标与 favicon 改为紧凑鲸形剪影加高能声呐脉冲路径，并与蓝紫 / 白色视觉系统对齐（#487）。
+
+### 修复
+
+- RoleConfig 路径参数在进 SQL 前校验 UUID：`PUT /role-configs/global/:roleId` 等不再把 `explore` 这类角色名交给 Postgres；返回 `400` 与稳定 `error_code`（`INVALID_ROLE_ID` / `INVALID_ROLE_CONFIG_ID` / `INVALID_ID`），不回显数据库错误（#478 / #480）。
+- 管理 API 全局将 `ZodError` 与 Fastify `FST_ERR_VALIDATION` 映射为 `400`：`error_code=invalid_payload`，人类可读 `error`，可选 `issues` 只含字段 `path` 与稳定 `code`；不回显堆栈、正则或枚举全集。已单独 catch 成 400 的路由保持原 `error_code`（#477 / #481）。
+- Pi 真实 Job 冻结已认证 `models.json` 路由到 `pi_provider`，adapter 传 `--provider <route> --model <id>`，避免 `grok-4.6` 这类裸 id 在 Pi 内置多 provider 目录中歧义后 provision 才失败。无法唯一确定时在快照解析 / claim 启动以 `PI_MODEL_UNAVAILABLE` 失败，不进入沙箱 provision（#479 / #483）。
+- Pi `message_end` 在 `stopReason` 为 `error` / `aborted` 时保留上游 `errorMessage`（及同级回退字段），写入脱敏后的 Job 失败短尾与 `agent_settled.errorDetail`，不再只显示 `Pi message ended: error`（#482 / #485）。
+
+### 部署 / 升级说明
+
+- 无需重建数据库（仍为 schema v48）。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build。上一份 catalog 已有该 digest 时复用 version 行且不打新的运行时 version tag；若 src-cache digest 从未入册，仍发布 version tag 并由 inspect 补记，平台镜像仍打 `0.3.3` tag。
+
+## [0.3.2] - 2026-09-12
+
+### 变更
+
+- 将 v0.3.1 亮色主题 id/名称从 `open-kritt` 更名为内部语义 `coral` / `珊瑚纸台`（#470 / #473）。读取旧 `localStorage` 值会迁移为 `coral`，之后只写入新 id；视觉 token 不变。
+
+### 修复
+
+- Pi 真实 Job 不再把 `deepsonar/<model>` 原样传给 `--model`：快照冻结 CLI 目录 id，adapter 映射已冻结的 provider 前缀；目录中不存在的模型在创建/解析快照时以 `PI_MODEL_UNAVAILABLE` 失败，而不是 Agent CLI 启动后才退出（#468 / #469）。
+- 亮色主题把表格、筛选、列表选中/hover/focus、抽屉和命令面板迁到独立语义 token（`surface-selected` / `surface-hover` / `surface-control` 等），Finding / Job 选中行不再复用近黑背景（#471 / #474）。
+- 亮色主题为加载骨架、空状态、移动端壳层、选择器/模块选择、角色与凭据配置、intent launch 与 task handoff 补齐 `surface-control` / `surface-hover` / `surface-selected` / `surface-disabled` 等语义 token，不再复用近黑十六进制表面（#472 / #475）。
+
+### 部署 / 升级说明
+
+- 无需重建数据库（仍为 schema v48）。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build。上一份 catalog 已有该 digest 时复用 version 行且不打新的运行时 version tag；若 src-cache digest 从未入册，仍发布 version tag 并由 inspect 补记，平台镜像仍打 `0.3.2` tag。
+
+## [0.3.1] - 2026-09-12
+
+### 新增
+
+- AI-native 可信执行内核第一阶段：模型通过 Plan、Capability Pack、Artifact、Fact、Finding、Verify、Research 与 Report 组合工作，Scheduler 继续独占沙箱、权限、预算、幂等和副作用。
+- 模型主导执行协议 Phase 1（#443 / #458）：`packages/shared-types` 增加版本化 `Plan` / `PlanTask` / `CompletionPolicy` / `PlanResult`。Job 控制 API 新增 `submit_plan` / `submit_plan_result`（`continue|complete|blocked|needs_human`），经既有 capability token 与事件事务落库。Scheduler 在 `jobs.payload_json.plan_protocol` 审计计划原文、裁剪结果、执行结果和终止原因。Hub 行为不变；每个 Intent 适配为一个 PlanTask。本阶段不派发 Worker，也不改收敛门。
+- Artifact 成为内部写入真相（#444 / #455 Phase 1）：新增版本化 `artifacts` / `artifact_claims` / `artifact_evidence` / `artifact_relations`（schema v47）；`emit_fact` 接受可选通用 Artifact 输入；`emit_finding` 先落 Artifact，再投影 `findings` 作为缓存。Verify / Report / SARIF 仍走既有 Finding 路径。
+- 质量指标与 Hub 回放基线（#445 / #456 Phase 1）：只读 `GET /dashboard/quality`、`GET /projects/:id/quality`、`GET /canvases/:id/quality` 从 Job / Finding / Verify / Usage Ledger 派生确认率、误报率、Verify 分歧率、人工介入率与单 Finding 成本；`GET …/quality/replay` 固定 `hub_replay` schema_version=1。项目级 token 必须匹配路径 `:id`，跨项目读 quality/replay 返回 `PROJECT_MISMATCH`。不改变 Hub 决策，不写入经验。
+- RepairFeedback 协议脚手架（#446 / #453 Phase 1）：`packages/shared-types` 增加版本化 `RepairFeedback`（`model_correctable` / `transient_retryable` / `unknown_external_effect` / `permanent_failure`）。Control API 对 schema 截断/校验与 256 KiB 语义 payload 超限返回字段级 `repair`（expected / observed_shape / remaining_budget / next_action），不再只回 `Platform operation was rejected`。Handler `details` 只保留白名单字段，且不得覆盖 `error` / `error_code` / `retryable` / `repair`。
+- Capability Pack 第一刀（#447 / #459）：`deepsonar.capability-pack/v1` Manifest、Job 级 list/search/describe/validate/preview，以及 RoleConfig 快照冻结 selector/digest。发现失败复用 #453 版本化 `RepairFeedback`，不另建 envelope。
+- 语义去重与相对优先级与漏洞确认分离（#448 / #460）：报告前有界批次聚类、canonical anchor 增量比较、canonical 集合 `priority_score`；写入 `finding_research*`（schema v48），不改 `verify_status` / severity / 报告门禁。失败显式记 run 并保留候选。只读 `GET /canvases/:id/finding-research`，列表/详情分列展示验证、严重度、重复关系与研究优先级。
+- 任务工作台默认决策总览（#449 / #451 / #454 / #457）：任务详情从默认过程画布改为统一工作台壳层，六个一级视图（总览、研究地图、事实证据、任务发现、任务运行、报告），首次打开默认「总览」。Header 展示执行 / 认知 / 交付状态线；总览从前端投影结论、证据缺口、待决事项与下一步 Action。Job / Finding 错误串投影为只读 `RepairFeedback` 四类；过程画布保留为高级审计入口。
+- 新增可持久化的 `open-kritt` 亮色主题（#450 / #452）：暖白画布 + 珊瑚橙强调色，写入 `localStorage`；沿用现有主题选择器与 CSS token，不改其他主题。Finding / Job 严重性与运行状态继续用独立语义色。
+
+### 修复
+
+- Capability Pack 发现以上界为 Job 冻结 selector + content hash；源目录在 Job 创建后变更不能扩大或改写可见集合。过长 selector 不再写入 `RepairFeedback.path`（#447 / #462）。
+- Finding research 的 emit/report 挂钩用 savepoint 隔离持久化失败：研究 SQL 或失败账本写入出错只回滚 savepoint，外层 Finding / 报告事务继续提交（#448）。
+- timeout / orphan 在没有效果账本、或账本仍有 `unknown` / `effect_pending` 时不再标成可安全重试：工作台投影为 `unknown_effect`，须确认；仅显式 `replay_safe: true` 且无未决效果才允许 `retry_same_session`（#461）。
+- Worker 派发 claim 改为单事务选节点 + 预留 `worker_sandbox_leases` 占位，并写入 `last_dispatch_at`；并发 provision 不能超过节点 `max_sandboxes`。远端 create 失败释放占位，成功则把占位改成真实 sandbox id。去掉 claim 失败后再 `pickRoundRobinWorker` 且不记账的 fallback（#434 / #442）。
+- Worker 沙箱租约在正常 destroy 时也会释放（#431 / #440）：`OpenSandboxRunner.destroyResource` 命中 sessions 缓存后仍调用 `client.destroy`；worker-plane `destroy` 在 `finally` 里释放租约。reaper / 启动 reconcile 按终态或缺失 Job 回收 `worker_sandbox_leases`，重启即可清掉已泄漏的容量占用。
+- 项目导出在活动 Job 下不再撕裂快照（#436 / #439）：数据收集走 `REPEATABLE READ` 只读事务；`project_full` 拒绝 `allow_active_jobs`，仅证据归档 / 自定义事件模块可显式允许；`credentials.mode=excluded` 不再把凭据身份写入 role-configs；events 达上限时标记 `counts.events_truncated` 与 manifest warning；导入对缺少 Job 的 Finding 记 warning。
+- 自定义项目导出模块校验：未知 / 原型链 selector（`constructor`/`toString` 等）返回 400 并列明 `rejected`，不再静默丢弃或 500；`reports`/`artifacts` 从未实现收集，已从导出契约移除（#435 / #438）。
+- Release 指纹未变但 `src-<fingerprint>` digest 尚未写入上一份 catalog 时，不再 fail closed：先发布 version tag，再对已发布通道做真实 inspect 补记 catalog 行。
+
+### 安全
+
+- Worker 注册/心跳不再允许 bootstrap token 静默改写 endpoint 或抢占已有 `node_id`（含保留的 `local`）：远程注册拒绝保留 id 与同名接管，须管理员 `DELETE /workers/:id` 后才能 reclaim；远程 endpoint 拒绝 loopback / link-local / `169.254.0.0/16` / 不可路由地址，并可选用 CIDR/hostname allowlist；注册与拒绝的心跳写入审计并按 IP 限流；心跳不能改 kind/所有权。本地 seed 在 kind/endpoint 被改写后轮换 node token，劫持无法跨 Scheduler 重启存活（#433 / #441）。
+- OpenSandbox 仅在 Kubernetes create 请求 `extensions["bootstrap.execd.isolation"]=enable`（#427 / #432 / #437）：Docker 不带该 extension，避免主沙箱容器被授予 `CAP_SYS_ADMIN` 与 unconfined seccomp/apparmor；K8s/Kata 仍需 execd uid gate 才能写 `/etc/hosts`。SDK client 不再强制覆盖该字段。相对 v0.2.11「始终带 isolation」收紧。
+
+### 变更
+
+- 回写 as-built 架构与 Agent 指南（#463）：`DESIGN.md` / `docs/ARCHITECTURE.md` / `AGENTS.md` 对齐 Plan、Artifact、质量指标、RepairFeedback、Capability Pack 与任务工作台；长期插件化方向见 `docs/AI_NATIVE_TRUSTED_KERNEL.md`（#446）。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v46 → v48。v47 新增 `artifacts` / `artifact_claims` / `artifact_evidence` / `artifact_relations` 与 `findings.artifact_id`；v48 新增 `finding_research_runs` / `finding_dedupe_clusters` / `finding_research`。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- Plan / Capability Pack / 质量指标 / RepairFeedback 均为 Phase 1：不改 Hub 收敛门，也不自动派发新 Worker。
+- 任务工作台 timeout/orphan 默认须确认后再重试；无效果账本时不再给出无条件 `retry_same_session`。
+- 相对 v0.2.11：Docker 路径不再请求 execd isolation；仅 Kubernetes/Kata 需要该 extension。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build。上一份 catalog 已有该 digest 时复用 version 行且不打新的运行时 version tag；若 src-cache digest 从未入册，仍发布 version tag 并由 inspect 补记，平台镜像仍打 `0.3.1` tag。
+
+## [0.2.11] - 2026-09-11
+
+### 新增
+
+- 沙箱执行面节点化 P0（#415 / #416）：Scheduler 以 Postgres `worker_nodes` 为注册表（无 etcd），worker 持 bootstrap token 注册并心跳；派发按轮询 + 每节点 `max_sandboxes`。单机 compose 仍种子 `local` worker（`OPEN_SANDBOX_DOMAIN`）。沙箱流量继续走 `OPEN_SANDBOX_USE_SERVER_PROXY`。新增 `deploy/docker-compose.worker.yml` 与 `./deploy/deploy.sh up worker-join --control-plane …`。
+- 项目导出支持自定义模块（#411 / #412）：可按模块组合导出；`ACTIVE_JOBS` 门槛收紧到真正需要一致性的路径（`project_full` / 含 events 的自定义），findings/tasks 等允许在活动 Job 下导出。
+
+### 修复
+
+- OpenSandbox server 在 Podman 下缺少 `/.dockerenv` 时，egress sidecar 探针不再误用 `127.0.0.1`：容器探测同时认 `/run/.containerenv`，compose 为官方 server 挂入 `/.dockerenv` 标记，使 `[docker].host_ip` 生效（#422）。
+- Scheduler 内存缓存的 gateway sidecar `containerId` 在容器重建后会按名称重新发现并走原有 reuse/replace 判定，不再因 `no such object` 让后续 Job provision 全部失败（#426 / #429）。
+- OpenSandbox 创建沙箱时始终带 `extensions["bootstrap.execd.isolation"]=enable`（#427）：execd 指定 uid/gid（含 Kubernetes Gateway `/etc/hosts` 注入）才能通过 bwrap gate；不再依赖 Job 快照或新的平台开关。
+- Release 指纹未变时复用上一版 catalog 记录，不再拿 `src-*` 缓存 digest 去对已发布 index digest（build-push+provenance 的 index 与 imagetools 选出的干净 index 不同）。
+- Windows Docker Desktop 上 OpenSandbox real Job 的 Gateway hostname 改为引擎 `docker exec -u 0` 写入沙箱 `/etc/hosts`（#423 / #424）：不再依赖 execd/bwrap 改 Docker 注入的 hosts 文件；Kubernetes/Kata 仍走 execd uid=0。失败文案固定带 `method`/`exit`/`uid`/`gid`，guest USER 不变。
+
+### 变更
+
+- 拆开平台版本与 Agent 运行时镜像版本（#417 / #418）：GitHub Release / `DEEPSONAR_IMAGE_TAG` / scheduler·web·admission 仍跟 `vX.Y.Z`；运行时产品只在指纹输入变化时升版本。指纹未变不新增 catalog version 行，也不对 ACR/GHCR/Docker Hub 打新的平台 version tag，继续指向已有不可变 digest。
+- 平台清单声明 `min_runtime_image`（全局下限 + 可选 per-key）。选中的官方 trusted 版本低于下限时，预检 / 建任务 / Job 冻结前 fail closed，稳定错误码 `RUNTIME_IMAGE_BELOW_PLATFORM_MIN`；已冻结 Job 快照不改写。
+- `deploy` 的平台镜像仍拉 `*:$IMAGE_TAG`（来自 catalog `platform_version`）；运行时镜像按 catalog 真实 version/digest 拉取，不再假设平台 `0.2.10` 等于 `kali:0.2.10`。
+- 任务工作台「创建」改为本地日历日 `YYYY-MM-DD`，不再显示「N 分钟/天前」；完整时刻仍在 tooltip（#419 / #421）。
+- 统一 OpenSandbox 宿主端点缺省为 `127.0.0.1:18081`（#413 / #414），与标准部署宿主端口一致；同步 `.env.example`、compose 映射与相关测试。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v45 → v46。v46 新增 `worker_nodes` 与 `worker_sandbox_leases`。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- 仍跑 `v0.2.10` 的调度器在 Windows Docker Desktop、Podman egress sidecar、gateway sidecar 重建后、以及 execd uid gate 上会继续踩上述 provision 失败。升级调度器 / web / image-admission 镜像后才会生效。
+- OpenSandbox 宿主直连缺省端口从 `8080` 改为 `18081`。已有 `deploy/.env` 若仍写旧端口，需与 compose 映射一并改掉。
+- 单机 `up real` 仍种子 `local` worker；远程执行面用 `./deploy/deploy.sh up worker-join --control-plane …`。心跳超时只停止新派发，不自动开新 attempt。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build，运行时 catalog 可复用已有不可变 digest，平台镜像仍打 `0.2.11` tag。
+
+## [0.2.10] - 2026-09-07
+
+### 新增
+
+- 报告多级只读视图（#408 / #409）：任务工作台「报告」页签改为任务级聚合——上方任务总报告（可切换版本），下方本任务各已确认 Finding 的最新独立报告；新增 `GET /projects/:id/reports`（可选 `canvas_id`，`reports:read` 范围）按任务编组全部任务报告版本与各 Finding 独立报告，项目页 `/projects/:id/reports` 按任务分组展开。只补只读展示与导航，不改双轨生成、幂等版本化或 SARIF/Markdown 下载语义。
+
+## [0.2.9] - 2026-09-06
+
+### 新增
+
+- Runtime image readiness 与拉取任务持久化：Hub 目录/`list_available_runtime_images` 返回 `readiness`（ready/preparing/unavailable/error）且不泄露 OCI/digest；`GET /runtime-images/registry` 附 `image_status`，`GET /runtime-images/registry/pull-status` 返回可关联 image_key 的结构化阶段。拉取任务落 `runtime_image_pull_tasks`（schema v44）；Scheduler 重启把 in-flight 标为 `interrupted`（`scheduler_restarted`），不自动 resume。Hub 提交未就绪镜像返回可重试 `runtime_image_not_ready` 且不创建 Job；管理 API 映射为 409 并可轮询 pull-status（#398）。
+- `GET /dashboard/ops` 提供态势 P1/P2 服务端运营指标：Finding 分布与高风险未闭环、项目/任务覆盖、近 7 日成功率/耗时/角色对比、并发水位与失败原因；snapshot=current、throughput=history（#400 / #242 数据契约）。
+- 读 API 标明查询平面：`current` / `history` / `live`；live 不是审计源。Job 详情与事件分页返回 `query_plane` 与导入 `provenance`（#400）。
+- Finding 处置矩阵：`confirmed_vuln` 必须 `verify_status=confirmed`；高风险未闭环不含已确认漏洞（#400）。
+- 取消/超时/孤儿后的迟到语义事件仍用 `job_not_running`，并附归属 `details`；`events.attempt_id` 记录摄入锁时的 Attempt（schema v45）（#400）。
+- 导入 Job 默认 historical/readonly；导入时活动归档为 cancelled 的 Job 续跑返回 `409 JOB_IMPORTED_READONLY`（#400）。
+
+### 变更
+
+- Finding 确认改为 Fact-first 硬门：只认图上结构化 Fact（`finding_id` / `subject_revision` / ownership / `expected` / `actual` / `outcome`）。门禁通过则直接确认，或由只消费 Fact 的 `verify_finding` 提交收口提案；不再二次复核源码、原始制品或 maker 结论。不足、失败、冲突或版本不匹配保持未确认并回弹 Hub；审计记录所用 Fact 与门禁结果（#399）。
+- 保留 Fact 证据信任态 `verification_status`，与 Finding `verify_status` 分界；报告数值门禁只认 verified Fact（#391 / #387）。
+- 明确过程流三职责并收口补读（#388 / #359）：`events` 仍是语义账本，evidence NDJSON/manifest 是过程证据，`stream-bus` 只作非权威投递。HTTP/WS 补读只认本机 `BLOB_DIR`；未落盘标 `unpersisted`，本副本看不到文件标 `visibility=unavailable`。不从过程流重放控制副作用，不承诺零丢失。
+- 收敛通用配置面（#386 / #359）：删除无决策作用的 Finding 协议模式 `agent_choice`（并入 `hybrid`）、`rules.finding_protocol` 双写，以及 RoleConfig `runtime_knobs` 的 snake_case 别名。三层协议合并、`runtime_knobs` 四层、`image_strategy` 与 `pin_policy` 保留；Job 仍只认冻结快照。启动/导入物理改写历史别名，新写入拒绝。
+- DSH YAML 解析与 Gateway 运行时投影迁到 `@deepsonar/runtime-sandbox` adapter；Scheduler 管理面调用该 API 校验/冻结，executor 只经 `adapter.projectRuntime`。通用状态机不再持有 DSH wire schema（#390 / #359）。
+
+### 修复
+
+- 明确 DSH/Pi「解码」为三类契约（请求兼容投影 / 运行事件解码 / Session 归档与查看器），修正 DESIGN 误把 #320 当作完整解码的引用。DSH 未知 JSON-RPC 帧改为可诊断的 `unknown_runtime`，并解码独立 `tool/call` / `tool/result`；钉死 Pi `0.84.4` / DSH `0.1.1-rc.2` 脱敏夹具覆盖文本、工具、错误、usage、Session 身份与损坏帧。普通输出或伪造工具调用仍不变成控制语义事件（#389 / #359）。
+
+### 安全
+
+- 收紧 Token 提权与项目 / Transfer / 镜像治理：新 Token 的 scopes 必须是调用者有效 scopes 的子集，非 admin 不能授予 `admin`；项目 actor 只能管理本项目且不超过自身权限的 Token。`POST /jobs` 跨项目返回稳定 `PROJECT_MISMATCH` 且不建 Job。平台镜像治理（registry sync/apply/pull、digest、rescan 等）与平台 Transfer 对项目 actor 一律 `PROJECT_SCOPE_FORBIDDEN`；项目 Transfer 不能 `create_new` / `merge_platform`（#403）。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v43 → v45。v44 新增 `runtime_image_pull_tasks`；v45 为 `events.attempt_id`。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- Finding 确认已改为 Fact-first：旧的二次盲复核 / maker 结论路径不再存在。已有未确认 Finding 需按图上结构化 Fact 重新收口。
+- Token / 项目边界收紧后，原先能创建全局或跨项目 Token、跨项目建 Job、或用项目 Token 做平台镜像治理 / 平台 Transfer 的调用会失败。
+- 本版本未改官方 Agent Dockerfile；Release 若指纹未变会走 `src-<fingerprint>` 跳过 docker build，digest 可复用 v0.2.8。
+
+## [0.2.8] - 2026-09-06
+
+### 新增
+
+- Hub 可按任务动态选择 Worker 运行镜像：intent 可选 `runtime_image_key`，只接受本轮 `list_available_runtime_images` 返回的市场 key；非法/未启用/CLI 不兼容使整次决策以 `invalid_runtime_image` 拒绝。省略时按角色缺省解析（#357）。
+- Verify 盲验 Phase 1：`verify_finding` 只冻结主体 / location / `artifact_refs`，不下发 maker 的 title/summary/severity；Verify 先独立推导再逐项 DIFF，仅 exact match 可 confirm（#371）。
+- Fact/Finding 可选 `quantities: [{value, unit, basis, ref?}]`（最多 20）。报告阶段机械核对已确认 Finding 与 verified/confirmed Fact 的值+口径（#368）。
+
+### 变更
+
+- Schema 升至 v43。v42 删除 Plane 列与 `credentials.kind=plane`；v43 删除 `findings.suggest_verify`。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+- inherit_global 项目 RoleConfig 不再保留被忽略的行上 `model` / `runtime_image_key`。启动、切换策略、写入、导入导出与批量绑定会物理清空这些字段；批量绑定 impact 去掉 leftover 警告字段（#359 / #233 / #146）。
+- 删除 Finding 兼容旋钮 `suggest_verify`。控制契约、落库、导入导出与工具说明不再接受该字段；是否派生 Verify 只认冻结规则（#359）。
+- 删除过时 Plane 集成与假身份：`plane_project_id` / `plane_issue_id` / `projects.canvas_id` 回退、`CONTROL_MCP_SERVER` 与 `plane-client` 包一并删除（#359 / #363）。
+- 删除控制 MCP 残留通道：adapter 不再声明 `controlMcp`；CLI 流中的伪造 `mcp__deepsonar-control__*` 只告警，不再默认映射为语义事件；冒烟入口改为 `ci:smoke:control-api`。缺少冻结 Finding 协议的画布 fail closed，不再现场回退当前全局/项目配置（#359）。
+- 删除无决策作用的兼容别名：`false_positive` 不再作为 Verify verdict 输入（只认 `confirmed|rework|needs_human`）；Credential 写入拒绝 leftover `allowed_model_ids`；Job/WS 实时流信封只保留 `items`；公共 `POST /jobs` 不再把 `audit_module` 映射为 `audit`。历史 Finding `verify_status=false_positive` 与导入投影仍可读（#359）。
+- 继续删除 leftover 第二真相：官方 audit 镜像不再回退 `DOCKER_IMAGE_AUDIT`；`BLOB_STORE` 只认 `fs|s3`；删除空 `docker-compose.online.yml`、空洞 verify/publish 转发函数，以及前端 `deepsonar_token` 静默迁移（#359）。
+- 导入 RoleConfig 不再静默写入 leftover `agent_cli`（缺省仍 `claude-code`，`codex`/`open-code`/未知 fail closed）；前端凭据保存不再静默剥离 leftover `allowed_model_ids`（#359）。
+- 规则 JSON 物理清扫已删除的 `autoVerifySeverities` / `hubWaitSeverities` / leftover CLI 并发键；PATCH 拒绝这些别名，`asCliLimits` 只忽略 leftover 键而不整表作废；路由 registrar 不再转发领域 schema（#359）。
+- 删除 leftover 本机 Docker inspect 调度闸门：建 Job / Hub / Verify / Report / resume 不再因 Scheduler 本机缺层拒绝；readiness 不再报 `RUNTIME_IMAGE_NOT_LOCAL`。OpenSandbox 仍按冻结 digest 拉取并在 provision 后重验（#359 / #286）。
+- 官方镜像不再安装 leftover `@openai/codex` / `opencode-ai`。新 Job 只认 `claude-code` / `pi` / `dsh`；历史 leftover Session 归档仍只读解析，路径守卫保留 `/.codex/` `/.opencode/`（#359 / #318）。
+- leftover Job 身份别名不再映射为当前类型：`audit_module` 不再当作 `audit`，`hub` 不再当作 `hub_reason`。事件摄入 fail closed；测试夹具改用当前类型。`verify` 仍是 runtime-image smoke 通道（#359）。
+- leftover Codex/OpenCode Session 解析函数迁出热路径；`*.poc.ts` 迁出生产 `src/`；verify/report 转发层删除，`core.ts` 只做组装（#359 / #366 / #369）。
+
+### 修复
+
+- Hub 选图后 resume / rerun 保留 Job 已冻结的 runtime image；CLI 不兼容改为 `invalid_runtime_image`，不再 500（#360）。
+- 报告数值保真门禁不再因 Agent 改写口径或未确认 Fact 误炸：只核对 verified/confirmed Fact 与 confirmed Finding；覆盖足够的 Agent 稿数值失败时回退确定性模板，并明确要求报告原样保留 value/unit/basis（#374）。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v40 → v43。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- 凭据 `kind=plane` 已从基线删除；旧库重建时该行不会回填。
+- 官方 Agent 镜像指纹变化（去掉 leftover Codex/OpenCode 安装），Release 会重建 base / kali-minimal 及依赖 base digest 的专项镜像。Scheduler 镜像因删除 `plane-client` 也会重建。
+- Chrome Fuzz Release 构建在托管 runner 上先释放磁盘并加 swap，降低 V8 编译把 runner 打挂后整次发布 skip 的风险（v0.2.7 因 amd64 构建中途失联未产出 GitHub Release）。
+- 新 RoleConfig / 新 Job 的 `agent_cli` 只接受 `claude-code` / `pi` / `dsh`；导入 leftover CLI 不再静默改写。
+
+## [0.2.7] - 2026-09-04
+
+### 新增
+
+- Pi 第三方扩展走注册制准入：RoleConfig `pi_extensions` 只接受已注册 id，Job 创建冻结后经 `--no-extensions` + `-e` 注入镜像预置路径。pilot 为 `pi-web-access`（预置 audit / kali-minimal，不进 base；无长期密钥下发，出网服从 `allow_egress`）（#351）。
+- 控制台「新建项目」只创建空项目，不铸画布、不派 Hub（#343）。快捷启动仍可一次完成「新项目 + 第一项任务」。
+- 项目启用多个运行时镜像时按 digest 入队去重、串行拉取，不再因 in-flight 准备 409（#342）。
+
+### 变更
+
+- Schema 升至 v40（`role_configs.pi_extensions_json`）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+
+### 修复
+
+- 非 root 专项镜像 OpenSandbox provision 以 execd `uid=0` 写入 Gateway `/etc/hosts`，guest `USER deepsonar` 不变；失败改为 `GatewayHostsBindError`，不再报 `failed to bind deepsonar-gateway-proxy in sandbox hosts`（#346 / #355）。
+- 本机镜像准备不再抢占 `admin_bulk`；通道切换与项目启用共用同一队列，已入队项不会丢失。失败 digest 不占用去重锁，Web 在 inspect 未就绪时继续轮询后自动启用。
+- OpenSandbox Docker 宿主端口池钉在 `40000–49000`，避开 Windows Hyper-V / WinNAT 排除区（#349）。
+- ClickHouse 专项镜像环境检查与鸿蒙一样校验从 Base 继承的 Claude Code（`claude --version`）；Audit 此前未检查 CLI，Test/Fuzz 只做 `command -v`。缺 CLI 时镜像构建失败（#353）。
+
+### 部署 / 升级说明
+
+- **须重建数据库**：schema v39 → v40。先 `pnpm db:rebuild -- --plan`，再 `--apply`。Scheduler 启动不自动升级。
+- 本版本含 #346 Gateway hosts bind 修复；仍跑 `v0.2.6` 的真实 Job 会在写沙箱 `/etc/hosts` 时于 provision 失败。升级调度器镜像后才会生效。
+- Windows Docker Desktop 部署请使用本版本钉死的 OpenSandbox `port_range`；自定义 `40000–60000` 会落回排除区。
+- ClickHouse 专项镜像指纹变化，Release 会重建；audit / kali-minimal 若含 `pi-web-access` 预置也可能重建。未改内容的镜像仍走 `src-<fingerprint>` 跳过 docker build。
+
+## [0.2.6] - 2026-09-02
+
+### Fixes
+
+- Hardened provider routing and runtime adapters, including nested RPC failures and session progress rendering.
+- Stabilized Pi job completion, failure reporting, and usage-ledger cache-hit display.
+
+## [0.2.5] - 2026-09-02
+
+### Fixes
+
+- Added the latest scheduler, provider, and runtime hardening changes from the 0.2.x maintenance cycle.
+
+## [0.2.4] - 2026-09-02
+
+### Fixes
+
+- Added bounded OpenSandbox provisioning retries and Pi system-prompt/session handling fixes.
+
+## [0.2.3] - 2026-09-02
+
+### 新增
+
+- **ClickHouse audit/test/fuzz 专项运行时**：三个官方 project-opt-in 镜像对标 Chrome 三件套。Audit 提供 git / CMake / Ninja / Clang-LLVM / binutils；Test 钉死官方 LTS `clickhouse-common-static` `v26.3.28.5`，HTTP 冒烟走 `127.0.0.1`；Fuzz 装同一官方二进制加 Clang-16 / libFuzzer / AFL++，不从源码编 ClickHouse。Test server 与 Fuzz `clickhouse-local` 共用沙箱预算内 config（关 watchdog/mlock/crash report/page cache，限制线程池与 8GiB 级默认 cache）。专项 CI 在 `--network none` 下把 hostname 钉成 `localhost`，避免 ClickHouse DNSResolver 解析容器 id 时卡在 Docker DNS。三套均要求 `allow_egress=true`，stall 下限与 Chrome 相同。
+
+### 变更
+
+- **Agent CLI 新配置收敛为三类（#318）**：新 RoleConfig / 新 Job 只接受 `claude-code`（默认）、`pi`、`dsh`。leftover `codex` / `open-code` 历史快照与 Session 归档只读可看，不自动改写；下次保存 leftover 配置拒绝并提示迁移。运行时注册表与新增 CLI 接入流程保留。
+
+### 部署 / 升级说明
+
+- 本版本无 schema 变更（仍为 v39）。
+- 首次正式发布 ClickHouse 三套专项镜像；Release 成功后会把 digest 回写 `deploy/runtime-image-registry.json`。此前 bundled catalog 的 ClickHouse 条目为 `versions: []`。
+- 新 RoleConfig / 新 Job 的 `agent_cli` 只接受 `claude-code` / `pi` / `dsh`；历史 leftover CLI 快照仍只读可看。
+
+## [0.2.2] - 2026-09-01
+
+### 修复
+
+- task retry / 唤醒 Hub 时当前 RoleConfig / Credential 无法解析，稳定返回 `409 SNAPSHOT_STALE`，不再 500（#315）。
+- 角色 `agent_cli` 更新时，绑定 LLM 凭据在 Provider 兼容矩阵通过后跟随最新配置；Job 解析以角色为准，凭据 `agent_cli` 仅为软提示（#316）。
+- Provider `/models` 探测失败不再阻塞凭据或角色保存；catalog 软降级为空，仍可写 health（#317）。
+- pi / dsh adapter 解析上游错误里嵌入的 JSON `message`，Job `last_error` 展示短原因（#320）。
+- dsh 在平台 system prompt 前投影英文 coding-assistant opener，对齐 pi 风格 `input[0]`，减少兼容网关按 system 帧全部 401（#321）。
+- 控制台侧栏版本号链接到官方 GitHub `releases/tag/vX.Y.Z`；脏 tag 回退 releases 首页；空版本不渲染链接（#327）。
+
+### 变更
+
+- 刷新治理 Agent CLI pin（#319）：Claude Code `2.1.231` → `2.1.252`，Pi Coding Agent `0.84.1` → `0.84.4`，DSH 完整 package closure `0.1.0-rc.7` → `0.1.1-rc.2`（npm `latest` 标签仍指向过期的 `0.0.1-rc.*`，不以该标签为准）。adapter、Base/Kali Dockerfile 与 runtime 清单同步更新 `dist.integrity`。
+- OpenSandbox server 宿主端口默认改为 `18081`（`docker-compose.opensandbox.prod.yml` / `.env.example`）。调度器仍经 compose 网络 `opensandbox:8080` 访问，不受宿主端口影响。
+
+### 部署 / 升级说明
+
+- 本版本无 schema 变更。
+- CLI pin 变更会重建官方 Agent 运行时镜像（Base / Kali 等）；Release 指纹变化后才会 docker build。
+- 已用 `OPEN_SANDBOX_HOST_PORT=18080` 的部署可继续显式覆盖；新默认是 `18081`。
+
+## [0.2.1] - 2026-09-01
+
+### 新增
+
+- 用量账本记录并展示 Gateway 缓存读/写 token（`cache_read_input_tokens` / `cache_creation_input_tokens`）。CURRENT PROJECT 增加「项目账本」`/projects/:id/usage`，任务工作台不再内嵌项目账本。全局 / 项目 / 任务账本可折叠，偏好按用户 + 页面记忆，默认展开。Schema 升至 v39。
+- **provider-neutral 沙箱运行时（#162 / #307）**：`RuntimeHost` / `ensureHost` 成为调度器与沙箱之间的唯一执行边界，五类 CLI adapter（claude-code / codex / open-code / pi / dsh）不再引用任何 provider SDK 类型；real 默认 `SANDBOX_PROVIDER=opensandbox`，`createRealRunner()` 只构造 `OpenSandboxRunner`。**删除 `agentbox-sdk` 与 `AgentboxRunner`**：real 模式下其它 provider 值启动即失败，不再有默认双轨。
+- **OpenSandbox Docker adapter（Phase 2）**：绑定 `@alibaba-group/opensandbox@0.1.11`，server / execd / egress 只认 `name@sha256` 不可变 digest pin（禁止 `latest`，SDK 版本与安装版本强校验）；provision 后重验运行时合同（/workspace、/bin/sh、tool-manifest 与 sha256）；硬限制（cpu / memory / pids / cap-drop-all / no-new-privileges）缺失或不安全值 fail closed；架构平台（amd64 / arm64）不匹配 fail closed。
+- **受限网络经路径过滤 Gateway sidecar**：restricted 沙箱只放行 `deepsonar-gateway-proxy`（/gateway 与 /control/v1 固定路径转发，拒绝 CONNECT 与任意代理），sidecar 容器受 DeepSonar 标签管理（非受管容器拒绝接管）；sandbox `/etc/hosts` 注入 sidecar IPv4 / K8s ClusterIP；模型请求经 Model Gateway 转发，沙箱只持短期 Job capability token，Provider 长期密钥不进沙箱。
+- **OpenSandbox server 探针**：real 模式 `GET /readiness` 与 Dispatcher claim 以鉴权 `list()` 探测 server，缺 `OPEN_SANDBOX_API_KEY` / 不可达 fail closed（不 claim）；`GET /health` 暴露 `opensandbox.level/ready`；错误消息对 API key 脱敏。
+- **Kubernetes + Kata 后端（Phase 3）**：BatchSandbox + `RuntimeClass=kata-qemu` overlay（namespace / ResourceQuota / LimitRange / Gateway Service 无 selector，ClusterIP 写入沙箱 /etc/hosts）；共享资产走 labeled PVC + seeder（`kubectl cp`，不挂 docker.sock）；`OPEN_SANDBOX_KUBERNETES=1` 时省略 Docker 专有 `pids` 资源字段但仍要求冻结 pidsLimit。
+- **共享资产卷防呆**：Docker provision 在 create 前 `inspectPreparedSharedAssetsVolume`，缺 labeled volume 或 Job 所有权不匹配 fail closed，避免引擎自动建空卷；guest `/proc/mounts` 重验只读挂载。
+- **重启对账与回收**：按持久 sandboxId `ensureHost` 重连；Reaper desired-state cleanup 覆盖任意 real provider；超时 / 孤儿回收 capability token、关闭 PTY、移除共享资产卷。
+- **Session 查看器可切换归档（#314）**：`GET /jobs/:id/evidence/session` 返回 `artifacts`（main / subagent / vendor_export），`?path=` 切换与下载，默认最后一次主 Session / vendor export（按 manifest 写入顺序）；在线预览上限提升到 8 MiB（超限 `truncated`，完整字节走 download）。
+- **Claude 会话解析改善（#314）**：跨行 `tool_use` id → name 回填工具名（`tool_result` 标题「结果 Read」）；检查器正文上限 32k；`progress` / `file-history-snapshot` / `compact` / `web_search` 归为系统行，快照只摘要文件数；Session 页多归档用 `SearchableSelect` 切换（标签带文件名与 attempt 前缀），切换请求丢弃过期响应。
+- 生产 scheduler 镜像钉 `kubectl v1.36.4`（sha256，amd64 / arm64）。
+
+### 修复
+
+- 五类 CLI 在 OpenSandbox 上的会话归档 / 恢复链路：Codex 用 argv prompt + stdin EOF（`< /dev/null`）打出 `thread.started`，按 `sessions/YYYY/MM/DD/rollout-*.jsonl` 发现归档；execd 分行 log item 用换行拼接；Claude 无换行拼接 JSON 按 brace depth 拆分；DSH 在 initialize 前冻结确定性 session id，503 瞬态失败按各自契约恢复同会话（401 不恢复）。
+- OpenSandbox destroy 对已删除沙箱幂等成功（404 / 409 / SANDBOX_NOT_FOUND / already in progress 视为已结算）；provision 取消不再空等 create 返回，迟到 session 与残留资源都会被回收。
+- Dispatcher 冷宿主不再因本机缺镜像层拒绝 Job：OpenSandbox 由 server 按不可变 digest 拉取，合同 / digest 在 provision 后重验。
+- CI：鉴权调度器（:3101）启动前停掉仍在写同一库的 :3100，避免 boot 期 `reconcileOwnedSequences` 与 INSERT 竞态（#314）。
+
+### 变更
+
+- 默认 real 沙箱从 Agentbox 切换为 OpenSandbox：生产部署默认叠加 `docker-compose.opensandbox.prod.yml`（server 发布在 `127.0.0.1:18080`）；`docker-compose.opensandbox.host.yml` / `k8s.yml` 为已有 server / Kata 集群的附加 overlay。
+- 本机镜像 digest 预检闸门随 Agentbox 删除而不再触发：OpenSandbox 模式由 server 按不可变 digest 拉取并在 provision 后重验承担；`shouldInspectLocalRuntimeImage()` 相关死代码链与文案残留待后续清理。
+
+### 部署 / 升级说明
+
+- **Breaking（0.2.x）**：`SANDBOX_PROVIDER=local-docker` 已移除，real 模式只支持 `opensandbox`。升级须部署 OpenSandbox server（`deploy/opensandbox/config.toml` + digest pin）并配置 `OPEN_SANDBOX_API_KEY`；缺 key 时 readiness / Dispatcher claim fail closed。
+- Schema 升至 v39（用量账本，见「新增」首条）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+- 官方运行时镜像内容未变（本版不含运行时镜像内容变更），Release 指纹未变时跳过 docker build，只打新版本 tag；scheduler 镜像因 `kubectl` 依赖会重建。
+
+## [0.1.46] - 2026-08-31
+
+### 新增
+
+- 官方 `deepsonar-mobile` 专项镜像（project opt-in）：覆盖 Android（JADX CLI、apktool、bundletool、apkeep、androguard、官方 ADB、Frida/Objection；`.so` 用 binutils / radare2 / LIEF）、iOS Linux 宿主（libimobiledevice / plistutil / iproxy）与 OpenHarmony 应用/设备（HAP 静态检查 + 官方 hdc）。对照 [awesome-ai-reverse](https://github.com/DiscoverBox/awesome-ai-reverse) 只并入官方可钉死的基础 CLI；不预装 MobSF、jadx-gui、Burp、mitmproxy、IDA、Ghidra、DevEco、决策扫描器或 JADX-AI-MCP / apktool-mcp / FIRERPA 等 MCP。无 adb / hdc / idevice 目标时必须结构化 `needs_human` / `inconclusive`。现有 `deepsonar-openharmony-*` 仍负责源码构建/Clang/fuzz。
+- `deepsonar-mobile` 钉入 [ApkCheckPack](https://github.com/moyuwa/ApkCheckPack) `20260618`（linux-amd64 静态二进制 + arm64 qemu）。Agent 可选用的加固/SDK 指纹 CLI，不是平台规定扫描入口，也不把输出当成 Finding。
+
+### 修复
+
+- 同一摄入先成功 `request_human` 再跟迟到 `mark_job_done` / `submit_hub_decision` 时，跳过后续终态并保住 `waiting_human`，不再因 `duplicate_tool_call` 整笔回滚（续 #298 / #300）。Executor 先落 human 再看 runner 错误；Dispatcher 已在人工门时不再把 Job / 画布刷成 failed。
+- `request_human` 同时把对应 `job` / `intent` / `report` 画布节点标为 `waiting_human`。向等待人工的 Job 回复与忽略共用恢复路径（关 Attempt → `pending` → 唤醒调度），避免消息停在 `planned`。Job 账本仍为 `waiting_human` 时，即使画布节点已被刷成 failed 也可定向回复；解析不到活动 Job 仍不得默认发给 Hub。
+
+## [0.1.45] - 2026-08-26
+
+### 新增
+
+- 项目风险台：进入项目后的「项目风险 / 风险发现」列出该项目全部任务 Finding；顶部用 `GET /projects/:id/findings/summary` 聚合严重度 / 验证 / 处置，避免列表 500 条窗口静默截断（#302）。
+- Finding 处置新增 `human_reproducing`（人工复现中）。可作 compose 种子；`confirmed_vuln` 仍要求 Verify 已 confirmed。Schema 升至 v38。
+
+### 修复
+
+- Job 结果页「下发 Prompt」：运行时把去掉画布 YAML 的完整输入冻结到 `payload.dispatched_prompt`；既有 Hub 后续轮次从 canvas 任务正文 / 触发原因回填，不再空白。
+- 过程画布筛选坞与图例放入 React Flow `Panel`，避免被 pane 盖住；去掉 `onlyRenderVisibleElements`，边 SVG 使用 1px + `overflow: visible`，平移后连线不再被裁掉。
+- resume 已 `request_human` 的 Job 后，终态互斥只计当前 Attempt：旧 Attempt 的 human 不再把新会话 `mark_job_done` / `submit_hub_decision` 判成 `duplicate_tool_call`（#298）。
+- Hub 人工收尾同一回合先 `submit_hub_decision` 再 `mark_job_done` 时，running 守卫用摄入加锁时的状态；迟到 done 幂等，不再 `job_not_running` 整笔回滚（#300）。
+
+### 部署 / 升级说明
+
+- Schema 升至 v38（`findings.disposition` 增加 `human_reproducing`）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+- 本版本不改官方运行时镜像内容。Release 指纹未变时跳过 docker build，只打新版本 tag。
+
+## [0.1.44] - 2026-08-23
+
+### 新增
+
+- 官方 runtime catalog 提升后，自动把已过期的官方项目 pin 滚到最新 trusted（#284）。只改 `project_runtime_images.selected_version_id`，不改 Job 快照；`version_id=null` 仍跟随最新；`pin_ok` 显式旧版、第三方 pin 与 `pin_policy=hold` 不自动换 digest。每次滚动写 `runtime_image.official_pin_roll` 审计。市场行可显示「已随官方升到 x.y.z」。建任务前先解析 Hub 快照，避免 pin 过期留下无 Job 空壳画布；已有空壳可 `POST /tasks/:id/retry`。
+- 任务 / Job 启动前对本机冻结 digest 做与 Dispatcher 相同的 inspect-only 校验（#286）。catalog trusted 不再当成「本机可跑」；缺图则拒绝插入 Job，返回可诊断错误（digest / 版本 / 准备入口），执行期仍禁止隐式 `docker pull`。resume 校验快照 digest，不改用 latest。
+- 新建任务「指定时间」改为可点击月历与时刻表（#294），不再依赖浏览器原生 `date` / `time` 控件。调度语义不变：仍提交 `scheduled_start_at` UTC，本机墙钟显示，提交时拒绝过去时刻。
+
+### 修复
+
+- 人工介入请求可不回复直接隐藏，也可在“显示历史”中取消隐藏；回复成功后仍按用户与任务记为“已回复”并随已处理项隐藏。两者都只改变工作台展示偏好，不把请求误记为“忽略”，也不改写 Job 调度语义。
+- 从未真正 `running`（`started_at` 为空）且唯一 Job 在 provision 失败的任务，不再被列表 / 工作台 / Dashboard 标成「已完成」（#292）。全部 Job 终态但从未开始时，失败 / timeout / orphan / cancelled 显示失败，不再只靠 `ended_at` 误判完成。
+- 过程画布按稳定可见投影展示（#289 / #290）：默认深度 3、每父节点先揭开 12 个子节点、默认 24 个可见节点预算并以 24 为步长展开，180 节点硬上限仍在。主干边使用 ELK 实际路由，回到 root 的反馈边走外围收敛轨道，不再反向穿过源卡片。筛选 / 展开 / delta 布局保留用户平移缩放；PNG 导出标明当前可见投影。
+- 项目设置镜像策略下拉不再截断产品名，触发器可换行显示完整镜像名。
+
+### 变更
+
+- 根 README 去掉重复的运行时镜像能力表、中国区 ACR 拉取示例及静态审计 / 动态验证说明；镜像发布与升级仍以 `docs/RELEASE_RUNTIME_IMAGES.md` 与 `DESIGN.md` 为准。
+
+### 部署 / 升级说明
+
+- Schema 升至 v37（`project_runtime_images.pin_policy`，默认 `follow`）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+- 本版本不改官方运行时镜像内容。Release 指纹未变时跳过 docker build，只打新版本 tag。升版后官方 stale pin 会自动滚到最新 trusted；本机仍须准备即将冻结的那条 digest，不会在执行期隐式拉取。
+
+## [0.1.43] - 2026-08-21
+
+### 修复
+
+- `db:rebuild` 回填后只对 **public** 上的 owned sequence `setval(MAX(id))`，并在 rebuild 结束与 Scheduler 启动时校验 `last_value >= MAX`、下次 `nextval` 为 `MAX+1`。漂移会自动对齐，对不齐则 fail closed，避免 `audit_logs_pkey` / `events_pkey` 撞号（#281）。不改 append-only，也不把审计主键改成 UUID。
+- 任务页人工介入默认折叠、可隐藏历史，并提供「忽略」以跳过等待（#277）。忽略会把 human 节点标为 `ignored`；若 Job 仍为 `waiting_human` 则恢复 pending，让 Agent 继续推进。折叠/隐藏按用户与任务写入 localStorage。
+- 镜像市场切换官方仓库通道时，若已有准备/拉取任务，返回当前 `pull-status`（202）并展示进度，不再把 `409 runtime_image_preparation_busy` 当硬失败（#278）。同 digest 复用准备锁，通道切换可抢占当前通道的 `admin_bulk`。下拉保持待切换通道，完成后自动重试落库。准备任务异常退出会离开 `queued`/`running`。
+
+### 部署 / 升级说明
+
+- Schema 仍为 v36，升本版不必为结构重建库。若库曾 `db:rebuild` 后出现 `audit_logs_pkey` / `events_pkey` 撞号，Scheduler 启动会自动 `setval`；不齐则 fail closed。
+- 本版本不改官方运行时镜像内容。Release 指纹未变时跳过 docker build，只打新版本 tag。
+
+## [0.1.42] - 2026-08-20
+
+### 新增
+
+- 配置中心第一批运行时护栏落库并可热读（#263）：`stallSec`、`jobTokenMaxRequests`（0=不限制）、`auditTimeoutSec` / `verifyTimeoutSec`、`provisionTimeoutSec`。优先级 Job > 角色 RoleConfig > 项目规则 > 平台 `global_settings` > 部署 env 引导。Web「配置中心」与角色编辑器可改，保存有可见 toast 并写审计。已在跑的 Job 继续用冻结快照；下一 Job 无需重启调度器。
+- 任务下发后可就地修改标题与内容（#253 / #251）：画布工作台直接改当前任务意图，调度器写入权威任务记录并保留过程画布；不另开任务、不改写已冻结 Job 快照。
+- 组合续挖（`kind=compose`）可选择同项目未确认 Finding（pending / verifying / needs_human / confirmed），并禁止把新画布扩成新一轮资产扫描（#273 / #274）。Hub 不得下发未绑定种子的 explore/audit；`emit_finding` 拒收种子资产以外的新仓/新模块 Finding。重试仍在源 Finding 被删、跨项目或否定处置时 `COMPOSE_SEEDS_STALE`，不因仍未 confirmed 而拒绝。
+- OpenHarmony Test 钉死官方 SDK `hdc` 作为设备协议（#268）；CI 只冒烟 `hdc version`，无设备时结构化 `needs_human`。
+
+### 修复
+
+- 大过程画布分层加载（#270）：默认每层先揭开 12 个后继、限制同时渲染节点数，筛选坞保持可点；超过 ELK 阈值改用列布局，不再叠在服务端 `(0,0)`。
+- 拓扑边改为东出西进的层间正交总线，竖段贴在源节点右侧近层间隙并按同一父节点分车道；广播 overlay 默认不盖过程图，点选节点才画对应叠加层。
+- 不再把每条边的 SVG 钉成画布一屏：平移/放大到右侧列时正交折线仍可见，端点扣到真实 handle。
+- 过程画布筛选坞始终默认展开；折叠态「筛选节点」在亮/暗色与 <640px 下保持可点可读，不再被 `100%-176px` 裁成只剩导出。
+- 拓扑连线把 `--deepsonar-edge-zoom-boost` 与 `--xy-edge-stroke-width` 写到 `.react-flow` 根节点，默认 fitView 下描边保持可读。
+- 任务页人工介入可直接回复，不再静默只打 Hub（#272）。
+- Reaper 不再把健康沙箱里的单条长工具调用判成产出停滞：`tool.call.started` 写入语义进度与 `runtime_activity`，在飞工具且 lease 仍有效时跳过 stall；`deepsonar-chrome-audit/test/fuzz` 另有 5400/10800s 下限。全局 `DEEPSONAR_JOB_STALL_SEC` 默认仍为 900s。
+- 官方 runtime catalog 不再被 image-admission 周期复扫按 Debian/发行版 Trivy CRITICAL 或 secret 自动吊销；第三方仍保持 0 CRITICAL / 0 secret。仅有吊销版本时任务启动返回 `409 RUNTIME_IMAGE_REVOKED`，不再误报 `RUNTIME_IMAGE_PLATFORM_UNAVAILABLE`。`/health` 以 `official_trust_warnings` 暴露官方默认镜像已吊销。
+- Pi Provider 编辑器接受官方 `llm-pi-ai` settings YAML/JSON，提取 `baseURL` / 模型 / API key，并物化到 `.pi/agent/models.json`（#255）。
+- OpenHarmony arm64 冒烟接受 qemu 上拆开的 `Connect server failed` + `Ver:` 输出（#276）：合并 `hdc version` / `hdc -v` 后出现 `Ver:` 即通过，不再要求两条都带版本；hdc 缺失或完全无版本仍 fail closed。
+
+### 变更
+
+- 源码、测试与文档示例禁止写死公网第三方/中转域名；需要可运行 URL 夹具时只用 `127.0.0.1` 或内网地址。产品内置官方厂商默认端点与官方发行源除外（#258）。
+- 官方运行时只保留基础工具，移除 Semgrep、gitleaks、shellcheck 与 chrome-audit-scan（#267 / #266）。Finding 质量走 harness + Verify；OpenHarmony Test 的 `hdc` 钉死仍保留。
+
+### 部署 / 升级说明
+
+- 本版本将 Schema 升至 v36（`role_configs.runtime_knobs_json`）。已有库须先 `pnpm db:rebuild -- --plan`，再 `--apply`。
+- `DEEPSONAR_JOB_STALL_SEC` / `DEEPSONAR_JOB_TOKEN_MAX_REQUESTS` / `DEFAULT_AUDIT_TIMEOUT_SEC` / `DEFAULT_VERIFY_TIMEOUT_SEC` / `PROVISION_TIMEOUT_SEC` 现为引导值：库中有键则 UI/DB 优先。lease TTL、Reaper 间隔、Gateway 超时、镜像 registry/cosign/syft/trivy/clamav pins 与巡检间隔仍只走部署 env。
+- 官方 Audit / Kali / Chrome 运行时工具清单有变，发版会重建相应镜像（指纹变化）；旧 pin 不会被静默改写。
+
+## [0.1.41] - 2026-08-20
+
+### 新增
+
+- 态势页增加 P0 运营总览：`GET /dashboard/overview` 聚合项目 / 任务 / Job / Finding 总量与状态分布、今日与近 7 日（Asia/Shanghai）新建 / 完成任务与新增 Finding、活跃项目 Top 5 与最近活动；关注队列仍是处置入口。
+- 发布矩阵纳入官方 `deepsonar-assets-helper` 与 `deepsonar-silo`；real `up` / `pull` 优先拉 `$IMAGE_REGISTRY/deepsonar-*:$IMAGE_TAG`，缺失时分别回退 busybox pin 与 pgsty/silo。
+
+### 修复
+
+- `inherit_global`（缺省 / 脏 `image_strategy`）下新 Job 不再被遗留项目 RoleConfig.model 覆盖；快照 `model` / `upstream_model` / 默认 CLI 跟全局 RoleConfig + 账号主模型。批量绑定仍可不改写行上模型，但 impact 与 Provider 流程标明这些值在 inherit 下不生效。
+- 官方镜像升版并 registry sync 后，项目显式 `selected_version_id` 不再静默改写；pin 无法解析而最新 trusted 可用时，readiness / 建任务返回 `409 RUNTIME_IMAGE_PIN_STALE`（点名旧 pin 与最新版本，并给出一键升级或改为跟随最新），不再 HTTP 500。市场列表对过期 pin 显示 `pin_stale`。`version_id=null` 仍跟随最新 trusted。
+- 过程画布默认能看清拓扑连线（含亮色主题）；深度或筛选藏边时提示「已隐藏 N 条边」。
+- 过程画布在极低 `fitView` 缩放时连线仍保持可见，不再被压成看不见。
+- 桌面端筛选坞默认展开，亮色主题下「筛选节点」入口对比度可读。
+- 广播账本在 0 条时仍显示「广播账本 · 0 条」空态，不再整块卸载。
+- 删除 Provider 账号不再被 `failed` / `timeout` / `orphan` 的可恢复 Job 永久拦住；仅待领取与运行中/冻结 Job 返回 409。
+- 侧栏仅在 `auth_required === false` 时显示「开发模式」；`/auth/status` 未就绪或失败不再误当成鉴权关闭。
+- Windows PowerShell 5.1 与 pwsh 可解析 `deploy.ps1`（UTF-8 BOM + 仅 ASCII）。
+- `aliyun-acr` 启动 warmup 以冻结 digest 判定本地就绪，接受同 digest 的 Docker Hub / GHCR 本地图；选定通道 pull 超时后对已核实的同 digest 其它通道重试一次。共享资产 helper 纳入 startup warmup。
+
+### 部署 / 升级说明
+
+- 本版本不修改数据库 Schema（仍为 v35）。
+- 官方 `deepsonar-assets-helper` / `deepsonar-silo` 镜像只在本版本正式发布后才存在；在制品尚未打出前，compose 仍回退 busybox pin 与 pgsty/silo。
+
+## [0.1.40] - 2026-08-19
+
+### 修复
+
+- `db:rebuild` 回填后对全部 public 基表重置 serial/bigserial 与 IDENTITY 序列：空表下次 `nextval` 为 1，非空 `MAX=N` 则下次为 `N+1`，避免官方种子表或空 `events` 跳号后撞 `events_pkey`。
+- 瓷白 / 雾白下项目镜像抽屉、确认框、终端外框和各页硬编码深色岛改走 `theme-*` token，避免深字叠深底。
+- 新建任务「指定时间」改为日期 + 时刻选择器，触发器始终显示完整 `YYYY-MM-DD HH:mm`；未来时刻校验只在提交时进行，不再用轮询改 `min` 打断选择。
+- 角色绑定镜像下拉以完整产品名为触发器主文案，种类放次行；悬停与展开列表均可读 OpenHarmony Audit / Test / Fuzz。
+- 项目运行时镜像页与全局市场共用 `pull-status` 进度面板；启用返回 `202` 或 `409 busy` 时立刻展示当前拉取任务、来源、短 digest 与失败原因。
+- 任务工作台切到本次运行 / 发现 / 事实 / 报告后，过程画布不再盖住列表与报告正文。
+- 移除凭证层 `allowed_model_ids` 白名单，模型可用性只认 `settings_config`，避免 GLM / DeepSeek 任务被 Gateway 403。
+- Model Gateway 出站把 Claude CLI 别名 `fable` / `sonnet` / `opus` / `haiku` 改写成 Job 快照冻结的 `upstream_model`。
+- `image-admission` 在 Cosign 3 未配置 identity 时跳过非法 verify，合同扫描不再必然失败。
+
+### 部署 / 升级说明
+
+- 本版本不修改数据库 Schema。
+- 若升级前已经 `db:rebuild` 且出现 `events_pkey` 冲突，升级后再跑一次 `pnpm db:rebuild -- --apply`，或把 `events_id_seq` `setval` 到 `MAX(id)`。
+
+## [0.1.39] - 2026-08-18
+
+### 新增
+
+- 每个任务提供数据库权威的 drain pause/start：暂停只阻止新 Job 领取，已运行 Job 安全收尾；列表与画布统一显示暂停中/已暂停状态。
+- 项目可通过 `maxConcurrentJobs` 独立收紧 claim 配额，支持 `0` 暂停项目调度且不放宽全局硬上限。
+- 模块源同步结果区分“已更新”与“已是最新”。
+- 新增 Job 级“按当前配置重新执行”：保留同一 Job、画布与历史 Attempt/effect，按当前 RoleConfig、Credential、项目策略和 runtime image 完整重冻快照。
+
+### 修复
+
+- 启动对账批量 orphan 的 sibling Worker 不再被新 Hub 抢占恢复入口；一次任务恢复按原 Job ID 批量重新入队并建立新 Attempt，旧 unknown effect 不自动重放。未 finalize 的 normalized stream 以有界 synthetic manifest 保持可见。
+- 官方镜像清单不可达时 bundled fallback 只补缺失版本，不覆盖现有引用或信任；普通网络/拉取扫描失败不再撤销官方可信版本。
+- Pi Gateway 运行时补齐 `auth.json`、`provider/model` 选择与空响应失败收口，并增加无语义产出的停滞 Reaper。
+- DSH 完整 package closure 统一升级并固定到 `0.1.0-rc.7`，Cordis 使用合法的 agent-spine bash 配置、唯一工具注册和显式固定 integrity 的 subprocess implementation；Base 镜像新建或复用时均执行断网 JSON-RPC 启动冒烟。
+- Agent stderr 以精确脱敏、总量有界的 normalized evidence 保存，Job 错误仍保持短摘要。
+- 本地 Docker/vfs 宿主增加受管容器/卷周期 desired-state 清理、非强制 runtime image GC 和磁盘水位 claim 门禁；禁止 broad prune 和删除非 DeepSonar 资源。
+- Job `resume` 现明确定义为使用旧冻结快照创建新 Attempt；当前 CLI/模型/凭据/runtime identity 漂移或无法解析时稳定返回 `409 SNAPSHOT_STALE`。任务级启动中断批次也会原子拒绝 stale 快照并返回 Job IDs，不再静默使用旧模型。
+
+### 部署 / 升级说明
+
+- 本版本不修改数据库 Schema。
+- DSH runtime 依赖闭包变化会重建 Base/Audit/Kali 镜像；发布后应等待新 runtime catalog 回写再升级生产栈。
+- rootless/vfs 部署须把 `DEEPSONAR_HOST_DISK_SOURCE` 指向 Docker data-root；达到 error 水位后暂停新 claim，清理和已运行 Job继续工作。
+
+## [0.1.38] - 2026-08-17
+
+### 修复
+
+- Model Gateway 对 Anthropic 同时注入 `Authorization: Bearer` 与 `x-api-key`，并在凭据 `base_url` 已含 `/v1` 时避免拼成 `/v1/v1/messages`。
+- Job token 模型白名单同时覆盖 Claude CLI 别名（如 `fable`）与 settings 解析出的上游模型 ID，避免网关 403。
+- Windows 主机解析 Docker Engine 默认走 named pipe，不再误用 unix socket。
+
+### 变更
+
+- 保留 `pnpm db:up` 独立开发库；新增 `pnpm db:up:deploy` 可将开发态改连 deploy 栈 Postgres（`POSTGRES_BIND`，与独立库互斥占用 5432）。
+
+## [0.1.37] - 2026-08-17
+
+### 修复
+
+- `image-admission` 的扫描器环境变量未设置或留空时默认使用官方不可变 `@sha256` digest；显式覆盖仍必须是完整 digest，非法值继续 fail closed。
+- 修复 S33 启动门禁：`project_opt_in` 专项镜像不再阻塞 Dispatcher，官方 Base/Audit/Kali 仍需就绪；`/health` 的 readiness 同时反映 Dispatcher 是否启用，启动预热失败持续输出可诊断日志并按有界退避重试。
+- Attempt outcome 不再持久化完整 summary，仅保留 `summary_sha256` 与 UTF-8 `summary_bytes`；超限输入改为稳定、可重试的控制错误。
+- managed gateway 增加启动预热、`Created` 残留处理和独立的 `docker run` 超时；创建或健康检查失败时按受管标签、owner 与 inspect 得到的容器 ID 限定清理，避免误删其他容器。
+- skill source 启动同步支持可取消超时，等待底层 clone/rev-parse 真正收口后再重试；单个来源失败会汇总但不阻塞同轮后续来源，Scheduler 停止时主动取消同步。
+
+### 发布说明
+
+- 不可变 `v0.1.36` 因缺少 CHANGELOG 章节在发布元数据门禁失败，未发布任何制品；`v0.1.37` 是首个包含以上变化的正式发布。
+
+## [0.1.35] - 2026-08-16
+
+### 变更
+
+- 人类用户名/密码登录增加持久化暴力破解防护：任意校验（含成功）都占额；紧桶为用户名+IP 的 5 次/5 分钟，粗桶为 IP 的 20 次/5 分钟。Web 代理写入入站 TCP peer 的 `X-Forwarded-For`，Scheduler 只信任 1 跳。IP 超限不再插入 identity 行，过期窗口在占额事务内回收。超限返回 `429 LOGIN_RATE_LIMITED`。Schema 升至 v35（`login_rate_limits`）。
+- 官方运行时镜像的默认同步只拉取每个产品在所选 registry 通道上的最新版本；历史可信 digest 继续服务显式 pin 与已冻结 Job 快照。
+- Provider 角色绑定行采用固定 CLI/镜像列宽，并在右侧集中显示绑定状态与模型信息，长镜像标签不再挤压控件。
+
+### 修复
+
+- Scheduler 启动时先监听健康端口并暴露 readiness 详情，在有效 Base/Audit/Kali 镜像全部本地可用前不启用 Dispatcher；准备失败按有界退避持续重试，避免把镜像拉取故障推迟到任务运行期。
+- 项目镜像策略、角色绑定与 registry 通道变更改为异步准备：新引用验证并拉取成功后才原子保存；准备期间返回 `202 saved:false`，旧配置继续生效。Job 遇到缺失镜像时以 `runtime_image_not_ready` 失败并记录可诊断原因。
+- 修复 DSH Provider 设置在 Job 快照中按 TOML 错误解析的问题，现按 DSH 原生 YAML 冻结，同时保留凭据清理边界。
+
+### 部署 / 升级说明
+
+- 本版本包含 Schema v35；已有数据库须先运行 `pnpm db:rebuild -- --plan` 检查，再以 `pnpm db:rebuild -- --apply` 重建回填。
+
+## [0.1.34] - 2026-08-16
+
+### 变更
+
+- 更新 `deepsonar-management` 项目 Skill：补齐 standard/compose/定时任务、provision 并发、画布 Fact、广播账本与人工消息命令，并移除失效的旧 Fact 验证路径。
+
+### 修复
+
+- 修复 Agent 可纠正的控制输入、schema、payload 与 summary 错误会终止 Agent/Job 的问题，改为返回稳定、可重试的控制错误；`mark_job_done` summary 按 8192 UTF-8 字节限制，Attempt outcome 仅保存摘要哈希与字节数；延迟执行的 Hub/Human 决策在接受前预检，并在最终事务中重新校验。修复 #166。
+
+## [0.1.33] - 2026-08-15
+
+### Added
+
+- Added full-topology PNG export to Task Canvas.
+
+### Changed
+
+- Task Canvas node filters and the broadcast ledger now default to compact collapsed docks and expand independently without covering the graph.
+- Production provisioning now defaults to a 900-second budget; rootless Docker `vfs` deployments are documented to serialize provisioning through the database setting.
+
+### Fixed
+
+- Managed Gateway sidecars now carry a proxy-script revision and are rebuilt when the route contract changes, preventing stale pre-`/control/v1` proxies from surviving upgrades.
+- Provision timeouts now wait for external creation and cleanup to settle, with a final Job/Attempt-label sweep for containers created after cancellation.
+- Image admission validates every scanner digest at startup instead of claiming scans before discovering an empty or mutable scanner configuration. Addresses #165.
+
+### Deployment / Upgrade Notes
+
+- The immutable `v0.1.32` tag failed the release metadata gate before any artifact was published. `v0.1.33` is the first published release containing these changes.
+
+## [0.1.31] - 2026-08-15
+
+### Added
+
+- Added `pnpm db:rebuild` to back up an existing database, apply the current `database/schema.sql` baseline, and copy overlapping columns. Scheduler boot still fail-closes on version mismatch and does not run incremental ALTER statements.
+
+### Fixed
+
+- Fixed Task Canvas Fact polling so the one-second lifecycle clock no longer rebuilds the five-second polling interval and floods `/canvases/:id/facts`. Closes #163.
+- Fixed Job-scoped Platform Control API provisioning so `DEEPSONAR_API_BASE_URL`, `DEEPSONAR_API_TOKEN`, and `DEEPSONAR_JOB_ID` are present in Worker `Config.Env`; authentication remains disabled until the Job reaches `running`, and terminal cleanup revokes the grant. Closes #164.
+
+## [0.1.30] - 2026-08-15
+
+### Added
+
+- Added `standard | compose` task kinds with explicit confirmed-Finding seed selection, immutable seed snapshots, read-only Canvas projection, governed retry validation, and matching Tasks/Findings Web entry points. Closes #161.
+- Added DeepSeek Harness Provider YAML for arbitrary Pi-AI routes, task/default execution modes, model-owned third-party reasoning mappings, and governed subagent routing through `dsh-reasoning-settings`.
+- Added searchable multi-select filters and redesigned Canvas broadcast and Agent Session inspection surfaces.
+
+### Changed
+
+- Provider-owned reasoning now uses each CLI's native contract: Claude Code `effortLevel`, Codex `model_reasoning_effort`, OpenCode `--variant`, Pi `--thinking`, and canonical DSH effort IDs mapped by model YAML.
+- Runtime and Scheduler session handling now preserve exact CLI session identity, bounded diagnostics, cancellation, provisioning reconciliation, and API-only control semantics across all governed Agent CLIs.
+
+### Fixed
+
+- Fixed Finding verification, human evidence priority, convergence, shared-asset cleanup, and project runtime-image policy boundaries.
+- Fixed the runtime-image marketplace CI smoke after RoleConfig reasoning removal and made its Job cleanup retry PostgreSQL deadlocks without leaking active real-mode sandboxes.
+
+### Deployment / Upgrade Notes
+
+- This release is identified by the immutable `v0.1.30` tag; runtime image tags use `0.1.30` without the `v` prefix.
+- Database schema is now v34. Existing databases must be rebuilt from `database/schema.sql`; the project intentionally provides no in-place migration path.
+
+### Runtime Images
+
+- Base, audit, and Kali images install the checksum-pinned `dsh-reasoning-settings@0.3.0` host plugin alongside the official DSH 0.1.0-rc.6 runtime; generated headless Cordis compositions mount its inheritance and subagent-routing controls.
+
+## [0.1.29] - 2026-08-14
+
+### Fixed
+
+- Fixed Chrome runtime promotion to strip BuildKit provenance attestations before assembling the clean multi-architecture index copied to ACR and Docker Hub. The failed immutable `v0.1.28` tag is not reused.
+
+## [0.1.28] - 2026-08-13
+
+### Added
+
+- 增加通用 CLI 客户端上下文预算：Credential 基准、RoleConfig 覆盖、Job 冻结展示、Agent 配置包和平台导入导出均使用 1024–10000000 的统一范围；Codex/OpenCode/Pi 物化到各自受支持落点，Claude Code 只冻结展示且不伪造绝对窗口设置。该预算不会提升 Provider、模型或账号的上游能力。Refs #144
+- Added DeepSeek Harness as a governed fifth Agent CLI using the official unattended JSON-RPC server, deterministic multi-turn sessions, exact-session recovery, structured event streaming, completion gating, standard Skill registry/filesystem/tool support, and Job Session archival/viewing.
+
+### Changed
+
+- Pinned Claude Code 2.1.231, OpenCode 1.18.18, and the official DSH 0.1.0-rc.6 JSON-RPC package closure in governed runtime images.
+- Database schema is now v30. Existing databases must be rebuilt from `database/schema.sql`; the project intentionally provides no in-place migration path.
+
+### Fixed
+
+- 修复 Job 控制能力元数据：Claude Code、Codex、OpenCode、Pi 与 DSH 现在均如实声明已注入的 HTTP Platform Control API；支持 MCP 的运行时仍保留过渡通道，由 Agent 对每次逻辑操作自行二选一。
+- 修复 Anthropic 兼容子路径网关的模型发现与凭据健康检查：按有界有序候选探测模型端点，且仅在 HTTP 404/405 时回退。
+- 修复项目镜像策略投影不一致：`inherit_global` 继续继承全局镜像，`project_managed` 只使用项目角色映射；项目 RoleConfig 的遗留 `runtime_image_key` 不再通过写入、导入导出、展示或 readiness 生效。
+
+### Deployment / Upgrade Notes
+
+- This release is identified by the immutable `v0.1.28` tag. Rebuild existing databases for schema v30 before starting the Scheduler.
+
+### Runtime Images
+
+- Base, audit, and Kali images include only the pinned DSH machine runtime and official JSON-RPC components; DSH TUI, Web UI, skins, and `dsh-cc-tui` are explicitly excluded.
+
+## [0.1.27] - 2026-08-13
+
+### Fixed
+
+- Fixed registry release evidence by using the clean runnable GHCR version index as the canonical digest shared with ACR and Docker Hub, while retaining full provenance on immutable `src-*` tags.
+
+## [0.1.26] - 2026-08-13
+
+### Fixed
+
+- Fixed ACR and Docker Hub promotion for attested BuildKit indexes by selecting exact runnable platform manifest digests before cross-registry assembly.
+
+## [0.1.25] - 2026-08-13
+
+### Fixed
+
+- Fixed Chrome Fuzz arm64 builds by using static ELF and runtime-contract checks under QEMU while retaining executable smoke tests on native arm64 runners.
+- Fixed ACR and Docker Hub image promotion by filtering to supported platforms so unsupported provenance-attestation descriptors are not copied, while GHCR promotion retains provenance.
+- Added a hard gate to public `POST /jobs` that requires the requested project role to be enabled.
+
+## [0.1.24] - 2026-08-12
+
+### Added
+
+- Added Scheduler-owned Job Attempt/effect persistence, cancellable and reconcilable provisioning, Canvas delivery and model-usage ledgers, and bounded runtime context identity/compaction diagnostics.
+- Added Pi as a governed API-only RPC runtime with a fixed static control Skill, exact session-file recovery, approved Extension loading, immutable runtime-image packaging, and real Docker RPC smoke coverage.
+- Added Job-scoped Platform Control API capabilities with inline operation schemas, short-lived allowlisted tokens, idempotent invocation, terminal revocation, and PostgreSQL integration coverage for Fact, Finding, Hub decision, and Job completion.
+- Added project-managed runtime-image policy and governed provider/account configuration flows across Scheduler and Web surfaces.
+
+### Changed
+
+- Finding verification convergence now honors `minVerifySeverity`; task reports are versioned from their convergence input and can include lower-severity pending Findings as explicitly uncovered items.
+- Gateway retries transient upstream failures only before response delivery, while supported Agent CLIs resume the exact captured session with bounded retries and fail closed on identity mismatch.
+- Official runtime-image admission now selects an immutable reference from the configured deployment registry and re-scans a previously revoked official digest only when the trusted catalog moves it to a different proven registry reference.
+- Database schema is now v27. Existing databases must be rebuilt from `database/schema.sql`; the project intentionally provides no in-place migration path.
+
+### Fixed
+
+- Fixed provisioning cancellation races, late sandbox creation cleanup, Attempt undefined-resource persistence, shared-asset helper residue, and ambiguous Canvas delivery settlement after process failures.
+- Fixed missing task-level reports caused by all-severity convergence, stale report inputs, and report version reuse when the convergence snapshot changes.
+- Fixed ACR-only deployments revoking official images after admission attempted unreachable GHCR references, including recovery for rows already revoked by the old reference.
+- Fixed Pi RPC CI startup, writable bind mounts, hard-kill recovery, exact session reuse, and bounded diagnostics when the RPC process exits early.
+- Fixed oversized Gateway request error handling and shared-asset conflict paths so transient failures remain recoverable without duplicating semantic side effects.
+
+### Deployment / Upgrade Notes
+
+- This release is identified by the immutable `v0.1.24` tag. Runtime image tags use `0.1.24` without the `v` prefix.
+- Rebuild existing databases for schema v27 before starting the Scheduler. Configure `DEEPSONAR_IMAGE_REGISTRY` to the deployment registry/namespace so official admission and runtime pulls use the same published channel.
+
+### Runtime Images
+
+- Base and audit images now contain the pinned Pi RPC runtime alongside the existing governed CLIs. The release reuses unchanged fingerprinted images and rebuilds only presets whose Dockerfile, manifests, build arguments, platform set, or dependencies changed.
+
+## [0.1.23] - 2026-08-10
+
+### Fixed
+
+- Fixed Chrome Fuzz arm64 V8 builds by using the pinned target LLVM/compiler-runtime toolchain and arm64 sysroot paths.
+- Recovered Chrome Fuzz smoke validation on x64 runners by pulling and running the immutable image with an explicit `linux/arm64` platform.
+
+### Deployment / Upgrade Notes
+
+- This recovery release is identified by the immutable `v0.1.23` tag. Runtime image tags use `0.1.23` without the `v` prefix.
+
+## [0.1.21] - 2026-08-08
+
+### Added
+
+- Added visible live-stream thinking/reasoning output, project-level sandbox resource overrides, and three project-opt-in Chrome specialist runtimes for audit, headless/CDP testing, and real V8 fuzzing.
+- Added governed terminal copy and keyboard behavior, including selection-aware Ctrl/Cmd+C and Tab/Shift+Tab passthrough.
+
+### Changed
+
+- Job detail terminals now open on demand, live results keep a single vertical scroller, and runtime/report convergence paths retain their durable payload and completion state.
+- Runtime image catalogs expanded from six to nine official multi-architecture images, with native Chrome child builds, immutable digest assembly, and smoke-gated release publication.
+- Database schema is now v24. Existing databases must be rebuilt from `database/schema.sql`; there is no incremental migration path.
+
+### Fixed
+
+- Fixed Job-detail Escape handling and terminal lifecycle leakage when switching Jobs.
+- Fixed missing Finding report payloads that left root-active work pending, and fixed successful completion-gate continuation after a 429 being recorded as failure.
+- Fixed terminal copy feedback, prompt double-scrollbars, and real-time reasoning visibility in the Job detail UI.
+
+### Deployment / Upgrade Notes
+
+- This release is identified by the immutable `v0.1.21` tag. Runtime image tags use `0.1.21` without the `v` prefix and must not use `latest`.
+- Rebuild existing databases for schema v24 before starting the Scheduler; the repository intentionally has no in-place migration path.
+
+### Runtime Images
+
+- The release publishes nine official multi-architecture runtime image catalogs: the existing six plus Chrome Audit, Chrome Test, and Chrome Fuzz. Chrome images remain project-opt-in and are recorded only after immutable digest and native-architecture smoke validation.
+
+## [0.1.20] - 2026-08-08
+
+### Added
+
+- Governed runtime adapters now execute Claude Code, Codex, and OpenCode through a shared capability contract with frozen Job snapshots, normalized structured events, control MCP enforcement, and fail-closed readiness checks.
+- Running local-docker Jobs now expose an authenticated, permission-gated PTY terminal beside the live event stream, with bounded traffic, resize support, audit metadata, and automatic sandbox cleanup.
+
+### Changed
+
+- Official runtime image selection now defaults to the Aliyun ACR channel, while jobs continue to freeze governed immutable image digests.
+- Production deployment guidance and runtime configuration now reflect the current provider, gateway, object-storage, and image-channel behavior.
+- GitHub Releases now publish the exact validated version section from this changelog and fail before image builds when tag or compare-link metadata is inconsistent.
+- Runtime image size budgets now account for the governed Codex and OpenCode native payloads while retaining explicit CI-enforced limits for base, audit, and Kali images.
+
+### Fixed
+
+- Hardened runtime control, task observability, semantic event fixtures, fake-mode semantic output, agent completion idempotence, and isolated Agent CLI home directories.
+- Canvas viewports now re-fit after durable graph additions or removals without timer races, while preserving trace and focused-node behavior.
+
+### Deployment / Upgrade Notes
+
+- This release is identified by the immutable `v0.1.20` tag. Runtime image tags omit the `v` prefix; deployment can instead consume the published digest registry.
+- The release workflow updates the bundled runtime registry and `deploy/.env.example` after the image catalog passes validation.
+
+### Runtime Images
+
+- The release workflow publishes and records the six official multi-architecture runtime image catalogs with inspected immutable digests and channel evidence.
+
+## [0.1.19] - 2026-08-07
+
+### Added
+
+- Provider account settings and production deployment alignment were added.
+
+### Changed
+
+- Runtime image metadata and deployment image tags were synchronized for the release.
+
+### Deployment / Upgrade Notes
+
+- Product version is the immutable `v0.1.19` tag; image tags use `0.1.19` without the `v` prefix.
+
+### Runtime Images
+
+- The six-image runtime registry was published with multi-architecture digest metadata and release assets.
+
+### Fixed
+
+- CI skipped duplicate runtime-image smoke tests where the release pipeline already covered the same checks.
+
+## [0.1.18] - 2026-08-07
+
+### Fixed
+
+- Restored the OpenHarmony vendored repository launcher checksum required by the runtime image build.
+
+### Runtime Images
+
+- The bundled runtime registry was synchronized for the `v0.1.18` release.
+
+[0.5.6]: https://github.com/SummerSec/DeepSonar/compare/v0.5.5...v0.5.6
+[0.5.5]: https://github.com/SummerSec/DeepSonar/compare/v0.5.4...v0.5.5
+[0.5.4]: https://github.com/SummerSec/DeepSonar/compare/v0.5.3...v0.5.4
+[0.5.3]: https://github.com/SummerSec/DeepSonar/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/SummerSec/DeepSonar/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/SummerSec/DeepSonar/compare/v0.4.11...v0.5.1
+[0.4.11]: https://github.com/SummerSec/DeepSonar/compare/v0.4.10...v0.4.11
+[0.4.10]: https://github.com/SummerSec/DeepSonar/compare/v0.4.9...v0.4.10
+[0.4.9]: https://github.com/SummerSec/DeepSonar/compare/v0.4.8...v0.4.9
+[0.4.8]: https://github.com/SummerSec/DeepSonar/compare/v0.4.7...v0.4.8
+[0.4.7]: https://github.com/SummerSec/DeepSonar/compare/v0.4.6...v0.4.7
+[0.4.6]: https://github.com/SummerSec/DeepSonar/compare/v0.4.5...v0.4.6
+[0.4.5]: https://github.com/SummerSec/DeepSonar/compare/v0.4.4...v0.4.5
+[0.4.4]: https://github.com/SummerSec/DeepSonar/compare/v0.4.3...v0.4.4
+[0.4.3]: https://github.com/SummerSec/DeepSonar/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/SummerSec/DeepSonar/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/SummerSec/DeepSonar/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/SummerSec/DeepSonar/compare/v0.3.3...v0.4.0
+[0.3.3]: https://github.com/SummerSec/DeepSonar/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/SummerSec/DeepSonar/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/SummerSec/DeepSonar/compare/v0.2.11...v0.3.1
+[0.2.11]: https://github.com/SummerSec/DeepSonar/compare/v0.2.10...v0.2.11
+[0.2.10]: https://github.com/SummerSec/DeepSonar/compare/v0.2.9...v0.2.10
+[0.2.9]: https://github.com/SummerSec/DeepSonar/compare/v0.2.8...v0.2.9
+[0.2.8]: https://github.com/SummerSec/DeepSonar/compare/v0.2.7...v0.2.8
+[0.2.3]: https://github.com/SummerSec/DeepSonar/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/SummerSec/DeepSonar/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/SummerSec/DeepSonar/compare/v0.1.46...v0.2.1
+[0.2.4]: https://github.com/SummerSec/DeepSonar/compare/v0.2.3...v0.2.4
+[0.2.5]: https://github.com/SummerSec/DeepSonar/compare/v0.2.4...v0.2.5
+[0.2.7]: https://github.com/SummerSec/DeepSonar/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/SummerSec/DeepSonar/compare/v0.2.5...v0.2.6
+[0.1.46]: https://github.com/SummerSec/DeepSonar/compare/v0.1.45...v0.1.46
+[0.1.45]: https://github.com/SummerSec/DeepSonar/compare/v0.1.44...v0.1.45
+[0.1.44]: https://github.com/SummerSec/DeepSonar/compare/v0.1.43...v0.1.44
+[0.1.43]: https://github.com/SummerSec/DeepSonar/compare/v0.1.42...v0.1.43
+[0.1.42]: https://github.com/SummerSec/DeepSonar/compare/v0.1.41...v0.1.42
+[0.1.41]: https://github.com/SummerSec/DeepSonar/compare/v0.1.40...v0.1.41
+[0.1.40]: https://github.com/SummerSec/DeepSonar/compare/v0.1.39...v0.1.40
+[0.1.39]: https://github.com/SummerSec/DeepSonar/compare/v0.1.38...v0.1.39
+[0.1.38]: https://github.com/SummerSec/DeepSonar/compare/v0.1.37...v0.1.38
+[0.1.37]: https://github.com/SummerSec/DeepSonar/compare/v0.1.36...v0.1.37
+[0.1.35]: https://github.com/SummerSec/DeepSonar/compare/v0.1.34...v0.1.35
+[0.1.34]: https://github.com/SummerSec/DeepSonar/compare/v0.1.33...v0.1.34
+[0.1.24]: https://github.com/SummerSec/DeepSonar/compare/v0.1.23...v0.1.24
+[0.1.33]: https://github.com/SummerSec/DeepSonar/compare/v0.1.32...v0.1.33
+[0.1.31]: https://github.com/SummerSec/DeepSonar/compare/v0.1.30...v0.1.31
+[0.1.30]: https://github.com/SummerSec/DeepSonar/compare/v0.1.29...v0.1.30
+[0.1.29]: https://github.com/SummerSec/DeepSonar/compare/v0.1.28...v0.1.29
+[0.1.28]: https://github.com/SummerSec/DeepSonar/compare/v0.1.27...v0.1.28
+[0.1.27]: https://github.com/SummerSec/DeepSonar/compare/v0.1.26...v0.1.27
+[0.1.26]: https://github.com/SummerSec/DeepSonar/compare/v0.1.25...v0.1.26
+[0.1.25]: https://github.com/SummerSec/DeepSonar/compare/v0.1.24...v0.1.25
+[0.1.23]: https://github.com/SummerSec/DeepSonar/compare/v0.1.22...v0.1.23
+[0.1.21]: https://github.com/SummerSec/DeepSonar/compare/v0.1.20...v0.1.21
+[0.1.20]: https://github.com/SummerSec/DeepSonar/compare/v0.1.19...v0.1.20
+[0.1.19]: https://github.com/SummerSec/DeepSonar/compare/v0.1.18...v0.1.19
+[0.1.18]: https://github.com/SummerSec/DeepSonar/compare/v0.1.17...v0.1.18
+
+[0.6.0]: https://github.com/SummerSec/DeepSonar/compare/v0.5.6...v0.6.0
+
+[0.6.1]: https://github.com/SummerSec/DeepSonar/compare/v0.6.0...v0.6.1

@@ -1,0 +1,25 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "deepsonar-base:local",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "project_opt_in": true,
+  "toolset": "chrome-test",
+  "sources": "deploy/chrome-runtime-sources.json",
+  "aptSource": "snapshot.debian.org/archive/debian/20260731T162426Z",
+  "aptSecuritySource": "snapshot.debian.org/archive/debian-security/20260731T162426Z",
+  "apt": {
+    "chromium": { "version": "151.0.7922.71-1~deb12u1", "capabilities": ["headless-browser", "cdp"] },
+    "chromium-common": { "version": "151.0.7922.71-1~deb12u1", "capabilities": ["headless-browser-resources"] },
+    "git": { "version": "snapshot", "capabilities": ["source-control"] }
+  },
+  "npm": {
+    "playwright-core": { "version": "1.62.1", "integrity": "sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==", "capabilities": ["cdp-client"] }
+  },
+  "toolsets": {
+    "chrome-test": {
+      "imageKey": "deepsonar-chrome-test",
+      "description": "Project-opt-in pinned Chromium headless/CDP runtime",
+      "maxSizeMiB": 1400
+    }
+  }
+}

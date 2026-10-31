@@ -1,0 +1,641 @@
+{
+  "sample_kind": "synthetic complete candidate generations; no quality or identity labels",
+  "node": "v24.19.0",
+  "postgres": "PostgreSQL 16.15 on x86_64-pc-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+  "client_host": {
+    "cpu_model": "INTEL(R) XEON(R) PLATINUM 8573C",
+    "logical_cpus": 5,
+    "total_memory_bytes": 18882662400,
+    "scope": "client host OS-visible resources; not PostgreSQL allocation, container quota or peak usage"
+  },
+  "rule_version": "durable-candidates/v1|project-finding-features/v1|unicode-nfkc-lower/v1|project-finding-lexical/v1",
+  "measured_scenario_wall_ms": 7779.855694000001,
+  "input_distribution": {
+    "sources": 45,
+    "jobs": 45,
+    "hotspot_sources": 29,
+    "sparse_sources": 8,
+    "missing_summary": 8,
+    "missing_location": 8,
+    "missing_category": 16,
+    "missing_artifact": 45
+  },
+  "initial_sources": 45,
+  "rebuilt_sources": 46,
+  "cadence": {
+    "probe_wait_ms": 25,
+    "production_worker_wait_ms": 2000,
+    "production_resweep_delay_seconds": 30,
+    "mode": "explicit rebuild, sequential candidate-only worker; feature worker omitted; not production cadence"
+  },
+  "phases": [
+    {
+      "name": "initial_complete_generation",
+      "samples": [
+        {
+          "phase": "initial_complete_generation",
+          "tick": 0,
+          "elapsed_ms": 5.384763999999905,
+          "worker_ms": 0,
+          "requested_wait_ms": 0,
+          "actual_wait_ms": 0,
+          "processed": 0,
+          "total_sources": 45,
+          "recorded_sources": 0,
+          "pending_sources": 45,
+          "status": "pending",
+          "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "active_generation": null,
+          "cursor_id": null
+        },
+        {
+          "phase": "initial_complete_generation",
+          "tick": 1,
+          "elapsed_ms": 548.6173349999999,
+          "worker_ms": 517.903112,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 24.183393000000024,
+          "processed": 5,
+          "total_sources": 45,
+          "recorded_sources": 5,
+          "pending_sources": 40,
+          "status": "running",
+          "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "active_generation": null,
+          "cursor_id": "77200000-0000-0000-0000-000000000004"
+        },
+        {
+          "phase": "initial_complete_generation",
+          "tick": 2,
+          "elapsed_ms": 1008.371703,
+          "worker_ms": 432.2804960000001,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.225374999999985,
+          "processed": 5,
+          "total_sources": 45,
+          "recorded_sources": 10,
+          "pending_sources": 35,
+          "status": "running",
+          "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "active_generation": null,
+          "cursor_id": "77200000-0000-0000-0000-000000000009"
+        },
+        {
+          "phase": "initial_complete_generation",
+          "tick": 3,
+          "elapsed_ms": 1403.0496689999998,
+          "worker_ms": 369.3205720000001,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 24.393445999999585,
+          "processed": 5,
+          "total_sources": 45,
+          "recorded_sources": 15,
+          "pending_sources": 30,
+          "status": "running",
+          "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "active_generation": null,
+          "cursor_id": "77200000-0000-0000-0000-000000000014"
+        },
+        {
+          "phase": "initial_complete_generation",
+          "tick": 4,
+          "elapsed_ms": 1793.0672659999998,
+          "worker_ms": 363.505576,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.23284700000022,
+          "processed": 5,
+          "total_sources": 45,
+          "recorded_sources": 20,
+          "pending_sources": 25,
+          "status": "running",
+          "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "active_generation": null,
+          "cursor_id": "77200000-0000-0000-0000-000000000019"
+        },
+        {
+          "phase": "initial_complete_generation",
+          "tick": 5,
+          "elapsed_ms": 2267.6639969999997,
+          "worker_ms": 448.41168100000004,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.169940000000224,
+          "processed": 5,
+          "total_sources": 45,
+          "recorded_sources": 25,
+          "pending_sources": 20,
+          "status": "running",
+          "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "active_generation": null,
+          "cursor_id": "77200000-0000-0000-0000-000000000024"
+        },
+        {
+          "phase": "initial_complete_generation",
+          "tick": 6,
+          "elapsed_ms": 2849.2895,
+          "worker_ms": 555.6501360000002,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.20168599999988,
+          "processed": 5,
+          "total_sources": 45,
+          "recorded_sources": 30,
+          "pending_sources": 15,
+          "status": "running",
+          "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "active_generation": null,
+          "cursor_id": "77200000-0000-0000-0000-000000000029"
+        },
+        {
+          "phase": "initial_complete_generation",
+          "tick": 7,
+          "elapsed_ms": 3305.824547,
+          "worker_ms": 430.52124399999957,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.142197000000124,
+          "processed": 5,
+          "total_sources": 45,
+          "recorded_sources": 35,
+          "pending_sources": 10,
+          "status": "running",
+          "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "active_generation": null,
+          "cursor_id": "77200000-0000-0000-0000-000000000034"
+        },
+        {
+          "phase": "initial_complete_generation",
+          "tick": 8,
+          "elapsed_ms": 3665.6023139999998,
+          "worker_ms": 333.8801620000004,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.12895599999956,
+          "processed": 5,
+          "total_sources": 45,
+          "recorded_sources": 40,
+          "pending_sources": 5,
+          "status": "running",
+          "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "active_generation": null,
+          "cursor_id": "77200000-0000-0000-0000-000000000039"
+        },
+        {
+          "phase": "initial_complete_generation",
+          "tick": 9,
+          "elapsed_ms": 4102.177911,
+          "worker_ms": 410.49833800000033,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.188156999999592,
+          "processed": 5,
+          "total_sources": 45,
+          "recorded_sources": 45,
+          "pending_sources": 0,
+          "status": "running",
+          "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "active_generation": null,
+          "cursor_id": "77200000-0000-0000-0000-000000000044"
+        },
+        {
+          "phase": "initial_complete_generation",
+          "tick": 10,
+          "elapsed_ms": 4132.658223,
+          "worker_ms": 4.373196000000462,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.149994999999763,
+          "processed": 0,
+          "total_sources": 45,
+          "recorded_sources": 45,
+          "pending_sources": 0,
+          "status": "succeeded",
+          "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "active_generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "cursor_id": null
+        }
+      ],
+      "summary": {
+        "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+        "complete": true,
+        "publication_elapsed_ms": 4132.658223,
+        "wall_ms": 4127.273459,
+        "worker_ms": 3866.344513000001,
+        "actual_tick_wait_ms": 250.01599199999896,
+        "recorded_source_delta": 45,
+        "sources_per_wall_second": 10.903081767424997,
+        "remaining_sources": 0
+      }
+    },
+    {
+      "name": "explicit_rebuild_after_edit_and_insert",
+      "samples": [
+        {
+          "phase": "explicit_rebuild_after_edit_and_insert",
+          "tick": 0,
+          "elapsed_ms": 4213.981198,
+          "worker_ms": 0,
+          "requested_wait_ms": 0,
+          "actual_wait_ms": 0,
+          "processed": 0,
+          "total_sources": 46,
+          "recorded_sources": 0,
+          "pending_sources": 46,
+          "status": "pending",
+          "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "active_generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "cursor_id": null
+        },
+        {
+          "phase": "explicit_rebuild_after_edit_and_insert",
+          "tick": 1,
+          "elapsed_ms": 4791.325191,
+          "worker_ms": 551.2387210000006,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.13127600000007,
+          "processed": 5,
+          "total_sources": 46,
+          "recorded_sources": 5,
+          "pending_sources": 41,
+          "status": "running",
+          "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "active_generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "cursor_id": "77200000-0000-0000-0000-000000000004"
+        },
+        {
+          "phase": "explicit_rebuild_after_edit_and_insert",
+          "tick": 2,
+          "elapsed_ms": 5340.704229,
+          "worker_ms": 523.4006369999997,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.16161699999975,
+          "processed": 5,
+          "total_sources": 46,
+          "recorded_sources": 10,
+          "pending_sources": 36,
+          "status": "running",
+          "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "active_generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "cursor_id": "77200000-0000-0000-0000-000000000009"
+        },
+        {
+          "phase": "explicit_rebuild_after_edit_and_insert",
+          "tick": 3,
+          "elapsed_ms": 5795.86855,
+          "worker_ms": 429.176684,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.153298000000177,
+          "processed": 5,
+          "total_sources": 46,
+          "recorded_sources": 15,
+          "pending_sources": 31,
+          "status": "running",
+          "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "active_generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "cursor_id": "77200000-0000-0000-0000-000000000014"
+        },
+        {
+          "phase": "explicit_rebuild_after_edit_and_insert",
+          "tick": 4,
+          "elapsed_ms": 6132.37593,
+          "worker_ms": 310.7103649999999,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.1890599999997,
+          "processed": 5,
+          "total_sources": 46,
+          "recorded_sources": 20,
+          "pending_sources": 26,
+          "status": "running",
+          "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "active_generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "cursor_id": "77200000-0000-0000-0000-000000000019"
+        },
+        {
+          "phase": "explicit_rebuild_after_edit_and_insert",
+          "tick": 5,
+          "elapsed_ms": 6417.214318,
+          "worker_ms": 259.11027599999943,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.14527300000009,
+          "processed": 5,
+          "total_sources": 46,
+          "recorded_sources": 25,
+          "pending_sources": 21,
+          "status": "running",
+          "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "active_generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "cursor_id": "77200000-0000-0000-0000-000000000024"
+        },
+        {
+          "phase": "explicit_rebuild_after_edit_and_insert",
+          "tick": 6,
+          "elapsed_ms": 6699.816702,
+          "worker_ms": 256.82006,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.152264999999716,
+          "processed": 5,
+          "total_sources": 46,
+          "recorded_sources": 30,
+          "pending_sources": 16,
+          "status": "running",
+          "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "active_generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "cursor_id": "77200000-0000-0000-0000-000000000029"
+        },
+        {
+          "phase": "explicit_rebuild_after_edit_and_insert",
+          "tick": 7,
+          "elapsed_ms": 7045.011823,
+          "worker_ms": 319.1674980000007,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.283468999999968,
+          "processed": 5,
+          "total_sources": 46,
+          "recorded_sources": 35,
+          "pending_sources": 11,
+          "status": "running",
+          "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "active_generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "cursor_id": "77200000-0000-0000-0000-000000000034"
+        },
+        {
+          "phase": "explicit_rebuild_after_edit_and_insert",
+          "tick": 8,
+          "elapsed_ms": 7396.628898,
+          "worker_ms": 325.24338799999896,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.18620099999862,
+          "processed": 5,
+          "total_sources": 46,
+          "recorded_sources": 40,
+          "pending_sources": 6,
+          "status": "running",
+          "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "active_generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "cursor_id": "77200000-0000-0000-0000-000000000039"
+        },
+        {
+          "phase": "explicit_rebuild_after_edit_and_insert",
+          "tick": 9,
+          "elapsed_ms": 7677.286314,
+          "worker_ms": 255.05377800000133,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.155657999999676,
+          "processed": 5,
+          "total_sources": 46,
+          "recorded_sources": 45,
+          "pending_sources": 1,
+          "status": "running",
+          "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "active_generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+          "cursor_id": "77200000-0000-0000-0000-000000000044"
+        },
+        {
+          "phase": "explicit_rebuild_after_edit_and_insert",
+          "tick": 10,
+          "elapsed_ms": 7756.4562319999995,
+          "worker_ms": 53.61922299999969,
+          "requested_wait_ms": 25,
+          "actual_wait_ms": 25.149116999999023,
+          "processed": 1,
+          "total_sources": 46,
+          "recorded_sources": 46,
+          "pending_sources": 0,
+          "status": "succeeded",
+          "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "active_generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+          "cursor_id": null
+        }
+      ],
+      "summary": {
+        "generation": "9000363d-03fa-4e8d-8262-13f5c7d34a7b",
+        "complete": true,
+        "publication_elapsed_ms": 7756.4562319999995,
+        "wall_ms": 3542.475033999999,
+        "worker_ms": 3283.5406300000004,
+        "actual_tick_wait_ms": 251.7072339999968,
+        "recorded_source_delta": 46,
+        "sources_per_wall_second": 12.985271472205389,
+        "remaining_sources": 0
+      }
+    }
+  ],
+  "pause": {
+    "before": {
+      "phase": "initial_complete_generation",
+      "tick": 1,
+      "elapsed_ms": 548.6173349999999,
+      "worker_ms": 517.903112,
+      "requested_wait_ms": 25,
+      "actual_wait_ms": 24.183393000000024,
+      "processed": 5,
+      "total_sources": 45,
+      "recorded_sources": 5,
+      "pending_sources": 40,
+      "status": "running",
+      "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+      "active_generation": null,
+      "cursor_id": "77200000-0000-0000-0000-000000000004"
+    },
+    "after": {
+      "phase": "scheduler_stop_gate",
+      "tick": 0,
+      "elapsed_ms": 549.882202,
+      "worker_ms": 0.0378690000000006,
+      "requested_wait_ms": 0,
+      "actual_wait_ms": 0,
+      "processed": 0,
+      "total_sources": 45,
+      "recorded_sources": 5,
+      "pending_sources": 40,
+      "status": "running",
+      "generation": "b5fac36b-0c2f-443b-a203-30a1a6632936",
+      "active_generation": null,
+      "cursor_id": "77200000-0000-0000-0000-000000000004"
+    }
+  },
+  "source_change": {
+    "old_items": 25,
+    "invalidated_status": "stale",
+    "invalidated_items": 0,
+    "rebuilt_status": "succeeded",
+    "new_generation_published": true
+  },
+  "database_resources": {
+    "before": {
+      "counters": {
+        "xact_commit": 99,
+        "xact_rollback": 0,
+        "blks_read": 71,
+        "blks_hit": 111225,
+        "tup_returned": 83341,
+        "tup_fetched": 78738,
+        "tup_inserted": 8768,
+        "tup_updated": 627,
+        "tup_deleted": 15,
+        "temp_files": 0,
+        "temp_bytes": 0,
+        "deadlocks": 0,
+        "blk_read_time": 0,
+        "blk_write_time": 0
+      },
+      "stats_reset": null,
+      "database_bytes": 13171735,
+      "observed_connections": 1,
+      "relations": [
+        {
+          "relname": "project_finding_candidate_edges",
+          "table_bytes": 8192,
+          "index_bytes": 16384,
+          "total_bytes": 24576
+        },
+        {
+          "relname": "project_finding_candidate_scan",
+          "table_bytes": 16384,
+          "index_bytes": 16384,
+          "total_bytes": 32768
+        },
+        {
+          "relname": "project_finding_candidate_sources",
+          "table_bytes": 8192,
+          "index_bytes": 8192,
+          "total_bytes": 16384
+        },
+        {
+          "relname": "project_finding_candidate_work",
+          "table_bytes": 8192,
+          "index_bytes": 16384,
+          "total_bytes": 24576
+        }
+      ],
+      "indexes": [
+        {
+          "indexrelname": "project_finding_candidate_edges_pkey",
+          "bytes": 8192
+        },
+        {
+          "indexrelname": "project_finding_candidate_edges_right",
+          "bytes": 8192
+        },
+        {
+          "indexrelname": "project_finding_candidate_scan_pkey",
+          "bytes": 16384
+        },
+        {
+          "indexrelname": "project_finding_candidate_sources_pkey",
+          "bytes": 8192
+        },
+        {
+          "indexrelname": "project_finding_candidate_work_due",
+          "bytes": 8192
+        },
+        {
+          "indexrelname": "project_finding_candidate_work_pkey",
+          "bytes": 8192
+        }
+      ]
+    },
+    "after": {
+      "counters": {
+        "xact_commit": 203,
+        "xact_rollback": 0,
+        "blks_read": 85,
+        "blks_hit": 304795,
+        "tup_returned": 762902,
+        "tup_fetched": 755143,
+        "tup_inserted": 10310,
+        "tup_updated": 1724,
+        "tup_deleted": 16,
+        "temp_files": 0,
+        "temp_bytes": 0,
+        "deadlocks": 0,
+        "blk_read_time": 0,
+        "blk_write_time": 0
+      },
+      "stats_reset": null,
+      "database_bytes": 14574095,
+      "observed_connections": 1,
+      "relations": [
+        {
+          "relname": "project_finding_candidate_edges",
+          "table_bytes": 1048576,
+          "index_bytes": 393216,
+          "total_bytes": 1441792
+        },
+        {
+          "relname": "project_finding_candidate_scan",
+          "table_bytes": 16384,
+          "index_bytes": 16384,
+          "total_bytes": 32768
+        },
+        {
+          "relname": "project_finding_candidate_sources",
+          "table_bytes": 65536,
+          "index_bytes": 16384,
+          "total_bytes": 81920
+        },
+        {
+          "relname": "project_finding_candidate_work",
+          "table_bytes": 16384,
+          "index_bytes": 32768,
+          "total_bytes": 49152
+        }
+      ],
+      "indexes": [
+        {
+          "indexrelname": "project_finding_candidate_edges_pkey",
+          "bytes": 204800
+        },
+        {
+          "indexrelname": "project_finding_candidate_edges_right",
+          "bytes": 188416
+        },
+        {
+          "indexrelname": "project_finding_candidate_scan_pkey",
+          "bytes": 16384
+        },
+        {
+          "indexrelname": "project_finding_candidate_sources_pkey",
+          "bytes": 16384
+        },
+        {
+          "indexrelname": "project_finding_candidate_work_due",
+          "bytes": 16384
+        },
+        {
+          "indexrelname": "project_finding_candidate_work_pkey",
+          "bytes": 16384
+        }
+      ]
+    },
+    "delta": {
+      "xact_commit": 104,
+      "xact_rollback": 0,
+      "blks_read": 14,
+      "blks_hit": 193570,
+      "tup_returned": 679561,
+      "tup_fetched": 676405,
+      "tup_inserted": 1542,
+      "tup_updated": 1097,
+      "tup_deleted": 1,
+      "temp_files": 0,
+      "temp_bytes": 0,
+      "deadlocks": 0,
+      "blk_read_time": 0,
+      "blk_write_time": 0
+    },
+    "track_io_timing": "off"
+  },
+  "client_resources": {
+    "user_cpu_us": 2581477,
+    "system_cpu_us": 472197,
+    "max_rss_kib_process_lifetime": 225984,
+    "includes": "Node client only; excludes PostgreSQL"
+  },
+  "limitations": [
+    "One small single-project synthetic workload; no scale or quality inference.",
+    "Single measured run without deliberate warmup; shared host contention is uncontrolled, not a percentile benchmark.",
+    "Synthetic sources have no Artifact/Evidence rows or authoritative identity fields; evidence-heavy cost is not measured.",
+    "Database counters include probe reads, snapshot queries and writes, with PostgreSQL asynchronous statistics timing.",
+    "Single probe backend requests its stats flush; no shared statistics reset or privileged monitoring.",
+    "Database sizes are allocated bytes including retained inactive generation, not peak memory or disk throughput.",
+    "Connection count is sampled, not a peak. Container CPU/RSS and cluster-wide pg_stat_io are not measured.",
+    "enabled=false tests Scheduler stop gate, not platform-maintenance transition or process crash.",
+    "Full source counts are probe-only observation queries. Runtime LIMIT bounds returned rows, not physical database work.",
+    "Timing includes instrumentation and deliberately shortened cadence; not a production SLA."
+  ]
+}

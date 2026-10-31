@@ -1,0 +1,130 @@
+{
+  "schema": "deepsonar.audit-regression/v1",
+  "samples": [
+    {
+      "sample_id": "ar-gate-mode-01",
+      "task_type": "security.vulnerability",
+      "subject_revision": "abc111",
+      "scope": "apps/api/auth.ts:login",
+      "evidence_refs": [
+        "fact:review-1",
+        "artifact:snippet-1"
+      ],
+      "human_label": "true_positive",
+      "human_rationale": "人工复查：user-controlled id 进入未绑定 SQL，修订 abc111 仍受影响。",
+      "disputed": false,
+      "coverage_tags": [
+        "gate_mode"
+      ]
+    },
+    {
+      "sample_id": "ar-bad-revision-01",
+      "task_type": "security.vulnerability",
+      "subject_revision": "abc222",
+      "scope": "apps/api/auth.ts:login",
+      "evidence_refs": [
+        "fact:review-stale"
+      ],
+      "human_label": "inconclusive",
+      "human_rationale": "证据 subject_revision=old@v0 与目标 abc222 不符，不能确认。",
+      "disputed": false,
+      "coverage_tags": [
+        "bad_source_or_revision",
+        "gate_mode"
+      ]
+    },
+    {
+      "sample_id": "ar-conflict-01",
+      "task_type": "security.vulnerability",
+      "subject_revision": "abc333",
+      "scope": "apps/web/upload.ts",
+      "evidence_refs": [
+        "fact:support-1",
+        "fact:refute-1"
+      ],
+      "human_label": "inconclusive",
+      "human_rationale": "支持与反驳 Fact 并存且未解消，人工标为证据不足。",
+      "disputed": false,
+      "coverage_tags": [
+        "support_refute_conflict"
+      ]
+    },
+    {
+      "sample_id": "ar-unreachable-01",
+      "task_type": "security.vulnerability",
+      "subject_revision": "abc444",
+      "scope": "apps/legacy/admin.ts",
+      "evidence_refs": [
+        "fact:path-dead"
+      ],
+      "human_label": "unreachable",
+      "human_rationale": "入口在编译期死代码，人工确认不可达。",
+      "disputed": false,
+      "coverage_tags": [
+        "unreachable"
+      ]
+    },
+    {
+      "sample_id": "ar-tool-missing-01",
+      "task_type": "security.vulnerability",
+      "subject_revision": "abc555",
+      "scope": "mobile/apk",
+      "evidence_refs": [
+        "fact:tool-gap"
+      ],
+      "human_label": "insufficient_evidence",
+      "human_rationale": "镜像缺 frida/adb 目标，不能用源码叙述冒充设备结果。",
+      "disputed": false,
+      "coverage_tags": [
+        "tool_missing"
+      ]
+    },
+    {
+      "sample_id": "ar-no-progress-01",
+      "task_type": "security.vulnerability",
+      "subject_revision": "abc666",
+      "scope": "apps/api/search.ts",
+      "evidence_refs": [
+        "fact:same-fingerprint"
+      ],
+      "human_label": "inconclusive",
+      "human_rationale": "相同证据指纹重复派发无新增信息，应停派而非确认。",
+      "disputed": false,
+      "coverage_tags": [
+        "no_progress_repeat"
+      ]
+    },
+    {
+      "sample_id": "ar-disputed-01",
+      "task_type": "security.vulnerability",
+      "subject_revision": "abc777",
+      "scope": "apps/api/cache.ts",
+      "evidence_refs": [
+        "fact:review-d"
+      ],
+      "human_label": "disputed",
+      "human_rationale": "两名审阅者对影响是否跨租户未达成一致，争议标签保留。",
+      "disputed": true,
+      "coverage_tags": [
+        "gate_mode"
+      ],
+      "notes": "不计入准确率分母"
+    },
+    {
+      "sample_id": "ar-missing-poc-not-fp-01",
+      "task_type": "security.vulnerability",
+      "subject_revision": "abc888",
+      "scope": "apps/api/export.ts",
+      "evidence_refs": [
+        "fact:static-only"
+      ],
+      "human_label": "insufficient_evidence",
+      "human_rationale": "仅静态路径、尚无动态 PoC；按协议标证据不足，不得标误报。",
+      "disputed": false,
+      "coverage_tags": [
+        "gate_mode",
+        "tool_missing"
+      ]
+    }
+  ]
+}

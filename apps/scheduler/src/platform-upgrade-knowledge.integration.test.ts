@@ -1,0 +1,105 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID, createHash} from 'node:crypto';
+import {execFileSync} from 'node:child_process';
+import {mkdtempSync, writeFileSync, readFileSync, rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import postgres from 'postgres';
+import {runUpgradeSchema} from './platform-upgrade-schema-runner.js';
+import {runMigrations, type MigrationConnection} from './migration-runner.js';
+import {createPlatformMaintenanceGate} from './platform-maintenance.js';
+import {SCHEMA_VERSION} from './schema-version.js';
+
+const url=process.env.UPGRADE_SCHEMA_TEST_DATABASE_URL;
+const sourceCommit='a01eb3948fa773d93361c703b8fdde7f56ab50f2';
+test('actual knowledge schema 61 upgrades to integrated maintenance schema without losing knowledge or preferences', {skip:!url,timeout:120000}, async()=>{
+  const suffix=randomUUID().replaceAll('-',''), sourceName=`ds_knowledge_${suffix}`, candidateName=`ds_upgrade_${suffix}`;
+  const admin=postgres(url!,{max:1,onnotice:()=>{}});
+  const connect=(name:string)=>{const u=new URL(url!);u.pathname='/'+name;return postgres(u.toString(),{max:1,onnotice:()=>{}});};
+  let source:ReturnType<typeof postgres>|undefined, candidate:ReturnType<typeof postgres>|undefined;
+  let madeSource=false,madeCandidate=false;
+  const backupDirectory=mkdtempSync(join(tmpdir(),'pr747-knowledge-dump-'));
+  const backupFile=join(backupDirectory,'source.dump');
+  const container=process.env.UPGRADE_SCHEMA_TEST_POSTGRES_CONTAINER || 'pr747-test-postgres';
+  const databaseUser=decodeURIComponent(new URL(url!).username);
+  try {
+    const baseline=execFileSync('git',['show',`${sourceCommit}:database/schema.sql`],{encoding:'utf8'});
+    assert.match(baseline,/VALUES \('global', 61\)/);
+    assert.doesNotMatch(baseline,/CREATE TABLE platform_upgrade_state/);
+    await admin.unsafe(`CREATE DATABASE "${sourceName}" TEMPLATE template0`);madeSource=true;source=connect(sourceName);
+    await source.unsafe(baseline);
+    const project=randomUUID(),item=randomUUID(),version=randomUUID(),job=randomUUID(),attempt=randomUUID(),canvas=randomUUID(),key=randomUUID();
+    const digest='a'.repeat(64), preference={enabled_credential_ids:[],test_marker:'knowledge source preferences'};
+    await source`INSERT INTO projects(id,name,config_json) VALUES(${project},'schema61 fixture',${source.json(preference)})`;
+    await source`INSERT INTO canvases(id,project_id,title) VALUES(${canvas},${project},'history')`;
+    await source`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json) VALUES(${job},${project},${canvas},'explore','succeeded','{"model":"historical-model","agent_cli":"pi"}')`;
+    await source`INSERT INTO job_attempts(id,job_id,attempt_no,status,phase,session_id) VALUES(${attempt},${job},1,'succeeded','agent.ready',${'fixture-'+attempt})`;
+    await source`INSERT INTO shared_asset_blobs(content_sha256,bytes,content_type,blob_uri) VALUES(${digest},1,'text/plain','fixture/knowledge')`;
+    await source`INSERT INTO project_knowledge_items(id,project_id,kind,logical_key,title) VALUES(${item},${project},'skill','migration/skill','preserved knowledge')`;
+    await source`INSERT INTO project_knowledge_versions(id,project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash) VALUES(${version},${project},${item},1,${digest},${job},${attempt},'[]',${digest})`;
+    await source`UPDATE project_knowledge_items SET active_version_id=${version},status='active' WHERE id=${item}`;
+    await source`INSERT INTO project_knowledge_receipts(project_id,job_id,attempt_id,operation,idempotency_key,input_digest,event_id,result_json) VALUES(${project},${job},${attempt},'request_project_knowledge',${key},${digest},${randomUUID()},'{"preserved":true}')`;
+    await source`UPDATE role_configs SET model='explicit-global-preference',agent_cli='pi' WHERE project_id IS NULL`;
+    await source`UPDATE global_settings SET claims_paused=true,claims_pause_reason='platform_upgrade',claims_paused_by='isolated-test',claims_paused_at=now() WHERE id='global'`;
+    const sourceHash=createHash('sha256').update(baseline).digest('hex');
+    const db=await source.reserve();let plan;
+    try {plan=await runUpgradeSchema(db as unknown as MigrationConnection,{action:'plan',source_database:sourceName,candidate_database:candidateName,source_schema_sha256:sourceHash});}finally{db.release();}
+    assert.equal(plan.ok,true,JSON.stringify(plan.plan.blocking_errors));
+    assert.equal(plan.plan.source_schema_version,61);
+    assert.equal(SCHEMA_VERSION,65);
+    await source.end();source=undefined;
+    const dump=execFileSync('docker',['exec',container,'pg_dump','-U',databaseUser,'-d',sourceName,'--format=custom','--no-owner','--no-acl'],{maxBuffer:64*1024*1024,timeout:30000});
+    assert.equal(dump.subarray(0,5).toString(),'PGDMP');
+    writeFileSync(backupFile,dump,{mode:0o600});
+    const backup=readFileSync(backupFile), backupHash=createHash('sha256').update(backup).digest('hex');
+    assert.equal(backupHash,createHash('sha256').update(dump).digest('hex'));
+    execFileSync('docker',['exec','-i',container,'pg_restore','--list'],{input:backup,timeout:30000,stdio:['pipe','pipe','pipe']});
+    await admin.unsafe(`CREATE DATABASE "${candidateName}" TEMPLATE template0`);madeCandidate=true;
+    execFileSync('docker',['exec','-i',container,'pg_restore','-U',databaseUser,'-d',candidateName,'--exit-on-error','--no-owner','--no-acl'],{input:backup,timeout:30000,stdio:['pipe','pipe','pipe']});
+    candidate=connect(candidateName);
+    assert.equal((await candidate`SELECT version FROM schema_meta WHERE id='global'`)[0].version,61);
+    assert.deepEqual((await candidate`SELECT config_json FROM projects WHERE id=${project}`)[0].config_json,preference);
+    assert.equal((await candidate`SELECT active_version_id FROM project_knowledge_items WHERE id=${item}`)[0].active_version_id,version);
+    assert.equal((await candidate`SELECT content_sha256 FROM project_knowledge_versions WHERE id=${version}`)[0].content_sha256,digest);
+    assert.deepEqual((await candidate`SELECT result_json FROM project_knowledge_receipts WHERE idempotency_key=${key}`)[0].result_json,{preserved:true});
+    assert.deepEqual((await candidate`SELECT agent_snapshot_json FROM jobs WHERE id=${job}`)[0].agent_snapshot_json,{model:'historical-model',agent_cli:'pi'});
+    assert.ok((await candidate`SELECT model,agent_cli FROM role_configs WHERE project_id IS NULL`).every(row=>row.model==='explicit-global-preference'&&row.agent_cli==='pi'));
+    const reserved=await candidate.reserve();
+    try {
+      const current=await runUpgradeSchema(reserved as unknown as MigrationConnection,{action:'plan',candidate_database:candidateName,source_schema_sha256:sourceHash});
+      assert.equal(current.plan.plan_hash,plan.plan.plan_hash);
+      const result=await runUpgradeSchema(reserved as unknown as MigrationConnection,{action:'apply',candidate_database:candidateName,source_schema_sha256:sourceHash,expected_plan_hash:plan.plan.plan_hash,verified_backup_sha256:backupHash});
+      assert.equal(result.ok,true,JSON.stringify(result.plan.blocking_errors));
+      await runMigrations(reserved as unknown as MigrationConnection);
+    }finally{reserved.release();}
+    assert.equal((await candidate`SELECT version FROM schema_meta WHERE id='global'`)[0].version,65);
+    assert.deepEqual((await candidate`SELECT config_json FROM projects WHERE id=${project}`)[0].config_json,preference);
+    assert.equal((await candidate`SELECT active_version_id FROM project_knowledge_items WHERE id=${item}`)[0].active_version_id,version);
+    assert.equal((await candidate`SELECT content_sha256 FROM project_knowledge_versions WHERE id=${version}`)[0].content_sha256,digest);
+    assert.deepEqual((await candidate`SELECT result_json FROM project_knowledge_receipts WHERE idempotency_key=${key}`)[0].result_json,{preserved:true});
+    assert.equal((await candidate`SELECT agent_snapshot_json FROM jobs WHERE id=${job}`)[0].agent_snapshot_json.model,'historical-model');
+    assert.ok((await candidate`SELECT model,agent_cli FROM role_configs WHERE project_id IS NULL`).every(row=>row.model==='explicit-global-preference'&&row.agent_cli==='pi'));
+    assert.equal((await candidate`SELECT claims_paused FROM global_settings WHERE id='global'`)[0].claims_paused,true);
+    assert.equal((await candidate`SELECT phase FROM platform_upgrade_state WHERE id='global'`)[0].phase,'active');
+    const generation=randomUUID();let started=0;
+    await candidate`UPDATE platform_upgrade_state SET phase='preparing',generation=${generation},runtime_role=current_user,target_version='0.0.62',worker_generation_token_hash=${digest} WHERE id='global'`;
+    const gate=createPlatformMaintenanceGate({identity:{generation,version:'0.0.62'},readState:async()=>{
+      const [row]=await candidate!`SELECT phase,generation,runtime_role,target_version,current_user AS current_role FROM platform_upgrade_state WHERE id='global'`;
+      return row as unknown as import('./platform-maintenance.js').PlatformUpgradeState;
+    },start:()=>{started++;}});
+    gate.setBootReady();await gate.refresh();assert.equal(gate.active(),false);assert.equal(started,0);
+    await candidate`UPDATE platform_upgrade_state SET phase='active' WHERE id='global'`;
+    await gate.refresh();assert.equal(gate.active(),true);assert.equal(started,1);gate.close();
+    source=connect(sourceName);
+    assert.equal((await source`SELECT version FROM schema_meta WHERE id='global'`)[0].version,61);
+    assert.equal((await source`SELECT to_regclass('public.platform_upgrade_state') AS state`)[0].state,null);
+    assert.equal((await source`SELECT active_version_id FROM project_knowledge_items WHERE id=${item}`)[0].active_version_id,version);
+  }finally{
+    await source?.end({timeout:5});await candidate?.end({timeout:5});
+    if(madeCandidate)await admin.unsafe(`DROP DATABASE "${candidateName}"`);
+    if(madeSource)await admin.unsafe(`DROP DATABASE "${sourceName}"`);
+    await admin.end({timeout:5});
+    rmSync(backupDirectory,{recursive:true,force:true});
+  }
+});

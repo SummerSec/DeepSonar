@@ -1,0 +1,228 @@
+/**
+ * #648: role prompt / Verification evidence / platform-tool allowlist alignment.
+ */
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import test from "node:test";
+import {
+  DONE_SUMMARY_MAX_BYTES,
+  EmitFindingDirectPayload,
+  DonePayload,
+  VERIFY_REPORT_PLATFORM_TOOLS,
+  allowedPlatformTools,
+  resolvePlatformTools,
+} from "@deepsonar/shared-types";
+import { instructionDocument, resultContract } from "./executor-real.js";
+import { platformToolGuide } from "./platform-tools.js";
+import { buildVerifyJobPrompt } from "./verify-prompt.js";
+import { RUNTIME_TEST_TOOLCHAIN_POLICY, withRuntimeTestToolchainPolicy, runtimeEvidencePolicy, SPECIALTY_RUNTIME_IMAGE_POLICIES } from "./domains/role-runtime-snapshot/application.js";
+
+const schemaSql = readFileSync(new URL("../../../database/schema.sql", import.meta.url), "utf8");
+const executorSource = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+const platformToolsSource = readFileSync(new URL("./platform-tools.ts", import.meta.url), "utf8");
+
+test("#648 verify prompt examples only use supports|refutes|inconclusive (no rejects)", () => {
+  const prompt = buildVerifyJobPrompt({
+    attempt: 2,
+    subject: { id: "00000000-0000-4000-8000-000000000099", location: "a.ts:1" },
+    evidenceJson: "{}",
+    taskGoal: "goal",
+  });
+  assert.match(prompt, /outcome=supports/);
+  assert.match(prompt, /outcome=refutes/);
+  assert.match(prompt, /supports\|refutes\|inconclusive/);
+  assert.doesNotMatch(prompt, /rejects/);
+});
+
+test("#648 Hub verify bounce hints only allow review or test", () => {
+  assert.match(executorSource, /只能派发 review 或 test/);
+  assert.match(executorSource, /不得派发 audit\/explore/);
+  assert.doesNotMatch(
+    executorSource,
+    /派发普通角色（review\/test\/audit\/explore/,
+  );
+  // Scheduler rejection path remains the hard gate.
+  const sideEffects = readFileSync(
+    new URL("./domains/event-ingestion/side-effects.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(sideEffects, /\["review", "test"\]/);
+  assert.match(sideEffects, /verify_rework.*verify_failed|verify_failed.*verify_rework/);
+});
+
+test("#648 mark_job_done summary copy uses 8192 UTF-8 bytes", () => {
+  assert.equal(DONE_SUMMARY_MAX_BYTES, 8192);
+  assert.match(platformToolsSource, /最多 8192 UTF-8 字节/);
+  assert.doesNotMatch(platformToolsSource, /最多 10000/);
+  const guide = platformToolGuide(["mark_job_done"]);
+  assert.match(guide, /8192 UTF-8 字节/);
+  assert.match(guide, /确定性模板.*Finding ID/);
+});
+
+test("#648 verify/report empty platform_tools_json expands to strict allowlist only", () => {
+  assert.deepEqual(VERIFY_REPORT_PLATFORM_TOOLS, [
+    "emit_progress",
+    "mark_job_done",
+    "ack_human_message",
+    "list_available_skills",
+    "search_skills",
+    "pull_skill",
+  ]);
+  for (const role of ["verify", "report"] as const) {
+    const tools = resolvePlatformTools(role, "system", {});
+    assert.deepEqual(tools.sort(), [...VERIFY_REPORT_PLATFORM_TOOLS].sort());
+    assert.equal(tools.includes("emit_fact"), false);
+    assert.equal(tools.includes("emit_finding"), false);
+    assert.equal(tools.includes("request_human"), false);
+    assert.deepEqual(allowedPlatformTools(role, "system").sort(), [...VERIFY_REPORT_PLATFORM_TOOLS].sort());
+  }
+  // Ordinary roles still expand empty config to the full catalog (minus explicit false).
+  const audit = resolvePlatformTools("audit", "role", {});
+  assert.ok(audit.includes("emit_finding"));
+  assert.ok(audit.includes("emit_fact"));
+  assert.ok(audit.length > VERIFY_REPORT_PLATFORM_TOOLS.length);
+});
+
+test("#648 schema seed documents verify terminals and report five sections", () => {
+  assert.match(schemaSql, /outcome=supports.*confirmed|supports` 且门禁通过/);
+  assert.match(schemaSql, /outcome=refutes.*refuted|全量 `outcome=refutes`/);
+  assert.match(schemaSql, /inconclusive/);
+  assert.match(schemaSql, /可修复的证据不足/);
+  assert.doesNotMatch(schemaSql, /否定结论走 rework/);
+  assert.match(schemaSql, /固定五类章节/);
+  assert.match(schemaSql, /已确认/);
+  assert.match(schemaSql, /已排除/);
+  assert.match(schemaSql, /未证实/);
+  assert.match(schemaSql, /待人工确认/);
+  assert.match(schemaSql, /未自动验证/);
+  assert.match(schemaSql, /禁止访问 Scheduler 管理 API/);
+  assert.match(schemaSql, /结果仅允许通过本 Job 的受治理平台工具提交/);
+  assert.doesNotMatch(schemaSql, /行号等细节可以后补/);
+  assert.match(schemaSql, /重置令牌可重复使用/);
+  assert.match(schemaSql, /成功重置后令牌未失效/);
+});
+
+test("RoleConfig seed prompts do not embed the platform control Skill", () => {
+  const seedStart = schemaSql.indexOf("INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)");
+  const seedEnd = schemaSql.indexOf(") AS templates(name, instructions) ON templates.name = r.name", seedStart);
+  assert.ok(seedStart >= 0 && seedEnd > seedStart, "role config seed block missing");
+  const rolePromptSeed = schemaSql.slice(seedStart, seedEnd);
+  assert.doesNotMatch(rolePromptSeed, /deepsonar-control/);
+  assert.doesNotMatch(rolePromptSeed, /静态[^\n]*Skill/);
+  // The control Skill remains platform-owned in the runtime composition.
+  assert.match(executorSource, /injectPlatformControlSkill\(snapshot\.skills\)/);
+  assert.match(executorSource, /deepsonar-control Skill/);
+});
+
+test("RoleConfig seed prompts point Agents to self-service Skill pulling", () => {
+  const seedStart = schemaSql.indexOf("INSERT INTO role_configs (role_id, agent_cli, instructions_markdown, runtime_image_key)");
+  const seedEnd = schemaSql.indexOf(") AS templates(name, instructions) ON templates.name = r.name", seedStart);
+  const rolePromptSeed = schemaSql.slice(seedStart, seedEnd);
+  assert.equal((rolePromptSeed.match(/Job-scoped API operation/g) ?? []).length, 9);
+  assert.doesNotMatch(rolePromptSeed, /deepsonar-control/);
+  assert.match(rolePromptSeed, /list_available_skills/);
+  assert.match(rolePromptSeed, /search_skills/);
+  assert.match(rolePromptSeed, /pull_skill/);
+  assert.doesNotMatch(rolePromptSeed, /vuln-definitions/);
+});
+
+test("Hub prompt treats injected YAML as an initial projection and scopes Worker edits", () => {
+  assert.match(schemaSql, /画布（YAML）.*初始投影/);
+  assert.match(schemaSql, /graph_query.*overview/);
+  assert.match(schemaSql, /必须明确目标材料是只读还是允许修改/);
+  assert.match(executorSource, /画布 YAML 是启动时的初始投影/);
+  assert.match(executorSource, /graph_query\(\{kind:\"overview\"\}\)/);
+  assert.match(executorSource, /未明确授权不得修改目标/);
+  assert.match(executorSource, /目标材料只读/);
+});
+
+test("#648 test toolchain policy does not conflate inconclusive with needs_human", () => {
+  assert.match(runtimeEvidencePolicy("test"), /outcome=inconclusive/);
+  assert.match(runtimeEvidencePolicy("test"), /mark_job_done\.verdict only/);
+  assert.doesNotMatch(RUNTIME_TEST_TOOLCHAIN_POLICY, /inconclusive\/needs-human evidence/);
+  assert.match(schemaSql, /outcome=inconclusive/);
+  assert.match(schemaSql, /needs_human` 仅是 `mark_job_done\.verdict`/);
+});
+
+test("#648 review/test emit_fact.description examples meet min length 16", () => {
+  const reviewMatch = schemaSql.match(/普通复核：`emit_fact\(\{"title":"复核结论","description":"([^"]+)"\}/);
+  const testMatch = schemaSql.match(/普通测试事实：`emit_fact\(\{"title":"测试结果","description":"([^"]+)"\}/);
+  const verifyReview = schemaSql.match(/"title":"独立复核：权限前提成立","description":"([^"]+)"/);
+  const verifyTest = schemaSql.match(/"title":"实测：未授权读取可复现","description":"([^"]+)"/);
+  for (const [label, m] of [
+    ["ordinary review", reviewMatch],
+    ["ordinary test", testMatch],
+    ["verification review", verifyReview],
+    ["verification test", verifyTest],
+  ] as const) {
+    assert.ok(m, `${label} example missing`);
+    assert.ok([...m![1]!].length >= 16, `${label} description too short: ${m![1]}`);
+  }
+});
+
+
+function seededRole(name: string): string {
+  const marker = `('${name}', $instructions$`;
+  const start = schemaSql.indexOf(marker);
+  assert.ok(start >= 0);
+  return schemaSql.slice(start + marker.length, schemaSql.indexOf("$instructions$)", start));
+}
+
+function composedInstructions(role: "verify" | "test" | "report", image: string): string {
+  const tools = resolvePlatformTools(role, role === "test" ? "role" : "system", {});
+  return instructionDocument({
+    role, roleDescription: role,
+    customInstructions: withRuntimeTestToolchainPolicy(role, seededRole(role), image),
+    allowEgress: false,
+    contract: resultContract(tools, false, role === "test", role === "verify", false),
+    toolGuide: platformToolGuide(tools), enabledTools: tools, disabledTools: [],
+  });
+}
+
+test("the emitted Finding guide example satisfies the actual schema", () => {
+  const guide = platformToolGuide(["emit_finding"]);
+  const example = guide.match(/- 示例：`([^`]+)`/);
+  assert.ok(example);
+  assert.equal(EmitFindingDirectPayload.safeParse(JSON.parse(example[1]!)).success, true);
+});
+
+test("the emitted rework guide requires a nonempty missing_evidence array", () => {
+  const guide = platformToolGuide(["mark_job_done"]);
+  assert.match(guide, /rework` 必须提供非空 `missing_evidence`/);
+  assert.doesNotMatch(guide, /可选 `missing_evidence`/);
+  const example = guide.match(/- rework 示例：`([^`]+)`/);
+  assert.ok(example);
+  assert.equal(DonePayload.safeParse(JSON.parse(example[1]!)).success, true);
+});
+
+test("composed Verify instructions respect allowed operations for every official image", () => {
+  for (const image of ["deepsonar-base", "deepsonar-kali-minimal", ...SPECIALTY_RUNTIME_IMAGE_POLICIES.map((p) => p.image_key)]) {
+    const policy = withRuntimeTestToolchainPolicy("verify", null, image)!;
+    assert.doesNotMatch(policy, /emit_fact|request_human/);
+    assert.match(policy, /verdict=rework.*nonempty missing_evidence/);
+    assert.match(policy, /verdict=needs_human/);
+    const composed = composedInstructions("verify", image);
+    assert.match(composed, /missing_evidence/);
+    assert.doesNotMatch(composed, /submit emit_fact|blockers use request_human|submit structured inconclusive\/needs_human/);
+    assert.equal((composed.match(/### Runtime evidence submission/g) ?? []).length, 1);
+  }
+});
+
+test("composed ordinary Test instructions do not require an invented Finding", () => {
+  const composed = composedInstructions("test", "deepsonar-mobile");
+  assert.match(composed, /Without a target Finding, submit an ordinary emit_fact/);
+  assert.match(composed, /omit verification and never invent a finding_id/);
+  assert.match(composed, /没有目标 Finding 时只提交普通 Fact/);
+  assert.match(composed, /attempted_refutation/);
+  assert.doesNotMatch(composed, /submit structured inconclusive\/needs_human/);
+});
+
+test("Report composition permits bounded summary and deterministic large-report projection", () => {
+  const composed = composedInstructions("report", "deepsonar-base");
+  assert.match(composed, /8192 UTF-8 字节/);
+  assert.match(composed, /不能容纳时提交有界摘要/);
+  assert.match(composed, /Scheduler.*完整确定性模板/);
+  assert.doesNotMatch(composed, /summary` 为\*\*完整 Markdown 正文/);
+  assert.doesNotMatch(executorSource, /尽量引用 Finding id 或标题/);
+  assert.match(executorSource, /不能容纳时只提交有界摘要，Scheduler 从冻结 report-input\.json/);
+});

@@ -1,0 +1,44 @@
+{
+  "contract": "deepsonar.runtime.contract/v1",
+  "baseImage": "deepsonar-base:local",
+  "platforms": ["linux/amd64", "linux/arm64"],
+  "project_opt_in": true,
+  "toolset": "openharmony-test",
+  "downloads": {
+    "hdc": {
+      "version": "3.2.0b",
+      "sdkVersion": "6.0.0.47",
+      "license": "Apache-2.0",
+      "capabilities": ["hdc", "device-protocol"],
+      "source": "official OpenHarmony public SDK toolchains/hdc + libusb_shared",
+      "sdk": {
+        "url": "https://repo.huaweicloud.com/openharmony/os/6.0-Release/ohos-sdk-windows_linux-public.tar.gz",
+        "sha256": "a315834ac133625efc912bd078f3e2b2550868d04aef1b5aa4f9679c8b3c9d8e"
+      },
+      "component": "linux/toolchains-linux-x64-6.0.0.47-Beta1.zip",
+      "componentSha256": "8b86d431f8dc147ec4c5d1c64fdc45ea1f7c847e90ca21a457ed4ab8394e9a85",
+      "companion": ["libusb_shared.so"],
+      "note": "Official public SDK ships linux-x64 hdc. amd64 runs it natively; arm64 runs the same official binary via qemu-user-static and Debian amd64 multiarch runtime libs. Do not substitute HarmonyOS closed toolchains.",
+      "assets": {
+        "amd64": {
+          "url": "https://repo.huaweicloud.com/openharmony/os/6.0-Release/ohos-sdk-windows_linux-public.tar.gz",
+          "sha256": "a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e",
+          "libusbSharedSha256": "431e69ebe2f87ac693c3dae032ec82baa3196b9d403139ae9775ccbaf9227887"
+        },
+        "arm64": {
+          "url": "https://repo.huaweicloud.com/openharmony/os/6.0-Release/ohos-sdk-windows_linux-public.tar.gz",
+          "sha256": "a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e",
+          "libusbSharedSha256": "431e69ebe2f87ac693c3dae032ec82baa3196b9d403139ae9775ccbaf9227887",
+          "hostInterpreter": "qemu-user-static"
+        }
+      }
+    }
+  },
+  "toolsets": {
+    "openharmony-test": {
+      "imageKey": "deepsonar-openharmony-test",
+      "description": "Project-opt-in OpenHarmony source sync/build plus pinned official hdc device protocol",
+      "maxSizeMiB": 900
+    }
+  }
+}

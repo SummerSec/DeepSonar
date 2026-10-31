@@ -1,0 +1,559 @@
+import { CaretDown, Check, FloppyDisk, MagnifyingGlass, X } from "@phosphor-icons/react";
+import {
+  allowedPlatformTools,
+  requiredPlatformTools,
+  resolvePlatformTools,
+  type PlatformToolConfig,
+  type PlatformToolName,
+} from "@deepsonar/shared-types";
+import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import {
+  type ProviderCredential,
+  type RoleConfigInput,
+  type RoleConfigView,
+  type SkillSource,
+  type SkillSourceDetail,
+} from "./api";
+import { MarkdownView } from "./MarkdownView";
+import { SearchableMultiSelect, SearchableSelect } from "./SearchableSelect";
+import { HelpTip } from "./ui";
+import {
+  countIncludedModules,
+  groupModuleOptions,
+  isPluginGroupExpanded,
+  moduleIsIncluded,
+  moduleSelectorFor,
+  pluginSelectorFor,
+  selectorIsActive,
+  sourceSelectorFor,
+  toggleExplicitModule,
+  togglePluginGroupExpanded,
+  toggleSelector,
+  type ModulePickerOption,
+} from "./module-selector-state";
+
+/**
+ * 角色配置编辑器：指令 / 平台工具 / 模块（职责面）。
+ * 运行时 CLI/Provider/模型/扩展由项目授权与 Hub 组合；账号 CRUD 在 Provider 凭据页。
+ */
+
+const inputCls =
+  "w-full rounded-md border border-ink-700 bg-ink-850 px-3 py-2 font-mono text-[14px] text-zinc-200 outline-none transition-colors focus:border-acc-500";
+const labelCls = "mb-1.5 block font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500";
+
+const PLATFORM_TOOL_META: Record<PlatformToolName, { title: string; description: string }> = {
+  suggest_project_skills: { title: "Skill 条件建议（需启用）", description: "按当前 Job 条件筛选本项目精确 Skill；效果不足时标为未知。须先在全局角色显式启用，项目只能进一步收紧。" },
+  record_skill_choice: { title: "记录 Skill 选择（需启用）", description: "保存采用、拒绝或无候选的声明回执；不会执行 Skill、授予权限或证明效果。须先在全局角色显式启用。" },
+  list_available_roles: { title: "查询可用角色", description: "让 Hub 按需获取当前项目可派发的数据库角色。" },
+  list_available_runtime_images: { title: "查询可用镜像", description: "让 Hub 按需获取本项目已启用且可信的镜像目录（含 purpose/tool_summary/not_included/capabilities/selection_hints），按任务匹配后原样复制 image_key，禁止猜测。" },
+  list_available_agent_clis: { title: "查询可用 Agent CLI", description: "让 Hub 按需获取本项目白名单内的 Agent CLI；提案须 ∈ 列表，省略时走项目软缺省或角色回退。" },
+  list_available_providers: { title: "查询可用 Provider", description: "让 Hub 按需获取本项目白名单内的 Provider/凭据；提案须 ∈ 列表，并发与配额在 Provider 侧，不按角色锁死。" },
+  list_available_skill_sources: { title: "查询可用 Skill 源", description: "让 Hub 按需获取本项目已启用 Skill 源目录（#603 只读 stub）；发现≠授权，下发仍以快照 selector + 白名单为上限。" },
+  list_available_skills: { title: "Agent 拉取 Skill", description: "列出平台 trusted+enabled 源中的具体业务 Skill，Agent 按需选择并拉取。" },
+  search_skills: { title: "搜索可拉取 Skill", description: "按 selector、名称、插件或描述搜索业务 Skill。" },
+  pull_skill: { title: "拉取业务 Skill", description: "按本轮目录返回的 selector 和 content hash 拉取 Skill 文件。" },
+  list_capabilities: { title: "查询能力包", description: "列出本 Job 可见的 Capability Pack 摘要；完整契约用 describe_capability 按需读取。" },
+  search_capabilities: { title: "搜索能力包", description: "按任务查询可用 Capability Pack，不依赖预先知道 RoleConfig selector。" },
+  describe_capability: { title: "描述能力包", description: "按 id/version/digest 读取 Capability Pack 机器契约。" },
+  validate_composition: { title: "校验能力组合", description: "校验 Pack 草案与 selector，拒绝扩大冻结权限，失败返回 RepairFeedback。" },
+  preview_materialization: { title: "预览能力物化", description: "dry-run 解析 selector 并冻结 digest，不改 RoleConfig。" },
+  list_shared_assets: { title: "查询共享资产", description: "列出本 Job 冻结的只读资产目录；用 mount_path 直接读取，无单独下载工具（Scheduler 预挂载，含 S3）。" },
+  request_project_knowledge: { title: "请求沉淀项目知识", description: "用已验证的来源引用请求受治理的知识工作流，不直接创建或激活版本。" },
+  search_project_knowledge: { title: "搜索项目知识", description: "只搜索本 Job 冻结且当前未撤销的项目知识目录。" },
+  read_project_memory: { title: "读取项目记忆", description: "按冻结的版本和内容哈希读取本项目记忆。" },
+  read_knowledge_input: { title: "读取知识输入", description: "按当前知识工作流的有界输入清单读取来源材料。" },
+  propose_project_knowledge: { title: "提案项目知识", description: "提交带基线引用和来源的候选提案，由平台审查与结算。" },
+  submit_knowledge_evaluation: { title: "提交知识评测", description: "提交隔离试验的结构化评测结果及证据引用。" },
+  review_project_knowledge: { title: "审查项目知识", description: "提交独立审查结论；Agent 无法自行晋升版本。" },
+  record_knowledge_feedback: { title: "记录知识反馈", description: "记录具体使用结果和后续改进建议，不改写历史版本。" },
+  get_knowledge_receipt: { title: "查询知识回执", description: "只读查询当前 Job 的持久操作回执，不恢复旧执行令牌。" },
+  graph_query: { title: "按需读图", description: "让 Hub 按需查询本 Job 画布（overview/index/node 等有界投影），不要一次拉全图。Hub 角色不可关闭。" },
+  publish_shared_asset: { title: "发布共享资产", description: "把 /workspace 普通文件发布为不可变版本；Scheduler 经 BlobStore（本地/S3）落库，禁止从只读挂载树发布。" },
+  emit_progress: { title: "过程进度", description: "允许 Worker 增量上报当前动作和完成百分比。" },
+  emit_fact: { title: "事实提交", description: "允许工作角色把新证据写成画布 Fact。" },
+  emit_finding: { title: "漏洞提交", description: "允许审计角色提交带严重级别的 Finding。" },
+  submit_hub_decision: { title: "Hub 决策", description: "允许 Hub 提交完成结论或下一批派发意图。" },
+  submit_plan: { title: "提交计划", description: "允许模型提交版本化 Plan（目标、子任务、依赖、完成策略）；Scheduler 保存原文与裁剪结果。" },
+  submit_plan_result: { title: "提交计划结果", description: "允许模型提交 continue / complete / blocked / needs_human，并记录执行结果与终止原因。" },
+  mark_job_done: { title: "正常完成", description: "提交 Job 最终摘要并形成合法终态。" },
+  request_human: { title: "请求人工", description: "遇到授权或高风险阻塞时结束本轮并请求人工介入。" },
+  ack_human_message: { title: "确认人工消息", description: "仅在当前 Job 实际收到人工消息后显式 ACK；普通文本回复不会确认。" },
+};
+
+// ---------- 表单状态 ----------
+
+interface ConfigForm {
+  /** RoleConfig 职责面；运行时 CLI/Provider 由项目授权与 Hub 组合。 */
+  agent_cli: string;
+  dsh_task_mode: "standard" | "ptc";
+  model: string;
+  env_keys: string[];
+  env_vars: Record<string, string>;
+  config_files: Array<{ path: string; content: string }>;
+  instructions_markdown: string;
+  runtime_image_key: string;
+  modules: string[];
+  skills: string;
+  commands: string;
+  mcps: string;
+  subagents: string;
+  platform_tools: PlatformToolConfig;
+}
+
+const EMPTY: ConfigForm = {
+  agent_cli: "",
+  dsh_task_mode: "standard",
+  model: "",
+  env_keys: [],
+  env_vars: {},
+  config_files: [],
+  instructions_markdown: "",
+  runtime_image_key: "",
+  modules: [],
+  skills: "[]",
+  commands: "[]",
+  mcps: "[]",
+  subagents: "[]",
+  platform_tools: {},
+};
+
+/** 从已有 RoleConfig 视图预填表单（无配置时给缺省值） */
+function formOf(cfg: RoleConfigView | null | undefined): ConfigForm {
+  if (!cfg) return EMPTY;
+  return {
+    agent_cli: cfg.agent_cli ?? "",
+    dsh_task_mode: cfg.dsh_task_mode ?? "standard",
+    model: cfg.model ?? "",
+    env_keys: cfg.env_keys ?? [],
+    env_vars: cfg.env_vars_json ?? {},
+    config_files: (cfg.config_files ?? []).map((file) => ({ path: file.path, content: file.content })),
+    instructions_markdown: cfg.instructions_markdown ?? "",
+    runtime_image_key: cfg.runtime_image_key ?? "",
+    modules: cfg.modules_json ?? [],
+    skills: JSON.stringify(cfg.skills_json ?? [], null, 2),
+    commands: JSON.stringify(cfg.commands_json ?? [], null, 2),
+    mcps: JSON.stringify(cfg.mcps_json ?? [], null, 2),
+    subagents: JSON.stringify(cfg.subagents_json ?? [], null, 2),
+    platform_tools: cfg.platform_tools_json ?? {},
+  };
+}
+
+function parseJsonArray(text: string): Record<string, unknown>[] {
+  const v = JSON.parse(text || "[]") as unknown;
+  if (!Array.isArray(v)) throw new Error("必须是 JSON 数组");
+  return v as Record<string, unknown>[];
+}
+
+function ModulePicker({ sources, sourceDetails, selected, onChange }: { sources: SkillSource[]; sourceDetails: Record<string, SkillSourceDetail>; selected: string[]; onChange: (values: string[]) => void }) {
+  const [query, setQuery] = useState("");
+  const [sourceIds, setSourceIds] = useState<string[]>([]);
+  /** Per-plugin open/closed overrides; default is collapsed (search expands matches). */
+  const [expandOverrides, setExpandOverrides] = useState<Map<string, boolean>>(() => new Map());
+  const options = useMemo<ModulePickerOption[]>(
+    () => sources.flatMap((source) => (sourceDetails[source.id]?.catalog_json ?? []).map((module) => ({
+      ...module,
+      key: moduleSelectorFor(source.id, module.id),
+      sourceId: source.id,
+      sourceName: source.name,
+    }))),
+    [sources, sourceDetails],
+  );
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return options.filter((option) =>
+      (!sourceIds.length || sourceIds.includes(option.sourceId)) &&
+      `${option.name} ${option.description} ${option.plugin} ${option.kind} ${option.sourceName}`.toLowerCase().includes(needle),
+    );
+  }, [options, query, sourceIds]);
+  const groups = useMemo(() => groupModuleOptions(options), [options]);
+  const visibleKeys = filtered.map((option) => option.key);
+  const allVisibleDirectSelected = visibleKeys.length > 0 && visibleKeys.every((key) => selected.includes(key));
+  const toggleOne = (option: ModulePickerOption) => onChange(toggleExplicitModule(selected, option.sourceId, option.id));
+  const toggleVisible = () => {
+    if (allVisibleDirectSelected) onChange(selected.filter((key) => !visibleKeys.includes(key)));
+    else onChange([...new Set([...selected, ...visibleKeys])]);
+  };
+  const selectedGroupSelectors = selected.filter((value) => value.includes(":plugin:") || value.endsWith(":source:*"));
+  const selectedDirectOptions = options.filter((option) => selected.includes(option.key));
+  const sourceOptions = sources.map((source) => ({
+    source,
+    options: filtered.filter((option) => option.sourceId === source.id),
+    total: options.filter((option) => option.sourceId === source.id).length,
+  })).filter(({ source }) => !sourceIds.length || sourceIds.includes(source.id));
+
+  const visiblePluginKeys = useMemo(() => {
+    const keys: string[] = [];
+    for (const { source, options: sourceVisible } of sourceOptions) {
+      for (const group of groups.filter((item) => item.sourceId === source.id)) {
+        const visible = group.options.filter((option) => sourceVisible.some((item) => item.key === option.key));
+        if (visible.length > 0 || !query.trim()) keys.push(group.selector);
+      }
+    }
+    return keys;
+  }, [groups, query, sourceOptions]);
+
+  const expandAllVisible = () => {
+    setExpandOverrides((current) => {
+      const next = new Map(current);
+      for (const key of visiblePluginKeys) next.set(key, true);
+      return next;
+    });
+  };
+  const collapseAll = () => setExpandOverrides(new Map(visiblePluginKeys.map((key) => [key, false])));
+
+  return <div className="module-picker">
+    <div className="module-toolbar">
+      <div className="selector-search flex-1"><MagnifyingGlass size={14} weight="light" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Skill、Command、插件或说明" /></div>
+      <SearchableMultiSelect value={sourceIds} onChange={setSourceIds} options={sources.map((source) => ({ value: source.id, label: source.name }))} placeholder="全部模块源" ariaLabel="模块来源" className="block [&>button]:w-full" />
+    </div>
+    <div className="module-summary">
+      <span><strong>{selected.length}</strong> 个选择器已选 · 当前显示 {filtered.length} 个模块 · 插件默认折叠</span>
+      <div>
+        <button type="button" onClick={expandAllVisible} disabled={visiblePluginKeys.length === 0}>展开插件</button>
+        <button type="button" onClick={collapseAll} disabled={visiblePluginKeys.length === 0}>全部折叠</button>
+        <button type="button" onClick={toggleVisible} disabled={visibleKeys.length === 0}>{allVisibleDirectSelected ? "取消当前结果" : "全选当前结果"}</button>
+        {selected.length > 0 && <button type="button" onClick={() => onChange([])}>全部清空</button>}
+      </div>
+    </div>
+    {selectedGroupSelectors.length > 0 && <div className="selected-modules">{selectedGroupSelectors.map((selector) => <button type="button" key={selector} onClick={() => onChange(toggleSelector(selected, selector))} title="取消整组选择"><span>{selector.endsWith(":source:*") ? "整源" : `插件 · ${selector.split(":plugin:")[1] ?? selector}`}</span><X size={11} /></button>)}</div>}
+    {selectedDirectOptions.length > 0 && <div className="selected-modules">{selectedDirectOptions.map((option) => <button type="button" key={option.key} onClick={() => toggleOne(option)} title="移除单个模块"><span>{option.name}</span><X size={11} /></button>)}</div>}
+    <div className="module-results">
+      {sourceOptions.map(({ source, options: sourceVisible, total }) => {
+        const sourceSelector = sourceSelectorFor(source.id);
+        const sourceActive = selectorIsActive(selected, sourceSelector);
+        const sourceGroups = groups
+          .filter((group) => group.sourceId === source.id)
+          .map((group) => ({
+            ...group,
+            options: group.options.filter((option) => sourceVisible.some((item) => item.key === option.key)),
+          }))
+          .filter((group) => group.options.length > 0 || !query.trim());
+        return <div key={source.id} className="module-source-group">
+          <div className="module-group-heading">
+            <span>
+              <strong>{source.name}</strong>
+              <small>
+                {total > 0 ? `${total} 个目录项 · ${sourceGroups.length} 个插件` : "目录为空，请先同步"}
+                {source.trust_status !== "trusted" ? ` · ${source.trust_status === "quarantined" ? "待审批" : "未启用"}` : ""}
+              </small>
+            </span>
+            <button type="button" disabled={total === 0} className={sourceActive ? "is-selected" : ""} onClick={() => onChange(toggleSelector(selected, sourceSelector))}>{sourceActive ? "取消整源" : "挂载整源"}</button>
+          </div>
+          {sourceGroups.map((group) => {
+            const pluginExplicit = selectorIsActive(selected, pluginSelectorFor(group.sourceId, group.plugin));
+            const pluginActive = pluginExplicit || sourceActive;
+            const included = countIncludedModules(group.options, selected);
+            const expanded = isPluginGroupExpanded({
+              groupKey: group.selector,
+              query,
+              overrides: expandOverrides,
+              hasVisibleModules: group.options.length > 0,
+            });
+            return <div key={group.selector} className={`module-plugin-group${expanded ? " is-expanded" : " is-collapsed"}`}>
+              <div className="module-group-heading module-plugin-heading">
+                <button
+                  type="button"
+                  className="module-plugin-toggle"
+                  aria-expanded={expanded}
+                  onClick={() => setExpandOverrides((current) => togglePluginGroupExpanded(current, group.selector, expanded))}
+                >
+                  <CaretDown size={12} className={`module-plugin-caret ${expanded ? "is-open" : ""}`} />
+                  <span>
+                    <strong>{group.plugin}</strong>
+                    <small>
+                      {group.options.length} 个模块
+                      {included > 0 ? ` · ${included} 已选` : ""}
+                      {sourceActive ? " · 随整源包含" : pluginExplicit ? " · 整插件挂载" : " · 点开可单选"}
+                    </small>
+                  </span>
+                </button>
+                <button type="button" disabled={sourceActive} className={pluginActive ? "is-selected" : ""} onClick={() => onChange(toggleSelector(selected, group.selector))}>{sourceActive ? "随整源" : pluginExplicit ? "取消插件" : "挂载插件"}</button>
+              </div>
+              {expanded && group.options.map((option) => {
+                const checked = moduleIsIncluded(option, selected);
+                const inherited = checked && !selected.includes(option.key);
+                return <label key={option.key} className={checked ? "is-selected" : ""}>
+                  <input type="checkbox" checked={checked} disabled={inherited} onChange={() => toggleOne(option)} />
+                  <span className="module-check">{checked && <Check size={12} weight="bold" />}</span>
+                  <span className="min-w-0 flex-1">
+                    <strong>{option.name}</strong>
+                    <small>{option.description || `${option.plugin} 中的 ${option.kind}`}{inherited ? " · 随组包含" : ""}</small>
+                  </span>
+                  <span className="module-meta"><em>{option.kind}</em><small>{option.sourceName} / {option.plugin}</small></span>
+                </label>;
+              })}
+            </div>;
+          })}
+        </div>;
+      })}
+      {sources.length === 0 && <div className="selector-empty">尚未添加模块源，请先到「模块源」登记并同步仓库。</div>}
+      {sources.length > 0 && filtered.length === 0 && <div className="selector-empty">没有匹配的模块；空目录请先同步，插件/整源选择会在下一 Job 按当前 catalog 展开。</div>}
+    </div>
+  </div>;
+}
+
+/** 项目侧 CLI/Provider 主边界在设置「CLI / Provider 启用与缺省」；此处绑定须 ∈ 项目白名单，并发不在角色上配置。 */
+export function RoleConfigEditor({
+  title,
+  roleName,
+  roleKind,
+  projectId,
+  initial,
+  credentials,
+  sources,
+  sourceDetails,
+  enabledSkillSourceIds = null,
+  busy,
+  saved = false,
+  failed = false,
+  onSave,
+  onCancel,
+}: {
+  /** 表单标题（如「全局缺省配置 · explore」「项目覆盖 · verify」） */
+  title: string;
+  roleName: string;
+  roleKind: "role" | "hub" | "system";
+  projectId?: string;
+  /** 预填配置：项目覆盖时传全局配置做底，全局编辑时传现有全局配置 */
+  initial: RoleConfigView | null | undefined;
+  /** 可选 Credential（调用方已按项目边界过滤：全局=null 或本项目） */
+  credentials: ProviderCredential[];
+  /** Git 模块源（模块勾选列表用） */
+  sources: SkillSource[];
+  sourceDetails: Record<string, SkillSourceDetail>;
+  /** 项目已启用 Skill 源；提供时模块候选只显示白名单内源（#603）。 */
+  enabledSkillSourceIds?: string[] | null;
+  busy: boolean;
+  saved?: boolean;
+  failed?: boolean;
+  onSave: (body: RoleConfigInput) => void;
+  onCancel: () => void;
+}) {
+  const [form, setForm] = useState<ConfigForm>(() => formOf(initial));
+  const [error, setError] = useState<string | null>(null);
+  const pickerSources = useMemo(() => {
+    if (!enabledSkillSourceIds) return sources;
+    const allow = new Set(enabledSkillSourceIds);
+    return sources.filter((source) => allow.has(source.id));
+  }, [sources, enabledSkillSourceIds]);
+  void credentials; // 父组件仍传入以兼容签名；运行时凭据由项目授权解析
+  const availablePlatformTools = allowedPlatformTools(roleName, roleKind);
+  const requiredPlatformToolSet = new Set(requiredPlatformTools(roleKind));
+  const configuredPlatformToolSet = new Set(resolvePlatformTools(roleName, roleKind, form.platform_tools));
+
+  const submit = () => {
+    try {
+      // RoleConfig 只保存职责/指令/工具；运行时凭据由项目授权解析。
+      const body: RoleConfigInput = {
+        ...(!projectId ? {
+          agent_cli: (form.agent_cli || null) as RoleConfigInput["agent_cli"],
+          model: form.model.trim() || null,
+        } : {}),
+        dsh_task_mode: form.dsh_task_mode,
+        env_keys: form.env_keys,
+        env_vars: form.env_vars,
+        modules: form.modules,
+        skills: parseJsonArray(form.skills),
+        commands: parseJsonArray(form.commands),
+        mcps: parseJsonArray(form.mcps),
+        subagents: parseJsonArray(form.subagents),
+        platform_tools: form.platform_tools,
+        instructions_markdown: form.instructions_markdown.trim() || null,
+        runtime_image_key: projectId ? null : form.runtime_image_key.trim() || null,
+        // #690: RoleConfig no longer submits credentials bindings.
+        config_files: form.config_files,
+      };
+      setError(null);
+      onSave(body);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div className="role-config-editor min-w-0">
+      <div className="role-config-header flex-wrap">
+        <div>
+          <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-acc-400">{title}</span>
+          <p>定义这个角色下一次运行时冻结的执行快照。</p>
+        </div>
+        <span className="role-config-snapshot">NEXT JOB SNAPSHOT</span>
+        <button
+          onClick={onCancel}
+          aria-label="收起"
+          className="rounded-md p-1 text-zinc-500 transition-colors hover:bg-ink-800 hover:text-zinc-200"
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      <div className="role-config-grid">
+        <section className="role-config-section role-config-runtime">
+          <div className="role-config-section-title">
+            <span>01</span>
+            <strong>
+              指令与平台工具
+              <HelpTip>
+                运行时 CLI / Provider / 模型 / Pi 扩展由项目授权目录与 Hub 能力组合决定（#690）。账号密钥在「Provider 凭据」页管理。此处仅维护角色职责、指令与平台工具。
+                运行时凭据由项目授权 Provider 解析。
+              </HelpTip>
+            </strong>
+          </div>
+          {!projectId && (
+            <div className="space-y-3">
+              <label className={labelCls}>跨 CLI 候选的全局偏好</label>
+              <SearchableSelect value={form.agent_cli} onChange={(agent_cli) => setForm({ ...form, agent_cli })}
+                options={[{ value: "claude-code", label: "Claude Code" }, { value: "pi", label: "Pi" }, { value: "dsh", label: "DSH" }]}
+                placeholder="未指定（由可用凭据决定）" ariaLabel="全局 CLI 偏好" clearable />
+              <label className={labelCls}>全局模型偏好</label>
+              <input className={inputCls} value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}
+                placeholder="未指定（使用凭据配置）" />
+            </div>
+          )}
+          <details className="role-config-instructions">
+            <summary className="role-config-instructions-summary">
+              <span className="role-config-instructions-title">
+                Worker 长期指令
+                <HelpTip>
+                  平台会自动补充工作区、prompt 输入、runtime-manifest、动态 skill / command / MCP / sub-agent、环境变量名称、网络边界、不可用内部接口和增量结果工具；这里仅维护该角色长期稳定的职责与方法。
+                </HelpTip>
+              </span>
+              <small>
+                {form.instructions_markdown.trim()
+                  ? `${form.instructions_markdown.trim().length} 字`
+                  : "未填写"}
+              </small>
+              <CaretDown size={14} />
+            </summary>
+            <div className="role-config-instructions-body">
+              <MarkdownView
+                markdown={form.instructions_markdown}
+                editable
+                onChange={(value) => setForm({ ...form, instructions_markdown: value })}
+                rows={12}
+                placeholder="每个 Job 会冻结并生成 /workspace/AGENTS.md 与 /workspace/CLAUDE.md；不要在这里填写某一次任务内容。支持 Markdown。"
+                className="rounded-xl border border-ink-700 bg-ink-850/50 p-2.5"
+              />
+            </div>
+          </details>
+          <div>
+            <label className={labelCls}>
+              平台工具
+              <HelpTip>
+                常规平台工具默认启用；Skill 条件建议和选择记录需在全局角色显式启用，项目只能进一步关闭。mark_job_done 为终态必需且不可关闭，Hub 另需 graph_query。
+                保存后从下一 Job 起生效并冻结到快照；关闭的工具不会注入 MCP，也不会出现在动态 AGENTS.md、CLAUDE.md 和运行清单的可用列表中。
+              </HelpTip>
+            </label>
+            <div className="flex flex-col gap-1.5">
+              {availablePlatformTools.map((tool) => {
+                const required = requiredPlatformToolSet.has(tool);
+                const enabled = configuredPlatformToolSet.has(tool);
+                const inheritsSuggestion = Boolean(projectId && form.platform_tools[tool] === undefined
+                  && (tool === "suggest_project_skills" || tool === "record_skill_choice"));
+                const meta = PLATFORM_TOOL_META[tool];
+                return (
+                  <label
+                    key={tool}
+                    className="flex cursor-pointer items-center gap-2.5 rounded-md border border-ink-700 bg-ink-850/70 px-3 py-2.5 transition-colors hover:border-ink-600"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      ref={(node) => { if (node) node.indeterminate = inheritsSuggestion; }}
+                      aria-checked={inheritsSuggestion ? "mixed" : enabled}
+                      disabled={required}
+                      onChange={(event) => setForm((current) => ({
+                        ...current,
+                        platform_tools: { ...current.platform_tools, [tool]: event.target.checked },
+                      }))}
+                      className="accent-acc-500"
+                    />
+                    <span className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-zinc-200">
+                      <code className="font-mono text-acc-300">{tool}</code>
+                      {inheritsSuggestion && <span className="text-zinc-400">继承全局配置</span>}
+                      <span className="inline-flex items-center">
+                        {meta.title}
+                        <HelpTip label={`${meta.title} 说明`}>{meta.description}</HelpTip>
+                      </span>
+                      {required && (
+                        <em className="rounded bg-acc-500/10 px-1.5 py-0.5 font-mono text-[9px] not-italic text-acc-300">
+                          终态必需
+                        </em>
+                      )}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          {form.agent_cli === "dsh" && (
+            <div className="mt-4 border-t border-ink-700/60 pt-4">
+              <label className={labelCls}>
+                DSH 任务模式
+                <HelpTip>Standard 直接暴露原生工具；PTC 通过 Code Mode SDK 和 run_code 将多步工具调用组合为 TypeScript 程序。选择会冻结到下一 Job。</HelpTip>
+              </label>
+              <div className="grid grid-cols-2 overflow-hidden rounded-md border border-ink-700" role="group" aria-label="DSH 任务模式">
+                {(["standard", "ptc"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    aria-pressed={form.dsh_task_mode === mode}
+                    className={`min-h-9 px-3 text-[12px] transition-colors ${form.dsh_task_mode === mode ? "bg-acc-500/20 text-acc-200" : "bg-ink-850 text-zinc-500 hover:text-zinc-200"}`}
+                    onClick={() => setForm((current) => ({ ...current, dsh_task_mode: mode }))}
+                  >
+                    {mode === "standard" ? "Standard" : "PTC"}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+
+        <details className="role-config-section role-config-modules" open>
+          <summary className="role-config-modules-summary">
+            <div className="role-config-section-title">
+              <span>02</span>
+              <strong>
+                Agent 模块目录
+                <HelpTip>
+                  目录由「模块源」同步生成。展开后列表内上下滚动；可挂载整插件/整源，selector 会跟随后续 sync 在下一 Job 纳入新增模块。 候选须 ∈ 项目 Skill 源白名单（#603，服务端 fail-closed）；RoleConfig 勾选仅为过渡缺省建议，主路径将迁到 Hub 从项目已启用集合选型。
+                </HelpTip>
+              </strong>
+            </div>
+            <small>
+              {form.modules.length > 0 ? `已选 ${form.modules.length} 个` : "未选模块"}
+            </small>
+            <CaretDown size={14} />
+          </summary>
+          <div className="role-config-modules-body">
+            <ModulePicker sources={pickerSources} sourceDetails={sourceDetails} selected={form.modules} onChange={(modules) => setForm({ ...form, modules })} />
+          </div>
+        </details>
+      </div>
+
+      {error && (
+        <div className="rounded-md border border-red-900/60 bg-red-950/40 px-3 py-2 font-mono text-[13px] text-red-300">
+          {error}
+        </div>
+      )}
+
+      <div className="role-config-actions">
+        <button
+          onClick={submit}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:opacity-50"
+        >
+          <FloppyDisk size={13} /> {busy ? "保存中…" : saved ? "已保存" : failed ? "保存失败" : "保存配置"}
+        </button>
+        <button
+          onClick={onCancel}
+          className="rounded-md border border-ink-700 px-3 py-1.5 text-[14px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200"
+        >
+          取消
+        </button>
+        <span className="ml-auto self-center font-mono text-[12px] text-zinc-600">下一 job 生效</span>
+      </div>
+    </div>
+  );
+}

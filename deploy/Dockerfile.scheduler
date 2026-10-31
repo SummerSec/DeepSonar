@@ -1,0 +1,52 @@
+FROM node:24-alpine@sha256:50c8e8ca1d27439048670df5883f32d57cf81cff6233222c893fd0d9884cbd81
+# Pin must be a multi-arch OCI index (linux/amd64 + linux/arm64). See #598.
+
+# kubectl is required when OPEN_SANDBOX_KUBERNETES=1 (Gateway ClusterIP bind + PVC seeder).
+ARG TARGETARCH=amd64
+ARG KUBECTL_VERSION=v1.36.4
+RUN apk add --no-cache ca-certificates git docker-cli wget \
+  && arch="$TARGETARCH" \
+  && if [ "$arch" = "amd64" ]; then sha=8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a; \
+     elif [ "$arch" = "arm64" ]; then sha=0ecf44450ee6063bf19dd166a103ee6df4a9034455c2abce626e6eea657d73fb; \
+     else echo "unsupported TARGETARCH=$TARGETARCH" >&2; exit 1; fi \
+  && wget -q -O /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl" \
+  && echo "${sha}  /usr/local/bin/kubectl" | sha256sum -c - \
+  && chmod +x /usr/local/bin/kubectl \
+  && corepack enable
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY apps/scheduler/package.json apps/scheduler/package.json
+COPY apps/image-admission/package.json apps/image-admission/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/shared-types/package.json packages/shared-types/package.json
+COPY packages/runtime-manual-contract/package.json packages/runtime-manual-contract/package.json
+COPY packages/runtime-sandbox/package.json packages/runtime-sandbox/package.json
+
+RUN pnpm install --frozen-lockfile --filter @deepsonar/scheduler...
+
+COPY apps/scheduler apps/scheduler
+COPY packages packages
+COPY database database
+COPY agent-harness/demo-repo agent-harness/demo-repo
+COPY deploy/runtime-image-registry.json deploy/runtime-image-registry.json
+COPY deploy/worker-register.mjs deploy/worker-register-contract.mjs deploy/
+
+# 生产制品（§12.1）：workspace 包 main/exports 指向 dist，scheduler 跑 node dist/index.js（不用 tsx）
+RUN pnpm -r --filter @deepsonar/shared-types --filter @deepsonar/runtime-manual-contract --filter @deepsonar/runtime-sandbox --filter @deepsonar/scheduler build
+
+
+ARG GIT_REVISION=
+LABEL org.opencontainers.image.source="https://github.com/SummerSec/DeepSonar" \
+      org.opencontainers.image.revision="${GIT_REVISION}"
+ENV DEEPSONAR_GIT_REVISION=${GIT_REVISION}
+
+ENV NODE_ENV=production
+# Content-addressed blobs (shared assets, evidence) must live on the mounted volume.
+# Compose mounts blob_data at /app/data; without this, cwd-relative ./data/blobs
+# lands on the container writable layer and is lost on recreate.
+ENV BLOB_DIR=/app/data/blobs
+EXPOSE 3100
+
+CMD ["pnpm", "--filter", "@deepsonar/scheduler", "start"]

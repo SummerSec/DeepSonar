@@ -1,0 +1,99 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import test from "node:test";
+
+const sourceRoot = path.resolve(import.meta.dirname);
+const panel = readFileSync(path.join(sourceRoot, "JobDetailPanel.tsx"), "utf8");
+const workspace = readFileSync(path.join(sourceRoot, "LiveTerminalWorkspace.tsx"), "utf8");
+const markdown = readFileSync(path.join(sourceRoot, "MarkdownView.tsx"), "utf8");
+
+test("job detail Escape closes the drawer but defers to a nested confirmation", () => {
+  assert.match(panel, /event\.key !== "Escape" \|\| event\.defaultPrevented/);
+  assert.match(panel, /document\.querySelector\('\[role="alertdialog"\]'\)/);
+  assert.match(panel, /window\.addEventListener\("keydown", onKeyDown\)/);
+  assert.match(panel, /onClose\(\);/);
+});
+
+test("live terminal is an explicit, permission-gated mount", () => {
+  assert.match(workspace, /useState\(false\)/);
+  assert.match(workspace, /desktop && canOpenTerminal && desktopTerminalOpen/);
+  assert.match(workspace, /aria-label="打开终端"/);
+  assert.match(workspace, /aria-label="关闭终端"/);
+  assert.match(workspace, /mobileView === "terminal" && canOpenTerminal/);
+  assert.match(workspace, /该 CLI 暂不支持交互终端/);
+  assert.doesNotMatch(workspace, /mobileView === "stream" \? "" : "hidden"/);
+  assert.doesNotMatch(workspace, /mobileView === "terminal" \? "" : "hidden"/);
+});
+
+test("changing jobs resets terminal state and tears down the previous terminal", () => {
+  assert.match(workspace, /const \[terminalJobId, setTerminalJobId\] = useState\(jobId\)/);
+  assert.match(workspace, /setDesktopTerminalOpen\(false\);[\s\S]*?setMobileView\("stream"\);[\s\S]*?setTerminalJobId\(jobId\);[\s\S]*?\}, \[jobId\]\)/);
+  assert.match(workspace, /desktop && canOpenTerminal && desktopTerminalOpen && terminalJobId === jobId/);
+  assert.match(workspace, /mobileView === "terminal" && canOpenTerminal && terminalJobId === jobId/);
+  assert.match(workspace, /<TerminalPanel key=\{jobId\}/);
+});
+
+test("job result human messages default collapsed through the shared list", () => {
+  assert.match(panel, /<HumanMessageList/);
+  assert.match(panel, /expandedIds=\{expandedMessageIds\}/);
+  assert.doesNotMatch(panel, /human-message-detail-section" aria-label="人工消息"/);
+});
+
+test("results keep one vertical scroller while Markdown remains fully visible", () => {
+  const resultStart = panel.indexOf('tab === "result"');
+  const liveStart = panel.indexOf('tab === "live"', resultStart);
+  const scrollStart = panel.indexOf("overflow-x-hidden overflow-y-auto");
+  assert.ok(resultStart >= 0 && scrollStart >= 0 && liveStart > resultStart);
+  const result = panel.slice(scrollStart, liveStart);
+  assert.equal((result.match(/overflow-y-auto/g) ?? []).length, 1);
+  assert.doesNotMatch(result, /max-h-\[40vh\]\s+overflow-y-auto/);
+  assert.match(result, /MarkdownView markdown=\{dispatchPrompt\} scrollable=\{false\}/);
+  assert.match(result, /MarkdownView markdown=\{runSummary\} scrollable=\{false\}/);
+  assert.match(result, /navigator\.clipboard\?\.writeText\(dispatchPrompt\)/);
+  assert.match(panel, /detail\.dispatched_prompt/);
+  assert.match(panel, /extractDispatchPrompt\(detail\.job\.type, detail\.job\.payload_json\)/);
+  assert.match(panel, /没有可展示的下发 prompt/);
+  assert.doesNotMatch(panel, /未找到冻结的下发 prompt/);
+  assert.match(markdown, /scrollable = true/);
+  assert.match(markdown, /scrollable \? "max-h-\[65vh\] overflow-auto" : "overflow-visible"/);
+});
+
+test("运行详情展示有界上下文诊断，而不读取原始 prompt", () => {
+  assert.match(panel, /上下文生命周期/);
+  assert.match(panel, /context_diagnostics/);
+  assert.match(panel, /压缩观测/);
+  assert.match(panel, /transform_chain_digest/);
+  assert.doesNotMatch(panel, /runtime_context\.prompt/);
+});
+
+test("Session 页可切换并下载所选归档", () => {
+  assert.match(panel, /api\.jobSession\(jobId, \{ path \}\)/);
+  assert.match(panel, /artifacts=\{session\.artifacts \?\? \[session\.meta\]\}/);
+  assert.match(panel, /onSelectArtifact=/);
+  assert.match(panel, /path: session\.meta\.path/);
+  assert.match(panel, /sessionSelectReq/);
+  assert.match(panel, /if \(req !== sessionSelectReq\.current\) return/);
+});
+
+test("运行详情把错误投影为 RepairFeedback，未知效果不提供无条件重试", () => {
+  assert.match(panel, /RepairFeedbackPanel/);
+  assert.match(panel, /projectJobActions/);
+  assert.match(panel, /allowJobRetry/);
+  assert.match(panel, /unknown_external_effect/);
+  assert.match(panel, /repairRecoveryActions/);
+  assert.match(panel, /recoveryActions=\{repairRecoveryActions\}/);
+  assert.match(panel, /确认后 · 旧快照重跑/);
+  assert.match(panel, /RESUMABLE\.has\(detail\.job\.status\) && allowJobRetry/);
+});
+
+test("运行详情展示 Attempt、外部效果、投递和用量摘要", () => {
+  assert.match(panel, /执行账本/);
+  assert.match(panel, /latestAttempt/);
+  assert.match(panel, /unknownEffects/);
+  assert.match(panel, /deliveryCounts/);
+  assert.match(panel, /inputTokens/);
+  assert.match(panel, /outputTokens/);
+  assert.match(panel, /totalTokens/);
+  assert.match(panel, /gatewayUsage=\{detail\.usage\}/);
+});
