@@ -1,7 +1,7 @@
 # 11. 工程规范
 
 > 状态：**as-built（#741 PR 5 回填）**。本文记录当前仓库开发、验证和文档治理必须遵守的工程规则；实现冲突时以代码、schema、OpenAPI 和测试为准。
-> 同步日期：2026-10-15
+> 同步日期：2026-10-31
 
 本文是 DeepSonar 的开发规范视图。它把可重复的工程约束、测试分层、文档保鲜和发布前核查集中在一个位置；新架构事实以 [`docs/architecture/README.md`](README.md)、相关架构视图、追溯矩阵和 ADR 为准，`DESIGN.md`、`docs/README.md` 与其他专题文档提供摘要或专题证据。
 
@@ -81,11 +81,13 @@ Control API 的每个 operation 必须经过三层校验：
 | PostgreSQL 集成 | 事务锁、幂等、投影、恢复和跨进程行为 | 需要 `TEST_DATABASE_URL` 的 `pnpm ci:integration:finding-research`、`pnpm ci:integration:finding-protocol`、`pnpm ci:integration:platform-api`、`pnpm ci:integration:event-ingestion` 等；CI gate 显式注入测试数据库 |
 | Web 与接口集成 | URL 真相、权限、空态/错误态、刷新和事实投影 | `pnpm ci:unit:web-facts`、`pnpm ci:unit:searchable-selects`、`pnpm ci:integration:report-download` 等；Web 下拉必须通过可搜索选择门禁 |
 | Sandbox / images / smoke | 镜像、OpenSandbox、清理、控制面和真实部署边界 | `pnpm ci:images`、`pnpm ci:smoke:control-api`、`pnpm ci:smoke:hub`、`pnpm ci:unit:runtime-sandbox`；需要真实 Docker、OpenSandbox 或 registry 的测试必须声明前置条件 |
-| 文档与发布门 | 版本字面量、脚本和链接、已删机制、架构文档结构 | `pnpm ci:unit:docs-freshness`；CI 已在 `.github/workflows/ci.yml` 的 gate job 接线 |
+| 文档与发布门 | 版本字面量、脚本和链接、已删机制、架构文档结构 | `pnpm ci:unit:docs-freshness`；CI 已在 `.github/workflows/ci.yml` 的 docs-freshness job 接线 |
 
 单元测试不替代 PostgreSQL 集成，typecheck 不替代行为测试，fake 模式冒烟不替代真实沙箱或多架构镜像证据。`ci:unit:ci-test-hook` 维护 `*.test.ts` 的脚本接线棘轮；它不能证明对应 script 已被 workflow 调用，workflow 仍需人工核对。测试数据库或真实沙箱不可用时保留跳过/未执行事实，不改写为成功。
 
-当前 CI 的 `pull_request` 会运行 gate；合并到 `main` 的 push 对文档路径使用 `paths-ignore`，所以纯文档变更是否触发主干 CI 不能靠经验推断，必要时按发布硬门手动补跑并核对 SHA。
+当前 CI 在单 workflow 内分类 PR：只有新增/修改的明确根目录文档、LICENSE、THIRD_PARTY_NOTICES.md 或 docs 下 Markdown（排除 docs/evidence）可跳过重活；运行时手册、skills、未知路径、混合、删除及重命名都运行全量。文档保鲜与 `pnpm ci:unit:ci-routing` 始终执行，ci-summary 验证分类结果、文档与每个应运行 job，失败、取消或意外跳过不能通过。分类失败/缺失输出不允许走文档路径；push 与 workflow_dispatch 强制 full。
+
+合并到 `main` 的 push 对文档路径使用 `paths-ignore`，所以纯文档变更是否触发主干 CI 不能靠经验推断，必要时按发布硬门手动补跑并核对 SHA。
 
 ## 5. 文档、需求和发布保鲜
 
