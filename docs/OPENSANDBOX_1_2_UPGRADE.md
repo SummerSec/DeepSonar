@@ -41,6 +41,8 @@ Verification baseline: independent sibling worktree `DeepSonar-opensandbox-1.2`,
 - Documentation freshness and file-size gates each passed 10 tests, 0 failed; the former was rerun after fixing a numeric package-manager version mistaken for a script name. Manual review matched affected IR-001/003, source facts, policy and evidence boundaries; no new requirement/ADR or schema change is needed.
 
 
+2026-11-01 first standalone CI failed before SDK/native execution: core run 41240763331 and Reverse run 41240763357 hit a stale static Reverse version oracle (expected historical v0.6.0; main catalog declares published v0.6.2). A separate test-only prerequisite carries the already-existing #831 fix: select the catalog's published platform version, require its canonical immutable digest and retain both-platform/all-channel evidence equality. No catalog, release metadata, runtime or history is rewritten. New exact-head hosted results still require verification.
+
 Historical SDK 1.1 results do not establish SDK 1.2 behavior. This baseline contains no successful new pinned-server parsing, live/native, actual PTY or final standalone CI record. Those results must bind actual checkout SHA, immutable images and unskipped execution logs.
 
 Production/model execution is not authorized by this document. Existing production-execution exemption does not turn unknown effects, non-model gates or missing independent quality inputs into passed acceptance. Historical [ARCHITECTURE](ARCHITECTURE.md), [release-readiness record](RELEASE_READINESS_POST_v0.4.4.md) and [CHANGELOG](../CHANGELOG.md) version facts are preserved.

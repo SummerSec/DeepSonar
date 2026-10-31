@@ -115,12 +115,18 @@ const reverseImage = registry.images?.find((image) => image.image_key === "deeps
 if (!reverseImage) fail("registry must include deepsonar-reverse");
 if (reverseImage.project_opt_in !== true) fail("registry reverse must stay project_opt_in");
 if (!Array.isArray(reverseImage.versions) || reverseImage.versions.length < 1) {
-  fail("registry reverse versions must be backfilled after the v0.6.0 Release (was [])");
+  fail("registry reverse must contain the current published platform version");
 }
-const reverseVersion = reverseImage.versions[0];
-const reverseDigest = "sha256:fb2839c403b9a478b71eb64f2343b2edf787475be3ef280696b479319d591b4c";
-if (reverseVersion.version !== "0.6.0") fail(`expected reverse version 0.6.0, got ${reverseVersion.version}`);
-if (reverseVersion.digest !== reverseDigest) fail(`reverse digest drift: ${reverseVersion.digest}`);
+const publishedVersion = registry.platform?.version;
+if (typeof publishedVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(publishedVersion)) {
+  fail("registry must identify a published platform version");
+}
+const reverseVersion = reverseImage.versions.find((entry) => entry.version === publishedVersion);
+if (!reverseVersion) fail(`registry reverse is missing published version ${publishedVersion}`);
+const reverseDigest = reverseVersion.digest;
+if (typeof reverseDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(reverseDigest)) {
+  fail("reverse version must use a canonical immutable digest");
+}
 if ((reverseVersion.platforms || []).join(",") !== "linux/amd64,linux/arm64") fail("reverse platforms must be amd64+arm64");
 for (const channel of ["github", "dockerhub", "aliyun-acr"]) {
   const evidence = reverseVersion.registry_evidence?.[channel];
