@@ -1,6 +1,6 @@
 # 沙箱 Pi 观测内存：A 片决策记录
 
-> 状态：**原则已定，工程契约待闭合**。7 项设计原则已由用户于 2026-10-31 确认（见 [#815 决策评论](https://github.com/SummerSec/DeepSonar/issues/815#issuecomment-6538810106)）；本文件把这些原则、条件适用项、后续工程实现与启用门禁分开记录，避免把已定项重新当作待定。
+> 状态：**原则已定，核心工程及本地构建镜像 RPC/启动拒绝已有证据；最终 CI 与发布门禁仍未闭合**。7 项设计原则已由用户于 2026-10-31 确认（见 [#815 决策评论](https://github.com/SummerSec/DeepSonar/issues/815#issuecomment-6538810106)）；本文件把这些原则、已验证实现与剩余启用门禁分开记录，避免把局部证据扩张为发布结论。
 > 同步日期：2026-10-31
 
 ## 1. 这份文件解决什么
@@ -23,9 +23,9 @@
 | 6 | 压缩身份 | 沿用 DeepSonar 身份与追踪契约；无法表达时如实标 `unknown`，不伪造已知变换链；暂不扩新 policy |
 | 7 | 模型 | 首版后台**仅使用当前 Job 已冻结模型**，不新增独立模型权限 |
 
-### 原则 3 的实现位置尚未论证
+### 原则 3 的当前实现
 
-宿主在收到 `extension_error` 时会失败，但这**不意味着只能改内核**：受控扩展或适配层可以先捕获预期内的 worker 故障并记录降级。实现放在哪一层需要单独论证。
+wrapper 只对 exact quota 或内核确认未开始的 transient 记录可见降级并交回 native compaction；宿主收到 `extension_error` 仍失败。内核负责 transport 证明与持久结算，已验证边界见 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md)和 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
 
 无论放在哪一层，都必须守住边界：不得因此放宽全部 `error` / `extension_error` 处理，不得吞掉权限违规与协议损坏，也不得把降级记录伪装成成功。
 
@@ -41,15 +41,15 @@
 
 | 项 | 触发条件 | 当前状态 |
 | --- | --- | --- |
-| 有限总额的保底/分配契约与数值 | 仅在管理员显式配置有限总额时 | **未选择任何数值或百分比**；契约缺失时不得启用 OM |
-| 并发占额验收用例（`N=1`、后台先调用等） | 同上 | 未执行 |
-| 独立 workload 归因的具体实现（独立 token / 可信调用上下文） | D 片 | 留待 D 片论证；本记录不授权创建凭据或扩权 |
+| 有限总额的分配契约 | 仅在管理员显式配置有限总额时 | 已实现显式 `total_requests` / `main_requests` / `background_requests`；不推导比例、不自动转移剩余额度 |
+| 并发占额与 unknown/pending 验收 | 同上 | Gateway unit + 真实 SQL/HTTP 及已知请求前 transport/结算、防冒充回归已通过，范围见 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md) |
+| 独立 workload 归因的具体实现（独立 token / 可信调用上下文） | D 片 | `observational_memory` token、workload ledger 与终态撤销已实现；不授权创建凭据或扩权 |
 
 ## 4. 后续工程实现（不阻塞 A 结论，阻塞启用）
 
-- 原则 1 的字段拆分落到 `PiExtensionRegistration`（当前只有 `requires_egress`）。
-- 原则 3 的降级实现与位置论证。
-- 原则 5 的归因机制。
+- 原则 1 的字段拆分已落到 `PiExtensionRegistration` 的 `requires_egress` / `requires_gateway`，并由 wrapper/Gateway 分别校验。
+- 原则 3 的降级实现已限制为 exact quota 或 known-never-started `gateway_transient`；provider 5xx/error prose、pending/unknown、权限和协议错误保持硬失败。
+- 原则 5 的归因机制已落到可信 `observational_memory` token、workload ledger 和终态撤销；本地 built-image 验收已通过，最终组合 CI 与发布证据另行核对。
 
 以上均须在启用前完成，不能以「原则已定」代替实现。
 
@@ -59,7 +59,8 @@
 
 | 层级 | 内容 | 处理 |
 | --- | --- | --- |
-| 可延期（不阻塞进入 B 设计） | rpc 模式实测、`extension_error` 实际触发、守卫到 Job 终态的传播路径、质量收益与成本 | 进入 B 设计不阻塞；**但必须在注册或启用前完成**，在此之前相关结论只能表述为推断 |
+| 已取得工程证据、仍需最终 CI/发布核对 | 实际本地构建镜像的 canonical Pi/OM RPC、独立生产启动守卫正负例；Session preview/download 脱敏、Gateway 预算/ledger | 镜像身份、场景和分母见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)，已发布通道/平台与 registry/catalog 仍另验 |
+| 可延期（不阻塞继续整合） | 质量收益、成本收益、真实模型和生产容量 | 保持 `unknown`；**不得**用本地替身、CI 或静态门禁代替 |
 | 不可豁免（注册前硬门） | canonical 发布物来源、tarball integrity、实际 `entry` 核验 | 无论风险是否延期，注册前必须完成 |
 | 不可豁免（启用前硬门） | 固定宿主兼容、RPC 纯净性、配置隔离、额度与归因、数据出口脱敏 | 无论风险是否延期，启用前必须完成 |
 
@@ -73,6 +74,8 @@ A 的结论需要明确写出，并区分「原则已定」与「工程契约闭
 - ☐ 原则已定，但工程契约未闭合，暂不进入 B
 - ☐ A 否决，停止：不注册、不预装、不启用
 
+当前记录：设计原则已定；核心 wrapper/RPC、Session archive、Gateway 预算及本地构建镜像 RPC/生产启动守卫已有工程证据。本文件不替用户签署 A 正式通过，最终组合 CI 与发布证据仍未完成。
+
 签署：
 
 | 项 | 内容 |
@@ -83,4 +86,4 @@ A 的结论需要明确写出，并区分「原则已定」与「工程契约闭
 
 ## 7. 边界
 
-本文件记录的是产品/设计原则的选择，不是运行时验证通过。canonical 发布物、宿主兼容、配置冻结、RPC、数据多出口脱敏、预算隔离等验收仍须完成；未验证的效果与成本收益保持未验证。A 的工程契约与剩余评审问题仍须明确闭合，不能仅凭本文件宣称插件可启用。
+本文件记录的是产品/设计原则的选择，也回填截至 2026-10-31 的工程验证状态，不授予发布或生产启用权限。canonical 包、配置冻结、RPC、Session 多出口脱敏、Gateway 预算隔离、新 Job 的 OM 专属版本准入及本地镜像内容守卫均已有对应证据；最终组合 CI 与发布证据未完成，质量与成本收益仍为 `unknown`，剩余门禁不能被本文件跳过。

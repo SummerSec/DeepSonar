@@ -9,7 +9,7 @@
 
 DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canvas 保存过程真相，Sandbox/Evidence 保存执行与原始证据，Scheduler 是唯一有副作用的执行者。Artifact 是版本化内部写入真相，Fact 是观察或验证证据，Finding 是可查询风险投影，Report 是冻结输入后的交付投影。下文把 Canvas、Fact、Artifact、Device、shared assets 和 transfer 分别归入独立域，避免把它们混为 Job 或 Finding 的字段。
 
-本文件不把长期 Plan 全量调度、任务/会话级 Pack 生命周期、跨任务经验推荐、全图权威布局或跨进程持久 resume 写成当前能力；这些若作为规范目标，均标为暂缓或未实现。代码事实与规范不一致时保留规范陈述并登记实现违约，不能反向降低规范。
+当前 Plan v2 通过既有 Hub Intent admission 执行有界依赖任务，不建立第二执行通道。任务/会话级 Pack 生命周期、跨任务经验推荐、全图权威布局或跨进程持久 resume 仍不作为当前能力；规范目标与具体未交付项分别登记。代码事实与规范不一致时保留规范陈述并登记实现违约，不能反向降低规范。
 
 ## 2. 功能需求
 
@@ -56,20 +56,20 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 ### FR-TASK-006 版本化任务契约与派发前校验
 
 - **规范要求**：系统必须支持可选版本化任务契约，保留原始需求及采用的模板版本/规范化快照；缺项返回字段级建议，不通过固定标题或字数评定质量。显式契约必须严格校验版本、结构与未知字段；契约只能收窄平台权限，不得自行证明身份、授权或前置条件。派发前必须按当前可信事实复核必要条件，不能沿用创建时的过期通过结果。
-- **决策来源**：#767；减少不同创建者与入口造成的遗漏，同时保留非审计工程任务和自由文本输入。
-- **实现状态**：结构化校验、共享场景模板和派发门禁已接线；已提供契约的 objective/targets/scope/evidence/acceptance 缺项在创建/派发阻塞，其他缺项给具体建议。没有契约时返回未评估提示，这是原有可选契约设计；是否强制迁移须另行决策。没有可信核验器的目标身份、写授权、必需前置条件保持未核验并阻塞依赖链，不自动缩窄任务或声称动态验证已完成。自然语言语义分析、任意资产可达性/基线探测及真实模型质量收益尚无实现/评测证据。
-- **代码入口**：[共享契约](../../packages/shared-types/src/task-contract.ts)、[创建路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
-- **验证证据**：契约规范化、变形输入与安全边界行为测试；人工核对 API/Web/CLI 对同一结构化意图返回一致缺项/阻塞，并核对创建后撤销权限时派发拒绝。实际运行结果见 PR 验收记录，不以字段校验冒充模型效果评测。
+- **决策来源**：#767；[ADR-0011](adr/0011-trusted-target-authorization.md)；保留非审计工程任务和自由文本输入，目标授权只能来自可信只读 authority。
+- **实现状态**：结构化校验、模板和派发门禁已接线；显式契约缺必要字段即阻塞，无契约保持 unassessed。`reference-http/v1` 的 authority 协议按认证 principal、租户/角色/资源、精确动作/前提、内容/契约及 authority revision 判权；无密钥 immutable grant 写系统审计，子/系统 Job 统一继承，provision 前与 rerun 实时重核。缺失或变化 grant 返回不可重试 `target_authorization_grant_invalid`。未知、撤销、超时或不支持的目标均 fail closed；授权读取不执行目标动作。任意目标探测、自然语言语义理解和真实模型质量收益未验证。
+- **代码入口**：[共享契约](../../packages/shared-types/src/task-contract.ts)、[目标授权域](../../apps/scheduler/src/domains/target-authorization/)、[中央快照准入](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)、[创建路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[rerun](../../apps/scheduler/src/domains/job-control/rerun.ts)。
+- **验证证据**：`pnpm ci:unit:task-intent`；[真实 SQL/HTTP 授权链](../../apps/scheduler/src/domains/target-authorization/target-authorization.integration.test.ts)覆盖真实创建/Control/子 Job 与 test-only Worker；撤权、过期、版本/范围漂移、无伪造放行、无部分派生及终态保留见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。定向运行与最终组合 CI 分开记录。
 
 ### FR-TASK-007 通用任务标准与研究候选准入
 
 - **规范要求**：已提供的任务契约必须在创建与派发前检查目标、资产、范围、证据与验收要求的基本完整性，不能通过省略 outcome 或选择 task_defined 绕过。研究候选必须绑定整个冻结契约与判据 Fact 引用；观察须独立保留，unknown/无关观察不计成果。赏金规则只作可选附加筛选，不由严重度或相似文本推导资格。
 - **决策来源**：#767 / #794 通用任务下发主轴；#775 拥有目标版本、证据缺口和整体报告收敛。
-- **实现状态**：首片接通关键字段完整性、整契约摘要、通用判据与赏金附加声明筛选；通过仅为 admitted_for_research，submission_eligibility 保持 not_assessed。至少一项 acceptance 贡献关联不代表全部目标满足。无契约入口按原可选设计保持 unassessed，不以强制迁移为本 issue 必须完成项。报告防误报已接确定性目标投影，不能将技术 confirmed 计为任务达标；来源隔离的普通 Job 判据评审已接宿主分配、自有 Fact/留存字节与冲突失效检查，不认证不同人/模型。攻击链、knownness适用性、资格与整体报告收敛仍有后续范围；真实模型验收不作为交付门槛，效果未验证。
+- **实现状态**：关键字段完整性、整契约摘要、通用判据及赏金附加声明筛选已接线；通过仅为 admitted_for_research，不产生提交资格。至少一项 acceptance 关联不代表全部目标满足，无契约仍 unassessed。确定性报告和来源隔离评审检查宿主分配、自有 Fact、当前 Attempt/留存字节、冲突与失效，不认证不同人/模型。独立程序资格见 FR-FIND-008，Plan v2 完成 authority 见 FR-CAP-006；适用攻击链、knownness 必须有任务所要求的独立依据，不能由已接线工程推定。模型收益未验证。
 - **代码入口**：[研究候选契约](../../packages/shared-types/src/task-outcome.ts)、[Finding 入口](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts)、[Artifact](../../apps/scheduler/src/domains/artifacts/model.ts)、[首片边界](../TASK_OUTCOME_ADMISSION.md)。
 - **验证证据**：通用完整性、outcome 不绕过、整契约版本、判据与 Fact/Artifact 来源、依据保存及冻结压缩传播行为测试；实际运行结果见 PR，不以研究候选计目标完成。
 
-非 Finding 交付与执行观察的实现边界见[任务执行结果评审](../TASK_RESULT_REVIEW.md)：通过既有 Fact Artifact 表达 delivery/negative_result/blocked/not_executed，声明种类与判据满足分离；工程任务不得被迫生成漏洞 Finding，阻塞和未执行不计成果。该扩展已接严格声明、恰好一个 Finding/Fact subject 的评审请求、宿主来源绑定和报告投影；失败 Job 的声明仍可显示缺口，不贡献正向成果。来源/评审/报告共享 8MiB 证据预算，超限 fail closed；实际验收见 PR，不自动改变 #775 的完成 authority。
+非 Finding 交付与执行观察的实现边界见[任务执行结果评审](../TASK_RESULT_REVIEW.md)：通过既有 Fact Artifact 表达 delivery/negative_result/blocked/not_executed，声明种类与判据满足分离；工程任务不得被迫生成漏洞 Finding，阻塞和未执行不计成果。该扩展已接严格声明、恰好一个 Finding/Fact subject 的评审请求、宿主来源绑定和报告投影；失败 Job 的声明仍可显示缺口，不贡献正向成果。来源/评审/报告共享[证据预算](../../apps/scheduler/src/domains/plan-protocol/criterion-evidence.ts)，超限 fail closed；实际验收见 PR，不自动改变 #775 的完成 authority。
 
 ### FR-HUB-001 Scheduler 派生 Hub Job
 
@@ -83,7 +83,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Hub 只能提出工作角色 Intent（角色、能力、prompt、引用、预算和可选运行时镜像）；权限、引用合法性、预算、镜像与能力 admission 必须由 Scheduler 判定。模型不得通过 Intent 扩大 `platform_tools`、凭据、镜像、`allow_egress` 或项目范围。
 - **决策来源**：模型输出是提案，Job scope、快照和内核准入必须由 Scheduler 拥有。
-- **实现状态**：as-built；Intent 进入事件摄入与各 admission 路径重新校验，越权字段拒绝。
+- **实现状态**：as-built；普通 Intent 与 Plan v2 可执行任务共用 admission，重新校验引用、能力、镜像及目标 grant，越权字段拒绝。2026-10-31 terminal bootstrap fixture 观测到首个 Hub `submit_hub_decision` 的 v2 提案只从 HTTP Control API 构建并恰好接收一个 Worker；这是该 fixture 的验证形态，不是所有 Plan 的平台 worker cardinality 上限。终态后 Hub/Report 准入在 savepoint 中拒绝时暂停 Canvas，不回滚前驱终态或保留部分 Job。
 - **代码入口**：[事件摄入副作用](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts)、[能力准入](../../apps/scheduler/src/domains/capability-pack/)、[镜像边界](../../apps/scheduler/src/domains/role-runtime-snapshot/runtime-image-boundary-policy.ts)、[Control operation registry](../../apps/scheduler/src/domains/platform-api/operations.ts)。
 - **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:platform-api`；人工提交扩大工具、凭据、镜像、出网或项目范围的 Intent 并核对拒绝。
 
@@ -91,7 +91,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Hub 只能引用当前画布已投影的 canonical UUID；Finding 绑定必须使用数据库 Finding UUID。字段名、别名、跨画布 ID 和占位符必须拒绝。
 - **决策来源**：引用集是提案可审计的边界，不能让模型凭标题或猜测 ID 改写事实。
-- **实现状态**：as-built；compose scope 和 `referable_ids` 校验会拒绝跨 Canvas/非 canonical 引用。
+- **实现状态**：as-built；compose scope 和 `referable_ids` 拒绝跨 Canvas/非 canonical 引用。Plan v2 还核对来源预算、依赖无环，以及前驱成功 Attempt、Artifact/语义事件/留存字节与期望输出关联，不能以名称或模型自报满足依赖。
 - **代码入口**：[图与引用校验](../../apps/scheduler/src/graph.ts)、[Hub Intent 校验](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[任务编排作用域断言](../../apps/scheduler/src/task-compose.ts)。
 - **验证证据**：`pnpm ci:unit:graph-references`、`pnpm ci:integration:graph-references`、`pnpm ci:integration:task-intent`；人工提交别名、占位符和跨画布 UUID。
 
@@ -107,7 +107,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Hub 必须在角色 Job 终态后按事件触发下一轮或 Report；Verify 等待证据时必须按证据签名/门禁指纹唤醒，重复无进展达到配置上限时必须记录停止原因并可请求人工，不得静默空转。
 - **决策来源**：事件驱动避免定时轮询，证据未变化时需要明确阻塞而不是无限派发。
-- **实现状态**：as-built；`maxNoProgressRounds` 默认 2，正向预算和暂停原因均持久化。
+- **实现状态**：as-built；无进展上限见[配置](../../apps/scheduler/src/config.ts)，预算和暂停原因均持久化。
 - **代码入口**：[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Hub 策略](../../apps/scheduler/src/domains/hub-orchestration/policy.ts)、[配置](../../apps/scheduler/src/config.ts)。
 - **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:smoke:convergence`。
 
@@ -115,7 +115,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Hub 提交每个 Intent 时必须提供非空、自包含 prompt 和合法引用；首次决策不得在没有执行证据时直接宣称完成，完成、继续、阻塞和请求人工必须走结构化决策。
 - **决策来源**：模型输出是提案，平台需要可审计的意图和可执行输入，不能把自然语言结论当终态。
-- **实现状态**：as-built；`submit_hub_decision` 和 Intent schema 在 Scheduler 端拒绝缺 prompt/非法引用。显式 Plan 的可选 plan_basis 首片绑定当前版本和来源，一次补证后必须停止或基于全判据正向操作员授权完成；不替代语义评测。
+- **实现状态**：as-built；`submit_hub_decision` 和 Intent schema 拒绝缺 prompt/非法引用。当前 Plan v2 把路线绑定用户 objective/revision、当前输入与 lifetime 预算，允许有界多轮重规划；结果声明、Job 成功与输出关联均不能代替全判据当前正向操作员评价、有效来源及完整读取。v1 仅供历史读取，普通 Hub 不再写新的 v1 `hub_intent_adapter` audit。
 - **代码入口**：[Control 输入](../../apps/scheduler/src/control-input.ts)、[Hub application](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[任务契约测试](../../apps/scheduler/src/task-intent.contract.test.ts)。
 - **验证证据**：`pnpm ci:unit:plan-protocol`、`pnpm ci:integration:plan-protocol`；`pnpm ci:unit:bounded-contexts`、`pnpm ci:smoke:hub`；人工提交空 prompt 或无证据 complete 应得到稳定错误。
 
@@ -153,9 +153,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-009 创建时冻结执行快照
 
-- **规范要求**：系统必须在 Job 创建时冻结 CLI、Provider/model、运行时镜像 digest、工具/能力、Finding protocol、网络策略、设备需求和 runtime knobs；Dispatcher 运行时不得回读最新 RoleConfig 代替快照。
+- **规范要求**：系统必须在 Job 创建时冻结 CLI、Provider/model、运行时镜像 digest、工具/能力、Finding protocol、网络策略、设备需求和 runtime knobs；适用的目标 grant 与可选记忆策略也须冻结。Dispatcher 不得回读最新 RoleConfig 代替快照，实时撤权检查只能收紧冻结权限。
 - **决策来源**：执行结果要能按当时的权限、镜像和配置重放审计。
-- **实现状态**：as-built；快照身份和 schema 版本进入 `agent_snapshot_json`。
+- **实现状态**：as-built；快照身份和 schema 版本进入 `agent_snapshot_json`；目标 grant 只从 Scheduler 的可信输入或系统审计继承，调用方同名字段不会成为 authority。Pi 观测记忆的独立实现与未验收范围见 FR-CAP-009。
 - **代码入口**：[运行时快照应用](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[Provider freeze](../../apps/scheduler/src/domains/provider-adapter/freeze.ts)、[Agent profile](../../apps/scheduler/src/agent-runtime-profile.ts)。
 - **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:credential-compatibility`；人工在创建后修改角色并核对执行输入不变。
 
@@ -163,7 +163,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Scheduler 必须在持久化 claim、全局/项目并发和 lease 约束内领取 Job；Lease 续期必须绑定有效 Job/Attempt，过期或迟到回调不得重新取得执行权。
 - **决策来源**：多 Scheduler 副本、重试和迟到网络回调不能造成双执行或跨项目资源占用。
-- **实现状态**：as-built；claim 使用持久状态和锁，Lease TTL 默认 120 秒。
+- **实现状态**：as-built；claim 使用持久状态和锁，Lease TTL 以[配置](../../apps/scheduler/src/config.ts)为准。
 - **代码入口**：[Dispatch 控制](../../apps/scheduler/src/task-execution-control.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[全局设置](../../apps/scheduler/src/config.ts)。
 - **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:integration:dispatch-limits`；人工并发抢同一 Job 并核对最多一个 Attempt。
 
@@ -203,9 +203,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与 `waiting_human` 超时，不得信任 Agent 自报；取消、超时、迟到回调、容器创建与销毁必须走幂等路径，不得 resurrect 终态 Job。
 - **决策来源**：运维判定和外部清理是平台责任，迟到回调不能重新取得执行权。
-- **实现状态**：as-built；Reaper 和状态条件更新复用 Job/Attempt effect identity。
-- **代码入口**：[Dispatcher/Reaper](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[配置](../../apps/scheduler/src/config.ts)。
-- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-reaper`；人工重复取消/迟到回调核对稳定结果。
+- **实现状态**：as-built；Reaper 和状态条件更新复用 Job/Attempt effect identity。终态 model token 与 Control token 撤销在同一 Job 终态事务内完成，不另取 Job lock，也不吞掉撤销异常；回滚夹具保持 Job/model token/Control token/audit 原子性，终态后的真实 HTTP 请求返回 401。
+- **代码入口**：[Dispatcher/Reaper](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[token revocation](../../apps/scheduler/src/gateway-token-revocation.ts)、[配置](../../apps/scheduler/src/config.ts)。
+- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-reaper`；`terminal-bootstrap-regression.log` 记录 12 pass/0 skip，覆盖 bootstrap、ordinary Hub 无 v1 audit、依赖执行和 terminal rollback；人工重复取消/迟到回调核对稳定结果。
 
 ### FR-JOB-014 重试创建新 Attempt
 
@@ -219,7 +219,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：对支持覆盖的 runtime knobs，解析顺序必须为 Job > role/project > platform > env，最终值必须冻结到 Job；普通请求次数未配置或显式 0 时不限，显式正数才限制；非法 bootstrap 额度拒绝启动。完整用量分类见[用量限制](../USAGE_LIMITS.md)。role/project 只能在平台上限内收紧，env 仅作引导回退，`provisionTimeoutSec` 目前只接受 platform/env；未知或非法字段必须 fail closed。
 - **决策来源**：配置覆盖是权限和资源边界，运行时隐式回退会绕过审计。
-- **实现状态**：as-built；支持的 timeout 合法范围为 60–172800 秒，Job 创建另有 1–172800 秒边界；非所有 knobs 都支持 Job/role/project 覆盖。
+- **实现状态**：as-built；合法范围与覆盖能力见[runtime knobs](../../apps/scheduler/src/runtime-knobs.ts)及[快照限制](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)，并非所有 knobs 都支持 Job/role/project 覆盖。观测记忆在有限 Job 总额下必须显式分配总/主/后台额度，不能按比例猜测或省略分配后放行；冻结总额不限时保持不限，可选后台 cap 只收紧。
 - **代码入口**：[runtime knobs](../../apps/scheduler/src/runtime-knobs.ts)、[runtime knob tests](../../apps/scheduler/src/runtime-knobs.test.ts)、[sandbox limits](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)。
 - **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:bounded-contexts`；人工提交未知字段、超过平台上限和 `provisionTimeoutSec` 的非法低层覆盖。
 
@@ -352,11 +352,19 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-CAP-006 Plan 协议的当前边界
 
-- **规范要求**：系统若接收 Plan/PlanResult，必须版本化保存并校验 goal、任务、依赖、完成策略和预算；在尚未实现 Plan 驱动 Worker 派发前不得把 PlanResult 当作替代 Hub 收敛或 Job 终态。
-- **决策来源**：长期协议可以被发现和记录，但不能与当前生产主路径混淆。
-- **实现状态**：进行中；代码记录 Phase 1 Plan/Result，当前不会从该 operation 派发 Worker 或改变 Hub convergence。既有 Intent 的一次补证执行状态可按持久来源只读投影，不把生命周期成功当作目标判据满足。
-- **代码入口**：[Plan protocol](../../apps/scheduler/src/domains/plan-protocol/application.ts)、[Plan tests](../../apps/scheduler/src/plan-protocol.test.ts)、[设计边界](../../DESIGN.md)。
-- **验证证据**：`pnpm ci:unit:plan-protocol`、`pnpm ci:integration:plan-protocol`；人工核对 PlanResult 不绕过 Hub/Job 状态机。
+- **规范要求**：新执行只接收当前 Plan v2，v1 不可变历史只读。授权用户以 CAS 定义 objective、完成策略与有限 lifetime 预算；模型路线必须绑定当前版本，不得改变用户目标或重置计数。依赖任务必须复用现有 Hub Intent admission 与 Job/Attempt/effect，先核对实际成功 Attempt、来源及留存输出。PlanResult 和输出关联不得取得语义完成 authority。
+- **决策来源**：#775；[ADR-0012](adr/0012-plan-v2-execution.md)；模型提案与内核执行、操作员完成判据分责。
+- **实现状态**：v2 objective CAS、多轮路线、累计预算、依赖/输出校验、停止原因及持久接纳回执已接线；执行投影的 complete/completed 只表达工程路线输出条件，任务完成仍要求完整当前正向操作员判据和来源读取。输出关联不证明语义。2026-10-31 已物理删除 `applyHubPlanAdapter`、`persistPlanAudit`、side-effect writer 及纯 legacy adapt helpers/types/exports；普通 HubIntent 仍走原 handler，不制造新的 v1 `plan_protocol` 或 audit，immutable v1（含 `hub_intent_adapter`）仅供历史读取。根本地 replay 已完成 normal→all7negative→normal 三次退出 0，当前 v2 单一 SQL/HTTP fixture 的 17 个 outcomes/traces 匹配，七个注入故障均按预期使 gate 失败；`artifacts/plan-replay/report.json` 虽为 passed=true，但 provenance 为 dirty 的其他 commit，不能作为 `5619154f` 精确 SHA 验收，最终组合 CI 仍待验，模型收益 unknown。
+- **代码入口**：[共享 Plan 契约](../../packages/shared-types/src/plan.ts)、[objective](../../apps/scheduler/src/domains/plan-protocol/objective.ts)、[执行](../../apps/scheduler/src/domains/plan-protocol/execution.ts)、[输出关联](../../apps/scheduler/src/domains/plan-protocol/execution-output.ts)、[完成判据](../../apps/scheduler/src/domains/plan-protocol/decision.ts)、[历史 audit reader/test](../../apps/scheduler/src/plan-protocol.test.ts)、[回放夹具](../../agent-harness/plan-replay/README.md)。
+- **验证证据**：`pnpm ci:unit:plan-protocol`、`pnpm ci:integration:plan-protocol`；覆盖 objective/route CAS、累计预算不重置、依赖/实际字节/输出关联、未知效果、终止及 v1 新写入拒绝；根本地 replay/negative logs 与上述范围一致，但最终 combined CI 未执行。
+
+### FR-CAP-009 受治理 Pi 会话观测记忆
+
+- **规范要求**：可选观测记忆必须按准入插件及冻结 Job/当前 Session 隔离，仅经 Gateway 使用冻结模型和内核签发的独立 workload 凭据。有限总额必须显式分配 total/main/background，不能按比例或隐含预留推导；pending/unknown 记账、终态撤销和脱敏由内核控制。记忆仅是上下文，不能成为 Fact/Evidence 或语义完成 authority；协议、权限和未知效果不得静默降级。
+- **决策来源**：#815 已确认原则；[ADR-0013](adr/0013-governed-pi-memory.md)。
+- **实现状态**：注册/冻结配置、独立 Gateway workload/额度/usage ledger、私有 wrapper、RPC/历史 Session 脱敏已进入根工作树；默认 opt-in，有限总额须显式分配。新 Job 按选定镜像版本执行 OM 专属下限，缺失/非法/旧 metadata 拒绝；生产启动守卫独立检查 installed package/entry/wrapper。本地实际构建 base 镜像的内容预检、canonical Pi/OM RPC、缺包/缺 wrapper Docker 拒绝及适配器回归均已通过，集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。内核已知请求前 transport、持久零用量结算及 provider 防冒充也已通过，见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。最终组合 CI 与发布通道/平台、registry/catalog 证据未完成，质量/成本收益 unknown。
+- **代码入口**：[共享注册与配置](../../packages/shared-types/src/pi-extensions.ts)、[预算策略](../../apps/scheduler/src/gateway-om-budget.ts)、[Gateway](../../apps/scheduler/src/gateway.ts)、[受审 wrapper](../../agent-harness/pi-observational-memory-governed.ts)、[脱敏边界](../../packages/runtime-sandbox/src/pi-observational-memory.ts)；细则见[集成](../PI_OBSERVATIONAL_MEMORY_INTEGRATION.md)、[Gateway](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)和 [RPC](../PI_OBSERVATIONAL_MEMORY_RPC.md)。
+- **验证证据**：镜像身份、真实 RPC 场景、独立生产 guard Docker 正负例与版本/适配器回归见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；Gateway/Session 定向证据及其他根套件见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。本地 base 验收不替代 `pnpm ci:images` 的全镜像/平台结果及最终组合 CI。503 仅在内核证明未启动且零用量/effect `never_started` 持久结算后返回，请求次数不退还；settlement 失败及 ledger `unknown`/`pending` 保持 409 硬失败，Provider JSON/SSE/refusal 文案不构成 authority。
 
 ### FR-KNOW-001 项目知识的受治理生命周期
 
@@ -386,7 +394,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Canvas 查询必须按 Job scope、脱敏规则、单次查询硬上限及显式配置的累计调用/字节额度返回有界结果；每次结果必须标记截断/省略和 `referable_ids`，不得提供任意 `canvas_id`/`project_id` 越权查询。
 - **决策来源**：上下文按需读取降低泄露和上下文失控风险，引用集是提交决策的可验证边界。
-- **实现状态**：as-built；每 Job 累计调用次数与累计字节额度默认不限；对应配置为 0 时不限、正整数时限制。返回 budget 的 null 表示无限；计数和审计仍保留，单类查询 hard cap 不变。完整响应另有不可配置的 512000 UTF-8 bytes 硬上限（含引用及元数据）；超限返回 `graph_query_response_too_large`，不写入计数、已见引用或 Plan 读取证明。证据仅返回预览时，不授权被截断的 Fact 引用。
+- **实现状态**：as-built；累计额度及无限语义见[用量限制](../USAGE_LIMITS.md)，计数和审计仍保留。完整响应另有源码硬上限（含引用及元数据），超限返回 `graph_query_response_too_large`，不写入计数、已见引用或 Plan 读取证明。证据仅返回预览时，不授权被截断的 Fact 引用。
 - **代码入口**：[Graph Query](../../apps/scheduler/src/graph-query.ts)、[shared graph schemas](../../packages/shared-types/src/index.ts)、[Graph budget tests](../../apps/scheduler/src/graph-budget.test.ts)。
 - **验证证据**：`pnpm ci:unit:graph-references`、`pnpm ci:integration:graph-references`。
 
@@ -546,7 +554,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Verify 必须将通过、否定、冲突、证据不足、不可判定和需人工映射为明确终态/缺项；否定 evidence 只能在完整结构化证据和成功来源 Job 下进入 refuted，冲突进入 inconclusive，不得用 needs_human 混淆。
 - **决策来源**：终态决定 Hub、Report 和人工动作，错误映射会产生虚假确认或无限循环。
-- **实现状态**：as-built；无进展默认护栏来自 `DEEPSONAR_MAX_NO_PROGRESS_ROUNDS` 默认 2。
+- **实现状态**：as-built；无进展护栏与默认值见[配置](../../apps/scheduler/src/config.ts)中的 `DEEPSONAR_MAX_NO_PROGRESS_ROUNDS`。
 - **代码入口**：[Fact-first follow-up](../../apps/scheduler/src/verify-fact-gate.ts)、[Finding state matrix](../../apps/scheduler/src/finding-state-matrix.ts)、[Verify terminal](../../apps/scheduler/src/verify-terminal.ts)。
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:convergence-recovery`。
 
@@ -554,7 +562,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Research 必须以有界批次产生 canonical anchor、dedupe cluster、重复理由和保留全部来源 Finding 的映射；不得删除候选或修改 Finding 的 verify_status、severity、disposition。
 - **决策来源**：研究排序辅助注意力，不能成为技术验证或人工处置的隐式写入者。
-- **实现状态**：as-built；批次默认 8、最多 8 批，研究失败只记录 run。
+- **实现状态**：as-built；批次与累计上限见[研究策略](../../apps/scheduler/src/domains/finding-research/policy.ts)，研究失败只记录 run。
 - **代码入口**：[Research policy](../../apps/scheduler/src/domains/finding-research/policy.ts)、[Research application](../../apps/scheduler/src/domains/finding-research/application.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`。
 
@@ -632,9 +640,9 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：Hub 只能从本轮实时可用目录选择 image_key；Scheduler 必须检查 project 可见性、CLI 兼容性、trusted version 和平台，随后冻结 digest；Dispatcher 只能 inspect 冻结 ref，不得执行期回读目录或拉取任意 tag。
 - **决策来源**：选择和执行之间不能产生供应链漂移，Job 历史必须追溯到当时 digest。
-- **实现状态**：as-built；项目只能收紧可见集合，Job snapshot 不改写。
-- **代码入口**：[Hub image capability](../../apps/scheduler/src/hub-runtime-image-capability.ts)、[image boundary policy](../../apps/scheduler/src/domains/role-runtime-snapshot/runtime-image-boundary-policy.ts)、[OpenAPI](../../apps/scheduler/src/openapi.ts)。
-- **验证证据**：`pnpm ci:unit:runtime-images`、`pnpm ci:integration:hub-runtime-image`、`pnpm ci:unit:bounded-contexts`。
+- **实现状态**：目录与快照边界已实现，项目只能收紧可见集合。OM 按 shared registry 的专属下限校验 Scheduler 选定的 `runtimeImage.image_version`，缺失/非法/旧 metadata fail closed；历史冻结字节不变。实际本地 base 镜像的内容/RPC 与缺包/缺 wrapper 生产 guard 拒绝已验证，详见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。v0.6.2 镜像不含 OM；本地 image ID 不证明发布 manifest/catalog digest 或其他平台已验收。
+- **代码入口**：[Hub image capability](../../apps/scheduler/src/hub-runtime-image-capability.ts)、[image boundary policy](../../apps/scheduler/src/domains/role-runtime-snapshot/runtime-image-boundary-policy.ts)、[OM 版本准入](../../apps/scheduler/src/pi-extensions.ts)、[生产内容守卫](../../packages/runtime-sandbox/src/pi-memory-image-guard.ts)、[OpenAPI](../../apps/scheduler/src/openapi.ts)。
+- **验证证据**：`pnpm ci:unit:runtime-images`、`pnpm ci:integration:hub-runtime-image`、`pnpm ci:unit:bounded-contexts` 是既有入口；OM 专属准入与实际 Docker 证据见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)，最终组合 CI 与发布镜像证据仍另验。
 
 ### FR-IMG-004 镜像拉取账本和回收
 
@@ -664,7 +672,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：真实模型请求必须经 Scheduler-owned Model Gateway/受控 proxy，Job 只持短期 token；Gateway 必须按 Job deadline、allowed_models、请求/Token 额度和脱敏规则转发，不得把长期 Provider key 注入 Sandbox。
 - **决策来源**：模型请求是外部副作用和计费边界，统一出口才能限额、审计和撤销。
-- **实现状态**：as-built；用量写入追加式 `job_usage_ledger`，不保存 prompt/completion/headers。
+- **实现状态**：as-built；用量写 `job_usage_ledger`，不保存 prompt/completion/headers。已接入 `main` 与 `observational_memory` 的内核签发 token 身份，后台只能访问冻结的 provider/model/route；总用量与 memory 归因分开，质量/任务单位成本不把后台调用冒充主执行效果。终态撤销和 Job 状态更新共用同一终态事务，未知/待结算用量不被吞掉。
 - **代码入口**：[Gateway](../../apps/scheduler/src/gateway.ts)、[Gateway guard](../../apps/scheduler/src/domains/provider-adapter/gateway-guard.ts)、[Gateway tests](../../apps/scheduler/src/gateway-usage.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`。
 
@@ -672,9 +680,9 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：Job Gateway token 和 Control capability token 必须具有独立身份、有效期、请求/Token额度和撤销原因；Job 进入任何终态后必须撤销，不得跨 Job 复用。
 - **决策来源**：不同调用面需要不同最小权限，终态后继续访问会形成迟到写入和费用泄露。
-- **实现状态**：as-built；`job_tokens` 与 `job_capability_tokens` 分表维护。
-- **代码入口**：[Gateway token lifecycle](../../apps/scheduler/src/gateway.ts)、[platform token store](../../apps/scheduler/src/domains/platform-api/tokens.ts)、[schema](../../database/schema.sql)。
-- **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:capability-pack`、`pnpm ci:unit:job-lifecycle`。
+- **实现状态**：as-built；`job_tokens` 与 `job_capability_tokens` 分表维护，Gateway token 以 workload 区分主执行/观测记忆。有限总额跨轮换/撤销 token 聚合，后台 pending/unknown 保守阻断，所有 Job 终态撤销两类 workload token；已有用量与未知效果不因撤销被抹去。终态 model token、Control token、Job 状态和 audit 在同一事务中提交，不另取 Job lock，也不以 best-effort 吞异常。
+- **代码入口**：[Gateway token lifecycle](../../apps/scheduler/src/gateway.ts)、[token revocation transaction](../../apps/scheduler/src/gateway-token-revocation.ts)、[platform token store](../../apps/scheduler/src/domains/platform-api/tokens.ts)、[schema](../../database/schema.sql)。
+- **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:capability-pack`、`pnpm ci:unit:job-lifecycle`；terminal bootstrap/revocation fixture 12 pass/0 skip，回滚与终态后的实际 HTTP 401 已核验。
 
 ### FR-CRED-005 Agent CLI 适配器边界
 
@@ -810,7 +818,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：日志、events、audit_logs、Evidence 和 usage ledger 不得保存 Authorization/Cookie/Provider key/Job token 或完整 prompt/completion；可见错误只能返回脱敏摘要和形状。
 - **决策来源**：审计可见性不能以复制长期秘密和客户源码为代价。
-- **实现状态**：as-built；audit_logs append-only，Gateway usage 只保存计费维度和受控计数。
+- **实现状态**：audit_logs append-only，Gateway usage 只保存计费/workload 维度和受控计数。OM wrapper、新导出/RPC 副本及历史 Session HTTP preview/download 均在截断或发送前按 Pi header/manifest 结构脱敏；immutable archive metadata 保持不变，projection bytes/SHA/ContentDigest 单独报告。历史 HTTP 出口已有定向集成证据，本地实际镜像 RPC 与生产内容守卫另有直接证据，集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md)；不推导质量或成本收益。
 - **代码入口**：[schema audit comment/trigger](../../database/schema.sql)、[evidence redaction](../../apps/scheduler/src/evidence.ts)、[gateway ledger](../../apps/scheduler/src/gateway.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:authz`、`pnpm ci:unit:credential-compatibility`；人工抽查日志与 evidence。
 
@@ -818,7 +826,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：第三方镜像及需要物化为执行模块的二进制必须经过可信源、digest、扫描、签名/SBOM/工具契约和管理员提升后才能进入 Job；Skill 源按独立的 trusted/enabled/content-hash 规则治理；撤销/禁用必须阻止新 Job，历史快照保留引用用于审计。
 - **决策来源**：执行环境和 Skill 本身可携带供应链风险。
-- **实现状态**：部分达标；目录状态和 Job digest 冻结已落地，签名策略可配置且官方 catalog 可能记录 `signature: skipped`，这不等于已验证；Skill 源治理不等同于镜像签名/SBOM，真实 registry 证据需部署验收。
+- **实现状态**：部分达标；目录状态和 Job digest 冻结已落地，签名策略可配置且官方 catalog 可能记录 `signature: skipped`，这不等于已验证。OM 的 canonical 包/lock/manifest/wrapper 预检、专属版本准入与独立生产内容守卫已有本地镜像及定向回归证据，见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；发布通道/平台与 registry/catalog 仍另验，Skill 源治理不等同于镜像签名/SBOM。
 - **代码入口**：[runtime registry contract](../../apps/scheduler/src/runtime-image-registry-contract.ts)、[image admission](../../apps/image-admission/src)、[skill source policy](../../apps/scheduler/src/domains/project-skill-allowlist/policy.ts)。
 - **验证证据**：`pnpm ci:unit:image-admission`、`pnpm ci:unit:runtime-registry`、`pnpm ci:unit:startup-gate`。
 
@@ -843,7 +851,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 - **规范要求**：调度必须主要依赖 `pg_notify('deepsonar_jobs')` 唤醒，兜底轮询默认关闭；Lease 由 Scheduler 续期与判定，不得信任 Agent 自报存活。
 - **决策来源**：实时唤醒减少无界轮询，Lease 判定必须由平台掌握。
 - **实现状态**：as-built；notify/lease 路径已接线，默认值不等于可用性或恢复时间目标。
-- **代码入口**：[Scheduler 配置](../../apps/scheduler/src/config.ts)（`LEASE_TTL_SEC` 默认 120、`DEEPSONAR_DISPATCH_POLL_SEC` 默认 0）、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)。
+- **代码入口**：[Scheduler 配置](../../apps/scheduler/src/config.ts)（`LEASE_TTL_SEC`、`DEEPSONAR_DISPATCH_POLL_SEC`）、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)。
 - **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`；人工核对无 notify 时仅使用显式轮询配置。
 
 ### NFR-REL-006 写操作幂等与去重
@@ -856,7 +864,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 ### NFR-REL-002 运行时机制默认值
 
-- **规范要求**：机制参数默认值必须与配置源码一致，且仅作为运维预期，不得写成可用性 SLO：`DEFAULT_AUDIT_TIMEOUT_SEC=18000`、`DEFAULT_VERIFY_TIMEOUT_SEC=10800`、`PROVISION_TIMEOUT_SEC=300`、`LEASE_TTL_SEC=120`、`REAPER_INTERVAL_SEC=30`、`DEEPSONAR_JOB_STALL_SEC=900`（0 关闭）、`DEEPSONAR_WAITING_HUMAN_TIMEOUT_SEC=1800`（0 关闭）。端到端恢复时间、吞吐量和可用性目标未定义/尚未验证。
+- **规范要求**：机制参数及默认值以[配置源码](../../apps/scheduler/src/config.ts)为唯一数值入口，覆盖 audit/verify/provision、Lease、Reaper、stall 和 waiting_human；文档只记录含义与核对方式，不复制可变默认值。参数存在只证明护栏，不能代替可用性 SLO；端到端恢复、吞吐与可用性目标未定义/尚未验证。
 - **决策来源**：源码参数是机制边界，不能替代场景化质量证据。
 - **实现状态**：as-built（参数存在）；质量达标证据尚未验证。
 - **代码入口**：[Scheduler config](../../apps/scheduler/src/config.ts)、[stall policy](../../apps/scheduler/src/domains/job-lifecycle/stall-policy.ts)。
@@ -912,7 +920,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 ### NFR-PERF-002 Control 事件窗口预算
 
-- **规范要求**：语义事件必须使用固定窗口和独立桶计数；默认窗口为 60 秒，progress/standard/terminal 默认上限为 30/120/8，配置值必须经源码边界归一化，不得用吞吐猜测替代配置。
+- **规范要求**：语义事件必须使用固定窗口和 progress/standard/terminal 独立桶计数；窗口与默认上限以[配置](../../apps/scheduler/src/config.ts)及[限流策略](../../apps/scheduler/src/domains/event-ingestion/rate-limit.ts)为准，配置值必须经源码边界归一化，不得用吞吐猜测替代配置。
 - **决策来源**：终态/人工事件需要为进度噪声保留预算。
 - **实现状态**：as-built；预算超限返回 retry metadata 且重放不重复占用。
 - **代码入口**：[event rate policy](../../apps/scheduler/src/domains/event-ingestion/rate-limit.ts)、[rate limit schema](../../database/schema.sql)、[rate tests](../../apps/scheduler/src/domains/event-ingestion/rate-limit.test.ts)。
@@ -920,7 +928,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 ### NFR-PERF-003 Sandbox 资源边界
 
-- **规范要求**：Sandbox resource override 必须不超过平台 ceiling；CPU、memoryMiB、pidsLimit 的解析边界必须分别为 0.25–64、256–131072、64–32768，当前 server fallback 为 2 CPU/2048 MiB/512 pids，并启用 capDropAll/noNewPrivileges。
+- **规范要求**：Sandbox resource override 必须不超过平台 ceiling；CPU、memoryMiB、pidsLimit 的合法范围与 server 缺省见[快照限制](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)，并启用 capDropAll/noNewPrivileges。
 - **决策来源**：资源预算和进程隔离是多租户可靠性与安全的共同边界。
 - **实现状态**：as-built；项目只能收紧平台值，未知字段拒绝。
 - **代码入口**：[sandbox limits](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)、[sandbox tests](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.test.ts)、[runtime sandbox](../../packages/runtime-sandbox/src)。
@@ -928,7 +936,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 ### NFR-PERF-004 Gateway/Evidence 有界传输
 
-- **规范要求**：Gateway 请求体和重试、Evidence 流读取/解压/记录/保留必须遵守源码硬上限；Gateway body limit 必须为 16 MiB、最多 3 次尝试、重试延迟上限 2 秒，Evidence 预算超限必须截断并标记，不得无界缓冲。
+- **规范要求**：Gateway 请求体、尝试次数与重试延迟必须遵守[Gateway 源码上限](../../apps/scheduler/src/gateway.ts)；Evidence 流读取/解压/记录/保留按[证据实现](../../apps/scheduler/src/evidence.ts)有界，超限必须截断并标记，不得无界缓冲。
 - **决策来源**：上游和压缩流都可能提供恶意大输入，边界必须在 host 侧执行。
 - **实现状态**：as-built；无独立 SLA，只有上述代码/配置边界。
 - **代码入口**：[Gateway constants](../../apps/scheduler/src/gateway.ts)、[Evidence limits](../../apps/scheduler/src/evidence.ts)、[stream tests](../../apps/scheduler/src/evidence-stream.test.ts)。
@@ -978,9 +986,9 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：新增治理 CLI 必须同时提供 runtime adapter、session archive adapter、Web viewer parser、契约测试和原始归档下载；不完整接入不得作为新 Job 默认值。
 - **决策来源**：只接通启动而没有归档/查看会丢失执行真相。
-- **实现状态**：as-built（当前治理 CLI）；历史归档只读路径不扩展新运行时。
+- **实现状态**：当前治理 CLI 的 adapter/archive/viewer 已接线，历史只读不扩展新运行时。可选 OM 的 wrapper/RPC 和历史 HTTP preview/download 脱敏已核验；本地实际构建镜像的已安装 canonical Pi/OM RPC、生产内容守卫正负例与适配器回归也已通过。最终组合 CI、其他镜像/平台和发布 registry/catalog 证据仍另验；场景、身份与分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
 - **代码入口**：[CLI adapter docs](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[runtime adapters](../../packages/runtime-sandbox/src)、[session viewer](../../apps/web/src/session-viewer)。
-- **验证证据**：`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:web-session-viewer`、`pnpm ci:unit:credential-compatibility`。
+- **验证证据**：`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:web-session-viewer`、`pnpm ci:unit:credential-compatibility` 是既有入口；Session 集成、实际镜像 RPC/guard 与适配器回归见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md)，当前根套件及最终组合 CI 边界见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
 
 ### NFR-OPS-001 健康、就绪与调度门禁
 
@@ -992,7 +1000,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 ### NFR-OPS-002 Reaper 与运行时超时配置
 
-- **规范要求**：Reaper、Lease、provision、Job、waiting_human 和 stall 必须使用可配置且有边界的秒数；没有源码/配置依据的延迟、吞吐和 SLA 不得写入规格。当前 Lease TTL 默认 120 秒、Reaper 间隔默认 30 秒、provision 默认 300 秒、waiting_human 默认 1800 秒、Job stall 默认 900 秒。
+- **规范要求**：Reaper、Lease、provision、Job、waiting_human 和 stall 必须使用可配置且有边界的秒数，数值入口为[config](../../apps/scheduler/src/config.ts)与[runtime knobs](../../apps/scheduler/src/runtime-knobs.ts)；没有源码/配置依据的延迟、吞吐和 SLA 不得写入规格。
 - **决策来源**：运维调节需要真实配置出处，避免把未验证的 SLA 当承诺。
 - **实现状态**：as-built；超时和停滞条件由 Scheduler 判定，实际环境负载不在本文宣称范围。
 - **代码入口**：[config](../../apps/scheduler/src/config.ts)、[runtime knobs](../../apps/scheduler/src/runtime-knobs.ts)、[stall policy](../../apps/scheduler/src/domains/job-lifecycle/stall-policy.ts)。
@@ -1028,7 +1036,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：Provider 的上游协议必须只由 Gateway adapter 访问，Sandbox 通过短期 Job token 和受控 proxy 发请求；超时、network/http retry 必须受 Job deadline 和 Gateway 上限约束。
 - **决策来源**：Provider 是外部不确定系统，平台需要统一凭据、计费、重试和审计。
-- **实现状态**：as-built；Gateway 使用 16 MiB body limit、最多 3 attempts、2 秒 retry max delay。
+- **实现状态**：as-built；Gateway 请求体、重试和延迟边界以[Gateway 源码](../../apps/scheduler/src/gateway.ts)为准。
 - **代码入口**：[Gateway](../../apps/scheduler/src/gateway.ts)、[Provider adapter](../../apps/scheduler/src/domains/provider-adapter)、[gateway tests](../../apps/scheduler/src/gateway-retry.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`；真实 Provider 端到端需部署凭据后人工执行。
 
@@ -1150,9 +1158,9 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：Hub 启动输入只能包含任务目标和有界 Canvas 骨架/小图投影，大图必须通过当前 Job 的只读 `graph_query` 按需读取；角色 Agent 只能读取其 Job scope、角色快照和 operation 允许的任务/证据上下文，不得默认获得整张 Canvas 或能力目录。所有 graph 查询保留单次响应硬上限；累计调用/字节额度仅在显式配置时限制，耗尽时返回可修复反馈。
 - **决策来源**：上下文成本、数据泄漏和引用校验需要由平台控制而不是靠模型自律。
-- **实现状态**：as-built；Graph Query 有 overview/index/node/edges/findings/evidence/intents 分层。
+- **实现状态**：as-built；Graph Query 有 Job-scoped `plan_objective`、`plan_gap`、overview/index/node/edges/findings/evidence/intents 分层。`plan_objective` 不依赖 acceptedPlan，完整返回当前 Canvas 持久化 objective tuple，并校验 `input_sha256`；initial L0/overview 只返回有界 handle，不接受 selectors、cross-scope 或 whole-graph 读取。
 - **代码入口**：[graph query](../../apps/scheduler/src/graph-query.ts)、[graph budget tests](../../apps/scheduler/src/graph-budget.test.ts)、[设计摘要](../../DESIGN.md)。
-- **验证证据**：`pnpm ci:unit:graph-references`、`pnpm ci:integration:graph-references`、`pnpm ci:smoke:hub`。
+- **验证证据**：`pnpm ci:unit:graph-references`、`pnpm ci:integration:graph-references`、`pnpm ci:smoke:hub`；完整 objective tuple、`input_sha256` 漂移和累计 budget/单次响应超限均按稳定错误失败，非 Job scope/selector/cross-scope/whole-graph 输入不放行。
 
 ### CON-007 Fact、Artifact、Finding、Verify 与 Report 分责
 
@@ -1202,7 +1210,7 @@ Job Attempt 先写 effect intent/账本，外部 provision/执行可能在 `effe
 
 ## 7. 事实核查边界
 
-本文件已以 `DESIGN.md`、`docs/ARCHITECTURE.md`、`database/schema.sql`、`apps/scheduler/src/openapi.ts`、现行 bounded context 代码和 package.json 测试脚本逐项反查。测试命令只表示验证入口，不表示本次执行通过；未连接真实 Provider、OpenSandbox、registry、device broker、多副本共享 BlobStore 或 GitHub Release 的项目环境，不在本 PR 声称已验证范围内。长期设计（完整 Proposal/Receipt/Settlement、Plan 驱动派发、全图权威布局、任务/会话 Pack 生命周期）若在代码中只有 Phase 1/骨架，会保留“进行中/暂缓”状态，不写成 as-built。
+本次以当前集成分支源码、`database/schema.sql`、OpenAPI、共享契约及测试入口反查；旧 `docs/ARCHITECTURE.md` 仅作历史对照。测试命令本身不表示执行通过；主线程已通过的当前根分范围套件和 schema rebuild/CLI 备份恢复集中见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md#v063-集成证据范围2026-10-31)，#815 实际本地 base 镜像/生产 guard 证据见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。较早 `e23c3b4f` 的完整 CI `41186374980` 不代表当前组合，当前 PR/最终 main CI 与发布通道/平台、registry/catalog 仍未完成。独立人工质量输入不在生产执行豁免内。完整 Proposal/Receipt/Settlement、全图权威布局和任务/会话 Pack 生命周期继续按真实缺口登记。
 
 ## 程序规则附加评审（#767）
 
@@ -1216,8 +1224,8 @@ Finding evidence-trace 只读诊断精确绑定 Artifact source_event/来源 Att
 ### FR-FIND-007 可重建特征与关联质量边界
 
 - **规范要求**：项目特征必须保留来源摘要、提取器版本与 provenance；未知权威身份保持未知。派生失败不得改变来源，读取必须核对当前来源和权限，旧代不能覆盖新代。强关系上线前必须通过独立质量门。
-- **决策来源**：#770 分期实施与来源完整性约束。
-- **实现状态**：C 持久扫描、特征重建和状态元数据已合入；D 首片接通当前声明文本的有界数据库窗口检索及既有详情展示，后续切片接通按代持久化的弱候选、来源失效过滤与分页展示；离线评估工具检查样本隔离并报告质量分母，不发布同问题建议或自动宣告质量通过。
+- **决策来源**：#770 分期实施与来源完整性约束；#819 独立强关系质量门。
+- **实现状态**：持久特征扫描/重建、有界词法检索与按代弱候选已合入；#819 身份与关系工程见 FR-FIND-009。独立人工标签、问题家族/资产隔离调参及留出集、查看留出结果前冻结的阈值仍缺失，强关系质量与生产建议未交付；不以管理准入、合成断言或 CI 代替质量结论。
 - **代码入口**：[特征投影](../../apps/scheduler/src/domains/project-finding-research/)。
 - **验收**：`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`；人工标注与真实候选质量门仍未执行。
 
@@ -1228,3 +1236,11 @@ Finding evidence-trace 只读诊断精确绑定 Artifact source_event/来源 Att
 - **实现状态**：管理 API 显式准入操作员见证的程序材料，append-only 审计保存评审，当前资格按 Finding/Verify/Evidence 和材料生命周期重新投影；项目范围、maker 自批准、幂等重放、并发输入和读取预算 fail closed。不认证外部官方规则签名或自然人之间的物理独立性，不自动提交漏洞，不扩展执行权限。
 - **代码入口**：[资格域](../../apps/scheduler/src/domains/program-eligibility/)、[共享契约](../../packages/shared-types/src/program-eligibility.ts)、[专题](../PROGRAM_ELIGIBILITY.md)。
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、隔离 PostgreSQL 下 `pnpm ci:integration:verify-eligibility`、`pnpm ci:unit:authz`；本地定向结果见专题，不以真实模型或生产试验作为前置。
+
+### FR-FIND-009 操作员见证身份与跨任务关联
+
+- **规范要求**：跨任务强关系计算只能消费注册且不可变的身份 manifest revision 和显式 mapping；注册、修订、重映射及撤销必须校验认证操作员、项目 scope 与 CAS。读取和持久 worker 必须核对当前 Finding/来源、mapping/source revision、freshness、撤销与有界完整性，失效或截断不得输出正向完整结论。操作员见证不得冒充独立外部官方真实性；质量门未通过不得发布强关系建议。
+- **决策来源**：#819；[ADR-0014](adr/0014-operator-finding-identity.md)。[ADR-0009](adr/0009-finding-source-identity.md)仍是独立来源身份提议，不因本实现被追认为已采纳。
+- **实现状态**：注册 manifest、不变 revision、mapping CAS/失效、有界一致查询与 durable worker 工程已接线。`STRONG_RELATIONS_PUBLISHED=false`，quality_gate_status=not_evaluated；缺失独立标签/隔离留出/预冻结阈值，强关系质量与生产建议未交付。身份准入也不授予目标执行或程序资格 authority。
+- **代码入口**：[身份来源](../../apps/scheduler/src/domains/project-finding-research/identity-source-store.ts)、[映射](../../apps/scheduler/src/domains/project-finding-research/identity-mapping-store.ts)、[关系读取](../../apps/scheduler/src/domains/project-finding-research/relation-read.ts)、[持久计算](../../apps/scheduler/src/domains/project-finding-research/relation-computation.ts)、[schema](../../database/schema.sql)。
+- **验证证据**：`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`；真实 SQL/HTTP 测试覆盖 scope/CAS/不可变版本、freshness/撤销、worker 和有界读取。2026-10-31 主线程已通过完整 Finding Research 集成，最新分母及与定向测试的重叠边界见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md#v063-集成证据范围2026-10-31)；早期限时退出不再表示当前整套未完成。最终组合 CI 与独立人工质量仍分别验收。

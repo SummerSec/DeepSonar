@@ -63,7 +63,7 @@ complete 采用正向允许规则，不能只列少数禁止态：必须覆盖�
 
 ## 有界只读入口
 
-扩展当前 Job 的 `graph_query` 只读查询，按需读取一个 objective 的版本、判据、绑定状态、来源 ID 与未决原因。先校验当前 Job 的 Canvas/project 和工具白名单，才允许加载依据；不允许使用 Management API token 或绕到新的模型通道。响应给出 canonical event revision，不能只返回模型可伪造的 SHA 文本。
+扩展当前 Job 的 `graph_query` 只读查询：初始 L0/overview 只提供有界 handle；`kind=plan_objective` 在当前 Job scope 内独立于已接受 Plan 读取 `items[0]` 完整持久化 objective tuple，并带 canonical event revision。它不提供 selectors、cross-scope 或 wholeGraph；预算或 input hash 不满足时必须如实失败，不能把部分 tuple 当作完整依据。先校验当前 Job 的 Canvas/project 和工具白名单，才允许加载依据；不允许使用 Management API token 或绕到新的模型通道。
 
 首片一次最多 4 个判据、4 个 Fact；沿用 Job graph 字节/引用预算。记录当前 Job 已见引用，禁止跨任务检索结果直接充当证据。返回截断或 unavailable 时，complete 必须拒绝；continue 可在明确缺口与授权范围内请求一个补证 Intent。实际留存字节由 Scheduler 的有界验证器核对，模型只按需读取证据内容。
 
@@ -116,14 +116,15 @@ GET 原 operation 的 receipt_key 始终只读；进程缓存丢失或 handler �
 
 ## C/v2 当前实现对照
 
-以下是 #775 C 的 as-built 结论，使用 `plan.v=2` 执行型协议；Control、ingestion 和运行时工具 schema 均拒绝 v1 新提案。历史 Plan/Result 和自动 Intent 适配审计仍可读取，不能成为执行 fallback。
+以下是 #775 C 的 as-built 结论，使用 `plan.v=2` 执行型协议；Control、ingestion 和运行时工具 schema 均拒绝 v1 新提案。objective 内部 `v:1` 等字段只作读取 metadata，提交的 Plan 严格为 `v:2`；历史 Plan/Result 和自动 Intent 适配审计仍可读取，不能成为执行 fallback。
 
 - 授权用户在 `PATCH /tasks/{canvasId}` 以 `plan_objective.expected_revision` 做 CAS，持久保存目标 ID/revision、完整 CompletionPolicy、生命周期预算、输入 SHA 和状态。历史 Job、Attempt、semantic event、Artifact、Evidence 与报告保持不可变；新 revision 不重置已消耗任务数、轮数、无进展计数或 unknown-effect 账本。
 - v2 Plan 必须携带显式 `execution_route` revision，并把目标 ID/revision、Plan owner、当前路线 revision 和当前 Plan SHA 放进严格协议。模型只能调整路线与未派发 task，不能修改用户目标、完成判据或预算；并发路线提交由 Scheduler CAS 选择一个成功者。
 - 整条路线先复用既有 Hub Intent 准入；即使越权 task 尚未 ready，也会拒绝整个提案，不留下部分 child Job。ready task 再经同一个 materializer 复核 Canvas canonical 引用、普通角色、镜像/CLI/Provider/model、Finding/Verify、中央网络冻结、快照和共享资产。没有 Plan 专属队列或第二执行通道。
+- 读取预算或输入 hash 不满足时，提交失败并保留明确原因，不以部分目标/Plan 响应继续派发。
 - `depends_on` 要求当前用户目标 revision 的前置 Job 及最新 Attempt 成功。当前未拒绝的 Fact/Finding 必须投影自 submitted、未 superseded Artifact，并关联该 Attempt 的真实 semantic event。Artifact 和事件中的严格 `plan.output` extension 必须一致：`v:2`、objective ID/revision、task ID/SHA 与覆盖的精确 expected_outputs 名称；全部必要输出均须覆盖。留存文件复用有界验证器核对当前 Attempt 路径、finalized manifest、长度及实际 SHA。该关联证明输出来源与留存，不证明语义质量。
 - owner/child 的终态、取消、超时、Reaper、Reconcile 和镜像撤销路径会重建状态。旧目标 revision 的 Job 保持历史身份并占用 lifetime 预算；其迟到回调可以释放并发槽位，但旧输出永远不能满足新目标的依赖或完成。相同目标版本内的已派发 task 在路线修订中保持字节一致。历史 unknown effect 仍 fail closed。
 - `max_tasks`、`max_rounds`、`max_parallel_tasks` 和 `max_no_progress_rounds` 跨 key、路线、owner 与用户目标修订累计。取消、超时、失败、缺失输出、无进展和 unknown effect 均持久停止。当前路线执行投影完成后，Task/Hub complete 仍须全部必要判据的当前正向操作员评价及既有 Finding/Verify/report 门；PlanResult/done 不授予语义完成权威。
 - v2 Plan/Result 已经 ingestion 成功接纳时，真实执行器允许 Hub 以原 mark_job_done 协议结束本轮，不要求再提交一个派发 Intent。此状态只由成功语义写入设置；未经接纳的 Hub 仍须原决策协议。
 
-当前代码入口为 `packages/shared-types/src/plan.ts`、`apps/scheduler/src/domains/plan-protocol/execution.ts`、`execution-output.ts` 与 `apps/scheduler/src/domains/event-ingestion/side-effects.ts`。本批直接 Node/tsx 在各套件独立 CREATE/DROP 的真实 PostgreSQL 上跑通 Control→ingestion→准入 Intent/Job→fake Attempt/留存字节→graph projection；执行、停止、CAS、判据、独立评审和历史拒绝共 8 个 SQL 套件、16 项测试通过。新增套件的全局脚本/CI 接线由主集成方完成；尚未声称远端 CI 通过。真实模型、生产部署、人工语义质量与模型收益未验证。
+当前代码入口为 `packages/shared-types/src/plan.ts`、`apps/scheduler/src/domains/plan-protocol/execution.ts`、`execution-output.ts` 与 `apps/scheduler/src/domains/event-ingestion/side-effects.ts`。本批直接 Node/tsx 在各套件独立 CREATE/DROP 的真实 PostgreSQL 上跑通 Control→ingestion→准入 Intent/Job→fake Attempt/留存字节→graph projection；bootstrap fixture 仅用 HTTP objective 读取结果构造首个 v2 提案，并观测到恰好一个就绪 Worker；执行、停止、CAS、判据、独立评审和历史拒绝共 8 个 SQL 套件、16 项测试通过。新增套件的全局脚本/CI 接线由主集成方完成；尚未声称远端 CI 通过。真实模型、生产部署、人工语义质量与模型收益未验证。

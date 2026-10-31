@@ -1,8 +1,8 @@
 # 沙箱 Pi 观测内存扩展（`pi-observational-memory`）设计评审（#815 A 片）
 
-> 状态：**待评审；本文件只有语义与判定标准，没有运行时代码改动，也未启用任何扩展。**
-> 同步日期：2026-10-31。静态核对基线：main `2b76ac25`（已并入本分支），schema 65，pi `@earendil-works/pi-coding-agent` 1.4.0。
-> 关联 issue：[#815](https://github.com/SummerSec/DeepSonar/issues/815)。本片通过前，B 片之后一律不启动。
+> 状态：**A/B/C 运行时实现、定向回归及实际本地镜像 RPC/生产启动守卫已验证；最终组合 CI 和发布证据待完成。** 本文件保留评审语义与判定标准，当前镜像证据集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
+> 同步日期：2026-10-31。代码核对基线：当前根工作树，schema 以[源码编号](../apps/scheduler/src/schema-version.ts)为准；镜像验收身份见上述专题。
+> 关联 issue：[#815](https://github.com/SummerSec/DeepSonar/issues/815)。A 的设计硬门仍约束 B/C/D/E；当前只记录已验证实现与剩余启用门禁。
 
 ## 0. 本片交付
 
@@ -14,7 +14,7 @@
 | 4 | RPC 纯净性判定标准与验证方法 | §6 |
 | 5 | 与现有上下文治理（compaction / context window / 流截断）的关系 | §7 |
 
-结论先行：**A 片可以否决整个接入，但不能被跳过。** §8 记录 7 个决策点与 2026-10-31 已选定方向（非运行时验证，含一项阻断）；§9 把静态已核事实与仍需实测项分开。
+结论先行：**A 片的七项决策仍是接入硬约束，不能被跳过。** C/D/E 已有实际本地镜像 RPC/独立生产内容守卫、Session HTTP 出口和 Gateway/账本证据；§9 区分已验证工程、最终 CI/发布证据与未评估的质量/成本收益。
 
 ## 1. 动机与现状事实
 
@@ -43,7 +43,7 @@
   | `dist.integrity` | `sha512-jgQbFyLMs4wWhkf6F0voOgzMwtIXsb8+ks0MsPKpPxkdpyMX5E/el6Mk/vJ40m8GlKwBIsCKjL1r7Z2U8dCtmA==`（自算值与 registry 声明一致） | — |
   | peerDependencies | 全为 `*` | 同 |
 
-  两端不是同一对象：3.1.4 的发布物是 `src/` 形态，master 之后改为 `dist` 构建产物。**因此 `entry` 必须按 tarball 逐版核对，不得从上游源码或上一版本推断。** 本次实测走本机配置的 npmmirror 镜像（字节已用自算哈希核过），canonical 源仍需复核；宿主兼容性、运行时行为均未验证，不能据源码推断发布产物已准入。
+  两端不是同一对象：3.1.4 的发布物是 `src/` 形态，master 之后改为 `dist` 构建产物。**因此 `entry` 必须按 tarball 逐版核对，不得从上游源码或上一版本推断。** 宿主临时包 RPC 与实际本地构建镜像的已安装 canonical Pi/OM RPC 分别留证；镜像内容预检、新 Job 专属版本准入及独立生产内容守卫也已验证，见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
 - 上游 `src/config.ts:396-424` 按 **defaults → 全局 `getAgentDir()/settings.json` → 项目 `<cwd>/.pi/settings.json` → 环境变量** 合并 `observational-memory` 配置（环境变量当前覆盖 passive）；还单独读取项目优先的 `compaction.enabled`。平台重写全局文件（[provider-settings.ts](../apps/scheduler/src/provider-settings.ts)）并不阻止扩展自己读取项目文件，`--no-extensions` 也不隔离这条配置路径。
 
 ## 2. 为什么不能直接注册（硬门复述）
@@ -64,7 +64,7 @@
 > 3. tarball 内 `pi.extensions` / `files` / 实际`entry`（逐版核对）；
 > 4. tarball 内工具名与参数 schema、hooks 事件、配置键、宿主导入 API（见 §1）。
 >
-> 只核 `entry` 是不够的：工具名、hooks 与宿主导入决定它是否能被现有 adapter 解析、是否会触发 `PI_RPC_UNEXPECTED_EVENT` 或 `extension_error`。当前这些接口面仅在 npm 3.1.4 tarball 上核对过，**canonical 来源仍未证实**。
+> 只核 `entry` 是不够的：工具名、hooks 与宿主导入决定它是否能被现有 adapter 解析、是否会触发 `PI_RPC_UNEXPECTED_EVENT` 或 `extension_error`。当前接口面已按 canonical tarball 核对，并通过实际本地构建镜像的已安装插件 RPC；封装身份与独立内容守卫证据见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
 
 ## 3. 交付 1：memory 内容分类与脱敏规则
 
@@ -81,7 +81,7 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 | L2 reflection | reflector worker | 用户决策、约束、目标、偏好等持久事实 | session 文件（ledger） | 允许存在；**禁止把 shared asset 正文或 evidence 文件内容粘贴进来**；只允许短句摘要 |
 | L3 worker prompt / response 原文 | observer/reflector/dropper | 送给 worker 的上下文、模型返回 | worker 内存；debug/错误/通知出口需逐项验证 | 不得写入 workspace 其他路径、不得进 evidence、不得进 RPC 帧 |
 | L4 memory 索引/状态（`om:status` 输出、debug log） | 扩展 | 阈值、池大小、token 估算 | debug 默认关闭；启用后写 agent 目录下 NDJSON 文件；状态/通知走 UI API | **冻结关闭**：`debugLog: false`、`showWorkerNotifications: false` |
-| L5 session 文件整体 | pi | 全部会话行（含 L1/L2） | evidence 冷存储 archive | 保留大小与读取权限边界；持久化前执行 §3.4 脱敏及结构化过滤要求（待实现） |
+| L5 session 文件整体 | pi | 全部会话行（含 L1/L2） | evidence 冷存储 archive | `readSessionArtifact` 按 Pi header/manifest 选择并在 preview/download 前执行 §3.4 脱敏及结构化过滤；保留不可变 archive metadata |
 
 ### 3.3 出口矩阵（重复副本必须逐项声明）
 
@@ -89,11 +89,11 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 
 | # | 出口 | 具体内容（发布包 3.1.4 核实） | as-built 行为 | 目标语义 |
 | --- | --- | --- | --- | --- |
-| E1 | session 文件与 evidence archive | 全部会话行，含 L1/L2 与工具结果 | 读全文 → `redactRuntimeSecrets`（密钥精确值）→ 归档；无内容分类过滤 | 持久化前按结构化条目过滤；密钥精确值脱敏不得当作内容分类脱敏 |
-| E2 | recall 工具结果正文 | 工具名 `recall`，参数只有 `id`；`details.sourceEntries[].content` 为**整条源条目正文且无截断**（`renderSourceEntryContentOnly`）。`includeSourceContent` 是**内部函数参数**（`recall-observation.ts:152,263`），**既不是工具参数也不是公开 settings 配置项**（发布包 `src/config.ts` 无此键），唯一调用点未传第二参数 → 恒为 `true`（`:291`） | 作为普通 tool result 进入 session 与 RPC 帧；无专门过滤 | **冻结配置无法关闭正文返回**；只能做受控适配（包装/改上游）或输出过滤，且需由固定发布物验证；待实现 |
+| E1 | session 文件与 evidence archive | 全部会话行，含 L1/L2 与工具结果 | `readSessionArtifact` 按 Pi header/manifest 选择归档，先按结构化规则脱敏，再交给 preview/download；保留不可变归档 metadata | 已闭合 Pi OM memory 正文出口；projection bytes/SHA 单独报告，密钥精确值脱敏不得当作内容分类脱敏 |
+| E2 | recall 工具结果正文 | 工具名 `recall`，参数只有 `id`；`details.sourceEntries[].content` 为**整条源条目正文且无截断**（`renderSourceEntryContentOnly`）。`includeSourceContent` 是**内部函数参数**（`recall-observation.ts:152,263`），**既不是工具参数也不是公开 settings 配置项**（发布包 `src/config.ts` 无此键），唯一调用点未传第二参数 → 恒为 `true`（`:291`） | wrapper 在 Pi 序列化前做有界投影，renderer 再接收脱敏投影；身份、状态和 source metadata 保留 | **冻结配置无法关闭正文返回**；固定 wrapper 的有界脱敏已通过实际本地镜像 RPC 复核，见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md) |
 | E3 | compaction summary / fold | `session_before_compact` hook 产出的压缩结果与 memory fold | 作为 session 内容与 `context.compacted` 身份链的一部分 | 按 E1 过滤；身份字段不得因过滤而失真（否则降级为 `context.compaction_unknown`） |
-| E4 | 大 RPC 事件的落盘副本与返回预览（**两者不同，不能混同**） | 帧 > 1 MiB 时：落盘 `/workspace/.deepsonar-rpc-output/*.json` 并归档为 runtime artifact（[pi-rpc-output.ts:54-70](../packages/runtime-sandbox/src/pi-rpc-output.ts)） | **落盘为完整脱敏记录**（`project(record, secrets, false)`，仅密钥精确值替换，不裁字节）；**4 KiB 预览只用于返回事件**（`preview=true`）；约束为单次 ≤128 个文件、累计 128 MiB、写入 15s 超时 | 必须分别声明：落盘副本的保留/过滤/读取权限与存储预算；预览只是事件降噪，**不得作为存储或敏感边界的依据** |
-| E5 | 普通工具结果在 Web viewer 的展示 | 现有 `parseAgentSession` 就把 tool result 渲染出来（[parseAgentSession.ts](../apps/web/src/session-viewer/parseAgentSession.ts)） | 已展示会话内 tool 结果 | **不开 memory 面板 ≠ 正文不显示**；E1/E2 的过滤规则必须先落地，不靠「不新增 UI」代替 |
+| E4 | 大 RPC 事件的落盘副本与返回预览（**两者不同，不能混同**） | 帧 > 1 MiB 时：落盘 `/workspace/.deepsonar-rpc-output/*.json` 并归档为 runtime artifact（[pi-rpc-output.ts:54-70](../packages/runtime-sandbox/src/pi-rpc-output.ts)） | **落盘与预览均先过 OM 脱敏**；`PiRpcOutputCapture` 保留 control identity/framing 并另报 projection hash，预览仍只是返回事件的有界投影 | 必须分别声明：落盘副本的保留/过滤/读取权限与存储预算；预览只是事件降噪，**不得作为存储或敏感边界的依据** |
+| E5 | 普通工具结果在 Web viewer 的展示 | 现有 `parseAgentSession` 就把 tool result 渲染出来（[parseAgentSession.ts](../apps/web/src/session-viewer/parseAgentSession.ts)） | 已展示会话内 tool 结果；E1/E2 在归档/返回前投影 | **不开 memory 面板 ≠ 正文不显示**；过滤必须先于 viewer 展示，不靠「不新增 UI」代替 |
 | E6 | 配置、日志、通知、debug 文件 | `debugLog`（启用后写 agent 目录 NDJSON）、错误/fallback 通知、`om:status` 输出 | 默认关；catch-up 错误通知不完全受 `showWorkerNotifications` 控制 | 冻结关闭；出现记录即按敏感出口验收 |
 
 撤权与删除语义（必须分开写，不得混用）：
@@ -104,7 +104,7 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 
 ### 3.4 规则（供 C/E 片实现）
 
-1. **写入侧优先**：L1/L2 由扩展生成，平台无法逐字审计。关闭 `debugLog` 与 `showWorkerNotifications` 只减少输出，不是敏感正文脱敏保证；写入 session 的 observations/reflections、错误通知仍需检查。C 片须冻结这些配置与 `passive` 语义（见 §8.1 第 2 项），E 片须用含秘密的夹具验证各出口。上游 `src/debug-log.ts` 写文件而非默认 stdout；catch-up 错误通知也不完全受 `showWorkerNotifications` 控制。
+1. **写入侧优先**：L1/L2 由扩展生成，平台无法逐字审计。关闭 `debugLog` 与 `showWorkerNotifications` 只减少输出，不是敏感正文脱敏保证；wrapper 已冻结这些配置，并对 session/RPC/archive 出口执行结构化过滤。上游 `src/debug-log.ts` 写文件而非默认 stdout；catch-up 错误通知也不完全受 `showWorkerNotifications` 控制，故仍需保留 host/image 复核。
 2. **导出侧兜底**：若 E 片发现归档中出现 L3 或凭据明文，必须停止接入；修复方式是收紧扩展配置或加导出期脱敏，**不是**放宽归档正则。
 3. **不得投影**：L1/L2 不投影为 Finding、Fact、业务 Artifact、验证 Evidence、报告或质量指标；受控 session archive 中的物理存储不构成这种投影。memory 是模型的上下文治理产物，不是证据。任何"从 memory 生成 Finding/知识"的路径都超出本 issue 范围。
 4. **UI 边界**：Web session viewer 只按现有 pi 行格式解析（[parseAgentSession.ts](../apps/web/src/session-viewer/parseAgentSession.ts)）；不得为 memory 条目新增展示面板，除非先通过 G10 脱敏评审。
@@ -112,17 +112,17 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 
 ## 4. 交付 2：`requires_egress` / `requires_gateway` 契约语义
 
-### 4.1 现状事实
+### 4.1 历史问题与当前边界
 
 - `materializeFrozenPiExtensions(frozen, allowEgress)` 对 `requires_egress: true` 的扩展在 `allowEgress === false` 时**直接跳过**（不进 `paths`，记入 `skipped`）。
 - `allow_egress` 只控**目标网络**：提示词写明「本任务禁止访问模型网关之外的网络」（[executor-real.ts:897](../apps/scheduler/src/executor-real.ts)），env 侧是 `DEEPSONAR_ALLOW_EGRESS=0/1`（[executor-real.ts:837](../apps/scheduler/src/executor-real.ts)）。
-- 两种模式均设计为只经获准 Gateway 出模型；这不保证当前路由、凭据、模型授权或服务健康恒满足（[provider-settings.ts](../apps/scheduler/src/provider-settings.ts) 的 gateway rewrite 路径）。
+- 两种模式均设计为只经获准 Gateway 出模型；这不保证当前路由、凭据、模型授权或服务健康恒满足（[provider-settings.ts](../apps/scheduler/src/provider-settings.ts) 的 gateway rewrite 路径）。这是 A 片提出字段拆分前的边界事实，保留用于解释准入动机。
 
-也就是说：**现有 `requires_egress` 是"业务出网"语义，而 om 需要的是"模型出网"，两者被一个字段混在一起。**
+历史问题是：**旧 `requires_egress` 只表达业务出网，而 om 还需要表达模型 Gateway 要求。** 当前注册行已用下节两个正交字段分别表达并在加载/启动时校验，不再用单字段推断。
 
-### 4.2 提议契约（待评审）
+### 4.2 已落地契约与剩余准入核对
 
-注册行增加两个正交必填字段，二者都缺省即拒绝加载注册表（fail closed，不留推断分支）：
+注册行已增加两个正交字段，二者都按冻结 Job 在加载与启动时校验，缺失或不满足即拒绝（fail closed，不留推断分支）：
 
 | 字段 | 含义 | 值为 true 时物化条件 |
 | --- | --- | --- |
@@ -147,41 +147,41 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 
 ## 5. 交付 3：后台模型预算与优先级
 
-### 5.1 现状事实
+### 5.1 现状事实（截至 2026-10-31）
 
 - Job Token 额度（**同步 main `2b76ac25` 后已变**）：`runtime_knobs.job_token_max_requests` 由 Job 快照冻结（[executor-real.ts:775](../apps/scheduler/src/executor-real.ts)），允许区间 `0–1_000_000`（[runtime-knobs.ts:10](../apps/scheduler/src/runtime-knobs.ts)）；env 未设置或空 → **0 = 不限**，正数才受限（[config.ts:44-54,256](../apps/scheduler/src/config.ts)，见 [USAGE_LIMITS.md](USAGE_LIMITS.md)）；超限对调用方 429 `quota_exhausted`（[gateway.ts:719-730](../apps/scheduler/src/gateway.ts)）。
-- 用量账本 `job_usage_ledger` 的 `source` 只有 `gateway_response` / `gateway_stream` / `gateway_error`（[schema.sql](../database/schema.sql)），**没有"谁发起的请求"维度**。
+- Gateway 已为 OM 签发独立的 `observational_memory` workload token；请求来源由 `job_tokens.workload` 和 `job_token_id` 绑定，不能由 header/body/model 自报。`job_usage_ledger` 按 workload 分账，并保留原有 `gateway_response` / `gateway_stream` / `gateway_error` source 语义（[gateway.ts](../apps/scheduler/src/gateway.ts)、[gateway-om-budget.ts](../apps/scheduler/src/gateway-om-budget.ts)）。
 
-因此在**显式配置了有限额度**的 Job 上：om 的后台请求和主会话共用同一个计数器；后台跑满后，主 Agent 下一次请求就会 429 —— 这是把"记忆功能失败"升级成"任务失败"。默认不限的 Job 不受此限，但仍共用计数与账本。
+因此在**显式配置了有限额度**的 Job 上，main/background 必须在冻结对象中显式分配，后台不会取得未分配的剩余额度，也不会侵占 main reservation；默认不限的 Job 保持 unlimited，但仍记账并执行权限、模型和效果结算。
 
-### 5.2 提议语义（待评审）
+### 5.2 已落地语义与剩余核对
 
-1. **默认不限（已 as-built）**：请求数默认不限已在 main 落地（`usageLimit` 未设置即 0，[USAGE_LIMITS.md](USAGE_LIMITS.md)）；OM 必须沿用同一语义，不得隐式套用 500、16、32_000 或预留比例。token / 轮数同理只在显式配置时受限。协议大小、权限和防死循环保护不属于预算配额。
-2. **显式有限额度的主会话保底契约**：若管理员配置总请求数 `N > 0`，默认采用比例预留策略 `R = min(N, max(ceil(N * 0.2), 20))`，其中 `R` 为主会话预留、后台可用额度为 `max(0, N - R)`。该策略在 `N=1` 至 `N=20` 时后台额度为 0（OM 在有限总额下实际不启用后台模型调用），`N=21` 时后台额度为 1。管理员可在角色/项目配置中显式覆盖 `R`（覆盖值须满足 `0 < R ≤ N`）或选择"共享总额无保底"策略，但选择后者须书面确认撤回保底保证并记录审计。未配置有限总额（`N=0` 或未设置）走 `unlimited` 分支，不做减法，也不因此启用预留策略；独立后台限额只有显式配置才生效。其他显式有限 token/成本总额须同步说明主会话保底/隔离口径，不能借请求数不限绕过。
-3. **并发预留**：有限额度下在可信 Gateway/Job 锁内原子检查已用量与在途预留后再准入；主会话与后台共用总账，后台另受显式后台额度/主会话保底约束，计算时扣除主会话尚未使用的预留份额。不得用客户端读数先检查后递增；失败/取消按真实请求效果结算，未知用量不得当作零返还。无限额度不做配额拒绝，但继续记账与权限校验。请求数、token 与成本不得混用单位；调用前 token 上界及未知用量策略仍需 D 片证明。
-4. **超限降级可见**：后台额度耗尽跳过本轮 observe/reflect，记录 `skipped_budget_exhausted`；不得把后台耗尽冒充主会话失败。主会话自己达到显式总限额仍受限制。恢复、重试不得重置冻结额度或已有用量。
-5. **可信归因**：新增独立 workload 维度区分主会话与后台，身份必须由可信内核绑定并经 Gateway 校验；沙箱自报 header 不可信。保留现有结算 `source` 的 `gateway_response` / `gateway_stream` / `gateway_error` 语义，不能覆盖。独立 token/可信调用上下文的具体方案留 D 片评审，不能扩大 Job 权限或模型白名单；observer、reflector、dropper、fallback、compaction catch-up、retry 均覆盖同一鉴权、额度与归因规则。
-6. **成本口径**：后台成本单列，不冒充 Finding 质量收益或主会话成本；项目/Job 总用量仍包含这些真实请求，明细可按 workload 分解且总账可对账。
+1. **默认不限**：请求数默认不限（`usageLimit` 未设置即 0，见 [USAGE_LIMITS.md](USAGE_LIMITS.md)）；不得隐式套用上游轮数、token 或比例预留。显式 token/request cap 才受限，协议大小、权限和防死循环保护不属于配额。
+2. **显式有限分配**：冻结对象必须同时表达 `total_requests`、`main_requests`、`background_requests`；总额须等于 Job 总额，main/background 之和不得超额，剩余额度不自动转移。可选后台 request/token cap 只能进一步收紧分配。
+3. **可信并发与结算**：Gateway/Job 锁内原子检查并占额；请求发出后按真实效果 settlement。`pending` / `unknown` 或账本失败不得当作零返还，必须阻断后续后台出站；终态撤销 token 不删除已开始请求的账本。
+4. **降级边界**：已知 quota exhausted，或已知请求在上游启动前未开始（`gateway_transient` + `effect_status=not_started`）可见降级并回到 native compaction；provider 5xx 文本本身不构成“未开始”权威。`pending`、`unknown`、权限、协议、配置/完整性错误保持硬失败。
+5. **可信归因**：后台 workload 由内核 token 绑定并经 Gateway 校验；observer、reflector、dropper、fallback、compaction catch-up、retry 均覆盖同一冻结模型、额度与归因规则。请求与 token/memory usage 分账，成本可按 workload 对账。
+6. **当前证据**：Gateway OM unit + 真实 SQL/HTTP 及内核已知请求前 transport/持久零用量结算、provider 防冒充回归已通过，最新范围与分母集中见 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。
 
 ### 5.3 冻结配置段（G5 语义）
 
-C 片由 Scheduler 从 Job 快照生成 `.pi/agent/settings.json` 的 `observational-memory` 段，至少冻结：
+C 片已由 Scheduler 从 Job 快照生成 `.pi/agent/settings.json` 的 `observational-memory` 段，至少冻结：
 
 - `compactAfterTokensMode` + `compactAfterTokensRatio`（或 `calibrated` 阈值）
 - `observeAfterTokens` / `reflectAfterTokens`
-- `agentMaxTurns` / `agentMaxTokens`：只有管理员显式配置才有限额；未配置必须表达不限，不能让上游默认 16 / 32_000 悄悄生效。上游是否支持不限及如何适配尚未验证，未满足不得启用
+- `agentMaxTurns` / `agentMaxTokens`：只有管理员显式配置才有限额；未配置表达不限，不能让上游默认 16 / 32_000 悄悄生效
 - `showWorkerNotifications: false`、`debugLog: false`
 - `passive`（见 §8.1 第 2 项）
 
-约束：覆盖整个 defaults → global → project → env 链，以及独立 `compaction.enabled` 读取；不能只重写全局 settings。需受控适配层消费冻结值，并隔离/拒绝项目 settings 和相关 env 的覆盖，加载后校验有效配置与冻结快照一致（包括模型/fallback）。具体实现待 C 片验证。只接受注册表声明过的 knob；越界或未知字段 fail closed；Agent、Job 内容、项目配置一律不得覆盖该段（需要稳定 error code 与 RepairFeedback 分类）。
+约束：覆盖整个 defaults → global → project → env 链，以及独立 `compaction.enabled` 读取；wrapper 已通过私有 settings、环境恢复、session 绑定和 sticky failure 守卫隔离项目 settings 与相关 env 覆盖，加载后校验有效配置与冻结快照一致（包括模型/fallback）。只接受注册表声明过的 knob；越界或未知字段 fail closed；Agent、Job 内容、项目配置一律不得覆盖该段（需要稳定 error code 与 RepairFeedback 分类）。该配置隔离路径已通过实际本地镜像 RPC 复核，证据见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md)。
 
 ### 5.4 后台模型与 Gateway 冻结模型守卫
 
 - Gateway 对请求模型执行 Job 冻结白名单校验：[gateway-guard.ts:66](../apps/scheduler/src/domains/provider-adapter/gateway-guard.ts) `assertGatewayRequestModelAllowed`（出口在 [gateway.ts](../apps/scheduler/src/gateway.ts)），不匹配抛 `GATEWAY_FROZEN_MODEL_MISMATCH`（同文件 `:24`）。适配器未声明 `enforce_frozen_model`、`passthrough` 或白名单为空时软放行（历史快照语义）。
-- 上游 `normalizeSettingsConfig` 接受 `model` 键，即 observer / reflector / dropper 可以指定与会话冻结模型**不同的模型**。
-- 与 §6 的 `extension_error` → `failRuntime` 语义叠加后，后台 403 / 模型不匹配可能不是「记忆功能降级」，而是**整个 Job 失败**。
+- wrapper/Gateway 只允许当前 Job 冻结的 model/provider/route；模型不匹配和权限响应进入硬失败，不能借后台错误 marker 绕过 `extension_error`。
+- 已知 quota 或 known-never-started transient 才能返回可见 `native_compaction` 降级；`workload_usage_unknown`、`workload_usage_pending`、provider 5xx 未证明无效果，均不能降级。
 
-规则：首版**不允许 observer 独立模型**——C 片冻结配置不写入 `model`（或强制等于冻结模型）。若后续要支持独立模型，必须先在 D 片证明它满足同一冻结白名单、同一额度与同一归因，且不得为接入放宽既有 `enforce_frozen_model` 权限。E 片夹具必须覆盖「后台模型 ≠ 冻结模型」这一例，并断言失败时是受控降级而不是 Job 失败。
+规则：首版**不允许 observer 独立模型**——当前 wrapper/Gateway 已强制等于冻结模型。若后续要支持独立模型，必须先在独立决策中证明同一冻结白名单、额度与归因，且不得为接入放宽既有 `enforce_frozen_model` 权限。
 
 ## 6. 交付 4：RPC 纯净性判定标准
 
@@ -205,7 +205,7 @@ C 片由 Scheduler 从 Job 快照生成 `.pi/agent/settings.json` 的 `observati
 | C6 | 关闭 om 与开启 om 的帧序列在协议层等价（除 compaction 相关时序差异） | 出现白名单内但字段契约变化的帧（例如 `context.compacted` 身份字段缺失） |
 | C7 | recall 返回完整 `details` 时不因结构超限而失败 | 出现 `PI_RPC_UNSUPPORTED_LARGE_STRUCTURE` |
 
-### 6.3 C7 的代码条件反例（未复现运行故障）
+### 6.3 C7 的代码反例与已验证出口
 
 `recall` 默认带源条目正文，而大帧保护存在结构盲区：
 
@@ -213,16 +213,18 @@ C 片由 Scheduler 从 Job 快照生成 `.pi/agent/settings.json` 的 `observati
 - 投影只对 `PAYLOAD_KEYS = {text, delta, output, result, error, errorMessage, message}` 做 4 KiB 预览（[pi-rpc-output.ts:6](../packages/runtime-sandbox/src/pi-rpc-output.ts)）；**`content` 不在其中**。
 - 投影后仍 > 1 MiB 即抛 `PI_RPC_UNSUPPORTED_LARGE_STRUCTURE`（同文件 `:60`），该错误从帧循环抛出，**不是降级**。
 
-因此「一帧约 1.1 MiB 且体积压在 `details.sourceEntries[].content` 上的 recall 结果」在静态推演下会硬失败，即使原帧小于 8 MiB 上限。此为**代码条件反例**，尚未验证发布版 3.1.4 在真实 rpc 会话中是否产生同形帧，不记作已复现运行故障。
+因此「一帧约 1.1 MiB 且体积压在 `details.sourceEntries[].content` 上的 recall 结果」若直接进入旧投影会硬失败。当前 wrapper 已在 Pi 序列化前收紧 recall；宿主与实际本地构建镜像 RPC 均覆盖超过 1 MiB 的原始 source 并通过有界结果/脱敏检查，身份与场景集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
 
-验收要求：离线夹具必须包含带完整 `details` 的 `recall` 用例（不只 `cat` / `curl`），覆盖 4 KiB 预览键与非预览键两种结构；若确认会触发，修法只能是收紧扩展输出或为 `content` 类结构增加明确处理，**不得**把该错误改成静默降级。
+验收要求：离线夹具必须包含带完整 `details` 的 `recall` 用例（不只 `cat` / `curl`），覆盖 4 KiB 预览键与非预览键两种结构。当前实际本地镜像已通过该大 `content` 场景；修法只能是收紧扩展输出或为 `content` 类结构增加明确处理，**不得**把该错误改成静默降级。
 
-验证方法（E 片执行，本片只定标准）：
+验证方法与主线记录（2026-10-31；实际本地镜像已按此复核）：
 
 1. `pnpm ci:smoke:pi-rpc`（现有离线 RPC 夹具，[test-pi-rpc.mjs](../agent-harness/test-pi-rpc.mjs)）。
 2. 在同镜像、固定上游产物、`--no-extensions -e <om stub>` 下使用离线 fake provider 和受控 Gateway 替身，禁止真实模型及外部网络；记录所有调用、stdout/stderr、通知、debug 文件、session 与最终 archive。覆盖最小会话、大输出、主动 workers、passive 下恢复已有 observations 后的 compaction catch-up、fallback/retry、异常通知、kill/resume、取消与并发额度竞争。夹具须进仓库并有测试入口（`ci-test-hook` 棘轮）。
 3. 以现有 harness 的 `StrictJsonlReader` 检查逐字节 framing、非 JSON 行与尾部残留，再通过生产 `parsePiJsonlRecord` 验证事件语义；不得以宽松解析器替代。
-4. 注入恶意项目 `.pi/settings.json`、环境变量及恢复 session，证明冻结值不可覆盖；用可识别秘密标记覆盖正文、错误、通知、日志、session/archive 和模型请求出口，检查结构化过滤后的引用完整性。预算表覆盖未配置、0 不限、1/19/20/21、有限总额、显式后台限额、并发在途与未知用量；额外覆盖反例 `N=1`、`R` 未配置、后台限额未配置：后台先调用和主后台并发抢占时，都应因缺少有限额度契约而不启用 OM，不能让后台消耗唯一额度后再拒绝主会话；另验证显式 `R=1` 时后台不能占用该份额。所有项目均为未来离线验收计划，本次没有运行。
+4. 注入恶意项目 `.pi/settings.json`、环境变量及恢复 session，证明冻结值不可覆盖；用可识别秘密标记覆盖正文、错误、通知、日志、session/archive 和模型请求出口，检查结构化过滤后的引用完整性。实际本地镜像 RPC 已覆盖配置漂移、恢复同一 session、超大 recall、禁用 OM 及 quota/transient/hard-failure 分支；历史 session preview/download 也已在混合 CLI header、超大 canary、不可变字节、路径越界和 native quote preservation 夹具中通过。有限预算的并发/未知用量、已知请求前 transport 持久结算及 provider 防冒充证据见 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。
+
+2026-10-31 的实际本地构建镜像 RPC、生产启动守卫及版本准入/适配器回归证据集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；host 分支仍单独标记。wrapper 的 Runtime.js module identity、SDKHTTP 冒号/innerJSON 分类回归及 S3 类型/runtime build、Scheduler/Web tsc 也已有通过记录；类型/构建不证明外部存储已实测。
 
 ## 7. 交付 5：与现有上下文治理的关系
 
@@ -280,12 +282,12 @@ issue [#815 设计取舍记录](https://github.com/SummerSec/DeepSonar/issues/81
 | 1 | 网络契约 | 分开表示业务出网与 Gateway 访问要求 | 准入仍须校验路由/凭据/模型许可，Gateway 可达 ≠ 授权 |
 | 2 | 调用边界 | 接受后台记忆需要模型调用；主动/passive/恢复 catch-up 全部经 Gateway 治理 | passive 不得作为免治理入口 |
 | 3 | 失败策略 | worker 失败可见、受控降级，不拖垮主任务 | 权限违规/协议损坏不得吞错或伪装成功 |
-| 4 | 预算 | 未配置不限，不隐式加预留；显式有限总额时默认比例预留 `R = min(N, max(ceil(N * 0.2), 20))`，N≤20 时后台额度为 0 | 共享总额无保底策略须书面确认撤回保证；token/成本维度保底口径仍待 D 片验证 |
-| 5 | 归因 | 后台用量单列且与总账可对账，由可信服务端绑定 | 独立 token / 可信调用上下文的实现留 D 片，不授权创建凭据或扩大权限 |
+ | 4 | 预算 | 未配置不限，不隐式加预留；显式有限总额时冻结 `total_requests`、`main_requests`、`background_requests`，不推导比例或自动转移剩余额度 | token/成本维度按各自账本证据核对；请求前 transport 的持久零用量结算不退还请求次数，见 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md) |
+| 5 | 归因 | 后台用量单列且与总账可对账，由可信服务端绑定 | `observational_memory` token、workload ledger 与终态撤销已有实现；不得扩大凭据或模型权限 |
 | 6 | 压缩身份 | 沿用 DeepSonar 身份和追踪契约，不能表达时如实标 unknown | 暂不扩新 policy |
 | 7 | 模型 | 首版后台仅使用当前 Job 已冻结模型 | 不新增独立模型权限；放宽需 D 片单独评审 |
 
-该记录同时明确：canonical 发布物、宿主兼容、配置冻结、RPC、多出口脱敏、预算隔离等验收仍须完成，**不能据此宣称插件可启用**；A 的工程契约与剩余评审问题仍须闭合。
+该记录同时明确：canonical 发布物、宿主兼容、配置冻结、RPC、多出口脱敏、预算隔离等验收必须逐项留证。实际本地镜像 RPC、独立生产内容守卫、OM 专属版本准入和 Gateway/Session 工程证据已取得；最终组合 CI 与发布通道/平台、registry/catalog 仍待完成，**不能据此宣称完整发布验收通过**。
 
 ### 8.2 决策依据（供复核）
 
@@ -309,38 +311,40 @@ issue [#815 设计取舍记录](https://github.com/SummerSec/DeepSonar/issues/81
 | --- | --- | --- |
 | S1 | om 自身**不发 HTTP**，模型请求只能经宿主 `streamSimple` → 支持 §4 的 `requires_gateway` 论证 | 全仓无 `fetch` / `undici` / `node:http` |
 | S2 | 子进程 `spawn` **只出现在剪贴板**，且只在 `om:view` 命令路径使用；但 `commands/view.ts` 存在直接 copy/notify 路径，无 `hasUI` guard，其在 `--mode rpc` 下的可达性**仍待验证** | `src/clipboard.ts:1,49`、`src/commands/view.ts:43-74` |
-| S3 | 多数 UI 通知受 `ctx.hasUI` 约束，但 `commands/view.ts:43-74` 存在直接 copy/notify 路径**无 `hasUI` guard**；`showWorkerNotifications` 只是额外开关，不是唯一门。rpc 模式下通知是否出现**仍待验证** | `runtime.ts:132,306,316-324`、`consolidation-trigger.ts:113,146`、`commands/view.ts:43-74` |
-| S4 | 后台 worker 错误被捕获并记录，**不向宿主抛出** | `runtime.ts:310-329` `launchTrackedTask` 全程 try/catch |
+| S3 | 多数 UI 通知受 `ctx.hasUI` 约束；`commands/view.ts:43-74` 仍有无 `hasUI` guard 的路径，但实际本地镜像 Pi RPC 已复核 `hasUI=true` 且 OM notification subprotocol 被抑制 | `runtime.ts:132,306,316-324`、`consolidation-trigger.ts:113,146`、`commands/view.ts:43-74` |
+| S4 | 上游后台 worker 任务被捕获并记录；wrapper 另行追踪实际任务并将权限/协议/unknown 等 sticky failure 交给宿主 `extension_error` | `runtime.ts:310-329` `launchTrackedTask` 全程 try/catch；`agent-harness/pi-observational-memory-governed.ts` |
 | S5 | `passive` 只关闭 `agent_start` / `turn_end` 触发，**不关闭 `session_before_compact`** → passive 仍可能触发 catch-up 模型调用 | `compaction-trigger.ts:11`、`consolidation-trigger.ts:175` 有 passive 早退；`compaction-hook.ts` 无 |
 | S6 | 压缩 hook 在 summary 为空时**主动让出所有权**交回 pi 原生摘要，在并发压缩时返回 `{cancel:true}` | `compaction-hook.ts:26-45` |
 | S7 | memory **活跃投影**受 `observationsPoolMaxTokens`（默认 20k）约束，不是无界增长；但 ledger 历史、recall 原始正文及其在 session/RPC 中的副本仍会持续累积 | `compaction-hook.ts:14-22`、`buildCompactionProjection` 参数 |
 | S8 | `recall` 的源正文**无法通过调用参数关闭**（参数只有 `id`，唯一调用点用默认 `true`） | `recall-observation.ts:126-141,291` |
 | S9 | 大帧 4 KiB 预览只覆盖固定 payload 键，`content` 不在其中；超限抛错不降级 | `pi-rpc-output.ts:4,6,60`、`runtime-agent.ts:1531-1532` |
 
-### 9.2 仍需实测（不得当作已通过）
+### 9.2 已验证与仍需实测（不得把局部证据扩张为镜像/生产结论）
 
-1. **rpc 模式下 `ctx.hasUI` 的取值**：S3 已收窄为这一条——通知是否会出现只取决于 hasUI；`--mode rpc` 下的实际取值与 `pi.on(...)` 回调中 UI 之外的输出仍未验。
-2. **`extension_error` 的实际触发面**：S4 排除了 worker 失败路径；仍待验的是 `session_before_compact` hook 自身抛错、注册期错误，以及 pi 是否把扩展内部 rejected promise 映射为 `extension_error`（映射为 `failRuntime` 即整 Job 失败）。
-3. **compaction 契约一致性（C3/C6）**：S6 表明 om 要么让出、要么给自定义 summary；未验的是它给出 summary 时的结构与 adapter 期望的 `context.compacted` 身份字段是否兼容，以及 `compaction_end.result === null` 是否会被 native fallback 触发。
-4. **数据出口过滤实现**：S8 说明 recall 正文不可关；E1–E6 的过滤规则均未实现，也未验收（含 Web viewer 实际渲染大块 `content`）。
-5. **C7 反例的可复现性**：S9 已确认代码条件成立；未在 rpc 会话中复现，也未确认 3.1.4 在真实会话中会产生体积压在 `content` 上的 >1 MiB 帧。
-6. **canonical 来源**：npmmirror 副本自算哈希与 integrity 一致只证明**该副本**一致，canonical registry 未核；宿主兼容与升级到下一版的 `entry` 形态也未验（master 已改 `dist/`）。
-7. **配置覆盖隔离**：项目 `.pi/settings.json` 与环境变量覆盖链未隔离，也未证明冻结值不可覆盖。
-8. **额度与归因**：请求数默认不限已 as-built（[USAGE_LIMITS.md](USAGE_LIMITS.md)）；未验的是 om 后台 worker 是否确实走该额度与账本路径、后台开销是否在无限额度下仍可审计，以及 token/成本维度的保底/隔离契约与可信 workload 归因的具体方案。
-9. **后台请求量级**：上游默认轮数（16）不等于请求总量，fallback / catch-up / retry 也需计数；对上游限流的影响未测。
-10. **session 体积**：S7 仅给出活跃投影的 20k 阈值，但 ledger 历史、recall 原始正文及其副本的长期累积，以及长 Job 下与 32 MiB 归档上限、`BLOB_DIR` 压边的实际余量未测。
-11. **质量收益**：压缩效果、上下文丢失率、`context_window_exceeded` 发生率——需冻结数据集与对照试验，本 issue 不做承诺。
+1. **rpc/UI 行为**：实际本地镜像 RPC 已复核 `hasUI=true`、OM notification subprotocol 抑制及 status message 不新增模型 turn。
+2. **`extension_error` 的实际触发面**：实际镜像 RPC 已覆盖 permission/unknown/protocol/config-drift 硬失败，quota/transient 只在精确可降级条件下 fallback；不把已覆盖场景外的所有 hook 推定为通过。
+3. **compaction 契约一致性（C3/C6）**：实际镜像 RPC 已通过 success/native fallback；独立生产内容守卫在已安装、缺包、缺 wrapper 的 Docker 场景及适配器回归均通过。
+4. **数据出口过滤实现**：wrapper recall、RPC 大帧、Session preview/download 已脱敏；历史 archive metadata 保留，projection bytes/SHA/Content-Digest 另报；不推定未运行的全量浏览器交互或外部存储实测。
+5. **C7 反例**：实际镜像 real-RPC 已覆盖超过 1 MiB source 与 bounded recall，详见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
+6. **canonical / 镜像来源**：实际 installed package-lock、包/entry、manifest/wrapper 与 Pi manifest/bin/version 预检通过；新 Job 的 OM 专属版本准入已验证，发布通道/平台、registry/catalog 仍另验。
+7. **配置覆盖隔离**：实际镜像 RPC 已覆盖 home/project settings、passive env、config drift、session recovery 和 frozen model override。
+8. **额度与归因**：Gateway unit + SQL/HTTP 已验证显式分配、workload ledger、pending/unknown hard failure 和终态撤销；内核请求前 transport、持久零用量结算及 provider 防冒充见 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。
+9. **后台请求量级**：实际镜像日志的 main/background 及 observer/reflector 计数集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)，不作容量、SLA 或价格收益结论。
+10. **session 体积**：host recall 与历史大 canary 已通过有界投影；长 Job 的长期 ledger、外部 BLOB/S3 余量仍未测。
+11. **质量收益**：压缩效果、上下文丢失率、`context_window_exceeded` 发生率和成本收益仍需冻结数据集与对照试验，本 issue 不做承诺。
 
 ## 10. A 片验收
 
-- **合并本 PR 仅收录待决设计草案，不构成 A 正式通过，也不授权启动 B。** §8.1 的 2026-10-31 设计取舍记录已选定 7 项方向，其中决策 4 的默认比例预留数值 `R = min(N, max(ceil(N * 0.2), 20))` 已书面冻结，但该记录自述不是运行时验证；**token/成本维度保底口径、可信归因实现及实证门禁仍待 D 片完成**。A 通过须有明确书面结论，不能把文档 review、CI 成功或合并状态当作该结论。
-- 注册前必须完成 canonical 发布物来源、tarball integrity 与实际 entry 的核验；启用前必须完成固定宿主兼容、§6 RPC、配置隔离、额度/归因和 §3 数据出口验收。A 的设计决策通过不代替后续实证验收。
-- 若 A 否决则停止，**不注册、不预装、不启用**。只有 A 已通过并进入后续切片、E 再失败时，才可能已有预装产物；此时默认关闭并停止启用，不能以预装倒推通过 A。
+- **A 的七项设计取舍保持有效；工程证据不等于完整发布验收。** 实际本地镜像 Pi/OM RPC、独立生产 guard、Session 脱敏、Gateway/账本和定向回归均已有证据；显式有限预算不使用比例预留，unknown/pending 仍硬失败。
+- canonical 包/lock/manifest/wrapper、OM 专属版本准入、配置隔离、§6 RPC、§3 Session/RPC 出口和 Gateway 预算已分别核验；最终当前 PR/最终 main CI、发布通道/平台与 registry/catalog 证据尚未完成，质量与成本收益保持 `unknown`。
+- 在上述镜像与发布门禁闭合前，扩展仍不得被表述为已通过发布验收；新 Job 默认不启用，旧 released digest 不得由兼容 key 推断含 OM。
 - `pnpm ci:unit:docs-freshness` 通过（版本字面量、命令存在性、链接、已删机制残留）。
 - `pnpm ci:unit:file-size` 通过。
-- 本片不修改 schema、不修改运行时行为、不新增依赖；`git diff --check` 干净。
+- 本次文档核对不修改 schema、版本或发布目标；运行时实现与测试证据来自当前根代码，`git diff --check` 由主线程统一执行。
 
-## 11. 后续切片依赖
+## 11. 历史切片分工（不是当前未实现清单）
+
+下表保留 A 片当时对 B–F 的依赖关系，记录历史分工与验收来源；当前未闭合门禁以 §9.2、§10 及各专题状态为准，不应把下表标题解释为这些切片尚未实现。
 
 | 切片 | 依赖本片的产出 |
 | --- | --- |

@@ -1,6 +1,6 @@
 # Plan 缺口投影与操作员证据绑定（#775 A）
 
-> 状态：A 的审计可见性与操作员判据绑定可用；B/v1 保留只读历史，新写入/执行仅允许 C/v2。当前实现包含用户目标 CAS、统一 Hub Intent/Job 准入、留存输出依赖门、多轮路线修订和持久停止投影。真实模型与非模型语义质量未验证。
+> 状态：A 的审计可见性与操作员判据绑定可用；B/v1 保留只读历史，新写入/执行仅允许 C/v2。当前实现包含用户目标 CAS、统一 Hub Intent/Job 准入、Job-scoped objective 读取、留存输出依赖门、多轮路线修订和持久停止投影。真实模型与非模型语义质量未验证。
 > 同步日期：2026-10-31
 
 ## 读取与报告
@@ -83,7 +83,7 @@ expected_review_sha256: <当前评审依据摘要>
 
 ### 用户目标与路线身份
 
-授权用户通过 `PATCH /tasks/{canvasId}` 提交严格的 `plan_objective` CAS。服务端在 Canvas 行锁内递增 `objective.revision`，保存目标、CompletionPolicy、生命周期预算、目标输入 SHA 和状态；模型只能提交与当前目标的完整 goal/completion/budget 恒等的 v2 Plan。目标修订不会改写历史 Jobs、Attempts、事件、Artifact 或报告，也不会重置已消耗的任务数、轮数、无进展计数或 unknown-effect 账本。模型不能使用新标题、新 key、`next_goal` 或路线理由弱化用户标准或重置预算。
+授权用户通过 `PATCH /tasks/{canvasId}` 提交严格的 `plan_objective` CAS。服务端在 Canvas 行锁内递增 `objective.revision`，保存目标、CompletionPolicy、生命周期预算、目标输入 SHA 和状态；objective 内部 `v:1` 等字段只作读取 metadata，模型提交的 Plan 严格为 `v:2`，不能把 metadata 当执行 fallback。模型只能提交与当前目标的完整 goal/completion/budget 恒等的 v2 Plan。目标修订不会改写历史 Jobs、Attempts、事件、Artifact 或报告，也不会重置已消耗的任务数、轮数、无进展计数或 unknown-effect 账本。模型不能使用新标题、新 key、`next_goal` 或路线理由弱化用户标准或重置预算。
 
 v2 `submit_plan` 必须携带 `execution_route` revision，显式绑定 `plan_job_id`、目标 ID/revision、期望路线 revision 和期望当前 Plan SHA；首次路线使用 expected route `0`，后续路线由 Scheduler 以 CAS 单调递增。v1 新写入一律拒绝。同一目标 revision 内已派发 task 的不可变 SHA 必须在后继路线中保留；仅未派发 task 可调整。用户 CAS 到新目标 revision 后，旧 Job 仍不可变且计入 lifetime 预算，旧输出不能作为新目标的前置结果。
 
@@ -93,13 +93,17 @@ v2 `submit_plan` 必须携带 `execution_route` revision，显式绑定 `plan_jo
 
 `depends_on` 只在前置 task 的 Job 和最新 Attempt 成功、当前目标 revision 与 task SHA 匹配、Fact/Finding 当前未拒绝、Artifact submitted 且未 superseded 时释放。Artifact 与该 Attempt 的 fact/finding 事件必须包含一致的严格 `plan.output` extension，精确覆盖该 task 的全部 expected_outputs；每项关联的留存 Evidence 还须通过路径、finalized manifest、长度与实际 SHA 校验。单纯的 Evidence 行、done-only、PlanResult、旧目标/Attempt、未知效果或不完整来源都不能释放。该关联只证明输出来源及留存，不能替代操作员语义完成授权。
 
+### Job-scoped objective 读取与首个 Hub submit
+
+初始 L0/overview 只提供有界 handle；`graph_query(kind=plan_objective)` 是当前 Job scope 内独立于已接受 Plan 的只读读取，返回 `items[0]` 完整持久化 objective tuple。它不接受 selectors、cross-scope 或 wholeGraph 形态；预算或 input hash 不满足时返回明确失败，不把部分 tuple 当作完整读取。
+
 ### 多轮推进、重启与停止
 
 每次 Plan owner 或 child Job 终态，以及取消、Reaper、Reconcile 和镜像撤销等生命周期收口路径，都会在原有事务内重建当前状态；重启不依赖进程缓存。旧目标 revision 的 child 回调只能释放其占用的并发槽位，不能用旧输出满足新依赖或完成新目标。历史记录不改写，历史 unknown effect 仍 fail closed。后继任务被撤权时，savepoint 原子撤销整批新派发并持久停止，不回滚前置 Job 已证明的终态成功。
 
 Scheduler 按用户授权的 `max_tasks`、`max_rounds`、`max_parallel_tasks` 和 `max_no_progress_rounds` 控制生命周期。活动 Job 存在时不误判无进展；路线或目标真正变化且无可派发进展时累计无进展轮；达到预算、无进展、依赖失败、缺失结构化输出、任务终态失败或 unknown external effect 时持久写入停止原因。仅所有当前 task 的权威输出齐全，并满足当前 CompletionPolicy 的 positive authority，才可写入 `complete`；模型 `PlanResult.complete` 不能替代 Worker 输出、Verify 门或报告门。
 
-当前 v2 接口、数据库链路和 fake-worker 夹具位于 `packages/shared-types/src/plan.ts`、`apps/scheduler/src/domains/plan-protocol/`、`apps/scheduler/src/domains/event-ingestion/side-effects.ts` 及 `plan-execution*.integration.test.ts`。本地未设置 `TEST_DATABASE_URL` 时，PostgreSQL 集成用例会安全跳过；已运行的离线 schema/typecheck 结果不能代替未运行的 DB/HTTP 结果。真实模型、生产部署和人工语义质量仍未验证。
+当前 v2 接口、数据库链路和 fake-worker 夹具位于 `packages/shared-types/src/plan.ts`、`apps/scheduler/src/domains/plan-protocol/`、`apps/scheduler/src/domains/event-ingestion/side-effects.ts` 及 `plan-execution*.integration.test.ts`。bootstrap fixture 仅用 HTTP objective 读取结果构造首个 v2 提案，并观测到恰好一个就绪 Worker；这只是该 fixture 的方法和结果，不是通用首提案/route 约束。本地回放分项结果见下方[冻结离线回放](#冻结离线回放)；`artifacts/plan-replay/report.json` 的 passed/provenance 为 dirty 的非 HEAD 提交，不能写成 `5619154f` 精确最终验收，也不能把它表述为 17 个独立测试；最终组合 CI 仍待核对。真实模型、生产部署和人工语义质量仍未验证。
 
 ## 一次补证的执行投影
 
@@ -136,4 +140,4 @@ Scheduler 按用户授权的 `max_tasks`、`max_rounds`、`max_parallel_tasks` �
 
 ## 冻结离线回放
 
-[控制回放基线](../agent-harness/plan-replay/README.md) 保存 #809 的 v1 单步场景；它是历史控制回归基线，不能当作当前 v2 多轮依赖的验收结果。当前 v2 由 Plan execution/stop/objective/revision 与独立评审集成夹具验证；旧回放脚本和全局 CI 接线仍需主集成方按新契约整理。目标遗漏、模型 token 与质量保持 unknown；真实模型效果未验证。
+[控制回放基线](../agent-harness/plan-replay/README.md) 保存 #809 的 v1 单步历史场景，仍只作历史控制回归对照。当前 v2 回放迁移已由 SQL/HTTP fixture 本地核验：normal → all7negative → normal 三次 parent replay 均 exit 0，正常 fixture 的 17 条 outcome/trace 全匹配，7 种注入负例均正确触发 gate 失败；`report.json` 的 dirty provenance 不是 HEAD `5619154f` 的精确验收证据，且该结果不是 17 个独立测试。最终组合 CI 仍待主线程核对；目标遗漏、模型 token 与质量保持 unknown，真实模型效果未验证。

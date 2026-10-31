@@ -1,11 +1,14 @@
 # DeepSonar 文档索引
 
-> **任务目标证据（#767）**：契约与研究候选、确定性报告、来源隔离判据评审、非 Finding 交付/负结果已接线；Plan 可选显式关联已接线，保留原操作员 authority 与完整完成门。程序资格由 [#822 独立操作员评审](PROGRAM_ELIGIBILITY.md) 投影，目标授权执行与整体 Plan 收敛仍分别验收；无契约按原可选设计标为 unassessed。见[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md)、[任务判据评审](TASK_GOAL_REVIEW.md)、[执行结果评审](TASK_RESULT_REVIEW.md)与[报告](TASK_OUTCOME_REPORT.md)。
+> 状态：v0.6.3 集成文档索引；根工作树实现、历史验证和当前验收缺口分别记录。
+> 同步日期：2026-10-31
+
+> **任务目标证据（#767）**：契约、候选、来源隔离评审、非 Finding 结果与确定性报告已接线。可信只读 authority/grant 绑定当前身份、动作、前提和版本，子/系统 Job 统一继承并在 provision/重跑实时重核，见 [ADR 0011](architecture/adr/0011-trusted-target-authorization.md)。独立程序资格由 [#822 操作员评审](PROGRAM_ELIGIBILITY.md) 投影；目标授权、技术 Verify、判据、Plan 完成与资格各自分责。无契约仍 unassessed，验收见[矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
 
 > **任务下发（2026-10-29，#767）**：可选版本化契约、共享场景模板、结构化补充建议及派发前复核见[下发指南](../skills/deepsonar-management/references/task-dispatch.md)与 [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。结构化一致性与真实模型质量收益分开验收；未知身份/写权限不当作已授权。
-> **#775 A/B 首片**：[Plan 缺口投影](PLAN_GAP_PROJECTION.md) 将审计与操作员判据/留存证据绑定纳入冻结报告；报告机器整体判断仍为 unknown；既有 Intent 可按版本依据进行一次补证，全判据正向操作员授权才允许完成。持久 Plan 接纳回执可只读恢复；一次补证执行状态按持久来源只读重建，与判据满足分离；已接线未派发路线的显式 CAS 修订，保留目标/判据/预算及历史；真实效果未验证且不作为本批验收前置，完整 C 不启用。
+> **Plan v2（#775）**：当前执行接口只接收 v2，v1 的目标边界是不可变历史只读；普通 Hub 的 v1 writer 已在 2026-10-31 物理删除，历史 `hub_intent_adapter` audit 仍只读。用户 objective CAS、有限 lifetime 预算、多轮路线及留存输出检查复用既有 Intent admission；工程 complete 和输出关联不授予语义完成 authority，仍需全判据当前正向操作员授权。根本地回放已完成 normal→all7negative→normal 三次退出 0，当前 v2 SQL/HTTP fixture 的 17 个 outcomes/traces 与七个注入故障门禁匹配；artifact 报告 provenance 不是 `5619154f` 的精确 SHA，最终组合 CI 仍未验收。见 [ADR 0012](architecture/adr/0012-plan-v2-execution.md)、[运行时](architecture/06-runtime-view.md)与 [Plan 专题](PLAN_GAP_PROJECTION.md)。
 
-> **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造；项目词法检索与持久弱候选已实现。**#770 于 2026-10-31 按已交付切片收口**：跨任务强关系（同问题 / 同根因不同实例）拆出 [#819](https://github.com/SummerSec/DeepSonar/issues/819) 独立跟踪，登记为暂缓设计。生产执行按 [AGENTS.md 验收边界](../AGENTS.md) 豁免，但不覆盖离线非模型质量验收——权威资产映射、独立人工标注与强关系质量门仍未完成。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)与[风险记录](architecture/12-risks-and-tech-debt.md)。
+> **Finding 身份与关系（2026-10-31，#770/#819）**：来源幂等、不可变历史、词法检索与弱候选已实现。#819 又接通操作员见证身份 manifest、不变 revision、mapping CAS/freshness/撤销、有界一致读取与 durable worker；管理员准入不认证外部官方真实性。强关系发布关闭，quality=unknown / not_evaluated；真实人工标签、问题家族/资产隔离调参/留出及预冻结阈值仍缺失，质量与生产建议未交付，不能把 #819 记为全部完成。见 [FR-FIND-007](architecture/01-system-specification.md#fr-find-007-可重建特征与关联质量边界)、[FR-FIND-009](architecture/01-system-specification.md#fr-find-009-操作员见证身份与跨任务关联)、[ADR 0014](architecture/adr/0014-operator-finding-identity.md)及[风险](architecture/12-risks-and-tech-debt.md)。
 
 > **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
@@ -18,10 +21,10 @@
 
 > **凭据解析同步（2026-10-21，#757）**：Provider/model/项目授权先形成候选，凭据决定 CLI；readiness 与 Job 共用解析，区分全局种子无偏好和用户显式偏好。项目 RoleConfig 不再暴露可写却不生效的 CLI/model，未收紧白名单读取不固化凭据 ID。详见 [运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)、[数据架构](architecture/08-data-architecture.md)与[接口规范](architecture/09-interface-specs.md)。
 
-> **当前同步状态（2026-10-18）**：核心设计禁止向后兼容；废弃契约不保留旧 schema/API/UI/运行时路径。#690 已删除 `role_credentials`、`POST /credentials/batch-bind` 与 `RoleConfig.pi_extensions`；Hub 提案 provider/model/extension，Scheduler 在项目授权目录内解析凭据。#674 / #676 把运行镜像收敛为平台目录、Hub 组合角色权威（`image_strategy` / `role_runtime_images` / 项目角色启用白名单已移除）；schema 当前集成编号以 `schema-version.ts` 为准（不作为发布版本承诺）（#690 能力插件运行时；#691 清除项目级能力配置面；#740 平台级全局暂停领取与版本发现；#748 凭据健康类别新增 `model_unavailable` / `quota_exhausted`）；#740 平台镜像按不可变 digest 引用，`DEEPSONAR_IMAGE_TAG` 已删除，`/health.version` 只认 `DEEPSONAR_VERSION`。#626 把凭据资产、角色引用与快照生效拆成三条边界。当前 DSH 迁移选定官方 `@deepseek-ai/dsh@0.2.1-rc.2`：隔离 lockfile + `dsh --profile`、显式 `bundles: []` profile、Gateway-only 短期 token、PTC `run_code`、v4 Session 归档；跨进程持久 resume 明确不支持。根 README 与架构入口仍以本地库/Web 为主路径。开放演进只看 `DESIGN.md` §12 与代码。
+> **当前同步状态（2026-10-31）**：当前契约不向后兼容，冻结 Job/证据/审计历史保持不可变。#690 的旧凭据绑定与 RoleConfig Pi 扩展字段、#674/#676 的旧项目镜像机制均已删除；能力、凭据、镜像仍由内核准入和 Job 快照冻结。schema 只按[源码编号](../apps/scheduler/src/schema-version.ts)与[唯一基线](../database/schema.sql)核对；本批 full rebuild 已用固定历史 v62/v63/v64 数据和七张新 relation 表完成 pg_dump/pg_restore 验证，无 pending 项（2026-10-31 主线程证据）。其余当前边界见 [DESIGN](../DESIGN.md) 与[架构索引](architecture/README.md)。
 
 
-> **发布状态核对（2026-10-29）**：[v0.6.0](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.0) 已于 2026-10-22 正式发布（非 draft / prerelease），包含两份 runtime registry、平台签名证据、Reverse 证据和 Management Skill 附件。本次核对 Release 元数据及附件清单，没有重新执行 registry inspect、验签或部署；发布存在不代表任意部署已升级或已通过运行验收。镜像内容版本与平台 Release 版本分别管理，缓存复用仍须核对 runnable 平台 manifest。发布契约与历史记录见 [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md)，Reverse 专题见 [`REA_CLI_CAPABILITIES.md`](REA_CLI_CAPABILITIES.md)。
+> **集成/发布证据（2026-10-31）**：本批以用户确认已正式发布且不可变的 v0.6.2 为基线。完整 CI `41186374980` 通过 SHA `e23c3b4f`，仅覆盖较早 #822/#825，不能证明当前组合。当前根分范围完整套件及 schema rebuild/CLI plan/apply/备份恢复已通过，分母见[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md#v063-集成证据范围2026-10-31)；实际本地 base 镜像 canonical RPC/独立生产 guard 已通过，集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。当前 PR 远端 CI、最终 main CI 与发布通道/平台、registry/catalog 证据仍未完成。必须全部 issue 实现、全部 PR 绿灯后再合并，最终 main 检查通过后才准备 v0.6.3。生产部署/真实模型不要求执行，人工质量缺口不豁免。发布细则见 [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md)。
 
 > **阅读顺序（Agent / 贡献者）**  
 > 1. 仓库根 [`DESIGN.md`](../DESIGN.md) — as-built 产品与设计摘要  
@@ -49,8 +52,8 @@
 
 | 文档 | 状态 | 说明 |
 |------|------|------|
-| [architecture/README.md](architecture/README.md) | **文档基线（#741；2026-10-15）** | 十二篇规格与视图、主题权威归属、逐章迁移、[追溯矩阵](architecture/traceability.md)和[开发 Skill](../.agents/skills/architecture-doc-sync/SKILL.md)；实现事实、规范与验证证据分开 |
-| [architecture/adr/README.md](architecture/adr/README.md) | **已采纳决策索引** | 0001–0006 为历史回填；0007–0008 记录暂停回滚及维护身份隔离/候选库升级，验收范围见各条状态与演练记录 |
+| [architecture/README.md](architecture/README.md) | **v0.6.3 集成核对（2026-10-31）** | 十二视图、主题归属、[追溯矩阵](architecture/traceability.md)与开发 Skill；实现、规范、当前验证和未交付质量分开 |
+| [architecture/adr/README.md](architecture/adr/README.md) | **历史与当前决策索引** | 0009 保持提议、0010 保持已采纳；0011–0014 分别记录目标授权、Plan v2、Pi 记忆、操作员身份，验收缺口见正文 |
 
 ---
 
@@ -63,7 +66,12 @@
 | [AGENT_RUNTIME_CONTEXT.md](AGENT_RUNTIME_CONTEXT.md) | **as-built**（#138） | context_id / compaction / 恢复身份 |
 | [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | **as-built**（#37） | 领域拆分与锁序；非「待实施」 |
 | [USAGE_LIMITS.md](USAGE_LIMITS.md) | **as-built** | 用量预算默认不限、显式限额、历史冻结策略及保留安全边界 |
-| [AI_NATIVE_TRUSTED_KERNEL.md](AI_NATIVE_TRUSTED_KERNEL.md) | **长期设计提案**（#446；Phase 1 脚手架已落地） | 最小可信执行内核、可组合插件、统一修复反馈、durable receipt、插件准入与分阶段迁移。`RepairFeedback` 契约与 Control API 截断/校验路径已接线 |
+| [AI_NATIVE_TRUSTED_KERNEL.md](AI_NATIVE_TRUSTED_KERNEL.md) | **长期提案 + 已实现边界（2026-10-31）** | `RepairFeedback`、目标授权及 Plan v2 工程边界已有实现；完整长期协议、当前回放/组合验证与独立质量分别登记 |
+| [PI_OBSERVATIONAL_MEMORY_INTEGRATION.md](PI_OBSERVATIONAL_MEMORY_INTEGRATION.md) | **#815 A 工程与本地镜像准入已验** | canonical 固定发布物、独立 wrapper 指纹、opt-in 冻结配置/模型；OM 专属版本准入与生产内容守卫已验证，镜像证据集中见 RPC 专题 |
+| [PI_OBSERVATIONAL_MEMORY_GATEWAY.md](PI_OBSERVATIONAL_MEMORY_GATEWAY.md) | **#815 B Gateway/账本定向验收已过，组合验收另计** | 内核 workload 凭据、冻结路由、额度/归因、pending/unknown 与终态撤销；Gateway budget 与 real SQL/HTTP 定向证据已通过，最终组合 CI 和收益结论仍未完成 |
+| [PI_OBSERVATIONAL_MEMORY_RPC.md](PI_OBSERVATIONAL_MEMORY_RPC.md) | **#815 C 实际本地镜像 RPC/启动拒绝已验** | 本地 base 镜像身份、canonical package/lock/manifest/wrapper 预检、已安装真实 RPC 与独立生产 guard 正负例的唯一详细记录；历史 Session HTTP 脱敏已验，最终 CI/发布通道及收益另计 |
+| [PI_OBSERVATIONAL_MEMORY.md](PI_OBSERVATIONAL_MEMORY.md) | **#815 A 历史评审背景** | 当前实现细则以上述集成/Gateway/RPC 专题为准；早期比例方案不能覆盖当前显式分配契约，v0.6.2 镜像不含 OM |
+| [PROGRAM_ELIGIBILITY.md](PROGRAM_ELIGIBILITY.md) | **#822 as-built 工程边界** | 操作员见证材料与独立评审、证据失效和当前资格投影；不认证外部官方真实性，不授予目标执行或任务完成 authority |
 | [RUNTIME_IMAGE_REGISTRY_CONTRACT.md](RUNTIME_IMAGE_REGISTRY_CONTRACT.md) | **as-built**（#70 / #417） | 官方镜像 catalog v2、通道、平台/运行时版本轴、`min_runtime_image` fail-closed |
 | [RUNTIME_TEST_TOOLCHAINS.md](RUNTIME_TEST_TOOLCHAINS.md) | **as-built** | Kali Test / Verify Base 与 Mobile 工具链边界；#754 Rust ASC 默认、Python 显式回退及真实 APK/双架构验收边界 |
 | [RUNTIME_ROLE_IMAGE_MATRIX.md](RUNTIME_ROLE_IMAGE_MATRIX.md) | **as-built**（#565 / #588） | 角色×官方镜像默认、工具范围、不包含、Scheduler 边界注入；#588 起每镜附带 `/opt/deepsonar/manuals` 工具说明书与 CI 门禁 |
@@ -171,24 +179,24 @@
 
 #770 查询增强：现有项目交付页的服务端筛选、游标分页和汇总口径见[接口规格](architecture/09-interface-specs.md#finding-项目查询770-切片-b)（切片 B；2026-10-29）。来源身份由切片 A 独立交付（见本页顶部）；项目词法检索与持久弱候选另见下方专题，不能由查询上线推定强关系质量已验收。
 
-## #775 设计目标与实现差额
+## #775 当前执行与证据边界
 
-[有界 Intent 设计对照](PLAN_BOUNDED_INTENT_DESIGN.md) 区分 #791 已实现的 B 首片与未交付目标：首次显式 Plan 激活、每 Canvas 一次预算及假执行闭环已有证据；持久 Plan 接纳回执已复用 events.control_receipt，支持原响应恢复及冲突校验；真实模型效果未验证且不作为本批验收前置，C 不启用。
+[Plan v2 决策](architecture/adr/0012-plan-v2-execution.md)与[运行时视图](architecture/06-runtime-view.md)记录当前 objective CAS、有限 lifetime、多轮路线和依赖输出核验；[设计对照](PLAN_BOUNDED_INTENT_DESIGN.md)保留范围分析。历史每 Canvas 一次补证不再描述当前 v2 执行上限；不把 v1 审计只读当作新执行兼容。旧 writer 已于 2026-10-31 物理删除，ADR-0012 的决策文字保持不变。
 
 [#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI十八流程的真实代码、合成协议和未验收边界；不是模型质量报告。
 
 #767 程序规则附加评审已接线：仅 supplied bounty Finding，通过 program_rule:<ruleid> 独立评价材料规则；不改变通用任务判据，不授予提交资格。见[任务判据评审](TASK_GOAL_REVIEW.md)与[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
 
-#775 的[冻结离线控制回放](../agent-harness/plan-replay/README.md)提供32行逐例差异与缺失分母；不代表全部业务样本、模型质量收益或C阶段完成。
+#775 的[冻结离线控制回放](../agent-harness/plan-replay/README.md)记录当前 v2 的 SQL/HTTP fixture、17 个 outcomes/traces 和七个注入故障门禁；normal→all7negative→normal 迁移已完成。`report.json` 的 provenance 为 dirty 的其他 commit，不能当作 `5619154f` 精确验收；回放不证明模型质量收益或最终组合 CI。
 
 [Finding 证据追踪](EVIDENCE_TRACE.md)：本片修正来源 Attempt 与宿主实际字节完整性诊断；不认证命令执行、独立复现、knownness 或资格。
 
 
-#770 C 特征投影与 D 质量门：[项目 Finding 特征研究](PROJECT_FINDING_RESEARCH.md)（2026-10-30；C 与 D 词法检索/持久弱候选基础已合入，强关系建议未发布）。2026-10-31 强关系拆出 [#819](https://github.com/SummerSec/DeepSonar/issues/819) 独立跟踪。
+#770/#819：[项目 Finding 研究](PROJECT_FINDING_RESEARCH.md)及[数据架构](architecture/08-data-architecture.md)区分特征/弱候选、操作员身份/持久关系计算与未交付的独立强关系质量；生产建议仍关闭。
 
 #770 非模型验收工具：[Finding 离线评估与积压测量](PROJECT_FINDING_EVALUATION.md)（2026-10-30；工具已合入）。2026-10-31 随 #770 收口，但独立人工质量验收仍记为未执行；生产执行豁免不覆盖该验收。
 
 
 - [当前 Job 的 Skill 条件建议](SKILL_SUGGESTIONS.md)：#778 本项目精确版本条件匹配、选择声明回执与非模型验收矩阵；不自动启用，不声称效果或成本收益。
 
-- [沙箱 Pi 观测内存 A 片决策记录](PI_OBSERVATIONAL_MEMORY_DECISIONS.md)：#815 的 7 项设计原则已由用户确认，按「已定 / 条件适用时必填 / 后续实现 / 启用门禁」分层记录；工程契约与 A 结论仍待闭合，注册与启用前不预装、不启用。
+- [沙箱 Pi 观测记忆决策](PI_OBSERVATIONAL_MEMORY_DECISIONS.md)与 [ADR 0013](architecture/adr/0013-governed-pi-memory.md)：已定边界保持不变；实际本地镜像 RPC、独立生产 guard 与 OM 专属版本准入已验，细节集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。最终组合 CI、发布通道/平台与 registry/catalog 证据仍待完成，质量/成本收益 unknown。

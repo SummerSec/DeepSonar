@@ -1,7 +1,7 @@
 # 12. 风险与技术债
 
 > 状态：**as-built（风险登记，#741 PR 5 回填）**。本文只登记当前实现仍有证据支持的缺口、风险和有意暂缓项；已完成的历史决策不重复列为待办。
-> 同步日期：2026-10-30
+> 同步日期：2026-10-31
 
 风险登记以当前代码、schema、OpenAPI、测试和已维护专题为证据。issue 只作为来源或后续协调入口；本次回填没有核实历史讨论的原始日期，也不把计划文本写成已实现能力。
 
@@ -25,10 +25,11 @@
 | D-05 | 低 | Artifact-first Phase 1 已把 Fact/Finding 提案转换为 Artifact，并将 Finding/SARIF/报告作为投影；Claim/Evidence/Evaluation/Projection 的长期扩展和旧投影路径清理仍未完成。 | 投影种类增加时需要维持 Artifact、Fact、Finding 和报告的版本/来源一致，重复事实源会增加审计成本。 | 继续以 Artifact 为内部写入真相；Verify 只消费结构化 Fact、Artifact、Evidence 和独立 Evaluation。任何新字段先进入现有 schema/共享契约和投影测试。 |
 | D-06 | 低 | 质量指标和 Hub replay 已有只读投影；Experience 经验存储为空，尚未有跨任务经验召回、成本感知计划和策略评估闭环。 | 不能把质量投影或人工标签解读为模型准确率承诺，也不能自动把历史结果当作当前事实。 | 关联长期评估路线；没有冻结数据集、来源、版本和过期策略前，不新增经验写入或推荐路径。 |
 | D-07 | 中 | [`runtime-image-registry-contract.ts`](../../apps/scheduler/src/runtime-image-registry-contract.ts) 仍保留 schema v1 的兼容解析、旧 `image_ref` 投影和历史重复 digest alias；当前新目录契约以最新形态为准。 | 旧输入/输出路径继续存在会增加发布审计和移除成本，也可能让历史投影被误认为受支持的新契约。 | 仅在历史材料、迁移证据和发布窗口确认不再依赖后物理清扫；新生成内容不得依赖兼容投影，兼容解析不能扩大新运行时输入范围。 |
+| D-08 | 高 | OM 的 registry/freeze、Gateway workload/ledger、wrapper 与 RPC/历史 Session 脱敏已落地，默认显式 opt-in。实际本地 base 镜像的 canonical RPC、独立生产内容 guard 正负例及 OM 专属版本准入/适配器回归已通过；内核已知请求前 transport、持久零用量结算和 provider 防冒充亦已通过，集中见 [RPC](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)与 [Gateway](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。剩余为当前 PR/最终 main 组合 CI、发布通道/平台及 registry/catalog 证据；质量与成本收益仍为 `unknown`。 | 本地 base 验收不能证明最终源码组合、其他镜像/平台或已发布 digest；未经独立评估不能宣称记忆质量、价格/成本收益、容量或 SLA 改善。memory 仍不能成为 Fact/Evidence authority。 | 保持版本/内容两道独立准入、冻结 route/model、内核 workload、显式有限分配、pending/unknown 与终态撤销、私有配置和多出口脱敏。按[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)完成最终 CI，发布证据另行核对；质量/成本结论等待独立测量，不把源码接线、host 结果或本地 image ID 写成完整发布验收。 |
 
 ### 任务下发校验的证据边界（#767）
 
-共享契约已减少结构化字段与场景要求的入口漂移，但字段齐全不证明描述真实、目标可执行或模型结果一致。当前没有通用目标账号/租户/角色/资源归属与外部业务写权限探测器，也不从凭据公开元数据推断目标授权；相关必要条件未知时 fail closed。模板预算是规划信息，不替代既有内核资源预算。对任意自然语言的语义归一化、自动安全拆分和真实模型质量提升仍需单独评测。此边界不允许靠客户端 `verified` 或模板默认权限绕过。
+共享契约已减少结构化字段与场景要求的入口漂移，但字段齐全不证明描述真实、目标可执行或模型结果一致。当前仅有 Scheduler-owned 的 `reference-http/v1` 目标授权适配器，并不是通用目标账号/租户/角色/资源归属与外部业务写权限探测器；也不从凭据公开元数据推断目标授权。authority、action、prerequisite、scope、revision、freshness 和 binding 任一未知或不一致时 fail closed，客户端 `verified`、模板默认权限和旧 grant 不能绕过。模板预算是规划信息，不替代既有内核资源预算；任意自然语言的语义归一化、自动安全拆分和真实模型质量提升仍需单独评测。
 
 ## 2.1 ASC 迁移验收证据（#754）
 
@@ -60,13 +61,11 @@ P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspec
 
 当前目录发现和 Skill 拉取受 Job token、快照、预算、网络和审计约束；任务级或会话级 Pack 持久化、评估晋升和跨任务推荐仍属于长期阶段。暂缓期间，Skill 只能影响当前任务的方法，不能改变 Job 快照、项目范围、镜像、凭据或平台工具权限。
 
-### 3.5 项目级 Finding 强关系关联（#770 / #819）
+### 3.5 项目级 Finding 强关系关联（#819）
 
-项目查询增强、特征投影、词法检索与持久弱候选已 as-built：`project_finding_features` 保存可重建特征，`project_finding_candidate_*` 保存 canonical 双端弱候选，读端按当前来源与活动代核对，离线评估与积压探针已接线。跨任务**强关系**（疑似同一问题 / 同根因不同实例）未交付；2026-10-31 从 #770 拆出，独立跟踪见 [#819](https://github.com/SummerSec/DeepSonar/issues/819)。
+当前根代码已接入操作员认证的 identity source/mapping manifest、immutable source revision、mapping CAS、freshness/revocation/invalidation 和 durable relation worker；管理面有两条有界读取路由与六条受保护写入路由。写入只接受 `admin` 和 Finding 所属项目范围，服务端计算 digest/provenance，调用方不能自报外部 inventory authority；历史保留，最新 source/mapping 失效时读取端立即阻断，不回退旧版本。
 
-未完成的是三项而不是一项：**实现**上 [`compareFindingFeatures`](../../apps/scheduler/src/domains/project-finding-research/model.ts) 没有强关系输出分支，`IDENTITY_FIELDS` 全部已知且匹配时仍返回 `similar` / `lexical_overlap_only`（[`model.test.ts`](../../apps/scheduler/src/domains/project-finding-research/model.test.ts) 的 `v1 strong relation gate remains closed even for synthetic matching authority` 固定该行为）；**数据**上 `FindingPayload` 没有 asset / tenant / environment / version / parameter / root-cause 字段，权威身份一律 `null`；**质量验收**上没有独立人工标注集、没有按问题家族/资产隔离的调参/留出集、没有预先冻结的阈值。补齐输入不会自动产生强关系结论，仍需实现、接线与评审。
-
-在此之前不得把文本相似或弱候选宣称为同问题结论，不得传播 Verify / 处置状态，也不得用「未自动合并」充当质量指标。生产执行按 [AGENTS.md「验收边界」](../../AGENTS.md) 豁免；该豁免只覆盖生产执行，**不覆盖**上述非模型质量验收，未验证质量继续记为 `unknown`。
+交付边界仍然明确：强关系 `published=false`，`quality_gate_status=not_evaluated`，公共 relation items 为空；这套 operator attestation 不证明外部 inventory authenticity，也没有独立人工标注集、按问题家族/资产隔离的调参/留出集或预冻结阈值。`compareFindingFeatures` 的相似/弱候选不能被重新表述为同问题结论，不得传播 Verify/处置状态；质量与收益继续记为 `unknown`。生产执行豁免不覆盖这些非模型质量验收缺口。
 
 ## 4. 已收口边界（不作为待办）
 
@@ -75,7 +74,7 @@ P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspec
 | 边界 | 当前收口事实 | 主要核验入口 |
 | --- | --- | --- |
 | 不向后兼容 | 新契约不为旧输入保留兼容窗口；schema/快照不匹配 fail closed，历史快照和证据仅作不可变历史；现存格式兼容解析作为 D-07 登记，不是新契约。 | [`ADR 0001`](adr/0001-no-backward-compatibility.md)、[`migration-runner.ts`](../../apps/scheduler/src/migration-runner.ts)、Job snapshot tests |
-| 单一 schema 基线 | `schema.sql` 与 [`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 的导出值必须一致；空库套用，非空版本/结构漂移拒绝启动，无增量升级链。 | [`ADR 0002`](adr/0002-schema-baseline.md)、[`migration-runner.test.ts`](../../apps/scheduler/src/migration-runner.test.ts) |
+| 单一 schema 基线 | `schema.sql` 与 [`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 的导出值必须一致；空库套用，非空版本/结构漂移拒绝启动，无增量升级链。2026-10-31 full rebuild 已用固定历史 v62/v63/v64 数据执行 pg_dump/pg_restore，并恢复七张新 relation 表；主线程证据为 19 pass/0 skip，无 pending。 | [`ADR 0002`](adr/0002-schema-baseline.md)、[`migration-runner.test.ts`](../../apps/scheduler/src/migration-runner.test.ts)、[`database/schema.sql`](../../database/schema.sql)；full rebuild 结果见[顶层索引](../README.md) |
 | API-only 控制 | Job-scoped Control API、短期 capability token、严格输入和幂等语义是唯一语义写入通道；受治理普通 MCP 仍可作为业务工具，但不能绕过该写入通道。 | [`ADR 0003`](adr/0003-api-only-control.md)、[`platform-api/routes.ts`](../../apps/scheduler/src/domains/platform-api/routes.ts)、[`platform-api.test.ts`](../../apps/scheduler/src/domains/platform-api/platform-api.test.ts) |
 | Fact/Finding 分责 | Fact 的 `verification_status`、Finding 的 `verify_status` 和人的 `disposition` 独立；Verify 只消费结构化证据。 | [`ADR 0004`](adr/0004-fact-and-finding-verification.md)、[`database/schema.sql`](../../database/schema.sql)、[`verify-fact-first.test.ts`](../../apps/scheduler/src/verify-fact-first.test.ts) |
 | 三流职责 | `events` 是语义账本，Evidence 文件是过程证据，stream-bus 是非权威实时缓存；补读走 Evidence，过程流可见性显式报告。 | [`ADR 0005`](adr/0005-event-evidence-stream.md)、[`process-stream-policy.ts`](../../apps/scheduler/src/process-stream-policy.ts) |
@@ -99,13 +98,15 @@ P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspec
 
 风险登记与专题事实的交叉索引在 [`docs/README.md`](../README.md) 和 [`DESIGN.md`](../../DESIGN.md)；架构文档变更按照 [`11-engineering-specs.md`](11-engineering-specs.md) 和 [`architecture-doc-sync`](../../.agents/skills/architecture-doc-sync/SKILL.md) 的完整变更面处理。新增风险应优先引用代码/测试入口，避免只引用旧计划或未核实的历史结论。
 
-## #775：接纳恢复不代表执行结算
+## #775：Plan v2 路线与接纳恢复不代表执行结算
 
-Plan 持久成功响应已复用 control_receipt，inline/file 的缓存丢失、未结算恢复和冲突回归接入现有 Plan CI。原 handler/Attempt 不可恢复时仅提供持久接纳结果；不创建替代执行器，不重放未知外部效果。未保存的目标仓库/环境版本仍未知。真实模型效果未验证，按本批验收范围不作为关闭前置；C 不启用。设计目标与实现边界见 [有界 Intent 对照](../PLAN_BOUNDED_INTENT_DESIGN.md)。
+当前 Plan 执行接口只接收 v2，v1 只读历史是规范边界。2026-10-31 已物理删除 `applyHubPlanAdapter`、`persistPlanAudit`、side-effect writer 及纯 legacy `adapt*` helpers/types/exports；普通 HubIntent 仍走原 handler，不制造新的 v1 `plan_protocol` 或 audit，immutable v1（含 `hub_intent_adapter`）仅供历史读取。v2 objective/route CAS 与有限 lifetime 复用既有 Intent，保留 Attempt、实际 Evidence/provenance 和输出关联；接纳 receipt 不启动第二执行器。工程 `complete/completed` 仅表示路线输出条件，任务语义完成另需全部当前正向操作员判据。2026-10-31 根本地 normal→all7negative→normal 三次 replay 均 exit 0，当前 v2 单一 SQL/HTTP fixture 的 17 个 outcomes/traces 全匹配，七个注入故障均正确触发 gate 失败；`report.json` provenance 为 dirty 的非 HEAD 提交，且结果不是 17 个独立测试，最终 combined CI 仍待核对。未知或 `replay_policy=never` 的效果不自动重放。真实模型/生产执行不要求，质量/成本收益 unknown；人工质量输入不在豁免内。见 [ADR 0012](adr/0012-plan-v2-execution.md) 与 [Plan 专题](../PLAN_GAP_PROJECTION.md)。
 
-## 成果资格与目标收敛缺口（#767）
+## 可信目标授权与成果资格边界（#767 / #822）
 
-研究候选、来源隔离评审、非 Finding 工程/负结果与确定性报告已接线，不能继续将这些能力笼统列为未实现。剩余能力包括可信身份/目标写授权适配器，以及高标准安全提交所需攻击链、knownness 版本适用性与程序资格正向闭环；产品须明确适配器信任来源与资格 authority。无契约是原可选设计，标为 unassessed，不以强制迁移作为本 issue 必须完成项。可选 Plan 显式关联已接线，不能替代原 operator_attestation、verified Fact 或完整完成门；已关联来源需持续有效。验收证据与决策分列见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。真实模型验收已豁免，效果未验证不等于缺口已解决。
+Scheduler-owned 的只读 target-authorization protocol 已接线：authority/action/prerequisite/scope/revision/freshness/binding 由可信适配器返回，secret 只来自 host/platform 配置；中心继承与 dispatch/rerun live checks 重新核验，客户端字段、模板和公开凭据 metadata 不能证明外部写授权。最新 grant 无效不得回退旧 grant，`target_authorization_grant_invalid` 进入不可重试的 fail-closed 路径。目标写入本身不属于该协议。
+
+程序材料/资格的操作员准入、append-only history、当前 Finding/Verify/Evidence 绑定投影已接线，但不认证外部官方来源，不授予执行权限；Agent/internal actor、viewer 和 Finding maker 不能批准，写入权限由认证 actor 和项目范围决定。剩余缺口仍是高标准提交所需攻击链、knownness 版本适用性、独立质量数据和预冻结阈值；可选 Plan 关联不能替代 operator attestation、verified Fact 或完整完成门。验收证据与决策分列见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。真实模型验收已豁免，效果未验证不等于缺口已解决。
 
 执行证据摘要升级为 content_schema_version:2 有失效影响：旧 v1 结果/评审绑定可能不再通过当前校验。#797/#798 已随本批合入，部署前仍须核对保存证据的版本；禁止自动重写旧摘要或改绑 assignment。重新产出 task_result/独立评审不授予新 authority；历史保留，rejected 与 Plan verified 门不变。
 
@@ -117,4 +118,4 @@ Plan 持久成功响应已复用 control_receipt，inline/file 的缓存丢失�
 
 证据追踪此前混淆 manifest 声明摘要与 observed、路径后缀与精确 URI、最新 Attempt 与来源 Attempt；本片已修正只读完整性诊断并完成行为验收。仍无宿主命令 receipt 或真正独立复现/攻击链；knownness helper 未运行时接入，不可视为 novel authority。详见[证据追踪](../EVIDENCE_TRACE.md)。
 
-#775 已补一次补证的持久执行状态投影，不能代表所有目标/PlanTask 的执行覆盖；自动环境原因认证、目标修订、依赖图调度与有界自适应仍非本片实现。C 不启用，真实效果未验证且不作为本批验收前置。 见 [Plan 执行投影](../PLAN_GAP_PROJECTION.md#一次补证的执行投影)。
+#775 的 Plan v2 目标修订、依赖图调度、lifetime 路线、实际输出来源与既有 Intent 路径已接线；v1 writer 已于 2026-10-31 物理删除，immutable v1 与 `hub_intent_adapter` 仅保留历史读取。历史一次补证投影只说明历史范围；根本地 v2 replay 的 normal→all7negative→normal 三次退出 0、17 个 outcomes/traces 和七故障负例门禁已核验，但 `report.json` provenance 是 dirty 的非 HEAD 提交，最终 combined CI 仍待完成。不要求生产或真实模型试验，不因此豁免其他 issue 的独立人工质量输入。

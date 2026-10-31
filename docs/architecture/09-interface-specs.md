@@ -11,6 +11,8 @@
 
 `workspace_write` 仅表示沙箱工作区变更，不包含外部业务写入或代码推送；后者属于需要目标核验的 `write`。客户端不得把 `allowed_actions`、身份字段或前置条件声明当作授权证明。服务端对可核验的当前项目网络限制、凭据存在/启用/项目范围做复核；真实目标身份、写权限和任意材料的可用性无可信核验结果时保持未知。契约及提示只能使用凭据引用，不能放入密码、cookie、token；schema 不提供秘密字段，但也不能保证自由文本没有秘密。详细管理工作流见[任务下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
 
+当前 `reference-http/v1` 的身份与动作正向判权由宿主配置的只读 `deepsonar.target-authorization/v1` authority 提供，严格核对 principal/scope/action/prerequisite/content/contract/config/authority revision 和 freshness。任务不能指定 authority URL/secret 或自带 grant；系统审计保存无密钥 grant，子/系统 Job 统一继承，provision/rerun 实时复核。缺失或变化 grant 使用不可重试 `target_authorization_grant_invalid`；其他拒绝/传输错误按授权域稳定错误返回，均不执行目标动作。详见 [ADR 0011](adr/0011-trusted-target-authorization.md)及[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
+
 ## Management API
 
 Management API 面向用户、Web 和受信任自动化，包含项目/任务、Canvas、Job 控制、Finding/报告、设置、镜像、凭据、设备、Worker、导入导出、平台 claim、只读平台版本发现和审计等入口。管理员只读 `GET /platform/updates` 读取 catalog 同步路径最近一次写入的当前部署与 `platform` 信息比较结果；它不触发新的比较，也不执行升级、apply 或 rollback，项目 token 不能调用。管理 API token 以 hash/prefix 存储，明文只在创建或轮换时返回；token scope 与 path project scope 同时校验。Provider credential 与平台 API token 分离，凭据密文使用 nonce/auth tag 存储，常规 credential projection 不含 ciphertext；现有设置编辑契约允许特定 `settings_config` 字段携带账户配置值，因此该响应仍受管理 scope、审计和脱敏规则约束。Job snapshot 投影不携带长期 secret。
@@ -21,11 +23,32 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 ### Finding 项目查询（#770 切片 B）
 
-现有项目交付页使用 `GET /findings` 的最多 50 条游标页，按创建时间与 UUID 降序；游标保留 PostgreSQL 微秒精度。项目/任务/严重度/profile/类别/验证/处置同维度多选 OR、跨维度 AND；`q` 是标题、位置、摘要、指纹的不区分大小写字面子串，保留中文且转义 SQL 通配符。项目 token 在分页前约束所有项目和任务过滤项；列表与汇总复用同一条件和同项目来源 JOIN。汇总各桶在同一 SQL 快照计算，`total` 表示匹配数，`project_total` 明示为项目全量。列表与汇总为独立请求的当前读视图，不承诺跨请求快照一致；新建/删除/状态更新后需刷新首屏。
+现有项目交付页使用 `GET /findings` 的有界游标页，页面上限见[研究专题](../PROJECT_FINDING_RESEARCH.md)与机器契约，按创建时间与 UUID 降序；游标保留 PostgreSQL 微秒精度。项目/任务/严重度/profile/类别/验证/处置同维度多选 OR、跨维度 AND；`q` 是标题、位置、摘要、指纹的不区分大小写字面子串，保留中文且转义 SQL 通配符。项目 token 在分页前约束所有项目和任务过滤项；列表与汇总复用同一条件和同项目来源 JOIN。汇总各桶在同一 SQL 快照计算，`total` 表示匹配数，`project_total` 明示项目全量。列表与汇总是独立请求，不承诺跨请求快照一致；状态变化后需刷新首屏。
 
 任务/profile 选项从未筛选的授权汇总取得，不以当前页推断。URL 保存筛选、游标、详情与交付视图；查询失败隐藏旧列表、计数和详情，重试仍保留 URL。记录展示源 `updated_at`，不虚构异步计算状态。证据内容、任务详情和报告仍由各自 scope 校验，列表权限不扩大证据读取；普通 Job 无新增查询通道。
 
 本切片不提供猜测资产/版本筛选、关联边或数据完整性承诺。来源提前去重修复、权威特征覆盖率与样本质量、查询规模性能需分别验收；字面文本检索不是语义同一性判断。既有默认无分页 API 窗口仍供其他调用方使用，项目页面不再依赖该窗口。
+
+## Finding 操作员见证身份与强关系接口（#819）
+
+以下八个 Management API 操作在根认证和项目 scope hook 后注册；读接口要求 `findings:read`，身份 source/mapping 写接口要求 `admin`。项目受限主体只能访问自己的 Finding/Canvas；Job capability token 不进入这些 Management API，也不能写入身份登记。完整字段、严格未知字段拒绝、OpenAPI scope 和稳定错误响应以 [relation routes](../../apps/scheduler/src/domains/project-finding-research/relation-routes.ts)、[relation OpenAPI](../../apps/scheduler/src/domains/project-finding-research/relation-openapi.ts)、[`auth.ts`](../../apps/scheduler/src/auth.ts) 和 [shared relation schema](../../apps/scheduler/src/domains/project-finding-research/relation-schemas.ts) 为准。
+
+| 方法和路径 | scope | 接口边界 |
+| --- | --- | --- |
+| `GET /findings/:id/relations` | `findings:read` | 当前 Finding 的有界强关系状态；可选 opaque cursor 绑定 project、subject、generation、source/identity fingerprint，游标失配返回冲突并要求从首面重读 |
+| `GET /canvases/:id/finding-relations` | `findings:read` | 同一 repeatable-read 快照内的 Canvas 有界投影；不接受查询参数，不代表完整项目图 |
+| `POST /findings/:id/identity-sources` | `admin` | 登记 typed source manifest；server 生成 `source_id`、内容摘要和 `registered_by`，不是调用方声明 |
+| `POST /findings/:id/identity-sources/:sourceId/revisions` | `admin` | 以 `expected_source_revision` 做 CAS 追加不可变 revision；旧 revision 的 mapping 立即失效 |
+| `POST /findings/:id/identity-sources/:sourceId/revoke` | `admin` | 以当前 source revision + reason 撤销；保留历史，重复相同撤销可幂等读取 |
+| `POST /findings/:id/identity-mappings` | `admin` | 首次按 `source_id`/field 绑定，`expected_mapping_version` 必须为 `null`；server 从当前 source 解析 digest/metadata/freshness |
+| `POST /findings/:id/identity-mappings/remap` | `admin` | 以最新 mapping version + reason 做显式 CAS remap；原 mapping 撤销并追加新版本，不能静默覆盖 |
+| `POST /findings/:id/identity-mappings/revoke` | `admin` | 以最新 mapping version + reason 撤销当前字段绑定；保留历史并触发关系重建 |
+
+source body 只允许 `authority_version`、受限 `source_kind`、无控制字符的 `source_ref`、`freshness_until` 和非空 digest-only `identity_fields`；mapping body 不接受调用方自报 `identity_digest`、source revision/kind/ref/digest 或 provenance。source revision、mapping version、项目/Finding/source 外键和当前状态在事务内重验；过期、撤销、字段缺失、跨项目 source、旧 CAS 版本、重复 remap 和未知字段 fail closed，典型稳定错误为 `IDENTITY_SOURCE_CAS_CONFLICT`、`IDENTITY_MAPPING_CAS_CONFLICT`、`IDENTITY_SOURCE_STALE`、`IDENTITY_SOURCE_REVOKED`、`IDENTITY_SOURCE_FIELD_MISSING`、`PROJECT_MISMATCH` / `PROJECT_SCOPE_MISMATCH`。
+
+关系响应明确返回 `authority_basis=platform_admin_attestation` 与 `independent_external_verification=false`。当前 `quality_gate_status=not_evaluated`、`published=false`，公开读路由省略 suppressed relations；`includeSuppressed` 等未知 query 字段由 strict schema 拒绝。每次读侧按当前 Finding source fingerprint、identity snapshot fingerprint、generation 和 rule version 重核，旧或失效项标 `stale_results_omitted`；身份历史不完整则 `read_status=blocked`。响应中的 `read_status`/`read_reason`、`pair_truncated`、`next_cursor` 和 Canvas `query_budget` 是完整性判断，不应把空 `items` 当作“没有关系”。
+
+读取、计算和历史的上限只在源码命名常量维护：Finding page 的 `RELATION_RESULT_LIMIT`，Canvas 的 `CANVAS_FINDING_LIMIT`/`CANVAS_RELATION_LIMIT`/`CANVAS_RESPONSE_BYTES`，worker 的 `RELATION_BATCH_SIZE`/`RELATION_PROJECT_SCAN_SIZE`/`RELATION_PAIR_LIMIT`，以及 mapping 的 `IDENTITY_MAPPING_HISTORY_LIMIT`；见 [`relation-read.ts`](../../apps/scheduler/src/domains/project-finding-research/relation-read.ts)、[`relation-computation.ts`](../../apps/scheduler/src/domains/project-finding-research/relation-computation.ts) 和 [`identity-mapping-store.ts`](../../apps/scheduler/src/domains/project-finding-research/identity-mapping-store.ts)。文档不复制这些可变数值。
 
 ## Job-scoped Control API
 
@@ -33,7 +56,7 @@ Control API 由 Scheduler 动态注册 operation、schema 和当前 Job 的 allo
 
 所有 `/control/v1/jobs/{jobId}/operations/{operationId}` POST（包括只读 discovery、graph/capability 查询和 Skill 拉取）都必须带 UUID `Idempotency-Key`。在同一 Scheduler 进程的接口缓存仍存在时，同 key、同 operation 和同输入可返回已有结果；同 key 改变 operation/input 返回冲突。只读 operation 的 key 只提供请求级缓存和冲突检查，不产生 durable event/effect receipt；改变语义或外部效果的 operation 才继续依赖具体领域的事件 dedup、唯一键或 effect settlement。当前接口层缓存是进程内的，Scheduler 重启后会丢失；重启后的重复请求不能把内存缓存当成跨重启幂等保证。
 
-Control operation 分为两类：`list/search/describe/validate/preview` 能力发现、graph 查询和 Skill 拉取是只读 operation；`emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human`、人工 ACK 以及 Plan/PlanResult 是语义提交，其中 Plan/PlanResult 不直接派发 Worker 或执行依赖图；首次显式 Plan 激活当前 Canvas 的依据门，既有 Hub Intent 可进行一次有界补证，complete/报告受当前全判据授权校验。所有 operation 都不直接暴露数据库写入、容器命令、凭据、Job 快照或终态修改；只有语义提交由 event-ingestion/application transaction 产生受审计的领域结果。
+Control operation 分为两类：能力发现、graph 查询和 Skill 拉取返回受治理只读结果；`emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human`、人工 ACK 及 Plan/PlanResult 是语义提交。当前 v2 Plan/Result 在事件事务内驱动 Scheduler 复用既有 Intent admission/materializer 执行依赖任务，complete/报告仍受当前全判据 authority 校验。operation 不直接暴露数据库、容器、长期凭据、快照或终态修改；语义副作用只由 event-ingestion/application transaction 执行，v1 历史读取不是新执行输入。
 
 ## 项目知识接口（#752 分支）
 
@@ -80,6 +103,8 @@ Hub `complete` 被现有分析完成门拒绝时，保持 `invalid_payload` / `c
 
 Control graph_query 新增 plan_gap 分页只读类型；submit_hub_decision/request_human 可带严格版本化 plan_basis。字段、只读证明、单步预算、错误/重试边界见 [Plan 协议范围](../PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证)；OpenAPI 输入 schema 由 shared-types 派生，无新写入 API。
 
+`graph_query(kind=plan_objective)` 是独立的 Job-scoped 只读入口：初始 L0/overview 仅返回有界 handle，objective 查询独立于已接受 Plan 返回 `items[0]` 完整持久化 tuple；selectors、cross-scope、wholeGraph 不在契约内。预算或 input hash 不满足时返回明确失败，不以部分响应证明已完整读取。
+
 ### 修正模型请求额度（#776）
 
 Gateway 在 Job 锁内按首个完成拒绝回执识别修正请求，并复用 Attempt effect / usage ledger 累计。`REPAIR_USAGE_PENDING`、`REPAIR_USAGE_UNKNOWN`、`REPAIR_TOKEN_LIMIT_UNCONFIGURED`、`REPAIR_TOKEN_EXHAUSTED` 返回 409 与有界预算投影，不转发模型请求；未知用量的 remaining_tokens 为 null。显式配置、调用前成本限制和恢复行为见 [修正预算](../REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
@@ -98,7 +123,7 @@ emit_fact.artifact.task_result 接收 delivery/negative_result/blocked/not_execu
 
 goal_review criterion_ids 增加 program_rule:<ruleid>，仅 supplied bounty Finding 主体可用，fact_id 禁止。报告附加 program_rule_review status=not_assessed/partially_satisfied/rules_satisfied/blocked，通用 criteria 不变；exclusion satisfied 表示未命中排除。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
 
-程序规则报告累计上限为 100 条 Finding×rule 判据；超限所有 program_rule_review blocked、criteria 为空，原因 program_rule_projection_limit_exceeded，可读取单 Finding 报告。Plan goal_review_options 过滤程序规则 ID，不扩展通用 Plan 映射。
+程序规则报告按[源码累计上限](../../apps/scheduler/src/task-program-rule-report.ts)限制 Finding×rule 判据；超限所有 program_rule_review blocked、criteria 为空，原因 program_rule_projection_limit_exceeded，可读取单 Finding 报告。Plan goal_review_options 过滤程序规则 ID，不扩展通用 Plan 映射。
 
 ## 证据追踪诊断修复
 
@@ -112,10 +137,10 @@ plan_gap 的 supplementation_execution 只读提供单次补证状态、来源�
 
 ## Finding 词法检索（#770 D 检索首片）
 
-`GET /findings/:id/lexical-search` 使用既有 `findings:read` 与项目鉴权，当前声明文本按128来源窗口seek后排名最多25项，返回游标、窗口/排名截断、声明摘要与规则版本。主体变更使游标409失效；无缓存关系、Evidence内容或资产权限扩张。详情只展示待核验词法候选，不作全项目top-K或同问题判定。字段、权限矩阵、来源跳转及完整D缺口见[专题](../PROJECT_FINDING_RESEARCH.md#当前声明文本检索770-d-检索首片)。
+`GET /findings/:id/lexical-search` 使用 `findings:read` 与项目鉴权，按[研究专题](../PROJECT_FINDING_RESEARCH.md#当前声明文本检索770-d-检索首片)指向的有界来源窗口 seek 后排名，返回游标、窗口/排名截断、声明摘要与规则版本。主体变更使游标 409 失效；无 Evidence 内容或资产权限扩张。详情只展示待核验词法候选，不作全项目 top-K 或同问题判定。
 
 
-`GET /findings/:id/candidates` 沿用 findings:read/项目权限，以25条边窗口读取当前有效持久词法候选。活动代/主体输入改变使游标409失效；失效记录不补扫，可能返回有下一页的空窗口。Web 区分待计算、失败、过期、成功零项与重建。无关系写 API、强关系或处置传播，见[持久候选协议](../PROJECT_FINDING_RESEARCH.md#持久词法候选与代际失效770-d-后续切片)。
+`GET /findings/:id/candidates` 沿用 findings:read/项目权限，在[持久候选协议](../PROJECT_FINDING_RESEARCH.md#持久词法候选与代际失效770-d-后续切片)规定的有界窗口读取当前有效词法候选。活动代/主体改变使游标 409 失效；失效记录不补扫，可能返回有下一页的空窗口。Web 区分待计算、失败、过期、成功零项与重建。该接口不写关系、不传播处置；#819 身份管理与关系状态读取是本视图另列的独立入口。
 
 ### #778 Skill 条件建议接口
 
@@ -123,8 +148,10 @@ plan_gap 的 supplementation_execution 只读提供单次补证状态、来源�
 
 ## 独立程序资格管理接口（#822）
 
-FR-FIND-008 增加 `/program-materials` 的登记/读取、单材料读取/撤销，以及 `/findings/{id}/program-eligibility` 的当前投影和 `/reviews` 的写入/历史查询。沿用 `projects:read/write` 与 `findings:read/write`；材料平台准入另要求未绑定项目的管理员，评审写入另校验认证操作员与 maker 隔离。Job capability 不可调用管理写入。输入使用 shared strict schema，主体/权限由宿主推导；幂等重放仍检查项目范围。接口字段以[域 OpenAPI](../../apps/scheduler/src/domains/program-eligibility/openapi.ts)和[共享契约](../../packages/shared-types/src/program-eligibility.ts)为准，语义见[专题](../PROGRAM_ELIGIBILITY.md)。
+FR-FIND-008 增加 `/program-materials` 的登记/读取、单材料读取/撤销，以及 `/findings/{id}/program-eligibility` 的当前投影和 `/reviews` 的写入/历史查询。`GET /program-materials` 与单材料读取沿用 `projects:read`，材料登记/撤销沿用 `projects:write`；当前资格/历史评审读取要求 `findings:read`，评审写入要求 `findings:write`。平台材料准入另要求未绑定项目的管理员，项目材料遵守 actor 项目边界；评审写入另校验认证操作员与 maker 隔离。Job capability 不可调用管理写入。输入使用 [shared strict schema](../../packages/shared-types/src/program-eligibility.ts)，主体/权限由宿主推导，不能在请求体自报 reviewer、权限或资格状态；幂等重放仍检查项目范围。接口字段以[域 OpenAPI](../../apps/scheduler/src/domains/program-eligibility/openapi.ts)为准，当前资格在 repeatable-read 读取中重核 Finding/Artifact/Verify Attempt、材料版本和可重读证据；来源或证据变化、材料替代/撤销、多条有效评审冲突、历史损坏/截断或读取预算不足都保持 `blocked`，不由最后写入覆盖历史。该评审是操作员见证，不认证外部官方规则或自然人/模型之间的物理独立性，不改变技术 Verify、任务判据或执行授权；语义见[专题](../PROGRAM_ELIGIBILITY.md)与 [ADR-0010](adr/0010-program-eligibility-authority.md)。
 
-## Plan 未派发路线修订（#775）
+## Plan v2 目标与路线 CAS（#775）
 
-submit_plan envelope 接收可选 v1 route revision；仅未派发路线可改，目标/完成判据/假设/预算恒等。版本、权限与剩余预算在 Canvas 锁内重验；GET receipt_key 恢复 committed 修订结果，不代表工作已派发。 详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。
+`PATCH /tasks/:canvasId` 是 Management `tasks:write` 入口，按认证 actor 的项目权限与 Canvas 行锁校验 `plan_objective.expected_revision`；授权用户显式提供 goal、completion 和有限 lifetime budget，响应返回当前 objective/revision。活跃及历史 Job snapshot/Attempt/事件不被编辑；模型不能调用该管理输入改写目标。
+
+Job-scoped `submit_plan` 当前严格要求 `{plan: PlanV2, revision: execution_route}`；`submit_plan_result` 同样只接收 v2。objective/revision、owner、route CAS、Plan SHA 与已派发 task 的字节身份必须匹配；模型只能调整未派发路线，不能重置 lifetime 计数。v1 Plan/Result 只供历史读；普通 HubIntent 走原 handler，不制造新的 v1 `plan_protocol`，不可变 v1 与 `hub_intent_adapter` 审计只作历史解析。接纳 receipt 查询只恢复原响应，不证明执行或语义完成；工程执行投影和操作员完成门分开。机器字段以 [plan.ts](../../packages/shared-types/src/plan.ts)、[objective](../../apps/scheduler/src/domains/plan-protocol/objective.ts)和[任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)为准。

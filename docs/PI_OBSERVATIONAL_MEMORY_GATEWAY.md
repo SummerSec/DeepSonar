@@ -22,7 +22,7 @@ OM token 保存唯一的 `expected_provider`、`expected_model` 和 `expected_ro
 
 每次请求在 Job 锁内重新检查冻结范围、token、有效期和 Job 状态。Job 进入
 `succeeded`、`failed`、`timeout`、`cancelled` 或 `orphan` 后，两个 workload token
-均不可使用；撤销与请求准入共享 Job 锁。已经开始的上游请求仍须记账，终态和撤销
+均不可使用；撤销与请求准入共享 Job 锁。语义终态提交在同一事务内撤销模型和 Control 令牌并写撤销审计，回滚时一起恢复；独立清理路径复用同一撤销实现。已经开始的上游请求仍须记账，终态和撤销
 不能删除它的 usage 或覆盖 unknown effect。签发与记账不回写 Job snapshot。
 
 ## 请求配额
@@ -66,8 +66,11 @@ token 的历史计数。main reservation 在第一个后台 token 签发之前�
 每次后台准入只发起一次上游尝试，包括 unlimited 配额；不自动重放可能已经产生
 外部效果的请求。后台 JSON/SSE 响应在内存中有界缓冲，最多 16 MiB；只有现有严格
 协议 scanner 确认 terminal usage，且数据库结算成功后，才返回正常响应。
-错误状态、断流、超限、缺失或伪造 usage 均进入 unknown 并返回明确的 409。
+错误状态、断流、超限、缺失或伪造 usage 均进入 unknown 并返回明确的 409；provider 5xx/error prose 不自动等价于“请求未开始”。只有内核已证实的 known-never-started transport failure 才能按 `gateway_transient` + `effect_status=not_started` 走可见降级。
 上游请求/响应正文不落库。
+
+当前请求前失败分类只接受 Node 原生连接或 DNS 错误链，见
+[`gateway-om-budget.ts`](../apps/scheduler/src/gateway-om-budget.ts)。每个聚合错误叶子都须符合要求；超时、连接后断流、权限或协议错误不能继承一个连接失败 cause 后降级。返回 `503 gateway_transient` 前，Gateway 必须在 Job 锁内核对当前 pending reservation、写入 settled 零用量账本并持久结算 `never_started`，请求次数不退还。结算冲突或写入失败仍返回对账错误。provider 自报的同名 JSON、SSE error 和 Pi 会转述的 Anthropic refusal 字段不能冒充内核结果。零外部用量不等于已经完成价格计算。
 
 usage、effect settlement 和 token counter 在同一事务内写入。账本事务失败时，
 原 effect 保持 pending，调用方得到对账错误，后续后台请求不能再次出站；不能在
@@ -93,7 +96,7 @@ requests 另行保留用于对账，不摊入 Finding 或任务单位成本。Jo
 
 ## 本地验证与父任务接线
 
-离线入口：
+离线入口（2026-10-31 已执行）：
 
 - `apps/scheduler/src/gateway-om-budget.test.ts`：finite/unlimited 预算、严格字段、
   frozen model、provider 和 per-model 协议。
@@ -106,6 +109,7 @@ requests 另行保留用于对账，不摊入 Finding 或任务单位成本。Jo
   `gateway-body-limit.test.ts` 提供相关回归。
 - dashboard 的 `usage.test.ts`、`quality.test.ts`、`replay.test.ts` 验证单位成本排除；
   Web `usage-ledger.test.ts` 包含真实 React 渲染，验证后台成本与未知用量独立展示。
+- 2026-10-31 主线程在当前根代码上运行 Gateway OM unit/SQL、usage、retry、repair usage 和 repair SQL 六个入口，44 项通过、无跳过；覆盖真实关闭的 loopback 端口、持久零用量、配额不退还、provider 冒充、部分流、结算失败及跨 provider/workload 的用量投影。Linux Unix-socket 相关四项也通过。夹具的投影窗口由自身账本时间范围确定，避免主机时钟与数据库时间精度影响计数。
 
 使用已有 disposable `TEST_DATABASE_URL` 和本地 Node/tsx，无需设置示例密码：
 
@@ -116,6 +120,8 @@ D:\nodejs\node.exe apps\scheduler\node_modules\tsx\dist\cli.mjs --test --test-co
 ```
 
 该部分对应 `FR-CRED-003` / `FR-CRED-004` 的 Gateway 与短期 token 边界。主协调者
-拥有根 `package.json` 的新测试入口、CI 接线、架构追溯和顶层索引同步；本片没有
-修改这些文件。当前本地测试不等于 GitHub Actions 全量验收。真实模型、Docker、
-生产部署与 C 部分的 RPC/Session 行为没有在本片执行。
+拥有根 `package.json` 的测试入口、CI 接线、架构追溯和顶层索引同步；本片没有
+修改这些文件。当前本地测试不等于 GitHub Actions 全量验收。本地实际构建镜像的
+RPC、封装预检和独立生产启动守卫正负例已通过，集中见
+[RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；
+发布镜像/平台与 registry/catalog 证据仍另验，质量和成本收益保持 `unknown`。
