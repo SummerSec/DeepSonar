@@ -60,6 +60,14 @@ P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspec
 
 当前目录发现和 Skill 拉取受 Job token、快照、预算、网络和审计约束；任务级或会话级 Pack 持久化、评估晋升和跨任务推荐仍属于长期阶段。暂缓期间，Skill 只能影响当前任务的方法，不能改变 Job 快照、项目范围、镜像、凭据或平台工具权限。
 
+### 3.5 项目级 Finding 强关系关联（#770 / #819）
+
+项目查询增强、特征投影、词法检索与持久弱候选已 as-built：`project_finding_features` 保存可重建特征，`project_finding_candidate_*` 保存 canonical 双端弱候选，读端按当前来源与活动代核对，离线评估与积压探针已接线。跨任务**强关系**（疑似同一问题 / 同根因不同实例）未交付；2026-10-31 从 #770 拆出，独立跟踪见 [#819](https://github.com/SummerSec/DeepSonar/issues/819)。
+
+未完成的是三项而不是一项：**实现**上 [`compareFindingFeatures`](../../apps/scheduler/src/domains/project-finding-research/model.ts) 没有强关系输出分支，`IDENTITY_FIELDS` 全部已知且匹配时仍返回 `similar` / `lexical_overlap_only`（[`model.test.ts`](../../apps/scheduler/src/domains/project-finding-research/model.test.ts) 的 `v1 strong relation gate remains closed even for synthetic matching authority` 固定该行为）；**数据**上 `FindingPayload` 没有 asset / tenant / environment / version / parameter / root-cause 字段，权威身份一律 `null`；**质量验收**上没有独立人工标注集、没有按问题家族/资产隔离的调参/留出集、没有预先冻结的阈值。补齐输入不会自动产生强关系结论，仍需实现、接线与评审。
+
+在此之前不得把文本相似或弱候选宣称为同问题结论，不得传播 Verify / 处置状态，也不得用「未自动合并」充当质量指标。生产执行按 [AGENTS.md「验收边界」](../../AGENTS.md) 豁免；该豁免只覆盖生产执行，**不覆盖**上述非模型质量验收，未验证质量继续记为 `unknown`。
+
 ## 4. 已收口边界（不作为待办）
 
 下列结论已有代码和测试支撑，本节用于防止历史计划或旧 issue 把已完成能力重新写成债务：
