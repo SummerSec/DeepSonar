@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-10-30
+> 同步日期：2026-10-31
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -78,6 +78,10 @@ Plan 回执只绑定原 Job/Attempt、冻结快照及请求内容；查询不恢
 程序规则独立评价只认证执行来源绑定和对 operator_supplied 材料的评审过程，不认证官方规则或当前程序授权，不产生 eligible authority。同 Finding/完整契约匹配、证据和完整集合冲突/失效/预算门继续适用。详见[评审](../TASK_GOAL_REVIEW.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
 
 规则证据失效且没有当前有效替代 review 时以 insufficient 阻塞程序规则结论；有效重评可恢复，不由历史失效永久否决。规则投影超过全报告 100 条 Finding×rule 判据时全部阻塞，不保留先处理的正向结果；程序规则 ID 不得作为 Plan 通用判据 authority。
+
+## 独立程序资格 authority（#822）
+
+FR-FIND-008 只信任经过权限校验的操作员材料准入和独立评审；任务声明、Agent 输出、技术 `confirmed` 与普通 `program_rule_review` 都不能单独授予 `eligible`。项目绑定的管理员 token 也不能准入平台或其他项目材料，幂等键不能绕过项目隔离。评审绑定当前来源、Verify Attempt、材料版本和证据，写入按 Canvas 优先顺序锁定并重验，读取使用一致快照或已有报告事务的输入锁。材料是操作员见证，不声称已认证外部官方签名或自然人独立性；不授权目标执行或漏洞提交。见[ADR-0010](adr/0010-program-eligibility-authority.md)及[专题](../PROGRAM_ELIGIBILITY.md)。
 
 ## 证据追踪诊断修复
 

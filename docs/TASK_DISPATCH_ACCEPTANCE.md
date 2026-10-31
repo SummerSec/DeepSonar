@@ -26,7 +26,7 @@
 | 报告防误报 | #796 确定性投影、冻结版本、来源重核与 SARIF 边界 | 跨切片端到端验收与架构同步 | 无 |
 | 判据证据评审 | #797 普通 Job 来源隔离、当前 Attempt/字节、冲突/失效、预算保护 | 不认证不同人/模型；不等于提交资格 | 不默认要求外部人/模型认证 |
 | 工程交付与合法负结果 | #798 task.result Fact Artifact；delivery/negative_result 可评，blocked/not_executed 保留缺口 | 汇总零 Finding、失败来源、未执行、部分覆盖与预算回归；负结果不是整体完成 | 无 |
-| 高标准安全提交候选 | 已有规则材料身份与声明筛选、技术 Verify 和通用判据评审 | 适用攻击链、knownness 对目标版本的适用性及独立程序资格仍未形成完整正向闭环；eligible 不可由 severity/相似词推导 | 资格 authority 与适用程序范围需明确；不自动提交漏洞 |
+| 高标准安全提交候选 | 已有规则材料身份与声明筛选、技术 Verify、通用判据评审；#822 增加操作员准入与独立资格投影 | 适用攻击链、knownness 对目标版本的适用性仍需对应依据；资格投影不认证外部官方规则，也不可由 severity/相似词推导 | 资格绑定具体程序/版本与当前证据；不自动提交漏洞 |
 | #775 完成门 | 已有 operator_attestation、verified Fact、Plan 判据与 complete 门；#795 增加持久接纳回执 | 新评审不得自动变成 Plan authority；接纳回执不是执行完成 | 已接可选显式 goal_review 关联，不新增 authority、不替代原绑定 |
 
 ## Plan 关联边界与实际验收
@@ -82,7 +82,7 @@
 
 复现说明：本地 `@deepsonar/shared-types` 的 `dist` 早于本基线，未重建时 `tsx --test` 会因缺少新导出而误报模块错误；需先 `tsc -p packages/shared-types/tsconfig.json`。该差异只影响本地复现，不改变 `ci:unit:*` 入口定义。
 
-本轮不重跑上文已通过的数据库集成项，因此既不新增也不推翻它们。仍然存在的**实现**缺口是可信目标授权的正向接线，以及特定高标准成果的资格闭环（已拆到 #822）；引用失效、跨范围、零 Finding 与预算等回归属于本轮未覆盖的验收范围，同样不以单元计数替代。
+本轮不重跑上文已通过的数据库集成项，因此既不新增也不推翻它们。此处记录该历史基线的缺口：可信目标授权正向接线，以及当时拆到 #822 的资格闭环；#822 当前实现与新增验收见文末及[专题](PROGRAM_ELIGIBILITY.md)。引用失效、跨范围、零 Finding 与预算等回归仍按各自验收范围核对，不以旧单元计数替代。
 
 
 ## 程序规则独立评审切片（基于 #800）
@@ -135,3 +135,9 @@
 宿主来源依据：[RuntimeHost 接口](../packages/runtime-sandbox/src/runtime-host.ts)只返回底层进程结果；[REA 归档接纳](../apps/scheduler/src/domains/cli-capability/rea-cli-fact.ts)明确标记 agent_reported_observation；[Control schema](../packages/shared-types/src/index.ts)没有通用复现命令 operation。只读追踪的 not_attested 因此继续保留，不能靠新增字段消除。
 
 本轮仅核对范围与来源，不运行目标命令、不新增执行入口、不扩大 capability/凭据/网络授权。缺业务输入不阻碍独立离线工程，但不能以新添通用执行器或无限延伸待办替代原始正向验收。
+
+## #822 独立资格实现与定向离线验收（2026-10-31）
+
+程序材料的管理准入和独立资格评审已实现，复用 append-only 审计与既有 Finding/Verify/Evidence，详见[资格专题](PROGRAM_ELIGIBILITY.md)、FR-FIND-008 和 [ADR-0010](architecture/adr/0010-program-eligibility-authority.md)。这是操作员见证的当前资格投影，不认证外部官方来源或不同自然人的物理独立性，也不授予目标执行权限。
+
+本地定向 schema/model/routes/report 与既有任务报告共 35 项单元通过；真实隔离 PostgreSQL 路由/SQL 共 12 项通过，无跳过。覆盖真实管理 token/Job capability 分离、材料版本替代/撤销、当前证据及 Attempt 变化、无依据/越权/跨项目幂等重放、项目绑定管理员、有效评审冲突、Canvas 并发重验、历史不变和预算缺口。结果只证明这些工程行为；最终组合 CI 另验，未执行生产任务或业务模型试验。原有 goal_review/program_rule_review 本身仍不产生 eligible，不改写上文历史计数。

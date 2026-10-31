@@ -10,6 +10,7 @@ import { registerDashboardRoutes } from "./domains/dashboard/routes.js";
 import { registerCredentialRoutes } from "./domains/credential/routes.js";
 import { registerFindingResearchRoutes } from "./domains/finding-research/index.js";
 import { registerFindingVerificationRoutes } from "./domains/finding-verification/routes.js";
+import { registerProgramEligibilityRoutes } from "./domains/program-eligibility/index.js";
 import { registerJobControlRoutes } from "./domains/job-control/routes.js";
 import { registerProjectTaskRoutes } from "./domains/project-task/routes.js";
 import { registerReportRoutes } from "./domains/report-convergence/routes.js";
@@ -44,6 +45,7 @@ export function registerRoutes(app: FastifyInstance) {
   // scope hooks above are installed before it, preserving legacy behavior.
   registerReportRoutes(app);
   registerFindingVerificationRoutes(app);
+  registerProgramEligibilityRoutes(app);
   registerFindingResearchRoutes(app);
   registerSharedAssetRoutes(app);
 

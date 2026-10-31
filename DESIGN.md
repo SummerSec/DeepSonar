@@ -36,7 +36,7 @@ DeepSonar 的产品形态是“可信执行内核 + 可组合能力”。模型�
 目标成果分层为研究候选、技术验证与任务判据评价，不以 Finding 数量或 severity 计目标完成。工程 delivery、合法 negative_result 使用 Fact 的 task.result Artifact，无须构造 Finding；blocked/not_executed 仅保留缺口。来源隔离评审复核实际证据、完整评价集合、冲突与失效，不认证不同人/模型或赏金资格。Plan 可选显式关联此评审，仍由操作员保有语义绑定 authority 与 verified 原始 Fact，不按索引映射，不替代原完成门；显式关联与失效完成门已接线，验证见验收矩阵。见[结果评审](docs/TASK_RESULT_REVIEW.md)、[Plan 绑定](docs/PLAN_GAP_PROJECTION.md)、[验收矩阵](docs/TASK_DISPATCH_ACCEPTANCE.md)。无契约是原可选设计，明确 unassessed，不以强制迁移作为本 issue 必须关闭条件。
 
 
-已提供契约执行通用基本完整性与整契约绑定的研究候选检查；省略 outcome 或 task_defined 不绕过，赏金只追加筛选。通过为 admitted_for_research，非目标达标或高置信提交资格。无契约入口仍 unassessed，独立复核/资格与 #775 整体收敛未完成，见[首片边界](docs/TASK_OUTCOME_ADMISSION.md)。
+已提供契约执行通用基本完整性与整契约绑定的研究候选检查；省略 outcome 或 task_defined 不绕过，赏金只追加筛选。通过为 admitted_for_research，非目标达标或高置信提交资格。无契约入口仍 unassessed，独立程序资格由 [#822 操作员评审](docs/PROGRAM_ELIGIBILITY.md) 提供当前投影；目标授权执行与 #775 整体收敛仍分别验收。见[首片边界](docs/TASK_OUTCOME_ADMISSION.md)。
 
 ## 3. 核心实体
 
@@ -377,7 +377,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 
 RPC 完整帧在默认 8MiB、最高 64MiB 硬上限内校验；超过 1MiB 的受支持事件先落完整脱敏 JSON 到 workspace 与 Attempt evidence，再交付文本预览。128MiB 运行级保存预算含恢复进程；控制字段不丢弃，捕获失败不能结算成功。具体路径、hash 范围与测试边界见 [CLI 契约](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。此实现不证明生产审计覆盖已完成。
 
-程序规则独立评审（#767，本片已通过离线行为验收）复用 goal_review，对 supplied bounty Finding 增加 program_rule:<ruleid>，通用目标判据保持不变。requirement satisfied 表示满足，exclusion satisfied 表示未命中；报告独立呈现 program_rule_review，不把通用判据满足当程序规则完成。仅复核 operator_supplied 材料，不认证官方规则、授权或 eligible；攻击链、可复现性、knownness 与资格 authority 映射仍是缺口。详见[评审边界](docs/TASK_GOAL_REVIEW.md)。
+程序规则独立评审（#767，本片已通过离线行为验收）复用 goal_review，对 supplied bounty Finding 增加 program_rule:<ruleid>，通用目标判据保持不变。requirement satisfied 表示满足，exclusion satisfied 表示未命中；报告独立呈现 program_rule_review，不把通用判据满足当程序规则完成。该路径仅复核 operator_supplied 材料，不认证官方规则、授权或 eligible。独立程序资格另由 [#822 操作员准入与评审](docs/PROGRAM_ELIGIBILITY.md) 绑定当前 Finding/Verify/材料/证据后投影，不自动提交漏洞，也不代替适用攻击链或 knownness 核验。详见[评审边界](docs/TASK_GOAL_REVIEW.md)。
 
 ### #778 当前 Job 条件建议
 

@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-10-30
+> 同步日期：2026-10-31
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
@@ -140,6 +140,10 @@ schema65 增加 candidate_scan/work/sources/edges，按项目与代保存 canoni
 ### #778 选择声明存储
 
 `record_skill_choice` 复用 `project_knowledge_receipts` 的 operation/result_json 与既有 knowledge 事件，保存宿主重算建议快照和声明理由，不写 usage/work 或新经验表。目录、完整 Candidate CAS 和旧回执不变；SQL 基线无变更，不要求 schema bump/rebuild。历史选择不恢复权限。见[Skill 建议专题](../SKILL_SUGGESTIONS.md)。
+
+## 独立程序资格账本（#822）
+
+FR-FIND-008 复用 `audit_logs` 保存程序材料准入、替代、撤销及操作员评审；不新增 schema 或 Job 生命周期。评审绑定当前 Finding Artifact/来源摘要、来源与 Verify Attempt、确认轮次、冻结目标/基线、材料版本和证据指纹。当前资格重新投影，来源变化不修改旧评审或历史报告。损坏或截断历史、冲突及读取预算不足均阻断正向结果；批量预算外的条目显式返回缺口。数据结构和一致性边界见[程序资格专题](../PROGRAM_ELIGIBILITY.md)与[ADR-0010](adr/0010-program-eligibility-authority.md)。
 
 ## Plan 未派发路线修订（#775）
 

@@ -243,6 +243,55 @@ if (!databaseUrl) {
         assert.equal(current.json<{ status: string }>().status, "eligible");
       });
 
+      await t.test("registered management hooks enforce real tokens, scopes and Job capability separation", async () => {
+        const [{ default: websocket }, { registerRoutes }, { generateToken }, capability, { createAttempt }] = await Promise.all([
+          import("@fastify/websocket"), import("../../routes.js"), import("../../auth.js"),
+          import("../platform-api/index.js"), import("../job-attempt/application.js"),
+        ]);
+        const management = Fastify({ logger: false });
+        await management.register(websocket);
+        registerRoutes(management);
+        await management.ready();
+        try {
+          const token = async (scopes: string[], scopeProjectId: string) => {
+            const generated = generateToken();
+            await sql`INSERT INTO api_tokens (name,project_id,token_prefix,token_hash,scopes)
+              VALUES ('eligibility boundary',${scopeProjectId},${generated.prefix},${generated.hash},${scopes})`;
+            return { authorization: `Bearer ${generated.plaintext}` };
+          };
+          const reader = await token(["projects:read", "findings:read"], projectId);
+          const scopedAdmin = await token(["admin"], projectId);
+          const own = await management.inject({ method: "GET", url: `/findings/${findingId}/program-eligibility`, headers: reader });
+          assert.equal(own.statusCode, 200, own.payload);
+          assert.equal(own.json().status, "eligible");
+          const readOnlyWrite = await management.inject({ method: "POST", url: `/findings/${findingId}/program-eligibility/reviews`, headers: reader,
+            payload: review(secondMaterialId, randomUUID(), { program_version: "2026.11" }) });
+          assert.equal(readOnlyWrite.statusCode, 403, readOnlyWrite.payload);
+          const platform = await management.inject({ method: "POST", url: "/program-materials", headers: scopedAdmin, payload: material(randomUUID(), "2026.12") });
+          assert.equal(platform.statusCode, 403, platform.payload);
+          const foreignProject = randomUUID();
+          await sql`INSERT INTO projects(id,name) VALUES (${foreignProject},'Foreign eligibility token')`;
+          const foreign = await token(["admin"], foreignProject);
+          const outside = await management.inject({ method: "GET", url: `/findings/${findingId}/program-eligibility`, headers: foreign });
+          assert.equal(outside.statusCode, 403, outside.payload);
+          const agentJob = randomUUID();
+          await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
+            VALUES (${agentJob},${projectId},${canvasId},'audit','provisioning',${sql.json({ name: "audit", role_kind: "role", platform_tools: ["emit_progress"] })},'{}'::jsonb)`;
+          await createAttempt(sql, agentJob);
+          const grant = await capability.mintJobCapabilityToken(agentJob);
+          await sql`UPDATE jobs SET status='running',lease_expires_at=now()+interval '5 minutes' WHERE id=${agentJob}`;
+          await capability.activateProvisionedJobCapabilityTokens(agentJob);
+          const agentHeaders = { authorization: `Bearer ${grant.token}` };
+          const permitted = await management.inject({ method: "GET", url: `/control/v1/jobs/${agentJob}/capabilities`, headers: agentHeaders });
+          assert.equal(permitted.statusCode, 200, permitted.payload);
+          const escaped = await management.inject({ method: "POST", url: `/findings/${findingId}/program-eligibility/reviews`, headers: agentHeaders,
+            payload: review(secondMaterialId, randomUUID(), { program_version: "2026.11" }) });
+          assert.equal(escaped.statusCode, 401, escaped.payload);
+        } finally {
+          await management.close();
+        }
+      });
+
       await t.test("bounded report projection explicitly blocks entries beyond its lookup budget", async () => {
         const { loadProgramEligibilityProjections } = await import("./store.js");
         const projections = await loadProgramEligibilityProjections(sql, projectId, [...Array.from({ length: 100 }, () => randomUUID()), findingId]);

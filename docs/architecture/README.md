@@ -1,7 +1,7 @@
 # DeepSonar 系统架构设计
 
 > 状态：**as-built 文档基线（#741；#752 独立试验分支同步）**。覆盖现有实现与工程约束；暂缓能力及证据缺口单独列出，不构成新增运行时承诺。
-> 同步日期：2026-10-30
+> 同步日期：2026-10-31
 
 面向内部开发者和编码 Agent。先读 [DESIGN](../../DESIGN.md) 摘要，再按需求或主题定位；本目录不改变产品行为。需求组织参考 ISO/IEC/IEEE 29148，视图借鉴 arc42 / C4，关注点分离参考 ISO/IEC/IEEE 42010；这不是标准符合性认证。
 
@@ -15,7 +15,7 @@
 
 #767 可选任务下发契约已同步到 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)、接口/运行时/数据视图及追溯矩阵；可选自由文本、未知条件拒绝与质量评测限制见[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
 
-已提供契约执行通用基本完整性与整契约绑定的研究候选检查；省略 outcome 或 task_defined 不绕过，赏金只追加筛选。通过为 admitted_for_research，非目标达标或高置信提交资格。无契约入口仍 unassessed，独立复核/资格与 #775 整体收敛未完成，见[首片边界](../TASK_OUTCOME_ADMISSION.md)。
+已提供契约执行通用基本完整性与整契约绑定的研究候选检查；省略 outcome 或 task_defined 不绕过，赏金只追加筛选。通过为 admitted_for_research，非目标达标或高置信提交资格。无契约入口仍 unassessed，独立程序资格由 [#822 操作员评审](../PROGRAM_ELIGIBILITY.md) 提供当前投影，目标授权执行与 #775 整体收敛仍分别验收；见[首片边界](../TASK_OUTCOME_ADMISSION.md)。
 
 ## 1. 阅读路径与目录
 
@@ -59,6 +59,7 @@
 | 资源阈值与性能 | 04；[config](../../apps/scheduler/src/config.ts) | §9.2、§12 | 已迁入；不沿用旧默认值清单 |
 | 安全与隔离 | 10；[设备边界](../DEVICE_ACCESS.md)、[共享资产](../SHARED_ASSET_BLOB_STORE.md) | §9.1 | 概览已迁入，专题保留细则 |
 | 项目 Memory / Skill | 01 中 FR-KNOW；05–10 相关视图；[项目知识专题](../PROJECT_KNOWLEDGE.md) | 本期新增 | #752 分支实现与验证范围分开记录；专题拥有工作流和字段细则 |
+| 独立程序资格 | FR-FIND-008；08/09/10；[资格专题](../PROGRAM_ELIGIBILITY.md)、[ADR-0010](adr/0010-program-eligibility-authority.md) | 本期新增 | 操作员材料准入、评审与当前投影；不代替技术 Verify 或目标执行授权 |
 | 风险、路线与取舍 | 12、ADR；[长期提案](../AI_NATIVE_TRUSTED_KERNEL.md) | §10、§13–16 | 旧开工顺序与 MVP 结论只作历史 |
 | 工程与发布 | 11；[发布硬门](../RELEASE_RUNTIME_IMAGES.md)、AGENTS 执行摘要 | §17.5 | 入口已迁入，发布专题与执行红线保持有效 |
 
@@ -88,7 +89,7 @@
 
 #742 已交付索引骨架，#744 已交付首批三条链路规格与追溯。本次 #741 后续交付十二视图、追溯矩阵、六条 ADR、开发 Skill、逐章迁移标记和追溯/跨平台门禁。验证入口见 [11](11-engineering-specs.md)，本次执行结果以 PR 的验证记录为准。没有修改产品运行时行为、数据库基线或对外 API。
 
-#767 后续目标证据链见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)：研究候选、非 Finding 结果、来源隔离评审与确定性报告已接线；可选 Plan 关联已接线，原操作员 authority 保持不变。对应 FR-TASK-007、FR-RPT-001；资格与授权适配器缺口不得以结构校验冒充完成。
+#767 后续目标证据链见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)：研究候选、非 Finding 结果、来源隔离评审与确定性报告已接线；可选 Plan 关联已接线，原操作员 authority 保持不变。对应 FR-TASK-007、FR-RPT-001；程序资格另见 FR-FIND-008 和 [#822 专题](../PROGRAM_ELIGIBILITY.md)，授权适配器与整体目标闭环继续分别验收。
 
 FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的来源与字节完整性，不改变 Verify verdict 或赋予执行/资格 authority。
 

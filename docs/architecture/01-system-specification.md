@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-10-30
+> 同步日期：2026-10-31
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -1220,3 +1220,11 @@ Finding evidence-trace 只读诊断精确绑定 Artifact source_event/来源 Att
 - **实现状态**：C 持久扫描、特征重建和状态元数据已合入；D 首片接通当前声明文本的有界数据库窗口检索及既有详情展示，后续切片接通按代持久化的弱候选、来源失效过滤与分页展示；离线评估工具检查样本隔离并报告质量分母，不发布同问题建议或自动宣告质量通过。
 - **代码入口**：[特征投影](../../apps/scheduler/src/domains/project-finding-research/)。
 - **验收**：`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`；人工标注与真实候选质量门仍未执行。
+
+### FR-FIND-008 独立程序资格评审
+
+- **规范要求**：程序资格必须独立于技术 Verify 和任务判据评价，绑定具体 Finding、受治理目标/基线、当前程序材料版本和评审证据。只有认证且获授权的操作员可评审，Agent 自报不得单独产生通过；当前来源、Attempt、证据或程序版本变化必须使旧批准失效，冲突及缺项不得输出正向结论。评审依据、主体、权限、理由和时间必须可查询，历史保持不可变。
+- **决策来源**：#822；[ADR-0010](adr/0010-program-eligibility-authority.md)。
+- **实现状态**：管理 API 显式准入操作员见证的程序材料，append-only 审计保存评审，当前资格按 Finding/Verify/Evidence 和材料生命周期重新投影；项目范围、maker 自批准、幂等重放、并发输入和读取预算 fail closed。不认证外部官方规则签名或自然人之间的物理独立性，不自动提交漏洞，不扩展执行权限。
+- **代码入口**：[资格域](../../apps/scheduler/src/domains/program-eligibility/)、[共享契约](../../packages/shared-types/src/program-eligibility.ts)、[专题](../PROGRAM_ELIGIBILITY.md)。
+- **验证证据**：`pnpm ci:unit:verify-eligibility`、隔离 PostgreSQL 下 `pnpm ci:integration:verify-eligibility`、`pnpm ci:unit:authz`；本地定向结果见专题，不以真实模型或生产试验作为前置。

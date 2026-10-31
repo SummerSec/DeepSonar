@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-10-30
+> 同步日期：2026-10-31
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -120,6 +120,10 @@ plan_gap 的 supplementation_execution 只读提供单次补证状态、来源�
 ### #778 Skill 条件建议接口
 
 新增 Job-scoped `suggest_project_skills`（只读）与 `record_skill_choice`（knowledge 事件及 durable receipt），使用 shared strict schema 和动态 OpenAPI。target 是调用者声明；策略/context/catalog 摘要绑定上下文，宿主在选择时重算，摘要不授予权限。两个 operation 必须已在冻结 allowlist 中；不存在隐式启用。候选完整有界过滤后分页，超限整次拒绝。详细条件、未知语义及验收见[专题](../SKILL_SUGGESTIONS.md)。
+
+## 独立程序资格管理接口（#822）
+
+FR-FIND-008 增加 `/program-materials` 的登记/读取、单材料读取/撤销，以及 `/findings/{id}/program-eligibility` 的当前投影和 `/reviews` 的写入/历史查询。沿用 `projects:read/write` 与 `findings:read/write`；材料平台准入另要求未绑定项目的管理员，评审写入另校验认证操作员与 maker 隔离。Job capability 不可调用管理写入。输入使用 shared strict schema，主体/权限由宿主推导；幂等重放仍检查项目范围。接口字段以[域 OpenAPI](../../apps/scheduler/src/domains/program-eligibility/openapi.ts)和[共享契约](../../packages/shared-types/src/program-eligibility.ts)为准，语义见[专题](../PROGRAM_ELIGIBILITY.md)。
 
 ## Plan 未派发路线修订（#775）
 
