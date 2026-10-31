@@ -196,6 +196,9 @@ jobs:
       - name: Test wiring ratchet guard
         run: pnpm ci:unit:ci-test-hook
 
+      - name: File size ratchet guard
+        run: pnpm ci:unit:file-size
+
       - name: Docs freshness guard (version literals, pnpm scripts, links, removed mechanisms)
         run: pnpm ci:unit:docs-freshness
 
