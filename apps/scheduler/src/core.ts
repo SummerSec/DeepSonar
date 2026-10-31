@@ -61,7 +61,7 @@ import {
 import type { TargetAuthorizationSnapshot } from "./domains/target-authorization/contract.js";
 import * as findingVerification from "./verify.js";
 import * as reportConvergence from "./report.js";
-import { revokeJobTokens } from "./gateway.js";
+import { revokeJobTokensInTransaction } from "./gateway-token-revocation.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
 import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
@@ -1418,8 +1418,8 @@ export async function finalizeJob(
     WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
 
   // §6.3：job 终态立即吊销短期模型 Token（容器残留也调不动模型；网关另按 job 状态逐请求兜底）
-  await revokeJobTokens(jobId, `job_${status}`).catch(() => {});
-  await revokeJobCapabilityTokens(jobId, `job_${status}`).catch(() => {});
+  await revokeJobTokensInTransaction(tx, jobId, `job_${status}`);
+  await revokeJobCapabilityTokens(jobId, `job_${status}`, tx);
 
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
   // Plan v2 child completion/recovery is derived from the same terminal

@@ -6,12 +6,10 @@ import {
   ControlToolInputSchemasJson,
   EventEnvelope,
   Plan,
+  PlanAuditRecord,
   PlanResult,
   SubmitPlanPayload,
   SubmitPlanResultPayload,
-  adaptHubCompleteToPlanResult,
-  adaptHubIntentsToPlan,
-  adaptIntentToPlanTask,
   mergePlanAudit,
   toMcpToolInputSchema,
   trimPlan,
@@ -192,30 +190,26 @@ test("Plan v2 results require current objective, route, and plan identity", () =
   }).success, false);
 });
 
-test("Intent adapter maps one Hub intent to one PlanTask without inventing extra work", () => {
-  const intent = {
-    from: ["00000000-0000-4000-8000-000000000001"],
-    role: "explore",
-    description: "确认目标材料与版本范围",
-    prompt: "定位任务目标的权威材料，记录版本、来源和仍缺失的信息；只提交新增事实。",
-    runtime_image_key: "deepsonar-base",
-  };
-  const task = adaptIntentToPlanTask(intent, 0);
-  assert.equal(task.id, "intent-1");
-  assert.equal(task.role, "explore");
-  assert.equal(task.prompt, intent.prompt);
-  assert.deepEqual(task.from, intent.from);
-  assert.equal(task.runtime_image_key, "deepsonar-base");
-  const plan = adaptHubIntentsToPlan([intent, { ...intent, role: "analyze", description: "分析认证边界条件" }]);
-  assert.equal(plan.tasks.length, 2);
-  assert.equal(plan.tasks[1]?.id, "intent-2");
-  assert.equal(plan.tasks[1]?.role, "analyze");
-  const result = adaptHubCompleteToPlanResult({
-    from: [],
-    description: "目标已被当前引用证据完整覆盖",
+test("immutable historical Hub adapter audits remain readable", () => {
+  const record = PlanAuditRecord.parse({
+    v: 1,
+    source: "hub_intent_adapter",
+    raw: Plan.parse(samplePlan()),
+    trimmed: null,
+    trim_reasons: [],
+    result: PlanResult.parse({
+      v: 1,
+      outcome: "complete",
+      summary: "Historical Hub completion proposal",
+      termination_reason: "hub_complete",
+    }),
+    termination_reason: "hub_complete",
+    updated_at: "2026-10-29T00:00:00.000Z",
   });
-  assert.equal(result.outcome, "complete");
-  assert.equal(result.termination_reason, "hub_complete");
+  assert.equal(record.v, 1);
+  assert.equal(record.source, "hub_intent_adapter");
+  assert.equal(record.raw?.goal, samplePlan().goal);
+  assert.equal(record.result?.outcome, "complete");
 });
 
 test("Scheduler trim caps tasks and dangling depends_on while keeping the raw plan intact", () => {

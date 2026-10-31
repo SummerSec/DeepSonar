@@ -868,6 +868,7 @@ export const GRAPH_QUERY_LIMITS = {
 } as const;
 
 export const GraphQueryKind = z.enum([
+  "plan_objective",
   "plan_gap",
   "overview",
   "index",
@@ -908,6 +909,12 @@ export const GraphQueryPayload = z
     const add = (path: string[], message: string) => {
       ctx.addIssue({ code: "custom", path, message });
     };
+    if (value.kind === "plan_objective") {
+      for (const key of ["node_type", "status", "since", "cursor", "limit", "ids", "id", "direction", "edge_type", "verify_status", "unconverged_only", "finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `plan_objective does not accept ${key}`);
+      }
+      return;
+    }
     if (value.kind === "plan_gap") {
       for (const key of ["node_type","status","since","direction","edge_type","verify_status","unconverged_only","finding_id"] as const) {
         if (value[key] !== undefined) add([key], `plan_gap does not accept ${key}`);
@@ -1790,14 +1797,9 @@ export {
   PlanCriterionId,
   SubmitPlanPayload,
   SubmitPlanResultPayload,
-  adaptHubCompleteToPlanResult,
-  adaptHubIntentsToPlan,
-  adaptIntentToPlanTask,
   mergePlanAudit,
   planTaskGraphHasCycle,
   trimPlan,
-  type HubCompleteLike,
-  type HubIntentLike,
   type PlanTrimLimits,
 } from "./plan.js";
 

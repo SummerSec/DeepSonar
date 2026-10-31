@@ -61,5 +61,44 @@ test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes 
     await h.emit(String(root.id)); await h.finish(String(root.id));
     assert.equal((await h.children(multi.hub)).length, 2, "a revised route releases new dependent work");
     assert.equal((await h.state(multi.canvas)).plan_execution.lifetime_rounds, 2);
+
+    const terminal = await h.fixture();
+    await h.sql`UPDATE canvases SET target_json=target_json-'plan_objective' WHERE id=${terminal.canvas}`;
+    const ordinaryDecision = await h.invoke(terminal.hub, "submit_hub_decision", { intents: [{
+      role: "explore", from: [terminal.root], description: "Read the authorized scope through an ordinary Hub Intent",
+      prompt: "Read only this Canvas scope and retain the resulting evidence through the existing Control API.",
+    }] });
+    assert.equal(ordinaryDecision.statusCode, 200, ordinaryDecision.payload);
+    assert.equal((await h.children(terminal.hub)).length, 1);
+    const [ordinaryHub] = await h.sql`SELECT payload_json FROM jobs WHERE id=${terminal.hub}`;
+    assert.equal(ordinaryHub.payload_json.plan_protocol, undefined, "ordinary Hub decisions cannot manufacture a new historical v1 audit");
+    const [{ mintJobToken }, { encryptSecret }] = await Promise.all([
+      import("./gateway.js"), import("./credentials.js"),
+    ]);
+    const credential = randomUUID();
+    const encrypted = encryptSecret(`fixture-${randomUUID()}`);
+    await h.sql`INSERT INTO credentials(id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4)
+      VALUES(${credential},'terminal fixture','llm_provider','openai',${encrypted.ciphertext},
+        ${encrypted.nonce},${encrypted.auth_tag},'fixture','only')`;
+    const modelToken = await mintJobToken({ jobId: terminal.hub, projectId: terminal.project, credentialId: credential });
+    await assert.rejects(h.sql.begin(async (tx) => {
+      await h.core.finalizeJob(tx as unknown as typeof h.sql, terminal.hub, "succeeded", { summary: "Rolled back terminal proposal" });
+      throw new Error("rollback terminal fixture");
+    }), /rollback terminal fixture/);
+    const [rolledBack] = await h.sql`SELECT j.status,t.status AS token_status,
+      (SELECT count(*)::int FROM job_capability_tokens c WHERE c.job_id=j.id AND c.revoked_at IS NULL) AS active_capabilities
+      FROM jobs j JOIN job_tokens t ON t.job_id=j.id WHERE j.id=${terminal.hub} AND t.id=${modelToken.id}`;
+    assert.equal(rolledBack.status, "running");
+    assert.equal(rolledBack.token_status, "active", "terminal rollback must also restore the model credential");
+    assert.equal(rolledBack.active_capabilities, 1, "Control revocation participates in the same rollback");
+    const [rolledBackAudit] = await h.sql`SELECT count(*)::int AS count FROM audit_logs
+      WHERE action='job_token.revoke' AND resource_id=${modelToken.id}`;
+    assert.equal(rolledBackAudit.count, 0);
+    await h.finish(terminal.hub);
+    const [revoked] = await h.sql`SELECT status,revoke_reason FROM job_tokens WHERE id=${modelToken.id}`;
+    assert.equal(revoked.status, "revoked");
+    assert.equal(revoked.revoke_reason, "job_succeeded");
+    const denied = await h.invoke(terminal.hub, "mark_job_done", { summary: "Late completion cannot reuse the revoked Control token" });
+    assert.equal(denied.statusCode, 401);
   } finally { await h.close(); }
 });

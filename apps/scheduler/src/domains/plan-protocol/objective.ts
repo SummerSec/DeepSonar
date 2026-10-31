@@ -37,7 +37,7 @@ export const PersistedPlanObjective = z.object({
   budget: executionBudget,
   input_sha256: z.string().regex(/^[a-f0-9]{64}$/),
   status: z.enum(["active", "stopped", "completed"]),
-  updated_at: z.string().datetime(),
+  updated_at: z.string().datetime().max(64),
 }).strict();
 export type PersistedPlanObjective = z.infer<typeof PersistedPlanObjective>;
 

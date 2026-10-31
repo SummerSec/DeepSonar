@@ -66,7 +66,7 @@ export const PlanObjective = z
     budget: PlanExecutionBudget,
     input_sha256: contentDigest,
     status: z.enum(["active", "stopped", "completed"]),
-    updated_at: z.string().datetime(),
+    updated_at: z.string().datetime().max(64),
   })
   .strict();
 export type PlanObjective = z.infer<typeof PlanObjective>;
@@ -383,21 +383,6 @@ export type PlanAuditRecordV2 = z.infer<typeof PlanAuditRecordV2>;
 export const PlanAuditRecord = z.union([PlanAuditRecordV1, PlanAuditRecordV2]);
 export type PlanAuditRecord = z.infer<typeof PlanAuditRecord>;
 
-export type HubIntentLike = {
-  from: readonly string[];
-  role: string;
-  description: string;
-  prompt: string;
-  runtime_image_key?: string;
-  language_server_capability_id?: string;
-  cli_capability_ids?: readonly string[];
-};
-
-export type HubCompleteLike = {
-  from: readonly string[];
-  description: string;
-};
-
 export function planTaskGraphHasCycle(tasks: readonly { id: string; depends_on: readonly string[] }[]): boolean {
   const byId = new Map(tasks.map((task) => [task.id, task]));
   const visiting = new Set<string>();
@@ -414,51 +399,6 @@ export function planTaskGraphHasCycle(tasks: readonly { id: string; depends_on: 
     return false;
   };
   return tasks.some((task) => walk(task.id));
-}
-
-/** Hub Intent → one PlanTask. Compatibility only; does not change Hub dispatch. */
-export function adaptIntentToPlanTask(intent: HubIntentLike, index = 0): PlanTask {
-  return PlanTask.parse({
-    id: `intent-${index + 1}`,
-    title: intent.description.trim().slice(0, 200),
-    role: intent.role,
-    description: intent.description,
-    prompt: intent.prompt,
-    from: [...intent.from],
-    depends_on: [],
-    inputs: [],
-    expected_outputs: [],
-    ...(intent.runtime_image_key ? { runtime_image_key: intent.runtime_image_key } : {}),
-  });
-}
-
-export function adaptHubIntentsToPlan(intents: readonly HubIntentLike[], goal?: string): Plan {
-  const tasks = intents.map((intent, index) => adaptIntentToPlanTask(intent, index));
-  const first = intents[0]?.description.trim();
-  return Plan.parse({
-    v: PLAN_PROTOCOL_VERSION,
-    goal: (goal ?? first ?? "Hub-adapted plan from intents").slice(0, 4_000),
-    assumptions: [],
-    tasks,
-    completion: {
-      mode: "explicit_result",
-      description: "兼容层：由既有 Hub intent 适配为 PlanTask，完成仍以 submit_hub_decision 为准。",
-      required_outputs: [],
-    },
-    budget: { max_tasks: Math.max(1, tasks.length) },
-    open_questions: [],
-  });
-}
-
-export function adaptHubCompleteToPlanResult(complete: HubCompleteLike): PlanResult {
-  return PlanResult.parse({
-    v: PLAN_PROTOCOL_VERSION,
-    outcome: "complete",
-    summary: complete.description,
-    termination_reason: "hub_complete",
-    execution: [],
-    open_questions: [],
-  });
 }
 
 export interface PlanTrimLimits {

@@ -21,7 +21,7 @@ import {
   type HubRoleDefinitionPayload,
 } from "@deepsonar/shared-types";
 import { validatePlanDecision } from "../plan-protocol/decision.js";
-import { applyHubPlanAdapter, applySubmitPlan, applySubmitPlanResult } from "../plan-protocol/index.js";
+import { applySubmitPlan, applySubmitPlanResult } from "../plan-protocol/index.js";
 import {
   drivePlanExecution,
   type PlanExecutionPorts,
@@ -1653,17 +1653,6 @@ export function createEventIngestionSideEffectApplication(
         if (uniqueEdges.length === 0) return;
         await (services.hubEdgeBatchInsert ?? ports.insertEdgesIfAbsentBatch)(edgeTx, uniqueEdges);
       };
-
-      if (!p.plan_basis) await applyHubPlanAdapter(
-        tx,
-        jobId,
-        job as Record<string, unknown>,
-        {
-          complete: p.complete,
-          intents: submittedIntents,
-        },
-        rules.maxIntentsPerDecision,
-      );
 
       if (p.complete?.description) {
         // Hub complete 只是提案：统一完成门（排除当前仍 running 的 Hub 做门检）

@@ -1,17 +1,9 @@
 import { taskInputSha256 } from "./task-input.js";
 import { contentSha256 } from "./criterion-model.js";
 import {
-  Plan,
   PlanAuditRecord,
-  PlanResult,
   SubmitPlanPayload,
   SubmitPlanResultPayload,
-  adaptHubCompleteToPlanResult,
-  adaptHubIntentsToPlan,
-  mergePlanAudit,
-  trimPlan,
-  type HubCompleteLike,
-  type HubIntentLike,
 } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
 import type { EventIngestionTransaction } from "../event-ingestion/application.js";
@@ -27,28 +19,6 @@ export function readPlanAudit(payloadJson: unknown): PlanAuditRecord | null {
   const raw = (payloadJson as Record<string, unknown>).plan_protocol;
   const parsed = PlanAuditRecord.safeParse(raw);
   return parsed.success ? parsed.data : null;
-}
-
-export async function persistPlanAudit(
-  tx: EventIngestionTransaction,
-  jobId: string,
-  currentPayload: unknown,
-  patch: Parameters<typeof mergePlanAudit>[1],
-): Promise<PlanAuditRecord> {
-  const current = readPlanAudit(currentPayload);
-  if (current?.v === 2) {
-    throw new ControlInputError(
-      "plan_stale_revision",
-      "执行型 Plan owner 不能降级接收历史 v1 Plan；请按 v2 execution_route 提交新路线。",
-      "plan",
-    );
-  }
-  const record = mergePlanAudit(current, patch);
-  await tx`
-    UPDATE jobs
-    SET payload_json = payload_json || ${tx.json({ plan_protocol: record } as never)}
-    WHERE id = ${jobId}`;
-  return record;
 }
 
 function planV2Audit(input: {
@@ -358,34 +328,4 @@ export async function applySubmitPlanResult(
       terminationReason: result.termination_reason ?? result.outcome,
     });
   }
-}
-
-export async function applyHubPlanAdapter(
-  tx: EventIngestionTransaction,
-  jobId: string,
-  job: Record<string, unknown>,
-  decision: { complete?: HubCompleteLike; intents?: readonly HubIntentLike[] },
-  maxTasks: number,
-): Promise<PlanAuditRecord> {
-  const current = readPlanAudit(job.payload_json);
-  // Hub completion still uses the original convergence gates. It must not
-  // downgrade or rewrite the independently versioned v2 route/result audit.
-  if (current?.v === 2) return current;
-  if (decision.complete) {
-    const result = adaptHubCompleteToPlanResult(decision.complete);
-    return persistPlanAudit(tx, jobId, job.payload_json, {
-      source: "hub_intent_adapter",
-      result,
-      termination_reason: result.termination_reason ?? "hub_complete",
-    });
-  }
-  const intents = decision.intents ?? [];
-  const raw = adaptHubIntentsToPlan(intents);
-  const { trimmed, reasons } = trimPlan(raw, { maxTasks });
-  return persistPlanAudit(tx, jobId, job.payload_json, {
-    source: "hub_intent_adapter",
-    raw,
-    trimmed,
-    trim_reasons: reasons,
-  });
 }

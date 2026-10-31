@@ -42,7 +42,7 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   assert.match(content, /必须使用原 key、revision 和完全相同 payload 再 POST 一次/);
   assert.equal(
     DEEPSONAR_CONTROL_SKILL_SHA256,
-    "dba585a1d3feac6091f4a5f2b9f95a8c6e9917baee507d34b184393c0c7018d2",
+    "1e3ff49235390cba3a9b4b9075d05d258514998a11c0816c00733d0669c41cd0",
   );
 });
 
