@@ -1,11 +1,21 @@
 import { IDENTITY_FIELDS, type IdentityField, type RelationKind } from './model.js';
+import { PLATFORM_IDENTITY_FIELDS, type PlatformIdentityField } from './identity.js';
 
 export const OFFLINE_INPUT_BYTES = 4 * 1024 * 1024;
-export const RELATION_LABELS: readonly RelationKind[] = ['suspected_same_issue','same_root_cause_different_instance','similar','distinct','insufficient_information'];
+export const RELATION_LABELS: readonly RelationKind[] = ['suspected_same_issue','same_problem','same_root_cause_different_instance','similar','distinct','insufficient_information'];
+export interface OfflineAuthoritativeIdentityMapping {
+  field: PlatformIdentityField;
+  identity_digest: string;
+  authority_version: string;
+  source_revision: string;
+  source_digest: string;
+  freshness_until: string;
+}
 export interface OfflineSource {
   id:string;project_id:string;job_id:string;split:'tuning'|'holdout';asset_group:string;family_group:string;
   revision:string|null;digest:string|null;title:string;location:string|null;summary:string|null;profile:string;category:string|null;
   identity_declarations?:Partial<Record<IdentityField,string|null>>;
+  authoritative_identity_mappings?:OfflineAuthoritativeIdentityMapping[];
 }
 export interface OfflineDataset {
   schema_version:1;dataset_id:string;dataset_kind:'synthetic'|'human-labeled';
@@ -35,7 +45,7 @@ function uuid(value:unknown):string{
 }
 function integer(value:unknown,max:number):number{if(!Number.isInteger(value)||Number(value)<1||Number(value)>max)return fail('INVALID_CONFIGURATION');return Number(value);}
 function source(value:unknown):OfflineSource{
-  const row=object(value);keys(row,['id','project_id','job_id','split','asset_group','family_group','revision','digest','title','location','summary','profile','category'],['identity_declarations']);
+  const row=object(value);keys(row,['id','project_id','job_id','split','asset_group','family_group','revision','digest','title','location','summary','profile','category'],['identity_declarations','authoritative_identity_mappings']);
   if(typeof row.split!=='string'||!['tuning','holdout'].includes(row.split))fail('INVALID_SPLIT');
   const revision=row.revision===null?null:shortId(row.revision);
   if(row.digest!==null&&(typeof row.digest!=='string'||!/^sha256:[0-9a-f]{64}$/.test(row.digest)))fail('INVALID_SOURCE_DIGEST');
@@ -47,9 +57,28 @@ function source(value:unknown):OfflineSource{
     const supplied=object(row.identity_declarations);keys(supplied,[],[...IDENTITY_FIELDS]);identity={};
     for(const field of IDENTITY_FIELDS)if(Object.hasOwn(supplied,field))identity[field]=text(supplied[field],256,true);
   }
+  let authoritative:OfflineAuthoritativeIdentityMapping[]|undefined;
+  if(row.authoritative_identity_mappings!==undefined){
+    if(!Array.isArray(row.authoritative_identity_mappings)||row.authoritative_identity_mappings.length>PLATFORM_IDENTITY_FIELDS.length)fail('INVALID_IDENTITY_MAPPINGS');
+    const seen=new Set<string>();
+    authoritative=row.authoritative_identity_mappings.map(value=>{
+      const mapping=object(value);keys(mapping,['field','identity_digest','authority_version','source_revision','source_digest','freshness_until']);
+      if(typeof mapping.field!=='string'||!PLATFORM_IDENTITY_FIELDS.includes(mapping.field as PlatformIdentityField)||seen.has(mapping.field))fail('INVALID_IDENTITY_MAPPINGS');
+      seen.add(mapping.field);
+      if(typeof mapping.identity_digest!=='string'||!/^sha256:[0-9a-f]{64}$/.test(mapping.identity_digest)
+        ||typeof mapping.source_digest!=='string'||!/^sha256:[0-9a-f]{64}$/.test(mapping.source_digest))fail('INVALID_IDENTITY_MAPPINGS');
+      if(typeof mapping.authority_version!=='string'||!mapping.authority_version.trim()||mapping.authority_version.length>128
+        ||typeof mapping.source_revision!=='string'||!mapping.source_revision.trim()||mapping.source_revision.length>256)fail('INVALID_IDENTITY_MAPPINGS');
+      const authority_version=mapping.authority_version.trim(),source_revision=mapping.source_revision.trim();
+      if(typeof mapping.freshness_until!=='string'||!Number.isFinite(new Date(mapping.freshness_until).getTime()))fail('INVALID_IDENTITY_MAPPINGS');
+      return {field:mapping.field as PlatformIdentityField,identity_digest:mapping.identity_digest,
+        authority_version,source_revision,source_digest:mapping.source_digest,freshness_until:new Date(mapping.freshness_until).toISOString()};
+    });
+  }
   return {id:uuid(row.id),project_id:uuid(row.project_id),job_id:uuid(row.job_id),split:row.split as OfflineSource['split'],
     asset_group:shortId(row.asset_group),family_group:shortId(row.family_group),revision,digest:row.digest as string|null,
-    title,location,summary,profile:text(row.profile,128)!,category:text(row.category,128,true),...(identity?{identity_declarations:identity}:{})};
+    title,location,summary,profile:text(row.profile,128)!,category:text(row.category,128,true),...(identity?{identity_declarations:identity}:{}),
+    ...(authoritative?{authoritative_identity_mappings:authoritative}: {})};
 }
 
 /** Declaration-level isolation validation; group truth and annotation independence are not certified. */

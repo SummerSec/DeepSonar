@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 65);
+INSERT INTO schema_meta (id, version) VALUES ('global', 66);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -446,6 +446,177 @@ CREATE TABLE project_finding_candidate_edges (
   FOREIGN KEY (project_id, right_id) REFERENCES findings(project_id, id) ON DELETE CASCADE
 );
 CREATE INDEX project_finding_candidate_edges_right ON project_finding_candidate_edges(project_id, generation, right_id, left_id);
+
+-- #819: platform-admin-admitted identity manifests. The registry is an
+-- operator-curated attestation boundary; it does not authenticate an external
+-- inventory or prove that the referenced system is truthful.
+CREATE FUNCTION deepsonar_identity_manifest_fields_valid(value jsonb) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE WHEN jsonb_typeof(value) = 'object' THEN
+    NOT EXISTS (
+      SELECT 1 FROM jsonb_object_keys(value) AS keys(key)
+      WHERE key NOT IN ('asset', 'service', 'tenant', 'environment', 'version',
+                        'parameter', 'permission_boundary', 'root_cause')
+    )
+    AND COALESCE((
+      SELECT bool_and(jsonb_typeof(entry.value) = 'string'
+        AND (entry.value #>> '{}') ~ '^sha256:[a-f0-9]{64}$')
+      FROM jsonb_each(value) AS entry(key, value)
+    ), false)
+    ELSE false END
+$$;
+
+CREATE TABLE project_finding_identity_sources (
+  source_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  finding_id uuid NOT NULL,
+  current_revision int NOT NULL DEFAULT 1 CHECK (current_revision > 0),
+  revoked_at timestamptz,
+  revocation_reason text CHECK (revocation_reason IS NULL OR char_length(revocation_reason) BETWEEN 1 AND 512),
+  registered_by text NOT NULL CHECK (char_length(registered_by) BETWEEN 1 AND 256),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT project_finding_identity_source_finding_fk
+    FOREIGN KEY (project_id, finding_id) REFERENCES findings(project_id, id) ON DELETE CASCADE,
+  UNIQUE (project_id, source_id, finding_id)
+);
+CREATE INDEX project_finding_identity_sources_finding_idx
+  ON project_finding_identity_sources(project_id, finding_id, source_id);
+
+CREATE TABLE project_finding_identity_source_revisions (
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_id uuid NOT NULL,
+  finding_id uuid NOT NULL,
+  revision int NOT NULL CHECK (revision > 0),
+  authority_version text NOT NULL CHECK (char_length(authority_version) BETWEEN 1 AND 128),
+  source_kind text NOT NULL CHECK (source_kind IN (
+    'platform_target', 'platform_inventory', 'platform_deployment',
+    'platform_evidence', 'platform_root_cause'
+  )),
+  source_ref text NOT NULL CHECK (
+    char_length(source_ref) BETWEEN 1 AND 512 AND source_ref !~ E'[[:cntrl:]]'
+  ),
+  freshness_until timestamptz NOT NULL,
+  identity_fields_json jsonb NOT NULL CHECK (deepsonar_identity_manifest_fields_valid(identity_fields_json)),
+  content_sha256 text NOT NULL CHECK (content_sha256 ~ '^sha256:[a-f0-9]{64}$'),
+  registered_by text NOT NULL CHECK (char_length(registered_by) BETWEEN 1 AND 256),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, source_id, revision),
+  UNIQUE (project_id, source_id, finding_id, revision),
+  FOREIGN KEY (project_id, source_id, finding_id)
+    REFERENCES project_finding_identity_sources(project_id, source_id, finding_id) ON DELETE CASCADE
+);
+CREATE INDEX project_finding_identity_source_revisions_current_idx
+  ON project_finding_identity_source_revisions(project_id, source_id, finding_id, revision);
+CREATE FUNCTION deepsonar_identity_source_revision_append_only() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  -- A source/finding/project deletion may cascade through this history table.
+  -- Direct history edits remain forbidden while the owning source still exists.
+  IF TG_OP = 'DELETE' AND NOT EXISTS (
+    SELECT 1 FROM project_finding_identity_sources
+    WHERE project_id = OLD.project_id AND source_id = OLD.source_id
+      AND finding_id = OLD.finding_id
+  ) THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'identity source revisions are immutable';
+END $$;
+CREATE TRIGGER project_finding_identity_source_revisions_immutable
+  BEFORE UPDATE OR DELETE ON project_finding_identity_source_revisions
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_identity_source_revision_append_only();
+
+CREATE TABLE project_finding_identity_mappings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  finding_id uuid NOT NULL,
+  field text NOT NULL CHECK (field IN (
+    'asset', 'service', 'tenant', 'environment', 'version', 'parameter',
+    'permission_boundary', 'root_cause'
+  )),
+  source_id uuid NOT NULL,
+  source_revision int NOT NULL CHECK (source_revision > 0),
+  mapping_version int NOT NULL CHECK (mapping_version > 0),
+  revoked_at timestamptz,
+  revocation_reason text CHECK (revocation_reason IS NULL OR char_length(revocation_reason) BETWEEN 1 AND 512),
+  authorized_by text NOT NULL CHECK (char_length(authorized_by) BETWEEN 1 AND 256),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT project_finding_identity_mapping_finding_fk
+    FOREIGN KEY (project_id, finding_id) REFERENCES findings(project_id, id) ON DELETE CASCADE,
+  CONSTRAINT project_finding_identity_mapping_source_fk
+    FOREIGN KEY (project_id, source_id, finding_id)
+    REFERENCES project_finding_identity_sources(project_id, source_id, finding_id) ON DELETE CASCADE,
+  CONSTRAINT project_finding_identity_mapping_revision_fk
+    FOREIGN KEY (project_id, source_id, finding_id, source_revision)
+    REFERENCES project_finding_identity_source_revisions(project_id, source_id, finding_id, revision),
+  UNIQUE (project_id, finding_id, field, mapping_version),
+  UNIQUE (project_id, finding_id, field, source_id, source_revision)
+);
+CREATE INDEX project_finding_identity_mappings_lookup
+  ON project_finding_identity_mappings(project_id, field, source_id, source_revision, finding_id);
+CREATE INDEX project_finding_identity_mappings_history
+  ON project_finding_identity_mappings(project_id, finding_id, field, mapping_version DESC);
+
+-- Rebuildable, Scheduler-owned strong relation work and source checkpoints.
+CREATE TABLE project_finding_relation_scan (
+  id text PRIMARY KEY CHECK (id = 'global'),
+  cursor_id uuid
+);
+INSERT INTO project_finding_relation_scan (id) VALUES ('global');
+CREATE TABLE project_finding_relation_work (
+  project_id uuid PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  generation uuid NOT NULL DEFAULT gen_random_uuid(),
+  active_generation uuid,
+  rule_version text NOT NULL,
+  cursor_id uuid,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
+  attempts int NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 3),
+  error_code text,
+  next_run_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX project_finding_relation_work_due
+  ON project_finding_relation_work(next_run_at, project_id) WHERE status <> 'failed';
+CREATE TABLE project_finding_relation_sources (
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  generation uuid NOT NULL,
+  finding_id uuid NOT NULL,
+  source_fingerprint text NOT NULL CHECK (source_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  identity_fingerprint text NOT NULL CHECK (identity_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  rule_version text NOT NULL,
+  examined int NOT NULL CHECK (examined BETWEEN 0 AND 257),
+  pair_truncated boolean NOT NULL,
+  read_status text NOT NULL DEFAULT 'complete' CHECK (read_status IN ('complete', 'truncated', 'blocked')),
+  read_reason text,
+  processed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, generation, finding_id),
+  FOREIGN KEY (project_id, finding_id) REFERENCES findings(project_id, id) ON DELETE CASCADE
+);
+CREATE TABLE project_finding_relations (
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  generation uuid NOT NULL,
+  left_id uuid NOT NULL,
+  right_id uuid NOT NULL,
+  left_source_fingerprint text NOT NULL CHECK (left_source_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  right_source_fingerprint text NOT NULL CHECK (right_source_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  left_identity_fingerprint text NOT NULL CHECK (left_identity_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  right_identity_fingerprint text NOT NULL CHECK (right_identity_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  relation_kind text NOT NULL CHECK (relation_kind IN ('same_problem', 'same_root_cause_different_instance')),
+  matched_fields text[] NOT NULL,
+  different_fields text[] NOT NULL,
+  root_cause_continuation boolean NOT NULL,
+  rule_version text NOT NULL,
+  quality_gate_status text NOT NULL CHECK (quality_gate_status IN ('not_evaluated', 'passed', 'failed')),
+  published boolean NOT NULL DEFAULT false CHECK (published = false),
+  processed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, generation, left_id, right_id),
+  CONSTRAINT project_finding_relations_order CHECK (left_id < right_id),
+  FOREIGN KEY (project_id, left_id) REFERENCES findings(project_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (project_id, right_id) REFERENCES findings(project_id, id) ON DELETE CASCADE
+);
+CREATE INDEX project_finding_relations_right
+  ON project_finding_relations(project_id, generation, right_id, left_id);
 
 CREATE INDEX findings_artifact_idx ON findings (artifact_id) WHERE artifact_id IS NOT NULL;
 CREATE INDEX findings_filter_idx ON findings (project_id, severity, verify_status);

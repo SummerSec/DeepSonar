@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdtemp,writeFile,rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
@@ -28,6 +28,10 @@ test('strict deterministic normalized import and complete report hashes',()=>{
   assert.equal(report.splits.holdout.pair_rule_metrics.per_class.suspected_same_issue.recall.value,0);
   assert.equal(report.splits.holdout.pair_rule_metrics.per_class.suspected_same_issue.precision.value,null);
   assert.equal(report.quality_gate_status,'not_assessed');assert.equal(report.independent_label_verification,false);
+  assert.equal(report.strong_relation_quality_gate.status,'not_evaluated');
+  assert.equal(report.strong_relation_quality_gate.published,false);
+  assert.equal(report.strong_relation_quality_gate.independent_human_labels_verified,false);
+  assert.equal(report.strong_relation_quality_gate.thresholds_frozen_before_holdout,false);
   assert.equal(report.execution_plane,'offline_local_corpus_window_simulation');assert.equal(report.experimental_configuration,false);
   assert.equal(report.coverage.declared_fields.location.value,0);assert.equal(report.coverage.declared_fields.title.value,1);
   assert.ok(!JSON.stringify(report).includes('synthetic lexical claim'));assert.ok(!JSON.stringify(report).includes('中文 参数'));
@@ -46,6 +50,20 @@ test('labels and identity declarations never change rule predictions or candidat
   assert.equal(b.coverage.authoritative_mapping.value,0);
   const forged=fixture() as unknown as Record<string,unknown>;const source=(forged.sources as Record<string,unknown>[])[0];source.identity={asset:{value:'forged authority'}};
   reject(forged,'INVALID_FIELDS');
+});
+test('offline authoritative mappings are digest-only and never publish strong relations',()=>{
+  const input=fixture();
+  const digest=(value:string)=>`sha256:${value.repeat(64).slice(0,64)}`;
+  const strongFields=['asset','tenant','environment','version','parameter','root_cause'] as const;
+  for(const source of input.sources.slice(0,2)) source.authoritative_identity_mappings=strongFields.map((field,index)=>({
+    field,identity_digest:digest(['a','b','c','d','e','f'][index]),authority_version:field==='root_cause'?'root-cause/v1':'inventory/v1',
+    source_revision:'rev-1',source_digest:digest(['1','2','3','4','5','6'][index]),freshness_until:'2099-01-01T00:00:00.000Z',
+  }));
+  const report=evaluateOfflineDataset(input);
+  assert.equal(report.identity_coverage.available_authoritative_mapping_fields,6);
+  assert.equal(report.strong_relation_quality_gate.published,false);
+  assert.equal(report.strong_relation_quality_gate.status,'not_evaluated');
+  assert.equal(report.pairs[0].strong_relation_prediction,'same_problem');
 });
 test('explicit null labels and absent pair labels never become negative examples',()=>{
   const input=fixture();input.pairs[0].label=null;
@@ -119,7 +137,7 @@ registerHooks({resolve(specifier,context,next){if(/^(?:node:)?(?:net|http|https|
 globalThis.fetch=()=>{throw Error('FORBIDDEN_OFFLINE_NETWORK');};
 const environment=process.env;process.env=new Proxy(environment,{get(target,key){if(key==='DATABASE_URL'||key==='DEEPSONAR_AUTH_REQUIRED')throw Error('FORBIDDEN_OFFLINE_ENV');return Reflect.get(target,key);}});
 `);
-    const run=(args:string[])=>promisify(execFile)(process.execPath,['--import',createRequire(import.meta.url).resolve('tsx'),'--import',guard,cli,...args],
+    const run=(args:string[])=>promisify(execFile)(process.execPath,['--import',pathToFileURL(createRequire(import.meta.url).resolve('tsx')).href,'--import',pathToFileURL(guard).href,cli,...args],
       {cwd:dir,env:{...process.env,DATABASE_URL:'postgres://secret:private@127.0.0.1:1/forbidden'},maxBuffer:4*1024*1024});
     const success=await run(['--input',input]);assert.equal(success.stderr,'');
     assert.deepEqual(JSON.parse(success.stdout),evaluateOfflineDataset(fixture()));

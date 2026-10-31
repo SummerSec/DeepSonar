@@ -9,6 +9,7 @@ import { registerCanvasRoutes } from "./domains/canvas/routes.js";
 import { registerDashboardRoutes } from "./domains/dashboard/routes.js";
 import { registerCredentialRoutes } from "./domains/credential/routes.js";
 import { registerFindingResearchRoutes } from "./domains/finding-research/index.js";
+import { registerFindingRelationRoutes } from "./domains/project-finding-research/relation-routes.js";
 import { registerFindingVerificationRoutes } from "./domains/finding-verification/routes.js";
 import { registerProgramEligibilityRoutes } from "./domains/program-eligibility/index.js";
 import { registerJobControlRoutes } from "./domains/job-control/routes.js";
@@ -47,6 +48,7 @@ export function registerRoutes(app: FastifyInstance) {
   registerFindingVerificationRoutes(app);
   registerProgramEligibilityRoutes(app);
   registerFindingResearchRoutes(app);
+  registerFindingRelationRoutes(app);
   registerSharedAssetRoutes(app);
 
   // Model Gateway（§6.3）：自身用 DEEPSONAR_JOB_TOKEN 鉴权（authHook 豁免 /gateway/*）
