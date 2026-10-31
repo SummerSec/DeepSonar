@@ -74,6 +74,18 @@ test("material admission keeps project-scoped admin tokens inside their project"
   assert.equal(canRegisterMaterial({ type: "user", id: "viewer", name: "viewer", projectId: null, role: "viewer", scopes: ["projects:write"] }, { kind: "project", project_id: current.project_id }), false);
 });
 
+test("no independent review stays unassessed even when technical prerequisites are blocked", () => {
+  const input = { findingId, technicalStatus: "pending", technicalBinding: null, technicalGaps: ["finding_verify_not_confirmed"],
+    material: null, materialGaps: [], currentEvidenceDigest: null, reviews: [] };
+  const result = projectProgramEligibility(input);
+  assert.equal(result.status, "not_assessed");
+  assert.equal(result.current_review_id, null);
+  assert.ok(result.gaps.includes("eligibility_review_missing"));
+  assert.ok(result.gaps.includes("finding_verify_not_confirmed"));
+  const malformed = projectProgramEligibility({ ...input, historyInvalid: true });
+  assert.equal(malformed.status, "blocked", "Malformed history must not be mistaken for absent review");
+});
+
 test("a current independent approval is eligible and does not mutate technical status", () => {
   const result = projectProgramEligibility({ findingId, technicalStatus: "confirmed", technicalBinding: current, technicalGaps: [], material, materialGaps: [], currentEvidenceDigest, reviews: [review()] });
   assert.equal(result.status, "eligible");

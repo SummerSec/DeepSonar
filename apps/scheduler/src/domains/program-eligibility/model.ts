@@ -243,6 +243,13 @@ export function projectProgramEligibility(input: EligibilityProjectionInput): El
       gaps: [...new Set([...gaps, "eligibility_history_invalid"])], historical_review_ids: historical,
     };
   }
+  if (!input.reviews.length) {
+    return {
+      status: "not_assessed", finding_id: input.findingId, technical_status: input.technicalStatus,
+      current_review_id: null, current_material_id: input.material?.material_id ?? null,
+      gaps: [...new Set(gaps)], historical_review_ids: historical,
+    };
+  }
   if (!input.technicalBinding || input.technicalGaps.length) {
     return {
       status: "blocked", finding_id: input.findingId, technical_status: input.technicalStatus,

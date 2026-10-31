@@ -15,6 +15,8 @@
 
 ## 当前有效性
 
+没有独立评审且历史完整时保持 `not_assessed`，并列出技术或材料缺项；已有评审失效时为 `blocked`。历史损坏即使没有可解析的评审也保持 `blocked`。
+
 评审绑定具体 Finding、Artifact revision/source digest、来源及 Verify Attempt、当前 confirmed round、来源 Job 冻结契约中的目标/基线、准入材料的 program/version/source hash、当前证据指纹、理由和时间。请求不能通过匹配任意材料自报一个 Finding 未获准的目标。
 
 材料替代、撤销和来源/Attempt/证据变化不会改写旧评审；当前投影重新校验。当前有效批准与拒绝并存时为 `blocked`，不用最后写入覆盖先前结论。`eligible` 只表示当前操作员资格评审仍有效；技术 `confirmed`、普通目标判据满足和 `program_rule_review.rules_satisfied` 均不能单独推导资格。`ineligible` 是有依据的明确否定，`blocked` 表示无法安全判断。
@@ -40,4 +42,4 @@
 
 2026-10-31 域内定向验证：Windows Node 与真实隔离 PostgreSQL 下，schema/model/routes/report 及既有任务报告单元共 35 项通过，路由/SQL 集成共 12 项通过，无跳过。覆盖真实管理 token 与 Job capability 分离、来源和版本不符、身份伪造/越权、项目绑定管理员、幂等并发及跨项目重放、多条当前评审、Verify Attempt 变化、Canvas 并发重验、材料替代/撤销、证据变化、未知效果、预算及重启重读。未执行生产任务或真实模型质量试验；最终组合 GitHub CI 尚未完成。主路由、OpenAPI、scope、测试接线、文档与体量的本地门禁另有 44 项通过；这些结果不代表外部程序资格已经通过。
 
-单元已接入 `pnpm ci:unit:verify-eligibility`，数据库测试已接入 `pnpm ci:integration:verify-eligibility`；全局路由/scope 由 `pnpm ci:unit:authz` 检查。2026-10-31 集成分支按这些脚本中的同一文件清单以本地 Windows Node 执行，分别通过 185、24、78 项；前述定向结果与这些组合有重叠，不重复加总。未设置 `TEST_DATABASE_URL` 时集成测试明确跳过，不能声称通过。该功能不改 schema 基线。
+单元已接入 `pnpm ci:unit:verify-eligibility`，数据库测试已接入 `pnpm ci:integration:verify-eligibility`；全局路由/scope 由 `pnpm ci:unit:authz` 检查。2026-10-31 集成分支按这些脚本中的同一文件清单以本地 Windows Node 执行，分别通过 186、24、78 项；资格状态修正后的 `ci:integration:authz-boundaries` 文件清单另通过 85 项。前述定向结果与这些组合有重叠，不重复加总。未设置 `TEST_DATABASE_URL` 时集成测试明确跳过，不能声称通过。该功能不改 schema 基线。
