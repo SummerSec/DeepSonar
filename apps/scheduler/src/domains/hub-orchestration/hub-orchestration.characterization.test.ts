@@ -168,7 +168,8 @@ test("core composition root wires Hub orchestration without owning eligibility S
   assert.match(application, /budget_exhausted:incomplete:\$\{limitLabel\}/);
   assert.match(application, /deepsonar_hub_budget_exhausted_total/);
   assert.doesNotMatch(application, /max_hub_rounds_incomplete/);
-  assert.match(source, /parseHubMaxRounds\(raw\.maxHubRounds\) \?\? base\.maxHubRounds/);
+  assert.match(source, /const maxHubRounds = parseHubMaxRounds\(raw\.maxHubRounds\)/);
+  assert.match(source, /maxHubRounds: maxHubRounds \?\? base\.maxHubRounds/);
   assert.match(application, /dispatched_prompt: extractDispatchPrompt\("hub_reason"/);
   assert.match(
     application,

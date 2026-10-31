@@ -18,7 +18,8 @@ export type CliPermission = z.infer<typeof CliPermission>;
 
 export const CliLimits = z
   .object({
-    max_calls_per_job: z.number().int().min(1).max(10_000),
+    /** Missing/0 means unlimited; positive values are explicit per-Job caps. */
+    max_calls_per_job: z.number().int().min(0).max(10_000).default(0),
     timeout_ms: z.number().int().min(100).max(600_000),
     max_output_bytes: z.number().int().min(1_024).max(16_777_216),
   })

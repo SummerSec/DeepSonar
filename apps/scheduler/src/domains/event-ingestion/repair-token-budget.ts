@@ -10,10 +10,10 @@ export type RepairTokenBudget = {
   usage_status: "known" | "pending" | "unknown";
 };
 
-/** A missing policy is not an unlimited budget. Freeze this on the first rejection. */
+/** Freeze 0 as unlimited; historical null/missing receipts retain their closed policy. */
 export function configuredRepairTokenLimit(): number | null {
   const value = config.gateway.repairMaxTokens;
-  return Number.isSafeInteger(value) && value > 0 ? value : null;
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 /** Caller holds the Job lock. Costs are a projection of the existing ledger, never a second balance. */
@@ -39,9 +39,9 @@ export async function readRepairTokenBudget(db: typeof sql, jobId: string): Prom
       else known += count;
     }
   }
-  const cap = Number.isSafeInteger(limit) && limit > 0 ? limit : null;
+  const cap = Number.isSafeInteger(limit) && limit >= 0 ? limit : null;
   return { receipt_ref: String(first.event_id), attempt_id: String(first.payload_json.attempt_id), limit_tokens: cap, known_tokens: known,
-    remaining_tokens: state === "known" && cap !== null ? Math.max(0, cap - known) : null, usage_status: state };
+    remaining_tokens: state === "known" && cap !== null && cap > 0 ? Math.max(0, cap - known) : null, usage_status: state };
 }
 
 export class RepairTokenBudgetError extends Error {
@@ -49,7 +49,7 @@ export class RepairTokenBudgetError extends Error {
 }
 
 /** Bound generated output as well as admission. Input/cache cost is known only after the response. */
-export function boundRepairOutput(body: unknown, path: string, remaining: number): unknown {
+export function boundRepairOutput(body: unknown, path: string, remaining: number | null): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body) || Buffer.isBuffer(body)) {
     throw new RepairTokenBudgetError("REPAIR_PROTOCOL_UNSUPPORTED", "Repair requires a supported JSON model request");
   }
@@ -62,16 +62,22 @@ export function boundRepairOutput(body: unknown, path: string, remaining: number
     || (normalized === "completions" && typeof input.prompt !== "string")) {
     throw new RepairTokenBudgetError("REPAIR_PROTOCOL_UNSUPPORTED", "Repair supports one completion and no batch or best-of generation");
   }
-  const cap = (value: unknown): number => {
-    if (value === undefined) return remaining;
+  const cap = (value: unknown): number | undefined => {
+    if (value === undefined) return remaining ?? undefined;
     if (!Number.isSafeInteger(value) || Number(value) <= 0) {
       throw new RepairTokenBudgetError("REPAIR_PROTOCOL_UNSUPPORTED", "Repair output limit must be a positive integer");
     }
-    return Math.min(Number(value), remaining);
+    return remaining === null ? Number(value) : Math.min(Number(value), remaining);
   };
-  const output = { ...input, [field]: cap(input[field]) };
+  const output: Record<string, unknown> = { ...input };
+  const outputCap = cap(input[field]);
+  if (outputCap !== undefined) output[field] = outputCap;
   if (normalized === "chat/completions") {
-    if ("max_tokens" in output) { output.max_tokens = Math.min(cap(input.max_tokens), cap(input[field])); delete output.max_completion_tokens; }
+    if ("max_tokens" in output) {
+      const legacyCap = cap(input.max_tokens);
+      output.max_tokens = outputCap === undefined ? legacyCap : Math.min(legacyCap!, outputCap);
+      delete output.max_completion_tokens;
+    }
     // Provider-generated terminal usage is required; model/tool contents never substitute for it.
     if (output.stream === true) output.stream_options = { ...(typeof input.stream_options === "object" && input.stream_options ? input.stream_options : {}), include_usage: true };
   }
@@ -85,7 +91,7 @@ export function assertRepairTokenBudget(budget: RepairTokenBudget | null, newReq
     budget.usage_status === "pending" ? "REPAIR_USAGE_PENDING" : "REPAIR_USAGE_UNKNOWN",
     "Repair usage is not settled; reconcile the existing request before continuing", budget);
   if (newRequest && budget.limit_tokens === null) throw new RepairTokenBudgetError(
-    "REPAIR_TOKEN_LIMIT_UNCONFIGURED", "Repair model requests require an explicit administrator token limit", budget);
+    "REPAIR_TOKEN_LIMIT_UNCONFIGURED", "The frozen repair policy does not permit model requests", budget);
   if (budget.remaining_tokens === 0) throw new RepairTokenBudgetError(
     "REPAIR_TOKEN_EXHAUSTED", "Repair token allowance exhausted; stop and request human intervention", budget);
 }
@@ -108,7 +114,11 @@ export async function admitGatewayRepair(db: typeof sql, jobId: string, attemptI
     AND payload_json->>'operation'='mark_job_done' AND payload_json->>'status'='persisted_deferred' LIMIT 1`;
   if (accepted) throw new RepairTokenBudgetError("COMPLETION_ALREADY_ACCEPTED", "Completion already accepted; reconcile its receipt", budget);
   assertRepairTokenBudget(budget, true);
-  // A configured Job-wide ceiling always takes precedence, including requests made before repair.
+  return budget;
+}
+
+/** Caller holds the Job lock; an explicit total ceiling covers every model request and token rotation. */
+export async function readJobTokenAllowance(db: typeof sql, jobId: string, budget?: RepairTokenBudget): Promise<number | null> {
   const [totalLimit] = await db`SELECT MIN(max_tokens) AS cap FROM job_tokens WHERE job_id=${jobId} AND max_tokens IS NOT NULL`;
   if (totalLimit?.cap != null) {
     const [usage] = await db`SELECT COALESCE(SUM(l.total_tokens) FILTER (WHERE l.settlement_status='settled'),0) AS total,
@@ -120,7 +130,7 @@ export async function admitGatewayRepair(db: typeof sql, jobId: string, attemptI
       throw new RepairTokenBudgetError("JOB_TOKEN_USAGE_UNKNOWN", "Job token usage requires reconciliation", budget);
     }
     if (total >= cap) throw new RepairTokenBudgetError("JOB_TOKEN_EXHAUSTED", "Job token allowance exhausted", budget);
-    budget.remaining_tokens = Math.min(budget.remaining_tokens!, cap - total);
+    return cap - total;
   }
-  return budget;
+  return null;
 }

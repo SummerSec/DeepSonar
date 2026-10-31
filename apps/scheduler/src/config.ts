@@ -40,25 +40,17 @@ function int(name: string, dflt: number): number {
   recordConfigInput(name, Number.isFinite(v) && v > 0);
   return Number.isFinite(v) && v > 0 ? v : dflt;
 }
-/**
- * Hub round budget (#521): unset → unlimited (`0`); `unlimited`/`0` → unlimited;
- * positive integer → finite cap; invalid → fallback (logged, not silent 20).
- * Keep this parser local so config does not import hub-orchestration.
- */
-function hubMaxRounds(name: string, dflt: number): number {
+/** Usage quotas are opt-in. Invalid explicit input must never widen a limit. */
+function usageLimit(name: string, max: number, allowUnlimited = false): number {
   const raw = process.env[name];
-  if (raw === undefined) return dflt;
-  const trimmed = raw.trim();
-  recordConfigInput(name, /^unlimited$/i.test(trimmed) || (Number.isSafeInteger(Number(raw)) && Number(raw) >= 0 && Number(raw) <= 10_000));
-  if (trimmed.length === 0) {
-    console.warn(`[config] ${name} 为空，回落 ${dflt === 0 ? "unlimited" : dflt}`);
-    return dflt;
-  }
-  if (/^unlimited$/i.test(trimmed)) return 0;
-  const v = Number(trimmed);
-  if (Number.isSafeInteger(v) && v >= 0 && v <= 10_000) return v;
-  console.warn(`[config] ${name}=${JSON.stringify(raw)} 非法，回落 ${dflt === 0 ? "unlimited" : dflt}`);
-  return dflt;
+  if (raw === undefined || raw.trim() === "") return 0;
+  if (allowUnlimited && /^unlimited$/i.test(raw.trim())) return 0;
+  const value = Number(raw);
+  if (Number.isSafeInteger(value) && value >= 0 && value <= max) return value;
+  configInputErrors.add(name);
+  // Offline validation reports sanitized field errors instead of starting a runtime.
+  if (process.env.DEEPSONAR_OFFLINE_PREFLIGHT === "1") return 0;
+  throw new Error(`[config] ${name} must be an integer between 0 and ${max}`);
 }
 /** Bounded positive integer configuration; invalid or out-of-range values use the safe default. */
 function boundedInt(name: string, dflt: number, max: number): number {
@@ -223,7 +215,7 @@ export const config = {
   hub: {
     enabled: bool("DEEPSONAR_HUB_ENABLED", true),
     /** 0 = unlimited。未设置或 `unlimited`/`0` 都不按轮次停；正整数才是护栏。 */
-    maxRounds: hubMaxRounds("DEEPSONAR_HUB_MAX_ROUNDS", 0),
+    maxRounds: usageLimit("DEEPSONAR_HUB_MAX_ROUNDS", 10_000, true),
     maxIntents: int("DEEPSONAR_HUB_MAX_INTENTS", 6),
   },
 
@@ -234,8 +226,8 @@ export const config = {
     maxYamlCharsVerify: int("MAX_GRAPH_YAML_CHARS_VERIFY", 24_000),
     maxYamlCharsReport: int("MAX_GRAPH_YAML_CHARS_REPORT", 8_000),
     maxFindingReportInputChars: int("MAX_FINDING_REPORT_INPUT_CHARS", 40_000),
-    queryMaxCalls: int("DEEPSONAR_GRAPH_QUERY_MAX_CALLS", 40),
-    queryMaxBytes: int("DEEPSONAR_GRAPH_QUERY_MAX_BYTES", 512_000),
+    queryMaxCalls: usageLimit("DEEPSONAR_GRAPH_QUERY_MAX_CALLS", Number.MAX_SAFE_INTEGER),
+    queryMaxBytes: usageLimit("DEEPSONAR_GRAPH_QUERY_MAX_BYTES", Number.MAX_SAFE_INTEGER),
   },
 
   /**
@@ -246,8 +238,8 @@ export const config = {
 
   /** Model Gateway（§6.3）：沙箱持短期 DEEPSONAR_JOB_TOKEN 经网关调用模型，不持有长期 Key */
   gateway: {
-    /** Explicit repair allowance; absent/invalid is closed, never unlimited. Frozen on first rejection. */
-    repairMaxTokens: boundedInt("DEEPSONAR_REPAIR_MAX_TOKENS", 0, 2_000_000),
+    /** Opt-in repair allowance; absent/0 is unlimited. Frozen on first rejection. */
+    repairMaxTokens: usageLimit("DEEPSONAR_REPAIR_MAX_TOKENS", 2_000_000),
     /** Endpoint injected into every real sandbox CLI configuration. */
     sandboxUrl: str(
       "DEEPSONAR_GATEWAY_SANDBOX_URL",
@@ -259,10 +251,7 @@ export const config = {
       "http://host.docker.internal:3100/gateway",
     ),
     /** Job Token 默认请求上限；0 = 不限制。落库后由配置中心覆盖。 */
-    maxRequests:
-      Number(process.env.DEEPSONAR_JOB_TOKEN_MAX_REQUESTS) === 0
-        ? 0
-        : int("DEEPSONAR_JOB_TOKEN_MAX_REQUESTS", 500),
+    maxRequests: usageLimit("DEEPSONAR_JOB_TOKEN_MAX_REQUESTS", 1_000_000),
     /** Job Token 生命周期（秒），应 ≥ job timeout */
     tokenTtlSec: int("DEEPSONAR_JOB_TOKEN_TTL_SEC", 4 * 3600),
     /** 转发上游超时（毫秒；流式为首字节超时） */

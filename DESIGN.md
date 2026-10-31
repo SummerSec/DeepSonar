@@ -126,6 +126,8 @@ Profile 复用现有配置解析和物化路径，不建立第二个 Provider Ga
 
 `maxHubRounds`、follow-up 深度、token、wall time、并发和沙箱限制都是不同的护栏。它们可以阻止失控，但不能单独代替模型说明“为什么已经完成”。Plan 协议全面落地前，现有 Hub 和固定角色闭环仍是唯一生产主路径。
 
+用量额度采用显式配置：普通请求次数、修正 token、验证轮数、图查询累计调用/字节和 LSP 调用未配置时不限，显式正数才限制。非法配置拒绝，已有数据库配置与冻结历史不迁移。协议、权限、租约、资源容量和无进展保护独立保留。完整分类见 [用量限制](docs/USAGE_LIMITS.md)。
+
 ### 4.3 失败反馈与修正
 
 插件、Control API、Plan、Artifact、Verify 和 Runtime Adapter 必须使用四类失败语义：
@@ -141,7 +143,7 @@ Profile 复用现有配置解析和物化路径，不建立第二个 Provider Ga
 
 当前 Phase 1 已接入 Control API 的严格 schema/字节约束和标准错误路径。模型收到 `model_correctable` 后应重新读取能力目录、节点引用或当前状态，再以新的提案 revision 和 Idempotency-Key 提交。预算耗尽必须明确进入 `blocked` 或 `needs_human`，不能重复发送相同错误后静默结束。
 
-#776 的完成拒绝可冻结独立 repair-token 限额；Gateway 按原 effect/usage ledger 在 Job 锁内累计、预留并对未知用量停止。管理员未配置时不发起新增修正模型请求；不代表精确调用前费用上界，详见 [修正用量与额度](docs/REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。 #776 的限定范围、离线证据与用户效果评测豁免见 [验收矩阵](docs/REPAIR_FEEDBACK_ACCEPTANCE.md)。
+#776 的完成拒绝可冻结独立 repair-token 限额；Gateway 按原 effect/usage ledger 在 Job 锁内累计、预留并对未知用量停止。新修正链未配置或显式 0 时不限 token；历史冻结策略不重写；不代表精确调用前费用上界，详见 [修正用量与额度](docs/REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。 #776 的限定范围、离线证据与用户效果评测豁免见 [验收矩阵](docs/REPAIR_FEEDBACK_ACCEPTANCE.md)。
 
 
 `accepted` 的目标语义是 durable receipt。已有 Job/Attempt/effect 账本仍是事实边界：`effect_pending` 或 `unknown` 不是普通模型错误，`replay_policy=never` 时禁止自动猜测重放。完整 Proposal/Receipt/Settlement 和失败检查点仍是长期演进项。

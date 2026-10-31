@@ -45,7 +45,7 @@ export const LANGUAGE_SERVER_CAPABILITY_MANIFESTS: readonly LsManifest[] = [
     read_only: true,
     network: "disabled",
     limits: {
-      max_calls_per_job: 64,
+      max_calls_per_job: 0,
       timeout_ms: 30_000,
       max_response_bytes: 262_144,
       cpu: 1,
@@ -74,7 +74,7 @@ function packDraftForLanguageServer(module: LsManifest): CapabilityPackDraft {
     ],
     outputs: [{ name: "language_server_result", artifact_schema: "language_server.query_result" }],
     permissions: { platform_tools: [], allow_egress: false },
-    budget: { max_attempts: 3, max_tokens: 50_000 },
+    budget: { max_attempts: 3 },
     failure_policy: { correctable: true, replay: "same_session" },
     evaluator: `capability.${module.id}.v1`,
   });

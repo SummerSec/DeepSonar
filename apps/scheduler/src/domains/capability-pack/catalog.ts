@@ -55,7 +55,7 @@ export function freezeCapabilityPackManifest(draft: CapabilityPackDraft): Capabi
   return CapabilityPackManifest.parse({ ...draft, digest: capabilityPackDigest(draft) });
 }
 
-const DEFAULT_BUDGET = { max_attempts: 3, max_tokens: 50_000 } as const;
+const DEFAULT_BUDGET = { max_attempts: 3 } as const;
 const CORRECTABLE_POLICY = { correctable: true, replay: "same_session" } as const;
 
 export interface CapabilityCatalogRecord {

@@ -82,7 +82,7 @@ Attempt 的 `job_attempt_effects` 先 `effect_pending` 后 settlement，只有�
 
 ## 有界读取和语义事件
 
-真实执行器按 `hub`、`agent`、`verify`、`report` scope 构造不同的服务端图快照；Hub 的启动指令明确要求在增量到达后重新调用 `graph_query(overview)`，Worker/Verify/Report 使用各自的任务快照和证据输入。所有 `graph_query` 都受 kind、引用、脱敏和字节/调用预算限制，返回投影会记录本轮可见引用，不能凭猜测提交节点 ID。语义事件必须通过 shared Zod schema、入口 handler 和 event-ingestion 事务三层校验；CLI 文本、伪造工具调用、Shell 控制文件和管理 API 猜测不构成事件。实现入口是 [`executor-real.ts`](../../apps/scheduler/src/executor-real.ts) 和 [`graph-query.ts`](../../apps/scheduler/src/graph-query.ts)。
+真实执行器按 `hub`、`agent`、`verify`、`report` scope 构造不同的服务端图快照；Hub 的启动指令明确要求在增量到达后重新调用 `graph_query(overview)`，Worker/Verify/Report 使用各自的任务快照和证据输入。所有 `graph_query` 都受 kind、引用、脱敏和单次投影硬上限限制；累计字节/调用额度默认不限，只有显式正整数配置时限制。完整响应（包括引用和元数据）超过 512000 UTF-8 bytes 时先拒绝，不写入任何计数、引用或 Plan 读取证明；已接受响应按最终序列化字节计数，反馈剩余字节可保守少报几个字节以避免自引用计数。证据预览不授权被截断的 Fact 引用。该上限只约束单次响应，不限制跨成功查询累积的已见引用集合，也不约束完整 Canvas 加载内存。返回投影会记录本轮可见引用，不能凭猜测提交节点 ID。语义事件必须通过 shared Zod schema、入口 handler 和 event-ingestion 事务三层校验；CLI 文本、伪造工具调用、Shell 控制文件和管理 API 猜测不构成事件。实现入口是 [`executor-real.ts`](../../apps/scheduler/src/executor-real.ts) 和 [`graph-query.ts`](../../apps/scheduler/src/graph-query.ts)。
 
 平台暂停领取的排空判定同时检查在途 Job 与所有 Attempt（包括已终结 Attempt）的 `effect_pending` / `unknown` 外部效果；Attempt 结束不是效果已结算的证明，全部结算前保持 `pausing`（FR-JOB-004 / FR-JOB-006 / FR-JOB-010）。
 

@@ -36,7 +36,7 @@ import {
   GatewayFrozenModelMismatchError,
 } from "./domains/provider-adapter/index.js";
 import { beginEffect, markEffectUnknown, settleEffect } from "./domains/job-attempt/index.js";
-import { admitGatewayRepair, boundRepairOutput, RepairTokenBudgetError } from "./domains/event-ingestion/repair-token-budget.js";
+import { admitGatewayRepair, boundRepairOutput, readJobTokenAllowance, RepairTokenBudgetError } from "./domains/event-ingestion/repair-token-budget.js";
 import { createRepairUsageScanner } from "./gateway-repair-usage.js";
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
@@ -318,6 +318,13 @@ export async function mintJobToken(input: {
   const plaintext = `deepsonarjob_${prefix}_${secret}`;
   const ttl = input.ttlSec ?? config.gateway.tokenTtlSec;
   const maxRequests = input.maxRequests ?? config.gateway.maxRequests;
+  const maxTokens = input.maxTokens ?? 0;
+  if (!Number.isSafeInteger(maxRequests) || maxRequests < 0 || maxRequests > 1_000_000) {
+    throw new RangeError("maxRequests must be an integer between 0 (unlimited) and 1000000");
+  }
+  if (!Number.isSafeInteger(maxTokens) || maxTokens < 0) {
+    throw new RangeError("maxTokens must be a nonnegative safe integer (0 is unlimited)");
+  }
   const [row] = await sql`
     INSERT INTO job_tokens ${sql({
       job_id: input.jobId,
@@ -327,7 +334,7 @@ export async function mintJobToken(input: {
       token_hash: hashJobToken(plaintext),
       allowed_models: (input.allowedModels ?? []) as never,
       max_requests: maxRequests,
-      max_tokens: input.maxTokens ?? null,
+      max_tokens: maxTokens === 0 ? null : maxTokens,
       expires_at: new Date(Date.now() + ttl * 1000),
     })}
     RETURNING id`;
@@ -810,7 +817,11 @@ export function registerGateway(app: FastifyInstance): void {
       // 来自同一行的原子更新，重试/并发请求不会复用 effect_id。
       const requestIntent = await sql.begin(async (tx) => {
         const repairBudget = await admitGatewayRepair(tx as unknown as typeof sql, String(jt.job_id), gatewayAttemptId);
-        if (repairBudget) outboundBuf = Buffer.from(JSON.stringify(boundRepairOutput(outboundBody, upstreamPath, repairBudget.remaining_tokens!)), "utf8");
+        const totalRemaining = await readJobTokenAllowance(tx as unknown as typeof sql, String(jt.job_id), repairBudget ?? undefined);
+        const remaining = totalRemaining === null ? repairBudget?.remaining_tokens ?? null
+          : Math.min(totalRemaining, repairBudget?.remaining_tokens ?? totalRemaining);
+        if (repairBudget) repairBudget.remaining_tokens = remaining;
+        if (repairBudget || remaining !== null) outboundBuf = Buffer.from(JSON.stringify(boundRepairOutput(outboundBody, upstreamPath, remaining)), "utf8");
         const gatewayInputDigest = createHash("sha256").update(outboundBuf ?? Buffer.alloc(0)).digest("hex");
         const [requestCounter] = await tx`
           UPDATE job_tokens
@@ -830,7 +841,7 @@ export function registerGateway(app: FastifyInstance): void {
               repair_reserved_tokens: repairBudget.remaining_tokens } : {}) },
         });
         if (!effectStarted) throw new Error("Job 的活动 Attempt 已结束");
-        return { requestNo, effectId, repairBudget };
+        return { requestNo, effectId, repairBudget, singleAttempt: repairBudget !== null || totalRemaining !== null };
       }).catch(error => {
         if (error instanceof RepairTokenBudgetError) return error;
         throw error;
@@ -866,7 +877,7 @@ export function registerGateway(app: FastifyInstance): void {
             headers,
             body: outboundBuf && req.method !== "GET" ? new Uint8Array(outboundBuf) : undefined,
           },
-        }, requestIntent.repairBudget ? { maxAttempts: 1 } : {});
+        }, requestIntent.singleAttempt ? { maxAttempts: 1 } : {});
       } catch (error) {
         await trySettleGatewayUsage({
           jobId: String(jt.job_id),

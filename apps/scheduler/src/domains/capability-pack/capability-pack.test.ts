@@ -447,3 +447,8 @@ test("new discovery tools are part of the default platform tool set", () => {
     assert.ok(ALL_PLATFORM_TOOLS.includes(tool as typeof ALL_PLATFORM_TOOLS[number]));
   }
 });
+
+
+test("builtin packs do not impose an implicit token allowance", () => {
+  for (const pack of BUILTIN_CAPABILITY_PACKS) assert.equal(pack.manifest.budget.max_tokens, undefined);
+});
