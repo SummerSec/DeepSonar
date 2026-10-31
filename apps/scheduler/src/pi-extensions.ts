@@ -19,6 +19,10 @@ import {
   type PiExtensionRegistration,
   type PiObservationalMemoryConfig as FrozenPiObservationalMemoryConfig,
 } from "@deepsonar/shared-types";
+import {
+  compareSemverCore,
+  runtimeImageVersionCore,
+} from "./runtime-image-registry-contract.js";
 
 export interface FrozenPiExtension {
   id: string;
@@ -49,6 +53,12 @@ export interface PiExtensionInjection {
 export { parsePiExtensionIds, validatePiExtensionIds };
 
 export const PI_OBSERVATIONAL_MEMORY_SETTINGS_PROVIDER = PI_OBSERVATIONAL_MEMORY_PROVIDER;
+
+// Runtime-image catalog labels may carry a platform/build suffix, but the
+// version core must remain an unambiguous, safe integer X.Y.Z tuple. Keep
+// this stricter than the generic catalog label parser: OM admission must not
+// treat an arbitrary prefix as a supported image version.
+const RUNTIME_IMAGE_VERSION_LABEL_RE = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[a-z0-9]+(?:[._-][a-z0-9]+)*)?$/;
 
 const OBSERVATIONAL_MEMORY_DEFAULTS = {
   observeAfterTokens: 10_000,
@@ -121,6 +131,33 @@ function observationalMemoryLoaderSource(config: FrozenPiObservationalMemoryConf
   ].join("\n");
 }
 
+/**
+ * Enforce extension-specific runtime-image admission using only the
+ * Scheduler-selected immutable catalog version. Missing metadata fails
+ * closed for extensions that declare a minimum. Historical frozen rows are
+ * parsed through a separate path below and do not re-run Job-create admission.
+ */
+export function assertPiExtensionRuntimeImageVersion(
+  ext: PiExtensionRegistration,
+  imageVersion: string | null | undefined,
+): void {
+  const minimum = ext.min_runtime_image_version;
+  if (!minimum) return;
+  const labelMatch = typeof imageVersion === "string"
+    ? RUNTIME_IMAGE_VERSION_LABEL_RE.exec(imageVersion)
+    : null;
+  const core = typeof imageVersion === "string" && labelMatch
+    && labelMatch.slice(1, 4).every((part) => Number.isSafeInteger(Number(part)))
+    ? runtimeImageVersionCore(imageVersion)
+    : null;
+  if (!core) {
+    throw new Error(`PI_EXTENSION_RUNTIME_IMAGE_VERSION_INVALID:${ext.id}`);
+  }
+  if (compareSemverCore(core, minimum) < 0) {
+    throw new Error(`PI_EXTENSION_RUNTIME_IMAGE_VERSION_UNSUPPORTED:${ext.id}:${core}:${minimum}`);
+  }
+}
+
 function freezeOne(
   ext: PiExtensionRegistration,
   imageKey: string | null,
@@ -159,6 +196,8 @@ export function freezePiExtensions(
   agentCli: string,
   imageKey: string | null,
   model?: { provider?: string | null; model?: string | null; thinking?: string | null; contextWindowTokens?: number | null },
+  /** Scheduler-selected immutable runtime-image catalog version. */
+  imageVersion?: string | null,
 ): FrozenPiExtension[] {
   const error = validatePiExtensionIds(ids, agentCli);
   if (error) throw new Error(error);
@@ -166,6 +205,7 @@ export function freezePiExtensions(
   return parsePiExtensionIds(ids).map((id) => {
     const ext = registeredPiExtension(id);
     if (!ext) throw new Error(`未注册的 Pi 扩展: ${id}`);
+    assertPiExtensionRuntimeImageVersion(ext, imageVersion);
     return freezeOne(ext, imageKey, model);
   });
 }
@@ -224,6 +264,9 @@ export function parseFrozenPiExtensions(value: unknown): FrozenPiExtension[] {
     const observationalMemory = ext.id === PI_OBSERVATIONAL_MEMORY_ID
       ? PiObservationalMemoryConfig.parse(row.observational_memory)
       : undefined;
+    // Historical Job snapshots retain their original immutable bytes. They
+    // are revalidated against the registry shape, but never re-admitted
+    // against the current image-version floor.
     return freezeOne(ext, null, undefined, observationalMemory);
   });
 }

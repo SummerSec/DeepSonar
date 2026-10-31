@@ -6,6 +6,7 @@ import {
   assertObservationalMemoryRequestScope,
   gatewayRouteForProtocol,
   GatewayWorkloadPolicyError,
+  isKnownObservationalMemoryPreRequestFailure,
   resolveObservationalMemoryBudget,
   resolveObservationalMemoryGatewayScope,
 } from "./gateway-om-budget.js";
@@ -170,4 +171,59 @@ test("the frozen route is a single protocol path and the model/provider checks a
     config: config({ source_provider: "openai" }),
     settingsConfig: { provider: "openai", api: "openai-responses" },
   }), { provider: "openai", model: "claude-memory", route: "v1/responses" });
+});
+
+test("only bounded pre-connect Node transport causes degrade OM", () => {
+  const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:1"), {
+    code: "ECONNREFUSED", syscall: "connect",
+  });
+  const dns = Object.assign(new Error("getaddrinfo ENOTFOUND provider.invalid"), {
+    code: "ENOTFOUND", syscall: "getaddrinfo",
+  });
+  const dnsRetry = Object.assign(new Error("getaddrinfo EAI_AGAIN provider.invalid"), {
+    code: "EAI_AGAIN", syscall: "getaddrinfo",
+  });
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(new TypeError("fetch failed", { cause: refused })), true);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(new TypeError("fetch failed", { cause: dns })), true);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(dnsRetry), true);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(new Error("permission wrapper", { cause: refused })), false);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(Object.assign(new TypeError("permission wrapper", { cause: refused }), {
+    code: "PERMISSION_DENIED",
+  })), false);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(Object.assign(new AggregateError([refused]), {
+    code: "EPERM",
+  })), false);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(Object.assign(new Error("permission leaf"), {
+    name: "PermissionError", code: "ECONNREFUSED", syscall: "connect",
+  })), false);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure({
+    name: "Error", code: "ECONNREFUSED", syscall: "connect",
+  }), false);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(Object.assign(new Error("reset"), {
+    code: "ECONNRESET", syscall: "read",
+  })), false);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(Object.assign(new Error("timed out"), {
+    name: "TimeoutError", code: "ECONNREFUSED", syscall: "connect",
+  })), false);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(new Error("provider says gateway_transient")), false);
+});
+
+test("AggregateError degrades only when every bounded leaf proves pre-connect", () => {
+  const leaf = (code: string, syscall: string) => Object.assign(new Error(code), { code, syscall });
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(new AggregateError([
+    leaf("ECONNREFUSED", "connect"), leaf("EAI_AGAIN", "getaddrinfo"),
+  ])), true);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(new AggregateError([
+    leaf("ECONNREFUSED", "connect"), new Error("provider failure"),
+  ])), false);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(new AggregateError([])), false);
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(new AggregateError(
+    Array.from({ length: 9 }, () => leaf("ECONNREFUSED", "connect")),
+  )), false);
+  const cyclic: { cause?: unknown } = {};
+  cyclic.cause = cyclic;
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(cyclic), false);
+  let deep: object = leaf("ECONNREFUSED", "connect");
+  for (let i = 0; i < 10; i++) deep = { cause: deep };
+  assert.equal(isKnownObservationalMemoryPreRequestFailure(deep), false);
 });

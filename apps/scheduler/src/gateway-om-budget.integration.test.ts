@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import net from "node:net";
 import test from "node:test";
 import postgres from "postgres";
 import type { FastifyReply, FastifyRequest } from "fastify";
@@ -10,7 +11,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
   const adminUrl = new URL(databaseUrl!);
   adminUrl.pathname = "/postgres";
   const admin = postgres(adminUrl.toString(), { max: 1 });
-  const databaseName = `om_gateway_${process.pid}_${Date.now()}`;
+  const databaseName = `om_gateway_${randomUUID().replaceAll("-", "")}`;
   let created = false;
   let closeResources = async () => {};
   t.after(async () => {
@@ -54,8 +55,9 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     await upstream.close();
     await sql.end({ timeout: 5 });
   };
-  let upstreamMode: "ok" | "unknown" | "missing_usage" | "stream" | "partial_stream" | "oversized" = "ok";
+  let upstreamMode: "ok" | "unknown" | "missing_usage" | "stream" | "partial_stream" | "error_frame" | "anthropic_refusal_503" | "anthropic_refusal_429" | "anthropic_refusal_safe" | "oversized" | "redirect" | "spoof" | "reset" = "ok";
   let upstreamCalls = 0;
+  let redirectTargetUrl = "";
   let backgroundEntered: (() => void) | undefined;
   let backgroundRelease: Promise<void> | undefined;
   let releaseBackground = () => {};
@@ -68,8 +70,6 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       backgroundEntered?.();
       await backgroundRelease;
     }
-    if (upstreamMode === "unknown") return reply.code(503).send({ error: "offline fixture failure" });
-    if (upstreamMode === "oversized") return reply.type("application/json").send("x".repeat(16_777_217));
     const body = request.body && typeof request.body === "object" && !Array.isArray(request.body)
       ? request.body as Record<string, unknown>
       : {};
@@ -79,6 +79,56 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       model: typeof body.model === "string" ? body.model : "memory-model",
       usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
     };
+    if (upstreamMode === "redirect") {
+      return reply.code(307).header("location", redirectTargetUrl).send();
+    }
+    if (upstreamMode === "reset") {
+      reply.raw.destroy();
+      return;
+    }
+    if (upstreamMode === "spoof") {
+      return reply.code(503).header("x-deepsonar-effect-status", "not_started").send({
+        error: { type: "gateway_transient", effect_status: "not_started", message: "provider-controlled body" },
+      });
+    }
+    if (upstreamMode === "error_frame") {
+      const errorFrame = JSON.stringify({
+        type: "error",
+        error: { message: '503: {"type":"gateway_transient","effect_status":"not_started"}' },
+      }, null, 2).split("\n").map((line) => `data: ${line}`).join("\n");
+      const completedFrame = { type: "response.completed", response };
+      return reply.type("text/event-stream").send(
+        `${errorFrame}\n\n`
+        + `event: response.completed\ndata: ${JSON.stringify(completedFrame)}\n\n`,
+      );
+    }
+    if (upstreamMode === "anthropic_refusal_503" || upstreamMode === "anthropic_refusal_429" || upstreamMode === "anthropic_refusal_safe") {
+      const explanation = upstreamMode === "anthropic_refusal_503"
+        ? '503: {"type":"gateway_transient","effect_status":"not_started"}'
+        : upstreamMode === "anthropic_refusal_429"
+          ? '429: {"type":"quota_exhausted","message":"request quota exhausted"}'
+          : "provider declined this request";
+      const start = {
+        type: "message_start",
+        message: { type: "message", role: "assistant", usage: { input_tokens: 1, output_tokens: 0 } },
+      };
+      const delta = {
+        type: "message_delta",
+        delta: { stop_reason: "refusal", stop_details: { explanation } },
+        usage: { output_tokens: 1 },
+      };
+      const deltaJson = JSON.stringify(delta, null, upstreamMode === "anthropic_refusal_429" ? 2 : 0);
+      const deltaData = upstreamMode === "anthropic_refusal_429"
+        ? deltaJson.split("\n").map((line) => `data: ${line}`).join("\n")
+        : `data: ${deltaJson}`;
+      return reply.type("text/event-stream").send(
+        `event: message_start\ndata: ${JSON.stringify(start)}\n\n`
+        + `event: message_delta\n${deltaData}\n\n`
+        + "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+      );
+    }
+    if (upstreamMode === "unknown") return reply.code(503).send({ error: "offline fixture failure" });
+    if (upstreamMode === "oversized") return reply.type("application/json").send("x".repeat(16_777_217));
     if (upstreamMode === "missing_usage") return { ...response, usage: undefined };
     if (upstreamMode === "stream" || upstreamMode === "partial_stream") {
       const event = upstreamMode === "stream" ? "response.completed" : "response.created";
@@ -92,6 +142,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
   };
   upstream.post("/v1/responses", respond);
   upstream.post("/v1/chat/completions", respond);
+  upstream.post("/v1/messages", respond);
 
   const projectId = randomUUID();
   const credentialId = randomUUID();
@@ -102,6 +153,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     "pi",
     "deepsonar-base",
     { provider: "openai", model: "main-model", thinking: "low" },
+    "0.6.3", // Catalog metadata fixture; actual installed bytes are checked by the image RPC gate.
   );
   const baseExtension = frozenExtensions[0];
   if (!baseExtension?.observational_memory) throw new Error("OM extension fixture was not registered");
@@ -109,13 +161,18 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
   const settingsConfig = {
     providers: { openai: { api: "openai-responses", models: [{ id: "main-model" }] } },
   };
+  const anthropicSettingsConfig = {
+    providers: { anthropic: { api: "anthropic-messages", models: [{ id: "main-model" }] } },
+  };
     const makeSnapshot = (credential: string, options: {
+      provider?: "openai" | "anthropic";
       totalRequests?: number;
       mainRequests?: number;
       backgroundRequests?: number;
       backgroundMaxRequests?: number;
       backgroundMaxTokens?: number;
     } = {}) => {
+      const provider = options.provider ?? "openai";
       const totalRequests = options.totalRequests ?? 4;
       const mainRequests = options.mainRequests ?? 2;
       const backgroundRequests = options.backgroundRequests ?? 2;
@@ -126,10 +183,10 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
         agent_cli: "pi",
         model: "main-model",
         upstream_model: "main-model",
-        pi_provider: "openai",
+        pi_provider: provider,
         credential_id: credential,
-        credential_provider: "openai",
-        settings_config_json: settingsConfig,
+        credential_provider: provider,
+        settings_config_json: provider === "anthropic" ? anthropicSettingsConfig : settingsConfig,
         config_files: [],
         runtime_knobs: {
           job_token_max_requests: totalRequests,
@@ -142,6 +199,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
           ...baseExtension,
           observational_memory: {
             ...baseObservationalMemory,
+            source_provider: provider,
             ...(totalRequests === 0 ? {} : { request_budget: {
               total_requests: totalRequests,
               main_requests: mainRequests,
@@ -158,6 +216,14 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     await upstream.listen({ port: 0, host: "127.0.0.1" });
     const address = upstream.server.address();
     assert.ok(address && typeof address !== "string");
+    const closedProbe = net.createServer();
+    await new Promise<void>((resolve, reject) => {
+      closedProbe.once("error", reject);
+      closedProbe.listen(0, "127.0.0.1", () => resolve());
+    });
+    const closedPort = (closedProbe.address() as net.AddressInfo).port;
+    await new Promise<void>((resolve, reject) => closedProbe.close((error) => error ? reject(error) : resolve()));
+    redirectTargetUrl = `http://127.0.0.1:${closedPort}/v1/responses`;
     await sql`INSERT INTO projects(id, name) VALUES (${projectId}, 'OM Gateway fixture')`;
     await sql`INSERT INTO credentials(
       id, name, kind, provider, ciphertext, nonce, auth_tag, fingerprint, last4,
@@ -167,15 +233,34 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       ${encrypted.nonce}, ${encrypted.auth_tag}, 'offline', 'only',
       ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })}, ${sql.json(settingsConfig)}
     )`;
+    const closedCredentialId = randomUUID();
+    await sql`INSERT INTO credentials(
+      id, name, kind, provider, ciphertext, nonce, auth_tag, fingerprint, last4,
+      public_metadata_json, settings_config_json
+    ) VALUES (
+      ${closedCredentialId}, 'closed', 'llm_provider', 'openai', ${encrypted.ciphertext},
+      ${encrypted.nonce}, ${encrypted.auth_tag}, 'closed', 'only',
+      ${sql.json({ base_url: `http://127.0.0.1:${closedPort}` })}, ${sql.json(settingsConfig)}
+    )`;
+    const anthropicCredentialId = randomUUID();
+    await sql`INSERT INTO credentials(
+      id, name, kind, provider, ciphertext, nonce, auth_tag, fingerprint, last4,
+      public_metadata_json, settings_config_json
+    ) VALUES (
+      ${anthropicCredentialId}, 'anthropic', 'llm_provider', 'anthropic', ${encrypted.ciphertext},
+      ${encrypted.nonce}, ${encrypted.auth_tag}, 'anthropic', 'only',
+      ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })}, ${sql.json(anthropicSettingsConfig)}
+    )`;
     gateway.registerGateway(app);
     await app.ready();
 
     const createJob = async (
       status: "running" | "succeeded" = "running",
       options: Parameters<typeof makeSnapshot>[1] = {},
+      jobCredentialId = credentialId,
     ) => {
       const jobId = randomUUID();
-      const snapshot = makeSnapshot(credentialId, options);
+      const snapshot = makeSnapshot(jobCredentialId, options);
       await sql`INSERT INTO jobs(
         id, project_id, type, status, agent_snapshot_json, started_at, timeout_sec, lease_expires_at
       ) VALUES (
@@ -186,10 +271,10 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     };
     const issue = (jobId: string, workload: "main" | "observational_memory", limits: {
       maxTokens?: number; maxRequests?: number; allowedModels?: string[];
-    } = {}) => mintJobToken({
+    } = {}, jobCredentialId = credentialId) => mintJobToken({
       jobId,
       projectId,
-      credentialId,
+      credentialId: jobCredentialId,
       workload,
       ttlSec: 3600,
       ...limits,
@@ -305,6 +390,193 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       ledger.filter((row) => row.workload === "observational_memory").reduce((sum, row) => sum + Number(row.total_tokens), 0),
       counts.background_tokens,
     );
+
+    // A real closed loopback port proves a known-before-request transport
+    // failure without forging an upstream 503 or replacing fetch in the
+    // positive path. The request reservation is consumed, but external usage
+    // is durably known to be zero and the independent main reserve survives.
+    const closedJob = await createJob("running", { backgroundMaxRequests: 1 }, closedCredentialId);
+    const closedMain = await issue(closedJob.jobId, "main", {}, closedCredentialId);
+    const closedMemory = await issue(closedJob.jobId, "observational_memory", {}, closedCredentialId);
+    const callsBeforeClosed = upstreamCalls;
+    const transient = await request(closedMemory.plaintext, { claimedWorkload: "main" });
+    assert.equal(transient.statusCode, 503);
+    assert.deepEqual(transient.json(), {
+      error: { type: "gateway_transient", effect_status: "not_started", message: "upstream unavailable before request start" },
+    });
+    assert.equal(upstreamCalls, callsBeforeClosed, "a closed provider port never reaches the fixture upstream");
+    const [closedUsage] = await sql`
+      SELECT t.used_requests, t.used_tokens, t.workload AS token_workload,
+             l.job_id, l.project_id, l.attempt_id, l.job_token_id, l.effect_id, l.request_no,
+             l.provider, l.model, l.model_catalog_match, l.upstream_reporting_model,
+             l.input_tokens, l.output_tokens, l.total_tokens, l.cache_read_input_tokens,
+             l.cache_creation_input_tokens, l.adjustment_tokens, l.settlement_status, l.source,
+             l.workload, e.status AS effect_status, e.intent_json, e.resource_identity_json,
+             e.settlement_json
+      FROM job_tokens t
+      JOIN job_usage_ledger l ON l.job_token_id = t.id
+      JOIN job_attempt_effects e ON e.attempt_id = l.attempt_id AND e.effect_id = l.effect_id
+      WHERE t.id = ${closedMemory.id}`;
+    assert.equal(closedUsage.used_requests, 1);
+    assert.equal(Number(closedUsage.used_tokens), 0);
+    assert.equal(closedUsage.token_workload, "observational_memory");
+    assert.equal(closedUsage.job_id, closedJob.jobId);
+    assert.equal(closedUsage.project_id, projectId);
+    assert.equal(closedUsage.attempt_id, closedJob.attemptId);
+    assert.equal(closedUsage.job_token_id, closedMemory.id);
+    assert.equal(closedUsage.effect_id, `gateway_model_request:${closedMemory.id}:1`);
+    assert.equal(closedUsage.request_no, 1);
+    assert.equal(closedUsage.provider, "openai");
+    assert.equal(closedUsage.model, "main-model");
+    assert.equal(closedUsage.model_catalog_match, null);
+    assert.equal(closedUsage.upstream_reporting_model, null);
+    assert.equal(closedUsage.workload, "observational_memory");
+    for (const field of ["input_tokens", "output_tokens", "total_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "adjustment_tokens"] as const) {
+      assert.equal(Number(closedUsage[field]), 0, `${field} must stay zero for a pre-request failure`);
+    }
+    assert.equal(Number(closedUsage.total_tokens), 0);
+    assert.equal(closedUsage.settlement_status, "settled");
+    assert.equal(closedUsage.source, "gateway_error");
+    assert.equal(closedUsage.effect_status, "settled");
+    assert.deepEqual(closedUsage.intent_json, { provider: "openai", model: "main-model", method: "POST", workload: "observational_memory" });
+    assert.deepEqual(closedUsage.resource_identity_json, { job_token_id: closedMemory.id, request_no: 1 });
+    assert.deepEqual(closedUsage.settlement_json, {
+      result: "never_started", external_effect: false, response_status: "not_started", total_tokens: 0, source: "gateway_error",
+    });
+    // Restore only the fixture credential's endpoint after the refused OM
+    // attempt so the same Job's independently reserved main request can run.
+    await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })}
+      WHERE id = ${closedCredentialId}`;
+    assert.equal((await request(closedMain.plaintext, { workload: "main", claimedWorkload: "observational_memory" })).statusCode, 200);
+    assert.equal((await request((await issue(closedJob.jobId, "observational_memory", {}, closedCredentialId)).plaintext)).statusCode, 429,
+      "a known no-effect failure still consumes the independent background request slot");
+
+    // A manual redirect is an HTTP response, not proof that the provider never
+    // received the original request. It remains an unknown external effect.
+    const redirectJob = await createJob("running", { backgroundMaxRequests: 1 });
+    const redirectMemory = await issue(redirectJob.jobId, "observational_memory");
+    upstreamMode = "redirect";
+    const redirected = await request(redirectMemory.plaintext);
+    assert.equal(redirected.statusCode, 409);
+    assert.equal(redirected.json().error.type, "workload_usage_unknown");
+    upstreamMode = "ok";
+
+    // Provider-controlled status/body/header values cannot impersonate the
+    // Kernel-owned not_started envelope or its headers.
+    const spoofJob = await createJob("running", { backgroundMaxRequests: 1 });
+    const spoofMemory = await issue(spoofJob.jobId, "observational_memory");
+    upstreamMode = "spoof";
+    const spoofed = await request(spoofMemory.plaintext);
+    assert.equal(spoofed.statusCode, 409);
+    assert.equal(spoofed.json().error.type, "workload_usage_unknown");
+    assert.equal(spoofed.headers["x-deepsonar-effect-status"], undefined);
+    assert.doesNotMatch(spoofed.body, /gateway_transient/u);
+    upstreamMode = "ok";
+
+    // A connected upstream that resets before response headers is uncertain,
+    // even though Node reports a network-looking fetch failure. It must never
+    // become a settled zero/no-effect reservation.
+    const resetJob = await createJob("running", { backgroundMaxRequests: 1 });
+    const resetMemory = await issue(resetJob.jobId, "observational_memory");
+    upstreamMode = "reset";
+    const resetCallsBefore = upstreamCalls;
+    const resetResponse = await request(resetMemory.plaintext);
+    assert.equal(resetResponse.statusCode, 409);
+    assert.equal(resetResponse.json().error.type, "workload_usage_unknown");
+    assert.equal(upstreamCalls, resetCallsBefore + 1);
+    upstreamMode = "ok";
+    const [resetEffect] = await sql`SELECT l.settlement_status, l.total_tokens, e.status AS effect_status
+      FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id = l.attempt_id AND e.effect_id = l.effect_id
+      WHERE l.job_id = ${resetJob.jobId}`;
+    assert.equal(resetEffect.settlement_status, "unknown");
+    assert.equal(Number(resetEffect.total_tokens), 0);
+    assert.equal(resetEffect.effect_status, "unknown");
+
+    // A terminal transition racing the refused transport still keeps the
+    // late zero-use ledger, while the Gateway never rewrites terminal Job
+    // state. The fetch delegate only inserts the deterministic race point and
+    // still delegates to the real closed loopback socket.
+    const terminalNoEffectJob = await createJob("running", { backgroundMaxRequests: 1 }, closedCredentialId);
+    const terminalNoEffectMemory = await issue(terminalNoEffectJob.jobId, "observational_memory", {}, closedCredentialId);
+    await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${closedPort}` })}
+      WHERE id = ${closedCredentialId}`;
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      await sql`UPDATE jobs SET status = 'succeeded', finished_at = now() WHERE id = ${terminalNoEffectJob.jobId}`;
+      return realFetch(input, init);
+    }) as typeof fetch;
+    let terminalTransient;
+    try {
+      terminalTransient = await request(terminalNoEffectMemory.plaintext);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+    assert.equal(terminalTransient.statusCode, 503);
+    assert.equal(terminalTransient.json().error.effect_status, "not_started");
+    const [terminalNoEffect] = await sql`SELECT j.status, l.settlement_status, l.total_tokens, e.status AS effect_status
+      FROM jobs j JOIN job_usage_ledger l ON l.job_id = j.id
+      JOIN job_attempt_effects e ON e.attempt_id = l.attempt_id AND e.effect_id = l.effect_id
+      WHERE j.id = ${terminalNoEffectJob.jobId}`;
+    assert.equal(terminalNoEffect.status, "succeeded");
+    assert.equal(terminalNoEffect.settlement_status, "settled");
+    assert.equal(Number(terminalNoEffect.total_tokens), 0);
+    assert.equal(terminalNoEffect.effect_status, "settled");
+
+    // A conflicting effect transition wins the reconciliation race. The
+    // strict path must not append a second zero ledger or claim not_started.
+    const conflictJob = await createJob("running", { backgroundMaxRequests: 2 }, closedCredentialId);
+    const conflictMemory = await issue(conflictJob.jobId, "observational_memory", {}, closedCredentialId);
+    const conflictFetch = globalThis.fetch;
+    globalThis.fetch = (async (input, init) => {
+      await sql`UPDATE job_attempt_effects
+        SET status = 'unknown', settlement_json = ${sql.json({ result: "unknown_effect" })}, settled_at = now()
+        WHERE job_id = ${conflictJob.jobId} AND effect_kind = 'gateway_model_request' AND status = 'effect_pending'`;
+      return conflictFetch(input, init);
+    }) as typeof fetch;
+    let conflictResponse;
+    try {
+      conflictResponse = await request(conflictMemory.plaintext);
+    } finally {
+      globalThis.fetch = conflictFetch;
+    }
+    assert.equal(conflictResponse.statusCode, 409);
+    assert.equal(conflictResponse.json().error.type, "workload_usage_unknown");
+    assert.doesNotMatch(conflictResponse.body, /gateway_transient/u);
+    const [conflictEffect] = await sql`SELECT status FROM job_attempt_effects
+      WHERE job_id = ${conflictJob.jobId} AND effect_kind = 'gateway_model_request'`;
+    assert.equal(conflictEffect.status, "unknown");
+    const [conflictLedger] = await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id = ${conflictJob.jobId}`;
+    assert.equal(conflictLedger.n, 0);
+
+    // A ledger write failure cannot be converted into a false zero/free
+    // result: the pending reservation remains the only safe accounting state.
+    const failedNoEffectJob = await createJob("running", { backgroundMaxRequests: 2 }, closedCredentialId);
+    const failedNoEffectMemory = await issue(failedNoEffectJob.jobId, "observational_memory", {}, closedCredentialId);
+    await sql.unsafe(`CREATE FUNCTION reject_om_transient_usage_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'offline transient ledger failure'; END $$`);
+    await sql.unsafe(`CREATE TRIGGER reject_om_transient_usage_fixture BEFORE INSERT ON job_usage_ledger
+      FOR EACH ROW WHEN (NEW.job_id='${failedNoEffectJob.jobId}'::uuid) EXECUTE FUNCTION reject_om_transient_usage_fixture()`);
+    try {
+      const failedTransient = await request(failedNoEffectMemory.plaintext);
+      assert.equal(failedTransient.statusCode, 409);
+      assert.equal(failedTransient.json().error.type, "workload_usage_unknown");
+      assert.doesNotMatch(failedTransient.body, /gateway_transient/u);
+    } finally {
+      await sql.unsafe("DROP TRIGGER reject_om_transient_usage_fixture ON job_usage_ledger");
+      await sql.unsafe("DROP FUNCTION reject_om_transient_usage_fixture()");
+    }
+    const [failedNoEffect] = await sql`SELECT status FROM job_attempt_effects
+      WHERE job_id = ${failedNoEffectJob.jobId} AND effect_kind = 'gateway_model_request'`;
+    assert.equal(failedNoEffect.status, "effect_pending");
+    const [failedNoEffectLedger] = await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id = ${failedNoEffectJob.jobId}`;
+    assert.equal(failedNoEffectLedger.n, 0);
+    const callsAfterFailedSettlement = upstreamCalls;
+    const failedRetry = await request((await issue(failedNoEffectJob.jobId, "observational_memory", {}, closedCredentialId)).plaintext);
+    assert.equal(failedRetry.statusCode, 409);
+    assert.equal(failedRetry.json().error.type, "workload_usage_pending");
+    assert.equal(upstreamCalls, callsAfterFailedSettlement, "pending reconciliation blocks a rotated background token before upstream");
+    await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })}
+      WHERE id = ${closedCredentialId}`;
 
     const unknownJob = await createJob();
     const unknownMain = await issue(unknownJob.jobId, "main");
@@ -455,7 +727,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     assert.equal(deniedDamaged.json().error.type, "PI_OM_NOT_IN_FROZEN_SNAPSHOT");
     assert.equal(upstreamCalls, callsBeforeDamaged);
 
-    for (const mode of ["unknown", "missing_usage", "partial_stream", "oversized", "stream"] as const) {
+    for (const mode of ["unknown", "missing_usage", "partial_stream", "error_frame", "oversized", "stream"] as const) {
       const protocolJob = await createJob("running", { backgroundMaxRequests: 1 });
       const protocolMemory = await issue(protocolJob.jobId, "observational_memory");
       upstreamMode = mode;
@@ -474,6 +746,27 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       assert.equal(protocolLedger.workload, "observational_memory");
       assert.equal(protocolLedger.settlement_status, mode === "stream" ? "settled" : "unknown");
       assert.equal(protocolLedger.effect_status, mode === "stream" ? "settled" : "unknown");
+    }
+
+    // Anthropic's native refusal carrier is copied verbatim into Pi's
+    // errorMessage. Reserved Kernel/quota grammar is therefore unknown even
+    // when the same stream also contains valid terminal usage; ordinary
+    // provider refusal prose remains a normal settled response.
+    for (const mode of ["anthropic_refusal_503", "anthropic_refusal_429", "anthropic_refusal_safe"] as const) {
+      const anthropicJob = await createJob("running", { provider: "anthropic", backgroundMaxRequests: 1 }, anthropicCredentialId);
+      const anthropicMemory = await issue(anthropicJob.jobId, "observational_memory", {}, anthropicCredentialId);
+      upstreamMode = mode;
+      const callsBeforeAnthropic = upstreamCalls;
+      const response = await request(anthropicMemory.plaintext, { path: "v1/messages" });
+      assert.equal(response.statusCode, mode === "anthropic_refusal_safe" ? 200 : 409, mode);
+      assert.equal(upstreamCalls, callsBeforeAnthropic + 1);
+      upstreamMode = "ok";
+      const [anthropicLedger] = await sql`SELECT l.settlement_status, l.total_tokens, e.status AS effect_status
+        FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id
+        WHERE l.job_id=${anthropicJob.jobId}`;
+      assert.equal(anthropicLedger.settlement_status, mode === "anthropic_refusal_safe" ? "settled" : "unknown", mode);
+      assert.equal(anthropicLedger.effect_status, mode === "anthropic_refusal_safe" ? "settled" : "unknown", mode);
+      assert.equal(Number(anthropicLedger.total_tokens), 2);
     }
 
     // SQL failure leaves the original effect pending and prevents a second call,
@@ -498,17 +791,29 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     const [{ loadDashboardUsage, resolveUsageWindow }, { loadQualityContext, buildQualityReport }] = await Promise.all([
       import("./domains/dashboard/usage.js"), import("./domains/dashboard/quality.js"),
     ]);
-    const window = resolveUsageWindow({ period: "day" });
+    const [observedRange] = await sql`SELECT min(observed_at) AS first_at,max(observed_at) AS last_at
+      FROM job_usage_ledger WHERE project_id=${projectId}`;
+    // Cover the complete fixture ledger using its own clock, including
+    // PostgreSQL's sub-millisecond precision and a possible calendar rollover.
+    const firstAt = new Date(observedRange.first_at).toISOString();
+    const endAt = new Date(new Date(observedRange.last_at).getTime() + 1);
+    const window = resolveUsageWindow({ period: "custom", from: firstAt, to: endAt.toISOString(), now: endAt });
     assert.ok(!("error_code" in window));
     const projected = await loadDashboardUsage({ window, projectId });
     const totals = await sql`SELECT workload, count(*)::int AS requests, sum(total_tokens)::int AS tokens
-      FROM job_usage_ledger WHERE project_id=${projectId} GROUP BY workload`;
+      FROM job_usage_ledger
+      WHERE project_id=${projectId} AND observed_at >= ${window.start} AND observed_at < ${window.endExclusive}
+      GROUP BY workload`;
     for (const row of totals) {
       const workload = row.workload as "main" | "observational_memory";
       assert.equal(projected.workloads[workload].requests, row.requests);
       assert.equal(projected.workloads[workload].total_tokens, row.tokens);
     }
-    assert.equal(projected.models.filter((row) => row.model === "main-model").length, 2);
+    assert.equal(projected.models.filter((row) => row.model === "main-model").length, 3,
+      JSON.stringify({ expected: "openai main/background plus Anthropic refusal controls",
+        projected: projected.models.map(({ provider, model, workload, requests }) => ({ provider, model, workload, requests })),
+        ledger: await sql`SELECT provider,model,workload,count(*)::int AS requests
+          FROM job_usage_ledger WHERE project_id=${projectId} GROUP BY provider,model,workload` }));
     assert.equal(projected.tasks.reduce((sum, row) => sum + row.total_tokens, 0) <= projected.workloads.main.total_tokens, true);
     const quality = buildQualityReport(await loadQualityContext({ kind: "project", project_id: projectId, canvas_id: null }));
     assert.equal(quality.cost.total_tokens, 0, "no Finding is charged for memory-only usage");

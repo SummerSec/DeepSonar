@@ -15,15 +15,19 @@ const {
   scrubIgnoredProjectRoleConfigIdentity,
   scrubStoredProjectImagePolicy,
 } = await import("./application.js");
+const { config } = await import("../../config.js");
 
 function snapshotDb(input: {
   projectConfig?: unknown;
   projectCfg: Record<string, unknown> | undefined;
   globalCfg: Record<string, unknown> | undefined;
   credential?: Record<string, unknown>;
+  runtimeImage?: { version?: string | null; digest?: string };
+  queries?: string[];
 }): SnapshotDb {
   const query = async (strings: TemplateStringsArray) => {
     const sql = strings.join("?");
+    input.queries?.push(sql);
     if (sql.includes("FROM agent_roles")) {
       return [{ id: "role-audit", name: "audit", description: "audit", kind: "role", ui_color: "#f59e0b" }];
     }
@@ -46,6 +50,46 @@ function snapshotDb(input: {
       }];
     }
     if (sql.includes("FROM role_config_files")) return [];
+    if (input.runtimeImage && sql.includes("runtime_registry_channel")) {
+      return [{ runtime_registry_channel: "github" }];
+    }
+    if (input.runtimeImage && sql.includes("SELECT ri.id, ri.image_key, ri.official")) {
+      return [{
+        id: "runtime-image-base",
+        image_key: "deepsonar-base",
+        official: true,
+        enabled: true,
+        project_opt_in: false,
+        visible_project_ids: [],
+        project_enabled: null,
+      }];
+    }
+    if (input.runtimeImage && sql.includes("SELECT ri.id AS runtime_image_id")) {
+      const digest = input.runtimeImage.digest ?? `sha256:${"b".repeat(64)}`;
+      return [{
+        runtime_image_id: "runtime-image-base",
+        image_key: "deepsonar-base",
+        source_kind: "official",
+        official: true,
+        runtime_image_version_id: "runtime-image-version-base",
+        version: input.runtimeImage.version ?? null,
+        resolved_ref: `ghcr.io/summersec/deepsonar-base@${digest}`,
+        digest,
+        registry_channel: "github",
+        tools_manifest_sha256: null,
+        contract_version: "deepsonar.runtime.contract/v1",
+        scan_summary_json: {
+          manual: {
+            contract: "deepsonar.runtime.manuals/v1",
+            path: "/opt/deepsonar/manuals/index.json",
+            version: "2026.09.17",
+            sha256: "a".repeat(64),
+            count: 1,
+          },
+        },
+        admission_scan_id: "runtime-image-scan-base",
+      }];
+    }
     return [];
   };
   return Object.assign(query, { json: (value: unknown) => value });
@@ -355,25 +399,90 @@ test("Hub pi_extension_ids 冻结已注册扩展，未注册 id 使快照不可�
   );
 });
 
+test("OM freeze caller admits only the selected immutable image version", async () => {
+  const globalCfg = {
+    id: "fixture-role-config", project_id: null, agent_cli: "pi", model: "fixture-model", version: 1,
+    runtime_image_key: "deepsonar-base", env_vars_json: {}, env_keys: [], modules_json: [],
+    skills_json: [], commands_json: [], mcps_json: [], subagents_json: [],
+  };
+  const credential = {
+    id: "fixture-credential", name: "fixture", provider: "openai", status: "active",
+    cred_project_id: null, agent_cli: "pi", meta_json: {}, public_metadata_json: {},
+    settings_config_json: {
+      provider: "openai", baseUrl: "http://127.0.0.1/v1", api: "openai-responses",
+      models: [{ id: "fixture-model" }],
+    },
+  };
+  const previousAgentMode = config.runtime.agentMode;
+  Reflect.set(config.runtime, "agentMode", "real");
+  try {
+    for (const version of [null, "configured-local", "0.6.2", "0.6.3garbage"]) {
+      const queries: string[] = [];
+      await assert.rejects(
+        () => resolveAgentSnapshotForJob(snapshotDb({
+          projectConfig: {}, projectCfg: undefined, globalCfg, credential,
+          runtimeImage: { version }, queries,
+        }), "project-1", "audit", {
+          piExtensionIds: ["pi-observational-memory"],
+          // Untrusted task metadata is intentionally ignored by the resolver.
+          ...({
+            runtimeImageVersion: "0.6.3",
+            runtimeImageDigest: `sha256:${"c".repeat(64)}`,
+          } as unknown as Parameters<typeof resolveAgentSnapshotForJob>[3]),
+        }),
+        (error: unknown) => error instanceof SnapshotUnresolvableError
+          && /PI_EXTENSION_RUNTIME_IMAGE_VERSION_(INVALID|UNSUPPORTED)/.test(error.message),
+      );
+      assert.equal(queries.some((query) => /\b(?:INSERT|UPDATE|DELETE)\b/i.test(query)), false);
+    }
+
+    const queries: string[] = [];
+    const admitted = await resolveAgentSnapshotForJob(snapshotDb({
+      projectConfig: {}, projectCfg: undefined, globalCfg, credential,
+      runtimeImage: { version: "0.6.3", digest: `sha256:${"d".repeat(64)}` }, queries,
+    }), "project-1", "audit", {
+      piExtensionIds: ["pi-observational-memory"],
+      ...({
+        runtimeImageVersion: "0.6.2",
+        runtimeImageDigest: `sha256:${"e".repeat(64)}`,
+      } as unknown as Parameters<typeof resolveAgentSnapshotForJob>[3]),
+    });
+    assert.equal(admitted.runtime_image.image_version, "0.6.3");
+    assert.equal(admitted.runtime_image.image_digest, `sha256:${"d".repeat(64)}`);
+    assert.equal(admitted.pi_extensions[0]?.id, "pi-observational-memory");
+    assert.equal(queries.some((query) => /\b(?:INSERT|UPDATE|DELETE)\b/i.test(query)), false);
+  } finally {
+    Reflect.set(config.runtime, "agentMode", previousAgentMode);
+  }
+});
+
 test("OM Job persistence freezes platform quotas into matching snapshot/profile/launch copies", async () => {
   const { persistPreparedJob } = await import("../../job-creation.js");
   const { parseFrozenPiExtensions } = await import("../../pi-extensions.js");
-  const snapshot = await resolveAgentSnapshotForJob(snapshotDb({
-    projectConfig: {}, projectCfg: undefined,
-    globalCfg: {
-      id: "fixture-role-config", project_id: null, agent_cli: "pi", model: "fixture-model", version: 1,
-      runtime_image_key: "deepsonar-base", env_vars_json: {}, env_keys: [], modules_json: [],
-      skills_json: [], commands_json: [], mcps_json: [], subagents_json: [],
-    },
-    credential: {
-      id: "fixture-credential", name: "fixture", provider: "openai", status: "active",
-      cred_project_id: null, agent_cli: "pi", meta_json: {}, public_metadata_json: {},
-      settings_config_json: {
-        provider: "openai", baseUrl: "http://127.0.0.1/v1", api: "openai-responses",
-        models: [{ id: "fixture-model" }],
+  const previousAgentMode = config.runtime.agentMode;
+  Reflect.set(config.runtime, "agentMode", "real");
+  let snapshot;
+  try {
+    snapshot = await resolveAgentSnapshotForJob(snapshotDb({
+      projectConfig: {}, projectCfg: undefined,
+      globalCfg: {
+        id: "fixture-role-config", project_id: null, agent_cli: "pi", model: "fixture-model", version: 1,
+        runtime_image_key: "deepsonar-base", env_vars_json: {}, env_keys: [], modules_json: [],
+        skills_json: [], commands_json: [], mcps_json: [], subagents_json: [],
       },
-    },
-  }), "project-1", "audit", { piExtensionIds: ["pi-observational-memory"] });
+      credential: {
+        id: "fixture-credential", name: "fixture", provider: "openai", status: "active",
+        cred_project_id: null, agent_cli: "pi", meta_json: {}, public_metadata_json: {},
+        settings_config_json: {
+          provider: "openai", baseUrl: "http://127.0.0.1/v1", api: "openai-responses",
+          models: [{ id: "fixture-model" }],
+        },
+      },
+      runtimeImage: { version: "0.6.3" },
+    }), "project-1", "audit", { piExtensionIds: ["pi-observational-memory"] });
+  } finally {
+    Reflect.set(config.runtime, "agentMode", previousAgentMode);
+  }
   const before = structuredClone(snapshot);
   const frozenConfig = parseFrozenPiExtensions(snapshot.pi_extensions)[0]?.observational_memory;
   assert.ok(frozenConfig);

@@ -23,6 +23,8 @@ import {
   piExtensionLoaderSource,
 } from "./pi-extensions.js";
 
+const OM_MIN_IMAGE_VERSION = PI_EXTENSION_REGISTRY["pi-observational-memory"].min_runtime_image_version!;
+
 test("RoleConfig 只接受已注册的 Pi 扩展", () => {
   assert.equal(validatePiExtensionIds([], "pi"), null);
   assert.equal(validatePiExtensionIds(["pi-web-access"], "pi"), null);
@@ -114,10 +116,44 @@ function frozenObservationalMemory(imageKey = "deepsonar-base") {
     model: "gpt-5.6",
     thinking: "low",
     contextWindowTokens: 128_000,
-  });
+  }, OM_MIN_IMAGE_VERSION);
   assert.ok(extension);
   return extension;
 }
+
+test("OM admission uses the Scheduler-selected immutable image version", () => {
+  const model = { provider: "openai", model: "gpt-5.6", thinking: "low" };
+  assert.throws(
+    () => freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", model),
+    /PI_EXTENSION_RUNTIME_IMAGE_VERSION_INVALID:pi-observational-memory/,
+  );
+  assert.throws(
+    () => freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", model, null),
+    /PI_EXTENSION_RUNTIME_IMAGE_VERSION_INVALID:pi-observational-memory/,
+  );
+  for (const version of [
+    "", "configured-local", "v0.6", "0.6.invalid", "0.6.3garbage", "0.6.3.4", "0.6.3/evil", "0.6.3-",
+    "0.6.3+build", "0.6.3-linux/amd64", " 0.6.3", "0.6.3 ", "01.6.3",
+    "999999999999999999.0.0",
+  ]) {
+    assert.throws(
+      () => freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", model, version),
+      /PI_EXTENSION_RUNTIME_IMAGE_VERSION_INVALID:pi-observational-memory/,
+    );
+  }
+  assert.throws(
+    () => freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", model, "0.6.2"),
+    /PI_EXTENSION_RUNTIME_IMAGE_VERSION_UNSUPPORTED:pi-observational-memory:0\.6\.2:0\.6\.3/,
+  );
+  assert.doesNotThrow(
+    () => freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", model, "v0.6.3-linux-amd64"),
+  );
+  // The minimum is extension-specific; a non-OM extension keeps its existing
+  // image-key-only contract even when the authoritative version is absent.
+  assert.doesNotThrow(
+    () => freezePiExtensions(["pi-web-access"], "pi", "deepsonar-audit", undefined, null),
+  );
+});
 
 test("observational memory is opt-in, provider-isolated, and rejects unknown config fields", () => {
   assert.deepEqual(freezePiExtensions([], "pi", "deepsonar-base"), []);
@@ -150,7 +186,7 @@ test("observational memory materialization is Gateway-gated and hashes ordered s
     provider: "openai",
     model: "gpt-5.6",
     thinking: "low",
-  });
+  }, OM_MIN_IMAGE_VERSION);
   assert.throws(
     () => materializeFrozenPiExtensions(frozen, true, { gatewayAvailable: false }),
     /PI_EXTENSION_GATEWAY_REQUIRED:pi-observational-memory/,

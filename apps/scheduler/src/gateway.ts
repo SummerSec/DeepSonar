@@ -22,6 +22,7 @@ import {
   UNKNOWN_PROVIDER_ERROR,
 } from "./credentials.js";
 import { sql } from "./db.js";
+import { revokeJobTokensInTransaction } from "./gateway-token-revocation.js";
 import { inc } from "./metrics.js";
 import { appendOtlpEnvelope } from "./evidence.js";
 import { extractBaseUrlFromSettings } from "./provider-settings.js";
@@ -44,6 +45,7 @@ import {
   assertObservationalMemoryRequestScope,
   GATEWAY_WORKLOADS,
   GatewayWorkloadPolicyError,
+  isKnownObservationalMemoryPreRequestFailure,
   resolveObservationalMemoryBudget,
   resolveObservationalMemoryGatewayScope,
   type GatewayWorkload,
@@ -171,8 +173,8 @@ export class GatewayUpstreamUnreachableError extends Error {
   readonly retryReasons: GatewayRetryReason[];
   readonly reason: GatewayRetryReason;
 
-  constructor(reason: GatewayRetryReason, attempts: number, retryReasons: GatewayRetryReason[]) {
-    super("上游不可达");
+  constructor(reason: GatewayRetryReason, attempts: number, retryReasons: GatewayRetryReason[], cause?: unknown) {
+    super("上游不可达", cause === undefined ? undefined : { cause });
     this.name = "GatewayUpstreamUnreachableError";
     this.reason = reason;
     this.attempts = attempts;
@@ -285,12 +287,12 @@ export async function fetchGatewayUpstream(
     } catch (error) {
       const reason: GatewayRetryReason = isGatewayTimeoutError(error) ? "timeout" : "network";
       if (attempts >= maxAttempts) {
-        throw new GatewayUpstreamUnreachableError(reason, attempts, retryReasons);
+        throw new GatewayUpstreamUnreachableError(reason, attempts, retryReasons, error);
       }
       const remainingMs = request.jobDeadlineMs == null ? Number.POSITIVE_INFINITY : request.jobDeadlineMs - now();
       const delayMs = gatewayRetryDelayMs(retryReasons.length + 1, random, options.retryBaseDelayMs, options.retryMaxDelayMs);
       if (remainingMs <= delayMs) {
-        throw new GatewayUpstreamUnreachableError(reason, attempts, retryReasons);
+        throw new GatewayUpstreamUnreachableError(reason, attempts, retryReasons, error);
       }
       retryReasons.push(reason);
       await sleep(delayMs);
@@ -466,26 +468,9 @@ export async function mintJobToken(input: {
 
 /** Job 终态吊销（succeeded/failed/cancelled/timeout/orphan 全部调用点走这里） */
 export async function revokeJobTokens(jobId: string, reason: string): Promise<void> {
-  const revoked = await sql.begin(async (tx) => {
-    await tx`SELECT id FROM jobs WHERE id = ${jobId} FOR UPDATE`;
-    return tx`
-      UPDATE job_tokens SET status = 'revoked', revoked_at = now(), revoke_reason = ${reason}
-      WHERE job_id = ${jobId} AND status = 'active'
-      RETURNING id, project_id`;
-  });
-  for (const r of revoked) {
-    await sql`
-      INSERT INTO audit_logs ${sql({
-        actor_type: "system",
-        actor_id: "scheduler",
-        action: "job_token.revoke",
-        project_id: r.project_id as string,
-        resource_type: "job_token",
-        resource_id: r.id as string,
-        after_json: sql.json({ job_id: jobId, reason } as never),
-        result: "ok",
-      })}`;
-  }
+  // SAFETY: the revoker uses only tagged queries and json; TransactionSql
+  // implements both. The shared executor type also includes pool-only methods.
+  await sql.begin((tx) => revokeJobTokensInTransaction(tx as unknown as typeof sql, jobId, reason));
 }
 
 /** 按 provider 注入真实认证头（与 credential-test.ts 行为一致） */
@@ -785,6 +770,255 @@ async function trySettleGatewayUsage(
     // 同时保留低基数指标和脱敏错误日志，不能假装账本已成功。
     inc("deepsonar_usage_ledger_write_failures_total", { source: input.source });
     console.error(`[gateway] 模型请求结算失败 effect=${input.effectId}:`, settlementError instanceof Error ? settlementError.message : String(settlementError));
+    return false;
+  }
+}
+
+/**
+ * Close an OM reservation only when this transaction proves that the matching
+ * request effect is still pending and has no competing usage row.  A settled
+ * zero ledger is the durable known-no-effect record; request allocation is
+ * intentionally not refunded.
+ */
+async function trySettleGatewayNoExternalUsage(input: GatewayUsageLedgerInput): Promise<boolean> {
+  try {
+    await sql.begin(async (tx) => {
+      await tx`SELECT id FROM jobs WHERE id = ${input.jobId} FOR UPDATE`;
+      const [effect] = await tx`
+        SELECT job_id, effect_kind, status
+        FROM job_attempt_effects
+        WHERE attempt_id = ${input.attemptId} AND effect_id = ${input.effectId}
+        FOR UPDATE`;
+      if (!effect || String(effect.job_id) !== input.jobId || effect.effect_kind !== "gateway_model_request"
+        || effect.status !== "effect_pending") {
+        throw new Error("gateway no-effect settlement reservation mismatch");
+      }
+      const [existingLedger] = await tx`
+        SELECT id
+        FROM job_usage_ledger
+        WHERE attempt_id = ${input.attemptId} AND effect_id = ${input.effectId}
+        FOR UPDATE`;
+      if (existingLedger) throw new Error("gateway no-effect settlement already has a ledger row");
+      if (!await appendUsageLedger(tx as unknown as typeof sql, input)) {
+        throw new Error("gateway no-effect settlement ledger insert was not durable");
+      }
+      const [zeroLedger] = await tx`
+        SELECT job_id, project_id, attempt_id, job_token_id, effect_id, request_no,
+               provider, model, input_tokens, output_tokens, total_tokens,
+               cache_read_input_tokens, cache_creation_input_tokens, adjustment_tokens,
+               settlement_status, source, workload
+        FROM job_usage_ledger
+        WHERE attempt_id = ${input.attemptId} AND effect_id = ${input.effectId}
+        FOR UPDATE`;
+      if (!zeroLedger || String(zeroLedger.job_id) !== input.jobId || String(zeroLedger.project_id) !== input.projectId
+        || String(zeroLedger.attempt_id) !== input.attemptId || String(zeroLedger.job_token_id) !== input.jobTokenId
+        || zeroLedger.effect_id !== input.effectId || Number(zeroLedger.request_no) !== input.requestNo
+        || zeroLedger.provider !== input.provider || zeroLedger.model !== input.model
+        || [zeroLedger.input_tokens, zeroLedger.output_tokens, zeroLedger.total_tokens,
+          zeroLedger.cache_read_input_tokens, zeroLedger.cache_creation_input_tokens, zeroLedger.adjustment_tokens]
+          .some((value) => Number(value) !== 0)
+        || zeroLedger.settlement_status !== "settled" || zeroLedger.source !== "gateway_error"
+        || zeroLedger.workload !== "observational_memory") {
+        throw new Error("gateway no-effect settlement ledger contents were not zero and settled");
+      }
+      await settleEffect(tx as unknown as typeof sql, input.attemptId, input.effectId, {
+        status: "settled",
+        outcome: {
+          result: "never_started",
+          external_effect: false,
+          response_status: "not_started",
+          total_tokens: 0,
+          source: input.source,
+        },
+      });
+      const [settled] = await tx`
+        SELECT status, settlement_json
+        FROM job_attempt_effects
+        WHERE attempt_id = ${input.attemptId} AND effect_id = ${input.effectId}`;
+      const settlement = settled?.settlement_json as Record<string, unknown> | undefined;
+      if (!settled || settled.status !== "settled" || settlement?.result !== "never_started"
+        || settlement.external_effect !== false) {
+        throw new Error("gateway no-effect settlement did not close the reservation");
+      }
+    });
+    return true;
+  } catch (settlementError) {
+    inc("deepsonar_usage_ledger_write_failures_total", { source: input.source });
+    console.error(`[gateway] known no-effect settlement failed effect=${input.effectId}:`,
+      settlementError instanceof Error ? settlementError.message : "unknown settlement error");
+    return false;
+  }
+}
+
+function isReservedGatewayTransientShape(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const error = record.error && typeof record.error === "object" && !Array.isArray(record.error)
+    ? record.error as Record<string, unknown>
+    : record;
+  return error.type === "gateway_transient" && error.effect_status === "not_started";
+}
+
+function isReservedGatewayTransientRecord(value: unknown): boolean {
+  if (isReservedGatewayTransientShape(value)) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const error = record.error && typeof record.error === "object" && !Array.isArray(record.error)
+    ? record.error as Record<string, unknown>
+    : null;
+  const message = typeof error?.message === "string" ? error.message.trim() : "";
+  if (!message) return false;
+  const body = message.replace(/^503(?:\s+|:\s*)/u, "");
+  try {
+    return isReservedGatewayTransientShape(JSON.parse(body) as unknown);
+  } catch {
+    return false;
+  }
+}
+
+function isGatewayApiErrorFrame(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (record.type === "error") return true;
+  const error = record.error;
+  if (error === null || typeof error !== "object" || Array.isArray(error)) return false;
+  const nested = error as Record<string, unknown>;
+  return typeof nested.type === "string" || typeof nested.code === "string" || typeof nested.message === "string";
+}
+
+const MAX_GATEWAY_ERROR_FRAME_BYTES = 1_048_576;
+
+function scanGatewaySseFrames(text: string, visit: (eventName: string, data: string) => boolean): boolean {
+  let eventName = "";
+  let data: string[] = [];
+  let frameBytes = 0;
+  const flush = (): boolean => {
+    const currentEvent = eventName;
+    const currentData = data;
+    eventName = "";
+    data = [];
+    frameBytes = 0;
+    if (currentEvent === "" && currentData.length === 0) return false;
+    return visit(currentEvent, currentData.join("\n"));
+  };
+  for (const line of text.split(/\r\n|\n|\r/u)) {
+    if (line === "") {
+      if (flush()) return true;
+      continue;
+    }
+    if (line.startsWith(":")) continue;
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      const value = line.slice(5).replace(/^ /u, "");
+      frameBytes += Buffer.byteLength(value, "utf8");
+      if (frameBytes <= MAX_GATEWAY_ERROR_FRAME_BYTES) data.push(value);
+    }
+  }
+  return flush();
+}
+
+/** Detect a structured provider API error event without scanning generated text. */
+export function containsGatewayApiErrorFrame(body: string | Uint8Array, isSse = false): boolean {
+  const text = typeof body === "string" ? body : Buffer.from(body).toString("utf8");
+  if (!isSse) {
+    try {
+      return isGatewayApiErrorFrame(JSON.parse(text) as unknown);
+    } catch {
+      return false;
+    }
+  }
+  return scanGatewaySseFrames(text, (eventName, payload) => {
+    if (eventName === "error") return true;
+    if (!payload || Buffer.byteLength(payload, "utf8") > MAX_GATEWAY_ERROR_FRAME_BYTES) return false;
+    try {
+      return isGatewayApiErrorFrame(JSON.parse(payload) as unknown);
+    } catch {
+      return false;
+    }
+  });
+}
+
+function isReservedGatewayFailureCarrier(message: string): boolean {
+  if (message === "429 request quota exhausted" || message === "429 observational-memory token cap exhausted") return true;
+  const match = /^(\d{3})(?:\s+|:\s*)([\s\S]*)$/u.exec(message);
+  if (!match) return false;
+  const status = Number(match[1]);
+  if (status !== 429 && status !== 503) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(match[2]!);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const record = parsed as Record<string, unknown>;
+  const detail = record.error && typeof record.error === "object" && !Array.isArray(record.error)
+    ? record.error as Record<string, unknown>
+    : record;
+  const code = detail.type ?? detail.code ?? record.error_code;
+  if (status === 503) return code === "gateway_transient" && detail.effect_status === "not_started";
+  return code === "quota_exhausted" || code === "workload_token_cap_exhausted";
+}
+
+function isAnthropicRefusalFailureFrame(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const delta = record.type === "message_delta" && record.delta && typeof record.delta === "object"
+    && !Array.isArray(record.delta) ? record.delta as Record<string, unknown> : null;
+  const refusal = record.type === "message"
+    ? record
+    : delta?.stop_reason === "refusal" ? delta : null;
+  if (!refusal || refusal.stop_reason !== "refusal") return false;
+  const details = refusal.stop_details && typeof refusal.stop_details === "object" && !Array.isArray(refusal.stop_details)
+    ? refusal.stop_details as Record<string, unknown>
+    : null;
+  return typeof details?.explanation === "string" && isReservedGatewayFailureCarrier(details.explanation);
+}
+
+/** Reject only the protocol-native Anthropic refusal field that Pi surfaces verbatim. */
+export function containsAnthropicRefusalFailureCarrier(
+  body: string | Uint8Array,
+  isSse: boolean,
+  upstreamPath: string,
+): boolean {
+  if (!/(?:^|\/)messages(?:\/|$)/u.test(upstreamPath.replace(/^\/+/, ""))) return false;
+  const text = typeof body === "string" ? body : Buffer.from(body).toString("utf8");
+  const inspect = (_eventName: string, payload: string): boolean => {
+    if (!payload || Buffer.byteLength(payload, "utf8") > MAX_GATEWAY_ERROR_FRAME_BYTES) return false;
+    try {
+      return isAnthropicRefusalFailureFrame(JSON.parse(payload) as unknown);
+    } catch {
+      return false;
+    }
+  };
+  if (isSse) return scanGatewaySseFrames(text, inspect);
+  try {
+    return isAnthropicRefusalFailureFrame(JSON.parse(text) as unknown);
+  } catch {
+    return false;
+  }
+}
+
+/** Reject only an exact provider body that impersonates the Kernel transient envelope. */
+export function containsReservedGatewayTransientEnvelope(body: string | Uint8Array, isSse = false): boolean {
+  const text = typeof body === "string" ? body : Buffer.from(body).toString("utf8");
+  if (isSse) {
+    for (const line of text.split(/\r?\n/u)) {
+      if (!line.startsWith("data:")) continue;
+      try {
+        if (isReservedGatewayTransientRecord(JSON.parse(line.slice(5).replace(/^ /u, "")) as unknown)) return true;
+      } catch {
+        // The strict protocol scanner owns malformed/partial SSE handling.
+      }
+    }
+    return false;
+  }
+  try {
+    return isReservedGatewayTransientRecord(JSON.parse(text) as unknown);
+  } catch {
     return false;
   }
 }
@@ -1236,9 +1470,42 @@ export function registerGateway(app: FastifyInstance): void {
             method: req.method,
             headers,
             body: outboundBuf && req.method !== "GET" ? new Uint8Array(outboundBuf) : undefined,
+            ...(workload === "observational_memory" ? { redirect: "manual" as const } : {}),
           },
         }, requestIntent.singleAttempt ? { maxAttempts: 1 } : {});
       } catch (error) {
+        if (workload === "observational_memory"
+          && error instanceof GatewayUpstreamUnreachableError
+          && error.attempts === 1
+          && error.reason === "network"
+          && isKnownObservationalMemoryPreRequestFailure(error.cause)) {
+          const settled = await trySettleGatewayNoExternalUsage({
+            jobId: String(jt.job_id),
+            projectId: String(jt.project_id),
+            attemptId: gatewayAttemptId,
+            jobTokenId: String(jt.id),
+            effectId: gatewayEffectId,
+            requestNo,
+            provider: safeProvider,
+            model,
+            modelCatalogMatch,
+            upstreamReportingModel: null,
+            usage: { ...EMPTY_USAGE },
+            status: "settled",
+            source: "gateway_error",
+            workload,
+          });
+          if (settled) {
+            return reply.code(503).send({
+              error: {
+                type: "gateway_transient",
+                effect_status: "not_started",
+                message: "upstream unavailable before request start",
+              },
+            });
+          }
+          return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");
+        }
         await trySettleGatewayUsage({
           jobId: String(jt.job_id),
           projectId: String(jt.project_id),
@@ -1333,9 +1600,17 @@ export function registerGateway(app: FastifyInstance): void {
       const trustedUsage = repairUsageScanner.finish();
       const usage = trustedUsage ?? { ...EMPTY_USAGE };
       const scanned = usage.total;
+      const backgroundBody = backgroundChunks ? Buffer.concat(backgroundChunks) : null;
+      const apiErrorFrame = backgroundBody ? containsGatewayApiErrorFrame(backgroundBody, isSse) : false;
+      const anthropicRefusalFailure = backgroundBody
+        ? containsAnthropicRefusalFailureCarrier(backgroundBody, isSse, upstreamPath)
+        : false;
+      const reservedTransientBody = backgroundBody
+        ? containsReservedGatewayTransientEnvelope(backgroundBody, isSse)
+        : false;
       // Earlier hidden attempts and interrupted/error responses cannot establish complete cost.
       const uncertainUsage = streamInterrupted || upstreamResult.attempts > 1 || !upstream.ok
-        || (backgroundChunks !== null && trustedUsage === null);
+        || (backgroundChunks !== null && trustedUsage === null) || apiErrorFrame || anthropicRefusalFailure || reservedTransientBody;
       const usageSettled = await trySettleGatewayUsage({
         jobId: String(jt.job_id),
         projectId: String(jt.project_id),

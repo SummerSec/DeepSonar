@@ -9,6 +9,11 @@ export const PI_EXTENSION_MAX_PER_ROLE = 8;
 export const PI_OBSERVATIONAL_MEMORY_ID = "pi-observational-memory" as const;
 export const PI_OBSERVATIONAL_MEMORY_PACKAGE = "pi-observational-memory" as const;
 export const PI_OBSERVATIONAL_MEMORY_VERSION = "3.1.4" as const;
+/**
+ * The first runtime-image version supported by OM admission. This is an
+ * extension-specific requirement, not the platform-wide runtime-image floor.
+ */
+export const PI_OBSERVATIONAL_MEMORY_MIN_RUNTIME_IMAGE_VERSION = "0.6.3" as const;
 export const PI_OBSERVATIONAL_MEMORY_INTEGRITY = "sha512-jgQbFyLMs4wWhkf6F0voOgzMwtIXsb8+ks0MsPKpPxkdpyMX5E/el6Mk/vJ40m8GlKwBIsCKjL1r7Z2U8dCtmA==" as const;
 export const PI_OBSERVATIONAL_MEMORY_ENTRY = "src/index.ts" as const;
 export const PI_OBSERVATIONAL_MEMORY_PROVIDER = "__deepsonar_observational_memory" as const;
@@ -128,6 +133,8 @@ export interface PiExtensionRegistration {
   requires_gateway: boolean;
   compatible_image_keys: readonly string[];
   entry: string;
+  /** Optional extension-specific minimum immutable runtime-image version. */
+  min_runtime_image_version?: string;
 }
 
 /**
@@ -158,6 +165,7 @@ export const PI_EXTENSION_REGISTRY = {
     requires_gateway: true,
     compatible_image_keys: ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
     entry: "src/index.ts",
+    min_runtime_image_version: PI_OBSERVATIONAL_MEMORY_MIN_RUNTIME_IMAGE_VERSION,
   },
 } as const satisfies Record<string, PiExtensionRegistration>;
 

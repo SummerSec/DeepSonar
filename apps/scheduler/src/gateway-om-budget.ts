@@ -10,6 +10,9 @@ export const GATEWAY_WORKLOADS = ["main", "observational_memory"] as const;
 export type GatewayWorkload = (typeof GATEWAY_WORKLOADS)[number];
 
 const MAX_REQUESTS = 1_000_000;
+const MAX_PRE_REQUEST_CAUSE_DEPTH = 8;
+const MAX_PRE_REQUEST_CAUSE_NODES = 32;
+const MAX_PRE_REQUEST_AGGREGATE_WIDTH = 8;
 
 export type ObservationalMemoryBudgetPlan = {
   total_requests: number;
@@ -30,6 +33,89 @@ export class GatewayWorkloadPolicyError extends Error {
     super(message);
     this.name = "GatewayWorkloadPolicyError";
   }
+}
+
+type ReadErrorProperty = { ok: true; present: boolean; value?: unknown } | { ok: false };
+
+function readErrorProperty(value: object, key: string): ReadErrorProperty {
+  try {
+    if (!(key in value)) return { ok: true, present: false };
+    return { ok: true, present: true, value: (value as Record<string, unknown>)[key] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function exactErrorString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function provesPreRequestTransportFailure(value: object, nameValue: string | null): boolean {
+  if (!(value instanceof Error) || nameValue !== "Error") return false;
+  const code = readErrorProperty(value, "code");
+  const syscall = readErrorProperty(value, "syscall");
+  if (!code.ok || !syscall.ok) return false;
+  const codeValue = exactErrorString(code.value);
+  const syscallValue = exactErrorString(syscall.value);
+  return (codeValue === "ECONNREFUSED" && syscallValue === "connect")
+    || ((codeValue === "ENOTFOUND" || codeValue === "EAI_AGAIN") && syscallValue === "getaddrinfo");
+}
+
+/**
+ * Classify only a Node transport error proven to have failed before connect.
+ *
+ * Fetch wraps these errors in a TypeError whose `cause` is the Node error.  A
+ * bounded cause walk is deliberate: provider prose, timeout wrappers, mixed
+ * AggregateErrors, cycles and attacker-sized error graphs must all fail closed.
+ */
+export function isKnownObservationalMemoryPreRequestFailure(error: unknown): boolean {
+  const seen = new Set<object>();
+  let nodes = 0;
+
+  const visit = (value: unknown, depth: number): boolean => {
+    if (!value || typeof value !== "object" || depth > MAX_PRE_REQUEST_CAUSE_DEPTH) return false;
+    if (seen.has(value)) return false;
+    seen.add(value);
+    nodes += 1;
+    if (nodes > MAX_PRE_REQUEST_CAUSE_NODES) return false;
+
+    const name = readErrorProperty(value, "name");
+    const code = readErrorProperty(value, "code");
+    if (!name.ok || !code.ok) return false;
+    const nameValue = exactErrorString(name.value);
+    const codeValue = exactErrorString(code.value);
+    if (nameValue === "AbortError" || nameValue === "TimeoutError" || codeValue === "ABORT_ERR") return false;
+    if (code.present && code.value !== undefined
+      && !["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN"].includes(codeValue ?? "")) return false;
+
+    const aggregate = value instanceof AggregateError;
+    const errors = readErrorProperty(value, "errors");
+    if (!errors.ok || (!aggregate && errors.present)) return false;
+    let hasBranch = false;
+    if (aggregate) {
+      if (!errors.ok || !errors.present || !Array.isArray(errors.value)
+        || errors.value.length === 0 || errors.value.length > MAX_PRE_REQUEST_AGGREGATE_WIDTH) return false;
+      hasBranch = true;
+      for (const leaf of errors.value) {
+        if (!visit(leaf, depth + 1)) return false;
+      }
+    }
+
+    const cause = readErrorProperty(value, "cause");
+    if (!cause.ok) return false;
+    if (cause.present) {
+      hasBranch = true;
+      // Native undici fetch exposes a TypeError -> cause chain. Do not let an
+      // arbitrary permission/protocol/config wrapper inherit a transport
+      // leaf merely because it happens to carry `cause`.
+      if (!(value instanceof AggregateError) && nameValue !== "TypeError") return false;
+      if (!visit(cause.value, depth + 1)) return false;
+    }
+
+    return hasBranch ? true : provesPreRequestTransportFailure(value, nameValue);
+  };
+
+  return visit(error, 0);
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {

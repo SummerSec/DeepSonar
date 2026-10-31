@@ -639,7 +639,7 @@ async function resolveAgentSnapshotForJobUnchecked(
     model: providerSnapshot.model,
     thinking: providerSnapshot.reasoning,
     contextWindowTokens: providerSnapshot.context_window_tokens,
-  });
+  }, runtimeImage.image_version);
   const providerEnvRefs = Object.keys(
     providerSnapshot.settings_config_json && typeof providerSnapshot.settings_config_json === "object"
       ? ((providerSnapshot.settings_config_json as Record<string, unknown>).env as Record<string, unknown> | undefined) ?? {}
