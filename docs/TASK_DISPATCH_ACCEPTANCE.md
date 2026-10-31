@@ -1,7 +1,7 @@
 # 任务下发验收矩阵（#767）
 
 > 状态：实现与验收盘点；已有能力与剩余正向验收分列，运行结果以关联 PR/CI 记录为准。
-> 同步日期：2026-10-30
+> 同步日期：2026-10-31
 
 原 issue 要求按场景明确目标、范围、授权、材料与完成条件，并在创建/派发前发现不满足的前置条件。后续 #794、#796、#797、#798 分别补充目标相关研究候选、报告防误报、来源隔离判据评审及非 Finding 交付。下表不把源码或测试入口存在等同于本次已运行通过。
 
@@ -61,6 +61,21 @@
 | `ci:unit:docs-freshness` | 10/10 |
 
 上述完整链直接覆盖[真实路由测试](../apps/scheduler/src/task-plan-review.integration.test.ts)，终态竞态回归见[terminal-race 测试](../apps/scheduler/src/executor-real-terminal-race.test.ts)。完整 `pnpm build`（含 Scheduler TypeScript 与 Web Vite）已通过；Web 仍提示现有大 chunk 警告。
+
+### 2026-10-31 单元层复核（基线 `b655bed1`）
+
+在 v0.6.1 发布提交上重跑可离线单元入口，刷新上表中单元层的计数。**本次未运行需要 `TEST_DATABASE_URL` 的集成套件，也未调用真实模型**，因此只更新单元证据，不改变「跨切片端到端验收」仍待数据库集成的事实。
+
+| 范围 | 本轮实测 |
+| --- | --- |
+| 任务契约、意图、结果与目标评审（`ci:unit:task-intent` 的 Scheduler 部分，17 个文件） | 121/121 |
+| Plan 协议、判据、决策与目标评审绑定（`ci:unit:plan-protocol` 的 Scheduler 部分） | 34/34 |
+| Web：`plan-gap-report`、`task-intent`、`task-contract-editor` | 19/19 |
+| 报告防误报与版本：`report-failure-recovery`、`report-numeric-fidelity`、`task-report-version` | 33/33 |
+
+复现说明：本地 `@deepsonar/shared-types` 的 `dist` 早于本基线，未重建时 `tsx --test` 会因缺少新导出而误报模块错误；需先 `tsc -p packages/shared-types/tsconfig.json`。该差异只影响本地复现，不改变 `ci:unit:*` 入口定义。
+
+仍未汇总、需要数据库的项保持开放：引用失效与跨范围回归、零 Finding / 失败来源 / 未执行 / 部分覆盖与预算的端到端回归，以及独立程序资格正向闭环。这些不以本轮单元计数替代。
 
 
 ## 程序规则独立评审切片（基于 #800）
