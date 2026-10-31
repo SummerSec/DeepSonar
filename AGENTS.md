@@ -237,8 +237,13 @@ Canvas 只读，Web 对当前可见投影使用 elkjs 布局，超阈值或失�
 3. **as-built 与代码相反**：本版触及的机制逐条核 `DESIGN.md`、`docs/architecture/README.md` 归属表指定的视图与专题；描述错误时回写文档，实现违反已采纳约束时登记缺陷，不通过修改规范掩盖违约。
 4. **状态索引**：`docs/README.md` 的同步状态与日期、专题文档文首状态行、新增/收口的 issue 表。
 5. **命令、路径与链接**：文档里引用的 `pnpm` 脚本、文件路径、schema 版本、交叉链接逐条验证存在（参考：把所有 `pnpm <script>` 与 `package.json` 对账）。
+6. **可变数字必须带核对基线**：文档里的任何**可变量**——env 默认值、阈值、上限、超时、计数、池大小、冻结额度——必须属于下列两种写法之一：
+   - 写上核对基线（`main <sha>` 或 `YYYY-MM-DD`，二者至少一项），例如「`DEEPSONAR_JOB_TOKEN_MAX_REQUESTS` 未设置即 0 = 不限（核对 main `2b76ac25`）」；
+   - 或**不复制数字**，直接指向代码或权威文档（如 [USAGE_LIMITS.md](docs/USAGE_LIMITS.md)、`apps/scheduler/src/config.ts`）。
 
-其中 1 的版本字面量、5 的命令与链接、以及 2 的已删机制残留已由 `pnpm ci:unit:docs-freshness` 机检并在 CI 中阻断；**第 3 项（as-built 与代码相反）无法自动化**，必须人工逐条核——这正是本条硬门不能省的理由。
+   禁止写「本 PR 基线默认 N」「当前默认 N」这类**无归属的数字**。理由：这类漂移机检抓不到——实测案例是 `DEEPSONAR_JOB_TOKEN_MAX_REQUESTS` 默认值从 500 改为 0（不限），而一份文档的「本 PR 基线默认 500」在 `docs-freshness` 全绿的情况下静默过期了整轮。若同一数字同时存在于权威文档（如 `USAGE_LIMITS.md`），其他文档应链接而不复述。
+
+其中 1 的版本字面量、5 的命令与链接、以及 2 的已删机制残留已由 `pnpm ci:unit:docs-freshness` 机检并在 CI 中阻断；**第 3 项（as-built 与代码相反）与第 6 项（可变数字的时效）无法自动化**，必须人工逐条核——这正是本条硬门不能省的理由。
 
 为什么写死成硬门：`docs/PROJECT_REVIEW_2026-08.md` 早就建议加「文档表征测试」断言 schema 版本字面量一致，而该断言一直没落地，于是 v0.4.x 期间本文件与 `DESIGN.md` 的版本号真实漂移了两代，另有一批按已删机制写的段落（PR #696 修正）。**现已落地为 `pnpm ci:unit:docs-freshness`**（版本字面量、文档里的 `pnpm` 脚本存在性、相对链接、已删机制残留），已挂进 CI；但机检覆盖不到语义——「as-built 段落是否与代码相反」仍需人工按上面第 3 项逐条核。
 
