@@ -7,7 +7,7 @@
 
 > **Finding 来源身份（2026-10-29，#770 A）**：Job 内来源幂等与 Control 提交幂等分离，跨 Job 相同文本保留独立 Finding/Artifact，冲突拒绝；历史缺失不补造；项目词法检索与持久弱候选已实现。**#770 于 2026-10-31 按已交付切片收口**：跨任务强关系（同问题 / 同根因不同实例）拆出 [#819](https://github.com/SummerSec/DeepSonar/issues/819) 独立跟踪，登记为暂缓设计。生产执行按 [AGENTS.md 验收边界](../AGENTS.md) 豁免，但不覆盖离线非模型质量验收——权威资产映射、独立人工标注与强关系质量门仍未完成。见[数据架构](architecture/08-data-architecture.md#finding-来源身份770-a)与[风险记录](architecture/12-risks-and-tech-debt.md)。
 
-> **修正 token（2026-10-30，#776）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，默认需管理员配置；调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
+> **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
 > **Pi 大输出（2026-10-29，#765）**：完整 JSON 校验、脱敏 workspace/evidence 双写、128MiB 保存预算与控制帧保留；详见 [CLI 契约](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。生产重跑未验收。
 
