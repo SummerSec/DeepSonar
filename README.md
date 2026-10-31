@@ -6,6 +6,8 @@ DeepSonar 是面向安全研究与工程任务的 AI 执行平台。你提供项
 
 模型负责规划与推理；平台负责权限、隔离、预算、调度和结果校验。你可以在同一个工作台查看任务进展、追查结论来源，并在需要时介入。
 
+项目以[优化人的注意力](DESIGN.md#核心理念优化人的注意力)作为需求、架构、交互和评审的共同依据；授权、安全、正确性与证据边界继续成立。
+
 [部署指南](docs/ONE_CLICK_DEPLOYMENT.md) · [文档索引](docs/README.md) · [架构设计](DESIGN.md) · [版本发布](https://github.com/SummerSec/DeepSonar/releases) · [问题反馈](https://github.com/SummerSec/DeepSonar/issues)
 
 ## 可以做什么
@@ -237,7 +239,7 @@ HTTP API 契约见 [OpenAPI 定义](apps/scheduler/src/openapi.ts)。
 
 提交问题时，请提供版本、部署方式、宿主架构、复现步骤与脱敏日志。不要上传真实 API Key、Token、主密钥、客户数据或未授权目标的信息。
 
-文档或实现建议可先提交 [Issue](https://github.com/SummerSec/DeepSonar/issues)。涉及功能、数据结构或安全边界的变更，需要同步相关设计文档与测试。
+文档或实现建议可先提交 [Issue](https://github.com/SummerSec/DeepSonar/issues)。涉及功能、数据结构或安全边界的变更，需要同步相关设计文档与测试。新增界面、通知、配置、工作流或自动化行为时，按[注意力成本评审](docs/architecture/11-engineering-specs.md#11-注意力成本评审830)简要说明取舍；纯内部修改无需额外填写表格。
 
 ## 许可证
 

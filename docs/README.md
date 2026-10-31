@@ -3,6 +3,8 @@
 > 状态：v0.6.3 集成文档索引；根工作树实现、历史验证和当前验收缺口分别记录。
 > 同步日期：2026-10-31
 
+> **注意力原则（#830）**：单一权威定义见 [DESIGN](../DESIGN.md#核心理念优化人的注意力)，开发与贡献入口引用同一[工程评审及正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)。NFR-UX-001 登记约束与验证范围；本次只落实设计/评审依据，不改变运行时、UI 或授权，也不宣称注意力收益。
+
 > **任务目标证据（#767）**：契约、候选、来源隔离评审、非 Finding 结果与确定性报告已接线。可信只读 authority/grant 绑定当前身份、动作、前提和版本，子/系统 Job 统一继承并在 provision/重跑实时重核，见 [ADR 0011](architecture/adr/0011-trusted-target-authorization.md)。独立程序资格由 [#822 操作员评审](PROGRAM_ELIGIBILITY.md) 投影；目标授权、技术 Verify、判据、Plan 完成与资格各自分责。无契约仍 unassessed，验收见[矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
 
 > **任务下发（2026-10-29，#767）**：可选版本化契约、共享场景模板、结构化补充建议及派发前复核见[下发指南](../skills/deepsonar-management/references/task-dispatch.md)与 [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。结构化一致性与真实模型质量收益分开验收；未知身份/写权限不当作已授权。

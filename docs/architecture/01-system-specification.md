@@ -1014,6 +1014,14 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 - **代码入口**：[AGENTS release gate](../../AGENTS.md)、[docs freshness](../../apps/scheduler/src/docs-freshness.test.ts)、[architecture README](./README.md)。
 - **验证证据**：`pnpm ci:unit:docs-freshness`、`pnpm ci:unit:file-size`、`git diff --check`；人工逐条核对代码与视图。
 
+### NFR-UX-001 人的注意力与可行动交互
+
+- **规范要求**：需求、架构、交互及评审遵守 [DESIGN 的单一权威定义](../../DESIGN.md#核心理念优化人的注意力)，评估人工负担与新增配置/通知/决策/维护代价；优先复用和在既有授权内自行处理。可行动决定、实质阻塞、风险变化与可验收成果优先呈现，细节按需展开且保留审计；必须提问时说明缺失输入、影响及具体决定。不得隐瞒失败、默认扩权、自动批准/合并或降低验证标准。
+- **决策来源**：[#830](https://github.com/SummerSec/DeepSonar/issues/830) 集中明确已有设计方向，不新增执行架构或权限。
+- **实现状态**：开发规范、评审问题和正反例已接入；本次没有运行时或 UI 行为变更，不宣称所有既有交互已满足，也未测量注意力收益。
+- **代码入口**：[AGENTS](../../AGENTS.md)、[工程评审与示例](11-engineering-specs.md#11-注意力成本评审830)、[贡献入口](../../README.md#反馈与贡献)（本需求仅属开发治理）。
+- **验证证据**：`pnpm ci:unit:docs-freshness`、`git diff --check`；人工核对单一权威定义、入口链接、重复进度/可核实问题/真实阻塞/必要授权/失败/验收六类示例，以及未扩张执行和 UI 范围。
+
 ## 4. 外部接口需求
 
 ### IR-011 管理 API、Control API 与 WebSocket

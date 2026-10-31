@@ -25,6 +25,10 @@
 | 多副本证据可见性 | Web/WS 请求落到没有本地 Evidence 文件的副本 | 返回 visibility unavailable，并按协议关闭过程流；不把实时总线当作权威补读 | stream visibility、WS 关闭码、stream queue | [`evidence-stream.test.ts`](../../apps/scheduler/src/evidence-stream.test.ts)、[`process-stream-boundary.test.ts`](../../apps/scheduler/src/process-stream-boundary.test.ts) |
 | 文档可维护性 | 版本、脚本、链接或已删机制在文档漂移 | 文档 freshness gate 失败，发布前修复 | docs freshness 输出 | `ci:unit:docs-freshness`、人工 as-built 对照 |
 
+## 注意力成本的验证边界（#830）
+
+NFR-UX-001 的权威定义在 [DESIGN](../../DESIGN.md#核心理念优化人的注意力)，开发评审与具体正反例见 [工程规范](11-engineering-specs.md#11-注意力成本评审830)。评审观察需要用户关注的事项、解除阻塞所需步骤、重复问题、状态/风险/证据是否可理解；不把减少消息数当作独立成功指标。当前交付是设计原则、开发约束与人工评审依据，没有新增自动通知行为，也没有节省比例、认知负担或效果收益的测量结论。安全、权限、失败可见性和实际验收要求继续成立。
+
 ## 身份、资格与质量门
 
 程序资格的工程闭环已经接入，但它是操作员对已登记材料和当前 Finding/Verify/Evidence 的可追溯见证；它不认证外部官方规则、站点所有权或自然人/模型之间的物理独立性，也不授予目标执行或自动提交权限。资格 `eligible`、技术 `confirmed` 和任务判据满足仍是不同状态，边界见 [FR-FIND-008](01-system-specification.md#fr-find-008-独立程序资格评审) 与 [ADR-0010](adr/0010-program-eligibility-authority.md)。

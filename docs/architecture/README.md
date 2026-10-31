@@ -19,6 +19,8 @@
 
 #815 Pi 会话观测记忆的注册/冻结、Gateway workload/账本与 wrapper/RPC 工程已进入根工作树，见 FR-CAP-009 和 [ADR 0013](adr/0013-governed-pi-memory.md)。有限总额必须显式分配，不推导百分比。实际本地 base 镜像的 canonical RPC、独立生产内容 guard 正负例及封装/OM 专属版本准入/适配器回归已通过，完整身份、场景和分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；历史 Session HTTP 脱敏与 Gateway 已知请求前 transport/持久结算、防冒充也已核验，见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。最终组合 CI、发布通道/平台及 registry/catalog 证据未完成，不能以本地 image ID 宣称发布或质量/成本收益。
 
+#830 将[注意力原则](../../DESIGN.md#核心理念优化人的注意力)集中定义在 DESIGN；开发入口和贡献指引复用[工程评审与示例](11-engineering-specs.md#11-注意力成本评审830)，映射 NFR-UX-001、03/04/11 与追溯矩阵。仅落实设计/开发约束，不新增运行时、UI、权限或收益承诺。
+
 ## 1. 阅读路径与目录
 
 | 文件 | 回答的问题 | 状态 |
@@ -75,7 +77,7 @@
 
 每篇文档前 12 行必须有 `> 状态：...` 与 `> 同步日期：YYYY-MM-DD`。同步日期是最近核对该文档事实的日期，不是措辞编辑日期。文档级 as-built 不代表所有关联测试在当前环境通过；具体未完成能力和验证缺口必须显式标注。
 
-视图编号不重排；需求按 `FR-域-NNN`、`NFR-属性-NNN`、`IR-NNN`、`CON-NNN` 分类。功能域在 01 中定义，TASK 包含任务编排，独立证据与资产边界不能隐含混入 Finding。非功能属性为 SEC、REL、PERF、OBS、EVO、OPS；域按稳定责任分组，不按每个文件创建前缀。
+视图编号不重排；需求按 `FR-域-NNN`、`NFR-属性-NNN`、`IR-NNN`、`CON-NNN` 分类。功能域在 01 中定义，TASK 包含任务编排，独立证据与资产边界不能隐含混入 Finding。非功能属性为 SEC、REL、PERF、OBS、EVO、OPS、UX（人的注意力成本）；域按稳定责任分组，不按每个文件创建前缀。
 
 需求以三级标题定义，格式为 `### ID`（可附中文标题）（例如查找 FR-JOB-001）；正文引用相同 ID 不算重复定义。每条记录规范要求、决策来源（含理由）、代码入口、实现状态和验证证据。ID 发布后不改作他义、不复用；本次保留 #744 首批编号的原有含义，新增需求使用未占用编号。废弃需求保留「实现状态：已废弃」及取代者，并登记到 `docs-freshness.test.ts` 的 `DEPRECATED_REQUIREMENT_IDS`；门禁要求登记条目持续保持废弃状态，不能重新激活或删除。历史引用不恢复旧运行时契约。
 
