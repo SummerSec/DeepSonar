@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { assertOpenSandboxSdkPin, commandWithEnv, installedOpenSandboxSdkVersion, isOpenSandboxGoneError, classifyOpenSandboxUploadFault, isOpenSandboxUploadFailureMessage, isTransientOpenSandboxUploadError, joinCommandLogText, writeFilesWithRetry } from "./opensandbox-sdk-client.js";
+import { ConnectionConfig, Sandbox, SandboxManager } from "@alibaba-group/opensandbox";
+import { createSdkOpenSandboxClient, assertOpenSandboxSdkPin, commandWithEnv, installedOpenSandboxSdkVersion, isOpenSandboxGoneError, classifyOpenSandboxUploadFault, isOpenSandboxUploadFailureMessage, isTransientOpenSandboxUploadError, joinCommandLogText, writeFilesWithRetry } from "./opensandbox-sdk-client.js";
 import { OPENSANDBOX_SDK_VERSION } from "./opensandbox-version.js";
 import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
 
@@ -10,6 +11,43 @@ test("OpenSandbox SDK pin matches the installed package and rejects drift", () =
   assert.equal(assertOpenSandboxSdkPin(OPENSANDBOX_SDK_VERSION), OPENSANDBOX_SDK_VERSION);
   assert.throws(() => assertOpenSandboxSdkPin("0.0.1"), /OPENSANDBOX_SDK_PIN_MISMATCH/);
   assert.throws(() => assertOpenSandboxSdkPin("latest"), /OPENSANDBOX_SDK_UNPINNED/);
+});
+
+test("OpenSandbox SDK connections disable implicit wake retry on create and reconnect", async (t) => {
+  const configs: ConnectionConfig[] = [];
+  const capture = (config?: ConnectionConfig) => {
+    assert.ok(config instanceof ConnectionConfig, "exercise the installed SDK constructor");
+    configs.push(config);
+    throw new Error("unit SDK operation stopped before network");
+  };
+  t.mock.method(Sandbox, "create", async (options: { connectionConfig?: ConnectionConfig }) => capture(options.connectionConfig));
+  t.mock.method(Sandbox, "connect", async (options: { connectionConfig?: ConnectionConfig }) => capture(options.connectionConfig));
+  const client = createSdkOpenSandboxClient({ domain: "127.0.0.1:1", apiKey: "" });
+  try {
+    await assert.rejects(client.create({
+      image: `registry.invalid/unit@sha256:${"a".repeat(64)}`,
+      env: {}, metadata: {}, resource: { cpu: "1", memory: "128Mi" },
+      timeoutSeconds: null, networkPolicy: { defaultAction: "deny", egress: [] }, volumes: [],
+    }), /unit SDK operation stopped before network/);
+    assert.equal(await client.connect("unit-sandbox"), undefined);
+    assert.equal(configs.length, 2);
+    assert.equal(configs[0], configs[1], "client shares only the uninitialized base");
+    for (const config of configs) {
+      assert.equal(config.wakeRetry.enabled, false);
+      assert.equal(config.disableMetrics, true);
+      assert.equal(config.useServerProxy, true);
+      assert.equal(config.requestTimeoutSeconds, 180);
+      assert.equal(config.ownsTransport, false, "singleton stays uninitialized");
+      const fresh = config.withTransportIfMissing();
+      assert.notEqual(fresh, config, "installed SDK clones uninitialized inputs");
+      assert.equal(fresh.ownsTransport, true);
+      assert.equal(fresh.withTransportIfMissing(), fresh, "initialized inputs are borrowed");
+      assert.equal(fresh.wakeRetry.enabled, false, "transport replacement cannot opt into replay");
+      await fresh.closeTransport();
+    }
+  } finally {
+    for (const config of configs) await config.closeTransport();
+  }
 });
 
 test("OpenSandbox destroy treats already-gone sandboxes as success", () => {
@@ -164,4 +202,64 @@ test("classifyOpenSandboxUploadFault distinguishes transient vs persistent_signa
   assert.equal(classifyOpenSandboxUploadFault(new Error("forbidden")), "none");
   assert.equal(isOpenSandboxUploadFailureMessage("Upload failed (status=503) UNEXPECTED_RESPONSE"), true);
   assert.equal(isOpenSandboxUploadFailureMessage("model 401 unauthorized"), false);
+});
+
+test("OpenSandbox SDK upload recycle supplies a genuinely new uninitialized config", async (t) => {
+  let base: ConnectionConfig | undefined;
+  const previous = new ConnectionConfig({ domain: "127.0.0.1:1", wakeRetryEnabled: false }).withTransportIfMissing();
+  const closed = t.mock.method(previous, "closeTransport", async () => {});
+  let replacement: ConnectionConfig | undefined;
+  t.mock.method(Sandbox, "create", async (options: { connectionConfig?: ConnectionConfig }) => {
+    base = options.connectionConfig;
+    return { id: "unit-sandbox", connectionConfig: previous, files: {
+      writeFiles: async () => { throw Object.assign(new Error("Upload failed (status=500)"), { statusCode: 500 }); },
+    } } as unknown as Sandbox;
+  });
+  t.mock.method(Sandbox, "connect", async (options: { connectionConfig?: ConnectionConfig }) => {
+    replacement = options.connectionConfig;
+    return { id: "unit-sandbox", files: { writeFiles: async () => {} } } as unknown as Sandbox;
+  });
+  try {
+    const client = createSdkOpenSandboxClient({ domain: "127.0.0.1:1", apiKey: "" });
+    const session = await client.create({
+      image: `registry.invalid/unit@sha256:${"a".repeat(64)}`,
+      env: {}, metadata: {}, resource: { cpu: "1", memory: "128Mi" },
+      timeoutSeconds: null, networkPolicy: { defaultAction: "deny", egress: [] }, volumes: [],
+    });
+    await session.writeFile("/workspace/unit", "unit");
+    assert.equal(closed.mock.callCount(), 1);
+    assert.ok(replacement instanceof ConnectionConfig);
+    assert.notEqual(replacement, base);
+    assert.notEqual(replacement, previous);
+    assert.equal(replacement.ownsTransport, false);
+    assert.equal(replacement.wakeRetry.enabled, false);
+    assert.equal(replacement.disableMetrics, true);
+    assert.equal(replacement.requestTimeoutSeconds, 180);
+  } finally {
+    closed.mock.restore();
+    await previous.closeTransport();
+  }
+});
+
+test("installed SDK managers close owned clones but not caller-initialized transports", async (t) => {
+  const base = new ConnectionConfig({ domain: "127.0.0.1:1", wakeRetryEnabled: false, disableMetrics: true });
+  const clone = base.withTransportIfMissing();
+  const transportClone = t.mock.method(base, "withTransportIfMissing", () => clone);
+  const owned = SandboxManager.create({ connectionConfig: base });
+  assert.notEqual(clone, base);
+  assert.equal(base.ownsTransport, false);
+  const ownedClose = t.mock.method(clone, "closeTransport");
+  await owned.close();
+  assert.equal(ownedClose.mock.callCount(), 1);
+  transportClone.mock.restore();
+  const initialized = base.withTransportIfMissing();
+  const borrowed = SandboxManager.create({ connectionConfig: initialized });
+  const borrowedClose = t.mock.method(initialized, "closeTransport");
+  try {
+    assert.equal(initialized.withTransportIfMissing(), initialized);
+    await borrowed.close();
+    assert.equal(borrowedClose.mock.callCount(), 0);
+  } finally {
+    await initialized.closeTransport();
+  }
 });

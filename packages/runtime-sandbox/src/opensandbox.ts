@@ -544,7 +544,7 @@ export async function injectGatewayHostsViaExecd(
 }
 
 /**
- * OpenSandbox create (1.1.0) has no ExtraHosts / hostAliases field, and the
+ * Pinned OpenSandbox SDK create has no extraHosts / hostAliases field, and the
  * sidecar IP is only known after the sandbox network exists. Docker writes
  * /etc/hosts through the Engine (`docker exec -u 0`); execd/bwrap cannot
  * mutate the Docker-injected file on Windows Desktop. Kubernetes/Kata still
