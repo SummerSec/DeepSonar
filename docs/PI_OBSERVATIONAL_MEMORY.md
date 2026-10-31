@@ -92,7 +92,7 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 | E1 | session 文件与 evidence archive | 全部会话行，含 L1/L2 与工具结果 | 读全文 → `redactRuntimeSecrets`（密钥精确值）→ 归档；无内容分类过滤 | 持久化前按结构化条目过滤；密钥精确值脱敏不得当作内容分类脱敏 |
 | E2 | recall 工具结果正文 | 工具名 `recall`，返回 observation/reflection 正文；`details.sourceEntries[].content` **默认就带**（`includeSourceContent` 默认 `true`）：上游 `src/tools/recall-observation.ts:152,263` | 作为普通 tool result 进入 session 与 RPC 帧；无专门过滤 | 与 E1 同策略；默认关闭或受限 `content` 需先改冻结配置并验收 |
 | E3 | compaction summary / fold | `session_before_compact` hook 产出的压缩结果与 memory fold | 作为 session 内容与 `context.compacted` 身份链的一部分 | 按 E1 过滤；身份字段不得因过滤而失真（否则降级为 `context.compaction_unknown`） |
-| E4 | 大 RPC 事件的落盘副本 | 超 1 MiB 帧投影后写入`/workspace/.deepsonar-rpc-output/*.json` 并归档为 runtime artifact（[pi-rpc-output.ts](../packages/runtime-sandbox/src/pi-rpc-output.ts)） | 已有密钥脱敏；但只对固定 payload 键做 4 KiB 预览，`content` 不在其中 | 与 E1 同策略；新增出口时必须显式声明保留/过滤规则（见 §6.3） |
+| E4 | 大 RPC 事件的落盘副本 | 超 1 MiB 帧投影后写入 `/workspace/.deepsonar-rpc-output/*.json` 并归档为 runtime artifact（[pi-rpc-output.ts](../packages/runtime-sandbox/src/pi-rpc-output.ts)） | 已有密钥脱敏；但只对固定 payload 键做 4 KiB 预览，`content` 不在其中 | 与 E1 同策略；新增出口时必须显式声明保留/过滤规则（见 §6.3） |
 | E5 | 普通工具结果在 Web viewer 的展示 | 现有 `parseAgentSession` 就把 tool result 渲染出来（[parseAgentSession.ts](../apps/web/src/session-viewer/parseAgentSession.ts)） | 已展示会话内 tool 结果 | **不开 memory 面板 ≠ 正文不显示**；E1/E2 的过滤规则必须先落地，不靠「不新增 UI」代替 |
 | E6 | 配置、日志、通知、debug 文件 | `debugLog`（启用后写 agent 目录 NDJSON）、错误/fallback 通知、`om:status` 输出 | 默认关；catch-up 错误通知不完全受 `showWorkerNotifications` 控制 | 冻结关闭；出现记录即按敏感出口验收 |
 
