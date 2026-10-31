@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { stripTypeScriptTypes } from "node:module";
 import { RpcClient } from "./pi-rpc-client.mjs";
 import { FROZEN_CONFIG, MODEL, OM_PROVIDER, OBSERVATION, REFLECTION } from "./pi-om-config.mjs";
+import { resolvePiPackage } from "../pi-image-packaging.mjs";
 
 const IMAGE_OM_ROOT = "/opt/deepsonar/pi-extensions/node_modules/pi-observational-memory";
 const IMAGE_WRAPPER = "/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts";
@@ -16,15 +17,8 @@ const observationId = createHash("sha256").update(OBSERVATION).digest("hex").sli
 const privateProse = new RegExp(`${OBSERVATION}|${REFLECTION}`, "u");
 
 function resolveCli(binary) {
-  let executable = binary;
-  if (!path.isAbsolute(executable)) executable = process.env.PATH.split(path.delimiter)
-    .map((dir) => path.join(dir, binary)).find(existsSync);
-  assert.ok(executable, "Pi CLI is unavailable; provide DEEPSONAR_PI_BINARY pointing to dist/cli.js");
-  if (/\.(?:cmd|ps1)$/iu.test(executable)) executable = path.join(path.dirname(executable), "node_modules/@earendil-works/pi-coding-agent/dist/cli.js");
-  executable = realpathSync(executable);
-  const pkg = JSON.parse(readFileSync(path.join(path.dirname(executable), "../package.json"), "utf8"));
-  assert.equal(pkg.name, "@earendil-works/pi-coding-agent");
-  assert.equal(pkg.version, "1.4.0", "real RPC smoke requires the pinned Pi CLI");
+  const { executable, metadata } = resolvePiPackage(binary);
+  assert.equal(metadata.version, "1.4.0", "real RPC smoke requires the pinned Pi CLI");
   return executable;
 }
 
@@ -167,13 +161,23 @@ export async function runRealPiRpc() {
   const reports = [];
   try {
     const boundary = await loadBoundaries(root);
-    const omRoot = process.env.DEEPSONAR_PI_OM_PACKAGE ?? (existsSync(IMAGE_OM_ROOT) ? IMAGE_OM_ROOT : path.join(REPO, ".tmp-om-3.1.4/package"));
+    const imageProof = process.env.DEEPSONAR_PI_IMAGE_PROOF === "1";
+    if (imageProof) {
+      assert.equal(process.env.DEEPSONAR_PI_OM_PACKAGE, undefined, "image proof cannot substitute a host plugin");
+    }
+    const omRoot = imageProof ? IMAGE_OM_ROOT
+      : process.env.DEEPSONAR_PI_OM_PACKAGE ?? (existsSync(IMAGE_OM_ROOT) ? IMAGE_OM_ROOT : path.join(REPO, ".tmp-om-3.1.4/package"));
     assert.equal(JSON.parse(readFileSync(path.join(omRoot, "package.json"), "utf8")).version, "3.1.4");
-    const originalWrapper = existsSync(IMAGE_WRAPPER) ? IMAGE_WRAPPER : path.join(REPO, "agent-harness/pi-observational-memory-governed.ts");
-    const wrapper = path.join(root, "tested-wrapper.ts");
-    // Test-only path relocation. The implementation and canonical published
-    // plugin bytes are unchanged; production has no override environment flag.
-    writeFileSync(wrapper, readFileSync(originalWrapper, "utf8").replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`));
+    let wrapper = IMAGE_WRAPPER;
+    if (imageProof) {
+      assert.ok(existsSync(wrapper), "the built image must contain its production wrapper");
+    } else {
+      const originalWrapper = existsSync(IMAGE_WRAPPER) ? IMAGE_WRAPPER : path.join(REPO, "agent-harness/pi-observational-memory-governed.ts");
+      wrapper = path.join(root, "tested-wrapper.ts");
+      // Host-only testing relocates the immutable canonical package. Image
+      // acceptance always imports the installed production wrapper directly.
+      writeFileSync(wrapper, readFileSync(originalWrapper, "utf8").replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`));
+    }
     for (const scenario of ["success", "quota", "transient", "permission", "unknown", "protocol", "config-drift", "disabled"]) {
       const scenarioRoot = path.join(root, scenario);
       mkdirSync(scenarioRoot);

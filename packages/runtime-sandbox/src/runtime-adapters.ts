@@ -4,6 +4,7 @@ import { buildDshPiAiRuntimeProjection, type DshPiAiRuntimeProjection } from "./
 import { DSH_PI_COMPAT_SYSTEM_PROMPT, formatDshTurnError, projectDshSystemPrompt } from "./dsh-request-frame.js";
 import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
 import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
+import { PI_MEMORY_IMAGE_GUARD_SOURCE } from "./pi-memory-image-guard.js";
 import { isPiObservationalMemoryCustomType, isPiObservationalMemoryExpectedWorkerFailure, redactPiObservationalMemoryText } from "./pi-observational-memory.js";
 
 export type AgentCliId = "claude-code" | "dsh" | "pi";
@@ -617,13 +618,18 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     : unknownRuntimeEvent();
 }
 
-function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessionFile?: string): Promise<RuntimeProcess> {
-  const extensions = (context.piExtensions ?? []).map((extension) => {
+async function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessionFile?: string): Promise<RuntimeProcess> {
+  const extensionPaths = context.piExtensions ?? [];
+  const extensions = extensionPaths.map((extension) => {
     if (!extension.startsWith("/workspace/.deepsonar-home/.pi/agent/extensions/") || extension.includes("/../") || extension.includes("\0")) {
       throw new Error("PI_EXTENSION_PATH_INVALID");
     }
     return ` -e ${shellQuote(extension)}`;
   }).join("");
+  if (extensionPaths.some((entry) => entry.endsWith("/pi-observational-memory.ts"))) {
+    const checked = await host.run(`node -e ${shellQuote(PI_MEMORY_IMAGE_GUARD_SOURCE)}`, { timeoutMs: 10_000 });
+    if (checked.exitCode !== 0) throw new Error("PI_OM_RUNTIME_IMAGE_CONTENT_INVALID");
+  }
   let command = `pi --mode rpc --no-approve --no-extensions${extensions}`;
   if (sessionFile) command += ` --session ${shellQuote(sessionFile)}`;
   const launch = resolvePiCliLaunchFlags(context.model, context.modelProvider);
