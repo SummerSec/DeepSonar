@@ -11,9 +11,12 @@ import { config } from "./config.js";
 import { isSeverityInVerifyScope, normalizeFindingArtifactRefs } from "./verify.js";
 import { findingVerificationSummaries } from "./verify-summaries.js";
 import { taskTargetForPrompt } from "./task-compose.js";
+import { readPersistedPlanObjective, type PersistedPlanObjective } from "./domains/plan-protocol/objective.js";
+import { taskInputSha256 } from "./domains/plan-protocol/task-input.js";
 import {
   humanHintProjection,
   idsMentionedInText,
+  planObjectiveReadHandle,
   projectVerifyFinding,
   projectedQuantities,
   serializeFindingStatusIndex,
@@ -118,6 +121,13 @@ export interface CanvasGraph {
 }
 
 export interface GraphQueryStore {
+  loadPlanObjective?(jobId: string, canvasId: string): Promise<{
+    items: Record<string, unknown>[];
+    truncated: false;
+    omitted: Record<string, number>;
+    referable_ids: string[];
+    next_cursor?: string;
+  }>;
   loadPlanGap?(jobId:string,canvasId:string,input:GraphQueryInput):Promise<ReturnType<typeof projectKind> & {plan_read:PlanReadProof}>;
   loadCanvas(canvasId: string): Promise<CanvasGraph>;
   loadState(jobId: string): Promise<GraphQueryState>;
@@ -234,9 +244,10 @@ export async function loadCanvasGraph(canvasId: string): Promise<CanvasGraph> {
   const findingIds = findings.flatMap((finding) => (finding.imported ? [] : [finding.id]));
   const verificationSummaries = await findingVerificationSummaries(sql, findingIds);
   const target = asRecord(canvas?.target_json);
+  const currentObjective = readPersistedPlanObjective(target);
   return {
     canvasId,
-    goal: String(target.goal ?? canvas?.title ?? ""),
+    goal: String(currentObjective?.goal ?? target.goal ?? canvas?.title ?? ""),
     target,
     promptTarget: taskTargetForPrompt(target),
     nodes: nodes.map((node) => ({
@@ -259,7 +270,53 @@ export async function loadCanvasGraph(canvasId: string): Promise<CanvasGraph> {
   };
 }
 
+/** Return the complete current user objective without a bounded preview. */
+export function projectPlanObjective(objective: PersistedPlanObjective): {
+  items: Record<string, unknown>[];
+  truncated: false;
+  omitted: Record<string, number>;
+  referable_ids: string[];
+} {
+  return {
+    // `items[0]` is the full authoritative tuple. The envelope's
+    // truncated=false is the completeness marker; no wrapper may be
+    // mistaken for a current objective.
+    items: [objective],
+    truncated: false,
+    omitted: {},
+    // User objectives are not Canvas node references and cannot authorize
+    // Hub `from` values.
+    referable_ids: [],
+  };
+}
+
 export const sqlGraphQueryStore: GraphQueryStore = {
+  async loadPlanObjective(jobId, canvasId) {
+    const [row] = await sql`
+      SELECT c.title, c.target_json
+      FROM jobs j
+      JOIN canvases c ON c.id = j.canvas_id AND c.project_id = j.project_id
+      WHERE j.id = ${jobId} AND j.canvas_id = ${canvasId} AND c.id = ${canvasId}`;
+    if (!row) {
+      throw new ControlInputError("invalid_payload", "plan_objective requires the current Job Canvas and project scope", "canvas_id");
+    }
+    const target = asRecord(row.target_json);
+    const objective = readPersistedPlanObjective(target);
+    if (!objective) {
+      const hasPersistedObjective = Object.prototype.hasOwnProperty.call(target, "plan_objective");
+      throw new ControlInputError(
+        "invalid_payload",
+        hasPersistedObjective
+          ? "current Canvas persisted user objective is invalid"
+          : "current Canvas has no persisted user objective",
+        "plan_objective",
+      );
+    }
+    if (objective.input_sha256 !== taskInputSha256(row.title, row.target_json)) {
+      throw new ControlInputError("plan_stale_revision", "persisted user objective does not match the current Canvas input", "plan_objective.input_sha256");
+    }
+    return projectPlanObjective(objective);
+  },
   loadPlanGap: (jobId,canvasId,input)=>queryPlanGap(sql,jobId,canvasId,input),
   async loadCanvas(canvasId) {
     return loadCanvasGraph(canvasId);
@@ -524,6 +581,7 @@ export function projectOverview(graph: CanvasGraph): {
   const hints = graph.nodes.filter((node) => node.node_type === "human").slice(-4).map((hint) => humanHintProjection(hint));
   const item = {
     goal: short(graph.goal, 240),
+    plan_objective: planObjectiveReadHandle(graph.target),
     target: stripSecrets({
       kind: graph.promptTarget.kind ?? null,
       title: short(graph.promptTarget.title, 120),
@@ -689,14 +747,36 @@ export async function executeGraphQuery(input: {
     }, true));
   }
 
-  const graph = await store.loadCanvas(input.canvasId);
-  if (parsed.data.kind==='plan_gap' && !store.loadPlanGap) throw new PlatformRuntimeHandlerError("OPERATION_REJECTED","Plan gap reader is unavailable",{statusCode:422,errorCode:"invalid_payload",retryable:false});
-  const projection = parsed.data.kind==='plan_gap' ? await store.loadPlanGap!(input.jobId,input.canvasId,parsed.data).catch(error=>{
-    if (error instanceof ControlInputError) throw new PlatformRuntimeHandlerError('OPERATION_REJECTED',error.message,{statusCode:error.retryable?422:409,errorCode:error.code,retryable:error.retryable,path:error.path});
+  const planObjective = parsed.data.kind === "plan_objective";
+  if (planObjective && !store.loadPlanObjective) {
+    throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", "Plan objective reader is unavailable", {
+      statusCode: 422, errorCode: "invalid_payload", retryable: false,
+    });
+  }
+  const graph = planObjective ? null : await store.loadCanvas(input.canvasId);
+  if (parsed.data.kind === "plan_gap" && !store.loadPlanGap) {
+    throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", "Plan gap reader is unavailable", {
+      statusCode: 422, errorCode: "invalid_payload", retryable: false,
+    });
+  }
+  const mapReaderError = (error: unknown): never => {
+    if (error instanceof ControlInputError) {
+      throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", error.message, {
+        statusCode: error.retryable ? 422 : 409,
+        errorCode: error.code,
+        retryable: error.retryable,
+        path: error.path,
+      });
+    }
     throw error;
-  }) : projectKind(graph, parsed.data);
+  };
+  const projection = planObjective
+    ? await store.loadPlanObjective!(input.jobId, input.canvasId).catch(mapReaderError)
+    : parsed.data.kind === "plan_gap"
+      ? await store.loadPlanGap!(input.jobId, input.canvasId, parsed.data).catch(mapReaderError)
+      : projectKind(graph!, parsed.data);
   const membership = new Set(
-    graph.nodes
+    (graph?.nodes ?? [])
       .filter((node) => node.node_type === "root" || node.node_type === "fact" || node.node_type === "finding")
       .map((node) => node.id),
   );

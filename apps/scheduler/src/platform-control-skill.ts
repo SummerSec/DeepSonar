@@ -18,9 +18,16 @@ description: 使用受治理的 DeepSonar Job 控制 API 提交运行提案、�
 
 ## 有界 Plan 决策
 
-plan_gap 的 supplementation_execution 只描述已关联的一次补证 Job/Attempt，不覆盖整个目标。not_dispatched 不等于目标未执行，succeeded 不等于判据满足或阴性；reported_blocker 只是 Agent 的结构化报告，unknown 不得重放。
-显式 submit_plan 后，可用 graph_query(kind=plan_gap,id=Plan Job UUID,ids=最多四个 Fact UUID,cursor=返回游标,limit=最多4)读取当前判据、来源、revision 与内容 SHA。沿用查询预算和本 Job 已见引用；翻页读完必要判据后才能提交 complete。plan_basis 使用返回版本，continue 仅可携带一个既有 Intent，并写明 rationale/expected_gain；每任务仅一次补证，改标题、Plan 或 Job 不能重置。全部必要判据必须具有当前有效的操作员 satisfies 评价；verified、阴性观察、模型 done 都不能单独证明完成。预算耗尽或无法确认时使用 request_human；带依据的停止使用 blocked/needs_human 与 platform_blocker.business_decision。依据过期先重读，unknown effect 禁止重放；查询预算耗尽仍可普通 request_human。
+plan_gap 的 supplementation_execution 仅描述历史一次补证关联，不覆盖整个目标。历史 v1 返回 historical=true、supplementation_remaining=0，只可读取，不能再派发或完成。succeeded 不等于判据满足或阴性；reported_blocker 只是 Agent 的结构化报告，unknown 不得重放。
+显式 submit_plan 后，可用 graph_query(kind=plan_gap,id=Plan Job UUID,ids=最多四个 Fact UUID,cursor=返回游标,limit=最多4)读取当前判据、来源、revision 与内容 SHA；v2 还返回 objective/route revision、budget 和执行停止投影。沿用查询预算和本 Job 已见引用；翻页读完必要判据后才能提交 complete。plan_basis 使用返回版本，只用于完成提案或安全人工停止；继续执行必须提交当前 v2 execution_route，不能以单步 Intent 绕过依赖与预算。全部必要判据必须具有当前有效的操作员 satisfies 评价；verified、阴性观察、模型 done 都不能单独证明完成。预算耗尽或无法确认时使用 request_human；带依据的停止使用 blocked/needs_human 与 platform_blocker.business_decision。依据过期先重读，unknown effect 禁止重放；查询预算耗尽仍可普通 request_human。
 带 plan_basis 的 submit_hub_decision/request_human（含 payload_file）成功返回持久 persisted_deferred 接纳回执，不代表派发或完成。响应丢失时 GET 对应 operation?receipt_key=<原UUID> 只读原结果；POST 完全相同的 key/输入只可恢复原活动 Attempt 的本地提案，不启动新执行。文件输入重试必须保持原路径与内容；未知效果不重放。无活动 handler 时只能读取接纳结果，不推断执行成功。
+
+### 执行型 Plan v2
+
+首次 v2 submit_plan 前，Hub 必须先通过本 Job 的 graph_query({kind:"plan_objective"}) 读取当前用户目标。只有 truncated=false 且 items[0] 为完整 tuple 时才可继续；将返回的 objective_id 原样写入 plan.objective_id 与 revision.objective_id，将 revision 原样写入 plan.objective_revision 与 revision.expected_objective_revision，并将 goal、completion、budget 原样复制到 plan；input_sha256、status、updated_at 只用于核对当前目标版本，不是严格 v2 Plan 的提交字段。不能从 YAML read handle、旧 task 文本或模型记忆猜测，也不能削弱或替换任何用户字段。该读取是完整 tuple 的唯一 bootstrap 入口；读取失败、缺失或预算不足时不得提交 Plan。
+用户先通过管理面的 PATCH /tasks/:canvasId 以 expected_revision CAS 写入 plan_objective；模型不得提交、削弱或替换 goal、completion 或 lifetime budget。新执行必须提交 plan.v=2 与 v2 execution_route revision；v1 只作为历史审计，不通过兼容 fallback 进入新执行。Scheduler 只把当前路线的 ready task 通过既有 Hub Intent/Job materializer 派发，依赖必须来自成功的当前 Attempt 以及未拒绝的 Fact/Finding Artifact/Evidence，不接受 PlanResult/done-only 作为输出。路线修订只影响尚未派发 task，已派发 task 的 SHA 必须保持不变。
+每个 task 必须声明非空且唯一的 expected_outputs。Worker 按 Scheduler 注入的输出合约，通过 emit_fact/emit_finding 的 artifact.extensions["plan.output"] 提交 v=2、objective_id、objective_revision、task_id、task_sha256 和本次覆盖的精确 expected_outputs 名称，附当前 Attempt 的留存文件 URI/SHA256。只有当前目标版本的匹配输出及 manifest/实际字节验证通过，才可释放依赖。该关联不提供语义完成权威。已成功接纳 v2 Plan/Result 的 Hub 用 mark_job_done 结束本轮，不再重复提交派发 Intent。
+生命周期预算（max_tasks、max_rounds、max_parallel_tasks、max_no_progress_rounds）跨新的 key、标题、目标修订和 Hub Job 继续累计；取消、超时、失败、unknown effect、缺失输出、依赖失败和无进展会持久停止。重启从 Canvas projection 与不可变 Job/event/Artifact/Evidence 重建，不重放未知副作用。PlanResult 的 complete 不是完成授权，仍须既有 Hub、Verify 和 Report 正向门。
 
 
 ## 传输方式

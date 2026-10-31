@@ -15,6 +15,8 @@ import { SCHEMA_VERSION } from "./schema-version.js";
 
 const V64_COMMIT = "6a8ab4ad777df0c727b82b34834f43c99fbd7843";
 const CANDIDATE_TABLES = ["project_finding_candidate_scan", "project_finding_candidate_work", "project_finding_candidate_sources", "project_finding_candidate_edges"];
+const RELATION_TABLES = ["project_finding_identity_sources", "project_finding_identity_source_revisions", "project_finding_identity_mappings", "project_finding_relation_scan", "project_finding_relation_sources", "project_finding_relation_work", "project_finding_relations"];
+const NEW_TABLES = [...CANDIDATE_TABLES, ...RELATION_TABLES];
 const CANDIDATE_INDEXES = ["project_finding_candidate_work_due", "project_finding_candidate_edges_right"];
 
 function schemaV64(): string {
@@ -29,11 +31,11 @@ function schemaV64(): string {
   assert.match(schema, /INSERT INTO schema_meta \(id, version\) VALUES \('global', 64\)/);
   assert.match(schema, /CREATE TABLE project_finding_features/);
   assert.match(schema, /CREATE INDEX findings_project_scan_idx ON findings\(project_id, id\)/);
-  for (const name of CANDIDATE_TABLES) assert.ok(!schema.includes(name));
+  for (const name of NEW_TABLES) assert.ok(!schema.includes(name));
   return schema;
 }
 async function assertNoCandidates(db: ReturnType<typeof postgres>): Promise<void> {
-  for (const name of [...CANDIDATE_TABLES, ...CANDIDATE_INDEXES]) {
+  for (const name of [...NEW_TABLES, ...CANDIDATE_INDEXES]) {
     assert.equal((await db`SELECT to_regclass(${'public.' + name})::text AS name`)[0].name, null, name);
   }
 }
@@ -142,7 +144,7 @@ export async function runCandidateSchemaRebuildFixture(testUrl: string): Promise
     const plan = await rebuildSchemaOnReservedSession(reserve, { mode: "plan", terminateScheduler: false });
     assert.equal(plan.plan.currentVersion, 64);
     assert.equal(plan.plan.targetVersion, SCHEMA_VERSION);
-    assert.deepEqual([...plan.plan.newTables].sort(), [...CANDIDATE_TABLES].sort());
+    assert.deepEqual([...plan.plan.newTables].sort(), [...NEW_TABLES].sort());
     assert.equal(plan.applied, false);
     await assertNoCandidates(db);
     assert.deepEqual(await captureHistory(db), history);
@@ -157,11 +159,11 @@ export async function runCandidateSchemaRebuildFixture(testUrl: string): Promise
     assert.equal((await db`SELECT version FROM schema_meta WHERE id='global'`)[0].version, SCHEMA_VERSION);
     assert.deepEqual(await captureHistory(db), history);
     assert.equal((await db`SELECT indisunique FROM pg_index WHERE indexrelid='findings_project_scan_idx'::regclass`)[0].indisunique, true);
-    for (const name of [...CANDIDATE_TABLES, ...CANDIDATE_INDEXES]) {
+    for (const name of [...NEW_TABLES, ...CANDIDATE_INDEXES]) {
       assert.equal((await db`SELECT to_regclass(${'public.' + name})::text AS name`)[0].name, name);
     }
     assert.deepEqual((await db`SELECT id,cursor_id FROM project_finding_candidate_scan`).map(row => ({ ...row })), [{ id: "global", cursor_id: null }]);
-    for (const name of CANDIDATE_TABLES.filter(name => !name.endsWith("_scan"))) {
+    for (const name of NEW_TABLES.filter(name => !name.endsWith("_scan"))) {
       assert.equal(Number((await db.unsafe(`SELECT count(*) AS n FROM ${name}`))[0].n), 0);
     }
     await assertCandidateConstraints(db, project, own, foreign);

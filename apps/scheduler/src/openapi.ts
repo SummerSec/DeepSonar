@@ -14,6 +14,8 @@ import { config } from "./config.js";
 import { FINDING_DISPOSITIONS } from "./finding-disposition.js";
 import { RUNTIME_IMAGE_REGISTRY_CHANNELS } from "./runtime-image-registry-contract.js";
 import { KNOWLEDGE_MANAGEMENT_OPERATIONS } from "./domains/project-knowledge/openapi.js";
+import { PROGRAM_ELIGIBILITY_OPERATIONS, PROGRAM_ELIGIBILITY_OPENAPI_SCHEMAS } from "./domains/program-eligibility/openapi.js";
+import { FINDING_RELATION_OPERATIONS, FINDING_RELATION_SCHEMAS } from "./domains/project-finding-research/relation-openapi.js";
 
 const TaskContractFeedbackSchema = {
   type: "object",
@@ -320,6 +322,8 @@ const RuntimeImageChannelUnavailableSchema = {
 
 /** 核心 API 操作表（OpenAPI paths 的单一来源） */
 const OPS: Op[] = [
+  ...PROGRAM_ELIGIBILITY_OPERATIONS,
+  ...FINDING_RELATION_OPERATIONS,
   ...KNOWLEDGE_MANAGEMENT_OPERATIONS,
   // 设备准入与管理面（#505 阶段 1）：平台是权威，写操作后把期望集合整集推给 rig broker。
   { method: "get", path: "/devices", summary: "设备登记列表（含在途租约与 rig 准入状态；不返回租约 token）", scope: "tasks:read", tags: ["Devices"] },
@@ -1294,9 +1298,9 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/tasks/{canvasId}",
-    summary: "更新任务标题与内容（不改写已冻结 Job 快照）",
+    summary: "更新任务标题、内容或授权用户目标（不改写已冻结 Job 快照）",
     description:
-      "同步 canvases.title 与 target_json.title/content/goal，并更新 root 节点标题/body。只影响后续 Hub 读图、新派生 Job 与显式重试；不改写已在跑或已结束 Job 的 agent_snapshot_json。归档任务返回 409 TASK_ARCHIVED。",
+      "同步 canvases.title 与 target_json.title/content/goal，并更新 root 节点标题/body。plan_objective 使用 expected_revision 做用户 CAS；只影响后续 Hub 读图、新派生 Job 与显式重试，不改写已在跑或已结束 Job 的 agent_snapshot_json、Attempt 或事件。归档任务返回 409 TASK_ARCHIVED。",
     scope: "tasks:write",
     tags: ["Tasks"],
     body: {
@@ -1305,13 +1309,44 @@ const OPS: Op[] = [
       properties: {
         title: { type: "string", minLength: 1, maxLength: 200 },
         content: { type: "string", minLength: 1, maxLength: 20000, description: "必要背景、边界与完成标准；同步写入 target_json.content 与 goal" },
+        plan_objective: {
+          type: "object",
+          additionalProperties: false,
+          required: ["expected_revision", "goal", "completion", "budget"],
+          description: "授权用户的目标 CAS 修订；模型不能提交或弱化此对象。历史 Job/Attempt 保持不可变。",
+          properties: {
+            expected_revision: { type: ["string", "null"], pattern: "^(?:0|[1-9][0-9]{0,19})$" },
+            goal: { type: "string", minLength: 8, maxLength: 4000 },
+            completion: {
+              type: "object",
+              additionalProperties: false,
+              required: ["mode", "description"],
+              properties: {
+                mode: { type: "string", enum: ["all_tasks", "any_blocking_resolved", "explicit_result"] },
+                description: { type: "string", minLength: 8, maxLength: 4000 },
+                required_outputs: { type: "array", maxItems: 32, items: { type: "string", minLength: 1, maxLength: 500 } },
+              },
+            },
+            budget: {
+              type: "object",
+              additionalProperties: false,
+              required: ["max_tasks", "max_rounds", "max_no_progress_rounds", "max_parallel_tasks"],
+              properties: {
+                max_tasks: { type: "integer", minimum: 1, maximum: 1000 },
+                max_rounds: { type: "integer", minimum: 1, maximum: 1000 },
+                max_no_progress_rounds: { type: "integer", minimum: 0, maximum: 100 },
+                max_parallel_tasks: { type: "integer", minimum: 1, maximum: 32 },
+              },
+            },
+          },
+        },
       },
     },
     responses: {
       "200": {
         type: "object",
         additionalProperties: false,
-        required: ["id", "title", "target_json", "has_active_jobs", "snapshot_rewritten", "message"],
+        required: ["id", "title", "target_json", "plan_objective", "has_active_jobs", "snapshot_rewritten", "message"],
         properties: {
           id: { type: "string", format: "uuid" },
           project_id: { type: "string", format: "uuid" },
@@ -1319,6 +1354,7 @@ const OPS: Op[] = [
           status: { type: "string" },
           archived_at: { type: ["string", "null"] },
           target_json: { type: "object", additionalProperties: true },
+          plan_objective: { type: ["object", "null"], additionalProperties: true, description: "当前授权用户目标及其 CAS revision" },
           has_active_jobs: { type: "boolean" },
           snapshot_rewritten: { type: "boolean", enum: [false] },
           message: { type: "string" },
@@ -1426,9 +1462,9 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/jobs/{id}/evidence/session",
-    summary: "查看 Agent CLI 原始 Session",
+    summary: "查看 Agent CLI Session",
     description:
-      "默认返回主 Session / vendor export。query path 选择 manifest 中的 main / subagent / vendor_export 文件。在线预览最多 8 MiB，超限 truncated=true；完整字节走 download。artifacts 列出全部可切换归档。",
+      "默认返回主 Session / vendor export。query path 选择 manifest 中的 main / subagent / vendor_export 文件。Pi 观察记忆先对完整归档作脱敏投影，再按 SESSION_VIEW_MAX_BYTES（见 evidence.ts）截断；含 projection 时其 bytes/sha256 描述脱敏全文，meta 仍描述不可变源归档。artifacts 列出全部可切换归档。",
     scope: "tasks:read",
     tags: ["Jobs"],
     query: {
@@ -1438,8 +1474,8 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/jobs/{id}/evidence/session/download",
-    summary: "下载 Agent CLI 原始 Session",
-    description: "下载所选 Session 归档全文。query path 与查看接口相同，默认主 Session。",
+    summary: "下载 Agent CLI Session",
+    description: "下载所选 Session 全文。query path 与查看接口相同，默认主 Session。Pi 观察记忆按与预览相同的规则脱敏，不改写源归档或 manifest。发生投影时返回 x-deepsonar-session-projection=pi-memory-redacted 和描述实际下载字节的 Content-Digest；原始来源哈希仍见 manifest。",
     scope: "tasks:read",
     tags: ["Jobs"],
     query: {
@@ -3300,7 +3336,9 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         },
       },
       schemas: {
+        ...FINDING_RELATION_SCHEMAS,
         Error: ErrorSchema,
+        ...PROGRAM_ELIGIBILITY_OPENAPI_SCHEMAS,
         DashboardStatusBucket: {
           type: "object",
           additionalProperties: false,

@@ -33,7 +33,7 @@ function contentType(event: Record<string, unknown> | undefined): unknown {
   return message?.content?.[0]?.type;
 }
 
-function fakeSandbox(): {
+function fakeSandbox(imageGuardExitCode = 0): {
   host: never;
   commands: string[];
   envs: Record<string, string>[];
@@ -55,7 +55,7 @@ function fakeSandbox(): {
     },
     run: async (command: string) => {
       runCommands.push(command);
-      return { exitCode: 0, stdout: "", stderr: "" } as never;
+      return { exitCode: command.startsWith("node -e ") ? imageGuardExitCode : 0, stdout: "", stderr: "" } as never;
     },
     uploadFile: async (content: string, path: string) => {
       uploads.push({ path, content });
@@ -122,6 +122,30 @@ test("内置注册表明确、不可变且能力完整", () => {
   assert.doesNotMatch(runtimeAgent, /DEFAULT_SEMANTIC_TOOL_EVENTS/);
   assert.doesNotMatch(runtimeAgent, /semanticToolEvents/);
   assert.match(runtimeAgent, /key === "controlMcp" && entry !== true/);
+});
+
+test("Pi checks installed memory files before starting or resuming RPC", async () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const context = {
+    env: {}, cwd: "/workspace", input: "Read the authorized task scope",
+    mcpConfigPath: "/workspace/.deepsonar/mcp.json",
+    piExtensions: ["/workspace/.deepsonar-home/.pi/agent/extensions/pi-observational-memory.ts"],
+  };
+  const valid = fakeSandbox();
+  await adapter.start({ ...context, host: valid.host });
+  assert.equal(valid.runCommands.length, 1);
+  assert.match(valid.runCommands[0]!, /^node -e /);
+  assert.match(valid.commands[0]!, /^pi --mode rpc /);
+  for (const resume of [false, true]) {
+    const missing = fakeSandbox(78);
+    const supplied = { ...context, host: missing.host, sessionId: "existing", sessionFile: "/workspace/session.jsonl" };
+    await assert.rejects(resume ? adapter.resume(supplied) : adapter.start(supplied), /PI_OM_RUNTIME_IMAGE_CONTENT_INVALID/);
+    assert.equal(missing.commands.length, 0, "a missing plugin or wrapper cannot start Pi or send a model request");
+  }
+  const disabled = fakeSandbox(78);
+  await adapter.start({ ...context, host: disabled.host, piExtensions: [] });
+  assert.equal(disabled.runCommands.length, 0);
+  assert.equal(disabled.commands.length, 1);
 });
 
 test("applyRuntimeOutput keeps session identity from CLI JSONL", () => {
@@ -432,11 +456,11 @@ test("Pi 默认关闭扩展，受治理扩展才通过显式路径加载", async
   assert.match(fake.commands[0] ?? "", /--no-extensions/);
   assert.doesNotMatch(fake.commands[0] ?? "", /--append-system-prompt/);
   assert.match(fake.commands[0] ?? "", /-e '\/workspace\/\.deepsonar-home\/\.pi\/agent\/extensions\/deepsonar-control\.mjs'/);
-  assert.throws(
+  await assert.rejects(
     () => adapter.start({ ...context, piExtensions: ["/workspace/.pi/extensions/project.mjs"] }),
     /PI_EXTENSION_PATH_INVALID/,
   );
-  assert.throws(
+  await assert.rejects(
     () => adapter.start({ ...context, piExtensions: ["/opt/deepsonar/pi-extensions/node_modules/pi-web-access/index.ts"] }),
     /PI_EXTENSION_PATH_INVALID/,
   );
@@ -812,6 +836,46 @@ for (const record of [
     assert.equal(adapter.decodeOutput({ type: "agent_settled" }, state)[0]?.is_error, true);
   });
 }
+
+test("Pi explicitly marked OM worker quota failure degrades without failing the Job", () => {
+  const state = {};
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  assert.deepEqual(adapter.decodeOutput({
+    type: "message_end",
+    message: { role: "custom", customType: "deepsonar.om.status", content: "Worker unavailable",
+      details: { code: "PI_OM_WORKER_QUOTA_EXHAUSTED", fallback: "native_compaction" } },
+  }, state), [{
+    type: "runtime.diagnostic",
+    code: "pi_om_worker_degraded",
+    failure_class: "expected_worker",
+    fallback: "native_compaction",
+  }]);
+  assert.equal(adapter.decodeOutput({ type: "agent_settled" }, state)[0]?.is_error, undefined);
+});
+
+test("Pi never downgrades extension_error, even with an expected-worker marker", () => {
+  const state = {};
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  assert.equal(adapter.decodeOutput({ type: "extension_error", error: "PI_OM_WORKER_TRANSIENT" }, state)[0]?.is_error, true);
+  assert.equal(adapter.decodeOutput({ type: "agent_settled" }, state)[0]?.is_error, true);
+});
+
+test("Pi admits the official entry_appended frame and exposes only OM ledger identity", () => {
+  const record = { type: "entry_appended", entry: { type: "custom", id: "ledger-1", parentId: "source-1",
+    customType: "om.observations.recorded", data: { observations: [{ id: "abcdef123456", content: "private memory" }] } } };
+  assert.deepEqual(parsePiJsonlRecord(JSON.stringify(record)), record);
+  assert.deepEqual(AGENT_CLI_RUNTIME_ADAPTERS.pi.decodeOutput(record, {}), [{ type: "runtime.diagnostic",
+    code: "pi_om_entry_appended", custom_type: "om.observations.recorded", entry_id: "ledger-1" }]);
+});
+
+test("Pi OM permission/protocol/unknown-effect failures remain sticky hard failures", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  for (const error of ["PI_OM_PERMISSION_DENIED", "PI_OM_PROTOCOL_CORRUPTION", "PI_OM_UNKNOWN_EFFECT"]) {
+    const state = {};
+    assert.equal(adapter.decodeOutput({ type: "extension_error", error }, state)[0]?.is_error, true);
+    assert.equal(adapter.decodeOutput({ type: "agent_settled" }, state)[0]?.is_error, true);
+  }
+});
 
 
 test("DSH Docker smoke uses the production allowlisted profile tree", async () => {

@@ -22,6 +22,7 @@ import {
   UNKNOWN_PROVIDER_ERROR,
 } from "./credentials.js";
 import { sql } from "./db.js";
+import { revokeJobTokensInTransaction } from "./gateway-token-revocation.js";
 import { inc } from "./metrics.js";
 import { appendOtlpEnvelope } from "./evidence.js";
 import { extractBaseUrlFromSettings } from "./provider-settings.js";
@@ -38,9 +39,28 @@ import {
 import { beginEffect, markEffectUnknown, settleEffect } from "./domains/job-attempt/index.js";
 import { admitGatewayRepair, boundRepairOutput, readJobTokenAllowance, RepairTokenBudgetError } from "./domains/event-ingestion/repair-token-budget.js";
 import { createRepairUsageScanner } from "./gateway-repair-usage.js";
+import {
+  assertObservationalMemoryProvider,
+  assertObservationalMemoryFrozenJobModel,
+  assertObservationalMemoryRequestScope,
+  GATEWAY_WORKLOADS,
+  GatewayWorkloadPolicyError,
+  isKnownObservationalMemoryPreRequestFailure,
+  resolveObservationalMemoryBudget,
+  resolveObservationalMemoryGatewayScope,
+  type GatewayWorkload,
+} from "./gateway-om-budget.js";
+import { observationalMemoryConfig, parseFrozenPiExtensions } from "./pi-extensions.js";
 
 const JOB_ACTIVE = ["pending", "claimed", "provisioning", "running", "waiting_human"];
 const JOB_TOKEN_RE = /^deepsonarjob_([0-9a-f]{8})_[A-Za-z0-9_-]{16,}$/;
+export { GATEWAY_WORKLOADS } from "./gateway-om-budget.js";
+export type { GatewayWorkload } from "./gateway-om-budget.js";
+
+function gatewayWorkload(value: unknown): GatewayWorkload {
+  if ((GATEWAY_WORKLOADS as readonly unknown[]).includes(value)) return value as GatewayWorkload;
+  throw new Error("unknown_gateway_workload");
+}
 
 function headerString(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return typeof value[0] === "string" ? value[0].trim() : "";
@@ -153,8 +173,8 @@ export class GatewayUpstreamUnreachableError extends Error {
   readonly retryReasons: GatewayRetryReason[];
   readonly reason: GatewayRetryReason;
 
-  constructor(reason: GatewayRetryReason, attempts: number, retryReasons: GatewayRetryReason[]) {
-    super("上游不可达");
+  constructor(reason: GatewayRetryReason, attempts: number, retryReasons: GatewayRetryReason[], cause?: unknown) {
+    super("上游不可达", cause === undefined ? undefined : { cause });
     this.name = "GatewayUpstreamUnreachableError";
     this.reason = reason;
     this.attempts = attempts;
@@ -267,12 +287,12 @@ export async function fetchGatewayUpstream(
     } catch (error) {
       const reason: GatewayRetryReason = isGatewayTimeoutError(error) ? "timeout" : "network";
       if (attempts >= maxAttempts) {
-        throw new GatewayUpstreamUnreachableError(reason, attempts, retryReasons);
+        throw new GatewayUpstreamUnreachableError(reason, attempts, retryReasons, error);
       }
       const remainingMs = request.jobDeadlineMs == null ? Number.POSITIVE_INFINITY : request.jobDeadlineMs - now();
       const delayMs = gatewayRetryDelayMs(retryReasons.length + 1, random, options.retryBaseDelayMs, options.retryMaxDelayMs);
       if (remainingMs <= delayMs) {
-        throw new GatewayUpstreamUnreachableError(reason, attempts, retryReasons);
+        throw new GatewayUpstreamUnreachableError(reason, attempts, retryReasons, error);
       }
       retryReasons.push(reason);
       await sleep(delayMs);
@@ -312,34 +332,115 @@ export async function mintJobToken(input: {
   maxRequests?: number;
   maxTokens?: number | null;
   ttlSec?: number;
+  workload?: GatewayWorkload;
 }): Promise<{ plaintext: string; id: string }> {
   const prefix = randomBytes(4).toString("hex");
   const secret = randomBytes(24).toString("base64url");
   const plaintext = `deepsonarjob_${prefix}_${secret}`;
   const ttl = input.ttlSec ?? config.gateway.tokenTtlSec;
-  const maxRequests = input.maxRequests ?? config.gateway.maxRequests;
-  const maxTokens = input.maxTokens ?? 0;
+  const workload = input.workload ?? "main";
+  if (!(GATEWAY_WORKLOADS as readonly unknown[]).includes(workload)) throw new RangeError("unsupported workload");
+  let maxRequests = input.maxRequests ?? config.gateway.maxRequests;
+  let maxTokens = input.maxTokens ?? 0;
   if (!Number.isSafeInteger(maxRequests) || maxRequests < 0 || maxRequests > 1_000_000) {
     throw new RangeError("maxRequests must be an integer between 0 (unlimited) and 1000000");
   }
   if (!Number.isSafeInteger(maxTokens) || maxTokens < 0) {
     throw new RangeError("maxTokens must be a nonnegative safe integer (0 is unlimited)");
   }
-  const [row] = await sql`
+  return sql.begin(async (tx) => {
+  let requestTotalLimit = 0;
+  let workloadMaxTokens: number | null = null;
+  let allowedModels = input.allowedModels ?? [];
+  let expectedProvider: string | null = null;
+  let expectedModel: string | null = null;
+  let expectedRoute: string | null = null;
+
+  // OM scope is derived from immutable Job state and the Credential row.
+  // Mint arguments cannot enlarge the model, route, or workload budget.
+  const [job] = await tx`
+    SELECT project_id, agent_snapshot_json, status
+    FROM jobs
+    WHERE id = ${input.jobId}
+    FOR UPDATE`;
+  if (!job) throw new Error("JOB_NOT_FOUND");
+  if (String(job.project_id) !== input.projectId) throw new Error("JOB_PROJECT_SCOPE_MISMATCH");
+  if (!JOB_ACTIVE.includes(String(job.status))) throw new Error("JOB_INACTIVE");
+  const snapshot = job.agent_snapshot_json && typeof job.agent_snapshot_json === "object" && !Array.isArray(job.agent_snapshot_json)
+    ? job.agent_snapshot_json as Record<string, unknown>
+    : {};
+  const frozen = parseFrozenPiExtensions(snapshot.pi_extensions);
+  const observationalMemory = observationalMemoryConfig(frozen);
+  if (observationalMemory) {
+    if (snapshot.agent_cli !== "pi") {
+      throw new Error("PI_OM_AGENT_CLI_SCOPE_MISMATCH");
+    }
+    const frozenCredentialId = typeof snapshot.credential_id === "string" ? snapshot.credential_id : "";
+    if (!frozenCredentialId || frozenCredentialId !== input.credentialId) {
+      throw new Error("JOB_CREDENTIAL_SCOPE_MISMATCH");
+    }
+    assertObservationalMemoryFrozenJobModel({
+      workload: "observational_memory",
+      frozenJobModel: snapshot.model,
+      sourceModel: observationalMemory.source_model,
+    });
+    const frozenKnobs = snapshot.runtime_knobs && typeof snapshot.runtime_knobs === "object" && !Array.isArray(snapshot.runtime_knobs)
+      ? snapshot.runtime_knobs as Record<string, unknown>
+      : {};
+    const plan = resolveObservationalMemoryBudget({
+      config: observationalMemory,
+      jobTokenMaxRequests: frozenKnobs.job_token_max_requests,
+    });
+    requestTotalLimit = plan.total_requests;
+    maxRequests = workload === "main" ? plan.main_requests : plan.background_requests;
+    if (workload === "observational_memory") {
+      const scope = resolveObservationalMemoryGatewayScope({
+        config: observationalMemory,
+        settingsConfig: snapshot.settings_config_json,
+        configFiles: snapshot.config_files,
+      });
+      const [credential] = await tx`SELECT kind, provider, status FROM credentials WHERE id = ${input.credentialId}`;
+      if (!credential || credential.status !== "active") throw new Error("PI_OM_CREDENTIAL_INACTIVE");
+      const projection = projectCredentialProvider(String(credential.kind), String(credential.provider));
+      if (!projection.provider_valid) throw new Error(UNKNOWN_PROVIDER_ERROR);
+      const frozenCredentialProvider = typeof snapshot.credential_provider === "string"
+        ? snapshot.credential_provider.trim()
+        : "";
+      if (!frozenCredentialProvider || frozenCredentialProvider !== projection.provider) {
+        throw new Error("JOB_CREDENTIAL_PROVIDER_SCOPE_MISMATCH");
+      }
+      expectedProvider = projection.provider;
+      expectedModel = scope.model;
+      expectedRoute = scope.route;
+      allowedModels = [scope.model];
+      workloadMaxTokens = plan.background_max_tokens;
+      maxTokens = 0;
+    }
+  } else if (workload === "observational_memory") {
+    throw new Error("PI_OM_NOT_IN_FROZEN_SNAPSHOT");
+  }
+
+  const [row] = await tx`
     INSERT INTO job_tokens ${sql({
       job_id: input.jobId,
       project_id: input.projectId,
       credential_id: input.credentialId,
       token_prefix: prefix,
       token_hash: hashJobToken(plaintext),
-      allowed_models: (input.allowedModels ?? []) as never,
+      allowed_models: allowedModels as never,
       max_requests: maxRequests,
       max_tokens: maxTokens === 0 ? null : maxTokens,
+      workload,
+      request_total_limit: requestTotalLimit,
+      workload_max_tokens: workloadMaxTokens,
+      expected_provider: expectedProvider,
+      expected_model: expectedModel,
+      expected_route: expectedRoute,
       expires_at: new Date(Date.now() + ttl * 1000),
     })}
     RETURNING id`;
   // 铸造记录（无 HTTP 上下文，直接写行；actor = system）
-  await sql`
+  await tx`
     INSERT INTO audit_logs ${sql({
       actor_type: "system",
       actor_id: "executor",
@@ -350,33 +451,26 @@ export async function mintJobToken(input: {
       after_json: sql.json({
         job_id: input.jobId,
         credential_id: input.credentialId,
-        allowed_models: input.allowedModels ?? [],
+        allowed_models: allowedModels,
         max_requests: maxRequests,
+        workload,
+        request_total_limit: requestTotalLimit,
+        workload_max_tokens: workloadMaxTokens,
+        expected_provider: expectedProvider,
+        expected_model: expectedModel,
+        expected_route: expectedRoute,
       } as never),
       result: "ok",
     })}`;
   return { plaintext, id: row.id as string };
+  });
 }
 
 /** Job 终态吊销（succeeded/failed/cancelled/timeout/orphan 全部调用点走这里） */
 export async function revokeJobTokens(jobId: string, reason: string): Promise<void> {
-  const revoked = await sql`
-    UPDATE job_tokens SET status = 'revoked', revoked_at = now(), revoke_reason = ${reason}
-    WHERE job_id = ${jobId} AND status = 'active'
-    RETURNING id, project_id`;
-  for (const r of revoked) {
-    await sql`
-      INSERT INTO audit_logs ${sql({
-        actor_type: "system",
-        actor_id: "scheduler",
-        action: "job_token.revoke",
-        project_id: r.project_id as string,
-        resource_type: "job_token",
-        resource_id: r.id as string,
-        after_json: sql.json({ job_id: jobId, reason } as never),
-        result: "ok",
-      })}`;
-  }
+  // SAFETY: the revoker uses only tagged queries and json; TransactionSql
+  // implements both. The shared executor type also includes pool-only methods.
+  await sql.begin((tx) => revokeJobTokensInTransaction(tx as unknown as typeof sql, jobId, reason));
 }
 
 /** 按 provider 注入真实认证头（与 credential-test.ts 行为一致） */
@@ -578,6 +672,7 @@ type GatewayUsageLedgerInput = {
   jobId: string;
   projectId: string;
   attemptId: string;
+  jobTokenId: string;
   effectId: string;
   requestNo: number;
   provider: string;
@@ -587,6 +682,7 @@ type GatewayUsageLedgerInput = {
   usage: UsageBreakdown;
   status: "settled" | "unknown" | "not_reported";
   source: "gateway_response" | "gateway_stream" | "gateway_error";
+  workload: GatewayWorkload;
 };
 
 
@@ -609,12 +705,13 @@ export function extractUpstreamReportingModel(text: string): string | null {
 async function appendUsageLedger(
   db: typeof sql,
   input: GatewayUsageLedgerInput,
-): Promise<void> {
-  await db`
+): Promise<boolean> {
+  const [row] = await db`
     INSERT INTO job_usage_ledger ${db({
       job_id: input.jobId,
       project_id: input.projectId,
       attempt_id: input.attemptId,
+      job_token_id: input.jobTokenId,
       effect_id: input.effectId,
       request_no: input.requestNo,
       provider: input.provider.slice(0, 100),
@@ -629,18 +726,24 @@ async function appendUsageLedger(
       adjustment_tokens: input.usage.total - input.usage.input - input.usage.output,
       settlement_status: input.status,
       source: input.source,
+      workload: input.workload,
     })}
-    ON CONFLICT (attempt_id, effect_id) DO NOTHING`;
+    ON CONFLICT (attempt_id, effect_id) DO NOTHING
+    RETURNING id`;
+  return Boolean(row);
 }
 
 async function trySettleGatewayUsage(
   input: GatewayUsageLedgerInput,
   effectStatus: "settled" | "unknown",
   error?: unknown,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await sql.begin(async (tx) => {
-      await appendUsageLedger(tx as unknown as typeof sql, input);
+      // Serialize against admission and revocation. An already-started
+      // request still owns a durable usage record after Job termination.
+      await tx`SELECT id FROM jobs WHERE id = ${input.jobId} FOR UPDATE`;
+      const ledgerInserted = await appendUsageLedger(tx as unknown as typeof sql, input);
       if (effectStatus === "unknown") {
         await markEffectUnknown(tx as unknown as typeof sql, input.attemptId, input.effectId, error ?? "模型请求结果无法确认");
       } else {
@@ -652,19 +755,471 @@ async function trySettleGatewayUsage(
             source: input.source,
           },
         });
+        if (ledgerInserted && input.usage.total > 0) {
+          await tx`
+            UPDATE job_tokens
+               SET used_tokens = used_tokens + ${input.usage.total}
+             WHERE id = ${input.jobTokenId}`;
+        }
       }
     });
+    return true;
   } catch (settlementError) {
     // 响应已经可能发送给 Worker，不能把账本写失败变成未处理异常；
-    // 额度缓存仍按已观察用量更新，同时保留低基数指标和脱敏错误日志，
-    // 由运维根据 effect_id 对账，不假装账本已成功。
+    // 事务失败会留下未结算 effect，后续 OM 请求因此 fail closed，
+    // 同时保留低基数指标和脱敏错误日志，不能假装账本已成功。
     inc("deepsonar_usage_ledger_write_failures_total", { source: input.source });
     console.error(`[gateway] 模型请求结算失败 effect=${input.effectId}:`, settlementError instanceof Error ? settlementError.message : String(settlementError));
+    return false;
+  }
+}
+
+/**
+ * Close an OM reservation only when this transaction proves that the matching
+ * request effect is still pending and has no competing usage row.  A settled
+ * zero ledger is the durable known-no-effect record; request allocation is
+ * intentionally not refunded.
+ */
+async function trySettleGatewayNoExternalUsage(input: GatewayUsageLedgerInput): Promise<boolean> {
+  try {
+    await sql.begin(async (tx) => {
+      await tx`SELECT id FROM jobs WHERE id = ${input.jobId} FOR UPDATE`;
+      const [effect] = await tx`
+        SELECT job_id, effect_kind, status
+        FROM job_attempt_effects
+        WHERE attempt_id = ${input.attemptId} AND effect_id = ${input.effectId}
+        FOR UPDATE`;
+      if (!effect || String(effect.job_id) !== input.jobId || effect.effect_kind !== "gateway_model_request"
+        || effect.status !== "effect_pending") {
+        throw new Error("gateway no-effect settlement reservation mismatch");
+      }
+      const [existingLedger] = await tx`
+        SELECT id
+        FROM job_usage_ledger
+        WHERE attempt_id = ${input.attemptId} AND effect_id = ${input.effectId}
+        FOR UPDATE`;
+      if (existingLedger) throw new Error("gateway no-effect settlement already has a ledger row");
+      if (!await appendUsageLedger(tx as unknown as typeof sql, input)) {
+        throw new Error("gateway no-effect settlement ledger insert was not durable");
+      }
+      const [zeroLedger] = await tx`
+        SELECT job_id, project_id, attempt_id, job_token_id, effect_id, request_no,
+               provider, model, input_tokens, output_tokens, total_tokens,
+               cache_read_input_tokens, cache_creation_input_tokens, adjustment_tokens,
+               settlement_status, source, workload
+        FROM job_usage_ledger
+        WHERE attempt_id = ${input.attemptId} AND effect_id = ${input.effectId}
+        FOR UPDATE`;
+      if (!zeroLedger || String(zeroLedger.job_id) !== input.jobId || String(zeroLedger.project_id) !== input.projectId
+        || String(zeroLedger.attempt_id) !== input.attemptId || String(zeroLedger.job_token_id) !== input.jobTokenId
+        || zeroLedger.effect_id !== input.effectId || Number(zeroLedger.request_no) !== input.requestNo
+        || zeroLedger.provider !== input.provider || zeroLedger.model !== input.model
+        || [zeroLedger.input_tokens, zeroLedger.output_tokens, zeroLedger.total_tokens,
+          zeroLedger.cache_read_input_tokens, zeroLedger.cache_creation_input_tokens, zeroLedger.adjustment_tokens]
+          .some((value) => Number(value) !== 0)
+        || zeroLedger.settlement_status !== "settled" || zeroLedger.source !== "gateway_error"
+        || zeroLedger.workload !== "observational_memory") {
+        throw new Error("gateway no-effect settlement ledger contents were not zero and settled");
+      }
+      await settleEffect(tx as unknown as typeof sql, input.attemptId, input.effectId, {
+        status: "settled",
+        outcome: {
+          result: "never_started",
+          external_effect: false,
+          response_status: "not_started",
+          total_tokens: 0,
+          source: input.source,
+        },
+      });
+      const [settled] = await tx`
+        SELECT status, settlement_json
+        FROM job_attempt_effects
+        WHERE attempt_id = ${input.attemptId} AND effect_id = ${input.effectId}`;
+      const settlement = settled?.settlement_json as Record<string, unknown> | undefined;
+      if (!settled || settled.status !== "settled" || settlement?.result !== "never_started"
+        || settlement.external_effect !== false) {
+        throw new Error("gateway no-effect settlement did not close the reservation");
+      }
+    });
+    return true;
+  } catch (settlementError) {
+    inc("deepsonar_usage_ledger_write_failures_total", { source: input.source });
+    console.error(`[gateway] known no-effect settlement failed effect=${input.effectId}:`,
+      settlementError instanceof Error ? settlementError.message : "unknown settlement error");
+    return false;
+  }
+}
+
+function isReservedGatewayTransientShape(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const error = record.error && typeof record.error === "object" && !Array.isArray(record.error)
+    ? record.error as Record<string, unknown>
+    : record;
+  return error.type === "gateway_transient" && error.effect_status === "not_started";
+}
+
+function isReservedGatewayTransientRecord(value: unknown): boolean {
+  if (isReservedGatewayTransientShape(value)) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const error = record.error && typeof record.error === "object" && !Array.isArray(record.error)
+    ? record.error as Record<string, unknown>
+    : null;
+  const message = typeof error?.message === "string" ? error.message.trim() : "";
+  if (!message) return false;
+  const body = message.replace(/^503(?:\s+|:\s*)/u, "");
+  try {
+    return isReservedGatewayTransientShape(JSON.parse(body) as unknown);
+  } catch {
+    return false;
+  }
+}
+
+function isGatewayApiErrorFrame(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (record.type === "error") return true;
+  const error = record.error;
+  if (error === null || typeof error !== "object" || Array.isArray(error)) return false;
+  const nested = error as Record<string, unknown>;
+  return typeof nested.type === "string" || typeof nested.code === "string" || typeof nested.message === "string";
+}
+
+const MAX_GATEWAY_ERROR_FRAME_BYTES = 1_048_576;
+
+function scanGatewaySseFrames(text: string, visit: (eventName: string, data: string) => boolean): boolean {
+  let eventName = "";
+  let data: string[] = [];
+  let frameBytes = 0;
+  const flush = (): boolean => {
+    const currentEvent = eventName;
+    const currentData = data;
+    eventName = "";
+    data = [];
+    frameBytes = 0;
+    if (currentEvent === "" && currentData.length === 0) return false;
+    return visit(currentEvent, currentData.join("\n"));
+  };
+  for (const line of text.split(/\r\n|\n|\r/u)) {
+    if (line === "") {
+      if (flush()) return true;
+      continue;
+    }
+    if (line.startsWith(":")) continue;
+    if (line.startsWith("event:")) {
+      eventName = line.slice(6).trim();
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      const value = line.slice(5).replace(/^ /u, "");
+      frameBytes += Buffer.byteLength(value, "utf8");
+      if (frameBytes <= MAX_GATEWAY_ERROR_FRAME_BYTES) data.push(value);
+    }
+  }
+  return flush();
+}
+
+/** Detect a structured provider API error event without scanning generated text. */
+export function containsGatewayApiErrorFrame(body: string | Uint8Array, isSse = false): boolean {
+  const text = typeof body === "string" ? body : Buffer.from(body).toString("utf8");
+  if (!isSse) {
+    try {
+      return isGatewayApiErrorFrame(JSON.parse(text) as unknown);
+    } catch {
+      return false;
+    }
+  }
+  return scanGatewaySseFrames(text, (eventName, payload) => {
+    if (eventName === "error") return true;
+    if (!payload || Buffer.byteLength(payload, "utf8") > MAX_GATEWAY_ERROR_FRAME_BYTES) return false;
+    try {
+      return isGatewayApiErrorFrame(JSON.parse(payload) as unknown);
+    } catch {
+      return false;
+    }
+  });
+}
+
+function isReservedGatewayFailureCarrier(message: string): boolean {
+  if (message === "429 request quota exhausted" || message === "429 observational-memory token cap exhausted") return true;
+  const match = /^(\d{3})(?:\s+|:\s*)([\s\S]*)$/u.exec(message);
+  if (!match) return false;
+  const status = Number(match[1]);
+  if (status !== 429 && status !== 503) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(match[2]!);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const record = parsed as Record<string, unknown>;
+  const detail = record.error && typeof record.error === "object" && !Array.isArray(record.error)
+    ? record.error as Record<string, unknown>
+    : record;
+  const code = detail.type ?? detail.code ?? record.error_code;
+  if (status === 503) return code === "gateway_transient" && detail.effect_status === "not_started";
+  return code === "quota_exhausted" || code === "workload_token_cap_exhausted";
+}
+
+function isAnthropicRefusalFailureFrame(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const delta = record.type === "message_delta" && record.delta && typeof record.delta === "object"
+    && !Array.isArray(record.delta) ? record.delta as Record<string, unknown> : null;
+  const refusal = record.type === "message"
+    ? record
+    : delta?.stop_reason === "refusal" ? delta : null;
+  if (!refusal || refusal.stop_reason !== "refusal") return false;
+  const details = refusal.stop_details && typeof refusal.stop_details === "object" && !Array.isArray(refusal.stop_details)
+    ? refusal.stop_details as Record<string, unknown>
+    : null;
+  return typeof details?.explanation === "string" && isReservedGatewayFailureCarrier(details.explanation);
+}
+
+/** Reject only the protocol-native Anthropic refusal field that Pi surfaces verbatim. */
+export function containsAnthropicRefusalFailureCarrier(
+  body: string | Uint8Array,
+  isSse: boolean,
+  upstreamPath: string,
+): boolean {
+  if (!/(?:^|\/)messages(?:\/|$)/u.test(upstreamPath.replace(/^\/+/, ""))) return false;
+  const text = typeof body === "string" ? body : Buffer.from(body).toString("utf8");
+  const inspect = (_eventName: string, payload: string): boolean => {
+    if (!payload || Buffer.byteLength(payload, "utf8") > MAX_GATEWAY_ERROR_FRAME_BYTES) return false;
+    try {
+      return isAnthropicRefusalFailureFrame(JSON.parse(payload) as unknown);
+    } catch {
+      return false;
+    }
+  };
+  if (isSse) return scanGatewaySseFrames(text, inspect);
+  try {
+    return isAnthropicRefusalFailureFrame(JSON.parse(text) as unknown);
+  } catch {
+    return false;
+  }
+}
+
+/** Reject only an exact provider body that impersonates the Kernel transient envelope. */
+export function containsReservedGatewayTransientEnvelope(body: string | Uint8Array, isSse = false): boolean {
+  const text = typeof body === "string" ? body : Buffer.from(body).toString("utf8");
+  if (isSse) {
+    for (const line of text.split(/\r?\n/u)) {
+      if (!line.startsWith("data:")) continue;
+      try {
+        if (isReservedGatewayTransientRecord(JSON.parse(line.slice(5).replace(/^ /u, "")) as unknown)) return true;
+      } catch {
+        // The strict protocol scanner owns malformed/partial SSE handling.
+      }
+    }
+    return false;
+  }
+  try {
+    return isReservedGatewayTransientRecord(JSON.parse(text) as unknown);
+  } catch {
+    return false;
   }
 }
 
 function deny(reply: FastifyReply, code: number, error: string, code2: string) {
   return reply.code(code).send({ error: { type: code2, message: error } });
+}
+
+type GatewayRequestAdmission = {
+  requestNo: number;
+  effectId: string;
+  repairBudget: Awaited<ReturnType<typeof admitGatewayRepair>>;
+  singleAttempt: boolean;
+} | {
+  denied: "job_inactive" | "quota_exhausted" | "workload_usage_unknown" | "workload_usage_pending" | "workload_token_cap_exhausted";
+};
+
+/** Repair token accounting is Job-wide for legacy Jobs.  OM Jobs keep the
+ * existing repair cap on the main workload only, so background usage cannot
+ * consume the main repair reserve. */
+async function readWorkloadTokenAllowance(
+  db: typeof sql,
+  jobId: string,
+  workload: GatewayWorkload,
+  budget?: Awaited<ReturnType<typeof admitGatewayRepair>> | null,
+): Promise<number | null> {
+  const [totalLimit] = await db`
+    SELECT MIN(NULLIF(COALESCE(workload_max_tokens, max_tokens), 0)) AS cap
+    FROM job_tokens
+    WHERE job_id = ${jobId} AND workload = ${workload}`;
+  const [usage] = await db`
+    SELECT COALESCE(SUM(l.total_tokens) FILTER (WHERE l.settlement_status='settled'),0) AS total,
+           COUNT(*) FILTER (WHERE e.status='effect_pending' AND l.id IS NULL) AS pending,
+           COUNT(*) FILTER (WHERE (e.status <> 'settled' OR l.settlement_status IS DISTINCT FROM 'settled')
+             AND NOT (e.status='effect_pending' AND l.id IS NULL)) AS unresolved
+    FROM job_attempt_effects e
+    LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
+    WHERE e.job_id=${jobId} AND e.effect_kind='gateway_model_request'
+      AND COALESCE(l.workload, e.intent_json->>'workload', 'main') = ${workload}`;
+  const total = Number(usage.total), cap = Number(totalLimit.cap), unresolved = Number(usage.unresolved);
+  const pending = Number(usage.pending);
+  if (unresolved < 0 || !Number.isSafeInteger(unresolved)
+    || pending < 0 || !Number.isSafeInteger(pending)
+    || (unresolved > 0 && (workload === "observational_memory" || totalLimit.cap != null))
+    || total < 0 || !Number.isSafeInteger(total)
+    || (totalLimit.cap != null && (cap < 0 || !Number.isSafeInteger(cap)))) {
+    throw new RepairTokenBudgetError("JOB_TOKEN_USAGE_UNKNOWN", "Job token usage requires reconciliation", budget ?? undefined);
+  }
+  if (pending > 0 && (workload === "observational_memory" || totalLimit.cap != null)) {
+    throw new RepairTokenBudgetError("JOB_TOKEN_USAGE_PENDING", "Job token allowance is reserved by an unsettled request", budget ?? undefined);
+  }
+  if (totalLimit?.cap == null) return null;
+  if (total >= cap) throw new RepairTokenBudgetError("JOB_TOKEN_EXHAUSTED", "Job token allowance exhausted", budget ?? undefined);
+  return cap - total;
+}
+
+async function admitGatewayRequest(
+  tx: typeof sql,
+  input: {
+    jobId: string;
+    tokenId: string;
+    workload: GatewayWorkload;
+    attemptId: string;
+    provider: string;
+    model: string;
+    upstreamPath: string;
+    method: string;
+    gatewayInputDigest: () => string;
+    onRepairBody: (remaining: number | null, budget: Awaited<ReturnType<typeof admitGatewayRepair>>) => void;
+  },
+): Promise<GatewayRequestAdmission> {
+  const [job] = await tx`SELECT status, project_id, agent_snapshot_json FROM jobs WHERE id=${input.jobId} FOR UPDATE`;
+  if (!job || !JOB_ACTIVE.includes(String(job.status))) {
+    await tx`UPDATE job_tokens SET status='revoked', revoked_at=now(), revoke_reason=${`job_${String(job?.status ?? "missing")}`} WHERE job_id=${input.jobId} AND status='active'`;
+    return { denied: "job_inactive" };
+  }
+  const tokens = await tx`
+    SELECT id, workload, used_requests, max_requests, request_total_limit,
+           used_tokens, workload_max_tokens, status, credential_id, project_id,
+           expires_at > clock_timestamp() AS unexpired
+    FROM job_tokens
+    WHERE job_id=${input.jobId}
+    ORDER BY id
+    FOR UPDATE`;
+  const token = tokens.find((row) => String(row.id) === input.tokenId);
+  if (!token || token.status !== "active" || !token.unexpired || token.workload !== input.workload) return { denied: "quota_exhausted" };
+  const snapshot = job.agent_snapshot_json as Record<string, unknown>;
+  const omConfig = observationalMemoryConfig(parseFrozenPiExtensions(snapshot?.pi_extensions));
+  const omPlan = omConfig ? resolveObservationalMemoryBudget({
+    config: omConfig,
+    jobTokenMaxRequests: (snapshot.runtime_knobs as Record<string, unknown> | undefined)?.job_token_max_requests,
+  }) : null;
+  const omJob = omPlan !== null;
+  if (input.workload === "observational_memory") {
+    if (!omConfig || snapshot.agent_cli !== "pi") {
+      throw new GatewayWorkloadPolicyError("PI_OM_NOT_IN_FROZEN_SNAPSHOT", "observational-memory is absent from the frozen Pi Job");
+    }
+    if (String(token.project_id) !== String(job.project_id) || token.credential_id !== snapshot.credential_id) {
+      throw new GatewayWorkloadPolicyError("PI_OM_JOB_SCOPE_MISMATCH", "observational-memory token does not match its frozen Job scope");
+    }
+    assertObservationalMemoryFrozenJobModel({ workload: input.workload, frozenJobModel: snapshot.model, sourceModel: omConfig.source_model });
+    const scope = resolveObservationalMemoryGatewayScope({ config: omConfig, settingsConfig: snapshot.settings_config_json, configFiles: snapshot.config_files });
+    assertObservationalMemoryRequestScope({ workload: input.workload, requestModel: input.model, upstreamPath: input.upstreamPath,
+      expectedModel: scope.model, expectedRoute: scope.route });
+  }
+  const quotaRowsValid = tokens.every((row) => {
+    const usedRequests = Number(row.used_requests);
+    const maxRequests = Number(row.max_requests);
+    const requestTotalLimit = Number(row.request_total_limit);
+    const usedTokens = Number(row.used_tokens);
+    const workloadMaxTokens = row.workload_max_tokens == null ? null : Number(row.workload_max_tokens);
+    return Number.isSafeInteger(usedRequests) && usedRequests >= 0
+      && Number.isSafeInteger(maxRequests) && maxRequests >= 0 && maxRequests <= 1_000_000
+      && Number.isSafeInteger(requestTotalLimit) && requestTotalLimit >= 0 && requestTotalLimit <= 1_000_000
+      && Number.isSafeInteger(usedTokens) && usedTokens >= 0
+      && (workloadMaxTokens === null || (Number.isSafeInteger(workloadMaxTokens) && workloadMaxTokens >= 0));
+  });
+  if (!quotaRowsValid) return { denied: omJob ? "workload_usage_unknown" : "quota_exhausted" };
+  const finiteTotalLimits = tokens
+    .map((row) => Number(row.request_total_limit))
+    .filter((limit) => limit > 0);
+  const totalLimit = omPlan?.total_requests ?? (finiteTotalLimits.length > 0 ? Math.min(...finiteTotalLimits) : 0);
+  const totalUsed = tokens.reduce((sum, row) => sum + Number(row.used_requests), 0);
+  const workloadUsed = tokens
+    .filter((row) => row.workload === input.workload)
+    .reduce((sum, row) => sum + Number(row.used_requests), 0);
+  if (!Number.isSafeInteger(totalUsed) || !Number.isSafeInteger(workloadUsed)) {
+    return { denied: omJob ? "workload_usage_unknown" : "quota_exhausted" };
+  }
+  const workloadTokens = tokens.filter((row) => row.workload === input.workload);
+  const finiteWorkloadLimits = workloadTokens
+    .map((row) => Number(row.max_requests ?? 0))
+    .filter((limit) => Number.isSafeInteger(limit) && limit > 0);
+  const workloadLimit = omPlan
+    ? input.workload === "main" ? omPlan.main_requests : omPlan.background_requests
+    : finiteWorkloadLimits.length > 0 ? Math.min(...finiteWorkloadLimits) : 0;
+  let backgroundRemaining: number | null = null;
+  let backgroundPending = false;
+  if (input.workload === "observational_memory") {
+    try {
+      backgroundRemaining = await readWorkloadTokenAllowance(tx, input.jobId, input.workload);
+    } catch (error) {
+      if (error instanceof RepairTokenBudgetError && error.code === "JOB_TOKEN_USAGE_UNKNOWN") {
+        return { denied: "workload_usage_unknown" };
+      }
+      if (error instanceof RepairTokenBudgetError && error.code === "JOB_TOKEN_USAGE_PENDING") {
+        backgroundPending = true;
+      }
+      if (error instanceof RepairTokenBudgetError && error.code === "JOB_TOKEN_EXHAUSTED") {
+        return { denied: "workload_token_cap_exhausted" };
+      }
+      if (!backgroundPending) throw error;
+    }
+  }
+  if (totalLimit > 0 && totalUsed >= totalLimit) return { denied: "quota_exhausted" };
+  if (omJob && workloadLimit > 0 && workloadUsed >= workloadLimit) return { denied: "quota_exhausted" };
+  if (backgroundPending) return { denied: "workload_usage_pending" };
+
+  const repairBudget = input.workload === "main"
+    ? await admitGatewayRepair(tx, input.jobId, input.attemptId)
+    : null;
+  const totalRemaining = input.workload === "main" && omJob
+    ? await readWorkloadTokenAllowance(tx, input.jobId, "main", repairBudget)
+    : input.workload === "main"
+      ? await readJobTokenAllowance(tx, input.jobId, repairBudget ?? undefined)
+      : backgroundRemaining;
+  const remaining = totalRemaining === null ? repairBudget?.remaining_tokens ?? null
+    : Math.min(totalRemaining, repairBudget?.remaining_tokens ?? totalRemaining);
+  if (repairBudget) repairBudget.remaining_tokens = remaining;
+  input.onRepairBody(remaining, repairBudget);
+
+  const [requestCounter] = await tx`
+    UPDATE job_tokens
+       SET used_requests = used_requests + 1
+     WHERE id = ${input.tokenId} AND status = 'active'
+       AND (max_requests <= 0 OR used_requests < max_requests)
+       AND (request_total_limit <= 0 OR ${totalUsed} < request_total_limit)
+    RETURNING used_requests`;
+  if (!requestCounter) return { denied: "quota_exhausted" };
+  const requestNo = Number(requestCounter.used_requests);
+  const effectId = `gateway_model_request:${input.tokenId}:${requestNo}`;
+  const effectStarted = await beginEffect(tx, input.attemptId, {
+    effectId,
+    kind: "gateway_model_request",
+    inputDigest: input.gatewayInputDigest(),
+    resourceIdentity: { job_token_id: input.tokenId, request_no: requestNo },
+    intent: {
+      provider: input.provider,
+      model: input.model.slice(0, 200),
+      method: input.method,
+      workload: input.workload,
+      ...(repairBudget ? { repair_receipt_ref: repairBudget.receipt_ref, repair_reserved_tokens: repairBudget.remaining_tokens } : {}),
+    },
+  });
+  if (!effectStarted) throw new Error("Job Attempt is no longer active");
+  return {
+    requestNo,
+    effectId,
+    repairBudget,
+    singleAttempt: input.workload === "observational_memory" || repairBudget !== null || totalRemaining !== null || (omJob && workloadLimit > 0),
+  };
 }
 
 function recordGatewayRetryMetrics(
@@ -723,7 +1278,7 @@ export function registerGateway(app: FastifyInstance): void {
         });
         return deny(reply, 401, "job 已结束，token 不可用", "job_inactive");
       }
-      if (jobTokenQuotaExhausted(jt.used_requests as number, jt.max_requests as number)) {
+      if (jt.workload !== "observational_memory" && jobTokenQuotaExhausted(jt.used_requests as number, jt.max_requests as number)) {
         await sql`UPDATE job_tokens SET status = 'exhausted' WHERE id = ${jt.id} AND status = 'active'`;
         void auditGateway(req, {
           action: "gateway.denied",
@@ -738,7 +1293,31 @@ export function registerGateway(app: FastifyInstance): void {
 
       // 模型限制（仅对带 model 字段的请求体生效；fastify 已解析 JSON，重序列化转发）
       const rawBody = req.body as unknown;
+      let workload: GatewayWorkload;
+      try {
+        workload = gatewayWorkload(jt.workload);
+      } catch {
+        return deny(reply, 403, "token workload 不受支持", "unknown_workload");
+      }
       const upstreamPath = (req.params as { "*": string })["*"];
+      if (workload === "observational_memory" && req.method !== "POST") {
+        return deny(reply, 403, "observational-memory requires a JSON model POST", "FROZEN_WORKLOAD_PROTOCOL_MISMATCH");
+      }
+      const requestModel = gatewayRequestModelFromBody(rawBody);
+      try {
+        assertObservationalMemoryRequestScope({
+          workload,
+          requestModel,
+          upstreamPath,
+          expectedModel: jt.expected_model,
+          expectedRoute: jt.expected_route,
+        });
+      } catch (error) {
+        if (error instanceof GatewayWorkloadPolicyError) {
+          return deny(reply, 403, error.message, error.code);
+        }
+        throw error;
+      }
       const otlp = upstreamPath.match(/^otel\/v1\/(logs|metrics|traces)$/);
       if (req.method === "POST" && otlp) {
         try {
@@ -757,22 +1336,26 @@ export function registerGateway(app: FastifyInstance): void {
           return deny(reply, 413, error instanceof Error ? error.message : String(error), "otlp_rejected");
         }
       }
-      try {
-        assertGatewayRequestModelAllowed({
-          requestModel: gatewayRequestModelFromBody(rawBody),
-          agentSnapshot: jt.agent_snapshot_json,
-        });
-      } catch (error) {
-        if (error instanceof GatewayFrozenModelMismatchError) {
-          return reply.code(403).send({
-            error: { type: "frozen_model_mismatch", message: error.message },
-            error_code: "frozen_model_mismatch",
-            repair: error.repair,
+      if (workload !== "observational_memory") {
+        try {
+          assertGatewayRequestModelAllowed({
+            requestModel,
+            agentSnapshot: jt.agent_snapshot_json,
           });
+        } catch (error) {
+          if (error instanceof GatewayFrozenModelMismatchError) {
+            return reply.code(403).send({
+              error: { type: "frozen_model_mismatch", message: error.message },
+              error_code: "frozen_model_mismatch",
+              repair: error.repair,
+            });
+          }
+          throw error;
         }
-        throw error;
       }
-      const outboundBody = applyGatewayOutboundModelRewrite(rawBody, jt.agent_snapshot_json);
+      const outboundBody = workload === "observational_memory"
+        ? rawBody
+        : applyGatewayOutboundModelRewrite(rawBody, jt.agent_snapshot_json);
       let outboundBuf =
         outboundBody == null
           ? null
@@ -790,6 +1373,18 @@ export function registerGateway(app: FastifyInstance): void {
         return deny(reply, 502, UNKNOWN_PROVIDER_ERROR, "unknown_provider");
       }
       const safeProvider = providerProjection.provider;
+      try {
+        assertObservationalMemoryProvider({
+          workload,
+          actualProvider: safeProvider,
+          expectedProvider: jt.expected_provider,
+        });
+      } catch (error) {
+        if (error instanceof GatewayWorkloadPolicyError) {
+          return deny(reply, 403, error.message, error.code);
+        }
+        throw error;
+      }
       const secret = decryptSecret(cred as never);
       const meta = (cred.public_metadata_json ?? {}) as { base_url?: string };
       const settingsBaseUrl = extractBaseUrlFromSettings(cred.settings_config_json);
@@ -816,41 +1411,40 @@ export function registerGateway(app: FastifyInstance): void {
       // 转发（流式直通；请求数先计，token 数响应后补记）。请求序号
       // 来自同一行的原子更新，重试/并发请求不会复用 effect_id。
       const requestIntent = await sql.begin(async (tx) => {
-        const repairBudget = await admitGatewayRepair(tx as unknown as typeof sql, String(jt.job_id), gatewayAttemptId);
-        const totalRemaining = await readJobTokenAllowance(tx as unknown as typeof sql, String(jt.job_id), repairBudget ?? undefined);
-        const remaining = totalRemaining === null ? repairBudget?.remaining_tokens ?? null
-          : Math.min(totalRemaining, repairBudget?.remaining_tokens ?? totalRemaining);
-        if (repairBudget) repairBudget.remaining_tokens = remaining;
-        if (repairBudget || remaining !== null) outboundBuf = Buffer.from(JSON.stringify(boundRepairOutput(outboundBody, upstreamPath, remaining)), "utf8");
-        const gatewayInputDigest = createHash("sha256").update(outboundBuf ?? Buffer.alloc(0)).digest("hex");
-        const [requestCounter] = await tx`
-          UPDATE job_tokens
-             SET used_requests = used_requests + 1
-           WHERE id = ${jt.id} AND status = 'active' AND (max_requests <= 0 OR used_requests < max_requests)
-           RETURNING used_requests`;
-        if (!requestCounter) return null;
-        const requestNo = Number(requestCounter.used_requests);
-        const effectId = `gateway_model_request:${String(jt.id)}:${requestNo}`;
-        const effectStarted = await beginEffect(tx as unknown as typeof sql, gatewayAttemptId, {
-          effectId,
-          kind: "gateway_model_request",
-          inputDigest: gatewayInputDigest,
-          resourceIdentity: { job_token_id: String(jt.id), request_no: requestNo },
-          intent: { provider: safeProvider, model: model.slice(0, 200), method: req.method,
-            ...(repairBudget ? { repair_receipt_ref: repairBudget.receipt_ref,
-              repair_reserved_tokens: repairBudget.remaining_tokens } : {}) },
+        return admitGatewayRequest(tx as unknown as typeof sql, {
+          jobId: String(jt.job_id),
+          tokenId: String(jt.id),
+          workload,
+          attemptId: gatewayAttemptId,
+          provider: safeProvider,
+          model,
+          upstreamPath,
+          method: req.method,
+          // Repair output may be bounded by onRepairBody.  Hash the final
+          // outbound bytes so the effect records the request actually sent.
+          gatewayInputDigest: () => createHash("sha256").update(outboundBuf ?? Buffer.alloc(0)).digest("hex"),
+          onRepairBody: (remaining, repairBudget) => {
+            if (repairBudget || remaining !== null) {
+              outboundBuf = Buffer.from(JSON.stringify(boundRepairOutput(outboundBody, upstreamPath, remaining)), "utf8");
+            }
+          },
         });
-        if (!effectStarted) throw new Error("Job 的活动 Attempt 已结束");
-        return { requestNo, effectId, repairBudget, singleAttempt: repairBudget !== null || totalRemaining !== null };
       }).catch(error => {
-        if (error instanceof RepairTokenBudgetError) return error;
+        if (error instanceof RepairTokenBudgetError || error instanceof GatewayWorkloadPolicyError) return error;
         throw error;
       });
+      if (requestIntent instanceof GatewayWorkloadPolicyError) return deny(reply, 403, requestIntent.message, requestIntent.code);
       if (requestIntent instanceof RepairTokenBudgetError) {
         return reply.code(409).send({ error: { type: requestIntent.code, message: requestIntent.message },
           repair_token_budget: requestIntent.budget, retryable: false });
       }
-      if (!requestIntent) return deny(reply, 429, "请求数额度用尽", "quota_exhausted");
+      if ("denied" in requestIntent) {
+        if (requestIntent.denied === "job_inactive") return deny(reply, 401, "job is no longer active", "job_inactive");
+        if (requestIntent.denied === "workload_usage_unknown") return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");
+        if (requestIntent.denied === "workload_usage_pending") return deny(reply, 409, "observational-memory allowance is reserved by an unsettled request", "workload_usage_pending");
+        if (requestIntent.denied === "workload_token_cap_exhausted") return deny(reply, 429, "observational-memory token cap exhausted", "workload_token_cap_exhausted");
+        return deny(reply, 429, "request quota exhausted", "quota_exhausted");
+      }
       const { requestNo, effectId: gatewayEffectId } = requestIntent;
       const headers: Record<string, string> = {
         "content-type": (req.headers["content-type"] as string) ?? "application/json",
@@ -876,13 +1470,47 @@ export function registerGateway(app: FastifyInstance): void {
             method: req.method,
             headers,
             body: outboundBuf && req.method !== "GET" ? new Uint8Array(outboundBuf) : undefined,
+            ...(workload === "observational_memory" ? { redirect: "manual" as const } : {}),
           },
         }, requestIntent.singleAttempt ? { maxAttempts: 1 } : {});
       } catch (error) {
+        if (workload === "observational_memory"
+          && error instanceof GatewayUpstreamUnreachableError
+          && error.attempts === 1
+          && error.reason === "network"
+          && isKnownObservationalMemoryPreRequestFailure(error.cause)) {
+          const settled = await trySettleGatewayNoExternalUsage({
+            jobId: String(jt.job_id),
+            projectId: String(jt.project_id),
+            attemptId: gatewayAttemptId,
+            jobTokenId: String(jt.id),
+            effectId: gatewayEffectId,
+            requestNo,
+            provider: safeProvider,
+            model,
+            modelCatalogMatch,
+            upstreamReportingModel: null,
+            usage: { ...EMPTY_USAGE },
+            status: "settled",
+            source: "gateway_error",
+            workload,
+          });
+          if (settled) {
+            return reply.code(503).send({
+              error: {
+                type: "gateway_transient",
+                effect_status: "not_started",
+                message: "upstream unavailable before request start",
+              },
+            });
+          }
+          return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");
+        }
         await trySettleGatewayUsage({
           jobId: String(jt.job_id),
           projectId: String(jt.project_id),
           attemptId: gatewayAttemptId,
+          jobTokenId: String(jt.id),
           effectId: gatewayEffectId,
           requestNo,
           provider: safeProvider,
@@ -892,10 +1520,12 @@ export function registerGateway(app: FastifyInstance): void {
           usage: { ...EMPTY_USAGE },
           status: "unknown",
           source: "gateway_error",
+          workload,
         }, "unknown", error);
         if (!(error instanceof GatewayUpstreamUnreachableError)) throw error;
         recordGatewayRetryMetrics(safeProvider, error.attempts, error.retryReasons, error.reason);
         inc("deepsonar_provider_errors_total", { provider: safeProvider });
+        if (workload === "observational_memory") return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");
         return deny(reply, 502, "上游不可达", "upstream_unreachable");
       }
       const upstream = upstreamResult.response;
@@ -910,17 +1540,24 @@ export function registerGateway(app: FastifyInstance): void {
 
       // 响应直通：非流式缓存全文以解析 usage；流式边转发边扫描
       const isSse = (upstream.headers.get("content-type") ?? "").includes("text/event-stream");
-      reply.hijack();
-      reply.raw.writeHead(upstream.status, {
-        "content-type": upstream.headers.get("content-type") ?? "application/json",
-        ...(isSse ? { "cache-control": "no-cache", connection: "keep-alive" } : {}),
-      });
+      // Background responses are bounded and acknowledged only after trusted
+      // terminal usage and durable settlement. A provider error, partial stream
+      // or ledger failure must surface as unknown, never quota degradation.
+      const backgroundChunks: Uint8Array[] | null = workload === "observational_memory" ? [] : null;
+      let backgroundBytes = 0;
+      if (!backgroundChunks) {
+        reply.hijack();
+        reply.raw.writeHead(upstream.status, {
+          "content-type": upstream.headers.get("content-type") ?? "application/json",
+          ...(isSse ? { "cache-control": "no-cache", connection: "keep-alive" } : {}),
+        });
+      }
       if (!upstream.body) {
-        reply.raw.end();
         await trySettleGatewayUsage({
           jobId: String(jt.job_id),
           projectId: String(jt.project_id),
           attemptId: gatewayAttemptId,
+          jobTokenId: String(jt.id),
           effectId: gatewayEffectId,
           requestNo,
           provider: safeProvider,
@@ -928,9 +1565,12 @@ export function registerGateway(app: FastifyInstance): void {
           modelCatalogMatch,
           upstreamReportingModel: null,
           usage: { ...EMPTY_USAGE },
-          status: "not_reported",
+          status: backgroundChunks ? "unknown" : "not_reported",
           source: isSse ? "gateway_stream" : "gateway_response",
-        }, "settled");
+          workload,
+        }, backgroundChunks ? "unknown" : "settled");
+        if (backgroundChunks) return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");
+        reply.raw.end();
         return;
       }
       const repairUsageScanner = createRepairUsageScanner(upstreamPath, isSse);
@@ -941,7 +1581,11 @@ export function registerGateway(app: FastifyInstance): void {
           const { done, value } = await reader.read();
           if (done) break;
           if (value) {
-            reply.raw.write(value);
+            if (backgroundChunks) {
+              backgroundBytes += value.byteLength;
+              if (backgroundBytes > 16_777_216) throw new Error("background response exceeds accounting buffer");
+              backgroundChunks.push(value);
+            } else reply.raw.write(value);
             // 只解析完整 SSE/JSON 行；保留未完成行，避免重叠尾巴导致
             // 同一 usage JSON 在相邻 chunk 中被重复累计。
             repairUsageScanner.push(value);
@@ -951,18 +1595,27 @@ export function registerGateway(app: FastifyInstance): void {
       } catch {
         // 客户端/上游断流：尽力收尾
         streamInterrupted = true;
-      } finally {
-        reply.raw.end();
+        await reader.cancel().catch(() => {});
       }
       const trustedUsage = repairUsageScanner.finish();
       const usage = trustedUsage ?? { ...EMPTY_USAGE };
       const scanned = usage.total;
+      const backgroundBody = backgroundChunks ? Buffer.concat(backgroundChunks) : null;
+      const apiErrorFrame = backgroundBody ? containsGatewayApiErrorFrame(backgroundBody, isSse) : false;
+      const anthropicRefusalFailure = backgroundBody
+        ? containsAnthropicRefusalFailureCarrier(backgroundBody, isSse, upstreamPath)
+        : false;
+      const reservedTransientBody = backgroundBody
+        ? containsReservedGatewayTransientEnvelope(backgroundBody, isSse)
+        : false;
       // Earlier hidden attempts and interrupted/error responses cannot establish complete cost.
-      const uncertainUsage = streamInterrupted || upstreamResult.attempts > 1 || !upstream.ok;
-      await trySettleGatewayUsage({
+      const uncertainUsage = streamInterrupted || upstreamResult.attempts > 1 || !upstream.ok
+        || (backgroundChunks !== null && trustedUsage === null) || apiErrorFrame || anthropicRefusalFailure || reservedTransientBody;
+      const usageSettled = await trySettleGatewayUsage({
         jobId: String(jt.job_id),
         projectId: String(jt.project_id),
         attemptId: gatewayAttemptId,
+        jobTokenId: String(jt.id),
         effectId: gatewayEffectId,
         requestNo,
         provider: safeProvider,
@@ -972,11 +1625,18 @@ export function registerGateway(app: FastifyInstance): void {
         usage,
         status: uncertainUsage ? "unknown" : trustedUsage ? "settled" : "not_reported",
         source: isSse ? "gateway_stream" : "gateway_response",
+        workload,
       }, uncertainUsage ? "unknown" : "settled", uncertainUsage ? "模型请求完整用量无法确认" : undefined);
-      if (scanned > 0) {
+      if (scanned > 0 && !uncertainUsage) {
         inc("deepsonar_model_tokens_total", { provider: safeProvider }, scanned);
-        await sql`UPDATE job_tokens SET used_tokens = used_tokens + ${scanned} WHERE id = ${jt.id}`;
       }
+      if (backgroundChunks) {
+        if (uncertainUsage || !usageSettled) return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");
+        return reply.code(upstream.status)
+          .header("content-type", upstream.headers.get("content-type") ?? "application/json")
+          .send(Buffer.concat(backgroundChunks));
+      }
+      reply.raw.end();
     },
   });
 }

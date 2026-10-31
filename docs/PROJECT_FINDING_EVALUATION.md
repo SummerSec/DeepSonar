@@ -1,10 +1,10 @@
 # Finding 离线标注评估与积压测量（#770）
 
-> 状态：**离线工具已随 #811 合入；未收到独立人工标签，未完成质量验收**。
-> 收口（2026-10-31）：随 #770 按已交付切片关闭，强关系拆出 [#819](https://github.com/SummerSec/DeepSonar/issues/819)。生产执行按 AGENTS.md「验收边界」豁免，但**不覆盖本文的人工质量验收**：人工质量评估仍记为未执行，工具与合成夹具不因此被解释为质量门通过；阈值提案仍为「待审阅」而非已批准。
-> 同步日期：2026-10-30
+> 状态：**离线工具已合入；#819 独立强关系指标及管理 API 抑制测试已在工作分支接线；受治理质量评估/审核/发布路径尚缺，独立人工质量验收未完成**。
+> 收口（2026-10-31）：随 #770 按已交付切片关闭，强关系由 [#819](https://github.com/SummerSec/DeepSonar/issues/819) 独立实现。生产执行按 AGENTS.md「验收边界」豁免，但**不覆盖本文的人工质量验收**：人工质量评估仍记为未执行，工具与合成夹具不因此被解释为质量门通过；阈值提案仍为「待审阅」而非已批准。
+> 同步日期：2026-10-31
 
-本文承接[特征与候选专题](PROJECT_FINDING_RESEARCH.md)。本切片只补原 issue 要求的非模型验收工具：本地标注导入/校验、可追溯质量报告、字段覆盖/不足率与后台积压资源测量。不导入生产数据库，不新增 HTTP API、权限、模型通道或身份映射。命令成功只表示报告生成成功，不表示候选算法满足上线质量。
+本文承接[特征与候选专题](PROJECT_FINDING_RESEARCH.md)。本切片补充非模型验收工具：本地标注导入/校验、可追溯质量报告、字段覆盖/不足率、强关系摘要映射输入与后台积压资源测量。不导入生产数据库，不调用模型。命令成功只表示报告生成成功，不表示候选算法或强关系满足上线质量。
 
 ## 本地数据契约
 
@@ -20,9 +20,9 @@ pnpm --silent research:evaluate:offline -- --input ../../docs/evidence/770-offli
 
 数据集必须提供 schema_version、dataset_id、dataset_kind（synthetic / human-labeled）、metadata（labelset_revision、annotator_ids、labeling_method），以及预声明 config（k、scan_limit、predeclared）。human-labeled 要求匿名审核者与 human-declared 声明，但工具无法证明标注人员独立性或来源真实性；报告明确保留这一限制。synthetic 只能验证工具行为，不能冒充人工评估。
 
-每个来源记录 UUID 身份、项目/Job、tuning或holdout分区、asset_group/family_group、来源revision或digest、title/location/summary/profile/category。identity_declarations 只能统计提交者所提供字段的覆盖，不作为当前生产提取器的权威输入。组标识仅用于检查隔离，不证明资产同一性；生产权威映射可用字段仍为0。未知字段用 null，不用相同“unknown”字符串冒充共同身份。
+每个来源记录 UUID 身份、项目/Job、tuning或holdout分区、asset_group/family_group、来源revision或digest、title/location/summary/profile/category。identity_declarations 只能统计提交者所提供字段的覆盖，不作为当前生产提取器的权威输入。可选 `authoritative_identity_mappings` 只接受摘要、authority version、source revision/digest 和 freshness，不接受原始身份值；它用于离线重放强关系判定，不能替代平台独立核验。组标识仅用于检查隔离，不证明资产同一性。未知字段用 null，不用相同“unknown”字符串冒充共同身份。
 
-标注对通过两端ID引用来源，label为 suspected_same_issue、same_root_cause_different_instance、similar、distinct、insufficient_information 或显式 null。null 表示缺标注，不等于信息不足类别，更不等于明确不同。非法类别、重复/反向对、缺失来源、跨项目或同Job评估对均拒绝。跨 tuning/holdout 的同来源、同资产组或同问题家族拒绝；缺少隔离组也拒绝出具隔离评估。校验只针对提交的标识，不能发现被错误改名或伪造的家族。
+标注对通过两端ID引用来源，label为 suspected_same_issue、same_problem、same_root_cause_different_instance、similar、distinct、insufficient_information 或显式 null。null 表示缺标注，不等于信息不足类别，更不等于明确不同。非法类别、重复/反向对、缺失来源、跨项目或同Job评估对均拒绝。跨 tuning/holdout 的同来源、同资产组或同问题家族拒绝；缺少隔离组也拒绝出具隔离评估。校验只针对提交的标识，不能发现被错误改名或伪造的家族。
 
 ## 预测与报告口径
 
@@ -34,8 +34,9 @@ pnpm --silent research:evaluate:offline -- --input ../../docs/evidence/770-offli
 - **候选流水线**：有向查询机会的召回和后续分类，未召回不能从分母中消失，相关关系的漏召回计 FN。
 - **缺失标签**：计数单列；未标注的返回候选不得算 FP。recall@K 仅对该标注集内的正例成立，不是全项目真实召回率。
 - **不足与覆盖**：预测信息不足、人工信息不足、未标注和未召回分开；文本与身份声明字段覆盖率报告分子/分母，提供者声明与当前可用权威映射分开。
+- **强关系工程重放**：若提供摘要映射，逐对增加 `strong_relation_prediction` 与规则原因；`strong_pair_rule_metrics` 独立使用强预测统计无向标注对，`strong_candidate_pipeline_metrics` 则统计有向词法样本窗口检索后再判强关系的机会，不是实际 SQL identity/root-cause worker 召回。`suspected_same_issue` 与 `same_problem` 显式统一到 `same_problem`；只有同问题、同根因不同实例与 distinct 真值进入强关系评分分母，null、弱 similar 和人工 insufficient 单列而不猜作负例。缺失/过期映射的弃权及窗口漏召回仍是已知强正例的 FN；返回强预测但标签未知的数量单列，不能据条件精确率宣称全语料质量通过。强结果不改变原词法指标、不生成生产建议，也不表示来源映射已独立认证。评估器/强规则/指标版本纳入配置摘要；2026-10-31 合成回归只支持这些工程行为。
 
-所有零分母为 null，不伪造0或1。强关系有真值而当前规则没有强输出时 recall 为0；没有该类真值时为null。规范化输入、配置与规则版本绑定摘要，逐对输出通过来源ID和摘要追溯；报告不复制原始文本、证据URI或身份声明内容。source.digest/revision 是提交者提供的来源引用，工具没有访问原始系统独立核验；sources[].input_digest 则是本次实际读取的规范化来源行摘要。摘要不是匿名化保证，应按原样本权限保存报告。工具不发布 `passed` 质量结论。
+所有零分母为 null，不伪造0或1。强关系有真值而当前规则没有可用摘要映射时 recall 为0；没有该类真值时为null。规范化输入、配置与规则版本绑定摘要，逐对输出通过来源ID和摘要追溯；报告不复制原始文本、证据URI或身份声明内容。source.digest/revision 是提交者提供的来源引用，工具没有访问原始系统独立核验；sources[].input_digest 则是本次实际读取的规范化来源行摘要。摘要不是匿名化保证，应按原样本权限保存报告。工具不发布 `passed` 质量结论。
 
 ## 待审阅的验收建议（不是已批准阈值）
 
@@ -44,17 +45,17 @@ pnpm --silent research:evaluate:offline -- --input ../../docs/evidence/770-offli
 | 项目 | 提案 | 边界 |
 | --- | --- | --- |
 | 检索候选 | 标注正例 recall@25 >= 0.90 | 只适用于事先确认覆盖范围的标注语料；必须同时给分母、截断和字段缺失分层结果 |
-| 强同问题/根因建议 | 各类别 precision >= 0.95、recall >= 0.80 | 当前实现不输出强关系，不能达标；不是要求弱检索先实现强关系 |
+| 强同问题/根因建议 | 各类别 precision >= 0.95、recall >= 0.80 | 公共强建议仍关闭，受治理质量门尚缺；离线强预测/指标不等于正式通过 |
 | 信息不足 | 必须如实报告比例及分母，不单设越低越好的目标 | 不能为降低不足率而编造身份或把未知判为不同 |
 | 硬边界 | 已知租户/服务等冲突不得输出同问题；不得传播 Verify/处置 | 来自原定行为约束，不是质量分数可抵消的错误 |
 
-这些数字不是实证最优值。应由问题风险与人工复核成本决定是否采用或调整，随后冻结配置和评估协议再查看独立留出结果。原 issue 未规定最低样本条数，本工具不增加固定数量门槛；小样本必须展示分母与不确定性，不能用一两个成功样本承诺普遍质量。阈值与标注真实性的审阅仍由评审记录承担。
+这些数字不是实证最优值。应由问题风险与人工复核成本决定是否采用或调整，随后冻结配置和评估协议再查看独立留出结果。原 issue 未规定最低样本条数，本工具不增加固定数量门槛；小样本必须展示分母与不确定性，不能用一两个成功样本承诺普遍质量。阈值与标注真实性的审阅仍由评审记录承担。报告的 `strong_relation_quality_gate` 固定为 `not_evaluated`，所有独立验证 flags 为 false；当前工具没有受治理评估准入或晋升实现，补齐独立人工标签、双重分区、阈值冻结和身份来源材料也不会自行变为 passed。材料必须由后续受治理的独立评审与冻结协议链路接纳，不能把 `human-labeled` 字面量当作独立性证明。
 
 ## 最小外部输入与剩余工作
 
-需要脱敏来源记录及可信的历史修订/字段来源、独立人工标签与资产/问题家族分区、预先确定的评估阈值。缺少权威字段可明确保留未知，不要求建立完整身份平台；但不能据此声称完整强关系方案完成。输入到位后可直接运行本工具，审阅覆盖率、候选漏召回、逐类误判与预算，并据实际失败完善必需实现。无需真实模型调用或模型成本试验。
+仍需两类工作。软件侧：版本化有界协议、可审计的首次留出访问前阈值预注册、独立证据评审与评估准入、当前通过门的晋升/撤销，以及 SQL/public schema/read 的受控非空发布路径尚未实现；本工具的独立强指标只提供离线身份/词法窗口模拟，不是实际 SQL identity/root-cause worker 的质量度量。真实输入侧：脱敏历史身份 crosswalk/修订与许可来源、独立人工标注及争议裁决、经复核的资产/问题家族双重隔离调参/留出集，以及首次查看留出前冻结且可检查的阈值/协议记录仍缺失。仅供应数据或声明 predeclared 不能启用生产建议，不能以 synthetic 工程通过替代真实独立质量。现有 schema 的 sources/pairs 可生成离线报告，但阈值、独立复核及预注册记录需要另供配套证据，不得给严格导入 JSON 添加未知字段。无需真实模型调用、模型成本试验或生产访问。
 
-人工纠正、语义向量召回、项目分组、自动知识晋升不在本次范围。schema65、生产规则、候选工作调度和现有权限保持原状。
+人工纠正、语义向量召回、项目分组、自动知识晋升不在本次范围。schema66、生产规则、候选工作调度和现有权限保持原状。
 
 
 ## 完整小规模积压与资源探针
@@ -77,3 +78,8 @@ pnpm --silent research:evaluate:offline -- --input ../../docs/evidence/770-offli
 数据库分配字节13,171,735→14,574,095，候选四表含索引1,605,632字节，其中索引458,752字节，含保留旧代。连接数只是采样，不是峰值；未测数据库容器CPU/RSS或全cluster pg_stat_io。Node客户端 user/system CPU约2.581/0.472秒、进程生命周期maxRSS225,984KiB，不能当作PostgreSQL资源。完整样本与方法见[原始积压资源证据](evidence/770-backlog-probe.json)。这些是可复现工程观测，不是承诺容量或新添的上线阈值。
 
 测试入口：`pnpm ci:unit:finding-offline-evaluation` 校验导入、隔离、缺标注、指标口径、CLI与统计；`pnpm ci:integration:finding-research` 运行独立库完整积压场景及原候选回归。真实人工质量评估尚未运行；本切片不因此无限追加可选优化。
+## #819 evaluation boundary correction (2026-10-31)
+
+Offline `authoritative_identity_mappings` remain synthetic, caller-declared replay inputs for evaluator behavior. They are not source-registry records, not independent external verification, and not evidence that the production mapping authority is trustworthy. The production registry is platform-admin admitted and explicitly reports that limitation. The default strong-relation quality gate remains `not_evaluated` and `published=false`. Genuine independent labels, family-and-asset-disjoint tuning/holdout and thresholds frozen before holdout inspection are necessary but not sufficient: governed evaluation/review admission, promotion/revocation and guarded public publication are still missing software paths.
+
+The registered Finding and Canvas read APIs also expose `authority_basis=platform_admin_attestation` and `independent_external_verification=false`; public `items` stay empty even when the disposable SQL fixture has successfully derived a relation. The HTTP integration test uses actual root authentication/project hooks, stored Management API Tokens, and a separately minted valid Job capability token; it verifies scopes, cross-project denial, source/mapping CAS, invalid input and publication suppression. These are engineering behavior checks, not external-source authentication, human-label independence, threshold approval, or measured relation quality. The existing Finding research unit/integration scripts include these tests and are called by the current CI workflow; no new quality-pass path is introduced.

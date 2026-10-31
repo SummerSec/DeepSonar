@@ -64,7 +64,10 @@ function ctx(overrides: Partial<QualityContext> = {}): QualityContext {
       payload_json: { intents: [{ role: "audit", description: "继续审计登录", runtime_image_key: "deepsonar-audit" }] },
       created_at: "2026-09-11T02:04:00.000Z",
     }],
-    usage: [{ job_id: "hub-1", total_tokens: 80, provider: "anthropic", model: "claude" }],
+    usage: [
+      { job_id: "hub-1", total_tokens: 80, provider: "anthropic", model: "claude", workload: "main" },
+      { job_id: "hub-1", total_tokens: 40, provider: "openai", model: "main-model", workload: "observational_memory" },
+    ],
     humanCanvasIds: [],
     canvases: [{ id: "c1", project_id: "p1", title: "登录" }],
     ...overrides,
@@ -134,6 +137,8 @@ test("buildReplayBaseline records current hub rounds without inventing recalled 
   assert.equal(baseline.records[1]!.input.finding_counts.total, 1);
   assert.equal(baseline.records[0]!.quality.confirmation_rate, 1);
   assert.equal(baseline.records[0]!.cost.hub_tokens, 80);
+  assert.equal(baseline.records[0]!.cost.canvas_tokens, 80);
+  assert.equal(baseline.records[0]!.cost.background_tokens, 40);
   assert.equal(baseline.records[0]!.strategy.runtime_image_key, "deepsonar-base");
   assert.equal(baseline.records[1]!.plan.kind, "none");
 });

@@ -6,6 +6,21 @@
  */
 
 export const REGISTERED_ROUTE_SURFACE = `
+GET /program-materials
+GET /program-materials/:id
+POST /program-materials
+POST /program-materials/:id/revoke
+GET /findings/:id/program-eligibility
+GET /findings/:id/program-eligibility/reviews
+POST /findings/:id/program-eligibility/reviews
+GET /findings/:id/relations
+GET /canvases/:id/finding-relations
+POST /findings/:id/identity-sources
+POST /findings/:id/identity-sources/:sourceId/revisions
+POST /findings/:id/identity-sources/:sourceId/revoke
+POST /findings/:id/identity-mappings
+POST /findings/:id/identity-mappings/remap
+POST /findings/:id/identity-mappings/revoke
 GET /projects/:id/knowledge/:itemId/versions
 GET /projects/:id/knowledge
 GET /projects/:id/knowledge/receipts
@@ -233,6 +248,21 @@ PUT /role-configs/global/:roleId
 `.trim().split(/\r?\n/);
 
 export const OPENAPI_OPERATION_SURFACE = `
+GET /program-materials
+GET /program-materials/{id}
+POST /program-materials
+POST /program-materials/{id}/revoke
+GET /findings/{id}/program-eligibility
+GET /findings/{id}/program-eligibility/reviews
+POST /findings/{id}/program-eligibility/reviews
+GET /findings/{id}/relations
+GET /canvases/{id}/finding-relations
+POST /findings/{id}/identity-sources
+POST /findings/{id}/identity-sources/{sourceId}/revisions
+POST /findings/{id}/identity-sources/{sourceId}/revoke
+POST /findings/{id}/identity-mappings
+POST /findings/{id}/identity-mappings/remap
+POST /findings/{id}/identity-mappings/revoke
 GET /projects/{id}/knowledge/{itemId}/versions
 GET /projects/{id}/knowledge
 GET /projects/{id}/knowledge/receipts

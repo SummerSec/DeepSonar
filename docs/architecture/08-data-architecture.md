@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-10-30
+> 同步日期：2026-10-31
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
@@ -18,11 +18,15 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 | `canvas_nodes`、`canvas_edges`、`canvas_changes` | Intent、Fact、Artifact、Finding、Job 等过程图和 revision | 节点/边由拥有域写入；变更日志有可见 floor；Agent 不能提交坐标或任意终态 |
 | `jobs`、`job_attempts` | 逻辑任务和一次执行尝试 | Job 有冻结 `agent_snapshot_json`；一个 Job 同时最多一个 active Attempt |
 | `job_attempt_effects` | provision、agent run、清理等外部效果意图和 settlement | `effect_pending`/`unknown` 保护崩溃恢复；effect id 幂等；未知不得自动重放 |
-| `job_tokens`、`job_capability_tokens` | Gateway 凭据与 Job-scoped Control 能力 | 存 hash/prefix 或受限加密投影；终态 Job 撤销 token |
+| `job_tokens`、`job_capability_tokens` | Gateway workload 凭据与独立 Job-scoped Control 能力 | Gateway 区分 `main` / `observational_memory`、冻结 provider/model/route 及有限分配；终态撤销，凭据不取得管理权限 |
+| `job_usage_ledger` | Gateway 观测用量、workload 归因和结算 | 新记录绑定 `job_token_id`；总量与 memory 用量分开，历史缺失引用保持历史读取，不补造来源 |
 | `events`、`event_dedup`、`job_event_rate_limits` | 语义事件、Job 序列和 durable 限流 | event id、Job sequence 和事件 dedup 约束重复；原始运行流不进入 events |
 | `artifacts`、`artifact_claims`、`artifact_evidence`、`artifact_relations` | 版本化内部写入真相 | claim/evidence polarity 和 relation 类型结构化保存，旧版本可追溯 |
 | `findings`、`finding_verification_rounds` | Finding 处置和 Verify 门 | `verify_status` 与人的 `disposition` 分离；round 保存 eligibility/evidence/rework 状态 |
 | `finding_research_runs` 及 cluster/anchor/priority 表 | Research 语义结果与运行审计 | batch 有界、输入幂等；失败不回滚主 Finding/Report |
+| `project_finding_identity_sources`、`project_finding_identity_source_revisions` | 每个 Finding 的操作员见证身份来源及不可变 revision | 只接受已知身份字段的 SHA-256 digest；revision 只追加，source 当前指针可撤销 |
+| `project_finding_identity_mappings` | Finding 字段到已登记身份来源的显式绑定 | source revision、mapping version、项目/Finding 外键及 CAS；撤销和来源变化在当前读时失效 |
+| `project_finding_relation_*` | Scheduler 所有、可重建的跨 Finding 强关系计算与来源检查点 | generation、source/identity fingerprint、rule version、read 状态和质量门；`published` 物理保持关闭 |
 | `task_reports`、`finding_reports` | 冻结输入后的版本化 Projection | 一条 scope 只有一个 active 版本；输入/输出 hash 使变化追加版本 |
 | `shared_assets*` | 内容寻址共享资产和 Job 版本绑定 | scope、配额、版本和 Blob hash 分离；不把文件内容直接当语义事件 |
 | `project_knowledge_*` | 项目 Memory/Skill、不可变版本、work/assignment、proposal/evaluation/receipt、精确 grant 与 usage | 草稿/候选不进普通目录；复合项目/Job/Attempt 外键校验 provenance；版本正文留在 CAS，历史版本含 revoked 保留，不自动 GC |
@@ -30,9 +34,23 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 | `runtime_images*`、`devices*` | 镜像信任目录和设备租约/事件 | 信任状态、摘要、租约和设备状态由对应域持有 |
 | `platform_update_checks` | 平台 catalog 与当前部署版本的最近一次只读比较结果 | 单例行；由 `platform-updates` 写入，管理员读取；不触发升级或 Compose 变更 |
 
+本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及本批其他 schema 变更；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。完整 rebuild/恢复夹具已本地核验（含固定历史 v62/v63/v64 dump/pg_restore 与七张新 relation 表），不再把 rebuild 写成 pending；结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，最终组合 CI 仍由主线程核对。
+
+保鲜门禁的单处编号核对：当前主线 v66（核对日期 2026-10-31，集成分支 `ca7d841c`；未发布，合并身份关系与 OM ledger 变更）。其他摘要只链接源码；后续源码推进须重核本处，不能把编号当成重建/恢复证据。
+
 ### 任务契约快照（#767）
 
 `canvases.target_json.task_contract` 保存规范化后的版本化契约，包含 schema 与模板版本；`content` 保留原始用户需求。Job 的 `agent_snapshot_json.task_contract` 冻结该契约用于执行提示；未提交契约的 Job 不增加此字段。模板升级不会重写既有契约。沿用现有 JSONB，不新增数据库表/列或第二份任务真相。派发时读取当前权限只用于撤销/收窄检查，不改变历史 Job 冻结运行快照。
+
+目标授权的 host grant 复用 append-only `audit_logs`，固定 system actor 与 `task.target_authorization` action，保存 Canvas/project、内容/契约/revision 及严格无密钥 snapshot；不从任意 Canvas metadata 或调用方同名字段读取 authority。中央子/系统 Job 准入只取最新有效绑定，provision/rerun 另核 live authority；旧行保留不等于可回退授权。见 [grant store](../../apps/scheduler/src/domains/target-authorization/grant.ts)及 [ADR 0011](adr/0011-trusted-target-authorization.md)。
+
+### Pi 观测记忆的配置、账本与归档（#815）
+
+OM 的 package/version/integrity/entry、wrapper 指纹、Job/当前 Session 配置与模型进入现有冻结快照和 Runtime Profile；不是项目知识库，也不新增 memory 事实表。Gateway 从内核签发的 `job_tokens.workload` 识别后台，不接受客户端 header/body 自报来源；有限总额在所有轮换、撤销及历史 token 上聚合，总/主/后台分配不可隐式转借，冻结总额不限则仍不限。
+
+后台 usage、effect settlement 与 token counter 在原有 Job 锁/事务内结算。pending 保留占额，缺失 usage/unknown 需对账且不能按零退款或自动重放；Job 终态撤销凭据不删除在途用量或未知效果。Dashboard 总量保留全部观测并分 workload；项目/任务/Finding/Replay 的单位成本只以主执行口径统计，后台用量另列，不声称收益。字段与边界见[预算策略](../../apps/scheduler/src/gateway-om-budget.ts)、[Gateway](../../apps/scheduler/src/gateway.ts)和[专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。
+
+Session observation/reflection、fold/recall 正文只用于上下文；新归档、RPC 大帧副本和 viewer 脱敏保留身份与来源元数据，物理归档不使 memory 成为 Fact/Evidence authority。历史 HTTP preview/download 已在预览截断或发送前按 Pi header/manifest 独立执行结构化脱敏，immutable archive metadata 保持不变，projection bytes/SHA/Content-Digest 另报，相关真实路由集成已通过。实际本地构建镜像的 RPC、独立生产 guard 及封装/版本准入回归也已通过，集中见 [RPC 边界](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；Gateway 已知请求前失败须持久结算零用量/effect `never_started` 才能降级，详情见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。最终组合 CI 与发布证据仍另验，不推导质量或成本收益。
 
 ## 运行身份与可选白名单（#757）
 
@@ -85,6 +103,8 @@ stateDiagram-v2
 
 Job 的 `succeeded` 和 `cancelled` 是终态；`failed/timeout/orphan → pending` 必须服从 reconcile、retry 和未知效果规则。Attempt 还记录 `preparing`、`effect_pending`、`provisioned`、`agent.ready`、`settling`、`terminal`、`interrupted`、`unknown` 等 phase；`job_attempt_effects` 分 `planned/effect_pending/settled/unknown`，其 replay policy 不能由模型决定。
 
+已核验的 core `finalizeJob` 终态事务同时收口 Job/model token、Control token、audit 与终态，终态后实际 HTTP 请求断言 401；该证据只覆盖 finalizeJob 路径，不外推所有 drain/Reaper 清理路径。bootstrap/terminal 及完整 rebuild 日志见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
+
 Verify round 有 pending/running/rework/confirmed/needs_human/failed/refuted/inconclusive，Finding 还独立保存 verify status 和 disposition。Research run 有 pending/running/succeeded/failed；Task/Finding report 有 pending/generating/succeeded/failed，并以输入 hash 区分版本。这些状态由各 bounded context 拥有，跨域事件只能通过拥有者入口推进。
 
 
@@ -105,6 +125,29 @@ Control `event_id` / Idempotency-Key 保持提交幂等；来源 Finding 使用 
 同 Job 同 fingerprint 的完整规范化提案以 `source_digest` 比较（v1 前缀的 SHA-256，递归排序对象键，数组有序，含 raw 来源）。相同提案重交无新增效果；内容不同明确拒绝并回滚，不能静默丢弃新证据。当前没有 Finding 修订协议，title/location/rule_id/profile 身份字段变化是新提案；同 Job 同身份却环境/版本不同必须冲突，不能伪装同源。Job 行锁与同事务 event_dedup 保证并发重放顺序。hash 不是根因或目标版本证据，资产/版本未知仍未知。
 
 基线重建保留已有 Finding UUID、job_id、状态、证据和 Artifact key。历史行的新增 source_digest 为 NULL；原提交事件重放仍由 event_dedup 拦截，但新提交若命中无法证明内容相同的历史来源则 fail closed，不推导摘要或替换旧 Artifact。导入导出携带已有摘要；无摘要的历史行保持未知。此前项目指纹提前去重的提交不自动补造来源，只有另行证明来源和授权才能评估恢复。数据完整性起点是部署本写入契约后接受的独立来源，不是重建日期之前所有事件。跨任务关系、投影和质量评估不属于此切片。
+
+## Finding 操作员见证身份与强关系（#819）
+
+跨任务关系不从 title、summary、location、相似文本、任务目标或自由格式 evidence 推断身份。平台只接受按 Finding/project 归属登记的 typed identity manifest；每个字段只保存 `sha256:` digest，服务端计算 manifest 内容摘要并记录认证主体。允许的 source kind、字段和 CAS/输入形状以 [relation schema](../../apps/scheduler/src/domains/project-finding-research/relation-schemas.ts) 为准，数据库完整性约束见 [`database/schema.sql`](../../database/schema.sql)。
+
+身份分为六个强字段 `asset`、`tenant`、`environment`、`version`、`parameter`、`root_cause`，以及在两边都已知时可阻断关系的上下文字段 `service`、`permission_boundary`；比较规则和版本见 [`identity.ts`](../../apps/scheduler/src/domains/project-finding-research/identity.ts)。只有同项目、六个强字段均为当前有效且无冲突时才可能产生强关系：全部实例字段相同为 `same_problem`，仅 root cause 相同而实例字段不同为 `same_root_cause_different_instance`；缺失、冲突、root-cause authority version 不一致或上下文冲突保持 `insufficient_information`/`distinct`。
+
+身份来源的 authority 是 `platform_admin_attestation`，响应明确 `independent_external_verification=false`：操作员见证是平台内的准入和审计边界，不认证外部官方库存、站点所有权、规则真实性或自然人/模型之间的物理独立性。该边界与 #822 的程序资格分离；程序资格仍由 [FR-FIND-008](01-system-specification.md#fr-find-008-独立程序资格评审) 和 [ADR-0010](adr/0010-program-eligibility-authority.md) 的独立材料/评审投影负责，身份准入不授予提交资格、目标写权限或执行授权。
+
+### 来源、mapping 与失效
+
+- Management API 只允许当前 Finding/project scope 的认证 `admin` principal 登记、修订或撤销 source；内部 worker 不从请求体接受 actor/provenance。source revision 由数据库 append-only trigger 保护，source 当前 revision 和 `revoked_at` 留在拥有表中，历史不删除。
+- 新 mapping 的 `expected_mapping_version` 必须为 `null`，服务端从当前 source revision 解析 digest、source metadata 和 freshness；调用方不能自报 `identity_digest`、source revision、source kind、source ref 或 source digest。已有字段只能用最新 mapping version + reason 做显式 CAS remap/revoke；同一次撤销可幂等重放，过期 revision/version 返回冲突。
+- `freshness_until`、source revoke、source revision 变化、mapping revoke、字段缺失和跨项目选择都在写入或当前读取时 fail closed。source revision 变化不会改写旧 mapping，但会立即使旧绑定无效并请求新的 relation generation；当前 Finding/source/identity fingerprint 不匹配时，读侧省略 stale relation。
+- 每字段的 mapping history 是有界读取；达到实现常量 [`IDENTITY_MAPPING_HISTORY_LIMIT`](../../apps/scheduler/src/domains/project-finding-research/identity-mapping-store.ts) 时 snapshot 标记 `history_truncated`，关系读取为 `blocked`，不能把不完整历史当作完整身份。
+
+### 强关系计算与投影
+
+强关系是 Scheduler-owned 的可重建派生数据，不是 Finding/Artifact 的第二事实源。`project_finding_relation_work` 按 project/generation 保存 cursor、attempt、error 和状态；`project_finding_relation_sources` 保存每个 Finding 的 source/identity fingerprint、检查数量、pair truncation 和 read reason；`project_finding_relations` 保存有序双端关系、匹配/差异字段、rule version、quality gate 和 `published`。source/mapping 变化会创建新的 generation；worker 在维护身份 fence、repeatable-read 与 savepoint 内以有界批次计算，失败保留 checkpoint，不改写来源事实。
+
+查询和计算的 Finding/page/pair/Canvas response 上限均由 [`relation-read.ts`](../../apps/scheduler/src/domains/project-finding-research/relation-read.ts) 与 [`relation-computation.ts`](../../apps/scheduler/src/domains/project-finding-research/relation-computation.ts) 的命名常量维护；mapping history 由上方 store 常量维护。文档不复制这些可变数值，调用方必须使用响应中的 `read_status`、`read_reason`、`pair_truncated` 和 `query_budget` 判断是否完整。
+
+当前实现固定 `quality_gate_status=not_evaluated`、`published=false`，且公开管理读响应的 `items` 为空；`includeSuppressed` 等未知查询字段按 strict schema 拒绝。即使 worker 已完成，读侧仍按当前 Finding/source/identity fingerprint 再核验，旧 generation 或失效关系只作为 stale/omitted 处理。独立人工标签、问题家族/资产隔离的调参和留出集、查看留出结果前冻结的阈值均未提供，故强关系质量和生产建议保持 unknown/withheld。
 
 #776 的修正限额冻结在首个 control_receipt 的 repair_token_limit；Gateway effect intent 保存宿主 repair_receipt_ref/repair_reserved_tokens。实际用量仍只在 job_usage_ledger 一次写入，按 Attempt/effect 联结投影累计，无新增表或 schema 版本变更。未知/缺报与已知零分开；详见 [修正预算](../REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
@@ -141,6 +184,14 @@ schema65 增加 candidate_scan/work/sources/edges，按项目与代保存 canoni
 
 `record_skill_choice` 复用 `project_knowledge_receipts` 的 operation/result_json 与既有 knowledge 事件，保存宿主重算建议快照和声明理由，不写 usage/work 或新经验表。目录、完整 Candidate CAS 和旧回执不变；SQL 基线无变更，不要求 schema bump/rebuild。历史选择不恢复权限。见[Skill 建议专题](../SKILL_SUGGESTIONS.md)。
 
-## Plan 未派发路线修订（#775）
+## 独立程序资格账本（#822）
 
-路线修订复用 plan 语义事件与 owner 当前 plan_protocol 投影；首次提交保存 plan_input_sha256，CAS 使用事件 head/内容摘要，历史事件与冻结快照不改写。即时结算响应从原事件恢复，不新增表或账本。 详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。
+FR-FIND-008 复用 `audit_logs` 保存程序材料准入、替代、撤销及操作员评审；不新增 schema 或 Job 生命周期。平台/项目材料的管理准入、评审主体、项目 scope 与 maker 隔离由认证 actor 推导，请求体不能自报 reviewer、权限或资格状态。评审绑定当前 Finding Artifact/来源摘要、来源与 Verify Attempt、确认轮次、冻结目标/基线、材料版本和证据指纹。当前资格在 repeatable-read 只读快照中重新投影；来源、Attempt、证据或材料变化不修改旧评审或历史报告，但使旧批准失效。缺少评审保持 `not_assessed`，失效、冲突、历史损坏/截断或读取预算不足进入 `blocked`，不由最后写入覆盖先前结论；只有仍有效的独立操作员评审可表示 `eligible`，不认证外部官方规则，也不改变技术 Verify、任务判据或执行权限。批量预算外的条目显式返回缺口。数据结构和一致性边界见[程序资格专题](../PROGRAM_ELIGIBILITY.md)、[shared schema](../../packages/shared-types/src/program-eligibility.ts) 与 [ADR-0010](adr/0010-program-eligibility-authority.md)。
+
+## Plan v2 的目标、路线与执行投影（#775）
+
+`canvases.target_json.plan_objective` 保存用户 CAS 的 objective ID/revision、goal、CompletionPolicy、显式预算、输入 SHA 与状态；`plan_execution` 保存 owner、route revision、累计任务/轮次/无进展及停止原因，是 Scheduler 从持久来源维护的当前投影。`last_no_progress_result_event_id` 在首次可评估的 continue 结果消费前缺省；消费后保存现有 `events.id` 的精确正十进制字符串水位，经当前 owner/Canvas/项目和 PlanResult 身份校验，同一事件在回调或重启重建中不再消耗预算。活动或新 ready 工作延后消费，真正新事件仍计数。修订保留水位及 lifetime 计数，不改写历史 Job/Attempt、事件或证据；该字段不新增表、共享 Plan 契约或执行通道。
+
+当前 `submit_plan`/`submit_plan_result` 严格接收 v2，路线 CAS 绑定 objective/owner/revision/Plan SHA。owner 的 `payload_json.plan_protocol`、plan 语义事件、接纳 receipt、普通 Intent/Job 与 `payload_json.plan_context` 共同记录关联；不新增 Plan 执行表或第二队列。前驱输出来自事件/Artifact 的相同 `plan.output` 扩展、成功且当前的 Attempt 与实际留存 Evidence，并覆盖期望输出；关联不证明语义满足。
+
+`stop_reason=complete` / objective `completed` 只表达工程路线输出条件；Hub/Report 的任务完成还须当前操作员正向判据。v1 目标契约只读历史；普通 HubIntent 走原 handler，不制造新的 v1 `plan_protocol`。`applyHubPlanAdapter`、`persistPlanAudit`、副作用 writer 与 pure legacy `adapt*` helper/type/export 已物理删除；不可变 v1 与 `hub_intent_adapter` 历史审计仍可解析，不能作为新执行输入。代码见 [objective](../../apps/scheduler/src/domains/plan-protocol/objective.ts)、[执行](../../apps/scheduler/src/domains/plan-protocol/execution.ts)、[输出](../../apps/scheduler/src/domains/plan-protocol/execution-output.ts)与 [ADR 0012](adr/0012-plan-v2-execution.md)。

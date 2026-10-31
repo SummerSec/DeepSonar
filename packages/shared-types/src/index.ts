@@ -868,6 +868,7 @@ export const GRAPH_QUERY_LIMITS = {
 } as const;
 
 export const GraphQueryKind = z.enum([
+  "plan_objective",
   "plan_gap",
   "overview",
   "index",
@@ -908,6 +909,12 @@ export const GraphQueryPayload = z
     const add = (path: string[], message: string) => {
       ctx.addIssue({ code: "custom", path, message });
     };
+    if (value.kind === "plan_objective") {
+      for (const key of ["node_type", "status", "since", "cursor", "limit", "ids", "id", "direction", "edge_type", "verify_status", "unconverged_only", "finding_id"] as const) {
+        if (value[key] !== undefined) add([key], `plan_objective does not accept ${key}`);
+      }
+      return;
+    }
     if (value.kind === "plan_gap") {
       for (const key of ["node_type","status","since","direction","edge_type","verify_status","unconverged_only","finding_id"] as const) {
         if (value[key] !== undefined) add([key], `plan_gap does not accept ${key}`);
@@ -1765,10 +1772,20 @@ export function resolvePlatformToolsTightened(
 export {
   CompletionPolicy,
   PLAN_PROTOCOL_VERSION,
+  PLAN_EXECUTION_PROTOCOL_VERSION,
   PLAN_TASK_LIMITS,
   Plan,
   PlanAuditRecord,
+  PlanAuditRecordV1,
+  PlanAuditRecordV2,
   PlanAuditSource,
+  PlanExecutionBudget,
+  PlanObjective,
+  PlanObjectivePatch,
+  PlanV2,
+  PlanResultV2,
+  PlanRouteRevisionV2,
+  HistoricalSubmitPlanPayload,
   PlanBudget,
   PlanResult,
   PlanResultOutcome,
@@ -1780,16 +1797,19 @@ export {
   PlanCriterionId,
   SubmitPlanPayload,
   SubmitPlanResultPayload,
-  adaptHubCompleteToPlanResult,
-  adaptHubIntentsToPlan,
-  adaptIntentToPlanTask,
   mergePlanAudit,
   planTaskGraphHasCycle,
   trimPlan,
-  type HubCompleteLike,
-  type HubIntentLike,
   type PlanTrimLimits,
 } from "./plan.js";
+
+export {
+  PI_OBSERVATIONAL_MEMORY_REDACTION_MARKER,
+  isPiObservationalMemoryCustomType,
+  redactPiObservationalMemory,
+  redactPiObservationalMemoryText,
+  type PiMemoryRedactedValue,
+} from "./pi-observational-memory-redaction.js";
 
 export {
   PI_EXTENSION_IMAGE_ROOT,
@@ -1797,6 +1817,19 @@ export {
   PI_EXTENSION_REGISTRY,
   PI_EXTENSION_SANDBOX_PREFIX,
   PI_EXTENSION_WORKSPACE_DIR,
+  PI_OBSERVATIONAL_MEMORY_ENTRY,
+  PI_OBSERVATIONAL_MEMORY_ID,
+  PI_OBSERVATIONAL_MEMORY_INTEGRITY,
+  PI_OBSERVATIONAL_MEMORY_PACKAGE,
+  PI_OBSERVATIONAL_MEMORY_PROVIDER,
+  PI_OBSERVATIONAL_MEMORY_SCHEMA,
+  PI_OBSERVATIONAL_MEMORY_SETTINGS_KEY,
+  PI_OBSERVATIONAL_MEMORY_VERSION,
+  PI_OBSERVATIONAL_MEMORY_WRAPPER_PATH,
+  PiObservationalMemoryBackgroundLimits,
+  PiObservationalMemoryConfig,
+  PiObservationalMemoryRequestBudget,
+  piObservationalMemorySettings,
   PiExtensionId,
   isRegisteredPiExtensionId,
   parsePiExtensionIds,
@@ -1836,3 +1869,4 @@ export async function computeFingerprint(
 }
 
 export * from "./task-contract.js";
+export * from "./program-eligibility.js";

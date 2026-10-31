@@ -47,7 +47,7 @@ test("Chrome runtime policy accepts egress, rejects false, and leaves non-Chrome
 test("Job creation freezes the canvas policy and ignores payload policy", async () => {
   let target: Record<string, unknown> = { network_policy: { allow_egress: false } };
   const db = ((strings: TemplateStringsArray) => {
-    assert.match(strings[0] ?? "", /SELECT target_json FROM canvases/);
+    assert.match(strings[0] ?? "", /SELECT project_id, target_json FROM canvases/);
     return Promise.resolve([{ target_json: target }]);
   }) as never;
   const snapshot = await freezeAgentSnapshotNetworkPolicy(db, "canvas-1", {
@@ -58,7 +58,7 @@ test("Job creation freezes the canvas policy and ignores payload policy", async 
   target = { network_policy: { allow_egress: true } };
   assert.equal(requireFrozenSnapshotAllowEgress(snapshot), false, "later canvas changes cannot alter a Job snapshot");
   const chromeDb = ((strings: TemplateStringsArray) => {
-    assert.match(strings[0] ?? "", /SELECT target_json FROM canvases/);
+    assert.match(strings[0] ?? "", /SELECT project_id, target_json FROM canvases/);
     return Promise.resolve([{ target_json: { network_policy: { allow_egress: false } } }]);
   }) as never;
   await assert.rejects(
@@ -81,7 +81,7 @@ test("Job creation freezes the canvas policy and ignores payload policy", async 
 
 test("malformed canvas policy and missing Job snapshot fail closed", async () => {
   const malformed = ((strings: TemplateStringsArray) => {
-    assert.match(strings[0] ?? "", /SELECT target_json FROM canvases/);
+    assert.match(strings[0] ?? "", /SELECT project_id, target_json FROM canvases/);
     return Promise.resolve([{ target_json: { network_policy: { allow_egress: "true" } } }]);
   }) as never;
   await assert.rejects(
@@ -138,19 +138,26 @@ test("retry validates the locked canvas policy before destructive reset and inse
 
 test("all direct Job creation paths freeze policy before INSERT", () => {
   const paths = [
-    ["finding report", reportSource.slice(reportSource.indexOf("export async function maybeDispatchFindingReport"))],
-    ["task report", reportSource.slice(reportSource.indexOf("export async function maybeDispatchReport"))],
-    ["verify", verifySource.slice(verifySource.indexOf("export async function createVerifyRound"))],
-    ["event follow-up", eventSideEffectsSource.slice(eventSideEffectsSource.indexOf("async function applySideEffects"))],
-    ["Hub", hubSource.slice(hubSource.indexOf("async function maybeTriggerHub"))],
-    ["transfer history import", transferImportSource.slice(transferImportSource.indexOf("// jobs 阶段 1"))],
+    ["finding report", reportSource, "export async function maybeDispatchFindingReport"],
+    ["task report", reportSource, "export async function maybeDispatchReport"],
+    ["verify", verifySource, "export async function createVerifyRound"],
+    ["event follow-up", eventSideEffectsSource, "async function prepareHubIntent"],
+    ["Hub", hubSource, "async function maybeTriggerHub"],
+    ["transfer history import", transferImportSource, "// jobs 阶段 1"],
   ] as const;
-  for (const [name, source] of paths) {
+  for (const [name, fullSource, entry] of paths) {
+    const start = fullSource.indexOf(entry);
+    assert.ok(start >= 0, `${name} must have its characterized creation entry`);
+    const source = fullSource.slice(start);
     const freeze = source.indexOf("freezeAgentSnapshotNetworkPolicy");
     const insert = source.indexOf("INSERT INTO jobs");
     assert.ok(freeze >= 0, `${name} must freeze network policy`);
     assert.ok(insert > freeze, `${name} must freeze before inserting a Job`);
   }
+  const eventFollowup = eventSideEffectsSource.slice(eventSideEffectsSource.indexOf("async function applySideEffects"));
+  const prepare = eventFollowup.indexOf("await prepareHubIntent(");
+  const materialize = eventFollowup.indexOf("await materializePreparedHubIntent(");
+  assert.ok(prepare >= 0 && materialize > prepare, "event follow-up must prepare and freeze every Intent before materialization");
 });
 
 test("Chrome runtimes raise stall floors without changing the global 900s default", () => {

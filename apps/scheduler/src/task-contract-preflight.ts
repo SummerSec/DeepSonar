@@ -5,11 +5,19 @@ import {
   deriveTaskProgramRuleCriteria,
   validateTaskContractDispatch,
   type TaskContract,
+  type TaskContractAction,
   type TaskContractFeedback,
 } from "@deepsonar/shared-types";
 import { assertChromeRuntimeEgressAllowed } from "./domains/role-runtime-snapshot/sandbox-limits.js";
 import { parseProjectAgentAllowlist } from "./domains/project-agent-allowlist/policy.js";
 import { taskContractDigest } from "./task-outcome-snapshot.js";
+import {
+  checkTargetAuthorization,
+  targetAuthorizationWriteRequested,
+  type TargetAuthorizationConfig,
+  type TargetAuthorizationFetch,
+} from "./domains/target-authorization/index.js";
+import type { TargetAuthorizationSnapshot } from "./domains/target-authorization/contract.js";
 
 type Query = (strings: TemplateStringsArray, ...values: unknown[]) => unknown;
 
@@ -21,20 +29,62 @@ export class TaskContractBlockedError extends Error {
   }
 }
 
+export interface TaskContractPreflightOptions {
+  /** Return the target authorization snapshot as well as blockers at create time. */
+  detailed?: boolean;
+  /** Scheduler-authenticated platform principal; never copied from the task body. */
+  principalId?: string | null;
+  /** Exact original task content used for the authority content/revision binding. */
+  content?: string;
+  /** Secret-free target authorization snapshot from the immutable Job snapshot. */
+  frozenTargetAuthorization?: unknown;
+  /** Dispatcher/rerun must not authorize a Job that was never snapshotted. */
+  requireFrozenTargetAuthorization?: boolean;
+  /** Dependency injection is for offline tests; production reads platform env only. */
+  targetAuthorizationConfig?: TargetAuthorizationConfig;
+  targetAuthorizationEnv?: NodeJS.ProcessEnv;
+  targetAuthorizationFetch?: TargetAuthorizationFetch;
+  now?: () => Date;
+}
+
+export interface TaskContractPreflightResult {
+  blockers: TaskContractFeedback[];
+  targetAuthorization?: TargetAuthorizationSnapshot;
+  /** Scheduler-derived action facts, exposed only to internal detailed callers/tests. */
+  authorizedActions?: readonly TaskContractAction[];
+}
+
 /** Re-read availability, never credential secrets or untrusted identity metadata. */
 export async function taskContractPreflight(
   db: Query,
   projectId: string,
   contract: TaskContract,
   allowEgress: boolean,
-): Promise<TaskContractFeedback[]> {
+  options: TaskContractPreflightOptions & { detailed: true },
+): Promise<TaskContractPreflightResult>;
+export async function taskContractPreflight(
+  db: Query,
+  projectId: string,
+  contract: TaskContract,
+  allowEgress: boolean,
+  options?: TaskContractPreflightOptions,
+): Promise<TaskContractFeedback[]>;
+export async function taskContractPreflight(
+  db: Query,
+  projectId: string,
+  contract: TaskContract,
+  allowEgress: boolean,
+  options: TaskContractPreflightOptions = {},
+): Promise<TaskContractFeedback[] | TaskContractPreflightResult> {
   const [project] = await db`SELECT id, status, config_json FROM projects WHERE id = ${projectId}` as Array<{
     id: string; status: string; config_json: unknown;
   }>;
-  if (!project || project.status !== "active") return [{
+  if (!project || project.status !== "active") return preflightReturn(options, {
+    blockers: [{
     code: "task_contract_project_unavailable", path: "project_id",
     message: "任务项目不存在或已归档。", suggestion: "确认当前项目仍有效。",
-  }];
+    }],
+  });
   const allowlist = parseProjectAgentAllowlist(project.config_json);
   const credentials = contract.credential_refs.length === 0 ? [] : await db`
     SELECT id, kind FROM credentials
@@ -44,9 +94,60 @@ export async function taskContractPreflight(
   const availableCredentialIds = credentials.filter((row) => row.kind !== "llm_provider"
     || !allowlist.credential_ids_configured || allowlist.enabled_credential_ids.includes(row.id))
     .map((row) => row.id);
-  // The platform currently has no trusted application-account identity/write probe.
-  // Do not promote client statements or public credential metadata into grants.
-  return validateTaskContractDispatch(contract, { allowEgress, availableCredentialIds, authorizedActions: allowEgress ? ["read", "workspace_write", "egress"] : ["read", "workspace_write"] });
+  const targetAuthorization = await checkTargetAuthorization({
+    projectId,
+    contract,
+    principalId: options.principalId,
+    content: options.content,
+    frozenSnapshot: options.frozenTargetAuthorization,
+    requireFrozenSnapshot: options.requireFrozenTargetAuthorization,
+    config: options.targetAuthorizationConfig,
+    env: options.targetAuthorizationEnv,
+    fetchImpl: options.targetAuthorizationFetch,
+    now: options.now,
+  });
+  const authorizedActions: TaskContractAction[] = allowEgress
+    ? ["read", "workspace_write", "egress"]
+    : ["read", "workspace_write"];
+  const identity = targetAuthorization.kind === "allow" && targetAuthorization.snapshot
+    ? {
+      tenant: targetAuthorization.snapshot.tenant,
+      role: targetAuthorization.snapshot.role,
+      resource: targetAuthorization.snapshot.resource,
+    }
+    : undefined;
+  // The authority may validate the identity of a read-only contract using the
+  // reference adapter, but that check must not promote a broad authority
+  // response into a target-write grant the contract did not request.
+  const targetWriteRequested = targetAuthorizationWriteRequested(contract);
+  if (targetAuthorization.kind === "allow" && targetWriteRequested) authorizedActions.push("write");
+  const blockers = [
+    ...(targetAuthorization.kind === "block" ? [targetAuthorization.feedback] : []),
+    ...validateTaskContractDispatch(contract, {
+      allowEgress,
+      availableCredentialIds,
+      authorizedActions,
+      identity,
+      verifiedPrerequisiteIds: targetAuthorization.kind === "allow"
+        ? targetAuthorization.snapshot?.prerequisite_ids
+        : undefined,
+    }),
+  ];
+  const result: TaskContractPreflightResult = {
+    blockers,
+    authorizedActions: [...authorizedActions],
+    ...(targetAuthorization.kind === "allow" && targetAuthorization.snapshot
+      ? { targetAuthorization: targetAuthorization.snapshot }
+      : {}),
+  };
+  return preflightReturn(options, result);
+}
+
+function preflightReturn(
+  options: TaskContractPreflightOptions,
+  result: TaskContractPreflightResult,
+): TaskContractFeedback[] | TaskContractPreflightResult {
+  return options.detailed === true ? result : result.blockers;
 }
 
 export function frozenTaskContract(snapshot: unknown): TaskContract | undefined {

@@ -7,7 +7,10 @@ import {
   DISPATCH_CLAIM_ADVISORY_KEY,
   parseRelatedFindingIds,
   resolveAgentSnapshotForJob,
+  rulesForProject,
 } from "../../core.js";
+import { frozenTaskContract, taskContractPreflight } from "../../task-contract-preflight.js";
+import type { TaskContractFeedback } from "@deepsonar/shared-types";
 import type { AgentRuntimeSnapshot } from "../role-runtime-snapshot/index.js";
 import { sql } from "../../db.js";
 import { runner } from "../../runtime.js";
@@ -67,6 +70,7 @@ export type RequeueJobResult =
     }
   | { kind: "not_found" }
   | { kind: "not_resumable"; status: string; reason?: string; error_code?: string; provenance?: JobProvenance }
+  | { kind: "target_authorization_blocked"; detail: SnapshotStaleDetail; blockers: TaskContractFeedback[]; provenance?: JobProvenance }
   | { kind: "snapshot_stale"; detail: SnapshotStaleDetail; provenance?: JobProvenance };
 
 const resumableStatuses = new Set<string>(RESUMABLE_JOB_STATUSES);
@@ -353,6 +357,49 @@ export async function requeueJob(
         detail: { job_id: jobId, stale_fields: staleFields },
         provenance,
       };
+    }
+
+    // Target authorization is a live, read-only authority check.  It runs
+    // before Attempt interruption, grant revocation, or the pending transition
+    // so a revoked/expired target cannot make a new historical side effect.
+    const storedSnapshot = objectValue(job.agent_snapshot_json);
+    const storedTargetAuthorization = storedSnapshot.target_authorization;
+    const currentSnapshotObject = objectValue(currentSnapshot);
+    const targetAuthorizationForCheck = mode === "resume-frozen"
+      ? storedTargetAuthorization
+      : currentSnapshotObject.target_authorization;
+    const taskContract = frozenTaskContract(currentSnapshot);
+    if (taskContract) {
+      const targetAuthorization = targetAuthorizationForCheck;
+      const payload = objectValue(job.payload_json);
+      const rules = await rulesForProject(tx, String(job.project_id));
+      const blockers = await taskContractPreflight(
+        tx,
+        String(job.project_id),
+        taskContract,
+        Boolean(objectValue(currentSnapshot.network_policy).allow_egress) && rules.allowEgress,
+        {
+          principalId: targetAuthorization && typeof targetAuthorization === "object" && !Array.isArray(targetAuthorization)
+            && typeof (targetAuthorization as SnapshotObject).principal_id === "string"
+            ? (targetAuthorization as SnapshotObject).principal_id as string
+            : null,
+          content: typeof payload.content === "string" ? payload.content : undefined,
+          frozenTargetAuthorization: targetAuthorization,
+          requireFrozenTargetAuthorization: true,
+        },
+      );
+      if (blockers.length > 0) {
+        return {
+          kind: "target_authorization_blocked" as const,
+          detail: {
+            job_id: jobId,
+            stale_fields: ["target_authorization"],
+            resolution_error: "目标授权 authority 未确认当前项目、目标、主体、动作或前置条件",
+          },
+          blockers,
+          provenance,
+        };
+      }
     }
 
     // waiting_human may still own the previous active Attempt. Close it as an

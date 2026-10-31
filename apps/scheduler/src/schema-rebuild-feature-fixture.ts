@@ -16,6 +16,8 @@ import { SCHEMA_VERSION } from "./schema-version.js";
 const V63_COMMIT = "0841f8272ab1c9c64fdfeddba7aff53f2d5c856d";
 const FEATURE_TABLES = ["project_finding_feature_scan", "project_finding_feature_work", "project_finding_features"];
 const CANDIDATE_TABLES = ["project_finding_candidate_scan", "project_finding_candidate_work", "project_finding_candidate_sources", "project_finding_candidate_edges"];
+const RELATION_TABLES = ["project_finding_identity_sources", "project_finding_identity_source_revisions", "project_finding_identity_mappings", "project_finding_relation_scan", "project_finding_relation_sources", "project_finding_relation_work", "project_finding_relations"];
+const DERIVED_TABLES = [...FEATURE_TABLES, ...CANDIDATE_TABLES, ...RELATION_TABLES];
 const FEATURE_INDEXES = ["project_finding_feature_work_due", "project_finding_features_project", "findings_project_scan_idx"];
 
 function schemaV63(): string {
@@ -30,12 +32,12 @@ function schemaV63(): string {
   assert.match(schema, /INSERT INTO schema_meta \(id, version\) VALUES \('global', 63\)/);
   assert.match(schema, /source_digest text/);
   assert.match(schema, /findings_job_id_fingerprint_key UNIQUE \(job_id, fingerprint\)/);
-  for (const name of [...FEATURE_TABLES, ...FEATURE_INDEXES, ...CANDIDATE_TABLES]) assert.ok(!schema.includes(name));
+  for (const name of [...DERIVED_TABLES, ...FEATURE_INDEXES]) assert.ok(!schema.includes(name));
   return schema;
 }
 
 async function assertNoFeatures(db: ReturnType<typeof postgres>): Promise<void> {
-  for (const name of [...FEATURE_TABLES, ...FEATURE_INDEXES, ...CANDIDATE_TABLES]) {
+  for (const name of [...DERIVED_TABLES, ...FEATURE_INDEXES]) {
     assert.equal((await db`SELECT to_regclass(${'public.' + name})::text AS name`)[0].name, null, name);
   }
 }
@@ -99,7 +101,7 @@ export async function runFeatureSchemaRebuildFixture(testUrl: string): Promise<v
     const plan = await rebuildSchemaOnReservedSession(reserve, { mode: "plan", terminateScheduler: false });
     assert.equal(plan.plan.currentVersion, 63);
     assert.equal(plan.plan.targetVersion, SCHEMA_VERSION);
-    assert.deepEqual([...plan.plan.newTables].sort(), [...FEATURE_TABLES, ...CANDIDATE_TABLES].sort());
+    assert.deepEqual([...plan.plan.newTables].sort(), [...DERIVED_TABLES].sort());
     assert.equal(plan.applied, false);
     await assertNoFeatures(db);
     assert.deepEqual(await capture(db), history);
@@ -115,11 +117,11 @@ export async function runFeatureSchemaRebuildFixture(testUrl: string): Promise<v
     assert.deepEqual(await capture(backup), history, "the actual on-disk v63 backup restores every source row");
     assert.equal((await db`SELECT version FROM schema_meta WHERE id='global'`)[0].version, SCHEMA_VERSION);
     assert.deepEqual(await capture(db), history, "rebuild preserves full history including source_digest and Verify state");
-    for (const name of [...FEATURE_TABLES, ...FEATURE_INDEXES]) {
+    for (const name of [...DERIVED_TABLES, ...FEATURE_INDEXES]) {
       assert.equal((await db`SELECT to_regclass(${'public.' + name})::text AS name`)[0].name, name);
     }
     assert.deepEqual((await db`SELECT id,cursor_id FROM project_finding_feature_scan`).map(row => ({ ...row })), [{ id: "global", cursor_id: null }]);
-    for (const name of ["project_finding_feature_work", "project_finding_features"]) {
+    for (const name of ["project_finding_feature_work", "project_finding_features", ...RELATION_TABLES.filter((table) => table !== "project_finding_relation_scan")]) {
       assert.equal(Number((await db.unsafe(`SELECT count(*) AS n FROM ${name}`))[0].n), 0);
     }
 

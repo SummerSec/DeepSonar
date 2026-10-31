@@ -69,6 +69,8 @@ export interface HubReplayRecord {
   cost: {
     hub_tokens: number;
     canvas_tokens: number;
+    /** Observable OM usage is reconciled separately and is not task cost. */
+    background_tokens: number;
     hub_duration_ms: number | null;
     canvas_duration_ms: number | null;
   };
@@ -181,8 +183,10 @@ function contextForCanvas(input: QualityContext, canvasId: string, projectId: st
 
 export function buildReplayBaseline(input: QualityContext, limit: number = HUB_REPLAY_DEFAULT_LIMIT): HubReplayBaseline {
   const tokensByJob = new Map<string, number>();
+  const backgroundTokensByJob = new Map<string, number>();
   for (const row of input.usage) {
-    tokensByJob.set(row.job_id, (tokensByJob.get(row.job_id) ?? 0) + Math.max(0, Math.trunc(row.total_tokens)));
+    const target = row.workload === "observational_memory" ? backgroundTokensByJob : tokensByJob;
+    target.set(row.job_id, (target.get(row.job_id) ?? 0) + Math.max(0, Math.trunc(row.total_tokens)));
   }
   const canvasTitle = new Map(input.canvases.map((canvas) => [canvas.id, canvas.title]));
   const jobsByCanvas = new Map<string, QualityJobRow[]>();
@@ -219,6 +223,7 @@ export function buildReplayBaseline(input: QualityContext, limit: number = HUB_R
 
   const qualityByCanvas = new Map<string, QualityReport>();
   const tokensByCanvas = new Map<string, number>();
+  const backgroundTokensByCanvas = new Map<string, number>();
   for (const canvasId of new Set(hubJobs.map((job) => job.canvas_id!))) {
     const scoped = contextForCanvas(input, canvasId, hubJobs.find((job) => job.canvas_id === canvasId)!.project_id);
     qualityByCanvas.set(canvasId, buildQualityReport(scoped));
@@ -227,6 +232,10 @@ export function buildReplayBaseline(input: QualityContext, limit: number = HUB_R
       .reduce((sum, job) => sum + (tokensByJob.get(job.id) ?? 0), 0);
     for (const finding of scoped.findings) tokens += findingCosts.get(finding.id)?.tokens ?? 0;
     tokensByCanvas.set(canvasId, tokens);
+    backgroundTokensByCanvas.set(canvasId, scoped.jobs.reduce(
+      (sum, scopedJob) => sum + (backgroundTokensByJob.get(scopedJob.id) ?? 0),
+      0,
+    ));
   }
 
   const records = hubJobs.map((job) => {
@@ -273,6 +282,7 @@ export function buildReplayBaseline(input: QualityContext, limit: number = HUB_R
       cost: {
         hub_tokens: tokensByJob.get(job.id) ?? 0,
         canvas_tokens: tokensByCanvas.get(job.canvas_id!) ?? 0,
+        background_tokens: backgroundTokensByCanvas.get(job.canvas_id!) ?? 0,
         hub_duration_ms: durationMs(job.started_at, job.finished_at),
         canvas_duration_ms: canvasDurationMs(canvasJobs),
       },

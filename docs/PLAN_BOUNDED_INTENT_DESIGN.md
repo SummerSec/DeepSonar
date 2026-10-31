@@ -1,17 +1,19 @@
-# #775 B：通过现有 Intent 完成一次有界补证（设计）
+# #775 B/C：通过现有 Intent 的有界补证与执行型 Plan（设计与实现对照）
 
-> 状态：**设计目标与实现对照**。B 的一次补证首片已合入；本切片补持久接纳响应恢复，复用 control_receipt。真实模型效果未验证，本批不要求真实模型验收；仅开放未派发路线的显式修订，完整 C 不启用。
-> 同步日期：2026-10-30
+> 状态：**设计目标与实现对照**。B 的一次补证首片与持久接纳响应恢复已合入；#775 C/v2 已完成用户目标 CAS、现有 Hub Intent/Job 派发、依赖执行、多轮路由和停止条件接线。真实模型效果未验证，本批不要求真实模型验收。
+> 同步日期：2026-10-31
+
+当前新写入与执行仅接纳 Plan v2。下文 B/v1 的提交流程、单步补证和路线修订是历史设计与交付记录；历史记录可读，不能继续执行，也不能通过旧输入兼容启用。当前执行与本批验证以文末 C/v2 为准。
 
 ## 基线与交付边界
 
-实现基线为 main `0841f827`，已含 A 审计可见性 #782、操作员判据/留存证据绑定 #785、B 首片 #791 与设计对照 #786。本切片仅补 Plan 成功接纳回执恢复，不改变每 Canvas 单步预算。
+实现基线为 main `0841f827`，已含 A 审计可见性 #782、操作员判据/留存证据绑定 #785、B 首片 #791 与设计对照 #786。本切片补 B 的 Plan 成功接纳回执恢复，并在独立 v2 合约中接入执行型路线；B 的每 Canvas 单步预算仍不改变。
 
-#791 的 [实现范围](https://github.com/SummerSec/DeepSonar/blob/1c04804e364e7c55522857c1f060bf9f308ace81/docs/PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证) 是当前行为说明；本文保留设计目标及未交付差额，不能通过修改措辞将缺口视为已完成。
+#791 的 [B 实现范围](https://github.com/SummerSec/DeepSonar/blob/1c04804e364e7c55522857c1f060bf9f308ace81/docs/PLAN_GAP_PROJECTION.md#b既有-intent-上的一次补证) 是一次补证行为说明；本文保留 B 设计边界，并在文末记录 C/v2 的当前实现。不能通过修改措辞将仍未实现的语义质量或真实效果验收视为已完成。
 
-[Plan](../packages/shared-types/src/plan.ts) 已有目标、CompletionPolicy、依赖、预算、结果与审计。`submit_plan` / `submit_plan_result` 本身不直接派发；#791 的首次显式 `submit_plan` 还启用当前 Canvas 的决策/自动完成门禁。[Hub 决策处理](../apps/scheduler/src/domains/event-ingestion/side-effects.ts) 才通过既有 Intent 派发，且派发前重做引用、角色、镜像与快照校验。B 不使 submit_plan 单独执行，也不新增第二套 Plan/Job/执行引擎。
+[Plan](../packages/shared-types/src/plan.ts) 已有目标、CompletionPolicy、依赖、预算、结果与审计。v1 `submit_plan` / `submit_plan_result` 本身不直接派发；#791 的首次显式 `submit_plan` 还启用当前 Canvas 的决策/自动完成门禁。[Hub 决策处理](../apps/scheduler/src/domains/event-ingestion/side-effects.ts) 才通过既有 Intent 派发，且派发前重做引用、角色、镜像与快照校验。B 不使 submit_plan 单独执行，也不新增第二套 Plan/Job/执行引擎。v2 的执行型 `submit_plan` 是明确的新版本契约：Scheduler 在同一事件事务中调用同一个 Hub Intent materializer，仍不建立第二执行通道。
 
-首片 B 的可验收闭环限定为：既有任务 → 读取一个目标的当前缺口 → 一个有界补证 Intent → 既有 Job/Attempt/Evidence → 再读缺口并明确停止/等待人工。原设计上界为每个目标版本一次；#791 首片采用更严格的 **每 Canvas 至多一次**，换 Plan、内容版本、Job、标题或 Idempotency-Key 都不能重置。按版本重置预算不是已实现能力，若后续开放须单独定义授权与验收。首片不支持递归换方法、多层依赖调度或持续自适应。未证明收益前不进入 C。
+首片 B 的可验收闭环限定为：既有任务 → 读取一个目标的当前缺口 → 一个有界补证 Intent → 既有 Job/Attempt/Evidence → 再读缺口并明确停止/等待人工。原设计上界为每个目标版本一次；#791 首片采用更严格的 **每 Canvas 至多一次**，换 Plan、内容版本、Job、标题或 Idempotency-Key 都不能重置。按版本重置 B 预算不是已实现能力。首片不支持递归换方法、多层依赖调度或持续自适应；这些是 B 首片的历史边界，不是 v2 的输入兼容层。
 
 ## 目标和来源身份
 
@@ -61,7 +63,7 @@ complete 采用正向允许规则，不能只列少数禁止态：必须覆盖�
 
 ## 有界只读入口
 
-扩展当前 Job 的 `graph_query` 只读查询，按需读取一个 objective 的版本、判据、绑定状态、来源 ID 与未决原因。先校验当前 Job 的 Canvas/project 和工具白名单，才允许加载依据；不允许使用 Management API token 或绕到新的模型通道。响应给出 canonical event revision，不能只返回模型可伪造的 SHA 文本。
+扩展当前 Job 的 `graph_query` 只读查询：初始 L0/overview 只提供有界 handle；`kind=plan_objective` 在当前 Job scope 内独立于已接受 Plan 读取 `items[0]` 完整持久化 objective tuple，并带 canonical event revision。它不提供 selectors、cross-scope 或 wholeGraph；预算或 input hash 不满足时必须如实失败，不能把部分 tuple 当作完整依据。先校验当前 Job 的 Canvas/project 和工具白名单，才允许加载依据；不允许使用 Management API token 或绕到新的模型通道。
 
 首片一次最多 4 个判据、4 个 Fact；沿用 Job graph 字节/引用预算。记录当前 Job 已见引用，禁止跨任务检索结果直接充当证据。返回截断或 unavailable 时，complete 必须拒绝；continue 可在明确缺口与授权范围内请求一个补证 Intent。实际留存字节由 Scheduler 的有界验证器核对，模型只按需读取证据内容。
 
@@ -106,8 +108,23 @@ GET 原 operation 的 receipt_key 始终只读；进程缓存丢失或 handler �
 
 ## 真实效果验收和剩余工作
 
-离线样本只证明来源、决策检查、调度原子性与恢复边界。用户已明确本批所有 issue 不需要真实模型验收，因此不以模型效果试验作为关闭前置；真实效果未验证，不声称质量或收益提升。C 阶段仍不启用，现有代码/离线验收缺口仍须分别完成。
+离线样本只证明来源、决策检查、调度原子性与恢复边界。真实模型效果未验证，不声称质量或收益提升。独立人工标注、来源隔离的质量评审与其他非模型质量验收不由本批工程测试替代。
 
 本切片扩展 plan-decision.integration.test.ts，使用两组 inline/file 业务样本验证：已持久接纳但 ingestion 前失败、无 handler 只读原结果、unknown effect 阻止恢复、原 Attempt 恢复一次、同 key 改输入/文件/operation 冲突与最终 CAS。executor 竞态测试覆盖预留不结算、旧 preflight 不覆盖、同事件 ID 普通调用不能绕过预留及失败释放。测试模拟重启后的内存缓存和 handler 丢失，不声称重新启动真实模型或恢复其会话。
 
-未派发路线修订的已实现边界、版本字段与恢复行为见[路线修订](PLAN_GAP_PROJECTION.md#未派发路线修订)；它不开放用户目标变更、追加补证预算或依赖图执行，本文其余 C 设计仍未交付。
+未派发路线修订的 v1 已实现边界、版本字段与恢复行为见[路线修订](PLAN_GAP_PROJECTION.md#未派发路线修订)。它不开放用户目标变更或追加 B 补证预算。
+
+## C/v2 当前实现对照
+
+以下是 #775 C 的 as-built 结论，使用 `plan.v=2` 执行型协议；Control、ingestion 和运行时工具 schema 均拒绝 v1 新提案。objective 内部 `v:1` 等字段只作读取 metadata，提交的 Plan 严格为 `v:2`；历史 Plan/Result 和自动 Intent 适配审计仍可读取，不能成为执行 fallback。
+
+- 授权用户在 `PATCH /tasks/{canvasId}` 以 `plan_objective.expected_revision` 做 CAS，持久保存目标 ID/revision、完整 CompletionPolicy、生命周期预算、输入 SHA 和状态。历史 Job、Attempt、semantic event、Artifact、Evidence 与报告保持不可变；新 revision 不重置已消耗任务数、轮数、无进展计数或 unknown-effect 账本。
+- v2 Plan 必须携带显式 `execution_route` revision，并把目标 ID/revision、Plan owner、当前路线 revision 和当前 Plan SHA 放进严格协议。模型只能调整路线与未派发 task，不能修改用户目标、完成判据或预算；并发路线提交由 Scheduler CAS 选择一个成功者。
+- 整条路线先复用既有 Hub Intent 准入；即使越权 task 尚未 ready，也会拒绝整个提案，不留下部分 child Job。ready task 再经同一个 materializer 复核 Canvas canonical 引用、普通角色、镜像/CLI/Provider/model、Finding/Verify、中央网络冻结、快照和共享资产。没有 Plan 专属队列或第二执行通道。
+- 读取预算或输入 hash 不满足时，提交失败并保留明确原因，不以部分目标/Plan 响应继续派发。
+- `depends_on` 要求当前用户目标 revision 的前置 Job 及最新 Attempt 成功。当前未拒绝的 Fact/Finding 必须投影自 submitted、未 superseded Artifact，并关联该 Attempt 的真实 semantic event。Artifact 和事件中的严格 `plan.output` extension 必须一致：`v:2`、objective ID/revision、task ID/SHA 与覆盖的精确 expected_outputs 名称；全部必要输出均须覆盖。留存文件复用有界验证器核对当前 Attempt 路径、finalized manifest、长度及实际 SHA。该关联证明输出来源与留存，不证明语义质量。
+- owner/child 的终态、取消、超时、Reaper、Reconcile 和镜像撤销路径会重建状态。旧目标 revision 的 Job 保持历史身份并占用 lifetime 预算；其迟到回调可以释放并发槽位，但旧输出永远不能满足新目标的依赖或完成。相同目标版本内的已派发 task 在路线修订中保持字节一致。历史 unknown effect 仍 fail closed。
+- `max_tasks`、`max_rounds`、`max_parallel_tasks` 和 `max_no_progress_rounds` 跨 key、路线、owner 与用户目标修订累计。取消、超时、失败、缺失输出、无进展和 unknown effect 均持久停止。当前路线执行投影完成后，Task/Hub complete 仍须全部必要判据的当前正向操作员评价及既有 Finding/Verify/report 门；PlanResult/done 不授予语义完成权威。
+- v2 Plan/Result 已经 ingestion 成功接纳时，真实执行器允许 Hub 以原 mark_job_done 协议结束本轮，不要求再提交一个派发 Intent。此状态只由成功语义写入设置；未经接纳的 Hub 仍须原决策协议。
+
+当前代码入口为 `packages/shared-types/src/plan.ts`、`apps/scheduler/src/domains/plan-protocol/execution.ts`、`execution-output.ts` 与 `apps/scheduler/src/domains/event-ingestion/side-effects.ts`。本批直接 Node/tsx 在各套件独立 CREATE/DROP 的真实 PostgreSQL 上跑通 Control→ingestion→准入 Intent/Job→fake Attempt/留存字节→graph projection；bootstrap fixture 仅用 HTTP objective 读取结果构造首个 v2 提案，并观测到恰好一个就绪 Worker；执行、停止、CAS、判据、独立评审和历史拒绝共 8 个 SQL 套件、16 项测试通过。新增套件的全局脚本/CI 接线由主集成方完成；尚未声称远端 CI 通过。真实模型、生产部署、人工语义质量与模型收益未验证。

@@ -41,6 +41,7 @@ import {
 } from "../../runtime-images.js";
 import { runRuntimeImageContractSelftest } from "../../runtime-image-contract-selftest.js";
 import { reconcileRuntimeImagesOnNodes } from "../../runtime-image-reconcile.js";
+import { advancePlanTaskAfterTerminalJob, lockCanvasForConvergence } from "../../core.js";
 
 const RuntimeImageImportBody = z.object({
   image_key: z.string().regex(/^[a-z][a-z0-9-]{1,62}$/),
@@ -903,6 +904,15 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
         `runtime image revoked: ${body.reason}`,
       );
       for (const job of affected) {
+        await sql.begin(async (txRaw) => {
+          const tx = txRaw as unknown as typeof sql;
+          const [meta] = await tx`SELECT canvas_id FROM jobs WHERE id=${job.id as string}`;
+          await lockCanvasForConvergence(tx, (meta?.canvas_id as string | null) ?? null);
+          await tx`
+            UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
+            WHERE job_id = ${job.id as string} AND node_type = ANY(${["job", "intent", "report"]})`;
+          await advancePlanTaskAfterTerminalJob(tx, job.id as string);
+        });
         await revokeJobTokens(job.id as string, "runtime_image_revoked").catch(() => {});
         await revokeJobCapabilityTokens(job.id as string, "runtime_image_revoked").catch(() => {});
         if (job.sandbox_id) await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});

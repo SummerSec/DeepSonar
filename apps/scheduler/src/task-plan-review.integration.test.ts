@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { Plan, normalizeTaskContract, deriveTaskGoalCriteria } from "@deepsonar/shared-types";
+import { SubmitPlanPayload, normalizeTaskContract, deriveTaskGoalCriteria } from "@deepsonar/shared-types";
 
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
 if (!databaseUrl) {
@@ -102,9 +102,9 @@ if (!databaseUrl) {
         await sql`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status) VALUES(${canvas},${id},'intent','Isolated execution','pending')`;
         return runtime(id, project, canvas);
       };
-      const plan = Plan.parse({ v: 1, goal: "Deliver a scoped parser investigation", tasks: [{ id: "review", title: "Review retained output", role: "audit",
+      const planBase = { goal: "Deliver a scoped parser investigation", tasks: [{ id: "review", title: "Review retained output", role: "audit",
         description: "Scoped parser review", prompt: "Review the scoped parser execution and retain evidence.", expected_outputs: ["Parser matrix record"] }],
-        completion: { mode: "explicit_result", description: "Scoped parser criterion evaluated", required_outputs: ["Parser matrix record"] } });
+        completion: { mode: "all_tasks", description: "Scoped parser criterion evaluated", required_outputs: ["Parser matrix record"] } };
       const fixture = async (kind: "delivery" | "negative_result" = "delivery") => {
         const project = randomUUID(), canvas = randomUUID();
         await sql`INSERT INTO projects(id,name,config_json) VALUES(${project},'Task Plan mapping fixture',${sql.json({ rules: { hubEnabled: false }, enabled_credential_ids: [] })})`;
@@ -126,7 +126,26 @@ if (!databaseUrl) {
           await done(run); return { run, evidence, evaluation };
         };
         const evaluated = await review(), owner = await seed(project, canvas, true);
-        const submitted = await invoke(owner, "submit_plan", { plan }); assert.equal(submitted.statusCode, 200, submitted.payload);
+        const budget = { max_tasks: 2, max_rounds: 2, max_no_progress_rounds: 1, max_parallel_tasks: 1 };
+        const patched = await app.inject({ method: "PATCH", url: `/tasks/${canvas}`, headers, payload: {
+          plan_objective: { expected_revision: null, goal: planBase.goal, completion: planBase.completion, budget },
+        } });
+        assert.equal(patched.statusCode, 200, patched.payload);
+        const objective = patched.json().plan_objective;
+        const submission = SubmitPlanPayload.parse({ plan: { ...planBase, v: 2,
+          objective_id: objective.objective_id, objective_revision: "1", route_revision: "1", budget },
+          revision: { v: 2, kind: "execution_route", plan_job_id: owner.id, objective_id: objective.objective_id,
+            expected_objective_revision: "1", expected_route_revision: "0", expected_plan_sha256: null, rationale: "Run current scoped parser route" } });
+        const plan = submission.plan;
+        const submitted = await invoke(owner, "submit_plan", submission); assert.equal(submitted.statusCode, 200, submitted.payload);
+        const [child] = await sql`SELECT id FROM jobs WHERE parent_job_id=${owner.id}`;
+        const planWorker = await runtime(String(child.id), project, canvas), retained = await proof(planWorker);
+        const { contentSha256 } = await import("./domains/plan-protocol/criterion-model.js");
+        await emit(planWorker, { artifact_key: `plan/${planWorker.id}/output`, evidence: [{ statement: "Retained parser route execution",
+          uri: `attempts/${planWorker.attempt}/result.txt`, sha256: createHash("sha256").update(retained.bytes).digest("hex") }],
+          extensions: { "plan.output": { v: 2, objective_id: objective.objective_id, objective_revision: "1",
+            task_id: "review", task_sha256: contentSha256(plan.tasks[0]), expected_outputs: ["Parser matrix record"] } } });
+        await done(planWorker);
         const detail = async () => {
           const response = await app.inject({ method: "GET", url: `/canvases/${canvas}/facts/${evaluated.evidence.fact}`, headers });
           assert.equal(response.statusCode, 200, response.payload); return response.json();
