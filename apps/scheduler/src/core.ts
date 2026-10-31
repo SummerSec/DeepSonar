@@ -170,7 +170,7 @@ export interface ProjectRules {
   maxFollowupsPerJob: number;
   maxFollowupDepth: number;
   maxAutoRetries: number;
-  /** Finding 业务验证轮次上限（与 maxAutoRetries 基础设施重试分离）；默认 3。 */
+  /** Finding 业务验证轮次上限（与 maxAutoRetries 基础设施重试分离）；默认 0 不限。 */
   maxVerificationRounds: number;
   /**
    * wait_evidence 路径上「门禁结论不变」的连续轮次上限（#519）。
@@ -573,7 +573,7 @@ function envDefaultRules(): ProjectRules {
     maxFollowupsPerJob: config.limits.maxFollowupsPerJob,
     maxFollowupDepth: config.limits.maxFollowupDepth,
     maxAutoRetries: config.limits.maxAutoRetries,
-    maxVerificationRounds: 3,
+    maxVerificationRounds: 0,
     maxNoProgressRounds: config.rules.maxNoProgressRounds,
     auditTimeoutSec: config.timeouts.auditSec,
     verifyTimeoutSec: config.timeouts.verifySec,
@@ -598,7 +598,10 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
   let min = base.minVerifySeverity;
   if (raw.minVerifySeverity != null) min = asSeverityRank(raw.minVerifySeverity, min);
 
-  const maxVerificationRounds = Number(raw.maxVerificationRounds);
+  const maxVerificationRounds = raw.maxVerificationRounds;
+  if (maxVerificationRounds !== undefined && (typeof maxVerificationRounds !== "number" || !Number.isInteger(maxVerificationRounds) || maxVerificationRounds < 0 || maxVerificationRounds > 20)) throw new Error("Invalid maxVerificationRounds: expected integer 0-20 (0 unlimited)");
+  const maxHubRounds = parseHubMaxRounds(raw.maxHubRounds);
+  if (Object.hasOwn(raw, "maxHubRounds") && maxHubRounds === null) throw new Error("Invalid maxHubRounds");
   const maxNoProgressRounds = Number(raw.maxNoProgressRounds);
   const maxGlobalJobs = asConcurrencyLimit(raw.maxGlobalJobs, base.maxGlobalJobs);
   const maxJobsPerProject = Math.min(maxGlobalJobs, asConcurrencyLimit(raw.maxJobsPerProject, base.maxJobsPerProject));
@@ -608,10 +611,7 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
     maxFollowupsPerJob: (raw.maxFollowupsPerJob as number) ?? base.maxFollowupsPerJob,
     maxFollowupDepth: (raw.maxFollowupDepth as number) ?? base.maxFollowupDepth,
     maxAutoRetries: (raw.maxAutoRetries as number) ?? base.maxAutoRetries,
-    maxVerificationRounds:
-      Number.isInteger(maxVerificationRounds) && maxVerificationRounds >= 1 && maxVerificationRounds <= 20
-        ? maxVerificationRounds
-        : base.maxVerificationRounds,
+    maxVerificationRounds: typeof maxVerificationRounds === "number" ? maxVerificationRounds : base.maxVerificationRounds,
     maxNoProgressRounds:
       Number.isInteger(maxNoProgressRounds) && maxNoProgressRounds >= 0 && maxNoProgressRounds <= 5
         ? maxNoProgressRounds
@@ -632,7 +632,7 @@ function mergeRulesLayer(raw: Record<string, unknown>, base: ProjectRules): Proj
       RUNTIME_KNOB_BOUNDS.provisionTimeoutSec.max,
     ),
     hubEnabled: (raw.hubEnabled as boolean) ?? base.hubEnabled,
-    maxHubRounds: parseHubMaxRounds(raw.maxHubRounds) ?? base.maxHubRounds,
+    maxHubRounds: maxHubRounds ?? base.maxHubRounds,
     maxIntentsPerDecision: (raw.maxIntentsPerDecision as number) ?? base.maxIntentsPerDecision,
     allowEgress: (raw.allowEgress as boolean) ?? base.allowEgress,
     maxGlobalJobs,

@@ -172,3 +172,20 @@ test("env defaults stay aligned with bootstrap config", () => {
   assert.equal(typeof defaults.jobTokenMaxRequests, "number");
   assert.equal(typeof defaults.provisionTimeoutSec, "number");
 });
+
+
+test("unlimited bootstrap respects explicit layers and frozen historical limits", () => {
+  const unlimited = { ...env, jobTokenMaxRequests: 0 };
+  const defaults = resolveRuntimeKnobs({ jobType: "audit", env: unlimited });
+  assert.equal(defaults.jobTokenMaxRequests, 0);
+  assert.equal(jobTokenQuotaExhausted(1_000_001, defaults.jobTokenMaxRequests), false);
+  for (const layer of ["platform", "project", "role", "job"] as const) {
+    const limited = resolveRuntimeKnobs({ jobType: "audit", env: unlimited, [layer]: { jobTokenMaxRequests: 7 } });
+    assert.equal(limited.jobTokenMaxRequests, 7);
+    assert.equal(limited.sources.jobTokenMaxRequests, layer);
+    assert.equal(jobTokenQuotaExhausted(7, limited.jobTokenMaxRequests), true);
+  }
+  const old = freezeRuntimeKnobs(resolveRuntimeKnobs({ jobType: "audit", env }));
+  resolveRuntimeKnobs({ jobType: "audit", env: unlimited });
+  assert.equal(frozenRuntimeKnobsFromSnapshot({ runtime_knobs: old })?.job_token_max_requests, 500);
+});

@@ -31,6 +31,12 @@ DeepSonar 将通用命令行工具建模为**受治理、可插拔**的 Agent �
 4. **Job 快照**：准入成功后冻结 `cli_capabilities: FrozenCliCapability[]` 与 `cli_capability_pack.pack_fingerprint`。
 5. **证据语义**：结果 schema `deepsonar.cli-capability-result/v1` 固定 `is_finding: false`；CLI 输出只作 Evidence/Fact 输入，不可直接升格为安全 Finding，也不可替代 LSP/AST/污点分析。
 
+## 用量限制
+
+调用额度 `max_calls_per_job` 未配置或为 `0` 时不限，显式正整数才限制；非法值拒绝。内置能力包不再声明默认 token 额度，已冻结 Job 的显式额度保持原值。超时、单响应/输出字节限制、路径与权限校验仍保留。
+
+CLI 调用额度目前是目录/冻结元数据，尚无统一执行计数器；此调整不声称补齐 CLI 正数额度的运行时执行。
+
 ## 非目标（本阶段）
 
 - 不为全部镜像一次性安装全部工具；禁止 Job 内 `apt`/`npm`/`pip` 或网络下载工具。

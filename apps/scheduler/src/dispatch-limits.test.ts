@@ -209,8 +209,7 @@ test("invalid persisted caps fall back and project rules cannot widen global cap
   assert.equal(unlimitedHub.maxHubRounds, 0);
   const finiteHub = await globalRules(fakeDb([{ rules_json: { maxHubRounds: 3 } }]));
   assert.equal(finiteHub.maxHubRounds, 3);
-  const invalidHub = await globalRules(fakeDb([{ rules_json: { maxHubRounds: -1 } }]));
-  assert.equal(invalidHub.maxHubRounds, config.hub.maxRounds, "invalid persisted maxHubRounds keeps env/default");
+  await assert.rejects(globalRules(fakeDb([{ rules_json: { maxHubRounds: -1 } }])), /Invalid maxHubRounds/);
   assert.equal(asConcurrencyLimit("not-a-number", 6), 6);
 
   const project = await rulesForProject(
@@ -639,4 +638,34 @@ test("credential max_concurrent blocks with skip reason credential, not agent_cl
   // CLI 档有余量时不得误归因到 agent_cli
   counts.credential.set("credential-a", 0);
   assert.equal(dispatchSkipReason(candidate, counts, rules, 8), null);
+});
+
+test("verification rounds are unlimited by default and validate explicit budgets", async () => {
+  assert.equal((await globalRules(fakeDb([]))).maxVerificationRounds, 0);
+  for (const maxVerificationRounds of [0, 1, 3, 20]) {
+    assert.equal((await globalRules(fakeDb([{ rules_json: { maxVerificationRounds } }]))).maxVerificationRounds, maxVerificationRounds);
+    assert.deepEqual(parseConcurrencyRulesPatch({ maxVerificationRounds }), { maxVerificationRounds });
+  }
+  for (const maxVerificationRounds of [-1, 21, 1.5, "3", null, false]) {
+    assert.throws(() => parseConcurrencyRulesPatch({ maxVerificationRounds }));
+    await assert.rejects(globalRules(fakeDb([{ rules_json: { maxVerificationRounds } }])), /Invalid maxVerificationRounds/);
+  }
+  const inherited = await rulesForProject(fakeDb([{ rules_json: { maxVerificationRounds: 3 } }], [{ config_json: {} }]), "project");
+  assert.equal(inherited.maxVerificationRounds, 3);
+  const explicit = await rulesForProject(fakeDb([{ rules_json: { maxVerificationRounds: 3 } }], [{ config_json: { rules: { maxVerificationRounds: 0 } } }]), "project");
+  assert.equal(explicit.maxVerificationRounds, 0);
+  assert.equal(explicit.maxNoProgressRounds, 2, "unlimited usage preserves the independent no-progress guard");
+});
+
+test("fresh database rules seed does not restore finite usage round defaults", async () => {
+  const { readFileSync } = await import("node:fs");
+  const schema = readFileSync(new URL("../../../database/schema.sql", import.meta.url), "utf8");
+  const match = schema.match(/INSERT INTO global_settings \(id, rules_json\) VALUES \([\s\S]*?'(\{[\s\S]*?\})'::jsonb/);
+  assert.ok(match, "global rules seed is present");
+  const seeded = JSON.parse(match[1]);
+  const resolved = await globalRules(fakeDb([{ rules_json: seeded }]));
+  assert.equal(resolved.maxVerificationRounds, 0);
+  assert.equal(resolved.maxHubRounds, 0);
+  assert.equal(resolved.maxAutoRetries, 6);
+  assert.equal(resolved.maxNoProgressRounds, 2);
 });

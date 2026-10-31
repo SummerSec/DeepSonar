@@ -55,6 +55,12 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
       });
     }
   }
+  if (Object.hasOwn(rules, "maxVerificationRounds")) {
+    const value = rules.maxVerificationRounds;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 20) {
+      ctx.addIssue({ code: "custom", path: ["maxVerificationRounds"], message: "maxVerificationRounds 必须是 0-20 的整数（0 表示不限制轮次）" });
+    }
+  }
   if (Object.hasOwn(rules, "maxNoProgressRounds")) {
     const value = rules.maxNoProgressRounds;
     if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 5) {

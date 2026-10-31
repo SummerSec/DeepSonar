@@ -43,14 +43,14 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     await sql`INSERT INTO credentials(id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4,public_metadata_json)
       VALUES(${credentialId},'offline','llm_provider','openai',${encrypted.ciphertext},${encrypted.nonce},${encrypted.auth_tag},
       'offline','only',${sql.json({ base_url: `http://127.0.0.1:${address.port}` })})`;
-    const setup = async (cap = 10, maxTokens?: number) => {
+    const setup = async (cap = 10, maxTokens?: number, maxRequests = 100) => {
       Object.assign(config.gateway, { repairMaxTokens: cap });
       const jobId = randomUUID();
       await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
         VALUES(${jobId},${projectId},'audit','running',${sql.json({ name: "audit", platform_tools: ["mark_job_done"] })},now(),3600,now()+interval '1 hour')`;
       const attempt = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, jobId));
       const grant = await api.mintJobCapabilityToken(jobId);
-      const mint = () => gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests: 100, maxTokens });
+      const mint = () => gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests, maxTokens });
       let token = await mint();
       api.registerRuntimeHandler(jobId, () => ({ completion_prepared: true }), ["mark_job_done"]);
       const propose = (revision: number, summary: string, key = randomUUID()) => app.inject({ method: "POST",
@@ -69,7 +69,43 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
       };
       return { jobId, attempt, propose, request, read, settle, rotate: async () => { token = await mint(); return token.plaintext; } };
     };
+    const validation = { jobId: randomUUID(), projectId, credentialId };
+    for (const value of [-1, 0.5, NaN, Infinity]) {
+      await assert.rejects(gateway.mintJobToken({ ...validation, maxRequests: value }), /maxRequests/);
+      await assert.rejects(gateway.mintJobToken({ ...validation, maxTokens: value }), /maxTokens/);
+    }
+    const unlimitedRequests = await setup(0, 0, 0);
+    await sql`UPDATE job_tokens SET used_requests=500 WHERE job_id=${unlimitedRequests.jobId}`;
+    assert.equal((await unlimitedRequests.request()).statusCode, 200); await unlimitedRequests.settle(1);
+    const [unlimitedCounter] = await sql`SELECT used_requests,status FROM job_tokens WHERE job_id=${unlimitedRequests.jobId}`;
+    assert.equal(unlimitedCounter.used_requests, 501); assert.equal(unlimitedCounter.status, "active");
+
+    const ordinaryCap = await setup(0, 10); responseTokens = 4;
+    assert.equal((await ordinaryCap.request()).statusCode, 200); await ordinaryCap.settle(1);
+    assert.equal(lastOutputLimit, 10);
+    responseTokens = 6;
+    await ordinaryCap.rotate();
+    assert.equal((await ordinaryCap.request()).statusCode, 200); await ordinaryCap.settle(2);
+    assert.equal(lastOutputLimit, 6, "ordinary Job cap survives token rotation and includes prior usage");
+    const beforeCapDenial = calls;
+    assert.equal((await ordinaryCap.request()).json().error.type, "JOB_TOKEN_EXHAUSTED");
+    assert.equal(calls, beforeCapDenial);
+    const ordinaryUnknown = await setup(0, 10); malformed = true;
+    await ordinaryUnknown.request(); await ordinaryUnknown.settle(1); malformed = false;
+    assert.equal((await ordinaryUnknown.request()).json().error.type, "JOB_TOKEN_USAGE_UNKNOWN");
+    const oldZeroCap = await setup(0);
+    await sql`UPDATE job_tokens SET max_tokens=0 WHERE job_id=${oldZeroCap.jobId}`;
+    assert.equal((await oldZeroCap.request()).json().error.type, "JOB_TOKEN_EXHAUSTED", "historical frozen zero remains closed");
+    responseTokens = 6;
     const first = await setup();
+    for (const cap of [undefined, 0, 7]) {
+      const minted = await gateway.mintJobToken({ jobId: first.jobId, projectId, credentialId, maxRequests: cap, maxTokens: cap });
+      const [stored] = await sql`SELECT max_requests,max_tokens FROM job_tokens WHERE id=${minted.id}`;
+      assert.equal(stored.max_requests, cap ?? config.gateway.maxRequests);
+      assert.equal(stored.max_tokens, cap ? String(cap) : null);
+      // These mint fixtures must not introduce a Job-wide ceiling into the repair scenarios below.
+      await sql`DELETE FROM job_tokens WHERE id=${minted.id}`;
+    }
     assert.equal((await first.request()).statusCode, 200); await first.settle(1);
     assert.equal(await first.read(), null, "normal first model request has no repair charge");
     const rejectionKey = randomUUID();
@@ -139,9 +175,40 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     await zero.request(); await zero.settle(1);
     assert.equal((await zero.read())?.usage_status, "known"); assert.equal((await zero.read())?.remaining_tokens, 10);
 
-    const unconfigured = await setup(0); await unconfigured.propose(0, "x".repeat(8193));
-    assert.equal((await unconfigured.request()).json().error.type, "REPAIR_TOKEN_LIMIT_UNCONFIGURED");
-    assert.equal((await unconfigured.propose(1, "local correction without model cost")).statusCode, 200);
+    const unconfigured = await setup(0);
+    const unlimitedRejection = await unconfigured.propose(0, "x".repeat(8193));
+    assert.equal(unlimitedRejection.json().repair.remaining_budget.tokens, undefined, "unlimited feedback does not advertise exhausted tokens");
+    responseTokens = 2_000_001;
+    for (let count = 1; count <= 2; count++) {
+      assert.equal((await unconfigured.request()).statusCode, 200); await unconfigured.settle(count);
+      assert.equal(lastOutputLimit, undefined, "unlimited repair does not inject a zero or finite output cap");
+    }
+    assert.equal((await unconfigured.read())?.limit_tokens, 0);
+    assert.equal((await unconfigured.read())?.remaining_tokens, null);
+    assert.equal((await unconfigured.read())?.known_tokens, 4_000_002, "unlimited still records authoritative usage");
+    Object.assign(config.gateway, { repairMaxTokens: 1 });
+    assert.equal((await unconfigured.read())?.limit_tokens, 0, "unlimited receipt remains frozen after policy changes");
+    assert.equal((await unconfigured.propose(1, "correction after unlimited model usage")).statusCode, 200);
+
+    // Historical receipts remain immutable and retain their original closed policy.
+    for (const historicalLimit of [null, undefined]) {
+      const historical = await setup(0); await historical.propose(0, "x".repeat(8193));
+      if (historicalLimit === null) await sql`UPDATE events SET payload_json=jsonb_set(payload_json,'{repair_token_limit}','null'::jsonb)
+        WHERE job_id=${historical.jobId} AND type='control_receipt'`;
+      else await sql`UPDATE events SET payload_json=payload_json-'repair_token_limit'
+        WHERE job_id=${historical.jobId} AND type='control_receipt'`;
+      const beforeHistorical = calls;
+      assert.equal((await historical.request()).json().error.type, "REPAIR_TOKEN_LIMIT_UNCONFIGURED");
+      assert.equal(calls, beforeHistorical);
+      assert.equal((await historical.propose(1, "local correction without model cost")).statusCode, 200);
+    }
+
+    const totalOnly = await setup(0, 10); responseTokens = 4;
+    await totalOnly.request(); await totalOnly.settle(1); await totalOnly.propose(0, "x".repeat(8193));
+    responseTokens = 6;
+    assert.equal((await totalOnly.request()).statusCode, 200); await totalOnly.settle(2);
+    assert.equal(lastOutputLimit, 6, "finite Job ceiling tightens unlimited repair without null coercion");
+    assert.equal((await totalOnly.request()).json().error.type, "JOB_TOKEN_EXHAUSTED");
 
     const total = await setup(10, 3); responseTokens = 3;
     await total.request(); await total.settle(1); await total.propose(0, "x".repeat(8193));
@@ -155,6 +222,14 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     const beforeFailure = calls; await failed.request(); await failed.settle(1); responseStatus = 200;
     assert.equal(calls, beforeFailure + 1, "repair performs one upstream attempt, not hidden potentially billable retries");
     assert.equal((await failed.read())?.usage_status, "unknown");
+
+    const finiteOrdinary = await setup(0, 10); responseStatus = 503;
+    const beforeFiniteFailure = calls;
+    assert.equal((await finiteOrdinary.request()).statusCode, 503);
+    await finiteOrdinary.settle(1); responseStatus = 200;
+    assert.equal(calls, beforeFiniteFailure + 1, "finite ordinary quota prohibits potentially billable hidden retries");
+    assert.equal((await finiteOrdinary.request()).json().error.type, "JOB_TOKEN_USAGE_UNKNOWN");
+    assert.equal(calls, beforeFiniteFailure + 1, "unknown finite usage blocks further upstream calls");
 
     // Ordinary Job: a successful business response is not proof that an earlier attempt was free.
     const ordinaryRetry = await setup();
@@ -180,8 +255,8 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     const [knownZero] = await sql`SELECT total_tokens,settlement_status FROM job_usage_ledger WHERE job_id=${ordinaryZero.jobId}`;
     assert.equal(knownZero.total_tokens, "0"); assert.equal(knownZero.settlement_status, "settled");
     assert.equal((await ordinaryZero.propose(0, "single successful request with authoritative zero usage")).statusCode, 200);
-    const [notAdmitted] = await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id=${unconfigured.jobId}`;
-    assert.equal(notAdmitted.n, 0, "denied-before-send is known not to have issued a new billable request");
+    const [unlimitedUsage] = await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id=${unconfigured.jobId}`;
+    assert.equal(unlimitedUsage.n, 2, "unlimited repair uses the existing ledger");
 
     const replacedAttempt = await setup(); await replacedAttempt.propose(0, "x".repeat(8193));
     await sql`UPDATE job_attempts SET status='interrupted',finished_at=now() WHERE job_id=${replacedAttempt.jobId}`;

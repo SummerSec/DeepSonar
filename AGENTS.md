@@ -72,7 +72,29 @@ pnpm ci:smoke:hub
 pnpm ci:images
 ```
 
-`gate` 里的守则套件分散在多个脚本（如 `ci:unit:searchable-selects` 禁止原生 `<select>`、`ci:unit:file-size` 文件体量棘轮、`ci:unit:bounded-contexts` 固定路由面与 bounded-context 所有权、`ci:unit:docs-freshness` 文档保鲜），`ci:unit:web-facts` 覆盖不到：Web 或路由面改动要按需补跑，否则 CI 才第一次报错。`ci:unit:authz` 内的 `ci-test-hook.test.ts` 保证每个被跟踪的 `*.test.ts` 都有测试入口引用（未接线的进 `apps/scheduler/src/ci-test-hook.manifest.json` 基线，只能缩小），但**脚本本身是否被 workflow 调用仍需人工确认**：全量脚本见根目录 `package.json`，已进 CI 的以 `.github/workflows/ci.yml` 为准（`ci:unit:bounded-contexts` 自 #684 起已进 CI）。测试数据库需要 `TEST_DATABASE_URL`；只依赖真实沙箱的测试要明确检查运行时是否可用。镜像改动还要检查 Dockerfile、`.dockerignore`、runtime registry fingerprint、平台架构和体积预算。
+`gate` 里的守则套件分散在多个脚本（如 `ci:unit:searchable-selects` 禁止原生 `<select>`、`ci:unit:file-size` 文件体量棘轮、`ci:unit:bounded-contexts` 固定路由面与 bounded-context 所有权、`ci:unit:docs-freshness` 文档保鲜），`ci:unit:web-facts` 覆盖不到：Web 或路由面改动要按需补跑，否则 CI 才第一次报错。`ci:unit:authz` 内的 `ci-test-hook.test.ts` 保证每个被跟踪的 `*.test.ts` 都有测试入口引用（未接线的进 `apps/scheduler/src/ci-test-hook.manifest.json` 基线，只能缩小），但**脚本本身是否被 workflow 调用仍需人工确认**：全量脚本见根目录 `package.json`，已进 CI 的以 `.github/workflows/ci.yml` 为准（`ci:unit:bounded-contexts` 自 #684 起已进 CI；`ci:unit:file-size` 自 2026-10-31 起在 gate 中显式执行，此前仅通过 `ci:unit:authz` 的文件列表间接运行，调整该列表会让棘轮静默失效）。测试数据库需要 `TEST_DATABASE_URL`；只依赖真实沙箱的测试要明确检查运行时是否可用。镜像改动还要检查 Dockerfile、`.dockerignore`、runtime registry fingerprint、平台架构和体积预算。
+
+## 验收边界：不要求生产测试部署（2026-10-31）
+
+后续项目开发**不要求生产环境测试部署**。验收以 GitHub Actions 实际通过的 CI 为准：`.github/workflows/ci.yml` 调用的 `ci:unit:*`、`ci:integration:*`、`ci:smoke:*`、`ci:images` 等门禁全部通过，即视为本仓库的**工程验收**完成。用户已明确此类生产执行无需进行，不因缺少生产重跑、生产数据验证或真实模型试验阻塞合并与 issue 关闭。
+
+### 豁免范围
+
+豁免的只有**生产执行**：生产环境测试部署、生产重跑、生产数据验证、真实模型试验。
+
+**非模型质量验收不在豁免范围。** 下列要求仍按各自 issue 的验收条款执行，不因本节失效：
+
+- 独立人工标注集，以及按问题家族 / 资产隔离的调参集与留出集；
+- 在查看留出结果之前冻结的质量阈值；
+- 需要人工判定、独立复核或外部真实输入的验收项。
+
+无法取得这些输入时，对应能力记为**未交付或暂缓**（或拆出独立跟踪项），不能用 CI 通过替代质量结论，也不能把「工程验收完成」表述为「质量验收通过」。
+
+### 证据口径
+
+- 未执行的生产验收、未运行的真实模型试验、未取得的人工标注，仍须在交付摘要和文档中如实标注为未验证；不能写成已通过，也不能用离线/合成结果代替效果数据。
+- 离线、合成和替身证据可以支撑工程行为验收，但质量收益、容量和 SLA 结论在没有实测数据时保持 `unknown`。
+- 生产部署（`deploy/deploy.sh` / `deploy/deploy.ps1`）仍是独立运维动作，不因本节的 CI 验收约定自动获得授权。
 
 ## 总体架构纪律
 

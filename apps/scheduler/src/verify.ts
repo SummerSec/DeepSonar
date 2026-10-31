@@ -46,7 +46,7 @@ import { evaluateConfirmGate } from "./verify-confirm-gate.js";
 export { evaluateConfirmGate };
 export type { ConfirmGateOptions, ConfirmGateResult } from "./verify-confirm-gate.js";
 import {
-  classifyVerifyTerminalReason,
+  classifyVerifyTerminalReason, verificationFailureRetriesExhausted,
   isVerifyConvergedStatus,
   shouldCreateHumanBlocker,
   type VerifySettleTerminal,
@@ -535,7 +535,7 @@ export async function createVerifyRound(
   const [{ max_attempt }] = await tx<[{ max_attempt: number | null }]>`
     SELECT MAX(attempt) AS max_attempt FROM finding_verification_rounds WHERE finding_id = ${findingId}`;
   const nextAttempt = Number(openRound?.attempt ?? ((max_attempt ?? 0) + 1));
-  if (nextAttempt > rules.maxVerificationRounds) {
+  if (rules.maxVerificationRounds > 0 && nextAttempt > rules.maxVerificationRounds) {
     await settleFindingVerifyByReason(tx, findingId, "max_verification_rounds");
     return null;
   }
@@ -1058,12 +1058,13 @@ export async function closeVerifyRound(
   const canvasId = (job.canvas_id as string) ?? null;
   const rules = await rulesForProject(tx as unknown as typeof sql, job.project_id as string);
 
-  // 基础设施失败 / 取消
+  // 基础设施失败 / 取消（独立连续失败护栏）
   if (opts.jobStatus !== "succeeded") {
     const attempt = round.attempt as number;
-    const atLimit = attempt >= rules.maxVerificationRounds;
-    if (atLimit || opts.jobStatus === "cancelled") {
-      const reason = opts.error ?? `verify_${opts.jobStatus}`;
+    const atLimit = rules.maxVerificationRounds > 0 && attempt >= rules.maxVerificationRounds;
+    const retriesExhausted = opts.jobStatus !== "cancelled" && await verificationFailureRetriesExhausted(tx, findingId, attempt, rules.maxAutoRetries);
+    if (atLimit || retriesExhausted || opts.jobStatus === "cancelled") {
+      const reason = retriesExhausted ? "verify_failed_retry_exhausted" : opts.error ?? `verify_${opts.jobStatus}`;
       const outcome: RoundOutcome = classifyVerifyTerminalReason(reason);
       await finishRound(tx, round.id as string, {
         status: "failed",
@@ -1078,7 +1079,6 @@ export async function closeVerifyRound(
       });
       return { outcome, forceHub: false };
     }
-
     await finishRound(tx, round.id as string, {
       status: "failed",
       proposed: null,
@@ -1141,7 +1141,7 @@ export async function closeVerifyRound(
   }
 
   // 轮次上限：rework 且已达上限 → inconclusive（预算耗尽，不是人）
-  if (final === "rework" && (round.attempt as number) >= rules.maxVerificationRounds) {
+  if (final === "rework" && rules.maxVerificationRounds > 0 && (round.attempt as number) >= rules.maxVerificationRounds) {
     final = "inconclusive";
   }
 
@@ -1378,7 +1378,7 @@ export async function maybeReverifyAfterFollowup(
       });
       return;
     }
-    if (attempt >= rules.maxVerificationRounds || noNewCount >= rules.maxVerificationRounds) {
+    if (rules.maxVerificationRounds > 0 && attempt >= rules.maxVerificationRounds) {
       await settleFindingVerifyByReason(tx, findingId, "max_verification_rounds_no_new_evidence", {
         gateFingerprint: gateFp,
         evidenceGrowth: evidenceGrew,

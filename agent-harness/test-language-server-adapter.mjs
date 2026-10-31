@@ -65,5 +65,17 @@ assert.equal(truncated.truncated, true);
 assert.ok(truncated.truncation_notes.length > 0);
 assert.equal(truncated.is_finding, false);
 
+// Both omitted and explicit zero quotas continue beyond the former default of 64.
+for (const limits of [undefined, { max_calls_per_job: 0 }]) {
+  const unlimited = createLanguageServerAdapter({ workspaceRoot: dir, transport, limits });
+  for (let i = 0; i < 70; i++) {
+    const result = await unlimited.run("hover", { path: "a.cc" });
+    assert.equal(result.inconclusive, false);
+  }
+}
+for (const value of [-1, 1.5, NaN, Infinity, "2", null, 10_001]) {
+  assert.throws(() => createLanguageServerAdapter({ limits: { max_calls_per_job: value } }), /max_calls_per_job/);
+}
+
 await rm(dir, { recursive: true, force: true });
 console.log("language-server-adapter offline tests ok");

@@ -25,6 +25,10 @@ DeepSonar 将语言服务器建模为**受治理、可插拔**的 Agent 能力�
 4. **Job 快照**：兼容审计镜像在创建 Job 时冻结 `language_server`（id / version / image_key / config_fingerprint / limits）。
 5. **Adapter**：`agent-harness/language-server-adapter.mjs` 仅暴露受控操作；限制超时、调用次数、响应大小与工作区路径沙箱。结果 schema 为 `deepsonar.language-server-result/v1`，`is_finding: false`。
 
+## 用量限制
+
+调用额度 `max_calls_per_job` 未配置或为 `0` 时不限，显式正整数才限制；非法值拒绝。内置能力包不再声明默认 token 额度，已冻结 Job 的显式额度保持原值。超时、单响应/输出字节限制、路径与权限校验仍保留。
+
 ## 非目标（本阶段）
 
 - 不为全部镜像预装语言服务器；禁止 Job 内 `apt`/`npm` 安装 LSP。

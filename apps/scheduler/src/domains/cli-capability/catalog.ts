@@ -33,7 +33,7 @@ export const BASE_CLI_COMPATIBLE_IMAGES = [
 ] as const;
 
 const DEFAULT_LIMITS = {
-  max_calls_per_job: 128,
+  max_calls_per_job: 0,
   timeout_ms: 60_000,
   max_output_bytes: 1_048_576,
 } as const;
@@ -181,7 +181,7 @@ export const CLI_CAPABILITY_MANIFESTS: readonly CliManifest[] = [
     default_available: true,
     permissions: ["read_workspace"],
     network: "disabled",
-    limits: { ...DEFAULT_LIMITS, max_calls_per_job: 256 },
+    limits: { ...DEFAULT_LIMITS },
     common_args: ["--brief", "--mime-type", "--dereference"],
     evidence_types: ["file_type_hint"],
     non_inferable_conclusions: [...NON_FINDING, "file(1) hints are not format-proof parsers"],
@@ -201,7 +201,7 @@ export const CLI_CAPABILITY_MANIFESTS: readonly CliManifest[] = [
     default_available: true,
     permissions: ["read_workspace"],
     network: "disabled",
-    limits: { ...DEFAULT_LIMITS, max_calls_per_job: 512 },
+    limits: { ...DEFAULT_LIMITS },
     common_args: ["--check", "--strict", "--tag"],
     evidence_types: ["content_digest"],
     non_inferable_conclusions: [...NON_FINDING, "Digest equality is integrity, not safety"],
@@ -286,7 +286,7 @@ export const CLI_CAPABILITY_MANIFESTS: readonly CliManifest[] = [
     default_available: true,
     permissions: ["read_workspace", "write_workspace"],
     network: "disabled",
-    limits: { max_calls_per_job: 32, timeout_ms: 600_000, max_output_bytes: 4_194_304 },
+    limits: { max_calls_per_job: 0, timeout_ms: 600_000, max_output_bytes: 4_194_304 },
     common_args: [
       "analyze",
       "search",
@@ -343,7 +343,7 @@ function packDraftForCli(module: CliManifest): CapabilityPackDraft {
     ],
     outputs: [{ name: "cli_capability_result", artifact_schema: "cli.capability_result" }],
     permissions: { platform_tools: [], allow_egress: false },
-    budget: { max_attempts: 3, max_tokens: 50_000 },
+    budget: { max_attempts: 3 },
     failure_policy: { correctable: true, replay: "same_session" },
     evaluator: `capability.${module.id}.v1`,
   });

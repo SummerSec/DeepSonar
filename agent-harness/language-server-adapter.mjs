@@ -21,7 +21,7 @@ export const LANGUAGE_SERVER_OPERATIONS = Object.freeze([
 ]);
 
 export const DEFAULT_LIMITS = Object.freeze({
-  max_calls_per_job: 64,
+  max_calls_per_job: 0,
   timeout_ms: 30_000,
   max_response_bytes: 262_144,
 });
@@ -108,6 +108,10 @@ function unavailableResult(ctx, reason, message) {
  */
 export function createLanguageServerAdapter(options = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits ?? {}) };
+  if (limits.max_calls_per_job === undefined) limits.max_calls_per_job = 0;
+  if (!Number.isSafeInteger(limits.max_calls_per_job) || limits.max_calls_per_job < 0 || limits.max_calls_per_job > 10_000) {
+    throw new Error("max_calls_per_job must be an integer between 0 and 10000");
+  }
   const workspaceRoot = path.resolve(options.workspaceRoot ?? "/workspace");
   const jobId = options.jobId ?? "job-unknown";
   const revision = options.revision ?? "unknown";
@@ -126,7 +130,7 @@ export function createLanguageServerAdapter(options = {}) {
       );
     }
 
-    if (calls >= limits.max_calls_per_job) {
+    if (limits.max_calls_per_job > 0 && calls >= limits.max_calls_per_job) {
       return unavailableResult(
         { jobId, workspaceRoot, revision, server, serverVersion, capabilityId, requestType: operation },
         "budget_exceeded",

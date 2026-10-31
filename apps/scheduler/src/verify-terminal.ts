@@ -55,3 +55,15 @@ export function classifyVerifyTerminalReason(reason: string | null | undefined):
 export function shouldCreateHumanBlocker(status: VerifySettleTerminal): boolean {
   return status === "needs_human";
 }
+
+/** Consecutive infrastructure failures, independent of business verification rounds. */
+export async function verificationFailureRetriesExhausted(
+  db: typeof import("./db.js").sql, findingId: string, attempt: number, maxRetries: number,
+): Promise<boolean> {
+  if (!Number.isSafeInteger(maxRetries) || maxRetries < 0) throw new Error("Invalid maxAutoRetries");
+  if (maxRetries === 0) return true;
+  const previous = await db`SELECT status FROM finding_verification_rounds
+    WHERE finding_id=${findingId} AND attempt<${attempt} AND finished_at IS NOT NULL
+    ORDER BY attempt DESC LIMIT ${maxRetries}`;
+  return previous.length === maxRetries && previous.every(row => row.status === "failed");
+}
