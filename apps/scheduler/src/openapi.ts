@@ -14,6 +14,7 @@ import { config } from "./config.js";
 import { FINDING_DISPOSITIONS } from "./finding-disposition.js";
 import { RUNTIME_IMAGE_REGISTRY_CHANNELS } from "./runtime-image-registry-contract.js";
 import { KNOWLEDGE_MANAGEMENT_OPERATIONS } from "./domains/project-knowledge/openapi.js";
+import { PROGRAM_ELIGIBILITY_OPERATIONS, PROGRAM_ELIGIBILITY_OPENAPI_SCHEMAS } from "./domains/program-eligibility/openapi.js";
 
 const TaskContractFeedbackSchema = {
   type: "object",
@@ -320,6 +321,7 @@ const RuntimeImageChannelUnavailableSchema = {
 
 /** 核心 API 操作表（OpenAPI paths 的单一来源） */
 const OPS: Op[] = [
+  ...PROGRAM_ELIGIBILITY_OPERATIONS,
   ...KNOWLEDGE_MANAGEMENT_OPERATIONS,
   // 设备准入与管理面（#505 阶段 1）：平台是权威，写操作后把期望集合整集推给 rig broker。
   { method: "get", path: "/devices", summary: "设备登记列表（含在途租约与 rig 准入状态；不返回租约 token）", scope: "tasks:read", tags: ["Devices"] },
@@ -3301,6 +3303,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       },
       schemas: {
         Error: ErrorSchema,
+        ...PROGRAM_ELIGIBILITY_OPENAPI_SCHEMAS,
         DashboardStatusBucket: {
           type: "object",
           additionalProperties: false,
