@@ -6,7 +6,7 @@
  * 完整清单：docs/AGENT_CLI_RUNTIME_ADAPTERS.md「Session 归档 + Web 查看器」。
  */
 
-import { redactPiObservationalMemoryText } from "./pi-observational-memory.js";
+import { redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 
 export type SupportedAgentCli = "claude-code" | "pi" | "dsh";
 

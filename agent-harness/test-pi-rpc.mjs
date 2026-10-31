@@ -55,6 +55,7 @@ if (process.argv.includes("--inside")) {
     "-v", `${path.join(repo, "agent-harness/pi-image-packaging.mjs")}:/tmp/deepsonar-tests/pi-image-packaging.mjs:ro`,
     "-v", `${path.join(repo, "agent-harness/runtime-images.json")}:/tmp/deepsonar-tests/runtime-images.json:ro`,
     "-v", `${path.join(repo, "agent-harness/fixtures")}:/tmp/deepsonar-tests/fixtures:ro`,
+    "-v", `${path.join(repo, "packages/shared-types/src/pi-observational-memory-redaction.ts")}:/tmp/deepsonar-runtime/pi-observational-memory-redaction.ts:ro`,
     "-v", `${path.join(repo, "packages/runtime-sandbox/src/pi-observational-memory.ts")}:/tmp/deepsonar-runtime/pi-observational-memory.ts:ro`,
     "-v", `${path.join(repo, "packages/runtime-sandbox/src/pi-jsonl-framer.ts")}:/tmp/deepsonar-runtime/pi-jsonl-framer.ts:ro`,
     "-v", `${path.join(repo, "packages/runtime-sandbox/src/runtime-adapters.ts")}:/tmp/deepsonar-runtime/runtime-adapters.ts:ro`,

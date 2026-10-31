@@ -1804,6 +1804,14 @@ export {
 } from "./plan.js";
 
 export {
+  PI_OBSERVATIONAL_MEMORY_REDACTION_MARKER,
+  isPiObservationalMemoryCustomType,
+  redactPiObservationalMemory,
+  redactPiObservationalMemoryText,
+  type PiMemoryRedactedValue,
+} from "./pi-observational-memory-redaction.js";
+
+export {
   PI_EXTENSION_IMAGE_ROOT,
   PI_EXTENSION_MAX_PER_ROLE,
   PI_EXTENSION_REGISTRY,

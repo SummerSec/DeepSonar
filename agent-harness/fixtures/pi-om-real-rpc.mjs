@@ -29,13 +29,19 @@ async function loadBoundaries(root) {
     writeFileSync(file, stripTypeScriptTypes(source, { mode: "transform", sourceUrl: `${name}.ts` }));
     return { file, module: await import(pathToFileURL(file).href) };
   };
-  const redactor = await load("redactor", readFileSync(path.join(dir, "pi-observational-memory.ts"), "utf8"));
+  const sharedPath = process.env.DEEPSONAR_RPC_BOUNDARY_DIR
+    ? path.join(dir, "pi-observational-memory-redaction.ts")
+    : path.join(REPO, "packages/shared-types/src/pi-observational-memory-redaction.ts");
+  const shared = await load("memory-fields", readFileSync(sharedPath, "utf8"));
+  const sharedImport = JSON.stringify(pathToFileURL(shared.file).href);
+  const redactor = await load("redactor", readFileSync(path.join(dir, "pi-observational-memory.ts"), "utf8")
+    .replace('"@deepsonar/shared-types"', sharedImport));
   const framer = await load("framer", readFileSync(path.join(dir, "pi-jsonl-framer.ts"), "utf8"));
   const adapter = readFileSync(path.join(dir, "runtime-adapters.ts"), "utf8");
   const parser = await load("parser", adapter.slice(adapter.indexOf("const PI_RPC_EVENT_TYPES"), adapter.indexOf("const ALL_IMAGE_KEYS")));
   const capture = await load("capture", readFileSync(path.join(dir, "pi-rpc-output.ts"), "utf8")
-    .replace('"./pi-observational-memory.js"', JSON.stringify(pathToFileURL(redactor.file).href)));
-  return { ...redactor.module, ...framer.module, ...parser.module, ...capture.module };
+    .replace('"@deepsonar/shared-types"', sharedImport));
+  return { ...shared.module, ...redactor.module, ...framer.module, ...parser.module, ...capture.module };
 }
 
 async function fakeGateway(scenario) {

@@ -1,5 +1,5 @@
 import type { SessionItemKind, SessionTimelineItem } from "./parseAgentSession";
-import { redactPiObservationalMemoryText } from "../../../../packages/runtime-sandbox/src/pi-observational-memory";
+import { redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 
 /** Apply the same field policy to timeline, inspector and raw archive views. */
 export function sessionViewerSafeText(text: string, cli?: string | null): string {

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeHost } from "./runtime-host.js";
-import { redactPiObservationalMemory } from "./pi-observational-memory.js";
+import { redactPiObservationalMemory } from "@deepsonar/shared-types";
 
 export const PI_RPC_INLINE_BYTES = 1024 * 1024;
 export const PI_RPC_CAPTURE_BYTES = 128 * 1024 * 1024;

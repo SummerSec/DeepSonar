@@ -5,7 +5,8 @@ import { DSH_PI_COMPAT_SYSTEM_PROMPT, formatDshTurnError, projectDshSystemPrompt
 import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
 import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
 import { PI_MEMORY_IMAGE_GUARD_SOURCE } from "./pi-memory-image-guard.js";
-import { isPiObservationalMemoryCustomType, isPiObservationalMemoryExpectedWorkerFailure, redactPiObservationalMemoryText } from "./pi-observational-memory.js";
+import { isPiObservationalMemoryCustomType, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
+import { isPiObservationalMemoryExpectedWorkerFailure } from "./pi-observational-memory.js";
 
 export type AgentCliId = "claude-code" | "dsh" | "pi";
 

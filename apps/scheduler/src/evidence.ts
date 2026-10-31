@@ -1,4 +1,5 @@
-import { redactPiObservationalMemoryText, type SessionBundle } from "@deepsonar/runtime-sandbox";
+import type { SessionBundle } from "@deepsonar/runtime-sandbox";
+import { redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, open, opendir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";

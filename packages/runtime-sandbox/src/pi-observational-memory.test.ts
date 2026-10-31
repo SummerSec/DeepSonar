@@ -8,9 +8,8 @@ import { PiRpcOutputCapture } from "./pi-rpc-output.js";
 import {
   isPiObservationalMemoryExpectedWorkerFailure,
   PiObservationalMemoryTextRedactor,
-  redactPiObservationalMemory,
-  redactPiObservationalMemoryText,
 } from "./pi-observational-memory.js";
+import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 
 const MEMORY_TEXT = "private decision and source text";
 const REDACTED = "[REDACTED: observational-memory]";

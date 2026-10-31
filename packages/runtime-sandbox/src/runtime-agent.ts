@@ -27,11 +27,8 @@ import type { AgentRuntimeLaunchSpecification } from "./agent-runtime-profile-ad
 import { assertWorkspaceWritePath, shellQuote, type RuntimeHost } from "./runtime-host.js";
 import { PiRpcDriver } from "./pi-rpc-driver.js";
 import { createStdinCloseKiller } from "./runtime-stdin-close.js";
-import {
-  PiObservationalMemoryTextRedactor,
-  redactPiObservationalMemory,
-  redactPiObservationalMemoryText,
-} from "./pi-observational-memory.js";
+import { PiObservationalMemoryTextRedactor } from "./pi-observational-memory.js";
+import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 
 
 export type ReasoningEffort = string;
