@@ -19,6 +19,10 @@
 
 控制面 Dockerfile 的 `node:24-alpine` pin 必须是含 amd64+arm64 的 OCI index；静态门禁见 `pnpm ci:unit:control-plane-platforms`（亦挂入 `pnpm ci:images`）。发布后可用 `docker buildx imagetools inspect` 验收 index 同时含两平台。
 
+## Web 隔离构建回归
+
+Web 生产构建使用 [`tsconfig.build.json`](../apps/web/tsconfig.build.json) 继承完整严格类型配置，仅排除测试入口；`typecheck` 保留完整 `tsconfig.json`，跨包 Plan 报告测试仍由 `ci:unit:plan-protocol` 执行。`ci:images` 同时执行实际 `deploy/Dockerfile.web` 构建与最终静态产物检查，覆盖完整仓库可通过而镜像上下文缺少 Scheduler 源码的情况；不复制 Scheduler 源码到 Web 镜像。2026-10-31 核对 v0.6.1 run `41171008148` 的 Web job `124451427235` 已因 TS2307 失败；原 tag 保留，其他镜像产出不等于正式 Release 完成。修复后的双架构发布结果须由目标 Release workflow 另行证明。
+
 ## 发布前门禁
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。

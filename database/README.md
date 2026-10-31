@@ -1,6 +1,6 @@
 # Database schema
 
-`schema.sql` 是唯一 schema 真相源（当前 **v60**，与 `apps/scheduler/src/schema-version.ts` 同步）。Scheduler 启动时在 reserved
+`schema.sql` 是唯一 schema 真相源；当前集成版本以 [`SCHEMA_VERSION`](../apps/scheduler/src/schema-version.ts) 为准，数据库基线必须与之同步。Scheduler 启动时在 reserved
 PostgreSQL session 上持有 session advisory lock：
 
 - **空数据库**：原子执行 `database/schema.sql`，直接得到当前版本；
