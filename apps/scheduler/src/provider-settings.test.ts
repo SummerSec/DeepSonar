@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { defaultDshPiAiSettings } from "@deepsonar/runtime-sandbox";
-import { PI_OBSERVATIONAL_MEMORY_PROVIDER } from "@deepsonar/shared-types";
+import { PI_EXTENSION_REGISTRY, PI_OBSERVATIONAL_MEMORY_PROVIDER } from "@deepsonar/shared-types";
 import { freezePiExtensions } from "./pi-extensions.js";
 import {
   extractBaseUrlFromSettings,
@@ -215,7 +215,7 @@ test("Pi provider settings cannot activate or override Scheduler-owned observati
 function observationalMemoryRoutingFixture(api = "openai-responses") {
   const [extension] = freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", {
     provider: "fixture-route", model: "fixture-model", thinking: "low",
-  });
+  }, PI_EXTENSION_REGISTRY["pi-observational-memory"].min_runtime_image_version);
   assert.ok(extension?.observational_memory);
   const files = materializeProviderSettings({
     agentCli: "pi",
