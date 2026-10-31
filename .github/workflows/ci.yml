@@ -54,40 +54,10 @@ jobs:
           PR_BASE: ${{ github.event.pull_request.base.sha }}
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          set -euo pipefail
-          emit() { echo "docs_only=$1" >> "$GITHUB_OUTPUT"; }
-
-          # 非 PR（含 workflow_dispatch、push@main）一律 full。
-          if [ "$EVENT_NAME" != "pull_request" ]; then emit false; exit 0; fi
-          if [ -z "${PR_BASE:-}" ] || [ -z "${PR_HEAD:-}" ]; then emit false; exit 0; fi
-
-          # 分类器自身失败必须 fail safe 到 full，不能误判成 docs-only。
-          if ! diff_out=$(git diff --name-status --no-renames "$PR_BASE...$PR_HEAD"); then
-            echo "::warning::classifier diff failed; falling back to full"
-            emit false; exit 0
-          fi
-          if [ -z "$diff_out" ]; then emit false; exit 0; fi
-
-          docs_only=true
-          while IFS=$'\t' read -r status path; do
-            [ -z "${status:-}" ] && continue
-            # 只接受新增/修改；删除、重命名（--no-renames 后表现为 D+A）、类型变更一律 full。
-            case "$status" in
-              A|M) ;;
-              *) docs_only=false; break ;;
-            esac
-            # 安全文本白名单。skills/ 是运行时提示，docs/evidence/ 是探测数据，都不算纯文档。
-            case "$path" in
-              LICENSE|THIRD_PARTY_NOTICES.md) ;;
-              skills/*) docs_only=false; break ;;
-              docs/evidence/*) docs_only=false; break ;;
-              README.md|AGENTS.md|CLAUDE.md|DESIGN.md|CHANGELOG.md) ;;
-              docs/*.md) ;;
-              *) docs_only=false; break ;;
-            esac
-          done <<< "$diff_out"
-
-          emit "$docs_only"
+          node agent-harness/classify-ci-changes.mjs \
+            --event-name "$EVENT_NAME" \
+            --base "${PR_BASE:-}" \
+            --head "${PR_HEAD:-}"
 
   # 文档保鲜在所有 PR 上运行（含纯代码 PR）：删脚本、schema 版本变化同样会破坏文档。
   # 需要完整 checkout（读取 package.json、schema-version、Git symlink 元数据），但不启动数据库。

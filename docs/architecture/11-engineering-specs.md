@@ -85,7 +85,7 @@ Control API 的每个 operation 必须经过三层校验：
 
 单元测试不替代 PostgreSQL 集成，typecheck 不替代行为测试，fake 模式冒烟不替代真实沙箱或多架构镜像证据。`ci:unit:ci-test-hook` 维护 `*.test.ts` 的脚本接线棘轮；它不能证明对应 script 已被 workflow 调用，workflow 仍需人工核对。测试数据库或真实沙箱不可用时保留跳过/未执行事实，不改写为成功。
 
-当前 CI 在单 workflow 内分类 PR：只有新增/修改的明确根目录文档、LICENSE、THIRD_PARTY_NOTICES.md 或 docs 下 Markdown（排除 docs/evidence）可跳过重活；运行时手册、skills、未知路径、混合、删除及重命名都运行全量。文档保鲜与 `pnpm ci:unit:ci-routing` 始终执行，ci-summary 验证分类结果、文档与每个应运行 job，失败、取消或意外跳过不能通过。分类失败/缺失输出不允许走文档路径；push 与 workflow_dispatch 强制 full。
+当前 CI 在单 workflow 内分类 PR：只有新增/修改且位于 [明确文件白名单](../../agent-harness/classify-ci-changes.mjs) 内的纯文本文件可跳过重活；不按 Markdown 后缀或 docs/skills 目录前缀放行。运行时手册、Skill、提示、配置、未知路径、混合改动、删除及重命名都运行全量。分类器使用 NUL 分隔的 Git diff 保留文件名身份。文档保鲜与 `pnpm ci:unit:ci-routing` 始终执行，ci-summary 验证分类结果、文档与每个应运行 job，失败、取消或意外跳过不能通过。分类失败/缺失输出不允许走文档路径；已触发的 push 与 workflow_dispatch 强制 full。
 
 合并到 `main` 的 push 对文档路径使用 `paths-ignore`，所以纯文档变更是否触发主干 CI 不能靠经验推断，必要时按发布硬门手动补跑并核对 SHA。
 

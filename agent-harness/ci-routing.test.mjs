@@ -28,16 +28,21 @@ test("actual classifier handles docs, runtime inputs, unknowns, rename/delete an
     git("init", "-q"); git("config", "user.email", "ci@example.invalid"); git("config", "user.name", "CI fixture");
     writeFileSync(join(dir, "README.md"), "initial\n"); git("add", "."); git("commit", "-qm", "base");
     const base = git("rev-parse", "HEAD");
+    mkdirSync(join(dir, "agent-harness"), { recursive: true });
+    writeFileSync(join(dir, "agent-harness/classify-ci-changes.mjs"), readFileSync(new URL("agent-harness/classify-ci-changes.mjs", root)));
     const classifyHead = (event = "pull_request", head = git("rev-parse", "HEAD")) => {
       const output = join(dir, "output"); writeFileSync(output, "");
       const run = spawnSync("bash", ["-c", classify], { cwd: dir, encoding: "utf8",
         env: { ...process.env, EVENT_NAME: event, PR_BASE: base, PR_HEAD: head, GITHUB_OUTPUT: output } });
-      assert.equal(run.status, 0, run.stderr);
-      return readFileSync(output, "utf8").trim();
+      const invalidRevision = event === "pull_request" && (!head || head === "missing-ref");
+      assert.equal(run.status, invalidRevision ? 1 : 0, run.stderr);
+      return readFileSync(output, "utf8").trim().split("\n").find(line => line.startsWith("docs_only="));
     };
     assert.equal(classifyHead(), "docs_only=false", "empty diff");
     for (const [files, expected] of [
-      [["README.md"], true], [["docs/guide.md"], true], [["docs/architecture/new.md"], true],
+      [["README.md"], true], [["docs/README.md"], true], [["docs/architecture/README.md"], true],
+      [["docs/guide.md"], false], [["docs/architecture/new.md"], false], [["docs/说明 文档.md"], false],
+      [["docs/README.md "], false],
       [["LICENSE"], true], [["README.md", "apps/new.ts"], false],
       [["agent-harness/runtime-manuals/tools/binutils.md"], false],
       [["agent-harness/runtime-manuals/other.md"], false], [["agent-harness/other.md"], false],
