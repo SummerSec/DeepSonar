@@ -619,6 +619,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     return {
       meta: session.meta,
       artifacts: session.artifacts,
+      ...(session.projection ? { projection: session.projection } : {}),
       text: session.content.subarray(0, SESSION_VIEW_MAX_BYTES).toString("utf8"),
       truncated: session.content.byteLength > SESSION_VIEW_MAX_BYTES,
     };
@@ -637,6 +638,10 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       });
     }
     const safeName = session.meta.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    if (session.projection) {
+      reply.header("x-deepsonar-session-projection", session.projection.kind);
+      reply.header("content-digest", `sha-256=:${Buffer.from(session.projection.sha256, "hex").toString("base64")}:`);
+    }
     return reply
       .header("content-type", "application/x-ndjson; charset=utf-8")
       .header("content-disposition", `attachment; filename="${safeName}"`)

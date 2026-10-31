@@ -61,7 +61,10 @@ async function fakeGateway(scenario) {
       const names = body.tools?.map((tool) => tool.function.name) ?? [];
       const stage = names.includes("record_observations") ? "observer" : names.includes("record_reflections") ? "reflector" : "main";
       assert.equal(stage === "main", workload === "main", "worker escaped its attributed Gateway route");
-      const row = { workload, model: body.model, stage, status: 200, input_bytes: Buffer.byteLength(text), total_tokens: 1040,
+      // Synthetic usage follows request size so the real plugin's progress
+      // watermark sees new context rather than an impossible constant window.
+      const promptTokens = Math.max(1, Math.ceil(Buffer.byteLength(text) / 4));
+      const row = { workload, model: body.model, stage, status: 200, input_bytes: Buffer.byteLength(text), total_tokens: promptTokens + 16,
         tool_acks: body.messages.filter((message) => message.role === "tool").map((message) =>
           typeof message.content === "string" ? message.content.slice(0, 512) : "nontext") };
       requests.push(row);
@@ -97,8 +100,11 @@ async function fakeGateway(scenario) {
         tool = { name: "record_observations", arguments: { observations: [{ timestamp: "2026-10-31 12:00",
           content, relevance: "high", sourceEntryIds: [source] }] } };
       } else if (stage === "reflector" && !body.messages.some((message) => message.role === "tool")) {
-        assert.ok(transcript.includes(observationId));
-        tool = { name: "record_reflections", arguments: { reflections: [{ content: REFLECTION, supportingObservationIds: [observationId] }] } };
+        const ids = [...transcript.matchAll(/\[([a-f0-9]{12})\] [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}/gu)].map((match) => match[1]);
+        const support = ids.includes(observationId) ? observationId : ids[0];
+        assert.ok(support, "actual reflector input must carry an allowed observation id");
+        const content = support === observationId ? REFLECTION : `${REFLECTION}_OTHER_${support}`;
+        tool = { name: "record_reflections", arguments: { reflections: [{ content, supportingObservationIds: [support] }] } };
       } else if (stage === "main" && transcript.includes("RECALL_NOW")
         && !body.messages.some((message) => message.role === "tool" && message.tool_call_id === "recall-call")) {
         tool = { name: "recall", arguments: { id: observationId } };
@@ -111,7 +117,7 @@ async function fakeGateway(scenario) {
       if (tool) chunk({ tool_calls: [{ index: 0, id: stage === "main" ? "recall-call" : `${stage}-record`,
         type: "function", function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] });
       else chunk({ content: stage === "main" && !names.length ? "NATIVE_SUMMARY" : "offline completed" });
-      chunk({}, tool ? "tool_calls" : "stop", { prompt_tokens: 1024, completion_tokens: 16, total_tokens: 1040 });
+      chunk({}, tool ? "tool_calls" : "stop", { prompt_tokens: promptTokens, completion_tokens: 16, total_tokens: promptTokens + 16 });
       res.end("data: [DONE]\n\n");
     } catch (error) {
       server.fixtureError = error;
@@ -191,6 +197,10 @@ export async function runRealPiRpc() {
           assert.ok(gateway.requests.some((row) => row.stage === "observer"));
           assert.ok(client.records.some((record) => record.type === "entry_appended"
             && record.entry?.customType === "om.observations.recorded"), "the actual observer must commit its session entry before settlement");
+          // The bounded observer first covers Pi's preceding system entry.
+          // Advance another real turn to cover the large user entry before
+          // asking for the observation linked specifically to that entry.
+          await client.turn("Observe the remaining original source before recall.");
           await client.turn("RECALL_NOW");
           assert.ok(gateway.requests.some((row) => row.stage === "reflector"), "the actual reflector must run after observer state is committed");
           // The production parser already redacts memory. Inspect the actual

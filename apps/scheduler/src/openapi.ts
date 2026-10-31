@@ -1462,9 +1462,9 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/jobs/{id}/evidence/session",
-    summary: "查看 Agent CLI 原始 Session",
+    summary: "查看 Agent CLI Session",
     description:
-      "默认返回主 Session / vendor export。query path 选择 manifest 中的 main / subagent / vendor_export 文件。在线预览最多 8 MiB，超限 truncated=true；完整字节走 download。artifacts 列出全部可切换归档。",
+      "默认返回主 Session / vendor export。query path 选择 manifest 中的 main / subagent / vendor_export 文件。Pi 观察记忆先对完整归档作脱敏投影，再按 SESSION_VIEW_MAX_BYTES（见 evidence.ts）截断；含 projection 时其 bytes/sha256 描述脱敏全文，meta 仍描述不可变源归档。artifacts 列出全部可切换归档。",
     scope: "tasks:read",
     tags: ["Jobs"],
     query: {
@@ -1474,8 +1474,8 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/jobs/{id}/evidence/session/download",
-    summary: "下载 Agent CLI 原始 Session",
-    description: "下载所选 Session 归档全文。query path 与查看接口相同，默认主 Session。",
+    summary: "下载 Agent CLI Session",
+    description: "下载所选 Session 全文。query path 与查看接口相同，默认主 Session。Pi 观察记忆按与预览相同的规则脱敏，不改写源归档或 manifest。发生投影时返回 x-deepsonar-session-projection=pi-memory-redacted 和描述实际下载字节的 Content-Digest；原始来源哈希仍见 manifest。",
     scope: "tasks:read",
     tags: ["Jobs"],
     query: {

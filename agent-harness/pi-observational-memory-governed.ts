@@ -298,15 +298,17 @@ type GuardState = { hardFailure?: Error; degraded?: string; workers: Set<Promise
 function workerFailure(error: unknown): string {
   const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   if (/^PI_OM_[A-Z0-9_]+$/u.test(raw) && !raw.startsWith("PI_OM_WORKER_")) return raw;
-  // pi-ai retains HTTP errors as '<status> <JSON>'. Classify only the
-  // Gateway's structured code, never provider prose or a bare HTTP 5xx.
-  const body = raw.replace(/^\d{3}\s+/u, "");
+  // Current SDK transports expose either '<status> <envelope>' or
+  // '<status>: <inner error>'. Retain status when classifying either shape.
+  const status = Number(raw.match(/^(\d{3})(?:\s+|:\s*)/u)?.[1]);
+  const body = raw.replace(/^\d{3}(?:\s+|:\s*)/u, "");
   if (/^429 (?:request quota exhausted|observational-memory token cap exhausted)$/u.test(raw)) return "PI_OM_WORKER_QUOTA_EXHAUSTED";
   try {
     const parsed = JSON.parse(body);
-    const code = parsed?.error?.type ?? parsed?.error?.code ?? parsed?.error_code;
-    if (code === "quota_exhausted" || code === "workload_token_cap_exhausted") return "PI_OM_WORKER_QUOTA_EXHAUSTED";
-    if (code === "gateway_transient" && parsed.error?.effect_status === "not_started") return "PI_OM_WORKER_TRANSIENT";
+    const detail = isRecord(parsed?.error) ? parsed.error : parsed;
+    const code = detail?.type ?? detail?.code ?? parsed?.error_code;
+    if (status === 429 && (code === "quota_exhausted" || code === "workload_token_cap_exhausted")) return "PI_OM_WORKER_QUOTA_EXHAUSTED";
+    if (status === 503 && code === "gateway_transient" && detail.effect_status === "not_started") return "PI_OM_WORKER_TRANSIENT";
     if (code === "workload_usage_unknown" || code === "workload_usage_pending") return "PI_OM_UNKNOWN_EFFECT";
   } catch { /* Unrecognized errors fail closed. */ }
   return "PI_OM_PROTOCOL_WORKER_FAILURE";

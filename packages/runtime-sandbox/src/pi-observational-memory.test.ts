@@ -263,7 +263,9 @@ test("wrapper uses frozen config, restores Pi environment, bounds recall and shi
   } finally { fixture.close(); }
 });
 
-for (const error of ["429 request quota exhausted", '503 {"error":{"type":"gateway_transient","effect_status":"not_started"}}']) {
+for (const error of ["429 request quota exhausted", '503 {"error":{"type":"gateway_transient","effect_status":"not_started"}}',
+  '429: {"type":"quota_exhausted","message":"request quota exhausted"}',
+  '503: {"type":"gateway_transient","effect_status":"not_started"}']) {
   test(`wrapper reports ${error.slice(0, 3)} background failure after upstream swallowed it and permits native compaction`, async () => {
     const fixture = await wrapperFixture(error);
     try {
@@ -278,7 +280,9 @@ for (const error of ["429 request quota exhausted", '503 {"error":{"type":"gatew
 }
 
 for (const error of ["PI_OM_MODEL_SCOPE_INVALID", "PI_OM_WORKER_TRANSIENT", '409 {"error":{"type":"workload_usage_unknown"}}', "unrecognized protocol error",
-  '503 {"error":{"type":"gateway_transient"}}']) {
+  '503 {"error":{"type":"gateway_transient"}}',
+  '403: {"type":"quota_exhausted","message":"forbidden"}',
+  '503: {"type":"gateway_transient"}']) {
   test(`wrapper keeps swallowed worker failure hard: ${error.slice(0, 32)}`, async () => {
     const fixture = await wrapperFixture(error);
     try {

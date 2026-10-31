@@ -867,6 +867,7 @@ export interface EvidenceFileMeta {
 
 export interface JobSession {
   meta: EvidenceFileMeta;
+  projection?: { kind: "pi-memory-redacted"; bytes: number; sha256: string };
   artifacts?: EvidenceFileMeta[];
   text: string;
   truncated: boolean;

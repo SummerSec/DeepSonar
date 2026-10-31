@@ -1027,7 +1027,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   truncated={session.truncated}
                   cli={evidence?.manifest.cli}
                   sessionId={evidence?.manifest.session_id}
-                  sourceLabel="CLI Session 归档"
+                  sourceLabel={session.projection ? "CLI Session 脱敏归档" : "CLI Session 归档"}
                   artifacts={session.artifacts ?? [session.meta]}
                   selectedPath={session.meta.path}
                   gatewayUsage={detail.usage}
@@ -1088,7 +1088,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   </p>
                   <p className="font-mono text-[11px] leading-5 text-zinc-600">
                     常见原因：AGENT_MODE=fake（不会落盘 Session）、运行中尚未 finalize、
-                    或该 CLI 未成功捕获 session_id。有归档时标签会显示文件数，并出现时间线 / 用量 / 统计 / 原始。
+                    或该 CLI 未成功捕获 session_id。有归档时标签会显示文件数，并出现账本 / 用量 / 统计 / 会话文本。
                   </p>
                 </div>
               )}

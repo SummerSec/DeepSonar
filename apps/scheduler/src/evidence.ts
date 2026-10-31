@@ -1,4 +1,4 @@
-import type { SessionBundle } from "@deepsonar/runtime-sandbox";
+import { redactPiObservationalMemoryText, type SessionBundle } from "@deepsonar/runtime-sandbox";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { appendFile, mkdir, open, opendir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -433,14 +433,43 @@ function defaultSessionArtifact(artifacts: readonly EvidenceFileMeta[]): Evidenc
 export async function readSessionArtifact(
   jobId: string,
   path?: string | null,
-): Promise<{ meta: EvidenceFileMeta; content: Buffer; artifacts: EvidenceFileMeta[] } | null> {
-  const artifacts = listSessionArtifacts(await readEvidenceManifest(jobId));
+): Promise<{
+  meta: EvidenceFileMeta;
+  content: Buffer;
+  artifacts: EvidenceFileMeta[];
+  projection?: { kind: "pi-memory-redacted"; bytes: number; sha256: string };
+} | null> {
+  const manifest = await readEvidenceManifest(jobId);
+  const artifacts = listSessionArtifacts(manifest);
   if (artifacts.length === 0) return null;
   const meta = path
     ? artifacts.find((file) => file.path === path)
     : defaultSessionArtifact(artifacts);
   if (!meta) return null;
-  return { meta, content: await readFile(resolveManifestFile(jobId, meta)), artifacts: sortSessionArtifacts(artifacts) };
+  const original = await readFile(resolveManifestFile(jobId, meta));
+  const firstLf = original.indexOf(0x0a);
+  let piHeader = false;
+  if (firstLf > 0 && firstLf < 16 * 1024) {
+    try {
+      const header = JSON.parse(original.subarray(0, firstLf).toString("utf8"));
+      piHeader = header?.type === "session" && header.version === 3
+        && typeof header.id === "string" && typeof header.cwd === "string";
+    } catch { /* A different CLI's first record is not a Pi header. */ }
+  }
+  let content = original;
+  if (manifest?.cli === "pi" || piHeader) {
+    const text = original.toString("utf8");
+    const redacted = redactPiObservationalMemoryText(text);
+    if (redacted !== text) content = Buffer.from(redacted, "utf8");
+  }
+  // Source manifest hashes describe immutable retained bytes. A redacted read
+  // is explicitly projected, before either route truncates or downloads it.
+  return {
+    meta, content, artifacts: sortSessionArtifacts(artifacts),
+    ...(content !== original ? {
+      projection: { kind: "pi-memory-redacted" as const, bytes: content.byteLength, sha256: sha256(content) },
+    } : {}),
+  };
 }
 
 const MAX_STREAM_READ_BYTES = 8 * 1024 * 1024;
