@@ -1,11 +1,11 @@
 ## [Unreleased]
 
-## [0.7.0] - 2026-10-31
+## [0.6.1] - 2026-10-31
 
 ### 发布与升级边界
 
-- 本版发布已合入并通过门禁的功能切片，不代表 #765、#767、#770、#775 整体完成；这些 issue 的生产重跑、外部可信输入、独立标签或后续规划闭环仍按各自验收记录保留。真实模型效果、恢复率、质量和成本收益未验证，不用离线协议测试代替效果数据。
-- 产品版本由不可变 `v0.7.0` tag 唯一确定；数据库基线由 v0.6.0 的 schema 62 更新到 **65**，包含独立 Finding 来源身份、特征和候选派生状态。已有非空库版本不匹配时拒绝启动；升级须先备份、排空/对账未结算效果，按维护计划、显式审批与候选库重建流程执行。没有增量 ALTER 链，不支持无人值守跨 schema 升级。本次不部署生产系统。
+- 本版发布已合入并通过门禁的功能切片，不代表 #767、#770、#775 整体完成；这些 issue 的外部可信输入、独立标签或后续规划闭环仍按各自验收记录保留。#765 的生产重跑验收已按用户要求豁免并关闭，修复纳入本版；豁免不代表实际生产重跑通过。真实模型效果、恢复率、质量和成本收益未验证，不用离线协议测试代替效果数据。
+- 产品版本由不可变 `v0.6.1` tag 唯一确定；数据库基线由 v0.6.0 的 schema 62 更新到 **65**，包含独立 Finding 来源身份、特征和候选派生状态。已有非空库版本不匹配时拒绝启动；升级须先备份、排空/对账未结算效果，按维护计划、显式审批与候选库重建流程执行。没有增量 ALTER 链，不支持无人值守跨 schema 升级。本次不部署生产系统。
 - 修正模型调用需要管理员显式配置 `DEEPSONAR_REPAIR_MAX_TOKENS`；未设置或非法时不允许新增修正模型请求。首个持久拒绝回执冻结额度，重启不重置；用量未知必须对账，不能记为零。该机制是累计结算后的熔断，输入/缓存成本仍可能使单次已准入请求超出剩余额度，不承诺精确调用前总成本上限。
 - 发布准备不提前改写 bundled 镜像 digest、部署示例或私有 package 版本。镜像、双架构原生验证、配置通道 inspect、三张平台 GHCR index 的 keyless 签名与最终附件必须由本 tag 的 Release workflow 实际成功产生；本节本身不证明发布已完成。
 
@@ -30,7 +30,7 @@
 
 ### 修复
 
-- Pi RPC 大输出按完整 JSON 处理（#765）：按 LF 独立计数，修复合批字节误计、跨帧前缀残留和嵌套 type 误判；不再截断 JSON 或跳过控制帧。默认硬上限 8MiB，可通过 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1–64MiB 配置。额度内超过 1MiB 的事件先保存完整脱敏 JSON 到 Job workspace 和 Attempt evidence，再将已知文本字段投影为 UTF-8 安全预览；保留响应 ID、身份、错误和生命周期字段。诊断仅含 original_bytes、retained_bytes、sha256（redacted_json）、path/evidence_path 与 capture_complete，不含原始 preview。每次运行含恢复共用 128MiB 保存额度；超硬上限、结构不可安全投影、写盘失败或额度耗尽明确失败，不能报告阴性/成功。无需 schema 变更；生产 17 个 Job 未重跑。
+- Pi RPC 大输出按完整 JSON 处理（#765）：按 LF 独立计数，修复合批字节误计、跨帧前缀残留和嵌套 type 误判；不再截断 JSON 或跳过控制帧。默认硬上限 8MiB，可通过 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1–64MiB 配置。额度内超过 1MiB 的事件先保存完整脱敏 JSON 到 Job workspace 和 Attempt evidence，再将已知文本字段投影为 UTF-8 安全预览；保留响应 ID、身份、错误和生命周期字段。诊断仅含 original_bytes、retained_bytes、sha256（redacted_json）、path/evidence_path 与 capture_complete，不含原始 preview。每次运行含恢复共用 128MiB 保存额度；超硬上限、结构不可安全投影、写盘失败或额度耗尽明确失败，不能报告阴性/成功。该修复自身无需 schema 变更；生产 17 个 Job 未重跑，其生产验收已获豁免，#765 于 2026-10-31 关闭（[收口记录](https://github.com/SummerSec/DeepSonar/issues/765#issuecomment-6537343628)）。不声称生产审计覆盖已经验证。
 
 
 - 官方运行时镜像清单拉取不再因单次链路抖动失败（#761）：`github.com/.../releases/latest/download` 会 302 到 `release-assets.githubusercontent.com`，部分网络下首跳常超过 10s；原先每次请求只有一次 10s 硬超时且零重试，表现为 `remote registry request timed out` 反复出现。现在：① 仅对瞬时错误（超时/连接重置/429/5xx）做有界重试（默认 3 次，`DEEPSONAR_RUNTIME_REGISTRY_FETCH_ATTEMPTS` 可调 1–5），鉴权/主机/载荷/体积错误立即失败；② 无 token 时公开通道失败后回退 `api.github.com` 的 release asset；③ 瞬时失败**保留上次成功清单**（`stale`/`consecutive_failures`/`last_success_at`），连续 3 次才降级到 bundled，`stale` 期间不写平台更新检查，横幅不再随单次抖动翻转。不 bump schema。
@@ -1311,4 +1311,4 @@
 
 [0.6.0]: https://github.com/SummerSec/DeepSonar/compare/v0.5.6...v0.6.0
 
-[0.7.0]: https://github.com/SummerSec/DeepSonar/compare/v0.6.0...v0.7.0
+[0.6.1]: https://github.com/SummerSec/DeepSonar/compare/v0.6.0...v0.6.1
