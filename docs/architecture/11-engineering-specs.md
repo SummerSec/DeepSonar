@@ -89,6 +89,8 @@ Control API 的每个 operation 必须经过三层校验：
 
 合并到 `main` 的 push 对文档路径使用 `paths-ignore`，所以纯文档变更是否触发主干 CI 不能靠经验推断，必要时按发布硬门手动补跑并核对 SHA。
 
+Chrome Fuzz ARM64 的 CI/Release cache miss 构建前执行[受控宿主磁盘准备](../../.github/ci/prepare-hosted-runner-disk.mjs)，只清理 GitHub-hosted runner 的显式 SDK 白名单，保护工作区和 Docker 状态。always-running docs-freshness job 另运行该脚本的 mock 安全测试。实际磁盘耗尽证据、信任限制和待验证运行见[发布专题](../RELEASE_RUNTIME_IMAGES.md#chrome-fuzz-arm64-的宿主磁盘准备)；不以清理测试代替原生构建或 smoke。
+
 ## 5. 文档、需求和发布保鲜
 
 结构性变更包括功能域、API、schema、状态机、配置快照、运行时镜像、权限或安全边界变化。提交前必须从完整变更面判断影响，并同步：

@@ -23,6 +23,12 @@
 
 Web 生产构建使用 [`tsconfig.build.json`](../apps/web/tsconfig.build.json) 继承完整严格类型配置，仅排除测试入口；`typecheck` 保留完整 `tsconfig.json`，跨包 Plan 报告测试仍由 `ci:unit:plan-protocol` 执行。`ci:images` 同时执行实际 `deploy/Dockerfile.web` 构建与最终静态产物检查，覆盖完整仓库可通过而镜像上下文缺少 Scheduler 源码的情况；不复制 Scheduler 源码到 Web 镜像。2026-10-31 核对 v0.6.1 run `41171008148` 的 Web job `124451427235` 已因 TS2307 失败；原 tag 保留，其他镜像产出不等于正式 Release 完成。修复后的双架构发布结果须由目标 Release workflow 另行证明。
 
+## Chrome Fuzz ARM64 的宿主磁盘准备
+
+2026-10-31，[CI run 41173355695](https://github.com/SummerSec/DeepSonar/actions/runs/41173355695) 的 `chrome-fuzz-arm64-build` 在构建中失败；check-run 注释明确记录 runner 写诊断日志时 `System.IO.IOException: No space left on device`。该证据不能证明编译错误、网络协议问题或容量/SLA 上限。
+
+CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚本](../.github/ci/prepare-hosted-runner-disk.mjs)：只在 GitHub-hosted runner 删除明确列出的未使用 SDK，并打印前后磁盘状态。脚本保护工作区、runner 和 Docker/containerd 数据，清理失败直接失败；本地与 self-hosted 禁止实际删除，显式 dry-run 只打印诊断。安全测试通过 mock 命令执行，不删除宿主文件。此准备不改变 fingerprint、镜像产物或原生 build/smoke 门禁，空间是否足够仍须由新运行证明，不能将本地安全测试写成 ARM64 构建已通过。
+
 ## 发布前门禁
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。
@@ -39,7 +45,7 @@ pnpm build
 pnpm ci:images
 ```
 
-先按 `AGENTS.md` 的发版硬门完成人工 as-built 文档核对，再等待最终 `main` 提交的 CI 通过，才创建并推送新的不可变 `vX.Y.Z` tag。`ci:unit:changelog` 验证校验器本身的用例，上面的 `validate-changelog.mjs` 命令才验证真实待发布区段；每次发布需改为本次目标和实际前一 tag。`ci.yml` 的 `push@main` 会跳过纯文档提交，因此文档版 release-prep 合入后，应在 Actions 手动触发 `ci` 的 `workflow_dispatch` 并核对运行 SHA 为最终待打 tag 的提交。纯文档 PR 仍运行核心 CI；专项 workflow 是否触发由各自 paths 决定。运行镜像输入及 `BASE_IMAGE` digest 未变且 immutable `src-*` cache 可用时，核心 CI 可复用既有构建，仍执行规定的真实冒烟；不要为缩短发版时间改动 fingerprint 或跳过门禁。Release workflow 会在镜像构建前再次校验 tag、目标 changelog 区段和 compare link；校验失败时不会构建或发布镜像。工作流将经过校验的精确 changelog 区段写入 GitHub Release，同时保留许可证声明、runtime registry、Management Skill 附件和 GitHub 生成的 compare notes。
+先按 `AGENTS.md` 的发版硬门完成人工 as-built 文档核对，再等待最终 `main` 提交的 CI 通过，才创建并推送新的不可变 `vX.Y.Z` tag。`ci:unit:changelog` 验证校验器本身的用例，上面的 `validate-changelog.mjs` 命令才验证真实待发布区段；每次发布需改为本次目标和实际前一 tag。`ci.yml` 的 `push@main` 会跳过纯文档提交，因此文档版 release-prep 合入后，应在 Actions 手动触发 `ci` 的 `workflow_dispatch` 并核对运行 SHA 为最终待打 tag 的提交。纯文档 PR 始终执行文档保鲜与聚合门，只有明确白名单内的文本变更可跳过重活；手动 `workflow_dispatch` 强制全量。专项 workflow 是否触发由各自 paths 决定。运行镜像输入及 `BASE_IMAGE` digest 未变且 immutable `src-*` cache 可用时，核心 CI 可复用既有构建，仍执行规定的真实冒烟；不要为缩短发版时间改动 fingerprint 或跳过门禁。Release workflow 会在镜像构建前再次校验 tag、目标 changelog 区段和 compare link；校验失败时不会构建或发布镜像。工作流将经过校验的精确 changelog 区段写入 GitHub Release，同时保留许可证声明、runtime registry、Management Skill 附件和 GitHub 生成的 compare notes。
 
 **v0.5.5 发布结果**（v0.5.4 tag 不移动；其 Release 中 `reverse-images` 曾把 GHCR index 推送成功但 ACR / Docker Hub `imagetools create` 失败；#732 为 `publish-reverse-runtime.mjs` 补上 HTTP/1.1、每次 15 分钟、最多 3 次重试）：v0.5.5 tag 触发的 Release 已全部成功——真实不可变 digest、`reverse.json`、三通道 inspect、证据附件 `deepsonar-reverse-evidence-0.5.5.tar.gz`，并由 workflow 把 `deepsonar-reverse` `0.5.5` 回写 `deploy/runtime-image-registry.json`（此前 `versions: []`）。后续发版仍不得用空 descriptor、手写 digest、复制其他产品证据或从必需产品集合静默删除 reverse 来绕过阻塞。
 
