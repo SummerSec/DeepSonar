@@ -14,13 +14,13 @@
 | 4 | RPC 纯净性判定标准与验证方法 | §6 |
 | 5 | 与现有上下文治理（compaction / context window / 流截断）的关系 | §7 |
 
-结论先行：**A 片可以否决整个接入，但不能被跳过。** §8 列出必须先由人拍板的 6 个决策点；§9 是尚未验证项。
+结论先行：**A 片可以否决整个接入，但不能被跳过。** §8 列出必须先由人拍板的 7 个决策点；§9 是尚未验证项。
 
 ## 1. 动机与现状事实
 
 - 沙箱 Pi 以 `pi --mode rpc --no-approve --no-extensions -e <准入 stub>` 启动（[runtime-adapters.ts:611](../packages/runtime-sandbox/src/runtime-adapters.ts)），项目 `.pi` 目录不会自动加载，扩展只能来自平台注册表（[pi-extensions.ts:30](../packages/shared-types/src/pi-extensions.ts)）。
 - 因此当前 Job 内的上下文压缩完全由 pi 自身 compaction 完成，逐级 summary 化；Scheduler 侧只有两条兜底：`context_window_exceeded` 自动重试 1 次、`pi_stream_truncated` 自动重试 1 次（[context-window-exceeded.ts](../apps/scheduler/src/context-window-exceeded.ts)、[pi-stream-truncation.ts](../apps/scheduler/src/pi-stream-truncation.ts)）。
-- `pi-observational-memory`（MIT，v3.1.4）把记忆工作提前到 `turn_end` 后台完成，使 compaction 变成渲染步骤。它的后台 worker（observer / reflector / dropper）通过 `agentLoop` 发起**真实模型请求**，上游默认 `agentMaxTurns: 16`、`agentMaxTokens: 32_000`，在 DeepSonar 里这些请求只能走 Gateway。
+- `pi-observational-memory`（MIT，v3.1.4）把记忆工作提前到 `turn_end` 后台完成，使 compaction 的主要路径变成渲染步骤；存在同步 observer catch-up 和委托 Pi 原生压缩的 fallback 例外，不能保证压缩阶段零模型调用。它的后台 worker（observer / reflector / dropper）通过 `agentLoop` 发起**真实模型请求**，上游默认 `agentMaxTurns: 16`、`agentMaxTokens: 32_000`，在 DeepSonar 里这些请求只能走 Gateway。
 - 准入对象必须是**发布物**，不是上游源码分支。本次实测 npm 发布包 `pi-observational-memory@3.1.4`（`npm pack` 下载后自行计算 sha512，不采信 registry 自报）：
 
   | 项 | 发布包 3.1.4（实测） | 上游 master `022da5e`（源码核对） |
@@ -119,8 +119,8 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 ### 5.2 提议语义（待评审）
 
 1. **默认不限**：按用户最新要求，预算、请求数、token、轮数等额度只有显式配置才限制；未配置归一化为 `unlimited`，不得隐式套用 500、16、32_000 或预留比例。本 PR 不实现该代码改动，也不改写既有 Job 冻结配置；协议大小、权限和防死循环保护不属于预算配额。
-2. **显式有限额度的主会话预留**：若管理员配置总请求数 `N > 0`，可另显式配置预留 `R`，要求 `0 ≤ R ≤ N`；未配置 `R` 不额外扣除预留。若选择比例策略，其示例值为 `R = min(N, max(ceil(N * 0.2), 20))`，不是默认策略。`N=1/19/20` 在该显式策略下后台额度为 0，`N=21` 为 1；`N=0`（现有不限哨兵）或未配置走 `unlimited` 分支，不做减法。独立后台限额也只有显式配置才生效。
-3. **并发预留**：有限额度下在可信 Gateway/Job 锁内原子检查已用量与在途预留后再准入；主会话与后台共用总账，后台另受显式后台额度/主会话保底约束。不得用客户端读数先检查后递增；失败/取消按真实请求效果结算，未知用量不得当作零返还。无限额度不做配额拒绝，但继续记账与权限校验。请求数、token 与成本不得混用单位；调用前 token 上界及未知用量策略仍需 D 片证明。
+2. **显式有限额度的主会话保底契约**：若管理员配置总请求数 `N > 0`，启用 OM 前必须书面选择并冻结可执行的主会话预留或后台隔离契约，D 片证明其在共享总账下仍有效。未选择契约不得启用 OM，不能将缺失预留 `R` 自动当作 0 后宣称保底，也不得偷偷补默认配额。预留方案要求显式 `0 < R ≤ N`，保证后台不能消耗尚未被主会话使用的预留；这不是主会话无限调用保证。后台隔离若仍共享有限总额，必须证明后台无法耗尽主会话承诺的份额，单有独立后台计数器不够。若选择比例预留，其示例值为 `R = min(N, max(ceil(N * 0.2), 20))`，不是默认策略。`N=1/19/20` 在该显式策略下后台额度为 0，`N=21` 为 1。`N=0`（现有不限哨兵）或未配置走 `unlimited` 分支，不做减法，也不因此要求有限额度契约；独立后台限额只有显式配置才生效。其他显式有限 token/成本总额同样必须说明主会话保底/隔离口径，不能借请求数不限绕过。
+3. **并发预留**：有限额度下在可信 Gateway/Job 锁内原子检查已用量与在途预留后再准入；主会话与后台共用总账，后台另受显式后台额度/主会话保底约束，计算时扣除主会话尚未使用的预留份额。不得用客户端读数先检查后递增；失败/取消按真实请求效果结算，未知用量不得当作零返还。无限额度不做配额拒绝，但继续记账与权限校验。请求数、token 与成本不得混用单位；调用前 token 上界及未知用量策略仍需 D 片证明。
 4. **超限降级可见**：后台额度耗尽跳过本轮 observe/reflect，记录 `skipped_budget_exhausted`；不得把后台耗尽冒充主会话失败。主会话自己达到显式总限额仍受限制。恢复、重试不得重置冻结额度或已有用量。
 5. **可信归因**：新增独立 workload 维度区分主会话与后台，身份必须由可信内核绑定并经 Gateway 校验；沙箱自报 header 不可信。保留现有结算 `source` 的 `gateway_response` / `gateway_stream` / `gateway_error` 语义，不能覆盖。独立 token/可信调用上下文的具体方案留 D 片评审，不能扩大 Job 权限或模型白名单；observer、reflector、dropper、fallback、compaction catch-up、retry 均覆盖同一鉴权、额度与归因规则。
 6. **成本口径**：后台成本单列，不冒充 Finding 质量收益或主会话成本；项目/Job 总用量仍包含这些真实请求，明细可按 workload 分解且总账可对账。
@@ -171,7 +171,7 @@ C 片由 Scheduler 从 Job 快照生成 `.pi/agent/settings.json` 的 `observati
 1. `pnpm ci:smoke:pi-rpc`（现有离线 RPC 夹具，[test-pi-rpc.mjs](../agent-harness/test-pi-rpc.mjs)）。
 2. 在同镜像、固定上游产物、`--no-extensions -e <om stub>` 下使用离线 fake provider 和受控 Gateway 替身，禁止真实模型及外部网络；记录所有调用、stdout/stderr、通知、debug 文件、session 与最终 archive。覆盖最小会话、大输出、主动 workers、passive 下恢复已有 observations 后的 compaction catch-up、fallback/retry、异常通知、kill/resume、取消与并发额度竞争。夹具须进仓库并有测试入口（`ci-test-hook` 棘轮）。
 3. 以现有 harness 的 `StrictJsonlReader` 检查逐字节 framing、非 JSON 行与尾部残留，再通过生产 `parsePiJsonlRecord` 验证事件语义；不得以宽松解析器替代。
-4. 注入恶意项目 `.pi/settings.json`、环境变量及恢复 session，证明冻结值不可覆盖；用可识别秘密标记覆盖正文、错误、通知、日志、session/archive 和模型请求出口，检查结构化过滤后的引用完整性。预算表覆盖未配置、0 不限、1/19/20/21、有限总额、显式后台限额、并发在途与未知用量；所有项目均为未来离线验收计划，本次没有运行。
+4. 注入恶意项目 `.pi/settings.json`、环境变量及恢复 session，证明冻结值不可覆盖；用可识别秘密标记覆盖正文、错误、通知、日志、session/archive 和模型请求出口，检查结构化过滤后的引用完整性。预算表覆盖未配置、0 不限、1/19/20/21、有限总额、显式后台限额、并发在途与未知用量；额外覆盖反例 `N=1`、`R` 未配置、后台限额未配置：后台先调用和主后台并发抢占时，都应因缺少有限额度契约而不启用 OM，不能让后台消耗唯一额度后再拒绝主会话；另验证显式 `R=1` 时后台不能占用该份额。所有项目均为未来离线验收计划，本次没有运行。
 
 ## 7. 交付 5：与现有上下文治理的关系
 
@@ -179,7 +179,7 @@ C 片由 Scheduler 从 Job 快照生成 `.pi/agent/settings.json` 的 `observati
 
 | 层 | 谁负责 | 现状 | 接入 om 后 |
 | --- | --- | --- | --- |
-| 会话内记忆与压缩触发 | pi + 扩展 | pi 内建 compaction | om 提前完成 observe/reflect，compaction 变渲染 |
+| 会话内记忆与压缩触发 | pi + 扩展 | pi 内建 compaction | om 提前完成 observe/reflect，compaction 主要为渲染；同步 catch-up / 原生 fallback 仍可能调用模型 |
 | 压缩事件的身份与审计 | DeepSonar adapter（`context.compacted`，要求 `event_id` / `context_id` / `context_revision` / `transform_chain_digest` 等，[runtime-adapters.ts:267-296](../packages/runtime-sandbox/src/runtime-adapters.ts)） | adapter 提供 identity，字段齐全才认作已压缩 | **om 若改变了 transform 链，仍以 DeepSonar 身份字段为准；无法表达时必须降级为 `context.compaction_unknown`，不得伪装成已知链** |
 | 失败与重试预算 | Scheduler（`context_window_exceeded` 1 次、`pi_stream_truncated` 1 次） | 按 Job 累计，不看 attempt | 不变；om 的失败**不得**被记成 `context_window_exceeded` 或消耗这两笔预算 |
 
@@ -202,12 +202,14 @@ Web 与质量投影仍以 `context.compacted` / `context.compaction_unknown` 为
 
 ## 8. 必须由人拍板的决策点
 
+以下 7 项均为待定方案；本 PR 收录建议不代表这些选项已获批准。A 正式通过所需书面记录见 §10。
+
 | # | 决策 | 选项 | 建议 |
 | --- | --- | --- | --- |
 | 1 | `requires_egress` / `requires_gateway` 是否按 §4.2 拆字段（含注册表 fail closed） | 拆 / 保持单字段并把 om 判为不兼容断网 Job | 拆；单字段会留下不可审计的静默跳过 |
 | 2 | 主动模式与 passive 的实际调用边界 | 均经完整模型治理 / 拒绝接入 | passive 不是零模型调用保证：上游 `src/hooks/compaction-hook.ts` 可调用 `compaction-catch-up.ts:48-114` 的 `runObserver`，恢复已有 observations 后也需验证；治理未落地不得以 passive 替代 |
 | 3 | 后台 worker 失败是否可接受 Job 失败（现状 `extension_error` 会失败） | 接受 / 必须降级 | 必须降级；把记忆功能失败放大成任务失败不可接受 |
-| 4 | 显式有限额度下是否配置主会话预留 | 比例 / 绝对值 / 不做预留 | 默认不限且不预留；只有管理员选择有限额度及预留策略才按 §5.2 计算，数值待评审 |
+| 4 | 显式有限总额下的保底契约 | 显式比例/绝对值预留 / 可证明有效的后台隔离 | 默认不限且不预留；有限总额未选契约不得启用 OM，不隐式补额度；选定契约与数值须书面冻结并按 §5.2 验收 |
 | 5 | 独立可信 workload 维度实现方式 | 内核绑定的独立 token / 可信调用上下文 | 待 D 片评审；拒绝自报 header，保留原结算 source、模型白名单与全出口治理 |
 | 6 | 压缩身份链与 om 的关系 | 以 DeepSonar 身份为准并在无法表达时降级 / 扩展新 policy 表达 om | 先降级（诚实），有真实需求再扩契约 |
 | 7 | observer 是否允许独立模型（见 §5.4） | 只允许冻结模型 / 允许但受白名单与额度约束 | 首版只允许冻结模型；放宽需 D 片单独评审，不得放宽 `enforce_frozen_model` |
@@ -227,7 +229,9 @@ Web 与质量投影仍以 `context.compacted` / `context.compaction_unknown` 为
 
 ## 10. A 片验收
 
-- 本文件评审通过后才可启动 B 及后续切片；若 A 否决则停止，**不注册、不预装、不启用**。只有 A 已通过并进入后续切片、E 再失败时，才可能已有预装产物；此时默认关闭并停止启用，不能以预装倒推通过 A。§8 的书面结论须区分通过与否决。
+- **合并本 PR 仅收录待决设计草案，不构成 A 正式通过，也不授权启动 B。** A 通过必须另有明确书面决策记录，逐项列出 §8 的 7 项选定方案、有限总额下保底/隔离契约与未决项处理，并明确写出 A 通过结论。未决阻断项未解决不得进入 B，不能把文档 review、CI 成功或合并状态当作该结论。
+- 注册前必须完成 canonical 发布物来源、tarball integrity 与实际 entry 的核验；启用前必须完成固定宿主兼容、§6 RPC、配置隔离、额度/归因和 §3 数据出口验收。A 的设计决策通过不代替后续实证验收。
+- 若 A 否决则停止，**不注册、不预装、不启用**。只有 A 已通过并进入后续切片、E 再失败时，才可能已有预装产物；此时默认关闭并停止启用，不能以预装倒推通过 A。
 - `pnpm ci:unit:docs-freshness` 通过（版本字面量、命令存在性、链接、已删机制残留）。
 - `pnpm ci:unit:file-size` 通过。
 - 本片不修改 schema、不修改运行时行为、不新增依赖；`git diff --check` 干净。
