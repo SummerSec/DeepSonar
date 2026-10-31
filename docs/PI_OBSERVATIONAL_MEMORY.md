@@ -21,7 +21,17 @@
 - 沙箱 Pi 以 `pi --mode rpc --no-approve --no-extensions -e <准入 stub>` 启动（[runtime-adapters.ts:611](../packages/runtime-sandbox/src/runtime-adapters.ts)），项目 `.pi` 目录不会自动加载，扩展只能来自平台注册表（[pi-extensions.ts:30](../packages/shared-types/src/pi-extensions.ts)）。
 - 因此当前 Job 内的上下文压缩完全由 pi 自身 compaction 完成，逐级 summary 化；Scheduler 侧只有两条兜底：`context_window_exceeded` 自动重试 1 次、`pi_stream_truncated` 自动重试 1 次（[context-window-exceeded.ts](../apps/scheduler/src/context-window-exceeded.ts)、[pi-stream-truncation.ts](../apps/scheduler/src/pi-stream-truncation.ts)）。
 - `pi-observational-memory`（MIT，v3.1.4）把记忆工作提前到 `turn_end` 后台完成，使 compaction 变成渲染步骤。它的后台 worker（observer / reflector / dropper）通过 `agentLoop` 发起**真实模型请求**，上游默认 `agentMaxTurns: 16`、`agentMaxTokens: 32_000`，在 DeepSonar 里这些请求只能走 Gateway。
-- 本次上游源码核对固定在 [022da5e5554d04dfdc876ed7dac4a42c6b83dfd4](https://github.com/elpapi42/pi-observational-memory/tree/022da5e5554d04dfdc876ed7dac4a42c6b83dfd4)。该提交 `package.json` 声明入口 **`./dist/index.ts`**；`scripts/build.js` 将 `src/index.ts` 打包到该入口，宿主包保持 external，peerDependencies 为 `*`。npm tarball 实际内容、integrity、源码与发布包一致性及宿主兼容性均未核验，不能据源码推断发布产物已准入。
+- 准入对象必须是**发布物**，不是上游源码分支。本次实测 npm 发布包 `pi-observational-memory@3.1.4`（`npm pack` 下载后自行计算 sha512，不采信 registry 自报）：
+
+  | 项 | 发布包 3.1.4（实测） | 上游 master `022da5e`（源码核对） |
+  | --- | --- | --- |
+  | `pi.extensions` | `["./src/index.ts"]` | `./dist/index.ts` |
+  | `files` | `["src/","LICENSE","README.md"]` | 含 `dist/` |
+  | 顶层目录 | `LICENSE` / `README.md` / `package.json` / `src`（无 `dist/`） | 含 `dist/` 与 `scripts/build.js` |
+  | `dist.integrity` | `sha512-jgQbFyLMs4wWhkf6F0voOgzMwtIXsb8+ks0MsPKpPxkdpyMX5E/el6Mk/vJ40m8GlKwBIsCKjL1r7Z2U8dCtmA==`（自算值与 registry 声明一致） | — |
+  | peerDependencies | 全为 `*` | 同 |
+
+  两端不是同一对象：3.1.4 的发布物是 `src/` 形态，master 之后改为 `dist` 构建产物。**因此 `entry` 必须按 tarball 逐版核对，不得从上游源码或上一版本推断。** 本次实测走本机配置的 npmmirror 镜像（字节已用自算哈希核过），canonical 源仍需复核；宿主兼容性、运行时行为均未验证，不能据源码推断发布产物已准入。
 - 上游 `src/config.ts:396-424` 按 **defaults → 全局 `getAgentDir()/settings.json` → 项目 `<cwd>/.pi/settings.json` → 环境变量** 合并 `observational-memory` 配置（环境变量当前覆盖 passive）；还单独读取项目优先的 `compaction.enabled`。平台重写全局文件（[provider-settings.ts](../apps/scheduler/src/provider-settings.ts)）并不阻止扩展自己读取项目文件，`--no-extensions` 也不隔离这条配置路径。
 
 ## 2. 为什么不能直接注册（硬门复述）
@@ -34,6 +44,8 @@
 | G9 | 未知 RPC 帧直接判失败，`extension_error` 让整个 Job 失败 | [runtime-adapters.ts:228-243,580-582](../packages/runtime-sandbox/src/runtime-adapters.ts) | §6 |
 | G10 | memory 内容可能随 session 导出，需持久化前过滤 | [cli-session-adapters.ts:94-120](../packages/runtime-sandbox/src/cli-session-adapters.ts) | §3 |
 | G11 | 快照冻结 version/entry，扩展升级后旧快照拒绝重放 | `parseFrozenPiExtensions` | §7.4 |
+
+> 准入依据三条并列，缺一条不得写入注册表：来源 registry（canonical 源需复核，镜像只能作为副本）、tarball 的 `dist.integrity`、tarball 内 `pi.extensions` 与 `files` 的实际值。`entry` 逐版核对（见 §1）。
 
 ## 3. 交付 1：memory 内容分类与脱敏规则
 
@@ -125,6 +137,14 @@ C 片由 Scheduler 从 Job 快照生成 `.pi/agent/settings.json` 的 `observati
 
 约束：覆盖整个 defaults → global → project → env 链，以及独立 `compaction.enabled` 读取；不能只重写全局 settings。需受控适配层消费冻结值，并隔离/拒绝项目 settings 和相关 env 的覆盖，加载后校验有效配置与冻结快照一致（包括模型/fallback）。具体实现待 C 片验证。只接受注册表声明过的 knob；越界或未知字段 fail closed；Agent、Job 内容、项目配置一律不得覆盖该段（需要稳定 error code 与 RepairFeedback 分类）。
 
+### 5.4 后台模型与 Gateway 冻结模型守卫
+
+- Gateway 对请求模型执行 Job 冻结白名单校验：[gateway-guard.ts:66](../apps/scheduler/src/domains/provider-adapter/gateway-guard.ts) `assertGatewayRequestModelAllowed`（出口在 [gateway.ts](../apps/scheduler/src/gateway.ts)），不匹配抛 `GATEWAY_FROZEN_MODEL_MISMATCH`（同文件 `:24`）。适配器未声明 `enforce_frozen_model`、`passthrough` 或白名单为空时软放行（历史快照语义）。
+- 上游 `normalizeSettingsConfig` 接受 `model` 键，即 observer / reflector / dropper 可以指定与会话冻结模型**不同的模型**。
+- 与 §6 的 `extension_error` → `failRuntime` 语义叠加后，后台 403 / 模型不匹配可能不是「记忆功能降级」，而是**整个 Job 失败**。
+
+规则：首版**不允许 observer 独立模型**——C 片冻结配置不写入 `model`（或强制等于冻结模型）。若后续要支持独立模型，必须先在 D 片证明它满足同一冻结白名单、同一额度与同一归因，且不得为接入放宽既有 `enforce_frozen_model` 权限。E 片夹具必须覆盖「后台模型 ≠ 冻结模型」这一例，并断言失败时是受控降级而不是 Job 失败。
+
 ## 6. 交付 4：RPC 纯净性判定标准
 
 ### 6.1 现状事实（严格白名单）
@@ -190,6 +210,7 @@ Web 与质量投影仍以 `context.compacted` / `context.compaction_unknown` 为
 | 4 | 显式有限额度下是否配置主会话预留 | 比例 / 绝对值 / 不做预留 | 默认不限且不预留；只有管理员选择有限额度及预留策略才按 §5.2 计算，数值待评审 |
 | 5 | 独立可信 workload 维度实现方式 | 内核绑定的独立 token / 可信调用上下文 | 待 D 片评审；拒绝自报 header，保留原结算 source、模型白名单与全出口治理 |
 | 6 | 压缩身份链与 om 的关系 | 以 DeepSonar 身份为准并在无法表达时降级 / 扩展新 policy 表达 om | 先降级（诚实），有真实需求再扩契约 |
+| 7 | observer 是否允许独立模型（见 §5.4） | 只允许冻结模型 / 允许但受白名单与额度约束 | 首版只允许冻结模型；放宽需 D 片单独评审，不得放宽 `enforce_frozen_model` |
 
 ## 9. 未验证项（不得当作已通过）
 
@@ -200,8 +221,9 @@ Web 与质量投影仍以 `context.compacted` / `context.compaction_unknown` 为
 5. 后台 worker 的请求量级与对上游限流的影响（上游默认轮数不等于请求总量，fallback/catch-up/retry 也需计数）。
 6. memory ledger 对 session 体积、32 MiB 归档上限与 `BLOB_DIR` 的挤压程度。
 7. 剪贴板路径在无 X/Wayland 沙箱中的失败是否只影响 TUI 命令（不影响 rpc）。
-8. npm tarball/integrity、完整配置覆盖隔离、passive 恢复 catch-up、无限额度适配、可信归因与多出口脱敏均未验证。
-9. 质量收益：压缩效果、上下文丢失率、`context_window_exceeded` 发生率——需冻结数据集与对照试验，本 issue 不做承诺。
+8. npm tarball/integrity（现已核 3.1.4 的发布物内容与 integrity；canonical 源、宿主兼容、升级到下一版的 `entry` 形态仍未验）、完整配置覆盖隔离、passive 恢复 catch-up、无限额度适配、可信归因与多出口脱敏均未验证。
+9. 后台 worker 实际发出的模型是否可能落在冻结白名单外，以及 `GATEWAY_FROZEN_MODEL_MISMATCH` 到 Job 终态的传播路径（§5.4）尚未实测。
+10. 质量收益：压缩效果、上下文丢失率、`context_window_exceeded` 发生率——需冻结数据集与对照试验，本 issue 不做承诺。
 
 ## 10. A 片验收
 
