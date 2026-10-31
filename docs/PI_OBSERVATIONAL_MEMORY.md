@@ -1,7 +1,7 @@
 # 沙箱 Pi 观测内存扩展（`pi-observational-memory`）设计评审（#815 A 片）
 
 > 状态：**待评审；本文件只有语义与判定标准，没有运行时代码改动，也未启用任何扩展。**
-> 同步日期：2026-10-31。静态核对基线：PR 基线 `b655bed1543fc7377b6c1cc877c11b2be82925b1`，schema 65，pi `@earendil-works/pi-coding-agent` 1.4.0。
+> 同步日期：2026-10-31。静态核对基线：main `2b76ac25`（已并入本分支），schema 65，pi `@earendil-works/pi-coding-agent` 1.4.0。
 > 关联 issue：[#815](https://github.com/SummerSec/DeepSonar/issues/815)。本片通过前，B 片之后一律不启动。
 
 ## 0. 本片交付
@@ -149,14 +149,14 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 
 ### 5.1 现状事实
 
-- Job Token 额度：`job_tokens.max_requests`（本 PR 基线默认 500，`0` 表示不限；这是待独立修复的基线事实，不是本设计目标，[config.ts:262](../apps/scheduler/src/config.ts)）由 `runtime_knobs.job_token_max_requests` 冻结（[executor-real.ts:775](../apps/scheduler/src/executor-real.ts)）；超限直接对调用方 429 `quota_exhausted`（[gateway.ts:719-730](../apps/scheduler/src/gateway.ts)）。
+- Job Token 额度（**同步 main `2b76ac25` 后已变**）：`runtime_knobs.job_token_max_requests` 由 Job 快照冻结（[executor-real.ts:775](../apps/scheduler/src/executor-real.ts)），允许区间 `0–1_000_000`（[runtime-knobs.ts:10](../apps/scheduler/src/runtime-knobs.ts)）；env 未设置或空 → **0 = 不限**，正数才受限（[config.ts:44-54,256](../apps/scheduler/src/config.ts)，见 [USAGE_LIMITS.md](USAGE_LIMITS.md)）；超限对调用方 429 `quota_exhausted`（[gateway.ts:719-730](../apps/scheduler/src/gateway.ts)）。
 - 用量账本 `job_usage_ledger` 的 `source` 只有 `gateway_response` / `gateway_stream` / `gateway_error`（[schema.sql](../database/schema.sql)），**没有"谁发起的请求"维度**。
 
-因此若直接接入现有有限额度路径：om 的后台请求和主会话共用同一个计数器；后台跑满后，主 Agent 下一次请求就会 429 —— 这是把"记忆功能失败"升级成"任务失败"。
+因此在**显式配置了有限额度**的 Job 上：om 的后台请求和主会话共用同一个计数器；后台跑满后，主 Agent 下一次请求就会 429 —— 这是把"记忆功能失败"升级成"任务失败"。默认不限的 Job 不受此限，但仍共用计数与账本。
 
 ### 5.2 提议语义（待评审）
 
-1. **默认不限**：按用户最新要求，预算、请求数、token、轮数等额度只有显式配置才限制；未配置归一化为 `unlimited`，不得隐式套用 500、16、32_000 或预留比例。本 PR 不实现该代码改动，也不改写既有 Job 冻结配置；协议大小、权限和防死循环保护不属于预算配额。
+1. **默认不限（已 as-built）**：请求数默认不限已在 main 落地（`usageLimit` 未设置即 0，[USAGE_LIMITS.md](USAGE_LIMITS.md)）；OM 必须沿用同一语义，不得隐式套用 500、16、32_000 或预留比例。token / 轮数同理只在显式配置时受限。协议大小、权限和防死循环保护不属于预算配额。
 2. **显式有限额度的主会话保底契约**：若管理员配置总请求数 `N > 0`，启用 OM 前必须书面选择并冻结可执行的主会话预留或后台隔离契约，D 片证明其在共享总账下仍有效。未选择契约不得启用 OM，不能将缺失预留 `R` 自动当作 0 后宣称保底，也不得偷偷补默认配额。预留方案要求显式 `0 < R ≤ N`，保证后台不能消耗尚未被主会话使用的预留；这不是主会话无限调用保证。后台隔离若仍共享有限总额，必须证明后台无法耗尽主会话承诺的份额，单有独立后台计数器不够。若选择比例预留，其示例值为 `R = min(N, max(ceil(N * 0.2), 20))`，不是默认策略。`N=1/19/20` 在该显式策略下后台额度为 0，`N=21` 为 1。`N=0`（现有不限哨兵）或未配置走 `unlimited` 分支，不做减法，也不因此要求有限额度契约；独立后台限额只有显式配置才生效。其他显式有限 token/成本总额同样必须说明主会话保底/隔离口径，不能借请求数不限绕过。
 3. **并发预留**：有限额度下在可信 Gateway/Job 锁内原子检查已用量与在途预留后再准入；主会话与后台共用总账，后台另受显式后台额度/主会话保底约束，计算时扣除主会话尚未使用的预留份额。不得用客户端读数先检查后递增；失败/取消按真实请求效果结算，未知用量不得当作零返还。无限额度不做配额拒绝，但继续记账与权限校验。请求数、token 与成本不得混用单位；调用前 token 上界及未知用量策略仍需 D 片证明。
 4. **超限降级可见**：后台额度耗尽跳过本轮 observe/reflect，记录 `skipped_budget_exhausted`；不得把后台耗尽冒充主会话失败。主会话自己达到显式总限额仍受限制。恢复、重试不得重置冻结额度或已有用量。
@@ -326,7 +326,7 @@ issue [#815 设计取舍记录](https://github.com/SummerSec/DeepSonar/issues/81
 5. **C7 反例的可复现性**：S9 已确认代码条件成立；未在 rpc 会话中复现，也未确认 3.1.4 在真实会话中会产生体积压在 `content` 上的 >1 MiB 帧。
 6. **canonical 来源**：npmmirror 副本自算哈希与 integrity 一致只证明**该副本**一致，canonical registry 未核；宿主兼容与升级到下一版的 `entry` 形态也未验（master 已改 `dist/`）。
 7. **配置覆盖隔离**：项目 `.pi/settings.json` 与环境变量覆盖链未隔离，也未证明冻结值不可覆盖。
-8. **额度与归因**：无限额度适配、有限总额保底契约、可信 workload 归因的具体方案均未实现。
+8. **额度与归因**：请求数默认不限已 as-built（[USAGE_LIMITS.md](USAGE_LIMITS.md)）；未验的是 om 后台 worker 是否确实走该额度与账本路径、后台开销是否在无限额度下仍可审计，以及 token/成本维度的保底/隔离契约与可信 workload 归因的具体方案。
 9. **后台请求量级**：上游默认轮数（16）不等于请求总量，fallback / catch-up / retry 也需计数；对上游限流的影响未测。
 10. **session 体积**：S7 给出 memory 部分的上界，但长 Job 下与 32 MiB 归档上限、`BLOB_DIR` 压边的实际余量未测。
 11. **质量收益**：压缩效果、上下文丢失率、`context_window_exceeded` 发生率——需冻结数据集与对照试验，本 issue 不做承诺。
