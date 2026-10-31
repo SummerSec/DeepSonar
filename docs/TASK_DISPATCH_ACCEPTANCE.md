@@ -62,9 +62,11 @@
 
 上述完整链直接覆盖[真实路由测试](../apps/scheduler/src/task-plan-review.integration.test.ts)，终态竞态回归见[terminal-race 测试](../apps/scheduler/src/executor-real-terminal-race.test.ts)。完整 `pnpm build`（含 Scheduler TypeScript 与 Web Vite）已通过；Web 仍提示现有大 chunk 警告。
 
-### 2026-10-31 单元层复核（基线 `b655bed1`）
+### 2026-10-31 单元层追加复核（历史基线 `b655bed1`）
 
-在 v0.6.1 发布提交上重跑可离线单元入口，刷新上表中单元层的计数。**本次未运行需要 `TEST_DATABASE_URL` 的集成套件，也未调用真实模型**，因此只更新单元证据，不改变「跨切片端到端验收」仍待数据库集成的事实。
+`b655bed1` 是 v0.6.1 的**发布准备提交**；截至本次核验，v0.6.1 tag 与 Release 尚未产生，因此这里只把它当作历史测试基线，不表示该版本已发布。
+
+这一组是**追加**复核，不替换也不改写上文任何组合验收记录。**本轮未运行需要 `TEST_DATABASE_URL` 的集成套件，也未调用真实模型**；它只说明该基线的离线单元面通过，不证明当前 main 的数据库回归，也不推翻上文已记录的集成结果。
 
 | 范围 | 本轮实测 |
 | --- | --- |
@@ -76,11 +78,11 @@
 | Canvas Fact：`ci:unit:canvas-facts`（9 个文件） | 44/44 |
 | Verify 资格与 Fact-first：`ci:unit:verify-eligibility`（14 个文件） | 157/157 |
 
-七组共 450 项、0 失败。其中报告三套与 `ci:unit:verify-eligibility` 的文件列表重叠 33 项，去重后为 417 项。这表示本基线的**离线单元面是干净的**，不表示任何端到端或效果结论。
+七组共 450 项、0 失败。其中报告三套与 `ci:unit:verify-eligibility` 的文件列表重叠 33 项，去重后为 417 项。计数只对 `b655bed1` 成立：当前 main 已包含后续 Gateway、完成回执与 Verify 变更，旧基线计数不能代替新 main 的验收。
 
 复现说明：本地 `@deepsonar/shared-types` 的 `dist` 早于本基线，未重建时 `tsx --test` 会因缺少新导出而误报模块错误；需先 `tsc -p packages/shared-types/tsconfig.json`。该差异只影响本地复现，不改变 `ci:unit:*` 入口定义。
 
-仍未汇总、需要数据库的项保持开放：引用失效与跨范围回归、零 Finding / 失败来源 / 未执行 / 部分覆盖与预算的端到端回归，以及独立程序资格正向闭环。这些不以本轮单元计数替代。
+本轮不重跑上文已通过的数据库集成项，因此既不新增也不推翻它们。仍然存在的**实现**缺口是可信目标授权的正向接线，以及特定高标准成果的资格闭环（已拆到 #822）；引用失效、跨范围、零 Finding 与预算等回归属于本轮未覆盖的验收范围，同样不以单元计数替代。
 
 
 ## 程序规则独立评审切片（基于 #800）
