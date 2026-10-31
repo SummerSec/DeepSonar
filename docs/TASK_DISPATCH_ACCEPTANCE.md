@@ -72,6 +72,11 @@
 | Plan 协议、判据、决策与目标评审绑定（`ci:unit:plan-protocol` 的 Scheduler 部分） | 34/34 |
 | Web：`plan-gap-report`、`task-intent`、`task-contract-editor` | 19/19 |
 | 报告防误报与版本：`report-failure-recovery`、`report-numeric-fidelity`、`task-report-version` | 33/33 |
+| Finding 研究：`ci:unit:finding-research`（7 个文件） | 42/42 |
+| Canvas Fact：`ci:unit:canvas-facts`（9 个文件） | 44/44 |
+| Verify 资格与 Fact-first：`ci:unit:verify-eligibility`（14 个文件） | 157/157 |
+
+七组共 450 项、0 失败。其中报告三套与 `ci:unit:verify-eligibility` 的文件列表重叠 33 项，去重后为 417 项。这表示本基线的**离线单元面是干净的**，不表示任何端到端或效果结论。
 
 复现说明：本地 `@deepsonar/shared-types` 的 `dist` 早于本基线，未重建时 `tsx --test` 会因缺少新导出而误报模块错误；需先 `tsc -p packages/shared-types/tsconfig.json`。该差异只影响本地复现，不改变 `ci:unit:*` 入口定义。
 
