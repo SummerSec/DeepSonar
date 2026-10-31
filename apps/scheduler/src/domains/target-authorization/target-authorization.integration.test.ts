@@ -525,6 +525,26 @@ if (!testDatabaseUrl) {
         SELECT after_json FROM audit_logs WHERE action = 'task.target_authorization' AND project_id = ${projectId} ORDER BY id`;
       assert.deepEqual(grantsAfterRejectedPatch, grantsAfterPatch);
       assert.ok(fixture.requests.length > 5, "the Worker and rerun paths must consult the live authority");
+
+      fixture.revoked = false;
+      await sql`UPDATE jobs SET status='cancelled', finished_at=now()
+        WHERE canvas_id=${canvasId} AND type='hub_reason' AND status='pending'`;
+      const drift = await core.createJob({ projectId, canvasId, type: "audit", payload: {} });
+      assert.ok(drift.job);
+      const driftId = String(drift.job.id);
+      const [beforeDrift] = await sql`SELECT count(*)::int AS count FROM jobs WHERE canvas_id=${canvasId}`;
+      process.env.DEEPSONAR_TARGET_AUTHORITY_ID = "changed-authority";
+      await dispatcher.dispatchOnce();
+      await dispatcher.drainInFlight(15_000);
+      const [drifted] = await sql`SELECT status, sandbox_id FROM jobs WHERE id=${driftId}`;
+      assert.equal(drifted.status, "failed", "authority configuration drift must durably fail the Job even when follow-on Hub admission is denied");
+      assert.equal(drifted.sandbox_id, null);
+      assert.equal(provision.mock.callCount(), 0);
+      const [afterDrift] = await sql`SELECT count(*)::int AS count FROM jobs WHERE canvas_id=${canvasId}`;
+      assert.equal(afterDrift.count, beforeDrift.count, "denied follow-on admission must not create partial Jobs");
+      const convergence = await core.readCanvasConvergence(sql, canvasId);
+      assert.equal(convergence.auto_stopped, true);
+      assert.equal(convergence.paused_reason, "target_authorization_grant_invalid");
     } finally {
       if (drainDispatcher) await drainDispatcher();
       for (const jobId of registeredRuntimeHandlers) {

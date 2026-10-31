@@ -1,5 +1,6 @@
 import { normalizeTaskContract, type TaskContract } from "@deepsonar/shared-types";
 import type { SandboxLimits } from "@deepsonar/runtime-sandbox";
+import { ControlInputError } from "../../control-input.js";
 import {
   parseReferenceTarget,
   readLatestTargetAuthorizationGrant,
@@ -144,10 +145,15 @@ export async function freezeAgentSnapshotNetworkPolicy<T extends object>(
     const projectId = typeof canvas.project_id === "string" ? canvas.project_id : "";
     const content = (canvas.target_json as Record<string, unknown>).content;
     if (!projectId || typeof content !== "string") {
-      throw new Error(`canvas ${canvasId} 缺少目标授权所需的 project_id 或原始 content`);
+      throw new ControlInputError("target_authorization_grant_invalid", "Canvas is missing the original target authorization binding", "task_contract.identity");
     }
-    const config = readTargetAuthorizationConfig();
-    if (!config) throw new Error("target authorization platform configuration is unavailable");
+    let config;
+    try {
+      config = readTargetAuthorizationConfig();
+    } catch {
+      throw new ControlInputError("target_authorization_grant_invalid", "Target authorization platform configuration is invalid", "task_contract.identity");
+    }
+    if (!config) throw new ControlInputError("target_authorization_grant_invalid", "Target authorization platform configuration is unavailable", "task_contract.identity");
     const target = parseReferenceTarget(taskContract.targets);
     const identity = taskContract.identity;
     const binding = targetBinding(content, taskContract);
@@ -170,7 +176,7 @@ export async function freezeAgentSnapshotNetworkPolicy<T extends object>(
       || candidate.tenant !== identity?.tenant
       || candidate.role !== identity?.role
       || candidate.resource !== identity?.resource) {
-      throw new Error("target authorization grant is missing or does not match the authoritative Canvas");
+      throw new ControlInputError("target_authorization_grant_invalid", "Target authorization grant is missing or does not match the authoritative Canvas", "task_contract.identity");
     }
     authorization = candidate;
   }

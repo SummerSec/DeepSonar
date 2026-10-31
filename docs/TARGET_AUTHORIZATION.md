@@ -40,7 +40,8 @@ list, or secret reference.
 
 ## Platform configuration
 
-Configuration is read only from the Scheduler host environment:
+Configuration is read only from the Scheduler host environment. The accepted
+ranges and defaults are defined in the [configuration parser](../apps/scheduler/src/domains/target-authorization/contract.ts).
 
 | Variable | Meaning |
 | --- | --- |
@@ -48,9 +49,9 @@ Configuration is read only from the Scheduler host environment:
 | `DEEPSONAR_TARGET_AUTHORITY_ID` | Stable authority identity. |
 | `DEEPSONAR_TARGET_AUTHORITY_SECRET_REF` | Uppercase host environment variable name containing the secret. The secret value is never put in a request body, snapshot, feedback, or log. |
 | `DEEPSONAR_TARGET_AUTHORITY_ACTIONS` | Optional comma-separated value. If present, it must be exactly the three action names above in the same order. |
-| `DEEPSONAR_TARGET_AUTHORITY_MAX_AGE_SECONDS` | Response freshness bound, 1–300 seconds; default 60. |
-| `DEEPSONAR_TARGET_AUTHORITY_TIMEOUT_MS` | HTTP timeout, 50–10,000 ms; default 1,500. |
-| `DEEPSONAR_TARGET_AUTHORITY_MAX_BODY_BYTES` | Maximum authority response body, 1 KiB–1 MiB; default 64 KiB. |
+| `DEEPSONAR_TARGET_AUTHORITY_MAX_AGE_SECONDS` | Maximum permitted response freshness. |
+| `DEEPSONAR_TARGET_AUTHORITY_TIMEOUT_MS` | HTTP timeout. |
+| `DEEPSONAR_TARGET_AUTHORITY_MAX_BODY_BYTES` | Maximum authority response body. |
 
 The immutable Job snapshot stores the protocol, adapter, authority ID,
 configuration identity, project/target/principal/tenant/role/resource, exact
@@ -82,6 +83,12 @@ There is no production target-action endpoint or target-action client setting.
    new host grant in the edit transaction. A failed check commits neither the
    edit nor a grant. Existing Job snapshots retain their original binding;
    future Jobs use the matching current host grant.
+6. Invalid or changed host grant configuration returns the non-retryable
+   `target_authorization_grant_invalid` error. Follow-on Hub/Report admission
+   runs in a savepoint: rejection rolls back the follow-on batch, preserves the
+   predecessor's terminal result, and pauses Canvas convergence with that
+   reason. Plan dependency admission uses the same error to stop durably
+   without undoing the predecessor's proven output.
 
 Revocation, expiry, policy/revision change, identity or target mismatch,
 unavailable prerequisites, malformed/oversized replies, timeout, redirect, and
@@ -122,14 +129,22 @@ observes zero provision effects, zero runner provision calls, no sandbox and
 no target actions. Resume and rerun rejection preserve the snapshot, Job state
 and Attempt count. A subsequent dispatch does not replay the failed Job.
 Revoked creation leaves Canvas/Job counts unchanged; a revoked PATCH preserves
-the saved Canvas and host grants. Every SQL run creates and drops its own
+the saved Canvas and host grants. The configuration-drift regression also
+checks a real Dispatcher rejection with no other active Hub: the Job remains
+failed, no partial follow-on Job or sandbox exists, and Canvas convergence is
+paused. Every SQL run creates and drops its own
 disposable database and removes its temporary evidence directory.
 
-Local verification on 2026-10-31: the target-authorization unit suite passed
-8/8 and its SQL/HTTP integration test passed 1/1, with no skipped tests. These
-are offline engineering observations, not production target execution or model
-quality evidence. The test files still require inclusion in the global package
-scripts/CI test inventory; that integration is outside this scoped change.
+Parent verification on 2026-10-31: 37 combined contract/preflight/authorization
+tests passed, including the real SQL/HTTP chain. After integrating Plan v2,
+four SQL suites passed with no skips, including the new drift regression,
+Plan output/dependency/stopping and objective CAS cases; 28 focused control,
+Hub and snapshot tests also passed. These suites overlap and are not summed.
+Scheduler typecheck and active LSP checks passed. Global scripts now include
+the authorization unit test in `ci:unit:task-intent` and its SQL test in
+`ci:integration:authz-boundaries`; final combined remote CI is still pending.
+These are offline engineering observations, not production target execution
+or model quality evidence.
 
 Related requirements: [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验),
 [FR-JOB-009](architecture/01-system-specification.md#fr-job-009-创建时冻结执行快照),
