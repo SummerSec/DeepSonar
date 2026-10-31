@@ -42,13 +42,14 @@ export async function createPlanExecutionFixture() {
     process.env.DATABASE_URL = databaseUrl.toString(); process.env.BLOB_DIR = blob;
     process.env.AGENT_MODE = "fake"; process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
     process.env.DEEPSONAR_AUTH_REQUIRED = "false";
-    const [{ default: Fastify }, { default: websocket }, { migrate, sql }, { registerRoutes }, core, api, { createAttempt }, { executeGraphQuery }, { ControlInputError }] = await Promise.all([
+    const [{ default: Fastify }, { default: websocket }, { migrate, sql }, { registerRoutes }, core, api, { createAttempt }, { executeGraphQuery }, { ControlInputError }, { createSqlJobLifecycleApplication }] = await Promise.all([
       import("fastify"), import("@fastify/websocket"), import("./db.js"), import("./routes.js"),
       import("./core.js"), import("./domains/platform-api/index.js"), import("./domains/job-attempt/application.js"),
-      import("./graph-query.js"), import("./control-input.js"),
+      import("./graph-query.js"), import("./control-input.js"), import("./domains/job-lifecycle/application.js"),
     ]);
     closeSql = () => sql.end({ timeout: 5 }); unregister = api.unregisterRuntimeHandler;
     await migrate();
+    const lifecycle = createSqlJobLifecycleApplication(sql);
     const app: FastifyInstance = Fastify({ logger: false }); await app.register(websocket); registerRoutes(app); await app.ready();
     closeApp = () => app.close();
     const runtimes = new Map<string, { token: string; attempt: string }>();
@@ -56,10 +57,14 @@ export async function createPlanExecutionFixture() {
     const handlers = new Map<string, PlatformRuntimeHandler>();
     const operations = ["submit_plan", "submit_plan_result", "submit_hub_decision", "graph_query", "emit_fact", "mark_job_done", "request_human"];
     const start = async (job: string) => {
-      await sql`UPDATE jobs SET status='provisioning' WHERE id=${job}`;
+      assert.ok(await lifecycle.claimPendingJob(job), "fixture start must claim a pending Job once");
+      assert.ok(await lifecycle.transitionJob(job, "provisioning"), "fixture provisioning must pass lifecycle CAS");
       const attempt = String((await createAttempt(sql, job)).id);
       const grant = await api.mintJobCapabilityToken(job);
-      await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '10 minutes' WHERE id=${job}`;
+      const startedAt = new Date();
+      assert.ok(await lifecycle.transitionJob(job, "running", {
+        started_at: startedAt, lease_expires_at: new Date(startedAt.getTime() + 10 * 60 * 1000),
+      }), "fixture running must pass lifecycle CAS");
       await api.activateProvisionedJobCapabilityTokens(job);
       const handler: PlatformRuntimeHandler = async (context) => {
         if (context.planPhase === "abort") return {};

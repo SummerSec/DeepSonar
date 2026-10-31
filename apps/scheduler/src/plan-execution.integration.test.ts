@@ -9,6 +9,12 @@ test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes 
   try {
     const objective = executionObjective(); objective.budget.max_tasks = 2;
     const f = await h.fixture(objective), proposal = h.proposal(f);
+    const [ownerBefore] = await h.sql`SELECT status,
+      (SELECT count(*)::int FROM job_attempts WHERE job_id=j.id) AS attempts FROM jobs j WHERE id=${f.hub}`;
+    await assert.rejects(h.start(f.hub), /fixture start must claim a pending Job once/);
+    const [ownerAfter] = await h.sql`SELECT status,
+      (SELECT count(*)::int FROM job_attempts WHERE job_id=j.id) AS attempts FROM jobs j WHERE id=${f.hub}`;
+    assert.deepEqual(ownerAfter, ownerBefore, "duplicate fixture start cannot create an Attempt or rewrite running state");
     const key = randomUUID();
     const submitted = await h.invoke(f.hub, "submit_plan", proposal, key);
     assert.equal(submitted.statusCode, 200, submitted.payload);
@@ -95,6 +101,9 @@ test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes 
       WHERE action='job_token.revoke' AND resource_id=${modelToken.id}`;
     assert.equal(rolledBackAudit.count, 0);
     await h.finish(terminal.hub);
+    await assert.rejects(h.start(terminal.hub), /fixture start must claim a pending Job once/);
+    assert.equal((await h.sql`SELECT status FROM jobs WHERE id=${terminal.hub}`)[0].status, "succeeded",
+      "fixture startup cannot revive terminal Jobs");
     const [revoked] = await h.sql`SELECT status,revoke_reason FROM job_tokens WHERE id=${modelToken.id}`;
     assert.equal(revoked.status, "revoked");
     assert.equal(revoked.revoke_reason, "job_succeeded");
