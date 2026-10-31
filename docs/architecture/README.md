@@ -10,7 +10,7 @@
 #757 凭据先行解析已同步到 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时视图](06-runtime-view.md#凭据与-cli-解析757)、[数据架构](08-data-architecture.md)、[接口规范](09-interface-specs.md)及追溯矩阵；测试入口表示可复验方法，运行结果以 PR 验收记录为准。
 
 
-#770 A 来源身份独立写入与历史保留规则见[数据架构](08-data-architecture.md#finding-来源身份770-a)，对应 FR-FIND-002；关联建议仍为后续切片。
+#770 A 来源身份独立写入与历史保留规则见[数据架构](08-data-architecture.md#finding-来源身份770-a)，对应 FR-FIND-002；项目特征、词法检索与持久弱候选已合入，强关系质量门仍未通过，见[研究边界](../PROJECT_FINDING_RESEARCH.md)。
 
 
 #767 可选任务下发契约已同步到 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)、接口/运行时/数据视图及追溯矩阵；可选自由文本、未知条件拒绝与质量评测限制见[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。

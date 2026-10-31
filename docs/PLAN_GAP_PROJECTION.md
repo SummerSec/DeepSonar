@@ -69,7 +69,7 @@ expected_review_sha256: <当前评审依据摘要>
 
 执行证据绑定使用 `content_schema_version: 2`，摘要明确排除 `manual_verification` 与 `verification_status`，以免仅改变人工验证注释的操作破坏执行证明身份；Fact rejected 仍拒绝。Plan 所需 verified 授权独立检查，摘要稳定不代表权限或人工信任无需重验。
 
-这是摘要身份的部署边界，不能宣称无兼容影响：旧 v1 摘要可能失效，按当前契约严格拒绝，保留历史记录且不回写，不自动转换或授予新 authority。必要时重新产出 task_result 与独立评审；旧 assignment 不得静默改绑。#797/#798 在本批集成时尚未合并或部署，不消除该版本边界，部署前仍须核对实际保存的证据版本。
+这是摘要身份的部署边界，不能宣称无兼容影响：旧 v1 摘要可能失效，按当前契约严格拒绝，保留历史记录且不回写，不自动转换或授予新 authority。必要时重新产出 task_result 与独立评审；旧 assignment 不得静默改绑。#797/#798 已随本批合入；部署前仍须核对实际保存的证据版本。
 
 #795 的持久接纳回执只恢复原接纳结果与可恢复原 Attempt，不证明最终结算成功。接纳后关联评审失效时，最终完成门仍须拒绝；真实路由与 PostgreSQL 的[完整链测试](../apps/scheduler/src/task-plan-review.integration.test.ts)已通过 9 项（含顶层套件），覆盖 delivery/negative_result、原绑定、冲突/失效、旧摘要与接纳后失效；组合 CI 结果以 PR 最终记录为准。
 
