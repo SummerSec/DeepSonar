@@ -80,6 +80,7 @@ test("actual summary rejects failures, cancellation, missing outputs and unexpec
 });
 
 test("workflow really runs docs and regressions and preserves full-run dependencies", () => {
+  assert.ok(jobs.gate.steps.some((s) => s.name === "File size ratchet guard" && s.run === "pnpm ci:unit:file-size" && !s.if && !s["continue-on-error"]));
   const docs = jobs["docs-freshness"];
   assert.equal(docs.if, undefined);
   assert.equal(docs.steps.find((s) => s.uses === "actions/checkout@v4").with["fetch-depth"], 0);
