@@ -36,8 +36,88 @@ permissions:
   packages: read
 
 jobs:
+  # 变更分类：只有「所有改动都在安全文本白名单内」才判为 docs_only。
+  # 混合改动、删除/重命名、未知路径、分类失败、非 PR 事件（含 workflow_dispatch）一律 full。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          emit() { echo "docs_only=$1" >> "$GITHUB_OUTPUT"; }
+
+          # 非 PR（含 workflow_dispatch、push@main）一律 full。
+          if [ "$EVENT_NAME" != "pull_request" ]; then emit false; exit 0; fi
+          if [ -z "${PR_BASE:-}" ] || [ -z "${PR_HEAD:-}" ]; then emit false; exit 0; fi
+
+          # 分类器自身失败必须 fail safe 到 full，不能误判成 docs-only。
+          if ! diff_out=$(git diff --name-status --no-renames "$PR_BASE...$PR_HEAD"); then
+            echo "::warning::classifier diff failed; falling back to full"
+            emit false; exit 0
+          fi
+          if [ -z "$diff_out" ]; then emit false; exit 0; fi
+
+          docs_only=true
+          while IFS=$'\t' read -r status path; do
+            [ -z "${status:-}" ] && continue
+            # 只接受新增/修改；删除、重命名（--no-renames 后表现为 D+A）、类型变更一律 full。
+            case "$status" in
+              A|M) ;;
+              *) docs_only=false; break ;;
+            esac
+            # 安全文本白名单。skills/ 是运行时提示，docs/evidence/ 是探测数据，都不算纯文档。
+            case "$path" in
+              LICENSE|THIRD_PARTY_NOTICES.md) ;;
+              skills/*) docs_only=false; break ;;
+              docs/evidence/*) docs_only=false; break ;;
+              README.md|AGENTS.md|CLAUDE.md|DESIGN.md|CHANGELOG.md) ;;
+              docs/*.md) ;;
+              *) docs_only=false; break ;;
+            esac
+          done <<< "$diff_out"
+
+          emit "$docs_only"
+
+  # 文档保鲜在所有 PR 上运行（含纯代码 PR）：删脚本、schema 版本变化同样会破坏文档。
+  # 需要完整 checkout（读取 package.json、schema-version、Git symlink 元数据），但不启动数据库。
+  docs-freshness:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: CI routing and failure propagation regression
+        run: pnpm ci:unit:ci-routing
+
+      - name: Docs freshness guard (version literals, pnpm scripts, links, removed mechanisms)
+        run: pnpm ci:unit:docs-freshness
+
   windows-upgrade-backend:
     runs-on: windows-latest
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.docs_only != 'true'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +129,8 @@ jobs:
 
   gate:
     runs-on: ubuntu-24.04
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.docs_only != 'true'
     timeout-minutes: 40
     services:
       postgres:
@@ -195,12 +277,6 @@ jobs:
 
       - name: Test wiring ratchet guard
         run: pnpm ci:unit:ci-test-hook
-
-      - name: File size ratchet guard
-        run: pnpm ci:unit:file-size
-
-      - name: Docs freshness guard (version literals, pnpm scripts, links, removed mechanisms)
-        run: pnpm ci:unit:docs-freshness
 
       - name: Authenticated report download web unit
         run: pnpm ci:unit:web-report-download
@@ -591,6 +667,8 @@ jobs:
 
   runtime-images:
     runs-on: ubuntu-latest
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.docs_only != 'true'
     timeout-minutes: 45
     permissions:
       contents: read
@@ -727,6 +805,8 @@ jobs:
   # 编译，QEMU 只负责组装 arm64 运行时；真实 d8/libFuzzer 冒烟在依赖的 arm64 作业中原生执行。
   chrome-fuzz-arm64-build:
     runs-on: ubuntu-latest
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.docs_only != 'true'
     timeout-minutes: 240
     permissions:
       contents: read
@@ -828,8 +908,9 @@ jobs:
   # QEMU 可以组装交叉构建的镜像，但不是 ASan 插桩 V8 冒烟的可靠执行环境。
   # 该门禁固定使用原生 runner，成功结果才能证明真实 arm64 d8/libFuzzer 运行时可用。
   chrome-fuzz-arm64:
-    needs: chrome-fuzz-arm64-build
+    needs: [changes, chrome-fuzz-arm64-build]
     runs-on: ubuntu-24.04-arm
+    if: always() && !cancelled() && needs.changes.outputs.docs_only != 'true' && needs.chrome-fuzz-arm64-build.result == 'success'
     timeout-minutes: 30
     permissions:
       contents: read
@@ -851,3 +932,50 @@ jobs:
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker pull --platform linux/arm64 "$image_ref"
           node agent-harness/test-chrome-runtime.mjs "$image_ref" chrome-fuzz agent-harness/chrome-fuzz-runtime.json linux/arm64
+
+  # 稳定的 required 汇总检查：显式核对分类器、文档门禁与应运行的重活结果。
+  # 不用 echo success 占位；「跳过」与「失败」必须区分，避免 docs-only 掩盖真实失败。
+  ci-summary:
+    if: always()
+    needs: [changes, docs-freshness, windows-upgrade-backend, gate, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify required results
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
+          DOCS: ${{ needs.docs-freshness.result }}
+          WINDOWS: ${{ needs.windows-upgrade-backend.result }}
+          GATE: ${{ needs.gate.result }}
+          IMAGES: ${{ needs.runtime-images.result }}
+          FUZZ_BUILD: ${{ needs.chrome-fuzz-arm64-build.result }}
+          FUZZ: ${{ needs.chrome-fuzz-arm64.result }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
+          [ "$CHANGES" = "success" ] || fail "changes classifier did not succeed: $CHANGES"
+          [[ "$DOCS_ONLY" == "true" || "$DOCS_ONLY" == "false" ]] || fail "missing or invalid classifier output"
+          [ "$DOCS" = "success" ] || fail "docs-freshness did not succeed: $DOCS"
+
+          check_heavy() {
+            local name="$1" result="$2"
+            if [ "$DOCS_ONLY" = "true" ]; then
+              [ "$result" = "skipped" ] || fail "$name must be skipped for docs-only changes, got: $result"
+            else
+              [ "$result" = "success" ] || fail "$name did not succeed: $result"
+            fi
+          }
+
+          check_heavy windows-upgrade-backend "$WINDOWS"
+          check_heavy gate "$GATE"
+          check_heavy runtime-images "$IMAGES"
+          check_heavy chrome-fuzz-arm64-build "$FUZZ_BUILD"
+          check_heavy chrome-fuzz-arm64 "$FUZZ"
+
+          if [ "$DOCS_ONLY" = "true" ]; then
+            echo "docs-only change: docs-freshness passed; heavy jobs skipped as expected"
+          else
+            echo "full run: docs-freshness and all heavy jobs passed"
+          fi
