@@ -189,3 +189,5 @@
 
 
 - [当前 Job 的 Skill 条件建议](SKILL_SUGGESTIONS.md)：#778 本项目精确版本条件匹配、选择声明回执与非模型验收矩阵；不自动启用，不声称效果或成本收益。
+
+- [沙箱 Pi 观测内存扩展设计评审](PI_OBSERVATIONAL_MEMORY.md)：#815 A 片，只定 memory 数据边界、`requires_egress` / `requires_gateway` 语义、后台模型预算与 RPC 纯净性判定；未注册、未预装、未启用，质量收益未验证。
