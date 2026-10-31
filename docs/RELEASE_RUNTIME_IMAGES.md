@@ -1,6 +1,8 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> **状态：运维 as-built；发布元数据核对于 2026-10-29**。[v0.6.0](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.0) 已于 2026-10-22T06:02:52Z 正式发布（非 draft / prerelease），Release 附有 `runtime-image-registry.json`、`runtime-image-registry-v2.json`、`platform-signature-evidence.json`、`deepsonar-reverse-evidence-0.6.0.tar.gz` 和 Management Skill。本次只核对 Release 元数据及附件清单，未重新 inspect 镜像、验签或部署；附件存在不替代签名内容校验，发布完成不等于现网已经升级。下次发布仍须按本文完成目标版本的双架构、各通道 inspect、签名和验收门禁；历史正式 tag 保持不可变。
+> **状态：运维 as-built；最新正式发布元数据核对于 2026-10-31**。[v0.6.2](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.2) 于 2026-10-31T09:05:38Z 正式发布，非 draft / prerelease；tag 指向包含 Web 隔离构建修复的 `347385a53f43d15a53175226528af10a692f6f9e`。剩余 issue/PR 的下一发布目标为 **v0.6.3**，对比起点为 v0.6.2。这里核对发布元数据与源码关系，不重新声明附件、签名或各通道镜像已逐项复验。
+>
+> **历史 v0.6.0 元数据核对（2026-10-29）**。[v0.6.0](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.0) 已于 2026-10-22T06:02:52Z 正式发布（非 draft / prerelease），Release 附有 `runtime-image-registry.json`、`runtime-image-registry-v2.json`、`platform-signature-evidence.json`、`deepsonar-reverse-evidence-0.6.0.tar.gz` 和 Management Skill。本次只核对 Release 元数据及附件清单，未重新 inspect 镜像、验签或部署；附件存在不替代签名内容校验，发布完成不等于现网已经升级。下次发布仍须按本文完成目标版本的双架构、各通道 inspect、签名和验收门禁；历史正式 tag 保持不可变。
 >
 > Scheduler / runtime-sandbox 契约修复的**部署生效与自检**：[`RUNTIME_IMAGE_CONTRACT_DEPLOY.md`](RUNTIME_IMAGE_CONTRACT_DEPLOY.md)（#636）。
 
@@ -21,13 +23,13 @@
 
 ## Web 隔离构建回归
 
-Web 生产构建使用 [`tsconfig.build.json`](../apps/web/tsconfig.build.json) 继承完整严格类型配置，仅排除测试入口；`typecheck` 保留完整 `tsconfig.json`，跨包 Plan 报告测试仍由 `ci:unit:plan-protocol` 执行。`ci:images` 同时执行实际 `deploy/Dockerfile.web` 构建与最终静态产物检查，覆盖完整仓库可通过而镜像上下文缺少 Scheduler 源码的情况；不复制 Scheduler 源码到 Web 镜像。2026-10-31 核对 v0.6.1 run `41171008148` 的 Web job `124451427235` 已因 TS2307 失败；原 tag 保留，其他镜像产出不等于正式 Release 完成。修复后的双架构发布结果须由目标 Release workflow 另行证明。
+Web 生产构建使用 [`tsconfig.build.json`](../apps/web/tsconfig.build.json) 继承完整严格类型配置，仅排除测试入口；`typecheck` 保留完整 `tsconfig.json`，跨包 Plan 报告测试仍由 `ci:unit:plan-protocol` 执行。`ci:images` 同时执行实际 `deploy/Dockerfile.web` 构建与最终静态产物检查，覆盖完整仓库可通过而镜像上下文缺少 Scheduler 源码的情况；不复制 Scheduler 源码到 Web 镜像。2026-10-31 核对 v0.6.1 run `41171008148` 的 Web job `124451427235` 已因 TS2307 失败；原 tag 保留，其他镜像产出不等于正式 Release 完成。该修复已随 v0.6.2 正式发布；v0.6.3 仍须在最终提交上重新完成适用的发布门禁。
 
 ## Chrome Fuzz ARM64 的宿主磁盘准备
 
 2026-10-31，[CI run 41173355695](https://github.com/SummerSec/DeepSonar/actions/runs/41173355695) 的 `chrome-fuzz-arm64-build` 在构建中失败；check-run 注释明确记录 runner 写诊断日志时 `System.IO.IOException: No space left on device`。该证据不能证明编译错误、网络协议问题或容量/SLA 上限。
 
-CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚本](../.github/ci/prepare-hosted-runner-disk.mjs)：只在 GitHub-hosted runner 删除明确列出的未使用 SDK，并打印前后磁盘状态。脚本保护工作区、runner 和 Docker/containerd 数据，清理失败直接失败；本地与 self-hosted 禁止实际删除，显式 dry-run 只打印诊断。安全测试通过 mock 命令执行，不删除宿主文件。此准备不改变 fingerprint、镜像产物或原生 build/smoke 门禁，空间是否足够仍须由新运行证明，不能将本地安全测试写成 ARM64 构建已通过。
+CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚本](../.github/ci/prepare-hosted-runner-disk.mjs)：只在 GitHub-hosted runner 删除明确列出的未使用 SDK，并打印前后磁盘状态。脚本保护工作区、runner 和 Docker/containerd 数据，清理失败直接失败；本地与 self-hosted 禁止实际删除，显式 dry-run 只打印诊断。安全测试通过 mock 命令执行，不删除宿主文件。此准备不改变 fingerprint、镜像产物或原生 build/smoke 门禁。2026-10-31，[后续 run 41184204236](https://github.com/SummerSec/DeepSonar/actions/runs/41184204236) 的 ARM64 构建与原生 smoke 均通过；该轮整体 CI 因独立的资格报告回归失败，不能写成全量通过。此证据不构成容量/SLA 保证。
 
 ## 发布前门禁
 
