@@ -93,7 +93,12 @@ import { inc } from "./metrics.js";
 import { acknowledgeHumanMessage, registerHumanMessageRuntime } from "./domains/canvas/human-messages.js";
 import { composeHubInstruction, composeScopeForPrompt, composeWorkerInstruction } from "./compose-scope.js";
 import { frozenTaskSeeds } from "./task-compose.js";
-import { materializeFrozenPiExtensions, parseFrozenPiExtensions } from "./pi-extensions.js";
+import {
+  materializeFrozenPiExtensions,
+  observationalMemoryConfig,
+  parseFrozenPiExtensions,
+} from "./pi-extensions.js";
+import { resolveObservationalMemoryBudget } from "./gateway-om-budget.js";
 import {
   assertPiSnapshotLaunchSelection,
   hasProviderSettingsConfig,
@@ -743,7 +748,17 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   let runtimeConfigFiles = snapshot.config_files.map((item) => ({ ...item }));
   let runtimeGatewayRouted = false;
   let gatewayToken: string | null = null;
+  let observationalMemoryGatewayToken: string | null = null;
   let activeCredentialProvider: string | null = null;
+  const frozenPiExtensions = provider === "pi" ? parseFrozenPiExtensions(snapshot.pi_extensions) : [];
+  const observationalMemory = provider === "pi" ? observationalMemoryConfig(frozenPiExtensions) : null;
+  const frozenKnobs = snapshot.runtime_knobs;
+  const observationalMemoryBudget = observationalMemory
+    ? resolveObservationalMemoryBudget({
+        config: observationalMemory,
+        jobTokenMaxRequests: frozenKnobs?.job_token_max_requests,
+      })
+    : null;
   for (const key of snapshot.env_keys) {
     if (!config.runtime.isEnvKeyAllowed(key)) {
       console.warn(`[real-agent] env_key 不在白名单，拒绝注入: ${key}`);
@@ -768,7 +783,6 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       upstreamModel,
       settingsConfig: snapshot.settings_config_json,
     });
-    const frozenKnobs = snapshot.runtime_knobs;
     const jt = await mintJobToken({
       jobId: job.id as string,
       projectId: job.project_id as string,
@@ -776,9 +790,21 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       allowedModels: tokenModels,
       maxRequests: typeof frozenKnobs?.job_token_max_requests === "number" ? frozenKnobs.job_token_max_requests : undefined,
       ttlSec: Math.max((job.timeout_sec as number) ?? 7200, config.gateway.tokenTtlSec),
+      workload: "main",
     });
     gatewayToken = jt.plaintext;
     registerJobEvidenceSecrets(jobId, [gatewayToken]);
+    if (observationalMemory) {
+      const omToken = await mintJobToken({
+        jobId: job.id as string,
+        projectId: job.project_id as string,
+        credentialId: cred.id as string,
+        ttlSec: Math.max((job.timeout_sec as number) ?? 7200, config.gateway.tokenTtlSec),
+        workload: "observational_memory",
+      });
+      observationalMemoryGatewayToken = omToken.plaintext;
+      registerJobEvidenceSecrets(jobId, [observationalMemoryGatewayToken]);
+    }
     env.DEEPSONAR_GATEWAY_TOKEN = gatewayToken;
     if (provider === "pi" && !materializedProviderConfig) {
       runtimeConfigFiles = materializeProviderSettings({
@@ -798,6 +824,9 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
         files: runtimeConfigFiles,
         gatewayBaseUrl: config.gateway.sandboxUrl,
         jobToken: jt.plaintext,
+        ...(observationalMemory
+          ? { observationalMemory: { config: observationalMemory, backgroundToken: observationalMemoryGatewayToken ?? "" } }
+          : {}),
       });
       for (const key of mapping.secretKeys) delete env[key];
       if (mapping.baseUrlKey) delete env[mapping.baseUrlKey];
@@ -835,6 +864,9 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   }
   if (materializedProviderConfig && !runtimeGatewayRouted) {
     throw new Error("冻结的 Provider 配置无法绑定 Job Gateway");
+  }
+  if (observationalMemory && !observationalMemoryGatewayToken) {
+    throw new Error("PI_OM_CREDENTIAL_REQUIRED");
   }
   env.DEEPSONAR_ALLOW_EGRESS = allowEgress ? "1" : "0";
   env.DEEPSONAR_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
@@ -1097,7 +1129,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   });
   const mcps = snapshot.mcps.filter((item) => (item as { name?: unknown })?.name !== CONTROL_MCP_NAME);
   const piExtensionInjection = provider === "pi"
-    ? materializeFrozenPiExtensions(parseFrozenPiExtensions(snapshot.pi_extensions), allowEgress)
+    ? materializeFrozenPiExtensions(frozenPiExtensions, allowEgress, {
+        gatewayAvailable: !observationalMemory || observationalMemoryGatewayToken !== null,
+      })
     : { files: [], paths: [], injected: [], skipped: [] };
   const moduleEvidence = moduleEvidenceFromSnapshot(snapshot);
   const componentManifest = {
@@ -1123,6 +1157,21 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     provider_files: runtimeConfigFiles.map((f) => ({ path: f.path, sha256: f.content_sha256 })),
     pi_extensions: piExtensionInjection.injected,
     pi_extensions_skipped: piExtensionInjection.skipped,
+    ...(observationalMemory ? {
+      observational_memory: {
+        schema: observationalMemory.schema,
+        package: observationalMemory.package,
+        version: observationalMemory.version,
+        integrity: observationalMemory.integrity,
+        source_provider: observationalMemory.source_provider,
+        source_model: observationalMemory.source_model,
+        model: observationalMemory.model,
+        workload_budget: observationalMemoryBudget,
+        passive: false,
+        showWorkerNotifications: false,
+        debugLog: false,
+      },
+    } : {}),
     provider_gateway_routed: runtimeGatewayRouted,
     system_tools: controlToolNames,
     disabled_system_tools: disabledControlToolNames,
@@ -1173,9 +1222,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   }
   for (const file of runtimeConfigFiles) {
     if (file.path.startsWith(".pi/agent/extensions/")) continue;
-    const target = provider === "pi" && file.path.startsWith(".pi/")
-      ? `/workspace/.deepsonar-home/${file.path}`
-      : `/workspace/${file.path}`;
+    const target = provider === "pi" && file.path === ".pi/settings.json"
+      ? "/workspace/.pi/settings.json"
+      : provider === "pi" && file.path.startsWith(".pi/")
+        ? `/workspace/.deepsonar-home/${file.path}`
+        : `/workspace/${file.path}`;
     workspaceFiles[target] = file.content;
   }
   for (const file of piExtensionInjection.files) {

@@ -35,6 +35,7 @@ const entry = (imageKey, spec) => ({
   verification_note: spec.verification_note ?? "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image.",
   ...(spec.device_required === undefined ? {} : { device_required: spec.device_required }),
   ...(spec.requires_egress === undefined ? {} : { requires_egress: spec.requires_egress }),
+  ...(spec.requires_gateway === undefined ? {} : { requires_gateway: spec.requires_gateway }),
   ...(spec.covers === undefined ? {} : { covers: spec.covers })
 });
 
@@ -158,6 +159,50 @@ const wrapper = (imageKey, id, commands, source, usage, selection, invocation, p
 
 const capability = (imageKey, id, version, source, commands, usage, selection, invocation, params, extra = {}) => def(imageKey, id, version, source, commands, usage, selection, invocation, params, { kind: "capability", ...extra });
 
+const observationalMemory = (imageKey, source = "agent-harness/runtime-images.json") => [
+  capability(
+    imageKey,
+    "pi-observational-memory",
+    "3.1.4",
+    `${source}#/piExtensions.pi-observational-memory`,
+    ["pi"],
+    "Use the frozen Pi observational-memory extension for current-Job observations, reflections, recall, and context compaction.",
+    "Use only when the Job snapshot explicitly contains the registered extension and the image manifest contains both the MIT package and the governed wrapper. It is Gateway-only: it has no business egress permission.",
+    "pi --mode rpc --no-approve --no-extensions -e /workspace/.deepsonar-home/.pi/agent/extensions/pi-observational-memory.ts",
+    ["frozen Job snapshot", "Gateway availability", "request_budget", "background_limits"],
+    {
+      covers: [
+        "pi-observational-memory",
+        "pi-observational-memory-governed",
+        "recall",
+        "/opt/deepsonar/pi-extensions/node_modules/pi-observational-memory/src/index.ts",
+        "/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts",
+      ],
+      requires_egress: false,
+      requires_gateway: true,
+      prerequisites: [
+        "A Pi Job whose immutable snapshot explicitly admits pi-observational-memory",
+        "The pinned pi-observational-memory@3.1.4 package and SHA-512 integrity in the image",
+        "The image-local governed wrapper and Scheduler Model Gateway",
+        "Explicit positive main/background request allocations when the frozen Job request total is finite; independently unset background request/token limits mean unlimited",
+      ],
+      output_interpretation: "Memory entries are current-Job context state only. They are not DeepSonar Facts, Evidence, Findings, verification results, or cross-Job memory.",
+      failure_handling: {
+        missing_condition: "If the package, wrapper, frozen provider/model, Gateway route, or quota allocation is unavailable, fail closed before activation; do not download a replacement or silently run with defaults.",
+        transient_retryable: "A bounded Gateway or upstream transient failure may be recorded as a visible memory-worker degradation within the frozen budget. Preserve the main Job path and do not replay an unknown external effect.",
+        permanent: "Protocol, permission, malformed-snapshot, package-integrity, and unknown-external-effect errors remain hard failures. Do not convert them to a successful fallback.",
+      },
+      composition_flow: "frozen Job provider/model and quota -> governed wrapper -> Scheduler Model Gateway -> current-Job session ledger -> Pi compaction/recall; no Fact/Evidence promotion.",
+      evidence_retention: [
+        "Package version, npm integrity, actual src/index.ts entry, wrapper source path and wrapper SHA-256",
+        "Job/Attempt identity, image key/digest, Gateway workload, and frozen request budget",
+        "Redacted worker status and protocol outcome only; do not treat memory content as Fact or Evidence",
+      ],
+      version_limits_side_effects_cleanup: "The npm package and wrapper bytes are image-fixed and included in the runtime fingerprint. Memory is scoped to one frozen Job/session; remove only workspace-local temporary files after the Job, and never persist or reuse it across Jobs.",
+    },
+  ),
+];
+
 const makeImage = (imageKey, sourceFiles, inheritedFrom, defs, sections) => {
   const entries = defs;
   return {
@@ -178,8 +223,8 @@ const commonBase = (imageKey) => [...makeBase(imageKey), ...addDshModules(imageK
 const baseSource = "agent-harness/runtime-images.json";
 
 const images = [];
-images.push(makeImage("deepsonar-base", ["agent-harness/runtime-images.json", "agent-harness/dsh-runtime/package.json", "agent-harness/dsh-runtime/package-lock.json", "deploy/Dockerfile.agent", "agent-harness/write-tool-manifest.mjs"], [], commonBase("deepsonar-base"), ["base utilities", "Agent CLIs", "DSH implementation dependencies"]));
-images.push(makeImage("deepsonar-audit", ["agent-harness/runtime-images.json", "agent-harness/dsh-runtime/package.json", "agent-harness/dsh-runtime/package-lock.json", "deploy/Dockerfile.agent", "deploy/pi-web-access"], [], [...commonBase("deepsonar-audit"), ...auditBase("deepsonar-audit")], ["base utilities", "Agent CLIs", "binary inspection", "Pi web access"]));
+images.push(makeImage("deepsonar-base", ["agent-harness/runtime-images.json", "agent-harness/dsh-runtime/package.json", "agent-harness/dsh-runtime/package-lock.json", "deploy/Dockerfile.agent", "agent-harness/write-tool-manifest.mjs", "agent-harness/pi-observational-memory-governed.ts"], [], [...commonBase("deepsonar-base"), ...observationalMemory("deepsonar-base")], ["base utilities", "Agent CLIs", "DSH implementation dependencies", "Pi observational memory"]));
+images.push(makeImage("deepsonar-audit", ["agent-harness/runtime-images.json", "agent-harness/dsh-runtime/package.json", "agent-harness/dsh-runtime/package-lock.json", "deploy/Dockerfile.agent", "agent-harness/write-tool-manifest.mjs", "agent-harness/pi-observational-memory-governed.ts", "deploy/pi-web-access"], [], [...commonBase("deepsonar-audit"), ...observationalMemory("deepsonar-audit"), ...auditBase("deepsonar-audit")], ["base utilities", "Agent CLIs", "binary inspection", "Pi web access", "Pi observational memory"]));
 
 const kaliCommon = [
   ["ca-certificates", "dpkg", [], "Provide TLS trust for permitted HTTPS operations.", "Runtime dependency; network permission remains Scheduler-controlled.", "not directly callable", [], true],
@@ -212,9 +257,10 @@ const kaliExtras = [
   def("deepsonar-kali-minimal", "jdk-17", "17.0.19+10", "agent-harness/kali-minimal-runtime.json#/managed.jdk.versions[2]", ["java", "javac", "jar"], "Build or run projects requiring the default Java 17 runtime.", "Use Java 17 only when project metadata permits it; record selected JAVA_HOME.", "java -version", ["-version", "-cp", "-jar", "--release"], { covers: ["jdk"] }),
   def("deepsonar-kali-minimal", "maven", "3.9.16", "agent-harness/kali-minimal-runtime.json#/downloads.maven", ["mvn"], "Build or test Maven projects with a present pom.xml and locked dependency policy.", "Use Maven when the repository declares Maven; do not download dependencies without network permission.", "mvn -version", ["-o", "-DskipTests", "-pl", "-am", "-f"]),
   def("deepsonar-kali-minimal", "pi-web-access", "0.29.0", "agent-harness/kali-minimal-runtime.json#/piExtensions.pi-web-access", ["pi"], "Use Pi's declared web search, content extraction, or URL fetch capability when the job permits egress.", "Use only for task-required current external material; preserve URL and retrieval provenance.", "pi --help", ["query", "URL", "result limit"], { kind: "capability", requires_egress: true, covers: ["pi-web-access"], failure_handling: { missing_condition: "If egress is disallowed, record missing network condition and continue with local evidence when possible." } }),
+  ...observationalMemory("deepsonar-kali-minimal", "agent-harness/kali-minimal-runtime.json"),
   ...addDshModules("deepsonar-kali-minimal", "agent-harness/kali-minimal-runtime.json")
 ];
-images.push(makeImage("deepsonar-kali-minimal", ["agent-harness/kali-minimal-runtime.json", "agent-harness/dsh-runtime/package.json", "agent-harness/dsh-runtime/package-lock.json", "deploy/Dockerfile.agent-kali-minimal"], [], [...makeKaliCommon(), ...kaliExtras], ["common utilities", "multi-version Python", "Go/Rust", "Java 8/11/17", "Maven", "Agent CLIs"]));
+images.push(makeImage("deepsonar-kali-minimal", ["agent-harness/kali-minimal-runtime.json", "agent-harness/dsh-runtime/package.json", "agent-harness/dsh-runtime/package-lock.json", "deploy/Dockerfile.agent-kali-minimal", "agent-harness/pi-observational-memory-governed.ts"], [], [...makeKaliCommon(), ...kaliExtras], ["common utilities", "multi-version Python", "Go/Rust", "Java 8/11/17", "Maven", "Agent CLIs", "Pi observational memory"]));
 
 const chromeTestDefs = (imageKey) => [
   def(imageKey, "chromium", "151.0.7922.71-1~deb12u1", "agent-harness/chrome-test-runtime.json#/apt.chromium", ["chromium"], "Launch a browser to observe page behavior, DOM, navigation, and browser artifacts.", "Use Chromium/CDP for real browser behavior; use Playwright for structured interaction after CDP connects.", "chromium --version", ["--headless=new", "--remote-debugging-port", "--user-data-dir", "--no-sandbox"]),

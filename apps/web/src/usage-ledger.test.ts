@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { JobUsageLedgerView } from "./UsageLedgerBoard";
+import type { JobUsageSummary } from "./api";
 import {
   defaultCustomRange,
   formatCacheHitRate,
@@ -12,6 +16,32 @@ import {
   usagePeriodLabel,
   writeUsageLedgerCollapsed,
 } from "./usage-ledger.js";
+
+test("Job ledger renders memory cost and unknown usage separately from main cost", () => {
+  const main: JobUsageSummary = {
+    id: "main-request", effect_id: "gateway:main:1", request_no: 1, provider: "offline", model: "same-model",
+    input_tokens: 8, output_tokens: 2, total_tokens: 10, cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0, adjustment_tokens: 0, settlement_status: "settled", observed_at: "2026-10-31T00:00:00Z",
+  };
+  const background: JobUsageSummary = {
+    ...main, id: "memory-request", workload: "observational_memory", total_tokens: 900, settlement_status: "unknown",
+  };
+  const html = renderToStaticMarkup(createElement(JobUsageLedgerView, { usage: [main, background] }));
+  const summaries = [...html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/g)].map((match) => match[1]!.replace(/<[^>]*>/g, ""));
+  assert.equal(summaries.length, 2);
+  assert.match(summaries[0]!, /主任务：1 次/);
+  assert.match(summaries[0]!, /合计 10/);
+  assert.doesNotMatch(summaries[0]!, /900|待对账/);
+  assert.match(summaries[1]!, /记忆后台：1 次/);
+  assert.match(summaries[1]!, /合计 900/);
+  assert.match(summaries[1]!, /用量待对账 1 条/);
+  assert.match(html, /用量未知/);
+  assert.match(html, /最近 2 条模型请求（最多 100 条）/);
+});
+
+test("Job ledger has no invented cost in the empty state", () => {
+  assert.equal(renderToStaticMarkup(createElement(JobUsageLedgerView, { usage: [] })), "");
+});
 
 test("Shanghai helpers keep custom defaults on a 7-day inclusive window", () => {
   const now = new Date("2026-08-19T10:00:00.000+08:00");

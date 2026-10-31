@@ -73,7 +73,7 @@ test('actual knowledge schema 61 upgrades to integrated maintenance schema witho
       assert.equal(result.ok,true,JSON.stringify(result.plan.blocking_errors));
       await runMigrations(reserved as unknown as MigrationConnection);
     }finally{reserved.release();}
-    assert.equal((await candidate`SELECT version FROM schema_meta WHERE id='global'`)[0].version,65);
+    assert.equal((await candidate`SELECT version FROM schema_meta WHERE id='global'`)[0].version,66);
     assert.deepEqual((await candidate`SELECT config_json FROM projects WHERE id=${project}`)[0].config_json,preference);
     assert.equal((await candidate`SELECT active_version_id FROM project_knowledge_items WHERE id=${item}`)[0].active_version_id,version);
     assert.equal((await candidate`SELECT content_sha256 FROM project_knowledge_versions WHERE id=${version}`)[0].content_sha256,digest);

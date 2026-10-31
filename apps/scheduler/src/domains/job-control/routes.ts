@@ -489,9 +489,9 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       sql`SELECT id, attempt_id, effect_id, request_no, provider, model,
                  model_catalog_match, upstream_reporting_model, input_tokens,
                  output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens,
-                 adjustment_tokens, settlement_status, source,
+                 adjustment_tokens, settlement_status, source, workload, job_token_id,
                  observed_at, created_at
-            FROM job_usage_ledger WHERE job_id = ${id} ORDER BY request_no DESC LIMIT 100`,
+            FROM job_usage_ledger WHERE job_id = ${id} ORDER BY observed_at DESC, id DESC LIMIT 100`,
       job.canvas_id
         ? sql`SELECT title, target_json FROM canvases WHERE id = ${job.canvas_id as string}`
         : Promise.resolve([] as Array<{ title?: unknown; target_json?: unknown }>),

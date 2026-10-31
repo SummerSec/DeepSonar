@@ -161,6 +161,7 @@ export interface DashboardOps {
 }
 
 export type UsagePeriod = "day" | "week" | "month" | "custom";
+export type UsageWorkload = "main" | "observational_memory";
 
 export interface UsageTokenTotals {
   requests: number;
@@ -188,6 +189,7 @@ export interface DashboardUsage {
   period: UsagePeriod;
   range: { start: string; end: string; days: string[] };
   totals: UsageTokenTotals;
+  workloads: Record<UsageWorkload, UsageTokenTotals>;
   series: Array<UsageTokenCounts & { date: string }>;
   projects: Array<UsageTokenCounts & { id: string; name: string; jobs: number; tasks: number }>;
   tasks: Array<UsageTokenCounts & {
@@ -197,7 +199,7 @@ export interface DashboardUsage {
     project_name: string;
     jobs: number;
   }>;
-  models: Array<UsageTokenCounts & { provider: string; model: string }>;
+  models: Array<UsageTokenCounts & { provider: string; model: string; workload: UsageWorkload }>;
 }
 
 export interface Project {
@@ -588,6 +590,7 @@ export interface CanvasBroadcastSummary {
 export interface JobUsageSummary {
   id: string;
   attempt_id?: string;
+  job_token_id?: string | null;
   effect_id: string;
   request_no: number;
   provider: string;
@@ -600,6 +603,7 @@ export interface JobUsageSummary {
   adjustment_tokens: number;
   settlement_status: "settled" | "unknown" | "not_reported";
   source?: string;
+  workload?: UsageWorkload;
   observed_at: string;
 }
 

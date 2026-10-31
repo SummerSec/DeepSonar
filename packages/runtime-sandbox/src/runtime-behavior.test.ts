@@ -438,6 +438,20 @@ test("runtime stderr evidence default budget is 1 MiB and keeps short streams lo
   assert.equal(events.some((event) => event.type === "runtime.stderr.truncated"), false);
 });
 
+test("OM stderr is redacted across chunks while disabled stderr stays immediate", () => {
+  const events: Record<string, unknown>[] = [];
+  const stderr = new BoundedRuntimeStderrEvidence([], (event) => events.push(event), 4096, true);
+  const line = JSON.stringify({ customType: "om.observations.recorded", data: {
+    observations: [{ id: "abcdef123456", content: "private OM source canary", sourceEntryIds: ["source-1"] }],
+  } }) + "\n";
+  for (const character of line) stderr.push(character);
+  stderr.finish();
+  assert.doesNotMatch(JSON.stringify(events), /private OM/u);
+  assert.match(JSON.stringify(events), /source-1/u);
+  const ordinary = new BoundedRuntimeStderrEvidence([], () => {});
+  assert.equal(ordinary.push("no newline yet"), "no newline yet");
+});
+
 test("CLI 同会话恢复只接受明确的临时上游错误", () => {
   for (const message of [
     "HTTP 408 Request Timeout",
@@ -1046,6 +1060,20 @@ test("exact runtime secret redaction covers result files and archived session ar
   assert.doesNotMatch(JSON.stringify(value), new RegExp(token));
 });
 
+test("runtime object and telemetry redaction also scrub JSONL OM strings", () => {
+  const privateText = "private decision from observational memory";
+  const line = JSON.stringify({
+    type: "custom",
+    customType: "om.observations.recorded",
+    data: { observations: [{ id: "abcdef123456", content: privateText }] },
+  });
+  const runtimeValue = redactRuntimeSecrets({ artifact: line }, []);
+  assert.doesNotMatch(JSON.stringify(runtimeValue), new RegExp(privateText));
+  assert.match(String((runtimeValue as { artifact: string }).artifact), /REDACTED: observational-memory/u);
+  const telemetry = redactToolTelemetry(line);
+  assert.doesNotMatch(String(telemetry), new RegExp(privateText));
+});
+
 test("mapCliEvent redacts an exact runtime token before non-control telemetry", () => {
   const token = "deepsonarcap_runtime_stream_0123456789";
   const events: Record<string, unknown>[] = [];
@@ -1319,6 +1347,26 @@ test("Pi session archive accepts only the exact governed sessionFile", async () 
     kind: "main",
   }]);
   assert.equal(bundle.captureError, undefined);
+});
+
+test("Pi session archive redacts OM ledger prose while preserving the JSONL envelope", async () => {
+  const sessionFile = "/workspace/.deepsonar-home/.pi/agent/session-om.jsonl";
+  const privateText = "private session observation";
+  const content = `${JSON.stringify({
+    type: "custom",
+    id: "entry-1",
+    customType: "om.observations.recorded",
+    data: { observations: [{ id: "abcdef123456", content: privateText, sourceEntryIds: ["source-1"] }] },
+  })}\n`;
+  const bundle = await CLI_SESSION_ADAPTERS.pi.exportSession(
+    mockedSessionDiscoveryRuntime({ exitCode: 0, stdout: "", stderr: "" }, { [sessionFile]: content }),
+    "session-om",
+    sessionFile,
+  );
+  const archived = bundle.artifacts[0]?.content ?? "";
+  assert.doesNotMatch(archived, new RegExp(privateText));
+  assert.match(archived, /om\.observations\.recorded/u);
+  assert.match(archived, /abcdef123456/u);
 });
 
 test("Pi session archive rejects a governed sessionFile path escape", async () => {

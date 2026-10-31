@@ -66,6 +66,9 @@ export interface QualityReport {
   cost: {
     findings_with_cost: number;
     total_tokens: number;
+    /** Background OM usage is visible for reconciliation but never assigned to a Finding. */
+    background_tokens: number;
+    background_requests: number;
     avg_tokens_per_finding: number | null;
     total_duration_ms: number;
     avg_duration_ms_per_finding: number | null;
@@ -129,6 +132,7 @@ export interface QualityUsageRow {
   total_tokens: number;
   provider: string;
   model: string;
+  workload?: "main" | "observational_memory";
 }
 
 export interface QualityContext {
@@ -211,6 +215,7 @@ export function attributeFindingCosts(input: {
 }): Map<string, { tokens: number; duration_ms: number; job_count: number }> {
   const tokensByJob = new Map<string, number>();
   for (const row of input.usage) {
+    if (row.workload === "observational_memory") continue;
     tokensByJob.set(row.job_id, (tokensByJob.get(row.job_id) ?? 0) + Math.max(0, Math.trunc(row.total_tokens)));
   }
   const durationByJob = new Map<string, number>();
@@ -364,6 +369,8 @@ export function buildQualityReport(input: QualityContext): QualityReport {
   const findingsWithCost = perFinding.filter((item) => item.tokens > 0 || item.duration_ms > 0).length;
   const totalTokens = perFinding.reduce((sum, item) => sum + item.tokens, 0);
   const totalDuration = perFinding.reduce((sum, item) => sum + item.duration_ms, 0);
+  const backgroundRows = input.usage.filter((row) => row.workload === "observational_memory");
+  const backgroundTokens = backgroundRows.reduce((sum, row) => sum + Math.max(0, Math.trunc(row.total_tokens)), 0);
   const jobsById = new Map(input.jobs.map((job) => [job.id, job]));
 
   return {
@@ -400,6 +407,8 @@ export function buildQualityReport(input: QualityContext): QualityReport {
     cost: {
       findings_with_cost: findingsWithCost,
       total_tokens: totalTokens,
+      background_tokens: backgroundTokens,
+      background_requests: backgroundRows.length,
       avg_tokens_per_finding: findings.length ? Math.round(totalTokens / findings.length) : null,
       total_duration_ms: totalDuration,
       avg_duration_ms_per_finding: findings.length ? Math.round(totalDuration / findings.length) : null,
@@ -468,7 +477,7 @@ export async function loadQualityContext(
         AND (${projectId}::uuid IS NULL OR j.project_id = ${projectId}::uuid)
         AND (${canvasId}::text IS NULL OR j.canvas_id = ${canvasId}::text)`,
     sql<Record<string, unknown>[]>`
-      SELECT u.job_id, u.total_tokens, u.provider, u.model
+      SELECT u.job_id, u.total_tokens, u.provider, u.model, u.workload
       FROM job_usage_ledger u
       JOIN jobs j ON j.id = u.job_id
       WHERE (${projectId}::uuid IS NULL OR u.project_id = ${projectId}::uuid)
@@ -534,6 +543,7 @@ export async function loadQualityContext(
       total_tokens: asCount(row.total_tokens),
       provider: asText(row.provider),
       model: asText(row.model),
+      workload: row.workload === "observational_memory" ? "observational_memory" : "main",
     })),
     humanCanvasIds: humanRows.map((row) => asText(row.canvas_id)).filter(Boolean),
     canvases: canvasRows.map((row) => ({

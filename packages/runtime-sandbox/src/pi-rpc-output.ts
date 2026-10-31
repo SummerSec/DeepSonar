@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { RuntimeHost } from "./runtime-host.js";
+import { redactPiObservationalMemory } from "./pi-observational-memory.js";
 
 export const PI_RPC_INLINE_BYTES = 1024 * 1024;
 export const PI_RPC_CAPTURE_BYTES = 128 * 1024 * 1024;
@@ -50,13 +51,14 @@ export class PiRpcOutputCapture {
   }
 
   async prepare(record: Record<string, unknown>, originalBytes: number): Promise<Record<string, unknown>> {
-    if (originalBytes <= PI_RPC_INLINE_BYTES) return record;
+    const safeRecord = redactPiObservationalMemory(record) as Record<string, unknown>;
+    if (originalBytes <= PI_RPC_INLINE_BYTES) return safeRecord;
     try {
       if (!this.archive) throw new Error("PI_RPC_CAPTURE_UNAVAILABLE");
-      const content = JSON.stringify(project(record, this.secrets, false));
+      const content = JSON.stringify(project(safeRecord, this.secrets, false));
       const bytes = Buffer.byteLength(content);
       if (this.sequence >= 128 || this.retainedBytes + bytes > this.budget) throw new Error("PI_RPC_CAPTURE_BUDGET_EXCEEDED");
-      const projected = project(record, this.secrets, true) as Record<string, unknown>;
+      const projected = project(safeRecord, this.secrets, true) as Record<string, unknown>;
       if (Buffer.byteLength(JSON.stringify(projected)) > PI_RPC_INLINE_BYTES) throw new Error("PI_RPC_UNSUPPORTED_LARGE_STRUCTURE");
       const name = `pi-rpc-${this.runId}-${++this.sequence}.json`;
       const path = `/workspace/.deepsonar-rpc-output/${name}`;
@@ -64,7 +66,7 @@ export class PiRpcOutputCapture {
       await this.write(() => this.host.uploadFile(content, path));
       const evidencePath = await this.write(() => this.archive!({ name, content }));
       this.retainedBytes += bytes;
-      this.emit({ type: "runtime.diagnostic", code: "pi_rpc_output_filed", event_type: record.type,
+      this.emit({ type: "runtime.diagnostic", code: "pi_rpc_output_filed", event_type: safeRecord.type,
         truncated: true, original_bytes: originalBytes, retained_bytes: bytes, capture_complete: true,
         sha256: createHash("sha256").update(content).digest("hex"), hash_scope: "redacted_json",
         path, evidence_path: evidencePath });

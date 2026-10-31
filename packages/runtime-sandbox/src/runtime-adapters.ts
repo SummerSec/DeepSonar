@@ -4,6 +4,7 @@ import { buildDshPiAiRuntimeProjection, type DshPiAiRuntimeProjection } from "./
 import { DSH_PI_COMPAT_SYSTEM_PROMPT, formatDshTurnError, projectDshSystemPrompt } from "./dsh-request-frame.js";
 import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
 import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
+import { isPiObservationalMemoryCustomType, isPiObservationalMemoryExpectedWorkerFailure, redactPiObservationalMemoryText } from "./pi-observational-memory.js";
 
 export type AgentCliId = "claude-code" | "dsh" | "pi";
 
@@ -199,6 +200,7 @@ const PI_RPC_EVENT_TYPES = new Set([
   "message_start",
   "message_update",
   "message_end",
+  "entry_appended",
   "bash_execution_update",
   "tool_execution_start",
   "tool_execution_update",
@@ -318,7 +320,7 @@ function textFrom(value: unknown): string | undefined {
 }
 
 function runtimeErrorResult(raw: string | undefined, fallback: string): Record<string, unknown> {
-  const parsed = preferInnerJsonErrorMessage(raw && raw.trim() ? raw : fallback);
+  const parsed = preferInnerJsonErrorMessage(redactPiObservationalMemoryText(raw && raw.trim() ? raw : fallback));
   return {
     type: "result",
     subtype: "error",
@@ -545,6 +547,12 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     return [];
   }
   if (type === "agent_start") return [{ type: "system", subtype: "init", ...(state.sessionId ? { session_id: state.sessionId } : {}) }];
+  if (type === "entry_appended") {
+    const entry = line.entry as Record<string, unknown> | undefined;
+    return entry?.type === "custom" && isPiObservationalMemoryCustomType(entry.customType)
+      ? [{ type: "runtime.diagnostic", code: "pi_om_entry_appended", custom_type: entry.customType, entry_id: entry.id }]
+      : unknownRuntimeEvent();
+  }
   if (type === "message_update") {
     const event = line.assistantMessageEvent && typeof line.assistantMessageEvent === "object" && !Array.isArray(line.assistantMessageEvent)
       ? line.assistantMessageEvent as Record<string, unknown>
@@ -556,6 +564,14 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     const message = line.message && typeof line.message === "object" && !Array.isArray(line.message)
       ? line.message as Record<string, unknown>
       : undefined;
+    if (message?.role === "custom" && message.customType === "deepsonar.om.status") {
+      const details = message.details as Record<string, unknown> | undefined;
+      if (details?.fallback === "native_compaction" && isPiObservationalMemoryExpectedWorkerFailure(details)) {
+        return [{ type: "runtime.diagnostic", code: "pi_om_worker_degraded",
+          failure_class: "expected_worker", fallback: "native_compaction" }];
+      }
+      return fail("PI_OM_PROTOCOL_STATUS_INVALID");
+    }
     if (message?.role && message.role !== "assistant") return [];
     const stopReason = String(message?.stopReason ?? line.stopReason ?? "");
     if (stopReason === "error" || stopReason === "aborted") {

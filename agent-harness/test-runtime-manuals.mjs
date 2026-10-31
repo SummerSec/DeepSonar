@@ -219,7 +219,7 @@ function assertGeneratedManifestSource(imageKey, entries) {
   const [relativeConfigPath, toolset] = source;
   const config = object(JSON.parse(readFileSync(join(root, relativeConfigPath), "utf8")), `${imageKey} runtime inventory`);
   const enabled = (entry) => !entry.toolsets || entry.toolsets.includes(toolset);
-  const declared = ["apt", "npm", "downloads", "managed", "piExtensions"].flatMap((section) =>
+  const declared = ["apt", "npm", "downloads", "managed", "piExtensions", "piExtensionWrappers"].flatMap((section) =>
     Object.entries(config[section] ?? {}).filter(([, entry]) => enabled(entry)).map(([name]) => name));
   const missing = missingCoverage(declared, catalogCoverage(entries));
   if (missing.length > 0) fail(`${imageKey} generated tool manifest entries lack documentation: ${missing.join(", ")}`);

@@ -78,7 +78,7 @@ export {
   SPECIALTY_RUNTIME_IMAGE_POLICIES,
   specialtyPolicyForImageKey,
 } from "./runtime-image-boundary-policy.js";
-import { freezePiExtensions } from "../../pi-extensions.js";
+import { freezePiExtensions, observationalMemoryConfig } from "../../pi-extensions.js";
 import { parseRuntimeKnobOverride } from "../../runtime-knobs.js";
 import {
   assertAgentCliAllowlisted,
@@ -634,7 +634,12 @@ async function resolveAgentSnapshotForJobUnchecked(
   const hubPiExtensionIds = Array.isArray(options?.piExtensionIds)
     ? options.piExtensionIds.map((id) => String(id).trim()).filter(Boolean)
     : [];
-  const frozenPiExtensions = freezePiExtensions(hubPiExtensionIds, agentCli, runtimeImage.image_key);
+  const frozenPiExtensions = freezePiExtensions(hubPiExtensionIds, agentCli, runtimeImage.image_key, {
+    provider: providerSnapshot.pi_provider ?? (llm ? String(llm.provider ?? "") : null),
+    model: providerSnapshot.model,
+    thinking: providerSnapshot.reasoning,
+    contextWindowTokens: providerSnapshot.context_window_tokens,
+  });
   const providerEnvRefs = Object.keys(
     providerSnapshot.settings_config_json && typeof providerSnapshot.settings_config_json === "object"
       ? ((providerSnapshot.settings_config_json as Record<string, unknown>).env as Record<string, unknown> | undefined) ?? {}
@@ -659,6 +664,7 @@ async function resolveAgentSnapshotForJobUnchecked(
           model: providerSnapshot.model,
           provider: providerSnapshot.pi_provider,
           extensions: frozenPiExtensions.map((extension) => extension.id),
+          observational_memory: observationalMemoryConfig(frozenPiExtensions),
         }
       : null,
     dsh: agentCli === "dsh"

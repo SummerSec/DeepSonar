@@ -338,6 +338,12 @@ export {
 } from "./agent-runtime-profile-adapters.js";
 export type { AgentRuntimeLaunchSpecification } from "./agent-runtime-profile-adapters.js";
 export {
+  isPiObservationalMemoryExpectedWorkerFailure,
+  isPiObservationalMemoryCustomType,
+  redactPiObservationalMemory,
+  redactPiObservationalMemoryText,
+} from "./pi-observational-memory.js";
+export {
   CONTEXT_CONTRACT_VERSION,
   CONTEXT_MAX_COMPACTIONS,
   CONTEXT_MAX_EVENT_IDS,

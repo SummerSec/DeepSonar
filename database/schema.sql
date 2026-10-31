@@ -1097,49 +1097,6 @@ CREATE INDEX canvas_broadcasts_canvas_idx ON canvas_broadcasts (canvas_id, creat
 CREATE INDEX canvas_broadcasts_attempt_idx ON canvas_broadcasts (attempt_id, delivery_status, updated_at)
   WHERE attempt_id IS NOT NULL;
 
--- Model Gateway 用量的追加式账本。只记录计费维度和受控计数，不记录
--- prompt、completion、请求头、凭据或沙箱内容；job_tokens 仍是额度熔断缓存。
-CREATE TABLE job_usage_ledger (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  attempt_id uuid NOT NULL REFERENCES job_attempts(id) ON DELETE CASCADE,
-  effect_id text NOT NULL,
-  request_no int NOT NULL,
-  provider text NOT NULL,
-  model text NOT NULL DEFAULT '',
-  model_catalog_match boolean,
-  upstream_reporting_model text,
-  input_tokens bigint NOT NULL DEFAULT 0,
-  output_tokens bigint NOT NULL DEFAULT 0,
-  total_tokens bigint NOT NULL DEFAULT 0,
-  cache_read_input_tokens bigint NOT NULL DEFAULT 0,
-  cache_creation_input_tokens bigint NOT NULL DEFAULT 0,
-  adjustment_tokens bigint NOT NULL DEFAULT 0,
-  settlement_status text NOT NULL DEFAULT 'settled',
-  source text NOT NULL DEFAULT 'gateway_response',
-  observed_at timestamptz NOT NULL DEFAULT now(),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT job_usage_ledger_effect_id_check CHECK (effect_id ~ '^[a-z][a-z0-9_.:-]{1,127}$'),
-  CONSTRAINT job_usage_ledger_request_no_check CHECK (request_no >= 1 AND request_no <= 1000000000),
-  CONSTRAINT job_usage_ledger_provider_check CHECK (length(provider) BETWEEN 1 AND 100 AND provider !~ '[[:cntrl:]]'),
-  CONSTRAINT job_usage_ledger_model_check CHECK (length(model) <= 200 AND model !~ '[[:cntrl:]]'),
-  CONSTRAINT job_usage_ledger_upstream_reporting_model_check CHECK (
-    upstream_reporting_model IS NULL
-    OR (length(upstream_reporting_model) <= 200 AND upstream_reporting_model !~ '[[:cntrl:]]')
-  ),
-  CONSTRAINT job_usage_ledger_counts_check CHECK (
-    input_tokens >= 0 AND output_tokens >= 0 AND total_tokens >= 0
-    AND cache_read_input_tokens >= 0 AND cache_creation_input_tokens >= 0
-    AND adjustment_tokens BETWEEN -1000000000000 AND 1000000000000
-  ),
-  CONSTRAINT job_usage_ledger_status_check CHECK (settlement_status IN ('settled', 'unknown', 'not_reported')),
-  CONSTRAINT job_usage_ledger_source_check CHECK (source IN ('gateway_response', 'gateway_stream', 'gateway_error')),
-  UNIQUE (attempt_id, effect_id)
-);
-CREATE INDEX job_usage_ledger_job_idx ON job_usage_ledger (job_id, observed_at DESC);
-CREATE INDEX job_usage_ledger_project_idx ON job_usage_ledger (project_id, observed_at DESC);
-
 CREATE TABLE skill_sources (
   source_instance_id uuid NOT NULL DEFAULT gen_random_uuid(),
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1359,6 +1316,12 @@ CREATE TABLE job_tokens (
   allowed_models text[] NOT NULL DEFAULT '{}',
   max_requests int NOT NULL,
   max_tokens bigint,
+  workload text NOT NULL DEFAULT 'main',
+  request_total_limit int NOT NULL DEFAULT 0,
+  workload_max_tokens bigint,
+  expected_provider text,
+  expected_model text,
+  expected_route text,
   used_requests int NOT NULL DEFAULT 0,
   used_tokens bigint NOT NULL DEFAULT 0,
   status text NOT NULL DEFAULT 'active',
@@ -1367,10 +1330,75 @@ CREATE TABLE job_tokens (
   revoke_reason text,
   created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT job_tokens_status_check
-    CHECK (status IN ('active', 'expired', 'exhausted', 'revoked'))
+    CHECK (status IN ('active', 'expired', 'exhausted', 'revoked')),
+  CONSTRAINT job_tokens_workload_check
+    CHECK (workload IN ('main', 'observational_memory')),
+  CONSTRAINT job_tokens_request_total_limit_check
+    CHECK (request_total_limit BETWEEN 0 AND 1000000),
+  CONSTRAINT job_tokens_workload_max_tokens_check
+    CHECK (workload_max_tokens IS NULL OR workload_max_tokens >= 0),
+  CONSTRAINT job_tokens_expected_provider_check
+    CHECK (expected_provider IS NULL OR (length(expected_provider) BETWEEN 1 AND 120 AND expected_provider !~ '[[:cntrl:]]')),
+  CONSTRAINT job_tokens_expected_model_check
+    CHECK (expected_model IS NULL OR (length(expected_model) BETWEEN 1 AND 240 AND expected_model !~ '[[:cntrl:]]')),
+  CONSTRAINT job_tokens_expected_route_check
+    CHECK (expected_route IS NULL OR expected_route IN ('v1/messages', 'v1/chat/completions', 'v1/responses')),
+  CONSTRAINT job_tokens_workload_scope_check CHECK (
+    workload = 'main'
+    OR (expected_provider IS NOT NULL AND expected_model IS NOT NULL AND expected_route IS NOT NULL)
+  )
 );
 
 CREATE INDEX job_tokens_job_idx ON job_tokens (job_id);
+CREATE INDEX job_tokens_workload_idx ON job_tokens (job_id, workload, status);
+
+-- Model Gateway 用量的追加式账本。只记录计费维度和受控计数，不记录
+-- prompt、completion、请求头、凭据或沙箱内容；job_tokens 仍是额度熔断缓存。
+CREATE TABLE job_usage_ledger (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  attempt_id uuid NOT NULL REFERENCES job_attempts(id) ON DELETE CASCADE,
+  job_token_id uuid REFERENCES job_tokens(id),
+  effect_id text NOT NULL,
+  request_no int NOT NULL,
+  provider text NOT NULL,
+  model text NOT NULL DEFAULT '',
+  model_catalog_match boolean,
+  upstream_reporting_model text,
+  input_tokens bigint NOT NULL DEFAULT 0,
+  output_tokens bigint NOT NULL DEFAULT 0,
+  total_tokens bigint NOT NULL DEFAULT 0,
+  cache_read_input_tokens bigint NOT NULL DEFAULT 0,
+  cache_creation_input_tokens bigint NOT NULL DEFAULT 0,
+  adjustment_tokens bigint NOT NULL DEFAULT 0,
+  settlement_status text NOT NULL DEFAULT 'settled',
+  source text NOT NULL DEFAULT 'gateway_response',
+  workload text NOT NULL DEFAULT 'main',
+  observed_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT job_usage_ledger_effect_id_check CHECK (effect_id ~ '^[a-z][a-z0-9_.:-]{1,127}$'),
+  CONSTRAINT job_usage_ledger_request_no_check CHECK (request_no >= 1 AND request_no <= 1000000000),
+  CONSTRAINT job_usage_ledger_provider_check CHECK (length(provider) BETWEEN 1 AND 100 AND provider !~ '[[:cntrl:]]'),
+  CONSTRAINT job_usage_ledger_model_check CHECK (length(model) <= 200 AND model !~ '[[:cntrl:]]'),
+  CONSTRAINT job_usage_ledger_upstream_reporting_model_check CHECK (
+    upstream_reporting_model IS NULL
+    OR (length(upstream_reporting_model) <= 200 AND upstream_reporting_model !~ '[[:cntrl:]]')
+  ),
+  CONSTRAINT job_usage_ledger_counts_check CHECK (
+    input_tokens >= 0 AND output_tokens >= 0 AND total_tokens >= 0
+    AND cache_read_input_tokens >= 0 AND cache_creation_input_tokens >= 0
+    AND adjustment_tokens BETWEEN -1000000000000 AND 1000000000000
+  ),
+  CONSTRAINT job_usage_ledger_status_check CHECK (settlement_status IN ('settled', 'unknown', 'not_reported')),
+  CONSTRAINT job_usage_ledger_source_check CHECK (source IN ('gateway_response', 'gateway_stream', 'gateway_error')),
+  CONSTRAINT job_usage_ledger_workload_check CHECK (workload IN ('main', 'observational_memory')),
+  UNIQUE (attempt_id, effect_id)
+);
+CREATE INDEX job_usage_ledger_job_idx ON job_usage_ledger (job_id, observed_at DESC);
+CREATE INDEX job_usage_ledger_project_idx ON job_usage_ledger (project_id, observed_at DESC);
+CREATE INDEX job_usage_ledger_workload_idx ON job_usage_ledger (job_id, workload, observed_at DESC);
+CREATE INDEX job_usage_ledger_token_idx ON job_usage_ledger (job_token_id, observed_at DESC);
 
 -- Short-lived Job-scoped capability tokens for the Platform Tool API. This is
 -- intentionally independent from job_tokens, which are Gateway credentials.

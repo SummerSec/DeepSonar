@@ -813,6 +813,46 @@ for (const record of [
   });
 }
 
+test("Pi explicitly marked OM worker quota failure degrades without failing the Job", () => {
+  const state = {};
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  assert.deepEqual(adapter.decodeOutput({
+    type: "message_end",
+    message: { role: "custom", customType: "deepsonar.om.status", content: "Worker unavailable",
+      details: { code: "PI_OM_WORKER_QUOTA_EXHAUSTED", fallback: "native_compaction" } },
+  }, state), [{
+    type: "runtime.diagnostic",
+    code: "pi_om_worker_degraded",
+    failure_class: "expected_worker",
+    fallback: "native_compaction",
+  }]);
+  assert.equal(adapter.decodeOutput({ type: "agent_settled" }, state)[0]?.is_error, undefined);
+});
+
+test("Pi never downgrades extension_error, even with an expected-worker marker", () => {
+  const state = {};
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  assert.equal(adapter.decodeOutput({ type: "extension_error", error: "PI_OM_WORKER_TRANSIENT" }, state)[0]?.is_error, true);
+  assert.equal(adapter.decodeOutput({ type: "agent_settled" }, state)[0]?.is_error, true);
+});
+
+test("Pi admits the official entry_appended frame and exposes only OM ledger identity", () => {
+  const record = { type: "entry_appended", entry: { type: "custom", id: "ledger-1", parentId: "source-1",
+    customType: "om.observations.recorded", data: { observations: [{ id: "abcdef123456", content: "private memory" }] } } };
+  assert.deepEqual(parsePiJsonlRecord(JSON.stringify(record)), record);
+  assert.deepEqual(AGENT_CLI_RUNTIME_ADAPTERS.pi.decodeOutput(record, {}), [{ type: "runtime.diagnostic",
+    code: "pi_om_entry_appended", custom_type: "om.observations.recorded", entry_id: "ledger-1" }]);
+});
+
+test("Pi OM permission/protocol/unknown-effect failures remain sticky hard failures", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  for (const error of ["PI_OM_PERMISSION_DENIED", "PI_OM_PROTOCOL_CORRUPTION", "PI_OM_UNKNOWN_EFFECT"]) {
+    const state = {};
+    assert.equal(adapter.decodeOutput({ type: "extension_error", error }, state)[0]?.is_error, true);
+    assert.equal(adapter.decodeOutput({ type: "agent_settled" }, state)[0]?.is_error, true);
+  }
+});
+
 
 test("DSH Docker smoke uses the production allowlisted profile tree", async () => {
   const smoke = await import(new URL("../../../agent-harness/dsh-cordis-smoke-config.mjs", import.meta.url).href);

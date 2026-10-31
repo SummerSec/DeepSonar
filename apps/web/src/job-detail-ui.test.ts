@@ -92,8 +92,10 @@ test("运行详情展示 Attempt、外部效果、投递和用量摘要", () => 
   assert.match(panel, /latestAttempt/);
   assert.match(panel, /unknownEffects/);
   assert.match(panel, /deliveryCounts/);
-  assert.match(panel, /inputTokens/);
-  assert.match(panel, /outputTokens/);
-  assert.match(panel, /totalTokens/);
+  assert.match(panel, /<JobUsageLedgerView usage=\{detail\.usage\}/);
+  const ledger = readFileSync(new URL("./UsageLedgerBoard.tsx", import.meta.url), "utf8");
+  assert.match(ledger, /input_tokens/);
+  assert.match(ledger, /output_tokens/);
+  assert.match(ledger, /total_tokens/);
   assert.match(panel, /gatewayUsage=\{detail\.usage\}/);
 });

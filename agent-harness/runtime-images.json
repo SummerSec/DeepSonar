@@ -71,6 +71,27 @@
       "toolsets": ["audit"],
       "compatible_image_keys": ["deepsonar-audit"],
       "entry": "index.ts"
+    },
+    "pi-observational-memory": {
+      "package": "pi-observational-memory",
+      "version": "3.1.4",
+      "integrity": "sha512-jgQbFyLMs4wWhkf6F0voOgzMwtIXsb8+ks0MsPKpPxkdpyMX5E/el6Mk/vJ40m8GlKwBIsCKjL1r7Z2U8dCtmA==",
+      "license": "MIT",
+      "capabilities": ["observational-memory", "context-compaction", "recall"],
+      "requires_egress": false,
+      "requires_gateway": true,
+      "compatible_image_keys": ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"],
+      "entry": "src/index.ts"
+    }
+  },
+  "piExtensionWrappers": {
+    "pi-observational-memory-governed": {
+      "source": "agent-harness/pi-observational-memory-governed.ts",
+      "path": "/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts",
+      "version": "source-reviewed",
+      "license": "LicenseRef-DeepSonar",
+      "capabilities": ["governed-observational-memory", "gateway-only-model-routing"],
+      "compatible_image_keys": ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]
     }
   },
   "downloads": {},
