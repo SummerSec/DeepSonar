@@ -14,7 +14,7 @@
 | 4 | RPC 纯净性判定标准与验证方法 | §6 |
 | 5 | 与现有上下文治理（compaction / context window / 流截断）的关系 | §7 |
 
-结论先行：**A 片可以否决整个接入，但不能被跳过。** §8 列出必须先由人拍板的 7 个决策点；§9 把静态已核事实与仍需实测项分开。
+结论先行：**A 片可以否决整个接入，但不能被跳过。** §8 记录 7 个决策点与 2026-10-31 已选定方向（非运行时验证，含一项阻断）；§9 把静态已核事实与仍需实测项分开。
 
 ## 1. 动机与现状事实
 
@@ -90,9 +90,9 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 | # | 出口 | 具体内容（发布包 3.1.4 核实） | as-built 行为 | 目标语义 |
 | --- | --- | --- | --- | --- |
 | E1 | session 文件与 evidence archive | 全部会话行，含 L1/L2 与工具结果 | 读全文 → `redactRuntimeSecrets`（密钥精确值）→ 归档；无内容分类过滤 | 持久化前按结构化条目过滤；密钥精确值脱敏不得当作内容分类脱敏 |
-| E2 | recall 工具结果正文 | 工具名 `recall`，参数只有 `id`；`details.sourceEntries[].content` 为**整条源条目正文且无截断**（`renderSourceEntryContentOnly`），唯一调用点未传第二参数 → `includeSourceContent` **恒为 `true`**（上游 `src/tools/recall-observation.ts:126-141,291`） | 作为普通 tool result 进入 session 与 RPC 帧；无专门过滤 | **无法靠调用参数关闭**；只能靠冻结配置或改上游；与 E1 同策略 |
+| E2 | recall 工具结果正文 | 工具名 `recall`，参数只有 `id`；`details.sourceEntries[].content` 为**整条源条目正文且无截断**（`renderSourceEntryContentOnly`）。`includeSourceContent` 是**内部函数参数**（`recall-observation.ts:152,263`），**既不是工具参数也不是公开 settings 配置项**（发布包 `src/config.ts` 无此键），唯一调用点未传第二参数 → 恒为 `true`（`:291`） | 作为普通 tool result 进入 session 与 RPC 帧；无专门过滤 | **冻结配置无法关闭正文返回**；只能做受控适配（包装/改上游）或输出过滤，且需由固定发布物验证；待实现 |
 | E3 | compaction summary / fold | `session_before_compact` hook 产出的压缩结果与 memory fold | 作为 session 内容与 `context.compacted` 身份链的一部分 | 按 E1 过滤；身份字段不得因过滤而失真（否则降级为 `context.compaction_unknown`） |
-| E4 | 大 RPC 事件的落盘副本 | 超 1 MiB 帧投影后写入 `/workspace/.deepsonar-rpc-output/*.json` 并归档为 runtime artifact（[pi-rpc-output.ts](../packages/runtime-sandbox/src/pi-rpc-output.ts)） | 已有密钥脱敏；但只对固定 payload 键做 4 KiB 预览，`content` 不在其中 | 与 E1 同策略；新增出口时必须显式声明保留/过滤规则（见 §6.3） |
+| E4 | 大 RPC 事件的落盘副本与返回预览（**两者不同，不能混同**） | 帧 > 1 MiB 时：落盘 `/workspace/.deepsonar-rpc-output/*.json` 并归档为 runtime artifact（[pi-rpc-output.ts:54-70](../packages/runtime-sandbox/src/pi-rpc-output.ts)） | **落盘为完整脱敏记录**（`project(record, secrets, false)`，仅密钥精确值替换，不裁字节）；**4 KiB 预览只用于返回事件**（`preview=true`）；约束为单次 ≤128 个文件、累计 128 MiB、写入 15s 超时 | 必须分别声明：落盘副本的保留/过滤/读取权限与存储预算；预览只是事件降噪，**不得作为存储或敏感边界的依据** |
 | E5 | 普通工具结果在 Web viewer 的展示 | 现有 `parseAgentSession` 就把 tool result 渲染出来（[parseAgentSession.ts](../apps/web/src/session-viewer/parseAgentSession.ts)） | 已展示会话内 tool 结果 | **不开 memory 面板 ≠ 正文不显示**；E1/E2 的过滤规则必须先落地，不靠「不新增 UI」代替 |
 | E6 | 配置、日志、通知、debug 文件 | `debugLog`（启用后写 agent 目录 NDJSON）、错误/fallback 通知、`om:status` 输出 | 默认关；catch-up 错误通知不完全受 `showWorkerNotifications` 控制 | 冻结关闭；出现记录即按敏感出口验收 |
 
@@ -104,7 +104,7 @@ C/E 片可以在持久化前解析 JSONL，按结构化条目策略保留、脱�
 
 ### 3.4 规则（供 C/E 片实现）
 
-1. **写入侧优先**：L1/L2 由扩展生成，平台无法逐字审计。关闭 `debugLog` 与 `showWorkerNotifications` 只减少输出，不是敏感正文脱敏保证；写入 session 的 observations/reflections、错误通知仍需检查。C 片须冻结这些配置与 `passive` 语义（见 §8 决策 2），E 片须用含秘密的夹具验证各出口。上游 `src/debug-log.ts` 写文件而非默认 stdout；catch-up 错误通知也不完全受 `showWorkerNotifications` 控制。
+1. **写入侧优先**：L1/L2 由扩展生成，平台无法逐字审计。关闭 `debugLog` 与 `showWorkerNotifications` 只减少输出，不是敏感正文脱敏保证；写入 session 的 observations/reflections、错误通知仍需检查。C 片须冻结这些配置与 `passive` 语义（见 §8.1 第 2 项），E 片须用含秘密的夹具验证各出口。上游 `src/debug-log.ts` 写文件而非默认 stdout；catch-up 错误通知也不完全受 `showWorkerNotifications` 控制。
 2. **导出侧兜底**：若 E 片发现归档中出现 L3 或凭据明文，必须停止接入；修复方式是收紧扩展配置或加导出期脱敏，**不是**放宽归档正则。
 3. **不得投影**：L1/L2 不投影为 Finding、Fact、业务 Artifact、验证 Evidence、报告或质量指标；受控 session archive 中的物理存储不构成这种投影。memory 是模型的上下文治理产物，不是证据。任何"从 memory 生成 Finding/知识"的路径都超出本 issue 范围。
 4. **UI 边界**：Web session viewer 只按现有 pi 行格式解析（[parseAgentSession.ts](../apps/web/src/session-viewer/parseAgentSession.ts)）；不得为 memory 条目新增展示面板，除非先通过 G10 脱敏评审。
@@ -171,7 +171,7 @@ C 片由 Scheduler 从 Job 快照生成 `.pi/agent/settings.json` 的 `observati
 - `observeAfterTokens` / `reflectAfterTokens`
 - `agentMaxTurns` / `agentMaxTokens`：只有管理员显式配置才有限额；未配置必须表达不限，不能让上游默认 16 / 32_000 悄悄生效。上游是否支持不限及如何适配尚未验证，未满足不得启用
 - `showWorkerNotifications: false`、`debugLog: false`
-- `passive`（见 §8 决策 2）
+- `passive`（见 §8.1 第 2 项）
 
 约束：覆盖整个 defaults → global → project → env 链，以及独立 `compaction.enabled` 读取；不能只重写全局 settings。需受控适配层消费冻结值，并隔离/拒绝项目 settings 和相关 env 的覆盖，加载后校验有效配置与冻结快照一致（包括模型/fallback）。具体实现待 C 片验证。只接受注册表声明过的 knob；越界或未知字段 fail closed；Agent、Job 内容、项目配置一律不得覆盖该段（需要稳定 error code 与 RepairFeedback 分类）。
 
@@ -260,27 +260,44 @@ Web 与质量投影仍以 `context.compacted` / `context.compaction_unknown` 为
 | 新建 / 新排队（尚未冻结） | 不带 om | 无额外要求 |
 | 已排队且已冻结带 om | **仍按快照加载 om** | 不得暗改 `agent_snapshot_json`；如需强停，走既有 cancel 路径并记录原因 |
 | 运行中 | 不中断；继续带 om 到终态 | 可选：新推送的人工指令无法关闭扩展，需在 UI/文档如实说明 |
-| 恢复 / retry / rerun | 按快照仍带 om | 不因组合变更而视为快照失效；除非管理员显式选择重解析 |
+| `resume-frozen`（恢复旧冻结快照） | **仍带 om**；快照身份漂移时返回 `SNAPSHOT_STALE` 而不重解析 | 不因组合变更而视为快照失效（[rerun.ts:349-357](../apps/scheduler/src/domains/job-control/rerun.ts)） |
+| `rerun-current`（按当前配置重跑） | **重解析当前配置并重新冻结** → 移除后**不再带 om**；同时重建 shared asset 版本 | 属于显式选择重解析，不是暗改历史快照（[rerun.ts:341-376](../apps/scheduler/src/domains/job-control/rerun.ts)） |
 
-因此 **F 片不得承诺「移除即回到旧行为、无残留」**。可承诺的只有：新 Job 不再冻结该扩展、历史快照不被暗改、已冻结 Job 仍可审计。
+因此 **F 片不得承诺「移除即回到旧行为、无残留」**。可承诺的只有：新 Job 不再冻结该扩展、`resume-frozen` 仍按旧快照、`rerun-current` 按当前配置重新冻结、历史快照不被暗改、已冻结 Job 仍可审计。
 
-验收（离线）：先创建并冻结一个带 om 的 Job，再从组合移除 om，随后启动/恢复该旧 Job，断言它仍按快照带 om 且快照字节未变。
+验收（离线）：先创建并冻结一个带 om 的 Job，再从组合移除 om，随后分别验证：`resume-frozen` 仍带 om 且快照字节未变；`rerun-current` 按当前配置重算（不带 om）且重建 shared asset。两者不得写成同一个承诺。
 
 撤销读取权限与擦除历史内容严格分开（见 §3.3）：移除组合不是撤权，也不是擦除；dropper 删除更不能当作历史擦除。
 
-## 8. 必须由人拍板的决策点
+## 8. 决策点与已选方案
 
-以下 7 项均为待定方案；本 PR 收录建议不代表这些选项已获批准。A 正式通过所需书面记录见 §10。
+### 8.1 2026-10-31 设计取舍记录（已选定方向）
 
-| # | 决策 | 选项 | 建议 |
+issue [#815 设计取舍记录](https://github.com/SummerSec/DeepSonar/issues/815#issuecomment-6538810106) 已按推荐方案选定 7 项方向。下表「已选」列即该记录，它**只是产品/设计原则选择，不是运行时验证**。
+
+| # | 决策 | 已选方向 | 仍待定或阻断 |
 | --- | --- | --- | --- |
-| 1 | `requires_egress` / `requires_gateway` 是否按 §4.2 拆字段（含注册表 fail closed） | 拆 / 保持单字段并把 om 判为不兼容断网 Job | 拆；单字段会留下不可审计的静默跳过 |
-| 2 | 主动模式与 passive 的实际调用边界 | 均经完整模型治理 / 拒绝接入 | passive 不是零模型调用保证：上游 `src/hooks/compaction-hook.ts` 可调用 `compaction-catch-up.ts:48-114` 的 `runObserver`，恢复已有 observations 后也需验证；治理未落地不得以 passive 替代 |
-| 3 | 后台 worker 失败是否可接受 Job 失败（现状 `extension_error` 会失败） | 接受 / 必须降级 | 必须降级；把记忆功能失败放大成任务失败不可接受 |
-| 4 | 显式有限总额下的保底契约 | 显式比例/绝对值预留 / 可证明有效的后台隔离 | 默认不限且不预留；有限总额未选契约不得启用 OM，不隐式补额度；选定契约与数值须书面冻结并按 §5.2 验收 |
-| 5 | 独立可信 workload 维度实现方式 | 内核绑定的独立 token / 可信调用上下文 | 待 D 片评审；拒绝自报 header，保留原结算 source、模型白名单与全出口治理 |
-| 6 | 压缩身份链与 om 的关系 | 以 DeepSonar 身份为准并在无法表达时降级 / 扩展新 policy 表达 om | 先降级（诚实），有真实需求再扩契约 |
-| 7 | observer 是否允许独立模型（见 §5.4） | 只允许冻结模型 / 允许但受白名单与额度约束 | 首版只允许冻结模型；放宽需 D 片单独评审，不得放宽 `enforce_frozen_model` |
+| 1 | 网络契约 | 分开表示业务出网与 Gateway 访问要求 | 准入仍须校验路由/凭据/模型许可，Gateway 可达 ≠ 授权 |
+| 2 | 调用边界 | 接受后台记忆需要模型调用；主动/passive/恢复 catch-up 全部经 Gateway 治理 | passive 不得作为免治理入口 |
+| 3 | 失败策略 | worker 失败可见、受控降级，不拖垮主任务 | 权限违规/协议损坏不得吞错或伪装成功 |
+| 4 | 预算 | 未配置不限，不隐式加预留；显式有限总额时主任务优先 | **具体数值/百分比未选 → 有限总额契约缺失时不得启用 OM（阻断项）** |
+| 5 | 归因 | 后台用量单列且与总账可对账，由可信服务端绑定 | 独立 token / 可信调用上下文的实现留 D 片，不授权创建凭据或扩大权限 |
+| 6 | 压缩身份 | 沿用 DeepSonar 身份和追踪契约，不能表达时如实标 unknown | 暂不扩新 policy |
+| 7 | 模型 | 首版后台仅使用当前 Job 已冻结模型 | 不新增独立模型权限；放宽需 D 片单独评审 |
+
+该记录同时明确：canonical 发布物、宿主兼容、配置冻结、RPC、多出口脱敏、预算隔离等验收仍须完成，**不能据此宣称插件可启用**；A 的工程契约与剩余评审问题仍须闭合。
+
+### 8.2 决策依据（供复核）
+
+| # | 选项 | 建议与理由 |
+| --- | --- | --- |
+| 1 | 拆 / 保持单字段 | 拆；单字段会留下不可审计的静默跳过 |
+| 2 | 均经治理 / 拒绝接入 | passive 不是零模型调用保证（`compaction-hook.ts` 可调 catch-up 的 `runObserver`） |
+| 3 | 接受 / 必须降级 | 必须降级；`extension_error` 会把记忆失败放大成 Job 失败 |
+| 4 | 预留 / 后台隔离 | 两种都须可证有效；选定后须书面冻结数值并按 §5.2 验收 |
+| 5 | 内核绑定 token / 可信上下文 | 拒绝自报 header，保留原结算 `source`、模型白名单与出口治理 |
+| 6 | 以本仓身份为准 / 扩新 policy | 先降级（诚实），有真实需求再扩契约 |
+| 7 | 冻结模型 / 允许独立模型 | 首版只允许冻结模型，不得为接入放宽 `enforce_frozen_model` |
 
 ## 9. 审查状态：静态已核 vs 仍需实测
 
@@ -316,7 +333,7 @@ Web 与质量投影仍以 `context.compacted` / `context.compaction_unknown` 为
 
 ## 10. A 片验收
 
-- **合并本 PR 仅收录待决设计草案，不构成 A 正式通过，也不授权启动 B。** A 通过必须另有明确书面决策记录，逐项列出 §8 的 7 项选定方案、有限总额下保底/隔离契约与未决项处理，并明确写出 A 通过结论。未决阻断项未解决不得进入 B，不能把文档 review、CI 成功或合并状态当作该结论。
+- **合并本 PR 仅收录待决设计草案，不构成 A 正式通过，也不授权启动 B。** §8.1 的 2026-10-31 设计取舍记录已选定 7 项方向，但该记录自述不是运行时验证；**有限总额保底契约的具体数值仍未选（阻断项）**。A 通过仍需明确写出结论并处理未决阻断项，不能把文档 review、CI 成功或合并状态当作该结论。
 - 注册前必须完成 canonical 发布物来源、tarball integrity 与实际 entry 的核验；启用前必须完成固定宿主兼容、§6 RPC、配置隔离、额度/归因和 §3 数据出口验收。A 的设计决策通过不代替后续实证验收。
 - 若 A 否决则停止，**不注册、不预装、不启用**。只有 A 已通过并进入后续切片、E 再失败时，才可能已有预装产物；此时默认关闭并停止启用，不能以预装倒推通过 A。
 - `pnpm ci:unit:docs-freshness` 通过（版本字面量、命令存在性、链接、已删机制残留）。
