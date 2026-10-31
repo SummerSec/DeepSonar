@@ -8,6 +8,7 @@ import { projectCredentialProviderError, projectJobEventPayload, projectJobPaylo
 import { extractDispatchPrompt, parseJsonRecord } from "../../job-dispatch-prompt.js";
 import {
   createJob,
+  advancePlanTaskAfterTerminalJob,
   ensureCanvasForTask,
   fixedPriorityForJob,
   lockCanvasForConvergence,
@@ -740,6 +741,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       await tx`
         UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
         WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
+      await advancePlanTaskAfterTerminalJob(tx, id);
     });
     await recoverCancelledDerivedJob(job, reason).catch((e) =>
       console.error(`[cancel] derived job recovery failed:`, e),
@@ -773,6 +775,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
           await tx`
             UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
             WHERE job_id = ${cancelledJob.id as string} AND node_type = ANY(${["job", "intent", "report"]})`;
+          await advancePlanTaskAfterTerminalJob(tx, String(cancelledJob.id));
         }
       });
     }

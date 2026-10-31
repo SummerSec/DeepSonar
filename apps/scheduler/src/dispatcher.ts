@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { config, managesHostDockerRuntime } from "./config.js";
 import {
   advanceCanvasAfterTerminalJob,
+  advancePlanTaskAfterTerminalJob,
   DISPATCH_CLAIM_ADVISORY_KEY,
   globalRules,
   rulesForProject,
@@ -1410,6 +1411,7 @@ async function runJob(jobId: string) {
       await tx`
         UPDATE canvas_nodes SET status = 'failed', updated_at = now()
         WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]}) AND status IN ('running','pending')`;
+      if (row) await advancePlanTaskAfterTerminalJob(tx, jobId);
       if (row && row.type !== "report" && canvasId && locator) {
         await advanceCanvasAfterTerminalJob(
           tx,

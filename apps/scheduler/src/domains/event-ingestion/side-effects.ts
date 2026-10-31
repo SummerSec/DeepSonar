@@ -22,6 +22,12 @@ import {
 } from "@deepsonar/shared-types";
 import { validatePlanDecision } from "../plan-protocol/decision.js";
 import { applyHubPlanAdapter, applySubmitPlan, applySubmitPlanResult } from "../plan-protocol/index.js";
+import {
+  drivePlanExecution,
+  type PlanExecutionPorts,
+  type PlanTaskMaterializationInput,
+} from "../plan-protocol/execution.js";
+import { readPersistedPlanObjective } from "../plan-protocol/objective.js";
 import type { SharedAssetSelection } from "../shared-assets/index.js";
 import {
   freezeAgentSnapshotNetworkPolicy,
@@ -33,6 +39,7 @@ import {
   assertHubDecisionCanvasReferences,
   parseHubDecisionPayload,
   type HubDecision,
+  type HubIntent,
   type HubReferenceLookup,
 } from "../../graph.js";
 import {
@@ -102,6 +109,11 @@ export interface EventIngestionSideEffectApplication {
     payload: unknown,
     services?: EventSideEffectServices,
   ): Promise<void>;
+  /** Shared Hub Intent materialization seam used by Plan v2 execution. */
+  materializePlanTask(
+    tx: EventIngestionTransaction,
+    input: PlanTaskMaterializationInput,
+  ): Promise<{ created: { id: string }; intentNodeId: string }>;
 }
 
 export type SchedulingPurpose = "manual" | "discovery" | "convergence_evidence" | "verify" | "report";
@@ -226,6 +238,8 @@ export interface EventIngestionSideEffectPorts {
     status: "succeeded" | "failed",
     result?: EventFinalizeResult,
   ) => Promise<unknown>;
+  /** Production wiring for execution-capable Plan v2 submissions. */
+  planExecution?: PlanExecutionPorts;
 }
 
 export type EventCanvasEdgeInput = {
@@ -286,6 +300,20 @@ export function createEventIngestionSideEffectApplication(
     verify_finding: "system",
     report: "system",
   };
+
+  // A Plan task is a normal Worker Intent.  Keep the distinction explicit at
+  // this boundary even though rolesForProject currently queries kind=role:
+  // a malformed/reserved registry row must not turn a Plan task into a Hub,
+  // Verify, or Report Job.
+  const PLAN_FORBIDDEN_WORKER_ROLES = new Set([
+    "audit_module",
+    "hub",
+    "hub_reason",
+    "report",
+    "system",
+    "verify",
+    "verify_finding",
+  ]);
 
   // Current built-in Job types may omit `name` and infer it from type.
   // Leftover aliases (`audit_module`, `hub`) are not current identities.
@@ -502,6 +530,7 @@ export function createEventIngestionSideEffectApplication(
     services: EventSideEffectServices,
     phase: "preflight" | "apply",
     parsedDecision?: HubDecision,
+    options: { skipPlanContext?: boolean } = {},
   ) {
     const decision = parsedDecision ?? parseHubDecisionPayload(payload);
     const canvasId = (job.canvas_id as string | null) ?? null;
@@ -513,10 +542,12 @@ export function createEventIngestionSideEffectApplication(
     const rules = await ports.rulesForProject(tx, job.project_id as string);
     const roles = decision.complete ? [] : await ports.rolesForProject(tx, job.project_id as string);
     const submittedIntents = decision.intents ?? [];
-    await validatePlanDecision(tx,jobId,job,decision.plan_basis,'hub_decision',{
-      eventId:services.eventId,final:phase==='apply',maxIntents:rules.maxIntentsPerDecision,
-      references:decision.complete?.from ?? submittedIntents[0]?.from ?? [],
-    });
+    if (!options.skipPlanContext) {
+      await validatePlanDecision(tx,jobId,job,decision.plan_basis,'hub_decision',{
+        eventId:services.eventId,final:phase==='apply',maxIntents:rules.maxIntentsPerDecision,
+        references:decision.complete?.from ?? submittedIntents[0]?.from ?? [],
+      });
+    }
     const decisionTrigger = ((job.payload_json as Record<string, unknown> | undefined)?.trigger ?? {}) as HubDecisionTrigger;
     const findingByNodeId = new Map<string, HubFindingBinding>();
     const ambiguousFindingNodeIds = new Set<string>();
@@ -788,6 +819,360 @@ export function createEventIngestionSideEffectApplication(
     };
   }
 
+  type HubDecisionValidation = NonNullable<Awaited<ReturnType<typeof validateHubDecision>>>;
+
+  type PreparedHubIntent = {
+    it: HubIntent;
+    role: string;
+    title: string;
+    snapshot: AgentRuntimeSnapshot;
+    workerPrompt: string;
+    relatedImportedIds: string[];
+    applyHubFollowup: boolean;
+    verificationFollowup: ReturnType<EventFindingVerification["buildVerificationFollowupPayload"]>;
+    followupFindingId: string | null;
+    schedulingPurpose: SchedulingPurpose;
+  };
+
+  async function prepareHubIntent(
+    tx: EventIngestionTransaction,
+    job: Record<string, unknown>,
+    validation: HubDecisionValidation,
+    intent: HubIntent,
+    services: EventSideEffectServices,
+    duplicateMode: "skip" | "reject" | "allow",
+  ): Promise<PreparedHubIntent | null> {
+    const {
+      canvasId,
+      referenceNodes,
+      decisionTrigger,
+      findingByNodeId,
+      ambiguousFindingNodeIds,
+      composeCanvas,
+      allowedImageKeys,
+    } = validation;
+    const title = intent.description.trim().slice(0, 120);
+    if (duplicateMode !== "allow") {
+      const duplicate = await tx`
+        SELECT 1 FROM canvas_nodes
+        WHERE canvas_id = ${canvasId} AND node_type = 'intent' AND title = ${title}
+          AND status NOT IN ('succeeded', 'failed', 'cancelled')
+        LIMIT 1`;
+      if (duplicate.length > 0) {
+        if (duplicateMode === "skip") return null;
+        throw new ControlInputError(
+          "plan_stale_revision",
+          "Plan task 已有同标题的活动 Intent；拒绝重复派发并保留当前历史。",
+          "plan.tasks",
+        );
+      }
+    }
+
+    const baseRole = intent.role;
+    const sourceFinding = resolveHubFindingIntent(
+      baseRole,
+      intent.from,
+      referenceNodes,
+      findingByNodeId,
+      ambiguousFindingNodeIds,
+    ).finding;
+    const boundImported = [...new Map(
+      intent.from.flatMap((id) => {
+        const finding = findingByNodeId.get(id);
+        return finding?.imported ? [[finding.node_id, finding] as const] : [];
+      }),
+    ).values()];
+    const relatedImportedIds = boundImported.map((finding) => finding.id);
+    const boundLocations = boundImported
+      .map((finding) => finding.location)
+      .filter((value): value is string => Boolean(value));
+    const importedSeedFindingId = sourceFinding?.imported ? sourceFinding.id : relatedImportedIds[0] ?? null;
+    const workerPrompt = composeCanvas && boundLocations.length > 0
+      ? composeBoundWorkerPrompt(intent.prompt, boundLocations)
+      : intent.prompt.trim();
+    const trigger = sourceFinding && !sourceFinding.imported
+      ? {
+          ...decisionTrigger,
+          kind: ["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")
+            ? decisionTrigger.kind
+            : "hub_finding",
+          finding_id: sourceFinding.id,
+        }
+      : decisionTrigger;
+    const hubFollowup = ["confirmed_finding", "risk_acceptance_followup", "human_comment"].includes(
+      trigger.kind ?? "",
+    );
+    const verificationFollowup = importedSeedFindingId && sourceFinding?.imported
+      ? null
+      : ports.findingVerification.buildVerificationFollowupPayload(trigger, intent.from, baseRole);
+    const followupFindingId =
+      typeof verificationFollowup?.finding_id === "string" ? verificationFollowup.finding_id : null;
+    const snapshotFindingIds = [...new Set([
+      ...(followupFindingId ? [followupFindingId] : relatedImportedIds),
+      ...(intent.goal_review?.finding_id ? [intent.goal_review.finding_id.toLowerCase()] : []),
+    ])];
+    if (intent.goal_review && snapshotFindingIds.length > 8) {
+      throw invalidControlPayload("评审候选不能扩大既有 Finding 关联数量上限。", "intents.goal_review");
+    }
+
+    let snapshot: AgentRuntimeSnapshot;
+    try {
+      snapshot = await freezeAgentSnapshotNetworkPolicy(
+        tx,
+        canvasId,
+        await ports.resolveAgentSnapshotForJob(
+          tx,
+          job.project_id as string,
+          baseRole,
+          snapshotFindingIds,
+          {
+            runtimeImageKey: intent.runtime_image_key ?? null,
+            agentCli: intent.agent_cli ?? null,
+            provider: intent.provider ?? null,
+            modelRef: intent.model_ref ?? null,
+            modelRequirements: intent.model_requirements ?? null,
+            taskPromptOverride: intent.role_prompt ?? null,
+            roleDefinition: intent.role_definition ?? null,
+            baseRoleName: intent.role_definition ? baseRole : null,
+            languageServerCapabilityId: intent.language_server_capability_id ?? null,
+            cliCapabilityIds: Array.isArray(intent.cli_capability_ids) ? intent.cli_capability_ids : null,
+            piExtensionIds: Array.isArray(intent.pi_extension_ids) ? intent.pi_extension_ids : null,
+          },
+        ),
+      );
+    } catch (error) {
+      if (error instanceof ControlInputError) throw error;
+      if (isHubRuntimeImageResolutionError(error)) {
+        throw invalidRuntimeImage("intents.runtime_image_key", allowedImageKeys);
+      }
+      throw error;
+    }
+    if (intent.goal_review) {
+      snapshot = await freezeGoalReviewAssignment(tx, String(job.project_id), canvasId, snapshot, intent.goal_review);
+    }
+    return {
+      it: intent,
+      role: baseRole,
+      title,
+      snapshot,
+      workerPrompt,
+      relatedImportedIds,
+      applyHubFollowup: hubFollowup && !verificationFollowup,
+      verificationFollowup,
+      followupFindingId,
+      schedulingPurpose: verificationFollowup ? "convergence_evidence" : "discovery",
+    };
+  }
+
+  async function materializePreparedHubIntent(
+    tx: EventIngestionTransaction,
+    job: Record<string, unknown>,
+    validation: HubDecisionValidation,
+    prepared: PreparedHubIntent,
+    services: EventSideEffectServices,
+    extras: {
+      planContext?: Record<string, unknown>;
+      planTask?: {
+        taskId: string;
+        taskContext: Record<string, unknown>;
+        inputs: readonly string[];
+        expectedOutputs: readonly string[];
+        verification?: unknown;
+        dependencyNodeIds: readonly string[];
+      };
+      legacyPlanContext?: Record<string, unknown>;
+    } = {},
+  ): Promise<{ created: { id: string }; intentNodeId: string }> {
+    const { canvasId, referenceNodes, rules } = validation;
+    const {
+      it,
+      role,
+      title,
+      snapshot,
+      workerPrompt,
+      relatedImportedIds,
+      applyHubFollowup,
+      verificationFollowup,
+      followupFindingId,
+      schedulingPurpose,
+    } = prepared;
+    const planContext = extras.planContext ?? extras.legacyPlanContext;
+    const planPrompt = extras.planTask
+      ? `${workerPrompt}\n\nScheduler PlanTask output contract (association only; never completion authority):\n${JSON.stringify({
+          extension: "plan.output", v: 2,
+          objective_id: extras.planTask.taskContext.objective_id,
+          objective_revision: extras.planTask.taskContext.objective_revision,
+          task_id: extras.planTask.taskId, task_sha256: extras.planTask.taskContext.task_sha256,
+          expected_outputs: extras.planTask.expectedOutputs,
+        })}\nRetain actual execution bytes in this Attempt. Emit each named output through emit_fact or emit_finding with artifact.extensions["plan.output"] containing v, objective_id, objective_revision, task_id, task_sha256 and the exact covered expected_outputs. Attach artifact.evidence URI and SHA256 for those retained bytes. A done summary, missing bytes, or a different output label cannot fulfill a dependency.\nDependency output references:\n${JSON.stringify(extras.planTask.taskContext.dependency_outputs ?? [])}`
+      : workerPrompt;
+    const intentPayload: Record<string, unknown> = {
+      description: it.description,
+      prompt: planPrompt,
+      from: it.from,
+      ...(it.role_definition ? { role_definition: it.role_definition } : {}),
+      ...(it.role_prompt ? { role_prompt: it.role_prompt } : {}),
+      ...(it.model_ref ? { model_ref: it.model_ref } : {}),
+      ...(it.model_requirements ? { model_requirements: it.model_requirements } : {}),
+      ...(extras.planTask
+        ? {
+            inputs: extras.planTask.inputs,
+            expected_outputs: extras.planTask.expectedOutputs,
+            ...(extras.planTask.verification !== undefined ? { verification: extras.planTask.verification } : {}),
+          }
+        : {}),
+    };
+    const payload: Record<string, unknown> = {
+      ...(planContext ? { plan_context: planContext } : {}),
+      scheduling_purpose: schedulingPurpose,
+      intent: intentPayload,
+      ...(applyHubFollowup ? { hub_followup: true } : {}),
+      ...((relatedImportedIds.length > 0 || it.goal_review?.finding_id)
+        ? { related_finding_ids: [...new Set([...relatedImportedIds, ...(it.goal_review?.finding_id ? [it.goal_review.finding_id.toLowerCase()] : [])])] }
+        : {}),
+      ...(verificationFollowup
+        ? { verification_followup: { ...verificationFollowup, scheduler_owned: true } }
+        : {}),
+    };
+    if (extras.planTask) {
+      payload.plan_context = extras.planTask.taskContext;
+    }
+    const [roleJob] = await tx`
+      INSERT INTO jobs ${tx({
+        project_id: job.project_id as string,
+        canvas_id: canvasId,
+        parent_job_id: job.id as string,
+        finding_id: followupFindingId,
+        agent_snapshot_json: snapshot as never,
+        type: role,
+        priority: ports.fixedPriorityForJob({ type: role, purpose: schedulingPurpose }),
+        payload_json: payload as never,
+        timeout_sec: rules.auditTimeoutSec,
+        followup_depth: 0,
+      })}
+      RETURNING id`;
+    if (!roleJob) throw new Error("Hub Intent materialization did not create a Job");
+    await ports.recordJobSharedAssets(tx, roleJob.id as string, snapshot.shared_assets ?? []);
+
+    const [{ next_y }] = await tx<[{ next_y: number }]>`
+      SELECT COALESCE(MAX(y), 60) + 140 AS next_y
+      FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'intent'`;
+    const [intentNode] = await tx`
+      INSERT INTO canvas_nodes ${tx({
+        canvas_id: canvasId,
+        job_id: roleJob.id as string,
+        node_type: "intent",
+        title,
+        body_json: {
+          role,
+          description: it.description,
+          ...(snapshot.ui_color ? { ui_color: snapshot.ui_color } : {}),
+          ...(extras.planTask ? { plan_task_id: extras.planTask.taskId, plan_context: extras.planTask.taskContext } : {}),
+        } as never,
+        x: 1220,
+        y: next_y,
+        status: "pending",
+      })}
+      RETURNING id`;
+    if (!intentNode) throw new Error("Hub Intent materialization did not create an Intent node");
+    await tx`
+      UPDATE jobs SET payload_json = payload_json || ${tx.json({ intent_node_id: intentNode.id } as never)}
+      WHERE id = ${roleJob.id}`;
+
+    const edges: EventCanvasEdgeInput[] = [];
+    for (const from of it.from) {
+      const source = referenceNodes.get(from);
+      if (source) edges.push({ canvasId, fromId: source.id, toId: intentNode.id as string, edgeType: "from" });
+    }
+    for (const nodeId of extras.planTask?.dependencyNodeIds ?? []) {
+      edges.push({ canvasId, fromId: nodeId, toId: intentNode.id as string, edgeType: "depends_on" });
+    }
+    if (edges.length > 0) {
+      await (services.hubEdgeBatchInsert ?? ports.insertEdgesIfAbsentBatch)(tx, edges);
+    }
+    return { created: { id: String(roleJob.id) }, intentNodeId: String(intentNode.id) };
+  }
+
+  async function preparePlanTask(
+    tx: EventIngestionTransaction,
+    input: PlanTaskMaterializationInput,
+  ) {
+    if (PLAN_FORBIDDEN_WORKER_ROLES.has(input.task.role.trim().toLowerCase())) {
+      throw new ControlInputError(
+        "tool_not_allowed",
+        "Plan task 只能使用普通 Worker role，不能派发 Hub、Verify、Report 或 system Job。",
+        "plan.tasks.role",
+      );
+    }
+    const [owner] = await tx`
+      SELECT * FROM jobs
+      WHERE id = ${input.parentJobId}
+        AND project_id = ${input.projectId}
+        AND canvas_id = ${input.canvasId}
+        AND type = 'hub_reason'
+        AND agent_snapshot_json->>'role_kind' = 'hub'
+      FOR SHARE`;
+    if (!owner) {
+      throw new ControlInputError(
+        "tool_not_allowed",
+        "Plan v2 task 必须通过当前 Canvas 的 Hub owner 进入既有 Intent 路径。",
+        "revision.plan_job_id",
+      );
+    }
+    const intent: HubIntent = {
+      from: [...input.task.from],
+      role: input.task.role,
+      description: input.task.description,
+      prompt: input.task.prompt,
+      ...(input.task.runtime_image_key ? { runtime_image_key: input.task.runtime_image_key } : {}),
+    };
+    const decision: HubDecision = { intents: [intent] };
+    const validation = await validateHubDecision(
+      tx,
+      input.parentJobId,
+      owner as Record<string, unknown>,
+      decision,
+      { eventId: input.dispatchEventId ?? undefined },
+      "apply",
+      decision,
+      { skipPlanContext: true },
+    );
+    if (!validation) throw new ControlInputError("invalid_payload", "Plan v2 Intent 缺少 Canvas 准入上下文。", "plan.tasks");
+    const prepared = await prepareHubIntent(tx, owner as Record<string, unknown>, validation, intent, {
+      eventId: input.dispatchEventId ?? undefined,
+    }, "allow");
+    if (!prepared) throw new ControlInputError("plan_stale_revision", "Plan v2 Intent 未能进入统一准入路径。", "plan.tasks");
+    if (prepared.snapshot.role_kind !== "role") {
+      throw new ControlInputError("tool_not_allowed", "Plan task 的冻结运行时必须是普通 Worker role。", "plan.tasks.role");
+    }
+    return { owner, validation, prepared };
+  }
+
+  async function materializePlanTask(
+    tx: EventIngestionTransaction,
+    input: PlanTaskMaterializationInput,
+  ): Promise<{ created: { id: string }; intentNodeId: string }> {
+    const { owner, validation, prepared } = await preparePlanTask(tx, input);
+    return materializePreparedHubIntent(
+      tx,
+      owner as Record<string, unknown>,
+      validation,
+      prepared,
+      { eventId: input.dispatchEventId ?? undefined },
+      {
+        planContext: input.taskContext,
+        planTask: {
+          taskId: input.task.id,
+          taskContext: input.taskContext,
+          inputs: input.task.inputs,
+          expectedOutputs: input.task.expected_outputs,
+          verification: input.task.verification,
+          dependencyNodeIds: input.dependencyOutputs.flatMap((output) => output.node_ids),
+        },
+      },
+    );
+  }
+
   async function preflightDeferredSideEffects(
     tx: EventIngestionTransaction,
     jobId: string,
@@ -868,12 +1253,77 @@ export function createEventIngestionSideEffectApplication(
 
     if (type === "plan") {
       const rules = await ports.rulesForProject(tx, job.project_id as string);
-      await applySubmitPlan(tx, jobId, job as Record<string, unknown>, validatedPayload, rules.maxIntentsPerDecision, services.eventId);
+      const audit = await applySubmitPlan(
+        tx,
+        jobId,
+        job as Record<string, unknown>,
+        validatedPayload,
+        rules.maxIntentsPerDecision,
+        services.eventId,
+      );
+      if (audit.v === 2) {
+        if (!ports.planExecution) {
+          throw new ControlInputError("invalid_payload", "Plan v2 execution adapter is unavailable", "plan");
+        }
+        const revision = (validatedPayload as { revision?: { plan_job_id?: string } }).revision;
+        const planJobId = revision?.plan_job_id;
+        const canvasId = typeof job.canvas_id === "string" ? job.canvas_id : null;
+        if (!planJobId || !canvasId) {
+          throw new ControlInputError("invalid_payload", "Plan v2 requires a Canvas-scoped Plan owner", "revision.plan_job_id");
+        }
+        const [canvas] = await tx`SELECT target_json FROM canvases WHERE id=${canvasId} FOR SHARE`;
+        const objective = readPersistedPlanObjective(canvas?.target_json);
+        if (!objective || !audit.raw) {
+          throw new ControlInputError("plan_stale_revision", "Plan v2 user objective is unavailable", "plan.objective_id");
+        }
+        // Admit the entire proposed route before dispatching its first root.
+        // A forbidden delayed task must not leave an authorized partial plan.
+        for (const task of audit.raw.tasks) {
+          await preparePlanTask(tx, {
+            canvasId, projectId: String(job.project_id), parentJobId: planJobId,
+            plan: audit.raw, objective, task, taskContext: {}, dependencyOutputs: [],
+            dispatchEventId: services.eventId ?? null,
+          });
+        }
+        await drivePlanExecution(tx, {
+          canvasId,
+          projectId: String(job.project_id),
+          planJobId,
+          plan: audit.raw,
+          objective,
+          eventId: services.eventId ?? null,
+        }, ports.planExecution);
+      }
       return;
     }
 
     if (type === "plan_result") {
-      await applySubmitPlanResult(tx, jobId, job as Record<string, unknown>, validatedPayload);
+      const audit = await applySubmitPlanResult(tx, jobId, job as Record<string, unknown>, validatedPayload);
+      if (audit.v === 2 && audit.raw && audit.result) {
+        if (!ports.planExecution) {
+          throw new ControlInputError("invalid_payload", "Plan v2 execution adapter is unavailable", "result");
+        }
+        const canvasId = typeof job.canvas_id === "string" ? job.canvas_id : null;
+        if (!canvasId) {
+          throw new ControlInputError("invalid_payload", "Plan v2 result requires a Canvas-scoped Plan owner", "result");
+        }
+        const [canvas] = await tx`SELECT target_json FROM canvases WHERE id=${canvasId} FOR SHARE`;
+        const objective = readPersistedPlanObjective(canvas?.target_json);
+        if (!objective || objective.objective_id !== audit.raw.objective_id || objective.revision !== audit.raw.objective_revision) {
+          throw new ControlInputError("plan_stale_revision", "Plan v2 result 的用户目标 revision 已过期", "result.objective_revision");
+        }
+        await drivePlanExecution(tx, {
+          canvasId,
+          projectId: String(job.project_id),
+          planJobId: String(jobId),
+          plan: audit.raw,
+          objective,
+          stopReason: ["blocked", "needs_human"].includes(audit.result.outcome)
+            ? `model_${audit.result.outcome}`
+            : null,
+          result: audit.result,
+        }, ports.planExecution);
+      }
       return;
     }
 
@@ -1242,228 +1692,34 @@ export function createEventIngestionSideEffectApplication(
         return;
       }
 
-      const hubEdges: EventCanvasEdgeInput[] = [];
-
       const intents = submittedIntents.slice(0, rules.maxIntentsPerDecision);
-      const preparedIntents: Array<{
-        it: (typeof intents)[number];
-        role: string;
-        title: string;
-        snapshot: AgentRuntimeSnapshot;
-        workerPrompt: string;
-        relatedImportedIds: string[];
-        applyHubFollowup: boolean;
-        verificationFollowup: ReturnType<EventFindingVerification["buildVerificationFollowupPayload"]>;
-        followupFindingId: string | null;
-        schedulingPurpose: SchedulingPurpose;
-      }> = [];
+      const preparedIntents: PreparedHubIntent[] = [];
 
       for (const it of intents) {
-        if (roles.length === 0) {
-          throw invalidRole(it.role, "intents.role");
-        }
-        const title = it.description.trim().slice(0, 120);
-        // 去重：同画布已有同标题的未结论 intent → 跳过（hub 重复派发护栏）
-        const dup = await tx`
-        SELECT 1 FROM canvas_nodes
-        WHERE canvas_id = ${canvasId} AND node_type = 'intent' AND title = ${title}
-          AND status NOT IN ('succeeded', 'failed', 'cancelled')
-        LIMIT 1`;
-        if (dup.length > 0) continue;
-
-        // `role` is the governed platform role contract. role_definition is
-        // Job-scoped only (#691): frozen into this Job snapshot, never persisted
-        // as project agent_roles / RoleConfig. Cross-task reuse goes through Skills.
-        const baseRole = it.role!;
-        const role = baseRole;
-        const sourceFinding = resolveHubFindingIntent(
-          baseRole,
-          it.from,
-          referenceNodes,
-          findingByNodeId,
-          ambiguousFindingNodeIds,
-        ).finding;
-        const boundImported = [...new Map(
-          it.from.flatMap((id) => {
-            const finding = findingByNodeId.get(id);
-            return finding?.imported ? [[finding.node_id, finding] as const] : [];
-          }),
-        ).values()];
-        const relatedImportedIds = boundImported.map((finding) => finding.id);
-        const boundLocations = boundImported
-          .map((finding) => finding.location)
-          .filter((value): value is string => Boolean(value));
-        const importedSeedFindingId = sourceFinding?.imported ? sourceFinding.id : relatedImportedIds[0] ?? null;
-        const workerPrompt = composeCanvas && boundLocations.length > 0
-          ? composeBoundWorkerPrompt(it.prompt, boundLocations)
-          : it.prompt.trim();
-        const trigger = sourceFinding && !sourceFinding.imported
-          ? {
-              ...decisionTrigger,
-              kind: ["verify_rework", "verify_failed"].includes(decisionTrigger.kind ?? "")
-                ? decisionTrigger.kind
-                : "hub_finding",
-              finding_id: sourceFinding.id,
-            }
-          : decisionTrigger;
-        // verify_rework/verify_failed 补证不得 hub_followup：否则每个补证成功都会 force Hub，
-        // 与「全部补证终态后 maybeReverifyAfterFollowup」冲突。
-        const hubFollowup = ["confirmed_finding", "risk_acceptance_followup", "human_comment"].includes(
-          trigger.kind ?? "",
-        );
-        const verificationFollowup = importedSeedFindingId && sourceFinding?.imported
-          ? null
-          : ports.findingVerification.buildVerificationFollowupPayload(trigger, it.from, baseRole);
-        const followupFindingId =
-          typeof verificationFollowup?.finding_id === "string" ? verificationFollowup.finding_id : null;
-        const snapshotFindingIds = [...new Set([
-          ...(followupFindingId ? [followupFindingId] : relatedImportedIds),
-          ...(it.goal_review?.finding_id ? [it.goal_review.finding_id.toLowerCase()] : []),
-        ])];
-        if (it.goal_review && snapshotFindingIds.length > 8) throw invalidControlPayload("评审候选不能扩大既有 Finding 关联数量上限。", "intents.goal_review");
-        let snapshot;
-        try {
-          snapshot = await freezeAgentSnapshotNetworkPolicy(
-            tx,
-            canvasId,
-            await ports.resolveAgentSnapshotForJob(
-              tx,
-              job.project_id as string,
-              role,
-              snapshotFindingIds,
-              {
-                runtimeImageKey: it.runtime_image_key ?? null,
-                agentCli: it.agent_cli ?? null,
-                provider: it.provider ?? null,
-                modelRef: it.model_ref ?? null,
-                modelRequirements: it.model_requirements ?? null,
-                taskPromptOverride: it.role_prompt ?? null,
-                roleDefinition: it.role_definition ?? null,
-                baseRoleName: baseRole,
-                languageServerCapabilityId: it.language_server_capability_id ?? null,
-                cliCapabilityIds: Array.isArray(it.cli_capability_ids) ? it.cli_capability_ids : null,
-                piExtensionIds: Array.isArray(it.pi_extension_ids) ? it.pi_extension_ids : null,
-              },
-            ),
-          );
-        } catch (error) {
-          if (error instanceof ControlInputError) throw error;
-          if (isHubRuntimeImageResolutionError(error)) {
-            throw invalidRuntimeImage("intents.runtime_image_key", allowedImageKeys);
-          }
-          throw error;
-        }
-        if (it.goal_review) snapshot = await freezeGoalReviewAssignment(tx, String(job.project_id), canvasId, snapshot, it.goal_review);
-        // 补证 Job 即使 Hub 因其它原因带了 hub_followup，也禁止 force 提前回弹
-        const applyHubFollowup = hubFollowup && !verificationFollowup;
-        const schedulingPurpose: SchedulingPurpose = verificationFollowup ? "convergence_evidence" : "discovery";
-        preparedIntents.push({
-          it,
-          role,
-          title,
-          snapshot,
-          workerPrompt,
-          relatedImportedIds,
-          applyHubFollowup,
-          verificationFollowup,
-          followupFindingId,
-          schedulingPurpose,
-        });
+        const prepared = await prepareHubIntent(tx, job as Record<string, unknown>, validation, it, services, "skip");
+        if (prepared) preparedIntents.push(prepared);
       }
 
       if (p.plan_basis && preparedIntents.length!==1) throw new ControlInputError('plan_budget_exhausted','单步补证不得被重复 Intent 跳过或部分派发；请重读当前工作。','intents');
       for (const prepared of preparedIntents) {
-        const {
-          it,
-          role,
-          title,
-          snapshot,
-          workerPrompt,
-          relatedImportedIds,
-          applyHubFollowup,
-          verificationFollowup,
-          followupFindingId,
-          schedulingPurpose,
-        } = prepared;
-        const [roleJob] = await tx`
-        INSERT INTO jobs ${tx({
-          project_id: job.project_id as string,
-          canvas_id: canvasId,
-          parent_job_id: job.id as string,
-          finding_id: followupFindingId,
-          agent_snapshot_json: snapshot as never,
-          type: role,
-          priority: ports.fixedPriorityForJob({
-            type: role,
-            purpose: schedulingPurpose,
-          }),
-          payload_json: {
-            ...(p.plan_basis ? {plan_context:{plan_job_id:p.plan_basis.plan_job_id,plan_sha256:p.plan_basis.plan_sha256,decision_event_id:services.eventId,scheduler_owned:true}} : {}),
-            scheduling_purpose: schedulingPurpose,
-            intent: {
-              description: it.description,
-              prompt: workerPrompt,
-              from: it.from,
-              ...(it.role_definition ? { role_definition: it.role_definition } : {}),
-              ...(it.role_prompt ? { role_prompt: it.role_prompt } : {}),
-              ...(it.model_ref ? { model_ref: it.model_ref } : {}),
-              ...(it.model_requirements ? { model_requirements: it.model_requirements } : {}),
-            },
-            ...(applyHubFollowup ? { hub_followup: true } : {}),
-            ...((relatedImportedIds.length > 0 || it.goal_review?.finding_id) ? { related_finding_ids: [...new Set([...relatedImportedIds, ...(it.goal_review?.finding_id ? [it.goal_review.finding_id.toLowerCase()] : [])])] } : {}),
-            ...(verificationFollowup
-              ? {
-                  verification_followup: {
-                    ...verificationFollowup,
-                    scheduler_owned: true,
-                  },
-                }
-              : {}),
-          } as never,
-          timeout_sec: rules.auditTimeoutSec,
-          followup_depth: 0,
-        })}
-        RETURNING id`;
-        await ports.recordJobSharedAssets(tx, roleJob.id as string, snapshot.shared_assets ?? []);
-        // intent 节点与角色 job 1:1（节点即任务卡：pending=未认领 running=进行中 succeeded=已结论）
-        const [{ next_y }] = await tx<[{ next_y: number }]>`
-        SELECT COALESCE(MAX(y), 60) + 140 AS next_y FROM canvas_nodes
-        WHERE canvas_id = ${canvasId} AND node_type = 'intent'`;
-        const [intentNode] = await tx`
-        INSERT INTO canvas_nodes ${tx({
-          canvas_id: canvasId,
-          job_id: roleJob.id as string,
-          node_type: "intent",
-          title,
-          // Freeze the scheduler-selected worker color with the intent so
-          // historical canvases do not change when a role is later edited or
-          // deleted.  System/Hub snapshots intentionally carry null here.
-          body_json: {
-            role,
-            description: it.description,
-            ...(snapshot.ui_color ? { ui_color: snapshot.ui_color } : {}),
-          } as never,
-          x: 1220,
-          y: next_y,
-          status: "pending",
-        })}
-        RETURNING id`;
-        await tx`
-        UPDATE jobs SET payload_json = payload_json || ${tx.json({ intent_node_id: intentNode.id })}
-        WHERE id = ${roleJob.id}`;
-        // 'from' 边：被引用事实 → 新意图（Cairn Intent.from）
-        for (const fid of it.from) {
-          const src = referenceNodes.get(fid);
-          if (src)
-            hubEdges.push({
-              canvasId,
-              fromId: src.id,
-              toId: intentNode.id as string,
-              edgeType: "from",
-            });
-        }
+        await materializePreparedHubIntent(
+          tx,
+          job as Record<string, unknown>,
+          validation,
+          prepared,
+          services,
+          p.plan_basis
+            ? {
+                legacyPlanContext: {
+                  plan_job_id: p.plan_basis.plan_job_id,
+                  plan_sha256: p.plan_basis.plan_sha256,
+                  decision_event_id: services.eventId,
+                  scheduler_owned: true,
+                },
+              }
+            : undefined,
+        );
       }
-      await insertHubEdges(tx, hubEdges);
       return;
     }
 
@@ -1506,5 +1762,5 @@ export function createEventIngestionSideEffectApplication(
     }
   }
 
-  return { preflightDeferredSideEffects, applySideEffects };
+  return { preflightDeferredSideEffects, applySideEffects, materializePlanTask };
 }

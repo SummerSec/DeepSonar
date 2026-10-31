@@ -1,9 +1,12 @@
 import { z } from "zod";
 
 const nonEmptyText = (max: number) => z.string().min(1).max(max).regex(/\S/);
+const contentDigest = z.string().regex(/^[a-f0-9]{64}$/);
 
-/** Phase 1 Plan protocol version. New fields require a new literal. */
+/** Immutable Phase 1 history. Never admitted for new execution. */
 export const PLAN_PROTOCOL_VERSION = 1 as const;
+/** Execution-capable Plan contract. v1 remains a historical/audit protocol. */
+export const PLAN_EXECUTION_PROTOCOL_VERSION = 2 as const;
 
 export const PLAN_TASK_LIMITS = {
   minTasks: 1,
@@ -38,6 +41,47 @@ export const PlanBudget = z
   .strict();
 export type PlanBudget = z.infer<typeof PlanBudget>;
 
+const NonNegativeRevision = z.string().regex(/^(?:0|[1-9][0-9]{0,19})$/);
+const PositiveRevision = z.string().regex(/^[1-9][0-9]{0,19}$/);
+
+/** User-authorized lifetime controls for execution-capable Plans. */
+export const PlanExecutionBudget = z
+  .object({
+    max_tasks: z.number().int().min(1).max(1_000),
+    max_rounds: z.number().int().min(1).max(1_000),
+    max_no_progress_rounds: z.number().int().min(0).max(100),
+    max_parallel_tasks: z.number().int().min(1).max(32),
+  })
+  .strict();
+export type PlanExecutionBudget = z.infer<typeof PlanExecutionBudget>;
+
+/** Durable user objective stored in the current Canvas projection. */
+export const PlanObjective = z
+  .object({
+    v: z.literal(1),
+    objective_id: z.string().uuid(),
+    revision: PositiveRevision,
+    goal: z.string().min(8).max(4_000).regex(/\S/),
+    completion: z.lazy(() => CompletionPolicy),
+    budget: PlanExecutionBudget,
+    input_sha256: contentDigest,
+    status: z.enum(["active", "stopped", "completed"]),
+    updated_at: z.string().datetime(),
+  })
+  .strict();
+export type PlanObjective = z.infer<typeof PlanObjective>;
+
+/** Only an authorized user may submit this patch. Models never receive it. */
+export const PlanObjectivePatch = z
+  .object({
+    expected_revision: NonNegativeRevision.nullable(),
+    goal: z.string().min(8).max(4_000).regex(/\S/),
+    completion: z.lazy(() => CompletionPolicy),
+    budget: PlanExecutionBudget,
+  })
+  .strict();
+export type PlanObjectivePatch = z.infer<typeof PlanObjectivePatch>;
+
 export const PlanTask = z
   .object({
     id: PlanTaskId,
@@ -69,7 +113,6 @@ export type PlanResultOutcome = z.infer<typeof PlanResultOutcome>;
 
 /** Versioned evidence/revision metadata for the existing Hub/Intent path, never a second work contract. */
 export const PlanCriterionId = z.string().regex(/^(completion|output-(?:[0-9]|[12][0-9]|3[01]))$/);
-const contentDigest = z.string().regex(/^[a-f0-9]{64}$/);
 export const PlanDecisionBasis = z.object({
   v: z.literal(1),
   plan_job_id: z.string().uuid(),
@@ -145,6 +188,72 @@ export const Plan = z
   });
 export type Plan = z.infer<typeof Plan>;
 
+/**
+ * Execution-capable Plan. The objective and budget are copied into this
+ * versioned proposal so the Scheduler can compare them byte-for-byte with the
+ * user-owned Canvas objective before it creates any Job.
+ */
+export const PlanV2 = z
+  .object({
+    v: z.literal(PLAN_EXECUTION_PROTOCOL_VERSION),
+    objective_id: z.string().uuid(),
+    objective_revision: PositiveRevision,
+    route_revision: PositiveRevision,
+    goal: z.string().min(8).max(4_000).regex(/\S/),
+    assumptions: z.array(z.string().min(1).max(500).regex(/\S/)).max(32).default([]),
+    tasks: z.array(PlanTask).min(PLAN_TASK_LIMITS.minTasks).max(PLAN_TASK_LIMITS.maxTasks),
+    completion: CompletionPolicy,
+    budget: PlanExecutionBudget,
+    open_questions: planOpenQuestions.default([]),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const ids = value.tasks.map((task) => task.id);
+    const unique = new Set(ids);
+    if (unique.size !== ids.length) {
+      ctx.addIssue({ code: "custom", path: ["tasks"], message: "Plan task ids must be unique" });
+      return;
+    }
+    for (const [index, task] of value.tasks.entries()) {
+      if (task.expected_outputs.length === 0 || new Set(task.expected_outputs).size !== task.expected_outputs.length) {
+        ctx.addIssue({ code: "custom", path: ["tasks", index, "expected_outputs"], message: "Plan v2 tasks must name unique expected outputs" });
+      }
+      if (new Set(task.from).size !== task.from.length) {
+        ctx.addIssue({ code: "custom", path: ["tasks", index, "from"], message: "Plan v2 task source references must be unique" });
+      }
+      if (new Set(task.depends_on).size !== task.depends_on.length) {
+        ctx.addIssue({ code: "custom", path: ["tasks", index, "depends_on"], message: "Plan v2 task dependencies must be unique" });
+      }
+      for (const [depIndex, dep] of task.depends_on.entries()) {
+        if (dep === task.id) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["tasks", index, "depends_on", depIndex],
+            message: "Plan task cannot depend on itself",
+          });
+        } else if (!unique.has(dep)) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["tasks", index, "depends_on", depIndex],
+            message: `Plan task depends_on unknown task id ${dep}`,
+          });
+        }
+      }
+    }
+    const uniqueFrom = new Set(value.tasks.flatMap((task) => task.from));
+    if (uniqueFrom.size > PLAN_TASK_LIMITS.totalUniqueFrom) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["tasks"],
+        message: `Plan v2 source references exceed ${PLAN_TASK_LIMITS.totalUniqueFrom}`,
+      });
+    }
+    if (planTaskGraphHasCycle(value.tasks)) {
+      ctx.addIssue({ code: "custom", path: ["tasks"], message: "Plan task depends_on must be acyclic" });
+    }
+  });
+export type PlanV2 = z.infer<typeof PlanV2>;
+
 export const PlanResult = z
   .object({
     v: z.literal(PLAN_PROTOCOL_VERSION),
@@ -167,6 +276,32 @@ export const PlanResult = z
   });
 export type PlanResult = z.infer<typeof PlanResult>;
 
+/** Model proposal result for v2. It never substitutes for Job/Attempt output. */
+export const PlanResultV2 = z
+  .object({
+    v: z.literal(PLAN_EXECUTION_PROTOCOL_VERSION),
+    objective_id: z.string().uuid(),
+    objective_revision: PositiveRevision,
+    route_revision: PositiveRevision,
+    plan_sha256: contentDigest,
+    outcome: PlanResultOutcome,
+    summary: z.string().min(8).max(10_000).regex(/\S/),
+    termination_reason: z.string().min(8).max(4_000).regex(/\S/).optional(),
+    execution: z.array(PlanTaskExecution).max(PLAN_TASK_LIMITS.maxTasks).default([]),
+    open_questions: planOpenQuestions.default([]),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.outcome !== "continue" && !value.termination_reason) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["termination_reason"],
+        message: "complete, blocked, and needs_human results must provide termination_reason",
+      });
+    }
+  });
+export type PlanResultV2 = z.infer<typeof PlanResultV2>;
+
 /** Agent-facing submit_plan body. Single object so MCP/Anthropic accept the schema. */
 export const PlanRouteRevision = z.object({
   v: z.literal(1),
@@ -178,18 +313,45 @@ export const PlanRouteRevision = z.object({
   rationale: nonEmptyText(2_000),
 }).strict();
 export type PlanRouteRevision = z.infer<typeof PlanRouteRevision>;
-export const SubmitPlanPayload = z.object({ plan: Plan, revision: PlanRouteRevision.optional() }).strict();
+
+/** v2 route CAS. Initial execution uses expected_route_revision="0". */
+export const PlanRouteRevisionV2 = z.object({
+  v: z.literal(PLAN_EXECUTION_PROTOCOL_VERSION),
+  kind: z.literal("execution_route"),
+  plan_job_id: z.string().uuid(),
+  objective_id: z.string().uuid(),
+  expected_objective_revision: PositiveRevision,
+  expected_route_revision: NonNegativeRevision,
+  expected_plan_sha256: contentDigest.nullable(),
+  rationale: nonEmptyText(2_000),
+}).strict();
+export type PlanRouteRevisionV2 = z.infer<typeof PlanRouteRevisionV2>;
+
+/** Immutable historical submission shape. Not a Control/ingestion input. */
+export const HistoricalSubmitPlanPayload = z.object({
+  plan: Plan,
+  revision: PlanRouteRevision.optional(),
+}).strict();
+export type HistoricalSubmitPlanPayload = z.infer<typeof HistoricalSubmitPlanPayload>;
+
+/** Current write contract: one top-level MCP object, v2 only. */
+export const SubmitPlanPayload = z
+  .object({
+    plan: PlanV2,
+    revision: PlanRouteRevisionV2,
+  })
+  .strict();
 export type SubmitPlanPayload = z.infer<typeof SubmitPlanPayload>;
 
 /** Agent-facing submit_plan_result body. */
-export const SubmitPlanResultPayload = PlanResult;
-export type SubmitPlanResultPayload = PlanResult;
+export const SubmitPlanResultPayload = PlanResultV2;
+export type SubmitPlanResultPayload = PlanResultV2;
 
 export const PlanAuditSource = z.enum(["submit_plan", "hub_intent_adapter"]);
 export type PlanAuditSource = z.infer<typeof PlanAuditSource>;
 
-/** Durable Job-owned audit: raw plan, scheduler trim, execution, termination. */
-export const PlanAuditRecord = z
+/** Durable Job-owned audit: v1 historical record. */
+export const PlanAuditRecordV1 = z
   .object({
     v: z.literal(PLAN_PROTOCOL_VERSION),
     source: PlanAuditSource,
@@ -201,6 +363,24 @@ export const PlanAuditRecord = z
     updated_at: z.string().datetime(),
   })
   .strict();
+export type PlanAuditRecordV1 = z.infer<typeof PlanAuditRecordV1>;
+
+/** Durable Job-owned audit for execution-capable v2 Plans. */
+export const PlanAuditRecordV2 = z
+  .object({
+    v: z.literal(PLAN_EXECUTION_PROTOCOL_VERSION),
+    source: z.literal("submit_plan"),
+    raw: PlanV2.nullable(),
+    trimmed: PlanV2.nullable(),
+    trim_reasons: z.array(z.string().min(1).max(200)).max(32),
+    result: PlanResultV2.nullable(),
+    termination_reason: z.string().min(1).max(4_000).nullable(),
+    updated_at: z.string().datetime(),
+  })
+  .strict();
+export type PlanAuditRecordV2 = z.infer<typeof PlanAuditRecordV2>;
+
+export const PlanAuditRecord = z.union([PlanAuditRecordV1, PlanAuditRecordV2]);
 export type PlanAuditRecord = z.infer<typeof PlanAuditRecord>;
 
 export type HubIntentLike = {
@@ -332,11 +512,11 @@ export function trimPlan(plan: Plan, limits: PlanTrimLimits): { trimmed: Plan; r
 
 export function mergePlanAudit(
   current: unknown,
-  patch: Partial<Omit<PlanAuditRecord, "v" | "updated_at">> & Pick<PlanAuditRecord, "source">,
+  patch: Partial<Omit<PlanAuditRecordV1, "v" | "updated_at">> & Pick<PlanAuditRecordV1, "source">,
   updatedAt = new Date().toISOString(),
-): PlanAuditRecord {
-  const existing = PlanAuditRecord.safeParse(current);
-  const base: Omit<PlanAuditRecord, "updated_at"> = existing.success
+): PlanAuditRecordV1 {
+  const existing = PlanAuditRecordV1.safeParse(current);
+  const base: Omit<PlanAuditRecordV1, "updated_at"> = existing.success
     ? existing.data
     : {
         v: PLAN_PROTOCOL_VERSION,
@@ -347,7 +527,7 @@ export function mergePlanAudit(
         result: null,
         termination_reason: null,
       };
-  return PlanAuditRecord.parse({
+  return PlanAuditRecordV1.parse({
     v: PLAN_PROTOCOL_VERSION,
     source: patch.source,
     raw: patch.raw !== undefined ? patch.raw : base.raw,

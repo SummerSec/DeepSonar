@@ -1,7 +1,7 @@
 # Plan 缺口投影与操作员证据绑定（#775 A）
 
-> 状态：部分实现；A 的审计可见性与操作员判据绑定可用，B 单步决策、假执行闭环及持久接纳回执已接线；可选目标评审关联已接线，不提供自动语义判定。真实模型效果未验证且已豁免验收，仅开放派发前的显式路线修订；完整 C 未启用。
-> 同步日期：2026-10-30
+> 状态：A 的审计可见性与操作员判据绑定可用；B/v1 保留只读历史，新写入/执行仅允许 C/v2。当前实现包含用户目标 CAS、统一 Hub Intent/Job 准入、留存输出依赖门、多轮路线修订和持久停止投影。真实模型与非模型语义质量未验证。
+> 同步日期：2026-10-31
 
 ## 读取与报告
 
@@ -33,9 +33,11 @@ Fact 的来源由 body.artifact_id → 当前 emit_fact Artifact → 同 Canvas/
 
 `pnpm ci:unit:plan-protocol` 覆盖原有提案边界、聚合/失效、真实留存字节与路径预算；`pnpm ci:integration:plan-protocol` 在隔离 PostgreSQL 覆盖管理 API 权限、作用域、并发 CAS、重试、撤销重验、内容/Artifact/Attempt 失效、审计失败原子回滚与持久重建。入口已接 CI；具体通过结果以 PR 为准。
 
-这份合成样本证明来源检查，不是实际漏洞任务或真实模型收益评测。本切片已从既有持久来源重建一次补证的排队/准备/运行/终态，但没有覆盖整个目标或 Plan 依赖图的执行分类；环境缺失没有统一可信事实字段，不能自动认证。独立语义充分性、用户目标 revision 和目标仓库 baseline 仍缺。B 的一次补证与持久回执已实现；C 尚未启用。真实模型试验按本批验收范围不执行、不作为关闭前置，真实效果未验证；不能以本切片替代整个 #775 的代码验收。原绑定不依赖 task_contract；显式选择目标评审关联的绑定另须满足下述契约一致性。
+这份合成样本证明来源检查，不是实际漏洞任务或真实模型收益评测。本切片已从既有持久来源重建一次补证的排队/准备/运行/终态；v2 执行链另有 Plan owner → Hub Intent/Job → fake worker 输出的数据库夹具。环境缺失没有统一可信事实字段，不能自动认证。独立语义充分性、目标仓库 baseline 和真实模型效果仍未验证；不能以离线样本替代质量验收。原绑定不依赖 task_contract；显式选择目标评审关联的绑定另须满足下述契约一致性。
 
 ## B：既有 Intent 上的一次补证
+
+本节是 B/v1 的历史交付记录。当前 schema 拒绝 v1 新写入，历史 plan_gap 返回 `historical=true`、`supplementation_remaining=0`；旧 Plan、旧单步决策或旧路线修订不能派发或完成新执行。原安全人工停止与只读接纳回执恢复仍可使用。
 
 显式 submit_plan 的持久事件与原文内容必须一致。graph_query(kind=plan_gap) 只读当前 Job 的同 Canvas/项目，分页最多 4 判据、4 Fact 来源，沿用调用/字节预算与已见 canonical 引用。宿主保存本 Job 对当前 projection SHA 已读的完整判据 ID；截断绑定不记作完整已读。依据不来自报告最新 32 条窗口或项目关系。
 
@@ -75,6 +77,30 @@ expected_review_sha256: <当前评审依据摘要>
 
 程序规则附加评审不扩展 Plan 通用判据映射：`goal_review_options` 过滤 `program_rule:<ruleid>`，该 ID 不得作为目标判据映射到 Plan。程序规则满足仍不是 Plan 完成或提交资格授权。
 
+## #775 C：执行型 Plan v2 闭环（as-built）
+
+本节记录当前实现的 v2 语义。上文 B 的“单步”“每 Canvas 至多一次”和“C 尚未启用”均是 B 首片的历史边界；它们不描述 v2 的新执行协议，也不能作为 v2 的兼容输入。
+
+### 用户目标与路线身份
+
+授权用户通过 `PATCH /tasks/{canvasId}` 提交严格的 `plan_objective` CAS。服务端在 Canvas 行锁内递增 `objective.revision`，保存目标、CompletionPolicy、生命周期预算、目标输入 SHA 和状态；模型只能提交与当前目标的完整 goal/completion/budget 恒等的 v2 Plan。目标修订不会改写历史 Jobs、Attempts、事件、Artifact 或报告，也不会重置已消耗的任务数、轮数、无进展计数或 unknown-effect 账本。模型不能使用新标题、新 key、`next_goal` 或路线理由弱化用户标准或重置预算。
+
+v2 `submit_plan` 必须携带 `execution_route` revision，显式绑定 `plan_job_id`、目标 ID/revision、期望路线 revision 和期望当前 Plan SHA；首次路线使用 expected route `0`，后续路线由 Scheduler 以 CAS 单调递增。v1 新写入一律拒绝。同一目标 revision 内已派发 task 的不可变 SHA 必须在后继路线中保留；仅未派发 task 可调整。用户 CAS 到新目标 revision 后，旧 Job 仍不可变且计入 lifetime 预算，旧输出不能作为新目标的前置结果。
+
+### 现有 Intent/Job 路径与依赖释放
+
+接纳 v2 Plan 后，Scheduler 在同一事件事务中计算 ready tasks，并调用 event-ingestion 的共享 Hub Intent materializer。它复用当前 Canvas 引用、角色、运行时镜像、CLI、Provider/model、Finding/Verify、快照、网络策略、共享资产、Intent 节点和边的准入与落库逻辑；Plan 不建立第二个 worker queue 或 Job 执行器。Plan task 的 scheduler-owned context 冻结目标/路线/task SHA、分发事件和依赖输出引用。
+
+`depends_on` 只在前置 task 的 Job 和最新 Attempt 成功、当前目标 revision 与 task SHA 匹配、Fact/Finding 当前未拒绝、Artifact submitted 且未 superseded 时释放。Artifact 与该 Attempt 的 fact/finding 事件必须包含一致的严格 `plan.output` extension，精确覆盖该 task 的全部 expected_outputs；每项关联的留存 Evidence 还须通过路径、finalized manifest、长度与实际 SHA 校验。单纯的 Evidence 行、done-only、PlanResult、旧目标/Attempt、未知效果或不完整来源都不能释放。该关联只证明输出来源及留存，不能替代操作员语义完成授权。
+
+### 多轮推进、重启与停止
+
+每次 Plan owner 或 child Job 终态，以及取消、Reaper、Reconcile 和镜像撤销等生命周期收口路径，都会在原有事务内重建当前状态；重启不依赖进程缓存。旧目标 revision 的 child 回调只能释放其占用的并发槽位，不能用旧输出满足新依赖或完成新目标。历史记录不改写，历史 unknown effect 仍 fail closed。后继任务被撤权时，savepoint 原子撤销整批新派发并持久停止，不回滚前置 Job 已证明的终态成功。
+
+Scheduler 按用户授权的 `max_tasks`、`max_rounds`、`max_parallel_tasks` 和 `max_no_progress_rounds` 控制生命周期。活动 Job 存在时不误判无进展；路线或目标真正变化且无可派发进展时累计无进展轮；达到预算、无进展、依赖失败、缺失结构化输出、任务终态失败或 unknown external effect 时持久写入停止原因。仅所有当前 task 的权威输出齐全，并满足当前 CompletionPolicy 的 positive authority，才可写入 `complete`；模型 `PlanResult.complete` 不能替代 Worker 输出、Verify 门或报告门。
+
+当前 v2 接口、数据库链路和 fake-worker 夹具位于 `packages/shared-types/src/plan.ts`、`apps/scheduler/src/domains/plan-protocol/`、`apps/scheduler/src/domains/event-ingestion/side-effects.ts` 及 `plan-execution*.integration.test.ts`。本地未设置 `TEST_DATABASE_URL` 时，PostgreSQL 集成用例会安全跳过；已运行的离线 schema/typecheck 结果不能代替未运行的 DB/HTTP 结果。真实模型、生产部署和人工语义质量仍未验证。
+
 ## 一次补证的执行投影
 
 `graph_query(kind=plan_gap)` 与冻结报告条目增加 `supplementation_execution`。范围固定为 `single_supplementation`；不向 PlanTask、用户全部目标或同项目其他任务推断执行覆盖，不改变判据 `state`、已见引用、决策 revision、projection_sha256 或预算。独立 `source_sha256` 仅标识该执行投影；报告刷新把来源变化纳入新冻结输入，旧报告不回写。
@@ -94,6 +120,8 @@ expected_review_sha256: <当前评审依据摘要>
 
 ## 未派发路线修订
 
+本节仅保留历史 v1 语义；当前路线 CAS 使用上文 C/v2 合约，不再接纳本节的 v1 写入输入。
+
 `submit_plan` 的 Plan v1 本体不变，envelope 新增可选严格 `revision`：`v:1`、`kind:route`、`plan_job_id`、`expected_revision`、`expected_plan_sha256`、`expected_task_input_sha256` 与非空 `rationale`。首次提交仍用 `{plan}`；替换已有 raw Plan 必须显式修订，不能用新 key 隐式覆盖。
 
 修订仅允许改变 tasks/open_questions；goal、completion、assumptions、budget 必须规范化恒等，不能由模型声称“语义等价”后弱化判据。这是执行路线调整，不是用户目标版本协议。首次 Plan 在 owner 的既有 payload 保存 `plan_input_sha256`；任务 title/target（排除 convergence）改变即失效，即使用新摘要提交也不能悄悄重设目标。缺少冻结输入的历史 Plan 不可修订，不自动补造旧基线。
@@ -104,8 +132,8 @@ expected_review_sha256: <当前评审依据摘要>
 
 路线修订即时结算，直接以既有 semantic event 恢复 `receipt_status:committed` 响应，无第二账本。相同 key/内容 POST 或 `GET submit_plan?receipt_key=<UUID>` 在当前 capability 授权下可恢复结果，handler/进程缓存缺失也不重执行；同 key 异内容/operation 拒绝。这个结果不同于 Hub 的 persisted_deferred 接纳回执，不声称已派发或完成任务。
 
-`ci:integration:plan-protocol` 接入 `plan-revision.integration.test.ts`，以隔离 PostgreSQL/Control HTTP 覆盖并发 CAS、重放/恢复、撤权与过期租约、范围与版本失效、预算/未知效果/待结算回执、历史不可变。该切片不增加每 Canvas 一次预算，不执行依赖图、不自动取消已运行 Job，也未交付用户目标修订或有界无进展规划；#775 仍部分完成。
+`ci:integration:plan-protocol` 接入 `plan-revision.integration.test.ts`，以隔离 PostgreSQL/Control HTTP 覆盖并发 CAS、重放/恢复、撤权与过期租约、范围与版本失效、预算/未知效果/待结算回执、历史不可变。B 首片的每 Canvas 一次补证预算仍不变；上面的 C/v2 是独立的执行型 Plan 合约，不把 B 的一次补证升级成隐式多步能力。
 
 ## 冻结离线回放
 
-[控制回放基线](../agent-harness/plan-replay/README.md) 固定 #809 的16场景×inline/file两种输入方式，记录真实 SQL/HTTP 观测和逐例差异、缺失及完整分母；CI 上传可审查 JSON。它是控制行为回归，不是前后模型收益实验，不启动 C。目标遗漏/模型token和质量、多轮无进展未测量保持null；整体样本与C验收仍需后续补齐。
+[控制回放基线](../agent-harness/plan-replay/README.md) 保存 #809 的 v1 单步场景；它是历史控制回归基线，不能当作当前 v2 多轮依赖的验收结果。当前 v2 由 Plan execution/stop/objective/revision 与独立评审集成夹具验证；旧回放脚本和全局 CI 接线仍需主集成方按新契约整理。目标遗漏、模型 token 与质量保持 unknown；真实模型效果未验证。

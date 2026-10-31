@@ -66,11 +66,22 @@ import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
 import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
 import { freezeTaskSeedTarget, insertTaskSeedProjections } from "./task-compose.js";
+import {
+  advancePlanTaskAfterTerminal,
+  type PlanExecutionPorts,
+} from "./domains/plan-protocol/execution.js";
 
 const roleRuntimeSnapshotApplication = createRoleRuntimeSnapshotApplication();
 
 type Tx = typeof sql;
 export type IngestResult = EventIngestionResult;
+
+let eventIngestionSideEffectApplication!: ReturnType<typeof createEventIngestionSideEffectApplication>;
+
+const planExecutionPorts: PlanExecutionPorts = {
+  materializePlanTask: (tx, input) =>
+    eventIngestionSideEffectApplication.materializePlanTask(tx, input),
+};
 
 /**
  * Atomic status transition.  A null result still means a race or illegal
@@ -103,7 +114,7 @@ export async function assertJobCanPublishSharedAsset(jobId: string, sandboxId: s
 
 // Event-ingestion owns append/dedup/sequence ordering. Semantic event writes
 // are composed through the event-ingestion bounded context's typed ports.
-const eventIngestionSideEffectApplication = createEventIngestionSideEffectApplication({
+eventIngestionSideEffectApplication = createEventIngestionSideEffectApplication({
   findingVerification,
   // SAFETY: 以下四个适配器都把 postgres.js 事务句柄透传给同接口的 `sql` 实现。
   rulesForProject: async (tx, projectId) => rulesForProject(tx as unknown as typeof sql, projectId),
@@ -117,6 +128,7 @@ const eventIngestionSideEffectApplication = createEventIngestionSideEffectApplic
   insertEdgesIfAbsentBatch: async (tx, edges) => insertEdgesIfAbsentBatch(tx as Tx, edges),
   findingProtocolForJob: async (tx, job) => findingProtocolForJob(tx as Tx, job),
   finalizeJob: async (tx, jobId, status, result) => finalizeJob(tx as Tx, jobId, status, result),
+  planExecution: planExecutionPorts,
 });
 
 const eventIngestionApplication = createEventIngestionApplication(
@@ -1410,6 +1422,10 @@ export async function finalizeJob(
   await revokeJobCapabilityTokens(jobId, `job_${status}`).catch(() => {});
 
   const [job] = await tx`SELECT * FROM jobs WHERE id = ${jobId}`;
+  // Plan v2 child completion/recovery is derived from the same terminal
+  // transaction.  The driver only releases dependants from durable Job/
+  // Attempt/event output; it never trusts PlanResult text.
+  if (job) await advancePlanTaskAfterTerminal(tx, jobId, planExecutionPorts);
   // §13.1 指标：终态计数 + 时长
   // Canvas is already held as the outer lock for this terminal path. Verify
   // close/recovery and Hub eligibility take Finding/Round locks underneath it.
@@ -1491,6 +1507,11 @@ export async function finalizeJob(
     });
   }
   return true;
+}
+
+/** Shared terminal hook for lifecycle recovery paths that bypass finalizeJob. */
+export async function advancePlanTaskAfterTerminalJob(tx: Tx, jobId: string) {
+  return advancePlanTaskAfterTerminal(tx, jobId, planExecutionPorts);
 }
 
 /**

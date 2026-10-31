@@ -30,6 +30,9 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   assert.match(content, /不要先尝试 MCP.*不要在 API 失败后回退到 MCP/);
   assert.match(content, /plan_basis/);
   assert.match(content, /plan_gap/);
+  assert.match(content, /历史 v1.*只可读取，不能再派发或完成/);
+  assert.match(content, /artifact\.extensions\["plan\.output"\]/);
+  assert.match(content, /实际字节验证/);
   assert.match(content, /repair/);
   assert.match(content, /model_correctable/);
   assert.match(content, /X-DeepSonar-Proposal-Revision.*首次为 0/);
@@ -37,7 +40,10 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   assert.match(content, /persisted_deferred/);
   assert.match(content, /查询只读取持久结果，不恢复执行器本地完成门/);
   assert.match(content, /必须使用原 key、revision 和完全相同 payload 再 POST 一次/);
-  assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "c32ccf38780f90fc8d37b9e1e7fb26c80c3557eea30ab97c438eb1a6371002da");
+  assert.equal(
+    DEEPSONAR_CONTROL_SKILL_SHA256,
+    "dba585a1d3feac6091f4a5f2b9f95a8c6e9917baee507d34b184393c0c7018d2",
+  );
 });
 
 test("平台 API 基地址必须可从沙箱访问并指向当前 Job", () => {

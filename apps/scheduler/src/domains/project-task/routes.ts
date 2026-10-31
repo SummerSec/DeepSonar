@@ -5,6 +5,7 @@ import { audit } from "../../audit.js";
 import { config } from "../../config.js";
 import {
   DISPATCH_CLAIM_ADVISORY_KEY,
+  advancePlanTaskAfterTerminalJob,
   createJob,
   ensureCanvasForTask,
   fixedPriorityForJob,
@@ -17,6 +18,7 @@ import {
   resolveAgentSnapshotForJob,
 } from "../../core.js";
 import { sql } from "../../db.js";
+import { ControlInputError } from "../../control-input.js";
 import { revokeJobTokens } from "../../gateway.js";
 import { runner } from "../../runtime.js";
 import { recoverCancelledDerivedJob } from "../job-control/recovery.js";
@@ -69,6 +71,7 @@ import {
 import { taskContractPreflight, taskContractRuntimeBlockers } from "../../task-contract-preflight.js";
 import type { TargetAuthorizationSnapshot } from "../target-authorization/contract.js";
 import { recordTargetAuthorizationGrant, targetAuthorizationRequired } from "../target-authorization/index.js";
+import { applyPlanObjectivePatch, readPersistedPlanObjective } from "../plan-protocol/objective.js";
 
 const CreateProjectBody = z.object({
   name: z.string().min(1),
@@ -161,9 +164,14 @@ async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
     await revokeJobTokens(id, "cancelled").catch(() => {});
     await revokeJobCapabilityTokens(id, "cancelled").catch(() => {});
     await releaseDeviceLeasesForJobQuietly(id, "cancelled");
-    await sql`
-      UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
-      WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
+    await sql.begin(async (txRaw) => {
+      const tx = txRaw as unknown as typeof sql;
+      await tx`SELECT id FROM canvases WHERE id=${canvasId} FOR UPDATE`;
+      await tx`
+        UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
+        WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
+      await advancePlanTaskAfterTerminalJob(tx, id);
+    });
     await recoverCancelledDerivedJob(job, "task archived/deleted").catch(() => {});
   }
   return active.length;
@@ -612,7 +620,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       }
       throw error;
     }
-    const result = await sql.begin(async (tx) => {
+    let result;
+    try {
+      result = await sql.begin(async (tx) => {
       const [canvas] = await tx`
         SELECT id, project_id, title, status, archived_at, target_json
         FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
@@ -624,13 +634,22 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         (canvas.target_json ?? {}) as Record<string, unknown>,
         body,
       );
+      const objectivePatch = body.plan_objective
+        ? applyPlanObjectivePatch({
+            title: nextTitle,
+            target: nextTarget,
+            patch: body.plan_objective,
+          })
+        : null;
+      const objectiveTarget = objectivePatch?.target ?? nextTarget;
+      const objective = objectivePatch?.objective ?? readPersistedPlanObjective(objectiveTarget);
       let targetAuthorization: TargetAuthorizationSnapshot | undefined;
-      if (nextTarget.task_contract !== undefined) {
-        const taskContract = normalizeTaskContract(nextTarget.task_contract);
+      if (objectiveTarget.task_contract !== undefined) {
+        const taskContract = normalizeTaskContract(objectiveTarget.task_contract);
         const rules = await rulesForProject(tx as unknown as typeof sql, String(canvas.project_id));
-        const networkPolicy = nextTarget.network_policy && typeof nextTarget.network_policy === "object"
-          && !Array.isArray(nextTarget.network_policy)
-          ? nextTarget.network_policy as Record<string, unknown>
+        const networkPolicy = objectiveTarget.network_policy && typeof objectiveTarget.network_policy === "object"
+          && !Array.isArray(objectiveTarget.network_policy)
+          ? objectiveTarget.network_policy as Record<string, unknown>
           : {};
         const preflight = await taskContractPreflight(
           tx as unknown as typeof sql,
@@ -640,7 +659,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           {
             detailed: true,
             principalId: req.actor?.id ?? req.actor?.name ?? null,
-            content: typeof nextTarget.content === "string" ? nextTarget.content : undefined,
+            content: typeof objectiveTarget.content === "string" ? objectiveTarget.content : undefined,
           },
         );
         if (preflight.blockers.length > 0) {
@@ -657,7 +676,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       }
       const [updated] = await tx`
         UPDATE canvases
-        SET title = ${nextTitle}, target_json = ${tx.json(nextTarget as never)}
+        SET title = ${nextTitle}, target_json = ${tx.json(objectiveTarget as never)}
         WHERE id = ${canvasId}
         RETURNING id, project_id, title, status, archived_at, target_json`;
       if (targetAuthorization) {
@@ -677,7 +696,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       if (root) {
         const nextBody = applyRootBodyIntent(
           (root.body_json ?? {}) as Record<string, unknown>,
-          nextTarget,
+          objectiveTarget,
         );
         await tx`
           UPDATE canvas_nodes
@@ -693,9 +712,20 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       return {
         reason: undefined,
         canvas: updated,
+        objective,
         hasActiveJobs: active.length > 0,
       };
-    });
+      });
+    } catch (error) {
+      if (error instanceof ControlInputError) {
+        return reply.code(error.code === "plan_stale_revision" ? 409 : error.retryable ? 422 : 409).send({
+          error: error.message,
+          error_code: error.code,
+          ...(error.path ? { path: error.path } : {}),
+        });
+      }
+      throw error;
+    }
 
     if (result.reason === "not_found") {
       return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
@@ -723,6 +753,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       after: {
         title: body.title,
         content: body.content,
+        objective_revision: result.objective?.revision ?? null,
         snapshot_rewritten: false,
         has_active_jobs: hasActiveJobs,
       },
@@ -734,6 +765,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       status: result.canvas.status,
       archived_at: result.canvas.archived_at,
       target_json: result.canvas.target_json,
+      plan_objective: result.objective ?? null,
       has_active_jobs: hasActiveJobs,
       snapshot_rewritten: false,
       message: taskIntentSavedMessage(hasActiveJobs),

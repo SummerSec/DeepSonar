@@ -305,6 +305,8 @@ export function recordFirstSemanticDone<T>(state: { done: T | null }, proposal: 
 }
 
 export interface DeferredSemanticState {
+  /** Set only after a current v2 Plan operation commits through ingestion. */
+  executionPlan?: { eventId: string };
   done: { eventId: string; summary: string; verdict?: VerifyVerdict; missingEvidence?: string[] } | null;
   hub: { eventId: string; payload: unknown } | null;
   human: { eventId: string; reason: string; subject: HumanPayload["subject"]; plan_basis?: HumanPayload["plan_basis"] } | null;
@@ -337,7 +339,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
   if (!state.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
 
   const events: EventEnvelopeInput[] = [];
-  if (input.isHub) {
+  if (input.isHub && (state.hub || !state.executionPlan)) {
     const decision = input.hubDecision;
     if (!decision || !state.hub) throw new Error("Hub 未通过 submit_hub_decision 提交合法决策");
     if (decision.complete) {
@@ -1420,6 +1422,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     }
     if (event.type === "plan" || event.type === "plan_result") {
       await ingestSemanticEventObserved(jobId, { ...event, payload: event.payload });
+      semanticState.executionPlan = { eventId };
       return;
     }
     if (planReservation && !(runtimeControl.planPhase === "commit" && event.event_id === planReservation.eventId && event.type === planReservation.type)

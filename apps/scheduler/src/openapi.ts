@@ -1296,9 +1296,9 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/tasks/{canvasId}",
-    summary: "更新任务标题与内容（不改写已冻结 Job 快照）",
+    summary: "更新任务标题、内容或授权用户目标（不改写已冻结 Job 快照）",
     description:
-      "同步 canvases.title 与 target_json.title/content/goal，并更新 root 节点标题/body。只影响后续 Hub 读图、新派生 Job 与显式重试；不改写已在跑或已结束 Job 的 agent_snapshot_json。归档任务返回 409 TASK_ARCHIVED。",
+      "同步 canvases.title 与 target_json.title/content/goal，并更新 root 节点标题/body。plan_objective 使用 expected_revision 做用户 CAS；只影响后续 Hub 读图、新派生 Job 与显式重试，不改写已在跑或已结束 Job 的 agent_snapshot_json、Attempt 或事件。归档任务返回 409 TASK_ARCHIVED。",
     scope: "tasks:write",
     tags: ["Tasks"],
     body: {
@@ -1307,13 +1307,44 @@ const OPS: Op[] = [
       properties: {
         title: { type: "string", minLength: 1, maxLength: 200 },
         content: { type: "string", minLength: 1, maxLength: 20000, description: "必要背景、边界与完成标准；同步写入 target_json.content 与 goal" },
+        plan_objective: {
+          type: "object",
+          additionalProperties: false,
+          required: ["expected_revision", "goal", "completion", "budget"],
+          description: "授权用户的目标 CAS 修订；模型不能提交或弱化此对象。历史 Job/Attempt 保持不可变。",
+          properties: {
+            expected_revision: { type: ["string", "null"], pattern: "^(?:0|[1-9][0-9]{0,19})$" },
+            goal: { type: "string", minLength: 8, maxLength: 4000 },
+            completion: {
+              type: "object",
+              additionalProperties: false,
+              required: ["mode", "description"],
+              properties: {
+                mode: { type: "string", enum: ["all_tasks", "any_blocking_resolved", "explicit_result"] },
+                description: { type: "string", minLength: 8, maxLength: 4000 },
+                required_outputs: { type: "array", maxItems: 32, items: { type: "string", minLength: 1, maxLength: 500 } },
+              },
+            },
+            budget: {
+              type: "object",
+              additionalProperties: false,
+              required: ["max_tasks", "max_rounds", "max_no_progress_rounds", "max_parallel_tasks"],
+              properties: {
+                max_tasks: { type: "integer", minimum: 1, maximum: 1000 },
+                max_rounds: { type: "integer", minimum: 1, maximum: 1000 },
+                max_no_progress_rounds: { type: "integer", minimum: 0, maximum: 100 },
+                max_parallel_tasks: { type: "integer", minimum: 1, maximum: 32 },
+              },
+            },
+          },
+        },
       },
     },
     responses: {
       "200": {
         type: "object",
         additionalProperties: false,
-        required: ["id", "title", "target_json", "has_active_jobs", "snapshot_rewritten", "message"],
+        required: ["id", "title", "target_json", "plan_objective", "has_active_jobs", "snapshot_rewritten", "message"],
         properties: {
           id: { type: "string", format: "uuid" },
           project_id: { type: "string", format: "uuid" },
@@ -1321,6 +1352,7 @@ const OPS: Op[] = [
           status: { type: "string" },
           archived_at: { type: ["string", "null"] },
           target_json: { type: "object", additionalProperties: true },
+          plan_objective: { type: ["object", "null"], additionalProperties: true, description: "当前授权用户目标及其 CAS revision" },
           has_active_jobs: { type: "boolean" },
           snapshot_rewritten: { type: "boolean", enum: [false] },
           message: { type: "string" },
