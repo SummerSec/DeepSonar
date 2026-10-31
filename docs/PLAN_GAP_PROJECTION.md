@@ -105,3 +105,7 @@ expected_review_sha256: <当前评审依据摘要>
 路线修订即时结算，直接以既有 semantic event 恢复 `receipt_status:committed` 响应，无第二账本。相同 key/内容 POST 或 `GET submit_plan?receipt_key=<UUID>` 在当前 capability 授权下可恢复结果，handler/进程缓存缺失也不重执行；同 key 异内容/operation 拒绝。这个结果不同于 Hub 的 persisted_deferred 接纳回执，不声称已派发或完成任务。
 
 `ci:integration:plan-protocol` 接入 `plan-revision.integration.test.ts`，以隔离 PostgreSQL/Control HTTP 覆盖并发 CAS、重放/恢复、撤权与过期租约、范围与版本失效、预算/未知效果/待结算回执、历史不可变。该切片不增加每 Canvas 一次预算，不执行依赖图、不自动取消已运行 Job，也未交付用户目标修订或有界无进展规划；#775 仍部分完成。
+
+## 冻结离线回放
+
+[控制回放基线](../agent-harness/plan-replay/README.md) 固定 #809 的16场景×inline/file两种输入方式，记录真实 SQL/HTTP 观测和逐例差异、缺失及完整分母；CI 上传可审查 JSON。它是控制行为回归，不是前后模型收益实验，不启动 C。目标遗漏/模型token和质量、多轮无进展未测量保持null；整体样本与C验收仍需后续补齐。

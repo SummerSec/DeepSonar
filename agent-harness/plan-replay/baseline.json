@@ -1,0 +1,149 @@
+{
+  "schema": "deepsonar.plan-offline-baseline/v1",
+  "baseline_commit": "ffb30d912b103d889430e2b56627730f956265d7",
+  "scope": "controlled_sql_http_regression",
+  "modes": [
+    "inline",
+    "file"
+  ],
+  "cases": [
+    {
+      "id": "unproven_completion",
+      "category": "unproven_completion",
+      "expected": {
+        "http_status": 422,
+        "error_code": "plan_completion_unproven"
+      }
+    },
+    {
+      "id": "pending_receipt",
+      "category": "execution",
+      "expected": {
+        "state": "not_dispatched",
+        "child_count": 0
+      }
+    },
+    {
+      "id": "lifecycle_claimed_active",
+      "category": "execution",
+      "expected": {
+        "state": "queued",
+        "completion_assessment": "unknown"
+      }
+    },
+    {
+      "id": "lifecycle_provisioning_active",
+      "category": "execution",
+      "expected": {
+        "state": "preparing",
+        "completion_assessment": "unknown"
+      }
+    },
+    {
+      "id": "lifecycle_running_active",
+      "category": "execution",
+      "expected": {
+        "state": "running",
+        "completion_assessment": "unknown"
+      }
+    },
+    {
+      "id": "lifecycle_waiting_human_active",
+      "category": "execution",
+      "expected": {
+        "state": "waiting_human",
+        "completion_assessment": "unknown"
+      }
+    },
+    {
+      "id": "lifecycle_succeeded_succeeded",
+      "category": "execution",
+      "expected": {
+        "state": "succeeded",
+        "completion_assessment": "unknown"
+      }
+    },
+    {
+      "id": "lifecycle_failed_failed",
+      "category": "execution",
+      "expected": {
+        "state": "failed",
+        "completion_assessment": "unknown"
+      }
+    },
+    {
+      "id": "lifecycle_cancelled_cancelled",
+      "category": "execution",
+      "expected": {
+        "state": "cancelled",
+        "completion_assessment": "unknown"
+      }
+    },
+    {
+      "id": "lifecycle_timeout_timeout",
+      "category": "execution",
+      "expected": {
+        "state": "timeout",
+        "completion_assessment": "unknown"
+      }
+    },
+    {
+      "id": "lifecycle_running_succeeded",
+      "category": "execution",
+      "expected": {
+        "state": "unknown",
+        "completion_assessment": "unknown"
+      }
+    },
+    {
+      "id": "lifecycle_orphan_orphan",
+      "category": "execution",
+      "expected": {
+        "state": "unknown",
+        "completion_assessment": "unknown"
+      }
+    },
+    {
+      "id": "credential_report",
+      "category": "reported_blocker",
+      "expected": {
+        "state": "waiting_human",
+        "blocker_kind": "credential",
+        "authority": "agent_report"
+      }
+    },
+    {
+      "id": "historical_unknown",
+      "category": "unknown_effect",
+      "expected": {
+        "state": "unknown",
+        "reason": "unknown_external_effect"
+      }
+    },
+    {
+      "id": "post_execution_unbound",
+      "category": "evidence_authority",
+      "expected": {
+        "criterion_state": "unbound",
+        "eligible": true
+      }
+    },
+    {
+      "id": "safe_human_stop",
+      "category": "human_stop",
+      "expected": {
+        "http_status": 200,
+        "job_status": "waiting_human",
+        "child_count": 1
+      }
+    }
+  ],
+  "unmeasured": [
+    "semantic_goal_omissions",
+    "model_quality",
+    "model_tokens",
+    "model_time",
+    "adaptive_no_progress_rounds"
+  ],
+  "notes": "Frozen expected control behavior at #809; modes are transports, not before/after model arms. Zero regression is not evidence of quality improvement."
+}

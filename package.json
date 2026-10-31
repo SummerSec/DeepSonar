@@ -56,6 +56,8 @@
     "ci:integration:dispatch-limits": "pnpm --filter @deepsonar/scheduler exec tsx --test --test-concurrency=1 src/dispatch-limits.integration.test.ts src/task-execution-control.integration.test.ts src/domains/platform-claims/platform-claims.integration.test.ts",
     "ci:integration:event-ingestion": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/event-ingestion.integration.test.ts",
     "ci:integration:event-authorization": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/authorization.integration.test.ts",
+    "ci:unit:plan-replay": "node --test agent-harness/plan-replay/report.test.mjs",
+    "ci:integration:plan-replay": "node agent-harness/plan-replay/negative.mjs && node agent-harness/plan-replay/run.mjs",
     "ci:unit:plan-protocol": "pnpm --filter @deepsonar/shared-types build && pnpm --filter @deepsonar/scheduler exec tsx --test src/plan-protocol.test.ts src/plan-gap-projection.test.ts src/plan-criterion.test.ts src/plan-decision.test.ts src/domains/plan-protocol/goal-review-binding.test.ts && pnpm --filter @deepsonar/web exec tsx --test src/plan-gap-report.test.ts",
     "ci:integration:plan-protocol": "pnpm --filter @deepsonar/shared-types build && pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/plan-protocol.integration.test.ts src/plan-revision.integration.test.ts src/plan-criterion.integration.test.ts src/plan-decision.integration.test.ts src/task-plan-review.integration.test.ts",
     "ci:integration:hub-runtime-image": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/event-ingestion/hub-runtime-image.integration.test.ts",
