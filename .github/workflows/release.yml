@@ -2373,9 +2373,192 @@ jobs:
           path: release-digests/openharmony-audit.json
           if-no-files-found: error
 
-  openharmony-fuzz:
+  openharmony-fuzz-build:
     needs: base-image
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.candidate.outputs.digest }}
+      skip: ${{ steps.resolve.outputs.skip }}
+      fingerprint: ${{ steps.fingerprint.outputs.fingerprint }}
+      src_tag: ${{ steps.fingerprint.outputs.src_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - id: release
+        name: 解析 registry 命名空间
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.base-image.outputs.version }}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$version" ]]
+          [[ -n "$owner" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          printf 'owner=%s\n' "$owner" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
+          labels: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Fuzz
+            org.opencontainers.image.description=OpenHarmony 动态验证与 Fuzz 环境：libFuzzer、AFL++、ASan/UBSan；不含全量源码或固件。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          annotations: |
+            org.opencontainers.image.title=DeepSonar OpenHarmony Fuzz
+            org.opencontainers.image.description=OpenHarmony 动态验证与 Fuzz 环境：libFuzzer、AFL++、ASan/UBSan；不含全量源码或固件。
+            org.opencontainers.image.licenses=LicenseRef-DeepSonar-Proprietary
+            org.opencontainers.image.documentation=https://github.com/SummerSec/DeepSonar/blob/main/docs/RELEASE_RUNTIME_IMAGES.md
+          tags: |
+            type=semver,pattern={{version}}
+            type=sha,prefix=
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+      - id: fingerprint
+        name: Build fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          node agent-harness/image-build-fingerprint.mjs --preset deepsonar-openharmony-fuzz \
+            --build-arg "BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
+      - id: resolve
+        name: Resolve src cache
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
+          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+        run: bash agent-harness/resolve-image-src-cache.sh resolve
+      - id: build
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.agent-openharmony-fuzz
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz,push-by-digest=true,name-canonical=true,push=true
+          platforms: linux/amd64,linux/arm64
+          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          sbom: true
+          provenance: mode=max
+          cache-from: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz:buildcache
+            type=gha,scope=openharmony-fuzz
+          cache-to: |
+            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz:buildcache,mode=max
+            type=gha,mode=max,scope=openharmony-fuzz
+      - id: candidate
+        name: Validate immutable OpenHarmony Fuzz candidate without publishing tags
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
+          SKIP: ${{ steps.resolve.outputs.skip }}
+          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          EXPECTED_SOURCE: ${{ needs.base-image.outputs.checkout_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$SKIP" == 'true' || "$SKIP" == 'false' ]]
+          if [[ "$SKIP" == 'true' ]]; then digest="$REUSE_DIGEST"; else digest="$BUILD_DIGEST"; fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          source_sha="$(git rev-parse HEAD)"
+          [[ "$source_sha" == "$EXPECTED_SOURCE" ]]
+          image_ref="${IMAGE_NAME}@${digest}"
+          selected_sources_text="$(bash agent-harness/select-runtime-platform-sources.sh "$image_ref" 'linux/amd64,linux/arm64')"
+          mapfile -t selected_sources <<< "$selected_sources_text"
+          [[ ${#selected_sources[@]} -eq 2 ]]
+          printf 'source_sha=%s\nimage_ref=%s\n' "$source_sha" "$image_ref"
+          printf 'runnable=%s\n' "${selected_sources[@]}"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+
+  openharmony-fuzz-native:
+    needs: [base-image, openharmony-fuzz-build]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Native default-user environment, manual and sanitizer acceptance
+        shell: bash
+        env:
+          IMAGE_NAME: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-fuzz
+          DIGEST: ${{ needs.openharmony-fuzz-build.outputs.digest }}
+          EXPECTED_SOURCE: ${{ needs.base-image.outputs.checkout_ref }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          source_sha="$(git rev-parse HEAD)"
+          [[ "$source_sha" == "$EXPECTED_SOURCE" ]]
+          image_ref="${IMAGE_NAME}@${DIGEST}"
+          platform="linux/${{ matrix.arch }}"
+          log="$RUNNER_TEMP/openharmony-fuzz-native-${{ matrix.arch }}.log"
+          mkdir -p openharmony-fuzz-native-logs
+          printf 'source_sha=%s\nimage_ref=%s\nplatform=%s\n' "$source_sha" "$image_ref" "$platform" \
+            | tee "openharmony-fuzz-native-logs/identity-${{ matrix.arch }}.log"
+          docker pull --platform "$platform" "$image_ref" 2>&1 | tee "$log"
+          docker run --rm --network none --platform "$platform" "$image_ref" openharmony-fuzz-env.sh --check \
+            2>&1 | tee -a "$log"
+          node agent-harness/test-runtime-manuals-runtime.mjs "$image_ref" --image-key deepsonar-openharmony-fuzz --platform "$platform" \
+            2>&1 | tee -a "$log"
+          node agent-harness/test-openharmony-fuzz-runtime.mjs "$image_ref" --platform "linux/${{ matrix.arch }}" \
+            2>&1 | tee -a "$log"
+      - name: Bound native acceptance log artifact
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p openharmony-fuzz-native-logs
+          log="$RUNNER_TEMP/openharmony-fuzz-native-${{ matrix.arch }}.log"
+          if [[ -f "$log" ]]; then
+            tail -c 1048576 "$log" > "openharmony-fuzz-native-logs/runtime-${{ matrix.arch }}.log"
+          else
+            printf 'Native acceptance did not produce a runtime log.\n' > "openharmony-fuzz-native-logs/runtime-${{ matrix.arch }}.log"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: openharmony-fuzz-native-${{ matrix.arch }}-${{ github.run_attempt }}
+          path: openharmony-fuzz-native-logs/
+          if-no-files-found: error
+          retention-days: 7
+
+  openharmony-fuzz:
+    needs: [base-image, openharmony-fuzz-build, openharmony-fuzz-native]
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
     env:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -2471,66 +2654,29 @@ jobs:
           tags: |
             type=semver,pattern=openharmony-fuzz-{{version}}
             type=sha,prefix=openharmony-fuzz-sha-
-      - id: fingerprint
-        name: Build fingerprint
-        shell: bash
-        run: |
-          set -euo pipefail
-          node agent-harness/image-build-fingerprint.mjs --preset deepsonar-openharmony-fuzz \
-            --build-arg "BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}"
-      - id: resolve
-        name: Resolve src cache
-        shell: bash
-        env:
-          IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
-          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
-        run: bash agent-harness/resolve-image-src-cache.sh resolve
-      - id: build
-        if: ${{ steps.resolve.outputs.skip != 'true' }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: deploy/Dockerfile.agent-openharmony-fuzz
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz,push-by-digest=true,name-canonical=true,push=true
-          platforms: linux/amd64,linux/arm64
-          build-args: BASE_IMAGE=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base@${{ needs.base-image.outputs.digest }}
-          labels: ${{ steps.meta.outputs.labels }}
-          annotations: ${{ steps.meta.outputs.annotations }}
-          sbom: true
-          provenance: mode=max
-          cache-from: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz:buildcache
-            type=gha,scope=openharmony-fuzz
-          cache-to: |
-            type=registry,ref=${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz:buildcache,mode=max
-            type=gha,mode=max,scope=openharmony-fuzz
       - id: image
-        name: Final digest + pin src
+        name: Pin natively accepted OpenHarmony Fuzz candidate src
         shell: bash
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
-          FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
-          SKIP: ${{ steps.resolve.outputs.skip }}
-          REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
-          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          FINGERPRINT: ${{ needs.openharmony-fuzz-build.outputs.fingerprint }}
+          SRC_TAG: ${{ needs.openharmony-fuzz-build.outputs.src_tag }}
+          SKIP: ${{ needs.openharmony-fuzz-build.outputs.skip }}
+          DIGEST: ${{ needs.openharmony-fuzz-build.outputs.digest }}
         run: |
           set -euo pipefail
-          if [[ "$SKIP" == "true" ]]; then
-            digest="$REUSE_DIGEST"
-          else
-            digest="$BUILD_DIGEST"
-            DIGEST="$digest" bash agent-harness/resolve-image-src-cache.sh pin
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$SKIP" == 'true' || "$SKIP" == 'false' ]]
+          if [[ "$SKIP" != 'true' ]]; then
+            bash agent-harness/resolve-image-src-cache.sh pin
           fi
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf 'digest=%s\n' "$DIGEST" >> "$GITHUB_OUTPUT"
       - name: 按 Registry 发布标签
         id: publish
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
           SOURCE_DIGEST: ${{ steps.image.outputs.digest }}
-          SKIP: ${{ steps.resolve.outputs.skip }}
+          SKIP: ${{ needs.openharmony-fuzz-build.outputs.skip }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
           ACR_TAGS: ${{ steps.acr-meta.outputs.tags }}
           DOCKERHUB_TAGS: ${{ steps.dockerhub-meta.outputs.tags }}
@@ -2599,7 +2745,7 @@ jobs:
           DOCKERHUB_UNAVAILABLE_REASON: credentials_missing_or_not_published
           ACR_UNAVAILABLE_REASON: credentials_missing
           VERSION: ${{ steps.release.outputs.version }}
-          SKIP: ${{ steps.resolve.outputs.skip }}
+          SKIP: ${{ needs.openharmony-fuzz-build.outputs.skip }}
         run: |
           set -euo pipefail
           bash agent-harness/write-release-runtime-descriptor.sh release-digests/openharmony-fuzz.json

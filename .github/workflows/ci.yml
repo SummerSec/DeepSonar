@@ -81,6 +81,18 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Tracked diff and runtime manual reproducibility
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          base="${BASE_SHA:-$(git rev-parse HEAD^)}"
+          # Preserve this repository's existing mixed LF/CRLF files without allowing trailing spaces.
+          git -c core.whitespace=trailing-space,space-before-tab,cr-at-eol diff --check "$base" "$HEAD_SHA"
+          node agent-harness/runtime-manuals/generate-catalog.mjs
+          git diff --exit-code -- agent-harness/runtime-manuals/catalog.json
+
       - name: CI routing and failure propagation regression
         run: pnpm ci:unit:ci-routing
 

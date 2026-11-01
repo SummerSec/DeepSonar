@@ -28408,12 +28408,12 @@
         "deepsonar-base"
       ],
       "source_files": [
-        "agent-harness/openharmony-fuzz-runtime.json",
         "deploy/Dockerfile.agent-openharmony-fuzz",
         "deploy/openharmony-fuzz-env.sh",
         "deploy/openharmony-fuzz-build.sh",
         "deploy/openharmony-init.sh",
-        "deploy/openharmony-build.sh"
+        "deploy/openharmony-build.sh",
+        "agent-harness/test-openharmony-fuzz-runtime.mjs"
       ],
       "sections": [
         "inherited base tools",
@@ -30527,7 +30527,7 @@
           "agent_visible": true,
           "implementation_only": false,
           "version": "snapshot (exact apt version not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.git-lfs",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz",
           "commands": [
             "git-lfs"
           ],
@@ -30615,7 +30615,7 @@
           "agent_visible": true,
           "implementation_only": false,
           "version": "snapshot (Python package provided by image)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.python3-requests",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz",
           "commands": [
             "python3"
           ],
@@ -30657,7 +30657,7 @@
           "agent_visible": true,
           "implementation_only": false,
           "version": "snapshot (exact apt version not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.build-essential",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz",
           "commands": [
             "cc",
             "gcc",
@@ -30706,7 +30706,7 @@
           "agent_visible": true,
           "implementation_only": false,
           "version": "snapshot (exact apt version not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.ccache",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz",
           "commands": [
             "ccache"
           ],
@@ -30748,7 +30748,7 @@
           "agent_visible": true,
           "implementation_only": false,
           "version": "snapshot (exact apt version not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.cmake",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz",
           "commands": [
             "cmake"
           ],
@@ -30792,7 +30792,7 @@
           "agent_visible": true,
           "implementation_only": false,
           "version": "snapshot (exact apt version not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.ninja-build",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz",
           "commands": [
             "ninja"
           ],
@@ -30834,7 +30834,7 @@
           "agent_visible": true,
           "implementation_only": false,
           "version": "snapshot (exact apt versions not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.ssh-rsync-patch",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz",
           "commands": [
             "ssh",
             "rsync",
@@ -30879,7 +30879,7 @@
           "agent_visible": true,
           "implementation_only": false,
           "version": "snapshot (exact apt version not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.pkg-config",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz",
           "commands": [
             "pkg-config"
           ],
@@ -31011,23 +31011,28 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "snapshot (exact versions not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.clang",
+          "version": "1:19.1.7-3~deb12u1",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz#LLVM_PACKAGE_VERSION",
           "commands": [
             "clang",
             "clang++",
-            "llvm-symbolizer"
+            "clang-19",
+            "clang++-19",
+            "llvm-config-19",
+            "llvm-symbolizer",
+            "lld-19"
           ],
           "usage_scenario": "Compile an OpenHarmony or native fuzz harness with sanitizer instrumentation.",
-          "selection_basis": "Use the declared compiler/runtime; retain flags and source revision.",
+          "selection_basis": "Use default Clang 19 and matching compiler-rt 19; retain flags, target triple, resource directory, and source revision.",
           "prerequisites": [
             "Read the frozen job image manifest and work under the job workspace."
           ],
-          "minimal_invocation": "clang++ -fsanitize=fuzzer,address -o harness harness.cc",
+          "minimal_invocation": "clang++ -O1 -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined -o harness harness.cc",
           "common_parameters": [
-            "-fsanitize",
-            "-fno-omit-frame-pointer",
+            "-O1",
             "-g",
+            "-fno-omit-frame-pointer",
+            "-fsanitize=fuzzer,address,undefined",
             "-o"
           ],
           "output_interpretation": "Treat stdout/stderr and exit code as observations. A successful process does not prove a security conclusion by itself.",
@@ -31047,9 +31052,16 @@
             "exit code",
             "input and output hashes"
           ],
-          "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
+          "version_limits_side_effects_cleanup": "Debian bookworm clang-19, clang-tools-19, llvm-19, llvm-19-dev, lld-19, and libclang-rt-19-dev are pinned by LLVM_PACKAGE_VERSION. PATH selects /usr/lib/llvm-19/bin before other compiler paths. Keep default PIE and existing ASLR; do not substitute LLVM 14 or disable sanitizers to obtain a passing smoke.",
           "verification_status": "source_declared_unexecuted",
-          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
+          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image.",
+          "covers": [
+            "clang-19",
+            "clang-tools-19",
+            "llvm-19",
+            "llvm-19-dev",
+            "lld-19"
+          ]
         },
         {
           "image_key": "deepsonar-openharmony-fuzz",
@@ -31057,21 +31069,22 @@
           "kind": "runtime_dependency",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "snapshot (exact versions not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.compiler-rt",
+          "version": "1:19.1.7-3~deb12u1",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz#LLVM_PACKAGE_VERSION",
           "commands": [
             "clang"
           ],
-          "usage_scenario": "Provide compiler-rt, ASan, UBSan, and LSan runtimes for instrumented execution.",
+          "usage_scenario": "Provide LLVM 19 compiler-rt sanitizer libraries for instrumented execution.",
           "selection_basis": "Use only via the matching compiler and target; runtime output is tied to that instrumentation.",
           "prerequisites": [
             "Read the frozen job image manifest and work under the job workspace."
           ],
-          "minimal_invocation": "clang -fsanitize=address,undefined -o sample sample.c",
+          "minimal_invocation": "clang -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -o sample sample.c",
           "common_parameters": [
-            "-fsanitize",
+            "-O1",
             "-g",
-            "-fno-omit-frame-pointer"
+            "-fno-omit-frame-pointer",
+            "-fsanitize=address,undefined"
           ],
           "output_interpretation": "Treat stdout/stderr and exit code as observations. A successful process does not prove a security conclusion by itself.",
           "failure_handling": {
@@ -31090,14 +31103,15 @@
             "exit code",
             "input and output hashes"
           ],
-          "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
+          "version_limits_side_effects_cleanup": "The pinned package is libclang-rt-19-dev, selected through Clang 19's target-specific resource directory. The separately installed libasan8/libubsan1/liblsan0 packages are not the compiler-rt 19 pin. Both engines retain ASan and UBSan with default PIE/ASLR; retain reports and remove only verified temporary paths.",
           "verification_status": "source_declared_unexecuted",
           "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image.",
           "covers": [
             "compiler-rt",
             "libasan",
             "libubsan",
-            "liblsan"
+            "liblsan",
+            "libclang-rt-19-dev"
           ]
         },
         {
@@ -31106,8 +31120,8 @@
           "kind": "runtime_dependency",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "snapshot (exact version not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.libfuzzer",
+          "version": "1:19.1.7-3~deb12u1",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz#LLVM_PACKAGE_VERSION",
           "commands": [],
           "usage_scenario": "Run an in-process harness with a bounded seed corpus.",
           "selection_basis": "Use libFuzzer for in-process targets; use AFL++ for forkserver workflows.",
@@ -31138,7 +31152,7 @@
             "exit code",
             "input and output hashes"
           ],
-          "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
+          "version_limits_side_effects_cleanup": "libFuzzer is the target-specific compiler-rt 19 archive, not a separate host fuzzer package. Build with -O1 -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined. Keep crash artifacts in an owned workspace directory and bound runs; empty-harness smoke does not prove an OpenHarmony component or device result.",
           "verification_status": "source_declared_unexecuted",
           "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
         },
@@ -31148,19 +31162,22 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "snapshot (exact version not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.afl++",
+          "version": "v4.32c",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz#AFL_COMMIT",
           "commands": [
             "afl-fuzz",
-            "afl-clang-fast"
+            "afl-clang-fast",
+            "afl-clang-fast++",
+            "afl-showmap"
           ],
           "usage_scenario": "Run an AFL++ target with explicit corpus and output directories.",
-          "selection_basis": "Choose AFL++ when forkserver/corpus behavior fits the harness; do not mix corpus formats silently.",
+          "selection_basis": "Choose AFL++ for a main/driver-compatible harness; use the LLVM 19 PCGUARD compiler/plugin pair, not Debian LLVM 14 or NATIVE fallback.",
           "prerequisites": [
             "Read the frozen job image manifest and work under the job workspace."
           ],
-          "minimal_invocation": "afl-fuzz -i corpus/in -o corpus/out -- ./harness @@",
+          "minimal_invocation": "afl-fuzz -V 5 -i corpus/in -o corpus/out -m none -- ./harness @@",
           "common_parameters": [
+            "-V",
             "-i",
             "-o",
             "-t",
@@ -31168,7 +31185,7 @@
             "-M",
             "-S"
           ],
-          "output_interpretation": "Treat stdout/stderr and exit code as observations. A successful process does not prove a security conclusion by itself.",
+          "output_interpretation": "Retain crash inputs and specific sanitizer diagnostics; version strings alone do not prove instrumentation. The native host probe requires nonempty different afl-showmap maps for two branch inputs.",
           "failure_handling": {
             "normal_empty": "A successful command with no match, no rows, or no device is an empty observation; save it as empty and do not turn it into a failure.",
             "model_correctable": "For an invalid path, option, format, or query, read stderr, correct the input, and retry with a new command and recorded revision.",
@@ -31185,7 +31202,7 @@
             "exit code",
             "input and output hashes"
           ],
-          "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
+          "version_limits_side_effects_cleanup": "Apache-2.0 AFL++ v4.32c source commit c340a022e2546488c15f85593d0f37e30eeaab3a, tarball SHA-256 77d3dcc321ac4514cf5a9dccd0d070c4a3a417df1d353a01b89540c83090ff41. Built with clang-19/clang++-19 and llvm-config-19; AFL_CC/AFL_CXX and AFL_LLVM_INSTRUMENT=PCGUARD select the matching plugin. The build helper keeps ASan+UBSan/default PIE/ASLR. Bound execution and retain input/output hashes before cleaning owned temporary files.",
           "verification_status": "source_declared_unexecuted",
           "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
         },
@@ -31196,7 +31213,7 @@
           "agent_visible": true,
           "implementation_only": false,
           "version": "snapshot (exact version not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.gdb",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz",
           "commands": [
             "gdb"
           ],
@@ -31240,7 +31257,7 @@
           "agent_visible": true,
           "implementation_only": false,
           "version": "snapshot (exact versions not pinned)",
-          "version_source": "agent-harness/openharmony-fuzz-runtime.json#/apt.binutils",
+          "version_source": "deploy/Dockerfile.agent-openharmony-fuzz",
           "commands": [
             "objdump",
             "readelf",
@@ -31287,7 +31304,7 @@
           "kind": "capability",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "image compiler/runtime snapshot",
+          "version": "Clang/compiler-rt 19.1.7; AFL++ v4.32c LLVM 19 PCGUARD",
           "version_source": "deploy/Dockerfile.agent-openharmony-fuzz#inline manifest",
           "commands": [
             "openharmony-fuzz-build.sh"
@@ -31295,8 +31312,8 @@
           "usage_scenario": "Build a libFuzzer or AFL++ harness with explicit source, engine, and output.",
           "selection_basis": "Select the engine based on harness compatibility and desired corpus workflow.",
           "prerequisites": [
-            "Harness source",
-            "Matching compiler/runtime",
+            "Harness source: LLVMFuzzerTestOneInput for libFuzzer, main/driver for AFL++",
+            "Matching Clang/compiler-rt 19 and LLVM 19 PCGUARD plugin",
             "Writable output path"
           ],
           "minimal_invocation": "openharmony-fuzz-build.sh --source harness.cc --engine libfuzzer --output /workspace/harness",
@@ -31324,7 +31341,7 @@
             "exit code",
             "input and output hashes"
           ],
-          "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
+          "version_limits_side_effects_cleanup": "Both helper paths use -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined; libFuzzer adds -fsanitize=fuzzer. Preserve default PIE and ASLR. Compilation is not an OpenHarmony target/device verification and does not start a long fuzz campaign.",
           "verification_status": "source_declared_unexecuted",
           "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
         },
@@ -31340,18 +31357,18 @@
             "/opt/deepsonar/bin/openharmony-fuzz-env.sh --check",
             "/opt/deepsonar/bin/openharmony-fuzz-env.sh --check --static"
           ],
-          "usage_scenario": "Verify fuzzer, symbolizer, sanitizer, and static/dynamic architecture prerequisites.",
-          "selection_basis": "Run before building or running a fuzz target.",
+          "usage_scenario": "Verify matching LLVM 19/compiler-rt 19/AFL++ PCGUARD and compile the original C/libFuzzer probe plus the real AFL build-helper path.",
+          "selection_basis": "Use --check on a native target; --static is compile/ELF-only for QEMU build checks and is not runtime acceptance.",
           "prerequisites": [
             "The corresponding runtime image",
             "A job workspace and explicit input/output paths"
           ],
-          "minimal_invocation": "/opt/deepsonar/bin/openharmony-fuzz-env.sh --check --static",
+          "minimal_invocation": "/opt/deepsonar/bin/openharmony-fuzz-env.sh --check",
           "common_parameters": [
             "--check",
             "--static"
           ],
-          "output_interpretation": "Treat stdout/stderr and exit code as observations. A successful process does not prove a security conclusion by itself.",
+          "output_interpretation": "--check compiles and executes the original C/libFuzzer probe and real AFL helper smoke. --static only compiles and checks ELF architecture/PIE/sanitizer symbols; it never executes the sanitizer targets. Neither mode proves an OpenHarmony component or device result.",
           "failure_handling": {
             "normal_empty": "A successful command with no match, no rows, or no device is an empty observation; save it as empty and do not turn it into a failure.",
             "model_correctable": "For an invalid path, option, format, or query, read stderr, correct the input, and retry with a new command and recorded revision.",
@@ -31368,7 +31385,7 @@
             "exit code",
             "input and output hashes"
           ],
-          "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
+          "version_limits_side_effects_cleanup": "Actions-only host script agent-harness/test-openharmony-fuzz-runtime.mjs requires native linux/amd64 or linux/arm64: fixed 20 original C + 20 libFuzzer helper + 20 AFL helper fresh launches, both engines' ASan heap-buffer-overflow and UBSan signed-integer-overflow diagnostics, and two nonempty different AFL branch maps. This host script is not a shipped Agent command; QEMU/static checks are not native runtime proof. Keep sanitizers/default PIE/ASLR, retain logs, and remove only verified temporary paths.",
           "verification_status": "source_reviewed_unexecuted",
           "verification_note": "Wrapper source was reviewed; no Docker image was built or executed by this catalog generation."
         },
@@ -31384,7 +31401,7 @@
             "/opt/deepsonar/bin/openharmony-fuzz-build.sh"
           ],
           "usage_scenario": "Compile a bounded OpenHarmony fuzz harness with libFuzzer or AFL++.",
-          "selection_basis": "Use after the source and engine are selected.",
+          "selection_basis": "Use after the source and engine are selected; AFL needs main/driver and libFuzzer needs LLVMFuzzerTestOneInput.",
           "prerequisites": [
             "The corresponding runtime image",
             "A job workspace and explicit input/output paths"
@@ -31414,7 +31431,7 @@
             "exit code",
             "input and output hashes"
           ],
-          "version_limits_side_effects_cleanup": "Version is bound to the image manifest. Use a workspace-local output directory, bound resources, and remove temporary files after evidence is retained.",
+          "version_limits_side_effects_cleanup": "The real helper keeps -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined and adds -fsanitize=fuzzer for libFuzzer or AFL_USE_ASAN=1 for LLVM 19 PCGUARD AFL++. Do not add -no-pie, disable sanitizer instrumentation, alter ASLR, or substitute an old/NATIVE plugin to get a passing smoke. Retain binary/input/log hashes; no automatic long-running fuzz campaign or device verification.",
           "verification_status": "source_reviewed_unexecuted",
           "verification_note": "Wrapper source was reviewed; no Docker image was built or executed by this catalog generation."
         }

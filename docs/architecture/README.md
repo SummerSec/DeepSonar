@@ -1,6 +1,6 @@
 # DeepSonar 系统架构设计
 
-> 状态：**v0.6.3 集成分支 as-built 与规范索引**。覆盖根工作树已实现边界；质量缺口及待验收范围单独列出，不表示全部 issue 或当前组合已交付。
+> 状态：**v0.6.3 as-built 与规范索引**。工程集成已合并，发布修复仍须最终 SHA 验收；暂缓质量与正式发行状态分开，不以代码存在宣称通过。
 > 同步日期：2026-11-01
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
@@ -16,9 +16,9 @@
 
 #767 可选任务下发契约已同步到 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)、接口/运行时/数据视图及追溯矩阵；可选自由文本、未知条件拒绝与质量评测限制见[下发指南](../../skills/deepsonar-management/references/task-dispatch.md)。
 
-研究候选完整性、目标判据、技术 Verify、独立程序资格及 Plan 完成 authority 分层；admitted_for_research 不表示完成或 eligible，无契约仍 unassessed。#767 可信只读 authority/grant 继承及实时重核见 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)与 [ADR 0011](adr/0011-trusted-target-authorization.md)。#775 当前 v2 objective CAS、lifetime 预算、多轮依赖任务复用 Hub Intent admission，持久 continue 事件消费水位避免回调/重启重计，新增单元已验、SQL 回归最终 CI 待验，输出关联只证明工程来源，见 [FR-CAP-006](01-system-specification.md#fr-cap-006-plan-协议的当前边界)和 [ADR 0012](adr/0012-plan-v2-execution.md)；普通 Hub 的 v1 writer 已于 2026-10-31 物理删除，immutable v1 audit 仍可读；本地 normal→all7negative→normal 与七故障门禁已核验，但 report provenance 不是当前 HEAD，最终组合 CI 仍待验。
+研究候选完整性、目标判据、技术 Verify、独立程序资格及 Plan 完成 authority 分层；admitted_for_research 不表示完成或 eligible，无契约仍 unassessed。#767 可信只读 authority/grant 继承及实时重核见 [FR-TASK-006](01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)与 [ADR 0011](adr/0011-trusted-target-authorization.md)。#775 当前 v2 objective CAS、lifetime 预算、多轮依赖任务复用 Hub Intent admission，持久 continue 事件消费水位避免回调/重启重计，该工程切片已通过下述 `fdb55a01` 主线 Actions，输出关联只证明工程来源，见 [FR-CAP-006](01-system-specification.md#fr-cap-006-plan-协议的当前边界)和 [ADR 0012](adr/0012-plan-v2-execution.md)；普通 Hub 的 v1 writer 已于 2026-10-31 物理删除，immutable v1 audit 仍可读；较早本地 normal→all7negative→normal 报告只作历史，不能覆盖后续修复 SHA。
 
-#815 Pi 会话观测记忆的注册/冻结、Gateway workload/账本与 wrapper/RPC 工程已进入根工作树，见 FR-CAP-009 和 [ADR 0013](adr/0013-governed-pi-memory.md)。有限总额必须显式分配，不推导百分比。实际本地 base 镜像的 canonical RPC、独立生产内容 guard 正负例及封装/OM 专属版本准入/适配器回归已通过，完整身份、场景和分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；历史 Session HTTP 脱敏与 Gateway 已知请求前 transport/持久结算、防冒充也已核验，见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。最终组合 CI、发布通道/平台及 registry/catalog 证据未完成，不能以本地 image ID 宣称发布或质量/成本收益。
+#815 Pi 会话观测记忆的注册/冻结、Gateway workload/账本与 wrapper/RPC 工程已进入根工作树，见 FR-CAP-009 和 [ADR 0013](adr/0013-governed-pi-memory.md)。有限总额必须显式分配，不推导百分比。实际本地 base 镜像的 canonical RPC、独立生产内容 guard 正负例及封装/OM 专属版本准入/适配器回归已通过，完整身份、场景和分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；历史 Session HTTP 脱敏与 Gateway 已知请求前 transport/持久结算、防冒充也已核验，见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。工程组合已通过下述 `fdb55a01` 主线 Actions，但发布通道/平台及最终 registry/catalog 闭环尚未完成，不能以本地 image ID 宣称发布或质量/成本收益。
 
 #830 将[注意力原则](../../DESIGN.md#核心理念优化人的注意力)集中定义在 DESIGN；开发入口和贡献指引复用[工程评审与示例](11-engineering-specs.md#11-注意力成本评审830)，映射 NFR-UX-001、03/04/11 与追溯矩阵。仅落实设计/开发约束，不新增运行时、UI、权限或收益承诺。
 
@@ -62,7 +62,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 | 构件与依赖 | 05；[bounded contexts / 锁序](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | §4.4、§5、§11 | 构件地图已迁入；锁序专题保留权威 |
 | API 与修复 | 09；[OpenAPI](../../apps/scheduler/src/openapi.ts) / shared-types | §7、§8 控制通道 | 已迁入；字段由机器契约维护 |
 | CLI 与运行上下文 | [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[runtime context](../AGENT_RUNTIME_CONTEXT.md)、[profiles](../AGENT_RUNTIME_PROFILES.md) | §8.1–8.2 | 专题保留权威，03/05/09 引用 |
-| 镜像与部署 | 07；[镜像目录契约](../RUNTIME_IMAGE_REGISTRY_CONTRACT.md)、[部署](../ONE_CLICK_DEPLOYMENT.md) | §8.3、§9 资源 | 已迁入概览，专题保留细则 |
+| 镜像与部署 | 07；[镜像目录契约](../RUNTIME_IMAGE_REGISTRY_CONTRACT.md)、[部署](../ONE_CLICK_DEPLOYMENT.md)、[发布契约](<../RELEASE_RUNTIME_IMAGES.md>) | §8.3、§9 资源 | 已迁入概览；FR-IMG-001/002 的 OH Fuzz 匹配工具链与 fresh/reuse 原生 sanitizer 回归见发布专题，实际执行结果单独留证 |
 | OpenSandbox upgrade | IR-001/003; 06/07/08/10; [upgrade record](../OPENSANDBOX_1_2_UPGRADE.md), [canonical pins](../../packages/runtime-sandbox/src/opensandbox-version.ts) | Historical versions retained | SDK/images updated; direct ingress and Scheduler recovery unchanged; local unit vs actual server/live/native/final-SHA proof separated |
 | 资源阈值与性能 | 04；[config](../../apps/scheduler/src/config.ts) | §9.2、§12 | 已迁入；不沿用旧默认值清单 |
 | 安全与隔离 | 10；[设备边界](../DEVICE_ACCESS.md)、[共享资产](../SHARED_ASSET_BLOB_STORE.md) | §9.1 | 概览已迁入，专题保留细则 |
@@ -109,4 +109,4 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 
 #778 当前 Job 的条件建议与选择回执已同步 FR-CAP-003 / FR-CAP-008、构件/接口/数据/安全视图；[专题](../SKILL_SUGGESTIONS.md)列出非模型验收矩阵及未评估的效果、平台源和 Pack 范围。
 
-2026-10-31 集成证据：完整 CI run `41186374980` 通过的 SHA 是较早 `e23c3b4f`，只含当时 #822/#825 基线；不得推广到当前组合。当前根的 Plan、Finding Research、Verify、权限及 Web/Session 分范围套件和 schema rebuild/CLI 备份恢复已通过，最新计数与重叠边界见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md#v063-集成证据范围2026-10-31)。#815 实际本地 base 镜像与独立生产 guard 已验；当前 PR/最终 main CI、发布通道/平台及 registry/catalog 仍未完成。先完成纳入交付范围的实现和对应 PR 绿灯，再合并、核对最终 main 并准备 v0.6.3；v0.6.2 正式发布保持不可变。生产执行与真实模型试验不要求，缺失人工质量输入仍是未交付项。 This is historical schema66 evidence. On 2026-11-01 Lead verified SDK-only #832 merged to main b1d77c3031f1942e782605bd62772cb70860c7e8 (schema65, 12/12 successful checks); Root schema67 quality WIP still lacks final CI/independent quality acceptance. Do not label the older main e219 as current or treat SDK acceptance as quality acceptance.
+2026-11-01 集成证据：[#831](https://github.com/SummerSec/DeepSonar/pull/831) 在最终 PR 检查全绿后合并至 `fdb55a01b1e02b5b9078586923a8d506ce5bb096`；该主线的六个适用 Actions 工作流全绿，包含真实 schema67 重建和备份恢复，本轮工程 issue 已收口。较早 schema66/SDK-only 和本地记录只作历史，不能覆盖后续修复。OpenHarmony Fuzz 在正式 Release 的新构建失败，当前修复映射 FR-IMG-001/002、07 部署视图及既有 ADR 0006，增加匹配工具链与 fresh/reuse 双原生架构行为证据；[发布专题](<../RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)区分有限诊断、最终修复 SHA 验收和正式发行。v0.6.3 尚未正式发布，v0.6.2 保持不可变；独立质量、Host 证书/晋升/公开强关系建议按本轮决定暂缓，不把工程全绿写成质量通过。

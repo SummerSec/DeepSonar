@@ -21,6 +21,7 @@
 
 ### 修复
 
+- OpenHarmony Fuzz 将默认 Clang/compiler-rt 更新为匹配的 LLVM 19，并以固定源码与校验和构建同版 PCGUARD AFL++ 4.32c，保留 PIE/ASLR、ASan/UBSan 与 libFuzzer。专项 CI 和 Release 对新建、复用候选均执行双架构原生启动、两种实际 engine 的 sanitizer 负例及 AFL 分支覆盖，先验收再 pin/publish；修复仍须最终 SHA 的 Actions 实际通过，既有 v0.6.3 tag 不自动移动。
 - Hub 每次决策在同一事务内合并去重写入一批 Intent 边；终态 token 撤销保持与 Job 结算同一事务。CI 夹具使用当前生命周期、冻结快照与授权契约，不绕过 CAS 或回退直接 Canvas 查询。
 - PostgreSQL 集成夹具恢复时间戳时保留微秒，畸形 JSON 以原始文本进入解析器，并对回执内容而非驱动容器原型做历史不变校验；生产来源校验、JSON 约束及拒绝条件不放宽。
 - 文档保鲜识别 Markdown 角括号目标及空格/锚点，真实 routing 回归同时验证普通和角括号坏链接仍会失败；既有 changelog 校验器接入 Actions，验证待发布的实际版本区段与 compare link。

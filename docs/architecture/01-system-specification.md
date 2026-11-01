@@ -626,7 +626,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 - **决策来源**：镜像是执行供应链和权限边界，产品身份与不可变版本必须分离。
 - **实现状态**：部分达标；准入状态和 digest 约束在目录与 Job snapshot 中保存，签名/SBOM 结果取决于 trust policy 与 registry evidence；未启用签名策略时官方 catalog 可为 `signature: skipped`，真实验证仍需部署证据。
 - **代码入口**：[runtime image schema](../../database/schema.sql)、[image routes](../../apps/scheduler/src/domains/runtime-image/routes.ts)、[registry contract](../../apps/scheduler/src/runtime-image-registry-contract.ts)。
-- **验证证据**：`pnpm ci:unit:runtime-images`、`pnpm ci:unit:image-admission`、`pnpm ci:unit:runtime-registry`。
+- **验证证据**：`pnpm ci:unit:runtime-images`、`pnpm ci:unit:image-admission`、`pnpm ci:unit:runtime-registry`；[镜像一致性检查](<../../agent-harness/check-runtime-image-consistency.mjs>)核对 OH Fuzz compiler/compiler-rt/AFL 来源闭包与发布接线，实际执行验收及限制见[发布契约](<../RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)。
 
 ### FR-IMG-002 镜像准入、通道与 readiness
 
@@ -634,7 +634,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 - **决策来源**：目录存在不代表当前宿主或通道可执行，readiness 必须区别准备中、不可用和错误。
 - **实现状态**：as-built；同 digest 通道重试最多使用一次额外 pull attempt，失败保持 fail closed。
 - **代码入口**：[runtime image readiness](../../apps/scheduler/src/runtime-image-readiness.ts)、[pull/reconcile](../../apps/scheduler/src/runtime-image-reconcile.ts)、[image tests](../../apps/scheduler/src/runtime-image-readiness.test.ts)。
-- **验证证据**：`pnpm ci:unit:runtime-images`、`pnpm ci:integration:runtime-image-channels`、`pnpm ci:unit:runtime-registry`。
+- **验证证据**：`pnpm ci:unit:runtime-images`、`pnpm ci:integration:runtime-image-channels`、`pnpm ci:unit:runtime-registry`；OpenHarmony Fuzz 的 [原生行为回归](<../../agent-harness/test-openharmony-fuzz-runtime.mjs>)由专项 CI 与 Release 对 fresh/reuse 候选同样执行，覆盖默认工具链、两种 engine、PIE 与 sanitizer 真实报告，见[发布契约](<../RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)。入口存在不等于通过，按最终 SHA / 镜像 digest 的 Actions 结果验收。
 
 ### FR-IMG-003 Job 镜像解析与快照冻结
 
