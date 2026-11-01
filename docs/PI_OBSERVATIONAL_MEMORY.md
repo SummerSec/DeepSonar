@@ -1,7 +1,7 @@
 # 沙箱 Pi 观测内存扩展（`pi-observational-memory`）设计评审（#815 A 片）
 
-> 状态：**A/B/C 运行时实现、定向回归及实际本地镜像 RPC/生产启动守卫已验证；最终组合 CI 和发布证据待完成。** 本文件保留评审语义与判定标准，当前镜像证据集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
-> 同步日期：2026-10-31。代码核对基线：当前根工作树，schema 以[源码编号](../apps/scheduler/src/schema-version.ts)为准；镜像验收身份见上述专题。
+> 状态：**本轮约定工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)；后续修复 SHA 和正式发布仍另验。** 本文件保留评审语义与判定标准，历史本地镜像 RPC/生产启动守卫证据集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
+> 同步日期：2026-11-01。已验收工程基线为 `fdb55a01`，schema 以[源码编号](../apps/scheduler/src/schema-version.ts)为准；历史镜像验收身份见上述专题。
 > 关联 issue：[#815](https://github.com/SummerSec/DeepSonar/issues/815)。A 的设计硬门仍约束 B/C/D/E；当前只记录已验证实现与剩余启用门禁。
 
 ## 0. 本片交付
@@ -287,7 +287,7 @@ issue [#815 设计取舍记录](https://github.com/SummerSec/DeepSonar/issues/81
 | 6 | 压缩身份 | 沿用 DeepSonar 身份和追踪契约，不能表达时如实标 unknown | 暂不扩新 policy |
 | 7 | 模型 | 首版后台仅使用当前 Job 已冻结模型 | 不新增独立模型权限；放宽需 D 片单独评审 |
 
-该记录同时明确：canonical 发布物、宿主兼容、配置冻结、RPC、多出口脱敏、预算隔离等验收必须逐项留证。实际本地镜像 RPC、独立生产内容守卫、OM 专属版本准入和 Gateway/Session 工程证据已取得；最终组合 CI 与发布通道/平台、registry/catalog 仍待完成，**不能据此宣称完整发布验收通过**。
+该记录同时明确：canonical 发布物、宿主兼容、配置冻结、RPC、多出口脱敏、预算隔离等验收必须逐项留证。实际本地镜像 RPC、独立生产内容守卫、OM 专属版本准入和 Gateway/Session 工程证据已取得；当时组合 CI 与发布通道/平台、registry/catalog 仍待完成；后续 #831 工程验收见文首，**不能据此宣称完整发布验收通过**。
 
 ### 8.2 决策依据（供复核）
 
@@ -336,7 +336,7 @@ issue [#815 设计取舍记录](https://github.com/SummerSec/DeepSonar/issues/81
 ## 10. A 片验收
 
 - **A 的七项设计取舍保持有效；工程证据不等于完整发布验收。** 实际本地镜像 Pi/OM RPC、独立生产 guard、Session 脱敏、Gateway/账本和定向回归均已有证据；显式有限预算不使用比例预留，unknown/pending 仍硬失败。
-- canonical 包/lock/manifest/wrapper、OM 专属版本准入、配置隔离、§6 RPC、§3 Session/RPC 出口和 Gateway 预算已分别核验；最终当前 PR/最终 main CI、发布通道/平台与 registry/catalog 证据尚未完成，质量与成本收益保持 `unknown`。
+- canonical 包/lock/manifest/wrapper、OM 专属版本准入、配置隔离、§6 RPC、§3 Session/RPC 出口和 Gateway 预算已分别核验；本轮工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA、发布通道/平台与 registry/catalog 仍另验，质量与成本收益保持 `unknown`。
 - 在上述镜像与发布门禁闭合前，扩展仍不得被表述为已通过发布验收；新 Job 默认不启用，旧 released digest 不得由兼容 key 推断含 OM。
 - `pnpm ci:unit:docs-freshness` 通过（版本字面量、命令存在性、链接、已删机制残留）。
 - `pnpm ci:unit:file-size` 通过。

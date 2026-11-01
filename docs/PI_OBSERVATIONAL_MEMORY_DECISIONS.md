@@ -1,7 +1,7 @@
 # 沙箱 Pi 观测内存：A 片决策记录
 
-> 状态：**原则已定，核心工程及本地构建镜像 RPC/启动拒绝已有证据；最终 CI 与发布门禁仍未闭合**。7 项设计原则已由用户于 2026-10-31 确认（见 [#815 决策评论](https://github.com/SummerSec/DeepSonar/issues/815#issuecomment-6538810106)）；本文件把这些原则、已验证实现与剩余启用门禁分开记录，避免把局部证据扩张为发布结论。
-> 同步日期：2026-10-31
+> 状态：**原则已定，本轮约定工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)；后续修复 SHA 和正式发布仍另验**。7 项设计原则已由用户于 2026-10-31 确认（见 [#815 决策评论](https://github.com/SummerSec/DeepSonar/issues/815#issuecomment-6538810106)）；本文件把这些原则、已验证实现与剩余启用门禁分开记录，避免把局部证据扩张为发布结论。
+> 同步日期：2026-11-01
 
 ## 1. 这份文件解决什么
 
@@ -49,7 +49,7 @@ wrapper 只对 exact quota 或内核确认未开始的 transient 记录可见降
 
 - 原则 1 的字段拆分已落到 `PiExtensionRegistration` 的 `requires_egress` / `requires_gateway`，并由 wrapper/Gateway 分别校验。
 - 原则 3 的降级实现已限制为 exact quota 或 known-never-started `gateway_transient`；provider 5xx/error prose、pending/unknown、权限和协议错误保持硬失败。
-- 原则 5 的归因机制已落到可信 `observational_memory` token、workload ledger 和终态撤销；本地 built-image 验收已通过，最终组合 CI 与发布证据另行核对。
+- 原则 5 的归因机制已落到可信 `observational_memory` token、workload ledger 和终态撤销；本地 built-image 验收保留历史范围，本轮工程验收见上述 #831 Actions；后续修复 SHA 与正式发布另行核对。
 
 以上均须在启用前完成，不能以「原则已定」代替实现。
 
@@ -59,7 +59,7 @@ wrapper 只对 exact quota 或内核确认未开始的 transient 记录可见降
 
 | 层级 | 内容 | 处理 |
 | --- | --- | --- |
-| 已取得工程证据、仍需最终 CI/发布核对 | 实际本地构建镜像的 canonical Pi/OM RPC、独立生产启动守卫正负例；Session preview/download 脱敏、Gateway 预算/ledger | 镜像身份、场景和分母见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)，已发布通道/平台与 registry/catalog 仍另验 |
+| 本轮工程已随 #831 Actions 验收、后续修复 SHA/发布另验 | 实际本地构建镜像的 canonical Pi/OM RPC、独立生产启动守卫正负例；Session preview/download 脱敏、Gateway 预算/ledger | 镜像身份、场景和分母见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)，已发布通道/平台与 registry/catalog 仍另验 |
 | 可延期（不阻塞继续整合） | 质量收益、成本收益、真实模型和生产容量 | 保持 `unknown`；**不得**用本地替身、CI 或静态门禁代替 |
 | 不可豁免（注册前硬门） | canonical 发布物来源、tarball integrity、实际 `entry` 核验 | 无论风险是否延期，注册前必须完成 |
 | 不可豁免（启用前硬门） | 固定宿主兼容、RPC 纯净性、配置隔离、额度与归因、数据出口脱敏 | 无论风险是否延期，启用前必须完成 |
@@ -74,7 +74,7 @@ A 的结论需要明确写出，并区分「原则已定」与「工程契约闭
 - ☐ 原则已定，但工程契约未闭合，暂不进入 B
 - ☐ A 否决，停止：不注册、不预装、不启用
 
-当前记录：设计原则已定；核心 wrapper/RPC、Session archive、Gateway 预算及本地构建镜像 RPC/生产启动守卫已有工程证据。本文件不替用户签署 A 正式通过，最终组合 CI 与发布证据仍未完成。
+当前记录：设计原则已定；本轮约定工程已随上述 #831 Actions 验收，历史 wrapper/RPC、Session archive、Gateway 与本地镜像证据保留原范围。本文件不替用户签署 A 正式通过，也不把工程验收当作后续修复 SHA 或正式发布完成。
 
 签署：
 
@@ -86,4 +86,4 @@ A 的结论需要明确写出，并区分「原则已定」与「工程契约闭
 
 ## 7. 边界
 
-本文件记录的是产品/设计原则的选择，也回填截至 2026-10-31 的工程验证状态，不授予发布或生产启用权限。canonical 包、配置冻结、RPC、Session 多出口脱敏、Gateway 预算隔离、新 Job 的 OM 专属版本准入及本地镜像内容守卫均已有对应证据；最终组合 CI 与发布证据未完成，质量与成本收益仍为 `unknown`，剩余门禁不能被本文件跳过。
+本文件记录的是产品/设计原则的选择，也保留截至 2026-10-31 的历史工程验证状态，不授予发布或生产启用权限。canonical 包、配置冻结、RPC、Session 多出口脱敏、Gateway 预算隔离、新 Job 的 OM 专属版本准入及本地镜像内容守卫当时已有对应证据，组合 CI 与发布证据当时未完成；后续 #831 工程验收见文首。质量与成本收益仍为 `unknown`，后续修复 SHA 和发布门禁不能被本文件跳过。

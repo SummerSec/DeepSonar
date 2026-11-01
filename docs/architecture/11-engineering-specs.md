@@ -1,7 +1,7 @@
 # 11. 工程规范
 
 > 状态：**as-built（#741 PR 5 回填）**。本文记录当前仓库开发、验证和文档治理必须遵守的工程规则；实现冲突时以代码、schema、OpenAPI 和测试为准。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 本文是 DeepSonar 的开发规范视图。它把可重复的工程约束、测试分层、文档保鲜和发布前核查集中在一个位置；新架构事实以 [`docs/architecture/README.md`](README.md)、相关架构视图、追溯矩阵和 ADR 为准，`DESIGN.md`、`docs/README.md` 与其他专题文档提供摘要或专题证据。
 
@@ -101,12 +101,12 @@ Control API 的每个 operation 必须经过三层校验：
 - 未设置有限 `job_token_max_requests` 时保持 unlimited；仅显式有限总额才要求 `total_requests`、`main_requests`、`background_requests` 正整数分配且总额匹配，禁止百分比或隐式预留。可选后台 request/token cap 只能进一步收紧。请求总额与 token/memory usage 是不同账本维度；并发占额、失败/取消、pending/unknown 和未知外部效果按真实效果结算，不能按零返还或自动重放；已知 quota/not-started 可见降级，权限、协议、integrity、snapshot 和 unknown effect 硬失败。
 - wrapper 已隔离扩展私有配置并收紧输出。recall、OM ledger、compaction fold、session/raw archive 和大 RPC 副本按边界做有界投影/脱敏；历史 session preview/raw download 已在全局 job-control 路径于预览截断/下载发送前按 Pi header/manifest 脱敏，immutable archive metadata 保持不变，projection bytes/SHA/Content-Digest 单独报告。memory 只服务上下文治理，不是 Fact/Evidence/Artifact/Finding/报告 authority，不产生跨 Job 读取路径。详见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md)。
 
-2026-10-31 主线程已完成实际本地 base 镜像构建、canonical Pi/OM/生产 wrapper 的真实 RPC、独立生产内容 guard 的 Docker 正负例及封装/版本准入/适配器回归，集中证据见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。历史 Session HTTP 脱敏、Gateway 已知请求前 transport 的持久零用量结算及 provider 防冒充也已通过，见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。最初被旧异步断言中断的组合脚本不能计作通过；后续适配器与实际 Docker RPC 的分别重跑才是通过依据。本地 image ID 不能充当发布 manifest/catalog digest；最终组合 CI、发布通道/平台证据仍未完成，质量与成本收益保持 `unknown`。
+2026-10-31 主线程已完成实际本地 base 镜像构建、canonical Pi/OM/生产 wrapper 的真实 RPC、独立生产内容 guard 的 Docker 正负例及封装/版本准入/适配器回归，集中证据见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。历史 Session HTTP 脱敏、Gateway 已知请求前 transport 的持久零用量结算及 provider 防冒充也已通过，见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。最初被旧异步断言中断的组合脚本不能计作通过；后续适配器与实际 Docker RPC 的分别重跑才是通过依据。本地 image ID 不能充当发布 manifest/catalog digest；本轮工程已随 [#831 在 fdb55a01 主线 Actions 验收](<../TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA 与正式发布通道/平台仍另验，质量与成本收益保持 `unknown`。
 
 ### 3.5 可信目标授权、Plan v2 与资格/关系 authority
 
 - 目标授权是 Scheduler-owned 的只读协议：authority/action/prerequisite/scope/revision/freshness/binding 由可信适配器返回，secret 只来自 host/platform 配置；客户端字段、模板或公开凭据 metadata 不能证明外部写权限。中心继承和每次 dispatch/rerun 的 live check 必须保留，最新 grant 无效时不得回退旧 grant；`target_authorization_grant_invalid` 属于不可重试的 fail-closed 路径。
-- 新写入和执行只接受 Plan v2；v1 仅作历史读取。Plan 绑定用户目标的 human CAS、有限 lifetime reroute、执行路线 CAS 和既有 Hub Intent channel；调度保留 Attempt、Evidence bytes、provenance 和 output associations。`PlanResult`/`done` 只能是模型提案或持久接纳，不拥有 semantic completion authority；pending/unknown effect 禁止自动 replay。2026-10-31 已物理删除 `applyHubPlanAdapter`、`persistPlanAudit`、side-effect writer 及纯 legacy `adapt*` helpers/types/exports；普通 HubIntent 仍走原 handler，不制造新的 v1 `plan_protocol` 或 audit，immutable v1（含 `hub_intent_adapter`）仅供历史读取。根本地 replay 已完成 normal→all7negative→normal 三次退出 0，当前 v2 单一 SQL/HTTP fixture 的 17 个 outcomes/traces 与七个注入故障门禁匹配；artifact report provenance 为 dirty 的非 HEAD 提交，不能作为精确 HEAD 最终验收，最终 combined CI 仍待核对。
+- 新写入和执行只接受 Plan v2；v1 仅作历史读取。Plan 绑定用户目标的 human CAS、有限 lifetime reroute、执行路线 CAS 和既有 Hub Intent channel；调度保留 Attempt、Evidence bytes、provenance 和 output associations。`PlanResult`/`done` 只能是模型提案或持久接纳，不拥有 semantic completion authority；pending/unknown effect 禁止自动 replay。2026-10-31 已物理删除 `applyHubPlanAdapter`、`persistPlanAudit`、side-effect writer 及纯 legacy `adapt*` helpers/types/exports；普通 HubIntent 仍走原 handler，不制造新的 v1 `plan_protocol` 或 audit，immutable v1（含 `hub_intent_adapter`）仅供历史读取。根本地 replay 已完成 normal→all7negative→normal 三次退出 0，当前 v2 单一 SQL/HTTP fixture 的 17 个 outcomes/traces 与七个注入故障门禁匹配；artifact report provenance 为 dirty 的非 HEAD 提交，不能作为精确 HEAD 最终验收；后续 #831 工程 Actions 验收见上述摘要，不改写这些历史报告。
 - #819 的 identity source/mapping 使用操作员认证、immutable manifest、revision/mapping CAS、freshness/revocation/invalidation 和 durable worker；当前强关系必须保持未发布/质量未评估，且不把 operator attestation 写成已认证的外部 inventory authenticity。#822 的程序资格只接受认证操作员的 append-only material/review，资格是 Finding/Verify/Evidence 的只读投影，不改变 Verify、不授予执行权限。
 
 ## 4. 测试分层与实际接线
@@ -163,4 +163,4 @@ Chrome Fuzz ARM64 的 CI/Release cache miss 构建前执行[受控宿主磁盘�
 
 仓库开发 Skill [`architecture-doc-sync`](../../.agents/skills/architecture-doc-sync/SKILL.md) 将上述同步面和验收输出用于后续开发任务；它只治理仓库文档，不改变运行时。
 
-Plan [冻结离线回放](../../agent-harness/plan-replay/README.md)锁定期望样本、摘要与逐例分母，失败/跳过不算通过。2026-10-31 根本地 normal→all7negative→normal 三次 replay 均 exit 0；当前 v2 单一 SQL/HTTP fixture 的 17 个 outcomes/traces 全匹配，七个注入故障均正确触发 gate 失败。`artifacts/plan-replay/report.json` 虽为 `passed=true`，但 provenance 是 dirty 的非 HEAD 提交，且结果不是 17 个独立测试；最终 combined CI 仍待核对，未测模型指标为 `unknown`，不推导质量或成本收益。
+Plan [冻结离线回放](../../agent-harness/plan-replay/README.md)锁定期望样本、摘要与逐例分母，失败/跳过不算通过。2026-10-31 根本地 normal→all7negative→normal 三次 replay 均 exit 0；当前 v2 单一 SQL/HTTP fixture 的 17 个 outcomes/traces 全匹配，七个注入故障均正确触发 gate 失败。`artifacts/plan-replay/report.json` 虽为 `passed=true`，但 provenance 是 dirty 的非 HEAD 提交，且结果不是 17 个独立测试；当时最终 combined CI 仍待核对，后续 #831 工程验收见上述摘要；未测模型指标为 `unknown`，不推导质量或成本收益。

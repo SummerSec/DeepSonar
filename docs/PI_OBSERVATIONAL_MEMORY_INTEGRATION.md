@@ -1,7 +1,7 @@
 # pi-observational-memory 集成
 
-> 状态：A/B/C 实现、定向回归及本地构建镜像内真实 RPC/生产启动守卫正负例已验证；最终组合 CI、发布证据和收益评估分别保留。
-> 同步日期：2026-10-31
+> 状态：本轮约定工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)；下文本地镜像 RPC/生产启动守卫和定向回归保留历史范围，后续修复 SHA、正式发布和收益评估另计。
+> 同步日期：2026-11-01
 
 ## 范围
 
@@ -56,7 +56,7 @@ Memory 只属于一个冻结 Job/session 的上下文状态。它不产生 DeepS
 
 本片对应 `FR-JOB-009`、`FR-IMG-003`、`FR-CRED-002` / `003` / `004`、`NFR-SEC-004` 和 `CON-005` / `008` / `009`。已核对 `DESIGN.md` 的运行时快照、插件和镜像边界，以及 architecture 规格与 traceability 中对应归属；架构视图、可信内核和 ADR 的同步由主线程按本次证据完成。
 
-## 本次验证
+## 历史验证（2026-10-31）
 
 已执行并通过（2026-10-31）：
 
@@ -73,7 +73,7 @@ Memory 只属于一个冻结 Job/session 的上下文状态。它不产生 DeepS
 - `packages/shared-types/src/pi-extensions.ts` 与 `agent-runtime-profile.ts` 的直接 TypeScript 严格检查通过；主线随后核验 S3 类型/runtime build、Scheduler/Web tsc 通过。
 - A 片路径的 `git diff --check`：通过。
 
-尚未通过或未执行：
+截至 2026-10-31 当时尚未通过或未执行（后续 #831 工程验收见文首，以下不作当前 CI 状态）：
 
 - S3 类型/runtime build、Scheduler typecheck 和 Web tsc 已通过；这只证明类型/构建链路，不证明真实 S3 外部存储或生产部署验收。
 - 最终当前 PR 远端 CI、最终 main CI 与发布通道/平台镜像、registry/catalog 证据仍未完成；本地 base 镜像验收不等于这些范围通过。

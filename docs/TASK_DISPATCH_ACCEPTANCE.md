@@ -1,9 +1,15 @@
 # 任务下发验收矩阵（#767）
 
-> 状态：当前集成实现与分范围证据盘点；可信授权及 Plan v2 已接线，最终组合验收和独立质量缺口仍显式保留。
-> 同步日期：2026-10-31
+> 状态：本轮约定工程已随 #831 在 fdb55a01 主线 Actions 验收；历史分范围证据、暂缓质量与后续发布验收分别记录。
+> 同步日期：2026-11-01
 
 原 issue 要求按场景明确目标、范围、授权、材料与完成条件，并在创建/派发前发现不满足的前置条件。后续 #794、#796、#797、#798 分别补充目标相关研究候选、报告防误报、来源隔离判据评审及非 Finding 交付。下表不把源码或测试入口存在等同于本次已运行通过。
+
+## #831 engineering acceptance (2026-11-01)
+
+[#831](https://github.com/SummerSec/DeepSonar/pull/831) 最终 PR head `9e70a74ee83261d70c2fa36eb57c66333f1334de` 与合并主线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 各通过 26 个适用检查、六个 Actions 工作流。[主线核心 CI 41298113058](https://github.com/SummerSec/DeepSonar/actions/runs/41298113058) 包含真实 PostgreSQL/schema67 重建、PGDMP 备份/pg_restore 恢复、Plan v2 integration，以及 Pi OM budget/真实 SQL/HTTP 套件；#767/#775/#815/#819/#822 的本轮约定工程已收口。Finding 工程与暂缓质量的细分见[评估专题](<PROJECT_FINDING_EVALUATION.md#819-sql-quality-engineering-2026-11-01-merged-engineering-slice>)。
+
+该 SHA 是已验收工程基线，不代表后续 #838 修复、新的最终 main 或正式 Release 已通过。下文 2026-10-31 的本地、dirty replay、schema66 和 WIP 镜像记录保留原范围，不能追溯升级为最终 SHA 证据。独立质量及后续 Host 证书/CAS 晋升/公开强关系按[本轮范围](<../AGENTS.md#豁免范围>)暂缓，质量和模型成本收益保持 `unknown` / `not_evaluated`；全部新增测试、构建和验证只在 Actions 执行。
 
 ## 原始下发要求
 
@@ -27,7 +33,7 @@
 | 判据证据评审 | #797 普通 Job 来源隔离、当前 Attempt/字节、冲突/失效、预算保护 | 不认证不同人/模型；不等于提交资格 | 不默认要求外部人/模型认证 |
 | 工程交付与合法负结果 | #798 task.result Fact Artifact；delivery/negative_result 可评，blocked/not_executed 保留缺口 | 汇总零 Finding、失败来源、未执行、部分覆盖与预算回归；负结果不是整体完成 | 无 |
 | 高标准安全提交候选 | 已有规则材料身份与声明筛选、技术 Verify、通用判据评审；#822 增加操作员准入与独立资格投影 | 适用攻击链、knownness 对目标版本的适用性仍需对应依据；资格投影不认证外部官方规则，也不可由 severity/相似词推导 | 资格绑定具体程序/版本与当前证据；不自动提交漏洞 |
-| #775 执行与完成门 | 当前 Plan v2 用户 objective CAS、lifetime 预算、多轮依赖执行、实际留存/输出关联与原操作员完成门；持久回执 | v2 回放已有本地 SQL/HTTP fixture 核验，最终组合 CI 待验；新评审/输出关联不自动变成 Plan authority | 复用已有 Hub Intent admission；不新增执行通道、不替代原绑定 |
+| #775 执行与完成门 | 当前 Plan v2 用户 objective CAS、lifetime 预算、多轮依赖执行、实际留存/输出关联与原操作员完成门；持久回执 | #831 工程已按上述 Actions 证据验收；历史本地 v2 回放保留原范围，新评审/输出关联不自动变成 Plan authority | 复用已有 Hub Intent admission；不新增执行通道、不替代原绑定 |
 
 ## Plan 关联边界与实际验收
 
@@ -66,7 +72,7 @@
 
 ### 2026-10-31 v2 回放、bootstrap/terminal 与 schema rebuild 追加核验
 
-- **Plan v2 读取与回放。** 当前 Job 的 `graph_query(kind=plan_objective)` 已按上述边界独立于已接受 Plan 返回 `items[0]` 完整持久化目标 tuple；读取预算或 input hash 不满足时保留失败，不把部分响应当完整依据。bootstrap fixture 仅用该 HTTP 读取结果构造首个 v2 提案，并观测到恰好一个就绪 Worker，不将此 fixture 结果升格为所有 route 的协议约束。`C:\Users\sin\AppData\Local\Temp\deepsonar-work\parent-replay-status.json` 记录 normal → all7negative → normal 三次退出码均为 0；normal SQL/HTTP fixture 的 17 条 outcome/trace 全部匹配，7 种注入负例均完成并正确使 gate 失败。`artifacts/plan-replay/report.json` 虽为 `passed=true`/17 traces，但 provenance 是 dirty 的 `ba41a9f44e72e8aa8ccbb0ecba95e305645b52a7`，不是 HEAD `5619154f`，因此不能称为该 HEAD 的精确最终验收，也不是 17 个独立测试；最终组合 CI 仍待核对。
+- **Plan v2 读取与回放。** 当前 Job 的 `graph_query(kind=plan_objective)` 已按上述边界独立于已接受 Plan 返回 `items[0]` 完整持久化目标 tuple；读取预算或 input hash 不满足时保留失败，不把部分响应当完整依据。bootstrap fixture 仅用该 HTTP 读取结果构造首个 v2 提案，并观测到恰好一个就绪 Worker，不将此 fixture 结果升格为所有 route 的协议约束。`C:\Users\sin\AppData\Local\Temp\deepsonar-work\parent-replay-status.json` 记录 normal → all7negative → normal 三次退出码均为 0；normal SQL/HTTP fixture 的 17 条 outcome/trace 全部匹配，7 种注入负例均完成并正确使 gate 失败。`artifacts/plan-replay/report.json` 虽为 `passed=true`/17 traces，但 provenance 是 dirty 的 `ba41a9f44e72e8aa8ccbb0ecba95e305645b52a7`，不是 HEAD `5619154f`，因此不能称为该 HEAD 的精确最终验收，也不是 17 个独立测试；当时组合 CI 仍待核对，后续 #831 工程验收见文首。
 - **Bootstrap/terminal。** `C:\Users\sin\AppData\Local\Temp\deepsonar-work\terminal-bootstrap-regression.log` 为 12 passed、0 skipped，覆盖一个 bootstrap SQL fixture、普通 Hub 无新 v1 审计与 dependent execution/terminal rollback fixture、10 个 contract unit。已核验的 core `finalizeJob` 终态事务把 Job/model token、Control token、audit 和终态收口放在同一事务，终态后的实际 HTTP 请求断言 401；`gateway-token-revocation.ts` 复用调用方 Job 锁，不另取独立 Job 锁，也不吞掉失败。该结论不外推到所有 drain/Reaper 路径。
 - **Schema rebuild。** `C:\Users\sin\AppData\Local\Temp\deepsonar-work\rebuild-full.stdout.log` 与 `rebuild-status.json` 记录 19 passed、0 failed、0 skipped（日志完成时间 19:56），含固定历史 v62/v63/v64 dump/pg_restore 恢复及七张新 relation 表。主线程还实际执行 CLI plan/apply，基线 v65→v66，包含真实 `pg_dump` 和备份恢复；最后恢复原始 v65 与一个项目。本地镜像/版本准入证据见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)，最终组合 CI 与发布通道/平台证据另验。
 
@@ -169,6 +175,6 @@
 | #822 后续加固 | 操作员见证材料/多次评审、repeatable read 与证据失效已集成 | 独立外部官方来源真实性、不同自然人的物理独立性 |
 | #815 与 schema/发布 | 实际本地 base 镜像的 installed canonical Pi/OM RPC、独立生产 guard 正负例及封装/版本准入/适配器回归已通过，身份、日志和分母集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；内核请求前 transport/持久零用量结算与防冒充见 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md)；schema rebuild/CLI plan/apply/原库恢复见上文 | 本地 image ID 不代表发布 OCI manifest/catalog digest；其他镜像/平台、最终组合 CI、发布及质量/成本收益仍另验 |
 
-这些是主线程实际执行并独立核验的当前根分范围结果，套件与定向文件可能重叠，不求和。早期记录保留其历史范围，不再用超时或旧计数描述最新完整脚本状态。当前 PR 远端 CI、合并后最终 main CI 和 release 均未完成。
+这些是主线程截至 2026-10-31 实际执行并独立核验的历史根分范围结果，套件与定向文件可能重叠，不求和；早期超时或旧计数不覆盖当时最新完整脚本状态。当时 PR/main CI 和 release 均未完成；后续 #831 工程 Actions 验收见文首，不追溯改变该历史证据的范围。
 
 纳入本轮交付范围的实现及对应 PR、最终 SHA 的现有 GitHub Actions 适用检查实际全绿后才可合并；合并后核对最终 main，并完成既有 v0.6.3 发布硬门。2026-11-01 用户已明确暂缓独立质量及后续质量门，不作为本轮前置条件；质量仍 unknown/not_evaluated、强关系 published=false，不能用 CI 或文档隐藏未交付范围。#833/#834 按用户要求忽略；无需人工参与的后续自动化验证集中在 [#835](https://github.com/SummerSec/DeepSonar/issues/835)，不替代当前红灯修复或既有发布硬门。v0.6.2 正式发布保持不可变；未执行生产部署与真实模型试验。

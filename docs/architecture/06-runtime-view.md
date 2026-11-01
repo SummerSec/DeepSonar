@@ -5,13 +5,13 @@
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
-## Finding quality worker and preload (#819, 2026-11-01 Root WIP)
+## Finding quality worker and preload (#819, 2026-11-01 merged engineering slice)
 
 [Startup](<../../apps/scheduler/src/index.ts>) freezes [loaded quality assets](<../../apps/scheduler/src/domains/project-finding-research/quality-assets.ts>) before application schema SQL/service startup. Node24 synchronous [source capture](<../../apps/scheduler/src/domains/project-finding-research/quality-source-capture.ts>) is preloaded after TSX/source transforms and before the fourteen governed modules, capturing actual nextLoad source bytes before evaluation. [Dev/start](<../../apps/scheduler/package.json>) and CI direct compiled starts carry that preload. Missing/late capture fails closed, with no disk reread; Node/loader/preload are TCB, not self-signature or successful evaluation proof.
 
 The existing maintenance gate owns [quality-worker](<../../apps/scheduler/src/domains/project-finding-research/quality-worker.ts>) startup/stop. Stop synchronously forbids new ticks and returns its owned in-flight drain; startup retains drains across maintenance close/reopen and waits for them before SQL end. Each RR tick locks current/head/work and appends one admitted holdout-subject observation with generation/ordinal checkpoint. A separate completion tick appends zero observations, re-observes the full bounded cohort, recomputes metrics and binds actual work/dataset/run/evaluation. Report and review readers reconstruct the same durable/current-source chain in their caller RR snapshot; stale/conflicting work fails closed. This is bounded engineering, not measured throughput or production drain evidence.
 
-Protocol freeze/declaration precede separately committed raw holdout exposure; later parse/admission failure cannot erase it. `admitted`, `completed` and `reviewed` are structural stages, never current quality certificates. Host verification of independent evidence, certificate/CAS promotion and guarded public relations remain unimplemented; status stays not_evaluated/published=false. Current schema67 SQL/HTTP and final CI acceptance are pending, separately from historical schema66 evidence and [independent quality inputs](<../PROJECT_FINDING_EVALUATION.md>).
+Protocol freeze/declaration precede separately committed raw holdout exposure; later parse/admission failure cannot erase it. `admitted`, `completed` and `reviewed` are structural stages, never current quality certificates. Host verification of independent evidence, certificate/CAS promotion and guarded public relations remain unimplemented; status stays not_evaluated/published=false. The agreed schema67 SQL/HTTP/worker engineering slice passed at fdb55a01 in Actions; subsequent #838 repair checks and final-main acceptance are separate. Historical schema66 evidence and [independent quality inputs](<../PROJECT_FINDING_EVALUATION.md>) do not replace either engineering or quality acceptance.
 
 ## 凭据与 CLI 解析（#757）
 
@@ -125,7 +125,7 @@ RPC 按[帧与保存预算](../../packages/runtime-sandbox/src/pi-rpc-output.ts)
 
 后台请求只有在内核严格确认请求前 transport 失败、且持久写入零用量和 effect `never_started` 后才返回 `503 gateway_transient/not_started`；请求次数不退还，settlement 失败保留 pending/unknown 并返回 409，provider JSON/SSE/refusal 不能伪造该分类。详见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。
 
-有界 recall、新 Session/RPC 大帧归档与 viewer 脱敏保留控制身份，memory 不贡献 Fact/Evidence/完成 authority。历史 HTTP preview/download 已在截断/发送前按 Pi header/manifest 独立脱敏，immutable archive metadata 不变，projection bytes/SHA/Content-Digest 另报，相关集成已通过。实际本地 base 镜像 canonical RPC 和独立生产 guard 已验，证据见上述 RPC 专题；最终组合 CI、发布通道/平台和 registry/catalog 仍另验，质量/成本收益 unknown。源码见[wrapper](../../agent-harness/pi-observational-memory-governed.ts)、[共享脱敏策略](../../packages/shared-types/src/pi-observational-memory-redaction.ts)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。Runtime、历史归档和 Web 复用该浏览器安全策略；Node 流式缓冲留在 runtime-sandbox，Web 隔离镜像无需复制运行时源码。
+有界 recall、新 Session/RPC 大帧归档与 viewer 脱敏保留控制身份，memory 不贡献 Fact/Evidence/完成 authority。历史 HTTP preview/download 已在截断/发送前按 Pi header/manifest 独立脱敏，immutable archive metadata 不变，projection bytes/SHA/Content-Digest 另报，相关集成已通过。实际本地 base 镜像 canonical RPC 和独立生产 guard 已验，证据见上述 RPC 专题；本轮工程已随 [#831 在 fdb55a01 主线 Actions 验收](<../TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA、发布通道/平台和 registry/catalog 仍另验，质量/成本收益 unknown。源码见[wrapper](../../agent-harness/pi-observational-memory-governed.ts)、[共享脱敏策略](../../packages/shared-types/src/pi-observational-memory-redaction.ts)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。Runtime、历史归档和 Web 复用该浏览器安全策略；Node 流式缓冲留在 runtime-sandbox，Web 隔离镜像无需复制运行时源码。
 
 ## DSH 子代理与完成门（#766）
 

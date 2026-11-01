@@ -1,7 +1,7 @@
 # AI-native 可信执行内核与插件组合工作流
 
 > 状态：长期设计提案，尚未整体落地。当前实现按 [DESIGN.md](../DESIGN.md)、[架构归属表](architecture/README.md)、代码、schema 与 OpenAPI 核对；旧 `docs/ARCHITECTURE.md` 仅作历史对照。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 > 关联：[#443](https://github.com/SummerSec/DeepSonar/issues/443)、[#444](https://github.com/SummerSec/DeepSonar/issues/444)、[#445](https://github.com/SummerSec/DeepSonar/issues/445)、[#446](https://github.com/SummerSec/DeepSonar/issues/446)。
 
 ## 1. 设计判断
@@ -228,7 +228,7 @@ proposed
 
 当前入口由 `buildGraphSnapshot`、GraphScope、有界字符预算、Job-scoped `graph_query` 与 canonical UUID 校验组成，启动输入只给有界骨架，模型按需读取。上段细分查询名是长期方向，不冒充当前 operation 清单。不得读取其他项目、未授权 evidence、凭据或原始控制面秘密。上下文传输和记忆只能提供资料，不能改变 Canvas、events、Fact 或 Evidence 的权威性。
 
-#815 的 Job/当前 Session 观测记忆已进入 2026-10-31 根工作树，遵守 [ADR 0013](architecture/adr/0013-governed-pi-memory.md)：固定插件与 wrapper 指纹、冻结模型/配置、Gateway-only 独立 workload、有限总额的显式主/后台分配、保守 pending/unknown 记账及终态撤销由内核拥有。核心 `finalizeJob` 终态路径已验证 model 与 Control token 撤销共用终态事务；不把该证据扩展为所有旧 drain/reaper 路径均无 best-effort。冻结总额不限时保留不限，不隐式推导比例。wrapper/RPC/历史 Session preview/download 实施有界脱敏，projection bytes/SHA/Content-Digest 另报。实际本地 base 镜像的 canonical RPC、独立生产内容 guard 及封装/OM 专属版本准入/适配器回归已通过，集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；内核已知请求前 transport 的持久零用量结算和 provider 防冒充见 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。最终组合 CI 与发布通道/平台、registry/catalog 证据未完成，质量/成本收益 unknown；局部实现不表示完整长期 Experience 已交付。
+#815 的 Job/当前 Session 观测记忆已进入 2026-10-31 根工作树，遵守 [ADR 0013](architecture/adr/0013-governed-pi-memory.md)：固定插件与 wrapper 指纹、冻结模型/配置、Gateway-only 独立 workload、有限总额的显式主/后台分配、保守 pending/unknown 记账及终态撤销由内核拥有。核心 `finalizeJob` 终态路径已验证 model 与 Control token 撤销共用终态事务；不把该证据扩展为所有旧 drain/reaper 路径均无 best-effort。冻结总额不限时保留不限，不隐式推导比例。wrapper/RPC/历史 Session preview/download 实施有界脱敏，projection bytes/SHA/Content-Digest 另报。实际本地 base 镜像的 canonical RPC、独立生产内容 guard 及封装/OM 专属版本准入/适配器回归已通过，集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；内核已知请求前 transport 的持久零用量结算和 provider 防冒充见 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。本轮工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA 与正式发布通道/平台、registry/catalog 仍另验，质量/成本收益 unknown；局部实现不表示完整长期 Experience 已交付。
 
 ## 10. 分阶段实施路线
 

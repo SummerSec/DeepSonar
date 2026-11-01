@@ -1,7 +1,7 @@
 # Plan 缺口投影与操作员证据绑定（#775 A）
 
 > 状态：A 的审计可见性与操作员判据绑定可用；B/v1 保留只读历史，新写入/执行仅允许 C/v2。当前实现包含用户目标 CAS、统一 Hub Intent/Job 准入、Job-scoped objective 读取、留存输出依赖门、多轮路线修订和持久停止投影。真实模型与非模型语义质量未验证。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 ## 读取与报告
 
@@ -105,7 +105,7 @@ Scheduler 按用户授权的 `max_tasks`、`max_rounds`、`max_parallel_tasks` �
 
 2026-10-31 本地 `ci:unit:plan-protocol` 通过含重启投影、超出 number 精确范围的相邻事件 ID、活动/ready 延后评估及生命周期不重置的单元回归。`plan-execution-stops.integration.test.ts` 已接线真实 SQL/HTTP、owner/child 回调及独立 Node 进程重建回归；本地没有 `TEST_DATABASE_URL`，新增 SQL 场景尚未执行，必须由最终提交的 CI 核验，不能将跳过写成通过。
 
-当前 v2 接口、数据库链路和 fake-worker 夹具位于 `packages/shared-types/src/plan.ts`、`apps/scheduler/src/domains/plan-protocol/`、`apps/scheduler/src/domains/event-ingestion/side-effects.ts` 及 `plan-execution*.integration.test.ts`。bootstrap fixture 仅用 HTTP objective 读取结果构造首个 v2 提案，并观测到恰好一个就绪 Worker；这只是该 fixture 的方法和结果，不是通用首提案/route 约束。本地回放分项结果见下方[冻结离线回放](#冻结离线回放)；`artifacts/plan-replay/report.json` 的 passed/provenance 为 dirty 的非 HEAD 提交，不能写成 `5619154f` 精确最终验收，也不能把它表述为 17 个独立测试；最终组合 CI 仍待核对。真实模型、生产部署和人工语义质量仍未验证。
+当前 v2 接口、数据库链路和 fake-worker 夹具位于 `packages/shared-types/src/plan.ts`、`apps/scheduler/src/domains/plan-protocol/`、`apps/scheduler/src/domains/event-ingestion/side-effects.ts` 及 `plan-execution*.integration.test.ts`。bootstrap fixture 仅用 HTTP objective 读取结果构造首个 v2 提案，并观测到恰好一个就绪 Worker；这只是该 fixture 的方法和结果，不是通用首提案/route 约束。本地回放分项结果见下方[冻结离线回放](#冻结离线回放)；`artifacts/plan-replay/report.json` 的 passed/provenance 为 dirty 的非 HEAD 提交，不能写成 `5619154f` 精确最终验收，也不能把它表述为 17 个独立测试。当前 v2 工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA 仍须另验；真实模型、生产部署和人工语义质量仍未验证。
 
 ## 一次补证的执行投影
 
@@ -142,4 +142,6 @@ Scheduler 按用户授权的 `max_tasks`、`max_rounds`、`max_parallel_tasks` �
 
 ## 冻结离线回放
 
-[控制回放基线](../agent-harness/plan-replay/README.md) 保存 #809 的 v1 单步历史场景，仍只作历史控制回归对照。当前 v2 回放迁移已由 SQL/HTTP fixture 本地核验：normal → all7negative → normal 三次 parent replay 均 exit 0，正常 fixture 的 17 条 outcome/trace 全匹配，7 种注入负例均正确触发 gate 失败；`report.json` 的 dirty provenance 不是 HEAD `5619154f` 的精确验收证据，且该结果不是 17 个独立测试。最终组合 CI 仍待主线程核对；目标遗漏、模型 token 与质量保持 unknown，真实模型效果未验证。
+以下为 2026-10-31 的历史回放范围；后续 #831 工程 Actions 验收见文内链接，不改变该报告的 dirty provenance。
+
+[控制回放基线](../agent-harness/plan-replay/README.md) 保存 #809 的 v1 单步历史场景，仍只作历史控制回归对照。当前 v2 回放迁移已由 SQL/HTTP fixture 本地核验：normal → all7negative → normal 三次 parent replay 均 exit 0，正常 fixture 的 17 条 outcome/trace 全匹配，7 种注入负例均正确触发 gate 失败；`report.json` 的 dirty provenance 不是 HEAD `5619154f` 的精确验收证据，且该结果不是 17 个独立测试。当时最终组合 CI 仍待主线程核对；后续 #831 工程验收不追溯改变这些回放字节。目标遗漏、模型 token 与质量保持 unknown，真实模型效果未验证。

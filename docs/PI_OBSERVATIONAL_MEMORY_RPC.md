@@ -1,7 +1,7 @@
 # Governed Pi Observational Memory RPC Boundary
 
-> 状态：本地构建 base 镜像的 canonical Pi/OM 真实 RPC、独立生产启动守卫正负例及定向回归已通过；最终组合 CI 与发布镜像证据待完成。
-> 同步日期：2026-10-31
+> 状态：本轮约定工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)；下文本地 canonical Pi/OM RPC、独立生产启动守卫及定向回归保留历史范围。后续修复 SHA 与正式发布镜像仍另验。
+> 同步日期：2026-11-01
 
 This slice integrates the pinned `pi-observational-memory@3.1.4` source with
 Pi 1.4.0. Memory is session context, never a DeepSonar Fact, independent
@@ -270,7 +270,7 @@ Pi canonical bin 是 `dist/bundle/cli.js`；已修正原先假定 bin 只在包�
 内核已知请求前 transport/持久结算及 provider 防冒充证据见
 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md)，不与 RPC 计数相加。
 
-最终当前 PR 远端 CI、合并后最终 main CI、发布通道/平台镜像与 registry/catalog 证据尚未完成。
+截至 2026-10-31 当时，最终 PR/main CI 与发布通道/平台镜像、registry/catalog 证据尚未完成；后续 #831 工程验收见文首，不追溯认证这个 WIP 镜像。
 本地 base 镜像结果不证明所有镜像/平台，也不改写已发布 v0.6.2 的不可变 digest。
 外部 S3 存储未实测；质量、价格/成本收益、容量与 SLA 保持 `unknown`。
 
