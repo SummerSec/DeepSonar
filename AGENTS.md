@@ -21,7 +21,7 @@
 开始改动前按以下顺序阅读：
 
 1. [`DESIGN.md`](DESIGN.md)：当前 as-built 模型、内核边界、Hub、Capability Pack、Job、Verify、Research、Report、UI 和实现硬约束；
-2. [`docs/architecture/README.md`](docs/architecture/README.md)：系统规格、追溯矩阵、架构视图与 ADR；按改动面读取权威正文；
+2. [`docs/architecture/README.md`](docs/architecture/README.md)：系统规格、追溯矩阵、对应架构视图与 ADR；按改动面读取权威正文；
 3. [`docs/README.md`](docs/README.md)：专题文档的 as-built / 历史 / 进行中状态；
 4. [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)：长期 AI-native 可信内核、插件准入、RepairFeedback、Receipt 和 Crash Matrix；
 5. 代码、`database/schema.sql`、OpenAPI 和测试。
@@ -39,6 +39,20 @@
 ## 平台任务下发必须加载 Skill（#767）
 
 创建、拆分或重新下发 DeepSonar 平台任务前，必须加载并执行 [deepsonar-management](skills/deepsonar-management/SKILL.md)，按其中指向的任务下发流程完成整理与复核。详细规则只在该 Skill 维护，不在本文件复制。普通仓库代码修改、代码评审和编码子任务委派不属于平台任务下发，不因此套用业务任务模板。
+
+## CI gate：何时触发，何时必须等
+
+**开发不必逐个 commit 等全量 CI；合并或宣告工程验收通过前，必须核对最新合并候选。** 维护者反馈一次完整检查可能接近 1 小时（2026-11-01）；这是整轮 CI 的等待时间，不是 `gate` 单个 job 的固定时长。
+
+| 操作 | 当前行为（以 [ci.yml](.github/workflows/ci.yml) 为准） |
+| --- | --- |
+| 本地 `git commit`；推送到尚未开 PR 的普通功能分支 | 不触发核心 `ci`。开发中按改动面做定向验证，把相关修复集中推送，不必为每个 commit 开 PR 或手动补跑。 |
+| 打开、重新打开 PR，或向已打开的 PR 推送新提交 | 触发 `ci`，**Draft 也一样**。按整个 PR 而非最后一个 commit 分类：只有命中安全文档白名单才跳过重型 `gate`，文档检查仍跑。改动命中专项路径时，[reverse-runtime](.github/workflows/reverse-runtime.yml) 等还会独立运行。单纯切换 Draft / Ready 当前不会触发新一轮。 |
+| 合并或推送到 `main`；手动运行 `ci` | `main` 的改动未被 `paths-ignore` 排除时自动跑完整核心 CI。手动运行也跑完整核心 CI，不是快检；只在缺少必要验证或需要排障时使用，不要与同一提交正在运行的检查重复。 |
+
+**Agent 的等待规则：** 开发中 CI 排队或运行时，记录 PR、提交 SHA、运行链接和未完成项，即可继续不依赖结果的工作或向用户交接；不要反复轮询、推空提交或要求用户在线等候。出现失败先看失败步骤，再集中推送修复。合并前查看 PR 的 Checks，确认最新 head 对应的 `ci-summary` 和所有适用专项通过；旧提交全绿、必跑项缺失、失败或取消都不能作为通过依据。发布仍按原有发布门禁执行。
+
+**[#836 分层方案](https://github.com/SummerSec/DeepSonar/issues/836) 尚未启用。** 只有工作流合入并启用后，才按「开发中保留 Draft 跑快检 → 准备合并时转 Ready，无需空提交即可跑完整核心及适用专项 → Ready 后再推新提交重新验收」操作。实施该方案时同步更新本节，不把提案当成当前开关。
 
 ## 常用命令
 
@@ -241,7 +255,7 @@ Canvas 只读，Web 对当前可见投影使用 elkjs 布局，超阈值或失�
    - 写上核对基线（`main <sha>` 或 `YYYY-MM-DD`，二者至少一项），例如「`DEEPSONAR_JOB_TOKEN_MAX_REQUESTS` 未设置即 0 = 不限（核对 main `2b76ac25`）」；
    - 或**不复制数字**，直接指向代码或权威文档（如 [USAGE_LIMITS.md](docs/USAGE_LIMITS.md)、`apps/scheduler/src/config.ts`）。
 
-   禁止写「本 PR 基线默认 N」「当前默认 N」这类**无归属的数字**。理由：这类漂移机检抓不到——实测案例是 `DEEPSONAR_JOB_TOKEN_MAX_REQUESTS` 默认值从 500 改为 0（不限），而一份文档的「本 PR 基线默认 500」在 `docs-freshness` 全绿的情况下静默过期了整轮。若同一数字同时存在于权威文档（如 `USAGE_LIMITS.md`），其他文档应链接而不复述。
+   禁止写「本 PR 基线默认 N」「当前默认 N」这类**无归属的数字**。理由：这类漂移机检抓不到——实测案例是 `DEEPSONAR_JOB_TOKEN_MAX_REQUESTS` 默认值从 500 改为 0（不限），而一份文档的「生产默认 N」在 `docs-freshness` 全绿的情况下静默过期了整轮。若同一数字同时存在于权威文档（如 `USAGE_LIMITS.md`），其他文档应链接而不复述。
 
 其中 1 的版本字面量、5 的命令与链接、以及 2 的已删机制残留已由 `pnpm ci:unit:docs-freshness` 机检并在 CI 中阻断；**第 3 项（as-built 与代码相反）与第 6 项（可变数字的时效）无法自动化**，必须人工逐条核——这正是本条硬门不能省的理由。
 
