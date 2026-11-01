@@ -87,6 +87,18 @@ jobs:
       - name: Docs freshness guard (version literals, pnpm scripts, links, removed mechanisms)
         run: pnpm ci:unit:docs-freshness
 
+      - name: Changelog validator and current release section
+        run: |
+          pnpm ci:unit:changelog
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { validateChangelog } from "./agent-harness/validate-changelog.mjs";
+          const source = readFileSync("CHANGELOG.md", "utf8");
+          const [version, previousVersion] = [...source.matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map(match => match[1]);
+          const result = validateChangelog({ source, version, previousVersion, tag: `v${version}` });
+          console.log(`Validated v${version} against v${result.previousVersion}: ${result.compareUrl}`);
+          NODE
+
   windows-upgrade-backend:
     runs-on: windows-latest
     needs: changes

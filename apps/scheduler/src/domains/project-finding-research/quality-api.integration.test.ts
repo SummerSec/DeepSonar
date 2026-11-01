@@ -263,7 +263,9 @@ test("genuine PostgreSQL/root HTTP: stored sessions admit, execute and review a 
       assert.deepEqual(await rows(), history); assert.equal((await head()).version, version);
       const revoke = await ok("POST", path + "/revoke", { expected_version: (await head()).version, reason: "synthetic source drift" }, sessions[1]!);
       assert.equal(revoke.quality_status, "not_evaluated"); assert.equal((await head()).phase, "revoked");
-      assert.equal((await head()).first_access_record_id, firstAccess); assert.deepEqual((await rows()).slice(0, history.length), history);
+      assert.equal((await head()).first_access_record_id, firstAccess);
+      // postgres.js Result.slice returns Array; compare every preserved row, not container prototypes.
+      assert.deepEqual((await rows()).slice(0, history.length), [...history]);
       assert.deepEqual(await current(), baselineCurrent);
       const before = await rows(), refused = await upload(JSON.stringify(dataset)); assert.equal(refused.statusCode, 409);
       const added = (await rows()).filter(row => !before.some(old => old.id === row.id));
