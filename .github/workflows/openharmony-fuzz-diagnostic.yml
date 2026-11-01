@@ -37,7 +37,9 @@ jobs:
             printf 'source=%s\nbase=%s\n' "$RELEASE_SOURCE" "$RELEASE_BASE"
             git status --porcelain
             uname -a
-            sysctl vm.mmap_rnd_bits vm.mmap_rnd_compat_bits
+            if ! sudo sysctl vm.mmap_rnd_bits vm.mmap_rnd_compat_bits; then
+              printf 'ASLR host facts unavailable; sanitizer result remains authoritative.\n'
+            fi
             docker version
           } > "$RUNNER_TEMP/oh-diagnostic/host.txt" 2>&1
       - name: Prepare diagnostic-only pre-smoke image definition
