@@ -82,7 +82,7 @@ test("quality immutable receipts enforce scope, actor/digest bounds, retries, al
     await record(db, f.a, f.p, { kind: "holdout_access" });
     await record(db, f.a, f.p, { kind: "alias_resolution", subject: first, requestKey: "retry", body: { alias_status: "ambiguous" } });
     await assert.rejects(db`INSERT INTO project_finding_quality_records(project_id,protocol_id,kind,record_digest,actor_type,actor_name,body_json)
-      VALUES(${f.a},${f.p},'holdout_payload',${digest},'internal','fixture',${"{"}::jsonb)`, { code: "22P02" });
+      VALUES(${f.a},${f.p},'holdout_payload',${digest},'internal','fixture',${"{"}::text::jsonb)`, { code: "22P02" });
     const rejection = await record(db, f.a, f.p, { kind: "rejection", subject: first, body: { error_code: "HOLDOUT_JSON_INVALID", raw_input_digest: digest } });
     assert.equal((await db`SELECT count(*)::int AS n FROM project_finding_quality_records WHERE protocol_id=${f.p} AND kind='holdout_access'`)[0].n, 3);
     assert.equal((await db`SELECT subject_record_id FROM project_finding_quality_records WHERE id=${rejection}`)[0].subject_record_id, first);

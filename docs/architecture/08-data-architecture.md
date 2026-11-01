@@ -40,7 +40,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及本批其他 schema 变更；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。完整 rebuild/恢复夹具已本地核验（含固定历史 v62/v63/v64 dump/pg_restore 与七张新 relation 表），不再把 rebuild 写成 pending；结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，最终组合 CI 仍由主线程核对。
 
-保鲜门禁的单处编号核对：当前主线 v66（核对日期 2026-10-31，集成分支 `ca7d841c`；未发布，合并身份关系与 OM ledger 变更）。其他摘要只链接源码；后续源码推进须重核本处，不能把编号当成重建/恢复证据。
+保鲜门禁的单处编号核对：当前主线 v67（核对日期 2026-11-01，集成源码 `55b64622`；未发布，纳入质量协议与观察账本）。`ca7d841c` 的 schema66 重建/恢复证据只代表 2026-10-31 的历史切片，不代表 schema67 已通过。其他摘要只链接源码；后续源码推进须重核本处，不能把编号当成重建/恢复证据。
 
 ### 任务契约快照（#767）
 

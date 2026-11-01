@@ -3,6 +3,7 @@
 > 状态：**#770 offline tooling is merged; #819 quality engineering is partially implemented in the schema67 Root worktree. Current certificates, CAS promotion, guarded publication and independent human-quality acceptance are not delivered.**
 > 收口（2026-10-31）：随 #770 按已交付切片关闭，强关系由 [#819](https://github.com/SummerSec/DeepSonar/issues/819) 独立实现。生产执行按 AGENTS.md「验收边界」豁免，但**不覆盖本文的人工质量验收**：人工质量评估仍记为未执行，工具与合成夹具不因此被解释为质量门通过；阈值提案仍为「待审阅」而非已批准。
 > 同步日期：2026-11-01
+> **v0.6.3 本轮范围（2026-11-01）**：按[最新用户范围决定](<../AGENTS.md#豁免范围>)，独立质量验证及后续质量门建设（脱敏独立人工标注、家族/资产分离调参与留出、Host 外部证据认证及当前证书、CAS 晋升、公开强关系建议）均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现工程和现有测试/权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试、构建和 typecheck 仅在 Actions 执行。质量仍为 `unknown` / `not_evaluated`，强关系 `published=false`；下文历史非豁免及强关系质量要求不表示本轮追加质量卡点，CI 全绿也不等于独立质量通过。
 
 本文承接[特征与候选专题](PROJECT_FINDING_RESEARCH.md)。本切片补充非模型验收工具：本地标注导入/校验、可追溯质量报告、字段覆盖/不足率、强关系摘要映射输入与后台积压资源测量。不导入生产数据库，不调用模型。命令成功只表示报告生成成功，不表示候选算法或强关系满足上线质量。
 

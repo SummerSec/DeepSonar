@@ -3,6 +3,7 @@
 > 状态：**C and D lexical/persistent candidates are merged; #819 identity/relation and schema67 quality protocol/SQL worker/report/review engineering are partially implemented in Root WIP. Independent quality, current certificates/promotion and public strong suggestions are not delivered.**
 > 收口（2026-10-31）：**#770 按已交付切片关闭**，强关系（同问题 / 同根因不同实例）由 [#819](https://github.com/SummerSec/DeepSonar/issues/819) 独立实现。生产执行按 AGENTS.md「验收边界」豁免，但不覆盖本文「强关系验收最小外部输入」与各未验证项。
 > 同步日期：2026-11-01
+> **v0.6.3 本轮范围（2026-11-01）**：独立质量验证、人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不阻塞本轮 PR 合并、工程 issue 收口或发布。已实现工程及现有测试/权限/CAS/发布抑制边界保留；只认最终 SHA 的现有 GitHub Actions 适用检查实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量前置要求不表示本轮追加卡点。完整口径见[本轮评估范围](<PROJECT_FINDING_EVALUATION.md>)。
 
 本切片依赖 #770 A 的独立 Job 来源身份，独立于 B 的项目查询增强。原 Finding、Artifact、Verify、人工处置和任务内 Research 都不由本投影改写。没有项目 Canvas、项目 Hub、模型调用、Job 跨任务接口或自动处置。
 

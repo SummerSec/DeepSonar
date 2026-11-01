@@ -126,14 +126,16 @@ test("docs-only runs the real freshness gate: good links pass, broken links fail
   const runDocs = () => spawnSync("pnpm", ["ci:unit:docs-freshness"], { cwd: root, env, encoding: "utf8" });
   const docsResults = { DOCS_ONLY: "true", ...Object.fromEntries(resultVars.map((name) => [name, "skipped"])) };
   try {
-    writeFileSync(fixture, "[README](../README.md)\n");
+    writeFileSync(fixture, "[README](../README.md)\n[Wrapped README](<../README.md>)\n");
     const good = runDocs();
     assert.equal(good.status, 0, good.stdout + good.stderr);
     assert.equal(runSummary(docsResults).status, 0);
-    writeFileSync(fixture, "[Broken](./ci-routing-missing-target.md)\n");
-    const bad = runDocs();
-    assert.notEqual(bad.status, 0, "broken link must fail real docs gate");
-    assert.match(bad.stdout + bad.stderr, /ci-routing-missing-target/);
-    assert.notEqual(runSummary({ ...docsResults, DOCS: "failure" }).status, 0);
+    for (const target of ["./ci-routing-missing-target.md", "<./ci-routing-missing-target.md>"]) {
+      writeFileSync(fixture, `[Broken](${target})\n`);
+      const bad = runDocs();
+      assert.notEqual(bad.status, 0, "broken link must fail real docs gate");
+      assert.match(bad.stdout + bad.stderr, /ci-routing-missing-target/);
+      assert.notEqual(runSummary({ ...docsResults, DOCS: "failure" }).status, 0);
+    }
   } finally { rmSync(fixture, { force: true }); }
 });

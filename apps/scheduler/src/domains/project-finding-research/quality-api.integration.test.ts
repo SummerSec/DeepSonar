@@ -229,8 +229,10 @@ test("genuine PostgreSQL/root HTTP: stored sessions admit, execute and review a 
         assert.equal(driftReview.json().error_code, "QUALITY_ADMITTED_SOURCE_CHANGED");
         assert.deepEqual(await rows(), before); assert.equal((await head()).version, version);
       } finally {
-        // Restore this disposable Finding exactly, including SQL microseconds; no history/Job rewrites.
-        await sql`UPDATE findings SET summary=${originalSource.summary},updated_at=${originalSource.updated_at}::timestamptz WHERE id=${findings[0]!}`;
+        // Bind as text before SQL casts: postgres.js's timestamptz serializer truncates microseconds.
+        await sql`UPDATE findings SET summary=${originalSource.summary},updated_at=${originalSource.updated_at}::text::timestamptz WHERE id=${findings[0]!}`;
+        const [restored] = await sql`SELECT updated_at::text AS updated_at FROM findings WHERE id=${findings[0]!}`;
+        assert.equal(restored!.updated_at, originalSource.updated_at);
       }
       const review = await ok("POST", path + "/reviews", body, sessions[1]!);
       assert.equal(review.quality_status, "not_evaluated"); assert.equal(review.chain.integrity_status, "structurally_valid");

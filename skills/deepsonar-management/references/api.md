@@ -200,7 +200,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 
 ### Finding 质量协议与工程报表（#819）
 
-这组接口用于受治理的工程评估，不是强关系质量证书或发布开关。必须使用 `POST /auth/login` 取得的真实数据库用户会话（`deepsonar_user_…` Bearer）、`admin` scope、admin/operator 角色及同项目权限；即使本地普通认证可省略，API/service token、Job/internal 和 bootstrap 主体也不能代替用户。所有路径拒绝 query 参数，成功元数据响应使用 `Cache-Control: no-store`。
+这组接口用于受治理的工程评估，不是强关系质量证书或发布开关。2026-11-01 用户决定本轮优先发布 v0.6.3，独立质量验证、人工数据集及后续证书/晋升/公开建议质量门暂缓；只以最终 SHA 的 GitHub Actions 完整工程检查验收，不以未验证材料阻塞本轮发布，也不把 `not_evaluated` 解释为质量通过。必须使用 `POST /auth/login` 取得的真实数据库用户会话（`deepsonar_user_…` Bearer）、`admin` scope、admin/operator 角色及同项目权限；即使本地普通认证可省略，API/service token、Job/internal 和 bootstrap 主体也不能代替用户。所有路径拒绝 query 参数，成功元数据响应使用 `Cache-Control: no-store`。
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
