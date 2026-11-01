@@ -1,6 +1,8 @@
 import type { sql } from "../../db.js";
 import type { CurrentIdentityField } from "./identity.js";
 
+export const STRONG_SELECTOR_MODULE_URL = import.meta.url;
+
 type Db = typeof sql;
 
 export const RELATION_PAIR_LIMIT = 256;

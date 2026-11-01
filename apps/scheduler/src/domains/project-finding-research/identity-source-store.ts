@@ -13,6 +13,8 @@ import {
 import { boundedText, dateOrNull, digest, fail, isoTimestamp, StrongRelationStoreError } from "./relation-errors.js";
 import { requestStrongRelationRebuild } from "./relation-work.js";
 
+export const IDENTITY_SOURCE_MODULE_URL = import.meta.url;
+
 type Db = typeof sql;
 
 export const IDENTITY_SOURCE_ADMIN_SCOPE = "admin" as const;

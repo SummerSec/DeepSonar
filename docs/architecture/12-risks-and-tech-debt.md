@@ -1,7 +1,7 @@
 # 12. 风险与技术债
 
 > 状态：**as-built（风险登记，#741 PR 5 回填）**。本文只登记当前实现仍有证据支持的缺口、风险和有意暂缓项；已完成的历史决策不重复列为待办。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 风险登记以当前代码、schema、OpenAPI、测试和已维护专题为证据。issue 只作为来源或后续协调入口；本次回填没有核实历史讨论的原始日期，也不把计划文本写成已实现能力。
 
@@ -67,7 +67,9 @@ P1 的暂停领取、版本发现、digest 部署、官方平台 manifest inspec
 
 交付边界仍然明确：强关系 `published=false`，`quality_gate_status=not_evaluated`，公共 relation items 为空；这套 operator attestation 不证明外部 inventory authenticity，也没有独立人工标注集、按问题家族/资产隔离的调参/留出集或预冻结阈值。`compareFindingFeatures` 的相似/弱候选不能被重新表述为同问题结论，不得传播 Verify/处置状态；质量与收益继续记为 `unknown`。生产执行豁免不覆盖这些非模型质量验收缺口。
 
-受治理阈值预注册、独立证据评审、评估准入、通过质量门晋升及撤销路径仍未实现；SQL `published=false` 约束、公共空数组 schema 和 read 抑制共同使当前派生关系无法发布。这不是只有外部数据缺失的门。新增离线强关系逐类指标已区分直接身份比较与词法窗口模拟，但后者不是实际 SQL identity/root-cause worker 质量。需要先完成版本/项目/来源绑定、CAS/不可变审计、当前门和来源失效联动的软件路径，再以真实独立数据和预冻结协议验收；不得直接翻转常量或以合成 passed 代替真实质量。范围见[离线评估](../PROJECT_FINDING_EVALUATION.md#最小外部输入与剩余工作)。
+Current schema67 Root WIP has implemented protocol commitments/freeze, pre-body exposure and append-only receipt/CAS state, bounded real-SQL observations, report reconstruction and structural review/revoke. These are no longer wholly missing software. Remaining software is host admission/verification of external independent facts, natural-human alias/conflict resolution, current-certificate issuance and audited CAS promotion/expiry/revocation/source invalidation, plus guarded nonempty public SQL/schema/read publication. SQL now binds published rows to passed/non-null certificate tuples; it does not issue or verify certificates. Code/public responses still suppress relations. [Remaining software and genuine inputs](<../PROJECT_FINDING_EVALUATION.md#最小外部输入与剩余工作>) cannot be replaced by supplying synthetic declarations, digest-shaped records, account IDs or flipping constants.
+
+Node/runtime-loader/preload trust and signed immutable deployment remain independent TCB/evidence boundaries; load-returned source hashing is not self-certification or proof that evaluation succeeded. Independent historical provenance, labels/adjudication, verified family/asset partitions and threshold adoption before prior/alias holdout access remain externally unverified. Current schema67 SQL/HTTP/final-SHA CI evidence is pending; historical schema66 rebuild/restore successes are not retested or relabeled as new acceptance. Production/model execution is waived, these independent non-model quality inputs are not.
 
 ## 4. 已收口边界（不作为待办）
 

@@ -2,7 +2,7 @@
 
 > 状态：**已采纳**
 > 决策日期：2026-10-31
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 > 来源：#819 / `2773050a30a882e4b7c64955853662ddec06ec9d`
 > 关联需求：FR-FIND-009 / FR-FIND-007；程序资格边界见 FR-FIND-008
 
@@ -45,3 +45,9 @@
 - 让 Agent/Job capability token 直接写身份或关系：突破 Management scope 和可信内核边界，拒绝。
 - 在独立人工标签、隔离留出和预冻结阈值缺失时发布强关系：不能把工程门禁代替质量验收，拒绝。
 - 将身份准入并入 #822 程序资格或改写 ADR-0009/ADR-0010：会混淆来源身份、程序资格和既有决策状态，拒绝。
+
+## 2026-11-01 as-built status appendix (historical decision unchanged)
+
+The decision and schema65-to66/2026-10-31 verification above are historical and unchanged. Current Root WIP has schema67 structural protocol/receipt/head/current/work/observation tables, exact-bigint CAS and pre-body exposure, actual deployed-SQL worker/metrics with bounded full-cohort RR recheck, safe report reads and structural review/revoke. [Current engineering/status](<../../PROJECT_FINDING_EVALUATION.md>) and [data/interface boundaries](<../08-data-architecture.md>) supersede only the implementation-status snapshot, not this ADR decision or its authority limits.
+
+Node24 trusted preload captures actual load-returned bytes before evaluation for governed assets; Node/loader/preload remain TCB, not self-signature, successful evaluation or human truth. True user-session admin/operator review and account-conflict checks do not authenticate distinct natural humans, independent labels/aliases, external provenance, disjoint splits or pre-access adopted thresholds. Host verification, current-certificate issuance/CAS promotion and guarded public strong relations remain unimplemented; published=false/not_evaluated continues. Current schema67 SQL/HTTP and final-source CI acceptance are pending, genuine quality not delivered; older schema66/rebuild success is not that proof. SDK-only main schema65 acceptance/merge is independent. No historical decision, production/model requirement or extra issue gate is introduced.

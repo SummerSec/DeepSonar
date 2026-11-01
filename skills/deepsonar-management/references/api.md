@@ -1,7 +1,7 @@
 # DeepSonar Management API 契约
 
 > 状态：当前集成分支 API 参考；字段与授权以运行时 schema 和宿主实现为准，未验收范围明确保留。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 > **权威机器可读 schema（运行时）**：调度器提供以下豁免鉴权端点，优先以此为准。
 > - `GET /openapi.json` — OpenAPI 3.0.3 完整 JSON
@@ -197,6 +197,34 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | POST | /findings/:id/identity-mappings/revoke | admin | 以最新 mapping version 和 reason 撤销；同 version 重复撤销幂等，历史保留 |
 
 常见失败包括 `PROJECT_MISMATCH`/`PROJECT_SCOPE_MISMATCH`、`IDENTITY_SOURCE_CAS_CONFLICT`、`IDENTITY_MAPPING_CAS_CONFLICT`、source/mapping stale 或 revoked；未知字段和 caller-supplied provenance 直接拒绝。durable relation worker 只重建当前有界 projection，不把强关系发布为业务结论。
+
+### Finding 质量协议与工程报表（#819）
+
+这组接口用于受治理的工程评估，不是强关系质量证书或发布开关。必须使用 `POST /auth/login` 取得的真实数据库用户会话（`deepsonar_user_…` Bearer）、`admin` scope、admin/operator 角色及同项目权限；即使本地普通认证可省略，API/service token、Job/internal 和 bootstrap 主体也不能代替用户。所有路径拒绝 query 参数，成功元数据响应使用 `Cache-Control: no-store`。
+
+| 方法 | 路径 | Scope | 说明 |
+| --- | --- | --- | --- |
+| GET | /projects/:id/finding-quality/assets | admin | 当前真实装载模块、配置、selector/normalization/rule 摘要；trusted Node preload 捕获返回给 evaluator 的字节，不是部署签名或人工真实性证明 |
+| POST | /projects/:id/finding-quality/protocols | admin | 只登记 strict 协议元数据、scope/digests、阈值和有效期；同一登记主体的 exact replay 不重置历史 |
+| GET | /projects/:id/finding-quality/protocols/:protocolId | admin | 协议、head、work 摘要和终身 corpus 暴露状态；不返回原始标签或观察 |
+| GET | /projects/:id/finding-quality/protocols/:protocolId/report | admin | 在只读 repeatable-read 事务内重构已完成的真实 SQL generation/cohort 和 report digest；明确 `source_validation=repeatable_read_mvcc_snapshot`，不证明未来仍 current |
+| POST | /projects/:id/finding-quality/protocols/:protocolId/freeze | admin | `{expected_version}`；在首次留出暴露前冻结协议，终身同 corpus 暴露或历史未知时拒绝重新冻结 |
+| POST | /projects/:id/finding-quality/protocols/:protocolId/declarations | admin | `{expected_version}`；追加从 freeze 派生的 digest-only 数据声明，不消费原始留出数据 |
+| POST | /projects/:id/finding-quality/protocols/:protocolId/declarations/:declarationId/payload | admin | strict JSON 标签包；可选 `Idempotency-Key`；本请求独立提交 exposure 后才进入媒体/JSON/大小/schema 校验与 admission |
+| POST | /projects/:id/finding-quality/protocols/:protocolId/reviews | admin | `{expected_version,evidence_digest,expires_at}`；只追加工程评审候选，须有真实完成的不可变观察批次，不能用 digest-shaped 伪造 evaluation 通过 |
+| POST | /projects/:id/finding-quality/protocols/:protocolId/revoke | admin | `{expected_version,reason}`；取消本协议 pending/running work，只清除本协议自己的 current tuple，保留历史、观察与首次暴露 |
+
+`expected_version` 是规范的非负 bigint **字符串**，不是 JSON number；以 GET 返回的版本做精确 CAS，不能重置 generation 或覆盖冻结记录。登记和上传的字段、字节/数量预算以 [共享质量契约](../../../apps/scheduler/src/domains/project-finding-research/quality-contract.ts) 及 [OpenAPI](../../../apps/scheduler/src/domains/project-finding-research/quality-openapi.ts) 为准；这些预算不是最低样本量或质量阈值。数据包 `kind=synthetic`/`human_labeled` 只是声明，不认证标注者、来源或独立性。
+
+**暴露不可回滚**：在本请求的 `preParsing` 已提交 exposure 后，解析、超限、schema 或 SQL admission 失败会保留该收据并追加 linked rejection；admission/payload/work 自身在失败事务中回滚。权限、无效声明或复用 key 在消费请求体前拒绝时，不根据猜测的字节凭空添加暴露。所有 reused key 都冲突，换协议/阈值、重试或 revoke 不能抹掉同 corpus 的终身暴露。
+
+Scheduler 普通有限 tick 只追加一个 heldout subject 的实际当前 SQL 观察；另一个 read-only re-observation 完成阶段核对整个已有 cohort，不追加新观察，再原子写 evaluation/report/head/work。候选选择复用部署中的 current-source/mapping 与 UUID 窗口，不因标签或词法排序筛选；指标使用整个 admitted holdout 真值作分母。GET report 仅给绑定、digest、计数和指标，明确省略 `input`、原始标签、来源对象、selector traces 和 decisions。
+
+评审在同一 repeatable-read 事务中核对实际持久化 review 信封、真实 completed work/observations/report；已知 maker/tuner/registrar/custodian 与其传递 alias 不能自审，冲突或当前来源变化时整次候选与 head 更新回滚。不同账号和 hash 不能证明是不同自然人。当前所有成功结果仍返回 `quality_status=not_evaluated` 及独立标注、自然人 alias、外部 provenance、预先采纳阈值未验证的 blockers；没有 certificate、current promotion 或强关系发布接口，不能提交 `verified`/`passed`/`independent` 等自报标志解除门禁。
+
+常见状态：`400` strict 输入或报告/来源无效，`401` 未认证，`403` 主体/项目权限不足，`404` 当前项目无该协议/声明，`409` 版本、状态或终身暴露冲突，`413` 请求体超预算，`503` 真实装载资产未建立，`500` SQL/拒绝收据写入失败。失败不回显标签包、凭据、内部堆栈或原始异常。工程单元与真实 PostgreSQL/HTTP 入口为 `pnpm ci:unit:finding-quality` 和 `pnpm ci:integration:finding-quality`；后者必须真的配置 `TEST_DATABASE_URL`，本地 skip 不是通过。
+
+注意力成本：平台自动做版本、来源、暴露审计、分母、报表重构和失效检查，统一返回可查询状态与稳定错误；人工只提供平台无法代替的真实标注、预先约定阈值和独立复核证据。不增加逐条 Finding 审批，不改变 Verify、disposition 或任务执行路径。完整未交付项见 [Finding Research](../../../docs/PROJECT_FINDING_RESEARCH.md)。
 
 ### 程序材料与 Finding 程序资格（#822）
 

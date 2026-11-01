@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 66);
+INSERT INTO schema_meta (id, version) VALUES ('global', 67);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -593,6 +593,152 @@ CREATE TABLE project_finding_relation_sources (
   PRIMARY KEY (project_id, generation, finding_id),
   FOREIGN KEY (project_id, finding_id) REFERENCES findings(project_id, id) ON DELETE CASCADE
 );
+-- #819: governed quality history. These are structural receipts and CAS pointers,
+-- not proof of labels, thresholds, source validity, review independence or quality.
+CREATE TABLE project_finding_quality_protocols (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  protocol_digest text NOT NULL CHECK (protocol_digest ~ '^sha256:[a-f0-9]{64}$'),
+  body_json jsonb NOT NULL CHECK (jsonb_typeof(body_json) = 'object' AND octet_length(body_json::text) <= 65536),
+  created_by_actor_type text NOT NULL CHECK (created_by_actor_type IN ('bootstrap_admin', 'api_token', 'user', 'internal')),
+  created_by_actor_id text CHECK (created_by_actor_id IS NULL OR char_length(created_by_actor_id) BETWEEN 1 AND 200),
+  created_by_actor_name text NOT NULL CHECK (char_length(created_by_actor_name) BETWEEN 1 AND 200),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE (id, project_id),
+  UNIQUE (project_id, protocol_digest)
+);
+CREATE TABLE project_finding_quality_records (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  protocol_id uuid NOT NULL,
+  kind text NOT NULL CHECK (kind IN (
+    'registered', 'freeze', 'dataset_declaration', 'holdout_access', 'holdout_payload',
+    'dataset_admission', 'evaluation', 'review', 'revoke', 'rejection', 'alias_resolution'
+  )),
+  record_digest text NOT NULL CHECK (record_digest ~ '^sha256:[a-f0-9]{64}$'),
+  subject_record_id uuid,
+  request_key text CHECK (request_key IS NULL OR char_length(request_key) BETWEEN 1 AND 200),
+  actor_type text NOT NULL CHECK (actor_type IN ('bootstrap_admin', 'api_token', 'user', 'internal')),
+  actor_id text CHECK (actor_id IS NULL OR char_length(actor_id) BETWEEN 1 AND 200),
+  actor_name text NOT NULL CHECK (char_length(actor_name) BETWEEN 1 AND 200),
+  body_json jsonb NOT NULL CHECK (jsonb_typeof(body_json) = 'object' AND octet_length(body_json::text) <= 16777216),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE (id, project_id, protocol_id),
+  -- No unique content digest: distinct exposure/rejection attempts must survive.
+  UNIQUE (project_id, protocol_id, kind, request_key),
+  FOREIGN KEY (protocol_id, project_id) REFERENCES project_finding_quality_protocols(id, project_id),
+  FOREIGN KEY (subject_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id)
+);
+CREATE INDEX project_finding_quality_records_history
+  ON project_finding_quality_records(project_id, protocol_id, created_at, id);
+CREATE TABLE project_finding_quality_heads (
+  project_id uuid NOT NULL,
+  protocol_id uuid NOT NULL,
+  version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+  phase text NOT NULL CHECK (phase IN ('registered', 'frozen', 'admitted', 'evaluated', 'reviewed', 'revoked', 'blocked')),
+  latest_record_id uuid NOT NULL,
+  freeze_record_id uuid,
+  declaration_record_id uuid,
+  first_access_record_id uuid,
+  dataset_record_id uuid,
+  evaluation_record_id uuid,
+  review_record_id uuid,
+  revocation_record_id uuid,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (project_id, protocol_id),
+  FOREIGN KEY (protocol_id, project_id) REFERENCES project_finding_quality_protocols(id, project_id),
+  FOREIGN KEY (latest_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (freeze_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (declaration_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (first_access_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (dataset_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (evaluation_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (review_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (revocation_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  CONSTRAINT project_finding_quality_heads_freeze_check CHECK (
+    phase NOT IN ('frozen', 'admitted', 'evaluated', 'reviewed') OR freeze_record_id IS NOT NULL
+  ),
+  CONSTRAINT project_finding_quality_heads_admission_check CHECK (
+    phase NOT IN ('admitted', 'evaluated', 'reviewed') OR (first_access_record_id IS NOT NULL AND dataset_record_id IS NOT NULL)
+  ),
+  CONSTRAINT project_finding_quality_heads_evaluation_check CHECK (
+    phase NOT IN ('evaluated', 'reviewed') OR evaluation_record_id IS NOT NULL
+  ),
+  CONSTRAINT project_finding_quality_heads_review_check CHECK (phase <> 'reviewed' OR review_record_id IS NOT NULL),
+  CONSTRAINT project_finding_quality_heads_revoke_check CHECK (phase <> 'revoked' OR revocation_record_id IS NOT NULL)
+);
+CREATE TABLE project_finding_quality_current (
+  project_id uuid PRIMARY KEY REFERENCES projects(id),
+  version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+  protocol_id uuid,
+  certificate_record_id uuid,
+  scope_digest text CHECK (scope_digest IS NULL OR scope_digest ~ '^sha256:[a-f0-9]{64}$'),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  FOREIGN KEY (protocol_id, project_id) REFERENCES project_finding_quality_protocols(id, project_id),
+  FOREIGN KEY (certificate_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  CONSTRAINT project_finding_quality_current_tuple_check CHECK (
+    (protocol_id IS NULL AND certificate_record_id IS NULL AND scope_digest IS NULL)
+    OR (protocol_id IS NOT NULL AND certificate_record_id IS NOT NULL AND scope_digest IS NOT NULL)
+  )
+);
+CREATE TABLE project_finding_quality_work (
+  project_id uuid NOT NULL,
+  protocol_id uuid NOT NULL,
+  generation bigint NOT NULL DEFAULT 1 CHECK (generation >= 1),
+  processed_generation bigint NOT NULL DEFAULT 0 CHECK (processed_generation >= 0 AND processed_generation <= generation),
+  claimed_generation bigint CHECK (claimed_generation IS NULL OR claimed_generation BETWEEN 1 AND generation),
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+  dataset_record_id uuid,
+  evaluation_record_id uuid,
+  state_json jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(state_json) = 'object' AND octet_length(state_json::text) <= 16384),
+  last_error_code text CHECK (last_error_code IS NULL OR char_length(last_error_code) BETWEEN 1 AND 160),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (project_id, protocol_id),
+  FOREIGN KEY (protocol_id, project_id) REFERENCES project_finding_quality_protocols(id, project_id),
+  FOREIGN KEY (dataset_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (evaluation_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id)
+);
+-- Raw selector trace and raw decisions only; human labels belong to sealed records.
+CREATE TABLE project_finding_quality_observations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  protocol_id uuid NOT NULL,
+  work_generation bigint NOT NULL CHECK (work_generation >= 1),
+  dataset_record_id uuid NOT NULL,
+  subject_finding_id uuid NOT NULL,
+  ordinal int NOT NULL CHECK (ordinal >= 0),
+  body_json jsonb NOT NULL CHECK (jsonb_typeof(body_json) = 'object' AND octet_length(body_json::text) <= 262144),
+  input_digest text NOT NULL CHECK (input_digest ~ '^sha256:[a-f0-9]{64}$'),
+  record_digest text NOT NULL CHECK (record_digest ~ '^sha256:[a-f0-9]{64}$'),
+  observed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  FOREIGN KEY (project_id, protocol_id) REFERENCES project_finding_quality_work(project_id, protocol_id),
+  FOREIGN KEY (dataset_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (project_id, subject_finding_id) REFERENCES findings(project_id, id),
+  UNIQUE (protocol_id, work_generation, subject_finding_id),
+  UNIQUE (protocol_id, work_generation, ordinal)
+);
+-- Normal writes cannot backdate freeze/access receipts or rewrite history. Restore
+-- copies preserve original server timestamps while triggers are explicitly off.
+CREATE FUNCTION deepsonar_finding_quality_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP <> 'INSERT' THEN
+    RAISE EXCEPTION 'finding_quality_history_append_only';
+  END IF;
+  IF TG_TABLE_NAME = 'project_finding_quality_observations' THEN
+    NEW.observed_at := clock_timestamp();
+  ELSE
+    NEW.created_at := clock_timestamp();
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER project_finding_quality_protocols_immutable BEFORE INSERT OR UPDATE OR DELETE ON project_finding_quality_protocols
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_finding_quality_append_only();
+CREATE TRIGGER project_finding_quality_records_immutable BEFORE INSERT OR UPDATE OR DELETE ON project_finding_quality_records
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_finding_quality_append_only();
+CREATE TRIGGER project_finding_quality_observations_immutable BEFORE INSERT OR UPDATE OR DELETE ON project_finding_quality_observations
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_finding_quality_append_only();
+
 CREATE TABLE project_finding_relations (
   project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   generation uuid NOT NULL,
@@ -607,13 +753,28 @@ CREATE TABLE project_finding_relations (
   different_fields text[] NOT NULL,
   root_cause_continuation boolean NOT NULL,
   rule_version text NOT NULL,
-  quality_gate_status text NOT NULL CHECK (quality_gate_status IN ('not_evaluated', 'passed', 'failed')),
-  published boolean NOT NULL DEFAULT false CHECK (published = false),
+  quality_protocol_id uuid,
+  quality_certificate_record_id uuid,
+  quality_scope_digest text CHECK (quality_scope_digest IS NULL OR quality_scope_digest ~ '^sha256:[a-f0-9]{64}$'),
+  quality_gate_status text NOT NULL DEFAULT 'not_evaluated' CHECK (quality_gate_status IN ('not_evaluated', 'passed', 'failed')),
+  published boolean NOT NULL DEFAULT false,
+  CONSTRAINT project_finding_relations_quality_tuple_check CHECK (
+    (quality_protocol_id IS NULL AND quality_certificate_record_id IS NULL AND quality_scope_digest IS NULL)
+    OR (quality_protocol_id IS NOT NULL AND quality_certificate_record_id IS NOT NULL AND quality_scope_digest IS NOT NULL)
+  ),
+  CONSTRAINT project_finding_relations_quality_pass_check CHECK (
+    quality_gate_status <> 'passed' OR (quality_protocol_id IS NOT NULL AND quality_certificate_record_id IS NOT NULL AND quality_scope_digest IS NOT NULL)
+  ),
+  CONSTRAINT project_finding_relations_quality_publish_check CHECK (
+    NOT published OR (quality_gate_status = 'passed' AND quality_protocol_id IS NOT NULL AND quality_certificate_record_id IS NOT NULL AND quality_scope_digest IS NOT NULL)
+  ),
   processed_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (project_id, generation, left_id, right_id),
   CONSTRAINT project_finding_relations_order CHECK (left_id < right_id),
   FOREIGN KEY (project_id, left_id) REFERENCES findings(project_id, id) ON DELETE CASCADE,
-  FOREIGN KEY (project_id, right_id) REFERENCES findings(project_id, id) ON DELETE CASCADE
+  FOREIGN KEY (project_id, right_id) REFERENCES findings(project_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (quality_protocol_id, project_id) REFERENCES project_finding_quality_protocols(id, project_id),
+  FOREIGN KEY (quality_certificate_record_id, project_id, quality_protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id)
 );
 CREATE INDEX project_finding_relations_right
   ON project_finding_relations(project_id, generation, right_id, left_id);

@@ -16,6 +16,7 @@ import { RUNTIME_IMAGE_REGISTRY_CHANNELS } from "./runtime-image-registry-contra
 import { KNOWLEDGE_MANAGEMENT_OPERATIONS } from "./domains/project-knowledge/openapi.js";
 import { PROGRAM_ELIGIBILITY_OPERATIONS, PROGRAM_ELIGIBILITY_OPENAPI_SCHEMAS } from "./domains/program-eligibility/openapi.js";
 import { FINDING_RELATION_OPERATIONS, FINDING_RELATION_SCHEMAS } from "./domains/project-finding-research/relation-openapi.js";
+import { FINDING_QUALITY_OPERATIONS, FINDING_QUALITY_SCHEMAS } from "./domains/project-finding-research/quality-openapi.js";
 
 const TaskContractFeedbackSchema = {
   type: "object",
@@ -324,6 +325,7 @@ const RuntimeImageChannelUnavailableSchema = {
 const OPS: Op[] = [
   ...PROGRAM_ELIGIBILITY_OPERATIONS,
   ...FINDING_RELATION_OPERATIONS,
+  ...FINDING_QUALITY_OPERATIONS,
   ...KNOWLEDGE_MANAGEMENT_OPERATIONS,
   // 设备准入与管理面（#505 阶段 1）：平台是权威，写操作后把期望集合整集推给 rig broker。
   { method: "get", path: "/devices", summary: "设备登记列表（含在途租约与 rig 准入状态；不返回租约 token）", scope: "tasks:read", tags: ["Devices"] },
@@ -3305,6 +3307,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       { name: "Tasks" },
       { name: "Jobs" },
       { name: "Findings" },
+      { name: "Finding Quality" },
       { name: "Reports" },
       { name: "Settings" },
       { name: "Roles" },
@@ -3337,6 +3340,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
       },
       schemas: {
         ...FINDING_RELATION_SCHEMAS,
+        ...FINDING_QUALITY_SCHEMAS,
         Error: ErrorSchema,
         ...PROGRAM_ELIGIBILITY_OPENAPI_SCHEMAS,
         DashboardStatusBucket: {

@@ -13,6 +13,7 @@ import { fail } from "./relation-errors.js";
 import { requestStrongRelationRebuild } from "./relation-work.js";
 import { selectStrongRelationCandidates } from "./strong-candidate-selector.js";
 
+export const RELATION_COMPUTATION_MODULE_URL = import.meta.url;
 type Db = typeof sql;
 
 export const RELATION_BATCH_SIZE = 5;

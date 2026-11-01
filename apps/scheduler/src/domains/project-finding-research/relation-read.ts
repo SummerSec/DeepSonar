@@ -16,6 +16,7 @@ import { loadFindingEnvelope } from "./relation-computation.js";
 import { fail } from "./relation-errors.js";
 import { IDENTITY_SOURCE_AUTHORITY_BASIS } from "./identity-source-store.js";
 
+export const RELATION_READ_MODULE_URL = import.meta.url;
 type Db = typeof sql;
 
 export const RELATION_RESULT_LIMIT = 50;

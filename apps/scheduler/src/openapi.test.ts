@@ -129,3 +129,41 @@ test("RoleConfigInput no longer accepts credentials or pi_extensions (#690)", ()
   assert.equal((document.paths as Record<string, unknown>)["/credentials/batch-bind"], undefined);
   assert.equal(schemas.CredentialBatchBindingRequest, undefined);
 });
+
+test("governed quality OpenAPI keeps session authority, strict inputs and safe unknown reports", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const schemas = (document.components as Record<string, unknown>).schemas as Record<string, Record<string, any>>;
+  const quality = Object.entries(paths).filter(([path]) => path.startsWith("/projects/{id}/finding-quality"));
+  const operations = quality.flatMap(([, methods]) => Object.values(methods));
+  assert.equal(operations.length, 9);
+  for (const operation of operations) {
+    assert.equal(operation["x-deepsonar-scope"], "admin");
+    assert.deepEqual(operation.security, [{ bearerAuth: [] }]);
+    assert.match(operation.description, /stored user session/);
+    assert.equal((operation.parameters ?? []).some((parameter: Record<string, unknown>) => parameter.in === "query"), false);
+    const success = operation.responses["200"].content["application/json"].schema;
+    assert.equal(success.type, "object");
+    assert.equal(success.additionalProperties, false);
+    assert.equal(success.content, undefined, "Response Objects must not be double-wrapped as schemas");
+    assert.deepEqual(success.properties.quality_status.enum, ["not_evaluated"]);
+    for (const status of ["400", "401", "403", "404", "409", "413", "500", "503"]) {
+      assert.equal(operation.responses[status].content["application/json"].schema.type, "object");
+    }
+  }
+  assert.equal(schemas.FindingQualityProtocol.additionalProperties, false);
+  assert.equal(schemas.FindingQualityDataset.additionalProperties, false);
+  assert.deepEqual(schemas.FindingQualityDataset.properties.kind.enum, ["synthetic", "human_labeled"]);
+  assert.equal(schemas.FindingQualityVersion.properties.expected_version.type, "string");
+  assert.deepEqual(schemas.FindingQualityVersion.required, ["expected_version"]);
+  const report = schemas.FindingQualitySafeReport;
+  assert.equal(report.additionalProperties, false);
+  assert.deepEqual(report.properties.dataset_kind.enum, ["synthetic", "human_labeled"]);
+  for (const raw of ["input", "pairs", "sources", "selections", "selection", "decisions", "observations"]) {
+    assert.equal(report.properties[raw], undefined);
+  }
+  const operation = paths["/projects/{id}/finding-quality/protocols/{protocolId}/report"].get;
+  assert.deepEqual(operation.responses["200"].content["application/json"].schema.properties.report, {
+    $ref: "#/components/schemas/FindingQualitySafeReport",
+  });
+});

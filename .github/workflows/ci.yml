@@ -137,8 +137,8 @@ jobs:
           restore_version="$(/usr/lib/postgresql/16/bin/pg_restore --version)"
           echo "$dump_version"
           echo "$restore_version"
-          [[ "$dump_version" == "pg_dump (PostgreSQL) 16."* ]]
-          [[ "$restore_version" == "pg_restore (PostgreSQL) 16."* ]]
+          [[ "$dump_version" == "pg_dump (PostgreSQL) 16."* ]] || exit 1
+          [[ "$restore_version" == "pg_restore (PostgreSQL) 16."* ]] || exit 1
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
 
       - run: pnpm install --frozen-lockfile
@@ -288,6 +288,9 @@ jobs:
       - name: Finding research ranking unit
         run: pnpm ci:unit:finding-research
 
+      - name: Finding governed quality unit and real module entrypoints
+        run: pnpm ci:unit:finding-quality
+
       - name: Finding protocol PostgreSQL integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
@@ -301,6 +304,13 @@ jobs:
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:finding-research
+
+      - name: Finding governed quality PostgreSQL and stored-session HTTP integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: |
+          test -n "$TEST_DATABASE_URL"
+          pnpm ci:integration:finding-quality
 
       - name: Shared assets contract unit
         run: pnpm ci:unit:shared-assets
@@ -574,7 +584,7 @@ jobs:
           SCHEDULER_HOST: "127.0.0.1"
           DEEPSONAR_HUB_ENABLED: "false"
         run: |
-          node apps/scheduler/dist/index.js > /tmp/scheduler-3100.log 2>&1 &
+          node --import ./apps/scheduler/dist/domains/project-finding-research/quality-source-bootstrap.js apps/scheduler/dist/index.js > /tmp/scheduler-3100.log 2>&1 &
           echo $! > /tmp/scheduler-3100.pid
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:3100/health && exit 0
@@ -617,7 +627,7 @@ jobs:
               sleep 0.25
             done
           fi
-          node apps/scheduler/dist/index.js > /tmp/scheduler-3101.log 2>&1 &
+          node --import ./apps/scheduler/dist/domains/project-finding-research/quality-source-bootstrap.js apps/scheduler/dist/index.js > /tmp/scheduler-3101.log 2>&1 &
           echo $! > /tmp/scheduler-3101.pid
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:3101/health && exit 0

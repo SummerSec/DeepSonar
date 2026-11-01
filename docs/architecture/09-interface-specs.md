@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -49,6 +49,16 @@ source body 只允许 `authority_version`、受限 `source_kind`、无控制字�
 关系响应明确返回 `authority_basis=platform_admin_attestation` 与 `independent_external_verification=false`。当前 `quality_gate_status=not_evaluated`、`published=false`，公开读路由省略 suppressed relations；`includeSuppressed` 等未知 query 字段由 strict schema 拒绝。每次读侧按当前 Finding source fingerprint、identity snapshot fingerprint、generation 和 rule version 重核，旧或失效项标 `stale_results_omitted`；身份历史不完整则 `read_status=blocked`。响应中的 `read_status`/`read_reason`、`pair_truncated`、`next_cursor` 和 Canvas `query_budget` 是完整性判断，不应把空 `items` 当作“没有关系”。
 
 读取、计算和历史的上限只在源码命名常量维护：Finding page 的 `RELATION_RESULT_LIMIT`，Canvas 的 `CANVAS_FINDING_LIMIT`/`CANVAS_RELATION_LIMIT`/`CANVAS_RESPONSE_BYTES`，worker 的 `RELATION_BATCH_SIZE`/`RELATION_PROJECT_SCAN_SIZE`/`RELATION_PAIR_LIMIT`，以及 mapping 的 `IDENTITY_MAPPING_HISTORY_LIMIT`；见 [`relation-read.ts`](../../apps/scheduler/src/domains/project-finding-research/relation-read.ts)、[`relation-computation.ts`](../../apps/scheduler/src/domains/project-finding-research/relation-computation.ts) 和 [`identity-mapping-store.ts`](../../apps/scheduler/src/domains/project-finding-research/identity-mapping-store.ts)。文档不复制这些可变数值。
+
+## Finding quality management protocol (#819, 2026-11-01 Root WIP)
+
+Nine routes are registered under `/projects/:id/finding-quality`: GET `/assets`; POST `/protocols`; GET `/protocols/:protocolId`; GET `/protocols/:protocolId/report`; POST protocol `/freeze`, `/declarations`, `/declarations/:declarationId/payload`, `/reviews` and `/revoke`. [Registrar and strict bodies](<../../apps/scheduler/src/domains/project-finding-research/quality-api.ts>) and [OpenAPI input schemas/response allowlists](<../../apps/scheduler/src/domains/project-finding-research/quality-openapi.ts>) are the machine authority; root routing and scope manifests are wired, not evidence of passing CI.
+
+Every route requires a true authenticated user session with admin/operator role, admin scope and same-project ownership before body handling; API token, bootstrap, internal and Job actors cannot become review humans. Queries/unknown fields are rejected, responses are no-store. CAS expected_version is a canonical decimal string within signed-bigint range, never a JSON number. Actor, timestamps, quality flags and future report digests are server-owned.
+
+Payload preParsing commits holdout access separately before decoding JSON, media rejection, body-limit processing or admission. Rejection cannot roll it back; a reused request key with unknown raw identity conflicts before body consumption and does not append a second exposure. Late freeze, receipt/scope/loaded-asset mismatch and stale CAS fail closed. Error codes come from the contract/registrar, including the verified QUALITY_HEAD_VERSION_CONFLICT; error projection is finite and does not echo raw labels.
+
+Report GET uses one caller repeatable-read snapshot to reconstruct completed work, immutable observations, actual evaluation and current source/identity bindings, then recompute metrics/digests. Its explicit allowlist exposes bindings, aggregate ratios/counts and blockers, not report.input, raw labels or selector traces. Review checks durable chain/account conflicts and this current report in the same snapshot. Both still return quality_status=not_evaluated; structural review/revoke is not external human verification, a current certificate, promotion or public strong-relation authority.
 
 ## Job-scoped Control API
 

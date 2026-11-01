@@ -18,6 +18,8 @@ import {
 import { boundedText, dateOrNull, fail, StrongRelationStoreError } from "./relation-errors.js";
 import { requestStrongRelationRebuild } from "./relation-work.js";
 
+export const IDENTITY_MAPPING_MODULE_URL = import.meta.url;
+
 type Db = typeof sql;
 
 export const IDENTITY_MAPPING_HISTORY_LIMIT = 64;

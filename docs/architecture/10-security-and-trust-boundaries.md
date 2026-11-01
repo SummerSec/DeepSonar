@@ -58,6 +58,14 @@ The 2026-11-01 upgrade preserves Scheduler authority: [connectionConfig](../../p
 
 权限校验不能替代资源隔离。沙箱网络、文件、设备、共享资产配额、Job 并发和事件预算仍由 Scheduler 和运行时 host 强制；镜像准入只回答“该摘要能否被选择”，不能让镜像取得平台管理权限。涉及 Job/Attempt 的沙箱 provision、Agent run、Gateway 和清理效果按各自 effect/settlement 与对账规则记录；Management 配置、image-admission 扫描和 Registry 发布使用自己的数据库状态与审计，不虚构 Job Attempt 账本。
 
+## Finding quality trust boundaries (#819, 2026-11-01 Root WIP)
+
+[Quality management](<../../apps/scheduler/src/domains/project-finding-research/quality-api.ts>) requires authenticated user-session admin/operator plus admin scope and early same-project ownership. Account identity proves a platform principal, not a distinct natural human; API/bootstrap/internal/Job actors cannot supply independent review authority. Strict protocol/dataset/review bodies reject caller actor/time/pass flags. Raw holdout exposure commits before parsing/limits/admission and survives subsequent rejection; a reused unknown-raw key is a pre-body conflict, not new exposure.
+
+[Ledger/state](<../../apps/scheduler/src/domains/project-finding-research/quality-state-store.ts>) rechecks project scope, exact-bigint CAS, durable typed/order-linked receipts, DB-owned times and lifetime history including revoked/expired/alias records under SQL row/byte limits. Review reconstructs work/evaluation/current-source metrics in its RR transaction and rejects known account conflicts, but independent labels, natural-human aliases, provenance, split isolation and pre-access threshold adoption remain UNVERIFIED. Current certificates, audited promotion and guarded publication are missing, not merely awaiting data.
+
+[Source capture](<../../apps/scheduler/src/domains/project-finding-research/quality-source-capture.ts>) records the actual load-returned evaluator-input bytes under a trusted Node24 synchronous preload, after transformations and before governed imports. No later disk fallback or caller hash authenticates code. Node, loader chain and preload are TCB; the preload cannot attest its own initial load. Source capture does not establish signed immutable deployment integrity, successful evaluation or external truth. [Assets](<../../apps/scheduler/src/domains/project-finding-research/quality-assets.ts>) bind source/config/rule/selector versions, not human quality. Report GET explicitly omits raw input/labels/traces; not_evaluated/published=false still suppresses strong relations.
+
 
 ## 目标授权的可信边界（#767）
 

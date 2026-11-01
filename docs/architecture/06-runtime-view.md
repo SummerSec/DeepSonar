@@ -5,6 +5,14 @@
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
+## Finding quality worker and preload (#819, 2026-11-01 Root WIP)
+
+[Startup](<../../apps/scheduler/src/index.ts>) freezes [loaded quality assets](<../../apps/scheduler/src/domains/project-finding-research/quality-assets.ts>) before application schema SQL/service startup. Node24 synchronous [source capture](<../../apps/scheduler/src/domains/project-finding-research/quality-source-capture.ts>) is preloaded after TSX/source transforms and before the fourteen governed modules, capturing actual nextLoad source bytes before evaluation. [Dev/start](<../../apps/scheduler/package.json>) and CI direct compiled starts carry that preload. Missing/late capture fails closed, with no disk reread; Node/loader/preload are TCB, not self-signature or successful evaluation proof.
+
+The existing maintenance gate owns [quality-worker](<../../apps/scheduler/src/domains/project-finding-research/quality-worker.ts>) startup/stop. Stop synchronously forbids new ticks and returns its owned in-flight drain; startup retains drains across maintenance close/reopen and waits for them before SQL end. Each RR tick locks current/head/work and appends one admitted holdout-subject observation with generation/ordinal checkpoint. A separate completion tick appends zero observations, re-observes the full bounded cohort, recomputes metrics and binds actual work/dataset/run/evaluation. Report and review readers reconstruct the same durable/current-source chain in their caller RR snapshot; stale/conflicting work fails closed. This is bounded engineering, not measured throughput or production drain evidence.
+
+Protocol freeze/declaration precede separately committed raw holdout exposure; later parse/admission failure cannot erase it. `admitted`, `completed` and `reviewed` are structural stages, never current quality certificates. Host verification of independent evidence, certificate/CAS promotion and guarded public relations remain unimplemented; status stays not_evaluated/published=false. Current schema67 SQL/HTTP and final CI acceptance are pending, separately from historical schema66 evidence and [independent quality inputs](<../PROJECT_FINDING_EVALUATION.md>).
+
 ## 凭据与 CLI 解析（#757）
 
 `resolveProviderCredentialForJob` 是 readiness 与 Job 创建共同使用的解析入口，需求见 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)。解析先限于本项目或全局的 active Provider 账号，以及独立的项目 CLI / 凭据白名单，再校验 Provider 协议与模型要求；不能先用系统 CLI 种子筛掉唯一有效账号。

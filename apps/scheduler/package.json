@@ -5,8 +5,8 @@
   "license": "UNLICENSED",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "node dist/index.js",
+    "dev": "node --import tsx --import ./src/domains/project-finding-research/quality-source-bootstrap.ts --watch src/index.ts",
+    "start": "node --import ./dist/domains/project-finding-research/quality-source-bootstrap.js dist/index.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:migrations": "tsx --test src/migration-runner.test.ts src/db.test.ts src/schema-rebuild.test.ts src/schema-rebuild.integration.test.ts",

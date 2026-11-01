@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 
+export const STRONG_IDENTITY_MODULE_URL = import.meta.url;
+export const STRONG_IDENTITY_EXTRACTOR_VERSION = "platform-operator-identity-fields/v1";
+export const STRONG_IDENTITY_NORMALIZATION_VERSION = "nfkc-trim-identity/v1";
+
 /**
  * Strong Finding identity is deliberately separate from declaration text.
  * These values are platform-issued digests.  Callers cannot promote title,
