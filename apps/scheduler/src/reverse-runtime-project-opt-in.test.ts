@@ -16,13 +16,14 @@ import {
   parseRuntimeImageRegistry,
   selectRuntimeImageRef,
   toHubRuntimeImageCatalogEntry,
-  type RuntimeImageRegistryChannelEvidence,
 } from "./runtime-images.js";
 import { officialCatalogBackfillSql } from "./schema-rebuild.js";
 
 const schema = readFileSync(new URL("../../../database/schema.sql", import.meta.url), "utf8");
 const registryRaw = JSON.parse(readFileSync(new URL("../../../deploy/runtime-image-registry.json", import.meta.url), "utf8"));
 const registry = parseRuntimeImageRegistry(registryRaw);
+
+const BUILTIN_ACR_NAMESPACE = "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const hubRoleId = "22222222-2222-4222-8222-222222222222";
@@ -182,14 +183,12 @@ test("bundled current reverse digest binds official catalog admission (static-re
   assert.ok(reverse, "bundled registry must include deepsonar-reverse");
   assert.equal(reverse.project_opt_in, true);
   assert.equal(typeof registry.platform_version, "string");
-  const version = reverse.versions.find((entry) => entry.version === registry.platform_version);
-  assert.ok(version, "bundled registry must include reverse for its published platform version");
+  const published = reverse.versions.filter((entry) => entry.version === registry.platform_version);
+  assert.equal(published.length, 1, "bundled registry must include exactly one reverse for its published platform version");
+  const version = published[0]!;
   const digest = version.digest;
   assert.ok(typeof digest === "string");
   assert.match(digest, /^sha256:[a-f0-9]{64}$/);
-  const acrRef = version.registry_refs?.["aliyun-acr"];
-  assert.ok(acrRef);
-  const acrNamespace = acrRef.slice(0, acrRef.lastIndexOf("/"));
   assert.deepEqual(version.platforms, ["linux/amd64", "linux/arm64"]);
   assert.equal(
     version.image_ref,
@@ -203,9 +202,12 @@ test("bundled current reverse digest binds official catalog admission (static-re
     version.registry_refs?.dockerhub,
     `docker.io/sumsec/deepsonar@${digest}`,
   );
-  assert.equal(acrRef, `${acrNamespace}/deepsonar-reverse@${digest}`);
+  assert.equal(
+    version.registry_refs?.["aliyun-acr"],
+    `${BUILTIN_ACR_NAMESPACE}/deepsonar-reverse@${digest}`,
+  );
   for (const channel of ["github", "dockerhub", "aliyun-acr"] as const) {
-    const evidence: RuntimeImageRegistryChannelEvidence | undefined = version.registry_evidence?.[channel];
+    const evidence = version.registry_evidence?.[channel];
     assert.ok(evidence, `${channel} registry_evidence required`);
     assert.equal(evidence.available, true, `${channel} must be available`);
     assert.equal(evidence.inspect_digest, digest, `${channel} inspect must match canonical digest`);
@@ -214,7 +216,7 @@ test("bundled current reverse digest binds official catalog admission (static-re
   // with scan_summary.source=static-registry (Release catalog digest is the trust root).
   assert.equal(selectRuntimeImageRef("deepsonar-reverse", version, ""), version.image_ref);
   assert.equal(
-    selectRuntimeImageRef("deepsonar-reverse", version, acrNamespace),
+    selectRuntimeImageRef("deepsonar-reverse", version, BUILTIN_ACR_NAMESPACE),
     version.registry_refs!["aliyun-acr"],
   );
   const admissionScanSummary = {

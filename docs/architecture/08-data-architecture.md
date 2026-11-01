@@ -10,6 +10,10 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 [`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前集成版本以该常量与基线一致性为准，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
 
 
+## OpenSandbox pin 与不可变 Job 快照（IR-001/003）
+
+2026-11-01：本次只升级 [SDK/镜像版本事实](../../packages/runtime-sandbox/src/opensandbox-version.ts)及相应依赖、部署和测试；数据库 schema 不变。新 Job 从当前版本事实冻结 pin，已创建 Job 的 SDK 1.1 pin、镜像、Evidence 与审计仍是历史真相，不自动重写或重新绑定为 1.2。SDK 安装版本与冻结 pin 不一致时 binding fail closed，不以最新默认值补齐旧快照。详见 [独立升级记录](../OPENSANDBOX_1_2_UPGRADE.md)。
+
 ## 核心实体和关系
 
 | 实体/表组 | 作用 | 关键关系或约束 |
