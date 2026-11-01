@@ -13,7 +13,12 @@ jobs:
   diagnose:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [clang-14, clang-19]
     env:
+      DIAGNOSTIC_COMPILER: ${{ matrix.compiler }}
       RELEASE_SOURCE: fdb55a01b1e02b5b9078586923a8d506ce5bb096
       RELEASE_BASE: ghcr.io/summersec/deepsonar-base@sha256:29f7d8b63d4a323295ba204d83e682a43698d648b965899287b818547a7b5220
     steps:
@@ -57,6 +62,9 @@ jobs:
           # Deliberately stop before the crashing command to retain a debug image.
           # This derivative is never published and is not a release smoke pass.
           definition = prefix + boundary.rstrip('\n') + ' \\\n' + manifest[:-2] + '\n'
+          if os.environ['DIAGNOSTIC_COMPILER'] == 'clang-19':
+              definition += '''RUN apt-get update && apt-get install -y --no-install-recommends clang-19=1:19.1.7-3~deb12u1 libclang-rt-19-dev=1:19.1.7-3~deb12u1
+          '''
           target = Path(os.environ['RUNNER_TEMP']) / 'oh-diagnostic' / 'Dockerfile'
           target.write_text(definition)
           PY
@@ -75,12 +83,13 @@ jobs:
           exec > >(tee /evidence/probe.log) 2>&1
           uname -a
           printf 'mmap_rnd_bits='; cat /proc/sys/vm/mmap_rnd_bits
-          clang --version
-          clang -print-resource-dir
-          dpkg-query -W clang clang-14 libclang-rt-14-dev libasan8 libubsan1 libc6 libc6-dev
+          "$DIAGNOSTIC_COMPILER" --version
+          "$DIAGNOSTIC_COMPILER" -print-resource-dir
+          dpkg-query -W clang-14 libclang-rt-14-dev libasan8 libubsan1 libc6 libc6-dev
+          if [[ "$DIAGNOSTIC_COMPILER" == clang-19 ]]; then dpkg-query -W clang-19 libclang-rt-19-dev; fi
           sha256sum /opt/deepsonar/bin/openharmony-fuzz-env.sh
           printf 'int LLVMFuzzerTestOneInput(const unsigned char *d, unsigned long n){(void)d;(void)n;return 0;}\n' \
-            | clang -x c - -O1 -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined \
+            | "$DIAGNOSTIC_COMPILER" -x c - -O1 -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined \
               -o /tmp/deepsonar-libfuzzer-smoke || exit 1
           readelf -h /tmp/deepsonar-libfuzzer-smoke
           ldd /tmp/deepsonar-libfuzzer-smoke
@@ -109,13 +118,14 @@ jobs:
           printf 'Not reproduced in this diagnostic sample; not a release acceptance.\n'
           SH
           docker run --rm --network none --memory 4g --pids-limit 256 \
+            --env DIAGNOSTIC_COMPILER \
             --mount "type=bind,src=$RUNNER_TEMP/oh-diagnostic,dst=/evidence" \
             deepsonar-oh-fuzz-diagnostic:local bash /evidence/probe.sh
       - name: Preserve diagnosis even when the original command fails
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: openharmony-fuzz-pinned-diagnostic
+          name: openharmony-fuzz-pinned-diagnostic-${{ matrix.compiler }}
           path: ${{ runner.temp }}/oh-diagnostic
           if-no-files-found: error
           retention-days: 14
