@@ -66,7 +66,7 @@ trap cleanup EXIT
 # libFuzzer crash artifacts also stay inside this owned temporary directory.
 cd "$work"
 export ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1
-export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+export UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:print_stacktrace=1
 failures=0
 clang --version > "$work/clang-version"; cat "$work/clang-version"
 clang++ --version > "$work/clangxx-version"; cat "$work/clangxx-version"
@@ -98,7 +98,7 @@ set -e
 printf 'afl-fuzz help status=%s\n' "$afl_help_status"; cat "$work/afl-version"
 grep -Eq '4\.32c' "$work/afl-version"
 printf 'AFL LLVM instrumentation=%s\n' "$AFL_LLVM_INSTRUMENT"
-[[ "$AFL_LLVM_INSTRUMENT" == PCGUARD ]]
+[[ "$AFL_LLVM_INSTRUMENT" == PCGUARD && "$AFL_UBSAN_VERBOSE" == 1 ]]
 helper=/opt/deepsonar/bin/openharmony-fuzz-build.sh
 test -x "$helper"
 
@@ -138,8 +138,13 @@ printf 'extern "C" int LLVMFuzzerTestOneInput(const unsigned char *d, unsigned l
 printf 'int main(void){return 0;}\n' > "$work/empty-afl.cc"
 "$helper" --engine libfuzzer --source "$work/empty.cc" --output "$work/helper-lib"
 AFL_DEBUG=1 "$helper" --engine afl --source "$work/empty-afl.cc" --output "$work/helper-afl" 2>&1 | tee "$work/afl-build.log"
+# Resolve the actual compiler argument; AFL may spell its installed path as bin/../lib.
 # The shared coverage hook alone cannot distinguish PCGUARD from NATIVE mode.
-grep -Fq -- '-fpass-plugin=/usr/local/lib/afl/SanitizerCoveragePCGUARD.so' "$work/afl-build.log"
+plugin_path="$(sed -nE "s/.*'-fpass-plugin=([^']+)'.*/\1/p" "$work/afl-build.log")"
+plugin_canonical="$(realpath -- "$plugin_path")"
+[[ "$plugin_canonical" == /usr/local/lib/afl/SanitizerCoveragePCGUARD.so ]]
+test -s "$plugin_canonical"
+printf 'AFL loaded PCGUARD plugin=%s\n' "$plugin_canonical"
 elf_check "$work/original-c" libfuzzer
 elf_check "$work/helper-lib" libfuzzer
 elf_check "$work/helper-afl" afl
@@ -234,7 +239,10 @@ CPP
 elf_check "$work/branches" afl
 printf A > "$work/input-A"; printf B > "$work/input-B"
 for branch in A B; do
-  run_logged "showmap-$branch" bash -c \
+  # AFL's bounded map collection disables symbolization, not sanitizer checks.
+  run_logged "showmap-$branch" env \
+    ASAN_OPTIONS=detect_leaks=0:halt_on_error=1:abort_on_error=1:symbolize=0 \
+    UBSAN_OPTIONS=halt_on_error=1:abort_on_error=1:symbolize=0 bash -c \
     'afl-showmap -q -e -m none -t 5000 -o "$1" -- "$2" < "$3"' \
     bash "$work/map-$branch" "$work/branches" "$work/input-$branch"
   if [[ "$status" != 0 ]] || ! test -s "$work/map-$branch"; then

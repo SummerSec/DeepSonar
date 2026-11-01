@@ -221,7 +221,11 @@ Toolchain baseline checked 2026-11-01: [Fuzz Dockerfile](<../deploy/Dockerfile.a
 pins matching Debian LLVM/compiler-rt 19 and builds checksum-pinned AFL++ 4.32c
 against the same LLVM PCGUARD plugin. This retains default PIE/ASLR and
 ASan/UBSan/libFuzzer; replacing only the smoke flags or Clang alias would leave
-the actual AFL build path broken. Exact pins and host-tool limitations are in
+the actual AFL build path broken. The image and helper set `AFL_UBSAN_VERBOSE=1`
+at compile time, retaining specific non-recovering UBSan reports instead of
+trap-only signals. The probe resolves the actual compiler plugin argument to
+its installed PCGUARD path; spelling the same path with `bin/../lib` is valid.
+Exact pins and host-tool limitations are in
 the Dockerfile and [toolchain guide](<RUNTIME_TEST_TOOLCHAINS.md>).
 
 Fresh **and reused** Fuzz candidates must pass offline environment/manual checks

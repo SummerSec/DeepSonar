@@ -31202,7 +31202,7 @@
             "exit code",
             "input and output hashes"
           ],
-          "version_limits_side_effects_cleanup": "Apache-2.0 AFL++ v4.32c source commit c340a022e2546488c15f85593d0f37e30eeaab3a, tarball SHA-256 77d3dcc321ac4514cf5a9dccd0d070c4a3a417df1d353a01b89540c83090ff41. Built with clang-19/clang++-19 and llvm-config-19; AFL_CC/AFL_CXX and AFL_LLVM_INSTRUMENT=PCGUARD select the matching plugin. The build helper keeps ASan+UBSan/default PIE/ASLR. Bound execution and retain input/output hashes before cleaning owned temporary files.",
+          "version_limits_side_effects_cleanup": "Apache-2.0 AFL++ v4.32c source commit c340a022e2546488c15f85593d0f37e30eeaab3a, tarball SHA-256 77d3dcc321ac4514cf5a9dccd0d070c4a3a417df1d353a01b89540c83090ff41. Built with clang-19/clang++-19 and llvm-config-19; AFL_CC/AFL_CXX and AFL_LLVM_INSTRUMENT=PCGUARD select the matching plugin. The image and build helper set AFL_UBSAN_VERBOSE=1 at compile time to retain detailed, non-recovering UBSan reports instead of trap-only signals; ASan+UBSan/default PIE/ASLR remain enabled. Bound execution and retain input/output hashes before cleaning owned temporary files.",
           "verification_status": "source_declared_unexecuted",
           "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
         },
@@ -31341,7 +31341,7 @@
             "exit code",
             "input and output hashes"
           ],
-          "version_limits_side_effects_cleanup": "Both helper paths use -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined; libFuzzer adds -fsanitize=fuzzer. Preserve default PIE and ASLR. Compilation is not an OpenHarmony target/device verification and does not start a long fuzz campaign.",
+          "version_limits_side_effects_cleanup": "Both helper paths use -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined; libFuzzer adds -fsanitize=fuzzer. AFL++ compilation sets AFL_UBSAN_VERBOSE=1 to retain specific non-recovering UBSan reports. Preserve default PIE and ASLR. Compilation is not an OpenHarmony target/device verification and does not start a long fuzz campaign.",
           "verification_status": "source_declared_unexecuted",
           "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
         },
@@ -31431,7 +31431,7 @@
             "exit code",
             "input and output hashes"
           ],
-          "version_limits_side_effects_cleanup": "The real helper keeps -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined and adds -fsanitize=fuzzer for libFuzzer or AFL_USE_ASAN=1 for LLVM 19 PCGUARD AFL++. Do not add -no-pie, disable sanitizer instrumentation, alter ASLR, or substitute an old/NATIVE plugin to get a passing smoke. Retain binary/input/log hashes; no automatic long-running fuzz campaign or device verification.",
+          "version_limits_side_effects_cleanup": "The real helper keeps -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined and adds -fsanitize=fuzzer for libFuzzer or AFL_USE_ASAN=1 AFL_UBSAN_VERBOSE=1 for LLVM 19 PCGUARD AFL++, preserving specific non-recovering UBSan reports. Do not add -no-pie, disable sanitizer instrumentation, alter ASLR, or substitute an old/NATIVE plugin to get a passing smoke. Retain binary/input/log hashes; no automatic long-running fuzz campaign or device verification.",
           "verification_status": "source_reviewed_unexecuted",
           "verification_note": "Wrapper source was reviewed; no Docker image was built or executed by this catalog generation."
         }

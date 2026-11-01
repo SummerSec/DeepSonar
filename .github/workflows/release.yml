@@ -2514,7 +2514,7 @@ jobs:
       - name: Native default-user environment, manual and sanitizer acceptance
         shell: bash
         env:
-          IMAGE_NAME: ${{ env.REGISTRY }}/${{ needs.base-image.outputs.owner }}/deepsonar-openharmony-fuzz
+          REGISTRY_HOST: ${{ env.REGISTRY }}
           DIGEST: ${{ needs.openharmony-fuzz-build.outputs.digest }}
           EXPECTED_SOURCE: ${{ needs.base-image.outputs.checkout_ref }}
         run: |
@@ -2522,7 +2522,9 @@ jobs:
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           source_sha="$(git rev-parse HEAD)"
           [[ "$source_sha" == "$EXPECTED_SOURCE" ]]
-          image_ref="${IMAGE_NAME}@${DIGEST}"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          [[ -n "$owner" ]]
+          image_ref="${REGISTRY_HOST}/${owner}/deepsonar-openharmony-fuzz@${DIGEST}"
           platform="linux/${{ matrix.arch }}"
           log="$RUNNER_TEMP/openharmony-fuzz-native-${{ matrix.arch }}.log"
           mkdir -p openharmony-fuzz-native-logs
