@@ -1,4 +1,10 @@
 import type { SessionItemKind, SessionTimelineItem } from "./parseAgentSession";
+import { redactPiObservationalMemoryText } from "@deepsonar/shared-types";
+
+/** Apply the same field policy to timeline, inspector and raw archive views. */
+export function sessionViewerSafeText(text: string, cli?: string | null): string {
+  return !cli || cli === "pi" ? redactPiObservationalMemoryText(text) : text;
+}
 
 export type SessionArtifactMeta = {
   name: string;
@@ -38,7 +44,20 @@ export type SessionGatewayUsageRow = {
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
   settlement_status?: string;
+  workload?: "main" | "observational_memory";
   observed_at?: string;
+};
+
+export type SessionGatewayWorkloadUsage = {
+  requests: number;
+  input: number;
+  output: number;
+  total: number;
+  cacheRead: number;
+  cacheWrite: number;
+  settled: number;
+  unknown: number;
+  notReported: number;
 };
 
 export type SessionGatewayModelUsage = {
@@ -51,6 +70,7 @@ export type SessionGatewayModelUsage = {
   total: number;
   cacheRead: number;
   cacheWrite: number;
+  workload: "main" | "observational_memory";
 };
 
 export type SessionTokenUsage = {
@@ -69,6 +89,7 @@ export type SessionTokenUsage = {
     settled: number;
     unknown: number;
     notReported: number;
+    workloads: Record<"main" | "observational_memory", SessionGatewayWorkloadUsage>;
     models: SessionGatewayModelUsage[];
     rows: Array<SessionGatewayUsageRow & { request_no: number; provider: string; model: string }>;
   } | null;
@@ -150,6 +171,24 @@ function tokenCount(value: unknown): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+function gatewayWorkload(value: unknown): "main" | "observational_memory" {
+  return value === "observational_memory" ? "observational_memory" : "main";
+}
+
+function emptyGatewayWorkloadUsage(): SessionGatewayWorkloadUsage {
+  return {
+    requests: 0,
+    input: 0,
+    output: 0,
+    total: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    settled: 0,
+    unknown: 0,
+    notReported: 0,
+  };
+}
+
 function addBucket(target: SessionTokenBucket, tokens?: SessionTimelineItem["tokens"]): void {
   if (!tokens) return;
   target.input += tokenCount(tokens.input);
@@ -220,10 +259,15 @@ export function buildSessionTokenUsage(
     settled: 0,
     unknown: 0,
     notReported: 0,
+    workloads: {
+      main: emptyGatewayWorkloadUsage(),
+      observational_memory: emptyGatewayWorkloadUsage(),
+    },
     models: [] as SessionGatewayModelUsage[],
     rows: gatewayUsage
       .map((row, index) => ({
         ...row,
+        workload: gatewayWorkload(row.workload),
         request_no: tokenCount(row.request_no) || index + 1,
         provider: row.provider?.trim() || "unknown",
         model: row.model?.trim() || "—",
@@ -232,19 +276,33 @@ export function buildSessionTokenUsage(
   };
 
   for (const row of gateway.rows) {
+    const workload = row.workload;
+    const workloadUsage = gateway.workloads[workload];
+    workloadUsage.requests += 1;
     gateway.input += tokenCount(row.input_tokens);
     gateway.output += tokenCount(row.output_tokens);
     gateway.total += tokenCount(row.total_tokens);
     gateway.cacheRead += tokenCount(row.cache_read_input_tokens);
     gateway.cacheWrite += tokenCount(row.cache_creation_input_tokens);
+    workloadUsage.input += tokenCount(row.input_tokens);
+    workloadUsage.output += tokenCount(row.output_tokens);
+    workloadUsage.total += tokenCount(row.total_tokens);
+    workloadUsage.cacheRead += tokenCount(row.cache_read_input_tokens);
+    workloadUsage.cacheWrite += tokenCount(row.cache_creation_input_tokens);
     if (row.settlement_status === "unknown") gateway.unknown += 1;
     else if (row.settlement_status === "not_reported") gateway.notReported += 1;
     else gateway.settled += 1;
-    const key = `${row.provider}::${row.model}`;
+    if (row.settlement_status === "unknown") workloadUsage.unknown += 1;
+    else if (row.settlement_status === "not_reported") workloadUsage.notReported += 1;
+    else workloadUsage.settled += 1;
+    const key = workload === "main"
+      ? `${row.provider}::${row.model}`
+      : `${workload}::${row.provider}::${row.model}`;
     const model = models.get(key) ?? {
       key,
       provider: row.provider,
       model: row.model,
+      workload,
       requests: 0,
       input: 0,
       output: 0,

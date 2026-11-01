@@ -1,7 +1,7 @@
 import { CaretDown } from "@phosphor-icons/react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, type DashboardUsage, type UsagePeriod } from "./api";
+import { api, type DashboardUsage, type JobUsageSummary, type UsagePeriod } from "./api";
 import { useAuth } from "./auth";
 import { formatTrendDay } from "./dashboard-overview";
 import { humanInterventionUiPrefUserKey } from "./human-messages";
@@ -26,6 +26,41 @@ type TokenRow = {
   cache_read_input_tokens: number;
   cache_creation_input_tokens: number;
 };
+
+export function JobUsageLedgerView({ usage }: { usage: readonly JobUsageSummary[] }) {
+  if (!usage.length) return null;
+  return (
+    <section aria-label="模型用量账本" className="space-y-2 font-mono text-[11px] text-zinc-400">
+      {(["main", "observational_memory"] as const).map((workload) => {
+        const rows = usage.filter((row) => (row.workload ?? "main") === workload);
+        const sum = (key: Exclude<keyof TokenRow, "requests">) => rows.reduce((total, row) => total + Number(row[key] || 0), 0);
+        const unknown = rows.filter((row) => row.settlement_status !== "settled").length;
+        return (
+          <p key={workload}>
+            <span className="text-zinc-300">{workload === "main" ? "主任务" : "记忆后台"}：</span>
+            {rows.length} 次 · 输入 {formatTokenCount(sum("input_tokens"))} / 输出 {formatTokenCount(sum("output_tokens"))}
+            {" · "}缓存读/写 {formatTokenCount(sum("cache_read_input_tokens"))}/{formatTokenCount(sum("cache_creation_input_tokens"))}
+            {" · "}合计 {formatTokenCount(sum("total_tokens"))}
+            {unknown > 0 && <span className="ml-2 text-amber-300">用量待对账 {unknown} 条</span>}
+          </p>
+        );
+      })}
+      <details>
+        <summary className="cursor-pointer">最近 {usage.length} 条模型请求（最多 100 条）</summary>
+        <ol className="mt-2 space-y-1">
+          {usage.map((row) => (
+            <li key={row.id} className="flex flex-wrap gap-x-2 border-l border-white/[.08] pl-3">
+              <span>{row.workload === "observational_memory" ? "记忆后台" : "主任务"}</span>
+              <span>{row.provider} / {row.model}</span>
+              <span>{formatTokenCount(row.total_tokens)} tokens</span>
+              <span>{row.settlement_status === "settled" ? "已结算" : row.settlement_status === "unknown" ? "用量未知" : "未报告用量"}</span>
+            </li>
+          ))}
+        </ol>
+      </details>
+    </section>
+  );
+}
 
 export function UsageLedgerBoard({
   scope = "global",
@@ -86,6 +121,8 @@ export function UsageLedgerBoard({
   }, [period, customFrom, customTo, projectId, canvasId]);
 
   const peak = Math.max(1, ...(usage?.series.map((day) => day.total_tokens) ?? [0]));
+  const mainWorkload = usage?.workloads.main;
+  const memoryWorkload = usage?.workloads.observational_memory;
   const title = scope === "task" ? "本任务用量账本" : scope === "project" ? "项目账本" : "用量账本";
   const hint = scope === "task"
     ? "只统计挂在本画布上的 Gateway 账本，不对账 Session 归档，也不计价。"
@@ -135,7 +172,7 @@ export function UsageLedgerBoard({
         {collapsed ? (
           <p className="usage-ledger__note">
             {usage
-              ? `${usage.totals.requests} 请求 · 合计 ${formatTokenCount(usage.totals.total_tokens)} · 缓存读 ${formatTokenCount(usage.totals.cache_read_input_tokens ?? 0)}`
+              ? `${usage.totals.requests} 请求 · 合计 ${formatTokenCount(usage.totals.total_tokens)} · 主任务 ${formatTokenCount(usage.workloads.main.total_tokens)} · 记忆后台 ${formatTokenCount(usage.workloads.observational_memory.total_tokens)}`
               : loading ? "正在汇总账本…" : "账本已收起"}
           </p>
         ) : (
@@ -170,6 +207,10 @@ export function UsageLedgerBoard({
                     value={formatCacheHitRate(usage.totals.cache_read_input_tokens ?? 0, usage.totals.cache_creation_input_tokens ?? 0)}
                   />
                   <UsageStat label="合计" value={formatTokenCount(usage.totals.total_tokens)} raw={usage.totals.total_tokens} />
+                  <UsageStat label="主任务请求" value={String(mainWorkload?.requests ?? 0)} />
+                  <UsageStat label="记忆后台请求" value={String(memoryWorkload?.requests ?? 0)} />
+                  <UsageStat label="主任务 tokens" value={formatTokenCount(mainWorkload?.total_tokens ?? 0)} raw={mainWorkload?.total_tokens ?? 0} />
+                  <UsageStat label="记忆后台 tokens" value={formatTokenCount(memoryWorkload?.total_tokens ?? 0)} raw={memoryWorkload?.total_tokens ?? 0} />
                   <UsageStat label="Job" value={String(usage.totals.jobs)} />
                   {scope === "global" && <UsageStat label="项目" value={String(usage.totals.projects)} />}
                   {scope !== "task" && <UsageStat label="任务" value={String(usage.totals.tasks)} />}
@@ -199,8 +240,8 @@ export function UsageLedgerBoard({
                     <div className={`usage-ledger__tables${scope === "global" ? " is-global" : ""}`}>
                       {scope === "global" && (
                         <UsageTable
-                          title="项目"
-                          empty="该窗口没有项目消耗"
+                          title="项目（主任务）"
+                          empty="该窗口没有项目主任务消耗"
                           rows={usage.projects.map((item) => ({
                             key: item.id,
                             name: item.name,
@@ -212,8 +253,8 @@ export function UsageLedgerBoard({
                       )}
                       {scope !== "task" && (
                         <UsageTable
-                          title="任务"
-                          empty="该窗口没有任务消耗"
+                          title="任务（主任务）"
+                          empty="该窗口没有任务主任务消耗"
                           rows={usage.tasks.map((item) => ({
                             key: item.canvas_id ?? item.title,
                             name: item.title,
@@ -227,9 +268,9 @@ export function UsageLedgerBoard({
                         title="模型"
                         empty="该窗口没有模型拆分"
                         rows={usage.models.map((item) => ({
-                          key: `${item.provider}:${item.model}`,
+                          key: `${item.workload}:${item.provider}:${item.model}`,
                           name: `${item.provider} / ${item.model}`,
-                          meta: `${item.requests} 次请求`,
+                          meta: `${item.workload === "observational_memory" ? "记忆后台" : "主任务"} · ${item.requests} 次请求`,
                           tokens: item,
                         }))}
                       />

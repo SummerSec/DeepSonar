@@ -1,7 +1,7 @@
 # 05 构建块与所有权
 
 > 状态：**as-built**（#741）。列出四个应用、三个共享包和 Scheduler 域的责任边界及依赖方向；领域状态机由专题文档维护。
-> 同步日期：2026-10-30
+> 同步日期：2026-10-31
 
 构建块按照“入口组装、领域负责规则、基础设施负责外部效果”分层。所有权以目录、注册入口和运行时依赖为事实；完整 bounded-context 说明见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -52,13 +52,14 @@ flowchart LR
 | `event-ingestion` | 事件 envelope、dedup、Job sequence 和语义副作用事务 | → canvas、job-lifecycle、hub、audit |
 | `extension-materialization` | 经准入的 CLI/Skill 扩展 materialization | → capability-pack、skill-source、runtime snapshot |
 | `finding-research` | 语义 cluster、canonical anchor、relative priority 和研究审计 | → finding、report；不反向改变 Verify |
+| `project-finding-research` | 特征/弱候选、操作员见证身份 manifest/mapping、CAS/freshness/撤销、持久关系 worker 与当前有界读取 | → finding、audit、settings 的维护 fence；当前强关系不发布，不认证外部官方来源 |
 | `finding-verification` | Verify rounds、证据门、rework、needs_human、确认/驳回 | → artifacts、job-lifecycle、canvas |
 | `hub-orchestration` | Hub eligibility、intent 校验、轮次和进展 | → context、job-lifecycle、canvas |
 | `job-attempt` | Attempt、phase、effect pending/settlement、replay 和资源清理 | → dispatcher、sandbox、audit |
 | `job-control` | 取消、恢复、重跑、人工路径等管理动作 | → job-lifecycle、job-attempt、canvas |
 | `job-lifecycle` | Job 状态策略、claim/failure/timeout/orphan/reconcile | → attempt、dispatcher、hub |
 | `language-server-capability` | 语言服务能力目录和准入描述 | → capability-pack、platform-api |
-| `plan-protocol` | 计划和计划结果协议、版本与校验 | → platform-api、job-control、canvas |
+| `plan-protocol` | 用户 objective/路线 CAS、Plan v2/Result、lifetime 预算、依赖/实际输出及完成判据 | → platform-api、event-ingestion、hub-orchestration、job-control、canvas；复用既有 Intent materializer |
 | `platform-api` | Job-scoped Control operation registry、token、动态接口和反馈 | → 所有允许 Agent 提案的域 |
 | `platform-claims` | 平台级暂停/恢复等 claim | → dispatcher、settings、audit |
 | `platform-updates` | 从 registry catalog 做平台版本/结构化 manifest 的只读发现，并写入 `platform_update_checks` 单例；不执行升级或 apply | → runtime-image、settings、audit；Web 只读展示管理员提示 |
@@ -67,6 +68,7 @@ flowchart LR
 | `project-skill-allowlist` | 项目 Skill 来源和选择约束 | → skill-source、extension-materialization |
 | `project-task` | 项目任务入口、Canvas 根和 ingress 幂等 | → canvas、hub、job-lifecycle |
 | `provider-adapter` | Provider/model 目录、兼容性和网关选择 | → credential、gateway、runtime snapshot |
+| `program-eligibility` | 可信程序材料的操作员准入、append-only 评审、当前 Finding/Verify/Evidence 只读投影和历史失效 | → finding、finding-verification、audit；不认证外部官方来源，不授予执行权限 |
 | `report-convergence` | Task/Finding 报告输入门、版本、SARIF 和失败状态 | → context、canvas、research |
 | `role-config` | 角色/项目候选配置和管理投影 | → runtime snapshot、auth |
 | `role-runtime-snapshot` | 创建期 CLI、Provider、技能、镜像、网络、凭据和 knobs 快照 | → dispatcher、job-attempt；不拥有 Job 状态 |
@@ -76,6 +78,7 @@ flowchart LR
 | `skill-source` | Skill 来源、trusted/enabled 状态、选择和内容 hash | → platform-api、extension-materialization |
 | `stream` | WS ticket、Evidence catch-up、过程流可见性和背压 | → evidence、auth、job-lifecycle |
 | `system` | 健康、schema/启动检查和系统级装配 | → 所有应用基础设施 |
+| `target-authorization` | Scheduler-owned 只读目标授权协议、平台配置 identity、freshness/binding/revision 和 Job grant 账本 | → project-task、role-runtime-snapshot、audit；不执行目标写入，客户端声明不能替代 authority |
 | `transfer` | 导入/导出包的格式、校验、作用域和审计 | → auth、project、shared-assets、audit |
 | `worker-nodes` | 远程 Worker 注册、心跳和节点能力 | → dispatcher、runtime-sandbox、audit |
 
@@ -92,3 +95,11 @@ flowchart LR
 ### #778 在线条件建议与选择回执
 
 `project-knowledge/skill-suggestions.ts` 在冻结目录与当前权限交集中读取本项目精确 Skill 的适用声明；纯规则比较当前 Job 条件，完整有界过滤后分页。`record_skill_choice` 复用 knowledge ingestion/receipt，宿主重新计算并锁定复查，实际 pull/usage/feedback 继续独立。没有新表、执行器或经验账本；其他源和 Pack 未评估。完整边界见[专题](../SKILL_SUGGESTIONS.md)。
+
+## Pi runtime 与观测内存边界（#815）
+
+Pi 的现行运行时所有权落在 `packages/shared-types/src/pi-extensions.ts`、`apps/scheduler/src/pi-extensions.ts` 和 `packages/runtime-sandbox`：平台注册表与镜像预装共同构成准入，Hub 只能选择已注册 ID；Job 创建时冻结 package/version/integrity/entry/workspace/image 兼容性，执行时用 `--no-extensions` 加显式 `-e` 物化 stub。Pi RPC 白名单、session identity、过程/大帧归档和 Gateway 路由仍由 Scheduler 的运行时路径拥有。RoleConfig 不再保存 `pi_extensions`，扩展选择属于能力组合和 Job snapshot。
+
+当前根 checkout 已包含 `pi-observational-memory` 的 registry row、wrapper loader、冻结配置、Gateway workload、用量账本和 RPC/archive 边界；新 Job 仍须由 Hub 能力组合显式 opt-in，默认不启用。扩展及 wrapper 预装路径、Job snapshot 和 `--no-extensions` + 显式 `-e` 物化由 Scheduler/runtime-sandbox 共同持有。观测内存只属于 Job/current-session 上下文治理，不是 Fact、Evidence、Artifact、Finding 或报告的 authority，也不得形成跨 Job 读取路径；[ADR 0013](adr/0013-governed-pi-memory.md) 记录条件准入和独立启用门禁。
+
+当前实现固定 canonical npm 包与入口，`requires_egress=false`、`requires_gateway=true`；冻结的 provider/model、私有设置、独立 `observational_memory` workload token、显式有限 `total_requests`/`main_requests`/`background_requests` 分配、pending/unknown 结算、终态撤销、可见降级和多出口脱敏由内核或 wrapper 守卫。新 Job 从所选 `runtimeImage.image_version` 校验 OM 专属下限，运行时由 [pi-memory-image-guard](../../packages/runtime-sandbox/src/pi-memory-image-guard.ts) 在 Pi 启动/恢复前独立检查 installed package/entry/wrapper。实际本地 base 镜像的封装/RPC/guard 正负例及回归已通过，身份、场景和分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；请求前 transport 与持久结算见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。最终组合 CI 与发布证据另验，质量/成本收益保持 `unknown`。

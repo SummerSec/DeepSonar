@@ -25,6 +25,8 @@ ARG DSH_VERSION=0.2.1-rc.2
 ARG DSH_INTEGRITY=sha512-tvY+yhfKRifthbqPe/OK0AYxM5ZkvqfYq/jMYgJcEUxiRRL1Vwra3Ti5TB6AXgSWQdiPHYh/Vp6SJa9yHwMNuw==
 ARG PI_WEB_ACCESS_VERSION=0.29.0
 ARG PI_WEB_ACCESS_INTEGRITY=sha512-1l4sAWYkFhiBynJf/mXuxmCHxjhiAyWJ4rfQVFu8UPa0JQhCS9oXAmNXcL0Q1SfrO00plmb6L4IkypJ3n1Q4Kg==
+ARG PI_OBSERVATIONAL_MEMORY_VERSION=3.1.4
+ARG PI_OBSERVATIONAL_MEMORY_INTEGRITY=sha512-jgQbFyLMs4wWhkf6F0voOgzMwtIXsb8+ks0MsPKpPxkdpyMX5E/el6Mk/vJ40m8GlKwBIsCKjL1r7Z2U8dCtmA==
 ARG NODE_VERSION=22.23.2
 ARG UV_VERSION=0.11.32
 ARG UV_AMD64_SHA256=aab924fd522efd06f1c5f3b93a243864fc453132c94b2dc49f1371b528a4b967
@@ -82,11 +84,18 @@ RUN set -eu; \
   npm cache clean --force
 
 RUN set -eu; \
+  test "$(npm view pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION} dist.integrity)" = "$PI_OBSERVATIONAL_MEMORY_INTEGRITY"; \
   test "$(npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity)" = "$PI_WEB_ACCESS_INTEGRITY"; \
   mkdir -p /opt/deepsonar/pi-extensions; \
+  npm install --omit=dev --ignore-scripts --save-exact --no-audit --no-fund --prefix /opt/deepsonar/pi-extensions \
+    pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION}; \
+  node -e 'const fs=require("node:fs"),root=process.argv[3]||"/opt/deepsonar/pi-extensions",p=JSON.parse(fs.readFileSync(root+"/package-lock.json")).packages["node_modules/pi-observational-memory"],installed=JSON.parse(fs.readFileSync(root+"/node_modules/pi-observational-memory/package.json")); if(p?.version!==process.argv[1]||p?.integrity!==process.argv[2]||p?.resolved!=="https://registry.npmjs.org/pi-observational-memory/-/pi-observational-memory-"+process.argv[1]+".tgz"||installed.name!=="pi-observational-memory"||installed.version!==process.argv[1]||installed.license!=="MIT"||!fs.existsSync(root+"/node_modules/pi-observational-memory/src/index.ts")) throw new Error("PI_OM_INSTALL_IDENTITY_MISMATCH");' "$PI_OBSERVATIONAL_MEMORY_VERSION" "$PI_OBSERVATIONAL_MEMORY_INTEGRITY"; \
   npm install --omit=dev --no-audit --no-fund --prefix /opt/deepsonar/pi-extensions \
     pi-web-access@${PI_WEB_ACCESS_VERSION}; \
   npm cache clean --force
+
+COPY agent-harness/pi-observational-memory-governed.ts /opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts
+RUN test -s /opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts
 
 RUN set -eu; arch="$(dpkg --print-architecture)"; \
     case "$arch" in \

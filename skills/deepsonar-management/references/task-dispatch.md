@@ -99,7 +99,7 @@ Canvas 保存规范化契约和模板版本，Job 保存冻结契约用于执行
 
 Scheduler 在沙箱创建前再次核对当前项目网络策略、引用凭据的存在/启用/项目范围与冻结 Job 边界。客户端 `allowed_actions` 只是本次限制，不能授予写权限或出网。平台对 `allowed_actions` 与 `required_actions` 的并集核验；可选允许动作也不能跳过授权。显式契约任务的出网取当前项目规则、冻结 Job 网络与契约允许动作的交集；即使任务请求 `allow_egress: true`，也不能绕过当前项目规则。未选择 egress 的契约会冻结为禁止出网；旧的无契约任务保留原网络覆盖语义。`identity` 是待核验的目标租户/角色/资源声明；凭据存在不证明已登录目标，也不证明有目标写权限。前置条件只能声明 `declared/missing/not_applicable`，不能提交 `verified`。
 
-当前没有通用目标身份/写授权/材料可达性的可信探测器：必要身份、write 或必需前置条件无法核验时拒绝依赖链，返回具体补充项。不会为了探测权限尝试未授权写入。只读任务可明确声明 read；需要目标外联时另声明 egress，仍受实际项目/Job 策略限制。无法安全自动拆分任意自由文本，因此阻塞整条契约依赖链；要保留只读价值，应另建明确范围的只读任务，不能把动态验证目标标成已完成。
+当前没有通用目标身份/写授权/材料可达性的可信探测器。唯一已接线的目标授权例外是宿主显式配置的 `reference-http/v1`：Scheduler 通过可信只读 authority 核对实际 principal/租户/角色/资源、动作与前置条件，在创建期冻结 grant，并在派发、child/rerun 和沙箱 provision 前重新核对当前来源及范围。它不试写目标，也不支持任意身份适配器或由任务内容指定 authority；完整边界见[可信目标授权](../../../docs/TARGET_AUTHORIZATION.md)。未配置该受信来源、来源过期/撤销/不匹配，或必要条件无法核验时拒绝依赖链，返回具体补充项。不会为了探测权限尝试未授权写入。只读任务可明确声明 read；需要目标外联时另声明 egress，仍受实际项目/Job 策略限制。无法安全自动拆分任意自由文本，因此阻塞无法核验的整条契约依赖链；要保留只读价值，应另建明确范围的只读任务，不能把动态验证目标标成已完成。
 
 这是一道任务准入门，不是对沙箱任意命令的细粒度读写授权器。未声明或与正文矛盾的动作需要人工审核；字段检查不证明所有模型行为安全，也不取代现有平台准入。
 
@@ -171,7 +171,7 @@ Scheduler 在沙箱创建前再次核对当前项目网络策略、引用凭据�
 
 ## 9. 通用任务标准与研究候选（#767 / #794 首片）
 
-所有已提供的 task_contract 都检查 objective/targets/scope/evidence/acceptance 基本完整性。exclusions 可以为空，有声明则纳入候选判据。省略 outcome、选择 task_defined 或 bounty_submission 都不绕过通用门。仍接受无契约旧入口但返回 unassessed；这是迁移缺口，不代表该任务已达到统一标准，也不是删除已启用契约绕过检查的理由。
+所有已提供的 task_contract 都检查 objective/targets/scope/evidence/acceptance 基本完整性。exclusions 可以为空，有声明则纳入候选判据。省略 outcome、选择 task_defined 或 bounty_submission 都不绕过通用门。契约仍是显式可选的当前入口；未提供 task_contract 的任务返回 unassessed，这是未评估边界而非强制迁移缺口，不代表该任务已达到统一标准，也不是删除已启用契约绕过检查的理由。
 
 outcome 子对象可显式为 `{"mode":"task_defined"}`；只有用户要求按指定项目规则形成可提交成果时才选 bounty_submission。后者的 rules_status unknown 可开展补证观察，但不能提交 Finding；supplied 须提供规则快照。用户授权选定的 source.sha256 只是材料身份声明，不是官方规则或权限认证。详见[通用标准与研究候选](../../../docs/TASK_OUTCOME_ADMISSION.md)。
 

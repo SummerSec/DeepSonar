@@ -204,9 +204,18 @@ try {
     assert.equal(await dispatcher.dispatchOnce(), 1, `expected only ${mode} Job to dispatch`);
     const deadline = Date.now() + 600_000;
     let interrupted = false;
+    let redispatchCalls = 0;
+    let redispatched = 0;
     let row: any;
     while (Date.now() < deadline) {
       [row] = await sql`SELECT * FROM jobs WHERE id=${id}`;
+      // This harness drives dispatchOnce directly, without the production LISTEN
+      // loop. Consume legal kernel requeues through that same dispatcher rather
+      // than stranding a pre-start retry until the unchanged acceptance deadline.
+      if (row.status === "pending") {
+        redispatchCalls++;
+        redispatched += await dispatcher.dispatchOnce();
+      }
       if (!interrupted && ["cancel", "timeout"].includes(mode)) {
         const [checkpoint] = await sql`SELECT id,payload_json FROM events WHERE job_id=${id} AND payload_json->>'message' LIKE 'REA_CHECKPOINT_READY%'`;
         if (checkpoint) {
@@ -230,7 +239,13 @@ try {
     // Terminal status precedes the dispatcher's asynchronous finally cleanup.
     // Drain before asserting the outcome, including expected test failures.
     await drainJobs!();
-    const jobReport: Record<string, unknown> = { id, mode, status: row.status, error: row.error ?? null };
+    const attempts = await sql`SELECT id,status,phase,sandbox_id,created_at,finished_at,
+      outcome_json->>'reason' AS reason, outcome_json->>'retry_scheduled' AS retry_scheduled
+      FROM job_attempts WHERE job_id=${id} ORDER BY created_at,id LIMIT 16`;
+    const jobReport: Record<string, unknown> = {
+      id, mode, status: row.status, error: row.error ?? null, attempts,
+      redispatch_calls: redispatchCalls, redispatched,
+    };
     report.jobs.push(jobReport);
     await saveReport();
     const expectedStatus = mode === "cancel" ? "cancelled" : mode === "timeout" ? "timeout" : mode === "failure" ? "failed" : "succeeded";
@@ -247,7 +262,6 @@ try {
     const modelTokens = await sql`SELECT status FROM job_tokens WHERE job_id=${id}`;
     assert.ok(modelTokens.length > 0 && modelTokens.every((token: any) => token.status !== "active"), "model tokens must be revoked too");
     assert.ok(!(await runtime.sharedAssetsVolumeManager.listManaged()).some((volume) => volume.jobId === id), "shared-assets mount leaked");
-    const attempts = await sql`SELECT id,status,sandbox_id FROM job_attempts WHERE job_id=${id}`;
     assert.ok(attempts.some((attempt: any) => attempt.sandbox_id && attempt.status !== "active"));
     Object.assign(jobReport, { attempts, resources_remaining: 0 });
     await saveReport();

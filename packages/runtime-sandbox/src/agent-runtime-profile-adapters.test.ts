@@ -11,7 +11,7 @@ function frozenProfile(agent_cli: "claude-code" | "pi" | "dsh"): FrozenAgentRunt
       ? { model_env: "ANTHROPIC_MODEL", effort_level: "high" }
       : null,
     pi: agent_cli === "pi"
-      ? { model: "reasoning-model", provider: "anthropic", extensions: ["code-navigation"] }
+      ? { model: "reasoning-model", provider: "anthropic", extensions: ["code-navigation"], observational_memory: null }
       : null,
     dsh: agent_cli === "dsh"
       ? { task_mode: "ptc" as const, provider: "anthropic" }

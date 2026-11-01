@@ -18,6 +18,28 @@
 
 历史材料可以说明决策来源，但不能单独证明能力当前存在。发现文档与实现不一致时登记偏差并回写文档，不能改规范去迎合未实现的行为。
 
+### 1.1 注意力成本评审（#830）
+
+以 [DESIGN 的权威定义](../../DESIGN.md#核心理念优化人的注意力)为依据，新增界面、通知、配置、工作流或自动化行为时，在现有需求或 PR 说明里简要回答：
+
+- 用户为什么需要关注它？减少哪类人工负担，又增加哪些设置、决策或维护成本？
+- 能否在已有授权内自动处理，或合并重复信息、复用现有能力？
+- 是否有认知负担更小的实现，仍让用户看清状态、风险和证据？
+- 若必须询问，缺什么、影响什么、需要哪一个具体决定？已有有效授权是否已足够？
+
+纯内部修改无需填写额外表格；复用现有评审即可，不新增审批层。以下是评审示例，属于设计要求，不表示所有既有产品行为已自动满足：
+
+| 场景 | 符合原则的处理 | 应避免的处理 |
+| --- | --- | --- |
+| 重复进度 | 正常阶段变化留在状态和历史；合并重复消息，实质变化再提醒 | 每轮刷新重复发送相同进度，要求用户反复确认正常运行 |
+| 可自行核实的问题 | 先查当前仓库、配置、已有记录和有效授权；只问仍缺的具体输入 | 要用户重新提供系统已经能够读取的信息或重复选择已确定方案 |
+| 真实阻塞 | 说明缺失输入、受影响工作、可继续部分及需要的一个决定 | 隐藏阻塞、给笼统的“请检查配置”，或把全部排查转给用户 |
+| 必要授权 | 既有授权覆盖时继续；范围变化或安全边界确需确认时展示具体动作、影响及依据 | 对每个可逆步骤重复求准，或把沉默当成生产部署、扩权和合并批准 |
+| 失败报告 | 区分已执行失败、未执行和效果未知，给证据及可行动的恢复路径 | 因为少打扰而省略失败，把 unknown、skip 或草稿显示为成功 |
+| 结果验收 | 展示可审阅成果、实际验证范围和待决定项，详情与审计按需展开 | 只给模型的“已完成”，让用户自行从原始日志判断目标是否达成 |
+
+不新增通知聚合器、Agent 角色、配置或执行通道，不自动批准/合并，也不降低质量、安全和验证门。目标持续收敛与任务前置条件仍归 #775 / #767；发现具体交互缺口先核对 as-built、现有规划与关联 issue，再登记真实增量，不在 #830 中展开重构。注意力收益尚未测量，不承诺节省比例。
+
 ## 2. 代码与数据规范
 
 ### 2.1 领域边界
@@ -45,7 +67,7 @@
 
 ### 3.1 Control API
 
-真实 Job 的语义写入只通过 Job-scoped Control API 完成。受治理的普通 MCP/CLI 工具仍可作为业务执行手段，但不得绕过 Control API 写入语义状态。短期 Job capability token 只保存可审计的 hash/prefix 表示，按 operation allowlist、项目 scope、Job 状态、过期时间和预算校验；终态同时撤销相关 token。发现接口只提供选择入口，不能把发现结果当成授权。
+真实 Job 的语义写入只通过 Job-scoped Control API 完成。受治理的普通 MCP/CLI 工具仍可作为业务执行手段，但不得绕过 Control API 写入语义状态。短期 Job capability token 只保存可审计的 hash/prefix 表示，按 operation allowlist、项目 scope、Job 状态、过期时间和预算校验；终态同时撤销相关 token。终态 Job、model token、Control token 与 audit 撤销在同一事务内完成，不另取 Job lock，也不以 best-effort 吞掉异常。发现接口只提供选择入口，不能把发现结果当成授权。
 
 Control API 的每个 operation 必须经过三层校验：
 
@@ -69,6 +91,24 @@ Control API 的每个 operation 必须经过三层校验：
 
 运行时能力缺失返回结构化 `capability_unavailable` 或稳定准入错误，不通过包管理器、下载脚本或未登记命令静默安装。镜像目录、签名/扫描、版本引用和 pull/reconcile 的细则见 [ADR 0006](adr/0006-runtime-image-admission.md)。
 
+### 3.4 Pi 观测内存的条件准入（#815）
+
+当前根代码已实现 Pi 扩展注册、Job snapshot 冻结、镜像预装 stub、OM wrapper、Gateway workload、RPC 白名单和 session/archive 边界；新 Job 默认不启用，必须由 Hub 能力组合显式 opt-in。以下区分已接入实现、不变边界和仍未闭合的启用验收；任何尚未执行的真实 RPC、Docker 或模型证据都不能写成通过：
+
+- 准入对象固定为发布物及其接口面：npm `pi-observational-memory@3.1.4` 的 entry 是 `src/index.ts`，integrity 是 `sha512-jgQbFyLMs4wWhkf6F0voOgzMwtIXsb8+ks0MsPKpPxkdpyMX5E/el6Mk/vJ40m8GlKwBIsCKjL1r7Z2U8dCtmA==`；wrapper 单独 fingerprint，且按 tarball 接口面加载。manifest key compatibility 不证明旧 released digest 含 OM，v0.6.2 镜像不含 OM。
+- OM 只能由显式 opt-in 的冻结 Job/current-session 使用。发布物与 wrapper 预装进准入镜像，Job 冻结 entry/version/integrity、配置和模型路由；私有配置、项目 settings、环境变量和任务内容不得覆盖冻结段。`requires_egress=false` 表示不需要业务出网，`requires_gateway=true` 表示会产生模型请求，二者分开校验。
+- 所有后台请求只能走冻结 Gateway 路由，并使用内核签发、独立归因的 `observational_memory` workload credential；observer/reflector/dropper/recall/fallback/catch-up/retry 不能直连 Provider 或凭客户端自报来源。首版只使用当前 Job 冻结模型，终态撤销 workload token。
+- 未设置有限 `job_token_max_requests` 时保持 unlimited；仅显式有限总额才要求 `total_requests`、`main_requests`、`background_requests` 正整数分配且总额匹配，禁止百分比或隐式预留。可选后台 request/token cap 只能进一步收紧。请求总额与 token/memory usage 是不同账本维度；并发占额、失败/取消、pending/unknown 和未知外部效果按真实效果结算，不能按零返还或自动重放；已知 quota/not-started 可见降级，权限、协议、integrity、snapshot 和 unknown effect 硬失败。
+- wrapper 已隔离扩展私有配置并收紧输出。recall、OM ledger、compaction fold、session/raw archive 和大 RPC 副本按边界做有界投影/脱敏；历史 session preview/raw download 已在全局 job-control 路径于预览截断/下载发送前按 Pi header/manifest 脱敏，immutable archive metadata 保持不变，projection bytes/SHA/Content-Digest 单独报告。memory 只服务上下文治理，不是 Fact/Evidence/Artifact/Finding/报告 authority，不产生跨 Job 读取路径。详见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md)。
+
+2026-10-31 主线程已完成实际本地 base 镜像构建、canonical Pi/OM/生产 wrapper 的真实 RPC、独立生产内容 guard 的 Docker 正负例及封装/版本准入/适配器回归，集中证据见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。历史 Session HTTP 脱敏、Gateway 已知请求前 transport 的持久零用量结算及 provider 防冒充也已通过，见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。最初被旧异步断言中断的组合脚本不能计作通过；后续适配器与实际 Docker RPC 的分别重跑才是通过依据。本地 image ID 不能充当发布 manifest/catalog digest；最终组合 CI、发布通道/平台证据仍未完成，质量与成本收益保持 `unknown`。
+
+### 3.5 可信目标授权、Plan v2 与资格/关系 authority
+
+- 目标授权是 Scheduler-owned 的只读协议：authority/action/prerequisite/scope/revision/freshness/binding 由可信适配器返回，secret 只来自 host/platform 配置；客户端字段、模板或公开凭据 metadata 不能证明外部写权限。中心继承和每次 dispatch/rerun 的 live check 必须保留，最新 grant 无效时不得回退旧 grant；`target_authorization_grant_invalid` 属于不可重试的 fail-closed 路径。
+- 新写入和执行只接受 Plan v2；v1 仅作历史读取。Plan 绑定用户目标的 human CAS、有限 lifetime reroute、执行路线 CAS 和既有 Hub Intent channel；调度保留 Attempt、Evidence bytes、provenance 和 output associations。`PlanResult`/`done` 只能是模型提案或持久接纳，不拥有 semantic completion authority；pending/unknown effect 禁止自动 replay。2026-10-31 已物理删除 `applyHubPlanAdapter`、`persistPlanAudit`、side-effect writer 及纯 legacy `adapt*` helpers/types/exports；普通 HubIntent 仍走原 handler，不制造新的 v1 `plan_protocol` 或 audit，immutable v1（含 `hub_intent_adapter`）仅供历史读取。根本地 replay 已完成 normal→all7negative→normal 三次退出 0，当前 v2 单一 SQL/HTTP fixture 的 17 个 outcomes/traces 与七个注入故障门禁匹配；artifact report provenance 为 dirty 的非 HEAD 提交，不能作为精确 HEAD 最终验收，最终 combined CI 仍待核对。
+- #819 的 identity source/mapping 使用操作员认证、immutable manifest、revision/mapping CAS、freshness/revocation/invalidation 和 durable worker；当前强关系必须保持未发布/质量未评估，且不把 operator attestation 写成已认证的外部 inventory authenticity。#822 的程序资格只接受认证操作员的 append-only material/review，资格是 Finding/Verify/Evidence 的只读投影，不改变 Verify、不授予执行权限。
+
 ## 4. 测试分层与实际接线
 
 测试入口按风险和依赖分层，脚本只代表已接线的测试；没有运行的环境验收不能在文档或 PR 中写成通过。
@@ -85,9 +125,13 @@ Control API 的每个 operation 必须经过三层校验：
 
 单元测试不替代 PostgreSQL 集成，typecheck 不替代行为测试，fake 模式冒烟不替代真实沙箱或多架构镜像证据。`ci:unit:ci-test-hook` 维护 `*.test.ts` 的脚本接线棘轮；它不能证明对应 script 已被 workflow 调用，workflow 仍需人工核对。测试数据库或真实沙箱不可用时保留跳过/未执行事实，不改写为成功。
 
-当前 CI 在单 workflow 内分类 PR：只有新增/修改的明确根目录文档、LICENSE、THIRD_PARTY_NOTICES.md 或 docs 下 Markdown（排除 docs/evidence）可跳过重活；运行时手册、skills、未知路径、混合、删除及重命名都运行全量。文档保鲜与 `pnpm ci:unit:ci-routing` 始终执行，ci-summary 验证分类结果、文档与每个应运行 job，失败、取消或意外跳过不能通过。分类失败/缺失输出不允许走文档路径；push 与 workflow_dispatch 强制 full。
+当前 CI 在单 workflow 内分类 PR：只有新增/修改且位于 [明确文件白名单](../../agent-harness/classify-ci-changes.mjs) 内的纯文本文件可跳过重活；不按 Markdown 后缀或 docs/skills 目录前缀放行。运行时手册、Skill、提示、配置、未知路径、混合改动、删除及重命名都运行全量。分类器使用 NUL 分隔的 Git diff 保留文件名身份。文档保鲜与 `pnpm ci:unit:ci-routing` 始终执行，ci-summary 验证分类结果、文档与每个应运行 job，失败、取消或意外跳过不能通过。分类失败/缺失输出不允许走文档路径；已触发的 push 与 workflow_dispatch 强制 full。
+
+#825 的 Web 构建使用[独立 build 配置](../../apps/web/tsconfig.build.json)隔离测试文件，入口见 [package.json](../../apps/web/package.json)；测试仍由各自 CI suite 执行，不能把排除测试编译解释为行为测试通过。新增 ADR 路径与本次 Management Skill API 修改不因 Markdown 后缀自动获得 docs-only 分类。
 
 合并到 `main` 的 push 对文档路径使用 `paths-ignore`，所以纯文档变更是否触发主干 CI 不能靠经验推断，必要时按发布硬门手动补跑并核对 SHA。
+
+Chrome Fuzz ARM64 的 CI/Release cache miss 构建前执行[受控宿主磁盘准备](../../.github/ci/prepare-hosted-runner-disk.mjs)，只清理 GitHub-hosted runner 的显式 SDK 白名单，保护工作区和 Docker 状态。always-running docs-freshness job 另运行该脚本的 mock 安全测试。实际磁盘耗尽证据、信任限制和待验证运行见[发布专题](../RELEASE_RUNTIME_IMAGES.md#chrome-fuzz-arm64-的宿主磁盘准备)；不以清理测试代替原生构建或 smoke。
 
 ## 5. 文档、需求和发布保鲜
 
@@ -119,4 +163,4 @@ Control API 的每个 operation 必须经过三层校验：
 
 仓库开发 Skill [`architecture-doc-sync`](../../.agents/skills/architecture-doc-sync/SKILL.md) 将上述同步面和验收输出用于后续开发任务；它只治理仓库文档，不改变运行时。
 
-Plan [冻结离线回放](../../agent-harness/plan-replay/README.md)独立锁定期望样本和摘要，从实际SQL/HTTP夹具采集观测。CI输出逐例差异、缺失和分母，失败/跳过不能算通过；未测模型指标保持null，不推导收益或C阶段准入。
+Plan [冻结离线回放](../../agent-harness/plan-replay/README.md)锁定期望样本、摘要与逐例分母，失败/跳过不算通过。2026-10-31 根本地 normal→all7negative→normal 三次 replay 均 exit 0；当前 v2 单一 SQL/HTTP fixture 的 17 个 outcomes/traces 全匹配，七个注入故障均正确触发 gate 失败。`artifacts/plan-replay/report.json` 虽为 `passed=true`，但 provenance 是 dirty 的非 HEAD 提交，且结果不是 17 个独立测试；最终 combined CI 仍待核对，未测模型指标为 `unknown`，不推导质量或成本收益。

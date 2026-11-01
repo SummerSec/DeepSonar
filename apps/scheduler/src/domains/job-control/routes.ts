@@ -1,4 +1,4 @@
-import { TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { TaskGoalReviewRequest, normalizeTaskContract } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
@@ -8,10 +8,12 @@ import { projectCredentialProviderError, projectJobEventPayload, projectJobPaylo
 import { extractDispatchPrompt, parseJsonRecord } from "../../job-dispatch-prompt.js";
 import {
   createJob,
+  advancePlanTaskAfterTerminalJob,
   ensureCanvasForTask,
   fixedPriorityForJob,
   lockCanvasForConvergence,
   priorityMatchesJob,
+  rulesForProject,
   rolesForProject,
   triggerHubFromHumanComment,
 } from "../../core.js";
@@ -39,6 +41,8 @@ import {
   requeueJob,
   type RequeueJobResult,
 } from "./rerun.js";
+import { taskContractPreflight } from "../../task-contract-preflight.js";
+import type { TargetAuthorizationSnapshot } from "../target-authorization/contract.js";
 
 const CreateJobBody = z.object({
   project_id: z.string().uuid(),
@@ -67,6 +71,16 @@ function sendRequeueError(
         ?? `Job 状态 ${result.status} 不允许重新入队；仅 failed/timeout/orphan/waiting_human 可操作`,
       error_code: result.error_code ?? JOB_NOT_RESUMABLE,
       status: result.status,
+      ...(result.provenance ? { provenance: result.provenance } : {}),
+    });
+  }
+  if (result.kind === "target_authorization_blocked") {
+    return reply.code(409).send({
+      error: "目标授权 authority 未确认当前任务条件；未重新入队",
+      error_code: "TARGET_AUTHORIZATION_BLOCKED",
+      job_ids: [result.detail.job_id],
+      stale_fields: result.detail.stale_fields,
+      task_contract_blockers: result.blockers,
       ...(result.provenance ? { provenance: result.provenance } : {}),
     });
   }
@@ -160,6 +174,37 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         expected_priority: expectedPriority,
       });
     }
+    let taskContract;
+    let targetAuthorization: TargetAuthorizationSnapshot | undefined;
+    if (payload.task_contract !== undefined) {
+      try {
+        taskContract = normalizeTaskContract(payload.task_contract);
+      } catch {
+        return reply.code(400).send({
+          error: "payload.task_contract 结构无效",
+          error_code: "invalid_payload",
+          field: "payload.task_contract",
+        });
+      }
+      payload.task_contract = taskContract;
+      const networkPolicy = payload.network_policy && typeof payload.network_policy === "object"
+        && !Array.isArray(payload.network_policy)
+        ? payload.network_policy as Record<string, unknown>
+        : {};
+      const currentRules = await rulesForProject(sql, projectId);
+      const taskAllowEgress = currentRules.allowEgress && networkPolicy.allow_egress === true;
+      const preflight = await taskContractPreflight(sql, projectId, taskContract, taskAllowEgress, {
+        detailed: true,
+        principalId: req.actor?.id ?? req.actor?.name ?? null,
+        content: typeof payload.content === "string" ? payload.content : undefined,
+      });
+      targetAuthorization = preflight.targetAuthorization;
+      if (preflight.blockers.length > 0) return reply.code(409).send({
+        error: "任务所需前置条件尚未满足",
+        error_code: "task_contract_blocked",
+        task_contract_blockers: preflight.blockers,
+      });
+    }
     let canvasId: string;
     try {
       if (reviewRequest?.success) {
@@ -197,6 +242,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         timeoutSec: body.timeout_sec,
         stallSec: body.stall_sec,
         maxRequests: body.max_requests,
+        targetAuthorization,
       });
       if (duplicated) return reply.code(409).send({ error: "冲突的活动 Job 已存在" });
       return reply.code(201).send(job);
@@ -443,9 +489,9 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       sql`SELECT id, attempt_id, effect_id, request_no, provider, model,
                  model_catalog_match, upstream_reporting_model, input_tokens,
                  output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens,
-                 adjustment_tokens, settlement_status, source,
+                 adjustment_tokens, settlement_status, source, workload, job_token_id,
                  observed_at, created_at
-            FROM job_usage_ledger WHERE job_id = ${id} ORDER BY request_no DESC LIMIT 100`,
+            FROM job_usage_ledger WHERE job_id = ${id} ORDER BY observed_at DESC, id DESC LIMIT 100`,
       job.canvas_id
         ? sql`SELECT title, target_json FROM canvases WHERE id = ${job.canvas_id as string}`
         : Promise.resolve([] as Array<{ title?: unknown; target_json?: unknown }>),
@@ -573,6 +619,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     return {
       meta: session.meta,
       artifacts: session.artifacts,
+      ...(session.projection ? { projection: session.projection } : {}),
       text: session.content.subarray(0, SESSION_VIEW_MAX_BYTES).toString("utf8"),
       truncated: session.content.byteLength > SESSION_VIEW_MAX_BYTES,
     };
@@ -591,6 +638,10 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       });
     }
     const safeName = session.meta.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    if (session.projection) {
+      reply.header("x-deepsonar-session-projection", session.projection.kind);
+      reply.header("content-digest", `sha-256=:${Buffer.from(session.projection.sha256, "hex").toString("base64")}:`);
+    }
     return reply
       .header("content-type", "application/x-ndjson; charset=utf-8")
       .header("content-disposition", `attachment; filename="${safeName}"`)
@@ -695,6 +746,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       await tx`
         UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
         WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
+      await advancePlanTaskAfterTerminalJob(tx, id);
     });
     await recoverCancelledDerivedJob(job, reason).catch((e) =>
       console.error(`[cancel] derived job recovery failed:`, e),
@@ -728,6 +780,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
           await tx`
             UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
             WHERE job_id = ${cancelledJob.id as string} AND node_type = ANY(${["job", "intent", "report"]})`;
+          await advancePlanTaskAfterTerminalJob(tx, String(cancelledJob.id));
         }
       });
     }

@@ -110,7 +110,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   graph_query: {
     summary: "Query the current Job canvas graph on demand",
-    description: "Return a bounded read-only projection of this Job's canvas (overview, index, node, edges, findings, evidence, intents, or plan_gap). plan_gap reads a current explicit Plan by id, up to four criteria per page and four Fact ids; supplementation_execution separately describes the single linked Job/Attempt lifecycle, never criterion satisfaction or whole-goal execution coverage; use its revision/content hashes in optional plan_basis on one existing Intent or complete proposal. Scope is frozen to the Job snapshot; canvas_id and project_id are not accepted. Use overview first, then index/node; do not try to pull the whole graph in one call.",
+    description: "Return a bounded read-only projection of this Job's canvas (overview, index, node, edges, findings, evidence, intents, plan_objective, or plan_gap). Before the first Plan v2 submission, read plan_objective to obtain the complete current user objective, revision, completion policy, and budget; it accepts no selectors and refuses a partial result when the remaining Job budget cannot fit the complete tuple. plan_gap reads an accepted Plan and its criterion pages; its read proofs and plan_basis govern existing Intent or completion proposals. Scope is frozen to the Job snapshot; canvas_id and project_id are not accepted. Use overview first, then bounded queries; do not try to pull the whole graph in one call.",
     readOnly: true,
     eventType: null,
   },
@@ -146,13 +146,13 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   submit_plan: {
     summary: "Submit a versioned execution plan",
-    description: "Submit an initial Plan audit, or an explicit v1 route revision with owner, expected event revision, Plan SHA and task-input SHA. Route revisions only change tasks/open questions before supplementation dispatch; goal/completion/assumptions/budget stay identical, no trimming or budget reset. A committed revision is recoverable by the same key or GET receipt_key. This operation never dispatches workers.",
+    description: "Submit the current v2 execution route. Requires a user-owned objective/revision, an explicit execution_route CAS, and immutable goal/completion/budget identity; the Scheduler validates canonical references, dependencies, lifetime limits and dispatched-task hashes, then materializes ready PlanTasks through the existing Hub Intent/Job path in the same transaction. v1 is immutable history and is rejected for new submissions. A committed proposal is recoverable by the same key or GET receipt_key; receipt recovery never starts a second executor.",
     readOnly: false,
     eventType: "plan",
   },
   submit_plan_result: {
     summary: "Submit a plan execution result",
-    description: "Submit a PlanResult outcome: continue, complete, blocked, or needs_human. Scheduler records execution and termination_reason. Phase 1 does not change Hub convergence.",
+    description: "Submit a version-matched PlanResult outcome: continue, complete, blocked, or needs_human. v2 identity must match the current user objective, route and raw Plan SHA. The model result is only a proposal: dependency release requires successful current Job/Attempt Fact or Finding Artifact/Evidence, and complete remains subject to existing Verify/report gates. blocked/needs_human persist a Scheduler stop without replaying effects.",
     readOnly: false,
     eventType: "plan_result",
   },

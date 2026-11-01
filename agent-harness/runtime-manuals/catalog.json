@@ -31,12 +31,14 @@
         "agent-harness/dsh-runtime/package.json",
         "agent-harness/dsh-runtime/package-lock.json",
         "deploy/Dockerfile.agent",
-        "agent-harness/write-tool-manifest.mjs"
+        "agent-harness/write-tool-manifest.mjs",
+        "agent-harness/pi-observational-memory-governed.ts"
       ],
       "sections": [
         "base utilities",
         "Agent CLIs",
-        "DSH implementation dependencies"
+        "DSH implementation dependencies",
+        "Pi observational memory"
       ],
       "entries": [
         {
@@ -2136,10 +2138,63 @@
           "version_limits_side_effects_cleanup": "Do not import or replace this package from a job. The package is shipped only to support the pinned dsh runtime.",
           "verification_status": "source_reviewed_not_shipped_as_command",
           "verification_note": "Package is declared in the runtime manifest and has no standalone Agent command."
+        },
+        {
+          "image_key": "deepsonar-base",
+          "id": "pi-observational-memory",
+          "kind": "capability",
+          "agent_visible": true,
+          "implementation_only": false,
+          "version": "3.1.4",
+          "version_source": "agent-harness/runtime-images.json#/piExtensions.pi-observational-memory",
+          "commands": [
+            "pi"
+          ],
+          "usage_scenario": "Use the frozen Pi observational-memory extension for current-Job observations, reflections, recall, and context compaction.",
+          "selection_basis": "Use only when the Job snapshot explicitly contains the registered extension and the image manifest contains both the MIT package and the governed wrapper. It is Gateway-only: it has no business egress permission.",
+          "prerequisites": [
+            "A Pi Job whose immutable snapshot explicitly admits pi-observational-memory",
+            "The pinned pi-observational-memory@3.1.4 package and SHA-512 integrity in the image",
+            "The image-local governed wrapper and Scheduler Model Gateway",
+            "Explicit positive main/background request allocations when the frozen Job request total is finite; independently unset background request/token limits mean unlimited"
+          ],
+          "minimal_invocation": "pi --mode rpc --no-approve --no-extensions -e /workspace/.deepsonar-home/.pi/agent/extensions/pi-observational-memory.ts",
+          "common_parameters": [
+            "frozen Job snapshot",
+            "Gateway availability",
+            "request_budget",
+            "background_limits"
+          ],
+          "output_interpretation": "Memory entries are current-Job context state only. They are not DeepSonar Facts, Evidence, Findings, verification results, or cross-Job memory.",
+          "failure_handling": {
+            "normal_empty": "A successful command with no match, no rows, or no device is an empty observation; save it as empty and do not turn it into a failure.",
+            "model_correctable": "For an invalid path, option, format, or query, read stderr, correct the input, and retry with a new command and recorded revision.",
+            "transient_retryable": "A bounded Gateway or upstream transient failure may be recorded as a visible memory-worker degradation within the frozen budget. Preserve the main Job path and do not replay an unknown external effect.",
+            "missing_condition": "If the package, wrapper, frozen provider/model, Gateway route, or quota allocation is unavailable, fail closed before activation; do not download a replacement or silently run with defaults.",
+            "permanent": "Protocol, permission, malformed-snapshot, package-integrity, and unknown-external-effect errors remain hard failures. Do not convert them to a successful fallback."
+          },
+          "composition_flow": "frozen Job provider/model and quota -> governed wrapper -> Scheduler Model Gateway -> current-Job session ledger -> Pi compaction/recall; no Fact/Evidence promotion.",
+          "evidence_retention": [
+            "Package version, npm integrity, actual src/index.ts entry, wrapper source path and wrapper SHA-256",
+            "Job/Attempt identity, image key/digest, Gateway workload, and frozen request budget",
+            "Redacted worker status and protocol outcome only; do not treat memory content as Fact or Evidence"
+          ],
+          "version_limits_side_effects_cleanup": "The npm package and wrapper bytes are image-fixed and included in the runtime fingerprint. Memory is scoped to one frozen Job/session; remove only workspace-local temporary files after the Job, and never persist or reuse it across Jobs.",
+          "verification_status": "source_declared_unexecuted",
+          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image.",
+          "requires_egress": false,
+          "requires_gateway": true,
+          "covers": [
+            "pi-observational-memory",
+            "pi-observational-memory-governed",
+            "recall",
+            "/opt/deepsonar/pi-extensions/node_modules/pi-observational-memory/src/index.ts",
+            "/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts"
+          ]
         }
       ],
-      "entry_count": 57,
-      "agent_visible_entry_count": 14,
+      "entry_count": 58,
+      "agent_visible_entry_count": 15,
       "implementation_only_entry_count": 43
     },
     {
@@ -2152,13 +2207,16 @@
         "agent-harness/dsh-runtime/package.json",
         "agent-harness/dsh-runtime/package-lock.json",
         "deploy/Dockerfile.agent",
+        "agent-harness/write-tool-manifest.mjs",
+        "agent-harness/pi-observational-memory-governed.ts",
         "deploy/pi-web-access"
       ],
       "sections": [
         "base utilities",
         "Agent CLIs",
         "binary inspection",
-        "Pi web access"
+        "Pi web access",
+        "Pi observational memory"
       ],
       "entries": [
         {
@@ -4258,6 +4316,59 @@
           "version_limits_side_effects_cleanup": "Do not import or replace this package from a job. The package is shipped only to support the pinned dsh runtime.",
           "verification_status": "source_reviewed_not_shipped_as_command",
           "verification_note": "Package is declared in the runtime manifest and has no standalone Agent command."
+        },
+        {
+          "image_key": "deepsonar-audit",
+          "id": "pi-observational-memory",
+          "kind": "capability",
+          "agent_visible": true,
+          "implementation_only": false,
+          "version": "3.1.4",
+          "version_source": "agent-harness/runtime-images.json#/piExtensions.pi-observational-memory",
+          "commands": [
+            "pi"
+          ],
+          "usage_scenario": "Use the frozen Pi observational-memory extension for current-Job observations, reflections, recall, and context compaction.",
+          "selection_basis": "Use only when the Job snapshot explicitly contains the registered extension and the image manifest contains both the MIT package and the governed wrapper. It is Gateway-only: it has no business egress permission.",
+          "prerequisites": [
+            "A Pi Job whose immutable snapshot explicitly admits pi-observational-memory",
+            "The pinned pi-observational-memory@3.1.4 package and SHA-512 integrity in the image",
+            "The image-local governed wrapper and Scheduler Model Gateway",
+            "Explicit positive main/background request allocations when the frozen Job request total is finite; independently unset background request/token limits mean unlimited"
+          ],
+          "minimal_invocation": "pi --mode rpc --no-approve --no-extensions -e /workspace/.deepsonar-home/.pi/agent/extensions/pi-observational-memory.ts",
+          "common_parameters": [
+            "frozen Job snapshot",
+            "Gateway availability",
+            "request_budget",
+            "background_limits"
+          ],
+          "output_interpretation": "Memory entries are current-Job context state only. They are not DeepSonar Facts, Evidence, Findings, verification results, or cross-Job memory.",
+          "failure_handling": {
+            "normal_empty": "A successful command with no match, no rows, or no device is an empty observation; save it as empty and do not turn it into a failure.",
+            "model_correctable": "For an invalid path, option, format, or query, read stderr, correct the input, and retry with a new command and recorded revision.",
+            "transient_retryable": "A bounded Gateway or upstream transient failure may be recorded as a visible memory-worker degradation within the frozen budget. Preserve the main Job path and do not replay an unknown external effect.",
+            "missing_condition": "If the package, wrapper, frozen provider/model, Gateway route, or quota allocation is unavailable, fail closed before activation; do not download a replacement or silently run with defaults.",
+            "permanent": "Protocol, permission, malformed-snapshot, package-integrity, and unknown-external-effect errors remain hard failures. Do not convert them to a successful fallback."
+          },
+          "composition_flow": "frozen Job provider/model and quota -> governed wrapper -> Scheduler Model Gateway -> current-Job session ledger -> Pi compaction/recall; no Fact/Evidence promotion.",
+          "evidence_retention": [
+            "Package version, npm integrity, actual src/index.ts entry, wrapper source path and wrapper SHA-256",
+            "Job/Attempt identity, image key/digest, Gateway workload, and frozen request budget",
+            "Redacted worker status and protocol outcome only; do not treat memory content as Fact or Evidence"
+          ],
+          "version_limits_side_effects_cleanup": "The npm package and wrapper bytes are image-fixed and included in the runtime fingerprint. Memory is scoped to one frozen Job/session; remove only workspace-local temporary files after the Job, and never persist or reuse it across Jobs.",
+          "verification_status": "source_declared_unexecuted",
+          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image.",
+          "requires_egress": false,
+          "requires_gateway": true,
+          "covers": [
+            "pi-observational-memory",
+            "pi-observational-memory-governed",
+            "recall",
+            "/opt/deepsonar/pi-extensions/node_modules/pi-observational-memory/src/index.ts",
+            "/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts"
+          ]
         },
         {
           "image_key": "deepsonar-audit",
@@ -4359,8 +4470,8 @@
           "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image."
         }
       ],
-      "entry_count": 59,
-      "agent_visible_entry_count": 16,
+      "entry_count": 60,
+      "agent_visible_entry_count": 17,
       "implementation_only_entry_count": 43
     },
     {
@@ -4372,7 +4483,8 @@
         "agent-harness/kali-minimal-runtime.json",
         "agent-harness/dsh-runtime/package.json",
         "agent-harness/dsh-runtime/package-lock.json",
-        "deploy/Dockerfile.agent-kali-minimal"
+        "deploy/Dockerfile.agent-kali-minimal",
+        "agent-harness/pi-observational-memory-governed.ts"
       ],
       "sections": [
         "common utilities",
@@ -4380,7 +4492,8 @@
         "Go/Rust",
         "Java 8/11/17",
         "Maven",
-        "Agent CLIs"
+        "Agent CLIs",
+        "Pi observational memory"
       ],
       "entries": [
         {
@@ -5740,6 +5853,59 @@
           "requires_egress": true,
           "covers": [
             "pi-web-access"
+          ]
+        },
+        {
+          "image_key": "deepsonar-kali-minimal",
+          "id": "pi-observational-memory",
+          "kind": "capability",
+          "agent_visible": true,
+          "implementation_only": false,
+          "version": "3.1.4",
+          "version_source": "agent-harness/kali-minimal-runtime.json#/piExtensions.pi-observational-memory",
+          "commands": [
+            "pi"
+          ],
+          "usage_scenario": "Use the frozen Pi observational-memory extension for current-Job observations, reflections, recall, and context compaction.",
+          "selection_basis": "Use only when the Job snapshot explicitly contains the registered extension and the image manifest contains both the MIT package and the governed wrapper. It is Gateway-only: it has no business egress permission.",
+          "prerequisites": [
+            "A Pi Job whose immutable snapshot explicitly admits pi-observational-memory",
+            "The pinned pi-observational-memory@3.1.4 package and SHA-512 integrity in the image",
+            "The image-local governed wrapper and Scheduler Model Gateway",
+            "Explicit positive main/background request allocations when the frozen Job request total is finite; independently unset background request/token limits mean unlimited"
+          ],
+          "minimal_invocation": "pi --mode rpc --no-approve --no-extensions -e /workspace/.deepsonar-home/.pi/agent/extensions/pi-observational-memory.ts",
+          "common_parameters": [
+            "frozen Job snapshot",
+            "Gateway availability",
+            "request_budget",
+            "background_limits"
+          ],
+          "output_interpretation": "Memory entries are current-Job context state only. They are not DeepSonar Facts, Evidence, Findings, verification results, or cross-Job memory.",
+          "failure_handling": {
+            "normal_empty": "A successful command with no match, no rows, or no device is an empty observation; save it as empty and do not turn it into a failure.",
+            "model_correctable": "For an invalid path, option, format, or query, read stderr, correct the input, and retry with a new command and recorded revision.",
+            "transient_retryable": "A bounded Gateway or upstream transient failure may be recorded as a visible memory-worker degradation within the frozen budget. Preserve the main Job path and do not replay an unknown external effect.",
+            "missing_condition": "If the package, wrapper, frozen provider/model, Gateway route, or quota allocation is unavailable, fail closed before activation; do not download a replacement or silently run with defaults.",
+            "permanent": "Protocol, permission, malformed-snapshot, package-integrity, and unknown-external-effect errors remain hard failures. Do not convert them to a successful fallback."
+          },
+          "composition_flow": "frozen Job provider/model and quota -> governed wrapper -> Scheduler Model Gateway -> current-Job session ledger -> Pi compaction/recall; no Fact/Evidence promotion.",
+          "evidence_retention": [
+            "Package version, npm integrity, actual src/index.ts entry, wrapper source path and wrapper SHA-256",
+            "Job/Attempt identity, image key/digest, Gateway workload, and frozen request budget",
+            "Redacted worker status and protocol outcome only; do not treat memory content as Fact or Evidence"
+          ],
+          "version_limits_side_effects_cleanup": "The npm package and wrapper bytes are image-fixed and included in the runtime fingerprint. Memory is scoped to one frozen Job/session; remove only workspace-local temporary files after the Job, and never persist or reuse it across Jobs.",
+          "verification_status": "source_declared_unexecuted",
+          "verification_note": "Entry is derived from the pinned source manifest; this catalog run did not build or execute the image.",
+          "requires_egress": false,
+          "requires_gateway": true,
+          "covers": [
+            "pi-observational-memory",
+            "pi-observational-memory-governed",
+            "recall",
+            "/opt/deepsonar/pi-extensions/node_modules/pi-observational-memory/src/index.ts",
+            "/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts"
           ]
         },
         {
@@ -7137,8 +7303,8 @@
           "verification_note": "Package is declared in the runtime manifest and has no standalone Agent command."
         }
       ],
-      "entry_count": 72,
-      "agent_visible_entry_count": 29,
+      "entry_count": 73,
+      "agent_visible_entry_count": 30,
       "implementation_only_entry_count": 43
     },
     {
@@ -37423,8 +37589,8 @@
   ],
   "totals": {
     "image_count": 14,
-    "entry_count": 970,
-    "agent_visible_entry_count": 363,
+    "entry_count": 973,
+    "agent_visible_entry_count": 366,
     "implementation_only_entry_count": 607
   }
 }

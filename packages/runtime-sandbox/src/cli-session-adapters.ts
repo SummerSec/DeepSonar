@@ -6,6 +6,8 @@
  * 完整清单：docs/AGENT_CLI_RUNTIME_ADAPTERS.md「Session 归档 + Web 查看器」。
  */
 
+import { redactPiObservationalMemoryText } from "@deepsonar/shared-types";
+
 export type SupportedAgentCli = "claude-code" | "pi" | "dsh";
 
 export interface SessionDiscoveryRuntime {
@@ -61,10 +63,11 @@ async function readDiscovered(
       return { cli, sessionId, artifacts, captureError: "Session 文件合计超过 32 MiB，已停止归档" };
     }
     const subagent = sourcePath.includes("/subagents/");
+    const safeContent = cli === "pi" ? redactPiObservationalMemoryText(content) : content;
     artifacts.push({
       name: subagent ? `subagents/${safeName(sourcePath, sessionId, i)}` : safeName(sourcePath, sessionId, i),
       sourcePath,
-      content,
+      content: safeContent,
       kind: subagent ? "subagent" : "main",
     });
   }
@@ -114,7 +117,7 @@ const piAdapter: AgentCliSessionAdapter = {
       artifacts: [{
         name: safeName(normalized, sessionId, 0),
         sourcePath: normalized,
-        content,
+        content: redactPiObservationalMemoryText(content),
         kind: "main",
       }],
     };

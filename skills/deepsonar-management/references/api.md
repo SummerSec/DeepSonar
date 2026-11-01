@@ -1,16 +1,19 @@
 # DeepSonar Management API 契约
 
+> 状态：当前集成分支 API 参考；字段与授权以运行时 schema 和宿主实现为准，未验收范围明确保留。
+> 同步日期：2026-11-01
+
 > **权威机器可读 schema（运行时）**：调度器提供以下豁免鉴权端点，优先以此为准。
 > - `GET /openapi.json` — OpenAPI 3.0.3 完整 JSON
 > - `GET /schema` — 默认同 openapi；`?format=summary|markdown|openapi`
 > - `GET /schema.md` — 本文件（仓库内副本）或运行时生成摘要
 
-Base URL：`DEEPSONAR_BASE_URL`（默认 `http://localhost:3100`）
+Base URL：`DEEPSONAR_BASE_URL`，按实际管理入口配置；本机示例 `http://127.0.0.1:3100`。
 认证：`Authorization: Bearer <session or API Token>`（`DEEPSONAR_AUTH_REQUIRED=false` 时本地回环可省略）
 
 **普通 Bearer hook 豁免**：`/health`、`/openapi.json`、`/schema`、`/schema.md`、`/auth/status`、`/auth/login`、`/auth/bootstrap`、`/workers/register`、`/workers/heartbeat`、`/gateway/*`、`/ws`、`/terminal-ws`。其中 `/gateway/*` 使用 Job Token 自鉴权；`/workers/register` 使用 `DEEPSONAR_WORKER_BOOTSTRAP_TOKEN`，`/workers/heartbeat` 使用注册返回的节点 token；`/ws` 与 `/terminal-ws` 必须携带 `POST /auth/ws-ticket` 签发的一次性 ticket，不是匿名入口。
 
-**OpenAPI 覆盖边界**：`GET /openapi.json` 覆盖全部管理面 HTTP operation（= 已注册路由 − 下面三组）。不在其中的只有：`/gateway/*`（Job Token 自鉴权的 Model Gateway 代理）、`/control/v1/jobs/*`（沙箱内 Agent 的 Job capability Control API，Job token 自鉴权）、`/ws` 与 `/terminal-ws`（WebSocket 升级入口，handler 内消费一次性 ticket）。它们没有 request/response JSON 契约，因此不进 OpenAPI；`route-surface.test.ts` 用显式 allowlist 断言这条边界，新增路由既未进 OpenAPI 也不在 allowlist 会直接失败。
+**OpenAPI 覆盖边界**：`GET /openapi.json` 覆盖 Management HTTP operation。Gateway 代理、Job-scoped Control 与 WebSocket 使用各自的认证和运行时契约；Control 另提供当前 Job 的动态 schema/OpenAPI，不并入全局 Management 清单。`route-surface.test.ts` 用显式 allowlist 检查边界，新增路由既未登记也不在 allowlist 会失败。
 
 `x-deepsonar-scope`：具体 scope 名 = 需要该 scope；`authenticated` = 任意已认证主体（无具体 scope 要求）；`exempt` = 豁免鉴权。
 
@@ -78,7 +81,7 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, kind?, seed_finding_ids?, allow_egress?, schedule_beijing_8am?, scheduled_start_at?, device?, task_contract?}`；`device` = 真实设备需求 `{transport, key?, model?, exclusive?, ttl_sec?, roles?}`（缺省 `roles:["test"]`），冻结进 Job 快照并需要项目先 `device_access_enabled=true`，否则 `409 device_not_authorized`；`kind` 缺省为 `standard` 且禁止种子，`compose` 必须显式提交同项目 1–8 个当前可代入（未否定处置，含未确认）Finding UUID；省略出网字段时继承项目默认值；`scheduled_start_at`（ISO）优先于北京时间 08:00 快捷项 |
-| PATCH | /tasks/:canvasId | tasks:write | 就地更新 `{title?, content?}`（至少一项）；同步 `canvases.title` 与 `target_json.title/content/goal` 及 root 节点。只影响后续 Hub 读图 / 新派生 Job / 显式重试，不改写已冻结 Job `agent_snapshot_json`。归档返回 `409 TASK_ARCHIVED` |
+| PATCH | /tasks/:canvasId | tasks:write | 就地更新 `{title?, content?, plan_objective?}`（至少一项）；`plan_objective` 只能由授权用户提交 `{expected_revision, goal, completion, budget}`，在 Canvas 行锁内做当前目标 revision CAS，冲突返回 `409 plan_stale_revision`，不接受 Agent 的 Plan payload。同步 `canvases.title` 与 `target_json.title/content/goal/plan_objective` 及 root 节点；只影响后续 Hub 读图 / 新派生 Job / 显式重试，不改写已冻结 Job `agent_snapshot_json`、Attempt 或事件。归档返回 `409 TASK_ARCHIVED`。`200` 返回当前 `plan_objective` 与 `snapshot_rewritten:false` |
 | POST | /tasks/:canvasId/pause | jobs:control | 幂等 drain pause；阻止该 Canvas 继续 claim，已在 claimed/provisioning/running/waiting_human 的 Job 安全收尾。返回 `execution_state/active_count/pending_count/changed` |
 | POST | /tasks/:canvasId/start | jobs:control | 幂等解除执行门禁并 `pg_notify`；不清 schedule，不重试 failed/orphan/cancelled；归档任务返回 `409 TASK_ARCHIVED` |
 | POST | /tasks/:canvasId/resume-session | jobs:control | 继续任务且不删历史；无活动 Job 时优先把全部启动中断的 role Worker 按同 Job ID、旧冻结快照重新入队（`action=rerun_interrupted_jobs`，Dispatcher 建新 Attempt），旧 unknown/never effect 不重放；批次或单 Job 任一快照身份漂移时整次返回 `409 SNAPSHOT_STALE` + `job_ids`，应逐 Job 调用 `rerun-current`；无可恢复 Job 强制唤醒 Hub 时若当前配置无法解析，同样 `409 SNAPSHOT_STALE` |
@@ -139,6 +142,22 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | POST | /jobs/:id/resume | jobs:control | failed/timeout/orphan/waiting_human 使用旧冻结快照重新执行（同 Job、新 Attempt）；导入 cancelled 返回 `409 JOB_IMPORTED_READONLY`；当前受治理身份漂移或无法解析时返回 `409 SNAPSHOT_STALE`。这会创建新的执行 Attempt，不承诺跨进程恢复 DSH 持久 Session；DSH 进程级恢复明确返回 `CONTEXT_RESUME_UNSUPPORTED` |
 | POST | /jobs/:id/rerun-current | jobs:control | failed/timeout/orphan/waiting_human 按当前 RoleConfig/Credential/项目网络、共享资产与 runtime image 策略完整重冻后重新执行；保留同 job_id、payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect |
 
+### Job-scoped Control API：目标授权与 Plan v2
+
+沙箱内 Agent 使用 Job capability token 访问下列路由；它们不属于本文件的普通 Management HTTP/OpenAPI 清单，但 Scheduler 仍以当前 Job 的 operation allowlist、项目/Canvas scope、快照、预算和状态重新校验：
+
+| 方法 | 路径 | 鉴权/范围 | 说明 |
+| --- | --- | --- | --- |
+| GET | /control/v1/jobs/:jobId/capabilities | Job token | 返回当前 Job 可用 operation 与 invoke URL；不授予额外权限 |
+| GET | /control/v1/jobs/:jobId/openapi.json | Job token | 返回当前 Job allowlist 的机器契约 |
+| GET / POST | /control/v1/jobs/:jobId/operations/:operationId | Job token | GET 只读 operation schema 或 `receipt_key`；POST 要求 `Idempotency-Key`，输入、状态、scope、引用和效果由宿主/事务层重新校验 |
+
+`submit_plan` 只接受当前 Plan v2，匹配用户 objective/revision、`execution_route` CAS 和 goal/completion/budget；canonical 引用、依赖、lifetime 与已派发 task hash 由 Scheduler 重验，ready task 复用既有 Intent/Job。v1 的目标边界为历史只读；普通 HubIntent 走原 handler，不制造新的 v1 `plan_protocol`，旧 `hub_intent_adapter` 审计只作为不可变历史解析。`submit_plan_result` 只是匹配版本的结果提案，依赖须有当前成功 Attempt、Artifact/语义来源、实际留存字节及期望输出关联；工程 complete/completed 不等于任务完成，后者仍需全部当前正向操作员判据、完整读取与 Hub/Report 门。未知效果不自动 replay，receipt 查询只恢复原响应。
+
+`graph_query(kind=plan_objective)` 是当前 Job scope 内独立于已接受 Plan 的完整只读读取；初始 L0/overview 仅给有界 handle，objective 查询返回 `items[0]` 持久化 tuple。selectors、cross-scope、wholeGraph 不属于受支持契约，预算或 input hash 不满足时如实失败。
+
+目标 write 或显式 identity 触发只读 `deepsonar.target-authorization/v1`。宿主配置 authority/secret/精确动作链，以认证 principal 和契约声明生成 scope、前提、内容/契约 binding；authority 严格复述 revision/freshness 等当前条件。`reference-http/v1` 是当前支持目标，secret 不进请求体或快照；材料、声明或凭据存在不等于授权。创建/派发/重跑重新核验，缺失或变化 grant 以不可重试 `target_authorization_grant_invalid` 拒绝，其他错误保留各自稳定 code。没有目标授权管理端点，授权查询不执行目标动作，见 [ADR 0011](../../../docs/architecture/adr/0011-trusted-target-authorization.md)。
+
 ### 结果与报告
 
 | 方法 | 路径 | Scope | 说明 |
@@ -162,6 +181,67 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | GET | /reports/:id/sarif | tasks:read | **非 JSON attachment**，`application/sarif+json; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.sarif"` |
 | POST | /canvases/:id/report/retry | jobs:control | 仅 `failed` 可重试，否则 409 |
 
+### Finding 身份与关系（#819）
+
+这些路由属于 Management API，不接受 Job capability token；所有操作都先做认证主体、Finding 所属项目和 `findings:read`/`admin` scope 校验。当前关系投影是有界的操作员见证状态：`authority_basis=platform_admin_attestation`、`independent_external_verification=false`、`published=false`、`quality_gate_status=not_evaluated`，未发布 relation items 不会因查询而暴露。操作员见证不认证外部 inventory authenticity。
+
+| 方法 | 路径 | Scope | 说明 |
+| --- | --- | --- | --- |
+| GET | /findings/:id/relations | findings:read | 当前 Finding 的有界关系状态；可选 opaque cursor 绑定 project/subject/generation/source/identity fingerprints；cursor 冲突需无 cursor 重读 |
+| GET | /canvases/:id/finding-relations | findings:read | Canvas 当前关系投影；读取受 Finding/relations/byte budget 限制，并通过 `read_status`/`read_reason` 显式报告截断或身份历史阻断，不是完整项目图 |
+| POST | /findings/:id/identity-sources | admin | 登记 typed identity source attestation；服务端计算 digest、记录认证主体，source_kind 是操作员断言，身份字段只保存已知字段 SHA-256 digest |
+| POST | /findings/:id/identity-sources/:sourceId/revisions | admin | 以 `expected_source_revision` 做 CAS 追加修订；旧 revision 绑定的 mapping 在读取时立即失效 |
+| POST | /findings/:id/identity-sources/:sourceId/revoke | admin | 以当前 source revision 撤销；同 revision 重复撤销幂等，历史保留，当前 mapping/relations 失效 |
+| POST | /findings/:id/identity-mappings | admin | 首次绑定 admitted source；`expected_mapping_version` 必须为 `null`，server 解析当前 source revision、identity digest 和 provenance，调用方不能自报 digest/provenance |
+| POST | /findings/:id/identity-mappings/remap | admin | 以最新 mapping version 和 reason 做 CAS remap；原 mapping 撤销并原子追加到新 source/revision |
+| POST | /findings/:id/identity-mappings/revoke | admin | 以最新 mapping version 和 reason 撤销；同 version 重复撤销幂等，历史保留 |
+
+常见失败包括 `PROJECT_MISMATCH`/`PROJECT_SCOPE_MISMATCH`、`IDENTITY_SOURCE_CAS_CONFLICT`、`IDENTITY_MAPPING_CAS_CONFLICT`、source/mapping stale 或 revoked；未知字段和 caller-supplied provenance 直接拒绝。durable relation worker 只重建当前有界 projection，不把强关系发布为业务结论。
+
+### Finding 质量协议与工程报表（#819）
+
+这组接口用于受治理的工程评估，不是强关系质量证书或发布开关。2026-11-01 用户决定本轮优先发布 v0.6.3，独立质量验证、人工数据集及后续证书/晋升/公开建议质量门暂缓；只以最终 SHA 的 GitHub Actions 完整工程检查验收，不以未验证材料阻塞本轮发布，也不把 `not_evaluated` 解释为质量通过。必须使用 `POST /auth/login` 取得的真实数据库用户会话（`deepsonar_user_…` Bearer）、`admin` scope、admin/operator 角色及同项目权限；即使本地普通认证可省略，API/service token、Job/internal 和 bootstrap 主体也不能代替用户。所有路径拒绝 query 参数，成功元数据响应使用 `Cache-Control: no-store`。
+
+| 方法 | 路径 | Scope | 说明 |
+| --- | --- | --- | --- |
+| GET | /projects/:id/finding-quality/assets | admin | 当前真实装载模块、配置、selector/normalization/rule 摘要；trusted Node preload 捕获返回给 evaluator 的字节，不是部署签名或人工真实性证明 |
+| POST | /projects/:id/finding-quality/protocols | admin | 只登记 strict 协议元数据、scope/digests、阈值和有效期；同一登记主体的 exact replay 不重置历史 |
+| GET | /projects/:id/finding-quality/protocols/:protocolId | admin | 协议、head、work 摘要和终身 corpus 暴露状态；不返回原始标签或观察 |
+| GET | /projects/:id/finding-quality/protocols/:protocolId/report | admin | 在只读 repeatable-read 事务内重构已完成的真实 SQL generation/cohort 和 report digest；明确 `source_validation=repeatable_read_mvcc_snapshot`，不证明未来仍 current |
+| POST | /projects/:id/finding-quality/protocols/:protocolId/freeze | admin | `{expected_version}`；在首次留出暴露前冻结协议，终身同 corpus 暴露或历史未知时拒绝重新冻结 |
+| POST | /projects/:id/finding-quality/protocols/:protocolId/declarations | admin | `{expected_version}`；追加从 freeze 派生的 digest-only 数据声明，不消费原始留出数据 |
+| POST | /projects/:id/finding-quality/protocols/:protocolId/declarations/:declarationId/payload | admin | strict JSON 标签包；可选 `Idempotency-Key`；本请求独立提交 exposure 后才进入媒体/JSON/大小/schema 校验与 admission |
+| POST | /projects/:id/finding-quality/protocols/:protocolId/reviews | admin | `{expected_version,evidence_digest,expires_at}`；只追加工程评审候选，须有真实完成的不可变观察批次，不能用 digest-shaped 伪造 evaluation 通过 |
+| POST | /projects/:id/finding-quality/protocols/:protocolId/revoke | admin | `{expected_version,reason}`；取消本协议 pending/running work，只清除本协议自己的 current tuple，保留历史、观察与首次暴露 |
+
+`expected_version` 是规范的非负 bigint **字符串**，不是 JSON number；以 GET 返回的版本做精确 CAS，不能重置 generation 或覆盖冻结记录。登记和上传的字段、字节/数量预算以 [共享质量契约](../../../apps/scheduler/src/domains/project-finding-research/quality-contract.ts) 及 [OpenAPI](../../../apps/scheduler/src/domains/project-finding-research/quality-openapi.ts) 为准；这些预算不是最低样本量或质量阈值。数据包 `kind=synthetic`/`human_labeled` 只是声明，不认证标注者、来源或独立性。
+
+**暴露不可回滚**：在本请求的 `preParsing` 已提交 exposure 后，解析、超限、schema 或 SQL admission 失败会保留该收据并追加 linked rejection；admission/payload/work 自身在失败事务中回滚。权限、无效声明或复用 key 在消费请求体前拒绝时，不根据猜测的字节凭空添加暴露。所有 reused key 都冲突，换协议/阈值、重试或 revoke 不能抹掉同 corpus 的终身暴露。
+
+Scheduler 普通有限 tick 只追加一个 heldout subject 的实际当前 SQL 观察；另一个 read-only re-observation 完成阶段核对整个已有 cohort，不追加新观察，再原子写 evaluation/report/head/work。候选选择复用部署中的 current-source/mapping 与 UUID 窗口，不因标签或词法排序筛选；指标使用整个 admitted holdout 真值作分母。GET report 仅给绑定、digest、计数和指标，明确省略 `input`、原始标签、来源对象、selector traces 和 decisions。
+
+评审在同一 repeatable-read 事务中核对实际持久化 review 信封、真实 completed work/observations/report；已知 maker/tuner/registrar/custodian 与其传递 alias 不能自审，冲突或当前来源变化时整次候选与 head 更新回滚。不同账号和 hash 不能证明是不同自然人。当前所有成功结果仍返回 `quality_status=not_evaluated` 及独立标注、自然人 alias、外部 provenance、预先采纳阈值未验证的 blockers；没有 certificate、current promotion 或强关系发布接口，不能提交 `verified`/`passed`/`independent` 等自报标志解除门禁。
+
+常见状态：`400` strict 输入或报告/来源无效，`401` 未认证，`403` 主体/项目权限不足，`404` 当前项目无该协议/声明，`409` 版本、状态或终身暴露冲突，`413` 请求体超预算，`503` 真实装载资产未建立，`500` SQL/拒绝收据写入失败。失败不回显标签包、凭据、内部堆栈或原始异常。工程单元与真实 PostgreSQL/HTTP 入口为 `pnpm ci:unit:finding-quality` 和 `pnpm ci:integration:finding-quality`；后者必须真的配置 `TEST_DATABASE_URL`，本地 skip 不是通过。
+
+注意力成本：平台自动做版本、来源、暴露审计、分母、报表重构和失效检查，统一返回可查询状态与稳定错误；人工只提供平台无法代替的真实标注、预先约定阈值和独立复核证据。不增加逐条 Finding 审批，不改变 Verify、disposition 或任务执行路径。完整未交付项见 [Finding Research](../../../docs/PROJECT_FINDING_RESEARCH.md)。
+
+### 程序材料与 Finding 程序资格（#822）
+
+程序材料和资格是独立的管理/审计投影，不是任务执行授权。写入身份由认证 actor 推导，不能在 body 自报 reviewer、trust 或资格状态；平台管理员/项目范围由服务端检查，Agent/internal actor、viewer 和 Finding maker 不能批准。材料和评审采用 append-only history；撤销、替代、证据/Verify/Finding revision 变化、历史损坏或读取预算不足都会使当前正向资格失效或保持 `blocked`。当前实现不认证外部官方来源。
+
+| 方法 | 路径 | Scope | 说明 |
+| --- | --- | --- | --- |
+| GET | /program-materials | projects:read | 查询当前可信程序材料；`project_id`、`include_history=true` 可选，返回 `invalid_history_count`/`history_incomplete` |
+| GET | /program-materials/:id | projects:read | 查询单个材料及其历史完整性状态 |
+| POST | /program-materials | projects:write | 登记可信程序材料；服务端从认证 actor 冻结登记者和权限，非 Job/Agent 自授权 |
+| POST | /program-materials/:id/revoke | projects:write | append-only 撤销；历史评审仍可读但不贡献当前资格；使用材料版本/幂等键校验 |
+| POST | /findings/:id/program-eligibility/reviews | findings:write | 提交独立资格评审；必须绑定当前 Finding Artifact revision/source digest、Verify confirmed round、材料 version/hash/target、可重读证据、理由和幂等键；`blocked` 返回 409 |
+| GET | /findings/:id/program-eligibility/reviews | findings:read | 查询 append-only 历史评审、当前 projection、材料和历史完整性 |
+| GET | /findings/:id/program-eligibility | findings:read | 查询当前资格；`eligible` 仅表示当前绑定仍有效的独立评审，`technical_status=confirmed` 不反向推出资格 |
+
+这些路由不改变技术 Verify、Finding disposition 或 Job 生命周期，也不创建第二执行通道。资格投影不能替代 `operator_attestation`、verified Fact 或完整完成门。
+
 ### 设置（规则与角色启停）
 
 | 方法 | 路径 | Scope | 说明 |
@@ -170,7 +250,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | GET | /platform/claims | tasks:read | #740 平台级全局暂停领取状态：`{claims_paused, reason, note, paused_by, paused_at, state: running\|pausing\|paused, drained, in_flight:{claimed,provisioning,running,total}, pending, waiting_human, effect_pending_attempts, unknown_effect_attempts}`。项目级 token 403 `PLATFORM_CLAIMS_PROJECT_TOKEN_FORBIDDEN` |
 | POST | /platform/claims/pause | admin | `{reason: platform_upgrade\|maintenance, note?}`（strict，note ≤500）。持久化、跨副本生效、重启保持；只阻止新领取，不取消在途 Job。同原因幂等 `changed=false`；其他原因已暂停 409 `PLATFORM_CLAIMS_ALREADY_PAUSED`。审计 `platform.claims_pause` |
 | POST | /platform/claims/resume | admin | `{reason?}`：带 reason 时仅当前原因一致才解除，否则 409 `PLATFORM_CLAIMS_PAUSE_REASON_MISMATCH`；未暂停幂等。`pg_notify` 唤醒调度，审计 `platform.claims_resume` |
-| PATCH | /global-settings | agents:write | `{rules: {...}, finding_protocol?}` 合并；`finding_protocol` 只能走顶层字段。claim 读 effective 并由 `pg_notify` 唤醒。并发默认 **20 / 5**（env/代码）；库 `rules_json` 优先。Finding 协议默认 **CVSS 3.1**（接受 3.1/4.0），模式 hybrid/fixed |
+| PATCH | /global-settings | agents:write | `{rules: {...}, finding_protocol?}` 合并；`finding_protocol` 只走顶层。claim 读 effective 并由 `pg_notify` 唤醒；库 `rules_json` 优先，并发默认以 [config](../../../apps/scheduler/src/config.ts)为准，Finding 协议版本/模式以运行时 OpenAPI 为准 |
 | GET | /projects/:id/settings | agents:read | 项目规则覆盖 + 角色启用 + `effective_rules.maxConcurrentJobs` / `maxConcurrentJobsSource` + `active_jobs` |
 | PATCH | /projects/:id/settings | agents:write | `{rules?, roles?: {enabled: string[] \| null}, finding_protocol?}`；`rules.maxConcurrentJobs` 为 `0–1000` 或 `null`（清除继承全局）；`enabled: null` 恢复默认 |
 
@@ -190,9 +270,7 @@ PUT body：
 
 ```json
 {
-  "agent_cli": "claude-code | pi | dsh",
   "dsh_task_mode": "standard | ptc",
-  "model": "string | null",
   "env_keys": ["..."],
   "env_vars": { "KEY": "value" },
   "modules": [
@@ -222,6 +300,8 @@ PUT body：
 }
 ```
 
+项目 RoleConfig 的 PUT 不接受或持久化 `agent_cli` / `model`；这两个字段只可由平台管理员写入全局 RoleConfig（全局读取可见，项目读取不暴露）。运行时身份以凭据的 `agent_cli` 与 `settings_config_json` 模型目录为准，Hub 的 provider/model selector 和项目 Agent allowlist 只能提出或收窄候选，不能由项目 RoleConfig 自报模型或 CLI。
+
 保存前服务端校验：env 白名单、镜像可信目录、Credential 项目边界、配置文件路径白名单与密钥特征扫描，**越界一律 400**。
 
 `source_id` 必须是固定格式 UUID；selector 原样落库。`plugin:` 和 `source:*` 在创建下一 Job 时按当前 trusted/enabled catalog 展开，因此同步后的新增模块会跟随组选择器进入新快照；历史 Job 不会漂移。导入导出会保留合法 selector，路径中的 `..`、绝对路径、空段和未知保留前缀会被拒绝。
@@ -244,7 +324,11 @@ DSH 运行时固定为官方 `@deepseek-ai/dsh@0.2.1-rc.2`，由隔离 `agent-ha
 
 `sandbox_limits` 是项目 RoleConfig 的唯一覆盖入口（不是全局 RoleConfig）；项目 RoleConfig 读取投影字段名为 `sandbox_limits_json`。Schema v24 的字段仍服从服务端硬上限，Job 创建时冻结。
 
-Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleConfig → 平台缺省。模型按 `RoleConfig.model（可选覆盖）→ Credential settingsConfig → null` 解析；`reasoning` 只从 Credential `settings_config_json` 读取。DSH 快照还冻结官方 profile 版本、`dsh_task_mode`、Gateway route/model 与短期 token 注入策略；当前 adapter `persistentSessionResume=false`。快照含 effective `model`、物化后的 CLI 配置文件、Provider-owned `reasoning`、`credential_id` 与 `runtime_image`（digest）。**改 RoleConfig 或 Credential 不影响已创建 Job**。
+Job 创建时必须冻结完整运行快照：平台/项目 Agent allowlist 与 Hub selector 先确定候选，Scheduler 在项目/全局可用范围内解析 credential；运行身份优先来自 Credential 的 `agent_cli` 与 `settings_config_json` 模型目录，平台默认/全局 RoleConfig 仅作软缺省，项目 RoleConfig 的同名遗留字段不生效。`reasoning` 只从 Credential `settings_config_json` 读取。DSH 快照还冻结官方 profile 版本、`dsh_task_mode`、Gateway route/model 与短期 token 注入策略；当前 adapter `persistentSessionResume=false`。快照含 effective `model`、物化后的 CLI 配置文件、Provider-owned `reasoning`、`credential_id` 与 `runtime_image`（digest）。**改 RoleConfig 或 Credential 不影响已创建 Job**。
+
+Pi 扩展同样不是普通 RoleConfig 字段或可由 Agent 上传的管理资源：Hub 能力组合只能选择平台注册的 `pi_extension_ids`，Scheduler 在 Job 创建时重新校验注册项、镜像兼容性和 package/version/integrity/entry 并冻结到 snapshot；RoleConfig、AgentPack 和任务文本不能写入 `pi_extensions`。当前 registry 含 `pi-web-access` 与 pinned `pi-observational-memory@3.1.4`，后者没有单独 Management endpoint，且默认不启用。OM 运行时使用 Gateway-only、独立 workload credential、条件有限预算、私有配置守卫和 archive 脱敏边界；旧 released digest 或 v0.6.2 镜像不能由 manifest key 推断含 OM。
+
+OM 新 Job 还按 [shared registry](../../../packages/shared-types/src/pi-extensions.ts) 的专属下限校验 Scheduler 选定的 `runtimeImage.image_version`，缺失/非法/旧 metadata 拒绝；非 OM/全局下限与历史冻结快照不变。Pi 启动/恢复前的生产 package/entry/wrapper guard 与封装预检独立。实际本地 base 镜像的 canonical RPC/guard 正负例已通过，身份与证据集中见 [RPC 专题](../../../docs/PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；不据此宣称最终组合 CI 或发布通道/平台、registry/catalog 已通过。
 
 路径参数都是 UUID，**不是**角色名（如 `explore`）：
 
@@ -258,7 +342,7 @@ Job 创建时必须冻结完整运行快照：项目 RoleConfig → 全局 RoleC
 | GET | /role-configs/bindable | agents:read | Provider 绑定选择器元数据（含 `agent_cli` / `runtime_image_key` / `can_bind` / `id` / `role_id`） |
 | PATCH | /role-configs/:id/agent-cli | agents:write | `:id` 为 RoleConfig UUID；仅改 `agent_cli`；已绑 LLM 时校验 CLI↔Provider，兼容则同步凭据 `agent_cli` |
 | PATCH | /role-configs/:id/runtime-image | agents:write | `:id` 为 RoleConfig UUID；仅改 `runtime_image_key`（`null`=系统底座）；不改写凭据/文件 |
-| PUT | /role-configs/global/:roleId | agents:write | `:roleId` 为角色 UUID（不是 `explore` 这类 name）；全局 upsert（version +1）；绑定 LLM 凭据兼容则跟随最新 `agent_cli` |
+| PUT | /role-configs/global/:roleId | agents:write | `:roleId` 为角色 UUID；全局 upsert 并递增 version。全局显式 CLI 是候选消歧偏好，账号由 Scheduler credential-first 解析；不恢复旧角色账号绑定 |
 | GET | /projects/:id/role-configs | agents:read | 各角色来源 project / global / none；`project_config` 返回实时完整项目覆盖 |
 | PUT | /projects/:id/role-configs/:roleId | agents:write | `:roleId` 为角色 UUID；项目覆盖；普通角色须已启用（409）；绑定 LLM 凭据兼容则跟随最新 `agent_cli` |
 | DELETE | /projects/:id/role-configs/:roleId | agents:write | `:roleId` 为角色 UUID；删除覆盖，回落全局 |

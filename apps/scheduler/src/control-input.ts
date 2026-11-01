@@ -7,6 +7,7 @@ export const CONTROL_INPUT_ERROR_CODES = {
   planUnproven: "plan_completion_unproven",
   planSource: "plan_source_unavailable",
   planUnknownEffect: "plan_unknown_effect",
+  targetAuthorizationGrantInvalid: "target_authorization_grant_invalid",
   unknownField: "unknown_field",
   unknownTool: "unknown_tool",
   toolNotAllowed: "tool_not_allowed",

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { deleteProjectsLeavingAuditShells } from "../../test-project-teardown.js";
+import { authorizationPayloadFor as payloadFor } from "./authorization-event-test-fixture.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -69,44 +70,6 @@ if (!testDatabaseUrl) {
       return id;
     };
 
-    const payloadFor = (type: string): unknown => {
-      switch (type) {
-        case "progress": return { message: "late event" };
-        case "fact": return { title: "late fact", description: "late description" };
-        case "finding": return {
-          title: "late finding",
-          summary: "late finding remains valid before authorization",
-          severity: "low",
-        };
-        case "hub_decision": return { complete: { from: [], description: "late decision" } };
-        case "plan": return {
-          plan: {
-            v: 1,
-            goal: "late plan goal",
-            tasks: [{
-              id: "late-task",
-              title: "late task title",
-              role: "explore",
-              description: "late task description",
-              prompt: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
-            }],
-            completion: { mode: "explicit_result", description: "late completion policy" },
-          },
-        };
-        case "plan_result": return {
-          v: 1,
-          outcome: "continue",
-          summary: "late plan result summary",
-        };
-        case "human": return {
-          reason: "late operator decision",
-          subject: { type: "platform_blocker", kind: "business_decision" },
-        };
-        case "done": return { summary: "late completion" };
-        default: throw new Error(`unknown test event type ${type}`);
-      }
-    };
-
     const assertRejectedWithoutWrites = async (jobId: string, type: string, code: string) => {
       const eventId = randomUUID();
       const [before] = await sql<{ events: number; dedup: number; limits: number; nodes: number; findings: number }[]>`
@@ -117,7 +80,7 @@ if (!testDatabaseUrl) {
           (SELECT COUNT(*)::int FROM canvas_nodes WHERE job_id = ${jobId}) AS nodes,
           (SELECT COUNT(*)::int FROM findings WHERE job_id = ${jobId}) AS findings`;
       await assert.rejects(
-        ingestEvent(jobId, { v: 1, event_id: eventId, type: type as never, payload: payloadFor(type) as never }),
+        ingestEvent(jobId, { v: 1, event_id: eventId, type: type as never, payload: payloadFor(type, jobId) as never }),
         (error: unknown) => {
           assert.ok(error instanceof ControlInputError, `${type}: expected ControlInputError`);
           assert.equal(error.code, code, `${type}: stable error code`);

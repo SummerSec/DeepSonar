@@ -2,7 +2,7 @@ import { PlanDecisionBasis } from "@deepsonar/shared-types";
 import type { sql } from "../../db.js";
 import { ControlInputError } from "../../control-input.js";
 import { planCriteria, type CriterionProjection } from "./criterion-model.js";
-import { activePlanBasis, explicitPlanOwner, readPlanObjective } from "./objective.js";
+import { activePlanBasis, explicitPlanOwner, readPlanObjective, readPersistedPlanObjective, readPlanExecutionState } from "./objective.js";
 
 /** Positive authorization only; a negative observation is not an authorization by itself. */
 export function criteriaAuthorizeCompletion(criteria: readonly CriterionProjection[], required: readonly string[]): boolean {
@@ -22,7 +22,9 @@ export async function validatePlanDecision(
   if (basisInput===undefined) {
     // A plain human stop remains available even if the graph budget is exhausted.
     if (kind==='human') return null;
-    if (await activePlanBasis(db,canvasId,String(job.project_id),options.eventId)
+    const [canvas] = await db`SELECT target_json FROM canvases WHERE id=${canvasId} AND project_id=${String(job.project_id)}`;
+    if (readPersistedPlanObjective(canvas?.target_json)
+      || await activePlanBasis(db,canvasId,String(job.project_id),options.eventId)
       || await explicitPlanOwner(db,canvasId,String(job.project_id))) {
       throw new ControlInputError('plan_context_required','该任务已启用目标依据，Hub 决策不得省略当前 plan_basis。','plan_basis');
     }
@@ -51,6 +53,19 @@ export async function validatePlanDecision(
     }
   }
   if (kind==='human') return {basis,objective};
+  if (objective.plan.v === 1) {
+    throw new ControlInputError('invalid_payload','历史 v1 Plan 只可读取；新执行必须由用户声明目标并提交 v2 execution_route。','plan_basis');
+  }
+  if (basis.outcome === 'continue') {
+    throw new ControlInputError('invalid_payload','执行型 Plan 只能通过 v2 execution_route 派发或修改任务，不能用单步补证绕过依赖和 lifetime 预算。','plan_basis');
+  }
+  const [currentCanvas] = await db`SELECT target_json FROM canvases WHERE id=${canvasId}`;
+  const execution = readPlanExecutionState(currentCanvas?.target_json);
+  const userObjective = readPersistedPlanObjective(currentCanvas?.target_json);
+  if (userObjective?.status !== 'completed' || execution?.stop_reason !== 'complete'
+    || userObjective.objective_id !== objective.plan.objective_id || userObjective.revision !== objective.plan.objective_revision) {
+    throw new ControlInputError('plan_completion_unproven','当前目标的执行路线尚未以完整留存输出完成。','plan_basis.outcome');
+  }
   const references=options.references ?? [];
   if (!references.every(id=>seen.has(id)) || !basis.source_refs.every(ref=>references.includes(ref.fact_id))) {
     throw new ControlInputError('plan_source_unavailable','Hub 引用必须本 Job 已读，并包含所声明的来源 Fact。','plan_basis.source_refs');
@@ -58,10 +73,7 @@ export async function validatePlanDecision(
   if (objective.staleObjective) throw new ControlInputError('plan_stale_revision','已接纳目标的范围版本已失效，需人工处理；不能重置单步预算。','plan_basis');
   const unknown=await hasUnknownPlanEffects(db,canvasId,objective.projectId);
   if (unknown) throw new ControlInputError('plan_unknown_effect','存在未对账外部效果，禁止继续派发或完成。','plan_basis');
-  if (basis.outcome==='continue') {
-    if (objective.spent || (options.maxIntents ?? 1)<1) throw new ControlInputError('plan_budget_exhausted','本任务的一次补证预算已用尽；请说明停止原因或请求人工。','plan_basis.outcome');
-    if (objective.plan.tasks.some(task=>task.depends_on.length>0)) throw new ControlInputError('invalid_payload','首片仅支持独立单步补证，不执行 Plan 依赖图。','plan_basis');
-  } else {
+  {
     const required=planCriteria(objective.plan).map(c=>c.id);
     const delivered=Array.isArray(graph?.plan_read?.criterion_ids)?graph.plan_read.criterion_ids:[];
     const refs=new Set(basis.source_refs.map(ref=>ref.fact_id));
@@ -85,14 +97,19 @@ async function hasUnknownPlanEffects(db:typeof sql,canvasId:string,projectId:str
 
 /** Shared by automatic Report/budget convergence as well as explicit Hub complete. */
 export async function planCompletionBlockers(db:typeof sql,canvasId:string):Promise<string[]> {
-  const [canvas]=await db`SELECT project_id FROM canvases WHERE id=${canvasId}`;
+  const [canvas]=await db`SELECT project_id,target_json FROM canvases WHERE id=${canvasId}`;
   if (!canvas) return [];
   try {
     const active=await activePlanBasis(db,canvasId,String(canvas.project_id));
     const owner=active?.plan_job_id ?? await explicitPlanOwner(db,canvasId,String(canvas.project_id));
+    const objective = readPersistedPlanObjective(canvas.target_json);
+    const execution = readPlanExecutionState(canvas.target_json);
+    if (objective && (!execution || execution.objective_id !== objective.objective_id || execution.objective_revision !== objective.revision)) return ['plan_objective_unavailable'];
     if (!owner) return [];
     if (await hasUnknownPlanEffects(db,canvasId,String(canvas.project_id))) return ["plan_unknown_effect"];
     const current=await readPlanObjective(db,owner,canvasId,owner);
+    if (current.plan.v === 1) return ['plan_objective_unavailable'];
+    if (objective?.status !== 'completed' || execution?.stop_reason !== 'complete') return ['plan_criteria_unproven'];
     return !current.staleObjective && criteriaAuthorizeCompletion(current.criteria,planCriteria(current.plan).map(c=>c.id))
       ? [] : ['plan_criteria_unproven'];
   } catch (error) {

@@ -87,3 +87,12 @@ test('report availability names Plan blockers without blaming unrelated Findings
   const {classifyTaskReportAvailability}=await import('./report.js');
   assert.equal(classifyTaskReportAvailability({rootStatus:'analysis_complete',minVerifySeverity:null,blockers:['plan_criteria_unproven'],problems:[]}).reason,'plan_not_ready');
 });
+
+test('a committed current Plan closes its Hub round without a second work proposal',async()=>{
+  const {buildDeferredSemanticTerminalEvents}=await import('./executor-real.js');
+  const done={eventId:randomUUID(),summary:'The current execution route was accepted by the Scheduler'};
+  const input={state:{done,hub:null,human:null},isHub:true,isVerify:false,hubDecision:null,maxIntentsPerDecision:1,factCount:0,findingCount:0};
+  assert.throws(()=>buildDeferredSemanticTerminalEvents(input),/submit_hub_decision/);
+  const events=buildDeferredSemanticTerminalEvents({...input,state:{...input.state,executionPlan:{eventId:randomUUID()}}});
+  assert.deepEqual(events.map(event=>event.type),['done']);
+});

@@ -4,7 +4,12 @@ import { sql } from "./db.js";
 import { inc } from "./metrics.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
-import { advanceCanvasAfterTerminalJob, lockCanvasForConvergence, recoverVerifyJobTerminal } from "./core.js";
+import {
+  advanceCanvasAfterTerminalJob,
+  advancePlanTaskAfterTerminalJob,
+  lockCanvasForConvergence,
+  recoverVerifyJobTerminal,
+} from "./core.js";
 import { revokeJobTokens } from "./gateway.js";
 import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
@@ -81,6 +86,7 @@ export async function reapOnce(): Promise<{
       await tx`
         UPDATE canvas_nodes SET status = 'failed', updated_at = now()
         WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
+      await advancePlanTaskAfterTerminalJob(tx, jobId);
       if (meta?.canvas_id) await expireDanglingHumanNodes(tx, meta.canvas_id);
       if (meta?.type === "report") {
         await finalizeReportJob(tx, jobId, {

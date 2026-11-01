@@ -11,6 +11,8 @@ export const USAGE_PERIODS = ["day", "week", "month", "custom"] as const;
 export type UsagePeriod = (typeof USAGE_PERIODS)[number];
 export const USAGE_TOP_N = 8;
 export const USAGE_MAX_DAYS = 366;
+export const USAGE_WORKLOADS = ["main", "observational_memory"] as const;
+export type UsageWorkload = (typeof USAGE_WORKLOADS)[number];
 const PRESET_DAYS: Record<Exclude<UsagePeriod, "custom">, number> = { day: 1, week: 7, month: 30 };
 const YMD = /^(\d{4})-(\d{2})-(\d{2})$/;
 
@@ -53,6 +55,7 @@ export interface UsageTaskRow extends Pick<UsageTokenTotals, keyof UsageTokenCou
 export interface UsageModelRow extends UsageTokenCounts {
   provider: string;
   model: string;
+  workload: UsageWorkload;
 }
 
 export interface UsageWindow {
@@ -75,6 +78,7 @@ export interface DashboardUsage {
   period: UsagePeriod;
   range: { start: string; end: string; days: string[] };
   totals: UsageTokenTotals;
+  workloads: Record<UsageWorkload, UsageTokenTotals>;
   series: UsageSeriesDay[];
   projects: UsageProjectRow[];
   tasks: UsageTaskRow[];
@@ -96,6 +100,8 @@ export interface UsageLedgerRow {
   project_name: string;
   canvas_id: string | null;
   canvas_title: string | null;
+  /** Old ledger rows predate workload attribution and are main by definition. */
+  workload?: UsageWorkload;
 }
 
 /** `null` means the caller sent a period outside USAGE_PERIODS (#490: that is a
@@ -218,6 +224,10 @@ function asCount(value: unknown): number {
   return Number.isFinite(n) ? Math.max(0, Math.trunc(n)) : 0;
 }
 
+function asWorkload(value: unknown): UsageWorkload {
+  return value === "observational_memory" ? "observational_memory" : "main";
+}
+
 function addTokens(
   target: UsageTokenCounts,
   row: Pick<UsageLedgerRow, "input_tokens" | "output_tokens" | "total_tokens" | "cache_read_input_tokens" | "cache_creation_input_tokens">,
@@ -242,6 +252,10 @@ export function buildDashboardUsage(input: {
 }): DashboardUsage {
   const { window } = input;
   const totals = emptyTotals();
+  const workloads: Record<UsageWorkload, UsageTokenTotals> = {
+    main: emptyTotals(),
+    observational_memory: emptyTotals(),
+  };
   const series = new Map(window.days.map((date) => [date, emptyDay(date)]));
   const projects = new Map<string, UsageProjectRow & { jobIds: Set<string>; taskIds: Set<string> }>();
   const tasks = new Map<string, UsageTaskRow & { jobIds: Set<string> }>();
@@ -249,18 +263,40 @@ export function buildDashboardUsage(input: {
   const jobIds = new Set<string>();
   const projectIds = new Set<string>();
   const taskIds = new Set<string>();
+  const workloadJobIds: Record<UsageWorkload, Set<string>> = {
+    main: new Set<string>(),
+    observational_memory: new Set<string>(),
+  };
+  const workloadProjectIds: Record<UsageWorkload, Set<string>> = {
+    main: new Set<string>(),
+    observational_memory: new Set<string>(),
+  };
+  const workloadTaskIds: Record<UsageWorkload, Set<string>> = {
+    main: new Set<string>(),
+    observational_memory: new Set<string>(),
+  };
 
   for (const row of input.rows) {
+    const workload = asWorkload(row.workload);
     addTokens(totals, row);
+    addTokens(workloads[workload], row);
     jobIds.add(row.job_id);
     projectIds.add(row.project_id);
     if (row.canvas_id) taskIds.add(row.canvas_id);
+    workloadJobIds[workload].add(row.job_id);
+    workloadProjectIds[workload].add(row.project_id);
+    if (row.canvas_id) workloadTaskIds[workload].add(row.canvas_id);
     if (row.settlement_status === "unknown") totals.unknown += 1;
     else if (row.settlement_status === "not_reported") totals.not_reported += 1;
     else totals.settled += 1;
+    if (row.settlement_status === "unknown") workloads[workload].unknown += 1;
+    else if (row.settlement_status === "not_reported") workloads[workload].not_reported += 1;
+    else workloads[workload].settled += 1;
 
     const date = dayKey(row.observed_at);
     if (date && series.has(date)) addTokens(series.get(date)!, row);
+
+    if (workload === "main") {
 
     const project = projects.get(row.project_id) ?? {
       id: row.project_id,
@@ -289,11 +325,13 @@ export function buildDashboardUsage(input: {
     addTokens(task, row);
     task.jobIds.add(row.job_id);
     tasks.set(taskKey, task);
+    }
 
-    const modelKey = `${row.provider}::${row.model}`;
+    const modelKey = JSON.stringify([workload, row.provider, row.model]);
     const model = models.get(modelKey) ?? {
       provider: row.provider || "unknown",
       model: row.model || "—",
+      workload,
       ...emptyTokenCounts(),
     };
     addTokens(model, row);
@@ -303,6 +341,11 @@ export function buildDashboardUsage(input: {
   totals.jobs = jobIds.size;
   totals.projects = projectIds.size;
   totals.tasks = taskIds.size;
+  for (const workload of USAGE_WORKLOADS) {
+    workloads[workload].jobs = workloadJobIds[workload].size;
+    workloads[workload].projects = workloadProjectIds[workload].size;
+    workloads[workload].tasks = workloadTaskIds[workload].size;
+  }
   for (const project of projects.values()) {
     project.jobs = project.jobIds.size;
     project.tasks = project.taskIds.size;
@@ -319,6 +362,7 @@ export function buildDashboardUsage(input: {
       days: window.days,
     },
     totals,
+    workloads,
     series: window.days.map((date) => series.get(date)!),
     projects: rankByTotal([...projects.values()]).slice(0, USAGE_TOP_N).map(({ jobIds: _jobs, taskIds: _tasks, ...row }) => row),
     tasks: rankByTotal([...tasks.values()]).slice(0, USAGE_TOP_N).map(({ jobIds: _jobs, ...row }) => row),
@@ -349,7 +393,7 @@ export async function loadDashboardUsage(input: {
   const rows = await sql<Record<string, unknown>[]>`
     SELECT u.observed_at, u.input_tokens, u.output_tokens, u.total_tokens,
            u.cache_read_input_tokens, u.cache_creation_input_tokens,
-           u.settlement_status, u.provider, u.model, u.job_id, u.project_id,
+           u.settlement_status, u.provider, u.model, u.workload, u.job_id, u.project_id,
            p.name AS project_name, j.canvas_id, c.title AS canvas_title
     FROM job_usage_ledger u
     JOIN jobs j ON j.id = u.job_id
@@ -377,6 +421,7 @@ export async function loadDashboardUsage(input: {
       project_name: asText(row.project_name),
       canvas_id: typeof row.canvas_id === "string" && row.canvas_id ? row.canvas_id : null,
       canvas_title: typeof row.canvas_title === "string" ? row.canvas_title : null,
+      workload: asWorkload(row.workload),
     })),
   });
 }

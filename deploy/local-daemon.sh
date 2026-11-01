@@ -19,7 +19,7 @@ LOG="$ROOT/data/logs"
 WEB_PORT="${DEEPSONAR_WEB_PORT:-8080}"
 mkdir -p "$RUN" "$LOG"
 
-pid_scheduler() { pgrep -f "node $ROOT/apps/scheduler/dist/index.js" | head -1 || true; }
+pid_scheduler() { pgrep -f "node --import $ROOT/apps/scheduler/dist/domains/project-finding-research/quality-source-bootstrap.js $ROOT/apps/scheduler/dist/index.js" | head -1 || true; }
 pid_web()       { pgrep -f "node $ROOT/deploy/web-server.mjs" | head -1 || true; }
 
 start_one() {
@@ -35,7 +35,7 @@ start_one() {
 }
 
 start_scheduler() {
-  nohup setsid node "$ROOT/apps/scheduler/dist/index.js" > "$LOG/scheduler.log" 2>&1 < /dev/null &
+  nohup setsid node --import "$ROOT/apps/scheduler/dist/domains/project-finding-research/quality-source-bootstrap.js" "$ROOT/apps/scheduler/dist/index.js" > "$LOG/scheduler.log" 2>&1 < /dev/null &
 }
 start_web() {
   nohup setsid env PUBLIC_ROOT="$ROOT/apps/web/dist" HOST=0.0.0.0 PORT="$WEB_PORT" \

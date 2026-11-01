@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 65);
+INSERT INTO schema_meta (id, version) VALUES ('global', 67);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -446,6 +446,338 @@ CREATE TABLE project_finding_candidate_edges (
   FOREIGN KEY (project_id, right_id) REFERENCES findings(project_id, id) ON DELETE CASCADE
 );
 CREATE INDEX project_finding_candidate_edges_right ON project_finding_candidate_edges(project_id, generation, right_id, left_id);
+
+-- #819: platform-admin-admitted identity manifests. The registry is an
+-- operator-curated attestation boundary; it does not authenticate an external
+-- inventory or prove that the referenced system is truthful.
+CREATE FUNCTION deepsonar_identity_manifest_fields_valid(value jsonb) RETURNS boolean
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE WHEN jsonb_typeof(value) = 'object' THEN
+    NOT EXISTS (
+      SELECT 1 FROM jsonb_object_keys(value) AS keys(key)
+      WHERE key NOT IN ('asset', 'service', 'tenant', 'environment', 'version',
+                        'parameter', 'permission_boundary', 'root_cause')
+    )
+    AND COALESCE((
+      SELECT bool_and(jsonb_typeof(entry.value) = 'string'
+        AND (entry.value #>> '{}') ~ '^sha256:[a-f0-9]{64}$')
+      FROM jsonb_each(value) AS entry(key, value)
+    ), false)
+    ELSE false END
+$$;
+
+CREATE TABLE project_finding_identity_sources (
+  source_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  finding_id uuid NOT NULL,
+  current_revision int NOT NULL DEFAULT 1 CHECK (current_revision > 0),
+  revoked_at timestamptz,
+  revocation_reason text CHECK (revocation_reason IS NULL OR char_length(revocation_reason) BETWEEN 1 AND 512),
+  registered_by text NOT NULL CHECK (char_length(registered_by) BETWEEN 1 AND 256),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT project_finding_identity_source_finding_fk
+    FOREIGN KEY (project_id, finding_id) REFERENCES findings(project_id, id) ON DELETE CASCADE,
+  UNIQUE (project_id, source_id, finding_id)
+);
+CREATE INDEX project_finding_identity_sources_finding_idx
+  ON project_finding_identity_sources(project_id, finding_id, source_id);
+
+CREATE TABLE project_finding_identity_source_revisions (
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  source_id uuid NOT NULL,
+  finding_id uuid NOT NULL,
+  revision int NOT NULL CHECK (revision > 0),
+  authority_version text NOT NULL CHECK (char_length(authority_version) BETWEEN 1 AND 128),
+  source_kind text NOT NULL CHECK (source_kind IN (
+    'platform_target', 'platform_inventory', 'platform_deployment',
+    'platform_evidence', 'platform_root_cause'
+  )),
+  source_ref text NOT NULL CHECK (
+    char_length(source_ref) BETWEEN 1 AND 512 AND source_ref !~ E'[[:cntrl:]]'
+  ),
+  freshness_until timestamptz NOT NULL,
+  identity_fields_json jsonb NOT NULL CHECK (deepsonar_identity_manifest_fields_valid(identity_fields_json)),
+  content_sha256 text NOT NULL CHECK (content_sha256 ~ '^sha256:[a-f0-9]{64}$'),
+  registered_by text NOT NULL CHECK (char_length(registered_by) BETWEEN 1 AND 256),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, source_id, revision),
+  UNIQUE (project_id, source_id, finding_id, revision),
+  FOREIGN KEY (project_id, source_id, finding_id)
+    REFERENCES project_finding_identity_sources(project_id, source_id, finding_id) ON DELETE CASCADE
+);
+CREATE INDEX project_finding_identity_source_revisions_current_idx
+  ON project_finding_identity_source_revisions(project_id, source_id, finding_id, revision);
+CREATE FUNCTION deepsonar_identity_source_revision_append_only() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  -- A source/finding/project deletion may cascade through this history table.
+  -- Direct history edits remain forbidden while the owning source still exists.
+  IF TG_OP = 'DELETE' AND NOT EXISTS (
+    SELECT 1 FROM project_finding_identity_sources
+    WHERE project_id = OLD.project_id AND source_id = OLD.source_id
+      AND finding_id = OLD.finding_id
+  ) THEN
+    RETURN OLD;
+  END IF;
+  RAISE EXCEPTION 'identity source revisions are immutable';
+END $$;
+CREATE TRIGGER project_finding_identity_source_revisions_immutable
+  BEFORE UPDATE OR DELETE ON project_finding_identity_source_revisions
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_identity_source_revision_append_only();
+
+CREATE TABLE project_finding_identity_mappings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  finding_id uuid NOT NULL,
+  field text NOT NULL CHECK (field IN (
+    'asset', 'service', 'tenant', 'environment', 'version', 'parameter',
+    'permission_boundary', 'root_cause'
+  )),
+  source_id uuid NOT NULL,
+  source_revision int NOT NULL CHECK (source_revision > 0),
+  mapping_version int NOT NULL CHECK (mapping_version > 0),
+  revoked_at timestamptz,
+  revocation_reason text CHECK (revocation_reason IS NULL OR char_length(revocation_reason) BETWEEN 1 AND 512),
+  authorized_by text NOT NULL CHECK (char_length(authorized_by) BETWEEN 1 AND 256),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT project_finding_identity_mapping_finding_fk
+    FOREIGN KEY (project_id, finding_id) REFERENCES findings(project_id, id) ON DELETE CASCADE,
+  CONSTRAINT project_finding_identity_mapping_source_fk
+    FOREIGN KEY (project_id, source_id, finding_id)
+    REFERENCES project_finding_identity_sources(project_id, source_id, finding_id) ON DELETE CASCADE,
+  CONSTRAINT project_finding_identity_mapping_revision_fk
+    FOREIGN KEY (project_id, source_id, finding_id, source_revision)
+    REFERENCES project_finding_identity_source_revisions(project_id, source_id, finding_id, revision),
+  UNIQUE (project_id, finding_id, field, mapping_version),
+  UNIQUE (project_id, finding_id, field, source_id, source_revision)
+);
+CREATE INDEX project_finding_identity_mappings_lookup
+  ON project_finding_identity_mappings(project_id, field, source_id, source_revision, finding_id);
+CREATE INDEX project_finding_identity_mappings_history
+  ON project_finding_identity_mappings(project_id, finding_id, field, mapping_version DESC);
+
+-- Rebuildable, Scheduler-owned strong relation work and source checkpoints.
+CREATE TABLE project_finding_relation_scan (
+  id text PRIMARY KEY CHECK (id = 'global'),
+  cursor_id uuid
+);
+INSERT INTO project_finding_relation_scan (id) VALUES ('global');
+CREATE TABLE project_finding_relation_work (
+  project_id uuid PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  generation uuid NOT NULL DEFAULT gen_random_uuid(),
+  active_generation uuid,
+  rule_version text NOT NULL,
+  cursor_id uuid,
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'succeeded', 'failed')),
+  attempts int NOT NULL DEFAULT 0 CHECK (attempts BETWEEN 0 AND 3),
+  error_code text,
+  next_run_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX project_finding_relation_work_due
+  ON project_finding_relation_work(next_run_at, project_id) WHERE status <> 'failed';
+CREATE TABLE project_finding_relation_sources (
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  generation uuid NOT NULL,
+  finding_id uuid NOT NULL,
+  source_fingerprint text NOT NULL CHECK (source_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  identity_fingerprint text NOT NULL CHECK (identity_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  rule_version text NOT NULL,
+  examined int NOT NULL CHECK (examined BETWEEN 0 AND 257),
+  pair_truncated boolean NOT NULL,
+  read_status text NOT NULL DEFAULT 'complete' CHECK (read_status IN ('complete', 'truncated', 'blocked')),
+  read_reason text,
+  processed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, generation, finding_id),
+  FOREIGN KEY (project_id, finding_id) REFERENCES findings(project_id, id) ON DELETE CASCADE
+);
+-- #819: governed quality history. These are structural receipts and CAS pointers,
+-- not proof of labels, thresholds, source validity, review independence or quality.
+CREATE TABLE project_finding_quality_protocols (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL REFERENCES projects(id),
+  protocol_digest text NOT NULL CHECK (protocol_digest ~ '^sha256:[a-f0-9]{64}$'),
+  body_json jsonb NOT NULL CHECK (jsonb_typeof(body_json) = 'object' AND octet_length(body_json::text) <= 65536),
+  created_by_actor_type text NOT NULL CHECK (created_by_actor_type IN ('bootstrap_admin', 'api_token', 'user', 'internal')),
+  created_by_actor_id text CHECK (created_by_actor_id IS NULL OR char_length(created_by_actor_id) BETWEEN 1 AND 200),
+  created_by_actor_name text NOT NULL CHECK (char_length(created_by_actor_name) BETWEEN 1 AND 200),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE (id, project_id),
+  UNIQUE (project_id, protocol_digest)
+);
+CREATE TABLE project_finding_quality_records (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  protocol_id uuid NOT NULL,
+  kind text NOT NULL CHECK (kind IN (
+    'registered', 'freeze', 'dataset_declaration', 'holdout_access', 'holdout_payload',
+    'dataset_admission', 'evaluation', 'review', 'revoke', 'rejection', 'alias_resolution'
+  )),
+  record_digest text NOT NULL CHECK (record_digest ~ '^sha256:[a-f0-9]{64}$'),
+  subject_record_id uuid,
+  request_key text CHECK (request_key IS NULL OR char_length(request_key) BETWEEN 1 AND 200),
+  actor_type text NOT NULL CHECK (actor_type IN ('bootstrap_admin', 'api_token', 'user', 'internal')),
+  actor_id text CHECK (actor_id IS NULL OR char_length(actor_id) BETWEEN 1 AND 200),
+  actor_name text NOT NULL CHECK (char_length(actor_name) BETWEEN 1 AND 200),
+  body_json jsonb NOT NULL CHECK (jsonb_typeof(body_json) = 'object' AND octet_length(body_json::text) <= 16777216),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE (id, project_id, protocol_id),
+  -- No unique content digest: distinct exposure/rejection attempts must survive.
+  UNIQUE (project_id, protocol_id, kind, request_key),
+  FOREIGN KEY (protocol_id, project_id) REFERENCES project_finding_quality_protocols(id, project_id),
+  FOREIGN KEY (subject_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id)
+);
+CREATE INDEX project_finding_quality_records_history
+  ON project_finding_quality_records(project_id, protocol_id, created_at, id);
+CREATE TABLE project_finding_quality_heads (
+  project_id uuid NOT NULL,
+  protocol_id uuid NOT NULL,
+  version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+  phase text NOT NULL CHECK (phase IN ('registered', 'frozen', 'admitted', 'evaluated', 'reviewed', 'revoked', 'blocked')),
+  latest_record_id uuid NOT NULL,
+  freeze_record_id uuid,
+  declaration_record_id uuid,
+  first_access_record_id uuid,
+  dataset_record_id uuid,
+  evaluation_record_id uuid,
+  review_record_id uuid,
+  revocation_record_id uuid,
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (project_id, protocol_id),
+  FOREIGN KEY (protocol_id, project_id) REFERENCES project_finding_quality_protocols(id, project_id),
+  FOREIGN KEY (latest_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (freeze_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (declaration_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (first_access_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (dataset_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (evaluation_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (review_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (revocation_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  CONSTRAINT project_finding_quality_heads_freeze_check CHECK (
+    phase NOT IN ('frozen', 'admitted', 'evaluated', 'reviewed') OR freeze_record_id IS NOT NULL
+  ),
+  CONSTRAINT project_finding_quality_heads_admission_check CHECK (
+    phase NOT IN ('admitted', 'evaluated', 'reviewed') OR (first_access_record_id IS NOT NULL AND dataset_record_id IS NOT NULL)
+  ),
+  CONSTRAINT project_finding_quality_heads_evaluation_check CHECK (
+    phase NOT IN ('evaluated', 'reviewed') OR evaluation_record_id IS NOT NULL
+  ),
+  CONSTRAINT project_finding_quality_heads_review_check CHECK (phase <> 'reviewed' OR review_record_id IS NOT NULL),
+  CONSTRAINT project_finding_quality_heads_revoke_check CHECK (phase <> 'revoked' OR revocation_record_id IS NOT NULL)
+);
+CREATE TABLE project_finding_quality_current (
+  project_id uuid PRIMARY KEY REFERENCES projects(id),
+  version bigint NOT NULL DEFAULT 0 CHECK (version >= 0),
+  protocol_id uuid,
+  certificate_record_id uuid,
+  scope_digest text CHECK (scope_digest IS NULL OR scope_digest ~ '^sha256:[a-f0-9]{64}$'),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  FOREIGN KEY (protocol_id, project_id) REFERENCES project_finding_quality_protocols(id, project_id),
+  FOREIGN KEY (certificate_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  CONSTRAINT project_finding_quality_current_tuple_check CHECK (
+    (protocol_id IS NULL AND certificate_record_id IS NULL AND scope_digest IS NULL)
+    OR (protocol_id IS NOT NULL AND certificate_record_id IS NOT NULL AND scope_digest IS NOT NULL)
+  )
+);
+CREATE TABLE project_finding_quality_work (
+  project_id uuid NOT NULL,
+  protocol_id uuid NOT NULL,
+  generation bigint NOT NULL DEFAULT 1 CHECK (generation >= 1),
+  processed_generation bigint NOT NULL DEFAULT 0 CHECK (processed_generation >= 0 AND processed_generation <= generation),
+  claimed_generation bigint CHECK (claimed_generation IS NULL OR claimed_generation BETWEEN 1 AND generation),
+  status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+  dataset_record_id uuid,
+  evaluation_record_id uuid,
+  state_json jsonb NOT NULL DEFAULT '{}' CHECK (jsonb_typeof(state_json) = 'object' AND octet_length(state_json::text) <= 16384),
+  last_error_code text CHECK (last_error_code IS NULL OR char_length(last_error_code) BETWEEN 1 AND 160),
+  created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  updated_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (project_id, protocol_id),
+  FOREIGN KEY (protocol_id, project_id) REFERENCES project_finding_quality_protocols(id, project_id),
+  FOREIGN KEY (dataset_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (evaluation_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id)
+);
+-- Raw selector trace and raw decisions only; human labels belong to sealed records.
+CREATE TABLE project_finding_quality_observations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid NOT NULL,
+  protocol_id uuid NOT NULL,
+  work_generation bigint NOT NULL CHECK (work_generation >= 1),
+  dataset_record_id uuid NOT NULL,
+  subject_finding_id uuid NOT NULL,
+  ordinal int NOT NULL CHECK (ordinal >= 0),
+  body_json jsonb NOT NULL CHECK (jsonb_typeof(body_json) = 'object' AND octet_length(body_json::text) <= 262144),
+  input_digest text NOT NULL CHECK (input_digest ~ '^sha256:[a-f0-9]{64}$'),
+  record_digest text NOT NULL CHECK (record_digest ~ '^sha256:[a-f0-9]{64}$'),
+  observed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  FOREIGN KEY (project_id, protocol_id) REFERENCES project_finding_quality_work(project_id, protocol_id),
+  FOREIGN KEY (dataset_record_id, project_id, protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id),
+  FOREIGN KEY (project_id, subject_finding_id) REFERENCES findings(project_id, id),
+  UNIQUE (protocol_id, work_generation, subject_finding_id),
+  UNIQUE (protocol_id, work_generation, ordinal)
+);
+-- Normal writes cannot backdate freeze/access receipts or rewrite history. Restore
+-- copies preserve original server timestamps while triggers are explicitly off.
+CREATE FUNCTION deepsonar_finding_quality_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP <> 'INSERT' THEN
+    RAISE EXCEPTION 'finding_quality_history_append_only';
+  END IF;
+  IF TG_TABLE_NAME = 'project_finding_quality_observations' THEN
+    NEW.observed_at := clock_timestamp();
+  ELSE
+    NEW.created_at := clock_timestamp();
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER project_finding_quality_protocols_immutable BEFORE INSERT OR UPDATE OR DELETE ON project_finding_quality_protocols
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_finding_quality_append_only();
+CREATE TRIGGER project_finding_quality_records_immutable BEFORE INSERT OR UPDATE OR DELETE ON project_finding_quality_records
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_finding_quality_append_only();
+CREATE TRIGGER project_finding_quality_observations_immutable BEFORE INSERT OR UPDATE OR DELETE ON project_finding_quality_observations
+  FOR EACH ROW EXECUTE FUNCTION deepsonar_finding_quality_append_only();
+
+CREATE TABLE project_finding_relations (
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  generation uuid NOT NULL,
+  left_id uuid NOT NULL,
+  right_id uuid NOT NULL,
+  left_source_fingerprint text NOT NULL CHECK (left_source_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  right_source_fingerprint text NOT NULL CHECK (right_source_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  left_identity_fingerprint text NOT NULL CHECK (left_identity_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  right_identity_fingerprint text NOT NULL CHECK (right_identity_fingerprint ~ '^sha256:[a-f0-9]{64}$'),
+  relation_kind text NOT NULL CHECK (relation_kind IN ('same_problem', 'same_root_cause_different_instance')),
+  matched_fields text[] NOT NULL,
+  different_fields text[] NOT NULL,
+  root_cause_continuation boolean NOT NULL,
+  rule_version text NOT NULL,
+  quality_protocol_id uuid,
+  quality_certificate_record_id uuid,
+  quality_scope_digest text CHECK (quality_scope_digest IS NULL OR quality_scope_digest ~ '^sha256:[a-f0-9]{64}$'),
+  quality_gate_status text NOT NULL DEFAULT 'not_evaluated' CHECK (quality_gate_status IN ('not_evaluated', 'passed', 'failed')),
+  published boolean NOT NULL DEFAULT false,
+  CONSTRAINT project_finding_relations_quality_tuple_check CHECK (
+    (quality_protocol_id IS NULL AND quality_certificate_record_id IS NULL AND quality_scope_digest IS NULL)
+    OR (quality_protocol_id IS NOT NULL AND quality_certificate_record_id IS NOT NULL AND quality_scope_digest IS NOT NULL)
+  ),
+  CONSTRAINT project_finding_relations_quality_pass_check CHECK (
+    quality_gate_status <> 'passed' OR (quality_protocol_id IS NOT NULL AND quality_certificate_record_id IS NOT NULL AND quality_scope_digest IS NOT NULL)
+  ),
+  CONSTRAINT project_finding_relations_quality_publish_check CHECK (
+    NOT published OR (quality_gate_status = 'passed' AND quality_protocol_id IS NOT NULL AND quality_certificate_record_id IS NOT NULL AND quality_scope_digest IS NOT NULL)
+  ),
+  processed_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (project_id, generation, left_id, right_id),
+  CONSTRAINT project_finding_relations_order CHECK (left_id < right_id),
+  FOREIGN KEY (project_id, left_id) REFERENCES findings(project_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (project_id, right_id) REFERENCES findings(project_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (quality_protocol_id, project_id) REFERENCES project_finding_quality_protocols(id, project_id),
+  FOREIGN KEY (quality_certificate_record_id, project_id, quality_protocol_id) REFERENCES project_finding_quality_records(id, project_id, protocol_id)
+);
+CREATE INDEX project_finding_relations_right
+  ON project_finding_relations(project_id, generation, right_id, left_id);
 
 CREATE INDEX findings_artifact_idx ON findings (artifact_id) WHERE artifact_id IS NOT NULL;
 CREATE INDEX findings_filter_idx ON findings (project_id, severity, verify_status);
@@ -926,49 +1258,6 @@ CREATE INDEX canvas_broadcasts_canvas_idx ON canvas_broadcasts (canvas_id, creat
 CREATE INDEX canvas_broadcasts_attempt_idx ON canvas_broadcasts (attempt_id, delivery_status, updated_at)
   WHERE attempt_id IS NOT NULL;
 
--- Model Gateway 用量的追加式账本。只记录计费维度和受控计数，不记录
--- prompt、completion、请求头、凭据或沙箱内容；job_tokens 仍是额度熔断缓存。
-CREATE TABLE job_usage_ledger (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  attempt_id uuid NOT NULL REFERENCES job_attempts(id) ON DELETE CASCADE,
-  effect_id text NOT NULL,
-  request_no int NOT NULL,
-  provider text NOT NULL,
-  model text NOT NULL DEFAULT '',
-  model_catalog_match boolean,
-  upstream_reporting_model text,
-  input_tokens bigint NOT NULL DEFAULT 0,
-  output_tokens bigint NOT NULL DEFAULT 0,
-  total_tokens bigint NOT NULL DEFAULT 0,
-  cache_read_input_tokens bigint NOT NULL DEFAULT 0,
-  cache_creation_input_tokens bigint NOT NULL DEFAULT 0,
-  adjustment_tokens bigint NOT NULL DEFAULT 0,
-  settlement_status text NOT NULL DEFAULT 'settled',
-  source text NOT NULL DEFAULT 'gateway_response',
-  observed_at timestamptz NOT NULL DEFAULT now(),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT job_usage_ledger_effect_id_check CHECK (effect_id ~ '^[a-z][a-z0-9_.:-]{1,127}$'),
-  CONSTRAINT job_usage_ledger_request_no_check CHECK (request_no >= 1 AND request_no <= 1000000000),
-  CONSTRAINT job_usage_ledger_provider_check CHECK (length(provider) BETWEEN 1 AND 100 AND provider !~ '[[:cntrl:]]'),
-  CONSTRAINT job_usage_ledger_model_check CHECK (length(model) <= 200 AND model !~ '[[:cntrl:]]'),
-  CONSTRAINT job_usage_ledger_upstream_reporting_model_check CHECK (
-    upstream_reporting_model IS NULL
-    OR (length(upstream_reporting_model) <= 200 AND upstream_reporting_model !~ '[[:cntrl:]]')
-  ),
-  CONSTRAINT job_usage_ledger_counts_check CHECK (
-    input_tokens >= 0 AND output_tokens >= 0 AND total_tokens >= 0
-    AND cache_read_input_tokens >= 0 AND cache_creation_input_tokens >= 0
-    AND adjustment_tokens BETWEEN -1000000000000 AND 1000000000000
-  ),
-  CONSTRAINT job_usage_ledger_status_check CHECK (settlement_status IN ('settled', 'unknown', 'not_reported')),
-  CONSTRAINT job_usage_ledger_source_check CHECK (source IN ('gateway_response', 'gateway_stream', 'gateway_error')),
-  UNIQUE (attempt_id, effect_id)
-);
-CREATE INDEX job_usage_ledger_job_idx ON job_usage_ledger (job_id, observed_at DESC);
-CREATE INDEX job_usage_ledger_project_idx ON job_usage_ledger (project_id, observed_at DESC);
-
 CREATE TABLE skill_sources (
   source_instance_id uuid NOT NULL DEFAULT gen_random_uuid(),
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1188,6 +1477,12 @@ CREATE TABLE job_tokens (
   allowed_models text[] NOT NULL DEFAULT '{}',
   max_requests int NOT NULL,
   max_tokens bigint,
+  workload text NOT NULL DEFAULT 'main',
+  request_total_limit int NOT NULL DEFAULT 0,
+  workload_max_tokens bigint,
+  expected_provider text,
+  expected_model text,
+  expected_route text,
   used_requests int NOT NULL DEFAULT 0,
   used_tokens bigint NOT NULL DEFAULT 0,
   status text NOT NULL DEFAULT 'active',
@@ -1196,10 +1491,75 @@ CREATE TABLE job_tokens (
   revoke_reason text,
   created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT job_tokens_status_check
-    CHECK (status IN ('active', 'expired', 'exhausted', 'revoked'))
+    CHECK (status IN ('active', 'expired', 'exhausted', 'revoked')),
+  CONSTRAINT job_tokens_workload_check
+    CHECK (workload IN ('main', 'observational_memory')),
+  CONSTRAINT job_tokens_request_total_limit_check
+    CHECK (request_total_limit BETWEEN 0 AND 1000000),
+  CONSTRAINT job_tokens_workload_max_tokens_check
+    CHECK (workload_max_tokens IS NULL OR workload_max_tokens >= 0),
+  CONSTRAINT job_tokens_expected_provider_check
+    CHECK (expected_provider IS NULL OR (length(expected_provider) BETWEEN 1 AND 120 AND expected_provider !~ '[[:cntrl:]]')),
+  CONSTRAINT job_tokens_expected_model_check
+    CHECK (expected_model IS NULL OR (length(expected_model) BETWEEN 1 AND 240 AND expected_model !~ '[[:cntrl:]]')),
+  CONSTRAINT job_tokens_expected_route_check
+    CHECK (expected_route IS NULL OR expected_route IN ('v1/messages', 'v1/chat/completions', 'v1/responses')),
+  CONSTRAINT job_tokens_workload_scope_check CHECK (
+    workload = 'main'
+    OR (expected_provider IS NOT NULL AND expected_model IS NOT NULL AND expected_route IS NOT NULL)
+  )
 );
 
 CREATE INDEX job_tokens_job_idx ON job_tokens (job_id);
+CREATE INDEX job_tokens_workload_idx ON job_tokens (job_id, workload, status);
+
+-- Model Gateway 用量的追加式账本。只记录计费维度和受控计数，不记录
+-- prompt、completion、请求头、凭据或沙箱内容；job_tokens 仍是额度熔断缓存。
+CREATE TABLE job_usage_ledger (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  attempt_id uuid NOT NULL REFERENCES job_attempts(id) ON DELETE CASCADE,
+  job_token_id uuid REFERENCES job_tokens(id),
+  effect_id text NOT NULL,
+  request_no int NOT NULL,
+  provider text NOT NULL,
+  model text NOT NULL DEFAULT '',
+  model_catalog_match boolean,
+  upstream_reporting_model text,
+  input_tokens bigint NOT NULL DEFAULT 0,
+  output_tokens bigint NOT NULL DEFAULT 0,
+  total_tokens bigint NOT NULL DEFAULT 0,
+  cache_read_input_tokens bigint NOT NULL DEFAULT 0,
+  cache_creation_input_tokens bigint NOT NULL DEFAULT 0,
+  adjustment_tokens bigint NOT NULL DEFAULT 0,
+  settlement_status text NOT NULL DEFAULT 'settled',
+  source text NOT NULL DEFAULT 'gateway_response',
+  workload text NOT NULL DEFAULT 'main',
+  observed_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT job_usage_ledger_effect_id_check CHECK (effect_id ~ '^[a-z][a-z0-9_.:-]{1,127}$'),
+  CONSTRAINT job_usage_ledger_request_no_check CHECK (request_no >= 1 AND request_no <= 1000000000),
+  CONSTRAINT job_usage_ledger_provider_check CHECK (length(provider) BETWEEN 1 AND 100 AND provider !~ '[[:cntrl:]]'),
+  CONSTRAINT job_usage_ledger_model_check CHECK (length(model) <= 200 AND model !~ '[[:cntrl:]]'),
+  CONSTRAINT job_usage_ledger_upstream_reporting_model_check CHECK (
+    upstream_reporting_model IS NULL
+    OR (length(upstream_reporting_model) <= 200 AND upstream_reporting_model !~ '[[:cntrl:]]')
+  ),
+  CONSTRAINT job_usage_ledger_counts_check CHECK (
+    input_tokens >= 0 AND output_tokens >= 0 AND total_tokens >= 0
+    AND cache_read_input_tokens >= 0 AND cache_creation_input_tokens >= 0
+    AND adjustment_tokens BETWEEN -1000000000000 AND 1000000000000
+  ),
+  CONSTRAINT job_usage_ledger_status_check CHECK (settlement_status IN ('settled', 'unknown', 'not_reported')),
+  CONSTRAINT job_usage_ledger_source_check CHECK (source IN ('gateway_response', 'gateway_stream', 'gateway_error')),
+  CONSTRAINT job_usage_ledger_workload_check CHECK (workload IN ('main', 'observational_memory')),
+  UNIQUE (attempt_id, effect_id)
+);
+CREATE INDEX job_usage_ledger_job_idx ON job_usage_ledger (job_id, observed_at DESC);
+CREATE INDEX job_usage_ledger_project_idx ON job_usage_ledger (project_id, observed_at DESC);
+CREATE INDEX job_usage_ledger_workload_idx ON job_usage_ledger (job_id, workload, observed_at DESC);
+CREATE INDEX job_usage_ledger_token_idx ON job_usage_ledger (job_token_id, observed_at DESC);
 
 -- Short-lived Job-scoped capability tokens for the Platform Tool API. This is
 -- intentionally independent from job_tokens, which are Gateway credentials.

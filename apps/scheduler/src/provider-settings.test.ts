@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { defaultDshPiAiSettings } from "@deepsonar/runtime-sandbox";
+import { PI_EXTENSION_REGISTRY, PI_OBSERVATIONAL_MEMORY_PROVIDER } from "@deepsonar/shared-types";
+import { freezePiExtensions } from "./pi-extensions.js";
 import {
   extractBaseUrlFromSettings,
   extractModelFromSettings,
@@ -158,6 +161,151 @@ test("Pi models.json 支持 provider、模型解析和网关改写", () => {
     provider: "deepsonar",
     cliModel: "gpt-5",
   });
+});
+
+test("Pi Gateway routing preserves project settings when OM is disabled", () => {
+  const [models] = materializeProviderSettings({
+    agentCli: "pi",
+    settingsConfig: {
+      provider: "openai",
+      baseUrl: "http://127.0.0.1/v1",
+      api: "openai-responses",
+      models: [{ id: "gpt-5.6" }],
+    },
+  });
+  assert.ok(models);
+  const projectSettings = JSON.stringify({ project: { untouched: true } });
+  const projectFile = {
+    path: ".pi/settings.json",
+    content: projectSettings,
+    content_sha256: createHash("sha256").update(projectSettings, "utf8").digest("hex"),
+  };
+  const routed = routeMaterializedProviderFilesThroughGateway({
+    agentCli: "pi",
+    files: [models, projectFile],
+    gatewayBaseUrl: "http://deepsonar-gateway-proxy:3100/gateway",
+    jobToken: "deepsonarjob_12345678_test-token-value",
+  });
+  const preserved = routed.filter((item) => item.path === ".pi/settings.json");
+  assert.equal(preserved.length, 1);
+  assert.deepEqual(preserved[0], projectFile);
+});
+
+test("Pi provider settings cannot activate or override Scheduler-owned observational memory", () => {
+  const settings = {
+    provider: "openai",
+    baseUrl: "http://127.0.0.1/v1",
+    api: "openai-responses",
+    models: [{ id: "gpt-5.6" }],
+    "observational-memory": {
+      observeAfterTokens: 1,
+      model: { provider: "attacker", id: "attacker-model" },
+      passive: true,
+    },
+  };
+  const snapshot = providerSettingsForJobSnapshot(settings, "pi");
+  assert.equal(snapshot["observational-memory"], undefined);
+  const [file] = materializeProviderSettings({ agentCli: "pi", settingsConfig: settings });
+  const materialized = JSON.parse(file!.content) as {
+    providers: Record<string, Record<string, unknown>>;
+  };
+  assert.equal(materialized.providers.deepsonar?.["observational-memory"], undefined);
+});
+
+function observationalMemoryRoutingFixture(api = "openai-responses") {
+  const [extension] = freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", {
+    provider: "fixture-route", model: "fixture-model", thinking: "low",
+  }, PI_EXTENSION_REGISTRY["pi-observational-memory"].min_runtime_image_version);
+  assert.ok(extension?.observational_memory);
+  const files = materializeProviderSettings({
+    agentCli: "pi",
+    settingsConfig: { providers: {
+      "fixture-route": { baseUrl: "http://127.0.0.1/v1", api,
+        models: [{ id: "fixture-model", contextWindow: 128_000 }, { id: "unselected-model" }] },
+      "other-route": { baseUrl: "http://127.0.0.2/v1", api: "openai-responses", models: [{ id: "other-model" }] },
+    } },
+  });
+  return {
+    agentCli: "pi" as const,
+    files,
+    gatewayBaseUrl: "http://deepsonar-gateway-proxy:3100/gateway",
+    jobToken: "fixture-main-token",
+    observationalMemory: { config: extension.observational_memory, backgroundToken: "fixture-background-token" },
+  };
+}
+
+test("OM materialization isolates its frozen model, auth and settings for every Gateway protocol", () => {
+  for (const api of ["openai-responses", "openai-completions", "anthropic-messages"]) {
+    const input = observationalMemoryRoutingFixture(api);
+    const original = structuredClone(input.files);
+    const routed = routeMaterializedProviderFilesThroughGateway(input);
+    assert.deepEqual(input.files, original);
+    const models = JSON.parse(routed.find((file) => file.path === ".pi/agent/models.json")!.content);
+    const memory = models.providers[PI_OBSERVATIONAL_MEMORY_PROVIDER];
+    assert.equal(memory.baseUrl, input.gatewayBaseUrl);
+    assert.equal(memory.apiKey, "$DEEPSONAR_OM_GATEWAY_TOKEN");
+    assert.equal(memory.api, api);
+    assert.deepEqual(memory.models, [{ id: "fixture-model", contextWindow: 128_000 }]);
+    assert.equal(memory.authHeader, api === "anthropic-messages" ? true : undefined);
+    assert.equal(models.providers["fixture-route"].models.length, 2);
+    const auth = JSON.parse(routed.find((file) => file.path === ".pi/agent/auth.json")!.content);
+    assert.equal(auth[PI_OBSERVATIONAL_MEMORY_PROVIDER].key, input.observationalMemory.backgroundToken);
+    assert.equal(auth["fixture-route"].key, input.jobToken);
+    assert.equal(auth["other-route"].key, input.jobToken);
+    for (const path of [".pi/settings.json", ".pi/agent/settings.json"]) {
+      const settings = JSON.parse(routed.find((file) => file.path === path)!.content)["observational-memory"];
+      assert.deepEqual(settings.model, input.observationalMemory.config.model);
+      assert.equal(settings.showWorkerNotifications, false);
+      assert.equal(settings.debugLog, false);
+      assert.equal(settings.passive, false);
+    }
+    for (const file of routed) assert.equal(file.content_sha256, createHash("sha256").update(file.content).digest("hex"));
+  }
+});
+
+test("OM rejects missing frozen model/provider, non-Gateway protocols, and nonisolated tokens", () => {
+  const input = observationalMemoryRoutingFixture();
+  const config = input.observationalMemory.config;
+  assert.throws(() => routeMaterializedProviderFilesThroughGateway({
+    ...input, observationalMemory: { ...input.observationalMemory, config: { ...config, source_provider: "missing-route" } },
+  }), /PI_OM_SOURCE_PROVIDER_NOT_MATERIALIZED/);
+  assert.throws(() => routeMaterializedProviderFilesThroughGateway({
+    ...input, observationalMemory: { ...input.observationalMemory, config: {
+      ...config, source_model: "missing-model", model: { ...config.model, id: "missing-model" },
+    } },
+  }), /PI_OM_SOURCE_MODEL_NOT_MATERIALIZED/);
+  assert.throws(() => routeMaterializedProviderFilesThroughGateway(observationalMemoryRoutingFixture("google-generative-ai")), /PI_OM_GATEWAY_PROTOCOL_UNSUPPORTED/);
+  for (const backgroundToken of ["", input.jobToken]) {
+    assert.throws(() => routeMaterializedProviderFilesThroughGateway({
+      ...input, observationalMemory: { ...input.observationalMemory, backgroundToken },
+    }), /PI_OM_GATEWAY_TOKEN_(?:MISSING|NOT_ISOLATED)/);
+  }
+  assert.throws(() => routeMaterializedProviderFilesThroughGateway({ ...input, agentCli: "claude-code" }), /PI_OM_REQUIRES_PI/);
+  assert.throws(() => routeMaterializedProviderFilesThroughGateway({
+    ...input, observationalMemory: { ...input.observationalMemory, config: { ...config, workload: "main" } as typeof config },
+  }), /unrecognized key/i);
+});
+
+test("OM retains selected-model capabilities without source endpoint or header overrides", () => {
+  const input = observationalMemoryRoutingFixture();
+  const modelsFile = input.files.find((file) => file.path === ".pi/agent/models.json")!;
+  const original = JSON.parse(modelsFile.content);
+  original.providers["fixture-route"].headers = { "x-provider-header": "fixture-value" };
+  Object.assign(original.providers["fixture-route"].models[0], {
+    api: "anthropic-messages", baseUrl: "http://127.0.0.9/direct",
+    headers: { "x-model-header": "fixture-value" },
+  });
+  const content = JSON.stringify(original);
+  const routed = routeMaterializedProviderFilesThroughGateway({
+    ...input, files: [{ ...modelsFile, content, content_sha256: createHash("sha256").update(content).digest("hex") }],
+  });
+  const models = JSON.parse(routed.find((file) => file.path === ".pi/agent/models.json")!.content);
+  const memory = models.providers[PI_OBSERVATIONAL_MEMORY_PROVIDER];
+  assert.equal(memory.baseUrl, input.gatewayBaseUrl);
+  assert.equal(memory.api, "anthropic-messages");
+  assert.equal(memory.authHeader, true);
+  assert.equal(memory.headers, undefined);
+  assert.deepEqual(memory.models, [{ id: "fixture-model", contextWindow: 128_000, api: "anthropic-messages" }]);
 });
 
 test("Pi anthropic-messages 网关改写补 authHeader 以便现网 Gateway 认 Bearer", () => {

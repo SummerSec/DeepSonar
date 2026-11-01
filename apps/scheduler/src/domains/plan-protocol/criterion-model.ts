@@ -32,7 +32,7 @@ export function contentSha256(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 }
 
-export function planCriteria(plan: Plan) {
+export function planCriteria(plan: Pick<Plan, "completion">) {
   return [
     { id: "completion", text: plan.completion.description },
     ...plan.completion.required_outputs.map((text, index) => ({ id: `output-${index}`, text })),

@@ -143,24 +143,57 @@ test("usage board aggregates tokens by day, project, task, and model", () => {
         settlement_status: "unknown",
         total_tokens: 14,
       }),
+      row({
+        observed_at: "2026-08-18T04:00:00.000Z",
+        input_tokens: 6,
+        output_tokens: 3,
+        total_tokens: 9,
+        project_id: "project-3",
+        project_name: "memory-background",
+        job_id: "job-om",
+        canvas_id: "canvas-om",
+        canvas_title: "memory-background",
+        provider: "openai",
+        model: "memory-model",
+        workload: "observational_memory",
+      }),
     ],
   });
 
-  assert.equal(usage.totals.requests, 3);
-  assert.equal(usage.totals.input_tokens, 40);
-  assert.equal(usage.totals.output_tokens, 14);
-  assert.equal(usage.totals.total_tokens, 54);
+  assert.equal(usage.totals.requests, 4);
+  assert.equal(usage.totals.input_tokens, 46);
+  assert.equal(usage.totals.output_tokens, 17);
+  assert.equal(usage.totals.total_tokens, 63);
   assert.equal(usage.totals.cache_read_input_tokens, 80);
   assert.equal(usage.totals.cache_creation_input_tokens, 12);
   assert.equal(usage.series.find((day) => day.date === "2026-08-18")?.cache_read_input_tokens, 80);
-  assert.equal(usage.totals.jobs, 3);
-  assert.equal(usage.totals.projects, 2);
-  assert.equal(usage.totals.tasks, 3);
-  assert.equal(usage.totals.settled, 2);
+  assert.equal(usage.totals.jobs, 4);
+  assert.equal(usage.totals.projects, 3);
+  assert.equal(usage.totals.tasks, 4);
+  assert.equal(usage.totals.settled, 3);
   assert.equal(usage.totals.unknown, 1);
-  assert.equal(usage.series.find((day) => day.date === "2026-08-18")?.total_tokens, 40);
+  assert.equal(usage.series.find((day) => day.date === "2026-08-18")?.total_tokens, 49);
   assert.equal(usage.series.find((day) => day.date === "2026-08-19")?.total_tokens, 14);
   assert.deepEqual(usage.projects.map((item) => item.id), ["project-1", "project-2"]);
   assert.equal(usage.tasks[0]?.title, "复测");
-  assert.deepEqual(usage.models.map((item) => item.model), ["sonnet", "claude", "gpt"]);
+  assert.equal(usage.workloads.main.total_tokens, 54);
+  assert.equal(usage.workloads.observational_memory.total_tokens, 9);
+  assert.equal(usage.workloads.observational_memory.requests, 1);
+  assert.deepEqual(usage.projects.map((item) => item.id), ["project-1", "project-2"]);
+  assert.deepEqual(usage.models.map((item) => item.model), ["sonnet", "claude", "gpt", "memory-model"]);
+});
+
+test("the same frozen model has distinct main and memory totals, including unsettled usage", () => {
+  const window = resolveUsageWindow({ period: "week", now: NOW });
+  assert.ok(!("error_code" in window));
+  const main = row({ workload: "main", total_tokens: 10 });
+  const memory = row({ workload: "observational_memory", total_tokens: 900, settlement_status: "unknown" });
+  const usage = buildDashboardUsage({ window, rows: [main, memory] });
+  assert.equal(usage.models.length, 2);
+  assert.equal(usage.workloads.main.total_tokens, 10);
+  assert.equal(usage.workloads.observational_memory.total_tokens, 900);
+  assert.equal(usage.workloads.observational_memory.unknown, 1);
+  assert.equal(usage.projects[0]!.total_tokens, 10);
+  assert.equal(usage.tasks[0]!.total_tokens, 10);
+  assert.equal(usage.totals.total_tokens, 910);
 });

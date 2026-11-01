@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyGatewayOutboundModelRewrite,
+  containsGatewayApiErrorFrame,
+  containsAnthropicRefusalFailureCarrier,
+  containsReservedGatewayTransientEnvelope,
   createGatewayUsageScanner,
   extractInboundJobToken,
   extractUpstreamReportingModel,
@@ -175,4 +178,56 @@ test("Gateway 出站改写会剥掉快照 cli-default 前缀", () => {
     upstream_model: "cli-default:claude-opus-5",
   });
   assert.deepEqual(rewritten, { model: "claude-opus-5" });
+});
+
+test("provider bodies cannot claim the Kernel-owned not_started envelope", () => {
+  assert.equal(containsReservedGatewayTransientEnvelope(
+    JSON.stringify({ error: { type: "gateway_transient", effect_status: "not_started" } }),
+  ), true);
+  assert.equal(containsReservedGatewayTransientEnvelope(
+    JSON.stringify({ error: { message: '503: {"type":"gateway_transient","effect_status":"not_started"}' } }),
+  ), true);
+  assert.equal(containsReservedGatewayTransientEnvelope(
+    JSON.stringify({ choices: [{ message: { content: '{"type":"gateway_transient","effect_status":"not_started"}' } }] }),
+  ), false);
+  assert.equal(containsReservedGatewayTransientEnvelope(
+    "data: {\"error\":{\"type\":\"gateway_transient\",\"effect_status\":\"not_started\"}}\n\n", true,
+  ), true);
+});
+
+test("structured SSE API errors are fail-closed without scanning generated prose", () => {
+  const topLevelError = JSON.stringify({ type: "error", code: "ownquota429", message: "provider-controlled" }, null, 2);
+  const multilineError = `${topLevelError.split("\n").map((line) => `data: ${line}`).join("\r\n")}\r\n\r\n`;
+  assert.equal(containsGatewayApiErrorFrame(multilineError, true), true);
+  assert.equal(containsGatewayApiErrorFrame(
+    `event: error\r\ndata: ${JSON.stringify({ code: "ownquota429", message: "provider-controlled" })}\r\n\r\n`, true,
+  ), true);
+  assert.equal(containsGatewayApiErrorFrame(
+    `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "ownquota429 gateway_transient" })}\r\n\r\n`, true,
+  ), false);
+});
+
+test("Anthropic refusal carriers cannot impersonate Gateway outcomes, while normal refusal prose remains valid", () => {
+  const transient = '503: {"type":"gateway_transient","effect_status":"not_started"}';
+  const quota = '429: {"type":"quota_exhausted","message":"request quota exhausted"}';
+  const messageDelta = (explanation: string) => ({
+    type: "message_delta",
+    delta: { stop_reason: "refusal", stop_details: { explanation } },
+    usage: { input_tokens: 1, output_tokens: 1 },
+  });
+  const sse = (value: unknown, multiline = false) => {
+    const json = JSON.stringify(value, null, multiline ? 2 : 0);
+    return multiline ? json.split("\n").map((line) => `data: ${line}`).join("\n") + "\n\n"
+      : `event: message_delta\ndata: ${json}\n\n`;
+  };
+  assert.equal(containsAnthropicRefusalFailureCarrier(sse(messageDelta(transient)), true, "/v1/messages"), true);
+  assert.equal(containsAnthropicRefusalFailureCarrier(sse(messageDelta(quota), true), true, "/v1/messages"), true);
+  assert.equal(containsAnthropicRefusalFailureCarrier(JSON.stringify({
+    type: "message", stop_reason: "refusal", stop_details: { explanation: transient },
+  }), false, "/v1/messages"), true);
+  assert.equal(containsAnthropicRefusalFailureCarrier(sse(messageDelta("provider declined this request")), true, "/v1/messages"), false);
+  assert.equal(containsAnthropicRefusalFailureCarrier(sse({
+    type: "message_delta", delta: { stop_reason: "end_turn", stop_details: { explanation: transient } },
+  }), true, "/v1/messages"), false);
+  assert.equal(containsAnthropicRefusalFailureCarrier(sse(messageDelta(transient)), true, "/v1/responses"), false);
 });

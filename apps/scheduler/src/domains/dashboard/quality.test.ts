@@ -169,6 +169,19 @@ test("per-finding cost splits shared origin tokens and keeps verify jobs whole",
   assert.deepEqual(costs.get("b"), { tokens: 50, duration_ms: 300_000, job_count: 1 });
 });
 
+test("observational-memory usage is visible but never charged to a Finding", () => {
+  const report = buildQualityReport(ctx({
+    usage: [
+      { job_id: "maker-1", total_tokens: 100, provider: "anthropic", model: "claude", workload: "main" },
+      { job_id: "maker-1", total_tokens: 40, provider: "openai", model: "memory-model", workload: "observational_memory" },
+    ],
+  }));
+  assert.equal(report.cost.total_tokens, 100);
+  assert.equal(report.cost.background_tokens, 40);
+  assert.equal(report.cost.background_requests, 1);
+  assert.equal(report.cost.per_finding[0]?.tokens, 100);
+});
+
 test("empty scope is a real zero and truncates long per-finding lists", () => {
   const empty = buildQualityReport(ctx({ findings: [], jobs: [], usage: [] }));
   assert.equal(empty.findings.total, 0);

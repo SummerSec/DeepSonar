@@ -20,6 +20,7 @@ import {
   unknownControlField,
 } from "./control-input.js";
 import { REPORT_QUANTITY_VERBATIM_NOTE } from "./report-numeric-fidelity.js";
+import { readPersistedPlanObjective } from "./domains/plan-protocol/objective.js";
 
 /** Server-side bounded graph projections for Hub/Worker prompt inputs. */
 export type GraphScope = "hub" | "agent" | "verify" | "report";
@@ -69,6 +70,26 @@ export interface GraphSnapshot {
 
 function kv(key: string, value: unknown): string {
   return key + ": " + JSON.stringify(value ?? null);
+}
+
+/**
+ * A bounded bootstrap handle for the current user objective. The complete
+ * tuple is read through the Job-scoped graph_query plan_objective operation;
+ * this handle must never be mistaken for the objective contents.
+ */
+export function planObjectiveReadHandle(target: Record<string, unknown>): Record<string, unknown> {
+  const objective = readPersistedPlanObjective(target);
+  return {
+    kind: "plan_objective",
+    ...(objective
+      ? {
+          available: true,
+          objective_id: objective.objective_id,
+          revision: objective.revision,
+          status: objective.status,
+        }
+      : { available: false }),
+  };
 }
 
 export function short(value: unknown, max: number): string {
@@ -269,8 +290,12 @@ export async function buildGraphSnapshot(
     SELECT from_node_id, to_node_id, edge_type
     FROM canvas_edges WHERE canvas_id = ${canvasId}`;
   const target = (canvas?.target_json ?? {}) as Record<string, unknown>;
-  const promptTarget = taskTargetForPrompt(target);
-  const goal = String(target.goal ?? canvas?.title ?? "");
+  const currentObjective = readPersistedPlanObjective(target);
+  const promptTarget = { ...taskTargetForPrompt(target) };
+  // The authoritative objective has its own complete Job-scoped reader. Do
+  // not let the general target projection crop it into a misleading preview.
+  delete promptTarget.plan_objective;
+  const goal = String(currentObjective?.goal ?? target.goal ?? canvas?.title ?? "");
   const root = nodes.find((node) => node.node_type === "root");
   const facts = nodes.filter((node) => node.node_type === "fact" || node.node_type === "finding");
   const factNodes = nodes.filter((node) => node.node_type === "fact");
@@ -363,6 +388,7 @@ export async function buildGraphSnapshot(
     kv("truncated", false),
     kv("omitted", {}),
     kv("goal", short(goal, hubOverviewOnly ? 240 : 1_200)),
+    kv("plan_objective", planObjectiveReadHandle(target)),
     kv("target", boundedJson(promptTarget, hubOverviewOnly ? 480 : 2_400)),
     kv("root_id", root?.id ?? null),
     kv("root_status", root?.status ?? null),
@@ -689,6 +715,27 @@ export async function buildGraphSnapshot(
     lines[1] = overflowMarkers.truncated;
     lines[2] = overflowMarkers.omitted;
     yaml = lines.join("\n");
+    if (yaml.length > projectionMaxChars) {
+      // Keep the bootstrap handle and root identity authoritative even when a
+      // valid objective's escaped goal makes the ordinary header too large.
+      // The old first-eight-lines fallback could retain that oversized goal and
+      // still exceed projectionMaxChars. Replace the general previews with
+      // explicit omissions instead of presenting a cropped value as complete.
+      omitted.goal = (omitted.goal ?? 0) + 1;
+      omitted.target = (omitted.target ?? 0) + 1;
+      const compactMarkers = graphProjectionMarkers(true, omitted);
+      const compactHeader = [
+        kv("scope", scope),
+        compactMarkers.truncated,
+        compactMarkers.omitted,
+        kv("goal", null),
+        kv("plan_objective", planObjectiveReadHandle(target)),
+        kv("target", { truncated: true }),
+        kv("root_id", root?.id ?? null),
+      ];
+      lines.splice(0, lines.length, ...compactHeader);
+      yaml = lines.join("\n");
+    }
   }
   const referableIds = unique([
     ...facts.map((node) => String(node.id)),

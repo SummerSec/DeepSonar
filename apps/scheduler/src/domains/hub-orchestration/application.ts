@@ -1,4 +1,5 @@
 import { sql } from "../../db.js";
+import { ControlInputError } from "../../control-input.js";
 import { planContext } from "../plan-protocol/objective.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
 import { extractDispatchPrompt } from "../../job-dispatch-prompt.js";
@@ -532,7 +533,9 @@ export function createHubOrchestrationApplication(
       await ports.resolveAgentSnapshotForJob(tx, projectId, "hub_reason", triggerFindingId ? [triggerFindingId] : []) as object,
     );
     const [canvas] = await tx`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
-    const plan=await planContext(tx as unknown as typeof sql,canvasId,projectId);
+    // SAFETY: planContext uses tagged reads on this same PostgreSQL handle;
+    // it does not open another connection or transaction.
+    const plan = await planContext(tx as unknown as typeof sql, canvasId, projectId);
     const hubPayload = { trigger, scheduling_purpose: "hub", ...(plan?{plan_context:{plan_job_id:plan.plan_job_id,plan_sha256:plan.plan_sha256,scheduler_owned:true}}:{}) };
     const [hubJob] = await tx`
       INSERT INTO jobs ${tx({
@@ -607,41 +610,59 @@ export function createHubOrchestrationApplication(
     if (!canvasId || job.type === "report") return "noop";
     if (!(await ports.lockCanvasForConvergence(tx, canvasId))) return "noop";
 
-    const [root] = await tx`
-      SELECT status FROM canvas_nodes
-      WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
-    // report_failed 是报告终态收口，禁止空闲 Hub 再拉一轮。
-    if (root?.status === "report_failed") return "noop";
-    if (root?.status === "analysis_complete" || root?.status === "reporting") {
-      await ports.maybeDispatchReport(tx, canvasId);
-      return "report";
-    }
+    // SAFETY: terminal callers pass an open postgres.js TransactionSql from
+    // begin/savepoint; the domain's query-handle alias omits its savepoint API.
+    const transaction = tx as unknown as {
+      savepoint<T>(callback: (nested: HubOrchestrationTransaction) => Promise<T>): Promise<T>;
+    };
+    try {
+      // Follow-on admission cannot undo the predecessor's terminal result.
+      return await transaction.savepoint(async (nested) => {
+        const [root] = await nested`
+          SELECT status FROM canvas_nodes
+          WHERE canvas_id = ${canvasId} AND node_type = 'root' LIMIT 1`;
+        if (root?.status === "report_failed") return "noop" as const;
+        if (root?.status === "analysis_complete" || root?.status === "reporting") {
+          await ports.maybeDispatchReport(nested, canvasId);
+          return "report" as const;
+        }
 
-    if (job.type === "hub_reason" && terminalStatus !== "succeeded") {
-      await tx`
-        UPDATE finding_verification_rounds r
-        SET requirements_json = (requirements_json - 'hub_evidence_signature') - 'hub_gate_fingerprint'
-        FROM findings f
-        JOIN jobs origin ON origin.id = f.job_id
-        WHERE r.finding_id = f.id
-          AND origin.canvas_id = ${canvasId}
-          AND r.status = 'pending'
-          AND r.requirements_json->>'eligibility' = 'waiting_evidence'`;
+        if (job.type === "hub_reason" && terminalStatus !== "succeeded") {
+          await nested`
+            UPDATE finding_verification_rounds r
+            SET requirements_json = (requirements_json - 'hub_evidence_signature') - 'hub_gate_fingerprint'
+            FROM findings f
+            JOIN jobs origin ON origin.id = f.job_id
+            WHERE r.finding_id = f.id
+              AND origin.canvas_id = ${canvasId}
+              AND r.status = 'pending'
+              AND r.requirements_json->>'eligibility' = 'waiting_evidence'`;
+          return "noop" as const;
+        }
+
+        await maybeTriggerHub(nested, job, {
+          force: false,
+          sourceNodeIds: opts.sourceNodeIds ?? [],
+          trigger: opts.trigger ?? {
+            kind: "canvas_idle",
+            after_job_id: job.id,
+            after_job_type: job.type,
+            after_job_status: terminalStatus,
+          },
+          idleWake: true,
+        });
+        return "hub" as const;
+      });
+    } catch (error) {
+      if (!(error instanceof ControlInputError) || error.code !== "target_authorization_grant_invalid") throw error;
+      await ports.patchCanvasConvergence(tx, canvasId, {
+        hub_paused: true,
+        auto_stopped: true,
+        paused_reason: error.code,
+        paused_at: new Date().toISOString(),
+      });
       return "noop";
     }
-
-    await maybeTriggerHub(tx, job, {
-      force: false,
-      sourceNodeIds: opts.sourceNodeIds ?? [],
-      trigger: opts.trigger ?? {
-        kind: "canvas_idle",
-        after_job_id: job.id,
-        after_job_type: job.type,
-        after_job_status: terminalStatus,
-      },
-      idleWake: true,
-    });
-    return "hub";
   }
 
   async function triggerHubFromHumanComment(input: HubHumanCommentInput): Promise<HubHumanCommentResult> {
@@ -665,6 +686,8 @@ export function createHubOrchestrationApplication(
     let hubJobId: string | undefined;
 
     await db.begin(async (rawTx) => {
+      // SAFETY: rawTx is the open postgres.js transaction; this domain uses
+      // only its tagged-query/json operations through the shared handle type.
       const tx = rawTx as unknown as HubOrchestrationTransaction;
       const [findingNode] = finding.node_id
         ? await tx`SELECT id, x, y FROM canvas_nodes WHERE id = ${finding.node_id as string}`

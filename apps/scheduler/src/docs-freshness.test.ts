@@ -156,13 +156,29 @@ test("#696 文档引用的 pnpm 脚本都存在于 package.json", () => {
   );
 });
 
+function markdownLinkTargets(body: string): string[] {
+  return [...body.matchAll(/!?\[[^\]]*\]\((?:<([^>\r\n]+)>|([^)\s]+))(?:\s+"[^"]*")?\)/g)]
+    .map((match) => match[1] ?? match[2]!);
+}
+
+test("#696 角括号链接保留空格与锚点并仍纳入目标校验", () => {
+  assert.deepEqual(markdownLinkTargets([
+    "[plain](docs/guide.md#part)", "[wrapped](<docs/guide.md#part>)",
+    "![space](<docs/path with spaces/image.png>)", '[title](<docs/guide.md> "guide")',
+    "[broken](<docs/missing-target.md>)", "[external](<https://example.invalid/docs>)",
+  ].join("\n")), [
+    "docs/guide.md#part", "docs/guide.md#part", "docs/path with spaces/image.png",
+    "docs/guide.md", "docs/missing-target.md", "https://example.invalid/docs",
+  ]);
+});
+
 test("#696 文档里的相对链接都有目标文件", () => {
   const broken: string[] = [];
   for (const file of docFiles()) {
     if (HISTORICAL_DOCS.has(file)) continue;
     const body = stripFences(read(file));
-    for (const match of body.matchAll(/!?\[[^\]]*\]\(([^)\s]+)\)/g)) {
-      const target = match[1]!.split("#")[0]!;
+    for (const link of markdownLinkTargets(body)) {
+      const target = link.split("#")[0]!;
       if (!target || /^(https?:|mailto:|tel:)/.test(target)) continue;
       const resolved = path.normalize(path.join(path.dirname(file), target));
       if (!existsSync(path.join(ROOT, resolved))) broken.push(`${file} -> ${target}`);

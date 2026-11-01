@@ -1,8 +1,12 @@
 import { hasChromeArm64Gate } from "./ci-chrome-arm64-gate.mjs";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync as fsStatSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync as fsStatSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Script } from "node:vm";
-import { COMMON_FINGERPRINT_PATHS, FINGERPRINT_SCHEMA_VERSION, PRESETS } from "./image-build-fingerprint.mjs";
+import { COMMON_FINGERPRINT_PATHS, computeFingerprint, FINGERPRINT_SCHEMA_VERSION, PRESETS } from "./image-build-fingerprint.mjs";
+import localImage, { OM_INSTALL_IDENTITY_CHECK } from "./image.mjs";
 
 // Git preserves the executable bit in the repository, but Windows reports a
 // checkout's mode as 0644 regardless of that index bit. Keep the Linux gate
@@ -12,6 +16,7 @@ const statSync = process.platform === "win32" ? (() => ({ mode: 0o755 })) : fsSt
 const config = JSON.parse(readFileSync(new URL("./runtime-images.json", import.meta.url), "utf8"));
 const dockerfile = readFileSync(new URL("../deploy/Dockerfile.agent", import.meta.url), "utf8");
 const localDefinition = readFileSync(new URL("./image.mjs", import.meta.url), "utf8");
+const writeManifest = readFileSync(new URL("./write-tool-manifest.mjs", import.meta.url), "utf8");
 const kaliConfig = JSON.parse(readFileSync(new URL("./kali-minimal-runtime.json", import.meta.url), "utf8"));
 const kaliDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-kali-minimal", import.meta.url), "utf8");
 await import("./check-dsh-runtime.mjs");
@@ -291,13 +296,129 @@ expect(basePiWeb?.integrity === kaliPiWeb?.integrity, "base/kali pi-web-access i
 expect(Array.isArray(basePiWeb?.toolsets) && basePiWeb.toolsets.length === 1 && basePiWeb.toolsets[0] === "audit", "pi-web-access preinstall is audit-only to stay inside the base size budget");
 expect(Array.isArray(basePiWeb?.compatible_image_keys) && basePiWeb.compatible_image_keys.includes("deepsonar-audit") && !basePiWeb.compatible_image_keys.includes("deepsonar-base"), "pi-web-access stays off the size-gated base image");
 expect(Array.isArray(kaliPiWeb?.compatible_image_keys) && kaliPiWeb.compatible_image_keys.includes("deepsonar-kali-minimal"), "pi-web-access Kali compatibility missing");
-expect(dockerfile.includes('if [ "$TOOLSET" != audit ]; then exit 0; fi'), "Dockerfile.agent must skip Pi extension preinstall on TOOLSET=base");
+expect(dockerfile.includes('if [ "$TOOLSET" != audit ]; then npm cache clean --force; exit 0; fi'), "Dockerfile.agent must keep pi-web-access audit-only while installing OM in base");
 expect(sharedPiExtensions.includes('id: "pi-web-access"') && sharedPiExtensions.includes(basePiWeb.version) && sharedPiExtensions.includes(basePiWeb.integrity), "shared-types Pi extension registry drifted from runtime-images.json");
 expect(dockerfile.includes(`ARG PI_WEB_ACCESS_VERSION=${basePiWeb.version}`) && dockerfile.includes(`ARG PI_WEB_ACCESS_INTEGRITY=${basePiWeb.integrity}`), "Dockerfile.agent must pin pi-web-access");
 expect(kaliDockerfile.includes(`ARG PI_WEB_ACCESS_VERSION=${kaliPiWeb.version}`) && kaliDockerfile.includes(`ARG PI_WEB_ACCESS_INTEGRITY=${kaliPiWeb.integrity}`), "Kali Dockerfile must pin pi-web-access");
 expect(dockerfile.includes("npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity") && dockerfile.includes("--prefix /opt/deepsonar/pi-extensions"), "Dockerfile.agent must integrity-check and prefix-install Pi extensions");
 expect(kaliDockerfile.includes("npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity") && kaliDockerfile.includes("--prefix /opt/deepsonar/pi-extensions"), "Kali Dockerfile must integrity-check and prefix-install Pi extensions");
 expect(localDefinition.includes("piExtensions") && localDefinition.includes("/opt/deepsonar/pi-extensions"), "image.mjs must preinstall registered Pi extensions to the fixed prefix");
+const baseOm = config.piExtensions?.["pi-observational-memory"];
+const kaliOm = kaliConfig.piExtensions?.["pi-observational-memory"];
+expect(baseOm?.version === "3.1.4" && kaliOm?.version === "3.1.4", "pi-observational-memory version must stay pinned");
+expect(baseOm?.integrity === "sha512-jgQbFyLMs4wWhkf6F0voOgzMwtIXsb8+ks0MsPKpPxkdpyMX5E/el6Mk/vJ40m8GlKwBIsCKjL1r7Z2U8dCtmA==", "pi-observational-memory integrity drift");
+expect(baseOm?.integrity === kaliOm?.integrity, "base/Kali pi-observational-memory integrity must match");
+expect(baseOm?.requires_egress === false && baseOm?.requires_gateway === true, "OM must be Gateway-only and have no business egress");
+expect(Array.isArray(baseOm?.compatible_image_keys) && baseOm.compatible_image_keys.includes("deepsonar-base") && baseOm.compatible_image_keys.includes("deepsonar-audit"), "OM base/audit compatibility missing");
+expect(Array.isArray(kaliOm?.compatible_image_keys) && kaliOm.compatible_image_keys.includes("deepsonar-kali-minimal"), "OM Kali compatibility missing");
+expect(sharedPiExtensions.includes('id: "pi-observational-memory"') && sharedPiExtensions.includes(baseOm.version) && sharedPiExtensions.includes(baseOm.integrity) && sharedPiExtensions.includes('entry: "src/index.ts"'), "shared-types OM registry drifted from runtime-images.json");
+expect(dockerfile.includes(`ARG PI_OBSERVATIONAL_MEMORY_VERSION=${baseOm.version}`) && dockerfile.includes(`ARG PI_OBSERVATIONAL_MEMORY_INTEGRITY=${baseOm.integrity}`), "Dockerfile.agent must pin OM");
+expect(kaliDockerfile.includes(`ARG PI_OBSERVATIONAL_MEMORY_VERSION=${kaliOm.version}`) && kaliDockerfile.includes(`ARG PI_OBSERVATIONAL_MEMORY_INTEGRITY=${kaliOm.integrity}`), "Kali Dockerfile must pin OM");
+expect(dockerfile.includes("npm view pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION} dist.integrity") && dockerfile.includes("pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION}"), "Dockerfile.agent must integrity-check and install OM");
+expect(kaliDockerfile.includes("npm view pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION} dist.integrity") && kaliDockerfile.includes("pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION}"), "Kali Dockerfile must integrity-check and install OM");
+for (const [name, source] of [["base/audit", dockerfile], ["Kali", kaliDockerfile]]) {
+  expect(source.includes(`node -e '${OM_INSTALL_IDENTITY_CHECK}'`), `${name} must verify the installed canonical OM lock identity`);
+  expect(/npm install --omit=dev --ignore-scripts --save-exact[^\n]+\\\r?\n\s+pi-observational-memory/u.test(source), `${name} must install the exact OM version with lifecycle scripts disabled before the identity check`);
+  expect(!/npm install[^\n]*(?:--force|--legacy-peer-deps)/u.test(source), `${name} must not override peer admission`);
+}
+// Exercise the same install predicate used by both Dockerfiles and image.mjs.
+// npm's archive SRI verification is followed by this pinned lock comparison;
+// checking npm view alone would not reject a changed resolved artifact.
+const omLock = { packages: { "node_modules/pi-observational-memory": {
+  version: baseOm.version,
+  integrity: baseOm.integrity,
+  resolved: `https://registry.npmjs.org/pi-observational-memory/-/pi-observational-memory-${baseOm.version}.tgz`,
+} } };
+const omMetadata = { name: "pi-observational-memory", version: baseOm.version, license: "MIT" };
+const checkOmInstall = (lock, metadata, hasEntry = true) => new Script(OM_INSTALL_IDENTITY_CHECK).runInNewContext({
+  process: { argv: ["node", baseOm.version, baseOm.integrity, "/fixture-prefix"] },
+  require: (name) => {
+    if (name !== "node:fs") throw new Error(`unexpected install verifier module: ${name}`);
+    return {
+      readFileSync: (path) => {
+        if (path === "/fixture-prefix/package-lock.json") return JSON.stringify(lock);
+        if (path === "/fixture-prefix/node_modules/pi-observational-memory/package.json") return JSON.stringify(metadata);
+        throw new Error(`unexpected install verifier path: ${path}`);
+      },
+      existsSync: (path) => hasEntry && path === "/fixture-prefix/node_modules/pi-observational-memory/src/index.ts",
+    };
+  },
+});
+checkOmInstall(omLock, omMetadata);
+const omInstalled = omLock.packages["node_modules/pi-observational-memory"];
+for (const patch of [
+  { version: "0.0.0" },
+  { integrity: "sha512-unadmitted" },
+  { resolved: "http://127.0.0.1/unadmitted.tgz" },
+]) {
+  let rejected = false;
+  try { checkOmInstall({ packages: { "node_modules/pi-observational-memory": { ...omInstalled, ...patch } } }, omMetadata); }
+  catch (error) { rejected = error.message === "PI_OM_INSTALL_IDENTITY_MISMATCH"; }
+  expect(rejected, `OM install verifier must reject changed ${Object.keys(patch)[0]}`);
+}
+for (const [metadata, hasEntry] of [
+  [{ ...omMetadata, name: "other-package" }, true],
+  [{ ...omMetadata, version: "0.0.0" }, true],
+  [{ ...omMetadata, license: "UNVERIFIED" }, true],
+  [omMetadata, false],
+]) {
+  let rejected = false;
+  try { checkOmInstall(omLock, metadata, hasEntry); }
+  catch (error) { rejected = error.message === "PI_OM_INSTALL_IDENTITY_MISMATCH"; }
+  expect(rejected, "OM install verifier must reject missing/changed installed metadata or source entry");
+}
+const baseOmWrapper = config.piExtensionWrappers?.["pi-observational-memory-governed"];
+const kaliOmWrapper = kaliConfig.piExtensionWrappers?.["pi-observational-memory-governed"];
+expect(baseOmWrapper?.source === "agent-harness/pi-observational-memory-governed.ts", "base OM wrapper source drift");
+expect(baseOmWrapper?.path === "/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts", "base OM wrapper path drift");
+expect(kaliOmWrapper?.source === baseOmWrapper?.source && kaliOmWrapper?.path === baseOmWrapper?.path, "base/Kali OM wrapper identity must match");
+expect(existsSync(new URL(`../${baseOmWrapper?.source ?? ""}`, import.meta.url)), "OM wrapper source is missing from the repository");
+expect(dockerfile.includes(`COPY ${baseOmWrapper?.source} ${baseOmWrapper?.path}`), "Dockerfile.agent must copy the governed OM wrapper");
+expect(kaliDockerfile.includes(`COPY ${kaliOmWrapper?.source} ${kaliOmWrapper?.path}`), "Kali Dockerfile must copy the governed OM wrapper");
+expect(writeManifest.includes("piExtensionWrappers") && writeManifest.includes("repository-wrapper") && writeManifest.includes("createHash(\"sha256\")"), "tool manifest must record governed OM wrapper provenance and bytes");
+expect(writeManifest.includes("package: entry.package") && writeManifest.includes("integrity: entry.integrity") && writeManifest.includes("entry: entry.entry"), "tool manifest must record Pi package identity, entry, and integrity");
+expect(localDefinition.includes("piExtensionWrappers") && localDefinition.includes("repository-wrapper") && localDefinition.includes("package: entry.package") && localDefinition.includes("integrity: entry.integrity") && localDefinition.includes("entry: entry.entry"), "image.mjs must carry governed wrapper and Pi package provenance");
+for (const preset of ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]) {
+  expect(PRESETS[preset]?.paths.includes(baseOmWrapper.source), `${preset} fingerprint must include the actual governed wrapper bytes`);
+}
+const omWrapperBytes = readFileSync(new URL(`../${baseOmWrapper.source}`, import.meta.url));
+const localWrapperCommand = localImage.run.find((line) => line.includes(baseOmWrapper.path) && line.includes("Buffer.from(process.argv[1]"));
+const localWrapperBytes = localWrapperCommand?.match(/'([A-Za-z0-9+/=]+)' '\/opt\/deepsonar\/pi-extensions\/deepsonar-observational-memory\.ts'/u);
+expect(Boolean(localWrapperBytes) && Buffer.from(localWrapperBytes[1], "base64").equals(omWrapperBytes), "local image must embed the reviewed wrapper bytes without depending on a repository path inside the container");
+const omRoot = fileURLToPath(new URL("../", import.meta.url));
+const omTemporaryRoot = join(omRoot, ".tmp");
+mkdirSync(omTemporaryRoot, { recursive: true });
+const omFixture = mkdtempSync(join(omTemporaryRoot, "815a-image-gate-"));
+try {
+  for (const [toolset, inventory] of [["base", config], ["audit", config], ["kali-minimal", kaliConfig]]) {
+    const inputPath = join(omFixture, `${toolset}.json`);
+    const outputPath = join(omFixture, `${toolset}-manifest.json`);
+    // Only extension provenance is under test here; no host dpkg invocation.
+    writeFileSync(inputPath, JSON.stringify({ ...inventory, apt: {}, npm: {}, downloads: {}, managed: {} }));
+    execFileSync(process.execPath, [fileURLToPath(new URL("./write-tool-manifest.mjs", import.meta.url)), inputPath, toolset, outputPath]);
+    const manifest = JSON.parse(readFileSync(outputPath, "utf8"));
+    const installedPackage = manifest.tools.find((tool) => tool.name === baseOm.package);
+    const installedWrapper = manifest.tools.find((tool) => tool.name === "pi-observational-memory-governed");
+    expect(installedPackage?.integrity === baseOm.integrity && installedPackage?.entry === "src/index.ts"
+      && installedPackage?.requires_gateway === true && installedPackage?.requires_egress === false,
+    `${toolset} manifest must retain exact OM identity and network boundaries`);
+    expect(installedWrapper?.sha256 === createHash("sha256").update(omWrapperBytes).digest("hex")
+      && installedWrapper?.source_path === baseOmWrapper.source && installedWrapper?.wrapper_path === baseOmWrapper.path,
+    `${toolset} manifest must hash the actual governed wrapper independently of the npm integrity`);
+    const { sha256: manifestHash, ...manifestBody } = manifest;
+    expect(manifestHash === createHash("sha256").update(JSON.stringify(manifestBody)).digest("hex"), `${toolset} manifest hash must bind wrapper provenance`);
+  }
+  const copyPath = join(omFixture, "wrapper-copy.ts");
+  writeFileSync(copyPath, omWrapperBytes);
+  const options = { dockerfile: "deploy/Dockerfile.agent", paths: [relative(omRoot, copyPath)], platforms: "linux/amd64,linux/arm64" };
+  const originalFingerprint = computeFingerprint(options).fingerprint;
+  writeFileSync(copyPath, Buffer.concat([omWrapperBytes, Buffer.from("\n// fixture byte change\n")]));
+  expect(computeFingerprint(options).fingerprint !== originalFingerprint, "changed wrapper bytes must invalidate the image fingerprint");
+} finally {
+  const fixturePath = resolve(omFixture);
+  if (!fixturePath.startsWith(`${resolve(omTemporaryRoot)}${sep}815a-image-gate-`)) throw new Error("OM fixture cleanup escaped its temporary workspace directory");
+  rmSync(fixturePath, { recursive: true, force: true });
+}
 expect(dockerfile.includes("jq=${JQ_VERSION} libjq1=${JQ_VERSION}"), "base/audit must pin jq and its exact-version libjq1 dependency together");
 const aptArgs = {
   git: "GIT", python3: "PYTHON", "ca-certificates": "CA_CERTIFICATES",

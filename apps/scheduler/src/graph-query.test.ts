@@ -6,10 +6,12 @@ import {
   ControlToolInputSchemasJson,
   GRAPH_QUERY_LIMITS,
   GraphQueryPayload,
+  PlanObjective as PlanObjectiveSchema,
   requiredPlatformTools,
   resolvePlatformTools,
   toMcpToolInputSchema,
 } from "@deepsonar/shared-types";
+import type { PlanObjective } from "@deepsonar/shared-types";
 import { parseHubDecisionPayload } from "./graph.js";
 import {
   executeGraphQuery,
@@ -18,6 +20,8 @@ import {
   projectIntentFrontier,
   projectNodeBody,
   projectNodeIndex,
+  projectOverview,
+  projectPlanObjective,
   seedProjectedNodeIds,
   type CanvasGraph,
   type GraphQueryState,
@@ -26,6 +30,7 @@ import {
 import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 import { PLATFORM_OPERATION_IDS } from "./domains/platform-api/operations.js";
 import { controlRuntimeRejection } from "./domains/platform-api/repair.js";
+import { PersistedPlanObjective } from "./domains/plan-protocol/objective.js";
 
 const ROOT = "00000000-0000-4000-8000-000000000001";
 const FACT = "00000000-0000-4000-8000-000000000002";
@@ -39,6 +44,27 @@ const CANVAS = "00000000-0000-4000-8000-0000000000bb";
 function id(index: number): string {
   return `00000000-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
 }
+
+const OBJECTIVE: PlanObjective = {
+  v: 1,
+  objective_id: id(6),
+  revision: "1",
+  goal: "Read the complete current objective before planning",
+  completion: {
+    mode: "all_tasks",
+    description: "Every required output is retained",
+    required_outputs: ["bootstrap tuple"],
+  },
+  budget: {
+    max_tasks: 4,
+    max_rounds: 2,
+    max_no_progress_rounds: 1,
+    max_parallel_tasks: 1,
+  },
+  input_sha256: "a".repeat(64),
+  status: "active",
+  updated_at: "2026-10-31T00:00:00.000Z",
+};
 
 function node(input: {
   id: string;
@@ -148,6 +174,8 @@ test("graph_query MCP schema stays a single strict object and rejects canvas_id/
   assert.equal(Array.isArray(schema.oneOf), false);
   assert.doesNotThrow(() => toMcpToolInputSchema(GraphQueryPayload));
   assert.equal(GraphQueryPayload.safeParse({ kind: "overview" }).success, true);
+  assert.equal(GraphQueryPayload.safeParse({ kind: "plan_objective" }).success, true);
+  assert.equal(GraphQueryPayload.safeParse({ kind: "plan_objective", id: ROOT }).success, false);
   assert.equal(GraphQueryPayload.safeParse({ kind: "overview", canvas_id: CANVAS }).success, false);
   assert.equal(GraphQueryPayload.safeParse({ kind: "index", project_id: CANVAS }).success, false);
   assert.equal(GraphQueryPayload.safeParse({ kind: "node" }).success, false);
@@ -192,6 +220,76 @@ test("T1 overview then index then node returns bounded envelopes", async () => {
   assert.ok(live.has(ROOT));
   assert.ok(live.has(FACT));
   assert.equal(store.snapshot().calls, 3);
+});
+
+test("current plan objective has a bounded handle and a complete graph read", async () => {
+  const graph = fixtureGraph();
+  graph.target = { ...graph.target, plan_objective: OBJECTIVE };
+  graph.promptTarget = { ...graph.promptTarget, plan_objective: OBJECTIVE };
+  const overview = projectOverview(graph);
+  assert.deepEqual((overview.items[0] as Record<string, unknown>).plan_objective, {
+    kind: "plan_objective",
+    available: true,
+    objective_id: OBJECTIVE.objective_id,
+    revision: OBJECTIVE.revision,
+    status: OBJECTIVE.status,
+  });
+
+  const store = memoryStore(graph);
+  store.loadCanvas = async () => { throw new Error("plan_objective must not load the whole Canvas"); };
+  store.loadPlanObjective = async () => projectPlanObjective(OBJECTIVE);
+  const result = await executeGraphQuery({
+    jobId: JOB,
+    canvasId: CANVAS,
+    payload: { kind: "plan_objective" },
+    store,
+    maxCalls: 1,
+    maxBytes: 512_000,
+  });
+  assert.equal(result.truncated, false);
+  assert.deepEqual(result.items[0], OBJECTIVE);
+  assert.deepEqual(result.referable_ids, []);
+  assert.equal(store.snapshot().calls, 1);
+  assert.ok(store.snapshot().bytes < 512_000);
+
+  const maxObjective: PlanObjective = {
+    ...OBJECTIVE,
+    revision: "9".repeat(20),
+    goal: "\u0001".repeat(3_999) + "G",
+    completion: {
+      mode: "explicit_result",
+      description: "\u0002".repeat(3_999) + "D",
+      required_outputs: Array.from({ length: 32 }, () => "\u0003".repeat(499) + "O"),
+    },
+    updated_at: "2026-10-31T00:00:00." + "0".repeat(43) + "Z",
+  };
+  const sharedMaxObjective = PlanObjectiveSchema.parse(maxObjective);
+  const persistedMaxObjective = PersistedPlanObjective.parse(maxObjective);
+  assert.deepEqual(sharedMaxObjective, persistedMaxObjective);
+  const maxStore = memoryStore(graph);
+  maxStore.loadCanvas = async () => { throw new Error("plan_objective must not load the whole Canvas"); };
+  maxStore.loadPlanObjective = async () => projectPlanObjective(persistedMaxObjective);
+  const maxResult = await executeGraphQuery({
+    jobId: JOB,
+    canvasId: CANVAS,
+    payload: { kind: "plan_objective" },
+    store: maxStore,
+    maxCalls: 1,
+    maxBytes: 512_000,
+  });
+  assert.deepEqual(maxResult.items[0], persistedMaxObjective);
+  assert.equal(maxResult.truncated, false);
+  assert.ok(maxStore.snapshot().bytes < 512_000);
+});
+
+test("objective timestamp bounds keep every valid tuple below the graph response cap", () => {
+  const bounded = "2026-10-31T00:00:00." + "0".repeat(43) + "Z";
+  const oversized = "2026-10-31T00:00:00." + "0".repeat(44) + "Z";
+  assert.equal(bounded.length, 64);
+  assert.equal(PlanObjectiveSchema.shape.updated_at.safeParse(bounded).success, true);
+  assert.equal(PersistedPlanObjective.shape.updated_at.safeParse(bounded).success, true);
+  assert.equal(PlanObjectiveSchema.shape.updated_at.safeParse(oversized).success, false);
+  assert.equal(PersistedPlanObjective.shape.updated_at.safeParse(oversized).success, false);
 });
 
 test("T3 index truncation reports omitted and next_cursor", () => {

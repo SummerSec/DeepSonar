@@ -26,6 +26,11 @@ if (!testDatabaseUrl) {
       settleCanvasFindingsAtGuardrail,
     } = await import("./verify.js");
     await migrate();
+    const createRound = (opts: Parameters<typeof createVerifyRound>[1]) => sql.begin((tx) => {
+      // SAFETY: this is a real TransactionSql; verification uses its Job/Canvas
+      // locks and nested report savepoint, matching the production callers.
+      return createVerifyRound(tx as unknown as typeof sql, opts);
+    });
 
     const projectId = randomUUID();
     const canvasId = `verify-eligibility-${randomUUID()}`;
@@ -59,7 +64,7 @@ if (!testDatabaseUrl) {
           ${`verify-eligibility-${findingId}`}, 'missing evidence finding', 'high', 'integration finding', 'security.vulnerability')`;
 
       const finding = (await sql`SELECT * FROM findings WHERE id = ${findingId}`)[0] as Record<string, unknown>;
-      const first = await createVerifyRound(sql, {
+      const first = await createRound({
         projectId,
         canvasId,
         finding,
@@ -145,7 +150,7 @@ if (!testDatabaseUrl) {
         })}, 'unverified')
         RETURNING id`;
       const [afterReviewFinding] = await sql`SELECT * FROM findings WHERE id = ${findingId}`;
-      const afterReview = await createVerifyRound(sql, {
+      const afterReview = await createRound({
         projectId,
         canvasId,
         finding: afterReviewFinding as Record<string, unknown>,
@@ -177,7 +182,7 @@ if (!testDatabaseUrl) {
       // A structured review/test pair can pass the inner Fact gate while the
       // full security confirmation contract is still incomplete.
       const [incompleteFinding] = await sql`SELECT * FROM findings WHERE id = ${findingId}`;
-      assert.equal(await createVerifyRound(sql, {
+      assert.equal(await createRound({
         projectId, canvasId, finding: incompleteFinding as Record<string, unknown>,
         parentJobId: testJobId, followupDepth: 2, priorityBase: 0,
       }), null);
@@ -211,7 +216,7 @@ if (!testDatabaseUrl) {
           })})
         WHERE id = ${testNode.id as string}`;
       const [qualifiedFinding] = await sql`SELECT * FROM findings WHERE id = ${findingId}`;
-      const qualified = await createVerifyRound(sql, {
+      const qualified = await createRound({
         projectId,
         canvasId,
         finding: qualifiedFinding as Record<string, unknown>,
@@ -229,6 +234,15 @@ if (!testDatabaseUrl) {
       assert.equal((closed.requirements_json as Record<string, unknown>).close_path, "fact_first");
       const [confirmedFinding] = await sql`SELECT verify_status, raw_json FROM findings WHERE id = ${findingId}`;
       assert.equal(confirmedFinding.verify_status, "confirmed");
+      const [findingReport] = await sql`
+        SELECT r.status, r.input_sha256, j.status AS job_status, j.payload_json->>'kind' AS kind
+        FROM finding_reports r JOIN jobs j ON j.id=r.report_job_id
+        WHERE r.finding_id=${findingId} ORDER BY r.version DESC LIMIT 1`;
+      assert.ok(findingReport, "fact-first confirmation must actually dispatch its derivative report");
+      assert.equal(findingReport.status, "pending");
+      assert.equal(findingReport.job_status, "pending");
+      assert.equal(findingReport.kind, "finding_report");
+      assert.match(String(findingReport.input_sha256), /^[0-9a-f]{64}$/);
       const gate = ((confirmedFinding.raw_json as Record<string, unknown>).verification_state as Record<string, unknown>).gate as Record<string, unknown>;
       assert.equal(gate.result, "passed");
       assert.equal((await sql`SELECT COUNT(*)::int AS n FROM jobs WHERE finding_id = ${findingId} AND type = 'verify_finding'`)[0].n, 0);

@@ -11,8 +11,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@deepsonar/runtime-manual-contract": "workspace:*",
     "@alibaba-group/opensandbox": "1.2.0",
+    "@deepsonar/runtime-manual-contract": "workspace:*",
     "@deepsonar/shared-types": "workspace:*",
     "undici": "^7.29.0",
     "yaml": "^2.9.0"

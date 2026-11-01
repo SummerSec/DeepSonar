@@ -5,6 +5,7 @@ import { formatSnapshotModelField } from "./snapshot-model-label";
 import { FrozenProviderModelHealthSection } from "./FrozenProviderModelHealth";
 import { LiveStream, StreamView, recordsToStreamBlocks } from "./LiveStream";
 import { LiveTerminalWorkspace } from "./LiveTerminalWorkspace";
+import { JobUsageLedgerView } from "./UsageLedgerBoard";
 import { appendUniqueRows, mergeRefreshedPage } from "./canvas-page-sync";
 import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
@@ -123,11 +124,6 @@ function ExecutionLedgerView({ detail }: { detail: JobDetail }) {
     counts[delivery.delivery_status] = (counts[delivery.delivery_status] ?? 0) + 1;
     return counts;
   }, {});
-  const inputTokens = detail.usage.reduce((total, row) => total + Number(row.input_tokens || 0), 0);
-  const outputTokens = detail.usage.reduce((total, row) => total + Number(row.output_tokens || 0), 0);
-  const cacheReadTokens = detail.usage.reduce((total, row) => total + Number(row.cache_read_input_tokens || 0), 0);
-  const cacheWriteTokens = detail.usage.reduce((total, row) => total + Number(row.cache_creation_input_tokens || 0), 0);
-  const totalTokens = detail.usage.reduce((total, row) => total + Number(row.total_tokens || 0), 0);
   if (!latestAttempt && detail.effects.length === 0 && detail.broadcasts.length === 0 && detail.usage.length === 0) {
     return <p className="font-mono text-[12px] text-zinc-600">该运行尚未记录执行账本。</p>;
   }
@@ -141,12 +137,11 @@ function ExecutionLedgerView({ detail }: { detail: JobDetail }) {
         <ConfigField label="执行阶段" value={latestAttempt?.phase ?? "—"} />
         <ConfigField label="外部效果" value={`${detail.effects.length} · 未决 ${unknownEffects.length}`} />
         <ConfigField
-          label="模型用量"
-          value={detail.usage.length
-            ? `${detail.usage.length} 次 · in ${inputTokens} / out ${outputTokens} / cache ${cacheReadTokens}/${cacheWriteTokens} / Σ ${totalTokens}`
-            : "—"}
+          label="用量记录"
+          value={detail.usage.length ? `最近 ${detail.usage.length} 条` : "—"}
         />
       </div>
+      <JobUsageLedgerView usage={detail.usage} />
       <div className="font-mono text-[11px] text-zinc-400">
         <span className="text-zinc-600">增量投递：</span>
         injected {deliveryCounts.injected ?? 0}
@@ -1032,7 +1027,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   truncated={session.truncated}
                   cli={evidence?.manifest.cli}
                   sessionId={evidence?.manifest.session_id}
-                  sourceLabel="CLI Session 归档"
+                  sourceLabel={session.projection ? "CLI Session 脱敏归档" : "CLI Session 归档"}
                   artifacts={session.artifacts ?? [session.meta]}
                   selectedPath={session.meta.path}
                   gatewayUsage={detail.usage}
@@ -1093,7 +1088,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
                   </p>
                   <p className="font-mono text-[11px] leading-5 text-zinc-600">
                     常见原因：AGENT_MODE=fake（不会落盘 Session）、运行中尚未 finalize、
-                    或该 CLI 未成功捕获 session_id。有归档时标签会显示文件数，并出现时间线 / 用量 / 统计 / 原始。
+                    或该 CLI 未成功捕获 session_id。有归档时标签会显示文件数，并出现账本 / 用量 / 统计 / 会话文本。
                   </p>
                 </div>
               )}

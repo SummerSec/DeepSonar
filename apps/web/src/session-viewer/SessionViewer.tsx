@@ -20,6 +20,7 @@ import {
   sessionHasTokenUsage,
   sessionLedgerTurnCount,
   sessionViewerWorkspaceMode,
+  sessionViewerSafeText,
   type SessionArtifactMeta,
   type SessionGatewayUsageRow,
   type SessionLedgerRow,
@@ -267,7 +268,7 @@ function Inspector({
 }
 
 export function SessionViewer({
-  text,
+  text: sourceText,
   truncated,
   cli,
   sessionId,
@@ -279,6 +280,7 @@ export function SessionViewer({
   onDownload,
   downloadError,
 }: SessionViewerProps) {
+  const text = useMemo(() => sessionViewerSafeText(sourceText, cli), [sourceText, cli]);
   const parsed = useMemo(() => parseAgentSession(text, { cli }), [text, cli]);
   const rows = useMemo(() => buildSessionLedger(parsed.items), [parsed.items]);
   const tokenUsage = useMemo(() => buildSessionTokenUsage(rows, gatewayUsage), [rows, gatewayUsage]);
@@ -322,7 +324,7 @@ export function SessionViewer({
     ["timeline", `账本 ${parsed.items.length}`],
     ["usage", `用量 ${tokenUsage.gateway?.requests ?? tokenUsage.session.reportedEvents}`],
     ["stats", `统计 ${parsed.tools.length}`],
-    ["raw", "原始记录"],
+    ["raw", "会话文本"],
   ];
 
   return (
@@ -355,7 +357,7 @@ export function SessionViewer({
         )}
         {onDownload && (
           <button type="button" onClick={onDownload} className="session-viewer__download">
-            <DownloadSimple size={13} /> 下载原始文件
+            <DownloadSimple size={13} /> 下载完整会话
           </button>
         )}
       </div>
@@ -437,7 +439,7 @@ export function SessionViewer({
               ) : (
                 <div className="session-viewer__empty-state">
                   <strong>{parsed.totals.lines === 0 ? "Session 内容为空" : "没有匹配的事件"}</strong>
-                  <p>{parsed.totals.lines === 0 ? "可切换 RAW 查看原始归档。" : "调整搜索词或类型筛选后重试。"}</p>
+                  <p>{parsed.totals.lines === 0 ? "可切换到会话文本查看归档内容。" : "调整搜索词或类型筛选后重试。"}</p>
                 </div>
               )}
             </section>
@@ -497,10 +499,10 @@ export function SessionViewer({
         <div className="session-viewer__raw">
           <div className="session-viewer__raw-header">
             <span className="session-viewer__raw-title">RAW ARCHIVE</span>
-            <span className="session-viewer__raw-meta">{text.length.toLocaleString()} chars · 未改写</span>
+            <span className="session-viewer__raw-meta">{text.length.toLocaleString()} chars · {text === sourceText ? "未改写" : "记忆内容已脱敏"}</span>
           </div>
           <pre>{text}</pre>
-          {truncated && <p className="session-viewer__truncated">页面预览已截断，请下载完整原始文件。</p>}
+          {truncated && <p className="session-viewer__truncated">页面预览已截断，请下载完整会话文件。</p>}
         </div>
       )}
     </div>
@@ -562,7 +564,9 @@ function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
               平台 Model Gateway 写入的 `job_usage_ledger`，按请求记账；settled {gateway.settled}
               {gateway.unknown ? ` · unknown ${gateway.unknown}` : ""}
               {gateway.notReported ? ` · 未上报 ${gateway.notReported}` : ""}
-              。与 Session 归档数字不必相等，本页不对账、不定价。
+              。主任务 {gateway.workloads.main.requests} 请求 / {formatTokenCount(gateway.workloads.main.total)} tokens；
+              记忆后台 {gateway.workloads.observational_memory.requests} 请求 / {formatTokenCount(gateway.workloads.observational_memory.total)} tokens。
+              与 Session 归档数字不必相等，本页不对账、不定价。
             </p>
           </>
         ) : (
@@ -607,6 +611,7 @@ function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
             <thead>
               <tr>
                 <th>模型</th>
+                <th>负载</th>
                 <th className="session-viewer__num">请求</th>
                 <th className="session-viewer__num">输入</th>
                 <th className="session-viewer__num">输出</th>
@@ -619,6 +624,7 @@ function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
               {gateway.models.map((model) => (
                 <tr key={model.key}>
                   <td>{model.provider} / {model.model}</td>
+                  <td>{model.workload === "observational_memory" ? "记忆后台" : "主任务"}</td>
                   <td className="session-viewer__num">{model.requests}</td>
                   <td className="session-viewer__num">{formatTokenCount(model.input)}</td>
                   <td className="session-viewer__num">{formatTokenCount(model.output)}</td>
@@ -640,6 +646,7 @@ function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
               <tr>
                 <th>#</th>
                 <th>模型</th>
+                <th>负载</th>
                 <th className="session-viewer__num">输入</th>
                 <th className="session-viewer__num">输出</th>
                 <th className="session-viewer__num">缓存读</th>
@@ -668,6 +675,7 @@ function SessionUsagePane({ usage }: { usage: SessionTokenUsage }) {
                       </div>
                     )}
                   </td>
+                  <td>{row.workload === "observational_memory" ? "记忆后台" : "主任务"}</td>
                   <td className="session-viewer__num">{formatTokenCount(Number(row.input_tokens || 0))}</td>
                   <td className="session-viewer__num">{formatTokenCount(Number(row.output_tokens || 0))}</td>
                   <td className="session-viewer__num">{formatTokenCount(Number(row.cache_read_input_tokens || 0))}</td>

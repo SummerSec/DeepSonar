@@ -1,4 +1,6 @@
 import { startFindingFeatureWorker } from "./domains/project-finding-research/worker.js";
+import { bootFindingQualityAssets } from "./domains/project-finding-research/quality-assets.js";
+import { startFindingQualityWorker } from "./domains/project-finding-research/quality-worker.js";
 import { createPlatformMaintenanceGate, registerPlatformMaintenanceGuard, type PlatformUpgradeState } from "./platform-maintenance.js";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
@@ -34,6 +36,8 @@ import { startRuntimeImageGc } from "./runtime-image-gc.js";
 import { seedLocalWorkerNode } from "./domains/worker-nodes/index.js";
 
 async function main() {
+  // Preload must observe the complete governed graph before any SQL or service starts.
+  bootFindingQualityAssets();
   // 运行时 SDK 内部个别异步错误会以 unhandledRejection 冒出（如 daemon 启动失败），
   // 绝不能因此崩掉整个调度进程 —— 记日志即可，job 级错误由 runJob 的 try/catch 兜底
   process.on("unhandledRejection", (reason) => {
@@ -58,6 +62,7 @@ async function main() {
   };
   let stopRuntimeImageWarmup = () => {};
   let stopGatewayUpstreamSocket: () => Promise<void> = async () => {};
+  const qualityDrains = new Set<Promise<void>>();
   const maintenance = createPlatformMaintenanceGate({
     identity,
     readState: async () => {
@@ -77,6 +82,14 @@ async function main() {
       registerStop(startReaper());
       registerStop(startTransferWorker());
       registerStop(startFindingFeatureWorker());
+      const stopQualityWorker = startFindingQualityWorker();
+      registerStop(() => {
+        // The maintenance gate stops synchronously; retain this owned SQL tick
+        // until it settles, including across close/reopen cycles.
+        const drain = stopQualityWorker();
+        qualityDrains.add(drain);
+        void drain.finally(() => qualityDrains.delete(drain));
+      });
       registerStop(startRuntimeImageRegistrySync());
       registerStop(startRuntimeImageGc());
       registerStop(managesHostDockerRuntime() ? startHostDiskMonitor(() => {
@@ -150,6 +163,7 @@ async function main() {
     // 优雅退出（§12.2）：先等在执行的 job 收尾，再关 HTTP 与 DB
     await drainInFlight(15_000);
     await app.close();
+    await Promise.all(qualityDrains);
     await sql.end();
     process.exit(0);
   };

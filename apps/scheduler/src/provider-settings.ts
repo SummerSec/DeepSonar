@@ -14,12 +14,17 @@ import {
   CODEX_REASONING_EFFORTS,
   ContextWindowTokens,
   PI_REASONING_EFFORTS,
+  PI_OBSERVATIONAL_MEMORY_PROVIDER,
+  PI_OBSERVATIONAL_MEMORY_SETTINGS_KEY,
+  PiObservationalMemoryConfig as PiObservationalMemoryConfigSchema,
+  piObservationalMemorySettings,
   isClaudeCodeReasoningEffort,
   isCodexReasoningEffort,
   isPiReasoningEffort,
   isReasoningValue,
   rejectNonCurrentAgentCli,
   type ReasoningValue,
+  type PiObservationalMemoryConfig,
 } from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
 import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiDocument, readOfficialLlmPiAiSettings } from "@deepsonar/runtime-sandbox";
@@ -158,6 +163,9 @@ export function providerSettingsForJobSnapshot(settingsConfig: unknown, agentCli
   const source = asObject(settingsConfig);
   const contextWindowTokens = parseContextWindowTokens(source.context_window_tokens);
   const snapshot = scrubRuntimeSecretFields(structuredClone(source)) as Record<string, unknown>;
+  // Observational-memory configuration is Scheduler-owned. A credential or
+  // RoleConfig settings blob cannot activate or override the frozen Job copy.
+  delete snapshot[PI_OBSERVATIONAL_MEMORY_SETTINGS_KEY];
   if (contextWindowTokens == null) delete snapshot.context_window_tokens;
   else snapshot.context_window_tokens = contextWindowTokens;
   if (typeof snapshot.config === "string" && snapshot.config.trim()) {
@@ -195,7 +203,12 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
   files: readonly MaterializedConfigFile[];
   gatewayBaseUrl: string;
   jobToken: string;
+  observationalMemory?: {
+    config: PiObservationalMemoryConfig;
+    backgroundToken: string;
+  };
 }): MaterializedConfigFile[] {
+  if (input.observationalMemory && input.agentCli !== "pi") throw new Error("PI_OM_REQUIRES_PI");
   const gatewayBaseUrl = input.gatewayBaseUrl.trim().replace(/\/+$/u, "");
   const jobToken = input.jobToken.trim();
   if (!gatewayBaseUrl || !jobToken) throw new Error("受限网络缺少 Gateway URL 或 Job token");
@@ -205,6 +218,7 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
     const source = byPath.get(".claude/settings.json");
     if (!source) throw new Error("受限网络缺少冻结的 Claude settings.json");
     const settings = scrubRuntimeSecretFields(parseJsonObject(source.content, source.path)) as Record<string, unknown>;
+    delete settings[PI_OBSERVATIONAL_MEMORY_SETTINGS_KEY];
     const env = asObject(settings.env);
     delete env.ANTHROPIC_API_KEY;
     env.ANTHROPIC_AUTH_TOKEN = jobToken;
@@ -219,6 +233,7 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
     const source = byPath.get(".pi/agent/models.json");
     if (!source) throw new Error("受限网络缺少冻结的 Pi models.json");
     const settings = scrubRuntimeSecretFields(parseJsonObject(source.content, source.path)) as Record<string, unknown>;
+    delete settings[PI_OBSERVATIONAL_MEMORY_SETTINGS_KEY];
     const providers = asObject(settings.providers);
     if (Object.keys(providers).length === 0) throw new Error("受限网络无法定位 Pi provider");
     const auth: Record<string, { type: "api_key"; key: string }> = {};
@@ -231,16 +246,65 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
       providers[providerId] = provider;
       auth[providerId] = { type: "api_key", key: jobToken };
     }
+    if (input.observationalMemory) {
+      const { backgroundToken } = input.observationalMemory;
+      const observationalMemory = PiObservationalMemoryConfigSchema.parse(input.observationalMemory.config);
+      const background = backgroundToken.trim();
+      if (!background) throw new Error("PI_OM_GATEWAY_TOKEN_MISSING");
+      if (background === jobToken) throw new Error("PI_OM_GATEWAY_TOKEN_NOT_ISOLATED");
+      const sourceProvider = asObject(providers[observationalMemory.source_provider]);
+      if (Object.keys(sourceProvider).length === 0) {
+        throw new Error("PI_OM_SOURCE_PROVIDER_NOT_MATERIALIZED");
+      }
+      const sourceModels = Array.isArray(sourceProvider.models)
+        ? sourceProvider.models.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === "object" && !Array.isArray(item)))
+        : [];
+      const sourceModel = sourceModels.find((item) => item.id === observationalMemory.source_model);
+      if (!sourceModel) throw new Error("PI_OM_SOURCE_MODEL_NOT_MATERIALIZED");
+      const api = sourceModel.api ?? sourceProvider.api;
+      if (!INFERENCE_WIRE_PROTOCOLS.includes(api as InferenceWireProtocol)) {
+        throw new Error("PI_OM_GATEWAY_PROTOCOL_UNSUPPORTED");
+      }
+      const omProvider = structuredClone(sourceProvider) as Record<string, unknown>;
+      const omModel = structuredClone(sourceModel);
+      // The alias retains model capabilities, never source endpoint/header
+      // overrides that could bypass the Gateway or replace its token.
+      for (const key of ["baseUrl", "baseURL", "base_url", "headers"]) {
+        delete omModel[key];
+        delete omProvider[key];
+      }
+      omProvider.models = [omModel];
+      omProvider.api = api;
+      omProvider.baseUrl = gatewayBaseUrl;
+      omProvider.apiKey = "$DEEPSONAR_OM_GATEWAY_TOKEN";
+      if (api === "anthropic-messages") omProvider.authHeader = true;
+      providers[PI_OBSERVATIONAL_MEMORY_PROVIDER] = omProvider;
+      auth[PI_OBSERVATIONAL_MEMORY_PROVIDER] = { type: "api_key", key: background };
+    }
     settings.providers = providers;
     const rewritten = input.files
-      .filter((item) => item.path !== ".pi/agent/auth.json" && item.path !== ".pi/agent/settings.json")
+      .filter((item) => item.path !== ".pi/agent/auth.json"
+        && item.path !== ".pi/agent/settings.json"
+        && (!input.observationalMemory || item.path !== ".pi/settings.json"))
       .map((item) => item.path === source.path
         ? file(item.path, `${JSON.stringify(settings, null, 2)}\n`)
         : { ...item });
     rewritten.push(file(".pi/agent/auth.json", `${JSON.stringify(auth, null, 2)}\n`));
-    rewritten.push(file(".pi/agent/settings.json", `${JSON.stringify({
+    const agentSettings: Record<string, unknown> = {
       retry: { enabled: true, maxRetries: 2, provider: { maxRetries: 2 } },
-    }, null, 2)}\n`));
+    };
+    if (input.observationalMemory) {
+      agentSettings[PI_OBSERVATIONAL_MEMORY_SETTINGS_KEY] = piObservationalMemorySettings(input.observationalMemory.config);
+    }
+    rewritten.push(file(".pi/agent/settings.json", `${JSON.stringify(agentSettings, null, 2)}\n`));
+    if (input.observationalMemory) {
+      // The plugin reads the project settings after the home settings. Upload a
+      // Scheduler-owned copy so a checked-in .pi/settings.json cannot override
+      // the frozen Job values.
+      rewritten.push(file(".pi/settings.json", `${JSON.stringify({
+        [PI_OBSERVATIONAL_MEMORY_SETTINGS_KEY]: piObservationalMemorySettings(input.observationalMemory.config),
+      }, null, 2)}\n`));
+    }
     return rewritten;
   }
 
@@ -428,6 +492,9 @@ export function materializeProviderSettings(input: {
     const source = structuredClone(settings) as Record<string, unknown>;
     delete source.context_window_tokens;
     delete source.reasoning;
+    // This is a Scheduler-owned extension projection. Provider/RoleConfig
+    // settings may not smuggle a mutable OM section into models.json.
+    delete source[PI_OBSERVATIONAL_MEMORY_SETTINGS_KEY];
     const configuredProviders = official
       ? official.providers
       : asObject(source.providers);

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PI_OBSERVATIONAL_MEMORY_ID, PiObservationalMemoryConfig } from "./pi-extensions.js";
 
 /** Unified Scheduler-owned Agent Runtime Profile contract (#613). */
 export const AGENT_RUNTIME_PROFILE_SCHEMA = "deepsonar.agent-runtime-profile/v1" as const;
@@ -44,6 +45,7 @@ const PiNativeOptions = z.object({
   model: z.string().min(1).max(240).nullable(),
   provider: z.string().min(1).max(120).nullable(),
   extensions: z.array(z.string().min(1).max(160)).max(32),
+  observational_memory: PiObservationalMemoryConfig.nullable(),
 }).strict();
 
 const DshNativeOptions = z.object({
@@ -82,7 +84,22 @@ const profileBody = {
   profile_fingerprint: Sha256,
 } as const;
 
-export const AgentRuntimeProfile = z.object(profileBody).strict();
+export const AgentRuntimeProfile = z.object(profileBody).strict().superRefine((profile, ctx) => {
+  const pi = profile.native_options.pi;
+  const memory = pi?.observational_memory;
+  if (!pi || !memory) return;
+  if (profile.agent_cli !== "pi") {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["agent_cli"], message: "observational memory requires pi" });
+  }
+  if (profile.model_ref !== memory.source_model || pi.model !== memory.source_model || pi.provider !== memory.source_provider) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["native_options", "pi", "observational_memory"], message: "must match the frozen Job provider/model" });
+  }
+  const extension = profile.extensions.find((entry) => entry.id === PI_OBSERVATIONAL_MEMORY_ID);
+  if (!pi.extensions.includes(PI_OBSERVATIONAL_MEMORY_ID)
+    || extension?.version !== memory.version || extension?.integrity !== memory.integrity) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["extensions"], message: "observational memory requires its frozen extension identity" });
+  }
+});
 export type AgentRuntimeProfile = z.infer<typeof AgentRuntimeProfile>;
 export type FrozenAgentRuntimeProfile = AgentRuntimeProfile;
 

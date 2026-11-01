@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { startReaJobModel } from "./rea-job-model.js";
 
@@ -82,6 +83,23 @@ test("REA loopback model reports actor failure without mark_job_done", async () 
   } finally {
     await model.close();
   }
+});
+
+test("live REA acceptance drives kernel requeues and retains failure diagnostics without weakening gates", () => {
+  const source = readFileSync(new URL("./opensandbox-rea-job.e2e.ts", import.meta.url), "utf8");
+  const start = source.indexOf("  const run = async (id: string, mode: string)");
+  const end = source.indexOf("  const archiveFor = async", start);
+  assert.ok(start >= 0 && end > start, "live dispatch driver must exist");
+  const run = source.slice(start, end);
+  assert.match(run, /assert\.equal\(await dispatcher\.dispatchOnce\(\), 1/);
+  assert.match(run, /if \(row\.status === "pending"\) \{[\s\S]*?await dispatcher\.dispatchOnce\(\)/);
+  assert.match(run, /const deadline = Date\.now\(\) \+ 600_000/);
+  assert.ok(run.indexOf("const attempts = await sql") < run.indexOf("if (row.status !== expectedStatus)"),
+    "attempt retry reasons must be recorded even when acceptance fails");
+  assert.doesNotMatch(run, /UPDATE\s+jobs\s+SET\s+status\s*=/i);
+  assert.match(run, /assert\.equal\(row\.status, expectedStatus/);
+  assert.match(run, /sandbox leaked/);
+  assert.match(run, /terminal Job tokens must be revoked/);
 });
 
 // Execute only the actual request builders: no actor workload, sandbox, or model.

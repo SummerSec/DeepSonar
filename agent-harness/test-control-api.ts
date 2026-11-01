@@ -1,5 +1,6 @@
 /** Job 级控制 API-only 契约冒烟：验证静态 Skill、冻结权限和 OpenAPI 投影。 */
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
 import {
   DEEPSONAR_CONTROL_SKILL,
   DEEPSONAR_CONTROL_SKILL_NAME,
@@ -45,7 +46,27 @@ const failOnLegacyControlText = (text: string, label: string): void => {
 
 const skillContent = DEEPSONAR_CONTROL_SKILL.files["SKILL.md"];
 assert.equal(DEEPSONAR_CONTROL_SKILL_NAME, "deepsonar-control");
-assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, "c32ccf38780f90fc8d37b9e1e7fb26c80c3557eea30ab97c438eb1a6371002da");
+// Reviewed Plan v2 bytes: 4e74b913, then complete-objective bootstrap 5619154f.
+const expectedSkillSha256 = "1e3ff49235390cba3a9b4b9075d05d258514998a11c0816c00733d0669c41cd0";
+const canonicalSkillBytes = Buffer.from(
+  `{"name":"deepsonar-control","files":{"SKILL.md":${JSON.stringify(skillContent)}}}`,
+  "utf8",
+);
+assert.deepEqual(canonicalSkillBytes, Buffer.from(JSON.stringify(DEEPSONAR_CONTROL_SKILL), "utf8"));
+// Separate byte serialization and WebCrypto, not the production hash helper.
+const digestSkillBytes = async (bytes: Uint8Array): Promise<string> =>
+  Buffer.from(await webcrypto.subtle.digest("SHA-256", Uint8Array.from(bytes))).toString("hex");
+assert.equal(await digestSkillBytes(canonicalSkillBytes), expectedSkillSha256);
+assert.equal(DEEPSONAR_CONTROL_SKILL_SHA256, expectedSkillSha256);
+const corruptedSkillBytes = Buffer.from(canonicalSkillBytes);
+const corruptionOffset = canonicalSkillBytes.indexOf("DeepSonar");
+assert.ok(corruptionOffset >= 0, "corruption probe targets an actual Skill content byte");
+corruptedSkillBytes[corruptionOffset] = corruptedSkillBytes[corruptionOffset]! ^ 1;
+await assert.rejects(
+  async () => assert.equal(await digestSkillBytes(corruptedSkillBytes), expectedSkillSha256),
+  { code: "ERR_ASSERTION" },
+  "one changed Skill byte must not satisfy the reviewed digest",
+);
 assert.match(skillContent, /所有 CLI 都只能使用 Job 级 HTTP 控制 API/);
 assert.match(skillContent, /Agent 通过当前 CLI 可用的 HTTP 工具/);
 assert.match(skillContent, /GET \$DEEPSONAR_API_BASE_URL\/agent\/capabilities_list/);
@@ -54,6 +75,8 @@ assert.match(skillContent, /POST \$DEEPSONAR_API_BASE_URL\/operations\/:operatio
 assert.match(skillContent, /Authorization: Bearer \$DEEPSONAR_API_TOKEN/);
 assert.match(skillContent, /Idempotency-Key/);
 assert.match(skillContent, /不要先尝试 MCP，也不要在 API 失败后回退到 MCP/);
+assert.match(skillContent, /graph_query\(\{kind:"plan_objective"\}\)/);
+assert.match(skillContent, /truncated=false.*完整 tuple/);
 assert.match(skillContent, /repair/);
 assert.match(skillContent, /model_correctable/);
 assert.match(skillContent, /X-DeepSonar-Proposal-Revision/);

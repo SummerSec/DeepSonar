@@ -1,6 +1,7 @@
 # AI-native 可信执行内核与插件组合工作流
 
 > 状态：长期设计提案，尚未整体落地。当前实现按 [DESIGN.md](../DESIGN.md)、[架构归属表](architecture/README.md)、代码、schema 与 OpenAPI 核对；旧 `docs/ARCHITECTURE.md` 仅作历史对照。
+> 同步日期：2026-10-31
 > 关联：[#443](https://github.com/SummerSec/DeepSonar/issues/443)、[#444](https://github.com/SummerSec/DeepSonar/issues/444)、[#445](https://github.com/SummerSec/DeepSonar/issues/445)、[#446](https://github.com/SummerSec/DeepSonar/issues/446)。
 
 ## 1. 设计判断
@@ -19,6 +20,8 @@ DeepSonar 的长期方向是：
 
 当前 Hub、Worker、Fact/Finding、Verify、Report 闭环是可运行的 as-built 主路径。本文描述逐步演进的目标边界，不把未来协议误写成现有实现，也不要求一次重写 Scheduler。
 
+本次集成已接通可信只读目标授权（[ADR 0011](architecture/adr/0011-trusted-target-authorization.md)）、通过既有 Hub Intent 执行的 Plan v2（[ADR 0012](architecture/adr/0012-plan-v2-execution.md)）及操作员见证身份关系工程（[ADR 0014](architecture/adr/0014-operator-finding-identity.md)）。这些局部实现不表示本文全部长期协议已交付。#819 仍缺真实人工标签、家族/资产隔离的调参与留出集及预冻结阈值，强关系建议不发布，质量保持 unknown / not_evaluated；#822 仍是 operator attestation，不认证外部官方真实性；操作员准入不认证外部官方来源。
+
 ## 2. 内核与插件的职责边界
 
 | 能力 | 可信内核拥有 | 插件/模型可以提出 |
@@ -31,6 +34,8 @@ DeepSonar 的长期方向是：
 | 质量 | 评估契约、回放、指标、准入和回滚 | 领域评估器和候选策略 |
 
 模型不能直接修改数据库、容器、凭据、镜像准入、Job 快照、权限、账本或已发生但结果未知的外部效果。插件只能申请权限；内核按冻结 Job 身份、项目范围和安全策略授予权限。
+
+目标授权的权威配置与密钥由宿主持有。只读 authority 协议精确核验 principal、目标身份、动作、前提、项目/资源 scope 及内容/契约/authority revision；无密钥 grant 进入系统 append-only `audit_logs`。新建子 Job 和系统 Job 统一继承并重验，provision 前及重跑再核当前授权。缺失或变化 grant 以不可重试 `target_authorization_grant_invalid` 拒绝；终态后派生拒绝只回滚 savepoint 并暂停 Canvas，不回滚前驱终态。授权读取不执行目标动作，不把凭据存在或声明字段当作允许。
 
 ## 3. 稳定的最小协议
 
@@ -47,7 +52,9 @@ DeepSonar 的长期方向是：
 
 ## 4. Plan 与能力组合
 
-未来的 Plan 至少包含：
+当前新写入与执行契约为 [Plan v2](../packages/shared-types/src/plan.ts)：授权用户以 CAS 定义 objective、完成策略和有限 lifetime 预算；模型路线须绑定 objective/revision，并复用现有 Hub Intent admission、Job/Attempt/effect 执行多轮依赖任务。Job-scoped `graph_query(kind=plan_objective)` 已提供有界、独立于 acceptedPlan 的完整 persisted objective 读取；该 operation 不要求也不返回 acceptedPlan。初始 L0/overview 只给有界 handle，不提供 selector、cross-scope 或 whole-graph；无法取得完整持久元组、查询预算不足或 `input_sha256` 与当前任务输入不匹配时明确失败。依赖放行检查实际留存字节与 provenance、当前成功 Attempt 及 Artifact 的期望输出关联；该关联不具有语义完成 authority。全判据当前正向操作员评价和完整读取仍是完成条件。v1 仅供不可变历史读取，不接受为新执行输入。
+
+下面是长期概念草图，不是当前 HTTP/Control API 的可提交 schema；实际字段、严格校验和额度以共享契约与宿主实现为准：
 
 ```ts
 type Plan = {
@@ -77,7 +84,9 @@ type Plan = {
 
 `maxHubRounds`、followup depth、token、wall time、并发、租约和沙箱限制的长期语义应分开：前两者是防失控的预算护栏，后者是执行安全边界。它们不能单独替模型证明“业务上已经完成”。这与 #443 的 Plan/Convergence 方向一致。
 
-第一阶段可以把当前 Intent 适配成单个 `PlanTask`，把现有 Hub 行为作为默认 Plan。等新协议经过回放验证后，再允许模型组合多个能力包。
+当前已把可执行 PlanTask 接入既有 Intent admission，没有第二执行器；普通 Hub 使用原 handler，`graph_query(kind=plan_objective)` 仍受 Job scope、预算和 input hash 校验且独立于 acceptedPlan。更广泛的能力组合与策略效果仍须分别验收，不能从协议接线推定质量收益。
+
+工程执行投影的 `complete`/`completed` 不表示语义目标完成，后者仍由当前操作员判据和 Hub/Report gate 判定。2026-10-31 已物理删除 `applyHubPlanAdapter`、`persistPlanAudit`、`sideeffectwriter` 及 pure-legacy adapt helpers/types/exports；ordinaryHub 不新增 v1 plan protocol。`immutablev1` / `hub_intent_adapter` 仅供历史 audit 读取，不列为当前执行债务。
 
 ## 5. Artifact-first 与投影
 
@@ -106,7 +115,7 @@ type Artifact = {
 
 一个 Artifact 可以同时包含支持证据、反驳证据和未决假设。Verify 消费 Artifact、Claim、Evidence 和独立 Evaluation，不覆盖原始 Artifact。Finding、SARIF、Task Report 和外部集成都是确定性 Projection；投影失败不能破坏内部事实和验证账本。
 
-迁移期 `emit_finding` 可以作为兼容入口，但必须先转换为 Artifact。不得同时维护两个独立事实源。旧 Finding UUID 可作为投影身份保留，以避免历史链接断裂。
+当前 `emit_finding` 先写 Artifact，再投影 Finding；不得同时维护两个独立事实源。已有 Finding UUID 是不可变历史投影身份，不是支持旧运行时输入的理由。
 
 ## 6. 统一失败、修复与重试语义
 
@@ -217,7 +226,9 @@ proposed
 
 模型可以逐步从平台查询状态，但查询本身仍是 Job-scoped capability：默认提供摘要、`search_nodes`、`get_node`、`get_neighbors`、`get_evidence`、`get_conflicts` 和历史/经验检索；每次返回带 revision、来源和预算信息。
 
-现有 `buildGraphSnapshot`、GraphScope、整图字符预算和 canonical UUID 校验继续作为兼容与安全底座。逐步从“平台将全图 YAML 塞入 prompt”转向“模型主动查询需要的状态”，但不能让模型读取其他项目、未授权 evidence、凭据或原始控制面秘密。`graph_delta` 只改变上下文传输成本，不改变 Canvas、events、evidence 的权威性。
+当前入口由 `buildGraphSnapshot`、GraphScope、有界字符预算、Job-scoped `graph_query` 与 canonical UUID 校验组成，启动输入只给有界骨架，模型按需读取。上段细分查询名是长期方向，不冒充当前 operation 清单。不得读取其他项目、未授权 evidence、凭据或原始控制面秘密。上下文传输和记忆只能提供资料，不能改变 Canvas、events、Fact 或 Evidence 的权威性。
+
+#815 的 Job/当前 Session 观测记忆已进入 2026-10-31 根工作树，遵守 [ADR 0013](architecture/adr/0013-governed-pi-memory.md)：固定插件与 wrapper 指纹、冻结模型/配置、Gateway-only 独立 workload、有限总额的显式主/后台分配、保守 pending/unknown 记账及终态撤销由内核拥有。核心 `finalizeJob` 终态路径已验证 model 与 Control token 撤销共用终态事务；不把该证据扩展为所有旧 drain/reaper 路径均无 best-effort。冻结总额不限时保留不限，不隐式推导比例。wrapper/RPC/历史 Session preview/download 实施有界脱敏，projection bytes/SHA/Content-Digest 另报。实际本地 base 镜像的 canonical RPC、独立生产内容 guard 及封装/OM 专属版本准入/适配器回归已通过，集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；内核已知请求前 transport 的持久零用量结算和 provider 防冒充见 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。最终组合 CI 与发布通道/平台、registry/catalog 证据未完成，质量/成本收益 unknown；局部实现不表示完整长期 Experience 已交付。
 
 ## 10. 分阶段实施路线
 
@@ -230,7 +241,7 @@ proposed
 
 ### Phase 1：统一 RepairFeedback
 
-- **已落地（本切片）**：`packages/shared-types` 版本化 `RepairFeedback`；Control API schema 拒绝（含 `mark_job_done.summary` 8192 字节）与 `assertSemanticEventPayloadSize` 超限返回字段级 `repair`。Handler `details` 经白名单嵌套，不得覆盖规范信封。
+- **已落地**：`packages/shared-types` 版本化 `RepairFeedback`；Control API schema 拒绝与 `assertSemanticEventPayloadSize` 超限返回字段级 `repair`。字节上限见[共享 Control schema](../packages/shared-types/src/index.ts)与宿主校验，Handler `details` 经白名单嵌套，不得覆盖规范信封。
 - 让 Plan、Artifact、Verify 和 Runtime Adapter 使用同一反馈 Envelope。
 - 保留已有稳定错误码，补充 path、expected、current state、accepted effects、repair budget 和 next action。
 - 统一 Completion Gate，使 nudge 带上真实失败上下文而不是固定催促语句。
@@ -245,10 +256,9 @@ proposed
 
 ### Phase 3：Plan 与 Capability Pack
 
-- 引入版本化 `Plan/PlanTask/CompletionPolicy/PlanResult`。
-- 把现有角色包装为内置 capability pack，先保持旧行为。
-- 支持模型声明依赖、预期输出、验证路径、预算和 `complete/continue/blocked/needs_human`。
-- 将角色、Hub 意图与硬阈值从业务流程作者降为可组合默认策略和安全预算。
+- **已接线并有定向回放证据**：版本化 Plan v2、用户 objective CAS、lifetime 预算、多轮路线、依赖及实际留存输出检查；模型声明 `complete/continue/blocked/needs_human`，Scheduler 按既有 Hub/Job admission 执行。ROOT 的 v2 replay 走 normal → 7 negative → normal，17 个 SQL/HTTP fixture outcome matched，7 个 injected fault 按预期失败；报告 provenance 为 dirty `ba41a9f4`，不作为当前最终 SHA 的 CI 验收。
+- **保持独立**：语义判据的操作员 authority、Job 终态与输出关联；模型不能重置累计额度或把 done 声明当作完成。
+- **待验证/后续**：最终组合 CI、发布通道/平台及 registry/catalog 证据，以及更广能力组合和模型策略质量；本地 base 镜像 RPC/内容守卫与 OM 专属版本准入已通过，见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
 
 ### Phase 4：Artifact-first
 
@@ -270,11 +280,13 @@ proposed
 
 - 可修正错误统一返回脱敏、字段级、可执行反馈；模型能在同一 Session 修正并成功提交。
 - `accepted` 的 proposal 可查询、可幂等判断，不因进程退出静默丢失。
-- `unknown_external_effect` 不会被自动重复执行；所有 Job 最终进入 `succeeded`、`blocked`、`needs_human` 或 `failed`。
+- `unknown_external_effect` 不会被自动重复执行；Job 使用现有生命周期，`blocked` / `needs_human` 是提案或任务处置语义，不能增加第二套 Job 终态。
 - 新插件通过正常执行、错误修复、幂等、恢复、越权和 crash matrix；运行后资源、Token、Attempt 和副作用均可核对。
 - 回放可解释模型提交了什么、平台拒绝了什么、模型如何修正、哪些效果已 settlement。
 
 至少观测：修正成功率、平均修正轮数、重复错误率、错误后最终成功率、unknown effect 数量、插件失败原因分布、Verify 分歧率、Finding 确认/误报率、人工介入率、每 Finding 成本和缺陷逃逸率。
+
+2026-10-31 主线程已通过当前根的 Plan、Finding Research、Verify、权限、Web/Session 分范围套件及 schema rebuild/CLI plan/apply/备份恢复，完整范围和分母见[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md#v063-集成证据范围2026-10-31)。#815 实际本地 base 镜像、独立生产 guard 与 OM 专属版本准入也已验证。当前 PR 远端完整 CI、合并后最终 main CI、发布通道/平台与 registry/catalog 证据仍缺；较早 `e23c3b4f` 的成功 run `41186374980` 不替代当前组合。独立人工质量输入不在生产执行豁免内，#819 未取得时保持质量未交付，不能由本地或 CI 结果推出质量、成本或 SLA 收益。
 
 ## 12. 非目标与设计纪律
 

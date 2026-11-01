@@ -367,8 +367,12 @@ export async function authenticateJobCapabilityToken(jobId: string, plaintext: s
 export const verifyJobCapabilityToken = authenticateJobCapabilityToken;
 
 /** Revoke every capability for a Job; safe to call from terminal/reaper paths. */
-export async function revokeJobCapabilityTokens(jobId: string, reason = "job_terminal"): Promise<number> {
-  const rows = await sql`
+export async function revokeJobCapabilityTokens(
+  jobId: string,
+  reason = "job_terminal",
+  executor: typeof sql = sql,
+): Promise<number> {
+  const rows = await executor`
     UPDATE job_capability_tokens
     SET revoked_at = now(), revoke_reason = ${reason.slice(0, 200)}
     WHERE job_id = ${jobId} AND revoked_at IS NULL

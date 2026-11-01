@@ -1,5 +1,30 @@
 ## [Unreleased]
 
+## [0.6.3] - 2026-11-01
+
+### 发布与升级边界
+
+- 相对上一正式版 v0.6.2，本版集成可信任务授权、Plan v2 有界执行、Pi 观测记忆、独立程序资格及 Finding 关系工程。数据库基线从 **65** 更新到 **67**；非空库版本或结构不匹配时拒绝启动。升级须先备份、排空并对账未结算效果，再按显式审批与候选库重建流程执行；没有增量 ALTER 链，不支持无人值守跨 schema 升级。
+- 按用户 2026-11-01 的范围决定，独立质量验证、人工标注、按问题家族/资产分离的调参与留出集及后续质量门本轮暂缓。Host 外部证据认证、当前质量证书、CAS 晋升和公开强关系建议未交付；质量保持 `unknown` / `not_evaluated`，强关系 `published=false`。工程检查通过不代表质量、模型效果、成本收益、容量或 SLA 已验证。
+- #833、#834 按用户要求忽略；无需人工参与的完整进程崩溃恢复、数据库压力和长会话资源验证集中由 [#835](https://github.com/SummerSec/DeepSonar/issues/835) 后续跟踪，不替代当前红灯修复和既有发布门禁。
+- 本节是发布准备，不证明正式发行已完成。各最终 SHA 的适用测试、构建及 typecheck 仅通过 GitHub Actions 验收；最终主线与 schema67 重建/备份恢复、原生双架构、已配置镜像通道 inspect、平台签名、catalog 和 Release 附件仍须由本次实际工作流成功产生。不部署生产、不提前改写 bundled digest，也不调整私有 package 版本。
+
+### 新增与变更
+
+- **可信任务下发（#767）**：在既有可选任务契约、来源隔离评审和报告之上，增加宿主配置的只读目标 authority 与不可变 grant；精确绑定 principal、项目/租户/资源、动作、前提、内容与版本。子/系统 Job 统一继承，在 provision 与重跑前重核，失效时拒绝执行；不把契约或凭据存在当作授权，不新增目标写入通道。
+- **Plan v2（#775）**：授权用户以 CAS 定义 objective、完成策略和显式有限预算；模型只能提出与当前目标版本一致的路线。依赖任务复用 Hub Intent admission，lifetime 任务/轮次/并发/无进展预算跨重规划保留；持久 continue 事件水位防止回调或重启重复计数。放行检查当前成功 Attempt、实际留存输出及来源，语义完成仍需当前全判据正向操作员授权；旧 v1 writer 已删除，历史审计保持只读，未知外部效果不重放。
+- **Pi 会话观测记忆（#815）**：可选接入固定 `pi-observational-memory` 发布物与受治理 wrapper，新 Job 默认关闭。冻结模型/配置，后台模型请求只走独立 Gateway workload；有限总额必须显式分配主/后台预算。镜像预检、启动/恢复、RPC 和历史 Session 读取执行版本、完整性与脱敏检查；仅已知额度耗尽或已持久证明请求未开始的瞬态失败可见降级，未知效果和权限错误保持失败。
+- **独立程序资格（#822）**：操作员准入/撤销程序材料，独立资格评审绑定当前 Finding、材料版本、Verify、Attempt 和 Evidence；来源漂移、撤销、冲突或预算缺口阻断旧正向投影，无评审仍未评估。不认证外部官方规则，不授予任务执行或完成权限，也不自动提交漏洞。
+- **Finding 关系工程（#819，本轮工程切片）**：增加操作员见证的身份来源/mapping 版本与 CAS、当前来源校验及有界持久关系计算；协议/freeze/暴露/拒绝回执、同项目精确版本 CAS、不可变实际 SQL 观察、repeatable-read 报告重建和结构性 review/revoke 已接线。真实加载源码采集绑定可信 Node/loader/preload 边界，不能自证部署或人工事实；本版不发布强关系建议。
+- **OpenSandbox 1.2**：同步升级 SDK 与官方不可变 server/execd/egress pins，显式关闭 SDK wake retry，保留 direct ingress、代理和 Scheduler 所有的恢复/TTL 边界。区分调用方与 SDK transport 所有权，上传回收重建本地 transport，不重建远端 Sandbox。
+- **开发设计依据（#830）**：将优化人的注意力作为共同设计与评审原则，统一开发入口、架构追溯及具体正反例；不新增 UI 或运行时行为，不声称注意力收益已测量。
+
+### 修复
+
+- Hub 每次决策在同一事务内合并去重写入一批 Intent 边；终态 token 撤销保持与 Job 结算同一事务。CI 夹具使用当前生命周期、冻结快照与授权契约，不绕过 CAS 或回退直接 Canvas 查询。
+- PostgreSQL 集成夹具恢复时间戳时保留微秒，畸形 JSON 以原始文本进入解析器，并对回执内容而非驱动容器原型做历史不变校验；生产来源校验、JSON 约束及拒绝条件不放宽。
+- 文档保鲜识别 Markdown 角括号目标及空格/锚点，真实 routing 回归同时验证普通和角括号坏链接仍会失败；既有 changelog 校验器接入 Actions，验证待发布的实际版本区段与 compare link。
+
 ## [0.6.2] - 2026-10-31
 
 ### 发布恢复与升级边界
@@ -1334,3 +1359,5 @@
 [0.6.1]: https://github.com/SummerSec/DeepSonar/compare/v0.6.0...v0.6.1
 
 [0.6.2]: https://github.com/SummerSec/DeepSonar/compare/v0.6.1...v0.6.2
+
+[0.6.3]: https://github.com/SummerSec/DeepSonar/compare/v0.6.2...v0.6.3
