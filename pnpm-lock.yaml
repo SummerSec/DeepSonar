@@ -193,8 +193,8 @@ importers:
   packages/runtime-sandbox:
     dependencies:
       '@alibaba-group/opensandbox':
-        specifier: 1.1.0
-        version: 1.1.0
+        specifier: 1.2.0
+        version: 1.2.0
       '@deepsonar/runtime-manual-contract':
         specifier: workspace:*
         version: link:../runtime-manual-contract
@@ -230,8 +230,8 @@ importers:
 
 packages:
 
-  '@alibaba-group/opensandbox@1.1.0':
-    resolution: {integrity: sha512-Q2d0l8UYajN72AHQxYAU8BCXQxhTyHOJF/5b06A53kAZTcsCmNcQnKaoxAATgH15SCSGFtxuje42DHzrjwYDYA==}
+  '@alibaba-group/opensandbox@1.2.0':
+    resolution: {integrity: sha512-Ogjt0n76pSyZxUvi8b6gnotbmoVfNNSZQn+iZ3njZWleMOgJxtki1qcs50ojGfPFeLA4iB2NZ6QpRCVEzu2JDg==}
     engines: {node: '>=20'}
 
   '@asamuzakjp/css-color@3.2.0':
@@ -1784,6 +1784,10 @@ packages:
     resolution: {integrity: sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw==}
     engines: {node: '>=20.18.1'}
 
+  undici@7.30.1:
+    resolution: {integrity: sha512-03KrMbjIFDWQR5RNPrSw3bd1r12JpyFQl9/yxjUbJtqkjmllqC5lFjZh6ujeuJCKr8EOQvRW872Oy/az+nLYxg==}
+    engines: {node: '>=20.18.1'}
+
   update-browserslist-db@1.2.3:
     resolution: {integrity: sha512-Js0m9cx+qOgDxo0eMiFGEueWztz+d4+M3rGlmKPT+T4IS/jP4ylw3Nwpu6cpTTP8R1MAC1kF4VbdLt3ARf209w==}
     hasBin: true
@@ -1909,11 +1913,11 @@ packages:
 
 snapshots:
 
-  '@alibaba-group/opensandbox@1.1.0':
+  '@alibaba-group/opensandbox@1.2.0':
     dependencies:
       '@opentelemetry/api': 1.9.1
       openapi-fetch: 0.14.1
-      undici: 7.29.0
+      undici: 7.30.1
 
   '@asamuzakjp/css-color@3.2.0':
     dependencies:
@@ -3389,6 +3393,8 @@ snapshots:
   undici-types@8.3.0: {}
 
   undici@7.29.0: {}
+
+  undici@7.30.1: {}
 
   update-browserslist-db@1.2.3(browserslist@4.28.7):
     dependencies:

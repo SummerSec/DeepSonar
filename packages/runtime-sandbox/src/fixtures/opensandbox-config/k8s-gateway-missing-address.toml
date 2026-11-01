@@ -9,7 +9,7 @@ level = "INFO"
 
 [runtime]
 type = "kubernetes"
-execd_image = "docker.io/opensandbox/execd@sha256:e11fdd6fa641329a1fe5298e71c8dd2afca742674fe48bc855b2ff6715512829"
+execd_image = "docker.io/opensandbox/execd@sha256:c75836c46ef4302afccec182d5d7339eb2f905f51e3d73b7aa17bb76c832526c"
 
 [kubernetes]
 namespace = "deepsonar-opensandbox"

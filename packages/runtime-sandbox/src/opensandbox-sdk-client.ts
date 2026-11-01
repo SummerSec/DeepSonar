@@ -47,6 +47,8 @@ function connectionConfig(connection: OpenSandboxConnection): ConnectionConfig {
     protocol: connection.protocol ?? "http",
     useServerProxy: connection.useServerProxy ?? true,
     disableMetrics: true,
+    // Scheduler owns recovery; do not silently replay SDK requests.
+    wakeRetryEnabled: false,
     requestTimeoutSeconds: 180,
   });
 }
@@ -268,6 +270,8 @@ function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenS
 export function createSdkOpenSandboxClient(connection: OpenSandboxConnection): OpenSandboxClient {
   const pin = assertOpenSandboxSdkPin(connection.pin?.sdk ?? OPENSANDBOX_SDK_VERSION);
   void pin;
+  // Keep the singleton uninitialized: SDK 1.2 clones/owns each operation transport.
+  // Pre-initializing it would make create/connect/manager borrow a caller-owned pool.
   const config = connectionConfig(connection);
   return {
     async create(input: OpenSandboxCreateInput) {
