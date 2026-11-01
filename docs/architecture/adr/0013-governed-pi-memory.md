@@ -1,8 +1,8 @@
 # 0013. Pi 观测内存的受治理条件准入
 
-> 状态：**已采纳的条件准入决策；本地构建镜像运行与内容缺失拒绝已验，最终 CI/发布证据待完成**。当前根工作树的 canonical Pi/OM RPC、独立生产启动守卫、版本准入/适配器回归及 Gateway/Session 边界已有证据；详细身份、场景和分母集中见 [RPC 专题](../../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
+> 状态：**已采纳的条件准入决策；本轮工程已随 [#831 在 fdb55a01 主线 Actions 验收](<../../TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA/正式发布另验**。下文本地 canonical Pi/OM RPC、独立生产启动守卫、版本准入/适配器回归及 Gateway/Session 证据保留历史范围；详细身份、场景和分母集中见 [RPC 专题](../../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
 > 决策日期：2026-10-31
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 > 来源：#815 A/B/C；实现核对基线为 2026-10-31 当前根代码与下方源码入口
 > 关联需求：FR-CAP-009 / NFR-SEC-001
 
@@ -18,7 +18,7 @@ Pi 已有受治理的扩展边界：扩展必须进入平台注册表并预装�
 
 新 Job 的 OM 准入按 Scheduler 选定的 `runtimeImage.image_version` 执行扩展专属下限，由 `freezePiExtensions` 第五参数传入；具体要求见 [registry](../../../packages/shared-types/src/pi-extensions.ts)，未提高其他运行时的全局下限。缺失、非法或旧版本均拒绝；已有冻结历史不重新按当前版本准入。运行时由 [pi-memory-image-guard](../../../packages/runtime-sandbox/src/pi-memory-image-guard.ts) 在启动/恢复 Pi RPC 及首个 prompt 前独立检查 installed package/entry/wrapper。版本/角色快照和适配器回归已通过；同一生产 guard JS 在实际本地构建镜像内的已安装、缺包、缺 wrapper 场景也已通过。
 
-实际本地 base 镜像的封装预检、已安装 canonical Pi/OM 与生产 wrapper RPC、独立内容守卫正负例均有直接证据，集中见 [RPC 专题](../../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。历史 Session 脱敏及 Gateway 已知请求前 transport 的持久零用量结算/防冒充也已验证，见 [Gateway 专题](../../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。当前 PR/最终 main CI 和发布通道/平台、registry/catalog 仍待验，质量与成本收益保持 `unknown`。本节是实现状态，不替代下方已采纳的条件准入决策。
+实际本地 base 镜像的封装预检、已安装 canonical Pi/OM 与生产 wrapper RPC、独立内容守卫正负例均有直接证据，集中见 [RPC 专题](../../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。历史 Session 脱敏及 Gateway 已知请求前 transport 的持久零用量结算/防冒充也已验证，见 [Gateway 专题](../../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。本轮工程验收见文首 #831 Actions 摘要；后续修复 SHA 和正式发布通道/平台、registry/catalog 仍另验，质量与成本收益保持 `unknown`。本节是实现状态，不替代下方已采纳的条件准入决策。
 
 ## 决策
 
@@ -56,7 +56,7 @@ wrapper 必须在私有配置和输出边界上收紧发布物行为。recall �
 
 ## 当前状态与启用门禁
 
-当前 checkout 的实现与本地镜像运行证据见上节及 [RPC 专题](../../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。生产内容守卫与封装预检独立，已实际验证内容缺失时在 Pi 启动前拒绝；这不是仅以 helper 单元负例推定拒绝。最终组合 CI 与发布证据未完成，质量与成本收益保持 `unknown`。
+当前 checkout 的实现与本地镜像运行证据见上节及 [RPC 专题](../../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。生产内容守卫与封装预检独立，已实际验证内容缺失时在 Pi 启动前拒绝；这不是仅以 helper 单元负例推定拒绝。本轮工程已按上述 #831 Actions 摘要验收，后续修复 SHA 与正式发布仍另验，质量与成本收益保持 `unknown`。
 
 启用前必须取得逐项证据：
 
@@ -64,7 +64,7 @@ wrapper 必须在私有配置和输出边界上收紧发布物行为。recall �
 2. Job/session snapshot、private-config guards、Gateway-only route/model、内核 workload credential、独立归因、显式预算和终态撤销；
 3. quota/内核确认 known-never-started transport 可见降级，以及 protocol/permission/unknown effect/integrity/snapshot 硬失败；
 4. bounded recall、raw archive 和 RPC 大帧的结构化过滤/脱敏；
-5. built image/旧镜像 image acceptance、完整 runtime 证据，以及与当前根代码绑定的最终组合 CI；本地 base 镜像 RPC、独立生产 guard、版本准入、Session 脱敏及 Gateway SQL/HTTP 已分别留证，最终组合 CI 与发布通道/平台证据待完成。外部 S3 存储未实测，不作为本批工程 CI 收口的生产执行前置。
+5. built image/旧镜像 image acceptance、完整 runtime 证据，以及与当前根代码绑定的最终组合 CI；本地 base 镜像 RPC、独立生产 guard、版本准入、Session 脱敏及 Gateway SQL/HTTP 保留历史证据，本轮工程组合已随 #831 Actions 验收，后续修复 SHA 与正式发布通道/平台仍另验。外部 S3 存储未实测，不作为本批工程 CI 收口的生产执行前置。
 
 本地构建镜像的真实插件与内容守卫已验收，不能扩张为全部上述门禁或完整发布通过；新 Job 默认不启用。旧 released digest 和 v0.6.2 镜像不能由兼容 key 推断含 OM。
 
@@ -80,4 +80,4 @@ wrapper 必须在私有配置和输出边界上收紧发布物行为。recall �
 
 Pi registry/freeze/materialization 见 [`pi-extensions.ts`](../../../packages/shared-types/src/pi-extensions.ts) 与 [`apps/scheduler/src/pi-extensions.ts`](../../../apps/scheduler/src/pi-extensions.ts)；Gateway 预算与账本见 [`PI_OBSERVATIONAL_MEMORY_GATEWAY.md`](../../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)，RPC/归档边界见 [`PI_OBSERVATIONAL_MEMORY_RPC.md`](../../PI_OBSERVATIONAL_MEMORY_RPC.md)、[`pi-rpc-output.ts`](../../../packages/runtime-sandbox/src/pi-rpc-output.ts) 和 [`cli-session-adapters.ts`](../../../packages/runtime-sandbox/src/cli-session-adapters.ts)。设计取舍和未验证项见 [`PI_OBSERVATIONAL_MEMORY.md`](../../PI_OBSERVATIONAL_MEMORY.md) 与 [`PI_OBSERVATIONAL_MEMORY_DECISIONS.md`](../../PI_OBSERVATIONAL_MEMORY_DECISIONS.md)。
 
-本 ADR 记录准入边界与当前实现状态，不把未执行的本地、镜像、RPC、模型或生产测试写成通过；没有独立效果/成本证据时保持收益 unknown，不由本 ADR 新增生产或真实模型验收前置。#819 的人工标签/隔离留出/预冻结阈值要求仍按其自身质量门执行。
+本 ADR 记录准入边界与当前实现状态，不把未执行的本地、镜像、RPC、模型或生产测试写成通过；没有独立效果/成本证据时保持收益 unknown，不由本 ADR 新增生产或真实模型验收前置。#819 的独立质量按[本轮范围](<../../../AGENTS.md#豁免范围>)暂缓，不由本 ADR 宣告质量通过。

@@ -1,7 +1,7 @@
 # 任务目标报告防误报（#767 后续片）
 
 > 状态：确定性报告与结构化来源复核；接入来源隔离的普通 Job 判据评审，不认证不同人/模型；只展示独立资格投影，不自行授予整体完成或提交资格。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 
 本片接续[通用任务标准与研究候选准入](TASK_OUTCOME_ADMISSION.md)，防止报告把研究候选或技术 confirmed 写成任务成果。报告消费[来源隔离的普通 Job 评审](TASK_GOAL_REVIEW.md)，不自行生成语义评价，不新增执行通道或 Plan 完成门。来源隔离不认证不同人/模型；提交资格由 [#822 操作员独立评审](PROGRAM_ELIGIBILITY.md) 提供当前投影，适用攻击链与 knownness 仍需任务要求的依据。当前 [Plan v2](architecture/adr/0012-plan-v2-execution.md) 已接工程执行，但报告、输出关联和普通评审不取得操作员的整体完成 authority。
 
@@ -52,7 +52,7 @@
 
 行为验收应覆盖：技术 confirmed 不计目标完成；伪造 raw_json authority 无效；来源 Job/Artifact/node/events/Attempt 失效；当前 Fact 撤销；Canvas 删除/修改契约；无 Finding 的来源快照；截断；模型正文/Markdown 注入无法覆盖结论；Task/Finding 报告及 SARIF 的一致边界；投影变化生成新版本；近契约上限的单 Finding 输入去重后仍保留全部源规则与判据。实现入口与测试见 [来源投影测试](../apps/scheduler/src/task-outcome-report.test.ts)和[报告正文测试](../apps/scheduler/src/report-numeric-fidelity.test.ts)，实际运行结果以 PR 记录为准。
 
-报告防误报已接普通 Job 的来源隔离评审与逐判据展示，不认证不同人/模型，也不代替 #775 完成 authority。#822 程序资格不由普通评审、Agent 声明、技术 confirmed 或 `program_rule_review` 单独推导。#819 的身份/关系工程也不能改变 Verify、任务评价或资格，强关系尚不发布，独立质量输入仍缺失。无契约保持未评估；无需生产或真实模型试验，但不豁免人工质量输入。当前完整 Verify/Report 集成、其他根套件和 schema rebuild/CLI 备份恢复结果见[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md)；实际本地 base 镜像 RPC/独立生产 guard 见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。最终当前 PR/最终 main CI 与发布通道/平台、registry/catalog 仍待完成，质量/成本收益 unknown。
+报告防误报已接普通 Job 的来源隔离评审与逐判据展示，不认证不同人/模型，也不代替 #775 完成 authority。#822 程序资格不由普通评审、Agent 声明、技术 confirmed 或 `program_rule_review` 单独推导。#819 的身份/关系工程也不能改变 Verify、任务评价或资格，强关系尚不发布，独立质量输入仍缺失。无契约保持未评估；无需生产或真实模型试验，独立质量按[本轮范围](<../AGENTS.md#豁免范围>)暂缓而非通过。本轮工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)；历史 Verify/Report、schema rebuild/CLI 备份恢复和本地 base 镜像 RPC/独立生产 guard 保留原范围，后者见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。后续修复 SHA、最终 main 与正式发布通道/平台、registry/catalog 仍另验，质量/成本收益 unknown。
 
 
 ## 独立程序规则投影

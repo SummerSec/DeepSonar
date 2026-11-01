@@ -2,7 +2,7 @@
 
 > 状态：**已采纳**
 > 原决策日期：2026-10-31（由 `4e74b913`、`464ea681` 提交时间核对）
-> 同步日期：2026-10-31
+> 同步日期：2026-11-01
 > 来源：#775；执行型 Plan v2、目标 CAS、依赖输出和停止语义
 > 关联需求：FR-TASK-006、FR-CAP-006、FR-HUB-002、FR-HUB-003、FR-HUB-005、FR-JOB-009、FR-JOB-013、FR-CRED-002、FR-IMG-003
 
@@ -27,7 +27,7 @@
 
 核对 `2773050a` 时，工程执行投影可先记录 `stop_reason=complete` / objective `status=completed`，任务收敛仍须另过当前正向操作员判据；该工程字段不是本决策所述的语义完成。2026-10-31 复核确认 `applyHubPlanAdapter`、`persistPlanAudit`、副作用 writer 与 pure legacy `adapt*` helper/type/export 已物理删除；普通 HubIntent 仍走原 handler，不制造新的 v1 `plan_protocol`，不可变 v1 与 `hub_intent_adapter` 审计仅作为历史读取解析。上述实现状态不改变本 ADR 的决策段。
 
-本地补充核验见[验收矩阵](../../TASK_DISPATCH_ACCEPTANCE.md)：v2 replay 的报告 provenance 为 dirty 的非 HEAD 提交，不能作为 `5619154f` 精确最终验收，也不是 17 个独立测试；terminal/bootstrap、schema rebuild/restore 与 core `finalizeJob` 的终态 401 断言均已留证。最终组合 CI 仍待核对，终态结论不外推到所有 drain/Reaper 路径。
+2026-10-31 历史本地补充核验见[验收矩阵](../../TASK_DISPATCH_ACCEPTANCE.md)：v2 replay 的报告 provenance 为 dirty 的非 HEAD 提交，不能作为 `5619154f` 精确最终验收，也不是 17 个独立测试；terminal/bootstrap、schema rebuild/restore 与 core `finalizeJob` 的终态 401 断言均已留证。后续本轮工程已随 [#831 在 fdb55a01 主线 Actions 验收](<../../TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，不追溯改变这些历史报告；终态结论不外推到所有 drain/Reaper 路径。
 
 ## 后果
 
@@ -45,4 +45,4 @@
 
 ## 验证边界
 
-当前单元与 PostgreSQL 集成入口由根 `package.json` 的 `ci:unit:plan-protocol`、`ci:integration:plan-protocol` 覆盖，具体测试见 `plan-execution*.integration.test.ts`、`plan-objective*.test.ts`、`plan-revision.integration.test.ts` 和相关 Intent/输出测试。需以精确 PR head 的 CI 结果核对接线、数据库前置条件和未跳过状态；本 ADR 不声称本轮已完成最终组合 CI、生产执行或模型/人工质量验收。v2 replay 的本地证据与 provenance 限制见[验收矩阵](../../TASK_DISPATCH_ACCEPTANCE.md)。
+当前单元与 PostgreSQL 集成入口由根 `package.json` 的 `ci:unit:plan-protocol`、`ci:integration:plan-protocol` 覆盖，具体测试见 `plan-execution*.integration.test.ts`、`plan-objective*.test.ts`、`plan-revision.integration.test.ts` 和相关 Intent/输出测试。本轮工程的精确 PR/main Actions 验收见上述 #831 摘要；后续修复 SHA 仍须核对接线、数据库前置条件和未跳过状态，不声称生产执行或模型/人工质量已验收。v2 replay 的历史本地证据与 provenance 限制见[验收矩阵](../../TASK_DISPATCH_ACCEPTANCE.md)。
