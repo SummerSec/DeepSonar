@@ -7,18 +7,42 @@ ARG TARGETARCH
 
 USER root
 ARG REPO_SHA256=2410cfea0b746fa175acd7130116e3cab26fb2f1cb8107e7a030cd50b0f2c020
+# LLVM 19 includes the ASan allocator/PIE fix (upstream fb77ca05).
+# Build AFL++ against the same LLVM: Debian's AFL++ package embeds LLVM 14 paths.
+ARG LLVM_PACKAGE_VERSION=1:19.1.7-3~deb12u1
+ARG AFL_COMMIT=c340a022e2546488c15f85593d0f37e30eeaab3a
+ARG AFL_SHA256=77d3dcc321ac4514cf5a9dccd0d070c4a3a417df1d353a01b89540c83090ff41
+ENV PATH=/opt/deepsonar/bin:/usr/lib/llvm-19/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential ccache cmake ninja-build git-lfs python3-requests python-is-python3 \
     openssh-client rsync patch pkg-config \
-    clang clang-tools llvm lld libclang-rt-dev \
+    clang-19="$LLVM_PACKAGE_VERSION" clang-tools-19="$LLVM_PACKAGE_VERSION" \
+    llvm-19="$LLVM_PACKAGE_VERSION" llvm-19-dev="$LLVM_PACKAGE_VERSION" \
+    lld-19="$LLVM_PACKAGE_VERSION" libclang-rt-19-dev="$LLVM_PACKAGE_VERSION" \
     libasan8 libubsan1 liblsan0 \
-    afl++ \
     gdb binutils \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
     /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* \
   && git lfs install --system \
   && install -d -m 0755 /opt/deepsonar/bin /workspace
+
+# Upstream recursively expands -j$(nproc); bound that make variable as well.
+RUN set -eux; \
+  curl -fsSLo /tmp/deepsonar-afl.tar.gz "https://codeload.github.com/AFLplusplus/AFLplusplus/tar.gz/$AFL_COMMIT"; \
+  echo "$AFL_SHA256  /tmp/deepsonar-afl.tar.gz" | sha256sum -c -; \
+  install -d /tmp/deepsonar-afl-src /opt/deepsonar/licenses/aflplusplus; \
+  tar -xzf /tmp/deepsonar-afl.tar.gz --strip-components=1 -C /tmp/deepsonar-afl-src; \
+  make -C /tmp/deepsonar-afl-src -j2 CC=clang-19 CXX=clang++-19 LLVM_CONFIG=llvm-config-19 nproc=2 NO_NYX=1 NO_PYTHON=1 all; \
+  make -C /tmp/deepsonar-afl-src -f GNUmakefile.llvm -j2 CC=clang-19 CXX=clang++-19 LLVM_CONFIG=llvm-config-19 all; \
+  make -C /tmp/deepsonar-afl-src CC=clang-19 CXX=clang++-19 LLVM_CONFIG=llvm-config-19 nproc=2 NO_NYX=1 NO_PYTHON=1 install; \
+  test -s /usr/local/lib/afl/SanitizerCoveragePCGUARD.so; \
+  test -s /usr/local/lib/afl/afl-compiler-rt.o; \
+  install -m 0644 /tmp/deepsonar-afl-src/LICENSE /opt/deepsonar/licenses/aflplusplus/LICENSE; \
+  printf '%s\n' "$AFL_COMMIT" > /opt/deepsonar/licenses/aflplusplus/SOURCE_COMMIT; \
+  test "$(readlink -f /tmp/deepsonar-afl-src)" = /tmp/deepsonar-afl-src; \
+  rm -rf /tmp/deepsonar-afl-src; \
+  rm -f /tmp/deepsonar-afl.tar.gz
 
 COPY deploy/vendor/gitcode-repo-py3 /tmp/repo
 RUN sed -i 's/\r$//' /tmp/repo \
@@ -64,9 +88,13 @@ ENV IS_SANDBOX=1 \
     OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
     CC=clang \
     CXX=clang++ \
+    AFL_CC=clang-19 \
+    AFL_CXX=clang++-19 \
+    AFL_LLVM_INSTRUMENT=PCGUARD \
+    AFL_UBSAN_VERBOSE=1 \
     AFL_SKIP_CPUFREQ=1 \
     AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
-    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/deepsonar/bin:/usr/lib/llvm-19/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 WORKDIR /workspace
 
 FROM scratch
@@ -84,9 +112,13 @@ ENV IS_SANDBOX=1 \
     OPENHARMONY_SOURCE_DIR=/workspace/openharmony \
     CC=clang \
     CXX=clang++ \
+    AFL_CC=clang-19 \
+    AFL_CXX=clang++-19 \
+    AFL_LLVM_INSTRUMENT=PCGUARD \
+    AFL_UBSAN_VERBOSE=1 \
     AFL_SKIP_CPUFREQ=1 \
     AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
-    PATH=/opt/deepsonar/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/deepsonar/bin:/usr/lib/llvm-19/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 COPY --from=runtime-rootfs / /
 WORKDIR /workspace
 USER deepsonar

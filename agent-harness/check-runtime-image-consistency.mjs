@@ -50,6 +50,7 @@ const openHarmonyAuditEnv = readFileSync(new URL("../deploy/openharmony-audit-en
 const openHarmonyAuditScan = readFileSync(new URL("../deploy/openharmony-audit-scan.sh", import.meta.url), "utf8");
 const openHarmonyFuzzEnv = readFileSync(new URL("../deploy/openharmony-fuzz-env.sh", import.meta.url), "utf8");
 const openHarmonyFuzzBuild = readFileSync(new URL("../deploy/openharmony-fuzz-build.sh", import.meta.url), "utf8");
+const openHarmonyFuzzRuntime = readFileSync(new URL("./test-openharmony-fuzz-runtime.mjs", import.meta.url), "utf8");
 const openHarmonyRegistry = JSON.parse(readFileSync(new URL("../deploy/runtime-image-registry.json", import.meta.url), "utf8"));
 const prepareScript = readFileSync(new URL("../deploy/prepare-runtime-images.sh", import.meta.url), "utf8");
 const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
@@ -251,7 +252,7 @@ expect((openHarmonyWorkflow.match(/toolset: openharmony-test/g) ?? []).length ==
 expect((openHarmonyWorkflow.match(/toolset: openharmony-audit/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two audit matrix entries");
 expect((openHarmonyWorkflow.match(/toolset: openharmony-fuzz/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two fuzz matrix entries");
 expect((openHarmonyWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 3 && (openHarmonyWorkflow.match(/platform: linux\/arm64/g) ?? []).length === 3, "OpenHarmony workflow must retain amd64/arm64 matrix coverage for test/audit/fuzz");
-expect(openHarmonyWorkflow.includes("check_args: --check --static") && openHarmonyWorkflow.includes("matrix.check_args"), "OpenHarmony Fuzz CI must use static mode for arm64 smoke");
+expect(openHarmonyWorkflow.includes("ubuntu-24.04-arm") && openHarmonyWorkflow.includes("matrix.check_args") && !openHarmonyWorkflow.includes("check_args: --check --static"), "OpenHarmony Fuzz CI must dynamically check both native architectures");
 expect(openHarmonyWorkflow.includes("check_args: --check --hdc"), "OpenHarmony Test CI must smoke hdc version without requiring a device");
 expect(localDefinition.includes('runtime-images.json'), "agent-harness/image.mjs must consume runtime-images.json");
 expect(dockerfile.includes(`ARG BASE_IMAGE=${config.baseImage}`), "Dockerfile.agent base image differs from runtime-images.json");
@@ -964,23 +965,34 @@ expect(!openHarmonyAuditDockerfile.includes("openharmony-hdc") && !openHarmonyFu
 for (const tool of ["clang", "clang-tidy", "clang-tools", "libclang-rt-dev", "sparse", "cppcheck", "bear", "libasan8", "libubsan1", "gdb"]) {
   expect(openHarmonyAuditDockerfile.includes(tool), `OpenHarmony Audit 镜像缺少工具：${tool}`);
 }
-for (const tool of ["clang", "libclang-rt-dev", "afl++", "libasan8", "libubsan1", "gdb", "llvm"]) {
+for (const tool of ["clang-19", "libclang-rt-19-dev", "LLVM_CONFIG=llvm-config-19", "SanitizerCoveragePCGUARD.so", "libasan8", "libubsan1", "gdb", "llvm-19"]) {
   expect(openHarmonyFuzzDockerfile.includes(tool), `OpenHarmony Fuzz 镜像缺少工具：${tool}`);
 }
 expect(openHarmonyFuzzDockerfile.includes('"compiler-rt","libfuzzer"'), "OpenHarmony Fuzz manifest must declare compiler-rt and libfuzzer");
+expect(openHarmonyFuzzDockerfile.includes("ARG LLVM_PACKAGE_VERSION=1:19.1.7-3~deb12u1") && openHarmonyFuzzDockerfile.includes("/usr/lib/llvm-19/bin") && openHarmonyFuzzDockerfile.includes("AFL_LLVM_INSTRUMENT=PCGUARD"), "OpenHarmony Fuzz default compiler, runtime and AFL plugin must be matched");
+expect(openHarmonyFuzzDockerfile.includes("ARG AFL_COMMIT=c340a022e2546488c15f85593d0f37e30eeaab3a") && openHarmonyFuzzDockerfile.includes("ARG AFL_SHA256=77d3dcc321ac4514cf5a9dccd0d070c4a3a417df1d353a01b89540c83090ff41") && openHarmonyFuzzDockerfile.includes("-f GNUmakefile.llvm"), "AFL++ must be pinned and its LLVM build errors must propagate");
+for (const source of [openHarmonyFuzzDockerfile, openHarmonyFuzzEnv, openHarmonyFuzzBuild, openHarmonyFuzzRuntime]) {
+  expect(!/-fno-pie|-no-pie|-fno-sanitize|setarch|sysctl\s+-w/.test(source), "OpenHarmony startup repair must preserve PIE, ASLR and sanitizers");
+}
+expect(openHarmonyFuzzEnv.includes("-O1 -g -fno-omit-frame-pointer -fsanitize=fuzzer,address,undefined") && openHarmonyFuzzEnv.includes("UBSAN_OPTIONS=halt_on_error=1") && openHarmonyFuzzEnv.includes('"$afl_binary"'), "OpenHarmony environment smoke must preserve original flags and exercise AFL");
+expect(openHarmonyFuzzRuntime.includes("launch<=20") && openHarmonyFuzzRuntime.includes("AddressSanitizer: heap-buffer-overflow") && openHarmonyFuzzRuntime.includes("runtime error: signed integer overflow") && openHarmonyFuzzRuntime.includes("afl-showmap") && openHarmonyFuzzRuntime.includes("FLAGS_1.*PIE"), "OpenHarmony native regression must cover fixed launches, PIE and actual sanitizer/coverage behavior");
+expect(openHarmonyFuzzRuntime.includes('[[ "$AFL_LLVM_INSTRUMENT" == PCGUARD && "$AFL_UBSAN_VERBOSE" == 1 ]]') && openHarmonyFuzzRuntime.includes("-fpass-plugin=([^']+)") && openHarmonyFuzzRuntime.includes('plugin_canonical="$(realpath -- "$plugin_path")"') && openHarmonyFuzzRuntime.includes('[[ "$plugin_canonical" == /usr/local/lib/afl/SanitizerCoveragePCGUARD.so ]]'), "OpenHarmony AFL regression must prove the resolved selected PCGUARD plugin, not just its shared coverage hook");
+expect(openHarmonyFuzzBuild.includes("AFL_USE_ASAN=1 AFL_UBSAN_VERBOSE=1 afl-clang-fast++") && (openHarmonyFuzzDockerfile.match(/AFL_UBSAN_VERBOSE=1/g) ?? []).length === 2, "OpenHarmony AFL helper and both image stages must retain specific non-recovering UBSan reports");
+expect(openHarmonyWorkflow.includes("agent-harness/test-openharmony-fuzz-runtime.mjs") && openHarmonyWorkflow.includes("matrix.toolset == 'openharmony-fuzz' || steps.resolve.outputs.skip != 'true'"), "Reused OpenHarmony Fuzz images must not skip environment or native regression checks");
+expect(releaseWorkflow.includes("openharmony-fuzz-native:") && releaseWorkflow.includes("agent-harness/test-openharmony-fuzz-runtime.mjs") && releaseWorkflow.includes("needs: [base-image, openharmony-fuzz-build, openharmony-fuzz-native]"), "OpenHarmony Release publication must wait for both native sanitizer regressions");
 expect(openHarmonyFuzzEnv.includes("clang -print-resource-dir"), "OpenHarmony Fuzz check must probe Clang's resource dir dynamically");
 expect(openHarmonyFuzzEnv.includes("clang -print-target-triple"), "OpenHarmony Fuzz check must derive the runtime architecture from Clang");
 expect(openHarmonyFuzzEnv.includes("fuzzer_interceptors"), "OpenHarmony Fuzz check must verify the libFuzzer interceptor archive");
 expect(openHarmonyFuzzEnv.includes("ubsan_standalone"), "OpenHarmony Fuzz check must verify the UBSan compiler-rt archive");
 expect(openHarmonyFuzzEnv.includes("-fsanitize=fuzzer,address,undefined"), "OpenHarmony Fuzz check must compile with the production sanitizer set");
 expect(openHarmonyFuzzEnv.includes("--static"), "OpenHarmony Fuzz check must expose a static cross-architecture mode");
-expect(openHarmonyFuzzEnv.includes("readelf -h") && openHarmonyFuzzEnv.includes("readelf -Ws") && openHarmonyFuzzEnv.includes("file \"$smoke_binary\""), "OpenHarmony Fuzz static mode must inspect ELF metadata");
+expect(openHarmonyFuzzEnv.includes("readelf -h") && openHarmonyFuzzEnv.includes("readelf -Ws") && openHarmonyFuzzEnv.includes("file \"$binary\""), "OpenHarmony Fuzz static mode must inspect ELF metadata for both engines");
 expect(openHarmonyFuzzEnv.includes("__asan_init") && openHarmonyFuzzEnv.includes("LLVMFuzzerRunDriver"), "OpenHarmony Fuzz static mode must prove ASan/libFuzzer instrumentation");
 expect(openHarmonyFuzzEnv.includes("tool-manifest.json") && openHarmonyFuzzEnv.includes("deepsonar.runtime.contract/v1"), "OpenHarmony Fuzz check must validate its runtime manifest");
 expect(openHarmonyFuzzEnv.includes('if [[ "$check_mode" == "static" ]]'), "OpenHarmony Fuzz static mode must branch before sanitizer execution");
 expect(openHarmonyFuzzEnv.includes("ASAN_OPTIONS=detect_leaks=0") && openHarmonyFuzzEnv.includes('"$smoke_binary" -runs=1'), "OpenHarmony Fuzz amd64 mode must run the sanitizer/libFuzzer smoke binary");
 expect(openHarmonyFuzzDockerfile.includes("ARG TARGETARCH") && openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check --static"), "OpenHarmony Fuzz image build must use static mode for arm64 targets");
-expect(openHarmonyWorkflow.includes("check_args: --check --static") && openHarmonyWorkflow.includes("matrix.check_args"), "OpenHarmony Fuzz CI must use static mode for arm64 smoke");
+expect(openHarmonyWorkflow.includes("ubuntu-24.04-arm") && openHarmonyWorkflow.includes("matrix.check_args") && !openHarmonyWorkflow.includes("check_args: --check --static"), "OpenHarmony Fuzz CI must dynamically check both native architectures");
 expect(openHarmonyDockerfile.includes("openharmony-env.sh --check --hdc"), "OpenHarmony Test 必须在构建时执行含 hdc version 的环境 smoke check");
 expect(openHarmonyAuditDockerfile.includes("openharmony-audit-env.sh --check"), "OpenHarmony Audit 必须在构建时执行环境 smoke check");
 expect(openHarmonyFuzzDockerfile.includes("openharmony-fuzz-env.sh --check"), "OpenHarmony Fuzz 必须在构建时执行环境 smoke check");

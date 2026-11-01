@@ -365,7 +365,7 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 
 未来实现必须先更新本表和相关专题文档，明确哪些是 as-built、哪些是进行中、哪些只是提案。不能用旧 Issue、历史 `*_PLAN.md` 或静态角色名称推断当前实现。
 
-v0.6.3 集成核对（2026-10-31）：已知完整 CI run `41186374980` 仅覆盖 `e23c3b4f` 的较早 #822/#825 基线，不能代表当前组合。主线程已通过当前根的 Plan、Finding Research、Verify、权限及 Web/Session 分范围套件，schema rebuild/CLI plan/apply/备份恢复也已核验，计数和重叠边界见[验收矩阵](docs/TASK_DISPATCH_ACCEPTANCE.md)。#815 实际本地 base 镜像与独立生产 guard 已验收，最终当前 PR/最终 main CI、发布通道/平台与 registry/catalog 证据仍未完成。必须先完成纳入交付范围的实现及对应 PR 绿灯，再合并并核对最终 main，之后才可发 v0.6.3；#819 质量缺口不能由文档或 CI 宣称完成。v0.6.2 已正式发布，保持不可变。不要求生产测试部署或真实模型试验，质量/成本收益仍未知。 Current 2026-11-01 boundary: Lead verified SDK-only #832 merged to main b1d77c3031f1942e782605bd62772cb70860c7e8 after 12/12 successful checks (schema65). Root quality WIP targets schema67 and has no final pushed-source CI; historical schema66/root results above do not cover it. No release or quality acceptance is claimed.
+v0.6.3 集成核对（2026-11-01）：[#831](https://github.com/SummerSec/DeepSonar/pull/831) 已在最终 PR 检查全绿后合并至 `fdb55a01b1e02b5b9078586923a8d506ce5bb096`，该主线的六个适用 Actions 工作流全绿，包含 schema67 的真实 PostgreSQL 重建/备份恢复；本轮工程 issue 已收口。上述证据只覆盖该 SHA，不覆盖后续修复。正式 [Release](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 的 OpenHarmony Fuzz 新构建出现 sanitizer 启动崩溃；旧主线的 OH 缓存命中不能替代新候选运行证据。本修复使 LLVM/compiler-rt 与 AFL++ 插件匹配，并把 fresh/reuse 候选的双原生架构行为检查接入既有 CI/Release，细则及诊断证据见[发布专题](<docs/RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)；修复的最终 SHA、镜像通道、签名和正式附件仍须实际通过。v0.6.2 保持不可变；v0.6.3 尚未正式发布，现有 tag 不因本修复自动移动。独立质量与 Host 证书/晋升/强关系建议按本轮范围暂缓，质量保持 unknown/not_evaluated；#833/#834 忽略、#835 为后续机器验证，不替代当前红灯修复。
 
 ## 13. 实现硬约束
 

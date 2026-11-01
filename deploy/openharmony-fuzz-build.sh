@@ -51,8 +51,10 @@ case "$engine" in
       "${extra_cflags[@]}" "$source_file" "${extra_ldflags[@]}" -o "$output"
     ;;
   afl)
-    # AFL++ 快速插桩 + ASan；harness 需提供 main 或使用 afl 驱动。
-    AFL_USE_ASAN=1 afl-clang-fast++ "${common_flags[@]}" \
+    # 镜像内 AFL++ 与 LLVM 19 同源构建 PCGUARD 插桩，保留 ASan/UBSan。
+    # verbose 在编译期保留 UBSan 报告；默认 trap 只给信号，运行选项无法补回报告。
+    # harness 需提供 main 或使用 AFL 驱动；不降级到旧 LLVM 插件或 non-PIE。
+    AFL_USE_ASAN=1 AFL_UBSAN_VERBOSE=1 afl-clang-fast++ "${common_flags[@]}" \
       "${extra_cflags[@]}" "$source_file" "${extra_ldflags[@]}" -o "$output"
     ;;
   *)

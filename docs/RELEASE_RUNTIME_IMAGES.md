@@ -206,17 +206,51 @@ Chrome Fuzz, there is no QEMU/cross-compile exception.
 
 ## OpenHarmony specialist CI contract
 
-`openharmony-runtime.yml` covers test, audit, and fuzz on `linux/amd64` and
-`linux/arm64`. It uses QEMU for builds, runs the offline environment checks, and
-pins one immutable GHCR `src-*` tag per architecture. OpenHarmony Test smoke is
+[OpenHarmony CI](<../.github/workflows/openharmony-runtime.yml>) covers test,
+audit, and fuzz on `linux/amd64` and `linux/arm64`. Test/audit retain QEMU
+cross-architecture checks. Fuzz uses a matching native runner for each platform;
+its Dockerfile still offers a compile/ELF-only arm64 build check for QEMU,
+which is not dynamic sanitizer evidence. OpenHarmony Test smoke is
 `hdc version` / `hdc -v` plus the source-tool check; either command reporting
 `Ver:` is enough (qemu/no-daemon may print `Connect server failed` on the
-other), and it must not require a real device. It is path-filtered to the
-OpenHarmony Dockerfiles, the `openharmony-*.sh` scripts, the vendored
-`gitcode-repo-py3` launcher and official `toolchains/hdc` slice, the Test
-runtime manifest, `.dockerignore`, the shared
-fingerprint/cache scripts, and its own workflow file. Release still publishes
-all three OpenHarmony products.
+other), and it must not require a real device. Path filters include the
+OpenHarmony Dockerfiles, scripts, vendored repo/hdc tools, Test manifest,
+manuals, fingerprint/cache inputs and the [Fuzz behavior probe](<../agent-harness/test-openharmony-fuzz-runtime.mjs>).
+
+Toolchain baseline checked 2026-11-01: [Fuzz Dockerfile](<../deploy/Dockerfile.agent-openharmony-fuzz>)
+pins matching Debian LLVM/compiler-rt 19 and builds checksum-pinned AFL++ 4.32c
+against the same LLVM PCGUARD plugin. This retains default PIE/ASLR and
+ASan/UBSan/libFuzzer; replacing only the smoke flags or Clang alias would leave
+the actual AFL build path broken. The image and helper set `AFL_UBSAN_VERBOSE=1`
+at compile time, retaining specific non-recovering UBSan reports instead of
+trap-only signals. The probe resolves the actual compiler plugin argument to
+its installed PCGUARD path; spelling the same path with `bin/../lib` is valid.
+Exact pins and host-tool limitations are in
+the Dockerfile and [toolchain guide](<RUNTIME_TEST_TOOLCHAINS.md>).
+
+Fresh **and reused** Fuzz candidates must pass offline environment/manual checks
+and the same native behavior probe: fixed independent launches through the
+original C command and both production helper engines, actual ASan/UBSan error
+reports, and distinct nonempty AFL branch maps. Only then may CI pin its
+single-architecture source cache. [Release](<../.github/workflows/release.yml>)
+selects one immutable multi-platform candidate, tests it on both native
+architectures, then pins new source cache and publishes version tags/descriptors.
+A cache hit, QEMU ELF check, version string, or partial image push cannot replace
+these checks. Actual acceptance is the exact source SHA, candidate digest and
+Actions logs, not this contract text or a synthetic target's product quality.
+Release still publishes all three OpenHarmony products.
+
+诊断记录（2026-11-01）：[原 Release 的 OH Fuzz job](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948/job/124831086342)
+在 ASan/libFuzzer 启动时退出 139；原日志没有栈，不能仅凭退出码断言根因。
+[固定源码/基础镜像诊断](https://github.com/SummerSec/DeepSonar/actions/runs/41305345014)
+以原 C 源码和参数复现 20 次中的 8 次崩溃，GDB 显示高熵 PIE 映射落入 LLVM 14 ASan
+固定主分配器保留区。所选 LLVM 19 包含 [上游最终修复](https://github.com/llvm/llvm-project/commit/fb77ca05ffb4f8e666878f2f6718a9fb4d686839)。
+[独立启动对比](https://github.com/SummerSec/DeepSonar/actions/runs/41306403494)
+固定 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 和 base
+`sha256:29f7d8b63d4a323295ba204d83e682a43698d648b965899287b818547a7b5220`：
+LLVM 14 对照 7/20 失败，匹配 LLVM 19 候选 20/20 通过，均保留原 flags、PIE 和宿主 ASLR。
+这是有限诊断，不是实际 AFL 工具链、arm64 或正式发布验收；不重跑旧 Release 碰运气，
+修复走正常 PR 和最终 SHA Actions，既有未发布 tag 的恢复仍须单独明确授权。
 
 ### Reverse 原生发布硬门（#718）
 

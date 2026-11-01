@@ -1,6 +1,6 @@
 # DeepSonar 文档索引
 
-> 状态：v0.6.3 集成文档索引；根工作树实现、历史验证和当前验收缺口分别记录。
+> 状态：v0.6.3 工程集成已合并；发布修复、历史验证和正式发行状态分别记录。
 > 同步日期：2026-11-01
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
 
@@ -9,9 +9,9 @@
 > **任务目标证据（#767）**：契约、候选、来源隔离评审、非 Finding 结果与确定性报告已接线。可信只读 authority/grant 绑定当前身份、动作、前提和版本，子/系统 Job 统一继承并在 provision/重跑实时重核，见 [ADR 0011](architecture/adr/0011-trusted-target-authorization.md)。独立程序资格由 [#822 操作员评审](PROGRAM_ELIGIBILITY.md) 投影；目标授权、技术 Verify、判据、Plan 完成与资格各自分责。无契约仍 unassessed，验收见[矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
 
 > **任务下发（2026-10-29，#767）**：可选版本化契约、共享场景模板、结构化补充建议及派发前复核见[下发指南](../skills/deepsonar-management/references/task-dispatch.md)与 [FR-TASK-006](architecture/01-system-specification.md#fr-task-006-版本化任务契约与派发前校验)。结构化一致性与真实模型质量收益分开验收；未知身份/写权限不当作已授权。
-> **Plan v2（#775）**：当前执行接口只接收 v2，v1 的目标边界是不可变历史只读；普通 Hub 的 v1 writer 已在 2026-10-31 物理删除，历史 `hub_intent_adapter` audit 仍只读。用户 objective CAS、有限 lifetime 预算、多轮路线及留存输出检查复用既有 Intent admission；当前 owner/Canvas/项目绑定的 continue 事件消费水位防止终态和重启重计，单元回归已验、新 SQL 场景最终 SHA CI 待验；工程 complete 和输出关联不授予语义完成 authority，仍需全判据当前正向操作员授权。根本地回放已完成 normal→all7negative→normal 三次退出 0，当前 v2 SQL/HTTP fixture 的 17 个 outcomes/traces 与七个注入故障门禁匹配；artifact 报告 provenance 不是 `5619154f` 的精确 SHA，最终组合 CI 仍未验收。见 [ADR 0012](architecture/adr/0012-plan-v2-execution.md)、[运行时](architecture/06-runtime-view.md)与 [Plan 专题](PLAN_GAP_PROJECTION.md)。
+> **Plan v2（#775）**：当前执行接口只接收 v2，普通 Hub 的 v1 writer 已删除，历史 audit 仍只读。objective CAS、有限 lifetime 预算、多轮路线及留存输出检查复用既有 Intent admission，持久 continue 消费水位防止终态和重启重计；工程 complete 和输出关联不授予语义完成 authority。该工程切片已随下述 `fdb55a01` 主线 Actions 验收，历史本地回放不是后续 SHA 的证明。见 [ADR 0012](architecture/adr/0012-plan-v2-execution.md)、[运行时](architecture/06-runtime-view.md)与 [Plan 专题](PLAN_GAP_PROJECTION.md)。
 
-> **Finding quality engineering (2026-11-01, #770/#819)**: Identity/relation and lexical/weak-candidate mechanisms remain distinct. Root schema67 now adds partial protocol/freeze/exposure receipts, exact-bigint CAS, bounded actual-SQL observations/recomputed reports and protected structural review/revoke. [FR-FIND-007/009](<architecture/01-system-specification.md>), [ADR 0014](<architecture/adr/0014-operator-finding-identity.md>) and [evaluation status](<PROJECT_FINDING_EVALUATION.md>) preserve not_evaluated/published=false. Host external-fact verification, current certificates/promotion/guarded publication are missing; independent labels/aliases/provenance, verified family/asset partitions and pre-access adopted thresholds remain unverified. Source-loader capture is TCB evidence, not self-signature or human-quality proof; no whole #819 delivery or current CI pass is asserted.
+> **Finding quality engineering (2026-11-01, #770/#819)**: Identity/relation and lexical/weak-candidate mechanisms remain distinct. Root schema67 now adds partial protocol/freeze/exposure receipts, exact-bigint CAS, bounded actual-SQL observations/recomputed reports and protected structural review/revoke. [FR-FIND-007/009](<architecture/01-system-specification.md>), [ADR 0014](<architecture/adr/0014-operator-finding-identity.md>) and [evaluation status](<PROJECT_FINDING_EVALUATION.md>) preserve not_evaluated/published=false. Host external-fact verification, current certificates/promotion/guarded publication are missing; independent labels/aliases/provenance, verified family/asset partitions and pre-access adopted thresholds remain unverified. Source-loader capture is TCB evidence, not self-signature or human-quality proof. The engineering slice passed the exact-main Actions listed below and #819 closed within the agreed scope; deferred quality and Host certification/promotion are not delivered.
 
 > **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
@@ -27,7 +27,7 @@
 > **当前同步状态（2026-10-31）**：当前契约不向后兼容，冻结 Job/证据/审计历史保持不可变。#690 的旧凭据绑定与 RoleConfig Pi 扩展字段、#674/#676 的旧项目镜像机制均已删除；能力、凭据、镜像仍由内核准入和 Job 快照冻结。schema 只按[源码编号](../apps/scheduler/src/schema-version.ts)与[唯一基线](../database/schema.sql)核对；本批 full rebuild 已用固定历史 v62/v63/v64 数据和七张新 relation 表完成 pg_dump/pg_restore 验证，无 pending 项（2026-10-31 主线程证据）。其余当前边界见 [DESIGN](../DESIGN.md) 与[架构索引](architecture/README.md)。
 
 
-> **集成/发布证据（2026-10-31）**：本批以用户确认已正式发布且不可变的 v0.6.2 为基线。完整 CI `41186374980` 通过 SHA `e23c3b4f`，仅覆盖较早 #822/#825，不能证明当前组合。当前根分范围完整套件及 schema rebuild/CLI plan/apply/备份恢复已通过，分母见[验收矩阵](TASK_DISPATCH_ACCEPTANCE.md#v063-集成证据范围2026-10-31)；实际本地 base 镜像 canonical RPC/独立生产 guard 已通过，集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。当前 PR 远端 CI、最终 main CI 与发布通道/平台、registry/catalog 证据仍未完成。必须全部 issue 实现、全部 PR 绿灯后再合并，最终 main 检查通过后才准备 v0.6.3。生产部署/真实模型不要求执行，人工质量缺口不豁免。发布细则见 [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md)。
+> **集成/发布证据（2026-11-01）**：[#831](https://github.com/SummerSec/DeepSonar/pull/831) 最终 PR 与合并主线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 的六个适用 Actions 工作流已全绿，本轮工程 issue 已关闭，schema67 重建/备份恢复已在 Actions 验收。此前本地和较早 SHA 记录保留为历史，不能覆盖新修复。正式 [Release](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 的 OpenHarmony Fuzz 新构建失败；匹配工具链和 fresh/reuse 原生 sanitizer 回归须通过正常修复 PR 的 Actions 验收，不能靠缓存命中或重跑旧版本宣称修复。v0.6.3 尚未正式发布，tag 保持原位；已发布 v0.6.2 不变。最终修复 SHA、镜像通道、签名、catalog 与正式附件须实际成功，见[发布专题](<RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)；暂缓质量和 #833/#834/#835 不替代当前红灯修复。
 
 > **阅读顺序（Agent / 贡献者）**  
 > 1. 仓库根 [`DESIGN.md`](../DESIGN.md) — as-built 产品与设计摘要  
@@ -76,7 +76,7 @@
 | [PI_OBSERVATIONAL_MEMORY.md](PI_OBSERVATIONAL_MEMORY.md) | **#815 A 历史评审背景** | 当前实现细则以上述集成/Gateway/RPC 专题为准；早期比例方案不能覆盖当前显式分配契约，v0.6.2 镜像不含 OM |
 | [PROGRAM_ELIGIBILITY.md](PROGRAM_ELIGIBILITY.md) | **#822 as-built 工程边界** | 操作员见证材料与独立评审、证据失效和当前资格投影；不认证外部官方真实性，不授予目标执行或任务完成 authority |
 | [RUNTIME_IMAGE_REGISTRY_CONTRACT.md](RUNTIME_IMAGE_REGISTRY_CONTRACT.md) | **as-built**（#70 / #417） | 官方镜像 catalog v2、通道、平台/运行时版本轴、`min_runtime_image` fail-closed |
-| [RUNTIME_TEST_TOOLCHAINS.md](RUNTIME_TEST_TOOLCHAINS.md) | **as-built** | Kali Test / Verify Base 与 Mobile 工具链边界；#754 Rust ASC 默认、Python 显式回退及真实 APK/双架构验收边界 |
+| [RUNTIME_TEST_TOOLCHAINS.md](RUNTIME_TEST_TOOLCHAINS.md) | **as-built；执行证据另计** | Kali Test / Verify Base 与 Mobile 边界；OH Fuzz 匹配 LLVM/AFL 工具链与原生 sanitizer 回归；#754 Rust ASC 默认、Python 显式回退及真实 APK/双架构验收边界 |
 | [RUNTIME_ROLE_IMAGE_MATRIX.md](RUNTIME_ROLE_IMAGE_MATRIX.md) | **as-built**（#565 / #588） | 角色×官方镜像默认、工具范围、不包含、Scheduler 边界注入；#588 起每镜附带 `/opt/deepsonar/manuals` 工具说明书与 CI 门禁 |
 | [RUNTIME_TOOL_MANUALS.md](RUNTIME_TOOL_MANUALS.md) | **as-built**（#588） | 14 个官方镜像的离线工具手册契约、发现方式、构建与验收门禁 |
 | [语言服务器能力](LANGUAGE_SERVER_CAPABILITIES.md) | #604 受治理 `language-server.clangd`（phase 1） |
