@@ -42,13 +42,14 @@ export async function createPlanExecutionFixture() {
     process.env.DATABASE_URL = databaseUrl.toString(); process.env.BLOB_DIR = blob;
     process.env.AGENT_MODE = "fake"; process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
     process.env.DEEPSONAR_AUTH_REQUIRED = "false";
-    const [{ default: Fastify }, { default: websocket }, { migrate, sql }, { registerRoutes }, core, api, { createAttempt }, { executeGraphQuery }, { ControlInputError }] = await Promise.all([
+    const [{ default: Fastify }, { default: websocket }, { migrate, sql }, { registerRoutes }, core, api, { createAttempt }, { executeGraphQuery }, { ControlInputError }, { createSqlJobLifecycleApplication }] = await Promise.all([
       import("fastify"), import("@fastify/websocket"), import("./db.js"), import("./routes.js"),
       import("./core.js"), import("./domains/platform-api/index.js"), import("./domains/job-attempt/application.js"),
-      import("./graph-query.js"), import("./control-input.js"),
+      import("./graph-query.js"), import("./control-input.js"), import("./domains/job-lifecycle/application.js"),
     ]);
     closeSql = () => sql.end({ timeout: 5 }); unregister = api.unregisterRuntimeHandler;
     await migrate();
+    const lifecycle = createSqlJobLifecycleApplication(sql);
     const app: FastifyInstance = Fastify({ logger: false }); await app.register(websocket); registerRoutes(app); await app.ready();
     closeApp = () => app.close();
     const runtimes = new Map<string, { token: string; attempt: string }>();
@@ -56,10 +57,14 @@ export async function createPlanExecutionFixture() {
     const handlers = new Map<string, PlatformRuntimeHandler>();
     const operations = ["submit_plan", "submit_plan_result", "submit_hub_decision", "graph_query", "emit_fact", "mark_job_done", "request_human"];
     const start = async (job: string) => {
-      await sql`UPDATE jobs SET status='provisioning' WHERE id=${job}`;
+      assert.ok(await lifecycle.claimPendingJob(job), "fixture start must claim a pending Job once");
+      assert.ok(await lifecycle.transitionJob(job, "provisioning"), "fixture provisioning must pass lifecycle CAS");
       const attempt = String((await createAttempt(sql, job)).id);
       const grant = await api.mintJobCapabilityToken(job);
-      await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '10 minutes' WHERE id=${job}`;
+      const startedAt = new Date();
+      assert.ok(await lifecycle.transitionJob(job, "running", {
+        started_at: startedAt, lease_expires_at: new Date(startedAt.getTime() + 10 * 60 * 1000),
+      }), "fixture running must pass lifecycle CAS");
       await api.activateProvisionedJobCapabilityTokens(job);
       const handler: PlatformRuntimeHandler = async (context) => {
         if (context.planPhase === "abort") return {};
@@ -88,6 +93,20 @@ export async function createPlanExecutionFixture() {
       handlers.set(job, handler); api.registerRuntimeHandler(job, handler, operations);
       jobs.push(job); runtimes.set(job, { token: grant.token, attempt });
       return { token: grant.token, attempt };
+    };
+    const retryTruncated = async (job: string) => {
+      assert.equal(process.env.AGENT_MODE, "fake", "fixture retry never executes a real runtime");
+      const runtime = runtimes.get(job);
+      assert.ok(runtime, "fixture retry requires its already-bound runtime");
+      const [current] = await sql`SELECT j.status,a.id AS attempt_id FROM jobs j
+        JOIN job_attempts a ON a.job_id=j.id AND a.status='active' WHERE j.id=${job}`;
+      assert.equal(current?.status, "running", "fixture retry cannot resurrect a terminal Job");
+      assert.equal(String(current?.attempt_id), runtime.attempt, "fixture retry must own the current Attempt");
+      const effects = await sql`SELECT id FROM job_attempt_effects WHERE attempt_id=${runtime.attempt}`;
+      assert.equal(effects.length, 0, "fixture retry cannot replay any recorded external effect");
+      assert.ok(await lifecycle.retryTruncatedExecution(job, "Offline fixture stream truncated", {}, {}),
+        "fixture retry must pass the Scheduler-owned running CAS");
+      return start(job);
     };
     const invoke = (job: string, operation: string, payload: unknown, key = randomUUID()): Promise<LightMyRequestResponse> => app.inject({
       method: "POST", url: `/control/v1/jobs/${job}/operations/${operation}`,
@@ -149,6 +168,6 @@ export async function createPlanExecutionFixture() {
     };
     const state = async (canvas: string) => (await sql`SELECT target_json FROM canvases WHERE id=${canvas}`)[0].target_json;
     const rebind = (job: string) => api.registerRuntimeHandler(job, handlers.get(job)!, operations);
-    return { sql, app, api, core, blob, start, rebind, invoke, fixture, task, proposal, children, emit, finish, state, holdPlanCommit, close };
+    return { sql, app, api, core, blob, start, retryTruncated, rebind, invoke, fixture, task, proposal, children, emit, finish, state, holdPlanCommit, close };
   } catch (error) { await close(); throw error; }
 }
