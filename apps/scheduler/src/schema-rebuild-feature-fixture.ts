@@ -17,7 +17,8 @@ const V63_COMMIT = "0841f8272ab1c9c64fdfeddba7aff53f2d5c856d";
 const FEATURE_TABLES = ["project_finding_feature_scan", "project_finding_feature_work", "project_finding_features"];
 const CANDIDATE_TABLES = ["project_finding_candidate_scan", "project_finding_candidate_work", "project_finding_candidate_sources", "project_finding_candidate_edges"];
 const RELATION_TABLES = ["project_finding_identity_sources", "project_finding_identity_source_revisions", "project_finding_identity_mappings", "project_finding_relation_scan", "project_finding_relation_sources", "project_finding_relation_work", "project_finding_relations"];
-const DERIVED_TABLES = [...FEATURE_TABLES, ...CANDIDATE_TABLES, ...RELATION_TABLES];
+const QUALITY_TABLES = ["project_finding_quality_protocols", "project_finding_quality_records", "project_finding_quality_heads", "project_finding_quality_current", "project_finding_quality_work", "project_finding_quality_observations"];
+const DERIVED_TABLES = [...FEATURE_TABLES, ...CANDIDATE_TABLES, ...RELATION_TABLES, ...QUALITY_TABLES];
 const FEATURE_INDEXES = ["project_finding_feature_work_due", "project_finding_features_project", "findings_project_scan_idx"];
 
 function schemaV63(): string {
@@ -121,7 +122,7 @@ export async function runFeatureSchemaRebuildFixture(testUrl: string): Promise<v
       assert.equal((await db`SELECT to_regclass(${'public.' + name})::text AS name`)[0].name, name);
     }
     assert.deepEqual((await db`SELECT id,cursor_id FROM project_finding_feature_scan`).map(row => ({ ...row })), [{ id: "global", cursor_id: null }]);
-    for (const name of ["project_finding_feature_work", "project_finding_features", ...RELATION_TABLES.filter((table) => table !== "project_finding_relation_scan")]) {
+    for (const name of ["project_finding_feature_work", "project_finding_features", ...RELATION_TABLES.filter((table) => table !== "project_finding_relation_scan"), ...QUALITY_TABLES]) {
       assert.equal(Number((await db.unsafe(`SELECT count(*) AS n FROM ${name}`))[0].n), 0);
     }
 
