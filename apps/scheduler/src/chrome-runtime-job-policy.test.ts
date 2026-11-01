@@ -46,9 +46,10 @@ test("Chrome runtime policy accepts egress, rejects false, and leaves non-Chrome
 
 test("Job creation freezes the canvas policy and ignores payload policy", async () => {
   let target: Record<string, unknown> = { network_policy: { allow_egress: false } };
-  const db = ((strings: TemplateStringsArray) => {
-    assert.match(strings[0] ?? "", /SELECT project_id, target_json FROM canvases/);
-    return Promise.resolve([{ target_json: target }]);
+  const db = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+    assert.equal(strings.join("?").replace(/\s+/g, " ").trim(), "SELECT project_id, target_json FROM canvases WHERE id = ? FOR SHARE");
+    assert.deepEqual(values, ["canvas-1"]);
+    return Promise.resolve([{ project_id: "project-1", target_json: target }]);
   }) as never;
   const snapshot = await freezeAgentSnapshotNetworkPolicy(db, "canvas-1", {
     runtime_image: { image_key: "deepsonar-audit" },
@@ -57,9 +58,10 @@ test("Job creation freezes the canvas policy and ignores payload policy", async 
   assert.equal(snapshot.network_policy.allow_egress, false);
   target = { network_policy: { allow_egress: true } };
   assert.equal(requireFrozenSnapshotAllowEgress(snapshot), false, "later canvas changes cannot alter a Job snapshot");
-  const chromeDb = ((strings: TemplateStringsArray) => {
-    assert.match(strings[0] ?? "", /SELECT project_id, target_json FROM canvases/);
-    return Promise.resolve([{ target_json: { network_policy: { allow_egress: false } } }]);
+  const chromeDb = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+    assert.equal(strings.join("?").replace(/\s+/g, " ").trim(), "SELECT project_id, target_json FROM canvases WHERE id = ? FOR SHARE");
+    assert.deepEqual(values, ["canvas-1"]);
+    return Promise.resolve([{ project_id: "project-1", target_json: { network_policy: { allow_egress: false } } }]);
   }) as never;
   await assert.rejects(
     () => freezeAgentSnapshotNetworkPolicy(
@@ -80,9 +82,10 @@ test("Job creation freezes the canvas policy and ignores payload policy", async 
 });
 
 test("malformed canvas policy and missing Job snapshot fail closed", async () => {
-  const malformed = ((strings: TemplateStringsArray) => {
-    assert.match(strings[0] ?? "", /SELECT project_id, target_json FROM canvases/);
-    return Promise.resolve([{ target_json: { network_policy: { allow_egress: "true" } } }]);
+  const malformed = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+    assert.equal(strings.join("?").replace(/\s+/g, " ").trim(), "SELECT project_id, target_json FROM canvases WHERE id = ? FOR SHARE");
+    assert.deepEqual(values, ["canvas-1"]);
+    return Promise.resolve([{ project_id: "project-1", target_json: { network_policy: { allow_egress: "true" } } }]);
   }) as never;
   await assert.rejects(
     () => freezeAgentSnapshotNetworkPolicy(malformed, "canvas-1", { runtime_image: { image_key: "deepsonar-audit" } }),
@@ -154,10 +157,14 @@ test("all direct Job creation paths freeze policy before INSERT", () => {
     assert.ok(freeze >= 0, `${name} must freeze network policy`);
     assert.ok(insert > freeze, `${name} must freeze before inserting a Job`);
   }
+  assert.ok(eventSideEffectsSource.indexOf("async function prepareHubIntent") >= 0);
   const eventFollowup = eventSideEffectsSource.slice(eventSideEffectsSource.indexOf("async function applySideEffects"));
   const prepare = eventFollowup.indexOf("await prepareHubIntent(");
   const materialize = eventFollowup.indexOf("await materializePreparedHubIntent(");
   assert.ok(prepare >= 0 && materialize > prepare, "event follow-up must prepare and freeze every Intent before materialization");
+  const materializer = eventSideEffectsSource.slice(eventSideEffectsSource.indexOf("async function materializePreparedHubIntent"), eventSideEffectsSource.indexOf("async function materializePlanTask"));
+  assert.match(materializer, /snapshot,[\s\S]*\} = prepared;/);
+  assert.match(materializer, /agent_snapshot_json: snapshot as never/);
 });
 
 test("Chrome runtimes raise stall floors without changing the global 900s default", () => {
