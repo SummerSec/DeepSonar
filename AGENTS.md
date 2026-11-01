@@ -21,7 +21,7 @@
 开始改动前按以下顺序阅读：
 
 1. [`DESIGN.md`](DESIGN.md)：当前 as-built 模型、内核边界、Hub、Capability Pack、Job、Verify、Research、Report、UI 和实现硬约束；
-2. [`docs/architecture/README.md`](docs/architecture/README.md)：系统规格、追溯矩阵、对应架构视图与 ADR；按改动面读取权威正文；
+2. [`docs/architecture/README.md`](docs/architecture/README.md)：系统规格、追溯矩阵、架构视图与 ADR；按改动面读取权威正文；
 3. [`docs/README.md`](docs/README.md)：专题文档的 as-built / 历史 / 进行中状态；
 4. [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)：长期 AI-native 可信内核、插件准入、RepairFeedback、Receipt 和 Crash Matrix；
 5. 代码、`database/schema.sql`、OpenAPI 和测试。
@@ -255,7 +255,7 @@ Canvas 只读，Web 对当前可见投影使用 elkjs 布局，超阈值或失�
    - 写上核对基线（`main <sha>` 或 `YYYY-MM-DD`，二者至少一项），例如「`DEEPSONAR_JOB_TOKEN_MAX_REQUESTS` 未设置即 0 = 不限（核对 main `2b76ac25`）」；
    - 或**不复制数字**，直接指向代码或权威文档（如 [USAGE_LIMITS.md](docs/USAGE_LIMITS.md)、`apps/scheduler/src/config.ts`）。
 
-   禁止写「本 PR 基线默认 N」「当前默认 N」这类**无归属的数字**。理由：这类漂移机检抓不到——实测案例是 `DEEPSONAR_JOB_TOKEN_MAX_REQUESTS` 默认值从 500 改为 0（不限），而一份文档的「生产默认 N」在 `docs-freshness` 全绿的情况下静默过期了整轮。若同一数字同时存在于权威文档（如 `USAGE_LIMITS.md`），其他文档应链接而不复述。
+   禁止写「本 PR 基线默认 N」「当前默认 N」这类**无归属的数字**。理由：这类漂移机检抓不到——实测案例是 `DEEPSONAR_JOB_TOKEN_MAX_REQUESTS` 默认值从 500 改为 0（不限），而一份文档的「本 PR 基线默认 500」在 `docs-freshness` 全绿的情况下静默过期了整轮。若同一数字同时存在于权威文档（如 `USAGE_LIMITS.md`），其他文档应链接而不复述。
 
 其中 1 的版本字面量、5 的命令与链接、以及 2 的已删机制残留已由 `pnpm ci:unit:docs-freshness` 机检并在 CI 中阻断；**第 3 项（as-built 与代码相反）与第 6 项（可变数字的时效）无法自动化**，必须人工逐条核——这正是本条硬门不能省的理由。
 
