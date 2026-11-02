@@ -61,3 +61,6 @@ fi
 
 usage >&2
 exit 2
+
+# Probe (#836): verifies the Draft fast path defers specialist matrices and that
+# the same SHA turning Ready re-triggers them. Comment-only, no behaviour change.
