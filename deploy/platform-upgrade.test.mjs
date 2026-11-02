@@ -458,3 +458,110 @@ test('missing or malformed preflight success cannot authorize apply', async () =
     assert.equal(f.paused(), false); assert.equal(f.state(), null);
   }
 });
+
+// #845 defect 1: dual-stack hosts with a dead AAAA path made every catalog fetch
+// time out while `curl` succeeded, and the single attempt had no retry at all.
+import {loadReleaseCatalog, fetchReleaseCatalog, preferIpv4Addresses, RELEASE_RETRY_DELAYS_MS} from './platform-upgrade-host.mjs';
+import { getDefaultResultOrder } from 'node:dns';
+
+const jsonResponse = (body, status = 200) => ({status, ok: status >= 200 && status < 300, json: async () => body});
+
+test('catalog fetch prefers IPv4 and stays idempotent', () => {
+  assert.equal(preferIpv4Addresses(), 'ipv4first');
+  assert.equal(preferIpv4Addresses(), 'ipv4first');
+  assert.equal(getDefaultResultOrder(), 'ipv4first');
+});
+
+test('transient catalog failures are retried with the documented backoff', async () => {
+  const order = [], delays = [];
+  const fetchImpl = async url => {
+    order.push(url);
+    return order.length < 3 ? jsonResponse({}, 503) : jsonResponse({platform_version: '0.6.4'});
+  };
+  const catalog = await fetchReleaseCatalog('https://example.invalid/catalog.json', {
+    fetchImpl, sleep: async delay => { delays.push(delay); },
+  });
+  assert.equal(order.length, 3);
+  assert.deepEqual(delays, [RELEASE_RETRY_DELAYS_MS[0], RELEASE_RETRY_DELAYS_MS[1]]);
+  assert.equal(catalog.platform_version, '0.6.4');
+});
+
+test('a missing release fails immediately instead of retrying', async () => {
+  const attempts = [], delays = [];
+  await assert.rejects(fetchReleaseCatalog('https://example.invalid/catalog.json', {
+    fetchImpl: async () => { attempts.push(1); return jsonResponse({}, 404); },
+    sleep: async delay => { delays.push(delay); },
+  }), error => error.code === 'RELEASE_NOT_FOUND');
+  assert.equal(attempts.length, 1);
+  assert.deepEqual(delays, []);
+});
+
+test('non-retryable client errors and invalid JSON are not retried', async () => {
+  const statuses = [];
+  await assert.rejects(fetchReleaseCatalog('https://example.invalid/catalog.json', {
+    fetchImpl: async () => { statuses.push(403); return jsonResponse({}, 403); },
+    sleep: async () => { throw new Error('must not sleep'); },
+  }), error => error.code === 'RELEASE_FETCH_FAILED');
+  assert.equal(statuses.length, 1);
+
+  await assert.rejects(fetchReleaseCatalog('https://example.invalid/catalog.json', {
+    fetchImpl: async () => ({status: 200, ok: true, json: async () => { throw new SyntaxError('bad json'); }}),
+    sleep: async () => { throw new Error('must not sleep'); },
+  }), error => error.code === 'RELEASE_CATALOG_INVALID');
+});
+
+test('network errors are retried and the exhaustion message reports the attempt count', async () => {
+  const delays = [], attempts = [];
+  await assert.rejects(fetchReleaseCatalog('https://example.invalid/catalog.json', {
+    fetchImpl: async () => { attempts.push(1); throw Object.assign(new Error('Connect Timeout Error'), {code: 'UND_ERR_CONNECT_TIMEOUT'}); },
+    sleep: async delay => { delays.push(delay); },
+  }), error => error.code === 'RELEASE_FETCH_FAILED' && error.attempts === 4 && /after 4 attempt/.test(error.message));
+  assert.equal(attempts.length, 4);
+  assert.deepEqual(delays, [...RELEASE_RETRY_DELAYS_MS]);
+});
+
+test('a network error is retried then succeeds', async () => {
+  let calls = 0;
+  const catalog = await fetchReleaseCatalog('https://example.invalid/catalog.json', {
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('ECONNRESET');
+      return jsonResponse({platform_version: '0.6.4'});
+    },
+    sleep: async () => {},
+  });
+  assert.equal(calls, 2);
+  assert.equal(catalog.platform_version, '0.6.4');
+});
+
+test('an explicit catalog file bypasses the network entirely', async () => {
+  const catalog = await loadReleaseCatalog({
+    source: '/srv/mirror/runtime-image-registry.json',
+    url: 'https://example.invalid/catalog.json',
+    fetchImpl: async () => { throw new Error('network must not be used'); },
+    readFileImpl: async () => JSON.stringify({platform_version: '0.6.4'}),
+  });
+  assert.equal(catalog.platform_version, '0.6.4');
+});
+
+test('an explicit catalog URL keeps retry semantics', async () => {
+  const urls = [];
+  const catalog = await loadReleaseCatalog({
+    source: 'https://mirror.invalid/runtime-image-registry.json',
+    url: 'https://example.invalid/catalog.json',
+    fetchImpl: async url => {
+      urls.push(url);
+      return urls.length === 1 ? jsonResponse({}, 502) : jsonResponse({platform_version: '0.6.4'});
+    },
+    sleep: async () => {},
+  });
+  assert.deepEqual(urls, ['https://mirror.invalid/runtime-image-registry.json', 'https://mirror.invalid/runtime-image-registry.json']);
+  assert.equal(catalog.platform_version, '0.6.4');
+});
+
+test('unreadable and malformed catalog files fail with explicit codes', async () => {
+  await assert.rejects(loadReleaseCatalog({source: '/nope.json', readFileImpl: async () => { throw new Error('ENOENT'); }}),
+    error => error.code === 'RELEASE_CATALOG_UNREADABLE');
+  await assert.rejects(loadReleaseCatalog({source: '/bad.json', readFileImpl: async () => '{not json'}),
+    error => error.code === 'RELEASE_CATALOG_INVALID');
+});
