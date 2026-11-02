@@ -179,3 +179,5 @@ export function resolvePlatformImageValues(target, currentValues, { channel } = 
 // probe(#836): sample 8
 
 // probe(#836): sample 9
+
+// probe(#836): sample 10
