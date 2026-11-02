@@ -65,12 +65,14 @@ test("a killed Scheduler process leaves a replayable durable completion (#835)",
   await admin.unsafe(`CREATE DATABASE "${name}"`);
   const url = new URL(databaseUrl!); url.pathname = `/${name}`;
   const children: Child[] = [];
-  const [{ sql, migrate }, api, { createAttempt }] = await Promise.all([
-    import("../../db.js"), import("./index.js"), import("../job-attempt/application.js"),
-  ]);
   try {
-    // The parent process points at the same isolated database the children use.
+    // The parent process must point at the isolated database *before* db.js is loaded,
+    // otherwise the parent would write to the runner's default database while the children
+    // read the isolated one (the first CI run hung for exactly that reason).
     process.env.DATABASE_URL = url.toString();
+    const [{ sql, migrate }, api, { createAttempt }] = await Promise.all([
+      import("../../db.js"), import("./index.js"), import("../job-attempt/application.js"),
+    ]);
     await migrate();
     const projectId = randomUUID(), jobId = randomUUID();
     await sql`INSERT INTO projects(id,name) VALUES(${projectId},'crash test')`;
@@ -85,8 +87,11 @@ test("a killed Scheduler process leaves a replayable durable completion (#835)",
     children.push(first);
     await first.ready;
     const pending = post(first.port, jobId, grant.token, key, payload).catch(() => "no response");
-    const exited = once(first.child, "exit");
-    const [code, signal] = await exited as [number | null, NodeJS.Signals | null];
+    const exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("the crash child never exited: SIGKILL window not reached")), 90_000);
+      first.child.once("exit", (code, signal) => { clearTimeout(timer); resolve([code, signal]); });
+    });
+    const [code, signal] = await exited;
     await pending;
     assert.equal(signal, "SIGKILL", `the crash window must be a real SIGKILL, got ${code ?? signal}`);
 
