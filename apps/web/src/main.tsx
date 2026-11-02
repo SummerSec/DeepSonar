@@ -19,3 +19,5 @@ createRoot(document.getElementById("root")!).render(
     </BrowserRouter>
   </StrictMode>,
 );
+
+// probe(#836): sample marker 1

@@ -998,6 +998,11 @@ jobs:
       - name: Workspace typecheck
         run: pnpm -r typecheck
 
+      # Suites import workspace packages through their built dist (for example
+      # @deepsonar/shared-types), exactly like the full gate does after build.
+      - name: Workspace build
+        run: pnpm -r build
+
       - name: Mapped no-service unit suites
         env:
           FAST_SUITES: ${{ needs.changes.outputs.fast_suites }}
