@@ -14,9 +14,10 @@ import {verifyMaintenanceWeb, assertMaintenanceDatabase, assertRollbackConnectio
 import {readSourceActivation, resumeRollback} from './platform-upgrade-maintenance-recovery.mjs';
 import {loadManagedInventory, maintenanceNodes} from './platform-upgrade-maintenance-nodes.mjs';
 import {createMaintenanceTransport, durablePrivateWrite, readPrivateJson, assertDirectoryDurability} from './platform-upgrade-maintenance-transport.mjs';
+import {PLATFORM_IMAGE_KEYS, platformImageKey} from './platform-release-catalog.mjs';
 
-const services = ['scheduler', 'web', 'image-admission'];
-const imageKeys = ['DEEPSONAR_SCHEDULER_IMAGE', 'DEEPSONAR_WEB_IMAGE', 'DEEPSONAR_IMAGE_ADMISSION_IMAGE'];
+const services = [...PLATFORM_IMAGE_KEYS];
+const imageKeys = services.map(platformImageKey);
 const hash = value => createHash('sha256').update(value).digest('hex');
 // #845: image admission can leave scans claimed/running after its worker dies.
 // A scan older than this window no longer holds a live claim; blocking the
@@ -31,7 +32,12 @@ const claimsSql = `SELECT json_build_object('claims_paused',claims_paused,'reaso
 'in_flight',json_build_object('total',(SELECT count(*) FROM jobs WHERE status IN ('claimed','provisioning','running'))),
 'effect_pending_attempts',(SELECT count(*) FROM job_attempt_effects WHERE status='effect_pending'),
 'unknown_effect_attempts',(SELECT count(*) FROM job_attempt_effects WHERE status='unknown')) FROM global_settings WHERE id='global'`;
-const valuesFor = target => target.values ?? Object.fromEntries([['DEEPSONAR_VERSION', target.version], ...services.map((service, i) => [imageKeys[i], target.images[service].registry_refs.github])]);
+// #842: values come from the journaled target, already resolved against the
+// deployment's current registry channel by hostAdapter.release().
+const valuesFor = target => {
+  if (!target?.values || typeof target.values !== 'object') throw new Error('maintenance target is missing resolved platform image values');
+  return target.values;
+};
 
 export function maintenanceHostAdapter(options = {}) {
   const root = resolve(options.directory ?? dirname(fileURLToPath(import.meta.url)));
@@ -384,6 +390,7 @@ UPDATE platform_upgrade_state SET phase='active' WHERE id='global'; COMMIT; SELE
         for (const service of ['scheduler', 'image-admission']) {
           const id = dc(['ps', '-q', service]).toString().trim();
           if (!/^[a-f0-9]{12,64}$/.test(id)) throw new Error('rollback source container missing');
+          // pi-lens-ignore: unchecked-throwing-call-js
           const entries = JSON.parse(run(['inspect', '--format', '{{json .Config.Env}}', id]).toString());
           const urls = entries.filter(entry => entry.startsWith('DATABASE_URL='));
           if (urls.length !== 1) throw new Error('rollback source database connection mismatch');

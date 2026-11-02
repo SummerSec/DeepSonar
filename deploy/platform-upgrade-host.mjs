@@ -12,10 +12,11 @@ import { getDefaultResultOrder, setDefaultResultOrder } from 'node:dns';
 import { assertDrained, verifyBackup } from './platform-upgrade.mjs';
 import { CONFIG_SNAPSHOT_SQL, preflightBlock, targetConfigurationPreflight } from './platform-upgrade-preflight.mjs';
 import { verifyPlatformRelease } from '../agent-harness/check-platform-release.mjs';
+import { PLATFORM_IMAGE_KEYS, PLATFORM_IMAGE_CHANNEL_NAMES, platformImageKey, platformImageRefPattern, resolvePlatformImageValues } from './platform-release-catalog.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
-const keys = { scheduler: 'DEEPSONAR_SCHEDULER_IMAGE', web: 'DEEPSONAR_WEB_IMAGE', 'image-admission': 'DEEPSONAR_IMAGE_ADMISSION_IMAGE' };
-const services = Object.keys(keys);
+const services = [...PLATFORM_IMAGE_KEYS];
+const keys = Object.fromEntries(services.map(service => [service, platformImageKey(service)]));
 const maxBuffer = 512 * 1024 * 1024;
 
 export function platformValues(contents) {
@@ -24,7 +25,8 @@ export function platformValues(contents) {
     const lines = contents.split(/\r?\n/).filter(line => new RegExp(`^\\s*(?:export\\s+)?${key}(?:\\s*[=:]|\\s*$)`).test(line));
     if (lines.length !== 1 || !lines[0].startsWith(`${key}=`)) throw new Error(`ambiguous/missing ${key}`);
     const value = lines[0].slice(key.length + 1);
-    if (key === 'DEEPSONAR_VERSION' ? !/^\d+\.\d+\.\d+$/.test(value) : !new RegExp(`^(?:ghcr\\.io/summersec|docker\\.io/summersec|crpi-6s5wwv0nhl6dq1l0\\.cn-hangzhou\\.personal\\.cr\\.aliyuncs\\.com/summersec)/deepsonar-${Object.keys(keys).find(name => keys[name] === key)}@sha256:[a-f0-9]{64}$`).test(value)) {
+    const service = services.find(name => keys[name] === key);
+    if (key === 'DEEPSONAR_VERSION' ? !/^\d+\.\d+\.\d+$/.test(value) : !platformImageRefPattern(service).test(value)) {
       throw new Error(`unsupported ${key}; upgrade requires official registry digest references for the matching service`);
     }
     result[key] = value;
@@ -120,6 +122,15 @@ export async function loadReleaseCatalog({source, url, fetchImpl = fetch, sleep 
     throw catalogError('RELEASE_CATALOG_INVALID', `catalog file ${source} is not valid JSON`);
   }
 }
+/**
+ * Resolve a release catalog platform object against a deployment `.env`
+ * (#842): keep the registry channel the deployment already uses unless the
+ * operator names one explicitly. Exported so the host policy is testable
+ * without network access or Docker.
+ */
+export function resolveReleaseTarget(platform, envContents, { channel } = {}) {
+  return { ...platform, values: resolvePlatformImageValues(platform, platformValues(envContents), { channel }) };
+}
 
 async function atomic(path, contents) {
   const temp = `${path}.tmp`;
@@ -155,6 +166,7 @@ export function hostAdapter(options = {}) {
   const deploymentTarget = () => {
     const context = commandEnv.DOCKER_CONTEXT || (commandEnv.DOCKER_HOST ? null : run(['context', 'show']).toString().trim());
     const endpoint = context
+      // pi-lens-ignore: unchecked-throwing-call-js
       ? JSON.parse(run(['context', 'inspect', context, '--format', '{{json .Endpoints.docker.Host}}']).toString())
       : commandEnv.DOCKER_HOST;
     if (!endpoint || (context !== null && !context)) throw new Error('cannot identify Docker deployment target');
@@ -179,15 +191,24 @@ export function hostAdapter(options = {}) {
     if (!response.ok) throw new Error(`management API ${path} failed (${response.status})`);
     return response.json();
   };
-  const imageValues = target => target.values ?? Object.fromEntries([
-    ['DEEPSONAR_VERSION', target.version], ...services.map(service => [keys[service], target.images[service].registry_refs.github]),
-  ]);
+  // #842: the target must carry values resolved from the deployment's current
+  // registry channel. Never fall back to a hard-coded channel here — a silent
+  // switch rewrites .env and pulls from a registry the operator never chose.
+  const targetValues = target => {
+    const values = target?.values;
+    if (!values || typeof values !== 'object') throw new Error('upgrade target is missing resolved platform image values; resolve them from the deployment .env first');
+    return values;
+  };
+  // Resolve the published channel that matches this deployment's current .env
+  // (#842). VerifyPlatformRelease rejects unknown catalog keys, so a release
+  // asset cannot smuggle pre-resolved values past this step.
+  const withResolvedValues = async platform => resolveReleaseTarget(platform, await readFile(envPath, 'utf8'), { channel: options.registryChannel });
   const verifyImages = target => {
     for (const service of services) {
       const container = dc(['ps', '-q', service]).toString().trim();
       if (!container || container.includes('\n')) throw new Error('expected one platform container per service');
       const actual = run(['inspect', '--format', '{{.Config.Image}}', container]).toString().trim();
-      if (actual !== imageValues(target)[keys[service]]) throw new Error(`${service} digest verification failed`);
+      if (actual !== targetValues(target)[keys[service]]) throw new Error(`${service} digest verification failed`);
     }
   };
   const adapter = {
@@ -226,7 +247,7 @@ export function hostAdapter(options = {}) {
       });
       verifyPlatformRelease(catalog);
       if (version && catalog.platform.version !== version) throw new Error('release version mismatch');
-      return catalog.platform;
+      return withResolvedValues(catalog.platform);
     },
     async current() {
       const values = parseValues(await readFile(envPath, 'utf8'));
@@ -238,13 +259,13 @@ export function hostAdapter(options = {}) {
       verifyImages(current);
       return current;
     },
-    async pull(target) { for (const service of services) run(['pull', imageValues(target)[keys[service]]]); },
+    async pull(target) { for (const service of services) run(['pull', targetValues(target)[keys[service]]]); },
     async preflight(target) {
       let remoteCount;
       try { remoteCount = sql("SELECT count(*) FROM worker_nodes WHERE kind='remote'"); }
       catch { return preflightBlock('HOST_WORKER_SNAPSHOT_FAILED', 'host.worker_nodes', 'Could not verify the single-host upgrade prerequisite.'); }
       if (remoteCount !== '0') return preflightBlock('HOST_REMOTE_WORKERS_UNSUPPORTED', 'host.worker_nodes', 'Remote workers require a coordinated upgrade; this CLI supports one Compose host only.');
-      return targetConfigurationPreflight({target, values: imageValues(target), commandEnv, dc, run, snapshotSql: CONFIG_SNAPSHOT_SQL});
+      return targetConfigurationPreflight({target, values: targetValues(target), commandEnv, dc, run, snapshotSql: CONFIG_SNAPSHOT_SQL});
     },
     async schemaPlan() { throw new Error('schema differs: review target schema-rebuild-cli --plan with a read-only database role; automatic rebuild is not supported'); },
     claims: () => request('/platform/claims'),
@@ -293,7 +314,7 @@ export function hostAdapter(options = {}) {
     },
     async configure(target) {
       let contents = await readFile(envPath, 'utf8'); parseValues(contents);
-      for (const [key, value] of Object.entries(imageValues(target))) contents = contents.replace(new RegExp(`^${key}=.*$`, 'gm'), `${key}=${value}`);
+      for (const [key, value] of Object.entries(targetValues(target))) contents = contents.replace(new RegExp(`^${key}=.*$`, 'gm'), `${key}=${value}`);
       parseValues(contents); await atomic(envPath, contents);
     },
     // #845: podman does not run the periodic healthcheck by itself, so `compose up --wait`
@@ -318,6 +339,7 @@ export function hostAdapter(options = {}) {
       verifyImages(target);
       dc(['exec', '-T', 'web', 'node', '-e', "fetch('http://127.0.0.1:8080/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]);
       if (options.webUrl) {
+        // pi-lens-ignore: unchecked-throwing-call-js
         const url = new URL(options.webUrl);
         if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', '[::1]', 'localhost'].includes(url.hostname))) throw new Error('Web URL must use HTTPS or loopback HTTP');
         const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(15_000) });
@@ -335,9 +357,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const [action, ...args] = process.argv.slice(2), options = {};
   for (let i = 0; i < args.length; i += 2) {
     if (args[i] === '--reset-role-identity') {options.resetRoleIdentity = true; i -= 1; continue;}
-    const key = { '--version': 'version', '--to': 'version', '--api': 'api', '--web-url': 'webUrl', '--web': 'webUrl', '--compose-file': 'composeFiles', '--approve-plan-hash': 'approvedPlanHash', '--nodes': 'nodes', '--policy': 'policy', '--scheduler': 'scheduler', '--node-path': 'nodePath', '--catalog': 'catalog' }[args[i]];
-    if (!key || !args[i + 1]) throw new Error('usage: check|apply|rollback|resume-rollback|auto [--to vX.Y.Z] [--policy FILE] [--api URL] [--web-url URL] [--compose-file FILE ...] [--catalog FILE|URL]');
+    const key = { '--version': 'version', '--to': 'version', '--api': 'api', '--web-url': 'webUrl', '--web': 'webUrl', '--compose-file': 'composeFiles', '--approve-plan-hash': 'approvedPlanHash', '--nodes': 'nodes', '--policy': 'policy', '--scheduler': 'scheduler', '--node-path': 'nodePath', '--catalog': 'catalog', '--registry-channel': 'registryChannel' }[args[i]];
+    if (!key || !args[i + 1]) throw new Error('usage: check|apply|rollback|resume-rollback|auto [--to vX.Y.Z] [--policy FILE] [--api URL] [--web-url URL] [--compose-file FILE ...] [--catalog FILE|URL] [--registry-channel CHANNEL]');
     if (key === 'composeFiles') (options[key] ??= []).push(args[i + 1]); else options[key] = args[i + 1];
+  }
+  // #842: changing registry is an explicit, CLI-only operator decision.
+  if (options.registryChannel !== undefined && !PLATFORM_IMAGE_CHANNEL_NAMES.includes(options.registryChannel)) {
+    throw new Error(`unsupported --registry-channel ${options.registryChannel}; expected one of ${PLATFORM_IMAGE_CHANNEL_NAMES.join(', ')}`);
   }
   try {
     if (action === 'auto-template') {

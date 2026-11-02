@@ -51,6 +51,20 @@ Linux 使用 `flock` 和文件/目录 `fsync`；Windows 原生后端使用本地
 - 只有 `started_at`（无则 `created_at`）在最近 **10 分钟**内的 `claimed`/`running` 扫描才算仍未结算，会阻断升级；
 - 超出窗口的行视为被遗弃的僵尸行（admission worker 崩溃/重启遗弃），不阻断，但会以 `stale` 计数出现在错误信息里；
 - 窗口可用 `scanLeaseMinutes` 覆盖（测试与特殊环境用），不做静默放宽。
+### 平台镜像 registry 通道（#842）
+
+`.env` 里三条平台镜像引用各自带完整 registry 前缀。**升级默认沿用当前部署已在用的通道，不静默迁移**：控制器按当前引用在目标 release 清单的 `registry_refs` 里做唯一匹配，命中恰好一个通道才继续；清单没有该通道时 fail closed（`UPGRADE_REGISTRY_CHANNEL_UNRESOLVED`），`.env` 一个字节都不会被改写。
+
+- 通道定义只有一处权威：`deploy/platform-release-catalog.mjs`（`github` / `dockerhub` / `aliyun-acr`，Docker Hub 命名空间是 `sumsec`）。Release 侧的 `agent-harness/generate-runtime-image-registry.mjs` 也 import 这份定义，不再各存一份。
+- 想主动换 registry 才用显式开关：
+
+```bash
+./deploy/deploy.sh upgrade apply --to vX.Y.Z --registry-channel github --approve-plan-hash <hash>
+```
+
+  三个平台服务必须同时发布在该通道，否则整单失败（不允许三个服务跨两个 registry）。
+- **签名通道与部署通道是两件事**：cosign attestation 只发布在 GHCR，因此 `upgrade auto` 的签名验证恒用 `registry_refs.github`，即使部署在 ACR / Docker Hub 也如此。不要把签名验证改成跟随 `.env`。
+- 回滚仍按源代记录的引用恢复（`state.current.values`），不会把通道写回成 GHCR。
 
 默认关闭的 `upgrade auto`、维护窗口、签名准入和禁用调度模板见 [自动升级说明](UPGRADE_AUTOMATION.md)。生产 Release keyless 签名权限及实际正向链路尚未启用或验收，不能据临时密钥测试宣称生产无人值守升级已可用。
 

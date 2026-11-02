@@ -1,24 +1,32 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+// #842: channel identity is owned by the deploy-side catalog contract so the
+// release generator and the host upgrade CLI cannot drift apart.
+import {
+  PLATFORM_IMAGE_CHANNEL_NAMES as CHANNELS,
+  PLATFORM_IMAGE_CHANNELS as REF_POLICIES,
+} from "../deploy/platform-release-catalog.mjs";
 
-const parse = (path) => JSON.parse(readFileSync(path, "utf8"));
+const parse = (path) => {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    // Release generator is fail-fast: an unparsable descriptor must abort the
+    // release run instead of degrading to a synthesised catalog.
+    return fail(`invalid JSON: ${path}`);
+  }
+};
 
 const VERSION_RE = /^v?\d+\.\d+\.\d+(-[a-z0-9][a-z0-9.-]*)?$/;
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const PLATFORM_RE = /^[a-z0-9]+\/[a-z0-9][a-z0-9._-]*$/;
 const IMAGE_KEY_RE = /^[a-z][a-z0-9-]{1,62}$/;
-const CHANNELS = ["github", "dockerhub", "aliyun-acr"];
 const AVAILABLE_PROVENANCE = {
   github: "build-push+inspect",
   dockerhub: "cross-registry-copy+inspect",
   "aliyun-acr": "cross-registry-copy+inspect",
 };
 const UNAVAILABLE_REASON_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const REF_POLICIES = {
-  github: { host: "ghcr.io", namespace: "summersec" },
-  dockerhub: { host: "docker.io", namespace: "sumsec" },
-  "aliyun-acr": { host: "crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com", namespace: "summersec" },
-};
 const EXPECTED_KEYS = [
   "deepsonar-base",
   "deepsonar-audit",
@@ -517,6 +525,7 @@ function expectedImagesFromTemplate(template) {
 
 function loadMinRuntimeImage() {
   if (process.env.MIN_RUNTIME_IMAGE) {
+    // pi-lens-ignore: unchecked-throwing-call-js
     return assertMinRuntimeImage(JSON.parse(process.env.MIN_RUNTIME_IMAGE));
   }
   const minPath = process.env.MIN_RUNTIME_IMAGE_FILE

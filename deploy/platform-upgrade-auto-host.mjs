@@ -7,6 +7,15 @@ import {maintenanceHostAdapter} from './platform-upgrade-maintenance-host.mjs';
 import {createMaintenanceTransport, durablePrivateWrite, readPrivateJson} from './platform-upgrade-maintenance-transport.mjs';
 import {AUTO_POLICY_SCHEMA, validateAutoPolicy, inMaintenanceWindow, autoError} from './platform-upgrade-auto-policy.mjs';
 import {runAutomaticUpgrade} from './platform-upgrade-auto.mjs';
+import {PLATFORM_IMAGE_KEYS} from './platform-release-catalog.mjs';
+
+// #842: cosign attestations are published on the GitHub registry only
+// (platform-signature-publication.mjs freezes images = registry_refs.github), so
+// signature verification stays pinned to github even when the host deploys from
+// Aliyun ACR or Docker Hub. This is the SIGNATURE channel, not the deployment
+// channel — do not follow .env here.
+export const signatureImages = target => Object.fromEntries(
+  PLATFORM_IMAGE_KEYS.map(service => [service, target.images[service].registry_refs.github]));
 
 export async function runHostAutomatic(options = {}) {
   if (options.version || options.approvedPlanHash || options.resetRoleIdentity) throw autoError('AUTO_MANUAL_OPTIONS_FORBIDDEN');
@@ -34,7 +43,7 @@ export async function runHostAutomatic(options = {}) {
     verifySignatures: async (target, signaturePolicy) => {
       const {verifyPlatformSignatures} = await import('./platform-upgrade-signature.mjs');
       return verifyPlatformSignatures({target: {version: target.version, commit_sha: target.commit_sha, schema_version: target.schema_version,
-        images: Object.fromEntries(['scheduler', 'web', 'image-admission'].map(service => [service, target.images[service].registry_refs.github]))}, policy: signaturePolicy});
+        images: signatureImages(target)}, policy: signaturePolicy});
     },
   }, {policy}));
 }

@@ -234,6 +234,11 @@ const verificationTarget = {
   images: Object.fromEntries(['scheduler', 'web', 'image-admission'].map(service => [service, {
     registry_refs: {github: `ghcr.io/summersec/deepsonar-${service}@sha256:${'a'.repeat(64)}`},
   }])),
+  // #842: resolved against the deployment's current registry channel before use.
+  values: Object.fromEntries([
+    ['DEEPSONAR_VERSION', '1.2.3'],
+    ...['scheduler', 'web', 'image-admission'].map(service => [`DEEPSONAR_${service.replaceAll('-', '_').toUpperCase()}_IMAGE`, `ghcr.io/summersec/deepsonar-${service}@sha256:${'a'.repeat(64)}`]),
+  ]),
 };
 const pausedResponse = {claims_paused: true, reason: 'platform_upgrade', drained: true, in_flight: {total: 0}, effect_pending_attempts: 0, unknown_effect_attempts: 0};
 
@@ -564,4 +569,94 @@ test('unreadable and malformed catalog files fail with explicit codes', async ()
     error => error.code === 'RELEASE_CATALOG_UNREADABLE');
   await assert.rejects(loadReleaseCatalog({source: '/bad.json', readFileImpl: async () => '{not json'}),
     error => error.code === 'RELEASE_CATALOG_INVALID');
+});
+
+// #842: upgrading must not migrate the deployment's registry channel. The
+// forward path used to hard-code `registry_refs.github` while rollback restored
+// the original ACR refs, so a single `apply` silently moved hosts to ghcr.io.
+import { resolveReleaseTarget } from './platform-upgrade-host.mjs';
+import { PLATFORM_IMAGE_KEYS, PLATFORM_IMAGE_CHANNELS, platformImageKey } from './platform-release-catalog.mjs';
+
+const ACR_HOST = PLATFORM_IMAGE_CHANNELS['aliyun-acr'].host;
+const githubImage = service => `ghcr.io/summersec/deepsonar-${service}@sha256:${'a'.repeat(64)}`;
+const acrImage = service => `${ACR_HOST}/summersec/deepsonar-${service}@sha256:${'b'.repeat(64)}`;
+const dockerhubImage = service => `docker.io/sumsec/deepsonar-${service}@sha256:${'c'.repeat(64)}`;
+const platformCatalog = channels => ({
+  version: '0.6.3', schema_version: 65,
+  images: Object.fromEntries(PLATFORM_IMAGE_KEYS.map(service => [service, {
+    digest: `sha256:${'a'.repeat(64)}`,
+    registry_refs: Object.fromEntries(channels.map(channel => [channel, {github: githubImage, 'aliyun-acr': acrImage, dockerhub: dockerhubImage}[channel](service)])),
+  }])),
+});
+const deploymentEnv = image => ['DEEPSONAR_VERSION=0.6.2', ...PLATFORM_IMAGE_KEYS.map(service => `${platformImageKey(service)}=${image(service)}`)].join('\n') + '\n';
+
+function upgradeDirectory(image) {
+  const temp = mkdtempSync(join(tmpdir(), 'ds-registry-channel-'));
+  writeFileSync(join(temp, '.env'), deploymentEnv(image));
+  return {temp, envPath: join(temp, '.env'), cleanup: () => rmSync(temp, {recursive: true, force: true})};
+}
+
+test('an Aliyun ACR deployment keeps ACR references through configure (#842)', async () => {
+  const fixtureDir = upgradeDirectory(acrImage);
+  try {
+    const target = resolveReleaseTarget(platformCatalog(['github', 'aliyun-acr']), readFileSync(fixtureDir.envPath, 'utf8'));
+    await hostAdapter({directory: fixtureDir.temp, run: () => Buffer.alloc(0)}).configure(target);
+    const written = readFileSync(fixtureDir.envPath, 'utf8');
+    for (const service of PLATFORM_IMAGE_KEYS) {
+      assert.ok(written.includes(`${platformImageKey(service)}=${acrImage(service)}`), `${service} must stay on ACR`);
+      assert.doesNotMatch(written, new RegExp(`^${platformImageKey(service)}=ghcr\\.io`, 'm'));
+    }
+    assert.match(written, /^DEEPSONAR_VERSION=0\.6\.3$/m);
+  } finally {
+    fixtureDir.cleanup();
+  }
+});
+
+test('an explicit registry channel is the only way configure migrates all three services (#842)', async () => {
+  const fixtureDir = upgradeDirectory(acrImage);
+  try {
+    const target = resolveReleaseTarget(platformCatalog(['github', 'aliyun-acr']), readFileSync(fixtureDir.envPath, 'utf8'), {channel: 'github'});
+    await hostAdapter({directory: fixtureDir.temp, run: () => Buffer.alloc(0)}).configure(target);
+    const written = readFileSync(fixtureDir.envPath, 'utf8');
+    for (const service of PLATFORM_IMAGE_KEYS) assert.ok(written.includes(`${platformImageKey(service)}=${githubImage(service)}`));
+    assert.doesNotMatch(written, /aliyuncs\.com/);
+  } finally {
+    fixtureDir.cleanup();
+  }
+});
+
+test('a target without resolved values fails closed and leaves .env untouched (#842)', async () => {
+  const fixtureDir = upgradeDirectory(acrImage);
+  try {
+    const before = readFileSync(fixtureDir.envPath, 'utf8');
+    const io = hostAdapter({directory: fixtureDir.temp, run: () => Buffer.alloc(0)});
+    const unresolved = platformCatalog(['github', 'aliyun-acr']);
+    await assert.rejects(io.configure(unresolved), /missing resolved platform image values/);
+    await assert.rejects(io.pull(unresolved), /missing resolved platform image values/);
+    assert.equal(readFileSync(fixtureDir.envPath, 'utf8'), before);
+  } finally {
+    fixtureDir.cleanup();
+  }
+});
+
+test('a release catalog without the deployment channel fails closed without rewriting .env (#842)', async () => {
+  const fixtureDir = upgradeDirectory(acrImage);
+  try {
+    const before = readFileSync(fixtureDir.envPath, 'utf8');
+    assert.throws(
+      () => resolveReleaseTarget(platformCatalog(['github']), before),
+      error => error.code === 'UPGRADE_REGISTRY_CHANNEL_UNRESOLVED',
+    );
+    assert.equal(readFileSync(fixtureDir.envPath, 'utf8'), before);
+  } finally {
+    fixtureDir.cleanup();
+  }
+});
+
+test('platform values accept both official Docker Hub forms of the namespace only (#842)', () => {
+  const accepted = deploymentEnv(dockerhubImage);
+  assert.equal(platformValues(accepted).DEEPSONAR_WEB_IMAGE, dockerhubImage('web'));
+  // `docker.io/summersec` is not a published namespace; only `sumsec` is.
+  assert.throws(() => platformValues(deploymentEnv(service => dockerhubImage(service).replace('sumsec', 'summersec'))), /official registry/);
+  assert.throws(() => platformValues(deploymentEnv(service => `127.0.0.1:55000/summersec/deepsonar-${service}@sha256:${'a'.repeat(64)}`)), /official registry/);
 });
