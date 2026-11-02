@@ -1,5 +1,43 @@
 import {spawnSync} from 'node:child_process';
 export {assertDirectoryDurability, durablePrivateWrite, readPrivateJson} from './platform-upgrade-filesystem.mjs';
+
+const STDOUT_LIMIT = 512 * 1024 * 1024;
+const STDERR_LIMIT = 400;
+
+/** Bounded, credential-free stderr excerpt for operator triage (#845). */
+function redactDiagnostic(text) {
+  return String(text ?? '')
+    .replace(/postgres(?:ql)?:\/\/[^\s]+/gu, 'postgres://<redacted>')
+    .replace(/PGPASSWORD=\S+/gu, 'PGPASSWORD=<redacted>')
+    .replace(/\bpassword=\S+/giu, 'password=<redacted>')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, STDERR_LIMIT);
+}
+
+/**
+ * A Docker operation failed only when the child exit status is not allowed.
+ * #845: a successful child can still hand Node an EPIPE (`pg_restore --list` stops
+ * reading stdin once the TOC is parsed), so `error` alone must never fail a run.
+ */
+export const isRunFailure = (result, allowed = [0]) => !allowed.includes(result?.status);
+
+/**
+ * Failure detail that is safe to log: exit status, signal and error code were
+ * missing before (#845) — the operator saw only `output suppressed`. Stderr stays
+ * hidden unless DEEPSONAR_UPGRADE_DEBUG_STDERR opts in, because this module must
+ * never surface PostgreSQL diagnostics.
+ */
+export function runFailureMessage(args, result, {debugStderr = process.env.DEEPSONAR_UPGRADE_DEBUG_STDERR === '1'} = {}) {
+  const details = [
+    `docker ${args?.[0] ?? '<unknown>'} exit ${result?.status ?? 'none'}`,
+    result?.signal ? `signal ${result.signal}` : null,
+    result?.error?.code ? `error ${result.error.code}` : null,
+  ].filter(Boolean).join(', ');
+  const stderr = debugStderr ? redactDiagnostic(result?.stderr?.toString?.() ?? '') : '';
+  return `maintenance Docker operation failed (${details})${stderr ? `: ${stderr}` : ''}`;
+}
+
 // Constant program; all connection credentials and SQL arrive on stdin. Never
 // interpolate them in command arguments or surface PostgreSQL diagnostics.
 export const SQL_PROGRAM = `const postgres=require('/app/apps/scheduler/node_modules/postgres');
@@ -10,8 +48,10 @@ const rows=[...sets].reverse().find(x=>x.length)||[];process.stdout.write(JSON.s
 finally{await db.end({timeout:5});}})().catch(()=>{process.stderr.write('maintenance SQL failed');process.exitCode=1;});`;
 export function createMaintenanceTransport({compose, commandEnv, run: injectedRun}) {
   const run = injectedRun ?? ((args, input, env = commandEnv, allowed = [0]) => {
-    const result = spawnSync('docker', args, {input, env, maxBuffer: 512 * 1024 * 1024, timeout: 600_000});
-    if (result.error || !allowed.includes(result.status)) throw new Error('maintenance Docker operation failed; output suppressed');
+    const result = spawnSync('docker', args, {input, env, maxBuffer: STDOUT_LIMIT, timeout: 600_000});
+    // #845: the exit status decides the outcome; EPIPE after a successful child
+    // (podman) must not be reported as a failed upgrade step.
+    if (isRunFailure(result, allowed)) throw new Error(runFailureMessage(args, result));
     return allowed.length > 1 ? {stdout: result.stdout, status: result.status} : result.stdout;
   });
   const dc = (args, input, env = commandEnv) => run([...compose, ...args], input, env);

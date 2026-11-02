@@ -200,7 +200,11 @@ export function hostAdapter(options = {}) {
       for (const [key, value] of Object.entries(imageValues(target))) contents = contents.replace(new RegExp(`^${key}=.*$`, 'gm'), `${key}=${value}`);
       parseValues(contents); await atomic(envPath, contents);
     },
-    start: async () => { dc(['up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', ...services]); },
+    // #845: podman does not run the periodic healthcheck by itself, so `compose up --wait`
+    // would block until the timeout with a container that is already serving /health.
+    // verify() asserts readiness over HTTP (ok + ready + version) and schema, which is the
+    // stronger gate; do not reintroduce --wait here.
+    start: async () => { dc(['up', '-d', '--no-deps', ...services]); },
     async verify(target) {
       // Compose health only proves HTTP 200. Scheduler runtime-image/gateway
       // warmup is asynchronous and can still be preparing after compose --wait.
