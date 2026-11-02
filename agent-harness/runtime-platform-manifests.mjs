@@ -21,9 +21,41 @@ export function immutableImageRepository(ref) {
 
 export function inspectRuntimeManifest(ref) {
   immutableImageRepository(ref);
-  return JSON.parse(execFileSync("docker", ["buildx", "imagetools", "inspect", "--raw", ref], {
+  const raw = execFileSync("docker", ["buildx", "imagetools", "inspect", "--raw", ref], {
     encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 120_000, windowsHide: true,
-  }));
+  });
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Fail closed with a diagnosable message instead of a bare SyntaxError.
+    fail(`buildx returned an unparsable manifest for ${ref}`);
+  }
+}
+
+/** True when the failure means "this engine has no buildx imagetools", not "the image is wrong". */
+export function isMissingBuildx(error) {
+  const text = `${error?.stderr ?? ""} ${error?.stdout ?? ""} ${error?.message ?? ""}`;
+  return /unknown (?:flag|command)|imagetools|not a docker command|unrecognized command|buildx: not found|executable file not found/iu.test(text);
+}
+
+/**
+ * Engine-agnostic manifest inspection (#845): prefer docker buildx, fall back to the
+ * Registry v2 API when the engine has no buildx (podman/buildah). The fallback keeps
+ * digest, media-type, platform and child-digest verification; see registry-v2-manifests.mjs.
+ */
+export async function inspectRuntimeManifestAsync(ref, {run = execFileSync, fetchImpl = fetch} = {}) {
+  immutableImageRepository(ref);
+  try {
+    return JSON.parse(run("docker", ["buildx", "imagetools", "inspect", "--raw", ref], {
+      encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 120_000, windowsHide: true,
+    }));
+  } catch (error) {
+    if (!isMissingBuildx(error)) throw error;
+  }
+  // Loaded lazily: the synchronous release scripts copy this module into a fixture
+  // directory without its neighbours, and the fallback is only needed on a host.
+  const { inspectRegistryManifest } = await import("./registry-v2-manifests.mjs");
+  return inspectRegistryManifest(ref, {fetchImpl});
 }
 
 // A wrapper/index digest includes attestations and annotations. Only runnable
@@ -94,6 +126,11 @@ export function parsePlatformSources(argv) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const { sourceRefs } = resolveRuntimePlatformSources(parsePlatformSources(process.argv.slice(2)));
-  console.log(sourceRefs.join("\n"));
+  try {
+    const { sourceRefs } = resolveRuntimePlatformSources(parsePlatformSources(process.argv.slice(2)));
+    console.log(sourceRefs.join("\n"));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "invalid platform sources");
+    process.exitCode = 1;
+  }
 }

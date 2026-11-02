@@ -18,6 +18,9 @@
 - **平台升级不再静默改写镜像 registry 通道（#842）**：`platform-upgrade-host.mjs` 的写入路径原先固定取 `registry_refs.github`，读取路径却接受三个通道，于是按官方 `deploy/.env.example` 部署在阿里云 ACR 的宿主机执行 `apply` 后被改写成 `ghcr.io`（`pull`/`verifyImages` 同源）。现在升级默认沿用当前部署已在用的通道，按 `.env` 的仓库前缀在目标清单 `registry_refs` 里唯一匹配，匹配不到或匹配到多个即 fail closed 且不改写 `.env`；`--registry-channel github|dockerhub|aliyun-acr` 是唯一的显式迁移入口，三个平台服务必须同时在该通道发布。
 - **Docker Hub 命名空间拼写与 allowlist 漂移**：升级 CLI 手抄的 allowlist 写的是 `docker.io/summersec`，官方命名空间是 `sumsec`（`docker.io/sumsec`），导致 Docker Hub 部署无法升级。通道与命名空间现由 `deploy/platform-release-catalog.mjs` 单点定义，release 侧的 `generate-runtime-image-registry.mjs` 反过来 import 它，不再两份副本。
 - **签名通道与部署通道解耦**：`upgrade auto` 的 cosign 验证恒用 `registry_refs.github`（attestation 只发布在 GHCR），与部署通道无关；新增回归守卫防误改。
+- **无 docker buildx 的宿主（podman/buildah）也能校验发布清单（#845 缺陷 2）**：升级的跨 registry digest 校验原先只能走 `docker buildx imagetools inspect --raw`，podman 别名下 `buildx` 落到 buildah，直接 `unknown flag: --raw`，`upgrade check` 与 `apply` 全部无法启动。现在引擎无关地选择可用实现：优先 buildx；缺失时走 Registry v2 API，并按**同样的强度**校验——请求钉在不可变 digest 上、响应体自行 sha256 必须等于该 digest、只接受 OCI index / Docker manifest-list / 单 manifest 媒体类型，平台集合与子 manifest digest 仍由原校验逻辑判定，cosign 签名校验不变。凭据缺失、状态异常、digest 不符一律 fail closed，并给出一条可执行说明（配置该 registry 凭据，或用有 buildx 的宿主），不回退放行。
+- **宿主身份不再依赖 `docker context`（#845 缺陷 2）**：podman 没有 `context` 子命令。部署目标改按「`DOCKER_CONTEXT` → `DOCKER_HOST` → `docker info` 报出的 engine id / 主机名」顺序绑定**真实身份**，全部拿不到时 fail closed 并说明缺什么；不使用固定占位身份，因此 check/apply/rollback 之间仍能发现「换了一台部署目标」。
+- 新增 `agent-harness/registry-v2-manifests.mjs` 与 `agent-harness/test-registry-v2-manifests.mjs`（离线回归），并把 `verifyPlatformReleaseAsync` 接入宿主升级；`pnpm ci:unit:runtime-registry` 覆盖新用例。
 
 ## [0.6.4] - 2026-11-02
 

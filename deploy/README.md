@@ -65,6 +65,18 @@ Linux 使用 `flock` 和文件/目录 `fsync`；Windows 原生后端使用本地
   三个平台服务必须同时发布在该通道，否则整单失败（不允许三个服务跨两个 registry）。
 - **签名通道与部署通道是两件事**：cosign attestation 只发布在 GHCR，因此 `upgrade auto` 的签名验证恒用 `registry_refs.github`，即使部署在 ACR / Docker Hub 也如此。不要把签名验证改成跟随 `.env`。
 - 回滚仍按源代记录的引用恢复（`state.current.values`），不会把通道写回成 GHCR。
+### 引擎兼容：没有 docker buildx 也能升级（#845）
+
+升级的第一步要按不可变 digest 校验发布清单（digest、平台集合、子 manifest、签名）。原先只能用 `docker buildx imagetools inspect --raw`，在 podman/buildah 宿主上直接报 `unknown flag: --raw`。现在自动选择可用实现：
+
+| 引擎能力 | 校验路径 |
+| --- | --- |
+| 有 docker buildx | 原路径不变 |
+| 无 buildx（podman/buildah） | Registry v2 `GET /v2/<repo>/manifests/<digest>`，响应体自行 sha256 必须等于请求的 digest；只接受 OCI index / Docker manifest-list / 单 manifest 媒体类型 |
+
+两条路径之后都走同一套平台集合与子 manifest 校验，cosign 签名验证恒用 GHCR 引用、不随之变化。**校验失败不会因回退而放行**：凭据缺失、HTTP 异常、内容类型不符、digest 不符都会 fail closed，并给出该配凭据还是该换宿主的具体说明。
+
+部署目标身份同样不依赖 `docker context`：`DOCKER_CONTEXT` → `DOCKER_HOST` → `docker info` 报出的 engine id / 主机名，取第一个可用的**真实**身份；三者都没有时升级直接拒绝启动，不用占位符。
 
 默认关闭的 `upgrade auto`、维护窗口、签名准入和禁用调度模板见 [自动升级说明](UPGRADE_AUTOMATION.md)。生产 Release keyless 签名权限及实际正向链路尚未启用或验收，不能据临时密钥测试宣称生产无人值守升级已可用。
 
