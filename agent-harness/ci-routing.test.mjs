@@ -14,8 +14,8 @@ const workflow = parse(source);
 const jobs = workflow.jobs;
 const classify = jobs.changes.steps.find((step) => step.id === "classify").run;
 const summary = jobs["ci-summary"].steps.find((step) => step.name === "Verify required results").run;
-const heavy = ["windows-upgrade-backend", "gate", "runtime-images", "chrome-fuzz-arm64-build", "chrome-fuzz-arm64"];
-const resultVars = ["WINDOWS", "GATE", "IMAGES", "FUZZ_BUILD", "FUZZ"];
+const heavy = ["windows-upgrade-backend", "crash-recovery", "gate", "runtime-images", "chrome-fuzz-arm64-build", "chrome-fuzz-arm64"];
+const resultVars = ["WINDOWS", "CRASH", "GATE", "IMAGES", "FUZZ_BUILD", "FUZZ"];
 const runSummary = (overrides = {}) => spawnSync("bash", ["-c", summary], {
   env: { ...process.env, CHANGES: "success", DOCS: "success", DOCS_ONLY: "false", MODE: "ready-full", PLAN_STATUS: "ok",
     ...Object.fromEntries(resultVars.map((name) => [name, "success"])), ...overrides }, encoding: "utf8",
