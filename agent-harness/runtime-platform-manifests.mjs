@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { inspectRegistryManifest } from "./registry-v2-manifests.mjs";
 
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const PLATFORM_RE = /^[a-z0-9]+\/[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9._-]+)?$/;
@@ -24,6 +25,29 @@ export function inspectRuntimeManifest(ref) {
   return JSON.parse(execFileSync("docker", ["buildx", "imagetools", "inspect", "--raw", ref], {
     encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 120_000, windowsHide: true,
   }));
+}
+
+/** True when the failure means "this engine has no buildx imagetools", not "the image is wrong". */
+export function isMissingBuildx(error) {
+  const text = `${error?.stderr ?? ""} ${error?.stdout ?? ""} ${error?.message ?? ""}`;
+  return /unknown (?:flag|command)|imagetools|not a docker command|unrecognized command|buildx: not found|executable file not found/iu.test(text);
+}
+
+/**
+ * Engine-agnostic manifest inspection (#845): prefer docker buildx, fall back to the
+ * Registry v2 API when the engine has no buildx (podman/buildah). The fallback keeps
+ * digest, media-type, platform and child-digest verification; see registry-v2-manifests.mjs.
+ */
+export async function inspectRuntimeManifestAsync(ref, {run = execFileSync, fetchImpl = fetch} = {}) {
+  immutableImageRepository(ref);
+  try {
+    return JSON.parse(run("docker", ["buildx", "imagetools", "inspect", "--raw", ref], {
+      encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 120_000, windowsHide: true,
+    }));
+  } catch (error) {
+    if (!isMissingBuildx(error)) throw error;
+  }
+  return inspectRegistryManifest(ref, {fetchImpl});
 }
 
 // A wrapper/index digest includes attestations and annotations. Only runnable

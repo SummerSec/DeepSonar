@@ -660,3 +660,47 @@ test('platform values accept both official Docker Hub forms of the namespace onl
   assert.throws(() => platformValues(deploymentEnv(service => dockerhubImage(service).replace('sumsec', 'summersec'))), /official registry/);
   assert.throws(() => platformValues(deploymentEnv(service => `127.0.0.1:55000/summersec/deepsonar-${service}@sha256:${'a'.repeat(64)}`)), /official registry/);
 });
+
+// #845 defect 2: podman/buildah has no `docker context` subcommand. The deployment
+// identity must still bind to a real engine identity - never a placeholder.
+import {resolveEngineIdentity} from './platform-upgrade-host.mjs';
+
+test('engine identity uses context, DOCKER_HOST, or the engine id in that order', () => {
+  const contextRun = args => Buffer.from(args[1] === 'show' ? 'default' : '"unix:///var/run/docker.sock"');
+  assert.deepEqual(resolveEngineIdentity({commandEnv: {}, run: contextRun}), {context: 'default', endpoint: 'unix:///var/run/docker.sock'});
+  assert.deepEqual(resolveEngineIdentity({commandEnv: {DOCKER_HOST: 'tcp://127.0.0.1:2376'}, run: () => {throw new Error('must not inspect contexts');}}),
+    {context: null, endpoint: 'tcp://127.0.0.1:2376'});
+  assert.deepEqual(resolveEngineIdentity({commandEnv: {DOCKER_CONTEXT: 'remote'}, run: args => Buffer.from(args[1] === 'inspect' ? '"tcp://10.0.0.5:2376"' : 'remote')}),
+    {context: 'remote', endpoint: 'tcp://10.0.0.5:2376'});
+});
+
+test('a podman-style engine without context support binds to its own identity', () => {
+  const podman = (info) => args => {
+    if (args[0] === 'context') throw Object.assign(new Error('unrecognized command `docker context show`'), {status: 125});
+    if (args[0] === 'info') return Buffer.from(JSON.stringify(info));
+    return Buffer.alloc(0);
+  };
+  assert.deepEqual(resolveEngineIdentity({commandEnv: {}, run: podman({ID: 'e1b2', Name: 's66'})}), {context: null, endpoint: 'engine://e1b2'});
+  // Host name alone is still a real identity; a different engine id must differ.
+  assert.deepEqual(resolveEngineIdentity({commandEnv: {}, run: podman({ID: '', Name: 's66'})}), {context: null, endpoint: 'engine://name:s66'});
+  assert.notDeepEqual(
+    resolveEngineIdentity({commandEnv: {}, run: podman({ID: 'e1b2'})}),
+    resolveEngineIdentity({commandEnv: {}, run: podman({ID: 'f9c3'})}),
+    'identity must stay comparable across check/apply/rollback',
+  );
+});
+
+test('an engine with no identity at all fails closed instead of inventing one', () => {
+  const anonymous = args => {
+    if (args[0] === 'context') throw new Error('unrecognized command');
+    if (args[0] === 'info') return Buffer.from('{}');
+    return Buffer.alloc(0);
+  };
+  assert.throws(() => resolveEngineIdentity({commandEnv: {}, run: anonymous}),
+    /cannot identify the Docker deployment target.*engine id nor a host name/u);
+  const broken = args => {
+    if (args[0] === 'info') throw new Error('docker info failed');
+    throw new Error('unrecognized command');
+  };
+  assert.throws(() => resolveEngineIdentity({commandEnv: {}, run: broken}), /cannot identify the Docker deployment target/u);
+});

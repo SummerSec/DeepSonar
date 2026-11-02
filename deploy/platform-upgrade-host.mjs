@@ -11,13 +11,47 @@ import { fileURLToPath } from 'node:url';
 import { getDefaultResultOrder, setDefaultResultOrder } from 'node:dns';
 import { assertDrained, verifyBackup } from './platform-upgrade.mjs';
 import { CONFIG_SNAPSHOT_SQL, preflightBlock, targetConfigurationPreflight } from './platform-upgrade-preflight.mjs';
-import { verifyPlatformRelease } from '../agent-harness/check-platform-release.mjs';
+import { verifyPlatformReleaseAsync } from '../agent-harness/check-platform-release.mjs';
 import { PLATFORM_IMAGE_KEYS, PLATFORM_IMAGE_CHANNEL_NAMES, platformImageKey, platformImageRefPattern, resolvePlatformImageValues } from './platform-release-catalog.mjs';
+import { inspectRuntimeManifestAsync, runnablePlatformDigests } from '../agent-harness/runtime-platform-manifests.mjs';
 
 const dir = dirname(fileURLToPath(import.meta.url));
 const services = [...PLATFORM_IMAGE_KEYS];
 const keys = Object.fromEntries(services.map(service => [service, platformImageKey(service)]));
 const maxBuffer = 512 * 1024 * 1024;
+
+/**
+ * Bind an upgrade to a real engine identity (#845). podman/buildah has no
+ * `docker context` subcommand, so fall back to the engine's own id/host name from
+ * `docker info`. A placeholder identity is never acceptable: the value guards
+ * check/apply/rollback against operating on a different deployment.
+ */
+export function resolveEngineIdentity({commandEnv = process.env, run}) {
+  if (commandEnv.DOCKER_CONTEXT) {
+    const endpoint = run(['context', 'inspect', commandEnv.DOCKER_CONTEXT, '--format', '{{json .Endpoints.docker.Host}}']).toString();
+    return {context: commandEnv.DOCKER_CONTEXT, endpoint: JSON.parse(endpoint)};
+  }
+  if (commandEnv.DOCKER_HOST) return {context: null, endpoint: commandEnv.DOCKER_HOST};
+  try {
+    const context = run(['context', 'show']).toString().trim();
+    const endpoint = JSON.parse(run(['context', 'inspect', context, '--format', '{{json .Endpoints.docker.Host}}']).toString());
+    if (context && endpoint) return {context, endpoint};
+  } catch {
+    // Engine without context support (podman alias): fall through to docker info.
+  }
+  let info;
+  try {
+    info = JSON.parse(run(['info', '--format', '{{json .}}']).toString());
+  } catch {
+    info = null;
+  }
+  const id = typeof info?.ID === 'string' ? info.ID.trim() : '';
+  const name = typeof info?.Name === 'string' ? info.Name.trim() : '';
+  if (!id && !name) {
+    throw new Error('cannot identify the Docker deployment target: no --context/DOCKER_HOST, and `docker info` reported neither an engine id nor a host name');
+  }
+  return {context: null, endpoint: `engine://${id || `name:${name}`}`};
+}
 
 export function platformValues(contents) {
   const result = {};
@@ -163,13 +197,14 @@ export function hostAdapter(options = {}) {
     return allowedStatuses.length > 1 ? {stdout: output.stdout, status: output.status} : output.stdout;
   });
   let boundTarget;
+  // #845: podman/buildah has no `docker context` subcommand. Bind the target to a
+  // real engine identity instead of a placeholder: context+endpoint on the Docker
+  // CLI, DOCKER_HOST when set, otherwise the engine's own id/host name from
+  // `docker info`. Identity must stay comparable across check/apply/rollback.
+  const engineIdentity = () => resolveEngineIdentity({commandEnv, run});
   const deploymentTarget = () => {
-    const context = commandEnv.DOCKER_CONTEXT || (commandEnv.DOCKER_HOST ? null : run(['context', 'show']).toString().trim());
-    const endpoint = context
-      // pi-lens-ignore: unchecked-throwing-call-js
-      ? JSON.parse(run(['context', 'inspect', context, '--format', '{{json .Endpoints.docker.Host}}']).toString())
-      : commandEnv.DOCKER_HOST;
-    if (!endpoint || (context !== null && !context)) throw new Error('cannot identify Docker deployment target');
+    const {context, endpoint} = engineIdentity();
+    if (!endpoint) throw new Error('cannot identify Docker deployment target');
     // Hash the endpoint/context identity: never persist URLs that might contain credentials.
     const dockerIdentity = createHash('sha256').update(JSON.stringify({context, endpoint})).digest('hex');
     const composeFileHashes = composeFiles.map(path => createHash('sha256').update(readFileSync(path)).digest('hex'));
@@ -245,7 +280,8 @@ export function hostAdapter(options = {}) {
         retryDelays: options.releaseRetryDelays,
       // pi-lens-ignore: unchecked-throwing-call-js
       });
-      verifyPlatformRelease(catalog);
+      await verifyPlatformReleaseAsync(catalog, async (ref, platforms) =>
+        runnablePlatformDigests(await inspectRuntimeManifestAsync(ref), platforms));
       if (version && catalog.platform.version !== version) throw new Error('release version mismatch');
       return withResolvedValues(catalog.platform);
     },

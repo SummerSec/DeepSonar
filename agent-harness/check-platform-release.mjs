@@ -13,6 +13,20 @@ export function verifyPlatformRelease(catalog, inspectManifest) {
   }
 }
 
+/**
+ * Async twin of verifyPlatformRelease for hosts without docker buildx (#845).
+ * Same platform/child-digest checks; only the manifest source differs.
+ */
+export async function verifyPlatformReleaseAsync(catalog, inspectManifest) {
+  const platform = assertPlatformManifest(catalog.platform, catalog.platform_version);
+  for (const [key, image] of Object.entries(platform.images)) {
+    for (const [channel, ref] of Object.entries(image.registry_refs)) {
+      const actual = await inspectManifest(ref, image.platforms);
+      if (!samePlatformDigests(actual, image.child_digests)) throw new Error(`${key} ${channel} platform payload mismatch`);
+    }
+  }
+}
+
 export function platformEnvExample(catalog, contents) {
   const platform = assertPlatformManifest(catalog.platform, catalog.platform_version);
   const assignmentPattern = (name) => new RegExp(`^[ \t]*(?:export[ \t]+)?${name}(?:[ \t]*[=:]|[ \t]*$)`, "gm");
