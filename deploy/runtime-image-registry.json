@@ -830,7 +830,7 @@
       "default_role": "audit",
       "versions": [
         {
-          "version": "0.6.4",
+          "version": "0.6.5",
           "digest": "sha256:62adab41e50e59d936413030e46459b29ebe7288b21bb02f7ef3e1a9228adaab",
           "platforms": [
             "linux/amd64",
