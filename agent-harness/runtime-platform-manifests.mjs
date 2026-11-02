@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { inspectRegistryManifest } from "./registry-v2-manifests.mjs";
 
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const PLATFORM_RE = /^[a-z0-9]+\/[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9._-]+)?$/;
@@ -47,6 +46,9 @@ export async function inspectRuntimeManifestAsync(ref, {run = execFileSync, fetc
   } catch (error) {
     if (!isMissingBuildx(error)) throw error;
   }
+  // Loaded lazily: the synchronous release scripts copy this module into a fixture
+  // directory without its neighbours, and the fallback is only needed on a host.
+  const { inspectRegistryManifest } = await import("./registry-v2-manifests.mjs");
   return inspectRegistryManifest(ref, {fetchImpl});
 }
 
