@@ -252,3 +252,46 @@ if ($clock.Elapsed.TotalSeconds -gt 2.5) { throw 'EOF drain exceeded the origina
     }
   });
 });
+
+// #842 review (P2): the explicit registry-channel migration must be reachable from
+// the official Windows entry point, not only from deploy.sh's argv passthrough.
+test("deploy.ps1 exposes the explicit registry-channel switch and forwards it", () => {
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(3));
+  assert.match(text, /\[ValidateSet\("github", "dockerhub", "aliyun-acr"\)\]\s*\n\s*\[string\]\$RegistryChannel/u,
+    "RegistryChannel must reject values the Node CLI would reject");
+  assert.match(text, /if \(\$RegistryChannel\) \{ \$upgradeArgs \+= @\("--registry-channel", \$RegistryChannel\) \}/u,
+    "the switch must be forwarded to platform-upgrade-host.mjs");
+  // Forwarding must not bypass the journaled/Frozen target or signature-channel rules.
+  assert.match(text, /"--to", \$UpgradeVersion/u);
+  assert.doesNotMatch(text, /DEEPSONAR_SCHEDULER_IMAGE\s*=\s*.*RegistryChannel|RegistryChannel.*\|\s*Out-File/u);
+});
+
+test("deploy.ps1 forwards -RegistryChannel to the Node upgrade CLI", (t) => {
+  const pwsh = firstPwsh();
+  if (!pwsh) { t.skip("PowerShell is unavailable in this environment"); return; }
+  const dir = mkdtempSync(join(tmpdir(), "ds-pwsh-registry-"));
+  const capture = join(dir, "node args.bin");
+  try {
+    writeFileSync(join(dir, "node"), `#!/bin/sh
+printf '%s\\0' "$@" > "$ARG_CAPTURE_FILE"
+exit 0
+`, { mode: 0o755 });
+    const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, ARG_CAPTURE_FILE: capture };
+    const run = extra => spawnSync(pwsh, ["-NoProfile", "-File", scriptPath, "upgrade", "check", ...extra], { env, encoding: "utf8", timeout: 30_000 });
+
+    const explicit = run(["-RegistryChannel", "dockerhub"]);
+    assert.equal(explicit.status, 0, explicit.stdout + explicit.stderr);
+    const forwarded = readFileSync(capture).toString("utf8").split("\0").filter(Boolean);
+    assert.ok(forwarded.includes("--registry-channel"), forwarded.join(" "));
+    assert.equal(forwarded[forwarded.indexOf("--registry-channel") + 1], "dockerhub");
+
+    const implicit = run([]);
+    assert.equal(implicit.status, 0, implicit.stdout + implicit.stderr);
+    assert.equal(readFileSync(capture).toString("utf8").includes("--registry-channel"), false,
+      "omitting the switch must keep the deployment channel, not pick one");
+
+    const invalid = run(["-RegistryChannel", "summersec"]);
+    assert.notEqual(invalid.status, 0, "unknown channel must be rejected before the CLI runs");
+    assert.match(invalid.stdout + invalid.stderr, /github|dockerhub|aliyun-acr/u);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
