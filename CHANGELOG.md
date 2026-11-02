@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+### 变更
+
+- **PR 按 Draft / Ready 分层验收（#836）**：新增 `agent-harness/ci-run-plan.mjs`，在同一个分类器之上产出运行计划（`docs` / `draft-fast` / `ready-full` + 必须运行的专家套件 + 原因 + base/head），专家套件的路径基线直接读各自 workflow 的 `pull_request.paths`，清单不会与计划漂移；分类失败、diff 读不到、缺 SHA 一律 fail closed 到「全部套件」。
+  - `ci.yml` 增加 `pull_request.types`（含 `ready_for_review` / `converted_to_draft`）、`plan` 输出、`draft-fast`（frozen install + `pnpm -r typecheck` + 按路径映射的无服务单测，不起 PostgreSQL）与 `ci-preview`（Draft 只出非 required 预览）；`ci-summary` 在 Draft 上跳过，只在 `ready-full`/`docs` 出具合并结论。
+  - 五个专家工作流（reverse / chrome / clickhouse / mobile / openharmony）各新增 `plan` 作业并跑同一个 `ci-run-plan.mjs`，重活矩阵仅在 `mode == ready-full` 时启动；`push@main` 与手动运行保持完整矩阵，PR 触发仍由各工作流自己持有。
+  - 开关是仓库变量 `CI_PR_MODE`：只有 `tiered` 启用分层，未设置/非法/`full` 时恢复分层前的完整 PR 验收；没有 `off`/`skip-all`。
+  - 尚未接入：专家套件迁移到 `ci.yml` 的 `workflow_call` 统一入口、ruleset/分支保护实际核对、失败注入与前后各 10 次 PR 的均值采集。这些未在 CI 上执行，不能按已交付计。
+
 ## [0.6.4] - 2026-11-02
 
 ### 发布恢复与升级边界

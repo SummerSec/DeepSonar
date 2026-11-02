@@ -11,6 +11,9 @@ name: ci
 # - workflow_dispatch：手动补跑
 on:
   pull_request:
+    # Draft/Ready is the developer switch (#836): the plan job reads the current
+    # PR state, so a Draft->Ready transition on the same SHA re-plans.
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   push:
     branches: [main]
     paths-ignore:
@@ -42,7 +45,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      docs_only: ${{ steps.classify.outputs.docs_only }}
+      docs_only: ${{ steps.plan.outputs.docs_only }}
+      mode: ${{ steps.plan.outputs.mode }}
+      plan_status: ${{ steps.plan.outputs.plan_status }}
+      required_suites: ${{ steps.plan.outputs.required_suites }}
+      fast_suites: ${{ steps.plan.outputs.fast_suites }}
+      reasons: ${{ steps.plan.outputs.reasons }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,6 +66,26 @@ jobs:
             --event-name "$EVENT_NAME" \
             --base "${PR_BASE:-}" \
             --head "${PR_HEAD:-}"
+
+      # #836: one plan per run — docs | draft-fast | ready-full, plus the
+      # specialist suites the full tier must verify. CI_PR_MODE only enables the
+      # tier when it is exactly `tiered`; unset/invalid/full restores the legacy
+      # full PR acceptance.
+      - id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          CI_PR_MODE: ${{ vars.CI_PR_MODE }}
+        run: |
+          node agent-harness/ci-run-plan.mjs \
+            --event-name "$EVENT_NAME" \
+            --base "${PR_BASE:-}" \
+            --head "${PR_HEAD:-}" \
+            --draft "${PR_DRAFT:-false}" \
+            --ci-pr-mode "${CI_PR_MODE:-}" \
+            --root .
 
   # 文档保鲜在所有 PR 上运行（含纯代码 PR）：删脚本、schema 版本变化同样会破坏文档。
   # 需要完整 checkout（读取 package.json、schema-version、Git symlink 元数据），但不启动数据库。
@@ -114,7 +142,7 @@ jobs:
   windows-upgrade-backend:
     runs-on: windows-latest
     needs: changes
-    if: always() && !cancelled() && needs.changes.outputs.docs_only != 'true'
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
@@ -127,7 +155,7 @@ jobs:
   gate:
     runs-on: ubuntu-24.04
     needs: changes
-    if: always() && !cancelled() && needs.changes.outputs.docs_only != 'true'
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
     timeout-minutes: 40
     services:
       postgres:
@@ -678,7 +706,7 @@ jobs:
   runtime-images:
     runs-on: ubuntu-latest
     needs: changes
-    if: always() && !cancelled() && needs.changes.outputs.docs_only != 'true'
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
     timeout-minutes: 45
     permissions:
       contents: read
@@ -816,7 +844,7 @@ jobs:
   chrome-fuzz-arm64-build:
     runs-on: ubuntu-latest
     needs: changes
-    if: always() && !cancelled() && needs.changes.outputs.docs_only != 'true'
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
     timeout-minutes: 240
     permissions:
       contents: read
@@ -923,7 +951,7 @@ jobs:
   chrome-fuzz-arm64:
     needs: [changes, chrome-fuzz-arm64-build]
     runs-on: ubuntu-24.04-arm
-    if: always() && !cancelled() && needs.changes.outputs.docs_only != 'true' && needs.chrome-fuzz-arm64-build.result == 'success'
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full' && needs.chrome-fuzz-arm64-build.result == 'success'
     timeout-minutes: 30
     permissions:
       contents: read
@@ -946,10 +974,79 @@ jobs:
           docker pull --platform linux/arm64 "$image_ref"
           node agent-harness/test-chrome-runtime.mjs "$image_ref" chrome-fuzz agent-harness/chrome-fuzz-runtime.json linux/arm64
 
+  # #836 Draft 快检：frozen install + workspace typecheck + 命中模块的无服务单测。
+  # 不启动 PostgreSQL / 镜像矩阵 / Chrome ARM64 / Windows 专项，不产生 required 汇总。
+  draft-fast:
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'draft-fast'
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Workspace typecheck
+        run: pnpm -r typecheck
+
+      - name: Mapped no-service unit suites
+        env:
+          FAST_SUITES: ${{ needs.changes.outputs.fast_suites }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FAST_SUITES:-}" ]; then
+            echo "no fast suite matched this diff"
+            exit 0
+          fi
+          IFS=',' read -r -a suites <<< "$FAST_SUITES"
+          for suite in "${suites[@]}"; do
+            [ -n "$suite" ] || continue
+            echo "::group::$suite"
+            pnpm "$suite"
+            echo "::endgroup::"
+          done
+
+  # Draft 只发非 required 预览；不允许用同名 ci-summary 冒充可合并。
+  ci-preview:
+    runs-on: ubuntu-latest
+    needs: [changes, draft-fast]
+    if: always() && needs.changes.outputs.mode == 'draft-fast'
+    timeout-minutes: 5
+    steps:
+      - name: Draft preview (not a merge gate)
+        env:
+          PLAN: ${{ needs.changes.result }}
+          PLAN_STATUS: ${{ needs.changes.outputs.plan_status }}
+          FAST: ${{ needs.draft-fast.result }}
+          REASONS: ${{ needs.changes.outputs.reasons }}
+          FAST_SUITES: ${{ needs.changes.outputs.fast_suites }}
+        run: |
+          set -euo pipefail
+          echo "plan=$PLAN plan_status=$PLAN_STATUS fast=draft-fast:$FAST"
+          echo "reasons=$REASONS"
+          echo "fast_suites=${FAST_SUITES:-none}"
+          [ "$PLAN" = "success" ] || { echo "::error::run plan did not succeed: $PLAN"; exit 1; }
+          [ "$PLAN_STATUS" = "ok" ] || { echo "::error::run plan failed; a Draft still fails closed: $PLAN_STATUS"; exit 1; }
+          [ "$FAST" = "success" ] || { echo "::error::draft fast checks did not succeed: $FAST"; exit 1; }
+          echo "Draft fast checks passed. Ready for review switches to full acceptance."
+
   # 稳定的 required 汇总检查：显式核对分类器、文档门禁与应运行的重活结果。
   # 不用 echo success 占位；「跳过」与「失败」必须区分，避免 docs-only 掩盖真实失败。
   ci-summary:
-    if: always()
+    # Draft runs emit ci-preview instead of ci-summary. Note: GitHub counts a
+    # SKIPPED required check as satisfied, so skipping ci-summary does not itself
+    # block a Draft merge; blocking Draft merges must come from policy (ruleset /
+    # separate required check), not from this workflow's skip.
+    if: always() && needs.changes.outputs.mode != 'draft-fast'
     needs: [changes, docs-freshness, windows-upgrade-backend, gate, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -957,6 +1054,8 @@ jobs:
       - name: Verify required results
         env:
           CHANGES: ${{ needs.changes.result }}
+          MODE: ${{ needs.changes.outputs.mode }}
+          PLAN_STATUS: ${{ needs.changes.outputs.plan_status }}
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           DOCS: ${{ needs.docs-freshness.result }}
           WINDOWS: ${{ needs.windows-upgrade-backend.result }}
@@ -970,6 +1069,14 @@ jobs:
 
           [ "$CHANGES" = "success" ] || fail "changes classifier did not succeed: $CHANGES"
           [[ "$DOCS_ONLY" == "true" || "$DOCS_ONLY" == "false" ]] || fail "missing or invalid classifier output"
+          # #836: only the ready-full and docs tiers may report a merge verdict.
+          case "$MODE" in
+            ready-full|docs) ;;
+            *) fail "ci-summary ran outside the ready-full/docs tier: ${MODE:-<empty>}" ;;
+          esac
+          [ "$PLAN_STATUS" = "ok" ] || fail "run plan did not succeed: ${PLAN_STATUS:-<empty>}"
+          if [ "$MODE" = "docs" ] && [ "$DOCS_ONLY" != "true" ]; then fail "docs tier reported docs_only=$DOCS_ONLY"; fi
+
           [ "$DOCS" = "success" ] || fail "docs-freshness did not succeed: $DOCS"
 
           check_heavy() {

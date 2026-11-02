@@ -17,7 +17,7 @@ const summary = jobs["ci-summary"].steps.find((step) => step.name === "Verify re
 const heavy = ["windows-upgrade-backend", "gate", "runtime-images", "chrome-fuzz-arm64-build", "chrome-fuzz-arm64"];
 const resultVars = ["WINDOWS", "GATE", "IMAGES", "FUZZ_BUILD", "FUZZ"];
 const runSummary = (overrides = {}) => spawnSync("bash", ["-c", summary], {
-  env: { ...process.env, CHANGES: "success", DOCS: "success", DOCS_ONLY: "false",
+  env: { ...process.env, CHANGES: "success", DOCS: "success", DOCS_ONLY: "false", MODE: "ready-full", PLAN_STATUS: "ok",
     ...Object.fromEntries(resultVars.map((name) => [name, "success"])), ...overrides }, encoding: "utf8",
 });
 
@@ -70,7 +70,7 @@ test("actual classifier handles docs, runtime inputs, unknowns, rename/delete an
 
 test("actual summary rejects failures, cancellation, missing outputs and unexpected skips", () => {
   assert.equal(runSummary().status, 0);
-  const docs = { DOCS_ONLY: "true", ...Object.fromEntries(resultVars.map((name) => [name, "skipped"])) };
+  const docs = { MODE: "docs", DOCS_ONLY: "true", ...Object.fromEntries(resultVars.map((name) => [name, "skipped"])) };
   assert.equal(runSummary(docs).status, 0);
   for (const result of ["failure", "cancelled", "skipped", ""]) {
     for (const name of ["CHANGES", "DOCS", ...resultVars]) {
@@ -82,6 +82,12 @@ test("actual summary rejects failures, cancellation, missing outputs and unexpec
   }
   for (const DOCS_ONLY of ["", "unknown"]) assert.notEqual(runSummary({ DOCS_ONLY }).status, 0);
   for (const name of resultVars) assert.notEqual(runSummary({ ...docs, [name]: "success" }).status, 0);
+  // #836 tier assertions: a Draft runs never report a merge verdict, and a
+  // failed run plan cannot be summarised as success.
+  for (const MODE of ["draft-fast", "", "unknown"]) assert.notEqual(runSummary({ MODE }).status, 0, `MODE=${MODE}`);
+  assert.notEqual(runSummary({ PLAN_STATUS: "failed" }).status, 0);
+  assert.notEqual(runSummary({ PLAN_STATUS: "" }).status, 0);
+  assert.notEqual(runSummary({ ...docs, DOCS_ONLY: "false" }).status, 0, "docs tier must report docs_only=true");
 });
 
 test("workflow really runs docs and regressions and preserves full-run dependencies", () => {
@@ -92,11 +98,25 @@ test("workflow really runs docs and regressions and preserves full-run dependenc
   for (const command of ["pnpm install --frozen-lockfile", "pnpm ci:unit:docs-freshness", "pnpm ci:unit:ci-routing"]) {
     assert.ok(docs.steps.some((s) => s.run === command && !s.if && !s["continue-on-error"]), command);
   }
-  assert.equal(jobs["ci-summary"].if, "always()");
+  assert.equal(jobs["ci-summary"].if, "always() && needs.changes.outputs.mode != 'draft-fast'");
+  assert.ok(jobs["draft-fast"], "the Draft fast tier must exist");
+  assert.ok(jobs["ci-preview"], "Draft runs need a non-required preview check");
+  assert.equal(jobs["ci-preview"].if, "always() && needs.changes.outputs.mode == 'draft-fast'");
+  assert.equal(jobs["draft-fast"].if, "always() && !cancelled() && needs.changes.outputs.mode == 'draft-fast'");
+  // Draft fast checks reuse the frozen install and never start heavy services.
+  for (const command of ["pnpm install --frozen-lockfile", "pnpm -r typecheck"]) {
+    assert.ok(jobs["draft-fast"].steps.some((s) => s.run === command), command);
+  }
+  assert.equal(jobs["draft-fast"].services, undefined, "Draft fast tier must not start PostgreSQL");
+  assert.deepEqual(workflow.on.pull_request.types, ["opened", "reopened", "synchronize", "ready_for_review", "converted_to_draft"]);
+  assert.ok(jobs.changes.steps.some((s) => s.id === "plan" && s.run.includes("ci-run-plan.mjs")));
+  for (const output of ["mode", "plan_status", "required_suites", "fast_suites", "reasons"]) {
+    assert.ok(jobs.changes.outputs[output], `changes job must expose ${output}`);
+  }
   assert.deepEqual(new Set(jobs["ci-summary"].needs), new Set(["changes", "docs-freshness", ...heavy]));
   for (const name of heavy) {
     assert.ok([jobs[name].needs].flat().includes("changes"));
-    assert.ok(jobs[name].if.startsWith("always() && !cancelled() && needs.changes.outputs.docs_only != 'true'"));
+    assert.ok(jobs[name].if.startsWith("always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'"));
   }
   assert.ok(jobs["chrome-fuzz-arm64"].if.includes("needs.chrome-fuzz-arm64-build.result == 'success'"));
 });
