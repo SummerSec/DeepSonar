@@ -104,9 +104,14 @@ test("workflow really runs docs and regressions and preserves full-run dependenc
   assert.equal(jobs["ci-preview"].if, "always() && needs.changes.outputs.mode == 'draft-fast'");
   assert.equal(jobs["draft-fast"].if, "always() && !cancelled() && needs.changes.outputs.mode == 'draft-fast'");
   // Draft fast checks reuse the frozen install and never start heavy services.
-  for (const command of ["pnpm install --frozen-lockfile", "pnpm -r typecheck"]) {
+  for (const command of ["pnpm install --frozen-lockfile", "pnpm -r typecheck", "pnpm -r build"]) {
     assert.ok(jobs["draft-fast"].steps.some((s) => s.run === command), command);
   }
+  // Suites import workspace packages via their built dist; without build the fast
+  // path fails with ERR_MODULE_NOT_FOUND (observed on the #836 sample PR).
+  assert.ok(jobs["draft-fast"].steps.findIndex((s) => s.run === "pnpm -r build")
+    < jobs["draft-fast"].steps.findIndex((s) => s.name === "Mapped no-service unit suites"),
+    "build must run before the mapped suites");
   assert.equal(jobs["draft-fast"].services, undefined, "Draft fast tier must not start PostgreSQL");
   assert.deepEqual(workflow.on.pull_request.types, ["opened", "reopened", "synchronize", "ready_for_review", "converted_to_draft"]);
   assert.ok(jobs.changes.steps.some((s) => s.id === "plan" && s.run.includes("ci-run-plan.mjs")));
