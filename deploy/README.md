@@ -29,7 +29,6 @@ Shell 和 PowerShell 共用维护升级控制器 `platform-upgrade-maintenance-h
 
 Linux 使用 `flock` 和文件/目录 `fsync`；Windows 原生后端使用本地 NTFS 的独占内核句柄、受保护私有 DACL、write-through 替换及 flush。锁由宿主进程持有，写文件的子进程借用同一锁直到 I/O 结束，避免宿主崩溃后孤儿写入与下一代交错；不需手删锁文件。Windows 拒绝网络盘、非 NTFS 与 reparse 路径。原生 Windows CI 单独验证锁竞争、进程终止、ACL 与文件替换；Linux PowerShell 测试不代替原生证据，也不证明真实 Windows Docker 部署或断电恢复验收。
 
-<<<<<<< HEAD
 ### release catalog 拉取与离线通道（#845）
 
 `upgrade check|apply` 第一步要取官方 `runtime-image-registry.json`。默认从 GitHub Release 取，行为：
@@ -45,7 +44,6 @@ Linux 使用 `flock` 和文件/目录 `fsync`；Windows 原生后端使用本地
 ```
 
 `--catalog` 只改变**字节来源**，`verifyPlatformRelease` 仍会对结果做跨 registry digest 校验 —— 不因离线通道降低校验强度。
-=======
 ### 维护升级的前置断言与扫描租约（#845）
 
 维护流程每一步都先跑 `checkClaims`：claims 必须处于 `platform_upgrade` 暂停、已排空、无 unsettled effect。image-admission 扫描用**租约窗口**判定：
@@ -53,7 +51,6 @@ Linux 使用 `flock` 和文件/目录 `fsync`；Windows 原生后端使用本地
 - 只有 `started_at`（无则 `created_at`）在最近 **10 分钟**内的 `claimed`/`running` 扫描才算仍未结算，会阻断升级；
 - 超出窗口的行视为被遗弃的僵尸行（admission worker 崩溃/重启遗弃），不阻断，但会以 `stale` 计数出现在错误信息里；
 - 窗口可用 `scanLeaseMinutes` 覆盖（测试与特殊环境用），不做静默放宽。
->>>>>>> d3df0962 (fix(#845): stop stale image-admission scans from blocking every upgrade)
 
 默认关闭的 `upgrade auto`、维护窗口、签名准入和禁用调度模板见 [自动升级说明](UPGRADE_AUTOMATION.md)。生产 Release keyless 签名权限及实际正向链路尚未启用或验收，不能据临时密钥测试宣称生产无人值守升级已可用。
 
