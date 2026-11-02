@@ -14,6 +14,7 @@
   - 未修：缺陷 1（catalog 拉取重试 / DNS `ipv4first` / `--catalog` 离线通道）、缺陷 2（buildx `imagetools` 与 `docker context` 缺失时的能力探测与 Registry v2 回退）、缺陷 3（unknown effects 对账入口）、缺陷 4（`runtime_image_scans` 僵尸回收）。这些仍按 #845 跟踪。
 - **release catalog 拉取：IPv4 优先 + 指数退避 + 离线通道（#845 缺陷 1）**：双栈出口上 AAAA 不可达时 undici 每次连接都超时（同一时刻 `curl` 成功），而拉取只有单次尝试、无重试。现在进程内启用 IPv4 优先 DNS 排序；瞬时错误（网络/超时、408、425、429、5xx）退避重试 3 次（2s/5s/10s），`404` 与其他 4xx 立即失败；新增 `--catalog <path|url>` 与 `DEEPSONAR_UPGRADE_CATALOG` 指定 catalog 来源，`verifyPlatformRelease` 照常执行，校验强度不降。
   - 仍按 #845 跟踪：缺陷 2（buildx `imagetools` / `docker context` 能力探测与 Registry v2 回退）、缺陷 3（`unknown` effects 对账入口）、缺陷 4（`runtime_image_scans` 僵尸回收）。
+- **僵尸 image-admission 扫描不再永久阻断维护升级（#845 缺陷 4）**：`checkClaims` 原先把 `runtime_image_scans` 里任何 `claimed`/`running` 行都当作未结算，于是被历史 admission 实例遗弃的行（真实宿主上 48 条，最老停滞数周）会让 `apply` 在 `pauseAndDrain` 之后进入 `awaiting_drain` 并且永远无法前进。现在只有落在**租约窗口内**（默认 10 分钟，按 `coalesce(started_at, created_at)` 计算，可用 `scanLeaseMinutes` 覆盖）的扫描才阻断；窗口外的行按 `stale` 计数一并写进错误信息，**不会被静默忽略**，操作员仍能看到有多少行被遗弃。
 
 ## [0.6.4] - 2026-11-02
 

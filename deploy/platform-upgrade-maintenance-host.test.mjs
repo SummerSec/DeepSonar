@@ -78,7 +78,7 @@ test('host refuses changed same-version source database after a lost rollback ac
   assert.equal(started, false);
   assert.equal(state.status, 'rollback_resuming');
 });
-async function probe(t, {row, runtimeExists = true, exists = true, table = true, claims, scans = 0}) {
+async function probe(t, {row, runtimeExists = true, exists = true, table = true, claims, scans = {active: 0, stale: 0}}) {
   const directory = await mkdtemp(join(tmpdir(), 'maintenance-authority-'));
   t.after(() => rm(directory, {recursive: true, force: true}));
   const state = {generation: '11111111-1111-4111-8111-111111111111', binding: {fixture: true}, target: {version: '2.0.0', values: {DEEPSONAR_SCHEDULER_IMAGE: 'trusted-image'}}};
@@ -91,7 +91,7 @@ async function probe(t, {row, runtimeExists = true, exists = true, table = true,
     if (args.includes('ps')) return Buffer.from('a'.repeat(64));
     const {sql} = JSON.parse(input);
     if (sql.includes("'claims_paused'")) return Buffer.from(JSON.stringify([{value: claims}]));
-    if (sql.includes('FROM runtime_image_scans')) return Buffer.from(JSON.stringify([{value: scans}]));
+    if (sql.includes('FROM runtime_image_scans')) return Buffer.from(JSON.stringify([{value: JSON.stringify({active: scans?.active ?? 0, stale: scans?.stale ?? 0})}]));
     if (sql.includes('SELECT rolcanlogin')) return Buffer.from('[{"value":true}]');
     if (sql.includes('shobj_description')) return Buffer.from('[{"value":null}]');
     if (sql.includes('EXISTS(SELECT 1 FROM pg_database')) return Buffer.from(JSON.stringify([{value: exists}]));
@@ -123,10 +123,32 @@ test('restored source generation cannot have served target writes before candida
 test('unsettled long job or unknown effect preserves old containers and LOGIN identity during recovery', async t => {
   for (const pending of [{in_flight: {total: 1}, unknown_effect_attempts: 0}, {in_flight: {total: 0}, unknown_effect_attempts: 1}, {in_flight: {total: 0}, unknown_effect_attempts: 0, effect_pending_attempts: 1}, {in_flight: {total: 0}, unknown_effect_attempts: 0, scans: 1}]) {
     const claims = {claims_paused: true, reason: 'platform_upgrade', drained: true, effect_pending_attempts: 0, ...pending};
-    const {io, state, calls} = await probe(t, {claims, scans: pending.scans ?? 0}); state.receipts = {};
+    const {io, state, calls} = await probe(t, {claims, scans: {active: pending.scans ?? 0, stale: 0}}); state.receipts = {};
     const result = await io.rollbackPreparing(state);
     assert.equal(result.awaiting_drain, true); assert.equal(result.services_unchanged, true);
     assert.equal(calls.some(call => call.args.includes('stop')), false);
     assert.equal(calls.some(call => call.input && /ALTER ROLE|pg_terminate_backend/.test(JSON.parse(call.input).sql)), false);
   }
+});
+
+// #845 defect 4: image admission can leave rows stuck in claimed/running after its
+// worker dies. Blocking every step on them makes any maintenance upgrade impossible
+// (48 rows were stuck for weeks on a real host).
+import {scanBlockMessage} from './platform-upgrade-maintenance-host.mjs';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+
+test('stale admission scans no longer block an upgrade, active ones still do', () => {
+  assert.equal(scanBlockMessage({active: 0, stale: 48}, 10), null, 'stale rows are not live claim holders');
+  assert.match(scanBlockMessage({active: 1, stale: 48}, 10), /1 active, 48 stale beyond 10m/);
+  assert.match(scanBlockMessage({active: 3, stale: 0}, 10), /3 active, 0 stale/);
+});
+
+test('the scan gate keys on started_at within a lease window and reports both counts', () => {
+  const source = readFileSync(`${fileURLToPath(new URL('..', import.meta.url))}deploy/platform-upgrade-maintenance-host.mjs`, 'utf8');
+  assert.match(source, /coalesce\(started_at, created_at\)/u, 'a never-started scan must still expire via created_at');
+  assert.match(source, /count\(\*\) FILTER \(WHERE/u, 'active and stale counts must come from one query');
+  assert.match(source, /scanLeaseMinutes = Number\.isSafeInteger\(options\.scanLeaseMinutes\)/u, 'the lease window must be configurable for tests');
+  assert.doesNotMatch(source, /SELECT count\(\*\)::int FROM runtime_image_scans WHERE status IN \('claimed','running'\)"/u,
+    'the unfiltered count-only gate must be gone');
 });
