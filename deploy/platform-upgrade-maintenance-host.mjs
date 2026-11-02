@@ -14,7 +14,7 @@ import {verifyMaintenanceWeb, assertMaintenanceDatabase, assertRollbackConnectio
 import {readSourceActivation, resumeRollback} from './platform-upgrade-maintenance-recovery.mjs';
 import {loadManagedInventory, maintenanceNodes} from './platform-upgrade-maintenance-nodes.mjs';
 import {createMaintenanceTransport, durablePrivateWrite, readPrivateJson, assertDirectoryDurability} from './platform-upgrade-maintenance-transport.mjs';
-import {PLATFORM_IMAGE_KEYS, platformImageKey} from './platform-release-catalog.mjs';
+import {PLATFORM_IMAGE_KEYS, platformImageKey, resolvePlatformImageValues} from './platform-release-catalog.mjs';
 
 const services = [...PLATFORM_IMAGE_KEYS];
 const imageKeys = services.map(platformImageKey);
@@ -38,6 +38,19 @@ const valuesFor = target => {
   if (!target?.values || typeof target.values !== 'object') throw new Error('maintenance target is missing resolved platform image values');
   return target.values;
 };
+
+/**
+ * Freeze the target's platform image values (#842).
+ *
+ * A journal written before channel resolution existed carries a target without
+ * `values`; throwing here would leave an in-flight upgrade unrecoverable (candidate
+ * database created, CLI unable to resume). Resolve it from *this* deployment's
+ * current channel instead and store it on the target, so resume, prepare, patch and
+ * rollback all keep using one frozen set of references. A target that already has
+ * values is never re-resolved - the journal stays authoritative.
+ */
+export const resolvePlanValues = (target, currentValues, {channel} = {}) =>
+  target.values ?? (target.values = resolvePlatformImageValues(target, currentValues, {channel}));
 
 export function maintenanceHostAdapter(options = {}) {
   const root = resolve(options.directory ?? dirname(fileURLToPath(import.meta.url)));
@@ -187,7 +200,7 @@ FROM runtime_image_scans WHERE status IN ('claimed','running')`});
     },
     async resolveTarget() {const target = await legacy.release(); await legacy.pull(target); return target;},
     async plan(target, {recovery: recovering = false, resetRoleIdentity = options.resetRoleIdentity === true} = {}) {
-      const prior = await source(), values = valuesFor(target);
+      const prior = await source(), values = resolvePlanValues(target, prior.values, {channel: options.registryChannel});
       if (!recovering) verifyContainers({target: {values: prior.values}});
       const source_schema_sha256 = run(['run', '--rm', '--network=none', '--read-only', '--entrypoint=node', prior.values.DEEPSONAR_SCHEDULER_IMAGE, '-e', "console.log(require('crypto').createHash('sha256').update(require('fs').readFileSync('/app/database/schema.sql')).digest('hex'))"]).toString().trim();
       if (!/^[a-f0-9]{64}$/.test(source_schema_sha256)) throw new Error('source schema fingerprint invalid');

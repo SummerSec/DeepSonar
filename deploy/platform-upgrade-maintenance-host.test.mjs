@@ -152,3 +152,47 @@ test('the scan gate keys on started_at within a lease window and reports both co
   assert.doesNotMatch(source, /SELECT count\(\*\)::int FROM runtime_image_scans WHERE status IN \('claimed','running'\)"/u,
     'the unfiltered count-only gate must be gone');
 });
+
+// #842 P1 (self-review): a journal written before channel resolution existed has a
+// target without `values`. Throwing there would strand an in-flight upgrade -
+// candidate database created, CLI unable to resume. Resolve it from the current
+// deployment channel and freeze it on the target instead.
+import {resolvePlanValues} from './platform-upgrade-maintenance-host.mjs';
+import {PLATFORM_IMAGE_CHANNELS, PLATFORM_IMAGE_KEYS, platformImageKey} from './platform-release-catalog.mjs';
+
+const ACR = PLATFORM_IMAGE_CHANNELS['aliyun-acr'];
+const githubRef = service => `ghcr.io/summersec/deepsonar-${service}@sha256:${'a'.repeat(64)}`;
+const acrRef = service => `${ACR.host}/${ACR.namespace}/deepsonar-${service}@sha256:${'b'.repeat(64)}`;
+const catalogTarget = version => ({
+  version, schema_version: 67,
+  images: Object.fromEntries(PLATFORM_IMAGE_KEYS.map(service => [service, {
+    digest: `sha256:${'a'.repeat(64)}`,
+    registry_refs: {github: githubRef(service), 'aliyun-acr': acrRef(service)},
+  }])),
+});
+const envValues = ref => Object.fromEntries([
+  ['DEEPSONAR_VERSION', '0.6.0'],
+  ...PLATFORM_IMAGE_KEYS.map(service => [platformImageKey(service), ref(service)]),
+]);
+
+test('a legacy journal target gets its values resolved from the current channel', () => {
+  const target = catalogTarget('0.6.4');
+  const values = resolvePlanValues(target, envValues(acrRef));
+  for (const service of PLATFORM_IMAGE_KEYS) assert.equal(values[platformImageKey(service)], acrRef(service));
+  assert.equal(values.DEEPSONAR_VERSION, '0.6.4');
+  // Frozen onto the target so resume/prepare/rollback share one set of references.
+  assert.deepEqual(target.values, values);
+  assert.equal(resolvePlanValues(target, envValues(githubRef)), values, 'a resolved target must never be re-resolved');
+  assert.equal(target.values[platformImageKey('web')], acrRef('web'), 'the journaled channel stays authoritative');
+});
+
+test('an unresolvable legacy target fails closed with the channel error, not a bare throw', () => {
+  const dockerhubOnly = catalogTarget('0.6.4');
+  delete dockerhubOnly.images.scheduler.registry_refs['aliyun-acr'];
+  assert.throws(() => resolvePlanValues(dockerhubOnly, envValues(acrRef)),
+    error => error.code === 'UPGRADE_REGISTRY_CHANNEL_UNRESOLVED');
+  assert.equal(dockerhubOnly.values, undefined, 'a failed resolution must not freeze partial values');
+
+  assert.throws(() => resolvePlanValues(catalogTarget('0.6.4'), envValues(() => 'not-a-digest-ref')),
+    error => error.code === 'UPGRADE_REGISTRY_CHANNEL_UNRESOLVED');
+});
