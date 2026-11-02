@@ -152,6 +152,38 @@ jobs:
       - name: Native Windows upgrade locking and private durable files
         run: node --test deploy/platform-upgrade-lock.test.mjs deploy/platform-upgrade-windows.test.mjs deploy/platform-upgrade-filesystem.test.mjs deploy/platform-upgrade-preflight-windows.test.mjs
 
+  # #835 item 1: a real process is SIGKILLed mid-completion and a fresh process must
+  # replay the durable receipt. Kept out of `gate` so it has its own time budget.
+  crash-recovery:
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: deepsonar-ci-pass
+          POSTGRES_DB: deepsonar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U deepsonar -d deepsonar"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: Kill a real Scheduler process and replay from a fresh one
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:crash-recovery
+
   gate:
     runs-on: ubuntu-24.04
     needs: changes
@@ -1052,7 +1084,7 @@ jobs:
     # block a Draft merge; blocking Draft merges must come from policy (ruleset /
     # separate required check), not from this workflow's skip.
     if: always() && needs.changes.outputs.mode != 'draft-fast'
-    needs: [changes, docs-freshness, windows-upgrade-backend, gate, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
+    needs: [changes, docs-freshness, windows-upgrade-backend, crash-recovery, gate, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1064,6 +1096,7 @@ jobs:
           DOCS_ONLY: ${{ needs.changes.outputs.docs_only }}
           DOCS: ${{ needs.docs-freshness.result }}
           WINDOWS: ${{ needs.windows-upgrade-backend.result }}
+          CRASH: ${{ needs.crash-recovery.result }}
           GATE: ${{ needs.gate.result }}
           IMAGES: ${{ needs.runtime-images.result }}
           FUZZ_BUILD: ${{ needs.chrome-fuzz-arm64-build.result }}
@@ -1094,6 +1127,7 @@ jobs:
           }
 
           check_heavy windows-upgrade-backend "$WINDOWS"
+          check_heavy crash-recovery "$CRASH"
           check_heavy gate "$GATE"
           check_heavy runtime-images "$IMAGES"
           check_heavy chrome-fuzz-arm64-build "$FUZZ_BUILD"
