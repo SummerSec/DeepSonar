@@ -1,11 +1,10 @@
 name: openharmony-runtime
 
 on:
+  # #836: Draft/Ready is the developer switch. GitHub's default pull_request
+  # activity types are only opened/synchronize/reopened, so a same-SHA Draft ->
+  # Ready transition would otherwise never re-plan or run this matrix.
   pull_request:
-    # #836: Draft/Ready is the developer switch. GitHub's default pull_request
-    # activity types are only opened/synchronize/reopened, so a same-SHA Draft ->
-    # Ready transition would otherwise never re-plan or run this matrix.
-    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
     paths:
       - "deploy/Dockerfile.agent-openharmony"
       - "deploy/Dockerfile.agent-openharmony-*"
@@ -23,6 +22,7 @@ on:
       - "agent-harness/image-build-fingerprint.mjs"
       - "agent-harness/resolve-image-src-cache.sh"
       - ".github/workflows/openharmony-runtime.yml"
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   push:
     branches: [main]
     paths:
