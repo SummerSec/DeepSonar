@@ -21,9 +21,15 @@ export function immutableImageRepository(ref) {
 
 export function inspectRuntimeManifest(ref) {
   immutableImageRepository(ref);
-  return JSON.parse(execFileSync("docker", ["buildx", "imagetools", "inspect", "--raw", ref], {
+  const raw = execFileSync("docker", ["buildx", "imagetools", "inspect", "--raw", ref], {
     encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 120_000, windowsHide: true,
-  }));
+  });
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Fail closed with a diagnosable message instead of a bare SyntaxError.
+    fail(`buildx returned an unparsable manifest for ${ref}`);
+  }
 }
 
 /** True when the failure means "this engine has no buildx imagetools", not "the image is wrong". */
@@ -120,6 +126,11 @@ export function parsePlatformSources(argv) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const { sourceRefs } = resolveRuntimePlatformSources(parsePlatformSources(process.argv.slice(2)));
-  console.log(sourceRefs.join("\n"));
+  try {
+    const { sourceRefs } = resolveRuntimePlatformSources(parsePlatformSources(process.argv.slice(2)));
+    console.log(sourceRefs.join("\n"));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "invalid platform sources");
+    process.exitCode = 1;
+  }
 }
