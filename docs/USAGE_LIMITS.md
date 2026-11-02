@@ -26,3 +26,5 @@ Verify 基础设施失败另用已有 `maxAutoRetries`（默认 6）限制连续
 需求与追溯沿用配置优先级、Model Gateway、Graph Query、Verify、Capability 的既有需求，不新建并行配置体系。相关行为入口接入现有 dispatch-limits、executor-real、graph-references、capability-pack、verify 与 platform-api CI；详情以 PR 的已执行命令及结果为准。
 
 图查询累计不限不等于单次响应不限。证据被压缩成预览时不授予被截断的 Fact ID；调用者需通过有界 node/index 查询重新读取引用。完整响应限制不声称限制跨查询累积的已见 ID 集合或整个 Canvas 加载内存。
+
+See [broken link](./definitely-missing-doc.md) for details.
