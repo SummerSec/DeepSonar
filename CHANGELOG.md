@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- **v0.6.5 的 bundled 清单与 reverse 版本不一致（发布后回归）**：release 的 reverse 构建在 v0.6.5 命中指纹复用，`write-release-runtime-descriptor.sh` 沿用了上一版权限记录，于是 `deploy/runtime-image-registry.json` 出现「platform 0.6.5 + reverse 0.6.4」，`test-reverse-runtime.mjs` 的静态门禁在 main 上转红。现在复用路径会把 descriptor 重新标记为本次发布的版本（digest 与证据不变），并补上 v0.6.5 的 reverse 记录；发布清单校验与 reverse 门禁均通过。
+
 ## [0.6.5] - 2026-11-02
 
 ### 变更

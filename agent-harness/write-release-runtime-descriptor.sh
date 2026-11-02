@@ -23,12 +23,19 @@ if [[ "${SKIP:-}" != "true" ]]; then
   record_descriptor
 fi
 
+# Label a reused descriptor with the release being published when the caller knows it.
+release_version_args=()
+if [[ -n "${VERSION:-}" ]]; then
+  release_version_args=(--version "${VERSION#v}")
+fi
+
 set +e
 node agent-harness/reuse-catalog-descriptor.mjs \
   --image-key "${IMAGE_KEY:?}" \
   --digest "${DIGEST:?}" \
   --catalog "${PREVIOUS_REGISTRY:-deploy/runtime-image-registry.json}" \
-  --out "$output"
+  --out "$output" \
+  ${release_version_args[@]+"${release_version_args[@]}"}
 reuse_status=$?
 set -e
 if [[ "$reuse_status" -eq 0 ]]; then

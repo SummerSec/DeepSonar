@@ -41,13 +41,16 @@ function optionalArg(name, argv) {
   return index >= 0 ? argv[index + 1] : undefined;
 }
 
-export function descriptorFromCatalogVersion(imageKey, version) {
+export function descriptorFromCatalogVersion(imageKey, version, releaseVersion) {
   if (!version || typeof version !== "object") fail(`${imageKey} catalog version is missing`);
   const evidence = version.registry_evidence;
   if (!evidence || typeof evidence !== "object") fail(`${imageKey} catalog version is missing registry_evidence`);
   return {
     image_key: imageKey,
-    version: version.version,
+    // A reused build is still published *for this release*: keep the digest/evidence,
+    // relabel the version, so the catalog never ends up advertising the current
+    // platform version with an older reverse/specialist row (#release-reuse).
+    version: releaseVersion ?? version.version,
     digest: version.digest,
     platforms: version.platforms,
     size_bytes: version.size_bytes,
@@ -58,7 +61,7 @@ export function descriptorFromCatalogVersion(imageKey, version) {
   };
 }
 
-export function reuseCatalogDescriptor({ catalog, imageKey, digest, platformSources, inspectManifest }) {
+export function reuseCatalogDescriptor({ catalog, imageKey, digest, platformSources, inspectManifest, releaseVersion }) {
   if (Boolean(digest) === Boolean(platformSources)) fail("provide exactly one digest or platform sources identity");
   if (digest && !/^sha256:[0-9a-f]{64}$/.test(digest)) fail("invalid digest identity");
   const expected = platformSources
@@ -85,7 +88,8 @@ export function reuseCatalogDescriptor({ catalog, imageKey, digest, platformSour
       : `${imageKey} previous catalog has no version with matching tested platform manifests`);
   }
   if (digest && match.digest !== digest) fail(`${imageKey} reused digest mismatch`);
-  return descriptorFromCatalogVersion(imageKey, match);
+  if (releaseVersion !== undefined && !/^\d+\.\d+\.\d+$/.test(releaseVersion)) fail("invalid release version");
+  return descriptorFromCatalogVersion(imageKey, match, releaseVersion);
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -96,16 +100,17 @@ function main(argv = process.argv.slice(2)) {
     const catalogPath = optionalArg("--catalog", argv)
       ?? fileURLToPath(new URL("../deploy/runtime-image-registry.json", import.meta.url));
     const digest = optionalArg("--digest", argv);
+    const releaseVersion = optionalArg("--version", argv);
     const platformSources = parsePlatformSources(argv);
     const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
-    const descriptor = reuseCatalogDescriptor({ catalog, imageKey, digest, platformSources });
+    const descriptor = reuseCatalogDescriptor({ catalog, imageKey, digest, platformSources, releaseVersion });
     if (probe && !output) {
       console.log(`reusable: ${imageKey} ${descriptor.version}`);
       return;
     }
     mkdirSync(dirname(output), { recursive: true });
     writeFileSync(output, `${JSON.stringify(descriptor, null, 2)}\n`);
-    console.log(`image build unchanged; version kept: ${imageKey} ${descriptor.version}`);
+    console.log(`image build unchanged; descriptor version ${descriptor.version}: ${imageKey}`);
   } catch (error) {
     if (isCatalogReuseMiss(error)) {
       console.error(error.message);

@@ -64,10 +64,26 @@ const catalog = {
   }],
 };
 
+
 const descriptor = reuseCatalogDescriptor({ catalog, imageKey: "deepsonar-base", digest });
 assert.equal(descriptor.version, "0.1.8");
 assert.equal(descriptor.digest, digest);
 assert.equal(descriptor.ghcr_ref, `ghcr.io/summersec/deepsonar-base@${digest}`);
+
+// A reused build is still published for the current release. Keeping the old label
+// produced a catalog whose platform version was ahead of the reverse row, which the
+// reverse static gate and the catalog contract both reject.
+const relabelled = reuseCatalogDescriptor({ catalog, imageKey: "deepsonar-base", digest, releaseVersion: "0.6.5" });
+assert.equal(relabelled.version, "0.6.5", "reuse must relabel to the release being published");
+assert.equal(relabelled.digest, digest, "relabelling must not change the digest or evidence");
+assert.equal(relabelled.registry_refs.github, descriptor.registry_refs.github);
+let badVersion;
+try {
+  reuseCatalogDescriptor({ catalog, imageKey: "deepsonar-base", digest, releaseVersion: "v0.6.5" });
+} catch (error) {
+  badVersion = error;
+}
+assert.match(String(badVersion?.message), /invalid release version/i);
 
 let reuseMiss;
 try {
