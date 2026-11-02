@@ -133,6 +133,25 @@ pnpm ci:images
 
 `gate` 里的守则套件分散在多个脚本（如 `ci:unit:searchable-selects` 禁止原生 `<select>`、`ci:unit:file-size` 文件体量棘轮、`ci:unit:bounded-contexts` 固定路由面与 bounded-context 所有权、`ci:unit:docs-freshness` 文档保鲜），`ci:unit:web-facts` 覆盖不到：Web 或路由面改动要按需补跑，否则 CI 才第一次报错。`ci:unit:authz` 内的 `ci-test-hook.test.ts` 保证每个被跟踪的 `*.test.ts` 都有测试入口引用（未接线的进 `apps/scheduler/src/ci-test-hook.manifest.json` 基线，只能缩小），但**脚本本身是否被 workflow 调用仍需人工确认**：全量脚本见根目录 `package.json`，已进 CI 的以 `.github/workflows/ci.yml` 为准（`ci:unit:bounded-contexts` 自 #684 起已进 CI；`ci:unit:file-size` 自 2026-10-31 起在 gate 中显式执行，此前仅通过 `ci:unit:authz` 的文件列表间接运行，调整该列表会让棘轮静默失效）。测试数据库需要 `TEST_DATABASE_URL`；只依赖真实沙箱的测试要明确检查运行时是否可用。镜像改动还要检查 Dockerfile、`.dockerignore`、runtime registry fingerprint、平台架构和体积预算。
 
+## PR 的 Draft / Ready 分层（#836）
+
+`ci.yml` 按当前 PR 状态出运行计划（`agent-harness/ci-run-plan.mjs`），只有同一个分类器，不另造第二套判断：
+
+| 模式 | 何时 | 跑什么 |
+| --- | --- | --- |
+| `docs` | 纯文档白名单 | 文档保鲜 + 路由回归，重活全跳 |
+| `draft-fast` | Draft PR 的代码改动 | frozen install、workspace typecheck、按路径映射的无服务单测；不启动 PostgreSQL、镜像矩阵、Chrome ARM64 或 Windows 专项 |
+| `ready-full` | Ready for review、`push@main`、手动运行 | 现有全部核心检查，不减覆盖 |
+
+- **开关是仓库变量 `CI_PR_MODE`**：只有值为 `tiered` 才启用分层；未设置、非法值或 `full` 时恢复分层前的完整 PR 验收（纯文档例外保留）。没有 `off` / `skip-all`。
+- Draft 只发非 required 的 `ci-preview`；`ci-summary` 在 Draft 上跳过，因此 Draft 的成功不会冒充可合并。Ready 才产生稳定 `ci-summary`。
+- 连续推送时 Draft 每次都有实际快检；同一 SHA 从 Draft 转 Ready 会重新出计划并跑完整验收，不需要再推空 commit。旧 run 的绿灯不能顶替最新候选。
+- 手动运行某个工作流强制该工作流完整验收；`push@main` 不进入快路。
+- 专家套件（reverse / chrome / clickhouse / mobile / openharmony）的路径基线直接读各自 workflow 的 `pull_request.paths`，因此清单不会与计划漂移。
+- 五个专家工作流各自跑同一个 `ci-run-plan.mjs`（不是五份判断），重活矩阵只在 `mode == ready-full` 时启动；`push@main` 与手动运行仍是完整验收。专家套件的 PR 触发保留，尚未迁移到 `ci.yml` 的 `workflow_call` 统一入口。
+- 改分类器、汇总或本套路由本身时按高风险改动处理：需要独立评审与完整验收，不能用自己的快检规则给自己放行。
+- 出现漏测、重复触发或 required check 错配时，先把 `CI_PR_MODE` 设回 `full`（或删掉变量），再修路由。
+
 ## 验收边界：不要求生产测试部署（2026-10-31）
 
 后续项目开发**不要求生产环境测试部署**。验收以 GitHub Actions 实际通过的 CI 为准：`.github/workflows/ci.yml` 调用的 `ci:unit:*`、`ci:integration:*`、`ci:smoke:*`、`ci:images` 等门禁全部通过，即视为本仓库的**工程验收**完成。用户已明确此类生产执行无需进行，不因缺少生产重跑、生产数据验证或真实模型试验阻塞合并与 issue 关闭。

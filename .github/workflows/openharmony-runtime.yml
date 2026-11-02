@@ -45,7 +45,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # #836: same run plan as ci.yml (one shared script, not five copies). A Draft
+  # PR gets its fast checks from ci.yml, so specialists only start their heavy
+  # matrices for the ready-for-review candidate, push@main, or a manual run.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      reasons: ${{ steps.plan.outputs.reasons }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          CI_PR_MODE: ${{ vars.CI_PR_MODE }}
+        run: |
+          node agent-harness/ci-run-plan.mjs \
+            --event-name "$EVENT_NAME" \
+            --base "${PR_BASE:-}" \
+            --head "${PR_HEAD:-}" \
+            --draft "${PR_DRAFT:-false}" \
+            --ci-pr-mode "${CI_PR_MODE:-}" \
+            --root .
+
   openharmony-runtime-images:
+    needs: plan
+    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full'
     runs-on: ${{ matrix.toolset == 'openharmony-fuzz' && matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     timeout-minutes: 45
     permissions:
