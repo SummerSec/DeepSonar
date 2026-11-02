@@ -7,6 +7,11 @@
   - 五个专家工作流（reverse / chrome / clickhouse / mobile / openharmony）各新增 `plan` 作业并跑同一个 `ci-run-plan.mjs`，重活矩阵仅在 `mode == ready-full` 时启动；`push@main` 与手动运行保持完整矩阵，PR 触发仍由各工作流自己持有。
   - 开关是仓库变量 `CI_PR_MODE`：只有 `tiered` 启用分层，未设置/非法/`full` 时恢复分层前的完整 PR 验收；没有 `off`/`skip-all`。
   - 尚未接入：专家套件迁移到 `ci.yml` 的 `workflow_call` 统一入口、ruleset/分支保护实际核对、失败注入与前后各 10 次 PR 的均值采集。这些未在 CI 上执行，不能按已交付计。
+### 修复
+
+- **podman 宿主维护升级：成功的 `docker exec -i` 不再被判失败（#845 缺陷 5）**：`pg_restore --list` 读完归档 TOC 即关闭 stdin，Node 仍在向大备份管道写入，podman 下稳定返回 `EPIPE` 且**退出码为 0**；`run()` 原先把 `result.error` 与「退出码非 0」统一判失败，于是 197MB 备份的校验必然失败。现在以退出码为唯一判据（`isRunFailure`），`status === 0` 时 EPIPE 按成功处理；失败信息改为携带退出码/信号/错误码，可选 `DEEPSONAR_UPGRADE_DEBUG_STDERR=1` 输出**脱敏且截断**的 stderr（默认不输出，保持「不吐 PostgreSQL 诊断」的既有约定）。
+- **podman 宿主升级不再卡在 `compose up --wait`（#845 附带问题）**：podman 不自动执行周期 healthcheck，容器已 `Up (starting)` 而 `/health` 已 `ok:true`，`--wait` 会一直等到超时。三处启动点去掉 `--wait`/`--wait-timeout`，就绪改由已有的 HTTP 断言（`ok` + `ready` + `version`，维护路径再加 schema 与数据库断言）判定，覆盖不降反升。
+  - 未修：缺陷 1（catalog 拉取重试 / DNS `ipv4first` / `--catalog` 离线通道）、缺陷 2（buildx `imagetools` 与 `docker context` 缺失时的能力探测与 Registry v2 回退）、缺陷 3（unknown effects 对账入口）、缺陷 4（`runtime_image_scans` 僵尸回收）。这些仍按 #845 跟踪。
 
 ## [0.6.4] - 2026-11-02
 

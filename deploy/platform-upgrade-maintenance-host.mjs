@@ -250,7 +250,12 @@ export function maintenanceHostAdapter(options = {}) {
       await patchEnv(saved.source.env, {...valuesFor(state.target), DEEPSONAR_DATABASE_USER: saved.runtime.role, DEEPSONAR_DATABASE_PASSWORD: saved.runtime.password, DEEPSONAR_DATABASE_NAME: saved.candidateDatabase, DEEPSONAR_UPGRADE_GENERATION: state.generation});
       return {configured: true, database: saved.candidateDatabase};
     },
-    async startPreparing(state) {dc(['up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', ...services]);
+    async startPreparing(state) {
+    // #845: podman does not run the periodic healthcheck on its own, so `compose up
+    // --wait` blocks until timeout even though /health is already green. Readiness is
+    // asserted over HTTP afterwards (health + version + schema), which is the stronger
+    // check; do not reintroduce --wait here.
+    dc(['up', '-d', '--no-deps', ...services]);
       await (await nodesFor(state)).prepare({generation: state.generation, target: state.target, values: valuesFor(state.target), saved: await secrets(state)}); return {started: true};},
     async verifyPreparing(state) {
       const deadline = Date.now() + (options.readyTimeoutMs ?? 180000);
@@ -337,7 +342,11 @@ UPDATE platform_upgrade_state SET phase='active' WHERE id='global'; COMMIT; SELE
         // Existing activation receipts authorize forward repair, never a changed
         // .env pointing the same source image at a different database.
         assertRollbackConnection(await source(), saved);
-        dc(['up', '-d', '--no-deps', '--wait', '--wait-timeout', '180', ...services]);
+        // #845: podman does not run the periodic healthcheck on its own, so `compose up
+    // --wait` blocks until timeout even though /health is already green. Readiness is
+    // asserted over HTTP afterwards (health + version + schema), which is the stronger
+    // check; do not reintroduce --wait here.
+    dc(['up', '-d', '--no-deps', ...services]);
       };
       const waitSource = async preparing => {
         const deadline = Date.now() + (options.readyTimeoutMs ?? 180000);
