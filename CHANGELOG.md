@@ -1,6 +1,23 @@
 ## [Unreleased]
 
+## [0.6.4] - 2026-11-02
+
+### 发布恢复与升级边界
+
+- 本版承接 v0.6.3 的失败发布，包含[原工程记录](https://github.com/SummerSec/DeepSonar/blob/v0.6.3/CHANGELOG.md)中未正式交付的可信任务授权、Plan v2、Pi 观测记忆、独立程序资格、Finding 关系工程和 OpenSandbox 1.2 升级，以及本节修复。[原 Release 运行](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 在 OpenHarmony Fuzz 新构建的 sanitizer 启动阶段失败，未完成最终 catalog、平台签名和正式 Release。按用户 2026-11-02 的选择，保留原 v0.6.3 tag 和已有镜像，不删除、不移动或覆盖，不把部分镜像产出当作完整发行。
+- Git compare 起点为保留的 v0.6.3 tag；最近正式版及升级基线仍为 **v0.6.2**。数据库基线从 **65** 更新到 **67**；本次发布恢复不再修改 schema。非空库版本或结构不匹配时拒绝启动，升级须先备份、排空并对账未结算效果，再按显式审批与候选库重建流程执行；没有增量 ALTER 链，不支持无人值守跨 schema 升级。
+- 沿用原 v0.6.3 的本轮范围：独立质量验证、人工标注、隔离调参与留出集和后续质量门暂缓；Host 当前证书、CAS 晋升与公开强关系建议未交付，质量保持 `unknown` / `not_evaluated`、强关系 `published=false`。#833/#834 继续忽略，#835 仅跟踪后续纯机器验证，#836 为尚未实施的 CI 提速提案；均不替代当前红灯修复或既有工程与发布门禁。
+- 本节仅是发布准备。最终发布 SHA 的完整适用 GitHub Actions 和 v0.6.4 Release 工作流必须实际成功，完成原生双架构、配置通道 inspect、平台签名、catalog 与正式附件；前序工程 PR 全绿不替代本次发行证据。全部测试、构建、typecheck 和校验仅在 Actions 执行，不部署生产、不提前改写 bundled digest、不调整私有 package 版本。
+
+### 修复
+
+- OpenHarmony Fuzz 将默认 Clang/compiler-rt 更新为匹配的 LLVM 19，并以固定源码与校验和构建 PCGUARD AFL++ 4.32c，保留 PIE/ASLR、ASan/UBSan 与 libFuzzer。AFL helper 显式启用 UBSan 非恢复诊断；验收探针对实际编译器插件路径做规范化后严格匹配，不用降低检查规避错误。
+- 专项 CI 和 Release 对新建、复用的 OpenHarmony Fuzz 候选均执行 amd64/arm64 原生回归：每架构 20 次原始 C、20 次 libFuzzer helper、20 次 AFL helper 独立启动，两种 engine 的 ASan/UBSan 负例及 AFL 分支覆盖；通过后才 pin/publish。修复已由 [#838](https://github.com/SummerSec/DeepSonar/pull/838) 的 Actions 和合并主线验收，本次 Release 仍须验收自己实际使用的候选。
+- [#839](https://github.com/SummerSec/DeepSonar/pull/839) 同步 Finding、Plan v2、Pi 观测记忆与架构文档的工程状态；保留旧 SHA、本地验证和历史 schema 的原证据范围，不将工程验收写成质量验收或正式发布完成。
+
 ## [0.6.3] - 2026-11-01
+
+> 失败发布的历史准备记录；原 tag 保留。正式恢复由上方 v0.6.4 承接，以下内容不表示 v0.6.3 已正式发行。
 
 ### 发布与升级边界
 
@@ -21,7 +38,6 @@
 
 ### 修复
 
-- OpenHarmony Fuzz 将默认 Clang/compiler-rt 更新为匹配的 LLVM 19，并以固定源码与校验和构建同版 PCGUARD AFL++ 4.32c，保留 PIE/ASLR、ASan/UBSan 与 libFuzzer。专项 CI 和 Release 对新建、复用候选均执行双架构原生启动、两种实际 engine 的 sanitizer 负例及 AFL 分支覆盖，先验收再 pin/publish；修复仍须最终 SHA 的 Actions 实际通过，既有 v0.6.3 tag 不自动移动。
 - Hub 每次决策在同一事务内合并去重写入一批 Intent 边；终态 token 撤销保持与 Job 结算同一事务。CI 夹具使用当前生命周期、冻结快照与授权契约，不绕过 CAS 或回退直接 Canvas 查询。
 - PostgreSQL 集成夹具恢复时间戳时保留微秒，畸形 JSON 以原始文本进入解析器，并对回执内容而非驱动容器原型做历史不变校验；生产来源校验、JSON 约束及拒绝条件不放宽。
 - 文档保鲜识别 Markdown 角括号目标及空格/锚点，真实 routing 回归同时验证普通和角括号坏链接仍会失败；既有 changelog 校验器接入 Actions，验证待发布的实际版本区段与 compare link。
@@ -1362,3 +1378,5 @@
 [0.6.2]: https://github.com/SummerSec/DeepSonar/compare/v0.6.1...v0.6.2
 
 [0.6.3]: https://github.com/SummerSec/DeepSonar/compare/v0.6.2...v0.6.3
+
+[0.6.4]: https://github.com/SummerSec/DeepSonar/compare/v0.6.3...v0.6.4
