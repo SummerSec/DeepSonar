@@ -1042,7 +1042,10 @@ jobs:
   # 稳定的 required 汇总检查：显式核对分类器、文档门禁与应运行的重活结果。
   # 不用 echo success 占位；「跳过」与「失败」必须区分，避免 docs-only 掩盖真实失败。
   ci-summary:
-    # Draft runs emit ci-preview instead, so a skipped summary can never green a merge.
+    # Draft runs emit ci-preview instead of ci-summary. Note: GitHub counts a
+    # SKIPPED required check as satisfied, so skipping ci-summary does not itself
+    # block a Draft merge; blocking Draft merges must come from policy (ruleset /
+    # separate required check), not from this workflow's skip.
     if: always() && needs.changes.outputs.mode != 'draft-fast'
     needs: [changes, docs-freshness, windows-upgrade-backend, gate, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
     runs-on: ubuntu-latest

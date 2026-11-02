@@ -195,6 +195,14 @@ test("every specialist workflow gates its heavy matrix on the same run plan", ()
       assert.deepEqual(job.needs, "plan", `${suite}/${id} must depend on the plan`);
       assert.match(job.if, /needs\.plan\.outputs\.mode == 'ready-full'/, `${suite}/${id} must skip on Draft`);
     }
+    // #836 review (P1): a same-SHA Draft -> Ready transition must re-plan and run
+    // the matrix, so the workflow has to subscribe to ready_for_review. GitHub's
+    // default activity types are only opened/synchronize/reopened.
+    const types = workflow.on.pull_request.types;
+    for (const required of ["opened", "reopened", "synchronize", "ready_for_review"]) {
+      assert.ok(Array.isArray(types) && types.includes(required), `${suite} must trigger on ${required}`);
+    }
+    assert.ok(workflow.on.pull_request.paths, `${suite} must keep its path filter`);
     // push@main and manual runs still verify the full matrix.
     assert.ok(workflow.on.push, `${suite} must keep push@main`);
     assert.ok("workflow_dispatch" in workflow.on, `${suite} must keep a manual entry`);

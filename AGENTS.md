@@ -144,7 +144,8 @@ pnpm ci:images
 | `ready-full` | Ready for review、`push@main`、手动运行 | 现有全部核心检查，不减覆盖 |
 
 - **开关是仓库变量 `CI_PR_MODE`**：只有值为 `tiered` 才启用分层；未设置、非法值或 `full` 时恢复分层前的完整 PR 验收（纯文档例外保留）。没有 `off` / `skip-all`。
-- Draft 只发非 required 的 `ci-preview`；`ci-summary` 在 Draft 上跳过，因此 Draft 的成功不会冒充可合并。Ready 才产生稳定 `ci-summary`。
+- Draft 只发非 required 的 `ci-preview`，`ci-summary` 在 Draft 上跳过；Ready 才产生稳定 `ci-summary`。
+  **注意 GitHub 把 `skipped` 的 required check 视为满足**：跳过本身挡不住合并，要阻止 Draft 合并必须靠 ruleset / 单独的 required check，不能依赖本工作流的跳过行为。
 - 连续推送时 Draft 每次都有实际快检；同一 SHA 从 Draft 转 Ready 会重新出计划并跑完整验收，不需要再推空 commit。旧 run 的绿灯不能顶替最新候选。
 - 手动运行某个工作流强制该工作流完整验收；`push@main` 不进入快路。
 - 专家套件（reverse / chrome / clickhouse / mobile / openharmony）的路径基线直接读各自 workflow 的 `pull_request.paths`，因此清单不会与计划漂移。
