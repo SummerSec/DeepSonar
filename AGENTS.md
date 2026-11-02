@@ -151,6 +151,7 @@ pnpm ci:images
 - 五个专家工作流各自跑同一个 `ci-run-plan.mjs`（不是五份判断），重活矩阵只在 `mode == ready-full` 时启动；`push@main` 与手动运行仍是完整验收。专家套件的 PR 触发保留，尚未迁移到 `ci.yml` 的 `workflow_call` 统一入口。
 - 改分类器、汇总或本套路由本身时按高风险改动处理：需要独立评审与完整验收，不能用自己的快检规则给自己放行。
 - 出现漏测、重复触发或 required check 错配时，先把 `CI_PR_MODE` 设回 `full`（或删掉变量），再修路由。
+- 现状核对（2026-11-02）：`main` 无分支保护、无 required status checks、无 merge queue，唯一 ruleset 只拦 AI 工具分支前缀。给 `main` 加 required check 时以 `ci-summary` 为入口；启用 merge queue 必须同时加 `merge_group: checks_requested` 并验队列 SHA，**没有队列就不要先加 `merge_group`**（死配置）。
 
 ## 验收边界：不要求生产测试部署（2026-10-31）
 
