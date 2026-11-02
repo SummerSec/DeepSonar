@@ -25,6 +25,10 @@ param(
   [string]$Policy,
   [string]$Scheduler,
   [string]$NodePath,
+  # #842: explicit registry-channel migration must be reachable from the official
+  # Windows entry point too, not only from the Node CLI / deploy.sh passthrough.
+  [ValidateSet("github", "dockerhub", "aliyun-acr")]
+  [string]$RegistryChannel,
   [switch]$ResetRoleIdentity,
 
   [switch]$NoBuild
@@ -43,6 +47,7 @@ if ($Action -eq "upgrade") {
   if ($Policy) { $upgradeArgs += @("--policy", $Policy) }
   if ($Scheduler) { $upgradeArgs += @("--scheduler", $Scheduler) }
   if ($NodePath) { $upgradeArgs += @("--node-path", $NodePath) }
+  if ($RegistryChannel) { $upgradeArgs += @("--registry-channel", $RegistryChannel) }
   if ($ResetRoleIdentity) { $upgradeArgs += "--reset-role-identity" }
   & node @upgradeArgs
   exit $LASTEXITCODE

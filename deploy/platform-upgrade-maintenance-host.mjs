@@ -14,9 +14,10 @@ import {verifyMaintenanceWeb, assertMaintenanceDatabase, assertRollbackConnectio
 import {readSourceActivation, resumeRollback} from './platform-upgrade-maintenance-recovery.mjs';
 import {loadManagedInventory, maintenanceNodes} from './platform-upgrade-maintenance-nodes.mjs';
 import {createMaintenanceTransport, durablePrivateWrite, readPrivateJson, assertDirectoryDurability} from './platform-upgrade-maintenance-transport.mjs';
+import {PLATFORM_IMAGE_KEYS, platformImageKey, resolvePlatformImageValues} from './platform-release-catalog.mjs';
 
-const services = ['scheduler', 'web', 'image-admission'];
-const imageKeys = ['DEEPSONAR_SCHEDULER_IMAGE', 'DEEPSONAR_WEB_IMAGE', 'DEEPSONAR_IMAGE_ADMISSION_IMAGE'];
+const services = [...PLATFORM_IMAGE_KEYS];
+const imageKeys = services.map(platformImageKey);
 const hash = value => createHash('sha256').update(value).digest('hex');
 // #845: image admission can leave scans claimed/running after its worker dies.
 // A scan older than this window no longer holds a live claim; blocking the
@@ -31,7 +32,25 @@ const claimsSql = `SELECT json_build_object('claims_paused',claims_paused,'reaso
 'in_flight',json_build_object('total',(SELECT count(*) FROM jobs WHERE status IN ('claimed','provisioning','running'))),
 'effect_pending_attempts',(SELECT count(*) FROM job_attempt_effects WHERE status='effect_pending'),
 'unknown_effect_attempts',(SELECT count(*) FROM job_attempt_effects WHERE status='unknown')) FROM global_settings WHERE id='global'`;
-const valuesFor = target => target.values ?? Object.fromEntries([['DEEPSONAR_VERSION', target.version], ...services.map((service, i) => [imageKeys[i], target.images[service].registry_refs.github])]);
+// #842: values come from the journaled target, already resolved against the
+// deployment's current registry channel by hostAdapter.release().
+const valuesFor = target => {
+  if (!target?.values || typeof target.values !== 'object') throw new Error('maintenance target is missing resolved platform image values');
+  return target.values;
+};
+
+/**
+ * Freeze the target's platform image values (#842).
+ *
+ * A journal written before channel resolution existed carries a target without
+ * `values`; throwing here would leave an in-flight upgrade unrecoverable (candidate
+ * database created, CLI unable to resume). Resolve it from *this* deployment's
+ * current channel instead and store it on the target, so resume, prepare, patch and
+ * rollback all keep using one frozen set of references. A target that already has
+ * values is never re-resolved - the journal stays authoritative.
+ */
+export const resolvePlanValues = (target, currentValues, {channel} = {}) =>
+  target.values ?? (target.values = resolvePlatformImageValues(target, currentValues, {channel}));
 
 export function maintenanceHostAdapter(options = {}) {
   const root = resolve(options.directory ?? dirname(fileURLToPath(import.meta.url)));
@@ -181,7 +200,7 @@ FROM runtime_image_scans WHERE status IN ('claimed','running')`});
     },
     async resolveTarget() {const target = await legacy.release(); await legacy.pull(target); return target;},
     async plan(target, {recovery: recovering = false, resetRoleIdentity = options.resetRoleIdentity === true} = {}) {
-      const prior = await source(), values = valuesFor(target);
+      const prior = await source(), values = resolvePlanValues(target, prior.values, {channel: options.registryChannel});
       if (!recovering) verifyContainers({target: {values: prior.values}});
       const source_schema_sha256 = run(['run', '--rm', '--network=none', '--read-only', '--entrypoint=node', prior.values.DEEPSONAR_SCHEDULER_IMAGE, '-e', "console.log(require('crypto').createHash('sha256').update(require('fs').readFileSync('/app/database/schema.sql')).digest('hex'))"]).toString().trim();
       if (!/^[a-f0-9]{64}$/.test(source_schema_sha256)) throw new Error('source schema fingerprint invalid');
@@ -384,6 +403,7 @@ UPDATE platform_upgrade_state SET phase='active' WHERE id='global'; COMMIT; SELE
         for (const service of ['scheduler', 'image-admission']) {
           const id = dc(['ps', '-q', service]).toString().trim();
           if (!/^[a-f0-9]{12,64}$/.test(id)) throw new Error('rollback source container missing');
+          // pi-lens-ignore: unchecked-throwing-call-js
           const entries = JSON.parse(run(['inspect', '--format', '{{json .Config.Env}}', id]).toString());
           const urls = entries.filter(entry => entry.startsWith('DATABASE_URL='));
           if (urls.length !== 1) throw new Error('rollback source database connection mismatch');

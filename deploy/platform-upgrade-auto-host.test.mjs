@@ -66,3 +66,22 @@ test('enabled host compares actual ready health with dotenv before discovering r
     await assert.rejects(readFile(join(dir, '.upgrade', 'maintenance.json')), {code: 'ENOENT'});
   } finally {await rm(dir, {recursive: true, force: true});}
 });
+
+// #842: signature verification is pinned to the GitHub registry regardless of
+// which registry the host deploys from. Attestations are only published there.
+import {signatureImages} from './platform-upgrade-auto-host.mjs';
+import {PLATFORM_IMAGE_KEYS, PLATFORM_IMAGE_CHANNELS, platformImageKey} from './platform-release-catalog.mjs';
+
+test('signature verification stays on the GitHub channel for a non-GitHub deployment', () => {
+  const acr = PLATFORM_IMAGE_CHANNELS['aliyun-acr'];
+  const target = {images: Object.fromEntries(PLATFORM_IMAGE_KEYS.map(service => [service, {registry_refs: {
+    github: `ghcr.io/summersec/deepsonar-${service}@sha256:${'a'.repeat(64)}`,
+    'aliyun-acr': `${acr.host}/${acr.namespace}/deepsonar-${service}@sha256:${'b'.repeat(64)}`,
+  }}]))};
+  const images = signatureImages(target);
+  for (const service of PLATFORM_IMAGE_KEYS) {
+    assert.equal(images[service], target.images[service].registry_refs.github);
+    assert.equal(images[service], `ghcr.io/summersec/deepsonar-${service}@sha256:${'a'.repeat(64)}`);
+    assert.ok(!images[service].includes('aliyuncs.com'), `${platformImageKey(service)} must not follow the deployment channel`);
+  }
+});
