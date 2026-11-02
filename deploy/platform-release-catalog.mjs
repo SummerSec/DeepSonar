@@ -162,3 +162,4 @@ export function resolvePlatformImageValues(target, currentValues, { channel } = 
   }
   return values;
 }
+// probe(#836): sample 1 — measures the draft fast path only.
