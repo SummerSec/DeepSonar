@@ -18,6 +18,14 @@ import {createMaintenanceTransport, durablePrivateWrite, readPrivateJson, assert
 const services = ['scheduler', 'web', 'image-admission'];
 const imageKeys = ['DEEPSONAR_SCHEDULER_IMAGE', 'DEEPSONAR_WEB_IMAGE', 'DEEPSONAR_IMAGE_ADMISSION_IMAGE'];
 const hash = value => createHash('sha256').update(value).digest('hex');
+// #845: image admission can leave scans claimed/running after its worker dies.
+// A scan older than this window no longer holds a live claim; blocking the
+// upgrade on it strands every maintenance run forever.
+const DEFAULT_SCAN_LEASE_MINUTES = 10;
+/** Only a scan inside the lease window still holds a live claim (#845). */
+export const scanBlockMessage = ({active, stale}, leaseMinutes) => active === 0
+  ? null
+  : `image admission scans must settle before backup: ${active} active, ${stale} stale beyond ${leaseMinutes}m`;
 const literal = value => "'" + String(value).replaceAll("'", "''") + "'";
 const claimsSql = `SELECT json_build_object('claims_paused',claims_paused,'reason',claims_pause_reason,'drained',true,
 'in_flight',json_build_object('total',(SELECT count(*) FROM jobs WHERE status IN ('claimed','provisioning','running'))),
@@ -87,9 +95,24 @@ export function maintenanceHostAdapter(options = {}) {
     const saved = await secrets(state);
     return maintenanceNodes({inventory: saved.inventory, registeredWorkerIds: saved.registeredWorkerIds, transport: options.nodeTransport, sshOptions: options.sshOptions, run, commandEnv});
   };
+  const scanLeaseMinutes = Number.isSafeInteger(options.scanLeaseMinutes) && options.scanLeaseMinutes > 0
+    ? options.scanLeaseMinutes : DEFAULT_SCAN_LEASE_MINUTES;
+  // Stale scans are reported, never silently ignored: an operator must still see how
+  // many admission rows were abandoned by a dead worker.
+  const unsettledScans = async state => {
+    const saved = await secrets(state);
+    const value = await adminScalar(state, {database: saved.source.database, sql: `SELECT json_build_object(
+'active', count(*) FILTER (WHERE coalesce(started_at, created_at) > now() - interval '${scanLeaseMinutes} minutes'),
+'stale', count(*) FILTER (WHERE coalesce(started_at, created_at) <= now() - interval '${scanLeaseMinutes} minutes'))::text
+FROM runtime_image_scans WHERE status IN ('claimed','running')`});
+    const parsed = JSON.parse(value);
+    return {active: Number(parsed?.active ?? 0), stale: Number(parsed?.stale ?? 0)};
+  };
   const checkClaims = async state => {const saved = await secrets(state); const result = await adminScalar(state, {database: saved.source.database, sql: claimsSql}); assertDrained(result);
-    const scans = await adminScalar(state, {database: saved.source.database, sql: "SELECT count(*)::int FROM runtime_image_scans WHERE status IN ('claimed','running')"});
-    if (scans !== 0) throw new Error('image admission scans must settle before backup'); return result;};
+    const scans = await unsettledScans(state);
+    const blocked = scanBlockMessage(scans, scanLeaseMinutes);
+    if (blocked) throw new Error(blocked);
+    return result;};
   const stop = () => dc(['stop', ...services]);
   const patchEnv = async (base, replacements) => {
     let contents = base;
