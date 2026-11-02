@@ -29,6 +29,22 @@ Shell 和 PowerShell 共用维护升级控制器 `platform-upgrade-maintenance-h
 
 Linux 使用 `flock` 和文件/目录 `fsync`；Windows 原生后端使用本地 NTFS 的独占内核句柄、受保护私有 DACL、write-through 替换及 flush。锁由宿主进程持有，写文件的子进程借用同一锁直到 I/O 结束，避免宿主崩溃后孤儿写入与下一代交错；不需手删锁文件。Windows 拒绝网络盘、非 NTFS 与 reparse 路径。原生 Windows CI 单独验证锁竞争、进程终止、ACL 与文件替换；Linux PowerShell 测试不代替原生证据，也不证明真实 Windows Docker 部署或断电恢复验收。
 
+### release catalog 拉取与离线通道（#845）
+
+`upgrade check|apply` 第一步要取官方 `runtime-image-registry.json`。默认从 GitHub Release 取，行为：
+
+- 进程内启用 **IPv4 优先** DNS 排序（双栈但 AAAA 不通的出口，否则 undici 每次连接都会超时，而 `curl` 正常）；
+- 瞬时错误（网络/超时、408、425、429、5xx）**指数退避重试 3 次**（2s / 5s / 10s）；`404`（版本不存在）与其他 4xx **立即失败**，不重试；
+- 想绕开单次 GitHub 连接（内网、镜像、坏出口）时，显式指定 catalog 来源：
+
+```bash
+./deploy/deploy.sh upgrade check --to v0.6.4 --catalog /srv/mirror/runtime-image-registry.json
+./deploy/deploy.sh upgrade apply --to v0.6.4 --catalog https://mirror.example/runtime-image-registry.json
+# 或环境变量 DEEPSONAR_UPGRADE_CATALOG=<path|url>
+```
+
+`--catalog` 只改变**字节来源**，`verifyPlatformRelease` 仍会对结果做跨 registry digest 校验 —— 不因离线通道降低校验强度。
+
 默认关闭的 `upgrade auto`、维护窗口、签名准入和禁用调度模板见 [自动升级说明](UPGRADE_AUTOMATION.md)。生产 Release keyless 签名权限及实际正向链路尚未启用或验收，不能据临时密钥测试宣称生产无人值守升级已可用。
 
 ```bash

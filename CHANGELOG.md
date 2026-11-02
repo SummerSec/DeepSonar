@@ -12,6 +12,8 @@
 - **podman 宿主维护升级：成功的 `docker exec -i` 不再被判失败（#845 缺陷 5）**：`pg_restore --list` 读完归档 TOC 即关闭 stdin，Node 仍在向大备份管道写入，podman 下稳定返回 `EPIPE` 且**退出码为 0**；`run()` 原先把 `result.error` 与「退出码非 0」统一判失败，于是 197MB 备份的校验必然失败。现在以退出码为唯一判据（`isRunFailure`），`status === 0` 时 EPIPE 按成功处理；失败信息改为携带退出码/信号/错误码，可选 `DEEPSONAR_UPGRADE_DEBUG_STDERR=1` 输出**脱敏且截断**的 stderr（默认不输出，保持「不吐 PostgreSQL 诊断」的既有约定）。
 - **podman 宿主升级不再卡在 `compose up --wait`（#845 附带问题）**：podman 不自动执行周期 healthcheck，容器已 `Up (starting)` 而 `/health` 已 `ok:true`，`--wait` 会一直等到超时。三处启动点去掉 `--wait`/`--wait-timeout`，就绪改由已有的 HTTP 断言（`ok` + `ready` + `version`，维护路径再加 schema 与数据库断言）判定，覆盖不降反升。
   - 未修：缺陷 1（catalog 拉取重试 / DNS `ipv4first` / `--catalog` 离线通道）、缺陷 2（buildx `imagetools` 与 `docker context` 缺失时的能力探测与 Registry v2 回退）、缺陷 3（unknown effects 对账入口）、缺陷 4（`runtime_image_scans` 僵尸回收）。这些仍按 #845 跟踪。
+- **release catalog 拉取：IPv4 优先 + 指数退避 + 离线通道（#845 缺陷 1）**：双栈出口上 AAAA 不可达时 undici 每次连接都超时（同一时刻 `curl` 成功），而拉取只有单次尝试、无重试。现在进程内启用 IPv4 优先 DNS 排序；瞬时错误（网络/超时、408、425、429、5xx）退避重试 3 次（2s/5s/10s），`404` 与其他 4xx 立即失败；新增 `--catalog <path|url>` 与 `DEEPSONAR_UPGRADE_CATALOG` 指定 catalog 来源，`verifyPlatformRelease` 照常执行，校验强度不降。
+  - 仍按 #845 跟踪：缺陷 2（buildx `imagetools` / `docker context` 能力探测与 Registry v2 回退）、缺陷 3（`unknown` effects 对账入口）、缺陷 4（`runtime_image_scans` 僵尸回收）。
 
 ## [0.6.4] - 2026-11-02
 

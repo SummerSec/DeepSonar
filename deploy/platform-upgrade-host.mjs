@@ -8,7 +8,8 @@ import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { upgrade, assertDrained, verifyBackup } from './platform-upgrade.mjs';
+import { getDefaultResultOrder, setDefaultResultOrder } from 'node:dns';
+import { assertDrained, verifyBackup } from './platform-upgrade.mjs';
 import { CONFIG_SNAPSHOT_SQL, preflightBlock, targetConfigurationPreflight } from './platform-upgrade-preflight.mjs';
 import { verifyPlatformRelease } from '../agent-harness/check-platform-release.mjs';
 
@@ -30,6 +31,94 @@ export function platformValues(contents) {
   }
   if (/^\s*(?:export\s+)?DEEPSONAR_IMAGE_TAG(?:\s*[=:]|\s*$)/m.test(contents)) throw new Error('obsolete platform image variable');
   return result;
+}
+
+// ---- official release catalog fetch (#845) --------------------------------
+// Operators on IPv4-only / broken-AAAA egresses saw every attempt time out while
+// `curl` fetched the same URL. Prefer IPv4, retry transient failures with backoff,
+// and allow an explicit catalog (file or mirror URL) so an upgrade never depends on
+// one GitHub connection. Verification of the catalog itself is unchanged.
+export const RELEASE_RETRY_DELAYS_MS = Object.freeze([2_000, 5_000, 10_000]);
+const RETRYABLE_RELEASE_STATUSES = Object.freeze([408, 425, 429, 500, 502, 503, 504]);
+export const RELEASE_CATALOG_ENV = 'DEEPSONAR_UPGRADE_CATALOG';
+
+const defaultSleep = delay => new Promise(done => {
+  setTimeout(done, delay);
+});
+
+/** IPv4-first DNS ordering; idempotent and safe on older Node. */
+export function preferIpv4Addresses() {
+  try {
+    if (getDefaultResultOrder() !== 'ipv4first') setDefaultResultOrder('ipv4first');
+    return getDefaultResultOrder();
+  } catch {
+    return null;
+  }
+}
+
+const catalogError = (code, message, {retryable = false, attempts} = {}) =>
+  Object.assign(new Error(message), {code, retryable, ...(attempts === undefined ? {} : {attempts})});
+
+const isCatalogError = error => typeof error?.code === 'string' && error.code.startsWith('RELEASE_');
+
+async function readCatalogJson(response) {
+  try {
+    return await response.json();
+  } catch {
+    throw catalogError('RELEASE_CATALOG_INVALID', 'official release catalog is not valid JSON');
+  }
+// pi-lens-ignore: unchecked-throwing-call-js
+}
+
+/**
+ * Fetch a release catalog with bounded exponential backoff. Only clearly transient
+ * conditions are retried: network/timeout errors, 408/425/429 and 5xx. A missing
+ * version (404) and any other 4xx fail immediately - retrying cannot fix them.
+ */
+export async function fetchReleaseCatalog(url, {fetchImpl = fetch, sleep = defaultSleep, retryDelays = RELEASE_RETRY_DELAYS_MS} = {}) {
+  preferIpv4Addresses();
+  let lastError;
+  for (let attempt = 0; attempt <= retryDelays.length; attempt += 1) {
+    try {
+      const response = await fetchImpl(url, {signal: AbortSignal.timeout(30_000)});
+      // pi-lens-ignore: unchecked-throwing-call-js
+      if (response.status === 404) throw catalogError('RELEASE_NOT_FOUND', `official release not found (404): ${url}`);
+      if (response.ok) return await readCatalogJson(response);
+      throw catalogError('RELEASE_FETCH_FAILED', `official release fetch failed (${response.status})`,
+        {retryable: RETRYABLE_RELEASE_STATUSES.includes(response.status)});
+    } catch (error) {
+      const failure = isCatalogError(error)
+        ? error
+        : catalogError('RELEASE_FETCH_FAILED', `official release fetch failed: ${error?.message ?? 'network error'}`, {retryable: true});
+      if (!failure.retryable) throw failure;
+      lastError = failure;
+    }
+    if (attempt < retryDelays.length) await sleep(retryDelays[attempt]);
+  }
+  throw catalogError('RELEASE_FETCH_FAILED',
+    `official release fetch failed after ${retryDelays.length + 1} attempt(s): ${lastError?.message ?? 'unknown error'}`,
+    {attempts: retryDelays.length + 1});
+}
+
+/**
+ * Load the catalog from an explicit source (http(s) URL or local file) or from the
+ * official release URL. `--catalog` / DEEPSONAR_UPGRADE_CATALOG only change where the
+ * bytes come from - verifyPlatformRelease still runs on the result.
+ */
+export async function loadReleaseCatalog({source, url, fetchImpl = fetch, sleep = defaultSleep, readFileImpl = readFile, retryDelays = RELEASE_RETRY_DELAYS_MS} = {}) {
+  if (!source) return fetchReleaseCatalog(url, {fetchImpl, sleep, retryDelays});
+  if (/^https?:\/\//iu.test(source)) return fetchReleaseCatalog(source, {fetchImpl, sleep, retryDelays});
+  let contents;
+  try {
+    contents = await readFileImpl(source, 'utf8');
+  } catch {
+    throw catalogError('RELEASE_CATALOG_UNREADABLE', `cannot read the catalog file ${source}`);
+  }
+  try {
+    return JSON.parse(contents);
+  } catch {
+    throw catalogError('RELEASE_CATALOG_INVALID', `catalog file ${source} is not valid JSON`);
+  }
 }
 
 async function atomic(path, contents) {
@@ -103,6 +192,7 @@ export function hostAdapter(options = {}) {
   };
   const adapter = {
     async lock(fn) {
+      // pi-lens-ignore: unchecked-throwing-call-js
       await mkdir(recovery, { recursive: true, mode: 0o700 });
       await chmod(recovery, 0o700);
       const lockPath = resolve(recovery, 'lock');
@@ -125,9 +215,15 @@ export function hostAdapter(options = {}) {
       const version = options.version?.replace(/^v/, '');
       if (version && !/^\d+\.\d+\.\d+$/.test(version)) throw new Error('version must be stable X.Y.Z');
       const url = `https://github.com/SummerSec/DeepSonar/releases/${version ? `download/v${version}` : 'latest/download'}/runtime-image-registry.json`;
-      const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-      if (!response.ok) throw new Error(`official release fetch failed (${response.status})`);
-      const catalog = await response.json();
+      const catalog = await loadReleaseCatalog({
+        source: options.catalog ?? process.env[RELEASE_CATALOG_ENV],
+        url,
+        fetchImpl: options.fetch,
+        sleep: options.sleep,
+        readFileImpl: options.readCatalogFile,
+        retryDelays: options.releaseRetryDelays,
+      // pi-lens-ignore: unchecked-throwing-call-js
+      });
       verifyPlatformRelease(catalog);
       if (version && catalog.platform.version !== version) throw new Error('release version mismatch');
       return catalog.platform;
@@ -239,8 +335,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const [action, ...args] = process.argv.slice(2), options = {};
   for (let i = 0; i < args.length; i += 2) {
     if (args[i] === '--reset-role-identity') {options.resetRoleIdentity = true; i -= 1; continue;}
-    const key = { '--version': 'version', '--to': 'version', '--api': 'api', '--web-url': 'webUrl', '--web': 'webUrl', '--compose-file': 'composeFiles', '--approve-plan-hash': 'approvedPlanHash', '--nodes': 'nodes', '--policy': 'policy', '--scheduler': 'scheduler', '--node-path': 'nodePath' }[args[i]];
-    if (!key || !args[i + 1]) throw new Error('usage: check|apply|rollback|resume-rollback|auto [--to vX.Y.Z] [--policy FILE] [--api URL] [--web-url URL] [--compose-file FILE ...]');
+    const key = { '--version': 'version', '--to': 'version', '--api': 'api', '--web-url': 'webUrl', '--web': 'webUrl', '--compose-file': 'composeFiles', '--approve-plan-hash': 'approvedPlanHash', '--nodes': 'nodes', '--policy': 'policy', '--scheduler': 'scheduler', '--node-path': 'nodePath', '--catalog': 'catalog' }[args[i]];
+    if (!key || !args[i + 1]) throw new Error('usage: check|apply|rollback|resume-rollback|auto [--to vX.Y.Z] [--policy FILE] [--api URL] [--web-url URL] [--compose-file FILE ...] [--catalog FILE|URL]');
     if (key === 'composeFiles') (options[key] ??= []).push(args[i + 1]); else options[key] = args[i + 1];
   }
   try {
