@@ -33,7 +33,9 @@ interface Child { child: ReturnType<typeof spawn>; port: number; ready: Promise<
 
 async function startChild(env: Record<string, string | undefined>): Promise<Child> {
   const port = await freePort();
-  const child = spawn("pnpm", ["exec", "tsx", FIXTURE], {
+  // Spawn node directly (tsx as a loader) so the process we hold is the server itself:
+  // under `pnpm exec` the SIGKILL lands on a grandchild and the wrapper exits normally.
+  const child = spawn(process.execPath, ["--import", "tsx", FIXTURE], {
     cwd: fileURLToPath(new URL("../../..", import.meta.url)),
     env: { ...process.env, ...env, PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
@@ -70,8 +72,9 @@ test("a killed Scheduler process leaves a replayable durable completion (#835)",
     // otherwise the parent would write to the runner's default database while the children
     // read the isolated one (the first CI run hung for exactly that reason).
     process.env.DATABASE_URL = url.toString();
-    const [{ sql, migrate }, api, { createAttempt }] = await Promise.all([
+    const [{ sql, migrate }, api, { createAttempt }, { completionReceiptId }] = await Promise.all([
       import("../../db.js"), import("./index.js"), import("../job-attempt/application.js"),
+      import("../event-ingestion/completion-receipt.js"),
     ]);
     await migrate();
     const projectId = randomUUID(), jobId = randomUUID();
@@ -105,12 +108,16 @@ test("a killed Scheduler process leaves a replayable durable completion (#835)",
     children.push(second);
     await second.ready;
     const replay = await post(second.port, jobId, grant.token, key, payload);
-    assert.equal(replay.status, 200, await replay.text());
+    const raw = await replay.text();
+    assert.equal(replay.status, 200, raw);
     // SAFETY: the Control API answers with the receipt envelope this suite asserts on;
-    // only the fields below are read and both are string comparisons.
-    const body = (await replay.json()) as { receipt_status?: string; idempotency_key?: string };
+    // only the two string fields below are read.
+    const body = JSON.parse(raw) as { receipt_status?: string; receipt_ref?: string; accepted?: boolean };
+    assert.equal(body.accepted, true, "the replayed completion is accepted from durable state");
     assert.equal(body.receipt_status, "persisted_deferred", "the restarted process serves the persisted receipt");
-    assert.equal(body.idempotency_key, key);
+    // The receipt identity is derived from (job, idempotency key): the same ref proves the
+    // restarted process returned the original receipt rather than writing a new one.
+    assert.equal(body.receipt_ref, completionReceiptId(jobId, key));
 
     const after = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${jobId} AND type='control_receipt'`;
     assert.equal(after.count, 1, "a replayed completion must not add a second durable receipt");
