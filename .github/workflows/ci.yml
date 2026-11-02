@@ -184,6 +184,46 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:crash-recovery
 
+  # #835 item 2: Find-ing lexical retrieval under a synthetic backlog, measured from the
+  # PostgreSQL side (pg_stat_database deltas + EXPLAIN BUFFERS), not client RSS.
+  lexical-pressure:
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: deepsonar-ci-pass
+          POSTGRES_DB: deepsonar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U deepsonar -d deepsonar"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: Synthetic backlog with server-side metrics
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          LEXICAL_PRESSURE_SIZES: "1000,10000"
+          LEXICAL_PRESSURE_ARTIFACT_DIR: ${{ github.workspace }}/artifacts/lexical-pressure
+        run: pnpm ci:integration:lexical-pressure
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: lexical-pressure-metrics
+          path: artifacts/lexical-pressure
+          if-no-files-found: warn
+
   gate:
     runs-on: ubuntu-24.04
     needs: changes
@@ -1084,7 +1124,7 @@ jobs:
     # block a Draft merge; blocking Draft merges must come from policy (ruleset /
     # separate required check), not from this workflow's skip.
     if: always() && needs.changes.outputs.mode != 'draft-fast'
-    needs: [changes, docs-freshness, windows-upgrade-backend, crash-recovery, gate, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
+    needs: [changes, docs-freshness, windows-upgrade-backend, crash-recovery, lexical-pressure, gate, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1097,6 +1137,7 @@ jobs:
           DOCS: ${{ needs.docs-freshness.result }}
           WINDOWS: ${{ needs.windows-upgrade-backend.result }}
           CRASH: ${{ needs.crash-recovery.result }}
+          LEXICAL: ${{ needs.lexical-pressure.result }}
           GATE: ${{ needs.gate.result }}
           IMAGES: ${{ needs.runtime-images.result }}
           FUZZ_BUILD: ${{ needs.chrome-fuzz-arm64-build.result }}
@@ -1128,6 +1169,7 @@ jobs:
 
           check_heavy windows-upgrade-backend "$WINDOWS"
           check_heavy crash-recovery "$CRASH"
+          check_heavy lexical-pressure "$LEXICAL"
           check_heavy gate "$GATE"
           check_heavy runtime-images "$IMAGES"
           check_heavy chrome-fuzz-arm64-build "$FUZZ_BUILD"
