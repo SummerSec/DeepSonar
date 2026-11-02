@@ -101,9 +101,10 @@ git diff --check
 
 ## Slice B release contract
 
-The release workflow is the source of truth for the v2 catalog. It publishes
-each image to configured destinations in this order: Aliyun ACR, GHCR, then
-Docker Hub. ACR and Docker Hub are optional; missing credentials produce an
+The [release workflow](../.github/workflows/release.yml) is the source of truth
+for the v2 catalog. Each publisher defines the order of publishing to configured
+destinations and copying its canonical index; there is no universal ACR-first
+sequence. ACR and Docker Hub are optional; missing credentials produce an
 explicit unavailable channel record rather than a guessed reference.
 The official ACR endpoint is fixed to
 `crpi-6s5wwv0nhl6dq1l0.cn-hangzhou.personal.cr.aliyuncs.com/summersec`; a
