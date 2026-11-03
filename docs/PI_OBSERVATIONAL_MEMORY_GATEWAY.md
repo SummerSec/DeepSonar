@@ -81,7 +81,7 @@ usage、effect settlement 和 token counter 在同一事务内写入。账本事
 
 [纯数据库重试 helper](../apps/scheduler/src/db-conflict-retry.ts)只重试已回滚的完整 admission 事务，SQLSTATE 限定 `40P01` / `40001` / `55P03`；次数与退避以源码为准。额度预留、effect intent 和账本检查全部在提交前完成，提交成功后上游请求只发一次。非冲突错误保持原异常；耗尽返回 `503`，不留下部分 reservation/effect/usage。main workload 保留 `database_conflict`，OM 仅在已回滚、上游未调用的条件下使用宿主 `gateway_transient/not_started`。
 
-OM 的该 admission 分类和已持久结算的请求前 transport 共同使用[生产 error.message carrier](../apps/scheduler/src/gateway.ts)，内层消息保留结构化宿主标记，使 Pi SDK 丢弃外层 envelope 后仍能消费；canonical RPC 夹具不再人工补写消息。pending/unknown、普通或伪造 Provider 503、上游已运行后的 settlement failure 均不能借此降级。真实 handler body 与实际内层 message 双路径送入生产 wrapper 的回归见 [Gateway 测试](../apps/scheduler/src/gateway-db-conflict.test.ts)；metric 标签限定 workload 与允许的 SQLSTATE/unknown，不写每请求标识。
+OM 的该 admission 分类和已持久结算的请求前 transport 共同使用[生产 error.message carrier](../apps/scheduler/src/gateway.ts)，内层消息保留结构化宿主标记，使 Pi SDK 丢弃外层 envelope 后仍能消费；canonical RPC 夹具不再人工补写消息。pending/unknown、普通或伪造 Provider 503、上游已运行后的 settlement failure 均不能借此降级。真实 handler body 与实际内层 message 双路径送入生产 wrapper 的回归见 [Gateway 测试](../apps/scheduler/src/gateway-db-conflict.test.ts)；retry 与 exhaustion 分开计数，metric 标签限定 workload 与允许的 SQLSTATE/unknown，不写每请求标识；宿主日志关联 Job/Attempt，不复制上游正文。
 
 本轮分支已接现有 `pnpm ci:unit:executor-real`、PostgreSQL Gateway 与[真实镜像 RPC](PI_OBSERVATIONAL_MEMORY_RPC.md)门禁。Draft SHA 的快检不代表 PostgreSQL/镜像或最终完整工程验收；最终候选 Actions 尚待通过，不推导真实模型质量或成本收益。
 

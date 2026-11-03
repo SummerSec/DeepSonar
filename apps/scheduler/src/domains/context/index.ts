@@ -9,7 +9,7 @@ import {
   type ContextState,
 } from "@deepsonar/runtime-sandbox";
 import { updateAttemptContext, type AttemptDatabase } from "../job-attempt/index.js";
-import { withDatabaseConflictRetry } from "../../db-conflict-retry.js";
+import { DB_CONFLICT_MAX_ATTEMPTS, withDatabaseConflictRetry } from "../../db-conflict-retry.js";
 import { inc } from "../../metrics.js";
 
 export function createJobRuntimeContext(input: {
@@ -105,11 +105,15 @@ export async function persistJobRuntimeContext(
          )
        WHERE id = ${jobId}`;
   }), {
-    onConflict(error) {
-      const code = (error as { code?: string }).code;
-      inc("deepsonar_database_conflict_retries_total", {
-        operation: "context",
-        code: code === "40P01" || code === "40001" || code === "55P03" ? code : "unknown",
+    onConflict(error, attempt) {
+      const rawCode = (error as { code?: string }).code;
+      const code = rawCode === "40P01" || rawCode === "40001" || rawCode === "55P03" ? rawCode : "unknown";
+      const labels = { operation: "context", code };
+      inc("deepsonar_database_conflict_retries_total", labels);
+      if (attempt === DB_CONFLICT_MAX_ATTEMPTS) inc("deepsonar_database_conflict_exhausted_total", labels);
+      console.warn("[context] recoverable database conflict", {
+        ...labels, attempt, exhausted: attempt === DB_CONFLICT_MAX_ATTEMPTS,
+        job_id: jobId, attempt_id: context.attempt_id ?? null,
       });
     },
   });

@@ -1459,6 +1459,10 @@ export function registerGateway(app: FastifyInstance): void {
         throw error;
       });
       if (requestIntent instanceof DatabaseConflictExhaustedError) {
+        const code = databaseConflictMetricCode(requestIntent.cause);
+        inc("deepsonar_gateway_db_conflict_exhausted_total", { workload, code });
+        app.log.warn({ code, workload, attempts: requestIntent.attempts, job_id: jt.job_id, attempt_id: gatewayAttemptId },
+          "gateway admission exhausted its bounded database conflict retries");
         // The admission transaction rolled back its counter and effect; no upstream request started.
         const message = "数据库锁冲突在有限重试后仍未恢复，请稍后重试；该请求未向上游发出";
         return reply.code(503).send({

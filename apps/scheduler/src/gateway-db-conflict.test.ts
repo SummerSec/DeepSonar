@@ -153,8 +153,9 @@ function setup(t: TestContext, selected: GatewayWorkload, code: string, failures
     headers: { authorization: `Bearer ${token}` }, payload: { model, messages: [{ role: "user", content: "offline" }] } }) };
 }
 
-async function conflictCount(code: string): Promise<number> {
-  const prefix = `deepsonar_gateway_db_conflict_retries_total{workload="${workload}",code="${code}"} `;
+async function conflictCount(code: string, exhausted = false): Promise<number> {
+  const metric = exhausted ? "exhausted" : "retries";
+  const prefix = `deepsonar_gateway_db_conflict_${metric}_total{workload="${workload}",code="${code}"} `;
   const line = (await renderMetrics()).split("\n").find((entry) => entry.startsWith(prefix));
   return line ? Number(line.slice(prefix.length)) : 0;
 }
@@ -189,6 +190,7 @@ for (const selected of ["main", "observational_memory"] as const) {
     test(`${selected} admission retries ${code} with one committed effect and one upstream request`, async (t) => {
       const fixture = setup(t, selected, code, 2);
       const before = await conflictCount(code);
+      const exhaustedBefore = await conflictCount(code, true);
       const response = await fixture.request();
       assert.equal(response.statusCode, 200, response.body);
       assert.deepEqual(fixture.errors, []);
@@ -202,11 +204,13 @@ for (const selected of ["main", "observational_memory"] as const) {
       assert.equal(store.ledger[0]?.workload, selected);
       assert.equal(store.usedTokens, 2);
       assert.equal(await conflictCount(code), before + 2);
+      assert.equal(await conflictCount(code, true), exhaustedBefore);
     });
 
     test(`${selected} exhausted ${code} rolls back admission and exposes the exact consumer envelope`, async (t) => {
       const fixture = setup(t, selected, code, 3);
       const before = await conflictCount(code);
+      const exhaustedBefore = await conflictCount(code, true);
       const response = await fixture.request();
       assert.equal(response.statusCode, 503, response.body);
       assert.deepEqual(fixture.errors, []);
@@ -221,6 +225,7 @@ for (const selected of ["main", "observational_memory"] as const) {
       if (selected === "observational_memory") assert.deepEqual(body, conflictFixture);
       else { assert.equal(body.error.type, "database_conflict"); assert.equal(body.error.effect_status, undefined); }
       assert.equal(await conflictCount(code), before + 3);
+      assert.equal(await conflictCount(code, true), exhaustedBefore + 1);
       await assertConsumer(response, selected === "observational_memory");
     });
   }

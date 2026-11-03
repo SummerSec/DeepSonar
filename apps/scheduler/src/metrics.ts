@@ -84,6 +84,8 @@ const HELP: Record<string, string> = {
   deepsonar_gateway_upstream_exhausted_total: "Model gateway upstream retry exhaustion by reason",
   deepsonar_gateway_db_conflict_retries_total: "Model gateway admission database conflicts during bounded retries, by workload and SQLSTATE",
   deepsonar_database_conflict_retries_total: "Database conflicts during bounded transaction retries, by operation and SQLSTATE",
+  deepsonar_gateway_db_conflict_exhausted_total: "Model gateway admission database conflict retry exhaustion, by workload and SQLSTATE",
+  deepsonar_database_conflict_exhausted_total: "Database conflict retry exhaustion, by operation and SQLSTATE",
   deepsonar_api_auth_failed_total: "API auth failures (401/403)",
   deepsonar_sandbox_provision_seconds_sum: "Sum of sandbox provision durations by provider",
   deepsonar_sandbox_provision_seconds_count: "Count of successful sandbox provisions by provider",
