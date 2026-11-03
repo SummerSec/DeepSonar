@@ -82,8 +82,14 @@ export async function persistJobRuntimeContext(
   await db.begin(async (txRaw) => {
     const tx = txRaw as unknown as AttemptDatabase;
     if (context.attempt_id) {
+      // Match Gateway admission / Attempt creation: Job before Attempt, held
+      // through both writes. Taking the Job lock after updateAttemptContext
+      // can deadlock against beginEffect in a Job-locked transaction (#871).
+      const [job] = await tx`SELECT id FROM jobs WHERE id = ${jobId} FOR UPDATE`;
+      if (!job) throw new Error("CONTEXT_JOB_NOT_FOUND");
       const attempt = await updateAttemptContext(tx, context.attempt_id, context);
       if (!attempt) throw new Error("CONTEXT_ATTEMPT_NOT_ACTIVE");
+      if (String(attempt.job_id) !== jobId) throw new Error("CONTEXT_ATTEMPT_JOB_MISMATCH");
     }
     await tx`
       UPDATE jobs

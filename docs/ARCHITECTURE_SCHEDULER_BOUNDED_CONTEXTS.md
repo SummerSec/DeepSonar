@@ -1,5 +1,6 @@
 # Scheduler bounded contexts and lock matrix
 
+> 同步日期：2026-11-03（#871 上下文锁序切片）
 > **Status: as-built (Issue #37 closed).** This note is the current domain
 > boundary and lock contract, not a pending redesign. Prefer the live modules
 > under `apps/scheduler/src/domains/*` if this text drifts.
@@ -78,6 +79,7 @@ append plus semantic side effects in one transaction.  The terminal path in
 | --- | --- | --- |
 | Dispatcher claim | `deepsonar_dispatch_claim` transaction advisory lock → candidate `jobs` rows (`FOR UPDATE SKIP LOCKED`) | The advisory lock serializes claim/retry and other runtime mutations; keep the candidate page bounded. |
 | Destructive canvas retry | `deepsonar_dispatch_claim` → `canvases` row (`FOR UPDATE`) → Job/runtime rows and canvas nodes | Re-check active Jobs after both locks; never wipe runtime rows from the preflight read. |
+| Runtime context persistence (#871 partial fix) | Job row (`FOR UPDATE`) → active Attempt row → Attempt context + Job evidence → **commit** | Matches Gateway admission’s Job-before-`beginEffect` order. Missing Job, inactive Attempt or mismatched Job/Attempt rolls back both projections. No external request retry; other #871 paths remain outside this slice. |
 | Event ingress (Job-only) | Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → job-only side effects → **commit** | The Job row serializes `MAX(job_seq)+1`; duplicate `event_id` returns before side effects. |
 | Event ingress (Canvas-aware target) | Canvas row (`FOR UPDATE`) → Job row (`FOR UPDATE`) → Job/Intent/Report target rows (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → Canvas/Finding/Hub side effects → **commit** | The append and semantic effects are one atomic transaction, so a side-effect failure rolls back the append and dedup marker. The preflight Canvas hint carries its source/target and node snapshots; all are rechecked under the ordered locks. A changed target or Postgres `40P01`/`55P03` retries up to three attempts and then fails closed; no reverse lock is taken. |
 | Dispatcher node upsert / failure close | Canvas row (`FOR UPDATE`) → Job CAS (`failExecution` / provision retry / truncated-execution retry) → `canvas_nodes` / `canvas_edges` → Hub advance | Same canvas-first order as ingest/finalize so the change-log trigger's `canvases` lock is reentrant. Never `UPDATE canvas_nodes` then wait for Canvas. Automatic sidecar retries are bounded by consumed `provision_retry` attempts, not `attempt_no`. Automatic Pi stream truncation retries are bounded by consumed `pi_stream_truncated` attempts, not `attempt_no`, and use `retryTruncatedExecution` (`running` and `started_at IS NOT NULL`), not `retryProvisioning`. |
