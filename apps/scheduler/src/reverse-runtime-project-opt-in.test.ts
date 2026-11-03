@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { evaluateReadiness, type ReadinessEvaluationInput } from "./readiness.js";
+import { compareRuntimeImageVersionLabels } from "./runtime-images.js";
 import {
   DEFAULT_RUNTIME_IMAGE_BY_ROLE,
   defaultRuntimeImageKey,
@@ -190,6 +191,14 @@ test("bundled current reverse digest binds official catalog admission (static-re
   // selectLatestRuntimeImagePullItems, instead of demanding the platform version.
   const published = [...reverse.versions].sort((left, right) =>
     compareRuntimeImageVersionLabels(right.version, left.version));
+  // Guard the selection itself: with a single catalog row the comparator above is
+  // never invoked, which would hide a broken import (and did, until typecheck).
+  assert.equal(
+    [...reverse.versions].sort((left, right) => compareRuntimeImageVersionLabels(right.version, left.version))[0]?.version,
+    (reverse.versions as Array<{ version: string }>).reduce((newest, entry) =>
+      compareRuntimeImageVersionLabels(entry.version, newest) > 0 ? entry.version : newest, reverse.versions[0]!.version),
+    "reverse selection must resolve the newest published label",
+  );
   assert.ok(published.length >= 1, "bundled registry must publish at least one reverse version");
   const version = published[0]!;
   const digest = version.digest;
