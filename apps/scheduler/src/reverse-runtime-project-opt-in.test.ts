@@ -183,8 +183,14 @@ test("bundled current reverse digest binds official catalog admission (static-re
   assert.ok(reverse, "bundled registry must include deepsonar-reverse");
   assert.equal(reverse.project_opt_in, true);
   assert.equal(typeof registry.platform_version, "string");
-  const published = reverse.versions.filter((entry) => entry.version === registry.platform_version);
-  assert.equal(published.length, 1, "bundled registry must include exactly one reverse for its published platform version");
+  // Runtime versions are an independent axis (docs/RELEASE_RUNTIME_IMAGES.md):
+  // a reused build keeps the version that first produced its digest, and
+  // relabelling it would let unchanged content satisfy a newer floor. Admission
+  // therefore resolves the newest published label, exactly like
+  // selectLatestRuntimeImagePullItems, instead of demanding the platform version.
+  const published = [...reverse.versions].sort((left, right) =>
+    compareRuntimeImageVersionLabels(right.version, left.version));
+  assert.ok(published.length >= 1, "bundled registry must publish at least one reverse version");
   const version = published[0]!;
   const digest = version.digest;
   assert.ok(typeof digest === "string");

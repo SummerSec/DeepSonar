@@ -126,14 +126,34 @@ const reverseImage = registry.images?.find((image) => image.image_key === "deeps
 if (!reverseImage) fail("registry must include deepsonar-reverse");
 if (reverseImage.project_opt_in !== true) fail("registry reverse must stay project_opt_in");
 if (!Array.isArray(reverseImage.versions) || reverseImage.versions.length < 1) {
-  fail("registry reverse must contain the current published platform version");
+  fail("registry reverse must contain at least one published version");
 }
 const publishedVersion = registry.platform?.version;
 if (typeof publishedVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(publishedVersion)) {
   fail("registry must identify a published platform version");
 }
-const reverseVersion = reverseImage.versions.find((entry) => entry.version === publishedVersion);
-if (!reverseVersion) fail(`registry reverse is missing published version ${publishedVersion}`);
+// Runtime versions are their own axis (docs/RELEASE_RUNTIME_IMAGES.md): a reused
+// build keeps the version that first produced its digest, because relabelling it
+// would let unchanged content satisfy a newer minimum-runtime floor. The gate
+// therefore pins artifact identity, which is what admission actually resolves.
+const floor = registry.min_runtime_image?.version;
+if (typeof floor !== "string" || !/^\d+\.\d+\.\d+$/.test(floor)) fail("registry must declare min_runtime_image.version");
+const versionParts = (value) => String(value).split(".").map((part) => Number(part));
+const compareVersion = (left, right) => {
+  const a = versionParts(left);
+  const b = versionParts(right);
+  for (let index = 0; index < 3; index += 1) {
+    const delta = (a[index] ?? 0) - (b[index] ?? 0);
+    if (delta !== 0) return delta;
+  }
+  return 0;
+};
+// Same selection the Scheduler uses for bulk pulls: newest label wins.
+const reverseVersion = [...reverseImage.versions].sort((left, right) => compareVersion(right.version, left.version))[0];
+if (!/^\d+\.\d+\.\d+$/.test(String(reverseVersion.version))) fail("registry reverse version must be a stable X.Y.Z identity");
+if (compareVersion(reverseVersion.version, floor) < 0) {
+  fail(`registry reverse version ${reverseVersion.version} is below the minimum runtime floor ${floor}`);
+}
 const reverseDigest = reverseVersion.digest;
 if (typeof reverseDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(reverseDigest)) {
   fail("reverse version must use a canonical immutable digest");

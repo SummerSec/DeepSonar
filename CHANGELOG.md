@@ -13,10 +13,7 @@
 ### 修复
 
 - **Release 回写不再绕过必需检查（v0.6.6 发布阻塞项）**：`release.yml` 的 bundled 清单回写原先直接 `git push` 到默认分支，默认分支启用 `ci-summary` 必需检查后该推送被拒（`Required status check "ci-summary" is expected`，v0.6.6 因此没有产出 Release）。现在回写推到 `bot/sync-runtime-registry-v<version>` 分支，显式 `gh workflow run ci.yml --ref <branch>`（`GITHUB_TOKEN` 推送的分支不会自动触发 workflow），轮询该 SHA 的 `ci-summary`，只有 `success` 才快进到默认分支并删除临时分支；失败/取消/跳过/90 分钟无结论都不移动默认分支。没有为 bot 增加 ruleset bypass，也没有改用可写 PAT 跳过门禁。
-- **bundled 清单里 reverse 的版本跟随规则写清并补回归（v0.6.6 阻塞项）**：`test-reverse-runtime.mjs` 与 `ci:unit:runtime-images` 里的 `reverse-runtime-project-opt-in.test.ts` 都要求 bundled 清单中恰好有一条 reverse 记录的版本等于 `platform_version`，而运行镜像版本默认是独立轴、内容未变时应保留「由哪一版构建」。两条规范同时成立的唯一表示是：复用 reverse 构建时就地重标该条记录的 `version`（同一 digest 无法保存两条引用相同的记录）。
-  - 保留的身份：`digest` / `platforms` / `image_ref` / `registry_refs` / `registry_evidence` 不变，回归断言这四项在重标后逐字节一致，新 digest 仍新增自己的版本条目。
-  - 影响面：下限比较只会看到「不低于平台」的值（重标目标即 `platform_version`，不会抬到平台之上）；历史标签被替换而非静默保留。其余镜像不受此例外影响。
-  - 该例外已写入 [发布与运行镜像](docs/RELEASE_RUNTIME_IMAGES.md#运行时镜像目录与发布契约)，避免再次被当成「清单写错了」而改动版本语义。
+- **运行镜像版本标签不再随发布重标，reverse 门禁改按产物身份校验（v0.6.6 阻塞项）**：此前为了满足「reverse 版本必须等于 platform 版本」的断言，发布时会把复用构建的记录**就地重标**成平台版本。该字段参与 Scheduler 的 `(runtime_image_id,digest)` 写入与最低运行镜像下限判断，重标会让未变化的旧内容「升级」到新标签——例如原标 `0.6.4`、下限 `0.6.5` 时本应判为过低，重标为 `0.6.6` 后即通过，而内容从未重建。因此改为版本轴独立：复用构建保留「由哪一版构建」，`agent-harness/test-reverse-runtime.mjs` 与 `apps/scheduler/src/reverse-runtime-project-opt-in.test.ts` 的同号断言改为按产物身份校验（最新标签不低于 `min_runtime_image`、canonical digest、amd64+arm64、三通道 `inspect_digest` 一致），bundled 清单的 `deepsonar-reverse` 回到真实构建版本 `0.6.4`（digest 未变）。需要更晚 reverse 的平台发布必须真实重建并产出新 digest，而不是改标签。
   - 说明：v0.6.5 的修复只改了 descriptor 复用路径（`reuse-catalog-descriptor.mjs`），组装路径会把它重新写回旧版本号；本次两处一致。
 - **v0.6.5 的 bundled 清单与 reverse 版本不一致（发布后回归）**：release 的 reverse 构建在 v0.6.5 命中指纹复用，`write-release-runtime-descriptor.sh` 沿用了上一版权限记录，于是 `deploy/runtime-image-registry.json` 出现「platform 0.6.5 + reverse 0.6.4」，`test-reverse-runtime.mjs` 的静态门禁在 main 上转红。现在复用路径会把 descriptor 重新标记为本次发布的版本（digest 与证据不变），并补上 v0.6.5 的 reverse 记录；发布清单校验与 reverse 门禁均通过。
 

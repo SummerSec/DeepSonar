@@ -117,7 +117,10 @@ async function fakeGateway(scenario, options = {}) {
         const canonical = transcript.includes("Source entry with large content:");
         const offered = [...transcript.matchAll(/\[([a-f0-9]{12})\]/gu)].map((match) => match[1]);
         const id = canonical ? observationId : options.recallId?.() ?? offered[0];
-        if (id) tool = { name: "recall", arguments: { id } };
+        if (id) {
+          options.onRecall?.(id);
+          tool = { name: "recall", arguments: { id } };
+        }
       }
       const id = `offline-${requests.length}`;
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
@@ -375,7 +378,8 @@ export async function runGrowthProbe({ rounds = 4, resumeRounds = 3 } = {}) {
     // never exists in it. Recall targets an id frozen BEFORE the restart, which
     // is what "the resumed process still resolves pre-restart sources" means.
     const recallState = { id: null };
-    gateway = await fakeGateway("success", { recallId: () => recallState.id });
+    const recallIssued = [];
+    gateway = await fakeGateway("success", { recallId: () => recallState.id, onRecall: (id) => recallIssued.push(id) });
     const paths = configure(scenarioRoot, gateway.port, wrapper.replaceAll("\\", "/"), "success");
     const start = (sessionFile) => new RpcClient(cli, ["--provider", "offline-main", "--model", MODEL,
       "-e", paths.extension, ...(sessionFile ? ["--session", sessionFile] : [])], {
@@ -431,10 +435,13 @@ export async function runGrowthProbe({ rounds = 4, resumeRounds = 3 } = {}) {
     assert.ok(resumedLedger.length >= ledgerPrefix.length, "the resumed session must not truncate the existing ledger");
     assert.equal(createHash("sha256").update(resumedLedger.subarray(0, ledgerPrefix.length)).digest("hex"),
       ledgerPrefixSha256, "the pre-restart ledger prefix must be preserved byte for byte");
+    recallIssued.length = 0;
     await client.turn("RECALL_NOW");
     sample("session-2/recall");
+    assert.deepEqual(recallIssued, [frozen.id], "the resumed session must recall exactly the frozen pre-restart observation");
     const recall = client.records.filter((record) => record.type === "tool_execution_end" && record.toolName === "recall").pop();
     const recallDetails = recall?.result?.details ?? {};
+    assert.ok(recall, "the recall tool must actually run, otherwise its status is meaningless");
     const status = recallDetails.status ?? "missing";
     // Diagnostics stay at metadata level: the raw observation records carry
     // private prose and must never reach a log, even on the failure path.
@@ -456,11 +463,16 @@ export async function runGrowthProbe({ rounds = 4, resumeRounds = 3 } = {}) {
     await client.stop();
     client = start();
     assert.equal((await client.command("get_state")).success, true);
+    recallIssued.length = 0;
     await client.turn("RECALL_NOW");
     const isolatedRecall = client.records.filter((record) => record.type === "tool_execution_end" && record.toolName === "recall").pop();
-    const isolatedStatus = isolatedRecall?.result?.details?.status ?? "missing";
-    assert.notEqual(isolatedStatus, "ok",
-      `a fresh session must not resolve pre-restart observations (status ${isolatedStatus})`);
+    assert.deepEqual(recallIssued, [frozen.id], "the negative control must query the same frozen id, not an unrelated one");
+    assert.ok(isolatedRecall, "the negative control must actually run the recall tool; a missing call proves nothing");
+    const isolatedStatus = isolatedRecall.result?.details?.status;
+    // Exact answer only: a missing record, an internal error, or any other status
+    // would also satisfy a loose "not ok" check and would hide a broken probe.
+    assert.equal(isolatedStatus, "not_found",
+      `a fresh session must answer not_found for pre-restart observations (got ${JSON.stringify(isolatedStatus)})`);
     const report = {
       pi_om_growth: "passed",
       rounds, resumeRounds,
