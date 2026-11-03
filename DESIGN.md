@@ -258,7 +258,7 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`unknown`/`pending` 保持硬失败，不能以 provider 5xx 文案替代效果 authority。#873 的 OM admission 回滚耗尽与已持久结算的请求前 transport 使用同一个宿主 error.message carrier，覆盖 SDK 只保留内层消息的路径；上游请求与结算不作为可重试 admission 重放。
 
-#874 的[完成恢复 v1](docs/REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)由原负回执、宿主恢复事实和去重 Hub 驱动。只有 Scheduler 冻结引用授权的严格对账/停止提案能进入原 Control 与语义事务；精确 effect/ledger 才能结算，原 key 不改写，原 deadline/预算、pause、人工、Verify 和完成门保持有效。Reaper 复用原 tick 做有界扫描，不自动对账或复活终态；退出会话/新 Attempt 的完整继续执行仍是缺口。共享卷同时受独立 PG session 的同 Job 生命周期锁和最新 Attempt fence 保护，锁保持至挂载与资源绑定完成，删除再核 Docker generation，详见[资产专题](docs/SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。本轮完整最终 SHA Actions 尚待验收。
+#874 的[完成恢复 v1](docs/REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)由原负回执、宿主恢复事实和去重 Hub 驱动。只有 Scheduler 冻结引用授权的严格对账/停止提案能进入原 Control 与语义事务；精确 effect/ledger 才能结算，原 key 不改写，原 deadline/预算、pause、人工、Verify 和完成门保持有效。Reaper 复用原 tick 做有界扫描，不自动对账或复活终态；退出会话/新 Attempt 的完整继续执行仍是缺口。共享卷同时受独立 PG session 的同 Job 生命周期锁和最新 Attempt fence 保护，锁保持至挂载与资源绑定完成，Docker volume/helper 使用独立 generation 名称，prepare 不采纳后继资源；清理快照后及破坏性调用前重验 session 许可。续租用精确 Attempt/sandbox registration 和 Job → 最新 Attempt 事务，旧 finally/tick 不能操作新 owner；详见[资产专题](docs/SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。本轮完整最终 SHA Actions 尚待验收。
 
 `finalizeJob` 的已核验终态路径把 Job/model token、Control token、audit 与终态收口放在同一事务；终态后实际 HTTP 请求断言为 401。`gateway-token-revocation.ts` 复用调用方 Job 锁，不另取独立 Job 锁，也不吞掉失败。该核验只约束此 core finalizeJob 路径，不推断所有 drain/Reaper 清理路径都具有相同实现。
 

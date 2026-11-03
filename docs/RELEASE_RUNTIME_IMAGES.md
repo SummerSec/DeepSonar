@@ -1,9 +1,9 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
 > 状态：**运维 as-built；v0.6.7 为当前修复候选，尚未 tag/发布**。
-> 同步日期：2026-11-03
+> 同步日期：2026-11-04
 >
-> 2026-11-03 核对 GitHub：最近正式版与最高既有版本 tag 均为 [v0.6.6](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.6)，正式发布时间 `2026-11-03T04:37:38Z`，非 draft / prerelease，tag commit 为 `4bbf86efdbcccb17b5a23c96083b9999d7f2508f`。已列出 Management Skill、Reverse evidence、platform signature evidence 及两份 runtime registry 附件；这里只核对发布元数据/清单，不表示本轮重新 inspect、验签或部署。新候选计划 compare `v0.6.6...v0.6.7`，schema 仍按当前源码基线；最终 SHA Actions、双原生架构/配置通道、签名、catalog/部署引用回写与正式 Release 附件全部通过后才能宣布发布完成，旧 tag/镜像保持不可变。
+> 2026-11-04 核对 GitHub：最近正式版与最高既有版本 tag 均为 [v0.6.6](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.6)，正式发布时间 `2026-11-03T04:37:38Z`，非 draft / prerelease，tag commit 为 `4bbf86efdbcccb17b5a23c96083b9999d7f2508f`。已列出 Management Skill、Reverse evidence、platform signature evidence 及两份 runtime registry 附件；这里只核对发布元数据/清单，不表示本轮重新 inspect、验签或部署。新候选计划 compare `v0.6.6...v0.6.7`，schema 仍按当前源码基线；最终 SHA Actions、双原生架构/配置通道、签名、catalog/部署引用回写与正式 Release 附件全部通过后才能宣布发布完成，旧 tag/镜像保持不可变。
 >
 > **历史 v0.6.4 发布准备基线（2026-11-02，保留历史来源）**。准备时最近正式版为 [v0.6.2](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.2)，于 2026-10-31T09:05:38Z 正式发布，非 draft / prerelease；tag 指向包含 Web 隔离构建修复的 `347385a53f43d15a53175226528af10a692f6f9e`。[v0.6.3 的 Release](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 失败，已有部分镜像但未完成正式发行。按用户 2026-11-02 的选择，保留其 tag 和既有镜像，改发 **v0.6.4**；Git compare 起点为 v0.6.3，成功升级基线仍为 v0.6.2（schema 65 → 67）。本轮范围沿用[原范围决定](<../AGENTS.md#豁免范围>)，不移动旧 tag 或覆盖旧镜像。这里核对发布元数据与源码关系，不重新声明附件、签名或各通道镜像已逐项复验。
 >

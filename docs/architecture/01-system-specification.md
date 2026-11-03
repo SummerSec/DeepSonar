@@ -883,8 +883,8 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 - **规范要求**：Lease 续期、Reaper、取消、超时和迟到回调的每次持久状态转移必须使用 Job/Attempt 的锁序、状态条件更新或 CAS 保护；外部资源清理可以在数据库事务外执行，但必须携带 effect identity 并通过幂等补偿与状态再核对收口。重复调用必须返回稳定结果，不得 resurrect 终态 Job。
 - **决策来源**：调度器和外部执行器的时序不可靠；数据库锁只保护持久状态，不能把外部网络清理错误地描述为同一事务。
 - **实现状态**：部分达标；Reaper 和取消路径使用事务、锁序与状态条件更新，外部清理通过独立幂等入口回收；跨事务清理与 Canvas/Job 并行竞态仍需按具体 effect identity 做人工核查。
-- **代码入口**：[Job lifecycle recovery](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[attempt cancellation](../../apps/scheduler/src/domains/job-attempt/provision-cancellation.ts)、[recovery tests](../../apps/scheduler/src/recovery-issue186.integration.test.ts)。
-- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:recovery`、`pnpm ci:smoke:opensandbox-reaper`。
+- **代码入口**：[Job lifecycle recovery](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[attempt cancellation](../../apps/scheduler/src/domains/job-attempt/provision-cancellation.ts)、[Attempt lease](../../apps/scheduler/src/attempt-lease.ts)、[recovery tests](../../apps/scheduler/src/recovery-issue186.integration.test.ts)。
+- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:recovery`、`pnpm ci:smoke:opensandbox-reaper`；本轮补精确 timer stop、迟到 alive、Job 锁等待后 owner 换代及 Job/Attempt 双 sandbox 续租拒绝源码，实际结果仍待最终 Actions。
 
 ### NFR-REL-003 运维重试投影
 

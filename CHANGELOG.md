@@ -1,6 +1,23 @@
 ## [Unreleased]
 
+## [0.6.7] - 2026-11-04
+
+> 发布准备：当前候选尚未打 tag 或正式发行。最终 SHA 的完整 GitHub Actions、原生双架构、配置镜像通道、签名、catalog/部署引用回写与 Release 附件仍须实际通过；本节记录实现变化，不代表工程验收或生产部署已经完成。schema 保持 67，私有 workspace package 版本不变。质量、成本和 SLA 保持 `unknown` / `not_evaluated`；#834 按用户要求暂缓。
+
 ### 修复
+
+- **数据库锁冲突不再直接终止本可安全重试的请求（#871/#873）**：context 在同一事务按 Job → Attempt 原子保存投影；Gateway admission 对请求前、已回滚的纯数据库事务做有界冲突重试，提交后才发一次上游请求。重试与耗尽分别输出低基数指标，日志关联 Job/Attempt。新增真实 PostgreSQL 旧序 `40P01` 负对照、精确 `NOWAIT` 锁序探测、生产终态整束回滚和失败 barrier 清理回归源码。
+- **OM 安全降级保留真实 Pi SDK 可见的宿主证明（#873）**：已证实未提交的 admission、请求前 transport 且持久零用量/`never_started` 结算成功时，用结构化 `error.message` 保留可信 `not_started`。Provider 503、伪造载荷、pending/unknown 和结算失败继续拒绝降级；不重发外部请求、不重复记账。真实 Gateway handler 与镜像 Pi RPC 场景同步覆盖。
+- **共享卷准备与清理绑定独立 generation（#871）**：同 Job 使用独立 PostgreSQL session 串行生命周期，并在 prepare、只读挂载、资源绑定到清理间重验当前/latest Attempt。Docker volume/helper 名称包含独立 generation；prepare 只操作自己的资源，cleanup 固定严格资源快照并在破坏性操作/重试前重验许可，旧流程失锁后不能采纳或删除后继 generation。helper 按精确容器 ID 删除，卷非 force 删除，跳过与失败分开记录。
+- **旧 Attempt 不续租或自动重试后继执行（#871）**：每个运行持有自己的 timer stop closure；续租在 Job → 最新 Attempt 事务核对 active/cancel 与双方 sandbox 身份。opaque runner 已被调用后的失败保持 unknown，即使没有 sandbox 也不推断未开始；自动 provision retry 要求明确 `never_started` 且 `external_effect` 为 JSON boolean false。
+
+### 变更
+
+- **完成阻塞可通过受治理对账或有界停止收敛（#874）**：保留原完成负回执，另持久化宿主恢复事实和去重 wake，Hub 只能针对冻结引用、当前权限/lease、原期限/预算及 revision/evidence CAS 提交严格 `reconcile_effects` 或 `stop`。只用精确 effect 的宿主 ledger 对账，不重放 unknown、不自动成功或复活终态。手工 pause、人工/Verify 等待和其他活动 Hub 的门保留；HTTP 200 仅 `persisted_deferred`。
+- 尚未启动的恢复 Hub 若因证据变化、原 deadline 到期或原执行关闭而失效，仅在真实 root/wake/dedup 绑定、无任何 Attempt/effect/启动痕迹时严格收口。旧 wake 消耗不重置，新证据须重新准入；忙 Canvas 在 claim 初选跳过。已退出会话/新 Attempt 的完整 continuation 仍未交付。
+- 需求、traceability、架构视图、ADR-0015、专题和验收入口同步；新增真实 HTTP receipt → semantic ingestion、生产 Reaper token/audit/Canvas/Plan、跨 scope/CAS/暂停/额度/重启及共享资源竞态回归源码。新增测试是否通过以最终候选 Actions 为准。
+
+### 既有更新提示修复
 
 - **平台更新横幅不再声称宿主机升级尚未实现（#869）**：管理员横幅此前写「请在宿主机执行 deploy.sh upgrade（尚未落地，见 #740）」——宿主机受控升级其实已随 v0.6.0 交付（#740 未实现的只是可选的「Web 发起升级」），而且裸 `upgrade` 没有 action，会被维护状态机拒绝为 `INVALID_MAINTENANCE_ACTION`。现在提示改为两步受控流程：先 `./deploy/deploy.sh upgrade check --to v<目标版本>` 审核阻断项与风险，再 `./deploy/deploy.sh upgrade apply --to v<目标版本>`（有风险时附 `--approve-plan-hash <本次计划哈希>`），并指向 `deploy/README.md` 的受控升级章节、明确「Web 只提示版本，不代执行升级」。目标版本取自状态字段而非写死在源码；schema 重建提醒、changelog 链接与检查失败语义保持不变。
   - 前端回归覆盖：普通更新、需 schema 重建、无更新、检查失败，断言不再出现「尚未落地」、指引包含 `check`/`apply` 子命令与文档入口、且不固定到某一发布版本。
@@ -1437,3 +1454,4 @@
 
 [0.6.5]: https://github.com/SummerSec/DeepSonar/compare/v0.6.4...v0.6.5
 [0.6.6]: https://github.com/SummerSec/DeepSonar/compare/v0.6.5...v0.6.6
+[0.6.7]: https://github.com/SummerSec/DeepSonar/compare/v0.6.6...v0.6.7
