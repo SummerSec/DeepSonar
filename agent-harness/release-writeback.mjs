@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 // Release writeback control flow (issue #865, review follow-up #866).
 //
 // The default branch requires `ci-summary`. A GITHUB_TOKEN push does not trigger
@@ -97,7 +99,10 @@ export async function runWriteback({
   return { conclusion, branch, defaultBranch, sha };
 }
 
-const isMain = process.argv[1] && process.argv[1].endsWith("release-writeback.mjs");
+// Exact file identity: `endsWith("release-writeback.mjs")` would also match
+// agent-harness/test-release-writeback.mjs and run the CLI inside its test.
+const isMain = process.argv[1]
+  && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
   const { execFileSync } = await import("node:child_process");
   const run = (file, args) => {
