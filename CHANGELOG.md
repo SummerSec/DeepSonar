@@ -12,6 +12,7 @@
 
 ### 修复
 
+- **Release 回写不再绕过必需检查（v0.6.6 发布阻塞项）**：`release.yml` 的 bundled 清单回写原先直接 `git push` 到默认分支，默认分支启用 `ci-summary` 必需检查后该推送被拒（`Required status check "ci-summary" is expected`，v0.6.6 因此没有产出 Release）。现在回写推到 `bot/sync-runtime-registry-v<version>` 分支，显式 `gh workflow run ci.yml --ref <branch>`（`GITHUB_TOKEN` 推送的分支不会自动触发 workflow），轮询该 SHA 的 `ci-summary`，只有 `success` 才快进到默认分支并删除临时分支；失败/取消/跳过/90 分钟无结论都不移动默认分支。没有为 bot 增加 ruleset bypass，也没有改用可写 PAT 跳过门禁。
 - **bundled 清单把复用镜像写成上一版发布（v0.6.6 阻塞项）**：`generate-runtime-image-registry.mjs` 组装清单时有一条独立的「digest 未变则保留旧版本号」分支，与 `test-reverse-runtime.mjs`（gate 中 `ci:images` 执行）要求的「reverse 版本必须等于 platform 版本」直接冲突——v0.6.5 因此转红，v0.6.6 的发布载荷再次出现「platform 0.6.6 + reverse 0.6.5」。现在 `versionsForUnchangedDigest` 接受发布版本参数，**平台跟踪镜像**（`deepsonar-reverse`）在指纹复用时按本次发布重标该条记录（digest、platforms、registry 证据不变，仍是一 digest 一条记录），其他镜像继续保留「由哪一版构建」的含义，旧有复用语义的测试也据此收敛。
   - 说明：v0.6.5 的修复只改了 descriptor 复用路径（`reuse-catalog-descriptor.mjs`），组装路径会把它重新写回旧版本号；本次两处一致。
 - **v0.6.5 的 bundled 清单与 reverse 版本不一致（发布后回归）**：release 的 reverse 构建在 v0.6.5 命中指纹复用，`write-release-runtime-descriptor.sh` 沿用了上一版权限记录，于是 `deploy/runtime-image-registry.json` 出现「platform 0.6.5 + reverse 0.6.4」，`test-reverse-runtime.mjs` 的静态门禁在 main 上转红。现在复用路径会把 descriptor 重新标记为本次发布的版本（digest 与证据不变），并补上 v0.6.5 的 reverse 记录；发布清单校验与 reverse 门禁均通过。
