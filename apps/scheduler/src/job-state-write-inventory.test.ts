@@ -26,6 +26,14 @@ const JOB_STATE_WRITE_INVENTORY: readonly JobStateWriteEntry[] = [
       /UPDATE\s+jobs\s+SET\s+status\s*=\s*'waiting_human'[\s\S]*?WHERE\s+id\s*=\s*\$\{jobId\}\s+AND\s+status\s*=\s*'running'/,
   },
   {
+    id: "job-attempt.retire-stale-pending-recovery-hub",
+    file: "domains/job-attempt/recovery.ts",
+    targets: ["cancelled"],
+    purpose: "retire a durably bound stale directed Hub only while pending with no Attempt, effect or startup traces",
+    pattern:
+      /UPDATE\s+jobs\s+j\s+SET\s+status\s*=\s*'cancelled'[\s\S]*?error='completion_recovery_grant_stale'[\s\S]*?WHERE\s+j\.id\s*=\s*\$\{hubId\}\s+AND\s+j\.status='pending'[\s\S]*?NOT EXISTS \(SELECT 1 FROM job_attempts a WHERE a\.job_id=j\.id\)[\s\S]*?NOT EXISTS \(SELECT 1 FROM job_attempt_effects e WHERE e\.job_id=j\.id\)/,
+  },
+  {
     id: "core.finalize-running-terminal",
     file: "core.ts",
     targets: ["succeeded", "failed"],

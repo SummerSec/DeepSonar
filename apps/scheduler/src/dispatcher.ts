@@ -686,10 +686,15 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       }
     }
   }
-  // 单次 claim 在 advisory xact lock 内核对：平台 → 项目 → Provider → Credential → Model → Agent CLI。
-  // CLI 是最低优先级资源门；Credential 总量不会被 CLI 配额覆盖或替代。
-  // 即使未来误启动两个 Scheduler，也不会出现先 count 后 update 的超配竞态。
-  const claimedJobs = await sql.begin(async (tx) => {
+  type ClaimCursor = { priority: number; createdAt: string; id: string };
+  type ClaimPage = { claimed: { id: string }[]; cursor: ClaimCursor | null; more: boolean };
+  const pendingPageSize = 500;
+  const claimedJobs: { id: string }[] = [];
+  let cursor: ClaimCursor | null = null;
+  // Each bounded page commits before discovering another Canvas. Only actual
+  // claims consume quota; skipped busy rows cannot reserve the remaining slots.
+  const claimPage = (): Promise<ClaimPage> => sql.begin(async (tx): Promise<ClaimPage> => {
+    const stop: ClaimPage = { claimed: [], cursor: null, more: false };
     await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
     // #740 platform-wide claim pause: read under the same advisory lock the
     // pause API takes, so every replica observes a committed pause before
@@ -698,7 +703,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
     const platformClaims = await readPlatformClaimsControl(tx as unknown as typeof sql);
     if (platformClaims.paused) {
       logPlatformClaimsPaused(platformClaims.missing ? "global_settings_missing" : platformClaims.reason);
-      return [] as { id: string }[];
+      return stop;
     }
     platformClaimsPauseLogged = null;
     const lifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
@@ -730,11 +735,10 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       dispatchSlots(rules.maxGlobalJobs, totalActive),
       provisionSlots(rules.maxConcurrentProvisioning, activeProvisioning),
     );
-    if (slots <= 0) return [] as { id: string }[];
+    if (slots <= 0) return stop;
 
-    let counts = accumulateDispatchCounts(active as unknown as ActiveDispatchRow[]);
+    const counts = accumulateDispatchCounts(active as unknown as ActiveDispatchRow[]);
     type PendingCandidate = DispatchCandidate & { id: string; priority: number; created_at_key: string; canvas_project_id: string | null };
-    const selected: PendingCandidate[] = [];
     const claimed: { id: string }[] = [];
     const projection = tx`
       SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.payload_json,
@@ -757,34 +761,22 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       if (await graphEligibilityReasonFromDb(tx as unknown as typeof sql, job, graphBatch)) return false;
       return !dispatchSkipReason(job, counts, rules, projectJobLimitForCandidate(job, rules.maxJobsPerProject));
     };
-    // Read-only bounded keyset pages select eligible slots; an ineligible first
-    // 500 rows must not starve later projects/CLIs. No Job/Attempt locks yet.
-    const pendingPageSize = 500;
-    let cursor: { priority: number; createdAt: string; id: string } | null = null;
-    while (selected.length < slots) {
-      const pending: PendingCandidate[] = await tx<PendingCandidate[]>`${projection}
-        WHERE j.status = 'pending'
-        ${cursor ? tx`AND (
-          j.priority < ${cursor.priority}
-          OR (j.priority = ${cursor.priority} AND j.created_at > ${sql.typed(cursor.createdAt, 25)}::timestamptz)
-          OR (j.priority = ${cursor.priority} AND j.created_at = ${sql.typed(cursor.createdAt, 25)}::timestamptz AND j.id > ${cursor.id}::uuid)
-        )` : tx``}
-        ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
-        LIMIT ${pendingPageSize}`;
-      if (pending.length === 0) break;
-      const last: PendingCandidate = pending[pending.length - 1]!;
-      cursor = { priority: Number(last.priority), createdAt: String(last.created_at_key), id: String(last.id) };
-      const graphBatch = await loadGraphEligibilityBatch(tx as unknown as typeof sql, pending);
-      for (const job of pending) {
-        if (selected.length >= slots) break;
-        if (!(await eligible(job, graphBatch))) continue;
-        selected.push(job);
-        accumulateDispatchCounts([{ ...job, count: 1 }], counts);
-      }
-    }
-    if (selected.length === 0) return claimed;
-    // All selected Canvases are locked, sorted, BEFORE any Job or Attempt.
-    // A busy Canvas is skipped; never refill from another page after Job locks.
+    // Freeze only this page's identity hints. Eligibility is authoritative after
+    // the sorted Canvas/project locks and Job SKIP LOCKED re-read below.
+    const selected: PendingCandidate[] = await tx<PendingCandidate[]>`${projection}
+      WHERE j.status = 'pending'
+      ${cursor ? tx`AND (
+        j.priority < ${cursor.priority}
+        OR (j.priority = ${cursor.priority} AND j.created_at > ${sql.typed(cursor.createdAt, 25)}::timestamptz)
+        OR (j.priority = ${cursor.priority} AND j.created_at = ${sql.typed(cursor.createdAt, 25)}::timestamptz AND j.id > ${cursor.id}::uuid)
+      )` : tx``}
+      ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
+      LIMIT ${pendingPageSize}`;
+    if (selected.length === 0) return stop;
+    const last: PendingCandidate = selected[selected.length - 1]!;
+    const nextCursor: ClaimCursor = { priority: Number(last.priority), createdAt: String(last.created_at_key), id: String(last.id) };
+    // Lock every candidate Canvas before any Job/Attempt. Never refill from a
+    // later page until this transaction has committed and released all locks.
     const canvasIds = [...new Set(selected.map((job) => job.canvas_id).filter(Boolean))] as string[];
     const lockedCanvases = await tx<{ id: string }[]>`
       SELECT id FROM canvases WHERE id = ANY(${canvasIds}::text[])
@@ -803,7 +795,6 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
         )
       ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
       FOR UPDATE OF j SKIP LOCKED`;
-    counts = accumulateDispatchCounts(active as unknown as ActiveDispatchRow[]);
     const graphBatch = await loadGraphEligibilityBatch(tx as unknown as typeof sql, pending);
     for (const job of pending) {
       // Re-check scope, pause/schedule, graph and quotas from locked rows before CAS.
@@ -822,9 +813,22 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       claimed.push({ id: row.id as string });
       accumulateDispatchCounts([{ ...job, count: 1 }], counts);
     }
-    return claimed;
+    return { claimed, cursor: nextCursor, more: selected.length === pendingPageSize && claimed.length < slots };
   });
-
+  while (true) {
+    let page: ClaimPage;
+    try {
+      page = await claimPage();
+    } catch (error) {
+      if (claimedJobs.length === 0) throw error;
+      // Earlier pages are already committed and must reach dispatchOnce.
+      console.error("[dispatcher] 后续分页领取失败，返回此前已提交的 Job:", error);
+      break;
+    }
+    claimedJobs.push(...page.claimed);
+    if (!page.more) break;
+    cursor = page.cursor;
+  }
   return claimedJobs;
 }
 

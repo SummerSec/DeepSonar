@@ -129,9 +129,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-002 Claim 创建 Scheduler-owned Attempt
 
-- **规范要求**：每次成功领取（claim）必须建立 Scheduler 拥有的 Attempt；Attempt 携带快照身份、沙箱身份、取消标记和效果账本，不得把 prompt 或 Provider 原文写入 Attempt 账本。
+- **规范要求**：每次成功领取（claim）必须建立 Scheduler 拥有的 Attempt；Attempt 携带快照身份、沙箱身份、取消标记和效果账本，不得把 prompt 或 Provider 原文写入 Attempt 账本。被忙 Canvas/Job 锁跳过的候选不得消耗本次领取槽位或阻止继续检查后续可运行候选。
 - **决策来源**：Attempt 是一次执行的审计边界，不能将模型原文混入生命周期账本。
-- **实现状态**：claim 事务创建 Attempt 并保存受限字段；#871 修复分支先做有界候选扫描，随后按排序 Canvas → project → Job → Attempt 锁序重验 scope/暂停/配额与状态；最终 SHA Actions 尚待验收。
+- **实现状态**：claim 与 Attempt 创建原子提交；#871 修复分支按有界 keyset 候选页分别开启事务，每页重新获取 claim advisory lock 并计算暂停/配额，按排序 Canvas → project → Job → Attempt 锁序核验 scope 与状态。仅成功领取计入槽位；忙锁跳过后可继续当前页，提交并释放本页锁后才读取下一页，不持 Job/Attempt 锁回头获取新 Canvas。最终 SHA Actions 尚待验收。
 - **代码入口**：[Attempt 应用](../../apps/scheduler/src/domains/job-attempt/)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[Attempt model](../../apps/scheduler/src/domains/job-attempt/model.ts)。
 - **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:integration:dispatch-limits`；真实 PG 的 busy Canvas 不占其 Job、独立 Canvas 仍可领取，Attempt 字段仍受原白名单约束。
 

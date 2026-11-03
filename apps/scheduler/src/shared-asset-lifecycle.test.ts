@@ -388,7 +388,7 @@ test("release is idempotent; a released lease is not a preparation permit", asyn
   await assert.rejects(lease.assertCurrent(), conflict("lock_lost"));
 });
 
-test("Dispatcher contract: read-only keyset selection precedes Canvas → Job → Attempt locks", async () => {
+test("Dispatcher contract: bounded keyset pages keep Canvas → Job → Attempt and charge actual claims", async () => {
   const source = await readFile(new URL("./dispatcher.ts", import.meta.url), "utf8");
   const start = source.indexOf("export async function claimPendingJobs");
   assert.ok(start >= 0);
@@ -398,12 +398,12 @@ test("Dispatcher contract: read-only keyset selection precedes Canvas → Job �
   assert.ok(canvasLock >= 0 && jobLock > canvasLock);
   assert.equal(claim.slice(0, canvasLock).includes("FOR UPDATE"), false);
   assert.ok(claim.indexOf("createOrGetActiveAttempt", jobLock) > jobLock);
-  assert.match(claim, /while \(selected.length < slots\)/);
   assert.match(claim, /j\.created_at::text AS created_at_key/);
   assert.match(claim, /j\.created_at > \$\{sql\.typed\(cursor\.createdAt, 25\)\}::timestamptz/);
   assert.match(claim, /hint\.canvas_id IS NOT DISTINCT FROM j\.canvas_id/);
-  assert.equal((claim.match(/accumulateDispatchCounts\(\[\{ \.\.\.job, count: 1 \}\], counts\)/g) ?? []).length, 2);
-  assert.equal((claim.match(/await eligible\(job, graphBatch\)/g) ?? []).length, 2);
+  const claimCas = claim.indexOf("const row = await lifecycle.claimPendingJob(job.id)");
+  const quotaCharge = claim.indexOf("accumulateDispatchCounts([{ ...job, count: 1 }], counts)");
+  assert.ok(claimCas > jobLock && quotaCharge > claimCas, "candidate hints must not reserve quota before the actual claim CAS");
 });
 
 test("Dispatcher contract: Job ownership fence precedes provision Attempt admission/settlement", async () => {

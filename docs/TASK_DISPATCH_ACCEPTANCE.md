@@ -1,17 +1,17 @@
 # 任务下发验收矩阵（#767）
 
 > 状态：历史 #831 工程验收与当前 #875 修复候选分开；Draft 快检、最终 SHA 全量验收、暂缓质量与正式发布分别记录。
-> 同步日期：2026-11-03
+> 同步日期：2026-11-04
 
 原 issue 要求按场景明确目标、范围、授权、材料与完成条件，并在创建/派发前发现不满足的前置条件。后续 #794、#796、#797、#798 分别补充目标相关研究候选、报告防误报、来源隔离判据评审及非 Finding 交付。下表不把源码或测试入口存在等同于本次已运行通过。
 
-## #875 当前修复候选（2026-11-03）
+## #875 当前修复候选（2026-11-04）
 
-[Draft PR #875](https://github.com/SummerSec/DeepSonar/pull/875) 首次提交 head 为 `914df7c70c184082bd32eb677568807c484c6aa8`。该 SHA 的[核心 CI 41654170176](https://github.com/SummerSec/DeepSonar/actions/runs/41654170176)实际通过 docs-freshness、workspace typecheck/build 与映射的无服务单测；`gate`、PostgreSQL/镜像重型检查和 `ci-summary` 在 Draft 路径跳过，因此这里只登记快检成功，不能作为合并或发布验收。[Reverse 路由运行](https://github.com/SummerSec/DeepSonar/actions/runs/41654170138)同样不表示原生镜像矩阵已运行。
+[PR #875](https://github.com/SummerSec/DeepSonar/pull/875) 首次以 Draft 提交，head 为 `914df7c70c184082bd32eb677568807c484c6aa8`。该 SHA 的[核心 CI 41654170176](https://github.com/SummerSec/DeepSonar/actions/runs/41654170176)实际通过 docs-freshness、workspace typecheck/build 与映射的无服务单测；`gate`、PostgreSQL/镜像重型检查和 `ci-summary` 在 Draft 路径跳过，因此这里只登记快检成功，不能作为合并或发布验收。[Reverse 路由运行](https://github.com/SummerSec/DeepSonar/actions/runs/41654170138)同样不表示原生镜像矩阵已运行。
 
 追加的 `de5a3e13818dd78ff0ca318c9169229155be1101` 修正首轮 checkpoint 4 处 typecheck 错误，[CI 41664255350](https://github.com/SummerSec/DeepSonar/actions/runs/41664255350)快检通过；`ca2e91e22a14426605832ef9929fd63bdfbc5f1d` 补独立数据库重试耗尽指标，[CI 41665015133](https://github.com/SummerSec/DeepSonar/actions/runs/41665015133)快检通过。这些均为 Draft，不含完整验收。
 
-当前修复分支继续整合 #871/#873/#874。独立静态审查发现的 context PG 锁序证明不足与 barrier 失败清理已修正，并经另一个只读审查者在 checkpoint `f91bad58` 复核，新增 PG 行为仍未执行。`0f7ac406` 已提交真实 Reaper 回归源码及原 Hub 不派并行 Hub、在原 deadline 有界收口的分支。恢复 Hub 的实际 claim、共享 prepare 失锁后不得删除后继 generation 等生产接线仍在补齐。未完成项不以源码存在或 Draft 绿灯冒充已验证。完整候选转 Ready 后按最终 SHA 重新核对全部适用 Actions；本地仅执行静态阅读、语法及 `git diff --check`，不运行 tests/build/typecheck/PG/Docker，不执行生产部署。
+修复分支已整合 #871/#873/#874 的 context/终态锁序、定向恢复 claim、精确 Attempt 续租、共享 prepare/cleanup 的失锁与 generation fence；PR 已转 Ready。`ff0ac08b` 的[完整 CI](https://github.com/SummerSec/DeepSonar/actions/runs/41678946927)实际通过 context/Attempt recovery PG 及全部受治理完成恢复 PG，包含真实 Reaper 的停止、两类 token 撤销、审计和 Canvas/Plan、迟到账本对账、微秒精度 CAS 与不可变负回执；整体 gate 随后因状态写入 inventory 未登记“未启动且过期的定向 Hub 取消”而失败。该专用 writer 已补清单，生产扫描不豁免。普通候选忙锁补槽已按分候选页独立事务补齐；相应真实 PG 回归补充中，覆盖目标包括同锁持有期间的独立候选、跨页推进及后页失败保留前页已提交领取。最终合并候选仍须重新核对完整核心与原生专项，旧 SHA 的局部成功不能替代最终验收。本地仅执行静态阅读、语法及 `git diff --check`，不运行 tests/build/typecheck/PG/Docker，不执行生产部署。
 
 ## #831 engineering acceptance (2026-11-01)
 
