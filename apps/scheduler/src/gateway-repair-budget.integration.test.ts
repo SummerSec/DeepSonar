@@ -148,15 +148,36 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     let unblock!: () => void;
     release = new Promise(resolve => { unblock = resolve; });
     const reached = new Promise<void>(resolve => { entered = resolve; });
-    const active = concurrent.request(); await reached;
-    const competing = await concurrent.request();
-    assert.equal(competing.json().error.type, "REPAIR_USAGE_PENDING");
-    assert.equal((await concurrent.read())?.remaining_tokens, null, "in-flight is not zero usage");
-    assert.equal((await concurrent.propose(1, "valid completion")).json().error_code, "REPAIR_USAGE_PENDING");
-    unblock(); await active; entered = undefined; release = undefined; await concurrent.settle(1);
-    assert.equal((await concurrent.read())?.known_tokens, 4);
-    assert.equal((await concurrent.propose(1, "valid completion")).statusCode, 200);
-    assert.equal((await concurrent.request()).json().error.type, "COMPLETION_ALREADY_ACCEPTED");
+    const active = concurrent.request();
+    try {
+      await reached;
+      const competing = await concurrent.request();
+      assert.equal(competing.json().error.type, "REPAIR_USAGE_PENDING");
+      assert.equal((await concurrent.read())?.remaining_tokens, null, "in-flight is not zero usage");
+      const pendingKey = randomUUID(), summary = "valid completion";
+      const pendingProposal = await concurrent.propose(1, summary, pendingKey);
+      assert.equal(pendingProposal.statusCode, 409, pendingProposal.body);
+      assert.equal(pendingProposal.json().error_code, "REPAIR_USAGE_PENDING");
+      assert.equal(pendingProposal.json().repair.proposal_revision, 1);
+      unblock(); await active; await concurrent.settle(1);
+      const settledBudget = await concurrent.read();
+      assert.equal(settledBudget?.known_tokens, 4);
+      assert.equal(settledBudget?.remaining_tokens, 6);
+      const replay = await concurrent.propose(1, summary, pendingKey);
+      assert.equal(replay.statusCode, 409, replay.body);
+      assert.deepEqual(replay.json(), pendingProposal.json(), "settlement never rewrites the original negative receipt");
+      const staleRevision = await concurrent.propose(1, summary);
+      assert.equal(staleRevision.statusCode, 409, staleRevision.body);
+      assert.equal(staleRevision.json().error_code, "COMPLETION_REVISION_CONFLICT", staleRevision.body);
+      assert.deepEqual(await concurrent.read(), settledBudget, "receipt replay and revision conflict do not reset repair cost");
+      const completed = await concurrent.propose(2, summary);
+      assert.equal(completed.statusCode, 200, completed.body);
+      assert.equal(completed.json().receipt_status, "persisted_deferred");
+      assert.equal((await concurrent.request()).json().error.type, "COMPLETION_ALREADY_ACCEPTED");
+    } finally {
+      unblock();
+      try { await active; } finally { entered = undefined; release = undefined; }
+    }
 
     const unknown = await setup(); await unknown.propose(0, "x".repeat(8193)); malformed = true;
     await unknown.request(); await unknown.settle(1); malformed = false;
@@ -248,7 +269,17 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     assert.equal(cannotSettle.json().error_code, "COMPLETION_EFFECT_UNKNOWN");
     const [ordinaryJob] = await sql`SELECT status FROM jobs WHERE id=${ordinaryRetry.jobId}`;
     assert.equal(ordinaryJob.status, "running", "uncertain cost does not overwrite business execution with failure or success");
-    assert.equal(await ordinaryRetry.read(), null, "no repair charge or receipt is fabricated before reconciliation");
+    const ordinaryRepairBudget = await ordinaryRetry.read();
+    assert.ok(ordinaryRepairBudget, "the governed completion refusal is durably recorded");
+    assert.equal(ordinaryRepairBudget.limit_tokens, 10);
+    assert.equal(ordinaryRepairBudget.known_tokens, 0, "earlier ordinary requests are not retroactively charged as repair");
+    assert.equal(ordinaryRepairBudget.remaining_tokens, 10);
+    assert.equal(ordinaryRepairBudget.usage_status, "known");
+    const [preservedCost] = await sql`SELECT l.total_tokens,l.settlement_status,e.status AS effect_status
+      FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id
+      WHERE l.job_id=${ordinaryRetry.jobId}`;
+    assert.deepEqual(preservedCost, uncertainCost, "recording a refusal never settles the earlier unknown effect or cost");
+    assert.equal(calls, beforeRetry + 2, "completion refusal and budget reads do not replay upstream requests");
 
     const ordinaryZero = await setup(); responseTokens = 0;
     assert.equal((await ordinaryZero.request()).statusCode, 200); await ordinaryZero.settle(1);
