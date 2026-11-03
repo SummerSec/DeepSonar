@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { assertPlatformManifest } from "./generate-runtime-image-registry.mjs";
+import { assertPlatformManifest, PLATFORM_TRACKED_IMAGE_KEYS, versionsForUnchangedDigest } from "./generate-runtime-image-registry.mjs";
 import { verifyPlatformRelease, platformEnvExample } from "./check-platform-release.mjs";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -236,7 +236,11 @@ try {
   assert.equal(reused.platform_version, "0.2.0");
   for (const image of reused.images) {
     assert.equal(image.versions.length, 1);
-    assert.equal(image.versions[0].version, "0.1.0");
+    // Reverse is the only image the gate ties to the platform version
+    // (test-reverse-runtime.ts requires reverse == platform), so a reused
+    // reverse build is relabelled; every other image keeps the release that
+    // actually built its digest.
+    assert.equal(image.versions[0].version, PLATFORM_TRACKED_IMAGE_KEYS.has(image.image_key) ? "0.2.0" : "0.1.0");
     assert.equal(image.versions[0].digest, digest);
     assert.deepEqual(image.versions[0].manual, manual);
   }
@@ -319,6 +323,30 @@ try {
   }
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
+}
+
+// A reused build is still shipped by the current release: the catalog may carry
+// only one entry per digest, so the entry must be relabelled rather than left
+// claiming the previous release (the v0.6.5 reverse regression).
+{
+  const digest = `sha256:${"a".repeat(64)}`;
+  const previous = [{ version: "0.6.5", digest, platforms: ["linux/amd64", "linux/arm64"],
+    registry_refs: { github: `ghcr.io/summersec/deepsonar-reverse@${digest}` } }];
+  const next = { version: "0.6.6", digest, platforms: ["linux/amd64", "linux/arm64"] };
+  const relabelled = versionsForUnchangedDigest(previous, next, "0.6.6");
+  assert.equal(relabelled.length, 1, "one entry per digest: relabelling must not append a duplicate");
+  assert.equal(relabelled[0].version, "0.6.6");
+  assert.equal(relabelled[0].digest, digest);
+  assert.deepEqual(relabelled[0].platforms, previous[0].platforms);
+  assert.equal(relabelled[0].registry_refs.github, previous[0].registry_refs.github);
+  // Without an explicit release version the older entry is preserved as-is.
+  assert.equal(versionsForUnchangedDigest(previous, next)[0].version, "0.6.5");
+  // A fresh digest still prepends its own version entry.
+  const freshDigest = `sha256:${"b".repeat(64)}`;
+  const replaced = versionsForUnchangedDigest(previous, { ...next, digest: freshDigest }, "0.6.6");
+  assert.equal(replaced.length, 1);
+  assert.equal(replaced[0].digest, freshDigest);
+  assert.equal(replaced[0].version, "0.6.6");
 }
 
 console.log("runtime registry generator v2 descriptors, optional channels, strict evidence and v1 check passed");
