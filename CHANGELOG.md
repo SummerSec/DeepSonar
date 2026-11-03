@@ -2,6 +2,8 @@
 
 ### 修复
 
+- **Gateway admission 在可恢复数据库冲突上有界重试并返回稳定错误码（#871 A 片段）**：同画布并发时 `40P01` 死锁会让 `/gateway/v1/messages` 直接 500，agent 侧看起来就是模型/调用失败。admission 事务（`sql.begin(admitGatewayRequest)`，内含 `beginEffect`）在向��游发出请求之前完成，回滚后计数器与 effect 一起消失，因此属于可安全重试的边界：现在对 `40P01` / `40001` / `55P03` 做 3 次尝试、25ms 起指数退避，耗尽时返回 `503 { error_code: "database_conflict", retryable: true, attempts }`，并把每次冲突计入 `deepsonar_gateway_db_conflict_retries_total{workload,code}`。**已经发出外部请求之后的路径不重试**，`unknown` 效果仍不自动重放；本片段不涉及锁序（见 #872）与共享卷缺陷 B。
+
 - **平台更新横幅不再声称宿主机升级尚未实现（#869）**：管理员横幅此前写「请在宿主机执行 deploy.sh upgrade（尚未落地，见 #740）」——宿主机受控升级其实已随 v0.6.0 交付（#740 未实现的只是可选的「Web 发起升级」），而且裸 `upgrade` 没有 action，会被维护状态机拒绝为 `INVALID_MAINTENANCE_ACTION`。现在提示改为两步受控流程：先 `./deploy/deploy.sh upgrade check --to v<目标版本>` 审核阻断项与风险，再 `./deploy/deploy.sh upgrade apply --to v<目标版本>`（有风险时附 `--approve-plan-hash <本次计划哈希>`），并指向 `deploy/README.md` 的受控升级章节、明确「Web 只提示版本，不代执行升级」。目标版本取自状态字段而非写死在源码；schema 重建提醒、changelog 链接与检查失败语义保持不变。
   - 前端回归覆盖：普通更新、需 schema 重建、无更新、检查失败，断言不再出现「尚未落地」、指引包含 `check`/`apply` 子命令与文档入口、且不固定到某一发布版本。
   - 旧部署要继续看到旧文案，直到获取包含本修复的 Web 镜像重建部署；本修复只影响新构建。

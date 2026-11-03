@@ -254,7 +254,7 @@ pending → claimed → provisioning → running → succeeded
 
 Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报。`pg_notify('deepsonar_jobs')` 是主要调度唤醒；可以关闭轮询。
 
-每个 Job 领取建立 Scheduler-owned Attempt。外部动作先写 `job_attempt_effects` 的 intent/`effect_pending`，观察到结果后再写 settlement。启动对账按 Attempt phase 和 effect 分类：只有尚未开始且无效果的准备阶段可以回到 `pending`；未知效果统一进入 `orphan`，清理 Token、沙箱、画布同步和租约，禁止自动重放。Attempt 终态收口时，从未绑定 `sandbox_id` 且未观察到迟到沙箱的失败 provision 记为 `settled`（outcome `never_started`，证明无外部后果），不得留 `unknown`；超时路径若已观察到迟到 sandbox handle（或 late destroy 失败），以及沙箱已启动后的中断、timeout/cancel/orphan，与 `agent_run` 未证实窗口，仍是 `unknown`。`replay_policy` 不因这次结算改变。
+每个 Job 领取建立 Scheduler-owned Attempt。外部动作先写 `job_attempt_effects` 的 intent/`effect_pending`，观察到结果后再写 settlement。启动对账按 Attempt phase 和 effect 分类：只有尚未开始且无效果的准备阶段可以回到 `pending`；未知效果统一进入 `orphan`，清理 Token、沙箱、画布同步和租约，禁止自动重放。Attempt 终态收口时，从未绑定 `sandbox_id` 且未观察到迟到沙箱的失败 provision 记为 `settled`（outcome `never_started`，证明无外部后果），不得留 `unknown`；超时路径若已观察到迟到 sandbox handle（或 late destroy 失败），以及沙箱已启动后的中断、timeout/cancel/orphan，与 `agent_run` 未证实窗口，仍是 `unknown`。`replay_policy` 不因这次结算改变。可恢复的数据库锁冲突（`40P01` 死锁 / `40001` 序列化失败 / `55P03` 锁超时）只在**未提交、无外部副作用**的事务边界上有界重试：Gateway admission（`sql.begin(admitGatewayRequest)`，含 `beginEffect` 写入）发生在向上游发出请求之前，回滚后计数器与 effect 一起消失，因此可安全重试，耗尽时返回稳定的 `database_conflict`（503，`retryable: true`），不把它当作模型/Agent 语义失败；已经发出外部请求之后的路径不重试，`unknown` 效果仍禁止自动重放。
 
 Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`unknown`/`pending` 保持硬失败，不能以 provider 5xx 文案替代效果 authority。
 
