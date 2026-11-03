@@ -743,7 +743,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
     const pendingPageSize = 500;
     let cursor: { priority: number; createdAt: string; id: string } | null = null;
     while (selected.length < slots) {
-      const pending = await tx<PendingCandidate[]>`${projection}
+      const pending: PendingCandidate[] = await tx<PendingCandidate[]>`${projection}
         WHERE j.status = 'pending'
         ${cursor ? tx`AND (
           j.priority < ${cursor.priority}
@@ -753,7 +753,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
         ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
         LIMIT ${pendingPageSize}`;
       if (pending.length === 0) break;
-      const last = pending[pending.length - 1]!;
+      const last: PendingCandidate = pending[pending.length - 1]!;
       cursor = { priority: Number(last.priority), createdAt: String(last.created_at_key), id: String(last.id) };
       const graphBatch = await loadGraphEligibilityBatch(tx as unknown as typeof sql, pending);
       for (const job of pending) {
@@ -838,7 +838,7 @@ export async function retryProvisioningJob(
       FROM jobs j WHERE j.id = ${jobId} FOR UPDATE OF j`;
     const current = await getActiveAttempt(tx, jobId, true);
     if (!owner || owner.canvas_id !== (locator?.canvas_id ?? null) || owner.latest_attempt_id !== attempt.id
-      || !current || current.id !== attempt.id || current.cancel_requested !== false) return false;
+      || !current || typeof current.id !== "string" || current.id !== attempt.id || current.cancel_requested !== false) return false;
     // Error text/missing handle cannot authorize replay. Only no effect or an
     // explicit host never_started settlement is admissible under this owner lock.
     const [blocked] = await tx`SELECT id FROM job_attempt_effects WHERE attempt_id = ${current.id}

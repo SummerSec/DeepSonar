@@ -117,8 +117,8 @@ export async function invokeDurablePlanDecision(input: {
       });
       if(saved) return matches(saved) ? saved.result : reject('IDEMPOTENCY_KEY_CONFLICT','Stored receipt does not match this request');
     }catch {return {statusCode:503,body:{accepted:false,error_code:'PLAN_RECEIPT_UNCERTAIN',error:'Receipt outcome unknown; query receipt_key before retrying unchanged input',retryable:false}};}
-    if(error instanceof ControlInputError) return {statusCode:409,body:controlRuntimeRejection({operation,code:error.code,message:error.message,
-      retryable:false,statusCode:409,path:error.path,details:error.details,idempotencyKey:key})};
+    if(error instanceof ControlInputError) return {statusCode:409,body:{...controlRuntimeRejection({operation,code:error.code,message:error.message,
+      retryable:false,statusCode:409,path:error.path,details:error.details,idempotencyKey:key})}};
     if(error instanceof EventRateLimitError) return {statusCode:429,body:{...controlRuntimeRejection({operation,code:error.code,message:error.message,retryable:true,statusCode:429,details:{...error.metadata},idempotencyKey:key})}};
     throw error;
   }
