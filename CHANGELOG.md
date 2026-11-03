@@ -1,5 +1,10 @@
 ## [Unreleased]
 
+### 变更
+
+- **Pi Observational Memory 长会话增长的自动化测量（#835 第 3 项）**：`agent-harness/fixtures/pi-om-real-rpc.mjs` 新增 `runGrowthProbe()`，在真实镜像内跑「多轮 + 重启续跑」的合成负载，按轮次记录 agent 目录（session ledger）、workspace、observer/reflector 请求数与帧数的**磁盘字节**，并断言「重启后仍能 recall 到重启前的来源」「历史不因召回有界而被删除」「artifact 不含私有正文」。`ci.yml` 新增 `pi-om-growth` job（自建 base 镜像、35 分钟预算、上传 `artifacts/pi-om-growth`），`pnpm ci:smoke:pi-om-growth` 为对应入口。
+  - 口径：合成规模，不宣称容量/SLA 或公开质量结论；字节数是标准落盘统计。
+
 ### 修复
 
 - **v0.6.5 的 bundled 清单与 reverse 版本不一致（发布后回归）**：release 的 reverse 构建在 v0.6.5 命中指纹复用，`write-release-runtime-descriptor.sh` 沿用了上一版权限记录，于是 `deploy/runtime-image-registry.json` 出现「platform 0.6.5 + reverse 0.6.4」，`test-reverse-runtime.mjs` 的静态门禁在 main 上转红。现在复用路径会把 descriptor 重新标记为本次发布的版本（digest 与证据不变），并补上 v0.6.5 的 reverse 记录；发布清单校验与 reverse 门禁均通过。

@@ -8,6 +8,10 @@ import * as piFixture from "./fixtures/pi-om-real-rpc.mjs";
 import { assertInstalledPiImage } from "./pi-image-packaging.mjs";
 
 const packagingOnly = process.argv.includes("--packaging-only");
+// #835 item 3: bounded multi-round / multi-session growth probe. It shares the
+// image harness (same canonical Pi/OM, same production wrapper) but measures
+// on-disk growth instead of replaying the eight failure scenarios.
+const growth = process.argv.includes("--growth");
 
 if (process.argv.includes("--inside")) {
   assert.equal(process.env.DEEPSONAR_PI_IMAGE_PROOF, "1", "Pi RPC smoke must run against an actual built image");
@@ -18,6 +22,9 @@ if (process.argv.includes("--inside")) {
   });
   if (packagingOnly) {
     console.log(JSON.stringify({ pi_image_packaging: "passed", image_identity: identity }));
+  } else if (growth) {
+    const report = await piFixture.runGrowthProbe();
+    console.log(JSON.stringify({ image_identity: identity, ...report }));
   } else {
     console.log(`Installed image identity: OM ${identity.package.version}, Pi ${identity.pi.version}, wrapper ${identity.wrapper.sha256}`);
     // The fixture's explicit image-proof flag selects the canonical installed
@@ -29,9 +36,14 @@ if (process.argv.includes("--inside")) {
   }
 } else if (process.env.DEEPSONAR_PI_BINARY) {
   assert.equal(packagingOnly, false, "--packaging-only requires the Docker image entrypoint");
-  const reports = await piFixture.runRealPiRpc();
-  assert.equal(reports.length, 8);
-  console.log(`HOST-ONLY Pi 1.4.0 + canonical OM 3.1.4: ${reports.length} offline real-RPC scenarios passed; not image evidence`);
+  if (growth) {
+    const report = await piFixture.runGrowthProbe();
+    console.log(`HOST-ONLY growth probe: ${report.samples.length} samples recorded; not image evidence`);
+  } else {
+    const reports = await piFixture.runRealPiRpc();
+    assert.equal(reports.length, 8);
+    console.log(`HOST-ONLY Pi 1.4.0 + canonical OM 3.1.4: ${reports.length} offline real-RPC scenarios passed; not image evidence`);
+  }
 } else {
   const repo = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
   const wrapperSha256 = createHash("sha256")
@@ -42,7 +54,7 @@ if (process.argv.includes("--inside")) {
   if (process.platform === "win32") assert.ok(existsSync(docker), `Docker Desktop CLI is missing: ${docker}`);
   const image = process.argv.slice(2).find((arg) => !arg.startsWith("--"))
     ?? process.env.DEEPSONAR_PI_IMAGE ?? "deepsonar-base:ci";
-  const insideArgs = ["--inside", ...(packagingOnly ? ["--packaging-only"] : [])];
+  const insideArgs = ["--inside", ...(packagingOnly ? ["--packaging-only"] : []), ...(growth ? ["--growth"] : [])];
   const containerName = `deepsonar-pi-rpc-${Date.now()}-${randomUUID().slice(0, 8)}`;
   const requestedTimeout = Number.parseInt(process.env.DEEPSONAR_PI_RPC_TIMEOUT_MS ?? "", 10);
   const timeoutMs = Number.isInteger(requestedTimeout) && requestedTimeout > 0 && requestedTimeout <= 30 * 60_000
