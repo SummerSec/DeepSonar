@@ -3721,6 +3721,10 @@ jobs:
         env:
           VERSION: ${{ needs.base-image.outputs.version }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # gh CLI needs its own token: job-level env does not reach this step and
+          # actions/checkout configures git credentials only.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           registry_file="deploy/runtime-image-registry.json"
@@ -3752,30 +3756,12 @@ jobs:
           fi
           git commit -m "chore(release): sync runtime-image-registry.json and platform digests for v${VERSION}"
           branch="bot/sync-runtime-registry-v${VERSION}"
-          sha="$(git rev-parse HEAD)"
-          git push origin "HEAD:refs/heads/${branch}"
-          # The default branch requires ci-summary. A GITHUB_TOKEN push does not
-          # trigger workflows, so dispatch ci.yml on the writeback branch
-          # explicitly and wait for the required check before fast-forwarding.
-          gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "$branch"
-          conclusion="pending"
-          for attempt in $(seq 1 90); do
-            sleep 60
-            conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${sha}/check-runs"               --jq '[.check_runs[] | select(.name == "ci-summary")] | .[0].conclusion // "pending"')"
-            case "$conclusion" in
-              success) break ;;
-              failure|cancelled|timed_out|skipped)
-                echo "ci-summary on ${branch} concluded ${conclusion}; refusing to move ${DEFAULT_BRANCH}" >&2
-                exit 1 ;;
-            esac
-            if [[ "$attempt" == "90" ]]; then
-              echo "ci-summary on ${branch} did not conclude within 90 minutes" >&2
-              exit 1
-            fi
-          done
-          git push origin "HEAD:${DEFAULT_BRANCH}"
-          git push origin --delete "$branch"
-          echo "已将 $registry_file 和 $env_file 经 ci-summary=${conclusion} 校验后回写到 origin/${DEFAULT_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
+          # The default branch requires ci-summary and a GITHUB_TOKEN push does not
+          # trigger workflows, so the control flow (push branch, dispatch, wait for
+          # the required check, fast-forward) lives in a tested module.
+          WRITEBACK_BRANCH="$branch" WRITEBACK_SHA="$(git rev-parse HEAD)" \
+            node agent-harness/release-writeback.mjs | tee /tmp/writeback.json
+          echo "已将 $registry_file 和 $env_file 经 ci-summary 校验后回写到 origin/${DEFAULT_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
       - name: Create Release and frozen assets without updating an existing Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

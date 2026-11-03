@@ -119,12 +119,14 @@ test("a killed Scheduler process leaves a replayable durable completion (#835)",
     // restarted process returned the original receipt rather than writing a new one.
     assert.equal(body.receipt_ref, completionReceiptId(jobId, key));
 
+    // postgres-js returns a RowList whose own `count` is the number of returned rows,
+    // which is always 1 here; the aggregate lives on the row itself.
     const after = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${jobId} AND type='control_receipt'`;
-    assert.equal(after.count, 1, "a replayed completion must not add a second durable receipt");
+    assert.equal(Number(after[0]?.count), 1, "a replayed completion must not add a second durable receipt");
     const [job] = await sql`SELECT status FROM jobs WHERE id=${jobId}`;
     assert.equal(job.status, "running", "the crash must not flip the Job terminal on its own");
-    const [attempt] = await sql`SELECT count(*)::int AS count FROM job_attempts WHERE job_id=${jobId}`;
-    assert.equal(attempt.count, 1, "a restart must not mint a second attempt");
+    const attempts = await sql`SELECT count(*)::int AS count FROM job_attempts WHERE job_id=${jobId}`;
+    assert.equal(Number(attempts[0]?.count), 1, "a restart must not mint a second attempt");
   } finally {
     for (const entry of children) entry.child.kill("SIGKILL");
     process.env.DATABASE_URL = databaseUrl;
