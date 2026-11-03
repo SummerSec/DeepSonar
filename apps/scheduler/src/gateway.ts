@@ -24,6 +24,7 @@ import {
 import { sql } from "./db.js";
 import { revokeJobTokensInTransaction } from "./gateway-token-revocation.js";
 import { inc } from "./metrics.js";
+import { DatabaseConflictExhaustedError, withDatabaseConflictRetry } from "./db-conflict-retry.js";
 import { appendOtlpEnvelope } from "./evidence.js";
 import { extractBaseUrlFromSettings } from "./provider-settings.js";
 import {
@@ -1410,7 +1411,10 @@ export function registerGateway(app: FastifyInstance): void {
       };
       // 转发（流式直通；请求数先计，token 数响应后补记）。请求序号
       // 来自同一行的原子更新，重试/并发请求不会复用 effect_id。
-      const requestIntent = await sql.begin(async (tx) => {
+      // #871 A：admission 事务在向上游发出请求之前完成，回滚后计数器与 effect
+      // 一起消失，因此死锁/序列化失败可以安全重试；耗尽时返回稳定错误码，而不是
+      // 让 agent 把它当成模型失败。
+      const requestIntent = await withDatabaseConflictRetry(async () => sql.begin(async (tx) => {
         return admitGatewayRequest(tx as unknown as typeof sql, {
           jobId: String(jt.job_id),
           tokenId: String(jt.id),
@@ -1429,10 +1433,31 @@ export function registerGateway(app: FastifyInstance): void {
             }
           },
         });
+      }), {
+        onConflict: (error, attempt) => {
+          inc("deepsonar_gateway_db_conflict_retries_total", {
+            workload,
+            code: String((error as { code?: unknown }).code ?? "unknown"),
+          });
+          app.log.warn({ attempt, code: (error as { code?: unknown }).code, job_id: jt.job_id },
+            "gateway admission retried after a recoverable database conflict");
+        },
       }).catch(error => {
         if (error instanceof RepairTokenBudgetError || error instanceof GatewayWorkloadPolicyError) return error;
+        if (error instanceof DatabaseConflictExhaustedError) return error;
         throw error;
       });
+      if (requestIntent instanceof DatabaseConflictExhaustedError) {
+        return reply.code(503).send({
+          error: {
+            type: "database_conflict",
+            message: "数据库锁冲突在有限重试后仍未恢复，请稍后重试；该请求未向上游发出",
+          },
+          error_code: "database_conflict",
+          retryable: true,
+          attempts: requestIntent.attempts,
+        });
+      }
       if (requestIntent instanceof GatewayWorkloadPolicyError) return deny(reply, 403, requestIntent.message, requestIntent.code);
       if (requestIntent instanceof RepairTokenBudgetError) {
         return reply.code(409).send({ error: { type: requestIntent.code, message: requestIntent.message },

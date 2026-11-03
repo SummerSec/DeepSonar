@@ -1,0 +1,80 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  DB_CONFLICT_MAX_ATTEMPTS,
+  DatabaseConflictExhaustedError,
+  isRetryableDatabaseConflict,
+  withDatabaseConflictRetry,
+} from "./db-conflict-retry.js";
+
+const conflict = (code: string) => Object.assign(new Error(`pg ${code}`), { code });
+
+test("only deadlock, serialization and lock-timeout errors are retryable", () => {
+  for (const code of ["40P01", "40001", "55P03"]) {
+    assert.equal(isRetryableDatabaseConflict(conflict(code)), true, `${code} must be retryable`);
+  }
+  for (const code of ["23505", "23503", "42P01", "57014", "08006"]) {
+    assert.equal(isRetryableDatabaseConflict(conflict(code)), false, `${code} must not be retried`);
+  }
+  assert.equal(isRetryableDatabaseConflict(null), false);
+  assert.equal(isRetryableDatabaseConflict(new Error("plain")), false);
+  // postgres.js occasionally wraps the driver error.
+  assert.equal(isRetryableDatabaseConflict({ code: "XX000", cause: conflict("40P01") }), true);
+});
+
+test("a recoverable conflict is retried and the successful result is returned", async () => {
+  const delays: number[] = [];
+  const conflicts: number[] = [];
+  let calls = 0;
+  const result = await withDatabaseConflictRetry(async (attempt) => {
+    calls += 1;
+    if (attempt < 3) throw conflict("40P01");
+    return `ok-${attempt}`;
+  }, {
+    sleep: async (ms) => { delays.push(ms); },
+    onConflict: (_error, attempt) => { conflicts.push(attempt); },
+  });
+  assert.equal(result, "ok-3");
+  assert.equal(calls, 3);
+  assert.deepEqual(conflicts, [1, 2], "each retried conflict is reported");
+  assert.deepEqual(delays, [25, 50], "backoff doubles between attempts");
+});
+
+test("a non-conflict error is thrown immediately without retrying", async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => withDatabaseConflictRetry(async () => {
+      calls += 1;
+      throw conflict("23505");
+    }, { sleep: async () => {} }),
+    (error: unknown) => (error as { code?: string }).code === "23505",
+  );
+  assert.equal(calls, 1, "unique-violation must not be retried");
+});
+
+test("exhaustion surfaces a stable code instead of a bare driver error", async () => {
+  let calls = 0;
+  await assert.rejects(
+    () => withDatabaseConflictRetry(async () => {
+      calls += 1;
+      throw conflict("40P01");
+    }, { sleep: async () => {} }),
+    (error: unknown) => {
+      assert.ok(error instanceof DatabaseConflictExhaustedError);
+      assert.equal(error.code, "DATABASE_CONFLICT_EXHAUSTED");
+      assert.equal(error.attempts, DB_CONFLICT_MAX_ATTEMPTS);
+      return true;
+    },
+  );
+  assert.equal(calls, DB_CONFLICT_MAX_ATTEMPTS, "retries are bounded, not unbounded");
+});
+
+test("the attempt index lets the transaction re-read state on each retry", async () => {
+  const seen: number[] = [];
+  await withDatabaseConflictRetry(async (attempt) => {
+    seen.push(attempt);
+    if (attempt === 1) throw conflict("40001");
+    return attempt;
+  }, { sleep: async () => {} });
+  assert.deepEqual(seen, [1, 2]);
+});
