@@ -13,20 +13,38 @@ import localImage, { OM_INSTALL_IDENTITY_CHECK } from "./image.mjs";
 // strict while comparing against the git baseline on Windows.
 const statSync = process.platform === "win32" ? (() => ({ mode: 0o755 })) : fsStatSync;
 
-const config = JSON.parse(readFileSync(new URL("./runtime-images.json", import.meta.url), "utf8"));
+// Every document this gate reads is load-bearing: a malformed file must abort the
+// consistency check with a readable message instead of a bare SyntaxError.
+function readJson(source) {
+  let raw;
+  try {
+    raw = readFileSync(source, "utf8");
+  } catch (error) {
+    console.error(`consistency input is unreadable: ${String(source)}: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error(`consistency input is not valid JSON: ${String(source)}: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
+
+const config = readJson(new URL("./runtime-images.json", import.meta.url));
 const dockerfile = readFileSync(new URL("../deploy/Dockerfile.agent", import.meta.url), "utf8");
 const localDefinition = readFileSync(new URL("./image.mjs", import.meta.url), "utf8");
 const writeManifest = readFileSync(new URL("./write-tool-manifest.mjs", import.meta.url), "utf8");
-const kaliConfig = JSON.parse(readFileSync(new URL("./kali-minimal-runtime.json", import.meta.url), "utf8"));
+const kaliConfig = readJson(new URL("./kali-minimal-runtime.json", import.meta.url));
 const kaliDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-kali-minimal", import.meta.url), "utf8");
 await import("./check-dsh-runtime.mjs");
 const openHarmonyDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony", import.meta.url), "utf8");
 const openHarmonyAuditDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony-audit", import.meta.url), "utf8");
 const openHarmonyFuzzDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-openharmony-fuzz", import.meta.url), "utf8");
-const chromeAuditConfig = JSON.parse(readFileSync(new URL("./chrome-audit-runtime.json", import.meta.url), "utf8"));
-const chromeTestConfig = JSON.parse(readFileSync(new URL("./chrome-test-runtime.json", import.meta.url), "utf8"));
-const chromeFuzzConfig = JSON.parse(readFileSync(new URL("./chrome-fuzz-runtime.json", import.meta.url), "utf8"));
-const chromeSources = JSON.parse(readFileSync(new URL("../deploy/chrome-runtime-sources.json", import.meta.url), "utf8"));
+const chromeAuditConfig = readJson(new URL("./chrome-audit-runtime.json", import.meta.url));
+const chromeTestConfig = readJson(new URL("./chrome-test-runtime.json", import.meta.url));
+const chromeFuzzConfig = readJson(new URL("./chrome-fuzz-runtime.json", import.meta.url));
+const chromeSources = readJson(new URL("../deploy/chrome-runtime-sources.json", import.meta.url));
 const chromeAuditDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-chrome-audit", import.meta.url), "utf8");
 const chromeTestDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-chrome-test", import.meta.url), "utf8");
 const chromeFuzzDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-chrome-fuzz", import.meta.url), "utf8");
@@ -42,7 +60,7 @@ const normalizedOpenHarmonyRepo = Buffer.from(openHarmonyRepo.toString("utf8").r
 const openHarmonyEnv = readFileSync(new URL("../deploy/openharmony-env.sh", import.meta.url), "utf8");
 const openHarmonyHdc = readFileSync(new URL("../deploy/openharmony-hdc.sh", import.meta.url), "utf8");
 const openHarmonyHdcBin = readFileSync(new URL("../deploy/openharmony-hdc-bin.sh", import.meta.url), "utf8");
-const openHarmonyTestConfig = JSON.parse(readFileSync(new URL("./openharmony-test-runtime.json", import.meta.url), "utf8"));
+const openHarmonyTestConfig = readJson(new URL("./openharmony-test-runtime.json", import.meta.url));
 const openHarmonyHdcSmoke = readFileSync(new URL("./test-openharmony-hdc.mjs", import.meta.url), "utf8");
 const openHarmonyInit = readFileSync(new URL("../deploy/openharmony-init.sh", import.meta.url), "utf8");
 const openHarmonyBuild = readFileSync(new URL("../deploy/openharmony-build.sh", import.meta.url), "utf8");
@@ -51,7 +69,7 @@ const openHarmonyAuditScan = readFileSync(new URL("../deploy/openharmony-audit-s
 const openHarmonyFuzzEnv = readFileSync(new URL("../deploy/openharmony-fuzz-env.sh", import.meta.url), "utf8");
 const openHarmonyFuzzBuild = readFileSync(new URL("../deploy/openharmony-fuzz-build.sh", import.meta.url), "utf8");
 const openHarmonyFuzzRuntime = readFileSync(new URL("./test-openharmony-fuzz-runtime.mjs", import.meta.url), "utf8");
-const openHarmonyRegistry = JSON.parse(readFileSync(new URL("../deploy/runtime-image-registry.json", import.meta.url), "utf8"));
+const openHarmonyRegistry = readJson(new URL("../deploy/runtime-image-registry.json", import.meta.url));
 const prepareScript = readFileSync(new URL("../deploy/prepare-runtime-images.sh", import.meta.url), "utf8");
 const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
 const deploySh = readFileSync(new URL("../deploy/deploy.sh", import.meta.url), "utf8");
@@ -71,10 +89,10 @@ const schedulerRuntimeImageRoutes = readFileSync(
 );
 const runtimeSmoke = readFileSync(new URL("./test-runtime-image.mjs", import.meta.url), "utf8");
 const chromeRuntimeSmoke = readFileSync(new URL("./test-chrome-runtime.mjs", import.meta.url), "utf8");
-const clickhouseAuditConfig = JSON.parse(readFileSync(new URL("./clickhouse-audit-runtime.json", import.meta.url), "utf8"));
-const clickhouseTestConfig = JSON.parse(readFileSync(new URL("./clickhouse-test-runtime.json", import.meta.url), "utf8"));
-const clickhouseFuzzConfig = JSON.parse(readFileSync(new URL("./clickhouse-fuzz-runtime.json", import.meta.url), "utf8"));
-const clickhouseSources = JSON.parse(readFileSync(new URL("../deploy/clickhouse-runtime-sources.json", import.meta.url), "utf8"));
+const clickhouseAuditConfig = readJson(new URL("./clickhouse-audit-runtime.json", import.meta.url));
+const clickhouseTestConfig = readJson(new URL("./clickhouse-test-runtime.json", import.meta.url));
+const clickhouseFuzzConfig = readJson(new URL("./clickhouse-fuzz-runtime.json", import.meta.url));
+const clickhouseSources = readJson(new URL("../deploy/clickhouse-runtime-sources.json", import.meta.url));
 const clickhouseAuditDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-clickhouse-audit", import.meta.url), "utf8");
 const clickhouseTestDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-clickhouse-test", import.meta.url), "utf8");
 const clickhouseFuzzDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-clickhouse-fuzz", import.meta.url), "utf8");
@@ -88,9 +106,9 @@ const clickhouseFuzzEnv = readFileSync(new URL("../deploy/clickhouse-fuzz-env.sh
 const clickhouseFuzzSmoke = readFileSync(new URL("../deploy/clickhouse-fuzz-smoke.sh", import.meta.url), "utf8");
 const clickhouseRuntimeSmoke = readFileSync(new URL("./test-clickhouse-runtime.mjs", import.meta.url), "utf8");
 const clickhouseWorkflow = readFileSync(new URL("../.github/workflows/clickhouse-runtime.yml", import.meta.url), "utf8");
-const mobileConfig = JSON.parse(readFileSync(new URL("./mobile-runtime.json", import.meta.url), "utf8"));
+const mobileConfig = readJson(new URL("./mobile-runtime.json", import.meta.url));
 const mobileDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-mobile", import.meta.url), "utf8");
-const reverseConfig = JSON.parse(readFileSync(new URL("./reverse-runtime.json", import.meta.url), "utf8"));
+const reverseConfig = readJson(new URL("./reverse-runtime.json", import.meta.url));
 const reverseDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-reverse", import.meta.url), "utf8");
 const mobileEnv = readFileSync(new URL("../deploy/mobile-env.sh", import.meta.url), "utf8");
 const mobileAdb = readFileSync(new URL("../deploy/mobile-adb.sh", import.meta.url), "utf8");
@@ -397,7 +415,7 @@ try {
     // Only extension provenance is under test here; no host dpkg invocation.
     writeFileSync(inputPath, JSON.stringify({ ...inventory, apt: {}, npm: {}, downloads: {}, managed: {} }));
     execFileSync(process.execPath, [fileURLToPath(new URL("./write-tool-manifest.mjs", import.meta.url)), inputPath, toolset, outputPath]);
-    const manifest = JSON.parse(readFileSync(outputPath, "utf8"));
+    const manifest = readJson(outputPath);
     const installedPackage = manifest.tools.find((tool) => tool.name === baseOm.package);
     const installedWrapper = manifest.tools.find((tool) => tool.name === "pi-observational-memory-governed");
     expect(installedPackage?.integrity === baseOm.integrity && installedPackage?.entry === "src/index.ts"
@@ -1205,7 +1223,7 @@ expect(!releaseWorkflow.includes("github.repository_owner"), "release workflow ä
 expect(openHarmonyRegistry.schema === "deepsonar.registry/v2" && openHarmonyRegistry.schema_version === 2, "bundled runtime catalog must be v2");
 expect(typeof openHarmonyRegistry.platform_version === "string" && /^\d+\.\d+\.\d+$/.test(openHarmonyRegistry.platform_version), "bundled catalog must declare platform_version");
 expect(openHarmonyRegistry.min_runtime_image?.version && /^\d+\.\d+\.\d+$/.test(openHarmonyRegistry.min_runtime_image.version), "bundled catalog must declare min_runtime_image.version");
-expect(registryScript.includes("image build unchanged; version relabelled"), "generator must relabel reused fingerprint digests to the release version");
+expect(registryScript.includes("image build unchanged; version kept"), "generator must keep the version that built a reused digest");
 expect(registryScript.includes("platform_version") && registryScript.includes("min_runtime_image"), "generator must emit split platform/runtime version axes");
 expect(releaseWorkflow.includes("maybe-skip-runtime-version-tags.sh"), "unchanged runtime products must skip new platform-version tags");
 expect(releaseWorkflow.includes("write-release-runtime-descriptor.sh"), "unchanged runtime products must reuse the previous catalog descriptor");
