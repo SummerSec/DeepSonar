@@ -32,6 +32,7 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
     const { controlInputDigest } = await import("../event-ingestion/control-receipt.js");
     const { createHubOrchestrationApplication } = await import("../hub-orchestration/application.js");
     const api = await import("../platform-api/index.js");
+    const { ControlInputError } = await import("../../control-input.js");
     const core = await import("../../core.js");
     const { default: Fastify } = await import("fastify");
     const app = Fastify();
@@ -124,7 +125,15 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       registered.add(String(hub.id));
       api.registerRuntimeHandler(String(hub.id), async context => {
         if (context.planPhase === "validate") {
-          await core.preflightDeferredSemanticEvent(String(hub.id), "hub_decision", context.input);
+          try { await core.preflightDeferredSemanticEvent(String(hub.id), "hub_decision", context.input); }
+          catch (error) {
+            // Match executor-real's controlled adapter; registry sanitizes all unwrapped handler errors.
+            if (!(error instanceof ControlInputError)) throw error;
+            throw new api.PlatformRuntimeHandlerError("OPERATION_REJECTED", error.message, {
+              statusCode: error.retryable ? 422 : 409, errorCode: error.code, retryable: error.retryable,
+              ...(error.path ? { path: error.path } : {}), ...(error.details ? { details: error.details } : {}),
+            });
+          }
           return {};
         }
         if (context.planPhase === "prepare") return { plan_prepared: true };
@@ -292,7 +301,8 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       const { hub, post } = await runHub(f);
       const decision = decisionFor(refreshed), key = randomUUID();
       const oldGrant = await post({ recovery: decisionFor(original) });
-      assert.equal(oldGrant.statusCode, 409);
+      assert.equal(oldGrant.statusCode, 409, oldGrant.body);
+      assert.equal(oldGrant.json().error_code, "recovery_not_authorized", oldGrant.body);
       await assert.rejects(finalApply(String(hub.id), decision, randomUUID()), assertCode("recovery_not_authorized"));
       const accepted = await post({ recovery: decision }, key);
       assert.equal(accepted.statusCode, 200, accepted.body);
@@ -496,6 +506,14 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       const first = await completion.readCompletionReceipt(sql, f.jobId, firstKey);
       await effect(f, "gateway:repair", "gateway_model_request", "unknown", { repair_receipt_ref: completion.completionReceiptId(f.jobId, firstKey) });
       await ledger(f, "gateway:repair");
+      // Force sub-millisecond precision so a JS Date round trip cannot accidentally satisfy the effect CAS.
+      const [observedEffect] = await sql`UPDATE job_attempt_effects
+        SET updated_at=date_trunc('milliseconds',clock_timestamp())+interval '321 microseconds'
+        WHERE job_id=${f.jobId} AND attempt_id=${f.attemptId} AND effect_id='gateway:repair'
+        RETURNING id,updated_at::text AS observed_updated_at`;
+      assert.match(observedEffect.observed_updated_at, /\.\d{3}321(?:[+-]|$)/);
+      const [exactLedger] = await sql`SELECT id FROM job_usage_ledger
+        WHERE job_id=${f.jobId} AND project_id=${f.projectId} AND attempt_id=${f.attemptId} AND effect_id='gateway:repair'`;
       const unknownKey = randomUUID(), refused = await propose(unknownKey, 1);
       assert.equal(refused.statusCode, 409); assert.equal(refused.body.error_code, "REPAIR_USAGE_UNKNOWN");
       assert.equal((refused.body.repair as { category: string }).category, "unknown_external_effect");
@@ -505,6 +523,10 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       const { hub, post } = await runHub(f), key = randomUUID(), decision = decisionFor(state);
       assert.equal((await post({ recovery: decision }, key)).statusCode, 200);
       await finalApply(String(hub.id), decision, key);
+      const [settledRepair] = await sql`SELECT status,settlement_json FROM job_attempt_effects WHERE id=${observedEffect.id}`;
+      assert.equal(settledRepair.status, "settled", "exact microsecond observation must satisfy the effect CAS");
+      assert.equal(settledRepair.settlement_json.usage_ledger_id, exactLedger.id);
+      assert.equal(settledRepair.settlement_json.reconciled_by, "completion-recovery");
       assert.equal((await recovery.readCompletionRecovery(sql, f.jobId, f.attemptId))?.status, "awaiting_completion");
       await sql.begin(tx => attempts.markAttemptInterrupted(tx as unknown as Db, f.jobId, "original session exited"));
       await sql.begin(tx => attempts.createAttempt(tx as unknown as Db, f.jobId));

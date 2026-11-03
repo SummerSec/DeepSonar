@@ -347,7 +347,7 @@ export async function applyCompletionRecoveryDecision(db: typeof sql, hub: Job, 
     await projectCompletionRecoveryToCanvas(db, requested);
     return requested;
   }
-  const rows = await db`SELECT e.id,e.effect_id,e.effect_kind,e.status,e.updated_at,l.id AS ledger_id,l.settlement_status,
+  const rows = await db`SELECT e.id,e.effect_id,e.effect_kind,e.status,e.updated_at::text AS observed_updated_at,l.id AS ledger_id,l.settlement_status,
     l.input_tokens,l.output_tokens,l.total_tokens,l.cache_read_input_tokens,l.cache_creation_input_tokens,l.adjustment_tokens
     FROM job_attempt_effects e LEFT JOIN job_usage_ledger l ON l.job_id=e.job_id AND l.project_id=${state.project_id}
       AND l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
@@ -365,11 +365,12 @@ export async function applyCompletionRecoveryDecision(db: typeof sql, hub: Job, 
   for (const row of rows) {
     if (!recoveryUsageIsKnown(row as Parameters<typeof recoveryUsageIsKnown>[0])) continue;
     const operationId = completionRecoveryIdentity(state.target_job_id, state.target_attempt_id, `reconcile:${String(hub.id)}:${eventId}:${row.id}`);
+    // Keep PostgreSQL microseconds as text: a JS Date truncates them and makes a valid CAS miss.
     // Status + observed evidence CAS. A real settlement/ledger change wins; never replace its result.
     await db`UPDATE job_attempt_effects e SET status='settled',settlement_json=e.settlement_json || ${db.json({
       outcome: "applied_with_usage", reconciled_by: "completion-recovery", reconcile_operation_id: operationId,
       recovery_ref: state.recovery_ref, hub_job_id: String(hub.id), decision_event_id: eventId, usage_ledger_id: String(row.ledger_id),
-    })},settled_at=now(),updated_at=now() WHERE e.id=${row.id} AND e.status='unknown' AND e.updated_at=${row.updated_at}
+    })},settled_at=now(),updated_at=now() WHERE e.id=${row.id} AND e.status='unknown' AND e.updated_at::text=${row.observed_updated_at}
       AND EXISTS (SELECT 1 FROM job_usage_ledger l WHERE l.id=${row.ledger_id} AND l.job_id=e.job_id AND l.project_id=${state.project_id}
         AND l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id AND l.settlement_status='settled'
         AND l.input_tokens=${row.input_tokens} AND l.output_tokens=${row.output_tokens} AND l.total_tokens=${row.total_tokens}
