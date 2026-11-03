@@ -69,10 +69,10 @@ export async function readCompletionRecoveryEvidence(db: typeof sql, job: Job, a
     count(*) FILTER (WHERE e.status='effect_pending' AND NOT
       (${active} AND e.attempt_id=${attemptId} AND e.effect_kind IN ('agent_run','agent_resume')))::int AS pending,
     count(*) FILTER (WHERE e.status='settled')::int AS accepted,
-    encode(digest(COALESCE(string_agg(encode(digest(jsonb_build_array(e.id,e.attempt_id,e.effect_id,e.effect_kind,e.status,
+    encode(sha256(convert_to(COALESCE(string_agg(encode(sha256(convert_to(jsonb_build_array(e.id,e.attempt_id,e.effect_id,e.effect_kind,e.status,
       e.updated_at,e.settlement_json,l.id,l.settlement_status,l.input_tokens,l.output_tokens,l.total_tokens,
-      l.cache_read_input_tokens,l.cache_creation_input_tokens,l.adjustment_tokens,l.source,l.observed_at)::text,'sha256'),'hex'),
-      '' ORDER BY e.id),''),'sha256'),'hex') AS effects_sha256
+      l.cache_read_input_tokens,l.cache_creation_input_tokens,l.adjustment_tokens,l.source,l.observed_at)::text,'UTF8')),'hex'),
+      '' ORDER BY e.id),''),'UTF8')),'hex') AS effects_sha256
     FROM job_attempt_effects e LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
       AND l.job_id=e.job_id AND l.project_id=${String(job.project_id)} WHERE e.job_id=${String(job.id)}`;
   const rows = await db`SELECT id,effect_kind,status FROM job_attempt_effects WHERE job_id=${String(job.id)}
