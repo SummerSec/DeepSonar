@@ -100,7 +100,7 @@ recovery: {
 
 Reaper 沿用原 timer/in-flight guard，每 tick 做有界 keyset 扫描，按恢复根 round-robin 推进，失败不丢请求。首次原 deadline 冻结，wake 身份与 Hub 插入同事务；失败 Hub 计入有界额度，换 key、证据变化或 Scheduler 重启不能重置 lifetime/repair/token 预算。证据改变可产生新的 NO_PROGRESS 身份，但不延长原 deadline。唤醒上限与扫描参数只在[恢复实现](../apps/scheduler/src/domains/job-attempt/recovery.ts)维护，不复制可漂移默认数字。
 
-活动 Hub、真实 waiting_human/Verify 等待、手工 pause 和已有 auto-stop 门必须保留。无精确证据的恢复明确留 blocked/unknown；达到原 deadline/额度或合法 `stop` 请求时，以 Canvas → Job → Attempt 事务调用既有 lifecycle，收口原 Attempt/effects 并原子撤销模型/Control token；runner/卷清理随后在事务外执行并重新 fencing。失败的终态 CAS 不吞请求；停止不表示未知外部效果已消失。
+其他活动 Hub、真实 waiting_human/Verify 等待、手工 pause 和已有 auto-stop 门必须保留。若恢复目标本身是仍运行的 Hub，不派并行恢复 Hub；原目标保持阻塞，达到冻结的原 deadline 后才由既有生命周期有界停止，不能让它永久挡住自己的期限收口。无精确证据的恢复明确留 blocked/unknown；达到原 deadline/额度或合法 `stop` 请求时，以 Canvas → Job → Attempt 事务调用既有 lifecycle，收口原 Attempt/effects 并原子撤销模型/Control token；runner/卷清理随后在事务外执行并重新 fencing。失败的终态 CAS 不吞请求；停止不表示未知外部效果已消失。
 
 仅仍活动的原 Attempt 可以在允许对账后用新 revision/key 重提完成，继续过原 Completion、Verify、Plan、人工及权限门。旧接受/拒绝回执不可改写，不复活 failed/cancelled/timeout/orphan，不自动 succeeded。已退出会话或新 Attempt 的完整继续执行仍是 v1 明确缺口，不能用“零 unknown”或回执查询伪称恢复运行器。
 

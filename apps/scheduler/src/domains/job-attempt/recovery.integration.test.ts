@@ -144,6 +144,89 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
     };
     const assertCode = (code: string) => (error: unknown) => error instanceof Error && "code" in error && error.code === code;
 
+    await t.test("real reapOnce stop adapter closes Attempt, revokes both token classes, audits and projects Canvas/Plan", async () => {
+      const f = await setup();
+      await effect(f, "agent:run", "agent_run", "effect_pending"); await effect(f);
+      const { PlanV2, PlanAuditRecord } = await import("@deepsonar/shared-types");
+      const { applyPlanObjectivePatch } = await import("../plan-protocol/objective.js");
+      const { contentSha256 } = await import("../plan-protocol/criterion-model.js");
+      const [canvas] = await sql`SELECT title,target_json FROM canvases WHERE id=${f.canvasId}`;
+      const [root] = await sql`SELECT id FROM canvas_nodes WHERE canvas_id=${f.canvasId} AND node_type='root'`;
+      const { target, objective } = applyPlanObjectivePatch({ title: canvas.title, target: canvas.target_json, patch: {
+        expected_revision: null, goal: "Retain scoped recovery evidence", completion: { mode: "all_tasks", description: "Retain the scoped task output", required_outputs: [] },
+        budget: { max_tasks: 2, max_rounds: 2, max_no_progress_rounds: 1, max_parallel_tasks: 1 },
+      } });
+      const planOwner = randomUUID();
+      const plan = PlanV2.parse({ v: 2, objective_id: objective.objective_id, objective_revision: objective.revision, route_revision: "1",
+        goal: objective.goal, assumptions: [], tasks: [{ id: "recover", title: "Scoped recovery task", role: "audit",
+          description: "Retain the scoped recovery evidence", prompt: "Inspect only this Canvas and retain its evidence.",
+          from: [String(root.id)], depends_on: [], inputs: [], expected_outputs: ["recovery evidence"] }],
+        completion: objective.completion, budget: objective.budget, open_questions: [] });
+      const planAudit = PlanAuditRecord.parse({ v: 2, source: "submit_plan", raw: plan, trimmed: plan,
+        trim_reasons: [], result: null, termination_reason: null, updated_at: new Date().toISOString() });
+      await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
+        VALUES(${planOwner},${f.projectId},${f.canvasId},'hub_reason','succeeded',${sql.json(hubSnapshot)},${sql.json({ plan_protocol: planAudit })})`;
+      await sql`UPDATE canvases SET target_json=${sql.json(target)} WHERE id=${f.canvasId}`;
+      await sql`UPDATE jobs SET parent_job_id=${planOwner},payload_json=${sql.json({ plan_context: { protocol: 2, scheduler_owned: true,
+        plan_job_id: planOwner, plan_sha256: contentSha256(plan), objective_id: objective.objective_id, objective_revision: objective.revision,
+        task_id: "recover", task_sha256: contentSha256(plan.tasks[0]), route_revision: "1", dependency_outputs: [], dispatch_event_id: null } })} WHERE id=${f.jobId}`;
+      const state = await observe(f); assert.equal(await queue(f), true);
+      const { hub, post } = await runHub(f), key = randomUUID(), decision = decisionFor(state, "stop");
+      const response = await post({ recovery: decision }, key); assert.equal(response.statusCode, 200, response.body);
+      await finalApply(String(hub.id), decision, key);
+      await sql`UPDATE jobs SET status='failed' WHERE id=${hub.id}`;
+      // No follow-on model Job is admitted; the real Reaper still runs its production terminal projection hooks.
+      await sql`UPDATE projects SET config_json='{"rules":{"hubEnabled":false}}' WHERE id=${f.projectId}`;
+      const capability = await api.mintJobCapabilityToken(f.jobId);
+      const credential = randomUUID(), modelToken = randomUUID();
+      await sql`INSERT INTO credentials(id,project_id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4,status)
+        VALUES(${credential},${f.projectId},'unused FK fixture','llm_provider','openai','fixture-not-a-secret','fixture','fixture',${randomUUID()},'test','disabled')`;
+      await sql`INSERT INTO job_tokens(id,job_id,project_id,credential_id,token_prefix,token_hash,max_requests,expires_at)
+        VALUES(${modelToken},${f.jobId},${f.projectId},${credential},${randomUUID()},${controlInputDigest(randomUUID())},1,clock_timestamp()+interval '1 hour')`;
+      const { reapOnce } = await import("../../reaper.js");
+      assert.equal(process.env.AGENT_MODE, "fake");
+      const result = await reapOnce(); assert.equal(result.recoveryStops, 1);
+      const job = await readJob(f.jobId);
+      assert.equal(job.status, "failed"); assert.equal(job.error, "platform_recovery_stop"); assert.ok(job.finished_at);
+      const [attempt] = await sql`SELECT status,phase,state_json,outcome_json FROM job_attempts WHERE id=${f.attemptId}`;
+      assert.equal(attempt.status, "failed"); assert.equal(attempt.phase, "terminal"); assert.equal(attempt.state_json.phase, "terminal");
+      assert.equal(attempt.outcome_json.recovery_ref, state.recovery_ref);
+      const effects = await sql`SELECT status FROM job_attempt_effects WHERE attempt_id=${f.attemptId}`;
+      assert.equal(effects.length, 2); assert.ok(effects.every(row => row.status === "unknown"));
+      const [tokens] = await sql`SELECT t.status,t.revoke_reason,c.revoked_at AS control_revoked,c.revoke_reason AS control_reason
+        FROM job_tokens t JOIN job_capability_tokens c ON c.id=${capability.id} WHERE t.id=${modelToken}`;
+      assert.equal(tokens.status, "revoked"); assert.equal(tokens.revoke_reason, "platform_recovery_stop");
+      assert.ok(tokens.control_revoked); assert.equal(tokens.control_reason, "platform_recovery_stop");
+      const audits = await sql`SELECT action,after_json FROM audit_logs WHERE resource_id=${modelToken} AND action='job_token.revoke'`;
+      assert.equal(audits.length, 1); assert.equal(audits[0].after_json.reason, "platform_recovery_stop");
+      const [projection] = await sql`SELECT status,body_json FROM canvas_nodes WHERE canvas_id=${f.canvasId} AND job_id=${f.jobId} AND node_type='job'`;
+      assert.equal(projection.status, "failed"); assert.equal(projection.body_json.recovery.status, "closed");
+      const [projectedCanvas] = await sql`SELECT target_json FROM canvases WHERE id=${f.canvasId}`;
+      assert.equal(projectedCanvas.target_json.plan_objective.status, "stopped");
+      assert.equal(projectedCanvas.target_json.plan_execution.stop_reason, "unknown_external_effect");
+      assert.equal(projectedCanvas.target_json.plan_execution.plan_job_id, planOwner);
+      const again = await reapOnce(); assert.equal(again.recoveryStops, 0);
+      assert.equal((await sql`SELECT count(*)::int AS n FROM audit_logs WHERE resource_id=${modelToken} AND action='job_token.revoke'`)[0].n, 1);
+
+      const liveOriginalHub = await setup(); await effect(liveOriginalHub);
+      await sql`UPDATE jobs SET type='hub_reason',agent_snapshot_json=${sql.json({ ...targetSnapshot, name: "hub_reason", role_kind: "hub" })} WHERE id=${liveOriginalHub.jobId}`;
+      await observe(liveOriginalHub);
+      assert.equal(await queue(liveOriginalHub), false, "an active original Hub with valid lease/deadline cannot queue a second Hub");
+      assert.equal((await sql`SELECT count(*)::int AS n FROM jobs WHERE canvas_id=${liveOriginalHub.canvasId} AND type='hub_reason'`)[0].n, 1);
+      const originalHub = await setup(); await effect(originalHub);
+      await sql`UPDATE jobs SET type='hub_reason',started_at=started_at-interval '2 hours',
+        agent_snapshot_json=${sql.json({ ...targetSnapshot, name: "hub_reason", role_kind: "hub" })} WHERE id=${originalHub.jobId}`;
+      await sql`UPDATE projects SET config_json='{"rules":{"hubEnabled":false}}' WHERE id=${originalHub.projectId}`;
+      await observe(originalHub);
+      assert.equal(await queue(originalHub), false, "a still-active original Hub never authorizes a parallel recovery Hub");
+      assert.equal((await sql`SELECT count(*)::int AS n FROM jobs WHERE canvas_id=${originalHub.canvasId} AND type='hub_reason'`)[0].n, 1);
+      const hubDeadline = await reapOnce(); assert.equal(hubDeadline.recoveryStops, 1);
+      assert.equal((await readJob(originalHub.jobId)).status, "failed");
+      assert.equal((await readJob(originalHub.jobId)).error, "platform_recovery_deadline");
+      assert.equal((await sql`SELECT status FROM job_attempts WHERE id=${originalHub.attemptId}`)[0].status, "failed");
+      assert.equal((await sql`SELECT status FROM job_attempt_effects WHERE attempt_id=${originalHub.attemptId}`)[0].status, "unknown");
+    });
+
     await t.test("old negative receipt is immutable; known exact ledger reconciles only via durable Hub decision and new key/revision", async () => {
       const f = await setup(); await effect(f); await ledger(f);
       const token = await api.mintJobCapabilityToken(f.jobId);
@@ -218,11 +301,19 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       const forged = randomUUID();
       await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
         VALUES(${forged},${f.projectId},${f.canvasId},'hub_reason','pending',${sql.json(hubSnapshot)},${sql.json(payload)})`;
-      assert.equal(await recovery.pendingCompletionRecoveryClaimTarget(sql, { id: forged }), null, "copying a real grant does not copy its durable wake binding");
+      await sql`UPDATE jobs SET status='failed' WHERE id=${id}`;
+      assert.equal(await recovery.pendingCompletionRecoveryClaimTarget(sql, { id: forged }), null, "with no other active Hub, copying a grant still cannot copy its durable wake binding");
       await sql`UPDATE jobs SET status='failed' WHERE id=${forged}`;
+      await sql`UPDATE jobs SET status='pending' WHERE id=${id}`;
       await sql`UPDATE jobs SET agent_snapshot_json=agent_snapshot_json || '{"changed":true}' WHERE id=${f.jobId}`;
       assert.equal(await recovery.pendingCompletionRecoveryClaimTarget(sql, { id }), null);
       await sql`UPDATE jobs SET agent_snapshot_json=${sql.json(targetSnapshot)} WHERE id=${f.jobId}`;
+      await sql`UPDATE jobs SET lease_expires_at=lease_expires_at-interval '2 hours' WHERE id=${f.jobId}`;
+      assert.equal(await recovery.pendingCompletionRecoveryClaimTarget(sql, { id }), null, "expired original lease cannot authorize claim");
+      await sql`UPDATE jobs SET lease_expires_at=lease_expires_at+interval '2 hours',started_at=started_at-interval '2 hours' WHERE id=${f.jobId}`;
+      assert.equal(await recovery.pendingCompletionRecoveryClaimTarget(sql, { id }), null, "the live original deadline remains a gate");
+      await sql`UPDATE jobs SET started_at=started_at+interval '2 hours' WHERE id=${f.jobId}`;
+      assert.equal(await recovery.pendingCompletionRecoveryClaimTarget(sql, { id }), f.jobId);
       await ledger(f);
       assert.equal(await recovery.pendingCompletionRecoveryClaimTarget(sql, { id }), null, "a newly arrived ledger invalidates the frozen evidence hash");
       const refreshed = await observe(f);
@@ -236,6 +327,61 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
         snapshotDigest: controlInputDigest(targetSnapshot), key: randomUUID(), revision: 0, rawInput: { summary: "new Attempt" },
         prepare: async () => ({ statusCode: 200, body: { completion_prepared: true } }) });
       assert.equal(newDone.statusCode, 409, "another Attempt's unresolved effects cannot become completion evidence");
+    });
+
+    await t.test("final apply rechecks manual pause, live evidence CAS, capability and original Attempt after 200 receipt", async () => {
+      for (const gate of ["manual_pause", "evidence", "capability", "attempt"]) {
+        const f = await setup(); await effect(f); await ledger(f);
+        const state = await observe(f); assert.equal(await queue(f), true);
+        const { hub, token, post } = await runHub(f), key = randomUUID(), decision = decisionFor(state);
+        const accepted = await post({ recovery: decision }, key); assert.equal(accepted.statusCode, 200, accepted.body);
+        const before = (await sql`SELECT payload_json FROM events WHERE job_id=${hub.id} AND payload_json->>'idempotency_key'=${key}`)[0].payload_json;
+        if (gate === "manual_pause") await sql`UPDATE canvases SET target_json=target_json || '{"execution_control":{"paused":true}}' WHERE id=${f.canvasId}`;
+        if (gate === "evidence") await sql`UPDATE job_usage_ledger SET settlement_status='not_reported' WHERE attempt_id=${f.attemptId}`;
+        if (gate === "capability") await api.revokeJobCapabilityTokens(String(hub.id), "fixture revocation");
+        if (gate === "attempt") await sql.begin(tx => attempts.markAttemptInterrupted(tx as unknown as Db, f.jobId, "session exited after acceptance"));
+        const code = gate === "manual_pause" ? "recovery_paused" : gate === "evidence" ? "recovery_stale"
+          : gate === "capability" ? "recovery_not_authorized" : "recovery_inactive";
+        await assert.rejects(finalApply(String(hub.id), decision, key), assertCode(code));
+        const [events] = await sql`SELECT count(*)::int AS n FROM events WHERE event_id=${key}`;
+        const [dedup] = await sql`SELECT count(*)::int AS n FROM event_dedup WHERE event_id=${key}`;
+        assert.equal(events.n, 0); assert.equal(dedup.n, 0, "failed apply rolls back semantic event and dedup together");
+        assert.equal((await sql`SELECT status FROM job_attempt_effects WHERE attempt_id=${f.attemptId}`)[0].status, "unknown");
+        assert.deepEqual((await sql`SELECT payload_json FROM events WHERE job_id=${hub.id} AND payload_json->>'idempotency_key'=${key}`)[0].payload_json, before);
+        assert.equal((await readJob(f.jobId)).status, "running");
+        if (gate === "capability") assert.ok((await sql`SELECT revoked_at FROM job_capability_tokens WHERE id=${token.id}`)[0].revoked_at);
+      }
+    });
+
+    await t.test("repair usage unknown persists in the Job transaction; another Attempt cannot resume its negative receipt", async () => {
+      const f = await setup();
+      const firstKey = randomUUID();
+      const propose = (key: string, revision: number, invalid = false) => completion.recordCompletionProposal({
+        jobId: f.jobId, projectId: f.projectId, snapshotDigest: controlInputDigest(targetSnapshot), key, revision,
+        rawInput: { summary: invalid ? "invalid proposal" : "same active session repaired" },
+        ...(invalid ? { schemaFailure: { statusCode: 422, body: { accepted: false, error_code: "invalid_done" } } } : {}),
+        prepare: async () => ({ statusCode: 200, body: { completion_prepared: true } }),
+      });
+      assert.equal((await propose(firstKey, 0, true)).statusCode, 422);
+      const first = await completion.readCompletionReceipt(sql, f.jobId, firstKey);
+      await effect(f, "gateway:repair", "gateway_model_request", "unknown", { repair_receipt_ref: completion.completionReceiptId(f.jobId, firstKey) });
+      await ledger(f, "gateway:repair");
+      const unknownKey = randomUUID(), refused = await propose(unknownKey, 1);
+      assert.equal(refused.statusCode, 409); assert.equal(refused.body.error_code, "REPAIR_USAGE_UNKNOWN");
+      assert.equal((refused.body.repair as { category: string }).category, "unknown_external_effect");
+      const state = (await recovery.readCompletionRecovery(sql, f.jobId, f.attemptId))!;
+      assert.equal(state.code, "REPAIR_USAGE_UNKNOWN");
+      assert.equal(await queue(f), true);
+      const { hub, post } = await runHub(f), key = randomUUID(), decision = decisionFor(state);
+      assert.equal((await post({ recovery: decision }, key)).statusCode, 200);
+      await finalApply(String(hub.id), decision, key);
+      assert.equal((await recovery.readCompletionRecovery(sql, f.jobId, f.attemptId))?.status, "awaiting_completion");
+      await sql.begin(tx => attempts.markAttemptInterrupted(tx as unknown as Db, f.jobId, "original session exited"));
+      await sql.begin(tx => attempts.createAttempt(tx as unknown as Db, f.jobId));
+      const blocked = await propose(randomUUID(), 2);
+      assert.equal(blocked.body.error_code, "COMPLETION_ATTEMPT_CHANGED");
+      assert.deepEqual(await completion.readCompletionReceipt(sql, f.jobId, firstKey), first);
+      assert.equal((await completion.readCompletionReceipt(sql, f.jobId, unknownKey))?.result.body.error_code, "REPAIR_USAGE_UNKNOWN");
     });
 
     await t.test("pending/not_reported/self-reported zero, interrupted Agent and absent sandbox never settle", async () => {
@@ -331,6 +477,14 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
         const response = await post({ recovery: decision }, key); assert.equal(response.statusCode, 200, response.body);
         await finalApply(String(hub.id), decision, key);
         assert.equal((await readJob(f.jobId)).status, "running", "stop proposal only persists its request");
+        if (status === "running") {
+          let forbiddenStops = 0;
+          await pump(f, async () => { forbiddenStops++; return null; });
+          await sql`UPDATE jobs SET status='waiting_human' WHERE id=${hub.id}`;
+          await pump(f, async () => { forbiddenStops++; return null; });
+          assert.equal(forbiddenStops, 0, "another running or waiting_human Hub retains ownership even after an explicit stop request");
+          assert.equal((await recovery.readCompletionRecovery(sql, f.jobId, f.attemptId))?.status, "stop_requested");
+        }
         await sql`UPDATE jobs SET status='failed' WHERE id=${hub.id}`;
         await sql`UPDATE jobs SET status=${status} WHERE id=${f.jobId}`;
         let calls = 0;
@@ -371,6 +525,13 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
         await pump(expired, stop); assert.equal(stops, 0);
         await sql`DELETE FROM jobs WHERE id=${blocker}`;
       }
+      const finding = randomUUID();
+      await sql`INSERT INTO findings(id,project_id,job_id,fingerprint,title,severity,summary,raw_json)
+        VALUES(${finding},${expired.projectId},${expired.jobId},${finding},'Verify waiting evidence','high','Missing independent evidence','{}')`;
+      await sql`INSERT INTO finding_verification_rounds(finding_id,attempt,status,requirements_json)
+        VALUES(${finding},1,'pending','{"eligibility":"waiting_evidence"}')`;
+      await pump(expired, stop); assert.equal(stops, 0, "Verify waiting_evidence without a Job retains its gate");
+      await sql`UPDATE finding_verification_rounds SET status='confirmed',final_outcome='confirmed' WHERE finding_id=${finding}`;
       await pump(expired, stop); assert.equal(stops, 1);
       assert.equal((await recovery.readCompletionRecovery(sql, expired.jobId, expired.attemptId))?.status, "stop_requested");
       const bad = await setup(); await effect(bad); await observe(bad);

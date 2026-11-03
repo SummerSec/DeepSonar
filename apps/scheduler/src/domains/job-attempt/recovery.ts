@@ -467,7 +467,7 @@ export async function pumpCompletionRecoveries(input: {
         const [canvas] = job.canvas_id ? await tx`SELECT status,target_json,target_json->'convergence' AS convergence_json FROM canvases WHERE id=${String(job.canvas_id)}` : [];
         if (!canvas || canvas.status === "archived" || canvasExecutionIsPaused(canvas.target_json) || canvas.convergence_json?.hub_paused || canvas.convergence_json?.auto_stopped
           || await completionRecoveryVerifyBlocked(tx, String(job.canvas_id), state.target_job_id)) return {};
-        const [hub] = await tx`SELECT id FROM jobs WHERE canvas_id=${String(job.canvas_id)}
+        const [hub] = await tx`SELECT id FROM jobs WHERE canvas_id=${String(job.canvas_id)} AND id<>${state.target_job_id}
           AND type='hub_reason' AND status IN ('pending','claimed','provisioning','running','waiting_human') LIMIT 1`;
         // A true human wait never consumes Stop. Platform waits may observe/wake, not close an execution here.
         if (job.status === "waiting_human") {
