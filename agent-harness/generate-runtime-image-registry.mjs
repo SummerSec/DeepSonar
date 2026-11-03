@@ -424,7 +424,14 @@ function assertMinRuntimeImage(value) {
   return { version: value.version, by_image_key: byImageKey };
 }
 
-export function versionsForUnchangedDigest(previousVersions, nextVersion) {
+// Images whose catalog version must equal the platform version of the release
+// that ships them. `agent-harness/test-reverse-runtime.mjs` (run by ci:images in
+// the gate) fails when the bundled catalog lists a reverse version other than
+// the platform version, so a fingerprint-reused reverse build has to be
+// relabelled. Other images keep the version of the release that built them.
+export const PLATFORM_TRACKED_IMAGE_KEYS = new Set(["deepsonar-reverse"]);
+
+export function versionsForUnchangedDigest(previousVersions, nextVersion, releaseVersion) {
   const previous = Array.isArray(previousVersions) ? previousVersions : [];
   if (nextVersion) {
     const matchingIndex = previous.findIndex((version) => version.digest === nextVersion.digest);
@@ -432,6 +439,16 @@ export function versionsForUnchangedDigest(previousVersions, nextVersion) {
       const matching = previous[matchingIndex];
       if (matching.manual && JSON.stringify(matching.manual) !== JSON.stringify(nextVersion.manual)) {
         fail(`unchanged digest ${nextVersion.digest} has conflicting runtime manual metadata`);
+      }
+      // A reused build is still shipped by THIS release. The catalog can only
+      // carry one entry per digest, so the entry is relabelled instead of the
+      // old version being kept: otherwise the bundled catalog keeps claiming
+      // the previous release while the platform moves on, which is exactly the
+      // v0.6.5 regression that turned the reverse gate red on main.
+      if (releaseVersion && matching.version !== releaseVersion) {
+        return previous.map((version, index) => index === matchingIndex
+          ? { ...version, version: releaseVersion, ...(version.manual || !nextVersion.manual ? {} : { manual: nextVersion.manual }) }
+          : version);
       }
       if (!matching.manual && nextVersion.manual) {
         return previous.map((version, index) => index === matchingIndex
@@ -567,9 +584,12 @@ function main(argv = process.argv.slice(2)) {
     const templateImage = templateImages.get(key);
     const { descriptor, records } = descriptors.get(key);
     const nextVersion = buildV2Version(descriptor, records, releaseVersion);
-    const versions = versionsForUnchangedDigest(templateImage.versions, nextVersion);
-    if (versions[0] && versions[0].digest === nextVersion.digest && versions[0].version !== releaseVersion) {
-      console.log(`image build unchanged; version kept: ${key} ${versions[0].version}`);
+    const previousVersions = templateImage.versions;
+    const versions = versionsForUnchangedDigest(previousVersions, nextVersion,
+      PLATFORM_TRACKED_IMAGE_KEYS.has(key) ? releaseVersion : undefined);
+    if (PLATFORM_TRACKED_IMAGE_KEYS.has(key) && versions[0] && versions[0].digest === nextVersion.digest) {
+      const previousVersion = (previousVersions ?? []).find((version) => version.digest === nextVersion.digest)?.version;
+      console.log(`image build unchanged; version relabelled: ${key} ${previousVersion ?? "(new)"} -> ${versions[0].version}`);
     }
     return { ...templateImage, versions };
   });

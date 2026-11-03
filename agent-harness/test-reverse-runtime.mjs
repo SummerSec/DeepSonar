@@ -16,7 +16,18 @@ const fail = (msg) => {
   process.exit(1);
 };
 
-const config = JSON.parse(readFileSync(resolve(root, "agent-harness/reverse-runtime.json"), "utf8"));
+// Every document this gate reads is load-bearing: a malformed file must abort
+// with a readable message instead of a bare SyntaxError.
+function readJson(pathname) {
+  try {
+    return JSON.parse(readFileSync(pathname, "utf8"));
+  } catch (error) {
+    console.error(`reverse gate input is not valid JSON: ${pathname}: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
+
+const config = readJson(resolve(root, "agent-harness/reverse-runtime.json"));
 const dockerfile = readFileSync(resolve(root, "deploy/Dockerfile.agent-reverse"), "utf8");
 const envScript = readFileSync(resolve(root, "deploy/reverse-env.sh"), "utf8");
 const schemaSql = readFileSync(resolve(root, "database/schema.sql"), "utf8");
@@ -85,7 +96,7 @@ if (config.toolsets?.reverse?.job_resource_recommendation?.memory_mib !== 4096) 
 }
 const measurementsPath = resolve(root, config.measurements?.amd64 ?? "agent-harness/reverse-amd64-measurements.json");
 if (!existsSync(measurementsPath)) fail(`amd64 measurements missing: ${measurementsPath}`);
-const measurements = JSON.parse(readFileSync(measurementsPath, "utf8"));
+const measurements = readJson(measurementsPath);
 if (measurements.schema !== "deepsonar.reverse.amd64-measurements/v1") fail("measurements schema drift");
 if (!Array.isArray(measurements.queries) || measurements.queries.length < 8) fail("measurements must list amd64 query timings");
 if (measurements.image_size?.provisional_maxSizeMiB !== 2800) fail("measurements provisional_maxSizeMiB drift");
@@ -110,40 +121,19 @@ if (!existsSync(resolve(root, "agent-harness/fixtures/reverse-sample/sample.c"))
   fail("public reverse sample source missing");
 }
 
-const registry = JSON.parse(readFileSync(resolve(root, "deploy/runtime-image-registry.json"), "utf8"));
+const registry = readJson(resolve(root, "deploy/runtime-image-registry.json"));
 const reverseImage = registry.images?.find((image) => image.image_key === "deepsonar-reverse");
 if (!reverseImage) fail("registry must include deepsonar-reverse");
 if (reverseImage.project_opt_in !== true) fail("registry reverse must stay project_opt_in");
 if (!Array.isArray(reverseImage.versions) || reverseImage.versions.length < 1) {
-  fail("registry reverse must contain at least one published version");
+  fail("registry reverse must contain the current published platform version");
 }
 const publishedVersion = registry.platform?.version;
 if (typeof publishedVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(publishedVersion)) {
   fail("registry must identify a published platform version");
 }
-// Runtime versions are an independent axis from the platform version
-// (docs/RELEASE_RUNTIME_IMAGES.md): a reused build keeps the version that first
-// produced its digest. The gate therefore pins the artifact identity — digest,
-// platform set and per-channel evidence — rather than demanding a version string
-// that would have to be rewritten on every release.
-const floor = registry.min_runtime_image?.version;
-if (typeof floor !== "string" || !/^\d+\.\d+\.\d+$/.test(floor)) fail("registry must declare min_runtime_image.version");
-const byVersion = (left, right) => {
-  const leftParts = String(left).split(".").map(Number);
-  const rightParts = String(right).split(".").map(Number);
-  for (let index = 0; index < 3; index += 1) {
-    const delta = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
-    if (delta !== 0) return delta;
-  }
-  return 0;
-};
-const reverseVersion = [...reverseImage.versions].sort((left, right) => byVersion(right.version, left.version))[0];
-if (byVersion(reverseVersion.version, floor) < 0) {
-  fail(`registry reverse version ${reverseVersion.version} is below the minimum runtime floor ${floor}`);
-}
-if (reverseVersion.version === "0.0.0" || !/^\d+\.\d+\.\d+$/.test(String(reverseVersion.version))) {
-  fail("registry reverse version must be a stable X.Y.Z identity");
-}
+const reverseVersion = reverseImage.versions.find((entry) => entry.version === publishedVersion);
+if (!reverseVersion) fail(`registry reverse is missing published version ${publishedVersion}`);
 const reverseDigest = reverseVersion.digest;
 if (typeof reverseDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(reverseDigest)) {
   fail("reverse version must use a canonical immutable digest");
