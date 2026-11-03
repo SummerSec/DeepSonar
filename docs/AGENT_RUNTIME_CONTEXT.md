@@ -1,5 +1,6 @@
 # Agent Runtime Context 契约
 
+> 同步日期：2026-11-03（#871 上下文锁序切片）
 > **状态：as-built（#138 已关）** — 与 `packages/runtime-sandbox` context 契约及 Executor 持久化路径对齐。  
 > 冲突时以代码与 `DESIGN.md` §11 为准。索引见 [`README.md`](README.md)。
 
@@ -17,6 +18,10 @@
 - `compaction`：压缩观测为 `observed`、`unknown` 或 `unsupported`。
 
 状态关联当前 `attempt_id`，同时写入活动 `job_attempts.state_json.runtime_context` 和 Job 的 `payload_json.runtime_evidence.context`。两处写入在同一事务内完成，Job 详情 API 最多投影最近 16 个变换。原始 prompt、上下文正文、Provider 原始事件和密钥不进入该状态。
+
+`persistJobRuntimeContext` 在有 Attempt 时先锁所属 Job，再锁并更新活动 Attempt，最后写 Job 投影，提交前一直持有锁；与 Gateway admission 的 Job → Attempt 顺序一致。Job 不存在、Attempt 非活动或不属于该 Job 时事务回滚，不留下单侧上下文更新。没有 Attempt 的上下文继续只写 Job。
+
+#871 的此切片只修复上下文持久化与 Gateway 的确定反序；离线等待图回归覆盖原顺序的死锁负对照、修复顺序与原子回滚，不等价于真实 PostgreSQL 或现场并发验收。Canvas/节点触发器的其他锁序、统一有界数据库重试、指标以及独立共享卷问题仍由 #871 跟踪；不重放任何外部模型效果。
 
 ## 变换与压缩
 
