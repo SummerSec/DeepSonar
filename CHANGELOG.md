@@ -1,7 +1,12 @@
 ## [Unreleased]
 
+## [0.6.6] - 2026-11-03
+
 ### 变更
 
+- **进程被杀后的完成回执恢复有了自动化验证（#835 第 1 项）**：新增 `completion-crash.integration.test.ts` 与 `crash-server.fixture.ts`，起一个**真实子进程**（node + tsx loader）跑真实 Control API，在 `mark_job_done` 的 commitment 阶段 `SIGKILL` 自己——回执已持久、HTTP 响应未写出。断言：子进程以 SIGKILL 退出、回执恰好 1 条、Job 未转终态、未多出 attempt；**全新进程**用同一幂等键重放拿到同一张回执（`receipt_ref = completionReceiptId(job,key)`）且 `control_receipt` 仍为 1 条。该套件有独立 `crash-recovery` job（15 分钟预算），不占用 gate 的 40 分钟关键路径。
+- **词法检索的数据库侧压力与隔离验证（#835 第 2 项）**：新增 `lexical-pressure.integration.test.ts`（固定种子、两个项目各 1000/10000 条合成 findings），断言 20 次顺序 + 8×5 有界并发下每次响应**完整**（`examined === 128`、`items <= 25`，超时不能伪装成更短答案）且不含另一项目的 finding；记录 `pg_stat_database` 的 temp files/bytes 与 blks read/hit 增量、锁与会话数、`EXPLAIN (ANALYZE, BUFFERS)` 到 `artifacts/lexical-pressure`，有独立 `lexical-pressure` job。
+  - 口径：合成规模，不含容量/SLA 或关系质量结论；宿主文件缓存无法在容器内清空，不宣称「冷缓存」。
 - **Pi Observational Memory 长会话增长的自动化测量（#835 第 3 项）**：`agent-harness/fixtures/pi-om-real-rpc.mjs` 新增 `runGrowthProbe()`，在真实镜像内跑「多轮 + 重启续跑」的合成负载，按轮次记录 agent 目录（session ledger）、workspace、observer/reflector 请求数与帧数的**磁盘字节**，并断言「重启后仍能 recall 到重启前的来源」「历史不因召回有界而被删除」「artifact 不含私有正文」。`ci.yml` 新增 `pi-om-growth` job（自建 base 镜像、35 分钟预算、上传 `artifacts/pi-om-growth`），`pnpm ci:smoke:pi-om-growth` 为对应入口。
   - 口径：合成规模，不宣称容量/SLA 或公开质量结论；字节数是标准落盘统计。
 
@@ -1422,3 +1427,4 @@
 [0.6.4]: https://github.com/SummerSec/DeepSonar/compare/v0.6.3...v0.6.4
 
 [0.6.5]: https://github.com/SummerSec/DeepSonar/compare/v0.6.4...v0.6.5
+[0.6.6]: https://github.com/SummerSec/DeepSonar/compare/v0.6.5...v0.6.6
