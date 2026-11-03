@@ -9,7 +9,9 @@
 
 [Draft PR #875](https://github.com/SummerSec/DeepSonar/pull/875) 首次提交 head 为 `914df7c70c184082bd32eb677568807c484c6aa8`。该 SHA 的[核心 CI 41654170176](https://github.com/SummerSec/DeepSonar/actions/runs/41654170176)实际通过 docs-freshness、workspace typecheck/build 与映射的无服务单测；`gate`、PostgreSQL/镜像重型检查和 `ci-summary` 在 Draft 路径跳过，因此这里只登记快检成功，不能作为合并或发布验收。[Reverse 路由运行](https://github.com/SummerSec/DeepSonar/actions/runs/41654170138)同样不表示原生镜像矩阵已运行。
 
-当前修复分支继续整合 #871/#873/#874。独立静态审查发现的 context PG 锁序证明不足与 barrier 失败清理已交专门回归修正；恢复 Hub 的实际 claim、手工 execution pause、共享 prepare 失锁后不得删除后继 generation 等路径仍在补齐。未完成项不以源码存在或 Draft 绿灯冒充已验证。完整候选转 Ready 后按最终 SHA 重新核对全部适用 Actions；本地仅执行静态阅读、语法及 `git diff --check`，不运行 tests/build/typecheck/PG/Docker，不执行生产部署。
+追加的 `de5a3e13818dd78ff0ca318c9169229155be1101` 修正首轮 checkpoint 4 处 typecheck 错误，[CI 41664255350](https://github.com/SummerSec/DeepSonar/actions/runs/41664255350)快检通过；`ca2e91e22a14426605832ef9929fd63bdfbc5f1d` 补独立数据库重试耗尽指标，[CI 41665015133](https://github.com/SummerSec/DeepSonar/actions/runs/41665015133)快检通过。这些均为 Draft，不含完整验收。
+
+当前修复分支继续整合 #871/#873/#874。独立静态审查发现的 context PG 锁序证明不足与 barrier 失败清理已修正，并经另一个只读审查者在 checkpoint `f91bad58` 复核，新增 PG 行为仍未执行。`0f7ac406` 已提交真实 Reaper 回归源码及原 Hub 不派并行 Hub、在原 deadline 有界收口的分支。恢复 Hub 的实际 claim、共享 prepare 失锁后不得删除后继 generation 等生产接线仍在补齐。未完成项不以源码存在或 Draft 绿灯冒充已验证。完整候选转 Ready 后按最终 SHA 重新核对全部适用 Actions；本地仅执行静态阅读、语法及 `git diff --check`，不运行 tests/build/typecheck/PG/Docker，不执行生产部署。
 
 ## #831 engineering acceptance (2026-11-01)
 

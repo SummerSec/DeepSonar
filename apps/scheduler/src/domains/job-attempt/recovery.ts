@@ -203,7 +203,11 @@ export async function pendingCompletionRecoveryClaimTarget(db: typeof sql, candi
   const trigger = hub?.payload_json?.trigger;
   if (trigger?.kind !== "completion_recovery" || !Array.isArray(trigger.recovery_refs) || trigger.recovery_refs.length !== 1) return null;
   const parsed = CompletionRecoveryGrant.safeParse(trigger.recovery_refs[0]);
-  if (!parsed.success) return null;
+  if (!parsed.success || typeof hub.canvas_id !== "string" || typeof hub.project_id !== "string") return null;
+  // Target binding later freezes this Canvas FOR SHARE. Claim's preliminary
+  // scan must skip a busy Canvas before that authoritative check can wait.
+  const [canvas] = await db`SELECT id FROM canvases WHERE id=${hub.canvas_id} AND project_id=${hub.project_id} FOR SHARE SKIP LOCKED`;
+  if (!canvas) return null;
   const grant = parsed.data;
   try {
     await validateCompletionRecoveryDecision(db, hub, { recovery_ref: grant.recovery_ref, target_job_id: grant.target_job_id,
@@ -425,6 +429,40 @@ export async function completionRecoveryCanWake(db: typeof sql, job: Job, reques
   return (await readCompletionRecoveryEvidence(db, target, state.target_attempt_id)).sha256 === state.evidence_sha256;
 }
 
+/** Canvas-first only. Retire stale host-directed work only when it has never acquired execution ownership. */
+async function retireStalePendingRecoveryHub(db: typeof sql, state: CompletionRecoveryState, hubId: string, originalClosed = false): Promise<boolean> {
+  const [hub] = await db`SELECT * FROM jobs WHERE id=${hubId} FOR UPDATE`;
+  const trigger = hub?.payload_json?.trigger;
+  if (!hub || hub.status !== "pending" || hub.type !== "hub_reason" || hub.claimed_at || hub.started_at || hub.sandbox_id
+    || hub.lease_expires_at || hub.heartbeat_at || hub.finished_at || hub.transcript_uri
+    || trigger?.kind !== "completion_recovery" || !Array.isArray(trigger.recovery_refs) || trigger.recovery_refs.length !== 1) return false;
+  const parsed = CompletionRecoveryGrant.safeParse(trigger.recovery_refs[0]);
+  if (!parsed.success) return false;
+  const { recovery_revision, evidence_sha256, ...binding } = parsed.data;
+  if (hub.project_id !== state.project_id || hub.canvas_id !== state.canvas_id
+    || controlInputDigest(binding) !== controlInputDigest({ recovery_ref: state.recovery_ref, target_job_id: state.target_job_id,
+      target_attempt_id: state.target_attempt_id, project_id: state.project_id, canvas_id: state.canvas_id, snapshot_sha256: state.snapshot_sha256 })
+    || (!originalClosed && Date.parse(state.deadline) > Date.now()
+      && recovery_revision === state.recovery_revision && evidence_sha256 === state.evidence_sha256)) return false;
+  const [root] = await db`SELECT e.event_id FROM events e JOIN event_dedup d ON d.event_id=e.event_id AND d.job_id=e.job_id
+    WHERE e.event_id=${state.recovery_ref} AND e.job_id=${state.target_job_id} AND e.attempt_id=${state.target_attempt_id}
+      AND e.type='control_receipt' AND e.payload_json @> ${db.json({ ...binding, authority: "scheduler", subtype, kind: "state" })}`;
+  const [wake] = await db`SELECT e.event_id FROM events e JOIN event_dedup d ON d.event_id=e.event_id AND d.job_id=e.job_id
+    WHERE e.event_id=${completionRecoveryIdentity(state.target_job_id, state.target_attempt_id, `wake:${evidence_sha256}`)}
+      AND e.job_id=${state.target_job_id} AND e.attempt_id=${state.target_attempt_id} AND e.type='control_receipt'
+      AND e.payload_json @> ${db.json({ ...parsed.data, authority: "scheduler", subtype, kind: "wake", hub_job_id: hubId })}`;
+  if (!root || !wake) return false;
+  const [retired] = await db`UPDATE jobs j SET status='cancelled',finished_at=now(),error='completion_recovery_grant_stale'
+    WHERE j.id=${hubId} AND j.status='pending' AND j.claimed_at IS NULL AND j.started_at IS NULL AND j.sandbox_id IS NULL
+      AND j.lease_expires_at IS NULL AND j.heartbeat_at IS NULL AND j.finished_at IS NULL AND j.transcript_uri IS NULL
+      AND NOT EXISTS (SELECT 1 FROM job_attempts a WHERE a.job_id=j.id)
+      AND NOT EXISTS (SELECT 1 FROM job_attempt_effects e WHERE e.job_id=j.id) RETURNING j.id`;
+  if (!retired) return false;
+  await db`UPDATE canvas_nodes SET status='cancelled',updated_at=now()
+    WHERE canvas_id=${state.canvas_id} AND job_id=${hubId} AND node_type='job'`;
+  return true;
+}
+
 /** Existing Reaper tick owns this pump: bounded keyset, no timer, automatic reconciliation or resurrection. */
 export async function pumpCompletionRecoveries(input: {
   db?: typeof sql; cursor?: string | null; limit?: number;
@@ -451,12 +489,15 @@ export async function pumpCompletionRecoveries(input: {
         const [job] = await tx`SELECT * FROM jobs WHERE id=${candidate.job_id} FOR UPDATE`;
         const [attempt] = await tx`SELECT * FROM job_attempts WHERE job_id=${candidate.job_id} AND id=${candidate.attempt_id} FOR UPDATE`;
         let state = await readCompletionRecovery(tx, String(candidate.job_id), String(candidate.attempt_id));
-        if (!job || !state || state.status === "closed") return {};
+        if (!job || !state) return {};
         if (job.canvas_id !== candidate.canvas_id || state.canvas_id !== job.canvas_id || state.project_id !== job.project_id
           || state.snapshot_sha256 !== controlInputDigest(job.agent_snapshot_json)) throw new Error("recovery binding changed");
-        if (!["claimed", "provisioning", "running", "waiting_human"].includes(String(job.status))
+        if (state.status === "closed" || !["claimed", "provisioning", "running", "waiting_human"].includes(String(job.status))
           || !attempt || attempt.status !== "active" || attempt.cancel_requested) {
-          state = await appendState(tx, job, { ...state, status: "closed", code: "RECOVERY_ORIGINAL_EXECUTION_CLOSED" });
+          const [pendingHub] = await tx`SELECT id FROM jobs WHERE canvas_id=${String(job.canvas_id)} AND id<>${state.target_job_id}
+            AND type='hub_reason' AND status='pending' LIMIT 1`;
+          if (pendingHub) await retireStalePendingRecoveryHub(tx, state, String(pendingHub.id), true);
+          if (state.status !== "closed") state = await appendState(tx, job, { ...state, status: "closed", code: "RECOVERY_ORIGINAL_EXECUTION_CLOSED" });
           await projectCompletionRecoveryToCanvas(tx, state); return {};
         }
         if (!["stop_requested", "completion_accepted"].includes(state.status)) {
@@ -467,14 +508,18 @@ export async function pumpCompletionRecoveries(input: {
         const [canvas] = job.canvas_id ? await tx`SELECT status,target_json,target_json->'convergence' AS convergence_json FROM canvases WHERE id=${String(job.canvas_id)}` : [];
         if (!canvas || canvas.status === "archived" || canvasExecutionIsPaused(canvas.target_json) || canvas.convergence_json?.hub_paused || canvas.convergence_json?.auto_stopped
           || await completionRecoveryVerifyBlocked(tx, String(job.canvas_id), state.target_job_id)) return {};
-        const [hub] = await tx`SELECT id FROM jobs WHERE canvas_id=${String(job.canvas_id)} AND id<>${state.target_job_id}
+        let [hub] = await tx`SELECT id FROM jobs WHERE canvas_id=${String(job.canvas_id)} AND id<>${state.target_job_id}
           AND type='hub_reason' AND status IN ('pending','claimed','provisioning','running','waiting_human') LIMIT 1`;
         // A true human wait never consumes Stop. Platform waits may observe/wake, not close an execution here.
         if (job.status === "waiting_human") {
           const [human] = await tx`SELECT payload_json FROM events WHERE job_id=${state.target_job_id} AND type='human' ORDER BY job_seq DESC LIMIT 1`;
           if (human?.payload_json?.subject?.type !== "platform_blocker") return {};
         }
-        if (hub) return {}; // An existing decision, including a human-wait Hub, retains ownership.
+        if (hub && await retireStalePendingRecoveryHub(tx, state, String(hub.id))) {
+          [hub] = await tx`SELECT id FROM jobs WHERE canvas_id=${String(job.canvas_id)} AND id<>${state.target_job_id}
+            AND type='hub_reason' AND status IN ('pending','claimed','provisioning','running','waiting_human') LIMIT 1`;
+        }
+        if (hub) return {}; // Started, unrelated or unproven Hubs retain ownership.
         const exhausted = state.status === "needed" && state.wakes_used >= state.wake_limit;
         const expired = Date.parse(state.deadline) <= Date.now();
         if (job.status !== "waiting_human" && (state.status === "stop_requested" || expired || exhausted)) {

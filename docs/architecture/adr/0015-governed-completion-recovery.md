@@ -17,6 +17,7 @@
 - `submit_hub_decision.recovery` 是严格独立分支，只允许 `reconcile_effects` 或 `stop`，使用 revision 与证据摘要 CAS；与 complete、intents、payload_file、plan_basis 互斥。shared schema、宿主 handler、event transaction 三层均重新校验 scope、token/lease、allowlist/grant 和预算。
 - 对账只读取精确 effect 的既有宿主账本/闭合证据并执行纯数据库 settlement。原响应正文、自报零用量、`interrupted`、缺少或存在 `sandbox_id` 均不能证明效果未开始或资源已停止。终态 helper 不得仅因没有 sandbox 投影而制造 `never_started`；真实未开始须有明确宿主证据并显式结算。
 - Reaper 复用原 timer 与 in-flight guard，以有界 keyset 扫描推进恢复。wake 身份与 Hub 插入同事务；失败 Hub 消耗同一额度，deadline 和 lifetime/token/repair 预算不得被新 key、新证据或重启延长。限额细节只在[恢复实现](../../../apps/scheduler/src/domains/job-attempt/recovery.ts)维护。
+- 尚未启动的 directed Hub 若因证据/版本变化或原 deadline 而确定失效，只能在同一 Canvas 事务中核对真实 root/wake 与 dedup 绑定、锁定 Hub 并证明完全无 Attempt/effect/启动痕迹后收口；新证据必须重新消耗剩余额度并经过原准入，不修改旧 grant。已领取/运行/人工等待或其他 Hub 继续拥有其既有决策门。
 - 未知效果归零只解除该阻塞，不批准完成。仅仍活动的原 Attempt 可用新 revision/key 重新提交，继续通过既有 Completion、Verify、Plan、人工和权限门；恢复不复活 failed/cancelled/timeout/orphan，不自动 succeeded，不覆盖用户 pause、真实 human/Verify wait 或未解决的活动 Hub。
 - `stop` 在同一 Canvas → Job → Attempt 事务复用生命周期、Attempt/effect 和模型/Control token 收口，失败保持请求供后续 tick。外部 runner/volume cleanup 在事务外进行；共享资源按 Job 生命周期边界、当前/latest Attempt 和观察到的 generation 再核对，non-force 卷删除失败保持可观察。
 

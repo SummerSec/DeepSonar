@@ -94,7 +94,7 @@ recovery: {
 }
 ```
 
-它与 complete、intents、payload_file 及 plan_basis 互斥，shared schema、Control handler、event transaction 三层重验引用、当前 project/Canvas/Job/Attempt/快照、revision/证据摘要 CAS、token/lease、operation allowlist/grant 和既有预算。HTTP 200 仅为 `persisted_deferred`，不是 Job succeeded、对账已执行或模型已理解。
+它与 complete、intents、payload_file 及 plan_basis 互斥，shared schema、Control handler、event transaction 三层重验引用、当前 project/Canvas/Job/Attempt/快照、revision/证据摘要 CAS、token/lease、operation allowlist/grant 和既有预算。HTTP 200 仅为 `persisted_deferred`，不是 Job succeeded、对账已执行或模型已理解。独立复核发现迟到证据可使未启动的 pending directed Hub 失效；当前修复分支已补 root/wake 双持久绑定、完全无 Attempt/effect/启动痕迹的旧 Hub 收口，覆盖迟到证据、原 deadline 到期及原执行关闭。保留原 wake 消耗和 deadline，再按新证据重验准入；对应真实 PG 回归仍待 Actions。已领取、运行或人工等待的 Hub 不受这条未启动收口规则影响。
 
 `reconcile_effects` 只读取精确 effect 的已有宿主证据并做纯数据库 settlement。严格已知的 usage 必须与原 effect/Attempt/Job 归属一致；缺失、not_reported、自报零、模糊匹配或无法证明模型请求已闭合均不清 unknown。`agent_run/interrupted`、有/无 sandbox、未知效果暂时归零也不能证明执行/资源已停止。未知或未证明效果不能自动 replay，模型 reason 不能作为证明。
 

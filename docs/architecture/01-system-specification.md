@@ -299,7 +299,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：`COMPLETION_EFFECT_UNKNOWN` / `REPAIR_USAGE_UNKNOWN` 必须保留原负回执，并在同一 Job 事务持久化宿主恢复事实；恢复 Hub 只能处理 Scheduler 明确授予的 project/Canvas/Job/Attempt/快照引用，以 revision 与证据摘要 CAS 提交 `reconcile_effects` 或 `stop`。恢复不得与 complete、intents、payload_file 或 plan_basis 混合。只能用精确 effect 的既有宿主证据纯数据库对账，禁止重放未知外部动作、复活终态或自动 succeeded；原活动 Attempt 修正后仍须通过原 Completion/Verify/Plan 门。
 - **决策来源**：#874 将“终态不能提交”收敛为持久可观察、去重且有界的恢复过程，而不扩大模型的权限与副作用边界；见 [ADR-0015](adr/0015-governed-completion-recovery.md)。
-- **实现状态**：当前修复分支实现 v1，最终 SHA 的 Actions 尚待验收；已退出会话或新 Attempt 的完整继续执行不属于 v1，不据回执恢复原运行器。
+- **实现状态**：当前修复分支实现 v1，最终 SHA 的 Actions 尚待验收。独立复核发现已排队但从未启动的恢复 Hub 可因迟到证据失效而阻塞后续恢复，已补严格持久绑定、无任何 Attempt/effect 的失效 Hub 收口源码，覆盖证据变化、原 deadline 与原执行关闭，仍待实际 PG 验收；不会放宽旧 grant、重置原期限或额度。已退出会话或新 Attempt 的完整继续执行不属于 v1，不据回执恢复原运行器。
 - **代码入口**：[恢复 schema](../../packages/shared-types/src/completion-recovery.ts)、[恢复事实与泵](../../apps/scheduler/src/domains/job-attempt/recovery.ts)、[回执事务](../../apps/scheduler/src/domains/event-ingestion/completion-receipt.ts)、[Hub application](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Reaper](../../apps/scheduler/src/reaper.ts)。
 - **验证证据**：`pnpm ci:unit:completion-recovery`、`pnpm ci:integration:completion-recovery`、`pnpm ci:integration:platform-api`；核对原 key/revision 重放、跨项目/Attempt/快照拒绝、无权恢复引用、并发 CAS、重启去重、未知/缺失 usage、pause/human 门及 deadline/额度停止。入口并非已执行结果，详细范围见[完成回执专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。
 

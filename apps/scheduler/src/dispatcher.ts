@@ -39,6 +39,7 @@ import {
 import { isOfficialRuntimeImageKey, RuntimeImageNotReadyError } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { pendingCompletionRecoveryClaimTarget } from "./domains/job-attempt/recovery.js";
+import { createAttemptLeaseRenewals, renewCurrentAttemptLease } from "./attempt-lease.js";
 import {
   DeviceNotAuthorizedError,
   DeviceNotAvailableError,
@@ -193,7 +194,12 @@ import { recordSystemAudit } from "./audit.js";
  * fake 模式走通状态机 + 事件 + 画布 + lease，不启动真实 Agent。
  */
 
-const activeLeases = new Map<string, ReturnType<typeof setInterval>>();
+const leaseRenewals = createAttemptLeaseRenewals({
+  intervalMs: Math.max(5, config.timeouts.leaseTtlSec / 3) * 1000,
+  isAlive: (owner) => runner.isAlive({ sandboxId: owner.sandboxId }),
+  renew: (owner, isCurrent) => renewCurrentAttemptLease(sql, owner, config.timeouts.leaseTtlSec, isCurrent),
+  onError: (error, owner) => console.error(`[dispatcher] Attempt lease renewal failed ${owner.jobId}/${owner.attemptId}:`, error),
+});
 
 /** Kept as a dispatcher export for existing diagnostics/tests. */
 export { CHROME_RUNTIME_IMAGE_KEYS } from "./domains/role-runtime-snapshot/index.js";
@@ -513,6 +519,7 @@ export async function drainInFlight(timeoutMs = 15_000): Promise<void> {
   if (inFlight.size > 0) {
     console.warn(`[dispatcher] drain 超时，仍有 ${inFlight.size} 个 job 在执行（重启后由 reconcile 判 orphan）`);
   }
+  leaseRenewals.stopAll();
 }
 
 /** 内置 real 类型；其余 job.type 若在角色注册表（agent_roles）中也为 real（Phase ② 自定义角色） */
@@ -587,14 +594,16 @@ async function graphEligibilityReasonFromDb(
   // Read the persisted directed grant on both the selection and locked claim pass.
   // Only its exact target can be excluded; every other graph and quota gate remains.
   const recoveryTarget = await pendingCompletionRecoveryClaimTarget(tx, job);
-  const [otherRole] = recoveryTarget ? await tx`SELECT 1 FROM jobs
-    WHERE canvas_id = ${canvasId} AND id <> ${id} AND id <> ${recoveryTarget}
-      AND type NOT IN ('hub_reason','verify_finding','report')
-      AND status = ANY(${activeStatuses}) LIMIT 1` : [];
+  const [otherWork] = recoveryTarget ? await tx`SELECT
+      COALESCE(bool_or(type NOT IN ('hub_reason','verify_finding','report') AND status = ANY(${activeStatuses})), false) AS active_role,
+      COALESCE(bool_or(status = 'waiting_human'), false) AS waiting_human
+    FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id} AND id <> ${recoveryTarget}` : [];
   const batchedState = batch?.systemStates.get(id);
   if (batchedState) {
     return graphEligibilityReason({ type, payload_json: job.payload_json }, {
-      ...batchedState, activeRole: recoveryTarget ? Boolean(otherRole) : batchedState.activeRole,
+      ...batchedState,
+      activeRole: recoveryTarget ? otherWork?.active_role !== false : batchedState.activeRole,
+      activeWaitingHuman: recoveryTarget ? otherWork?.waiting_human === true : batchedState.activeWaitingHuman,
     });
   }
 
@@ -614,9 +623,9 @@ async function graphEligibilityReasonFromDb(
     { type, payload_json: job.payload_json },
     {
       activeHub: activeHub.length > 0,
-      activeWaitingHuman: activeWaitingHuman.length > 0,
+      activeWaitingHuman: recoveryTarget ? otherWork?.waiting_human === true : activeWaitingHuman.length > 0,
       pendingHubOlder: Boolean(oldestPendingHub[0]?.id && oldestPendingHub[0].id !== id),
-      activeRole: recoveryTarget ? Boolean(otherRole) : activeRole.length > 0,
+      activeRole: recoveryTarget ? otherWork?.active_role !== false : activeRole.length > 0,
       rootStatus: (root[0]?.status as string | null) ?? null,
     },
   );
@@ -951,6 +960,7 @@ export async function lockCurrentProvisioningAttempt(
 }
 
 async function runJob(jobId: string) {
+  let stopLease: (() => void) | null = null;
   let handle: { sandboxId: string } | null = null;
   let sharedAssetsVolumeName: string | null = null;
   let sharedAssetsGeneration: string | undefined;
@@ -1227,7 +1237,7 @@ async function runJob(jobId: string) {
       });
       if (!started) throw new Error(`job ${jobId} 的 Attempt 已不再活动，禁止启动 agent_run`);
     });
-    startLeaseRenewal(jobId, handle);
+    stopLease = leaseRenewals.start({ jobId, attemptId: attemptId!, sandboxId: handle.sandboxId });
 
     // 画布：job 节点（如不存在）——claim 时由任务路由建 root 之外的 job 节点
     await ensureJobNode(jobId, job);
@@ -1449,7 +1459,7 @@ async function runJob(jobId: string) {
       }).catch(() => {});
     }
   } finally {
-    stopLeaseRenewal(jobId);
+    stopLease?.();
     if (handle) {
       const h = handle;
       await runner.destroy(h).catch((e) => {
@@ -1765,25 +1775,6 @@ async function executeFake(jobId: string, type: string) {
     description: `假 agent（${type}）：auth/login.php:42 存在未参数化拼接，用户输入经 $_GET 直达 mysqli_query，属高危数据流（演示事实）。`,
   });
   return; // done 由 runJob 兜底
-}
-
-// lease 续期：调度器侧维护（§3.3；接入 SDK 后改为控制通道探测驱动）
-function startLeaseRenewal(jobId: string, handle: { sandboxId: string }) {
-  const timer = setInterval(async () => {
-    const alive = await runner.isAlive(handle).catch(() => false);
-    if (!alive) return; // 停续，交给 Reaper 判 orphan
-    await sql`
-      UPDATE jobs SET lease_expires_at = now() + (${config.timeouts.leaseTtlSec} * interval '1 second'),
-                      heartbeat_at = now()
-      WHERE id = ${jobId} AND status = 'running'`;
-  }, Math.max(5, config.timeouts.leaseTtlSec / 3) * 1000);
-  activeLeases.set(jobId, timer);
-}
-
-function stopLeaseRenewal(jobId: string) {
-  const t = activeLeases.get(jobId);
-  if (t) clearInterval(t);
-  activeLeases.delete(jobId);
 }
 
 async function ensureJobNode(jobId: string, job: Record<string, unknown>) {

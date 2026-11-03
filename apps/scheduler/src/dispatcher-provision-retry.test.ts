@@ -82,8 +82,8 @@ test("source contract: opaque started failure stays unknown; retry requires curr
   assert.doesNotMatch(failure, /\.catch\(\(\) => \{\}\)/);
   const retry = source.slice(source.indexOf("export async function retryProvisioningJob"), source.indexOf("async function retryTruncatedExecutionJob"));
   assert.match(retry, /owner\.latest_attempt_id !== attempt\.id/);
-  assert.match(retry, /!current \|\| current\.id !== attempt\.id/);
-  assert.match(retry, /COALESCE\(settlement_json->>'result', ''\) = 'never_started'/);
+  assert.match(retry, /typeof current\.id !== "string" \|\| current\.id !== attempt\.id/);
+  assert.match(retry, /COALESCE\(settlement_json @> '\{"result":"never_started","external_effect":false\}'::jsonb, false\)/);
   assert.match(source, /if \(!provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure\(e\)\)/);
   // Behavioral proof is in shared-asset-lifecycle.integration.test.ts, not these source assertions.
 });
