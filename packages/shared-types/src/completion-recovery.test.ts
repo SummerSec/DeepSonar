@@ -58,6 +58,15 @@ test("projection whitelists bounded samples and never exposes raw effect, creden
   assert.equal(projectCompletionRecovery({ ...raw, effects: null }), undefined);
 });
 
+test("a valid recovery decision survives the Control-to-internal event handoff without accepting effect claims", () => {
+  const envelope = { v: 1, event_id: id, type: "hub_decision", payload: { recovery } };
+  const controlled = ControlEventEnvelope.parse(envelope);
+  assert.deepEqual(EventEnvelope.parse(controlled), controlled);
+  for (const schema of [ControlEventEnvelope, EventEnvelope]) {
+    assert.equal(schema.safeParse({ ...envelope, payload: { recovery: { ...recovery, settled: true } } }).success, false);
+  }
+});
+
 test("an Agent cannot forge the internal host control_receipt channel", () => {
   const envelope = { v: 1, event_id: id, type: "control_receipt", payload: { authority: "scheduler", subtype: "completion_recovery", ...projection } };
   assert.equal(ControlEventEnvelope.safeParse(envelope).success, false);

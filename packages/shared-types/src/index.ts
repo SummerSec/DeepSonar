@@ -1493,6 +1493,7 @@ const HubDecisionEnvelopeInput = z
   .object({
     complete: z.unknown().optional(),
     intents: z.unknown().optional(),
+    recovery: CompletionRecoveryDecision.optional(),
     plan_basis: PlanDecisionBasis.optional(),
   })
   .strict();

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import postgres from "postgres";
+import { z } from "zod";
 import type { CompletionRecoveryState } from "./recovery.js";
 import type { EffectKind } from "./model.js";
 
@@ -166,7 +167,11 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
         trim_reasons: [], result: null, termination_reason: null, updated_at: new Date().toISOString() });
       await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
         VALUES(${planOwner},${f.projectId},${f.canvasId},'hub_reason','succeeded',${sql.json(hubSnapshot)},${sql.json({ plan_protocol: planAudit })})`;
-      await sql`UPDATE canvases SET target_json=${JSON.stringify(target)}::jsonb WHERE id=${f.canvasId}`;
+      await sql`UPDATE canvases SET target_json=${sql.json(z.json().parse(target))} WHERE id=${f.canvasId}`;
+      const [persistedTarget] = await sql`SELECT jsonb_typeof(target_json) AS kind,target_json FROM canvases WHERE id=${f.canvasId}`;
+      assert.equal(persistedTarget.kind, "object", "Plan fixture must retain a JSON object, not a pre-serialized JSON string");
+      assert.deepEqual(persistedTarget.target_json.network_policy, targetSnapshot.network_policy);
+      assert.deepEqual(persistedTarget.target_json.plan_objective, objective);
       await sql`UPDATE jobs SET parent_job_id=${planOwner},payload_json=${sql.json({ plan_context: { protocol: 2, scheduler_owned: true,
         plan_job_id: planOwner, plan_sha256: contentSha256(plan), objective_id: objective.objective_id, objective_revision: objective.revision,
         task_id: "recover", task_sha256: contentSha256(plan.tasks[0]), route_revision: "1", dependency_outputs: [], dispatch_event_id: null } })} WHERE id=${f.jobId}`;

@@ -55,6 +55,10 @@ export async function invokeDurablePlanDecision(input: {
     canvasId:principal.canvasId,operationId:operation,input:payload,eventId:key,tokenId:principal.tokenId,idempotencyKey:key};
   const recovery = operation === 'submit_hub_decision' && payload && typeof payload === 'object' && 'recovery' in payload
     ? CompletionRecoveryDecision.parse((payload as {recovery:unknown}).recovery) : undefined;
+  const controlRejection = (error: ControlInputError): Result => ({ statusCode: 409, body: { ...controlRuntimeRejection({
+    operation, code: error.code, message: error.message, retryable: false, statusCode: 409,
+    path: error.path, details: error.details, idempotencyKey: key,
+  }) } });
   let recoveryGrant: CompletionRecoveryGrant | undefined;
   let preparedAttempt:string|undefined;
   const matches=(receipt:PlanReceipt)=>receipt.operation===operation && receipt.input_digest===digest
@@ -63,7 +67,12 @@ export async function invokeDurablePlanDecision(input: {
   if(!await readControlReceiptByKey(db,principal.jobId,key)) {
     const [attempt]=await db`SELECT id FROM job_attempts WHERE job_id=${principal.jobId} AND status='active' AND NOT cancel_requested`;
     if(!attempt) return reject('PLAN_RECEIPT_INACTIVE','Plan receipt requires an active Attempt');
-    await invokeRuntimeHandler({...context,planPhase:'validate',planAttemptId:String(attempt.id)});
+    try {
+      await invokeRuntimeHandler({...context,planPhase:'validate',planAttemptId:String(attempt.id)});
+    } catch (error) {
+      if (error instanceof ControlInputError) return controlRejection(error);
+      throw error;
+    }
   }
   let receipt:PlanReceipt|undefined;
   let result:Result;
@@ -117,8 +126,7 @@ export async function invokeDurablePlanDecision(input: {
       });
       if(saved) return matches(saved) ? saved.result : reject('IDEMPOTENCY_KEY_CONFLICT','Stored receipt does not match this request');
     }catch {return {statusCode:503,body:{accepted:false,error_code:'PLAN_RECEIPT_UNCERTAIN',error:'Receipt outcome unknown; query receipt_key before retrying unchanged input',retryable:false}};}
-    if(error instanceof ControlInputError) return {statusCode:409,body:{...controlRuntimeRejection({operation,code:error.code,message:error.message,
-      retryable:false,statusCode:409,path:error.path,details:error.details,idempotencyKey:key})}};
+    if(error instanceof ControlInputError) return controlRejection(error);
     if(error instanceof EventRateLimitError) return {statusCode:429,body:{...controlRuntimeRejection({operation,code:error.code,message:error.message,retryable:true,statusCode:429,details:{...error.metadata},idempotencyKey:key})}};
     throw error;
   }
