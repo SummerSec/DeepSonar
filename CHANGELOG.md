@@ -2,12 +2,13 @@
 
 ## [0.6.7] - 2026-11-04
 
-> 发布准备：当前候选尚未打 tag 或正式发行。最终 SHA 的完整 GitHub Actions、原生双架构、配置镜像通道、签名、catalog/部署引用回写与 Release 附件仍须实际通过；本节记录实现变化，不代表工程验收或生产部署已经完成。schema 保持 67，私有 workspace package 版本不变。质量、成本和 SLA 保持 `unknown` / `not_evaluated`；#834 按用户要求暂缓。
+> 本节记录实现变化；正式发行状态与工程验收以对应 [Release](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.7) 的完整 Actions、原生双架构、配置镜像通道、签名、catalog/部署引用回写及附件证据为准，不表示生产部署已经执行。schema 保持 67，私有 workspace package 版本不变。质量、成本和 SLA 保持 `unknown` / `not_evaluated`；#834 按用户要求暂缓。
 
 ### 修复
 
 - **数据库锁冲突不再直接终止本可安全重试的请求（#871/#873）**：context 在同一事务按 Job → Attempt 原子保存投影；Gateway admission 对请求前、已回滚的纯数据库事务做有界冲突重试，提交后才发一次上游请求。重试与耗尽分别输出低基数指标，日志关联 Job/Attempt。新增真实 PostgreSQL 旧序 `40P01` 负对照、精确 `NOWAIT` 锁序探测、生产终态整束回滚和失败 barrier 清理回归源码。
 - **OM 安全降级保留真实 Pi SDK 可见的宿主证明（#873）**：已证实未提交的 admission、请求前 transport 且持久零用量/`never_started` 结算成功时，用结构化 `error.message` 保留可信 `not_started`。Provider 503、伪造载荷、pending/unknown 和结算失败继续拒绝降级；不重发外部请求、不重复记账。真实 Gateway handler 与镜像 Pi RPC 场景同步覆盖。
+- **忙锁候选不占用领取槽位（#871）**：领取按有界候选页分别开启事务，每页重新核验暂停、scope 与实际配额，保持 Canvas → project → Job → Attempt 锁序。只计成功领取，忙 Canvas/Job 可跳过并在提交释放本页锁后继续后页。首事务页失败整页回滚；后页失败明确报告并返回前页已提交领取，交给执行器启动，不丢弃已提交工作。
 - **共享卷准备与清理绑定独立 generation（#871）**：同 Job 使用独立 PostgreSQL session 串行生命周期，并在 prepare、只读挂载、资源绑定到清理间重验当前/latest Attempt。Docker volume/helper 名称包含独立 generation；prepare 只操作自己的资源，cleanup 固定严格资源快照并在破坏性操作/重试前重验许可，旧流程失锁后不能采纳或删除后继 generation。helper 按精确容器 ID 删除，卷非 force 删除，跳过与失败分开记录。
 - **旧 Attempt 不续租或自动重试后继执行（#871）**：每个运行持有自己的 timer stop closure；续租在 Job → 最新 Attempt 事务核对 active/cancel 与双方 sandbox 身份。opaque runner 已被调用后的失败保持 unknown，即使没有 sandbox 也不推断未开始；自动 provision retry 要求明确 `never_started` 且 `external_effect` 为 JSON boolean false。
 

@@ -361,7 +361,6 @@ test("helper cleanup 根据旧 ID 删除，不能删除复用同名的新 helper
 for (const labels of [
   null,
   { [SHARED_ASSETS_JOB_LABEL]: jobId, [SHARED_ASSETS_GENERATION_LABEL]: generation },
-  ownedLabels(generation, "223e4567-e89b-12d3-a456-426614174000"),
   { [SHARED_ASSETS_VOLUME_LABEL]: "true", [SHARED_ASSETS_JOB_LABEL]: jobId },
   ownedLabels("not-a-generation"),
 ]) {
@@ -377,6 +376,20 @@ for (const labels of [
     });
   });
 }
+
+test("其他 Job 的合法卷可被全局发现，当前 Job 不得采纳或删除", async () => {
+  await withSource(async (sourcePath) => {
+    const otherJobId = "223e4567-e89b-12d3-a456-426614174000";
+    const state = daemon(volumeInspection(ownedLabels(generation, otherJobId)));
+    const volumes = manager(state);
+    await assert.rejects(volumes.prepare(prepareInput(sourcePath)), /preparation and cleanup failed/);
+    await assert.rejects(volumes.removeForJob(jobId, generation), /本地调度器管理卷/);
+    await volumes.removeForJob(jobId);
+    assert.deepEqual(await volumes.listManaged(), [{ volumeName, jobId: otherJobId, generation }]);
+    assert.equal(state.calls.some((args) => args[0] === "rm" || args[1] === "rm"), false);
+    assert.ok(state.volume);
+  });
+});
 
 test("未知 helper 保持原样，不按固定名字强删", async () => {
   const state = daemon(volumeInspection());
