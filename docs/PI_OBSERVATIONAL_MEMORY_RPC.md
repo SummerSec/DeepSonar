@@ -276,3 +276,24 @@ Pi canonical bin 是 `dist/bundle/cli.js`；已修正原先假定 bin 只在包�
 
 Documentation mapping: FR-CAP-009, FR-IMG-003, FR-JOB-009 / FR-JOB-013,
 NFR-SEC-003 / NFR-SEC-004, NFR-EVO-003, IR-001 / IR-002 and CON-005 / CON-008.
+
+## 长会话增长测量（#835 第 3 项）
+
+`runGrowthProbe()`（`agent-harness/fixtures/pi-om-real-rpc.mjs`）复用真实镜像里的 canonical Pi/OM 与生产 wrapper，跑「同一会话多轮 + 进程重启后续跑」的合成负载，按轮次记录**落盘字节**而不是客户端 RSS：
+
+| 记录项 | 来源 |
+| --- | --- |
+| agent 目录总字节与按顶层条目分桶 | `PI_CODING_AGENT_DIR`（session ledger、settings、auth） |
+| workspace 字节 | 场景 workspace |
+| observer / reflector 请求数 | fake Gateway 的 attribution 路由 |
+| JSONL 帧数与最大帧 | 生产 `parsePiJsonlRecord` 的 8MB 上限内 |
+
+断言只覆盖规则，不设体积阈值：
+
+1. 重启后的会话仍能 `recall` 到重启前记录的 observation（`status=ok` 且 `sourceEntries` 非空）；
+2. 落盘历史不为「召回有界」而收缩（agent 字节不回退）；
+3. artifact 里不出现私有正文（脱敏规则同样作用于测量产物）。
+
+执行入口：`pnpm ci:smoke:pi-om-growth`（等价 `node agent-harness/test-pi-rpc.mjs --growth`）；CI 由 `pi-om-growth` job 自建 base 镜像后运行，产物 `artifacts/pi-om-growth/{log.txt,metrics.json}`。
+
+**口径**：合成规模，字节数是标准落盘统计；本文不据此宣称容量、SLA 或公开质量结论。本地 host 模式（`DEEPSONAR_PI_OM_PACKAGE` + `DEEPSONAR_PI_BINARY`）只作开发期自测，不是镜像证据。

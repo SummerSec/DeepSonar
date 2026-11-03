@@ -224,6 +224,43 @@ jobs:
           path: artifacts/lexical-pressure
           if-no-files-found: warn
 
+  # #835 item 3: bounded multi-round / multi-session growth of the real OM
+  # plugin inside the built image. Measures on-disk bytes per round and proves a
+  # resumed process still recalls pre-restart sources without deleting history.
+  pi-om-growth:
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build base image with the real Pi/OM install
+        run: |
+          set -euo pipefail
+          docker buildx build --builder default --load --platform linux/amd64 \
+            --build-arg TOOLSET=base --tag deepsonar-base:ci --file deploy/Dockerfile.agent .
+      - name: Multi-round / multi-session growth probe
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/pi-om-growth
+          node agent-harness/test-pi-rpc.mjs --growth | tee artifacts/pi-om-growth/log.txt
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs";
+            const lines = readFileSync("artifacts/pi-om-growth/log.txt", "utf8").split("\n").reverse();
+            const report = lines.find((line) => line.startsWith("{\"image_identity\"") || line.startsWith("{\"pi_om_growth\""));
+            if (!report) throw new Error("the growth probe printed no JSON report");
+            writeFileSync("artifacts/pi-om-growth/metrics.json", `${JSON.stringify(JSON.parse(report), null, 2)}\n`);
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pi-om-growth
+          path: artifacts/pi-om-growth
+          if-no-files-found: warn
+
   gate:
     runs-on: ubuntu-24.04
     needs: changes
@@ -1124,7 +1161,7 @@ jobs:
     # block a Draft merge; blocking Draft merges must come from policy (ruleset /
     # separate required check), not from this workflow's skip.
     if: always() && needs.changes.outputs.mode != 'draft-fast'
-    needs: [changes, docs-freshness, windows-upgrade-backend, crash-recovery, lexical-pressure, gate, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
+    needs: [changes, docs-freshness, windows-upgrade-backend, crash-recovery, lexical-pressure, pi-om-growth, gate, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1138,6 +1175,7 @@ jobs:
           WINDOWS: ${{ needs.windows-upgrade-backend.result }}
           CRASH: ${{ needs.crash-recovery.result }}
           LEXICAL: ${{ needs.lexical-pressure.result }}
+          PIOM: ${{ needs.pi-om-growth.result }}
           GATE: ${{ needs.gate.result }}
           IMAGES: ${{ needs.runtime-images.result }}
           FUZZ_BUILD: ${{ needs.chrome-fuzz-arm64-build.result }}
@@ -1170,6 +1208,7 @@ jobs:
           check_heavy windows-upgrade-backend "$WINDOWS"
           check_heavy crash-recovery "$CRASH"
           check_heavy lexical-pressure "$LEXICAL"
+          check_heavy pi-om-growth "$PIOM"
           check_heavy gate "$GATE"
           check_heavy runtime-images "$IMAGES"
           check_heavy chrome-fuzz-arm64-build "$FUZZ_BUILD"

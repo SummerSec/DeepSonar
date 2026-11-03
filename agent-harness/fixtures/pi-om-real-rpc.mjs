@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -44,7 +44,7 @@ async function loadBoundaries(root) {
   return { ...shared.module, ...redactor.module, ...framer.module, ...parser.module, ...capture.module };
 }
 
-async function fakeGateway(scenario) {
+async function fakeGateway(scenario, options = {}) {
   const requests = [];
   const server = createServer(async (req, res) => {
     try {
@@ -107,7 +107,17 @@ async function fakeGateway(scenario) {
         tool = { name: "record_reflections", arguments: { reflections: [{ content, supportingObservationIds: [support] }] } };
       } else if (stage === "main" && transcript.includes("RECALL_NOW")
         && !body.messages.some((message) => message.role === "tool" && message.tool_call_id === "recall-call")) {
-        tool = { name: "recall", arguments: { id: observationId } };
+        // The eight failure scenarios record the canonical observation, so they
+        // recall by its fixed id. The growth probe synthesises its own entries,
+        // so it recalls the first id the plugin actually offered instead of
+        // asserting against an id that session never contained.
+        // The eight failure scenarios record the canonical observation verbatim,
+        // so they keep recalling by its fixed id. Sessions that synthesise their
+        // own entries (the growth probe) recall an id they actually recorded.
+        const canonical = transcript.includes("Source entry with large content:");
+        const offered = [...transcript.matchAll(/\[([a-f0-9]{12})\]/gu)].map((match) => match[1]);
+        const id = canonical ? observationId : options.recallId?.() ?? offered[0];
+        if (id) tool = { name: "recall", arguments: { id } };
       }
       const id = `offline-${requests.length}`;
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
@@ -291,4 +301,158 @@ export async function runRealPiRpc() {
     }
     return reports;
   } finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+// ---------------------------------------------------------------- growth probe
+
+// Byte accounting for #835 item 3. It measures what actually lands on disk per
+// round and per session instead of trusting a client-side RSS sample, and it
+// never reads file contents into the report so private prose cannot leak into
+// an artifact.
+function directoryBytes(directory, skip = new Set()) {
+  const totals = new Map();
+  let total = 0;
+  let files = 0;
+  const walk = (current) => {
+    let entries;
+    try { entries = readdirSync(current, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const absolute = path.join(current, entry.name);
+      if (skip.has(absolute)) continue;
+      if (entry.isDirectory()) walk(absolute);
+      else if (entry.isFile()) {
+        let size = 0;
+        try { size = statSync(absolute).size; } catch { continue; }
+        const bucket = path.relative(directory, absolute).split(path.sep)[0];
+        totals.set(bucket, (totals.get(bucket) ?? 0) + size);
+        total += size;
+        files += 1;
+      }
+    }
+  };
+  walk(directory);
+  return { total, files, buckets: Object.fromEntries([...totals].sort(([a], [b]) => a.localeCompare(b))) };
+}
+
+function findSessionFiles(directory, found = []) {
+  let entries;
+  try { entries = readdirSync(directory, { withFileTypes: true }); } catch { return found; }
+  for (const entry of entries) {
+    const absolute = path.join(directory, entry.name);
+    if (entry.isDirectory()) findSessionFiles(absolute, found);
+    else if (entry.isFile() && entry.name.endsWith(".jsonl")) found.push(absolute);
+  }
+  return found;
+}
+
+// #835 item 3: bounded multi-round / multi-session load with per-round on-disk
+// measurement. The assertions cover the *rules* (recall still resolves earlier
+// material after a resume, private prose never reaches the report, every frame
+// stays inside the framing limit) while the numbers are recorded for the
+// artifact — no threshold is tuned to make the run pass.
+export async function runGrowthProbe({ rounds = 4, resumeRounds = 3 } = {}) {
+  const cli = resolveCli(process.env.DEEPSONAR_PI_BINARY ?? "pi");
+  const root = mkdtempSync(path.join(tmpdir(), "deepsonar-om-growth-"));
+  const imageProof = process.env.DEEPSONAR_PI_IMAGE_PROOF === "1";
+  let client;
+  let gateway;
+  try {
+    const boundary = await loadBoundaries(root);
+    const omRoot = imageProof ? IMAGE_OM_ROOT
+      : process.env.DEEPSONAR_PI_OM_PACKAGE ?? (existsSync(IMAGE_OM_ROOT) ? IMAGE_OM_ROOT : path.join(REPO, ".tmp-om-3.1.4/package"));
+    assert.equal(JSON.parse(readFileSync(path.join(omRoot, "package.json"), "utf8")).version, "3.1.4");
+    let wrapper = IMAGE_WRAPPER;
+    if (imageProof) {
+      assert.ok(existsSync(wrapper), "the built image must contain its production wrapper");
+    } else {
+      const originalWrapper = existsSync(IMAGE_WRAPPER) ? IMAGE_WRAPPER : path.join(REPO, "agent-harness/pi-observational-memory-governed.ts");
+      wrapper = path.join(root, "tested-wrapper.ts");
+      writeFileSync(wrapper, readFileSync(originalWrapper, "utf8").replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`));
+    }
+    const scenarioRoot = path.join(root, "growth");
+    mkdirSync(scenarioRoot);
+    // The growth probe synthesises its own entries, so the canonical fixture id
+    // never exists in it. Recall targets an id the session really recorded,
+    // which is what "the resumed process still resolves pre-restart sources"
+    // has to mean here.
+    const recallState = { id: null };
+    const rememberObservation = () => {
+      for (const record of client?.records ?? []) {
+        const observed = record.entry?.data?.observations?.[0]?.id;
+        if (observed) recallState.id = observed;
+      }
+    };
+    gateway = await fakeGateway("success", { recallId: () => recallState.id });
+    const paths = configure(scenarioRoot, gateway.port, wrapper.replaceAll("\\", "/"), "success");
+    const start = (sessionFile) => new RpcClient(cli, ["--provider", "offline-main", "--model", MODEL,
+      "-e", paths.extension, ...(sessionFile ? ["--session", sessionFile] : [])], {
+      cwd: paths.workspace, env: { ...process.env, HOME: paths.home, USERPROFILE: paths.home,
+        PI_CODING_AGENT_DIR: paths.home, PI_OBSERVATIONAL_MEMORY_PASSIVE: "1", TEMP: scenarioRoot, TMPDIR: scenarioRoot },
+    }, boundary.PiJsonlFramer, (line) => boundary.parsePiJsonlRecord(line, 8 * 1024 * 1024));
+    const samples = [];
+    let largestFrame = 0;
+    const sample = (label) => {
+      for (const record of client.records) largestFrame = Math.max(largestFrame, JSON.stringify(record).length);
+      samples.push({ label, agent: directoryBytes(paths.home), workspace: directoryBytes(paths.workspace),
+        observerRequests: gateway.requests.filter((row) => row.stage === "observer").length,
+        reflectorRequests: gateway.requests.filter((row) => row.stage === "reflector").length,
+        frames: client.records.length });
+    };
+    client = start();
+    assert.equal((await client.command("get_state")).success, true);
+    for (let round = 1; round <= rounds; round += 1) {
+      await client.turn(`Growth round ${round} source entry: ` + `session-one-detail ${round} `.repeat(300));
+      sample(`session-1/round-${round}`);
+    }
+    const firstSession = findSessionFiles(paths.home).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
+    assert.ok(firstSession, "the first session must persist a transcript before the resume probe");
+    const firstSessionBytes = statSync(firstSession).size;
+    await client.stop();
+    client = start(firstSession);
+    assert.equal((await client.command("get_state")).success, true);
+    for (let round = 1; round <= resumeRounds; round += 1) {
+      await client.turn(`Resumed session round ${round}: ` + `session-two-detail ${round} `.repeat(300));
+      sample(`session-2/round-${round}`);
+    }
+    // Bounded recall must not be bought by deleting history: the resumed
+    // session still resolves material recorded before the process restart.
+    rememberObservation();
+    assert.ok(recallState.id, "the resumed session must have recorded an observation to recall");
+    await client.turn("RECALL_NOW");
+    sample("session-2/recall");
+    const recall = client.records.filter((record) => record.type === "tool_execution_end" && record.toolName === "recall").pop();
+    const recallDetails = recall?.result?.details ?? {};
+    const stageCounts = gateway.requests.reduce((counts, row) => ({ ...counts, [row.stage]: (counts[row.stage] ?? 0) + 1 }), {});
+    assert.equal(recallDetails.status, "ok",
+      `recall after resume must succeed (status ${recallDetails.status ?? "missing"}; stages ${JSON.stringify(stageCounts)}; `
+      + `observations ${JSON.stringify(client.records.filter((record) => record.entry?.customType?.startsWith("om.")).map((record) => record.entry?.customType))}`
+      + ` sample ${JSON.stringify(client.records.filter((record) => record.entry?.customType === "om.observations.recorded").slice(0, 1)).slice(0, 600)})`);
+    assert.ok((recallDetails.sourceEntries ?? []).length > 0, "recall after resume must still resolve pre-restart sources");
+    const agentAfter = directoryBytes(paths.home).total;
+    assert.ok(agentAfter >= firstSessionBytes, "on-disk history must not shrink to keep recall bounded");
+    const report = {
+      pi_om_growth: "passed",
+      rounds, resumeRounds,
+      firstSessionBytes,
+      largestFrameBytes: largestFrame,
+      requests: gateway.requests.length,
+      recallSources: (recallDetails.sourceEntries ?? []).length,
+      samples: samples.map((entry) => ({ label: entry.label, agentBytes: entry.agent.total, agentFiles: entry.agent.files,
+        workspaceBytes: entry.workspace.total, observerRequests: entry.observerRequests,
+        reflectorRequests: entry.reflectorRequests, frames: entry.frames,
+        agentBuckets: entry.agent.buckets })),
+      methodology: "synthetic scale only; bytes are on-disk totals per round, no public quality or SLA claim",
+    };
+    const artifactDirectory = process.env.DEEPSONAR_GROWTH_ARTIFACT_DIR;
+    if (artifactDirectory) {
+      mkdirSync(artifactDirectory, { recursive: true });
+      writeFileSync(path.join(artifactDirectory, "pi-om-growth.json"), `${JSON.stringify(report, null, 2)}\n`);
+    }
+    assert.ok(!privateProse.test(JSON.stringify(report)), "the growth artifact must not carry private prose");
+    return report;
+  } finally {
+    if (client) await client.stop().catch(() => {});
+    if (gateway) { gateway.server.closeAllConnections(); await new Promise((resolve) => gateway.server.close(resolve)); }
+    rmSync(root, { recursive: true, force: true });
+  }
 }
