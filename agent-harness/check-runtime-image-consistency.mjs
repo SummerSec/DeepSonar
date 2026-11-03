@@ -1200,7 +1200,7 @@ expect(!releaseWorkflow.includes("github.repository_owner"), "release workflow ä
 expect(openHarmonyRegistry.schema === "deepsonar.registry/v2" && openHarmonyRegistry.schema_version === 2, "bundled runtime catalog must be v2");
 expect(typeof openHarmonyRegistry.platform_version === "string" && /^\d+\.\d+\.\d+$/.test(openHarmonyRegistry.platform_version), "bundled catalog must declare platform_version");
 expect(openHarmonyRegistry.min_runtime_image?.version && /^\d+\.\d+\.\d+$/.test(openHarmonyRegistry.min_runtime_image.version), "bundled catalog must declare min_runtime_image.version");
-expect(registryScript.includes("image build unchanged; version kept"), "generator must reuse unchanged fingerprint versions");
+expect(registryScript.includes("image build unchanged; version relabelled"), "generator must relabel reused fingerprint digests to the release version");
 expect(registryScript.includes("platform_version") && registryScript.includes("min_runtime_image"), "generator must emit split platform/runtime version axes");
 expect(releaseWorkflow.includes("maybe-skip-runtime-version-tags.sh"), "unchanged runtime products must skip new platform-version tags");
 expect(releaseWorkflow.includes("write-release-runtime-descriptor.sh"), "unchanged runtime products must reuse the previous catalog descriptor");
