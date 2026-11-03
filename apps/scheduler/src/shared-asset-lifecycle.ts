@@ -193,7 +193,7 @@ export async function acquireSharedAssetPreparation(
  */
 export async function cleanupSharedAssetsForJob(
   input: SharedAssetLifecycleScope,
-  remove: () => Promise<void>,
+  remove: (assertCurrent: () => Promise<void>) => Promise<void>,
   connect: OpenSession = openSession,
 ): Promise<boolean> {
   const scope = canonicalScope(input);
@@ -211,7 +211,15 @@ export async function cleanupSharedAssetsForJob(
       conflict(scope, "cleanup", reason, state);
       return false;
     }
-    await remove();
+    await remove(async () => {
+      const current = await lock.state();
+      if (current.job_status !== state.job_status || current.canvas_id !== state.canvas_id
+        || current.latest_attempt_id !== state.latest_attempt_id || current.active_attempt_id
+        || current.cancel_requested !== state.cancel_requested) {
+        conflict(scope, "cleanup", "stale_attempt", current);
+        throw new SharedAssetLifecycleConflictError("stale_attempt");
+      }
+    });
     return true;
   } catch (error) {
     failed = true;

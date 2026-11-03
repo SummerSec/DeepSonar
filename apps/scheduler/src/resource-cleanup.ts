@@ -62,10 +62,13 @@ function defaultDependencies(volumeManager: SharedAssetsVolumeManager): DesiredS
     // Initial scans are only hints. Hold the same Job lifecycle boundary as
     // prepare/mount and re-read active ownership before destructive cleanup.
     removeContainer: (containerId, jobId, attemptId) => cleanupSharedAssetsForJob({ jobId },
-      () => runner.destroyResource({ resourceId: containerId, jobId, attemptId })),
+      async (assertCurrent) => {
+        await assertCurrent();
+        await runner.destroyResource({ resourceId: containerId, jobId, attemptId });
+      }),
     listVolumes: () => volumeManager.listManaged(),
     removeVolumeForJob: (jobId, generation) => cleanupSharedAssetsForJob({ jobId },
-      () => volumeManager.removeForJob(jobId, generation)),
+      (assertCurrent) => volumeManager.removeForJob(jobId, generation, assertCurrent)),
   };
 }
 

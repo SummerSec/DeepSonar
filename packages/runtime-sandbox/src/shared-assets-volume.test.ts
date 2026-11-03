@@ -14,11 +14,12 @@ import {
 } from "./shared-assets-volume.js";
 
 const jobId = "123e4567-e89b-12d3-a456-426614174000";
-const volumeName = `deepsonar-assets-${jobId}`;
-const helperName = `deepsonar-assets-writer-${jobId}`;
 const helperImage = DEFAULT_SHARED_ASSETS_HELPER_IMAGE;
 const generation = "123e4567-e89b-12d3-a456-426614174001";
 const nextGeneration = "123e4567-e89b-12d3-a456-426614174002";
+const nameFor = (value: string) => `deepsonar-assets-g${value.replaceAll("-", "")}`;
+const volumeName = nameFor(generation);
+const helperName = `deepsonar-assets-writer-g${generation.replaceAll("-", "")}`;
 const helperId = "a".repeat(64);
 
 test("Docker 命令超时具有稳定错误类别，不与普通 provision 超时混淆", () => {
@@ -58,12 +59,23 @@ interface Daemon {
   execute: (...args: string[]) => Promise<string>;
 }
 
-/** A single named volume/helper, with barriers injected at precise daemon calls. */
+/** Multiple generations coexist; accessors let barriers replace the most recently touched resource. */
 function daemon(volume: Record<string, unknown> | null = null): Daemon {
+  const volumes = new Map<string, Record<string, unknown>>();
+  const helpers = new Map<string, Record<string, unknown>>();
+  let currentVolume = String(volume?.Name ?? volumeName);
+  let currentHelper = helperName;
+  if (volume) volumes.set(currentVolume, volume);
   const state: Daemon = {
-    calls: [], volume, helper: null,
+    calls: [],
+    get volume() { return volumes.get(currentVolume) ?? null; },
+    set volume(value) { if (value) volumes.set(currentVolume, value); else volumes.delete(currentVolume); },
+    get helper() { return helpers.get(currentHelper) ?? null; },
+    set helper(value) { if (value) helpers.set(currentHelper, value); else helpers.delete(currentHelper); },
     execute: async (...args) => {
       state.calls.push(args);
+      if (args[0] === "volume" && ["inspect", "rm"].includes(args[1]!)) currentVolume = args[2]!;
+      if (args[0] === "container" && args[1] === "inspect") currentHelper = args[2]!;
       const overridden = await state.before?.(args);
       if (typeof overridden === "string") return overridden;
       if (args[0] === "image" && args[1] === "inspect") return "{}";
@@ -75,7 +87,7 @@ function daemon(volume: Record<string, unknown> | null = null): Daemon {
         if (!state.helper) throw new Error(`Error response from daemon: No such container: ${args[2]}`);
         return JSON.stringify(state.helper);
       }
-      if (args[0] === "volume" && args[1] === "ls") return state.volume ? String(state.volume.Name) : "";
+      if (args[0] === "volume" && args[1] === "ls") return [...volumes.keys()].join("\n");
       if (args[0] === "volume" && args[1] === "create") {
         const labels: Record<string, string> = {};
         args.forEach((arg, index) => {
@@ -84,10 +96,12 @@ function daemon(volume: Record<string, unknown> | null = null): Daemon {
             labels[key!] = value!;
           }
         });
-        state.volume ??= volumeInspection(labels);
-        return volumeName;
+        currentVolume = args.at(-1)!;
+        state.volume ??= volumeInspection(labels, currentVolume);
+        return currentVolume;
       }
       if (args[0] === "create") {
+        currentHelper = args[args.indexOf("--name") + 1]!;
         assert.equal(state.helper, null, "helper name collision");
         // Docker/Podman may implicitly create a missing named mount without labels.
         state.volume ??= volumeInspection(null);
@@ -98,7 +112,7 @@ function daemon(volume: Record<string, unknown> | null = null): Daemon {
             labels[key!] = value!;
           }
         });
-        state.helper = helperInspection(labels);
+        state.helper = { ...helperInspection(labels), Name: `/${currentHelper}` };
         return helperId;
       }
       if (args[0] === "cp") {
@@ -112,8 +126,8 @@ function daemon(volume: Record<string, unknown> | null = null): Daemon {
         return "";
       }
       if (args[0] === "volume" && args[1] === "rm") {
-        assert.deepEqual(args, ["volume", "rm", volumeName], "never force-detach a busy volume");
-        if (state.helper) throw new Error("volume is in use by a helper");
+        assert.deepEqual(args, ["volume", "rm", currentVolume], "never force-detach a busy volume");
+        if (helpers.size) throw new Error("volume is in use by a helper");
         state.volume = null;
         return "";
       }
@@ -280,10 +294,10 @@ test("下一次 prepare 使用新 generation；旧 finally 不能清理新一代
     const volumeManager = manager(state);
     await volumeManager.prepare(prepareInput(sourcePath));
     await volumeManager.prepare(prepareInput(sourcePath, nextGeneration));
-    const writesBefore = state.calls.filter((args) => args[1] === "rm" || args[0] === "rm").length;
-    await assert.rejects(volumeManager.removeForJob(jobId, generation), /generation changed/);
+    assert.deepEqual((await volumeManager.listManaged()).map((item) => item.volumeName), [volumeName, nameFor(nextGeneration)]);
+    await volumeManager.removeForJob(jobId, generation);
+    assert.deepEqual(await volumeManager.listManaged(), [{ volumeName: nameFor(nextGeneration), jobId, generation: nextGeneration }]);
     assert.deepEqual(state.volume?.Labels, ownedLabels(nextGeneration));
-    assert.equal(state.calls.filter((args) => args[1] === "rm" || args[0] === "rm").length, writesBefore);
     await volumeManager.removeForJob(jobId, nextGeneration);
     assert.equal(state.volume, null);
   });
@@ -354,10 +368,11 @@ for (const labels of [
   test(`缺失/错误 ownership labels 必须 fail closed: ${JSON.stringify(labels)}`, async () => {
     await withSource(async (sourcePath) => {
       const state = daemon(volumeInspection(labels));
-      await assert.rejects(manager(state).prepare(prepareInput(sourcePath)), /本地调度器管理卷/);
-      await assert.rejects(manager(state).removeForJob(jobId), /本地调度器管理卷/);
+      await assert.rejects(manager(state).prepare(prepareInput(sourcePath)), /preparation and cleanup failed/);
+      await assert.rejects(manager(state).removeForJob(jobId, generation), /本地调度器管理卷/);
+      await manager(state).removeForJob(jobId); // Discovery never adopts an unowned resource.
       assert.deepEqual(await manager(state).listManaged(), []);
-      assert.equal(state.calls.some((args) => args[0] === "rm" || args[1] === "rm" || args[1] === "create"), false);
+      assert.equal(state.calls.some((args) => args[0] === "rm" || args[1] === "rm"), false);
       assert.ok(state.volume);
     });
   });
@@ -402,7 +417,7 @@ test("删除重试前 generation 变化时停止，不能删同名替身", async
   state.before = (args) => { if (args[0] === "volume" && args[1] === "rm") throw new Error("busy"); };
   await assert.rejects(manager(state, async () => {
     state.volume = volumeInspection(ownedLabels(nextGeneration));
-  }).removeForJob(jobId), /generation changed/);
+  }).removeForJob(jobId, generation), /本地调度器管理卷|generation changed/);
   assert.equal(state.calls.filter((args) => args[0] === "volume" && args[1] === "rm").length, 1);
   assert.deepEqual(state.volume?.Labels, ownedLabels(nextGeneration));
 });
@@ -433,7 +448,7 @@ for (const error of [
   test(`模糊缺失/基础设施错误不得冒充不存在: ${error.message}`, async () => {
     const state = daemon();
     state.before = (args) => { if (args[0] === "volume" && args[1] === "inspect") throw error; };
-    await assert.rejects(manager(state).removeForJob(jobId), (value: unknown) => value === error);
+    await assert.rejects(manager(state).removeForJob(jobId, generation), (value: unknown) => value === error);
     assert.equal(state.calls.filter((args) => args[0] === "volume" && args[1] === "inspect").length, 3);
     assert.equal(state.calls.some((args) => args[0] === "rm" || args[1] === "rm"), false);
   });
@@ -443,7 +458,7 @@ for (const body of ["null", "[]", "broken-json"]) {
   test(`inspect 成功但响应无权威对象时 fail closed: ${body}`, async () => {
     const state = daemon();
     state.before = (args) => args[0] === "volume" && args[1] === "inspect" ? body : undefined;
-    await assert.rejects(manager(state).removeForJob(jobId));
+    await assert.rejects(manager(state).removeForJob(jobId, generation));
     assert.equal(state.calls.some((args) => args[0] === "rm" || args[1] === "rm"), false);
   });
 }
@@ -455,7 +470,7 @@ test("inspect 基础设施错误恢复后继续删除，所有删除前仍重新
   state.before = (args) => {
     if (args[0] === "volume" && args[1] === "inspect" && ++inspects < 3) throw new Error("Docker daemon unavailable");
   };
-  await manager(state, async (delay) => { delays.push(delay); }).removeForJob(jobId);
+  await manager(state, async (delay) => { delays.push(delay); }).removeForJob(jobId, generation);
   assert.equal(inspects, 4);
   assert.deepEqual(delays, [100, 200]);
   assert.equal(state.volume, null);
@@ -463,8 +478,8 @@ test("inspect 基础设施错误恢复后继续删除，所有删除前仍重新
 
 test("listManaged 合并 label/名称扫描并去重，仅返回严格 owner/generation 与创建时间", async () => {
   const secondJobId = "223e4567-e89b-12d3-a456-426614174000";
-  const secondVolume = `deepsonar-assets-${secondJobId}`;
-  const unknownVolume = "deepsonar-assets-323e4567-e89b-12d3-a456-426614174000";
+  const secondVolume = nameFor(nextGeneration);
+  const unknownVolume = nameFor("323e4567-e89b-12d3-a456-426614174000");
   const createdAt = "2026-08-12T03:00:00Z";
   const state = daemon(volumeInspection());
   state.before = (args) => {
@@ -480,6 +495,58 @@ test("listManaged 合并 label/名称扫描并去重，仅返回严格 owner/gen
     { volumeName: secondVolume, jobId: secondJobId, generation: nextGeneration, createdAt },
   ]);
   assert.equal(state.calls.filter((args) => args[0] === "volume" && args[1] === "inspect").length, 3);
+});
+
+test("staging 后失锁且新 Attempt 已准备 G2，旧 prepare 不创建也不删除任何 G2 资源", async () => {
+  await withSource(async (sourcePath) => {
+    const state = daemon();
+    const volumes = manager(state);
+    const lost = new Error("lifecycle backend lost");
+    await assert.rejects(volumes.prepare({
+      ...prepareInput(sourcePath),
+      assertCurrent: async () => {
+        await volumes.prepare(prepareInput(sourcePath, nextGeneration));
+        throw lost;
+      },
+    }), (error: unknown) => error === lost);
+    assert.deepEqual(await volumes.listManaged(), [{ volumeName: nameFor(nextGeneration), jobId, generation: nextGeneration }]);
+    assert.equal(state.calls.some((args) => args[1] === "create" && args.at(-1) === volumeName), false);
+    assert.equal(state.calls.some((args) => args[1] === "rm"), false);
+  });
+});
+
+test("Job cleanup freezes generation names before permit and cannot adopt G2 published during permit", async () => {
+  await withSource(async (sourcePath) => {
+    const state = daemon();
+    const volumes = manager(state);
+    await volumes.prepare(prepareInput(sourcePath));
+    let checked = false;
+    await volumes.removeForJob(jobId, undefined, async () => {
+      if (checked) return;
+      checked = true;
+      await volumes.prepare(prepareInput(sourcePath, nextGeneration));
+    });
+    assert.deepEqual(await volumes.listManaged(), [{ volumeName: nameFor(nextGeneration), jobId, generation: nextGeneration }]);
+    assert.equal(state.calls.some((args) => args[1] === "rm" && args[2] === nameFor(nextGeneration)), false);
+  });
+});
+
+test("cleanup loses permit after snapshot or during busy retry: no subsequent destructive call", async () => {
+  for (const loseOnRetry of [false, true]) {
+    const state = daemon(volumeInspection());
+    const lost = new Error("lifecycle backend lost");
+    let valid = true;
+    state.before = (args) => {
+      if (!loseOnRetry && args[0] === "container") valid = false;
+      if (loseOnRetry && args[1] === "rm") throw new Error("busy");
+    };
+    const volumes = manager(state, async () => { valid = false; });
+    await assert.rejects(volumes.removeForJob(jobId, generation, async () => {
+      if (!valid) throw lost;
+    }), (error: unknown) => error === lost);
+    assert.equal(state.calls.filter((args) => args[1] === "rm").length, loseOnRetry ? 1 : 0);
+    assert.ok(state.volume);
+  }
 });
 
 for (const command of ["ls", "inspect"] as const) {

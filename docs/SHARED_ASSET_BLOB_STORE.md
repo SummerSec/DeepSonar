@@ -131,7 +131,7 @@ fake 模式不使用也不预拉该 helper。官方 helper 由 Release 与 sched
 
 Dispatcher、Reaper、reconcile 与 managed resource cleanup 均走同一 fence。cleanup 返回 false 表示拒绝旧归属/活动归属，按 skipped 计数；回调完成且锁释放成功才表示 true。连接、锁、SQL、daemon、ownership/generation 和删除失败继续抛出，精确 daemon not-found 才是幂等不存在。扫描器传入所观察的 generation，不能删除后来同名重建的卷。
 
-[Docker manager](../packages/runtime-sandbox/src/shared-assets-volume.ts)严格验证 managed/Job/generation 标签，生成值独立于 Job id；每次准备/删除关键边界重新 inspect。helper 只按核验后的不可变容器 ID 清理，volume 使用非 force 删除，忙碌不能强拆。准备中隐式出现的无标签同名卷拒绝接纳，不猜测所有权。Kubernetes 不在本轮扩展 generation 语义，独立 POC 也不作为跨进程 PostgreSQL fencing 的证明。
+[Docker manager](../packages/runtime-sandbox/src/shared-assets-volume.ts)严格验证 managed/Job/generation 标签。独立审查发现仅用稳定 Job 名称与事后 PID 校验不足：prepare 在 staging 中失锁后可能采纳并删除后继 generation。当前修复分支改为 generation 独占实际 volume/helper 名称，prepare 只创建/清理本 generation；cleanup 快照严格资源后再验 permit，禁止失锁后重新列举采纳新资源。关键破坏性操作/重试前重验生命周期许可，helper 仍只按不可变容器 ID 清理，volume 非 force 删除。隐式无标签资源拒绝接纳。该 P1 修正尚待最终 SHA 回归验收；Kubernetes 不在本轮扩展 generation 语义，独立 POC 也不作为跨进程 PostgreSQL fencing 的证明。
 
 回归入口为 `pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:runtime-sandbox` 与 `pnpm ci:integration:shared-assets-volume`；现有 Actions 实际调用这些脚本。新源码覆盖两种 old-finally/new-prepare 交错、持锁 mount handoff、独立物理 backend 与业务池隔离、stale/cancelled/latest fence、strict Docker identity/generation 和 retry proof。本轮最终 SHA 的 PG/Docker/完整 Actions 尚待执行验收，不从替身或源码断言推导运行成功。
 

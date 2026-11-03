@@ -38,6 +38,7 @@ import {
 } from "./shared-asset-lifecycle.js";
 import { isOfficialRuntimeImageKey, RuntimeImageNotReadyError } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
+import { pendingCompletionRecoveryClaimTarget } from "./domains/job-attempt/recovery.js";
 import {
   DeviceNotAuthorizedError,
   DeviceNotAvailableError,
@@ -583,9 +584,18 @@ async function graphEligibilityReasonFromDb(
     );
   }
 
+  // Read the persisted directed grant on both the selection and locked claim pass.
+  // Only its exact target can be excluded; every other graph and quota gate remains.
+  const recoveryTarget = await pendingCompletionRecoveryClaimTarget(tx, job);
+  const [otherRole] = recoveryTarget ? await tx`SELECT 1 FROM jobs
+    WHERE canvas_id = ${canvasId} AND id <> ${id} AND id <> ${recoveryTarget}
+      AND type NOT IN ('hub_reason','verify_finding','report')
+      AND status = ANY(${activeStatuses}) LIMIT 1` : [];
   const batchedState = batch?.systemStates.get(id);
   if (batchedState) {
-    return graphEligibilityReason({ type, payload_json: job.payload_json }, batchedState);
+    return graphEligibilityReason({ type, payload_json: job.payload_json }, {
+      ...batchedState, activeRole: recoveryTarget ? Boolean(otherRole) : batchedState.activeRole,
+    });
   }
 
   const [activeHub, activeWaitingHuman, activeRole, root, oldestPendingHub] = await Promise.all([
@@ -606,7 +616,7 @@ async function graphEligibilityReasonFromDb(
       activeHub: activeHub.length > 0,
       activeWaitingHuman: activeWaitingHuman.length > 0,
       pendingHubOlder: Boolean(oldestPendingHub[0]?.id && oldestPendingHub[0].id !== id),
-      activeRole: activeRole.length > 0,
+      activeRole: recoveryTarget ? Boolean(otherRole) : activeRole.length > 0,
       rootStatus: (root[0]?.status as string | null) ?? null,
     },
   );
@@ -842,7 +852,8 @@ export async function retryProvisioningJob(
     // Error text/missing handle cannot authorize replay. Only no effect or an
     // explicit host never_started settlement is admissible under this owner lock.
     const [blocked] = await tx`SELECT id FROM job_attempt_effects WHERE attempt_id = ${current.id}
-      AND NOT (effect_kind = 'provision' AND status = 'settled' AND COALESCE(settlement_json->>'result', '') = 'never_started') LIMIT 1`;
+      AND NOT (effect_kind = 'provision' AND status = 'settled'
+         AND COALESCE(settlement_json @> '{"result":"never_started","external_effect":false}'::jsonb, false)) LIMIT 1`;
     if (blocked) return false;
     const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
       SELECT status, outcome_json, state_json
@@ -1027,6 +1038,7 @@ async function runJob(jobId: string) {
       sharedAssetsVolumeName = await sharedAssetsVolumeManager.prepare({
         jobId,
         generation: sharedAssetsGeneration,
+        assertCurrent: sharedAssetsPreparation.assertCurrent,
         files,
         catalog: buildJobSharedAssetCatalog({
           revision: snapshot.shared_assets_revision,
@@ -1456,11 +1468,11 @@ async function runJob(jobId: string) {
     }
     // Asset-bearing retries mint credentials only after this lock; also skip
     // Job-wide credentials/device cleanup when the latest owner already changed.
-    await cleanupSharedAssetsForJob({ jobId, attemptId }, async () => {
+    await cleanupSharedAssetsForJob({ jobId, attemptId }, async (assertCurrent) => {
       if (deviceLease) await releaseDeviceLeasesForJobQuietly(jobId, "attempt_terminal").catch(() => {});
       await revokeJobTokens(jobId, "dispatcher_cleanup").catch(() => {});
       if (platformCapability) await revokeJobCapabilityTokens(jobId).catch(() => {});
-      if (sharedAssetsVolumeName) await sharedAssetsVolumeManager.removeForJob(jobId, sharedAssetsGeneration);
+      if (sharedAssetsVolumeName) await sharedAssetsVolumeManager.removeForJob(jobId, sharedAssetsGeneration, assertCurrent);
     }).catch((e) => {
       inc("deepsonar_shared_assets_cleanup_failed_total");
       console.error(`[dispatcher] 共享资产卷/生命周期回收失败 ${jobId}:`, e);

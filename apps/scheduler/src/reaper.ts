@@ -80,7 +80,7 @@ export async function reapOnce(recoveryCursor: string | null = null): Promise<{
         console.error(`[reaper] 沙箱回收失败 ${sandboxId}:`, e);
       });
     }
-    await cleanupSharedAssetsForJob({ jobId }, () => sharedAssetsVolumeManager.removeForJob(jobId)).catch((e) => {
+    await cleanupSharedAssetsForJob({ jobId }, (assertCurrent) => sharedAssetsVolumeManager.removeForJob(jobId, undefined, assertCurrent)).catch((e) => {
       inc("deepsonar_shared_assets_cleanup_failed_total");
       console.error(`[reaper] 共享资产卷回收失败 ${jobId}:`, e);
     });

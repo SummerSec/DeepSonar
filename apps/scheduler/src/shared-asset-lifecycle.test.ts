@@ -306,6 +306,22 @@ test("connection/state SQL failures fail closed without invoking the cleanup cal
   assert.equal(db.owners.size, 0);
 });
 
+for (const change of ["backend", "attempt"] as const) {
+  test(`cleanup callback permit rechecks ${change} after resource snapshot before destruction`, async () => {
+    const db = sessions(terminal());
+    let removed = false;
+    await assert.rejects(cleanupSharedAssetsForJob({ jobId, attemptId: oldAttempt }, async (assertCurrent) => {
+      if (change === "backend") {
+        db.before = (query) => query.kind === "state" ? [{ backend_pid: query.pid + 1, ...terminal() }] : undefined;
+      } else db.states.set(jobId, preparing());
+      await assertCurrent();
+      removed = true;
+    }, db.connect), conflict(change === "backend" ? "lock_lost" : "stale_attempt"));
+    assert.equal(removed, false);
+    assert.equal(db.owners.size, 0);
+  });
+}
+
 test("successful remove with unlock failure is still a failure, and close releases the lock", async () => {
   const db = sessions(terminal());
   const error = new Error("unlock connection lost");
@@ -416,6 +432,6 @@ test("Dispatcher contract: private preparation permit survives runner handoff an
   assert.ok(run.indexOf('transitionJob(jobId, "running"', provision) < release);
   const cleanup = run.indexOf("await cleanupSharedAssetsForJob({ jobId, attemptId }");
   assert.ok(cleanup > release);
-  assert.match(run.slice(cleanup), /removeForJob\(jobId, sharedAssetsGeneration\)/);
+  assert.match(run.slice(cleanup), /removeForJob\(jobId, sharedAssetsGeneration, assertCurrent\)/);
   assert.ok(run.indexOf("await runner.destroy(h)") < run.indexOf("await sharedAssetsPreparation.release()"));
 });

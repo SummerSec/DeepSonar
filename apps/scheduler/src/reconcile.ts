@@ -51,7 +51,7 @@ export async function reconcileOnBoot(): Promise<void> {
   for (const volume of await sharedAssetsVolumeManager.listManaged()) {
     if (activeJobIds.has(volume.jobId)) continue;
     await cleanupSharedAssetsForJob({ jobId: volume.jobId },
-      () => sharedAssetsVolumeManager.removeForJob(volume.jobId, volume.generation))
+      (assertCurrent) => sharedAssetsVolumeManager.removeForJob(volume.jobId, volume.generation, assertCurrent))
       .then((removed) => { if (removed) console.warn(`[reconcile] 回收孤儿共享资产卷 ${volume.volumeName}`); })
       .catch((e) => {
         inc("deepsonar_shared_assets_cleanup_failed_total");
@@ -74,7 +74,7 @@ export async function reconcileOnBoot(): Promise<void> {
   }
   for (const job of provisionRecovery.requeued) {
     const jobId = String(job.id);
-    await cleanupSharedAssetsForJob({ jobId }, () => sharedAssetsVolumeManager.removeForJob(jobId)).catch(() => {
+    await cleanupSharedAssetsForJob({ jobId }, (assertCurrent) => sharedAssetsVolumeManager.removeForJob(jobId, undefined, assertCurrent)).catch(() => {
       inc("deepsonar_shared_assets_cleanup_failed_total");
     });
   }
@@ -85,7 +85,7 @@ export async function reconcileOnBoot(): Promise<void> {
     const jobId = String(job.id);
     const cid = (job.sandbox_id as string | null) ?? containerByJob.get(jobId);
     if (cid) await runner.destroyResource({ resourceId: cid, jobId, attemptId: "" }).catch(() => {});
-    await cleanupSharedAssetsForJob({ jobId }, () => sharedAssetsVolumeManager.removeForJob(jobId)).catch(() => {
+    await cleanupSharedAssetsForJob({ jobId }, (assertCurrent) => sharedAssetsVolumeManager.removeForJob(jobId, undefined, assertCurrent)).catch(() => {
       inc("deepsonar_shared_assets_cleanup_failed_total");
     });
   }
@@ -110,7 +110,7 @@ export async function reconcileOnBoot(): Promise<void> {
       await runner.destroyResource({ resourceId: cid, jobId, attemptId: "" })
         .catch((e) => console.error(`[reconcile] 容器回收失败 ${cid}:`, e instanceof Error ? e.message : e));
     }
-    await cleanupSharedAssetsForJob({ jobId }, () => sharedAssetsVolumeManager.removeForJob(jobId)).catch(() => {
+    await cleanupSharedAssetsForJob({ jobId }, (assertCurrent) => sharedAssetsVolumeManager.removeForJob(jobId, undefined, assertCurrent)).catch(() => {
       inc("deepsonar_shared_assets_cleanup_failed_total");
     });
   }
