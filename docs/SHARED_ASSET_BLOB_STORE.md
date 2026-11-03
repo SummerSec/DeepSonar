@@ -1,6 +1,7 @@
 # Shared Asset BlobStore
 
-> **Status: as-built (Issues #41, #158).** Index: [`README.md`](README.md).
+> 状态：**as-built（#41/#158）与 #871 当前修复边界**。最终修复 SHA 的 Actions 尚待验收；Index: [`README.md`](README.md)。
+> 同步日期：2026-11-03
 
 Shared assets keep **metadata in PostgreSQL** and **bytes in a pluggable BlobStore**.
 
@@ -123,6 +124,16 @@ local-docker 卷写入器的运行时默认回退仍是
 运行时随后以 `--pull=never` 创建写入器，Job 不能触发隐式 registry 拉取。
 fake 模式不使用也不预拉该 helper。官方 helper 由 Release 与 scheduler/web 一并发布，
 仓库不内置容器 tar，也不手写尚未存在的官方 digest。
+
+## 跨 Attempt 共享卷生命周期（#871）
+
+[Scheduler 生命周期锁](../apps/scheduler/src/shared-asset-lifecycle.ts)以独立 PostgreSQL session 串行同 Job 的 prepare 与 cleanup；获得锁后重新读取最新/active Attempt、phase、取消和 Canvas 归属。prepare 只接纳最新准备阶段，锁保持到 runner 确认只读挂载，并在 Job → Attempt 事务完成 effect settlement、sandbox 绑定和 running CAS。失败 handoff 先销毁本次 handle，再释放锁；新 Attempt 准备期间旧 finally 或扫描器不得删除资源。
+
+Dispatcher、Reaper、reconcile 与 managed resource cleanup 均走同一 fence。cleanup 返回 false 表示拒绝旧归属/活动归属，按 skipped 计数；回调完成且锁释放成功才表示 true。连接、锁、SQL、daemon、ownership/generation 和删除失败继续抛出，精确 daemon not-found 才是幂等不存在。扫描器传入所观察的 generation，不能删除后来同名重建的卷。
+
+[Docker manager](../packages/runtime-sandbox/src/shared-assets-volume.ts)严格验证 managed/Job/generation 标签，生成值独立于 Job id；每次准备/删除关键边界重新 inspect。helper 只按核验后的不可变容器 ID 清理，volume 使用非 force 删除，忙碌不能强拆。准备中隐式出现的无标签同名卷拒绝接纳，不猜测所有权。Kubernetes 不在本轮扩展 generation 语义，独立 POC 也不作为跨进程 PostgreSQL fencing 的证明。
+
+回归入口为 `pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:runtime-sandbox` 与 `pnpm ci:integration:shared-assets-volume`；现有 Actions 实际调用这些脚本。新源码覆盖两种 old-finally/new-prepare 交错、持锁 mount handoff、独立物理 backend 与业务池隔离、stale/cancelled/latest fence、strict Docker identity/generation 和 retry proof。本轮最终 SHA 的 PG/Docker/完整 Actions 尚待执行验收，不从替身或源码断言推导运行成功。
 
 ## Security notes
 

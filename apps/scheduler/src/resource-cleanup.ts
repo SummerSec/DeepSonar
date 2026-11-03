@@ -6,6 +6,7 @@ import {
 import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
+import { cleanupSharedAssetsForJob } from "./shared-asset-lifecycle.js";
 
 const ACTIVE_JOB_STATUSES = ["claimed", "provisioning", "running", "waiting_human"] as const;
 
@@ -13,20 +14,23 @@ export interface ManagedVolume {
   volumeName: string;
   jobId: string;
   createdAt?: string;
+  generation?: string;
 }
 
 export interface DesiredStateCleanupDependencies {
   loadActiveResources: () => Promise<Array<{ jobId: string; attemptId: string | null }>>;
   listContainers: () => Promise<DeepSonarContainer[]>;
-  removeContainer: (containerId: string) => Promise<void>;
+  removeContainer: (containerId: string, jobId: string, attemptId: string) => Promise<boolean | void>;
   listVolumes: () => Promise<ManagedVolume[]>;
-  removeVolumeForJob: (jobId: string) => Promise<void>;
+  removeVolumeForJob: (jobId: string, expectedGeneration?: string) => Promise<boolean | void>;
 }
 
 export interface DesiredStateCleanupResult {
   skipped: boolean;
   removedContainers: number;
   removedVolumes: number;
+  skippedContainers: number;
+  skippedVolumes: number;
   residualContainers: number;
   residualVolumes: number;
   failures: number;
@@ -55,9 +59,13 @@ function defaultDependencies(volumeManager: SharedAssetsVolumeManager): DesiredS
       attemptId: resource.attemptId,
       state: resource.state ?? "",
     })),
-    removeContainer: (containerId) => runner.destroyResource({ resourceId: containerId, jobId: "", attemptId: "" }),
+    // Initial scans are only hints. Hold the same Job lifecycle boundary as
+    // prepare/mount and re-read active ownership before destructive cleanup.
+    removeContainer: (containerId, jobId, attemptId) => cleanupSharedAssetsForJob({ jobId },
+      () => runner.destroyResource({ resourceId: containerId, jobId, attemptId })),
     listVolumes: () => volumeManager.listManaged(),
-    removeVolumeForJob: (jobId) => volumeManager.removeForJob(jobId),
+    removeVolumeForJob: (jobId, generation) => cleanupSharedAssetsForJob({ jobId },
+      () => volumeManager.removeForJob(jobId, generation)),
   };
 }
 
@@ -76,6 +84,8 @@ export async function cleanupManagedResourcesOnce(
       skipped: true,
       removedContainers: 0,
       removedVolumes: 0,
+      skippedContainers: 0,
+      skippedVolumes: 0,
       residualContainers: 0,
       residualVolumes: 0,
       failures: 0,
@@ -103,11 +113,14 @@ export async function cleanupManagedResourcesOnce(
 
     let removedContainers = 0;
     let removedVolumes = 0;
+    let skippedContainers = 0;
+    let skippedVolumes = 0;
     let containerFailures = 0;
     let volumeFailures = 0;
     for (const container of orphanContainers) {
       try {
-        await dependencies.removeContainer(container.containerId);
+        const removed = await dependencies.removeContainer(container.containerId, container.jobId, container.attemptId);
+        if (removed === false) { skippedContainers += 1; continue; }
         removedContainers += 1;
       } catch (error) {
         containerFailures += 1;
@@ -121,7 +134,8 @@ export async function cleanupManagedResourcesOnce(
     }
     for (const volume of orphanVolumes) {
       try {
-        await dependencies.removeVolumeForJob(volume.jobId);
+        const removed = await dependencies.removeVolumeForJob(volume.jobId, volume.generation);
+        if (removed === false) { skippedVolumes += 1; continue; }
         removedVolumes += 1;
       } catch (error) {
         volumeFailures += 1;
@@ -143,6 +157,8 @@ export async function cleanupManagedResourcesOnce(
       skipped: false,
       removedContainers,
       removedVolumes,
+      skippedContainers,
+      skippedVolumes,
       residualContainers: containerFailures,
       residualVolumes: volumeFailures,
       failures,

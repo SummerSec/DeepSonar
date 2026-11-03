@@ -1,7 +1,7 @@
 # mark_job_done 持久修正回执（#776 B）
 
-> 状态：实现中；以独立 PR 的测试和评审结果为验收依据。真实模型理解质量未评测。
-> 同步日期：2026-10-31
+> 状态：#776 B/C 为 as-built；#874 受治理恢复 v1 在当前修复分支实现，以最终 SHA 的 GitHub Actions 和评审为工程验收依据。真实模型理解质量未评测。
+> 同步日期：2026-11-03
 
 B 切片只处理 `mark_job_done`，复用 Control HTTP、语义 `events`、Job/Attempt 与既有效果边界。没有第二执行通道，没有新表或 schema bump，不自动重跑 Job。A 的冻结矩阵见 #776 对应 A PR；C0/C1 的限定扩展见下文，原 issue 收口范围见 [验收矩阵](REPAIR_FEEDBACK_ACCEPTANCE.md)。
 
@@ -73,6 +73,38 @@ Gateway 与拒绝/接受回执使用同一 Job 锁。一次修正请求占用剩
 预检通过并不锁定状态；最终 ingestion 仍运行相同完成门，期间新增的活跃工作等会使提交失败并回滚。C1 同时替换最终拒绝中原来拼接的自由标题/issue 文本，属于反馈脱敏，不改变收敛条件、Verify 技术确认、权限或未知效果规则。该反馈不编造 `accepted_effects`，不新增 Hub 持久 revision/修正预算或状态，不扩展为通用完成门；本 issue 限定 C 的验收范围见验收矩阵。
 
 `completion-feedback.integration.test.ts` 使用真实 Fastify 注入、Job token、隔离 PostgreSQL、原预检与最终 `ingestEvent`。门证据由数据库夹具构造，不代表真实模型产物或独立技术验证质量。测试覆盖各缺失类别、超过 1000 项的截断、原 open-round 查询的观测上限、跨项目/Job/引用拒绝，以及预检后状态变化导致最终回滚。满足原门后真实事件可落地、相同事件重放不重复，root 进入 `analysis_complete` 而 Hub Job 保持 `running`；不将此称为 Job 终态结算。单元测试验证固定大小、确定顺序无关投影及未知 blocker 脱敏，分别接入现有 `ci:unit:capability-pack` 和 `ci:integration:platform-api`。
+
+## Completion Recovery v1
+
+#874 的范围是持久负回执 → 宿主恢复事实 → 去重 Hub → 受治理对账/停止。它不增加通用重试引擎、Job 状态、schema 或外部执行旁路；决策与需求见 [ADR-0015](architecture/adr/0015-governed-completion-recovery.md)及 FR-CTRL-010。
+
+`COMPLETION_EFFECT_UNKNOWN` / `REPAIR_USAGE_UNKNOWN` 在原 Job 锁事务保留负回执，同时追加恢复事实；原 key 重放仍返回原拒绝，不改成成功，也不重复消耗修正额度。恢复根身份不来自客户端 key，绑定原 project/Canvas/Job/Attempt 和冻结快照；宿主 state 只写 `events` / `event_dedup`，Canvas recovery 节点是可重建、只读、脱敏投影。Job-only 回执事务不更新会隐式锁 Canvas 的节点；投影由 Canvas-first 的恢复泵/application 刷新。
+
+恢复 Hub 必须有 Scheduler 冻结的 `trigger.recovery_refs`。普通 Hub、模型自报 ID、其他 Canvas/Attempt/快照或只读节点 metadata 不取得此权限。模型只提交如下严格分支；完整字段规则的机器权威是[共享 schema](../packages/shared-types/src/completion-recovery.ts)：
+
+```ts
+recovery: {
+  recovery_ref: UUID;
+  target_job_id: UUID;
+  target_attempt_id: UUID;
+  expected_recovery_revision: number;
+  expected_evidence_sha256: string;
+  action: "reconcile_effects" | "stop";
+  reason: string; // 受限原因，不是证据
+}
+```
+
+它与 complete、intents、payload_file 及 plan_basis 互斥，shared schema、Control handler、event transaction 三层重验引用、当前 project/Canvas/Job/Attempt/快照、revision/证据摘要 CAS、token/lease、operation allowlist/grant 和既有预算。HTTP 200 仅为 `persisted_deferred`，不是 Job succeeded、对账已执行或模型已理解。
+
+`reconcile_effects` 只读取精确 effect 的已有宿主证据并做纯数据库 settlement。严格已知的 usage 必须与原 effect/Attempt/Job 归属一致；缺失、not_reported、自报零、模糊匹配或无法证明模型请求已闭合均不清 unknown。`agent_run/interrupted`、有/无 sandbox、未知效果暂时归零也不能证明执行/资源已停止。未知或未证明效果不能自动 replay，模型 reason 不能作为证明。
+
+Reaper 沿用原 timer/in-flight guard，每 tick 做有界 keyset 扫描，按恢复根 round-robin 推进，失败不丢请求。首次原 deadline 冻结，wake 身份与 Hub 插入同事务；失败 Hub 计入有界额度，换 key、证据变化或 Scheduler 重启不能重置 lifetime/repair/token 预算。证据改变可产生新的 NO_PROGRESS 身份，但不延长原 deadline。唤醒上限与扫描参数只在[恢复实现](../apps/scheduler/src/domains/job-attempt/recovery.ts)维护，不复制可漂移默认数字。
+
+活动 Hub、真实 waiting_human/Verify 等待、手工 pause 和已有 auto-stop 门必须保留。无精确证据的恢复明确留 blocked/unknown；达到原 deadline/额度或合法 `stop` 请求时，以 Canvas → Job → Attempt 事务调用既有 lifecycle，收口原 Attempt/effects 并原子撤销模型/Control token；runner/卷清理随后在事务外执行并重新 fencing。失败的终态 CAS 不吞请求；停止不表示未知外部效果已消失。
+
+仅仍活动的原 Attempt 可以在允许对账后用新 revision/key 重提完成，继续过原 Completion、Verify、Plan、人工及权限门。旧接受/拒绝回执不可改写，不复活 failed/cancelled/timeout/orphan，不自动 succeeded。已退出会话或新 Attempt 的完整继续执行仍是 v1 明确缺口，不能用“零 unknown”或回执查询伪称恢复运行器。
+
+工程入口为 `pnpm ci:unit:completion-recovery`、`pnpm ci:integration:completion-recovery` 及既有 `pnpm ci:integration:platform-api`。实现、回归源码和最终 SHA 实际 Actions 结果分别登记；本轮未在本地运行测试/build/typecheck，真实模型恢复率、成本收益和生产执行未测。
 
 ## 验收边界
 

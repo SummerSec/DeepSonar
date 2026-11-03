@@ -103,9 +103,9 @@ export type EffectSettlement = {
 };
 
 /**
- * Observed provision failure: Scheduler never bound a sandbox_id and the
- * provider returned a failure (cleanup already ran). This is not an unknown
- * external-effect window. Crash, timeout, cancel, and restart still use unknown.
+ * Explicit host no-start proof, established before an opaque provision call.
+ * Missing sandbox_id, a provider exception or attempted cleanup is not proof.
+ * Once the runner call may have begun, failures/crashes remain unknown.
  */
 export function provisionNeverStartedSettlement(error?: unknown): EffectSettlement {
   return {

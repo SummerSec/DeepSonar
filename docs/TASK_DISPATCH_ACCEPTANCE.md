@@ -1,9 +1,15 @@
 # 任务下发验收矩阵（#767）
 
-> 状态：本轮约定工程已随 #831 在 fdb55a01 主线 Actions 验收；历史分范围证据、暂缓质量与后续发布验收分别记录。
-> 同步日期：2026-11-01
+> 状态：历史 #831 工程验收与当前 #875 修复候选分开；Draft 快检、最终 SHA 全量验收、暂缓质量与正式发布分别记录。
+> 同步日期：2026-11-03
 
 原 issue 要求按场景明确目标、范围、授权、材料与完成条件，并在创建/派发前发现不满足的前置条件。后续 #794、#796、#797、#798 分别补充目标相关研究候选、报告防误报、来源隔离判据评审及非 Finding 交付。下表不把源码或测试入口存在等同于本次已运行通过。
+
+## #875 当前修复候选（2026-11-03）
+
+[Draft PR #875](https://github.com/SummerSec/DeepSonar/pull/875) 首次提交 head 为 `914df7c70c184082bd32eb677568807c484c6aa8`。该 SHA 的[核心 CI 41654170176](https://github.com/SummerSec/DeepSonar/actions/runs/41654170176)实际通过 docs-freshness、workspace typecheck/build 与映射的无服务单测；`gate`、PostgreSQL/镜像重型检查和 `ci-summary` 在 Draft 路径跳过，因此这里只登记快检成功，不能作为合并或发布验收。[Reverse 路由运行](https://github.com/SummerSec/DeepSonar/actions/runs/41654170138)同样不表示原生镜像矩阵已运行。
+
+当前修复分支继续整合 #871/#873/#874。独立静态审查发现的 context PG 锁序证明不足与 barrier 失败清理已交专门回归修正；恢复 Hub 的实际 claim、手工 execution pause、共享 prepare 失锁后不得删除后继 generation 等路径仍在补齐。未完成项不以源码存在或 Draft 绿灯冒充已验证。完整候选转 Ready 后按最终 SHA 重新核对全部适用 Actions；本地仅执行静态阅读、语法及 `git diff --check`，不运行 tests/build/typecheck/PG/Docker，不执行生产部署。
 
 ## #831 engineering acceptance (2026-11-01)
 

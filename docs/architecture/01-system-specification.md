@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-10-31
+> 同步日期：2026-11-03
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -131,9 +131,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：每次成功领取（claim）必须建立 Scheduler 拥有的 Attempt；Attempt 携带快照身份、沙箱身份、取消标记和效果账本，不得把 prompt 或 Provider 原文写入 Attempt 账本。
 - **决策来源**：Attempt 是一次执行的审计边界，不能将模型原文混入生命周期账本。
-- **实现状态**：as-built；claim 事务创建 Attempt 并保存受限字段。
+- **实现状态**：claim 事务创建 Attempt 并保存受限字段；#871 修复分支先做有界候选扫描，随后按排序 Canvas → project → Job → Attempt 锁序重验 scope/暂停/配额与状态；最终 SHA Actions 尚待验收。
 - **代码入口**：[Attempt 应用](../../apps/scheduler/src/domains/job-attempt/)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[Attempt model](../../apps/scheduler/src/domains/job-attempt/model.ts)。
-- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:scheduler-characterization`；人工抽查 Attempt 字段白名单。
+- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:integration:dispatch-limits`；真实 PG 的 busy Canvas 不占其 Job、独立 Canvas 仍可领取，Attempt 字段仍受原白名单约束。
 
 ### FR-JOB-003 finalizeJob 派生系统 Job
 
@@ -185,11 +185,11 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-006 provision never_started 结算
 
-- **规范要求**：若 provision 失败且从未绑定 `sandbox_id`、也未观察到迟到沙箱，必须记为 `settled` 且 outcome 为 `never_started`；一旦观察到迟到 sandbox handle、late destroy 失败，或沙箱已启动后的中断/timeout/cancel/orphan，仍必须按未知外部效果处理。
-- **决策来源**：只有明确证明没有外部后果时才能安全结束；迟到 handle 或已启动迹象都必须保留 unknown 语义。
-- **实现状态**：as-built；provision failure 分支区分 `never_started` 与 unknown/late handle。
-- **代码入口**：[Attempt model](../../apps/scheduler/src/domains/job-attempt/model.ts)、[Attempt 应用](../../apps/scheduler/src/domains/job-attempt/application.ts)、[恢复测试](../../apps/scheduler/src/recovery-issue186.integration.test.ts)。
-- **验证证据**：`pnpm ci:unit:recovery`、`pnpm ci:integration:recovery`；分别覆盖无 sandbox、迟到 sandbox 和运行中断场景。
+- **规范要求**：provision 只有在明确宿主证据证明外部创建未开始时，才可显式记为 `settled` 且 outcome 为 `never_started`。`sandbox_id` 缺失/存在、没有日志或未看到迟到句柄均不能单独证明未开始/已停止；无法证明的 pending provision 在终态收口后仍为 unknown，已显式结算的真实 never_started 不改写。
+- **决策来源**：只有明确证明没有外部后果才能安全结束；#874 按 [ADR-0015](adr/0015-governed-completion-recovery.md)收窄历史的无 sandbox 推断，保留迟到 handle、timeout/cancel/orphan 的未知语义。
+- **实现状态**：当前修复分支去除终态 helper 的无 sandbox 自动结算；最终 SHA 的 Actions 尚待验收。
+- **代码入口**：[Attempt model](../../apps/scheduler/src/domains/job-attempt/model.ts)、[Attempt 应用](../../apps/scheduler/src/domains/job-attempt/application.ts)、[Attempt PostgreSQL 回归](../../apps/scheduler/src/domains/job-attempt/application.integration.test.ts)。
+- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`；分别覆盖有/无 sandbox 仍 pending 的 provision、显式 prior never_started、迟到 handle 与运行中断。
 
 ### FR-JOB-007 reconcileOnBoot 启动恢复
 
@@ -294,6 +294,14 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **实现状态**：as-built（分类与 API 失败路径）；完整 Receipt/Settlement 目标尚未全部落地。
 - **代码入口**：[trusted kernel 文档](../AI_NATIVE_TRUSTED_KERNEL.md)、[Control input](../../apps/scheduler/src/control-input.ts)、[Job recovery](../../apps/scheduler/src/domains/job-lifecycle/application.ts)。
 - **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:recovery`、`pnpm ci:smoke:control-api`。
+
+### FR-CTRL-010 完成未知效果的受治理恢复
+
+- **规范要求**：`COMPLETION_EFFECT_UNKNOWN` / `REPAIR_USAGE_UNKNOWN` 必须保留原负回执，并在同一 Job 事务持久化宿主恢复事实；恢复 Hub 只能处理 Scheduler 明确授予的 project/Canvas/Job/Attempt/快照引用，以 revision 与证据摘要 CAS 提交 `reconcile_effects` 或 `stop`。恢复不得与 complete、intents、payload_file 或 plan_basis 混合。只能用精确 effect 的既有宿主证据纯数据库对账，禁止重放未知外部动作、复活终态或自动 succeeded；原活动 Attempt 修正后仍须通过原 Completion/Verify/Plan 门。
+- **决策来源**：#874 将“终态不能提交”收敛为持久可观察、去重且有界的恢复过程，而不扩大模型的权限与副作用边界；见 [ADR-0015](adr/0015-governed-completion-recovery.md)。
+- **实现状态**：当前修复分支实现 v1，最终 SHA 的 Actions 尚待验收；已退出会话或新 Attempt 的完整继续执行不属于 v1，不据回执恢复原运行器。
+- **代码入口**：[恢复 schema](../../packages/shared-types/src/completion-recovery.ts)、[恢复事实与泵](../../apps/scheduler/src/domains/job-attempt/recovery.ts)、[回执事务](../../apps/scheduler/src/domains/event-ingestion/completion-receipt.ts)、[Hub application](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Reaper](../../apps/scheduler/src/reaper.ts)。
+- **验证证据**：`pnpm ci:unit:completion-recovery`、`pnpm ci:integration:completion-recovery`、`pnpm ci:integration:platform-api`；核对原 key/revision 重放、跨项目/Attempt/快照拒绝、无权恢复引用、并发 CAS、重启去重、未知/缺失 usage、pause/human 门及 deadline/额度停止。入口并非已执行结果，详细范围见[完成回执专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。
 
 ### FR-CAP-007 Capability Pack 机器契约
 
@@ -768,9 +776,9 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：Job 必须按 project/Finding scope 解析当前 asset versions，计算 selection revision，记录 `job_shared_asset_versions` 并以只读路径挂载；进行中 Job 不得因后续资产版本变化而漂移。
 - **决策来源**：执行需要稳定材料，资产更新应影响下一次 Job 而不是当前快照。
-- **实现状态**：as-built；mount path 固定在 `/workspace/.deepsonar/shared/` 下。
-- **代码入口**：[Asset selection](../../apps/scheduler/src/domains/shared-assets/application.ts)、[runtime sandbox volume](../../packages/runtime-sandbox/src/shared-assets-volume.ts)、[schema](../../database/schema.sql)。
-- **验证证据**：`pnpm ci:unit:shared-assets`、`pnpm ci:integration:shared-assets-volume`、`pnpm ci:unit:runtime-sandbox`。
+- **实现状态**：mount path 固定在 `/workspace/.deepsonar/shared/` 下；#871 修复分支用独立 PG session 持有同 Job 的准备/清理锁直至只读 mount 与绑定提交，删除时重验最新 Attempt 与 Docker generation。当前最终 SHA Actions 尚待验收。
+- **代码入口**：[Asset selection](../../apps/scheduler/src/domains/shared-assets/application.ts)、[runtime sandbox volume](../../packages/runtime-sandbox/src/shared-assets-volume.ts)、[生命周期锁](../../apps/scheduler/src/shared-asset-lifecycle.ts)、[资产专题](../SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。
+- **验证证据**：`pnpm ci:unit:shared-assets`、`pnpm ci:integration:shared-assets-volume`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`；覆盖严格 ownership/generation、non-force、两种 old-finally/new-prepare 交错及 stale owner 拒绝。
 
 ### FR-XFER-001 `.deepsonarpack` 导出格式和校验
 
@@ -1214,7 +1222,7 @@ Agent 使用当前 Job token 调用 `validate_composition`、`graph_query` 或 `
 
 ### 6.3 超时、崩溃与未知效果
 
-Job Attempt 先写 effect intent/账本，外部 provision/执行可能在 `effect_pending` 或 `unknown` 窗口崩溃（FR-JOB-004、FR-JOB-005）。只有无 sandbox 且无迟到效果的 provision 失败可结算为 `never_started`（FR-JOB-006）；启动 reconcile 仅在 preparing 且无效果时回到 pending，其它情况进入 orphan/对账（FR-JOB-007）。Reaper 对 timeout、stall、lease expiry、waiting_human timeout 走有界恢复（FR-JOB-008、NFR-REL-002），数据库终态由事务条件原子判定，外部 cleanup 在事务外按 effect identity 幂等补偿；未知效果不得自动 replay，运维投影不得推荐 `retry_same_session`（NFR-REL-003、NFR-REL-008）。可核对入口为 `pnpm ci:unit:recovery`、`pnpm ci:integration:recovery`、`pnpm ci:smoke:opensandbox-reconcile`、`pnpm ci:smoke:opensandbox-reaper`；真实 OpenSandbox、多副本和 Broker 验收仍需人工环境证据。
+Job Attempt 先写 effect intent/账本，外部 provision/执行可能在 `effect_pending` 或 `unknown` 窗口崩溃（FR-JOB-004、FR-JOB-005）。只有明确宿主证据证明外部创建未开始的 provision 才可结算为 `never_started`，缺少 sandbox/迟到句柄不能作为证明（FR-JOB-006）；启动 reconcile 仅在 preparing 且无效果时回到 pending，其它情况进入 orphan/对账（FR-JOB-007）。Reaper 对 timeout、stall、lease expiry、waiting_human timeout 走有界恢复（FR-JOB-008、NFR-REL-002），数据库终态由事务条件原子判定，外部 cleanup 在事务外按 effect identity 幂等补偿；未知效果不得自动 replay，运维投影不得推荐 `retry_same_session`（NFR-REL-003、NFR-REL-008）。可核对入口为 `pnpm ci:unit:recovery`、`pnpm ci:integration:recovery`、`pnpm ci:smoke:opensandbox-reconcile`、`pnpm ci:smoke:opensandbox-reaper`；真实 OpenSandbox、多副本和 Broker 验收仍需人工环境证据。
 
 ## 7. 事实核查边界
 

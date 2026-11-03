@@ -92,12 +92,12 @@
 | 操作 | 当前行为（以 [ci.yml](.github/workflows/ci.yml) 为准） |
 | --- | --- |
 | 本地 `git commit`；推送到尚未开 PR 的普通功能分支 | 不触发核心 `ci`。开发中按改动面做定向验证，把相关修复集中推送，不必为每个 commit 开 PR 或手动补跑。 |
-| 打开、重新打开 PR，或向已打开的 PR 推送新提交 | 触发 `ci`，**Draft 也一样**。按整个 PR 而非最后一个 commit 分类：只有命中安全文档白名单才跳过重型 `gate`，文档检查仍跑。改动命中专项路径时，[reverse-runtime](.github/workflows/reverse-runtime.yml) 等还会独立运行。单纯切换 Draft / Ready 当前不会触发新一轮。 |
+| 打开、重新打开 PR，向已打开 PR 推送新提交，或切换 Draft / Ready | 触发 `ci`；按整个 PR 而非最后一个 commit 分类，文档检查每轮都跑。仓库变量 `CI_PR_MODE=tiered` 时，Draft 代码 PR 跑 `draft-fast`，转 Ready 同一 SHA 触发完整核心与适用专项；未设置、非法值或 `full` 则恢复完整 PR 验收。纯安全文档白名单才跳过重型 `gate`。 |
 | 合并或推送到 `main`；手动运行 `ci` | `main` 的改动未被 `paths-ignore` 排除时自动跑完整核心 CI。手动运行也跑完整核心 CI，不是快检；只在缺少必要验证或需要排障时使用，不要与同一提交正在运行的检查重复。 |
 
 **Agent 的等待规则：** 开发中 CI 排队或运行时，记录 PR、提交 SHA、运行链接和未完成项，即可继续不依赖结果的工作或向用户交接；不要反复轮询、推空提交或要求用户在线等候。出现失败先看失败步骤，再集中推送修复。合并前查看 PR 的 Checks，确认最新 head 对应的 `ci-summary` 和所有适用专项通过；旧提交全绿、必跑项缺失、失败或取消都不能作为通过依据。发布仍按原有发布门禁执行。
 
-**[#836 分层方案](https://github.com/SummerSec/DeepSonar/issues/836) 尚未启用。** 只有工作流合入并启用后，才按「开发中保留 Draft 跑快检 → 准备合并时转 Ready，无需空提交即可跑完整核心及适用专项 → Ready 后再推新提交重新验收」操作。实施该方案时同步更新本节，不把提案当成当前开关。
+**[#836 分层方案](https://github.com/SummerSec/DeepSonar/issues/836) 已启用**（2026-11-03 核对：工作流已合入，`CI_PR_MODE=tiered`）。开发中保留 Draft 跑快检，准备合并时转 Ready，同一 SHA 无需空提交即可跑完整核心及适用专项；Ready 后再推新提交必须重新验收。实际仓库变量与工作流是当前行为依据，不能把旧状态说明当作开关。
 
 ## 常用命令
 
@@ -152,7 +152,7 @@ pnpm ci:images
 - 五个专家工作流各自跑同一个 `ci-run-plan.mjs`（不是五份判断），重活矩阵只在 `mode == ready-full` 时启动；`push@main` 与手动运行仍是完整验收。专家套件的 PR 触发保留，尚未迁移到 `ci.yml` 的 `workflow_call` 统一入口。
 - 改分类器、汇总或本套路由本身时按高风险改动处理：需要独立评审与完整验收，不能用自己的快检规则给自己放行。
 - 出现漏测、重复触发或 required check 错配时，先把 `CI_PR_MODE` 设回 `full`（或删掉变量），再修路由。
-- 现状核对（2026-11-02）：`main` 无分支保护、无 required status checks、无 merge queue，唯一 ruleset 只拦 AI 工具分支前缀。给 `main` 加 required check 时以 `ci-summary` 为入口；启用 merge queue 必须同时加 `merge_group: checks_requested` 并验队列 SHA，**没有队列就不要先加 `merge_group`**（死配置）。
+- 现状核对（2026-11-03）：`main` 的 active ruleset `main required ci-summary` 要求 `ci-summary`，另有 AI 工具分支前缀规则；没有 merge queue。required check 不替代最终 SHA 的全部适用检查或人工合并授权。启用 merge queue 必须同时加 `merge_group: checks_requested` 并验队列 SHA，**没有队列就不要先加 `merge_group`**（死配置）。
 
 ## 验收边界：不要求生产测试部署（2026-10-31）
 

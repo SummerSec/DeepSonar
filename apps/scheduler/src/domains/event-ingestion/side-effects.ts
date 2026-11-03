@@ -79,6 +79,7 @@ import {
 } from "../artifacts/index.js";
 import { runFindingResearchBestEffort } from "../finding-research/index.js";
 import { config } from "../../config.js";
+import { validateCompletionRecoveryDecision, applyCompletionRecoveryDecision } from "../job-attempt/recovery.js";
 import { selectModelsForRequirements } from "../provider-adapter/index.js";
 
 export interface EventSideEffectServices {
@@ -538,11 +539,18 @@ export function createEventIngestionSideEffectApplication(
       if (phase === "apply") return null;
       throw new ControlInputError("invalid_payload", "Hub 决策必须绑定当前 Job 的画布。", "canvas_id");
     }
+    const triggerKind = (job.payload_json as { trigger?: { kind?: string } } | undefined)?.trigger?.kind;
+    if (triggerKind === "completion_recovery" && !decision.recovery) {
+      throw new ControlInputError("recovery_not_authorized", "A directed recovery Hub cannot issue ordinary complete or intents", "recovery");
+    }
+    if (decision.recovery) await validateCompletionRecoveryDecision(tx, job, decision.recovery, {
+      final: phase === "apply", eventId: services.eventId,
+    });
     const referenceNodes = await assertHubDecisionCanvasReferences(tx, canvasId, decision, services.hubReferenceLookup);
     const rules = await ports.rulesForProject(tx, job.project_id as string);
-    const roles = decision.complete ? [] : await ports.rolesForProject(tx, job.project_id as string);
+    const roles = decision.complete || decision.recovery ? [] : await ports.rolesForProject(tx, job.project_id as string);
     const submittedIntents = decision.intents ?? [];
-    if (!options.skipPlanContext) {
+    if (!options.skipPlanContext && !decision.recovery) {
       await validatePlanDecision(tx,jobId,job,decision.plan_basis,'hub_decision',{
         eventId:services.eventId,final:phase==='apply',maxIntents:rules.maxIntentsPerDecision,
         references:decision.complete?.from ?? submittedIntents[0]?.from ?? [],
@@ -1635,6 +1643,10 @@ export function createEventIngestionSideEffectApplication(
         hubDecision,
       );
       if (!validation) return;
+      if (validation.decision.recovery) {
+        await applyCompletionRecoveryDecision(tx, job, validation.decision.recovery, services.eventId ?? "");
+        return;
+      }
       const {
         decision: p,
         canvasId,

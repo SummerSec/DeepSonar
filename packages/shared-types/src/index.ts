@@ -8,6 +8,8 @@ export * from "./task-outcome.js";
 import { KnowledgeControlPayloadSchemas, KNOWLEDGE_OPERATION_IDS, KnowledgeMutationPayload } from "./project-knowledge.js";
 export * from "./project-knowledge.js";
 import { RepairFeedback as ReadinessRepairFeedback } from "./repair-feedback.js";
+import { CompletionRecoveryDecision } from "./completion-recovery.js";
+export * from "./completion-recovery.js";
 import {
   DescribeCapabilityPayload,
   ListCapabilitiesPayload,
@@ -1369,7 +1371,7 @@ export type HubDecisionPayloadFile = z.infer<typeof HubDecisionPayloadFile>;
  * Must stay a **single object** schema (not z.union): Claude Code / Anthropic MCP
  * skips tools whose inputSchema uses top-level anyOf/oneOf
  * ("its input schema uses top-level anyOf, which the Anthropic API does not accept").
- * Mutual exclusivity of complete vs intents vs payload_file is enforced in superRefine
+ * Mutual exclusivity of complete vs intents vs payload_file vs recovery is enforced in superRefine
  * and again by the Job control API host. `payload_file` is a temporary bypass for tool_use
  * truncation of large multi-intent JSON: write the full decision under /workspace
  * then pass only the relative path.
@@ -1379,6 +1381,7 @@ export const HubDecisionPayload = z
     complete: HubCompletePayload.optional(),
     intents: z.array(HubIntentPayload).min(1).max(100).optional(),
     payload_file: HubDecisionPayloadFile.optional(),
+    recovery: CompletionRecoveryDecision.optional(),
     plan_basis: PlanDecisionBasis.optional(),
   })
   .strict()
@@ -1386,16 +1389,17 @@ export const HubDecisionPayload = z
     const hasComplete = value.complete !== undefined;
     const hasIntents = value.intents !== undefined;
     const hasFile = value.payload_file !== undefined;
-    if ((hasComplete ? 1 : 0) + (hasIntents ? 1 : 0) + (hasFile ? 1 : 0) !== 1) {
+    const hasRecovery = value.recovery !== undefined;
+    if ((hasComplete ? 1 : 0) + (hasIntents ? 1 : 0) + (hasFile ? 1 : 0) + (hasRecovery ? 1 : 0) !== 1) {
       ctx.addIssue({
         code: "custom",
         path: hasComplete && hasIntents ? ["complete"] : hasFile ? ["payload_file"] : [],
-        message: "submit_hub_decision must provide exactly one of complete, intents, or payload_file",
+        message: "submit_hub_decision must provide exactly one of complete, intents, payload_file, or recovery",
       });
       return;
     }
     if (value.plan_basis) {
-      if (hasFile || (hasIntents && (value.plan_basis.outcome !== "continue" || value.intents!.length !== 1))
+      if (hasFile || hasRecovery || (hasIntents && (value.plan_basis.outcome !== "continue" || value.intents!.length !== 1))
         || (hasComplete && value.plan_basis.outcome !== "complete")) {
         ctx.addIssue({ code: "custom", path: ["plan_basis"], message: "Plan decisions require exactly one continue Intent or one complete proposal; file basis belongs inside the file" });
       }

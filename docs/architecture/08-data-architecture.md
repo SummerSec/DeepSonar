@@ -1,9 +1,15 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-11-01
+> 同步日期：2026-11-03
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
+
+## 完成恢复事实与证据（#874）
+
+[恢复实现](../../apps/scheduler/src/domains/job-attempt/recovery.ts)沿用 `events` / `event_dedup`，不新增 schema、Job 状态或平行效果账本。Job/Attempt 绑定的恢复根由 Scheduler 生成，state/wake 事件只追加；revision 取持久 job sequence，原 deadline、wake 上限和累计预算不会因换 key、证据变化或重启重置。完整 scoped effect/ledger 证据在数据库中计算摘要，模型只读有界、脱敏投影；Canvas metadata 是可重建视图，不能作为恢复授权。
+
+原 completion 负回执不可改写，对账请求的持久接纳也不表示 effect settled。精确 usage proof 必须匹配 project/Job/Attempt/effect；pending、not_reported、缺失用量及未知资源归属不推断为零。Job-only 回执事务不写 Canvas，恢复泵/application 按 Canvas-first 更新投影。决策、未来缺口与待执行验收见 [ADR 0015](adr/0015-governed-completion-recovery.md)、[FR-CTRL-010](01-system-specification.md#fr-ctrl-010-完成未知效果的受治理恢复)及[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。
 
 ## Schema 基线纪律
 

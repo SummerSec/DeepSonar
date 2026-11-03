@@ -383,6 +383,15 @@ jobs:
 
       - name: Scheduler orphan recovery evidence unit
         run: pnpm ci:unit:recovery
+
+      - name: Governed completion recovery contracts and unit
+        run: pnpm ci:unit:completion-recovery
+
+      - name: Governed completion recovery PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          DEEPSONAR_HUB_ENABLED: "true"
+        run: pnpm ci:integration:completion-recovery
       - name: Device broker unit
         run: pnpm ci:unit:device-broker
 

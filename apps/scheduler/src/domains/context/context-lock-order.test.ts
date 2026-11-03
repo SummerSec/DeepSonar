@@ -22,8 +22,13 @@ const context = () => createJobRuntimeContext({
  * them, and either outcome releases locks. Unknown SQL fails closed.
  * Only the two rows and gateway effect insertion relevant to #871 are modeled.
  */
-function database(options: { missingJob?: boolean; attemptJobId?: string; status?: string; failJobWrite?: boolean } = {}) {
+function database(options: {
+  missingJob?: boolean; attemptJobId?: string; status?: string; failJobWrite?: boolean;
+  jobWriteErrors?: string[];
+} = {}) {
   type Row = Record<string, unknown>;
+  const jobWriteErrors = [...(options.jobWriteErrors ?? [])];
+  let jobWriteAttempts = 0;
   const rows = new Map<string, Row>();
   if (!options.missingJob) rows.set("job", { id: jobId });
   rows.set("attempt", {
@@ -82,6 +87,9 @@ function database(options: { missingJob?: boolean; attemptJobId?: string; status
         }
         if (query.startsWith("UPDATE jobs")) {
           await lock(transaction, "job");
+          jobWriteAttempts += 1;
+          const code = jobWriteErrors.shift();
+          if (code) throw Object.assign(new Error("injected database conflict"), { code });
           if (options.failJobWrite) throw new Error("injected Job write failure");
           writes.set("job", { ...read("job"), context: values[0] });
           return [];
@@ -107,7 +115,8 @@ function database(options: { missingJob?: boolean; attemptJobId?: string; status
       previous.resolve();
     }
   } } as unknown as AttemptDatabase;
-  return { db, rows, onLock: (hook: typeof beforeLock) => { beforeLock = hook; } };
+  return { db, rows, get jobWriteAttempts() { return jobWriteAttempts; },
+    onLock: (hook: typeof beforeLock) => { beforeLock = hook; } };
 }
 
 async function race(persist: typeof persistJobRuntimeContext) {
@@ -168,3 +177,32 @@ for (const [name, options, error] of [
     assert.deepEqual(fixture.rows, before);
   });
 }
+
+for (const code of ["40P01", "40001", "55P03"]) {
+  test(`context retries rolled-back ${code} writes without partial projections`, async () => {
+    const fixture = database({ jobWriteErrors: [code, code] });
+    await persistJobRuntimeContext(fixture.db, jobId, context());
+    assert.equal(fixture.jobWriteAttempts, 3);
+    assert.deepEqual((fixture.rows.get("attempt")!.state_json as Record<string, unknown>).runtime_context,
+      fixture.rows.get("job")!.context);
+    assert.equal(fixture.rows.has("effect"), false, "context retries cannot create external effect intents");
+  });
+}
+
+test("exhausted context conflicts preserve both projections and expose a stable error", async () => {
+  const fixture = database({ jobWriteErrors: ["40P01", "40001", "55P03", "40P01"] });
+  const before = structuredClone(fixture.rows);
+  await assert.rejects(persistJobRuntimeContext(fixture.db, jobId, context()), {
+    code: "DATABASE_CONFLICT_EXHAUSTED", attempts: 3,
+  });
+  assert.equal(fixture.jobWriteAttempts, 3);
+  assert.deepEqual(fixture.rows, before);
+});
+
+test("non-conflict SQL errors never retry a context write", async () => {
+  const fixture = database({ jobWriteErrors: ["23505"] });
+  const before = structuredClone(fixture.rows);
+  await assert.rejects(persistJobRuntimeContext(fixture.db, jobId, context()), { code: "23505" });
+  assert.equal(fixture.jobWriteAttempts, 1);
+  assert.deepEqual(fixture.rows, before);
+});

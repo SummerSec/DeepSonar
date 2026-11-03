@@ -45,6 +45,7 @@ import {
 import { handleCapabilityDiscovery } from "./domains/capability-pack/index.js";
 import type { AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
 import { sql } from "./db.js";
+import { validateCompletionRecoveryDecision } from "./domains/job-attempt/recovery.js";
 import { buildGraphSnapshot, parseHubDecisionPayload, type GraphScope, type HubDecision } from "./graph.js";
 import { executeGraphQuery, seedGraphQueryProjectedIds } from "./graph-query.js";
 import { readPersistedPlanObjective } from "./domains/plan-protocol/objective.js";
@@ -348,7 +349,9 @@ export function buildDeferredSemanticTerminalEvents(input: {
   if (input.isHub && (state.hub || !state.executionPlan)) {
     const decision = input.hubDecision;
     if (!decision || !state.hub) throw new Error("Hub 未通过 submit_hub_decision 提交合法决策");
-    if (decision.complete) {
+    if (decision.recovery) {
+      events.push({ v: 1, event_id: state.hub.eventId, type: "hub_decision", payload: { recovery: decision.recovery } });
+    } else if (decision.complete) {
       events.push({
         v: 1,
         event_id: state.hub.eventId,
@@ -1667,6 +1670,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     const eventType = CONTROL_SEMANTIC_EVENT_TYPES[operation as keyof typeof CONTROL_SEMANTIC_EVENT_TYPES];
     if (!eventType) throw new Error("unknown platform operation");
     try {
+      if (operation === "submit_hub_decision" && context.input && typeof context.input === "object"
+        && "recovery" in context.input && (!context.planPhase || context.planPhase === "validate")) {
+        await validateCompletionRecoveryDecision(sql, job, (context.input as { recovery: unknown }).recovery, { tokenId: context.tokenId });
+      }
       await onSemanticEvent({
         v: 1,
         event_id: context.eventId || randomUUID(),

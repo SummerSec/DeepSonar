@@ -17,6 +17,11 @@ import { cleanupManagedResourcesOnce, shouldCleanupManagedResources } from "./re
 import { releaseOrphanSandboxLeases } from "./domains/worker-nodes/registry.js";
 import { reapExpiredDeviceLeases } from "./domains/device/index.js";
 import { expireDanglingHumanNodes, reapExpiredHumanNodes } from "./domains/canvas/human-node-expire.js";
+import { cleanupSharedAssetsForJob } from "./shared-asset-lifecycle.js";
+import { pumpCompletionRecoveries } from "./domains/job-attempt/recovery.js";
+import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
+import { revokeJobTokensInTransaction } from "./gateway-token-revocation.js";
+import { triggerCompletionRecovery } from "./core.js";
 
 /**
  * Reaper（§3.3 兜底）：调度器唯一可信的终局判定者
@@ -26,14 +31,34 @@ import { expireDanglingHumanNodes, reapExpiredHumanNodes } from "./domains/canva
  * - dangling human 投影：无类型/无目标/无处理入口的 open 节点 → expired
  */
 
-export async function reapOnce(): Promise<{
+export async function reapOnce(recoveryCursor: string | null = null): Promise<{
   timeouts: number;
   orphans: number;
   provisionStuck: number;
   stalled: number;
   humanTimeouts: number;
   expiredHumanNodes: number;
+  recoveryStops: number;
+  recoveryWakes: number;
+  recoveryCursor: string | null;
 }> {
+  const recovery = await pumpCompletionRecoveries({
+    cursor: recoveryCursor,
+    wake: triggerCompletionRecovery,
+    stop: async (tx, job, request) => {
+      // The pump already owns Canvas → Job → current Attempt and revalidates
+      // scope/deadline. Reuse lifecycle/effect/token truth in this transaction;
+      // pending effects become unknown, never a guessed safe settlement.
+      const stopped = await createSqlJobLifecycleApplication(tx).failExecution(request.jobId, request.reason);
+      if (!stopped) return null;
+      await settleAttemptTerminal(tx, request.jobId, "failed", {
+        reason: request.reason, recovery_ref: request.recoveryRef,
+      }, request.reason);
+      await revokeJobTokensInTransaction(tx, request.jobId, request.reason);
+      await revokeJobCapabilityTokens(request.jobId, request.reason, tx);
+      return { ...job, ...stopped, status: "failed", error: request.reason };
+    },
+  });
   const lifecycle = createSqlJobLifecycleApplication();
   const timedOut = await lifecycle.reapExecutionTimeout();
   const liveRules = await globalRules(sql);
@@ -45,7 +70,8 @@ export async function reapOnce(): Promise<{
   const stalled = await lifecycle.reapStalledExecution(liveRules.stallSec);
   const waitingHumanTimedOut = await lifecycle.reapWaitingHumanTimeout(config.timeouts.waitingHumanSec);
 
-  for (const j of [...timedOut, ...provisionStuck, ...orphaned, ...stalled, ...waitingHumanTimedOut]) {
+  const recoveryStoppedIds = new Set(recovery.stoppedJobs.map((job) => String(job.id)));
+  for (const j of [...timedOut, ...provisionStuck, ...orphaned, ...stalled, ...waitingHumanTimedOut, ...recovery.stoppedJobs]) {
     const jobId = j.id as string;
     const sandboxId = j.sandbox_id as string | null | undefined;
     if (sandboxId) {
@@ -54,7 +80,7 @@ export async function reapOnce(): Promise<{
         console.error(`[reaper] 沙箱回收失败 ${sandboxId}:`, e);
       });
     }
-    await sharedAssetsVolumeManager.removeForJob(jobId).catch((e) => {
+    await cleanupSharedAssetsForJob({ jobId }, () => sharedAssetsVolumeManager.removeForJob(jobId)).catch((e) => {
       inc("deepsonar_shared_assets_cleanup_failed_total");
       console.error(`[reaper] 共享资产卷回收失败 ${jobId}:`, e);
     });
@@ -63,7 +89,9 @@ export async function reapOnce(): Promise<{
     const isProvision = provisionStuck.some((x) => x.id === jobId);
     const isStalled = stalled.some((x) => x.id === jobId);
     const isHumanTimeout = waitingHumanTimedOut.some((x) => x.id === jobId);
-    if (isTimeout) inc("deepsonar_jobs_failed_total", { reason: "timeout" });
+    const isRecoveryStop = recoveryStoppedIds.has(jobId);
+    if (isRecoveryStop) inc("deepsonar_jobs_failed_total", { reason: "recovery_stop" });
+    else if (isTimeout) inc("deepsonar_jobs_failed_total", { reason: "timeout" });
     else if (isProvision) inc("deepsonar_jobs_failed_total", { reason: "provision_stuck" });
     else if (isStalled) inc("deepsonar_jobs_failed_total", { reason: "stalled" });
     else if (isHumanTimeout) inc("deepsonar_jobs_failed_total", { reason: "human_timeout" });
@@ -71,7 +99,7 @@ export async function reapOnce(): Promise<{
     // §6.3：终局判定即吊销短期模型 Token
     await revokeJobTokens(jobId, "reaper").catch(() => {});
     await revokeJobCapabilityTokens(jobId, "reaper").catch(() => {});
-    const terminalStatus = isTimeout ? "timeout" : isProvision || isStalled || isHumanTimeout ? "failed" : "orphan";
+    const terminalStatus = isTimeout ? "timeout" : isProvision || isStalled || isHumanTimeout || isRecoveryStop ? "failed" : "orphan";
     const [meta] = await sql<{
       id: string;
       type: string;
@@ -145,17 +173,22 @@ export async function reapOnce(): Promise<{
     stalled: stalled.length,
     humanTimeouts: waitingHumanTimedOut.length,
     expiredHumanNodes,
+    recoveryStops: recovery.stoppedJobs.length,
+    recoveryWakes: recovery.woken,
+    recoveryCursor: recovery.cursor,
   };
 }
 
 export function startReaper() {
   let running = false;
+  let recoveryCursor: string | null = null;
   const timer = setInterval(() => {
     if (running) return;
     running = true;
     void (async () => {
-      const result = await reapOnce();
-      if (result.timeouts + result.orphans + result.provisionStuck + result.stalled + result.humanTimeouts + result.expiredHumanNodes > 0) {
+      const result = await reapOnce(recoveryCursor);
+      recoveryCursor = result.recoveryCursor;
+      if (result.timeouts + result.orphans + result.provisionStuck + result.stalled + result.humanTimeouts + result.expiredHumanNodes + result.recoveryStops + result.recoveryWakes > 0) {
         console.log("[reaper]", result);
       }
       if (shouldCleanupManagedResources(config.runtime)) {

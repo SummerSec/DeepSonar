@@ -812,6 +812,7 @@ export interface HubDecision {
   plan_basis?: PlanDecisionBasis;
   complete?: { from: string[]; description: string };
   intents?: HubIntent[];
+  recovery?: import("@deepsonar/shared-types").CompletionRecoveryDecision;
 }
 
 export interface HubReferenceNode {
@@ -902,24 +903,26 @@ export function parseHubDecisionPayload(
       throw unknownControlField(issue.path.length > 0 ? issue.path.join(".") : `hub_decision.${keys}`);
     }
     throw invalidControlPayload(
-      "Hub 决策必须且只能提供 complete、intents 或 payload_file 之一，且每个字段都必须完整（payload_file 须在宿主展开后变为 complete/intents）。",
+      "Hub 决策必须且只能提供 complete、intents、payload_file 或 recovery 之一，且字段必须完整（payload_file 须在宿主展开后变为严格决策）。",
       issue?.path.join(".") || "hub_decision",
     );
   }
 
-  // HubDecisionPayload is a single object with optional complete|intents (xor via superRefine).
+  // HubDecisionPayload has four strictly exclusive branches; recovery is never an intents fallback.
   // Do not use `"complete" in data` — optional keys may be present as undefined.
   const data = parsed.data;
-  const decision: HubDecision = data.complete
-    ? { complete: data.complete }
-    : {
-        intents: (data.intents ?? []).map((intent) => ({
-          ...intent,
-          role: intent.role.trim(),
-          description: intent.description.trim(),
-          prompt: intent.prompt.trim(),
-        })),
-      };
+  const decision: HubDecision = data.recovery
+    ? { recovery: data.recovery }
+    : data.complete
+      ? { complete: data.complete }
+      : {
+          intents: (data.intents ?? []).map((intent) => ({
+            ...intent,
+            role: intent.role.trim(),
+            description: intent.description.trim(),
+            prompt: intent.prompt.trim(),
+          })),
+        };
 
   if (data.plan_basis) decision.plan_basis=data.plan_basis;
   if (referableIds !== undefined) assertHubDecisionReferableIds(decision, referableIds);

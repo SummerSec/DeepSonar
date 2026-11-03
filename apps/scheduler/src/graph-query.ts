@@ -1,5 +1,6 @@
 import {
   GRAPH_QUERY_LIMITS,
+  projectCompletionRecovery,
   GraphQueryPayload,
   type GraphQueryKind,
   type GraphQueryPayload as GraphQueryInput,
@@ -398,6 +399,7 @@ export function projectNodeBody(
       summary: short(body.description ?? body.summary ?? finding?.summary, 420),
       location: short(body.location ?? finding?.location, 140),
       ...(projectedQuantities(body) ? { quantities: projectedQuantities(body) } : {}),
+      ...(projectCompletionRecovery(body.recovery) ? { recovery: projectCompletionRecovery(body.recovery) } : {}),
       ...(finding
         ? {
             ...(finding.imported ? { imported: true, readonly: true } : { finding_id: finding.id }),

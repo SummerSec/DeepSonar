@@ -9,6 +9,8 @@ import {
   type ContextState,
 } from "@deepsonar/runtime-sandbox";
 import { updateAttemptContext, type AttemptDatabase } from "../job-attempt/index.js";
+import { withDatabaseConflictRetry } from "../../db-conflict-retry.js";
+import { inc } from "../../metrics.js";
 
 export function createJobRuntimeContext(input: {
   attemptId?: string | null;
@@ -79,7 +81,8 @@ export async function persistJobRuntimeContext(
   context: ContextState,
 ): Promise<void> {
   validateContextState(context);
-  await db.begin(async (txRaw) => {
+  // Both projections commit together; retries never re-run the Agent or a model request.
+  await withDatabaseConflictRetry(() => db.begin(async (txRaw) => {
     const tx = txRaw as unknown as AttemptDatabase;
     if (context.attempt_id) {
       // Match Gateway admission / Attempt creation: Job before Attempt, held
@@ -101,6 +104,14 @@ export async function persistJobRuntimeContext(
            true
          )
        WHERE id = ${jobId}`;
+  }), {
+    onConflict(error) {
+      const code = (error as { code?: string }).code;
+      inc("deepsonar_database_conflict_retries_total", {
+        operation: "context",
+        code: code === "40P01" || code === "40001" || code === "55P03" ? code : "unknown",
+      });
+    },
   });
 }
 

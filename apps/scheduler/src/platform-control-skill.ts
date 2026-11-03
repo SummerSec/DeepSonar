@@ -80,6 +80,12 @@ Content-Type。绝不打印、记录、引用、复制、提交、写入 URL、p
 回执查询不启动 CLI、不创建新 Attempt；不支持原会话续接时停止，不能把重新下发称作同会话恢复。
 Job 终态后 Control token 不再可用，由管理面按项目权限查看既有事件记录。
 
+## 未结算效果的受治理恢复
+
+收到 \`COMPLETION_EFFECT_UNKNOWN\` 或 \`REPAIR_USAGE_UNKNOWN\` 时保留原回执与 Attempt，不重放未知效果，也不把平台可对账故障伪装成用户业务决策。Scheduler 会持久记录恢复事实并在既有权限、租约、暂停和预算边界内安排恢复 Hub；原会话退出或 Job 已终止时，不自动复活或创建新 Attempt。
+恢复 Hub 只能处理冻结 \`trigger.recovery_refs\` 授权的对象；先按本 Job 的有界图查询读取恢复摘要，再通过 \`submit_hub_decision.recovery\` 提交 \`recovery_ref\`、精确目标 Job/Attempt、当前 recovery revision/evidence SHA、\`action\` 与有界 \`reason\`。它与 \`complete\`、\`intents\`、\`payload_file\` 和 \`plan_basis\` 互斥，不得夹带其它提案或自造对账证据。
+\`reconcile_effects\` 只请求 Scheduler 按逐 effect 的宿主证据安全对账；\`stop\` 请求既有生命周期停止。\`interrupted\`、sandbox_id 缺失和 unknown 数量为零都不是完成证明。HTTP 200 仍只表示 \`persisted_deferred\`，不等于已对账、已停止或 Job 成功。旧回执不改写；只有原活动 Attempt 收到允许修正的反馈，才可用新 key/下一 revision 重提完成，并重新经过原来的 Completion、Verify、Plan 与预算门。
+
 ## 操作与完成
 
 只能调用能力发现和本 Job 冻结的 \`platform_tools\` 操作，遵守返回的参数 Schema、相对

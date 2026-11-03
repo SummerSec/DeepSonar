@@ -1,7 +1,7 @@
 # DeepSonar 文档索引
 
-> 状态：v0.6.3 工程集成已合并；发布修复、历史验证和正式发行状态分别记录。
-> 同步日期：2026-11-01
+> 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
+> 同步日期：2026-11-03
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
 
 > **注意力原则（#830）**：单一权威定义见 [DESIGN](../DESIGN.md#核心理念优化人的注意力)，开发与贡献入口引用同一[工程评审及正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)。NFR-UX-001 登记约束与验证范围；本次只落实设计/评审依据，不改变运行时、UI 或授权，也不宣称注意力收益。
@@ -12,6 +12,8 @@
 > **Plan v2（#775）**：当前执行接口只接收 v2，普通 Hub 的 v1 writer 已删除，历史 audit 仍只读。objective CAS、有限 lifetime 预算、多轮路线及留存输出检查复用既有 Intent admission，持久 continue 消费水位防止终态和重启重计；工程 complete 和输出关联不授予语义完成 authority。该工程切片已随下述 `fdb55a01` 主线 Actions 验收，历史本地回放不是后续 SHA 的证明。见 [ADR 0012](architecture/adr/0012-plan-v2-execution.md)、[运行时](architecture/06-runtime-view.md)与 [Plan 专题](PLAN_GAP_PROJECTION.md)。
 
 > **Finding quality engineering (2026-11-01, #770/#819)**: Identity/relation and lexical/weak-candidate mechanisms remain distinct. The agreed schema67 engineering slice merged via #831 includes protocol/freeze/exposure receipts, exact-bigint CAS, bounded actual-SQL observations/recomputed reports and protected structural review/revoke. [FR-FIND-007/009](<architecture/01-system-specification.md>), [ADR 0014](<architecture/adr/0014-operator-finding-identity.md>) and [evaluation status](<PROJECT_FINDING_EVALUATION.md>) preserve not_evaluated/published=false. Host external-fact verification, current certificates/promotion/guarded publication are missing; independent labels/aliases/provenance, verified family/asset partitions and pre-access adopted thresholds remain unverified. Source-loader capture is TCB evidence, not self-signature or human-quality proof. The engineering slice passed the exact-main Actions listed below and #819 closed within the agreed scope; deferred quality and Host certification/promotion are not delivered.
+
+> **当前稳定性修复（2026-11-03，#871/#873/#874）**：Gateway admission 纯数据库有界重试、SDK error.message 的宿主安全降级 carrier、Canvas-first 锁序与[跨 Attempt 共享卷生命周期](SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)在当前修复分支整合；[完成恢复 v1](REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)使用持久宿主事实、去重 Hub 与严格对账/停止提案。完整最终 SHA Actions 尚待验收，退出会话/新 Attempt 的完整继续执行未交付，正式版本状态另行核对。
 
 > **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
