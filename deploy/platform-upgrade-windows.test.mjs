@@ -52,10 +52,11 @@ test('native Windows orphaned I/O helper retains the kernel lock after owner ter
   const readyFile=join(directory,'ready.txt'),diagnosticFile=join(directory,'stage.json');
   const started=performance.now();
   const nativePowerShell=win32.join(process.env.SystemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe');
+  // Cold .NET compilation has its own budget, separate from the native-runtime watchdog below.
   const compiled=spawnSync(nativePowerShell,['-NoLogo','-NoProfile','-NonInteractive','-Command',
     "$ErrorActionPreference='Stop';$r=[Console]::In.ReadToEnd()|ConvertFrom-Json;Add-Type -Path @($r.library,$r.fixture) -OutputAssembly $r.output -OutputType ConsoleApplication"],{
     input:JSON.stringify({library:fileURLToPath(new URL('./platform-upgrade-windows.cs',import.meta.url)),fixture:fileURLToPath(new URL('./platform-upgrade-windows-borrow-fixture.cs',import.meta.url)),output:executable}),
-    encoding:'utf8',timeout:15000,windowsHide:true,
+    encoding:'utf8',timeout:60000,windowsHide:true,
   });
   assert.equal(compiled.status,0,'native fixture compilation failed: '+String(compiled.error?.code??compiled.signal??compiled.status));
   // This watchdog has its own event loop; unlike a test timeout it still fires

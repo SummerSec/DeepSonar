@@ -13,12 +13,19 @@ function barrier() {
   return { promise, resolve };
 }
 
-async function bounded<T>(promise: PromiseLike<T>, message: string): Promise<T> {
+function captureOutcome<T>(work: Promise<T>, release: () => void): Promise<PromiseSettledResult<T>> {
+  return work.then(
+    (value) => ({ status: "fulfilled" as const, value }),
+    (reason) => { release(); return { status: "rejected" as const, reason }; },
+  );
+}
+
+async function bounded<T>(promise: PromiseLike<T>, message: string, timeoutMs = 5_000): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       Promise.resolve(promise),
-      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), 5_000); }),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), timeoutMs); }),
     ]);
   } finally {
     if (timer) clearTimeout(timer);
@@ -498,6 +505,310 @@ if (!testDatabaseUrl) {
         });
         const claimed = await bounded(claimPendingJobs(), "previously busy Canvas did not become claimable");
         assert.deepEqual(claimed.map((job) => job.id), [lockedJobId]);
+      });
+
+      type OrdinaryFixture = { projectId: string; canvasId: string; jobId: string; nodeId: string };
+      async function resetClaimFixtures(maxGlobalJobs = 1) {
+        // This is the database created above, not TEST_DATABASE_URL's database.
+        await sql.begin(async (txRaw) => {
+          const tx = txRaw as unknown as typeof sql;
+          await tx`SELECT id FROM canvases ORDER BY id FOR UPDATE`;
+          const jobs = await tx`SELECT id FROM jobs
+            WHERE status IN ('pending','claimed','provisioning','running','waiting_human') ORDER BY id FOR UPDATE`;
+          const ids = jobs.map((job) => String(job.id));
+          for (const id of ids) await settleAttemptTerminal(tx, id, "failed", { reason: "claim_fixture_reset" });
+          await tx`UPDATE jobs SET status='failed', finished_at=now() WHERE id=ANY(${ids}::uuid[])`;
+          await tx`UPDATE canvas_nodes SET status='failed' WHERE job_id=ANY(${ids}::uuid[])
+            AND node_type=ANY(${["job", "intent", "report"]})`;
+        });
+        await sql`UPDATE global_settings SET rules_json=${sql.json({ maxGlobalJobs, maxJobsPerProject: maxGlobalJobs,
+          maxConcurrentProvisioning: maxGlobalJobs, maxConcurrentByProvider: {}, maxConcurrentByAgentCli: {} } as never)} WHERE id='global'`;
+      }
+
+      async function ordinaryFixture(priority: number): Promise<OrdinaryFixture> {
+        const scope = { projectId: randomUUID(), canvasId: randomUUID(), jobId: randomUUID(), nodeId: randomUUID() };
+        await sql.begin(async (tx) => {
+          await tx`INSERT INTO projects(id,name) VALUES(${scope.projectId},'ordinary claim fixture')`;
+          await tx`INSERT INTO canvases(id,project_id,title,target_json) VALUES
+            (${scope.canvasId},${scope.projectId},'ordinary claim','{"network_policy":{"allow_egress":false},"content":"integration"}')`;
+          await tx`INSERT INTO jobs(id,project_id,canvas_id,type,status,priority,agent_snapshot_json,payload_json) VALUES
+            (${scope.jobId},${scope.projectId},${scope.canvasId},'audit','pending',${priority},${sql.json(snapshot as never)},
+              '{"trigger":{"kind":"graph_progress"}}')`;
+          await tx`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json) VALUES
+            (${randomUUID()},${scope.canvasId},NULL,'root','root','active','{}'),
+            (${scope.nodeId},${scope.canvasId},${scope.jobId},'job','ordinary job','pending','{"ordinary_fixture":true}')`;
+        });
+        return scope;
+      }
+
+      async function readOrdinary(scope: OrdinaryFixture) {
+        const rows = await sql`SELECT j.status,j.claimed_at,j.finished_at,j.payload_json,
+          n.status AS node_status,n.body_json,c.change_revision::text AS revision,
+          (SELECT count(*)::int FROM job_attempts WHERE job_id=j.id) AS attempts,
+          a.id AS attempt_id,a.status AS attempt_status,a.phase,a.state_json
+          FROM jobs j JOIN canvases c ON c.id=j.canvas_id
+          JOIN canvas_nodes n ON n.id=${scope.nodeId} AND n.job_id=j.id
+          LEFT JOIN job_attempts a ON a.job_id=j.id WHERE j.id=${scope.jobId}`;
+        assert.equal(rows.length, 1, "each fresh ordinary Job has at most one Attempt");
+        return rows[0]!;
+      }
+
+      async function assertOrdinary(scope: OrdinaryFixture, status: "pending" | "claimed" | "cancelled") {
+        const row = await readOrdinary(scope);
+        assert.equal(row.status, status);
+        assert.deepEqual(row.payload_json, { trigger: { kind: "graph_progress" } }, "ordinary Jobs carry no recovery grant");
+        assert.deepEqual(row.body_json, { ordinary_fixture: true });
+        // Claim does not advertise a running node before provision/execution.
+        assert.equal(row.node_status, status === "cancelled" ? "cancelled" : "pending");
+        assert.equal(row.attempts, status === "pending" ? 0 : 1);
+        assert.equal(row.claimed_at === null, status === "pending");
+        assert.equal(row.finished_at === null, status !== "cancelled");
+        if (status !== "pending") {
+          assert.equal(row.attempt_status, status === "cancelled" ? "cancelled" : "active");
+          assert.equal(row.phase, status === "cancelled" ? "terminal" : "preparing");
+          assert.equal(row.state_json.job_id, scope.jobId);
+          assert.equal(row.state_json.attempt_id, row.attempt_id);
+        }
+        return row;
+      }
+
+      async function finishOrdinary(scope: OrdinaryFixture) {
+        // A real terminal Attempt and matching Job/node release the hard slot;
+        // do not merely erase a claimed Job's status while its Attempt is active.
+        await sql.begin(async (txRaw) => {
+          const tx = txRaw as unknown as typeof sql;
+          await tx`SELECT id FROM canvases WHERE id=${scope.canvasId} FOR UPDATE`;
+          await tx`SELECT id FROM jobs WHERE id=${scope.jobId} FOR UPDATE`;
+          assert.ok(await settleAttemptTerminal(tx, scope.jobId, "cancelled", { reason: "claim_fixture_slot_release" }));
+          await tx`UPDATE jobs SET status='cancelled',finished_at=now() WHERE id=${scope.jobId} AND status='claimed'`;
+          await tx`UPDATE canvas_nodes SET status='cancelled' WHERE id=${scope.nodeId}`;
+        });
+        await assertOrdinary(scope, "cancelled");
+      }
+
+      async function withBusyOrdinary(
+        scope: OrdinaryFixture & { jobIds: string[] }, lock: "job" | "canvas",
+        run: (claim: () => Promise<{ id: string }[]>) => Promise<void>,
+      ) {
+        const holderDb = postgres(targetUrl.toString(), { max: 1, max_lifetime: 0, connect_timeout: 5,
+          connection: { application_name: "ordinary-claim-holder", statement_timeout: 30_000, lock_timeout: 0 } });
+        const probeDb = postgres(targetUrl.toString(), { max: 1, max_lifetime: 0, connect_timeout: 5,
+          connection: { application_name: "ordinary-claim-probe", statement_timeout: 30_000, lock_timeout: 0 } });
+        actorClients.push(holderDb, probeDb);
+        const held = barrier(), releaseHolder = barrier();
+        const release = () => { held.resolve(); releaseHolder.resolve(); };
+        const outcomes: Promise<PromiseSettledResult<unknown>>[] = [];
+        try {
+          const [[holder], [probe], [scheduler]] = await Promise.all([
+            holderDb`SELECT pg_backend_pid() AS pid`, probeDb`SELECT pg_backend_pid() AS pid`, sql`SELECT pg_backend_pid() AS pid`,
+          ]);
+          const holderPid = Number(holder!.pid), probePid = Number(probe!.pid), schedulerPid = Number(scheduler!.pid);
+          assert.equal(new Set([holderPid, probePid, schedulerPid]).size, 3, "holder, exact-row probe and Scheduler are independent sessions");
+          let lockAcquired = false;
+          const holding = captureOutcome(holderDb.begin(async (tx) => {
+            assert.equal(Number((await tx`SELECT pg_backend_pid() AS pid`)[0]!.pid), holderPid);
+            const locked = lock === "job"
+              ? await tx`SELECT id FROM jobs WHERE id=ANY(${scope.jobIds}::uuid[]) ORDER BY id FOR UPDATE`
+              : await tx`SELECT id FROM canvases WHERE id=${scope.canvasId} FOR UPDATE`;
+            assert.deepEqual(locked.map((row) => String(row.id)), lock === "job" ? [...scope.jobIds].sort() : [scope.canvasId]);
+            lockAcquired = true;
+            held.resolve();
+            await releaseHolder.promise;
+          }), release);
+          outcomes.push(holding);
+          await bounded(held.promise, "ordinary lock holder did not reach the exact fixture rows");
+          assert.equal(lockAcquired, true);
+          const probing = captureOutcome(probeDb.begin(async (tx) => {
+            assert.equal(Number((await tx`SELECT pg_backend_pid() AS pid`)[0]!.pid), probePid);
+            const rows = lock === "job"
+              ? await tx`SELECT id FROM jobs WHERE id=${scope.jobIds[0]!} FOR UPDATE`
+              : await tx`SELECT id FROM canvases WHERE id=${scope.canvasId} FOR UPDATE`;
+            assert.equal(rows[0]!.id, lock === "job" ? scope.jobIds[0]! : scope.canvasId);
+          }), release);
+          outcomes.push(probing);
+          const observe = async (wait = false) => {
+            const deadline = Date.now() + 5_000;
+            do {
+              const [row] = await control`SELECT pg_blocking_pids(pid) AS blockers,wait_event_type,query,
+                EXISTS(SELECT 1 FROM pg_locks WHERE pid=${holderPid} AND locktype='transactionid' AND granted) AS holder_transaction
+                FROM pg_stat_activity WHERE pid=${probePid}`;
+              if (row?.blockers.includes(holderPid)) {
+                assert.deepEqual(row.blockers, [holderPid]);
+                assert.equal(row.wait_event_type, "Lock");
+                assert.equal(row.holder_transaction, true);
+                assert.match(row.query, lock === "job" ? /\bFROM jobs\b.*\bFOR UPDATE\b/is : /\bFROM canvases\b.*\bFOR UPDATE\b/is);
+                return;
+              }
+              if (!wait) break;
+              // Each round trips to PostgreSQL; no elapsed sleep proves the lock.
+            } while (Date.now() < deadline);
+            assert.fail("the exact ordinary row probe must still wait on the same holder");
+          };
+          await observe(true);
+          const claim = async () => {
+            await observe();
+            const work = captureOutcome(claimPendingJobs(), release);
+            outcomes.push(work);
+            const result = await bounded(work, "busy ordinary candidates starved the available hard slot");
+            if (result.status === "rejected") throw result.reason;
+            await observe();
+            return result.value;
+          };
+          const checking = captureOutcome(run(claim), release);
+          outcomes.push(checking);
+          const result = await bounded(checking, "ordinary claims did not finish while the lock remained held", 15_000);
+          if (result.status === "rejected") throw result.reason;
+          await observe();
+          assert.equal(Number((await sql`SELECT pg_backend_pid() AS pid`)[0]!.pid), schedulerPid);
+        } finally {
+          release();
+          try {
+            const joined = await Promise.allSettled(outcomes);
+            for (const result of joined) {
+              if (result.status === "rejected") throw result.reason;
+              if (result.value.status === "rejected") throw result.value.reason;
+            }
+          } finally {
+            const closed = await Promise.allSettled([holderDb.end({ timeout: 0 }), probeDb.end({ timeout: 0 })]);
+            for (const result of closed) if (result.status === "rejected") throw result.reason;
+          }
+        }
+      }
+
+      async function busyOrdinaryPage(count: number) {
+        const scope = await ordinaryFixture(100);
+        const extraIds = Array.from({ length: count - 1 }, () => randomUUID());
+        await sql.begin(async (tx) => {
+          await tx`SELECT id FROM canvases WHERE id=${scope.canvasId} FOR UPDATE`;
+          await tx`INSERT INTO jobs(id,project_id,canvas_id,type,status,priority,agent_snapshot_json,payload_json)
+            SELECT id,${scope.projectId}::uuid,${scope.canvasId}::text,'audit','pending',100,${sql.json(snapshot as never)}::jsonb,
+              '{"trigger":{"kind":"graph_progress"}}'::jsonb FROM unnest(${extraIds}::uuid[]) AS candidate(id)`;
+          await tx`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
+            SELECT ${scope.canvasId},id,'job','ordinary busy page','pending','{"ordinary_fixture":true}'::jsonb
+              FROM unnest(${extraIds}::uuid[]) AS candidate(id)`;
+        });
+        return { ...scope, jobIds: [scope.jobId, ...extraIds] };
+      }
+
+      async function assertBusyPage(scope: OrdinaryFixture & { jobIds: string[] }) {
+        const [row] = await sql`SELECT
+          (SELECT count(*)::int FROM jobs WHERE id=ANY(${scope.jobIds}::uuid[]) AND status='pending'
+            AND type='audit' AND payload_json='{"trigger":{"kind":"graph_progress"}}'::jsonb AND claimed_at IS NULL) AS pending,
+          (SELECT count(*)::int FROM job_attempts WHERE job_id=ANY(${scope.jobIds}::uuid[])) AS attempts,
+          (SELECT count(*)::int FROM canvas_nodes WHERE job_id=ANY(${scope.jobIds}::uuid[]) AND node_type='job'
+            AND status='pending' AND body_json='{"ordinary_fixture":true}'::jsonb) AS nodes`;
+        assert.equal(row!.pending, scope.jobIds.length);
+        assert.equal(row!.attempts, 0);
+        assert.equal(row!.nodes, scope.jobIds.length);
+      }
+
+      for (const lock of ["job", "canvas"] as const) {
+        await t.test(`ordinary max-slot=1: busy A ${lock} does not starve B then C while the same lock stays held`, async () => {
+          await resetClaimFixtures();
+          const a = await ordinaryFixture(100), b = await ordinaryFixture(50), c = await ordinaryFixture(1);
+          assert.equal(new Set([a.projectId, b.projectId, c.projectId]).size, 3);
+          assert.equal(new Set([a.canvasId, b.canvasId, c.canvasId]).size, 3);
+          const beforeA = await assertOrdinary(a, "pending");
+          await withBusyOrdinary({ ...a, jobIds: [a.jobId] }, lock, async (claim) => {
+            assert.deepEqual((await claim()).map((job) => job.id), [b.jobId]);
+            await assertOrdinary(b, "claimed");
+            await assertOrdinary(c, "pending");
+            assert.deepEqual(await readOrdinary(a), beforeA, "skipping A cannot partially claim it or mutate its node");
+            await finishOrdinary(b);
+            assert.deepEqual((await claim()).map((job) => job.id), [c.jobId]);
+            await assertOrdinary(c, "claimed");
+            assert.deepEqual(await readOrdinary(a), beforeA);
+          });
+        });
+      }
+
+      await t.test("one real claim call fills a hard slot from candidate 501 after all first 500 eligible ordinary Jobs stay locked", async () => {
+        await resetClaimFixtures();
+        const busy = await busyOrdinaryPage(500), ready = await ordinaryFixture(1);
+        assert.notEqual(busy.projectId, ready.projectId);
+        assert.notEqual(busy.canvasId, ready.canvasId);
+        const ordered = await sql`SELECT id FROM jobs WHERE status='pending' ORDER BY priority DESC,created_at ASC,id ASC`;
+        assert.equal(ordered.length, 501);
+        assert.deepEqual(ordered.slice(0, 500).map((row) => String(row.id)).sort(), [...busy.jobIds].sort());
+        assert.equal(ordered[500]!.id, ready.jobId);
+        const before = await readOrdinary(busy);
+        await withBusyOrdinary(busy, "job", async (claim) => {
+          assert.deepEqual((await claim()).map((job) => job.id), [ready.jobId], "refill must cross the 500-row page in this invocation");
+          await assertOrdinary(ready, "claimed");
+          await assertBusyPage(busy);
+          assert.deepEqual(await readOrdinary(busy), before);
+        });
+      });
+
+      async function withClaimFault(jobId: string, run: (message: string) => Promise<void>) {
+        assert.match(jobId, /^[0-9a-f-]{36}$/);
+        const message = `ordinary-claim-sentinel-${jobId}`;
+        // Scoped test-only PostgreSQL fault, not a fake SQL client/production hook.
+        await sql.unsafe(`CREATE FUNCTION test_ordinary_claim_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN RAISE EXCEPTION USING ERRCODE='P0001', MESSAGE='${message}'; END; $$`);
+        let installed = false;
+        try {
+          await sql.unsafe(`CREATE TRIGGER test_ordinary_claim_fault BEFORE UPDATE OF status ON jobs
+            FOR EACH ROW WHEN (NEW.id='${jobId}'::uuid AND NEW.status='claimed') EXECUTE FUNCTION test_ordinary_claim_fault()`);
+          installed = true;
+          await run(message);
+        } finally {
+          try { if (installed) await sql.unsafe("DROP TRIGGER test_ordinary_claim_fault ON jobs"); }
+          finally { await sql.unsafe("DROP FUNCTION test_ordinary_claim_fault()"); }
+        }
+      }
+
+      await t.test("a first-page claim fault throws its PostgreSQL error and rolls back every Job/Attempt in that page", async () => {
+        await resetClaimFixtures(2);
+        const first = await ordinaryFixture(50), broken = await ordinaryFixture(1);
+        const before = await Promise.all([readOrdinary(first), readOrdinary(broken)]);
+        await withClaimFault(broken.jobId, async (message) => {
+          const work = captureOutcome(claimPendingJobs(), () => {});
+          try {
+            const result = await bounded(work, "first-page PostgreSQL fault did not settle");
+            assert.equal(result.status, "rejected", "no claims from an aborted page may be returned as committed");
+            if (result.status === "rejected") {
+              assert.equal(result.reason.code, "P0001");
+              assert.equal(result.reason.message, message);
+            }
+            assert.deepEqual(await Promise.all([readOrdinary(first), readOrdinary(broken)]), before);
+          } finally { await Promise.allSettled([work]); }
+        });
+        const retry = captureOutcome(claimPendingJobs(), () => {});
+        try {
+          const result = await bounded(retry, "first-page rollback leaked its claim lock");
+          if (result.status === "rejected") throw result.reason;
+          assert.deepEqual(result.value.map((job) => job.id), [first.jobId, broken.jobId]);
+          await assertOrdinary(first, "claimed");
+          await assertOrdinary(broken, "claimed");
+        } finally { await Promise.allSettled([retry]); }
+      });
+
+      await t.test("a later-page claim fault returns committed earlier-page work and rolls back only the failing page", async () => {
+        await resetClaimFixtures(2);
+        const busy = await busyOrdinaryPage(499), first = await ordinaryFixture(50), broken = await ordinaryFixture(1);
+        const ordered = await sql`SELECT id FROM jobs WHERE status='pending' ORDER BY priority DESC,created_at ASC,id ASC`;
+        assert.equal(ordered.length, 501);
+        assert.equal(ordered[499]!.id, first.jobId);
+        assert.equal(ordered[500]!.id, broken.jobId);
+        const beforeBroken = await readOrdinary(broken);
+        await withClaimFault(broken.jobId, async (message) => {
+          const errors: unknown[][] = [];
+          const previousError = console.error;
+          console.error = (...values: unknown[]) => { errors.push(values); previousError(...values); };
+          try {
+            await withBusyOrdinary(busy, "job", async (claim) => {
+              assert.deepEqual((await claim()).map((job) => job.id), [first.jobId], "a later failed page cannot strand committed dispatch work");
+              await assertOrdinary(first, "claimed");
+              assert.deepEqual(await readOrdinary(broken), beforeBroken);
+              await assertOrdinary(broken, "pending");
+              await assertBusyPage(busy);
+            });
+            assert.ok(errors.some((values) => values.some((value) => String(value).includes(message))), "partial-page failure must be logged explicitly");
+          } finally { console.error = previousError; }
+        });
+        await assertOrdinary(first, "claimed");
+        assert.deepEqual(await readOrdinary(broken), beforeBroken);
       });
     } catch (error) {
       failed = true;

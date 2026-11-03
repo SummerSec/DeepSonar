@@ -11,7 +11,7 @@
 
 追加的 `de5a3e13818dd78ff0ca318c9169229155be1101` 修正首轮 checkpoint 4 处 typecheck 错误，[CI 41664255350](https://github.com/SummerSec/DeepSonar/actions/runs/41664255350)快检通过；`ca2e91e22a14426605832ef9929fd63bdfbc5f1d` 补独立数据库重试耗尽指标，[CI 41665015133](https://github.com/SummerSec/DeepSonar/actions/runs/41665015133)快检通过。这些均为 Draft，不含完整验收。
 
-修复分支已整合 #871/#873/#874 的 context/终态锁序、定向恢复 claim、精确 Attempt 续租、共享 prepare/cleanup 的失锁与 generation fence；PR 已转 Ready。`ff0ac08b` 的[完整 CI](https://github.com/SummerSec/DeepSonar/actions/runs/41678946927)实际通过 context/Attempt recovery PG 及全部受治理完成恢复 PG，包含真实 Reaper 的停止、两类 token 撤销、审计和 Canvas/Plan、迟到账本对账、微秒精度 CAS 与不可变负回执；整体 gate 随后因状态写入 inventory 未登记“未启动且过期的定向 Hub 取消”而失败。该专用 writer 已补清单，生产扫描不豁免。普通候选忙锁补槽已按分候选页独立事务补齐；相应真实 PG 回归补充中，覆盖目标包括同锁持有期间的独立候选、跨页推进及后页失败保留前页已提交领取。最终合并候选仍须重新核对完整核心与原生专项，旧 SHA 的局部成功不能替代最终验收。本地仅执行静态阅读、语法及 `git diff --check`，不运行 tests/build/typecheck/PG/Docker，不执行生产部署。
+修复分支已整合 #871/#873/#874 的 context/终态锁序、定向恢复 claim、精确 Attempt 续租、共享 prepare/cleanup 的失锁与 generation fence；PR 已转 Ready。`ff0ac08b` 的[完整 CI](https://github.com/SummerSec/DeepSonar/actions/runs/41678946927)实际通过 context/Attempt recovery PG 及全部受治理完成恢复 PG，包含真实 Reaper 的停止、两类 token 撤销、审计和 Canvas/Plan、迟到账本对账、微秒精度 CAS 与不可变负回执；整体 gate 随后因状态写入 inventory 未登记“未启动且过期的定向 Hub 取消”而失败。该专用 writer 已补清单，生产扫描不豁免。普通候选忙锁补槽已按分候选页独立事务补齐；相应真实 PG 回归已接源码入口，涵盖同锁持有期间的独立候选、跨页推进、首事务页故障整页回滚及后页失败保留前页已提交领取，新增行为尚待最终候选的实际运行。最终合并候选仍须重新核对完整核心与原生专项，旧 SHA 的局部成功不能替代最终验收。本地仅执行静态阅读、语法及 `git diff --check`，不运行 tests/build/typecheck/PG/Docker，不执行生产部署。
 
 ## #831 engineering acceptance (2026-11-01)
 
