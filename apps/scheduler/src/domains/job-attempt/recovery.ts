@@ -367,7 +367,7 @@ export async function applyCompletionRecoveryDecision(db: typeof sql, hub: Job, 
     const operationId = completionRecoveryIdentity(state.target_job_id, state.target_attempt_id, `reconcile:${String(hub.id)}:${eventId}:${row.id}`);
     // Keep PostgreSQL microseconds as text: a JS Date truncates them and makes a valid CAS miss.
     // Status + observed evidence CAS. A real settlement/ledger change wins; never replace its result.
-    await db`UPDATE job_attempt_effects e SET status='settled',settlement_json=e.settlement_json || ${db.json({
+    const [settled] = await db`UPDATE job_attempt_effects e SET status='settled',settlement_json=e.settlement_json || ${db.json({
       outcome: "applied_with_usage", reconciled_by: "completion-recovery", reconcile_operation_id: operationId,
       recovery_ref: state.recovery_ref, hub_job_id: String(hub.id), decision_event_id: eventId, usage_ledger_id: String(row.ledger_id),
     })},settled_at=now(),updated_at=now() WHERE e.id=${row.id} AND e.status='unknown' AND e.updated_at::text=${row.observed_updated_at}
@@ -375,7 +375,8 @@ export async function applyCompletionRecoveryDecision(db: typeof sql, hub: Job, 
         AND l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id AND l.settlement_status='settled'
         AND l.input_tokens=${row.input_tokens} AND l.output_tokens=${row.output_tokens} AND l.total_tokens=${row.total_tokens}
         AND l.cache_read_input_tokens=${row.cache_read_input_tokens} AND l.cache_creation_input_tokens=${row.cache_creation_input_tokens}
-        AND l.adjustment_tokens=${row.adjustment_tokens})`;
+        AND l.adjustment_tokens=${row.adjustment_tokens}) RETURNING e.id`;
+    if (!settled) throw new ControlInputError("recovery_stale", "Exact effect settlement CAS did not match the locked observation", "recovery");
   }
   const evidence = await readCompletionRecoveryEvidence(db, target, state.target_attempt_id);
   const refreshed = await recordCompletionRecovery(db, target, state.target_attempt_id, state.receipt_ref, "COMPLETION_EFFECT_UNKNOWN", evidence);
