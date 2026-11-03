@@ -1159,7 +1159,12 @@ expect(
   "Release 必须按架构原生构建 ClickHouse 三项镜像并在组装 index 前完成冒烟",
 );
 expect(releaseWorkflow.includes('test-clickhouse-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}" "${{ matrix.platform }}"'), "release ClickHouse smoke must pull and run the matrix target platform");
-expect(releaseWorkflow.includes('git push origin "HEAD:${DEFAULT_BRANCH}"') || releaseWorkflow.includes("git push origin \"HEAD:${DEFAULT_BRANCH}\""), "release workflow 必须把清单推送到默认分支");
+// The writeback control flow lives in agent-harness/release-writeback.mjs so the
+// "never move the default branch unless ci-summary passed" rule is unit tested;
+// the workflow must invoke it and the module must still push the default branch.
+const writebackScript = readFileSync(new URL("./release-writeback.mjs", import.meta.url), "utf8");
+expect(releaseWorkflow.includes("agent-harness/release-writeback.mjs"), "release workflow 必须通过受测模块回写默认分支");
+expect(writebackScript.includes("`HEAD:${defaultBranch}`"), "release writeback 模块必须把清单推送到默认分支");
 expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");
 expect(releaseWorkflow.includes("kali-minimal:"), "release workflow 缺少 Kali 独立 job（避免多架构同作业 ENOSPC）");
 expect(releaseWorkflow.includes("  mobile:") && releaseWorkflow.includes("Dockerfile.agent-mobile"), "release workflow 必须发布 Mobile 专项镜像");

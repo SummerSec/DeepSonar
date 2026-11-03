@@ -74,6 +74,8 @@ test("lexical retrieval stays bounded and isolated under a synthetic backlog (#8
           // Fixed-seed shape: a hot repeated phrase, sparse titles and a missing summary band.
           // Synthetic text stays in SQL: padding a JS string with a column reference would
           // evaluate `n` outside the query.
+          // Row shape and scale are deterministic (generate_series); identifiers stay random
+          // so two runs cannot collide in the same database.
           await sql`INSERT INTO findings(project_id,job_id,fingerprint,title,summary,profile)
             SELECT ${project}::uuid,${job}::uuid,n::text,
               CASE WHEN n % 7 = 0 THEN 'sql injection in login' ELSE ${label} || ' unrelated ' || repeat('x', n % 40) END,
@@ -90,8 +92,9 @@ test("lexical retrieval stays bounded and isolated under a synthetic backlog (#8
         await sql`ANALYZE findings`; await sql`ANALYZE jobs`; await sql`ANALYZE canvases`;
         const [subjectRow] = await sql`SELECT id FROM findings WHERE project_id=${projectA}::uuid ORDER BY fingerprint LIMIT 1`;
         const subject = String(subjectRow.id);
-        const [foreignRow] = await sql`SELECT id FROM findings WHERE project_id=${projectB}::uuid ORDER BY fingerprint LIMIT 1`;
-        const foreignIds = new Set((await sql`SELECT id FROM findings WHERE project_id=${projectB}::uuid ORDER BY id LIMIT 50`).map(row => String(row.id)));
+        // Every returned row is attributed back to its project in one query at the end of
+        // the run: a 50-row sample of the other project cannot prove isolation.
+        const returned = new Set<string>();
 
         const before = await stats();
         const sequential: number[] = [];
@@ -104,9 +107,7 @@ test("lexical retrieval stays bounded and isolated under a synthetic backlog (#8
           assert.equal(response.examined, 128, "the window budget must not shrink under pressure");
           assert.ok(response.items.length <= 25, "window size must stay within the documented bound");
           examined = response.examined;
-          for (const item of response.items) {
-            assert.ok(!foreignIds.has(String(item.finding_id)), "project isolation: another project's finding leaked into the window");
-          }
+          for (const item of response.items) returned.add(String(item.finding_id));
         }
         const concurrent: number[] = [];
         await Promise.all(Array.from({ length: 8 }, async () => {
@@ -117,8 +118,16 @@ test("lexical retrieval stays bounded and isolated under a synthetic backlog (#8
             assert.ok(response, "a concurrent query must not degrade to a partial result");
             assert.equal(response.examined, 128);
             assert.ok(response.items.length <= 25);
+            for (const item of response.items) returned.add(String(item.finding_id));
           }
         }));
+        assert.ok(returned.size > 0, "the windows returned no rows at all, so the isolation check would be vacuous");
+        const ownership = await sql`
+          SELECT count(*)::int AS total, count(*) FILTER (WHERE project_id = ${projectA}::uuid)::int AS mine
+          FROM findings WHERE id = ANY(${[...returned]}::uuid[])`;
+        assert.equal(Number(ownership[0]?.total), returned.size, "every returned id must exist in findings");
+        assert.equal(Number(ownership[0]?.mine), returned.size,
+          "project isolation: every returned finding must belong to the queried project");
         const after = await stats();
 
         const plan = await sql.begin("isolation level repeatable read read only", async tx => {

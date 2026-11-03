@@ -81,6 +81,20 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 
 **Chrome / ClickHouse 双架构缓存复用（v0.5.4 修正）**：Audit、Test、Fuzz 在 amd64 与 arm64 同时命中 source-cache 后，先将本轮已验收的每架构 wrapper/index 解析为该目标平台唯一的 runnable manifest digest。用候选 catalog 的不可变 digest inspect runnable descriptors，再比较精确的 `linux/amd64` / `linux/arm64` → manifest digest 映射；attestation descriptor 不计入 payload，也不能充当 runnable manifest。只有平台集合和每个平台 digest 完全相同才复用 catalog canonical digest。缺失、重复、歧义的 runnable descriptor，或解析 / inspect 错误均 fail closed；不同 payload / 无匹配 catalog 行只作为复用未命中，改用本轮已测试缓存子镜像重新组装 index，再发布所有配置通道并收集新 inspect 证据。最后选入 catalog 的 canonical digest 必须包含本轮实际测试的两个子 manifest；不要求无关 wrapper / attestation 的 index digest 相等。其他调用方按精确 canonical digest 的复用方式仍有效。
 
+**运行时版本轴与 reverse 跟随例外（#864 评审结论）**：`versions[].version` 表示「哪一次发布首次产出该 digest」，默认**不**随平台版本变化——内容未变时保留原 `version` + `digest`（summary 写 `image build unchanged; version kept`）。该字段参与 Scheduler 的 `(runtime_image_id,digest)` 写入与 `min_runtime_image` 下限比较，不能当作纯粹的展示标签。
+
+唯一例外是 `deepsonar-reverse`：它必须携带**平台版本**（`PLATFORM_TRACKED_IMAGE_KEYS`）。这条例外不是约定俗成的偏好，而是两条既有规范同时要求的结果：
+- `apps/scheduler/src/reverse-runtime-project-opt-in.test.ts`（`ci:unit:runtime-images`）要求 bundled 清单里恰好有一条 reverse 记录的 `version === platform_version`，Scheduler 的 reverse 准入按该记录取 digest / `image_ref` / 通道引用；
+- `agent-harness/test-reverse-runtime.mjs`（`ci:images`）同样按平台版本查找 reverse 记录。
+
+清单无法为同一 digest 保存两条引用相同的记录（生成器与 Scheduler 契约都会拒绝重复 normalized ref），因此复用 reverse 构建时只能**就地重标**该条记录的 `version`。
+
+重标保留的身份与影响面（有回归覆盖）：
+- `digest` / `platforms` / `image_ref` / `registry_refs` / `registry_evidence` 全部不变，仍是一条记录对应一个 digest；`agent-harness/test-runtime-registry-generator.mjs` 断言这四处不变，且新 digest 仍会带上自己的版本条目。
+- 下限判断（`isRuntimeImageBelowPlatformMin`，见 `runtime-image-platform-min.test.ts`）只会看到「不低于平台版本」的值：重标的目标值就是 `platform_version`，不会把记录抬到平台之上，也不会让它绕过低于下限的检查。
+- 历史标签被替换而非静默保留；需要「本次发布跑的是哪一版」时看 `platform.version`，不要从运行镜像版本反推。
+- 其他镜像（base / audit / chrome / clickhouse / mobile / openharmony / kali）没有这条例外，继续保留「由哪一版构建」的含义。
+
 **最终清单 payload 门禁**：`agent-harness/check-runtime-catalog-platforms.mjs` 必须收到 Chrome / ClickHouse Audit、Test、Fuzz 及 Reverse 七个产品 × amd64 / arm64 的全部 14 份 native-smoke artifact。它从这些已测试 wrapper 重新解析 runnable manifest，并按 Scheduler 相同的 latest-version 排序为每个通道 / 平台解析实际 selected version；每个可用通道内的 amd64 / arm64 必须选中同一条 canonical 双平台记录，拆成不同平台版本的选择明确 fail closed，不能因任意历史行匹配就冒充 Scheduler 实际选择。随后重新 inspect 生成清单中 GHCR 及每个 available 的 Docker Hub / ACR 所选不可变 index，逐个平台核对实际子 manifest digest；不信任 cache-hit 标志、version 标签或 descriptor 自报的平台摘要。该门禁只校验目录的 bulk/latest 选择，不改写或覆盖既有 Job 冻结 / 钉死的 digest。未选中的历史行可以保留；缺失或歧义的选择、任一可用通道选到陈旧 payload、artifact 缺件 / 重复、解析 / inspect 失败均 fail closed。最终 Release job 使用既有凭据在本 job 登录 GHCR 及已配置的 Docker Hub / ACR，不依赖其他 job 的登录状态。此门禁在生成清单后、Release asset 上传及 bundled / 部署 tag 回写前执行；仅本次 catalog 修正不改运行镜像输入与 fingerprint，也不跳过 native smoke；v0.5.4 包含的其他变更（包括 #718 共享手册输入）仍可能触发重建。
 
 **真实 digest 来自构建输出或经不可变 registry inspect 证明可复用的 catalog 内容**，不会手写伪造。发布成功后：

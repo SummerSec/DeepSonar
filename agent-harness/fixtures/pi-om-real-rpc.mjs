@@ -372,27 +372,24 @@ export async function runGrowthProbe({ rounds = 4, resumeRounds = 3 } = {}) {
     const scenarioRoot = path.join(root, "growth");
     mkdirSync(scenarioRoot);
     // The growth probe synthesises its own entries, so the canonical fixture id
-    // never exists in it. Recall targets an id the session really recorded,
-    // which is what "the resumed process still resolves pre-restart sources"
-    // has to mean here.
+    // never exists in it. Recall targets an id frozen BEFORE the restart, which
+    // is what "the resumed process still resolves pre-restart sources" means.
     const recallState = { id: null };
-    const rememberObservation = () => {
-      for (const record of client?.records ?? []) {
-        const observed = record.entry?.data?.observations?.[0]?.id;
-        if (observed) recallState.id = observed;
-      }
-    };
     gateway = await fakeGateway("success", { recallId: () => recallState.id });
     const paths = configure(scenarioRoot, gateway.port, wrapper.replaceAll("\\", "/"), "success");
     const start = (sessionFile) => new RpcClient(cli, ["--provider", "offline-main", "--model", MODEL,
       "-e", paths.extension, ...(sessionFile ? ["--session", sessionFile] : [])], {
       cwd: paths.workspace, env: { ...process.env, HOME: paths.home, USERPROFILE: paths.home,
         PI_CODING_AGENT_DIR: paths.home, PI_OBSERVATIONAL_MEMORY_PASSIVE: "1", TEMP: scenarioRoot, TMPDIR: scenarioRoot },
-    }, boundary.PiJsonlFramer, (line) => boundary.parsePiJsonlRecord(line, 8 * 1024 * 1024));
+    }, boundary.PiJsonlFramer, (line) => {
+      // Frame size is the number of bytes that actually crossed the pipe, not the
+      // length of a re-serialised object (UTF-16 characters, different escaping).
+      largestFrameBytes = Math.max(largestFrameBytes, Buffer.byteLength(line, "utf8"));
+      return boundary.parsePiJsonlRecord(line, 8 * 1024 * 1024);
+    });
     const samples = [];
-    let largestFrame = 0;
+    let largestFrameBytes = 0;
     const sample = (label) => {
-      for (const record of client.records) largestFrame = Math.max(largestFrame, JSON.stringify(record).length);
       samples.push({ label, agent: directoryBytes(paths.home), workspace: directoryBytes(paths.workspace),
         observerRequests: gateway.requests.filter((row) => row.stage === "observer").length,
         reflectorRequests: gateway.requests.filter((row) => row.stage === "reflector").length,
@@ -406,7 +403,21 @@ export async function runGrowthProbe({ rounds = 4, resumeRounds = 3 } = {}) {
     }
     const firstSession = findSessionFiles(paths.home).sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
     assert.ok(firstSession, "the first session must persist a transcript before the resume probe");
-    const firstSessionBytes = statSync(firstSession).size;
+    // Freeze the pre-restart state BEFORE the process dies: the observation the
+    // resumed process must still resolve, the source entries it has to name, and
+    // the exact bytes of the ledger it must not rewrite.
+    const frozenObservations = [];
+    for (const record of client.records) {
+      for (const observation of record.entry?.data?.observations ?? []) {
+        if (observation?.id) frozenObservations.push({ id: String(observation.id),
+          sources: (observation.sourceEntryIds ?? []).map(String) });
+      }
+    }
+    assert.ok(frozenObservations.length > 0, "the first session must record at least one observation to freeze");
+    const frozen = frozenObservations[0];
+    const ledgerPrefix = readFileSync(firstSession);
+    const ledgerPrefixSha256 = createHash("sha256").update(ledgerPrefix).digest("hex");
+    recallState.id = frozen.id;
     await client.stop();
     client = start(firstSession);
     assert.equal((await client.command("get_state")).success, true);
@@ -414,34 +425,57 @@ export async function runGrowthProbe({ rounds = 4, resumeRounds = 3 } = {}) {
       await client.turn(`Resumed session round ${round}: ` + `session-two-detail ${round} `.repeat(300));
       sample(`session-2/round-${round}`);
     }
-    // Bounded recall must not be bought by deleting history: the resumed
-    // session still resolves material recorded before the process restart.
-    rememberObservation();
-    assert.ok(recallState.id, "the resumed session must have recorded an observation to recall");
+    // History integrity is a statement about the frozen bytes, not about a total
+    // directory size (new rounds or settings files could cover a truncated ledger).
+    const resumedLedger = readFileSync(firstSession);
+    assert.ok(resumedLedger.length >= ledgerPrefix.length, "the resumed session must not truncate the existing ledger");
+    assert.equal(createHash("sha256").update(resumedLedger.subarray(0, ledgerPrefix.length)).digest("hex"),
+      ledgerPrefixSha256, "the pre-restart ledger prefix must be preserved byte for byte");
     await client.turn("RECALL_NOW");
     sample("session-2/recall");
     const recall = client.records.filter((record) => record.type === "tool_execution_end" && record.toolName === "recall").pop();
     const recallDetails = recall?.result?.details ?? {};
-    const stageCounts = gateway.requests.reduce((counts, row) => ({ ...counts, [row.stage]: (counts[row.stage] ?? 0) + 1 }), {});
-    assert.equal(recallDetails.status, "ok",
-      `recall after resume must succeed (status ${recallDetails.status ?? "missing"}; stages ${JSON.stringify(stageCounts)}; `
-      + `observations ${JSON.stringify(client.records.filter((record) => record.entry?.customType?.startsWith("om.")).map((record) => record.entry?.customType))}`
-      + ` sample ${JSON.stringify(client.records.filter((record) => record.entry?.customType === "om.observations.recorded").slice(0, 1)).slice(0, 600)})`);
-    assert.ok((recallDetails.sourceEntries ?? []).length > 0, "recall after resume must still resolve pre-restart sources");
-    const agentAfter = directoryBytes(paths.home).total;
-    assert.ok(agentAfter >= firstSessionBytes, "on-disk history must not shrink to keep recall bounded");
+    const status = recallDetails.status ?? "missing";
+    // Diagnostics stay at metadata level: the raw observation records carry
+    // private prose and must never reach a log, even on the failure path.
+    const safeDiagnostics = JSON.stringify({
+      status,
+      requestedId: frozen.id,
+      stages: gateway.requests.reduce((counts, row) => ({ ...counts, [row.stage]: (counts[row.stage] ?? 0) + 1 }), {}),
+      recordedTypes: client.records.map((record) => record.entry?.customType).filter(Boolean),
+    });
+    assert.equal(status, "ok", `recall of the frozen pre-restart observation must succeed: ${safeDiagnostics}`);
+    const recallSources = (recallDetails.sourceEntries ?? []).map((entry) => String(entry.id));
+    assert.ok(recallSources.length > 0, `recall must name sources: ${safeDiagnostics}`);
+    for (const source of recallSources) {
+      assert.ok(frozen.sources.includes(source),
+        `recall must resolve pre-restart sources only: ${safeDiagnostics} sources=${JSON.stringify(recallSources)}`);
+    }
+    // Negative control: a session that never saw those records must NOT resolve
+    // the frozen id, otherwise the positive case above proves nothing.
+    await client.stop();
+    client = start();
+    assert.equal((await client.command("get_state")).success, true);
+    await client.turn("RECALL_NOW");
+    const isolatedRecall = client.records.filter((record) => record.type === "tool_execution_end" && record.toolName === "recall").pop();
+    const isolatedStatus = isolatedRecall?.result?.details?.status ?? "missing";
+    assert.notEqual(isolatedStatus, "ok",
+      `a fresh session must not resolve pre-restart observations (status ${isolatedStatus})`);
     const report = {
       pi_om_growth: "passed",
       rounds, resumeRounds,
-      firstSessionBytes,
-      largestFrameBytes: largestFrame,
+      ledgerPrefixBytes: ledgerPrefix.length,
+      ledgerPrefixSha256,
+      largestFrameBytes,
       requests: gateway.requests.length,
-      recallSources: (recallDetails.sourceEntries ?? []).length,
+      frozenObservationId: frozen.id,
+      recallSources: recallSources.length,
+      negativeControl: isolatedStatus,
       samples: samples.map((entry) => ({ label: entry.label, agentBytes: entry.agent.total, agentFiles: entry.agent.files,
         workspaceBytes: entry.workspace.total, observerRequests: entry.observerRequests,
-        reflectorRequests: entry.reflectorRequests, frames: entry.frames,
-        agentBuckets: entry.agent.buckets })),
-      methodology: "synthetic scale only; bytes are on-disk totals per round, no public quality or SLA claim",
+        reflectorRequests: entry.reflectorRequests, frames: entry.frames, agentBuckets: entry.agent.buckets })),
+      methodology: "synthetic scale only; bytes are on-disk totals per round, frame bytes are UTF-8 pipe bytes; "
+        + "no public quality or SLA claim",
     };
     const artifactDirectory = process.env.DEEPSONAR_GROWTH_ARTIFACT_DIR;
     if (artifactDirectory) {

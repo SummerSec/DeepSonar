@@ -9,7 +9,18 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const generator = path.join(root, "agent-harness", "generate-runtime-image-registry.mjs");
-const template = JSON.parse(readFileSync(path.join(root, "deploy", "runtime-image-registry.json"), "utf8"));
+// Fail with a readable message instead of a bare SyntaxError: this fixture is the
+// baseline the generator is compared against, so a malformed catalog must abort.
+function readJson(pathname) {
+  try {
+    return JSON.parse(readFileSync(pathname, "utf8"));
+  } catch (error) {
+    console.error(`test fixture is not valid JSON: ${pathname}: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
+}
+
+const template = readJson(path.join(root, "deploy", "runtime-image-registry.json"));
 const tempRoot = mkdtempSync(path.join(os.tmpdir(), "deepsonar-runtime-registry-v2-"));
 const descriptorDir = path.join(tempRoot, "descriptors");
 const outputPath = path.join(tempRoot, "runtime-image-registry.json");
