@@ -1,7 +1,9 @@
 // Unit doubles for the wrapper's boundary. These are NOT the real-plugin RPC
 // acceptance fixture (pi-om-real-rpc.mjs); no memory algorithm is reproduced.
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { FROZEN_CONFIG } from "./pi-om-config.mjs";
 
 const doubleSource = `
@@ -52,4 +54,42 @@ export async function loadGovernedBoundary() {
   const code = stripTypeScriptTypes(source, { mode: "transform", sourceUrl: "governed-om-unit.ts" });
   const { createGovernedObservationalMemoryExtension } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
   return { createGovernedObservationalMemoryExtension, config: structuredClone(FROZEN_CONFIG) };
+}
+
+// Feed an actual Gateway response (or an SDK's message-only carrier) through the
+// production wrapper's worker, settle and compaction hooks; no classifier double.
+export async function createFailureBoundary(errorMessage) {
+  const { createGovernedObservationalMemoryExtension: create, config } = await loadGovernedBoundary();
+  const root = mkdtempSync(path.join(tmpdir(), "om-gateway-boundary-"));
+  const previous = Object.fromEntries(["TEMP", "TMPDIR", "PI_CODING_AGENT_DIR", "PI_OBSERVATIONAL_MEMORY_PASSIVE"]
+    .map((key) => [key, process.env[key]]));
+  process.env.TEMP = root;
+  process.env.TMPDIR = root;
+  process.env.PI_CODING_AGENT_DIR = root;
+  process.env.PI_OBSERVATIONAL_MEMORY_PASSIVE = "1";
+  const close = () => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  };
+  const hooks = new Map();
+  const messages = [];
+  const entries = [];
+  const model = { provider: config.model.provider, id: config.model.id, api: "openai-completions", baseUrl: "http://127.0.0.1/om" };
+  const context = { cwd: root, mode: "rpc", hasUI: true,
+    ui: { notify: () => { throw new Error("RPC must not create UI frames"); } },
+    model: { provider: "main", id: "main", contextWindow: 1000000 },
+    sessionManager: { getSessionId: () => "gateway-boundary", getSessionFile: () => path.join(root, "session.jsonl") },
+    modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "offline-unit" }),
+      async *streamSimple() { yield { type: "error", error: { errorMessage } }; } },
+  };
+  const pi = { on: (name, handler) => hooks.set(name, [...(hooks.get(name) ?? []), handler]),
+    registerTool() {}, registerCommand() {},
+    sendMessage: (message) => messages.push(message), appendEntry: (...args) => entries.push(args),
+  };
+  try { create(config)(pi); } catch (error) { close(); throw error; }
+  return { messages, entries, close,
+    async event(name) { let result; for (const handler of hooks.get(name) ?? []) result = await handler({}, context); return result; },
+  };
 }

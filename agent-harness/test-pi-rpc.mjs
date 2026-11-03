@@ -10,7 +10,7 @@ import { assertInstalledPiImage } from "./pi-image-packaging.mjs";
 const packagingOnly = process.argv.includes("--packaging-only");
 // #835 item 3: bounded multi-round / multi-session growth probe. It shares the
 // image harness (same canonical Pi/OM, same production wrapper) but measures
-// on-disk growth instead of replaying the eight failure scenarios.
+// on-disk growth instead of replaying the RPC scenario suite.
 const growth = process.argv.includes("--growth");
 
 if (process.argv.includes("--inside")) {
@@ -31,7 +31,7 @@ if (process.argv.includes("--inside")) {
     // package and production wrapper. Host mode remains the only branch that
     // relocates a wrapper for local smoke testing.
     const reports = await piFixture.runRealPiRpc();
-    assert.equal(reports.length, 8);
+    assert.equal(reports.length, piFixture.PI_RPC_SCENARIOS.length);
     console.log(`Pi 1.4.0 + canonical OM 3.1.4: ${reports.length} offline real-RPC image scenarios passed`);
   }
 } else if (process.env.DEEPSONAR_PI_BINARY) {
@@ -41,7 +41,7 @@ if (process.argv.includes("--inside")) {
     console.log(`HOST-ONLY growth probe: ${report.samples.length} samples recorded; not image evidence`);
   } else {
     const reports = await piFixture.runRealPiRpc();
-    assert.equal(reports.length, 8);
+    assert.equal(reports.length, piFixture.PI_RPC_SCENARIOS.length);
     console.log(`HOST-ONLY Pi 1.4.0 + canonical OM 3.1.4: ${reports.length} offline real-RPC scenarios passed; not image evidence`);
   }
 } else {

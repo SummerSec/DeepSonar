@@ -402,7 +402,8 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     const transient = await request(closedMemory.plaintext, { claimedWorkload: "main" });
     assert.equal(transient.statusCode, 503);
     assert.deepEqual(transient.json(), {
-      error: { type: "gateway_transient", effect_status: "not_started", message: "upstream unavailable before request start" },
+      error: { type: "gateway_transient", effect_status: "not_started",
+        message: '{"type":"gateway_transient","effect_status":"not_started","message":"upstream unavailable before request start"}' },
     });
     assert.equal(upstreamCalls, callsBeforeClosed, "a closed provider port never reaches the fixture upstream");
     const [closedUsage] = await sql`

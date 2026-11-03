@@ -1028,6 +1028,19 @@ function deny(reply: FastifyReply, code: number, error: string, code2: string) {
   return reply.code(code).send({ error: { type: code2, message: error } });
 }
 
+/** Only host-proven no-effect paths may emit this envelope; Pi's SDK may retain only error.message. */
+function gatewayNotStartedError(message: string) {
+  const error = { type: "gateway_transient", effect_status: "not_started", message };
+  return { ...error, message: JSON.stringify(error) };
+}
+
+function databaseConflictMetricCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "unknown";
+  const { code, cause } = error as { code?: unknown; cause?: unknown };
+  if (code === "40P01" || code === "40001" || code === "55P03") return code;
+  return cause ? databaseConflictMetricCode(cause) : "unknown";
+}
+
 type GatewayRequestAdmission = {
   requestNo: number;
   effectId: string;
@@ -1435,11 +1448,9 @@ export function registerGateway(app: FastifyInstance): void {
         });
       }), {
         onConflict: (error, attempt) => {
-          inc("deepsonar_gateway_db_conflict_retries_total", {
-            workload,
-            code: String((error as { code?: unknown }).code ?? "unknown"),
-          });
-          app.log.warn({ attempt, code: (error as { code?: unknown }).code, job_id: jt.job_id },
+          const code = databaseConflictMetricCode(error);
+          inc("deepsonar_gateway_db_conflict_retries_total", { workload, code });
+          app.log.warn({ attempt, code, job_id: jt.job_id },
             "gateway admission retried after a recoverable database conflict");
         },
       }).catch(error => {
@@ -1448,11 +1459,10 @@ export function registerGateway(app: FastifyInstance): void {
         throw error;
       });
       if (requestIntent instanceof DatabaseConflictExhaustedError) {
+        // The admission transaction rolled back its counter and effect; no upstream request started.
+        const message = "数据库锁冲突在有限重试后仍未恢复，请稍后重试；该请求未向上游发出";
         return reply.code(503).send({
-          error: {
-            type: "database_conflict",
-            message: "数据库锁冲突在有限重试后仍未恢复，请稍后重试；该请求未向上游发出",
-          },
+          error: workload === "observational_memory" ? gatewayNotStartedError(message) : { type: "database_conflict", message },
           error_code: "database_conflict",
           retryable: true,
           attempts: requestIntent.attempts,
@@ -1522,11 +1532,7 @@ export function registerGateway(app: FastifyInstance): void {
           });
           if (settled) {
             return reply.code(503).send({
-              error: {
-                type: "gateway_transient",
-                effect_status: "not_started",
-                message: "upstream unavailable before request start",
-              },
+              error: gatewayNotStartedError("upstream unavailable before request start"),
             });
           }
           return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");

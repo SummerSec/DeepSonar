@@ -15,6 +15,18 @@ const IMAGE_WRAPPER = "/opt/deepsonar/pi-extensions/deepsonar-observational-memo
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
 const observationId = createHash("sha256").update(OBSERVATION).digest("hex").slice(0, 12);
 const privateProse = new RegExp(`${OBSERVATION}|${REFLECTION}`, "u");
+// The real Scheduler route regression asserts both exact wire payloads, including
+// the message carrier produced by the host. Never repair an SDK message here.
+const dbConflictResponse = JSON.parse(readFileSync(new URL("./pi-om-db-conflict.json", import.meta.url), "utf8"));
+export const PI_RPC_TRANSPORT_TRANSIENT_RESPONSE = Object.freeze({
+  error: {
+    type: "gateway_transient", effect_status: "not_started",
+    message: '{"type":"gateway_transient","effect_status":"not_started","message":"upstream unavailable before request start"}',
+  },
+});
+export const PI_RPC_SCENARIOS = Object.freeze([
+  "success", "quota", "transient", "database-conflict", "upstream-503", "permission", "pending", "unknown", "protocol", "config-drift", "disabled",
+]);
 
 function resolveCli(binary) {
   const { executable, metadata } = resolvePiPackage(binary);
@@ -68,8 +80,15 @@ async function fakeGateway(scenario, options = {}) {
         tool_acks: body.messages.filter((message) => message.role === "tool").map((message) =>
           typeof message.content === "string" ? message.content.slice(0, 512) : "nontext") };
       requests.push(row);
-      if (workload !== "main" && ["quota", "transient", "permission", "unknown", "protocol"].includes(scenario)) {
-        row.status = scenario === "quota" ? 429 : scenario === "transient" ? 503 : scenario === "permission" ? 403 : 409;
+      if (workload !== "main" && ["transient", "database-conflict"].includes(scenario)) {
+        row.status = 503;
+        row.total_tokens = null;
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify(scenario === "database-conflict" ? dbConflictResponse : PI_RPC_TRANSPORT_TRANSIENT_RESPONSE));
+        return;
+      }
+      if (workload !== "main" && ["quota", "upstream-503", "permission", "pending", "unknown", "protocol"].includes(scenario)) {
+        row.status = scenario === "quota" ? 429 : scenario === "upstream-503" ? 503 : scenario === "permission" ? 403 : 409;
         row.total_tokens = null;
         if (scenario === "protocol") {
           row.status = 200;
@@ -78,12 +97,11 @@ async function fakeGateway(scenario, options = {}) {
           return;
         }
         const error = scenario === "quota" ? { type: "quota_exhausted", message: "request quota exhausted" }
-          : scenario === "transient" ? { type: "gateway_transient", effect_status: "not_started" }
-            : scenario === "unknown" ? { type: "workload_usage_unknown" }
-              : scenario === "permission" ? { type: "frozen_model_mismatch" } : { type: "malformed_response" };
-        // SDK errors preserve message, so include the structured Gateway code
-        // in the transient/unknown fixture's message as well.
-        if (!error.message) error.message = JSON.stringify({ error: { ...error } });
+          : scenario === "upstream-503" ? { type: "overloaded_error", message: "offline upstream unavailable" }
+            : scenario === "pending" ? { type: "workload_usage_pending", message: "observational-memory allowance is reserved by an unsettled request" }
+              : scenario === "unknown" ? { type: "workload_usage_unknown", message: "observational-memory usage requires reconciliation" }
+                : scenario === "permission" ? { type: "frozen_model_mismatch", message: "offline frozen model mismatch" }
+                  : { type: "malformed_response", message: "offline malformed response" };
         res.writeHead(row.status, { "content-type": "application/json" });
         res.end(JSON.stringify({ error }));
         return;
@@ -107,11 +125,11 @@ async function fakeGateway(scenario, options = {}) {
         tool = { name: "record_reflections", arguments: { reflections: [{ content, supportingObservationIds: [support] }] } };
       } else if (stage === "main" && transcript.includes("RECALL_NOW")
         && !body.messages.some((message) => message.role === "tool" && message.tool_call_id === "recall-call")) {
-        // The eight failure scenarios record the canonical observation, so they
+        // The RPC scenarios record the canonical observation, so they
         // recall by its fixed id. The growth probe synthesises its own entries,
         // so it recalls the first id the plugin actually offered instead of
         // asserting against an id that session never contained.
-        // The eight failure scenarios record the canonical observation verbatim,
+        // The RPC scenarios record the canonical observation verbatim,
         // so they keep recalling by its fixed id. Sessions that synthesise their
         // own entries (the growth probe) recall an id they actually recorded.
         const canonical = transcript.includes("Source entry with large content:");
@@ -197,7 +215,7 @@ export async function runRealPiRpc() {
       // acceptance always imports the installed production wrapper directly.
       writeFileSync(wrapper, readFileSync(originalWrapper, "utf8").replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`));
     }
-    for (const scenario of ["success", "quota", "transient", "permission", "unknown", "protocol", "config-drift", "disabled"]) {
+    for (const scenario of PI_RPC_SCENARIOS) {
       const scenarioRoot = path.join(root, scenario);
       mkdirSync(scenarioRoot);
       const gateway = await fakeGateway(scenario);
@@ -212,10 +230,12 @@ export async function runRealPiRpc() {
         client = start();
         const state = await client.command("get_state");
         assert.equal(state.success, true);
-        const hard = ["permission", "unknown", "protocol", "config-drift"].includes(scenario);
+        const hard = ["upstream-503", "permission", "pending", "unknown", "protocol", "config-drift"].includes(scenario);
         await client.turn("Source entry with large content: " + "original-source-detail ".repeat(scenario === "success" ? 60000 : 200), hard);
         if (hard) {
           assert.ok(client.records.some((record) => record.type === "extension_error"), "background hard failure was swallowed");
+          assert.ok(!client.records.some((record) => record.type === "message_end"
+            && record.message?.customType === "deepsonar.om.status"), "hard failure must not advertise native compaction fallback");
         } else if (scenario === "success") {
           assert.ok(gateway.requests.some((row) => row.stage === "observer"));
           assert.ok(client.records.some((record) => record.type === "entry_appended"
@@ -271,7 +291,10 @@ export async function runRealPiRpc() {
         } else {
           const degraded = client.records.find((record) => record.type === "message_end" && record.message?.customType === "deepsonar.om.status");
           assert.equal(Boolean(degraded), scenario !== "disabled", "expected worker failure must be visible over RPC");
-          if (degraded) assert.equal(degraded.message.details.fallback, "native_compaction");
+          if (degraded) {
+            assert.equal(degraded.message.details.fallback, "native_compaction");
+            assert.equal(degraded.message.details.code, scenario === "quota" ? "PI_OM_WORKER_QUOTA_EXHAUSTED" : "PI_OM_WORKER_TRANSIENT");
+          }
           const compacted = await client.command("compact");
           assert.equal(compacted.success, true);
           assert.match(JSON.stringify(compacted.data), /NATIVE_SUMMARY/u, "native model compaction did not run");
