@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### 修复
+
+- **平台更新横幅不再声称宿主机升级尚未实现（#869）**：管理员横幅此前写「请在宿主机执行 deploy.sh upgrade（尚未落地，见 #740）」——宿主机受控升级其实已随 v0.6.0 交付（#740 未实现的只是可选的「Web 发起升级」），而且裸 `upgrade` 没有 action，会被维护状态机拒绝为 `INVALID_MAINTENANCE_ACTION`。现在提示改为两步受控流程：先 `./deploy/deploy.sh upgrade check --to v<目标版本>` 审核阻断项与风险，再 `./deploy/deploy.sh upgrade apply --to v<目标版本>`（有风险时附 `--approve-plan-hash <本次计划哈希>`），并指向 `deploy/README.md` 的受控升级章节、明确「Web 只提示版本，不代执行升级」。目标版本取自状态字段而非写死在源码；schema 重建提醒、changelog 链接与检查失败语义保持不变。
+  - 前端回归覆盖：普通更新、需 schema 重建、无更新、检查失败，断言不再出现「尚未落地」、指引包含 `check`/`apply` 子命令与文档入口、且不固定到某一发布版本。
+  - 旧部署要继续看到旧文案，直到获取包含本修复的 Web 镜像重建部署；本修复只影响新构建。
+
 ## [0.6.6] - 2026-11-03
 
 ### 变更

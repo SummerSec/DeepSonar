@@ -36,7 +36,13 @@ export function platformUpdatePrompt(status: PlatformUpdateStatus | null | undef
   if (status.schema_rebuild_needed) {
     parts.push(`需 schema 重建（目标 v${status.available_schema_version ?? "?"}）`);
   }
-  parts.push("请在宿主机执行 deploy.sh upgrade（尚未落地，见 #740）");
+  // Host upgrade is shipped (#740 P1/P2, v0.6.0+); only the optional
+  // web-initiated upgrade is unimplemented, so the prompt must not claim
+  // otherwise and must not suggest a bare `upgrade` that lacks an action.
+  const target = `v${status.available_version}`;
+  parts.push(`在宿主机受控升级：先 ./deploy/deploy.sh upgrade check --to ${target} 并审核阻断项与风险，`
+    + `再 ./deploy/deploy.sh upgrade apply --to ${target}（有风险时附 --approve-plan-hash <本次计划哈希>）`);
+  parts.push("Web 只提示版本，不代执行升级；步骤见 deploy/README.md 的受控升级章节");
   return {
     kind: "available",
     title: `发现平台新版本 ${status.available_version}`,
