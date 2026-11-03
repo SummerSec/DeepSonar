@@ -15,6 +15,8 @@ if (!testDatabaseUrl) {
     const {
       createAttempt,
       beginEffect,
+      settleEffect,
+      updateAttemptResource,
       settleAttemptTerminal,
       requestAttemptCancel,
       updateAttemptSession,
@@ -147,12 +149,32 @@ if (!testDatabaseUrl) {
       const [failedEffect] = await sql`SELECT status, settlement_json FROM job_attempt_effects WHERE attempt_id = ${String(failedAttempt.id)} AND effect_id = 'provision:sandbox-start'`;
       assert.equal(failedAttemptRow.status, "failed");
       assert.equal(failedAttemptRow.sandbox_id, null);
-      assert.equal(failedEffect.status, "settled");
-      assert.equal(failedEffect.settlement_json.result, "never_started");
-      assert.equal(failedEffect.settlement_json.external_effect, false);
+      assert.equal(failedEffect.status, "unknown", "absent sandbox identity is not never-started evidence");
+      assert.equal(failedEffect.settlement_json.result, undefined);
+      assert.equal(failedEffect.settlement_json.external_effect, undefined);
       await sql`DELETE FROM jobs WHERE id = ${failedJobId}`;
+      for (const explicitSettlement of [false, true]) {
+        const id = randomUUID();
+        await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
+          VALUES(${id},${projectId},${canvasId},'audit','provisioning',${sql.json({ agent_cli: 'claude-code' } as never)})`;
+        const row = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, id, { agent_cli: "claude-code" }));
+        await sql.begin(async tx => {
+          const db = tx as unknown as typeof sql;
+          await beginEffect(db, String(row.id), { effectId: "provision:explicit-evidence", kind: "provision", inputDigest: "b".repeat(64) });
+          if (explicitSettlement) await settleEffect(db, String(row.id), "provision:explicit-evidence", {
+            status: "settled", outcome: { result: "never_started", external_effect: false, evidence: "host_observed_no_creation" },
+          });
+          else await updateAttemptResource(db, String(row.id), { sandboxId: "test-observed-resource" });
+          await settleAttemptTerminal(db, id, "failed", { reason: "recovery_stop" });
+        });
+        const [observed] = await sql`SELECT status,settlement_json FROM job_attempt_effects WHERE attempt_id=${String(row.id)} AND effect_id='provision:explicit-evidence'`;
+        assert.equal(observed.status, explicitSettlement ? "settled" : "unknown");
+        if (explicitSettlement) assert.deepEqual(observed.settlement_json, { result: "never_started", external_effect: false, evidence: "host_observed_no_creation" });
+        else assert.equal(observed.settlement_json.result, undefined, "a bound resource is not exit evidence either");
+        await sql`DELETE FROM jobs WHERE id=${id}`;
+      }
     } finally {
-      await sql`DELETE FROM jobs WHERE id = ${jobId}`;
+      await sql`DELETE FROM jobs WHERE project_id=${projectId} AND canvas_id=${canvasId}`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
       await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await sql.end({ timeout: 5 }).catch(() => {});

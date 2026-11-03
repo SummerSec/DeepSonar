@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-01
+> 同步日期：2026-11-03
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
@@ -254,9 +254,11 @@ pending → claimed → provisioning → running → succeeded
 
 Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报。`pg_notify('deepsonar_jobs')` 是主要调度唤醒；可以关闭轮询。
 
-每个 Job 领取建立 Scheduler-owned Attempt。外部动作先写 `job_attempt_effects` 的 intent/`effect_pending`，观察到结果后再写 settlement。启动对账按 Attempt phase 和 effect 分类：只有尚未开始且无效果的准备阶段可以回到 `pending`；未知效果统一进入 `orphan`，清理 Token、沙箱、画布同步和租约，禁止自动重放。Attempt 终态收口时，从未绑定 `sandbox_id` 且未观察到迟到沙箱的失败 provision 记为 `settled`（outcome `never_started`，证明无外部后果），不得留 `unknown`；超时路径若已观察到迟到 sandbox handle（或 late destroy 失败），以及沙箱已启动后的中断、timeout/cancel/orphan，与 `agent_run` 未证实窗口，仍是 `unknown`。`replay_policy` 不因这次结算改变。
+每个 Job 领取建立 Scheduler-owned Attempt。claim 按有界 keyset 候选页使用独立事务，每页按 advisory lock → 排序 Canvas → project → Job → Attempt 取锁并重新核验暂停、scope 与配额；只计真实领取，忙锁候选不耗槽位，提交释放本页锁后才检查后续页。外部动作先写 `job_attempt_effects` 的 intent/`effect_pending`，观察到结果后再写 settlement。启动对账按 Attempt phase 和 effect 分类：只有尚未开始且无效果的准备阶段可以回到 `pending`；未知效果统一进入 `orphan`，清理 Token、沙箱、画布同步和租约，禁止自动重放。只有明确宿主证据证明尚未调用外部创建，才可显式把 provision 结算为 `never_started`；缺少 `sandbox_id` 或未见迟到句柄不能证明未开始。已调用 runner 的 opaque 失败、timeout/cancel/orphan 及 pending provision 在终态收口时保持 `unknown`，既有真实 settlement 不改写。自动 provision 重试在 Canvas → Job → 当前最新 Attempt 锁下重核，只接纳无效果或明确 settled/never_started 的原 Attempt；`replay_policy` 不变。规则与本轮待验收边界见 [ADR 0015](docs/architecture/adr/0015-governed-completion-recovery.md)。
 
-Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`unknown`/`pending` 保持硬失败，不能以 provider 5xx 文案替代效果 authority。
+Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`unknown`/`pending` 保持硬失败，不能以 provider 5xx 文案替代效果 authority。#873 的 OM admission 回滚耗尽与已持久结算的请求前 transport 使用同一个宿主 error.message carrier，覆盖 SDK 只保留内层消息的路径；上游请求与结算不作为可重试 admission 重放。
+
+#874 的[完成恢复 v1](docs/REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)由原负回执、宿主恢复事实和去重 Hub 驱动。只有 Scheduler 冻结引用授权的严格对账/停止提案能进入原 Control 与语义事务；精确 effect/ledger 才能结算，原 key 不改写，原 deadline/预算、pause、人工、Verify 和完成门保持有效。Reaper 复用原 tick 做有界扫描，不自动对账或复活终态；退出会话/新 Attempt 的完整继续执行仍是缺口。共享卷同时受独立 PG session 的同 Job 生命周期锁和最新 Attempt fence 保护，锁保持至挂载与资源绑定完成，Docker volume/helper 使用独立 generation 名称，prepare 不采纳后继资源；清理快照后及破坏性调用前重验 session 许可。续租用精确 Attempt/sandbox registration 和 Job → 最新 Attempt 事务，旧 finally/tick 不能操作新 owner；详见[资产专题](docs/SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。本轮完整最终 SHA Actions 尚待验收。
 
 `finalizeJob` 的已核验终态路径把 Job/model token、Control token、audit 与终态收口放在同一事务；终态后实际 HTTP 请求断言为 401。`gateway-token-revocation.ts` 复用调用方 Job 锁，不另取独立 Job 锁，也不吞掉失败。该核验只约束此 core finalizeJob 路径，不推断所有 drain/Reaper 清理路径都具有相同实现。
 

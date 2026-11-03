@@ -77,11 +77,7 @@ function fakeAttemptDatabase(initialState: AttemptState): {
           const terminalStatus = values.find((value): value is AttemptStatus => (
             value === "succeeded" || value === "failed" || value === "cancelled" || value === "timeout" || value === "orphan"
           ));
-          const settleFailedUnstartedProvision = values.includes(true)
-            && terminalStatus === "failed"
-            && effect.effect_kind === "provision"
-            && !state.sandbox_id;
-          effect.status = (terminalStatus === "succeeded" && effect.effect_kind === "agent_run") || settleFailedUnstartedProvision
+          effect.status = terminalStatus === "succeeded" && effect.effect_kind === "agent_run"
             ? "settled"
             : "unknown";
         }
@@ -269,7 +265,7 @@ test("settleAttemptTerminal 超限 outcome 抛 ControlInputError 而不是裸 Er
   assert.equal(read().status, "active");
 });
 
-test("provision 失败且从未绑定 sandbox_id 时，终态把账本收成 settled 而不是 unknown", async () => {
+test("provision 失败且缺少 sandbox_id 时，终态仍保留 unknown",  async () => {
   const { db, read } = fakeAttemptDatabase(attemptState());
   await beginEffect(db, "attempt-race-1", {
     effectId: "provision:1",
@@ -279,7 +275,7 @@ test("provision 失败且从未绑定 sandbox_id 时，终态把账本收成 set
   });
   await settleAttemptTerminal(db, "job-race-1", "failed", { reason: "sandbox_start_failed" }, "DOCKER::SANDBOX_START_FAILED");
   assert.equal(read().status, "failed");
-  assert.equal(read().effect?.status, "settled");
+  assert.equal(read().effect?.status, "unknown");
 });
 
 test("provision 已绑定 sandbox_id 后失败，终态仍把未收口效果标 unknown", async () => {
@@ -316,14 +312,14 @@ test("timeout / cancelled / orphan 的未收口 provision 仍是 unknown", async
   }
 });
 
-test("settleAttemptTerminal 用布尔参数判定未启动 provision，不用裸 null IS NULL", async () => {
+test("settleAttemptTerminal 没有缺资源身份的 never_started 推断", async () => {
   const source = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
   const terminal = source.slice(source.indexOf("export async function settleAttemptTerminal"));
-  assert.match(terminal, /settleFailedUnstartedProvision/);
+  assert.doesNotMatch(terminal, /settleFailedUnstartedProvision|neverStartedOutcome/);
   assert.doesNotMatch(terminal.slice(0, terminal.indexOf("export async function markAttemptInterrupted")), /\$\{sandboxId\} IS NULL/);
 });
 
-test("settleUnstartedProvisionEffect 把观察到的创建失败收成 settled，且不把 Attempt 标成 provisioned", async () => {
+test("settleUnstartedProvisionEffect 仅记录显式宿主 no-start 证明，终态保留该 settlement",  async () => {
   const { db, read } = fakeAttemptDatabase(attemptState());
   await beginEffect(db, "attempt-race-1", {
     effectId: "provision:1",
@@ -331,12 +327,14 @@ test("settleUnstartedProvisionEffect 把观察到的创建失败收成 settled�
     resourceIdentity: { job_id: "job-race-1" },
     intent: { image: "deepsonar-base@sha256:abc" },
   });
-  await settleUnstartedProvisionEffect(db, "attempt-race-1", "provision:1", "DOCKER::SANDBOX_START_FAILED");
+  await settleUnstartedProvisionEffect(db, "attempt-race-1", "provision:1", "HOST_PROVISION_NOT_CALLED");
   const after = read();
   assert.equal(after.effect?.status, "settled");
   assert.equal(after.status, "active");
   assert.notEqual(after.state.phase, "provisioned");
   assert.equal(after.state.phase, "settling");
+  await settleAttemptTerminal(db, "job-race-1", "failed", { reason: "host_pre_call_rejected" });
+  assert.equal(read().effect?.status, "settled", "terminal settlement preserves already explicit host proof");
 });
 
 test("terminal 收口后，迟到的 Agent effect settlement 是幂等 no-op", async () => {

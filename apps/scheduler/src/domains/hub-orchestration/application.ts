@@ -3,6 +3,8 @@ import { ControlInputError } from "../../control-input.js";
 import { planContext } from "../plan-protocol/objective.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
 import { extractDispatchPrompt } from "../../job-dispatch-prompt.js";
+import { CompletionRecoveryGrant } from "@deepsonar/shared-types";
+import { completionRecoveryCanWake, completionRecoveryVerifyBlocked, recordCompletionRecoveryWake, type CompletionRecoveryState } from "../job-attempt/recovery.js";
 import { inc } from "../../metrics.js";
 import {
   formatVerifyUnclosedPausedReason,
@@ -51,6 +53,8 @@ export interface HubTriggerOptions {
   manual?: boolean;
   /** 画布空闲唤醒：无待跑 job 时入队 Hub。 */
   idleWake?: boolean;
+  /** Internal Scheduler-directed wake; cannot carry manual/force or ordinary Plan authority. */
+  completionRecovery?: CompletionRecoveryState;
 }
 
 export interface HubHumanCommentInput {
@@ -80,6 +84,7 @@ export interface HubOrchestrationApplication {
     opts?: Pick<HubTriggerOptions, "sourceNodeIds" | "trigger">,
   ): Promise<"report" | "hub" | "noop">;
   triggerHubFromHumanComment(input: HubHumanCommentInput): Promise<HubHumanCommentResult>;
+  triggerCompletionRecovery(tx: HubOrchestrationTransaction, job: HubJobRecord, state: CompletionRecoveryState): Promise<boolean>;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -386,6 +391,8 @@ export function createHubOrchestrationApplication(
     // Serialize the eligibility check and INSERT per canvas. This is the
     // same Canvas-first lock boundary used by terminal/recovery callers.
     if (!(await ports.lockCanvasForConvergence(tx, canvasId))) return;
+    if (options.completionRecovery && (options.force || options.manual || options.idleWake
+      || !await completionRecoveryCanWake(tx, job, options.completionRecovery))) return;
     if (await rootAnalysisFinished(tx, canvasId)) return;
 
     const convergence = await ports.readCanvasConvergence(tx, canvasId);
@@ -416,12 +423,17 @@ export function createHubOrchestrationApplication(
 
     if (options.idleWake) {
       if (await hasActiveRunnableJobs(tx, canvasId, (job.id as string) ?? null)) return;
+    } else if (options.completionRecovery) {
+      const other = await tx`SELECT id FROM jobs WHERE canvas_id=${canvasId} AND type<>'hub_reason'
+        AND id<>${options.completionRecovery.target_job_id} AND status IN ('pending','claimed','provisioning','running','waiting_human') LIMIT 1`;
+      if (other.length) return;
     } else if (!options.manual && !options.force) {
       if (await hasActiveRoleJobs(tx, canvasId)) return;
     }
 
     const waitSeverities = ports.careSeverities(rules.minVerifySeverity);
-    const waiting = await waitingEvidenceRound(tx, canvasId);
+    if (options.completionRecovery && await hasWaitingEvidenceRound(tx, canvasId)) return;
+    const waiting = options.completionRecovery ? null : await waitingEvidenceRound(tx, canvasId);
     let waitingWake: {
       id: string;
       evidence_signature: string;
@@ -473,6 +485,7 @@ export function createHubOrchestrationApplication(
       SELECT COUNT(*)::int AS count FROM jobs
       WHERE canvas_id = ${canvasId} AND type = 'hub_reason' AND status = 'succeeded'`;
     if (!isHubRoundWithinBudget(Number(count), rules.maxHubRounds)) {
+      if (options.completionRecovery) return; // Preserve the ordinary budget; no report/auto-stop side path.
       const limitLabel = hubRoundLimitLabel(rules.maxHubRounds);
       console.warn(`[hub] 画布 ${canvasId} 已达 hub 决策轮次上限 ${limitLabel}，停止自驱`);
       inc("deepsonar_hub_budget_exhausted_total", { limit: limitLabel });
@@ -535,7 +548,7 @@ export function createHubOrchestrationApplication(
     const [canvas] = await tx`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
     // SAFETY: planContext uses tagged reads on this same PostgreSQL handle;
     // it does not open another connection or transaction.
-    const plan = await planContext(tx as unknown as typeof sql, canvasId, projectId);
+    const plan = options.completionRecovery ? null : await planContext(tx as unknown as typeof sql, canvasId, projectId);
     const hubPayload = { trigger, scheduling_purpose: "hub", ...(plan?{plan_context:{plan_job_id:plan.plan_job_id,plan_sha256:plan.plan_sha256,scheduler_owned:true}}:{}) };
     const [hubJob] = await tx`
       INSERT INTO jobs ${tx({
@@ -577,7 +590,7 @@ export function createHubOrchestrationApplication(
       RETURNING id`;
 
     let sourceNodeIds = options.sourceNodeIds ?? [];
-    if (sourceNodeIds.length === 0 && job.id) {
+    if (sourceNodeIds.length === 0 && job.id && !options.completionRecovery) {
       const sources = await tx`
         SELECT id FROM canvas_nodes
         WHERE canvas_id = ${canvasId} AND job_id = ${job.id as string}
@@ -768,5 +781,35 @@ export function createHubOrchestrationApplication(
     return { hub_queued: true, canvas_id: canvasId, hub_job_id: hubJobId };
   }
 
-  return { maybeTriggerHub, advanceCanvasAfterTerminalJob, triggerHubFromHumanComment };
+  async function triggerCompletionRecovery(tx: HubOrchestrationTransaction, job: HubJobRecord, state: CompletionRecoveryState): Promise<boolean> {
+    if (!job.canvas_id || job.canvas_id !== state.canvas_id || job.project_id !== state.project_id) return false;
+    const canvasId = String(job.canvas_id);
+    if (!await ports.lockCanvasForConvergence(tx, canvasId)) return false;
+    if (!await completionRecoveryCanWake(tx, job, state)
+      || await completionRecoveryVerifyBlocked(tx, canvasId, state.target_job_id)) return false;
+    const [existingHub] = await tx`SELECT id FROM jobs WHERE canvas_id=${canvasId} AND type='hub_reason'
+      AND status IN ('pending','claimed','provisioning','running','waiting_human') LIMIT 1`;
+    if (existingHub) return false; // Leave this fingerprint unconsumed, including human-wait Hubs.
+    const [foreignEffect] = await tx`SELECT e.id FROM job_attempt_effects e JOIN jobs owner ON owner.id=e.job_id
+      WHERE owner.canvas_id=${canvasId} AND owner.project_id=${state.project_id}
+      AND NOT (e.job_id=${state.target_job_id} AND e.attempt_id=${state.target_attempt_id})
+      AND (e.status='unknown' OR (e.status='effect_pending' AND NOT (owner.status='running'
+        AND e.effect_kind IN ('agent_run','agent_resume') AND EXISTS (SELECT 1 FROM job_attempts a
+          WHERE a.id=e.attempt_id AND a.job_id=e.job_id AND a.status='active' AND NOT a.cancel_requested)))) LIMIT 1`;
+    if (foreignEffect) return false;
+    const grant = CompletionRecoveryGrant.parse({ recovery_ref: state.recovery_ref, target_job_id: state.target_job_id,
+      target_attempt_id: state.target_attempt_id, project_id: state.project_id, canvas_id: canvasId,
+      snapshot_sha256: state.snapshot_sha256, evidence_sha256: state.evidence_sha256, recovery_revision: state.recovery_revision });
+    await maybeTriggerHub(tx, job, { completionRecovery: state, trigger: { kind: "completion_recovery", recovery_refs: [grant] } });
+    const [hub] = await tx`SELECT id FROM jobs WHERE canvas_id=${canvasId} AND type='hub_reason' AND status='pending'
+      AND payload_json->'trigger'->>'kind'='completion_recovery'
+      AND payload_json->'trigger'->'recovery_refs'->0->>'recovery_ref'=${state.recovery_ref}
+      AND payload_json->'trigger'->'recovery_refs'->0->>'evidence_sha256'=${state.evidence_sha256} ORDER BY created_at DESC LIMIT 1`;
+    if (!hub) return false;
+    // Hub insert and durable (root,fingerprint) marker commit or roll back together.
+    await recordCompletionRecoveryWake(tx, state, String(hub.id));
+    return true;
+  }
+
+  return { maybeTriggerHub, advanceCanvasAfterTerminalJob, triggerHubFromHumanComment, triggerCompletionRecovery };
 }

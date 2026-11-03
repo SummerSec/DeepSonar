@@ -1,0 +1,10 @@
+{
+  "error": {
+    "type": "gateway_transient",
+    "effect_status": "not_started",
+    "message": "{\"type\":\"gateway_transient\",\"effect_status\":\"not_started\",\"message\":\"数据库锁冲突在有限重试后仍未恢复，请稍后重试；该请求未向上游发出\"}"
+  },
+  "error_code": "database_conflict",
+  "retryable": true,
+  "attempts": 3
+}

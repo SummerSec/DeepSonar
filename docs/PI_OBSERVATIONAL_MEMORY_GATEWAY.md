@@ -1,5 +1,5 @@
 > 状态：as-built（#815 B 的 Gateway、账本与用量投影；本地替身和隔离 SQL 验证不代表真实模型效果或完整平台验收）
-> 同步日期：2026-10-31
+> 同步日期：2026-11-03
 
 # Pi Observational Memory Gateway
 
@@ -66,7 +66,7 @@ token 的历史计数。main reservation 在第一个后台 token 签发之前�
 每次后台准入只发起一次上游尝试，包括 unlimited 配额；不自动重放可能已经产生
 外部效果的请求。后台 JSON/SSE 响应在内存中有界缓冲，最多 16 MiB；只有现有严格
 协议 scanner 确认 terminal usage，且数据库结算成功后，才返回正常响应。
-错误状态、断流、超限、缺失或伪造 usage 均进入 unknown 并返回明确的 409；provider 5xx/error prose 不自动等价于“请求未开始”。只有内核已证实的 known-never-started transport failure 才能按 `gateway_transient` + `effect_status=not_started` 走可见降级。
+错误状态、断流、超限、缺失或伪造 usage 均进入 unknown 并返回明确的 409；provider 5xx/error prose 不自动等价于“请求未开始”。只有内核已证明 admission 未提交、或 known-never-started transport 且零用量结算已提交，才能按 `gateway_transient` + `effect_status=not_started` 走可见降级。
 上游请求/响应正文不落库。
 
 当前请求前失败分类只接受 Node 原生连接或 DNS 错误链，见
@@ -76,6 +76,14 @@ usage、effect settlement 和 token counter 在同一事务内写入。账本事
 原 effect 保持 pending，调用方得到对账错误，后续后台请求不能再次出站；不能在
 内存中补造成功账单。权限、provider/model/route、snapshot、完整性、协议、撤销和
 未知外部效果错误都保留硬失败边界。
+
+## Admission 数据库冲突与 SDK 消息（#871/#873）
+
+[纯数据库重试 helper](../apps/scheduler/src/db-conflict-retry.ts)只重试已回滚的完整 admission 事务，SQLSTATE 限定 `40P01` / `40001` / `55P03`；次数与退避以源码为准。额度预留、effect intent 和账本检查全部在提交前完成，提交成功后上游请求只发一次。非冲突错误保持原异常；耗尽返回 `503`，不留下部分 reservation/effect/usage。main workload 保留 `database_conflict`，OM 仅在已回滚、上游未调用的条件下使用宿主 `gateway_transient/not_started`。
+
+OM 的该 admission 分类和已持久结算的请求前 transport 共同使用[生产 error.message carrier](../apps/scheduler/src/gateway.ts)，内层消息保留结构化宿主标记，使 Pi SDK 丢弃外层 envelope 后仍能消费；canonical RPC 夹具不再人工补写消息。pending/unknown、普通或伪造 Provider 503、上游已运行后的 settlement failure 均不能借此降级。真实 handler body 与实际内层 message 双路径送入生产 wrapper 的回归见 [Gateway 测试](../apps/scheduler/src/gateway-db-conflict.test.ts)；retry 与 exhaustion 分开计数，metric 标签限定 workload 与允许的 SQLSTATE/unknown，不写每请求标识；宿主日志关联 Job/Attempt，不复制上游正文。
+
+本轮分支已接现有 `pnpm ci:unit:executor-real`、PostgreSQL Gateway 与[真实镜像 RPC](PI_OBSERVATIONAL_MEMORY_RPC.md)门禁。Draft SHA 的快检不代表 PostgreSQL/镜像或最终完整工程验收；最终候选 Actions 尚待通过，不推导真实模型质量或成本收益。
 
 ## 账本与展示
 

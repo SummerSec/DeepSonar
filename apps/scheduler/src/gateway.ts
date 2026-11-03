@@ -24,6 +24,7 @@ import {
 import { sql } from "./db.js";
 import { revokeJobTokensInTransaction } from "./gateway-token-revocation.js";
 import { inc } from "./metrics.js";
+import { DatabaseConflictExhaustedError, withDatabaseConflictRetry } from "./db-conflict-retry.js";
 import { appendOtlpEnvelope } from "./evidence.js";
 import { extractBaseUrlFromSettings } from "./provider-settings.js";
 import {
@@ -1027,6 +1028,19 @@ function deny(reply: FastifyReply, code: number, error: string, code2: string) {
   return reply.code(code).send({ error: { type: code2, message: error } });
 }
 
+/** Only host-proven no-effect paths may emit this envelope; Pi's SDK may retain only error.message. */
+function gatewayNotStartedError(message: string) {
+  const error = { type: "gateway_transient", effect_status: "not_started", message };
+  return { ...error, message: JSON.stringify(error) };
+}
+
+function databaseConflictMetricCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "unknown";
+  const { code, cause } = error as { code?: unknown; cause?: unknown };
+  if (code === "40P01" || code === "40001" || code === "55P03") return code;
+  return cause ? databaseConflictMetricCode(cause) : "unknown";
+}
+
 type GatewayRequestAdmission = {
   requestNo: number;
   effectId: string;
@@ -1410,7 +1424,10 @@ export function registerGateway(app: FastifyInstance): void {
       };
       // 转发（流式直通；请求数先计，token 数响应后补记）。请求序号
       // 来自同一行的原子更新，重试/并发请求不会复用 effect_id。
-      const requestIntent = await sql.begin(async (tx) => {
+      // #871 A：admission 事务在向上游发出请求之前完成，回滚后计数器与 effect
+      // 一起消失，因此死锁/序列化失败可以安全重试；耗尽时返回稳定错误码，而不是
+      // 让 agent 把它当成模型失败。
+      const requestIntent = await withDatabaseConflictRetry(async () => sql.begin(async (tx) => {
         return admitGatewayRequest(tx as unknown as typeof sql, {
           jobId: String(jt.job_id),
           tokenId: String(jt.id),
@@ -1429,10 +1446,32 @@ export function registerGateway(app: FastifyInstance): void {
             }
           },
         });
+      }), {
+        onConflict: (error, attempt) => {
+          const code = databaseConflictMetricCode(error);
+          inc("deepsonar_gateway_db_conflict_retries_total", { workload, code });
+          app.log.warn({ attempt, code, job_id: jt.job_id },
+            "gateway admission retried after a recoverable database conflict");
+        },
       }).catch(error => {
         if (error instanceof RepairTokenBudgetError || error instanceof GatewayWorkloadPolicyError) return error;
+        if (error instanceof DatabaseConflictExhaustedError) return error;
         throw error;
       });
+      if (requestIntent instanceof DatabaseConflictExhaustedError) {
+        const code = databaseConflictMetricCode(requestIntent.cause);
+        inc("deepsonar_gateway_db_conflict_exhausted_total", { workload, code });
+        app.log.warn({ code, workload, attempts: requestIntent.attempts, job_id: jt.job_id, attempt_id: gatewayAttemptId },
+          "gateway admission exhausted its bounded database conflict retries");
+        // The admission transaction rolled back its counter and effect; no upstream request started.
+        const message = "数据库锁冲突在有限重试后仍未恢复，请稍后重试；该请求未向上游发出";
+        return reply.code(503).send({
+          error: workload === "observational_memory" ? gatewayNotStartedError(message) : { type: "database_conflict", message },
+          error_code: "database_conflict",
+          retryable: true,
+          attempts: requestIntent.attempts,
+        });
+      }
       if (requestIntent instanceof GatewayWorkloadPolicyError) return deny(reply, 403, requestIntent.message, requestIntent.code);
       if (requestIntent instanceof RepairTokenBudgetError) {
         return reply.code(409).send({ error: { type: requestIntent.code, message: requestIntent.message },
@@ -1497,11 +1536,7 @@ export function registerGateway(app: FastifyInstance): void {
           });
           if (settled) {
             return reply.code(503).send({
-              error: {
-                type: "gateway_transient",
-                effect_status: "not_started",
-                message: "upstream unavailable before request start",
-              },
+              error: gatewayNotStartedError("upstream unavailable before request start"),
             });
           }
           return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");

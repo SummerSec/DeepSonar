@@ -1577,6 +1577,14 @@ export async function maybeTriggerHub(
   return hubOrchestrationApplication.maybeTriggerHub(tx, job, options);
 }
 
+export async function triggerCompletionRecovery(
+  tx: Tx,
+  job: HubJobRecord,
+  state: Parameters<typeof hubOrchestrationApplication.triggerCompletionRecovery>[2],
+): Promise<boolean> {
+  return hubOrchestrationApplication.triggerCompletionRecovery(tx, job, state);
+}
+
 export async function triggerHubFromHumanComment(input: HubHumanCommentInput): Promise<HubHumanCommentResult> {
   return hubOrchestrationApplication.triggerHubFromHumanComment(input);
 }

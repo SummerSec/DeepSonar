@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-01
+> 同步日期：2026-11-03
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -67,6 +67,12 @@ Control API 由 Scheduler 动态注册 operation、schema 和当前 Job 的 allo
 所有 `/control/v1/jobs/{jobId}/operations/{operationId}` POST（包括只读 discovery、graph/capability 查询和 Skill 拉取）都必须带 UUID `Idempotency-Key`。在同一 Scheduler 进程的接口缓存仍存在时，同 key、同 operation 和同输入可返回已有结果；同 key 改变 operation/input 返回冲突。只读 operation 的 key 只提供请求级缓存和冲突检查，不产生 durable event/effect receipt；改变语义或外部效果的 operation 才继续依赖具体领域的事件 dedup、唯一键或 effect settlement。当前接口层缓存是进程内的，Scheduler 重启后会丢失；重启后的重复请求不能把内存缓存当成跨重启幂等保证。
 
 Control operation 分为两类：能力发现、graph 查询和 Skill 拉取返回受治理只读结果；`emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human`、人工 ACK 及 Plan/PlanResult 是语义提交。当前 v2 Plan/Result 在事件事务内驱动 Scheduler 复用既有 Intent admission/materializer 执行依赖任务，complete/报告仍受当前全判据 authority 校验。operation 不直接暴露数据库、容器、长期凭据、快照或终态修改；语义副作用只由 event-ingestion/application transaction 执行，v1 历史读取不是新执行输入。
+
+### 完成恢复提案（#874）
+
+`submit_hub_decision` 在既有 complete/intents/payload_file 之外增加严格互斥的 `recovery` 分支，并与 plan_basis 互斥；字段只在[共享 schema](../../packages/shared-types/src/completion-recovery.ts)定义。Scheduler 冻结的 `trigger.recovery_refs` 授予精确 target Job/Attempt、scope、快照、恢复 revision 与 evidence hash；普通 Hub、猜测 UUID 或只读图 metadata 不取得此权限。shared schema、宿主 handler 和最终语义事务复核同一契约及当前 token/lease/allowlist、原预算、授权与证据 CAS。
+
+合法 action 仅为 `reconcile_effects` / `stop`；reason 不作为证据。200 `persisted_deferred` 仅证明提案持久接纳，不表示对账执行、Job 成功或模型理解。稳定拒绝码 `recovery_not_authorized`、`recovery_paused`、`recovery_stale`、`recovery_inactive` 默认 fail closed，不能靠自动重试扩大权限。原 completion key 的负回执保持不可变；活动原 Attempt 在证据修复后需用新 revision/key 重新走完成门。详见 [ADR 0015](adr/0015-governed-completion-recovery.md)及[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。当前分支最终 SHA 的 Actions 尚待验收。
 
 ## 项目知识接口（#752 分支）
 

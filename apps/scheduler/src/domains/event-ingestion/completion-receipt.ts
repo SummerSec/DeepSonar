@@ -1,10 +1,11 @@
 import { readControlReceiptByKey, controlInputDigest } from "./control-receipt.js";
 import { createHash } from "node:crypto";
-import { DonePayload, type RepairFeedback } from "@deepsonar/shared-types";
+import { DonePayload, projectCompletionRecovery, type RepairFeedback } from "@deepsonar/shared-types";
 import { sql } from "../../db.js";
 import { ControlInputError } from "../../control-input.js";
 import { consumeEventRateLimit } from "./rate-limit.js";
 import { configuredRepairTokenLimit, readRepairTokenBudget, assertRepairTokenBudget, RepairTokenBudgetError } from "./repair-token-budget.js";
+import { readCompletionRecovery, readCompletionRecoveryEvidence, recordCompletionRecovery, recordCompletionRecoveryAccepted, completionRecoveryFeedback } from "../job-attempt/recovery.js";
 
 export const COMPLETION_REPAIR_LIMIT = 8;
 export type CompletionResult = { statusCode: number; body: Record<string, unknown> };
@@ -15,6 +16,9 @@ export type CompletionReceipt = {
   proposal_revision: number; attempt_id: string; snapshot_digest: string;
   status: "rejected" | "persisted_deferred"; result: CompletionResult;
   repair_token_limit: number | null;
+  /** Live evidence distinguishes legitimate identical done after reconciliation from no-progress repair. */
+  evidence_sha256?: string;
+  recovery_ref?: string;
 };
 
 /** Both identities are Job-scoped because event_dedup has a global primary key. */
@@ -76,7 +80,7 @@ export async function recordCompletionProposal(input: {
   const digest = completionInputDigest(input.rawInput);
   return db.begin(async transaction => {
     const tx = transaction as unknown as typeof sql;
-    const [job] = await tx`SELECT id,project_id,status,agent_snapshot_json,
+    const [job] = await tx`SELECT id,project_id,canvas_id,status,agent_snapshot_json,started_at,timeout_sec,
       lease_expires_at > clock_timestamp() AS leased,
       started_at + timeout_sec * interval '1 second' > clock_timestamp() AS within_time
       FROM jobs WHERE id=${input.jobId} FOR UPDATE`;
@@ -113,32 +117,47 @@ export async function recordCompletionProposal(input: {
     }
     if (previous && previous.attempt_id !== attempt.id) return reject("COMPLETION_ATTEMPT_CHANGED", "Original repair session cannot be resumed by another Attempt");
     if (history.length >= COMPLETION_REPAIR_LIMIT) return reject("COMPLETION_REPAIR_EXHAUSTED", "Completion repair budget exhausted; stop and request human intervention");
-    if (history.filter(row => row.payload_json.input_digest === digest).length >= 2) {
-      return reject("COMPLETION_NO_PROGRESS", "Repeated unchanged invalid completion; stop repair and request human intervention");
-    }
     const expectedRevision = previous ? previous.proposal_revision + 1 : 0;
     if (input.revision !== expectedRevision) return reject("COMPLETION_REVISION_CONFLICT", `Expected proposal revision ${expectedRevision}`);
     const tokenBudget = await readRepairTokenBudget(tx, input.jobId);
+    let blockerCode: string | undefined;
     try { assertRepairTokenBudget(tokenBudget, false); }
     catch (error) {
       if (!(error instanceof RepairTokenBudgetError)) throw error;
-      return { ...reject(error.code, error.message), body: { ...reject(error.code, error.message).body, repair_token_budget: tokenBudget } };
+      if (!["REPAIR_USAGE_UNKNOWN", "REPAIR_USAGE_PENDING"].includes(error.code)) {
+        return { ...reject(error.code, error.message), body: { ...reject(error.code, error.message).body, repair_token_budget: tokenBudget } };
+      }
+      blockerCode = error.code;
     }
-    // Unknown effects cannot be cleared or replayed by a corrected completion.
-    const [unknown] = await tx`SELECT id FROM job_attempt_effects WHERE job_id=${input.jobId}
-      AND (status='unknown' OR (status='effect_pending' AND NOT
-        (attempt_id=${attempt.id} AND effect_kind IN ('agent_run','agent_resume')))) LIMIT 1`;
-    if (unknown) return reject("COMPLETION_EFFECT_UNKNOWN", "Unknown external effect requires reconciliation before completion repair");
-    let result = input.schemaFailure ?? await input.prepare(String(attempt.id));
+    const recovery = await readCompletionRecovery(tx, input.jobId, String(attempt.id));
+    if (recovery?.status === "stop_requested" || recovery?.status === "closed") return reject("COMPLETION_RECOVERY_STOPPED", "Recovery has a durable stop request; do not resume completion");
+    const evidence = await readCompletionRecoveryEvidence(tx, job, String(attempt.id));
+    // An unchanged valid done becomes legitimate after authoritative evidence changes.
+    if (history.filter(row => row.payload_json.input_digest === digest && row.payload_json.evidence_sha256 === evidence.sha256).length >= 2) {
+      return reject("COMPLETION_NO_PROGRESS", "Repeated unchanged invalid completion and evidence; stop repair");
+    }
+    if (!blockerCode && evidence.blocking.unknown + evidence.blocking.pending > 0) blockerCode = "COMPLETION_EFFECT_UNKNOWN";
+    const receiptRef = completionReceiptId(input.jobId, input.key);
+    const recoveryState = blockerCode
+      ? await recordCompletionRecovery(tx, job, String(attempt.id), receiptRef, blockerCode, evidence) : undefined;
+    let result: CompletionResult = recoveryState ? { ...reject(blockerCode!, "External effects require governed reconciliation before completion"), body: {
+      ...reject(blockerCode!, "External effects require governed reconciliation before completion").body,
+      recovery: projectCompletionRecovery(recoveryState), repair: completionRecoveryFeedback({
+        key: input.key, revision: input.revision, repairAttempt: history.length + 1,
+        remainingAttempts: COMPLETION_REPAIR_LIMIT - history.length - 1, state: recoveryState, evidence,
+        remainingTokens: tokenBudget ? tokenBudget.remaining_tokens : (configuredRepairTokenLimit() || null),
+        remainingWallTime: Math.floor((Date.parse(recoveryState.deadline) - Date.now()) / 1000),
+      }),
+    } } : input.schemaFailure ?? await input.prepare(String(attempt.id));
     if (result.statusCode >= 500 || result.statusCode === 429) return result;
     const accepted = result.statusCode === 200 && result.body.completion_prepared === true;
     if (result.statusCode === 200 && !accepted) return reject("COMPLETION_PREPARE_UNSUPPORTED", "Runtime does not support durable completion preparation");
-    const receiptRef = completionReceiptId(input.jobId, input.key);
     if (accepted) {
       DonePayload.parse(input.rawInput);
+      await recordCompletionRecoveryAccepted(tx, job, String(attempt.id), evidence);
       result = { statusCode: 200, body: { accepted: true, operation: "mark_job_done",
         receipt_ref: receiptRef, receipt_status: "persisted_deferred", proposal_revision: input.revision } };
-    } else if (result.body.repair) {
+    } else if (result.body.repair && !recoveryState) {
       const repair = result.body.repair as RepairFeedback;
       const remainingTokens = tokenBudget ? tokenBudget.remaining_tokens : configuredRepairTokenLimit();
       result = { ...result, body: { ...result.body, repair: { ...repair,
@@ -155,7 +174,8 @@ export async function recordCompletionProposal(input: {
       input_digest: digest, proposal_revision: input.revision, attempt_id: String(attempt.id),
       ...(accepted ? { settlement_digest: completionSettlementDigest(input.rawInput) } : {}),
       snapshot_digest: input.snapshotDigest, status: accepted ? "persisted_deferred" : "rejected", result,
-      repair_token_limit: tokenBudget ? tokenBudget.limit_tokens : configuredRepairTokenLimit() };
+      repair_token_limit: tokenBudget ? tokenBudget.limit_tokens : configuredRepairTokenLimit(),
+      evidence_sha256: evidence.sha256, ...(recoveryState ? { recovery_ref: recoveryState.recovery_ref } : {}) };
     // Accepted completion must remain available when ordinary semantic output exhausts its bucket.
     // Rejected proposals stay bounded by the standard bucket and persistent repair limit.
     await consumeEventRateLimit(tx, input.jobId, accepted ? "done" : "control_receipt", new Date());

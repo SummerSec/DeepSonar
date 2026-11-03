@@ -79,10 +79,10 @@ test("确定性故障点默认拒绝重放并保留 after-settlement 成功", ()
   assert.deepEqual(EFFECT_CRASH_POINTS.map(effectCrashRecovery), ["retry_new_attempt", "mark_unknown", "mark_unknown", "continue"]);
 });
 
-test("观察到的 provision 创建失败不是 unknown 窗口", () => {
-  const settlement = provisionNeverStartedSettlement("DOCKER::SANDBOX_START_FAILED");
+test("显式宿主 pre-call/no-start 证明可保留 never_started settlement", () => {
+  const settlement = provisionNeverStartedSettlement("HOST_PROVISION_NOT_CALLED");
   assert.equal(settlement.status, "settled");
-  assert.equal(settlement.error, "DOCKER::SANDBOX_START_FAILED");
+  assert.equal(settlement.error, "HOST_PROVISION_NOT_CALLED");
   assert.deepEqual(settlement.outcome, { result: "never_started", external_effect: false });
 });
 

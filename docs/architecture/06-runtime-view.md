@@ -1,7 +1,7 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-01
+> 同步日期：2026-11-03
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -93,6 +93,16 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 Attempt 的 `job_attempt_effects` 先 `effect_pending` 后 settlement，只有代码明确标记为安全的清理效果可重放；未知效果始终需要对账或人工。控制流和清理路径必须写审计并释放设备租约、共享资产卷、token 和沙箱资源。
 
 Gateway 503 仅在内核明确证明请求尚未启动时可降级；`unknown` 或 `pending` 必须硬失败，provider 5xx 文案不构成外部效果 authority。
+
+## 数据库锁序、共享卷与完成恢复（#871/#873/#874）
+
+涉及图投影的事务按 Canvas → Job → Attempt → effects 获取锁；节点/边触发器也会锁 Canvas，不能在持 Job 后才更新节点。claim 按有界 keyset 候选页使用独立事务，每页重新获取 claim advisory lock 并读取平台暂停、活动数与配额。先排序锁 Canvas，再锁项目/Job/Attempt 并核验当前 scope 和调度条件，仅成功领取计入配额；忙锁候选不消耗槽位。需要继续扫描时先提交并释放本页锁，下一页重新按同一锁序开始，不能持 Job/Attempt 锁回头锁新 Canvas。context 的 Job-only 写入在同一 Job → Attempt 事务更新两份投影。仅已回滚的纯数据库事务允许按 [DB conflict helper](../../apps/scheduler/src/db-conflict-retry.ts)有界重试；Gateway 在 admission 提交后只向上游发一次请求，不重放请求或未知效果。
+
+[共享资产生命周期锁](../../apps/scheduler/src/shared-asset-lifecycle.ts)使用独立 PostgreSQL session 串行同 Job 的 prepare 与 cleanup，不占住业务连接池等待外部 provision。准备要求当前最新 active Attempt，锁保持到 runner 验证只读挂载并提交资源绑定/running CAS；旧 finally、Reaper 和扫描器在获得锁后重新读取归属，active/新 Attempt 拒绝删除。Docker 的实际 volume/helper 名称由独立 generation 决定，prepare 只操作本 generation；cleanup 固定资源快照后重验独立 session 许可，每次破坏性操作或重试前再检查，不能失锁后采纳后继资源。Docker 再严格验证 managed/Job/generation 标签，helper 用 inspect 得到的不可变容器 ID 清理，卷非 force 删除；精确不存在、fenced skip 与失败分别处理。完整边界见[共享资产专题](../SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。续租由[Attempt lease helper](../../apps/scheduler/src/attempt-lease.ts)维护精确 registration 与 stop closure，旧 finally 不删除新 timer；alive 探测后再次核归属，在短 Job → 最新 Attempt 事务中检查 active/cancel 与 Job/Attempt 双 sandbox 绑定，旧 tick 不续后继 lease。无服务 timer 与真实 PostgreSQL 归属回归均已接源码，实际结果以最终 Actions 为准。
+
+完成被未知效果或未知修正用量阻断时，原负回执与宿主恢复事实同事务落库；原 key 重放保持原结果。Reaper 的既有 tick 按有界 keyset 扫描恢复根，冻结原 deadline 与有限 wake，不能自动执行对账。只有带 Scheduler 冻结引用的去重 Hub 可提出 `reconcile_effects` 或 `stop`，沿原 Control/语义事务重新校验权限、scope、快照和证据 CAS。对账只消费精确 effect 的持久用量证据；中断、缺少句柄或零 unknown 不证明资源停止。原会话仍活动时重新完成仍走全部既有门；退出会话/新 Attempt 的完整继续执行仍未交付。pause、auto-stop、人工与 Verify 等待保持权威。见 [FR-CTRL-010](01-system-specification.md#fr-ctrl-010-完成未知效果的受治理恢复)、[ADR 0015](adr/0015-governed-completion-recovery.md)和[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。
+
+上述修复已接入现有 Actions 脚本；本分支最终 SHA 的 PostgreSQL、完整核心及镜像验收尚未执行通过，源码存在不作为运行证据。
 
 ## OpenSandbox upgrade and recovery boundary (IR-001/003)
 

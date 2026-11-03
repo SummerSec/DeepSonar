@@ -86,9 +86,10 @@ test("late destroy failure is visible to the caller before timeout reaches them"
   assert.equal(destroyFailed, true);
 });
 
-test("dispatcher fail-closes never_started when late provision handle is observed", () => {
+test("source contract: calling runner.provision is uncertain even when no late handle was observed", () => {
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  assert.match(source, /provisionAttempted = true;\s*handle = await withProvisionTimeout\(\s*runner\.provision\(provisionInput\)/);
   assert.match(source, /lateProvisionExternalUncertain = true/);
-  assert.match(source, /markEffectUnknown/);
-  assert.match(source, /settleUnstartedProvisionEffect/);
+  assert.match(source, /if \(provisionAttempted \|\| lateProvisionExternalUncertain\)\s*\{\s*await markEffectUnknown/);
+  assert.match(source, /else\s*\{\s*await settleUnstartedProvisionEffect/);
 });

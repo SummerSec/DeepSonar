@@ -17,7 +17,7 @@ test("OpenSandbox container startup errors retain nested provider details", () =
   assert.equal(isRetryableProvisionFailure(error), true);
 });
 
-test("only transient container startup failures are automatically retryable", () => {
+test("transient container startup errors are retry candidates, not proof that create never started", () => {
   assert.equal(isRetryableProvisionFailure(new Error("runtime image digest mismatch")), false);
   assert.equal(isRetryableProvisionFailure(new Error("Egress sidecar container failed to start.")), true);
   assert.equal(isRetryableProvisionFailure(new Error("provision 已取消")), false);
@@ -72,15 +72,23 @@ test("dispatcher provision retry budget is counted attempts, not attempt_no", ()
   assert.doesNotMatch(source, /attempt_no \?\? 0\) <= MAX_AUTOMATIC_PROVISION_RETRIES/);
 });
 
-test("observed provision create failure settles never_started; late handle stays unknown", () => {
+test("source contract: opaque started failure stays unknown; retry requires current owner and explicit no-create evidence", () => {
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
-  assert.match(source, /settleUnstartedProvisionEffect/);
-  assert.match(source, /lateProvisionExternalUncertain/);
-  assert.match(source, /markEffectUnknown/);
-  assert.match(source, /lateProvisionExternalUncertain\)\s*\{\s*\n\s*await markEffectUnknown/);
+  const failure = source.slice(source.indexOf("// Once runner.provision was invoked"), source.indexOf("// Job → Attempt: settlement"));
+  assert.match(failure, /if \(provisionAttempted \|\| lateProvisionExternalUncertain\)\s*\{\s*await markEffectUnknown/);
+  assert.match(failure, /else\s*\{\s*await settleUnstartedProvisionEffect/);
+  assert.match(failure, /await lockCurrentProvisioningAttempt/);
+  assert.match(failure, /throw new AggregateError\(\[error, settlementError\]/);
+  assert.doesNotMatch(failure, /\.catch\(\(\) => \{\}\)/);
+  const retry = source.slice(source.indexOf("export async function retryProvisioningJob"), source.indexOf("async function retryTruncatedExecutionJob"));
+  assert.match(retry, /owner\.latest_attempt_id !== attempt\.id/);
+  assert.match(retry, /typeof current\.id !== "string" \|\| current\.id !== attempt\.id/);
+  assert.match(retry, /COALESCE\(settlement_json @> '\{"result":"never_started","external_effect":false\}'::jsonb, false\)/);
+  assert.match(source, /if \(!provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure\(e\)\)/);
+  // Behavioral proof is in shared-asset-lifecycle.integration.test.ts, not these source assertions.
 });
 
-test("Upload failed 500 / UNEXPECTED_RESPONSE during provision is automatically retryable", () => {
+test("Upload failed 500 / UNEXPECTED_RESPONSE is a transient retry candidate, not a create receipt", () => {
   assert.equal(
     isRetryableProvisionFailure(
       Object.assign(new Error("Upload failed (status=500)"), {

@@ -1,5 +1,6 @@
 import { planRevisionReceipt, isPlanRevisionKey } from "./plan-revision-receipt.js";
 import { invokeDurablePlanDecision, readPlanReceipt, PLAN_RECEIPT_OPERATIONS, type PlanReceiptOperation } from "./plan-receipt.js";
+import { readCompletionRecoveryProjection } from "../job-attempt/recovery.js";
 import { readControlReceiptByKey, controlInputDigest } from "../event-ingestion/control-receipt.js";
 import { sql } from "../../db.js";
 import { invokeDurableCompletion } from "./completion.js";
@@ -245,10 +246,10 @@ async function executeInvocation(
         throw error;
       }
       const owner=await readControlReceiptByKey(sql,jobId,key);
-      if(owner && !(input && typeof input==='object' && 'plan_basis' in input)) return {statusCode:409,cacheable:false,body:{accepted:false,error_code:'IDEMPOTENCY_KEY_CONFLICT',error:'Key already belongs to a durable Plan input',retryable:false}};
+      if(owner && !(input && typeof input==='object' && ('plan_basis' in input || 'recovery' in input))) return {statusCode:409,cacheable:false,body:{accepted:false,error_code:'IDEMPOTENCY_KEY_CONFLICT',error:'Key already belongs to a durable Plan input',retryable:false}};
     }
     if (key && PLAN_RECEIPT_OPERATIONS.includes(operationId as PlanReceiptOperation)
-      && input && typeof input === "object" && "plan_basis" in input) {
+      && input && typeof input === "object" && ("plan_basis" in input || "recovery" in input)) {
       const result = await invokeDurablePlanDecision({principal,operation:operationId as PlanReceiptOperation,key,payload:input,requestInput});
       return {...result,cacheable:false};
     }
@@ -344,7 +345,7 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
   }
   const owned = await readControlReceiptByKey(sql, jobId, key);
   const planRequest = PLAN_RECEIPT_OPERATIONS.includes(definition.operationId as PlanReceiptOperation)
-    && parsed.input && typeof parsed.input === "object" && ("plan_basis" in parsed.input || "payload_file" in parsed.input);
+    && parsed.input && typeof parsed.input === "object" && ("plan_basis" in parsed.input || "payload_file" in parsed.input || "recovery" in parsed.input);
   if (owned && (!planRequest || owned.operation !== definition.operationId)) {
     return sendError(reply, 409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key already belongs to a durable control receipt");
   }
@@ -455,7 +456,8 @@ export function registerPlatformControlRoutes(app: FastifyInstance): void {
       if (definition.operationId !== "mark_job_done" || !isUuid(receiptKey)) return sendError(reply, 400, "INVALID_RECEIPT_KEY", "Receipt lookup requires mark_job_done and a UUID receipt_key");
       const receipt = await readCompletionReceipt(sql, principal.jobId, receiptKey);
       if (!receipt) return sendError(reply, 404, "COMPLETION_RECEIPT_NOT_FOUND", "Completion receipt not found");
-      return reply.header("cache-control", "no-store").send(receipt.result.body);
+      const recoveryCurrent = await readCompletionRecoveryProjection(sql, principal.jobId, receipt.attempt_id);
+      return reply.header("cache-control", "no-store").send({ ...receipt.result.body, ...(recoveryCurrent ? { recovery_current: recoveryCurrent } : {}) });
     }
     return reply.header("cache-control", "no-store").send(operationDescription(definition));
   });

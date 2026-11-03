@@ -53,6 +53,8 @@ test("desired-state cleanup preserves only exact active Job/Attempt resources", 
     skipped: false,
     removedContainers: 2,
     removedVolumes: 1,
+    skippedContainers: 0,
+    skippedVolumes: 0,
     residualContainers: 0,
     residualVolumes: 0,
     failures: 0,
@@ -97,6 +99,53 @@ test("desired-state cleanup reports residual resources and retries them next cyc
   assert.equal(second.removedContainers, 1);
   assert.equal(second.residualContainers, 0);
   assert.equal(attempts, 2);
+});
+
+test("desired-state cleanup reports ownership-fenced skips rather than removals", async () => {
+  resetResourceCleanupStateForTests();
+  const generation = "55555555-5555-4555-8555-555555555555";
+  const result = await cleanupManagedResourcesOnce(dependencies({
+    loadActiveResources: async () => [],
+    listContainers: async () => [{ containerId: "became-active", jobId: terminalJob, attemptId: oldAttempt, state: "running" }],
+    listVolumes: async () => [{ volumeName: `deepsonar-assets-${terminalJob}`, jobId: terminalJob, generation }],
+    removeContainer: async (id, jobId, attemptId) => {
+      assert.deepEqual([id, jobId, attemptId], ["became-active", terminalJob, oldAttempt]);
+      return false;
+    },
+    removeVolumeForJob: async (jobId, expectedGeneration) => {
+      assert.equal(jobId, terminalJob);
+      assert.equal(expectedGeneration, generation);
+      return false;
+    },
+  }));
+  assert.equal(result.removedContainers + result.removedVolumes, 0);
+  assert.equal(result.skippedContainers, 1);
+  assert.equal(result.skippedVolumes, 1);
+  assert.equal(result.failures + result.residualContainers + result.residualVolumes, 0);
+});
+
+test("desired-state cleanup preserves volume failures and the observed generation", async () => {
+  resetResourceCleanupStateForTests();
+  const generation = "55555555-5555-4555-8555-555555555555";
+  let calls = 0;
+  const deps = dependencies({
+    listContainers: async () => [],
+    listVolumes: async () => [{ volumeName: `deepsonar-assets-${terminalJob}`, jobId: terminalJob, generation }],
+    removeVolumeForJob: async (jobId, expectedGeneration) => {
+      assert.equal(jobId, terminalJob);
+      assert.equal(expectedGeneration, generation);
+      calls += 1;
+      if (calls === 1) throw new Error("volume generation mismatch");
+    },
+  });
+  const first = await cleanupManagedResourcesOnce(deps);
+  assert.equal(first.removedVolumes + first.skippedVolumes, 0);
+  assert.equal(first.failures, 1);
+  assert.equal(first.residualVolumes, 1);
+  const second = await cleanupManagedResourcesOnce(deps);
+  assert.equal(second.removedVolumes, 1);
+  assert.equal(second.failures, 0);
+  assert.equal(calls, 2);
 });
 
 test("desired-state cleanup is non-reentrant", async () => {

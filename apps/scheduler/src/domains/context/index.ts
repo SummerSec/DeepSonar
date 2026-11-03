@@ -9,6 +9,8 @@ import {
   type ContextState,
 } from "@deepsonar/runtime-sandbox";
 import { updateAttemptContext, type AttemptDatabase } from "../job-attempt/index.js";
+import { DB_CONFLICT_MAX_ATTEMPTS, withDatabaseConflictRetry } from "../../db-conflict-retry.js";
+import { inc } from "../../metrics.js";
 
 export function createJobRuntimeContext(input: {
   attemptId?: string | null;
@@ -79,7 +81,8 @@ export async function persistJobRuntimeContext(
   context: ContextState,
 ): Promise<void> {
   validateContextState(context);
-  await db.begin(async (txRaw) => {
+  // Both projections commit together; retries never re-run the Agent or a model request.
+  await withDatabaseConflictRetry(() => db.begin(async (txRaw) => {
     const tx = txRaw as unknown as AttemptDatabase;
     if (context.attempt_id) {
       // Match Gateway admission / Attempt creation: Job before Attempt, held
@@ -101,6 +104,18 @@ export async function persistJobRuntimeContext(
            true
          )
        WHERE id = ${jobId}`;
+  }), {
+    onConflict(error, attempt) {
+      const rawCode = (error as { code?: string }).code;
+      const code = rawCode === "40P01" || rawCode === "40001" || rawCode === "55P03" ? rawCode : "unknown";
+      const labels = { operation: "context", code };
+      inc("deepsonar_database_conflict_retries_total", labels);
+      if (attempt === DB_CONFLICT_MAX_ATTEMPTS) inc("deepsonar_database_conflict_exhausted_total", labels);
+      console.warn("[context] recoverable database conflict", {
+        ...labels, attempt, exhausted: attempt === DB_CONFLICT_MAX_ATTEMPTS,
+        job_id: jobId, attempt_id: context.attempt_id ?? null,
+      });
+    },
   });
 }
 

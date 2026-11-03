@@ -1,6 +1,6 @@
 # Scheduler bounded contexts and lock matrix
 
-> 同步日期：2026-11-03（#871 上下文锁序切片）
+> 同步日期：2026-11-04（#871 上下文锁序与分候选页领取）
 > **Status: as-built (Issue #37 closed).** This note is the current domain
 > boundary and lock contract, not a pending redesign. Prefer the live modules
 > under `apps/scheduler/src/domains/*` if this text drifts.
@@ -77,7 +77,7 @@ append plus semantic side effects in one transaction.  The terminal path in
 
 | Operation | Canonical acquisition order | Contract |
 | --- | --- | --- |
-| Dispatcher claim | `deepsonar_dispatch_claim` transaction advisory lock → candidate `jobs` rows (`FOR UPDATE SKIP LOCKED`) | The advisory lock serializes claim/retry and other runtime mutations; keep the candidate page bounded. |
+| Dispatcher claim | `deepsonar_dispatch_claim` transaction advisory lock → sorted Canvas rows (`FOR SHARE SKIP LOCKED`) → sorted project rows (`FOR SHARE`) → candidate Jobs (`FOR UPDATE SKIP LOCKED`) → Attempt | Each bounded keyset page has its own transaction and fresh pause/quota checks. Only successful claims consume capacity. Commit and release the page before reading the next one; never acquire a new Canvas under held Job/Attempt locks. |
 | Destructive canvas retry | `deepsonar_dispatch_claim` → `canvases` row (`FOR UPDATE`) → Job/runtime rows and canvas nodes | Re-check active Jobs after both locks; never wipe runtime rows from the preflight read. |
 | Runtime context persistence (#871 partial fix) | Job row (`FOR UPDATE`) → active Attempt row → Attempt context + Job evidence → **commit** | Matches Gateway admission’s Job-before-`beginEffect` order. Missing Job, inactive Attempt or mismatched Job/Attempt rolls back both projections. No external request retry; other #871 paths remain outside this slice. |
 | Event ingress (Job-only) | Job row (`FOR UPDATE`) → `event_dedup` unique insert → `events` sequence/insert → job-only side effects → **commit** | The Job row serializes `MAX(job_seq)+1`; duplicate `event_id` returns before side effects. |
@@ -186,6 +186,13 @@ drain (`pending → cancelled`). `request_human` is now owned by the
 event-ingestion side-effect application. Finalization and priority drain remain
 coupled to Canvas/Finding/Report convergence. Phase 1 remains a historical
 milestone and does not by itself describe the later completed slices.
+
+The completion-recovery domain additionally owns one narrow `pending → cancelled`
+CAS for stale directed Hubs. It requires the durable root/wake/dedup binding,
+matching frozen scope and a complete absence of Attempts, effects and startup
+traces; started Hubs remain under their existing lifecycle owner. This specific
+writer is enumerated in the [Job-state inventory](../apps/scheduler/src/job-state-write-inventory.test.ts), not exempted from
+its production scan. See [ADR 0015](architecture/adr/0015-governed-completion-recovery.md).
 
 ## Issue #37 completion
 

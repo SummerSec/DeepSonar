@@ -224,7 +224,7 @@ export async function markEffectUnknown(
   });
 }
 
-/** Provision threw before sandbox_id was bound; do not leave the ledger on unknown. */
+/** Explicit host pre-call/no-start proof only; a missing sandbox_id or thrown opaque provision is not proof. */
 export async function settleUnstartedProvisionEffect(
   db: AttemptDatabase,
   attemptId: string,
@@ -347,26 +347,15 @@ export async function settleAttemptTerminal(
   assertBoundedJson(next, "attempt state", ATTEMPT_MAX_STATE_BYTES);
   // 终态与未收口外部效果必须在调用方同一事务中提交。只有主 Agent run
   // 可由成功终态证明已完成；并发投递/网关效果未显式结算时仍必须 unknown。
-  // provision 失败且从未绑定 sandbox_id：创建已失败并清理，不得留 unknown。
-  // 用布尔参数而不是 ${null} IS NULL：postgres.js 无法给裸 null 推断类型（42P18）。
-  const settleFailedUnstartedProvision = status === "failed" && !current.sandbox_id;
-  const neverStartedOutcome = {
-    result: "never_started",
-    external_effect: false,
-    job_status: status,
-  };
+  // A missing sandbox_id is not proof that provision never started. Only an
+  // explicit host settlement may establish that fact; terminal failure preserves unknown.
   await db`
     UPDATE job_attempt_effects
        SET status = CASE
              WHEN ${status} = 'succeeded' AND effect_kind = 'agent_run' THEN 'settled'
-             WHEN ${settleFailedUnstartedProvision} AND effect_kind = 'provision' THEN 'settled'
              ELSE 'unknown'
            END,
-           settlement_json = CASE
-             WHEN ${settleFailedUnstartedProvision} AND effect_kind = 'provision'
-               THEN ${db.json(neverStartedOutcome as never)}
-             ELSE ${db.json({ job_status: status } as never)}
-           END,
+           settlement_json = ${db.json({ job_status: status } as never)},
            error = COALESCE(error, ${safeError}),
            settled_at = COALESCE(settled_at, now()),
            updated_at = now()

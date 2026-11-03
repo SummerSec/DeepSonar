@@ -16,26 +16,60 @@ test("Docker shared-assets volume is labeled, mounted read-only, and removed", {
   await execFileP("docker", ["pull", DEFAULT_SHARED_ASSETS_HELPER_IMAGE]);
   const manager = new DockerSharedAssetsVolumeManager(DEFAULT_SHARED_ASSETS_HELPER_IMAGE);
   const jobId = randomUUID();
+  const generation = randomUUID();
+  const expectedName = `deepsonar-assets-g${generation.replaceAll("-", "")}`;
   const temp = await mkdtemp(path.join(os.tmpdir(), "deepsonar-assets-test-"));
   const source = path.join(temp, "fixture.txt");
   await writeFile(source, "immutable fixture\n", "utf8");
   let volume: string | null = null;
   try {
     volume = await manager.prepare({
-      jobId,
+      jobId, generation,
       files: [{ sourcePath: source, relativePath: "project/fixture.txt" }],
       catalog: { version: 1, readonly: true, assets: [{ key: "fixture.txt" }] },
     });
-    assert.equal(volume, `deepsonar-assets-${jobId}`);
+    assert.equal(volume, expectedName);
     const { stdout } = await execFileP("docker", ["run", "--pull=never", "--rm", "-v", `${volume}:/workspace/.deepsonar/shared:ro`, "--entrypoint", "/bin/sh", DEFAULT_SHARED_ASSETS_HELPER_IMAGE, "-c", "cat /workspace/.deepsonar/shared/project/fixture.txt; cat /workspace/.deepsonar/shared/catalog.json; if echo changed > /workspace/.deepsonar/shared/project/fixture.txt 2>/dev/null; then exit 91; fi"]);
     assert.match(stdout, /immutable fixture/);
     assert.match(stdout, /\"readonly\": true/);
     assert.equal((await manager.listManaged()).some((item) => item.jobId === jobId), true);
     await manager.removeForJob(jobId);
     volume = null;
-    await assert.rejects(execFileP("docker", ["volume", "inspect", `deepsonar-assets-${jobId}`]));
+    await assert.rejects(execFileP("docker", ["volume", "inspect", expectedName]));
   } finally {
     if (volume) await manager.removeForJob(jobId).catch(() => undefined);
+    await rm(temp, { recursive: true, force: true });
+  }
+});
+
+test("Docker generations coexist; stale prepare/cleanup cannot remove the new mounted volume", { skip: enabled ? false : "set RUN_DOCKER_SHARED_ASSETS_TEST=1" }, async () => {
+  await execFileP("docker", ["pull", DEFAULT_SHARED_ASSETS_HELPER_IMAGE]);
+  const manager = new DockerSharedAssetsVolumeManager(DEFAULT_SHARED_ASSETS_HELPER_IMAGE);
+  const jobId = randomUUID();
+  const firstGeneration = randomUUID();
+  const nextGeneration = randomUUID();
+  const temp = await mkdtemp(path.join(os.tmpdir(), "deepsonar-assets-generations-"));
+  const sourcePath = path.join(temp, "fixture.txt");
+  await writeFile(sourcePath, "generation-safe\n");
+  const input = { jobId, files: [{ sourcePath, relativePath: "fixture.txt" }], catalog: {} };
+  let containerId = "";
+  try {
+    const first = await manager.prepare({ ...input, generation: firstGeneration });
+    const second = await manager.prepare({ ...input, generation: nextGeneration });
+    assert.notEqual(first, second);
+    assert.equal((await manager.listManaged()).filter((item) => item.jobId === jobId).length, 2);
+    const container = await execFileP("docker", ["create", "--pull=never", "--network", "none", "-v", `${second}:/assets:ro`, DEFAULT_SHARED_ASSETS_HELPER_IMAGE]);
+    containerId = container.stdout.trim();
+    await manager.removeForJob(jobId, firstGeneration);
+    const lost = new Error("lifecycle session lost");
+    await assert.rejects(manager.prepare({ ...input, generation: randomUUID(), assertCurrent: async () => { throw lost; } }), (error: unknown) => error === lost);
+    await assert.rejects(manager.removeForJob(jobId, nextGeneration, async () => { throw lost; }), (error: unknown) => error === lost);
+    assert.deepEqual((await manager.listManaged()).filter((item) => item.jobId === jobId).map((item) => item.volumeName), [second]);
+    await execFileP("docker", ["start", "-a", containerId]);
+    await execFileP("docker", ["volume", "inspect", second!]);
+  } finally {
+    if (containerId) await execFileP("docker", ["rm", "-f", containerId]);
+    await manager.removeForJob(jobId);
     await rm(temp, { recursive: true, force: true });
   }
 });

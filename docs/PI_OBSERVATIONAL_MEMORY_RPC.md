@@ -1,11 +1,17 @@
 # Governed Pi Observational Memory RPC Boundary
 
 > 状态：本轮约定工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)；下文本地 canonical Pi/OM RPC、独立生产启动守卫及定向回归保留历史范围。后续修复 SHA 与正式发布镜像仍另验。
-> 同步日期：2026-11-01
+> 同步日期：2026-11-03
 
 This slice integrates the pinned `pi-observational-memory@3.1.4` source with
 Pi 1.4.0. Memory is session context, never a DeepSonar Fact, independent
 Evaluation, or permission to submit semantic control events.
+
+## #873 当前修复与待执行验收
+
+[生产 Gateway](../apps/scheduler/src/gateway.ts)的宿主安全失败结构现在保留于 SDK 实际接收的 `error.message`；[真实 RPC 夹具](../agent-harness/fixtures/pi-om-real-rpc.mjs)直接使用生产响应 carrier，不再自行补写缺失 message。新增 admission 数据库冲突、pending 和普通 Provider 503 场景，完整场景集合由 `PI_RPC_SCENARIOS` 单处维护；安全降级要求真实 native summary，硬失败不得产生 fallback 状态。已安装 canonical Pi/OM、生产 wrapper 和镜像身份校验继续保留。
+
+下面的历史场景分母与历史日志不改写成新结果。本轮更新已接现有镜像 RPC Actions 门禁，最终候选的真实镜像/完整 Actions 尚待通过；Draft 的 build/typecheck/映射单测不能替代它们。详细 admission/transport/unknown 边界见 [Gateway 专题](PI_OBSERVATIONAL_MEMORY_GATEWAY.md#admission-数据库冲突与-sdk-消息871873)。
 
 ## Canonical entry and frozen configuration
 

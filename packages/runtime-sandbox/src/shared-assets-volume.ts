@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,10 +8,11 @@ import { SHARED_ASSETS_JOB_LABEL, SHARED_ASSETS_VOLUME_LABEL, assertSharedAssets
 
 const execFileP = promisify(execFile);
 const JOB_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MANAGED_VOLUME_NAME_RE = /^deepsonar-assets-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
+const MANAGED_VOLUME_NAME_RE = /^deepsonar-assets-g([0-9a-f]{32})$/;
 const VOLUME_REMOVE_MAX_ATTEMPTS = 3;
 const VOLUME_REMOVE_RETRY_BASE_DELAY_MS = 100;
 export const SHARED_ASSETS_DOCKER_COMMAND_TIMEOUT_MS = 60_000;
+export const SHARED_ASSETS_GENERATION_LABEL = "deepsonar.shared_assets.generation";
 const OCI_NAME_COMPONENT_RE = "[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?";
 const IMMUTABLE_OCI_REF_RE = new RegExp(
   `^(?:${OCI_NAME_COMPONENT_RE}(?::[0-9]+)?/)*${OCI_NAME_COMPONENT_RE}(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?@sha256:[0-9a-f]{64}$`,
@@ -71,10 +73,19 @@ export interface SharedAssetVolumeFile {
   relativePath: string;
 }
 
+type AssertCurrent = () => Promise<void>;
+interface PreparationInput {
+  jobId: string;
+  files: SharedAssetVolumeFile[];
+  catalog: unknown;
+  generation?: string;
+  assertCurrent?: AssertCurrent;
+}
+
 export interface SharedAssetsVolumeManager {
-  prepare(input: { jobId: string; files: SharedAssetVolumeFile[]; catalog: unknown }): Promise<string | null>;
-  removeForJob(jobId: string): Promise<void>;
-  listManaged(): Promise<Array<{ volumeName: string; jobId: string; createdAt?: string }>>;
+  prepare(input: PreparationInput): Promise<string | null>;
+  removeForJob(jobId: string, expectedGeneration?: string, assertCurrent?: AssertCurrent): Promise<void>;
+  listManaged(): Promise<Array<{ volumeName: string; jobId: string; createdAt?: string; generation?: string }>>;
 }
 
 export function managedSharedAssetsVolumeName(jobId: string): string {
@@ -82,12 +93,13 @@ export function managedSharedAssetsVolumeName(jobId: string): string {
   return `deepsonar-assets-${jobId.toLowerCase()}`;
 }
 
-function volumeName(jobId: string): string {
-  return managedSharedAssetsVolumeName(jobId);
+function volumeName(generation: string): string {
+  if (!JOB_ID_RE.test(generation)) throw new Error("invalid shared-assets generation");
+  return `deepsonar-assets-g${generation.toLowerCase().replaceAll("-", "")}`;
 }
 
-function jobIdFromVolumeName(name: string): string | null {
-  return MANAGED_VOLUME_NAME_RE.exec(name)?.[1] ?? null;
+function helperName(generation: string): string {
+  return `deepsonar-assets-writer-g${generation.toLowerCase().replaceAll("-", "")}`;
 }
 
 interface SharedAssetsVolumeInspection {
@@ -98,33 +110,35 @@ interface SharedAssetsVolumeInspection {
   CreatedAt?: unknown;
 }
 
-function isManagedInspection(
-  inspected: SharedAssetsVolumeInspection,
-  name: string,
-  jobId: string,
-): boolean {
-  if (inspected.Name !== name || inspected.Driver !== "local" || inspected.Scope !== "local") return false;
-  const labelsValue = inspected.Labels;
-  if (labelsValue !== undefined && labelsValue !== null && (typeof labelsValue !== "object" || Array.isArray(labelsValue))) {
-    return false;
-  }
-  const labels = labelsValue && typeof labelsValue === "object"
-    ? labelsValue as Record<string, unknown>
-    : {};
-  if (labels[SHARED_ASSETS_VOLUME_LABEL] !== undefined && labels[SHARED_ASSETS_VOLUME_LABEL] !== "true") return false;
-  const labeledJobId = labels[SHARED_ASSETS_JOB_LABEL];
-  if (labeledJobId !== undefined && (typeof labeledJobId !== "string" || !JOB_ID_RE.test(labeledJobId) || labeledJobId.toLowerCase() !== jobId)) {
-    return false;
-  }
-  return true;
+function generationOf(labels: unknown): string | null {
+  if (!labels || typeof labels !== "object" || Array.isArray(labels)) return null;
+  const generation = (labels as Record<string, unknown>)[SHARED_ASSETS_GENERATION_LABEL];
+  return typeof generation === "string" && JOB_ID_RE.test(generation) ? generation : null;
 }
 
-function isMissingVolumeError(error: unknown): boolean {
-  const detail = error && typeof error === "object" && "stderr" in error
-    ? String((error as { stderr?: unknown }).stderr ?? "")
-    : "";
-  const message = error instanceof Error ? error.message : String(error);
-  return /no such volume|no volume with name .* found|volume .* (?:not found|does not exist)/i.test(`${message}\n${detail}`);
+function isManagedInspection(inspected: SharedAssetsVolumeInspection, name: string, jobId: string): boolean {
+  try {
+    assertSharedAssetsVolumeOwnership(inspected, name, jobId);
+    const generation = generationOf(inspected.Labels);
+    return generation !== null && volumeName(generation) === name;
+  } catch {
+    return false;
+  }
+}
+
+function isMissingResourceError(error: unknown, kind: "volume" | "container", name: string): boolean {
+  if (isDockerCommandTimeout(error)) return false;
+  const stderr = error && typeof error === "object" && "stderr" in error
+    ? (error as { stderr?: unknown }).stderr : undefined;
+  const detail = typeof stderr === "string" && stderr.trim()
+    ? stderr : error instanceof Error ? error.message : "";
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Only an exact daemon diagnostic for this resource is authoritative absence.
+  const patterns = [
+    `^(?:Error response from daemon: |Error: )?(?:get ${escaped}: no such ${kind}|no such ${kind}:? ["']?${escaped}["']?)$`,
+    `^Error: no ${kind} with (?:name|ID) ["']?${escaped}["']? found(?:: no such ${kind})?$`,
+  ];
+  return patterns.some((pattern) => new RegExp(pattern, "i").test(detail.trim()));
 }
 
 function safeRelativePath(input: string): string {
@@ -152,21 +166,24 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
     }
   }
 
-  async prepare(input: { jobId: string; files: SharedAssetVolumeFile[]; catalog: unknown }): Promise<string | null> {
+  async prepare(input: PreparationInput): Promise<string | null> {
     if (input.files.length === 0) return null;
+    const generation = (input.generation ?? randomUUID()).toLowerCase();
+    const name = volumeName(generation);
+    managedSharedAssetsVolumeName(input.jobId); // Validate Job identity without using it as a Docker resource name.
+    const canonicalJobId = input.jobId.toLowerCase();
+    const helper = helperName(generation);
+    const permit = input.assertCurrent;
     await this.executeDocker("image", "inspect", this.helperImage);
-    const name = volumeName(input.jobId);
-    const canonicalJobId = name.slice("deepsonar-assets-".length);
-    const helper = `deepsonar-assets-writer-${canonicalJobId}`;
-    await this.executeDocker("rm", "-f", helper).catch(() => "");
-    await this.removeForJob(canonicalJobId);
-    await this.executeDocker("volume", "create", "--driver", "local", "--label", `${SHARED_ASSETS_VOLUME_LABEL}=true`, "--label", `${SHARED_ASSETS_JOB_LABEL}=${canonicalJobId}`, name);
-    const inspected = JSON.parse(await this.executeDocker("volume", "inspect", name, "--format", "{{json .}}")) as Record<string, unknown>;
-    assertSharedAssetsVolumeOwnership(inspected, name, canonicalJobId);
-
+    const labels = [
+      "--label", `${SHARED_ASSETS_VOLUME_LABEL}=true`,
+      "--label", `${SHARED_ASSETS_JOB_LABEL}=${canonicalJobId}`,
+      "--label", `${SHARED_ASSETS_GENERATION_LABEL}=${generation}`,
+    ];
+    // Stage bytes before creating a volume that a helper could implicitly recreate.
     const staging = await mkdtemp(path.join(os.tmpdir(), "deepsonar-assets-"));
     let helperCleanupRequired = false;
-    let volumeCleanupRequired = true;
+    let volumeCleanupRequired = false;
     let primaryFailed = false;
     let primaryError: unknown;
     let cleanupFailed = false;
@@ -179,30 +196,50 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
         await cp(file.sourcePath, target, { force: false, errorOnExist: true });
       }
       await writeFile(path.join(staging, "catalog.json"), `${JSON.stringify(input.catalog, null, 2)}\n`, { flag: "wx" });
+      await permit?.();
+      volumeCleanupRequired = true; // A timed-out create can still have created our labeled volume.
+      await this.executeDocker("volume", "create", "--driver", "local", ...labels, name);
+      await this.requireVolume(name, canonicalJobId, generation);
+      await permit?.();
       helperCleanupRequired = true;
       await this.executeDocker(
-        "create", "--pull=never", "--name", helper, "--network", "none", "--cap-drop", "ALL",
+        "create", "--pull=never", "--name", helper, ...labels, "--network", "none", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges", "--read-only", "-v", `${name}:/assets`,
         this.helperImage,
       );
-      await this.executeDocker("cp", `${staging}${path.sep}.`, `${helper}:/assets`);
-      volumeCleanupRequired = false;
+      const writer = await this.inspectHelper(canonicalJobId, generation);
+      if (!writer) throw new Error("shared assets helper disappeared during prepare");
+      // Reject an implicit, unlabeled replacement before copying any bytes.
+      await this.requireVolume(name, canonicalJobId, generation);
+      await permit?.();
+      await this.executeDocker("cp", `${staging}${path.sep}.`, `${writer.id}:/assets`);
+      await this.requireVolume(name, canonicalJobId, generation);
     } catch (error) {
       primaryFailed = true;
       primaryError = error;
     }
     if (helperCleanupRequired) {
       try {
-        await this.executeDocker("rm", "-f", helper);
+        await this.removeHelper(canonicalJobId, generation, permit);
       } catch (error) {
         cleanupFailed = true;
         cleanupError = error;
         volumeCleanupRequired = true;
       }
     }
+    if (!primaryFailed && !cleanupFailed) {
+      try {
+        await this.requireVolume(name, canonicalJobId, generation);
+        await permit?.();
+        volumeCleanupRequired = false;
+      } catch (error) {
+        primaryFailed = true;
+        primaryError = error;
+      }
+    }
     if (volumeCleanupRequired) {
       try {
-        await this.removeVolumeWithRetry(name);
+        await this.removeVolumeWithRetry(name, canonicalJobId, generation, permit);
       } catch (error) {
         if (!cleanupFailed) {
           cleanupFailed = true;
@@ -218,23 +255,77 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
         cleanupError = error;
       }
     }
+    if (primaryFailed && cleanupFailed) {
+      throw new AggregateError([primaryError, cleanupError], "shared assets preparation and cleanup failed", { cause: primaryError });
+    }
     if (primaryFailed) throw primaryError;
     if (cleanupFailed) throw cleanupError;
     return name;
   }
 
-  async removeForJob(jobId: string): Promise<void> {
-    const name = volumeName(jobId);
-    const inspected = await this.inspectVolumeWithRetry(name);
-    if (!inspected) return;
-    const canonicalJobId = name.slice("deepsonar-assets-".length);
-    if (!isManagedInspection(inspected, name, canonicalJobId)) {
-      throw new Error("共享资产卷不是该 Job 的本地调度器管理卷");
+  /** Scheduler callers must hold the Job lifecycle lock and re-check the Attempt first. */
+  async removeForJob(jobId: string, expectedGeneration?: string, assertCurrent?: AssertCurrent): Promise<void> {
+    managedSharedAssetsVolumeName(jobId);
+    const canonicalJobId = jobId.toLowerCase();
+    // Freeze names before checking the permit. Never adopt generations discovered after lock loss.
+    const resources = expectedGeneration === undefined
+      ? (await this.listManaged()).filter((item) => item.jobId === canonicalJobId)
+      : [{ volumeName: volumeName(expectedGeneration), generation: expectedGeneration.toLowerCase() }];
+    await assertCurrent?.();
+    for (const resource of resources) {
+      const generation = resource.generation!;
+      const inspected = await this.inspectOwnedVolume(resource.volumeName, canonicalJobId, generation);
+      await this.removeHelper(canonicalJobId, generation, assertCurrent);
+      if (inspected) await this.removeVolumeWithRetry(resource.volumeName, canonicalJobId, generation, assertCurrent);
     }
-    await this.removeVolumeWithRetry(name);
   }
 
-  async listManaged(): Promise<Array<{ volumeName: string; jobId: string; createdAt?: string }>> {
+  private async inspectOwnedVolume(name: string, jobId: string, generation?: string): Promise<Record<string, unknown> | null> {
+    const inspected = await this.inspectVolumeWithRetry(name);
+    if (!inspected) return null;
+    if (!isManagedInspection(inspected, name, jobId)) {
+      throw new Error("共享资产卷不是该 Job 的本地调度器管理卷");
+    }
+    if (generation !== undefined && generationOf(inspected.Labels) !== generation) {
+      throw new Error("shared assets volume generation changed");
+    }
+    return inspected;
+  }
+
+  private async requireVolume(name: string, jobId: string, generation: string): Promise<void> {
+    if (!(await this.inspectOwnedVolume(name, jobId, generation))) {
+      throw new Error("shared assets volume disappeared during prepare");
+    }
+  }
+
+  private async inspectHelper(jobId: string, generation: string): Promise<{ id: string } | null> {
+    const helper = helperName(generation);
+    const inspected = await this.inspectResourceWithRetry("container", helper);
+    if (!inspected) return null;
+    const labels = (inspected.Config as { Labels?: Record<string, unknown> } | undefined)?.Labels;
+    const observedGeneration = generationOf(labels);
+    if (typeof inspected.Id !== "string" || !/^[0-9a-f]{64}$/i.test(inspected.Id)
+      || (inspected.Name !== helper && inspected.Name !== `/${helper}`)
+      || labels?.[SHARED_ASSETS_VOLUME_LABEL] !== "true" || labels?.[SHARED_ASSETS_JOB_LABEL] !== jobId
+      || !observedGeneration || (generation !== undefined && generation !== observedGeneration)) {
+      throw new Error("shared assets helper is not owned by this Job/generation");
+    }
+    return { id: inspected.Id };
+  }
+
+  private async removeHelper(jobId: string, generation: string, assertCurrent?: AssertCurrent): Promise<void> {
+    const helper = await this.inspectHelper(jobId, generation);
+    // Delete by daemon identity, never a name that could now identify a replacement.
+    if (!helper) return;
+    await assertCurrent?.();
+    try {
+      await this.executeDocker("rm", "-f", helper.id);
+    } catch (error) {
+      if (!isMissingResourceError(error, "container", helper.id)) throw error;
+    }
+  }
+
+  async listManaged(): Promise<Array<{ volumeName: string; jobId: string; createdAt?: string; generation?: string }>> {
     const [labeledNames, prefixedNames] = await Promise.all([
       this.executeDocker("volume", "ls", "--filter", `label=${SHARED_ASSETS_VOLUME_LABEL}=true`, "--format", "{{.Name}}"),
       this.executeDocker("volume", "ls", "--filter", "name=deepsonar-assets-", "--format", "{{.Name}}"),
@@ -243,35 +334,34 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
       ...labeledNames.split(/\r?\n/).filter(Boolean),
       ...prefixedNames.split(/\r?\n/).filter(Boolean),
     ]);
-    const result: Array<{ volumeName: string; jobId: string; createdAt?: string }> = [];
+    const result: Array<{ volumeName: string; jobId: string; createdAt?: string; generation?: string }> = [];
     for (const name of names) {
-      const jobId = jobIdFromVolumeName(name);
-      if (!jobId) continue;
-      let inspected: SharedAssetsVolumeInspection;
-      try {
-        inspected = JSON.parse(await this.executeDocker("volume", "inspect", name, "--format", "{{json .}}")) as SharedAssetsVolumeInspection;
-      } catch (error) {
-        if (isMissingVolumeError(error)) continue;
-        throw error;
-      }
-      if (!isManagedInspection(inspected, name, jobId)) continue;
+      if (!MANAGED_VOLUME_NAME_RE.test(name)) continue;
+      const inspected = await this.inspectVolumeWithRetry(name);
+      const jobId = (inspected?.Labels as Record<string, unknown> | undefined)?.[SHARED_ASSETS_JOB_LABEL];
+      if (typeof jobId !== "string" || !JOB_ID_RE.test(jobId)
+        || !inspected || !isManagedInspection(inspected, name, jobId)) continue;
       result.push({
         volumeName: name,
         jobId,
+        generation: generationOf(inspected.Labels)!,
         ...(typeof inspected.CreatedAt === "string" ? { createdAt: inspected.CreatedAt } : {}),
       });
     }
     return result;
   }
 
-  private async removeVolumeWithRetry(name: string): Promise<void> {
+  private async removeVolumeWithRetry(name: string, jobId: string, generation: string, assertCurrent?: AssertCurrent): Promise<void> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= VOLUME_REMOVE_MAX_ATTEMPTS; attempt += 1) {
+      // Ownership is re-read before EVERY remove, including retries after a busy volume.
+      if (!(await this.inspectOwnedVolume(name, jobId, generation))) return;
+      await assertCurrent?.();
       try {
-        await this.executeDocker("volume", "rm", "-f", name);
+        await this.executeDocker("volume", "rm", name); // Never force-detach a mounted volume.
         return;
       } catch (error) {
-        if (isMissingVolumeError(error)) return;
+        if (isMissingResourceError(error, "volume", name)) return;
         lastError = error;
         if (attempt < VOLUME_REMOVE_MAX_ATTEMPTS) {
           await this.wait(VOLUME_REMOVE_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));
@@ -281,15 +371,19 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
     throw lastError;
   }
 
-  private async inspectVolumeWithRetry(name: string): Promise<Record<string, unknown> | null> {
+  private inspectVolumeWithRetry(name: string): Promise<Record<string, unknown> | null> {
+    return this.inspectResourceWithRetry("volume", name);
+  }
+
+  private async inspectResourceWithRetry(kind: "volume" | "container", name: string): Promise<Record<string, unknown> | null> {
     let lastError: unknown;
     for (let attempt = 1; attempt <= VOLUME_REMOVE_MAX_ATTEMPTS; attempt += 1) {
       try {
-        return JSON.parse(
-          await this.executeDocker("volume", "inspect", name, "--format", "{{json .}}"),
-        ) as Record<string, unknown>;
+        const inspected: unknown = JSON.parse(await this.executeDocker(kind, "inspect", name, "--format", "{{json .}}"));
+        if (!inspected || typeof inspected !== "object" || Array.isArray(inspected)) throw new Error(`invalid ${kind} inspect response`);
+        return inspected as Record<string, unknown>;
       } catch (error) {
-        if (isMissingVolumeError(error)) return null;
+        if (isMissingResourceError(error, kind, name)) return null;
         lastError = error;
         if (attempt < VOLUME_REMOVE_MAX_ATTEMPTS) {
           await this.wait(VOLUME_REMOVE_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1));

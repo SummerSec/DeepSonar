@@ -32,8 +32,14 @@ import { buildJobSharedAssetCatalog, materializeSharedAssetBlob, SHARED_ASSETS_R
 import { executeReal, preparePlatformCapability, type PreparedPlatformCapability } from "./executor-real.js";
 import { inc } from "./metrics.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
+import {
+  acquireSharedAssetPreparation, cleanupSharedAssetsForJob, SharedAssetLifecycleConflictError,
+  type SharedAssetPreparationLease,
+} from "./shared-asset-lifecycle.js";
 import { isOfficialRuntimeImageKey, RuntimeImageNotReadyError } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
+import { pendingCompletionRecoveryClaimTarget } from "./domains/job-attempt/recovery.js";
+import { createAttemptLeaseRenewals, renewCurrentAttemptLease } from "./attempt-lease.js";
 import {
   DeviceNotAuthorizedError,
   DeviceNotAvailableError,
@@ -188,7 +194,12 @@ import { recordSystemAudit } from "./audit.js";
  * fake 模式走通状态机 + 事件 + 画布 + lease，不启动真实 Agent。
  */
 
-const activeLeases = new Map<string, ReturnType<typeof setInterval>>();
+const leaseRenewals = createAttemptLeaseRenewals({
+  intervalMs: Math.max(5, config.timeouts.leaseTtlSec / 3) * 1000,
+  isAlive: (owner) => runner.isAlive({ sandboxId: owner.sandboxId }),
+  renew: (owner, isCurrent) => renewCurrentAttemptLease(sql, owner, config.timeouts.leaseTtlSec, isCurrent),
+  onError: (error, owner) => console.error(`[dispatcher] Attempt lease renewal failed ${owner.jobId}/${owner.attemptId}:`, error),
+});
 
 /** Kept as a dispatcher export for existing diagnostics/tests. */
 export { CHROME_RUNTIME_IMAGE_KEYS } from "./domains/role-runtime-snapshot/index.js";
@@ -508,6 +519,7 @@ export async function drainInFlight(timeoutMs = 15_000): Promise<void> {
   if (inFlight.size > 0) {
     console.warn(`[dispatcher] drain 超时，仍有 ${inFlight.size} 个 job 在执行（重启后由 reconcile 判 orphan）`);
   }
+  leaseRenewals.stopAll();
 }
 
 /** 内置 real 类型；其余 job.type 若在角色注册表（agent_roles）中也为 real（Phase ② 自定义角色） */
@@ -579,9 +591,20 @@ async function graphEligibilityReasonFromDb(
     );
   }
 
+  // Read the persisted directed grant on both the selection and locked claim pass.
+  // Only its exact target can be excluded; every other graph and quota gate remains.
+  const recoveryTarget = await pendingCompletionRecoveryClaimTarget(tx, job);
+  const [otherWork] = recoveryTarget ? await tx`SELECT
+      COALESCE(bool_or(type NOT IN ('hub_reason','verify_finding','report') AND status = ANY(${activeStatuses})), false) AS active_role,
+      COALESCE(bool_or(status = 'waiting_human'), false) AS waiting_human
+    FROM jobs WHERE canvas_id = ${canvasId} AND id <> ${id} AND id <> ${recoveryTarget}` : [];
   const batchedState = batch?.systemStates.get(id);
   if (batchedState) {
-    return graphEligibilityReason({ type, payload_json: job.payload_json }, batchedState);
+    return graphEligibilityReason({ type, payload_json: job.payload_json }, {
+      ...batchedState,
+      activeRole: recoveryTarget ? otherWork?.active_role !== false : batchedState.activeRole,
+      activeWaitingHuman: recoveryTarget ? otherWork?.waiting_human === true : batchedState.activeWaitingHuman,
+    });
   }
 
   const [activeHub, activeWaitingHuman, activeRole, root, oldestPendingHub] = await Promise.all([
@@ -600,9 +623,9 @@ async function graphEligibilityReasonFromDb(
     { type, payload_json: job.payload_json },
     {
       activeHub: activeHub.length > 0,
-      activeWaitingHuman: activeWaitingHuman.length > 0,
+      activeWaitingHuman: recoveryTarget ? otherWork?.waiting_human === true : activeWaitingHuman.length > 0,
       pendingHubOlder: Boolean(oldestPendingHub[0]?.id && oldestPendingHub[0].id !== id),
-      activeRole: activeRole.length > 0,
+      activeRole: recoveryTarget ? otherWork?.active_role !== false : activeRole.length > 0,
       rootStatus: (root[0]?.status as string | null) ?? null,
     },
   );
@@ -663,10 +686,15 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       }
     }
   }
-  // 单次 claim 在 advisory xact lock 内核对：平台 → 项目 → Provider → Credential → Model → Agent CLI。
-  // CLI 是最低优先级资源门；Credential 总量不会被 CLI 配额覆盖或替代。
-  // 即使未来误启动两个 Scheduler，也不会出现先 count 后 update 的超配竞态。
-  const claimedJobs = await sql.begin(async (tx) => {
+  type ClaimCursor = { priority: number; createdAt: string; id: string };
+  type ClaimPage = { claimed: { id: string }[]; cursor: ClaimCursor | null; more: boolean };
+  const pendingPageSize = 500;
+  const claimedJobs: { id: string }[] = [];
+  let cursor: ClaimCursor | null = null;
+  // Each bounded page commits before discovering another Canvas. Only actual
+  // claims consume quota; skipped busy rows cannot reserve the remaining slots.
+  const claimPage = (): Promise<ClaimPage> => sql.begin(async (tx): Promise<ClaimPage> => {
+    const stop: ClaimPage = { claimed: [], cursor: null, more: false };
     await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
     // #740 platform-wide claim pause: read under the same advisory lock the
     // pause API takes, so every replica observes a committed pause before
@@ -675,7 +703,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
     const platformClaims = await readPlatformClaimsControl(tx as unknown as typeof sql);
     if (platformClaims.paused) {
       logPlatformClaimsPaused(platformClaims.missing ? "global_settings_missing" : platformClaims.reason);
-      return [] as { id: string }[];
+      return stop;
     }
     platformClaimsPauseLogged = null;
     const lifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
@@ -707,165 +735,100 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       dispatchSlots(rules.maxGlobalJobs, totalActive),
       provisionSlots(rules.maxConcurrentProvisioning, activeProvisioning),
     );
-    if (slots <= 0) return [] as { id: string }[];
+    if (slots <= 0) return stop;
 
-    const {
-      project: projectCounts,
-      provider: providerCounts,
-      credential: credentialCounts,
-      model: modelCounts,
-      cli: cliCounts,
-    } = accumulateDispatchCounts(active as unknown as ActiveDispatchRow[]);
+    const counts = accumulateDispatchCounts(active as unknown as ActiveDispatchRow[]);
+    type PendingCandidate = DispatchCandidate & { id: string; priority: number; created_at_key: string; canvas_project_id: string | null };
     const claimed: { id: string }[] = [];
-    /**
-     * Scan pending jobs in bounded pages, advancing a keyset cursor after
-     * every page. A single LIMIT 500 lets an ineligible high-priority prefix
-     * starve eligible jobs behind it; keyset paging keeps scanning until all
-     * available slots are filled or pending is exhausted.
-     */
-    const pendingPageSize = 500;
-    let cursor: { priority: number; createdAt: string; id: string } | null = null;
-    while (claimed.length < slots) {
-      // Outer joins remain unlocked. Lock the Job for claim and the inner
-      // project row in SHARE mode so a concurrent settings update linearizes
-      // before or after this claim instead of changing policy mid-decision.
-      // ORDER BY uses mixed directions, so the keyset predicate is expanded
-      // explicitly instead of relying on a tuple comparison.
-      const pending = cursor
-        ? await tx`
-            SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.payload_json,
-                   j.priority, j.created_at::text AS created_at_key, j.agent_snapshot_json,
-                   j.agent_snapshot_json->>'agent_cli' AS agent_cli,
-                   j.agent_snapshot_json->>'credential_id' AS credential_id,
-                   j.agent_snapshot_json->>'credential_provider' AS credential_provider,
-                   j.agent_snapshot_json->>'model' AS model,
-                   j.agent_snapshot_json->>'upstream_model' AS upstream_model,
-                   p.config_json AS project_config_json,
-                   c.public_metadata_json AS credential_metadata,
-                   cv.target_json AS canvas_target_json
-            FROM jobs j
-            JOIN projects p ON p.id = j.project_id
-            LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
-            LEFT JOIN canvases cv ON cv.id = j.canvas_id
-            WHERE j.status = 'pending'
-              AND (
-                j.priority < ${cursor.priority}
-              OR (j.priority = ${cursor.priority} AND j.created_at > ${sql.typed(cursor.createdAt, 25)}::timestamptz)
-              OR (j.priority = ${cursor.priority} AND j.created_at = ${sql.typed(cursor.createdAt, 25)}::timestamptz AND j.id > ${cursor.id}::uuid)
-              )
-            ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
-            LIMIT ${pendingPageSize}
-            FOR UPDATE OF j SKIP LOCKED
-            FOR SHARE OF p`
-        : await tx`
-            SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.payload_json,
-                   j.priority, j.created_at::text AS created_at_key, j.agent_snapshot_json,
-                   j.agent_snapshot_json->>'agent_cli' AS agent_cli,
-                   j.agent_snapshot_json->>'credential_id' AS credential_id,
-                   j.agent_snapshot_json->>'credential_provider' AS credential_provider,
-                   j.agent_snapshot_json->>'model' AS model,
-                   j.agent_snapshot_json->>'upstream_model' AS upstream_model,
-                   p.config_json AS project_config_json,
-                   c.public_metadata_json AS credential_metadata,
-                   cv.target_json AS canvas_target_json
-            FROM jobs j
-            JOIN projects p ON p.id = j.project_id
-            LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
-            LEFT JOIN canvases cv ON cv.id = j.canvas_id
-            WHERE j.status = 'pending'
-            ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
-            LIMIT ${pendingPageSize}
-            FOR UPDATE OF j SKIP LOCKED
-            FOR SHARE OF p`;
-
-      if (pending.length === 0) break;
-      const last = pending[pending.length - 1] as Record<string, unknown>;
-      cursor = {
-        priority: Number(last.priority),
-        createdAt: String(last.created_at_key),
-        id: String(last.id),
-      };
-      // SAFETY: 两处都是 postgres.js 事务句柄，与 sql 同接口；候选行由本事务 SELECT 列清单决定。
-      const graphBatch = await loadGraphEligibilityBatch(
-        tx as unknown as typeof sql,
-        pending as unknown as DispatchCandidate[],
+    const projection = tx`
+      SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.payload_json,
+             j.priority, j.created_at::text AS created_at_key, j.agent_snapshot_json,
+             j.agent_snapshot_json->>'agent_cli' AS agent_cli,
+             j.agent_snapshot_json->>'credential_id' AS credential_id,
+             j.agent_snapshot_json->>'credential_provider' AS credential_provider,
+             j.agent_snapshot_json->>'model' AS model,
+             j.agent_snapshot_json->>'upstream_model' AS upstream_model,
+             p.config_json AS project_config_json, c.public_metadata_json AS credential_metadata,
+             cv.target_json AS canvas_target_json, cv.project_id AS canvas_project_id
+      FROM jobs j
+      JOIN projects p ON p.id = j.project_id
+      LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
+      LEFT JOIN canvases cv ON cv.id = j.canvas_id`;
+    const eligible = async (job: PendingCandidate, graphBatch: GraphEligibilityBatch): Promise<boolean> => {
+      if (job.canvas_id && (job.canvas_project_id !== job.project_id || canvasExecutionIsPaused(job.canvas_target_json))) return false;
+      if (canvasScheduleBlocksDispatch(job.canvas_target_json)) return false;
+      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
+      if (await graphEligibilityReasonFromDb(tx as unknown as typeof sql, job, graphBatch)) return false;
+      return !dispatchSkipReason(job, counts, rules, projectJobLimitForCandidate(job, rules.maxJobsPerProject));
+    };
+    // Freeze only this page's identity hints. Eligibility is authoritative after
+    // the sorted Canvas/project locks and Job SKIP LOCKED re-read below.
+    const selected: PendingCandidate[] = await tx<PendingCandidate[]>`${projection}
+      WHERE j.status = 'pending'
+      ${cursor ? tx`AND (
+        j.priority < ${cursor.priority}
+        OR (j.priority = ${cursor.priority} AND j.created_at > ${sql.typed(cursor.createdAt, 25)}::timestamptz)
+        OR (j.priority = ${cursor.priority} AND j.created_at = ${sql.typed(cursor.createdAt, 25)}::timestamptz AND j.id > ${cursor.id}::uuid)
+      )` : tx``}
+      ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
+      LIMIT ${pendingPageSize}`;
+    if (selected.length === 0) return stop;
+    const last: PendingCandidate = selected[selected.length - 1]!;
+    const nextCursor: ClaimCursor = { priority: Number(last.priority), createdAt: String(last.created_at_key), id: String(last.id) };
+    // Lock every candidate Canvas before any Job/Attempt. Never refill from a
+    // later page until this transaction has committed and released all locks.
+    const canvasIds = [...new Set(selected.map((job) => job.canvas_id).filter(Boolean))] as string[];
+    const lockedCanvases = await tx<{ id: string }[]>`
+      SELECT id FROM canvases WHERE id = ANY(${canvasIds}::text[])
+      ORDER BY id FOR SHARE SKIP LOCKED`;
+    // Project settings also linearize before the authoritative Job re-read.
+    await tx`SELECT id FROM projects WHERE id = ANY(${selected.map((job) => String(job.project_id))}::uuid[])
+      ORDER BY id FOR SHARE`;
+    const pending = await tx<PendingCandidate[]>`${projection}
+      WHERE j.status = 'pending' AND j.id = ANY(${selected.map((job) => job.id)}::uuid[])
+        AND (j.canvas_id IS NULL OR j.canvas_id = ANY(${lockedCanvases.map((canvas) => canvas.id)}::text[]))
+        AND EXISTS (
+          SELECT 1 FROM jsonb_to_recordset(${tx.json(selected.map((job) => ({
+            id: job.id, project_id: String(job.project_id), canvas_id: job.canvas_id ?? null,
+          })) as never)}) AS hint(id uuid, project_id uuid, canvas_id text)
+          WHERE hint.id = j.id AND hint.project_id = j.project_id AND hint.canvas_id IS NOT DISTINCT FROM j.canvas_id
+        )
+      ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
+      FOR UPDATE OF j SKIP LOCKED`;
+    const graphBatch = await loadGraphEligibilityBatch(tx as unknown as typeof sql, pending);
+    for (const job of pending) {
+      // Re-check scope, pause/schedule, graph and quotas from locked rows before CAS.
+      if (claimed.length >= slots) break;
+      if (!(await eligible(job, graphBatch))) continue;
+      const row = await lifecycle.claimPendingJob(job.id);
+      if (!row) continue;
+      await createOrGetActiveAttempt(
+        tx as unknown as typeof sql, job.id, attemptSnapshotIdentity(job.agent_snapshot_json), { "deepsonar.job": job.id },
       );
-
-      for (const job of pending) {
-        if (claimed.length >= slots) break;
-        // Canvas execution control is a database-authoritative admission gate.
-        // Lock the Canvas after the candidate Job so a concurrent pause either
-        // linearizes before this re-read (and blocks claim) or after the claim.
-        // The initial join is only a scan hint; it is not authoritative.
-        let canvasTarget = (job as DispatchCandidate).canvas_target_json;
-        if (job.canvas_id) {
-          const [lockedCanvas] = await tx`
-            SELECT target_json FROM canvases
-            WHERE id = ${job.canvas_id as string}
-            FOR SHARE`;
-          if (!lockedCanvas) continue;
-          canvasTarget = lockedCanvas.target_json;
-          if (canvasExecutionIsPaused(canvasTarget)) continue;
-        }
-        // Task-level schedule gate: hold every job on the canvas until start_at.
-        if (canvasScheduleBlocksDispatch(canvasTarget)) continue;
-        // SAFETY: 同上，事务句柄与 sql 同接口；job 由本事务投影为 DispatchCandidate。
-        const graphSkip = await graphEligibilityReasonFromDb(
-          tx as unknown as typeof sql,
-          job as DispatchCandidate,
-          graphBatch,
-        );
-        if (graphSkip) continue;
-        const projectId = job.project_id as string;
-        // Historical snapshots may omit agent_cli; keep quota accounting on
-        // the immutable platform default rather than mutable env config.
-        const cli = String(job.agent_cli ?? PLATFORM_DEFAULT_AGENT_CLI);
-        const provider = String(job.credential_provider ?? "");
-        const credentialId = String(job.credential_id ?? "");
-        const model = snapshotUpstreamModel(job) ?? "";
-        const skipReason = dispatchSkipReason(
-          job as DispatchCandidate,
-          {
-            project: projectCounts,
-            provider: providerCounts,
-            credential: credentialCounts,
-            model: modelCounts,
-            cli: cliCounts,
-          },
-          rules,
-          projectJobLimitForCandidate(job, rules.maxJobsPerProject),
-        );
-        if (skipReason) continue;
-        const row = await lifecycle.claimPendingJob(job.id as string);
-        if (!row) continue;
-        // SAFETY: 同上，事务句柄与 sql 同接口。
-        await createOrGetActiveAttempt(
-          tx as unknown as typeof sql,
-          String(job.id),
-          attemptSnapshotIdentity(job.agent_snapshot_json),
-          { "deepsonar.job": String(job.id) },
-        );
-        // A Finding Report is queued as `pending`; it becomes visible as
-        // `generating` only after the DB claim succeeds.  Keep this update in
-        // the same transaction as the jobs CAS so a report can never advertise
-        // generation for a still-queued job (or remain queued after a claim).
-        if (String(job.type ?? "") === "report") {
-          await tx`
-            UPDATE finding_reports
-            SET status = 'generating', updated_at = now()
-            WHERE report_job_id = ${row.id as string} AND status = 'pending'`;
-        }
-        claimed.push({ id: row.id as string });
-        projectCounts.set(projectId, (projectCounts.get(projectId) ?? 0) + 1);
-        if (provider) providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
-        if (credentialId) credentialCounts.set(credentialId, (credentialCounts.get(credentialId) ?? 0) + 1);
-        if (credentialId && model) modelCounts.set(dispatchModelKey(credentialId, model), (modelCounts.get(dispatchModelKey(credentialId, model)) ?? 0) + 1);
-        cliCounts.set(cli, (cliCounts.get(cli) ?? 0) + 1);
+      // Reports advertise generating only after the same transaction's Job CAS.
+      if (String(job.type ?? "") === "report") {
+        await tx`UPDATE finding_reports SET status = 'generating', updated_at = now()
+          WHERE report_job_id = ${row.id as string} AND status = 'pending'`;
       }
+      claimed.push({ id: row.id as string });
+      accumulateDispatchCounts([{ ...job, count: 1 }], counts);
     }
-    return claimed;
+    return { claimed, cursor: nextCursor, more: selected.length === pendingPageSize && claimed.length < slots };
   });
-
+  while (true) {
+    let page: ClaimPage;
+    try {
+      page = await claimPage();
+    } catch (error) {
+      if (claimedJobs.length === 0) throw error;
+      // Earlier pages are already committed and must reach dispatchOnce.
+      console.error("[dispatcher] 后续分页领取失败，返回此前已提交的 Job:", error);
+      break;
+    }
+    claimedJobs.push(...page.claimed);
+    if (!page.more) break;
+    cursor = page.cursor;
+  }
   return claimedJobs;
 }
 
@@ -883,7 +846,7 @@ export async function dispatchOnce(): Promise<number> {
   return claimedJobs.length;
 }
 
-async function retryProvisioningJob(
+export async function retryProvisioningJob(
   jobId: string,
   attempt: Record<string, unknown>,
   errorMessage: string,
@@ -893,6 +856,18 @@ async function retryProvisioningJob(
     const [locator] = await tx<{ canvas_id: string | null }[]>`
       SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
     await lockCanvasForConvergence(tx, locator?.canvas_id ?? null);
+    const [owner] = await tx`
+      SELECT j.canvas_id, (SELECT id FROM job_attempts WHERE job_id = j.id ORDER BY attempt_no DESC LIMIT 1) AS latest_attempt_id
+      FROM jobs j WHERE j.id = ${jobId} FOR UPDATE OF j`;
+    const current = await getActiveAttempt(tx, jobId, true);
+    if (!owner || owner.canvas_id !== (locator?.canvas_id ?? null) || owner.latest_attempt_id !== attempt.id
+      || !current || typeof current.id !== "string" || current.id !== attempt.id || current.cancel_requested !== false) return false;
+    // Error text/missing handle cannot authorize replay. Only no effect or an
+    // explicit host never_started settlement is admissible under this owner lock.
+    const [blocked] = await tx`SELECT id FROM job_attempt_effects WHERE attempt_id = ${current.id}
+      AND NOT (effect_kind = 'provision' AND status = 'settled'
+         AND COALESCE(settlement_json @> '{"result":"never_started","external_effect":false}'::jsonb, false)) LIMIT 1`;
+    if (blocked) return false;
     const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
       SELECT status, outcome_json, state_json
       FROM job_attempts
@@ -974,9 +949,26 @@ async function retryContextWindowExceededJob(
   return Boolean(retried);
 }
 
+/** Job before Attempt; both provision admission and mount settlement fence the same owner. */
+export async function lockCurrentProvisioningAttempt(
+  db: typeof sql, jobId: string, attemptId: string, phase: "preparing" | "provision.effect_pending",
+): Promise<void> {
+  const [job] = await db`
+    SELECT j.status, (SELECT id FROM job_attempts WHERE job_id = j.id ORDER BY attempt_no DESC LIMIT 1) AS latest_attempt_id
+    FROM jobs j WHERE j.id = ${jobId} FOR UPDATE OF j`;
+  const attempt = await getActiveAttempt(db, jobId, true);
+  if (job?.status !== "provisioning" || job.latest_attempt_id !== attemptId || attempt?.id !== attemptId
+    || attempt.cancel_requested !== false || attempt.phase !== phase) {
+    throw new SharedAssetLifecycleConflictError("stale_attempt");
+  }
+}
+
 async function runJob(jobId: string) {
+  let stopLease: (() => void) | null = null;
   let handle: { sandboxId: string } | null = null;
   let sharedAssetsVolumeName: string | null = null;
+  let sharedAssetsGeneration: string | undefined;
+  let sharedAssetsPreparation: SharedAssetPreparationLease | null = null;
   let attemptId: string | null = null;
   let provisionEffectId: string | null = null;
   let provisionAttempted = false;
@@ -1044,11 +1036,6 @@ async function runJob(jobId: string) {
       }
     }
     if (!(await lifecycle.transitionJob(jobId, "provisioning"))) return; // 竞态：已被 cancel/reap
-    if (useReal) {
-      // Capability authentication remains disabled until `running`, but the
-      // plaintext must exist before Docker creates immutable Config.Env.
-      platformCapability = await preparePlatformCapability(jobId, snapshot);
-    }
     const frozenAssets = snapshot.shared_assets ?? [];
     if (useReal && frozenAssets.length > 0) {
       const files = [];
@@ -1058,8 +1045,14 @@ async function runJob(jobId: string) {
           relativePath: asset.mount_path.replace(`${SHARED_ASSETS_READONLY_ROOT}/`, ""),
         });
       }
+      // Blob IO above holds no SQL transaction/asset lock; the private session
+      // below stays reserved through helper prepare, runner mount and binding.
+      sharedAssetsGeneration = randomUUID();
+      sharedAssetsPreparation = await acquireSharedAssetPreparation({ jobId, attemptId: attemptId!, canvasId: job.canvas_id as string | null });
       sharedAssetsVolumeName = await sharedAssetsVolumeManager.prepare({
         jobId,
+        generation: sharedAssetsGeneration,
+        assertCurrent: sharedAssetsPreparation.assertCurrent,
         files,
         catalog: buildJobSharedAssetCatalog({
           revision: snapshot.shared_assets_revision,
@@ -1068,10 +1061,18 @@ async function runJob(jobId: string) {
         }),
       });
     }
+    await sharedAssetsPreparation?.assertCurrent();
+    if (useReal) {
+      // For asset-bearing Jobs the old cleanup must finish before minting new
+      // credentials. Authentication stays disabled until running; plaintext is
+      // still ready before the runner creates immutable Config.Env.
+      platformCapability = await preparePlatformCapability(jobId, snapshot);
+    }
     provisionEffectId = `provision:${String(attempt.attempt_no)}`;
     await sql.begin(async (tx) => {
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-      await beginEffect(tx as unknown as typeof sql, attemptId!, {
+      await lockCurrentProvisioningAttempt(tx as unknown as typeof sql, jobId, attemptId!, "preparing");
+      const admitted = await beginEffect(tx as unknown as typeof sql, attemptId!, {
         effectId: provisionEffectId!,
         kind: "provision",
         inputDigest: String(
@@ -1079,9 +1080,10 @@ async function runJob(jobId: string) {
             ? (attempt.snapshot_identity_json as Record<string, unknown>).snapshot_sha256 ?? ""
             : "",
         ).replace(/^sha256:/, "") || null,
-        resourceIdentity: { job_id: jobId, attempt_id: attemptId },
+        resourceIdentity: { job_id: jobId, attempt_id: attemptId, shared_assets_generation: sharedAssetsGeneration ?? null },
         intent: { image_ref: runtimeImage, network: useReal ? (allowEgress ? "egress" : "restricted") : "none" },
       });
+      if (!admitted) throw new SharedAssetLifecycleConflictError("stale_attempt");
     });
     // 超时路径若观察到迟到沙箱（或 late destroy 失败），不得再标 never_started。
     let lateProvisionExternalUncertain = false;
@@ -1090,7 +1092,6 @@ async function runJob(jobId: string) {
       // 真实设备接入：快照声明了设备需求且本 Job 角色命中时才申请租约。
       // 授权在申请时重新校验；未授权 fail closed 且不进重试链。
       if (useReal) {
-        provisionAttempted = true;
         deviceLease = await acquireDeviceLeaseForJob({
           jobId,
           attemptId: attemptId!,
@@ -1137,11 +1138,13 @@ async function runJob(jobId: string) {
       });
       try {
         const [stillProvisioning] = await sql`
-          SELECT id FROM jobs
-          WHERE id = ${jobId} AND status = 'provisioning'`;
+          SELECT j.id FROM jobs j JOIN job_attempts a ON a.job_id = j.id
+          WHERE j.id = ${jobId} AND j.status = 'provisioning' AND a.id = ${attemptId!}
+            AND a.status = 'active' AND a.cancel_requested = false AND a.phase = 'provision.effect_pending'
+            AND a.attempt_no = (SELECT max(attempt_no) FROM job_attempts WHERE job_id = j.id)`;
         if (!stillProvisioning) {
           await interruptProvision(jobId, attemptId!);
-          throw new Error(`job ${jobId} 在 provision 启动前已离开 provisioning 状态`);
+          throw new SharedAssetLifecycleConflictError("stale_attempt");
         }
         const frozenProvisionSec = snapshot.runtime_knobs?.provision_timeout_sec;
         const provisionSec = typeof frozenProvisionSec === "number" && frozenProvisionSec > 0
@@ -1152,6 +1155,7 @@ async function runJob(jobId: string) {
           : "opensandbox";
         const provisionStarted = Date.now();
         try {
+          await sharedAssetsPreparation?.assertCurrent();
           provisionAttempted = true;
           handle = await withProvisionTimeout(
             runner.provision(provisionInput),
@@ -1179,39 +1183,45 @@ async function runJob(jobId: string) {
         unregisterProvision();
       }
     } catch (error) {
-      // 观察到的创建失败且从未见到沙箱：provider cleanup 后可证明无外部后果 → never_started。
-      // 超时路径若已观察到迟到 handle（或 destroy 失败留下残留风险）→ 保持 unknown，fail closed。
-      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-      await sql.begin(async (tx) => {
-        if (lateProvisionExternalUncertain) {
-          await markEffectUnknown(tx as unknown as typeof sql, attemptId!, provisionEffectId!, error);
-        } else {
-          await settleUnstartedProvisionEffect(tx as unknown as typeof sql, attemptId!, provisionEffectId!, error);
-        }
-      }).catch(() => {});
+      // Once runner.provision was invoked, no handle is NOT proof of no create.
+      // Only an explicit pre-call failure is never_started; opaque/late effects stay unknown.
+      try {
+        await sql.begin(async (txRaw) => {
+          const tx = txRaw as unknown as typeof sql;
+          await lockCurrentProvisioningAttempt(tx, jobId, attemptId!, "provision.effect_pending");
+          if (provisionAttempted || lateProvisionExternalUncertain) {
+            await markEffectUnknown(tx, attemptId!, provisionEffectId!, error);
+          } else {
+            await settleUnstartedProvisionEffect(tx, attemptId!, provisionEffectId!, error);
+          }
+        });
+      } catch (settlementError) {
+        console.error(`[dispatcher] provision effect settlement/fence failed ${jobId}:`, settlementError);
+        throw new AggregateError([error, settlementError], "provision failed and its Attempt effect could not be settled", { cause: error });
+      }
       throw error;
     }
-    // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-    await sql.begin(async (tx) => {
-      await settleEffect(tx as unknown as typeof sql, attemptId!, provisionEffectId!, {
-        status: "settled",
-        outcome: { sandbox_id: handle?.sandboxId ?? null },
-      });
-      await updateAttemptResource(tx as unknown as typeof sql, attemptId!, {
-        sandboxId: handle?.sandboxId ?? null,
-        phase: "provisioned",
-      });
-      const [bound] = await tx`
-        UPDATE jobs SET sandbox_id = ${handle?.sandboxId ?? null}
-        WHERE id = ${jobId} AND status = 'provisioning'
-        RETURNING id`;
-      if (!bound) throw new Error(`job ${jobId} 在 provision 收口前已失去 provisioning 状态`);
-    });
-
-    // running：开 lease（竞态守卫：此时被 cancel 则放弃执行，直接走 finally 回收）
+    await sharedAssetsPreparation?.assertCurrent(); // runner has verified the read-only mount handoff.
     const lease = new Date(Date.now() + config.timeouts.leaseTtlSec * 1000);
-    if (!(await lifecycle.transitionJob(jobId, "running", { started_at: new Date(), lease_expires_at: lease }))) {
-      return;
+    // Job → Attempt: settlement, resource binding and running CAS share one owner-fenced transaction.
+    await sql.begin(async (txRaw) => {
+      const tx = txRaw as unknown as typeof sql;
+      await lockCurrentProvisioningAttempt(tx, jobId, attemptId!, "provision.effect_pending");
+      await settleEffect(tx, attemptId!, provisionEffectId!, {
+        status: "settled", outcome: { sandbox_id: handle?.sandboxId ?? null },
+      });
+      await updateAttemptResource(tx, attemptId!, { sandboxId: handle?.sandboxId ?? null, phase: "provisioned" });
+      const [bound] = await tx`UPDATE jobs SET sandbox_id = ${handle?.sandboxId ?? null}
+        WHERE id = ${jobId} AND status = 'provisioning' RETURNING id`;
+      if (!bound) throw new SharedAssetLifecycleConflictError("stale_attempt");
+      if (!(await createSqlJobLifecycleApplication(tx).transitionJob(jobId, "running", { started_at: new Date(), lease_expires_at: lease }))) {
+        throw new SharedAssetLifecycleConflictError("stale_attempt");
+      }
+    });
+    if (sharedAssetsPreparation) {
+      const preparation = sharedAssetsPreparation;
+      sharedAssetsPreparation = null;
+      await preparation.release(); // only after mount handoff and durable Attempt/Job binding.
     }
     if (platformCapability) await activateProvisionedJobCapabilityTokens(jobId);
     // Provisioning admission 统计 claimed/provisioning Job；离开该阶段后
@@ -1231,7 +1241,7 @@ async function runJob(jobId: string) {
       });
       if (!started) throw new Error(`job ${jobId} 的 Attempt 已不再活动，禁止启动 agent_run`);
     });
-    startLeaseRenewal(jobId, handle);
+    stopLease = leaseRenewals.start({ jobId, attemptId: attemptId!, sandboxId: handle.sandboxId });
 
     // 画布：job 节点（如不存在）——claim 时由任务路由建 root 之外的 job 节点
     await ensureJobNode(jobId, job);
@@ -1257,10 +1267,19 @@ async function runJob(jobId: string) {
       }).catch((err) => console.error("[dispatcher] opensandbox upload circuit success record failed:", err));
     }
   } catch (e) {
-    const [current] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
+    const [current] = await sql<{ status: string; latest_attempt_id: string | null }[]>`
+      SELECT j.status, (SELECT id FROM job_attempts WHERE job_id = j.id ORDER BY attempt_no DESC LIMIT 1) AS latest_attempt_id
+      FROM jobs j WHERE j.id = ${jobId}`;
+    if ((attemptId && current?.latest_attempt_id !== attemptId)
+      || (e instanceof SharedAssetLifecycleConflictError && e.reason === "stale_attempt")
+      || (e instanceof AggregateError && e.errors.some((error) => error instanceof SharedAssetLifecycleConflictError && error.reason === "stale_attempt"))) {
+      if (e instanceof AggregateError) throw e; // Keep failed fencing/settlement visible without writing the newer owner.
+      return;
+    }
     if (current?.status === "waiting_human") {
       // request_human already closed this run. A late exclusive-tool rejection
       // must not paint the wait gate as failed or hide the reply target.
+      if (e instanceof AggregateError) throw e;
       return;
     }
     const rawMessage = formatDispatcherFailureMessage(e);
@@ -1276,7 +1295,7 @@ async function runJob(jobId: string) {
       ? `${rawMessage} (code=event_rate_limited bucket=${String(details.metadata?.bucket ?? "unknown")} retry_after_sec=${String(details.metadata?.retry_after_sec ?? "unknown")} limit=${String(details.metadata?.limit ?? "unknown")})`
       : rawMessage;
     let msg = formatted.trim() || classified.message.trim() || DISPATCHER_EXCEPTION_FALLBACK;
-    if (provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)) {
+    if (!provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)) {
       const retried = await retryProvisioningJob(jobId, activeAttempt, msg).catch((retryError) => {
         console.error(`[dispatcher] provision retry scheduling failed for ${jobId}:`, retryError);
         return false;
@@ -1403,6 +1422,11 @@ async function runJob(jobId: string) {
         SELECT id, type, canvas_id, project_id, priority FROM jobs WHERE id = ${jobId}`;
       const canvasId = (locator?.canvas_id as string | null) ?? null;
       await lockCanvasForConvergence(tx, canvasId);
+      const [owner] = await tx`
+        SELECT j.canvas_id, j.project_id, (SELECT id FROM job_attempts WHERE job_id = j.id ORDER BY attempt_no DESC LIMIT 1) AS latest_attempt_id
+        FROM jobs j WHERE j.id = ${jobId} FOR UPDATE OF j`;
+      if (!owner || owner.canvas_id !== canvasId || owner.project_id !== locator?.project_id
+        || (attemptId && owner.latest_attempt_id !== attemptId)) return null;
       const txLifecycle = createSqlJobLifecycleApplication(tx);
       const row = await txLifecycle.failExecution(jobId, msg);
       if (row) {
@@ -1439,21 +1463,7 @@ async function runJob(jobId: string) {
       }).catch(() => {});
     }
   } finally {
-    stopLeaseRenewal(jobId);
-    if (deviceLease) {
-      const lease = deviceLease;
-      deviceLease = null;
-      await releaseDeviceLeasesForJobQuietly(jobId, "attempt_terminal").catch(() => {});
-      void lease;
-    }
-    // Pair model-gateway tokens with platform capability tokens. finalizeJob
-    // already revokes both on mark_job_done; executor failures go through
-    // failExecution without that path, so finally must revoke model tokens too.
-    await revokeJobTokens(jobId, "dispatcher_cleanup").catch(() => {});
-    if (platformCapability) {
-      await revokeJobCapabilityTokens(jobId).catch(() => {});
-      platformCapability = null;
-    }
+    stopLease?.();
     if (handle) {
       const h = handle;
       await runner.destroy(h).catch((e) => {
@@ -1461,12 +1471,28 @@ async function runJob(jobId: string) {
         console.error(`[dispatcher] 沙箱回收失败 ${h.sandboxId}:`, e);
       });
     }
-    if (sharedAssetsVolumeName) {
-      await sharedAssetsVolumeManager.removeForJob(jobId).catch((e) => {
+    // Failed/late handoff retains the private lock until its exact sandbox is
+    // destroyed; release before invoking the independently locking cleanup.
+    if (sharedAssetsPreparation) {
+      await sharedAssetsPreparation.release().catch((e) => {
         inc("deepsonar_shared_assets_cleanup_failed_total");
-        console.error(`[dispatcher] 共享资产卷回收失败 ${jobId}:`, e);
+        console.error(`[dispatcher] 共享资产生命周期锁释放失败 ${jobId}:`, e);
       });
+      sharedAssetsPreparation = null;
     }
+    // Asset-bearing retries mint credentials only after this lock; also skip
+    // Job-wide credentials/device cleanup when the latest owner already changed.
+    await cleanupSharedAssetsForJob({ jobId, attemptId }, async (assertCurrent) => {
+      if (deviceLease) await releaseDeviceLeasesForJobQuietly(jobId, "attempt_terminal").catch(() => {});
+      await revokeJobTokens(jobId, "dispatcher_cleanup").catch(() => {});
+      if (platformCapability) await revokeJobCapabilityTokens(jobId).catch(() => {});
+      if (sharedAssetsVolumeName) await sharedAssetsVolumeManager.removeForJob(jobId, sharedAssetsGeneration, assertCurrent);
+    }).catch((e) => {
+      inc("deepsonar_shared_assets_cleanup_failed_total");
+      console.error(`[dispatcher] 共享资产卷/生命周期回收失败 ${jobId}:`, e);
+    });
+    deviceLease = null;
+    platformCapability = null;
   }
 }
 
@@ -1753,25 +1779,6 @@ async function executeFake(jobId: string, type: string) {
     description: `假 agent（${type}）：auth/login.php:42 存在未参数化拼接，用户输入经 $_GET 直达 mysqli_query，属高危数据流（演示事实）。`,
   });
   return; // done 由 runJob 兜底
-}
-
-// lease 续期：调度器侧维护（§3.3；接入 SDK 后改为控制通道探测驱动）
-function startLeaseRenewal(jobId: string, handle: { sandboxId: string }) {
-  const timer = setInterval(async () => {
-    const alive = await runner.isAlive(handle).catch(() => false);
-    if (!alive) return; // 停续，交给 Reaper 判 orphan
-    await sql`
-      UPDATE jobs SET lease_expires_at = now() + (${config.timeouts.leaseTtlSec} * interval '1 second'),
-                      heartbeat_at = now()
-      WHERE id = ${jobId} AND status = 'running'`;
-  }, Math.max(5, config.timeouts.leaseTtlSec / 3) * 1000);
-  activeLeases.set(jobId, timer);
-}
-
-function stopLeaseRenewal(jobId: string) {
-  const t = activeLeases.get(jobId);
-  if (t) clearInterval(t);
-  activeLeases.delete(jobId);
 }
 
 async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
