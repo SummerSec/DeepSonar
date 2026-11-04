@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [0.6.9] - 2026-11-04
+
 ### 修复
 
 - **回写在缺权限时立即失败、并覆盖遗留 bot 分支（#880）**：v0.6.8 的回写已经等到 `ci-summary passed`，却在建 PR 时被 `GitHub Actions is not permitted to create or approve pull requests` 拒绝——该仓库开关关闭，而检查发生在满一轮门禁之后（22 分钟）。现在回写先查 `actions/permissions/workflow` 的 `can_approve_pull_request_reviews`，关闭时以单条可执行提示（`WRITEBACK_PR_PERMISSION_MISSING`，指明设置位置）在秒级失败，且在 dispatch 之前。同时 bot 分支改为 `--force-with-lease` 覆盖：它是 workflow 独占的可丢弃分支，上一次尝试留下的同名分支会让普通推送因非快进而失败（v0.6.8 attempt 2 实测）。
@@ -1474,3 +1476,4 @@
 [0.6.6]: https://github.com/SummerSec/DeepSonar/compare/v0.6.5...v0.6.6
 [0.6.7]: https://github.com/SummerSec/DeepSonar/compare/v0.6.6...v0.6.7
 [0.6.8]: https://github.com/SummerSec/DeepSonar/compare/v0.6.7...v0.6.8
+[0.6.9]: https://github.com/SummerSec/DeepSonar/compare/v0.6.8...v0.6.9
