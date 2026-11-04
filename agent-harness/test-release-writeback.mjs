@@ -31,11 +31,12 @@ function harness({
     if (joined.startsWith("gh workflow run")) {
       return dispatchFails ? { status: 1, stderr: "HTTP 403: Resource not accessible" } : { status: 0, stdout: "" };
     }
-    if (joined.startsWith("gh api") && joined.includes("/check-runs")) {
+    if (joined.startsWith("gh pr view") && joined.includes("statusCheckRollup")) {
       const conclusion = conclusions[Math.min(pollIndex, conclusions.length - 1)];
       pollIndex += 1;
       return { status: 0, stdout: `${conclusion}\n` };
     }
+
     if (joined.startsWith("gh pr list")) return { status: 0, stdout: `${existingPr}\n` };
     if (joined.startsWith("gh pr create")) {
       return createFails
@@ -79,12 +80,17 @@ await assert.rejects(
   (error) => error instanceof WritebackError && error.code === "WRITEBACK_INPUT_MISSING" && /GH_TOKEN/.test(error.message),
 );
 
-// 2. dispatch failure must not move the default branch and must keep the branch.
+// 2. the writeback opens the pull request first, so ci.yml is triggered by the normal
+//    pull_request event (a dispatched run never satisfies the PR's required check).
 {
-  const { calls, run } = harness({ dispatchFails: true });
-  await assert.rejects(() => runWriteback({ ...base, env, run, sleep: quiet }),
-    (error) => error.code === "WRITEBACK_DISPATCH_FAILED" && /was not modified/.test(error.message));
-  neverMutatesMain(calls);
+  const { calls, run } = harness();
+  await runWriteback({ ...base, env, run, sleep: quiet });
+  const createIndex = calls.findIndex((call) => call.startsWith("gh pr create"));
+  assert.ok(createIndex >= 0, "a pull request is opened");
+  assert.ok(!calls.some((call) => call.startsWith("gh workflow run")),
+    "no workflow_dispatch: its check-runs are not part of the PR rollup");
+  const rollupIndex = calls.findIndex((call) => call.includes("statusCheckRollup"));
+  assert.ok(rollupIndex > createIndex, "the required check is read from the pull request after it opens");
 }
 
 // 3. every blocking conclusion keeps the default branch where it was.
@@ -113,7 +119,7 @@ for (const conclusion of ["failure", "cancelled", "timed_out", "skipped"]) {
     if (joined.startsWith("gh api") && joined.includes("/actions/permissions/workflow")) {
       return { status: 0, stdout: '{"can_approve_pull_request_reviews":true}\n' };
     }
-    if (joined.startsWith("gh api") && joined.includes("/check-runs")) {
+    if (joined.startsWith("gh pr view") && joined.includes("statusCheckRollup")) {
       polls += 1;
       return polls === 1 ? { status: 1, stderr: "unexpected EOF" } : { status: 0, stdout: "success\n" };
     }
@@ -141,9 +147,9 @@ for (const conclusion of ["failure", "cancelled", "timed_out", "skipped"]) {
   neverMutatesMain(calls);
 }
 
-// 7. a blocked PR keeps waiting (checks may still be settling) and then merges.
+// 7. UNKNOWN/BLOCKED right after opening are transient: keep polling, then merge.
 {
-  const { calls, run } = harness({ mergeStates: ["BLOCKED", "BLOCKED", "CLEAN"] });
+  const { calls, run } = harness({ mergeStates: ["UNKNOWN", "BLOCKED", "CLEAN"] });
   const result = await runWriteback({ ...base, env, run, sleep: quiet });
   assert.equal(result.via, "pr_merge");
   assert.ok(calls.filter((call) => call.startsWith("gh pr view")).length >= 3);
@@ -186,7 +192,7 @@ for (const conclusion of ["failure", "cancelled", "timed_out", "skipped"]) {
 }
 
 // 12. a repository that forbids Actions from creating pull requests fails in seconds
-//     with one actionable message instead of after a full gate.
+//     with one actionable message instead of after the PR could not be opened.
 {
   let gateDispatched = false;
   const run = (file, args) => {
@@ -198,7 +204,7 @@ for (const conclusion of ["failure", "cancelled", "timed_out", "skipped"]) {
   await assert.rejects(() => runWriteback({ ...base, env, run, sleep: quiet }),
     (error) => error.code === "WRITEBACK_PR_PERMISSION_MISSING"
       && /Allow GitHub Actions to create and approve pull requests/u.test(error.message));
-  assert.equal(gateDispatched, false, "the preflight must run before the gate is dispatched");
+  assert.equal(gateDispatched, false, "the preflight must run before any gate work starts");
 }
 
 // 13. the bot branch is workflow-owned: a leftover branch from an earlier attempt is
