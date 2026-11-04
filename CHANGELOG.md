@@ -3,6 +3,7 @@
 ### 修复
 
 - **回写在缺权限时立即失败、并覆盖遗留 bot 分支（#880）**：v0.6.8 的回写已经等到 `ci-summary passed`，却在建 PR 时被 `GitHub Actions is not permitted to create or approve pull requests` 拒绝——该仓库开关关闭，而检查发生在满一轮门禁之后（22 分钟）。现在回写先查 `actions/permissions/workflow` 的 `can_approve_pull_request_reviews`，关闭时以单条可执行提示（`WRITEBACK_PR_PERMISSION_MISSING`，指明设置位置）在秒级失败，且在 dispatch 之前。同时 bot 分支改为 `--force-with-lease` 覆盖：它是 workflow 独占的可丢弃分支，上一次尝试留下的同名分支会让普通推送因非快进而失败（v0.6.8 attempt 2 实测）。
+- **锁序回归的等待谓词不再被单次采样的竞态打断（#881）**：`context-lock-order.integration.test.ts` 的 `waitForBlocked` 在 `pg_blocking_pids` 已包含持有者、但同一次采样的 `wait_event_type` 仍为 `null` 时立即断言失败（#880 的 gate 因此转红，同一代码在 #878 上通过）。现在只有在「被正确阻塞 且 `wait_event_type = Lock` 且语句边界匹配」同时成立时才返回，最终要求不变、只把断言时机改成轮询，属于收紧而非放宽。
 
 ## [0.6.8] - 2026-11-04
 

@@ -34,9 +34,14 @@ async function waitForBlocked(db: TestSql, waiter: number, holder: number, query
       FROM pg_stat_activity WHERE pid = ${waiter}`;
     if (row?.blockers.includes(holder)) {
       assert.deepEqual(row.blockers, [holder], "only the fixture Gateway may block context persistence");
-      assert.equal(row.wait_event_type, "Lock");
-      assert.match(row.query, query);
-      return;
+      // pg_stat_activity can report the blocker while the wait is between states, so a
+      // single sample can carry a null wait_event_type. Keep polling until BOTH
+      // predicates hold; the final state is still required, so this tightens timing
+      // rather than relaxing the assertion.
+      if (row.wait_event_type === "Lock") {
+        assert.match(row.query, query);
+        return;
+      }
     }
     // Poll a database predicate, never assume that a delay proves contention.
     await pollDelay(10);
