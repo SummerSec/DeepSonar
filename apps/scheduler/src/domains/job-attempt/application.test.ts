@@ -264,10 +264,10 @@ test("重启中断在途 effect 时结清已可判定的项，不重放、不新
   const afterRestart = read();
   assert.equal(afterRestart.status, "interrupted");
   assert.equal(afterRestart.state.phase, "interrupted");
-  // #874: a provision without a recorded sandbox never reached the resource layer,
-  // so the interrupt itself proves `not_applied`; leaving it `unknown` only blocked
-  // the completion gate for a state the platform could already decide.
-  assert.equal(afterRestart.effect?.status, "settled");
+  // A missing sandbox id is NOT proof the create never happened: the dispatcher
+  // commits the provision intent before calling the runner, so the interrupt path
+  // keeps `provision` unknown instead of inventing `not_applied` (#874 review).
+  assert.equal(afterRestart.effect?.status, "unknown");
   // Settled effects stay immutable: a late report cannot resurrect or replay them.
   await settleEffect(db, "attempt-race-1", "provision:1", { status: "settled", outcome: { sandbox_id: "late" } });
   assert.deepEqual(read(), afterRestart);
@@ -297,7 +297,7 @@ test("中断路径按 usage 证据结清 gateway 请求（有 ledger 行）", as
   assert.equal(read().effect?.status, "settled", "recorded usage proves the request was applied");
 });
 
-test("中断路径把 agent_run 结清为已终止的运行，而不是留给人工对账", async () => {
+test("中断路径不把数据库状态当作 runner 已退出的证据", async () => {
   const { db, read } = fakeAttemptDatabase(attemptState());
   await beginEffect(db, "attempt-race-1", {
     effectId: "agent_run:1",
@@ -305,7 +305,22 @@ test("中断路径把 agent_run 结清为已终止的运行，而不是留给人
     intent: { runner: "fake" },
   });
   await markAttemptInterrupted(db, "job-race-1", "scheduler restart");
-  assert.equal(read().effect?.status, "settled", "interrupted runs are provably no longer executing");
+  // `markAttemptInterrupted` runs inside a transaction; the caller destroys the
+  // sandbox afterwards and a failed destroy is only logged. Settling here would
+  // claim an exit nobody observed.
+  assert.equal(read().effect?.status, "unknown");
+});
+
+test("中断路径结清已有正面证据的 canvas 投递", async () => {
+  const { db, evidence, read } = fakeAttemptDatabase(attemptState());
+  evidence.canvasNodeId = "node-1";
+  await beginEffect(db, "attempt-race-1", {
+    effectId: "canvas:1",
+    kind: "canvas_delivery",
+    intent: { node: "node-1" },
+  });
+  await markAttemptInterrupted(db, "job-race-1", "scheduler restart");
+  assert.equal(read().effect?.status, "settled", "an existing canvas node proves the write happened");
 });
 
 test("settleAttemptTerminal 把合法长 CJK summary 收成 hash+bytes，不杀 Attempt", async () => {

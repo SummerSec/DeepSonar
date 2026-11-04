@@ -387,12 +387,18 @@ WHERE e.attempt_id = $1 AND e.status = 'effect_pending'
 ORDER BY e.created_at, e.id`;
 
 /**
- * Settle what the interrupt already proves, and keep only genuinely unprovable
- * effects as `unknown`.
+ * Settle only what the interrupt itself proves, and keep everything else `unknown`.
  *
- * The interrupted attempt is not a terminal status (it can be resumed), but its
- * run is provably finished by the time this runs, so `agent_run` is settled rather
- * than left to a reconciliation that no operator would trigger for a stuck Job.
+ * Positive evidence only:
+ *   - `gateway_model_request` with recorded usage rows — the upstream call happened;
+ *   - `canvas_delivery` with a node that already exists — the write happened.
+ *
+ * Deliberately not settled here:
+ *   - `agent_run`: the database status says the Scheduler stopped waiting, not that
+ *     the runner exited (`job-control/rerun.ts` destroys the sandbox after commit and
+ *     logs a failed destroy), so claiming `applied_run_terminated` would invent proof;
+ *   - `provision` without a sandbox id: a missing id is not proof the create never
+ *     happened (see settleUnstartedProvisionEffect).
  */
 export async function settleInterruptedEffects(
   db: AttemptDatabase,
@@ -410,8 +416,10 @@ export async function settleInterruptedEffects(
       usageRows: Number(row.usage_rows ?? 0),
       canvasNodeId: row.canvas_node_id === null || row.canvas_node_id === undefined ? null : String(row.canvas_node_id),
     };
-    const classification = classifyEffect(evidence, { attemptTerminated: true });
-    if (classification.decision === "auto") {
+    const classification = classifyEffect(evidence);
+    const provable = classification.decision === "auto"
+      && (classification.rule === "usage_ledger_recorded" || classification.rule === "canvas_node_present");
+    if (provable && classification.decision === "auto") {
       const outcome = { ...classification.settlement, reconciled_by: "interrupt-path", reconcile_rule: classification.rule };
       assertBoundedJson(outcome, "interrupt settlement", 8 * 1024);
       await db`

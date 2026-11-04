@@ -35,6 +35,10 @@ FROM job_attempt_effects e
 JOIN job_attempts a ON a.id = e.attempt_id
 JOIN jobs j ON j.id = e.job_id
 WHERE e.status IN ('unknown', 'effect_pending')
+  -- An active Attempt may be mid-flight: the dispatcher commits the provision intent
+  -- before runner.provision and binds the sandbox afterwards, so settling it here
+  -- would fabricate evidence for a resource that is still being created (#874).
+  AND a.status <> 'active'
 ORDER BY e.effect_kind, e.created_at, e.id
 LIMIT ${limit}`;
 
@@ -169,6 +173,7 @@ FROM job_attempt_effects e
 JOIN job_attempts a ON a.id = e.attempt_id
 JOIN jobs j ON j.id = e.job_id
 WHERE e.job_id = ${quotedJobId}::uuid AND e.status IN ('unknown', 'effect_pending')
+  AND a.status <> 'active'
 ORDER BY e.created_at, e.id`;
 
 export async function runEffectReconcile(db: MigrationConnection, input: ReconcileRequest): Promise<ReconcileResult> {
