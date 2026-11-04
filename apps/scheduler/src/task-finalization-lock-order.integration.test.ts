@@ -34,9 +34,14 @@ async function waitForBlocked(db: TestSql, waiter: number, holder: number, query
       FROM pg_stat_activity WHERE pid = ${waiter}`;
     if (row?.blockers.includes(holder)) {
       assert.deepEqual(row.blockers, [holder], "only the fixture Canvas holder may block finalization");
-      assert.equal(row.wait_event_type, "Lock");
-      assert.match(row.query, query);
-      return;
+      // #881 follow-up: pg_stat_activity can already name the blocker on a sample whose
+      // wait_event_type is still null, so one sample is not proof of the lock boundary.
+      // Keep polling until BOTH predicates hold; the final state is still required, so
+      // this tightens timing instead of relaxing the assertion.
+      if (row.wait_event_type === "Lock") {
+        assert.match(row.query, query);
+        return;
+      }
     }
     // Poll the database predicate, not a timing assumption about either writer.
     await pollDelay(10);

@@ -72,6 +72,10 @@ const openHarmonyFuzzRuntime = readFileSync(new URL("./test-openharmony-fuzz-run
 const openHarmonyRegistry = readJson(new URL("../deploy/runtime-image-registry.json", import.meta.url));
 const prepareScript = readFileSync(new URL("../deploy/prepare-runtime-images.sh", import.meta.url), "utf8");
 const releaseWorkflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+// #893: the release writeback was extracted into scripts shared with the resume entry, so
+// the writeback invariants below are asserted against that code.
+const writebackScript = readFileSync(new URL("./release-writeback.mjs", import.meta.url), "utf8");
+const writebackShell = readFileSync(new URL("./release-writeback.sh", import.meta.url), "utf8");
 const deploySh = readFileSync(new URL("../deploy/deploy.sh", import.meta.url), "utf8");
 const descriptorScript = readFileSync(new URL("./record-runtime-image-digest.mjs", import.meta.url), "utf8");
 const recordContractScript = readFileSync(new URL("./runtime-image-record.mjs", import.meta.url), "utf8");
@@ -1113,11 +1117,13 @@ expect(releaseWorkflow.includes("actions/upload-artifact@v4"), "release workflow
 expect(releaseWorkflow.includes("generate-runtime-image-registry.mjs"), "release workflow 缺少 runtime registry 合并脚本");
 expect(releaseWorkflow.includes("deploy/runtime-image-registry.json"), "release workflow 未发布 runtime registry");
 expect(releaseWorkflow.includes("回写 bundled 清单到默认分支"), "release workflow 必须在发布后回写 deploy/runtime-image-registry.json");
-expect(releaseWorkflow.includes('env_file="deploy/.env.example"'), "release workflow 必须同步 deploy/.env.example");
+// #893: the writeback shell lives in agent-harness/release-writeback.sh (shared with the
+// resume entry), so these invariants follow the code instead of one workflow file.
+expect(writebackShell.includes('env_file="deploy/.env.example"'), "release writeback 必须同步 deploy/.env.example");
 expect(!releaseWorkflow.includes("DEEPSONAR_IMAGE_TAG"), "release workflow 不得引用已删除的平台镜像 tag 变量");
-expect(releaseWorkflow.includes('[[ "$VERSION" =~ ^[0-9][^[:space:]]*$ ]]'), "release workflow 必须校验 ACR 标签使用无 v 的数字版本");
-expect(releaseWorkflow.includes('check-platform-release.mjs --write-env "$tmp_registry" "$tmp_env"'), "release workflow 必须回写经过校验的平台版本和完整 digest 引用");
-expect(releaseWorkflow.includes('git add -- "$registry_file" "$env_file"'), "release workflow 必须同时暂存 runtime registry 和 deploy/.env.example");
+expect(writebackShell.includes('[[ "$VERSION" =~ ^[0-9][^[:space:]]*$ ]]'), "release writeback 必须校验 ACR 标签使用无 v 的数字版本");
+expect(writebackShell.includes('check-platform-release.mjs --write-env'), "release writeback 必须回写经过校验的平台版本和完整 digest 引用");
+expect(writebackShell.includes('git add -- "$registry_file" "$env_file"'), "release writeback 必须同时暂存 runtime registry 和 deploy/.env.example");
 expect(releaseWorkflow.includes("group: release-runtime-images-${{ github.repository }}"), "release workflow 必须跨 tag 串行执行");
 expect(releaseWorkflow.includes("cancel-in-progress: false"), "release workflow 不得取消正在执行的旧发布");
 expect((releaseWorkflow.match(/timeout --foreground --signal=TERM --kill-after=1m 20m docker buildx imagetools create/g) ?? []).length >= 6, "所有跨 Registry imagetools 重试必须设置单次 20 分钟超时，并在 TERM 后 1 分钟强制结束");
@@ -1182,13 +1188,16 @@ expect(releaseWorkflow.includes('test-clickhouse-runtime.mjs "$image_ref" "${{ m
 // the workflow must invoke it, and the module must land the commit on the default
 // branch through a pull request (a direct push is rejected by the ruleset even when
 // the required check already passed on that SHA — v0.6.7, #877).
-const writebackScript = readFileSync(new URL("./release-writeback.mjs", import.meta.url), "utf8");
-expect(releaseWorkflow.includes("agent-harness/release-writeback.mjs"), "release workflow 必须通过受测模块回写默认分支");
+expect(writebackShell.includes("release-writeback.mjs"), "release writeback 脚本必须调用受测模块回写默认分支");
+expect(releaseWorkflow.includes("agent-harness/release-writeback.sh"), "release workflow 必须调用受测回写脚本");
 expect(writebackScript.includes('"gh", ["pr", "merge"'), "release writeback 模块必须经 PR 合并落到默认分支");
 expect(writebackScript.includes("pulls") || writebackScript.includes('"pr", "create"'), "release writeback 模块必须能打开回写 PR");
 expect(!writebackScript.includes("`HEAD:${defaultBranch}`"), "release writeback 不得直推默认分支");
 expect(releaseWorkflow.includes("pull-requests: write"), "release job 必须具备 pull-requests: write 才能合并回写 PR");
-expect(releaseWorkflow.includes("chore(release): sync runtime-image-registry.json"), "release workflow 回写提交信息必须可识别");
+// #893: the writeback commit lives in the shared script (reused by the resume entry),
+// so the invariant follows the code rather than one workflow file.
+expect(writebackShell.includes("chore(release): sync runtime-image-registry.json"), "release writeback 提交信息必须可识别");
+expect(releaseWorkflow.includes("agent-harness/release-writeback.sh"), "release workflow 必须调用受测回写脚本");
 expect(releaseWorkflow.includes("kali-minimal:"), "release workflow 缺少 Kali 独立 job（避免多架构同作业 ENOSPC）");
 expect(releaseWorkflow.includes("  mobile:") && releaseWorkflow.includes("Dockerfile.agent-mobile"), "release workflow 必须发布 Mobile 专项镜像");
 // #718: Reverse must execute real native Ghidra and dispatched Job gates

@@ -3676,20 +3676,15 @@ jobs:
           path: platform-signature-evidence.json
           if-no-files-found: error
 
-  release:
+  # #893: publication and bundled writeback are separate stages over the same frozen
+  # payload. A writeback failure must never withhold the Release (v0.6.6-v0.6.10 were
+  # each blocked exactly that way), and a Release that already exists must not block the
+  # writeback either.
+  release-publish:
     needs: [base-image, prepare-release, platform-signatures]
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      # The writeback must land through the same gate as every other change:
-      # it pushes a branch, dispatches ci.yml on it (GITHUB_TOKEN pushes do not
-      # trigger workflows themselves), waits for the required ci-summary and then
-      # lands the branch through a pull request. A direct push to the default
-      # branch is rejected by the ruleset even when the check already passed
-      # (v0.6.7), so the PR path is the mechanism, not a convenience.
-      actions: write
-      checks: read
-      pull-requests: write
     env:
       FREEZE_SHA256: ${{ needs.prepare-release.outputs.freeze_sha256 }}
       RECEIPT_SHA256: ${{ needs.platform-signatures.outputs.receipt_sha256 }}
@@ -3709,73 +3704,44 @@ jobs:
         with:
           name: platform-signature-evidence
           path: signature-evidence
-      - name: Require signed frozen payload before publication or bundled writeback
-        run: node agent-harness/platform-signature-publication.mjs gate frozen-release
-      - name: Refuse to overwrite an existing public Release
-        uses: actions/github-script@v7
+      - name: 校验签名载荷并创建 Release（#893 P4，与回写解耦）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.base-image.outputs.version }}
+        run: bash agent-harness/release-publish.sh frozen-release signature-evidence
+
+  # #893: independent stage. `continue-on-error` keeps a writeback failure visible as a
+  # failed job without withholding or invalidating a Release that already published.
+  release-writeback:
+    needs: [base-image, prepare-release, platform-signatures]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write
+      # The writeback must land through the same gate as every other change: it pushes a
+      # branch, opens a pull request so ci.yml runs on it (a GITHUB_TOKEN push does not
+      # trigger workflows), waits for the required ci-summary on that pull request and
+      # merges it. A direct push is rejected by the ruleset even when the check already
+      # passed (v0.6.7), and a dispatched run's checks never reach the pull request
+      # rollup (v0.6.8), so the pull request is the mechanism, not a convenience.
+      actions: write
+      checks: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
         with:
-          script: |
-            try {
-              await github.rest.repos.getReleaseByTag({...context.repo, tag: context.ref.replace('refs/tags/', '')});
-              core.setFailed('Release already exists; refusing overwrite');
-            } catch (error) {
-              if (error.status !== 404) throw error;
-            }
-      - name: 回写 bundled 清单到默认分支
+          fetch-depth: 0
+          ref: ${{ needs.base-image.outputs.checkout_ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v4
+        with:
+          name: platform-release-payload
+          path: frozen-release
+      - name: 回写 bundled 清单到默认分支（#893 P3）
         env:
           VERSION: ${{ needs.base-image.outputs.version }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          # gh CLI needs its own token: job-level env does not reach this step and
-          # actions/checkout configures git credentials only.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          registry_file="deploy/runtime-image-registry.json"
-          env_file="deploy/.env.example"
-          cp frozen-release/deploy/runtime-image-registry.json "$registry_file"
-          [[ -f "$registry_file" ]]
-          [[ -f "$env_file" ]]
-          [[ "$VERSION" =~ ^[0-9][^[:space:]]*$ ]]
-          node agent-harness/generate-runtime-image-registry.mjs --check "$registry_file"
-          # Preserve generated files before checking out the default branch.
-          tmp_registry="$(mktemp)"
-          tmp_env="$(mktemp)"
-          cp "$registry_file" "$tmp_registry"
-          cp "$env_file" "$tmp_env"
-          node agent-harness/check-platform-release.mjs --write-env "$tmp_registry" "$tmp_env"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin "$DEFAULT_BRANCH"
-          git show "origin/${DEFAULT_BRANCH}:$env_file" > "$tmp_env"
-          node agent-harness/check-platform-release.mjs --write-env "$tmp_registry" "$tmp_env"
-          git checkout -f -B "bot/sync-runtime-registry-v${VERSION}" "origin/${DEFAULT_BRANCH}"
-          cp "$tmp_registry" "$registry_file"
-          cp "$tmp_env" "$env_file"
-          rm -f "$tmp_registry" "$tmp_env"
-          git add -- "$registry_file" "$env_file"
-          if git diff --cached --quiet -- "$registry_file" "$env_file"; then
-            echo "默认分支上的 $registry_file 和 $env_file 已是本次发布内容，跳过回写"
-            exit 0
-          fi
-          git commit -m "chore(release): sync runtime-image-registry.json and platform digests for v${VERSION}"
-          branch="bot/sync-runtime-registry-v${VERSION}"
-          # The default branch requires ci-summary and a GITHUB_TOKEN push does not
-          # trigger workflows, so the control flow (push branch, dispatch, wait for
-          # the required check, fast-forward) lives in a tested module.
-          WRITEBACK_BRANCH="$branch" WRITEBACK_SHA="$(git rev-parse HEAD)" \
-            node agent-harness/release-writeback.mjs | tee /tmp/writeback.json
-          echo "已将 $registry_file 和 $env_file 经 ci-summary 校验后回写到 origin/${DEFAULT_BRANCH}" >> "$GITHUB_STEP_SUMMARY"
-      - name: Create Release and frozen assets without updating an existing Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.base-image.outputs.version }}
-        run: |
-          set -euo pipefail
-          gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
-            --notes-file frozen-release/release-body.md \
-            "frozen-release/deepsonar-reverse-evidence-${VERSION}.tar.gz" \
-            "frozen-release/deepsonar-management-skill-${VERSION}.tar.gz" \
-            frozen-release/deploy/runtime-image-registry.json \
-            frozen-release/runtime-image-registry-v2.json \
-            signature-evidence/platform-signature-evidence.json
+        run: bash agent-harness/release-writeback.sh frozen-release

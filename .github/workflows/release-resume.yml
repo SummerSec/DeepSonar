@@ -1,0 +1,104 @@
+# #893: resume a release without rebuilding images.
+#
+# A full release is a long chain whose last two stages are irreversible
+# external effects. When such a stage fails (ruleset rejection, missing
+# pull-request permission, a bot PR waiting for approval, a flaky runner),
+# the original run's artifacts are still valid, so the fix is to re-run the
+# stage rather than the pipeline.
+#
+# Usage: Actions -> "Release resume" -> Run workflow
+#   version        X.Y.Z of the release to complete
+#   source_run_id  the release.yml run whose artifacts are reused
+#   stages         writeback | publish | both
+name: Release resume
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (X.Y.Z)"
+        required: true
+      source_run_id:
+        description: "release.yml run id with platform-release-payload"
+        required: true
+      stages:
+        description: "Which stage(s) to resume"
+        required: true
+        default: both
+        type: choice
+        options: [both, writeback, publish]
+
+permissions:
+  contents: write
+  actions: read
+  checks: read
+  pull-requests: write
+
+concurrency:
+  group: release-resume-${{ github.repository }}-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  resume:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: 校验输入
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          STAGES: ${{ inputs.stages }}
+        run: |
+          set -euo pipefail
+          version_re='^[0-9]+\.[0-9]+\.[0-9]+$'
+          run_re='^[0-9]+$'
+          [[ "$VERSION" =~ $version_re ]] || {
+            echo "version must be X.Y.Z" >&2; exit 1; }
+          [[ "$SOURCE_RUN_ID" =~ $run_re ]] || {
+            echo "source_run_id must be numeric" >&2; exit 1; }
+          case "$STAGES" in
+            writeback|publish|both) ;;
+            *) echo "unknown stages: $STAGES" >&2; exit 1 ;;
+          esac
+          git rev-parse "v${VERSION}" >/dev/null 2>&1 || {
+            echo "tag v${VERSION} does not exist" >&2; exit 1; }
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # Reusing the original artifacts is what makes the resume cheap.
+      - name: 复用原运行的冻结载荷
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name platform-release-payload --dir frozen-release
+          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name platform-signature-evidence --dir signature-evidence
+          ls -1 frozen-release | head
+
+      - name: 回写 bundled 清单（P3）
+        if: ${{ inputs.stages != 'publish' }}
+        env:
+          VERSION: ${{ inputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash agent-harness/release-writeback.sh frozen-release
+
+      - name: 创建 Release（P4）
+        if: ${{ inputs.stages != 'writeback' }}
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: >
+          bash agent-harness/release-publish.sh
+          frozen-release signature-evidence

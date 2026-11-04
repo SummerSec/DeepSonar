@@ -114,7 +114,8 @@ test("#696 文档声明的 schema 主线版本与 SCHEMA_VERSION 一致", () => 
   assert.ok(version, "apps/scheduler/src/schema-version.ts 必须导出数字 SCHEMA_VERSION");
 
   const declared = new Map<string, Set<string>>();
-  for (const file of ["AGENTS.md", "DESIGN.md", ...relativeFiles("docs", [".md"])]) {
+  // skills/** 也纳入：技能文档里写错主线版本同样会误导操作者。
+  for (const file of ["AGENTS.md", "DESIGN.md", ...relativeFiles("docs", [".md"]), ...relativeFiles("skills", [".md"])]) {
     for (const match of read(file).matchAll(/当前主线\s*v(\d+)/g)) {
       const seen = declared.get(match[1]!) ?? new Set<string>();
       seen.add(file);

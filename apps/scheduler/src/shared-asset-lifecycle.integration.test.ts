@@ -634,12 +634,15 @@ if (!testDatabaseUrl) {
                 FROM pg_stat_activity WHERE pid=${probePid}`;
               if (row?.blockers.includes(holderPid)) {
                 assert.deepEqual(row.blockers, [holderPid]);
-                assert.equal(row.wait_event_type, "Lock");
-                assert.equal(row.holder_transaction, true);
-                assert.match(row.query, lock === "job" ? /\bFROM jobs\b.*\bFOR UPDATE\b/is : /\bFROM canvases\b.*\bFOR UPDATE\b/is);
-                return;
-              }
-              if (!wait) break;
+                // #881 follow-up: a single pg_stat_activity sample can name the blocker
+                // while wait_event_type is still null. Require every predicate on the same
+                // sample before returning; the expected end state is unchanged.
+                if (row.wait_event_type === "Lock") {
+                  assert.equal(row.holder_transaction, true);
+                  assert.match(row.query, lock === "job" ? /\bFROM jobs\b.*\bFOR UPDATE\b/is : /\bFROM canvases\b.*\bFOR UPDATE\b/is);
+                  return;
+                }
+              } else if (!wait) break;
               // Each round trips to PostgreSQL; no elapsed sleep proves the lock.
             } while (Date.now() < deadline);
             assert.fail("the exact ordinary row probe must still wait on the same holder");

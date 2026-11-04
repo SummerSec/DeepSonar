@@ -23,7 +23,9 @@
 
 失败语义：dispatch 失败、检查失败/超时、PR 无法合并（`DIRTY`/`CONFLICTING`/`BEHIND`）、合并命令失败、`compare` 未包含该提交，任何一种都**不移动默认分支**并把 bot 分支留在原地供排查；错误信息保留远端 `remote:` 行（规则拒绝的原因），不再只给退出码。
 
-要放行的是**同一条门禁**，不是绕过它：不要为 bot 配置 ruleset bypass、不要直推、也不要用可写 PAT 跳过必需检查。 前置条件：仓库必须允许 GitHub Actions 创建 PR（Settings → Actions → General → “Allow GitHub Actions to create and approve pull requests”，API 为 `repos/<owner>/<repo>/actions/permissions/workflow` 的 `can_approve_pull_request_reviews=true`）。回写脚本在动任何分支之前先检查该开关，关闭时立即以 `WRITEBACK_PR_PERMISSION_MISSING` 单条可执行提示失败，而不是先等满一轮门禁再报 GraphQL 错误（v0.6.8 实测：22 分钟后才失败）。bot 分支由 workflow 独占且可丢弃，因此用 `--force-with-lease` 覆盖上一次尝试留下的同名分支，避免非快进推送把发布卡死。
+要放行的是**同一条门禁**，不是绕过它：不要为 bot 配置 ruleset bypass、不要直推、也不要用可写 PAT 跳过必需检查。
+
+**发布按阶段可重入（#893）**：`release.yml` 的末端不再是「一个 job 里的两个不可逆动作」，而是两个独立阶段，都只消费同一份冻结载荷：`release-publish`（校验签名载荷 → 建 Release，Release 已存在则不改写）与 `release-writeback`（同步 bundled 清单与 `.env.example`，内容一致则早退）。写回阶段带 `continue-on-error`：失败会以失败 job 的形式可见，但**不会扣住已经可以发布的 Release**；反之 Release 已存在也不会阻塞写回。两段实现分别在 `agent-harness/release-publish.sh` 与 `agent-harness/release-writeback.sh`，被发布流程与 `.github/workflows/release-resume.yml` 共用。当某一阶段失败时（规则拒绝、缺权限、bot PR 待批准、runner 抖动），用 **Release resume** 手动触发：输入版本、`source_run_id` 与要重跑的阶段，它会从原运行下载 `platform-release-payload` 与 `platform-signature-evidence` 后只重跑该阶段，**不重建镜像**；两个阶段都幂等，重跑不会产生额外提交或覆盖既有 Release。 前置条件：仓库必须允许 GitHub Actions 创建 PR（Settings → Actions → General → “Allow GitHub Actions to create and approve pull requests”，API 为 `repos/<owner>/<repo>/actions/permissions/workflow` 的 `can_approve_pull_request_reviews=true`）。回写脚本在动任何分支之前先检查该开关，关闭时立即以 `WRITEBACK_PR_PERMISSION_MISSING` 单条可执行提示失败，而不是先等满一轮门禁再报 GraphQL 错误（v0.6.8 实测：22 分钟后才失败）。bot 分支由 workflow 独占且可丢弃，因此用 `--force-with-lease` 覆盖上一次尝试留下的同名分支，避免非快进推送把发布卡死。
 
 **一次人工批准是这条路径的固有成本（#887）**：由 `GITHUB_TOKEN` 创建的 PR 被 GitHub 当作外部贡献者，它的 workflow 运行不会自动开始，而是**等待维护者在 Actions 里批准**；等待期间 PR 的检查汇总为空，回写若按「检查未结论」继续轮询就会白等到预算耗尽（v0.6.10 实测：08:37 建 PR，gate 停在待批准约一小时，回写在 10:08 以 `WRITEBACK_CHECK_TIMEOUT` 失败）。现在回写会识别这种运行（`status=waiting` 或 `conclusion=action_required`）并**立即**以 `WRITEBACK_RUN_AWAITING_APPROVAL` 失败，消息里给出该 run 与 PR 编号、以及「在 Actions 里批准后重跑本次 release job」。
 
