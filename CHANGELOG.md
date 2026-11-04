@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+## [0.6.10] - 2026-11-04
+
+### 修复
+
+- **回写链路三处修复合入后的首个发版（#880 / #881 / #883 / #884）**：本版用于实际验证「先开 PR、由 `pull_request` 事件跑门禁、再合并」的自动回写路径——v0.6.6 到 v0.6.9 的发布都因回写问题需要人工补齐。内容为：缺权限时不再阻断（仅明确读到 false 才失败）、bot 分支 lease 覆盖、去掉 dispatch 改为 PR 触发、锁序回归的等待谓词改为轮询、以及补回 v0.6.9 的 bundled 清单。
+
 ### 修复
 
 - **回写的权限前置检查读不到时不再阻断发布（#883）**：上一个版本加的前置检查调用 `repos/<repo>/actions/permissions/workflow`，该端点需要仓库管理权限，workflow 的 `GITHUB_TOKEN` 直接 403（`Resource not accessible by integration`），于是检查本身成了新的发布阻塞（v0.6.9 实测）。现在只有**真正读到** `can_approve_pull_request_reviews === false` 才失败；读不到视为未知并继续，真正的错误仍由开 PR 那一步给出。fail-open 的代价是失去秒级诊断，但不会让发布必然失败。
@@ -1482,3 +1488,4 @@
 [0.6.7]: https://github.com/SummerSec/DeepSonar/compare/v0.6.6...v0.6.7
 [0.6.8]: https://github.com/SummerSec/DeepSonar/compare/v0.6.7...v0.6.8
 [0.6.9]: https://github.com/SummerSec/DeepSonar/compare/v0.6.8...v0.6.9
+[0.6.10]: https://github.com/SummerSec/DeepSonar/compare/v0.6.9...v0.6.10
