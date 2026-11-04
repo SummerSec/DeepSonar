@@ -2,6 +2,15 @@
 
 ### 修复
 
+- **`needs_human` 不再接收系统侧原因（#890）**：生产库里 37 条 `needs_human` 中 **35 条（94.6%）** 的原因是 `budget_exhausted`(14)、`boot_stale_open_verification_round`(9)、`cancelled`(7)、`pending_*_stalled`(4)、未知原因(1)——全部是我们自己机理的事实，不是需要人做的判断；它们之所以落进人工，是因为 `classifyVerifyTerminalReason` 的白名单里只写了 `max_verification_rounds` / `verify_cancelled` 这类码，现场的码对不上就兜底到 `needs_human`。
+  - 分类器现在显式列出**系统侧 inconclusive 原因**（预算、取消、启动对账的陈旧轮次、停滞唤醒、`inconclusive_escalate_after_*`），并把这些与「未知原因」统一收敛为 `inconclusive`；
+  - `needs_human` 只保留给**能力边界**（`verify_needs_human` / `credential` / `missing_device` / `business_decision` / `capability_limit` / `external_authorization`）；
+  - Hub 的「停滞升级」不再无条件建人工任务：`ports.markFindingNeedsHuman` 改名并改实现为 `settleStalledFinding` → 走分类器，停滞的 Finding 收敛为 `inconclusive`，不再创建 human Action；
+  - 新增 `deepsonar_verify_policy_gap_total`：未知原因被计入「策略缺口」，让缺失的规则可观测，而不是静默变成人工或静默消失；
+  - 不降低验证门槛：不自动 `confirmed`、不改 `disposition`、不重放 `unknown`；`fact_first_rejected → refuted` 的映射保持不变。
+
+### 修复
+
 - **REST 创建任务时可以直接初始化用户 objective（#887）**：`POST /projects/:id/tasks` 此前不接受 `plan_objective`，创建出的任务在 Plan v2 下无法提交首个计划——`graph_query(kind=plan_objective)` 报「没有已持久化的用户目标」，`submit_plan` v2 也被拒，Agent 只能让授权用户额外发一次 `PATCH /tasks/:canvasId`。现在创建请求可带可选 `plan_objective`，服务端用**与 PATCH 相同**的 `applyPlanObjectivePatch` 校验并在创建 Canvas 的同一事务内落库（首版 revision=1、identity 由服务端生成）；不传时行为不变，也不会凭空生成目标。权限边界不变：目标仍只能由授权用户通过用户入口设置，Agent 的 plan payload 不能携带它。
 
 ### 修复

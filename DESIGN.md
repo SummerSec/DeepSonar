@@ -222,7 +222,7 @@ review/test/worker 的复核结果必须作为结构化 Fact 提交，至少引�
 
 Verify 只消费允许的 Fact、Artifact、Evidence 和独立 Evaluation，不重读 maker 结论作为证据（#399）。证据不足、冲突、版本不匹配或主体变更时，Finding 保持未确认，Hub 可按 advisory/必需缺项派发补证。`minVerifySeverity` 只决定自动验证和收敛范围，不会删除低于阈值的 Finding。
 
-Hub 证据等待唤醒以证据签名 / 门禁指纹边沿触发；**从未有过 review/test 证据的 pending Finding** 即使签名未变也计入唤醒（签名门只防「已有证据但无进展」的重复轮）。关注级别内 `inconclusive` 若在 Hub 自驱停滞时仍未收口（按 [Hub 策略](apps/scheduler/src/domains/hub-orchestration/policy.ts)中的累计轮次，或与 stalled pending 一并停机），升级为 `needs_human` 并创建 human Action，同时在画布 convergence / root `body_json` 写入 `paused_reason=verify_unclosed:…`，禁止静默停机。
+Hub 证据等待唤醒以证据签名 / 门禁指纹边沿触发；**从未有过 review/test 证据的 pending Finding** 即使签名未变也计入唤醒（签名门只防「已有证据但无进展」的重复轮）。关注级别内 `inconclusive` 若在 Hub 自驱停滞时仍未收口（按 [Hub 策略](apps/scheduler/src/domains/hub-orchestration/policy.ts)中的累计轮次，或与 stalled pending 一并停机），按原因分类收敛（#890）：预算耗尽、取消、停滞唤醒、启动对账发现的陈旧轮次、以及任何未被分类器认识的原因一律 `inconclusive`，未知原因同时计入 `deepsonar_verify_policy_gap_total` 视为策略缺口；只有能力边界（`verify_needs_human` / `credential` / `missing_device` / `business_decision` / `capability_limit` / `external_authorization`）才升级为 `needs_human` 并创建 human Action。无论哪条路径，都在画布 convergence / root `body_json` 写入 `paused_reason=verify_unclosed:…`，禁止静默停机；降低打扰不得通过少报失败或降低验证门实现。
 
 Fact `verification_status`（证据可信度）、Finding `verify_status`（技术验证）和 Finding `disposition`（人工处置）是三个独立状态机。人工不能直接把 Finding 写成 `confirmed`，也不能把 rejected Fact 直接升为 verified。
 

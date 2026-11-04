@@ -124,7 +124,7 @@ test("Hub application keeps no-op guards before touching the transaction", async
     evaluateAnalysisCompleteGate: async () => ({ ok: false, blockers: ["fixture"] }),
     hasSucceededRoleWork: async () => false,
     maybeDispatchReport: async () => undefined,
-    markFindingNeedsHuman: async () => true,
+    settleStalledFinding: async () => true,
   });
 
   await app.maybeTriggerHub(fakeTx, undefined);
@@ -141,7 +141,9 @@ test("Hub application stop path writes paused_reason for verify-unclosed (#574)"
   const application = readFileSync(new URL("./application.ts", import.meta.url), "utf8");
   assert.match(application, /stopHubForUnclosedVerify/);
   assert.match(application, /formatVerifyUnclosedPausedReason/);
-  assert.match(application, /markFindingNeedsHuman/);
+  // #890: stalled Findings settle through the reason classifier instead of being
+  // escalated to a human Action unconditionally.
+  assert.match(application, /settleStalledFinding/);
   assert.match(application, /hub_wake_attempts/);
   assert.match(application, /neverVerified: allowNeverVerifiedWake/);
   assert.match(application, /paused_reason: pausedReason/);
@@ -157,7 +159,7 @@ test("core composition root wires Hub orchestration without owning eligibility S
   assert.match(source, /hubOrchestrationApplication\.advanceCanvasAfterTerminalJob/);
   assert.match(source, /hubOrchestrationApplication\.triggerHubFromHumanComment/);
   assert.match(source, /export async function maybeTriggerHub\([\s\S]*?return hubOrchestrationApplication\.maybeTriggerHub/);
-  assert.match(source, /markFindingNeedsHuman/);
+  assert.match(source, /settleStalledFinding/);
   assert.ok(
     application.indexOf("ports.lockCanvasForConvergence(tx, canvasId)") <
       application.indexOf("const activeHub"),

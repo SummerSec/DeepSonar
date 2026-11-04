@@ -46,7 +46,7 @@ import { evaluateConfirmGate } from "./verify-confirm-gate.js";
 export { evaluateConfirmGate };
 export type { ConfirmGateOptions, ConfirmGateResult } from "./verify-confirm-gate.js";
 import {
-  classifyVerifyTerminalReason, verificationFailureRetriesExhausted,
+  classifyVerifyTerminalReason, isVerifyPolicyGapReason, verificationFailureRetriesExhausted,
   isVerifyConvergedStatus,
   shouldCreateHumanBlocker,
   type VerifySettleTerminal,
@@ -1786,6 +1786,9 @@ export async function settleFindingVerifyByReason(
     extraBody?: Record<string, unknown>;
   } = {},
 ): Promise<boolean> {
+  // #890: an unrecognised reason is a missing policy, not a human task. Count it so a
+  // gap is visible instead of silently becoming (or silently not becoming) attention.
+  if (isVerifyPolicyGapReason(reason)) inc("deepsonar_verify_policy_gap_total");
   return settleFindingVerifyTerminal(
     tx,
     findingId,

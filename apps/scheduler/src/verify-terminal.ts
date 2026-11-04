@@ -26,6 +26,38 @@ const BUDGET_INCONCLUSIVE_REASONS = new Set([
   "verification_limit",
 ]);
 
+/**
+ * Scheduler-side reasons that must converge truthfully instead of borrowing human
+ * attention (#890). Every entry here is a fact about our own machinery — budget,
+ * cancellation, a stalled wake, a stale round found at boot — never a decision a
+ * person has to make. Production showed 35 of 37 `needs_human` findings came from
+ * exactly these codes falling through to the capability bucket.
+ */
+const SYSTEM_INCONCLUSIVE_REASONS = new Set([
+  "budget_exhausted",
+  "cancelled",
+  "boot_stale_open_verification_round",
+  "pending_never_verified_stalled",
+  "pending_waiting_evidence_stalled",
+  "pending_waiting_evidence_signature_stale",
+  "verification_stalled",
+]);
+
+/**
+ * The only reasons allowed to park a Finding in `needs_human`: something outside the
+ * system's reach (capability, credential, device) or a decision that is genuinely the
+ * user's (business/scope). Everything else, including an unrecognised reason, is a
+ * policy gap and must converge honestly.
+ */
+const CAPABILITY_BOUNDARY_REASONS = new Set([
+  "verify_needs_human",
+  "credential",
+  "missing_device",
+  "business_decision",
+  "capability_limit",
+  "external_authorization",
+]);
+
 export function isVerifyConvergedStatus(status: string): status is VerifyConvergedStatus {
   return (VERIFY_CONVERGED_STATUSES as readonly string[]).includes(status);
 }
@@ -48,8 +80,33 @@ export function classifyVerifyTerminalReason(reason: string | null | undefined):
     || value.startsWith("verify_cancelled") || value.startsWith("verify_orphan")) {
     return "inconclusive";
   }
+  if (value.startsWith("inconclusive_escalate_after_")) return "inconclusive";
   if (BUDGET_INCONCLUSIVE_REASONS.has(value)) return "inconclusive";
-  return "needs_human";
+  if (SYSTEM_INCONCLUSIVE_REASONS.has(value)) return "inconclusive";
+  if (CAPABILITY_BOUNDARY_REASONS.has(value)) return "needs_human";
+  // An unrecognised reason is a policy gap, not a human task (#890). Converging as
+  // inconclusive keeps the Finding honest ("we could not prove it") without spending
+  // attention on a decision nobody is being asked to make.
+  return "inconclusive";
+}
+
+/**
+ * True when `reason` is not a reason the Scheduler knows how to classify. Callers use
+ * this to count policy gaps so a missing rule is visible instead of silently becoming
+ * (or silently not becoming) a human task.
+ */
+export function isVerifyPolicyGapReason(reason: string | null | undefined): boolean {
+  const value = String(reason ?? "").trim();
+  if (!value) return true;
+  if (value === "fact_first_rejected" || value === "fact_first_conflict") return false;
+  if (value.startsWith("no_progress:") || value.startsWith("max_hub_rounds")) return false;
+  if (value.startsWith("verify_failed") || value.startsWith("verify_timeout")
+    || value.startsWith("verify_cancelled") || value.startsWith("verify_orphan")) return false;
+  if (value.startsWith("inconclusive_escalate_after_")) return false;
+  if (BUDGET_INCONCLUSIVE_REASONS.has(value)) return false;
+  if (SYSTEM_INCONCLUSIVE_REASONS.has(value)) return false;
+  if (CAPABILITY_BOUNDARY_REASONS.has(value)) return false;
+  return true;
 }
 
 export function shouldCreateHumanBlocker(status: VerifySettleTerminal): boolean {

@@ -88,8 +88,12 @@ export interface HubOrchestrationPorts {
   ) => Promise<HubAnalysisCompleteGate>;
   hasSucceededRoleWork: (tx: HubOrchestrationTransaction, canvasId: string) => Promise<boolean>;
   maybeDispatchReport: (tx: HubOrchestrationTransaction, canvasId: string) => Promise<unknown>;
-  /** Escalate a stuck Finding to needs_human + human Action (#574). */
-  markFindingNeedsHuman: (
+  /**
+   * Settle a Finding that cannot make progress, using the Scheduler's reason
+   * classifier (#890): machinery reasons (stalled wake, budget, cancellation) converge
+   * as `inconclusive` and only a real capability boundary parks it in `needs_human`.
+   */
+  settleStalledFinding: (
     tx: HubOrchestrationTransaction,
     findingId: string,
     reason: string,

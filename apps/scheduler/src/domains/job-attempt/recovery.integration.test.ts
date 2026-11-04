@@ -72,7 +72,7 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       evaluateAnalysisCompleteGate: async () => { throw new Error("no automatic completion"); },
       hasSucceededRoleWork: async () => false,
       maybeDispatchReport: async () => { throw new Error("no automatic report"); },
-      markFindingNeedsHuman: async () => { throw new Error("no implicit human verdict"); },
+      settleStalledFinding: async () => { throw new Error("no implicit human verdict"); },
     });
     const setup = async () => {
       const projectId = randomUUID(), canvasId = `recovery-${randomUUID()}`, jobId = randomUUID();
