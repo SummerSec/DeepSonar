@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [0.6.12] - 2026-11-05
+
 ### 修复
 
 - **发布拆成可重入阶段，写回不再阻塞 Release（#893）**：v0.6.4/v0.6.5 一次成功，从「默认分支要求 `ci-summary`」那一刻起每次都要人工补救——回写与建 Release 串在同一个 job 的末尾，任一失败就废掉整轮（v0.6.6 直推被拒、v0.6.8 四次尝试、v0.6.9 前置检查 403、v0.6.10 等审批超时、v0.6.11 撞上 runner `docker info` 超时）。现在：
@@ -1522,3 +1524,4 @@
 [0.6.9]: https://github.com/SummerSec/DeepSonar/compare/v0.6.8...v0.6.9
 [0.6.10]: https://github.com/SummerSec/DeepSonar/compare/v0.6.9...v0.6.10
 [0.6.11]: https://github.com/SummerSec/DeepSonar/compare/v0.6.10...v0.6.11
+[0.6.12]: https://github.com/SummerSec/DeepSonar/compare/v0.6.11...v0.6.12
