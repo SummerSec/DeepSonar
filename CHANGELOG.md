@@ -1,5 +1,7 @@
 ## [Unreleased]
 
+## [0.6.11] - 2026-11-05
+
 ### 修复
 
 - **`needs_human` 不再接收系统侧原因（#890）**：生产库里 37 条 `needs_human` 中 **35 条（94.6%）** 的原因是 `budget_exhausted`(14)、`boot_stale_open_verification_round`(9)、`cancelled`(7)、`pending_*_stalled`(4)、未知原因(1)——全部是我们自己机理的事实，不是需要人做的判断；它们之所以落进人工，是因为 `classifyVerifyTerminalReason` 的白名单里只写了 `max_verification_rounds` / `verify_cancelled` 这类码，现场的码对不上就兜底到 `needs_human`。
@@ -1506,3 +1508,4 @@
 [0.6.8]: https://github.com/SummerSec/DeepSonar/compare/v0.6.7...v0.6.8
 [0.6.9]: https://github.com/SummerSec/DeepSonar/compare/v0.6.8...v0.6.9
 [0.6.10]: https://github.com/SummerSec/DeepSonar/compare/v0.6.9...v0.6.10
+[0.6.11]: https://github.com/SummerSec/DeepSonar/compare/v0.6.10...v0.6.11
