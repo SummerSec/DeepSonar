@@ -3,6 +3,7 @@
 ### 修复
 
 - **回写的权限前置检查读不到时不再阻断发布（#883）**：上一个版本加的前置检查调用 `repos/<repo>/actions/permissions/workflow`，该端点需要仓库管理权限，workflow 的 `GITHUB_TOKEN` 直接 403（`Resource not accessible by integration`），于是检查本身成了新的发布阻塞（v0.6.9 实测）。现在只有**真正读到** `can_approve_pull_request_reviews === false` 才失败；读不到视为未知并继续，真正的错误仍由开 PR 那一步给出。fail-open 的代价是失去秒级诊断，但不会让发布必然失败。
+- **补回 v0.6.9 的 bundled 清单与部署示例（发布补齐）**：v0.6.9 的 release job 在回写步骤因权限前置检查 403 失败，Release 未创建、默认分支清单也停在 0.6.8。本 PR 用该次运行已产出并通过 `generate-runtime-image-registry.mjs --check` 的 frozen 清单（`platform_version=0.6.9`）更新 `deploy/runtime-image-registry.json` 与 `deploy/.env.example` 的三条平台镜像 digest；对应的 Release 由同一次运行的签名载荷与证据附件补齐。
 
 ## [0.6.9] - 2026-11-04
 
