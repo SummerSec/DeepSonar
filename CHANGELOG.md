@@ -10,6 +10,7 @@
 - **技能保鲜补齐（#893 顺带）**：`skills/**` 此前只被「pnpm 脚本存在 / 相对链接 / 已删机制」检查，**schema 版本字面量与技能自带脚本都没人管**——`skills/deepsonar-management/scripts/test_deepsonar_api.py`（12 个用例）从未接入任何 CI。现在版本字面量扫描纳入 `skills/**`、新增 `ci:unit:management-skill` 并挂进 gate、清掉 `references/api.md` 里过期的「本轮优先发布 v0.6.3」表述（改为以 tag 为准，不复述版本号）。
   - **端点清单不再允许静默过期**：`references/api.md` 实测缺 35 条真实路由（devices / device-leases、项目知识库、`/tokens`、`/users`、`/auth/ws-ticket`、`/platform/updates`、Finding 的 `candidates` / `lexical-search` / `evidence-trace` / `verify-status`、项目 Skill 白名单、报告 availability/refresh、镜像 `registry/reconcile` 与 `visibility`），同时有 3 条 scope 与实现不一致（`/reports/:id/markdown`、`/runtime-images/registry/apply`、`/terminal-ws`）；全部按 `auth.ts` 的 `ROUTE_SCOPES` 补齐并修正。
   - 新增 `scripts/test_api_reference_coverage.py`：以 `ROUTE_SCOPES` 为真值，双向校验「实现里的路由都在 api.md」「api.md 的 scope 与实现一致」「api.md 不发明实现里没有的路由」，跟随 `ci:unit:management-skill` 进 gate。SKILL.md 同时写明哪些区域没有 CLI 子命令、需直接按 HTTP 契约调用，避免 Agent 以为缺命令就等于缺能力。
+- **补回 v0.6.11 的 bundled 清单与部署示例**：v0.6.11 的 release job 在回写阶段被 `GITHUB_TOKEN` 创建的 PR 的审批门挡住（`WRITEBACK_RUN_AWAITING_APPROVAL`，已做到秒级报出而不是等满 90 分钟），Release 未创建、默认分支清单停在 0.6.10。本 PR 用该次运行已产出并通过 `generate-runtime-image-registry.mjs --check` 的 frozen 清单（`platform_version=0.6.11`）更新 `deploy/runtime-image-registry.json` 与 `deploy/.env.example`；Release 由同一次运行的签名载荷在回写落地后补齐。
 
 ## [0.6.11] - 2026-11-05
 
