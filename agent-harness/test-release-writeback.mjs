@@ -16,6 +16,7 @@ function harness({
   deleteFails = false,
   prPermissionAllowed = true,
   prPermissionUnreadable = false,
+  awaitingApproval = false,
 } = {}) {
   const calls = [];
   let pollIndex = 0;
@@ -32,6 +33,11 @@ function harness({
     }
     if (joined.startsWith("gh workflow run")) {
       return dispatchFails ? { status: 1, stderr: "HTTP 403: Resource not accessible" } : { status: 0, stdout: "" };
+    }
+    if (joined.startsWith("gh api") && joined.includes("/actions/runs?head_sha=")) {
+      return awaitingApproval
+        ? { status: 0, stdout: '{"id":4242,"name":"ci","status":"waiting"}\n' }
+        : { status: 0, stdout: "\n" };
     }
     if (joined.startsWith("gh pr view") && joined.includes("statusCheckRollup")) {
       const conclusion = conclusions[Math.min(pollIndex, conclusions.length - 1)];
@@ -121,6 +127,13 @@ for (const conclusion of ["failure", "cancelled", "timed_out", "skipped"]) {
     if (joined.startsWith("gh api") && joined.includes("/actions/permissions/workflow")) {
       return { status: 0, stdout: '{"can_approve_pull_request_reviews":true}\n' };
     }
+    if (joined.startsWith("gh api") && joined.includes("/actions/runs?head_sha=")) return { status: 0, stdout: "\n" };
+    if (joined.startsWith("gh api") && joined.includes("/actions/runs?head_sha=")) {
+      return awaitingApproval
+        ? { status: 0, stdout: '{"id":4242,"name":"ci","status":"waiting"}\n' }
+        : { status: 0, stdout: "\n" };
+    }
+    if (joined.startsWith("gh api") && joined.includes("/actions/runs?head_sha=")) return { status: 0, stdout: "\n" };
     if (joined.startsWith("gh pr view") && joined.includes("statusCheckRollup")) {
       polls += 1;
       return polls === 1 ? { status: 1, stderr: "unexpected EOF" } : { status: 0, stdout: "success\n" };
@@ -216,6 +229,19 @@ for (const conclusion of ["failure", "cancelled", "timed_out", "skipped"]) {
   const result = await runWriteback({ ...base, env, run, sleep: quiet });
   assert.equal(result.via, "pr_merge", "the writeback still lands when the preflight cannot be read");
   assert.ok(calls.some((call) => call.startsWith("gh pr create")), "the pull request is still opened");
+}
+
+// 12c. a run held for approval fails fast with the action a maintainer must take,
+//      instead of burning the whole poll budget (v0.6.10 waited ~90 minutes).
+{
+  const s0 = Date.now();
+  await assert.rejects(
+    () => runWriteback({ ...base, env, run: harness({ awaitingApproval: true, conclusions: ["pending"] }).run, sleep: quiet, pollLimit: 5 }),
+    (error) => error.code === "WRITEBACK_RUN_AWAITING_APPROVAL"
+      && /approve it in the Actions UI/u.test(error.message)
+      && /re-run this release job/u.test(error.message),
+  );
+  assert.ok(Date.now() - s0 < 5_000, "the failure is immediate, not a timeout");
 }
 
 // 13. the bot branch is workflow-owned: a leftover branch from an earlier attempt is

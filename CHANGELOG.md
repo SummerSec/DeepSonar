@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- **回写识别「等待人工批准」的运行，立即给出该做的动作（#887）**：`GITHUB_TOKEN` 创建的 PR 被 GitHub 视为外部贡献者，其 workflow 运行要等维护者批准；等待期间 PR 的检查汇总为空，回写按「未结论」继续轮询，最终耗尽预算（v0.6.10 实测：建 PR 后 gate 停在待批准约 1 小时，回写在 90 分钟后以 `WRITEBACK_CHECK_TIMEOUT` 失败，而 PR 其实已经可合并）。现在轮询时若发现该 SHA 的运行处于 `waiting`/`action_required`，立即以 `WRITEBACK_RUN_AWAITING_APPROVAL` 失败，并在消息里给出 run id、PR 编号与「批准后重跑本次 release job」。发布文档同步写明这次人工批准是「不放宽必需检查」的固有成本。
+
 ## [0.6.10] - 2026-11-04
 
 ### 修复
