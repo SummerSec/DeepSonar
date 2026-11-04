@@ -196,16 +196,24 @@ export async function runWriteback({
   // Preflight: creating the writeback pull request needs a repository setting. Left
   // unchecked, the run burns a full gate (~20 min) before failing with a raw GraphQL
   // error, so it is asserted up front with one actionable message.
+  // The setting is only readable with repository administration rights, which a
+  // workflow GITHUB_TOKEN does not have (v0.6.9: 403 "Resource not accessible by
+  // integration" turned the preflight itself into a release blocker). Fail only when
+  // the value is actually read as false; an unreadable endpoint is inconclusive and
+  // the pull request step reports the real error if the setting is off.
   const permissions = run("gh", ["api", `repos/${repo}/actions/permissions/workflow`]);
-  assertOk(permissions, "workflow permissions lookup");
-  const permissionsPayload = parseJson(permissions, "workflow permissions lookup");
-  if (permissionsPayload.can_approve_pull_request_reviews !== true) {
-    throw new WritebackError(
-      `repository ${repo} does not allow GitHub Actions to create pull requests ` +
-        `(Actions → General → "Allow GitHub Actions to create and approve pull requests"); ` +
-        `the writeback lands through a pull request, so this must be enabled before the release`,
-      "WRITEBACK_PR_PERMISSION_MISSING",
-    );
+  if (permissions?.status === 0) {
+    const permissionsPayload = parseJson(permissions, "workflow permissions lookup");
+    if (permissionsPayload.can_approve_pull_request_reviews === false) {
+      throw new WritebackError(
+        `repository ${repo} does not allow GitHub Actions to create pull requests ` +
+          `(Actions → General → "Allow GitHub Actions to create and approve pull requests"); ` +
+          `the writeback lands through a pull request, so this must be enabled before the release`,
+        "WRITEBACK_PR_PERMISSION_MISSING",
+      );
+    }
+  } else {
+    log("workflow permission preflight is not readable with this token; continuing");
   }
 
   // The bot branch is workflow-owned and disposable: a previous attempt may have left
