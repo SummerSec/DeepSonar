@@ -10,6 +10,7 @@ import { migrate, sql, SCHEMA_VERSION } from "./db.js";
 import { drainInFlight, kickDispatcher, startDispatcher } from "./dispatcher.js";
 import { startReaper } from "./reaper.js";
 import { reconcileOnBoot } from "./reconcile.js";
+import { startEffectReconcileLoop } from "./effect-reconcile-loop.js";
 import { registerRoutes } from "./routes.js";
 import { startTransferWorker } from "./transfer/worker.js";
 import {
@@ -140,6 +141,21 @@ async function main() {
 
   // 重启 reconcile（JOB-04）：先对齐 DB↔docker，再放行调度
   await reconcileOnBoot();
+  // #874：unknown 外部效果在运行期必须有自动对账入口，不能只依赖升级期的人工 CLI。
+  const effectReconcile = startEffectReconcileLoop({
+    db: sql as unknown as Parameters<typeof startEffectReconcileLoop>[0]["db"],
+    onResult: (result, operationId) => {
+      if (result.applied === 0 && result.remaining_unknown === 0) return;
+      console.log(
+        `[reconcile] effects operation=${operationId} applied=${result.applied} ` +
+          `remaining_unknown=${result.remaining_unknown} undecided=${result.summary?.undecided_count ?? "?"}`,
+      );
+    },
+    onError: (error) => {
+      console.warn(`[reconcile] effect reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+    },
+  });
+  await effectReconcile.runOnce();
   const normalizedRounds = await normalizePendingVerificationRounds();
   if (normalizedRounds.missingJobReclassified > 0 || normalizedRounds.staleJobRepaired > 0) {
     console.warn(
@@ -156,6 +172,7 @@ async function main() {
   maintenanceTimer.unref();
 
   const shutdown = async () => {
+    effectReconcile.stop();
     clearInterval(maintenanceTimer);
     maintenance.close();
     await stopGatewayUpstreamSocket().catch(() => {});

@@ -58,11 +58,21 @@ const hasText = (value: string | null): boolean => typeof value === "string" && 
  * rule would mark a `gateway_model_request` as applied without proof that the provider
  * was actually charged.
  */
-export function classifyEffect(effect: EffectEvidence): EffectClassification {
+/**
+ * `interrupted` is deliberately NOT in TERMINAL_ATTEMPT_STATUSES: an interrupted
+ * attempt can be resumed by a later attempt. But on the interrupt path itself the
+ * run is provably no longer executing, so that caller passes `attemptTerminated`
+ * and the effect is settled instead of rotting as `unknown` (#874).
+ */
+export function classifyEffect(
+  effect: EffectEvidence,
+  options: { attemptTerminated?: boolean } = {},
+): EffectClassification {
   switch (effect.effectKind) {
     case "agent_run":
-      return isTerminal(effect.attemptStatus)
-        ? { decision: "auto", rule: "attempt_terminal", settlement: { outcome: "applied_run_terminated", attempt_status: effect.attemptStatus as string } }
+      return isTerminal(effect.attemptStatus) || options.attemptTerminated
+        ? { decision: "auto", rule: isTerminal(effect.attemptStatus) ? "attempt_terminal" : "attempt_interrupted",
+            settlement: { outcome: "applied_run_terminated", attempt_status: (effect.attemptStatus ?? "interrupted") as string } }
         : { decision: "undecided", rule: "attempt_not_terminal", missing: ["terminal_attempt_status"] };
     case "gateway_model_request":
       return Number.isSafeInteger(effect.usageRows) && effect.usageRows > 0

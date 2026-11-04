@@ -17,6 +17,8 @@ import {
   settleAttemptTerminal,
 } from "../job-attempt/index.js";
 import { CHROME_JOB_STALL_SEC, CLICKHOUSE_JOB_STALL_SEC, HUB_JOB_STALL_SEC, TOOL_CALL_STARTED_PREFIX } from "./stall-policy.js";
+import { reconcileJobEffects } from "../job-attempt/reconcile-effects-runner.js";
+import type { MigrationConnection } from "../../migration-runner.js";
 
 export type {
   JobLifecycleDatabase,
@@ -370,10 +372,11 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
       const budget = Number.isSafeInteger(waitingHumanSec) ? waitingHumanSec : 0;
       if (budget <= 0) return [];
       return atomically(async (tx) => {
-        const result = await tx`
-          UPDATE jobs SET status = 'failed', finished_at = now(),
-                          error = COALESCE(error, '') || '人工等待超时（Reaper 判定）',
-                          lease_expires_at = NULL, heartbeat_at = NULL
+        // #874: reconcile this Job's external effects before blaming the human. A Job
+        // that never completed because an effect was unreconcilable must say so,
+        // instead of being counted as "human timeout" and hiding the platform cause.
+        const candidates = await tx`
+          SELECT jobs.id::text AS id FROM jobs
           WHERE status = 'waiting_human'
             AND ${budget}::int > 0
             AND COALESCE(
@@ -381,8 +384,36 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
               started_at,
               claimed_at,
               created_at
-            ) + (${budget}::int * interval '1 second') < now()
-          RETURNING id, sandbox_id`;
+            ) + (${budget}::int * interval '1 second') < now()`;
+        const remaining = new Map<string, string[]>();
+        for (const candidate of candidates as unknown as Array<{ id: string }>) {
+          const outcome = await reconcileJobEffects(
+            tx as unknown as MigrationConnection,
+            String(candidate.id),
+            `reaper-timeout:${String(candidate.id)}`,
+          ).catch(() => null);
+          if (outcome && outcome.remaining > 0) remaining.set(String(candidate.id), outcome.remainingKinds);
+        }
+        const errorSuffix = (jobId: string): string => {
+          const kinds = remaining.get(jobId);
+          return kinds && kinds.length > 0
+            ? `；平台侧外部效果未结算（${kinds.join(",")}），需先对账再判定超时`
+            : "";
+        };
+        // One statement per candidate: the error text carries whether the residue is
+        // a platform effect (needs reconciliation) or a genuine human wait.
+        const result: Array<{ id: string; sandbox_id: string | null }> = [];
+        for (const candidate of candidates as unknown as Array<{ id: string }>) {
+          const suffix = errorSuffix(String(candidate.id));
+          const updated = await tx`
+            UPDATE jobs SET status = 'failed', finished_at = now(),
+                            error = COALESCE(error, '') || ${`人工等待超时（Reaper 判定）${suffix}`},
+                            lease_expires_at = NULL, heartbeat_at = NULL
+            WHERE id = ${String(candidate.id)}
+              AND status = 'waiting_human'
+            RETURNING id, sandbox_id`;
+          result.push(...(updated as unknown as Array<{ id: string; sandbox_id: string | null }>));
+        }
         for (const row of result) {
           await settleAttemptTerminal(
             tx,

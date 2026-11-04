@@ -102,6 +102,75 @@ export async function scanUnknownEffects(db: MigrationConnection, limit = DEFAUL
  *   - undecided effects are never touched, so their `unknown` status keeps blocking
  *     the upgrade until a human supplies the missing evidence.
  */
+/**
+ * Job-scoped reconciliation (#874 P1-4).
+ *
+ * The Reaper used to fail a `waiting_human` Job for "human timeout" even when the
+ * reason it never completed was an unreconciled platform effect. Before that verdict
+ * the caller reconciles this Job's effects: whatever the evidence proves is settled
+ * here, and the caller reports the residue explicitly instead of treating it as a
+ * human problem.
+ *
+ * Semantics match the global runner: only `auto` classifications are settled, the
+ * status guard keeps a concurrent kernel settlement authoritative, and nothing is
+ * replayed.
+ */
+export async function reconcileJobEffects(
+  db: MigrationConnection,
+  jobId: string,
+  operationId: string,
+): Promise<{ applied: number; remaining: number; remainingKinds: string[] }> {
+  if (typeof operationId !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(operationId)) throw new Error("INVALID_RECONCILE_OPERATION_ID");
+  const rows = (await db.unsafe(JOB_EVIDENCE_QUERY(quoteLiteral(jobId)))) as EvidenceRow[];
+  const effects = rows.map(toEvidence);
+  const groups = new Map<string, { ids: string[]; classification: Extract<EffectClassification, { decision: "auto" }> }>();
+  const undecided: EffectEvidence[] = [];
+  for (const effect of effects) {
+    const classification = classifyEffect(effect);
+    if (classification.decision !== "auto") {
+      undecided.push(effect);
+      continue;
+    }
+    const key = JSON.stringify(classification.settlement);
+    const existing = groups.get(key);
+    if (existing) existing.ids.push(effect.id);
+    else groups.set(key, { ids: [effect.id], classification });
+  }
+  let applied = 0;
+  for (const { ids, classification } of groups.values()) {
+    const payload = JSON.stringify({ ...classification.settlement, reconciled_by: "reaper-pre-timeout", reconcile_operation_id: operationId });
+    const settled = (await db.unsafe(
+      `UPDATE job_attempt_effects
+          SET status = 'settled',
+              settlement_json = settlement_json || ${quoteLiteral(payload)}::jsonb,
+              settled_at = now(),
+              updated_at = now()
+        WHERE id = ANY(${quoteUuidArray(ids)}::uuid[])
+          AND status IN ('unknown', 'effect_pending')
+        RETURNING id`,
+    )) as { id: string }[];
+    applied += settled.length;
+  }
+  return {
+    applied,
+    remaining: undecided.length,
+    remainingKinds: [...new Set(undecided.map((effect) => effect.effectKind))].sort(),
+  };
+}
+
+const JOB_EVIDENCE_QUERY = (quotedJobId: string) => `
+SELECT e.id::text AS id,
+       e.effect_kind,
+       a.status AS attempt_status,
+       coalesce(j.sandbox_id, a.sandbox_id) AS sandbox_id,
+       (SELECT count(*)::int FROM job_usage_ledger l WHERE l.attempt_id = e.attempt_id AND l.effect_id = e.effect_id) AS usage_rows,
+       (SELECT n.id::text FROM canvas_nodes n WHERE n.job_id = e.job_id ORDER BY n.id LIMIT 1) AS canvas_node_id
+FROM job_attempt_effects e
+JOIN job_attempts a ON a.id = e.attempt_id
+JOIN jobs j ON j.id = e.job_id
+WHERE e.job_id = ${quotedJobId}::uuid AND e.status IN ('unknown', 'effect_pending')
+ORDER BY e.created_at, e.id`;
+
 export async function runEffectReconcile(db: MigrationConnection, input: ReconcileRequest): Promise<ReconcileResult> {
   if (!RECONCILE_ACTIONS.includes(input.action)) throw new Error("INVALID_RECONCILE_ACTION");
   if (typeof input.operation_id !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(input.operation_id)) throw new Error("INVALID_RECONCILE_OPERATION_ID");

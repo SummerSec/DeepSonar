@@ -31,11 +31,13 @@ function clone<T>(value: T): T {
  */
 function fakeAttemptDatabase(initialState: AttemptState): {
   db: AttemptDatabase;
+  evidence: { usageRows: number; canvasNodeId: string | null };
   read: () => { status: AttemptStatus; state: AttemptState; effect: FakeEffect | null };
 } {
   let state = clone(initialState);
   let status: AttemptStatus = "active";
   let effect: FakeEffect | null = null;
+  const evidence = { usageRows: 0, canvasNodeId: null as string | null };
   const row = () => ({
     id: state.attempt_id,
     job_id: state.job_id,
@@ -53,6 +55,15 @@ function fakeAttemptDatabase(initialState: AttemptState): {
       // postgres.js 也会把对象传给 db({...}) 生成 INSERT 片段。
       if (!Array.isArray(strings)) return strings;
       const query = strings.join(" ").replace(/\s+/gu, " ").trim();
+      // #874: the interrupt path settles by effect row id, not by (attempt, effect_id).
+      if (query.includes("UPDATE job_attempt_effects SET status = 'settled'") && query.includes("WHERE id =")) {
+        if (effect?.status === "effect_pending") effect.status = "settled";
+        return [];
+      }
+      if (query.includes("UPDATE job_attempt_effects SET status = 'unknown'") && query.includes("WHERE id =")) {
+        if (effect?.status === "effect_pending") effect.status = "unknown";
+        return [];
+      }
       if (query.includes("SELECT * FROM job_attempts WHERE id")) return status === "active" ? [row()] : [];
       if (query.includes("SELECT * FROM job_attempts WHERE job_id")) return status === "active" ? [row()] : [];
       if (query.includes("SELECT job_id FROM job_attempts")) return [{ job_id: state.job_id }];
@@ -107,10 +118,26 @@ function fakeAttemptDatabase(initialState: AttemptState): {
       }
       throw new Error(`unexpected fake Attempt query: ${query}`);
     }) as unknown as AttemptDatabase,
-    { json: (value: unknown) => value },
+    {
+      json: (value: unknown) => value,
+      // #874: evidence for the in-flight effects of the interrupted attempt.
+      unsafe: (text: string) => {
+        if (!text.includes("FROM job_attempt_effects e")) throw new Error(`unexpected fake unsafe query: ${text.slice(0, 80)}`);
+        if (!effect || effect.status !== "effect_pending") return [];
+        return [{
+          id: "effect-row",
+          effect_kind: effect.effect_kind,
+          attempt_status: status,
+          sandbox_id: state.sandbox_id ?? null,
+          usage_rows: evidence.usageRows,
+          canvas_node_id: evidence.canvasNodeId,
+        }];
+      },
+    },
   );
   return {
     db,
+    evidence,
     read: () => ({ status, state: clone(state), effect: effect ? clone(effect) : null }),
   };
 }
@@ -225,7 +252,7 @@ test("取消先线性化时，禁止新效果且迟到 settlement 不能复活 A
   assert.equal(read().effect?.status, "unknown");
 });
 
-test("重启看到 effect_pending 时只产生 interrupted/unknown，不自动重放", async () => {
+test("重启中断在途 effect 时结清已可判定的项，不重放、不新起执行", async () => {
   const { db, read } = fakeAttemptDatabase(attemptState());
   await beginEffect(db, "attempt-race-1", {
     effectId: "provision:1",
@@ -237,9 +264,48 @@ test("重启看到 effect_pending 时只产生 interrupted/unknown，不自动�
   const afterRestart = read();
   assert.equal(afterRestart.status, "interrupted");
   assert.equal(afterRestart.state.phase, "interrupted");
-  assert.equal(afterRestart.effect?.status, "unknown");
+  // #874: a provision without a recorded sandbox never reached the resource layer,
+  // so the interrupt itself proves `not_applied`; leaving it `unknown` only blocked
+  // the completion gate for a state the platform could already decide.
+  assert.equal(afterRestart.effect?.status, "settled");
+  // Settled effects stay immutable: a late report cannot resurrect or replay them.
   await settleEffect(db, "attempt-race-1", "provision:1", { status: "settled", outcome: { sandbox_id: "late" } });
   assert.deepEqual(read(), afterRestart);
+});
+
+test("中断路径保留真正无法判定的 effect 为 unknown（gateway 无 usage 行）", async () => {
+  const { db, evidence, read } = fakeAttemptDatabase(attemptState());
+  evidence.usageRows = 0;
+  await beginEffect(db, "attempt-race-1", {
+    effectId: "gateway:1",
+    kind: "gateway_model_request",
+    intent: { path: "/v1/messages" },
+  });
+  await markAttemptInterrupted(db, "job-race-1", "scheduler restart");
+  assert.equal(read().effect?.status, "unknown", "no usage row means the upstream effect cannot be proven");
+});
+
+test("中断路径按 usage 证据结清 gateway 请求（有 ledger 行）", async () => {
+  const { db, evidence, read } = fakeAttemptDatabase(attemptState());
+  evidence.usageRows = 2;
+  await beginEffect(db, "attempt-race-1", {
+    effectId: "gateway:2",
+    kind: "gateway_model_request",
+    intent: { path: "/v1/messages" },
+  });
+  await markAttemptInterrupted(db, "job-race-1", "scheduler restart");
+  assert.equal(read().effect?.status, "settled", "recorded usage proves the request was applied");
+});
+
+test("中断路径把 agent_run 结清为已终止的运行，而不是留给人工对账", async () => {
+  const { db, read } = fakeAttemptDatabase(attemptState());
+  await beginEffect(db, "attempt-race-1", {
+    effectId: "agent_run:1",
+    kind: "agent_run",
+    intent: { runner: "fake" },
+  });
+  await markAttemptInterrupted(db, "job-race-1", "scheduler restart");
+  assert.equal(read().effect?.status, "settled", "interrupted runs are provably no longer executing");
 });
 
 test("settleAttemptTerminal 把合法长 CJK summary 收成 hash+bytes，不杀 Attempt", async () => {
