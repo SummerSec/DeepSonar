@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- **补回 v0.6.11 的 bundled 清单与部署示例**：v0.6.11 的 release job 在回写阶段被 `GITHUB_TOKEN` 创建的 PR 的审批门挡住（`WRITEBACK_RUN_AWAITING_APPROVAL`，已做到秒级报出而不是等满 90 分钟），Release 未创建、默认分支清单停在 0.6.10。本 PR 用该次运行已产出并通过 `generate-runtime-image-registry.mjs --check` 的 frozen 清单（`platform_version=0.6.11`）更新 `deploy/runtime-image-registry.json` 与 `deploy/.env.example`；Release 由同一次运行的签名载荷在回写落地后补齐。
+
 ## [0.6.11] - 2026-11-05
 
 ### 修复
