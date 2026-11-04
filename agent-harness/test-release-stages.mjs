@@ -67,4 +67,20 @@ const writebackScript = readFileSync(new URL("./release-writeback.sh", import.me
 assert.match(writebackScript, /git diff --cached --quiet/u, "writeback stays idempotent by early exit");
 assert.match(writebackScript, /release-writeback\.mjs/u);
 
+// 6. #899: `git checkout -f -B` restores every tracked file to the default branch, so the
+// bundled catalog must be captured into a temp BEFORE that checkout. v0.6.12 captured it
+// after the checkout, committed only deploy/.env.example and left the catalog a release
+// behind. Presence-only assertions cannot see an ordering mistake, so pin the order.
+const captureAt = writebackScript.indexOf('cp "$registry_file" "$tmp_registry"');
+// Match the command, not the prose that documents the hazard in the file header.
+const checkoutAt = writebackScript.search(/^git checkout -f -B "/mu);
+assert.ok(captureAt >= 0, "writeback must capture the bundled catalog into a temp file");
+assert.ok(checkoutAt >= 0, "writeback must switch to the bot branch");
+assert.ok(captureAt < checkoutAt,
+  "writeback must capture deploy/runtime-image-registry.json before git checkout -f -B overwrites it (#899)");
+assert.ok(writebackScript.indexOf('check-platform-release.mjs --write-env') < checkoutAt,
+  "the deployment example must be rewritten from the captured catalog before the checkout");
+assert.ok(writebackScript.indexOf('cp "$tmp_registry" "$registry_file"') > checkoutAt,
+  "the captured catalog must be restored on top of the bot branch");
+
 console.log("release stages: publication and writeback are independent, resumable and idempotent");

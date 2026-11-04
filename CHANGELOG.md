@@ -1,5 +1,11 @@
 ## [Unreleased]
 
+### 修复
+
+- **写回必须真的更新 bundled 清单（#899）**：v0.6.12 的写回只提交了 `deploy/.env.example`，`deploy/runtime-image-registry.json` 仍停在 0.6.11 —— 抽出脚本来时把「checkout 前先捕获 payload」丢了，而 `git checkout -f -B … origin/<branch>` 会把已被覆盖的受版本管理文件恢复到默认分支版本，于是捕获到的是旧清单、提交里只有 env。现在两步捕获都在 checkout 之前，且在提交前用 payload 版本自检（清单 `platform_version` 与 `DEEPSONAR_VERSION` 都必须等于本次 `VERSION`），任何捕获错误会直接失败而不是产出半更新提交或静默「已是本次内容」早退；只有两个文件都已是本版内容时才允许跳过。
+  - 新增 `agent-harness/test-release-writeback-order.mjs`：在临时 git 仓库里真实执行脚本（假 payload + 假 node 辅助），断言提交**同时**包含两个文件、清单里是 payload 版本、且已一致时不会产生空提交。
+  - 本 PR 同时修正 main 上已错位的清单：用 v0.6.12 的冻结载荷把 `deploy/runtime-image-registry.json` 更新到 `platform_version=0.6.12`，与 `.env.example` 对齐。
+
 ## [0.6.12] - 2026-11-05
 
 ### 修复
