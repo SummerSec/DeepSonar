@@ -1,5 +1,14 @@
 ## [Unreleased]
 
+### 修复
+
+- **发布拆成可重入阶段，写回不再阻塞 Release（#893）**：v0.6.4/v0.6.5 一次成功，从「默认分支要求 `ci-summary`」那一刻起每次都要人工补救——回写与建 Release 串在同一个 job 的末尾，任一失败就废掉整轮（v0.6.6 直推被拒、v0.6.8 四次尝试、v0.6.9 前置检查 403、v0.6.10 等审批超时、v0.6.11 撞上 runner `docker info` 超时）。现在：
+  - `release-publish` 与 `release-writeback` 是**两个独立 job**，都只消费同一份冻结载荷；`release-writeback` 带 `continue-on-error`，写回失败仍然可见但**不再扣住 Release**，Release 已存在也不会阻塞写回；
+  - 回写与发布的两段 shell 抽成 `agent-harness/release-writeback.sh` / `release-publish.sh`，两个入口共用同一份实现（含「已是本次发布内容则早退」与「Release 已存在则不改写」的幂等保护）；
+  - 新增可重入入口 `.github/workflows/release-resume.yml`（`version` / `source_run_id` / `stages=both|writeback|publish`）：**复用原运行的 payload 与签名证据**完成 P3/P4，不必重建镜像；
+  - 新增 `agent-harness/test-release-stages.mjs` 钉住上述结构：发布不依赖写回、写回失败被容忍、两个阶段都用共享脚本、resume 复用 artifact 且幂等。
+- **技能保鲜补齐（#893 顺带）**：`skills/**` 此前只被「pnpm 脚本存在 / 相对链接 / 已删机制」检查，**schema 版本字面量与技能自带脚本都没人管**——`skills/deepsonar-management/scripts/test_deepsonar_api.py`（12 个用例）从未接入任何 CI。现在版本字面量扫描纳入 `skills/**`、新增 `ci:unit:management-skill` 并挂进 gate、清掉 `references/api.md` 里过期的「本轮优先发布 v0.6.3」表述（改为以 tag 为准，不复述版本号）。
+
 ## [0.6.11] - 2026-11-05
 
 ### 修复

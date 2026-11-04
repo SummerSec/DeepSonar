@@ -275,8 +275,12 @@ try {
   assert.ok(!workflow.includes("DEEPSONAR_IMAGE_TAG"));
   assert.ok(workflow.indexOf("check-platform-release.mjs --check") < workflow.indexOf("准备 v2 Release asset"));
   assert.ok(workflow.includes('export PLATFORM_RELEASE_COMMIT="$(git rev-parse HEAD)"'));
-  assert.ok(workflow.includes('git show "origin/${DEFAULT_BRANCH}:$env_file" > "$tmp_env"'));
-  assert.ok(workflow.includes('check-platform-release.mjs --write-env "$tmp_registry" "$tmp_env"'));
+  // #893: the writeback shell moved into a shared script so the resume entry can reuse
+  // it; the invariants follow the code instead of a specific workflow file.
+  const writebackScript = readFileSync(path.join(root, "agent-harness/release-writeback.sh"), "utf8");
+  assert.ok(workflow.includes("agent-harness/release-writeback.sh"));
+  assert.ok(writebackScript.includes('git show "origin/${DEFAULT_BRANCH}:$env_file" > "$tmp_env"'));
+  assert.ok(writebackScript.includes('check-platform-release.mjs --write-env'));
   const platform = mixed.platform;
   assert.equal(platform.version, "0.2.0");
   assert.equal(platform.commit_sha, "a".repeat(40));

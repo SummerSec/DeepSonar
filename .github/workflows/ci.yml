@@ -127,6 +127,12 @@ jobs:
       - name: Docs freshness guard (version literals, pnpm scripts, links, removed mechanisms)
         run: pnpm ci:unit:docs-freshness
 
+      # #893 follow-up: the management Skill ships an executable CLI whose tests were
+      # never wired anywhere, so the only untested asset in the repo was the one humans
+      # are told to run.
+      - name: Management Skill CLI contract
+        run: pnpm ci:unit:management-skill
+
       - name: Changelog validator and current release section
         run: |
           pnpm ci:unit:changelog
