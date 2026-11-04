@@ -15,6 +15,7 @@ function harness({
   createFails = false,
   deleteFails = false,
   prPermissionAllowed = true,
+  prPermissionUnreadable = false,
 } = {}) {
   const calls = [];
   let pollIndex = 0;
@@ -24,6 +25,7 @@ function harness({
     calls.push(joined);
     if (joined.startsWith("git push")) return { status: 0, stdout: "" };
     if (joined.startsWith("gh api") && joined.includes("/actions/permissions/workflow")) {
+      if (prPermissionUnreadable) return { status: 1, stderr: "gh: Resource not accessible by integration (HTTP 403)" };
       return prPermissionAllowed
         ? { status: 0, stdout: `${JSON.stringify({ default_workflow_permissions: "read", can_approve_pull_request_reviews: true })}\n` }
         : { status: 0, stdout: `${JSON.stringify({ default_workflow_permissions: "read", can_approve_pull_request_reviews: false })}\n` };
@@ -205,6 +207,15 @@ for (const conclusion of ["failure", "cancelled", "timed_out", "skipped"]) {
     (error) => error.code === "WRITEBACK_PR_PERMISSION_MISSING"
       && /Allow GitHub Actions to create and approve pull requests/u.test(error.message));
   assert.equal(gateDispatched, false, "the preflight must run before any gate work starts");
+}
+
+// 12b. an unreadable permission endpoint is inconclusive: a workflow token cannot read
+//      it, and blocking on that would fail every release (v0.6.9).
+{
+  const { calls, run } = harness({ prPermissionUnreadable: true });
+  const result = await runWriteback({ ...base, env, run, sleep: quiet });
+  assert.equal(result.via, "pr_merge", "the writeback still lands when the preflight cannot be read");
+  assert.ok(calls.some((call) => call.startsWith("gh pr create")), "the pull request is still opened");
 }
 
 // 13. the bot branch is workflow-owned: a leftover branch from an earlier attempt is
