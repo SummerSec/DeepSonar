@@ -58,6 +58,13 @@ const hasText = (value: string | null): boolean => typeof value === "string" && 
  * rule would mark a `gateway_model_request` as applied without proof that the provider
  * was actually charged.
  */
+/**
+ * `interrupted` is deliberately NOT terminal: the row says the Scheduler stopped
+ * waiting, not that the runner process exited (`job-control/rerun.ts` destroys the
+ * sandbox only after the transaction commits, and a failed destroy is merely
+ * logged). Marking `agent_run` settled on that basis would claim an exit nobody
+ * observed, so `agent_run` stays undecided until real exit evidence exists (#874).
+ */
 export function classifyEffect(effect: EffectEvidence): EffectClassification {
   switch (effect.effectKind) {
     case "agent_run":

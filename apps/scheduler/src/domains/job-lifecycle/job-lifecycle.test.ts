@@ -262,25 +262,102 @@ test("Reaper provision 超时先提交终态，再等待所有 provision 中止�
   }
 });
 
-test("reapWaitingHumanTimeout casts budget to int and skips when closed", async () => {
+test("reapWaitingHumanTimeout casts budget to int, reconciles first and skips when closed", async () => {
   const queries: string[] = [];
   const db = Object.assign(
     ((strings: TemplateStringsArray) => {
       const query = strings.join(" ").replace(/\s+/gu, " ").trim();
       queries.push(query);
+      // #874: the candidate SELECT runs before the timeout verdict so a platform
+      // effect residue is not counted as a human fault.
+      if (query.includes("SELECT jobs.id::text AS id FROM jobs")) return [{ id: "job-timeout-1" }];
       return [];
     }) as unknown as typeof sql,
-    { json: (value: unknown) => value, begin: async (work: (tx: typeof sql) => Promise<unknown>) => work(db) },
+    {
+      json: (value: unknown) => value,
+      begin: async (work: (tx: typeof sql) => Promise<unknown>) => work(db),
+      // The pre-timeout reconcile asks for this job's unknown effects.
+      unsafe: async (text: string) => {
+        queries.push(text.replace(/\s+/gu, " ").trim());
+        return [];
+      },
+    },
   );
   const app = createSqlJobLifecycleApplication(db);
   assert.deepEqual(await app.reapWaitingHumanTimeout(0), []);
   assert.equal(queries.length, 0, "0 disables waiting_human timeout without SQL");
-  assert.deepEqual(await app.reapWaitingHumanTimeout(1800), []);
-  const timeout = queries.find((query) => query.includes("人工等待超时"));
+  await app.reapWaitingHumanTimeout(1800);
+  const select = queries.find((query) => query.includes("SELECT jobs.id::text AS id FROM jobs"));
+  assert.ok(select, "candidates must be selected before the verdict");
+  assert.match(select, /status = 'waiting_human'/u);
+  assert.match(select, /e\.type = 'human'/u);
+  assert.match(select, /::int \* interval '1 second'/u);
+  assert.ok(queries.some((query) => query.includes("FROM job_attempt_effects e")), "effects are reconciled before the verdict");
+  // The error text is a parameter (never inlined), so the UPDATE is identified by
+  // its shape rather than by the message literal.
+  const timeout = queries.find((query) => query.includes("lease_expires_at = NULL") && query.includes("status = 'failed'"));
   assert.ok(timeout, "waiting_human timeout UPDATE must run");
-  assert.match(timeout, /status = 'waiting_human'/);
-  assert.match(timeout, /e\.type = 'human'/);
-  assert.match(timeout, /::int \* interval '1 second'/);
+  assert.match(timeout, /status = 'waiting_human'/u, "the verdict still re-checks the source state");
+});
+
+test("reapWaitingHumanTimeout re-checks the deadline and honours reconciliation progress", async () => {
+  const queries: string[] = [];
+  const updates: unknown[][] = [];
+  const db = Object.assign(
+    ((strings: TemplateStringsArray, ...values: unknown[]) => {
+      const query = strings.join(" ").replace(/\s+/gu, " ").trim();
+      queries.push(query);
+      if (query.includes("SELECT jobs.id::text AS id FROM jobs")) return [{ id: "job-timeout-2" }];
+      if (query.includes("UPDATE jobs SET status = 'failed'")) updates.push(values);
+      return [];
+    }) as unknown as typeof sql,
+    {
+      json: (value: unknown) => value,
+      begin: async (work: (tx: typeof sql) => Promise<unknown>) => work(db),
+      // Reconciliation settles one effect for this Job (progress) and leaves none.
+      unsafe: async (text: string) => {
+        queries.push(text.replace(/\s+/gu, " ").trim());
+        if (text.includes("FROM job_attempt_effects e")) {
+          return [{ id: "33333333-3333-3333-3333-333333333333", effect_kind: "gateway_model_request",
+            attempt_status: "failed", sandbox_id: null, usage_rows: 1, canvas_node_id: null }];
+        }
+        return [{ id: "33333333-3333-3333-3333-333333333333" }];
+      },
+    },
+  );
+  const app = createSqlJobLifecycleApplication(db);
+  await app.reapWaitingHumanTimeout(1800);
+  // Progress was made and nothing is left: the Job gets another tick instead of being
+  // failed in the same pass that just unblocked it.
+  assert.deepEqual(updates, [], "a Job unblocked by reconciliation must not be failed immediately");
+});
+
+test("reapWaitingHumanTimeout still fails when the deadline expired and nothing was settled", async () => {
+  const queries: string[] = [];
+  const db = Object.assign(
+    ((strings: TemplateStringsArray) => {
+      const query = strings.join(" ").replace(/\s+/gu, " ").trim();
+      queries.push(query);
+      if (query.includes("SELECT jobs.id::text AS id FROM jobs")) return [{ id: "job-timeout-3" }];
+      return [];
+    }) as unknown as typeof sql,
+    {
+      json: (value: unknown) => value,
+      begin: async (work: (tx: typeof sql) => Promise<unknown>) => work(db),
+      unsafe: async (text: string) => {
+        queries.push(text.replace(/\s+/gu, " ").trim());
+        return [];
+      },
+    },
+  );
+  const app = createSqlJobLifecycleApplication(db);
+  await app.reapWaitingHumanTimeout(1800);
+  const update = queries.find((query) => query.includes("UPDATE jobs SET status = 'failed'"));
+  assert.ok(update, "a genuine human timeout still fails the Job");
+  // The final statement re-checks the same deadline it selected on, so a human reply
+  // during this batch cannot be punished for the earlier wait.
+  assert.match(update, /e\.type = 'human'/u);
+  assert.match(update, /::int \* interval '1 second'/u);
 });
 
 test("reapStalledExecution casts interpolated stall seconds to int before * interval", async () => {

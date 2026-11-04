@@ -17,6 +17,8 @@ import {
   settleAttemptTerminal,
 } from "../job-attempt/index.js";
 import { CHROME_JOB_STALL_SEC, CLICKHOUSE_JOB_STALL_SEC, HUB_JOB_STALL_SEC, TOOL_CALL_STARTED_PREFIX } from "./stall-policy.js";
+import { reconcileJobEffects } from "../job-attempt/reconcile-effects-runner.js";
+import type { MigrationConnection } from "../../migration-runner.js";
 
 export type {
   JobLifecycleDatabase,
@@ -370,10 +372,11 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
       const budget = Number.isSafeInteger(waitingHumanSec) ? waitingHumanSec : 0;
       if (budget <= 0) return [];
       return atomically(async (tx) => {
-        const result = await tx`
-          UPDATE jobs SET status = 'failed', finished_at = now(),
-                          error = COALESCE(error, '') || '人工等待超时（Reaper 判定）',
-                          lease_expires_at = NULL, heartbeat_at = NULL
+        // #874: reconcile this Job's external effects before blaming the human.
+        // Lock order stays Job → effects here, matching human-messages.ts (Job lock,
+        // then Attempt, then effect) so the pre-timeout pass cannot invert it.
+        const candidates = await tx`
+          SELECT jobs.id::text AS id FROM jobs
           WHERE status = 'waiting_human'
             AND ${budget}::int > 0
             AND COALESCE(
@@ -382,7 +385,41 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
               claimed_at,
               created_at
             ) + (${budget}::int * interval '1 second') < now()
-          RETURNING id, sandbox_id`;
+          FOR UPDATE`;
+        const result: Array<{ id: string; sandbox_id: string | null }> = [];
+        for (const candidate of candidates as unknown as Array<{ id: string }>) {
+          const jobId = String(candidate.id);
+          const outcome = await reconcileJobEffects(
+            tx as unknown as MigrationConnection,
+            jobId,
+            `reaper-timeout:${jobId}`,
+          ).catch(() => null);
+          if (!outcome) continue;
+          // A pass that actually settled the blocker earns this Job one more tick: the
+          // completion path may now succeed, so failing it in the same breath would
+          // throw away the reconciliation we just performed. The next tick applies
+          // nothing (the rows are settled) and the timeout applies normally.
+          if (outcome.remaining === 0 && outcome.applied > 0) continue;
+          const suffix = outcome.remaining > 0
+            ? `；平台侧外部效果未结算（${outcome.remainingKinds.join(",")}），需先对账再判定超时`
+            : "";
+          const updated = await tx`
+            UPDATE jobs SET status = 'failed', finished_at = now(),
+                            error = COALESCE(error, '') || ${`人工等待超时（Reaper 判定）${suffix}`},
+                            lease_expires_at = NULL, heartbeat_at = NULL
+            WHERE id = ${jobId}
+              AND status = 'waiting_human'
+              -- Re-check the deadline: a human reply during this batch resets the
+              -- budget and this Job must not be killed for the earlier wait.
+              AND COALESCE(
+                (SELECT max(e.created_at) FROM events e WHERE e.job_id = jobs.id AND e.type = 'human'),
+                started_at,
+                claimed_at,
+                created_at
+              ) + (${budget}::int * interval '1 second') < now()
+            RETURNING id, sandbox_id`;
+          result.push(...(updated as unknown as Array<{ id: string; sandbox_id: string | null }>));
+        }
         for (const row of result) {
           await settleAttemptTerminal(
             tx,

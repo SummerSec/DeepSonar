@@ -3,6 +3,7 @@ import path from "node:path";
 import { validateContextState, type ContextState } from "@deepsonar/runtime-sandbox";
 import { CONTROL_INPUT_ERROR_CODES, ControlInputError } from "../../control-input.js";
 import { sql } from "../../db.js";
+import { classifyEffect } from "./reconcile-effects.js";
 import {
   ATTEMPT_MAX_STATE_BYTES,
   ATTEMPT_MAX_ERROR_CHARS,
@@ -368,17 +369,90 @@ export async function settleAttemptTerminal(
   return updated ? (updated as AttemptRow) : null;
 }
 
+/**
+ * In-flight effects of an interrupted attempt, with the same evidence shape the
+ * reconcile runner uses (#874).
+ */
+const INTERRUPTED_EFFECT_EVIDENCE = `
+SELECT e.id::text AS id,
+       e.effect_kind,
+       a.status AS attempt_status,
+       coalesce(j.sandbox_id, a.sandbox_id) AS sandbox_id,
+       (SELECT count(*)::int FROM job_usage_ledger l WHERE l.attempt_id = e.attempt_id AND l.effect_id = e.effect_id) AS usage_rows,
+       (SELECT n.id::text FROM canvas_nodes n WHERE n.job_id = e.job_id ORDER BY n.id LIMIT 1) AS canvas_node_id
+FROM job_attempt_effects e
+JOIN job_attempts a ON a.id = e.attempt_id
+JOIN jobs j ON j.id = e.job_id
+WHERE e.attempt_id = $1 AND e.status = 'effect_pending'
+ORDER BY e.created_at, e.id`;
+
+/**
+ * Settle only what the interrupt itself proves, and keep everything else `unknown`.
+ *
+ * Positive evidence only:
+ *   - `gateway_model_request` with recorded usage rows — the upstream call happened;
+ *   - `canvas_delivery` with a node that already exists — the write happened.
+ *
+ * Deliberately not settled here:
+ *   - `agent_run`: the database status says the Scheduler stopped waiting, not that
+ *     the runner exited (`job-control/rerun.ts` destroys the sandbox after commit and
+ *     logs a failed destroy), so claiming `applied_run_terminated` would invent proof;
+ *   - `provision` without a sandbox id: a missing id is not proof the create never
+ *     happened (see settleUnstartedProvisionEffect).
+ */
+export async function settleInterruptedEffects(
+  db: AttemptDatabase,
+  attemptId: string,
+): Promise<{ settled: number; unknown: number }> {
+  const rows = (await db.unsafe(INTERRUPTED_EFFECT_EVIDENCE, [attemptId])) as Array<Record<string, unknown>>;
+  let settled = 0;
+  let unknown = 0;
+  for (const row of rows) {
+    const evidence = {
+      id: String(row.id),
+      effectKind: String(row.effect_kind),
+      attemptStatus: row.attempt_status === null || row.attempt_status === undefined ? null : String(row.attempt_status),
+      sandboxId: row.sandbox_id === null || row.sandbox_id === undefined ? null : String(row.sandbox_id),
+      usageRows: Number(row.usage_rows ?? 0),
+      canvasNodeId: row.canvas_node_id === null || row.canvas_node_id === undefined ? null : String(row.canvas_node_id),
+    };
+    const classification = classifyEffect(evidence);
+    const provable = classification.decision === "auto"
+      && (classification.rule === "usage_ledger_recorded" || classification.rule === "canvas_node_present");
+    if (provable && classification.decision === "auto") {
+      const outcome = { ...classification.settlement, reconciled_by: "interrupt-path", reconcile_rule: classification.rule };
+      assertBoundedJson(outcome, "interrupt settlement", 8 * 1024);
+      await db`
+        UPDATE job_attempt_effects SET status = 'settled', settlement_json = ${db.json(outcome as never)},
+          settled_at = now(), updated_at = now()
+        WHERE id = ${evidence.id}::uuid AND status = 'effect_pending'`;
+      settled += 1;
+    } else {
+      await db`
+        UPDATE job_attempt_effects SET status = 'unknown', error = COALESCE(error, ${`interrupted before settlement: ${classification.rule}`}),
+          settled_at = now(), updated_at = now()
+        WHERE id = ${evidence.id}::uuid AND status = 'effect_pending'`;
+      unknown += 1;
+    }
+  }
+  return { settled, unknown };
+}
+
 export async function markAttemptInterrupted(db: AttemptDatabase, jobId: string, reason: unknown): Promise<AttemptRow | null> {
   const safeReason = sanitizeError(reason);
   const [attempt] = await db`SELECT * FROM job_attempts WHERE job_id = ${jobId} AND status = 'active' ORDER BY attempt_no DESC LIMIT 1 FOR UPDATE`;
   if (!attempt) return null;
   const current = stateFromRow(attempt as AttemptRow);
   const next = { ...current, phase: "interrupted" as const, current_effect_id: null, outcome: { ...current.outcome, result: "interrupted" } } satisfies AttemptState;
-  await db`UPDATE job_attempt_effects SET status = 'unknown', error = COALESCE(error, ${safeReason}), settled_at = now(), updated_at = now() WHERE attempt_id = ${attempt.id} AND status = 'effect_pending'`;
+  // Mark the attempt interrupted first: the classification below depends on the
+  // attempt no longer being active, and the previous blanket UPDATE discarded
+  // evidence that was already conclusive (#874).
   const [updated] = await db`
     UPDATE job_attempts SET status = 'interrupted', phase = 'interrupted', state_json = ${db.json(next as never)}, outcome_json = ${db.json(next.outcome as never)},
       error = ${safeReason}, finished_at = now(), updated_at = now()
     WHERE id = ${attempt.id} AND status = 'active'
     RETURNING *`;
-  return updated ? (updated as AttemptRow) : null;
+  if (!updated) return null;
+  await settleInterruptedEffects(db, String(attempt.id));
+  return updated as AttemptRow;
 }
