@@ -19,7 +19,9 @@ import { fileURLToPath } from "node:url";
 
 const SUMMARY_CHECK = "ci-summary";
 const BLOCKING_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "skipped"]);
-const UNMERGEABLE_STATES = new Set(["DIRTY", "CONFLICTING", "BEHIND", "UNKNOWN"]);
+// UNKNOWN means "mergeability still being calculated" right after a PR opens, and
+// BEHIND only means the base moved (strict checks are off); neither is fatal.
+const UNMERGEABLE_STATES = new Set(["DIRTY", "CONFLICTING"]);
 
 export class WritebackError extends Error {
   constructor(message, code) {
@@ -68,25 +70,27 @@ function parseJson(result, what) {
   }
 }
 
-async function waitForSummaryCheck({ repo, branch, sha, run, sleep, pollLimit, log }) {
+async function waitForSummaryCheck({ repo, number, sha, run, sleep, pollLimit, log }) {
   let conclusion = "pending";
   for (let attempt = 1; attempt <= pollLimit; attempt += 1) {
     await sleep(attempt);
-    const poll = run("gh", ["api", `repos/${repo}/commits/${sha}/check-runs`, "--jq",
-      `[.check_runs[] | select(.name == "${SUMMARY_CHECK}")] | .[0].conclusion // "pending"`]);
+    // The pull request rollup is the authoritative view: only checks attached to the PR
+    // count towards its required status checks.
+    const poll = run("gh", ["pr", "view", number, "--repo", repo, "--json", "statusCheckRollup", "--jq",
+      `[.statusCheckRollup[]? | select(.name == "${SUMMARY_CHECK}")] | .[0].conclusion // "pending"`]);
     if (poll?.status !== 0) continue; // transient API hiccup: keep polling inside the budget
     conclusion = summaryConclusion(poll);
     if (conclusion === "success") break;
     if (BLOCKING_CONCLUSIONS.has(conclusion)) {
-      throw new WritebackError(`${SUMMARY_CHECK} on ${branch} concluded ${conclusion}; the default branch was not modified`,
+      throw new WritebackError(`${SUMMARY_CHECK} on pull request #${number} concluded ${conclusion}; the default branch was not modified`,
         "WRITEBACK_CHECK_FAILED");
     }
   }
   if (conclusion !== "success") {
-    throw new WritebackError(`${SUMMARY_CHECK} on ${branch} did not conclude within ${pollLimit} polls; the default branch was not modified`,
+    throw new WritebackError(`${SUMMARY_CHECK} on pull request #${number} did not conclude within ${pollLimit} polls; the default branch was not modified`,
       "WRITEBACK_CHECK_TIMEOUT");
   }
-  log(`${SUMMARY_CHECK} passed on ${sha}`);
+  log(`${SUMMARY_CHECK} passed on ${sha} (pull request #${number})`);
   return conclusion;
 }
 
@@ -189,19 +193,34 @@ export async function runWriteback({
   requireValue(env.GH_TOKEN, "GH_TOKEN");
   if (typeof run !== "function") throw new WritebackError("run is required", "WRITEBACK_INPUT_MISSING");
 
-  assertOk(run("git", ["push", "origin", `HEAD:refs/heads/${branch}`]), `push of ${branch}`);
+  // Preflight: creating the writeback pull request needs a repository setting. Left
+  // unchecked, the run burns a full gate (~20 min) before failing with a raw GraphQL
+  // error, so it is asserted up front with one actionable message.
+  const permissions = run("gh", ["api", `repos/${repo}/actions/permissions/workflow`]);
+  assertOk(permissions, "workflow permissions lookup");
+  const permissionsPayload = parseJson(permissions, "workflow permissions lookup");
+  if (permissionsPayload.can_approve_pull_request_reviews !== true) {
+    throw new WritebackError(
+      `repository ${repo} does not allow GitHub Actions to create pull requests ` +
+        `(Actions → General → "Allow GitHub Actions to create and approve pull requests"); ` +
+        `the writeback lands through a pull request, so this must be enabled before the release`,
+      "WRITEBACK_PR_PERMISSION_MISSING",
+    );
+  }
+
+  // The bot branch is workflow-owned and disposable: a previous attempt may have left
+  // it behind with a different commit, so a plain push would be rejected as
+  // non-fast-forward and strand the release.
+  assertOk(run("git", ["push", "--force-with-lease", "origin", `HEAD:refs/heads/${branch}`]), `push of ${branch}`);
   log(`pushed ${branch}`);
 
-  try {
-    assertOk(run("gh", ["workflow", "run", "ci.yml", "--repo", repo, "--ref", branch]), "ci.yml dispatch");
-  } catch (error) {
-    // Without a run there is no ci-summary to wait for; never touch the default branch.
-    throw new WritebackError(`${error.message}; ${defaultBranch} was not modified`, "WRITEBACK_DISPATCH_FAILED");
-  }
-  log("dispatched ci.yml on the writeback branch");
-
-  const conclusion = await waitForSummaryCheck({ repo, branch, sha, run, sleep, pollLimit, log });
+  // No workflow_dispatch here: a dispatched run's check-runs are not part of the pull
+  // request's rollup, so a required status check can never be satisfied that way
+  // (v0.6.8: the dispatch passed ci-summary, yet the PR stayed BLOCKED with an empty
+  // rollup). Opening the pull request triggers ci.yml through the normal
+  // `pull_request` event, which is also how a person lands the change.
   const number = await openOrReusePullRequest({ repo, branch, defaultBranch, sha, run, log });
+  const conclusion = await waitForSummaryCheck({ repo, number, sha, run, sleep, pollLimit, log });
   const merge = await mergePullRequest({ repo, number, branch, defaultBranch, run, sleep, pollLimit, log });
   await assertLanded({ repo, sha, defaultBranch, run, log });
   assertOk(run("git", ["push", "origin", "--delete", branch]), `cleanup of ${branch}`);
