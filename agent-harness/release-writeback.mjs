@@ -189,7 +189,25 @@ export async function runWriteback({
   requireValue(env.GH_TOKEN, "GH_TOKEN");
   if (typeof run !== "function") throw new WritebackError("run is required", "WRITEBACK_INPUT_MISSING");
 
-  assertOk(run("git", ["push", "origin", `HEAD:refs/heads/${branch}`]), `push of ${branch}`);
+  // Preflight: creating the writeback pull request needs a repository setting. Left
+  // unchecked, the run burns a full gate (~20 min) before failing with a raw GraphQL
+  // error, so it is asserted up front with one actionable message.
+  const permissions = run("gh", ["api", `repos/${repo}/actions/permissions/workflow`]);
+  assertOk(permissions, "workflow permissions lookup");
+  const permissionsPayload = parseJson(permissions, "workflow permissions lookup");
+  if (permissionsPayload.can_approve_pull_request_reviews !== true) {
+    throw new WritebackError(
+      `repository ${repo} does not allow GitHub Actions to create pull requests ` +
+        `(Actions → General → "Allow GitHub Actions to create and approve pull requests"); ` +
+        `the writeback lands through a pull request, so this must be enabled before the release`,
+      "WRITEBACK_PR_PERMISSION_MISSING",
+    );
+  }
+
+  // The bot branch is workflow-owned and disposable: a previous attempt may have left
+  // it behind with a different commit, so a plain push would be rejected as
+  // non-fast-forward and strand the release.
+  assertOk(run("git", ["push", "--force-with-lease", "origin", `HEAD:refs/heads/${branch}`]), `push of ${branch}`);
   log(`pushed ${branch}`);
 
   try {

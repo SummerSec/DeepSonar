@@ -14,6 +14,7 @@ function harness({
   compareStatusAfterMerge = "ahead",
   createFails = false,
   deleteFails = false,
+  prPermissionAllowed = true,
 } = {}) {
   const calls = [];
   let pollIndex = 0;
@@ -21,7 +22,12 @@ function harness({
   const run = (file, args) => {
     const joined = [file, ...args].join(" ");
     calls.push(joined);
-    if (joined.startsWith("git push origin HEAD:refs/heads/")) return { status: 0, stdout: "" };
+    if (joined.startsWith("git push")) return { status: 0, stdout: "" };
+    if (joined.startsWith("gh api") && joined.includes("/actions/permissions/workflow")) {
+      return prPermissionAllowed
+        ? { status: 0, stdout: `${JSON.stringify({ default_workflow_permissions: "read", can_approve_pull_request_reviews: true })}\n` }
+        : { status: 0, stdout: `${JSON.stringify({ default_workflow_permissions: "read", can_approve_pull_request_reviews: false })}\n` };
+    }
     if (joined.startsWith("gh workflow run")) {
       return dispatchFails ? { status: 1, stderr: "HTTP 403: Resource not accessible" } : { status: 0, stdout: "" };
     }
@@ -104,6 +110,9 @@ for (const conclusion of ["failure", "cancelled", "timed_out", "skipped"]) {
   const run = (file, args) => {
     const joined = [file, ...args].join(" ");
     calls.push(joined);
+    if (joined.startsWith("gh api") && joined.includes("/actions/permissions/workflow")) {
+      return { status: 0, stdout: '{"can_approve_pull_request_reviews":true}\n' };
+    }
     if (joined.startsWith("gh api") && joined.includes("/check-runs")) {
       polls += 1;
       return polls === 1 ? { status: 1, stderr: "unexpected EOF" } : { status: 0, stdout: "success\n" };
@@ -176,13 +185,39 @@ for (const conclusion of ["failure", "cancelled", "timed_out", "skipped"]) {
   neverMutatesMain(calls);
 }
 
-// 12. a local git rejection keeps the remote reason (ruleset lines), not just a code.
+// 12. a repository that forbids Actions from creating pull requests fails in seconds
+//     with one actionable message instead of after a full gate.
+{
+  let gateDispatched = false;
+  const run = (file, args) => {
+    const joined = [file, ...args].join(" ");
+    if (joined.includes("/actions/permissions/workflow")) return { status: 0, stdout: '{"can_approve_pull_request_reviews":false}\n' };
+    if (joined.startsWith("gh workflow run")) gateDispatched = true;
+    return { status: 0, stdout: "" };
+  };
+  await assert.rejects(() => runWriteback({ ...base, env, run, sleep: quiet }),
+    (error) => error.code === "WRITEBACK_PR_PERMISSION_MISSING"
+      && /Allow GitHub Actions to create and approve pull requests/u.test(error.message));
+  assert.equal(gateDispatched, false, "the preflight must run before the gate is dispatched");
+}
+
+// 13. the bot branch is workflow-owned: a leftover branch from an earlier attempt is
+//     overwritten with a lease instead of stranding the release on a non-fast-forward.
+{
+  const { calls, run } = harness();
+  await runWriteback({ ...base, env, run, sleep: quiet });
+  assert.ok(calls.some((call) => call.startsWith("git push --force-with-lease origin HEAD:refs/heads/bot/")),
+    "the bot branch is force-pushed with a lease");
+}
+
+// 14. a local git rejection still keeps the remote reason (ruleset lines).
 {
   const calls = [];
   const run = (file, args) => {
     const joined = [file, ...args].join(" ");
     calls.push(joined);
-    if (joined.startsWith("git push origin HEAD:refs/heads/")) {
+    if (joined.includes("/actions/permissions/workflow")) return { status: 0, stdout: '{"can_approve_pull_request_reviews":true}\n' };
+    if (joined.startsWith("git push")) {
       return { status: 1, stderr: [
         "To https://github.com/o/r",
         "remote: error: GH013: Repository rule violations found for refs/heads/main.",
@@ -196,4 +231,4 @@ for (const conclusion of ["failure", "cancelled", "timed_out", "skipped"]) {
     (error) => error.code === "WRITEBACK_COMMAND_FAILED" && /GH013/.test(error.message) && /ci-summary/.test(error.message));
 }
 
-console.log("release writeback: auth, dispatch, blocking conclusions, timeout, transient retry, PR merge, conflicts and landing verification passed");
+console.log("release writeback: permission preflight, auth, dispatch, blocking conclusions, timeout, transient retry, PR merge, branch lease, conflicts and landing verification passed");
