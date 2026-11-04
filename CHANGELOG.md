@@ -2,6 +2,10 @@
 
 ### 修复
 
+- **REST 创建任务时可以直接初始化用户 objective（#887）**：`POST /projects/:id/tasks` 此前不接受 `plan_objective`，创建出的任务在 Plan v2 下无法提交首个计划——`graph_query(kind=plan_objective)` 报「没有已持久化的用户目标」，`submit_plan` v2 也被拒，Agent 只能让授权用户额外发一次 `PATCH /tasks/:canvasId`。现在创建请求可带可选 `plan_objective`，服务端用**与 PATCH 相同**的 `applyPlanObjectivePatch` 校验并在创建 Canvas 的同一事务内落库（首版 revision=1、identity 由服务端生成）；不传时行为不变，也不会凭空生成目标。权限边界不变：目标仍只能由授权用户通过用户入口设置，Agent 的 plan payload 不能携带它。
+
+### 修复
+
 - **回写识别「等待人工批准」的运行，立即给出该做的动作（#887）**：`GITHUB_TOKEN` 创建的 PR 被 GitHub 视为外部贡献者，其 workflow 运行要等维护者批准；等待期间 PR 的检查汇总为空，回写按「未结论」继续轮询，最终耗尽预算（v0.6.10 实测：建 PR 后 gate 停在待批准约 1 小时，回写在 90 分钟后以 `WRITEBACK_CHECK_TIMEOUT` 失败，而 PR 其实已经可合并）。现在轮询时若发现该 SHA 的运行处于 `waiting`/`action_required`，立即以 `WRITEBACK_RUN_AWAITING_APPROVAL` 失败，并在消息里给出 run id、PR 编号与「批准后重跑本次 release job」。发布文档同步写明这次人工批准是「不放宽必需检查」的固有成本。
 
 ## [0.6.10] - 2026-11-04

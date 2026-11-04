@@ -71,7 +71,7 @@ import {
 import { taskContractPreflight, taskContractRuntimeBlockers } from "../../task-contract-preflight.js";
 import type { TargetAuthorizationSnapshot } from "../target-authorization/contract.js";
 import { recordTargetAuthorizationGrant, targetAuthorizationRequired } from "../target-authorization/index.js";
-import { applyPlanObjectivePatch, readPersistedPlanObjective } from "../plan-protocol/objective.js";
+import { applyPlanObjectivePatch, PlanObjectivePatch, readPersistedPlanObjective } from "../plan-protocol/objective.js";
 
 const CreateProjectBody = z.object({
   name: z.string().min(1),
@@ -98,6 +98,13 @@ const CreateTaskBody = z.object({
   schedule_beijing_8am: z.boolean().optional(),
   /** Optional task-level Runtime Profile overlay frozen with the first Job. */
   runtime_profile: RuntimeProfileOverridePayload.optional(),
+  /**
+   * Optional user-owned Plan v2 objective. The objective belongs to the authenticated
+   * user, so it can only be set through a user entry point (this request or the PATCH
+   * endpoint); without it a Plan v2 task needs an extra PATCH before it can submit
+   * (#887).
+   */
+  plan_objective: PlanObjectivePatch.optional(),
 });
 const TriggerTaskBody = z.object({
   event_id: z.string().trim().min(1).max(200),
@@ -335,14 +342,13 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
 
     let canvasId: string;
     try {
-      canvasId = await ensureCanvasForTask({
-        projectId: id,
+      // The objective is validated and stored by the same rules the PATCH endpoint
+      // uses, in the transaction that creates the Canvas, so a freshly created task
+      // can submit Plan v2 without an extra round-trip (#887).
+      const creationTarget = {
         title: body.title,
-        allowComposeSeeds: true,
-        target: {
-          title: body.title,
-          content: body.content,
-          goal: body.content,
+        content: body.content,
+        goal: body.content,
           kind: body.kind,
           ...(taskContract ? { task_contract: taskContract } : {}),
           ...(body.seed_finding_ids !== undefined ? { seed_finding_ids: body.seed_finding_ids } : {}),
@@ -352,8 +358,20 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
             : {}),
           ...(body.device !== undefined ? { device_requirement: body.device } : {}),
           ...(body.runtime_profile !== undefined ? { runtime_profile: body.runtime_profile } : {}),
-          ...(schedule ? { schedule } : {}),
-        },
+        ...(schedule ? { schedule } : {}),
+      } satisfies Record<string, unknown>;
+      const target = body.plan_objective
+        ? applyPlanObjectivePatch({
+            title: body.title,
+            target: creationTarget,
+            patch: body.plan_objective,
+          }).target
+        : creationTarget;
+      canvasId = await ensureCanvasForTask({
+        projectId: id,
+        title: body.title,
+        allowComposeSeeds: true,
+        target,
       });
     } catch (error) {
       if (

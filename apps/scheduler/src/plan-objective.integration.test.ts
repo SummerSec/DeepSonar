@@ -71,6 +71,46 @@ if (!testDatabaseUrl) {
       const denied = await app.inject({ method: "PATCH", url: `/tasks/${canvasId}`, headers: { authorization: `Bearer ${reader.plaintext}` }, payload: { plan_objective: objective(null) } });
       assert.equal(denied.statusCode, 403);
 
+      // #887: creating a task through the REST entry can initialise the same
+      // user-owned objective, so a fresh Plan v2 task does not need a second PATCH
+      // before it can submit its first plan.
+      const createdTask = await app.inject({
+        method: "POST",
+        url: `/projects/${projectId}/tasks`,
+        headers,
+        payload: { title: "Created with an objective", content: "REST creation carries the user objective", plan_objective: objective(null) },
+      });
+      assert.equal(createdTask.statusCode, 201, createdTask.payload);
+      const createdCanvasId = createdTask.json().canvas_id as string;
+      const [createdCanvas] = await sql`SELECT target_json FROM canvases WHERE id = ${createdCanvasId}`;
+      const { readPersistedPlanObjective } = await import("./domains/plan-protocol/objective.js");
+      const createdObjective = readPersistedPlanObjective(createdCanvas.target_json);
+      assert.ok(createdObjective, "the creation request must persist the user objective");
+      assert.equal(createdObjective.revision, "1", "a first objective starts at revision 1");
+      assert.match(String(createdObjective.goal), /scoped execution evidence/u, createdObjective.goal);
+      // The authenticated user owns it, so the PATCH entry can keep revising it with CAS.
+      const reviseCreated = await app.inject({
+        method: "PATCH",
+        url: `/tasks/${createdCanvasId}`,
+        headers,
+        payload: { plan_objective: objective("1", "Collect and verify the revised creation objective") },
+      });
+      assert.equal(reviseCreated.statusCode, 200, reviseCreated.payload);
+      assert.equal(reviseCreated.json().plan_objective.revision, "2");
+      assert.equal(reviseCreated.json().plan_objective.objective_id, createdObjective.objective_id,
+        "the creation and PATCH paths must agree on the objective identity");
+      // A creation request that omits the objective behaves exactly as before.
+      const withoutObjective = await app.inject({
+        method: "POST",
+        url: `/projects/${projectId}/tasks`,
+        headers,
+        payload: { title: "No objective yet", content: "The caller may add it later" },
+      });
+      assert.equal(withoutObjective.statusCode, 201, withoutObjective.payload);
+      const [noObjectiveCanvas] = await sql`SELECT target_json FROM canvases WHERE id = ${withoutObjective.json().canvas_id as string}`;
+      assert.equal(readPersistedPlanObjective(noObjectiveCanvas.target_json), null,
+        "omitting the objective must not invent one");
+
       const first = await app.inject({
         method: "PATCH",
         url: `/tasks/${canvasId}`,
