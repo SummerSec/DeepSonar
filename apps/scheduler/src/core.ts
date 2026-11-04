@@ -1268,8 +1268,10 @@ const hubOrchestrationApplication = createHubOrchestrationApplication(sql, {
   },
   hasSucceededRoleWork: findingVerification.hasSucceededRoleWork,
   maybeDispatchReport: reportConvergence.maybeDispatchReport,
-  markFindingNeedsHuman: async (tx, findingId, reason) =>
-    findingVerification.markFindingNeedsHuman(tx, findingId, reason),
+  // #890: a stalled Finding settles through the reason classifier, so machinery
+  // reasons converge as inconclusive instead of always creating a human Action.
+  settleStalledFinding: async (tx, findingId, reason) =>
+    findingVerification.settleFindingVerifyByReason(tx, findingId, reason),
 });
 
 type CanvasEdgeInput = {

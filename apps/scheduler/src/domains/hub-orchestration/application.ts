@@ -319,8 +319,11 @@ export function createHubOrchestrationApplication(
     if (escalateIds.length === 0) return;
 
     for (const item of escalateIds) {
-      await ports.markFindingNeedsHuman(tx, item.id, item.reason).catch((e) =>
-        console.error(`[hub] escalate finding ${item.id} failed:`, e),
+      // #890: settle by reason classification. A stalled wake or an exhausted budget is
+      // a fact about our machinery, so it converges as inconclusive; only a capability
+      // boundary (credential/device/business decision) becomes needs_human.
+      await ports.settleStalledFinding(tx, item.id, item.reason).catch((e) =>
+        console.error(`[hub] settle stalled finding ${item.id} failed:`, e),
       );
     }
 
