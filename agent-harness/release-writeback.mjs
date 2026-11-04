@@ -81,6 +81,15 @@ async function waitForSummaryCheck({ repo, number, sha, run, sleep, pollLimit, l
     if (poll?.status !== 0) continue; // transient API hiccup: keep polling inside the budget
     conclusion = summaryConclusion(poll);
     if (conclusion === "success") break;
+    const waiting = conclusion === "pending" ? pendingApprovalRun({ repo, sha, run }) : null;
+    if (waiting) {
+      throw new WritebackError(
+        `workflow run ${waiting.id} (${waiting.name ?? "ci"}) for pull request #${number} is waiting for approval; ` +
+          `approve it in the Actions UI and re-run this release job (a GITHUB_TOKEN-created pull request is treated ` +
+          `like an outside contributor, so its runs are held until a maintainer approves them)`,
+        "WRITEBACK_RUN_AWAITING_APPROVAL",
+      );
+    }
     if (BLOCKING_CONCLUSIONS.has(conclusion)) {
       throw new WritebackError(`${SUMMARY_CHECK} on pull request #${number} concluded ${conclusion}; the default branch was not modified`,
         "WRITEBACK_CHECK_FAILED");
@@ -92,6 +101,27 @@ async function waitForSummaryCheck({ repo, number, sha, run, sleep, pollLimit, l
   }
   log(`${SUMMARY_CHECK} passed on ${sha} (pull request #${number})`);
   return conclusion;
+}
+
+/**
+ * A pull request created by `GITHUB_TOKEN` is attributed to github-actions[bot], and
+ * GitHub treats that like an outside contributor: its workflow runs wait for a
+ * maintainer to approve them. That wait is invisible to the check rollup, so the
+ * poller used to burn its whole budget before reporting a timeout (v0.6.10: the gate
+ * sat unapproved for ~90 minutes). Detect it and say exactly what to do.
+ */
+function pendingApprovalRun({ repo, sha, run }) {
+  const listed = run("gh", ["api", `repos/${repo}/actions/runs?head_sha=${sha}&per_page=20`,
+    "--jq", '[.workflow_runs[] | select(.status == "waiting" or .conclusion == "action_required") | {id, name, status}] | .[0] // empty']);
+  if (listed?.status !== 0) return null;
+  const text = String(listed.stdout ?? "").trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 async function openOrReusePullRequest({ repo, branch, defaultBranch, sha, run, log }) {

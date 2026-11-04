@@ -23,7 +23,11 @@
 
 失败语义：dispatch 失败、检查失败/超时、PR 无法合并（`DIRTY`/`CONFLICTING`/`BEHIND`）、合并命令失败、`compare` 未包含该提交，任何一种都**不移动默认分支**并把 bot 分支留在原地供排查；错误信息保留远端 `remote:` 行（规则拒绝的原因），不再只给退出码。
 
-要放行的是**同一条门禁**，不是绕过它：不要为 bot 配置 ruleset bypass、不要直推、也不要用可写 PAT 跳过必需检查。 前置条件：仓库必须允许 GitHub Actions 创建 PR（Settings → Actions → General → “Allow GitHub Actions to create and approve pull requests”，API 为 `repos/<owner>/<repo>/actions/permissions/workflow` 的 `can_approve_pull_request_reviews=true`）。回写脚本在动任何分支之前先检查该开关，关闭时立即以 `WRITEBACK_PR_PERMISSION_MISSING` 单条可执行提示失败，而不是先等满一轮门禁再报 GraphQL 错误（v0.6.8 实测：22 分钟后才失败）。bot 分支由 workflow 独占且可丢弃，因此用 `--force-with-lease` 覆盖上一次尝试留下的同名分支，避免非快进推送把发布卡死。v0.6.6 因直推被拒（`Required status check "ci-summary" is expected`）而没产出 Release，v0.6.7 因“直推即使检查已通过仍被拒”而没产出 Release，本条据此把回写改为 PR 合并。
+要放行的是**同一条门禁**，不是绕过它：不要为 bot 配置 ruleset bypass、不要直推、也不要用可写 PAT 跳过必需检查。 前置条件：仓库必须允许 GitHub Actions 创建 PR（Settings → Actions → General → “Allow GitHub Actions to create and approve pull requests”，API 为 `repos/<owner>/<repo>/actions/permissions/workflow` 的 `can_approve_pull_request_reviews=true`）。回写脚本在动任何分支之前先检查该开关，关闭时立即以 `WRITEBACK_PR_PERMISSION_MISSING` 单条可执行提示失败，而不是先等满一轮门禁再报 GraphQL 错误（v0.6.8 实测：22 分钟后才失败）。bot 分支由 workflow 独占且可丢弃，因此用 `--force-with-lease` 覆盖上一次尝试留下的同名分支，避免非快进推送把发布卡死。
+
+**一次人工批准是这条路径的固有成本（#887）**：由 `GITHUB_TOKEN` 创建的 PR 被 GitHub 当作外部贡献者，它的 workflow 运行不会自动开始，而是**等待维护者在 Actions 里批准**；等待期间 PR 的检查汇总为空，回写若按「检查未结论」继续轮询就会白等到预算耗尽（v0.6.10 实测：08:37 建 PR，gate 停在待批准约一小时，回写在 10:08 以 `WRITEBACK_CHECK_TIMEOUT` 失败）。现在回写会识别这种运行（`status=waiting` 或 `conclusion=action_required`）并**立即**以 `WRITEBACK_RUN_AWAITING_APPROVAL` 失败，消息里给出该 run 与 PR 编号、以及「在 Actions 里批准后重跑本次 release job」。
+
+这是选择「不放宽必需检查」的代价：没有给 bot 配 ruleset bypass、也没有用可写 PAT 跳过门禁，所以每次发版需要维护者点一次批准。批准后 PR 变为 `CLEAN`，回写会自动合并并创建 Release；若回写已因等待超时退出，重跑该 release job 即可（清单已落地时回写会因无差异而早退，直接进入创建 Release）。v0.6.6 因直推被拒（`Required status check "ci-summary" is expected`）而没产出 Release，v0.6.7 因“直推即使检查已通过仍被拒”而没产出 Release，本条据此把回写改为 PR 合并。
 
 ## 控制面镜像平台矩阵（#598）
 
