@@ -1,12 +1,14 @@
 ## [Unreleased]
 
+## [0.6.8] - 2026-11-04
+
 ### 修复
 
 - **Release 回写改为经 PR 合并，直推默认分支在检查已通过时仍会被拒（#877）**：v0.6.7 的 Release 跑完镜像与签名后，回写步骤已经等到 `ci-summary passed on 8f3479d4`，紧随其后的 `git push origin HEAD:main` 仍被规则拒绝（`push declined due to repository rule violations`），Release 未创建，最终靠人工从 `bot/sync-runtime-registry-v0.6.7` 开 PR 才把清单合并进去。现在回写走与人工合并相同的路径：推 bot 分支 → 显式 dispatch `ci.yml` → 等 `ci-summary` → 开（或复用）PR → 轮询 `mergeStateStatus` 到 `CLEAN` → `gh pr merge --merge` → 用 `compare` 校验默认分支确实包含该提交 → 删除分支。任何一步失败都不移动默认分支并保留分支供排查；错误信息保留远端 `remote:` 行，不再只给退出码。没有为 bot 增加 ruleset bypass，也没有改用可写 PAT。
 - **unknown 外部效果不再把已完成的 Job 拖死（#874）**：此前 attempt 中断时无条件把在途效果刷成 `unknown`，而唯一的对账入口是宿主侧升级 CLI，运行期没有任何自动触发；结果是一个已产出完整结论的 Job 卡在完成门 → 挂 `waiting_human` → 被 Reaper 判「人工等待超时」→ 永久 failed（现场 24 个 Job 因此全部无法成功）。
-  - **中断时按证据分流**：`markAttemptInterrupted` 先把 attempt 置为 `interrupted`，再按既有 `classifyEffect` 规则结清可判定的在途效果（`gateway_model_request` 有 usage 行、`agent_run` 运行已终止、`provision` 依 sandbox 身份、`canvas_delivery` 依节点），只把证据不足的留作 `unknown`；`interrupted` 不加入全局终态枚举（该 attempt 仍可被续跑），只在中断路径按「运行已终止」处理。
+  - **中断时只结清有正面证据的效果**：`markAttemptInterrupted` 先把 attempt 置为 `interrupted`，再结清 `gateway_model_request`（有 `job_usage_ledger` 行）与 `canvas_delivery`（节点已存在）；`agent_run` 与缺少 `sandbox_id` 的 `provision` 仍保留 `unknown`——数据库状态只说明 Scheduler 停止等待，不证明 runner 已退出（销毁在事务提交后才发生，失败仅记日志），也不证明创建未发生。`interrupted` 不加入全局终态枚举（该 attempt 仍可被续跑）。
   - **周期性对账**：新增 `startEffectReconcileLoop`，启动时先跑一次并每 5 分钟复用 `runEffectReconcile`（`operation_id` 前缀 `runtime-reconcile:`，与升级期 CLI 的审计归因区分开），只结清 `auto`、`undecided` 维持 `unknown`、从不重放；单次失败只记录并等下一轮，不影响调度。
-  - **Reaper 判定前先对账**：`reapWaitingHumanTimeout` 先选出超时候选并对每个 Job 做一次定向对账；仍有残留时错误信息点名 effect 类型（「平台侧外部效果未结算（…）」），不再笼统记为人工超时。
+  - **Reaper 判定前先对账**：`reapWaitingHumanTimeout` 先锁住超时候选、对每个 Job 做一次定向对账（Job → effect 的锁序与人工消息路径一致），本次确实结清了阻塞时**不在同一轮判死**；仍有残留时错误信息点名 effect 类型，且最终语句重新核验人工等待截止时间，避免按旧等待误杀新等待。运行期对账只处理非 `active` 的 attempt，不会为正在创建的资源伪造证据。
   - 未做（本 PR 范围外）：已 failed 的历史 Job 不会被复活；`replay_policy` 白名单未扩大；现场 122 条存量 `unknown` 仍需跑一次对账 CLI 清理（这些项按现有规则全部可 `auto` 判定）。
 
 ## [0.6.7] - 2026-11-04
@@ -1465,3 +1467,4 @@
 [0.6.5]: https://github.com/SummerSec/DeepSonar/compare/v0.6.4...v0.6.5
 [0.6.6]: https://github.com/SummerSec/DeepSonar/compare/v0.6.5...v0.6.6
 [0.6.7]: https://github.com/SummerSec/DeepSonar/compare/v0.6.6...v0.6.7
+[0.6.8]: https://github.com/SummerSec/DeepSonar/compare/v0.6.7...v0.6.8
