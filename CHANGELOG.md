@@ -8,6 +8,8 @@
   - 新增可重入入口 `.github/workflows/release-resume.yml`（`version` / `source_run_id` / `stages=both|writeback|publish`）：**复用原运行的 payload 与签名证据**完成 P3/P4，不必重建镜像；
   - 新增 `agent-harness/test-release-stages.mjs` 钉住上述结构：发布不依赖写回、写回失败被容忍、两个阶段都用共享脚本、resume 复用 artifact 且幂等。
 - **技能保鲜补齐（#893 顺带）**：`skills/**` 此前只被「pnpm 脚本存在 / 相对链接 / 已删机制」检查，**schema 版本字面量与技能自带脚本都没人管**——`skills/deepsonar-management/scripts/test_deepsonar_api.py`（12 个用例）从未接入任何 CI。现在版本字面量扫描纳入 `skills/**`、新增 `ci:unit:management-skill` 并挂进 gate、清掉 `references/api.md` 里过期的「本轮优先发布 v0.6.3」表述（改为以 tag 为准，不复述版本号）。
+  - **端点清单不再允许静默过期**：`references/api.md` 实测缺 35 条真实路由（devices / device-leases、项目知识库、`/tokens`、`/users`、`/auth/ws-ticket`、`/platform/updates`、Finding 的 `candidates` / `lexical-search` / `evidence-trace` / `verify-status`、项目 Skill 白名单、报告 availability/refresh、镜像 `registry/reconcile` 与 `visibility`），同时有 3 条 scope 与实现不一致（`/reports/:id/markdown`、`/runtime-images/registry/apply`、`/terminal-ws`）；全部按 `auth.ts` 的 `ROUTE_SCOPES` 补齐并修正。
+  - 新增 `scripts/test_api_reference_coverage.py`：以 `ROUTE_SCOPES` 为真值，双向校验「实现里的路由都在 api.md」「api.md 的 scope 与实现一致」「api.md 不发明实现里没有的路由」，跟随 `ci:unit:management-skill` 进 gate。SKILL.md 同时写明哪些区域没有 CLI 子命令、需直接按 HTTP 契约调用，避免 Agent 以为缺命令就等于缺能力。
 
 ## [0.6.11] - 2026-11-05
 

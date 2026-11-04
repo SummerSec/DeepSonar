@@ -61,20 +61,29 @@ test('signatures must pass independent positive and actual metadata rejection; n
 test('workflow grants OIDC only to signing job and gates both release and writeback behind frozen verification', async () => {
   const workflow = (await readFile(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
   assert.equal(workflow.match(/id-token: write/g)?.length, 1);
-  const signature = workflow.split('\n  platform-signatures:\n')[1].split('\n  release:\n')[0];
+  const signature = workflow.split('\n  platform-signatures:\n')[1].split('\n  release-publish:\n')[0];
   assert.match(signature, /contents: read\n      packages: write\n      id-token: write/);
   assert.doesNotMatch(signature.split('    steps:')[0], /runner\./);
   assert.ok(signature.includes('"$RUNNER_TEMP/platform-signatures-docker" >> "$GITHUB_ENV"'));
   assert.ok(signature.indexOf('>> "$GITHUB_ENV"') < signature.indexOf('docker/login-action'));
   assert.ok(signature.indexOf('docker/login-action') < signature.indexOf('publication.mjs sign'));
   assert.match(signature, /platform-signature-publication.mjs sign frozen-release/);
-  const release = workflow.split('\n  release:\n')[1];
-  assert.match(release, /needs: \[base-image, prepare-release, platform-signatures\]/);
-  assert.ok(release.indexOf('publication.mjs gate') < release.indexOf('gh release create'));
-  assert.ok(release.indexOf('git checkout -f -B') < release.indexOf('gh release create'));
-  assert.match(release, /getReleaseByTag/);
-  assert.match(release, /error.status !== 404/);
-  assert.match(release, /ref: \$\{\{ needs.base-image.outputs.checkout_ref \}\}/);
+  // #893: publication and bundled writeback are separate, independently resumable stages
+  // over the same frozen payload.
+  const publish = workflow.split('\n  release-publish:\n')[1].split('\n  release-writeback:\n')[0];
+  assert.match(publish, /needs: \[base-image, prepare-release, platform-signatures\]/);
+  assert.match(publish, /release-publish\.sh frozen-release signature-evidence/);
+  assert.match(publish, /ref: \$\{\{ needs.base-image.outputs.checkout_ref \}\}/);
+  const writeback = workflow.split('\n  release-writeback:\n')[1];
+  assert.match(writeback, /needs: \[base-image, prepare-release, platform-signatures\]/);
+  assert.match(writeback, /release-writeback\.sh frozen-release/);
+  // A writeback problem must never withhold or overwrite an already published Release.
+  assert.doesNotMatch(writeback, /gh release create/);
+  const publishScript = (await readFile(new URL('./release-publish.sh', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
+  assert.ok(publishScript.indexOf('publication.mjs gate') < publishScript.indexOf('gh release create'));
+  assert.ok(publishScript.indexOf('gh release view') < publishScript.indexOf('gh release create'));
+  const writebackScript = (await readFile(new URL('./release-writeback.sh', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
+  assert.ok(writebackScript.indexOf('git checkout -f -B') < writebackScript.indexOf('release-writeback.mjs'));
   assert.equal(TRUST.cosignSha256.length, 64); assert.equal(TRUST.trustedRootSha256.length, 64);
 });
 

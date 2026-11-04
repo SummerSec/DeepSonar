@@ -189,7 +189,7 @@ python scripts/deepsonar-api.py runtime-images adopt-local <imageId> --image-ref
 python scripts/deepsonar-api.py runtime-images registry
 python scripts/deepsonar-api.py runtime-images registry-channel --channel github
 python scripts/deepsonar-api.py runtime-images registry-sync
-python scripts/deepsonar-api.py runtime-images registry-apply --data @runtime-image-registry.json   # 当前为 admin-only
+python scripts/deepsonar-api.py runtime-images registry-apply --data @runtime-image-registry.json   # images:manage，项目限定 token 被拒
 python scripts/deepsonar-api.py runtime-images registry-pull
 python scripts/deepsonar-api.py runtime-images registry-pull-status
 python scripts/deepsonar-api.py runtime-images official-digest <imageId> --image-ref repo/image@sha256:... [--version 1.0.0]
@@ -208,6 +208,8 @@ python scripts/deepsonar-api.py imports preview <importId>
 python scripts/deepsonar-api.py imports apply <importId> --mode create_new [--project-name restored]
 python scripts/deepsonar-api.py imports cancel <importId>
 ```
+
+CLI 只覆盖日常主路径。**下列区域没有 CLI 子命令，直接用 `references/api.md` 里的 HTTP 契约 + `curl`**（同样受 scope 约束，不要自行拼接不存在的路径）：真实设备与租约（`/devices`、`/device-leases`）、API Token 与用户（`/tokens`、`/users`）、项目知识库（`/projects/:id/knowledge/*`）、项目 Skill 白名单（`/projects/:id/skill-sources`）、Finding 编纂检索（`candidates` / `lexical-search` / `evidence-trace`）、镜像目录对账与可见性（`/runtime-images/registry/reconcile`、`/runtime-images/:id/visibility`）。
 
 ### RoleConfig 示例（Credential 绑定 + 可选 model 覆盖 + 镜像）
 

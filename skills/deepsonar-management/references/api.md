@@ -1,7 +1,7 @@
 # DeepSonar Management API 契约
 
 > 状态：当前集成分支 API 参考；字段与授权以运行时 schema 和宿主实现为准，未验收范围明确保留。
-> 同步日期：2026-11-01
+> 同步日期：2026-11-05
 
 > **权威机器可读 schema（运行时）**：调度器提供以下豁免鉴权端点，优先以此为准。
 > - `GET /openapi.json` — OpenAPI 3.0.3 完整 JSON
@@ -177,9 +177,16 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | GET | /canvases/:id/report | tasks:read | 任务报告元数据（status / markdown_uri / sarif_uri） |
 | GET | /canvases/:id/reports | tasks:read | 画布任务报告版本历史 |
 | GET | /projects/:id/reports | tasks:read | 项目报告聚合（按任务编组总报告版本 + confirmed Finding 独立报告；可选 `canvas_id`） |
-| GET | /reports/:id/markdown | tasks:read | **非 JSON attachment**，`text/markdown; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.md"` |
+| GET | /reports/:id/markdown | report:read | **非 JSON attachment**，`text/markdown; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.md"` |
 | GET | /reports/:id/sarif | tasks:read | **非 JSON attachment**，`application/sarif+json; charset=utf-8`，`Content-Disposition: attachment; filename="report-<id>.sarif"` |
 | POST | /canvases/:id/report/retry | jobs:control | 仅 `failed` 可重试，否则 409 |
+| GET | /canvases/:id/report/availability | tasks:read | 报告可生成性投影：缺什么输入、是否冻结可投影；`GET /canvases/:id/report` 为 404 时同一份 availability 随错误返回 |
+| POST | /canvases/:id/report/refresh | jobs:control | 对同一冻结输入重算投影（幂等）；输入变化才追加版本，返回 `{ok, report_id}`，失败 409 |
+| GET | /findings/:id/candidates | findings:read | 有界候选输入页；只接 `cursor`（其他 query 拒绝）；`no-store`；cursor 失效返回 `cursor_*` 码要求无 cursor 重读；超出语句预算 503 `CANDIDATE_QUERY_BUDGET_EXCEEDED` |
+| GET | /findings/:id/lexical-search | findings:read | 字面检索（非语义关联）；同上 cursor 与 `no-store` 约束；预算超限 503 `SEARCH_BUDGET_EXCEEDED` |
+| GET | /findings/:id/evidence-trace | findings:read | Fact↔Evidence 可追溯性只读视图；`runtime_proof=false`、`replay.kind=evidence_integrity_check`，不改变 verify verdict。详见 [EVIDENCE_TRACE](../../../docs/EVIDENCE_TRACE.md) |
+| GET | /canvases/:id/finding-research | findings:read | 研究运行与去重簇投影：最近 50 次 `finding_research_runs`（含 `error`）+ canvas 内簇及其 canonical Finding（最多 1000 条）；只读，不改变 severity / verify 门 / 报告收敛 |
+| PATCH | /findings/:id/verify-status | findings:write | 人工收口 verify 状态 `{status, reason?}`；非法结构 `400 FINDING_VERIFY_STATUS_INVALID`；写 Finding 的 `verify_status` 与人工处置，不重放 `unknown` 外部效果 |
 
 ### Finding 身份与关系（#819）
 
@@ -361,7 +368,7 @@ OM 新 Job 还按 [shared registry](../../../packages/shared-types/src/pi-extens
 | GET | /runtime-images/registry | images:read | 官方目录；保留 `schema/images`，并附 `selected_channel`（`github`\|`dockerhub`\|`aliyun-acr`）、`source`、`fallback`、`error`、`checked_at` 诊断 |
 | PATCH | /runtime-images/registry/channel | images:manage | 严格 body `{channel: github\|dockerhub\|aliyun-acr}`；只允许全局/admin actor，项目限定 token 返回 `403 PROJECT_SCOPE_FORBIDDEN`；审计 `runtime_image.registry_channel_update` |
 | POST | /runtime-images/registry/sync | images:manage | 刷新官方/内置 catalog；所选 channel 用于后续镜像引用解析与 pull，不决定 catalog 来源 |
-| POST | /runtime-images/registry/apply | admin | 直接提交 registry 对象或 `{registry: ...}`；该内部运维入口未分配 `images:manage` scope |
+| POST | /runtime-images/registry/apply | images:manage | 直接提交 registry 对象或 `{registry: ...}`；内部运维入口，项目限定 token 被拒 |
 | POST | /runtime-images/registry/pull | images:manage | 启动异步拉取任务，返回 202/task |
 | GET | /runtime-images/registry/pull-status | images:read | 持久化拉取任务状态、阶段、error_code 与时间戳；重启后 in-flight 为 interrupted |
 | POST | /runtime-images/:id/detect-local | images:read | `{image_ref}`；读取本机 Docker 元数据并返回候选（不会改变信任状态） |
@@ -373,6 +380,8 @@ OM 新 Job 还按 [shared registry](../../../packages/shared-types/src/pi-extens
 | PUT | /projects/:id/runtime-images/:imageId | images:manage | `{enabled, version_id?}`；只能启用 trusted 版本，`version_id` 用于固定/回滚 |
 | POST | /runtime-images/:id/official-digest | images:approve | 管理员登记官方不可变 digest |
 | POST | /runtime-images/manual-digest | images:approve | 管理员登记手工 digest（需完整 `image_ref`） |
+| POST | /runtime-images/registry/reconcile | images:manage | 只读对账：比对节点上的镜像 digest 与 catalog；`{repair: true}` 才启动受治理的定向拉取，拓扑问题仍如实报告 |
+| PATCH | /runtime-images/:id/visibility | images:manage | `{visible_project_ids}`；仅非官方产品可设（官方对所有项目默认可见，返回 `400 RUNTIME_IMAGE_VISIBILITY_OFFICIAL`）；项目限定 token 被拒 |
 
 Job 创建时冻结 `agent_snapshot_json.runtime_image`，至少包含产品/版本 ID、`image_ref=name@sha256:digest`、`image_digest`、工具清单哈希与准入扫描 ID。任务、Hub、Skill 和外部事件都不能提供任意镜像引用。
 
@@ -400,6 +409,8 @@ DEEPSONAR_OFFICIAL_KALI_MINIMAL_IMAGE=...   # 可选，项目 opt-in
 | POST | /skill-sources/:id/sync | skills:write | 浅克隆同步（无 body；Git 不可达 502） |
 | POST | /skill-sources/:id/trust | skills:write | `{trust_status, enabled?}` |
 | DELETE | /skill-sources/:id | skills:write | 删除 |
+| GET | /projects/:id/skill-sources | skills:read | 项目级启用白名单（镜像 / CLI·Provider 同构：平台控制面启用，Hub 只在已启用集合里选型）；项目级 token 的 `:id` 必须匹配 |
+| PUT | /projects/:id/skill-sources/:sourceId | skills:write | `{enabled}`；只改本项目白名单，不改变源自身的 trust/enabled |
 
 ### Provider / OCI Registry Credential（密钥加密；明文不回显）
 
@@ -428,6 +439,13 @@ LLM `provider` 表示 Gateway wire protocol：`anthropic` = Anthropic Messages�
 | --- | --- | --- | --- |
 | PATCH | /projects/:id/settings | agents:write | `device_access_enabled: true\|false\|null` 项目级 opt-in（默认关；null 清除）。设备租约的发放前置就是它 |
 | GET | /projects/:id/settings | agents:read | 返回 `device_access_enabled` |
+| GET | /devices | tasks:read | 设备注册表：`?status=&project_id=&limit=`（默认 200，上限 500）；项目级 token 只看到本项目设备；同一响应回报每个 rig 的 `broker_configured` / `admission`，一个 rig 不可达不影响其它 rig 的结论 |
+| POST | /devices | admin | 登记设备 `{key, project_id?, rig_id, model, transport, capabilities?, spec?}`；`rig_id` 必须已在 `DEEPSONAR_DEVICE_RIGS` 配好，否则 `400 INVALID_RIG`；登记后立即推送 broker 期望集合 |
+| PATCH | /devices/:id | admin | `{action}` 改设备状态（如上下线）；返回 `{device, rig_pushes}` |
+| DELETE | /devices/:id | admin | 显式 forget 设备；存在活跃租约时 `409`，不删除执行证据 |
+| GET | /devices/:id/events | tasks:read | 该设备的 append-only 事件（不含凭据） |
+| GET | /device-leases | tasks:read | 租约列表：`?state=&job_id=&device_id=&project_id=&limit=`（默认 200，上限 500）；项目级 token 只看到本项目租约 |
+| POST | /device-leases/:id/release | admin | 手工释放该设备全部租约（复用 Job 终态释放路径：置 `released`、设备回 `idle`、通知 broker） |
 
 设备经 **device broker** 暴露为可租借端点，沙箱不直连物理设备：
 
@@ -464,10 +482,38 @@ AgentPack（`deepsonar.agentpack/v1`）是 Web 本地导入/安装格式；当�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| * | /tokens* | tokens:manage | API Token 管理 |
+| GET | /tokens | tokens:manage | API Token 列表（前缀 + 安全字段，无明文）；项目级 token 只看到本项目且受管于自己的 token |
+| POST | /tokens | tokens:manage | `{name, scopes, project_id?, expires_in_days?}`（≤365 天）；scopes 必须是调用者 scopes 的子集，越权 `403 SCOPE_EXCEEDS_ACTOR` |
+| POST | /tokens/:id/revoke | tokens:manage | 吊销；不存在或已吊销 404 |
+| POST | /tokens/:id/rotate | tokens:manage | 轮换为同 scope 新 token 并吊销旧 token |
+| GET | /users | admin | 用户列表 |
+| POST | /users | admin | `{username, password, display_name?, role: admin\|operator\|viewer}`；用户名冲突等以 `400` + `error_code` 返回 |
+| PATCH | /users/:id | admin | `{display_name?, role?, status?: active\|disabled}` |
+| POST | /users/:id/password | admin | `{password}`；改密会吊销该用户全部旧会话 |
+| POST | /auth/ws-ticket | tasks:read | `{job_id, purpose: stream\|terminal}` 换取一次性 WS ticket（秒级过期）；长期 token 不进入 WebSocket URL；`purpose=terminal` 另需 admin 或 `jobs:control` |
+| GET | /platform/updates | admin | #740 平台版本发现最近一次检查结果（可更新版本、schema 是否需重建、`check_error`）；只读，不提供升级 apply；项目级 token 拒绝 |
 | GET | /audit-logs | admin | 审计日志 |
 | GET | /ws | tasks:read | Job 实时流 WebSocket；升级入口不在 `/openapi.json` 的 HTTP operation 清单内，必须先 `POST /auth/ws-ticket` 拿一次性 ticket |
-| GET | /terminal-ws | — | Job 终端 WebSocket（同上）；`purpose=terminal` 的 ticket 需 admin 或 jobs:control |
+| GET | /terminal-ws | jobs:control | Job 终端 WebSocket（同上）；`purpose=terminal` 的 ticket 需 admin 或 jobs:control |
+
+### 项目知识库（Memory / Skill，#752）
+
+项目知识分为 Memory 与 Skill：稳定身份 + 不可变版本 + active 指针，默认项目私有。Skill 版本可按精确版本授予另一项目（不含未来版本、不可转授权，也不带来源项目的 Memory / Evidence / 凭据 / 网络 / 工具 / 镜像权限）。内容预算与生命周期见[专题](../../../docs/PROJECT_KNOWLEDGE.md)；本表只描述管理面读写。
+
+| 方法 | 路径 | Scope | 说明 |
+| --- | --- | --- | --- |
+| GET | /projects/:id/knowledge | projects:read | 目录：`?kind=&status=&query=&limit=&offset=`（`limit+1` 探测 `next_offset`）；只列元数据与 active 版本 hash |
+| GET | /projects/:id/knowledge/:itemId | projects:read | 条目详情（含 active 版本指针）；不存在 `404 KNOWLEDGE_ITEM_NOT_FOUND` |
+| GET | /projects/:id/knowledge/:itemId/versions | projects:read | 版本历史分页（`limit/offset`），含 `content_sha256`、来源、`revoked_at/reason` |
+| GET | /projects/:id/knowledge/:itemId/versions/:versionId | projects:read | 精确版本正文 + 条目摘要；只有所属项目能读历史内容，来源引用保持不透明 |
+| GET | /projects/:id/knowledge/:itemId/versions/:versionId/grants | projects:read | 该版本已发出的项目间授权（最多 100 条） |
+| POST | /projects/:id/knowledge/:itemId/versions/:versionId/grants | projects:write | `{grantee_project_id}`；仅 `kind=skill` 且已通过评测、未撤销的版本可授；自授 `400 KNOWLEDGE_GRANT_SELF`、接收方无效 `404`、条件不符 `409 KNOWLEDGE_GRANT_DENIED`、重复 `409 KNOWLEDGE_GRANT_EXISTS` |
+| POST | /projects/:id/knowledge/grants/:grantId/revoke | projects:write | 撤销授权（安全收紧，立即生效）；不存在或已撤销 `404 KNOWLEDGE_GRANT_NOT_ACTIVE` |
+| POST | /projects/:id/knowledge/:itemId/versions/:versionId/revoke | projects:write | `{reason}` 安全撤销版本，同时撤销其全部授权并把条目置 `revoked` |
+| GET | /projects/:id/knowledge/receipts | projects:read | 按 `job_id` 查该 Job 的持久操作回执（`?job_id=&limit=&offset=`） |
+| GET | /projects/:id/knowledge/receipts/:receiptId | projects:read | 回执详情；只允许所属项目读取，不为查回执延长执行 token |
+
+Agent 侧对应受治理 operation 是 `request_project_knowledge` / `search_project_knowledge` / `read_project_memory` / `pull_skill` 等（见专题），**不是**这些 HTTP 管理接口。
 
 ### Readiness / preflight（#35/#36）
 
