@@ -3683,9 +3683,13 @@ jobs:
       contents: write
       # The writeback must land through the same gate as every other change:
       # it pushes a branch, dispatches ci.yml on it (GITHUB_TOKEN pushes do not
-      # trigger workflows themselves) and waits for the required ci-summary.
+      # trigger workflows themselves), waits for the required ci-summary and then
+      # lands the branch through a pull request. A direct push to the default
+      # branch is rejected by the ruleset even when the check already passed
+      # (v0.6.7), so the PR path is the mechanism, not a convenience.
       actions: write
       checks: read
+      pull-requests: write
     env:
       FREEZE_SHA256: ${{ needs.prepare-release.outputs.freeze_sha256 }}
       RECEIPT_SHA256: ${{ needs.platform-signatures.outputs.receipt_sha256 }}
