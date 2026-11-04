@@ -13,7 +13,17 @@
 
 `.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony、Chrome、ClickHouse 与 Mobile 专项镜像与 Reverse 原生双架构镜像，最后由一个 Release job 合并真实的 buildx manifest digest，上传 `runtime-image-registry.json` artifact，并把它与 Management Skill 一起作为 GitHub Release 附件。合并前的核心定义与 base/audit/Kali 门禁在 `.github/workflows/ci.yml`；Chrome amd64 合同冒烟在 `.github/workflows/chrome-runtime.yml`，ClickHouse amd64 合同冒烟在 `.github/workflows/clickhouse-runtime.yml`，OpenHarmony test/audit/fuzz amd64/arm64 专项冒烟在 `.github/workflows/openharmony-runtime.yml`，Mobile amd64/arm64 专项冒烟在 `.github/workflows/mobile-runtime.yml`。`deepsonar-reverse` 在 `.github/workflows/reverse-runtime.yml` 使用原生 amd64/arm64 runner 构建当前 base+reverse，执行 ELF/.so/PE REA/Ghidra、真实 `docker save` / cgroup / 取消测量和 OpenSandbox Job；release 对缓存与 fresh child 执行相同门禁。脚本已接线不等于实际运行已通过。
 
-同一 Release job 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` 与 `deploy/.env.example` 中的 `DEEPSONAR_VERSION` 及三条平台镜像 digest 引用（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE`，按本次发布的 index digest 重新 inspect 写入，#740）**提交并推送到仓库默认分支**（`chore(release): sync runtime-image-registry.json and image tag for vX.Y.Z`），用于更新内置 bundled 回退清单与部署示例版本。发布准备阶段不得手写运行镜像 digest 或提前改写 bundled 清单；v0.5.3 的 Chrome / ClickHouse 六个产品选择已知陈旧，须在新 Release 真实发布证据与最终 payload 门禁通过后由 workflow 回写纠正。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。**回写必须通过默认分支的 required check（#865）**：默认分支要求 `ci-summary` 时，workflow 先把回写提交推到 `bot/sync-runtime-registry-v<version>` 分支，因为 `GITHUB_TOKEN` 推的分支不会自动触发 workflow，所以显式 `gh workflow run ci.yml --ref <branch>` 触发一次，轮询该 SHA 的 `ci-summary`：`success` 才快进推送到默认分支并删除临时分支，`failure`/`cancelled`/`timed_out`/`skipped` 或 90 分钟未结论则失败且不移动默认分支。要放行的是**同一条门禁**，不是绕过它：不要为 bot 配置 ruleset bypass、不要直推、也不要用可写 PAT 跳过必需检查。v0.6.6 首次遇到该保护规则时写回被 `Required status check "ci-summary" is expected` 拒绝（Release 未创建），本条据此落地。
+同一 Release job 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` 与 `deploy/.env.example` 中的 `DEEPSONAR_VERSION` 及三条平台镜像 digest 引用（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE`，按本次发布的 index digest 重新 inspect 写入，#740）**提交并推送到仓库默认分支**（`chore(release): sync runtime-image-registry.json and image tag for vX.Y.Z`），用于更新内置 bundled 回退清单与部署示例版本。发布准备阶段不得手写运行镜像 digest 或提前改写 bundled 清单；v0.5.3 的 Chrome / ClickHouse 六个产品选择已知陈旧，须在新 Release 真实发布证据与最终 payload 门禁通过后由 workflow 回写纠正。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。**回写必须通过默认分支的 required check（#865 / #877）**：默认分支要求 `ci-summary`，而**直推会被规则拒绝**——即使 `ci-summary` 已经在同一个 SHA 上通过（v0.6.7 实测：日志先出现 `ci-summary passed on 8f3479d4`，随后 `push declined due to repository rule violations`，Release 未创建，最终由人工从 bot 分支开 PR 才把清单合并进去）。因此回写不再直推，而是**走与人工合并相同的路径**：
+
+1. 回写提交推到 `bot/sync-runtime-registry-v<version>` 分支；
+2. `GITHUB_TOKEN` 推送的分支不会自动触发 workflow，显式 `gh workflow run ci.yml --ref <branch>`；
+3. 轮询该 SHA 的 `ci-summary`，只有 `success` 才继续（`failure`/`cancelled`/`timed_out`/`skipped` 或 90 分钟无结论即失败，默认分支不动）；
+4. 打开（或复用已存在的）回写 PR，轮询 `mergeStateStatus` 直到 `CLEAN`，再 `gh pr merge --merge`；
+5. 合并后用 `compare` 校验默认分支确实包含该回写提交，然后删除 bot 分支。
+
+失败语义：dispatch 失败、检查失败/超时、PR 无法合并（`DIRTY`/`CONFLICTING`/`BEHIND`）、合并命令失败、`compare` 未包含该提交，任何一种都**不移动默认分支**并把 bot 分支留在原地供排查；错误信息保留远端 `remote:` 行（规则拒绝的原因），不再只给退出码。
+
+要放行的是**同一条门禁**，不是绕过它：不要为 bot 配置 ruleset bypass、不要直推、也不要用可写 PAT 跳过必需检查。v0.6.6 因直推被拒（`Required status check "ci-summary" is expected`）而没产出 Release，v0.6.7 因“直推即使检查已通过仍被拒”而没产出 Release，本条据此把回写改为 PR 合并。
 
 ## 控制面镜像平台矩阵（#598）
 

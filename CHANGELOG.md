@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- **Release 回写改为经 PR 合并，直推默认分支在检查已通过时仍会被拒（#877）**：v0.6.7 的 Release 跑完镜像与签名后，回写步骤已经等到 `ci-summary passed on 8f3479d4`，紧随其后的 `git push origin HEAD:main` 仍被规则拒绝（`push declined due to repository rule violations`），Release 未创建，最终靠人工从 `bot/sync-runtime-registry-v0.6.7` 开 PR 才把清单合并进去。现在回写走与人工合并相同的路径：推 bot 分支 → 显式 dispatch `ci.yml` → 等 `ci-summary` → 开（或复用）PR → 轮询 `mergeStateStatus` 到 `CLEAN` → `gh pr merge --merge` → 用 `compare` 校验默认分支确实包含该提交 → 删除分支。任何一步失败都不移动默认分支并保留分支供排查；错误信息保留远端 `remote:` 行，不再只给退出码。没有为 bot 增加 ruleset bypass，也没有改用可写 PAT。
+
 ## [0.6.7] - 2026-11-04
 
 > 本节记录实现变化；正式发行状态与工程验收以对应 [Release](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.7) 的完整 Actions、原生双架构、配置镜像通道、签名、catalog/部署引用回写及附件证据为准，不表示生产部署已经执行。schema 保持 67，私有 workspace package 版本不变。质量、成本和 SLA 保持 `unknown` / `not_evaluated`；#834 按用户要求暂缓。

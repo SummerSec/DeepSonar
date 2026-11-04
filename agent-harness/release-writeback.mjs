@@ -1,19 +1,25 @@
 #!/usr/bin/env node
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-// Release writeback control flow (issue #865, review follow-up #866).
+// Release writeback control flow (issues #865, #877).
 //
-// The default branch requires `ci-summary`. A GITHUB_TOKEN push does not trigger
-// workflows, so the writeback pushes a bot branch, dispatches ci.yml on it, waits
-// for the required check on that exact SHA and only then fast-forwards the
-// default branch. Every failure path must leave the default branch untouched and
-// keep the bot branch for inspection.
+// The default branch requires `ci-summary` and rejects direct pushes that the rule
+// engine cannot match to a completed run, even when the check already passed on the
+// exact SHA (v0.6.7: "ci-summary passed" then "push declined due to repository rule
+// violations"). Pushing harder is not the answer, and a ruleset bypass or a
+// writable PAT would let any workflow write the default branch.
+//
+// The writeback therefore lands the same way a person lands it: push a bot branch,
+// dispatch ci.yml on it (a GITHUB_TOKEN push does not trigger workflows), wait for
+// the required check, then open a pull request and merge it. Every failure path
+// leaves the default branch untouched and keeps the branch for inspection.
 //
 // The flow is a pure function over an injected `run`, so the control flow is
 // covered by agent-harness/test-release-writeback.mjs without git, gh or network.
 
 const SUMMARY_CHECK = "ci-summary";
 const BLOCKING_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", "skipped"]);
+const UNMERGEABLE_STATES = new Set(["DIRTY", "CONFLICTING", "BEHIND", "UNKNOWN"]);
 
 export class WritebackError extends Error {
   constructor(message, code) {
@@ -28,9 +34,22 @@ function requireValue(value, name) {
   return value;
 }
 
+/**
+ * Keep the operator-visible reason, not just the exit code: `git push` rejected by a
+ * ruleset explains itself on `remote:` lines that the tail of stderr does not show.
+ */
+function failureDetail(result) {
+  const raw = String(result?.stderr ?? "").trim() || String(result?.stdout ?? "").trim();
+  if (!raw) return "";
+  const lines = raw.split("\n").map((line) => line.trim()).filter(Boolean);
+  const remote = lines.filter((line) => /^(remote:|error:|fatal:|!)/u.test(line));
+  const chosen = remote.length > 0 ? remote : lines.slice(-3);
+  return chosen.slice(0, 6).join(" | ").slice(0, 600);
+}
+
 function assertOk(result, what) {
   if (!result || result.status !== 0) {
-    const detail = String(result?.stderr ?? result?.stdout ?? "").trim().split("\n").slice(-3).join(" ");
+    const detail = failureDetail(result);
     throw new WritebackError(`${what} failed (exit ${result?.status ?? "unknown"})${detail ? `: ${detail}` : ""}`, "WRITEBACK_COMMAND_FAILED");
   }
   return result;
@@ -39,6 +58,116 @@ function assertOk(result, what) {
 function summaryConclusion(result) {
   const text = String(result?.stdout ?? "").trim();
   return text || "pending";
+}
+
+function parseJson(result, what) {
+  try {
+    return JSON.parse(String(result?.stdout ?? ""));
+  } catch (error) {
+    throw new WritebackError(`${what} returned unparsable JSON: ${error instanceof Error ? error.message : String(error)}`, "WRITEBACK_OUTPUT_INVALID");
+  }
+}
+
+async function waitForSummaryCheck({ repo, branch, sha, run, sleep, pollLimit, log }) {
+  let conclusion = "pending";
+  for (let attempt = 1; attempt <= pollLimit; attempt += 1) {
+    await sleep(attempt);
+    const poll = run("gh", ["api", `repos/${repo}/commits/${sha}/check-runs`, "--jq",
+      `[.check_runs[] | select(.name == "${SUMMARY_CHECK}")] | .[0].conclusion // "pending"`]);
+    if (poll?.status !== 0) continue; // transient API hiccup: keep polling inside the budget
+    conclusion = summaryConclusion(poll);
+    if (conclusion === "success") break;
+    if (BLOCKING_CONCLUSIONS.has(conclusion)) {
+      throw new WritebackError(`${SUMMARY_CHECK} on ${branch} concluded ${conclusion}; the default branch was not modified`,
+        "WRITEBACK_CHECK_FAILED");
+    }
+  }
+  if (conclusion !== "success") {
+    throw new WritebackError(`${SUMMARY_CHECK} on ${branch} did not conclude within ${pollLimit} polls; the default branch was not modified`,
+      "WRITEBACK_CHECK_TIMEOUT");
+  }
+  log(`${SUMMARY_CHECK} passed on ${sha}`);
+  return conclusion;
+}
+
+async function openOrReusePullRequest({ repo, branch, defaultBranch, sha, run, log }) {
+  const listed = run("gh", ["pr", "list", "--repo", repo, "--head", branch, "--base", defaultBranch,
+    "--state", "open", "--json", "number", "--jq", ".[0].number // empty"]);
+  assertOk(listed, `lookup of an existing pull request for ${branch}`);
+  const existing = String(listed.stdout ?? "").trim();
+  if (existing) {
+    log(`reusing pull request #${existing} for ${branch}`);
+    return existing;
+  }
+  const created = run("gh", ["pr", "create", "--repo", repo, "--base", defaultBranch, "--head", branch,
+    "--title", `chore(release): sync bundled runtime catalog (${sha.slice(0, 8)})`,
+    "--body", [
+      "自动生成的发布回写：把本次发布校验通过的 bundled 清单与 `deploy/.env.example` 平台镜像 digest 同步到默认分支。",
+      "",
+      `- 来源提交：\`${sha}\``,
+      `- 必需检查：\`${SUMMARY_CHECK}\` 已在该提交上通过，github-actions 之外不做任何绕过。`,
+      "- 由 `agent-harness/release-writeback.mjs` 打开并合并；不再直推默认分支（#865 / #877）。",
+      "",
+      "<!-- dsh-superagent:worker -->",
+    ].join("\n")]);
+  assertOk(created, `pull request creation for ${branch}`);
+  const url = String(created.stdout ?? "").trim();
+  const number = url.match(/\/pull\/(\d+)\s*$/u)?.[1];
+  if (!number) {
+    throw new WritebackError(`pull request creation returned no number: ${url || "(empty)"}`, "WRITEBACK_OUTPUT_INVALID");
+  }
+  log(`opened pull request #${number} for ${branch}`);
+  return number;
+}
+
+async function mergePullRequest({ repo, number, branch, defaultBranch, run, sleep, pollLimit, log }) {
+  let lastState = "UNKNOWN";
+  for (let attempt = 1; attempt <= pollLimit; attempt += 1) {
+    const view = run("gh", ["pr", "view", number, "--repo", repo, "--json", "mergeStateStatus,state"]);
+    assertOk(view, `pull request #${number} state lookup`);
+    const payload = parseJson(view, `pull request #${number} state lookup`);
+    lastState = String(payload.mergeStateStatus ?? "UNKNOWN");
+    const state = String(payload.state ?? "");
+    if (state === "MERGED") {
+      log(`pull request #${number} is already merged`);
+      return { merged: true, via: "already_merged" };
+    }
+    if (state === "CLOSED") {
+      throw new WritebackError(`pull request #${number} was closed without merging; branch ${branch} kept for inspection`,
+        "WRITEBACK_PR_MERGED_FAILED");
+    }
+    if (lastState === "CLEAN") break;
+    if (UNMERGEABLE_STATES.has(lastState)) {
+      throw new WritebackError(`pull request #${number} is ${lastState} and cannot be merged; branch ${branch} kept for inspection`,
+        "WRITEBACK_PR_MERGED_FAILED");
+    }
+    // BLOCKED / UNSTABLE / has_hooks: checks are still settling, keep waiting.
+    await sleep(attempt);
+  }
+  if (lastState !== "CLEAN") {
+    throw new WritebackError(`pull request #${number} did not become mergeable within ${pollLimit} polls (last ${lastState}); branch ${branch} kept for inspection`,
+      "WRITEBACK_PR_TIMEOUT");
+  }
+  const merged = run("gh", ["pr", "merge", number, "--repo", repo, "--merge"]);
+  assertOk(merged, `merge of pull request #${number}`);
+  log(`merged pull request #${number} into ${defaultBranch}`);
+  return { merged: true, via: "pr_merge" };
+}
+
+async function assertLanded({ repo, sha, defaultBranch, run, log }) {
+  const tip = run("gh", ["api", `repos/${repo}/commits/${defaultBranch}`, "--jq", ".sha"]);
+  assertOk(tip, `lookup of ${defaultBranch}`);
+  const tipSha = String(tip.stdout ?? "").trim();
+  // The merge commit contains the writeback commit; verify containment rather than
+  // equality so a merge commit is accepted and anything else fails closed.
+  const contains = run("gh", ["api", `repos/${repo}/compare/${sha}...${tipSha}`, "--jq", ".status"]);
+  assertOk(contains, `comparison of ${sha} with ${defaultBranch}`);
+  const status = String(contains.stdout ?? "").trim();
+  if (status !== "ahead" && status !== "identical") {
+    throw new WritebackError(`${defaultBranch} does not contain ${sha} after the merge (compare status ${status || "empty"})`,
+      "WRITEBACK_NOT_LANDED");
+  }
+  log(`verified ${defaultBranch} contains ${sha}`);
 }
 
 /**
@@ -71,32 +200,12 @@ export async function runWriteback({
   }
   log("dispatched ci.yml on the writeback branch");
 
-  let conclusion = "pending";
-  for (let attempt = 1; attempt <= pollLimit; attempt += 1) {
-    await sleep(attempt);
-    const poll = run("gh", ["api", `repos/${repo}/commits/${sha}/check-runs`, "--jq",
-      `[.check_runs[] | select(.name == "${SUMMARY_CHECK}")] | .[0].conclusion // "pending"`]);
-    if (poll?.status !== 0) continue; // transient API hiccup: keep polling inside the budget
-    conclusion = summaryConclusion(poll);
-    if (conclusion === "success") break;
-    if (BLOCKING_CONCLUSIONS.has(conclusion)) {
-      throw new WritebackError(`${SUMMARY_CHECK} on ${branch} concluded ${conclusion}; ${defaultBranch} was not modified`,
-        "WRITEBACK_CHECK_FAILED");
-    }
-  }
-  if (conclusion !== "success") {
-    throw new WritebackError(`${SUMMARY_CHECK} on ${branch} did not conclude within ${pollLimit} polls; ${defaultBranch} was not modified`,
-      "WRITEBACK_CHECK_TIMEOUT");
-  }
-  log(`${SUMMARY_CHECK} passed on ${sha}`);
-
-  try {
-    assertOk(run("git", ["push", "origin", `HEAD:${defaultBranch}`]), `push to ${defaultBranch}`);
-  } catch (error) {
-    throw new WritebackError(`${error.message}; branch ${branch} kept for inspection`, "WRITEBACK_PUSH_CONFLICT");
-  }
+  const conclusion = await waitForSummaryCheck({ repo, branch, sha, run, sleep, pollLimit, log });
+  const number = await openOrReusePullRequest({ repo, branch, defaultBranch, sha, run, log });
+  const merge = await mergePullRequest({ repo, number, branch, defaultBranch, run, sleep, pollLimit, log });
+  await assertLanded({ repo, sha, defaultBranch, run, log });
   assertOk(run("git", ["push", "origin", "--delete", branch]), `cleanup of ${branch}`);
-  return { conclusion, branch, defaultBranch, sha };
+  return { conclusion, branch, defaultBranch, sha, pullRequest: number, via: merge.via };
 }
 
 // Exact file identity: `endsWith("release-writeback.mjs")` would also match
