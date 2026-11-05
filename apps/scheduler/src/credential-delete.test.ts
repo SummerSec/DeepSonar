@@ -67,7 +67,7 @@ test("DELETE globally checks project references but keeps actor-scoped impact", 
   assert.match(handler, /credentialImpact\(tx, id, actorProjectId\)/);
   assert.match(handler, /CREDENTIAL_PROJECT_REFERENCE/);
   assert.match(handler, /next_action:/);
-  assert.doesNotMatch(handler, /UPDATE projects|DELETE FROM projects/);
+  assert.doesNotMatch(handler, /UPDATE\s+projects|DELETE\s+FROM\s+projects/);
 });
 
 test("web project-reference refusal uses full scoped count and preserves empty whitelist semantics", () => {
