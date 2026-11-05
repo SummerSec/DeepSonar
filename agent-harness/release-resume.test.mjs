@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp, mkdir, writeFile, readFile, rm, symlink} from 'node:fs/promises';
+import {mkdtemp, mkdir, writeFile, readFile, rm, cp} from 'node:fs/promises';
 import {execFileSync, spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
@@ -140,7 +140,8 @@ test('release lookup distinguishes absence, completed release, draft and API fai
 test('real publish shell gates custom signature directory, creates once and never treats API errors as absence', async () => {
   const f = await fixture();
   try {
-    await symlink(resolve('agent-harness'), join(f.root, 'agent-harness'));
+    await cp(resolve('agent-harness'), join(f.root, 'agent-harness'), {recursive: true});
+    await cp(resolve('deploy'), join(f.root, 'deploy'), {recursive: true});
     const bin = join(f.root, 'bin'); await mkdir(bin);
     const gh = `#!/usr/bin/env node
 const fs = require('node:fs');
@@ -239,7 +240,8 @@ exec /bin/bash "$@"
         const workspace = join(f.root, `${selection}-${stage}`);
         git(f.root, 'clone', '--quiet', origin, workspace);
         git(workspace, 'checkout', '--detach', head);
-        await symlink(resolve('agent-harness'), join(workspace, 'agent-harness'));
+        await cp(resolve('agent-harness'), join(workspace, 'agent-harness'), {recursive: true});
+        await cp(resolve('deploy'), join(workspace, 'deploy'), {recursive: true});
         const runtime = {...process.env, ...env, GITHUB_SHA: head, STAGES: selection, GH_TOKEN: 'fixture',
           FIXTURE_ROOT: f.root, EFFECTS: effects, PATH: `${bin}:${process.env.PATH}`, WRITEBACK_EXIT: selection === 'both' ? '1' : '0'};
         for (const step of job.steps.filter(step => step.run && (!step.if || step.if === `matrix.stage == '${stage}'`))) {
