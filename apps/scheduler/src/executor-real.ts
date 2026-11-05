@@ -1814,7 +1814,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         if (platformApiEnabled) {
           registerRuntimeHandler(jobId, runtimePlatformHandler, platformOperations);
           registerRuntimeTerminalState(jobId, attemptId!, () => semanticState.human ? "human"
-            : semanticState.done ? "done" : semanticState.hub ? "hub_decision" : null);
+            : semanticState.done ? "done" : semanticState.hub ? "hub_decision" : null, () => semanticState.human?.subject ?? null);
           platformRuntimeRegistered = true;
         }
         const disposeHumanMessages = await registerHumanMessageRuntime(jobId, { sendMessage, writeWorkspaceFile });

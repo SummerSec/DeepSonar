@@ -239,15 +239,16 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
     if (current && (current.blocker || current.allowed_actions.includes("correct_proposal"))) {
       const unknown = current.allowed_actions.includes("reconcile_effects");
       const human = current.allowed_actions.includes("wait_for_human");
+      const platformWait = current.allowed_actions.includes("wait_for_platform");
       const correct = current.allowed_actions.includes("correct_proposal") && Boolean(job.error);
       if (current.blocker || correct) actions.push({
         id: `job:${job.id}:current`, kind: unknown ? "unknown_effect" : human ? "human_decision" : correct ? "model_repair" : "platform_blocker",
-        title: human ? "已接受人工请求，等待处理" : correct ? "当前执行可修正提案" : "按宿主当前恢复状态处理",
+        title: human ? "已接受人工请求，等待处理" : platformWait ? "已接受平台阻塞，等待配置或授权修复" : correct ? "当前执行可修正提案" : "按宿主当前恢复状态处理",
         reason: current.blocker ?? "当前 Attempt 可提交修正；提交时仍会重新准入",
         impact: unknown ? "未决效果必须先对账" : "历史回执不授予继续执行权限",
         evidence_refs: [`job:${job.id}`],
         recommended_action: unknown ? "confirm_unknown_effect" : human ? "reply_to_agent" : correct ? "correct_proposal"
-          : current.allowed_actions.includes("request_recovery") ? "request_recovery" : "inspect_recovery",
+          : platformWait ? "inspect_recovery" : current.allowed_actions.includes("request_recovery") ? "request_recovery" : "inspect_recovery",
         reversible: !unknown, next_state: status, priority: "high",
       });
       continue;

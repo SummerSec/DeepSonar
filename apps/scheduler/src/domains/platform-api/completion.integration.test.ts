@@ -25,7 +25,7 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
     await sql`INSERT INTO projects(id,name) VALUES(${projectId},'completion test')`;
     const setup = async (failFirstLiveCommit = false) => {
       const jobId = randomUUID();
-      const snapshot = { name: "audit", platform_tools: ["mark_job_done", "emit_progress"] };
+      const snapshot = { name: "audit", platform_tools: ["mark_job_done", "emit_progress", "request_human"] };
       await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
         VALUES(${jobId},${projectId},'audit','running',${sql.json(snapshot)},now(),3600,now()+interval '1 hour')`;
       const attempt = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, jobId));
@@ -69,6 +69,22 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
       const waiting = await current();
       assert.equal(waiting.accepted_terminal, "human", "accepted live human state is visible before delayed semantic settlement");
       assert.equal(waiting.allowed_actions.includes("correct_proposal"), false);
+      assert.equal(waiting.human_wait_kind, "unknown");
+      assert.equal(waiting.allowed_actions.includes("wait_for_human"), false, "untyped waiting is not a human decision");
+      for (const kind of ["credential", "authorization", "high_risk_action", "business_decision"] as const) {
+        registerRuntimeTerminalState(runner.jobId, runner.attemptId, () => terminal,
+          () => ({ type: "platform_blocker", kind }));
+        const projection = await current();
+        assert.equal(projection.accepted_terminal, "human", "accepted semantics never disappear");
+        assert.equal(projection.human_wait_kind, kind);
+        assert.equal(projection.allowed_actions.includes("wait_for_human"), ["high_risk_action", "business_decision"].includes(kind));
+        assert.equal(projection.allowed_actions.includes("wait_for_platform"), ["credential", "authorization"].includes(kind));
+        assert.equal(projection.allowed_actions.includes("correct_proposal"), false);
+      }
+      registerRuntimeTerminalState(runner.jobId, runner.attemptId, () => terminal,
+        () => ({ type: "finding", finding_id: randomUUID(), subject_revision: "synthetic-v1" }));
+      assert.equal((await current()).human_wait_kind, "finding");
+      assert.equal((await current()).allowed_actions.includes("wait_for_human"), true);
       terminal = null;
       const before = await current();
       assert.deepEqual(before.allowed_actions, ["correct_proposal"]);
@@ -84,6 +100,24 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
       assert.equal(after.allowed_actions.includes("correct_proposal"), false);
       assert.deepEqual((await runner.get(key)).json(), historical, "accepted state does not rewrite the old rejection");
       assert.equal(runner.calls.prepare, 1);
+    });
+    await t.test("persisted human subject preserves platform versus decision ownership after registry loss", async () => {
+      const { readCompletionExecutionState } = await import("./completion-state.js");
+      const { createEventIngestionApplication } = await import("../event-ingestion/application.js");
+      for (const kind of ["credential", "authorization", "high_risk_action", "business_decision"] as const) {
+        const runner = await setup();
+        await createEventIngestionApplication(sql, async () => {}).ingestEvent(runner.jobId, {
+          v: 1, event_id: randomUUID(), type: "human", payload: {
+            reason: "Synthetic accepted wait preserves its concrete governing subject.", subject: { type: "platform_blocker", kind },
+          },
+        });
+        api.unregisterRuntimeHandler(runner.jobId);
+        const current = await readCompletionExecutionState(sql, runner.jobId);
+        assert.equal(current?.accepted_terminal, "human"); assert.equal(current?.human_wait_kind, kind);
+        assert.equal(current?.allowed_actions.includes("correct_proposal"), false);
+        assert.equal(current?.allowed_actions.includes("wait_for_human"), ["high_risk_action", "business_decision"].includes(kind));
+        assert.equal(current?.allowed_actions.includes("wait_for_platform"), ["credential", "authorization"].includes(kind));
+      }
     });
     // Real adapter/framer + HTTP/PostgreSQL; synthetic process and controlled handler.
     // This matrix tests protocol plumbing, not model understanding or executeReal semantics.

@@ -55,14 +55,17 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       }
       assert.fail("synthetic Gateway settlement did not finish");
     };
-    const setup = async (repairLimit = 30) => {
+    const setup = async (repairLimit = 30, existingCanvasId?: string, snapshotOverrides: Record<string, unknown> = {}) => {
       config.gateway.repairMaxTokens = repairLimit;
       await sql`UPDATE role_configs SET model='model-a',version=version+1 WHERE id=${roleConfigId}`;
-      const canvasId = `repair-${randomUUID()}`, jobId = randomUUID();
-      await sql`INSERT INTO canvases(id,project_id,title,target_json)
-        VALUES(${canvasId},${projectId},'synthetic repair',${sql.json({ network_policy: { allow_egress: false } })})`;
-      await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status,body_json) VALUES(${canvasId},'root','root','active','{}')`;
-      const snapshot = await snapshots.freezeAgentSnapshotNetworkPolicy(sql, canvasId, await core.resolveAgentSnapshotForJob(sql, projectId, roleName));
+      const canvasId = existingCanvasId ?? `repair-${randomUUID()}`, jobId = randomUUID();
+      if (!existingCanvasId) {
+        await sql`INSERT INTO canvases(id,project_id,title,target_json)
+          VALUES(${canvasId},${projectId},'synthetic repair',${sql.json({ network_policy: { allow_egress: false } })})`;
+        await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status,body_json) VALUES(${canvasId},'root','root','active','{}')`;
+      }
+      const snapshot = { ...await snapshots.freezeAgentSnapshotNetworkPolicy(sql, canvasId, await core.resolveAgentSnapshotForJob(sql, projectId, roleName)),
+        ...snapshotOverrides }; // Synthetic historical snapshots may deliberately lack required authority.
       await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
         VALUES(${jobId},${projectId},${canvasId},${roleName},'running',${sql.json(snapshot as never)},now(),3600,now()+interval '1 hour')`;
       await sql`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json) VALUES(${canvasId},${jobId},'job','repair','running','{}')`;
@@ -270,6 +273,58 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
       await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
     });
+
+    const captureBatch = async (canvasId: string, ids: string[]) => {
+      const rows = await Promise.all([
+        sql`SELECT to_jsonb(j) AS row FROM jobs j WHERE id=ANY(${ids}::uuid[]) ORDER BY id`,
+        sql`SELECT to_jsonb(a) AS row FROM job_attempts a WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,attempt_no`,
+        sql`SELECT to_jsonb(e) AS row FROM events e WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,job_seq`,
+        sql`SELECT to_jsonb(d) AS row FROM event_dedup d WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,event_id`,
+        sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,id`,
+        sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,id`,
+        sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,id`,
+        sql`SELECT to_jsonb(t) AS row FROM job_capability_tokens t WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,id`,
+        sql`SELECT to_jsonb(c) AS row FROM canvases c WHERE id=${canvasId}`,
+        sql`SELECT to_jsonb(n) AS row FROM canvas_nodes n WHERE canvas_id=${canvasId} ORDER BY id`,
+      ]);
+      return JSON.parse(JSON.stringify(rows));
+    };
+    for (const blocker of ["unknown", "paused", "quota", "target_authorization"] as const) {
+      await t.test(`task resume-session: ${blocker} denies an entire orphan batch before any mutation`, async () => {
+        const deniedContract = { schema_version: 1, template_id: "engineering", template_version: 1,
+          objective: "Synthetic target write needs a frozen grant", targets: ["http://127.0.0.1:9/synthetic"],
+          scope: ["synthetic draft only"], acceptance: ["Read back synthetic change"], evidence: ["synthetic receipt"],
+          stop_conditions: ["Stop without target authorization"], required_actions: ["write"], allowed_actions: ["write"],
+          identity: { tenant: "synthetic", role: "editor", resource: "draft" } };
+        const first = await setup(30, undefined, blocker === "target_authorization" ? { task_contract: deniedContract } : {});
+        const second = await setup(30, first.canvasId);
+        if (blocker === "unknown") {
+          await attempts.beginEffect(sql, String(second.oldAttempt.id), { effectId: "batch-unknown", kind: "agent_run", step: 1,
+            replayPolicy: "never", intent: { fixture: true } });
+          await attempts.markEffectUnknown(sql, String(second.oldAttempt.id), "batch-unknown", "synthetic unresolved effect");
+        }
+        await first.stop("failed"); await second.stop("failed");
+        const ids = [first.jobId, second.jobId];
+        await sql`UPDATE jobs SET status='orphan',error='调度器重启（执行中断）' WHERE id=ANY(${ids}::uuid[])`;
+        // Preserve non-default convergence so a premature unpause is observable.
+        await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ convergence: {
+          hub_paused: true, auto_stopped: true, paused_reason: "synthetic retained reason", paused_at: "2026-01-01T00:00:00.000Z" },
+          ...(blocker === "paused" ? { execution_control: { paused: true, reason: "synthetic operator pause" } } : {}) })}
+          WHERE id=${first.canvasId}`;
+        if (blocker === "quota") await sql`UPDATE job_tokens SET used_requests=max_requests WHERE job_id=${second.jobId}`;
+        const before = await captureBatch(first.canvasId, ids);
+        const result = await app.inject({ method: "POST", url: `/tasks/${first.canvasId}/resume-session` });
+        assert.equal(result.statusCode, 409, result.body);
+        const expected = { unknown: "REPAIR_EFFECT_UNRESOLVED", paused: "REPAIR_PAUSED", quota: "REPAIR_REQUESTS_EXHAUSTED",
+          target_authorization: "TARGET_AUTHORIZATION_BLOCKED" }[blocker];
+        assert.equal(result.json().error_code, expected, result.body);
+        assert.deepEqual(await captureBatch(first.canvasId, ids), before,
+          "blocked batch preserves every Job/snapshot, Attempt/effect/ledger, receipt, token and Canvas convergence/node");
+        for (const id of ids) await assertNoGeneration(id);
+        if (blocker === "unknown" || blocker === "quota") assert.equal(result.json().job_id, second.jobId,
+          "a safe first sibling must not be mutated before a later sibling is denied");
+      });
+    }
 
     await t.test("request quota and ordinary provision retry cannot mint fresh repair capacity", async () => {
       const exhausted = await setup(); await exhausted.stop("failed");

@@ -268,6 +268,29 @@ async function resetReportState(tx: typeof sql, jobId: string): Promise<void> {
     WHERE report_job_id = ${jobId} AND status = 'failed'`;
 }
 
+/** Shared read-only target authorization gate; callers hold Canvas -> Job. */
+export async function requeueTargetAuthorizationBlockers(tx: typeof sql, job: Record<string, unknown>,
+  currentSnapshot: unknown, mode: "resume-frozen" | "rerun-current"): Promise<TaskContractFeedback[]> {
+  const storedSnapshot = objectValue(job.agent_snapshot_json);
+  const storedTargetAuthorization = storedSnapshot.target_authorization;
+  const currentSnapshotObject = objectValue(currentSnapshot);
+  const targetAuthorization = mode === "resume-frozen" ? storedTargetAuthorization : currentSnapshotObject.target_authorization;
+  const executionSnapshot = mode === "resume-frozen" ? storedSnapshot : currentSnapshotObject;
+  const taskContract = frozenTaskContract(executionSnapshot);
+  if (!taskContract) return [];
+  const payload = objectValue(job.payload_json);
+  const rules = await rulesForProject(tx, String(job.project_id));
+  return taskContractPreflight(tx, String(job.project_id), taskContract,
+    Boolean(objectValue(executionSnapshot.network_policy).allow_egress) && rules.allowEgress, {
+      principalId: targetAuthorization && typeof targetAuthorization === "object" && !Array.isArray(targetAuthorization)
+        && typeof (targetAuthorization as SnapshotObject).principal_id === "string"
+        ? (targetAuthorization as SnapshotObject).principal_id as string : null,
+      content: typeof payload.content === "string" ? payload.content : undefined,
+      frozenTargetAuthorization: targetAuthorization,
+      requireFrozenTargetAuthorization: true,
+    });
+}
+
 /**
  * Re-enqueue one recoverable Job. Both modes resolve the complete current
  * snapshot under the dispatcher admission lock. resume rejects identity drift
@@ -364,44 +387,18 @@ export async function requeueJob(
     // Target authorization is a live, read-only authority check.  It runs
     // before Attempt interruption, grant revocation, or the pending transition
     // so a revoked/expired target cannot make a new historical side effect.
-    const storedSnapshot = objectValue(job.agent_snapshot_json);
-    const storedTargetAuthorization = storedSnapshot.target_authorization;
-    const currentSnapshotObject = objectValue(currentSnapshot);
-    const targetAuthorizationForCheck = mode === "resume-frozen"
-      ? storedTargetAuthorization
-      : currentSnapshotObject.target_authorization;
-    const taskContract = frozenTaskContract(currentSnapshot);
-    if (taskContract) {
-      const targetAuthorization = targetAuthorizationForCheck;
-      const payload = objectValue(job.payload_json);
-      const rules = await rulesForProject(tx, String(job.project_id));
-      const blockers = await taskContractPreflight(
-        tx,
-        String(job.project_id),
-        taskContract,
-        Boolean(objectValue(currentSnapshot.network_policy).allow_egress) && rules.allowEgress,
-        {
-          principalId: targetAuthorization && typeof targetAuthorization === "object" && !Array.isArray(targetAuthorization)
-            && typeof (targetAuthorization as SnapshotObject).principal_id === "string"
-            ? (targetAuthorization as SnapshotObject).principal_id as string
-            : null,
-          content: typeof payload.content === "string" ? payload.content : undefined,
-          frozenTargetAuthorization: targetAuthorization,
-          requireFrozenTargetAuthorization: true,
+    const blockers = await requeueTargetAuthorizationBlockers(tx, job, currentSnapshot, mode);
+    if (blockers.length > 0) {
+      return {
+        kind: "target_authorization_blocked" as const,
+        detail: {
+          job_id: jobId,
+          stale_fields: ["target_authorization"],
+          resolution_error: "目标授权 authority 未确认当前项目、目标、主体、动作或前置条件",
         },
-      );
-      if (blockers.length > 0) {
-        return {
-          kind: "target_authorization_blocked" as const,
-          detail: {
-            job_id: jobId,
-            stale_fields: ["target_authorization"],
-            resolution_error: "目标授权 authority 未确认当前项目、目标、主体、动作或前置条件",
-          },
-          blockers,
-          provenance,
-        };
-      }
+        blockers,
+        provenance,
+      };
     }
 
     // Fence effect intent writers before inspecting the old ledger. An idle DB

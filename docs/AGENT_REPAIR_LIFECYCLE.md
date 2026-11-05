@@ -39,3 +39,6 @@
 本地只进行静态阅读与 `git diff --check`；测试、构建、typecheck 在 GitHub Actions。新增恢复测试使用隔离随机 PostgreSQL、假凭据、loopback 假上游和受控 runtime handler；真实 HTTP handler、预算、回执和最终 ingestion 属于工程覆盖，不是生产运行或真实模型理解。当前源码存在不等于最终 SHA 全绿。
 
 界面复用已有 Job 诊断和恢复入口，不增加通知/配置；当前状态明确区分等待人、平台对账和可请求恢复。没有宿主许可时不显示“安全重试”，减少用户误判和重复点击；响应仍需服务端实时准入。
+
+
+当前状态保留 `accepted_terminal=human` 的接受事实，并返回 `human_wait_kind` / `wait_owner`。credential 指向平台管理员修复，authorization 指向有权限的操作员；high_risk_action、business_decision 和 Finding 判断仍是明确人工决策。无类型历史只提示检查，不猜测需要回复 Agent。此分类不解除人工等待、不自动恢复、不授予授权。任务级批量恢复与单 Job 恢复共用实时目标授权预检；全批次通过后才改变 convergence、代际、Attempt 或 grants。

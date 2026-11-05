@@ -165,6 +165,10 @@ test("host current projection governs repair, human wait and recovery independen
   assert.equal(project("running", ["correct_proposal"], null)?.recommended_action, "correct_proposal");
   assert.equal(project("waiting_human", ["reconcile_effects"], "effects_require_reconciliation")?.kind, "unknown_effect");
   assert.equal(project("waiting_human", ["wait_for_human"], "human_already_accepted")?.recommended_action, "reply_to_agent");
+  const platform = project("waiting_human", ["wait_for_platform", "request_recovery"], "platform_blocker_accepted");
+  assert.equal(platform?.kind, "platform_blocker");
+  assert.equal(platform?.recommended_action, "inspect_recovery", "configuration/authority repair is not an Agent reply or automatic resume");
+  assert.notEqual(project("waiting_human", ["inspect_state"], "wait_subject_unknown")?.recommended_action, "reply_to_agent");
   assert.equal(project("failed", ["request_recovery"], "execution_inactive")?.recommended_action, "request_recovery");
   assert.equal(project("failed", ["inspect_state"], "REPAIR_DEADLINE_EXHAUSTED")?.recommended_action, "inspect_recovery");
   const ended = projectTaskActions({ jobs: [{ id: "ended", status: "failed", error: "invalid_payload" }] })[0];

@@ -30,6 +30,7 @@ import {
   frozenSnapshotStaleDetail,
   isSnapshotUnresolvableError,
   requeueJob,
+  requeueTargetAuthorizationBlockers,
   revokeOldRuntimeGrants,
   type SnapshotStaleDetail,
 } from "../job-control/rerun.js";
@@ -996,6 +997,11 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           convergence: null,
         };
       }
+      for (const worker of interruptedWorkers) {
+        const blockers = await requeueTargetAuthorizationBlockers(tx, worker, worker.agent_snapshot_json, "resume-frozen");
+        if (blockers.length) return { jobs: [], active: [], stale: [], convergence: null,
+          authorizationBlocked: { job_id: String(worker.id), blockers } };
+      }
       const convergence = interruptedWorkers.length > 0
         ? await patchCanvasConvergence(tx, canvasId, {
             hub_paused: false,
@@ -1039,6 +1045,10 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         convergence,
       };
     });
+    if ("authorizationBlocked" in interruptedBatch && interruptedBatch.authorizationBlocked) {
+      return reply.code(409).send({ error: "目标授权已失效；先修复授权", error_code: "TARGET_AUTHORIZATION_BLOCKED",
+        ...interruptedBatch.authorizationBlocked, next_action: "fix-target-authorization" });
+    }
     if ("repairBlocked" in interruptedBatch && interruptedBatch.repairBlocked) {
       return reply.code(409).send({ error: interruptedBatch.repairBlocked.reason,
         error_code: interruptedBatch.repairBlocked.code, job_id: interruptedBatch.repairBlocked.job_id,

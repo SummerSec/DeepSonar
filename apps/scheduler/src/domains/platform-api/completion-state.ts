@@ -2,7 +2,7 @@ import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
 import { sql } from "../../db.js";
 import { COMPLETION_REPAIR_LIMIT } from "../event-ingestion/completion-receipt.js";
 import { readRepairTokenBudget } from "../event-ingestion/repair-token-budget.js";
-import { listRuntimeHandlers, readRuntimeTerminalState } from "./registry.js";
+import { listRuntimeHandlers, readRuntimeTerminalState, readRuntimeHumanSubject } from "./registry.js";
 
 /** Read-only advice, never a grant. Every write rechecks authorization and lifecycle. */
 export async function readCompletionExecutionState(db: typeof sql, jobId: string) {
@@ -17,7 +17,7 @@ export async function readCompletionExecutionState(db: typeof sql, jobId: string
     const budget = await readRepairTokenBudget(tx, jobId);
     const [history] = await tx`SELECT COUNT(*)::int AS count,MAX((payload_json->>'proposal_revision')::int) AS revision
       FROM events WHERE job_id=${jobId} AND type='control_receipt' AND payload_json->>'operation'='mark_job_done'`;
-    const [accepted] = await tx`SELECT event_id,type FROM events WHERE job_id=${jobId}
+    const [accepted] = await tx`SELECT event_id,type,payload_json FROM events WHERE job_id=${jobId}
       AND attempt_id=${attempt?.id ?? null} AND (type='human' OR (type='control_receipt'
       AND payload_json->>'operation'='mark_job_done' AND payload_json->>'status'='persisted_deferred'))
       ORDER BY job_seq DESC LIMIT 1`;
@@ -31,9 +31,16 @@ export async function readCompletionExecutionState(db: typeof sql, jobId: string
     const localTerminal = attempt ? readRuntimeTerminalState(jobId, String(attempt.id)) : null;
     const acceptedTerminal = localTerminal === "human" || accepted?.type === "human" || job.status === "waiting_human" ? "human"
       : localTerminal === "done" || accepted ? "done" : localTerminal;
+    const subject = (attempt ? readRuntimeHumanSubject(jobId, String(attempt.id)) : null)
+      ?? (accepted?.type === "human" ? accepted.payload_json?.subject : null);
+    const humanWaitKind = acceptedTerminal !== "human" ? null : subject?.type === "finding" ? "finding"
+      : subject?.type === "platform_blocker" && ["authorization", "credential", "high_risk_action", "business_decision"].includes(subject.kind)
+        ? String(subject.kind) : "unknown";
+    const platformWait = humanWaitKind === "authorization" || humanWaitKind === "credential";
+    const decisionWait = humanWaitKind === "finding" || humanWaitKind === "high_risk_action" || humanWaitKind === "business_decision";
     if (Number(effects.count) > 0 || (budget && budget.usage_status !== "known")) blocker = "effects_require_reconciliation";
     else if (acceptedTerminal === "done") blocker = "completion_already_accepted";
-    else if (acceptedTerminal === "human") blocker = "human_already_accepted";
+    else if (acceptedTerminal === "human") blocker = platformWait ? "platform_blocker_accepted" : decisionWait ? "human_already_accepted" : "wait_subject_unknown";
     else if (admission?.blocker) blocker = admission.blocker.code;
     else if (budget?.deadline && Date.parse(budget.deadline) <= Date.now()) blocker = "repair_deadline_exhausted";
     else if (history.count >= COMPLETION_REPAIR_LIMIT || budget?.remaining_tokens === 0) blocker = "repair_budget_exhausted";
@@ -44,14 +51,16 @@ export async function readCompletionExecutionState(db: typeof sql, jobId: string
     if (blocker === "effects_require_reconciliation") actions.push("reconcile_effects");
     else if (acceptedTerminal === "done") actions.push("read_receipt", "wait_for_settlement");
     else if (acceptedTerminal === "human") {
-      actions.push("wait_for_human");
+      actions.push(platformWait ? "wait_for_platform" : decisionWait ? "wait_for_human" : "inspect_state");
       if (job.status === "waiting_human" && !admission?.blocker) actions.push("request_recovery");
     }
     else if (blocker && ["failed", "timeout", "orphan"].includes(job.status)
       && blocker !== "repair_budget_exhausted" && !admission?.blocker) actions.push("request_recovery");
     else if (blocker) actions.push("inspect_state");
     return { authority: "scheduler" as const, status: String(job.status), active_attempt_id: attempt?.status === "active" ? String(attempt.id) : null,
-      accepted_terminal: acceptedTerminal, allowed_actions: actions, blocker,
+      accepted_terminal: acceptedTerminal, human_wait_kind: humanWaitKind,
+      wait_owner: humanWaitKind === "credential" ? "platform_administrator" : humanWaitKind === "authorization" ? "authorized_operator"
+        : decisionWait ? "human_decision_maker" : acceptedTerminal === "human" ? "undetermined" : null, allowed_actions: actions, blocker,
       next_proposal_revision: Number(history.revision ?? -1) + 1,
       remaining_attempts: Math.max(0, COMPLETION_REPAIR_LIMIT - Number(history.count)),
       current_state_ref: `/control/v1/jobs/${jobId}/operations/mark_job_done`,
