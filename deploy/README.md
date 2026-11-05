@@ -80,7 +80,7 @@ Linux 使用 `flock` 和文件/目录 `fsync`；Windows 原生后端使用本地
 
 ### 未知效果的人工结清（#899）
 
-对账 CLI 的 `apply` 只结清能由平台证据判定的效果。`interrupted` 尝试上的 `agent_run` 属于证据上永远不可判定的一类（中断路径没有进程退出证据），会让跨 schema 升级一直停在 `UNSETTLED_SOURCE_EFFECTS`。此时用一次性人工结清，而不是手改库：
+对账 CLI 的 `apply` 只结清能由平台证据判定的效果。`interrupted` 尝试上的 `agent_run` 在没有正面退出证据时不可自动判定，会让升级计划一直停在 `UNSETTLED_SOURCE_EFFECTS`。此时用一次性人工结清，而不是手改库：
 
 ```bash
 node apps/scheduler/dist/platform-upgrade-reconcile-cli.js <<'JSON'
@@ -92,6 +92,20 @@ JSON
 ```
 
 约束：一次只结清一个 effect（无批量入口）；`outcome` 仅限 `not_applied`、`applied_run_terminated`、`delivered`；`evidence` 必填并进 `settlement_json.operator_evidence`；重复调用返回未结清；**不会**改变 `replay_policy`，也不会自动重放。
+
+`settle` 的机器结果（2026-11-05 核对）：
+
+| 字段 / 退出码 | 含义 |
+| --- | --- |
+| `ok=true` / exit 0 | 本次单条结清成功，且已读到后续全局计数；不表示可以升级 |
+| `settled` / `applied` | 本次是否写入 / 写入条数；重复、目标不存在、active 目标均为 false / 0，`ok=false` / exit 1 |
+| `remaining_unknown` | 写入后单次查询的全库 `unknown` + `effect_pending` 数量，包含 active Attempt 且不受扫描 limit 限制 |
+| `backlog_clear` | 上述计数是否为零；独立于单条结果，例如重复结清可为 `ok=false, backlog_clear=true` |
+| 查询或输入失败 | `ok=false` / exit 1；未经核验的 `remaining_unknown`、`backlog_clear` 为 null，绝不假报零 |
+
+若 UPDATE 已确认成功但后续计数失败，保留 `settled=true, applied=1`，整体 `ok=false`，须重新查询和执行升级 plan；若数据库写入结果本身未知，`applied=null`，不能据此假定没有写入。错误仅输出白名单码，凭据只经 stdin，证据说明不要包含秘密。人工证据保留于原效果行的 `settlement_json` 和 `evidence_ref`，重复请求或迟到内核结算不能覆盖；不创建另一套账本。
+
+`scan` / `apply` 的 summary 是有限扫描、排除 active 的分类结果，不能当全局升级许可；`settle` 的全局计数也只是观察时点。升级控制器仍独立检查效果、Job、维护身份、暂停与审批，不得修改维护状态绕过门禁。active 拒绝与内核后续结算、双连接竞争、CLI 计数和 plan gate 回归接在 `pnpm ci:integration:platform-upgrade` 的隔离 PostgreSQL Actions 中；本地不执行。工程验收须以最终 SHA 的完整 Actions 成功为准；本变更没有执行 s66 人工结清或生产升级，也不证明现场已恢复。
 
 默认关闭的 `upgrade auto`、维护窗口、签名准入和禁用调度模板见 [自动升级说明](UPGRADE_AUTOMATION.md)。生产 Release keyless 签名权限及实际正向链路尚未启用或验收，不能据临时密钥测试宣称生产无人值守升级已可用。
 

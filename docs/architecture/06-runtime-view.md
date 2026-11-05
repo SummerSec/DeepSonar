@@ -189,3 +189,7 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 ## Plan 未派发路线修订（#775 v1 历史）
 
 该 v1 路线修订仅作为不可变历史记录读取；当前路线修改使用上文 v2 `execution_route` CAS。历史事件、快照和回执不改写，未知效果、待结算回执或失效目标都不能借旧协议恢复执行。详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。
+
+## 操作员效果结清（#899）
+
+FR-JOB-005 的人工路径复用 `job_attempt_effects`：同一 UPDATE 排除 active Attempt 并只写未结清行；已结清证据不可覆盖，不改变 Attempt 程序计数器或 replay policy。CLI 将本次单条写入结果与独立全局计数分开，计数失败不能宣称清空；字段和退出契约见[部署说明](../../deploy/README.md#未知效果的人工结清899)。隔离 PostgreSQL 回归覆盖真实内核结算和锁竞争，最终 SHA Actions 成功才作为工程验收，未执行生产升级。

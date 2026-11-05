@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { MigrationConnection } from "../../migration-runner.js";
-import { runEffectReconcile, scanUnknownEffects, settleEffectByOperator } from "./reconcile-effects-runner.js";
+import { countUnsettledEffects, runEffectReconcile, scanUnknownEffects, settleEffectByOperator } from "./reconcile-effects-runner.js";
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -182,4 +182,12 @@ test("an effect on a still-active attempt is left to the kernel", async () => {
   });
   assert.equal(result.settled, false, "an active attempt must not be settled from outside");
   assert.match(statements.join("\n"), /NOT EXISTS \(\s*SELECT 1 FROM job_attempts a WHERE a\.id = e\.attempt_id AND a\.status = 'active'/);
+});
+
+
+test("global count refuses missing or invalid query results rather than reporting zero", async () => {
+  for (const rows of [[], [{ count: null }], [{ count: -1 }], [{ count: "NaN" }], [{ count: 0.5 }]]) {
+    const db = Object.assign(async () => [], { unsafe: async () => rows }) as unknown as MigrationConnection;
+    await assert.rejects(countUnsettledEffects(db), /INVALID_UNSETTLED_EFFECT_COUNT/);
+  }
 });
