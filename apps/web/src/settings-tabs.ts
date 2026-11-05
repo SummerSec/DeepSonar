@@ -55,7 +55,7 @@ export function settingsSectionDataNeeds(projectId: string | null, section: Glob
   return {
     agent: Boolean(projectId || section === "agents"),
     modules: Boolean(projectId || section === "agents" || section === "modules"),
-    roleCredentialBindings: false,
+    providerCredentials: Boolean(projectId),
   };
 }
 

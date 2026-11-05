@@ -636,8 +636,6 @@ export function projectProviderRuntimeSnapshot(input: {
       };
     }
   }
-  const upstreamSource = input.agentCli === "pi" && model ? (splitPiModelRef(model).modelId || model) : model;
-  const upstreamModel = resolveEffectiveModel({ roleModel: upstreamSource, agentCli: input.agentCli, settingsConfig }) ?? upstreamSource;
   let piProvider: string | null = null;
   if (input.agentCli === "pi" && model) {
     const selected = resolvePiCliLaunchSelection({
@@ -648,6 +646,7 @@ export function projectProviderRuntimeSnapshot(input: {
     model = selected.cliModel;
     piProvider = selected.provider;
   }
+  const upstreamModel = resolveEffectiveModel({ roleModel: model, agentCli: input.agentCli, settingsConfig }) ?? model;
   return {
     model,
     upstream_model: upstreamModel,

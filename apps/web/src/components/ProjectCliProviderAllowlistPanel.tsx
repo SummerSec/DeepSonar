@@ -55,6 +55,7 @@ function compatibleClis(credential: ProviderCredential): string {
 export function ProjectCliProviderAllowlistPanel({
   projectId,
   credentials,
+  credentialLoadState,
   enabledAgentClis,
   enabledCredentialIds,
   credentialIdsConfigured,
@@ -63,6 +64,7 @@ export function ProjectCliProviderAllowlistPanel({
 }: {
   projectId: string;
   credentials: ProviderCredential[];
+  credentialLoadState: "loading" | "error" | "loaded";
   enabledAgentClis: AgentCli[];
   enabledCredentialIds: string[];
   credentialIdsConfigured: boolean;
@@ -87,13 +89,15 @@ export function ProjectCliProviderAllowlistPanel({
   }, [enabledAgentClis, enabledCredentialIds, credentialIdsConfigured, defaultCredentialId]);
 
   const llmCredentials = useMemo(
-    () => credentials.filter((c) => c.kind === "llm_provider" && (c.project_id == null || c.project_id === projectId)),
-    [credentials, projectId],
+    () => credentialLoadState === "loaded" ? credentials.filter((c) => c.kind === "llm_provider" && (c.project_id == null || c.project_id === projectId)) : [],
+    [credentials, credentialLoadState, projectId],
   );
 
-  const unavailableDefault = defaultCredentialUnavailable(defaultCredentialId, llmCredentials);
+  const credentialListLoaded = credentialLoadState === "loaded";
+  const unavailableDefault = credentialListLoaded && defaultCredentialUnavailable(defaultCredentialId, llmCredentials);
   const unavailableIds = credIds.filter((id) => !llmCredentials.some((credential) => credential.id === id && credential.status === "active"));
   const removeUnavailableReferences = () => {
+    if (!credentialListLoaded) return;
     setCredIds((current) => current.filter((id) => !unavailableIds.includes(id)));
     setCredentialSelectionChanged(true);
   };
@@ -132,6 +136,7 @@ export function ProjectCliProviderAllowlistPanel({
   };
 
   const toggleCred = (id: string) => {
+    if (!credentialListLoaded) return;
     const current = credentialIdsConfigured || credentialSelectionChanged
       ? credIds : llmCredentials.filter((credential) => credential.status === "active").map((credential) => credential.id);
     setCredIds(current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
@@ -143,13 +148,17 @@ export function ProjectCliProviderAllowlistPanel({
       showToast("至少启用一种 Agent CLI", "error");
       return;
     }
+    if (!credentialListLoaded && (credentialSelectionChanged || clearDefaultCredential)) {
+      showToast("Provider 账号尚未加载成功，不能保存账号白名单或默认账号变更", "error");
+      return;
+    }
     setBusy(true);
     setSaved(false);
     setFailed(false);
     try {
       await api.patchSettings(projectId, {
         enabled_agent_clis: clis,
-        ...credentialSelectionPatch({ credentialSelectionChanged, credIds, defaultCredentialId, clearDefaultCredential }),
+        ...credentialSelectionPatch({ credentialSelectionChanged, credIds, defaultCredentialId, clearDefaultCredential, credentialListLoaded }),
       });
       showToast("已保存，下一 Job 生效", "ok");
       setSaved(true);
@@ -199,7 +208,11 @@ export function ProjectCliProviderAllowlistPanel({
 
         <div>
           <div className="mb-2 text-[12px] text-zinc-400">启用 Provider 账号</div>
-          {filteredByCli.length === 0 ? (
+          {credentialLoadState === "loading" ? (
+            <div role="status" className="rounded-md border border-dashed border-ink-700 px-3 py-4 text-[12px] text-zinc-500">正在加载 Provider 账号…</div>
+          ) : credentialLoadState === "error" ? (
+            <div role="alert" className="rounded-md border border-red-400/20 bg-red-400/[.06] px-3 py-4 text-[12px] text-red-200">Provider 账号加载失败，请使用上方“重试”重新加载。</div>
+          ) : filteredByCli.length === 0 ? (
             <div className="rounded-md border border-dashed border-ink-700 px-3 py-4 text-[12px] text-zinc-500">
               暂无兼容的 LLM Provider，请先在「凭据」页配置。
             </div>
@@ -246,7 +259,7 @@ export function ProjectCliProviderAllowlistPanel({
               })}
             </div>
           )}
-          {(credentialIdsConfigured || credentialSelectionChanged) && unavailableIds.length > 0 && (
+          {credentialListLoaded && (credentialIdsConfigured || credentialSelectionChanged) && unavailableIds.length > 0 && (
             <div role="alert" className="mt-2 text-[12px] text-amber-400/90">
               白名单中有 {unavailableIds.length} 个账号已删除、停用或不再可访问；请修复引用后保存。
               <button type="button" onClick={removeUnavailableReferences} disabled={busy}
@@ -261,10 +274,10 @@ export function ProjectCliProviderAllowlistPanel({
             </div>
           )}
           {probeError && <div role="alert" className="mt-2 rounded-md border border-red-400/20 bg-red-400/[.06] px-3 py-2 text-[11px] leading-5 text-red-200">{probeError}</div>}
-          {!credentialIdsConfigured && !credentialSelectionChanged && (
+          {credentialListLoaded && !credentialIdsConfigured && !credentialSelectionChanged && (
             <p className="mt-2 text-[12px] text-zinc-400">未收紧凭据范围：自动使用项目可访问的有效账号。勾选变更后保存会建立显式白名单。</p>
           )}
-          {(credentialIdsConfigured || credentialSelectionChanged) && credIds.length === 0 && (
+          {credentialListLoaded && (credentialIdsConfigured || credentialSelectionChanged) && credIds.length === 0 && (
             <div className="mt-2 text-[12px] text-amber-400/90">请至少启用一个 Provider。</div>
           )}
         </div>
@@ -272,7 +285,7 @@ export function ProjectCliProviderAllowlistPanel({
         <button
           type="button"
           onClick={save}
-          disabled={busy}
+          disabled={busy || (!credentialListLoaded && (credentialSelectionChanged || clearDefaultCredential))}
           className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-wait disabled:opacity-60"
         >
           <FloppyDisk size={13} /> {busy ? "保存中…" : saved ? "已保存" : failed ? "保存失败" : "保存"}

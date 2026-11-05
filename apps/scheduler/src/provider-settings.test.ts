@@ -428,6 +428,28 @@ test("Pi snapshot keeps OpenRouter-style catalog ids that themselves contain a s
   });
 });
 
+test("Pi exact catalog ids with slashes keep the same CLI and upstream identity", () => {
+  const modelId = "vendor/model-a";
+  const settings = {
+    providers: {
+      custom: {
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1/v1",
+        models: [{ id: modelId }],
+      },
+    },
+  };
+  for (const roleModel of [modelId, `custom/${modelId}`, null]) {
+    const projection = projectProviderRuntimeSnapshot({
+      agentCli: "pi", roleModel, settingsConfig: settings, defaultModel: null,
+    });
+    assert.equal(projection.model, modelId);
+    assert.equal(projection.upstream_model, modelId);
+    assert.equal(snapshotUpstreamModel(projection), modelId);
+    assert.equal(projection.pi_provider, "custom");
+  }
+});
+
 test("Pi ambiguous catalog id resolves to the authenticated models.json route", () => {
   const settings = {
     provider: "openai",

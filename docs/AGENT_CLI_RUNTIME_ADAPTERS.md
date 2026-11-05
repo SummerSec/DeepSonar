@@ -260,7 +260,9 @@ Pi 不物化 MCP 配置，也不调用 `pi.registerTool`。平台静态 `deepson
 不是 DeepSonar 默认路由前缀 `deepsonar/<id>`；adapter 会把已冻结的 `provider/model`
 映射为 `--provider <route> --model <id>`。裸 id 若落在 Pi 内置多 provider
 目录中，必须带上冻结的已认证路由（通常是 Gateway `deepsonar`），否则 Pi 会报
-ambiguous。模型请求统一改写到 Gateway，
+ambiguous。若账号声明的模型 ID 本身含 `/`（例如 `vendor/model-a`），快照的
+`model` 与 `upstream_model` 保留完整 ID；已认证路由独立冻结到 `pi_provider`。
+只有经过账号目录解析确认的路由前缀才会移除。模型请求统一改写到 Gateway，
 长期密钥不进入 snapshot、workspace、运行清单或 evidence。空 content / 零 usage 视为协议错误。
 
 项目 `.pi` 目录不会自动加载。`--no-extensions` 始终保留。Pi 扩展由 Hub 角色能力组合提案

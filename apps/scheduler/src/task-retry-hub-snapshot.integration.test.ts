@@ -111,6 +111,31 @@ if (!testDatabaseUrl) {
       const [retryJob] = await sql`SELECT id, status FROM jobs WHERE id = ${succeededJobId}`;
       assert.equal(retryJob.status, "succeeded", "retry must not wipe the canvas when the Hub snapshot is unresolvable");
 
+      // The project default must retain slash-containing catalog IDs through both task entry points.
+      const modelId = "vendor/model-a";
+      await sql`UPDATE role_configs SET agent_cli = 'pi', model = 'fable' WHERE id = ${hubConfig.id}`;
+      await sql`UPDATE credentials SET agent_cli = 'pi', settings_config_json = ${sql.json({
+        providers: { custom: { api: "openai-completions", models: [{ id: modelId }] } },
+      })} WHERE id = ${credentialId}`;
+      await sql`UPDATE projects SET config_json = ${sql.json({
+        enabled_agent_clis: ["pi"], default_agent_cli: "pi",
+        default_credential_id: credentialId, default_model_ref: modelId,
+      })} WHERE id = ${projectId}`;
+      const created = await app.inject({
+        method: "POST", url: `/projects/${projectId}/tasks`,
+        payload: { title: "Pi slash model", content: "Verify the configured model identity" },
+      });
+      assert.equal(created.statusCode, 201, created.payload);
+      const retried = await app.inject({ method: "POST", url: `/tasks/${canvasId}/retry` });
+      assert.equal(retried.statusCode, 201, retried.payload);
+      const snapshots = await sql`SELECT agent_snapshot_json FROM jobs WHERE project_id = ${projectId}`;
+      assert.equal(snapshots.length, 2);
+      for (const row of snapshots) {
+        assert.equal(row.agent_snapshot_json.model, modelId);
+        assert.equal(row.agent_snapshot_json.upstream_model, modelId);
+        assert.equal(row.agent_snapshot_json.pi_provider, "custom");
+      }
+
       // #490: an archived canvas must answer retry/resume with a stable error_code.
       await sql`UPDATE canvases SET status = 'archived', archived_at = now() WHERE id = ${canvasId}`;
       for (const url of [`/tasks/${canvasId}/retry`, `/tasks/${canvasId}/resume-session`]) {
