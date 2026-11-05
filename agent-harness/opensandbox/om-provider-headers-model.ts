@@ -10,6 +10,8 @@ export type OmHeaderCall = { stage: string; model: string; providerHeader: strin
 
 export async function startOmHeaderModel() {
   const calls: OmHeaderCall[] = [];
+  const catalogCalls: Array<{ method: string; path: string; providerHeader: string; modelHeader: string; returnedModels: string[] }> = [];
+  const probeCalls: Array<{ model: string; providerHeader: string; modelHeader: string; status: number }> = [];
   const errors: string[] = [];
   let observed = false;
   let completionAllowed = false;
@@ -23,6 +25,18 @@ export async function startOmHeaderModel() {
   let completionSent = false;
   const server = createServer(async (req, res) => {
     try {
+      if (req.method === "GET" && req.url === "/v1/models") {
+        assert.equal(req.headers.authorization, `Bearer ${OM_HEADERS_SECRET}`);
+        assert.equal(req.headers["x-fixture-provider"], "selected-provider");
+        assert.equal(req.headers["x-fixture-model"], "provider-default", "catalog discovery must not apply an inference model override");
+        assert.equal(req.headers["x-fixture-unselected"], undefined);
+        catalogCalls.push({ method: req.method, path: req.url,
+          providerHeader: String(req.headers["x-fixture-provider"]), modelHeader: String(req.headers["x-fixture-model"]),
+          returnedModels: [OM_HEADERS_MODEL] });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ object: "list", data: [{ id: OM_HEADERS_MODEL, object: "model", created: 1, owned_by: "offline-fixture" }] }));
+        return;
+      }
       assert.equal(req.method, "POST");
       assert.equal(req.url, "/v1/chat/completions");
       assert.equal(req.headers.authorization, `Bearer ${OM_HEADERS_SECRET}`);
@@ -34,6 +48,18 @@ export async function startOmHeaderModel() {
       for await (const chunk of req) bytes.push(Buffer.from(chunk));
       const body = JSON.parse(Buffer.concat(bytes).toString("utf8"));
       assert.equal(body.model, OM_HEADERS_MODEL);
+      if (body.stream === undefined) {
+        assert.equal(calls.length, 0, "readiness probe must precede the real Job");
+        assert.equal(probeCalls.length, 0, "exactly one production readiness probe");
+        assert.deepEqual(body, { model: OM_HEADERS_MODEL, max_tokens: 8, messages: [{ role: "user", content: "ping" }] });
+        probeCalls.push({ model: body.model, providerHeader: String(req.headers["x-fixture-provider"]),
+          modelHeader: String(req.headers["x-fixture-model"]), status: 200 });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ id: "offline-probe", object: "chat.completion", model: OM_HEADERS_MODEL,
+          choices: [{ index: 0, message: { role: "assistant", content: "pong" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+        return;
+      }
       const names = (body.tools ?? []).map((tool: any) => tool.function?.name);
       const stage = names.includes("record_observations") ? "observer" : names.includes("record_reflections") ? "reflector" : "main";
       assert.ok(calls.length < 40, "bounded offline model request count exceeded");
@@ -135,7 +161,7 @@ export async function startOmHeaderModel() {
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert.ok(address && typeof address !== "string");
-  return { url: `http://127.0.0.1:${address.port}`, calls, errors, observed: () => observed,
+  return { url: `http://127.0.0.1:${address.port}`, calls, catalogCalls, probeCalls, errors, observed: () => observed,
     recallEvidence: () => ({ current_session_read_verified: recalled, successful_reads: recalled ? 1 : 0,
       verified_source_prefix_sha256: recalled ? createHash("sha256").update(sourcePrefix).digest("hex") : null,
       recall_result_sha256: recallResultSha256,

@@ -114,6 +114,32 @@ try {
   await sql`INSERT INTO credentials(id,name,kind,provider,project_id,status,agent_cli,ciphertext,nonce,auth_tag,fingerprint,last4,settings_config_json,public_metadata_json)
     VALUES(${credentialId},'Offline Pi provider','llm_provider','openai',${projectId},'active','pi',${encrypted.ciphertext},${encrypted.nonce},${encrypted.auth_tag},
       ${credentials.fingerprintOf(OM_HEADERS_SECRET)},${credentials.last4Of(OM_HEADERS_SECRET)},${sql.json(settings)},${sql.json({ base_url: `${model.url}/v1` })})`;
+  report.stage = "credential-catalog-discovery";
+  const { discoverModelCatalog, testCredential } = await import("../../apps/scheduler/src/credential-test.js");
+  const { listHubProviderCatalog } = await import("../../apps/scheduler/src/domains/project-agent-allowlist/catalog.js");
+  const beforeDiscovery = await listHubProviderCatalog(sql, projectId);
+  assert.equal(beforeDiscovery.find(entry => entry.credential_id === credentialId)?.models.length, 0,
+    "settings models do not substitute for the Hub's discovered model catalog");
+  const [catalogCredential] = await sql`SELECT * FROM credentials WHERE id=${credentialId}`;
+  const discovered = await discoverModelCatalog(catalogCredential);
+  assert.equal(discovered.available, true, "production catalog discovery must reach the isolated provider");
+  assert.deepEqual(discovered.models, [OM_HEADERS_MODEL]); assert.ok(discovered.fetched_at);
+  assert.equal(model.catalogCalls.length, 1, "one real selected-provider catalog request must succeed");
+  // Credential setup is a fixture, but its catalog is the actual production
+  // discovery result. Never enable passthrough or substitute settings models.
+  // The tested child is still created only by the Control API below.
+  report.stage = "credential-inference-probe";
+  const health = await testCredential(catalogCredential);
+  assert.equal(health.ok, true, "formal readiness requires the actual inference probe");
+  assert.equal(health.probe_path, "inference"); assert.equal(model.probeCalls.length, 1);
+  report.readiness = { ok: health.ok, probe_path: health.probe_path, requests: model.probeCalls };
+  await sql`UPDATE credentials SET model_catalog_json=${sql.json(discovered.models)},
+    model_catalog_fetched_at=${discovered.fetched_at},last_tested_at=${health.fetched_at},health_status='ok'
+    WHERE id=${credentialId}`;
+  const availableProviders = await listHubProviderCatalog(sql, projectId);
+  assert.ok(availableProviders.find(entry => entry.credential_id === credentialId)?.models.some(entry => entry.model_id === OM_HEADERS_MODEL),
+    "formal Hub catalog must authorize the discovered model before any Job is created");
+  report.catalog = { available: discovered.available, models: discovered.models, requests: model.catalogCalls };
   for (const roleName of ["hub_reason", "audit"]) {
     const [role] = await sql`SELECT id FROM agent_roles WHERE name=${roleName}`; assert.ok(role);
     await sql`DELETE FROM role_configs WHERE role_id=${role.id} AND project_id IS NULL`;
@@ -137,27 +163,62 @@ try {
   await api.activateProvisionedJobCapabilityTokens(hubId);
   // Fixture transport wiring only; all proposal validation, snapshot generation
   // and child INSERT occur inside production preflight/ingestEvent.
+  report.bootstrap_phases = [];
   api.registerRuntimeHandler(hubId, async context => {
-    assert.equal(context.operationId, "submit_hub_decision");
-    if (context.planPhase === "resolve") return { resolved_plan_input: await expandWorkspacePayloadFile("submit_hub_decision", context.input, {
-      readWorkspaceFile: async () => { throw new Error("bootstrap fixture accepts inline input only; no sandbox filesystem"); },
-    }) };
-    if (context.planPhase) assert.equal(context.planAttemptId, String(bootstrapAttempt.id));
-    if (context.planPhase === "abort") return {};
-    if (context.planPhase === "prepare") return { plan_prepared: true };
-    if (context.planPhase !== "commit") await core.preflightDeferredSemanticEvent(hubId!, "hub_decision", context.input);
-    if (context.planPhase === "validate") return {};
-    await core.ingestEvent(hubId!, { v: 1, event_id: context.eventId, type: "hub_decision", payload: context.input } as never);
-    return { accepted: true, event_id: context.eventId };
+    let step = "operation-and-attempt-binding";
+    const phase = context.planPhase ?? "unphased";
+    report.bootstrap_phases.push({ phase, status: "entered" });
+    try {
+      assert.equal(context.operationId, "submit_hub_decision");
+      if (context.planPhase === "resolve") {
+        step = "resolve-inline-payload";
+        return { resolved_plan_input: await expandWorkspacePayloadFile("submit_hub_decision", context.input, {
+          readWorkspaceFile: async () => { throw new Error("bootstrap fixture accepts inline input only; no sandbox filesystem"); },
+        }) };
+      }
+      if (context.planPhase) assert.equal(context.planAttemptId, String(bootstrapAttempt.id));
+      if (context.planPhase === "abort") return {};
+      if (context.planPhase === "prepare") return { plan_prepared: true };
+      if (context.planPhase !== "commit") {
+        step = "production-preflight";
+        await core.preflightDeferredSemanticEvent(hubId!, "hub_decision", context.input);
+      }
+      if (context.planPhase === "validate") return {};
+      step = "production-ingest";
+      await core.ingestEvent(hubId!, { v: 1, event_id: context.eventId, type: "hub_decision", payload: context.input } as never);
+      return { accepted: true, event_id: context.eventId };
+    } catch (error) {
+      // The production registry intentionally replaces arbitrary handler errors
+      // with HANDLER_FAILED. Preserve only bounded class/code/path metadata in
+      // this isolated fixture, never raw payloads, SQL, credentials or messages.
+      const row = error as { name?: unknown; code?: unknown; path?: unknown };
+      const symbol = (value: unknown) => typeof value === "string" && /^[a-zA-Z0-9_.:/-]{1,160}$/u.test(value) ? value : null;
+      const diagnostic = { phase, step, status: "failed", name: symbol(row?.name), code: symbol(row?.code), path: symbol(row?.path) };
+      report.bootstrap_phases.push(diagnostic);
+      console.error(JSON.stringify({ bootstrap_handler_failure: diagnostic }));
+      throw error;
+    }
   }, ["submit_hub_decision"]);
   report.stage = "control-api-child-create";
+  const creationEventId = randomUUID();
+  report.creation_request = { event_id: creationEventId, idempotency_key: creationEventId };
+  const inspectCreationOutcome = async () => {
+    const events = await sql`SELECT event_id,type FROM events WHERE job_id=${hubId} AND event_id=${creationEventId}`;
+    const receipts = await sql`SELECT event_id FROM event_dedup WHERE job_id=${hubId} AND event_id=${creationEventId}`;
+    const children = await sql`SELECT id,status FROM jobs WHERE parent_job_id=${hubId}`;
+    report.creation_outcome = { events, receipts, children };
+    if (children.length === 1) childId = String(children[0].id);
+  };
   const response = await fetch(`http://127.0.0.1:3100/control/v1/jobs/${hubId}/operations/submit_hub_decision`, {
-    method: "POST", headers: { authorization: `Bearer ${grant.token}`, "content-type": "application/json", "idempotency-key": randomUUID() },
+    method: "POST", headers: { authorization: `Bearer ${grant.token}`, "content-type": "application/json", "idempotency-key": creationEventId, "x-deepsonar-event-id": creationEventId },
     body: JSON.stringify({ intents: [{ role: "audit", from: [rootNode], agent_cli: "pi", provider: "openai", model_ref: OM_HEADERS_MODEL,
       runtime_image_key: "deepsonar-base", pi_extension_ids: ["pi-observational-memory"],
       description: "Exercise real Pi and observational memory with the offline provider header fixture.",
       prompt: "Run the deterministic offline provider-header acceptance. Follow the provider's tool calls to read synthetic source data, let observational memory settle, and mark the Job done through the real Control API." }] }),
-  });
+  }).catch(async error => { await inspectCreationOutcome(); throw error; });
+  // Never retry an uncertain mutation, particularly with a new key. Query the
+  // original event/dedup and children before diagnosing either transport or HTTP failure.
+  await inspectCreationOutcome();
   const accepted = await response.json() as any;
   assert.equal(response.status, 200, JSON.stringify(accepted)); assert.equal(accepted.accepted, true);
   const children = await sql`SELECT * FROM jobs WHERE parent_job_id=${hubId}`;
