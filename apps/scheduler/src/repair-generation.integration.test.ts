@@ -301,11 +301,46 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,id`,
         sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,id`,
         sql`SELECT to_jsonb(t) AS row FROM job_capability_tokens t WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,id`,
+        sql`SELECT to_jsonb(a) AS row FROM job_shared_asset_versions a WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,version_id`,
         sql`SELECT to_jsonb(c) AS row FROM canvases c WHERE id=${canvasId}`,
         sql`SELECT to_jsonb(n) AS row FROM canvas_nodes n WHERE canvas_id=${canvasId} ORDER BY id`,
       ]);
       return JSON.parse(JSON.stringify(rows));
     };
+    for (const mode of ["resume", "rerun-current", "batch"] as const) {
+      await t.test(`${mode}: an empty pending transition rolls back every recovery mutation`, async () => {
+        const first = await setup();
+        const second = mode === "batch" ? await setup(30, first.canvasId) : null;
+        await first.stop("waiting_human");
+        if (second) await second.stop("waiting_human");
+        const ids = second ? [first.jobId, second.jobId] : [first.jobId];
+        if (second) await sql`UPDATE jobs SET status='orphan',error='调度器重启（执行中断）' WHERE id=ANY(${ids}::uuid[])`;
+        const blockedId = second?.jobId ?? first.jobId;
+        // A BEFORE trigger suppresses only the final pending UPDATE, after the
+        // transaction has already attempted generation, interruption and revocation.
+        await sql.unsafe(`CREATE FUNCTION reject_repair_pending_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+          IF NEW.id = '${blockedId}'::uuid AND NEW.status='pending' THEN RETURN NULL; END IF;
+          RETURN NEW; END $$`);
+        await sql.unsafe("CREATE TRIGGER reject_repair_pending_fixture BEFORE UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION reject_repair_pending_fixture()");
+        try {
+          const before = await captureBatch(first.canvasId, ids), calls = upstreamCalls;
+          const result = mode === "batch"
+            ? await app.inject({ method: "POST", url: `/tasks/${first.canvasId}/resume-session` })
+            : await first.recover(mode);
+          assert.equal(result.statusCode, 409, result.body);
+          assert.equal(result.json().error_code, "JOB_NOT_RESUMABLE");
+          assert.deepEqual(await captureBatch(first.canvasId, ids), before,
+            "rollback includes snapshot/policy, generation receipts, grants, shared assets, Attempts and earlier siblings");
+          assert.equal(upstreamCalls, calls);
+          for (const id of ids) await assertNoGeneration(id);
+        } finally {
+          await sql.unsafe("DROP TRIGGER reject_repair_pending_fixture ON jobs");
+          await sql.unsafe("DROP FUNCTION reject_repair_pending_fixture()");
+          await sql`UPDATE jobs SET status='cancelled' WHERE id=ANY(${ids}::uuid[])`;
+        }
+      });
+    }
+
     for (const blocker of ["unknown", "paused", "quota", "target_authorization"] as const) {
       await t.test(`task resume-session: ${blocker} denies an entire orphan batch before any mutation`, async () => {
         const deniedContract = { schema_version: 1, template_id: "engineering", template_version: 1,

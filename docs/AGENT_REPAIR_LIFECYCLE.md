@@ -7,7 +7,7 @@
 
 ## 宿主生命周期
 
-同 Job 的修复次数、revision、token 根与已知/未知用量累计保留。`resume` 保留原冻结快照且拒绝身份漂移；`rerun-current` 重新核对当前配置和目标授权。存在拒绝历史时，两者仅在旧效果全部结算、原期限未到、预算仍允许且未暂停/接受完成时追加新代际。锁顺序为 Canvas → Job → Attempt；与旧 effect intent 写入、Dispatcher 领取互斥。
+同 Job 的修复次数、revision、token 根与已知/未知用量累计保留。`resume` 保留原冻结快照且拒绝身份漂移；`rerun-current` 重新核对当前配置和目标授权。存在拒绝历史时，两者仅在旧效果全部结算、原期限未到、预算仍允许且未暂停/接受完成时追加新代际。锁顺序为 Canvas → Job → Attempt；与旧 effect intent 写入、Dispatcher 领取互斥。 pending 转换意外返回空结果时抛错回滚整个事务，再在事务外映射业务拒绝；批量恢复不得跳过失败成员并提交其他成员。隔离 SQL 触发器故障注入覆盖该回滚边界。
 
 恢复准入与 Gateway 使用共享 main token allowance：OM 的已结算后台用量不消耗 main reserve；同 Job 已有 OM token 历史时，即使 `rerun-current` 不再选择 OM，也保留 workload 计费隔离和历史有限上限。未启用过 OM 的 Job 继续使用全 Job token 额度。此隔离不豁免旧后台 pending/unknown effect：建立新代际前仍须全部结算。请求次数上限是独立约束，不因本 token allowance 修正而扩大。 allowance 将尚无账本的 pending reservation 返回为 `JOB_TOKEN_USAGE_PENDING`，不冒充 unknown 或零成本；未知/缺失结算仍返回 `JOB_TOKEN_USAGE_UNKNOWN`。两者均不授予新代际。
 

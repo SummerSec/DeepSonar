@@ -30,6 +30,8 @@ import {
   frozenSnapshotStaleDetail,
   isSnapshotUnresolvableError,
   requeueJob,
+  RecoveryTransitionError,
+  JOB_NOT_RESUMABLE,
   requeueTargetAuthorizationBlockers,
   revokeOldRuntimeGrants,
   type SnapshotStaleDetail,
@@ -1027,7 +1029,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           heartbeat_at: null,
           sandbox_id: null,
         });
-        if (!row) continue;
+        if (!row) throw new RecoveryTransitionError(String(worker.id), String(worker.status));
         await normalizePendingJobPriority(worker.id as string, tx);
         rerunJobs.push({ ...worker, status: row.status });
       }
@@ -1044,6 +1046,11 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         stale: [] as SnapshotStaleDetail[],
         convergence,
       };
+    }).catch((error: unknown) => {
+      if (!(error instanceof RecoveryTransitionError)) throw error;
+      return { jobs: [] as Array<Record<string, unknown>>, active: [] as Array<Record<string, unknown>>,
+        stale: [] as SnapshotStaleDetail[], convergence: null,
+        repairBlocked: { job_id: error.jobId, code: JOB_NOT_RESUMABLE, reason: error.message } };
     });
     if ("authorizationBlocked" in interruptedBatch && interruptedBatch.authorizationBlocked) {
       return reply.code(409).send({ error: "目标授权已失效；先修复授权", error_code: "TARGET_AUTHORIZATION_BLOCKED",

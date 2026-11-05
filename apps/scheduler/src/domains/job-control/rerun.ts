@@ -75,6 +75,14 @@ export type RequeueJobResult =
   | { kind: "target_authorization_blocked"; detail: SnapshotStaleDetail; blockers: TaskContractFeedback[]; provenance?: JobProvenance }
   | { kind: "snapshot_stale"; detail: SnapshotStaleDetail; provenance?: JobProvenance };
 
+/** Throw inside recovery transactions; translate only after PostgreSQL rolled back. */
+export class RecoveryTransitionError extends Error {
+  constructor(readonly jobId: string, readonly status: string, readonly provenance?: JobProvenance) {
+    super("恢复状态转换未完成；本次恢复已全部回滚，请检查当前 Job 状态");
+    this.name = "RecoveryTransitionError";
+  }
+}
+
 const resumableStatuses = new Set<string>(RESUMABLE_JOB_STATUSES);
 
 function objectValue(value: unknown): SnapshotObject {
@@ -438,7 +446,7 @@ export async function requeueJob(
       finished_at: null,
       heartbeat_at: null,
     });
-    if (!transitioned) return { kind: "not_resumable" as const, status, provenance };
+    if (!transitioned) throw new RecoveryTransitionError(jobId, status, provenance);
     const updated = {
       id: job.id,
       project_id: job.project_id,
@@ -462,6 +470,10 @@ export async function requeueJob(
       previous_sandbox_id: nullableString(job.sandbox_id),
       provenance,
     };
+  }).catch((error: unknown) => {
+    if (!(error instanceof RecoveryTransitionError)) throw error;
+    return { kind: "not_resumable" as const, status: error.status, provenance: error.provenance,
+      reason: error.message, error_code: JOB_NOT_RESUMABLE };
   });
   if (result.kind === "ok" && result.previous_sandbox_id) {
     await runner.destroy({ sandboxId: result.previous_sandbox_id }).catch((error) => {
