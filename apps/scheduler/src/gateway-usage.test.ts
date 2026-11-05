@@ -12,6 +12,9 @@ import {
   joinGatewayUpstreamUrl,
   rewriteGatewayOutboundModel,
   upstreamAuthHeaders,
+  gatewayInboundProtocolHeaders,
+  upstreamFinalAuthHeaders,
+  upstreamProtocolHeaders,
 } from "./gateway.js";
 
 test("usage JSON 跨 chunk 且完整记录落在前一块尾部时只累计一次", () => {
@@ -51,6 +54,48 @@ test("Anthropic 上游同时注入 Bearer 与 x-api-key", () => {
   assert.deepEqual(upstreamAuthHeaders("openai", "sk-test"), {
     authorization: "Bearer sk-test",
   });
+});
+
+test("gateway auth composition keeps protocol defaults separate from final auth", () => {
+  assert.deepEqual(upstreamFinalAuthHeaders("anthropic", "sk-test"), {
+    authorization: "Bearer sk-test",
+    "x-api-key": "sk-test",
+  });
+  assert.deepEqual(upstreamProtocolHeaders("anthropic"), {
+    "anthropic-version": "2023-06-01",
+    "user-agent": "claude-cli/2.1.312 (external, cli)",
+    "x-app": "cli",
+  });
+  assert.deepEqual(upstreamProtocolHeaders("openai"), {});
+  assert.deepEqual(upstreamFinalAuthHeaders("unknown", "sk-test"), {});
+});
+
+// #918: the old `/^anthropic-/` passthrough also matched `anthropic-api-key`, which
+// `extractInboundJobToken` accepts as an inbound Job token — a static path for sending the
+// Job token upstream. The allowlist is now exact.
+test("only allowlisted CLI protocol headers are forwarded upstream", () => {
+  const jobToken = "deepsonarjob_12345678_test-token-value";
+  const forwarded = gatewayInboundProtocolHeaders({
+    authorization: `Bearer ${jobToken}`,
+    "x-api-key": jobToken,
+    "anthropic-api-key": jobToken,
+    "anthropic-version": "2023-06-01",
+    "anthropic-beta": "fine-grained-tool-streaming",
+    "user-agent": "claude-cli/2.1.312 (external, cli)",
+    "x-app": "cli",
+    "x-traffic-type": "eval",
+    cookie: "session=1",
+    "x-deepsonar-job": "internal",
+  });
+  assert.deepEqual(forwarded, {
+    "anthropic-version": "2023-06-01",
+    "anthropic-beta": "fine-grained-tool-streaming",
+    "user-agent": "claude-cli/2.1.312 (external, cli)",
+    "x-app": "cli",
+  });
+  assert.ok(!JSON.stringify(forwarded).includes(jobToken), "the inbound Job token never rides along");
+  assert.deepEqual(gatewayInboundProtocolHeaders({ "anthropic-api-key": jobToken }), {});
+  assert.deepEqual(gatewayInboundProtocolHeaders({ "x-app": ["cli", "other"] }), { "x-app": "cli" });
 });
 
 test("凭据 base_url 已含 /v1 时去掉 Claude Code 重复的版本前缀", () => {

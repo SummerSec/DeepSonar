@@ -8,6 +8,7 @@ import {
   type CredentialHealthErrorCategory,
 } from "./credentials.js";
 import { claudeCliFingerprintHeaders } from "./claude-cli-fingerprint.js";
+import { providerCustomHeadersFromSettings } from "./provider-custom-headers.js";
 import { collectSecretValues, redactSecretAssignments } from "./credential-secret-projection.js";
 import { decryptSecret, PROVIDER_ENV_MAP } from "./credentials.js";
 import {
@@ -180,10 +181,22 @@ function resolveProbeProtocol(cred: CredentialRequestInput): InferenceWireProtoc
   }
 }
 
+/**
+ * #918: catalog discovery and inference probes must ride the same upstream route attributes
+ * as a real Job, so the credential's configured headers are resolved here too — with the same
+ * server-side sanitizer, and ahead of the protocol/final-auth layers.
+ */
+function configuredProbeHeaders(cred: CredentialRequestInput): Record<string, string> {
+  return providerCustomHeadersFromSettings(cred.settings_config_json).headers;
+}
+
 function modelRequest(cred: CredentialRequestInput, secret: string): { urls: string[]; headers: Record<string, string> } {
   return {
     urls: modelUrls(resolveProbeBaseUrl(cred)),
-    headers: authHeadersForProtocol(resolveProbeProtocol(cred), secret),
+    headers: {
+      ...configuredProbeHeaders(cred),
+      ...authHeadersForProtocol(resolveProbeProtocol(cred), secret),
+    },
   };
 }
 
@@ -249,7 +262,11 @@ function inferenceProbeRequest(cred: CredentialRequestInput, secret: string): In
   return {
     url: joinProbeUpstreamUrl(base, path),
     model,
-    headers: { "content-type": "application/json", ...authHeadersForProtocol(protocol, secret) },
+    headers: {
+      "content-type": "application/json",
+      ...configuredProbeHeaders(cred),
+      ...authHeadersForProtocol(protocol, secret),
+    },
     body: inferenceProbeBody(protocol, model),
     protocol,
     timeoutMs: INFERENCE_PROBE_TIMEOUT_MS[protocol],
