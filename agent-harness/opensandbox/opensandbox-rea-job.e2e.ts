@@ -138,6 +138,12 @@ try {
   await sql`INSERT INTO credentials (id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4,status,agent_cli,public_metadata_json)
     VALUES (${credentialId},'Disposable local model fixture','llm_provider','anthropic',${encrypted.ciphertext},${encrypted.nonce},${encrypted.auth_tag},
       ${credentials.fingerprintOf(secret)},${credentials.last4Of(secret)},'active','claude-code',${sql.json({ base_url: model.url })})`;
+  const { freezeGatewayProviderBinding } = await import("../../apps/scheduler/src/gateway-provider-binding.js");
+  const [boundCredential] = await sql`SELECT * FROM credentials WHERE id = ${credentialId}`;
+  const gatewayProviderBinding = freezeGatewayProviderBinding({
+    id: boundCredential.id, provider: boundCredential.provider, agent_cli: boundCredential.agent_cli,
+    settings_config_json: boundCredential.settings_config_json, public_metadata_json: boundCredential.public_metadata_json,
+  });
   const { persistSkillSourceManifest, freezeJobSkillCatalog } = await import("../../apps/scheduler/src/job-skill-catalog.js");
   const { freezeProjectKnowledgeCatalog } = await import("../../apps/scheduler/src/domains/project-knowledge/catalog-snapshot.js");
   const sourceId = randomUUID();
@@ -159,7 +165,7 @@ try {
   const makeSnapshot = (mode: string, extra: Record<string, unknown> = {}) => ({
     name: mode === "verify" ? "verify" : "audit", role_kind: mode === "verify" ? "system" : "role",
     agent_cli: "claude-code", agent_runtime: snapshotHelpers.freezeAgentCliRuntime(snapshotHelpers.AGENT_CLI_RUNTIME_ADAPTERS["claude-code"]),
-    credential_id: credentialId, credential_provider: "anthropic", model: "claude-sonnet-4-5", upstream_model: "claude-sonnet-4-5",
+    credential_id: credentialId, credential_provider: "anthropic", gateway_provider_binding: gatewayProviderBinding, model: "claude-sonnet-4-5", upstream_model: "claude-sonnet-4-5",
     env_vars: {}, env_keys: [], skills: [], commands: [], mcps: [], subagents: [], modules: [], module_selectors: [],
     expanded_modules: [], missing_modules: [], module_content_hash: "", skill_revisions: [], config_files: [
       file("rea-job-actor.py", worker), file("sample_elf.base64", sample.toString("base64")),

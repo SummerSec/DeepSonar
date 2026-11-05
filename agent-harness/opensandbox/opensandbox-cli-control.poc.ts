@@ -283,12 +283,20 @@ try {
         ${sql.json(JSON.parse(JSON.stringify(settingsConfig)))}
       )`;
 
+    const { freezeGatewayProviderBinding } = await import("../../apps/scheduler/src/gateway-provider-binding.js");
+    const [boundCredential] = await sql`SELECT * FROM credentials WHERE id = ${credentialId}`;
+    const gatewayProviderBinding = freezeGatewayProviderBinding({
+      id: boundCredential.id, provider: boundCredential.provider, agent_cli: boundCredential.agent_cli,
+      settings_config_json: boundCredential.settings_config_json, public_metadata_json: boundCredential.public_metadata_json,
+    });
+
     const snapshot = {
       name: "audit",
       platform_tools: [...operations],
       agent_cli: selectedCli,
       agent_runtime: freezeAgentCliRuntime(AGENT_CLI_RUNTIME_ADAPTERS[selectedCli]),
       credential_id: credentialId,
+      gateway_provider_binding: gatewayProviderBinding,
       credential_provider: plan.provider,
       model: plan.model,
       sandbox_limits: { cpu: 1, memoryMiB: 1024, pidsLimit: 256, capDropAll: true, noNewPrivileges: true },

@@ -84,6 +84,12 @@ try {
   await sql`INSERT INTO credentials(id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4,status,agent_cli,public_metadata_json)
     VALUES(${credentialId},'Disposable model','llm_provider','anthropic',${encrypted.ciphertext},${encrypted.nonce},${encrypted.auth_tag},
       ${credentials.fingerprintOf(secret)},${credentials.last4Of(secret)},'active','claude-code',${sql.json({ base_url: model.url })})`;
+  const { freezeGatewayProviderBinding } = await import("../../apps/scheduler/src/gateway-provider-binding.js");
+  const [boundCredential] = await sql`SELECT * FROM credentials WHERE id = ${credentialId}`;
+  const gatewayProviderBinding = freezeGatewayProviderBinding({
+    id: boundCredential.id, provider: boundCredential.provider, agent_cli: boundCredential.agent_cli,
+    settings_config_json: boundCredential.settings_config_json, public_metadata_json: boundCredential.public_metadata_json,
+  });
   const provenanceCanvas = randomUUID(), provenanceJob = randomUUID(), provenanceAttempt = randomUUID();
   await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${provenanceCanvas},${owner},'provenance','{}')`;
   await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
@@ -119,7 +125,7 @@ try {
     const snapshot = {
       name: "analyze", role_kind: "role", agent_cli: "claude-code",
       agent_runtime: snapshots.freezeAgentCliRuntime(snapshots.AGENT_CLI_RUNTIME_ADAPTERS["claude-code"]),
-      credential_id: credentialId, credential_provider: "anthropic", model: "claude-sonnet-4-5", upstream_model: "claude-sonnet-4-5",
+      credential_id: credentialId, credential_provider: "anthropic", gateway_provider_binding: gatewayProviderBinding, model: "claude-sonnet-4-5", upstream_model: "claude-sonnet-4-5",
       env_vars: {}, env_keys: [], skills: [], commands: [], mcps: [], subagents: [], modules: [], module_selectors: [],
       expanded_modules: [], missing_modules: [], module_content_hash: "", skill_revisions: [],
       config_files: [file("knowledge-job-actor.py", actor), file("knowledge-job-input.json", JSON.stringify(config))],
