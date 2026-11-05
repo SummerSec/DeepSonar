@@ -128,6 +128,10 @@ test('release lookup distinguishes absence, completed release, draft and API fai
   const run = (status, code, body = {}) => () => ({status: code, stdout: `HTTP/2.0 ${status} Status\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(body)}`});
   assert.equal(publicationState(env.VERSION, repo, run(404, 1)), 'missing');
   assert.equal(publicationState(env.VERSION, repo, run(200, 0, {tag_name: 'v0.6.0', draft: false, prerelease: false})), 'existing');
+  const complete = {tag_name: 'v0.6.0', draft: false, prerelease: false, assets: [{name: 'catalog.json', state: 'uploaded', digest: 'sha256:expected'}]};
+  assert.equal(publicationState(env.VERSION, repo, run(200, 0, complete), {'catalog.json': 'sha256:expected'}), 'existing');
+  for (const assets of [[], [{name: 'catalog.json', state: 'uploaded', digest: 'sha256:wrong'}]])
+    assert.throws(() => publicationState(env.VERSION, repo, run(200, 0, {...complete, assets}), {'catalog.json': 'sha256:expected'}), /assets_conflict/);
   for (const status of [401, 403, 429, 500]) assert.throws(() => publicationState(env.VERSION, repo, run(status, 1)), /lookup_failed/);
   assert.throws(() => publicationState(env.VERSION, repo, () => ({status: 1, stdout: ''})), /lookup_failed/);
   for (const body of [{tag_name: 'v0.6.0', draft: true, prerelease: false}, {tag_name: 'v0.6.1', draft: false, prerelease: false}])
@@ -144,7 +148,7 @@ const args = process.argv.slice(2);
 if (args[0] === 'api') {
   const exists = fs.existsSync(process.env.MARKER);
   const status = process.env.API_FAILURE ? 403 : exists ? 200 : 404;
-  console.log('HTTP/2.0 ' + status + ' Status\\nContent-Type: application/json\\n\\n' + JSON.stringify({tag_name:'v0.6.0',draft:false,prerelease:false}));
+  console.log('HTTP/2.0 ' + status + ' Status\\nContent-Type: application/json\\n\\n' + JSON.stringify({tag_name:'v0.6.0',draft:false,prerelease:false,assets: exists ? JSON.parse(fs.readFileSync(process.env.MARKER)).filter(a => fs.existsSync(a) && fs.statSync(a).isFile()).filter(a => !a.endsWith('release-body.md')).map(a => ({name:require('node:path').basename(a),state:'uploaded',digest:'sha256:' + require('node:crypto').createHash('sha256').update(fs.readFileSync(a)).digest('hex')})) : []}));
   process.exit(status === 200 ? 0 : 1);
 }
 if (args[0] !== 'release' || args[1] !== 'create') throw Error('unexpected effect');

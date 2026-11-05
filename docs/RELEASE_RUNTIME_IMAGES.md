@@ -41,7 +41,7 @@
 
 限制：只接受原运行 attempt 1；GitHub artifact API 不提供可靠的跨重跑 attempt 绑定，所以多 attempt、缺失/过期/重复 artifact、无 API archive digest、错误工作流/仓库/版本/commit、缺失成功阶段、下载或 API 失败均 fail closed。不能从本地副本或自报 receipt 修补这些缺口。真实恢复须另行授权；合成测试不代表已恢复任何旧版本。v0.6.14 run `42037159429` 未产生完整冻结载荷，不能恢复。
 
-Release 查询仅明确的 API 404 可进入 create，401/403/网络错误不当作缺失；已有正式 Release 保留不动，draft/prerelease 冲突停止供对账。create 的未知结果不在同次执行自动重放，下一次恢复先查询现状。回写仍可能因 bot PR 等待批准或 required checks 失败而停止；不会绕过权限或检查。回归由 `ci:unit:runtime-registry` 的 Actions gate 执行，Draft 快检也显式运行恢复及原签名测试；覆盖合成冻结产物、假 API、受控发布命令与临时 Git 回写，不连接生产或真实模型。
+Release 查询仅明确的 API 404 可进入 create，401/403/网络错误不当作缺失；已有正式 Release 的预期附件必须完整、已上传且 API digest 与冻结内容一致才幂等早退；缺件/不同内容或 draft/prerelease 冲突均停止供对账，不覆盖或补传。create 的未知结果不在同次执行自动重放，下一次恢复先查询现状。回写仍可能因 bot PR 等待批准或 required checks 失败而停止；不会绕过权限或检查。回归由 `ci:unit:runtime-registry` 的 Actions gate 执行，Draft 快检也显式运行恢复及原签名测试；覆盖合成冻结产物、假 API、受控发布命令与临时 Git 回写，不连接生产或真实模型。
 
 ## 控制面镜像平台矩阵（#598）
 

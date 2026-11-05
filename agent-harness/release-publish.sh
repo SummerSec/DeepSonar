@@ -13,7 +13,7 @@ node agent-harness/platform-signature-publication.mjs gate "$payload_dir" "$sign
 
 # Idempotent: an existing Release is left untouched rather than overwritten.
 # gh release view cannot distinguish missing from authentication/network errors.
-state="$(node agent-harness/release-publication-state.mjs)"
+state="$(node agent-harness/release-publication-state.mjs "$payload_dir" "$signature_dir")"
 if [[ "$state" == existing ]]; then
   echo "Release v${VERSION} already exists; leaving it untouched"
   exit 0
