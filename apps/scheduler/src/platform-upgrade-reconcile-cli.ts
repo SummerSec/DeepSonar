@@ -1,7 +1,13 @@
 import postgres from "postgres";
 import type { MigrationConnection } from "./migration-runner.js";
 import { RECONCILE_INPUT_SCHEMA, RECONCILE_RESULT_SCHEMA } from "./domains/job-attempt/reconcile-effects.js";
-import { runEffectReconcile, type ReconcileAction } from "./domains/job-attempt/reconcile-effects-runner.js";
+import {
+  OPERATOR_SETTLE_OUTCOMES,
+  runEffectReconcile,
+  settleEffectByOperator,
+  type OperatorSettleOutcome,
+  type ReconcileAction,
+} from "./domains/job-attempt/reconcile-effects-runner.js";
 
 // Host-invoked effect reconciliation (#845 defect 3): credentials and SQL never appear
 // in argv, only on stdin, and no driver message is ever printed.
@@ -12,6 +18,9 @@ const SAFE_ERROR_CODES = new Set([
   "INVALID_RECONCILE_ACTION",
   "INVALID_RECONCILE_OPERATION_ID",
   "INVALID_RECONCILE_LIMIT",
+  "INVALID_EFFECT_ID",
+  "INVALID_SETTLE_OUTCOME",
+  "INVALID_SETTLE_EVIDENCE",
 ]);
 
 let connection: ReturnType<typeof postgres> | undefined;
@@ -23,9 +32,12 @@ try {
   }
   const input = JSON.parse(raw) as {
     schema?: string;
-    action?: ReconcileAction;
+    action?: ReconcileAction | "settle";
     operation_id?: string;
     limit?: number;
+    effect_id?: string;
+    outcome?: OperatorSettleOutcome;
+    evidence?: string;
     connection?: { host?: string; port?: number; username?: string; password?: string; database?: string };
   };
   if (input.schema !== RECONCILE_INPUT_SCHEMA) throw new Error("INVALID_INPUT");
@@ -34,23 +46,45 @@ try {
     || typeof username !== "string" || typeof password !== "string" || typeof database !== "string" || !database) {
     throw new Error("INVALID_CONNECTION");
   }
-  if (input.action !== "scan" && input.action !== "apply") throw new Error("INVALID_RECONCILE_ACTION");
+  if (input.action !== "scan" && input.action !== "apply" && input.action !== "settle") {
+    throw new Error("INVALID_RECONCILE_ACTION");
+  }
+  // #899: an effect that platform evidence cannot decide is settled once by an operator,
+  // with a written reason, instead of being hand-edited in the database or replayed.
+  if (input.action === "settle") {
+    if (typeof input.effect_id !== "string") throw new Error("INVALID_EFFECT_ID");
+    if (typeof input.outcome !== "string" || !OPERATOR_SETTLE_OUTCOMES.includes(input.outcome as OperatorSettleOutcome)) {
+      throw new Error("INVALID_SETTLE_OUTCOME");
+    }
+    if (typeof input.evidence !== "string") throw new Error("INVALID_SETTLE_EVIDENCE");
+  }
   connection = postgres({
     host, port: port as number, username, password, database, max: 1, connect_timeout: 10, onnotice: () => {},
     connection: { application_name: "deepsonar-effect-reconcile" },
   });
   const reserved = await connection.reserve();
   try {
+    if (input.action === "settle") {
+      const settled = await settleEffectByOperator(reserved as unknown as MigrationConnection, {
+        effect_id: input.effect_id as string,
+        outcome: input.outcome as OperatorSettleOutcome,
+        evidence: input.evidence as string,
+        operation_id: input.operation_id ?? "",
+      });
+      process.stdout.write(`${JSON.stringify({ schema: RECONCILE_RESULT_SCHEMA, ok: settled.settled, action: "settle", applied: settled.settled ? 1 : 0, remaining_unknown: 0, ...settled })}\n`);
+      if (!settled.settled) process.exitCode = 1;
+    } else {
     // SAFETY: a reserved postgres connection exposes the same tagged-template and
     // unsafe() surface MigrationConnection declares; the narrow type only hides the
     // pool-specific methods this runner never calls.
-    const result = await runEffectReconcile(reserved as unknown as MigrationConnection, {
-      action: input.action,
-      operation_id: input.operation_id ?? "",
-      ...(input.limit === undefined ? {} : { limit: input.limit }),
-    });
-    process.stdout.write(`${JSON.stringify({ schema: RECONCILE_RESULT_SCHEMA, ...result })}\n`);
-    process.exitCode = result.ok ? 0 : 1;
+      const result = await runEffectReconcile(reserved as unknown as MigrationConnection, {
+        action: input.action as ReconcileAction,
+        operation_id: input.operation_id ?? "",
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
+      });
+      process.stdout.write(`${JSON.stringify({ schema: RECONCILE_RESULT_SCHEMA, ...result })}\n`);
+      process.exitCode = result.ok ? 0 : 1;
+    }
   } finally {
     reserved.release();
   }

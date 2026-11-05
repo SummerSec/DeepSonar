@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { MigrationConnection } from "../../migration-runner.js";
-import { runEffectReconcile, scanUnknownEffects } from "./reconcile-effects-runner.js";
+import { runEffectReconcile, scanUnknownEffects, settleEffectByOperator } from "./reconcile-effects-runner.js";
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
 
@@ -102,4 +102,61 @@ test("a scan never touches rows outside the unknown/effect_pending window", asyn
   assert.match(statements[0], /WHERE e\.status IN \('unknown', 'effect_pending'\)/u);
   assert.match(statements[0], /LIMIT 10/u);
   assert.doesNotMatch(statements[0], /UPDATE|DELETE|INSERT/u, "scan must stay read-only");
+});
+
+test("operator settlement records the reason and never replays the effect", async () => {
+  const statements: string[] = [];
+  const db = Object.assign(async (strings: TemplateStringsArray) => {
+    statements.push(strings.join("?"));
+    return [];
+  }, {
+    unsafe: async (sql: string) => {
+      statements.push(sql);
+      if (sql.includes("UPDATE job_attempt_effects")) return [{ id: "b3f5c1a2-0000-4000-8000-000000000001" }];
+      return [];
+    },
+  }) as unknown as MigrationConnection;
+
+  const result = await settleEffectByOperator(db, {
+    effect_id: "b3f5c1a2-0000-4000-8000-000000000001",
+    outcome: "not_applied",
+    evidence: "sandbox gone from the host; no model request was sent per gateway log",
+    operation_id: "operator-899",
+  });
+  assert.equal(result.settled, true);
+  const sql = statements.join("\n");
+  assert.match(sql, /"reconciled_by":"operator-settlement"/);
+  assert.match(sql, /"reconcile_operation_id":"operator-899"/);
+  assert.match(sql, /"operator_evidence":"sandbox gone/);
+  assert.match(sql, /WHERE id = '[0-9a-f-]{36}'::uuid/);
+  assert.match(sql, /status IN \('unknown', 'effect_pending'\)/);
+  // never touches replay_policy: settling records a fact, it does not authorise a replay
+  assert.doesNotMatch(sql, /replay_policy\s*=/);
+});
+
+test("a already-settled effect is reported as not settled instead of being rewritten", async () => {
+  const db = Object.assign(async () => [], { unsafe: async () => [] }) as unknown as MigrationConnection;
+  const result = await settleEffectByOperator(db, {
+    effect_id: "b3f5c1a2-0000-4000-8000-000000000002",
+    outcome: "not_applied",
+    evidence: "confirmed by the operator after inspecting the sandbox listing",
+    operation_id: "operator-899",
+  });
+  assert.equal(result.settled, false);
+});
+
+test("operator settlement refuses weak input instead of accepting a guess", async () => {
+  const db = Object.assign(async () => [], { unsafe: async () => [] }) as unknown as MigrationConnection;
+  await assert.rejects(
+    () => settleEffectByOperator(db, { effect_id: "not-a-uuid", outcome: "not_applied", evidence: "long enough reason", operation_id: "op-1" }),
+    /INVALID_EFFECT_ID/u,
+  );
+  await assert.rejects(
+    () => settleEffectByOperator(db, { effect_id: "b3f5c1a2-0000-4000-8000-000000000001", outcome: "guessed" as never, evidence: "long enough reason", operation_id: "op-1" }),
+    /INVALID_SETTLE_OUTCOME/u,
+  );
+  await assert.rejects(
+    () => settleEffectByOperator(db, { effect_id: "b3f5c1a2-0000-4000-8000-000000000001", outcome: "not_applied", evidence: "short", operation_id: "op-1" }),
+    /INVALID_SETTLE_EVIDENCE/u,
+  );
 });
