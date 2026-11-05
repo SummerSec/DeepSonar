@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { sql } from "./db.js";
 import { observationalMemoryConfig, parseFrozenPiExtensions } from "./pi-extensions.js";
 import { resolveObservationalMemoryBudget } from "./gateway-om-budget.js";
+import { frozenRuntimeKnobsFromSnapshot } from "./runtime-knobs.js";
 import { consumeEventRateLimit } from "./domains/event-ingestion/rate-limit.js";
 
 type Database = typeof sql;
@@ -43,7 +44,8 @@ function snapshotPolicy(snapshot: unknown): GatewayRequestBudget {
     const row = record(snapshot);
     // FrozenRuntimeKnobs always materializes this number. Missing legacy or
     // damaged fields are not evidence that the original policy was unlimited.
-    const knobs = record(row.runtime_knobs);
+    const knobs = frozenRuntimeKnobsFromSnapshot(row);
+    if (!knobs) throw invalid();
     const main = cap(knobs.job_token_max_requests);
     if (!["pi", "claude-code", "dsh"].includes(String(row.agent_cli))) throw invalid();
     if ((row.agent_cli === "pi" || row.pi_extensions !== undefined) && !Array.isArray(row.pi_extensions)) throw invalid();
