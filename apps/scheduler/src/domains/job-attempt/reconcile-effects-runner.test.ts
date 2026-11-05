@@ -113,6 +113,7 @@ test("operator settlement records the reason and never replays the effect", asyn
     unsafe: async (sql: string) => {
       statements.push(sql);
       if (sql.includes("UPDATE job_attempt_effects")) return [{ id: "b3f5c1a2-0000-4000-8000-000000000001" }];
+      if (sql.includes("count(*)")) return [{ count: 1 }];
       return [];
     },
   }) as unknown as MigrationConnection;
@@ -128,8 +129,10 @@ test("operator settlement records the reason and never replays the effect", asyn
   assert.match(sql, /"reconciled_by":"operator-settlement"/);
   assert.match(sql, /"reconcile_operation_id":"operator-899"/);
   assert.match(sql, /"operator_evidence":"sandbox gone/);
-  assert.match(sql, /WHERE id = '[0-9a-f-]{36}'::uuid/);
-  assert.match(sql, /status IN \('unknown', 'effect_pending'\)/);
+  assert.match(sql, /WHERE e\.id = '[0-9a-f-]{36}'::uuid/);
+  assert.match(sql, /e\.status IN \('unknown', 'effect_pending'\)/);
+  // #908 review: a still-active attempt keeps kernel ownership of its effects
+  assert.match(sql, /a\.status = 'active'/);
   // never touches replay_policy: settling records a fact, it does not authorise a replay
   assert.doesNotMatch(sql, /replay_policy\s*=/);
 });
@@ -159,4 +162,24 @@ test("operator settlement refuses weak input instead of accepting a guess", asyn
     () => settleEffectByOperator(db, { effect_id: "b3f5c1a2-0000-4000-8000-000000000001", outcome: "not_applied", evidence: "short", operation_id: "op-1" }),
     /INVALID_SETTLE_EVIDENCE/u,
   );
+});
+
+test("an effect on a still-active attempt is left to the kernel", async () => {
+  // The guard lives in SQL, so the observable contract is: the statement refuses active
+  // attempts and the caller reports 'not settled' rather than overwriting the kernel.
+  const statements: string[] = [];
+  const db = Object.assign(async () => [], {
+    unsafe: async (sql: string) => {
+      statements.push(sql);
+      return [];
+    },
+  }) as unknown as MigrationConnection;
+  const result = await settleEffectByOperator(db, {
+    effect_id: "b3f5c1a2-0000-4000-8000-000000000003",
+    outcome: "not_applied",
+    evidence: "operator inspected the host but the attempt is still running",
+    operation_id: "operator-899-2",
+  });
+  assert.equal(result.settled, false, "an active attempt must not be settled from outside");
+  assert.match(statements.join("\n"), /NOT EXISTS \(\s*SELECT 1 FROM job_attempts a WHERE a\.id = e\.attempt_id AND a\.status = 'active'/);
 });

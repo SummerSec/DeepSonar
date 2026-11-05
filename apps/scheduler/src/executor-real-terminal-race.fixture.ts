@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mock } from "node:test";
 import type { PlatformRuntimeHandlerContext } from "./domains/platform-api/registry.js";
 import type { EventEnvelopeInput } from "@deepsonar/shared-types";
+import type { RealAgentResult } from "@deepsonar/runtime-sandbox";
 
 // Only transport/storage boundaries are replaced. executeReal and the registry
 // retain their production semantic state, validation and terminal selection.
@@ -26,10 +27,11 @@ const snapshot = {
 };
 const job = { id: jobId, project_id: projectId, canvas_id: canvasId, sandbox_id: "offline-sandbox",
   payload_json: {}, agent_snapshot_json: snapshot };
-let scenario: () => Promise<void>;
+let scenario: () => Promise<void | RealAgentResult>;
 let preflight: (type: string) => Promise<void> = async () => {};
 let events: EventEnvelopeInput[] = [];
 let runnerCalls = 0;
+let bundleCalls = 0;
 let omitRunnerDispose = false;
 let gate: (() => boolean) | undefined;
 const fakeSql = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
@@ -58,7 +60,7 @@ mock.module(new URL("./core.js", import.meta.url), { namedExports: { ...core,
     await preflight(type);
   },
   ingestEvent: async (_job: string, event: EventEnvelopeInput) => { events.push(event); },
-  ingestEventBundle: async (_job: string, bundle: EventEnvelopeInput[]) => { events.push(...bundle); },
+  ingestEventBundle: async (_job: string, bundle: EventEnvelopeInput[]) => { bundleCalls++; events.push(...bundle); },
 } });
 const graph = await import("./graph.js");
 mock.module(new URL("./graph.js", import.meta.url), { namedExports: { ...graph,
@@ -102,11 +104,10 @@ mock.module("@deepsonar/runtime-sandbox", { namedExports: { ...runtime,
       sendMessage: async () => {}, writeWorkspaceFile: async () => {},
       readWorkspaceFile: async () => { throw new Error("No workspace reads in terminal race test"); },
     } as Parameters<NonNullable<typeof options.onRunReady>>[0]);
-    try { await scenario(); } finally {
+    try { return await scenario() ?? { text: "", files: {} }; } finally {
       if (omitRunnerDispose) assert.ok(listRuntimeHandlers(jobId).length > 0, "handler remains live before executor fallback cleanup");
       else await dispose?.();
     }
-    return { exitCode: 0, session: null };
   },
 } });
 const { executeReal } = await import("./executor-real.js");
@@ -119,10 +120,12 @@ export function call(operationId: string, input: unknown, options: Partial<Platf
     eventId: randomUUID(), tokenId: "offline-token", idempotencyKey: null,
     completionAttemptId: attemptId, ...options });
 }
-export async function runExecutor(act: () => Promise<void>, roleKind = "role", skipRunnerDispose = false) {
+export function terminalEvents() { return events.filter(event => ["human", "done", "hub_decision"].includes(event.type)); }
+export function terminalBundleCalls() { return bundleCalls; }
+export async function runExecutor(act: () => Promise<void | RealAgentResult>, roleKind = "role", skipRunnerDispose = false) {
   omitRunnerDispose = skipRunnerDispose;
   snapshot.role_kind = roleKind;
-  events = []; runnerCalls = 0; preflight = async () => {}; gate = undefined; scenario = act;
+  events = []; runnerCalls = 0; bundleCalls = 0; preflight = async () => {}; gate = undefined; scenario = act;
   const token = "offline-capability";
   try { await executeReal(jobId, "audit", { jobId, token, operationIds: operations, env: {
     DEEPSONAR_JOB_ID: jobId, DEEPSONAR_API_TOKEN: token,

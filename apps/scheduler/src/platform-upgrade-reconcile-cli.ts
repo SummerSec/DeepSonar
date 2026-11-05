@@ -3,6 +3,7 @@ import type { MigrationConnection } from "./migration-runner.js";
 import { RECONCILE_INPUT_SCHEMA, RECONCILE_RESULT_SCHEMA } from "./domains/job-attempt/reconcile-effects.js";
 import {
   OPERATOR_SETTLE_OUTCOMES,
+  countUnsettledEffects,
   runEffectReconcile,
   settleEffectByOperator,
   type OperatorSettleOutcome,
@@ -71,7 +72,10 @@ try {
         evidence: input.evidence as string,
         operation_id: input.operation_id ?? "",
       });
-      process.stdout.write(`${JSON.stringify({ schema: RECONCILE_RESULT_SCHEMA, ok: settled.settled, action: "settle", applied: settled.settled ? 1 : 0, remaining_unknown: 0, ...settled })}\n`);
+      // #908 review P2: report the effects that are actually still unsettled; a single
+      // operator settlement cannot claim the backlog is empty.
+      const remaining = await countUnsettledEffects(reserved as unknown as MigrationConnection);
+      process.stdout.write(`${JSON.stringify({ schema: RECONCILE_RESULT_SCHEMA, ok: remaining === 0, action: "settle", applied: settled.settled ? 1 : 0, remaining_unknown: remaining, ...settled })}\n`);
       if (!settled.settled) process.exitCode = 1;
     } else {
     // SAFETY: a reserved postgres connection exposes the same tagged-template and

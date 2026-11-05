@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { call, completionReady, rootId, runExecutor, setPreflight } from "./executor-real-terminal-race.fixture.js";
+import { call, completionReady, rootId, runExecutor, setPreflight, terminalBundleCalls, terminalEvents } from "./executor-real-terminal-race.fixture.js";
+import { resolveTerminalProcessOutcome, type RealAgentResult } from "@deepsonar/runtime-sandbox";
 import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 
 const done = { summary: "Completion accepted during the bounded offline race." };
@@ -111,6 +112,71 @@ test("executeReal: failed human preflight does not reserve a terminal outcome", 
 });
 
 const hub = { complete: { from: [rootId], description: "Offline objective is complete." } };
+const completionRefusal = "409 Completion already accepted; reconcile its receipt";
+const structuredRefusal: RealAgentResult = { text: "", files: {}, errorKind: "runner",
+  ...resolveTerminalProcessOutcome({ exitCode: 0,
+    terminalResult: { isError: true, errorDetail: completionRefusal } }) };
+
+async function acceptHubAndDone() {
+  const hubId = randomUUID(), doneId = randomUUID();
+  await call("submit_hub_decision", hub, { eventId: hubId });
+  await call("mark_job_done", done, { eventId: doneId, completionPhase: "prepare" });
+  await call("mark_job_done", done, { eventId: doneId, completionPhase: "commit" });
+  await call("mark_job_done", done, { eventId: doneId, completionPhase: "commit" });
+  assert.equal(completionReady(), true);
+  return [hubId, doneId];
+}
+
+test("executeReal: structured Gateway refusal settles the original accepted Hub/done exactly once", async () => {
+  let ids: string[] = [];
+  const terminals = await runExecutor(async () => {
+    ids = await acceptHubAndDone();
+    return structuredRefusal;
+  }, "hub");
+  assert.equal(terminalBundleCalls(), 1);
+  assert.deepEqual(terminals.map(event => event.type), ["hub_decision", "done"]);
+  assert.deepEqual(terminals.map(event => event.event_id), ids);
+  assert.deepEqual(terminals.map(event => event.payload), [hub, done]);
+});
+
+for (const phase of ["none", "prepare"] as const) {
+  test(`executeReal: structured refusal with ${phase} completion does not finalize`, async () => {
+    await assert.rejects(runExecutor(async () => {
+      await call("submit_hub_decision", hub);
+      if (phase === "prepare") await call("mark_job_done", done, { completionPhase: "prepare" });
+      assert.equal(completionReady(), false);
+      return structuredRefusal;
+    }, "hub"), /agent 运行失败: 409 Completion already accepted/);
+    assert.equal(terminalBundleCalls(), 0);
+    assert.deepEqual(terminalEvents(), []);
+  });
+}
+
+const rejectedResults: Array<[string, RealAgentResult]> = [
+  ...[0, 137].map(exitCode => [`exit ${exitCode} without structured terminal`, {
+    text: "", files: {}, errorKind: "runner" as const,
+    ...resolveTerminalProcessOutcome({ exitCode, stderrTail: completionRefusal }),
+  }] as [string, RealAgentResult]),
+  ["exit 137 after structured refusal", { text: "", files: {}, errorKind: "runner",
+    ...resolveTerminalProcessOutcome({ exitCode: 137, closeReason: "terminal_result",
+      terminalResult: { isError: true, errorDetail: completionRefusal } }) }],
+  ["transport error", { ...structuredRefusal, runnerErrorSource: "process" }],
+  ["missing provenance", { ...structuredRefusal, runnerErrorSource: undefined }],
+  ["arbitrary structured diagnostic", { ...structuredRefusal, error: `unrelated diagnostic: ${completionRefusal}` }],
+  ["semantic failure", { ...structuredRefusal, errorKind: "semantic" }],
+  ...["cancelled", "timeout", "lease expired", "COMPLETION_EFFECT_UNKNOWN"].map(reason => [reason,
+    { ...structuredRefusal, error: `${reason}: ${completionRefusal}` }] as [string, RealAgentResult]),
+];
+for (const [name, result] of rejectedResults) {
+  test(`executeReal: accepted Hub/done cannot swallow ${name}`, async () => {
+    await assert.rejects(runExecutor(async () => {
+      await acceptHubAndDone();
+      return result;
+    }, "hub"), /agent 运行失败:/);
+    assert.equal(terminalBundleCalls(), 0);
+    assert.deepEqual(terminalEvents(), []);
+  });
+}
 
 test("executeReal: human accepted during Hub preflight rejects the late Hub", { timeout: 5000 }, async () => {
   const entered = barrier(), resume = barrier();

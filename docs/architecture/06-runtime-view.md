@@ -87,6 +87,7 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 | 事件窗口或图查询预算耗尽 | 429 或预算错误，反馈当前状态和剩余预算 | 用新的有界查询/延迟重试修复；不扩大 Job scope |
 | provisioning 在外部效果开始前已知失败 | 记录失败并按已知可重试策略决定新 Attempt；Job 进入失败或受控 retry | 只有明确安全的 provisioning 重试允许继续；不重复未知外部效果 |
 | effect intent 已写但外部结果未知（例如沙箱句柄/销毁回执缺失） | Attempt effect 标记 `unknown`，Job 进入 orphan/对账路径，保留 effect id | **禁止自动重放未知效果**；由对账或人工确认后采取下一步 |
+| 已接受 done 后 CLI 再请求模型 | 仅对具有结构化终态来源的精确 Gateway 完成拒绝放行原 Hub/done bundle；进程退出、缺终态、传输/诊断或语义失败不覆盖 | 不重试进程、不重放未知效果，仍过原 ingestion/lifecycle 门；来源契约与离线回归见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919) |
 | 用户取消或 deadline 超时 | 以状态 CAS 收敛 Job/Attempt，停止 lease，撤销 token，执行可重复清理 | 迟到回调不能复活 Job；清理自身若未知也保留 unknown 记录 |
 | Scheduler 重启 | preparing 且没有 effect 的 Job 可回 pending；已发 intent、未结算或有外部句柄的 Attempt 走 unknown/orphan | Reaper/reconcile 先对账再清理；不能把“没有日志”当作“没有效果” |
 | Agent 调用 `request_human` | 执行器在异步预检前后检查完成预留及终态互斥，防止等待期间已接受完成或人工请求后再覆盖；记录 human message，Job 进入 `waiting_human`；人工回复另走 ACK operation | ACK 与 injected 分离；有回复可回 pending，等待人工预算超时由 Reaper 将 Job 置为 `failed` 并以 `human_timeout` 记因 |
@@ -101,6 +102,8 @@ Gateway 503 仅在内核明确证明请求尚未启动时可降级；`unknown` �
 ## 数据库锁序、共享卷与完成恢复（#871/#873/#874）
 
 涉及图投影的事务按 Canvas → Job → Attempt → effects 获取锁；节点/边触发器也会锁 Canvas，不能在持 Job 后才更新节点。claim 按有界 keyset 候选页使用独立事务，每页重新获取 claim advisory lock 并读取平台暂停、活动数与配额。先排序锁 Canvas，再锁项目/Job/Attempt 并核验当前 scope 和调度条件，仅成功领取计入配额；忙锁候选不消耗槽位。需要继续扫描时先提交并释放本页锁，下一页重新按同一锁序开始，不能持 Job/Attempt 锁回头锁新 Canvas。context 的 Job-only 写入在同一 Job → Attempt 事务更新两份投影。仅已回滚的纯数据库事务允许按 [DB conflict helper](../../apps/scheduler/src/db-conflict-retry.ts)有界重试；Gateway 在 admission 提交后只向上游发一次请求，不重放请求或未知效果。
+
+任务硬删除与归档复用上述锁序（#904 / #917 评审）：claim advisory → Canvas → 排序 Job → Attempt/effects，保留判定与数据库取消同事务；知识治理回执、版本、评估及设备租约历史保持不变，命中时在取消前拒绝。事务调用方通过 `deferProvisionInterruption` 将 provision abort/provider cancel 延后到真实提交成功，之后再销毁 sandbox；取消 CAS 后的 SQL 失败不应改变外部 runner。独立 PostgreSQL 回归覆盖删除回滚、提交后中断与归档/事件交错，最终工程验收仍以当前 SHA 的 Actions 为准。
 
 [共享资产生命周期锁](../../apps/scheduler/src/shared-asset-lifecycle.ts)使用独立 PostgreSQL session 串行同 Job 的 prepare 与 cleanup，不占住业务连接池等待外部 provision。准备要求当前最新 active Attempt，锁保持到 runner 验证只读挂载并提交资源绑定/running CAS；旧 finally、Reaper 和扫描器在获得锁后重新读取归属，active/新 Attempt 拒绝删除。Docker 的实际 volume/helper 名称由独立 generation 决定，prepare 只操作本 generation；cleanup 固定资源快照后重验独立 session 许可，每次破坏性操作或重试前再检查，不能失锁后采纳后继资源。Docker 再严格验证 managed/Job/generation 标签，helper 用 inspect 得到的不可变容器 ID 清理，卷非 force 删除；精确不存在、fenced skip 与失败分别处理。完整边界见[共享资产专题](../SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。续租由[Attempt lease helper](../../apps/scheduler/src/attempt-lease.ts)维护精确 registration 与 stop closure，旧 finally 不删除新 timer；alive 探测后再次核归属，在短 Job → 最新 Attempt 事务中检查 active/cancel 与 Job/Attempt 双 sandbox 绑定，旧 tick 不续后继 lease。无服务 timer 与真实 PostgreSQL 归属回归均已接源码，实际结果以最终 Actions 为准。
 

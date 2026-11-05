@@ -268,6 +268,7 @@ export {
   normalizeRuntimeErrorDetails,
   parseRuntimeLine,
   redactRuntimeSecrets,
+  resolveTerminalProcessOutcome,
   runRealAgent,
   runtimeCliEnv,
   skillMaterializationPath,

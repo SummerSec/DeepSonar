@@ -39,6 +39,30 @@ control API, event validation, completion gates, leases, and all state
 transitions. Output is consumed as structured JSON events; terminal text is
 never scraped.
 
+### Runner failure provenance (#919)
+
+`RealAgentResult.runnerErrorSource` distinguishes `structured_terminal` failures
+from `process` failures (exit, missing terminal, transport, resume or output
+capture). It describes the final attempt and is cleared by a later success;
+plain-final output cannot manufacture structured-terminal provenance. Pi RPC,
+error/extension diagnostics, aborted messages and streaming-error diagnostics,
+plus DSH JSON-RPC request failures, keep `process` provenance even when the
+adapter normalizes them into an error result; a later failed settlement keeps
+that source. A failed structured terminal never masks a nonzero exit, including
+after stdin close. Transport errors after a failed terminal also remain process
+failures; the existing successful intentional-close rule is unchanged.
+
+`executeReal` may settle the original Hub/done bundle exactly once only when
+its done was already accepted and the final structured error is the exact
+Gateway `COMPLETION_ALREADY_ACCEPTED` refusal or either registered gate message
+(with the supported Pi error/HTTP status prefix). Stderr, arbitrary diagnostics,
+missing provenance, semantic errors and cancellation/timeout/lease/unknown-effect
+failures cannot activate this override. Original receipt, permission, lifecycle
+and ingestion gates remain authoritative; this does not retry a process or
+reconcile unknown effects. Regression entry points are `ci:unit:runtime-sandbox`
+and `ci:unit:executor-real`; these are offline engineering fixtures, not live
+CLI/model or final-SHA Actions acceptance.
+
 DSH vendor dialect (official `settings.yaml` parse, secret-key reject, single
 route/profile rewrite onto the Job Gateway, pi-compatible `input[0]` frame, and
 Cordis composition) lives in `packages/runtime-sandbox/src/dsh-pi-ai.ts` plus
@@ -197,6 +221,22 @@ untrusted general-purpose RPC endpoint is unsupported.
 
 - **OpenAI-responses（#321）**：按 body `input[0]` 的首条 system 消息识别；DSH 由 `dsh-request-frame.ts` 投影为 pi 兼容帧。
 - **Anthropic Messages（#736）**：只按 `User-Agent` 是否以 `claude-cli` 开头识别，否则 401 `unauthorized client detected`。真实 Job 由 Claude CLI 自带该 UA 并经网关透传；Scheduler 自发的推理探测 / 模型目录发现与网关 `upstreamAuthHeaders` 统一注入 `user-agent: claude-cli/<pin> (external, cli)` + `x-app: cli`，版本取 claude-code adapter pin（`apps/scheduler/src/claude-cli-fingerprint.ts`），不得另写第二个版本号。
+
+### Provider 自定义请求头（#918）
+
+凭据可以在 `settings_config_json` 里声明额外的上游请求头（流量标签、中转路由键、租户标识），解析与校验集中在
+`apps/scheduler/src/provider-custom-headers.ts`，**只读服务器持有的凭据配置，不读沙箱入站头**。Gateway、模型目录发现与推理探测
+共用同一解析器，避免「连接测试走一条路由、真实 Job 走另一条」。
+
+生效顺序（低 → 高）：报文 framing（`content-type` / `accept`）→ 受信协议默认值（`anthropic-version`、CLI 指纹）→
+凭据配置头 → Gateway 允许透传的 CLI 协议头（**精确头名** `user-agent` / `x-app` / `anthropic-version` / `anthropic-beta`）→
+最终认证（由当前绑定凭据生成）。因此配置头永远无法占位认证、framing 或 hop-by-hop 层。
+
+- 头名小写归一（`X-Traffic-Type` 与 `x-traffic-type` 不会同时出站），校验 RFC 7230 token 字符、长度上限与条目数上限，拒绝 CR/LF/NUL。
+- 拒绝的类别包括认证载体（`authorization`、`x-api-key`、`anthropic-api-key`、`proxy-authorization`）、framing/hop-by-hop（`host`、`content-length`、`content-type`、`accept`、`connection`、`transfer-encoding`、`te`、`upgrade` 等）、协议与 CLI 身份（`user-agent`、`x-app`、`anthropic-*`）、内部/代理控制（`x-deepsonar-*`、`proxy-*`）以及 `cookie`/`set-cookie`。被拒条目只记头名，不进日志值。
+- 配置头与 endpoint 共用 `provider-settings.ts` 的服务端 profile 选择：官方 `llm-pi-ai` 顶层对象、`config` 对象与 `config` YAML 均复用 runtime-sandbox 官方解析器，按选中 route 读取；Pi `providers` 读取提供首个有效 endpoint 的同一 profile，即使该 profile 的头集合为空也不借用其他 provider 的头。未选出 endpoint profile 时，所有头集合（包括空集合）必须一致，否则不应用（fail closed）。metadata 覆盖的实际 endpoint 若与该 profile 声明的 URL 不一致，不应用其配置头，也不改选其他 profile。DSH 独立配置白名单不因此放宽。
+- 入站 Job token 曾经可经 `/^anthropic-/` 前缀透传（`anthropic-api-key` 也是合法入站 token 来源）。现在透传用精确头名集合，token 不再有静态外发路径。
+- Observational Memory 的别名 provider 仍会剔除 `headers` / `baseUrl`（见 `provider-settings.ts`），本机制不恢复沙箱对固定 endpoint 与请求头的覆盖能力。
 
 ## Pi Coding Agent RPC（#140）
 

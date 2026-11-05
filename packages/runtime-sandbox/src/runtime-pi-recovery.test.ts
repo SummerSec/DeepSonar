@@ -13,6 +13,8 @@ class PiProcess implements RuntimeProcess {
   queue: RuntimeProcessChunk[] = [];
   wake?: () => void;
   ended = false;
+  exitCode = 0;
+  transportError?: Error;
   constructor(private readonly input: (record: Record<string, unknown>, process: PiProcess) => void) {}
   emit(record: Record<string, unknown>) {
     this.queue.push({ type: "stdout", chunk: `${JSON.stringify(record)}\n` });
@@ -31,7 +33,8 @@ class PiProcess implements RuntimeProcess {
       if (record) yield record;
       else await new Promise<void>((resolve) => { this.wake = resolve; });
     }
-    yield { type: "exit", exitCode: 0 };
+    if (this.transportError) throw this.transportError;
+    yield { type: "exit", exitCode: this.exitCode };
   }
 }
 function state(process: PiProcess, command: Record<string, unknown>, id = "session-1") {
@@ -56,6 +59,86 @@ function host(factory: (index: number) => PiProcess, nonempty = true) {
     writeHumanInboxFile: async () => {},
   };
   return { runtime, processes };
+}
+
+const completionRefusal = "409 Completion already accepted; reconcile its receipt";
+test("production Pi runner retains structured Gateway completion refusal provenance", async () => {
+  const fake = host(() => new PiProcess((record, process) => {
+    if (record.type === "get_state") state(process, record);
+    else if (record.type === "prompt") turn(process, record, completionRefusal);
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true });
+  assert.equal(result.runnerErrorSource, "structured_terminal");
+  assert.equal(result.error, `Pi message ended: error: ${completionRefusal}`);
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(fake.processes.length, 1);
+});
+
+for (const exitCode of [0, 137]) {
+  test(`production Pi runner retains missing-terminal process provenance (exit ${exitCode})`, async () => {
+    const fake = host(() => new PiProcess((record, process) => {
+      if (record.type === "get_state") state(process, record);
+      else if (record.type === "prompt") {
+        process.emit({ type: "response", id: record.id, command: "prompt", success: true, data: { disposition: "started" } });
+        process.emit({ type: "agent_start" });
+        process.emit({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: completionRefusal } });
+        process.queue.push({ type: "stderr", chunk: completionRefusal });
+        process.exitCode = exitCode;
+        process.ended = true;
+      }
+    }));
+    const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true });
+    assert.equal(result.runnerErrorSource, "process");
+    assert.equal(result.terminalOutcome, "failure");
+    assert.match(result.error!, exitCode ? /退出码 137/ : /without a structured terminal result/);
+  });
+}
+
+test("production Pi runner nonzero exit after structured refusal keeps process provenance", async () => {
+  const fake = host(() => new PiProcess((record, process) => {
+    if (record.type === "get_state") state(process, record);
+    else if (record.type === "prompt") {
+      turn(process, record, completionRefusal);
+      process.exitCode = 137;
+    }
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true });
+  assert.equal(result.runnerErrorSource, "process");
+  assert.equal(result.terminalOutcome, "failure");
+  assert.match(result.error!, /退出码 137/);
+});
+
+test("production Pi runner transport failure replaces structured refusal provenance even after stdin close", async () => {
+  const fake = host(() => new PiProcess((record, process) => {
+    if (record.type === "get_state") state(process, record);
+    else if (record.type === "prompt") {
+      turn(process, record, completionRefusal);
+      process.transportError = new Error(completionRefusal);
+    }
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true });
+  assert.equal(result.runnerErrorSource, "process");
+  assert.equal(result.terminalOutcome, "failure");
+});
+
+for (const type of ["error", "extension_error", "message_update"] as const) {
+  test(`production Pi runner does not promote ${type} diagnostics into a Gateway terminal refusal`, async () => {
+    const fake = host(() => new PiProcess((record, process) => {
+      if (record.type === "get_state") state(process, record);
+      else if (record.type === "prompt") {
+        process.emit({ type: "response", id: record.id, command: "prompt", success: true, data: { disposition: "started" } });
+        process.emit({ type: "agent_start" });
+        process.emit(type === "message_update"
+          ? { type, assistantMessageEvent: { type: "error", error: completionRefusal } }
+          : { type, error: completionRefusal });
+        process.emit({ type: "agent_settled", aborted: false });
+      }
+    }));
+    const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true });
+    assert.equal(result.runnerErrorSource, "process");
+    assert.equal(result.terminalOutcome, "failure");
+    assert.equal(result.error, completionRefusal);
+  });
 }
 
 test("production Pi runner starts idle completion nudges with prompt once per turn", async () => {
@@ -94,6 +177,7 @@ test("production Pi runner resets failed attempt and verifies resumed identity b
   const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial" });
   assert.equal(result.error, undefined);
   assert.equal(result.terminalOutcome, "success");
+  assert.equal(result.runnerErrorSource, undefined);
   assert.equal(result.text, "done");
   assert.equal(fake.processes.length, 2);
   assert.deepEqual(fake.processes[1]!.commands.map((record) => record.type), ["get_state", "prompt"]);
@@ -214,8 +298,8 @@ test("#765 large and nested-type error events cannot turn into success", async (
         proc.emit({ type: "agent_start" });
         // Nested type deliberately precedes the top-level type.
         proc.emit({ nested: { type: "message_update" }, type,
-          ...(type === "message_end" ? { message: { role: "assistant", stopReason: "error", errorMessage: "invalid request " + largeText } }
-            : { assistantMessageEvent: { type: "error", error: "invalid request " + largeText } }) });
+          ...(type === "message_end" ? { message: { role: "assistant", stopReason: "error", errorMessage: `invalid request ${largeText}` } }
+            : { assistantMessageEvent: { type: "error", error: `invalid request ${largeText}` } }) });
         proc.emit({ type: "agent_settled", aborted: false });
       }
     }));
@@ -239,6 +323,7 @@ test("#765 capture failure is terminal, reports incomplete evidence and never le
     onRuntimeArtifact: async () => { throw new Error("disk failure synthetic-secret"); }, onEvent: e => events.push(e) });
   assert.equal(result.terminalOutcome, "failure");
   assert.equal(result.error, "PI_RPC_CAPTURE_WRITE_FAILED");
+  assert.equal(result.runnerErrorSource, "process");
   assert.ok(events.some(e => e.capture_complete === false));
   assert.ok(!JSON.stringify(events).includes("synthetic-secret"));
   assert.ok(!events.some(e => e.capture_complete === true));
@@ -280,7 +365,7 @@ test("#765 capture budget is run-wide and archive writes apply backpressure", as
 test("#765 preview cuts inside Chinese and emoji codepoints without corrupting UTF-8", async () => {
   for (const [text, expected] of [
     ["中".repeat(400_000), "中".repeat(1365)],
-    ["a" + "😀".repeat(300_000), "a" + "😀".repeat(1023)],
+    [`a${"😀".repeat(300_000)}`, `a${"😀".repeat(1023)}`],
     ["😀".repeat(300_000), "😀".repeat(1024)],
   ]) {
     const capture = new PiRpcOutputCapture({ uploadFile: async () => {} }, [], async () => "runtime/test.json", () => {});

@@ -27,6 +27,7 @@ import { inc } from "./metrics.js";
 import { DatabaseConflictExhaustedError, withDatabaseConflictRetry } from "./db-conflict-retry.js";
 import { appendOtlpEnvelope } from "./evidence.js";
 import { extractBaseUrlFromSettings } from "./provider-settings.js";
+import { composeUpstreamRequestHeaders, providerCustomHeadersFromSettings } from "./provider-custom-headers.js";
 import {
   bareUpstreamModelId,
   modelCatalogMatchForRequest,
@@ -474,24 +475,59 @@ export async function revokeJobTokens(jobId: string, reason: string): Promise<vo
   await sql.begin((tx) => revokeJobTokensInTransaction(tx as unknown as typeof sql, jobId, reason));
 }
 
-/** 按 provider 注入真实认证头（与 credential-test.ts 行为一致） */
-export function upstreamAuthHeaders(provider: string, secret: string): Record<string, string> {
+/**
+ * #918: protocol defaults the Gateway trusts for a provider. Kept separate from the final
+ * auth carriers so a CLI's own protocol headers can override the defaults while nothing
+ * can override authentication.
+ */
+export function upstreamProtocolHeaders(provider: string): Record<string, string> {
+  if (provider !== "anthropic") return {};
+  // #736: third-party Anthropic-compatible relays also fingerprint the Claude CLI.
+  return { "anthropic-version": "2023-06-01", ...claudeCliFingerprintHeaders() };
+}
+
+/** Final authentication, always generated from the currently bound credential. */
+export function upstreamFinalAuthHeaders(provider: string, secret: string): Record<string, string> {
   switch (provider) {
     case "anthropic":
       // 官方 Anthropic 认 x-api-key；第三方兼容代理（及本机 Claude Code）认 Bearer。
-      // #736：附带 Claude CLI 指纹（user-agent/x-app）。真实 Job 的 CLI 请求头会在
-      // 下方透传逻辑中覆盖这两项；缺少透传头时网关自发的 anthropic 请求仍保持同口径。
-      return {
-        authorization: `Bearer ${secret}`,
-        "x-api-key": secret,
-        "anthropic-version": "2023-06-01",
-        ...claudeCliFingerprintHeaders(),
-      };
+      return { authorization: `Bearer ${secret}`, "x-api-key": secret };
     case "openai":
       return { authorization: `Bearer ${secret}` };
     default:
       return {};
   }
+}
+
+/** 按 provider 注入真实认证头（与 credential-test.ts 行为一致） */
+export function upstreamAuthHeaders(provider: string, secret: string): Record<string, string> {
+  return { ...upstreamProtocolHeaders(provider), ...upstreamFinalAuthHeaders(provider, secret) };
+}
+
+/**
+ * #918: CLI headers the Gateway forwards upstream — exact names only. The previous
+ * `anthropic-*` prefix also matched `anthropic-api-key`, which `extractInboundJobToken`
+ * accepts as an inbound Job token; a prefix match therefore had a static path for sending
+ * a Job token to the upstream. Authentication carriers are finalised server-side instead.
+ */
+export const GATEWAY_INBOUND_PROTOCOL_HEADERS = new Set([
+  "user-agent",
+  "x-app",
+  "anthropic-version",
+  "anthropic-beta",
+]);
+
+export function gatewayInboundProtocolHeaders(
+  headers: Record<string, string | string[] | undefined>,
+): Record<string, string> {
+  const forwarded: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    const lower = name.toLowerCase();
+    if (!GATEWAY_INBOUND_PROTOCOL_HEADERS.has(lower)) continue;
+    const text = headerString(value);
+    if (text) forwarded[lower] = text;
+  }
+  return forwarded;
 }
 
 /** 凭据 base_url 已带 /v1 时，不要把 Claude Code 的 /v1/messages 再拼成 /v1/v1/messages。 */
@@ -1485,15 +1521,24 @@ export function registerGateway(app: FastifyInstance): void {
         return deny(reply, 429, "request quota exhausted", "quota_exhausted");
       }
       const { requestNo, effectId: gatewayEffectId } = requestIntent;
-      const headers: Record<string, string> = {
-        "content-type": (req.headers["content-type"] as string) ?? "application/json",
-        accept: (req.headers.accept as string) ?? "application/json",
-        ...upstreamAuthHeaders(safeProvider, secret),
-      };
-      // 透传 anthropic-version 等协议头（过滤 hop-by-hop 与安全头）
-      for (const [k, v] of Object.entries(req.headers)) {
-        if (/^(anthropic-|x-app|user-agent)/i.test(k) && typeof v === "string") headers[k] = v;
+      // #918: precedence, lowest to highest — body framing → trusted protocol defaults →
+      // headers configured on the credential → CLI protocol headers the Gateway allowlists
+      // (exact names) → authentication finalised from the bound credential. Configured
+      // headers are sanitized upstream of this point, so they cannot occupy the last layers.
+      const configuredHeaders = providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl);
+      if (configuredHeaders.rejected.length > 0) {
+        console.warn(`[gateway] provider headers not applied: ${configuredHeaders.rejected.join(",")}`);
       }
+      const headers = composeUpstreamRequestHeaders({
+        base: {
+          "content-type": (req.headers["content-type"] as string) ?? "application/json",
+          accept: (req.headers.accept as string) ?? "application/json",
+        },
+        configured: configuredHeaders.headers,
+        protocol: upstreamProtocolHeaders(safeProvider),
+        inboundProtocol: gatewayInboundProtocolHeaders(req.headers as Record<string, string | string[] | undefined>),
+        auth: upstreamFinalAuthHeaders(safeProvider, secret),
+      });
 
       const jobDeadlineMs = gatewayJobDeadlineMs(
         jt.started_at as Date | string | number | null,

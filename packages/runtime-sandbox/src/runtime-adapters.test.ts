@@ -625,19 +625,19 @@ test("Pi error / extension_error 优先展示嵌入 JSON 的 message", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
   const expected = "OpenAI API error (401): 无效的令牌 (request id: 20260901210556871436957gdfwdwZcW5EDY)";
   assert.deepEqual(adapter.decodeOutput({ type: "error", error: PI_ISSUE_320_SAMPLE }, {}), [
-    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE },
+    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE, runnerErrorSource: "process" },
   ]);
   assert.deepEqual(adapter.decodeOutput({ type: "extension_error", message: PI_ISSUE_320_SAMPLE }, {}), [
-    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE },
+    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE, runnerErrorSource: "process" },
   ]);
   assert.deepEqual(adapter.decodeOutput({ type: "error", errorMessage: PI_ISSUE_320_SAMPLE }, {}), [
-    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE },
+    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE, runnerErrorSource: "process" },
   ]);
   assert.deepEqual(adapter.decodeOutput({ type: "error", error: "connection refused" }, {}), [
-    { type: "result", subtype: "error", is_error: true, result: "connection refused" },
+    { type: "result", subtype: "error", is_error: true, result: "connection refused", runnerErrorSource: "process" },
   ]);
   assert.deepEqual(adapter.decodeOutput({ type: "response", command: "prompt", success: false, error: PI_ISSUE_320_SAMPLE }, {}), [
-    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE },
+    { type: "result", subtype: "error", is_error: true, result: expected, detail: PI_ISSUE_320_SAMPLE, runnerErrorSource: "process" },
   ]);
 });
 
@@ -645,10 +645,10 @@ test("DSH JSON-RPC 错误同样提取嵌入 JSON message", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
   const raw = "OpenAI API error (401): {\"message\":\"unauthorized client detected\"}";
   assert.deepEqual(adapter.decodeOutput({ jsonrpc: "2.0", id: "1", error: { message: raw } }, {}), [
-    { type: "result", subtype: "error", is_error: true, result: "OpenAI API error (401): unauthorized client detected", detail: raw },
+    { type: "result", subtype: "error", is_error: true, result: "OpenAI API error (401): unauthorized client detected", detail: raw, runnerErrorSource: "process" },
   ]);
   assert.deepEqual(adapter.decodeOutput({ jsonrpc: "2.0", id: "1", error: { code: -32000 } }, {}), [
-    { type: "result", subtype: "error", is_error: true, result: "DSH JSON-RPC request failed" },
+    { type: "result", subtype: "error", is_error: true, result: "DSH JSON-RPC request failed", runnerErrorSource: "process" },
   ]);
 });
 
