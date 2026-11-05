@@ -795,3 +795,16 @@ test("#749 CredentialConfigEditor renders the model input for every CLI", () => 
   assert.match(render({ agentCli: "codex" }), /id="cc-switch-codex-model"/);
   assert.match(render({ agentCli: "open-code", settingsJson: "{}" }), /cc-switch-opencode-models-url/);
 });
+
+
+test("#914 deletion reference navigation links only the visible projects and both reference fields", async () => {
+  const { ProjectCredentialRepairLinks } = await import("./components/ProjectCredentialRepairLinks");
+  const html = renderToStaticMarkup(createElement(ProjectCredentialRepairLinks, { references: {
+    count: 1, items: [{ project_id: "project-a", project_name: "Visible project", enabled: true, default: true }],
+  } }));
+  assert.match(html, /href="\/projects\/project-a\/settings\?tab=roles"/);
+  assert.match(html, /Visible project/);
+  assert.match(html, /启用账号、默认账号/);
+  assert.match(html, /不修改历史 Job 或自动重跑/);
+  assert.equal(renderToStaticMarkup(createElement(ProjectCredentialRepairLinks, { references: { count: 0, items: [] } })), "");
+});

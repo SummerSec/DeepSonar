@@ -1,11 +1,13 @@
 import { FloppyDisk } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
-import { api, type ProviderCredential } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, type ProjectSettings, type ProviderCredential } from "../api";
 import { isCurrentAgentCli } from "@deepsonar/shared-types";
 import { formatActiveConcurrencyQuota } from "../provider-account-concurrency";
-import { credentialSelectionPatch, defaultCredentialUnavailable } from "../project-provider-selection";
+import { credentialSelectionPatch, defaultCredentialCandidates, defaultCredentialUnavailable } from "../project-provider-selection";
 import { HelpTip } from "../ui";
 import { showToast } from "../toast";
+import { SearchableSelect } from "../SearchableSelect";
+import { CREDENTIAL_ACCOUNT_HREF } from "../settings-tabs";
 
 const AGENT_CLIS = ["claude-code", "pi", "dsh"] as const;
 type AgentCli = (typeof AGENT_CLIS)[number];
@@ -69,24 +71,57 @@ export function ProjectCliProviderAllowlistPanel({
   enabledCredentialIds: string[];
   credentialIdsConfigured: boolean;
   defaultCredentialId: string | null;
-  onSaved: () => void;
+  onSaved: (settings?: ProjectSettings) => void;
 }) {
   const [clis, setClis] = useState<AgentCli[]>(enabledAgentClis.length ? enabledAgentClis : ["claude-code"]);
   const [credIds, setCredIds] = useState<string[]>(enabledCredentialIds);
   const [credentialSelectionChanged, setCredentialSelectionChanged] = useState(false);
-  const [clearDefaultCredential, setClearDefaultCredential] = useState(false);
+  const [selectedDefaultCredentialId, setSelectedDefaultCredentialId] = useState(defaultCredentialId);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [configurationRefreshed, setConfigurationRefreshed] = useState(false);
   const [probeAction, setProbeAction] = useState<{ id: string; kind: "test" } | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
 
+  const currentProject = useRef(projectId);
+  currentProject.current = projectId;
+  const mounted = useRef(false);
+  const saveRequest = useRef<object | null>(null);
+  const probeRequest = useRef<object | null>(null);
   useEffect(() => {
+    mounted.current = true;
+    setBusy(false);
+    setProbeAction(null);
+    setProbeError(null);
+    return () => {
+      mounted.current = false;
+      saveRequest.current = null;
+      probeRequest.current = null;
+    };
+  }, [projectId]);
+
+  const resetDraft = () => {
     setClis(enabledAgentClis.length ? enabledAgentClis : ["claude-code"]);
     setCredIds(enabledCredentialIds);
     setCredentialSelectionChanged(false);
-    setClearDefaultCredential(false);
-  }, [enabledAgentClis, enabledCredentialIds, credentialIdsConfigured, defaultCredentialId]);
+    setSelectedDefaultCredentialId(defaultCredentialId);
+    setSaved(false);
+    setFailed(false);
+    setConfigurationRefreshed(false);
+  };
+  // Health probes reload settings with new arrays. Only a semantic configuration
+  // change (or project switch) may replace the draft; allowlist order is irrelevant.
+  const configurationKey = JSON.stringify([projectId, [...enabledAgentClis].sort(),
+    [...enabledCredentialIds].sort(), credentialIdsConfigured, defaultCredentialId]);
+  const previousConfiguration = useRef({ projectId, key: configurationKey });
+  useEffect(() => {
+    const previous = previousConfiguration.current;
+    if (previous.key === configurationKey) return;
+    previousConfiguration.current = { projectId, key: configurationKey };
+    resetDraft();
+    setConfigurationRefreshed(previous.projectId === projectId && !saved);
+  }, [projectId, configurationKey, enabledAgentClis, enabledCredentialIds, credentialIdsConfigured, defaultCredentialId]);
 
   const llmCredentials = useMemo(
     () => credentialLoadState === "loaded" ? credentials.filter((c) => c.kind === "llm_provider" && (c.project_id == null || c.project_id === projectId)) : [],
@@ -94,10 +129,15 @@ export function ProjectCliProviderAllowlistPanel({
   );
 
   const credentialListLoaded = credentialLoadState === "loaded";
-  const unavailableDefault = credentialListLoaded && defaultCredentialUnavailable(defaultCredentialId, llmCredentials);
+  const defaultCandidates = defaultCredentialCandidates(llmCredentials, projectId, credentialIdsConfigured || credentialSelectionChanged ? credIds : undefined)
+    .filter((credential) => clis.some((cli) => credentialSupportsCli(credential, cli)));
+  const unavailableDefault = credentialListLoaded && defaultCredentialUnavailable(selectedDefaultCredentialId, defaultCandidates);
+  const defaultChanged = selectedDefaultCredentialId !== defaultCredentialId;
   const unavailableIds = credIds.filter((id) => !llmCredentials.some((credential) => credential.id === id && credential.status === "active"));
+  const markDraftEdited = () => { setSaved(false); };
   const removeUnavailableReferences = () => {
     if (!credentialListLoaded) return;
+    markDraftEdited();
     setCredIds((current) => current.filter((id) => !unavailableIds.includes(id)));
     setCredentialSelectionChanged(true);
   };
@@ -108,10 +148,15 @@ export function ProjectCliProviderAllowlistPanel({
   }, [llmCredentials, clis]);
 
   const probeCredential = async (credential: ProviderCredential) => {
+    if (probeRequest.current || saveRequest.current) return;
+    const request = {};
+    probeRequest.current = request;
+    const isCurrent = () => mounted.current && currentProject.current === projectId && probeRequest.current === request;
     setProbeAction({ id: credential.id, kind: "test" });
     setProbeError(null);
     try {
       const result = await api.testCredential(credential.id);
+      if (!isCurrent()) return;
       if (!result.ok) {
         setProbeError(`${credential.name || credential.provider}：连接测试失败${result.category ? `（${result.category}）` : ""}${result.detail ? `：${result.detail}` : ""}`);
       } else {
@@ -119,13 +164,15 @@ export function ProjectCliProviderAllowlistPanel({
       }
       onSaved();
     } catch (error) {
+      if (!isCurrent()) return;
       setProbeError(`${credential.name || credential.provider}：${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      setProbeAction(null);
+      if (isCurrent()) { probeRequest.current = null; setProbeAction(null); }
     }
   };
 
   const toggleCli = (cli: AgentCli) => {
+    markDraftEdited();
     setClis((current) => {
       if (current.includes(cli)) {
         if (current.length === 1) return current;
@@ -137,6 +184,7 @@ export function ProjectCliProviderAllowlistPanel({
 
   const toggleCred = (id: string) => {
     if (!credentialListLoaded) return;
+    markDraftEdited();
     const current = credentialIdsConfigured || credentialSelectionChanged
       ? credIds : llmCredentials.filter((credential) => credential.status === "active").map((credential) => credential.id);
     setCredIds(current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
@@ -144,31 +192,43 @@ export function ProjectCliProviderAllowlistPanel({
   };
 
   const save = async () => {
+    if (saveRequest.current || probeRequest.current) return;
     if (clis.length === 0) {
       showToast("至少启用一种 Agent CLI", "error");
       return;
     }
-    if (!credentialListLoaded && (credentialSelectionChanged || clearDefaultCredential)) {
+    if (!credentialListLoaded) {
       showToast("Provider 账号尚未加载成功，不能保存账号白名单或默认账号变更", "error");
       return;
     }
+    if (unavailableDefault) {
+      showToast("请显式清除或更换不在可用范围内的默认账号", "error");
+      return;
+    }
+    const request = {};
+    saveRequest.current = request;
+    const isCurrent = () => mounted.current && currentProject.current === projectId && saveRequest.current === request;
     setBusy(true);
     setSaved(false);
     setFailed(false);
     try {
-      await api.patchSettings(projectId, {
+      const result = await api.patchSettings(projectId, {
         enabled_agent_clis: clis,
-        ...credentialSelectionPatch({ credentialSelectionChanged, credIds, defaultCredentialId, clearDefaultCredential, credentialListLoaded }),
+        ...credentialSelectionPatch({ credentialSelectionChanged, credIds, defaultCredentialId, selectedDefaultCredentialId, credentialListLoaded }),
       });
+      if (!isCurrent()) return;
       showToast("已保存，下一 Job 生效", "ok");
       setSaved(true);
-      window.setTimeout(() => setSaved(false), 2000);
-      onSaved();
+      setCredIds(result.enabled_credential_ids);
+      setSelectedDefaultCredentialId(result.default_credential_id);
+      setCredentialSelectionChanged(false);
+      onSaved(result);
     } catch (error) {
+      if (!isCurrent()) return;
       setFailed(true);
       showToast(`保存失败：${error instanceof Error ? error.message : error}`, "error");
     } finally {
-      setBusy(false);
+      if (isCurrent()) { saveRequest.current = null; setBusy(false); }
     }
   };
 
@@ -183,6 +243,7 @@ export function ProjectCliProviderAllowlistPanel({
         </div>
       </div>
       <div className="space-y-4 px-4 py-4">
+        {configurationRefreshed && <p role="status" className="text-xs text-amber-300">项目账号配置已在服务端变更，已加载最新配置，请重新确认选择。</p>}
         <div>
           <div className="mb-2 text-[12px] text-zinc-400">启用 Agent 类型</div>
           <div className="flex flex-wrap gap-2">
@@ -195,7 +256,7 @@ export function ProjectCliProviderAllowlistPanel({
                     on ? "border-acc-400/50 bg-acc-400/[.06] text-zinc-100" : "border-ink-700 text-zinc-400"
                   }`}
                 >
-                  <input type="checkbox" checked={on} onChange={() => toggleCli(cli)} className="accent-emerald-500" />
+                  <input type="checkbox" checked={on} disabled={busy} onChange={() => toggleCli(cli)} className="accent-emerald-500" />
                   <span className="font-mono">{cli}</span>
                 </label>
               );
@@ -231,7 +292,7 @@ export function ProjectCliProviderAllowlistPanel({
                   >
                     <div className="flex items-start gap-2">
                       <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-2">
-                        <input type="checkbox" checked={on} onChange={() => toggleCred(credential.id)} className="mt-1 accent-emerald-500" />
+                        <input type="checkbox" checked={on} disabled={busy} onChange={() => toggleCred(credential.id)} className="mt-1 accent-emerald-500" />
                         <span className="min-w-0 flex-1">
                           <strong className="block text-[13px] text-zinc-200">
                             {credential.name || "未命名"} · {credential.provider}
@@ -268,9 +329,9 @@ export function ProjectCliProviderAllowlistPanel({
           )}
           {unavailableDefault && (
             <div role="alert" className="mt-2 text-[12px] text-amber-400/90">
-              默认账号已删除、停用或不再可访问。
-              <button type="button" onClick={() => setClearDefaultCredential(true)} disabled={busy || clearDefaultCredential}
-                className="ml-2 underline">{clearDefaultCredential ? "默认引用将在保存时清除" : "清除失效默认引用"}</button>
+              默认账号已删除、停用、不再可访问，或不在当前账号 / CLI 启用范围内。
+              <button type="button" onClick={() => { markDraftEdited(); setSelectedDefaultCredentialId(null); }} disabled={busy}
+                className="ml-2 underline">清除失效默认引用</button>
             </div>
           )}
           {probeError && <div role="alert" className="mt-2 rounded-md border border-red-400/20 bg-red-400/[.06] px-3 py-2 text-[11px] leading-5 text-red-200">{probeError}</div>}
@@ -278,14 +339,32 @@ export function ProjectCliProviderAllowlistPanel({
             <p className="mt-2 text-[12px] text-zinc-400">未收紧凭据范围：自动使用项目可访问的有效账号。勾选变更后保存会建立显式白名单。</p>
           )}
           {credentialListLoaded && (credentialIdsConfigured || credentialSelectionChanged) && credIds.length === 0 && (
-            <div className="mt-2 text-[12px] text-amber-400/90">请至少启用一个 Provider。</div>
+            <div className="mt-2 text-[12px] text-amber-400/90">未启用可用账号：保存空白名单将禁止此项目使用任何 Provider，不会自动选择其他账号。</div>
           )}
         </div>
 
+        <fieldset disabled={busy || !credentialListLoaded} className="space-y-2 disabled:opacity-60">
+          <legend className="mb-2 text-[12px] text-zinc-400">项目默认账号</legend>
+          <SearchableSelect
+            key={`${credentialLoadState}:${busy}`}
+            value={selectedDefaultCredentialId ?? ""}
+            onChange={(id) => { if (credentialListLoaded && !busy) { markDraftEdited(); setSelectedDefaultCredentialId(id || null); } }}
+            options={defaultCandidates.map((credential) => ({ value: credential.id, label: `${credential.name || "未命名"} · ${credential.provider} · #${credential.id.slice(0, 8)}` }))}
+            placeholder={!credentialListLoaded ? "账号尚未加载，保留原默认引用" : selectedDefaultCredentialId ? "当前默认账号不可用，请清除或更换" : "未设置默认账号"}
+            ariaLabel="项目默认账号"
+            emptyText="当前启用范围内没有可用账号"
+          />
+          <p className="text-[12px] text-zinc-400">多个账号同时满足执行条件时，可明确选择默认账号消除歧义。更换或清除默认账号会同时清除项目模型及备用模型引用，下一 Job 重新解析模型。</p>
+          {defaultChanged && <p role="status" className="text-[12px] text-amber-400/90">默认账号变更将在保存后生效；项目模型及备用模型引用将清除。</p>}
+        </fieldset>
+        <a href={CREDENTIAL_ACCOUNT_HREF} className="block text-[12px] text-acc-300 underline">前往凭据页配置 Provider 连接与模型</a>
+
+        <button type="button" onClick={resetDraft} disabled={busy}
+          className="text-[12px] text-zinc-400 underline disabled:opacity-50">取消未保存变更</button>
         <button
           type="button"
           onClick={save}
-          disabled={busy || (!credentialListLoaded && (credentialSelectionChanged || clearDefaultCredential))}
+          disabled={busy || probeAction !== null || unavailableDefault || !credentialListLoaded}
           className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-wait disabled:opacity-60"
         >
           <FloppyDisk size={13} /> {busy ? "保存中…" : saved ? "已保存" : failed ? "保存失败" : "保存"}

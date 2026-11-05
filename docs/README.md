@@ -6,6 +6,8 @@
 
 > **v0.6.14 发布准备（2026-11-05）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)。Plan 范围修正与其他已合入补丁列于 [CHANGELOG](../CHANGELOG.md)，[#913 完成修正阻塞](https://github.com/SummerSec/DeepSonar/issues/913) 仍为已知问题。最终 main Actions 与正式产物成功状态分别核对。
 
+#914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由独立变更处理，不能据此视为整个 issue 完成。最终 SHA Actions 待验收。
+
 > **注意力原则（#830）**：单一权威定义见 [DESIGN](../DESIGN.md#核心理念优化人的注意力)，开发与贡献入口引用同一[工程评审及正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)。NFR-UX-001 登记约束与验证范围；本次只落实设计/评审依据，不改变运行时、UI 或授权，也不宣称注意力收益。
 
 > **任务目标证据（#767）**：契约、候选、来源隔离评审、非 Finding 结果与确定性报告已接线。可信只读 authority/grant 绑定当前身份、动作、前提和版本，子/系统 Job 统一继承并在 provision/重跑实时重核，见 [ADR 0011](architecture/adr/0011-trusted-target-authorization.md)。独立程序资格由 [#822 操作员评审](PROGRAM_ELIGIBILITY.md) 投影；目标授权、技术 Verify、判据、Plan 完成与资格各自分责。无契约仍 unassessed，验收见[矩阵](TASK_DISPATCH_ACCEPTANCE.md)。

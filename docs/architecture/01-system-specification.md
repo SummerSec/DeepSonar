@@ -676,6 +676,8 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 - **代码入口**：[Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts)、[model admission](../../apps/scheduler/src/domains/provider-adapter/model-catalog-admit.ts)、[resolve credential](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)。
 - **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（#757 假凭据与隔离数据库，含 readiness/快照一致性和历史快照不变）；`pnpm ci:integration:credential-delete`（#914 scoped HTTP 与 PostgreSQL 双向竞态）。
 
+Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；仅列出 active、项目可见且在启用范围内的候选。默认变化同步清除旧模型引用，加载失败不清配置；保存采用服务端结果。单 Job 重跑错误只按结构化原因导向配置入口，不自动执行。代码见[面板](../../apps/web/src/components/ProjectCliProviderAllowlistPanel.tsx)与[错误导航](../../apps/web/src/useJobRerun.tsx)。Web 回归随 `pnpm ci:unit:credential-compatibility`，resolver/rerun 回归随 `pnpm ci:unit:capability-pack` / `pnpm ci:integration:recovery`；最终 SHA Actions 待验收。
+
 ### FR-CRED-003 Model Gateway 唯一出口
 
 - **规范要求**：真实模型请求必须经 Scheduler-owned Model Gateway/受控 proxy，Job 只持短期 token；Gateway 必须按 Job deadline、allowed_models、请求/Token 额度和脱敏规则准入，不得把长期 Provider key 注入 Sandbox。放行后保持业务请求/响应原始字节与端到端头；仅处理认证、绑定目标和必要 HTTP 边界，不隐式重试/重定向或静默改写模型/输出参数。
