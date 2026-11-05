@@ -78,6 +78,21 @@ Linux 使用 `flock` 和文件/目录 `fsync`；Windows 原生后端使用本地
 
 部署目标身份同样不依赖 `docker context`：`DOCKER_CONTEXT` → `DOCKER_HOST` → `docker info` 报出的 engine id / 主机名，取第一个可用的**真实**身份；三者都没有时升级直接拒绝启动，不用占位符。
 
+### 未知效果的人工结清（#899）
+
+对账 CLI 的 `apply` 只结清能由平台证据判定的效果。`interrupted` 尝试上的 `agent_run` 属于证据上永远不可判定的一类（中断路径没有进程退出证据），会让跨 schema 升级一直停在 `UNSETTLED_SOURCE_EFFECTS`。此时用一次性人工结清，而不是手改库：
+
+```bash
+node apps/scheduler/dist/platform-upgrade-reconcile-cli.js <<'JSON'
+{"schema":"deepsonar.effect-reconcile/v1","action":"settle",
+ "effect_id":"<effect uuid>","outcome":"not_applied",
+ "evidence":"<为什么可以这样判定，原样留痕>","operation_id":"operator-899-1",
+ "connection":{"host":"127.0.0.1","port":5432,"username":"…","password":"…","database":"…"}}
+JSON
+```
+
+约束：一次只结清一个 effect（无批量入口）；`outcome` 仅限 `not_applied`、`applied_run_terminated`、`delivered`；`evidence` 必填并进 `settlement_json.operator_evidence`；重复调用返回未结清；**不会**改变 `replay_policy`，也不会自动重放。
+
 默认关闭的 `upgrade auto`、维护窗口、签名准入和禁用调度模板见 [自动升级说明](UPGRADE_AUTOMATION.md)。生产 Release keyless 签名权限及实际正向链路尚未启用或验收，不能据临时密钥测试宣称生产无人值守升级已可用。
 
 ```bash

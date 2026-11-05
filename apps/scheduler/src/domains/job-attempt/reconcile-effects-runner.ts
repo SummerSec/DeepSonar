@@ -8,6 +8,28 @@ import {
 } from "./reconcile-effects.js";
 
 export const RECONCILE_ACTIONS = ["scan", "apply"] as const;
+
+/**
+ * Operator settlement (#899).
+ *
+ * An effect can be permanently undecidable from platform evidence and still block a
+ * cross-schema upgrade forever — the reported host had one `agent_run` on an
+ * `interrupted` attempt doing exactly that. Replaying it is forbidden, so the only
+ * honest exit is a human supplying the missing fact once, with an audit trail. This is
+ * deliberately NOT a bulk action and NOT automatic: it settles one effect id, requires a
+ * written reason, records `reconciled_by=operator-settlement` plus the evidence
+ * reference, and never touches `replay_policy`.
+ */
+export const OPERATOR_SETTLE_OUTCOMES = ["not_applied", "applied_run_terminated", "delivered"] as const;
+export type OperatorSettleOutcome = (typeof OPERATOR_SETTLE_OUTCOMES)[number];
+
+export interface OperatorSettleInput {
+  readonly effect_id: string;
+  readonly outcome: OperatorSettleOutcome;
+  /** Why the operator can assert this outcome; stored verbatim for audit. */
+  readonly evidence: string;
+  readonly operation_id: string;
+}
 export type ReconcileAction = (typeof RECONCILE_ACTIONS)[number];
 
 export interface ReconcileRequest {
@@ -175,6 +197,44 @@ JOIN jobs j ON j.id = e.job_id
 WHERE e.job_id = ${quotedJobId}::uuid AND e.status IN ('unknown', 'effect_pending')
   AND a.status <> 'active'
 ORDER BY e.created_at, e.id`;
+
+/**
+ * Settle one effect from operator-supplied evidence. Returns `false` when the row is no
+ * longer pending (a concurrent settlement already happened), so a retry is safe.
+ */
+export async function settleEffectByOperator(
+  db: MigrationConnection,
+  input: OperatorSettleInput,
+): Promise<{ settled: boolean; effect_id: string; outcome: OperatorSettleOutcome }> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(input.effect_id)) {
+    throw new Error("INVALID_EFFECT_ID");
+  }
+  if (!OPERATOR_SETTLE_OUTCOMES.includes(input.outcome)) throw new Error("INVALID_SETTLE_OUTCOME");
+  if (typeof input.evidence !== "string" || input.evidence.trim().length < 8 || input.evidence.length > 512) {
+    throw new Error("INVALID_SETTLE_EVIDENCE");
+  }
+  if (typeof input.operation_id !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(input.operation_id)) {
+    throw new Error("INVALID_RECONCILE_OPERATION_ID");
+  }
+  const payload = JSON.stringify({
+    outcome: input.outcome,
+    reconciled_by: "operator-settlement",
+    reconcile_operation_id: input.operation_id,
+    operator_evidence: input.evidence.trim(),
+  });
+  const rows = (await db.unsafe(
+    `UPDATE job_attempt_effects
+        SET status = 'settled',
+            settlement_json = settlement_json || ${quoteLiteral(payload)}::jsonb,
+            evidence_ref = ${quoteLiteral(`operator:${input.operation_id}`)},
+            settled_at = now(),
+            updated_at = now()
+      WHERE id = ${quoteLiteral(input.effect_id)}::uuid
+        AND status IN ('unknown', 'effect_pending')
+      RETURNING id`,
+  )) as { id: string }[];
+  return { settled: rows.length > 0, effect_id: input.effect_id, outcome: input.outcome };
+}
 
 export async function runEffectReconcile(db: MigrationConnection, input: ReconcileRequest): Promise<ReconcileResult> {
   if (!RECONCILE_ACTIONS.includes(input.action)) throw new Error("INVALID_RECONCILE_ACTION");
