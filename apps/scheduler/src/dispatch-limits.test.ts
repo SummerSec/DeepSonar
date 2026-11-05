@@ -380,13 +380,35 @@ test("scrubLeftoverStoredRules updates global and project leftover rules", async
       updates.push(`project:${values[1]}`);
       const cfg = values[0] as { rules: Record<string, unknown> };
       assert.deepEqual(cfg.rules, { minVerifySeverity: "medium" });
-      return [];
+      assert.match(sql, /AND config_json = \?/);
+      assert.deepEqual(values[2], { rules: { hubWaitSeverities: ["low"], minVerifySeverity: "medium" } });
+      return [{ id: "p1" }];
     }
     throw new Error(`unexpected sql: ${sql}`);
   }, { json: (value: unknown) => value });
   const result = await scrubLeftoverStoredRules(db as never);
   assert.deepEqual(result, { global: 1, projects: 1 });
   assert.deepEqual(updates, ["global", "project:p1"]);
+});
+
+test("config cleanup loses CAS without overwriting references or claiming changes", async () => {
+  const original = { enabled_credential_ids: ["retained"], rules: { hubWaitSeverities: ["low"] },
+    finding_protocol: { mode: "agent_choice" }, image_strategy: "legacy" };
+  const db = Object.assign(async (strings: TemplateStringsArray) => {
+    const query = strings.join("?");
+    if (query.includes("FROM global_settings")) return [{ rules_json: {} }];
+    if (query.includes("FROM projects")) return [{ id: "p1", config_json: original }];
+    if (query.includes("UPDATE projects")) {
+      assert.match(query, /AND config_json = \?/);
+      assert.match(query, /RETURNING id/);
+      return []; // another writer changed the config before this cleanup
+    }
+    if (query.includes("FROM canvases") || query.includes("FROM role_configs")) return [];
+    throw new Error(`unexpected cleanup query: ${query}`);
+  }, { json: (value: unknown) => value });
+  assert.deepEqual(await scrubLeftoverStoredRules(db as never), { global: 0, projects: 0 });
+  assert.deepEqual(await scrubRedundantConfigSurface(db as never), { protocols: 0, imagePolicies: 0, roleKnobs: 0 });
+  assert.deepEqual(original.enabled_credential_ids, ["retained"]);
 });
 
 test("API rules projection strips finding_protocol", () => {
@@ -430,7 +452,8 @@ test("scrubRedundantConfigSurface rewrites deleted aliases", async () => {
     if (sql.includes("UPDATE projects")) {
       updates.push("project");
       assert.deepEqual(values[0], { finding_protocol: { mode: "hybrid" } });
-      return [];
+      assert.match(sql, /AND config_json = \?/);
+      return [{ id: "p1" }];
     }
     if (sql.includes("UPDATE canvases")) {
       updates.push("canvas");

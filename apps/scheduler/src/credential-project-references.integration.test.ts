@@ -7,9 +7,7 @@ import type { Actor } from "./auth.js";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
-if (!testDatabaseUrl) {
-  test("credential project references integration", { skip: "TEST_DATABASE_URL is required; no default database" }, () => {});
-} else {
+if (testDatabaseUrl) {
   test("credential project references: visibility, validation and real two-session races", { timeout: 60_000 }, async (t) => {
     const adminUrl = new URL(testDatabaseUrl);
     adminUrl.pathname = "/postgres";
@@ -30,9 +28,9 @@ if (!testDatabaseUrl) {
       process.env.DEEPSONAR_AUTH_REQUIRED = "false";
       process.env.AGENT_MODE = "fake";
       process.env.DEEPSONAR_DB_POOL_MAX = "2";
-      const [{ default: Fastify }, { sql, migrate }, { registerCredentialRoutes }, { registerSettingsRoutes }, { encryptSecret }] = await Promise.all([
+      const [{ default: Fastify }, { sql, migrate }, { registerCredentialRoutes }, { registerSettingsRoutes }, { encryptSecret }, { listProjectSkillSourceBindings, setProjectSkillSourceEnabled }] = await Promise.all([
         import("fastify"), import("./db.js"), import("./domains/credential/routes.js"),
-        import("./domains/settings/routes.js"), import("./credentials.js"),
+        import("./domains/settings/routes.js"), import("./credentials.js"), import("./domains/project-skill-allowlist/catalog.js"),
       ]);
       closeSql = () => sql.end({ timeout: 5 });
       await migrate();
@@ -63,6 +61,31 @@ if (!testDatabaseUrl) {
         return id;
       };
       const config = async (id: string) => (await sql`SELECT config_json FROM projects WHERE id = ${id}`)[0].config_json;
+      const withinDeadline = async <T>(pending: PromiseLike<T>, label: string): Promise<T> => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          return await Promise.race([
+            Promise.resolve(pending),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(new Error(`${label} did not settle within 5 seconds`)), 5_000);
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      };
+      const waitForBlocked = async (queryText: string, event?: string) => {
+        for (let i = 0; i < 200; i++) {
+          const rows = await observer!`SELECT pid FROM pg_stat_activity
+            WHERE datname = ${databaseName} AND pid <> pg_backend_pid()
+              AND query LIKE ${`%${queryText}%`} AND wait_event_type = 'Lock'
+              AND (${event ?? null}::text IS NULL OR wait_event = ${event ?? null})
+              AND cardinality(pg_blocking_pids(pid)) > 0`;
+          if (rows.length) return Number(rows[0].pid);
+          await delay(10);
+        }
+        assert.fail(`did not observe blocked PostgreSQL session: ${queryText}`);
+      };
 
       const shared = await credential();
       const a = await project("visible A", { enabled_credential_ids: [shared], default_credential_id: shared });
@@ -192,6 +215,128 @@ if (!testDatabaseUrl) {
         assert.equal((await config(p)).default_credential_id, id.toUpperCase());
       });
 
+      for (const operation of ["listProjectSkillSourceBindings", "setProjectSkillSourceEnabled"] as const) {
+        await t.test(`${operation} stamps only the Skill flag after a concurrent credential replacement/delete`, { timeout: 10_000 }, async () => {
+          const original = await credential();
+          const replacement = await credential();
+          const initial = {
+            enabled_credential_ids: [original], default_credential_id: original,
+            default_model_ref: "model-a", fallback_model_refs: ["model-b"],
+            unrelated: { nested: ["retain"] }, rules: { hubEnabled: false },
+          };
+          const p = await project(`Skill stamp ${operation}`, initial);
+          const sourceId = randomUUID();
+          await sql`INSERT INTO skill_sources(id, name, repo_url, branch, trust_status, enabled)
+            VALUES (${sourceId}, ${`reference-race-${sourceId}`}, 'http://127.0.0.1/skills.git', 'main', 'trusted', true)`;
+          if (operation === "listProjectSkillSourceBindings") {
+            await sql`INSERT INTO project_skill_sources(project_id, skill_source_id, enabled) VALUES (${p}, ${sourceId}, false)`;
+          }
+          const skillClient = postgres(targetUrl.toString(), { max: 1, connection: { statement_timeout: 5_000 } });
+          let announceRead!: () => void;
+          let releaseStamp!: () => void;
+          const read = new Promise<void>((resolve) => { announceRead = resolve; });
+          const hold = new Promise<void>((resolve) => { releaseStamp = resolve; });
+          let paused = false;
+          // SAFETY: the proxy forwards the real postgres query/helper interface and returns its unchanged rows.
+          const pausedDb = new Proxy(skillClient, {
+            apply(target, thisArg, args) {
+              const pending = Reflect.apply(target, thisArg, args);
+              if (paused || !Array.isArray(args[0]) || !args[0].join("").includes("SELECT config_json FROM projects")) return pending;
+              return (async () => {
+                const rows = await pending;
+                assert.deepEqual(rows[0].config_json, initial, "pause only after SELECT actually read the old config");
+                paused = true;
+                announceRead();
+                await hold;
+                return rows;
+              })();
+            },
+          }) as unknown as Parameters<typeof listProjectSkillSourceBindings>[0];
+          const stamp: Promise<Awaited<ReturnType<typeof listProjectSkillSourceBindings>> | Awaited<ReturnType<typeof setProjectSkillSourceEnabled>>> = operation === "listProjectSkillSourceBindings"
+            ? listProjectSkillSourceBindings(pausedDb, p)
+            : setProjectSkillSourceEnabled(pausedDb, p, sourceId, false);
+          try {
+            await withinDeadline(Promise.race([read, stamp.then(() => assert.fail("Skill write completed without its SELECT barrier"))]), "Skill config read");
+            const response = await withinDeadline(patch(p, {
+              enabled_credential_ids: [replacement], default_credential_id: replacement, device_access_enabled: true,
+            }), "credential replacement settings PATCH");
+            assert.equal(response.statusCode, 200, response.payload);
+            const expected = { ...initial, enabled_credential_ids: [replacement], default_credential_id: replacement, device_access_enabled: true };
+            assert.deepEqual(await config(p), expected);
+            const deleted = await withinDeadline(remove(original), "DELETE replaced credential");
+            assert.equal(deleted.statusCode, 200, deleted.payload);
+            assert.equal((await sql`SELECT id FROM credentials WHERE id = ${original}`).length, 0);
+            releaseStamp();
+            const result = await withinDeadline(stamp, "Skill flag stamp");
+            if ("sources" in result) {
+              assert.equal(result.configured, true);
+              assert.equal(result.sources.find((source) => source.skill_source_id === sourceId)?.project_enabled, false);
+            } else {
+              assert.equal(result.project_enabled, false);
+            }
+            const current = await config(p);
+            assert.deepEqual(current, { ...expected, skill_source_allowlist_configured: true });
+            assert.equal(JSON.stringify(current).includes(original), false, "a deleted credential UUID must not resurrect");
+            assert.equal((await sql`SELECT id FROM credentials WHERE id = ${replacement}`).length, 1);
+            assert.equal((await sql`SELECT enabled FROM project_skill_sources WHERE project_id = ${p} AND skill_source_id = ${sourceId}`)[0].enabled, false);
+          } finally {
+            releaseStamp();
+            try {
+              await withinDeadline(Promise.allSettled([stamp]), "Skill writer cleanup");
+            } finally {
+              await skillClient.end({ timeout: 5 });
+            }
+          }
+        });
+      }
+
+      await t.test("settings project lock permits concurrent global Credential PATCH to attach to that project", { timeout: 10_000 }, async () => {
+        const id = await credential();
+        const p = await project("credential FK lock race", { unrelated: { retained: true } });
+        const gate = 925;
+        const control = await observer!.reserve();
+        let gateLocked = false;
+        let moving: Promise<Awaited<ReturnType<typeof app.inject>>> | undefined;
+        let settings: typeof moving;
+        try {
+          await control`SELECT pg_advisory_lock(${gate})`;
+          gateLocked = true;
+          // Pause after Credential PATCH owns C, but before its project FK takes KEY SHARE on P.
+          await observer!.unsafe(`CREATE FUNCTION credential_project_fk_barrier() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN PERFORM pg_advisory_xact_lock(${gate}); RETURN NEW; END $$`);
+          await observer!.unsafe(`CREATE TRIGGER credential_project_fk_race BEFORE UPDATE OF project_id ON credentials
+            FOR EACH ROW WHEN (OLD.id = '${id}'::uuid) EXECUTE FUNCTION credential_project_fk_barrier()`);
+          moving = Promise.resolve(app.inject({ method: "PATCH", url: `/credentials/${id}`, payload: { project_id: p } }));
+          const movingPid = await waitForBlocked("UPDATE credentials SET", "advisory");
+          settings = Promise.resolve(patch(p, { enabled_credential_ids: [id], default_credential_id: id, device_access_enabled: true }));
+          const settingsPid = await waitForBlocked("SELECT id FROM credentials");
+          assert.notEqual(movingPid, settingsPid, "must be two independent scheduler PG sessions");
+          const [blocked] = await observer!`SELECT pg_blocking_pids(${settingsPid}) AS blockers`;
+          assert.ok(blocked.blockers.includes(movingPid), "settings must wait on the credential held by its actual PATCH");
+          await assert.rejects(observer!`SELECT id FROM projects WHERE id = ${p} FOR NO KEY UPDATE NOWAIT`,
+            (error: unknown) => (error as { code?: string }).code === "55P03", "settings must already own the project config lock");
+          await control`SELECT pg_advisory_unlock(${gate})`;
+          gateLocked = false;
+          const [moved, configured] = await withinDeadline(Promise.all([moving, settings]), "Credential FK/settings lock race");
+          assert.equal(moved.statusCode, 200, moved.payload);
+          assert.equal(configured.statusCode, 200, configured.payload);
+          assert.equal(moved.json().project_id, p);
+          assert.deepEqual(await config(p), {
+            unrelated: { retained: true }, enabled_credential_ids: [id], default_credential_id: id, device_access_enabled: true,
+          });
+          assert.equal((await sql`SELECT project_id FROM credentials WHERE id = ${id}`)[0].project_id, p);
+        } finally {
+          if (gateLocked) await control`SELECT pg_advisory_unlock(${gate})`;
+          try {
+            await withinDeadline(Promise.allSettled([moving, settings].filter((pending) => pending !== undefined)), "FK race request cleanup");
+          } finally {
+            control.release();
+            await observer!.unsafe("DROP TRIGGER IF EXISTS credential_project_fk_race ON credentials");
+            await observer!.unsafe("DROP FUNCTION IF EXISTS credential_project_fk_barrier()");
+          }
+        }
+      });
+
       await t.test("GET legacy cleanup cannot restore credential references replaced concurrently", { timeout: 10_000 }, async () => {
         const original = await credential();
         const replacement = await credential();
@@ -259,18 +404,6 @@ if (!testDatabaseUrl) {
               const target = direction === "delete-first" ? id : p;
               await observer!.unsafe(`CREATE TRIGGER reference_race BEFORE ${operation} ON ${table}
                 FOR EACH ROW WHEN (OLD.id = '${target}'::uuid) EXECUTE FUNCTION reference_race_barrier()`);
-              const waitForBlocked = async (queryText: string, event?: string) => {
-                for (let i = 0; i < 200; i++) {
-                  const rows = await observer!`SELECT pid FROM pg_stat_activity
-                    WHERE datname = ${databaseName} AND pid <> pg_backend_pid()
-                      AND query LIKE ${`%${queryText}%`} AND wait_event_type = 'Lock'
-                      AND (${event ?? null}::text IS NULL OR wait_event = ${event ?? null})
-                      AND cardinality(pg_blocking_pids(pid)) > 0`;
-                  if (rows.length) return Number(rows[0].pid);
-                  await delay(10);
-                }
-                assert.fail(`did not observe blocked PostgreSQL session: ${queryText}`);
-              };
               first = Promise.resolve(direction === "delete-first" ? remove(id) : patch(p, payload));
               const firstPid = await waitForBlocked(direction === "delete-first" ? "DELETE FROM credentials" : "UPDATE projects SET config_json", "advisory");
               second = Promise.resolve(direction === "delete-first" ? patch(p, payload) : remove(id));
@@ -302,4 +435,6 @@ if (!testDatabaseUrl) {
       await admin.end({ timeout: 5 });
     }
   });
+} else {
+  test("credential project references integration", { skip: "TEST_DATABASE_URL is required; no default database" }, () => {});
 }

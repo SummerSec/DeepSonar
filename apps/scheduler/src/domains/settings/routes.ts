@@ -342,7 +342,7 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
       result = await sql.begin(async (txRaw) => {
         // SAFETY: postgres.js transactions expose the same query interface used by the domain helpers.
         const tx = txRaw as unknown as typeof sql;
-        const [p] = await tx`SELECT config_json FROM projects WHERE id = ${id} FOR UPDATE`;
+        const [p] = await tx`SELECT config_json FROM projects WHERE id = ${id} FOR NO KEY UPDATE`;
         if (!p) throw new ProjectSettingsRejected(404, { error: "project not found" });
         const cfg = { ...((p.config_json ?? {}) as Record<string, unknown>) };
         const beforePassthrough = parseProjectAgentAllowlist(cfg).allow_model_catalog_passthrough;

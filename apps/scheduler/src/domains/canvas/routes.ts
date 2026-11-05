@@ -561,12 +561,13 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
       paused_at: new Date().toISOString(),
     });
     // 快捷：把项目关注级别定为 high（critical+high），其余语义写死
-    const [p] = await sql`SELECT config_json FROM projects WHERE id = ${canvas.project_id as string}`;
-    const cfg = { ...((p?.config_json ?? {}) as Record<string, unknown>) };
-    const rules = { ...((cfg.rules as Record<string, unknown>) ?? {}) };
-    rules.minVerifySeverity = "high";
-    cfg.rules = rules;
-    await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${canvas.project_id as string}`;
+    const [project] = await sql`
+      UPDATE projects SET config_json = jsonb_set(config_json, '{rules}',
+        (CASE WHEN jsonb_typeof(config_json->'rules') = 'object'
+          THEN config_json->'rules' ELSE '{}'::jsonb END) || ${sql.json({ minVerifySeverity: "high" })})
+      WHERE id = ${canvas.project_id as string}
+      RETURNING config_json->'rules' AS rules`;
+    const rules = (project?.rules ?? { minVerifySeverity: "high" }) as Record<string, unknown>;
     await audit(req, {
       action: "canvas.convergence_stop_after_gate",
       resourceType: "canvas",
