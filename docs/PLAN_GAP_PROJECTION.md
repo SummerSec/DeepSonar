@@ -95,6 +95,8 @@ v2 `submit_plan` 必须携带 `execution_route` revision，显式绑定 `plan_jo
 
 ### Job-scoped objective 读取与首个 Hub submit
 
+Plan v2 的 bootstrap 要求仅适用于执行型 Plan。未声明 `plan_objective`、没有活动 Plan basis 且没有显式 Plan owner 的普通任务继续通过 `submit_hub_decision` 提交 Intent；缺少可选 objective 本身不构成人工阻塞。已有目标、活动或历史显式 Plan 上下文的任务仍受现有 Plan 校验约束，读取失败、内容无效或预算不足时停止，不能改走普通 Intent。Hub 下发提示与控制 Skill 必须同时表达这个适用范围，见 [#910](https://github.com/SummerSec/DeepSonar/issues/910)。
+
 初始 L0/overview 只提供有界 handle；`graph_query(kind=plan_objective)` 是当前 Job scope 内独立于已接受 Plan 的只读读取，返回 `items[0]` 完整持久化 objective tuple。它不接受 selectors、cross-scope 或 wholeGraph 形态；预算或 input hash 不满足时返回明确失败，不把部分 tuple 当作完整读取。
 
 ### 多轮推进、重启与停止
