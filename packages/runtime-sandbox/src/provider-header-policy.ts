@@ -94,4 +94,3 @@ export function hasInvalidProviderHeaders(resolution: ProviderCustomHeaderResolu
   return resolution.rejected.some((reason) => reason === "headers_not_an_object"
     || reason === "too_many_headers" || reason.startsWith("invalid_") || reason.startsWith("duplicate_name:"));
 }
-

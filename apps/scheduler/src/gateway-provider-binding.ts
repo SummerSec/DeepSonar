@@ -3,11 +3,11 @@ import { PROVIDER_ENV_MAP } from "./credentials.js";
 import { providerCustomHeadersFromSettings } from "./provider-custom-headers.js";
 import { extractBaseUrlFromSettings, providerSettingsForJobSnapshot } from "./provider-settings.js";
 
-export interface GatewayProviderBinding {
+export type GatewayProviderBinding = {
   version: 1;
   credential_id: string;
   fingerprint: string;
-}
+};
 
 export interface GatewayProviderCredential {
   id: unknown;
