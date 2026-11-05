@@ -11,6 +11,7 @@
  * - 红线：上游明文 Key 不出本进程；请求/响应体不落库（usage 除外）
  */
 import { once } from "node:events";
+import { ensureGatewayRequestBudget, inspectGatewayRequestBudget, GatewayRequestBudgetError } from "./gateway-request-policy.js";
 import { finiteRequestCap, readHistoricalRequestBudget, resolveRequestBudget } from "./gateway-request-budget.js";
 import { persistNoEffectReceipt, readNoEffectReceipt, type GatewayNoEffectReason } from "./gateway-admission-receipt.js";
 import { createGatewayResponseGuard } from "./gateway-response-guard.js";
@@ -398,9 +399,9 @@ export async function mintJobToken(input: {
 
   // Every generation inherits the tightest persisted finite request ceiling.
   // Revocation/expiry does not erase a Job's lifetime usage or policy history.
-  const history = await readHistoricalRequestBudget(tx as unknown as typeof sql, input.jobId, workload);
-  requestTotalLimit = finiteRequestCap([requestTotalLimit, history.totalLimit]);
-  maxRequests = finiteRequestCap([maxRequests, history.workloadLimit]);
+  const policy = await ensureGatewayRequestBudget(tx as unknown as typeof sql, input.jobId, snapshot);
+  requestTotalLimit = finiteRequestCap([requestTotalLimit, policy.total_requests]);
+  maxRequests = finiteRequestCap([maxRequests, workload === "main" ? policy.main_requests : policy.background_requests]);
 
   const [row] = await tx`
     INSERT INTO job_tokens ${sql({
@@ -1151,8 +1152,9 @@ async function admitGatewayRequest(
       && (workloadMaxTokens === null || (Number.isSafeInteger(workloadMaxTokens) && workloadMaxTokens >= 0));
   });
   if (!quotaRowsValid) return { denied: omJob ? "workload_usage_unknown" : "quota_exhausted" };
+  const requestPolicy = await inspectGatewayRequestBudget(tx, input.jobId, snapshot);
   let requests: ReturnType<typeof resolveRequestBudget>;
-  try { requests = resolveRequestBudget(tokens, input.workload, omPlan); }
+  try { requests = resolveRequestBudget(tokens, input.workload, requestPolicy); }
   catch { return { denied: omJob ? "workload_usage_unknown" : "quota_exhausted" }; }
   const { totalUsed, workloadLimit } = requests;
   let backgroundRemaining: number | null = null;
@@ -1328,7 +1330,8 @@ export function registerGateway(app: FastifyInstance): void {
             const omConfig = observationalMemoryConfig(parseFrozenPiExtensions(job.agent_snapshot_json?.pi_extensions));
             const plan = omConfig ? resolveObservationalMemoryBudget({ config: omConfig,
               jobTokenMaxRequests: job.agent_snapshot_json?.runtime_knobs?.job_token_max_requests }) : null;
-            const requests = await readHistoricalRequestBudget(db, String(jt.job_id), workload, plan);
+            const requestPolicy = await inspectGatewayRequestBudget(db, String(jt.job_id), job.agent_snapshot_json);
+            const requests = await readHistoricalRequestBudget(db, String(jt.job_id), workload, requestPolicy);
             if (requests.exhausted) {
               throw new RepairTokenBudgetError("JOB_REQUEST_EXHAUSTED", "Job request allowance exhausted");
             }
@@ -1340,6 +1343,7 @@ export function registerGateway(app: FastifyInstance): void {
             return { remaining_tokens: remaining, policy_required: repair !== null || remaining !== null };
           });
         } catch (error) {
+          if (error instanceof GatewayRequestBudgetError) return deny(reply, 409, error.message, error.code);
           if (error instanceof RepairTokenBudgetError) return deny(reply, error.code.endsWith("EXHAUSTED") ? 429 : 409,
             error.message, error.code);
           throw error;
@@ -1597,7 +1601,7 @@ export function registerGateway(app: FastifyInstance): void {
             "gateway admission retried after a recoverable database conflict");
         },
       }).catch(error => {
-        if (error instanceof RepairTokenBudgetError || error instanceof GatewayWorkloadPolicyError) return error;
+        if (error instanceof RepairTokenBudgetError || error instanceof GatewayWorkloadPolicyError || error instanceof GatewayRequestBudgetError) return error;
         if (error instanceof DatabaseConflictExhaustedError) return error;
         throw error;
       });
@@ -1616,6 +1620,7 @@ export function registerGateway(app: FastifyInstance): void {
           attempts: requestIntent.attempts,
         });
       }
+      if (requestIntent instanceof GatewayRequestBudgetError) return deny(reply, 409, requestIntent.message, requestIntent.code);
       if (requestIntent instanceof GatewayWorkloadPolicyError) return deny(reply, 403, requestIntent.message, requestIntent.code);
       if (requestIntent instanceof RepairTokenBudgetError) {
         return reply.code(409).send({ error: { type: requestIntent.code, message: requestIntent.message },

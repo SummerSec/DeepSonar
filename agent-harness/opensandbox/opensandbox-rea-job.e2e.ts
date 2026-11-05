@@ -165,7 +165,8 @@ try {
   const makeSnapshot = (mode: string, extra: Record<string, unknown> = {}) => ({
     name: mode === "verify" ? "verify" : "audit", role_kind: mode === "verify" ? "system" : "role",
     agent_cli: "claude-code", agent_runtime: snapshotHelpers.freezeAgentCliRuntime(snapshotHelpers.AGENT_CLI_RUNTIME_ADAPTERS["claude-code"]),
-    credential_id: credentialId, credential_provider: "anthropic", gateway_provider_binding: gatewayProviderBinding, model: "claude-sonnet-4-5", upstream_model: "claude-sonnet-4-5",
+    credential_id: credentialId, credential_provider: "anthropic", gateway_provider_binding: gatewayProviderBinding,
+      pi_extensions: [], runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} }, model: "claude-sonnet-4-5", upstream_model: "claude-sonnet-4-5",
     env_vars: {}, env_keys: [], skills: [], commands: [], mcps: [], subagents: [], modules: [], module_selectors: [],
     expanded_modules: [], missing_modules: [], module_content_hash: "", skill_revisions: [], config_files: [
       file("rea-job-actor.py", worker), file("sample_elf.base64", sample.toString("base64")),

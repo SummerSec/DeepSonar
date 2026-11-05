@@ -1,11 +1,8 @@
 import { sql } from "./db.js";
 import { RepairTokenBudgetError } from "./domains/event-ingestion/repair-token-budget.js";
 
-/** Zero/absent means unlimited, never permission to remove an older finite cap. */
-export function finiteRequestCap(values: Array<number | null | undefined>): number {
-  const finite = values.filter((value): value is number => value != null && value > 0);
-  return finite.length > 0 ? Math.min(...finite) : 0;
-}
+import { finiteRequestCap } from "./gateway-request-policy.js";
+export { finiteRequestCap } from "./gateway-request-policy.js";
 
 type RequestPlan = { total_requests: number; main_requests: number; background_requests: number };
 

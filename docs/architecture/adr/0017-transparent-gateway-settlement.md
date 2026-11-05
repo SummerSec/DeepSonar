@@ -38,3 +38,7 @@ Job 锁下的额度预留、usage/effect 原子结算、终态撤销与主后台
 ## 配置身份与恢复补充（2026-11-05）
 
 #918 联动以根快照的非秘密 provider 配置摘要约束 mutable Credential：认证 secret 可轮换，目标/业务头/model 配置变化要求显式受治理 refreeze。目录使用 provider 头，推理与 OM 使用授权 model 默认；客户端已形成业务字段始终优先，不改 body。旧 Job 不自动回填；无效果 Job 可用现有 rerun-current 显式准备下一次执行，活动 Job 和未知效果/repair 链的安全恢复须与 #903 联合闭合。具体限制、操作路径与未完成项见[配置绑定与旧 Job 出口](../../MODEL_GATEWAY_TRANSPARENCY.md#provider-配置绑定与旧-job-出口918-联动)。
+
+## 累计请求策略补充（2026-11-05）
+
+原始完整请求策略使用既有 Job 级内核 control receipt 保存，不修改活动快照或新建预算表。首次 mint 一次冻结所有 workload，恢复在旧快照仍可读且 Job 锁持有时保存它；所有后代对回执、历史 token 与当前有限上限取交集。只读预检与持久 ensure 分离，后者必须包含在调用方恢复事务中，后续失败整体回滚。缺失/非法冻结输入或已经遗失且不可证明的历史策略阻塞，不能当作无限。Gateway 请求次数政策与 #903 的模型 token allowance、生命周期及 unknown-effect 决策保持独立。

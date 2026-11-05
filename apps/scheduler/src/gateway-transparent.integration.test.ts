@@ -180,7 +180,7 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
     const [boundCredential] = await sql`SELECT * FROM credentials WHERE id=${credentialId}`;
     const binding = freezeGatewayProviderBinding(boundCredential as never);
     await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
-      VALUES(${jobId},${projectId},'audit','running',${sql.json({ name: "audit", upstream_model: "not-an-alias", credential_id: credentialId, credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding })},
+      VALUES(${jobId},${projectId},'audit','running',${sql.json({ name: "audit", agent_cli: "claude-code", runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} }, upstream_model: "not-an-alias", credential_id: credentialId, credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding })},
         now(),3600,now()+interval '1 hour')`;
     await sql.begin(tx => createAttempt(tx as unknown as typeof sql, jobId));
     const token = await gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests: 0, maxTokens: 0 });
@@ -414,7 +414,7 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         for (const fixture of fixtures) {
           const boundedJobId = randomUUID();
           await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
-            VALUES(${boundedJobId},${projectId},'audit','running',${sql.json({ name: "request policy fixture", agent_cli: fixture.cli, credential_id: credentialId, credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding })},
+            VALUES(${boundedJobId},${projectId},'audit','running',${sql.json({ name: "request policy fixture", agent_cli: fixture.cli, pi_extensions: [], runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} }, credential_id: credentialId, credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding })},
               now(),3600,now()+interval '1 hour')`;
           await sql.begin(tx => createAttempt(tx as unknown as typeof sql, boundedJobId));
           const boundedToken = await gateway.mintJobToken({ jobId: boundedJobId, projectId, credentialId, maxRequests: 0, maxTokens: 20 });
@@ -479,7 +479,7 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
       assert.equal(repeated.status, 400, "Node header normalization must not hide conflicting duplicate authorization");
       const frozenJobId = randomUUID();
       await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
-        VALUES(${frozenJobId},${projectId},'audit','running',${sql.json({ credential_id: credentialId,
+        VALUES(${frozenJobId},${projectId},'audit','running',${sql.json({ agent_cli: "claude-code", runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} }, credential_id: credentialId,
           credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding,
           provider_model: { provider: "openai", cli_model_id: "allowed", upstream_model_id: "allowed", passthrough: false },
         })},now(),3600,now()+interval '1 hour')`;

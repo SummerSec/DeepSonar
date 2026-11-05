@@ -78,7 +78,7 @@ test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes 
         ${encrypted.nonce},${encrypted.auth_tag},'fixture','only','disabled')`;
     const { freezeGatewayProviderBinding } = await import("./gateway-provider-binding.js");
     const [boundCredential] = await h.sql`SELECT * FROM credentials WHERE id=${credential}`;
-    const terminal = await h.fixture(executionObjective(), { credential_id: credential, credential_provider: "openai",
+    const terminal = await h.fixture(executionObjective(), { agent_cli: "claude-code", runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} }, credential_id: credential, credential_provider: "openai",
       settings_config_json: {}, gateway_provider_binding: freezeGatewayProviderBinding(boundCredential as never) });
     await h.sql`UPDATE canvases SET target_json=target_json-'plan_objective' WHERE id=${terminal.canvas}`;
     const ordinaryDecision = await h.invoke(terminal.hub, "submit_hub_decision", { intents: [{

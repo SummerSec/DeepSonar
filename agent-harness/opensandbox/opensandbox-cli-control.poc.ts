@@ -297,6 +297,7 @@ try {
       agent_runtime: freezeAgentCliRuntime(AGENT_CLI_RUNTIME_ADAPTERS[selectedCli]),
       credential_id: credentialId,
       gateway_provider_binding: gatewayProviderBinding,
+      pi_extensions: [], runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} },
       credential_provider: plan.provider,
       model: plan.model,
       sandbox_limits: { cpu: 1, memoryMiB: 1024, pidsLimit: 256, capDropAll: true, noNewPrivileges: true },

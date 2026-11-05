@@ -50,7 +50,7 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
       Object.assign(config.gateway, { repairMaxTokens: cap });
       const jobId = randomUUID();
       await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
-        VALUES(${jobId},${projectId},'audit','running',${sql.json({ name: "audit", platform_tools: ["mark_job_done"], credential_id: credentialId, credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding })},now(),3600,now()+interval '1 hour')`;
+        VALUES(${jobId},${projectId},'audit','running',${sql.json({ name: "audit", agent_cli: "claude-code", runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} }, platform_tools: ["mark_job_done"], credential_id: credentialId, credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding })},now(),3600,now()+interval '1 hour')`;
       const attempt = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, jobId));
       const grant = await api.mintJobCapabilityToken(jobId);
       const mint = () => gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests, maxTokens });

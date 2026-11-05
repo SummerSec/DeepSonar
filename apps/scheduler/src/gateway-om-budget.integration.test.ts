@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import net from "node:net";
 import test from "node:test";
 import postgres from "postgres";
@@ -7,7 +7,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
-test("OM Gateway enforces frozen workload quotas and durable attribution over offline HTTP", { skip: !databaseUrl, timeout: 30_000 }, async (t) => {
+test("OM Gateway enforces frozen workload quotas and durable attribution over offline HTTP", { skip: !databaseUrl, timeout: 60_000 }, async (t) => {
   const adminUrl = new URL(databaseUrl!);
   adminUrl.pathname = "/postgres";
   const admin = postgres(adminUrl.toString(), { max: 1 });
@@ -42,6 +42,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     import("./pi-extensions.js"),
   ]);
   const { freezeGatewayProviderBinding } = await import("./gateway-provider-binding.js");
+  const { ensureGatewayRequestBudget, inspectGatewayRequestBudget } = await import("./gateway-request-policy.js");
   const Fastify = fastifyModule.default;
   const { sql, migrate } = db;
   const { mintJobToken, revokeJobTokens } = gateway;
@@ -436,14 +437,170 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       ledger: [...await sql`SELECT * FROM job_usage_ledger WHERE job_id=${jobId} ORDER BY id`],
     });
     const recoverFixture = async (job: Awaited<ReturnType<typeof createJob>>, snapshot: unknown) => {
-      await attemptApi.markAttemptInterrupted(sql, job.jobId, "offline recovery fixture");
-      await revokeJobTokens(job.jobId, "cancelled");
-      await sql`UPDATE job_tokens SET expires_at=now()-interval '1 minute' WHERE job_id=${job.jobId}`;
-      await sql`UPDATE jobs SET status='pending',agent_snapshot_json=${sql.json(snapshot as never)} WHERE id=${job.jobId}`;
-      const next = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, job.jobId));
-      await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '1 hour' WHERE id=${job.jobId}`;
-      return String(next.id);
+      return sql.begin(async rawTx => {
+        const tx = rawTx as unknown as typeof sql;
+        const [current] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${job.jobId} FOR UPDATE`;
+        await ensureGatewayRequestBudget(tx, job.jobId, current.agent_snapshot_json);
+        await attemptApi.markAttemptInterrupted(tx, job.jobId, "offline recovery fixture");
+        await tx`UPDATE job_tokens SET status='revoked',revoked_at=now(),revoke_reason='cancelled',expires_at=now()-interval '1 minute' WHERE job_id=${job.jobId}`;
+        await tx`UPDATE jobs SET status='pending',agent_snapshot_json=${tx.json(snapshot as never)} WHERE id=${job.jobId}`;
+        const next = await createAttempt(tx, job.jobId);
+        await tx`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '1 hour' WHERE id=${job.jobId}`;
+        return String(next.id);
+      });
     };
+    const policyReceipts = async (jobId: string) => [...await sql`SELECT event_id,payload_json FROM events
+      WHERE job_id=${jobId} AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget' ORDER BY job_seq`];
+    const recoveryState = async (jobId: string) => ({
+      jobs: [...await sql`SELECT * FROM jobs WHERE id=${jobId}`],
+      attempts: [...await sql`SELECT * FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no`],
+      tokens: [...await sql`SELECT * FROM job_tokens WHERE job_id=${jobId} ORDER BY id`],
+      events: [...await sql`SELECT * FROM events WHERE job_id=${jobId} ORDER BY job_seq`],
+      dedup: [...await sql`SELECT * FROM event_dedup WHERE job_id=${jobId} ORDER BY event_id`],
+      rate: [...await sql`SELECT * FROM job_event_rate_limits WHERE job_id=${jobId}`],
+      usage: await usageState(jobId),
+    });
+    // First-Attempt legacy/damaged snapshots must not establish an unlimited
+    // policy. All invalid shapes are persisted before their first Attempt.
+    const policyTemplate = makeSnapshot(credentialId);
+    const without = (value: Record<string, unknown>, field: string) => {
+      const copy = { ...value }; delete copy[field]; return copy;
+    };
+    const invalidInitialSnapshots: Array<[string, Record<string, unknown>]> = [
+      ["empty", {}],
+      ["missing runtime knobs", without(policyTemplate, "runtime_knobs")],
+      ["null runtime knobs", { ...policyTemplate, runtime_knobs: null }],
+      ["missing CLI", without(policyTemplate, "agent_cli")],
+      ["missing Pi extensions", without(policyTemplate, "pi_extensions")],
+      ["null Pi extensions", { ...policyTemplate, pi_extensions: null }],
+      ["invalid OM", { ...policyTemplate, pi_extensions: [{ id: "pi-observational-memory", observational_memory: {} }] }],
+      ...["stall_sec", "job_token_max_requests", "timeout_sec", "provision_timeout_sec"].flatMap(field => [
+        [`missing ${field}`, { ...policyTemplate, runtime_knobs: without(policyTemplate.runtime_knobs, field) }],
+        [`null ${field}`, { ...policyTemplate, runtime_knobs: { ...policyTemplate.runtime_knobs, [field]: null } }],
+      ] as Array<[string, Record<string, unknown>]>),
+    ];
+    for (const [label, snapshot] of invalidInitialSnapshots) {
+      const id = randomUUID();
+      await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+        VALUES(${id},${projectId},'audit','running',${sql.json(snapshot as never)},now(),3600,now()+interval '1 hour')`;
+      await createAttempt(sql, id);
+      const before = await recoveryState(id), calls = upstreamCalls;
+      assert.equal(before.attempts.length, 1); assert.equal(before.tokens.length, 0);
+      await assert.rejects(inspectGatewayRequestBudget(sql, id, snapshot), /GATEWAY_REQUEST_BUDGET_INVALID/, label);
+      await assert.rejects(sql.begin(async rawTx => {
+        const tx = rawTx as unknown as typeof sql;
+        const [current] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${id} FOR UPDATE`;
+        return ensureGatewayRequestBudget(tx, id, current.agent_snapshot_json);
+      }), /GATEWAY_REQUEST_BUDGET_INVALID/, label);
+      assert.deepEqual(await recoveryState(id), before, label);
+      assert.equal(upstreamCalls, calls);
+    }
+    const unlimitedOm = makeSnapshot(credentialId, { totalRequests: 0, backgroundMaxTokens: 0 });
+    for (const [label, snapshot] of [
+      ["explicit zero ordinary", { ...unlimitedOm, agent_cli: "claude-code", pi_extensions: [] }],
+      ["Pi empty extensions", { ...unlimitedOm, pi_extensions: [] }],
+      ["unlimited OM without request_budget", unlimitedOm],
+    ] as const) {
+      const id = randomUUID();
+      await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+        VALUES(${id},${projectId},'audit','running',${sql.json(snapshot)},now(),3600,now()+interval '1 hour')`;
+      await createAttempt(sql, id);
+      const before = await recoveryState(id);
+      const unlimitedPolicy = { version: 1, total_requests: 0, main_requests: 0, background_requests: 0 };
+      assert.deepEqual(await inspectGatewayRequestBudget(sql, id, snapshot), unlimitedPolicy, label);
+      assert.deepEqual(await recoveryState(id), before, label);
+      await sql.begin(async rawTx => {
+        const tx = rawTx as unknown as typeof sql;
+        const [row] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${id} FOR UPDATE`;
+        assert.deepEqual(await ensureGatewayRequestBudget(tx, id, row.agent_snapshot_json), unlimitedPolicy, label);
+      });
+      assert.deepEqual((await policyReceipts(id))[0]!.payload_json.policy, unlimitedPolicy, label);
+    }
+    // Read-only inspection is not an implicit migration, including on a fresh connection.
+    const inspected = await createJob("running", { totalRequests: 3, mainRequests: 2, backgroundRequests: 1 });
+    const inspectionBefore = await recoveryState(inspected.jobId);
+    const expectedPolicy = { version: 1, total_requests: 3, main_requests: 2, background_requests: 1 };
+    assert.deepEqual(await inspectGatewayRequestBudget(sql, inspected.jobId, inspected.snapshot), expectedPolicy);
+    assert.deepEqual(await recoveryState(inspected.jobId), inspectionBefore);
+    await sql.begin(async rawTx => {
+      const tx = rawTx as unknown as typeof sql;
+      const [row] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${inspected.jobId} FOR UPDATE`;
+      assert.deepEqual(await ensureGatewayRequestBudget(tx, inspected.jobId, row.agent_snapshot_json), expectedPolicy);
+      const writes = async () => ({
+        events: [...await tx`SELECT * FROM events WHERE job_id=${inspected.jobId} ORDER BY job_seq`],
+        dedup: [...await tx`SELECT * FROM event_dedup WHERE job_id=${inspected.jobId} ORDER BY event_id`],
+        rate: [...await tx`SELECT * FROM job_event_rate_limits WHERE job_id=${inspected.jobId}`],
+      });
+      const afterFirstEnsure = await writes();
+      assert.deepEqual(await ensureGatewayRequestBudget(tx, inspected.jobId, row.agent_snapshot_json), expectedPolicy);
+      assert.deepEqual(await writes(), afterFirstEnsure, "idempotent ensure consumes no extra rate limit or event write");
+    });
+    assert.equal((await policyReceipts(inspected.jobId)).length, 1);
+    const restartDb = postgres(isolatedUrl.toString(), { max: 1 });
+    try {
+      assert.deepEqual(await inspectGatewayRequestBudget(restartDb as unknown as typeof sql, inspected.jobId, inspected.snapshot), expectedPolicy);
+    } finally { await restartDb.end(); }
+    assert.equal((await policyReceipts(inspected.jobId)).length, 1);
+
+    for (const mintMainFirst of [false, true]) {
+      const unminted = await createJob("running", { totalRequests: 3, mainRequests: 2, backgroundRequests: 1, backgroundMaxTokens: 0 });
+      if (mintMainFirst) {
+        const value = await issue(unminted.jobId, "main");
+        assert.equal((await request(value.plaintext, { workload: "main" })).statusCode, 200);
+        await awaitSettled(unminted.jobId, 1);
+        assert.deepEqual((await policyReceipts(unminted.jobId))[0]!.payload_json.policy, expectedPolicy);
+      } else assert.equal((await policyReceipts(unminted.jobId)).length, 0);
+      const larger = { ...unminted.snapshot,
+        ...makeSnapshot(credentialId, { totalRequests: 8, mainRequests: 4, backgroundRequests: 4, backgroundMaxTokens: 0 }) };
+      await recoverFixture(unminted, larger);
+      const retained = await policyReceipts(unminted.jobId);
+      assert.equal(retained.length, 1);
+      assert.deepEqual(retained[0]!.payload_json.policy, expectedPolicy);
+      const firstOm = await issue(unminted.jobId, "observational_memory");
+      const [cap] = await sql`SELECT max_requests,request_total_limit FROM job_tokens WHERE id=${firstOm.id}`;
+      assert.equal(cap.max_requests, 1); assert.equal(cap.request_total_limit, 3);
+      assert.equal((await request(firstOm.plaintext)).statusCode, 200);
+      await awaitSettled(unminted.jobId, mintMainFirst ? 2 : 1);
+      const beforeCalls = upstreamCalls;
+      const rejected = await request(firstOm.plaintext);
+      assert.equal(rejected.statusCode, 429);
+      assert.equal((await receiptFor(rejected)).status, "not_started");
+      await recoverFixture(unminted, { ...unminted.snapshot, ...makeSnapshot(credentialId, { totalRequests: 0, backgroundMaxTokens: 0 }) });
+      const thirdOm = await issue(unminted.jobId, "observational_memory");
+      const beforeDenied = await usageState(unminted.jobId);
+      assert.equal((await request(thirdOm.plaintext)).statusCode, 429);
+      assert.equal(upstreamCalls, beforeCalls);
+      assert.deepEqual(await usageState(unminted.jobId), beforeDenied);
+      assert.deepEqual(await policyReceipts(unminted.jobId), retained, "later unlimited generations preserve the original receipt");
+    }
+    for (const corruption of ["missing_history", "negative", "policy_version", "envelope_version", "other_job_event_id", "authority"] as const) {
+      const damagedPolicy = await createJob();
+      if (corruption !== "missing_history") {
+        await issue(damagedPolicy.jobId, "main");
+        const [receipt] = await policyReceipts(damagedPolicy.jobId);
+        const payload = structuredClone(receipt!.payload_json);
+        let eventId = String(receipt!.event_id);
+        if (corruption === "negative") payload.policy.background_requests = -1;
+        if (corruption === "policy_version") payload.policy.version = 2;
+        if (corruption === "envelope_version") payload.v = 2;
+        if (corruption === "authority") payload.authority = "client";
+        if (corruption === "other_job_event_id") {
+          eventId = `gateway-request-budget:${createHash("sha256").update(JSON.stringify([randomUUID(), payload.policy])).digest("hex")}`;
+        }
+        await sql`UPDATE events SET payload_json=${sql.json(payload)},event_id=${eventId}
+          WHERE job_id=${damagedPolicy.jobId} AND payload_json->>'operation'='gateway_request_budget'`;
+      } else {
+        // Legacy multi-Attempt history has no authoritative policy receipt.
+        await attemptApi.markAttemptInterrupted(sql, damagedPolicy.jobId, "legacy missing policy fixture");
+        await createAttempt(sql, damagedPolicy.jobId);
+      }
+      const before = await recoveryState(damagedPolicy.jobId), calls = upstreamCalls;
+      const expected = corruption !== "missing_history" ? /GATEWAY_REQUEST_BUDGET_INVALID/ : /GATEWAY_REQUEST_BUDGET_HISTORY_MISSING/;
+      await assert.rejects(inspectGatewayRequestBudget(sql, damagedPolicy.jobId, damagedPolicy.snapshot), expected, corruption);
+      await assert.rejects(recoverFixture(damagedPolicy, damagedPolicy.snapshot), expected, corruption);
+      assert.deepEqual(await recoveryState(damagedPolicy.jobId), before, corruption);
+      assert.equal(upstreamCalls, calls);
+    }
     for (const mode of ["larger", "smaller", "zero", "unconfigured"] as const) {
       const historical = await createJob("running", { backgroundMaxTokens: 0 });
       const oldMain = await issue(historical.jobId, "main");
@@ -457,6 +614,14 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       const nextSnapshot = { ...historical.snapshot, ...makeSnapshot(credentialId, { ...options, backgroundMaxTokens: 0 }) };
       if (mode === "unconfigured") delete (nextSnapshot.runtime_knobs as Record<string, unknown>).job_token_max_requests;
       const nextAttempt = await recoverFixture(historical, nextSnapshot);
+      if (mode === "unconfigured") {
+        const beforeInvalidMint = await recoveryState(historical.jobId), beforeCalls = upstreamCalls;
+        await assert.rejects(issue(historical.jobId, "main"), /GATEWAY_REQUEST_BUDGET_INVALID/);
+        await assert.rejects(issue(historical.jobId, "observational_memory"), /GATEWAY_REQUEST_BUDGET_INVALID/);
+        assert.deepEqual(await recoveryState(historical.jobId), beforeInvalidMint);
+        assert.equal(upstreamCalls, beforeCalls);
+        continue;
+      }
       const newMain = await issue(historical.jobId, "main");
       const newOm = await issue(historical.jobId, "observational_memory");
       const [newCaps] = await sql`SELECT max_requests,request_total_limit FROM job_tokens WHERE id=${newMain.id}`;

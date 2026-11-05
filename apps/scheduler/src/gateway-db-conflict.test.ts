@@ -73,6 +73,8 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
         return [{ status: "running", project_id: projectId, agent_snapshot_json: snapshot }];
       }
       if (query.startsWith("SELECT id, workload, used_requests")) return [tokenRow(state)];
+      if (query.startsWith("SELECT workload,max_requests,request_total_limit FROM job_tokens")) return [tokenRow(state)];
+      if (query.startsWith("SELECT count(*)::int AS count FROM job_attempts")) return [{ count: 1 }];
       if (query.startsWith("SELECT status,lease_expires_at")) return [{ status: "running", leased: true, within_time: true }];
       if (query.startsWith("SELECT event_id,payload_json FROM events")) return [];
       if (query.startsWith("SELECT MIN(")) return [{ cap: null }];
@@ -154,7 +156,7 @@ const credential = { id: credentialId, ...encrypted, provider: "openai", kind: "
   agent_cli: "pi", public_metadata_json: { base_url: "http://127.0.0.1:14100" }, model_catalog_json: [],
   settings_config_json: { providers: { openai: { api: "openai-completions", models: [{ id: model }] } } } };
 const snapshot = { agent_cli: "pi", model, upstream_model: model, pi_provider: "openai", credential_id: credentialId,
-  credential_provider: "openai", runtime_knobs: { job_token_max_requests: 0 }, config_files: [],
+  credential_provider: "openai", runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} }, config_files: [],
   settings_config_json: credential.settings_config_json, gateway_provider_binding: freezeGatewayProviderBinding(credential),
   pi_extensions: freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", { provider: "openai", model }, "0.6.3") };
 

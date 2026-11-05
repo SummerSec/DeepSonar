@@ -107,11 +107,15 @@ if (!testDatabaseUrl) {
           ${id.slice(0, 16)}, 'cret', 'active', ${cli}, ${sql.json(settings)})`;
       }
 
+      const withFixtureKnobs = (snapshot: Awaited<ReturnType<typeof coreModule.resolveAgentSnapshotForJob>>, maxRequests = 0) => ({
+        ...snapshot, runtime_knobs: { stall_sec: 600, job_token_max_requests: maxRequests,
+          timeout_sec: 3600, provision_timeout_sec: 600, sources: {} },
+      });
       const currentSnapshot = async (targetCanvasId = canvasId) =>
         snapshotModule.freezeAgentSnapshotNetworkPolicy(
           sql,
           targetCanvasId,
-          await coreModule.resolveAgentSnapshotForJob(sql, projectId, roleName),
+          withFixtureKnobs(await coreModule.resolveAgentSnapshotForJob(sql, projectId, roleName)),
         );
       // Normalize postgres.js Result arrays before comparing the persisted
       // JSONB snapshot with the creation-time value.
@@ -659,7 +663,7 @@ if (!testDatabaseUrl) {
           await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status,body_json)
             VALUES(${quotaCanvas},'root','Quota recovery','active','{}')`;
           const frozen = await snapshotModule.freezeAgentSnapshotNetworkPolicy(sql, quotaCanvas,
-            await coreModule.resolveAgentSnapshotForJob(sql, projectId, quotaRole));
+            withFixtureKnobs(await coreModule.resolveAgentSnapshotForJob(sql, projectId, quotaRole), 20));
           await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
             VALUES(${quotaJob},${projectId},${quotaCanvas},${quotaRole},'running',${sql.json(frozen as never)},now(),3600,now()+interval '1 hour')`;
           await sql`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
@@ -686,6 +690,9 @@ if (!testDatabaseUrl) {
           await sql`UPDATE role_configs SET runtime_knobs_json=${sql.json({ jobTokenMaxRequests: replacementCap })},version=version+1 WHERE id=${quotaConfigId}`;
           const [oldAttemptEvidence] = await sql`SELECT * FROM job_attempts WHERE id=${String(oldQuotaAttempt.id)}`;
           const oldEffects = [...await sql`SELECT * FROM job_attempt_effects WHERE attempt_id=${String(oldQuotaAttempt.id)} ORDER BY id`];
+          const oldPolicies = [...await sql`SELECT event_id,payload_json FROM events WHERE job_id=${quotaJob}
+            AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget' ORDER BY job_seq`];
+          assert.ok(oldPolicies.length > 0, "first mint durably freezes the request policy");
           const recovery = await post(quotaJob, "rerun-current");
           assert.equal(recovery.statusCode, 200, recovery.body);
           const [requeued] = await sql`SELECT status,agent_snapshot_json FROM jobs WHERE id=${quotaJob}`;
@@ -716,6 +723,10 @@ if (!testDatabaseUrl) {
           assert.equal(quotaUpstreamCalls, beforeCalls + 1);
           const [oldAttemptAfter] = await sql`SELECT * FROM job_attempts WHERE id=${String(oldQuotaAttempt.id)}`;
           assert.deepEqual(oldAttemptAfter, oldAttemptEvidence);
+          const policiesAfter = [...await sql`SELECT event_id,payload_json FROM events WHERE job_id=${quotaJob}
+            AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget' ORDER BY job_seq`];
+          for (const oldPolicy of oldPolicies) assert.deepEqual(policiesAfter.find(row => row.event_id === oldPolicy.event_id), oldPolicy);
+
           assert.deepEqual([...await sql`SELECT * FROM job_attempt_effects WHERE attempt_id=${String(oldQuotaAttempt.id)} ORDER BY id`], oldEffects);
           await attemptModule.settleAttemptTerminal(sql, quotaJob, "succeeded", { reason: "fixture" });
           await sql`UPDATE jobs SET status='succeeded',finished_at=now() WHERE id=${quotaJob}`;
