@@ -725,6 +725,23 @@ test("tool.call.started/completed are mapped into stall-visible progress activit
   assert.match(source, /operatorVisibleDispatchPrompt\(initialInput, graph\?\.yaml/);
 });
 
+test("Hub Plan v2 bootstrap is limited to explicit Plan context", () => {
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  const ordinaryStart = source.indexOf("普通 Hub 任务没有 plan_objective 声明");
+  const marker = source.indexOf("Plan v2 first submit requirement:");
+  const end = source.indexOf("\\n\\n${initialInput}`;", marker);
+  assert.ok(ordinaryStart >= 0 && marker > ordinaryStart && end > marker, "Hub bootstrap prompt must remain explicit and inspectable");
+  const ordinaryScope = source.slice(ordinaryStart, marker);
+  const planBootstrap = source.slice(marker, end);
+  assert.match(ordinaryScope, /没有 plan_objective 声明，当前没有活动 Plan，且不存在历史显式 Plan owner[\s\S]*submit_hub_decision 提交 complete 或 intents/);
+  assert.match(ordinaryScope, /不得只因 plan_objective 缺失而停止或 request_human/);
+  assert.match(ordinaryScope, /只有当前任务声明了 plan_objective、存在活动 Plan 上下文或历史显式 Plan owner 时[\s\S]*执行型 Plan v2 要求/);
+  assert.match(planBootstrap, /truncated=false[\s\S]*goal, completion, and budget unchanged/);
+  assert.match(planBootstrap, /copy items\[0\]\.objective_id into plan\.objective_id and revision\.objective_id/);
+  assert.match(planBootstrap, /copy items\[0\]\.revision into plan\.objective_revision and revision\.expected_objective_revision/);
+  assert.match(planBootstrap, /If the read is unavailable, invalid, incomplete, has an invalid status, or the graph-query budget is too small, stop or request_human for that explicit Plan context; do not fall back to ordinary intents/);
+});
+
 test("shared-asset publish is gated by frozen platform_tools, not leftover role-kind helpers", () => {
   const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /canRolePublishSharedAsset|@deprecated 发布权限/);

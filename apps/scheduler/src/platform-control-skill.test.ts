@@ -42,8 +42,15 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   assert.match(content, /必须使用原 key、revision 和完全相同 payload 再 POST 一次/);
   assert.equal(
     DEEPSONAR_CONTROL_SKILL_SHA256,
-    "48f1403ee3b7b2a001ad42dd6dae6d29bea56f97cabaf9139aa5326a19f7139c",
+    "2be21c2a94594d51da7abccc2e47ac0f0bc1f5f218dcfa0120313fd7dafd100b",
   );
+});
+
+test("执行型 Plan 约束不会扩展到无 Plan 上下文的普通 Hub 任务", () => {
+  const content = DEEPSONAR_CONTROL_SKILL.files["SKILL.md"];
+  assert.match(content, /普通 Hub 任务没有 plan_objective 声明，当前没有活动 Plan，且不存在历史显式 Plan owner[\s\S]*submit_hub_decision.*complete 或 intents[\s\S]*不得仅因.*缺失.*request_human/);
+  assert.match(content, /执行型 Plan 的新执行必须提交 plan\.v=2/);
+  assert.match(content, /已有 plan_objective、活动 Plan 或历史显式 Plan owner[\s\S]*读取失败[\s\S]*request_human[\s\S]*不得回退普通 intents/);
 });
 
 test("平台 API 基地址必须可从沙箱访问并指向当前 Job", () => {
