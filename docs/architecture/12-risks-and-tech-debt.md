@@ -1,7 +1,7 @@
 # 12. 风险与技术债
 
 > 状态：**as-built（风险登记，#741 PR 5 回填）**。本文只登记当前实现仍有证据支持的缺口、风险和有意暂缓项；已完成的历史决策不重复列为待办。
-> 同步日期：2026-11-03
+> 同步日期：2026-11-05
 > **v0.6.3 本轮风险处置（2026-11-01）**：独立质量验证/标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均明确暂缓，不列为本轮 PR、工程 issue 收口或发布阻塞。不是仅待输入，也不在本轮追加这些软件卡点；已实现工程、现有测试和权限/CAS/发布抑制边界不放宽。工程验收仅以最终 SHA 的现有 GitHub Actions 适用检查实际全绿为准，全部测试/构建/typecheck 仅在 Actions 执行；质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。下文历史质量条款按[最新范围决定](<../../AGENTS.md#豁免范围>)解释，不能冒充质量通过。
 
 风险登记以当前代码、schema、OpenAPI、测试和已维护专题为证据。issue 只作为来源或后续协调入口；本次回填没有核实历史讨论的原始日期，也不把计划文本写成已实现能力。
@@ -27,6 +27,7 @@
 | D-06 | 低 | 质量指标和 Hub replay 已有只读投影；Experience 经验存储为空，尚未有跨任务经验召回、成本感知计划和策略评估闭环。 | 不能把质量投影或人工标签解读为模型准确率承诺，也不能自动把历史结果当作当前事实。 | 关联长期评估路线；没有冻结数据集、来源、版本和过期策略前，不新增经验写入或推荐路径。 |
 | D-07 | 中 | [`runtime-image-registry-contract.ts`](../../apps/scheduler/src/runtime-image-registry-contract.ts) 仍保留 schema v1 的兼容解析、旧 `image_ref` 投影和历史重复 digest alias；当前新目录契约以最新形态为准。 | 旧输入/输出路径继续存在会增加发布审计和移除成本，也可能让历史投影被误认为受支持的新契约。 | 仅在历史材料、迁移证据和发布窗口确认不再依赖后物理清扫；新生成内容不得依赖兼容投影，兼容解析不能扩大新运行时输入范围。 |
 | D-08 | 高 | OM 的 registry/freeze、Gateway workload/ledger、wrapper 与 RPC/历史 Session 脱敏已落地，默认显式 opt-in。实际本地 base 镜像的 canonical RPC、独立生产内容 guard 正负例及 OM 专属版本准入/适配器回归已通过；内核已知请求前 transport、持久零用量结算和 provider 防冒充亦已通过，集中见 [RPC](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)与 [Gateway](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。剩余为当前 PR/最终 main 组合 CI、发布通道/平台及 registry/catalog 证据；质量与成本收益仍为 `unknown`。 | 本地 base 验收不能证明最终源码组合、其他镜像/平台或已发布 digest；未经独立评估不能宣称记忆质量、价格/成本收益、容量或 SLA 改善。memory 仍不能成为 Fact/Evidence authority。 | 保持版本/内容两道独立准入、冻结 route/model、内核 workload、显式有限分配、pending/unknown 与终态撤销、私有配置和多出口脱敏。按[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)完成最终 CI，发布证据另行核对；质量/成本结论等待独立测量，不把源码接线、host 结果或本地 image ID 写成完整发布验收。 |
+| D-09 | 中 | 2026-11-05 本机 Pi 任务的完成修正提案已获 `persisted_deferred` 接纳，随后 Gateway 拒绝续发模型请求，运行器以最终失败收口，缓冲的 Hub decision 未落地。见 [#913](https://github.com/SummerSec/DeepSonar/issues/913)、[`executor-real.ts`](../../apps/scheduler/src/executor-real.ts) 与 [`repair-token-budget.ts`](../../apps/scheduler/src/domains/event-ingestion/repair-token-budget.ts)。 | 对应 Hub 任务无法创建 Worker；启动成功或重新入队不能证明恢复闭环通过。 | 当前仍未修复。后续须核对当前 Attempt、已接纳回执与合法退出，并通过既有语义事件束、效果结算和完成门收口；不得跳过权限、预算、取消、租约或未知效果边界。 |
 
 ### 任务下发校验的证据边界（#767）
 

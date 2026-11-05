@@ -1,9 +1,9 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；v0.6.7 为当前修复候选，尚未 tag/发布**。
-> 同步日期：2026-11-04
+> 状态：**运维 as-built；v0.6.13 为当前补丁候选，尚未 tag/发布**。
+> 同步日期：2026-11-05
 >
-> 2026-11-04 核对 GitHub：最近正式版与最高既有版本 tag 均为 [v0.6.6](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.6)，正式发布时间 `2026-11-03T04:37:38Z`，非 draft / prerelease，tag commit 为 `4bbf86efdbcccb17b5a23c96083b9999d7f2508f`。已列出 Management Skill、Reverse evidence、platform signature evidence 及两份 runtime registry 附件；这里只核对发布元数据/清单，不表示本轮重新 inspect、验签或部署。新候选计划 compare `v0.6.6...v0.6.7`，schema 仍按当前源码基线；最终 SHA Actions、双原生架构/配置通道、签名、catalog/部署引用回写与正式 Release 附件全部通过后才能宣布发布完成，旧 tag/镜像保持不可变。
+> 2026-11-05 核对 GitHub，最近正式版与最高既有版本 tag 均为 [v0.6.12](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.12)，正式发布时间为 `2026-11-04T17:43:26Z`，tag commit 为 `edcdcf3c17eeb6968e123a30d4860ee8a9e8b728`。Management Skill、Reverse evidence、platform signature evidence 及两份 runtime registry 附件已列出。当前补丁候选为 v0.6.13，compare 为 `v0.6.12...v0.6.13`。最终 main SHA 的 Actions 与正式 Release 流水线、签名、catalog 和产物仍待验收。已知的 [Pi 完成修正阻塞 #913](https://github.com/SummerSec/DeepSonar/issues/913) 尚未修复，发布范围见 [CHANGELOG](../CHANGELOG.md)。
 >
 > **历史 v0.6.4 发布准备基线（2026-11-02，保留历史来源）**。准备时最近正式版为 [v0.6.2](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.2)，于 2026-10-31T09:05:38Z 正式发布，非 draft / prerelease；tag 指向包含 Web 隔离构建修复的 `347385a53f43d15a53175226528af10a692f6f9e`。[v0.6.3 的 Release](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 失败，已有部分镜像但未完成正式发行。按用户 2026-11-02 的选择，保留其 tag 和既有镜像，改发 **v0.6.4**；Git compare 起点为 v0.6.3，成功升级基线仍为 v0.6.2（schema 65 → 67）。本轮范围沿用[原范围决定](<../AGENTS.md#豁免范围>)，不移动旧 tag 或覆盖旧镜像。这里核对发布元数据与源码关系，不重新声明附件、签名或各通道镜像已逐项复验。
 >
@@ -56,13 +56,13 @@ CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚�
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。
 
-发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-03 当前候选为 v0.6.7，预期 compare 为 `v0.6.6...v0.6.7`，最近正式升级基线为 v0.6.6，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
+发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-05 当前候选为 v0.6.13，预期 compare 为 `v0.6.12...v0.6.13`，最近正式升级基线为 v0.6.12，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
 
 ```bash
 pnpm ci:unit:docs-freshness
 pnpm ci:unit:changelog
 # 本轮真实 changelog 区段（仅在 Actions 执行）：
-node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.7 --previous-version 0.6.6 --tag v0.6.7
+node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.13 --previous-version 0.6.12 --tag v0.6.13
 pnpm typecheck
 pnpm build
 pnpm ci:images
