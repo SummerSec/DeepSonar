@@ -399,7 +399,7 @@ function sandboxClaude(
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
   if (context.reasoning) command += ` --effort ${shellQuote(context.reasoning)}`;
   if (context.systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(context.systemPromptPath)})"`;
-  return host.runAsync(modelRequestPolicyCommand(command, context.env), {
+  return host.runAsync(modelRequestPolicyCommand(command, context.env, "claude-code"), {
     cwd: context.cwd,
     env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "70", ...context.env },
   });

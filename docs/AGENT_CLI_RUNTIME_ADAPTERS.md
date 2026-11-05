@@ -363,4 +363,4 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 
 ### 主模型请求准入适配器（#923）
 
-[model-request-policy](../packages/runtime-sandbox/src/model-request-policy.ts)由 runtime-agent 上传并包装三 CLI 的 start/resume；Scheduler 将运行时主配置/DSH/env 指向沙箱 loopback，OM 仍直连真实 Gateway。适配器查询当前 Job token 的 allowance，仅检查已形成请求的 cap 与 Chat SSE usage，合规原字节转发，否则明确拒绝，不重试/重定向。主 CLI 原生生成入口的动态 cap/usage 尚未接入，有限额度下不兼容请求会被拒绝，不能宣称 #923 全部完成。opaque 受限请求和未知 allowance 拒绝；Gateway 继续最终原字节准入。生命周期、范围与持久拒绝回执见[透明传输专题](MODEL_GATEWAY_TRANSPARENCY.md)。CLI 形状合成测试已接 Actions，运行结果待最终 SHA 验收，不代表实际 CLI 或真实模型通过。
+[model-request-policy](../packages/runtime-sandbox/src/model-request-policy.ts)由 runtime-agent 上传并包装三 CLI 的 start/resume；Scheduler 将运行时主配置/DSH/env 指向沙箱 loopback，OM 仍直连真实 Gateway。适配器查询当前 Job token 的 allowance，仅检查已形成请求的 cap 与 Chat SSE usage，合规原字节转发，否则明确拒绝，不重试/重定向。Pi 已接原生 provider streamSimple 生成前选项；Claude 已接启动/resume 原生上限，但动态余额及 DSH 全调用 hook 仍未闭合，不能宣称 #923 全部完成。opaque 受限请求和未知 allowance 拒绝；Gateway 继续最终原字节准入。生命周期、范围与持久拒绝回执见[透明传输专题](MODEL_GATEWAY_TRANSPARENCY.md)。CLI 形状合成测试已接 Actions，运行结果待最终 SHA 验收，不代表实际 CLI 或真实模型通过。

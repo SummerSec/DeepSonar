@@ -4,10 +4,10 @@ export const MODEL_REQUEST_POLICY_BASE_URL = "http://127.0.0.1:38127/gateway";
 export const MODEL_REQUEST_POLICY_PATH = "/workspace/.deepsonar/model-request-policy.mjs";
 
 /** Explicit client admission policy; formed HTTP requests are never rewritten. */
-export function modelRequestPolicyCommand(command: string, env: Record<string, string>): string {
+export function modelRequestPolicyCommand(command: string, env: Record<string, string>, cli?: "claude-code"): string {
   if (!env.DEEPSONAR_REQUEST_POLICY_UPSTREAM) return command;
   if (!env.DEEPSONAR_GATEWAY_TOKEN) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
-  return `node ${shellQuote(MODEL_REQUEST_POLICY_PATH)} -- ${shellQuote(command)}`;
+  return `node ${shellQuote(MODEL_REQUEST_POLICY_PATH)}${cli ? " --claude-launch-budget" : ""} -- ${shellQuote(command)}`;
 }
 
 /** Uploaded as a standalone Node module; no SDK, package install or image rebuild is required. */
@@ -18,6 +18,8 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 
 const LIMIT = 16 * 1024 * 1024;
 const AUTH = new Set(['authorization','x-api-key','anthropic-api-key','proxy-authorization']);
@@ -225,12 +227,50 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
   } };
 }
 
+export async function prepareClaudeLaunch(command, environment, settings = []) {
+  const base = new URL(environment.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
+  const response = await exchange(base, base.pathname.replace(/\/+$/, '') + '/_allowance', 'GET',
+    ['authorization','Bearer ' + environment.DEEPSONAR_GATEWAY_TOKEN], null, AbortSignal.timeout(15_000));
+  const bytes = await collect(response, 65536);
+  if (response.statusCode !== 200) fail('MODEL_REQUEST_POLICY_ALLOWANCE_UNAVAILABLE');
+  const allowance = JSON.parse(bytes.toString('utf8'));
+  if (typeof allowance.policy_required !== 'boolean' || (allowance.remaining_tokens !== null
+    && (!Number.isSafeInteger(allowance.remaining_tokens) || allowance.remaining_tokens < 0))) fail('MODEL_REQUEST_POLICY_ALLOWANCE_INVALID');
+  if (allowance.remaining_tokens === null) return { command, env: environment };
+  if (allowance.remaining_tokens === 0) fail('MODEL_REQUEST_POLICY_EXHAUSTED', 429);
+  let cap = allowance.remaining_tokens;
+  for (const value of [environment.CLAUDE_CODE_MAX_OUTPUT_TOKENS, ...settings.map(setting => setting?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS)]) {
+    if (value !== undefined) {
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed < 1) fail('MODEL_REQUEST_POLICY_CLAUDE_CAP_INVALID');
+      cap = Math.min(cap, parsed);
+    }
+  }
+  const configuration = JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } });
+  // Only generated numeric settings are appended, never user-controlled shell text.
+  return { command: command + " --settings '" + configuration + "'",
+    env: { ...environment, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } };
+}
+
 async function launch() {
   const delimiter = process.argv.indexOf('--');
   if (delimiter < 0 || !process.argv[delimiter + 1]) fail('MODEL_REQUEST_POLICY_COMMAND');
   const policy = await startModelRequestPolicy({ upstream: process.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token: process.env.DEEPSONAR_GATEWAY_TOKEN });
+  let launchCommand = process.argv.slice(delimiter+1).join(' '), launchEnv = process.env;
+  if (process.argv.slice(2,delimiter).includes('--claude-launch-budget')) {
+    try {
+      const settings = [];
+      for (const file of new Set([path.join(process.env.HOME ?? '/workspace/.deepsonar-home','.claude/settings.json'),
+        path.join(process.cwd(),'.claude/settings.json'), path.join(process.cwd(),'.claude/settings.local.json')])) {
+        try { settings.push(JSON.parse(await readFile(file,'utf8'))); }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
+      const prepared = await prepareClaudeLaunch(launchCommand, launchEnv, settings);
+      launchCommand = prepared.command; launchEnv = prepared.env;
+    } catch (error) { await policy.close(); throw error; }
+  }
   let child;
-  try { child = spawn('/bin/sh',['-c',process.argv.slice(delimiter+1).join(' ')], { stdio:'inherit', detached:true }); }
+  try { child = spawn('/bin/sh',['-c',launchCommand], { stdio:'inherit', detached:true, env:launchEnv }); }
   catch (error) { await policy.close(); throw error; }
   let closing = false;
   const killGroup = signal => { if (child.pid) { try { process.kill(-child.pid,signal); } catch (error) { if (error.code !== 'ESRCH') throw error; } } };

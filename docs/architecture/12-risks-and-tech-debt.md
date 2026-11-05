@@ -130,3 +130,7 @@ Scheduler-owned 的只读 target-authorization protocol 已接线：authority/ac
 ## 透明 Gateway 的编码回显边界（#923）
 
 绑定凭据的响应 header/trailer 与跨 chunk 原始 body 明文回显已有阻断；gzip/deflate/br 旁路解码检查已接入同一阻断，未知编码和超限明确拒绝；任意业务自定义编码/变换后的 key echo 尚无完整检测保证。不得把现有明文扫描宣称为真实 key 任意表示均不会回流。协议范围和待验合成场景见[透明传输契约](../MODEL_GATEWAY_TRANSPARENCY.md)；最终 SHA Actions 以及压缩回显负例需单独留证，本轮未做生产或真实模型验证。
+
+### #923 原生 CLI 生成前预算兼容
+
+Pi 1.4.0 已接公开 provider streamSimple 入口，Claude Code 2.1.312 只支持本次 launch/resume 的原生输出上限；DSH 0.2.1-rc.2 的 agent/request 不覆盖 compaction，也不暴露请求局部 model.maxTokens。Claude 逐请求同步余额与 DSH 全调用 hook 仍是发布阻塞。必须使用请求形成前的受支持 SDK/CLI 入口或明确维护完整 adapter；不得用 HTTP body 改写或放宽预算消除缺口。具体版本、入口与静态证据见[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)。新合成回归不等于真实 CLI 运行通过，最终 SHA Actions 待验。

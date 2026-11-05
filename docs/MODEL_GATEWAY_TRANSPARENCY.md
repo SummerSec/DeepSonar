@@ -43,7 +43,19 @@ usage scanner 只观察副本，压缩响应仍按原压缩字节转发；无法
 
 该适配器收到已形成的模型 HTTP 请求后，只读取真实 Gateway allowance 并检查现有 cap/usage。合规请求保留原始 Buffer、摘要与签名头，包括大整数、未知字段、转义和空白。不合规则明确拒绝，不能自动修改任何已形成 body；参与模型/预算/usage 准入的重复键明确拒绝，未知业务重复键保留。有限额度下 opaque/压缩或不支持形状也明确拒绝。
 
-**未闭合兼容阻塞：** 三个主 CLI 的实际 SDK 请求形成前动态额度/usage 选项尚未接入。当前适配器无法修复缺失或过大的输出限制，也无法为 Chat SSE 补 usage。相关请求会被明确拒绝；现有合成形状测试只证明准入与拒绝，不能宣称有额度的 Pi/DSH/Claude 全部可用。下一步必须使用各 CLI 的原生请求生成前钩子设置选项，不得以另一个 HTTP 代理改写替代。
+### 锁定 CLI 的请求生成前入口与剩余阻塞
+
+核对日期 2026-11-05；只读锁定包源码与官方文档，不代表真实 CLI/模型验收。新增合成回归接入 `ci:unit:runtime-sandbox`。
+
+| CLI / 锁定版本 | 已接能力 | 边界 |
+| --- | --- | --- |
+| Pi `@earendil-works/pi-coding-agent` 1.4.0、pi-ai 1.4.0 | runtime-owned [扩展](../packages/runtime-sandbox/src/pi-main-request-budget.ts)通过正式 `registerProvider(provider,{api,streamSimple})`，在 SDK 构造请求前逐次读取 allowance，设置请求局部 `options.maxTokens` 与 `model.maxTokens`；由 SDK 生成 Chat usage。start/resume 均加载 | 不使用已有 payload 的 `before_provider_request`；显式不支持 streaming usage、Responses 最小输出不满足或 sampling 冲突则拒绝。Gateway 始终原字节重验。当前只有 SDK 边界替身回归，真实 Pi 加载链仍待 Actions 验收 |
+| Claude Code `@anthropic-ai/claude-code` 2.1.312 | start/resume 启动器先读取 allowance，再通过原生 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 与 `--settings` 设置正整数上限，保留更严格既有设置；零余额不启动 | 只保证启动时配置。stdin `update_environment_variables` 白名单不包含该变量；settings 热更新无逐请求同步屏障。工具循环、压缩及子任务的动态余额仍未闭合；managed settings 优先级更高，冲突由 Gateway 拒绝 |
+| DSH / dsh-llm / dsh-llm-pi-ai / dsh-agent-loop 0.2.1-rc.2、pi-ai 1.4.0 | 已核对 `agent/request` 异步 waterfall、`llm/stream`、`prepareCall` 及 `PiAiAdapter`；未接入不完整 hook | `agent/request` 在 prepareCall 前可设置 maxTokens，但 compaction 直接调用 llm.stream 绕过；llm/stream 的主请求已经冻结且 next 无新参数。llm-pi-ai 内部 model.maxTokens 无公开异步 hook，不能同时约束 Anthropic thinking。需要维护完整 SDK adapter hook 或替换受治理 provider adapter，不能靠改 HTTP body 解决 |
+
+锁定 Pi 源码证据：`dist/core/provider-composer.js` 的 provider streamSimple 分派、`dist/core/sdk.js` 的 modelRuntime；默认 auto/manual compaction 与 branch summary 经 `agent-session` 传同一 agent.streamFunction，因此在注册成功且仍为绑定 provider/model/API 时重查额度。外部扩展直接调用 SDK 不在该保证内。loader 的 jiti aliases/virtual modules 解析 compat import，不依赖 workspace 安装包；session_start 异常本身会被上游捕获，运行器检查扩展错误且 Gateway 保留最终准入。DSH：`dsh-agent-loop/lib/index.js:1191`、`dsh-compaction-basic/lib/index.js:323`、`dsh-llm-pi-ai/lib/index.js:1983`。Claude 原生包静态检查与[环境变量](https://code.claude.com/docs/en/env-vars)、[settings 优先级](https://code.claude.com/docs/en/settings)、[hooks](https://code.claude.com/docs/en/hooks)一致：静态 cap 不能冒充逐请求余额协商。Anthropic SSE 自带 usage，无需 OpenAI Chat 的 include_usage。
+
+**发布阻塞仍在：** Claude 动态余额与 DSH 全调用生成前适配未闭合。无法合规的已形成请求继续明确拒绝；不扩大预算、不降准入、不自动改 body。不能宣称三 CLI 有限额度全部兼容或 #923 完成。
 
 OM 在受审 wrapper 的请求生成层读取相同 allowance。wrapper 在生成请求前将 `options.maxTokens` 限制到该 allowance；Responses SDK 的最小输出值无法容纳时明确拒绝（当前 SDK 下限为 16，核对基线 2026-11-05）。pending/unknown 不允许协商下一次请求。此结果只是生成参数的提示，Gateway 出站前仍在 Job 锁内重核额度和冻结权限，竞态不能扩大 allowance。
 

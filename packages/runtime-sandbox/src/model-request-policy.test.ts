@@ -156,6 +156,34 @@ test("byte validation preserves every compliant byte and refuses required policy
   } finally { await file.close(); }
 });
 
+test("Claude launch and resume prepare the native output option before the CLI forms requests", async () => {
+  const file = await fixture();
+  let remaining: number | null = 20;
+  const server = http.createServer((req,res) => {
+    assert.equal(req.url, "/gateway/_allowance");
+    assert.equal(req.headers.authorization, "Bearer synthetic-main-token");
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ remaining_tokens: remaining, policy_required: true }));
+  });
+  const base = await listen(server);
+  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" };
+  try {
+    for (const command of ["claude -p", "claude -p --resume fixture"]) {
+      const prepared = await file.api.prepareClaudeLaunch(command, env);
+      assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, String(remaining));
+      assert.equal(prepared.command, command + ` --settings '{"env":{"CLAUDE_CODE_MAX_OUTPUT_TOKENS":"${remaining}"}}'`);
+      remaining = 10;
+    }
+    const lower = await file.api.prepareClaudeLaunch("claude -p", { ...env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8" },
+      [{ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: "5" } }]);
+    assert.equal(lower.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "5", "preserve stricter configured launch limits");
+    remaining = 0;
+    await assert.rejects(file.api.prepareClaudeLaunch("claude -p", env), /EXHAUSTED/u);
+    remaining = null;
+    assert.deepEqual(await file.api.prepareClaudeLaunch("claude -p", env), { command: "claude -p", env });
+  } finally { await close(server); await file.close(); }
+});
+
 test("all three CLI starts and supported resumes use the explicit wrapper without changing their stdin protocol", async () => {
   const commands: string[] = [];
   const host = {
@@ -168,7 +196,8 @@ test("all three CLI starts and supported resumes use the explicit wrapper withou
   for (const id of ["pi", "dsh", "claude-code"] as const) await AGENT_CLI_RUNTIME_ADAPTERS[id].start(context);
   for (const id of ["pi", "claude-code"] as const) await AGENT_CLI_RUNTIME_ADAPTERS[id].resume({ ...context, sessionId: "fixture", sessionFile: "/workspace/session.jsonl" });
   assert.equal(commands.length, 5);
-  for (const command of commands) assert.match(command, /^node '\/workspace\/\.deepsonar\/model-request-policy\.mjs' -- /u);
+  for (const command of commands) assert.match(command, /^node '\/workspace\/\.deepsonar\/model-request-policy\.mjs'(?: --claude-launch-budget)? -- /u);
+  assert.equal(commands.filter(command => command.includes(" --claude-launch-budget ")).length, 2);
   assert.equal(modelRequestPolicyCommand("pi --mode rpc", {}), "pi --mode rpc");
   assert.throws(() => modelRequestPolicyCommand("pi", { DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://gateway.invalid/gateway" }));
 });
