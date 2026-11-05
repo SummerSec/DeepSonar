@@ -134,8 +134,10 @@ export function ProjectCliProviderAllowlistPanel({
   const unavailableDefault = credentialListLoaded && defaultCredentialUnavailable(selectedDefaultCredentialId, defaultCandidates);
   const defaultChanged = selectedDefaultCredentialId !== defaultCredentialId;
   const unavailableIds = credIds.filter((id) => !llmCredentials.some((credential) => credential.id === id && credential.status === "active"));
+  const markDraftEdited = () => { setSaved(false); };
   const removeUnavailableReferences = () => {
     if (!credentialListLoaded) return;
+    markDraftEdited();
     setCredIds((current) => current.filter((id) => !unavailableIds.includes(id)));
     setCredentialSelectionChanged(true);
   };
@@ -170,6 +172,7 @@ export function ProjectCliProviderAllowlistPanel({
   };
 
   const toggleCli = (cli: AgentCli) => {
+    markDraftEdited();
     setClis((current) => {
       if (current.includes(cli)) {
         if (current.length === 1) return current;
@@ -181,6 +184,7 @@ export function ProjectCliProviderAllowlistPanel({
 
   const toggleCred = (id: string) => {
     if (!credentialListLoaded) return;
+    markDraftEdited();
     const current = credentialIdsConfigured || credentialSelectionChanged
       ? credIds : llmCredentials.filter((credential) => credential.status === "active").map((credential) => credential.id);
     setCredIds(current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
@@ -326,7 +330,7 @@ export function ProjectCliProviderAllowlistPanel({
           {unavailableDefault && (
             <div role="alert" className="mt-2 text-[12px] text-amber-400/90">
               默认账号已删除、停用、不再可访问，或不在当前账号 / CLI 启用范围内。
-              <button type="button" onClick={() => setSelectedDefaultCredentialId(null)} disabled={busy}
+              <button type="button" onClick={() => { markDraftEdited(); setSelectedDefaultCredentialId(null); }} disabled={busy}
                 className="ml-2 underline">清除失效默认引用</button>
             </div>
           )}
@@ -344,7 +348,7 @@ export function ProjectCliProviderAllowlistPanel({
           <SearchableSelect
             key={`${credentialLoadState}:${busy}`}
             value={selectedDefaultCredentialId ?? ""}
-            onChange={(id) => { if (credentialListLoaded && !busy) setSelectedDefaultCredentialId(id || null); }}
+            onChange={(id) => { if (credentialListLoaded && !busy) { markDraftEdited(); setSelectedDefaultCredentialId(id || null); } }}
             options={defaultCandidates.map((credential) => ({ value: credential.id, label: `${credential.name || "未命名"} · ${credential.provider} · #${credential.id.slice(0, 8)}` }))}
             placeholder={!credentialListLoaded ? "账号尚未加载，保留原默认引用" : selectedDefaultCredentialId ? "当前默认账号不可用，请清除或更换" : "未设置默认账号"}
             ariaLabel="项目默认账号"

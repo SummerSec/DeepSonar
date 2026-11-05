@@ -368,6 +368,19 @@ test("parent settings reload after probes preserves drafts before and during the
         }
       }
     }
+    // A no-op save keeps the same configuration key. Its old success state
+    // must not hide a later conflict after the user starts a new draft.
+    await act(async () => root.render(createElement(Parent, { key: "no-op-save-conflict", initialDefault: null })));
+    await click(button("保存"));
+    assert.ok(button("已保存"));
+    await chooseB();
+    assert.ok(button("保存"), "a new edit clears the historical save success state");
+    await click(button("测试"));
+    await act(async () => replaceServer({ enabled_agent_clis: ["pi"], enabled_credential_ids: ["a", "b"], default_credential_id: "a" } as ProjectSettings));
+    await act(async () => finishProbe({ ok: true } as Awaited<ReturnType<typeof api.testCredential>>));
+    assert.match(trigger().textContent!, /a · fixture/);
+    assert.match(container.textContent!, /项目账号配置已在服务端变更/);
+
     // A genuine server change is distinct from health refresh and is visible.
     await act(async () => replaceServer({ enabled_agent_clis: ["pi"], enabled_credential_ids: ["a", "b"], default_credential_id: "a" } as ProjectSettings));
     await chooseB();
