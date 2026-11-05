@@ -222,18 +222,32 @@ export async function settleEffectByOperator(
     reconcile_operation_id: input.operation_id,
     operator_evidence: input.evidence.trim(),
   });
+  // #908 review P1: an effect belonging to a still-active attempt must never be settled
+  // from the outside — the kernel still owns that outcome, and settling it would pre-empt
+  // the normal settlement path.
   const rows = (await db.unsafe(
-    `UPDATE job_attempt_effects
+    `UPDATE job_attempt_effects e
         SET status = 'settled',
-            settlement_json = settlement_json || ${quoteLiteral(payload)}::jsonb,
+            settlement_json = e.settlement_json || ${quoteLiteral(payload)}::jsonb,
             evidence_ref = ${quoteLiteral(`operator:${input.operation_id}`)},
             settled_at = now(),
             updated_at = now()
-      WHERE id = ${quoteLiteral(input.effect_id)}::uuid
-        AND status IN ('unknown', 'effect_pending')
-      RETURNING id`,
+      WHERE e.id = ${quoteLiteral(input.effect_id)}::uuid
+        AND e.status IN ('unknown', 'effect_pending')
+        AND NOT EXISTS (
+          SELECT 1 FROM job_attempts a WHERE a.id = e.attempt_id AND a.status = 'active'
+        )
+      RETURNING e.id`,
   )) as { id: string }[];
   return { settled: rows.length > 0, effect_id: input.effect_id, outcome: input.outcome };
+}
+
+/** Count of effects the kernel still considers unreconciled. */
+export async function countUnsettledEffects(db: MigrationConnection): Promise<number> {
+  const rows = (await db.unsafe(
+    `SELECT count(*)::int AS count FROM job_attempt_effects WHERE status IN ('unknown', 'effect_pending')`,
+  )) as { count: number }[];
+  return Number(rows[0]?.count ?? 0);
 }
 
 export async function runEffectReconcile(db: MigrationConnection, input: ReconcileRequest): Promise<ReconcileResult> {
