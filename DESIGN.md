@@ -254,7 +254,7 @@ pending → claimed → provisioning → running → succeeded
 
 Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报。`pg_notify('deepsonar_jobs')` 是主要调度唤醒；可以关闭轮询。
 
-每个 Job 领取建立 Scheduler-owned Attempt。claim 按有界 keyset 候选页使用独立事务，每页按 advisory lock → 排序 Canvas → project → Job → Attempt 取锁并重新核验暂停、scope 与配额；只计真实领取，忙锁候选不耗槽位，提交释放本页锁后才检查后续页。外部动作先写 `job_attempt_effects` 的 intent/`effect_pending`，观察到结果后再写 settlement。启动对账按 Attempt phase 和 effect 分类：只有尚未开始且无效果的准备阶段可以回到 `pending`；未知效果统一进入 `orphan`，清理 Token、沙箱、画布同步和租约，禁止自动重放。只有明确宿主证据证明尚未调用外部创建，才可显式把 provision 结算为 `never_started`；缺少 `sandbox_id` 或未见迟到句柄不能证明未开始。已调用 runner 的 opaque 失败、timeout/cancel/orphan 及 pending provision 在终态收口时保持 `unknown`，既有真实 settlement 不改写。自动 provision 重试在 Canvas → Job → 当前最新 Attempt 锁下重核，只接纳无效果或明确 settled/never_started 的原 Attempt；`replay_policy` 不变。规则与本轮待验收边界见 [ADR 0015](docs/architecture/adr/0015-governed-completion-recovery.md)。 运行期不得让 `unknown` 效果把已完成的工作拖死（#874）：attempt 中断时先按既有证据规则结清可判定的在途效果（`gateway_model_request` 有 `job_usage_ledger` 行、`agent_run` 在中断路径已确定终止、`provision` 依 sandbox 身份、`canvas_delivery` 依节点存在性），只把证据不足的保留为 `unknown`；`interrupted` 不加入全局终态枚举（该 attempt 仍可被后续 attempt 续跑），仅在中断路径按「运行已终止」判定。Scheduler 内置周期性效果对账（`runtime-reconcile:` operation_id、5 分钟、上限 500），复用同一 `runEffectReconcile` 语义：只结清 `auto`、`undecided` 维持 `unknown`、从不重放；Reaper 判定 `waiting_human` 超时前先对该 Job 定向对账，残留未结算时在错误信息中点名 effect 类型，不把平台侧待对账记成「人工等待超时」。
+每个 Job 领取建立 Scheduler-owned Attempt。claim 按有界 keyset 候选页使用独立事务，每页按 advisory lock → 排序 Canvas → project → Job → Attempt 取锁并重新核验暂停、scope 与配额；只计真实领取，忙锁候选不耗槽位，提交释放本页锁后才检查后续页。外部动作先写 `job_attempt_effects` 的 intent/`effect_pending`，观察到结果后再写 settlement。启动对账按 Attempt phase 和 effect 分类：只有尚未开始且无效果的准备阶段可以回到 `pending`；未知效果统一进入 `orphan`，清理 Token、沙箱、画布同步和租约，禁止自动重放。只有明确宿主证据证明尚未调用外部创建，才可显式把 provision 结算为 `never_started`；缺少 `sandbox_id` 或未见迟到句柄不能证明未开始。已调用 runner 的 opaque 失败、timeout/cancel/orphan 及 pending provision 在终态收口时保持 `unknown`，既有真实 settlement 不改写。自动 provision 重试在 Canvas → Job → 当前最新 Attempt 锁下重核，只接纳无效果或明确 settled/never_started 的原 Attempt；`replay_policy` 不变。规则与本轮待验收边界见 [ADR 0015](docs/architecture/adr/0015-governed-completion-recovery.md)。 运行期不得让 `unknown` 效果把已完成的工作拖死（#874）：attempt 中断时先按既有证据规则结清可判定的在途效果（`gateway_model_request` 有 `job_usage_ledger` 行、`canvas_delivery` 依节点存在性），只把证据不足的保留为 `unknown`；`interrupted` 不加入全局终态枚举（该 attempt 仍可被后续 attempt 续跑），中断数据库状态不证明 runner 已退出，`agent_run` 保持未知。Scheduler 内置周期性效果对账（`runtime-reconcile:` operation_id、5 分钟、上限 500），复用同一 `runEffectReconcile` 语义：只结清 `auto`、`undecided` 维持 `unknown`、从不重放；Reaper 判定 `waiting_human` 超时前先对该 Job 定向对账，残留未结算时在错误信息中点名 effect 类型，不把平台侧待对账记成「人工等待超时」。
 
 Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`unknown`/`pending` 保持硬失败，不能以 provider 5xx 文案替代效果 authority。#873 的 OM admission 回滚耗尽与已持久结算的请求前 transport 使用同一个宿主 error.message carrier，覆盖 SDK 只保留内层消息的路径；上游请求与结算不作为可重试 admission 重放。
 
@@ -273,6 +273,8 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 取消、超时、迟到回调、容器创建和销毁都走幂等路径。`timeout/orphan` 只有在没有待结算效果且策略允许时才可安全重试；否则必须让操作员确认。Job resume 使用创建期冻结快照，`rerun-current` 才重新解析当前配置并完整重冻，身份漂移返回 `SNAPSHOT_STALE`。
 
 终态后的 Hub/Report 派生在 savepoint 中执行目标 grant 准入。拒绝时暂停 Canvas，保留前驱 Job 的终态结算，且不留下部分派生 Job；不能为了补派系统工作回滚已经完成的执行事实。
+
+未知历史效果可经[受审计的单条人工结清](deploy/README.md#未知效果的人工结清899)补充操作员证据（#899）；active Attempt 仍由内核拥有。CLI 将单条操作成功与全库残留清空分开报告，失败计数为未知，结清不改 replay policy、Attempt 或维护授权。工程回归经隔离 PostgreSQL Actions 验收，生产升级另计。
 
 ## 8. 配置、快照和运行时
 
