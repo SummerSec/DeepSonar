@@ -315,7 +315,12 @@ export function assertObservationalMemoryRequestScope(input: {
     throw new GatewayWorkloadPolicyError("FROZEN_WORKLOAD_SCOPE_MISSING", "observational-memory token has no frozen model/route scope");
   }
   const requestRoute = input.upstreamPath.replace(/^\/+|\/+$/gu, "");
-  if (requestRoute !== expectedRoute) {
+  // OpenAI SDKs append a relative resource to their configured base URL;
+  // Anthropic SDKs append v1/messages. These exact protocol spellings are
+  // authorization observations only: never rewrite the outbound path here.
+  const relativeOpenAiRoute = expectedRoute === "v1/chat/completions" ? "chat/completions"
+    : expectedRoute === "v1/responses" ? "responses" : null;
+  if (requestRoute !== expectedRoute && requestRoute !== relativeOpenAiRoute) {
     throw new GatewayWorkloadPolicyError("FROZEN_WORKLOAD_ROUTE_MISMATCH", "observational-memory token cannot use this provider route");
   }
   if (input.requestModel !== expectedModel) {

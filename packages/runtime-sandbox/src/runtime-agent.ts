@@ -29,6 +29,7 @@ import { PiRpcDriver } from "./pi-rpc-driver.js";
 import { createStdinCloseKiller } from "./runtime-stdin-close.js";
 import { PiObservationalMemoryTextRedactor } from "./pi-observational-memory.js";
 import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
+import { MODEL_REQUEST_POLICY_PATH, MODEL_REQUEST_POLICY_SOURCE } from "./model-request-policy.js";
 
 
 export type ReasoningEffort = string;
@@ -1351,9 +1352,14 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     await host.uploadFile(content, normalized);
   }
 
-  // 2. 沙箱只当执行宿主：由 Runtime Adapter 直接驱动官方 CLI 协议，不走 SDK daemon/relay。
+  // 2. Runtime Adapter 驱动官方 CLI 协议；模型请求可经显式预算生成策略层。
   //    语义事件只接受 Job 级控制 API；CLI 流里的伪造控制 MCP tool call 只告警，不映射为事件。
   const cliEnv = runtimeCliEnv(spec.env);
+  if (cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM) {
+    if (!cliEnv.DEEPSONAR_GATEWAY_TOKEN) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
+    await host.run(`mkdir -p -- ${shellQuote(RUNTIME_DIR)}`);
+    await host.uploadFile(MODEL_REQUEST_POLICY_SOURCE, MODEL_REQUEST_POLICY_PATH);
+  }
   await ensureRuntimeHome(host);
   await materializeAgentFiles(host, spec, cliEnv);
   const mcpConfigPath = `${RUNTIME_DIR}/mcp.json`;

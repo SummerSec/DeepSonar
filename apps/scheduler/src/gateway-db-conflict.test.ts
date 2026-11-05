@@ -14,8 +14,8 @@ process.env.DEEPSONAR_MASTER_KEY = randomBytes(32).toString("hex");
 // This transactional SQL double faults at commit, after the quota/effect writes,
 // so a retry must discard both before attempting admission again.
 type Row = Record<string, unknown>;
-type Store = { usedRequests: number; usedTokens: number; effects: Row[]; ledger: Row[] };
-const emptyStore = (): Store => ({ usedRequests: 0, usedTokens: 0, effects: [], ledger: [] });
+type Store = { usedRequests: number; usedTokens: number; effects: Row[]; ledger: Row[]; receipts: Row[] };
+const emptyStore = (): Store => ({ usedRequests: 0, usedTokens: 0, effects: [], ledger: [], receipts: [] });
 let store = emptyStore();
 let workload: GatewayWorkload = "main";
 let admissionAttempts = 0;
@@ -46,7 +46,20 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
     const query = input.join("?").replace(/\s+/gu, " ").trim();
     const state = current();
     const rows = (): Row[] => {
-      if (query.startsWith("SELECT effect_id FROM job_attempt_effects")) return [];
+      if (query.startsWith("SELECT effect_id FROM job_attempt_effects")) return state.effects.filter((effect) =>
+        (effect.resource_identity_json as Row)?.job_token_id === values[2] && (effect.intent_json as Row)?.gateway_request_id === values[3]);
+      if (query.startsWith("SELECT status FROM jobs")) return [{ status: "running" }];
+      if (query.startsWith("SELECT id FROM job_tokens")) return values[0] === tokenId ? [{ id: tokenId }] : [];
+      if (query.startsWith("SELECT id FROM job_attempts")) return values[0] === attemptId ? [{ id: attemptId }] : [];
+      if (query.startsWith("SELECT payload_json FROM events")) return state.receipts.filter((row) => row.event_id === values[2]);
+      if (query.startsWith("SELECT COALESCE(MAX(job_seq)")) return [{ next: state.receipts.length + 1 }];
+      if (query.startsWith("INSERT INTO event_dedup")) return [];
+      if (query.startsWith("INSERT INTO events(")) {
+        state.receipts.push({ event_id: values[1], payload_json: values[4] }); return [];
+      }
+      if (query.startsWith("INSERT INTO job_event_rate_limits") || query.startsWith("UPDATE job_event_rate_limits")) return [];
+      if (query.includes("FROM job_event_rate_limits")) return [{ job_id: jobId, window_started_at: new Date(),
+        progress_count: 0, standard_count: 0, terminal_count: 0 }];
       if (query.startsWith("SELECT e.status, e.settlement_json, l.settlement_status, l.source")) {
         return state.effects.filter((entry) => (entry.intent_json as Row)?.gateway_request_id === values[3]).map((effect) => ({
           ...effect, settlement_status: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.settlement_status,
@@ -235,7 +248,8 @@ for (const selected of ["main", "observational_memory"] as const) {
       assert.deepEqual(fixture.errors, []);
       assert.equal(admissionAttempts, 3);
       assert.equal(fixture.upstream.mock.callCount(), 0);
-      assert.deepEqual(store, emptyStore());
+      assert.deepEqual({ ...store, receipts: [] }, emptyStore());
+      assert.equal(store.receipts.length, 1, "a separate durable no-effect receipt survives the rolled-back admission");
       assert.deepEqual(rollbacks.map((state) => [state.usedRequests, state.effects.length]), [[1, 1], [1, 1], [1, 1]]);
       const body = response.json();
       assert.equal(body.error_code, "database_conflict");
@@ -245,7 +259,7 @@ for (const selected of ["main", "observational_memory"] as const) {
       else { assert.equal(body.error.type, "database_conflict"); assert.equal(body.error.effect_status, undefined); }
       assert.equal(await conflictCount(code), before + 3);
       assert.equal(await conflictCount(code, true), exhaustedBefore + 1);
-      await assertConsumer(response, false);
+      await assertConsumer(response, selected === "observational_memory", selected === "observational_memory" ? await fixture.receipt() : { status: "unknown" });
     });
   }
 

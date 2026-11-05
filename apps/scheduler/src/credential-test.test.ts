@@ -81,7 +81,7 @@ test("catalog and inference preserve configured protocol headers and never follo
     const configured = { "anthropic-version": "future-version", "anthropic-beta": "future-beta",
       "user-agent": "configured-fixture", "x-app": "configured-app", "x-unknown-protocol": "value",
       accept: "application/vnd.fixture+json", "x-empty": "" };
-    const credential = { provider: "anthropic", kind: "llm_provider", ...encrypted,
+    const credential = { provider: "anthropic", kind: "llm_provider", ...encrypted, public_metadata_json: {},
       settings_config_json: { providers: { fixture: { baseUrl: "http://127.0.0.1/v1",
         api: "anthropic-messages", models: [{ id: "fixture-model" }], headers: configured } } } };
     assert.equal((await listCredentialModelsPreview(credential, "offline-header-fixture")).available, true);
@@ -104,7 +104,7 @@ test("invalid configured HTTP headers fail before catalog or inference transport
   let requests = 0;
   try {
     globalThis.fetch = (async () => { requests++; return new Response("{}"); }) as typeof fetch;
-    const credential = { provider: "openai", kind: "llm_provider", ...encryptSecret("offline-fixture"),
+    const credential = { provider: "openai", kind: "llm_provider", ...encryptSecret("offline-fixture"), public_metadata_json: {},
       settings_config_json: { providers: { fixture: { baseUrl: "http://127.0.0.1/v1",
         api: "openai-completions", models: [{ id: "fixture-model" }],
         headers: { "x-good": "preserved", "x-invalid": "value\r\ninjected: value" } } } } };

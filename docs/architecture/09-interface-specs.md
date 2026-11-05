@@ -178,3 +178,7 @@ Job-scoped `submit_plan` 当前严格要求 `{plan: PlanV2, revision: execution_
 ## 透明数据面与 scoped 回执（#923）
 
 Model Gateway 支持原始方法/相对路径/query、未知端到端头及原始 body；保留上游状态、错误、头和 SSE，不隐式重试或重定向。Host、认证及必要逐跳/framing 在内核边界处理。`x-deepsonar-request-id` 是被消费的精确控制字段；`GET /gateway/_settlement/:id` 是当前 Job/Attempt/token/workload 范围内、不可缓存的只读结算查询，不是上游路由或模型调用。返回 settled、not_started、pending、unknown 或 not_found，不泄露其他 scope 的 ledger。预算准入可返回 `GATEWAY_OUTPUT_BUDGET_REQUIRED`，客户端须显式提供受预算约束的输出参数。原始请求流有界缓冲、HEAD/OPTIONS、编码及升级限制见[契约](../MODEL_GATEWAY_TRANSPARENCY.md)，实现见[Gateway](../../apps/scheduler/src/gateway.ts)。
+
+`GET /gateway/_allowance` 接受当前有效的 main 或 observational_memory token 与活动 Attempt，返回 `{ remaining_tokens: null | number, policy_required: boolean }`，禁止缓存。查询在 Job 锁内读取原预算，不预留、不增加模型请求计数；main 取 Job 总量或 OM main-workload 额度与修正链余额的交集，后台保持自身额度。pending/unknown 拒绝；返回提示后最终出站仍须锁内重验，不能扩大授权。主执行由沙箱请求生成适配器处理输出参数，OM 由受审 wrapper 处理；两者都不替代 Gateway 准入。
+
+配额/已回滚 DB admission 拒绝的 `not_started` 查询来自同 scope 的宿主 `events.control_receipt`（`operation=gateway_admission`、`authority=kernel`），不以错误正文授权降级；无持久回执则 unknown，同 UUID 不得重发。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)。

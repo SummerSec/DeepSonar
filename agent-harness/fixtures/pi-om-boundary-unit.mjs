@@ -69,6 +69,9 @@ export async function createFailureBoundary(errorMessage, receipt = { status: "u
   process.env.PI_CODING_AGENT_DIR = root;
   process.env.PI_OBSERVATIONAL_MEMORY_PASSIVE = "1";
   const receiptServer = createServer((req, res) => {
+    if (req.headers.authorization === "Bearer offline-unit" && req.url === "/om/_allowance") {
+      res.writeHead(200, { "content-type": "application/json" }); res.end('{"remaining_tokens":null}'); return;
+    }
     if (req.headers.authorization !== "Bearer offline-unit" || !/^\/om\/_settlement\/[a-f0-9-]{36}$/u.test(req.url)) {
       res.writeHead(403); res.end(); return;
     }

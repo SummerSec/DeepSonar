@@ -26,7 +26,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 
 #871/#873 的数据库事务重试、Canvas-first 锁序与跨 Attempt 共享卷边界见[运行时](06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)及[资产专题](../SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。#874 的持久宿主恢复、去重 Hub 和严格对账/停止决策见 [FR-CTRL-010](01-system-specification.md#fr-ctrl-010-完成未知效果的受治理恢复)、[ADR 0015](adr/0015-governed-completion-recovery.md)及[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。当前修复分支已接回归入口，最终 SHA Actions 尚待验收；退出会话/新 Attempt 的完整继续执行仍未交付。
 
-#923 将模型数据面与结算确认分离，关联 FR-CRED-003/004、FR-CAP-009 和 NFR-PERF-004；[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)拥有原始字节、HTTP 边界、预算拒绝及 OM 查询契约，[ADR 0016](adr/0016-transparent-gateway-settlement.md)记录迁移。当前分支实现待最终 SHA Actions，旧证据不覆盖本次变更。
+#923 将模型数据面与结算确认分离，关联 FR-CRED-003/004、FR-CAP-009 和 NFR-PERF-004；[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)拥有原始字节、HTTP 边界、预算拒绝及 OM 查询契约，[ADR 0017](adr/0017-transparent-gateway-settlement.md)记录迁移。当前分支实现待最终 SHA Actions，旧证据不覆盖本次变更。
 
 ## 1. 阅读路径与目录
 

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { MODEL_REQUEST_POLICY_SOURCE } from "@deepsonar/runtime-sandbox";
 import { createServer, request, type IncomingMessage } from "node:http";
 import { connect } from "node:net";
 import { gzipSync } from "node:zlib";
@@ -25,6 +30,20 @@ function send(port: number, path: string, method: string, headers: string[], chu
     outgoing.on("error", reject);
     for (const chunk of chunks) outgoing.write(chunk);
     outgoing.end();
+  });
+}
+
+function rawExchange(port: number, path: string, bearer: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const socket = connect(port, "127.0.0.1");
+    const chunks: Buffer[] = [];
+    socket.setTimeout(5_000, () => socket.destroy(new Error("Raw HTTP exchange deadline exceeded")));
+    socket.on("data", chunk => chunks.push(Buffer.from(chunk)));
+    socket.on("error", error => {
+      if ((error as NodeJS.ErrnoException).code !== "ECONNRESET") reject(error);
+    });
+    socket.on("close", () => resolve(Buffer.concat(chunks)));
+    socket.on("connect", () => socket.write(`GET ${path} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nAuthorization: Bearer ${bearer}\r\nConnection: close\r\n\r\n`));
   });
 }
 
@@ -66,11 +85,36 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
       res.setHeader("x-request-id", "synthetic-request");
       res.setHeader("x-unknown-response", ["first", "second"]);
       res.setHeader("set-cookie", ["fixture=a", "fixture=b"]);
-      if (status) {
+      if (req.headers["x-policy-fixture"] === "main-generation") {
+        const common = { input_tokens: 3, output_tokens: 2, total_tokens: 5 };
+        const response = path === "/v1/messages"
+          ? { type: "message", role: "assistant", stop_reason: "end_turn", content: [], usage: common }
+          : path === "/v1/chat/completions"
+            ? { object: "chat.completion", choices: [{ index: 0, finish_reason: "stop", message: { content: "fixture" } }],
+              usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } }
+            : { object: "response", status: "completed", output: [], usage: common };
+        res.setHeader("content-type", "application/json");
+        // Completion waits for Gateway's final chunk and durable settlement, rather
+        // than reaching Content-Length before its SQL transaction can finish.
+        res.setHeader("transfer-encoding", "chunked");
+        res.end(JSON.stringify(response));
+      } else if (status) {
         res.statusCode = Number(status[1]);
         res.setHeader("retry-after", "9");
         res.setHeader("location", "http://127.0.0.1:1/never-follow");
         res.end(Buffer.from(`upstream ${status[1]}\n`));
+      } else if (path === "/v1/echo-reason") {
+        res.statusMessage = `upstream ${secret}`;
+        res.end("safe body");
+      } else if (path === "/v1/echo-header-name") {
+        res.setHeader(`x-${secret}`, "safe value");
+        res.end("safe body");
+      } else if (path === "/v1/echo-trailer-name") {
+        res.write("safe body");
+        // No Trailer declaration: exercise the final trailer-name check itself,
+        // rather than detecting the secret in an initial header value.
+        res.addTrailers({ [`x-${secret}`]: "safe value" });
+        res.end();
       } else if (path === "/v1/echo-header") {
         res.setHeader("x-upstream-debug", secret);
         res.end("must not expose response headers");
@@ -79,6 +123,11 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         // The test releases this only after seeing the safe prefix downstream,
         // proving the secret spans distinct observed upstream chunks.
         finishEcho = () => { finishEcho = undefined; res.end(`${secret.slice(8)} unsafe suffix`); };
+      } else if (path === "/v1/not-modified") {
+        res.statusCode = 304;
+        res.setHeader("content-encoding", "gzip");
+        res.setHeader("content-length", compressed.length);
+        res.end();
       } else if (path === "/v1/gzip") {
         res.setHeader("content-encoding", "gzip");
         res.setHeader("content-length", compressed.length);
@@ -176,6 +225,14 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
       assert.equal(headerLeak.status, 400);
       const bodyLeak = await via("/v1/messages", "POST", ["content-type", "application/octet-stream"], [Buffer.from(token.plaintext)]);
       assert.equal(bodyLeak.status, 400);
+      for (const value of [token.plaintext, [...token.plaintext].map(char => `%${char.charCodeAt(0).toString(16)}`).join("")]) {
+        assert.equal((await via(`/v1/messages?debug=${value}`)).status, 400);
+        assert.equal((await via(`/v1/${value}`)).status, 400);
+      }
+      const compressedLeak = await via("/v1/messages", "POST",
+        ["content-type", "application/json", "content-encoding", "gzip"],
+        [gzipSync(Buffer.from(JSON.stringify({ debug: token.plaintext })))]);
+      assert.equal(compressedLeak.status, 400);
       assert.equal(captured.length, before);
     });
     await t.test("upstream credential echoes in headers and across body chunks abort without exposing the key", async () => {
@@ -202,6 +259,20 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         assert.ok(!result.headers.join(" ").includes(secret));
         assert.ok(!result.body.includes(secret));
         if (path === "/v1/echo-body") assert.equal(result.body.toString(), "safe prefix ");
+      }
+    });
+    await t.test("raw HTTP status reason, header names and trailer names cannot return the bound key", async () => {
+      for (const path of ["/v1/echo-reason", "/v1/echo-header-name", "/v1/echo-trailer-name"]) {
+        const direct = await rawExchange(address.port, path, secret);
+        assert.ok(direct.includes(secret), "the direct raw wire fixture must actually contain the key");
+        const before = captured.length;
+        const proxied = await rawExchange(gatewayPort, `/gateway${path}`, token.plaintext);
+        assert.equal(captured.length, before + 1, "the authenticated request must reach the synthetic upstream");
+        assert.ok(!proxied.includes(secret), "no raw response bytes may expose the complete bound key");
+        if (path === "/v1/echo-trailer-name") {
+          assert.match(proxied.toString(), /^HTTP\/1\.1 200/u);
+          assert.ok(!proxied.includes(Buffer.from("\r\n0\r\n")), "unsafe trailers must abort before the final HTTP chunk");
+        } else assert.equal(proxied.length, 0, "unsafe reason/header names must be rejected before flushing headers");
       }
     });
     await t.test("HEAD and OPTIONS preserve methods and HEAD length without a body", async () => {
@@ -236,6 +307,29 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
       assert.deepEqual(values(response.headers, "content-encoding"), ["gzip"]);
       assert.deepEqual(values(response.headers, "content-length"), [String(compressed.length)]);
     });
+    await t.test("HEAD and 304 representation encoding metadata does not require a compressed entity", async () => {
+      const identity = randomUUID();
+      const head = await via("/v1/gzip", "HEAD", ["x-deepsonar-request-id", identity]);
+      const cached = await via("/v1/not-modified");
+      assert.equal(head.status, 200);
+      assert.equal(cached.status, 304);
+      for (const response of [head, cached]) {
+        assert.equal(response.body.length, 0);
+        assert.deepEqual(values(response.headers, "content-encoding"), ["gzip"]);
+        assert.deepEqual(values(response.headers, "content-length"), [String(compressed.length)]);
+      }
+      // A HEAD client completes at the headers, before usage settlement. Verify the
+      // eventual effect too: empty gzip decoding used to incorrectly mark it unknown.
+      let effectStatus = "";
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const [effect] = await sql`SELECT status FROM job_attempt_effects WHERE job_id=${jobId}
+          AND intent_json->>'gateway_request_id'=${identity}`;
+        effectStatus = String(effect?.status ?? "");
+        if (effectStatus && effectStatus !== "effect_pending") break;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.equal(effectStatus, "settled");
+    });
     await t.test("SSE first event arrives before the upstream is allowed to finish", async () => {
       let release: (() => void) | undefined;
       const first = new Promise<void>(resolve => { release = resolve; });
@@ -247,9 +341,10 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
           response.on("end", () => resolve(Buffer.concat(chunks)));
         });
         outgoing.on("error", reject);
+        outgoing.setTimeout(5_000, () => outgoing.destroy(new Error("SSE first-event deadline exceeded")));
         outgoing.end();
       });
-      await first;
+      await Promise.race([first, completed.then(() => { throw new Error("SSE ended before the release barrier"); })]);
       assert.ok(finishSse);
       finishSse();
       assert.deepEqual(await completed, Buffer.concat([sseFirst, sseLast]));
@@ -282,6 +377,60 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
     });
     await t.test("upstream truncation is not disguised as a successful complete body", async () => {
       await assert.rejects(via("/v1/interrupted"));
+    });
+    await t.test("main request-generation policy uses fresh real SQL allowances for three CLI request shapes", async () => {
+      const directory = await mkdtemp(path.join(tmpdir(), "gateway-main-policy-"));
+      try {
+        const modulePath = path.join(directory, "model-request-policy.mjs");
+        await writeFile(modulePath, MODEL_REQUEST_POLICY_SOURCE);
+        const { startModelRequestPolicy } = await import(pathToFileURL(modulePath).href);
+        const fixtures = [
+          { cli: "claude-code", route: "/v1/messages", field: "max_tokens",
+            body: { model: "fixture-model", max_tokens: 100, messages: [], extension: { preserve: true } } },
+          { cli: "pi", route: "/v1/chat/completions", field: "max_tokens",
+            body: { model: "fixture-model", max_tokens: 100, stream: true, stream_options: { future: "keep" },
+              messages: [], extension: { preserve: true } } },
+          { cli: "dsh", route: "/v1/responses", field: "max_output_tokens",
+            body: { model: "fixture-model", max_output_tokens: 100, input: [], extension: { preserve: true } } },
+        ];
+        for (const fixture of fixtures) {
+          const boundedJobId = randomUUID();
+          await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+            VALUES(${boundedJobId},${projectId},'audit','running',${sql.json({ name: "request policy fixture", agent_cli: fixture.cli })},
+              now(),3600,now()+interval '1 hour')`;
+          await sql.begin(tx => createAttempt(tx as unknown as typeof sql, boundedJobId));
+          const boundedToken = await gateway.mintJobToken({ jobId: boundedJobId, projectId, credentialId, maxRequests: 0, maxTokens: 20 });
+          const policy = await startModelRequestPolicy({ upstream: `http://127.0.0.1:${gatewayPort}/gateway`, token: boundedToken.plaintext, port: 0 });
+          try {
+            const policyAddress = policy.server.address();
+            assert.ok(policyAddress && typeof policyAddress !== "string");
+            for (const remaining of [20, 15]) {
+              const before = captured.length;
+              const response = await send(policyAddress.port, `/gateway${fixture.route}`, "POST",
+                ["authorization", `Bearer ${boundedToken.plaintext}`, "content-type", "application/json", "x-policy-fixture", "main-generation"],
+                [Buffer.from(JSON.stringify(fixture.body))]);
+              assert.equal(response.status, 200, `${fixture.cli}: ${response.body.toString()}`);
+              assert.equal(captured.length, before + 1, "allowance reads stay inside the Gateway and do not call the model");
+              const actual = captured.at(-1)!;
+              const generated = JSON.parse(actual.body.toString());
+              assert.equal(actual.path, fixture.route);
+              assert.equal(generated[fixture.field], remaining, "the second request must read the reduced SQL allowance");
+              assert.equal(generated.model, fixture.body.model);
+              assert.deepEqual(generated.extension, fixture.body.extension);
+              if (fixture.cli === "pi") assert.deepEqual(generated.stream_options, { future: "keep", include_usage: true });
+              assert.deepEqual(values(actual.headers, "authorization"), [`Bearer ${secret}`]);
+              assert.ok(!actual.headers.join(" ").includes(boundedToken.plaintext));
+            }
+            const [usage] = await sql`SELECT count(*)::int AS requests, sum(total_tokens)::int AS tokens,
+              bool_and(settlement_status='settled') AS settled FROM job_usage_ledger WHERE job_id=${boundedJobId}`;
+            assert.deepEqual({ requests: usage.requests, tokens: usage.tokens, settled: usage.settled },
+              { requests: 2, tokens: 10, settled: true });
+            const [counter] = await sql`SELECT used_requests, used_tokens FROM job_tokens WHERE id=${boundedToken.id}`;
+            assert.equal(Number(counter.used_requests), 2, "policy allowance lookups must not consume model requests");
+            assert.equal(Number(counter.used_tokens), 10);
+          } finally { await policy.close(); }
+        }
+      } finally { await rm(directory, { recursive: true, force: true }); }
     });
     await t.test("conflicting auth and forbidden frozen models never reach the upstream", async () => {
       const before = captured.length;

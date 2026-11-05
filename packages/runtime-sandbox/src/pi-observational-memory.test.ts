@@ -190,7 +190,7 @@ test("Pi session export and both large-RPC copies redact memory while keeping co
   assert.ok(copies.every((copy) => !copy.includes(MEMORY_TEXT)));
 });
 
-async function wrapperFixture(error?: string, receipt: Record<string, unknown> = { status: "settled" }) {
+async function wrapperFixture(error?: string, receipt: Record<string, unknown> = { status: "settled" }, remaining: number | null = null, api = "openai-completions") {
   const loaded = await import(new URL("../../../agent-harness/fixtures/pi-om-boundary-unit.mjs", import.meta.url).href);
   const { createGovernedObservationalMemoryExtension: create, config } = await loaded.loadGovernedBoundary();
   const root = mkdtempSync(path.join(tmpdir(), "om-wrapper-unit-"));
@@ -209,6 +209,10 @@ async function wrapperFixture(error?: string, receipt: Record<string, unknown> =
   const receiptRequests: string[] = [];
   const receiptServer = createServer((req, res) => {
     assert.equal(req.headers.authorization, "Bearer offline-unit");
+    if (req.url === "/om/_allowance") {
+      res.writeHead(remaining === 0 ? 429 : 200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ remaining_tokens: remaining })); return;
+    }
     assert.match(req.url!, /^\/om\/_settlement\/[a-f0-9-]{36}$/u);
     receiptRequests.push(req.url!);
     res.writeHead(200, { "content-type": "application/json" });
@@ -216,7 +220,7 @@ async function wrapperFixture(error?: string, receipt: Record<string, unknown> =
   });
   await new Promise<void>((resolve) => receiptServer.listen(0, "127.0.0.1", resolve));
   const port = (receiptServer.address() as { port: number }).port;
-  const model = { provider: config.model.provider, id: config.model.id, api: "openai-completions", baseUrl: `http://127.0.0.1:${port}/om`,
+  const model = { provider: config.model.provider, id: config.model.id, api, maxTokens: 4096, baseUrl: `http://127.0.0.1:${port}/om`,
     headers: { "X-Deepsonar-Request-Id": "untrusted" } };
   const context = { cwd: "/untrusted/project", mode: "rpc", hasUI: true, ui: { notify: () => { throw new Error("RPC must not create UI frames"); } },
     model: { provider: "main", id: "main", contextWindow: 1000000 },
@@ -359,5 +363,46 @@ test("OM holds SDK done until the correlated durable receipt settles", async () 
     receipt.status = "settled";
     await fixture.event("agent_before_settle");
     assert.equal(fixture.entries.length, 1);
+  } finally { fixture.close(); }
+});
+
+
+test("OM adapts provider output limit before SDK request creation", async () => {
+  const fixture = await wrapperFixture(undefined, { status: "settled" }, 128);
+  try {
+    await fixture.event("agent_start");
+    await fixture.event("agent_before_settle");
+    assert.equal(fixture.calls[0].options.maxTokens, 128);
+    assert.equal(fixture.calls[0].selected.maxTokens, 128, "SDK thinking overhead cannot exceed the request-local cap");
+    assert.equal(fixture.context.modelRegistry.find().maxTokens, 4096, "frozen model capabilities remain intact");
+  } finally { fixture.close(); }
+});
+
+for (const remaining of [0, 15]) {
+  test(`OM does not issue Responses request beyond remaining allowance ${remaining}`, async () => {
+    const fixture = await wrapperFixture(undefined, { status: "settled" }, remaining, "openai-responses");
+    try {
+      await fixture.event("agent_start");
+      await fixture.event("agent_before_settle");
+      assert.equal(fixture.calls.length, 0);
+      assert.equal(fixture.entries.length, 0);
+      assert.equal(fixture.messages[0]?.details.code, "PI_OM_WORKER_QUOTA_EXHAUSTED");
+    } finally { fixture.close(); }
+  });
+}
+
+
+test("OM Anthropic thinking budget is bounded by the request-local model ceiling", async () => {
+  const fixture = await wrapperFixture(undefined, { status: "settled" }, 2048, "anthropic-messages");
+  try {
+    await fixture.event("agent_start");
+    await fixture.event("agent_before_settle");
+    const { selected, options } = fixture.calls[0];
+    // Pinned pi-ai simple-options adds reasoning then clamps to model.maxTokens.
+    assert.equal(Math.min(options.maxTokens + 8192, selected.maxTokens), 2048);
+    assert.equal(selected.id, fixture.context.modelRegistry.find().id);
+    assert.equal(selected.api, "anthropic-messages");
+    assert.equal(selected.baseUrl, fixture.context.modelRegistry.find().baseUrl);
+    assert.equal(fixture.context.modelRegistry.find().maxTokens, 4096);
   } finally { fixture.close(); }
 });

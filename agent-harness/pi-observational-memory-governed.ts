@@ -333,6 +333,20 @@ export async function awaitGatewaySettlement(baseUrl: string, token: string, req
   fail("PI_OM_SETTLEMENT_TIMEOUT");
 }
 
+/** Read the server-owned allowance before generating a provider request. */
+async function gatewayAllowance(baseUrl: string, token: string): Promise<number | null> {
+  const response = await fetch(`${baseUrl.replace(/\/+$/u, "")}/_allowance`, {
+    headers: { authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(10_000),
+  });
+  // This is an authenticated control response, not provider-controlled prose.
+  if (response.status === 429) return 0;
+  if (!response.ok) fail("PI_OM_ALLOWANCE_UNAVAILABLE");
+  const result = await response.json() as AnyRecord;
+  if (result.remaining_tokens === null) return null;
+  if (!Number.isSafeInteger(result.remaining_tokens) || result.remaining_tokens < 0) fail("PI_OM_ALLOWANCE_INVALID");
+  return result.remaining_tokens;
+}
+
 function settlementToken(auth: unknown): string {
   if (!isRecord(auth) || auth.ok !== true) fail("PI_OM_PERMISSION_AUTH_FAILED");
   if (typeof auth.apiKey === "string" && auth.apiKey.length > 0) return auth.apiKey;
@@ -388,9 +402,23 @@ function guardedRegistry(registry: unknown, config: FrozenConfig, state: GuardSt
           } else stream = compatStreamSimple;
         }
         token = settlementToken(await registry.getApiKeyAndHeaders(model));
-        const requestModel = { ...model, headers: correlatedHeaders(model.headers, requestId) };
-        const requestOptions = { ...(isRecord(options) ? options : {}),
+        const remaining = await gatewayAllowance(model.baseUrl, token);
+        if (remaining === 0 || (remaining !== null && model.api === "openai-responses" && remaining < 16)) {
+          state.degraded ??= "PI_OM_WORKER_QUOTA_EXHAUSTED";
+          throw new Error(state.degraded);
+        }
+        const requestModel: AnyRecord = { ...model, headers: correlatedHeaders(model.headers, requestId) };
+        const requestOptions: AnyRecord = { ...(isRecord(options) ? options : {}),
           headers: correlatedHeaders(isRecord(options) ? options.headers : undefined, requestId) };
+        if (remaining !== null) {
+          const requested = requestOptions.maxTokens ?? model.maxTokens ?? remaining;
+          if (!Number.isSafeInteger(requested) || requested <= 0) fail("PI_OM_ALLOWANCE_INVALID");
+          requestOptions.maxTokens = Math.min(requested, remaining);
+          // Anthropic simple-options adds thinking budget to maxTokens, then
+          // caps at model.maxTokens. Bound this request-local capability copy
+          // too, without changing the frozen registry model or route identity.
+          requestModel.maxTokens = Math.min(model.maxTokens ?? remaining, remaining);
+        }
         requestStarted = true;
         const source = stream.call(owner, requestModel, context, requestOptions);
         let terminal: AnyRecord | undefined;

@@ -6,7 +6,7 @@
 > 来源：#815 A/B/C；实现核对基线为 2026-10-31 当前根代码与下方源码入口
 > 关联需求：FR-CAP-009 / NFR-SEC-001
 
-> 后续机制补充（2026-11-05）：[ADR 0016](0016-transparent-gateway-settlement.md) 将响应传输与持久结算确认分离；本 ADR 的准入、权限与 unknown 边界保持，历史运行证据不覆盖新实现。
+> 后续机制补充（2026-11-05）：[ADR 0017](0017-transparent-gateway-settlement.md) 将响应传输与持久结算确认分离；本 ADR 的准入、权限与 unknown 边界保持，历史运行证据不覆盖新实现。
 
 ## 背景
 

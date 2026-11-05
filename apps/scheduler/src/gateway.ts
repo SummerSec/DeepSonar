@@ -11,6 +11,7 @@
  * - 红线：上游明文 Key 不出本进程；请求/响应体不落库（usage 除外）
  */
 import { once } from "node:events";
+import { persistNoEffectReceipt, readNoEffectReceipt, type GatewayNoEffectReason } from "./gateway-admission-receipt.js";
 import { createGatewayResponseGuard } from "./gateway-response-guard.js";
 import { gatewayEndToEndHeaders, appendGatewayHeaders, requestGatewayHttp } from "./gateway-transparent-http.js";
 import { assertGatewayOutputBudget, gatewayObservationBytes, transparentGatewayUrl } from "./gateway-transparent-policy.js";
@@ -1073,6 +1074,10 @@ async function admitGatewayRequest(
     return { denied: "job_inactive" };
   }
   if (input.clientRequestId) {
+    if (await readNoEffectReceipt(tx, { jobId: input.jobId, attemptId: input.attemptId, tokenId: input.tokenId,
+      workload: input.workload, requestId: input.clientRequestId })) {
+      throw new GatewayWorkloadPolicyError("duplicate_gateway_request_id", "A durable admission receipt already owns this identity");
+    }
     const [existing] = await tx`SELECT effect_id FROM job_attempt_effects
       WHERE job_id=${input.jobId} AND attempt_id=${input.attemptId}
       AND resource_identity_json->>'job_token_id'=${input.tokenId}
@@ -1272,6 +1277,45 @@ export function registerGateway(app: FastifyInstance): void {
         });
         return deny(reply, 401, "job 已结束，token 不可用", "job_inactive");
       }
+      const clientRequestId = headerString(req.headers["x-deepsonar-request-id"]);
+      if (clientRequestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(clientRequestId)) {
+        return deny(reply, 400, "Invalid request identity", "invalid_gateway_request_id");
+      }
+      const saveAdmissionReceipt = async (reason: GatewayNoEffectReason): Promise<boolean> => {
+        if (!clientRequestId || !jt.attempt_id || !["main", "observational_memory"].includes(String(jt.workload))) return false;
+        return persistNoEffectReceipt(sql, { jobId: String(jt.job_id), attemptId: String(jt.attempt_id),
+          tokenId: String(jt.id), workload: gatewayWorkload(jt.workload), requestId: clientRequestId, reason });
+      };
+      let decodedTarget = req.url;
+      try { decodedTarget = decodeURIComponent(req.url); } catch { /* HTTP raw target validation is independent. */ }
+      if (req.url.includes(token) || decodedTarget.includes(token)) return deny(reply, 400, "Job credential in request target", "credential_in_business_data");
+      if (req.url === "/gateway/_allowance") {
+        if (req.method !== "GET" || !jt.attempt_id || !["main", "observational_memory"].includes(String(jt.workload))) {
+          return deny(reply, 403, "Allowance query requires an active workload", "workload_scope_mismatch");
+        }
+        reply.header("cache-control", "no-store");
+        try {
+          return await sql.begin(async (tx) => {
+            // Advisory request-generation policy, never a reservation. Admission
+            // rechecks the same budget under this Job lock before any external call.
+            const db = tx as unknown as typeof sql;
+            const [job] = await db`SELECT status, agent_snapshot_json FROM jobs WHERE id=${jt.job_id} FOR UPDATE`;
+            if (!job || !JOB_ACTIVE.includes(String(job.status))) throw new RepairTokenBudgetError("REPAIR_JOB_INACTIVE", "Job is no longer active");
+            const workload = gatewayWorkload(jt.workload);
+            const repair = workload === "main" ? await admitGatewayRepair(db, String(jt.job_id), String(jt.attempt_id)) : null;
+            const omJob = Boolean(observationalMemoryConfig(parseFrozenPiExtensions(job.agent_snapshot_json?.pi_extensions)));
+            const total = workload === "observational_memory" || omJob
+              ? await readWorkloadTokenAllowance(db, String(jt.job_id), workload, repair)
+              : await readJobTokenAllowance(db, String(jt.job_id), repair ?? undefined);
+            const remaining = total === null ? repair?.remaining_tokens ?? null : Math.min(total, repair?.remaining_tokens ?? total);
+            return { remaining_tokens: remaining, policy_required: repair !== null || remaining !== null };
+          });
+        } catch (error) {
+          if (error instanceof RepairTokenBudgetError) return deny(reply, error.code.endsWith("EXHAUSTED") ? 429 : 409,
+            error.message, error.code);
+          throw error;
+        }
+      }
       const receiptPath = /^\/gateway\/_settlement\/([0-9a-f-]{36})$/u.exec(req.url);
       if (req.url.startsWith("/gateway/_settlement/")) {
         if (req.method !== "GET" || !receiptPath) return deny(reply, 400, "Invalid settlement query", "invalid_settlement_query");
@@ -1282,7 +1326,11 @@ export function registerGateway(app: FastifyInstance): void {
           AND e.intent_json->>'gateway_request_id'=${receiptPath[1]!}
           AND e.intent_json->>'workload'=${String(jt.workload)}`;
         reply.header("cache-control", "no-store");
-        if (!receipt) return reply.code(404).send({ status: "not_found" });
+        if (!receipt) {
+          const noEffect = jt.attempt_id && await readNoEffectReceipt(sql, { jobId: String(jt.job_id),
+            attemptId: String(jt.attempt_id), tokenId: String(jt.id), workload: gatewayWorkload(jt.workload), requestId: receiptPath[1]! });
+          return noEffect || reply.code(404).send({ status: "not_found" });
+        }
         if (receipt.status === "settled" && receipt.settlement_status === "settled") {
           if (receipt.source === "gateway_error" && receipt.settlement_json?.external_effect === false) {
             return { status: "not_started", reason: "gateway_transient" };
@@ -1292,7 +1340,7 @@ export function registerGateway(app: FastifyInstance): void {
         return { status: receipt.status === "effect_pending" && !receipt.settlement_status ? "pending" : "unknown" };
       }
       if (jt.workload !== "observational_memory" && jobTokenQuotaExhausted(jt.used_requests as number, jt.max_requests as number)) {
-        await sql`UPDATE job_tokens SET status = 'exhausted' WHERE id = ${jt.id} AND status = 'active'`;
+        await saveAdmissionReceipt("quota_exhausted");
         void auditGateway(req, {
           action: "gateway.denied",
           projectId: jt.project_id as string,
@@ -1316,13 +1364,15 @@ export function registerGateway(app: FastifyInstance): void {
         outboundBuf = Buffer.concat(chunks);
       }
       let rawBody: unknown = outboundBuf;
+      let observedRequest: Buffer | null = outboundBuf;
       if (outboundBuf?.length) {
-        try { rawBody = JSON.parse(gatewayObservationBytes(outboundBuf, headerString(req.headers["content-encoding"])).toString("utf8")); }
-        catch { /* Opaque input is admitted or refused by authorization, never rewritten. */ }
+        try { observedRequest = gatewayObservationBytes(outboundBuf, headerString(req.headers["content-encoding"])); }
+        catch { observedRequest = null; }
       }
-      const clientRequestId = headerString(req.headers["x-deepsonar-request-id"]);
-      if (clientRequestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(clientRequestId)) {
-        return deny(reply, 400, "Invalid request identity", "invalid_gateway_request_id");
+      if (observedRequest?.includes(token)) return deny(reply, 400, "Job credential in body", "credential_in_business_data");
+      if (outboundBuf?.length) {
+        try { if (observedRequest) rawBody = JSON.parse(observedRequest.toString("utf8")); }
+        catch { /* Opaque input is admitted or refused by authorization, never rewritten. */ }
       }
       let workload: GatewayWorkload;
       try {
@@ -1428,6 +1478,9 @@ export function registerGateway(app: FastifyInstance): void {
       let requestTrailers: string[];
       try {
         url = joinGatewayUpstreamUrl(baseUrl, upstreamPath, qs);
+        let observedTarget = url;
+        try { observedTarget = decodeURIComponent(url); } catch { /* Preserve opaque URI bytes. */ }
+        if (url.includes(token) || observedTarget.includes(token)) return deny(reply, 400, "Job credential in upstream target", "credential_in_business_data");
         const configured = providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl);
         if (hasInvalidProviderHeaders(configured)) return deny(reply, 502, "Invalid provider header configuration", "invalid_provider_headers");
         if ((outboundBuf?.includes(token) ?? false) || req.raw.rawHeaders.some((value, i) => i % 2 === 1
@@ -1502,6 +1555,7 @@ export function registerGateway(app: FastifyInstance): void {
         app.log.warn({ code, workload, attempts: requestIntent.attempts, job_id: jt.job_id, attempt_id: gatewayAttemptId },
           "gateway admission exhausted its bounded database conflict retries");
         // The admission transaction rolled back its counter and effect; no upstream request started.
+        await saveAdmissionReceipt("gateway_transient");
         const message = "数据库锁冲突在有限重试后仍未恢复，请稍后重试；该请求未向上游发出";
         return reply.code(503).send({
           error: workload === "observational_memory" ? gatewayNotStartedError(message) : { type: "database_conflict", message },
@@ -1519,7 +1573,11 @@ export function registerGateway(app: FastifyInstance): void {
         if (requestIntent.denied === "job_inactive") return deny(reply, 401, "job is no longer active", "job_inactive");
         if (requestIntent.denied === "workload_usage_unknown") return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");
         if (requestIntent.denied === "workload_usage_pending") return deny(reply, 409, "observational-memory allowance is reserved by an unsettled request", "workload_usage_pending");
-        if (requestIntent.denied === "workload_token_cap_exhausted") return deny(reply, 429, "observational-memory token cap exhausted", "workload_token_cap_exhausted");
+        if (requestIntent.denied === "workload_token_cap_exhausted") {
+          await saveAdmissionReceipt("workload_token_cap_exhausted");
+          return deny(reply, 429, "observational-memory token cap exhausted", "workload_token_cap_exhausted");
+        }
+        await saveAdmissionReceipt("quota_exhausted");
         return deny(reply, 429, "request quota exhausted", "quota_exhausted");
       }
       const { requestNo, effectId: gatewayEffectId } = requestIntent;
@@ -1590,7 +1648,8 @@ export function registerGateway(app: FastifyInstance): void {
       if (status >= 500) inc("deepsonar_provider_errors_total", { provider: safeProvider });
       const isSse = String(upstream.headers["content-type"] ?? "").includes("text/event-stream");
       const scanner = createRepairUsageScanner(upstreamPath, isSse);
-      const compressed = Boolean(upstream.headers["content-encoding"] && upstream.headers["content-encoding"] !== "identity");
+      const hasEntity = req.method !== "HEAD" && status !== 204 && status !== 304;
+      const compressed = hasEntity && Boolean(upstream.headers["content-encoding"] && upstream.headers["content-encoding"] !== "identity");
       const observation: Buffer[] = []; let observationBytes = 0;
       let interrupted = false;
       let secretTail = Buffer.alloc(0);
@@ -1609,8 +1668,8 @@ export function registerGateway(app: FastifyInstance): void {
       let responseGuard: ReturnType<typeof createGatewayResponseGuard> | undefined;
       reply.hijack();
       try {
-        responseGuard = createGatewayResponseGuard(secret, headerString(upstream.headers["content-encoding"]));
-        if (secret && upstream.rawHeaders.some((value, i) => i % 2 === 1 && value.includes(secret))) throw new Error("upstream_credential_echo");
+        responseGuard = createGatewayResponseGuard(secret, hasEntity ? headerString(upstream.headers["content-encoding"]) : undefined);
+        if (secret && (upstream.statusMessage?.includes(secret) || upstream.rawHeaders.some(value => value.includes(secret)))) throw new Error("upstream_credential_echo");
         reply.raw.writeHead(status, upstream.statusMessage, gatewayEndToEndHeaders(upstream.rawHeaders));
         reply.raw.flushHeaders();
         for await (const chunk of upstream) {
@@ -1632,7 +1691,7 @@ export function registerGateway(app: FastifyInstance): void {
         await responseGuard.finish();
         await safeWrite(Buffer.alloc(0), true);
         if (upstream.rawTrailers.length) {
-          if (secret && upstream.rawTrailers.some((value, i) => i % 2 === 1 && value.includes(secret))) throw new Error("upstream_credential_echo");
+          if (secret && upstream.rawTrailers.some(value => value.includes(secret))) throw new Error("upstream_credential_echo");
           const connection: string[] = [];
           for (let i = 0; i < upstream.rawHeaders.length; i += 2) {
             if (upstream.rawHeaders[i]!.toLowerCase() === "connection") connection.push(upstream.rawHeaders[i]!, upstream.rawHeaders[i + 1]!);

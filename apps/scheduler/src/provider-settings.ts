@@ -206,6 +206,7 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
   observationalMemory?: {
     config: PiObservationalMemoryConfig;
     backgroundToken: string;
+    gatewayBaseUrl?: string;
   };
 }): MaterializedConfigFile[] {
   if (input.observationalMemory && input.agentCli !== "pi") throw new Error("PI_OM_REQUIRES_PI");
@@ -275,7 +276,7 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
       }
       omProvider.models = [omModel];
       omProvider.api = api;
-      omProvider.baseUrl = gatewayBaseUrl;
+      omProvider.baseUrl = input.observationalMemory.gatewayBaseUrl ?? gatewayBaseUrl;
       omProvider.apiKey = "$DEEPSONAR_OM_GATEWAY_TOKEN";
       if (api === "anthropic-messages") omProvider.authHeader = true;
       providers[PI_OBSERVATIONAL_MEMORY_PROVIDER] = omProvider;

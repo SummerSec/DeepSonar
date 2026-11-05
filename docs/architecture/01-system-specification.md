@@ -679,7 +679,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 ### FR-CRED-003 Model Gateway 唯一出口
 
 - **规范要求**：真实模型请求必须经 Scheduler-owned Model Gateway/受控 proxy，Job 只持短期 token；Gateway 必须按 Job deadline、allowed_models、请求/Token 额度和脱敏规则准入，不得把长期 Provider key 注入 Sandbox。放行后保持业务请求/响应原始字节与端到端头；仅处理认证、绑定目标和必要 HTTP 边界，不隐式重试/重定向或静默改写模型/输出参数。
-- **决策来源**：模型请求是外部副作用和计费边界，统一出口才能限额、审计和撤销；#923 及 [ADR 0016](adr/0016-transparent-gateway-settlement.md)要求透明数据面与准入/结算分离。
+- **决策来源**：模型请求是外部副作用和计费边界，统一出口才能限额、审计和撤销；#923 及 [ADR 0017](adr/0017-transparent-gateway-settlement.md)要求透明数据面与准入/结算分离。
 - **实现状态**：as-built；用量写 `job_usage_ledger`，不保存 prompt/completion/headers。已接入 `main` 与 `observational_memory` 的内核签发 token 身份，后台只能访问冻结的 provider/model/route；总用量与 memory 归因分开，质量/任务单位成本不把后台调用冒充主执行效果。终态撤销和 Job 状态更新共用同一终态事务，未知/待结算用量不被吞掉。#923 分支实现原始有界请求、单次 HTTP/SSE 传输及 OM scoped 结算查询，wrapper 确认 durable settled 前不提交终止结果；最终 SHA Actions 待验，协议限制见[专题](../MODEL_GATEWAY_TRANSPARENCY.md)。
 - **代码入口**：[Gateway](../../apps/scheduler/src/gateway.ts)、[Gateway guard](../../apps/scheduler/src/domains/provider-adapter/gateway-guard.ts)、[Gateway tests](../../apps/scheduler/src/gateway-usage.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`。

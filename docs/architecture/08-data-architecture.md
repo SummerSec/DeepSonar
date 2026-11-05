@@ -223,4 +223,6 @@ FR-FIND-008 复用 `audit_logs` 保存程序材料准入、替代、撤销及操
 
 ## Gateway 关联与持久确认（#923）
 
-OM 客户端请求 UUID 保存在现有 `job_attempt_effects.intent_json.gateway_request_id`，结合 Job、Attempt、token 和 workload 查询原 effect/usage ledger，不新增账本或 schema。请求关联不能扩大授权；只有 effect 与 usage 持久 settled 才返回成功确认，pending/unknown 不由 HTTP 数据已交付推定成功。参见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)及 [ADR 0016](adr/0016-transparent-gateway-settlement.md)。
+OM 客户端请求 UUID 保存在现有 `job_attempt_effects.intent_json.gateway_request_id`，结合 Job、Attempt、token 和 workload 查询原 effect/usage ledger，不新增账本或 schema。请求关联不能扩大授权；只有 effect 与 usage 持久 settled 才返回成功确认，pending/unknown 不由 HTTP 数据已交付推定成功。参见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)及 [ADR 0017](adr/0017-transparent-gateway-settlement.md)。
+
+#923 未准入的 quota/已回滚 DB 冲突拒绝由[gateway-admission-receipt](../../apps/scheduler/src/gateway-admission-receipt.ts)另开事务写原 events：type=control_receipt、operation=gateway_admission、authority=kernel，原 dedup 与事件限流生效。scope 绑定 Job/Attempt/token/workload/UUID，不创建模型 effect/request/usage，不改 schema；持久失败或 scope 不符不能返回降级 authority。allowance 只读原预算并返回交集，不预留或创建余额账本。

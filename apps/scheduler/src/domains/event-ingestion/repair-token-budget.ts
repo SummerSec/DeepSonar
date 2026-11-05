@@ -122,13 +122,16 @@ export async function readJobTokenAllowance(db: typeof sql, jobId: string, budge
   const [totalLimit] = await db`SELECT MIN(max_tokens) AS cap FROM job_tokens WHERE job_id=${jobId} AND max_tokens IS NOT NULL`;
   if (totalLimit?.cap != null) {
     const [usage] = await db`SELECT COALESCE(SUM(l.total_tokens) FILTER (WHERE l.settlement_status='settled'),0) AS total,
-      COUNT(*) FILTER (WHERE e.status<>'settled' OR l.settlement_status IS DISTINCT FROM 'settled') AS unresolved
+      COUNT(*) FILTER (WHERE e.status='effect_pending' AND l.id IS NULL) AS pending,
+      COUNT(*) FILTER (WHERE (e.status<>'settled' OR l.settlement_status IS DISTINCT FROM 'settled')
+        AND NOT (e.status='effect_pending' AND l.id IS NULL)) AS unresolved
       FROM job_attempt_effects e LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
       WHERE e.job_id=${jobId} AND e.effect_kind='gateway_model_request'`;
     const total = Number(usage.total), cap = Number(totalLimit.cap);
     if (Number(usage.unresolved) > 0 || !Number.isSafeInteger(total) || !Number.isSafeInteger(cap)) {
       throw new RepairTokenBudgetError("JOB_TOKEN_USAGE_UNKNOWN", "Job token usage requires reconciliation", budget);
     }
+    if (Number(usage.pending) > 0) throw new RepairTokenBudgetError("JOB_TOKEN_USAGE_PENDING", "Job token allowance is reserved by an unsettled request", budget);
     if (total >= cap) throw new RepairTokenBudgetError("JOB_TOKEN_EXHAUSTED", "Job token allowance exhausted", budget);
     return cap - total;
   }
