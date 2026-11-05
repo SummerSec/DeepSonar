@@ -210,7 +210,7 @@ untrusted general-purpose RPC endpoint is unsupported.
 
 - 头名小写归一（`X-Traffic-Type` 与 `x-traffic-type` 不会同时出站），校验 RFC 7230 token 字符、长度上限与条目数上限，拒绝 CR/LF/NUL。
 - 拒绝的类别包括认证载体（`authorization`、`x-api-key`、`anthropic-api-key`、`proxy-authorization`）、framing/hop-by-hop（`host`、`content-length`、`content-type`、`accept`、`connection`、`transfer-encoding`、`te`、`upgrade` 等）、协议与 CLI 身份（`user-agent`、`x-app`、`anthropic-*`）、内部/代理控制（`x-deepsonar-*`、`proxy-*`）以及 `cookie`/`set-cookie`。被拒条目只记头名，不进日志值。
-- 同一凭据的多个 provider 声明**不同**头集合时不做混合，直接不应用（fail closed）；官方 `llm-pi-ai` 形状按当前选中 route 解析。
+- 配置头与 endpoint 共用 `provider-settings.ts` 的服务端 profile 选择：官方 `llm-pi-ai` 顶层对象、`config` 对象与 `config` YAML 均复用 runtime-sandbox 官方解析器，按选中 route 读取；Pi `providers` 读取提供首个有效 endpoint 的同一 profile，即使该 profile 的头集合为空也不借用其他 provider 的头。未选出 endpoint profile 时，所有头集合（包括空集合）必须一致，否则不应用（fail closed）。metadata 覆盖的实际 endpoint 若与该 profile 声明的 URL 不一致，不应用其配置头，也不改选其他 profile。DSH 独立配置白名单不因此放宽。
 - 入站 Job token 曾经可经 `/^anthropic-/` 前缀透传（`anthropic-api-key` 也是合法入站 token 来源）。现在透传用精确头名集合，token 不再有静态外发路径。
 - Observational Memory 的别名 provider 仍会剔除 `headers` / `baseUrl`（见 `provider-settings.ts`），本机制不恢复沙箱对固定 endpoint 与请求头的覆盖能力。
 

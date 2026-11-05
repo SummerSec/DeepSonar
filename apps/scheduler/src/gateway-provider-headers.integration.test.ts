@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
+import { stringify } from "yaml";
 import postgres from "postgres";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -36,19 +37,24 @@ test("configured provider headers reach the upstream and the Job token never doe
   ]);
 
   const upstream = Fastify();
+  const otherUpstream = Fastify();
   const app = Fastify();
   const received: Array<Record<string, unknown>> = [];
-  upstream.post("/v1/chat/completions", async (req, reply) => {
-    received.push({ ...(req.headers as Record<string, unknown>) });
-    return {
-      object: "chat.completion",
-      choices: [{ index: 0, finish_reason: "stop", message: { content: "fixture" } }],
-      usage: { prompt_tokens: 3, completion_tokens: 0, total_tokens: 3 },
-    };
-  });
+  const otherReceived: Array<Record<string, unknown>> = [];
+  for (const [server, requests] of [[upstream, received], [otherUpstream, otherReceived]] as const) {
+    server.post("/v1/chat/completions", async (req) => {
+      requests.push({ ...(req.headers as Record<string, unknown>) });
+      return {
+        object: "chat.completion",
+        choices: [{ index: 0, finish_reason: "stop", message: { content: "fixture" } }],
+        usage: { prompt_tokens: 3, completion_tokens: 0, total_tokens: 3 },
+      };
+    });
+  }
 
   try {
     await migrate();
+    const otherUrl = await otherUpstream.listen({ port: 0, host: "127.0.0.1" });
     await upstream.listen({ port: 0, host: "127.0.0.1" });
     gateway.registerGateway(app);
     api.registerPlatformControlRoutes(app);
@@ -106,9 +112,54 @@ test("configured provider headers reach the upstream and the Job token never doe
       !Object.values(headers).some((value) => String(value).includes(token.plaintext)),
       "no header value may carry the inbound Job token",
     );
+
+    const firstUrl = `http://127.0.0.1:${address.port}/v1`;
+    const routeHeaders = { "X-Traffic-Type": "eval", "x-tenant": "tenant-b", "x-api-key": "must-not-apply" };
+    const document = {
+      "llm-pi-ai": { providers: {
+        a: { baseURL: firstUrl, api: "openai-completions", models: [{ id: "offline" }] },
+        b: { baseURL: `${otherUrl}/v1`, api: "openai-completions", models: [{ id: "offline" }], headers: routeHeaders },
+      } },
+      "agent-default-model": { provider: "b", model: "offline" },
+    };
+    const cases = [
+      { settings: document, target: otherReceived, unused: received, tenant: "tenant-b" },
+      { settings: { config: document }, target: otherReceived, unused: received, tenant: "tenant-b" },
+      { settings: { config: stringify(document) }, target: otherReceived, unused: received, tenant: "tenant-b" },
+      { settings: document, target: received, unused: otherReceived, tenant: null, baseUrl: firstUrl },
+      ...[undefined, {}].map((emptyHeaders) => ({ settings: { providers: {
+        a: { baseUrl: firstUrl, models: [{ id: "offline" }], headers: emptyHeaders },
+        b: { baseUrl: `${otherUrl}/v1`, models: [{ id: "offline" }], headers: routeHeaders },
+      } }, target: received, unused: otherReceived, tenant: null })),
+    ];
+    for (const fixture of cases) {
+      received.length = 0;
+      otherReceived.length = 0;
+      const metadata = "baseUrl" in fixture ? { base_url: fixture.baseUrl } : {};
+      await sql`UPDATE credentials SET public_metadata_json = ${sql.json(metadata)},
+        settings_config_json = ${sql.json(fixture.settings)} WHERE id = ${credentialId}`;
+      const result = await app.inject({ method: "POST", url: "/gateway/v1/chat/completions",
+        headers: { authorization: `Bearer ${token.plaintext}`, "anthropic-api-key": token.plaintext,
+          "x-tenant": "sandbox-spoofed", "x-untrusted": "must-not-forward", "x-traffic-type": "sandbox-spoofed",
+          "user-agent": "claude-cli/2.1.312 (external, cli)" },
+        payload: { model: "offline", messages: [] } });
+      assert.equal(result.statusCode, 200, result.payload);
+      assert.equal(fixture.target.length, 1);
+      assert.equal(fixture.unused.length, 0, "only the selected endpoint may receive a request");
+      const outbound = fixture.target[0]!;
+      assert.equal(outbound["x-tenant"], fixture.tenant ?? undefined);
+      assert.equal(outbound["x-traffic-type"], fixture.tenant ? "eval" : undefined);
+      assert.equal(outbound["x-untrusted"], undefined);
+      assert.equal(outbound["anthropic-api-key"], undefined);
+      assert.equal(outbound["x-api-key"], undefined);
+      assert.equal(outbound["user-agent"], "claude-cli/2.1.312 (external, cli)");
+      assert.equal(outbound.authorization, "Bearer offline-fixture-only");
+      assert.ok(!Object.values(outbound).some((value) => String(value).includes(token.plaintext)));
+    }
   } finally {
     await app.close();
     await upstream.close();
+    await otherUpstream.close();
     await sql.end();
     await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
     await admin.end();

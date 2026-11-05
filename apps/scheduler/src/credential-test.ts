@@ -186,15 +186,16 @@ function resolveProbeProtocol(cred: CredentialRequestInput): InferenceWireProtoc
  * as a real Job, so the credential's configured headers are resolved here too — with the same
  * server-side sanitizer, and ahead of the protocol/final-auth layers.
  */
-function configuredProbeHeaders(cred: CredentialRequestInput): Record<string, string> {
-  return providerCustomHeadersFromSettings(cred.settings_config_json).headers;
+function configuredProbeHeaders(cred: CredentialRequestInput, baseUrl: string): Record<string, string> {
+  return providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl).headers;
 }
 
 function modelRequest(cred: CredentialRequestInput, secret: string): { urls: string[]; headers: Record<string, string> } {
+  const baseUrl = resolveProbeBaseUrl(cred);
   return {
-    urls: modelUrls(resolveProbeBaseUrl(cred)),
+    urls: modelUrls(baseUrl),
     headers: {
-      ...configuredProbeHeaders(cred),
+      ...configuredProbeHeaders(cred, baseUrl),
       ...authHeadersForProtocol(resolveProbeProtocol(cred), secret),
     },
   };
@@ -264,7 +265,7 @@ function inferenceProbeRequest(cred: CredentialRequestInput, secret: string): In
     model,
     headers: {
       "content-type": "application/json",
-      ...configuredProbeHeaders(cred),
+      ...configuredProbeHeaders(cred, base),
       ...authHeadersForProtocol(protocol, secret),
     },
     body: inferenceProbeBody(protocol, model),

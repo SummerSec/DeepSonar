@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { stringify } from "yaml";
+import { extractBaseUrlFromSettings } from "./provider-settings.js";
 import {
   composeUpstreamRequestHeaders,
   isForbiddenProviderHeader,
@@ -131,6 +133,62 @@ test("the selected official route decides, and divergent provider routes are ref
   });
   assert.deepEqual(ambiguous.headers, {}, "two different provider header sets for one credential cannot be mixed");
   assert.deepEqual(ambiguous.rejected, ["ambiguous_multi_provider_headers"]);
+});
+
+test("official Pi wrappers resolve the selected endpoint and headers equally", () => {
+  const document = {
+    "llm-pi-ai": { providers: {
+      a: { baseURL: "http://127.0.0.1:18080/v1", headers: { "x-tenant": "tenant-a" } },
+      b: { baseURL: "http://127.0.0.1:18081/v1", headers: { "X-Traffic-Type": "eval", "x-tenant": "tenant-b" } },
+    } },
+    "agent-default-model": { provider: "b", model: "b-model" },
+  };
+  for (const settings of [document, { config: document }, { config: stringify(document) }]) {
+    assert.equal(extractBaseUrlFromSettings(settings), "http://127.0.0.1:18081/v1");
+    assert.deepEqual(providerCustomHeadersFromSettings(settings), {
+      headers: { "x-traffic-type": "eval", "x-tenant": "tenant-b" }, rejected: [],
+    });
+  }
+});
+
+test("Pi headers belong to the same first endpoint profile, including empty headers", () => {
+  for (const headers of [undefined, {}, { "x-api-key": "must-not-apply" }, { "x-tenant": "tenant-a" }]) {
+    const settings = { providers: {
+      a: { baseUrl: "http://127.0.0.1:18080/v1", headers },
+      b: { baseUrl: "http://127.0.0.1:18081/v1", headers: { "x-tenant": "tenant-b" } },
+    } };
+    assert.equal(extractBaseUrlFromSettings(settings), "http://127.0.0.1:18080/v1");
+    assert.deepEqual(providerCustomHeadersFromSettings(settings).headers,
+      headers?.["x-tenant"] ? { "x-tenant": "tenant-a" } : {});
+  }
+  const settings = { providers: {
+    a: { headers: { "x-tenant": "tenant-a" } },
+    b: { base_url: "http://127.0.0.1:18081/v1", headers: { "x-tenant": "tenant-b" } },
+  } };
+  assert.equal(extractBaseUrlFromSettings(settings), "http://127.0.0.1:18081/v1");
+  assert.deepEqual(providerCustomHeadersFromSettings(settings).headers, { "x-tenant": "tenant-b" });
+});
+
+test("metadata endpoint overrides cannot send another profile's headers upstream", () => {
+  const settings = { providers: {
+    a: { baseUrl: "http://127.0.0.1:18080/v1", headers: { "x-tenant": "tenant-a" } },
+    b: { baseUrl: "http://127.0.0.1:18081/v1", headers: { "x-tenant": "tenant-b" } },
+  } };
+  assert.deepEqual(providerCustomHeadersFromSettings(settings, "http://127.0.0.1:18080/v1///").headers,
+    { "x-tenant": "tenant-a" });
+  assert.deepEqual(providerCustomHeadersFromSettings(settings, "http://127.0.0.1:18081/v1"),
+    { headers: {}, rejected: ["upstream_endpoint_mismatch"] });
+  const official = { "llm-pi-ai": { providers: settings.providers }, "agent-default-model": { provider: "b" } };
+  assert.deepEqual(providerCustomHeadersFromSettings({ config: stringify(official) }, "http://127.0.0.1:18080/v1"),
+    { headers: {}, rejected: ["upstream_endpoint_mismatch"] });
+});
+
+test("empty header sets remain ambiguous when no endpoint profile is selected", () => {
+  const resolution = providerCustomHeadersFromSettings({ providers: {
+    a: {}, b: { headers: { "x-tenant": "tenant-b" } },
+  } });
+  assert.deepEqual(resolution.headers, {});
+  assert.deepEqual(resolution.rejected, ["ambiguous_multi_provider_headers"]);
 });
 
 test("compose keeps authentication final and lets configured headers ride below it", () => {

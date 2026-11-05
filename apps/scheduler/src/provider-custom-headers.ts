@@ -11,6 +11,8 @@
  * hop-by-hop transport or DeepSonar's own control/protocol headers.
  */
 
+import { resolveProviderUpstreamFromSettings } from "./provider-settings.js";
+
 /** Hard caps: a credential cannot turn itself into an arbitrary request-header console. */
 export const PROVIDER_CUSTOM_HEADER_LIMITS = {
   maxHeaders: 16,
@@ -119,40 +121,27 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function trimText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 /**
- * Resolve the configured header set for the credential's current route.
- *
- * Supported shapes, mirroring what `extractBaseUrlFromSettings` already understands:
- * - `{"llm-pi-ai": {"providers": {<route>: {"headers": {...}}}}}` (official DSH settings)
- * - `{"headers": {...}}` (flat route)
- * - `{"providers": {<id>: {"headers": {...}}}}` (Pi models.json shape)
- *
- * Several providers may carry *different* header sets for one credential; that is
- * ambiguous, so nothing is applied (fail closed, no mixing across providers/routes).
+ * Resolve headers from the same server-owned profile that selects the upstream endpoint.
+ * Official Pi top-level/config object/config YAML documents use the runtime's official
+ * parser through `resolveProviderUpstreamFromSettings`. An effective endpoint override
+ * must still match the selected profile's declared URL before its headers can be applied.
+ * With no selected endpoint profile, all provider header sets (including empty sets) must
+ * agree; never mix route attributes.
  */
-export function providerCustomHeadersFromSettings(settingsConfig: unknown): ProviderCustomHeaderResolution {
-  const settings = asRecord(settingsConfig);
-
-  const official = asRecord(asRecord(settings["llm-pi-ai"])?.providers);
-  if (Object.keys(official).length > 0) {
-    const defaultModel = asRecord(settings["agent-default-model"]);
-    const selected = trimText(defaultModel?.provider) ?? "";
-    const route = selected && official[selected] ? selected : Object.keys(official)[0]!;
-    const profile = asRecord(official[route]);
-    const resolution = sanitizeProviderCustomHeaders(profile.headers);
-    return { headers: resolution.headers, rejected: resolution.rejected };
+export function providerCustomHeadersFromSettings(
+  settingsConfig: unknown,
+  upstreamBaseUrl?: string,
+): ProviderCustomHeaderResolution {
+  const upstream = resolveProviderUpstreamFromSettings(settingsConfig);
+  if (upstreamBaseUrl && upstream.baseUrl && upstreamBaseUrl.trim().replace(/\/+$/u, "") !== upstream.baseUrl) {
+    return { headers: {}, rejected: ["upstream_endpoint_mismatch"] };
   }
+  if (upstream.profile) return sanitizeProviderCustomHeaders(upstream.profile.headers);
 
-  if (settings.headers != null) return sanitizeProviderCustomHeaders(settings.headers);
-
-  const providers = asRecord(settings.providers);
+  const providers = asRecord(asRecord(settingsConfig).providers);
   const configured = Object.values(providers)
-    .map((raw) => sanitizeProviderCustomHeaders(asRecord(raw).headers))
-    .filter((resolution) => Object.keys(resolution.headers).length > 0);
+    .map((raw) => sanitizeProviderCustomHeaders(asRecord(raw).headers));
   if (configured.length === 0) return { headers: {}, rejected: [] };
   const distinct = new Set(configured.map((resolution) => JSON.stringify(resolution.headers)));
   if (distinct.size > 1) {

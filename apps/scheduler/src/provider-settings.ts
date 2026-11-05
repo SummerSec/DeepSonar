@@ -658,26 +658,29 @@ export function projectProviderRuntimeSnapshot(input: {
   };
 }
 
-/** Resolve the direct upstream endpoint before Job Gateway projection. */
-export function extractBaseUrlFromSettings(settingsConfig: unknown): string | null {
+/** Resolve an endpoint and its owning profile together, before Job Gateway projection. */
+export function resolveProviderUpstreamFromSettings(settingsConfig: unknown): {
+  baseUrl: string | null;
+  profile: Record<string, unknown> | null;
+} {
   const official = readOfficialLlmPiAiSettings(settingsConfig);
-  if (official?.baseURL) return official.baseURL;
+  if (official?.baseURL) return { baseUrl: official.baseURL, profile: official.providers[official.route]! };
   const settings = asObject(settingsConfig);
   const env = asObject(settings.env);
   for (const key of ["ANTHROPIC_BASE_URL", "OPENAI_BASE_URL"]) {
     const value = env[key];
-    if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
+    if (typeof value === "string" && value.trim()) return { baseUrl: value.trim().replace(/\/+$/u, ""), profile: settings };
   }
   if (typeof settings.config === "string") {
     const nested = /\[model_providers\.[^\]]+\][\s\S]*?base_url\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
-    if (nested?.[1] || nested?.[2]) return (nested[1] || nested[2])!.replace(/\/+$/u, "");
+    if (nested?.[1] || nested?.[2]) return { baseUrl: (nested[1] || nested[2])!.replace(/\/+$/u, ""), profile: settings };
     const any = /base_url\s*=\s*(?:"([^"]+)"|'([^']+)')/m.exec(settings.config);
-    if (any?.[1] || any?.[2]) return (any[1] || any[2])!.replace(/\/+$/u, "");
+    if (any?.[1] || any?.[2]) return { baseUrl: (any[1] || any[2])!.replace(/\/+$/u, ""), profile: settings };
   }
   const options = asObject(settings.options);
   for (const key of ["baseURL", "baseUrl", "base_url"]) {
     const value = options[key];
-    if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
+    if (typeof value === "string" && value.trim()) return { baseUrl: value.trim().replace(/\/+$/u, ""), profile: settings };
   }
   const providers = asObject(settings.providers);
   const providerEntries = Object.keys(providers).length > 0 ? Object.values(providers) : [settings];
@@ -685,10 +688,17 @@ export function extractBaseUrlFromSettings(settingsConfig: unknown): string | nu
     const provider = asObject(rawProvider);
     for (const key of ["baseUrl", "baseURL", "base_url"]) {
       const value = provider[key];
-      if (typeof value === "string" && value.trim()) return value.trim().replace(/\/+$/u, "");
+      if (typeof value === "string" && value.trim()) return { baseUrl: value.trim().replace(/\/+$/u, ""), profile: provider };
     }
   }
-  return null;
+  if (official) return { baseUrl: null, profile: official.providers[official.route]! };
+  const profile = providerEntries.length === 1 ? asObject(providerEntries[0]) : null;
+  return { baseUrl: null, profile };
+}
+
+/** Resolve the direct upstream endpoint before Job Gateway projection. */
+export function extractBaseUrlFromSettings(settingsConfig: unknown): string | null {
+  return resolveProviderUpstreamFromSettings(settingsConfig).baseUrl;
 }
 
 

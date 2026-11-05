@@ -1,7 +1,65 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import Fastify from "fastify";
+import { stringify } from "yaml";
 
 process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
+
+test("catalog and inference outbound headers follow official wrappers and the selected endpoint", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { listCredentialModelsPreview, testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("offline-header-fixture");
+  const upstreams = [Fastify(), Fastify()];
+  const received: Array<{ upstream: number; path: string; headers: Record<string, unknown> }> = [];
+  for (const [index, upstream] of upstreams.entries()) {
+    upstream.route({ method: ["GET", "POST"], url: "/v1/*", handler: async (req) => {
+      received.push({ upstream: index, path: req.url, headers: { ...req.headers } });
+      return { data: [{ id: "fixture-model" }], choices: [], usage: { total_tokens: 1 } };
+    } });
+  }
+  try {
+    const urls = await Promise.all(upstreams.map((upstream) => upstream.listen({ port: 0, host: "127.0.0.1" })));
+    const headers = { "X-Traffic-Type": "eval", "x-tenant": "tenant-b", authorization: "must-not-apply" };
+    const document = {
+      "llm-pi-ai": { providers: {
+        a: { baseURL: `${urls[0]}/v1`, api: "openai-completions", models: [{ id: "fixture-model" }] },
+        b: { baseURL: `${urls[1]}/v1`, api: "openai-completions", models: [{ id: "fixture-model" }], headers },
+      } },
+      "agent-default-model": { provider: "b", model: "fixture-model" },
+    };
+    const cases = [
+      { settings: document, upstream: 1, tenant: "tenant-b" },
+      { settings: { config: document }, upstream: 1, tenant: "tenant-b" },
+      { settings: { config: stringify(document) }, upstream: 1, tenant: "tenant-b" },
+      { settings: document, upstream: 0, tenant: null, baseUrl: `${urls[0]}/v1` },
+      ...[undefined, {}].map((emptyHeaders) => ({ settings: { providers: {
+        a: { baseUrl: `${urls[0]}/v1`, api: "openai-completions", models: [{ id: "fixture-model" }], headers: emptyHeaders },
+        b: { baseUrl: `${urls[1]}/v1`, api: "openai-completions", models: [{ id: "fixture-model" }], headers },
+      } }, upstream: 0, tenant: null })),
+    ];
+    for (const fixture of cases) {
+      received.length = 0;
+      const metadata = "baseUrl" in fixture ? { base_url: fixture.baseUrl } : {};
+      const credential = { provider: "openai", kind: "llm_provider", ...encrypted,
+        public_metadata_json: metadata, settings_config_json: fixture.settings };
+      const catalog = await listCredentialModelsPreview(credential, "offline-header-fixture");
+      assert.equal(catalog.available, true, catalog.detail ?? "catalog unavailable");
+      const inference = await testCredential(credential);
+      assert.equal(inference.ok, true, inference.detail);
+      assert.equal(inference.probe_path, "inference");
+      assert.deepEqual(received.map((request) => [request.upstream, request.path]),
+        [[fixture.upstream, "/v1/models"], [fixture.upstream, "/v1/chat/completions"]]);
+      for (const request of received) {
+        assert.equal(request.headers["x-tenant"], fixture.tenant ?? undefined);
+        assert.equal(request.headers["x-traffic-type"], fixture.tenant ? "eval" : undefined);
+        assert.equal(request.headers.authorization, "Bearer offline-header-fixture");
+        assert.equal(request.headers["x-api-key"], undefined);
+      }
+    }
+  } finally {
+    await Promise.all(upstreams.map((upstream) => upstream.close()));
+  }
+});
 
 test("connection success/failure returns fixed health category and safe URL", async () => {
   const { encryptSecret } = await import("./credentials.js");

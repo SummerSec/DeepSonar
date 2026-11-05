@@ -1525,7 +1525,7 @@ export function registerGateway(app: FastifyInstance): void {
       // headers configured on the credential → CLI protocol headers the Gateway allowlists
       // (exact names) → authentication finalised from the bound credential. Configured
       // headers are sanitized upstream of this point, so they cannot occupy the last layers.
-      const configuredHeaders = providerCustomHeadersFromSettings(cred.settings_config_json);
+      const configuredHeaders = providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl);
       if (configuredHeaders.rejected.length > 0) {
         console.warn(`[gateway] provider headers not applied: ${configuredHeaders.rejected.join(",")}`);
       }
