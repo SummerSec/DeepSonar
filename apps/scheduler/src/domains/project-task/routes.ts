@@ -33,6 +33,7 @@ import {
 } from "../job-control/rerun.js";
 import { markAttemptInterrupted } from "../job-attempt/index.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
+import type { JobLifecycleRow } from "../job-lifecycle/index.js";
 import {
   DeviceNotAuthorizedError,
   freezeSnapshotDeviceRequirement,
@@ -206,34 +207,52 @@ async function wipeCanvasRuntimeData(tx: any, canvasId: string): Promise<void> {
   await tx`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
 }
 
-/** 取消画布上全部活动 job（归档/删除前兜底）。 */
-async function cancelActiveJobsOnCanvas(canvasId: string, db?: any): Promise<number> {
-  const active = await createSqlJobLifecycleApplication(db).cancelJobsOnCanvas(
+/**
+ * #904 review: the database half of a canvas cancel, executed inside the caller's
+ * transaction. The caller may already hold the canvas `FOR UPDATE` lock, so this must
+ * never open a second connection for the same canvas — the inner connection would wait
+ * on the outer lock that can only be released after this returns.
+ */
+async function cancelCanvasJobsInTransaction(tx: any, canvasId: string): Promise<JobLifecycleRow[]> {
+  const active = await createSqlJobLifecycleApplication(tx).cancelJobsOnCanvas(
     canvasId,
     "task archived/deleted",
     true,
     false,
   );
-  if (active.length === 0) return 0;
   for (const job of active) {
-    const id = job.id as string;
+    const id = String(job.id);
+    await tx`
+      UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
+      WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
+    await advancePlanTaskAfterTerminalJob(tx, id);
+  }
+  return active;
+}
+
+/**
+ * Sandbox destroy, token revocation, device lease release and derived-job recovery are
+ * external effects, not rows: a rollback cannot undo them. They run only after the
+ * caller's transaction committed, so a refused delete never tears down a runner first.
+ */
+async function settleCancelledCanvasJobs(cancelled: JobLifecycleRow[]): Promise<void> {
+  for (const job of cancelled) {
+    const id = String(job.id);
     if (job.sandbox_id) {
       await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});
     }
     await revokeJobTokens(id, "cancelled").catch(() => {});
     await revokeJobCapabilityTokens(id, "cancelled").catch(() => {});
     await releaseDeviceLeasesForJobQuietly(id, "cancelled");
-    await sql.begin(async (txRaw) => {
-      const tx = txRaw as unknown as typeof sql;
-      await tx`SELECT id FROM canvases WHERE id=${canvasId} FOR UPDATE`;
-      await tx`
-        UPDATE canvas_nodes SET status = 'cancelled', updated_at = now()
-        WHERE job_id = ${id} AND node_type = ANY(${["job", "intent", "report"]})`;
-      await advancePlanTaskAfterTerminalJob(tx, id);
-    });
     await recoverCancelledDerivedJob(job, "task archived/deleted").catch(() => {});
   }
-  return active.length;
+}
+
+/** 取消画布上全部活动 job（归档前兜底），自带事务。 */
+async function cancelActiveJobsOnCanvas(canvasId: string): Promise<number> {
+  const cancelled = await sql.begin((txRaw) => cancelCanvasJobsInTransaction(txRaw, canvasId));
+  await settleCancelledCanvasJobs(cancelled);
+  return cancelled.length;
 }
 
 async function withProjectJobQuota<T extends Record<string, unknown>>(
@@ -1428,7 +1447,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     // order). The retention decision, the cancellations and the wipe share that boundary,
     // so a concurrent knowledge write can neither slip in between the check and the
     // delete, nor be cancelled before the task is known to be deletable.
-    let cancelled = 0;
+    let cancelled: JobLifecycleRow[] = [];
     let retained: Record<string, number> = {};
     try {
       await sql.begin(async (tx) => {
@@ -1436,7 +1455,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         if (!locked) throw new TaskDeleteRefused("canvas_not_found", {});
         retained = await canvasKnowledgeRetention(tx, canvasId);
         if (Object.keys(retained).length > 0) throw new TaskDeleteRefused("retained", retained);
-        cancelled = await cancelActiveJobsOnCanvas(canvasId, tx);
+        cancelled = await cancelCanvasJobsInTransaction(tx, canvasId);
         await wipeCanvasRuntimeData(tx, canvasId);
         await tx`DELETE FROM canvases WHERE id = ${canvasId}`;
       });
@@ -1452,6 +1471,11 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       });
     }
 
+    // Committed: the task is gone, so its runners, tokens and leases must go too. Each step
+    // is best effort — the rows are already deleted and a teardown failure must not turn a
+    // completed delete into an error for the caller.
+    await settleCancelledCanvasJobs(cancelled);
+
     await audit(req, {
       action: "task.delete",
       resourceType: "canvas",
@@ -1460,14 +1484,14 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       after: {
         deleted: true,
         title: canvas.title,
-        cancelled_jobs: cancelled,
+        cancelled_jobs: cancelled.length,
       },
     });
     return reply.code(200).send({
       ok: true,
       id: canvasId,
       deleted: true,
-      cancelled_jobs: cancelled,
+      cancelled_jobs: cancelled.length,
     });
   });
 }
