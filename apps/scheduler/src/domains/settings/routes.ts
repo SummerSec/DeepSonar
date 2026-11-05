@@ -287,9 +287,17 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-    const cfg = (p.config_json ?? {}) as Record<string, unknown>;
+    let cfg = { ...((p.config_json ?? {}) as Record<string, unknown>) };
     if (scrubStoredProjectImagePolicy(cfg)) {
-      await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
+      // A GET cleanup must not overwrite a settings PATCH committed after its read.
+      const updated = await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)}
+        WHERE id = ${id} AND config_json = ${sql.json(p.config_json as never)} RETURNING id`;
+      if (updated.length === 0) {
+        const [current] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
+        if (!current) return reply.code(404).send({ error: "project not found" });
+        cfg = { ...((current.config_json ?? {}) as Record<string, unknown>) };
+        scrubStoredProjectImagePolicy(cfg);
+      }
     }
     const globalProtocol = parseStoredFindingProtocolConfig(
       ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,

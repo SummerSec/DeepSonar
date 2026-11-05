@@ -192,6 +192,47 @@ if (!testDatabaseUrl) {
         assert.equal((await config(p)).default_credential_id, id.toUpperCase());
       });
 
+      await t.test("GET legacy cleanup cannot restore credential references replaced concurrently", { timeout: 10_000 }, async () => {
+        const original = await credential();
+        const replacement = await credential();
+        const p = await project("GET cleanup CAS", { image_strategy: "legacy", enabled_credential_ids: [original] });
+        let announceLocked!: () => void;
+        let releaseWriter!: () => void;
+        const locked = new Promise<void>((resolve) => { announceLocked = resolve; });
+        const hold = new Promise<void>((resolve) => { releaseWriter = resolve; });
+        const writer = observer!.begin(async (tx) => {
+          await tx`SELECT id FROM projects WHERE id = ${p} FOR UPDATE`;
+          announceLocked();
+          await hold;
+          await tx`UPDATE projects SET config_json = ${tx.json({ enabled_credential_ids: [replacement] })} WHERE id = ${p}`;
+        });
+        let request: Promise<Awaited<ReturnType<typeof app.inject>>> | undefined;
+        try {
+          await locked;
+          request = Promise.resolve(app.inject({ method: "GET", url: `/projects/${p}/settings` }));
+          let blocked = false;
+          for (let i = 0; i < 200; i++) {
+            const waiting = await observer!`SELECT pid FROM pg_stat_activity
+              WHERE datname = ${databaseName} AND query LIKE '%UPDATE projects SET config_json%'
+                AND wait_event_type = 'Lock' AND cardinality(pg_blocking_pids(pid)) > 0`;
+            if (waiting.length > 0) { blocked = true; break; }
+            await delay(10);
+          }
+          assert.equal(blocked, true, "GET must read its old config before waiting for the concurrent writer");
+          releaseWriter();
+          await writer;
+          const response = await request;
+          assert.equal(response.statusCode, 200, response.payload);
+          assert.deepEqual(response.json().enabled_credential_ids, [replacement]);
+          assert.deepEqual(await config(p), { enabled_credential_ids: [replacement] });
+          assert.equal((await remove(original)).statusCode, 200, "GET must not recreate the removed reference");
+        } finally {
+          releaseWriter();
+          await writer;
+          if (request) await request;
+        }
+      });
+
       // Test-only triggers pause after the route's validation/zero-reference scan,
       // while its real transaction still holds the credential row lock.
       for (const direction of ["delete-first", "write-first"] as const) {
