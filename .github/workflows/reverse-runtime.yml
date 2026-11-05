@@ -213,6 +213,12 @@ jobs:
           set -euo pipefail
           export REA_JOB_IMAGE="$(docker image inspect --format '{{.Id}}' deepsonar-reverse:native-ci)"
           pnpm ci:integration:rea-job
+      - name: Prepare immutable loopback image for OM Job creation
+        run: |
+          set -euo pipefail
+          docker run -d --name om-provider-registry -p 127.0.0.1:15000:5000 \
+            registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+          node agent-harness/opensandbox/om-provider-headers-image.mjs
       - name: Created and dispatched Pi OM provider headers (synthetic upstream only)
         env:
           TEST_DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/postgres
@@ -221,7 +227,6 @@ jobs:
           OM_PROVIDER_HEADERS_REPORT_DIR: ${{ github.workspace }}/om-provider-headers-evidence/${{ matrix.arch }}
         run: |
           set -euo pipefail
-          export OM_PROVIDER_HEADERS_IMAGE="$(docker image inspect --format '{{.Id}}' deepsonar-base:reverse-ci)"
           pnpm ci:integration:om-provider-headers
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
@@ -245,4 +250,6 @@ jobs:
         if: ${{ always() }}
         env:
           OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
-        run: docker compose -f deploy/docker-compose.opensandbox.yml down -v
+        run: |
+          trap 'docker rm -fv om-provider-registry || true' EXIT
+          docker compose -f deploy/docker-compose.opensandbox.yml down -v

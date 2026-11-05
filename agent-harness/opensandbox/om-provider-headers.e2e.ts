@@ -30,11 +30,17 @@ let model: Awaited<ReturnType<typeof startOmHeaderModel>> | undefined;
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 try {
   report.stage = "image-and-installed-runtime";
-  for (const key of ["TEST_DATABASE_URL", "OPEN_SANDBOX_API_KEY", "OM_PROVIDER_HEADERS_IMAGE"]) assert.ok(process.env[key]?.trim(), `missing ${key}`);
+  for (const key of ["TEST_DATABASE_URL", "OPEN_SANDBOX_API_KEY", "OM_PROVIDER_HEADERS_IMAGE", "OM_PROVIDER_HEADERS_EXPECTED_CONFIG_ID"]) assert.ok(process.env[key]?.trim(), `missing ${key}`);
   const imageRef = process.env.OM_PROVIDER_HEADERS_IMAGE!.trim();
-  assert.match(imageRef, /^sha256:[a-f0-9]{64}$/u, "acceptance consumes the inspected local immutable image id");
+  assert.match(imageRef, /^127\.0\.0\.1:15000\/om-provider-base@sha256:[a-f0-9]{64}$/u,
+    "acceptance requires the isolated loopback repository and its actual manifest digest");
+  const imageDigest = imageRef.slice(imageRef.indexOf("@") + 1);
+  const expectedConfigId = process.env.OM_PROVIDER_HEADERS_EXPECTED_CONFIG_ID!.trim();
+  assert.match(expectedConfigId, /^sha256:[a-f0-9]{64}$/u, "original locally built config identity is required");
   const image = JSON.parse(execFileSync("docker", ["image", "inspect", imageRef], { encoding: "utf8" }))[0];
-  assert.equal(image.Id, imageRef, "Docker image identity must match the requested immutable id");
+  assert.equal(image.Id, expectedConfigId, "pulled manifest must resolve to the originally built base config");
+  assert.ok(Array.isArray(image.RepoDigests) && image.RepoDigests.includes(imageRef),
+    "Docker must retain the exact pulled loopback repository manifest identity");
   assert.equal(image.Config.Labels["io.deepsonar.image-key"], "deepsonar-base", "base Docker image-key label");
   const arch = os.arch() === "arm64" ? "arm64" : "amd64";
   assert.equal(image.Architecture, arch, "native runtime required");
@@ -54,7 +60,7 @@ try {
     "installed production wrapper must match this checkout");
   const piVersion = execFileSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "pi", imageRef, "--version"], { encoding: "utf8" }).trim();
   assert.match(piVersion, /\b1\.4\.0\b/u, "installed Pi CLI version");
-  report.image = { id: imageRef, architecture: arch, catalog_fixture_version: declaredVersion, installed: { ...packageVersions, pi: piVersion } };
+  report.image = { ref: imageRef, manifest_digest: imageDigest, config_id: image.Id, architecture: arch, catalog_fixture_version: declaredVersion, installed: { ...packageVersions, pi: piVersion } };
 
   report.stage = "isolated-database";
   const postgres = (await import(requireScheduler.resolve("postgres"))).default;
@@ -94,7 +100,7 @@ try {
   await sql`INSERT INTO project_runtime_images(project_id,runtime_image_id,enabled) VALUES(${projectId},${catalog.id},true)`;
   await sql`UPDATE runtime_image_versions SET trust_status='disabled' WHERE runtime_image_id=${catalog.id}`;
   await sql`INSERT INTO runtime_image_versions(runtime_image_id,version,image_ref,resolved_ref,digest,platforms_json,trust_status,tools_manifest_sha256,scan_summary_json,promoted_at)
-    VALUES(${catalog.id},${`${declaredVersion}-omfixture`},${imageRef},${imageRef},${imageRef},${sql.json([`linux/${arch}`])},'trusted',
+    VALUES(${catalog.id},${`${declaredVersion}-omfixture`},${imageRef},${imageRef},${imageDigest},${sql.json([`linux/${arch}`])},'trusted',
       ${createHash('sha256').update(manifestBytes).digest('hex')},${sql.json({ source: "isolated-local-image-fixture", manual: manifest.manual })},now())`;
   const selectedModel = { id: OM_HEADERS_MODEL, name: OM_HEADERS_MODEL, reasoning: false, input: ["text"], contextWindow: 200000, maxTokens: 4096,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, headers: { "x-fixture-model": "selected-model" } };
@@ -164,6 +170,7 @@ try {
   assert.ok(om); assert.equal(om.source_provider, OM_HEADERS_PROVIDER); assert.equal(om.source_model, OM_HEADERS_MODEL);
   assert.equal(om.observeAfterTokens, 10000, "no test-only threshold or plugin override");
   assert.ok(snapshot.agent_runtime_launch); assert.equal(snapshot.runtime_image.image_ref, imageRef);
+  assert.equal(snapshot.runtime_image.image_digest, imageDigest);
   const snapshotSha = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
   report.creation = { operation: "submit_hub_decision", child_job: childId, snapshot_sha256: snapshotSha,
     pi_provider: snapshot.pi_provider, model: snapshot.upstream_model, om_source_provider: om.source_provider,
