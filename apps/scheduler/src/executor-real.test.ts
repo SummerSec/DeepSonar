@@ -734,7 +734,7 @@ test("Hub Plan v2 bootstrap is limited to explicit Plan context", () => {
   const ordinaryScope = source.slice(ordinaryStart, marker);
   const planBootstrap = source.slice(marker, end);
   assert.match(ordinaryScope, /没有 plan_objective 声明，当前没有活动 Plan，且不存在历史显式 Plan owner[\s\S]*submit_hub_decision 提交 complete 或 intents/);
-  assert.match(ordinaryScope, /不得只因 plan_objective 缺失而停止或 request_human/);
+  assert.match(ordinaryScope, /不得仅因 plan_objective 缺失而停止或 request_human/);
   assert.match(ordinaryScope, /只有当前任务声明了 plan_objective、存在活动 Plan 上下文或历史显式 Plan owner 时[\s\S]*执行型 Plan v2 要求/);
   assert.match(planBootstrap, /truncated=false[\s\S]*goal, completion, and budget unchanged/);
   assert.match(planBootstrap, /copy items\[0\]\.objective_id into plan\.objective_id and revision\.objective_id/);
