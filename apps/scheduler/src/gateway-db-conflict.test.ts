@@ -67,8 +67,7 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
         }));
       }
       if (query.startsWith("SELECT jt.*")) return [tokenRow(state)];
-      if (query.startsWith("SELECT * FROM credentials")) return [{ ...encrypted, provider: "openai", kind: "llm_provider", status: "active",
-        agent_cli: "pi", public_metadata_json: { base_url: "http://127.0.0.1:14100" }, model_catalog_json: [] }];
+      if (query.startsWith("SELECT * FROM credentials")) return [credential];
       if (query.startsWith("SELECT status, project_id, agent_snapshot_json FROM jobs")) {
         onAdmission();
         return [{ status: "running", project_id: projectId, agent_snapshot_json: snapshot }];
@@ -144,15 +143,19 @@ mock.module(new URL("./gateway-transparent-http.js", import.meta.url), { namedEx
 } });
 const { registerGateway, hashJobToken } = await import("./gateway.js");
 const { encryptSecret } = await import("./credentials.js");
+const { freezeGatewayProviderBinding } = await import("./gateway-provider-binding.js");
 const { freezePiExtensions } = await import("./pi-extensions.js");
 const { renderMetrics } = await import("./metrics.js");
 const { createFailureBoundary } = await import(new URL("../../../agent-harness/fixtures/pi-om-boundary-unit.mjs", import.meta.url).href);
 const { PI_RPC_TRANSPORT_TRANSIENT_RESPONSE } = await import(new URL("../../../agent-harness/fixtures/pi-om-real-rpc.mjs", import.meta.url).href);
 const conflictFixture = JSON.parse(readFileSync(new URL("../../../agent-harness/fixtures/pi-om-db-conflict.json", import.meta.url), "utf8"));
 const encrypted = encryptSecret("offline-fixture-only");
+const credential = { id: credentialId, ...encrypted, provider: "openai", kind: "llm_provider", status: "active",
+  agent_cli: "pi", public_metadata_json: { base_url: "http://127.0.0.1:14100" }, model_catalog_json: [],
+  settings_config_json: { providers: { openai: { api: "openai-completions", models: [{ id: model }] } } } };
 const snapshot = { agent_cli: "pi", model, upstream_model: model, pi_provider: "openai", credential_id: credentialId,
   credential_provider: "openai", runtime_knobs: { job_token_max_requests: 0 }, config_files: [],
-  settings_config_json: { providers: { openai: { api: "openai-completions", models: [{ id: model }] } } },
+  settings_config_json: credential.settings_config_json, gateway_provider_binding: freezeGatewayProviderBinding(credential),
   pi_extensions: freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", { provider: "openai", model }, "0.6.3") };
 
 function setup(t: TestContext, selected: GatewayWorkload, code: string, failures: number, upstreamStatus = 200,

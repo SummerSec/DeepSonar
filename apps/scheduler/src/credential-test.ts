@@ -186,8 +186,9 @@ function resolveProbeProtocol(cred: CredentialRequestInput): InferenceWireProtoc
  * as a real Job, so the credential's configured headers are resolved here too — with the same
  * server-side sanitizer, and ahead of the protocol/final-auth layers.
  */
-function configuredProbeHeaders(cred: CredentialRequestInput, baseUrl: string): Record<string, string> {
-  const resolution = providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl);
+function configuredProbeHeaders(cred: CredentialRequestInput, baseUrl: string, model?: string): Record<string, string> {
+  const resolution = providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl,
+    model === undefined ? { purpose: "catalog" } : { purpose: "inference", model });
   if (hasInvalidProviderHeaders(resolution)) {
     throw new CredentialProbeError("Provider 请求头配置无效", "configuration");
   }
@@ -196,7 +197,7 @@ function configuredProbeHeaders(cred: CredentialRequestInput, baseUrl: string): 
 
 /** Match Gateway precedence: protocol defaults, endpoint configuration, final bound auth. */
 function probeHeaders(cred: CredentialRequestInput, baseUrl: string, secret: string,
-  protocol: InferenceWireProtocol, base?: Record<string, string>): Record<string, string> {
+  protocol: InferenceWireProtocol, base?: Record<string, string>, model?: string): Record<string, string> {
   const defaults: Record<string, string> = {};
   const auth: Record<string, string> = {};
   for (const [name, value] of Object.entries(authHeadersForProtocol(protocol, secret))) {
@@ -204,7 +205,7 @@ function probeHeaders(cred: CredentialRequestInput, baseUrl: string, secret: str
     (lower === "authorization" || lower === "x-api-key" ? auth : defaults)[lower] = value;
   }
   return composeUpstreamRequestHeaders({ base, protocol: defaults,
-    configured: configuredProbeHeaders(cred, baseUrl), auth });
+    configured: configuredProbeHeaders(cred, baseUrl, model), auth });
 }
 
 function modelRequest(cred: CredentialRequestInput, secret: string): { urls: string[]; headers: Record<string, string> } {
@@ -277,7 +278,7 @@ function inferenceProbeRequest(cred: CredentialRequestInput, secret: string): In
   return {
     url: joinProbeUpstreamUrl(base, path),
     model,
-    headers: probeHeaders(cred, base, secret, protocol, { "content-type": "application/json" }),
+    headers: probeHeaders(cred, base, secret, protocol, { "content-type": "application/json" }, model),
     body: inferenceProbeBody(protocol, model),
     protocol,
     timeoutMs: INFERENCE_PROBE_TIMEOUT_MS[protocol],

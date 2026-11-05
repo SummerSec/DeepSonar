@@ -20,6 +20,7 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     import("./config.js"), import("./credentials.js"), import("./domains/job-attempt/application.js"),
     import("./domains/event-ingestion/repair-token-budget.js"),
   ]);
+  const { freezeGatewayProviderBinding } = await import("./gateway-provider-binding.js");
   const upstream = Fastify(), app = Fastify();
   let calls = 0, responseTokens = 6, responseStatus = 200, malformed = false;
   let responseSequence: Array<{ status: number; tokens: number }> = [];
@@ -43,11 +44,13 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     await sql`INSERT INTO credentials(id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4,public_metadata_json)
       VALUES(${credentialId},'offline','llm_provider','openai',${encrypted.ciphertext},${encrypted.nonce},${encrypted.auth_tag},
       'offline','only',${sql.json({ base_url: `http://127.0.0.1:${address.port}` })})`;
+    const [boundCredential] = await sql`SELECT * FROM credentials WHERE id=${credentialId}`;
+    const binding = freezeGatewayProviderBinding(boundCredential as never);
     const setup = async (cap = 10, maxTokens?: number, maxRequests = 100) => {
       Object.assign(config.gateway, { repairMaxTokens: cap });
       const jobId = randomUUID();
       await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
-        VALUES(${jobId},${projectId},'audit','running',${sql.json({ name: "audit", platform_tools: ["mark_job_done"] })},now(),3600,now()+interval '1 hour')`;
+        VALUES(${jobId},${projectId},'audit','running',${sql.json({ name: "audit", platform_tools: ["mark_job_done"], credential_id: credentialId, credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding })},now(),3600,now()+interval '1 hour')`;
       const attempt = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, jobId));
       const grant = await api.mintJobCapabilityToken(jobId);
       const mint = () => gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests, maxTokens });

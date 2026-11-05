@@ -13,6 +13,7 @@
 import { once } from "node:events";
 import { persistNoEffectReceipt, readNoEffectReceipt, type GatewayNoEffectReason } from "./gateway-admission-receipt.js";
 import { createGatewayResponseGuard } from "./gateway-response-guard.js";
+import { assertGatewayProviderBinding, GatewayProviderBindingError } from "./gateway-provider-binding.js";
 import { gatewayEndToEndHeaders, appendGatewayHeaders, requestGatewayHttp } from "./gateway-transparent-http.js";
 import { assertGatewayOutputBudget, assertGatewayUnambiguousPolicyJson, gatewayObservationBytes, transparentGatewayUrl } from "./gateway-transparent-policy.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -332,6 +333,12 @@ export async function mintJobToken(input: {
   const snapshot = job.agent_snapshot_json && typeof job.agent_snapshot_json === "object" && !Array.isArray(job.agent_snapshot_json)
     ? job.agent_snapshot_json as Record<string, unknown>
     : {};
+  const [boundCredential] = await tx`SELECT * FROM credentials WHERE id = ${input.credentialId}`;
+  if (!boundCredential || boundCredential.status !== "active") throw new Error("JOB_CREDENTIAL_INACTIVE");
+  assertGatewayProviderBinding(snapshot.gateway_provider_binding, {
+    id: boundCredential.id, provider: boundCredential.provider, agent_cli: boundCredential.agent_cli,
+    settings_config_json: boundCredential.settings_config_json, public_metadata_json: boundCredential.public_metadata_json,
+  });
   const frozen = parseFrozenPiExtensions(snapshot.pi_extensions);
   const observationalMemory = observationalMemoryConfig(frozen);
   if (observationalMemory) {
@@ -1297,6 +1304,18 @@ export function registerGateway(app: FastifyInstance): void {
       catch { return deny(reply, 400, "Invalid request target encoding", "invalid_request_target"); }
       if (req.url.includes(token) || decodedTarget.includes(token)) return deny(reply, 400, "Job credential in request target", "credential_in_business_data");
       if (req.url === "/gateway/_allowance") {
+        const [credential] = await sql`SELECT * FROM credentials WHERE id = ${jt.credential_id}`;
+        if (!credential || credential.status !== "active") return deny(reply, 502, "Bound credential is unavailable", "credential_inactive");
+        try {
+          assertGatewayProviderBinding((jt.agent_snapshot_json as Record<string, unknown>)?.gateway_provider_binding, {
+            id: credential.id, provider: credential.provider, agent_cli: credential.agent_cli,
+            settings_config_json: credential.settings_config_json, public_metadata_json: credential.public_metadata_json,
+          });
+        } catch (error) {
+          if (error instanceof GatewayProviderBindingError) return deny(reply, 409,
+            "Provider configuration is no longer bound to this Job; regenerate its configuration", error.code);
+          return deny(reply, 502, "Invalid provider configuration", "invalid_provider_headers");
+        }
         if (req.method !== "GET" || !jt.attempt_id || !["main", "observational_memory"].includes(String(jt.workload))) {
           return deny(reply, 403, "Allowance query requires an active workload", "workload_scope_mismatch");
         }
@@ -1461,6 +1480,16 @@ export function registerGateway(app: FastifyInstance): void {
       if (!cred || (cred.status as string) !== "active") {
         return deny(reply, 502, "绑定的凭据不可用", "credential_inactive");
       }
+      try {
+        assertGatewayProviderBinding((jt.agent_snapshot_json as Record<string, unknown>)?.gateway_provider_binding, {
+          id: cred.id, provider: cred.provider, agent_cli: cred.agent_cli,
+          settings_config_json: cred.settings_config_json, public_metadata_json: cred.public_metadata_json,
+        });
+      } catch (error) {
+        if (error instanceof GatewayProviderBindingError) return deny(reply, 409,
+          "Provider configuration is no longer bound to this Job; regenerate its configuration", error.code);
+        return deny(reply, 502, "Invalid provider configuration", "invalid_provider_headers");
+      }
       const providerProjection = projectCredentialProvider(cred.kind, cred.provider);
       if (!providerProjection.provider_valid) {
         return deny(reply, 502, UNKNOWN_PROVIDER_ERROR, "unknown_provider");
@@ -1493,7 +1522,13 @@ export function registerGateway(app: FastifyInstance): void {
         try { observedTarget = observeGatewayTarget(url); }
         catch { return deny(reply, 400, "Invalid upstream target encoding", "invalid_request_target"); }
         if (url.includes(token) || observedTarget.includes(token)) return deny(reply, 400, "Job credential in upstream target", "credential_in_business_data");
-        const configured = providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl);
+        const frozenSnapshot = (jt.agent_snapshot_json ?? {}) as Record<string, unknown>;
+        const om = workload === "observational_memory"
+          ? observationalMemoryConfig(parseFrozenPiExtensions(frozenSnapshot.pi_extensions)) : null;
+        const frozenProvider = om?.source_provider ?? (typeof frozenSnapshot.pi_provider === "string" ? frozenSnapshot.pi_provider : undefined);
+        const configured = providerCustomHeadersFromSettings(frozenSnapshot.settings_config_json, baseUrl,
+          requestModel ? { purpose: "inference", model: requestModel, ...(frozenProvider ? { provider: frozenProvider } : {}) }
+            : { purpose: "catalog" });
         if (hasInvalidProviderHeaders(configured)) return deny(reply, 502, "Invalid provider header configuration", "invalid_provider_headers");
         if ((outboundBuf?.includes(token) ?? false) || req.raw.rawHeaders.some((value, i) => i % 2 === 1
           && value.includes(token) && !["authorization", "x-api-key", "anthropic-api-key", "proxy-authorization"].includes(req.raw.rawHeaders[i - 1]!.toLowerCase()))) {

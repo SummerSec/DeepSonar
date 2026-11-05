@@ -287,7 +287,7 @@ test("OM rejects missing frozen model/provider, non-Gateway protocols, and nonis
   }), /unrecognized key/i);
 });
 
-test("OM retains selected-model capabilities without source endpoint or header overrides", () => {
+test("OM retains selected-model capabilities and business headers while removing endpoint overrides", () => {
   const input = observationalMemoryRoutingFixture();
   const modelsFile = input.files.find((file) => file.path === ".pi/agent/models.json")!;
   const original = JSON.parse(modelsFile.content);
@@ -305,8 +305,9 @@ test("OM retains selected-model capabilities without source endpoint or header o
   assert.equal(memory.baseUrl, input.gatewayBaseUrl);
   assert.equal(memory.api, "anthropic-messages");
   assert.equal(memory.authHeader, true);
-  assert.equal(memory.headers, undefined);
-  assert.deepEqual(memory.models, [{ id: "fixture-model", contextWindow: 128_000, api: "anthropic-messages" }]);
+  assert.deepEqual(memory.headers, { "x-provider-header": "fixture-value" });
+  assert.deepEqual(memory.models, [{ id: "fixture-model", contextWindow: 128_000, api: "anthropic-messages",
+    headers: { "x-model-header": "fixture-value" } }]);
 });
 
 test("Pi anthropic-messages 网关改写补 authHeader 以便现网 Gateway 认 Bearer", () => {
@@ -946,4 +947,38 @@ test("Claude request generation selects the frozen wire model before the transpa
   assert.equal(frozenClaudeLaunchModel({ model: "fixture-native" }), "fixture-native");
   assert.equal(frozenClaudeLaunchModel({}), undefined);
   assert.equal(frozenClaudeLaunchModel({ model: "fixture[1m]", upstream_model: "fixture[1m]" }), "fixture[1m]");
+});
+
+
+test("Job freezing consumes exact credential and transport headers while preserving unknown business names", () => {
+  const business = { "x-business-key": "routing-key", "x-custom_token": "business-token",
+    "X-Unknown-Protocol": "future", "x-empty": "" };
+  const headers = { ...business, Authorization: "synthetic-auth", "proxy-authorization": "synthetic-proxy",
+    "x-api-key": "synthetic-api", "api-key": "synthetic-api", "anthropic-api-key": "synthetic-api",
+    host: "synthetic-host", connection: "x-hop", "x-hop": "hop-value",
+    "content-length": "5", "x-deepsonar-request-id": "synthetic-control" };
+  // Stay within the explicit configured-header count limit.
+  const settings = { providers: { fixture: { headers, models: [{ id: "m", headers: business }],
+    modelOverrides: { m: { headers: business } } } } };
+  const snapshot = providerSettingsForJobSnapshot(settings, "pi");
+  const provider = (snapshot.providers as typeof settings.providers).fixture;
+  const expected = { "x-business-key": "routing-key", "x-custom_token": "business-token",
+    "x-unknown-protocol": "future", "x-empty": "" };
+  assert.deepEqual(provider.headers, expected);
+  assert.deepEqual(provider.models[0]!.headers, expected);
+  assert.deepEqual(provider.modelOverrides.m.headers, expected);
+  assert.doesNotMatch(JSON.stringify(snapshot), /synthetic-|hop-value/u);
+  assert.equal(settings.providers.fixture.headers.Authorization, "synthetic-auth", "freezing must not mutate input");
+});
+
+test("Job freezing rejects raw CRLF and case-insensitive duplicates in every header layer", () => {
+  for (const headers of [{ "x-raw": "\rvalue" }, { "x-raw": "value\n" },
+    { "X-Duplicate": "a", "x-duplicate": "b" }, { Authorization: "synthetic\r" }]) {
+    for (const profile of [
+      { headers },
+      { models: [{ id: "m", headers }] },
+      { modelOverrides: { m: { headers } } },
+    ]) assert.throws(() => providerSettingsForJobSnapshot({ providers: { fixture: profile } }, "pi"),
+      /Invalid Provider headers/u);
+  }
 });

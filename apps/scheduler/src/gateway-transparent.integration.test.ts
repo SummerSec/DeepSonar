@@ -66,6 +66,7 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
     import("fastify"), import("./db.js"), import("./gateway.js"), import("./credentials.js"),
     import("./domains/job-attempt/application.js"),
   ]);
+  const { freezeGatewayProviderBinding } = await import("./gateway-provider-binding.js");
   const captured: Captured[] = [];
   const secret = "synthetic-upstream-key";
   let finishEcho: (() => void) | undefined;
@@ -176,8 +177,10 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
     await sql`INSERT INTO credentials(id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4,public_metadata_json)
       VALUES(${credentialId},'offline','llm_provider','openai',${encrypted.ciphertext},${encrypted.nonce},
         ${encrypted.auth_tag},'offline','only',${sql.json({ base_url: `http://127.0.0.1:${address.port}/v1` })})`;
+    const [boundCredential] = await sql`SELECT * FROM credentials WHERE id=${credentialId}`;
+    const binding = freezeGatewayProviderBinding(boundCredential as never);
     await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
-      VALUES(${jobId},${projectId},'audit','running',${sql.json({ name: "audit", upstream_model: "not-an-alias" })},
+      VALUES(${jobId},${projectId},'audit','running',${sql.json({ name: "audit", upstream_model: "not-an-alias", credential_id: credentialId, credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding })},
         now(),3600,now()+interval '1 hour')`;
     await sql.begin(tx => createAttempt(tx as unknown as typeof sql, jobId));
     const token = await gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests: 0, maxTokens: 0 });
@@ -411,7 +414,7 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         for (const fixture of fixtures) {
           const boundedJobId = randomUUID();
           await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
-            VALUES(${boundedJobId},${projectId},'audit','running',${sql.json({ name: "request policy fixture", agent_cli: fixture.cli })},
+            VALUES(${boundedJobId},${projectId},'audit','running',${sql.json({ name: "request policy fixture", agent_cli: fixture.cli, credential_id: credentialId, credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding })},
               now(),3600,now()+interval '1 hour')`;
           await sql.begin(tx => createAttempt(tx as unknown as typeof sql, boundedJobId));
           const boundedToken = await gateway.mintJobToken({ jobId: boundedJobId, projectId, credentialId, maxRequests: 0, maxTokens: 20 });
@@ -474,14 +477,21 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         ["authorization", `Bearer ${token.plaintext}`, "Authorization", "Bearer deepsonarjob_aaaaaaaa_other-synthetic-token",
           "content-type", "application/json"], [Buffer.from('{}')]);
       assert.equal(repeated.status, 400, "Node header normalization must not hide conflicting duplicate authorization");
-      await sql`UPDATE jobs SET agent_snapshot_json=${sql.json({ provider_model: {
-        provider: "openai", cli_model_id: "allowed", upstream_model_id: "allowed", passthrough: false,
-      } })} WHERE id=${jobId}`;
-      const forbidden = await via("/v1/chat/completions", "POST", ["content-type", "application/json"], [Buffer.from('{"model":"forbidden"}')]);
+      const frozenJobId = randomUUID();
+      await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+        VALUES(${frozenJobId},${projectId},'audit','running',${sql.json({ credential_id: credentialId,
+          credential_provider: "openai", settings_config_json: {}, gateway_provider_binding: binding,
+          provider_model: { provider: "openai", cli_model_id: "allowed", upstream_model_id: "allowed", passthrough: false },
+        })},now(),3600,now()+interval '1 hour')`;
+      await sql.begin(tx => createAttempt(tx as unknown as typeof sql, frozenJobId));
+      const frozenToken = await gateway.mintJobToken({ jobId: frozenJobId, projectId, credentialId, maxRequests: 0, maxTokens: 0 });
+      const frozenVia = (route: string, method: string, headers: string[], chunks: Buffer[]) =>
+        send(gatewayPort, `/gateway${route}`, method, ["authorization", `Bearer ${frozenToken.plaintext}`, ...headers], chunks);
+      const forbidden = await frozenVia("/v1/chat/completions", "POST", ["content-type", "application/json"], [Buffer.from('{"model":"forbidden"}')]);
       assert.equal(forbidden.status, 403);
-      const disguised = await via("/v1/chat/completions", "POST", ["content-type", "text/plain"], [Buffer.from('{"model":"forbidden"}')]);
+      const disguised = await frozenVia("/v1/chat/completions", "POST", ["content-type", "text/plain"], [Buffer.from('{"model":"forbidden"}')]);
       assert.equal(disguised.status, 403, "changing Content-Type cannot bypass frozen model authorization");
-      const opaque = await via("/v1/chat/completions", "POST", ["content-type", "application/octet-stream"], [payload]);
+      const opaque = await frozenVia("/v1/chat/completions", "POST", ["content-type", "application/octet-stream"], [payload]);
       assert.equal(opaque.status, 403, "a frozen model cannot be proven by an opaque request");
       assert.equal(captured.length, before);
     });

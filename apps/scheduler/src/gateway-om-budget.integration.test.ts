@@ -41,6 +41,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     import("./domains/job-attempt/application.js"),
     import("./pi-extensions.js"),
   ]);
+  const { freezeGatewayProviderBinding } = await import("./gateway-provider-binding.js");
   const Fastify = fastifyModule.default;
   const { sql, migrate } = db;
   const { mintJobToken, revokeJobTokens } = gateway;
@@ -58,6 +59,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
   let upstreamMode: "ok" | "unknown" | "missing_usage" | "stream" | "partial_stream" | "error_frame" | "anthropic_refusal_503" | "anthropic_refusal_429" | "anthropic_refusal_safe" | "oversized" | "redirect" | "spoof" | "reset" = "ok";
   let upstreamCalls = 0;
   let lastUpstreamPath = "";
+  let lastUpstreamHeaders: Record<string, unknown> = {};
   let redirectTargetUrl = "";
   let backgroundEntered: (() => void) | undefined;
   let backgroundRelease: Promise<void> | undefined;
@@ -67,6 +69,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
   const respond = async (request: FastifyRequest, reply: FastifyReply) => {
     upstreamCalls += 1;
     lastUpstreamPath = request.url;
+    lastUpstreamHeaders = { ...request.headers };
     if (request.url === "/v1/responses") {
       backgroundOutputLimit = (request.body as Record<string, unknown>).max_output_tokens;
       backgroundEntered?.();
@@ -162,7 +165,9 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
   if (!baseExtension?.observational_memory) throw new Error("OM extension fixture was not registered");
   const baseObservationalMemory = baseExtension.observational_memory;
   const settingsConfig = {
-    providers: { openai: { api: "openai-responses", models: [{ id: "main-model" }] } },
+    providers: { openai: { api: "openai-responses", headers: { "x-om-provider": "frozen-provider", "x-om-precedence": "provider" },
+      models: [{ id: "main-model", headers: { "x-om-model": "frozen-main", "x-om-precedence": "model" } },
+        { id: "other-model", headers: { "x-om-model": "must-not-leak" } }] } },
   };
   const anthropicSettingsConfig = {
     providers: { anthropic: { api: "anthropic-messages", models: [{ id: "main-model" }] } },
@@ -263,7 +268,8 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       jobCredentialId = credentialId,
     ) => {
       const jobId = randomUUID();
-      const snapshot = makeSnapshot(jobCredentialId, options);
+      const [boundCredential] = await sql`SELECT * FROM credentials WHERE id=${jobCredentialId}`;
+      const snapshot = { ...makeSnapshot(jobCredentialId, options), gateway_provider_binding: freezeGatewayProviderBinding(boundCredential as never) };
       await sql`INSERT INTO jobs(
         id, project_id, type, status, agent_snapshot_json, started_at, timeout_sec, lease_expires_at
       ) VALUES (
@@ -311,18 +317,21 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     // base. Exercise that spelling against the real authorization/SQL handler,
     // with both a root and a /v1 server-bound upstream base.
     for (const basePrefix of ["", "/v1"]) {
+      await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}${basePrefix}` })}
+        WHERE id = ${credentialId}`;
       const relativeJob = await createJob("running", { backgroundMaxTokens: 128 });
       const relativeToken = await issue(relativeJob.jobId, "observational_memory");
       const allowance = await app.inject({ method: "GET", url: "/gateway/_allowance",
         headers: { authorization: `Bearer ${relativeToken.plaintext}` } });
       assert.equal(allowance.statusCode, 200, allowance.body);
       assert.equal(allowance.json().remaining_tokens, 128);
-      await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}${basePrefix}` })}
-        WHERE id = ${credentialId}`;
       const relativeResponse = await request(relativeToken.plaintext, { path: "responses", maxTokens: allowance.json().remaining_tokens });
       assert.equal(relativeResponse.statusCode, 200, relativeResponse.body);
       assert.equal(lastUpstreamPath, `${basePrefix}/responses`, "only the bound base controls prefix mapping");
       assert.equal((await receiptFor(relativeResponse)).status, "settled");
+      assert.equal(lastUpstreamHeaders["x-om-provider"], "frozen-provider");
+      assert.equal(lastUpstreamHeaders["x-om-model"], "frozen-main", "OM fills headers from its frozen source model only");
+      assert.equal(lastUpstreamHeaders["x-om-precedence"], "model");
     }
     await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })}
       WHERE id = ${credentialId}`;
@@ -530,11 +539,10 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     assert.deepEqual(closedUsage.settlement_json, {
       result: "never_started", external_effect: false, response_status: "not_started", total_tokens: 0, source: "gateway_error",
     });
-    // Restore only the fixture credential's endpoint after the refused OM
-    // attempt so the same Job's independently reserved main request can run.
-    await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })}
-      WHERE id = ${closedCredentialId}`;
-    assert.equal((await request(closedMain.plaintext, { workload: "main", claimedWorkload: "observational_memory" })).statusCode, 200);
+    const closedMainResponse = await request(closedMain.plaintext, { workload: "main", claimedWorkload: "observational_memory" });
+    assert.equal(closedMainResponse.statusCode, 502, "independent main reservation still admits the unchanged closed endpoint");
+    const [closedMainCounter] = await sql`SELECT used_requests FROM job_tokens WHERE id=${closedMain.id}`;
+    assert.equal(closedMainCounter.used_requests, 1);
     assert.equal((await request((await issue(closedJob.jobId, "observational_memory", {}, closedCredentialId)).plaintext)).statusCode, 429,
       "a known no-effect failure still consumes the independent background request slot");
 
@@ -586,8 +594,6 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     // the request still uses the real closed loopback socket.
     const terminalNoEffectJob = await createJob("running", { backgroundMaxRequests: 1 }, closedCredentialId);
     const terminalNoEffectMemory = await issue(terminalNoEffectJob.jobId, "observational_memory", {}, closedCredentialId);
-    await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${closedPort}` })}
-      WHERE id = ${closedCredentialId}`;
     await sql.unsafe(`CREATE FUNCTION terminal_transport_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
       BEGIN UPDATE jobs SET status='succeeded', finished_at=now() WHERE id=NEW.job_id; RETURN NEW; END $$`);
     await sql.unsafe(`CREATE TRIGGER terminal_transport_fixture AFTER INSERT ON job_attempt_effects

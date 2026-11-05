@@ -983,3 +983,31 @@ test("#748 upstream summaries clean C0, C1 and DEL controls", async () => {
   assert.match(result?.message ?? "", /model denied/u);
   assert.doesNotMatch(result?.message ?? "", /[\u0000-\u001f\u007f-\u009f]/u);
 });
+
+test("native Pi catalog excludes model headers while inference uses the selected model layers", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { listCredentialModelsPreview, testCredential } = await import("./credential-test.js");
+  const originalFetch = globalThis.fetch;
+  const requests: RequestInit[] = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      requests.push(init!);
+      return new Response(JSON.stringify({ data: [{ id: "selected" }], choices: [], usage: { total_tokens: 1 } }));
+    }) as typeof fetch;
+    const credential = { provider: "openai", kind: "llm_provider", ...encryptSecret("synthetic-model-headers"),
+      public_metadata_json: {}, settings_config_json: { providers: { fixture: {
+        baseUrl: "http://127.0.0.1/v1", api: "openai-completions", headers: { "x-layer": "provider" },
+        modelOverrides: { selected: { headers: { "x-layer": "override", "x-override": "yes" } } },
+        models: [{ id: "selected", headers: { "x-layer": "model", "x-model": "yes" } }],
+      } } } };
+    assert.equal((await listCredentialModelsPreview(credential, "synthetic-model-headers")).available, true);
+    assert.equal((await testCredential(credential)).ok, true);
+    assert.equal(new Headers(requests[0]!.headers).get("x-layer"), "provider");
+    assert.equal(new Headers(requests[0]!.headers).get("x-model"), null);
+    const inference = requests.find((request) => request.method === "POST")!;
+    assert.ok(inference);
+    assert.equal(new Headers(inference.headers).get("x-layer"), "model");
+    assert.equal(new Headers(inference.headers).get("x-override"), "yes");
+    assert.equal(new Headers(inference.headers).get("x-model"), "yes");
+  } finally { globalThis.fetch = originalFetch; }
+});

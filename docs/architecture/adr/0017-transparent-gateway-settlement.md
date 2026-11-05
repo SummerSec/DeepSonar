@@ -33,3 +33,8 @@ Job 锁下的额度预留、usage/effect 原子结算、终态撤销与主后台
 ## 替代方案
 
 以下为本次分析，不追溯冒充历史讨论：继续扩展业务头白名单不能满足未知协议透传；保留 Gateway 的 OM 缓冲会破坏 SSE 首段和错误透传；直接删除结算门会让未知外部效果被提交为成功。故选择透明数据面加现有账本的 scoped 确认，不新增外部执行通道或账号路由策略。
+
+
+## 配置身份与恢复补充（2026-11-05）
+
+#918 联动以根快照的非秘密 provider 配置摘要约束 mutable Credential：认证 secret 可轮换，目标/业务头/model 配置变化要求显式受治理 refreeze。目录使用 provider 头，推理与 OM 使用授权 model 默认；客户端已形成业务字段始终优先，不改 body。旧 Job 不自动回填；无效果 Job 可用现有 rerun-current 显式准备下一次执行，活动 Job 和未知效果/repair 链的安全恢复须与 #903 联合闭合。具体限制、操作路径与未完成项见[配置绑定与旧 Job 出口](../../MODEL_GATEWAY_TRANSPARENCY.md#provider-配置绑定与旧-job-出口918-联动)。

@@ -376,3 +376,6 @@ export type {
   ContextTransformManifest,
   ContextTransformStage,
 } from "./context-contract.js";
+
+export { hasInvalidProviderHeaders, sanitizeProviderCustomHeaders, isForbiddenProviderHeader,
+  PROVIDER_CUSTOM_HEADER_LIMITS, type ProviderCustomHeaderResolution, type ProviderCustomHeaders } from "./provider-header-policy.js";

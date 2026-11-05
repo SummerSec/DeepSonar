@@ -165,6 +165,30 @@ if (!testDatabaseUrl) {
       const post = (jobId: string, action: "resume" | "rerun-current") =>
         app.inject({ method: "POST", url: `/jobs/${jobId}/${action}` });
 
+      // Pre-binding Jobs cannot resume into a later Gateway rejection. Refusal is
+      // read-only: migration must use the explicit governed recovery operation.
+      const legacySnapshot = { ...baselineSnapshot };
+      delete legacySnapshot.gateway_provider_binding;
+      const legacyJob = await insertJob({ status: "failed", snapshot: legacySnapshot });
+      const legacyRefused = await post(String(legacyJob.id), "resume");
+      assert.equal(legacyRefused.statusCode, 409, legacyRefused.payload);
+      assert.ok(legacyRefused.json().stale_fields.includes("gateway_provider_binding_fingerprint"));
+      const [legacyAfter] = await sql`SELECT status, agent_snapshot_json FROM jobs WHERE id=${String(legacyJob.id)}`;
+      assert.equal(legacyAfter.status, "failed");
+      assert.deepEqual(legacyAfter.agent_snapshot_json, legacySnapshot);
+      const [legacyAttempts] = await sql`SELECT count(*)::int AS n FROM job_attempts WHERE job_id=${String(legacyJob.id)}`;
+      assert.equal(legacyAttempts.n, 0);
+      const legacyRefrozen = await post(String(legacyJob.id), "rerun-current");
+      assert.equal(legacyRefrozen.statusCode, 200, legacyRefrozen.payload);
+      const [legacyReady] = await sql`SELECT id, status, agent_snapshot_json FROM jobs WHERE id=${String(legacyJob.id)}`;
+      assert.equal(legacyReady.id, legacyJob.id);
+      assert.equal(legacyReady.status, "pending");
+      assert.deepEqual(legacyReady.agent_snapshot_json.gateway_provider_binding, baselineSnapshot.gateway_provider_binding);
+      // This fixture has never run and has no effects or repair receipts. It is
+      // not evidence that an unknown-effect execution can safely be replayed.
+      await sql`UPDATE jobs SET status='cancelled',finished_at=now() WHERE id=${String(legacyJob.id)}`;
+
+
       // #914: rerun-current cannot repair dangling current configuration itself.
       // Repeated refusal preserves the frozen snapshot and creates no Attempt;
       // only an explicit settings repair permits the user's subsequent rerun.

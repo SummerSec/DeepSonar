@@ -2,97 +2,12 @@
  * #923: unknown end-to-end headers are business data, not an allowlist. Authentication,
  * transport framing and exact platform control fields are consumed at this boundary.
  */
-import { validateHeaderName, validateHeaderValue } from "node:http";
+import { hasInvalidProviderHeaders, sanitizeProviderCustomHeaders, readOfficialLlmPiAiSettings,
+  type ProviderCustomHeaderResolution, type ProviderCustomHeaders } from "@deepsonar/runtime-sandbox";
+export { hasInvalidProviderHeaders, sanitizeProviderCustomHeaders, isForbiddenProviderHeader,
+  PROVIDER_CUSTOM_HEADER_LIMITS, type ProviderCustomHeaderResolution, type ProviderCustomHeaders } from "@deepsonar/runtime-sandbox";
 
 import { resolveProviderUpstreamFromSettings } from "./provider-settings.js";
-
-/** Configuration resource limits; exceeding them is an explicit configuration error. */
-export const PROVIDER_CUSTOM_HEADER_LIMITS = {
-  maxHeaders: 16,
-  maxNameLength: 128,
-  maxValueLength: 1024,
-} as const;
-
-/** Only authentication, HTTP transport ownership and named platform controls. */
-const FORBIDDEN_EXACT = new Set([
-  "authorization", "proxy-authorization", "proxy-authenticate",
-  "x-api-key", "api-key", "anthropic-api-key",
-  "host", "content-length", "transfer-encoding", "connection", "proxy-connection",
-  "keep-alive", "upgrade", "te", "trailer", "expect",
-  "x-deepsonar-job", "x-deepsonar-workload", "x-deepsonar-effect-status",
-  "x-deepsonar-proposal-revision", "x-deepsonar-request-id",
-]);
-
-export type ProviderCustomHeaders = Record<string, string>;
-
-export interface ProviderCustomHeaderResolution {
-  headers: ProviderCustomHeaders;
-  /** Diagnosable reasons a configured entry was not applied (names only, never values). */
-  rejected: string[];
-}
-
-export function isForbiddenProviderHeader(name: string): boolean {
-  const lower = name.trim().toLowerCase();
-  return FORBIDDEN_EXACT.has(lower);
-}
-
-/**
- * Normalize names only. Preserve legal empty values and whitespace; reject ambiguous
- * case-insensitive duplicate configuration names. Callers must reject invalid configuration
- * before sending anything upstream; consumed authentication/transport fields are reported
- * separately as forbidden entries. Never report header values.
- */
-export function sanitizeProviderCustomHeaders(raw: unknown): ProviderCustomHeaderResolution {
-  const rejected: string[] = [];
-  const headers: ProviderCustomHeaders = {};
-  if (raw == null) return { headers, rejected };
-  if (typeof raw !== "object" || Array.isArray(raw)) return { headers, rejected: ["headers_not_an_object"] };
-  const entries = Object.entries(raw as Record<string, unknown>);
-  if (entries.length > PROVIDER_CUSTOM_HEADER_LIMITS.maxHeaders) {
-    return { headers, rejected: ["too_many_headers"] };
-  }
-  const connectionFields = new Set(entries
-    .filter(([name, value]) => name.toLowerCase() === "connection" && typeof value === "string")
-    .flatMap(([, value]) => (value as string).split(",").map((name) => name.trim().toLowerCase())));
-  for (const [rawName, rawValue] of entries) {
-    const name = rawName.toLowerCase();
-    try {
-      validateHeaderName(rawName);
-      if (name.length > PROVIDER_CUSTOM_HEADER_LIMITS.maxNameLength) throw new Error("name too long");
-    } catch {
-      rejected.push("invalid_name");
-      continue;
-    }
-    if (Object.hasOwn(headers, name)) {
-      rejected.push(`duplicate_name:${name}`);
-      continue;
-    }
-    if (isForbiddenProviderHeader(name) || connectionFields.has(name)) {
-      rejected.push(`forbidden:${name}`);
-      continue;
-    }
-    if (typeof rawValue !== "string") {
-      rejected.push(`invalid_value:${name}`);
-      continue;
-    }
-    const value = rawValue;
-    try {
-      validateHeaderValue(name, value);
-      if (value.length > PROVIDER_CUSTOM_HEADER_LIMITS.maxValueLength) throw new Error("value too long");
-    } catch {
-      rejected.push(`invalid_value:${name}`);
-      continue;
-    }
-    headers[name] = value;
-  }
-  return { headers, rejected };
-}
-
-/** Invalid HTTP configuration is a request failure, never a partial header set. */
-export function hasInvalidProviderHeaders(resolution: ProviderCustomHeaderResolution): boolean {
-  return resolution.rejected.some((reason) => reason === "headers_not_an_object"
-    || reason === "too_many_headers" || reason.startsWith("invalid_") || reason.startsWith("duplicate_name:"));
-}
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -110,6 +25,38 @@ function canonicalEndpoint(value: string): string | null {
   }
 }
 
+export type ProviderHeaderPurpose = { purpose: "catalog" } | { purpose: "inference"; model: string; provider?: string };
+
+/** Pi 1.4.0 provider-composer rawModelHeaders: overrides precede model definitions. */
+function profileHeaders(profile: Record<string, unknown>, selection: ProviderHeaderPurpose,
+  endpoint?: string): ProviderCustomHeaderResolution {
+  const provider = sanitizeProviderCustomHeaders(profile.headers);
+  if (selection.purpose === "catalog") return provider;
+  const invalid = (reason: string): ProviderCustomHeaderResolution => ({ headers: {}, rejected: [`invalid_model:${reason}`] });
+  const model = selection.model;
+  if (!model || model.trim() !== model) return invalid("missing_or_noncanonical");
+  // Profiles without a local model catalog can use a server-discovered model. Never
+  // infer a local definition from another provider, a display name, or a suffix.
+  if (profile.models == null && profile.modelOverrides == null) return provider;
+  const overrides = asRecord(profile.modelOverrides);
+  const models = profile.models;
+  const matches = Array.isArray(models)
+    ? models.map(asRecord).filter((entry) => entry.id === model)
+    : Object.hasOwn(asRecord(models), model) ? [asRecord(asRecord(models)[model])] : [];
+  if (matches.length > 1) return invalid("duplicate_definition");
+  if (!matches.length && !Object.hasOwn(overrides, model)) return invalid("not_found");
+  const definition = matches[0] ?? {};
+  const modelEndpoint = definition.baseUrl ?? definition.baseURL ?? definition.base_url;
+  if (typeof modelEndpoint === "string" && (!endpoint || canonicalEndpoint(modelEndpoint) !== canonicalEndpoint(endpoint))) {
+    return invalid("endpoint_mismatch");
+  }
+  const layers = [provider, sanitizeProviderCustomHeaders(asRecord(overrides[model]).headers),
+    sanitizeProviderCustomHeaders(definition.headers)];
+  const rejected = layers.flatMap((layer) => layer.rejected);
+  const result = { headers: Object.assign({}, ...layers.map((layer) => layer.headers)) as ProviderCustomHeaders, rejected };
+  return hasInvalidProviderHeaders(result) ? { headers: {}, rejected } : result;
+}
+
 /**
  * Resolve headers from the same server-owned profile that selects the upstream endpoint.
  * Official Pi top-level/config object/config YAML documents use the runtime's official
@@ -121,7 +68,30 @@ function canonicalEndpoint(value: string): string | null {
 export function providerCustomHeadersFromSettings(
   settingsConfig: unknown,
   upstreamBaseUrl?: string,
+  selection: ProviderHeaderPurpose = { purpose: "catalog" },
 ): ProviderCustomHeaderResolution {
+  // Only a caller holding the frozen server-side binding may supply provider.
+  // Exact route lookup precedes default-profile resolution; it never changes target.
+  if (selection.purpose === "inference" && selection.provider !== undefined) {
+    const invalid = (reason: string): ProviderCustomHeaderResolution => ({ headers: {}, rejected: [`invalid_model:${reason}`] });
+    const provider = selection.provider;
+    const official = readOfficialLlmPiAiSettings(settingsConfig);
+    const providers = official?.providers ?? asRecord(asRecord(settingsConfig).providers);
+    if (!provider || provider.trim() !== provider) return invalid("provider_not_found");
+    const hasConfiguredProviders = Object.keys(providers).length > 0;
+    if (hasConfiguredProviders && !Object.hasOwn(providers, provider)) return invalid("provider_not_found");
+    // A built-in SDK provider can be frozen without any models.json providers.
+    // Use only the top-level bound profile, never another configured provider.
+    const inherited = hasConfiguredProviders ? null : resolveProviderUpstreamFromSettings(settingsConfig);
+    const profile = hasConfiguredProviders ? asRecord(providers[provider]) : inherited?.profile ?? {};
+    const declared = profile.baseUrl ?? profile.baseURL ?? profile.base_url ?? inherited?.baseUrl ?? undefined;
+    const endpoint = typeof declared === "string" ? canonicalEndpoint(declared) : null;
+    const bound = upstreamBaseUrl ? canonicalEndpoint(upstreamBaseUrl) : null;
+    // An omitted endpoint inherits the credential-bound target. A declared one
+    // must match it; neither case may borrow another provider's headers.
+    if (!bound || (declared !== undefined && (!endpoint || endpoint !== bound))) return invalid("provider_endpoint_mismatch");
+    return profileHeaders(profile, selection, upstreamBaseUrl);
+  }
   const upstream = resolveProviderUpstreamFromSettings(settingsConfig);
   if (upstreamBaseUrl && upstream.baseUrl) {
     const configured = canonicalEndpoint(upstream.baseUrl);
@@ -130,7 +100,10 @@ export function providerCustomHeadersFromSettings(
       return { headers: {}, rejected: ["upstream_endpoint_mismatch"] };
     }
   }
-  if (upstream.profile) return sanitizeProviderCustomHeaders(upstream.profile.headers);
+  if (upstream.profile) return profileHeaders(upstream.profile, selection, upstreamBaseUrl ?? upstream.baseUrl ?? undefined);
+  if (selection.purpose === "inference") {
+    return { headers: {}, rejected: ["invalid_model:ambiguous_provider"] };
+  }
 
   const providers = asRecord(asRecord(settingsConfig).providers);
   const configured = Object.values(providers)

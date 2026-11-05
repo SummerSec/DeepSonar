@@ -25,6 +25,16 @@ JSON（包括扩展字段）、非 JSON 和二进制转发字节不重建。压�
 
 原始入站与最终出站 target 同时检查原文和一次百分号解码结果；非法百分号编码明确拒绝；按 octet 观察保留合法的非 UTF-8 URI 字节，不退回未解码原文，避免无关参数使 token 检查失效。该边界不宣称检测任意多重编码或业务自定义变换。
 
+## Provider 配置绑定与旧 Job 出口（#918 联动）
+
+目录发现只读取选定 provider 默认头；推理探测与 OM 使用授权 model 的生成前默认值。Pi 优先级为 provider → `modelOverrides[id].headers` → `models[].headers`，合法客户端业务头始终优先。不存在或歧义 model、跨 endpoint 的 model override 明确拒绝。冻结层保留合法业务头（包括名称含 key/token 的未知头），消费精确认证/传输控制，原始值中的首尾 CR/LF 和同层大小写重复均拒绝；DSH 只接受锁定原生 profile 支持的 provider headers，不虚构 model 头接口。
+
+新 Job 根快照的 `gateway_provider_binding` 保存版本、credential ID 与非秘密配置摘要，绑定 provider/CLI、目标、provider/model 配置和业务头。密文、认证值、健康状态与目录刷新不参与摘要。mint、allowance 与模型出站重新核对；仅 secret 轮换使用当前新 secret，业务头仍来自冻结默认与客户端原值。route/header/model 配置变化返回 `GATEWAY_PROVIDER_BINDING_CHANGED`，绝不把旧租户头发给新目标或静默替换客户端头。结算查询保留原 scope，不因配置变化丢失已发生效果的回执。
+
+发布后所有缺少绑定、但还要 mint/query allowance/发送模型请求的旧 Job 都被拒绝，包括已有活动 token；历史归档和结算查询不做自动迁移。`resume-frozen` 身份比较纳入绑定，缺失或变化返回 `SNAPSHOT_STALE`，不回填旧快照或活动 Attempt。合法无效果的 failed/timeout/orphan Job 可先修复当前账号配置，再由有 `jobs:control` 权限的操作员使用 Job 详情“当前配置重跑”或 `POST /jobs/:id/rerun-current`：现有受治理路径重新解析配置，锁内关闭旧 Attempt/撤销旧 grant，并显式将 Job 的下一次执行快照置为当前配置；保留同 Job ID、历史 Attempt/usage/effect。活动 pending/claimed/provisioning/running 不支持原地 refreeze；cancelled 也不是该 API 的可恢复状态，不能建议“取消后直接重跑”。
+
+**恢复联合阻塞（核对 2026-11-05）：** 既有 rerun 保留累计 token/ledger，有限模型余额与 pending/unknown 模型 usage 仍由原 Gateway 准入约束；但 `unknown agent_run` 可以被现有 rerun 再入队，旧修正 receipt 还可能触发 `REPAIR_ATTEMPT_CHANGED`，保存历史不等于安全重放。OM 新快照策略上限与原预算交集亦须由 #903 所有者联合核验。有未知效果或修正链历史的旧 Job 不得把此 API 当通用恢复出口，更不能删除 receipt、重置预算或新建 Job 规避约束；需 #903 的受治理证据对账与恢复决定闭合后验收。#928 仅新增绑定身份检查，不更改该生命周期策略。对应无效果旧 Job 拒绝→显式 refreeze 回归在 `job-rerun.integration.test.ts`，未知效果恢复不据此宣称通过。
+
 ## 响应与旁路记账
 
 上游状态、端到端响应头、普通/错误正文和 SSE 数据按原始字节送达。3xx、429 和 5xx 不因代理重试或跟随跳转消失；未知事件不经业务解析后重组。收到头即刷新，写缓冲满则等 drain；客户端取消、deadline 与上游断流中止传输并保守结算，不把截断响应补成成功。

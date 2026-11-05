@@ -1,5 +1,6 @@
 import { CONTEXT_WINDOW_TOKENS_MAX, CONTEXT_WINDOW_TOKENS_MIN, DSH_REASONING_EFFORTS, isDshReasoningEffort } from "@deepsonar/shared-types";
 import { parseDocument, stringify } from "yaml";
+import { hasInvalidProviderHeaders, sanitizeProviderCustomHeaders } from "./provider-header-policy.js";
 import { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt } from "./dsh-request-frame.js";
 
 export { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt };
@@ -14,7 +15,7 @@ const MODEL_ID_RE = /^[^\p{C}]{1,200}$/u;
 const PROFILE_KEYS = new Set([
   "displayName", "api", "baseURL", "models", "compat", "defaultContextWindow",
   "defaultMaxTokens", "defaultInput", "reasoning", "thinkingBudgets", "cacheRetention",
-  "streamIdleTimeoutMs",
+  "streamIdleTimeoutMs", "headers",
 ]);
 const MODEL_KEYS = new Set(["id", "name", "contextWindow", "maxTokens", "reasoningEfforts", "compat"]);
 const FORBIDDEN_KEYS = /^(?:apiKey|apiKeyEnv|headers?|transport|websocketConnectTimeoutMs|timeoutMs|retryPolicy|maxRetries|maxRetryDelayMs|authorization|cookie|password|secret|token)$/iu;
@@ -189,7 +190,16 @@ export function parseDshPiAiSettings(
 
   const profile = structuredClone(object(providers[selectedRoute], "DSH provider profile 必须是对象"));
   exactKeys(profile, PROFILE_KEYS, "provider profile");
-  for (const [key, value] of Object.entries(profile)) rejectForbiddenNested(value, `provider ${selectedRoute}.${key}`);
+  for (const [key, value] of Object.entries(profile)) {
+    if (key !== "headers") rejectForbiddenNested(value, `provider ${selectedRoute}.${key}`);
+  }
+  // The pinned DSH plugin supports provider headers only. Consume authentication
+  // and transport controls while preserving arbitrary legal business fields.
+  if (Object.hasOwn(profile, "headers")) {
+    const resolved = sanitizeProviderCustomHeaders(profile.headers);
+    if (hasInvalidProviderHeaders(resolved)) throw new Error("DSH pi-ai provider headers 无效");
+    profile.headers = resolved.headers;
+  }
   const protocol = profile.api;
   if (typeof protocol !== "string" || !DSH_PI_AI_PROTOCOLS.includes(protocol as DshPiAiProtocol)) {
     throw new Error(`DSH pi-ai api 必须是 ${DSH_PI_AI_PROTOCOLS.join(" | ")}`);

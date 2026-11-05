@@ -27,7 +27,7 @@ import {
   type PiObservationalMemoryConfig,
 } from "@deepsonar/shared-types";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
-import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiDocument, readOfficialLlmPiAiSettings } from "@deepsonar/runtime-sandbox";
+import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiDocument, readOfficialLlmPiAiSettings, sanitizeProviderCustomHeaders, hasInvalidProviderHeaders } from "@deepsonar/runtime-sandbox";
 import {
   agentCliBuiltinDefaultModel,
   extractModelFromSettings,
@@ -134,7 +134,16 @@ function scrubRuntimeSecretFields(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
       .filter(([key]) => !RUNTIME_SECRET_FIELD.test(key))
-      .map(([key, entry]) => [key, scrubRuntimeSecretFields(entry)]),
+      .map(([key, entry]) => {
+        // Header names are protocol data, not generic secret-field names. Consume
+        // exact authentication/transport controls and preserve all legal business names.
+        if (key === "headers") {
+          const resolution = sanitizeProviderCustomHeaders(entry);
+          if (hasInvalidProviderHeaders(resolution)) throw new Error("Invalid Provider headers in Job configuration");
+          return [key, resolution.headers];
+        }
+        return [key, scrubRuntimeSecretFields(entry)];
+      }),
   );
 }
 function freezeTomlConfig(config: string): string {
@@ -268,9 +277,10 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
       }
       const omProvider = structuredClone(sourceProvider) as Record<string, unknown>;
       const omModel = structuredClone(sourceModel);
-      // The alias retains model capabilities, never source endpoint/header
-      // overrides that could bypass the Gateway or replace its token.
-      for (const key of ["baseUrl", "baseURL", "base_url", "headers"]) {
+      // Preserve frozen business header defaults for the selected OM model.
+      // Header-aware freezing already consumed authentication and transport controls;
+      // only endpoint overrides could bypass the bound Gateway.
+      for (const key of ["baseUrl", "baseURL", "base_url"]) {
         delete omModel[key];
         delete omProvider[key];
       }
