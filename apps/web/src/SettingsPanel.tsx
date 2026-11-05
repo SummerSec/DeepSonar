@@ -1,6 +1,6 @@
 import { ArrowsClockwise, FloppyDisk, GearSix, PencilSimple, Plus, Trash, X } from "@phosphor-icons/react";
 import { ROLE_UI_COLOR_PATTERN } from "@deepsonar/shared-types";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   api,
@@ -115,6 +115,8 @@ export function SettingsPanel({
   const [providerActive, setProviderActive] = useState<Record<string, number>>({});
   const [sources, setSources] = useState<SkillSource[]>([]);
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
+  const [credentialLoad, setCredentialLoad] = useState<{ projectId: string; status: "loading" | "loaded" | "error" } | null>(null);
+  const credentialRequestId = useRef(0);
   const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
   const [newSource, setNewSource] = useState({ name: "", repo_url: "", branch: "main" });
   const [roles, setRoles] = useState<ProjectRole[]>([]);
@@ -129,7 +131,12 @@ export function SettingsPanel({
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
 
   const reload = () => {
-    if (!projectId && visibleGlobalTabs.length === 0) return;
+    const credentialRequest = ++credentialRequestId.current;
+    if (!projectId && visibleGlobalTabs.length === 0) {
+      setCredentials([]);
+      setCredentialLoad(null);
+      return;
+    }
     setAgentLoadError(null);
     const showAgentLoadError = (label: string, error: unknown) => {
       const detail = error instanceof Error ? error.message : String(error);
@@ -172,7 +179,22 @@ export function SettingsPanel({
         setProviderActive(g.active_by_provider ?? {});
       }).catch(() => {});
     }
-    if (dataNeeds.roleCredentialBindings && canLoadTab("roles")) api.credentials().then(setCredentials).catch(() => {});
+    if (projectId && dataNeeds.providerCredentials && canLoadTab("roles")) {
+      setCredentialLoad({ projectId, status: "loading" });
+      api.credentials().then((list) => {
+        if (credentialRequest !== credentialRequestId.current) return;
+        setCredentials(list);
+        setCredentialLoad({ projectId, status: "loaded" });
+      }).catch((error) => {
+        if (credentialRequest !== credentialRequestId.current) return;
+        setCredentials([]);
+        setCredentialLoad({ projectId, status: "error" });
+        showAgentLoadError("Provider 凭据", error);
+      });
+    } else {
+      setCredentials([]);
+      setCredentialLoad(null);
+    }
     if (dataNeeds.modules && canAccessAnyScope(me, ["skills:read"]) && (canLoadTab("roles") || canLoadTab("sources"))) api.skillSources()
       .then(async (list) => {
         setSources(list);
@@ -668,6 +690,7 @@ export function SettingsPanel({
                 </section>                <ProjectCliProviderAllowlistPanel
                   projectId={projectId}
                   credentials={credentials}
+                  credentialLoadState={credentialLoad?.projectId === projectId ? credentialLoad.status : "loading"}
                   enabledAgentClis={settings?.enabled_agent_clis ?? ["claude-code"]}
                   enabledCredentialIds={settings?.enabled_credential_ids ?? []}
                   credentialIdsConfigured={settings?.credential_ids_configured ?? false}

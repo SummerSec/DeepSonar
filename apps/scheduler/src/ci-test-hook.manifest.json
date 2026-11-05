@@ -41,7 +41,6 @@
     "apps/web/src/layout/AppShellEscape.test.ts",
     "apps/web/src/login-error.test.ts",
     "apps/web/src/module-selector-state.test.ts",
-    "apps/web/src/project-cli-provider-allowlist.test.ts",
     "apps/web/src/provider-account-helpers.test.ts",
     "apps/web/src/provider-base-url-draft.test.ts",
     "apps/web/src/settings-panel-image-policy.test.ts",

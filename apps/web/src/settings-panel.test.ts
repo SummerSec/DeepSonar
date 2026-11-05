@@ -38,10 +38,10 @@ test("global settings sections cannot expose another governance domain", () => {
 });
 
 test("global settings sections load only their owned data domains", () => {
-  assert.deepEqual(settingsSectionDataNeeds(null, "credentials"), { agent: false, modules: false, roleCredentialBindings: false });
-  assert.deepEqual(settingsSectionDataNeeds(null, "modules"), { agent: false, modules: true, roleCredentialBindings: false });
-  assert.deepEqual(settingsSectionDataNeeds(null, "platform"), { agent: false, modules: false, roleCredentialBindings: false });
-  assert.deepEqual(settingsSectionDataNeeds("project-id", "agents"), { agent: true, modules: true, roleCredentialBindings: false });
+  assert.deepEqual(settingsSectionDataNeeds(null, "credentials"), { agent: false, modules: false, providerCredentials: false });
+  assert.deepEqual(settingsSectionDataNeeds(null, "modules"), { agent: false, modules: true, providerCredentials: false });
+  assert.deepEqual(settingsSectionDataNeeds(null, "platform"), { agent: false, modules: false, providerCredentials: false });
+  assert.deepEqual(settingsSectionDataNeeds("project-id", "agents"), { agent: true, modules: true, providerCredentials: true });
 });
 
 test("global settings tabs follow the scheduler permission model", () => {

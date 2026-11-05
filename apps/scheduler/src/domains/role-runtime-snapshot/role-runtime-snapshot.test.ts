@@ -868,3 +868,31 @@ test("#757 Hub model selectors use the same normalization for credential and cap
     assert.equal(result.credential_id, "cred-model");
   }
 });
+
+test("project Pi default model with a slash passes the full snapshot admission", async () => {
+  const modelId = "vendor/model-a";
+  const credentialId = "edc9a7b5-51bf-40e8-aef2-e96e91aa4750";
+  const credential = {
+    id: credentialId, name: "local", provider: "openai", status: "active",
+    project_id: null, agent_cli: "pi", meta_json: {}, public_metadata_json: {},
+    settings_config_json: {
+      providers: { custom: { api: "openai-completions", models: [{ id: modelId }] } },
+    },
+  };
+  const result = await resolveAgentSnapshotForJob(
+    snapshotDb({
+      projectConfig: {
+        enabled_agent_clis: ["pi"], default_agent_cli: "pi",
+        default_credential_id: credentialId, default_model_ref: modelId,
+      },
+      projectCfg: undefined,
+      globalCfg: { id: "global-audit", version: 1, agent_cli: "pi", model: "fable", modules_json: [] },
+      credential,
+    }),
+    "project-1", "audit",
+  );
+  assert.equal(result.model, modelId);
+  assert.equal(result.upstream_model, modelId);
+  assert.equal(result.pi_provider, "custom");
+  assert.equal(result.credential_id, credentialId);
+});

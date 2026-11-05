@@ -1,10 +1,26 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { credentialSelectionPatch, defaultCredentialUnavailable } from "./project-provider-selection";
+import { ProjectCliProviderAllowlistPanel } from "./components/ProjectCliProviderAllowlistPanel";
 
 const panel = readFileSync(new URL("./components/ProjectCliProviderAllowlistPanel.tsx", import.meta.url), "utf8");
 const settings = readFileSync(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
+
+function renderCredentialPanel(credentialLoadState: "loading" | "error" | "loaded") {
+  return renderToStaticMarkup(createElement(ProjectCliProviderAllowlistPanel, {
+    projectId: "project-a",
+    credentials: [],
+    enabledAgentClis: ["claude-code"],
+    enabledCredentialIds: ["missing"],
+    credentialIdsConfigured: true,
+    defaultCredentialId: "missing",
+    credentialLoadState,
+    onSaved: () => {},
+  }));
+}
 
 test("项目设置挂载 CLI/Provider 启用面板，不再暴露软缺省控件", () => {
   assert.match(settings, /ProjectCliProviderAllowlistPanel/);
@@ -52,9 +68,9 @@ test("compatibleAgentClisForCredential 以 credential.agent_cli 独占，不按 
 
 test("ordinary save does not pin dynamic credential scope or erase preferences", () => {
   assert.match(settings, /credentialIdsConfigured=\{settings\?\.credential_ids_configured/);
-  assert.match(panel, /credentialSelectionPatch\(\{ credentialSelectionChanged, credIds, defaultCredentialId, clearDefaultCredential \}\)/);
+  assert.match(panel, /credentialSelectionPatch\(\{ credentialSelectionChanged, credIds, defaultCredentialId, clearDefaultCredential, credentialListLoaded \}\)/);
   assert.doesNotMatch(panel, /default_agent_cli: null|default_model_ref: null/);
-  assert.deepEqual(credentialSelectionPatch({ credentialSelectionChanged: false, credIds: [], defaultCredentialId: "default", clearDefaultCredential: false }), {});
+  assert.deepEqual(credentialSelectionPatch({ credentialSelectionChanged: false, credIds: [], defaultCredentialId: "default", clearDefaultCredential: false, credentialListLoaded: true }), {});
   assert.match(panel, /未收紧凭据范围/);
 });
 
@@ -74,9 +90,35 @@ test("unavailable explicit credential references can only be removed by an expli
   assert.match(panel, /账号已删除、停用或不再可访问/);
 });
 
+test("loading or failed credential reads never offer to remove default or allowlist references", () => {
+  const loading = renderCredentialPanel("loading");
+  assert.match(loading, /正在加载 Provider 账号/);
+  assert.doesNotMatch(loading, /移除失效引用|清除失效默认引用/);
+
+  const failed = renderCredentialPanel("error");
+  assert.match(failed, /Provider 账号加载失败/);
+  assert.doesNotMatch(failed, /移除失效引用|清除失效默认引用/);
+});
+
+test("a successful empty credential read still offers explicit stale-reference repair", () => {
+  const loaded = renderCredentialPanel("loaded");
+  assert.match(loaded, /移除失效引用/);
+  assert.match(loaded, /清除失效默认引用/);
+});
+
+test("credential patches fail closed until the account list loaded successfully", () => {
+  assert.deepEqual(credentialSelectionPatch({
+    credentialSelectionChanged: true,
+    credIds: [],
+    defaultCredentialId: "missing",
+    clearDefaultCredential: true,
+    credentialListLoaded: false,
+  }), {});
+});
+
 
 test("clearing an unavailable default alone keeps dynamic credential scope unconfigured", () => {
-  const draft = { credentialSelectionChanged: false, credIds: [], defaultCredentialId: "missing", clearDefaultCredential: false };
+  const draft = { credentialSelectionChanged: false, credIds: [], defaultCredentialId: "missing", clearDefaultCredential: false, credentialListLoaded: true };
   assert.equal(defaultCredentialUnavailable("missing", []), true);
   assert.equal(defaultCredentialUnavailable("missing", [{ id: "missing", status: "disabled" }]), true);
   assert.equal(defaultCredentialUnavailable("missing", [{ id: "missing", status: "active" }]), false);
@@ -90,7 +132,7 @@ test("clearing an unavailable default alone keeps dynamic credential scope uncon
 });
 
 test("editing an explicit allowlist can remove its default without adding credentials", () => {
-  assert.deepEqual(credentialSelectionPatch({ credentialSelectionChanged: true, credIds: [], defaultCredentialId: "removed", clearDefaultCredential: false }), {
+  assert.deepEqual(credentialSelectionPatch({ credentialSelectionChanged: true, credIds: [], defaultCredentialId: "removed", clearDefaultCredential: false, credentialListLoaded: true }), {
     enabled_credential_ids: [], default_credential_id: null,
   });
 });

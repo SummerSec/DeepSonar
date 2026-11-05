@@ -4,7 +4,9 @@ export function credentialSelectionPatch(input: {
   credIds: string[];
   defaultCredentialId: string | null;
   clearDefaultCredential: boolean;
+  credentialListLoaded: boolean;
 }): { enabled_credential_ids?: string[]; default_credential_id?: null } {
+  if (!input.credentialListLoaded) return {};
   return {
     ...(input.credentialSelectionChanged ? { enabled_credential_ids: input.credIds } : {}),
     ...(input.clearDefaultCredential || (input.credentialSelectionChanged && input.defaultCredentialId && !input.credIds.includes(input.defaultCredentialId))
