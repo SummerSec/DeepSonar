@@ -23,6 +23,8 @@ JSON（包括扩展字段）、非 JSON 和二进制转发字节不重建。压�
 
 所有 Job token 认证载体在边界消费，不转给上游；重复认证字段明确拒绝，未知业务字段含入站 Job token 时也拒绝整次请求，不能借业务头外发短期凭据。Host 从绑定目标生成；逐跳头及 Connection 点名字段被消费，长度与实际字节核验，分块 framing 由当前连接重新生成。平台只消费源码列出的精确控制字段（包括 `x-deepsonar-request-id`），不保留整个 `x-*` 或协议前缀。配置中的非法 HTTP 名称/值、资源超限和大小写冲突明确拒绝，不以部分配置继续调用。
 
+原始入站与最终出站 target 同时检查原文和一次百分号解码结果；非法百分号编码明确拒绝；按 octet 观察保留合法的非 UTF-8 URI 字节，不退回未解码原文，避免无关参数使 token 检查失效。该边界不宣称检测任意多重编码或业务自定义变换。
+
 ## 响应与旁路记账
 
 上游状态、端到端响应头、普通/错误正文和 SSE 数据按原始字节送达。3xx、429 和 5xx 不因代理重试或跟随跳转消失；未知事件不经业务解析后重组。收到头即刷新，写缓冲满则等 drain；客户端取消、deadline 与上游断流中止传输并保守结算，不把截断响应补成成功。
@@ -37,9 +39,11 @@ usage scanner 只观察副本，压缩响应仍按原压缩字节转发；无法
 
 `GET /gateway/_allowance` 接受当前有效的 main 或 observational_memory token 与活动 Attempt，返回 `{ remaining_tokens: null | number, policy_required: boolean }`，禁止缓存。查询在 Job 锁内读取原预算，不预留、不增加模型请求计数；main 取 Job 总量或 OM main-workload 额度与修正链余额的交集，后台保持自身额度。pending/unknown 拒绝；返回提示后最终出站仍须锁内重验，不能扩大授权。
 
-主执行的 Pi、DSH、Claude start/resume 命令由显式[请求生成适配器](../packages/runtime-sandbox/src/model-request-policy.ts)包装，运行器上传自包含 Node 脚本，生命周期与 CLI 绑定。Scheduler 仅将运行时主 Provider 配置、DSH profile 与 env 的 endpoint 指向沙箱 loopback `http://127.0.0.1:38127/gateway`（核对基线 2026-11-05），不改冻结历史；OM 后台配置仍直连真实 Gateway。
+主执行的 Pi、DSH、Claude start/resume 命令由显式[请求准入适配器](../packages/runtime-sandbox/src/model-request-policy.ts)包装，运行器上传自包含 Node 脚本，生命周期与 CLI 绑定。Scheduler 仅将运行时主 Provider 配置、DSH profile 与 env 的 endpoint 指向沙箱 loopback `http://127.0.0.1:38127/gateway`（核对基线 2026-11-05），不改冻结历史；OM 后台配置仍直连真实 Gateway。
 
-该适配器在发送受支持的模型 JSON 前读取真实 Gateway 的 allowance；需要策略时显式生成余额内的输出 cap 与 Chat SSE usage 参数，再将生成结果送到 Gateway。透明契约从 Gateway 已接收并获准的字节开始，不把生成层的参数适配隐藏进代理。策略所需输入为不透明/压缩模型 body 或不受支持形状时明确拒绝；allowance 查询失败/未知不继续，模型调用不隐式重试或跟随重定向。生成层只持当前 Job token，不能成为授权依据；沙箱绕过适配器仍受 Gateway 原字节准入约束。
+该适配器收到已形成的模型 HTTP 请求后，只读取真实 Gateway allowance 并检查现有 cap/usage。合规请求保留原始 Buffer、摘要与签名头，包括大整数、未知字段、转义和空白。不合规则明确拒绝，不能自动修改任何已形成 body；参与模型/预算/usage 准入的重复键明确拒绝，未知业务重复键保留。有限额度下 opaque/压缩或不支持形状也明确拒绝。
+
+**未闭合兼容阻塞：** 三个主 CLI 的实际 SDK 请求形成前动态额度/usage 选项尚未接入。当前适配器无法修复缺失或过大的输出限制，也无法为 Chat SSE 补 usage。相关请求会被明确拒绝；现有合成形状测试只证明准入与拒绝，不能宣称有额度的 Pi/DSH/Claude 全部可用。下一步必须使用各 CLI 的原生请求生成前钩子设置选项，不得以另一个 HTTP 代理改写替代。
 
 OM 在受审 wrapper 的请求生成层读取相同 allowance。wrapper 在生成请求前将 `options.maxTokens` 限制到该 allowance；Responses SDK 的最小输出值无法容纳时明确拒绝（当前 SDK 下限为 16，核对基线 2026-11-05）。pending/unknown 不允许协商下一次请求。此结果只是生成参数的提示，Gateway 出站前仍在 Job 锁内重核额度和冻结权限，竞态不能扩大 allowance。
 
@@ -49,7 +53,7 @@ OM 响应不再由 Gateway 缓冲后换成结算错误。受审 [wrapper](../age
 
 ## 验收范围
 
-合成凭据、合成 Job token、隔离 PostgreSQL 和 loopback 假上游是本轮证据来源，不访问真实模型或生产。新增 [传输测试](../apps/scheduler/src/gateway-transparent-http.test.ts)、[端到端测试](../apps/scheduler/src/gateway-transparent.integration.test.ts)，并更新已有 provider、budget、OM 与 wrapper 回归；[主 CLI 请求生成测试](../packages/runtime-sandbox/src/model-request-policy.test.ts)验证适配器与 CLI 形状的合成请求，不能冒充实际三 CLI 运行证据；实际 Actions 接线以 [package scripts](../package.json) 和 [工作流](../.github/workflows/ci.yml) 为准。
+合成凭据、合成 Job token、隔离 PostgreSQL 和 loopback 假上游是本轮证据来源，不访问真实模型或生产。新增 [传输测试](../apps/scheduler/src/gateway-transparent-http.test.ts)、[端到端测试](../apps/scheduler/src/gateway-transparent.integration.test.ts)，并更新已有 provider、budget、OM 与 wrapper 回归；[主 CLI 请求准入测试](../packages/runtime-sandbox/src/model-request-policy.test.ts)验证适配器与 CLI 形状的合成请求，不能冒充实际三 CLI 运行证据；实际 Actions 接线以 [package scripts](../package.json) 和 [工作流](../.github/workflows/ci.yml) 为准。
 
 验收分别核对直连/Gateway 请求字节与重复头/query、错误/重定向单次送达、SSE 首段/取消/背压、压缩/framing、凭据和 scope 负例、预算拒绝及持久结算查询。当前文档只记录实现和检查入口；通过/失败/未运行、精确 head 与检查链接由 PR 记录，历史 #918/#831 的通过结果不覆盖 #923。质量、成本收益及 SLA 保持 unknown。
 

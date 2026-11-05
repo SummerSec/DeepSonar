@@ -31,7 +31,7 @@ async function close(server: http.Server) {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
-test("three CLI model request shapes generate current limits while preserving models and extensions", { timeout: 20_000 }, async () => {
+test("three CLI request shapes preserve compliant bytes and refuse requests needing generation changes", { timeout: 20_000 }, async () => {
   const file = await fixture();
   let remaining = 20;
   let allowanceStatus = 200;
@@ -74,24 +74,26 @@ test("three CLI model request shapes generate current limits while preserving mo
   });
   try {
     const fixtures = [
-      { route: "v1/messages", payload: { model: "claude-fixture", max_tokens: 100, messages: [], extension: { keep: true } }, field: "max_tokens" },
-      { route: "v1/chat/completions", payload: { model: "pi-fixture", max_tokens: 100, stream: true, messages: [], extension: { keep: true } }, field: "max_tokens" },
-      { route: "v1/responses", payload: { model: "dsh-fixture", max_output_tokens: 100, input: "fixture", extension: { keep: true } }, field: "max_output_tokens" },
+      { route: "v1/messages", payload: { model: "claude-fixture", max_tokens: 7, messages: [], extension: { keep: true } }, field: "max_tokens" },
+      { route: "v1/chat/completions", payload: { model: "pi-fixture", max_tokens: 7, stream: true, stream_options: { include_usage: true }, messages: [], extension: { keep: true } }, field: "max_tokens" },
+      { route: "v1/responses", payload: { model: "dsh-fixture", max_output_tokens: 7, input: "fixture", extension: { keep: true } }, field: "max_output_tokens" },
     ];
     for (const fixture of fixtures) {
       const original = structuredClone(fixture.payload);
       const result = await request(fixture.route, fixture.payload, ["X-Repeated", "one", "X-Repeated", "two"]);
       assert.equal(result.status, 200); assert.deepEqual(result.bytes, compressed);
       const last = received.at(-1)!;
-      assert.equal(last.body[fixture.field], remaining);
+      assert.equal(last.body[fixture.field], 7);
       assert.equal(last.body.model, original.model); assert.deepEqual(last.body.extension, original.extension);
       assert.deepEqual(fixture.payload, original);
       assert.equal(last.headers["x-repeated"], "one, two");
       if (fixture.route.includes("chat")) assert.deepEqual(last.body.stream_options, { include_usage: true });
       remaining -= 3;
     }
-    await request("v1/chat/completions", { model: "pi-fixture", stream: true });
-    assert.equal(received.at(-1)!.body.max_completion_tokens, 11, "each request reads the reduced allowance");
+    const beforeMissingLimit = received.length;
+    const missingLimit = await request("v1/chat/completions", { model: "pi-fixture", stream: true });
+    assert.equal(missingLimit.status, 409);
+    assert.equal(received.length, beforeMissingLimit, "missing output/usage options must be set before forming the HTTP body");
     for (const code of ["JOB_TOKEN_USAGE_PENDING", "REPAIR_USAGE_PENDING"]) {
       pendingReplies = [code];
       const callsBefore = received.length, queriesBefore = allowanceQueries;
@@ -131,6 +133,26 @@ test("generation policy keeps unlimited bytes and refuses unsupported or amplify
       assert.throws(() => file.api.prepareModelRequest(body, "/v1/messages", { remaining_tokens: 10, policy_required: true }));
     }
     assert.throws(() => file.api.prepareModelRequest(raw, "/v1/messages", { remaining_tokens: 0, policy_required: true }));
+  } finally { await file.close(); }
+});
+
+test("byte validation preserves every compliant byte and refuses required policy changes", async () => {
+  const file = await fixture();
+  try {
+    const allowance = { remaining_tokens: 10, policy_required: true };
+    const raw = Buffer.from('{ "max_tokens" : 3, "extension_id":9007199254740993, "nested":{"number":1e999,"escaped":"\\u0061"} }\n');
+    assert.equal(file.api.prepareModelRequestBytes(raw, "/v1/messages", allowance), raw);
+    const large = Buffer.from(raw.toString().replace(' : 3', ' : 30'));
+    assert.throws(() => file.api.prepareModelRequestBytes(large, "/v1/messages", allowance));
+    const chat = Buffer.from('{"stream":true,"stream_options":{"extension":9007199254740993},"extension":["},\\\"",9007199254740993],"max_tokens":30,"max_completion_tokens":5}');
+    assert.throws(() => file.api.prepareModelRequestBytes(chat, "/v1/chat/completions", allowance));
+    const unknown = Buffer.from('{"max_tokens":3,"stream_options":{"stream_options":{"include_usage":false,"include_usage":true}}}');
+    assert.equal(file.api.prepareModelRequestBytes(unknown, "/v1/messages", allowance), unknown);
+    assert.throws(() => file.api.prepareModelRequestBytes(Buffer.from('{"max_tokens":30,"max_tokens":40}'), "/v1/messages", allowance));
+    for (const duplicate of ['{"max_tokens":9999,"max_tokens":3}', '{"n":8,"n":1,"max_tokens":3}',
+      '{"stream":true,"max_tokens":3,"stream_options":{"include_usage":false,"include_usage":true}}']) {
+      assert.throws(() => file.api.prepareModelRequestBytes(Buffer.from(duplicate), "/v1/chat/completions", allowance));
+    }
   } finally { await file.close(); }
 });
 

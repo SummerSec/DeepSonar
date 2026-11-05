@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -194,7 +194,7 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         { body: Buffer.from('{ "model": "fixture", invalid-json'), type: "application/json" },
       ];
       for (const fixture of cases) {
-        const path = "/v1/a%2Fb/%7e?a=1&a=2&empty=&flag&encoded=%252f+%20";
+        const path = "/v1/a%2Fb/%7e?a=1&a=2&empty=&flag&encoded=%252f+%20&octet=%ff";
         const business = ["content-type", fixture.type, "accept", "application/x-future", "user-agent", "fixture-cli",
           "x-traffic-type", "eval", "x-future-protocol", "one", "x-future-protocol", "two",
           "anthropic-future", "enabled", "x-deepsonar-business", "end-to-end", "cookie", "a=1", "cookie", "b=2"];
@@ -229,10 +229,25 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         assert.equal((await via(`/v1/messages?debug=${value}`)).status, 400);
         assert.equal((await via(`/v1/${value}`)).status, 400);
       }
+      const partlyEncoded = `%${token.plaintext.charCodeAt(0).toString(16)}${token.plaintext.slice(1)}`;
+      for (const target of [`/v1/messages?debug=${partlyEncoded}&bad=%ZZ`,
+        `/v1/messages?bad=%ZZ&debug=ok&debug=${partlyEncoded}`, `/v1/${partlyEncoded}?bad=%ZZ`]) {
+        assert.equal((await via(target)).status, 400, "unrelated invalid escapes cannot hide encoded credentials");
+      }
       const compressedLeak = await via("/v1/messages", "POST",
         ["content-type", "application/json", "content-encoding", "gzip"],
         [gzipSync(Buffer.from(JSON.stringify({ debug: token.plaintext })))]);
       assert.equal(compressedLeak.status, 400);
+      assert.equal(captured.length, before);
+    });
+    await t.test("duplicate policy members cannot exploit different upstream JSON parsers", async () => {
+      const before = captured.length;
+      for (const body of ['{"model":"other","model":"fixture","max_tokens":3}',
+        '{"max_tokens":9999,"max_tokens":3}', '{"n":8,"n":1,"max_tokens":3}',
+        '{"stream":true,"max_tokens":3,"stream_options":{"include_usage":false,"include_usage":true}}']) {
+        const result = await via("/v1/chat/completions", "POST", ["content-type", "application/json"], [Buffer.from(body)]);
+        assert.equal(result.status, 400);
+      }
       assert.equal(captured.length, before);
     });
     await t.test("upstream credential echoes in headers and across body chunks abort without exposing the key", async () => {
@@ -378,7 +393,7 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
     await t.test("upstream truncation is not disguised as a successful complete body", async () => {
       await assert.rejects(via("/v1/interrupted"));
     });
-    await t.test("main request-generation policy uses fresh real SQL allowances for three CLI request shapes", async () => {
+    await t.test("main admission adapter preserves formed requests using fresh SQL allowances for three CLI shapes", async () => {
       const directory = await mkdtemp(path.join(tmpdir(), "gateway-main-policy-"));
       try {
         const modulePath = path.join(directory, "model-request-policy.mjs");
@@ -408,7 +423,8 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
               const before = captured.length;
               const response = await send(policyAddress.port, `/gateway${fixture.route}`, "POST",
                 ["authorization", `Bearer ${boundedToken.plaintext}`, "content-type", "application/json", "x-policy-fixture", "main-generation"],
-                [Buffer.from(JSON.stringify(fixture.body))]);
+                [Buffer.from(JSON.stringify({ ...fixture.body, [fixture.field]: remaining,
+                  ...(fixture.cli === "pi" ? { stream_options: { ...fixture.body.stream_options, include_usage: true } } : {}) }))]);
               assert.equal(response.status, 200, `${fixture.cli}: ${response.body.toString()}`);
               assert.equal(captured.length, before + 1, "allowance reads stay inside the Gateway and do not call the model");
               const actual = captured.at(-1)!;
@@ -421,13 +437,30 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
               assert.deepEqual(values(actual.headers, "authorization"), [`Bearer ${secret}`]);
               assert.ok(!actual.headers.join(" ").includes(boundedToken.plaintext));
             }
+            const original = Buffer.from(`{ "model":"fixture-model", "${fixture.field}" : 1, "extension_id":9007199254740993, "escaped":"\\u0061" }\n`);
+            const digest = `sha-256=:${createHash("sha256").update(original).digest("base64")}:`;
+            const rawHeaders = ["authorization", `Bearer ${boundedToken.plaintext}`, "content-type", "application/json", "x-policy-fixture", "main-generation"];
+            const unchanged = await send(policyAddress.port, `/gateway${fixture.route}`, "POST",
+              [...rawHeaders, "content-digest", digest], [original]);
+            assert.equal(unchanged.status, 200);
+            assert.deepEqual(captured.at(-1)!.body, original, "already compliant requests retain every original byte");
+            assert.deepEqual(values(captured.at(-1)!.headers, "content-digest"), [digest]);
+            const oversized = Buffer.from(original.toString().replace(' : 1,', ' : 100,'));
+            const beforeRefusal = captured.length;
+            const signed = await send(policyAddress.port, `/gateway${fixture.route}`, "POST",
+              [...rawHeaders, "content-digest", digest], [oversized]);
+            assert.equal(signed.status, 409, "a required edit cannot silently invalidate a supplied digest");
+            assert.equal(captured.length, beforeRefusal);
+            const adapted = await send(policyAddress.port, `/gateway${fixture.route}`, "POST", rawHeaders, [oversized]);
+            assert.equal(adapted.status, 409, "unsigned formed requests must also be refused rather than edited");
+            assert.equal(captured.length, beforeRefusal);
             const [usage] = await sql`SELECT count(*)::int AS requests, sum(total_tokens)::int AS tokens,
               bool_and(settlement_status='settled') AS settled FROM job_usage_ledger WHERE job_id=${boundedJobId}`;
             assert.deepEqual({ requests: usage.requests, tokens: usage.tokens, settled: usage.settled },
-              { requests: 2, tokens: 10, settled: true });
+              { requests: 3, tokens: 15, settled: true });
             const [counter] = await sql`SELECT used_requests, used_tokens FROM job_tokens WHERE id=${boundedToken.id}`;
-            assert.equal(Number(counter.used_requests), 2, "policy allowance lookups must not consume model requests");
-            assert.equal(Number(counter.used_tokens), 10);
+            assert.equal(Number(counter.used_requests), 3, "policy allowance lookups must not consume model requests");
+            assert.equal(Number(counter.used_tokens), 15);
           } finally { await policy.close(); }
         }
       } finally { await rm(directory, { recursive: true, force: true }); }

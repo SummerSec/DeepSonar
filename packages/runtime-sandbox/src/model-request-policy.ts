@@ -3,7 +3,7 @@ import { shellQuote } from "./runtime-host.js";
 export const MODEL_REQUEST_POLICY_BASE_URL = "http://127.0.0.1:38127/gateway";
 export const MODEL_REQUEST_POLICY_PATH = "/workspace/.deepsonar/model-request-policy.mjs";
 
-/** Explicit client request-generation policy; the Scheduler Gateway stays byte-transparent. */
+/** Explicit client admission policy; formed HTTP requests are never rewritten. */
 export function modelRequestPolicyCommand(command: string, env: Record<string, string>): string {
   if (!env.DEEPSONAR_REQUEST_POLICY_UPSTREAM) return command;
   if (!env.DEEPSONAR_GATEWAY_TOKEN) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
@@ -81,6 +81,7 @@ export function prepareModelRequest(body, route, allowance) {
   }
   if (remaining !== null) output[field] = Math.min(body[field] ?? remaining, remaining);
   if (normalized === 'chat/completions') {
+    if (body.stream_options !== undefined && (!body.stream_options || typeof body.stream_options !== 'object' || Array.isArray(body.stream_options))) fail('MODEL_REQUEST_POLICY_PROTOCOL_UNSUPPORTED');
     if (field === 'max_tokens') {
       if (body.max_completion_tokens !== undefined) output.max_tokens = Math.min(body.max_tokens, body.max_completion_tokens, remaining ?? Infinity);
       delete output.max_completion_tokens;
@@ -88,6 +89,63 @@ export function prepareModelRequest(body, route, allowance) {
     if (body.stream === true) output.stream_options = { ...(body.stream_options ?? {}), include_usage: true };
   }
   return output;
+}
+
+// Check ambiguous admission members without changing any formed request.
+function assertPolicyMembers(source, owned = ['model','max_tokens','max_completion_tokens','max_output_tokens','n','best_of','stream','stream_options']) {
+  let cursor = 0;
+  const whitespace = () => { while (/\s/.test(source[cursor] ?? '') && cursor < source.length) cursor++; };
+  const stringEnd = () => {
+    cursor++;
+    while (cursor < source.length) {
+      const char = source[cursor++];
+      if (char === '\\') cursor++;
+      else if (char === '"') return;
+    }
+  };
+  const valueEnd = () => {
+    if (source[cursor] === '"') { stringEnd(); return; }
+    if (source[cursor] === '{' || source[cursor] === '[') {
+      const end = source[cursor++] === '{' ? '}' : ']';
+      while (cursor < source.length && source[cursor] !== end) {
+        if (source[cursor] === '"') stringEnd();
+        else if (source[cursor] === '{' || source[cursor] === '[') valueEnd();
+        else cursor++;
+      }
+      cursor++; return;
+    }
+    while (cursor < source.length && !/[,}\]\s]/.test(source[cursor])) cursor++;
+  };
+  whitespace(); cursor++;
+  const members = [];
+  whitespace();
+  while (source[cursor] !== '}') {
+    const start = cursor;
+    stringEnd();
+    const key = JSON.parse(source.slice(start, cursor));
+    whitespace(); cursor++; whitespace();
+    const valueStart = cursor; valueEnd(); const valueStop = cursor;
+    whitespace();
+    const comma = source[cursor] === ',' ? cursor++ : null;
+    members.push({ key, start, valueStart, valueStop, comma });
+    whitespace();
+  }
+  for (const key of owned) if (members.filter(member => member.key === key).length > 1) fail('MODEL_REQUEST_POLICY_DUPLICATE_MEMBER');
+  if (owned.includes('stream_options')) {
+    const options = members.find(member => member.key === 'stream_options');
+    if (options && source[options.valueStart] === '{') assertPolicyMembers(source.slice(options.valueStart,options.valueStop), ['include_usage']);
+  }
+}
+
+export function prepareModelRequestBytes(bytes, route, allowance) {
+  const source = bytes.toString('utf8');
+  const body = JSON.parse(source);
+  const required = prepareModelRequest(body, route, allowance);
+  if (allowance.policy_required) {
+    assertPolicyMembers(source);
+    if (JSON.stringify(body) !== JSON.stringify(required)) fail('MODEL_REQUEST_POLICY_PREGENERATION_REQUIRED');
+  }
+  return bytes;
 }
 
 export async function startModelRequestPolicy({ upstream, token, port = 38127 }) {
@@ -142,8 +200,7 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
         if (allowance.policy_required) {
           if (!/(?:^application\/json|\+json)(?:;|$)/i.test(String(req.headers['content-type'] ?? ''))
             || (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity')) fail('MODEL_REQUEST_POLICY_JSON_REQUIRED');
-          const adapted = prepareModelRequest(JSON.parse(bytes.toString('utf8')), route, allowance);
-          bytes = Buffer.from(JSON.stringify(adapted));
+          prepareModelRequestBytes(bytes, route, allowance);
         }
       }
       const outgoing = headers(req.rawHeaders, true); outgoing.push('authorization','Bearer ' + token);
@@ -158,7 +215,7 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
     } catch (error) {
       controller.abort();
       if (res.headersSent || res.destroyed) res.destroy();
-      else { res.writeHead(Number.isInteger(error.status) ? error.status : 502, {'content-type':'application/json'}); res.end(JSON.stringify({error:{type:'request_generation_policy',message: /^MODEL_REQUEST_POLICY_/.test(error.message) ? error.message : 'MODEL_REQUEST_POLICY_FAILED'}})); }
+      else { res.writeHead(Number.isInteger(error.status) ? error.status : 502, {'content-type':'application/json'}); res.end(JSON.stringify({error:{type:'request_admission_policy',message: /^MODEL_REQUEST_POLICY_/.test(error.message) ? error.message : 'MODEL_REQUEST_POLICY_FAILED'}})); }
     } finally { controllers.delete(controller); res.off('close',disconnected); }
   });
   await new Promise((resolve,reject) => { server.once('error',reject); server.listen(port,'127.0.0.1',resolve); });

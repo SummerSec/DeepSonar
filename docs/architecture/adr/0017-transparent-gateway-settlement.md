@@ -14,7 +14,7 @@
 
 获准模型请求必须保留原始业务字节、端到端头及响应，只在明确认证、绑定目标和 HTTP 传输边界转换。模型 alias 必须在请求生成层完成；预算不符必须在出站前明确拒绝，不能静默改写 body。透明传输不得隐式重试或跟随重定向。
 
-主执行三 CLI 通过显式沙箱 loopback 请求生成适配器，OM 通过受审 wrapper，在每次生成模型请求前读取原 Gateway 的 `_allowance` 提示。main 使用当前 token/Attempt 的 Job 或 main-workload 与修正预算交集；后台保持独立。需要策略时生成输出 cap 与 terminal usage 参数，opaque 或不支持输入明确拒绝，不在透明 Gateway 修改 body。运行器上传的自包含适配器与 CLI start/resume 生命周期绑定，只改运行时主 endpoint，OM 保持真实 Gateway。查询不预留、不消耗请求配额，pending/unknown 不准入下一请求；无法满足 SDK 最小输出要求时拒绝，不扩额度。数据面仍在 Job 锁内重新准入，提示不能替代原预算权限。
+主执行三 CLI 的 loopback 适配器只对已形成 HTTP 请求查询 allowance 并检查准入，合规原字节转发，不合规明确拒绝，绝不补写 cap/usage。main 使用当前 token/Attempt 的 Job 或 main-workload 与修正预算交集。三 CLI 原生生成前选项尚未接入，有限额度下的兼容性是未闭合阻塞。OM 受审 wrapper 在 SDK 调用前读取 allowance 并设置 SDK 选项，属于实际请求形成前的准备；无法满足 SDK 最小输出要求则拒绝。查询不预留、不消耗请求配额，pending/unknown 不准入；数据面仍在 Job 锁内重验，提示不扩大权限。
 
 OM 的严格持久结算保持，但确认从数据面迁移到原 Gateway 的 scoped 只读查询。已准入请求 UUID 作为原 effect intent 的关联字段；未准入的 quota/已回滚 DB 冲突拒绝在独立事务保存原 events 的 kernel `control_receipt/gateway_admission`。完整 Job/Attempt/token/workload/UUID scope、dedup 与事件限流不变，不新增模型计数、usage 或 schema。相同 UUID 禁止重发；回执持久失败不得降级，不成为另一套授权或账本。受审 wrapper 在当前 Job/Attempt/token/workload 对应的 durable settled 状态确认前不得提交模型终止结果。pending/unknown、撤销、查询失败和 timeout 均不能推定成功；Provider 的 JSON、SSE 或错误文案不构成平台回执。
 
@@ -28,7 +28,7 @@ Job 锁下的额度预留、usage/effect 原子结算、终态撤销与主后台
 
 业务协议扩展不需增加 Gateway 白名单，客户端能看到真实上游错误。代价是请求生成层须提供显式预算参数，OM wrapper 和 Gateway 须同时支持 scoped 结算查询；旧 wrapper 不能绕过此确认。分块请求仍受有界缓冲限制，不宣称无限流或全双工支持。
 
-验证复用传输/隔离数据库/OM wrapper/主请求生成适配器回归和现有 Actions 门禁；CLI 形状合成请求不等于实际三 CLI 已运行，最终证据须明确区分，最终 SHA 结果独立记录；本轮不做真实模型或生产验证，收益 unknown。
+验证复用传输/隔离数据库/OM wrapper/主请求准入适配器回归和现有 Actions 门禁；CLI 形状合成请求不等于实际三 CLI 已运行，最终证据须明确区分，最终 SHA 结果独立记录；本轮不做真实模型或生产验证，收益 unknown。
 
 ## 替代方案
 

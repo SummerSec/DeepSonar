@@ -14,7 +14,7 @@ import { once } from "node:events";
 import { persistNoEffectReceipt, readNoEffectReceipt, type GatewayNoEffectReason } from "./gateway-admission-receipt.js";
 import { createGatewayResponseGuard } from "./gateway-response-guard.js";
 import { gatewayEndToEndHeaders, appendGatewayHeaders, requestGatewayHttp } from "./gateway-transparent-http.js";
-import { assertGatewayOutputBudget, gatewayObservationBytes, transparentGatewayUrl } from "./gateway-transparent-policy.js";
+import { assertGatewayOutputBudget, assertGatewayUnambiguousPolicyJson, gatewayObservationBytes, transparentGatewayUrl } from "./gateway-transparent-policy.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { audit } from "./audit.js";
@@ -466,6 +466,12 @@ export function upstreamAuthHeaders(provider: string, secret: string): Record<st
 }
 
 /** 凭据 base_url 已带 /v1 时，不要把 Claude Code 的 /v1/messages 再拼成 /v1/v1/messages。 */
+function observeGatewayTarget(target: string): string {
+  if (/%(?![0-9a-f]{2})/iu.test(target)) throw new Error("invalid_target_escape");
+  // Tokens are ASCII. Decode octets without rejecting legal non-UTF-8 URI bytes.
+  return target.replace(/%([0-9a-f]{2})/giu, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+}
+
 export function joinGatewayUpstreamUrl(baseUrl: string, upstreamPath: string, qs = ""): string {
   return transparentGatewayUrl(baseUrl, upstreamPath, qs);
 }
@@ -1287,7 +1293,8 @@ export function registerGateway(app: FastifyInstance): void {
           tokenId: String(jt.id), workload: gatewayWorkload(jt.workload), requestId: clientRequestId, reason });
       };
       let decodedTarget = req.url;
-      try { decodedTarget = decodeURIComponent(req.url); } catch { /* HTTP raw target validation is independent. */ }
+      try { decodedTarget = observeGatewayTarget(req.url); }
+      catch { return deny(reply, 400, "Invalid request target encoding", "invalid_request_target"); }
       if (req.url.includes(token) || decodedTarget.includes(token)) return deny(reply, 400, "Job credential in request target", "credential_in_business_data");
       if (req.url === "/gateway/_allowance") {
         if (req.method !== "GET" || !jt.attempt_id || !["main", "observational_memory"].includes(String(jt.workload))) {
@@ -1370,6 +1377,10 @@ export function registerGateway(app: FastifyInstance): void {
         catch { observedRequest = null; }
       }
       if (observedRequest?.includes(token)) return deny(reply, 400, "Job credential in body", "credential_in_business_data");
+      if (observedRequest) {
+        try { assertGatewayUnambiguousPolicyJson(observedRequest); }
+        catch { return deny(reply, 400, "Ambiguous model or budget members", "ambiguous_policy_json"); }
+      }
       if (outboundBuf?.length) {
         try { if (observedRequest) rawBody = JSON.parse(observedRequest.toString("utf8")); }
         catch { /* Opaque input is admitted or refused by authorization, never rewritten. */ }
@@ -1479,7 +1490,8 @@ export function registerGateway(app: FastifyInstance): void {
       try {
         url = joinGatewayUpstreamUrl(baseUrl, upstreamPath, qs);
         let observedTarget = url;
-        try { observedTarget = decodeURIComponent(url); } catch { /* Preserve opaque URI bytes. */ }
+        try { observedTarget = observeGatewayTarget(url); }
+        catch { return deny(reply, 400, "Invalid upstream target encoding", "invalid_request_target"); }
         if (url.includes(token) || observedTarget.includes(token)) return deny(reply, 400, "Job credential in upstream target", "credential_in_business_data");
         const configured = providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl);
         if (hasInvalidProviderHeaders(configured)) return deny(reply, 502, "Invalid provider header configuration", "invalid_provider_headers");

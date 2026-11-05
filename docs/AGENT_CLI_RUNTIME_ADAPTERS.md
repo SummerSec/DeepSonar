@@ -361,6 +361,6 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 
 运行时 smoke：本地 `agent-harness/dsh-sdk-smoke-driver.mjs` 已用官方 package 验证 native bash、PTC `run_code`、原生子代理的 Gateway/model/reasoning 继承、Gateway token、同进程 follow-up、v4 capture、跨进程 resume 拒绝和 shutdown；`agent-harness/dsh-cordis-smoke-config.mjs` 是 profile smoke helper，`agent-harness/check-dsh-runtime.mjs`、`agent-harness/test-dsh-cordis.mjs` 与 `packages/runtime-sandbox/src/runtime-adapters.test.ts` 验证 lock/profile/Docker 与 adapter 契约。Docker 在当前环境不可用，因此容器启动与既有镜像 size budgets 仍由 CI gate 负责；本地只记录 npm closure 约 505 MiB unpacked、约 139 MiB gzip，不把它们写成镜像体积。完整 `pnpm ci:smoke:opensandbox-cli-control` 仍需要对应 Provider 凭据。
 
-### 主模型请求生成适配器（#923）
+### 主模型请求准入适配器（#923）
 
-[model-request-policy](../packages/runtime-sandbox/src/model-request-policy.ts)由 runtime-agent 上传并包装三 CLI 的 start/resume；Scheduler 将运行时主配置/DSH/env 指向沙箱 loopback，OM 仍直连真实 Gateway。适配器查询当前 Job token 的 allowance，按受支持协议显式生成输出 cap 与 Chat SSE usage，不重试/重定向。opaque 受限请求和未知 allowance 拒绝；Gateway 继续最终原字节准入。生命周期、范围与持久拒绝回执见[透明传输专题](MODEL_GATEWAY_TRANSPARENCY.md)。CLI 形状合成测试已接 Actions，运行结果待最终 SHA 验收，不代表实际 CLI 或真实模型通过。
+[model-request-policy](../packages/runtime-sandbox/src/model-request-policy.ts)由 runtime-agent 上传并包装三 CLI 的 start/resume；Scheduler 将运行时主配置/DSH/env 指向沙箱 loopback，OM 仍直连真实 Gateway。适配器查询当前 Job token 的 allowance，仅检查已形成请求的 cap 与 Chat SSE usage，合规原字节转发，否则明确拒绝，不重试/重定向。主 CLI 原生生成入口的动态 cap/usage 尚未接入，有限额度下不兼容请求会被拒绝，不能宣称 #923 全部完成。opaque 受限请求和未知 allowance 拒绝；Gateway 继续最终原字节准入。生命周期、范围与持久拒绝回执见[透明传输专题](MODEL_GATEWAY_TRANSPARENCY.md)。CLI 形状合成测试已接 Actions，运行结果待最终 SHA 验收，不代表实际 CLI 或真实模型通过。

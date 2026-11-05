@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { brotliCompressSync, deflateSync, gzipSync } from "node:zlib";
 import test from "node:test";
-import { assertGatewayOutputBudget, gatewayObservationBytes, transparentGatewayUrl } from "./gateway-transparent-policy.js";
+import { assertGatewayOutputBudget, assertGatewayUnambiguousPolicyJson, gatewayObservationBytes, transparentGatewayUrl } from "./gateway-transparent-policy.js";
 import { RepairTokenBudgetError } from "./domains/event-ingestion/repair-token-budget.js";
 
 test("Gateway URL mapping strips only the exact bound base-path overlap and preserves opaque URI bytes", () => {
@@ -75,5 +75,36 @@ test("budget admission rejects missing/excess limits and missing terminal stream
   for (const body of [{ n: 3 }, { best_of: 3 }, { max_completion_tokens: -1 }, Buffer.from("binary")]) {
     assert.throws(() => assertGatewayOutputBudget(body, "v1/chat/completions", 10),
       (error: unknown) => error instanceof RepairTokenBudgetError && error.code === "REPAIR_PROTOCOL_UNSUPPORTED");
+  }
+});
+
+test("Gateway rejects duplicate policy members even when the last value passes admission", () => {
+  for (const source of [
+    '{"max_tokens":9999,"max_tokens":3}',
+    '{"max_completion_tokens":9999,"max_completion_tokens":3}',
+    '{"max_output_tokens":9999,"max_output_tokens":3}',
+    '{"n":8,"n":1,"max_tokens":3}',
+    '{"best_of":8,"best_of":1,"max_tokens":3}',
+    '{"model":"unauthorized","model":"allowed"}',
+    '{"stream":false,"stream":true}',
+    '{"stream_options":{"include_usage":false},"stream_options":{"include_usage":true}}',
+    '{"stream_options":{"include_usage":false,"include_usage":true}}',
+    String.raw`{"max_\u0074okens":9999,"max_tokens":3}`,
+    String.raw`{"stream_\u006fptions":{"include_\u0075sage":false,"include_usage":true}}`,
+  ]) {
+    const bytes = Buffer.from(source), before = Buffer.from(bytes);
+    assert.throws(() => assertGatewayUnambiguousPolicyJson(bytes), /ambiguous_gateway_policy_json/u);
+    assert.deepEqual(bytes, before, "rejection never rewrites the wire representation");
+  }
+});
+
+test("Gateway preserves unknown duplicate business keys and ignores policy-like nested extension keys", () => {
+  const source = String.raw` {"max_tokens":3,"extension":1,"extension":9007199254740993,"nested":{"model":"one","model":"two","n":8,"n":1},"array":[{"max_tokens":100,"max_tokens":3}],"quoted":"} \" \\","stream_options":{"extension":1,"extension":2,"include_usage":true,"nested":{"include_usage":false,"include_usage":true}}} `;
+  const bytes = Buffer.from(source), before = Buffer.from(bytes);
+  assert.doesNotThrow(() => JSON.parse(source), "the nested duplicate fixture is valid JSON");
+  assert.doesNotThrow(() => assertGatewayUnambiguousPolicyJson(bytes));
+  assert.deepEqual(bytes, before);
+  for (const nonObject of ['[]', 'null', '"string"', '42', '{invalid']) {
+    assert.doesNotThrow(() => assertGatewayUnambiguousPolicyJson(Buffer.from(nonObject)), "existing body parsing owns non-object and invalid JSON policy");
   }
 });
