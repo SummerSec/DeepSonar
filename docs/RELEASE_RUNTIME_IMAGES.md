@@ -25,11 +25,23 @@
 
 要放行的是**同一条门禁**，不是绕过它：不要为 bot 配置 ruleset bypass、不要直推、也不要用可写 PAT 跳过必需检查。
 
-**发布按阶段可重入（#893）**：`release.yml` 的末端不再是「一个 job 里的两个不可逆动作」，而是两个独立阶段，都只消费同一份冻结载荷：`release-publish`（校验签名载荷 → 建 Release，Release 已存在则不改写）与 `release-writeback`（同步 bundled 清单与 `.env.example`，内容一致则早退）。写回阶段带 `continue-on-error`：失败会以失败 job 的形式可见，但**不会扣住已经可以发布的 Release**；反之 Release 已存在也不会阻塞写回。两段实现分别在 `agent-harness/release-publish.sh` 与 `agent-harness/release-writeback.sh`，被发布流程与 `.github/workflows/release-resume.yml` 共用。当某一阶段失败时（规则拒绝、缺权限、bot PR 待批准、runner 抖动），用 **Release resume** 手动触发：输入版本、`source_run_id` 与要重跑的阶段，它会从原运行下载 `platform-release-payload` 与 `platform-signature-evidence` 后只重跑该阶段，**不重建镜像**；两个阶段都幂等，重跑不会产生额外提交或覆盖既有 Release。 前置条件：仓库必须允许 GitHub Actions 创建 PR（Settings → Actions → General → “Allow GitHub Actions to create and approve pull requests”，API 为 `repos/<owner>/<repo>/actions/permissions/workflow` 的 `can_approve_pull_request_reviews=true`）。回写脚本在动任何分支之前先检查该开关，关闭时立即以 `WRITEBACK_PR_PERMISSION_MISSING` 单条可执行提示失败，而不是先等满一轮门禁再报 GraphQL 错误（v0.6.8 实测：22 分钟后才失败）。bot 分支由 workflow 独占且可丢弃，因此用 `--force-with-lease` 覆盖上一次尝试留下的同名分支，避免非快进推送把发布卡死。
+**发布按阶段可重入（#893）**：`release.yml` 的末端不再是「一个 job 里的两个不可逆动作」，而是两个独立阶段，都只消费同一份冻结载荷：`release-publish`（校验签名载荷 → 建 Release，Release 已存在则不改写）与 `release-writeback`（同步 bundled 清单与 `.env.example`，内容一致则早退）。写回阶段带 `continue-on-error`：失败会以失败 job 的形式可见，但**不会扣住已经可以发布的 Release**；反之 Release 已存在也不会阻塞写回。两段实现分别在 `agent-harness/release-publish.sh` 与 `agent-harness/release-writeback.sh`，被发布流程与 `.github/workflows/release-resume.yml` 共用。当某一阶段失败时，用默认分支上的 **Release resume** 手动触发，输入 `X.Y.Z`、原 `source_run_id` 与 `writeback | publish | both`。恢复身份、证据来源及拒绝条件见下节；它不重建或重新签名镜像。已正式存在的 Release 不改写；默认分支两个文件均一致时回写早退，尚未落地的 bot 分支仍走原 PR/required checks，相同完整树复用原 head 保留检查；默认分支已有更高版本时拒绝旧版回写。 前置条件：仓库必须允许 GitHub Actions 创建 PR（Settings → Actions → General → “Allow GitHub Actions to create and approve pull requests”，API 为 `repos/<owner>/<repo>/actions/permissions/workflow` 的 `can_approve_pull_request_reviews=true`）。回写脚本在动任何分支之前先检查该开关，关闭时立即以 `WRITEBACK_PR_PERMISSION_MISSING` 单条可执行提示失败，而不是先等满一轮门禁再报 GraphQL 错误（v0.6.8 实测：22 分钟后才失败）。bot 分支由 workflow 独占且可丢弃，因此用 `--force-with-lease` 覆盖上一次尝试留下的同名分支，避免非快进推送把发布卡死。
 
 **一次人工批准是这条路径的固有成本（#887）**：由 `GITHUB_TOKEN` 创建的 PR 被 GitHub 当作外部贡献者，它的 workflow 运行不会自动开始，而是**等待维护者在 Actions 里批准**；等待期间 PR 的检查汇总为空，回写若按「检查未结论」继续轮询就会白等到预算耗尽（v0.6.10 实测：08:37 建 PR，gate 停在待批准约一小时，回写在 10:08 以 `WRITEBACK_CHECK_TIMEOUT` 失败）。现在回写会识别这种运行（`status=waiting` 或 `conclusion=action_required`）并**立即**以 `WRITEBACK_RUN_AWAITING_APPROVAL` 失败，消息里给出该 run 与 PR 编号、以及「在 Actions 里批准后重跑本次 release job」。
 
-这是选择「不放宽必需检查」的代价：没有给 bot 配 ruleset bypass、也没有用可写 PAT 跳过门禁，所以每次发版需要维护者点一次批准。批准后 PR 变为 `CLEAN`，回写会自动合并并创建 Release；若回写已因等待超时退出，重跑该 release job 即可（清单已落地时回写会因无差异而早退，直接进入创建 Release）。v0.6.6 因直推被拒（`Required status check "ci-summary" is expected`）而没产出 Release，v0.6.7 因“直推即使检查已通过仍被拒”而没产出 Release，本条据此把回写改为 PR 合并。
+这是选择「不放宽必需检查」的代价：没有给 bot 配 ruleset bypass、也没有用可写 PAT 跳过门禁，所以每次发版需要维护者点一次批准。批准后 PR 变为 `CLEAN`，回写会按原门禁合并；发布是独立阶段。若回写已退出，可用恢复入口选择 writeback，清单与部署示例均一致时早退。v0.6.6 因直推被拒（`Required status check "ci-summary" is expected`）而没产出 Release，v0.6.7 因“直推即使检查已通过仍被拒”而没产出 Release，本条据此把回写改为 PR 合并。
+
+## 恢复身份与原发布证据
+
+核对基线：2026-11-05。`release-resume.yml` 只接受 `main` 的手动 dispatch，checkout 本次 `github.sha`，读取原版本 `refs/tags/vX.Y.Z` 而不执行旧 tag 的恢复代码。恢复与正常发布共享 concurrency，`both` 分别在两个 runner 上运行且 `fail-fast: false`，writeback 失败或切换工作树不会阻塞/改变 publish。默认分支升级不改原冻结目标。
+
+`agent-harness/release-resume.mjs` 在每次副作用前通过认证 GitHub API 验证：同一官方仓库及 head repository、`release.yml` workflow ID/path、稳定版本 head branch、完成状态、原 commit 与本地/远端 peeled tag 一致，以及 `base-image`、`prepare-release`、`platform-signatures` 成功 job 和身份/冻结/签名步骤。归档只按该运行中唯一 artifact 的 ID 下载，校验 API 提供的 SHA-256、有效期、run/repository/head SHA 与 producer job 时间窗口，再按固定成员白名单读取；不会解压执行路径或信任 payload 自报哈希。
+
+完整归档验证后，才从受信任归档取得 freeze/receipt 哈希，复用 `checkPublication` 与 `checkSignatureReceipt` 校验所有冻结附件、目标 metadata、原正向签名验证和负向篡改证明以及固定 cosign/根摘要。恢复不修改 `GITHUB_*`、不调用 signing、不增加 OIDC/持久凭据或新信任根；原 `releaseIdentity` 正式 tag 门禁不变。发布 gate 使用调用方的 signature directory。远端 tag 在证据检查后再次核对，不移动 tag；平台管理员另行并发移动 tag 不在恢复允许行为内。
+
+限制：只接受原运行 attempt 1；GitHub artifact API 不提供可靠的跨重跑 attempt 绑定，所以多 attempt、缺失/过期/重复 artifact、无 API archive digest、错误工作流/仓库/版本/commit、缺失成功阶段、下载或 API 失败均 fail closed。不能从本地副本或自报 receipt 修补这些缺口。真实恢复须另行授权；合成测试不代表已恢复任何旧版本。v0.6.14 run `42037159429` 未产生完整冻结载荷，不能恢复。
+
+Release 查询仅明确的 API 404 可进入 create，401/403/网络错误不当作缺失；已有正式 Release 保留不动，draft/prerelease 冲突停止供对账。create 的未知结果不在同次执行自动重放，下一次恢复先查询现状。回写仍可能因 bot PR 等待批准或 required checks 失败而停止；不会绕过权限或检查。回归由 `ci:unit:runtime-registry` 的 Actions gate 执行，Draft 快检也显式运行恢复及原签名测试；覆盖合成冻结产物、假 API、受控发布命令与临时 Git 回写，不连接生产或真实模型。
 
 ## 控制面镜像平台矩阵（#598）
 
@@ -296,4 +308,4 @@ LLVM 14 对照 7/20 失败，匹配 LLVM 19 候选 20/20 通过，均保留原 f
 
 ## 正式版本签名发布门禁
 
-每轮版本来自新的、未使用的 `vX.Y.Z` tag，私有 package 版本不作为产品版本。正式 tag 必须指向已通过 CI 的 main；签名身份、目标 commit、CHANGELOG、schema 与最终平台镜像必须一致。`prepare-release` 的冻结产物经 `platform-signatures` 三张 GHCR index 签名及独立验证后，`release` 才能发布与回写。仅签名 job 新增 `id-token: write`，不创建持久凭据；信任根、签名 metadata 与默认关闭的宿主自动升级规则见 [签名运维](../deploy/UPGRADE_AUTOMATION.md)。生产正例以本版 Release 的公开回执和 workflow 为准；不能用测试密钥或 tag 存在代替。
+每轮版本来自新的、未使用的 `vX.Y.Z` tag，私有 package 版本不作为产品版本。正式 tag 必须指向已通过 CI 的 main；签名身份、目标 commit、CHANGELOG、schema 与最终平台镜像必须一致。`prepare-release` 的冻结产物经 `platform-signatures` 三张 GHCR index 签名及独立验证后，独立 `release-publish` / `release-writeback` 才能发布与回写。仅签名 job 新增 `id-token: write`，不创建持久凭据；信任根、签名 metadata 与默认关闭的宿主自动升级规则见 [签名运维](../deploy/UPGRADE_AUTOMATION.md)。生产正例以本版 Release 的公开回执和 workflow 为准；不能用测试密钥或 tag 存在代替。

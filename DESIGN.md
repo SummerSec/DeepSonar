@@ -421,3 +421,5 @@ RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-o
 ### #778 当前 Job 条件建议
 
 当前项目 Skill 可通过 `suggest_project_skills` 做精确版本的条件匹配，再用 `record_skill_choice` 保存选择声明回执；宿主重算、撤权复查与原 `pull_skill` 授权独立。作者条件和调用者目标不是独立效果证据，未测质量分母为 0，不自动启用或晋升 Pack。接口、非模型验收矩阵和范围见[Skill 建议专题](docs/SKILL_SUGGESTIONS.md)。
+
+发布恢复仅复用经 GitHub 原运行/成功阶段/artifact 归档摘要绑定的冻结载荷和原签名回执，默认分支恢复身份与原 tag 发布身份分离；不重建镜像、不移动 tag、不重新签名。两阶段独立恢复及拒绝条件见[发布专题](docs/RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)。

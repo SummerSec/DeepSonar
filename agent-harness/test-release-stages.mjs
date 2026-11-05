@@ -52,7 +52,7 @@ for (const key of ["version", "source_run_id", "stages"]) {
 assert.deepEqual(trigger.stages.options, ["both", "writeback", "publish"]);
 const resumeSteps = resume.jobs?.resume?.steps ?? [];
 assert.ok(
-  resumeSteps.some((step) => String(step.run ?? "").includes("gh run download")),
+  resumeSteps.some((step) => String(step.run ?? "").includes("release-resume.mjs")),
   "resume must reuse the original run's artifacts instead of rebuilding",
 );
 assert.ok(resumeSteps.some((step) => String(step.run ?? "").includes("release-writeback.sh")));

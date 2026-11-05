@@ -33,6 +33,20 @@ cp "$registry_file" "$tmp_registry"
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 git fetch origin "$DEFAULT_BRANCH"
+# Recovering an older release must not roll the bundled default back.
+node --input-type=module -e '
+  import {execFileSync} from "node:child_process";
+  const current = JSON.parse(execFileSync("git", ["show", `origin/${process.env.DEFAULT_BRANCH}:deploy/runtime-image-registry.json`], {encoding: "utf8"})).platform_version;
+  const parts = value => {
+    if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value ?? "")) throw Error("writeback_version_invalid");
+    return value.split(".").map(BigInt);
+  };
+  const a = parts(current), b = parts(process.env.VERSION);
+  for (let i = 0; i < 3; i++) {
+    if (a[i] > b[i]) throw Error("writeback_newer_default_branch");
+    if (a[i] < b[i]) break;
+  }
+'
 git show "origin/${DEFAULT_BRANCH}:$env_file" > "$tmp_env"
 node agent-harness/check-platform-release.mjs --write-env "$tmp_registry" "$tmp_env"
 
@@ -61,7 +75,22 @@ if git diff --cached --quiet -- "$registry_file" "$env_file"; then
   echo "默认分支上的 $registry_file 和 $env_file 已是 v${VERSION} 的发布内容，跳过回写"
   exit 0
 fi
-git commit -m "chore(release): sync runtime-image-registry.json and platform digests for v${VERSION}"
+# Preserve an identical pending PR head (and its checks) across retries.
+branch="bot/sync-runtime-registry-v${VERSION}"
+existing=false
+if git ls-remote --exit-code origin "refs/heads/$branch" >/dev/null; then
+  git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"
+  if [[ "$(git write-tree)" == "$(git rev-parse "refs/remotes/origin/$branch^{tree}")" ]]; then
+    git reset --soft "refs/remotes/origin/$branch"
+    existing=true
+  fi
+else
+  status=$?
+  [[ "$status" == 2 ]] || exit "$status"
+fi
+if [[ "$existing" != true ]]; then
+  git commit -m "chore(release): sync runtime-image-registry.json and platform digests for v${VERSION}"
+fi
 WRITEBACK_BRANCH="bot/sync-runtime-registry-v${VERSION}" WRITEBACK_SHA="$(git rev-parse HEAD)" \
   node agent-harness/release-writeback.mjs | tee /tmp/writeback.json
 echo "已将 $registry_file 和 $env_file 经 ci-summary 校验后回写到 origin/${DEFAULT_BRANCH}" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"

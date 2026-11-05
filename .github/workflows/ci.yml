@@ -1119,6 +1119,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Release recovery evidence regressions
+        run: node --test agent-harness/release-resume.test.mjs agent-harness/platform-signature-publication.test.mjs
+
       - name: Workspace typecheck
         run: pnpm -r typecheck
 
