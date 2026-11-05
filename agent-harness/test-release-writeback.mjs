@@ -95,6 +95,10 @@ await assert.rejects(
   await runWriteback({ ...base, env, run, sleep: quiet });
   const createIndex = calls.findIndex((call) => call.startsWith("gh pr create"));
   assert.ok(createIndex >= 0, "a pull request is opened");
+  const creation = calls[createIndex];
+  assert.ok(creation.includes("使用 SummerSec 账号"), "the generated body discloses the automation identity");
+  assert.ok(creation.includes("等待本 PR 的 `ci-summary`"), "new PRs report that checks are pending");
+  assert.ok(!creation.includes("已在该提交上通过"), "PR creation must not claim checks already passed");
   assert.ok(!calls.some((call) => call.startsWith("gh workflow run")),
     "no workflow_dispatch: its check-runs are not part of the PR rollup");
   const rollupIndex = calls.findIndex((call) => call.includes("statusCheckRollup"));
