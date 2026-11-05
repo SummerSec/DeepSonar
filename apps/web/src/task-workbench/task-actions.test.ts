@@ -50,7 +50,7 @@ test("actions classify conflict, human, repair, retry and unknown effect", () =>
   assert.match(rows[0]?.title ?? "", /冲突/);
   assert.ok(rows.some((row) => row.id === "finding:f2:needs_human"));
   assert.ok(rows.some((row) => row.recommended_action === "reply_to_agent"));
-  assert.ok(rows.some((row) => row.kind === "model_repair"));
+  assert.ok(rows.some((row) => row.kind === "platform_blocker"));
   assert.ok(rows.some((row) => row.kind === "transient_retry"));
   assert.ok(rows.some((row) => row.id === "report:stale"));
 
@@ -99,7 +99,7 @@ test("timeout or orphan without a proven effect ledger needs confirmation, not r
     jobs: [{ id: "t3", type: "explore", status: "timeout", replay_safe: true }],
   });
   assert.equal(proven[0]?.kind, "transient_retry");
-  assert.equal(proven[0]?.recommended_action, "retry_same_session");
+  assert.equal(proven[0]?.recommended_action, "inspect_recovery");
 });
 
 test("dashboard and job projectors keep unproven timeout in needs_confirmation", () => {
@@ -124,7 +124,7 @@ test("dashboard and job projectors keep unproven timeout in needs_confirmation",
     effects: [],
   });
   assert.equal(provenJob.repair?.category, "transient_retryable");
-  assert.equal(provenJob.actions[0]?.recommended_action, "retry_same_session");
+  assert.equal(provenJob.actions[0]?.recommended_action, "inspect_recovery");
 
   assert.equal(projectFindingActions({
     finding: { id: "f9", title: "旧失败", verify_status: "pending" },
@@ -155,4 +155,20 @@ test("sort and dedupe keep a single highest-priority action per evidence", () =>
   ]);
   assert.equal(deduped.length, 1);
   assert.equal(deduped[0]?.id, "x");
+});
+
+
+test("host current projection governs repair, human wait and recovery independently of historical errors", () => {
+  const project = (status: string, allowed_actions: string[], blocker: string | null, error = "schema mismatch") =>
+    projectTaskActions({ jobs: [{ id: "job", status, error,
+      execution_state: { authority: "scheduler", status, allowed_actions, blocker } }] })[0];
+  assert.equal(project("running", ["correct_proposal"], null)?.recommended_action, "correct_proposal");
+  assert.equal(project("waiting_human", ["reconcile_effects"], "effects_require_reconciliation")?.kind, "unknown_effect");
+  assert.equal(project("waiting_human", ["wait_for_human"], "human_already_accepted")?.recommended_action, "reply_to_agent");
+  assert.equal(project("failed", ["request_recovery"], "execution_inactive")?.recommended_action, "request_recovery");
+  assert.equal(project("failed", ["inspect_state"], "REPAIR_DEADLINE_EXHAUSTED")?.recommended_action, "inspect_recovery");
+  const ended = projectTaskActions({ jobs: [{ id: "ended", status: "failed", error: "invalid_payload" }] })[0];
+  assert.equal(ended?.kind, "platform_blocker");
+  assert.notEqual(ended?.recommended_action, "retry_same_session");
+  assert.equal(ended?.next_state, "failed");
 });

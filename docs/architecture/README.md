@@ -1,7 +1,7 @@
 # DeepSonar 系统架构设计
 
 > 状态：**as-built 与规范索引**。#871/#873/#874 在当前修复分支收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
-> 同步日期：2026-11-04
+> 同步日期：2026-11-05
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
 面向内部开发者和编码 Agent。先读 [DESIGN](../../DESIGN.md) 摘要，再按需求或主题定位；本目录不改变产品行为。需求组织参考 ISO/IEC/IEEE 29148，视图借鉴 arc42 / C4，关注点分离参考 ISO/IEC/IEEE 42010；这不是标准符合性认证。
@@ -24,7 +24,7 @@
 
 OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade record](../OPENSANDBOX_1_2_UPGRADE.md): explicit SDK `wakeRetryEnabled=false`, unchanged direct deployment and kernel recovery; local SDK unit verification is not pinned-server/live/native or final-SHA CI acceptance.
 
-#871/#873 的数据库事务重试、Canvas-first 锁序与跨 Attempt 共享卷边界见[运行时](06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)及[资产专题](../SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。#874 的持久宿主恢复、去重 Hub 和严格对账/停止决策见 [FR-CTRL-010](01-system-specification.md#fr-ctrl-010-完成未知效果的受治理恢复)、[ADR 0015](adr/0015-governed-completion-recovery.md)及[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。当前修复分支已接回归入口，最终 SHA Actions 尚待验收；退出会话/新 Attempt 的完整继续执行仍未交付。
+#871/#873 的数据库事务重试、Canvas-first 锁序与跨 Attempt 共享卷边界见[运行时](06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)及[资产专题](../SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。#874 的持久宿主恢复、去重 Hub 和严格对账/停止决策见 [FR-CTRL-010](01-system-specification.md#fr-ctrl-010-完成未知效果的受治理恢复)、[ADR 0015](adr/0015-governed-completion-recovery.md)及[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。当前修复分支已接回归入口，最终 SHA Actions 尚待验收；显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](../AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录。
 
 ## 1. 阅读路径与目录
 

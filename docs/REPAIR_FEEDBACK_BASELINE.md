@@ -17,7 +17,7 @@
 | mark_job_done / verify 缺 verdict 或 rework 缺 missing_evidence | model_correctable | executor-real 在 recordFirstSemanticDone 前拒绝 | invalid_done/path；无结构化缺项或 accepted_effects | 补字段用新 key；完成门上下文待 B/C |
 | emit_progress / event_rate_limited | transient_retryable | 事务写入前限流 | retry_after_sec 与桶额度 | 安全原操作等待后旧 key；现有 repair-feedback.test.ts 覆盖 |
 | mark_job_done / tool_not_allowed、job_not_running | permanent_failure | 不能推定历史效果为空 | host rejection 有 envelope；HTTP auth/allowlist 仍可能只有 error_code | 停止，取消/租约/终态优先，不扩权 |
-| mark_job_done / HANDLER_FAILED | transient_retryable（现状缺陷风险） | 未知：异常不能证明无效果 | 泛化失败、旧 key 重试建议 | 必须先对账；本基线不认可一律自动重试安全 |
+| mark_job_done / HANDLER_FAILED | unknown_external_effect（#903 修复） | 未知：异常不能证明无效果 | 停止自动重试，查询回执与当前状态 | 必须先对账；未找到回执不证明无效果 |
 | 任意操作 / effect_pending、unknown、replay_policy=never | unknown_external_effect（规范） | job_attempt_effects | 独立效果账本，不等于 Control receipt | 停止重放，reconcile/orphan/人工处理；不制造 accepted_effects |
 | 已接受提交 / 响应丢失、同 key 改内容 | 进程内缓存命中/409 conflict | routes 的 Map；事件另有 durable gate | 原结果或 IDEMPOTENCY_KEY_CONFLICT | 同提交旧 key；进程重启丢缓存，不能声称持久 receipt 已闭环 |
 

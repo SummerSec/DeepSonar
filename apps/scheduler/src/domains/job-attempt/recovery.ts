@@ -220,12 +220,32 @@ export async function pendingCompletionRecoveryClaimTarget(db: typeof sql, candi
   }
 }
 
+/** Both effectful decisions and cooperative exit require the immutable directed wake. */
+async function assertRecoveryWake(db: typeof sql, hub: Job, grant: CompletionRecoveryGrant, state: CompletionRecoveryState) {
+  const [root] = await db`SELECT e.event_id FROM events e JOIN event_dedup d ON d.event_id=e.event_id AND d.job_id=e.job_id
+    WHERE e.job_id=${grant.target_job_id} AND e.attempt_id=${grant.target_attempt_id} AND e.event_id=${grant.recovery_ref}
+      AND e.type='control_receipt' AND e.payload_json->>'authority'='scheduler' AND e.payload_json->>'subtype'=${subtype}
+      AND e.payload_json->>'kind'='state' AND e.payload_json->>'project_id'=${grant.project_id}
+      AND e.payload_json->>'canvas_id'=${grant.canvas_id} AND e.payload_json->>'snapshot_sha256'=${grant.snapshot_sha256}`;
+  const [wake] = await db`SELECT e.event_id FROM events e JOIN event_dedup d ON d.event_id=e.event_id AND d.job_id=e.job_id
+    WHERE e.job_id=${grant.target_job_id} AND e.attempt_id=${grant.target_attempt_id} AND e.type='control_receipt'
+    AND e.event_id=${completionRecoveryIdentity(grant.target_job_id, grant.target_attempt_id, `wake:${grant.evidence_sha256}`)}
+    AND e.payload_json->>'authority'='scheduler' AND e.payload_json->>'subtype'=${subtype} AND e.payload_json->>'kind'='wake'
+    AND e.payload_json->>'recovery_ref'=${grant.recovery_ref} AND e.payload_json->>'hub_job_id'=${String(hub.id)}
+    AND e.payload_json->>'project_id'=${grant.project_id} AND e.payload_json->>'canvas_id'=${grant.canvas_id}
+    AND e.payload_json->>'snapshot_sha256'=${grant.snapshot_sha256}
+    AND e.payload_json->>'target_job_id'=${grant.target_job_id} AND e.payload_json->>'target_attempt_id'=${grant.target_attempt_id}
+    AND e.payload_json->>'evidence_sha256'=${grant.evidence_sha256} AND e.payload_json->>'recovery_revision'=${String(grant.recovery_revision)}`;
+  if (!root || !wake || state.wakes_used < 1 || state.wakes_used > state.wake_limit) throw new ControlInputError("recovery_not_authorized", "Recovery root/wake is missing or its frozen budget is exhausted", "recovery");
+}
+
 /** Read-only preflight or locked final validation; the caller must lock Canvas first when final=true. */
 export async function validateCompletionRecoveryDecision(db: typeof sql, hub: Job, raw: unknown,
   options: { final?: boolean; lockTarget?: boolean; tokenId?: string; eventId?: string; pendingClaim?: boolean } = {}) {
   const decision = CompletionRecoveryDecision.parse(raw);
   const locked = options.final || options.lockTarget;
   const grant = recoveryGrantForHub(hub, decision);
+  const release = decision.action === "release_stale";
   let tokenId = options.tokenId;
   if (options.final) {
     const [receipt] = await db`SELECT payload_json FROM events WHERE job_id=${String(hub.id)} AND type='control_receipt'
@@ -248,7 +268,7 @@ export async function validateCompletionRecoveryDecision(db: typeof sql, hub: Jo
     if (!token) throw new ControlInputError("recovery_not_authorized", "Current capability no longer grants this recovery operation", "recovery");
   } else if (options.final) throw new ControlInputError("recovery_not_authorized", "Recovery receipt has no capability binding", "recovery");
   const [canvas] = await db`SELECT status,target_json,target_json->'convergence' AS convergence_json FROM canvases WHERE id=${grant.canvas_id} AND project_id=${grant.project_id}`;
-  if (!canvas || canvas.status === "archived" || canvasExecutionIsPaused(canvas.target_json) || canvas.convergence_json?.hub_paused || canvas.convergence_json?.auto_stopped) {
+  if (!canvas || (!release && (canvas.status === "archived" || canvasExecutionIsPaused(canvas.target_json) || canvas.convergence_json?.hub_paused || canvas.convergence_json?.auto_stopped))) {
     throw new ControlInputError("recovery_paused", "Recovery cannot bypass Canvas pause or auto-stop", "recovery");
   }
   const targets = locked
@@ -256,7 +276,7 @@ export async function validateCompletionRecoveryDecision(db: typeof sql, hub: Jo
     : await db`SELECT * FROM jobs WHERE id=${grant.target_job_id}`;
   const target = targets[0];
   if (!target || target.project_id !== grant.project_id || target.canvas_id !== grant.canvas_id
-    || controlInputDigest(target.agent_snapshot_json) !== grant.snapshot_sha256) {
+    || (!release && controlInputDigest(target.agent_snapshot_json) !== grant.snapshot_sha256)) {
     throw new ControlInputError("recovery_not_authorized", "Recovery target scope or frozen snapshot changed", "recovery");
   }
   const attempts = locked
@@ -267,8 +287,26 @@ export async function validateCompletionRecoveryDecision(db: typeof sql, hub: Jo
   if (state && (state.project_id !== grant.project_id || state.canvas_id !== grant.canvas_id || state.snapshot_sha256 !== grant.snapshot_sha256)) {
     throw new ControlInputError("recovery_not_authorized", "Durable recovery scope does not match the directed grant", "recovery");
   }
+  if (release) {
+    // A no-effect withdrawal only closes this Hub's work. It does not inherit the
+    // new projection/grant, settle unknowns, stop the target or grant another wake.
+    if (!state || options.pendingClaim) throw new ControlInputError("recovery_not_authorized", "Stale release requires an existing directed recovery execution", "recovery");
+    await assertRecoveryWake(db, hub, grant, state);
+    const [liveHub] = await db`SELECT id FROM jobs j WHERE j.id=${String(hub.id)} AND j.status='running'
+      AND j.lease_expires_at>clock_timestamp() AND j.started_at+j.timeout_sec*interval '1 second'>clock_timestamp()
+      AND EXISTS (SELECT 1 FROM job_attempts a WHERE a.job_id=j.id AND a.status='active' AND NOT a.cancel_requested)`;
+    if (!liveHub) throw new ControlInputError("recovery_inactive", "Stale release requires this Hub's active Attempt, lease and deadline", "recovery");
+    const evidence = await readCompletionRecoveryEvidence(db, target, grant.target_attempt_id);
+    const stale = state.recovery_revision !== grant.recovery_revision || state.evidence_sha256 !== grant.evidence_sha256
+      || evidence.sha256 !== grant.evidence_sha256 || state.status !== "needed"
+      || attempt?.status !== "active" || attempt.cancel_requested || !["running", "waiting_human"].includes(String(target.status))
+      || controlInputDigest(target.agent_snapshot_json) !== grant.snapshot_sha256 || Date.parse(state.deadline) <= Date.now()
+      || !target.lease_expires_at || new Date(target.lease_expires_at as string).getTime() <= Date.now();
+    if (!stale) throw new ControlInputError("recovery_inactive", "The frozen grant is still current; use its authorized recovery action", "recovery");
+    return { decision, grant, target, attempt, state, evidence };
+  }
   if (!state || state.recovery_revision !== decision.expected_recovery_revision || state.evidence_sha256 !== decision.expected_evidence_sha256) {
-    throw new ControlInputError("recovery_stale", "Recovery revision or evidence changed; read the current projection", "recovery");
+    throw new ControlInputError("recovery_stale", "Recovery revision or evidence changed; submit release_stale with this Hub’s ORIGINAL frozen grant, then exit; only Scheduler may authorize a replacement", "recovery");
   }
   if (state.status !== "needed" || !attempt || attempt.status !== "active" || attempt.cancel_requested
     || !["running", "waiting_human"].includes(String(target.status)) || Date.parse(state.deadline) <= Date.now()) {
@@ -287,21 +325,7 @@ export async function validateCompletionRecoveryDecision(db: typeof sql, hub: Jo
   if (repairBudget && repairBudget.attempt_id !== grant.target_attempt_id) {
     throw new ControlInputError("recovery_inactive", "Another Attempt cannot take over the frozen repair budget", "recovery");
   }
-  const [root] = await db`SELECT e.event_id FROM events e JOIN event_dedup d ON d.event_id=e.event_id AND d.job_id=e.job_id
-    WHERE e.job_id=${grant.target_job_id} AND e.attempt_id=${grant.target_attempt_id} AND e.event_id=${grant.recovery_ref}
-      AND e.type='control_receipt' AND e.payload_json->>'authority'='scheduler' AND e.payload_json->>'subtype'=${subtype}
-      AND e.payload_json->>'kind'='state' AND e.payload_json->>'project_id'=${grant.project_id}
-      AND e.payload_json->>'canvas_id'=${grant.canvas_id} AND e.payload_json->>'snapshot_sha256'=${grant.snapshot_sha256}`;
-  const [wake] = await db`SELECT e.event_id FROM events e JOIN event_dedup d ON d.event_id=e.event_id AND d.job_id=e.job_id
-    WHERE e.job_id=${grant.target_job_id} AND e.attempt_id=${grant.target_attempt_id} AND e.type='control_receipt'
-    AND e.event_id=${completionRecoveryIdentity(grant.target_job_id, grant.target_attempt_id, `wake:${grant.evidence_sha256}`)}
-    AND e.payload_json->>'authority'='scheduler' AND e.payload_json->>'subtype'=${subtype} AND e.payload_json->>'kind'='wake'
-    AND e.payload_json->>'recovery_ref'=${grant.recovery_ref} AND e.payload_json->>'hub_job_id'=${String(hub.id)}
-    AND e.payload_json->>'project_id'=${grant.project_id} AND e.payload_json->>'canvas_id'=${grant.canvas_id}
-    AND e.payload_json->>'snapshot_sha256'=${grant.snapshot_sha256}
-    AND e.payload_json->>'target_job_id'=${grant.target_job_id} AND e.payload_json->>'target_attempt_id'=${grant.target_attempt_id}
-    AND e.payload_json->>'evidence_sha256'=${grant.evidence_sha256} AND e.payload_json->>'recovery_revision'=${String(grant.recovery_revision)}`;
-  if (!root || !wake || state.wakes_used < 1 || state.wakes_used > state.wake_limit) throw new ControlInputError("recovery_not_authorized", "Recovery root/wake is missing or its frozen budget is exhausted", "recovery");
+  await assertRecoveryWake(db, hub, grant, state);
   const pendingClaim = options.pendingClaim === true && !options.final && !options.lockTarget && !options.tokenId;
   const [hubGate] = await db`SELECT id FROM jobs j WHERE j.id=${String(hub.id)}
     AND ((${pendingClaim} AND j.status='pending' AND NOT EXISTS (SELECT 1 FROM job_attempts a WHERE a.job_id=j.id AND a.status='active'))
@@ -321,7 +345,7 @@ export async function validateCompletionRecoveryDecision(db: typeof sql, hub: Jo
     throw new ControlInputError("recovery_inactive", "Recovery does not bypass this Hub, unrelated active Jobs/effects or Verify waits", "recovery");
   }
   const evidence = await readCompletionRecoveryEvidence(db, target, grant.target_attempt_id);
-  if (evidence.sha256 !== state.evidence_sha256) throw new ControlInputError("recovery_stale", "Live evidence changed after the durable recovery observation", "recovery");
+  if (evidence.sha256 !== state.evidence_sha256) throw new ControlInputError("recovery_stale", "Live evidence changed; submit release_stale with this Hub’s ORIGINAL frozen grant, then exit; reading a new projection does not grant authority", "recovery");
   return { decision, grant, target, attempt, state, evidence };
 }
 
@@ -342,6 +366,7 @@ export function recoveryUsageIsKnown(row: { effect_kind: string; status: string;
 export async function applyCompletionRecoveryDecision(db: typeof sql, hub: Job, raw: unknown, eventId: string) {
   const checked = await validateCompletionRecoveryDecision(db, hub, raw, { final: true, eventId });
   const { decision, target, state } = checked;
+  if (decision.action === "release_stale") return state; // Immutable semantic receipt; normal Hub settlement releases ownership.
   if (decision.action === "stop") {
     const requested = await appendState(db, target, { ...state, status: "stop_requested", code: "platform_recovery_stop", stop_reason: "platform_recovery_stop" });
     await projectCompletionRecoveryToCanvas(db, requested);
@@ -492,16 +517,18 @@ export async function pumpCompletionRecoveries(input: {
         const [attempt] = await tx`SELECT * FROM job_attempts WHERE job_id=${candidate.job_id} AND id=${candidate.attempt_id} FOR UPDATE`;
         let state = await readCompletionRecovery(tx, String(candidate.job_id), String(candidate.attempt_id));
         if (!job || !state) return {};
-        if (job.canvas_id !== candidate.canvas_id || state.canvas_id !== job.canvas_id || state.project_id !== job.project_id
-          || state.snapshot_sha256 !== controlInputDigest(job.agent_snapshot_json)) throw new Error("recovery binding changed");
+        if (job.canvas_id !== candidate.canvas_id || state.canvas_id !== job.canvas_id || state.project_id !== job.project_id) throw new Error("recovery binding changed");
         if (state.status === "closed" || !["claimed", "provisioning", "running", "waiting_human"].includes(String(job.status))
           || !attempt || attempt.status !== "active" || attempt.cancel_requested) {
           const [pendingHub] = await tx`SELECT id FROM jobs WHERE canvas_id=${String(job.canvas_id)} AND id<>${state.target_job_id}
             AND type='hub_reason' AND status='pending' LIMIT 1`;
           if (pendingHub) await retireStalePendingRecoveryHub(tx, state, String(pendingHub.id), true);
           if (state.status !== "closed") state = await appendState(tx, job, { ...state, status: "closed", code: "RECOVERY_ORIGINAL_EXECUTION_CLOSED" });
-          await projectCompletionRecoveryToCanvas(tx, state); return {};
+          const [latest] = await tx`SELECT id FROM job_attempts WHERE job_id=${state.target_job_id} ORDER BY attempt_no DESC LIMIT 1`;
+          if (latest?.id === state.target_attempt_id) await projectCompletionRecoveryToCanvas(tx, state);
+          return {};
         }
+        if (state.snapshot_sha256 !== controlInputDigest(job.agent_snapshot_json)) throw new Error("recovery snapshot binding changed");
         if (!["stop_requested", "completion_accepted"].includes(state.status)) {
           const evidence = await readCompletionRecoveryEvidence(tx, job, String(candidate.attempt_id));
           state = await recordCompletionRecovery(tx, job, String(candidate.attempt_id), state.receipt_ref, state.code, evidence);

@@ -1,3 +1,4 @@
+import { registerRuntimeTerminalState } from "./domains/platform-api/registry.js";
 import { taskContractPrompt } from "./task-contract-preflight.js";
 import { prepareCompletionPayload } from "./completion-payload.js";
 import { normalizeArchivedReaFact } from "./domains/cli-capability/rea-cli-fact.js";
@@ -304,14 +305,10 @@ export function assertSemanticTerminalExclusivity(
   state: { done: unknown; hub: unknown; human: unknown },
   eventType: "done" | "hub_decision" | "human",
 ): void {
-  if (eventType === "human") {
-    if (state.human) throw toolBoundaryError("duplicateToolCall", "request_human 每个 Job 只能调用一次");
-    if (state.done || state.hub) throw toolBoundaryError("duplicateToolCall", "request_human 不得与 mark_job_done 或 submit_hub_decision 同时调用");
-    return;
-  }
-  if (state.human) {
-    const conflictingTool = eventType === "done" ? "mark_job_done" : "submit_hub_decision";
-    throw toolBoundaryError("duplicateToolCall", `${conflictingTool} 不得与 request_human 同时调用`);
+  const accepted = state.human ? "human" : state.done ? "done" : state.hub ? "hub_decision" : null;
+  if ((eventType === "human" && accepted) || (eventType !== "human" && accepted === "human")) {
+    throw new ControlInputError("duplicate_tool_call", `已接受 ${accepted}；不能提交相冲突的终态。`, undefined,
+      { accepted_terminal: accepted });
   }
 }
 
@@ -1713,7 +1710,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
           {
             statusCode: error.retryable ? 422 : 409,
             errorCode: error.code,
-            retryable: error.retryable,
+            retryable: error.details?.accepted_terminal ? false : error.retryable,
+            ...(error.details?.accepted_terminal ? { category: "permanent_failure" as const,
+              next_action: "终态提案已接受；停止提交冲突终态，等待原提案结算并读取当前状态。" } : {}),
             ...(error.path ? { path: error.path } : {}),
             ...(error.details ? { details: error.details } : {}),
           },
@@ -1814,6 +1813,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         readSandboxWorkspaceFileForRuntime = readWorkspaceFile;
         if (platformApiEnabled) {
           registerRuntimeHandler(jobId, runtimePlatformHandler, platformOperations);
+          registerRuntimeTerminalState(jobId, attemptId!, () => semanticState.human ? "human"
+            : semanticState.done ? "done" : semanticState.hub ? "hub_decision" : null);
           platformRuntimeRegistered = true;
         }
         const disposeHumanMessages = await registerHumanMessageRuntime(jobId, { sendMessage, writeWorkspaceFile });

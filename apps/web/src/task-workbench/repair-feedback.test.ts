@@ -34,17 +34,21 @@ test("unknown external effects are confirmation, never ordinary retry", () => {
   assert.equal(classifyRepairCategory({ status: "failed", error: "sandbox exited", hasUnknownEffects: true }), "unknown_external_effect");
 });
 
-test("timeout and snapshot errors map to retryable vs model-correctable", () => {
+test("historical error strings never grant current correction authority", () => {
   assert.equal(classifyRepairCategory({ status: "timeout" }), "unknown_external_effect");
   assert.equal(classifyRepairCategory({ status: "orphan" }), "unknown_external_effect");
   assert.equal(classifyRepairCategory({ status: "timeout", hasEffectLedger: true }), "transient_retryable");
   assert.equal(classifyRepairCategory({ status: "orphan", hasEffectLedger: true }), "transient_retryable");
-  assert.equal(classifyRepairCategory({ status: "failed", error: "SNAPSHOT_STALE: pin drifted" }), "model_correctable");
-  assert.equal(classifyRepairCategory({ status: "failed", error: "invalid_payload: intents[0].from" }), "model_correctable");
+  assert.equal(classifyRepairCategory({ status: "failed", error: "SNAPSHOT_STALE: pin drifted" }), "permanent_failure");
+  assert.equal(classifyRepairCategory({ status: "failed", error: "invalid_payload: intents[0].from" }), "permanent_failure");
   const payload = projectRepairFeedback({ status: "failed", error: "invalid_payload: intents[0].from 必须是 UUID" });
   assert.equal(payload.field_path, "intents[0].from");
-  assert.equal(payload.category, "model_correctable");
-  assert.ok(payload.expected);
+  assert.equal(payload.category, "permanent_failure");
+  const current = projectRepairFeedback({ status: "running", error: "invalid_payload: intents[0].from",
+    currentState: { authority: "scheduler", status: "running", allowed_actions: ["correct_proposal"], blocker: null } });
+  assert.equal(current.category, "model_correctable");
+  assert.ok(current.expected);
+  assert.equal(repairAllowsUnconditionalRetry(current), false);
 });
 
 test("generic failures stay permanent and do not offer unconditional retry", () => {

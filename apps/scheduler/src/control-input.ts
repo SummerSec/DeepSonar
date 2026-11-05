@@ -75,6 +75,7 @@ function inputShape(value: unknown): string {
 const AGENT_CORRECTABLE_CONTROL_CODES: ReadonlySet<ControlInputErrorCode> = new Set([
   CONTROL_INPUT_ERROR_CODES.invalidPayload,
   CONTROL_INPUT_ERROR_CODES.planStale,
+  CONTROL_INPUT_ERROR_CODES.recoveryStale,
   CONTROL_INPUT_ERROR_CODES.planContext,
   CONTROL_INPUT_ERROR_CODES.planBudget,
   CONTROL_INPUT_ERROR_CODES.planUnproven,

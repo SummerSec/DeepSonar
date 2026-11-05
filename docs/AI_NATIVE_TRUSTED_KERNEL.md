@@ -22,7 +22,7 @@ DeepSonar 的长期方向是：
 
 本次集成已接通可信只读目标授权（[ADR 0011](architecture/adr/0011-trusted-target-authorization.md)）、通过既有 Hub Intent 执行的 Plan v2（[ADR 0012](architecture/adr/0012-plan-v2-execution.md)）及操作员见证身份关系工程（[ADR 0014](architecture/adr/0014-operator-finding-identity.md)）。这些局部实现不表示本文全部长期协议已交付。#819 仍缺真实人工标签、家族/资产隔离的调参与留出集及预冻结阈值，强关系建议不发布，质量保持 unknown / not_evaluated；#822 仍是 operator attestation，不认证外部官方真实性；操作员准入不认证外部官方来源。
 
-#874 在现有回执/效果账本上增加[受治理完成恢复 v1](REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)：持久负回执与宿主恢复事实、去重 Hub，以及严格 `reconcile_effects` / `stop` 提案。恢复引用来自 Scheduler 冻结授权，精确 usage 才能纯数据库结算；原回执不改写，未知不 replay，原 deadline/预算及暂停、人工、Verify 门不绕过。该局部修复仍待最终 SHA Actions，退出会话/新 Attempt 的完整继续执行未交付，不表示长期 Proposal/Receipt/Settlement 已统一。取舍见 [ADR 0015](architecture/adr/0015-governed-completion-recovery.md)。
+#874 在现有回执/效果账本上增加[受治理完成恢复 v1](REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)：持久负回执与宿主恢复事实、去重 Hub，以及严格 `reconcile_effects` / `stop` 提案。恢复引用来自 Scheduler 冻结授权，精确 usage 才能纯数据库结算；原回执不改写，未知不 replay，原 deadline/预算及暂停、人工、Verify 门不绕过。该局部修复仍待最终 SHA Actions，显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录，不表示长期 Proposal/Receipt/Settlement 已统一。取舍见 [ADR 0015](architecture/adr/0015-governed-completion-recovery.md)。
 
 ## 2. 内核与插件的职责边界
 

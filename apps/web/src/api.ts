@@ -438,6 +438,7 @@ export interface FactSummary {
     verify_status: string;
   } | null;
   job: {
+    execution_state?: JobExecutionState | null;
     id: string;
     type: string;
     status: string;
@@ -607,8 +608,17 @@ export interface JobUsageSummary {
   observed_at: string;
 }
 
+export interface JobExecutionState {
+  authority: "scheduler";
+  status: string;
+  allowed_actions: string[];
+  blocker: string | null;
+  accepted_terminal?: string | null;
+}
+
 export interface JobDetail {
   job: {
+    execution_state?: JobExecutionState | null;
     id: string;
     type: string;
     status: string;

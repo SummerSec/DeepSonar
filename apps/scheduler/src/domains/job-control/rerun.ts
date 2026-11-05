@@ -1,3 +1,5 @@
+import { readRepairRequeueAdmission } from "./repair-admission.js";
+import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
 import { normalizeTaskContract, normalizeTaskGoalReviewRequest } from "@deepsonar/shared-types";
 import { taskContractDigest } from "../../task-outcome-snapshot.js";
 import { freezeGoalReviewAssignment, goalReviewDigest } from "../../task-goal-review-source.js";
@@ -400,6 +402,16 @@ export async function requeueJob(
           provenance,
         };
       }
+    }
+
+    // Fence effect intent writers before inspecting the old ledger. An idle DB
+    // observation alone cannot prove that a concurrent old runner stayed idle.
+    await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no FOR UPDATE`;
+    const repairAdmission = await readRepairRequeueAdmission(tx, jobId);
+    if (repairAdmission.blocker) return { kind: "not_resumable" as const, status, provenance,
+      reason: repairAdmission.blocker.reason, error_code: repairAdmission.blocker.code };
+    if (repairAdmission.budget && repairAdmission.deadline) {
+      await admitRepairGeneration(tx, jobId, repairAdmission.budget.receipt_ref, repairAdmission.deadline, mode);
     }
 
     // waiting_human may still own the previous active Attempt. Close it as an

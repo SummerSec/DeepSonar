@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-11-03
+> 同步日期：2026-11-05
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
@@ -219,3 +219,5 @@ FR-FIND-008 复用 `audit_logs` 保存程序材料准入、替代、撤销及操
 当前 `submit_plan`/`submit_plan_result` 严格接收 v2，路线 CAS 绑定 objective/owner/revision/Plan SHA。owner 的 `payload_json.plan_protocol`、plan 语义事件、接纳 receipt、普通 Intent/Job 与 `payload_json.plan_context` 共同记录关联；不新增 Plan 执行表或第二队列。前驱输出来自事件/Artifact 的相同 `plan.output` 扩展、成功且当前的 Attempt 与实际留存 Evidence，并覆盖期望输出；关联不证明语义满足。
 
 `stop_reason=complete` / objective `completed` 只表达工程路线输出条件；Hub/Report 的任务完成还须当前操作员正向判据。v1 目标契约只读历史；普通 HubIntent 走原 handler，不制造新的 v1 `plan_protocol`。`applyHubPlanAdapter`、`persistPlanAudit`、副作用 writer 与 pure legacy `adapt*` helper/type/export 已物理删除；不可变 v1 与 `hub_intent_adapter` 历史审计仍可解析，不能作为新执行输入。代码见 [objective](../../apps/scheduler/src/domains/plan-protocol/objective.ts)、[执行](../../apps/scheduler/src/domains/plan-protocol/execution.ts)、[输出](../../apps/scheduler/src/domains/plan-protocol/execution-output.ts)与 [ADR 0012](adr/0012-plan-v2-execution.md)。
+
+#903 的 Scheduler `repair_generation` 复用 events/event_dedup，保存旧链 superseded 与唯一下一 attempt_no；旧 receipt 不更新，费用仍引用原根，见 [ADR 0016](adr/0016-repair-execution-generations.md)。

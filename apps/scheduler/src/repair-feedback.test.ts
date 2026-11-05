@@ -169,7 +169,7 @@ test("graph_query budget exhaustion is model_correctable RepairFeedback", () => 
   assert.equal(body.details?.bytes_left, 12);
 });
 
-test("handler unavailable and failed use the same transient RepairFeedback contract", () => {
+test("handler unavailable is safely retryable but failures after invocation require reconciliation", () => {
   const key = "00000000-0000-4000-8000-000000000024";
   const unavailable = controlPlatformFailure({
     operation: "emit_finding",
@@ -185,16 +185,16 @@ test("handler unavailable and failed use the same transient RepairFeedback contr
   });
   for (const body of [unavailable, failed]) {
     assert.equal(body.accepted, false);
-    assert.equal(body.retryable, true);
-    assert.equal(body.repair.category, "transient_retryable");
+    assert.equal(body.retryable, body === unavailable);
+    assert.equal(body.repair.category, body === unavailable ? "transient_retryable" : "unknown_external_effect");
     assert.equal(body.repair.operation, "emit_finding");
     assert.equal(body.repair.idempotency_key, key);
-    assert.match(body.repair.next_action ?? "", /同一 Idempotency-Key/);
+    assert.match(body.repair.next_action ?? "", body === unavailable ? /同一 Idempotency-Key/ : /不得自动重试/);
   }
   assert.equal(unavailable.error_code, "HANDLER_UNAVAILABLE");
   assert.equal(failed.error_code, "HANDLER_FAILED");
   assert.equal(repairCategoryForControlFailure({ code: "HANDLER_UNAVAILABLE", statusCode: 503 }), "transient_retryable");
-  assert.equal(repairCategoryForControlFailure({ code: "HANDLER_FAILED", statusCode: 500 }), "transient_retryable");
+  assert.equal(repairCategoryForControlFailure({ code: "HANDLER_FAILED", statusCode: 500 }), "unknown_external_effect");
 });
 
 test("handler details containing error_code cannot overwrite the RepairFeedback envelope", () => {

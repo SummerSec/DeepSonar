@@ -103,3 +103,5 @@ ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」
 ```
 
 #770 A 的独立评审提议见 [0009 Finding 来源身份](0009-finding-source-identity.md)。
+
+- [0016：Scheduler 修复执行代际与 stale Hub 退出](0016-repair-execution-generations.md)（扩展 0015 的 v1 继续执行边界）。

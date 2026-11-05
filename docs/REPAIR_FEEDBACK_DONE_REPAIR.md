@@ -89,7 +89,7 @@ recovery: {
   target_attempt_id: UUID;
   expected_recovery_revision: number;
   expected_evidence_sha256: string;
-  action: "reconcile_effects" | "stop";
+  action: "reconcile_effects" | "stop" | "release_stale";
   reason: string; // 受限原因，不是证据
 }
 ```
@@ -102,7 +102,7 @@ Reaper 沿用原 timer/in-flight guard，每 tick 做有界 keyset 扫描，按�
 
 其他活动 Hub、真实 waiting_human/Verify 等待、手工 pause 和已有 auto-stop 门必须保留。若恢复目标本身是仍运行的 Hub，不派并行恢复 Hub；原目标保持阻塞，达到冻结的原 deadline 后才由既有生命周期有界停止，不能让它永久挡住自己的期限收口。无精确证据的恢复明确留 blocked/unknown；达到原 deadline/额度或合法 `stop` 请求时，以 Canvas → Job → Attempt 事务调用既有 lifecycle，收口原 Attempt/effects 并原子撤销模型/Control token；runner/卷清理随后在事务外执行并重新 fencing。失败的终态 CAS 不吞请求；停止不表示未知外部效果已消失。
 
-仅仍活动的原 Attempt 可以在允许对账后用新 revision/key 重提完成，继续过原 Completion、Verify、Plan、人工及权限门。旧接受/拒绝回执不可改写，不复活 failed/cancelled/timeout/orphan，不自动 succeeded。已退出会话或新 Attempt 的完整继续执行仍是 v1 明确缺口，不能用“零 unknown”或回执查询伪称恢复运行器。
+仅仍活动的原 Attempt 可以在允许对账后用新 revision/key 重提完成，继续过原 Completion、Verify、Plan、人工及权限门。旧接受/拒绝回执不可改写，不复活 failed/cancelled/timeout/orphan，不自动 succeeded。v1 不提供新执行；#903 由 [ADR 0016](architecture/adr/0016-repair-execution-generations.md)扩展为显式恢复准入的新执行代际，详情及当前审计矩阵见 [生命周期契约](AGENT_REPAIR_LIFECYCLE.md)。这不是恢复原运行器或重放未知效果。
 
 工程入口为 `pnpm ci:unit:completion-recovery`、`pnpm ci:integration:completion-recovery` 及既有 `pnpm ci:integration:platform-api`。实现、回归源码和最终 SHA 实际 Actions 结果分别登记；本轮未在本地运行测试/build/typecheck，真实模型恢复率、成本收益和生产执行未测。
 
@@ -115,3 +115,5 @@ Reaper 沿用原 timer/in-flight guard，每 tick 做有界 keyset 扫描，按�
 代码：[回执事务](../apps/scheduler/src/domains/event-ingestion/completion-receipt.ts)、[Control 组装](../apps/scheduler/src/domains/platform-api/completion.ts)、[路由](../apps/scheduler/src/domains/platform-api/routes.ts)、[平台控制 Skill](../apps/scheduler/src/platform-control-skill.ts)。
 
 三CLI的活动会话内离线协议验证见 [CLI 矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)；真实模型及跨进程完成恢复仍未验收。
+
+`release_stale` 仅允许已启动的 directed Hub 按原冻结 grant 安全退出；不对账、不扩大权限，原 Hub 正常结算后才可治理唤醒替代者。新投影不替换旧 grant。

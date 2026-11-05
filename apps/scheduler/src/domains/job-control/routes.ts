@@ -1,3 +1,4 @@
+import { readCompletionExecutionState } from "../platform-api/completion-state.js";
 import { TaskGoalReviewRequest, normalizeTaskContract } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -503,6 +504,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         : [];
     const safeJob = {
       ...job,
+      execution_state: await readCompletionExecutionState(sql, id),
       error: projectCredentialProviderError(job.error),
       payload_json: projectJobPayload(job.payload_json),
       plan_gaps: projectPlanGaps(String(job.id), job.payload_json),

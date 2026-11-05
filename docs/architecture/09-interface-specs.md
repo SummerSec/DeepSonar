@@ -72,7 +72,7 @@ Control operation 分为两类：能力发现、graph 查询和 Skill 拉取返�
 
 `submit_hub_decision` 在既有 complete/intents/payload_file 之外增加严格互斥的 `recovery` 分支，并与 plan_basis 互斥；字段只在[共享 schema](../../packages/shared-types/src/completion-recovery.ts)定义。Scheduler 冻结的 `trigger.recovery_refs` 授予精确 target Job/Attempt、scope、快照、恢复 revision 与 evidence hash；普通 Hub、猜测 UUID 或只读图 metadata 不取得此权限。shared schema、宿主 handler 和最终语义事务复核同一契约及当前 token/lease/allowlist、原预算、授权与证据 CAS。
 
-合法 action 仅为 `reconcile_effects` / `stop`；reason 不作为证据。200 `persisted_deferred` 仅证明提案持久接纳，不表示对账执行、Job 成功或模型理解。稳定拒绝码 `recovery_not_authorized`、`recovery_paused`、`recovery_stale`、`recovery_inactive` 默认 fail closed，不能靠自动重试扩大权限。原 completion key 的负回执保持不可变；活动原 Attempt 在证据修复后需用新 revision/key 重新走完成门。详见 [ADR 0015](adr/0015-governed-completion-recovery.md)及[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。当前分支最终 SHA 的 Actions 尚待验收。
+合法 action 为 `reconcile_effects` / `stop` / `release_stale`（后者用原 grant 无目标效果退出）；reason 不作为证据。200 `persisted_deferred` 仅证明提案持久接纳，不表示对账执行、Job 成功或模型理解。稳定拒绝码 `recovery_not_authorized`、`recovery_paused`、`recovery_stale`、`recovery_inactive` 默认 fail closed，不能靠自动重试扩大权限。原 completion key 的负回执保持不可变；活动原 Attempt 在证据修复后需用新 revision/key 重新走完成门。详见 [ADR 0015](adr/0015-governed-completion-recovery.md)及[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。当前分支最终 SHA 的 Actions 尚待验收。
 
 ## 项目知识接口（#752 分支）
 
@@ -173,3 +173,5 @@ FR-FIND-008 增加 `/program-materials` 的登记/读取、单材料读取/撤�
 `PATCH /tasks/:canvasId` 是 Management `tasks:write` 入口，按认证 actor 的项目权限与 Canvas 行锁校验 `plan_objective.expected_revision`；授权用户显式提供 goal、completion 和有限 lifetime budget，响应返回当前 objective/revision。活跃及历史 Job snapshot/Attempt/事件不被编辑；模型不能调用该管理输入改写目标。
 
 Job-scoped `submit_plan` 当前严格要求 `{plan: PlanV2, revision: execution_route}`；`submit_plan_result` 同样只接收 v2。objective/revision、owner、route CAS、Plan SHA 与已派发 task 的字节身份必须匹配；模型只能调整未派发路线，不能重置 lifetime 计数。v1 Plan/Result 只供历史读；普通 HubIntent 走原 handler，不制造新的 v1 `plan_protocol`，不可变 v1 与 `hub_intent_adapter` 审计只作历史解析。接纳 receipt 查询只恢复原响应，不证明执行或语义完成；工程执行投影和操作员完成门分开。机器字段以 [plan.ts](../../packages/shared-types/src/plan.ts)、[objective](../../apps/scheduler/src/domains/plan-protocol/objective.ts)和[任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)为准。
+
+#903 的当前 `execution_state` 与历史回执分离、恢复代际及 HTTP 分类见 [生命周期契约](../AGENT_REPAIR_LIFECYCLE.md)。

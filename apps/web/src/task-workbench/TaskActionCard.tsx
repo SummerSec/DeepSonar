@@ -3,9 +3,10 @@ import { Link } from "react-router-dom";
 import type { TaskAction } from "./types";
 
 const KIND_LABEL: Record<TaskAction["kind"], string> = {
+  platform_blocker: "平台恢复待处理",
   human_decision: "需要你判断",
   model_repair: "交给模型修复",
-  transient_retry: "可安全重试",
+  transient_retry: "检查恢复条件",
   unknown_effect: "未知效果",
 };
 

@@ -150,8 +150,8 @@
       "code": "HANDLER_FAILED",
       "message": "Platform operation failed",
       "path": null,
-      "retryable": true,
-      "category": "transient_retryable",
+      "retryable": false,
+      "category": "unknown_external_effect",
       "accepted_effect": "unknown-not-proven-absent"
     }
   ]

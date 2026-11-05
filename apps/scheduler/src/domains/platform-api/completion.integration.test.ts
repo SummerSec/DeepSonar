@@ -48,6 +48,43 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
       const get = (key: string) => app.inject({ method: "GET", url: `${endpoint}?receipt_key=${key}`, headers });
       return { grant, jobId, attemptId: String(attempt.id), calls, post, get, endpoint, headers };
     };
+    await t.test("HTTP input errors share actionable feedback and current state stays separate from immutable receipts", async () => {
+      const runner = await setup();
+      for (const headers of [runner.headers, { ...runner.headers, "idempotency-key": "invalid" },
+        { ...runner.headers, "idempotency-key": randomUUID() }]) {
+        const rejected = await app.inject({ method: "POST", url: runner.endpoint, headers, payload: { summary: "ready" } });
+        assert.equal(rejected.statusCode, 400, rejected.body);
+        assert.equal(rejected.json().repair.category, "model_correctable");
+        assert.equal(rejected.json().repair.current_state_ref, runner.endpoint);
+        assert.deepEqual(rejected.json().repair.remaining_budget, {});
+      }
+      const key = randomUUID();
+      const refused = await runner.post(key, 0, { summary: "x".repeat(8193) });
+      const historical = refused.json();
+      for (let i = 0; i < 3; i++) assert.deepEqual((await runner.get(key)).json(), historical);
+      const current = async () => (await app.inject({ method: "GET", url: runner.endpoint, headers: runner.headers })).json().execution_state;
+      const { registerRuntimeTerminalState } = await import("./registry.js");
+      let terminal: "human" | null = "human";
+      registerRuntimeTerminalState(runner.jobId, runner.attemptId, () => terminal);
+      const waiting = await current();
+      assert.equal(waiting.accepted_terminal, "human", "accepted live human state is visible before delayed semantic settlement");
+      assert.equal(waiting.allowed_actions.includes("correct_proposal"), false);
+      terminal = null;
+      const before = await current();
+      assert.deepEqual(before.allowed_actions, ["correct_proposal"]);
+      assert.equal(before.next_proposal_revision, 1);
+      assert.equal(before.remaining_attempts, 7);
+      const conflict = await runner.post(key, 0, { summary: "different" });
+      assert.equal(conflict.json().repair.category, "permanent_failure");
+      assert.match(conflict.json().repair.next_action, /停止自动换 key/);
+      const accepted = await runner.post(randomUUID(), 1, { summary: "corrected" });
+      assert.equal(accepted.statusCode, 200, accepted.body);
+      const after = await current();
+      assert.equal(after.accepted_terminal, "done");
+      assert.equal(after.allowed_actions.includes("correct_proposal"), false);
+      assert.deepEqual((await runner.get(key)).json(), historical, "accepted state does not rewrite the old rejection");
+      assert.equal(runner.calls.prepare, 1);
+    });
     // Real adapter/framer + HTTP/PostgreSQL; synthetic process and controlled handler.
     // This matrix tests protocol plumbing, not model understanding or executeReal semantics.
     for (const cli of COMPLETION_TEST_CLIS) {

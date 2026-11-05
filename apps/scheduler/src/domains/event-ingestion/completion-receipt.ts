@@ -16,6 +16,7 @@ export type CompletionReceipt = {
   proposal_revision: number; attempt_id: string; snapshot_digest: string;
   status: "rejected" | "persisted_deferred"; result: CompletionResult;
   repair_token_limit: number | null;
+  execution_deadline?: string;
   /** Live evidence distinguishes legitimate identical done after reconciliation from no-progress repair. */
   evidence_sha256?: string;
   recovery_ref?: string;
@@ -115,11 +116,11 @@ export async function recordCompletionProposal(input: {
     if (history.some(row => row.payload_json.status === "persisted_deferred")) {
       return reject("COMPLETION_ALREADY_ACCEPTED", "A completion is already durably accepted; read its receipt");
     }
-    if (previous && previous.attempt_id !== attempt.id) return reject("COMPLETION_ATTEMPT_CHANGED", "Original repair session cannot be resumed by another Attempt");
+    const tokenBudget = await readRepairTokenBudget(tx, input.jobId);
+    if (previous && (tokenBudget?.attempt_id ?? previous.attempt_id) !== attempt.id) return reject("COMPLETION_ATTEMPT_CHANGED", "No Scheduler repair generation authorizes this Attempt");
     if (history.length >= COMPLETION_REPAIR_LIMIT) return reject("COMPLETION_REPAIR_EXHAUSTED", "Completion repair budget exhausted; stop and request human intervention");
     const expectedRevision = previous ? previous.proposal_revision + 1 : 0;
     if (input.revision !== expectedRevision) return reject("COMPLETION_REVISION_CONFLICT", `Expected proposal revision ${expectedRevision}`);
-    const tokenBudget = await readRepairTokenBudget(tx, input.jobId);
     let blockerCode: string | undefined;
     try { assertRepairTokenBudget(tokenBudget, false); }
     catch (error) {
@@ -164,8 +165,8 @@ export async function recordCompletionProposal(input: {
         proposal_revision: input.revision, repair_attempt: history.length + 1,
         remaining_budget: { attempts: COMPLETION_REPAIR_LIMIT - history.length - 1,
           ...(remainingTokens !== null && remainingTokens > 0 ? { tokens: remainingTokens } : {}) },
-        current_state_ref: `/control/v1/jobs/${input.jobId}/operations/mark_job_done?receipt_key=${input.key}`,
-        next_action: history.length + 1 >= COMPLETION_REPAIR_LIMIT
+        current_state_ref: `/control/v1/jobs/${input.jobId}/operations/mark_job_done`,
+        next_action: repair.category !== "model_correctable" ? repair.next_action : history.length + 1 >= COMPLETION_REPAIR_LIMIT
           ? "修正预算耗尽；停止提交并请求人工处理。"
           : `读取当前回执；修正语义后用新的 Idempotency-Key 和 X-DeepSonar-Proposal-Revision: ${input.revision + 1} 提交。传输重试保持原 key/revision/payload。`,
       } } };
@@ -175,6 +176,7 @@ export async function recordCompletionProposal(input: {
       ...(accepted ? { settlement_digest: completionSettlementDigest(input.rawInput) } : {}),
       snapshot_digest: input.snapshotDigest, status: accepted ? "persisted_deferred" : "rejected", result,
       repair_token_limit: tokenBudget ? tokenBudget.limit_tokens : configuredRepairTokenLimit(),
+      execution_deadline: tokenBudget?.deadline ?? new Date(new Date(job.started_at).getTime() + Number(job.timeout_sec) * 1000).toISOString(),
       evidence_sha256: evidence.sha256, ...(recoveryState ? { recovery_ref: recoveryState.recovery_ref } : {}) };
     // Accepted completion must remain available when ordinary semantic output exhausts its bucket.
     // Rejected proposals stay bounded by the standard bucket and persistent repair limit.

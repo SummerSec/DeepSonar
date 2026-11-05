@@ -158,7 +158,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   mark_job_done: {
     summary: "Mark the current Job done",
-    description: "Submit the final Job summary and optional verification verdict with X-DeepSonar-Proposal-Revision (initial 0). Corrected semantics require a new key and next revision; transport retries retain key/revision/payload. Acceptance returns a durable persisted_deferred receipt, not settlement. Query this operation with receipt_key while the original Job capability remains active.",
+    description: "Submit the final Job summary and optional verification verdict with X-DeepSonar-Proposal-Revision (initial 0). Corrected semantics require a new key and next revision; transport retries retain key/revision/payload. Acceptance returns a durable persisted_deferred receipt, not settlement. GET this operation without receipt_key returns execution_state (Scheduler current advice, not a grant); GET receipt_key returns immutable history. History never authorizes continued execution. Requests still require an active Job capability.",
     readOnly: false,
     eventType: "done",
   },

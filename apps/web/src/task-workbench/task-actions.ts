@@ -10,6 +10,7 @@ const PRIORITY_RANK: Record<TaskActionPriority, number> = {
 };
 
 const KIND_RANK: Record<TaskActionKind, number> = {
+  platform_blocker: 4,
   human_decision: 0,
   unknown_effect: 1,
   model_repair: 2,
@@ -34,6 +35,13 @@ export type ActionJob = {
   canvas_title?: string | null;
   /** Only true when an effect ledger proves every effect is settled. Missing means unproven. */
   replay_safe?: boolean;
+  execution_state?: {
+    authority: "scheduler";
+    status: string;
+    allowed_actions: readonly string[];
+    blocker: string | null;
+    accepted_terminal?: string | null;
+  } | null;
   unknown_effects?: readonly ActionJobEffect[];
 };
 
@@ -138,13 +146,13 @@ function projectInterruptedJobAction(job: ActionJob, status: "timeout" | "orphan
   return {
     id: `job:${job.id}:${status}`,
     kind: "transient_retry",
-    title: `「${interruptedJobLabel(job)}」可安全重试`,
+    title: `「${interruptedJobLabel(job)}」需要恢复准入`,
     reason: status === "timeout" ? "运行超时，效果账本证明没有未决外部效果" : "运行失联，效果账本证明没有未决外部效果",
     impact: "不处理则该分支不会继续产出证据",
     evidence_refs: [`job:${job.id}`],
-    recommended_action: "retry_same_session",
+    recommended_action: "inspect_recovery",
     reversible: true,
-    next_state: "running",
+    next_state: status,
     priority: "normal",
   };
 }
@@ -226,19 +234,29 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
 
   for (const job of jobs) {
     const status = (job.status ?? "").toLowerCase();
-    if (status === "waiting_human") {
-      actions.push({
-        id: `job:${job.id}:waiting_human`,
-        kind: "human_decision",
-        title: `「${job.role_name || job.type || "运行"}」等待人工回复`,
-        reason: "这次运行停在 waiting_human，不会自动继续",
-        impact: "相关验证或决策分支会一直挂起",
+    const current = job.execution_state?.authority === "scheduler" && job.execution_state.status === status
+      ? job.execution_state : null;
+    if (current && (current.blocker || current.allowed_actions.includes("correct_proposal"))) {
+      const unknown = current.allowed_actions.includes("reconcile_effects");
+      const human = current.allowed_actions.includes("wait_for_human");
+      const correct = current.allowed_actions.includes("correct_proposal") && Boolean(job.error);
+      if (current.blocker || correct) actions.push({
+        id: `job:${job.id}:current`, kind: unknown ? "unknown_effect" : human ? "human_decision" : correct ? "model_repair" : "platform_blocker",
+        title: human ? "已接受人工请求，等待处理" : correct ? "当前执行可修正提案" : "按宿主当前恢复状态处理",
+        reason: current.blocker ?? "当前 Attempt 可提交修正；提交时仍会重新准入",
+        impact: unknown ? "未决效果必须先对账" : "历史回执不授予继续执行权限",
         evidence_refs: [`job:${job.id}`],
-        recommended_action: "reply_to_agent",
-        reversible: true,
-        next_state: "needs_human",
-        priority: "high",
+        recommended_action: unknown ? "confirm_unknown_effect" : human ? "reply_to_agent" : correct ? "correct_proposal"
+          : current.allowed_actions.includes("request_recovery") ? "request_recovery" : "inspect_recovery",
+        reversible: !unknown, next_state: status, priority: "high",
       });
+      continue;
+    }
+    if (status === "waiting_human") {
+      actions.push({ id: `job:${job.id}:waiting_human`, kind: "platform_blocker",
+        title: "运行等待原因需由宿主确认", reason: "缺少当前恢复投影，不能仅凭 waiting_human 推断需要人的决策",
+        impact: "读取当前状态，区分平台对账和已接受的人工请求", evidence_refs: [`job:${job.id}`],
+        recommended_action: "inspect_recovery", reversible: true, next_state: status, priority: "high" });
       continue;
     }
     if (status === "timeout" || status === "orphan") {
@@ -258,14 +276,14 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
       }
       actions.push({
         id: `job:${job.id}:failed`,
-        kind: "model_repair",
-        title: `「${job.role_name || job.type || "运行"}」失败，需要带上下文修复`,
-        reason: job.error?.trim() || "运行失败，但还没有未知外部效果账本",
+        kind: "platform_blocker",
+        title: `「${job.role_name || job.type || "运行"}」失败，需要检查恢复条件`,
+        reason: job.error?.trim() || "运行已结束；缺少未决效果不等于会话仍可继续",
         impact: "该分支的证据不会更新，后续结论可能不完整",
         evidence_refs: [`job:${job.id}`],
-        recommended_action: "retry_same_session",
+        recommended_action: "inspect_recovery",
         reversible: true,
-        next_state: "running",
+        next_state: status,
         priority: "high",
       });
     }
@@ -422,6 +440,7 @@ export function projectJobActions(input: {
       unknownEffects: unknown,
       acceptedEffects: settled,
       hasEffectLedger: hasLedger,
+      currentState: job.execution_state,
     })
     : null;
   return { actions: projectTaskActions({ jobs: [job] }), repair };

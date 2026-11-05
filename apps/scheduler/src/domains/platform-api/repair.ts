@@ -18,6 +18,7 @@ export interface ControlOperationRejectionBody {
 
 /** Handler extras that may appear beside / under the canonical envelope. Envelope keys are never copied. */
 const REJECTION_DETAIL_ALLOWLIST = [
+  "accepted_terminal",
   "expected",
   "observed_shape",
   "retry_after_sec",
@@ -124,6 +125,10 @@ export function controlRuntimeRejection(input: {
     rawInput: input.rawInput,
     idempotency_key: input.idempotencyKey ?? undefined,
   });
+  const terminal = input.details?.accepted_terminal;
+  if (terminal === "human" || terminal === "done" || terminal === "hub_decision") {
+    repair.accepted_effects = [{ effect_id: terminal, status: "accepted" }];
+  }
   return attachAllowlistedRejectionDetails(rejectionBody(repair, input.retryable), input.details);
 }
 
@@ -137,7 +142,9 @@ export function controlPlatformFailure(input: {
     operation: input.operation,
     code: input.code,
     message: input.message,
-    retryable: true,
+    retryable: input.code === "HANDLER_UNAVAILABLE",
+    category: input.code === "HANDLER_FAILED" ? "unknown_external_effect" : "transient_retryable",
+    ...(input.code === "HANDLER_FAILED" ? { next_action: "Handler 可能已产生效果；先查询原回执和当前状态并对账。未知结果不得自动重试或换 key 重放。" } : {}),
     statusCode: input.code === "HANDLER_UNAVAILABLE" ? 503 : 500,
     idempotencyKey: input.idempotencyKey,
   });

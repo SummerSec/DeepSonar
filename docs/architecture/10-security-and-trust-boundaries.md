@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-03
+> 同步日期：2026-11-05
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -48,7 +48,7 @@ flowchart LR
 
 ## 恢复与共享资源归属（#871/#874）
 
-完成恢复 Hub 只能使用 Scheduler 持久 wake 与冻结引用指向的同 project/Canvas/Job/Attempt/快照。模型 reason、Canvas recovery metadata、中断标记、缺少 sandbox 或零 unknown 都不是外部效果/资源停止证据。提案与最终 apply 同时受当前 capability/lease/allowlist、原预算、目标授权、pause/auto-stop、人工/Verify 等待和证据 CAS 限制；未知不得 replay，终态不得复活。只有精确 effect 的持久已知 ledger 允许纯数据库对账。退出会话的完整继续执行保持明确缺口，见 [ADR 0015](adr/0015-governed-completion-recovery.md)。
+完成恢复 Hub 只能使用 Scheduler 持久 wake 与冻结引用指向的同 project/Canvas/Job/Attempt/快照。模型 reason、Canvas recovery metadata、中断标记、缺少 sandbox 或零 unknown 都不是外部效果/资源停止证据。提案与最终 apply 同时受当前 capability/lease/allowlist、原预算、目标授权、pause/auto-stop、人工/Verify 等待和证据 CAS 限制；未知不得 replay，终态不得复活。只有精确 effect 的持久已知 ledger 允许纯数据库对账。显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](../AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录，见 [ADR 0015](adr/0015-governed-completion-recovery.md)。
 
 共享卷删除由 PostgreSQL 同 Job 生命周期锁和最新 Attempt fence 保护，取得锁后再读取当前归属；扫描时旧判断不能授权删除。Docker 必须同时核验 managed/Job/generation 标签及严格资源身份，helper 按 inspect 得到的容器 ID 删除，卷使用 non-force removal；label/inspect/connection/锁丢失/忙碌/daemon 错误均不能伪装成功或不存在。prepare 锁保持至只读 mount handoff 与资源绑定提交，失败只销毁本次 handle，见[资产专题](../SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。这些本轮修复仍待最终 SHA Actions 验收。
 

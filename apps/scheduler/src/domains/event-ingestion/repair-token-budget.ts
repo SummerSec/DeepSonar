@@ -1,10 +1,13 @@
 import { config } from "../../config.js";
 import { sql } from "../../db.js";
+import { readRepairGenerationOwner } from "../job-attempt/repair-generation.js";
 
 export type RepairTokenBudget = {
   receipt_ref: string;
   attempt_id: string;
   limit_tokens: number | null;
+  generation_ref?: string | null;
+  deadline?: string | null;
   known_tokens: number;
   remaining_tokens: number | null;
   usage_status: "known" | "pending" | "unknown";
@@ -40,7 +43,9 @@ export async function readRepairTokenBudget(db: typeof sql, jobId: string): Prom
     }
   }
   const cap = Number.isSafeInteger(limit) && limit >= 0 ? limit : null;
-  return { receipt_ref: String(first.event_id), attempt_id: String(first.payload_json.attempt_id), limit_tokens: cap, known_tokens: known,
+  const owner = await readRepairGenerationOwner(db, jobId, String(first.payload_json.attempt_id));
+  return { receipt_ref: String(first.event_id), attempt_id: owner.attempt_id ?? "",
+    generation_ref: owner.generation_ref, deadline: owner.deadline ?? first.payload_json.execution_deadline ?? null, limit_tokens: cap, known_tokens: known,
     remaining_tokens: state === "known" && cap !== null && cap > 0 ? Math.max(0, cap - known) : null, usage_status: state };
 }
 
@@ -87,6 +92,8 @@ export function boundRepairOutput(body: unknown, path: string, remaining: number
 /** Pending effects reserve the entire remaining allowance until authoritative settlement. */
 export function assertRepairTokenBudget(budget: RepairTokenBudget | null, newRequest: boolean): void {
   if (!budget) return;
+  if (budget.deadline && Date.parse(budget.deadline) <= Date.now()) throw new RepairTokenBudgetError(
+    "REPAIR_DEADLINE_EXHAUSTED", "Original completion repair deadline exhausted; stop this execution", budget);
   if (budget.usage_status !== "known") throw new RepairTokenBudgetError(
     budget.usage_status === "pending" ? "REPAIR_USAGE_PENDING" : "REPAIR_USAGE_UNKNOWN",
     "Repair usage is not settled; reconcile the existing request before continuing", budget);
@@ -133,4 +140,12 @@ export async function readJobTokenAllowance(db: typeof sql, jobId: string, budge
     return cap - total;
   }
   return null;
+}
+
+/** Before starting a successor runner; settlement paths must remain available after expiry. */
+export async function assertRepairExecutionOwner(db: typeof sql, jobId: string, attemptId: string): Promise<void> {
+  const budget = await readRepairTokenBudget(db, jobId);
+  if (!budget) return;
+  if (budget.attempt_id !== attemptId) throw new RepairTokenBudgetError("REPAIR_ATTEMPT_CHANGED", "No Scheduler generation authorizes this execution", budget);
+  assertRepairTokenBudget(budget, true);
 }

@@ -4,6 +4,7 @@ import { readCompletionRecoveryProjection } from "../job-attempt/recovery.js";
 import { readControlReceiptByKey, controlInputDigest } from "../event-ingestion/control-receipt.js";
 import { sql } from "../../db.js";
 import { invokeDurableCompletion } from "./completion.js";
+import { readCompletionExecutionState } from "./completion-state.js";
 import { readCompletionReceipt } from "../event-ingestion/completion-receipt.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -317,26 +318,48 @@ async function executeInvocation(
 
 async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, principal: CapabilityPrincipal, definition: PlatformOperationDefinition) {
   const jobId = req.params.jobId;
+  const sendInputError = (statusCode: number, code: string, message: string) => {
+    const conflict = code === "IDEMPOTENCY_KEY_CONFLICT";
+    const correctable = statusCode === 400 && !conflict;
+    const inputActions: Record<string, string> = {
+      IDEMPOTENCY_KEY_REQUIRED: "此请求尚未接受；补充 UUID Idempotency-Key。先读取当前状态；后续传输重试保持原 key/payload。",
+      IDEMPOTENCY_KEY_INVALID: "此请求尚未接受；将 Idempotency-Key 修正为 UUID，再读取当前状态并提交。",
+      COMPLETION_REVISION_REQUIRED: "此请求尚未接受；读取当前状态的 next_proposal_revision，补充 X-DeepSonar-Proposal-Revision；不要猜测归零。",
+      COMPLETION_EVENT_ID_CONFLICT: "event_id 必须等于 Idempotency-Key；保留已选 key 并修正 event_id，不自动创建第二笔操作。",
+      PLAN_EVENT_ID_CONFLICT: "event_id 必须等于 Idempotency-Key；保留已选 key 并修正 event_id，不自动创建第二笔操作。",
+    };
+    const body = controlRuntimeRejection({ operation: definition.operationId, code, message,
+      statusCode, retryable: correctable, category: correctable ? "model_correctable" : "permanent_failure",
+      idempotencyKey: isUuid(idempotencyKey(req)) ? idempotencyKey(req) : undefined,
+      next_action: conflict
+        ? "先查询原 key 的回执及当前状态；不能因冲突自动换 key 重放。确认是新的语义提案且当前执行仍获准后，才使用新 key/revision。"
+        : correctable ? inputActions[code] ?? "补齐或修正指出的请求头/字段；先读取当前状态。未接受的请求保持原 key，传输重试保持原 payload/revision。"
+          : "停止提交；读取当前状态和授权，按宿主允许动作处理。",
+    });
+    body.repair.current_state_ref = `/control/v1/jobs/${jobId}/operations/${definition.operationId}`;
+    body.repair.remaining_budget = {};
+    return reply.code(statusCode).send(body);
+  };
   if (!isAllowed(principal, definition.operationId)) {
-    return sendError(reply, 403, "OPERATION_NOT_ALLOWED", "Operation is not allowed for this Job");
+    return sendInputError(403, "OPERATION_NOT_ALLOWED", "Operation is not allowed for this Job");
   }
   const key = idempotencyKey(req);
-  if (!key) return sendError(reply, 400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required");
-  if (!isUuid(key)) return sendError(reply, 400, "IDEMPOTENCY_KEY_INVALID", "Idempotency-Key must be a UUID");
+  if (!key) return sendInputError(400, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key is required");
+  if (!isUuid(key)) return sendInputError(400, "IDEMPOTENCY_KEY_INVALID", "Idempotency-Key must be a UUID");
   const parsed = parseOperationInput(req, definition, key);
   if (await isPlanRevisionKey(key) && (definition.operationId !== "submit_plan"
     || !parsed.input || typeof parsed.input !== "object" || !("revision" in parsed.input))) {
-    return sendError(reply,409,"IDEMPOTENCY_KEY_CONFLICT","Key belongs to a committed Plan revision");
+    return sendInputError(409,"IDEMPOTENCY_KEY_CONFLICT","Key belongs to a committed Plan revision");
   }
   if (definition.operationId === "mark_job_done") {
     const existing = idempotencyCache.get(idempotencyCacheKey(jobId, key));
-    if (existing && existing.operationId !== "mark_job_done") return sendError(reply, 409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key belongs to another operation");
+    if (existing && existing.operationId !== "mark_job_done") return sendInputError(409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key belongs to another operation");
     const revision = headerValue(req, "x-deepsonar-proposal-revision");
     if (!revision || !/^(0|[1-9][0-9]{0,3})$/.test(revision)) {
-      return sendError(reply, 400, "COMPLETION_REVISION_REQUIRED", "mark_job_done requires X-DeepSonar-Proposal-Revision (initial 0)");
+      return sendInputError(400, "COMPLETION_REVISION_REQUIRED", "mark_job_done requires X-DeepSonar-Proposal-Revision (initial 0)");
     }
-    if (parsed.eventId !== key) return sendError(reply, 400, "COMPLETION_EVENT_ID_CONFLICT", "Completion event id must equal Idempotency-Key");
-    if (parsed.error && !parsed.error.body) return sendError(reply, parsed.error.statusCode, parsed.error.errorCode, parsed.error.message);
+    if (parsed.eventId !== key) return sendInputError(400, "COMPLETION_EVENT_ID_CONFLICT", "Completion event id must equal Idempotency-Key");
+    if (parsed.error && !parsed.error.body) return sendInputError(parsed.error.statusCode, parsed.error.errorCode, parsed.error.message);
     const invocation = invokeDurableCompletion({ principal, key, revision: Number(revision), payload: parsed.input,
       ...(parsed.error ? { schemaFailure: { statusCode: parsed.error.statusCode, body: parsed.error.body as Record<string, unknown> } } : {}) });
     // Reserve synchronously before yielding, so concurrent process-local mutations cannot reuse this key.
@@ -349,7 +372,7 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
   const planRequest = PLAN_RECEIPT_OPERATIONS.includes(definition.operationId as PlanReceiptOperation)
     && parsed.input && typeof parsed.input === "object" && ("plan_basis" in parsed.input || "payload_file" in parsed.input || "recovery" in parsed.input);
   if (owned && (!planRequest || owned.operation !== definition.operationId)) {
-    return sendError(reply, 409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key already belongs to a durable control receipt");
+    return sendInputError(409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key already belongs to a durable control receipt");
   }
   if (parsed.error) {
     if (parsed.error.retryable) {
@@ -361,22 +384,22 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
         ...(parsed.error.path ? { path: parsed.error.path } : {}),
       });
     }
-    return sendError(reply, parsed.error.statusCode, parsed.error.errorCode, parsed.error.message);
+    return sendInputError(parsed.error.statusCode, parsed.error.errorCode, parsed.error.message);
   }
 
   if (definition.operationId === "submit_plan" && parsed.input && typeof parsed.input === "object" && "revision" in parsed.input) {
-    if (parsed.eventId !== key) return sendError(reply,400,"PLAN_EVENT_ID_CONFLICT","Plan event id must equal Idempotency-Key");
+    if (parsed.eventId !== key) return sendInputError(400,"PLAN_EVENT_ID_CONFLICT","Plan event id must equal Idempotency-Key");
     const previous = idempotencyCache.get(idempotencyCacheKey(jobId,key));
     if (previous && (previous.operationId !== definition.operationId || previous.inputHash !== inputHash(parsed.input))) {
-      return sendError(reply,409,"IDEMPOTENCY_KEY_CONFLICT","Key belongs to another input or operation");
+      return sendInputError(409,"IDEMPOTENCY_KEY_CONFLICT","Key belongs to another input or operation");
     }
     const result=await executeInvocation(principal,jobId,definition.operationId,parsed.input,parsed.eventId,key);
     return reply.code(result.statusCode).send(result.body);
   }
   if (planRequest) {
-    if (parsed.eventId !== key) return sendError(reply,400,"PLAN_EVENT_ID_CONFLICT","Plan event id must equal Idempotency-Key");
+    if (parsed.eventId !== key) return sendInputError(400,"PLAN_EVENT_ID_CONFLICT","Plan event id must equal Idempotency-Key");
     const previous=idempotencyCache.get(idempotencyCacheKey(jobId,key));
-    if(!owned && previous && (previous.operationId!==definition.operationId || previous.inputHash!==inputHash(parsed.input))) return sendError(reply,409,"IDEMPOTENCY_KEY_CONFLICT","Key belongs to another input or operation");
+    if(!owned && previous && (previous.operationId!==definition.operationId || previous.inputHash!==inputHash(parsed.input))) return sendInputError(409,"IDEMPOTENCY_KEY_CONFLICT","Key belongs to another input or operation");
     if(!owned && previous) {const cached=await previous.result;return reply.code(cached.statusCode).send(cached.body);}
     const result=await executeInvocation(principal,jobId,definition.operationId,parsed.input,parsed.eventId,key);
     if(result.cacheable) idempotencyCache.set(idempotencyCacheKey(jobId,key),{operationId:definition.operationId,inputHash:inputHash(parsed.input),result:Promise.resolve(result)});
@@ -394,10 +417,10 @@ async function invokeOperation(req: CapabilityRequest, reply: FastifyReply, prin
   const previous = idempotencyCache.get(cacheKey);
   if (previous) {
     if (previous.operationId !== definition.operationId) {
-      return sendError(reply, 409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key was already used for another operation");
+      return sendInputError(409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key was already used for another operation");
     }
     if (previous.inputHash !== requestHash) {
-      return sendError(reply, 409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key was already used with different input");
+      return sendInputError(409, "IDEMPOTENCY_KEY_CONFLICT", "Idempotency-Key was already used with different input");
     }
     const result = await previous.result;
     return reply.code(result.statusCode).send(result.body);
@@ -461,7 +484,9 @@ export function registerPlatformControlRoutes(app: FastifyInstance): void {
       const recoveryCurrent = await readCompletionRecoveryProjection(sql, principal.jobId, receipt.attempt_id);
       return reply.header("cache-control", "no-store").send({ ...receipt.result.body, ...(recoveryCurrent ? { recovery_current: recoveryCurrent } : {}) });
     }
-    return reply.header("cache-control", "no-store").send(operationDescription(definition));
+    return reply.header("cache-control", "no-store").send({ ...operationDescription(definition),
+      ...(definition.operationId === "mark_job_done" ? { execution_state: await readCompletionExecutionState(sql, principal.jobId) } : {}),
+    });
   });
 
   app.post("/control/v1/jobs/:jobId/operations/:operationId", async (req, reply) => {

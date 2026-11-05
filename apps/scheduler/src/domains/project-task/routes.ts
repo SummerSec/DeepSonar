@@ -1,3 +1,5 @@
+import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
+import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { DeviceRequirement, FindingProtocolConfig, RuntimeProfileOverridePayload, TaskContract, normalizeTaskContract, taskContractWarnings } from "@deepsonar/shared-types";
 import { z } from "zod";
@@ -971,6 +973,14 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           )
         ORDER BY j.created_at ASC, j.id ASC
         FOR UPDATE OF j`;
+      const repairAdmissions = new Map<string, Awaited<ReturnType<typeof readRepairRequeueAdmission>>>();
+      for (const worker of interruptedWorkers) {
+        await tx`SELECT id FROM job_attempts WHERE job_id=${String(worker.id)} ORDER BY attempt_no FOR UPDATE`;
+        const admission = await readRepairRequeueAdmission(tx, String(worker.id));
+        if (admission.blocker) return { jobs: [], active: [], stale: [], convergence: null,
+          repairBlocked: { job_id: String(worker.id), ...admission.blocker } };
+        repairAdmissions.set(String(worker.id), admission);
+      }
       const stale: SnapshotStaleDetail[] = [];
       for (const worker of interruptedWorkers) {
         const detail = await frozenSnapshotStaleDetail(tx, worker as Record<string, unknown>);
@@ -997,6 +1007,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       const rerunJobs: Array<Record<string, unknown>> = [];
       const lifecycle = createSqlJobLifecycleApplication(tx);
       for (const worker of interruptedWorkers) {
+        const repair = repairAdmissions.get(String(worker.id));
+        if (repair?.budget && repair.deadline) await admitRepairGeneration(tx, String(worker.id),
+          repair.budget.receipt_ref, repair.deadline, "resume-frozen");
         await markAttemptInterrupted(tx, worker.id as string, "任务使用旧冻结快照重新执行启动中断 Job");
         await revokeOldRuntimeGrants(tx, worker.id as string, "task_resume_frozen");
         const row = await lifecycle.transitionJob(worker.id as string, "pending", {
@@ -1026,6 +1039,11 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         convergence,
       };
     });
+    if ("repairBlocked" in interruptedBatch && interruptedBatch.repairBlocked) {
+      return reply.code(409).send({ error: interruptedBatch.repairBlocked.reason,
+        error_code: interruptedBatch.repairBlocked.code, job_id: interruptedBatch.repairBlocked.job_id,
+        next_action: "inspect-job-recovery" });
+    }
     if (interruptedBatch.stale.length > 0) {
       const details = interruptedBatch.stale;
       return reply.code(409).send({
@@ -1091,6 +1109,11 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           next_action: "rerun-current",
         });
       }
+      if (resumed.kind === "not_resumable") return reply.code(409).send({
+        error: resumed.reason ?? "Job 当前不允许恢复", error_code: resumed.error_code ?? "JOB_NOT_RESUMABLE",
+        job_id: resumable.id, next_action: "inspect-job-recovery" });
+      if (resumed.kind === "target_authorization_blocked") return reply.code(409).send({
+        error: "目标授权已失效；先修复授权", error_code: "TARGET_AUTHORIZATION_BLOCKED", blockers: resumed.blockers });
       if (resumed.kind === "ok") {
         const convergence = await patchCanvasConvergence(sql, canvasId, {
           hub_paused: false,

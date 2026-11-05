@@ -166,13 +166,18 @@ if (!testDatabaseUrl) {
       assert.equal(unavailable.json().repair.category, "transient_retryable");
       assert.equal(unavailable.json().repair.operation, "emit_finding");
       assert.match(String(unavailable.json().repair.next_action), /Idempotency-Key/);
+      let sideEffects = 0;
       registerRuntimeHandler(jobId, async () => {
+        sideEffects++; // Models an effect accepted before the response path fails.
         throw new Error("secret-handler-boom");
       }, ["emit_progress"]);
       const crashed = await invoke("emit_progress", randomUUID(), { message: "handler crash probe" });
       assert.equal(crashed.statusCode, 500, crashed.payload);
       assert.equal(crashed.json().error_code, "HANDLER_FAILED");
-      assert.equal(crashed.json().repair.category, "transient_retryable");
+      assert.equal(crashed.json().repair.category, "unknown_external_effect");
+      assert.equal(crashed.json().retryable, false);
+      assert.equal(sideEffects, 1);
+      assert.match(crashed.json().repair.next_action, /不得自动重试/);
       assert.equal(JSON.stringify(crashed.json()).includes("secret-handler-boom"), false);
       registerRuntimeHandler(jobId, async () => {
         throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", "字段不符合契约。", {

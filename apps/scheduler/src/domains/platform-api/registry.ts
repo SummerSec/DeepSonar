@@ -184,6 +184,17 @@ export const platformRuntimeHandlerRegistry: RuntimeHandlerRegistry = new InMemo
 
 export const runtimeHandlerRegistry = platformRuntimeHandlerRegistry;
 
+export type RuntimeTerminalState = "human" | "done" | "hub_decision" | null;
+const terminalStateReaders = new Map<string, { attemptId: string; read: () => RuntimeTerminalState }>();
+/** Host-only, read-only projection. The callback cannot be supplied by Control input. */
+export function registerRuntimeTerminalState(jobId: string, attemptId: string, read: () => RuntimeTerminalState): void {
+  terminalStateReaders.set(jobId, { attemptId, read });
+}
+export function readRuntimeTerminalState(jobId: string, attemptId: string): RuntimeTerminalState {
+  const reader = terminalStateReaders.get(jobId);
+  return reader?.attemptId === attemptId ? reader.read() : null;
+}
+
 export function registerRuntimeHandler(
   jobId: string,
   handler: PlatformRuntimeHandler,
@@ -202,6 +213,7 @@ export function registerRuntimeHandler(
 }
 
 export function unregisterRuntimeHandler(jobId: string, operationId?: string): boolean {
+  if (operationId === undefined) terminalStateReaders.delete(jobId);
   return platformRuntimeHandlerRegistry.unregister(jobId, operationId);
 }
 

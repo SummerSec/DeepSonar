@@ -25,7 +25,7 @@ export async function invokeDurableCompletion(input: {
         if (error instanceof PlatformRuntimeHandlerError && error.rejection) {
           return { statusCode: error.rejection.statusCode, body: { ...controlRuntimeRejection({
             operation: "mark_job_done", code: error.rejection.errorCode, message: error.message,
-            retryable: error.rejection.retryable, path: error.rejection.path, details: error.rejection.details,
+            retryable: error.rejection.retryable, category: error.rejection.category, next_action: error.rejection.next_action, path: error.rejection.path, details: error.rejection.details,
             rawInput: payload, idempotencyKey: key,
           }) } };
         }
@@ -84,6 +84,22 @@ export async function invokeDurableCompletion(input: {
         // Durable acceptance is not settlement or proof that the original model processed it.
       });
     }
+  }
+  if (!result.receipt && result.statusCode >= 400 && !result.body.repair) {
+    const code = String(result.body.error_code ?? "COMPLETION_REJECTED");
+    const uncertain = code === "COMPLETION_RECEIPT_UNCERTAIN";
+    const correctable = code === "COMPLETION_REVISION_CONFLICT";
+    const body = controlRuntimeRejection({ operation: "mark_job_done", code,
+      message: String(result.body.error ?? "Completion rejected"), statusCode: result.statusCode,
+      retryable: correctable, category: uncertain ? "unknown_external_effect" : correctable ? "model_correctable" : "permanent_failure",
+      idempotencyKey: key, next_action: uncertain
+        ? "先查询原 key 回执并对账；结果未知时不得换 key/revision 重放。"
+        : correctable ? "读取当前状态的 next_proposal_revision；仅在允许 correct_proposal 时修正 revision 后提交。"
+          : "读取原 key 回执及宿主当前状态；停止自动换 key 重试，按宿主允许动作处理。",
+    });
+    body.repair.current_state_ref = `/control/v1/jobs/${principal.jobId}/operations/mark_job_done`;
+    body.repair.remaining_budget = {};
+    return { statusCode: result.statusCode, body: { ...result.body, ...body } };
   }
   return { statusCode: result.statusCode, body: result.body };
 }
