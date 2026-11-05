@@ -41,8 +41,15 @@ function parsePolicy(value: unknown): GatewayRequestBudget {
 function snapshotPolicy(snapshot: unknown): GatewayRequestBudget {
   try {
     const row = record(snapshot);
-    const knobs = row.runtime_knobs == null ? {} : record(row.runtime_knobs);
-    const main = knobs.job_token_max_requests == null ? 0 : cap(knobs.job_token_max_requests);
+    // FrozenRuntimeKnobs always materializes this number. Missing legacy or
+    // damaged fields are not evidence that the original policy was unlimited.
+    const knobs = record(row.runtime_knobs);
+    const main = cap(knobs.job_token_max_requests);
+    if (!["pi", "claude-code", "dsh"].includes(String(row.agent_cli))) throw invalid();
+    if ((row.agent_cli === "pi" || row.pi_extensions !== undefined) && !Array.isArray(row.pi_extensions)) throw invalid();
+    // A valid OM configuration may omit request_budget only with explicit
+    // total=0: freezeObservationalMemoryQuota and its shared schema define this
+    // shape. Missing OM extension metadata still fails parseFrozenPiExtensions.
     const om = observationalMemoryConfig(parseFrozenPiExtensions(row.pi_extensions));
     if (!om) return { version: 1, total_requests: 0, main_requests: main, background_requests: 0 };
     const plan = resolveObservationalMemoryBudget({ config: om, jobTokenMaxRequests: main });
@@ -79,7 +86,9 @@ export async function inspectGatewayRequestBudget(db: Database, jobId: string, p
   const tokens = await db`SELECT workload,max_requests,request_total_limit FROM job_tokens WHERE job_id=${jobId}`;
   for (const token of tokens) {
     if (token.workload !== "main" && token.workload !== "observational_memory") throw invalid();
-    const limit = cap(Number(token.max_requests)), total = cap(Number(token.request_total_limit));
+    // PostgreSQL int4 NOT NULL columns are numbers; never coerce damaged
+    // null/string input to an unlimited policy.
+    const limit = cap(token.max_requests), total = cap(token.request_total_limit);
     policy = intersect(policy, { version: 1, total_requests: total,
       main_requests: token.workload === "main" ? limit : 0,
       background_requests: token.workload === "observational_memory" ? limit : 0 });
