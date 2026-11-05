@@ -33,7 +33,7 @@ const server = createServer(async (req, res) => {
       if (phase === 'cancel') {
         res.once('close', () => { if (!res.writableEnded) { cancellationClosedOrder = ++lifecycleOrder; cancelledAllowanceResolve(); } });
         heldAllowanceResolve();
-        return; // Shutdown must abort this in-flight fetch; no timeout response.
+        return; // Hold admission until native shutdown; this fixture proves teardown only, not live-process abort.
       }
       remaining -= 73;
       grants.push({ cap: remaining, consumed: false, phase });
@@ -158,6 +158,11 @@ async function launch(baseUrl, label) {
   return { request, prompt, seen, children, get closedOrder() { return closedOrder; }, async shutdown() { await request('shutdown', {}); await exit; clearTimeout(timeout); assert.doesNotMatch(stderr, /did not activate|startup failed|ValidationError/); }, kill() { clearTimeout(timeout); processChild.kill('SIGKILL'); } };
 }
 
+// Public session notifications prove the CLI consumed SDK usage, not Gateway ledger settlement.
+function assertUsage(record) {
+  assert.ok(record, 'expected usage-bearing session event');
+  assert.deepEqual(record.params.event.data.usage, { inputTokens: 12, outputTokens: 3, totalTokens: 15 });
+}
 let runtime, cancelling;
 try {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -167,6 +172,9 @@ try {
   assert.equal(requests.filter(value => value.phase === 'tools').length, 2);
   const toolEvents = runtime.seen.filter(record => record.method === 'session.event' && record.params.event.type === 'tool/result');
   assert.ok(toolEvents.some(record => JSON.stringify(record).includes('synthetic-tool-completed')));
+  const toolMessages = runtime.seen.filter(record => record.method === 'session.event' && record.params.sessionId === 'synthetic-main-session' && record.params.event.type === 'assistant/message');
+  assert.equal(toolMessages.length, 2, 'tool request and continuation must both produce assistant messages');
+  toolMessages.forEach(assertUsage);
   phase = 'followup'; count = 0;
   await runtime.prompt('Continue the same session with decreasing allowance.');
   const followup = requests.find(value => value.phase === 'followup');
@@ -176,12 +184,15 @@ try {
   assert.equal(overflowSent, true);
   assert.ok(requests.some(value => value.phase === 'compaction' && value.summary), 'native compaction never called its SDK summary route');
   assert.ok(requests.filter(value => value.phase === 'compaction' && !value.summary).length >= 2, 'no post-compaction retry');
-  assert.ok(runtime.seen.some(record => record.method === 'session.event' && record.params.event.type === 'compaction/summary'), 'no compaction summary event notification');
+  assertUsage(runtime.seen.find(record => record.method === 'session.event' && record.params.event.type === 'compaction/summary'));
   phase = 'subagent'; count = 0;
   await runtime.prompt('Delegate the synthetic child and consume its result.');
   assert.equal(runtime.children.size, 1);
   assert.ok(requests.some(value => value.child));
   assert.ok(runtime.seen.some(record => record.method === 'subagent.finished' && record.params.lastAssistantMessage?.some(block => block.type === 'text' && block.text === 'synthetic-child-completed')));
+  const childMessages = runtime.seen.filter(record => record.method === 'session.event' && runtime.children.has(record.params.sessionId) && record.params.event.type === 'assistant/message');
+  assert.equal(childMessages.length, 1, 'real child must publish its own SDK usage');
+  childMessages.forEach(assertUsage);
   await runtime.shutdown(); runtime = undefined;
   assert.ok(grants.every(value => value.consumed), 'allowance did not reach corresponding SDK request');
   assert.ok(grants.every((value, index) => index === 0 || value.cap < grants[index - 1].cap), 'allowance grants did not decrease');
@@ -197,14 +208,14 @@ try {
   const shutdown = cancelling.shutdown();
   shutdown.catch(() => {}); // Still awaited below; cancellation assertion failures must not leak a rejection.
   let cancelTimer;
-  try { await Promise.race([cancelledAllowance, new Promise((_, reject) => { cancelTimer = setTimeout(() => reject(new Error('shutdown did not cancel allowance fetch')), 5000); })]); }
+  try { await Promise.race([cancelledAllowance, new Promise((_, reject) => { cancelTimer = setTimeout(() => reject(new Error('shutdown did not close the pending allowance connection')), 5000); })]); }
   finally { clearTimeout(cancelTimer); }
   await shutdown;
-  assert.ok(cancellationClosedOrder < cancelling.closedOrder, 'allowance connection closed only after CLI exit');
+  assert.ok(cancellationClosedOrder < cancelling.closedOrder, 'pending allowance connection remained open until after CLI close');
   cancelling = undefined;
   assert.equal(requests.length, before, 'cancelled admission sent provider HTTP');
   assert.deepEqual(errors, []);
-  console.log(`DSH real CLI production profile passed: tools, continuation, followup, native overflow compaction, child call, allowance cancellation (${requests.length} SDK HTTP requests)`);
+  console.log(`DSH real CLI production profile passed: tools, continuation, followup, native overflow compaction, child call, native shutdown cleanup (${requests.length} SDK HTTP requests)`);
 } finally {
   runtime?.kill(); cancelling?.kill(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
   await rm(root, { recursive: true, force: true });
