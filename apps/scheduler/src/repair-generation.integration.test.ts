@@ -667,6 +667,88 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
               await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
             });
           }
+          await t.test("second policy receipt insertion failure rolls back both fresh policy writes", async () => {
+            await setPlan(10, 8, 2);
+            const first = await createPolicyJob(), second = await createPolicyJob(first.canvasId);
+            const ids = [first.jobId, second.jobId];
+            await sql`UPDATE jobs SET status='orphan',error='调度器重启（执行中断）' WHERE id=ANY(${ids}::uuid[])`;
+            const ordered = await sql`SELECT id FROM jobs WHERE id=ANY(${ids}::uuid[]) ORDER BY created_at,id`;
+            const firstId = String(ordered[0].id), secondId = String(ordered[1].id);
+            const [history] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=ANY(${ids}::uuid[])
+              AND payload_json->>'operation'='gateway_request_budget'`;
+            const [tokens] = await sql`SELECT count(*)::int AS count FROM job_tokens WHERE job_id=ANY(${ids}::uuid[])`;
+            assert.equal(history.count, 0); assert.equal(tokens.count, 0);
+            // nextval survives rollback: a test-only witness proves the failure was
+            // reached after both dedup/rate writes and the first policy INSERT.
+            await sql.unsafe("CREATE SEQUENCE policy_rollback_witness");
+            await sql.unsafe(`CREATE FUNCTION reject_second_policy_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+              IF NEW.job_id='${secondId}'::uuid AND NEW.type='control_receipt'
+                AND NEW.payload_json->>'operation'='gateway_request_budget' THEN
+                IF NOT EXISTS (SELECT 1 FROM events e JOIN event_dedup d ON d.job_id=e.job_id AND d.event_id=e.event_id
+                  WHERE e.job_id='${firstId}'::uuid AND e.payload_json->>'operation'='gateway_request_budget')
+                  OR NOT EXISTS (SELECT 1 FROM event_dedup WHERE job_id=NEW.job_id AND event_id=NEW.event_id)
+                  OR (SELECT count(*) FROM job_event_rate_limits WHERE job_id IN ('${firstId}'::uuid,'${secondId}'::uuid)
+                    AND standard_count>0) <> 2 THEN
+                  RAISE EXCEPTION 'policy fixture did not reach both writes';
+                END IF;
+                PERFORM nextval('policy_rollback_witness');
+                RAISE EXCEPTION 'synthetic second policy insert failure';
+              END IF;
+              RETURN NEW; END $$`);
+            await sql.unsafe("CREATE TRIGGER reject_second_policy_fixture BEFORE INSERT ON events FOR EACH ROW EXECUTE FUNCTION reject_second_policy_fixture()");
+            try {
+              const before = await captureBatch(first.canvasId, ids), calls = upstreamCalls;
+              const response = await withCatalog(async () => app.inject({ method: "POST", url: `/tasks/${first.canvasId}/resume-session` }));
+              assert.ok(response.statusCode >= 400, response.body);
+              const [witness] = await sql`SELECT is_called,last_value::int AS value FROM policy_rollback_witness`;
+              assert.equal(witness.is_called, true, "both policy write paths must have been reached");
+              assert.equal(witness.value, 1);
+              assert.deepEqual(await captureBatch(first.canvasId, ids), before);
+              assert.equal(upstreamCalls, calls);
+            } finally {
+              await sql.unsafe("DROP TRIGGER reject_second_policy_fixture ON events");
+              await sql.unsafe("DROP FUNCTION reject_second_policy_fixture()");
+              await sql.unsafe("DROP SEQUENCE policy_rollback_witness");
+              await sql`UPDATE jobs SET status='cancelled' WHERE id=ANY(${ids}::uuid[])`;
+            }
+          });
+          for (const blocker of ["effect_pending", "unknown", "accepted", "paused"] as const) {
+            for (const mode of ["resume", "rerun-current", "batch"] as const) {
+              await t.test(`no repair root: ${blocker} rejects ${mode} without mutations`, async () => {
+                await setPlan(10, 8, 2);
+                const first = await createPolicyJob();
+                const affected = mode === "batch" ? await createPolicyJob(first.canvasId) : first;
+                const ids = mode === "batch" ? [first.jobId, affected.jobId] : [first.jobId];
+                const execution = await startPolicyJob(affected.jobId);
+                if (blocker === "effect_pending" || blocker === "unknown") {
+                  await attempts.beginEffect(sql, execution.attemptId, { effectId: "ordinary-unresolved", kind: "agent_run",
+                    step: 1, replayPolicy: "never", intent: { fixture: true } });
+                  if (blocker === "unknown") await attempts.markEffectUnknown(sql, execution.attemptId, "ordinary-unresolved", "synthetic unknown");
+                } else if (blocker === "accepted") {
+                  const accepted = await app.inject({ method: "POST", url: `/control/v1/jobs/${affected.jobId}/operations/mark_job_done`,
+                    headers: { authorization: `Bearer ${execution.grant}`, "idempotency-key": randomUUID(),
+                      "x-deepsonar-proposal-revision": "0" }, payload: { summary: "Synthetic accepted completion awaiting settlement." } });
+                  assert.equal(accepted.statusCode, 200, accepted.body);
+                } else {
+                  await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${first.canvasId}`;
+                }
+                assert.equal(await readBudget(affected.jobId), null, "no rejected completion root");
+                // Emulate a restart exposing a stopped Job; retain the old effects,
+                // accepted receipt and Attempt so recovery must inspect actual history.
+                await sql`UPDATE jobs SET status='orphan',error='调度器重启（执行中断）' WHERE id=ANY(${ids}::uuid[])`;
+                const before = await captureBatch(first.canvasId, ids), calls = upstreamCalls;
+                const response = await withCatalog(async () => app.inject({ method: "POST", url: mode === "batch"
+                  ? `/tasks/${first.canvasId}/resume-session` : `/jobs/${affected.jobId}/${mode}` }));
+                assert.equal(response.statusCode, 409, response.body);
+                assert.equal(response.json().error_code, blocker === "accepted" ? "COMPLETION_ALREADY_ACCEPTED"
+                  : blocker === "paused" ? "REPAIR_PAUSED" : "REPAIR_EFFECT_UNRESOLVED");
+                assert.deepEqual(await captureBatch(first.canvasId, ids), before);
+                assert.equal(upstreamCalls, calls);
+                api.unregisterRuntimeHandler(affected.jobId);
+                await sql`UPDATE jobs SET status='cancelled' WHERE id=ANY(${ids}::uuid[])`;
+              });
+            }
+          }
           await t.test("invalid original policy in later sibling rejects the whole no-receipt batch", async () => {
             await setPlan(10, 8, 2);
             const first = await createPolicyJob(), second = await createPolicyJob(first.canvasId);

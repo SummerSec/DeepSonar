@@ -7,7 +7,6 @@ import { canvasExecutionIsPaused } from "../../task-execution-control.js";
 /** Read-only preflight under Canvas -> Job locks. Unknown old effects never become safe by interruption. */
 export async function readRepairRequeueAdmission(db: typeof sql, jobId: string) {
   const budget = await readRepairTokenBudget(db, jobId);
-  if (!budget) return { budget: null, deadline: null, blocker: null };
   const deny = (code: string, reason: string) => ({ budget, deadline: null, blocker: { code, reason } });
   const [job] = await db`SELECT j.started_at,j.timeout_sec,j.agent_snapshot_json,c.target_json FROM jobs j
     LEFT JOIN canvases c ON c.id=j.canvas_id WHERE j.id=${jobId}`;
@@ -27,12 +26,21 @@ export async function readRepairRequeueAdmission(db: typeof sql, jobId: string) 
   const [history] = await db`SELECT count(*)::int AS count,
     count(*) FILTER (WHERE payload_json->>'status'='persisted_deferred')::int AS accepted
     FROM events WHERE job_id=${jobId} AND type='control_receipt' AND payload_json->>'operation'='mark_job_done'`;
-  if (Number(history.accepted) > 0) return deny("COMPLETION_ALREADY_ACCEPTED", "完成提案已接受；查询原回执并结算，不重跑已接受效果。");
+  const [done] = await db`SELECT event_id FROM events WHERE job_id=${jobId} AND type='done' LIMIT 1`;
+  if (done || Number(history.accepted) > 0) return deny("COMPLETION_ALREADY_ACCEPTED", "完成提案已接受；查询原回执并结算，不重跑已接受效果。");
+  try { await readMainTokenAllowance(db, jobId, job?.agent_snapshot_json, budget); }
+  catch (error) {
+    if (!(error instanceof RepairTokenBudgetError)) throw error;
+    return deny(error.code, error.message);
+  }
+  // Generic recovery safety applies even when no completion was ever rejected.
+  // Only repair revision/deadline accounting requires a rejected-completion root.
+  if (!budget) return { budget: null, deadline: null, blocker: null };
   if (Number(history.count) >= COMPLETION_REPAIR_LIMIT) return deny("COMPLETION_REPAIR_EXHAUSTED", "Job 累计修正次数已耗尽；不创建新代际。");
   const deadline = budget.deadline ?? (job?.started_at
     ? new Date(new Date(job.started_at).getTime() + Number(job.timeout_sec) * 1000).toISOString() : null);
   if (!deadline || Date.parse(deadline) <= Date.now()) return deny("REPAIR_DEADLINE_EXHAUSTED", "原修复期限已耗尽或无法确认；不能刷新期限继续执行。");
-  try { assertRepairTokenBudget({ ...budget, deadline }, true); await readMainTokenAllowance(db, jobId, job?.agent_snapshot_json, budget); }
+  try { assertRepairTokenBudget({ ...budget, deadline }, true); }
   catch (error) {
     if (!(error instanceof RepairTokenBudgetError)) throw error;
     return deny(error.code, error.message);
