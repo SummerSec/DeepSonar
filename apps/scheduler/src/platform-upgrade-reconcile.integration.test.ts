@@ -68,7 +68,8 @@ test("operator settlement: real PostgreSQL, kernel ownership, CLI and upgrade ga
   }
   try {
     await admin.unsafe(`CREATE DATABASE "${name}" TEMPLATE template0`); created = true;
-    await db.unsafe(readFileSync(SCHEMA_FILE, "utf8"));
+    const bootstrap = await db.reserve();
+    try { await bootstrap.unsafe(readFileSync(SCHEMA_FILE, "utf8")); } finally { bootstrap.release(); }
     await db`INSERT INTO projects(id,name) VALUES(${project},'operator settlement fixture')`;
 
     for (const kind of ["provision", "agent_run", "gateway_model_request"] as const) {
