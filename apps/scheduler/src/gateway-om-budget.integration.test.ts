@@ -791,6 +791,41 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     assert.equal(upstreamCalls, totalCalls);
     assert.deepEqual(await usageState(totalOnly.jobId), totalBefore);
 
+    // A legal ordinary Pi snapshot freezes a Job-wide cap, not merely a
+    // main-workload cap. Enabling OM later cannot create a new request reserve.
+    const enableOm = await createJob("running", { totalRequests: 3 }, credentialId, true);
+    const ordinaryMain = await issue(enableOm.jobId, "main", { maxRequests: 3 });
+    for (let i = 0; i < 2; i++) assert.equal((await request(ordinaryMain.plaintext, { workload: "main" })).statusCode, 200);
+    await awaitSettled(enableOm.jobId, 2);
+    const ordinaryPolicies = await policyReceipts(enableOm.jobId);
+    assert.deepEqual(ordinaryPolicies[0]!.payload_json.policy,
+      { version: 1, total_requests: 3, main_requests: 3, background_requests: 0 });
+    await recoverFixture(enableOm, { ...enableOm.snapshot,
+      ...makeSnapshot(credentialId, { totalRequests: 8, mainRequests: 4, backgroundRequests: 4, backgroundMaxTokens: 0 }) });
+    const enabledMain = await issue(enableOm.jobId, "main");
+    const enabledOm = await issue(enableOm.jobId, "observational_memory");
+    const [enabledCaps] = await sql`SELECT request_total_limit FROM job_tokens WHERE id=${enabledOm.id}`;
+    assert.equal(enabledCaps.request_total_limit, 3);
+    const beforeEnabledCalls = upstreamCalls;
+    assert.equal((await request(enabledOm.plaintext)).statusCode, 200);
+    await awaitSettled(enableOm.jobId, 3);
+    assert.equal(upstreamCalls, beforeEnabledCalls + 1);
+    const enabledBeforeDenied = await usageState(enableOm.jobId);
+    const enabledDenied = await Promise.all([
+      request(enabledMain.plaintext, { workload: "main" }), request(enabledOm.plaintext),
+    ]);
+    assert.deepEqual(enabledDenied.map(response => response.statusCode), [429, 429]);
+    assert.equal((await receiptFor(enabledDenied[1]!)).status, "not_started");
+    for (const value of [enabledMain, enabledOm]) {
+      const allowance = await app.inject({ method: "GET", url: "/gateway/_allowance",
+        headers: { authorization: `Bearer ${value.plaintext}` } });
+      assert.equal(allowance.statusCode, 429, allowance.body);
+    }
+    assert.equal(upstreamCalls, beforeEnabledCalls + 1);
+    assert.deepEqual(await usageState(enableOm.jobId), enabledBeforeDenied);
+    const enabledPolicies = await policyReceipts(enableOm.jobId);
+    for (const original of ordinaryPolicies) assert.deepEqual(enabledPolicies.find(row => row.event_id === original.event_id), original);
+
     for (const newCap of [0, 20]) {
       const ordinary = await createJob("running", { totalRequests: 0 }, credentialId, true);
       const ordinarySnapshot = ordinary.snapshot;

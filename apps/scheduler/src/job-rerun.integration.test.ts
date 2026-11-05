@@ -79,9 +79,12 @@ if (!testDatabaseUrl) {
       await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({ marker: "keep-root" })})`;
-      await sql`
-        INSERT INTO agent_roles (id, name, title, description, builtin, kind, ui_color)
-        VALUES (${roleId}, ${roleName}, 'Rerun fixture', 'Issue 202 fixture', false, 'role', '#c084fc')`;
+      const { allocateRoleUiColor } = await import("./role-colors.js");
+      await sql.begin(async tx => {
+        const color = await allocateRoleUiColor(tx as unknown as typeof sql);
+        await tx`INSERT INTO agent_roles (id, name, title, description, builtin, kind, ui_color)
+          VALUES (${roleId}, ${roleName}, 'Rerun fixture', 'Issue 202 fixture', false, 'role', ${color})`;
+      });
       await sql`
         INSERT INTO role_configs (id, role_id, project_id, agent_cli, model)
         VALUES (${roleConfigId}, ${roleId}, NULL, 'claude-code', 'model-a')`;
@@ -636,7 +639,7 @@ if (!testDatabaseUrl) {
       assert.equal(singleAfter.status, "failed");
 
       // #928: exercise the actual recovery route before issuing a replacement
-      // ordinary token. Its request_total_limit is zero, but 19/20 is not reset.
+      // ordinary token. The frozen Job-wide cap and its consumed 19/20 survive.
       const { mintJobToken } = await import("./gateway.js");
       const quotaUpstream = fastifyModule.default();
       let quotaUpstreamCalls = 0;
@@ -651,8 +654,11 @@ if (!testDatabaseUrl) {
         await sql`UPDATE credentials SET public_metadata_json=${sql.json({ base_url: quotaUrl })} WHERE id=${baselineCredentialId}`;
         const quotaRoleId = randomUUID(), quotaConfigId = randomUUID();
         const quotaRole = `quota_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
-        await sql`INSERT INTO agent_roles(id,name,title,description,builtin,kind,ui_color)
-          VALUES(${quotaRoleId},${quotaRole},'Quota recovery','Offline quota recovery',false,'role','#c084fc')`;
+        await sql.begin(async tx => {
+          const color = await allocateRoleUiColor(tx as unknown as typeof sql);
+          await tx`INSERT INTO agent_roles(id,name,title,description,builtin,kind,ui_color)
+            VALUES(${quotaRoleId},${quotaRole},'Quota recovery','Offline quota recovery',false,'role',${color})`;
+        });
         await sql`INSERT INTO role_configs(id,role_id,agent_cli,model,runtime_knobs_json)
           VALUES(${quotaConfigId},${quotaRoleId},'claude-code','model-a',${sql.json({ jobTokenMaxRequests: 20 })})`;
         for (const replacementCap of [0, 20]) {
@@ -706,7 +712,7 @@ if (!testDatabaseUrl) {
           await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '1 hour' WHERE id=${quotaJob}`;
           const replacement = await mintJobToken({ jobId: quotaJob, projectId, credentialId: baselineCredentialId, maxRequests: replacementCap });
           const [limits] = await sql`SELECT max_requests,request_total_limit FROM job_tokens WHERE id=${replacement.id}`;
-          assert.equal(limits.max_requests, 20); assert.equal(limits.request_total_limit, 0);
+          assert.equal(limits.max_requests, 20); assert.equal(limits.request_total_limit, 20);
           const beforeCalls = quotaUpstreamCalls;
           const responses = await Promise.all([send(replacement.plaintext), send(replacement.plaintext)]);
           assert.deepEqual(responses.map(response => response.statusCode).sort(), [200, 429]);

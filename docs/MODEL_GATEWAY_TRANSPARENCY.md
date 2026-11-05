@@ -45,7 +45,7 @@ usage scanner 只观察副本，压缩响应仍按原压缩字节转发；无法
 
 ## 预算与 OM 迁移
 
-请求次数按 Job 跨 token/Attempt 累计，普通 main 与 OM 均适用。首次铸造通过 [请求策略原语](../apps/scheduler/src/gateway-request-policy.ts)将完整 total/main/background 上限写为内核 `control_receipt`（operation=`gateway_request_budget`），包括尚未签发 token 的 workload。后续策略只可追加收紧，重复 ensure 幂等；allowance 查询和每次出站准入结合回执及所有历史 token（包括撤销、过期）的计数及有限上限；当前与历史 total/main/background 请求上限取各自正数最小值，0/未配置不能解除历史有限限制。新一代 token 不刷新累计余额；并发请求在同一 Job 锁内重验，拒绝不增加请求计数、不创建模型 effect、不访问上游。token 用量与 pending/unknown effect 的门禁继续独立执行；该规则不授权重放未知效果或修改旧 Attempt/receipt。
+请求次数按 Job 跨 token/Attempt 累计，普通 main 与 OM 均适用。首次铸造通过 [请求策略原语](../apps/scheduler/src/gateway-request-policy.ts)将完整 total/main/background 上限写为内核 `control_receipt`（operation=`gateway_request_budget`），包括尚未签发 token 的 workload。后续策略只可追加收紧，重复 ensure 幂等；allowance 查询和每次出站准入结合回执及所有历史 token（包括撤销、过期）的计数及有限上限；当前与历史 total/main/background 请求上限取各自正数最小值，0/未配置不能解除历史有限限制。普通 Job 已冻结的有限 `job_token_max_requests` 同时保留为 total/main 上限，后来启用 OM 也不能扩大旧 Job 总请求数；仅有 token 分量而无原始总额证据时不反推另一维预算。新一代 token 不刷新累计余额；并发请求在同一 Job 锁内重验，拒绝不增加请求计数、不创建模型 effect、不访问上游。token 用量与 pending/unknown effect 的门禁继续独立执行；该规则不授权重放未知效果或修改旧 Attempt/receipt。
 
 `inspectGatewayRequestBudget` 只读；`ensureGatewayRequestBudget` 依赖调用方已持有 Job 锁并处于同一事务，本身不提供事务原子性。恢复先对整批完成只读预检，再以旧冻结快照 ensure，之后才能修改 Attempt、grant、快照或 pending；ensure 后失败必须 throw 回滚而不是 return 提交部分回执。新回执消费既有 control receipt 率限，幂等不收费，写入/率限失败均阻塞。冻结策略经 `frozenRuntimeKnobsFromSnapshot` 与 Pi 扩展契约验证，缺失/null/损坏返回 `GATEWAY_REQUEST_BUDGET_INVALID`；合法数字 0 才是无限。无策略回执且已有多次 Attempt 返回 `GATEWAY_REQUEST_BUDGET_HISTORY_MISSING`，不推测丢失策略。完整合法 OM 在显式总额度 0 下不含 request_budget 的形状沿用创建期 `freezeObservationalMemoryQuota` 契约。
 
