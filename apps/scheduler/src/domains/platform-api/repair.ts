@@ -1,6 +1,7 @@
 import type { CapabilityPrincipal } from "./tokens.js";
 import {
   type RepairFeedback,
+  type RepairFeedbackCategory,
   repairFeedbackFromControlRejection,
   repairFeedbackFromZodIssues,
 } from "@deepsonar/shared-types";
@@ -102,6 +103,8 @@ export function controlRuntimeRejection(input: {
   code: string;
   message: string;
   retryable: boolean;
+  category?: RepairFeedbackCategory;
+  next_action?: string;
   statusCode?: number;
   path?: string;
   details?: Record<string, unknown>;
@@ -113,6 +116,8 @@ export function controlRuntimeRejection(input: {
     code: input.code,
     message: input.message,
     retryable: input.retryable,
+    category: input.category,
+    next_action: input.next_action,
     statusCode: input.statusCode,
     path: input.path,
     details: input.details,

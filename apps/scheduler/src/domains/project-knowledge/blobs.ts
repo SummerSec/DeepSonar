@@ -1,6 +1,6 @@
 import { getSharedAssetBlobStore, sharedAssetBlobUri } from "../../blob-store/index.js";
 import { KnowledgeCandidate, KNOWLEDGE_LIMITS, type KnowledgeCandidate as Candidate } from "@deepsonar/shared-types";
-import { canonical, reject, sha256, type KnowledgeDb } from "./types.js";
+import { canonical, KnowledgeOperationError, reject, sha256, type KnowledgeDb } from "./types.js";
 
 export async function writeKnowledgeBlob(db: KnowledgeDb, value: unknown): Promise<{ hash: string; bytes: number }> {
   const buffer = Buffer.from(canonical(value), "utf8");
@@ -23,7 +23,7 @@ export async function readKnowledgeBlob(db: KnowledgeDb, hash: string): Promise<
   if (!Number.isSafeInteger(Number(row.bytes)) || Number(row.bytes) < 0 || Number(row.bytes) > KNOWLEDGE_LIMITS.bundleBytes * 3)
     return reject("KNOWLEDGE_INPUT_TOO_LARGE", "Knowledge content exceeds the bounded CAS read budget");
   const bytes = await getSharedAssetBlobStore().get(String(row.blob_uri));
-  if (bytes.length !== Number(row.bytes) || sha256(bytes) !== hash) return reject("KNOWLEDGE_HASH_MISMATCH", "Knowledge content hash mismatch");
+  if (bytes.length !== Number(row.bytes) || sha256(bytes) !== hash) throw new KnowledgeOperationError("KNOWLEDGE_HASH_MISMATCH", "Knowledge content hash mismatch", "permanent_failure", "Stop using this frozen content and report its integrity failure to Scheduler; changing the requested hash cannot repair stored evidence.");
   return JSON.parse(bytes.toString("utf8")) as unknown;
 }
 

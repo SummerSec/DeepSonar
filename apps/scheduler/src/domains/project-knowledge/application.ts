@@ -199,7 +199,7 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
       }, { maxPayloadBytes: 180 * 1024 });
       await ingestion.ingestEvent(actor.jobId, { v: 1, event_id: eventId, type: "knowledge", payload: { operation: operation as never, input } });
       const [settled] = await db`SELECT operation,input_digest,result_json FROM project_knowledge_receipts WHERE job_id=${actor.jobId} AND idempotency_key=${key}`;
-      if (!settled) return reject("KNOWLEDGE_RECEIPT_MISSING", "Knowledge event has no durable settlement");
+      if (!settled) throw new KnowledgeOperationError("KNOWLEDGE_RECEIPT_MISSING", "Knowledge event has no durable settlement", "unknown_external_effect", "Stop automatic replay and preserve the original Idempotency-Key; ask Scheduler to reconcile the durable event and receipt before submitting another proposal.");
       if (settled.operation !== operation || settled.input_digest !== inputDigest) return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key has a different operation or input");
       return settled.result_json as Record<string, unknown>;
     },

@@ -1,6 +1,6 @@
 import type { SuggestProjectSkillsPayload, RecordSkillChoicePayload } from "@deepsonar/shared-types";
 import type { KnowledgeActor } from "./inputs.js";
-import { canonical, reject, sha256, type KnowledgeDb } from "./types.js";
+import { canonical, KnowledgeOperationError, reject, sha256, type KnowledgeDb } from "./types.js";
 import { projectSkillSelector, type FrozenKnowledgeCatalog, type KnowledgeCatalogEntry } from "./catalog-snapshot.js";
 import { readKnowledgeVersionContent } from "./blobs.js";
 import { assessSkillApplicability, SKILL_SUGGESTION_POLICY, type SuggestionEnvironment } from "./skill-suggestion-rules.js";
@@ -39,7 +39,7 @@ export async function prepareSkillSuggestions(db: KnowledgeDb, actor: KnowledgeA
   const candidates: PreparedSuggestions["candidates"] = [];
   for (const entry of visible) {
     const content = await readKnowledgeVersionContent(db, entry.version_id);
-    if (sha256(canonical(content)) !== entry.hash) return reject("KNOWLEDGE_HASH_MISMATCH", "Candidate differs from the frozen version");
+    if (sha256(canonical(content)) !== entry.hash) throw new KnowledgeOperationError("KNOWLEDGE_HASH_MISMATCH", "Candidate differs from the frozen version", "permanent_failure", "Stop using this frozen content and report its integrity failure to Scheduler; changing the requested hash cannot repair stored evidence.");
     if (content.kind !== "skill") return reject("KNOWLEDGE_SNAPSHOT_INVALID", "Candidate kind differs from the frozen catalog");
     candidates.push({ entry, raw: content.files?.["references/applicability.json"] });
   }

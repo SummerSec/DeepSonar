@@ -271,13 +271,16 @@ export function repairFeedbackFromControlRejection(input: {
   code: string;
   message: string;
   retryable?: boolean;
+  /** Host/domain-owned classification, never copied from untrusted details. */
+  category?: RepairFeedbackCategory;
+  next_action?: string;
   statusCode?: number;
   path?: string;
   details?: Record<string, unknown>;
   rawInput?: unknown;
   idempotency_key?: string;
 }): RepairFeedback {
-  const category = repairCategoryForControlFailure(input);
+  const category = input.category ?? repairCategoryForControlFailure(input);
   const expected = input.details && "expected" in input.details
     ? input.details.expected
     : category === "transient_retryable" && input.details
@@ -297,7 +300,7 @@ export function repairFeedbackFromControlRejection(input: {
     expected,
     observed_shape: observed,
     idempotency_key: input.idempotency_key,
-    next_action: nextActionFor({ category, code: input.code, path: input.path, expected }),
+    next_action: input.next_action ?? nextActionFor({ category, code: input.code, path: input.path, expected }),
   });
 }
 

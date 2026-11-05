@@ -283,6 +283,8 @@ async function executeInvocation(
           code: error.rejection.errorCode,
           message: error.message,
           retryable: error.rejection.retryable,
+          category: error.rejection.category,
+          next_action: error.rejection.next_action,
           statusCode: error.rejection.statusCode,
           path: error.rejection.path,
           details: error.rejection.details,
