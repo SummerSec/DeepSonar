@@ -56,8 +56,11 @@ if (!testDatabaseUrl) {
           VALUES (${canvasId}, ${projectId}, 'Delete me', ${sql.json({ network_policy: { allow_egress: false } })})`;
         await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, sandbox_id, agent_snapshot_json)
           VALUES (${jobId}, ${projectId}, ${canvasId}, 'explore', ${status}, ${sandboxId}, ${sql.json({})})`;
-        await sql`INSERT INTO job_attempts (id, job_id, attempt_no, status, phase, sandbox_id)
-          VALUES (${attemptId}, ${jobId}, 1, ${status === "failed" ? "failed" : "active"}, ${status === "failed" ? "preparing" : "agent.ready"}, ${sandboxId})`;
+        // The lifecycle application validates the attempt's total state identity, so the
+        // fixture supplies a well-formed state_json instead of the '{}' default.
+        await sql`INSERT INTO job_attempts (id, job_id, attempt_no, status, phase, sandbox_id, state_json)
+          VALUES (${attemptId}, ${jobId}, 1, ${status === "failed" ? "failed" : "active"}, ${status === "failed" ? "preparing" : "agent.ready"}, ${sandboxId},
+            ${sql.json({ version: 1, attempt_id: attemptId, job_id: jobId })})`;
         return { jobId, attemptId, canvasId };
       };
 

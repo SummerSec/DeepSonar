@@ -1,11 +1,6 @@
-import { createHash } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import {
   AgentCliWriteSchema,
-  PlatformToolName,
-  allowedPlatformTools,
-  parseModuleSelector,
-  requiredPlatformTools,
 } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit, credentialAuditState } from "../../audit.js";
@@ -17,10 +12,7 @@ import {
   isProviderKnown,
   isProviderAllowedForKind,
   last4Of,
-  projectCredentialProviderError,
   projectCredentialMetadata,
-  projectJobEventPayload,
-  projectJobPayload,
   projectCredentialProvider,
   providerSupportsBaseUrl,
   PROVIDER_CATALOG,
@@ -38,10 +30,8 @@ import {
   extractBaseUrlFromSettings,
   normalizeProviderSettings,
   parseContextWindowTokens,
-  projectProviderRuntimeSnapshot,
   resolveEffectiveModel,
   resolveRequestedModel,
-  type ProviderRuntimeSnapshotProjection,
 } from "../../provider-settings.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../../core.js";
 import {
@@ -49,8 +39,7 @@ import {
   activeConcurrencyForCredential,
   queryActiveDispatchRows,
 } from "../../dispatch-active-concurrency.js";
-import { PLATFORM_DEFAULT_AGENT_CLI, PLATFORM_DEFAULT_AGENT_MODEL } from "../role-runtime-snapshot/index.js";
-import { parseProjectImagePolicy, persistableProjectRoleConfigModel } from "../role-runtime-snapshot/application.js";
+import { PLATFORM_DEFAULT_AGENT_CLI } from "../role-runtime-snapshot/index.js";
 import { findProviderAdapter, resolveModelDescriptorCatalog } from "../provider-adapter/index.js";
 import { sql } from "../../db.js";
 import { RESUMABLE_JOB_STATUSES } from "../job-lifecycle/transition-policy.js";
@@ -184,7 +173,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     id: string,
     actorProjectId: string | null = null,
   ): Promise<Record<string, unknown>> {
-    const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, recoverableJobs, terminalJobs, scanCount, activeScans] = await Promise.all([
+    const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, recoverableJobs, terminalJobs, scanCount, activeScans, projectReferences] = await Promise.all([
       query<{ count: number }[]>`SELECT 0::int AS count`,
       query`SELECT NULL::uuid AS role_config_id WHERE false`,
       query<{ pending_unclaimed: number; active_frozen: number; recoverable: number; terminal_historical: number }[]>`
@@ -255,6 +244,18 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           AND s.status IN ('queued','claimed','running')
         ORDER BY s.created_at DESC
         LIMIT 50`,
+      // #914: a project's own Provider configuration can point at this credential. It is
+      // none of the in-use statuses, so deleting the credential used to leave the project
+      // pointing at a row that no longer exists and blocked every new snapshot.
+      query`
+        SELECT p.id, p.name,
+               COALESCE(jsonb_exists(p.config_json->'enabled_credential_ids', ${id}), false) AS enabled,
+               (p.config_json->>'default_credential_id') = ${id} AS is_default
+        FROM projects p
+        WHERE jsonb_exists(p.config_json->'enabled_credential_ids', ${id})
+           OR (p.config_json->>'default_credential_id') = ${id}
+        ORDER BY p.name
+        LIMIT 50`,
     ]);
     const counts = jobCount[0] ?? { pending_unclaimed: 0, active_frozen: 0, recoverable: 0, terminal_historical: 0 };
     const item = (job: Record<string, unknown>) => ({
@@ -295,6 +296,18 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
             created_at: scan.created_at,
           })),
         },
+      },
+      // #914: known references from project Provider configuration (whitelist / default
+      // account). These are not "in use" jobs, but deleting the row would leave the
+      // project config dangling and fail closed on the next snapshot resolution.
+      project_references: {
+        count: projectReferences.length,
+        items: projectReferences.map((row) => ({
+          project_id: row.id,
+          project_name: row.name,
+          enabled: row.enabled === true,
+          default: row.is_default === true,
+        })),
       },
     };
   }
@@ -842,6 +855,15 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         WHERE result_json->>'registry_credential_id' = ${id}
           AND status = ANY(${ACTIVE_SCAN_STATUSES as unknown as string[]})
         FOR UPDATE`;
+      // #914: lock the projects that reference this credential, so a concurrent whitelist /
+      // default-account write cannot commit a dangling reference between this check and the
+      // DELETE. Project settings writes take the project row lock, so this is the same
+      // boundary on both sides.
+      await tx`
+        SELECT id FROM projects
+        WHERE jsonb_exists(config_json->'enabled_credential_ids', ${id})
+           OR (config_json->>'default_credential_id') = ${id}
+        FOR UPDATE`;
 
       const impact = await credentialImpact(tx, id, actorProjectId);
       const jobs = impact.jobs as {
@@ -871,6 +893,25 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
             error: "credential is still referenced by an active image-admission scan",
             error_code: "CREDENTIAL_SCAN_IN_USE",
             impact,
+          },
+        };
+      }
+      // #914: deleting a credential that a project still enables (or uses as its default
+      // account) leaves that project pointing at a missing row, so every later snapshot
+      // resolution fails closed with SNAPSHOT_STALE and rerun-current cannot help. Refuse
+      // before touching anything and point at the project settings that must change first.
+      const projectReferences = impact.project_references as { count: number } | undefined;
+      const projectReferenceCount = Number(projectReferences?.count ?? 0);
+      if (projectReferenceCount > 0) {
+        return {
+          ok: false,
+          statusCode: 409,
+          body: {
+            error: "credential is still referenced by project provider configuration",
+            error_code: "CREDENTIAL_PROJECT_REFERENCE",
+            impact,
+            next_action:
+              "该账号仍被项目的“启用 Provider 账号/缺省账号”引用。请先在对应项目的账号设置中移除或替换它（替换时必须选 active、可选且模型自洽的账号），再删除。",
           },
         };
       }
