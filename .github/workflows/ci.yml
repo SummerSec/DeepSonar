@@ -121,6 +121,12 @@ jobs:
           node agent-harness/runtime-manuals/generate-catalog.mjs
           git diff --exit-code -- agent-harness/runtime-manuals/catalog.json
 
+      - name: Release recovery behavior and original signature identity
+        run: |
+          node --test agent-harness/release-resume.test.mjs agent-harness/platform-signature-publication.test.mjs
+          node agent-harness/test-release-stages.mjs
+          node agent-harness/test-release-writeback-order.mjs
+
       - name: CI routing and failure propagation regression
         run: pnpm ci:unit:ci-routing
 
@@ -1118,6 +1124,9 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Release recovery evidence regressions
+        run: node --test agent-harness/release-resume.test.mjs agent-harness/platform-signature-publication.test.mjs
 
       - name: Workspace typecheck
         run: pnpm -r typecheck

@@ -129,6 +129,14 @@ try {
   assert.equal(recorded.branch, `bot/sync-runtime-registry-v${version}`);
   assert.equal(recorded.sha, git(workspace, "rev-parse", "HEAD").trim());
 
+  // Pending PR retries preserve the exact remote head and its checks.
+  git(workspace, "push", "--quiet", "origin", `HEAD:refs/heads/${recorded.branch}`);
+  execFileSync("bash", [script, "frozen-release"], {
+    cwd: workspace, stdio: ["ignore", "pipe", "pipe"],
+    env: {...process.env, VERSION: version, DEFAULT_BRANCH: "main", GH_TOKEN: "fixture", WRITEBACK_MARKER: marker},
+  });
+  assert.equal(git(workspace, "rev-parse", "HEAD").trim(), recorded.sha);
+
   // A second run has nothing left to do and must exit without creating a commit.
   // Simulate the merged state: the same content is now on the default branch.
   git(workspace, "push", "--quiet", "origin", "HEAD:main");
@@ -153,6 +161,16 @@ try {
     stdio: ["ignore", "pipe", "pipe"],
     env: {...process.env, VERSION: version, DEFAULT_BRANCH: "main", GH_TOKEN: "fixture", WRITEBACK_MARKER: marker},
   }), (error) => /platform_version=0\.6\.11, expected 0\.6\.12/.test(String(error.stderr)));
+
+  // A newer default branch must never be downgraded by an old recovery.
+  writeFileSync(join(workspace, "deploy", "runtime-image-registry.json"), JSON.stringify(catalog("0.6.13")));
+  git(workspace, "add", "deploy/runtime-image-registry.json");
+  git(workspace, "commit", "--quiet", "-m", "newer release");
+  git(workspace, "push", "--quiet", "origin", "HEAD:main");
+  assert.throws(() => execFileSync("bash", [script, "frozen-release"], {
+    cwd: workspace, stdio: ["ignore", "pipe", "pipe"],
+    env: {...process.env, VERSION: version, DEFAULT_BRANCH: "main", GH_TOKEN: "fixture", WRITEBACK_MARKER: marker},
+  }), error => /writeback_newer_default_branch/.test(String(error.stderr)));
 
   rmSync(root, {recursive: true, force: true});
   console.log("release writeback: catalog and deployment example land in one commit, ordering regressions fail");

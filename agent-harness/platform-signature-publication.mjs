@@ -76,8 +76,13 @@ async function pinnedPolicy(directory) {
     trustedRootPath: join(directory, 'trusted-root.json'), trustedRootSha256: TRUST.trustedRootSha256};
 }
 async function cli() {
-  const [command, rawDirectory = '.'] = process.argv.slice(2);
+  const [command, rawDirectory = '.', signatureDirectory = 'signature-evidence'] = process.argv.slice(2);
   const env = process.env;
+  if (command === 'gate' && env.SOURCE_RUN_ID) {
+    const {verifiedResume} = await import('./release-resume.mjs');
+    await verifiedResume(env, resolve(rawDirectory), resolve(signatureDirectory));
+    return;
+  }
   const identity = releaseIdentity(env);
   if (command === 'identity') {
     releaseIdentity(env, execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim(),
@@ -99,7 +104,7 @@ async function cli() {
     await appendFile(env.GITHUB_OUTPUT, `receipt_sha256=${sha256(bytes)}\n`); return;
   }
   if (command !== 'gate') signatureError('signature_cli_arguments_invalid');
-  const bytes = await readFile('signature-evidence/platform-signature-evidence.json');
+  const bytes = await readFile(join(signatureDirectory, 'platform-signature-evidence.json'));
   checkSignatureReceipt(bytes, env.RECEIPT_SHA256, env.FREEZE_SHA256, frozen);
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) cli().catch(error => {

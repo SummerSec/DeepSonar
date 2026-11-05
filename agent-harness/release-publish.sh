@@ -9,15 +9,19 @@ signature_dir="${2:-signature-evidence}"
 : "${GH_TOKEN:?GH_TOKEN is required}"
 
 [[ -f "$payload_dir/release-body.md" ]]
-node agent-harness/platform-signature-publication.mjs gate "$payload_dir"
+node agent-harness/platform-signature-publication.mjs gate "$payload_dir" "$signature_dir"
 
 # Idempotent: an existing Release is left untouched rather than overwritten.
-if gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+# gh release view cannot distinguish missing from authentication/network errors.
+state="$(node agent-harness/release-publication-state.mjs "$payload_dir" "$signature_dir")"
+if [[ "$state" == existing ]]; then
   echo "Release v${VERSION} already exists; leaving it untouched"
   exit 0
 fi
 
-gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+latest=true
+[[ "$state" != missing-older ]] || latest=false
+gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --latest="$latest" \
   --notes-file "$payload_dir/release-body.md" \
   "$payload_dir/deepsonar-reverse-evidence-${VERSION}.tar.gz" \
   "$payload_dir/deepsonar-management-skill-${VERSION}.tar.gz" \
