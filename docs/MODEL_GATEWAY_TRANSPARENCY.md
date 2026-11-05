@@ -27,7 +27,7 @@ JSON（包括扩展字段）、非 JSON 和二进制转发字节不重建。压�
 
 ## Provider 配置绑定与旧 Job 出口（#918 联动）
 
-目录发现只读取选定 provider 默认头；推理探测与 OM 使用授权 model 的生成前默认值。Pi 优先级为 provider → `modelOverrides[id].headers` → `models[].headers`，合法客户端业务头始终优先。不存在或歧义 model、跨 endpoint 的 model override 明确拒绝。冻结层保留合法业务头（包括名称含 key/token 的未知头），消费精确认证/传输控制，原始值中的首尾 CR/LF 和同层大小写重复均拒绝；DSH 只接受锁定原生 profile 支持的 provider headers，不虚构 model 头接口。
+目录发现只读取选定 provider 默认头；推理探测与 OM 使用授权 model 的生成前默认值。Pi 优先级为 provider → `modelOverrides[id].headers` → `models[].headers`，合法客户端业务头始终优先。局部 `modelOverrides`/custom models 是覆盖集合，不是完整模型白名单；已授权内置模型未命中时使用 provider 默认头。模型许可由独立冻结模型准入决定；重复模型定义、跨 endpoint 的 model override 明确拒绝。冻结层保留合法业务头（包括名称含 key/token 的未知头），消费精确认证/传输控制，原始值中的首尾 CR/LF 和同层大小写重复均拒绝；DSH 只接受锁定原生 profile 支持的 provider headers，不虚构 model 头接口。
 
 新 Job 根快照的 `gateway_provider_binding` 保存版本、credential ID 与非秘密配置摘要，绑定 provider/CLI、目标、provider/model 配置和业务头。密文、认证值、健康状态与目录刷新不参与摘要。mint、allowance 与模型出站重新核对；仅 secret 轮换使用当前新 secret，业务头仍来自冻结默认与客户端原值。route/header/model 配置变化返回 `GATEWAY_PROVIDER_BINDING_CHANGED`，绝不把旧租户头发给新目标或静默替换客户端头。结算查询保留原 scope，不因配置变化丢失已发生效果的回执。
 
@@ -88,3 +88,8 @@ OM 响应不再由 Gateway 缓冲后换成结算错误。受审 [wrapper](../age
 `ci:integration:request-budget-sdk` 从现有 dsh-runtime lockfile 安装固定依赖，运行[真实 Pi SDK 阈值回归](../agent-harness/pi-main-budget-sdk-regression.test.ts)与[真实 DSH LlmRuntime/adapter 回归](../agent-harness/dsh-request-budget-sdk.mjs)。后者覆盖 prepared 与 direct 公共服务调用、逐次额度下降、usage、耗尽和身份拒绝，全部使用合成凭据及 loopback；不是生产模型或真实 DSH CLI 启动验收。新增源与测试尚未在本地执行，最终 SHA Actions 另验。
 
 同一 Actions 命令另外运行[真实 DSH CLI 回归](../agent-harness/dsh-request-budget-cli.mjs)，直接调用生产 `buildDshProfilePatch` 并仅重定位固定 vendor 产物的安装路径。用原生 SDK RPC 驱动工具续轮、多轮余额下降、context-overflow 触发的压缩恢复和实际 subagent，并逐项断言主工具续轮、压缩摘要与子会话接收到的输入/输出/总用量数值；shutdown 清理检查等待中的 allowance 连接关闭、没有模型出站；仅先于进程 close 事件关闭连接不能排除 OS 退出的影响，不证明存活进程内主动 abort 或 SDK 取消信号已被执行。锁定 RPC 没有独立 `session/cancel`，不能把 shutdown 验收表述为会话级取消或跨进程 resume 支持。这些是新增验收入口，最终提交的运行结果仍须单独核实，不能由 SDK 层通过推断 CLI 全路径通过。
+
+
+### Pi 原生模型覆盖与配置头对照
+
+`ci:integration:provider-headers-sdk` 使用独立测试 lockfile 的 Pi coding-agent/pi-ai 1.4.0，通过真实 ModelRuntime、ModelRegistry、内置 catalog 和 SDK 到 loopback 上游对照配置头；不改变生产 DSH 依赖。覆盖单个 override 仍保留其他内置模型、追加 custom model 后内置模型可调用、provider/override/definition 优先级，以及独立 Gateway 冻结模型 guard 对未授权模型的拒绝。测试源码为[原生对照回归](../agent-harness/pi-provider-headers-sdk-regression.test.ts)，已接入核心 Actions，新增行为尚待最终 SHA 运行验收。配置解析器负责生成默认值，不以局部覆盖集合取代模型授权。

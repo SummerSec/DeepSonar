@@ -85,7 +85,7 @@ test("configured provider headers reach the upstream and the Job token never doe
         credential_id: credentialId, credential_provider: "openai", gateway_provider_binding: binding,
         settings_config_json: providerSettingsForJobSnapshot(credential.settings_config_json, credential.agent_cli) };
       await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
-        VALUES(${jobId},${projectId},'audit','running',${sql.json(snapshot)},now(),3600,now()+interval '1 hour')`;
+        VALUES(${jobId},${projectId},'audit','running',${sql.json(snapshot as never)},now(),3600,now()+interval '1 hour')`;
       await sql.begin((tx) => createAttempt(tx as unknown as typeof sql, jobId));
       return gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests: 10, maxTokens: 0 });
     };

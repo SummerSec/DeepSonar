@@ -239,8 +239,9 @@ test("Pi 1.4.0 inference layers are provider then override then selected definit
     { "x-route": "provider", "x-provider": "p" });
   assert.deepEqual(providerCustomHeadersFromSettings(settings, undefined, { purpose: "inference", model: "selected" }),
     { headers: { "x-route": "model", "x-provider": "p", "x-override": "o", "x-model": "m" }, rejected: [] });
-  assert.equal(hasInvalidProviderHeaders(providerCustomHeadersFromSettings(settings, undefined,
-    { purpose: "inference", model: "missing" })), true);
+  assert.deepEqual(providerCustomHeadersFromSettings(settings, undefined,
+    { purpose: "inference", model: "other-builtin" }),
+    { headers: { "x-route": "provider", "x-provider": "p" }, rejected: [] });
 });
 
 test("inference refuses duplicate models, ambiguous providers and model endpoint changes", () => {
@@ -274,8 +275,7 @@ test("inference never resolves another provider's model and supports built-in ov
     a: { baseUrl: "http://127.0.0.1/v1", models: [{ id: "a-model" }] },
     b: { baseUrl: "http://127.0.0.1/other", models: [{ id: "b-model", headers: { "x-secret-route": "b" } }] },
   } }, "http://127.0.0.1/v1", { purpose: "inference", model: "b-model" });
-  assert.equal(hasInvalidProviderHeaders(result), true);
-  assert.deepEqual(result.headers, {});
+  assert.deepEqual(result, { headers: {}, rejected: [] }, "another provider model must not contribute headers");
   assert.deepEqual(providerCustomHeadersFromSettings({ providers: { a: {
     headers: { "x-layer": "provider" }, modelOverrides: { builtin: { headers: { "x-layer": "override" } } },
   } } }, undefined, { purpose: "inference", model: "builtin" }),
@@ -293,7 +293,6 @@ test("frozen provider disambiguates shared endpoint and model without consulting
       { purpose: "inference", model: "same", provider: "b" });
     assert.deepEqual(result, { headers: { "x-route": "b", "x-model": "b" }, rejected: [] });
     for (const selection of [
-      { purpose: "inference" as const, model: "missing", provider: "b" },
       { purpose: "inference" as const, model: "same", provider: "missing" },
     ]) assert.equal(hasInvalidProviderHeaders(providerCustomHeadersFromSettings(settings, "http://127.0.0.1/v1", selection)), true);
   }
@@ -353,5 +352,20 @@ test("frozen built-in providers work without a configured provider catalog", () 
     const result = providerCustomHeadersFromSettings(settings, "http://127.0.0.1/v1", selection);
     assert.deepEqual(result.headers, {});
     assert.equal(hasInvalidProviderHeaders(result), true);
+  }
+});
+
+
+test("partial model overrides and custom models retain provider defaults for other built-ins", () => {
+  for (const partial of [
+    { modelOverrides: { customized: { headers: { "x-layer": "override" } } } },
+    { models: [{ id: "customized", headers: { "x-layer": "definition" } }] },
+    { modelOverrides: { customized: { headers: { "x-layer": "override" } } },
+      models: [{ id: "custom", headers: { "x-custom": "never" } }] },
+  ]) {
+    const settings = { providers: { builtin: { ...partial, headers: { "x-layer": "provider" } } } };
+    assert.deepEqual(providerCustomHeadersFromSettings(settings, "http://127.0.0.1/v1",
+      { purpose: "inference", model: "other-builtin", provider: "builtin" }),
+      { headers: { "x-layer": "provider" }, rejected: [] });
   }
 });

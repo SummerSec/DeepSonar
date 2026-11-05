@@ -346,6 +346,9 @@ jobs:
       - name: Locked native SDK and DSH CLI budget regression (synthetic upstream only)
         run: pnpm ci:integration:request-budget-sdk
 
+      - name: Locked Pi provider composition and header regression (synthetic upstream only)
+        run: pnpm ci:integration:provider-headers-sdk
+
       - name: Target image offline upgrade configuration preflight
         run: pnpm ci:unit:platform-upgrade-preflight
 

@@ -44,7 +44,9 @@ function profileHeaders(profile: Record<string, unknown>, selection: ProviderHea
     ? models.map(asRecord).filter((entry) => entry.id === model)
     : Object.hasOwn(asRecord(models), model) ? [asRecord(asRecord(models)[model])] : [];
   if (matches.length > 1) return invalid("duplicate_definition");
-  if (!matches.length && !Object.hasOwn(overrides, model)) return invalid("not_found");
+  // Pi keeps built-in models alongside these partial overrides/definitions.
+  // A missing entry means provider defaults, not a failed model authorization.
+  // Gateway independently enforces the frozen model permission.
   const definition = matches[0] ?? {};
   const modelEndpoint = definition.baseUrl ?? definition.baseURL ?? definition.base_url;
   if (typeof modelEndpoint === "string" && (!endpoint || canonicalEndpoint(modelEndpoint) !== canonicalEndpoint(endpoint))) {
