@@ -29,7 +29,7 @@ test("Knowledge feedback survives domain, runtime registry and real Control HTTP
   try {
     await migrate(); api.registerPlatformControlRoutes(app); await app.ready();
     const owner = await support.seedKnowledgeJob(sql);
-    const consumer = await support.seedKnowledgeJob(sql, undefined, ["pull_skill", "search_project_knowledge"]);
+    const consumer = await support.seedKnowledgeJob(sql, undefined, ["pull_skill", "search_project_knowledge", "record_knowledge_feedback", "get_knowledge_receipt"]);
     const item = randomUUID(), version = randomUUID();
     const blob = await blobs.writeKnowledgeBlob(sql, { kind: "skill", logical_key: "feedback", title: "Feedback fixture",
       keywords: [], files: { "SKILL.md": "Use assigned inputs only." } });
@@ -42,15 +42,15 @@ test("Knowledge feedback survives domain, runtime registry and real Control HTTP
     const [grant] = await sql`INSERT INTO project_knowledge_grants(owner_project_id,item_id,version_id,grantee_project_id,granted_by)
       VALUES(${owner.projectId},${item},${version},${consumer.projectId},'fixture') RETURNING id`;
     const frozen = await catalog.freezeProjectKnowledgeCatalog(sql, consumer.projectId);
-    await sql`UPDATE jobs SET agent_snapshot_json=${sql.json({ platform_tools: ["pull_skill", "search_project_knowledge"], project_knowledge_catalog: frozen } as never)} WHERE id=${consumer.jobId}`;
+    await sql`UPDATE jobs SET agent_snapshot_json=${sql.json({ platform_tools: ["pull_skill", "search_project_knowledge", "record_knowledge_feedback", "get_knowledge_receipt"], project_knowledge_catalog: frozen } as never)} WHERE id=${consumer.jobId}`;
     const token = await api.mintJobCapabilityToken(consumer.jobId);
     const runtime = createKnowledgeRuntime({ db: sql, governanceHash: blob.hash });
     let calls = 0;
-    api.registerRuntimeHandler(consumer.jobId, context => { calls++; return runtime(context); }, ["pull_skill", "search_project_knowledge"]);
+    api.registerRuntimeHandler(consumer.jobId, context => { calls++; return runtime(context); }, ["pull_skill", "search_project_knowledge", "record_knowledge_feedback", "get_knowledge_receipt"]);
     registered.push(consumer.jobId);
-    const post = (operation: string, input: unknown) => app.inject({ method: "POST",
+    const post = (operation: string, input: unknown, key = randomUUID()) => app.inject({ method: "POST",
       url: `/control/v1/jobs/${consumer.jobId}/operations/${operation}`,
-      headers: { authorization: `Bearer ${token.token}`, "idempotency-key": randomUUID(), "content-type": "application/json" },
+      headers: { authorization: `Bearer ${token.token}`, "idempotency-key": key, "content-type": "application/json" },
       payload: JSON.stringify(input),
     });
     const input = { selector: catalog.projectSkillSelector(frozen.entries[0]!), expected_content_hash: blob.hash };
@@ -80,6 +80,47 @@ test("Knowledge feedback survives domain, runtime registry and real Control HTTP
     assert.equal(corrected.statusCode, 200, corrected.body);
     assert.equal(corrected.json().accepted, true);
     assert.equal((await sql`SELECT count(*)::int AS n FROM project_knowledge_usages WHERE job_id=${consumer.jobId}`)[0].n, 1);
+
+    // A different request key does not authorize replacing feedback on one usage.
+    const factId = randomUUID(), factBody = { observation: "needs clarification" };
+    await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,body_json,verification_status)
+      VALUES(${factId},${consumer.canvasId},${consumer.jobId},'fact','feedback evidence',${sql.json(factBody)},'unverified')`;
+    const factHash = types.sha256(types.canonical({ kind: "fact", id: factId, body: factBody, verification_status: "unverified" }));
+    const feedback = { usage_ref: corrected.json().usage_ref, outcome: "failure",
+      evidence_refs: [{ kind: "fact", ref: factId, content_hash: factHash }], next_action: "revise", reason: "clarify the method" };
+    const keyA = randomUUID(), keyB = randomUUID();
+    const acceptedFeedback = await post("record_knowledge_feedback", feedback, keyA);
+    assert.equal(acceptedFeedback.statusCode, 200, acceptedFeedback.body);
+    assert.equal(acceptedFeedback.json().accepted, true);
+    const [originalUsage] = await sql`SELECT feedback_json FROM project_knowledge_usages WHERE id=${feedback.usage_ref}`;
+    const originalWork = await sql`SELECT id,trigger_key,input_manifest_json,reason FROM project_knowledge_work WHERE origin_job_id=${consumer.jobId} ORDER BY id`;
+    assert.equal(originalWork.length, 1);
+    const conflictingFeedback = await post("record_knowledge_feedback", { ...feedback, reason: "replace the prior reason" }, keyB);
+    assert.equal(conflictingFeedback.statusCode, 422, conflictingFeedback.body);
+    const refusal = conflictingFeedback.json();
+    assert.equal(refusal.error_code, "KNOWLEDGE_IDEMPOTENCY_CONFLICT");
+    assert.equal(refusal.retryable, false);
+    assert.equal(refusal.repair.category, "permanent_failure");
+    assert.match(refusal.repair.next_action, /stop/i);
+    assert.doesNotMatch(refusal.repair.next_action, /get_knowledge_receipt/,
+      "the rejected new key has no knowledge receipt to retrieve");
+    assert.equal((await sql`SELECT id FROM project_knowledge_receipts WHERE job_id=${consumer.jobId} AND idempotency_key=${keyB}`).length, 0);
+    assert.equal((await sql`SELECT id FROM events WHERE job_id=${consumer.jobId} AND event_id=${types.knowledgeEventId(consumer.jobId, keyB)}`).length, 0,
+      "rejected feedback rolls back its event as well as the receipt");
+    assert.deepEqual((await sql`SELECT feedback_json FROM project_knowledge_usages WHERE id=${feedback.usage_ref}`)[0], originalUsage);
+    assert.deepEqual(await sql`SELECT id,trigger_key,input_manifest_json,reason FROM project_knowledge_work WHERE origin_job_id=${consumer.jobId} ORDER BY id`, originalWork);
+    const conflictingKeyA = await post("record_knowledge_feedback", { ...feedback, reason: "replace the prior reason" }, keyA);
+    assert.equal(conflictingKeyA.statusCode, 422, conflictingKeyA.body);
+    assert.equal(conflictingKeyA.json().error_code, "KNOWLEDGE_IDEMPOTENCY_CONFLICT");
+    assert.equal(conflictingKeyA.json().retryable, false);
+    assert.equal(conflictingKeyA.json().repair.category, "model_correctable");
+    assert.match(conflictingKeyA.json().repair.next_action, /get_knowledge_receipt.*original idempotency_key/);
+    const receiptA = await post("get_knowledge_receipt", { idempotency_key: keyA });
+    assert.equal(receiptA.statusCode, 200, receiptA.body);
+    assert.deepEqual(receiptA.json().result, acceptedFeedback.json(), "key A retains its original accepted result");
+    const missingReceiptB = await post("get_knowledge_receipt", { idempotency_key: keyB });
+    assert.equal(missingReceiptB.statusCode, 422, missingReceiptB.body);
+    assert.equal(missingReceiptB.json().error_code, "KNOWLEDGE_SCOPE_DENIED");
 
     await sql`UPDATE project_knowledge_grants SET revoked_at=now() WHERE id=${grant.id}`;
     const revoked = await post("pull_skill", input);

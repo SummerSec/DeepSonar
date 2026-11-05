@@ -56,7 +56,14 @@ test("completion receipt reserves its key inside knowledge's locked transaction"
     const f = await fixture(db);
     assert.equal((await f.complete()).statusCode, 200);
     const app = createProjectKnowledgeApplication({ db, governanceHash: "a".repeat(64) });
-    await assert.rejects(app.invoke(f.context), (error: unknown) => error instanceof KnowledgeOperationError && error.error_code === "KNOWLEDGE_IDEMPOTENCY_CONFLICT");
+    await assert.rejects(app.invoke(f.context), (error: unknown) => {
+      assert.ok(error instanceof KnowledgeOperationError);
+      assert.equal(error.error_code, "KNOWLEDGE_IDEMPOTENCY_CONFLICT");
+      assert.equal(error.category, "permanent_failure");
+      assert.match(error.next_action, /key belongs to a control receipt, not a knowledge receipt/);
+      assert.doesNotMatch(error.next_action, /get_knowledge_receipt/);
+      return true;
+    });
     assert.equal((await db`SELECT id FROM project_knowledge_receipts WHERE job_id=${f.job.jobId}`).length, 0);
     assert.equal((await db`SELECT id FROM project_knowledge_work WHERE origin_job_id=${f.job.jobId}`).length, 0);
   });
@@ -77,7 +84,14 @@ test("completion wins while knowledge is paused after preparation but before Job
     } });
     const app = createProjectKnowledgeApplication({ db: pausedDb, governanceHash: "a".repeat(64) });
     const knowledge = app.invoke(f.context);
-    const rejected = assert.rejects(knowledge, (error: unknown) => error instanceof KnowledgeOperationError && error.error_code === "KNOWLEDGE_IDEMPOTENCY_CONFLICT");
+    const rejected = assert.rejects(knowledge, (error: unknown) => {
+      assert.ok(error instanceof KnowledgeOperationError);
+      assert.equal(error.error_code, "KNOWLEDGE_IDEMPOTENCY_CONFLICT");
+      assert.equal(error.category, "permanent_failure");
+      assert.match(error.next_action, /key belongs to a control receipt, not a knowledge receipt/);
+      assert.doesNotMatch(error.next_action, /get_knowledge_receipt/);
+      return true;
+    });
     try {
       await arrived;
       assert.equal((await f.complete()).statusCode, 200);

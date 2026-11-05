@@ -12,10 +12,7 @@ const STOP_ACTIONS: Readonly<Record<string, string>> = {
   KNOWLEDGE_BUDGET_EXHAUSTED: "Stop this knowledge work and report its exhausted budget; do not create a new request to reset the budget.",
   KNOWLEDGE_CATALOG_LIMIT: "Stop and report the frozen catalog size blocker to Scheduler; changing tool input cannot reduce the snapshot.",
   KNOWLEDGE_SUGGESTION_CATALOG_LIMIT: "Stop and report the authorized catalog size blocker to Scheduler; do not bypass the bounded read budget.",
-};
-
-const CORRECTION_ACTIONS: Readonly<Record<string, string>> = {
-  KNOWLEDGE_IDEMPOTENCY_CONFLICT: "Read the existing receipt for this key and reconcile its accepted result before deciding on a new proposal; do not change keys to replay an accepted or unknown effect.",
+  KNOWLEDGE_IDEMPOTENCY_CONFLICT: "Stop this conflicting operation and report the conflict to Scheduler; do not assume this request has a receipt or change keys to replay an accepted or unknown effect.",
 };
 
 export class KnowledgeOperationError extends Error {
@@ -23,7 +20,7 @@ export class KnowledgeOperationError extends Error {
     public readonly error_code: string,
     message: string,
     public readonly category: RepairFeedbackCategory = STOP_ACTIONS[error_code] ? "permanent_failure" : "model_correctable",
-    public readonly next_action = STOP_ACTIONS[error_code] ?? CORRECTION_ACTIONS[error_code] ?? "Re-read the current authorized state, correct the input, and submit with a new Idempotency-Key while this Job and Attempt remain active",
+    public readonly next_action = STOP_ACTIONS[error_code] ?? "Re-read the current authorized state, correct the input, and submit with a new Idempotency-Key while this Job and Attempt remain active",
     public readonly path?: string,
   ) { super(message); this.name = "KnowledgeOperationError"; }
 }

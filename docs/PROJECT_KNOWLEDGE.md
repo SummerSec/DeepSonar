@@ -43,7 +43,7 @@ project、Job、Attempt、actor 和 assignment 均由平台推导，不接受请
 
 知识领域拒绝沿 `KnowledgeOperationError` → `PlatformRuntimeHandlerError` → Control HTTP 的既有 `RepairFeedback` 返回；保留稳定 `code`、`category`、可选字段 `path` 和领域 `next_action`，不在 runtime/HTTP 边界仅按 422 重新推断为可修正。Agent 工具响应消费同一反馈，不建立平行错误协议。
 
-- 当前授权与执行仍合法的输入错误保留 `model_correctable`，指向读取当前允许状态并修正输入。`retryable=false` 不妨碍按反馈提交合法修正，但不授权原样自动重放；幂等冲突须先读取并对账原 key 的回执，不能笼统换 key。`retryable=true` 只用于明确的 `transient_retryable`。
+- 当前授权与执行仍合法的输入错误保留 `model_correctable`，指向读取当前允许状态并修正输入。`retryable=false` 不妨碍按反馈提交合法修正，但不授权原样自动重放；幂等冲突按归属给出指引：仅已存在的 knowledge key/payload 冲突建议在有权限时读取原 knowledge 回执；Plan/control key 冲突停止并报告原请求归属；usage 身份或已接受 feedback 冲突停止且不覆盖原记录，不假定本次 key 存在回执，不能笼统换 key。`retryable=true` 只用于明确的 `transient_retryable`。
 - Job/Attempt 不再活动、operation/scope/assignment 无权限及版本/授权撤销属于 `permanent_failure`，`retryable=false`。行动指引要求停止该调用，由既有管理或恢复入口处理；改参数、换 key、重新启用源均不能复活旧执行权限。
 - 全局 Skill 目录的快照缺失、撤权或完整性失败继续 fail closed；治理冻结基线变化、已冻结知识正文/治理方法/建议候选的完整性失败也为 `permanent_failure`，与可修正的请求 hash 错误分开。
 - 事件提交后缺少持久结算回执返回 `unknown_external_effect`、`retryable=false`：保留原 key，交 Scheduler 对账事件和回执，不能自动重放或另开提案。

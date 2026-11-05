@@ -7,7 +7,7 @@ import { PlatformRuntimeHandlerError } from "../platform-api/registry.js";
 import { controlRuntimeRejection } from "../platform-api/repair.js";
 
 const permanent = ["KNOWLEDGE_JOB_INACTIVE", "KNOWLEDGE_SCOPE_DENIED", "KNOWLEDGE_REVOKED", "KNOWLEDGE_SNAPSHOT_INVALID",
-  "KNOWLEDGE_BUDGET_EXHAUSTED", "KNOWLEDGE_CATALOG_LIMIT", "KNOWLEDGE_SUGGESTION_CATALOG_LIMIT"];
+  "KNOWLEDGE_BUDGET_EXHAUSTED", "KNOWLEDGE_CATALOG_LIMIT", "KNOWLEDGE_SUGGESTION_CATALOG_LIMIT", "KNOWLEDGE_IDEMPOTENCY_CONFLICT"];
 test("Knowledge constructor and reject share fail-closed classification without making input errors permanent", () => {
   for (const code of [...permanent, "KNOWLEDGE_INPUT_INVALID", "KNOWLEDGE_HASH_MISMATCH", "KNOWLEDGE_INPUT_TOO_LARGE"]) {
     const direct = new KnowledgeOperationError(code, "fixture", undefined, undefined, "input");
@@ -75,11 +75,11 @@ test("runtime preserves all explicit domain classifications even when the code i
 });
 
 
-test("idempotency conflicts require receipt reconciliation before a new proposal", () => {
+test("unqualified identity conflicts stop without assuming this request has a receipt", () => {
   const domain = new KnowledgeOperationError("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "fixture");
-  assert.equal(domain.category, "model_correctable");
-  assert.match(domain.next_action, /existing receipt.*reconcile/);
-  assert.match(domain.next_action, /do not change keys.*unknown effect/);
+  assert.equal(domain.category, "permanent_failure");
+  assert.match(domain.next_action, /stop/i);
+  assert.doesNotMatch(domain.next_action, /get_knowledge_receipt/);
 });
 
 test("stored Knowledge blob integrity failure is not a model-correctable hash input", async () => {
@@ -98,4 +98,35 @@ test("stored Knowledge blob integrity failure is not a model-correctable hash in
       return true;
     });
   } finally { setSharedAssetBlobStoreForTests(null); }
+});
+
+
+test("usage identity mismatch refuses replacement without inventing a receipt for the caller key", async () => {
+  const { recordKnowledgeUsage } = await import("./usage.js");
+  const statements: string[] = [];
+  const db = (async (parts: TemplateStringsArray) => {
+    const statement = parts.join("?"); statements.push(statement);
+    if (statement.includes("FROM jobs")) return [{ id: "job" }];
+    if (statement.includes("INSERT INTO project_knowledge_usages")) return [];
+    if (statement.includes("SELECT id,owner_project_id,version_id"))
+      return [{ id: "existing-usage", owner_project_id: "different-owner", version_id: null }];
+    throw new Error(`Unexpected fixture SQL: ${statement}`);
+  }) as unknown as KnowledgeDb;
+  await assert.rejects(recordKnowledgeUsage(db, { projectId: "project", jobId: "job", attemptId: "attempt",
+    selector: "global:fixture", contentHash: "a".repeat(64) }), (error: unknown) => {
+    assert.ok(error instanceof KnowledgeOperationError);
+    assert.equal(error.error_code, "KNOWLEDGE_IDEMPOTENCY_CONFLICT");
+    assert.equal(error.category, "permanent_failure");
+    assert.match(error.next_action, /stop/i);
+    assert.doesNotMatch(error.next_action, /get_knowledge_receipt/);
+    const body = controlRuntimeRejection({ operation: "pull_skill", code: error.error_code, message: error.message,
+      category: error.category, next_action: error.next_action, retryable: false });
+    assert.equal(body.repair.next_action, error.next_action);
+    assert.equal(body.repair.category, "permanent_failure");
+    assert.equal(body.retryable, false);
+    return true;
+  });
+  assert.equal(statements.length, 3);
+  assert.match(statements[1]!, /ON CONFLICT.*DO NOTHING/);
+  assert.ok(statements.every(statement => !/UPDATE|DELETE/.test(statement)), "existing usage is never rewritten");
 });
