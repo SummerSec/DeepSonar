@@ -1,3 +1,4 @@
+import { useJobRerun, CredentialRepairNotice } from "../useJobRerun";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type JobSummary, type Project } from "../api";
@@ -54,6 +55,7 @@ export function JobsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const rerunAction = useJobRerun(searchParams.toString());
   const [loading, setLoading] = useState(true);
 
   // 拉全量队列，筛选在前端做，才能同时展示「筛选后 / 全量」
@@ -202,21 +204,19 @@ export function JobsPage() {
       confirmLabel: "强制退出",
       tone: "danger",
     })) return;
-    if (kind === "resume" && !await confirm({
-      title: "使用旧冻结快照重新执行？",
-      description: "保留同一 Job 与画布，创建新 Attempt；不会读取当前已修改的模型、CLI、凭据或运行镜像。若身份已漂移，服务端会拒绝并提示按当前配置重新执行。",
-      confirmLabel: "旧快照重新执行",
-    })) return;
-    if (kind === "rerun-current" && !await confirm({
-      title: "按当前配置重新执行？",
-      description: "保留同一 Job、画布 Fact/Finding/Intent 与历史 Attempt/effect，按当前 RoleConfig、Credential、项目策略和运行镜像完整重冻快照。",
-      confirmLabel: "按当前配置执行",
-    })) return;
+    if (kind !== "cancel") {
+      const job = rows.find((row) => row.id === id);
+      if (!job || busy) return;
+      return rerunAction.run({ jobId: id, projectId: job.project_id, mode: kind === "resume" ? "resume" : "current",
+        onSuccess: async (isCurrent) => {
+          const list = await api.jobs({});
+          if (isCurrent()) { setRows(list); setError(null); }
+        },
+      });
+    }
     setBusy(id);
     try {
-      if (kind === "cancel") await api.cancelJob(id, { force: true, reason: "强制退出" });
-      else if (kind === "resume") await api.resumeJob(id);
-      else await api.rerunJobCurrent(id);
+      await api.cancelJob(id, { force: true, reason: "强制退出" });
       await reload();
     } catch (e) {
       setError(String(e));
@@ -250,6 +250,7 @@ export function JobsPage() {
         onClear={clearFilters}
       />
 
+      <CredentialRepairNotice message={rerunAction.message} repair={rerunAction.repair} />
       {error && (
         <div className="mb-4 rounded-[10px] border border-red-900/60 bg-red-950/40 px-4 py-3 text-[15px] text-red-300">
           {error}
@@ -457,7 +458,7 @@ export function JobsPage() {
                       <div className="flex gap-1.5" onClick={(e) => e.stopPropagation()}>
                         {CANCELLABLE.has(j.status) && (
                           <button
-                            disabled={busy === j.id}
+                            disabled={busy === j.id || rerunAction.busy !== null}
                             onClick={() => act(j.id, "cancel")}
                             title="强制退出：取消 Job 并回收沙箱"
                             className="rounded-md border border-ink-700 px-2.5 py-1 font-mono text-[12px] text-zinc-400 transition-colors hover:border-red-900/60 hover:text-red-300 disabled:opacity-50"
@@ -468,7 +469,7 @@ export function JobsPage() {
                         {RESUMABLE.has(j.status) && (
                           <>
                             <button
-                              disabled={busy === j.id}
+                              disabled={busy === j.id || rerunAction.busy !== null}
                               onClick={() => act(j.id, "resume")}
                               title="使用该 Job 创建时的旧冻结快照重新执行"
                               className="rounded-md border border-ink-700 px-2.5 py-1 font-mono text-[12px] text-zinc-400 transition-colors hover:border-acc-500/50 hover:text-acc-400 disabled:opacity-50"
@@ -476,7 +477,7 @@ export function JobsPage() {
                               旧快照重跑
                             </button>
                             <button
-                              disabled={busy === j.id}
+                              disabled={busy === j.id || rerunAction.busy !== null}
                               onClick={() => act(j.id, "rerun-current")}
                               title="按当前 RoleConfig、凭据与运行镜像重冻后重新执行"
                               className="rounded-md border border-acc-500/30 px-2.5 py-1 font-mono text-[12px] text-acc-400 transition-colors hover:bg-acc-500/10 disabled:opacity-50"
@@ -598,7 +599,7 @@ export function JobsPage() {
                     </button>
                     {CANCELLABLE.has(j.status) && (
                       <button
-                        disabled={busy === j.id}
+                        disabled={busy === j.id || rerunAction.busy !== null}
                         onClick={() => act(j.id, "cancel")}
                         title="强制退出：取消 Job 并回收沙箱"
                         className="secondary-button min-h-8 px-3 py-1 text-[10px]"
@@ -609,14 +610,14 @@ export function JobsPage() {
                     {RESUMABLE.has(j.status) && (
                       <>
                         <button
-                          disabled={busy === j.id}
+                          disabled={busy === j.id || rerunAction.busy !== null}
                           onClick={() => act(j.id, "resume")}
                           className="secondary-button min-h-8 px-3 py-1 text-[10px]"
                         >
                           旧快照重跑
                         </button>
                         <button
-                          disabled={busy === j.id}
+                          disabled={busy === j.id || rerunAction.busy !== null}
                           onClick={() => act(j.id, "rerun-current")}
                           className="secondary-button min-h-8 px-3 py-1 text-[10px] text-acc-400"
                         >

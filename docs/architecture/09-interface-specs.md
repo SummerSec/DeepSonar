@@ -31,6 +31,14 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 管理认证入口有明确的健康、schema、bootstrap、Worker 注册和 WS ticket 例外；`/gateway` 与 `/control/v1/jobs` 使用独立的 Job-scoped 凭据。认证失败和授权拒绝会审计但不记录 token、Provider 原文或内部堆栈。旧配置不通过转换继续运行，不能用另一个认证面绕过当前契约。
 
+### 项目默认 Provider 账号选择（#914）
+
+项目 Provider 面板通过既有 settings PATCH 显式设置、更换或清除 `default_credential_id`。候选须是 active、全局或当前项目可见、在项目凭据与 CLI 启用范围内的 Provider；未配置凭据白名单表示未收紧，显式 `[]` 没有候选，不自动选择其他账号。现有失效引用清理控件继续保留；默认账号不可用时要求用户明确清除或更换，加载失败不能视作空名单并清掉配置。
+
+默认账号变化时，Web 同笔提交 `default_model_ref: null` 和 `fallback_model_refs: []`，避免旧账号模型默默沿用；保存后以服务端返回为准并刷新，失败保留未保存状态。账号连接与模型配置链接到既有 Credentials 页面。该 UI 切片不改变后端引用保护、resolver fail-closed、历史快照或 Job 恢复机制，不自动重跑任务，也不代表 #914 全部验收完成；最终 SHA Actions 结果另计。
+
+Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操作，读取 `SNAPSHOT_STALE` 响应的当前解析失败标记和结构化 `repair.code`。`resolution_error` 是人类可读文本，不按文案猜测机器原因：仅 `provider_credential_allowlist_stale` / `provider_credential_multi_match` 导向已知 Job 项目的 `settings?tab=roles` 和凭据配置页；普通快照身份漂移及其他权限、预算、租约拒绝不冒充账号失效。导航不发起重跑；保存配置后仍由用户确认后续执行。确认取消、重复点击、路由/项目切换及卸载用请求身份隔离迟到响应，已经入队但刷新失败与入队被拒绝分别展示。测试接在 `pnpm ci:unit:credential-compatibility`；最终 Actions 结果另记。resolver 的缺失/停用/跨项目引用与空名单拒绝、`rerun-current` 连续拒绝后仅由显式修复和再次执行恢复的回归分别接在 `pnpm ci:unit:capability-pack` 与 `pnpm ci:integration:recovery`；配置保存不改冻结快照，不自动入队。
+
 ### Finding 项目查询（#770 切片 B）
 
 现有项目交付页使用 `GET /findings` 的有界游标页，页面上限见[研究专题](../PROJECT_FINDING_RESEARCH.md)与机器契约，按创建时间与 UUID 降序；游标保留 PostgreSQL 微秒精度。项目/任务/严重度/profile/类别/验证/处置同维度多选 OR、跨维度 AND；`q` 是标题、位置、摘要、指纹的不区分大小写字面子串，保留中文且转义 SQL 通配符。项目 token 在分页前约束所有项目和任务过滤项；列表与汇总复用同一条件和同项目来源 JOIN。汇总各桶在同一 SQL 快照计算，`total` 表示匹配数，`project_total` 明示项目全量。列表与汇总是独立请求，不承诺跨请求快照一致；状态变化后需刷新首屏。

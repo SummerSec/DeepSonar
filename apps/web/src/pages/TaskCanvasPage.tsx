@@ -1,3 +1,4 @@
+import { useJobRerun, CredentialRepairNotice } from "../useJobRerun";
 import {
   CaretDown,
   DotsThree,
@@ -195,7 +196,9 @@ export function TaskCanvasPage() {
   const [jobRoleTypeFilters, setJobRoleTypeFilters] = useState<string[]>([]);
   const [jobKeyword, setJobKeyword] = useState("");
   const [convergence, setConvergence] = useState<CanvasConvergence | null>(null);
-  const [convBusy, setConvBusy] = useState(false);
+  const [convergenceBusy, setConvBusy] = useState(false);
+  const rerunAction = useJobRerun(`${projectId}:${canvasId}`);
+  const convBusy = convergenceBusy || rerunAction.busy !== null;
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef<HTMLDivElement>(null);
   const paginationRef = useRef<{ findings: PageProgress | null; jobs: PageProgress | null; facts: PageProgress | null }>({
@@ -604,32 +607,15 @@ export function TaskCanvasPage() {
     }
   };
 
-  const rerunOneJob = async (
-    job: { id: string; type: string },
-    mode: "resume" | "current",
-  ) => {
-    const useCurrent = mode === "current";
-    if (!await confirm({
-      title: useCurrent ? `按当前配置重新执行「${job.type}」？` : `使用旧冻结快照重新执行「${job.type}」？`,
-      description: useCurrent
-        ? "保留画布 Fact/Finding/Intent 与历史 Attempt/effect，按当前 RoleConfig、Credential、项目策略和运行镜像完整重冻快照。"
-        : "保留同一 Job 与画布并创建新 Attempt；不会采用当前配置变化，身份漂移时服务端会拒绝。",
-      confirmLabel: useCurrent ? "当前配置重跑" : "旧快照重跑",
-    })) return;
-    setConvBusy(true);
-    try {
-      if (useCurrent) await api.rerunJobCurrent(job.id);
-      else await api.resumeJob(job.id);
-      flash(useCurrent ? "已按当前配置重新入队" : "已使用旧冻结快照重新入队");
+  const rerunOneJob = async (job: { id: string; type: string }, mode: "resume" | "current") => {
+    if (!projectId || !canvasId || convergenceBusy) return;
+    await rerunAction.run({ jobId: job.id, projectId, mode, onSuccess: async (isCurrent) => {
       const js = await api.jobsPage({ canvas_id: canvasId, limit: 50 });
+      if (!isCurrent()) return;
       setJobs(js.items);
       setJobsCursor(js.next_cursor);
       setJobsHasMore(js.has_more);
-    } catch (e) {
-      flash(`重新执行失败：${e instanceof Error ? e.message : e}`);
-    } finally {
-      setConvBusy(false);
-    }
+    } });
   };
 
   /** 重试任务 = 清空本画布历史后从意图重新执行 */
@@ -1152,6 +1138,7 @@ export function TaskCanvasPage() {
       ) : null}
       notices={(
         <>
+      <CredentialRepairNotice message={rerunAction.message} repair={rerunAction.repair} />
       {error && (
         <div className="mx-3 mb-2 rounded-2xl bg-red-950/25 px-4 py-3 text-[11px] text-red-300 ring-1 ring-red-400/20">
           {error}

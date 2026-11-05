@@ -1,3 +1,4 @@
+import { ProjectRuntimeImageAuthority } from "./components/ProjectRuntimeImageAuthority";
 import { ArrowsClockwise, FloppyDisk, GearSix, PencilSimple, Plus, Trash, X } from "@phosphor-icons/react";
 import { ROLE_UI_COLOR_PATTERN } from "@deepsonar/shared-types";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -117,6 +118,7 @@ export function SettingsPanel({
   const [credentials, setCredentials] = useState<ProviderCredential[]>([]);
   const [credentialLoad, setCredentialLoad] = useState<{ projectId: string; status: "loading" | "loaded" | "error" } | null>(null);
   const credentialRequestId = useRef(0);
+  const [projectSettingsLoad, setProjectSettingsLoad] = useState<{ projectId: string; status: "loading" | "loaded" | "error" } | null>(null);
   const [sourceDetails, setSourceDetails] = useState<Record<string, SkillSourceDetail>>({});
   const [newSource, setNewSource] = useState({ name: "", repo_url: "", branch: "main" });
   const [roles, setRoles] = useState<ProjectRole[]>([]);
@@ -148,18 +150,25 @@ export function SettingsPanel({
       api.globalRoleConfigs().then(setGlobalConfigs).catch((error) => showAgentLoadError("全局 Agent 配置", error));
     }
     if (projectId) {
+      setProjectSettingsLoad({ projectId, status: "loading" });
       // 项目模式：角色带启用态 + 角色配置来源（项目覆盖/全局缺省/未配置）
       api.projectRoles(projectId).then(setRoles).catch((error) => showAgentLoadError("项目角色", error));
       api.projectRoleConfigs(projectId).then(setProjConfigs).catch((error) => showAgentLoadError("项目 Agent 配置", error));
       api
         .settings(projectId)
         .then((s) => {
+          if (credentialRequest !== credentialRequestId.current) return;
+          setProjectSettingsLoad({ projectId, status: "loaded" });
           setSettings(s);
           setRules(s.effective_rules);
           setFindingProtocol(s.finding_protocol);
           setEffectiveFindingProtocol(s.effective_finding_protocol);
         })
-        .catch(() => {});
+        .catch((error) => {
+          if (credentialRequest !== credentialRequestId.current) return;
+          setProjectSettingsLoad({ projectId, status: "error" });
+          showAgentLoadError("项目账号设置", error);
+        });
     } else if (globalSection === "agents" && canLoadTab("roles")) {
       // 全局模式：纯角色注册表（无启用态/绑定）+ 全局规则默认值
       api
@@ -215,8 +224,10 @@ export function SettingsPanel({
       .catch(() => {});
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(reload, [globalSection, projectId, visibleGlobalTabs]);
-
+  useEffect(() => {
+    reload();
+    return () => { credentialRequestId.current += 1; };
+  }, [globalSection, projectId, visibleGlobalTabs]);
 
   useEffect(() => {
     setTab(projectId
@@ -679,23 +690,22 @@ export function SettingsPanel({
 
             {projectId && (
               <>
-                <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
-                  <div className="border-b border-white/[.055] px-4 py-3">
-                    <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">运行镜像权威</div>
-                  </div>
-                  <div className="space-y-2 px-4 py-4 text-[13px] leading-6 text-zinc-400">
-                    <p>项目不再选择或绑定运行镜像。Job 缺省镜像跟随平台全局 RoleConfig；Hub 可通过 <code className="text-zinc-300">list_available_runtime_images</code> 从平台可信/就绪/CLI 兼容目录提案，创建时冻结不可变 digest。</p>
-                    <p>官方镜像默认可用（<code className="text-zinc-300">deepsonar-base</code> 永不可停用；其它官方可在平台「镜像」页按项目排除）。第三方须平台绑定可见项目后由项目启用。版本永远跟随平台 channel 最新，项目不能钉版本。</p>
-                  </div>
-                </section>                <ProjectCliProviderAllowlistPanel
+                <ProjectRuntimeImageAuthority />
+                <ProjectCliProviderAllowlistPanel
+                  key={projectId}
                   projectId={projectId}
                   credentials={credentials}
-                  credentialLoadState={credentialLoad?.projectId === projectId ? credentialLoad.status : "loading"}
+                  credentialLoadState={projectSettingsLoad?.projectId !== projectId ? "loading"
+                    : projectSettingsLoad.status !== "loaded" ? projectSettingsLoad.status
+                    : credentialLoad?.projectId === projectId ? credentialLoad.status : "loading"}
                   enabledAgentClis={settings?.enabled_agent_clis ?? ["claude-code"]}
                   enabledCredentialIds={settings?.enabled_credential_ids ?? []}
                   credentialIdsConfigured={settings?.credential_ids_configured ?? false}
                   defaultCredentialId={settings?.default_credential_id ?? null}
-                  onSaved={reload}
+                  onSaved={(saved) => {
+                    if (saved) setSettings(saved);
+                    reload();
+                  }}
                 />
                 <ProjectSkillSourceAllowlistPanel projectId={projectId} onSaved={reload} />
               </>
