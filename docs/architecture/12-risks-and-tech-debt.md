@@ -133,4 +133,4 @@ Scheduler-owned 的只读 target-authorization protocol 已接线：authority/ac
 
 ### #923 原生 CLI 生成前预算兼容
 
-Pi 1.4.0 已接公开 provider streamSimple 入口，Claude Code 2.1.312 只支持本次 launch/resume 的原生输出上限；DSH 0.2.1-rc.2 的 agent/request 不覆盖 compaction，也不暴露请求局部 model.maxTokens。Claude 逐请求同步余额与 DSH 全调用 hook 仍是发布阻塞。必须使用请求形成前的受支持 SDK/CLI 入口或明确维护完整 adapter；不得用 HTTP body 改写或放宽预算消除缺口。具体版本、入口与静态证据见[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)。新合成回归不等于真实 CLI 运行通过，最终 SHA Actions 待验。
+Pi 1.4.0 已接公开 provider streamSimple 入口，Claude Code 2.1.312 只支持本次 launch/resume 的原生输出上限；DSH 0.2.1-rc.2 的 agent/request 不覆盖 compaction，也不暴露请求局部 model.maxTokens。DSH 现已通过锁版本/摘要的独立 vendor adapter 在共用 SDK 调用前接入，待 Actions 验收；Claude 逐请求同步余额仍是发布阻塞。必须使用请求形成前的受支持 SDK/CLI 入口或明确维护完整 adapter；不得用 HTTP body 改写或放宽预算消除缺口。具体版本、入口与静态证据见[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)。新合成回归不等于真实 CLI 运行通过，最终 SHA Actions 待验。

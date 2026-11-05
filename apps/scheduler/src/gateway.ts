@@ -1503,8 +1503,10 @@ export function registerGateway(app: FastifyInstance): void {
         for (let i = 0; i < req.raw.rawHeaders.length; i += 2) {
           if (req.raw.rawHeaders[i]!.toLowerCase() === "connection") connection.push(req.raw.rawHeaders[i]!, req.raw.rawHeaders[i + 1]!);
         }
-        if (req.raw.rawTrailers.some(value => value.includes(token))) return deny(reply, 400, "Job credential in trailers", "credential_in_business_data");
-        requestTrailers = gatewayEndToEndHeaders([...connection, ...req.raw.rawTrailers], { request: true });
+        // Fastify's injected IncomingMessage omits rawTrailers when none exist.
+        const inboundTrailers = req.raw.rawTrailers ?? [];
+        if (inboundTrailers.some(value => value.includes(token))) return deny(reply, 400, "Job credential in trailers", "credential_in_business_data");
+        requestTrailers = gatewayEndToEndHeaders([...connection, ...inboundTrailers], { request: true });
         headers = appendGatewayHeaders({ ...upstreamProtocolHeaders(safeProvider), ...configured.headers }, req.raw.rawHeaders,
           upstreamFinalAuthHeaders(safeProvider, secret));
       } catch { return deny(reply, 400, "Invalid proxy target or HTTP headers", "invalid_gateway_request"); }

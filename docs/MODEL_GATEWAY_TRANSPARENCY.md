@@ -49,13 +49,13 @@ usage scanner 只观察副本，压缩响应仍按原压缩字节转发；无法
 
 | CLI / 锁定版本 | 已接能力 | 边界 |
 | --- | --- | --- |
-| Pi `@earendil-works/pi-coding-agent` 1.4.0、pi-ai 1.4.0 | runtime-owned [扩展](../packages/runtime-sandbox/src/pi-main-request-budget.ts)通过正式 `registerProvider(provider,{api,streamSimple})`，在 SDK 构造请求前逐次读取 allowance，设置请求局部 `options.maxTokens` 与 `model.maxTokens`；由 SDK 生成 Chat usage。start/resume 均加载 | 不使用已有 payload 的 `before_provider_request`；显式不支持 streaming usage、Responses 最小输出不满足或 sampling 冲突则拒绝。Gateway 始终原字节重验。当前只有 SDK 边界替身回归，真实 Pi 加载链仍待 Actions 验收 |
+| Pi `@earendil-works/pi-coding-agent` 1.4.0、pi-ai 1.4.0 | runtime-owned [扩展](../packages/runtime-sandbox/src/pi-main-request-budget.ts)通过正式 `registerProvider(provider,{api,streamSimple})`，在 SDK 构造请求前逐次读取 allowance，设置请求局部 `options.maxTokens` 与 `model.maxTokens`；由 SDK 生成 Chat usage。start/resume 均加载 | 不使用已有 payload 的 `before_provider_request`；显式不支持 streaming usage、Responses 最小输出不满足或 sampling 冲突则拒绝。非 adaptive Anthropic thinking 必须在额度及 SDK 上下文夹紧后仍至少有 2048 token，否则生成前拒绝，不关闭 thinking。Gateway 始终原字节重验。已新增锁定真实 SDK 到 loopback 上游的非 adaptive/adaptive 阈值回归，真实 Pi 进程加载链仍待验收 |
 | Claude Code `@anthropic-ai/claude-code` 2.1.312 | start/resume 启动器先读取 allowance，再通过原生 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 与 `--settings` 设置正整数上限，保留更严格既有设置；零余额不启动 | 只保证启动时配置。stdin `update_environment_variables` 白名单不包含该变量；settings 热更新无逐请求同步屏障。工具循环、压缩及子任务的动态余额仍未闭合；managed settings 优先级更高，冲突由 Gateway 拒绝 |
-| DSH / dsh-llm / dsh-llm-pi-ai / dsh-agent-loop 0.2.1-rc.2、pi-ai 1.4.0 | 已核对 `agent/request` 异步 waterfall、`llm/stream`、`prepareCall` 及 `PiAiAdapter`；未接入不完整 hook | `agent/request` 在 prepareCall 前可设置 maxTokens，但 compaction 直接调用 llm.stream 绕过；llm/stream 的主请求已经冻结且 next 无新参数。llm-pi-ai 内部 model.maxTokens 无公开异步 hook，不能同时约束 Anthropic thinking。需要维护完整 SDK adapter hook 或替换受治理 provider adapter，不能靠改 HTTP body 解决 |
+| DSH / dsh-llm / dsh-llm-pi-ai / dsh-agent-loop 0.2.1-rc.2、pi-ai 1.4.0 | 镜像构建期验证锁定 vendor bundle SHA256，生成独立 `deepsonar-index.js`，保留官方 apply/Config/消息/附件/签名/usage 转换；唯一 llm-pi-ai profile 条目指向该产物。共用 streamWithSnapshot 的 SDK 调用前读取 allowance 并使用与 Pi 相同的 SDK 输入政策 | 原包不改，运行时不安装或写包。导入时校验 artifact/helper/vendor 摘要及 SDK 版本；认证应用后的真实 provider 分派再次核对冻结目标与 token。prepared 主调用与 direct stream（compaction/子调用所用服务）走同一 adapter。跨进程 resume 仍明确不支持；真实 Cordis/SDK 合成上游回归待 Actions |
 
 锁定 Pi 源码证据：`dist/core/provider-composer.js` 的 provider streamSimple 分派、`dist/core/sdk.js` 的 modelRuntime；默认 auto/manual compaction 与 branch summary 经 `agent-session` 传同一 agent.streamFunction，因此在注册成功且仍为绑定 provider/model/API 时重查额度。外部扩展直接调用 SDK 不在该保证内。loader 的 jiti aliases/virtual modules 解析 compat import，不依赖 workspace 安装包；session_start 异常本身会被上游捕获，运行器检查扩展错误且 Gateway 保留最终准入。DSH：`dsh-agent-loop/lib/index.js:1191`、`dsh-compaction-basic/lib/index.js:323`、`dsh-llm-pi-ai/lib/index.js:1983`。Claude 原生包静态检查与[环境变量](https://code.claude.com/docs/en/env-vars)、[settings 优先级](https://code.claude.com/docs/en/settings)、[hooks](https://code.claude.com/docs/en/hooks)一致：静态 cap 不能冒充逐请求余额协商。Anthropic SSE 自带 usage，无需 OpenAI Chat 的 include_usage。
 
-**发布阻塞仍在：** Claude 动态余额与 DSH 全调用生成前适配未闭合。无法合规的已形成请求继续明确拒绝；不扩大预算、不降准入、不自动改 body。不能宣称三 CLI 有限额度全部兼容或 #923 完成。
+**发布阻塞仍在：** Claude 动态余额缺少受支持的逐模型请求生成前 hook。DSH 的完整受治理 adapter 补丁已接入但尚待最终 Actions 验收。无法合规的已形成请求继续明确拒绝；不扩大预算、不降准入、不自动改 body。不能宣称三 CLI 有限额度全部兼容或 #923 完成。
 
 OM 在受审 wrapper 的请求生成层读取相同 allowance。wrapper 在生成请求前将 `options.maxTokens` 限制到该 allowance；Responses SDK 的最小输出值无法容纳时明确拒绝（当前 SDK 下限为 16，核对基线 2026-11-05）。pending/unknown 不允许协商下一次请求。此结果只是生成参数的提示，Gateway 出站前仍在 Job 锁内重核额度和冻结权限，竞态不能扩大 allowance。
 
@@ -70,3 +70,9 @@ OM 响应不再由 Gateway 缓冲后换成结算错误。受审 [wrapper](../age
 验收分别核对直连/Gateway 请求字节与重复头/query、错误/重定向单次送达、SSE 首段/取消/背压、压缩/framing、凭据和 scope 负例、预算拒绝及持久结算查询。当前文档只记录实现和检查入口；通过/失败/未运行、精确 head 与检查链接由 PR 记录，历史 #918/#831 的通过结果不覆盖 #923。质量、成本收益及 SLA 保持 unknown。
 
 端到端回归另外对照不受模型观测限制的无效 JSON 原始字节，并检查业务头/body 携带 Job token 时出站前拒绝、响应头回显绑定 key 时断开，以及跨 chunk 明文 key 回显不完整送达。慢消费者用例证明字节完整性，不证明进程内存上界；gzip/deflate/br 的回显防护由响应守卫及相关合成回归覆盖范围单独核对，任意业务编码/变换后的 key 回显不在保证内。新增用例尚未在本地执行，须以该提交的 Actions 结果验收。
+
+### DSH vendor 产物与 SDK 验收
+
+[构建器](../agent-harness/dsh-request-budget-install.mjs)只生成同目录独立产物，不修改 npm 安装的官方 bundle；原源码摘要或唯一补丁点不匹配即构建失败。[helper](../packages/runtime-sandbox/src/dsh-request-budget.ts)共享 Pi 的 SDK 生成前政策，不使用 onPayload 修复参数。两类官方 runtime Dockerfile 均执行生成器，三个基础镜像 fingerprint 包含生成器与政策源码；旧镜像缺少产物时不能回退到无预算 hook 的 provider。
+
+`ci:integration:request-budget-sdk` 从现有 dsh-runtime lockfile 安装固定依赖，运行[真实 Pi SDK 阈值回归](../agent-harness/pi-main-budget-sdk-regression.test.ts)与[真实 DSH LlmRuntime/adapter 回归](../agent-harness/dsh-request-budget-sdk.mjs)。后者覆盖 prepared 与 direct 公共服务调用、逐次额度下降、usage、耗尽和身份拒绝，全部使用合成凭据及 loopback；不是生产模型或真实 DSH CLI 启动验收。新增源与测试尚未在本地执行，最终 SHA Actions 另验。

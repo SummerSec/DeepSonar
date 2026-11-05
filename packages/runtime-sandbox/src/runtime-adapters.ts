@@ -687,11 +687,17 @@ function dshSystemPromptAssignment(systemPromptPath?: string, projectedPrompt?: 
 
 function sandboxDsh(host: RuntimeHost, context: AdapterStartContext): Promise<RuntimeProcess> {
   if (!context.dshProvider) throw new Error("DSH_PROVIDER_CONFIG_MISSING");
+  const profile = context.dshProvider.config.providers[context.dshProvider.provider];
+  const budgetIdentity = context.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM ? JSON.stringify({
+    provider: context.dshProvider.provider, id: context.dshProvider.model,
+    api: profile?.api, baseUrl: profile?.baseURL,
+  }) : undefined;
   const command = `${dshSystemPromptAssignment(context.systemPromptPath, context.dshProvider.systemPrompt)}node ${DSH_BIN} --profile ${DSH_PROFILE}`;
   return host.runAsync(modelRequestPolicyCommand(command, context.env), {
     cwd: context.cwd,
     env: {
       ...context.env,
+      ...(budgetIdentity ? { DEEPSONAR_DSH_FROZEN_IDENTITY: budgetIdentity } : {}),
       DSH_HOME: "/workspace/.deepsonar-home/.dsh",
       DSH_SESSION_ROOT: "/workspace/.deepsonar-home/.dsh/sessions",
       DSH_CWD: context.cwd,
@@ -711,6 +717,7 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
     providerConfig: context.dshProvider.config,
     taskMode: context.dshTaskMode,
     cwd: context.cwd,
+    governedRequestBudget: Boolean(context.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM),
   }), `${profilePath}/cordis.patch.yml`);
   // Re-materialize every launch so an old home-level override cannot augment the
   // frozen Job composition. The profile itself has no inherited bundles.

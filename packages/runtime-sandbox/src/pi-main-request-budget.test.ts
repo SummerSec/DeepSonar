@@ -112,11 +112,17 @@ test("pending settlement polls only allowance; unknown usage and mismatched iden
   } finally { await f.close(); }
 });
 
-test("Anthropic thinking is bounded through SDK model/options and Responses minimums fail before SDK delegation", async () => {
+test("Anthropic thinking rejects insufficient room before delegation; adaptive thinking and Responses keep SDK caps", async () => {
   for (const api of ["anthropic-messages", "openai-responses"]) {
     const f = await fixture(api);
     try {
       f.allowance(32);
+      if (api === "anthropic-messages") {
+        Object.assign(f.model, { reasoning: true });
+        assert.match((await f.request({ reasoning: "high" }))[0].error.errorMessage, /THINKING_MINIMUM/u);
+        assert.equal(f.delegates.length, 0);
+        Object.assign(f.model.compat, { forceAdaptiveThinking: true });
+      }
       assert.equal((await f.request({ reasoning: "high", maxTokens: 128 }))[0].type, "done");
       assert.equal(f.delegates[0]!.model.maxTokens, 32);
       assert.equal(f.delegates[0]!.options.maxTokens, 32);
@@ -145,4 +151,18 @@ test("sampling overrides and unsupported providers cannot bypass the explicit SD
     assert.throws(() => f.hooks.get("session_start")!({}, { ...f.ctx, model: { ...f.model, provider: "__deepsonar_observational_memory" } }));
     assert.throws(() => f.hooks.get("session_start")!({}, { ...f.ctx, modelRegistry: { getRegisteredProviderConfig: () => ({ streamSimple: () => undefined }) } }));
   } finally { await f.close(); }
+});
+
+
+test("nonadaptive Anthropic thinking validates the exact pinned SDK minimum and custom budgets", async () => {
+  const { assertPiAnthropicThinkingBudget: check } = await load();
+  const model = { api: "anthropic-messages", reasoning: true, compat: {} };
+  for (const cap of [1, 32, 1024, 1025, 2047]) assert.throws(() => check(model, { reasoning: "high" }, cap), /THINKING_MINIMUM/u);
+  check(model, { reasoning: "high" }, 2048);
+  check(model, { reasoning: "xhigh", thinkingBudgets: { high: 1024 } }, 2048);
+  for (const budget of [0, 1, 1023, null, NaN]) assert.throws(() => check(model, { reasoning: "high", thinkingBudgets: { high: budget } }, 2048), /THINKING_MINIMUM/u);
+  check({ ...model, compat: { forceAdaptiveThinking: true } }, { reasoning: "high" }, 32);
+  check({ ...model, compat: { supportsMidConvoEffort: true } }, { reasoning: "high" }, 32);
+  assert.throws(() => check({ ...model, compat: { supportsAdaptiveThinking: true } }, { reasoning: "high" }, 32), /THINKING_MINIMUM/u);
+  check(model, {}, 32);
 });

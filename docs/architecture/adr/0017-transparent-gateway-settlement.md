@@ -14,7 +14,7 @@
 
 获准模型请求必须保留原始业务字节、端到端头及响应，只在明确认证、绑定目标和 HTTP 传输边界转换。模型 alias 必须在请求生成层完成；预算不符必须在出站前明确拒绝，不能静默改写 body。透明传输不得隐式重试或跟随重定向。
 
-主执行三 CLI 的 loopback 适配器只对已形成 HTTP 请求查询 allowance 并检查准入，合规原字节转发，不合规明确拒绝，绝不补写 cap/usage。main 使用当前 token/Attempt 的 Job 或 main-workload 与修正预算交集。Pi 通过原生 provider streamSimple hook 设置请求局部 SDK 上限；Claude 通过启动/resume 的原生 env/settings 设置静态上限。Claude 动态余额与 DSH 全调用覆盖仍是未闭合兼容阻塞。OM 受审 wrapper 在 SDK 调用前读取 allowance 并设置 SDK 选项，属于实际请求形成前的准备；无法满足 SDK 最小输出要求则拒绝。查询不预留、不消耗请求配额，pending/unknown 不准入；数据面仍在 Job 锁内重验，提示不扩大权限。
+主执行三 CLI 的 loopback 适配器只对已形成 HTTP 请求查询 allowance 并检查准入，合规原字节转发，不合规明确拒绝，绝不补写 cap/usage。main 使用当前 token/Attempt 的 Job 或 main-workload 与修正预算交集。Pi 通过原生 provider streamSimple hook 设置请求局部 SDK 上限；Claude 通过启动/resume 的原生 env/settings 设置静态上限。DSH 通过构建期锁版本/摘要的独立 vendor adapter 覆盖共用 SDK 调用前路径；Claude 动态余额仍是未闭合兼容阻塞。OM 受审 wrapper 在 SDK 调用前读取 allowance 并设置 SDK 选项，属于实际请求形成前的准备；无法满足 SDK 最小输出要求则拒绝。查询不预留、不消耗请求配额，pending/unknown 不准入；数据面仍在 Job 锁内重验，提示不扩大权限。
 
 OM 的严格持久结算保持，但确认从数据面迁移到原 Gateway 的 scoped 只读查询。已准入请求 UUID 作为原 effect intent 的关联字段；未准入的 quota/已回滚 DB 冲突拒绝在独立事务保存原 events 的 kernel `control_receipt/gateway_admission`。完整 Job/Attempt/token/workload/UUID scope、dedup 与事件限流不变，不新增模型计数、usage 或 schema。相同 UUID 禁止重发；回执持久失败不得降级，不成为另一套授权或账本。受审 wrapper 在当前 Job/Attempt/token/workload 对应的 durable settled 状态确认前不得提交模型终止结果。pending/unknown、撤销、查询失败和 timeout 均不能推定成功；Provider 的 JSON、SSE 或错误文案不构成平台回执。
 
