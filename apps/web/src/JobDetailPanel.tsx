@@ -448,7 +448,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
   const rerun = async (mode: "resume" | "current") => {
     if (!detail || !RESUMABLE.has(detail.job.status) || forceBusy) return;
     setForceMsg(null);
-    await rerunAction.run({ jobId, projectId: detail.job.project_id, mode, onSuccess: async (isCurrent) => {
+    await rerunAction.run({ jobId, projectId: detail.job.project_id ?? null, mode, onSuccess: async (isCurrent) => {
       const next = await api.job(jobId);
       if (isCurrent()) setDetail(next);
     } });

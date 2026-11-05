@@ -80,6 +80,7 @@ export function ProjectCliProviderAllowlistPanel({
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [configurationRefreshed, setConfigurationRefreshed] = useState(false);
   const [probeAction, setProbeAction] = useState<{ id: string; kind: "test" } | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
 
@@ -107,8 +108,20 @@ export function ProjectCliProviderAllowlistPanel({
     setSelectedDefaultCredentialId(defaultCredentialId);
     setSaved(false);
     setFailed(false);
+    setConfigurationRefreshed(false);
   };
-  useEffect(resetDraft, [projectId, enabledAgentClis, enabledCredentialIds, credentialIdsConfigured, defaultCredentialId]);
+  // Health probes reload settings with new arrays. Only a semantic configuration
+  // change (or project switch) may replace the draft; allowlist order is irrelevant.
+  const configurationKey = JSON.stringify([projectId, [...enabledAgentClis].sort(),
+    [...enabledCredentialIds].sort(), credentialIdsConfigured, defaultCredentialId]);
+  const previousConfiguration = useRef({ projectId, key: configurationKey });
+  useEffect(() => {
+    const previous = previousConfiguration.current;
+    if (previous.key === configurationKey) return;
+    previousConfiguration.current = { projectId, key: configurationKey };
+    resetDraft();
+    setConfigurationRefreshed(previous.projectId === projectId && !saved);
+  }, [projectId, configurationKey, enabledAgentClis, enabledCredentialIds, credentialIdsConfigured, defaultCredentialId]);
 
   const llmCredentials = useMemo(
     () => credentialLoadState === "loaded" ? credentials.filter((c) => c.kind === "llm_provider" && (c.project_id == null || c.project_id === projectId)) : [],
@@ -226,6 +239,7 @@ export function ProjectCliProviderAllowlistPanel({
         </div>
       </div>
       <div className="space-y-4 px-4 py-4">
+        {configurationRefreshed && <p role="status" className="text-xs text-amber-300">项目账号配置已在服务端变更，已加载最新配置，请重新确认选择。</p>}
         <div>
           <div className="mb-2 text-[12px] text-zinc-400">启用 Agent 类型</div>
           <div className="flex flex-wrap gap-2">

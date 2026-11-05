@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { act, createElement } from "react";
+import { act, createElement, useState } from "react";
 import { JSDOM } from "jsdom";
 import { api, type ProjectSettings, type ProviderCredential } from "./api";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -296,6 +296,90 @@ test("user selects and clears a default; PATCH result is reflected and a failed 
   } finally {
     await act(async () => root.unmount());
     api.patchSettings = original;
+    api.testCredential = originalProbe;
+    dom.window.close();
+    for (const [key, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
+});
+
+test("parent settings reload after probes preserves drafts before and during the request", async () => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
+  const replacements = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element, Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true };
+  const previous = new Map(Object.keys(replacements).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(replacements)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  const originalPatch = api.patchSettings;
+  const originalProbe = api.testCredential;
+  const container = dom.window.document.getElementById("root")!;
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container);
+  const credentials = ["a", "b"].map((id) => ({ id, name: id, kind: "llm_provider", provider: "fixture", agent_cli: "pi", status: "active", project_id: null })) as ProviderCredential[];
+  let finishProbe!: (result: Awaited<ReturnType<typeof api.testCredential>>) => void;
+  let replaceServer!: (value: ProjectSettings) => void;
+  let reloads = 0;
+  const requests: Array<Parameters<typeof api.patchSettings>[1]> = [];
+  api.testCredential = () => new Promise((resolve) => { finishProbe = resolve; });
+  api.patchSettings = async (_id, body) => {
+    requests.push(body);
+    return { enabled_agent_clis: ["pi"], enabled_credential_ids: ["a", "b"], default_credential_id: body.default_credential_id ?? null } as ProjectSettings;
+  };
+  function Parent({ initialDefault }: { initialDefault: string | null }) {
+    const [server, setServer] = useState({ enabled_agent_clis: ["pi"], enabled_credential_ids: ["a", "b"], default_credential_id: initialDefault } as ProjectSettings);
+    replaceServer = setServer;
+    return createElement(ProjectCliProviderAllowlistPanel, {
+      projectId: "project-a", credentials, credentialLoadState: "loaded", enabledAgentClis: server.enabled_agent_clis as ["pi"],
+      enabledCredentialIds: server.enabled_credential_ids, credentialIdsConfigured: true, defaultCredentialId: server.default_credential_id,
+      // Model the real parent's reload: successful or failed probes both return
+      // equivalent settings with freshly allocated (and possibly reordered) arrays.
+      onSaved: (result?: ProjectSettings) => {
+        reloads += 1;
+        setServer((current) => result ?? { ...current, enabled_agent_clis: [...current.enabled_agent_clis], enabled_credential_ids: [...current.enabled_credential_ids].reverse() });
+      },
+    });
+  }
+  const button = (label: string) => Array.from(container.querySelectorAll("button")).find((entry) => entry.textContent?.trim() === label);
+  const trigger = () => container.querySelector('[aria-label="项目默认账号"]')!;
+  const click = async (element: Element | undefined | null) => {
+    assert.ok(element);
+    await act(async () => { (element as HTMLElement).click(); });
+  };
+  const chooseB = async () => {
+    await click(trigger());
+    await click(Array.from(dom.window.document.querySelectorAll('[role="option"]')).find((option) => option.textContent?.includes("b · fixture")));
+  };
+  try {
+    for (const initialDefault of [null, "a"]) {
+      for (const ok of [true, false]) {
+        for (const editDuringProbe of [false, true]) {
+          await act(async () => root.render(createElement(Parent, { key: `${initialDefault}-${ok}-${editDuringProbe}`, initialDefault })));
+          if (!editDuringProbe) await chooseB();
+          await click(button("测试"));
+          if (editDuringProbe) await chooseB();
+          const beforeReload = reloads;
+          await act(async () => finishProbe({ ok, detail: ok ? undefined : "fixture failure" } as Awaited<ReturnType<typeof api.testCredential>>));
+          assert.equal(reloads, beforeReload + 1, "probe must exercise the parent settings refresh");
+          assert.match(trigger().textContent!, /b · fixture/, "equivalent server arrays must not erase unsaved B");
+          await click(button("保存"));
+          assert.deepEqual(requests.at(-1), { enabled_agent_clis: ["pi"], default_credential_id: "b", default_model_ref: null, fallback_model_refs: [] });
+          assert.match(trigger().textContent!, /b · fixture/, "successful save applies the server result");
+        }
+      }
+    }
+    // A genuine server change is distinct from health refresh and is visible.
+    await act(async () => replaceServer({ enabled_agent_clis: ["pi"], enabled_credential_ids: ["a", "b"], default_credential_id: "a" } as ProjectSettings));
+    await chooseB();
+    await act(async () => replaceServer({ enabled_agent_clis: ["pi"], enabled_credential_ids: ["a", "b"], default_credential_id: null } as ProjectSettings));
+    assert.match(trigger().textContent!, /未设置默认账号/);
+    assert.match(container.textContent!, /项目账号配置已在服务端变更/);
+    await chooseB();
+    await click(button("取消未保存变更"));
+    assert.match(trigger().textContent!, /未设置默认账号/);
+  } finally {
+    await act(async () => root.unmount());
+    api.patchSettings = originalPatch;
     api.testCredential = originalProbe;
     dom.window.close();
     for (const [key, descriptor] of previous) {
