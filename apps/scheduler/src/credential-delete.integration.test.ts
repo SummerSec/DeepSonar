@@ -250,47 +250,6 @@ if (!testDatabaseUrl) {
       const missing = await request("DELETE", `/credentials/${randomUUID()}`);
       assert.equal(missing.statusCode, 404, missing.payload);
 
-      // #914: a project that still enables this credential (or uses it as its default
-      // account) is not "in use" by any job, but deleting the row leaves the project
-      // config dangling and blocks every later snapshot with SNAPSHOT_STALE.
-      const referencedId = await insertCredential("referenced-by-project");
-      const otherProjectId = randomUUID();
-      await sql`INSERT INTO projects (id, name) VALUES (${otherProjectId}, 'credential reference holder')`;
-      await sql`
-        UPDATE projects
-        SET config_json = config_json || ${sql.json({
-          enabled_credential_ids: [referencedId],
-          default_credential_id: referencedId,
-        })}
-        WHERE id = ${otherProjectId}`;
-      const referencedImpact = json(await request("GET", `/credentials/${referencedId}/impact`)) as {
-        project_references: { count: number; items: Array<{ project_id: string; enabled: boolean; default: boolean }> };
-      };
-      assert.equal(referencedImpact.project_references.count, 1);
-      assert.equal(referencedImpact.project_references.items[0]?.project_id, otherProjectId);
-      assert.equal(referencedImpact.project_references.items[0]?.enabled, true);
-      assert.equal(referencedImpact.project_references.items[0]?.default, true);
-      const referencedRefuse = await request("DELETE", `/credentials/${referencedId}`);
-      assert.equal(referencedRefuse.statusCode, 409, referencedRefuse.payload);
-      assert.equal(json(referencedRefuse).error_code, "CREDENTIAL_PROJECT_REFERENCE");
-      assert.ok(String(json(referencedRefuse).next_action).length > 0, "the refusal must say what to fix");
-      const [referencedStill] = await sql`SELECT id FROM credentials WHERE id = ${referencedId}`;
-      assert.equal(String(referencedStill?.id), referencedId, "a refusal deletes nothing");
-      const [projectStill] = await sql<{ config_json: { enabled_credential_ids?: string[] } }[]>`
-        SELECT config_json FROM projects WHERE id = ${otherProjectId}`;
-      assert.deepEqual(projectStill?.config_json.enabled_credential_ids, [referencedId], "project config is untouched");
-
-      // Removing the reference (or replacing it) is what makes the delete possible again;
-      // the resolver's fail-closed behaviour for a still-dangling reference is unchanged.
-      await sql`
-        UPDATE projects
-        SET config_json = config_json - 'enabled_credential_ids' - 'default_credential_id'
-        WHERE id = ${otherProjectId}`;
-      const unreferencedOk = await request("DELETE", `/credentials/${referencedId}`);
-      assert.equal(unreferencedOk.statusCode, 200, unreferencedOk.payload);
-      const [referencedGone] = await sql`SELECT id FROM credentials WHERE id = ${referencedId}`;
-      assert.equal(referencedGone, undefined);
-
       const audits = await sql<{ action: string; after_json: unknown }[]>`
         SELECT action, after_json FROM audit_logs WHERE action = 'credential.delete'`;
       assert.ok(audits.length >= 1);

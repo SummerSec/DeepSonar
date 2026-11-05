@@ -3411,28 +3411,6 @@ export function buildOpenApiDocument(): Record<string, unknown> {
                 },
               },
             },
-            project_references: {
-              type: "object",
-              description:
-                "#914：项目自身 Provider 配置（config_json.enabled_credential_ids / default_credential_id）对该凭据的引用。非零时 DELETE /credentials/:id 返回 409 CREDENTIAL_PROJECT_REFERENCE，需先在项目账号设置里移除或替换。",
-              required: ["count", "items"],
-              properties: {
-                count: { type: "integer", minimum: 0 },
-                items: {
-                  type: "array",
-                  items: {
-                    type: "object",
-                    required: ["project_id", "enabled", "default"],
-                    properties: {
-                      project_id: { type: "string", format: "uuid" },
-                      project_name: { type: "string", nullable: true },
-                      enabled: { type: "boolean", description: "该项目白名单包含该账号" },
-                      default: { type: "boolean", description: "该项目把该账号设为缺省账号" },
-                    },
-                  },
-                },
-              },
-            },
           },
         },
         CredentialImpactJobBucket: {

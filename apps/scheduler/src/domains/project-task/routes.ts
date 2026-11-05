@@ -34,6 +34,7 @@ import {
 import { markAttemptInterrupted } from "../job-attempt/index.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import type { JobLifecycleRow } from "../job-lifecycle/index.js";
+import { interruptProvision } from "../job-attempt/provision-cancellation.js";
 import {
   DeviceNotAuthorizedError,
   freezeSnapshotDeviceRequirement,
@@ -134,7 +135,8 @@ async function canvasKnowledgeRetention(tx: any, canvasId: string): Promise<Reco
     WITH canvas_jobs AS (SELECT id FROM jobs WHERE canvas_id = ${canvasId})
     SELECT
       (SELECT count(*)::int FROM project_knowledge_work w
-        WHERE w.origin_job_id IN (SELECT id FROM canvas_jobs)
+        WHERE w.canvas_id = ${canvasId}
+           OR w.origin_job_id IN (SELECT id FROM canvas_jobs)
            OR w.active_job_id IN (SELECT id FROM canvas_jobs)) AS work,
       (SELECT count(*)::int FROM project_knowledge_versions v
         WHERE v.creator_job_id IN (SELECT id FROM canvas_jobs)) AS versions,
@@ -214,7 +216,12 @@ async function wipeCanvasRuntimeData(tx: any, canvasId: string): Promise<void> {
  * on the outer lock that can only be released after this returns.
  */
 async function cancelCanvasJobsInTransaction(tx: any, canvasId: string): Promise<JobLifecycleRow[]> {
-  const active = await createSqlJobLifecycleApplication(tx).cancelJobsOnCanvas(
+  // Also used by archive: acquire Canvas before lifecycle's Job/Attempt writes.
+  await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+  await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
+  // Serialize FK-backed knowledge writes before checking retention at DELETE.
+  await tx`SELECT id FROM jobs WHERE canvas_id = ${canvasId} ORDER BY id FOR UPDATE`;
+  const active = await createSqlJobLifecycleApplication(tx, { deferProvisionInterruption: true }).cancelJobsOnCanvas(
     canvasId,
     "task archived/deleted",
     true,
@@ -238,6 +245,7 @@ async function cancelCanvasJobsInTransaction(tx: any, canvasId: string): Promise
 async function settleCancelledCanvasJobs(cancelled: JobLifecycleRow[]): Promise<void> {
   for (const job of cancelled) {
     const id = String(job.id);
+    await interruptProvision(id);
     if (job.sandbox_id) {
       await runner.destroy({ sandboxId: job.sandbox_id as string }).catch(() => {});
     }
@@ -1451,8 +1459,10 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     let retained: Record<string, number> = {};
     try {
       await sql.begin(async (tx) => {
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
         const [locked] = await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
         if (!locked) throw new TaskDeleteRefused("canvas_not_found", {});
+        await tx`SELECT id FROM jobs WHERE canvas_id = ${canvasId} ORDER BY id FOR UPDATE`;
         retained = await canvasKnowledgeRetention(tx, canvasId);
         if (Object.keys(retained).length > 0) throw new TaskDeleteRefused("retained", retained);
         cancelled = await cancelCanvasJobsInTransaction(tx, canvasId);

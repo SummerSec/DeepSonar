@@ -5,16 +5,11 @@ import postgres from "postgres";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
-if (!testDatabaseUrl) {
-  test("Task hard delete with knowledge references (set TEST_DATABASE_URL to run)", {
-    skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
-  }, () => {});
-} else {
+if (testDatabaseUrl) {
   // #904: DELETE /tasks/:canvasId returned 500 when a job had project_knowledge_usages
-  // rows. Runtime usage/lease records belong to the task and are cleaned with it;
-  // knowledge work/versions are governance evidence (#752) and must be refused up front,
-  // before any job is cancelled, so a 409 really means nothing ran.
-  test("DELETE /tasks/:canvasId clears runtime knowledge usage and refuses retained governance records", async () => {
+  // rows. Only usage rows are disposable; device leases and knowledge governance
+  // evidence must survive, so retention is decided before cancellation.
+  test("DELETE /tasks/:canvasId clears runtime knowledge usage and refuses retained governance records", { timeout: 90_000 }, async () => {
     const adminUrl = new URL(testDatabaseUrl);
     adminUrl.pathname = "/postgres";
     adminUrl.search = "";
@@ -160,6 +155,83 @@ if (!testDatabaseUrl) {
         assert.equal(Number(canvasLive.count), 0);
         const [jobLive] = await sql`SELECT count(*)::int AS count FROM jobs WHERE id = ${live.jobId}`;
         assert.equal(Number(jobLive.count), 0);
+
+        // A post-CAS SQL failure must not abort an in-flight provision before rollback.
+        const { registerProvisionCancellation } = await import("./domains/job-attempt/provision-cancellation.js");
+        const provisioning = await seedJob(randomUUID(), "provisioning");
+        const abortController = new AbortController();
+        let providerCancels = 0;
+        const unregister = registerProvisionCancellation(provisioning.jobId, {
+          attemptId: provisioning.attemptId,
+          abortController,
+          cancelProvision: async () => { providerCancels++; },
+        });
+        await sql.unsafe(`CREATE FUNCTION reject_test_job_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN RAISE EXCEPTION 'delete-rollback-fixture'; END $$`);
+        await sql.unsafe(`CREATE TRIGGER reject_test_job_delete BEFORE DELETE ON jobs
+          FOR EACH ROW WHEN (OLD.id = '${provisioning.jobId}'::uuid)
+          EXECUTE FUNCTION reject_test_job_delete()`);
+        try {
+          const rolledBack = await app.inject({ method: "DELETE", url: `/tasks/${provisioning.canvasId}`, headers });
+          assert.equal(rolledBack.statusCode, 500, rolledBack.payload);
+          assert.match(rolledBack.payload, /delete-rollback-fixture/);
+          assert.equal(abortController.signal.aborted, false, "rollback must leave provision signal live");
+          assert.equal(providerCancels, 0, "provider cancellation must wait for commit");
+          const [jobRestored] = await sql`SELECT status FROM jobs WHERE id = ${provisioning.jobId}`;
+          const [attemptRestored] = await sql`SELECT status, cancel_requested FROM job_attempts WHERE id = ${provisioning.attemptId}`;
+          assert.equal(jobRestored.status, "provisioning");
+          assert.equal(attemptRestored.status, "active");
+          assert.equal(attemptRestored.cancel_requested, false);
+          await sql.unsafe("DROP TRIGGER reject_test_job_delete ON jobs");
+          const committed = await app.inject({ method: "DELETE", url: `/tasks/${provisioning.canvasId}`, headers });
+          assert.equal(committed.statusCode, 200, committed.payload);
+          assert.equal(abortController.signal.aborted, true);
+          assert.equal(providerCancels, 1, "committed delete cancels the provider exactly once");
+        } finally {
+          unregister();
+          await sql.unsafe("DROP TRIGGER IF EXISTS reject_test_job_delete ON jobs");
+        }
+
+        // Archive must wait for Canvas before acquiring Job: simulate ingestion holding
+        // Canvas and then writing the same Job from an independent PostgreSQL session.
+        const archiving = await seedJob(randomUUID(), "running");
+        const holder = postgres(targetUrl.toString(), { max: 1, onnotice: () => {} });
+        let releaseHolder!: () => void;
+        let announceLocked!: () => void;
+        const hold = new Promise<void>((resolve) => { releaseHolder = resolve; });
+        const locked = new Promise<void>((resolve) => { announceLocked = resolve; });
+        const holding = holder.begin(async (tx) => {
+          await tx`SELECT id FROM canvases WHERE id = ${archiving.canvasId} FOR UPDATE`;
+          announceLocked();
+          await hold;
+          await tx`SET LOCAL lock_timeout = '2s'`;
+          await tx`UPDATE jobs SET heartbeat_at = now() WHERE id = ${archiving.jobId}`;
+        });
+        try {
+          await locked;
+          const archive = app.inject({ method: "POST", url: `/tasks/${archiving.canvasId}/archive`, headers });
+          // Start the request before probing pg_stat_activity (inject is thenable/lazy).
+          const response = Promise.resolve(archive);
+          const deadline = Date.now() + 5_000;
+          let canvasWaitObserved = false;
+          while (Date.now() < deadline) {
+            const waiting = await sql`SELECT query FROM pg_stat_activity
+              WHERE datname = current_database() AND wait_event_type = 'Lock'
+                AND query LIKE '%SELECT id FROM canvases%' AND cardinality(pg_blocking_pids(pid)) > 0`;
+            if (waiting.length > 0) { canvasWaitObserved = true; break; }
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          assert.equal(canvasWaitObserved, true, "archive must block at Canvas, not hold Job first");
+          releaseHolder();
+          await holding;
+          const archived = await response;
+          assert.equal(archived.statusCode, 200, archived.payload);
+          assert.equal(archived.json().cancelled_jobs, 1);
+        } finally {
+          releaseHolder();
+          await holding;
+          await holder.end();
+        }
       } finally {
         runner.destroy = realDestroy;
       }
@@ -170,4 +242,8 @@ if (!testDatabaseUrl) {
       await admin.end();
     }
   });
+} else {
+  test("Task hard delete with knowledge references (set TEST_DATABASE_URL to run)", {
+    skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
+  }, () => {});
 }

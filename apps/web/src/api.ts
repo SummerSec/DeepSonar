@@ -1161,12 +1161,6 @@ export interface CredentialImpact {
   scans: {
     active: { count: number; items: Array<Record<string, unknown>> };
   };
-  /** #914: projects whose own Provider configuration still enables or defaults to this
-   * credential. Deleting it would leave that config dangling and fail the next snapshot. */
-  project_references?: {
-    count: number;
-    items: Array<{ project_id: string; project_name: string | null; enabled: boolean; default: boolean }>;
-  };
 }
 
 export type ProviderAccountCatalogItemView = ProviderAccountCatalogItem;

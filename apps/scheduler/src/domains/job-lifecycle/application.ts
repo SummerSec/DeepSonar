@@ -103,7 +103,10 @@ function rows(value: readonly JobLifecycleRow[]): JobLifecycleRow[] {
  * edges because they are scheduler-recovery decisions, not normal execution
  * transitions.
  */
-export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql): JobLifecycleApplication {
+export function createSqlJobLifecycleApplication(
+  db: JobLifecycleDatabase = sql,
+  options: { deferProvisionInterruption?: boolean } = {},
+): JobLifecycleApplication {
   const atomically = async <T>(work: (tx: JobLifecycleDatabase) => Promise<T>): Promise<T> => {
     // 默认适配器自行开启事务；调用方已经提供事务客户端时直接复用，
     // 避免在同一连接上嵌套事务造成错误的收口边界。
@@ -571,7 +574,11 @@ export function createSqlJobLifecycleApplication(db: JobLifecycleDatabase = sql)
         }
         return rows(result as unknown as JobLifecycleRow[]);
       });
-      await Promise.all(cancelled.map((row) => interruptProvision(String(row.id))));
+      // An outer transaction has not committed when atomically() returns. Its owner
+      // must invoke interruptProvision only after the real commit succeeds.
+      if (!options.deferProvisionInterruption) {
+        await Promise.all(cancelled.map((row) => interruptProvision(String(row.id))));
+      }
       return cancelled;
     },
 

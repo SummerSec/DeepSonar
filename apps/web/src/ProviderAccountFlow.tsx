@@ -401,22 +401,6 @@ export function ProviderAccountFlow({
         setError(`无法删除「${credential.name}」：仍有 ${activeScans} 个进行中的镜像准入扫描引用该凭据。`);
         return;
       }
-      // #914: project Provider configuration can reference this credential without any
-      // job running. Refuse up front with the affected projects and where to fix them,
-      // instead of letting the next snapshot fail closed with 409 SNAPSHOT_STALE.
-      const projectRefs = liveImpact.project_references?.items ?? [];
-      if (projectRefs.length > 0) {
-        const names = projectRefs
-          .slice(0, 3)
-          .map((ref) => `${ref.project_name ?? ref.project_id}${ref.default ? "（缺省账号）" : "（启用账号）"}`)
-          .join("、");
-        setError(
-          `无法删除「${credential.name}」：${projectRefs.length} 个项目仍引用该账号（${names}`
-          + `${projectRefs.length > 3 ? " 等" : ""}）。请先在项目设置 → Provider 账号里移除或替换它，再删除；`
-          + `否则这些项目的新快照会持续解析失败。`,
-        );
-        return;
-      }
       const historical = liveImpact.jobs.terminal_historical.count;
       const confirmed = await confirm({
         title: `删除账号 ${credential.name}？`,
