@@ -104,15 +104,20 @@ test("invalid configured HTTP headers fail before catalog or inference transport
   let requests = 0;
   try {
     globalThis.fetch = (async () => { requests++; return new Response("{}"); }) as typeof fetch;
-    const credential = { provider: "openai", kind: "llm_provider", ...encryptSecret("offline-fixture"), public_metadata_json: {},
-      settings_config_json: { providers: { fixture: { baseUrl: "http://127.0.0.1/v1",
-        api: "openai-completions", models: [{ id: "fixture-model" }],
-        headers: { "x-good": "preserved", "x-invalid": "value\r\ninjected: value" } } } } };
-    assert.equal((await listCredentialModelsPreview(credential, "offline-fixture")).available, false);
-    const result = await testCredential(credential);
-    assert.equal(result.ok, false);
-    assert.equal(result.category, "configuration");
-    assert.equal(requests, 0);
+    for (const invalidHeaders of [
+      { "x-invalid": "value\r\ninjected: value" }, { "x-invalid": "\r\nvalue" },
+      { "x-invalid": "value\r\n" }, { "X-Tenant": "a", "x-tenant": "b" },
+    ]) {
+      const credential = { provider: "openai", kind: "llm_provider", ...encryptSecret("offline-fixture"), public_metadata_json: {},
+        settings_config_json: { providers: { fixture: { baseUrl: "http://127.0.0.1/v1",
+          api: "openai-completions", models: [{ id: "fixture-model" }],
+          headers: { "x-good": "preserved", ...invalidHeaders } } } } };
+      assert.equal((await listCredentialModelsPreview(credential, "offline-fixture")).available, false);
+      const result = await testCredential(credential);
+      assert.equal(result.ok, false);
+      assert.equal(result.category, "configuration");
+      assert.equal(requests, 0);
+    }
   } finally { globalThis.fetch = originalFetch; }
 });
 
