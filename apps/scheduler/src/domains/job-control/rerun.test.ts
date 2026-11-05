@@ -1,3 +1,4 @@
+import { freezePiExtensions } from "../../pi-extensions.js";
 import assert from "node:assert/strict";
 import { buildRepairFeedback } from "@deepsonar/shared-types";
 import test from "node:test";
@@ -135,6 +136,14 @@ test("frozen Hub runtime_image_key is the override used to resolve current ident
   );
   assert.equal(frozenRuntimeImageOverride({ runtime_image_key: null }), undefined);
   assert.equal(frozenRuntimeImageOverride({}), undefined);
+});
+
+test("rerun preserves only previously admitted Pi extension ids and revalidates malformed history", () => {
+  const extensions = freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base",
+    { provider: "anthropic", model: "synthetic-model" }, "99.0.0");
+  assert.deepEqual(frozenRuntimeImageOverride({ runtime_image_key: "deepsonar-base", pi_extensions: extensions }),
+    { runtimeImageKey: "deepsonar-base", piExtensionIds: ["pi-observational-memory"] });
+  assert.throws(() => frozenRuntimeImageOverride({ runtime_image_key: "deepsonar-base", pi_extensions: [{ id: "unregistered" }] }));
 });
 
 test("SnapshotUnresolvableError preserves ModelCatalogMismatchError repair for HTTP 409 (#681)", () => {

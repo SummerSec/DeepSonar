@@ -9,6 +9,10 @@
 
 同 Job 的修复次数、revision、token 根与已知/未知用量累计保留。`resume` 保留原冻结快照且拒绝身份漂移；`rerun-current` 重新核对当前配置和目标授权。存在拒绝历史时，两者仅在旧效果全部结算、原期限未到、预算仍允许且未暂停/接受完成时追加新代际。锁顺序为 Canvas → Job → Attempt；与旧 effect intent 写入、Dispatcher 领取互斥。 pending 转换意外返回空结果时抛错回滚整个事务，再在事务外映射业务拒绝；批量恢复不得跳过失败成员并提交其他成员。隔离 SQL 触发器故障注入覆盖该回滚边界。
 
+恢复事务在旧快照仍可用时调用共享 `inspectGatewayRequestBudget`，通过全部只读门后再调用 `ensureGatewayRequestBudget`，把完整原请求策略保存在内核 `control_receipt`，包括从未签发 token 的 workload。普通无修复回执的恢复也执行该步骤；批量先检查所有成员，再写入。历史策略缺失/非法保持明确拒绝，rate-limit、dedup、policy receipt 与 pending 转换共同回滚。Gateway mint/admission 消费这些策略回执属于 #928 联合交付，不能把本分支仅保存回执当作请求上限已经端到端执行。
+
+`rerun-current` 保留原已授权 Pi 扩展选择并重新经过当前镜像/扩展准入。创建与恢复共用 `job-runtime-freeze.ts`，按平台配置一致重冻 quota、runtime knobs、profile 和 launch；较大的新配置不会授权提高旧 Job 持久请求策略。
+
 恢复准入与 Gateway 使用共享 main token allowance：OM 的已结算后台用量不消耗 main reserve；同 Job 已有 OM token 历史时，即使 `rerun-current` 不再选择 OM，也保留 workload 计费隔离和历史有限上限。未启用过 OM 的 Job 继续使用全 Job token 额度。此隔离不豁免旧后台 pending/unknown effect：建立新代际前仍须全部结算。请求次数上限是独立约束，不因本 token allowance 修正而扩大。 allowance 将尚无账本的 pending reservation 返回为 `JOB_TOKEN_USAGE_PENDING`，不冒充 unknown 或零成本；未知/缺失结算仍返回 `JOB_TOKEN_USAGE_UNKNOWN`。两者均不授予新代际。
 
 代际事件保存 `supersedes_attempt_id`、`previous_chain_status=superseded` 和唯一下一 `target_attempt_no`。待领取时 owner 为空，不能用于模型调用；领取后 Gateway 和完成门共同解析相同 owner。原负回执/费用不修改，模型调用继续归因到原 repair receipt；新完成提案使用累计下一 revision。原 key 查询和传输重放保持原结果，不把历史 next_action 当成当前许可。手动入口的成功只表示已入队；完成必须等新 Attempt 通过完成门和终态结算。
@@ -38,7 +42,7 @@
 
 ## 验证边界与注意力成本
 
-本地只进行静态阅读与 `git diff --check`；测试、构建、typecheck 在 GitHub Actions。新增恢复测试覆盖 OM main90/后台15/主上限100 的恢复与重新冻结最终结算、main 耗尽和旧后台 pending/unknown 的无变更拒绝，以及重冻后旧模型拒绝/新模型成功。使用隔离随机 PostgreSQL、假凭据、loopback 假上游和受控 runtime handler；真实 HTTP handler、预算、回执和最终 ingestion 属于工程覆盖，不是生产运行或真实模型理解。当前源码存在不等于最终 SHA 全绿。
+本地只进行静态阅读与 `git diff --check`；测试、构建、typecheck 在 GitHub Actions。联合请求额度回归依赖 #928 consumer：真实创建/HTTP 恢复/Dispatcher 后首次 OM token 仍受旧 10/8/2 策略约束，并覆盖未签发任何 token、连续恢复和非法原策略整批拒绝。该联合代码尚未运行。新增恢复测试覆盖 OM main90/后台15/主上限100 的恢复与重新冻结最终结算、main 耗尽和旧后台 pending/unknown 的无变更拒绝，以及重冻后旧模型拒绝/新模型成功。使用隔离随机 PostgreSQL、假凭据、loopback 假上游和受控 runtime handler；真实 HTTP handler、预算、回执和最终 ingestion 属于工程覆盖，不是生产运行或真实模型理解。当前源码存在不等于最终 SHA 全绿。
 
 界面复用已有 Job 诊断和恢复入口，不增加通知/配置；当前状态明确区分等待人、平台对账和可请求恢复。没有宿主许可时不显示“安全重试”，减少用户误判和重复点击；响应仍需服务端实时准入。
 

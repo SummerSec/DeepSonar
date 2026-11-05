@@ -1,3 +1,4 @@
+import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
 import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
 import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -950,7 +951,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       }
       const interruptedWorkers = await tx`
         SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.status,
-               j.payload_json, j.agent_snapshot_json, j.sandbox_id, j.created_at
+               j.payload_json, j.agent_snapshot_json, j.sandbox_id, j.created_at, j.timeout_sec
         FROM jobs j
         LEFT JOIN agent_roles r ON r.name = j.type
         LEFT JOIN LATERAL (
@@ -979,6 +980,12 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       const repairAdmissions = new Map<string, Awaited<ReturnType<typeof readRepairRequeueAdmission>>>();
       for (const worker of interruptedWorkers) {
         await tx`SELECT id FROM job_attempts WHERE job_id=${String(worker.id)} ORDER BY attempt_no FOR UPDATE`;
+        try { await inspectGatewayRequestBudget(tx, String(worker.id), worker.agent_snapshot_json); }
+        catch (error) {
+          if (!(error instanceof GatewayRequestBudgetError)) throw error;
+          return { jobs: [], active: [], stale: [], convergence: null,
+            repairBlocked: { job_id: String(worker.id), code: error.code, reason: error.message } };
+        }
         const admission = await readRepairRequeueAdmission(tx, String(worker.id));
         if (admission.blocker) return { jobs: [], active: [], stale: [], convergence: null,
           repairBlocked: { job_id: String(worker.id), ...admission.blocker } };
@@ -1003,6 +1010,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         const blockers = await requeueTargetAuthorizationBlockers(tx, worker, worker.agent_snapshot_json, "resume-frozen");
         if (blockers.length) return { jobs: [], active: [], stale: [], convergence: null,
           authorizationBlocked: { job_id: String(worker.id), blockers } };
+      }
+      for (const worker of interruptedWorkers) {
+        await ensureGatewayRequestBudget(tx, String(worker.id), worker.agent_snapshot_json);
       }
       const convergence = interruptedWorkers.length > 0
         ? await patchCanvasConvergence(tx, canvasId, {

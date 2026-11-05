@@ -45,6 +45,14 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       VALUES(${credentialId},'synthetic repair','llm_provider','anthropic',${projectId},${encrypted.ciphertext},${encrypted.nonce},${encrypted.auth_tag},
         'synthetic','only','active','claude-code',${sql.json({ env: { ANTHROPIC_MODEL: "model-a", ANTHROPIC_DEFAULT_SONNET_MODEL: "model-b" } })},
         ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })})`;
+    // Catalog admission is real SQL; runner remains the fake instance created at
+    // module import. Never call Dispatcher/provision/model execution in this scope.
+    const withCatalog = async <T>(read: () => Promise<T>): Promise<T> => {
+      const old = config.runtime.agentMode;
+      Reflect.set(config.runtime, "agentMode", "real");
+      try { return await read(); } finally { Reflect.set(config.runtime, "agentMode", old); }
+    };
+    const { freezeJobRuntimeConfiguration } = await import("./job-runtime-freeze.js");
     const readBudget = (jobId: string) => sql.begin(tx => budgets.readRepairTokenBudget(tx as unknown as typeof sql, jobId));
     const request = (token: string, model = "model-a") => app.inject({ method: "POST", url: "/gateway/v1/messages",
       headers: { authorization: `Bearer ${token}` }, payload: { model, max_tokens: 10, messages: [{ role: "user", content: "synthetic" }] } });
@@ -65,8 +73,14 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           VALUES(${canvasId},${projectId},'synthetic repair',${sql.json({ network_policy: { allow_egress: false } })})`;
         await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status,body_json) VALUES(${canvasId},'root','root','active','{}')`;
       }
-      const snapshot = { ...await snapshots.freezeAgentSnapshotNetworkPolicy(sql, canvasId, await core.resolveAgentSnapshotForJob(sql, projectId, roleName)),
-        ...snapshotOverrides }; // Synthetic historical snapshots may deliberately lack required authority.
+      const resolve = async () => snapshots.freezeAgentSnapshotNetworkPolicy(sql, canvasId,
+        await core.resolveAgentSnapshotForJob(sql, projectId, roleName));
+      const resolved = snapshotOverrides.pi_extensions ? await withCatalog(resolve) : await resolve();
+      const { snapshotWithKnobs } = await freezeJobRuntimeConfiguration(sql,
+        { projectId, type: roleName, timeoutSec: 3600 }, resolved);
+      const snapshot = { ...snapshotWithKnobs, ...snapshotOverrides,
+        runtime_knobs: { ...snapshotWithKnobs.runtime_knobs,
+          ...(snapshotOverrides.runtime_knobs as Record<string, unknown> | undefined) } };
       await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
         VALUES(${jobId},${projectId},${canvasId},${roleName},'running',${sql.json(snapshot as never)},now(),3600,now()+interval '1 hour')`;
       await sql`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json) VALUES(${canvasId},${jobId},'job','repair','running','{}')`;
@@ -95,7 +109,10 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         await sql`UPDATE jobs SET status=${status},finished_at=now() WHERE id=${jobId}`;
         api.unregisterRuntimeHandler(jobId);
       };
-      const recover = (mode: "resume" | "rerun-current") => app.inject({ method: "POST", url: `/jobs/${jobId}/${mode}` });
+      const recover = (mode: "resume" | "rerun-current") => {
+        const call = async () => app.inject({ method: "POST", url: `/jobs/${jobId}/${mode}` });
+        return snapshotOverrides.pi_extensions ? withCatalog(call) : call();
+      };
       const start = async () => {
         const claims = await dispatcher.claimPendingJobs();
         assert.ok(claims.some(row => String(row.id) === jobId), "real Dispatcher creates successor Attempt");
@@ -297,6 +314,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         sql`SELECT to_jsonb(a) AS row FROM job_attempts a WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,attempt_no`,
         sql`SELECT to_jsonb(e) AS row FROM events e WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,job_seq`,
         sql`SELECT to_jsonb(d) AS row FROM event_dedup d WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,event_id`,
+        sql`SELECT to_jsonb(r) AS row FROM job_event_rate_limits r WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id`,
         sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,id`,
         sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,id`,
         sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,id`,
@@ -443,6 +461,22 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       await assertNoGeneration(f.jobId);
     });
 
+    // Synthetic trusted catalog metadata only: never pull or run this image.
+    const digest = `sha256:${"a".repeat(64)}`, imageRef = `127.0.0.1/synthetic/deepsonar-base@${digest}`;
+    const [imageRow] = await sql`INSERT INTO runtime_images(image_key,name,publisher,source_kind,official)
+      VALUES('deepsonar-base','synthetic catalog','fixture','official',true)
+      ON CONFLICT(image_key) DO UPDATE SET enabled=true RETURNING id`;
+    const versionId = randomUUID();
+    await sql`INSERT INTO runtime_image_versions(id,runtime_image_id,version,image_ref,resolved_ref,digest,
+      platforms_json,trust_status,promoted_at,scan_summary_json)
+      VALUES(${versionId},${imageRow.id},'99.0.0',${imageRef},${imageRef},${digest},
+        ${sql.json(["linux/amd64", "linux/arm64"])},'trusted',now(),${sql.json({ manual: {
+          contract: "deepsonar.runtime.manuals/v1", path: "/opt/deepsonar/manuals/index.json",
+          version: "synthetic", sha256: "b".repeat(64), count: 1 } })})`;
+    await sql`INSERT INTO runtime_image_version_refs(version_id,channel,image_ref,resolved_ref,digest)
+      VALUES(${versionId},'github',${imageRef},${imageRef},${digest})`;
+    await sql`UPDATE global_settings SET runtime_registry_channel='github' WHERE id='global'`;
+
     await t.test("OM token history preserves main allowance through recovery and refreeze", async (t) => {
       const { freezePiExtensions } = await import("./pi-extensions.js");
       const { readMainTokenAllowance, readWorkloadTokenAllowance } = await import("./domains/event-ingestion/model-token-allowance.js");
@@ -526,6 +560,133 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
             assert.equal(cost.total, 109, "all main and background costs remain in the Job ledger");
             await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
           });
+        }
+        // Joint #903 + #928 contract: these HTTP assertions require the Gateway
+        // consumer of gateway_request_budget receipts, not just its shared reader.
+        const { persistPreparedJob } = await import("./job-creation.js");
+        const oldMainAllocation = process.env.DEEPSONAR_PI_OM_MAIN_MAX_REQUESTS;
+        const oldBackgroundAllocation = process.env.DEEPSONAR_PI_OM_BACKGROUND_MAX_REQUESTS;
+        const setPlan = async (total: number, main: number, background: number) => {
+          process.env.DEEPSONAR_PI_OM_MAIN_MAX_REQUESTS = String(main);
+          process.env.DEEPSONAR_PI_OM_BACKGROUND_MAX_REQUESTS = String(background);
+          await sql`UPDATE role_configs SET runtime_knobs_json=${sql.json({ jobTokenMaxRequests: total })} WHERE id=${roleConfigId}`;
+        };
+        const createPolicyJob = async (canvasId = `policy-${randomUUID()}`) => {
+          await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${projectId},'synthetic policy',
+            ${sql.json({ network_policy: { allow_egress: false } })}) ON CONFLICT(id) DO NOTHING`;
+          const resolved = await withCatalog(async () => snapshots.freezeAgentSnapshotNetworkPolicy(sql, canvasId,
+            await core.resolveAgentSnapshotForJob(sql, projectId, roleName, [], { piExtensionIds: ["pi-observational-memory"] })));
+          const { created } = await sql.begin(tx => persistPreparedJob(tx as unknown as typeof sql,
+            { projectId, canvasId, type: roleName, timeoutSec: 3600 }, { snapshot: resolved, payload: {}, priority: 0 }));
+          const jobId = String(created.id);
+          await sql`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
+            VALUES(${canvasId},${jobId},'job','synthetic','pending','{}')`;
+          return { jobId, canvasId };
+        };
+        const startPolicyJob = async (jobId: string) => {
+          // Real Dispatcher owns Attempt creation. Only fake-runner readiness is
+          // emulated; neither the frozen snapshot nor the Attempt is replaced.
+          assert.ok((await dispatcher.claimPendingJobs()).some(row => String(row.id) === jobId));
+          const [attempt] = await sql`SELECT id FROM job_attempts WHERE job_id=${jobId} AND status='active'`;
+          await sql`UPDATE jobs SET status='running',started_at=COALESCE(started_at,now()),lease_expires_at=now()+interval '1 hour'
+            WHERE id=${jobId}`;
+          api.registerRuntimeHandler(jobId, context => context.completionPhase === "prepare" ? { completion_prepared: true } : {}, ["mark_job_done"]);
+          const grant = await api.mintJobCapabilityToken(jobId);
+          return { attemptId: String(attempt.id), grant: grant.token };
+        };
+        const failPolicyJob = async (jobId: string) => {
+          await attempts.settleAttemptTerminal(sql, jobId, "failed", { reason: "synthetic known failure" });
+          await sql`UPDATE jobs SET status='failed',finished_at=now() WHERE id=${jobId}`;
+          api.unregisterRuntimeHandler(jobId);
+        };
+        try {
+          for (const initial of ["repair-main-only", "ordinary-main-only", "no-token"] as const) {
+            await t.test(`durable request policy survives ${initial} and two real refreezes`, async () => {
+              config.gateway.repairMaxTokens = 200;
+              await setPlan(10, 8, 2);
+              const f = await createPolicyJob();
+              const first = await startPolicyJob(f.jobId);
+              const endpoint = `/control/v1/jobs/${f.jobId}/operations/mark_job_done`;
+              const oldKey = randomUUID();
+              let oldReceipt: Awaited<ReturnType<typeof receipts.readCompletionReceipt>> = null;
+              if (initial === "repair-main-only") {
+                const rejected = await app.inject({ method: "POST", url: endpoint,
+                  headers: { authorization: `Bearer ${first.grant}`, "idempotency-key": oldKey, "x-deepsonar-proposal-revision": "0" },
+                  payload: { summary: "x".repeat(8193) } });
+                assert.equal(rejected.statusCode, 422, rejected.body);
+                oldReceipt = await receipts.readCompletionReceipt(sql, f.jobId, oldKey);
+              }
+              let ledgerCount = 0;
+              if (initial !== "no-token") {
+                const main = await gateway.mintJobToken({ jobId: f.jobId, projectId, credentialId });
+                const response = await request(main.plaintext);
+                assert.equal(response.statusCode, 200, response.body); await settled(f.jobId, ++ledgerCount);
+              }
+              const [oldBackground] = await sql`SELECT count(*)::int AS count FROM job_tokens
+                WHERE job_id=${f.jobId} AND workload='observational_memory'`;
+              assert.equal(oldBackground.count, 0, "original background allocation has no token row to reconstruct it from");
+              for (const total of [100, 200]) {
+                await failPolicyJob(f.jobId);
+                await setPlan(total, total * 0.8, total * 0.2);
+                const response = await withCatalog(async () => app.inject({ method: "POST", url: `/jobs/${f.jobId}/rerun-current` }));
+                assert.equal(response.statusCode, 200, response.body);
+                const [snapshot] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${f.jobId}`;
+                const frozenOm = snapshot.agent_snapshot_json.pi_extensions[0].observational_memory;
+                assert.deepEqual(frozenOm.request_budget, { total_requests: total, main_requests: total * 0.8, background_requests: total * 0.2 });
+                assert.deepEqual(snapshot.agent_snapshot_json.runtime_profile.native_options.pi.observational_memory, frozenOm);
+                const [policy] = await sql`SELECT payload_json->'policy' AS policy FROM events WHERE job_id=${f.jobId}
+                  AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget' ORDER BY job_seq LIMIT 1`;
+                assert.deepEqual(policy.policy, { version: 1, total_requests: 10, main_requests: 8, background_requests: 2 });
+                await startPolicyJob(f.jobId);
+              }
+              const background = await gateway.mintJobToken({ jobId: f.jobId, projectId, credentialId, workload: "observational_memory" });
+              const sendBackground = () => app.inject({ method: "POST", url: "/gateway/v1/messages",
+                headers: { authorization: `Bearer ${background.plaintext}`, "x-deepsonar-request-id": randomUUID() },
+                payload: { model: "model-a", max_tokens: 10, messages: [{ role: "user", content: "synthetic OM" }] } });
+              for (let i = 0; i < 2; i++) {
+                const response = await sendBackground(); assert.equal(response.statusCode, 200, response.body);
+                await settled(f.jobId, ++ledgerCount);
+              }
+              const countersAndEffects = () => Promise.all([
+                sql`SELECT id,used_requests,used_tokens FROM job_tokens WHERE job_id=${f.jobId} ORDER BY id`,
+                sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`,
+                sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+              ]);
+              const before = await countersAndEffects(), calls = upstreamCalls;
+              const denied = await sendBackground(); assert.equal(denied.statusCode, 429, denied.body);
+              assert.equal(upstreamCalls, calls); assert.deepEqual(await countersAndEffects(), before);
+              const finalGrant = await api.mintJobCapabilityToken(f.jobId);
+              const key = randomUUID(), summary = "Synthetic request budget remained immutable through ordinary and repair recovery.";
+              const done = await app.inject({ method: "POST", url: endpoint,
+                headers: { authorization: `Bearer ${finalGrant.token}`, "idempotency-key": key,
+                  "x-deepsonar-proposal-revision": initial === "repair-main-only" ? "1" : "0" }, payload: { summary } });
+              assert.equal(done.statusCode, 200, done.body);
+              await core.ingestEvent(f.jobId, { v: 1, event_id: receipts.completionDoneEventId(f.jobId, key), type: "done", payload: { summary } });
+              const [final] = await sql`SELECT status FROM jobs WHERE id=${f.jobId}`; assert.equal(final.status, "succeeded");
+              if (oldReceipt) assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, oldKey), oldReceipt);
+              await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+            });
+          }
+          await t.test("invalid original policy in later sibling rejects the whole no-receipt batch", async () => {
+            await setPlan(10, 8, 2);
+            const first = await createPolicyJob(), second = await createPolicyJob(first.canvasId);
+            // Deliberately malformed historical fixture, never a valid recovery success path.
+            await sql`UPDATE jobs SET status='orphan',error='调度器重启（执行中断）',
+              agent_snapshot_json=CASE WHEN id=${second.jobId} THEN agent_snapshot_json - 'runtime_knobs' ELSE agent_snapshot_json END
+              WHERE id=ANY(${[first.jobId, second.jobId]}::uuid[])`;
+            const before = await captureBatch(first.canvasId, [first.jobId, second.jobId]);
+            const response = await withCatalog(async () => app.inject({ method: "POST", url: `/tasks/${first.canvasId}/resume-session` }));
+            assert.equal(response.statusCode, 409, response.body);
+            assert.equal(response.json().error_code, "GATEWAY_REQUEST_BUDGET_INVALID");
+            assert.deepEqual(await captureBatch(first.canvasId, [first.jobId, second.jobId]), before);
+            await sql`UPDATE jobs SET status='cancelled' WHERE id=ANY(${[first.jobId, second.jobId]}::uuid[])`;
+          });
+        } finally {
+          if (oldMainAllocation === undefined) delete process.env.DEEPSONAR_PI_OM_MAIN_MAX_REQUESTS;
+          else process.env.DEEPSONAR_PI_OM_MAIN_MAX_REQUESTS = oldMainAllocation;
+          if (oldBackgroundAllocation === undefined) delete process.env.DEEPSONAR_PI_OM_BACKGROUND_MAX_REQUESTS;
+          else process.env.DEEPSONAR_PI_OM_BACKGROUND_MAX_REQUESTS = oldBackgroundAllocation;
+          await sql`UPDATE role_configs SET runtime_knobs_json='{}' WHERE id=${roleConfigId}`;
         }
       } finally {
         responseTokens = 4;

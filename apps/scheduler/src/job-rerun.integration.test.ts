@@ -107,12 +107,12 @@ if (!testDatabaseUrl) {
           ${id.slice(0, 16)}, 'cret', 'active', ${cli}, ${sql.json(settings)})`;
       }
 
-      const currentSnapshot = async (targetCanvasId = canvasId) =>
-        snapshotModule.freezeAgentSnapshotNetworkPolicy(
-          sql,
-          targetCanvasId,
-          await coreModule.resolveAgentSnapshotForJob(sql, projectId, roleName),
-        );
+      const { freezeJobRuntimeConfiguration } = await import("./job-runtime-freeze.js");
+      const currentSnapshot = async (targetCanvasId = canvasId) => {
+        const resolved = await snapshotModule.freezeAgentSnapshotNetworkPolicy(sql, targetCanvasId,
+          await coreModule.resolveAgentSnapshotForJob(sql, projectId, roleName));
+        return (await freezeJobRuntimeConfiguration(sql, { projectId, type: roleName }, resolved)).snapshotWithKnobs;
+      };
       // Normalize postgres.js Result arrays before comparing the persisted
       // JSONB snapshot with the creation-time value.
       const baselineSnapshot = JSON.parse(

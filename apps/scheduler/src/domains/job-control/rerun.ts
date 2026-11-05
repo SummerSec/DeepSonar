@@ -1,3 +1,6 @@
+import { freezeJobRuntimeConfiguration } from "../../job-runtime-freeze.js";
+import { parseFrozenPiExtensions } from "../../pi-extensions.js";
+import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
 import { readRepairRequeueAdmission } from "./repair-admission.js";
 import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
 import { normalizeTaskContract, normalizeTaskGoalReviewRequest } from "@deepsonar/shared-types";
@@ -211,10 +214,12 @@ export async function frozenSnapshotStaleDetail(
   }
 }
 
-/** Hub 冻结的 image_key 是该 Job 的镜像身份；resume/rerun 不得掉回角色缺省。 */
-export function frozenRuntimeImageOverride(snapshot: unknown): { runtimeImageKey: string } | undefined {
+/** Preserve the original image and extension selection; re-resolve their current admission and configuration. */
+export function frozenRuntimeImageOverride(snapshot: unknown): { runtimeImageKey?: string; piExtensionIds?: string[] } | undefined {
   const key = runtimeImageKeyFromSnapshot(snapshot);
-  return key ? { runtimeImageKey: key } : undefined;
+  const extensions = parseFrozenPiExtensions(objectValue(snapshot).pi_extensions).map(extension => extension.id);
+  return key || extensions.length ? { ...(key ? { runtimeImageKey: key } : {}),
+    ...(extensions.length ? { piExtensionIds: extensions } : {}) } : undefined;
 }
 
 export async function resolveCurrentSnapshotForExistingJob(
@@ -228,7 +233,7 @@ export async function resolveCurrentSnapshotForExistingJob(
       ...parseRelatedFindingIds(payload),
     ]),
   ];
-  const current = await freezeAgentSnapshotNetworkPolicy(
+  const resolved = await freezeAgentSnapshotNetworkPolicy(
     tx,
     String(job.canvas_id),
     await resolveAgentSnapshotForJob(
@@ -239,6 +244,9 @@ export async function resolveCurrentSnapshotForExistingJob(
       frozenRuntimeImageOverride(job.agent_snapshot_json),
     ),
   );
+  const { snapshotWithKnobs: current } = await freezeJobRuntimeConfiguration(tx,
+    { projectId: String(job.project_id), type: String(job.type),
+      ...(typeof job.timeout_sec === "number" ? { timeoutSec: job.timeout_sec } : {}) }, resolved);
   const previous = objectValue(job.agent_snapshot_json).task_goal_review;
   if (previous === undefined && payload.goal_review === undefined) return current;
   // The existing assignment is the authority, never the mutable rerun payload.
@@ -345,7 +353,7 @@ export async function requeueJob(
     }
     const [job] = await tx`
       SELECT id, project_id, canvas_id, finding_id, type, status, payload_json,
-             agent_snapshot_json, sandbox_id, priority
+             agent_snapshot_json, sandbox_id, priority, timeout_sec
       FROM jobs WHERE id = ${jobId} FOR UPDATE`;
     if (!job) return { kind: "not_found" as const };
     const status = String(job.status);
@@ -412,9 +420,16 @@ export async function requeueJob(
     // Fence effect intent writers before inspecting the old ledger. An idle DB
     // observation alone cannot prove that a concurrent old runner stayed idle.
     await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no FOR UPDATE`;
+    try { await inspectGatewayRequestBudget(tx, jobId, job.agent_snapshot_json); }
+    catch (error) {
+      if (!(error instanceof GatewayRequestBudgetError)) throw error;
+      return { kind: "not_resumable" as const, status, provenance, reason: error.message, error_code: error.code };
+    }
+
     const repairAdmission = await readRepairRequeueAdmission(tx, jobId);
     if (repairAdmission.blocker) return { kind: "not_resumable" as const, status, provenance,
       reason: repairAdmission.blocker.reason, error_code: repairAdmission.blocker.code };
+    await ensureGatewayRequestBudget(tx, jobId, job.agent_snapshot_json);
     if (repairAdmission.budget && repairAdmission.deadline) {
       await admitRepairGeneration(tx, jobId, repairAdmission.budget.receipt_ref, repairAdmission.deadline, mode);
     }

@@ -2,17 +2,9 @@ import type { KnowledgeJobAssignment } from "@deepsonar/shared-types";
 import type { sql } from "./db.js";
 import type { CreateJobInput } from "./core.js";
 import type { AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index.js";
-import { freezeRuntimeKnobs, mergeRoleRuntimeKnobOverrides, resolveRuntimeKnobs } from "./runtime-knobs.js";
+import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { sha256 } from "./domains/project-knowledge/types.js";
-import { buildAgentRuntimeLaunchSpecification } from "@deepsonar/runtime-sandbox";
-import { freezeAgentRuntimeProfile } from "./agent-runtime-profile.js";
-import {
-  assertObservationalMemoryQuota,
-  freezeObservationalMemoryQuotas,
-  observationalMemoryConfig,
-  parseFrozenPiExtensions,
-} from "./pi-extensions.js";
 
 /** Shared insert primitive. The caller owns snapshot admission and the complete transaction. */
 export async function persistPreparedJob(
@@ -20,49 +12,9 @@ export async function persistPreparedJob(
   prepared: { snapshot: AgentRuntimeSnapshot; payload: Record<string, unknown>; priority: number; assignment?: KnowledgeJobAssignment },
 ) {
   const { snapshot, payload, priority, assignment } = prepared;
-  const [projectRow, globalRow] = await Promise.all([
-    tx`SELECT config_json FROM projects WHERE id = ${input.projectId}`,
-    tx`SELECT rules_json FROM global_settings WHERE id = 'global'`,
-  ]);
-  const projectRules = (((projectRow[0]?.config_json as Record<string, unknown> | undefined)?.rules ?? {}) ?? {}) as Record<string, unknown>;
-  const platformRules = (globalRow[0]?.rules_json ?? {}) as Record<string, unknown>;
-  const knobs = resolveRuntimeKnobs({
-    jobType: input.type, imageKey: snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key,
-    job: { timeoutSec: input.timeoutSec, stallSec: input.stallSec, jobTokenMaxRequests: input.maxRequests },
-    role: mergeRoleRuntimeKnobOverrides(snapshot.role_runtime_knobs?.global, snapshot.role_runtime_knobs?.project),
-    project: projectRules, platform: platformRules,
-  });
-  const quotaFrozenPiExtensions = freezeObservationalMemoryQuotas(
-    parseFrozenPiExtensions(snapshot.pi_extensions),
-    knobs.jobTokenMaxRequests,
-  );
-  assertObservationalMemoryQuota(quotaFrozenPiExtensions, knobs.jobTokenMaxRequests);
-  const quotaObservationalMemory = observationalMemoryConfig(quotaFrozenPiExtensions);
-  let runtimeProfile = snapshot.runtime_profile;
-  let agentRuntimeLaunch = snapshot.agent_runtime_launch;
-  if (quotaObservationalMemory) {
-    const { profile_fingerprint: _profileFingerprint, ...profileBody } = snapshot.runtime_profile;
-    const piOptions = profileBody.native_options.pi;
-    if (!piOptions) throw new Error("PI_OM_RUNTIME_PROFILE_MISSING");
-    runtimeProfile = freezeAgentRuntimeProfile({
-      ...profileBody,
-      native_options: {
-        ...profileBody.native_options,
-        pi: { ...piOptions, observational_memory: quotaObservationalMemory },
-      },
-    });
-    agentRuntimeLaunch = buildAgentRuntimeLaunchSpecification(
-      runtimeProfile,
-      snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key ?? "",
-    );
-  }
-  const { role_runtime_knobs: _roleKnobs, ...base } = snapshot;
+  const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(tx, input, snapshot);
   const snapshotWithKnobs = {
-    ...base,
-    pi_extensions: quotaFrozenPiExtensions,
-    runtime_profile: runtimeProfile,
-    agent_runtime_launch: agentRuntimeLaunch,
-    runtime_knobs: freezeRuntimeKnobs(knobs),
+    ...runtimeSnapshot,
     ...(assignment ? { knowledge_assignment: assignment } : {}),
     // Trial arms receive their exact versions only through their assignment.
     ...(assignment?.stage === "trial" ? { project_knowledge_catalog: { entries: [], hash: sha256("[]") }, shared_assets: [] } : {}),
