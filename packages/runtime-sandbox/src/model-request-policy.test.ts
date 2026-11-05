@@ -64,7 +64,7 @@ test("three CLI request shapes preserve compliant bytes and refuse requests need
   const local = `http://127.0.0.1:${(policy.server.address() as AddressInfo).port}`;
   const request = (route: string, payload: unknown, headers: string[] = []) => new Promise<{ status: number; headers: http.IncomingHttpHeaders; bytes: Buffer }>((resolve, reject) => {
     const bytes = Buffer.from(JSON.stringify(payload));
-    const req = http.request(`${local}/gateway/${route}`, { method: "POST", headers: ["Authorization", "Bearer synthetic-main-token", "Content-Type", "application/json",
+    const req = http.request(`${local}/gateway/${route}`, { method: "POST", headers: ["Host", new URL(local).host, "Authorization", "Bearer synthetic-main-token", "Content-Type", "application/json",
       "Content-Length", String(bytes.length), ...headers] }, async (res) => {
       const chunks: Buffer[] = [];
       for await (const chunk of res) chunks.push(Buffer.from(chunk));
@@ -81,7 +81,7 @@ test("three CLI request shapes preserve compliant bytes and refuse requests need
     for (const fixture of fixtures) {
       const original = structuredClone(fixture.payload);
       const result = await request(fixture.route, fixture.payload, ["X-Repeated", "one", "X-Repeated", "two"]);
-      assert.equal(result.status, 200); assert.deepEqual(result.bytes, compressed);
+      assert.equal(result.status, 200, `${fixture.route}: ${result.bytes.toString()}`); assert.deepEqual(result.bytes, compressed);
       const last = received.at(-1)!;
       assert.equal(last.body[fixture.field], 7);
       assert.equal(last.body.model, original.model); assert.deepEqual(last.body.extension, original.extension);
