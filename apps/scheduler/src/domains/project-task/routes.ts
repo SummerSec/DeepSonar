@@ -116,6 +116,25 @@ const TriggerTaskBody = z.object({
 });
 /** 清空任务画布上的运行数据（jobs / findings / 图节点等），保留 canvas 行本身。 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+/**
+ * #904: knowledge work/versions created by a job are governance evidence (#752 forbids
+ * deleting them). A task whose jobs produced such records cannot be hard-deleted; the
+ * caller must refuse *before* cancelling jobs so a rejection really means "nothing ran".
+ */
+async function canvasKnowledgeRetention(
+  tx: any,
+  canvasId: string,
+): Promise<{ work: number; versions: number }> {
+  const [row] = await tx`
+    SELECT
+      (SELECT count(*)::int FROM project_knowledge_work w
+        WHERE w.origin_job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})
+           OR w.active_job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})) AS work,
+      (SELECT count(*)::int FROM project_knowledge_versions v
+        WHERE v.creator_job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})) AS versions`;
+  return { work: Number(row?.work ?? 0), versions: Number(row?.versions ?? 0) };
+}
+
 async function wipeCanvasRuntimeData(tx: any, canvasId: string): Promise<void> {
   await tx`UPDATE canvas_nodes SET job_id = NULL WHERE canvas_id = ${canvasId}`;
   await tx`DELETE FROM canvas_edges WHERE canvas_id = ${canvasId}`;
@@ -148,6 +167,15 @@ async function wipeCanvasRuntimeData(tx: any, canvasId: string): Promise<void> {
     DELETE FROM event_dedup WHERE job_id IN (
       SELECT id FROM jobs WHERE canvas_id = ${canvasId}
     )`;
+  // #904: per-job runtime records that carry a NOT NULL FK to jobs and legitimately
+  // belong to the task's execution. Knowledge identity/governance records are NOT here —
+  // they are refused up front (see canvasKnowledgeRetention) instead of being deleted.
+  await tx`
+    DELETE FROM project_knowledge_usages
+    WHERE job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})`;
+  await tx`
+    DELETE FROM device_leases
+    WHERE job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})`;
   await tx`
     UPDATE jobs SET parent_job_id = NULL, finding_id = NULL
     WHERE canvas_id = ${canvasId}`;
@@ -1355,6 +1383,19 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     const [canvas] = await sql`SELECT * FROM canvases WHERE id = ${canvasId}`;
     if (!canvas) return reply.code(404).send({ error: "canvas not found" });
     const projectId = canvas.project_id as string;
+
+    // Refuse before cancelling anything: a 409 must not claim "nothing changed" after
+    // sandboxes were torn down.
+    const retained = await canvasKnowledgeRetention(sql, canvasId);
+    if (retained.work > 0 || retained.versions > 0) {
+      return reply.code(409).send({
+        error: "task knowledge records must be retained",
+        error_code: "TASK_DELETE_KNOWLEDGE_RETAINED",
+        retained,
+        next_action: "该任务的 Job 产生了知识工作/版本记录，硬删除会销毁治理证据；请改用归档，或先确认这些记录的去向。",
+      });
+    }
+
     const cancelled = await cancelActiveJobsOnCanvas(canvasId);
 
     await sql.begin(async (tx) => {

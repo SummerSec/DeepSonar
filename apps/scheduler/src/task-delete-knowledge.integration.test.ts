@@ -1,0 +1,98 @@
+import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
+import test from "node:test";
+import postgres from "postgres";
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
+
+if (!testDatabaseUrl) {
+  test("Task hard delete with knowledge references (set TEST_DATABASE_URL to run)", {
+    skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
+  }, () => {});
+} else {
+  // #904: DELETE /tasks/:canvasId returned 500 when a job had project_knowledge_usages
+  // rows. Runtime usage/lease records belong to the task and are cleaned with it;
+  // knowledge work/versions are governance evidence (#752) and must be refused up front,
+  // before any job is cancelled, so a 409 really means nothing ran.
+  test("DELETE /tasks/:canvasId clears runtime knowledge usage and refuses retained governance records", async () => {
+    const adminUrl = new URL(testDatabaseUrl);
+    adminUrl.pathname = "/postgres";
+    adminUrl.search = "";
+    const admin = postgres(adminUrl.toString(), { max: 1 });
+    const databaseName = `deepsonar_task_delete_${process.pid}_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const targetUrl = new URL(testDatabaseUrl);
+    targetUrl.pathname = `/${databaseName}`;
+    targetUrl.search = "";
+    await admin.unsafe(`CREATE DATABASE "${databaseName}"`);
+
+    process.env.DATABASE_URL = targetUrl.toString();
+    process.env.AGENT_MODE = "fake";
+    process.env.DEEPSONAR_AUTH_REQUIRED = "true";
+    process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
+
+    const Fastify = (await import("fastify")).default;
+    const websocket = (await import("@fastify/websocket")).default;
+    const { migrate, sql } = await import("./db.js");
+    const { registerRoutes } = await import("./routes.js");
+    const { generateToken } = await import("./auth.js");
+    await migrate();
+    const app = Fastify({ logger: false });
+    await app.register(websocket);
+    registerRoutes(app);
+    await app.ready();
+
+    const projectId = randomUUID();
+    try {
+      const token = generateToken();
+      await sql`INSERT INTO api_tokens(name,token_prefix,token_hash,scopes)
+        VALUES ('task delete',${token.prefix},${token.hash},${["tasks:write", "tasks:read"]})`;
+      const headers = { authorization: `Bearer ${token.plaintext}` };
+      await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'task-delete-knowledge')`;
+
+      const seedJob = async (canvasId: string) => {
+        const jobId = randomUUID();
+        const attemptId = randomUUID();
+        await sql`INSERT INTO canvases (id, project_id, title, target_json)
+          VALUES (${canvasId}, ${projectId}, 'Delete me', ${sql.json({ network_policy: { allow_egress: false } })})`;
+        await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
+          VALUES (${jobId}, ${projectId}, ${canvasId}, 'explore', 'failed', ${sql.json({})})`;
+        await sql`INSERT INTO job_attempts (id, job_id, attempt_no, status, phase)
+          VALUES (${attemptId}, ${jobId}, 1, 'failed', 'preparing')`;
+        return { jobId, attemptId, canvasId };
+      };
+
+      // 1. A job that pulled knowledge: the usage row must not block the delete.
+      const withUsage = await seedJob(randomUUID());
+      await sql`INSERT INTO project_knowledge_usages (project_id, job_id, attempt_id, selector, content_sha256)
+        VALUES (${projectId}, ${withUsage.jobId}, ${withUsage.attemptId}, 'project:all', ${"a".repeat(64)})`;
+      const deleted = await app.inject({ method: "DELETE", url: `/tasks/${withUsage.canvasId}`, headers });
+      assert.equal(deleted.statusCode, 200, deleted.payload);
+      const [usageLeft] = await sql`SELECT count(*)::int AS count FROM project_knowledge_usages WHERE job_id = ${withUsage.jobId}`;
+      assert.equal(Number(usageLeft.count), 0, "runtime usage rows are cleaned with the task");
+      const [canvasLeft] = await sql`SELECT count(*)::int AS count FROM canvases WHERE id = ${withUsage.canvasId}`;
+      assert.equal(Number(canvasLeft.count), 0);
+
+      // 2. A job that produced knowledge work: deleting the task would destroy
+      //    governance evidence, so the API refuses before touching anything.
+      const withWork = await seedJob(randomUUID());
+      const workId = randomUUID();
+      await sql`INSERT INTO project_knowledge_work (id, project_id, origin_job_id, canvas_id, trigger_key, governance_hash)
+        VALUES (${workId}, ${projectId}, ${withWork.jobId}, ${withWork.canvasId}, 'delete-guard', ${"b".repeat(64)})`;
+      const refused = await app.inject({ method: "DELETE", url: `/tasks/${withWork.canvasId}`, headers });
+      assert.equal(refused.statusCode, 409, refused.payload);
+      assert.equal(refused.json().error_code, "TASK_DELETE_KNOWLEDGE_RETAINED");
+      assert.equal(refused.json().retained.work, 1);
+      const [canvasKept] = await sql`SELECT count(*)::int AS count FROM canvases WHERE id = ${withWork.canvasId}`;
+      assert.equal(Number(canvasKept.count), 1, "a refusal must leave the task in place");
+      const [jobKept] = await sql`SELECT count(*)::int AS count FROM jobs WHERE id = ${withWork.jobId}`;
+      assert.equal(Number(jobKept.count), 1);
+      const [workKept] = await sql`SELECT count(*)::int AS count FROM project_knowledge_work WHERE id = ${workId}`;
+      assert.equal(Number(workKept.count), 1, "governance evidence is never deleted by a task delete");
+    } finally {
+      await app.close();
+      await sql.end();
+      await admin.unsafe(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`);
+      await admin.end();
+    }
+  });
+}

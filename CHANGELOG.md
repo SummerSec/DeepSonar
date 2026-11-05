@@ -5,6 +5,11 @@
 - **写回必须真的更新 bundled 清单（#899）**：v0.6.12 的写回只提交了 `deploy/.env.example`，`deploy/runtime-image-registry.json` 仍停在 0.6.11 —— 抽出脚本来时把「checkout 前先捕获 payload」丢了，而 `git checkout -f -B … origin/<branch>` 会把已被覆盖的受版本管理文件恢复到默认分支版本，于是捕获到的是旧清单、提交里只有 env。现在两步捕获都在 checkout 之前，且在提交前用 payload 版本自检（清单 `platform_version` 与 `DEEPSONAR_VERSION` 都必须等于本次 `VERSION`），任何捕获错误会直接失败而不是产出半更新提交或静默「已是本次内容」早退；只有两个文件都已是本版内容时才允许跳过。
   - 新增 `agent-harness/test-release-writeback-order.mjs`：在临时 git 仓库里真实执行脚本（假 payload + 假 node 辅助），断言提交**同时**包含两个文件、清单里是 payload 版本、且已一致时不会产生空提交。
   - 本 PR 同时修正 main 上已错位的清单：用 v0.6.12 的冻结载荷把 `deploy/runtime-image-registry.json` 更新到 `platform_version=0.6.12`，与 `.env.example` 对齐。
+- **硬删除任务不再因知识引用 500（#904）**：`DELETE /tasks/:canvasId` 在 Job 留下 `project_knowledge_usages` 时命中外键约束报 500。运行期记录（`project_knowledge_usages`、`device_leases`）现在在删除 Job 之前于同一事务内按画布清理；而知识工作/版本（`project_knowledge_work`、`project_knowledge_versions`）是不可删的治理证据（#752），因此在**取消任何 Job 之前**先预检并以 `409 TASK_DELETE_KNOWLEDGE_RETAINED` 拒绝，附带保留计数与下一步说明——拒绝时确实什么都没发生，不会被说成"已取消"。回归在独立 PostgreSQL 库上验证两条路径（有 usage 删除成功、有工作记录时 409 且画布/Job/记录全部仍在）。
+
+### 变更
+
+- **无法自动判定的未知效果，改为一次受审计的人工结清（#899）**：`interrupted` 的 `agent_run` 效果在平台证据上永远不可判定（中断路径没有进程退出证据），却会永久阻塞跨 schema 维护升级，逼运维手改库。新增 `settleEffectByOperator` 与对账 CLI 的 `action: "settle"`：只结清单个 effect（UUID 校验、无批量入口）、`outcome` 限定 `not_applied|applied_run_terminated|delivered`、`evidence` 必填并原样进 `settlement_json.operator_evidence`，写入 `reconciled_by=operator-settlement` 与 `evidence_ref`，重复调用返回未结清而不是覆盖，且**不触碰 `replay_policy`**——结清是记录事实，不是授权重放。
 
 ## [0.6.12] - 2026-11-05
 
