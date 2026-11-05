@@ -358,7 +358,9 @@ async function mergeConfiguration(
   const warnings: string[] = [];
 
   return await sql.begin(async (tx) => {
-    const cfg = { ...((p.config_json ?? {}) as Record<string, unknown>) };
+    const [current] = await tx`SELECT config_json FROM projects WHERE id = ${targetProjectId} FOR NO KEY UPDATE`;
+    if (!current) throw Object.assign(new Error("target project not found"), { code: "NO_TARGET" });
+    const cfg = { ...((current.config_json ?? {}) as Record<string, unknown>) };
 
     if (modules.includes("rules")) {
       const rulesFile = readJson<{ rules?: Record<string, unknown> }>(pack.files, "data/rules.json");

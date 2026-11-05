@@ -254,7 +254,7 @@ pending → claimed → provisioning → running → succeeded
 
 Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报。`pg_notify('deepsonar_jobs')` 是主要调度唤醒；可以关闭轮询。
 
-每个 Job 领取建立 Scheduler-owned Attempt。claim 按有界 keyset 候选页使用独立事务，每页按 advisory lock → 排序 Canvas → project → Job → Attempt 取锁并重新核验暂停、scope 与配额；只计真实领取，忙锁候选不耗槽位，提交释放本页锁后才检查后续页。外部动作先写 `job_attempt_effects` 的 intent/`effect_pending`，观察到结果后再写 settlement。启动对账按 Attempt phase 和 effect 分类：只有尚未开始且无效果的准备阶段可以回到 `pending`；未知效果统一进入 `orphan`，清理 Token、沙箱、画布同步和租约，禁止自动重放。只有明确宿主证据证明尚未调用外部创建，才可显式把 provision 结算为 `never_started`；缺少 `sandbox_id` 或未见迟到句柄不能证明未开始。已调用 runner 的 opaque 失败、timeout/cancel/orphan 及 pending provision 在终态收口时保持 `unknown`，既有真实 settlement 不改写。自动 provision 重试在 Canvas → Job → 当前最新 Attempt 锁下重核，只接纳无效果或明确 settled/never_started 的原 Attempt；`replay_policy` 不变。规则与本轮待验收边界见 [ADR 0015](docs/architecture/adr/0015-governed-completion-recovery.md)。 运行期不得让 `unknown` 效果把已完成的工作拖死（#874）：attempt 中断时先按既有证据规则结清可判定的在途效果（`gateway_model_request` 有 `job_usage_ledger` 行、`agent_run` 在中断路径已确定终止、`provision` 依 sandbox 身份、`canvas_delivery` 依节点存在性），只把证据不足的保留为 `unknown`；`interrupted` 不加入全局终态枚举（该 attempt 仍可被后续 attempt 续跑），仅在中断路径按「运行已终止」判定。Scheduler 内置周期性效果对账（`runtime-reconcile:` operation_id、5 分钟、上限 500），复用同一 `runEffectReconcile` 语义：只结清 `auto`、`undecided` 维持 `unknown`、从不重放；Reaper 判定 `waiting_human` 超时前先对该 Job 定向对账，残留未结算时在错误信息中点名 effect 类型，不把平台侧待对账记成「人工等待超时」。
+每个 Job 领取建立 Scheduler-owned Attempt。claim 按有界 keyset 候选页使用独立事务，每页按 advisory lock → 排序 Canvas → project → Job → Attempt 取锁并重新核验暂停、scope 与配额；只计真实领取，忙锁候选不耗槽位，提交释放本页锁后才检查后续页。外部动作先写 `job_attempt_effects` 的 intent/`effect_pending`，观察到结果后再写 settlement。启动对账按 Attempt phase 和 effect 分类：只有尚未开始且无效果的准备阶段可以回到 `pending`；未知效果统一进入 `orphan`，清理 Token、沙箱、画布同步和租约，禁止自动重放。只有明确宿主证据证明尚未调用外部创建，才可显式把 provision 结算为 `never_started`；缺少 `sandbox_id` 或未见迟到句柄不能证明未开始。已调用 runner 的 opaque 失败、timeout/cancel/orphan 及 pending provision 在终态收口时保持 `unknown`，既有真实 settlement 不改写。自动 provision 重试在 Canvas → Job → 当前最新 Attempt 锁下重核，只接纳无效果或明确 settled/never_started 的原 Attempt；`replay_policy` 不变。规则与本轮待验收边界见 [ADR 0015](docs/architecture/adr/0015-governed-completion-recovery.md)。 运行期不得让 `unknown` 效果把已完成的工作拖死（#874）：attempt 中断时先按既有证据规则结清可判定的在途效果（`gateway_model_request` 有 `job_usage_ledger` 行、`canvas_delivery` 依节点存在性），只把证据不足的保留为 `unknown`；`interrupted` 不加入全局终态枚举（该 attempt 仍可被后续 attempt 续跑），中断数据库状态不证明 runner 已退出，`agent_run` 保持未知。Scheduler 内置周期性效果对账（`runtime-reconcile:` operation_id、5 分钟、上限 500），复用同一 `runEffectReconcile` 语义：只结清 `auto`、`undecided` 维持 `unknown`、从不重放；Reaper 判定 `waiting_human` 超时前先对该 Job 定向对账，残留未结算时在错误信息中点名 effect 类型，不把平台侧待对账记成「人工等待超时」。
 
 Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`unknown`/`pending` 保持硬失败，不能以 provider 5xx 文案替代效果 authority。#873 的 OM admission 回滚耗尽与已持久结算的请求前 transport 使用同一个宿主 error.message carrier，覆盖 SDK 只保留内层消息的路径；上游请求与结算不作为可重试 admission 重放。
 
@@ -274,6 +274,8 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 终态后的 Hub/Report 派生在 savepoint 中执行目标 grant 准入。拒绝时暂停 Canvas，保留前驱 Job 的终态结算，且不留下部分派生 Job；不能为了补派系统工作回滚已经完成的执行事实。
 
+未知历史效果可经[受审计的单条人工结清](deploy/README.md#未知效果的人工结清899)补充操作员证据（#899）；active Attempt 仍由内核拥有。CLI 将单条操作成功与全库残留清空分开报告，失败计数为未知，结清不改 replay policy、Attempt 或维护授权。工程回归经隔离 PostgreSQL Actions 验收，生产升级另计。
+
 ## 8. 配置、快照和运行时
 
 账号模型与探测（#748 / #749）：Claude Code 只有显式改主模型时才同步 tier / subagent 模型键，普通编辑保留独立路由。推理错误摘要有界读取，并对主密钥、原生配置中的其他秘密值和 URL 凭据脱敏，清理 C0/C1 控制字符；目录补充发现不授予 Job 选模资格。探测回写核对当前密钥版本、配置、CLI 与项目作用域，配置变化后拒绝陈旧结果。Windows 的基线重建支持 CRLF 和 LF，不改变已创建 Job 的冻结快照。
@@ -285,6 +287,8 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 **凭据与运行时插件边界（#632、#679、#690、#658、#707）：** Provider Credential 是可信内核持有的秘密资产；Provider/模型适配能力应由受治理插件描述，RoleConfig 与 Capability Pack 声明能力需求，不绑定账号 ID。账号 × Agent CLI 为 1:1 排他绑定（方案 A）：`llm_provider` 必须声明 `agent_cli`，使用期四层同口径 fail-closed——写入校验、项目账号目录交集、候选解析（`resolve-credential`，无软回退）、Job 快照 / readiness——任一层不匹配即拒绝，不得拖到执行期再发现归属错误。Job 创建时 Scheduler 在项目授权范围内解析 Provider、模型及秘密资源，只冻结非敏感插件/模型引用与策略。Pi 注册扩展也由角色能力插件组合，不由 `RoleConfig.pi_extensions` 管理。`role_credentials`、`POST /credentials/batch-bind`、`RoleConfig.pi_extensions` 与运行时回退已按 #690 删除；Hub 只提案 provider/model/extension 能力需求，Scheduler 在项目授权目录内解析凭据。发现 API / 模型目录结果本身不是授权。运行中与终态 Job 快照永远冻结，不因配置变化改写。
 
 **凭据先行解析（#757）：** Scheduler 先按项目作用域、active 状态、Provider、模型要求及显式项目白名单形成候选，再从凭据的排他 `agent_cli` 决定运行 CLI。单候选不受项目/全局软偏好误筛；Hub 显式 CLI 是硬约束，冲突仍以 `provider_credential_cli_mismatch` 拒绝。跨 CLI 多候选按项目 `default_agent_cli`、全局 RoleConfig 显式 CLI 消歧；全局种子 `agent_cli=NULL` 表示未指定偏好，用户显式选择 `claude-code` 才是偏好。没有可用偏好且无法唯一解析时返回 `provider_credential_multi_match`；项目默认凭据只在最终候选内选择。readiness 与新 Job 快照复用同一凭据解析函数。项目 RoleConfig 的 `agent_cli` / `model` 已停止写入和暴露并清空，项目运行身份从 Agent 设置声明。CLI 与凭据白名单分别可选收紧，读取不会把当前 active 凭据 ID 自动持久化；显式名单或默认凭据引用删除、停用、不可访问项时返回 `provider_credential_allowlist_stale` 及管理员修复指引，不能静默扩大名单。账号 × CLI 排他、六档并发、密钥隔离、镜像准入及历史 Job 快照不变。
+
+#914 当前仅交付[项目凭据引用保护切片](docs/architecture/09-interface-specs.md#项目凭据引用保护914-切片)：impact 按项目 scope 过滤，DELETE 独立拒绝全局尚存引用，设置写入在事务内与删除共用凭据行锁并重验全部引用；保留缺键与显式空白名单语义，不改写历史 Job。完整默认账号 UX 未由此交付，最终 SHA Actions 仍须另验。
 
 旧库升级不能从 CLI 值猜测种子来源：本地 `db:rebuild` 对版本未知或低于 v60、目标至少 v60 且需复制旧角色身份的库执行身份复核；需要重置时，只有管理员显式 `--reset-role-identity` 才丢弃旧角色 CLI/项目模型并保留全局模型和历史 Job，须有备份或明确保留 staging。宿主维护升级另按目标计划审批身份重置风险。详见[数据库升级说明](database/README.md#v60-角色身份复核757)及[维护升级说明](deploy/README.md)。
 

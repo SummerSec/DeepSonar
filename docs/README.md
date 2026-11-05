@@ -26,6 +26,8 @@
 
 > **账号修复审查补强（2026-10-18，#748 / #749）**：普通编辑保留 Claude 独立 tier；上游错误摘要覆盖配置秘密与 C1 控制字符；探测结果回写按配置、CLI 和项目核对；Windows 基线重建支持 CRLF/LF。详见 [`../DESIGN.md`](../DESIGN.md) §8 与 [凭据解析运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)。
 
+> **凭据引用保护（2026-11-05，#914 切片）**：项目范围 impact、全局删除完整性与设置/删除共用凭据行锁已接线；真实 PG 双会话与 scoped HTTP 回归复用 `pnpm ci:integration:credential-delete`。保留空白名单与冻结 Job，不提供新编辑器或自动扩权修复；完整默认账号 UX 未交付，最终 Actions 尚待验收。详见[接口规格](architecture/09-interface-specs.md#项目凭据引用保护914-切片)。
+
 > **凭据解析同步（2026-10-21，#757）**：Provider/model/项目授权先形成候选，凭据决定 CLI；readiness 与 Job 共用解析，区分全局种子无偏好和用户显式偏好。项目 RoleConfig 不再暴露可写却不生效的 CLI/model，未收紧白名单读取不固化凭据 ID。详见 [运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)、[数据架构](architecture/08-data-architecture.md)与[接口规范](architecture/09-interface-specs.md)。
 
 > **当前同步状态（2026-10-31）**：当前契约不向后兼容，冻结 Job/证据/审计历史保持不可变。#690 的旧凭据绑定与 RoleConfig Pi 扩展字段、#674/#676 的旧项目镜像机制均已删除；能力、凭据、镜像仍由内核准入和 Job 快照冻结。schema 只按[源码编号](../apps/scheduler/src/schema-version.ts)与[唯一基线](../database/schema.sql)核对；本批 full rebuild 已用固定历史 v62/v63/v64 数据和七张新 relation 表完成 pg_dump/pg_restore 验证，无 pending 项（2026-10-31 主线程证据）。其余当前边界见 [DESIGN](../DESIGN.md) 与[架构索引](architecture/README.md)。
@@ -211,3 +213,5 @@
 - [沙箱 Pi 观测记忆决策](PI_OBSERVATIONAL_MEMORY_DECISIONS.md)与 [ADR 0013](architecture/adr/0013-governed-pi-memory.md)：已定边界保持不变；实际本地镜像 RPC、独立生产 guard 与 OM 专属版本准入已验，细节集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。本轮工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA、发布通道/平台与 registry/catalog 仍另验，质量/成本收益 unknown。
 
 发布恢复的 as-built 身份/证据与限制已于 2026-11-05 对照[发布专题](RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)同步；真实恢复未经本次执行。
+
+#899 的[操作员效果结清契约](../deploy/README.md#未知效果的人工结清899)区分单条成功、全局残留和未核验状态；隔离 PostgreSQL/CLI 回归接入 Actions，最终 SHA 工程验收与 s66 现场升级分别留证。

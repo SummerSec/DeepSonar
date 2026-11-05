@@ -179,9 +179,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：当外部效果无法证明未发生（`effect_pending` / `unknown`，含崩溃、超时、取消后的未证实窗口）时，系统必须将 Attempt/Job 标为不可自动重放路径，通常进入 `orphan`/对账/人工路径，清理 Token、沙箱、画布同步和租约；`replay_policy` 不得被本次结算改宽。
 - **决策来源**：未知效果是事实状态，不是普通 transient error；猜测重放可能重复创建资源或修改目标。
-- **实现状态**：as-built；`effect_pending`/`unknown` 与 `replay_policy=never` 被单独处理并进入清理/对账路径。
+- **实现状态**：as-built；`effect_pending`/`unknown` 与 `replay_policy=never` 被单独处理并进入清理/对账路径。#899 允许对非 active 历史效果提供受审计单条人工证据，CLI 单条成功与全局残留分开，未核验计数不报零；不扩大重放或维护权限。
 - **代码入口**：[Attempt 应用](../../apps/scheduler/src/domains/job-attempt/application.ts)、[reconcile](../../apps/scheduler/src/reconcile.ts)、[Effect schema](../../database/schema.sql)、[工作台重试投影](../../apps/web/src)。
-- **验证证据**：`pnpm ci:unit:recovery`、`pnpm ci:integration:recovery`、`pnpm ci:smoke:opensandbox-reconcile`；人工核对 unknown 不提示安全重放。
+- **验证证据**：`pnpm ci:unit:recovery`、`pnpm ci:integration:recovery`、`pnpm ci:smoke:opensandbox-reconcile`；人工核对 unknown 不提示安全重放；#899 实际 CLI、active 拒绝/内核结算、竞争与 plan gate 的隔离 PostgreSQL 回归见 `pnpm ci:integration:platform-upgrade`，最终 SHA Actions 结果另计。
 
 ### FR-JOB-006 provision never_started 结算
 
@@ -672,9 +672,9 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：Hub 选择 Provider/model 必须来自当前 Job 可见、active 且 CLI 兼容的 catalog；Provider 健康、模型目录和 alias policy 必须在快照解析时校验，不兼容或未知值必须 fail closed。
 - **决策来源**：凭据、模型、CLI 和镜像是组合约束，不能由 prompt 绕过目录。
-- **实现状态**：as-built；model catalog 默认不允许未知 alias passthrough。#757 的 readiness 与 Job 共用凭据先行解析：Provider/model/项目授权先筛候选，唯一账号决定 CLI，Hub 显式 CLI 保持硬约束；跨 CLI 多候选以项目/全局显式偏好消歧，种子 NULL 不构成偏好。白名单读取不自动种 ID，显式不可用引用要求管理员修复，不扩大授权。
+- **实现状态**：as-built；model catalog 默认不允许未知 alias passthrough。#757 的 readiness 与 Job 共用凭据先行解析：Provider/model/项目授权先筛候选，唯一账号决定 CLI，Hub 显式 CLI 保持硬约束；跨 CLI 多候选以项目/全局显式偏好消歧，种子 NULL 不构成偏好。白名单读取不自动种 ID，显式不可用引用要求管理员修复，不扩大授权。#914 的引用保护切片在设置事务内重验所有保留/新增凭据，并与 DELETE 共用凭据行锁；项目 impact 按 actor scope 过滤，删除独立检查全局引用，拒绝时不自动修复白名单。完整默认账号 UX 未由此交付，详见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)。
 - **代码入口**：[Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts)、[model admission](../../apps/scheduler/src/domains/provider-adapter/model-catalog-admit.ts)、[resolve credential](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)。
-- **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（#757 假凭据与隔离数据库，含 readiness/快照一致性和历史快照不变）。
+- **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（#757 假凭据与隔离数据库，含 readiness/快照一致性和历史快照不变）；`pnpm ci:integration:credential-delete`（#914 scoped HTTP 与 PostgreSQL 双向竞态）。
 
 ### FR-CRED-003 Model Gateway 唯一出口
 

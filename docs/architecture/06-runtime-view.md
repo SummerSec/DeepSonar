@@ -25,6 +25,8 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 项目 CLI/Provider 管理页独立加载账号列表，区分加载中、加载失败与成功空列表。只有成功读取当前项目可见账号后才判定默认账号和白名单引用失效；未加载成功时保存 CLI 不能清除默认账号或写入空凭据白名单。Pi 模型快照对账号目录中含 `/` 的完整模型 ID 保持一致，CLI 路由单独冻结，详见 [CLI 运行时契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-coding-agent-rpc140)。
 
+#914 的项目账号引用 DELETE/设置事务、scope 过滤及双向竞态回归见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)；运行期停用和既有失效引用仍按上述解析门 fail closed，不代表完整默认账号 UX 已交付。
+
 实现入口：[凭据解析](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[快照组装](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[readiness](../../apps/scheduler/src/readiness.ts)。
 
 ## 正常链路
@@ -187,3 +189,7 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 ## Plan 未派发路线修订（#775 v1 历史）
 
 该 v1 路线修订仅作为不可变历史记录读取；当前路线修改使用上文 v2 `execution_route` CAS。历史事件、快照和回执不改写，未知效果、待结算回执或失效目标都不能借旧协议恢复执行。详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。
+
+## 操作员效果结清（#899）
+
+FR-JOB-005 的人工路径复用 `job_attempt_effects`：同一 UPDATE 排除 active Attempt 并只写未结清行；已结清证据不可覆盖，不改变 Attempt 程序计数器或 replay policy。CLI 将本次单条写入结果与独立全局计数分开，计数失败不能宣称清空；字段和退出契约见[部署说明](../../deploy/README.md#未知效果的人工结清899)。隔离 PostgreSQL 回归覆盖真实内核结算和锁竞争，最终 SHA Actions 成功才作为工程验收，未执行生产升级。
