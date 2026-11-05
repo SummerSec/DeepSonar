@@ -278,6 +278,29 @@ export function isSemanticAgentRunError(result: {
   return result.errorKind === "semantic" || result.error?.startsWith("语义事件处理失败:") === true;
 }
 
+/**
+ * #913: a session whose terminal control event the host already accepted keeps finishing
+ * (Pi asks for another model turn, the Gateway refuses because the completion is already
+ * durable). That refusal means the conversation is over, not that the run failed —
+ * failing it here is what dropped accepted Hub decisions and left the Canvas without a
+ * Worker.
+ *
+ * Both shapes reach the runner: the machine code `COMPLETION_ALREADY_ACCEPTED` and the
+ * 409 text from the two rejecting gates (`repair-token-budget` and `completion-receipt`),
+ * which the CLI surfaces verbatim.
+ */
+const ACCEPTED_COMPLETION_REFUSAL =
+  /COMPLETION_ALREADY_ACCEPTED|completion (?:is )?already (?:durably )?accepted/i;
+
+export function acceptedCompletionSupersedesRunnerFailure(
+  result: { error?: string; errorKind?: "semantic" | "runner"; terminalOutcome?: "success" | "failure" },
+  hasAcceptedTerminal: boolean,
+): boolean {
+  if (!hasAcceptedTerminal) return false;
+  if (!isFinalAgentRunnerError(result)) return false;
+  return typeof result.error === "string" && ACCEPTED_COMPLETION_REFUSAL.test(result.error);
+}
+
 export function isFinalAgentRunnerError(result: {
   error?: string;
   errorKind?: "semantic" | "runner";
@@ -1913,7 +1936,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   if (isSemanticAgentRunError(result)) throw reconstructAgentRunError(result.error ?? "语义事件处理失败", result.errorDetails);
   // A final runner failure remains authoritative. Only a result explicitly
   // marked as a later terminal success may carry a stale earlier error.
-  if (isFinalAgentRunnerError(result)) throw reconstructAgentRunError(result.error!, result.errorDetails);
+  if (acceptedCompletionSupersedesRunnerFailure(result, Boolean(semanticState.done))) {
+    // Fall through: the accepted terminal settles below, exactly once.
+  } else if (isFinalAgentRunnerError(result)) {
+    throw reconstructAgentRunError(result.error!, result.errorDetails);
+  }
   if (!semanticState.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
 
   // Hub 决策在 Agent 结束后落地：避免工具调用后 Agent 尚未收尾时提前派生下一轮。
