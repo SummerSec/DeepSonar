@@ -154,6 +154,8 @@ GET /tokens
 GET /users
 GET /workers
 GET /ws
+HEAD /gateway/*
+OPTIONS /gateway/*
 PATCH /agent-roles/:id
 PATCH /canvases/:id/facts/:nodeId/verification
 PATCH /credentials/:id
