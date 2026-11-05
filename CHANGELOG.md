@@ -1,14 +1,19 @@
 ## [Unreleased]
 
-### 进行中
+## [0.6.14] - 2026-11-05
 
-- **进行中，未知效果的受审计人工结清（#899 / PR #908）**：`interrupted` 的 `agent_run` 效果在平台证据上永远不可判定（中断路径没有进程退出证据），却会永久阻塞跨 schema 维护升级，逼运维手改库。PR #908 拟新增 `settleEffectByOperator` 与对账 CLI 的 `action: "settle"`：只结清单个 effect（UUID 校验、无批量入口）、`outcome` 限定 `not_applied|applied_run_terminated|delivered`、`evidence` 必填并原样进 `settlement_json.operator_evidence`，写入 `reconciled_by=operator-settlement` 与 `evidence_ref`，重复调用返回未结清而不是覆盖，且**不触碰 `replay_policy`**——结清是记录事实，不是授权重放。
+### 修复
+
+- **普通 Hub 的 Plan 前置要求范围（#910 / #912）**。Plan v2 bootstrap 仅约束已启用 Plan 的任务。没有 objective、活动 Plan 或历史显式 Plan owner 的普通文本任务继续使用既有 Hub Intent 路径，目标缺失本身不再触发人工阻塞。已启用 Plan 的目标读取、版本、预算与停止约束继续执行。
+
+### 已知问题
+
+- **Pi 完成修正链的派发阻塞（#913）仍未修复**。本版只修正 Plan 提示词范围及其摘要校验，完成接纳后的正常退出、回执结算与 Worker 派发仍由 #903 / #913 跟踪。
 
 ## [0.6.13] - 2026-11-05
 
 ### 修复
 
-- **普通 Hub 的 Plan 前置要求范围（#910 / #912）**。Plan v2 bootstrap 仅约束已启用 Plan 的任务。没有 objective、活动 Plan 或历史显式 Plan owner 的普通文本任务继续使用既有 Hub Intent 路径，目标缺失本身不再触发人工阻塞。已启用 Plan 的目标读取、版本、预算与停止约束继续执行。
 - **项目 Provider 与 Pi 模型配置（#907）**。项目设置按当前项目加载 Provider 列表，Pi 模型标识保持原值，凭据探测及运行快照使用一致的模型名称。
 - **Knowledge/Skill 拒绝反馈（#903 / #911）**。领域分类、稳定错误码、字段路径和下一步建议透传到实际运行工具响应，权限、生命周期和治理拒绝保持对应分类，回执键归属冲突与用量冲突分别处理。
 
@@ -16,6 +21,10 @@
   - 新增 `agent-harness/test-release-writeback-order.mjs`：在临时 git 仓库里真实执行脚本（假 payload + 假 node 辅助），断言提交**同时**包含两个文件、清单里是 payload 版本、且已一致时不会产生空提交。
   - 本 PR 同时修正 main 上已错位的清单：用 v0.6.12 的冻结载荷把 `deploy/runtime-image-registry.json` 更新到 `platform_version=0.6.12`，与 `.env.example` 对齐。
 - **硬删除任务不再因知识引用 500（#904）**：`DELETE /tasks/:canvasId` 在 Job 留下 `project_knowledge_usages` 时命中外键约束报 500。运行期记录（`project_knowledge_usages`、`device_leases`）现在在删除 Job 之前于同一事务内按画布清理；而知识工作/版本（`project_knowledge_work`、`project_knowledge_versions`）是不可删的治理证据（#752），因此在**取消任何 Job 之前**先预检并以 `409 TASK_DELETE_KNOWLEDGE_RETAINED` 拒绝，附带保留计数与下一步说明——拒绝时确实什么都没发生，不会被说成"已取消"。回归在独立 PostgreSQL 库上验证两条路径（有 usage 删除成功、有工作记录时 409 且画布/Job/记录全部仍在）。
+
+### 变更
+
+- **未知效果的受审计人工结清（#899 / #908）**：`interrupted` 的 `agent_run` 效果在平台证据上永远不可判定（中断路径没有进程退出证据），却会永久阻塞跨 schema 维护升级，逼运维手改库。新增 `settleEffectByOperator` 与对账 CLI 的 `action: "settle"`：只结清单个 effect（UUID 校验、无批量入口）、`outcome` 限定 `not_applied|applied_run_terminated|delivered`、`evidence` 必填并原样进 `settlement_json.operator_evidence`，写入 `reconciled_by=operator-settlement` 与 `evidence_ref`，重复调用返回未结清而不是覆盖，且**不触碰 `replay_policy`**——结清是记录事实，不是授权重放。
 
 ### 已知问题
 
@@ -1548,3 +1557,5 @@
 [0.6.12]: https://github.com/SummerSec/DeepSonar/compare/v0.6.11...v0.6.12
 
 [0.6.13]: https://github.com/SummerSec/DeepSonar/compare/v0.6.12...v0.6.13
+
+[0.6.14]: https://github.com/SummerSec/DeepSonar/compare/v0.6.13...v0.6.14
