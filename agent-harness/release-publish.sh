@@ -19,7 +19,9 @@ if [[ "$state" == existing ]]; then
   exit 0
 fi
 
-gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes \
+latest=true
+[[ "$state" != missing-older ]] || latest=false
+gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --latest="$latest" \
   --notes-file "$payload_dir/release-body.md" \
   "$payload_dir/deepsonar-reverse-evidence-${VERSION}.tar.gz" \
   "$payload_dir/deepsonar-management-skill-${VERSION}.tar.gz" \

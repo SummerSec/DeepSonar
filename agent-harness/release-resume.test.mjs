@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {resumeInputs, resumeIdentity, validateSource, remoteTag, sourceEvidence, unpackArtifact, verifiedResume} from './release-resume.mjs';
 import {freezePublication, TRUST, releaseIdentity} from './platform-signature-publication.mjs';
-import {publicationState} from './release-publication-state.mjs';
+import {publicationState, newerPublishedVersion} from './release-publication-state.mjs';
 import {sha256} from '../deploy/platform-upgrade-signature-contract.mjs';
 const repo = 'SummerSec/DeepSonar';
 const commit = 'a'.repeat(40);
@@ -125,7 +125,7 @@ test('tag drift after authenticated download fails closed', async () => {
   } finally {await rm(f.root, {recursive: true, force: true});}
 });
 test('release lookup distinguishes absence, completed release, draft and API failures', () => {
-  const run = (status, code, body = {}) => () => ({status: code, stdout: `HTTP/2.0 ${status} Status\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(body)}`});
+  const run = (status, code, body = {}) => args => args.includes('--paginate') ? ({status: 0, stdout: '[[]]'}) : ({status: code, stdout: `HTTP/2.0 ${status} Status\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(body)}`});
   assert.equal(publicationState(env.VERSION, repo, run(404, 1)), 'missing');
   assert.equal(publicationState(env.VERSION, repo, run(200, 0, {tag_name: 'v0.6.0', draft: false, prerelease: false})), 'existing');
   const complete = {tag_name: 'v0.6.0', draft: false, prerelease: false, assets: [{name: 'catalog.json', state: 'uploaded', digest: 'sha256:expected'}]};
@@ -147,6 +147,10 @@ test('real publish shell gates custom signature directory, creates once and neve
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 if (args[0] === 'api') {
+  if (args.includes('--paginate')) {
+    if (process.env.LIST_FAILURE) {console.error('API unavailable'); process.exit(1);}
+    console.log(JSON.stringify([[{tag_name: process.env.NEWER_RELEASE ? 'v0.7.0' : 'v0.5.0', draft:false, prerelease:false}]])); process.exit(0);
+  }
   const exists = fs.existsSync(process.env.MARKER);
   const status = process.env.API_FAILURE ? 403 : exists ? 200 : 404;
   console.log('HTTP/2.0 ' + status + ' Status\\nContent-Type: application/json\\n\\n' + JSON.stringify({tag_name:'v0.6.0',draft:false,prerelease:false,assets: exists ? JSON.parse(fs.readFileSync(process.env.MARKER)).filter(a => fs.existsSync(a) && fs.statSync(a).isFile()).filter(a => !a.endsWith('release-body.md')).map(a => ({name:require('node:path').basename(a),state:'uploaded',digest:'sha256:' + require('node:crypto').createHash('sha256').update(fs.readFileSync(a)).digest('hex')})) : []}));
@@ -167,10 +171,15 @@ fs.writeFileSync(process.env.MARKER, JSON.stringify(args));
     const run = (patch = {}, signature = f.signatures) => spawnSync('bash', [resolve('agent-harness/release-publish.sh'), f.payload, signature],
       {cwd: f.root, encoding: 'utf8', env: {...scriptEnv, ...patch}});
     assert.notEqual(run({API_FAILURE: '1'}).status, 0);
+    await assert.rejects(readFile(scriptEnv.MARKER), {code: 'ENOENT'});
+    assert.notEqual(run({LIST_FAILURE: '1'}).status, 0);
+    await assert.rejects(readFile(scriptEnv.MARKER), {code: 'ENOENT'});
     assert.notEqual(run({}, join(f.root, 'missing-proof')).status, 0);
-    const first = run(); assert.equal(first.status, 0, first.stderr);
+    await assert.rejects(readFile(scriptEnv.MARKER), {code: 'ENOENT'});
+    const first = run({NEWER_RELEASE: '1'}); assert.equal(first.status, 0, first.stderr);
     const second = run(); assert.equal(second.status, 0, second.stderr); assert.match(second.stdout, /leaving it untouched/);
     const args = JSON.parse(await readFile(scriptEnv.MARKER, 'utf8'));
+    assert.ok(args.includes('--latest=false'));
     assert.ok(args.includes('--verify-tag')); assert.ok(args.includes(join(f.signatures, 'platform-signature-evidence.json')));
   } finally {await rm(f.root, {recursive: true, force: true});}
 });
@@ -215,6 +224,8 @@ test('workflow commands on fresh Git checkouts recover all selections; writeback
     await writeFile(join(bin, 'gh'), `#!/usr/bin/env node
 const fs = require('node:fs'); const path = require('node:path'); const a = process.argv.slice(2);
 if (a[0] === 'api') {
+  fs.appendFileSync(process.env.API_CALLS, a.at(-1) + '\\n');
+  if (a.includes('--paginate')) {console.log('[[]]'); process.exit(0);}
   const endpoint = a.at(-1).replace('repos/SummerSec/DeepSonar/', '');
   const archive = /^actions\\/artifacts\\/(100|101)\\/zip$/.exec(endpoint);
   if (archive) {process.stdout.write(fs.readFileSync(path.join(process.env.FIXTURE_ROOT, archive[1] + '.zip'))); process.exit(0);}
@@ -223,7 +234,7 @@ if (a[0] === 'api') {
   if (!response) throw Error('unexpected endpoint ' + endpoint);
   console.log(JSON.stringify(response)); process.exit(0);
 }
-if (a[0] !== 'release' || a[1] !== 'create') throw Error('unexpected gh command');
+if (a[0] !== 'release' || a[1] !== 'create' || !a.includes('--latest=true')) throw Error('unexpected gh command');
 fs.appendFileSync(process.env.EFFECTS, 'publish\\n');
 `, {mode: 0o755});
     await writeFile(join(bin, 'bash'), `#!/bin/bash
@@ -243,14 +254,50 @@ exec /bin/bash "$@"
         await cp(resolve('agent-harness'), join(workspace, 'agent-harness'), {recursive: true});
         await cp(resolve('deploy'), join(workspace, 'deploy'), {recursive: true});
         const runtime = {...process.env, ...env, GITHUB_SHA: head, STAGES: selection, GH_TOKEN: 'fixture',
-          FIXTURE_ROOT: f.root, EFFECTS: effects, PATH: `${bin}:${process.env.PATH}`, WRITEBACK_EXIT: selection === 'both' ? '1' : '0'};
+          FIXTURE_ROOT: f.root, EFFECTS: effects, API_CALLS: join(f.root, `${selection}-${stage}.api`), PATH: `${bin}:${process.env.PATH}`, WRITEBACK_EXIT: selection === 'both' ? '1' : '0'};
         for (const step of job.steps.filter(step => step.run && (!step.if || step.if === `matrix.stage == '${stage}'`))) {
           const result = spawnSync('/bin/bash', ['-e', '-c', step.run], {cwd: workspace, env: runtime, encoding: 'utf8'});
           if (stage === 'writeback' && selection === 'both' && step.if) assert.notEqual(result.status, 0);
           else assert.equal(result.status, 0, `${step.name}: ${result.stderr}`);
+          if (step.run === 'node agent-harness/release-resume.mjs') {
+            assert.deepEqual(JSON.parse(await readFile(join(workspace, 'frozen-release/platform-release-freeze.json'))), frozen);
+            assert.deepEqual(JSON.parse(await readFile(join(workspace, 'signature-evidence/platform-signature-evidence.json'))), receipt);
+            const calls = await readFile(runtime.API_CALLS, 'utf8');
+            assert.match(calls, /actions\/runs\/42/);
+            assert.match(calls, /actions\/artifacts\/100\/zip/);
+            assert.match(calls, /actions\/artifacts\/101\/zip/);
+          }
         }
       }
       assert.deepEqual((await readFile(effects, 'utf8')).trim().split('\n'), stages);
     }
+    const rejected = join(f.root, 'rejected');
+    git(f.root, 'clone', '--quiet', origin, rejected);
+    await cp(resolve('agent-harness'), join(rejected, 'agent-harness'), {recursive: true});
+    await cp(resolve('deploy'), join(rejected, 'deploy'), {recursive: true});
+    responses['actions/runs/42'].head_branch = 'v9.9.9';
+    await writeFile(join(f.root, 'responses.json'), JSON.stringify(responses));
+    const effects = join(f.root, 'rejected.effects');
+    const runtime = {...process.env, ...env, GITHUB_SHA: head, GH_TOKEN: 'fixture', FIXTURE_ROOT: f.root,
+      EFFECTS: effects, API_CALLS: join(f.root, 'rejected.api'), PATH: `${bin}:${process.env.PATH}`};
+    const result = spawnSync('/bin/bash', ['-e', '-c', 'node agent-harness/release-resume.mjs\nbash agent-harness/release-publish.sh frozen-release signature-evidence'],
+      {cwd: rejected, env: runtime, encoding: 'utf8'});
+    assert.notEqual(result.status, 0); assert.match(result.stderr, /source_invalid/);
+    await assert.rejects(readFile(effects), {code: 'ENOENT'});
+    await assert.rejects(readFile(join(rejected, 'frozen-release/platform-release-freeze.json')), {code: 'ENOENT'});
   } finally {await rm(f.root, {recursive: true, force: true});}
+});
+
+test('latest cannot regress when an older complete release is recovered', () => {
+  const release = (tag_name, extra = {}) => ({tag_name, draft: false, prerelease: false, ...extra});
+  assert.equal(newerPublishedVersion('0.6.0', [release('v0.7.0')]), true);
+  assert.equal(newerPublishedVersion('0.6.0', [release('v0.6.0'), release('v0.5.9')]), false);
+  assert.equal(newerPublishedVersion('0.6.0', [release('v0.10.0')]), true);
+  assert.equal(newerPublishedVersion('0.6.0', [release('v1.0.0', {draft: true}), release('v1.0.0-rc1', {prerelease: true})]), false);
+  assert.throws(() => newerPublishedVersion('0.6.0', [{}]), /list_invalid/);
+  const run = args => args.includes('--paginate')
+    ? {status: 0, stdout: JSON.stringify([[release('v0.5.0')], [release('v0.8.0')]])}
+    : {status: 1, stdout: 'HTTP/2.0 404 Not Found\n\n{}'};
+  assert.equal(publicationState('0.6.0', repo, run), 'missing-older');
+  assert.throws(() => publicationState('0.6.0', repo, args => args.includes('--paginate') ? {status: 1} : run(args)), /list_lookup_failed/);
 });
