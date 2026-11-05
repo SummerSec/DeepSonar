@@ -49,6 +49,8 @@ usage scanner 只观察副本，压缩响应仍按原压缩字节转发；无法
 
 `inspectGatewayRequestBudget` 只读；`ensureGatewayRequestBudget` 依赖调用方已持有 Job 锁并处于同一事务，本身不提供事务原子性。恢复先对整批完成只读预检，再以旧冻结快照 ensure，之后才能修改 Attempt、grant、快照或 pending；ensure 后失败必须 throw 回滚而不是 return 提交部分回执。新回执消费既有 control receipt 率限，幂等不收费，写入/率限失败均阻塞。冻结策略经 `frozenRuntimeKnobsFromSnapshot` 与 Pi 扩展契约验证，缺失/null/损坏返回 `GATEWAY_REQUEST_BUDGET_INVALID`；合法数字 0 才是无限。无策略回执且已有多次 Attempt 返回 `GATEWAY_REQUEST_BUDGET_HISTORY_MISSING`，不推测丢失策略。完整合法 OM 在显式总额度 0 下不含 request_budget 的形状沿用创建期 `freezeObservationalMemoryQuota` 契约。
 
+若模型请求准入因上述策略无效或历史缺失而拒绝，Gateway 在已回滚、未建立模型 effect 的前提下，保存同 Job/Attempt/token/workload/request UUID 的 `gateway_admission` 回执，状态为 `policy_rejected`。受审 OM wrapper 只在认证 settlement 查询核验该回执后报告 `PI_OM_REQUEST_POLICY_INVALID` 或 `PI_OM_REQUEST_POLICY_HISTORY_MISSING` 硬失败；它不同于允许配额/瞬态降级的 `not_started`，不允许重试、native-compaction 软降级或清除任何历史 pending/unknown。回执缺失、写失败、错绑定、伪造正文仍保持 unknown/fail-closed。HTTP 409 的原有策略错误正文保持不变。
+
 [输出预算](../apps/scheduler/src/gateway-transparent-policy.ts) 不再给已放行 body 补写或压低输出参数。受预算约束的调用者必须显式提供剩余额度内的输出上限，以及该协议要求的 terminal usage（例如 Chat SSE `stream_options.include_usage`）；否则出站前返回 `GATEWAY_OUTPUT_BUDGET_REQUIRED`。输入/缓存成本仍在响应后确认，累计熔断不等于精确调用前总成本上限。
 
 `GET /gateway/_allowance` 接受当前有效的 main 或 observational_memory token 与活动 Attempt，返回 `{ remaining_tokens: null | number, policy_required: boolean }`，禁止缓存。查询在 Job 锁内读取原预算，不预留、不增加模型请求计数；main 取 Job 总量或 OM main-workload 额度与修正链余额的交集，后台保持自身额度。pending/unknown 拒绝；返回提示后最终出站仍须锁内重验，不能扩大授权。

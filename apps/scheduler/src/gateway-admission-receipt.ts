@@ -7,10 +7,18 @@ type Database = typeof sql;
 export type GatewayNoEffectScope = {
   jobId: string; attemptId: string; tokenId: string; workload: GatewayWorkload; requestId: string;
 };
-export type GatewayNoEffectReason = "quota_exhausted" | "workload_token_cap_exhausted" | "gateway_transient";
-export type GatewayNoEffectReceipt = { status: "not_started"; reason: GatewayNoEffectReason };
+type SoftReason = "quota_exhausted" | "workload_token_cap_exhausted" | "gateway_transient";
+type PolicyReason = "request_policy_invalid" | "request_policy_history_missing";
+export type GatewayNoEffectReason = SoftReason | PolicyReason;
+export type GatewayNoEffectReceipt = { status: "not_started"; reason: SoftReason }
+  | { status: "policy_rejected"; reason: PolicyReason };
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
-const REASONS = new Set<string>(["quota_exhausted", "workload_token_cap_exhausted", "gateway_transient"]);
+const REASONS = new Set<string>(["quota_exhausted", "workload_token_cap_exhausted", "gateway_transient",
+  "request_policy_invalid", "request_policy_history_missing"]);
+function receiptForReason(reason: GatewayNoEffectReason): GatewayNoEffectReceipt {
+  return reason === "request_policy_invalid" || reason === "request_policy_history_missing"
+    ? { status: "policy_rejected", reason } : { status: "not_started", reason };
+}
 
 function identity(scope: GatewayNoEffectScope): string {
   return `gateway-admission:${createHash("sha256").update(JSON.stringify([
@@ -27,8 +35,9 @@ export async function readNoEffectReceipt(db: Database, scope: GatewayNoEffectSc
     AND payload_json->>'token_id'=${scope.tokenId} AND payload_json->>'workload'=${scope.workload}
     AND payload_json->>'request_id'=${scope.requestId}`;
   const value = row?.payload_json;
-  if (!value || value.v !== 1 || value.status !== "not_started" || !REASONS.has(value.reason)) return null;
-  return { status: "not_started", reason: value.reason as GatewayNoEffectReason };
+  if (!value || value.v !== 1 || !REASONS.has(value.reason)) return null;
+  const receipt = receiptForReason(value.reason as GatewayNoEffectReason);
+  return value.status === receipt.status ? receipt : null;
 }
 
 /**
@@ -58,8 +67,8 @@ export async function persistNoEffectReceipt(db: Database, input: GatewayNoEffec
       await consumeEventRateLimit(tx, input.jobId, "control_receipt", new Date());
       const [{ next }] = await tx`SELECT COALESCE(MAX(job_seq),0)+1 AS next FROM events WHERE job_id=${input.jobId}`;
       const eventId = identity(input);
-      const payload = { v: 1, authority: "kernel", operation: "gateway_admission", status: "not_started",
-        token_id: input.tokenId, workload: input.workload, request_id: input.requestId, reason: input.reason };
+      const payload = { v: 1, authority: "kernel", operation: "gateway_admission", ...receiptForReason(input.reason),
+        token_id: input.tokenId, workload: input.workload, request_id: input.requestId };
       await tx`INSERT INTO event_dedup(event_id,job_id) VALUES(${eventId},${input.jobId})`;
       await tx`INSERT INTO events(job_id,event_id,job_seq,attempt_id,type,payload_json)
         VALUES(${input.jobId},${eventId},${next},${input.attemptId},'control_receipt',${tx.json(payload)})`;

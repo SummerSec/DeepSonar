@@ -1620,7 +1620,13 @@ export function registerGateway(app: FastifyInstance): void {
           attempts: requestIntent.attempts,
         });
       }
-      if (requestIntent instanceof GatewayRequestBudgetError) return deny(reply, 409, requestIntent.message, requestIntent.code);
+      if (requestIntent instanceof GatewayRequestBudgetError) {
+        // This request never acquired an effect. A policy rejection is a hard
+        // failure, not the quota/transient receipt that permits OM degradation.
+        await saveAdmissionReceipt(requestIntent.code === "GATEWAY_REQUEST_BUDGET_HISTORY_MISSING"
+          ? "request_policy_history_missing" : "request_policy_invalid");
+        return deny(reply, 409, requestIntent.message, requestIntent.code);
+      }
       if (requestIntent instanceof GatewayWorkloadPolicyError) return deny(reply, 403, requestIntent.message, requestIntent.code);
       if (requestIntent instanceof RepairTokenBudgetError) {
         return reply.code(409).send({ error: { type: requestIntent.code, message: requestIntent.message },

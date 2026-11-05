@@ -98,7 +98,7 @@ Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、�
 
 ## Gateway、流和导入接口
 
-Gateway 的请求次数额度在 Job 锁内跨 token/Attempt 累计；撤销/过期 token 仍参与用量与有限上限求交，普通 main 与 OM 均不能通过恢复、换 token 或新配置的 0/未配置重置额度。首次 mint 用内核 `control_receipt/gateway_request_budget` 冻结包括未签发 workload 的完整策略，后续只可追加收紧；恢复必须在替换旧快照前同事务保存旧策略。缺失或损坏的冻结策略明确拒绝，mint 固化交集，`_allowance` 在请求额度耗尽时返回 `JOB_REQUEST_EXHAUSTED`，最终 dispatch 仍重新准入；拒绝无模型出站、模型 effect 或请求计数变化。详见[透明预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)。
+Gateway 的请求次数额度在 Job 锁内跨 token/Attempt 累计；撤销/过期 token 仍参与用量与有限上限求交，普通 main 与 OM 均不能通过恢复、换 token 或新配置的 0/未配置重置额度。首次 mint 用内核 `control_receipt/gateway_request_budget` 冻结包括未签发 workload 的完整策略，后续只可追加收紧；恢复必须在替换旧快照前同事务保存旧策略。缺失或损坏的冻结策略明确拒绝，mint 固化交集，`_allowance` 在请求额度耗尽时返回 `JOB_REQUEST_EXHAUSTED`，最终 dispatch 仍重新准入；拒绝无模型出站、模型 effect 或请求计数变化。策略无效/历史缺失的模型准入拒绝保存 scoped `policy_rejected` settlement 回执，OM 仅凭可信回执分类为不可重试策略硬失败，不使用 quota/transient 软降级路径。详见[透明预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)。
 
 - **Model Gateway：** Provider 选择、凭据、网络、模型和用量归 Scheduler 所有。Gateway 上游请求/响应体不落库（usage 计数除外）；Job 执行流由 Evidence writer 归档并对已登记的运行时 secret 脱敏。Provider 错误不成为 Agent 可伪造的语义事件。实现见 [`gateway.ts`](../../apps/scheduler/src/gateway.ts) 与 [`evidence.ts`](../../apps/scheduler/src/evidence.ts)。
 - **过程流：** WS 使用一次性 ticket、项目/Job scope 和本地 Evidence catch-up。stream-bus 只做实时投递；本地副本不可见时返回 `visibility=unavailable`，不能从另一副本补造原始流。终端 WS 另有更严格的 control/admin scope、lease、帧大小和空闲限制。
@@ -197,7 +197,7 @@ Job-scoped `submit_plan` 当前严格要求 `{plan: PlanV2, revision: execution_
 
 ## 透明数据面与 scoped 回执（#923）
 
-Model Gateway 支持原始方法/相对路径/query、未知端到端头及原始 body；保留上游状态、错误、头和 SSE，不隐式重试或重定向。Host、认证及必要逐跳/framing 在内核边界处理。`x-deepsonar-request-id` 是被消费的精确控制字段；`GET /gateway/_settlement/:id` 是当前 Job/Attempt/token/workload 范围内、不可缓存的只读结算查询，不是上游路由或模型调用。返回 settled、not_started、pending、unknown 或 not_found，不泄露其他 scope 的 ledger。预算准入可返回 `GATEWAY_OUTPUT_BUDGET_REQUIRED`，客户端须显式提供受预算约束的输出参数。原始请求流有界缓冲、HEAD/OPTIONS、编码及升级限制见[契约](../MODEL_GATEWAY_TRANSPARENCY.md)，实现见[Gateway](../../apps/scheduler/src/gateway.ts)。
+Model Gateway 支持原始方法/相对路径/query、未知端到端头及原始 body；保留上游状态、错误、头和 SSE，不隐式重试或重定向。Host、认证及必要逐跳/framing 在内核边界处理。`x-deepsonar-request-id` 是被消费的精确控制字段；`GET /gateway/_settlement/:id` 是当前 Job/Attempt/token/workload 范围内、不可缓存的只读结算查询，不是上游路由或模型调用。返回 settled、not_started、policy_rejected、pending、unknown 或 not_found，不泄露其他 scope 的 ledger。预算准入可返回 `GATEWAY_OUTPUT_BUDGET_REQUIRED`，客户端须显式提供受预算约束的输出参数。原始请求流有界缓冲、HEAD/OPTIONS、编码及升级限制见[契约](../MODEL_GATEWAY_TRANSPARENCY.md)，实现见[Gateway](../../apps/scheduler/src/gateway.ts)。
 
 `GET /gateway/_allowance` 接受当前有效的 main 或 observational_memory token 与活动 Attempt，返回 `{ remaining_tokens: null | number, policy_required: boolean }`，禁止缓存。查询在 Job 锁内读取原预算，不预留、不增加模型请求计数；main 取 Job 总量或 OM main-workload 额度与修正链余额的交集，后台保持自身额度。pending/unknown 拒绝；返回提示后最终出站仍须锁内重验，不能扩大授权。主执行由沙箱请求生成适配器处理输出参数，OM 由受审 wrapper 处理；两者都不替代 Gateway 准入。
 

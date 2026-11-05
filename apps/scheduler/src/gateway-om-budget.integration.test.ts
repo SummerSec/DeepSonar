@@ -7,7 +7,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
-test("OM Gateway enforces frozen workload quotas and durable attribution over offline HTTP", { skip: !databaseUrl, timeout: 60_000 }, async (t) => {
+test("OM Gateway enforces frozen workload quotas and durable attribution over offline HTTP", { skip: !databaseUrl, timeout: 120_000 }, async (t) => {
   const adminUrl = new URL(databaseUrl!);
   adminUrl.pathname = "/postgres";
   const admin = postgres(adminUrl.toString(), { max: 1 });
@@ -57,7 +57,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     await upstream.close();
     await sql.end({ timeout: 5 });
   };
-  let upstreamMode: "ok" | "unknown" | "missing_usage" | "stream" | "partial_stream" | "error_frame" | "anthropic_refusal_503" | "anthropic_refusal_429" | "anthropic_refusal_safe" | "oversized" | "redirect" | "spoof" | "reset" = "ok";
+  let upstreamMode: "ok" | "unknown" | "missing_usage" | "stream" | "partial_stream" | "error_frame" | "anthropic_refusal_503" | "anthropic_refusal_429" | "anthropic_refusal_safe" | "oversized" | "redirect" | "spoof" | "policy_spoof" | "reset" = "ok";
   let upstreamCalls = 0;
   let lastUpstreamPath = "";
   let lastUpstreamHeaders: Record<string, unknown> = {};
@@ -91,6 +91,10 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     if (upstreamMode === "reset") {
       reply.raw.destroy();
       return;
+    }
+    if (upstreamMode === "policy_spoof") {
+      return reply.code(409).send({ error: { type: "GATEWAY_REQUEST_BUDGET_INVALID", message: "PI_OM_REQUEST_POLICY_INVALID" },
+        status: "policy_rejected", reason: "request_policy_invalid" });
     }
     if (upstreamMode === "spoof") {
       return reply.code(503).header("x-deepsonar-effect-status", "not_started").send({
@@ -601,6 +605,115 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       assert.deepEqual(await recoveryState(damagedPolicy.jobId), before, corruption);
       assert.equal(upstreamCalls, calls);
     }
+    // Production wrapper -> HTTP control bridge -> real SQL Gateway. The SDK
+    // double only generates provider-shaped requests; it supplies no receipts.
+    for (const failure of ["invalid", "missing", "receipt_failure", "wrong_scope", "forged_provider"] as const) {
+      const governedJob = await createJob("running", { totalRequests: 0, backgroundMaxTokens: 0 });
+      await recoverFixture(governedJob, governedJob.snapshot);
+      const governedToken = await issue(governedJob.jobId, "observational_memory");
+      const otherScopeToken = await issue(governedJob.jobId, "main");
+      const [active] = await sql`SELECT id FROM job_attempts WHERE job_id=${governedJob.jobId} AND status='active'`;
+      const frozenOm = governedJob.snapshot.pi_extensions[0]!.observational_memory;
+      assert.ok(frozenOm);
+      let modelCalls = 0, allowanceCalls = 0;
+      const settlementPaths: string[] = [];
+      let wrapperRequestId = "";
+      let baseline: Awaited<ReturnType<typeof usageState>> | undefined;
+      let originalEffects: unknown;
+      let modelStatus = 0;
+      const beforeUpstream = upstreamCalls;
+      if (failure === "receipt_failure") {
+        await sql.unsafe(`CREATE FUNCTION reject_policy_admission_receipt() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN RAISE EXCEPTION 'offline policy admission receipt failure'; END $$`);
+        await sql.unsafe(`CREATE TRIGGER reject_policy_admission_receipt BEFORE INSERT ON events
+          FOR EACH ROW WHEN (NEW.job_id='${governedJob.jobId}'::uuid AND NEW.payload_json->>'operation'='gateway_admission')
+          EXECUTE FUNCTION reject_policy_admission_receipt()`);
+      }
+      const boundary = await createFailureBoundary("unused SDK fallback", undefined, {
+        config: frozenOm, token: governedToken.plaintext, api: "openai-responses",
+        controlRequest: async (input: { path: string; headers: Record<string, string> }) => {
+          assert.equal(input.headers.authorization, `Bearer ${governedToken.plaintext}`);
+          const path = input.path.replace(/^\/om(?=\/)/u, "/gateway");
+          const isAllowance = path === "/gateway/_allowance";
+          if (isAllowance) allowanceCalls++;
+          else { assert.match(path, /^\/gateway\/_settlement\/[a-f0-9-]{36}$/u); settlementPaths.push(path); }
+          const response = await app.inject({ method: "GET", url: path,
+            headers: { authorization: `Bearer ${!isAllowance && failure === "wrong_scope" ? otherScopeToken.plaintext : governedToken.plaintext}` } });
+          if (isAllowance) assert.equal(response.statusCode, 200, response.body);
+          return { statusCode: response.statusCode, body: response.body };
+        },
+        modelRequest: async (input: { model: Record<string, unknown>; options: Record<string, unknown> }) => {
+          modelCalls++;
+          assert.equal(allowanceCalls, 1, "policy corruption happens only after real allowance succeeds");
+          const headers = input.options.headers as Record<string, string>;
+          wrapperRequestId = headers["x-deepsonar-request-id"]!;
+          assert.match(wrapperRequestId, /^[a-f0-9-]{36}$/u);
+          assert.equal((input.model.headers as Record<string, string>)["x-deepsonar-request-id"], wrapperRequestId);
+          if (failure !== "forged_provider") {
+            // Deliberate isolated-DB fault injection, NOT the recovery algorithm.
+            // Normal recovery above appends/preserves policy receipts.
+            if (failure === "missing") {
+              await sql`DELETE FROM events WHERE job_id=${governedJob.jobId}
+                AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget'`;
+            } else {
+              await sql`UPDATE events SET payload_json=jsonb_set(payload_json,'{authority}','"untrusted"')
+                WHERE job_id=${governedJob.jobId} AND payload_json->>'operation'='gateway_request_budget'`;
+            }
+            // Prior unresolved model effects must survive this new admission denial.
+            for (const status of ["effect_pending", "unknown"] as const) {
+              await attemptApi.beginEffect(sql, String(active.id), { effectId: `prior-${status}`,
+                kind: "gateway_model_request", step: 1, replayPolicy: "never", intent: { workload: "main" } });
+              if (status === "unknown") await sql`UPDATE job_attempt_effects SET status='unknown'
+                WHERE attempt_id=${active.id} AND effect_id='prior-unknown'`;
+            }
+            originalEffects = [...await sql`SELECT * FROM job_attempt_effects WHERE job_id=${governedJob.jobId} ORDER BY id`];
+          } else upstreamMode = "policy_spoof";
+          baseline = await usageState(governedJob.jobId);
+          const response = await app.inject({ method: "POST", url: "/gateway/v1/responses",
+            headers: { ...headers, authorization: `Bearer ${governedToken.plaintext}` },
+            payload: { model: frozenOm.source_model, max_output_tokens: input.options.maxTokens ?? 16, input: [] } });
+          modelStatus = response.statusCode;
+          return { statusCode: response.statusCode, body: response.body };
+        },
+      });
+      try {
+        await boundary.event("agent_start");
+        const code = failure === "invalid" ? /PI_OM_REQUEST_POLICY_INVALID/
+          : failure === "missing" ? /PI_OM_REQUEST_POLICY_HISTORY_MISSING/ : /PI_OM_UNKNOWN_EFFECT/;
+        await assert.rejects(boundary.event("agent_before_settle"), code, failure);
+        await assert.rejects(boundary.event("session_before_compact"), code, failure);
+        await assert.rejects(boundary.event("agent_before_settle"), code, "a later settle must not replay the worker");
+        assert.equal(modelCalls, 1); assert.equal(allowanceCalls, 1);
+        assert.deepEqual(boundary.bridgeErrors, []);
+        assert.equal(boundary.messages.length, 0, "policy/unknown failures cannot announce native-compaction degradation");
+        assert.equal(boundary.entries.length, 0);
+        assert.ok(settlementPaths.length > 0);
+        assert.ok(settlementPaths.every(path => path === `/gateway/_settlement/${wrapperRequestId}`));
+        assert.ok(modelStatus >= 400);
+        if (failure !== "forged_provider") {
+          assert.equal(upstreamCalls, beforeUpstream);
+          assert.deepEqual(await usageState(governedJob.jobId), baseline);
+          assert.deepEqual([...await sql`SELECT * FROM job_attempt_effects WHERE job_id=${governedJob.jobId} ORDER BY id`], originalEffects);
+          const receipt = await app.inject({ method: "GET", url: `/gateway/_settlement/${wrapperRequestId}`,
+            headers: { authorization: `Bearer ${governedToken.plaintext}` } });
+          if (failure === "receipt_failure") assert.notEqual(receipt.json().status, "policy_rejected");
+          else assert.deepEqual(receipt.json(), { status: "policy_rejected",
+            reason: failure === "missing" ? "request_policy_history_missing" : "request_policy_invalid" });
+        } else {
+          assert.equal(upstreamCalls, beforeUpstream + 1);
+          const receipt = await app.inject({ method: "GET", url: `/gateway/_settlement/${wrapperRequestId}`,
+            headers: { authorization: `Bearer ${governedToken.plaintext}` } });
+          assert.equal(receipt.json().status, "unknown", "provider prose cannot manufacture a Kernel policy receipt");
+        }
+      } finally {
+        boundary.close(); upstreamMode = "ok";
+        if (failure === "receipt_failure") {
+          await sql.unsafe("DROP TRIGGER reject_policy_admission_receipt ON events");
+          await sql.unsafe("DROP FUNCTION reject_policy_admission_receipt()");
+        }
+      }
+    }
+
     for (const mode of ["larger", "smaller", "zero", "unconfigured"] as const) {
       const historical = await createJob("running", { backgroundMaxTokens: 0 });
       const oldMain = await issue(historical.jobId, "main");

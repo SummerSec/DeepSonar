@@ -59,8 +59,15 @@ export async function loadGovernedBoundary() {
 
 // Feed an actual Gateway response (or an SDK's message-only carrier) through the
 // production wrapper's worker, settle and compaction hooks; no classifier double.
-export async function createFailureBoundary(errorMessage, receipt = { status: "unknown" }) {
-  const { createGovernedObservationalMemoryExtension: create, config } = await loadGovernedBoundary();
+// Optional integration adapters preserve the old two-argument unit API:
+// controlRequest({method,path,headers}) and modelRequest({model,context,options})
+// return {statusCode,body,headers?}; config/token/api select the actual frozen Job.
+// The wrapper itself still generates correlation IDs and performs HTTP controls.
+export async function createFailureBoundary(errorMessage, receipt = { status: "unknown" }, options = {}) {
+  const { createGovernedObservationalMemoryExtension: create, config: defaultConfig } = await loadGovernedBoundary();
+  const config = options.config ?? defaultConfig;
+  const token = options.token ?? "offline-unit";
+  const bridgeErrors = [];
   const root = mkdtempSync(path.join(tmpdir(), "om-gateway-boundary-"));
   const previous = Object.fromEntries(["TEMP", "TMPDIR", "PI_CODING_AGENT_DIR", "PI_OBSERVATIONAL_MEMORY_PASSIVE"]
     .map((key) => [key, process.env[key]]));
@@ -68,11 +75,21 @@ export async function createFailureBoundary(errorMessage, receipt = { status: "u
   process.env.TMPDIR = root;
   process.env.PI_CODING_AGENT_DIR = root;
   process.env.PI_OBSERVATIONAL_MEMORY_PASSIVE = "1";
-  const receiptServer = createServer((req, res) => {
-    if (req.headers.authorization === "Bearer offline-unit" && req.url === "/om/_allowance") {
+  const receiptServer = createServer(async (req, res) => {
+    if (options.controlRequest) {
+      try {
+        const response = await options.controlRequest({ method: req.method, path: req.url, headers: req.headers });
+        res.writeHead(response.statusCode, response.headers ?? { "content-type": "application/json" });
+        res.end(typeof response.body === "string" ? response.body : JSON.stringify(response.body));
+      } catch (error) {
+        bridgeErrors.push(error); res.writeHead(500); res.end();
+      }
+      return;
+    }
+    if (req.headers.authorization === `Bearer ${token}` && req.url === "/om/_allowance") {
       res.writeHead(200, { "content-type": "application/json" }); res.end('{"remaining_tokens":null}'); return;
     }
-    if (req.headers.authorization !== "Bearer offline-unit" || !/^\/om\/_settlement\/[a-f0-9-]{36}$/u.test(req.url)) {
+    if (req.headers.authorization !== `Bearer ${token}` || !/^\/om\/_settlement\/[a-f0-9-]{36}$/u.test(req.url)) {
       res.writeHead(403); res.end(); return;
     }
     res.writeHead(200, { "content-type": "application/json" });
@@ -89,20 +106,30 @@ export async function createFailureBoundary(errorMessage, receipt = { status: "u
   const hooks = new Map();
   const messages = [];
   const entries = [];
-  const model = { provider: config.model.provider, id: config.model.id, api: "openai-completions", baseUrl: `http://127.0.0.1:${receiptServer.address().port}/om` };
+  const model = { provider: config.model.provider, id: config.model.id, api: options.api ?? "openai-completions", baseUrl: `http://127.0.0.1:${receiptServer.address().port}/om` };
   const context = { cwd: root, mode: "rpc", hasUI: true,
     ui: { notify: () => { throw new Error("RPC must not create UI frames"); } },
     model: { provider: "main", id: "main", contextWindow: 1000000 },
     sessionManager: { getSessionId: () => "gateway-boundary", getSessionFile: () => path.join(root, "session.jsonl") },
-    modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "offline-unit" }),
-      async *streamSimple() { yield { type: "error", error: { errorMessage } }; } },
+    modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: token }),
+      async *streamSimple(model, context, streamOptions) {
+        if (options.modelRequest) {
+          const response = await options.modelRequest({ model, context, options: streamOptions });
+          if (response.statusCode >= 400) yield { type: "error", error: {
+            errorMessage: `${response.statusCode} ${typeof response.body === "string" ? response.body : JSON.stringify(response.body)}`,
+          } };
+          else yield { type: "done", message: { provider: model.provider, model: model.id } };
+          return;
+        }
+        yield { type: "error", error: { errorMessage } };
+      } },
   };
   const pi = { on: (name, handler) => hooks.set(name, [...(hooks.get(name) ?? []), handler]),
     registerTool() {}, registerCommand() {},
     sendMessage: (message) => messages.push(message), appendEntry: (...args) => entries.push(args),
   };
   try { create(config)(pi); } catch (error) { close(); throw error; }
-  return { messages, entries, close,
+  return { messages, entries, bridgeErrors, close,
     async event(name) { let result; for (const handler of hooks.get(name) ?? []) result = await handler({}, context); return result; },
   };
 }

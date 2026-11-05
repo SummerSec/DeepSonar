@@ -82,7 +82,7 @@ usage、effect settlement 和 token counter 在同一事务内写入。账本事
 
 有限输出预算由受审 wrapper 在请求生成前读取 `_allowance` 的 `remaining_tokens` 提示并显式限制 SDK `options.maxTokens`；SDK 最小输出要求无法满足时明确拒绝。OM 用当前后台 token/活动 Attempt 读取自己的额度；接口也服务 main 生成层但不混用两种 workload。查询不预留、不消耗模型请求配额，pending/unknown 保持拒绝；并发下最终请求仍由 Gateway 锁内复核，不能以旧提示绕过额度。Gateway 只准入或拒绝，不修改原 body。请求流仍有界收全，响应及时透传和旁路观察；范围、限制、回归入口及待验状态见[透明传输专题](MODEL_GATEWAY_TRANSPARENCY.md)与 [ADR 0017](architecture/adr/0017-transparent-gateway-settlement.md)。以下既有本地通过记录属于历史版本，不能作为 #923 最终 SHA 验收。
 
-配额拒绝及已回滚的 admission 数据库冲突耗尽，也必须有持久的宿主无外部效果回执才允许 OM 可见降级。[admission receipt helper](../apps/scheduler/src/gateway-admission-receipt.ts) 在确认未发上游、且失败 admission 已回滚后，另开事务复用 `events` 的 `control_receipt`：`operation=gateway_admission`、`authority=kernel`，按 Job/Attempt/token/workload/请求 UUID 绑定，复用事件限流与 dedup。它不创建模型 effect、不增加模型请求计数或 usage，不改 schema。查询同 scope 回执得到 `not_started` 才能按已知 quota/transient 降级；保存失败、缺失或不匹配保持 unknown。相同 UUID 不得重新发起上游请求。请求前 transport 的原 effect/零用量结算路径保持独立，不能与未准入回执混淆。
+配额拒绝及已回滚的 admission 数据库冲突耗尽，也必须有持久的宿主无外部效果回执才允许 OM 可见降级。[admission receipt helper](../apps/scheduler/src/gateway-admission-receipt.ts) 在确认未发上游、且失败 admission 已回滚后，另开事务复用 `events` 的 `control_receipt`：`operation=gateway_admission`、`authority=kernel`，按 Job/Attempt/token/workload/请求 UUID 绑定，复用事件限流与 dedup。它不创建模型 effect、不增加模型请求计数或 usage，不改 schema。查询同 scope 回执得到 `not_started` 才能按已知 quota/transient 降级；保存失败、缺失或不匹配保持 unknown。策略无效或历史缺失的确定准入拒绝另返回 `policy_rejected` scoped 回执，只允许 wrapper 分类为 `PI_OM_REQUEST_POLICY_INVALID` / `PI_OM_REQUEST_POLICY_HISTORY_MISSING` 硬失败，不允许 quota/transient 软降级、重试或解除历史 unknown/pending。缺失或写失败仍 unknown。相同 UUID 不得重新发起上游请求。请求前 transport 的原 effect/零用量结算路径保持独立，不能与未准入回执混淆。
 
 ## Admission 数据库冲突与 SDK 消息（#871/#873）
 

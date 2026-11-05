@@ -299,6 +299,37 @@ for (const error of ["429 request quota exhausted", '503 {"error":{"type":"gatew
   });
 }
 
+for (const [reason, code] of [
+  ["request_policy_invalid", "PI_OM_REQUEST_POLICY_INVALID"],
+  ["request_policy_history_missing", "PI_OM_REQUEST_POLICY_HISTORY_MISSING"],
+] as const) {
+  test(`trusted policy receipt is a hard failure: ${reason}`, async () => {
+    const fixture = await wrapperFixture("409 policy rejected", { status: "policy_rejected", reason });
+    try {
+      await fixture.event("agent_start").catch(() => {});
+      await assert.rejects(fixture.event("agent_before_settle"), new RegExp(code));
+      await assert.rejects(fixture.event("session_before_compact"), new RegExp(code));
+      assert.equal(fixture.messages.length, 0, "policy failure does not permit native compaction degradation");
+      assert.equal(fixture.entries.length, 0);
+    } finally { fixture.close(); }
+  });
+}
+
+for (const receipt of [
+  { status: "not_started", reason: "request_policy_invalid" },
+  { status: "policy_rejected", reason: "quota_exhausted" },
+  { status: "policy_rejected", reason: "unrecognized_policy" },
+]) {
+  test(`inconsistent policy receipt stays unknown: ${JSON.stringify(receipt)}`, async () => {
+    const fixture = await wrapperFixture("PI_OM_REQUEST_POLICY_INVALID", receipt);
+    try {
+      await fixture.event("agent_start").catch(() => {});
+      await assert.rejects(fixture.event("agent_before_settle"), /PI_OM_UNKNOWN_EFFECT/);
+      assert.equal(fixture.messages.length, 0); assert.equal(fixture.entries.length, 0);
+    } finally { fixture.close(); }
+  });
+}
+
 for (const error of ["PI_OM_MODEL_SCOPE_INVALID", "PI_OM_WORKER_TRANSIENT", '409 {"error":{"type":"workload_usage_unknown"}}', "unrecognized protocol error",
   '503 {"error":{"type":"gateway_transient"}}',
   '403: {"type":"quota_exhausted","message":"forbidden"}',

@@ -41,4 +41,4 @@ Job 锁下的额度预留、usage/effect 原子结算、终态撤销与主后台
 
 ## 累计请求策略补充（2026-11-05）
 
-原始完整请求策略使用既有 Job 级内核 control receipt 保存，不修改活动快照或新建预算表。首次 mint 一次冻结所有 workload，恢复在旧快照仍可读且 Job 锁持有时保存它；所有后代对回执、历史 token 与当前有限上限取交集。只读预检与持久 ensure 分离，后者必须包含在调用方恢复事务中，后续失败整体回滚。缺失/非法冻结输入或已经遗失且不可证明的历史策略阻塞，不能当作无限。Gateway 请求次数政策与 #903 的模型 token allowance、生命周期及 unknown-effect 决策保持独立。
+原始完整请求策略使用既有 Job 级内核 control receipt 保存，不修改活动快照或新建预算表。首次 mint 一次冻结所有 workload，恢复在旧快照仍可读且 Job 锁持有时保存它；所有后代对回执、历史 token 与当前有限上限取交集。只读预检与持久 ensure 分离，后者必须包含在调用方恢复事务中，后续失败整体回滚。缺失/非法冻结输入或已经遗失且不可证明的历史策略阻塞，不能当作无限。Gateway 请求次数政策与 #903 的模型 token allowance、生命周期及 unknown-effect 决策保持独立。确定未出站的策略拒绝采用独立 `policy_rejected` scoped 回执；wrapper 据此报告策略硬失败，不把它混入可降级的 quota/transient `not_started`。回执失败仍未知，历史未知效果不被解除。

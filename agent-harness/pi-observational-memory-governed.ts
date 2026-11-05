@@ -326,7 +326,7 @@ export async function awaitGatewaySettlement(baseUrl: string, token: string, req
     });
     if (response.status !== 404 && !response.ok) fail("PI_OM_SETTLEMENT_UNAVAILABLE");
     const receipt = await response.json() as AnyRecord;
-    if (response.ok && (receipt.status === "settled" || receipt.status === "not_started")) return receipt;
+    if (response.ok && (receipt.status === "settled" || receipt.status === "not_started" || receipt.status === "policy_rejected")) return receipt;
     if (receipt.status !== "pending" && receipt.status !== "not_found") fail("PI_OM_UNKNOWN_EFFECT");
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -442,12 +442,17 @@ function guardedRegistry(registry: unknown, config: FrozenConfig, state: GuardSt
         output.push(terminal as any);
       } catch (error) {
         // Provider error prose is untrusted even when it mimics a Kernel envelope.
-        // Only an authenticated, correlated no-effect receipt permits degradation.
+        // Only an authenticated, correlated receipt can classify no-effect policy
+        // failures; only quota/transient receipts permit degradation.
         let trustedError: unknown = error;
         if (requestStarted && token) {
           try {
             const receipt = await receiptForRequest();
-            if (receipt.status === "not_started" && receipt.reason === "gateway_transient") {
+            if (receipt.status === "policy_rejected" && receipt.reason === "request_policy_invalid") {
+              trustedError = new Error("PI_OM_REQUEST_POLICY_INVALID");
+            } else if (receipt.status === "policy_rejected" && receipt.reason === "request_policy_history_missing") {
+              trustedError = new Error("PI_OM_REQUEST_POLICY_HISTORY_MISSING");
+            } else if (receipt.status === "not_started" && receipt.reason === "gateway_transient") {
               trustedError = new Error('503 {"type":"gateway_transient","effect_status":"not_started"}');
             } else if (receipt.status === "not_started"
               && ["quota_exhausted", "workload_token_cap_exhausted"].includes(receipt.reason)) {
