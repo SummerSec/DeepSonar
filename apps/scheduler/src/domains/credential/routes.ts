@@ -53,6 +53,7 @@ import { PLATFORM_DEFAULT_AGENT_CLI, PLATFORM_DEFAULT_AGENT_MODEL } from "../rol
 import { parseProjectImagePolicy, persistableProjectRoleConfigModel } from "../role-runtime-snapshot/application.js";
 import { findProviderAdapter, resolveModelDescriptorCatalog } from "../provider-adapter/index.js";
 import { sql } from "../../db.js";
+import { credentialProjectReferences, lockCredentialProjectReferences } from "../../credential-project-references.js";
 import { RESUMABLE_JOB_STATUSES } from "../job-lifecycle/transition-policy.js";
 import {
   containsSecretMask,
@@ -184,7 +185,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     id: string,
     actorProjectId: string | null = null,
   ): Promise<Record<string, unknown>> {
-    const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, recoverableJobs, terminalJobs, scanCount, activeScans] = await Promise.all([
+    const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, recoverableJobs, terminalJobs, scanCount, activeScans, projectReferences] = await Promise.all([
       query<{ count: number }[]>`SELECT 0::int AS count`,
       query`SELECT NULL::uuid AS role_config_id WHERE false`,
       query<{ pending_unclaimed: number; active_frozen: number; recoverable: number; terminal_historical: number }[]>`
@@ -255,6 +256,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           AND s.status IN ('queued','claimed','running')
         ORDER BY s.created_at DESC
         LIMIT 50`,
+      credentialProjectReferences(query, id, actorProjectId),
     ]);
     const counts = jobCount[0] ?? { pending_unclaimed: 0, active_frozen: 0, recoverable: 0, terminal_historical: 0 };
     const item = (job: Record<string, unknown>) => ({
@@ -268,6 +270,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     });
     return {
       credential_id: id,
+      project_references: projectReferences,
       role_configs: {
         count: Number(bindingCount[0]?.count ?? 0),
         items: bindings.map((binding) => ({
@@ -810,6 +813,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       const tx = txRaw as unknown as typeof sql;
       await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+      await lockCredentialProjectReferences(tx, [id]);
       const [existing] = await tx`
         SELECT id, name, kind, provider, project_id
         FROM credentials WHERE id = ${id} FOR UPDATE`;
@@ -871,6 +875,21 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
             error: "credential is still referenced by an active image-admission scan",
             error_code: "CREDENTIAL_SCAN_IN_USE",
             impact,
+          },
+        };
+      }
+
+      // Integrity is global; the response impact remains restricted to the actor's project.
+      const projectReferences = await credentialProjectReferences(tx, id);
+      if (projectReferences.count > 0) {
+        return {
+          ok: false,
+          statusCode: 409,
+          body: {
+            error: "credential is still referenced by project provider configuration",
+            error_code: "CREDENTIAL_PROJECT_REFERENCE",
+            impact,
+            next_action: "请先在项目 Agent 设置中移除或替换账号引用，再删除；保留显式空白名单以禁用所有账号，不要删除白名单键扩大授权。不可见项目的引用需由管理员处理。",
           },
         };
       }

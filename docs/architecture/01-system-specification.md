@@ -672,9 +672,9 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：Hub 选择 Provider/model 必须来自当前 Job 可见、active 且 CLI 兼容的 catalog；Provider 健康、模型目录和 alias policy 必须在快照解析时校验，不兼容或未知值必须 fail closed。
 - **决策来源**：凭据、模型、CLI 和镜像是组合约束，不能由 prompt 绕过目录。
-- **实现状态**：as-built；model catalog 默认不允许未知 alias passthrough。#757 的 readiness 与 Job 共用凭据先行解析：Provider/model/项目授权先筛候选，唯一账号决定 CLI，Hub 显式 CLI 保持硬约束；跨 CLI 多候选以项目/全局显式偏好消歧，种子 NULL 不构成偏好。白名单读取不自动种 ID，显式不可用引用要求管理员修复，不扩大授权。
+- **实现状态**：as-built；model catalog 默认不允许未知 alias passthrough。#757 的 readiness 与 Job 共用凭据先行解析：Provider/model/项目授权先筛候选，唯一账号决定 CLI，Hub 显式 CLI 保持硬约束；跨 CLI 多候选以项目/全局显式偏好消歧，种子 NULL 不构成偏好。白名单读取不自动种 ID，显式不可用引用要求管理员修复，不扩大授权。#914 的引用保护切片在设置事务内重验所有保留/新增凭据，并与 DELETE 共用凭据行锁；项目 impact 按 actor scope 过滤，删除独立检查全局引用，拒绝时不自动修复白名单。完整默认账号 UX 未由此交付，详见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)。
 - **代码入口**：[Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts)、[model admission](../../apps/scheduler/src/domains/provider-adapter/model-catalog-admit.ts)、[resolve credential](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)。
-- **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（#757 假凭据与隔离数据库，含 readiness/快照一致性和历史快照不变）。
+- **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（#757 假凭据与隔离数据库，含 readiness/快照一致性和历史快照不变）；`pnpm ci:integration:credential-delete`（#914 scoped HTTP 与 PostgreSQL 双向竞态）。
 
 ### FR-CRED-003 Model Gateway 唯一出口
 

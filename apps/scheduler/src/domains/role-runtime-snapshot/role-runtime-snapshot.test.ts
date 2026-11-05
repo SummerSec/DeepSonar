@@ -763,7 +763,9 @@ test("empty modules_json leaves business skills empty; explicit list unchanged",
       return [{ id: "role-audit", name: "audit", description: "audit", kind: "role", ui_color: "#f59e0b" }];
     }
     if (sql.includes("UPDATE projects SET config_json")) {
-      projectConfig = { ...(values[0] as Record<string, unknown>) };
+      // SAFETY: this fake handles only the known JSON config update statements.
+      const patch = values[0] as Record<string, unknown>;
+      projectConfig = sql.includes("config_json = config_json ||") ? { ...projectConfig, ...patch } : { ...patch };
       return [];
     }
     if (sql.includes("FROM projects")) {

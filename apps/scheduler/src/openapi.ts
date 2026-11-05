@@ -1968,6 +1968,7 @@ const OPS: Op[] = [
     method: "patch",
     path: "/projects/{id}/settings",
     summary: "更新项目规则与 Agent 配置",
+    description: "在同一事务中锁项目行及被引用凭据，校验保留和新增账号引用均存在、active 且对项目可见；省略模型字段也不能绕过。失效引用返回 400 provider_credential_allowlist_stale，配置不变。缺键不收紧，显式 [] 禁止所有凭据；不自动删除白名单键。缺省/回退模型须与缺省账号配置自洽。",
     scope: "agents:write",
     tags: ["Settings"],
     body: {
@@ -1977,7 +1978,9 @@ const OPS: Op[] = [
         enabled_credential_ids: { type: "array", items: { type: "string", format: "uuid" }, description: "显式收紧凭据范围；省略不改变，空数组禁止所有凭据。" },
         default_agent_cli: { type: "string", enum: ["claude-code", "pi", "dsh"], nullable: true, description: "仅跨CLI候选的明确偏好；null清除" },
         default_credential_id: { type: "string", format: "uuid", nullable: true },
-        default_model_ref: { type: "string", nullable: true },
+        default_model_ref: { type: "string", nullable: true, description: "绑定缺省账号的模型 ID；null 清除，省略时保留并按账号模型配置重验。" },
+        fallback_model_refs: { type: "array", maxItems: 16, uniqueItems: true, items: { type: "string", minLength: 1, maxLength: 200 }, description: "绑定缺省账号的有序回退模型；清除缺省账号时一起清除。" },
+        allow_model_catalog_passthrough: { type: "boolean", description: "显式项目应急授权；默认按账号配置的模型名单校验，不以探测目录授予选模权限。" },
         rules: {
           type: "object",
           additionalProperties: true,
@@ -2684,7 +2687,7 @@ const OPS: Op[] = [
     method: "delete",
     path: "/credentials/{id}",
     summary: "删除已保存的 Provider 账号",
-    description: "有 pending 或 active/frozen Job（claimed/provisioning/running/waiting_human）时返回 409 CREDENTIAL_IN_USE。failed/timeout/orphan 可恢复历史不阻挡删除，影响投影仍列出。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。吊销并删除 job_tokens；不改写历史 Job 快照（#690：无 RoleConfig 凭据绑定）。响应与审计不含密文；项目凭据审计保留 project_id。",
+    description: "有 pending 或 active/frozen Job（claimed/provisioning/running/waiting_human）时返回 409 CREDENTIAL_IN_USE。failed/timeout/orphan 可恢复历史不阻挡删除，影响投影仍列出。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。任何项目 enabled_credential_ids/default_credential_id 引用仍存在时返回 409 CREDENTIAL_PROJECT_REFERENCE 和 next_action；完整性检查覆盖所有项目，impact 只展示 actor 可见项目。删除与项目设置写入共用事务级凭据行锁，不自动改项目白名单。吊销并删除 job_tokens；不改写历史 Job 快照（#690：无 RoleConfig 凭据绑定）。响应与审计不含密文；项目凭据审计保留 project_id。",
     scope: "agents:write",
     tags: ["Credentials"],
     query: {
@@ -2708,7 +2711,7 @@ const OPS: Op[] = [
         },
       },
       "409": {
-        description: "仍被 RoleConfig 绑定、pending/active Job 或活动镜像准入扫描引用",
+        description: "仍被 pending/active Job、活动镜像准入扫描或项目账号配置引用，或删除发生冲突",
         content: {
           "application/json": {
             schema: {
@@ -2719,9 +2722,10 @@ const OPS: Op[] = [
                   properties: {
                     error_code: {
                       type: "string",
-                      enum: ["CREDENTIAL_IN_USE", "CREDENTIAL_SCAN_IN_USE", "CREDENTIAL_CHANGED"],
+                      enum: ["CREDENTIAL_IN_USE", "CREDENTIAL_SCAN_IN_USE", "CREDENTIAL_PROJECT_REFERENCE", "CREDENTIAL_CHANGED"],
                     },
                     impact: { $ref: "#/components/schemas/CredentialImpact" },
+                    next_action: { type: "string", description: "项目引用拒绝时提供移除/替换引用的指引，不建议删除白名单键扩大授权。" },
                   },
                 },
               ],
@@ -3365,7 +3369,7 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         RuntimeRegistryChannelError: RuntimeRegistryChannelErrorSchema,
         CredentialImpact: {
           type: "object",
-          required: ["credential_id", "role_configs", "jobs", "scans"],
+          required: ["credential_id", "role_configs", "jobs", "scans", "project_references"],
           properties: {
             credential_id: { type: "string", format: "uuid" },
             role_configs: {
@@ -3407,6 +3411,28 @@ export function buildOpenApiDocument(): Record<string, unknown> {
                   properties: {
                     count: { type: "integer", minimum: 0 },
                     items: { type: "array", items: { type: "object", additionalProperties: true } },
+                  },
+                },
+              },
+            },
+            project_references: {
+              type: "object",
+              description:
+                "#914 引用保护切片：只返回 actor 可见项目的 Provider 配置引用及其完整计数，items 为有界列表。DELETE 独立检查所有项目，返回 409 CREDENTIAL_PROJECT_REFERENCE；不可见引用不进入 impact。需在既有项目 Agent 设置移除或替换引用；不是完整默认账号 UX 交付。",
+              required: ["count", "items"],
+              properties: {
+                count: { type: "integer", minimum: 0 },
+                items: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    required: ["project_id", "enabled", "default"],
+                    properties: {
+                      project_id: { type: "string", format: "uuid" },
+                      project_name: { type: "string", nullable: true },
+                      enabled: { type: "boolean", description: "该项目白名单包含该账号" },
+                      default: { type: "boolean", description: "该项目把该账号设为缺省账号" },
+                    },
                   },
                 },
               },
