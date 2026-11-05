@@ -712,7 +712,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
               await sql`UPDATE jobs SET status='cancelled' WHERE id=ANY(${ids}::uuid[])`;
             }
           });
-          for (const blocker of ["effect_pending", "unknown", "accepted", "paused"] as const) {
+          for (const blocker of ["effect_pending", "unknown", "accepted", "paused", "requests_exhausted", "main_tokens_exhausted"] as const) {
             for (const mode of ["resume", "rerun-current", "batch"] as const) {
               await t.test(`no repair root: ${blocker} rejects ${mode} without mutations`, async () => {
                 await setPlan(10, 8, 2);
@@ -724,6 +724,35 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
                   await attempts.beginEffect(sql, execution.attemptId, { effectId: "ordinary-unresolved", kind: "agent_run",
                     step: 1, replayPolicy: "never", intent: { fixture: true } });
                   if (blocker === "unknown") await attempts.markEffectUnknown(sql, execution.attemptId, "ordinary-unresolved", "synthetic unknown");
+                } else if (blocker === "requests_exhausted" || blocker === "main_tokens_exhausted") {
+                  // Two real Gateway grants each remain below their own counters;
+                  // only cumulative Job usage reaches the frozen cap. No repair root,
+                  // synthetic ledger insertion or counter mutation creates this cost.
+                  const oldResponseTokens = responseTokens;
+                  const tokensExhausted = blocker === "main_tokens_exhausted";
+                  responseTokens = tokensExhausted ? 10 : 4;
+                  let count = 0;
+                  try {
+                    for (let grantIndex = 0; grantIndex < 2; grantIndex++) {
+                      const token = await gateway.mintJobToken({ jobId: affected.jobId, projectId, credentialId,
+                        maxTokens: tokensExhausted ? 20 : 100 });
+                      for (let i = 0; i < (tokensExhausted ? 1 : 4); i++) {
+                        const response = await request(token.plaintext);
+                        assert.equal(response.statusCode, 200, response.body);
+                        await settled(affected.jobId, ++count);
+                      }
+                    }
+                  } finally { responseTokens = oldResponseTokens; }
+                  const [usage] = await sql`SELECT SUM(used_requests)::int AS requests,MAX(used_requests)::int AS per_token,
+                    MIN(max_requests)::int AS request_cap,MIN(max_tokens)::int AS token_cap
+                    FROM job_tokens WHERE job_id=${affected.jobId} AND workload='main'`;
+                  const [ledger] = await sql`SELECT SUM(total_tokens)::int AS tokens FROM job_usage_ledger
+                    WHERE job_id=${affected.jobId} AND workload='main' AND settlement_status='settled'`;
+                  assert.equal(usage.request_cap, 8);
+                  assert.equal(usage.requests, tokensExhausted ? 2 : 8);
+                  assert.equal(usage.per_token, tokensExhausted ? 1 : 4);
+                  assert.equal(usage.token_cap, tokensExhausted ? 20 : 100);
+                  assert.equal(ledger.tokens, tokensExhausted ? 20 : 32);
                 } else if (blocker === "accepted") {
                   const accepted = await app.inject({ method: "POST", url: `/control/v1/jobs/${affected.jobId}/operations/mark_job_done`,
                     headers: { authorization: `Bearer ${execution.grant}`, "idempotency-key": randomUUID(),
@@ -741,7 +770,9 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
                   ? `/tasks/${first.canvasId}/resume-session` : `/jobs/${affected.jobId}/${mode}` }));
                 assert.equal(response.statusCode, 409, response.body);
                 assert.equal(response.json().error_code, blocker === "accepted" ? "COMPLETION_ALREADY_ACCEPTED"
-                  : blocker === "paused" ? "REPAIR_PAUSED" : "REPAIR_EFFECT_UNRESOLVED");
+                  : blocker === "paused" ? "REPAIR_PAUSED"
+                  : blocker === "requests_exhausted" ? "REPAIR_REQUESTS_EXHAUSTED"
+                  : blocker === "main_tokens_exhausted" ? "JOB_TOKEN_EXHAUSTED" : "REPAIR_EFFECT_UNRESOLVED");
                 assert.deepEqual(await captureBatch(first.canvasId, ids), before);
                 assert.equal(upstreamCalls, calls);
                 api.unregisterRuntimeHandler(affected.jobId);

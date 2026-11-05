@@ -50,3 +50,5 @@
 当前状态保留 `accepted_terminal=human` 的接受事实，并返回 `human_wait_kind` / `wait_owner`。credential 指向平台管理员修复，authorization 指向有权限的操作员；high_risk_action、business_decision 和 Finding 判断仍是明确人工决策。无类型历史只提示检查，不猜测需要回复 Agent。此分类不解除人工等待、不自动恢复、不授予授权。任务级批量恢复与单 Job 恢复共用实时目标授权预检；全批次通过后才改变 convergence、代际、Attempt 或 grants。
 
 普通恢复即使从未产生 rejected completion，也必须通过暂停、所有旧未结算效果、已接受完成与累计模型额度的只读准入；只有修复 revision/deadline 依赖 repair root。无 root 的单 Job resume/rerun-current 与 sibling 批次负例验证拒绝不修改原状态。隔离数据库的第二 sibling 策略 INSERT 故障测试以非事务 sequence 作为到达见证，确认第一份策略回执及双方 dedup/rate-limit 写入后才抛错，再比较整批持久状态全部回滚；此测试已编写但尚未执行。
+
+无 repair root 的额度负例通过两个真实 loopback Gateway grant 累积结算：请求 4+4 达到主上限 8、token 10+10 达到主上限 20。resume、rerun-current、resume-session 均断言额度错误、没有额外上游调用且整批持久状态不变；未手工写费用账本或请求计数，测试仍待 Actions 运行。
