@@ -375,6 +375,21 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       assert.equal(generations.count, 0); assert.equal((await readBudget(f.jobId))?.known_tokens, 4);
     });
 
+    await t.test("non-OM allowance distinguishes pending reservation from unknown usage", async () => {
+      const { readMainTokenAllowance } = await import("./domains/event-ingestion/model-token-allowance.js");
+      const f = await setup(200);
+      const read = () => sql.begin(async tx => {
+        const [job] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${f.jobId} FOR UPDATE`;
+        return readMainTokenAllowance(tx as unknown as typeof sql, f.jobId, job.agent_snapshot_json);
+      });
+      await attempts.beginEffect(sql, String(f.oldAttempt.id), { effectId: "pending-main-allowance",
+        kind: "gateway_model_request", intent: { workload: "main", fixture: true } });
+      await assert.rejects(read(), { code: "JOB_TOKEN_USAGE_PENDING" });
+      await attempts.markEffectUnknown(sql, String(f.oldAttempt.id), "pending-main-allowance", "synthetic unknown usage");
+      await assert.rejects(read(), { code: "JOB_TOKEN_USAGE_UNKNOWN" });
+      await sql`UPDATE jobs SET status='cancelled' WHERE id=${f.jobId}`;
+    });
+
     await t.test("non-OM recovery retains the whole-Job token ceiling", async () => {
       const f = await setup(200);
       try {
@@ -395,7 +410,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
 
     await t.test("OM token history preserves main allowance through recovery and refreeze", async (t) => {
       const { freezePiExtensions } = await import("./pi-extensions.js");
-      const { readMainTokenAllowance } = await import("./domains/event-ingestion/model-token-allowance.js");
+      const { readMainTokenAllowance, readWorkloadTokenAllowance } = await import("./domains/event-ingestion/model-token-allowance.js");
       const settings = { providers: { anthropic: { api: "anthropic-messages", models: [{ id: "model-a" }] } } };
       const [originalCredential] = await sql`SELECT agent_cli,settings_config_json FROM credentials WHERE id=${credentialId}`;
       await sql`UPDATE role_configs SET agent_cli='pi' WHERE id=${roleConfigId}`;
@@ -438,6 +453,9 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
                 kind: "gateway_model_request", intent: { workload: "observational_memory", fixture: true } });
               if (scenario === "unknown") await attempts.markEffectUnknown(sql, String(f.oldAttempt.id),
                 "unresolved-om", "synthetic unknown background effect");
+              await assert.rejects(sql.begin(tx => readWorkloadTokenAllowance(tx as unknown as typeof sql,
+                f.jobId, "observational_memory")), { code: scenario === "effect_pending" ? "JOB_TOKEN_USAGE_PENDING" : "JOB_TOKEN_USAGE_UNKNOWN" });
+              assert.equal(await allowance(f.jobId), 10, "background reservation never consumes main allowance");
             }
             await f.stop(scenario === "effect_pending" || scenario === "unknown" ? "waiting_human" : "failed");
             responseTokens = 4;
