@@ -134,6 +134,8 @@ RPC 按[帧与保存预算](../../packages/runtime-sandbox/src/pi-rpc-output.ts)
 
 只有能力组合显式选择已注册 OM 时，新 Job 才冻结插件/配置/模型；Scheduler 物化受审 wrapper 的字面配置 loader，并签发与 main 分离的 `observational_memory` Gateway token。`requires_egress=false` 不放宽业务网络，`requires_gateway=true` 要求所有后台模型调用走冻结路由。当前 Session 的私有配置与身份守卫拒绝环境覆盖、配置漂移及切换/分叉，不回读最新设置。
 
+Gateway 与手动恢复使用同一 workload token allowance；历史 OM token 保留该 Job 的 main/background 计费隔离，即使重新冻结不再启用 OM。上限与已结算用量连续继承，未知后台效果仍阻断新代际。
+
 新 Job 的 `freezePiExtensions` 从 Scheduler 选定 `runtimeImage.image_version` 执行 [shared registry](../../packages/shared-types/src/pi-extensions.ts) 的 OM 专属下限，缺失/非法/旧 metadata 拒绝，历史冻结快照不重写。[runtime-adapters](../../packages/runtime-sandbox/src/runtime-adapters.ts) 在 Pi 启动/恢复及首个 prompt 前执行独立 [内容 guard](../../packages/runtime-sandbox/src/pi-memory-image-guard.ts)；缺少 canonical package/entry/wrapper 时不启动 `runAsync`/RPC。实际本地镜像正负例、canonical RPC 与回归证据集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
 
 有限 Job 总额要求显式主/后台分配且不超额；总额不限时不推导百分比。Gateway 按全部 token 历史累计，在 Job 锁内预留并结算；pending/unknown 保守阻断后台，单次上游尝试不自动重放未知效果，终态撤销全部 workload token。只有精确已知 quota 或 `effect_status=not_started` transient 可让 wrapper 发出可见 diagnostic 并交回 native compaction；权限、协议、snapshot、pending/unknown 和任何 extension_error 保持硬失败。

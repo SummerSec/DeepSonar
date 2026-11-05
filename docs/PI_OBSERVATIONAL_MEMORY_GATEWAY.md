@@ -50,6 +50,8 @@ token 的历史计数。main reservation 在第一个后台 token 签发之前�
 轮换多个 token 不会扩大 main、background 或 total allowance。独立后台 cap 的
 429 不消耗 main request/token reserve。
 
+手动恢复准入与 Gateway 共用 `model-token-allowance.ts` 的 main 额度读取。已签发 OM token 的 Job 在重新冻结配置后仍按原 workload 隔离累计 token 用量，后台历史不能转而消耗 main reserve；旧 pending/unknown 效果仍阻止新修复代际。
+
 ## Token 用量、pending 与 unknown
 
 `background_limits.max_tokens` 为 0 或未设置时，该 token 维度不限。正数限制以

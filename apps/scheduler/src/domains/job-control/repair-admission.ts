@@ -1,5 +1,6 @@
+import { readMainTokenAllowance } from "../event-ingestion/model-token-allowance.js";
 import { sql } from "../../db.js";
-import { readRepairTokenBudget, assertRepairTokenBudget, readJobTokenAllowance, RepairTokenBudgetError } from "../event-ingestion/repair-token-budget.js";
+import { readRepairTokenBudget, assertRepairTokenBudget, RepairTokenBudgetError } from "../event-ingestion/repair-token-budget.js";
 import { COMPLETION_REPAIR_LIMIT } from "../event-ingestion/completion-receipt.js";
 import { canvasExecutionIsPaused } from "../../task-execution-control.js";
 
@@ -8,7 +9,7 @@ export async function readRepairRequeueAdmission(db: typeof sql, jobId: string) 
   const budget = await readRepairTokenBudget(db, jobId);
   if (!budget) return { budget: null, deadline: null, blocker: null };
   const deny = (code: string, reason: string) => ({ budget, deadline: null, blocker: { code, reason } });
-  const [job] = await db`SELECT j.started_at,j.timeout_sec,c.target_json FROM jobs j
+  const [job] = await db`SELECT j.started_at,j.timeout_sec,j.agent_snapshot_json,c.target_json FROM jobs j
     LEFT JOIN canvases c ON c.id=j.canvas_id WHERE j.id=${jobId}`;
   if (canvasExecutionIsPaused(job?.target_json)) return deny("REPAIR_PAUSED", "任务已暂停；恢复修复前需由操作员解除暂停。");
   const [effects] = await db`SELECT id FROM job_attempt_effects WHERE job_id=${jobId} AND status<>'settled' LIMIT 1`;
@@ -31,7 +32,7 @@ export async function readRepairRequeueAdmission(db: typeof sql, jobId: string) 
   const deadline = budget.deadline ?? (job?.started_at
     ? new Date(new Date(job.started_at).getTime() + Number(job.timeout_sec) * 1000).toISOString() : null);
   if (!deadline || Date.parse(deadline) <= Date.now()) return deny("REPAIR_DEADLINE_EXHAUSTED", "原修复期限已耗尽或无法确认；不能刷新期限继续执行。");
-  try { assertRepairTokenBudget({ ...budget, deadline }, true); await readJobTokenAllowance(db, jobId, budget); }
+  try { assertRepairTokenBudget({ ...budget, deadline }, true); await readMainTokenAllowance(db, jobId, job?.agent_snapshot_json, budget); }
   catch (error) {
     if (!(error instanceof RepairTokenBudgetError)) throw error;
     return deny(error.code, error.message);

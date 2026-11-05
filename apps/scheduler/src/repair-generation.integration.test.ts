@@ -23,10 +23,11 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
   ]);
   const upstream = Fastify(), app = Fastify();
   let upstreamCalls = 0;
+  let responseTokens = 4;
   upstream.post("/v1/messages", async () => {
     upstreamCalls++;
     return { id: "synthetic", type: "message", role: "assistant", content: [{ type: "text", text: "synthetic response" }],
-      stop_reason: "end_turn", usage: { input_tokens: 3, output_tokens: 1 } };
+      stop_reason: "end_turn", usage: { input_tokens: responseTokens - 1, output_tokens: 1 } };
   });
   try {
     await migrate(); await upstream.listen({ host: "127.0.0.1", port: 0 });
@@ -45,8 +46,8 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         'synthetic','only','active','claude-code',${sql.json({ env: { ANTHROPIC_MODEL: "model-a", ANTHROPIC_DEFAULT_SONNET_MODEL: "model-b" } })},
         ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })})`;
     const readBudget = (jobId: string) => sql.begin(tx => budgets.readRepairTokenBudget(tx as unknown as typeof sql, jobId));
-    const request = (token: string) => app.inject({ method: "POST", url: "/gateway/v1/messages",
-      headers: { authorization: `Bearer ${token}` }, payload: { model: "model-a", max_tokens: 10, messages: [{ role: "user", content: "synthetic" }] } });
+    const request = (token: string, model = "model-a") => app.inject({ method: "POST", url: "/gateway/v1/messages",
+      headers: { authorization: `Bearer ${token}` }, payload: { model, max_tokens: 10, messages: [{ role: "user", content: "synthetic" }] } });
     const settled = async (jobId: string, count: number) => {
       for (let i = 0; i < 100; i++) {
         const [row] = await sql`SELECT count(*)::int AS count FROM job_usage_ledger WHERE job_id=${jobId} AND settlement_status='settled'`;
@@ -55,7 +56,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       }
       assert.fail("synthetic Gateway settlement did not finish");
     };
-    const setup = async (repairLimit = 30, existingCanvasId?: string, snapshotOverrides: Record<string, unknown> = {}) => {
+    const setup = async (repairLimit = 30, existingCanvasId?: string, snapshotOverrides: Record<string, unknown> = {}, mainCap = 40) => {
       config.gateway.repairMaxTokens = repairLimit;
       await sql`UPDATE role_configs SET model='model-a',version=version+1 WHERE id=${roleConfigId}`;
       const canvasId = existingCanvasId ?? `repair-${randomUUID()}`, jobId = randomUUID();
@@ -71,7 +72,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       await sql`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json) VALUES(${canvasId},${jobId},'job','repair','running','{}')`;
       const oldAttempt = await sql.begin(tx => attempts.createAttempt(tx as unknown as typeof sql, jobId));
       let grant = await api.mintJobCapabilityToken(jobId);
-      const mintGateway = () => gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests: 20, maxTokens: 40 });
+      const mintGateway = () => gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests: 20, maxTokens: mainCap });
       const oldGateway = await mintGateway();
       const endpoint = `/control/v1/jobs/${jobId}/operations/mark_job_done`;
       let prepared = 0;
@@ -106,7 +107,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         grant = await api.mintJobCapabilityToken(jobId); register();
         return { next, token: await mintGateway() };
       };
-      return { jobId, canvasId, oldAttempt, oldGateway, oldKey, oldReceipt, oldGrant: grant.token, before, endpoint,
+      return { jobId, canvasId, oldAttempt, oldGateway, oldKey, oldReceipt, mintGateway, oldGrant: grant.token, before, endpoint,
         propose, stop, recover, start, prepared: () => prepared, currentGrant: () => grant.token };
     };
 
@@ -138,7 +139,23 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         assert.equal(upstreamCalls, oldCallCount, "revoked old token never reaches synthetic upstream");
         assert.notEqual((await f.propose(randomUUID(), 1, "late old callback", f.oldGrant)).statusCode, 200);
         assert.equal(await renewCurrentAttemptLease(sql, { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: "synthetic-old" }, 3600), false);
-        assert.equal((await request(token.plaintext)).statusCode, 200); await settled(f.jobId, 2);
+        if (mode === "rerun-current") {
+          const [frozen] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${f.jobId}`;
+          assert.equal(frozen.agent_snapshot_json.provider_model.upstream_model_id, "model-b");
+          assert.equal(frozen.agent_snapshot_json.provider_model.passthrough, false);
+          const captureRequests = async () => Promise.all([
+            sql`SELECT id,used_requests,used_tokens FROM job_tokens WHERE job_id=${f.jobId} ORDER BY id`,
+            sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`,
+          ]);
+          const before = await captureRequests(), calls = upstreamCalls;
+          const oldModel = await request(token.plaintext, "model-a");
+          assert.equal(oldModel.statusCode, 403, oldModel.body);
+          assert.equal(oldModel.json().error_code, "frozen_model_mismatch");
+          assert.equal(upstreamCalls, calls);
+          assert.deepEqual(await captureRequests(), before, "wrong model cannot consume requests or create effects");
+        }
+        assert.equal((await request(token.plaintext, mode === "rerun-current" ? "model-b" : "model-a")).statusCode, 200);
+        await settled(f.jobId, 2);
         assert.equal((await readBudget(f.jobId))?.known_tokens, 8, "successor continues root repair accounting");
         assert.equal((await f.propose(randomUUID(), 0, "incorrect reset revision")).json().error_code, "COMPLETION_REVISION_CONFLICT");
         const key = randomUUID(), summary = "Synthetic successor completed through the durable completion gate.";
@@ -356,6 +373,112 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       const [job] = await sql`SELECT status FROM jobs WHERE id=${f.jobId}`; assert.equal(job.status, "failed");
       const [generations] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${f.jobId} AND payload_json->>'subtype'='repair_generation'`;
       assert.equal(generations.count, 0); assert.equal((await readBudget(f.jobId))?.known_tokens, 4);
+    });
+
+    await t.test("non-OM recovery retains the whole-Job token ceiling", async () => {
+      const f = await setup(200);
+      try {
+        responseTokens = 36;
+        assert.equal((await request(f.oldGateway.plaintext)).statusCode, 200); await settled(f.jobId, 2);
+      } finally { responseTokens = 4; }
+      await f.stop("failed");
+      const before = await captureBatch(f.canvasId, [f.jobId]);
+      for (const mode of ["resume", "rerun-current"] as const) {
+        const result = await f.recover(mode);
+        assert.equal(result.statusCode, 409, result.body);
+        assert.equal(result.json().error_code, "JOB_TOKEN_EXHAUSTED");
+        assert.deepEqual(await captureBatch(f.canvasId, [f.jobId]), before);
+      }
+      assert.equal((await readBudget(f.jobId))?.remaining_tokens, 160, "repair reserve does not override the Job ceiling");
+      await assertNoGeneration(f.jobId);
+    });
+
+    await t.test("OM token history preserves main allowance through recovery and refreeze", async (t) => {
+      const { freezePiExtensions } = await import("./pi-extensions.js");
+      const { readMainTokenAllowance } = await import("./domains/event-ingestion/model-token-allowance.js");
+      const settings = { providers: { anthropic: { api: "anthropic-messages", models: [{ id: "model-a" }] } } };
+      const [originalCredential] = await sql`SELECT agent_cli,settings_config_json FROM credentials WHERE id=${credentialId}`;
+      await sql`UPDATE role_configs SET agent_cli='pi' WHERE id=${roleConfigId}`;
+      await sql`UPDATE credentials SET agent_cli='pi',settings_config_json=${sql.json(settings)} WHERE id=${credentialId}`;
+      const extensions = freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base",
+        { provider: "anthropic", model: "model-a", thinking: "low" }, "0.6.3");
+      assert.ok(extensions[0]?.observational_memory);
+      const omExtensions = [{ ...extensions[0]!, observational_memory: {
+        ...extensions[0]!.observational_memory!, background_limits: { max_requests: 0, max_tokens: 50 },
+      } }];
+      const allowance = (jobId: string) => sql.begin(async tx => {
+        await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
+        const [row] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${jobId}`;
+        return readMainTokenAllowance(tx as unknown as typeof sql, jobId, row.agent_snapshot_json);
+      });
+      try {
+        for (const scenario of ["resume", "rerun-current", "exhausted", "effect_pending", "unknown"] as const) {
+          await t.test(scenario, async () => {
+            responseTokens = 4;
+            const f = await setup(200, undefined, { pi_extensions: omExtensions,
+              runtime_knobs: { job_token_max_requests: 0 } }, 100);
+            // Real Gateway requests establish 90 main + 15 background settled tokens.
+            // Input usage is accounted after the response; output remains within the explicit cap.
+            responseTokens = scenario === "exhausted" ? 96 : 86;
+            assert.equal((await request(f.oldGateway.plaintext)).statusCode, 200);
+            await settled(f.jobId, 2);
+            const background = await gateway.mintJobToken({ jobId: f.jobId, projectId, credentialId,
+              workload: "observational_memory" });
+            responseTokens = 15;
+            const backgroundResponse = await app.inject({ method: "POST", url: "/gateway/v1/messages",
+              headers: { authorization: `Bearer ${background.plaintext}`, "x-deepsonar-request-id": randomUUID() },
+              payload: { model: "model-a", max_tokens: 10, messages: [{ role: "user", content: "synthetic memory" }] } });
+            assert.equal(backgroundResponse.statusCode, 200, backgroundResponse.body);
+            await settled(f.jobId, 3);
+            assert.equal((await readBudget(f.jobId))?.known_tokens, scenario === "exhausted" ? 100 : 90,
+              "background cost is retained without charging the main repair root");
+            if (scenario !== "exhausted") assert.equal(await allowance(f.jobId), 10);
+            if (scenario === "effect_pending" || scenario === "unknown") {
+              await attempts.beginEffect(sql, String(f.oldAttempt.id), { effectId: "unresolved-om",
+                kind: "gateway_model_request", intent: { workload: "observational_memory", fixture: true } });
+              if (scenario === "unknown") await attempts.markEffectUnknown(sql, String(f.oldAttempt.id),
+                "unresolved-om", "synthetic unknown background effect");
+            }
+            await f.stop(scenario === "effect_pending" || scenario === "unknown" ? "waiting_human" : "failed");
+            responseTokens = 4;
+            if (scenario === "exhausted" || scenario === "effect_pending" || scenario === "unknown") {
+              const before = await captureBatch(f.canvasId, [f.jobId]), calls = upstreamCalls;
+              for (const mode of ["resume", "rerun-current"] as const) {
+                const result = await f.recover(mode);
+                assert.equal(result.statusCode, 409, result.body);
+                assert.equal(result.json().error_code, scenario === "exhausted" ? "JOB_TOKEN_EXHAUSTED" : "REPAIR_EFFECT_UNRESOLVED");
+                assert.deepEqual(await captureBatch(f.canvasId, [f.jobId]), before,
+                  "denial preserves tokens, all receipts, effects, usage, Attempts and Canvas state");
+              }
+              assert.equal(upstreamCalls, calls); await assertNoGeneration(f.jobId);
+              await sql`UPDATE jobs SET status='cancelled' WHERE id=${f.jobId}`;
+              return;
+            }
+            const recovered = await f.recover(scenario);
+            assert.equal(recovered.statusCode, 200, recovered.body);
+            const { next, token } = await f.start();
+            assert.equal(await allowance(f.jobId), 10, "new token/refreeze never resets the historical main ceiling");
+            const forwarded = await request(token.plaintext);
+            assert.equal(forwarded.statusCode, 200, forwarded.body); await settled(f.jobId, 4);
+            assert.equal(await allowance(f.jobId), 6);
+            assert.equal((await readBudget(f.jobId))?.known_tokens, 94);
+            const key = randomUUID(), summary = "Synthetic OM repair generation finished within its main reserve.";
+            const accepted = await f.propose(key, 1, summary); assert.equal(accepted.statusCode, 200, accepted.body);
+            await core.ingestEvent(f.jobId, { v: 1, event_id: receipts.completionDoneEventId(f.jobId, key), type: "done", payload: { summary } });
+            const [job] = await sql`SELECT status FROM jobs WHERE id=${f.jobId}`;
+            const [attempt] = await sql`SELECT status FROM job_attempts WHERE id=${next.id}`;
+            assert.equal(job.status, "succeeded"); assert.equal(attempt.status, "succeeded");
+            assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
+            const [cost] = await sql`SELECT SUM(total_tokens)::int AS total FROM job_usage_ledger WHERE job_id=${f.jobId}`;
+            assert.equal(cost.total, 109, "all main and background costs remain in the Job ledger");
+            await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+          });
+        }
+      } finally {
+        responseTokens = 4;
+        await sql`UPDATE role_configs SET agent_cli='claude-code' WHERE id=${roleConfigId}`;
+        await sql`UPDATE credentials SET agent_cli=${originalCredential.agent_cli},settings_config_json=${sql.json(originalCredential.settings_config_json)} WHERE id=${credentialId}`;
+      }
     });
 
     for (const state of ["effect_pending", "unknown"] as const) await t.test(`${state} blocks generation before mutation`, async () => {
