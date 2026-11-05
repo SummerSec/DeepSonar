@@ -266,10 +266,11 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       status: "running" | "succeeded" = "running",
       options: Parameters<typeof makeSnapshot>[1] = {},
       jobCredentialId = credentialId,
+      ordinary = false,
     ) => {
       const jobId = randomUUID();
       const [boundCredential] = await sql`SELECT * FROM credentials WHERE id=${jobCredentialId}`;
-      const snapshot = { ...makeSnapshot(jobCredentialId, options), gateway_provider_binding: freezeGatewayProviderBinding(boundCredential as never) };
+      const snapshot = { ...makeSnapshot(jobCredentialId, options), ...(ordinary ? { pi_extensions: [] } : {}), gateway_provider_binding: freezeGatewayProviderBinding(boundCredential as never) };
       await sql`INSERT INTO jobs(
         id, project_id, type, status, agent_snapshot_json, started_at, timeout_sec, lease_expires_at
       ) VALUES (
@@ -419,6 +420,119 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       request(rotatedMain.plaintext, { workload: "main" }),
     ]);
     assert.deepEqual(concurrentMain.map((response) => response.statusCode).sort((a, b) => a - b), [200, 429]);
+
+    // Recovery keeps every historical reservation, including revoked and expired tokens.
+    const awaitSettled = async (jobId: string, expected: number) => {
+      for (let poll = 0; poll < 200; poll++) {
+        const [row] = await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id=${jobId} AND settlement_status='settled'`;
+        if (row.n === expected) return;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.fail(`expected ${expected} settled requests for ${jobId}`);
+    };
+    const usageState = async (jobId: string) => ({
+      tokens: [...await sql`SELECT id, used_requests, used_tokens FROM job_tokens WHERE job_id=${jobId} ORDER BY id`],
+      effects: [...await sql`SELECT * FROM job_attempt_effects WHERE job_id=${jobId} ORDER BY id`],
+      ledger: [...await sql`SELECT * FROM job_usage_ledger WHERE job_id=${jobId} ORDER BY id`],
+    });
+    const recoverFixture = async (job: Awaited<ReturnType<typeof createJob>>, snapshot: unknown) => {
+      await attemptApi.markAttemptInterrupted(sql, job.jobId, "offline recovery fixture");
+      await revokeJobTokens(job.jobId, "cancelled");
+      await sql`UPDATE job_tokens SET expires_at=now()-interval '1 minute' WHERE job_id=${job.jobId}`;
+      await sql`UPDATE jobs SET status='pending',agent_snapshot_json=${sql.json(snapshot as never)} WHERE id=${job.jobId}`;
+      const next = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, job.jobId));
+      await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '1 hour' WHERE id=${job.jobId}`;
+      return String(next.id);
+    };
+    for (const mode of ["larger", "smaller", "zero", "unconfigured"] as const) {
+      const historical = await createJob("running", { backgroundMaxTokens: 0 });
+      const oldMain = await issue(historical.jobId, "main");
+      const oldOm = await issue(historical.jobId, "observational_memory");
+      assert.equal((await request(oldMain.plaintext, { workload: "main" })).statusCode, 200);
+      assert.equal((await request(oldOm.plaintext)).statusCode, 200);
+      await awaitSettled(historical.jobId, 2);
+      const oldEvidence = await usageState(historical.jobId);
+      const options = mode === "larger" ? { totalRequests: 8, mainRequests: 4, backgroundRequests: 4 }
+        : mode === "smaller" ? { totalRequests: 2, mainRequests: 1, backgroundRequests: 1 } : { totalRequests: 0 };
+      const nextSnapshot = { ...historical.snapshot, ...makeSnapshot(credentialId, { ...options, backgroundMaxTokens: 0 }) };
+      if (mode === "unconfigured") delete (nextSnapshot.runtime_knobs as Record<string, unknown>).job_token_max_requests;
+      const nextAttempt = await recoverFixture(historical, nextSnapshot);
+      const newMain = await issue(historical.jobId, "main");
+      const newOm = await issue(historical.jobId, "observational_memory");
+      const [newCaps] = await sql`SELECT max_requests,request_total_limit FROM job_tokens WHERE id=${newMain.id}`;
+      assert.equal(newCaps.max_requests, mode === "smaller" ? 1 : 2, mode);
+      assert.equal(newCaps.request_total_limit, mode === "smaller" ? 2 : 4, mode);
+      const beforeCalls = upstreamCalls;
+      const racedResponses = await Promise.all([
+        request(newMain.plaintext, { workload: "main" }), request(newMain.plaintext, { workload: "main" }), request(newOm.plaintext),
+      ]);
+      assert.deepEqual(racedResponses.map(r => r.statusCode).sort(), mode === "smaller" ? [429, 429, 429] : [200, 200, 429], mode);
+      assert.equal(upstreamCalls - beforeCalls, mode === "smaller" ? 0 : 2, mode);
+      await awaitSettled(historical.jobId, mode === "smaller" ? 2 : 4);
+      const beforeDenied = await usageState(historical.jobId);
+      for (const [value, scope] of [[newMain, "main"], [newOm, "observational_memory"]] as const) {
+        const denied = await request(value.plaintext, { workload: scope });
+        assert.equal(denied.statusCode, 429, denied.body);
+        if (scope === "observational_memory") assert.equal((await receiptFor(denied)).status, "not_started");
+        const allowance = await app.inject({ method: "GET", url: "/gateway/_allowance", headers: { authorization: `Bearer ${value.plaintext}` } });
+        assert.equal(allowance.statusCode, 429, allowance.body);
+      }
+      assert.equal(upstreamCalls - beforeCalls, mode === "smaller" ? 0 : 2);
+      assert.deepEqual(await usageState(historical.jobId), beforeDenied, "denial creates no reservation, effect or ledger write");
+      const [oldAttemptRow] = await sql`SELECT status FROM job_attempts WHERE id=${historical.attemptId}`;
+      const [nextAttemptRow] = await sql`SELECT status FROM job_attempts WHERE id=${nextAttempt}`;
+      assert.equal(oldAttemptRow.status, "interrupted"); assert.equal(nextAttemptRow.status, "active");
+      const after = await usageState(historical.jobId);
+      assert.deepEqual(after.effects.filter(row => row.attempt_id === historical.attemptId), oldEvidence.effects);
+      assert.deepEqual(after.ledger.filter(row => row.attempt_id === historical.attemptId), oldEvidence.ledger);
+    }
+    // Explicit persisted-SQL fixture: historical total=3 is tighter than either
+    // workload cap=4. This isolates intersection of stored constraints; it does
+    // not represent a prior OM plan or authorize widening an unminted workload.
+    const totalOnly = await createJob("running", { totalRequests: 8, mainRequests: 4, backgroundRequests: 4, backgroundMaxTokens: 0 });
+    const totalOldMain = await issue(totalOnly.jobId, "main");
+    await issue(totalOnly.jobId, "observational_memory");
+    await sql`UPDATE job_tokens SET request_total_limit=3 WHERE job_id=${totalOnly.jobId}`;
+    assert.equal((await request(totalOldMain.plaintext, { workload: "main" })).statusCode, 200);
+    await awaitSettled(totalOnly.jobId, 1);
+    await recoverFixture(totalOnly, { ...totalOnly.snapshot,
+      ...makeSnapshot(credentialId, { totalRequests: 8, mainRequests: 4, backgroundRequests: 4, backgroundMaxTokens: 0 }) });
+    const totalNewMain = await issue(totalOnly.jobId, "main");
+    const totalNewOm = await issue(totalOnly.jobId, "observational_memory");
+    for (let used = 2; used <= 3; used++) {
+      assert.equal((await request(totalNewOm.plaintext)).statusCode, 200);
+      await awaitSettled(totalOnly.jobId, used);
+    }
+    const totalBefore = await usageState(totalOnly.jobId), totalCalls = upstreamCalls;
+    for (const [value, scope] of [[totalNewMain, "main"], [totalNewOm, "observational_memory"]] as const) {
+      const denied = await request(value.plaintext, { workload: scope });
+      assert.equal(denied.statusCode, 429, denied.body);
+      const allowance = await app.inject({ method: "GET", url: "/gateway/_allowance", headers: { authorization: `Bearer ${value.plaintext}` } });
+      assert.equal(allowance.statusCode, 429, allowance.body);
+    }
+    assert.equal(upstreamCalls, totalCalls);
+    assert.deepEqual(await usageState(totalOnly.jobId), totalBefore);
+
+    for (const newCap of [0, 20]) {
+      const ordinary = await createJob("running", { totalRequests: 0 }, credentialId, true);
+      const ordinarySnapshot = ordinary.snapshot;
+      const old = await issue(ordinary.jobId, "main", { maxRequests: 20 });
+      for (let i = 0; i < 19; i++) assert.equal((await request(old.plaintext, { workload: "main" })).statusCode, 200);
+      await awaitSettled(ordinary.jobId, 19);
+      await recoverFixture(ordinary, ordinarySnapshot);
+      const fresh = await issue(ordinary.jobId, "main", { maxRequests: newCap });
+      const [cap] = await sql`SELECT max_requests,request_total_limit FROM job_tokens WHERE id=${fresh.id}`;
+      assert.equal(cap.max_requests, 20); assert.equal(cap.request_total_limit, 0);
+      const beforeCalls = upstreamCalls;
+      const racedResponses = await Promise.all([request(fresh.plaintext, { workload: "main" }), request(fresh.plaintext, { workload: "main" })]);
+      assert.deepEqual(racedResponses.map(r => r.statusCode).sort(), [200, 429]);
+      assert.equal(upstreamCalls, beforeCalls + 1);
+      await awaitSettled(ordinary.jobId, 20);
+      const beforeDenied = await usageState(ordinary.jobId);
+      assert.equal((await request(fresh.plaintext, { workload: "main" })).statusCode, 429);
+      assert.deepEqual(await usageState(ordinary.jobId), beforeDenied);
+      assert.equal(upstreamCalls, beforeCalls + 1);
+    }
 
     const tokenCapJob = await createJob("running", { backgroundMaxTokens: 2 });
     const tokenCapMain = await issue(tokenCapJob.jobId, "main");

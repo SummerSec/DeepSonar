@@ -114,7 +114,8 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     for (const cap of [undefined, 0, 7]) {
       const minted = await gateway.mintJobToken({ jobId: first.jobId, projectId, credentialId, maxRequests: cap, maxTokens: cap });
       const [stored] = await sql`SELECT max_requests,max_tokens FROM job_tokens WHERE id=${minted.id}`;
-      assert.equal(stored.max_requests, cap ?? config.gateway.maxRequests);
+      assert.equal(stored.max_requests, Math.min(100, (cap ?? config.gateway.maxRequests) || 100),
+        "mint retains the existing finite Job request cap when the requested cap is unlimited");
       assert.equal(stored.max_tokens, cap ? String(cap) : null);
       // These mint fixtures must not introduce a Job-wide ceiling into the repair scenarios below.
       await sql`DELETE FROM job_tokens WHERE id=${minted.id}`;

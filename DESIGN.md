@@ -148,6 +148,8 @@ Hub 只在当前 Job scope 内按需读图：初始 L0/overview 只提供有界 
 
 完成仍要求当前全判据正向操作员授权、有效来源与完整读取；普通目标评审、PlanResult、输出关联或报告均不能自行取得该 authority。报告机器整体判断保留 unknown，技术成果、任务完成和资格分别呈现。bootstrap fixture 仅用 HTTP objective 读取结果构造首个 v2 提案，并观测到恰好一个就绪 Worker；这是验证方法与结果，不是所有首个提案的协议约束。v2 回放本地 SQL/HTTP fixture 已核验，但报告 provenance 为 dirty 的非 HEAD 提交，不能写成 `5619154f` 精确最终验收；该历史回放不能代替最终 SHA，分项证据见[验收矩阵](docs/TASK_DISPATCH_ACCEPTANCE.md)；工程切片已随 #831 的 `fdb55a01` 主线 Actions 验收，后续修复 SHA 仍须另验。`maxHubRounds`、token、wall time、并发和沙箱限制只提供护栏，不代替完成理由或当前判据证据。
 
+Gateway 请求额度跨 token/Attempt 累计，含撤销和过期 token；普通 main 与 OM 的 total/main/background 请求上限各取历史与当前有限值的最小值，0/未配置不能解除旧有限上限，详见 [透明网关预算](docs/MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)。
+
 用量额度采用显式配置：普通请求次数、修正 token、验证轮数、图查询累计调用/字节和 LSP 调用未配置时不限，显式正数才限制。非法配置拒绝，已有数据库配置与冻结历史不迁移。协议、权限、租约、资源容量和无进展保护独立保留。完整分类见 [用量限制](docs/USAGE_LIMITS.md)。
 
 ### 4.3 失败反馈与修正

@@ -11,6 +11,7 @@
  * - 红线：上游明文 Key 不出本进程；请求/响应体不落库（usage 除外）
  */
 import { once } from "node:events";
+import { finiteRequestCap, readHistoricalRequestBudget, resolveRequestBudget } from "./gateway-request-budget.js";
 import { persistNoEffectReceipt, readNoEffectReceipt, type GatewayNoEffectReason } from "./gateway-admission-receipt.js";
 import { createGatewayResponseGuard } from "./gateway-response-guard.js";
 import { assertGatewayProviderBinding, GatewayProviderBindingError } from "./gateway-provider-binding.js";
@@ -394,6 +395,12 @@ export async function mintJobToken(input: {
   } else if (workload === "observational_memory") {
     throw new Error("PI_OM_NOT_IN_FROZEN_SNAPSHOT");
   }
+
+  // Every generation inherits the tightest persisted finite request ceiling.
+  // Revocation/expiry does not erase a Job's lifetime usage or policy history.
+  const history = await readHistoricalRequestBudget(tx as unknown as typeof sql, input.jobId, workload);
+  requestTotalLimit = finiteRequestCap([requestTotalLimit, history.totalLimit]);
+  maxRequests = finiteRequestCap([maxRequests, history.workloadLimit]);
 
   const [row] = await tx`
     INSERT INTO job_tokens ${sql({
@@ -1144,24 +1151,10 @@ async function admitGatewayRequest(
       && (workloadMaxTokens === null || (Number.isSafeInteger(workloadMaxTokens) && workloadMaxTokens >= 0));
   });
   if (!quotaRowsValid) return { denied: omJob ? "workload_usage_unknown" : "quota_exhausted" };
-  const finiteTotalLimits = tokens
-    .map((row) => Number(row.request_total_limit))
-    .filter((limit) => limit > 0);
-  const totalLimit = omPlan?.total_requests ?? (finiteTotalLimits.length > 0 ? Math.min(...finiteTotalLimits) : 0);
-  const totalUsed = tokens.reduce((sum, row) => sum + Number(row.used_requests), 0);
-  const workloadUsed = tokens
-    .filter((row) => row.workload === input.workload)
-    .reduce((sum, row) => sum + Number(row.used_requests), 0);
-  if (!Number.isSafeInteger(totalUsed) || !Number.isSafeInteger(workloadUsed)) {
-    return { denied: omJob ? "workload_usage_unknown" : "quota_exhausted" };
-  }
-  const workloadTokens = tokens.filter((row) => row.workload === input.workload);
-  const finiteWorkloadLimits = workloadTokens
-    .map((row) => Number(row.max_requests ?? 0))
-    .filter((limit) => Number.isSafeInteger(limit) && limit > 0);
-  const workloadLimit = omPlan
-    ? input.workload === "main" ? omPlan.main_requests : omPlan.background_requests
-    : finiteWorkloadLimits.length > 0 ? Math.min(...finiteWorkloadLimits) : 0;
+  let requests: ReturnType<typeof resolveRequestBudget>;
+  try { requests = resolveRequestBudget(tokens, input.workload, omPlan); }
+  catch { return { denied: omJob ? "workload_usage_unknown" : "quota_exhausted" }; }
+  const { totalUsed, workloadLimit } = requests;
   let backgroundRemaining: number | null = null;
   let backgroundPending = false;
   if (input.workload === "observational_memory") {
@@ -1180,8 +1173,7 @@ async function admitGatewayRequest(
       if (!backgroundPending) throw error;
     }
   }
-  if (totalLimit > 0 && totalUsed >= totalLimit) return { denied: "quota_exhausted" };
-  if (omJob && workloadLimit > 0 && workloadUsed >= workloadLimit) return { denied: "quota_exhausted" };
+  if (requests.exhausted) return { denied: "quota_exhausted" };
   if (backgroundPending) return { denied: "workload_usage_pending" };
 
   const repairBudget = input.workload === "main"
@@ -1333,9 +1325,15 @@ export function registerGateway(app: FastifyInstance): void {
             const [job] = await db`SELECT status, agent_snapshot_json FROM jobs WHERE id=${jt.job_id} FOR UPDATE`;
             if (!job || !JOB_ACTIVE.includes(String(job.status))) throw new RepairTokenBudgetError("REPAIR_JOB_INACTIVE", "Job is no longer active");
             const workload = gatewayWorkload(jt.workload);
+            const omConfig = observationalMemoryConfig(parseFrozenPiExtensions(job.agent_snapshot_json?.pi_extensions));
+            const plan = omConfig ? resolveObservationalMemoryBudget({ config: omConfig,
+              jobTokenMaxRequests: job.agent_snapshot_json?.runtime_knobs?.job_token_max_requests }) : null;
+            const requests = await readHistoricalRequestBudget(db, String(jt.job_id), workload, plan);
+            if (requests.exhausted) {
+              throw new RepairTokenBudgetError("JOB_REQUEST_EXHAUSTED", "Job request allowance exhausted");
+            }
             const repair = workload === "main" ? await admitGatewayRepair(db, String(jt.job_id), String(jt.attempt_id)) : null;
-            const omJob = Boolean(observationalMemoryConfig(parseFrozenPiExtensions(job.agent_snapshot_json?.pi_extensions)));
-            const total = workload === "observational_memory" || omJob
+            const total = workload === "observational_memory" || plan !== null
               ? await readWorkloadTokenAllowance(db, String(jt.job_id), workload, repair)
               : await readJobTokenAllowance(db, String(jt.job_id), repair ?? undefined);
             const remaining = total === null ? repair?.remaining_tokens ?? null : Math.min(total, repair?.remaining_tokens ?? total);

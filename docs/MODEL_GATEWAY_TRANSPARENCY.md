@@ -33,7 +33,7 @@ JSON（包括扩展字段）、非 JSON 和二进制转发字节不重建。压�
 
 发布后所有缺少绑定、但还要 mint/query allowance/发送模型请求的旧 Job 都被拒绝，包括已有活动 token；历史归档和结算查询不做自动迁移。`resume-frozen` 身份比较纳入绑定，缺失或变化返回 `SNAPSHOT_STALE`，不回填旧快照或活动 Attempt。合法无效果的 failed/timeout/orphan Job 可先修复当前账号配置，再由有 `jobs:control` 权限的操作员使用 Job 详情“当前配置重跑”或 `POST /jobs/:id/rerun-current`：现有受治理路径重新解析配置，锁内关闭旧 Attempt/撤销旧 grant，并显式将 Job 的下一次执行快照置为当前配置；保留同 Job ID、历史 Attempt/usage/effect。活动 pending/claimed/provisioning/running 不支持原地 refreeze；cancelled 也不是该 API 的可恢复状态，不能建议“取消后直接重跑”。
 
-**恢复联合阻塞（核对 2026-11-05）：** 既有 rerun 保留累计 token/ledger，有限模型余额与 pending/unknown 模型 usage 仍由原 Gateway 准入约束；但 `unknown agent_run` 可以被现有 rerun 再入队，旧修正 receipt 还可能触发 `REPAIR_ATTEMPT_CHANGED`，保存历史不等于安全重放。OM 新快照策略上限与原预算交集亦须由 #903 所有者联合核验。有未知效果或修正链历史的旧 Job 不得把此 API 当通用恢复出口，更不能删除 receipt、重置预算或新建 Job 规避约束；需 #903 的受治理证据对账与恢复决定闭合后验收。#928 仅新增绑定身份检查，不更改该生命周期策略。对应无效果旧 Job 拒绝→显式 refreeze 回归在 `job-rerun.integration.test.ts`，未知效果恢复不据此宣称通过。
+**恢复联合阻塞（核对 2026-11-05）：** 既有 rerun 保留累计 token/ledger，有限模型余额与 pending/unknown 模型 usage 仍由原 Gateway 准入约束；但 `unknown agent_run` 可以被现有 rerun 再入队，旧修正 receipt 还可能触发 `REPAIR_ATTEMPT_CHANGED`，保存历史不等于安全重放。OM 请求次数上限已在本分支按历史有限值求交；main token allowance 的联合口径仍由 #903 核验。当前 `rerun-current` 解析快照未传入原 `piExtensionIds`，会丢失 OM 选择；因此本轮 OM 请求额度矩阵仅证明隔离 SQL 恢复状态下的 Gateway 行为，不代表 OM 真实恢复入口已闭合。另一个持久化缺口是旧快照中从未签发 token 的 workload 上限：现有 token 行没有该额度，覆盖快照后无法仅靠 token 历史恢复；本分支求交保证限于已持久化额度，完整恢复需保留该历史约束。有未知效果或修正链历史的旧 Job 不得把此 API 当通用恢复出口，更不能删除 receipt、重置预算或新建 Job 规避约束；需 #903 的受治理证据对账与恢复决定闭合后验收。#928 仅新增绑定身份检查，不更改该生命周期策略。对应无效果旧 Job 拒绝→显式 refreeze 回归在 `job-rerun.integration.test.ts`，未知效果恢复不据此宣称通过。
 
 ## 响应与旁路记账
 
@@ -44,6 +44,8 @@ usage scanner 只观察副本，压缩响应仍按原压缩字节转发；无法
 绑定真实 key 在上游响应头/trailer 回显时中止；原始响应 body 通过跨 chunk 前缀观察阻断明文 key 回显。gzip、deflate、br 响应在转发每段压缩字节前通过独立解码观察检查回显，原压缩字节不替换；解码超限、非法或不支持的 Content-Encoding 明确断流，限制以 [响应守卫](../apps/scheduler/src/gateway-response-guard.ts) 为准。该检查不代表任意业务自定义编码/变换后的秘密检测。透明内容与秘密回显之间的安全例外必须如实记录，不能把原字节透传承诺扩张为放行已识别凭据。
 
 ## 预算与 OM 迁移
+
+请求次数按 Job 跨 token/Attempt 累计，普通 main 与 OM 均适用。铸造、allowance 查询和每次出站准入保留所有历史 token（包括撤销、过期）的计数及有限上限；当前与历史 total/main/background 请求上限取各自正数最小值，0/未配置不能解除历史有限限制。新一代 token 不刷新累计余额；并发请求在同一 Job 锁内重验，拒绝不增加请求计数、不创建模型 effect、不访问上游。token 用量与 pending/unknown effect 的门禁继续独立执行；该规则不授权重放未知效果或修改旧 Attempt/receipt。
 
 [输出预算](../apps/scheduler/src/gateway-transparent-policy.ts) 不再给已放行 body 补写或压低输出参数。受预算约束的调用者必须显式提供剩余额度内的输出上限，以及该协议要求的 terminal usage（例如 Chat SSE `stream_options.include_usage`）；否则出站前返回 `GATEWAY_OUTPUT_BUDGET_REQUIRED`。输入/缓存成本仍在响应后确认，累计熔断不等于精确调用前总成本上限。
 
