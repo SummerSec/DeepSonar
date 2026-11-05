@@ -483,6 +483,7 @@ test("an accepted completion supersedes the Gateway's already-accepted refusal",
     errorKind: "runner" as const,
     error: "409 Completion already accepted; reconcile its receipt",
     terminalOutcome: "failure" as const,
+    runnerErrorSource: "structured_terminal" as const,
   };
   assert.equal(acceptedCompletionSupersedesRunnerFailure(refusal, true), true);
   assert.equal(
@@ -511,6 +512,23 @@ test("an accepted completion supersedes the Gateway's already-accepted refusal",
     false,
     "only the accepted-completion refusal is superseded, not ordinary runner errors",
   );
+
+  for (const runnerErrorSource of [undefined, "process"] as const) {
+    assert.equal(acceptedCompletionSupersedesRunnerFailure({ ...refusal, runnerErrorSource }, true), false,
+      "diagnostic text without structured terminal provenance cannot override a failure");
+  }
+  for (const error of [
+    "unrelated diagnostic: 409 Completion already accepted; reconcile its receipt",
+    "409 Completion already accepted; reconcile its receipt; then transport failed",
+    "Pi message ended: aborted: 409 Completion already accepted; reconcile its receipt",
+    "Gateway timeout: COMPLETION_ALREADY_ACCEPTED",
+    "lease expired: COMPLETION_ALREADY_ACCEPTED",
+    "COMPLETION_EFFECT_UNKNOWN: Completion already accepted; reconcile its receipt",
+  ]) {
+    assert.equal(acceptedCompletionSupersedesRunnerFailure({ ...refusal, error }, true), false, error);
+  }
+  assert.equal(acceptedCompletionSupersedesRunnerFailure({ ...refusal,
+    error: `Pi message ended: error: ${refusal.error}` }, true), true);
 
   // The branch must exist *before* the unconditional runner-failure throw, otherwise the
   // accepted terminal never reaches the settling block below it.

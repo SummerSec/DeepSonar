@@ -122,6 +122,8 @@ export interface RealAgentResult {
   error?: string;
   /** 区分宿主语义校验失败关闭与 Provider/CLI 运行失败。 */
   errorKind?: "semantic" | "runner";
+  /** 当前 runner 失败的来源；宿主退出/传输/捕获错误不能作为结构化完成拒绝。 */
+  runnerErrorSource?: AdapterRuntimeState["runnerErrorSource"];
   /** 最后一次 CLI 终态尝试；旧 runner 错误跨重试残留时仍以此为准。 */
   terminalOutcome?: "success" | "failure";
   /** Scheduler 管理的语义失败详情；不携带任意 Error 字段。 */
@@ -307,7 +309,7 @@ export interface TerminalProcessAttempt {
   /** Diagnostic text from this process; never used to infer success. */
   finalText?: string;
   exitCode?: number;
-  terminalResult?: { isError?: boolean; errorDetail?: string };
+  terminalResult?: { isError?: boolean; errorDetail?: string; runnerErrorSource?: RealAgentResult["runnerErrorSource"] };
   closeReason?: TerminalAttemptCloseReason;
   stderrTail?: string;
 }
@@ -317,6 +319,7 @@ export interface TerminalProcessOutcome {
   observed: boolean;
   error?: string;
   terminalOutcome?: "success" | "failure";
+  runnerErrorSource?: RealAgentResult["runnerErrorSource"];
 }
 
 /**
@@ -333,25 +336,27 @@ export function resolveTerminalProcessOutcome(
   const stderr = input.stderrTail?.trim();
   const exitError = `agent CLI 退出码 ${exitCode}${stderr ? `: ${stderr.slice(-300)}` : ""}`;
   if (terminalResult) {
+    if (exitCode !== 0 && (terminalResult.isError || input.closeReason !== "terminal_result")) {
+      return { observed: true, error: exitError, terminalOutcome: "failure", runnerErrorSource: "process" };
+    }
     if (terminalResult.isError) {
       return {
         observed: true,
         error: resolveTerminalRunError(terminalResult),
         terminalOutcome: "failure",
+        runnerErrorSource: terminalResult.runnerErrorSource ?? "structured_terminal",
       };
-    }
-    if (exitCode !== 0 && input.closeReason !== "terminal_result") {
-      return { observed: true, error: exitError, terminalOutcome: "failure" };
     }
     return { observed: true, terminalOutcome: "success" };
   }
   if (exitCode !== 0) {
-    return { observed: true, error: exitError, terminalOutcome: "failure" };
+    return { observed: true, error: exitError, terminalOutcome: "failure", runnerErrorSource: "process" };
   }
   return {
     observed: true,
     error: `agent CLI exited without a structured terminal result${stderr ? `: ${stderr.slice(-300)}` : ""}`,
     terminalOutcome: "failure",
+    runnerErrorSource: "process",
   };
 }
 
@@ -1136,6 +1141,7 @@ export function mapCliEvent(
   finalText?: string;
   isError?: boolean;
   errorDetail?: string;
+  runnerErrorSource?: RealAgentResult["runnerErrorSource"];
   sessionId?: string;
   sessionFile?: string;
   settled?: boolean;
@@ -1266,7 +1272,8 @@ export function mapCliEvent(
     const safeText = redactSecretValues(text, secretValues);
     const isError = line.is_error === true || (line.subtype as string) !== "success";
     emit({ type: "run.completed", text: safeText || (line.subtype as string) });
-    return { finalText: safeText, isError, errorDetail: isError ? safeText || `agent result: ${String(line.subtype)}` : undefined, semanticEvents, warnings };
+    return { finalText: safeText, isError, errorDetail: isError ? safeText || `agent result: ${String(line.subtype)}` : undefined,
+      ...(line.runnerErrorSource === "process" ? { runnerErrorSource: "process" as const } : {}), semanticEvents, warnings };
   }
   if (type === "agent_settled") {
     const text = typeof line.result === "string" ? redactSecretValues(line.result, secretValues) : "";
@@ -1412,6 +1419,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   const resetPiTurn = () => {
     adapterState.failed = false;
     adapterState.errorDetail = undefined;
+    adapterState.runnerErrorSource = undefined;
     adapterState.finalText = undefined;
     adapterState.streamedText = undefined;
     adapterState.streamedReasoning = undefined;
@@ -1456,6 +1464,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   let sessionFile = "";
   let runError: string | undefined;
   let terminalOutcome: RealAgentResult["terminalOutcome"];
+  let runnerErrorSource: RealAgentResult["runnerErrorSource"];
   let semanticErrorDetails: RuntimeErrorDetails | undefined;
   let nudgesLeft = 3;
   let sessionResumeAttempts = 0;
@@ -1628,8 +1637,10 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
                 attemptTerminalResult = {
                   isError: outcome.isError,
                   ...(outcome.errorDetail !== undefined ? { errorDetail: outcome.errorDetail } : {}),
+                  ...(outcome.runnerErrorSource ? { runnerErrorSource: outcome.runnerErrorSource } : {}),
                 };
                 terminalOutcome = outcome.isError ? "failure" : "success";
+                runnerErrorSource = outcome.isError ? outcome.runnerErrorSource ?? "structured_terminal" : undefined;
                 // 即使 Provider 省略最终文本，只要发出终态成功/失败，也覆盖上一轮结果。
                 runError = resolveTerminalRunError(outcome);
               }
@@ -1646,6 +1657,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
                     attemptFinalText = "";
                     attemptTerminalResult = undefined;
                     terminalOutcome = undefined;
+                    runnerErrorSource = undefined;
                     await writeFollowUpMessage(nudge);
                   } else {
                     if (!sessionId) throw new Error(`AGENT_CLI_COMPLETION_GATE_SESSION_MISSING: ${adapter.id}`);
@@ -1704,13 +1716,14 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       const processErrorText = processError
         ? [runtimeErrorText(processError), attemptStderrTail].filter(Boolean).join(": ")
         : undefined;
-      const attemptOutcome = semanticError
+      const attemptOutcome: TerminalProcessOutcome = semanticError
         ? { observed: false }
-        : processError && !(attemptTerminalResult && attemptCloseReason === "terminal_result")
+        : processError && !(attemptTerminalResult?.isError === false && attemptCloseReason === "terminal_result")
           ? {
               observed: true,
               error: processErrorText || "agent CLI 运行失败",
-              terminalOutcome: "failure" as const,
+              terminalOutcome: "failure",
+              runnerErrorSource: "process",
             }
           : resolveTerminalProcessOutcome({
               finalText: attemptFinalText,
@@ -1722,6 +1735,9 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       if (attemptOutcome.observed) {
         runError = attemptOutcome.error;
         terminalOutcome = attemptOutcome.terminalOutcome;
+        runnerErrorSource = adapter.outputMode === "plain-final" && attemptOutcome.error
+          ? "process"
+          : attemptOutcome.runnerErrorSource;
       }
       if (!resumedExec && !semanticError && attemptOutcome.error) {
         const reason = classifyCliSessionResumeError(attemptOutcome.error);
@@ -1736,6 +1752,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
           if (!adapter.persistentSessionResume) {
             runError = `CONTEXT_RESUME_UNSUPPORTED: ${adapter.id} SDK cannot reopen a persisted session after process exit; start a new Job explicitly.`;
             terminalOutcome = "failure";
+            runnerErrorSource = "process";
             break;
           }
           const canResume = Boolean(sessionId && sessionResumeAttempts < CLI_SESSION_RESUME_MAX_ATTEMPTS);
@@ -1755,6 +1772,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
               spec.onWarning?.({ code: "cli_session_resume_failed", detail });
               runError = `AGENT_CLI_RESUME_FAILED: ${adapter.id}`;
               terminalOutcome = "failure";
+              runnerErrorSource = "process";
             }
           } else {
             const cause = !sessionId
@@ -1793,12 +1811,11 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     // An exception while handling the current attempt is the latest runner
     // failure. Keep semanticError separate so host validation remains
     // fail-closed even if the session emitted ordinary text afterwards.
-    // A stream error caused by the deliberate stdin close after a valid
-    // terminal result is not a runner failure.  Preserve a terminal failure
-    // result if that was what the provider reported.
-    if (!semanticError && !(attemptTerminalResult && attemptCloseReason === "terminal_result")) {
+    // Only a successful terminal permits ignoring intentional-close transport errors.
+    if (!semanticError && !(attemptTerminalResult?.isError === false && attemptCloseReason === "terminal_result")) {
       runError = e instanceof Error ? e.message : String(e);
       terminalOutcome = "failure";
+      runnerErrorSource = "process";
     }
   } finally {
     piDriver?.dispose();
@@ -1810,6 +1827,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   if (fatalOutputError) {
     runError = fatalOutputError;
     terminalOutcome = "failure";
+    runnerErrorSource = "process";
     spec.onEvent?.({ type: "runtime.diagnostic", code: fatalOutputError.split(":")[0], capture_complete: false });
   }
 
@@ -1866,6 +1884,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
         ? { errorKind: "runner" as const }
         : {}),
     ...(semanticErrorDetails ? { errorDetails: redactRuntimeSecrets(semanticErrorDetails, secretValues) as RuntimeErrorDetails } : {}),
+    ...(runError && !semanticError && runnerErrorSource ? { runnerErrorSource } : {}),
     ...(terminalOutcome ? { terminalOutcome } : {}),
     ...(sessionFile ? { sessionFile } : {}),
   };

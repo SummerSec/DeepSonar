@@ -131,6 +131,7 @@ export interface AdapterRuntimeState {
   dshActiveChildren?: Set<string>;
   failed?: boolean;
   errorDetail?: string;
+  runnerErrorSource?: "structured_terminal" | "process";
 }
 
 export interface RuntimeAdapter {
@@ -522,16 +523,19 @@ function piMessageEndErrorRaw(line: Record<string, unknown>, message?: Record<st
 
 function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
   const type = String(line.type ?? "");
-  const fail = (detail: string): Record<string, unknown>[] => {
+  const fail = (detail: string, runnerErrorSource?: AdapterRuntimeState["runnerErrorSource"]): Record<string, unknown>[] => {
     state.failed = true;
     state.errorDetail = detail;
-    return [{ type: "result", subtype: "error", is_error: true, result: detail }];
+    state.runnerErrorSource = runnerErrorSource;
+    return [{ type: "result", subtype: "error", is_error: true, result: detail,
+      ...(runnerErrorSource ? { runnerErrorSource } : {}) }];
   };
-  const failRuntime = (raw: string | undefined, fallback: string): Record<string, unknown>[] => {
+  const failRuntime = (raw: string | undefined, fallback: string, runnerErrorSource?: AdapterRuntimeState["runnerErrorSource"]): Record<string, unknown>[] => {
     const event = runtimeErrorResult(raw, fallback);
     state.failed = true;
     state.errorDetail = typeof event.result === "string" && event.result ? event.result : fallback;
-    return [event];
+    state.runnerErrorSource = runnerErrorSource;
+    return [{ ...event, ...(runnerErrorSource ? { runnerErrorSource } : {}) }];
   };
   if (type === "compaction_end" && line.result === null) {
     return fail("Pi context compaction failed");
@@ -544,7 +548,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     if (line.command === "get_state" && line.success === true) piSessionState(line, state);
     if (line.success === false) {
       const error = typeof line.error === "string" ? line.error : undefined;
-      return failRuntime(error, "Pi RPC command failed");
+      return failRuntime(error, "Pi RPC command failed", "process");
     }
     return [];
   }
@@ -559,7 +563,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     const event = line.assistantMessageEvent && typeof line.assistantMessageEvent === "object" && !Array.isArray(line.assistantMessageEvent)
       ? line.assistantMessageEvent as Record<string, unknown>
       : {};
-    if (String(event.type ?? "") === "error") return fail(textFrom(event.error ?? event.message) ?? "Pi assistant message failed");
+    if (String(event.type ?? "") === "error") return fail(textFrom(event.error ?? event.message) ?? "Pi assistant message failed", "process");
     return piTextFromMessageEvent(line, state);
   }
   if (type === "message_end") {
@@ -579,7 +583,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     if (stopReason === "error" || stopReason === "aborted") {
       const raw = piMessageEndErrorRaw(line, message);
       const fallback = `Pi message ended: ${stopReason}`;
-      return failRuntime(raw ? `${fallback}: ${raw}` : undefined, fallback);
+      return failRuntime(raw ? `${fallback}: ${raw}` : undefined, fallback, stopReason === "aborted" ? "process" : undefined);
     }
     const text = piMessageText(message);
     const unseen = text ? unseenCompleteText(state, "text", text) : undefined;
@@ -591,12 +595,13 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
   }
   if (type === "agent_settled") {
     if (line.aborted === true) return fail("Pi agent aborted");
-    if (state.failed) return [{ type: "result", subtype: "error", is_error: true, result: state.errorDetail ?? "Pi runtime failed" }];
+    if (state.failed) return [{ type: "result", subtype: "error", is_error: true, result: state.errorDetail ?? "Pi runtime failed",
+      ...(state.runnerErrorSource ? { runnerErrorSource: state.runnerErrorSource } : {}) }];
     return [{ type: "agent_settled", session_id: state.sessionId, session_file: state.sessionFile, result: state.finalText ?? "" }];
   }
   if (type === "agent_end") return [{ type: "agent_end" }];
   if (type === "error" || type === "extension_error") {
-    return failRuntime(textFrom(line.error ?? line.message ?? line.errorMessage), "Pi runtime failed");
+    return failRuntime(textFrom(line.error ?? line.message ?? line.errorMessage), "Pi runtime failed", "process");
   }
   if (["tool_execution_start", "tool_execution_update", "tool_execution_end"].includes(type)) {
     const tool = line.toolCall && typeof line.toolCall === "object" && !Array.isArray(line.toolCall)
@@ -780,7 +785,7 @@ function decodeDsh(line: Record<string, unknown>, state: AdapterRuntimeState): R
     if (line.error && typeof line.error === "object") {
       const error = line.error as Record<string, unknown>;
       const raw = typeof error.message === "string" ? error.message : undefined;
-      return [runtimeErrorResult(raw, "DSH JSON-RPC request failed")];
+      return [{ ...runtimeErrorResult(raw, "DSH JSON-RPC request failed"), runnerErrorSource: "process" }];
     }
     if (line.id === state.dshInitializeRequestId) {
       const result = line.result && typeof line.result === "object" ? line.result as Record<string, unknown> : {};

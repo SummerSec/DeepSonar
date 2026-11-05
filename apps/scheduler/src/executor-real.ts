@@ -9,6 +9,7 @@ import {
   requireAgentCliRuntimeAdapter,
   runRealAgent,
   type ContextState,
+  type RealAgentResult,
 } from "@deepsonar/runtime-sandbox";
 import {
   DonePayload,
@@ -278,25 +279,15 @@ export function isSemanticAgentRunError(result: {
   return result.errorKind === "semantic" || result.error?.startsWith("语义事件处理失败:") === true;
 }
 
-/**
- * #913: a session whose terminal control event the host already accepted keeps finishing
- * (Pi asks for another model turn, the Gateway refuses because the completion is already
- * durable). That refusal means the conversation is over, not that the run failed —
- * failing it here is what dropped accepted Hub decisions and left the Canvas without a
- * Worker.
- *
- * Both shapes reach the runner: the machine code `COMPLETION_ALREADY_ACCEPTED` and the
- * 409 text from the two rejecting gates (`repair-token-budget` and `completion-receipt`),
- * which the CLI surfaces verbatim.
- */
+/** #913: only a structured completion refusal may settle an already accepted done. */
 const ACCEPTED_COMPLETION_REFUSAL =
-  /COMPLETION_ALREADY_ACCEPTED|completion (?:is )?already (?:durably )?accepted/i;
+  /^(?:Pi message ended: error: )?(?:409 )?(?:COMPLETION_ALREADY_ACCEPTED|Completion already accepted; reconcile its receipt|A completion is already durably accepted; read its receipt)$/i;
 
 export function acceptedCompletionSupersedesRunnerFailure(
-  result: { error?: string; errorKind?: "semantic" | "runner"; terminalOutcome?: "success" | "failure" },
+  result: Pick<RealAgentResult, "error" | "errorKind" | "terminalOutcome" | "runnerErrorSource">,
   hasAcceptedTerminal: boolean,
 ): boolean {
-  if (!hasAcceptedTerminal) return false;
+  if (!hasAcceptedTerminal || result.runnerErrorSource !== "structured_terminal") return false;
   if (!isFinalAgentRunnerError(result)) return false;
   return typeof result.error === "string" && ACCEPTED_COMPLETION_REFUSAL.test(result.error);
 }
@@ -1934,8 +1925,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   // Host semantic validation is fail-closed. A transient Provider/CLI error
   // may be superseded by an accepted terminal control event below.
   if (isSemanticAgentRunError(result)) throw reconstructAgentRunError(result.error ?? "语义事件处理失败", result.errorDetails);
-  // A final runner failure remains authoritative. Only a result explicitly
-  // marked as a later terminal success may carry a stale earlier error.
+  // A final runner failure remains authoritative unless its structured terminal
+  // refusal only reports that the host already accepted completion.
   if (acceptedCompletionSupersedesRunnerFailure(result, Boolean(semanticState.done))) {
     // Fall through: the accepted terminal settles below, exactly once.
   } else if (isFinalAgentRunnerError(result)) {
