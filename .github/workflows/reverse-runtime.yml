@@ -34,6 +34,8 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
       - ".dockerignore"
+      - ".github/ci/prepare-hosted-runner-disk.mjs"
+      - ".github/ci/prepare-hosted-runner-disk.test.mjs"
       - ".github/workflows/reverse-runtime.yml"
       - ".github/workflows/release.yml"
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
@@ -68,6 +70,8 @@ on:
       - "package.json"
       - "pnpm-lock.yaml"
       - ".dockerignore"
+      - ".github/ci/prepare-hosted-runner-disk.mjs"
+      - ".github/ci/prepare-hosted-runner-disk.test.mjs"
       - ".github/workflows/reverse-runtime.yml"
       - ".github/workflows/release.yml"
   workflow_dispatch:
@@ -143,6 +147,10 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      # docker save stages an uncompressed export in Docker data before gzip
+      # measures the real archive. Reserve space before dependencies and builds.
+      - name: Prepare hosted runner disk for Reverse runtime
+        run: node .github/ci/prepare-hosted-runner-disk.mjs
       - name: Install Job integration dependencies
         run: |
           pnpm install --frozen-lockfile

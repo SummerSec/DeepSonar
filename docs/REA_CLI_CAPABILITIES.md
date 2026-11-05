@@ -100,6 +100,8 @@ pnpm ci:images
 
 `.github/workflows/reverse-runtime.yml` 在 `ubuntu-24.04` / `ubuntu-24.04-arm` 分别从当前 checkout 构建 base 与 reverse，PR 不获取 registry 写凭据、不发布标签、不通过 QEMU 代替原生验证。release 的 `reverse-image-builds` 使用本次 `base-image` 输出的不可变 digest；缓存命中也必须执行相同真实门禁。
 
+构建前，两种原生 runner 均调用 `.github/ci/prepare-hosted-runner-disk.mjs`，只移除显式白名单中的预装 SDK；GitHub-hosted 检查、workspace 与 Docker 数据保护保持有效。该步骤为 `docker save` 暂存未压缩镜像腾出空间，压缩体积仍由真实导出流测量，原有体积预算与失败门禁不变。脚本及其安全回归变更会触发本专项；最终 SHA 的实际运行证据另行核验。
+
 - 官方 Ghidra 12.1.4 PUBLIC zip 没有 Linux arm64 decompiler。arm64 builder 从同一个 SHA-256 校验过的 zip 的 bundled C++ 源码运行 `ghidra_opt` 原生构建；不运行 Gradle 下载、不回退到其它版本。最终镜像不包含编译对象和构建工具；ELF64 machine header 与宿主架构都必须匹配。
 - REA 的下载 tarball 本身校验固定 SHA-512 integrity，安装后的 lock entry 再核对；仅比较 `npm view` 元数据不算完整性验证。Node engines 与完整 JDK 21 在构建和运行期校验。
 - `agent-harness/reverse-native-smoke.mjs` 在真实 OCI 内运行公开源代码编译的 ELF / `.so` / PE（PE 只静态解析、不执行），覆盖首期八种 CLI 命令、函数 dossier 与有界 view/trace，执行环境检查与离线手册校验。

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import {
   REMOVABLE_PATHS,
@@ -104,4 +105,47 @@ test("cleanup failures still run after diagnostics and report the allowlisted pa
     new RegExp(`failed: remove ${REMOVABLE_PATHS[0].replaceAll("/", "\\/")}`),
   );
   assert.equal(calls.filter((call) => call.command === "df").length, 2);
+});
+
+const reverseWorkflow = readFileSync(new URL("../workflows/reverse-runtime.yml", import.meta.url), "utf8");
+
+test("Reverse matrix prepares disk before installs, builds and measured native smoke", () => {
+  const job = reverseWorkflow.split("  reverse-runtime-images:\n")[1];
+  assert.ok(job, "native acceptance job must exist");
+  assert.match(job, /runner: ubuntu-24\.04\n/);
+  assert.match(job, /runner: ubuntu-24\.04-arm\n/);
+  const steps = job.split(/\n      - /).slice(1);
+  const prep = steps.filter((step) => step.includes("run: node .github/ci/prepare-hosted-runner-disk.mjs"));
+  assert.equal(prep.length, 1, "both architectures share exactly one disk preparation step");
+  assert.doesNotMatch(prep[0], /if:|continue-on-error:|--dry-run|DISK_PREP_DRY_RUN|\|\|/);
+  assert.match(prep[0], /run: node \.github\/ci\/prepare-hosted-runner-disk\.mjs\s*$/);
+  const prepIndex = steps.indexOf(prep[0]);
+  for (const marker of ["actions/checkout@", "actions/setup-node@"]) {
+    const index = steps.findIndex((step) => step.includes(marker));
+    assert.ok(index >= 0 && index < prepIndex, `${marker} must precede disk preparation`);
+  }
+  for (const marker of [
+    "pnpm install --frozen-lockfile",
+    "sudo apt-get update",
+    "Build current native base",
+    "Build native Reverse runtime",
+    "node agent-harness/reverse-native-smoke.mjs",
+  ]) {
+    const index = steps.findIndex((step) => step.includes(marker));
+    assert.ok(index > prepIndex, `${marker} must follow disk preparation`);
+  }
+});
+
+test("Reverse PR and main path filters include disk preparation and its safety regressions", () => {
+  for (const event of ["pull_request", "push"]) {
+    const block = reverseWorkflow.split(`  ${event}:\n`)[1]?.split(/\n  [a-z_]+:/)[0];
+    assert.ok(block, `${event} trigger must exist`);
+    for (const file of ["prepare-hosted-runner-disk.mjs", "prepare-hosted-runner-disk.test.mjs"]) {
+      assert.ok(block.includes(`      - ".github/ci/${file}"`), `${event} must cover ${file}`);
+    }
+  }
+  const ci = readFileSync(new URL("../workflows/ci.yml", import.meta.url), "utf8");
+  const docsJob = ci.split("  docs-freshness:\n")[1]?.split(/\n  [a-z][\w-]*:/)[0];
+  assert.ok(docsJob?.includes("run: node --test .github/ci/prepare-hosted-runner-disk.test.mjs"),
+    "disk safety and wiring regressions must run even on Draft PRs");
 });

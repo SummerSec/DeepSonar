@@ -2,8 +2,8 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// These are preinstalled SDK/toolchain trees that the Chrome Fuzz Docker build
-// does not consume. Keep this list explicit: workspace, runner, and Docker
+// These are preinstalled SDK/toolchain trees that the Chrome Fuzz and Reverse Docker builds
+// do not consume. Keep this list explicit: workspace, runner, and Docker
 // state must never be selected dynamically for deletion.
 export const REMOVABLE_PATHS = Object.freeze([
   "/usr/local/lib/android",
