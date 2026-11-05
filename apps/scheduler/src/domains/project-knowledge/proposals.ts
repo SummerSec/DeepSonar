@@ -2,7 +2,7 @@ import type { ProposeProjectKnowledgePayload } from "@deepsonar/shared-types";
 import { requireKnowledgeCasePolicy } from "./case-policy.js";
 import type { KnowledgeActor } from "./inputs.js";
 import { registerKnowledgeBlob } from "./blobs.js";
-import { canonical, reject, sha256, type KnowledgeDb } from "./types.js";
+import { canonical, KnowledgeOperationError, reject, sha256, type KnowledgeDb } from "./types.js";
 
 export interface PreparedCandidate { hash: string; bytes: number }
 
@@ -13,7 +13,7 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
     WHERE a.job_id=${actor.jobId} AND a.project_id=${actor.projectId} AND a.work_id=${input.work_ref} FOR UPDATE OF w`;
   if (!assignment || assignment.stage !== "maker" || assignment.state !== "running" || assignment.work_stage !== "maker" || assignment.active_job_id !== actor.jobId)
     return reject("KNOWLEDGE_SCOPE_DENIED", "Maker assignment does not own this active work");
-  if (assignment.governance_hash !== governanceHash) return reject("KNOWLEDGE_BASE_CONFLICT", "Governance baseline changed");
+  if (assignment.governance_hash !== governanceHash) throw new KnowledgeOperationError("KNOWLEDGE_BASE_CONFLICT", "Governance baseline changed", "permanent_failure", "Stop this knowledge work and report the governance baseline change to Scheduler; input correction cannot replace the frozen governance grant.");
   if (Number(assignment.job_count) > 32 || Number(assignment.run_seconds) > 1800 || Number(assignment.revision_count) > 2)
     return reject("KNOWLEDGE_BUDGET_EXHAUSTED", "Knowledge work budget is exhausted");
   let parentCandidateVersion: string | null = null;

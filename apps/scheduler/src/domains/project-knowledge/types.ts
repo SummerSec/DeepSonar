@@ -4,17 +4,28 @@ import type { sql } from "../../db.js";
 
 export type KnowledgeDb = typeof sql;
 export type KnowledgeRow = Record<string, unknown>;
+const STOP_ACTIONS: Readonly<Record<string, string>> = {
+  KNOWLEDGE_JOB_INACTIVE: "Stop this operation; the Job or Attempt is inactive. Scheduler must determine whether a governed recovery is permitted.",
+  KNOWLEDGE_SCOPE_DENIED: "Stop this operation; the current Job grant does not authorize it. Report the scope blocker without changing permissions or retrying the same request.",
+  KNOWLEDGE_REVOKED: "Stop using this version or source; its authorization is unavailable or revoked. Do not replay the request or bypass the frozen Job scope.",
+  KNOWLEDGE_SNAPSHOT_INVALID: "Stop this operation and report the invalid frozen snapshot to Scheduler; the Agent cannot repair or replace the Job snapshot.",
+  KNOWLEDGE_BUDGET_EXHAUSTED: "Stop this knowledge work and report its exhausted budget; do not create a new request to reset the budget.",
+  KNOWLEDGE_CATALOG_LIMIT: "Stop and report the frozen catalog size blocker to Scheduler; changing tool input cannot reduce the snapshot.",
+  KNOWLEDGE_SUGGESTION_CATALOG_LIMIT: "Stop and report the authorized catalog size blocker to Scheduler; do not bypass the bounded read budget.",
+  KNOWLEDGE_IDEMPOTENCY_CONFLICT: "Stop this conflicting operation and report the conflict to Scheduler; do not assume this request has a receipt or change keys to replay an accepted or unknown effect.",
+};
+
 export class KnowledgeOperationError extends Error {
   constructor(
     public readonly error_code: string,
     message: string,
-    public readonly category: RepairFeedbackCategory = "model_correctable",
-    public readonly next_action = "Re-read the current work and correct the request",
+    public readonly category: RepairFeedbackCategory = STOP_ACTIONS[error_code] ? "permanent_failure" : "model_correctable",
+    public readonly next_action = STOP_ACTIONS[error_code] ?? "Re-read the current authorized state, correct the input, and submit with a new Idempotency-Key while this Job and Attempt remain active",
     public readonly path?: string,
   ) { super(message); this.name = "KnowledgeOperationError"; }
 }
 export const reject = (code: string, message: string, path?: string): never => {
-  throw new KnowledgeOperationError(code, message, "model_correctable", "Re-read the current state and submit a corrected request", path);
+  throw new KnowledgeOperationError(code, message, undefined, undefined, path);
 };
 export function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;

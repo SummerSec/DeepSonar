@@ -56,7 +56,11 @@ export function createKnowledgeRuntime(input: { db: KnowledgeDb; governanceHash:
       if (error instanceof KnowledgeOperationError || error instanceof JobSkillCatalogError) {
         throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", error.message, {
           statusCode: error instanceof JobSkillCatalogError ? 409 : 422,
-          errorCode: error.error_code, retryable: !(error instanceof JobSkillCatalogError),
+          errorCode: error.error_code,
+          retryable: error instanceof KnowledgeOperationError && error.category === "transient_retryable",
+          category: error instanceof KnowledgeOperationError ? error.category : "permanent_failure",
+          next_action: error instanceof KnowledgeOperationError ? error.next_action
+            : "Stop Skill access and report the frozen catalog failure to Scheduler; do not replace the snapshot or bypass its authorization.",
           ...(error instanceof KnowledgeOperationError && error.path ? { path: error.path } : {}),
         });
       }

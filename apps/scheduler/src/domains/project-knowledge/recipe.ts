@@ -1,7 +1,7 @@
 import type { KnowledgeInputManifestEntry } from "@deepsonar/shared-types";
 import type { KnowledgeActor } from "./inputs.js";
 import { readKnowledgeVersionContent } from "./blobs.js";
-import { canonical, reject, sha256, type KnowledgeDb } from "./types.js";
+import { canonical, KnowledgeOperationError, reject, sha256, type KnowledgeDb } from "./types.js";
 
 export const GOVERNOR_LOGICAL_KEY = "deepsonar/project-knowledge-governor";
 
@@ -23,7 +23,7 @@ export async function frozenGovernorRecipe(db: KnowledgeDb, actor: KnowledgeActo
   if (!row) return reject("KNOWLEDGE_REVOKED", "Frozen project governor recipe is revoked");
   const candidate = await readKnowledgeVersionContent(db, String(entry.version_id));
   if (candidate.kind !== "skill" || candidate.logical_key !== GOVERNOR_LOGICAL_KEY)
-    return reject("KNOWLEDGE_HASH_MISMATCH", "Governor recipe identity differs from frozen entry");
+    throw new KnowledgeOperationError("KNOWLEDGE_HASH_MISMATCH", "Governor recipe identity differs from frozen entry", "permanent_failure", "Stop using this frozen content and report its integrity failure to Scheduler; changing the requested hash cannot repair stored evidence.");
   return { input_ref: `governor:${entry.version_id}`, kind: "candidate", project_id: actor.projectId,
     content_hash: String(entry.hash), blob_hash: String(entry.hash), bytes: Number(row.bytes),
     audience: ["maker", "evaluator", "reviewer"] };

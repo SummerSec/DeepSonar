@@ -131,7 +131,7 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
       const inputDigest = sha256(canonical(input));
       const [existing] = await db`SELECT operation,input_digest,result_json FROM project_knowledge_receipts WHERE job_id=${actor.jobId} AND idempotency_key=${key}`;
       if (existing) {
-        if (existing.operation !== operation || existing.input_digest !== inputDigest) return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key has a different operation or input");
+        if (existing.operation !== operation || existing.input_digest !== inputDigest) throw new KnowledgeOperationError("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key has a different operation or input", "model_correctable", "This key already owns a knowledge receipt. If authorized, use get_knowledge_receipt with the original idempotency_key to reconcile it; otherwise report the conflict to Scheduler. Do not change keys to replay an accepted or unknown effect.");
         return existing.result_json as Record<string, unknown>;
       }
       const suggestions = operation === "record_skill_choice" ? await prepareSkillSuggestions(db, actor) : undefined;
@@ -166,9 +166,9 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
         // The ingestion transaction already owns the Job lock. An earlier read
         // outside this boundary cannot reserve a key against concurrent completion.
         const [revision] = await tx`SELECT id FROM events WHERE event_id=${key} AND type='plan' AND payload_json ? 'revision'`;
-        if (revision) return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key belongs to a Plan revision");
+        if (revision) throw new KnowledgeOperationError("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key belongs to a Plan revision", "permanent_failure", "Stop this knowledge proposal; the key belongs to a Plan revision, not a knowledge receipt. Preserve the original Plan request and report its key ownership conflict to Scheduler; do not replay with a new key.");
         if (await readControlReceiptByKey(tx, jobId, key)) {
-          return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key belongs to a control receipt");
+          throw new KnowledgeOperationError("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key belongs to a control receipt", "permanent_failure", "Stop this knowledge proposal; the key belongs to a control receipt, not a knowledge receipt. Preserve the original control request and report its key ownership conflict to Scheduler; do not replay with a new key.");
         }
         const [current] = await tx`SELECT lease_expires_at,agent_snapshot_json FROM jobs WHERE id=${jobId}`;
         if (!current || !current.lease_expires_at || new Date(current.lease_expires_at as string).getTime() <= Date.now()) return reject("KNOWLEDGE_JOB_INACTIVE", "Job lease expired");
@@ -199,8 +199,8 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
       }, { maxPayloadBytes: 180 * 1024 });
       await ingestion.ingestEvent(actor.jobId, { v: 1, event_id: eventId, type: "knowledge", payload: { operation: operation as never, input } });
       const [settled] = await db`SELECT operation,input_digest,result_json FROM project_knowledge_receipts WHERE job_id=${actor.jobId} AND idempotency_key=${key}`;
-      if (!settled) return reject("KNOWLEDGE_RECEIPT_MISSING", "Knowledge event has no durable settlement");
-      if (settled.operation !== operation || settled.input_digest !== inputDigest) return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key has a different operation or input");
+      if (!settled) throw new KnowledgeOperationError("KNOWLEDGE_RECEIPT_MISSING", "Knowledge event has no durable settlement", "unknown_external_effect", "Stop automatic replay and preserve the original Idempotency-Key; ask Scheduler to reconcile the durable event and receipt before submitting another proposal.");
+      if (settled.operation !== operation || settled.input_digest !== inputDigest) throw new KnowledgeOperationError("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Idempotency key has a different operation or input", "model_correctable", "This key already owns a knowledge receipt. If authorized, use get_knowledge_receipt with the original idempotency_key to reconcile it; otherwise report the conflict to Scheduler. Do not change keys to replay an accepted or unknown effect.");
       return settled.result_json as Record<string, unknown>;
     },
   };

@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-03
+> 同步日期：2026-11-05
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
@@ -108,7 +108,7 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 当前已落地的是第一刀：内置 pack、已信任 Git skill module、RoleConfig 生成只读目录投影；Job 级只读发现操作为 `list_capabilities`、`search_capabilities`、`describe_capability`、`validate_composition`、`preview_materialization`。现有 `explore`、`analyze`、`review`、`test`、`code`、`audit` 作为内置 pack 继续工作，`deepsonar-management` 也可以作为平台能力包被发现。
 Agent 运行中拉取业务 Skill 使用 `list_available_skills`、`search_skills`、`pull_skill`；这些操作返回并校验具体模块文件，但不改变 Job 的平台权限边界。
 
-#752 项目 Memory / Skill 有不可变版本、独立评测审查和持久 receipt/work。平台发现 Skill 指导搜索和使用，Scheduler 管理权限；项目 Skill 默认私有，来源项目可授权精确版本，授权不包含来源 Memory/Evidence 或未来版本。Job 冻结目录与实时撤销取交集，禁用后重启用不恢复旧 Job 权限。试验按 case×arm 分配独立标准 Job 与最小输入，不接业务 Hub/Report。实现、预算、管理 API 与验收边界见 [项目知识](docs/PROJECT_KNOWLEDGE.md)。
+#752 项目 Memory / Skill 有不可变版本、独立评测审查和持久 receipt/work。平台发现 Skill 指导搜索和使用，Scheduler 管理权限；项目 Skill 默认私有，来源项目可授权精确版本，授权不包含来源 Memory/Evidence 或未来版本。Job 冻结目录与实时撤销取交集，禁用后重启用不恢复旧 Job 权限。试验按 case×arm 分配独立标准 Job 与最小输入，不接业务 Hub/Report。实现、预算、管理 API 与验收边界见 [项目知识](docs/PROJECT_KNOWLEDGE.md)。 Knowledge/Skill 拒绝在领域、runtime 和 Control 工具反馈间保留分类与行动建议；可修正输入与生命周期/权限失效分开，见[反馈切片边界](docs/PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。
 
 发现不是授权。Scheduler 仍按项目范围、Job 快照、平台工具 allowlist、镜像兼容性和网络策略决定可执行集合。模型不能用 Manifest 扩大 `platform_tools`、凭据、镜像、`allow_egress` 或项目范围。
 

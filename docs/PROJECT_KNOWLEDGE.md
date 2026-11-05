@@ -1,6 +1,6 @@
 # 项目 Memory 与 Skill
 
-> 状态：#752 实现；同步日期：2026-10-21。代码、schema v61 和测试是事实入口。模型效果与生产试验结果需要独立记录，不能由状态机夹具推定。
+> 状态：#752 实现；同步日期：2026-11-05（本次核对拒绝反馈切片）。代码、[schema 基线](../database/schema.sql)和测试是事实入口。模型效果与生产试验结果需要独立记录，不能由状态机夹具推定。
 
 项目知识分为 Memory（有来源的简短事实）和 Skill（触发条件、步骤、输入输出、不适用边界）。两者有稳定身份、不可变版本和 active 指针。草稿、候选和评测资料不进入普通 Job 目录。
 
@@ -38,6 +38,19 @@ project、Job、Attempt、actor 和 assignment 均由平台推导，不接受请
 `read_knowledge_input` 每页最多 12 KiB UTF-8，返回 `content_fragment`、`encoding=json-utf8` 与 `next_cursor`。保持相同 work/input/hash 读取后续页，拼接后解析 JSON；每页仍重新检查 assignment、audience 和版本撤销。大输入在读取 CAS 前按元数据拒绝，不能用 cursor 读取其他工作或版本。
 
 控制 token 终态失效。历史回执通过 `GET /projects/:id/knowledge/receipts?job_id=...` 或 receipt 详情，以项目管理身份读取；不会为查回执延长执行 token。动态目录读取不使用进程内结果缓存，避免旧成功响应绕过撤销。
+
+## Knowledge/Skill 拒绝反馈（#903 切片）
+
+知识领域拒绝沿 `KnowledgeOperationError` → `PlatformRuntimeHandlerError` → Control HTTP 的既有 `RepairFeedback` 返回；保留稳定 `code`、`category`、可选字段 `path` 和领域 `next_action`，不在 runtime/HTTP 边界仅按 422 重新推断为可修正。Agent 工具响应消费同一反馈，不建立平行错误协议。
+
+- 当前授权与执行仍合法的输入错误保留 `model_correctable`，指向读取当前允许状态并修正输入。`retryable=false` 不妨碍按反馈提交合法修正，但不授权原样自动重放；幂等冲突按归属给出指引：仅已存在的 knowledge key/payload 冲突建议在有权限时读取原 knowledge 回执；Plan/control key 冲突停止并报告原请求归属；usage 身份或已接受 feedback 冲突停止且不覆盖原记录，不假定本次 key 存在回执，不能笼统换 key。`retryable=true` 只用于明确的 `transient_retryable`。
+- Job/Attempt 不再活动、operation/scope/assignment 无权限及版本/授权撤销属于 `permanent_failure`，`retryable=false`。行动指引要求停止该调用，由既有管理或恢复入口处理；改参数、换 key、重新启用源均不能复活旧执行权限。
+- 全局 Skill 目录的快照缺失、撤权或完整性失败继续 fail closed；治理冻结基线变化、已冻结知识正文/治理方法/建议候选的完整性失败也为 `permanent_failure`，与可修正的请求 hash 错误分开。
+- 事件提交后缺少持久结算回执返回 `unknown_external_effect`、`retryable=false`：保留原 key，交 Scheduler 对账事件和回执，不能自动重放或另开提案。
+
+外层 token、Job active 和 allowlist 准入可能先拒绝请求。域/adapter 单元契约与实际 HTTP 可达拒绝分别验证，不能把直接调用 adapter 视为终态请求已通过 HTTP 准入。知识单元与集成入口为 `pnpm ci:unit:project-knowledge` 和 `pnpm ci:integration:project-knowledge`，已由 `.github/workflows/ci.yml` 调用。离线/fake 上游和隔离数据库回归仅证明工程反馈链，不证明真实模型会理解并完成修正；最终执行结果以对应 SHA 的 GitHub Actions 为准。
+
+本切片不改变鉴权、lease/Attempt fencing、预算、幂等或未知效果门；跨 Attempt 新执行代际、Recovery Hub ownership、完成门和 Web 恢复投影仍属 #903 后续范围。
 
 ## 工作与结算
 

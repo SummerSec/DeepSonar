@@ -7,7 +7,7 @@ export async function enqueueKnowledgeWork(tx: KnowledgeDb, input: {
   actor: KnowledgeActor; governanceHash: string; trigger: unknown; manifest: KnowledgeInputManifestEntry[]; recipe?: KnowledgeInputManifestEntry; reason: string;
 }): Promise<string> {
   const manifest = input.recipe ? [...input.manifest, input.recipe] : input.manifest;
-  if (manifest.length > 20) return reject("KNOWLEDGE_BUDGET_EXHAUSTED", "Too many source and recipe inputs");
+  if (manifest.length > 20) return reject("KNOWLEDGE_INPUT_TOO_LARGE", "Too many source and recipe inputs");
   if (input.recipe) {
     const versionId = input.recipe.input_ref.slice("governor:".length);
     const [version] = await tx`SELECT id FROM project_knowledge_versions WHERE id=${versionId}

@@ -1,4 +1,4 @@
-import { reject, type KnowledgeDb } from "./types.js";
+import { KnowledgeOperationError, reject, type KnowledgeDb } from "./types.js";
 import { approvedKnowledgeVersion } from "./grant-policy.js";
 
 export async function recordKnowledgeUsage(tx: KnowledgeDb, input: {
@@ -28,6 +28,6 @@ export async function recordKnowledgeUsage(tx: KnowledgeDb, input: {
   const [existing] = await tx`SELECT id,owner_project_id,version_id FROM project_knowledge_usages WHERE job_id=${input.jobId}
     AND attempt_id=${input.attemptId} AND selector=${input.selector} AND content_sha256=${input.contentHash}`;
   if (!existing || existing.owner_project_id !== (input.ownerProjectId ?? null) || existing.version_id !== (input.versionId ?? null))
-    return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Usage identity changed for same pull");
+    throw new KnowledgeOperationError("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Usage identity changed for same pull", "permanent_failure", "Stop this pull and report the usage identity conflict to Scheduler. Preserve the existing usage identity; usage is deduplicated by Job, Attempt, selector and hash, not this HTTP key. Do not change keys to replay the pull or assume a receipt exists.");
   return String(existing.id);
 }

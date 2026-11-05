@@ -1,3 +1,5 @@
+import type { RepairFeedbackCategory } from "@deepsonar/shared-types";
+
 /**
  * Process-local bridge between a running Agent Job and the Platform Tool API.
  *
@@ -37,6 +39,9 @@ export interface PlatformOperationRejection {
   statusCode: 409 | 422 | 429;
   errorCode: string;
   retryable: boolean;
+  /** Trusted domain feedback; never populated from Agent input or rejection details. */
+  category?: RepairFeedbackCategory;
+  next_action?: string;
   path?: string;
   details?: Record<string, unknown>;
 }

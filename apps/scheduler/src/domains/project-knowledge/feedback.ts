@@ -1,7 +1,7 @@
 import type { RecordKnowledgeFeedbackPayload, KnowledgeInputManifestEntry } from "@deepsonar/shared-types";
 import type { KnowledgeActor } from "./inputs.js";
 import { enqueueKnowledgeWork } from "./requests.js";
-import { canonical, reject, type KnowledgeDb } from "./types.js";
+import { canonical, KnowledgeOperationError, reject, type KnowledgeDb } from "./types.js";
 
 export async function validateFeedbackUsage(db: KnowledgeDb, actor: KnowledgeActor, usageRef: string): Promise<void> {
   const [usage] = await db`SELECT u.id,u.version_id,u.owner_project_id,u.content_sha256,v.revoked_at,v.content_sha256 AS version_hash
@@ -21,7 +21,7 @@ export async function recordKnowledgeFeedback(tx: KnowledgeDb, actor: KnowledgeA
   const [usage] = await tx`SELECT feedback_json FROM project_knowledge_usages WHERE id=${input.usage_ref} FOR UPDATE`;
   if (!usage) return reject("KNOWLEDGE_SCOPE_DENIED", "Usage is unavailable");
   if (usage.feedback_json && canonical(usage.feedback_json) !== canonical(feedback))
-    return reject("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Usage already has different feedback");
+    throw new KnowledgeOperationError("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Usage already has different feedback", "permanent_failure", "Stop this feedback submission; this usage already has accepted feedback that cannot be overwritten. Preserve the original feedback and its request; this rejected request need not have a receipt. Do not change keys to replay or replace accepted feedback.");
   if (!usage.feedback_json) await tx`UPDATE project_knowledge_usages SET feedback_json=${tx.json(feedback)} WHERE id=${input.usage_ref}`;
   const workRef = await enqueueKnowledgeWork(tx, { actor, governanceHash,
     trigger: { usage_ref: input.usage_ref, feedback }, manifest, recipe, reason: input.reason });
