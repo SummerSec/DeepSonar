@@ -87,7 +87,7 @@ OM 响应不再由 Gateway 缓冲后换成结算错误。受审 [wrapper](../age
 
 [provider HTTP 集成](../apps/scheduler/src/gateway-provider-headers.integration.test.ts)分别改变路由、provider 头、model 头，要求旧 token 被拒且两个合成目标均无新增请求；另以相同目标和原始 body 对照指定业务头存在时成功、缺失时上游返回 429，并区分本地额度耗尽的 429 零出站。这只证明合成 fixture 的路由与透明错误行为，不证明现场 TPM/RPM 原因或问题已解决。
 
-`ci:integration:om-provider-headers` 的[真实创建与 launch 专项](../agent-harness/opensandbox/om-provider-headers.e2e.ts)由 [Reverse 工作流](../.github/workflows/reverse-runtime.yml)的原生双架构环境执行，复用隔离 PostgreSQL、固定 OpenSandbox 和本提交构建的 base 镜像。被测 Pi 子 Job 必须经 Hub `submit_hub_decision` Control API 正式创建、冻结并由 Dispatcher 启动，真实 Pi/OM 读取物化配置后通过实际 Gateway 向 loopback 合成上游发送所选 provider/model 头。SQL 配置准备不替代被测 Job 创建，手工 SDK 请求与 boundary-unit double 不计入本专项证据。新增入口尚待精确 SHA Actions；创建链也不替代 #903 的跨 Attempt 恢复联合验收。
+`ci:integration:om-provider-headers` 的[真实创建与 launch 专项](../agent-harness/opensandbox/om-provider-headers.e2e.ts)由 [Reverse 工作流](../.github/workflows/reverse-runtime.yml)的原生双架构环境执行，复用隔离 PostgreSQL、固定 OpenSandbox 和本提交构建的 base 镜像。被测 Pi 子 Job 必须经 Hub `submit_hub_decision` Control API 正式创建、冻结并由 Dispatcher 启动，真实 Pi/OM 读取物化配置后通过实际 Gateway 向 loopback 合成上游发送所选 provider/model 头。SQL 配置准备不替代被测 Job 创建，手工 SDK 请求与 boundary-unit double 不计入本专项证据。专项逐请求对照合成响应的 input/output/total usage，显式核对账本、token、Attempt、effect 的 Job 归属。真实 `record_observations` 成功回执与当前会话原生 `recall` 的合成来源正文核验分开记录，报告不输出记忆或来源原文。锁定 OM 的 recall 模型可见结果只有来源正文，不含 observation 原文或显式来源 ID；专项不宣称独立读取持久 observation 原文或证明跨进程重启持久性，也不扩大平台 Session 导出的脱敏边界。新增入口尚待精确 SHA Actions；创建链也不替代 #903 的跨 Attempt 恢复联合验收。
 
 端到端回归另外对照不受模型观测限制的无效 JSON 原始字节，并检查业务头/body 携带 Job token 时出站前拒绝、响应头回显绑定 key 时断开，以及跨 chunk 明文 key 回显不完整送达。慢消费者用例证明字节完整性，不证明进程内存上界；gzip/deflate/br 的回显防护由响应守卫及相关合成回归覆盖范围单独核对，任意业务编码/变换后的 key 回显不在保证内。新增用例尚未在本地执行，须以该提交的 Actions 结果验收。
 

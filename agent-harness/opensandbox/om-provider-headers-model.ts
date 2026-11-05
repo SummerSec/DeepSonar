@@ -1,6 +1,7 @@
 /** Deterministic provider only. Pi, OM, SDK, Gateway and launch remain production. */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { createHash } from "node:crypto";
 
 export const OM_HEADERS_MODEL = "om-headers-selected";
 export const OM_HEADERS_PROVIDER = "selected";
@@ -12,6 +13,12 @@ export async function startOmHeaderModel() {
   const errors: string[] = [];
   let observed = false;
   let completionAllowed = false;
+  let omSequence = 0;
+  let recallCallId: string | undefined;
+  let recalled = false;
+  let recallResultSha256: string | null = null;
+  const sourcePrefix = Array.from({ length: 8 }, (_, i) => `OM_HEADER_SOURCE_${i} ${createHash("sha256").update(String(i)).digest("hex")}`).join("\n");
+  let expectedObservation: { id: string; content: string; source: string } | undefined;
   let mainCalls = 0;
   let completionSent = false;
   const server = createServer(async (req, res) => {
@@ -32,23 +39,36 @@ export async function startOmHeaderModel() {
       assert.ok(calls.length < 40, "bounded offline model request count exceeded");
       const transcript = JSON.stringify(body.messages ?? []);
       const inputTokens = Math.max(1, Math.ceil(Buffer.byteLength(transcript) / 4));
-      calls.push({ stage, inputTokens, outputTokens: 32, totalTokens: inputTokens + 32, model: body.model, providerHeader: String(req.headers["x-fixture-provider"]),
+      // Unique response usage identifies each actual OM exchange independently
+      // of concurrent request arrival, finish order, or database timestamps.
+      const outputTokens = stage === "main" ? 32 : 32 + ++omSequence;
+      calls.push({ stage, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, model: body.model, providerHeader: String(req.headers["x-fixture-provider"]),
         modelHeader: String(req.headers["x-fixture-model"]), requestId: typeof req.headers["x-deepsonar-request-id"] === "string" ? req.headers["x-deepsonar-request-id"] : null });
       const messages = body.messages ?? [];
       let tool: { name: string; arguments: Record<string, unknown> } | undefined;
       if (stage === "observer") {
         const toolResult = messages.some((message: any) => message.role === "tool");
         if (!toolResult) {
-          const source = transcript.match(/Source entry id: ([^\]\\\s]+)/u)?.[1];
-          assert.ok(source, "canonical OM observer must provide an actual source entry id");
+          const observerText = messages.map((message: any) => typeof message.content === "string" ? message.content
+            : (message.content ?? []).filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n")).join("\n");
+          const sources = [...observerText.matchAll(/\[Source entry id: ([^\]\s]+)\]([\s\S]*?)(?=\[Source entry id:|$)/gu)];
+          const selected = sources.find(entry => entry[2]!.includes(sourcePrefix)) ?? sources[0];
+          assert.ok(selected, "canonical OM observer must provide an actual source entry id");
+          const source = selected[1]!;
+          const content = `Offline header acceptance retained observation number ${calls.length}.`;
+          // Canonical OM 3.1.4 hashes observation content into this identity.
+          // Only the real record_observations tool writes the native store.
+          if (selected[2]!.includes(sourcePrefix)) expectedObservation ??= {
+            id: createHash("sha256").update(content).digest("hex").slice(0, 12), content, source,
+          };
           tool = { name: "record_observations", arguments: { observations: [{ timestamp: "2026-11-05 12:00",
-            content: `Offline header acceptance retained source ${source}.`, relevance: "high", sourceEntryIds: [source] }] } };
+            content, relevance: "high", sourceEntryIds: [source] }] } };
         } else {
           const results = messages.filter((message: any) => message.role === "tool").map((message: any) =>
             typeof message.content === "string" ? message.content : JSON.stringify(message.content)).join("\n");
           assert.match(results, /Recorded [1-9][0-9]* new observations?/u, "canonical observer must actually record a source-backed observation");
           assert.doesNotMatch(results, /rejected/iu, "rejected observations cannot satisfy acceptance");
-          observed = true;
+          if (expectedObservation && transcript.includes(expectedObservation.content)) observed = true;
         }
       } else if (stage === "reflector") {
         if (!messages.some((message: any) => message.role === "tool")) {
@@ -59,6 +79,18 @@ export async function startOmHeaderModel() {
       } else {
         mainCalls++;
         const bash = names.find((name: string) => name.toLowerCase() === "bash");
+        if (recallCallId && !recalled) {
+          const result = messages.find((message: any) => message.role === "tool" && message.tool_call_id === recallCallId);
+          assert.ok(result, "real Pi must return the requested recall tool result before another main request");
+          const resultText = typeof result.content === "string" ? result.content : JSON.stringify(result.content);
+          assert.ok(expectedObservation);
+          // Native recall exposes SOURCE text to the model; observation prose
+          // and sourceEntryIds live in details, not in OpenAI tool.content.
+          assert.ok(resultText.includes(sourcePrefix), "real recall by recorded observation id must resolve the known synthetic source prefix");
+          assert.match(resultText, /\[Tool result: bash @ /u);
+          recallResultSha256 = createHash("sha256").update(resultText).digest("hex");
+          recalled = true;
+        }
         if (mainCalls === 1) {
           assert.ok(bash, "installed Pi must expose its real bash tool");
           // Fits Pi's normal 50 KiB tool-output limit while exceeding OM's
@@ -67,7 +99,12 @@ export async function startOmHeaderModel() {
         } else if (!completionAllowed) {
           assert.ok(bash);
           tool = { name: bash, arguments: { command: "sleep 1" } };
-        } else if (observed && !completionSent) {
+        } else if (!recallCallId) {
+          assert.ok(expectedObservation); assert.ok(names.includes("recall"), "canonical OM must register its real recall tool");
+          recallCallId = `offline-tool-${calls.length}`;
+          completionAllowed = false;
+          tool = { name: "recall", arguments: { id: expectedObservation.id } };
+        } else if (observed && recalled && !completionSent) {
           assert.ok(bash); completionSent = true;
           const program = ["import json,os,urllib.request,uuid",
             "url=os.environ['DEEPSONAR_API_BASE_URL'].rstrip('/')+'/operations/mark_job_done'",
@@ -87,7 +124,7 @@ export async function startOmHeaderModel() {
       if (tool) chunk({ tool_calls: [{ index: 0, id: `offline-tool-${calls.length}`, type: "function",
         function: { name: tool.name, arguments: JSON.stringify(tool.arguments) } }] });
       else chunk({ content: "Offline provider-header acceptance turn complete." });
-      chunk({}, tool ? "tool_calls" : "stop", { prompt_tokens: inputTokens, completion_tokens: 32, total_tokens: inputTokens + 32 });
+      chunk({}, tool ? "tool_calls" : "stop", { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: inputTokens + outputTokens });
       res.end("data: [DONE]\n\n");
     } catch (error) {
       // Do not put request bodies or authentication values in public artifacts.
@@ -99,6 +136,11 @@ export async function startOmHeaderModel() {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert.ok(address && typeof address !== "string");
   return { url: `http://127.0.0.1:${address.port}`, calls, errors, observed: () => observed,
+    recallEvidence: () => ({ current_session_read_verified: recalled, successful_reads: recalled ? 1 : 0,
+      verified_source_prefix_sha256: recalled ? createHash("sha256").update(sourcePrefix).digest("hex") : null,
+      recall_result_sha256: recallResultSha256,
+      observation_content_sha256: recalled && expectedObservation ? createHash("sha256").update(expectedObservation.content).digest("hex") : null,
+      does_not_prove: ["reading stored observation prose", "reading sourceEntryIds JSON", "cross-process restart persistence", "public content export"] }),
     allowCompletion: () => { assert.ok(observed); completionAllowed = true; },
     close: () => new Promise<void>((resolve, reject) => { server.closeAllConnections(); server.close(error => error ? reject(error) : resolve()); }) };
 }

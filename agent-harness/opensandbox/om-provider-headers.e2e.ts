@@ -11,7 +11,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { OM_HEADERS_MODEL, OM_HEADERS_PROVIDER, OM_HEADERS_SECRET, startOmHeaderModel } from "./om-provider-headers-model.js";
+import { OM_HEADERS_MODEL, OM_HEADERS_PROVIDER, OM_HEADERS_SECRET, startOmHeaderModel, type OmHeaderCall } from "./om-provider-headers-model.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const requireScheduler = createRequire(path.join(root, "apps/scheduler/package.json"));
@@ -29,29 +29,34 @@ let cancelChild: ((id: string) => Promise<unknown>) | undefined;
 let model: Awaited<ReturnType<typeof startOmHeaderModel>> | undefined;
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 try {
+  report.stage = "image-and-installed-runtime";
   for (const key of ["TEST_DATABASE_URL", "OPEN_SANDBOX_API_KEY", "OM_PROVIDER_HEADERS_IMAGE"]) assert.ok(process.env[key]?.trim(), `missing ${key}`);
   const imageRef = process.env.OM_PROVIDER_HEADERS_IMAGE!.trim();
   assert.match(imageRef, /^sha256:[a-f0-9]{64}$/u, "acceptance consumes the inspected local immutable image id");
   const image = JSON.parse(execFileSync("docker", ["image", "inspect", imageRef], { encoding: "utf8" }))[0];
-  assert.equal(image.Id, imageRef);
-  assert.equal(image.Config.Labels["io.deepsonar.image-key"], "deepsonar-base");
+  assert.equal(image.Id, imageRef, "Docker image identity must match the requested immutable id");
+  assert.equal(image.Config.Labels["io.deepsonar.image-key"], "deepsonar-base", "base Docker image-key label");
   const arch = os.arch() === "arm64" ? "arm64" : "amd64";
   assert.equal(image.Architecture, arch, "native runtime required");
   const manifestBytes = execFileSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "cat", imageRef, "/opt/deepsonar/tool-manifest.json"]);
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
-  assert.equal(manifest.imageKey, "deepsonar-base"); assert.ok(manifest.manual?.sha256);
+  assert.equal(manifest.image_key, "deepsonar-base", "base tool manifest image_key contract");
+  assert.ok(manifest.manual?.version && manifest.manual?.sha256 && manifest.manual?.count > 0,
+    "materialized runtime manual must expose version, sha256 and a positive count");
   const registry = JSON.parse(await readFile(path.join(root, "deploy/runtime-image-registry.json"), "utf8"));
   const declaredVersion = registry.images.find((entry: any) => entry.image_key === "deepsonar-base")?.versions[0]?.version;
-  assert.match(declaredVersion, /^\d+\.\d+\.\d+/u);
+  assert.match(declaredVersion, /^\d+\.\d+\.\d+/u, "base registry version must support the native OM image-version gate");
   // Verify installed package versions and wrapper bytes without replacing them.
   const packageVersions = JSON.parse(execFileSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", imageRef, "-e",
     "const fs=require('fs');console.log(JSON.stringify({om:JSON.parse(fs.readFileSync('/opt/deepsonar/pi-extensions/node_modules/pi-observational-memory/package.json')).version,wrapper:require('crypto').createHash('sha256').update(fs.readFileSync('/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts')).digest('hex')}))"], { encoding: "utf8" }));
-  assert.equal(packageVersions.om, "3.1.4");
-  assert.equal(packageVersions.wrapper, createHash("sha256").update(await readFile(path.join(root, "agent-harness/pi-observational-memory-governed.ts"))).digest("hex"));
+  assert.equal(packageVersions.om, "3.1.4", "installed canonical OM version");
+  assert.equal(packageVersions.wrapper, createHash("sha256").update(await readFile(path.join(root, "agent-harness/pi-observational-memory-governed.ts"))).digest("hex"),
+    "installed production wrapper must match this checkout");
   const piVersion = execFileSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "pi", imageRef, "--version"], { encoding: "utf8" }).trim();
-  assert.match(piVersion, /\b1\.4\.0\b/u);
+  assert.match(piVersion, /\b1\.4\.0\b/u, "installed Pi CLI version");
   report.image = { id: imageRef, architecture: arch, catalog_fixture_version: declaredVersion, installed: { ...packageVersions, pi: piVersion } };
 
+  report.stage = "isolated-database";
   const postgres = (await import(requireScheduler.resolve("postgres"))).default;
   const adminUrl = new URL(process.env.TEST_DATABASE_URL!); adminUrl.pathname = "/postgres"; adminUrl.search = "";
   admin = postgres(adminUrl.toString(), { max: 1 });
@@ -112,6 +117,7 @@ try {
   await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${projectId},'OM header acceptance',
     ${sql.json({ network_policy: { allow_egress: false }, convergence: { hub_paused: true, auto_stopped: false, paused_reason: "bootstrap_fixture" } })})`;
   await sql`INSERT INTO canvas_nodes(id,canvas_id,node_type,title,status,body_json) VALUES(${rootNode},${canvasId},'root','Offline scope','active','{}')`;
+  report.stage = "bootstrap-hub-create";
   const parent = await core.createJob({ projectId, canvasId, type: "hub_reason", maxRequests: 0,
     payload: { graph_query: { projected_node_ids: [rootNode] } } });
   assert.ok(parent.job); hubId = String(parent.job.id);
@@ -138,6 +144,7 @@ try {
     await core.ingestEvent(hubId!, { v: 1, event_id: context.eventId, type: "hub_decision", payload: context.input } as never);
     return { accepted: true, event_id: context.eventId };
   }, ["submit_hub_decision"]);
+  report.stage = "control-api-child-create";
   const response = await fetch(`http://127.0.0.1:3100/control/v1/jobs/${hubId}/operations/submit_hub_decision`, {
     method: "POST", headers: { authorization: `Bearer ${grant.token}`, "content-type": "application/json", "idempotency-key": randomUUID() },
     body: JSON.stringify({ intents: [{ role: "audit", from: [rootNode], agent_cli: "pi", provider: "openai", model_ref: OM_HEADERS_MODEL,
@@ -163,7 +170,44 @@ try {
     om_source_model: om.source_model, launch_sha256: createHash("sha256").update(JSON.stringify(snapshot.agent_runtime_launch)).digest("hex") };
   await sql.begin((tx: any) => core.finalizeJob(tx, hubId!, "succeeded", { summary: "Bootstrap proposal accepted" }));
   api.unregisterRuntimeHandler(hubId);
+  report.stage = "real-dispatch-and-om";
   assert.equal(await dispatcher.dispatchOnce(), 1);
+  const readOmLedger = async () => sql`SELECT l.*,e.status AS effect_status,e.job_id AS effect_job_id,
+      e.attempt_id AS effect_attempt_id,e.resource_identity_json->>'job_token_id' AS effect_token_id,
+      e.resource_identity_json->>'request_no' AS effect_request_no,e.intent_json->>'workload' AS effect_workload,
+      t.id AS scope_token_id,t.job_id AS token_job_id,t.workload AS token_workload,
+      a.id AS scope_attempt_id,a.job_id AS attempt_job_id,a.attempt_no,a.status AS attempt_status
+    FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id
+    JOIN job_tokens t ON t.id=l.job_token_id JOIN job_attempts a ON a.id=l.attempt_id
+    WHERE l.job_id=${childId} AND l.workload='observational_memory' ORDER BY l.request_no`;
+  const assertOmLedger = (rows: any[], calls: OmHeaderCall[], terminal: boolean) => {
+    assert.equal(rows.length, calls.length);
+    assert.equal(new Set(rows.map(row => row.job_token_id)).size, 1, "one issued OM token owns this new-Job request sequence");
+    assert.equal(new Set(rows.map(row => row.attempt_id)).size, 1, "one real Attempt owns the executed OM sequence");
+    const key = (input: number, output: number, total: number) => `${input}:${output}:${total}`;
+    const actualResponses = new Map(calls.map(call => [key(call.inputTokens, call.outputTokens, call.totalTokens), call]));
+    assert.equal(actualResponses.size, calls.length, "fixture response usage tuples must uniquely identify exchanges");
+    for (const [index, row] of rows.entries()) {
+      assert.equal(Number(row.request_no), index + 1, "OM token request numbers are contiguous, without hidden admissions");
+      for (const field of ["job_id", "effect_job_id", "token_job_id", "attempt_job_id"]) assert.equal(row[field], childId, field);
+      assert.equal(row.attempt_id, row.effect_attempt_id); assert.equal(row.attempt_id, row.scope_attempt_id);
+      assert.equal(row.job_token_id, row.effect_token_id); assert.equal(row.job_token_id, row.scope_token_id);
+      assert.equal(Number(row.effect_request_no), Number(row.request_no));
+      assert.equal(row.effect_id, `gateway_model_request:${row.job_token_id}:${row.request_no}`);
+      assert.equal(row.workload, "observational_memory"); assert.equal(row.token_workload, "observational_memory");
+      assert.equal(row.effect_workload, "observational_memory"); assert.equal(row.model, OM_HEADERS_MODEL);
+      assert.equal(row.provider, "openai"); assert.equal(row.settlement_status, "settled"); assert.equal(row.effect_status, "settled");
+      if (terminal) assert.equal(row.attempt_status, "succeeded");
+      const tuple = key(Number(row.input_tokens), Number(row.output_tokens), Number(row.total_tokens));
+      const response = actualResponses.get(tuple);
+      assert.ok(response, "each ledger row must match one actual provider response's complete usage tuple");
+      assert.equal(Number(row.input_tokens), response.inputTokens);
+      assert.equal(Number(row.output_tokens), response.outputTokens);
+      assert.equal(Number(row.total_tokens), response.totalTokens);
+      actualResponses.delete(tuple);
+    }
+    assert.equal(actualResponses.size, 0, "every actual OM response has exactly one attributed ledger row");
+  };
   const deadline = Date.now() + 600_000;
   let final: any;
   while (Date.now() < deadline) {
@@ -171,12 +215,13 @@ try {
     if (["succeeded", "failed", "cancelled", "orphan"].includes(final.status)) break;
     if (final.status === "pending") await dispatcher.dispatchOnce();
     if (model.observed()) {
+      const settled = await readOmLedger();
       const actualOm = model.calls.filter(call => call.stage !== "main");
-      const [settled] = await sql`SELECT count(*)::int AS requests,COALESCE(sum(l.total_tokens),0)::bigint AS tokens
-        FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id
-        WHERE l.job_id=${childId} AND l.workload='observational_memory' AND l.settlement_status='settled' AND e.status='settled'`;
-      if (Number(settled.requests) === actualOm.length && actualOm.length >= 2
-        && Number(settled.tokens) === actualOm.reduce((sum, call) => sum + call.totalTokens, 0)) model.allowCompletion();
+      if (settled.length === actualOm.length && actualOm.length >= 2
+        && settled.every((row: any) => row.settlement_status === "settled" && row.effect_status === "settled")) {
+        assertOmLedger(settled, actualOm, false);
+        model.allowCompletion();
+      }
     }
     await wait(500);
   }
@@ -185,22 +230,22 @@ try {
   assert.equal(createHash("sha256").update(JSON.stringify(final.agent_snapshot_json)).digest("hex"), snapshotSha, "no execution-time snapshot backfill");
   assert.deepEqual(model.errors, []); assert.ok(model.observed());
   const omCalls = model.calls.filter(call => call.stage !== "main"); assert.ok(omCalls.length >= 2);
-  const ledger = await sql`SELECT l.*,e.status AS effect_status,t.workload AS token_workload,a.attempt_no,a.status AS attempt_status
-    FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id
-    JOIN job_tokens t ON t.id=l.job_token_id JOIN job_attempts a ON a.id=l.attempt_id
-    WHERE l.job_id=${childId} AND l.workload='observational_memory' ORDER BY l.created_at`;
-  assert.equal(ledger.length, omCalls.length);
-  assert.ok(ledger.every((entry: any) => entry.settlement_status === "settled" && entry.effect_status === "settled"
-    && entry.token_workload === "observational_memory" && entry.attempt_status === "succeeded"));
-  assert.equal(ledger.reduce((sum: number, row: any) => sum + Number(row.total_tokens), 0), omCalls.reduce((sum, call) => sum + call.totalTokens, 0));
+  const ledger = await readOmLedger();
+  assertOmLedger(ledger, omCalls, true);
+  assert.equal(model.recallEvidence().current_session_read_verified, true);
+  report.observation_readback = model.recallEvidence();
   const [tokens] = await sql`SELECT count(DISTINCT workload)::int AS scopes FROM job_tokens WHERE job_id=${childId}`;
   assert.equal(tokens.scopes, 2, "executor minted distinct main and OM credentials");
   report.status = "passed"; report.calls = model.calls;
-  report.om_ledger = ledger.map((row: any) => ({ attempt_no: row.attempt_no, workload: row.workload,
+  report.om_ledger = ledger.map((row: any) => ({ request_no: Number(row.request_no), attempt_no: row.attempt_no, job_id: row.job_id,
+    effect_job_id: row.effect_job_id, token_job_id: row.token_job_id, attempt_job_id: row.attempt_job_id,
+    attempt_id: row.attempt_id, effect_id: row.effect_id, job_token_id: row.job_token_id, workload: row.workload,
     settlement_status: row.settlement_status, input_tokens: row.input_tokens, output_tokens: row.output_tokens, total_tokens: row.total_tokens }));
 } catch (error) {
   report.status = "failed";
-  report.error = error instanceof Error ? { name: error.name, message: error.message.replace(/http:\/\/[^\s]+/gu, "[loopback]") } : { name: "HarnessError" };
+  report.error = error instanceof Error ? { name: error.name, message: error.message.replace(/http:\/\/[^\s]+/gu, "[loopback]")
+    .replaceAll(OM_HEADERS_SECRET, "[synthetic-key]").replace(/Bearer\s+[^\s"']+/giu, "Bearer [redacted]") } : { name: "HarnessError" };
+  console.error(JSON.stringify({ status: report.status, stage: report.stage, error: report.error }));
   process.exitCode = 1;
 } finally {
   if (hubId) unregister?.(hubId);
