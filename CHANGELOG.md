@@ -2,6 +2,8 @@
 
 ### 修复
 
+- **Release resume 的原发布证据绑定**：默认分支恢复代码先校验原运行、成功阶段、不可变 tag 与 artifact 归档摘要，再复用冻结载荷和签名回执独立恢复 writeback / publish；不重建或重签镜像。拒绝错源、替换、缺失、过期及多 attempt 证据；发布查询错误不再被当作 Release 不存在，gate 使用实际签名目录。
+
 - **发布回写 PR 的检查状态文案（#920 评审）**：创建 PR 时仅说明等待该 PR 的 `ci-summary` 与适用专项，不再在检查运行前宣称“已通过”。生成正文同时明确自动化身份；离线回归校验创建早于检查读取且正文没有提前通过声明。
 - **Provider 删除与项目引用的一致性（#914 服务端切片）**：仍被项目白名单/默认账号引用的凭据以稳定 `CREDENTIAL_PROJECT_REFERENCE` 拒绝删除；impact 的项目列表与计数遵守调用者可见范围，删除完整性另按全局引用核对。项目 settings PATCH 在事务中验证并锁住有效、active、可访问的凭据，即使省略模型字段也不能写入悬挂 UUID；不把显式空白名单改成未收紧。GET 和启动清理使用原值 CAS；Skill 标记与 convergence 快捷规则仅更新当前 JSONB 对应字段，导入合并在事务锁内回读，避免无关写入复活旧账号引用。配置项目锁采用 `FOR NO KEY UPDATE`，与凭据迁移的外键 `KEY SHARE` 兼容。真实 PostgreSQL 回归覆盖两项目隔离、双向删除/写入、GET/Skill 交错及 Credential 项目迁移；默认账号选择 UX 的完整收口仍未交付。
 - **Provider 自定义请求头与所选上游一致（#918 / #921）**：Gateway、模型目录发现与推理探测共用服务端配置头解析。官方 Pi 顶层对象、config 对象及 config YAML 复用已有解析器；头只来自当前 endpoint 对应的 profile，空头集合不会借用其他 provider 的租户头，metadata 覆盖与 profile 不匹配时不混用。认证、逐跳/framing 处理与 Job 权限边界保持不变；完整业务透传另由 #923 跟踪，不冒充本片已实现。

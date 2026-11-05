@@ -215,4 +215,6 @@
 
 - [沙箱 Pi 观测记忆决策](PI_OBSERVATIONAL_MEMORY_DECISIONS.md)与 [ADR 0013](architecture/adr/0013-governed-pi-memory.md)：已定边界保持不变；实际本地镜像 RPC、独立生产 guard 与 OM 专属版本准入已验，细节集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。本轮工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA、发布通道/平台与 registry/catalog 仍另验，质量/成本收益 unknown。
 
+发布恢复的 as-built 身份/证据与限制已于 2026-11-05 对照[发布专题](RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)同步；真实恢复未经本次执行。
+
 #899 的[操作员效果结清契约](../deploy/README.md#未知效果的人工结清899)区分单条成功、全局残留和未核验状态；隔离 PostgreSQL/CLI 回归接入 Actions，最终 SHA 工程验收与 s66 现场升级分别留证。

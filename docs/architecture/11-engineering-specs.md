@@ -1,7 +1,7 @@
 # 11. 工程规范
 
 > 状态：**as-built（#741 PR 5 回填）**。本文记录当前仓库开发、验证和文档治理必须遵守的工程规则；实现冲突时以代码、schema、OpenAPI 和测试为准。
-> 同步日期：2026-11-01
+> 同步日期：2026-11-05
 
 本文是 DeepSonar 的开发规范视图。它把可重复的工程约束、测试分层、文档保鲜和发布前核查集中在一个位置；新架构事实以 [`docs/architecture/README.md`](README.md)、相关架构视图、追溯矩阵和 ADR 为准，`DESIGN.md`、`docs/README.md` 与其他专题文档提供摘要或专题证据。
 
@@ -164,3 +164,5 @@ Chrome Fuzz ARM64 的 CI/Release cache miss 构建前执行[受控宿主磁盘�
 仓库开发 Skill [`architecture-doc-sync`](../../.agents/skills/architecture-doc-sync/SKILL.md) 将上述同步面和验收输出用于后续开发任务；它只治理仓库文档，不改变运行时。
 
 Plan [冻结离线回放](../../agent-harness/plan-replay/README.md)锁定期望样本、摘要与逐例分母，失败/跳过不算通过。2026-10-31 根本地 normal→all7negative→normal 三次 replay 均 exit 0；当前 v2 单一 SQL/HTTP fixture 的 17 个 outcomes/traces 全匹配，七个注入故障均正确触发 gate 失败。`artifacts/plan-replay/report.json` 虽为 `passed=true`，但 provenance 是 dirty 的非 HEAD 提交，且结果不是 17 个独立测试；当时最终 combined CI 仍待核对，后续 #831 工程验收见上述摘要；未测模型指标为 `unknown`，不推导质量或成本收益。
+
+发布末端恢复复用原冻结证据，必须先绑定同仓库正式发布运行、成功准备/签名阶段与 GitHub artifact 摘要，再独立执行回写/发布；不放宽原签名身份、不可变 tag 或 PR 检查。详见[恢复契约](../RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)，映射 FR-IMG-001 / NFR-OPS-003；合成回归不等于真实恢复证据。
