@@ -76,3 +76,5 @@ OM 响应不再由 Gateway 缓冲后换成结算错误。受审 [wrapper](../age
 [构建器](../agent-harness/dsh-request-budget-install.mjs)只生成同目录独立产物，不修改 npm 安装的官方 bundle；原源码摘要或唯一补丁点不匹配即构建失败。[helper](../packages/runtime-sandbox/src/dsh-request-budget.ts)共享 Pi 的 SDK 生成前政策，不使用 onPayload 修复参数。两类官方 runtime Dockerfile 均执行生成器，三个基础镜像 fingerprint 包含生成器与政策源码；旧镜像缺少产物时不能回退到无预算 hook 的 provider。
 
 `ci:integration:request-budget-sdk` 从现有 dsh-runtime lockfile 安装固定依赖，运行[真实 Pi SDK 阈值回归](../agent-harness/pi-main-budget-sdk-regression.test.ts)与[真实 DSH LlmRuntime/adapter 回归](../agent-harness/dsh-request-budget-sdk.mjs)。后者覆盖 prepared 与 direct 公共服务调用、逐次额度下降、usage、耗尽和身份拒绝，全部使用合成凭据及 loopback；不是生产模型或真实 DSH CLI 启动验收。新增源与测试尚未在本地执行，最终 SHA Actions 另验。
+
+同一 Actions 命令另外运行[真实 DSH CLI 回归](../agent-harness/dsh-request-budget-cli.mjs)，直接调用生产 `buildDshProfilePatch` 并仅重定位固定 vendor 产物的安装路径。用原生 SDK RPC 驱动工具续轮、多轮余额下降、context-overflow 触发的压缩恢复和实际 subagent；取消通过原生 `shutdown` 检查等待中的 allowance 连接关闭、没有模型出站。锁定 RPC 没有独立 `session/cancel`，不能把 shutdown 验收表述为会话级取消或跨进程 resume 支持。这些是新增验收入口，最终提交的运行结果仍须单独核实，不能由 SDK 层通过推断 CLI 全路径通过。

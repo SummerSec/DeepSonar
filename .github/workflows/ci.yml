@@ -337,7 +337,7 @@ jobs:
 
       - run: pnpm -r build
 
-      - name: Locked native SDK request budget regression (synthetic upstream only)
+      - name: Locked native SDK and DSH CLI budget regression (synthetic upstream only)
         run: pnpm ci:integration:request-budget-sdk
 
       - name: Target image offline upgrade configuration preflight
