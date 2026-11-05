@@ -8,7 +8,7 @@ import {
   type CredentialHealthErrorCategory,
 } from "./credentials.js";
 import { claudeCliFingerprintHeaders } from "./claude-cli-fingerprint.js";
-import { providerCustomHeadersFromSettings } from "./provider-custom-headers.js";
+import { composeUpstreamRequestHeaders, hasInvalidProviderHeaders, providerCustomHeadersFromSettings } from "./provider-custom-headers.js";
 import { collectSecretValues, redactSecretAssignments } from "./credential-secret-projection.js";
 import { decryptSecret, PROVIDER_ENV_MAP } from "./credentials.js";
 import {
@@ -187,17 +187,31 @@ function resolveProbeProtocol(cred: CredentialRequestInput): InferenceWireProtoc
  * server-side sanitizer, and ahead of the protocol/final-auth layers.
  */
 function configuredProbeHeaders(cred: CredentialRequestInput, baseUrl: string): Record<string, string> {
-  return providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl).headers;
+  const resolution = providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl);
+  if (hasInvalidProviderHeaders(resolution)) {
+    throw new CredentialProbeError("Provider 请求头配置无效", "configuration");
+  }
+  return resolution.headers;
+}
+
+/** Match Gateway precedence: protocol defaults, endpoint configuration, final bound auth. */
+function probeHeaders(cred: CredentialRequestInput, baseUrl: string, secret: string,
+  protocol: InferenceWireProtocol, base?: Record<string, string>): Record<string, string> {
+  const defaults: Record<string, string> = {};
+  const auth: Record<string, string> = {};
+  for (const [name, value] of Object.entries(authHeadersForProtocol(protocol, secret))) {
+    const lower = name.toLowerCase();
+    (lower === "authorization" || lower === "x-api-key" ? auth : defaults)[lower] = value;
+  }
+  return composeUpstreamRequestHeaders({ base, protocol: defaults,
+    configured: configuredProbeHeaders(cred, baseUrl), auth });
 }
 
 function modelRequest(cred: CredentialRequestInput, secret: string): { urls: string[]; headers: Record<string, string> } {
   const baseUrl = resolveProbeBaseUrl(cred);
   return {
     urls: modelUrls(baseUrl),
-    headers: {
-      ...configuredProbeHeaders(cred, baseUrl),
-      ...authHeadersForProtocol(resolveProbeProtocol(cred), secret),
-    },
+    headers: probeHeaders(cred, baseUrl, secret, resolveProbeProtocol(cred)),
   };
 }
 
@@ -263,11 +277,7 @@ function inferenceProbeRequest(cred: CredentialRequestInput, secret: string): In
   return {
     url: joinProbeUpstreamUrl(base, path),
     model,
-    headers: {
-      "content-type": "application/json",
-      ...configuredProbeHeaders(cred, base),
-      ...authHeadersForProtocol(protocol, secret),
-    },
+    headers: probeHeaders(cred, base, secret, protocol, { "content-type": "application/json" }),
     body: inferenceProbeBody(protocol, model),
     protocol,
     timeoutMs: INFERENCE_PROBE_TIMEOUT_MS[protocol],
@@ -301,6 +311,7 @@ async function requestInferenceProbe(
   try {
     response = await fetch(url, {
       method: "POST",
+      redirect: "manual",
       headers: request.headers,
       body: request.body,
       signal: AbortSignal.timeout(timeoutMs),
@@ -627,6 +638,7 @@ async function requestModelCandidate(
     let response: Response;
     try {
       response = await fetch(url, {
+        redirect: "manual",
         headers: request.headers,
         signal: AbortSignal.timeout(timeoutMs),
       });

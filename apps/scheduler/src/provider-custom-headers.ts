@@ -1,65 +1,27 @@
-/**
- * #918: Provider credentials may need extra upstream request headers (traffic labels,
- * relay routing keys, tenant tags). The Gateway used to drop everything that was not a
- * protocol header the CLI happened to send, so `X-Traffic-Type: eval` configured on the
- * credential never reached the upstream, while catalog discovery and the inference probe
- * did not even try — three paths, three different upstream routes.
- *
- * This module is the single resolver/sanitizer they all share. It reads only
- * server-controlled configuration (the credential row's `settings_config_json`), never
- * sandbox input, and refuses anything that could replace authentication, framing,
- * hop-by-hop transport or DeepSonar's own control/protocol headers.
+/** Shared server-bound endpoint/header resolution for Gateway and credential probes.
+ * #923: unknown end-to-end headers are business data, not an allowlist. Authentication,
+ * transport framing and exact platform control fields are consumed at this boundary.
  */
+import { validateHeaderName, validateHeaderValue } from "node:http";
 
 import { resolveProviderUpstreamFromSettings } from "./provider-settings.js";
 
-/** Hard caps: a credential cannot turn itself into an arbitrary request-header console. */
+/** Configuration resource limits; exceeding them is an explicit configuration error. */
 export const PROVIDER_CUSTOM_HEADER_LIMITS = {
   maxHeaders: 16,
   maxNameLength: 128,
   maxValueLength: 1024,
 } as const;
 
-/**
- * Headers configuration may never set. Three groups:
- * - authentication carriers: the server decides them from the bound credential (and the
- *   inbound Job token must never be forwarded upstream, see `GATEWAY_PASSTHROUGH_HEADERS`);
- * - framing / hop-by-hop: `content-length` must match the body the Gateway wrote, and
- *   connection management belongs to the transport;
- * - protocol/CLI identity and internal control: `user-agent`/`x-app`/`anthropic-*` carry
- *   the CLI fingerprint (#736) and wire protocol version, `x-deepsonar-*` is ours.
- */
+/** Only authentication, HTTP transport ownership and named platform controls. */
 const FORBIDDEN_EXACT = new Set([
-  "authorization",
-  "proxy-authorization",
-  "proxy-connection",
-  "x-api-key",
-  "api-key",
-  "anthropic-api-key",
-  "anthropic-version",
-  "anthropic-beta",
-  "cookie",
-  "set-cookie",
-  "host",
-  "content-length",
-  "content-type",
-  "accept",
-  "accept-encoding",
-  "transfer-encoding",
-  "connection",
-  "keep-alive",
-  "upgrade",
-  "te",
-  "trailer",
-  "expect",
-  "user-agent",
-  "x-app",
+  "authorization", "proxy-authorization", "proxy-authenticate",
+  "x-api-key", "api-key", "anthropic-api-key",
+  "host", "content-length", "transfer-encoding", "connection", "proxy-connection",
+  "keep-alive", "upgrade", "te", "trailer", "expect",
+  "x-deepsonar-job", "x-deepsonar-workload", "x-deepsonar-effect-status",
+  "x-deepsonar-proposal-revision", "x-deepsonar-request-id",
 ]);
-
-const FORBIDDEN_PREFIXES = ["x-deepsonar-", "proxy-", "anthropic-"];
-
-/** RFC 7230 token characters; anything else is a header-injection attempt. */
-const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9a-z]+$/u;
 
 export type ProviderCustomHeaders = Record<string, string>;
 
@@ -71,14 +33,14 @@ export interface ProviderCustomHeaderResolution {
 
 export function isForbiddenProviderHeader(name: string): boolean {
   const lower = name.trim().toLowerCase();
-  if (FORBIDDEN_EXACT.has(lower)) return true;
-  return FORBIDDEN_PREFIXES.some((prefix) => lower.startsWith(prefix));
+  return FORBIDDEN_EXACT.has(lower);
 }
 
 /**
- * Normalize one configured header set. Names are lower-cased so `X-Traffic-Type` and
- * `x-traffic-type` cannot both reach the upstream; invalid names, CR/LF, NUL and
- * forbidden names/values are dropped and reported.
+ * Normalize names only. Preserve legal empty values and whitespace; reject ambiguous
+ * case-insensitive duplicate configuration names. Callers must reject invalid configuration
+ * before sending anything upstream; consumed authentication/transport fields are reported
+ * separately as forbidden entries. Never report header values.
  */
 export function sanitizeProviderCustomHeaders(raw: unknown): ProviderCustomHeaderResolution {
   const rejected: string[] = [];
@@ -89,13 +51,23 @@ export function sanitizeProviderCustomHeaders(raw: unknown): ProviderCustomHeade
   if (entries.length > PROVIDER_CUSTOM_HEADER_LIMITS.maxHeaders) {
     return { headers, rejected: ["too_many_headers"] };
   }
+  const connectionFields = new Set(entries
+    .filter(([name, value]) => name.toLowerCase() === "connection" && typeof value === "string")
+    .flatMap(([, value]) => (value as string).split(",").map((name) => name.trim().toLowerCase())));
   for (const [rawName, rawValue] of entries) {
-    const name = rawName.trim().toLowerCase();
-    if (!name || name.length > PROVIDER_CUSTOM_HEADER_LIMITS.maxNameLength || !HEADER_NAME_RE.test(name)) {
-      rejected.push(`invalid_name:${rawName.slice(0, 32)}`);
+    const name = rawName.toLowerCase();
+    try {
+      validateHeaderName(rawName);
+      if (name.length > PROVIDER_CUSTOM_HEADER_LIMITS.maxNameLength) throw new Error("name too long");
+    } catch {
+      rejected.push("invalid_name");
       continue;
     }
-    if (isForbiddenProviderHeader(name)) {
+    if (Object.hasOwn(headers, name)) {
+      rejected.push(`duplicate_name:${name}`);
+      continue;
+    }
+    if (isForbiddenProviderHeader(name) || connectionFields.has(name)) {
       rejected.push(`forbidden:${name}`);
       continue;
     }
@@ -103,18 +75,23 @@ export function sanitizeProviderCustomHeaders(raw: unknown): ProviderCustomHeade
       rejected.push(`invalid_value:${name}`);
       continue;
     }
-    const value = rawValue.trim();
-    if (
-      !value
-      || value.length > PROVIDER_CUSTOM_HEADER_LIMITS.maxValueLength
-      || /[\u0000\r\n]/u.test(value)
-    ) {
+    const value = rawValue;
+    try {
+      validateHeaderValue(name, value);
+      if (value.length > PROVIDER_CUSTOM_HEADER_LIMITS.maxValueLength) throw new Error("value too long");
+    } catch {
       rejected.push(`invalid_value:${name}`);
       continue;
     }
     headers[name] = value;
   }
   return { headers, rejected };
+}
+
+/** Invalid HTTP configuration is a request failure, never a partial header set. */
+export function hasInvalidProviderHeaders(resolution: ProviderCustomHeaderResolution): boolean {
+  return resolution.rejected.some((reason) => reason === "headers_not_an_object"
+    || reason === "too_many_headers" || reason.startsWith("invalid_") || reason.startsWith("duplicate_name:"));
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -170,9 +147,9 @@ export function providerCustomHeadersFromSettings(
 
 /**
  * Compose the final upstream header set from server-owned layers. Precedence, lowest to
- * highest: body framing → trusted protocol defaults → configured credential headers → CLI
- * protocol headers the Gateway allowlists → final authentication from the bound credential.
- * Configured headers are already sanitized, so they can never occupy the last two layers.
+ * highest: request defaults → protocol defaults → configured credential headers → incoming
+ * end-to-end request headers → authentication from the bound credential. Configuration is
+ * bound to the selected endpoint before composition.
  */
 export function composeUpstreamRequestHeaders(input: {
   configured?: ProviderCustomHeaders;

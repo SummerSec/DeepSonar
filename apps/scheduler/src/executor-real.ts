@@ -109,7 +109,7 @@ import {
   materializeProviderSettings,
   routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
-import { snapshotUpstreamModel } from "./provider-effective-model.js";
+import { frozenClaudeLaunchModel, snapshotUpstreamModel } from "./provider-effective-model.js";
 import {
   buildJobSharedAssetCatalog,
   SHARED_ASSETS_READONLY_ROOT,
@@ -1745,7 +1745,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     settings_config_json: snapshot.settings_config_json,
     config_files: runtimeConfigFiles,
   });
-  const runtimeModel = piLaunch?.cliModel ?? model;
+  const runtimeModel = provider === "claude-code" ? frozenClaudeLaunchModel(snapshot) : piLaunch?.cliModel ?? model;
   const dshProvider = runtimeAdapter.projectRuntime?.({
     settingsConfig: snapshot.settings_config_json,
     credentialProvider: activeCredentialProvider ?? "",

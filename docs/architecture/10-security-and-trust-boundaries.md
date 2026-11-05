@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-03
+> 同步日期：2026-11-05
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -134,3 +134,10 @@ FR-FIND-008 只信任经过权限校验的操作员材料准入和独立评审�
 ### #778 条件建议的信任边界
 
 作者 applicability sidecar 与调用者 target 均为声明，不能改变 Job 快照或成为事实。在线建议仅检查本项目冻结精确版本；外国条目不进入候选、诊断、计数或排序。CAS 后整批复查版本及 item 撤销，选择事务锁定版本与 item 再查，后续 pull 仍独立授权。选择回执不是使用记录或权限票据，未知质量/token 余额不补估值；描述文本不参与匹配。详见[专题](../SKILL_SUGGESTIONS.md)。
+
+
+## 透明代理的最小边界（#923）
+
+未知业务头默认保留，不能以泛前缀过滤代替权限检查。认证载体由 Gateway 消费并以绑定凭据重新生成；目标 authority 只来自服务器 base URL，Connection 指定字段和非法 framing 在 HTTP 边界处理，重定向不改变目标。配置头继续绑定 #921 选定 endpoint/profile。usage 与原始响应分离；客户端收到业务数据不表示 durable settlement，OM wrapper 必须查当前 Job/Attempt/token/workload 的宿主回执，Provider 内容不能冒充 settled 或 not_started。冻结模型、主后台预算、终态撤销和未知效果规则保持。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)及 [ADR 0016](adr/0016-transparent-gateway-settlement.md)，本分支最终 SHA Actions 待验。
+
+#923 同时拒绝重复认证字段和业务字段中的入站 Job token；上游 header/trailer 与跨 chunk 原始 body 的绑定 key 明文回显会中止。压缩/任意编码回显检测尚不完整，当前解压只用于 usage 观察，不能推定任意 encoded echo 已受保护；限制见[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)。

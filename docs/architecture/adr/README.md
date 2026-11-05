@@ -1,7 +1,7 @@
 # 架构决策记录（ADR）
 
 > 状态：**历史回填与当前集成决策索引**。0001–0006 保留原回填；0009 仍提议、0010 已采纳，0011–0014 保留各自已定边界，0015 记录本轮受治理完成恢复取舍；决策采纳不代表最终 SHA 工程验收或组合发布完成。
-> 同步日期：2026-11-03
+> 同步日期：2026-11-05
 
 ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」不再只留在 issue 讨论和索引表格里。目录总览与维护流程见 [`../README.md`](../README.md)。事实仍以 [`docs/architecture/README.md`](../README.md)、相关架构视图、代码、schema、OpenAPI 和测试为准；`DESIGN.md` 与 [`docs/README.md`](../../README.md) 提供摘要和专题状态。
 
@@ -63,6 +63,7 @@ ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」
 | [0013](0013-governed-pi-memory.md) | Pi 会话观测记忆受冻结策略、独立 Gateway workload 和有限额度治理 | 已采纳边界不变；实际本地 base 镜像 canonical RPC、独立生产 guard 与 OM 专属版本准入及 Gateway/Session 已验，集中见 [RPC 证据](../../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；本轮工程已随 #831 Actions 验收，后续修复 SHA/正式发布另验，质量/成本收益 unknown | #815 / FR-CAP-009 |
 | [0014](0014-operator-finding-identity.md) | 操作员见证身份以不可变 manifest、CAS 和失效检查支持关系计算 | 已采纳工程边界；外部官方真实性未认证，独立质量未交付，强关系不发布 | #819 / FR-FIND-009 |
 | [0015](0015-governed-completion-recovery.md) | 完成未知效果由持久宿主事实、去重 Hub 与受治理对账/停止处理 | 已采纳；当前修复分支待最终 SHA Actions，退出会话/新 Attempt 的完整继续执行保留缺口 | #874 / FR-CTRL-010 / FR-JOB-006 |
+| [0016](0016-transparent-gateway-settlement.md) | 透明模型数据面与原账本 scoped 持久结算确认分离 | 已采纳契约；#923 分支实现待最终 SHA Actions，不替代0013权限/未知效果边界 | #923 / FR-CRED-003/004 / FR-CAP-009 / NFR-PERF-004 |
 
 ---
 

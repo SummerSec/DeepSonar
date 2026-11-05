@@ -1,7 +1,7 @@
 # mark_job_done 持久修正回执（#776 B）
 
 > 状态：#776 B/C 为 as-built；#874 受治理恢复 v1 在当前修复分支实现，以最终 SHA 的 GitHub Actions 和评审为工程验收依据。真实模型理解质量未评测。
-> 同步日期：2026-11-03
+> 同步日期：2026-11-05
 
 B 切片只处理 `mark_job_done`，复用 Control HTTP、语义 `events`、Job/Attempt 与既有效果边界。没有第二执行通道，没有新表或 schema bump，不自动重跑 Job。A 的冻结矩阵见 #776 对应 A PR；C0/C1 的限定扩展见下文，原 issue 收口范围见 [验收矩阵](REPAIR_FEEDBACK_ACCEPTANCE.md)。
 
@@ -37,11 +37,11 @@ Job 状态、租约、时间预算、Attempt 取消与快照重新校验；未�
 
 Gateway 与拒绝/接受回执使用同一 Job 锁。一次修正请求占用剩余额度，未结算时不准入第二次请求；结算事务失败留下 pending，unknown、缺 usage、not_reported 不视为零。反馈投影提供 `usage_status`、`known_tokens` 与可空 `remaining_tokens`；未知或无限时不广告 `remaining_budget.tokens=0`；无限的 `limit_tokens=0`、`remaining_tokens=null`，用量仍照常记账。严格已知零用量仍可继续。额度耗尽、取消、租约/时间失效、完成已接受都会阻止继续调用；新完成提案也拒绝未结算/未知/耗尽的修正链，旧 key 仍读取原回执。
 
-只接受 OpenAI Chat/Completions、Responses、Anthropic Messages 协议根位置的完整 usage（JSON/SSE），不扫描 assistant/tool 正文或模型自报。缓存按协议处理：Anthropic 缓存另加，OpenAI 缓存已在 input 中。帧/JSON 超过 1MiB、总流超过 16MiB、截断、缺终态、非法计数、未知协议或错误结果均保留未知。原宽松解析 helper 不再用于 Gateway 持久用量；正常请求若有内部重试，也不能把此前尝试的未知成本归零。
+只接受 OpenAI Chat/Completions、Responses、Anthropic Messages 协议根位置的完整 usage（JSON/SSE），不扫描 assistant/tool 正文或模型自报。缓存按协议处理：Anthropic 缓存另加，OpenAI 缓存已在 input 中。帧/JSON 超过 1MiB、总流超过 16MiB、截断、缺终态、非法计数、未知协议或错误结果均保留未知。原宽松解析 helper 不再用于 Gateway 持久用量；#923 透明路径不再执行内部上游重试，既有历史未知成本也不得归零。
 
-现有 Provider 配置入口 `INFERENCE_WIRE_PROTOCOLS` 的三种协议（anthropic-messages / openai-completions / openai-responses）均有严格解析夹具。自定义兼容服务若缺少协议根计数、结束事件或返回不支持的 envelope，响应仍可传回，但用量为未知，不能广告已结算。没有单独的 Provider“失败请求确定未收费”契约；普通请求 503→200 时即使前一个错误正文自报零，也保留最后 200 业务响应和观测用量，把整个 effect 的成本标 unknown，首次完成被既有效果门拒绝，Job 不因此直接改成 failed。单次完整成功响应的权威零计数可结算并正常完成；准入前拒绝则没有发起新请求，不制造收费记录。这些区别由真实 loopback 回归验证。
+现有 Provider 配置入口 `INFERENCE_WIRE_PROTOCOLS` 的三种协议（anthropic-messages / openai-completions / openai-responses）均有严格解析夹具。自定义兼容服务若缺少协议根计数、结束事件或返回不支持的 envelope，响应仍可传回，但用量为未知，不能广告已结算。没有单独的 Provider“失败请求确定未收费”契约；普通请求遇到 503 时将原状态和正文交给客户端，不自动重试成 200；错误正文自报零不能证明无外部费用，effect 保持 unknown，首次完成受既有效果门约束，Job 不因此直接改成 failed。单次完整成功响应的权威零计数可结算并正常完成；准入前拒绝则没有发起新请求，不制造收费记录。这些区别由 loopback 回归覆盖；#923 最终 SHA 的 Actions 结果须单独核对。
 
-修正 Gateway 请求以及显式设置 Job 总 token 额度的普通请求最多一次上游尝试，禁止隐藏的潜在收费重试；普通无限额度请求保留既有有界重试。显式有限额度的输出上限由宿主限制到剩余 token；无限时保留调用者的输出参数，Chat SSE 请求开启 usage 返回，n/best_of 多候选与批量 prompt 在出站前拒绝。已有 `job_tokens.max_tokens` 若明确设置，则普通与修正准入均核对整个 Job 的原 usage ledger，未知总用量停止，较小总额度优先；Job 请求数、事件与时间上限仍有效。当前 executor 不自动设置 Job `max_tokens`；默认不限，显式正数才熔断，新 token 的 0 归一为 NULL，历史零额度不重写。
+所有 Gateway 模型请求均只发起一次上游交换，不隐藏收费重试或重定向（#923）。受预算约束的请求必须由调用者显式提供剩余额度内的输出上限，以及协议要求的 terminal usage；缺失或需改写时以 `GATEWAY_OUTPUT_BUDGET_REQUIRED` 在出站前拒绝，Gateway 不补写 Chat SSE usage 或改变输出参数。既有 n/best_of 多候选与批量 prompt 预算检查仍在准入执行，详见[透明传输契约](MODEL_GATEWAY_TRANSPARENCY.md)。已有 `job_tokens.max_tokens` 若明确设置，则普通与修正准入均核对整个 Job 的原 usage ledger，未知总用量停止，较小总额度优先；Job 请求数、事件与时间上限仍有效。当前 executor 不自动设置 Job `max_tokens`；默认不限，显式正数才熔断，新 token 的 0 归一为 NULL，历史零额度不重写。
 
 **边界：这是累计结算后的熔断，不是精确的调用前总成本保证。** 输入/缓存 token 只有上游响应后才能确认，单次已准入请求仍可能超出剩余额度；保留实际超额计数并阻止后续请求/修正完成，不截断账本或伪装成功。若产品要求绝对不超额，需要额外受信的调用前输入计数/计价契约；当前不以字符数或模型自报代替。该精度限制与默认不限的策略分开记录。
 

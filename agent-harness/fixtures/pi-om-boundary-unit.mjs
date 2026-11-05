@@ -1,6 +1,7 @@
 // Unit doubles for the wrapper's boundary. These are NOT the real-plugin RPC
 // acceptance fixture (pi-om-real-rpc.mjs); no memory algorithm is reproduced.
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:http";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -58,7 +59,7 @@ export async function loadGovernedBoundary() {
 
 // Feed an actual Gateway response (or an SDK's message-only carrier) through the
 // production wrapper's worker, settle and compaction hooks; no classifier double.
-export async function createFailureBoundary(errorMessage) {
+export async function createFailureBoundary(errorMessage, receipt = { status: "unknown" }) {
   const { createGovernedObservationalMemoryExtension: create, config } = await loadGovernedBoundary();
   const root = mkdtempSync(path.join(tmpdir(), "om-gateway-boundary-"));
   const previous = Object.fromEntries(["TEMP", "TMPDIR", "PI_CODING_AGENT_DIR", "PI_OBSERVATIONAL_MEMORY_PASSIVE"]
@@ -67,7 +68,16 @@ export async function createFailureBoundary(errorMessage) {
   process.env.TMPDIR = root;
   process.env.PI_CODING_AGENT_DIR = root;
   process.env.PI_OBSERVATIONAL_MEMORY_PASSIVE = "1";
+  const receiptServer = createServer((req, res) => {
+    if (req.headers.authorization !== "Bearer offline-unit" || !/^\/om\/_settlement\/[a-f0-9-]{36}$/u.test(req.url)) {
+      res.writeHead(403); res.end(); return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(receipt));
+  });
+  await new Promise((resolve) => receiptServer.listen(0, "127.0.0.1", resolve));
   const close = () => {
+    receiptServer.closeAllConnections(); receiptServer.close();
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key]; else process.env[key] = value;
     }
@@ -76,7 +86,7 @@ export async function createFailureBoundary(errorMessage) {
   const hooks = new Map();
   const messages = [];
   const entries = [];
-  const model = { provider: config.model.provider, id: config.model.id, api: "openai-completions", baseUrl: "http://127.0.0.1/om" };
+  const model = { provider: config.model.provider, id: config.model.id, api: "openai-completions", baseUrl: `http://127.0.0.1:${receiptServer.address().port}/om` };
   const context = { cwd: root, mode: "rpc", hasUI: true,
     ui: { notify: () => { throw new Error("RPC must not create UI frames"); } },
     model: { provider: "main", id: "main", contextWindow: 1000000 },

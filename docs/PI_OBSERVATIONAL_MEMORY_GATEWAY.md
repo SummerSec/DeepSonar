@@ -1,5 +1,5 @@
 > 状态：as-built（#815 B 的 Gateway、账本与用量投影；本地替身和隔离 SQL 验证不代表真实模型效果或完整平台验收）
-> 同步日期：2026-11-03
+> 同步日期：2026-11-05
 
 # Pi Observational Memory Gateway
 
@@ -17,7 +17,7 @@ Job model。OM 的 `source_model` 必须等于主 Job 的 frozen model，不能�
 OM token 保存唯一的 `expected_provider`、`expected_model` 和 `expected_route`。
 协议来自 frozen Pi provider/model profile；model 的 `api` 覆盖 provider `api`。
 已有 frozen `models.json` 损坏、缺少 provider/model 或协议不受支持时直接拒绝，
-不能改读另一份 settings 配置来延续请求。OM 不经过 main CLI alias rewrite，
+不能改读另一份 settings 配置来延续请求。Gateway 不再执行任何 CLI alias rewrite，
 只能向精确 route 提交指定模型的 POST。
 
 每次请求在 Job 锁内重新检查冻结范围、token、有效期和 Job 状态。Job 进入
@@ -64,18 +64,23 @@ token 的历史计数。main reservation 在第一个后台 token 签发之前�
 可以降级的配额 429。main 的独立准入不消费这些后台额度。
 
 每次后台准入只发起一次上游尝试，包括 unlimited 配额；不自动重放可能已经产生
-外部效果的请求。后台 JSON/SSE 响应在内存中有界缓冲，最多 16 MiB；只有现有严格
-协议 scanner 确认 terminal usage，且数据库结算成功后，才返回正常响应。
-错误状态、断流、超限、缺失或伪造 usage 均进入 unknown 并返回明确的 409；provider 5xx/error prose 不自动等价于“请求未开始”。只有内核已证明 admission 未提交、或 known-never-started transport 且零用量结算已提交，才能按 `gateway_transient` + `effect_status=not_started` 走可见降级。
+外部效果的请求。后台 JSON/SSE 响应按原始字节及时转发，不在 Gateway 缓冲后换成结算错误（#923）。只有严格协议 scanner 确认 terminal usage、数据库结算成功，且 wrapper 从 scoped 只读查询确认 durable settled，才提交模型终止结果。
+错误状态、断流、观察超限、缺失或伪造 usage 均进入 unknown；wrapper 通过结算查询硬失败，不改写已交付的上游状态或正文。provider 5xx/error prose 不自动等价于“请求未开始”。只有内核已证明 admission 未提交、或 known-never-started transport 且零用量结算已提交，才能按 `gateway_transient` + `effect_status=not_started` 走可见降级。
 上游请求/响应正文不落库。
 
 当前请求前失败分类只接受 Node 原生连接或 DNS 错误链，见
 [`gateway-om-budget.ts`](../apps/scheduler/src/gateway-om-budget.ts)。每个聚合错误叶子都须符合要求；超时、连接后断流、权限或协议错误不能继承一个连接失败 cause 后降级。返回 `503 gateway_transient` 前，Gateway 必须在 Job 锁内核对当前 pending reservation、写入 settled 零用量账本并持久结算 `never_started`，请求次数不退还。结算冲突或写入失败仍返回对账错误。provider 自报的同名 JSON、SSE error 和 Pi 会转述的 Anthropic refusal 字段不能冒充内核结果。零外部用量不等于已经完成价格计算。
 
 usage、effect settlement 和 token counter 在同一事务内写入。账本事务失败时，
-原 effect 保持 pending，调用方得到对账错误，后续后台请求不能再次出站；不能在
+原 effect 保持 pending，wrapper 的持久确认失败，后续后台请求不能再次出站；不能在
 内存中补造成功账单。权限、provider/model/route、snapshot、完整性、协议、撤销和
 未知外部效果错误都保留硬失败边界。
+
+## 透明传输后的持久确认（#923）
+
+受审 wrapper 每次请求创建 UUID，通过 `x-deepsonar-request-id` 交给 Gateway；该控制头不出站，UUID 登记在原 effect intent。模型终止结果先由 wrapper 持有，只有冻结 Gateway 的 `GET /gateway/_settlement/:id` 返回同 Job/当前 Attempt/token/workload 的 settled 才可提交。pending/not_found 只能有界等待，unknown、查询失败或超时硬失败；never_started 必须来自宿主持久账本，不能从 Provider 文案推断。查询不新增模型请求计数，不绕过 token 失效或终态撤销。
+
+有限输出预算由请求生成层显式提供，Gateway 只准入或拒绝，不修改原 body。请求流仍有界收全，响应及时透传和旁路观察；范围、限制、回归入口及待验状态见[透明传输专题](MODEL_GATEWAY_TRANSPARENCY.md)与 [ADR 0016](architecture/adr/0016-transparent-gateway-settlement.md)。以下既有本地通过记录属于历史版本，不能作为 #923 最终 SHA 验收。
 
 ## Admission 数据库冲突与 SDK 消息（#871/#873）
 

@@ -4,6 +4,7 @@
  * copied into the image and is the only supported OM loader.
  */
 
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -314,6 +315,40 @@ function workerFailure(error: unknown): string {
   return "PI_OM_PROTOCOL_WORKER_FAILURE";
 }
 
+/** Query only the frozen Gateway, never a URL returned by the provider. */
+export async function awaitGatewaySettlement(baseUrl: string, token: string, requestId: string): Promise<AnyRecord> {
+  const endpoint = `${baseUrl.replace(/\/+$/u, "")}/_settlement/${requestId}`;
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const response = await fetch(endpoint, {
+      headers: { authorization: `Bearer ${token}` }, redirect: "error",
+      signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+    });
+    if (response.status !== 404 && !response.ok) fail("PI_OM_SETTLEMENT_UNAVAILABLE");
+    const receipt = await response.json() as AnyRecord;
+    if (response.ok && (receipt.status === "settled" || receipt.status === "not_started")) return receipt;
+    if (receipt.status !== "pending" && receipt.status !== "not_found") fail("PI_OM_UNKNOWN_EFFECT");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  fail("PI_OM_SETTLEMENT_TIMEOUT");
+}
+
+function settlementToken(auth: unknown): string {
+  if (!isRecord(auth) || auth.ok !== true) fail("PI_OM_PERMISSION_AUTH_FAILED");
+  if (typeof auth.apiKey === "string" && auth.apiKey.length > 0) return auth.apiKey;
+  const headers = new Headers(isRecord(auth.headers) ? auth.headers : {});
+  const candidates = [headers.get("authorization")?.replace(/^Bearer\s+/iu, ""),
+    headers.get("x-api-key"), headers.get("anthropic-api-key")].filter(Boolean);
+  if (new Set(candidates).size !== 1) fail("PI_OM_PERMISSION_AUTH_FAILED");
+  return candidates[0]!;
+}
+
+function correlatedHeaders(value: unknown, requestId: string): Record<string, string> {
+  const headers = new Headers(isRecord(value) ? value : {});
+  headers.set("x-deepsonar-request-id", requestId);
+  return Object.fromEntries(headers.entries());
+}
+
 function guardedRegistry(registry: unknown, config: FrozenConfig, state: GuardState, assertConfig: () => void): AnyRecord {
   if (!isRecord(registry)) fail("PI_OM_MODEL_REGISTRY_MISSING");
   const assertModel: (model: unknown) => asserts model is AnyRecord = (model) => {
@@ -333,6 +368,11 @@ function guardedRegistry(registry: unknown, config: FrozenConfig, state: GuardSt
   const streamWorker = (model: AnyRecord, context: unknown, options: unknown) => {
     const output = createAssistantMessageEventStream();
     const pump = (async () => {
+      const requestId = randomUUID();
+      let token: string | undefined;
+      let requestStarted = false;
+      let receiptPromise: Promise<AnyRecord> | undefined;
+      const receiptForRequest = () => receiptPromise ??= awaitGatewaySettlement(model.baseUrl, token!, requestId);
       try {
         assertModel(model);
         if (state.degraded) throw new Error(state.degraded);
@@ -347,8 +387,13 @@ function guardedRegistry(registry: unknown, config: FrozenConfig, state: GuardSt
             owner = provider;
           } else stream = compatStreamSimple;
         }
-        const source = stream.call(owner, model, context, options);
-        let terminal = false;
+        token = settlementToken(await registry.getApiKeyAndHeaders(model));
+        const requestModel = { ...model, headers: correlatedHeaders(model.headers, requestId) };
+        const requestOptions = { ...(isRecord(options) ? options : {}),
+          headers: correlatedHeaders(isRecord(options) ? options.headers : undefined, requestId) };
+        requestStarted = true;
+        const source = stream.call(owner, requestModel, context, requestOptions);
+        let terminal: AnyRecord | undefined;
         for await (const event of source) {
           if (event.type === "error") {
             const detail = event.error?.errorMessage ?? event.error ?? event.message;
@@ -356,13 +401,33 @@ function guardedRegistry(registry: unknown, config: FrozenConfig, state: GuardSt
           }
           if (event.type === "done") {
             if (event.message?.provider !== GATEWAY_PROVIDER || event.message?.model !== config.model.id) fail("PI_OM_MODEL_RESPONSE_MISMATCH");
-            terminal = true;
+            if (terminal) fail("PI_OM_PROTOCOL_WORKER_INCOMPLETE");
+            terminal = event;
+            continue;
           }
+          if (terminal) fail("PI_OM_PROTOCOL_WORKER_INCOMPLETE");
           output.push(event);
         }
         if (!terminal) fail("PI_OM_PROTOCOL_WORKER_INCOMPLETE");
+        const receipt = await receiptForRequest();
+        if (receipt.status !== "settled") fail("PI_OM_UNKNOWN_EFFECT");
+        output.push(terminal as any);
       } catch (error) {
-        const failure = recordFailure(error);
+        // Provider error prose is untrusted even when it mimics a Kernel envelope.
+        // Only an authenticated, correlated no-effect receipt permits degradation.
+        let trustedError: unknown = error;
+        if (requestStarted && token) {
+          try {
+            const receipt = await receiptForRequest();
+            if (receipt.status === "not_started" && receipt.reason === "gateway_transient") {
+              trustedError = new Error('503 {"type":"gateway_transient","effect_status":"not_started"}');
+            } else if (receipt.status === "not_started"
+              && ["quota_exhausted", "workload_token_cap_exhausted"].includes(receipt.reason)) {
+              trustedError = new Error("429 request quota exhausted");
+            } else trustedError = new Error("PI_OM_UNKNOWN_EFFECT");
+          } catch { trustedError = new Error("PI_OM_UNKNOWN_EFFECT"); }
+        }
+        const failure = recordFailure(trustedError);
         output.push({ type: "error", reason: "error", error: {
           role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id,
           stopReason: "error", errorMessage: failure.message, timestamp: Date.now(),

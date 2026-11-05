@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createServer } from "node:http";
 import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -189,7 +190,7 @@ test("Pi session export and both large-RPC copies redact memory while keeping co
   assert.ok(copies.every((copy) => !copy.includes(MEMORY_TEXT)));
 });
 
-async function wrapperFixture(error?: string) {
+async function wrapperFixture(error?: string, receipt: Record<string, unknown> = { status: "settled" }) {
   const loaded = await import(new URL("../../../agent-harness/fixtures/pi-om-boundary-unit.mjs", import.meta.url).href);
   const { createGovernedObservationalMemoryExtension: create, config } = await loaded.loadGovernedBoundary();
   const root = mkdtempSync(path.join(tmpdir(), "om-wrapper-unit-"));
@@ -205,12 +206,23 @@ async function wrapperFixture(error?: string) {
   const messages: any[] = [];
   const entries: unknown[] = [];
   const calls: any[] = [];
-  const model = { provider: config.model.provider, id: config.model.id, api: "openai-completions", baseUrl: "http://127.0.0.1/om" };
+  const receiptRequests: string[] = [];
+  const receiptServer = createServer((req, res) => {
+    assert.equal(req.headers.authorization, "Bearer offline-unit");
+    assert.match(req.url!, /^\/om\/_settlement\/[a-f0-9-]{36}$/u);
+    receiptRequests.push(req.url!);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(receipt));
+  });
+  await new Promise<void>((resolve) => receiptServer.listen(0, "127.0.0.1", resolve));
+  const port = (receiptServer.address() as { port: number }).port;
+  const model = { provider: config.model.provider, id: config.model.id, api: "openai-completions", baseUrl: `http://127.0.0.1:${port}/om`,
+    headers: { "X-Deepsonar-Request-Id": "untrusted" } };
   const context = { cwd: "/untrusted/project", mode: "rpc", hasUI: true, ui: { notify: () => { throw new Error("RPC must not create UI frames"); } },
     model: { provider: "main", id: "main", contextWindow: 1000000 },
     sessionManager: { getSessionId: () => "same-job-session", getSessionFile: () => "/workspace/same-job/session.jsonl" },
     modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "offline-unit" }),
-      async *streamSimple(selected: unknown) { calls.push(selected); if (error) yield { type: "error", error: { errorMessage: error } };
+      async *streamSimple(selected: unknown, _context: unknown, options: unknown) { calls.push({ selected, options }); if (error) yield { type: "error", error: { errorMessage: error } };
         else yield { type: "done", message: { provider: model.provider, model: model.id } }; } },
   };
   const pi: any = { on: (name: string, handler: (...args: unknown[]) => unknown) => hooks.set(name, [...(hooks.get(name) ?? []), handler]),
@@ -223,9 +235,9 @@ async function wrapperFixture(error?: string) {
   };
   try { create(config)(pi); }
   catch (error) { for (const [key, value] of Object.entries(oldEnv)) if (value === undefined) delete process.env[key]; else process.env[key] = value; throw error; }
-  return { config, create, context, pi, calls, messages, entries, tools, commands, root,
+  return { config, create, context, pi, calls, messages, entries, tools, commands, root, receiptRequests,
     async event(name: string) { let result: unknown; for (const handler of hooks.get(name) ?? []) result = await handler({}, context); return result; },
-    close() { for (const [key, value] of Object.entries(oldEnv)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    close() { receiptServer.closeAllConnections(); receiptServer.close(); for (const [key, value] of Object.entries(oldEnv)) if (value === undefined) delete process.env[key]; else process.env[key] = value;
       rmSync(root, { recursive: true, force: true }); },
   };
 }
@@ -241,6 +253,10 @@ test("wrapper uses frozen config, restores Pi environment, bounds recall and shi
     assert.equal(process.env.PI_OBSERVATIONAL_MEMORY_PASSIVE, "1");
     assert.equal(fixture.context.model.provider, "main");
     assert.equal(fixture.calls.length, 1);
+    const requestId = fixture.calls[0].selected.headers["x-deepsonar-request-id"];
+    assert.match(requestId, /^[a-f0-9-]{36}$/u);
+    assert.equal(fixture.calls[0].options.headers["x-deepsonar-request-id"], requestId);
+    assert.deepEqual(fixture.receiptRequests, [`/om/_settlement/${requestId}`]);
     const recall = fixture.tools.get("recall");
     const result = await recall.execute("call-1", {}, undefined, undefined, fixture.context);
     assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 128 * 1024);
@@ -266,7 +282,8 @@ for (const error of ["429 request quota exhausted", '503 {"error":{"type":"gatew
   '429: {"type":"quota_exhausted","message":"request quota exhausted"}',
   '503: {"type":"gateway_transient","effect_status":"not_started"}']) {
   test(`wrapper reports ${error.slice(0, 3)} background failure after upstream swallowed it and permits native compaction`, async () => {
-    const fixture = await wrapperFixture(error);
+    const fixture = await wrapperFixture(error, { status: "not_started",
+      reason: error.startsWith("429") ? "quota_exhausted" : "gateway_transient" });
     try {
       await fixture.event("agent_start");
       await fixture.event("agent_before_settle");
@@ -311,4 +328,36 @@ test("wrapper rejects private config drift, bad frozen model and cross-session r
     writeFileSync(settings, "{}");
     await assert.rejects(drift.event("agent_start"), /PI_OM_CONFIG_DRIFT/u);
   } finally { drift.close(); }
+});
+
+for (const error of [undefined, '503 {"error":{"type":"gateway_transient","effect_status":"not_started"}}',
+  '429 {"error":{"type":"quota_exhausted"}}']) {
+  test(`OM does not commit terminal output or trust provider prose without settlement: ${error ?? "done"}`, async () => {
+    const fixture = await wrapperFixture(error, { status: "unknown" });
+    try {
+      await fixture.event("agent_start");
+      await assert.rejects(fixture.event("agent_before_settle"), /PI_OM_UNKNOWN_EFFECT/u);
+      assert.equal(fixture.entries.length, 0);
+      assert.equal(fixture.messages.length, 0);
+    } finally { fixture.close(); }
+  });
+}
+
+
+test("OM holds SDK done until the correlated durable receipt settles", async () => {
+  const receipt = { status: "pending" };
+  const fixture = await wrapperFixture(undefined, receipt);
+  try {
+    await fixture.event("agent_start");
+    // Wait for the actual loopback receipt query, not a mock SDK completion.
+    const deadline = Date.now() + 2000;
+    while (fixture.receiptRequests.length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(fixture.receiptRequests.length > 0);
+    assert.equal(fixture.entries.length, 0);
+    receipt.status = "settled";
+    await fixture.event("agent_before_settle");
+    assert.equal(fixture.entries.length, 1);
+  } finally { fixture.close(); }
 });

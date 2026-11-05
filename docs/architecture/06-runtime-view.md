@@ -187,3 +187,8 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 ## Plan 未派发路线修订（#775 v1 历史）
 
 该 v1 路线修订仅作为不可变历史记录读取；当前路线修改使用上文 v2 `execution_route` CAS。历史事件、快照和回执不改写，未知效果、待结算回执或失效目标都不能借旧协议恢复执行。详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。
+
+
+## Model Gateway 透明传输与结算（#923）
+
+请求按原 token、Job/Attempt、冻结模型和预算准入后，经单次 HTTP 交换转发原始 body、路径/query 和端到端头。客户端请求流先有界收全，响应/SSE 即时发送且遵守背压/取消；usage 仅旁路观察。CLI alias 移至请求生成层，预算不符在出站前明确拒绝。OM wrapper 为请求登记 UUID，收到模型终止结果后查询同 Job/Attempt/token/workload 的持久 effect/usage 状态，仅 settled 才提交；未知保持硬失败。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与 [ADR 0016](adr/0016-transparent-gateway-settlement.md)。本分支最终 SHA Actions 待验。

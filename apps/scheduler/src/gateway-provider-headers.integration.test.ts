@@ -87,11 +87,10 @@ test("configured provider headers reach the upstream and the Job token never doe
       url: "/gateway/v1/chat/completions",
       headers: {
         authorization: `Bearer ${token.plaintext}`,
-        // The sandbox tries to spoof the same header plus carry the Job token on an
-        // Anthropic auth carrier; neither may decide the upstream routing attribute or
-        // leak the token.
+        // Business headers override credential defaults; all inbound authentication
+        // carriers are consumed before the server generates upstream authentication.
         "anthropic-api-key": token.plaintext,
-        "x-traffic-type": "sandbox-spoofed",
+        "x-traffic-type": "client-traffic",
         "x-deepsonar-job": "internal",
         "user-agent": "claude-cli/2.1.312 (external, cli)",
       },
@@ -101,9 +100,9 @@ test("configured provider headers reach the upstream and the Job token never doe
     assert.equal(received.length, 1, "the fake upstream must have been called once");
 
     const headers = received[0]!;
-    assert.equal(headers["x-traffic-type"], "eval", "the credential's configured header wins over sandbox input");
+    assert.equal(headers["x-traffic-type"], "client-traffic", "client business headers override configured defaults");
     assert.equal(headers["x-tenant"], "acme");
-    assert.equal(headers["user-agent"], "claude-cli/2.1.312 (external, cli)", "allowlisted CLI protocol headers still pass");
+    assert.equal(headers["user-agent"], "claude-cli/2.1.312 (external, cli)", "CLI protocol headers pass");
     assert.equal(headers["x-deepsonar-job"], undefined, "internal control headers are never forwarded");
     assert.equal(headers["anthropic-api-key"], undefined, "the inbound Job token carrier is never forwarded");
     assert.equal(headers.authorization, "Bearer offline-fixture-only", "authentication comes from the bound credential");
@@ -140,7 +139,7 @@ test("configured provider headers reach the upstream and the Job token never doe
         settings_config_json = ${sql.json(fixture.settings)} WHERE id = ${credentialId}`;
       const result = await app.inject({ method: "POST", url: "/gateway/v1/chat/completions",
         headers: { authorization: `Bearer ${token.plaintext}`, "anthropic-api-key": token.plaintext,
-          "x-tenant": "sandbox-spoofed", "x-untrusted": "must-not-forward", "x-traffic-type": "sandbox-spoofed",
+          "x-unknown-protocol": "client-extension",
           "user-agent": "claude-cli/2.1.312 (external, cli)" },
         payload: { model: "offline", messages: [] } });
       assert.equal(result.statusCode, 200, result.payload);
@@ -149,7 +148,7 @@ test("configured provider headers reach the upstream and the Job token never doe
       const outbound = fixture.target[0]!;
       assert.equal(outbound["x-tenant"], fixture.tenant ?? undefined);
       assert.equal(outbound["x-traffic-type"], fixture.tenant ? "eval" : undefined);
-      assert.equal(outbound["x-untrusted"], undefined);
+      assert.equal(outbound["x-unknown-protocol"], "client-extension");
       assert.equal(outbound["anthropic-api-key"], undefined);
       assert.equal(outbound["x-api-key"], undefined);
       assert.equal(outbound["user-agent"], "claude-cli/2.1.312 (external, cli)");

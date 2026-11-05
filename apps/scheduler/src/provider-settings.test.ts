@@ -1,3 +1,4 @@
+import { frozenClaudeLaunchModel } from "./provider-effective-model.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
@@ -934,4 +935,15 @@ test("extractModelsFromSettings is CLI-dialect aware (#679)", () => {
   const mixed = extractModelsFromSettings(claudeSettings);
   assert.ok(mixed.includes("claude-sonnet-4-5"));
   assert.ok(mixed.includes("pi-only-id"));
+});
+
+
+test("Claude request generation selects the frozen wire model before the transparent gateway", () => {
+  for (const model of ["fable", "sonnet", "opus", "haiku"]) {
+    assert.equal(frozenClaudeLaunchModel({ model, upstream_model: "fixture-upstream" }), "fixture-upstream");
+  }
+  assert.equal(frozenClaudeLaunchModel({ model: null, upstream_model: "cli-default:claude-opus-5" }), "claude-opus-5");
+  assert.equal(frozenClaudeLaunchModel({ model: "fixture-native" }), "fixture-native");
+  assert.equal(frozenClaudeLaunchModel({}), undefined);
+  assert.equal(frozenClaudeLaunchModel({ model: "fixture[1m]", upstream_model: "fixture[1m]" }), "fixture[1m]");
 });

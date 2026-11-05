@@ -57,7 +57,7 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
         url: `/control/v1/jobs/${jobId}/operations/mark_job_done`, headers: { authorization: `Bearer ${grant.token}`,
           "idempotency-key": key, "x-deepsonar-proposal-revision": String(revision) }, payload: { summary } });
       const request = (extra: Record<string, unknown> = {}, path = "v1/chat/completions") => app.inject({ method: "POST", url: `/gateway/${path}`,
-        headers: { authorization: `Bearer ${token.plaintext}` }, payload: { model: "offline", messages: [], repair_tokens: 0, ...extra } });
+        headers: { authorization: `Bearer ${token.plaintext}` }, payload: { model: "offline", messages: [], repair_tokens: 0, max_completion_tokens: 1, ...extra } });
       const read = () => sql.begin(tx => budgetApi.readRepairTokenBudget(tx as unknown as typeof sql, jobId));
       const settle = async (count: number) => {
         for (let i = 0; i < 100; i++) {
@@ -81,11 +81,21 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     assert.equal(unlimitedCounter.used_requests, 501); assert.equal(unlimitedCounter.status, "active");
 
     const ordinaryCap = await setup(0, 10); responseTokens = 4;
-    assert.equal((await ordinaryCap.request()).statusCode, 200); await ordinaryCap.settle(1);
+    const beforePolicyDenials = calls;
+    for (const extra of [{ max_completion_tokens: undefined }, { max_completion_tokens: 11 },
+      { max_completion_tokens: 10, stream: true }]) {
+      const denied = await ordinaryCap.request(extra);
+      assert.equal(denied.statusCode, 409, denied.body);
+      assert.equal(denied.json().error.type, "GATEWAY_OUTPUT_BUDGET_REQUIRED");
+    }
+    assert.equal(calls, beforePolicyDenials, "missing/excess output limits and unobservable streams never reach upstream");
+    const [beforePolicyCounter] = await sql`SELECT used_requests FROM job_tokens WHERE job_id=${ordinaryCap.jobId}`;
+    assert.equal(beforePolicyCounter.used_requests, 0, "policy rejection rolls back quota reservation");
+    assert.equal((await ordinaryCap.request({ max_completion_tokens: 10 })).statusCode, 200); await ordinaryCap.settle(1);
     assert.equal(lastOutputLimit, 10);
     responseTokens = 6;
     await ordinaryCap.rotate();
-    assert.equal((await ordinaryCap.request()).statusCode, 200); await ordinaryCap.settle(2);
+    assert.equal((await ordinaryCap.request({ max_completion_tokens: 6 })).statusCode, 200); await ordinaryCap.settle(2);
     assert.equal(lastOutputLimit, 6, "ordinary Job cap survives token rotation and includes prior usage");
     const beforeCapDenial = calls;
     assert.equal((await ordinaryCap.request()).json().error.type, "JOB_TOKEN_EXHAUSTED");
@@ -113,8 +123,8 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     assert.equal((await first.read())?.known_tokens, 0);
     Object.assign(config.gateway, { repairMaxTokens: 1000 });
     assert.equal((await first.read())?.limit_tokens, 10, "policy is frozen, not reread from current config");
-    assert.equal((await first.request()).statusCode, 200); await first.settle(2);
-    assert.equal(lastOutputLimit, 10, "host supplies bounded output, regardless of self-reported repair cost");
+    assert.equal((await first.request({ max_completion_tokens: 10 })).statusCode, 200); await first.settle(2);
+    assert.equal(lastOutputLimit, 10, "explicit client output limit reaches upstream unchanged; self-reported repair cost is ignored");
     assert.equal((await first.read())?.known_tokens, 6);
     assert.equal((await first.propose(0, "x".repeat(8193), rejectionKey)).statusCode, 422);
     const rotatedToken = await first.rotate();
@@ -129,7 +139,7 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
       const {sql}=await import(process.env.REPAIR_FIXTURE_DB);
       const app=Fastify(); registerGateway(app);
       const result=await app.inject({method:'POST',url:'/gateway/v1/chat/completions',
-        headers:{authorization:'Bearer '+process.env.REPAIR_FIXTURE_TOKEN},payload:{model:'offline',messages:[]}});
+        headers:{authorization:'Bearer '+process.env.REPAIR_FIXTURE_TOKEN},payload:{model:'offline',messages:[],max_completion_tokens:4}});
       console.log(JSON.stringify({status:result.statusCode}));
       await app.close(); await sql.end({timeout:5});
     `], { timeout: 10000, cwd: new URL("../", import.meta.url), env: { ...process.env, REPAIR_FIXTURE_TOKEN: rotatedToken,
@@ -201,7 +211,7 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     assert.equal(unlimitedRejection.json().repair.remaining_budget.tokens, undefined, "unlimited feedback does not advertise exhausted tokens");
     responseTokens = 2_000_001;
     for (let count = 1; count <= 2; count++) {
-      assert.equal((await unconfigured.request()).statusCode, 200); await unconfigured.settle(count);
+      assert.equal((await unconfigured.request({ max_completion_tokens: undefined })).statusCode, 200); await unconfigured.settle(count);
       assert.equal(lastOutputLimit, undefined, "unlimited repair does not inject a zero or finite output cap");
     }
     assert.equal((await unconfigured.read())?.limit_tokens, 0);
@@ -227,8 +237,8 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     const totalOnly = await setup(0, 10); responseTokens = 4;
     await totalOnly.request(); await totalOnly.settle(1); await totalOnly.propose(0, "x".repeat(8193));
     responseTokens = 6;
-    assert.equal((await totalOnly.request()).statusCode, 200); await totalOnly.settle(2);
-    assert.equal(lastOutputLimit, 6, "finite Job ceiling tightens unlimited repair without null coercion");
+    assert.equal((await totalOnly.request({ max_completion_tokens: 6 })).statusCode, 200); await totalOnly.settle(2);
+    assert.equal(lastOutputLimit, 6, "client output limit within the finite Job ceiling is forwarded unchanged");
     assert.equal((await totalOnly.request()).json().error.type, "JOB_TOKEN_EXHAUSTED");
 
     const total = await setup(10, 3); responseTokens = 3;
@@ -252,18 +262,20 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
     assert.equal((await finiteOrdinary.request()).json().error.type, "JOB_TOKEN_USAGE_UNKNOWN");
     assert.equal(calls, beforeFiniteFailure + 1, "unknown finite usage blocks further upstream calls");
 
-    // Ordinary Job: a successful business response is not proof that an earlier attempt was free.
+    // Ordinary Job: the original upstream error is observable and its unknown cost remains durable.
     const ordinaryRetry = await setup();
     responseSequence = [{ status: 503, tokens: 0 }, { status: 200, tokens: 6 }];
     const beforeRetry = calls;
     const businessSuccess = await ordinaryRetry.request(); await ordinaryRetry.settle(1);
-    assert.equal(businessSuccess.statusCode, 200);
+    assert.equal(businessSuccess.statusCode, 503);
     assert.equal(businessSuccess.json().choices[0].message.content, "fixture");
-    assert.equal(calls, beforeRetry + 2, "ordinary request retains its existing bounded retry behavior");
+    assert.equal(calls, beforeRetry + 1, "ordinary requests never hide a retry behind the original upstream error");
+    assert.equal(responseSequence.length, 1, "the would-be successful retry was never invoked");
+    responseSequence = [];
     const [uncertainCost] = await sql`SELECT l.total_tokens,l.settlement_status,e.status AS effect_status
       FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id
       WHERE l.job_id=${ordinaryRetry.jobId}`;
-    assert.equal(uncertainCost.total_tokens, "6", "retain observed final usage without claiming earlier calls were free");
+    assert.equal(uncertainCost.total_tokens, "0", "retain observed usage without claiming an error response proves zero cost");
     assert.equal(uncertainCost.settlement_status, "unknown"); assert.equal(uncertainCost.effect_status, "unknown");
     const cannotSettle = await ordinaryRetry.propose(0, "business response received");
     assert.equal(cannotSettle.json().error_code, "COMPLETION_EFFECT_UNKNOWN");
@@ -279,7 +291,7 @@ test("repair tokens use durable Gateway accounting across rejection, restart, co
       FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id
       WHERE l.job_id=${ordinaryRetry.jobId}`;
     assert.deepEqual(preservedCost, uncertainCost, "recording a refusal never settles the earlier unknown effect or cost");
-    assert.equal(calls, beforeRetry + 2, "completion refusal and budget reads do not replay upstream requests");
+    assert.equal(calls, beforeRetry + 1, "completion refusal and budget reads do not replay upstream requests");
 
     const ordinaryZero = await setup(); responseTokens = 0;
     assert.equal((await ordinaryZero.request()).statusCode, 200); await ordinaryZero.settle(1);

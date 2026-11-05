@@ -125,3 +125,8 @@ Scheduler-owned 的只读 target-authorization protocol 已接线：authority/ac
 证据追踪此前混淆 manifest 声明摘要与 observed、路径后缀与精确 URI、最新 Attempt 与来源 Attempt；本片已修正只读完整性诊断并完成行为验收。仍无宿主命令 receipt 或真正独立复现/攻击链；knownness helper 未运行时接入，不可视为 novel authority。详见[证据追踪](../EVIDENCE_TRACE.md)。
 
 #775 的 Plan v2 目标修订、依赖图调度、lifetime 路线、实际输出来源与既有 Intent 路径已接线；v1 writer 已于 2026-10-31 物理删除，immutable v1 与 `hub_intent_adapter` 仅保留历史读取。历史一次补证投影只说明历史范围；根本地 v2 replay 的 normal→all7negative→normal 三次退出 0、17 个 outcomes/traces 和七故障负例门禁已核验，但 `report.json` provenance 是 dirty 的非 HEAD 提交，不能代表后续 #831 的工程验收证据；本轮工程已按上述 Actions 摘要验收，后续修复 SHA 和正式发布另计。不要求生产或真实模型试验，独立质量按本轮范围暂缓而非通过。
+
+
+## 透明 Gateway 的编码回显边界（#923）
+
+绑定凭据的响应 header/trailer 与跨 chunk 原始 body 明文回显已有阻断；gzip/deflate/br 旁路解码检查已接入同一阻断，未知编码和超限明确拒绝；任意业务自定义编码/变换后的 key echo 尚无完整检测保证。不得把现有明文扫描宣称为真实 key 任意表示均不会回流。协议范围和待验合成场景见[透明传输契约](../MODEL_GATEWAY_TRANSPARENCY.md)；最终 SHA Actions 以及压缩回显负例需单独留证，本轮未做生产或真实模型验证。

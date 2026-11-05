@@ -173,3 +173,8 @@ FR-FIND-008 增加 `/program-materials` 的登记/读取、单材料读取/撤�
 `PATCH /tasks/:canvasId` 是 Management `tasks:write` 入口，按认证 actor 的项目权限与 Canvas 行锁校验 `plan_objective.expected_revision`；授权用户显式提供 goal、completion 和有限 lifetime budget，响应返回当前 objective/revision。活跃及历史 Job snapshot/Attempt/事件不被编辑；模型不能调用该管理输入改写目标。
 
 Job-scoped `submit_plan` 当前严格要求 `{plan: PlanV2, revision: execution_route}`；`submit_plan_result` 同样只接收 v2。objective/revision、owner、route CAS、Plan SHA 与已派发 task 的字节身份必须匹配；模型只能调整未派发路线，不能重置 lifetime 计数。v1 Plan/Result 只供历史读；普通 HubIntent 走原 handler，不制造新的 v1 `plan_protocol`，不可变 v1 与 `hub_intent_adapter` 审计只作历史解析。接纳 receipt 查询只恢复原响应，不证明执行或语义完成；工程执行投影和操作员完成门分开。机器字段以 [plan.ts](../../packages/shared-types/src/plan.ts)、[objective](../../apps/scheduler/src/domains/plan-protocol/objective.ts)和[任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)为准。
+
+
+## 透明数据面与 scoped 回执（#923）
+
+Model Gateway 支持原始方法/相对路径/query、未知端到端头及原始 body；保留上游状态、错误、头和 SSE，不隐式重试或重定向。Host、认证及必要逐跳/framing 在内核边界处理。`x-deepsonar-request-id` 是被消费的精确控制字段；`GET /gateway/_settlement/:id` 是当前 Job/Attempt/token/workload 范围内、不可缓存的只读结算查询，不是上游路由或模型调用。返回 settled、not_started、pending、unknown 或 not_found，不泄露其他 scope 的 ledger。预算准入可返回 `GATEWAY_OUTPUT_BUDGET_REQUIRED`，客户端须显式提供受预算约束的输出参数。原始请求流有界缓冲、HEAD/OPTIONS、编码及升级限制见[契约](../MODEL_GATEWAY_TRANSPARENCY.md)，实现见[Gateway](../../apps/scheduler/src/gateway.ts)。

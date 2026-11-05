@@ -279,17 +279,29 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       ttlSec: 3600,
       ...limits,
     });
-    const request = (token: string, options: {
+    const correlations = new WeakMap<object, { token: string; id: string }>();
+    const receiptFor = async (response: object) => {
+      const correlation = correlations.get(response)!;
+      const receipt = await app.inject({ method: "GET", url: `/gateway/_settlement/${correlation.id}`,
+        headers: { authorization: `Bearer ${correlation.token}` } });
+      return receipt.json();
+    };
+    const request = async (token: string, options: {
       workload?: "main" | "observational_memory"; model?: string; path?: string;
       claimedWorkload?: string; method?: "POST" | "DELETE";
     } = {}) => {
       const workload = options.workload ?? "observational_memory";
-      return app.inject({
+      const id = randomUUID();
+      const route = options.path ?? (workload === "main" ? "v1/chat/completions" : "v1/responses");
+      const response = await app.inject({
         method: options.method ?? "POST",
-        url: `/gateway/${options.path ?? (workload === "main" ? "v1/chat/completions" : "v1/responses")}`,
-        headers: { authorization: `Bearer ${token}`, "x-deepsonar-workload": options.claimedWorkload ?? "main" },
-         payload: { model: options.model ?? "main-model", messages: [] },
+        url: `/gateway/${route}`,
+        headers: { authorization: `Bearer ${token}`, "x-deepsonar-request-id": id,
+          "x-deepsonar-workload": options.claimedWorkload ?? "main" },
+         payload: { model: options.model ?? "main-model", messages: [], [route.endsWith("responses") ? "max_output_tokens" : "max_tokens"]: 1 },
       });
+      correlations.set(response, { token, id });
+      return response;
     };
 
     const primary = await createJob();
@@ -458,8 +470,9 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     const redirectMemory = await issue(redirectJob.jobId, "observational_memory");
     upstreamMode = "redirect";
     const redirected = await request(redirectMemory.plaintext);
-    assert.equal(redirected.statusCode, 409);
-    assert.equal(redirected.json().error.type, "workload_usage_unknown");
+    assert.equal(redirected.statusCode, 307);
+    assert.equal(redirected.headers.location, redirectTargetUrl);
+    assert.equal((await receiptFor(redirected)).status, "unknown");
     upstreamMode = "ok";
 
     // Provider-controlled status/body/header values cannot impersonate the
@@ -468,10 +481,10 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     const spoofMemory = await issue(spoofJob.jobId, "observational_memory");
     upstreamMode = "spoof";
     const spoofed = await request(spoofMemory.plaintext);
-    assert.equal(spoofed.statusCode, 409);
-    assert.equal(spoofed.json().error.type, "workload_usage_unknown");
-    assert.equal(spoofed.headers["x-deepsonar-effect-status"], undefined);
-    assert.doesNotMatch(spoofed.body, /gateway_transient/u);
+    assert.equal(spoofed.statusCode, 503);
+    assert.equal(spoofed.json().error.type, "gateway_transient");
+    assert.equal(spoofed.headers["x-deepsonar-effect-status"], "not_started");
+    assert.equal((await receiptFor(spoofed)).status, "unknown", "provider prose is not a settlement receipt");
     upstreamMode = "ok";
 
     // A connected upstream that resets before response headers is uncertain,
@@ -495,23 +508,19 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
 
     // A terminal transition racing the refused transport still keeps the
     // late zero-use ledger, while the Gateway never rewrites terminal Job
-    // state. The fetch delegate only inserts the deterministic race point and
-    // still delegates to the real closed loopback socket.
+    // state. A database trigger inserts the deterministic race after effect admission;
+    // the request still uses the real closed loopback socket.
     const terminalNoEffectJob = await createJob("running", { backgroundMaxRequests: 1 }, closedCredentialId);
     const terminalNoEffectMemory = await issue(terminalNoEffectJob.jobId, "observational_memory", {}, closedCredentialId);
     await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${closedPort}` })}
       WHERE id = ${closedCredentialId}`;
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = (async (input, init) => {
-      await sql`UPDATE jobs SET status = 'succeeded', finished_at = now() WHERE id = ${terminalNoEffectJob.jobId}`;
-      return realFetch(input, init);
-    }) as typeof fetch;
-    let terminalTransient;
-    try {
-      terminalTransient = await request(terminalNoEffectMemory.plaintext);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    await sql.unsafe(`CREATE FUNCTION terminal_transport_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN UPDATE jobs SET status='succeeded', finished_at=now() WHERE id=NEW.job_id; RETURN NEW; END $$`);
+    await sql.unsafe(`CREATE TRIGGER terminal_transport_fixture AFTER INSERT ON job_attempt_effects
+      FOR EACH ROW WHEN (NEW.job_id='${terminalNoEffectJob.jobId}'::uuid) EXECUTE FUNCTION terminal_transport_fixture()`);
+    const terminalTransient = await request(terminalNoEffectMemory.plaintext);
+    await sql.unsafe('DROP TRIGGER terminal_transport_fixture ON job_attempt_effects');
+    await sql.unsafe('DROP FUNCTION terminal_transport_fixture()');
     assert.equal(terminalTransient.statusCode, 503);
     assert.equal(terminalTransient.json().error.effect_status, "not_started");
     const [terminalNoEffect] = await sql`SELECT j.status, l.settlement_status, l.total_tokens, e.status AS effect_status
@@ -527,19 +536,14 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     // strict path must not append a second zero ledger or claim not_started.
     const conflictJob = await createJob("running", { backgroundMaxRequests: 2 }, closedCredentialId);
     const conflictMemory = await issue(conflictJob.jobId, "observational_memory", {}, closedCredentialId);
-    const conflictFetch = globalThis.fetch;
-    globalThis.fetch = (async (input, init) => {
-      await sql`UPDATE job_attempt_effects
-        SET status = 'unknown', settlement_json = ${sql.json({ result: "unknown_effect" })}, settled_at = now()
-        WHERE job_id = ${conflictJob.jobId} AND effect_kind = 'gateway_model_request' AND status = 'effect_pending'`;
-      return conflictFetch(input, init);
-    }) as typeof fetch;
-    let conflictResponse;
-    try {
-      conflictResponse = await request(conflictMemory.plaintext);
-    } finally {
-      globalThis.fetch = conflictFetch;
-    }
+    await sql.unsafe(`CREATE FUNCTION conflict_transport_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN UPDATE job_attempt_effects SET status='unknown', settlement_json='{"result":"unknown_effect"}'::jsonb,
+        settled_at=now() WHERE id=NEW.id; RETURN NEW; END $$`);
+    await sql.unsafe(`CREATE TRIGGER conflict_transport_fixture AFTER INSERT ON job_attempt_effects
+      FOR EACH ROW WHEN (NEW.job_id='${conflictJob.jobId}'::uuid) EXECUTE FUNCTION conflict_transport_fixture()`);
+    const conflictResponse = await request(conflictMemory.plaintext);
+    await sql.unsafe('DROP TRIGGER conflict_transport_fixture ON job_attempt_effects');
+    await sql.unsafe('DROP FUNCTION conflict_transport_fixture()');
     assert.equal(conflictResponse.statusCode, 409);
     assert.equal(conflictResponse.json().error.type, "workload_usage_unknown");
     assert.doesNotMatch(conflictResponse.body, /gateway_transient/u);
@@ -584,8 +588,9 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     const unknownMemory = await issue(unknownJob.jobId, "observational_memory");
     upstreamMode = "unknown";
     const unknownResponse = await request(unknownMemory.plaintext);
-    assert.equal(unknownResponse.statusCode, 409);
-    assert.equal(unknownResponse.json().error.type, "workload_usage_unknown");
+    assert.equal(unknownResponse.statusCode, 503);
+    assert.deepEqual(unknownResponse.json(), { error: "offline fixture failure" });
+    assert.equal((await receiptFor(unknownResponse)).status, "unknown");
     upstreamMode = "ok";
     const callsBeforeBlockedRetry = upstreamCalls;
     const blockedRetry = await request(unknownMemory.plaintext);
@@ -682,7 +687,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     assert.equal((await request(pendingMain.plaintext, { workload: "main" })).statusCode, 200);
     releaseBackground();
     assert.equal((await inFlight).statusCode, 200);
-    assert.equal(backgroundOutputLimit, 20, "finite background output is bounded by its remaining allowance");
+    assert.equal(backgroundOutputLimit, 1, "admitted output limit is forwarded byte-for-byte without a Gateway rewrite");
     backgroundEntered = undefined;
     backgroundRelease = undefined;
     assert.equal((await request(pendingMemory.plaintext)).statusCode, 200, "settlement releases the independent background allowance");
@@ -734,7 +739,8 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       upstreamMode = mode;
       const callsBeforeProtocol = upstreamCalls;
       const response = await request(protocolMemory.plaintext);
-      assert.equal(response.statusCode, mode === "stream" ? 200 : 409, mode);
+      assert.equal(response.statusCode, mode === "unknown" ? 503 : 200, mode);
+      assert.equal((await receiptFor(response)).status, mode === "stream" ? "settled" : "unknown", mode);
       assert.equal(upstreamCalls, callsBeforeProtocol + 1, "background requests never replay uncertain external effects");
       upstreamMode = "ok";
       const next = await request((await issue(protocolJob.jobId, "observational_memory")).plaintext);
@@ -750,23 +756,25 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     }
 
     // Anthropic's native refusal carrier is copied verbatim into Pi's
-    // errorMessage. Reserved Kernel/quota grammar is therefore unknown even
-    // when the same stream also contains valid terminal usage; ordinary
-    // provider refusal prose remains a normal settled response.
+    // errorMessage. All bytes remain unchanged. The accounting observer marks
+    // reserved Kernel/quota carriers unknown even with terminal usage; ordinary
+    // refusal prose remains settled. The wrapper separately gates publication.
     for (const mode of ["anthropic_refusal_503", "anthropic_refusal_429", "anthropic_refusal_safe"] as const) {
       const anthropicJob = await createJob("running", { provider: "anthropic", backgroundMaxRequests: 1 }, anthropicCredentialId);
       const anthropicMemory = await issue(anthropicJob.jobId, "observational_memory", {}, anthropicCredentialId);
       upstreamMode = mode;
       const callsBeforeAnthropic = upstreamCalls;
       const response = await request(anthropicMemory.plaintext, { path: "v1/messages" });
-      assert.equal(response.statusCode, mode === "anthropic_refusal_safe" ? 200 : 409, mode);
+      assert.equal(response.statusCode, 200, mode);
       assert.equal(upstreamCalls, callsBeforeAnthropic + 1);
       upstreamMode = "ok";
       const [anthropicLedger] = await sql`SELECT l.settlement_status, l.total_tokens, e.status AS effect_status
         FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id
         WHERE l.job_id=${anthropicJob.jobId}`;
-      assert.equal(anthropicLedger.settlement_status, mode === "anthropic_refusal_safe" ? "settled" : "unknown", mode);
-      assert.equal(anthropicLedger.effect_status, mode === "anthropic_refusal_safe" ? "settled" : "unknown", mode);
+      const expectedSettlement = mode === "anthropic_refusal_safe" ? "settled" : "unknown";
+      assert.equal(anthropicLedger.settlement_status, expectedSettlement, mode);
+      assert.equal(anthropicLedger.effect_status, expectedSettlement, mode);
+      assert.equal((await receiptFor(response)).status, expectedSettlement, mode);
       assert.equal(Number(anthropicLedger.total_tokens), 2);
     }
 
@@ -778,7 +786,9 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       BEGIN RAISE EXCEPTION 'offline ledger failure'; END $$`);
     await sql.unsafe(`CREATE TRIGGER reject_om_usage_fixture BEFORE INSERT ON job_usage_ledger
       FOR EACH ROW WHEN (NEW.job_id='${failedLedgerJob.jobId}'::uuid) EXECUTE FUNCTION reject_om_usage_fixture()`);
-    assert.equal((await request(failedLedgerMemory.plaintext)).statusCode, 409);
+    const failedLedgerResponse = await request(failedLedgerMemory.plaintext);
+    assert.equal(failedLedgerResponse.statusCode, 200);
+    assert.equal((await receiptFor(failedLedgerResponse)).status, "pending");
     const callsAfterLedgerFailure = upstreamCalls;
     assert.equal((await request((await issue(failedLedgerJob.jobId, "observational_memory")).plaintext)).statusCode, 409);
     assert.equal(upstreamCalls, callsAfterLedgerFailure);

@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test, { mock, type TestContext } from "node:test";
 import Fastify from "fastify";
+import { Readable } from "node:stream";
 import type { GatewayWorkload } from "./gateway-om-budget.js";
 
 process.env.AGENT_MODE = "fake";
@@ -45,6 +46,13 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
     const query = input.join("?").replace(/\s+/gu, " ").trim();
     const state = current();
     const rows = (): Row[] => {
+      if (query.startsWith("SELECT effect_id FROM job_attempt_effects")) return [];
+      if (query.startsWith("SELECT e.status, e.settlement_json, l.settlement_status, l.source")) {
+        return state.effects.filter((entry) => (entry.intent_json as Row)?.gateway_request_id === values[3]).map((effect) => ({
+          ...effect, settlement_status: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.settlement_status,
+          source: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.source,
+        }));
+      }
       if (query.startsWith("SELECT jt.*")) return [tokenRow(state)];
       if (query.startsWith("SELECT * FROM credentials")) return [{ ...encrypted, provider: "openai", kind: "llm_provider", status: "active",
         agent_cli: "pi", public_metadata_json: { base_url: "http://127.0.0.1:14100" }, model_catalog_json: [] }];
@@ -116,6 +124,11 @@ const fakeSql = Object.assign(makeSql(() => store), {
 });
 const database = await import("./db.js");
 mock.module(new URL("./db.js", import.meta.url), { namedExports: { ...database, sql: fakeSql } });
+const transport = await import("./gateway-transparent-http.js");
+let upstreamImpl: typeof transport.requestGatewayHttp;
+mock.module(new URL("./gateway-transparent-http.js", import.meta.url), { namedExports: {
+  ...transport, requestGatewayHttp: (input: Parameters<typeof transport.requestGatewayHttp>[0]) => upstreamImpl(input),
+} });
 const { registerGateway, hashJobToken } = await import("./gateway.js");
 const { encryptSecret } = await import("./credentials.js");
 const { freezePiExtensions } = await import("./pi-extensions.js");
@@ -139,18 +152,24 @@ function setup(t: TestContext, selected: GatewayWorkload, code: string, failures
   app.setErrorHandler((error, _req, reply) => { errors.push(error); return reply.code(500).send({ error: "unhandled_database_error" }); });
   registerGateway(app);
   t.after(() => app.close());
-  const upstream = t.mock.method(globalThis, "fetch", async (url: unknown) => {
-    assert.equal(url, "http://127.0.0.1:14100/v1/chat/completions");
+  const upstream = t.mock.fn(async (input: Parameters<typeof transport.requestGatewayHttp>[0]) => {
+    assert.equal(input.url, "http://127.0.0.1:14100/v1/chat/completions");
     assert.equal(store.usedRequests, 1, "admission must commit before sending upstream");
     assert.equal(store.effects.length, 1);
     if (upstreamError) throw upstreamError;
-    return new Response(JSON.stringify(upstreamBody ?? { object: "chat.completion", model,
+    const body = JSON.stringify(upstreamBody ?? { object: "chat.completion", model,
       choices: [{ index: 0, finish_reason: "stop", message: { content: "offline" } }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }),
-    { status: upstreamStatus, headers: { "content-type": "application/json" } });
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    return Object.assign(Readable.from([Buffer.from(body)], { objectMode: false }), { statusCode: upstreamStatus, statusMessage: "Fixture",
+      headers: { "content-type": "application/json" }, rawHeaders: ["content-type", "application/json"], rawTrailers: [] }) as unknown as Awaited<ReturnType<typeof transport.requestGatewayHttp>>;
   });
-  return { errors, upstream, request: () => app.inject({ method: "POST", url: "/gateway/v1/chat/completions",
-    headers: { authorization: `Bearer ${token}` }, payload: { model, messages: [{ role: "user", content: "offline" }] } }) };
+  upstreamImpl = upstream;
+  const requestId = randomUUID();
+  return { errors, upstream, receipt: async () => (await app.inject({ method: "GET", url: `/gateway/_settlement/${requestId}`,
+    headers: { authorization: `Bearer ${token}` } })).json(),
+    request: () => app.inject({ method: "POST", url: "/gateway/v1/chat/completions",
+    headers: { authorization: `Bearer ${token}`, "x-deepsonar-request-id": requestId },
+    payload: { model, messages: [{ role: "user", content: "offline" }] } }) };
 }
 
 async function conflictCount(code: string, exhausted = false): Promise<number> {
@@ -160,11 +179,11 @@ async function conflictCount(code: string, exhausted = false): Promise<number> {
   return line ? Number(line.slice(prefix.length)) : 0;
 }
 
-async function assertConsumer(response: { statusCode: number; body: string }, degraded: boolean) {
+async function assertConsumer(response: { statusCode: number; body: string }, degraded: boolean, receipt = { status: "unknown" } as Row) {
   const body = JSON.parse(response.body);
   // Exercise both the full HTTP envelope and the SDK's message-only error text.
-  for (const error of [`${response.statusCode} ${response.body}`, `${response.statusCode}: ${body.error.message}`]) {
-    const boundary = await createFailureBoundary(error);
+  for (const error of [`${response.statusCode} ${response.body}`, `${response.statusCode}: ${body.error?.message ?? "upstream response"}`]) {
+    const boundary = await createFailureBoundary(error, receipt);
     try {
       if (degraded) {
         await boundary.event("agent_start");
@@ -226,7 +245,7 @@ for (const selected of ["main", "observational_memory"] as const) {
       else { assert.equal(body.error.type, "database_conflict"); assert.equal(body.error.effect_status, undefined); }
       assert.equal(await conflictCount(code), before + 3);
       assert.equal(await conflictCount(code, true), exhaustedBefore + 1);
-      await assertConsumer(response, selected === "observational_memory");
+      await assertConsumer(response, false);
     });
   }
 
@@ -278,8 +297,8 @@ for (const spoof of [false, true]) {
     const fixture = setup(t, "observational_memory", "40P01", 0, 503,
       spoof ? conflictFixture : { error: { type: "overloaded_error", message: "offline upstream unavailable" } });
     const response = await fixture.request();
-    assert.equal(response.statusCode, 409, response.body);
-    assert.equal(response.json().error.type, "workload_usage_unknown");
+    assert.equal(response.statusCode, 503, response.body);
+    assert.equal((await fixture.receipt()).status, "unknown");
     assert.equal(fixture.upstream.mock.callCount(), 1);
     assert.equal(store.effects[0]?.status, "unknown");
     assert.equal(store.ledger[0]?.settlement_status, "unknown");
@@ -308,7 +327,7 @@ test("OM native pre-request failure emits the real RPC carrier only after durabl
   assert.equal(store.ledger.length, 1);
   assert.equal(store.ledger[0]?.total_tokens, 0);
   assert.equal(store.ledger[0]?.settlement_status, "settled");
-  await assertConsumer(response, true);
+  await assertConsumer(response, true, await fixture.receipt());
 });
 
 test("OM pre-request failure remains hard when zero-usage settlement cannot commit", async (t) => {
@@ -336,8 +355,8 @@ test("OM settlement conflict is not retried or relabeled not_started after upstr
   settlementError = databaseError;
   t.mock.method(console, "error", () => {});
   const response = await fixture.request();
-  assert.equal(response.statusCode, 409, response.body);
-  assert.equal(response.json().error.type, "workload_usage_unknown");
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal((await fixture.receipt()).status, "pending");
   assert.equal(admissionAttempts, 1);
   assert.equal(settlementAttempts, 1);
   assert.equal(fixture.upstream.mock.callCount(), 1);

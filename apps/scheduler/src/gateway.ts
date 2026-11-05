@@ -10,6 +10,10 @@
  * - 用量：请求数必计；token 数从非流式 JSON usage 与 SSE usage 片段尽力解析
  * - 红线：上游明文 Key 不出本进程；请求/响应体不落库（usage 除外）
  */
+import { once } from "node:events";
+import { createGatewayResponseGuard } from "./gateway-response-guard.js";
+import { gatewayEndToEndHeaders, appendGatewayHeaders, requestGatewayHttp } from "./gateway-transparent-http.js";
+import { assertGatewayOutputBudget, gatewayObservationBytes, transparentGatewayUrl } from "./gateway-transparent-policy.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { audit } from "./audit.js";
@@ -27,9 +31,8 @@ import { inc } from "./metrics.js";
 import { DatabaseConflictExhaustedError, withDatabaseConflictRetry } from "./db-conflict-retry.js";
 import { appendOtlpEnvelope } from "./evidence.js";
 import { extractBaseUrlFromSettings } from "./provider-settings.js";
-import { composeUpstreamRequestHeaders, providerCustomHeadersFromSettings } from "./provider-custom-headers.js";
+import { hasInvalidProviderHeaders, providerCustomHeadersFromSettings } from "./provider-custom-headers.js";
 import {
-  bareUpstreamModelId,
   modelCatalogMatchForRequest,
 } from "./provider-effective-model.js";
 import { claudeCliFingerprintHeaders } from "./claude-cli-fingerprint.js";
@@ -39,7 +42,7 @@ import {
   GatewayFrozenModelMismatchError,
 } from "./domains/provider-adapter/index.js";
 import { beginEffect, markEffectUnknown, settleEffect } from "./domains/job-attempt/index.js";
-import { admitGatewayRepair, boundRepairOutput, readJobTokenAllowance, RepairTokenBudgetError } from "./domains/event-ingestion/repair-token-budget.js";
+import { admitGatewayRepair, readJobTokenAllowance, RepairTokenBudgetError } from "./domains/event-ingestion/repair-token-budget.js";
 import { createRepairUsageScanner } from "./gateway-repair-usage.js";
 import {
   assertObservationalMemoryProvider,
@@ -86,49 +89,6 @@ export function extractInboundJobToken(headers: {
   if (unique.length !== 1) return null;
   const token = unique[0]!;
   return JOB_TOKEN_RE.test(token) ? token : null;
-}
-
-/** Claude Code CLI selectors that must not be forwarded to a compatible upstream. */
-const CLAUDE_CLI_MODEL_ALIASES = new Set(["fable", "sonnet", "opus", "haiku"]);
-
-/**
- * 出站 model：CLI 别名改写成 Job 冻结的 upstream_model；已是上游 ID 或没有冻结值则保持原值。
- */
-export function rewriteGatewayOutboundModel(input: {
-  requestModel?: string | null;
-  upstreamModel?: string | null;
-}): string {
-  const request = input.requestModel?.trim() ?? "";
-  if (!request || !CLAUDE_CLI_MODEL_ALIASES.has(request.toLowerCase())) return request;
-  const upstream = input.upstreamModel?.trim() ?? "";
-  return upstream || request;
-}
-
-function frozenSnapshotUpstreamModel(snapshot: unknown): string | null {
-  const record = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
-    ? snapshot as { upstream_model?: unknown }
-    : null;
-  const upstream = typeof record?.upstream_model === "string" ? record.upstream_model.trim() : "";
-  return bareUpstreamModelId(upstream);
-}
-
-/**
- * 转发路径：非数组对象且 model 是 Claude CLI 别名时，改写成快照顶层 upstream_model。
- * 已是上游 ID、快照缺失/空、或 body 不是带 model 的对象时保持原值（可同对象引用）。
- */
-export function applyGatewayOutboundModelRewrite(rawBody: unknown, agentSnapshot: unknown): unknown {
-  if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return rawBody;
-  const currentModel = typeof (rawBody as { model?: unknown }).model === "string"
-    ? (rawBody as { model: string }).model
-    : "";
-  const outboundModel = rewriteGatewayOutboundModel({
-    requestModel: currentModel,
-    upstreamModel: frozenSnapshotUpstreamModel(agentSnapshot),
-  });
-  if (outboundModel && outboundModel !== currentModel) {
-    return { ...(rawBody as Record<string, unknown>), model: outboundModel };
-  }
-  return rawBody;
 }
 
 /** 模型网关允许进入业务层的最大请求体；超出后才由 Fastify 返回 413。 */
@@ -504,43 +464,9 @@ export function upstreamAuthHeaders(provider: string, secret: string): Record<st
   return { ...upstreamProtocolHeaders(provider), ...upstreamFinalAuthHeaders(provider, secret) };
 }
 
-/**
- * #918: CLI headers the Gateway forwards upstream — exact names only. The previous
- * `anthropic-*` prefix also matched `anthropic-api-key`, which `extractInboundJobToken`
- * accepts as an inbound Job token; a prefix match therefore had a static path for sending
- * a Job token to the upstream. Authentication carriers are finalised server-side instead.
- */
-export const GATEWAY_INBOUND_PROTOCOL_HEADERS = new Set([
-  "user-agent",
-  "x-app",
-  "anthropic-version",
-  "anthropic-beta",
-]);
-
-export function gatewayInboundProtocolHeaders(
-  headers: Record<string, string | string[] | undefined>,
-): Record<string, string> {
-  const forwarded: Record<string, string> = {};
-  for (const [name, value] of Object.entries(headers)) {
-    const lower = name.toLowerCase();
-    if (!GATEWAY_INBOUND_PROTOCOL_HEADERS.has(lower)) continue;
-    const text = headerString(value);
-    if (text) forwarded[lower] = text;
-  }
-  return forwarded;
-}
-
 /** 凭据 base_url 已带 /v1 时，不要把 Claude Code 的 /v1/messages 再拼成 /v1/v1/messages。 */
 export function joinGatewayUpstreamUrl(baseUrl: string, upstreamPath: string, qs = ""): string {
-  const base = baseUrl.replace(/\/+$/u, "");
-  const path = upstreamPath.replace(/^\/+/u, "");
-  const baseVer = /\/(v\d+)$/iu.exec(base)?.[1];
-  const pathVer = /^(v\d+)(?=\/|$)/iu.exec(path)?.[1];
-  if (baseVer && pathVer && baseVer.toLowerCase() === pathVer.toLowerCase()) {
-    const rest = path.slice(pathVer.length).replace(/^\/+/u, "");
-    return `${base}${rest ? `/${rest}` : ""}${qs}`;
-  }
-  return `${base}/${path}${qs}`;
+  return transparentGatewayUrl(baseUrl, upstreamPath, qs);
 }
 
 /** 从 SSE 流片段/JSON 文本里尽力提取 usage（不累加精确账单，只用于额度熔断）。 */
@@ -1137,6 +1063,7 @@ async function admitGatewayRequest(
     upstreamPath: string;
     method: string;
     gatewayInputDigest: () => string;
+    clientRequestId?: string;
     onRepairBody: (remaining: number | null, budget: Awaited<ReturnType<typeof admitGatewayRepair>>) => void;
   },
 ): Promise<GatewayRequestAdmission> {
@@ -1144,6 +1071,13 @@ async function admitGatewayRequest(
   if (!job || !JOB_ACTIVE.includes(String(job.status))) {
     await tx`UPDATE job_tokens SET status='revoked', revoked_at=now(), revoke_reason=${`job_${String(job?.status ?? "missing")}`} WHERE job_id=${input.jobId} AND status='active'`;
     return { denied: "job_inactive" };
+  }
+  if (input.clientRequestId) {
+    const [existing] = await tx`SELECT effect_id FROM job_attempt_effects
+      WHERE job_id=${input.jobId} AND attempt_id=${input.attemptId}
+      AND resource_identity_json->>'job_token_id'=${input.tokenId}
+      AND intent_json->>'gateway_request_id'=${input.clientRequestId}`;
+    if (existing) throw new GatewayWorkloadPolicyError("duplicate_gateway_request_id", "Request identity was already used; reconcile instead of replaying");
   }
   const tokens = await tx`
     SELECT id, workload, used_requests, max_requests, request_total_limit,
@@ -1260,6 +1194,7 @@ async function admitGatewayRequest(
       model: input.model.slice(0, 200),
       method: input.method,
       workload: input.workload,
+      ...(input.clientRequestId ? { gateway_request_id: input.clientRequestId } : {}),
       ...(repairBudget ? { repair_receipt_ref: repairBudget.receipt_ref, repair_reserved_tokens: repairBudget.remaining_tokens } : {}),
     },
   });
@@ -1285,16 +1220,25 @@ function recordGatewayRetryMetrics(
 
 /** 注册 /gateway/* 代理路由（自身鉴权，不走平台 authHook） */
 export function registerGateway(app: FastifyInstance): void {
-  app.addContentTypeParser(
-    ["application/x-protobuf", "application/protobuf"],
-    { parseAs: "buffer", bodyLimit: 2 * 1024 * 1024 },
-    (_req, body, done) => done(null, body),
-  );
+  // Encapsulation keeps raw-body parsing local to this proxy, never platform APIs.
+  void app.register(async (app) => {
+  app.removeAllContentTypeParsers();
+  app.addContentTypeParser("*", { parseAs: "buffer", bodyLimit: MODEL_GATEWAY_BODY_LIMIT },
+    (_req, body, done) => done(null, body));
   app.route({
-    method: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+    method: ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"],
+    exposeHeadRoute: false,
     url: "/gateway/*",
     bodyLimit: MODEL_GATEWAY_BODY_LIMIT,
     handler: async (req: FastifyRequest, reply: FastifyReply) => {
+      const authNames = new Set(["authorization", "x-api-key", "anthropic-api-key"]);
+      const seenAuth = new Set<string>();
+      for (let index = 0; index < req.raw.rawHeaders.length; index += 2) {
+        const name = req.raw.rawHeaders[index]!.toLowerCase();
+        if (!authNames.has(name)) continue;
+        if (seenAuth.has(name)) return deny(reply, 400, "Duplicate authentication carrier", "invalid_token");
+        seenAuth.add(name);
+      }
       const token = extractInboundJobToken(req.headers);
       const m = token?.match(JOB_TOKEN_RE) ?? null;
       if (!token || !m) return deny(reply, 401, "缺少或非法 DEEPSONAR_JOB_TOKEN", "invalid_token");
@@ -1328,6 +1272,25 @@ export function registerGateway(app: FastifyInstance): void {
         });
         return deny(reply, 401, "job 已结束，token 不可用", "job_inactive");
       }
+      const receiptPath = /^\/gateway\/_settlement\/([0-9a-f-]{36})$/u.exec(req.url);
+      if (req.url.startsWith("/gateway/_settlement/")) {
+        if (req.method !== "GET" || !receiptPath) return deny(reply, 400, "Invalid settlement query", "invalid_settlement_query");
+        const [receipt] = await sql`SELECT e.status, e.settlement_json, l.settlement_status, l.source
+          FROM job_attempt_effects e LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
+          WHERE e.job_id=${jt.job_id} AND e.attempt_id=${jt.attempt_id ?? null}
+          AND e.resource_identity_json->>'job_token_id'=${String(jt.id)}
+          AND e.intent_json->>'gateway_request_id'=${receiptPath[1]!}
+          AND e.intent_json->>'workload'=${String(jt.workload)}`;
+        reply.header("cache-control", "no-store");
+        if (!receipt) return reply.code(404).send({ status: "not_found" });
+        if (receipt.status === "settled" && receipt.settlement_status === "settled") {
+          if (receipt.source === "gateway_error" && receipt.settlement_json?.external_effect === false) {
+            return { status: "not_started", reason: "gateway_transient" };
+          }
+          return { status: "settled" };
+        }
+        return { status: receipt.status === "effect_pending" && !receipt.settlement_status ? "pending" : "unknown" };
+      }
       if (jt.workload !== "observational_memory" && jobTokenQuotaExhausted(jt.used_requests as number, jt.max_requests as number)) {
         await sql`UPDATE job_tokens SET status = 'exhausted' WHERE id = ${jt.id} AND status = 'active'`;
         void auditGateway(req, {
@@ -1341,15 +1304,36 @@ export function registerGateway(app: FastifyInstance): void {
         return deny(reply, 429, "请求数额度用尽", "quota_exhausted");
       }
 
-      // 模型限制（仅对带 model 字段的请求体生效；fastify 已解析 JSON，重序列化转发）
-      const rawBody = req.body as unknown;
+      let outboundBuf: Buffer | null = Buffer.isBuffer(req.body) ? req.body : null;
+      // Fastify intentionally skips GET/HEAD parsing; preserve legal bodies there too.
+      if (!outboundBuf && (req.headers["content-length"] || req.headers["transfer-encoding"])) {
+        const chunks: Buffer[] = []; let size = 0;
+        for await (const chunk of req.raw) {
+          const bytes = Buffer.from(chunk); size += bytes.length;
+          if (size > MODEL_GATEWAY_BODY_LIMIT) return deny(reply, 413, "Request body too large", "body_limit");
+          chunks.push(bytes);
+        }
+        outboundBuf = Buffer.concat(chunks);
+      }
+      let rawBody: unknown = outboundBuf;
+      if (outboundBuf?.length) {
+        try { rawBody = JSON.parse(gatewayObservationBytes(outboundBuf, headerString(req.headers["content-encoding"])).toString("utf8")); }
+        catch { /* Opaque input is admitted or refused by authorization, never rewritten. */ }
+      }
+      const clientRequestId = headerString(req.headers["x-deepsonar-request-id"]);
+      if (clientRequestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(clientRequestId)) {
+        return deny(reply, 400, "Invalid request identity", "invalid_gateway_request_id");
+      }
       let workload: GatewayWorkload;
       try {
         workload = gatewayWorkload(jt.workload);
       } catch {
         return deny(reply, 403, "token workload 不受支持", "unknown_workload");
       }
-      const upstreamPath = (req.params as { "*": string })["*"];
+      const upstreamPath = req.url.slice("/gateway/".length).split("?")[0]!;
+      if (workload === "observational_memory" && !clientRequestId) {
+        return deny(reply, 403, "OM requires a settlement request identity", "missing_gateway_request_id");
+      }
       if (workload === "observational_memory" && req.method !== "POST") {
         return deny(reply, 403, "observational-memory requires a JSON model POST", "FROZEN_WORKLOAD_PROTOCOL_MISMATCH");
       }
@@ -1386,6 +1370,12 @@ export function registerGateway(app: FastifyInstance): void {
           return deny(reply, 413, error instanceof Error ? error.message : String(error), "otlp_rejected");
         }
       }
+      // An opaque upload cannot prove a frozen model authorization. Unrestricted
+      // jobs still admit non-JSON bodies; this is a refusal, never a body conversion.
+      const frozenModel = jt.agent_snapshot_json?.provider_model;
+      if (outboundBuf?.length && frozenModel && !frozenModel.passthrough && !gatewayRequestModelFromBody(rawBody)) {
+        return deny(reply, 403, "Cannot authorize a model in this request representation", "frozen_model_mismatch");
+      }
       if (workload !== "observational_memory") {
         try {
           assertGatewayRequestModelAllowed({
@@ -1403,15 +1393,7 @@ export function registerGateway(app: FastifyInstance): void {
           throw error;
         }
       }
-      const outboundBody = workload === "observational_memory"
-        ? rawBody
-        : applyGatewayOutboundModelRewrite(rawBody, jt.agent_snapshot_json);
-      let outboundBuf =
-        outboundBody == null
-          ? null
-          : Buffer.isBuffer(outboundBody)
-            ? outboundBody
-            : Buffer.from(typeof outboundBody === "string" ? outboundBody : JSON.stringify(outboundBody), "utf8");
+      const outboundBody = rawBody;
 
       // 解密 Credential（明文不出本进程）
       const [cred] = await sql`SELECT * FROM credentials WHERE id = ${jt.credential_id}`;
@@ -1441,7 +1423,26 @@ export function registerGateway(app: FastifyInstance): void {
       const baseUrl =
         meta.base_url ?? settingsBaseUrl ?? PROVIDER_ENV_MAP[safeProvider]?.defaultBaseUrl ?? "https://api.anthropic.com";
       const qs = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
-      const url = joinGatewayUpstreamUrl(baseUrl, upstreamPath, qs);
+      let url: string;
+      let headers: string[];
+      let requestTrailers: string[];
+      try {
+        url = joinGatewayUpstreamUrl(baseUrl, upstreamPath, qs);
+        const configured = providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl);
+        if (hasInvalidProviderHeaders(configured)) return deny(reply, 502, "Invalid provider header configuration", "invalid_provider_headers");
+        if ((outboundBuf?.includes(token) ?? false) || req.raw.rawHeaders.some((value, i) => i % 2 === 1
+          && value.includes(token) && !["authorization", "x-api-key", "anthropic-api-key", "proxy-authorization"].includes(req.raw.rawHeaders[i - 1]!.toLowerCase()))) {
+          return deny(reply, 400, "Job credential in business data", "credential_in_business_data");
+        }
+        const connection: string[] = [];
+        for (let i = 0; i < req.raw.rawHeaders.length; i += 2) {
+          if (req.raw.rawHeaders[i]!.toLowerCase() === "connection") connection.push(req.raw.rawHeaders[i]!, req.raw.rawHeaders[i + 1]!);
+        }
+        if (req.raw.rawTrailers.some(value => value.includes(token))) return deny(reply, 400, "Job credential in trailers", "credential_in_business_data");
+        requestTrailers = gatewayEndToEndHeaders([...connection, ...req.raw.rawTrailers], { request: true });
+        headers = appendGatewayHeaders({ ...upstreamProtocolHeaders(safeProvider), ...configured.headers }, req.raw.rawHeaders,
+          upstreamFinalAuthHeaders(safeProvider, secret));
+      } catch { return deny(reply, 400, "Invalid proxy target or HTTP headers", "invalid_gateway_request"); }
 
       const gatewayAttemptId = typeof jt.attempt_id === "string" ? jt.attempt_id : null;
       if (!gatewayAttemptId) return deny(reply, 409, "Job 缺少活动 Attempt，拒绝无账本模型请求", "attempt_state_missing");
@@ -1475,10 +1476,11 @@ export function registerGateway(app: FastifyInstance): void {
           method: req.method,
           // Repair output may be bounded by onRepairBody.  Hash the final
           // outbound bytes so the effect records the request actually sent.
+          clientRequestId: clientRequestId || undefined,
           gatewayInputDigest: () => createHash("sha256").update(outboundBuf ?? Buffer.alloc(0)).digest("hex"),
           onRepairBody: (remaining, repairBudget) => {
             if (repairBudget || remaining !== null) {
-              outboundBuf = Buffer.from(JSON.stringify(boundRepairOutput(outboundBody, upstreamPath, remaining)), "utf8");
+              assertGatewayOutputBudget(outboundBody, upstreamPath, remaining);
             }
           },
         });
@@ -1521,48 +1523,22 @@ export function registerGateway(app: FastifyInstance): void {
         return deny(reply, 429, "request quota exhausted", "quota_exhausted");
       }
       const { requestNo, effectId: gatewayEffectId } = requestIntent;
-      // #918: precedence, lowest to highest — body framing → trusted protocol defaults →
-      // headers configured on the credential → CLI protocol headers the Gateway allowlists
-      // (exact names) → authentication finalised from the bound credential. Configured
-      // headers are sanitized upstream of this point, so they cannot occupy the last layers.
-      const configuredHeaders = providerCustomHeadersFromSettings(cred.settings_config_json, baseUrl);
-      if (configuredHeaders.rejected.length > 0) {
-        console.warn(`[gateway] provider headers not applied: ${configuredHeaders.rejected.join(",")}`);
-      }
-      const headers = composeUpstreamRequestHeaders({
-        base: {
-          "content-type": (req.headers["content-type"] as string) ?? "application/json",
-          accept: (req.headers.accept as string) ?? "application/json",
-        },
-        configured: configuredHeaders.headers,
-        protocol: upstreamProtocolHeaders(safeProvider),
-        inboundProtocol: gatewayInboundProtocolHeaders(req.headers as Record<string, string | string[] | undefined>),
-        auth: upstreamFinalAuthHeaders(safeProvider, secret),
-      });
-
       const jobDeadlineMs = gatewayJobDeadlineMs(
         jt.started_at as Date | string | number | null,
         jt.timeout_sec as number | null,
       );
-      let upstreamResult: GatewayRetryResult;
+      const controller = new AbortController();
+      const abortClient = () => { if (!reply.raw.writableFinished) controller.abort(); };
+      reply.raw.once("close", abortClient);
+      const timeout = Math.max(1, Math.min(config.gateway.upstreamTimeoutMs, jobDeadlineMs === null ? Infinity : jobDeadlineMs - Date.now()));
+      const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(timeout)]);
+      let upstream: Awaited<ReturnType<typeof requestGatewayHttp>>;
       try {
-        upstreamResult = await fetchGatewayUpstream({
-          url,
-          upstreamTimeoutMs: config.gateway.upstreamTimeoutMs,
-          jobDeadlineMs,
-          init: {
-            method: req.method,
-            headers,
-            body: outboundBuf && req.method !== "GET" ? new Uint8Array(outboundBuf) : undefined,
-            ...(workload === "observational_memory" ? { redirect: "manual" as const } : {}),
-          },
-        }, requestIntent.singleAttempt ? { maxAttempts: 1 } : {});
+        upstream = await requestGatewayHttp({ url, method: req.method, headers, body: outboundBuf, trailers: requestTrailers, signal });
       } catch (error) {
+        reply.raw.off("close", abortClient);
         if (workload === "observational_memory"
-          && error instanceof GatewayUpstreamUnreachableError
-          && error.attempts === 1
-          && error.reason === "network"
-          && isKnownObservationalMemoryPreRequestFailure(error.cause)) {
+          && isKnownObservationalMemoryPreRequestFailure(error)) {
           const settled = await trySettleGatewayNoExternalUsage({
             jobId: String(jt.job_id),
             projectId: String(jt.project_id),
@@ -1602,122 +1578,104 @@ export function registerGateway(app: FastifyInstance): void {
           source: "gateway_error",
           workload,
         }, "unknown", error);
-        if (!(error instanceof GatewayUpstreamUnreachableError)) throw error;
-        recordGatewayRetryMetrics(safeProvider, error.attempts, error.retryReasons, error.reason);
+        reply.raw.off("close", abortClient);
+        recordGatewayRetryMetrics(safeProvider, 1, [], signal.aborted ? "timeout" : "network");
         inc("deepsonar_provider_errors_total", { provider: safeProvider });
         if (workload === "observational_memory") return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");
         return deny(reply, 502, "上游不可达", "upstream_unreachable");
       }
-      const upstream = upstreamResult.response;
-      recordGatewayRetryMetrics(
-        safeProvider,
-        upstreamResult.attempts,
-        upstreamResult.retryReasons,
-        upstreamResult.exhaustedReason,
-      );
+      recordGatewayRetryMetrics(safeProvider, 1, []);
       inc("deepsonar_model_requests_total", { provider: safeProvider });
-      if (upstream.status >= 500) inc("deepsonar_provider_errors_total", { provider: safeProvider });
-
-      // 响应直通：非流式缓存全文以解析 usage；流式边转发边扫描
-      const isSse = (upstream.headers.get("content-type") ?? "").includes("text/event-stream");
-      // Background responses are bounded and acknowledged only after trusted
-      // terminal usage and durable settlement. A provider error, partial stream
-      // or ledger failure must surface as unknown, never quota degradation.
-      const backgroundChunks: Uint8Array[] | null = workload === "observational_memory" ? [] : null;
-      let backgroundBytes = 0;
-      if (!backgroundChunks) {
-        reply.hijack();
-        reply.raw.writeHead(upstream.status, {
-          "content-type": upstream.headers.get("content-type") ?? "application/json",
-          ...(isSse ? { "cache-control": "no-cache", connection: "keep-alive" } : {}),
-        });
-      }
-      if (!upstream.body) {
-        await trySettleGatewayUsage({
-          jobId: String(jt.job_id),
-          projectId: String(jt.project_id),
-          attemptId: gatewayAttemptId,
-          jobTokenId: String(jt.id),
-          effectId: gatewayEffectId,
-          requestNo,
-          provider: safeProvider,
-          model,
-          modelCatalogMatch,
-          upstreamReportingModel: null,
-          usage: { ...EMPTY_USAGE },
-          status: backgroundChunks ? "unknown" : "not_reported",
-          source: isSse ? "gateway_stream" : "gateway_response",
-          workload,
-        }, backgroundChunks ? "unknown" : "settled");
-        if (backgroundChunks) return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");
-        reply.raw.end();
-        return;
-      }
-      const repairUsageScanner = createRepairUsageScanner(upstreamPath, isSse);
-      const reader = upstream.body.getReader();
-      let streamInterrupted = false;
+      const status = upstream.statusCode ?? 502;
+      if (status >= 500) inc("deepsonar_provider_errors_total", { provider: safeProvider });
+      const isSse = String(upstream.headers["content-type"] ?? "").includes("text/event-stream");
+      const scanner = createRepairUsageScanner(upstreamPath, isSse);
+      const compressed = Boolean(upstream.headers["content-encoding"] && upstream.headers["content-encoding"] !== "identity");
+      const observation: Buffer[] = []; let observationBytes = 0;
+      let interrupted = false;
+      let secretTail = Buffer.alloc(0);
+      const secretBytes = Buffer.from(secret);
+      const safeWrite = async (bytes: Buffer, final = false): Promise<void> => {
+        const pending = Buffer.concat([secretTail, bytes]);
+        if (secretBytes.length && pending.includes(secretBytes)) throw new Error("upstream_credential_echo");
+        let held = 0;
+        if (!final) for (let n = Math.min(secretBytes.length - 1, pending.length); n > 0; n--) {
+          if (pending.subarray(pending.length - n).equals(secretBytes.subarray(0, n))) { held = n; break; }
+        }
+        const end = pending.length - held;
+        if (end && !reply.raw.write(pending.subarray(0, end))) await once(reply.raw, "drain", { signal });
+        secretTail = Buffer.from(pending.subarray(end));
+      };
+      let responseGuard: ReturnType<typeof createGatewayResponseGuard> | undefined;
+      reply.hijack();
       try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) {
-            if (backgroundChunks) {
-              backgroundBytes += value.byteLength;
-              if (backgroundBytes > 16_777_216) throw new Error("background response exceeds accounting buffer");
-              backgroundChunks.push(value);
-            } else reply.raw.write(value);
-            // 只解析完整 SSE/JSON 行；保留未完成行，避免重叠尾巴导致
-            // 同一 usage JSON 在相邻 chunk 中被重复累计。
-            repairUsageScanner.push(value);
-            noteResponseChunk(value);
+        responseGuard = createGatewayResponseGuard(secret, headerString(upstream.headers["content-encoding"]));
+        if (secret && upstream.rawHeaders.some((value, i) => i % 2 === 1 && value.includes(secret))) throw new Error("upstream_credential_echo");
+        reply.raw.writeHead(status, upstream.statusMessage, gatewayEndToEndHeaders(upstream.rawHeaders));
+        reply.raw.flushHeaders();
+        for await (const chunk of upstream) {
+          const bytes = Buffer.from(chunk);
+          await responseGuard.inspect(bytes);
+          await safeWrite(bytes);
+          if (compressed || workload === "observational_memory") {
+            observationBytes += bytes.length;
+            if (observationBytes <= MODEL_GATEWAY_BODY_LIMIT) observation.push(bytes);
           }
+          if (!compressed) { scanner.push(bytes); noteResponseChunk(bytes); }
+        }
+        if (compressed && observationBytes <= MODEL_GATEWAY_BODY_LIMIT) {
+          try {
+            const decoded = gatewayObservationBytes(Buffer.concat(observation), headerString(upstream.headers["content-encoding"]));
+            scanner.push(decoded); noteResponseChunk(decoded);
+          } catch { /* Unknown usage cannot authorize another bounded request. */ }
+        }
+        await responseGuard.finish();
+        await safeWrite(Buffer.alloc(0), true);
+        if (upstream.rawTrailers.length) {
+          if (secret && upstream.rawTrailers.some((value, i) => i % 2 === 1 && value.includes(secret))) throw new Error("upstream_credential_echo");
+          const connection: string[] = [];
+          for (let i = 0; i < upstream.rawHeaders.length; i += 2) {
+            if (upstream.rawHeaders[i]!.toLowerCase() === "connection") connection.push(upstream.rawHeaders[i]!, upstream.rawHeaders[i + 1]!);
+          }
+          const flat = gatewayEndToEndHeaders([...connection, ...upstream.rawTrailers]);
+          const trailers: [string, string][] = [];
+          for (let i = 0; i < flat.length; i += 2) trailers.push([flat[i]!, flat[i + 1]!]);
+          reply.raw.addTrailers(trailers);
         }
       } catch {
-        // 客户端/上游断流：尽力收尾
-        streamInterrupted = true;
-        await reader.cancel().catch(() => {});
+        interrupted = true;
+        controller.abort();
+        upstream.destroy();
       }
-      const trustedUsage = repairUsageScanner.finish();
-      const usage = trustedUsage ?? { ...EMPTY_USAGE };
-      const scanned = usage.total;
-      const backgroundBody = backgroundChunks ? Buffer.concat(backgroundChunks) : null;
-      const apiErrorFrame = backgroundBody ? containsGatewayApiErrorFrame(backgroundBody, isSse) : false;
-      const anthropicRefusalFailure = backgroundBody
-        ? containsAnthropicRefusalFailureCarrier(backgroundBody, isSse, upstreamPath)
-        : false;
-      const reservedTransientBody = backgroundBody
-        ? containsReservedGatewayTransientEnvelope(backgroundBody, isSse)
-        : false;
-      // Earlier hidden attempts and interrupted/error responses cannot establish complete cost.
-      const uncertainUsage = streamInterrupted || upstreamResult.attempts > 1 || !upstream.ok
-        || (backgroundChunks !== null && trustedUsage === null) || apiErrorFrame || anthropicRefusalFailure || reservedTransientBody;
-      const usageSettled = await trySettleGatewayUsage({
-        jobId: String(jt.job_id),
-        projectId: String(jt.project_id),
-        attemptId: gatewayAttemptId,
-        jobTokenId: String(jt.id),
-        effectId: gatewayEffectId,
-        requestNo,
-        provider: safeProvider,
-        model,
-        modelCatalogMatch,
-        upstreamReportingModel,
-        usage,
-        status: uncertainUsage ? "unknown" : trustedUsage ? "settled" : "not_reported",
-        source: isSse ? "gateway_stream" : "gateway_response",
-        workload,
-      }, uncertainUsage ? "unknown" : "settled", uncertainUsage ? "模型请求完整用量无法确认" : undefined);
-      if (scanned > 0 && !uncertainUsage) {
-        inc("deepsonar_model_tokens_total", { provider: safeProvider }, scanned);
+      responseGuard?.destroy();
+      const trusted = scanner.finish();
+      let protocolFailure = false;
+      if (workload === "observational_memory") {
+        try {
+          if (observationBytes > MODEL_GATEWAY_BODY_LIMIT) protocolFailure = true;
+          else {
+            const observed = gatewayObservationBytes(Buffer.concat(observation), headerString(upstream.headers["content-encoding"]));
+            protocolFailure = containsGatewayApiErrorFrame(observed, isSse)
+              || containsAnthropicRefusalFailureCarrier(observed, isSse, upstreamPath)
+              || containsReservedGatewayTransientEnvelope(observed, isSse);
+          }
+        } catch { protocolFailure = true; }
       }
-      if (backgroundChunks) {
-        if (uncertainUsage || !usageSettled) return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");
-        return reply.code(upstream.status)
-          .header("content-type", upstream.headers.get("content-type") ?? "application/json")
-          .send(Buffer.concat(backgroundChunks));
-      }
-      reply.raw.end();
+      const unknown = protocolFailure || interrupted || status < 200 || status >= 300 || (workload === "observational_memory" && !trusted);
+      const usage = trusted ?? { ...EMPTY_USAGE };
+      await trySettleGatewayUsage({
+        jobId: String(jt.job_id), projectId: String(jt.project_id), attemptId: gatewayAttemptId,
+        jobTokenId: String(jt.id), effectId: gatewayEffectId, requestNo, provider: safeProvider,
+        model, modelCatalogMatch, upstreamReportingModel, usage,
+        status: unknown ? "unknown" : trusted ? "settled" : "not_reported",
+        source: isSse ? "gateway_stream" : "gateway_response", workload,
+      }, unknown ? "unknown" : "settled", unknown ? "模型请求完整用量无法确认" : undefined);
+      if (usage.total > 0 && !unknown) inc("deepsonar_model_tokens_total", { provider: safeProvider }, usage.total);
+      reply.raw.off("close", abortClient);
+      if (interrupted) reply.raw.destroy(); else reply.raw.end();
+
     },
+  });
   });
 }
 

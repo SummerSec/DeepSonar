@@ -67,6 +67,55 @@ test("catalog and inference outbound headers follow official wrappers and the se
   }
 });
 
+test("catalog and inference preserve configured protocol headers and never follow redirects", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { listCredentialModelsPreview, testCredential } = await import("./credential-test.js");
+  const encrypted = encryptSecret("offline-header-fixture");
+  const originalFetch = globalThis.fetch;
+  const requests: RequestInit[] = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      requests.push(init!);
+      return new Response(JSON.stringify({ data: [{ id: "fixture-model" }] }), { status: 200 });
+    }) as typeof fetch;
+    const configured = { "anthropic-version": "future-version", "anthropic-beta": "future-beta",
+      "user-agent": "configured-fixture", "x-app": "configured-app", "x-unknown-protocol": "value",
+      accept: "application/vnd.fixture+json", "x-empty": "" };
+    const credential = { provider: "anthropic", kind: "llm_provider", ...encrypted,
+      settings_config_json: { providers: { fixture: { baseUrl: "http://127.0.0.1/v1",
+        api: "anthropic-messages", models: [{ id: "fixture-model" }], headers: configured } } } };
+    assert.equal((await listCredentialModelsPreview(credential, "offline-header-fixture")).available, true);
+    assert.equal((await testCredential(credential)).ok, true);
+    assert.ok(requests.length >= 2);
+    for (const request of requests) {
+      assert.equal(request.redirect, "manual");
+      const headers = new Headers(request.headers);
+      for (const [name, value] of Object.entries(configured)) assert.equal(headers.get(name), value);
+      assert.equal(headers.get("authorization"), "Bearer offline-header-fixture");
+      assert.equal(headers.get("x-api-key"), "offline-header-fixture");
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("invalid configured HTTP headers fail before catalog or inference transport", async () => {
+  const { encryptSecret } = await import("./credentials.js");
+  const { listCredentialModelsPreview, testCredential } = await import("./credential-test.js");
+  const originalFetch = globalThis.fetch;
+  let requests = 0;
+  try {
+    globalThis.fetch = (async () => { requests++; return new Response("{}"); }) as typeof fetch;
+    const credential = { provider: "openai", kind: "llm_provider", ...encryptSecret("offline-fixture"),
+      settings_config_json: { providers: { fixture: { baseUrl: "http://127.0.0.1/v1",
+        api: "openai-completions", models: [{ id: "fixture-model" }],
+        headers: { "x-good": "preserved", "x-invalid": "value\r\ninjected: value" } } } } };
+    assert.equal((await listCredentialModelsPreview(credential, "offline-fixture")).available, false);
+    const result = await testCredential(credential);
+    assert.equal(result.ok, false);
+    assert.equal(result.category, "configuration");
+    assert.equal(requests, 0);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("connection success/failure returns fixed health category and safe URL", async () => {
   const { encryptSecret } = await import("./credentials.js");
   const { testCredential } = await import("./credential-test.js");
