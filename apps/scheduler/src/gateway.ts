@@ -333,6 +333,11 @@ export async function mintJobToken(input: {
   const snapshot = job.agent_snapshot_json && typeof job.agent_snapshot_json === "object" && !Array.isArray(job.agent_snapshot_json)
     ? job.agent_snapshot_json as Record<string, unknown>
     : {};
+  // Frozen scope precedes mutable credential lookup, preserving scoped rejection
+  // without disclosing whether an unrelated credential exists or is active.
+  if (typeof snapshot.credential_id === "string" && snapshot.credential_id !== input.credentialId) {
+    throw new Error("JOB_CREDENTIAL_SCOPE_MISMATCH");
+  }
   const [boundCredential] = await tx`SELECT * FROM credentials WHERE id = ${input.credentialId}`;
   if (!boundCredential || boundCredential.status !== "active") throw new Error("JOB_CREDENTIAL_INACTIVE");
   assertGatewayProviderBinding(snapshot.gateway_provider_binding, {
