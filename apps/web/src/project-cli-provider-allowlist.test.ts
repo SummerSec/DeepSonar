@@ -130,7 +130,7 @@ test("clearing an unavailable default alone keeps dynamic credential scope uncon
   assert.deepEqual(patch, { default_credential_id: null, default_model_ref: null, fallback_model_refs: [] });
   assert.equal(Object.hasOwn(patch, "enabled_credential_ids"), false);
   assert.match(panel, /清除失效默认引用/);
-  assert.match(panel, /onClick=\{\(\) => setSelectedDefaultCredentialId\(null\)\}/);
+  assert.match(panel, /onClick=\{\(\) => \{ markDraftEdited\(\); setSelectedDefaultCredentialId\(null\); \}\}/);
 });
 
 test("allowlist edits never silently clear or replace a default", () => {
