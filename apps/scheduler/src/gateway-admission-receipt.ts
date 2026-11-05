@@ -55,7 +55,7 @@ export async function persistNoEffectReceipt(db: Database, input: GatewayNoEffec
       if (effect) return false;
       const existing = await readNoEffectReceipt(tx, input);
       if (existing) return existing.reason === input.reason;
-      await consumeEventRateLimit(transaction, input.jobId, "control_receipt", new Date());
+      await consumeEventRateLimit(tx, input.jobId, "control_receipt", new Date());
       const [{ next }] = await tx`SELECT COALESCE(MAX(job_seq),0)+1 AS next FROM events WHERE job_id=${input.jobId}`;
       const eventId = identity(input);
       const payload = { v: 1, authority: "kernel", operation: "gateway_admission", status: "not_started",
