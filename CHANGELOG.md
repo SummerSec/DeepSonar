@@ -5,6 +5,12 @@
 - **发布回写 PR 的检查状态文案（#920 评审）**：创建 PR 时仅说明等待该 PR 的 `ci-summary` 与适用专项，不再在检查运行前宣称“已通过”。生成正文同时明确自动化身份；离线回归校验创建早于检查读取且正文没有提前通过声明。
 
 ## [0.6.14] - 2026-11-05
+### 修复
+
+- **按评审补齐知识保留与设备租约语义（#904 评审）**：保留判定从 work/versions 扩展到 proposals、assignments、evaluations、receipts 与 `device_leases`——只留下不可变 receipt 的运行同样会被稳定 409，不再走到外键 500；`device_leases` 是 append-only 审计（设备删除检查依赖其行数），因此**不再**随任务删除，改为纳入拒绝。删除准入、取消与清理现在共用同一个事务与画布行锁（canvas → jobs 顺序），检查后并发写入无法再插到删除前，被拒绝时也确实没有取消任何 Job。`POST /tasks/:id/retry` 复用同一判定，返回同一错误码而不是在后段失败。
+- **操作员结清不再越过内核（#908 评审）**：`settleEffectByOperator` 增加 `NOT EXISTS (... a.status = 'active')` 守卫，仍由活动 Attempt 拥有的效果不会被外部结清；对账 CLI 的 settle 输出改为实际查询剩余未结清数量，不再无条件声称 `remaining_unknown=0`。
+
+### 进行中
 
 ### 修复
 

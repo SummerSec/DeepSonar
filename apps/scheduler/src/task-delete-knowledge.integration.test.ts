@@ -72,6 +72,30 @@ if (!testDatabaseUrl) {
       const [canvasLeft] = await sql`SELECT count(*)::int AS count FROM canvases WHERE id = ${withUsage.canvasId}`;
       assert.equal(Number(canvasLeft.count), 0);
 
+      // 1b. #904 review: a run that only recorded a knowledge receipt (no work/version)
+      //     must also be refused — receipts are immutable evidence and carry NOT NULL
+      //     job/attempt references, so deleting the job would have failed on the FK.
+      const withReceipt = await seedJob(randomUUID());
+      await sql`INSERT INTO project_knowledge_receipts (project_id, job_id, attempt_id, operation, idempotency_key, input_digest, event_id, result_json)
+        VALUES (${projectId}, ${withReceipt.jobId}, ${withReceipt.attemptId}, 'record_skill_choice', ${randomUUID()}, ${"c".repeat(64)}, ${randomUUID()}, ${sql.json({ ok: true })})`;
+      const refusedReceipt = await app.inject({ method: "DELETE", url: `/tasks/${withReceipt.canvasId}`, headers });
+      assert.equal(refusedReceipt.statusCode, 409, refusedReceipt.payload);
+      assert.equal(refusedReceipt.json().retained.receipts, 1);
+      const [receiptKept] = await sql`SELECT count(*)::int AS count FROM project_knowledge_receipts WHERE job_id = ${withReceipt.jobId}`;
+      assert.equal(Number(receiptKept.count), 1);
+
+      // 1c. Device lease history is append-only audit: deleting a task must not erase it.
+      const withLease = await seedJob(randomUUID());
+      const deviceId = randomUUID();
+      await sql`INSERT INTO devices (id, project_id, key, transport) VALUES (${deviceId}, ${projectId}, 'pixel-1', 'adb')`;
+      await sql`INSERT INTO device_leases (device_id, job_id, project_id, state, released_at)
+        VALUES (${deviceId}, ${withLease.jobId}, ${projectId}, 'released', now())`;
+      const refusedLease = await app.inject({ method: "DELETE", url: `/tasks/${withLease.canvasId}`, headers });
+      assert.equal(refusedLease.statusCode, 409, refusedLease.payload);
+      assert.equal(refusedLease.json().retained.device_leases, 1);
+      const [leaseKept] = await sql`SELECT count(*)::int AS count FROM device_leases WHERE job_id = ${withLease.jobId}`;
+      assert.equal(Number(leaseKept.count), 1, "lease history must survive a task delete attempt");
+
       // 2. A job that produced knowledge work: deleting the task would destroy
       //    governance evidence, so the API refuses before touching anything.
       const withWork = await seedJob(randomUUID());
@@ -84,6 +108,8 @@ if (!testDatabaseUrl) {
       assert.equal(refused.json().retained.work, 1);
       const [canvasKept] = await sql`SELECT count(*)::int AS count FROM canvases WHERE id = ${withWork.canvasId}`;
       assert.equal(Number(canvasKept.count), 1, "a refusal must leave the task in place");
+      const [notCancelled] = await sql`SELECT count(*)::int AS count FROM jobs WHERE id = ${withWork.jobId} AND status = 'failed'`;
+      assert.equal(Number(notCancelled.count), 1, "the refusal rolls back, so the job keeps its status");
       const [jobKept] = await sql`SELECT count(*)::int AS count FROM jobs WHERE id = ${withWork.jobId}`;
       assert.equal(Number(jobKept.count), 1);
       const [workKept] = await sql`SELECT count(*)::int AS count FROM project_knowledge_work WHERE id = ${workId}`;
