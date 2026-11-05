@@ -337,7 +337,14 @@ export function resolveTerminalProcessOutcome(
   const exitError = `agent CLI 退出码 ${exitCode}${stderr ? `: ${stderr.slice(-300)}` : ""}`;
   if (terminalResult) {
     if (exitCode !== 0 && (terminalResult.isError || input.closeReason !== "terminal_result")) {
-      return { observed: true, error: exitError, terminalOutcome: "failure", runnerErrorSource: "process" };
+      let error = exitError;
+      // Retain the structured rejection for bounded session recovery, without turning
+      // the non-zero process exit into a structured-terminal success/override source.
+      if (terminalResult.isError) {
+        const detail = resolveTerminalRunError(terminalResult);
+        if (detail) error += `: ${detail}`;
+      }
+      return { observed: true, error, terminalOutcome: "failure", runnerErrorSource: "process" };
     }
     if (terminalResult.isError) {
       return {

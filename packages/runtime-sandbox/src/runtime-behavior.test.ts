@@ -370,8 +370,19 @@ test("a nonzero exit overrides a structured refusal even after terminal stdin cl
     const outcome = resolveTerminalProcessOutcome({ exitCode: 137, closeReason,
       terminalResult: { isError: true, errorDetail: "COMPLETION_ALREADY_ACCEPTED" } });
     assert.equal(outcome.runnerErrorSource, "process");
-    assert.equal(outcome.error, "agent CLI 退出码 137");
+    assert.equal(outcome.terminalOutcome, "failure");
+    assert.equal(outcome.error, "agent CLI 退出码 137: COMPLETION_ALREADY_ACCEPTED");
   }
+});
+
+test("nonzero process failures retain structured details for bounded session recovery", () => {
+  const outcome = resolveTerminalProcessOutcome({
+    exitCode: 1,
+    terminalResult: { isError: true, errorDetail: "upstream status: 503" },
+  });
+  assert.equal(outcome.runnerErrorSource, "process");
+  assert.equal(outcome.terminalOutcome, "failure");
+  assert.equal(outcome.error, "agent CLI 退出码 1: upstream status: 503");
 });
 
 test("plain-final output synthesizes only a normalized successful result", () => {
