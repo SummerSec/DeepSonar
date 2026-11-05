@@ -169,3 +169,82 @@ fs.writeFileSync(process.env.MARKER, JSON.stringify(args));
     assert.ok(args.includes('--verify-tag')); assert.ok(args.includes(join(f.signatures, 'platform-signature-evidence.json')));
   } finally {await rm(f.root, {recursive: true, force: true});}
 });
+test('workflow commands on fresh Git checkouts recover all selections; writeback failure cannot suppress publish', async () => {
+  const {createRequire} = await import('node:module');
+  const yaml = createRequire(new URL('../apps/scheduler/package.json', import.meta.url))('yaml');
+  const workflow = yaml.parse(await readFile(new URL('../.github/workflows/release-resume.yml', import.meta.url), 'utf8'));
+  const job = workflow.jobs.resume;
+  assert.equal(job.strategy['fail-fast'], false);
+  assert.equal(job.steps.find(step => step.uses?.startsWith('actions/checkout')).with.ref, '${{ github.sha }}');
+  const f = await fixture();
+  try {
+    const origin = join(f.root, 'source'); await mkdir(origin);
+    const git = (cwd, ...args) => execFileSync('git', args, {cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim();
+    git(origin, 'init', '--initial-branch=main');
+    git(origin, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-m', 'fixture');
+    const head = git(origin, 'rev-parse', 'HEAD');
+    git(origin, 'tag', 'v0.6.0');
+    for (const path of ['deploy/runtime-image-registry.json', 'runtime-image-registry-v2.json']) {
+      const file = join(f.payload, path); const catalog = JSON.parse(await readFile(file));
+      catalog.platform.commit_sha = head; await writeFile(file, JSON.stringify(catalog));
+    }
+    const frozen = await freezePublication(f.payload, {version: env.VERSION, commit_sha: head});
+    const freezeBytes = JSON.stringify(frozen);
+    await writeFile(join(f.payload, 'platform-release-freeze.json'), freezeBytes);
+    const receiptFile = join(f.signatures, 'platform-signature-evidence.json');
+    const receipt = JSON.parse(await readFile(receiptFile));
+    receipt.freezeSha256 = sha256(freezeBytes); receipt.verification.targetSha256 = frozen.targetSha256;
+    await writeFile(receiptFile, JSON.stringify(receipt));
+    const data = metadata(head); const responses = {};
+    responses['actions/runs/42'] = data.run; responses['actions/workflows/release.yml'] = data.workflow;
+    responses['git/ref/tags/v0.6.0'] = {object: {type: 'commit', sha: head}};
+    responses['actions/runs/42/attempts/1/jobs?per_page=100&page=1'] = {total_count: 3, jobs: data.jobs};
+    for (const [id, dir] of [[100, f.payload], [101, f.signatures]]) {
+      const zip = join(f.root, `${id}.zip`); await rm(zip);
+      execFileSync('zip', ['-qr', zip, '.'], {cwd: dir});
+      data.artifacts[id - 100].digest = `sha256:${sha256(await readFile(zip))}`;
+    }
+    responses['actions/runs/42/artifacts?per_page=100&page=1'] = {total_count: 2, artifacts: data.artifacts};
+    await writeFile(join(f.root, 'responses.json'), JSON.stringify(responses));
+    const bin = join(f.root, 'commands'); await mkdir(bin);
+    await writeFile(join(bin, 'gh'), `#!/usr/bin/env node
+const fs = require('node:fs'); const path = require('node:path'); const a = process.argv.slice(2);
+if (a[0] === 'api') {
+  const endpoint = a.at(-1).replace('repos/SummerSec/DeepSonar/', '');
+  const archive = /^actions\\/artifacts\\/(100|101)\\/zip$/.exec(endpoint);
+  if (archive) {process.stdout.write(fs.readFileSync(path.join(process.env.FIXTURE_ROOT, archive[1] + '.zip'))); process.exit(0);}
+  if (endpoint.startsWith('releases/tags/')) {console.log('HTTP/2.0 404 Not Found\\n\\n{}'); process.exit(1);}
+  const response = JSON.parse(fs.readFileSync(path.join(process.env.FIXTURE_ROOT, 'responses.json')))[endpoint];
+  if (!response) throw Error('unexpected endpoint ' + endpoint);
+  console.log(JSON.stringify(response)); process.exit(0);
+}
+if (a[0] !== 'release' || a[1] !== 'create') throw Error('unexpected gh command');
+fs.appendFileSync(process.env.EFFECTS, 'publish\\n');
+`, {mode: 0o755});
+    await writeFile(join(bin, 'bash'), `#!/bin/bash
+if [[ "$1" == agent-harness/release-writeback.sh ]]; then
+  echo writeback >> "$EFFECTS"
+  exit "${'${WRITEBACK_EXIT:-0}'}"
+fi
+exec /bin/bash "$@"
+`, {mode: 0o755});
+    for (const selection of ['writeback', 'publish', 'both']) {
+      const stages = selection === 'both' ? ['writeback', 'publish'] : [selection];
+      const effects = join(f.root, `${selection}.effects`);
+      for (const stage of stages) {
+        const workspace = join(f.root, `${selection}-${stage}`);
+        git(f.root, 'clone', '--quiet', origin, workspace);
+        git(workspace, 'checkout', '--detach', head);
+        await symlink(resolve('agent-harness'), join(workspace, 'agent-harness'));
+        const runtime = {...process.env, ...env, GITHUB_SHA: head, STAGES: selection, GH_TOKEN: 'fixture',
+          FIXTURE_ROOT: f.root, EFFECTS: effects, PATH: `${bin}:${process.env.PATH}`, WRITEBACK_EXIT: selection === 'both' ? '1' : '0'};
+        for (const step of job.steps.filter(step => step.run && (!step.if || step.if === `matrix.stage == '${stage}'`))) {
+          const result = spawnSync('/bin/bash', ['-e', '-c', step.run], {cwd: workspace, env: runtime, encoding: 'utf8'});
+          if (stage === 'writeback' && selection === 'both' && step.if) assert.notEqual(result.status, 0);
+          else assert.equal(result.status, 0, `${step.name}: ${result.stderr}`);
+        }
+      }
+      assert.deepEqual((await readFile(effects, 'utf8')).trim().split('\n'), stages);
+    }
+  } finally {await rm(f.root, {recursive: true, force: true});}
+});

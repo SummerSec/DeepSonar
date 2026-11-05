@@ -1,6 +1,6 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；v0.6.14 为当前补丁候选，尚未 tag/发布**。
+> 状态：**运维 as-built；v0.6.14 的发布运行失败，未产出完整冻结载荷；不代表正式发布完成**。
 > 同步日期：2026-11-05
 >
 > 2026-11-05 核对 GitHub，最近正式版与最高既有版本 tag 均为 [v0.6.13](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.13)，正式发布时间为 `2026-11-05T13:02:09Z`，tag commit 为 `71cefc0b34d3eddf771a6a39decba6fa003b6ac6`。该 tag 尚未包含 #912，承载该修复及 #916 原生 CI 准备修正的新候选为 v0.6.14，compare 为 `v0.6.13...v0.6.14`。最终 main SHA 的 Actions 与正式 Release 流水线、签名、catalog 和产物仍待验收。已知的 [Pi 完成修正阻塞 #913](https://github.com/SummerSec/DeepSonar/issues/913) 尚未修复，发布范围见 [CHANGELOG](../CHANGELOG.md)。

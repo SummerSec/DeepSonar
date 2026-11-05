@@ -28,7 +28,9 @@ node agent-harness/generate-runtime-image-registry.mjs --check "$registry_file"
 #    example from the captured catalog. Nothing below may move these temps later.
 tmp_registry="$(mktemp)"
 tmp_env="$(mktemp)"
-trap 'rm -f "$tmp_registry" "$tmp_env"' EXIT
+tmp_controller="$(mktemp --suffix=.mjs)"
+trap 'rm -f "$tmp_registry" "$tmp_env" "$tmp_controller"' EXIT
+cp agent-harness/release-writeback.mjs "$tmp_controller"
 cp "$registry_file" "$tmp_registry"
 git config user.name "github-actions[bot]"
 git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -92,5 +94,5 @@ if [[ "$existing" != true ]]; then
   git commit -m "chore(release): sync runtime-image-registry.json and platform digests for v${VERSION}"
 fi
 WRITEBACK_BRANCH="bot/sync-runtime-registry-v${VERSION}" WRITEBACK_SHA="$(git rev-parse HEAD)" \
-  node agent-harness/release-writeback.mjs | tee /tmp/writeback.json
+  node "$tmp_controller" | tee /tmp/writeback.json
 echo "已将 $registry_file 和 $env_file 经 ci-summary 校验后回写到 origin/${DEFAULT_BRANCH}" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
