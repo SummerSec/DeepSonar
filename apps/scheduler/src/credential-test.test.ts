@@ -31,6 +31,12 @@ test("catalog and inference outbound headers follow official wrappers and the se
       { settings: document, upstream: 1, tenant: "tenant-b" },
       { settings: { config: document }, upstream: 1, tenant: "tenant-b" },
       { settings: { config: stringify(document) }, upstream: 1, tenant: "tenant-b" },
+      ...["HTTP:", "http:"].map((scheme) => ({ settings: {
+        ...document,
+        "llm-pi-ai": { providers: { ...document["llm-pi-ai"].providers,
+          b: { ...document["llm-pi-ai"].providers.b, baseURL: `${urls[1].replace(/^http:/u, scheme)}/v1/` },
+        } },
+      }, upstream: 1, tenant: "tenant-b" })),
       { settings: document, upstream: 0, tenant: null, baseUrl: `${urls[0]}/v1` },
       ...[undefined, {}].map((emptyHeaders) => ({ settings: { providers: {
         a: { baseUrl: `${urls[0]}/v1`, api: "openai-completions", models: [{ id: "fixture-model" }], headers: emptyHeaders },

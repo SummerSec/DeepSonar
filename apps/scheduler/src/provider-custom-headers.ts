@@ -121,6 +121,18 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+// Compare targets as URLs, not spelling: URL transport normalizes host/scheme and
+// default ports. Keep path, query, fragment and userinfo so real target changes differ.
+function canonicalEndpoint(value: string): string | null {
+  try {
+    const endpoint = new URL(value.trim());
+    endpoint.pathname = endpoint.pathname.replace(/\/+$/u, "");
+    return endpoint.href;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Resolve headers from the same server-owned profile that selects the upstream endpoint.
  * Official Pi top-level/config object/config YAML documents use the runtime's official
@@ -134,8 +146,12 @@ export function providerCustomHeadersFromSettings(
   upstreamBaseUrl?: string,
 ): ProviderCustomHeaderResolution {
   const upstream = resolveProviderUpstreamFromSettings(settingsConfig);
-  if (upstreamBaseUrl && upstream.baseUrl && upstreamBaseUrl.trim().replace(/\/+$/u, "") !== upstream.baseUrl) {
-    return { headers: {}, rejected: ["upstream_endpoint_mismatch"] };
+  if (upstreamBaseUrl && upstream.baseUrl) {
+    const configured = canonicalEndpoint(upstream.baseUrl);
+    const effective = canonicalEndpoint(upstreamBaseUrl);
+    if (!configured || !effective || configured !== effective) {
+      return { headers: {}, rejected: ["upstream_endpoint_mismatch"] };
+    }
   }
   if (upstream.profile) return sanitizeProviderCustomHeaders(upstream.profile.headers);
 

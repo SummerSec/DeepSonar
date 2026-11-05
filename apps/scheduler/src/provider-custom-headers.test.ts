@@ -183,6 +183,27 @@ test("metadata endpoint overrides cannot send another profile's headers upstream
     { headers: {}, rejected: ["upstream_endpoint_mismatch"] });
 });
 
+test("equivalent endpoint URLs retain headers while changed targets still reject", () => {
+  for (const [configured, effective] of [
+    ["HTTP://LOCALHOST:80/v1/", "http://localhost/v1"],
+    ["https://LOCALHOST:443/v1", "https://localhost/v1///"],
+    ["http://[::1]:80/v1", "http://[::1]/v1"],
+  ]) {
+    const settings = { providers: { relay: { baseURL: configured, headers: { "x-tenant": "same-route" } } } };
+    assert.deepEqual(providerCustomHeadersFromSettings(settings, effective), {
+      headers: { "x-tenant": "same-route" }, rejected: [],
+    });
+  }
+  const settings = { providers: { relay: {
+    baseURL: "http://localhost:80/v1", headers: { "x-tenant": "same-route" },
+  } } };
+  for (const other of ["http://localhost:81/v1", "http://localhost/v2", "https://localhost/v1", "http://localhost/v1?route=b", "not-a-url"]) {
+    assert.deepEqual(providerCustomHeadersFromSettings(settings, other), {
+      headers: {}, rejected: ["upstream_endpoint_mismatch"],
+    });
+  }
+});
+
 test("empty header sets remain ambiguous when no endpoint profile is selected", () => {
   const resolution = providerCustomHeadersFromSettings({ providers: {
     a: {}, b: { headers: { "x-tenant": "tenant-b" } },
