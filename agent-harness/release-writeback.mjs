@@ -136,10 +136,10 @@ async function openOrReusePullRequest({ repo, branch, defaultBranch, sha, run, l
   const created = run("gh", ["pr", "create", "--repo", repo, "--base", defaultBranch, "--head", branch,
     "--title", `chore(release): sync bundled runtime catalog (${sha.slice(0, 8)})`,
     "--body", [
-      "自动生成的发布回写：把本次发布校验通过的 bundled 清单与 `deploy/.env.example` 平台镜像 digest 同步到默认分支。",
+      "本 PR 由 dsh-superagent 自动生成，使用 SummerSec 账号，将本次发布校验通过的 bundled 清单与 `deploy/.env.example` 平台镜像 digest 同步到默认分支。",
       "",
       `- 来源提交：\`${sha}\``,
-      `- 必需检查：\`${SUMMARY_CHECK}\` 已在该提交上通过，github-actions 之外不做任何绕过。`,
+      `- 必需检查：等待本 PR 的 \`${SUMMARY_CHECK}\` 与全部适用专项完成；当前正文不表示检查已通过，也不允许绕过门禁。`,
       "- 由 `agent-harness/release-writeback.mjs` 打开并合并；不再直推默认分支（#865 / #877）。",
       "",
       "<!-- dsh-superagent:worker -->",
