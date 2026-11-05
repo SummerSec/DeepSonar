@@ -89,8 +89,9 @@ export async function ensureProjectSkillAllowlist(
   // Optionally stamp the configured flag once a project has rows, without
   // seeding opt-in enables (legacy seed path removed in #691).
   if (hasRows && !flagged && options?.persist !== false) {
-    markSkillAllowlistConfigured(cfg);
-    await db`UPDATE projects SET config_json = ${jsonParam(db, cfg) as never} WHERE id = ${projectId}`;
+    const flag: Record<string, unknown> = {};
+    markSkillAllowlistConfigured(flag);
+    await db`UPDATE projects SET config_json = config_json || ${jsonParam(db, flag) as never} WHERE id = ${projectId}`;
     return {
       allowlist: { configured: true, enabled_skill_source_ids: await loadAvailableIds(db, projectId) },
       persisted: true,
@@ -208,9 +209,9 @@ export async function setProjectSkillSourceEnabled(
     config_json: unknown;
   }>;
   if (project) {
-    const cfg = { ...((project.config_json ?? {}) as Record<string, unknown>) };
-    markSkillAllowlistConfigured(cfg);
-    await db`UPDATE projects SET config_json = ${jsonParam(db, cfg) as never} WHERE id = ${projectId}`;
+    const flag: Record<string, unknown> = {};
+    markSkillAllowlistConfigured(flag);
+    await db`UPDATE projects SET config_json = config_json || ${jsonParam(db, flag) as never} WHERE id = ${projectId}`;
   }
 
   // Recompute effective availability so UI reflects trust-minus-disable.

@@ -8,6 +8,8 @@
 
 平台维护升级的当前决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)：宿主、受管 SSH 节点和显式回滚恢复已接线；schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。具体基线与隔离环境见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)；Windows Docker 全流程、断电及真实模型验证不能由这些记录推定，P3 Web 发起仍未实现，不能把该决策等同于 #740 全部交付。
 
+#914 仅同步[项目凭据引用保护切片](09-interface-specs.md#项目凭据引用保护914-切片)至 FR-CRED-002、运行时/数据/安全视图及追溯矩阵；scope 过滤与删除/设置事务回归复用现有 credential-delete CI 入口，不声明完整默认账号 UX 或最终 SHA Actions 已验收。
+
 #757 凭据先行解析已同步到 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时视图](06-runtime-view.md#凭据与-cli-解析757)、[数据架构](08-data-architecture.md)、[接口规范](09-interface-specs.md)及追溯矩阵；测试入口表示可复验方法，运行结果以 PR 验收记录为准。
 
 

@@ -14,6 +14,7 @@ import {
 } from "../../core.js";
 import { PLATFORM_DEFAULT_AGENT_CLI } from "../role-runtime-snapshot/index.js";
 import { sql } from "../../db.js";
+import { lockCredentialProjectReferences } from "../../credential-project-references.js";
 import { loadReadiness, type ReadinessMaterialSource } from "../../readiness.js";
 import { resolveFindingProtocol } from "../../finding-protocol.js";
 import {
@@ -56,26 +57,42 @@ function projectAllowlistResponse(cfg: Record<string, unknown>) {
 }
 
 
-async function validateProjectModelAllowlist(
+async function validateProjectCredentialAllowlist(
+  query: typeof sql,
   projectId: string,
   cfg: Record<string, unknown>,
 ): Promise<void> {
   const allowlist = parseProjectAgentAllowlist(cfg);
+  if (cfg.default_credential_id != null && !allowlist.default_credential_id) {
+    throw Object.assign(new Error("缺省 Provider 引用必须是有效 UUID 且属于项目账号白名单"), {
+      error_code: "provider_credential_allowlist_stale",
+    });
+  }
+  if (!allowlist.default_credential_id && (cfg.default_model_ref != null
+    || (Array.isArray(cfg.fallback_model_refs) && cfg.fallback_model_refs.length > 0))) {
+    throw new Error("缺省/回退模型必须绑定缺省 Provider");
+  }
+  const ids = [...new Set([
+    ...allowlist.enabled_credential_ids,
+    ...(allowlist.default_credential_id ? [allowlist.default_credential_id] : []),
+  ])];
+  await lockCredentialProjectReferences(query, ids);
+  const credentials = ids.length === 0 ? [] : await query`
+    SELECT id, provider, model_catalog_fetched_at, settings_config_json, agent_cli
+    FROM credentials
+    WHERE id = ANY(${ids}::uuid[]) AND kind = 'llm_provider' AND status = 'active'
+      AND (project_id IS NULL OR project_id = ${projectId})`;
+  if (credentials.length !== ids.length) {
+    throw Object.assign(new Error("项目账号引用必须已存在、active 且对当前项目可见；请移除或替换失效引用，不能删除白名单键扩大授权"), {
+      error_code: "provider_credential_allowlist_stale",
+    });
+  }
   const refs = [
     ...(allowlist.default_model_ref ? [allowlist.default_model_ref] : []),
     ...allowlist.fallback_model_refs,
   ];
   if (refs.length === 0 || !allowlist.default_credential_id) return;
-  const [credential] = await sql`
-    SELECT id, provider, model_catalog_json, model_catalog_fetched_at, settings_config_json, status, project_id, agent_cli
-    FROM credentials
-    WHERE id = ${allowlist.default_credential_id} AND kind = 'llm_provider'
-    LIMIT 1`;
-  if (!credential) throw new Error("缺省模型必须绑定已存在的 LLM Provider");
-  if (credential.status !== "active") throw new Error("缺省模型 Provider 当前不可用");
-  if (credential.project_id && credential.project_id !== projectId) {
-    throw new Error("缺省模型 Provider 不属于当前项目");
-  }
+  const credential = credentials.find((row) => row.id === allowlist.default_credential_id)!;
   // Allowlist SSOT: account-configured model ids by credential CLI dialect (#656/#679).
   const dialectCli = typeof credential.agent_cli === "string" && credential.agent_cli.trim()
     ? credential.agent_cli.trim()
@@ -115,6 +132,12 @@ async function validateProjectModelAllowlist(
       });
       if (incompatible) throw new Error(`模型 ${incompatible} 与缺省 Agent CLI ${selectedCli} 不兼容`);
     }
+  }
+}
+
+class ProjectSettingsRejected extends Error {
+  constructor(readonly statusCode: number, readonly body: Record<string, unknown>) {
+    super(String(body.error));
   }
 }
 
@@ -264,9 +287,17 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
     if (!p) return reply.code(404).send({ error: "project not found" });
     const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-    const cfg = (p.config_json ?? {}) as Record<string, unknown>;
+    let cfg = { ...((p.config_json ?? {}) as Record<string, unknown>) };
     if (scrubStoredProjectImagePolicy(cfg)) {
-      await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
+      // A GET cleanup must not overwrite a settings PATCH committed after its read.
+      const updated = await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)}
+        WHERE id = ${id} AND config_json = ${sql.json(p.config_json as never)} RETURNING id`;
+      if (updated.length === 0) {
+        const [current] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
+        if (!current) return reply.code(404).send({ error: "project not found" });
+        cfg = { ...((current.config_json ?? {}) as Record<string, unknown>) };
+        scrubStoredProjectImagePolicy(cfg);
+      }
     }
     const globalProtocol = parseStoredFindingProtocolConfig(
       ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
@@ -306,82 +337,100 @@ export function registerSettingsRoutes(app: FastifyInstance): void {
     } catch (error) {
       return reply.code(400).send({ error: "invalid project settings rules", details: error instanceof z.ZodError ? error.issues : undefined });
     }
-    const [p] = await sql`SELECT config_json FROM projects WHERE id = ${id}`;
-    if (!p) return reply.code(404).send({ error: "project not found" });
-    const cfg = { ...((p.config_json ?? {}) as Record<string, unknown>) };
-    const beforePassthrough = parseProjectAgentAllowlist(cfg).allow_model_catalog_passthrough;
-    const beforeQuota = ((cfg.rules as Record<string, unknown> | undefined)?.maxConcurrentJobs) ?? null;
-    if (body.rules) {
-      const currentRules = { ...((cfg.rules as Record<string, unknown>) ?? {}) };
-      const nextRules = { ...currentRules, ...body.rules };
-      if (Object.hasOwn(body.rules, "maxConcurrentJobs")) {
-        if (body.rules.maxConcurrentJobs === null) {
-          delete nextRules.maxConcurrentJobs;
-        } else {
-          const global = await globalRules(sql);
-          if (projectJobQuotaPatchExceedsGlobal(
-            currentRules.maxConcurrentJobs,
-            body.rules.maxConcurrentJobs,
-            global.maxJobsPerProject,
-          )) {
-            return reply.code(400).send({
-              error: `maxConcurrentJobs 不能超过全局每项目上限 ${global.maxJobsPerProject}`,
+    let result;
+    try {
+      result = await sql.begin(async (txRaw) => {
+        // SAFETY: postgres.js transactions expose the same query interface used by the domain helpers.
+        const tx = txRaw as unknown as typeof sql;
+        const [p] = await tx`SELECT config_json FROM projects WHERE id = ${id} FOR NO KEY UPDATE`;
+        if (!p) throw new ProjectSettingsRejected(404, { error: "project not found" });
+        const cfg = { ...((p.config_json ?? {}) as Record<string, unknown>) };
+        const beforePassthrough = parseProjectAgentAllowlist(cfg).allow_model_catalog_passthrough;
+        const beforeQuota = ((cfg.rules as Record<string, unknown> | undefined)?.maxConcurrentJobs) ?? null;
+        if (body.rules) {
+          const currentRules = { ...((cfg.rules as Record<string, unknown>) ?? {}) };
+          const nextRules = { ...currentRules, ...body.rules };
+          if (Object.hasOwn(body.rules, "maxConcurrentJobs")) {
+            if (body.rules.maxConcurrentJobs === null) {
+              delete nextRules.maxConcurrentJobs;
+            } else {
+              const global = await globalRules(tx);
+              if (projectJobQuotaPatchExceedsGlobal(
+                currentRules.maxConcurrentJobs,
+                body.rules.maxConcurrentJobs,
+                global.maxJobsPerProject,
+              )) {
+                throw new ProjectSettingsRejected(400, {
+                  error: `maxConcurrentJobs 不能超过全局每项目上限 ${global.maxJobsPerProject}`,
+                });
+              }
+            }
+          }
+          cfg.rules = stripFindingProtocolFromRules(scrubLeftoverRulesJson(nextRules).rules);
+        }
+        if (body.finding_protocol !== undefined) {
+          if (body.finding_protocol === null) delete cfg.finding_protocol;
+          else cfg.finding_protocol = body.finding_protocol;
+        }
+        if (body.device_access_enabled !== undefined) {
+          // 默认关：null 清除。设备租约的发放前置就是这里的 opt-in。
+          if (body.device_access_enabled === null) delete cfg.device_access_enabled;
+          else cfg.device_access_enabled = body.device_access_enabled;
+        }
+        if (
+          body.enabled_agent_clis !== undefined
+          || body.enabled_credential_ids !== undefined
+          || body.default_agent_cli !== undefined
+          || body.default_credential_id !== undefined
+          || body.default_model_ref !== undefined
+          || body.fallback_model_refs !== undefined
+          || body.allow_model_catalog_passthrough !== undefined
+        ) {
+          try {
+            applyProjectAgentAllowlistPatch(cfg, {
+              enabled_agent_clis: body.enabled_agent_clis,
+              enabled_credential_ids: body.enabled_credential_ids,
+              default_agent_cli: body.default_agent_cli,
+              default_credential_id: body.default_credential_id,
+              default_model_ref: body.default_model_ref,
+              fallback_model_refs: body.fallback_model_refs,
+              allow_model_catalog_passthrough: body.allow_model_catalog_passthrough,
             });
+          } catch (error) {
+            throw new ProjectSettingsRejected(400, { error: error instanceof Error ? error.message : "invalid agent allowlist" });
           }
         }
-      }
-      cfg.rules = stripFindingProtocolFromRules(scrubLeftoverRulesJson(nextRules).rules);
-    }
-    if (body.finding_protocol !== undefined) {
-      if (body.finding_protocol === null) delete cfg.finding_protocol;
-      else cfg.finding_protocol = body.finding_protocol;
-    }
-    if (body.device_access_enabled !== undefined) {
-      // 默认关：null 清除。设备租约的发放前置就是这里的 opt-in。
-      if (body.device_access_enabled === null) delete cfg.device_access_enabled;
-      else cfg.device_access_enabled = body.device_access_enabled;
-    }
-    if (
-      body.enabled_agent_clis !== undefined
-      || body.enabled_credential_ids !== undefined
-      || body.default_agent_cli !== undefined
-      || body.default_credential_id !== undefined
-      || body.default_model_ref !== undefined
-      || body.fallback_model_refs !== undefined
-      || body.allow_model_catalog_passthrough !== undefined
-    ) {
-      try {
-        applyProjectAgentAllowlistPatch(cfg, {
-          enabled_agent_clis: body.enabled_agent_clis,
-          enabled_credential_ids: body.enabled_credential_ids,
-          default_agent_cli: body.default_agent_cli,
-          default_credential_id: body.default_credential_id,
-          default_model_ref: body.default_model_ref,
-          fallback_model_refs: body.fallback_model_refs,
-          allow_model_catalog_passthrough: body.allow_model_catalog_passthrough,
-        });
-        await validateProjectModelAllowlist(id, cfg);
-      } catch (error) {
-        return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid agent allowlist" });
-      }
-    }
-    scrubStoredProjectImagePolicy(cfg);
-    const [g] = await sql`SELECT rules_json FROM global_settings WHERE id = 'global'`;
-    const globalProtocol = parseStoredFindingProtocolConfig(
-      ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
-    );
-    const projectProtocol = parseStoredFindingProtocolConfig(cfg.finding_protocol);
-    let effectiveFindingProtocol;
-    try {
-      effectiveFindingProtocol = resolveFindingProtocol(globalProtocol, projectProtocol);
+        try {
+          // Validate retained references too: omitting model/credential fields cannot preserve stale IDs.
+          await validateProjectCredentialAllowlist(tx, id, cfg);
+        } catch (error) {
+          throw new ProjectSettingsRejected(400, {
+            error: error instanceof Error ? error.message : "invalid agent allowlist",
+            error_code: (error as { error_code?: string }).error_code,
+          });
+        }
+        scrubStoredProjectImagePolicy(cfg);
+        const [g] = await tx`SELECT rules_json FROM global_settings WHERE id = 'global'`;
+        const globalProtocol = parseStoredFindingProtocolConfig(
+          ((g?.rules_json ?? {}) as Record<string, unknown>).finding_protocol,
+        );
+        const projectProtocol = parseStoredFindingProtocolConfig(cfg.finding_protocol);
+        let effectiveFindingProtocol;
+        try {
+          effectiveFindingProtocol = resolveFindingProtocol(globalProtocol, projectProtocol);
+        } catch (error) {
+          throw new ProjectSettingsRejected(400, { error: error instanceof Error ? error.message : "invalid finding protocol" });
+        }
+        await tx`UPDATE projects SET config_json = ${tx.json(cfg as never)} WHERE id = ${id}`;
+        await scrubIgnoredProjectRoleConfigIdentity(tx, id);
+        await tx`SELECT pg_notify('deepsonar_jobs', 'project-settings-updated')`;
+        return { cfg, beforePassthrough, beforeQuota, projectProtocol, effectiveFindingProtocol };
+      });
     } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "invalid finding protocol" });
+      if (error instanceof ProjectSettingsRejected) return reply.code(error.statusCode).send(error.body);
+      throw error;
     }
-    await sql`UPDATE projects SET config_json = ${sql.json(cfg as never)} WHERE id = ${id}`;
-    await scrubIgnoredProjectRoleConfigIdentity(sql, id);
-    // Project rule changes can alter effective task behavior; wake dispatch so
-    // pending jobs do not wait for the next unrelated enqueue event.
-    await sql`SELECT pg_notify('deepsonar_jobs', 'project-settings-updated')`;
+    const { cfg, beforePassthrough, beforeQuota, projectProtocol, effectiveFindingProtocol } = result;
     // 项目级 rules 覆盖 / roles 启停都属配置修改
     const afterQuota = Object.hasOwn(body.rules ?? {}, "maxConcurrentJobs")
       ? ((cfg.rules as Record<string, unknown> | undefined)?.maxConcurrentJobs ?? null)

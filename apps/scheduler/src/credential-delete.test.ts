@@ -60,6 +60,23 @@ test("web deleteAccount only hard-blocks pending/active, not recoverable", () =>
   assert.match(handler, /请等待结束或取消后再删/);
 });
 
+test("DELETE globally checks project references but keeps actor-scoped impact", () => {
+  const handler = deleteHandler();
+  assert.match(handler, /lockCredentialProjectReferences\(tx, \[id\]\)/);
+  assert.match(handler, /credentialProjectReferences\(tx, id\)/);
+  assert.match(handler, /credentialImpact\(tx, id, actorProjectId\)/);
+  assert.match(handler, /CREDENTIAL_PROJECT_REFERENCE/);
+  assert.match(handler, /next_action:/);
+  assert.doesNotMatch(handler, /UPDATE\s+projects|DELETE\s+FROM\s+projects/);
+});
+
+test("web project-reference refusal uses full scoped count and preserves empty whitelist semantics", () => {
+  const flow = readFileSync(new URL("../../web/src/ProviderAccountFlow.tsx", import.meta.url), "utf8");
+  assert.match(flow, /projectRefCount = liveImpact\.project_references\.count/);
+  assert.match(flow, /if \(projectRefCount > 0\)/);
+  assert.match(flow, /保留显式空白名单/);
+});
+
 test("#690 delete no longer unbinds RoleConfig; audit still keeps project_id", () => {
   const handler = deleteHandler();
   assert.doesNotMatch(handler, /SET version = version \+ 1, updated_at = now\(\)/);

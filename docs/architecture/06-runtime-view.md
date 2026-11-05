@@ -25,6 +25,8 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 项目 CLI/Provider 管理页独立加载账号列表，区分加载中、加载失败与成功空列表。只有成功读取当前项目可见账号后才判定默认账号和白名单引用失效；未加载成功时保存 CLI 不能清除默认账号或写入空凭据白名单。Pi 模型快照对账号目录中含 `/` 的完整模型 ID 保持一致，CLI 路由单独冻结，详见 [CLI 运行时契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-coding-agent-rpc140)。
 
+#914 的项目账号引用 DELETE/设置事务、scope 过滤及双向竞态回归见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)；运行期停用和既有失效引用仍按上述解析门 fail closed，不代表完整默认账号 UX 已交付。
+
 实现入口：[凭据解析](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[快照组装](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[readiness](../../apps/scheduler/src/readiness.ts)。
 
 ## 正常链路
@@ -194,3 +196,7 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 请求按原 token、Job/Attempt、冻结模型和预算准入后，经单次 HTTP 交换转发原始 body、路径/query 和端到端头。客户端请求流先有界收全，响应/SSE 即时发送且遵守背压/取消；usage 仅旁路观察。CLI alias 移至请求生成层，预算不符在出站前明确拒绝。OM wrapper 为请求登记 UUID，收到模型终止结果后查询同 Job/Attempt/token/workload 的持久 effect/usage 状态，仅 settled 才提交；未知保持硬失败。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与 [ADR 0017](adr/0017-transparent-gateway-settlement.md)。本分支最终 SHA Actions 待验。
 
 #923 主执行启动/恢复由上传的[请求生成适配器](../../packages/runtime-sandbox/src/model-request-policy.ts)包装，三 CLI 主 endpoint 只在运行时投影到 loopback，OM 保持真实 Gateway。每次模型 JSON 先查询自身 workload allowance，生成 cap/usage 后交给 Gateway 原字节准入。未准入 quota/DB 回滚拒绝用原 events 的 scoped kernel 回执确认 not_started；保存失败 unknown，同 UUID 不重发。无新 schema/模型账本，Actions 待验。
+
+## 操作员效果结清（#899）
+
+FR-JOB-005 的人工路径复用 `job_attempt_effects`：同一 UPDATE 排除 active Attempt 并只写未结清行；已结清证据不可覆盖，不改变 Attempt 程序计数器或 replay policy。CLI 将本次单条写入结果与独立全局计数分开，计数失败不能宣称清空；字段和退出契约见[部署说明](../../deploy/README.md#未知效果的人工结清899)。隔离 PostgreSQL 回归覆盖真实内核结算和锁竞争，最终 SHA Actions 成功才作为工程验收，未执行生产升级。

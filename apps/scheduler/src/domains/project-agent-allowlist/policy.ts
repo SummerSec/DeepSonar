@@ -52,9 +52,11 @@ function parseCredentialIdList(value: unknown): string[] | null {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const item of value) {
-    if (typeof item !== "string" || !UUID_RE.test(item) || seen.has(item)) continue;
-    seen.add(item);
-    out.push(item);
+    if (typeof item !== "string" || !UUID_RE.test(item)) continue;
+    const id = item.toLowerCase();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
   }
   return out;
 }
@@ -64,7 +66,7 @@ function parseOptionalCli(value: unknown): CurrentAgentCli | null {
 }
 
 function parseOptionalCredentialId(value: unknown): string | null {
-  return typeof value === "string" && UUID_RE.test(value) ? value : null;
+  return typeof value === "string" && UUID_RE.test(value) ? value.toLowerCase() : null;
 }
 
 function parseOptionalModelRef(value: unknown): string | null {
@@ -149,7 +151,7 @@ export function applyProjectAgentAllowlistPatch(
     if (patch.default_credential_id === null) delete cfg.default_credential_id;
     else if (!UUID_RE.test(patch.default_credential_id)) {
       throw new Error("缺省 Provider credential_id 必须是 UUID");
-    } else cfg.default_credential_id = patch.default_credential_id;
+    } else cfg.default_credential_id = patch.default_credential_id.toLowerCase();
   }
   if (patch.default_model_ref !== undefined) {
     if (patch.default_model_ref === null) delete cfg.default_model_ref;
@@ -188,7 +190,16 @@ export function applyProjectAgentAllowlistPatch(
   }
   if (requestedCli && !enabledClis.includes(requestedCli)) delete cfg.default_agent_cli;
   if (requestedCred && enabledCreds !== null && !enabledCreds.includes(requestedCred)) delete cfg.default_credential_id;
-  if (!requestedCred || !requestedModel) delete cfg.default_model_ref;
+  const effectiveCred = parseOptionalCredentialId(cfg.default_credential_id);
+  if (!effectiveCred) {
+    if (patch.default_model_ref != null || (patch.fallback_model_refs?.length ?? 0) > 0) {
+      throw new Error("缺省/回退模型必须绑定缺省 Provider");
+    }
+    delete cfg.default_model_ref;
+    delete cfg.fallback_model_refs;
+  } else if (!requestedModel) {
+    delete cfg.default_model_ref;
+  }
   return parseProjectAgentAllowlist(cfg);
 }
 

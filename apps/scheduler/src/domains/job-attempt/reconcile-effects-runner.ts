@@ -247,7 +247,11 @@ export async function countUnsettledEffects(db: MigrationConnection): Promise<nu
   const rows = (await db.unsafe(
     `SELECT count(*)::int AS count FROM job_attempt_effects WHERE status IN ('unknown', 'effect_pending')`,
   )) as { count: number }[];
-  return Number(rows[0]?.count ?? 0);
+  const count = Number(rows[0]?.count);
+  if (rows.length !== 1 || !Number.isSafeInteger(count) || count < 0 || rows[0]?.count == null) {
+    throw new Error("INVALID_UNSETTLED_EFFECT_COUNT");
+  }
+  return count;
 }
 
 export async function runEffectReconcile(db: MigrationConnection, input: ReconcileRequest): Promise<ReconcileResult> {

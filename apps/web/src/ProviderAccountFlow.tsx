@@ -401,6 +401,21 @@ export function ProviderAccountFlow({
         setError(`无法删除「${credential.name}」：仍有 ${activeScans} 个进行中的镜像准入扫描引用该凭据。`);
         return;
       }
+      // Project references block deletion even when no Job is running.
+      const projectRefs = liveImpact.project_references.items;
+      const projectRefCount = liveImpact.project_references.count;
+      if (projectRefCount > 0) {
+        const names = projectRefs
+          .slice(0, 3)
+          .map((ref) => `${ref.project_name ?? ref.project_id}${ref.default ? "（缺省账号）" : "（启用账号）"}`)
+          .join("、");
+        setError(
+          `无法删除「${credential.name}」：${projectRefCount} 个可见项目仍引用该账号（${names}`
+          + `${projectRefCount > 3 ? " 等" : ""}）。请先在项目 Agent 设置里移除或替换引用，再删除；`
+          + `如需禁用所有账号，保留显式空白名单，不要删除白名单键扩大授权。`,
+        );
+        return;
+      }
       const historical = liveImpact.jobs.terminal_historical.count;
       const confirmed = await confirm({
         title: `删除账号 ${credential.name}？`,
