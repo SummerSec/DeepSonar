@@ -683,7 +683,8 @@ export function resolveProviderUpstreamFromSettings(settingsConfig: unknown): {
     if (typeof value === "string" && value.trim()) return { baseUrl: value.trim().replace(/\/+$/u, ""), profile: settings };
   }
   const providers = asObject(settings.providers);
-  const providerEntries = Object.keys(providers).length > 0 ? Object.values(providers) : [settings];
+  const providerEntries = Object.values(providers);
+  if (providerEntries.length === 0) providerEntries.push(settings);
   for (const rawProvider of providerEntries) {
     const provider = asObject(rawProvider);
     for (const key of ["baseUrl", "baseURL", "base_url"]) {
