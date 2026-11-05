@@ -43,9 +43,18 @@ test("configured provider headers reach the upstream and the Job token never doe
   const app = Fastify();
   const received: Array<Record<string, unknown>> = [];
   const otherReceived: Array<Record<string, unknown>> = [];
+  const rawBodies: string[] = [];
+  let requireBusinessHeader = false;
+  const missingHeaderBody = '{"error":{"type":"fixture_business_header_required","message":"missing routing label"}}';
   for (const [server, requests] of [[upstream, received], [otherUpstream, otherReceived]] as const) {
-    server.post("/v1/chat/completions", async (req) => {
+    server.removeContentTypeParser("application/json");
+    server.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => done(null, body));
+    server.post("/v1/chat/completions", async (req, reply) => {
       requests.push({ ...(req.headers as Record<string, unknown>) });
+      rawBodies.push(String(req.body));
+      if (requireBusinessHeader && req.headers["x-business-route"] !== "synthetic-route") {
+        return reply.code(429).header("content-type", "application/json").header("x-fixture-error", "upstream").send(missingHeaderBody);
+      }
       return {
         object: "chat.completion",
         choices: [{ index: 0, finish_reason: "stop", message: { content: "fixture" } }],
@@ -77,7 +86,7 @@ test("configured provider headers reach the upstream and the Job token never doe
           providers: { relay: { headers: { "X-Traffic-Type": "eval", "x-tenant": "acme", "x-api-key": "must-not-apply" } } },
         })})`;
 
-    const createBoundJob = async (model = "offline") => {
+    const createBoundJob = async (model = "offline", maxRequests = 10) => {
       const [credential] = await sql`SELECT * FROM credentials WHERE id=${credentialId}`;
       const binding = freezeGatewayProviderBinding(credential as never);
       const jobId = randomUUID();
@@ -87,7 +96,7 @@ test("configured provider headers reach the upstream and the Job token never doe
       await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
         VALUES(${jobId},${projectId},'audit','running',${sql.json(snapshot as never)},now(),3600,now()+interval '1 hour')`;
       await sql.begin((tx) => createAttempt(tx as unknown as typeof sql, jobId));
-      return gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests: 10, maxTokens: 0 });
+      return gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests, maxTokens: 0 });
     };
     const token = await createBoundJob();
     const legacyJobId = randomUUID();
@@ -213,15 +222,60 @@ test("configured provider headers reach the upstream and the Job token never doe
     assert.equal(received.at(-1)!.authorization, "Bearer offline-rotated-key");
     assert.equal(received.at(-1)!["x-tenant"], "tenant-a");
     assert.equal(received.at(-1)!["x-layer"], "model-a");
-    const beforeA = received.length, beforeB = otherReceived.length;
-    await sql`UPDATE credentials SET settings_config_json=${sql.json({ providers: { relay: {
-      ...modelSettings.providers.relay, baseUrl: `${otherUrl}/v1`, headers: { "x-tenant": "tenant-b" },
-    } } })} WHERE id=${credentialId}`;
-    const changed = await call(frozenA, "offline", { "x-tenant": "a" });
-    assert.equal(changed.statusCode, 409, changed.body);
-    assert.equal(changed.json().error.type, "GATEWAY_PROVIDER_BINDING_CHANGED");
-    assert.equal(received.length, beforeA);
-    assert.equal(otherReceived.length, beforeB);
+    // Each independent route attribute invalidates the old token before either target is called.
+    const independentChanges = [
+      { label: "route only", relay: { ...modelSettings.providers.relay, baseUrl: `${otherUrl}/v1` } },
+      { label: "provider headers only", relay: { ...modelSettings.providers.relay,
+        headers: { ...modelSettings.providers.relay.headers, "x-tenant": "changed-provider" } } },
+      { label: "model headers only", relay: { ...modelSettings.providers.relay,
+        models: modelSettings.providers.relay.models.map(model => model.id === "offline"
+          ? { ...model, headers: { ...model.headers, "x-model-only": "changed-model" } } : model) } },
+    ];
+    for (const fixture of independentChanges) {
+      const beforeA = received.length, beforeB = otherReceived.length;
+      await sql`UPDATE credentials SET settings_config_json=${sql.json({ providers: { relay: fixture.relay } })} WHERE id=${credentialId}`;
+      const changed = await call(frozenA, "offline", { "x-tenant": "a" });
+      assert.equal(changed.statusCode, 409, `${fixture.label}: ${changed.body}`);
+      assert.equal(changed.json().error.type, "GATEWAY_PROVIDER_BINDING_CHANGED", fixture.label);
+      assert.equal(received.length, beforeA, `${fixture.label}: original target must not receive a request`);
+      assert.equal(otherReceived.length, beforeB, `${fixture.label}: alternate target must not receive a request`);
+    }
+
+    await sql`UPDATE credentials SET settings_config_json=${sql.json(modelSettings)} WHERE id=${credentialId}`;
+    const businessToken = await createBoundJob();
+    // Identical raw business payload and target; only the required business header differs.
+    const rawBusinessBody = '{ "model" : "offline", "messages": [], "extension": {"keep":true} }';
+    const businessCall = (value: { plaintext: string }, includeHeader: boolean) => app.inject({
+      method: "POST", url: "/gateway/v1/chat/completions",
+      headers: { authorization: `Bearer ${value.plaintext}`, "content-type": "application/json",
+        ...(includeHeader ? { "x-business-route": "synthetic-route" } : {}) },
+      payload: rawBusinessBody,
+    });
+    requireBusinessHeader = true;
+    const beforeBusinessA = received.length, beforeBusinessB = otherReceived.length;
+    const acceptedBusiness = await businessCall(businessToken, true);
+    assert.equal(acceptedBusiness.statusCode, 200, acceptedBusiness.body);
+    const missingBusiness = await businessCall(businessToken, false);
+    assert.equal(missingBusiness.statusCode, 429, missingBusiness.body);
+    assert.equal(missingBusiness.body, missingHeaderBody, "upstream error body must remain byte-identical");
+    assert.equal(missingBusiness.headers["x-fixture-error"], "upstream");
+    assert.equal(received.length, beforeBusinessA + 2, "both business-header comparison requests reach the same upstream");
+    assert.equal(otherReceived.length, beforeBusinessB);
+    assert.equal(received[beforeBusinessA]!["x-business-route"], "synthetic-route");
+    assert.equal(received[beforeBusinessA + 1]!["x-business-route"], undefined);
+    assert.deepEqual(rawBodies.slice(-2), [rawBusinessBody, rawBusinessBody], "Gateway must not rewrite either body");
+
+    const limitedToken = await createBoundJob("offline", 1);
+    const firstLimited = await businessCall(limitedToken, true);
+    assert.equal(firstLimited.statusCode, 200, firstLimited.body);
+    const beforeQuotaA = received.length, beforeQuotaB = otherReceived.length;
+    const exhausted = await businessCall(limitedToken, true);
+    assert.equal(exhausted.statusCode, 429, exhausted.body);
+    assert.equal(exhausted.json().error.type, "quota_exhausted", "local quota denial must differ from upstream 429");
+    assert.equal(exhausted.headers["x-fixture-error"], undefined);
+    assert.equal(received.length, beforeQuotaA, "local request quota exhaustion has zero original-target egress");
+    assert.equal(otherReceived.length, beforeQuotaB, "local request quota exhaustion has zero alternate-target egress");
+    requireBusinessHeader = false;
 
     // Invalid profiles cannot create a frozen Job, and existing tokens cannot send through them.
     for (const invalid of [{ "X-Tenant": "a", "x-tenant": "b" }, { "x-tenant": "\r\na" }, { "x-tenant": "a\r\n" }]) {
