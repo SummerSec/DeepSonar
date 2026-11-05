@@ -181,7 +181,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       assert.equal(row.count, 0);
     };
     const waitForBlockedQuery = async (fragment: string) => {
-      for (let i = 0; i < 200; i++) {
+      for (let i = 0; i < 500; i++) {
         const [row] = await sql`SELECT count(*)::int AS count FROM pg_stat_activity
           WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE ${'%' + fragment + '%'}`;
         if (Number(row.count) > 0) return;
@@ -196,6 +196,11 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         assert.equal(result.statusCode, 409, result.body); assert.equal(result.json().error_code, "REPAIR_DEADLINE_EXHAUSTED");
       }
       await assertNoGeneration(f.jobId);
+      await assert.rejects(sql.begin(tx => budgets.assertRepairExecutionOwner(tx as unknown as typeof sql, f.jobId, String(f.oldAttempt.id))),
+        (error: unknown) => (error as { code?: string }).code === "REPAIR_DEADLINE_EXHAUSTED",
+        "expired ownership fails before a provision/agent effect can be admitted");
+      const [effects] = await sql`SELECT count(*)::int AS count FROM job_attempt_effects WHERE job_id=${f.jobId}`;
+      assert.equal(effects.count, 0);
       assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.key), f.receipt);
     });
     await t.test("Reaper owns timeout first: racing rerun cannot create a new owner", async () => {
@@ -210,7 +215,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         const rows = await createSqlJobLifecycleApplication(tx).reapExecutionTimeout();
         assert.ok(rows.some(row => row.id === f.jobId)); locked(); await hold;
       });
-      await ready;
+      await Promise.race([ready, reaping]);
       const recovering = app.inject({ method: "POST", url: `/jobs/${f.jobId}/rerun-current` });
       // Injection starts asynchronously; consume its thenable before observing the lock queue.
       const response = Promise.resolve(recovering);
@@ -227,7 +232,8 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       const f = await setup(); await f.stop("waiting_human");
       await sql`UPDATE jobs SET started_at=now()-interval '2 minutes' WHERE id=${f.jobId}`;
       const lockKey = 903123;
-      await admin`SELECT pg_advisory_lock(${lockKey})`;
+      const lockDb = postgres(url.toString(), { max: 1 });
+      await lockDb`SELECT pg_advisory_lock(${lockKey})`;
       await sql.unsafe(`CREATE FUNCTION hold_repair_pending_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
         IF NEW.id = '${f.jobId}'::uuid AND NEW.status='pending' THEN PERFORM pg_advisory_xact_lock(${lockKey}); END IF;
         RETURN NEW; END $$`);
@@ -238,7 +244,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         await waitForBlockedQuery("UPDATE jobs");
         reaping = createSqlJobLifecycleApplication().reapWaitingHumanTimeout(1);
         await waitForBlockedQuery("SELECT jobs.id::text");
-      } finally { await admin`SELECT pg_advisory_unlock(${lockKey})`; }
+      } finally { await lockDb`SELECT pg_advisory_unlock(${lockKey})`; await lockDb.end(); }
       const result = await response; assert.equal(result.statusCode, 200, result.body);
       assert.ok(reaping); assert.equal((await reaping).some(row => row.id === f.jobId), false);
       await sql.unsafe("DROP TRIGGER hold_repair_pending_fixture ON jobs");
@@ -263,6 +269,26 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       const [job] = await sql`SELECT status FROM jobs WHERE id=${f.jobId}`; assert.equal(job.status, "succeeded");
       assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
       await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+    });
+
+    await t.test("request quota and ordinary provision retry cannot mint fresh repair capacity", async () => {
+      const exhausted = await setup(); await exhausted.stop("failed");
+      await sql`UPDATE job_tokens SET used_requests=max_requests WHERE job_id=${exhausted.jobId}`;
+      for (const mode of ["resume", "rerun-current"] as const) {
+        const result = await exhausted.recover(mode);
+        assert.equal(result.statusCode, 409, result.body); assert.equal(result.json().error_code, "REPAIR_REQUESTS_EXHAUSTED");
+      }
+      await assertNoGeneration(exhausted.jobId);
+      const successor = await setup(); await successor.stop("failed");
+      assert.equal((await successor.recover("resume")).statusCode, 200);
+      const claims = await dispatcher.claimPendingJobs(); assert.ok(claims.some(row => row.id === successor.jobId));
+      const [attempt] = await sql`SELECT * FROM job_attempts WHERE job_id=${successor.jobId} AND status='active'`;
+      await sql`UPDATE jobs SET status='provisioning',started_at=NULL WHERE id=${successor.jobId}`;
+      assert.equal(await dispatcher.retryProvisioningJob(successor.jobId, attempt, "synthetic preparation failure"), false);
+      const [state] = await sql`SELECT count(*)::int AS count,MAX(attempt_no) AS last FROM job_attempts WHERE job_id=${successor.jobId}`;
+      assert.equal(state.count, 2); assert.equal(state.last, 2);
+      assert.equal((await readBudget(successor.jobId))?.attempt_id, String(attempt.id));
+      await sql`UPDATE jobs SET status='cancelled' WHERE id=${successor.jobId}`;
     });
 
     await t.test("exhausted cumulative token budget cannot be refreshed by manual recovery", async () => {
