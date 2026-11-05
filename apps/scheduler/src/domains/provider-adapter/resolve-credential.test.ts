@@ -382,3 +382,58 @@ test("#757 rejected model includes a bounded configured catalog repair sample", 
     return true;
   });
 });
+
+test("#914 stale member blocks the whole allowlist until explicit repair; empty stays deny-all", async () => {
+  const rows = [baseRow(CRED_B)];
+  const resolve = (cfg: Record<string, unknown>) => resolveProviderCredentialForJob({
+    db: dbWith(rows) as never,
+    projectId: "project-1",
+    provider: "anthropic",
+    modelRef: "claude-sonnet-4",
+    allowlist: parseProjectAgentAllowlist(cfg),
+  });
+  for (const cfg of [
+    { enabled_credential_ids: [CRED_A, CRED_B] },
+    { default_credential_id: CRED_A },
+    { enabled_credential_ids: [CRED_A, CRED_B], default_credential_id: CRED_A },
+  ]) {
+    const before = structuredClone(cfg);
+    await assert.rejects(() => resolve(cfg), (error: unknown) => {
+      assert.ok(error instanceof ProviderCredentialResolveError);
+      assert.equal(error.code, "provider_credential_allowlist_stale");
+      assert.equal(error.repair.category, "permanent_failure");
+      assert.equal(error.repair.next_action, "repair_project_credential_allowlist");
+      assert.deepEqual(error.repair.observed_shape, { unavailable_count: 1 });
+      return true;
+    });
+    assert.deepEqual(cfg, before, "resolution must not silently remove a stale reference or select another account");
+  }
+  assert.equal((await resolve({ enabled_credential_ids: [CRED_B], default_credential_id: CRED_B }))?.id, CRED_B);
+  const empty = { enabled_credential_ids: [] };
+  await assert.rejects(() => resolve(empty), (error: unknown) =>
+    error instanceof ProviderCredentialResolveError && error.code === "provider_credential_no_match");
+  assert.deepEqual(empty, { enabled_credential_ids: [] });
+  assert.equal((await resolve({}))?.id, CRED_B, "missing allowlist remains distinct from explicit []");
+});
+
+
+test("#914 disabled and cross-project references remain stale despite a healthy alternative", async () => {
+  for (const unavailable of [
+    { ...baseRow(CRED_A), status: "disabled" },
+    { ...baseRow(CRED_A), project_id: "other-project" },
+  ]) {
+    for (const config of [
+      { enabled_credential_ids: [CRED_A, CRED_B] },
+      { default_credential_id: CRED_A },
+      { enabled_credential_ids: [CRED_A, CRED_B], default_credential_id: CRED_A },
+    ]) {
+      await assert.rejects(() => resolveProviderCredentialForJob({
+        db: dbWith([unavailable, baseRow(CRED_B)]) as never,
+        projectId: "project-1", provider: "anthropic", modelRef: "claude-sonnet-4",
+        allowlist: parseProjectAgentAllowlist(config),
+      }), (error: unknown) => error instanceof ProviderCredentialResolveError
+        && error.code === "provider_credential_allowlist_stale"
+        && error.repair.next_action === "repair_project_credential_allowlist");
+    }
+  }
+});

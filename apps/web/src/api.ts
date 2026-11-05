@@ -610,6 +610,8 @@ export interface JobUsageSummary {
 export interface JobDetail {
   job: {
     id: string;
+    /** Returned by the Job detail API; older projections may omit it. */
+    project_id?: string;
     type: string;
     status: string;
     error: string | null;
