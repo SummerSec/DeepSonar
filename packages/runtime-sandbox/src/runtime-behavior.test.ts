@@ -299,6 +299,7 @@ test("completion-gate attempts keep the last process exit authoritative", () => 
     observed: true,
     error: "Provider 429",
     terminalOutcome: "failure",
+    runnerErrorSource: "structured_terminal",
   });
 
   // The old attempt produced text, but the resumed CLI process did not
@@ -315,6 +316,7 @@ test("completion-gate attempts keep the last process exit authoritative", () => 
     observed: true,
     error: "agent CLI 退出码 17: provider closed the session",
     terminalOutcome: "failure",
+    runnerErrorSource: "process",
   });
 });
 
@@ -335,6 +337,7 @@ test("intentional stdin close after a valid terminal result is not a runner fail
     observed: true,
     error: "agent CLI 退出码 1",
     terminalOutcome: "failure",
+    runnerErrorSource: "process",
   });
 });
 
@@ -348,7 +351,38 @@ test("a clean process exit without a structured terminal result is a runner fail
     observed: true,
     error: "agent CLI exited without a structured terminal result",
     terminalOutcome: "failure",
+    runnerErrorSource: "process",
   });
+});
+
+for (const exitCode of [0, 137]) {
+  test(`completion refusal in stderr cannot change process failure provenance (exit ${exitCode})`, () => {
+    const outcome = resolveTerminalProcessOutcome({ exitCode,
+      stderrTail: "409 Completion already accepted; reconcile its receipt" });
+    assert.equal(outcome.runnerErrorSource, "process");
+    assert.equal(outcome.terminalOutcome, "failure");
+    assert.match(outcome.error!, exitCode ? /退出码 137/ : /without a structured terminal result/);
+  });
+}
+
+test("a nonzero exit overrides a structured refusal even after terminal stdin close", () => {
+  for (const closeReason of [undefined, "terminal_result"] as const) {
+    const outcome = resolveTerminalProcessOutcome({ exitCode: 137, closeReason,
+      terminalResult: { isError: true, errorDetail: "COMPLETION_ALREADY_ACCEPTED" } });
+    assert.equal(outcome.runnerErrorSource, "process");
+    assert.equal(outcome.terminalOutcome, "failure");
+    assert.equal(outcome.error, "agent CLI 退出码 137: COMPLETION_ALREADY_ACCEPTED");
+  }
+});
+
+test("nonzero process failures retain structured details for bounded session recovery", () => {
+  const outcome = resolveTerminalProcessOutcome({
+    exitCode: 1,
+    terminalResult: { isError: true, errorDetail: "upstream status: 503" },
+  });
+  assert.equal(outcome.runnerErrorSource, "process");
+  assert.equal(outcome.terminalOutcome, "failure");
+  assert.equal(outcome.error, "agent CLI 退出码 1: upstream status: 503");
 });
 
 test("plain-final output synthesizes only a normalized successful result", () => {

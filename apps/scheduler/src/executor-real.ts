@@ -9,6 +9,7 @@ import {
   requireAgentCliRuntimeAdapter,
   runRealAgent,
   type ContextState,
+  type RealAgentResult,
 } from "@deepsonar/runtime-sandbox";
 import {
   DonePayload,
@@ -276,6 +277,19 @@ export function isSemanticAgentRunError(result: {
   errorKind?: "semantic" | "runner";
 }): boolean {
   return result.errorKind === "semantic" || result.error?.startsWith("语义事件处理失败:") === true;
+}
+
+/** #913: only a structured completion refusal may settle an already accepted done. */
+const ACCEPTED_COMPLETION_REFUSAL =
+  /^(?:Pi message ended: error: )?(?:409 )?(?:COMPLETION_ALREADY_ACCEPTED|Completion already accepted; reconcile its receipt|A completion is already durably accepted; read its receipt)$/i;
+
+export function acceptedCompletionSupersedesRunnerFailure(
+  result: Pick<RealAgentResult, "error" | "errorKind" | "terminalOutcome" | "runnerErrorSource">,
+  hasAcceptedTerminal: boolean,
+): boolean {
+  if (!hasAcceptedTerminal || result.runnerErrorSource !== "structured_terminal") return false;
+  if (!isFinalAgentRunnerError(result)) return false;
+  return typeof result.error === "string" && ACCEPTED_COMPLETION_REFUSAL.test(result.error);
 }
 
 export function isFinalAgentRunnerError(result: {
@@ -1911,9 +1925,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   // Host semantic validation is fail-closed. A transient Provider/CLI error
   // may be superseded by an accepted terminal control event below.
   if (isSemanticAgentRunError(result)) throw reconstructAgentRunError(result.error ?? "语义事件处理失败", result.errorDetails);
-  // A final runner failure remains authoritative. Only a result explicitly
-  // marked as a later terminal success may carry a stale earlier error.
-  if (isFinalAgentRunnerError(result)) throw reconstructAgentRunError(result.error!, result.errorDetails);
+  // A final runner failure remains authoritative unless its structured terminal
+  // refusal only reports that the host already accepted completion.
+  if (acceptedCompletionSupersedesRunnerFailure(result, Boolean(semanticState.done))) {
+    // Fall through: the accepted terminal settles below, exactly once.
+  } else if (isFinalAgentRunnerError(result)) {
+    throw reconstructAgentRunError(result.error!, result.errorDetails);
+  }
   if (!semanticState.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
 
   // Hub 决策在 Agent 结束后落地：避免工具调用后 Agent 尚未收尾时提前派生下一轮。

@@ -39,6 +39,30 @@ control API, event validation, completion gates, leases, and all state
 transitions. Output is consumed as structured JSON events; terminal text is
 never scraped.
 
+### Runner failure provenance (#919)
+
+`RealAgentResult.runnerErrorSource` distinguishes `structured_terminal` failures
+from `process` failures (exit, missing terminal, transport, resume or output
+capture). It describes the final attempt and is cleared by a later success;
+plain-final output cannot manufacture structured-terminal provenance. Pi RPC,
+error/extension diagnostics, aborted messages and streaming-error diagnostics,
+plus DSH JSON-RPC request failures, keep `process` provenance even when the
+adapter normalizes them into an error result; a later failed settlement keeps
+that source. A failed structured terminal never masks a nonzero exit, including
+after stdin close. Transport errors after a failed terminal also remain process
+failures; the existing successful intentional-close rule is unchanged.
+
+`executeReal` may settle the original Hub/done bundle exactly once only when
+its done was already accepted and the final structured error is the exact
+Gateway `COMPLETION_ALREADY_ACCEPTED` refusal or either registered gate message
+(with the supported Pi error/HTTP status prefix). Stderr, arbitrary diagnostics,
+missing provenance, semantic errors and cancellation/timeout/lease/unknown-effect
+failures cannot activate this override. Original receipt, permission, lifecycle
+and ingestion gates remain authoritative; this does not retry a process or
+reconcile unknown effects. Regression entry points are `ci:unit:runtime-sandbox`
+and `ci:unit:executor-real`; these are offline engineering fixtures, not live
+CLI/model or final-SHA Actions acceptance.
+
 DSH vendor dialect (official `settings.yaml` parse, secret-key reject, single
 route/profile rewrite onto the Job Gateway, pi-compatible `input[0]` frame, and
 Cordis composition) lives in `packages/runtime-sandbox/src/dsh-pi-ai.ts` plus

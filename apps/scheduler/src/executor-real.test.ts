@@ -11,6 +11,7 @@ import {
   buildDeferredSemanticTerminalEvents,
   isFinalAgentRunnerError,
   isSemanticAgentRunError,
+  acceptedCompletionSupersedesRunnerFailure,
   runtimeCredentialProviderError,
   hasMaterializedProviderConfig,
   credentialAuthorizationModel,
@@ -470,6 +471,75 @@ test("host semantic failures remain fail-closed while ordinary runner errors are
   assert.equal(isSemanticAgentRunError({ errorKind: "runner", error: "Provider 429" }), false);
   assert.equal(isFinalAgentRunnerError({ errorKind: "runner", error: "last retry failed", terminalOutcome: "failure" }), true);
   assert.equal(isFinalAgentRunnerError({ errorKind: "runner", error: "stale 429", terminalOutcome: "success" }), false);
+});
+
+// #913: Pi keeps asking for a model turn after the host accepted mark_job_done; the
+// Gateway refuses with COMPLETION_ALREADY_ACCEPTED. That refusal means the conversation
+// is over, so the accepted terminal must settle instead of the run failing — otherwise
+// the accepted Hub decision never creates a Worker.
+test("an accepted completion supersedes the Gateway's already-accepted refusal", () => {
+  // Both shapes the runner can receive: the machine code and the 409 text the CLI shows.
+  const refusal = {
+    errorKind: "runner" as const,
+    error: "409 Completion already accepted; reconcile its receipt",
+    terminalOutcome: "failure" as const,
+    runnerErrorSource: "structured_terminal" as const,
+  };
+  assert.equal(acceptedCompletionSupersedesRunnerFailure(refusal, true), true);
+  assert.equal(
+    acceptedCompletionSupersedesRunnerFailure({ ...refusal, error: "COMPLETION_ALREADY_ACCEPTED" }, true),
+    true,
+    "the machine code alone must also be recognised",
+  );
+  assert.equal(
+    acceptedCompletionSupersedesRunnerFailure({ ...refusal, error: "A completion is already durably accepted; read its receipt" }, true),
+    true,
+    "the completion-receipt gate uses different wording for the same refusal",
+  );
+  assert.equal(acceptedCompletionSupersedesRunnerFailure(refusal, false), false, "without an accepted terminal the failure stays authoritative");
+  assert.equal(
+    acceptedCompletionSupersedesRunnerFailure({ ...refusal, errorKind: "semantic" }, true),
+    false,
+    "host semantic validation errors stay fail-closed",
+  );
+  assert.equal(
+    acceptedCompletionSupersedesRunnerFailure({ ...refusal, terminalOutcome: "success" }, true),
+    false,
+    "a result already marked success needs no override",
+  );
+  assert.equal(
+    acceptedCompletionSupersedesRunnerFailure({ ...refusal, error: "Gateway 429 rate limited" }, true),
+    false,
+    "only the accepted-completion refusal is superseded, not ordinary runner errors",
+  );
+
+  for (const runnerErrorSource of [undefined, "process"] as const) {
+    assert.equal(acceptedCompletionSupersedesRunnerFailure({ ...refusal, runnerErrorSource }, true), false,
+      "diagnostic text without structured terminal provenance cannot override a failure");
+  }
+  for (const error of [
+    "unrelated diagnostic: 409 Completion already accepted; reconcile its receipt",
+    "409 Completion already accepted; reconcile its receipt; then transport failed",
+    "Pi message ended: aborted: 409 Completion already accepted; reconcile its receipt",
+    "Gateway timeout: COMPLETION_ALREADY_ACCEPTED",
+    "lease expired: COMPLETION_ALREADY_ACCEPTED",
+    "COMPLETION_EFFECT_UNKNOWN: Completion already accepted; reconcile its receipt",
+  ]) {
+    assert.equal(acceptedCompletionSupersedesRunnerFailure({ ...refusal, error }, true), false, error);
+  }
+  assert.equal(acceptedCompletionSupersedesRunnerFailure({ ...refusal,
+    error: `Pi message ended: error: ${refusal.error}` }, true), true);
+
+  // The branch must exist *before* the unconditional runner-failure throw, otherwise the
+  // accepted terminal never reaches the settling block below it.
+  const source = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  const override = source.indexOf("acceptedCompletionSupersedesRunnerFailure(result, Boolean(semanticState.done))");
+  const throwSite = source.indexOf('throw reconstructAgentRunError(result.error!, result.errorDetails)');
+  assert.ok(override > 0, "the executor must consult the accepted-completion override");
+  assert.ok(
+    override < throwSite,
+    "the override must run before the runner failure is thrown, so an accepted terminal still settles",
+  );
 });
 
 test("real executor generates identical AGENTS.md and CLAUDE.md instructions", () => {
