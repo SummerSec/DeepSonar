@@ -244,6 +244,19 @@ Control API 必须经过 shared Zod schema、宿主 handler、event-ingestion/ap
 
 反馈不能回显凭据、Provider 原文、完整不可信输入或内部堆栈。模型收到 `model_correctable` 后应重新读取能力目录或当前状态，用新的 revision/Idempotency-Key 修正；预算耗尽要明确进入 `blocked` 或 `needs_human`。瞬态错误有界恢复，权限/版本/快照错误 fail closed，未知外部效果禁止自动重放。
 
+#### Agent 操作错误：先反馈，再由 Agent 修正
+
+这是开发与评审约束，不表示所有入口已完成实现。沿用 [DESIGN 的失败分类](DESIGN.md#43-失败反馈与修正)、[可信内核的同会话修复闭环](docs/AI_NATIVE_TRUSTED_KERNEL.md#62-同会话修复闭环)和[完成回执协议](docs/REPAIR_FEEDBACK_DONE_REPAIR.md)，不另建控制通道、错误协议或状态机。
+
+1. **拒绝错误操作，不直接判死任务。** 对仍在授权、有效租约、时间和预算内的可修正输入错误，平台应明确拒绝本次提案，把原因及下一步交回当前 Agent，让它读取状态、修正并重新提交。不能只返回 HTTP 状态码、固定催促语句或写日志，也不能仅因一次可修正拒绝就冻结会话、结束 Job 或交给人工。Runtime Adapter、Control API 与完成门必须保证反馈能回到实际调用者。
+2. **反馈必须可行动且与事实一致。** 说明失败的 operation/字段、违反的约束、当前可引用状态、已经接受的效果、可选动作和真实剩余额度；无法确认的状态或额度明确标为未知，不编造“仍可修正”。修正次数、时间、token 和效果预算不能因重发同一回执、进程重启、换 key/token 或换 Attempt 而被错误重置；不得用扩大预算掩盖无法继续的生命周期。
+3. **先判断已接受结果，再决定如何修正。** 例如 `request_human` 与 `mark_job_done` 冲突：若均未接受，应说明互斥原因，让 Agent 选择符合当前目标的合法提案；若人工请求或完成已接受，应返回该事实并遵守其生命周期，不能再建议提交相冲突的终态。不得猜测 Agent 的业务选择、静默丢弃冲突输入后宣称整笔成功，或回滚已确认的效果来制造重试机会。
+4. **区分传输重试与新提案。** 同一提交的传输重试保持原 Idempotency-Key、revision 和 payload，先查询原结果；修正内容则按现有 operation 契约提交新 revision/key，并保留与原拒绝和修正预算的关联。回执缺失不等于没有副作用，`accepted` 不等于效果已结算或 Job 已完成。
+5. **恢复必须感知生命周期与执行身份。** 可继续的纠错不是 `waiting_human`；已接受的人工等待也不能继续按普通运行催促完成。Scheduler、lease、Reaper、取消和超时处理须依据真实状态及原 deadline 协调。若允许切换 Attempt，必须先明确旧修正链如何结束或受治理地续接，并一致核验新执行器、Control/Gateway token、回执、预算和效果的归属；不支持续接时明确停止并保留原因，不能创建一个注定沿用旧身份而失败的新尝试。不得删除 attempt fencing、改写冻结快照或重绑历史回执来消除身份拒绝。
+6. **可恢复不等于无条件重试。** `transient_retryable` 只按已证明安全的策略有界退避；权限、版本、快照、租约失效等边界继续 fail closed。未知外部效果、`effect_pending`、`unknown` 或 `replay_policy=never` 不能降格成模型输入错误后自动重放。预算耗尽、取消、真实超时、不可修正或需要新增授权时，明确停止或走既有人工/对账路径，保留最后反馈、已接受效果和具体阻塞，不无限循环、不伪装成功。
+
+涉及上述路径的实现，验收必须覆盖“拒绝 → 反馈实际可读 → 修正提交 → 接受/明确停止”的闭环，并检查重复旧 key、修正新 key、终态竞争、已接受人工等待、取消/超时、Reaper 与重启/新 Attempt、未知效果和跨权限输入。只断言返回 4xx 或反馈字段存在，不足以证明恢复成立；替身/离线工程证据与真实模型理解效果仍按本文件的验收边界分别报告。
+
 ### Artifact、Finding、Research 与 Report
 
 - Artifact 是版本化内部写入真相，保存 claims、evidence、relations 和 provenance；`emit_finding` 进入 Artifact 再投影 Finding。
