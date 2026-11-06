@@ -299,11 +299,19 @@ try {
     assert.equal(actualResponses.size, 0, "every actual OM response has exactly one attributed ledger row");
   };
   const deadline = Date.now() + 600_000;
+  const { reapOnce } = await import("../../apps/scheduler/src/reaper.js");
+  let recoveryCursor: string | null = null;
   let final: any;
   while (Date.now() < deadline) {
     [final] = await sql`SELECT status,sandbox_id,error,agent_snapshot_json FROM jobs WHERE id=${childId}`;
     if (["succeeded", "failed", "cancelled", "orphan"].includes(final.status)) break;
     if (final.status === "pending") await dispatcher.dispatchOnce();
+    if (model.completionEvidence().status === "pending") {
+      // This isolated harness does not start Scheduler timers. Use its real
+      // lifecycle pump to refresh recovery evidence after natural settlement;
+      // the fixture never reconciles effects or writes recovery state itself.
+      recoveryCursor = (await reapOnce(recoveryCursor)).recoveryCursor;
+    }
     if (model.observed()) {
       const settled = await readOmLedger();
       const actualOm = model.calls.filter(call => call.stage !== "main");
@@ -319,6 +327,18 @@ try {
   await drain();
   assert.equal(createHash("sha256").update(JSON.stringify(final.agent_snapshot_json)).digest("hex"), snapshotSha, "no execution-time snapshot backfill");
   assert.deepEqual(model.errors, []); assert.ok(model.observed());
+  // After repair, Gateway may correctly reject a further model request once
+  // completion is accepted. The final provider turn is not the authority here.
+  const completionReceipts = await sql`SELECT payload_json->>'status' AS status,
+    payload_json->'result'->'body'->>'accepted' AS accepted,
+    payload_json->'result'->'body'->>'receipt_status' AS receipt_status
+    FROM events WHERE job_id=${childId} AND type='control_receipt'
+      AND payload_json->>'operation'='mark_job_done'
+      AND payload_json->>'status'='persisted_deferred'`;
+  assert.equal(completionReceipts.length, 1, "real Job requires exactly one durably accepted completion");
+  assert.equal(completionReceipts[0].accepted, "true");
+  assert.equal(completionReceipts[0].receipt_status, "persisted_deferred");
+  report.completion = { durable_receipt_verified: true, receipt_status: "persisted_deferred" };
   const omCalls = model.calls.filter(call => call.stage !== "main"); assert.ok(omCalls.length >= 2);
   const ledger = await readOmLedger();
   assertOmLedger(ledger, omCalls, true);
@@ -369,7 +389,10 @@ try {
   await sql?.end({ timeout: 5 }).catch(() => {});
   if (databaseName) await admin?.unsafe(`DROP DATABASE IF EXISTS "${databaseName}" WITH (FORCE)`).catch(() => {});
   await admin?.end().catch(() => {});
-  if (model) report.calls = model.calls;
+  if (model) {
+    report.calls = model.calls;
+    report.completion = { ...report.completion, tool_result: model.completionEvidence() };
+  }
   await writeFile(path.join(reportDir, "om-provider-headers.json"), JSON.stringify(report, null, 2) + "\n");
   console.log(JSON.stringify({ status: report.status, report: path.join(reportDir, "om-provider-headers.json") }));
 }

@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 export const OM_HEADERS_MODEL = "om-headers-selected";
 export const OM_HEADERS_PROVIDER = "selected";
@@ -22,7 +23,13 @@ export async function startOmHeaderModel() {
   const sourcePrefix = Array.from({ length: 8 }, (_, i) => `OM_HEADER_SOURCE_${i} ${createHash("sha256").update(String(i)).digest("hex")}`).join("\n");
   let expectedObservation: { id: string; content: string; source: string } | undefined;
   let mainCalls = 0;
-  let completionSent = false;
+  let completionCallId: string | undefined;
+  let completionStatus: "not_started" | "pending" | "accepted" | "stopped" = "not_started";
+  let completionCode: string | null = null;
+  const completionCodes = new Set(["INACTIVE", "INITIAL_STATE_CONFLICT", "NOT_ALLOWED", "BUDGET_EXHAUSTED",
+    "RESTORE_NOT_ALLOWED", "RESTORE_UNCONFIRMED", "REJECTED", "IDENTITY_CONFLICT", "RECOVERY_STOPPED",
+    "REVISION_CONFLICT", "WAIT_EXHAUSTED", "CLIENT_ERROR"].map(code => `OM_COMPLETION_${code}`));
+  const completionProgram = readFileSync(new URL("./om-provider-headers-completion.py", import.meta.url), "utf8");
   const server = createServer(async (req, res) => {
     try {
       if (req.method === "GET" && req.url === "/v1/models") {
@@ -105,6 +112,22 @@ export async function startOmHeaderModel() {
       } else {
         mainCalls++;
         const bash = names.find((name: string) => name.toLowerCase() === "bash");
+        if (completionCallId && completionStatus === "pending") {
+          const result = messages.find((message: any) => message.role === "tool" && message.tool_call_id === completionCallId);
+          const resultText = typeof result?.content === "string" ? result.content : Array.isArray(result?.content)
+            ? result.content.filter((part: any) => part?.type === "text" && typeof part.text === "string").map((part: any) => part.text).join("\n") : "";
+          // Only this tool's fixed, receipt-backed marker permits the model to
+          // end normally. An HTTP attempt or ordinary final text is not acceptance.
+          const accepted = resultText.split("\n").some((line: string) => {
+            try {
+              const outcome = JSON.parse(line);
+              if (outcome.om_completion === "stopped" && completionCodes.has(outcome.code)) completionCode = outcome.code;
+              return outcome.om_completion === "accepted";
+            } catch { return false; }
+          });
+          completionStatus = accepted ? "accepted" : "stopped";
+          assert.ok(accepted, "OM completion client stopped without an accepted receipt");
+        }
         if (recallCallId && !recalled) {
           const result = messages.find((message: any) => message.role === "tool" && message.tool_call_id === recallCallId);
           assert.ok(result, "real Pi must return the requested recall tool result before another main request");
@@ -130,14 +153,11 @@ export async function startOmHeaderModel() {
           recallCallId = `offline-tool-${calls.length}`;
           completionAllowed = false;
           tool = { name: "recall", arguments: { id: expectedObservation.id } };
-        } else if (observed && recalled && !completionSent) {
-          assert.ok(bash); completionSent = true;
-          const program = ["import json,os,urllib.request,uuid",
-            "url=os.environ['DEEPSONAR_API_BASE_URL'].rstrip('/')+'/operations/mark_job_done'",
-            "headers={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['DEEPSONAR_API_TOKEN'],'Idempotency-Key':str(uuid.uuid4()),'X-Deepsonar-Proposal-Revision':'0'}",
-            "req=urllib.request.Request(url,data=json.dumps({'summary':'Real Pi and OM completed the offline provider-header acceptance.'}).encode(),headers=headers,method='POST')",
-            "print(urllib.request.urlopen(req,timeout=30).read().decode())"].join("\n");
-          tool = { name: bash, arguments: { command: `python3 - <<'PY'\n${program}\nPY` } };
+        } else if (observed && recalled && !completionCallId) {
+          assert.ok(bash);
+          completionCallId = `offline-tool-${calls.length}`;
+          completionStatus = "pending";
+          tool = { name: bash, arguments: { command: `python3 - <<'PY'\n${completionProgram}\nPY`, timeout: 120 } };
         }
       }
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
@@ -162,6 +182,7 @@ export async function startOmHeaderModel() {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert.ok(address && typeof address !== "string");
   return { url: `http://127.0.0.1:${address.port}`, calls, catalogCalls, probeCalls, errors, observed: () => observed,
+    completionEvidence: () => ({ status: completionStatus, code: completionCode }),
     recallEvidence: () => ({ current_session_read_verified: recalled, successful_reads: recalled ? 1 : 0,
       verified_source_prefix_sha256: recalled ? createHash("sha256").update(sourcePrefix).digest("hex") : null,
       recall_result_sha256: recallResultSha256,
