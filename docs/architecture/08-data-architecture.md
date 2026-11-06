@@ -219,3 +219,15 @@ FR-FIND-008 复用 `audit_logs` 保存程序材料准入、替代、撤销及操
 当前 `submit_plan`/`submit_plan_result` 严格接收 v2，路线 CAS 绑定 objective/owner/revision/Plan SHA。owner 的 `payload_json.plan_protocol`、plan 语义事件、接纳 receipt、普通 Intent/Job 与 `payload_json.plan_context` 共同记录关联；不新增 Plan 执行表或第二队列。前驱输出来自事件/Artifact 的相同 `plan.output` 扩展、成功且当前的 Attempt 与实际留存 Evidence，并覆盖期望输出；关联不证明语义满足。
 
 `stop_reason=complete` / objective `completed` 只表达工程路线输出条件；Hub/Report 的任务完成还须当前操作员正向判据。v1 目标契约只读历史；普通 HubIntent 走原 handler，不制造新的 v1 `plan_protocol`。`applyHubPlanAdapter`、`persistPlanAudit`、副作用 writer 与 pure legacy `adapt*` helper/type/export 已物理删除；不可变 v1 与 `hub_intent_adapter` 历史审计仍可解析，不能作为新执行输入。代码见 [objective](../../apps/scheduler/src/domains/plan-protocol/objective.ts)、[执行](../../apps/scheduler/src/domains/plan-protocol/execution.ts)、[输出](../../apps/scheduler/src/domains/plan-protocol/execution-output.ts)与 [ADR 0012](adr/0012-plan-v2-execution.md)。
+
+
+## Gateway 关联与持久确认（#923）
+
+OM 客户端请求 UUID 保存在现有 `job_attempt_effects.intent_json.gateway_request_id`，结合 Job、Attempt、token 和 workload 查询原 effect/usage ledger，不新增账本或 schema。请求关联不能扩大授权；只有 effect 与 usage 持久 settled 才返回成功确认，pending/unknown 不由 HTTP 数据已交付推定成功。参见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)及 [ADR 0017](adr/0017-transparent-gateway-settlement.md)。
+
+#923 未准入的 quota/已回滚 DB 冲突拒绝由[gateway-admission-receipt](../../apps/scheduler/src/gateway-admission-receipt.ts)另开事务写原 events：type=control_receipt、operation=gateway_admission、authority=kernel，原 dedup 与事件限流生效。scope 绑定 Job/Attempt/token/workload/UUID，不创建模型 effect/request/usage，不改 schema；持久失败或 scope 不符不能返回降级 authority。allowance 只读原预算并返回交集，不预留或创建余额账本。
+
+### Gateway 累计请求策略（#923）
+
+`events` 中内核 `control_receipt` 的 `gateway_request_budget` operation 保存版本化 total/main/background 请求上限；Job 级确定性 event ID 与 event_dedup 使相同策略幂等，后续记录只收紧。它保存 token 尚未签发时也存在的冻结约束；用量仍来自所有历史 job_tokens，不复制余额。原始值必须在旧快照被替换前验证和持久化；事务和缺失历史的失败边界见[透明预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)。
+#903 的 Scheduler `repair_generation` 复用 events/event_dedup，保存旧链 superseded 与唯一下一 attempt_no；旧 receipt 不更新，费用仍引用原根，见 [ADR 0016](adr/0016-repair-execution-generations.md)。

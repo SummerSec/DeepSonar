@@ -17,7 +17,7 @@
 
 > **Finding quality engineering (2026-11-01, #770/#819)**: Identity/relation and lexical/weak-candidate mechanisms remain distinct. The agreed schema67 engineering slice merged via #831 includes protocol/freeze/exposure receipts, exact-bigint CAS, bounded actual-SQL observations/recomputed reports and protected structural review/revoke. [FR-FIND-007/009](<architecture/01-system-specification.md>), [ADR 0014](<architecture/adr/0014-operator-finding-identity.md>) and [evaluation status](<PROJECT_FINDING_EVALUATION.md>) preserve not_evaluated/published=false. Host external-fact verification, current certificates/promotion/guarded publication are missing; independent labels/aliases/provenance, verified family/asset partitions and pre-access adopted thresholds remain unverified. Source-loader capture is TCB evidence, not self-signature or human-quality proof. The engineering slice passed the exact-main Actions listed below and #819 closed within the agreed scope; deferred quality and Host certification/promotion are not delivered.
 
-> **当前稳定性修复（2026-11-04，#871/#873/#874）**：Gateway admission 纯数据库有界重试、SDK error.message 的宿主安全降级 carrier、分候选页独立事务的 Canvas-first 领取与忙锁补槽，以及[跨 Attempt 共享卷生命周期](SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)在当前修复分支整合；[完成恢复 v1](REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)使用持久宿主事实、去重 Hub 与严格对账/停止提案。完整最终 SHA Actions 尚待验收，退出会话/新 Attempt 的完整继续执行未交付，正式版本状态另行核对。
+> **当前稳定性修复（2026-11-04，#871/#873/#874）**：Gateway admission 纯数据库有界重试、SDK error.message 的宿主安全降级 carrier、分候选页独立事务的 Canvas-first 领取与忙锁补槽，以及[跨 Attempt 共享卷生命周期](SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)在当前修复分支整合；[完成恢复 v1](REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)使用持久宿主事实、去重 Hub 与严格对账/停止提案。完整最终 SHA Actions 尚待验收，显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录，正式版本状态另行核对。
 
 > **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
@@ -79,6 +79,7 @@
 | [USAGE_LIMITS.md](USAGE_LIMITS.md) | **as-built** | 用量预算默认不限、显式限额、历史冻结策略及保留安全边界 |
 | [AI_NATIVE_TRUSTED_KERNEL.md](AI_NATIVE_TRUSTED_KERNEL.md) | **长期提案 + 已实现边界（2026-10-31）** | `RepairFeedback`、目标授权及 Plan v2 工程边界已有实现；完整长期协议、当前回放/组合验证与独立质量分别登记 |
 | [PI_OBSERVATIONAL_MEMORY_INTEGRATION.md](PI_OBSERVATIONAL_MEMORY_INTEGRATION.md) | **#815 A 工程与本地镜像准入已验** | canonical 固定发布物、独立 wrapper 指纹、opt-in 冻结配置/模型；OM 专属版本准入与生产内容守卫已验证，镜像证据集中见 RPC 专题 |
+| [MODEL_GATEWAY_TRANSPARENCY.md](MODEL_GATEWAY_TRANSPARENCY.md) | **#923 分支实现，Actions 待验** | 原始请求/响应、HTTP 边界、显式预算拒绝与 OM 持久确认；有界请求流限制和验收入口 |
 | [PI_OBSERVATIONAL_MEMORY_GATEWAY.md](PI_OBSERVATIONAL_MEMORY_GATEWAY.md) | **#815 B 工程已随 #831 Actions 验收** | 内核 workload 凭据、冻结路由、额度/归因、pending/unknown 与终态撤销；历史 Gateway budget/SQL/HTTP 证据保留原范围，后续修复 SHA、发布与收益结论另计 |
 | [PI_OBSERVATIONAL_MEMORY_RPC.md](PI_OBSERVATIONAL_MEMORY_RPC.md) | **#815 C 实际本地镜像 RPC/启动拒绝已验** | 本地 base 镜像身份、canonical package/lock/manifest/wrapper 预检、已安装真实 RPC 与独立生产 guard 正负例的唯一详细记录；#831 工程 Actions 已验收，后续修复 SHA/发布通道及收益另计 |
 | [SUPERAGENT_GAP_RESEARCH.md](SUPERAGENT_GAP_RESEARCH.md) | **研究结论（#833）** | DeepSeek Super Agent 与现有设计的差距评估：结论是不新增系统或功能层，已有 Hub/Intent/Job、能力发现、Skill 拉取、项目知识与成果评价覆盖大部分能力；效果改善仍无对照证据，后续只按现有架构推进。 |

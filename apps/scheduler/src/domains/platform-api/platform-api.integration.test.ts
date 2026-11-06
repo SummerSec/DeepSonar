@@ -166,13 +166,18 @@ if (!testDatabaseUrl) {
       assert.equal(unavailable.json().repair.category, "transient_retryable");
       assert.equal(unavailable.json().repair.operation, "emit_finding");
       assert.match(String(unavailable.json().repair.next_action), /Idempotency-Key/);
+      let sideEffects = 0;
       registerRuntimeHandler(jobId, async () => {
+        sideEffects++; // Models an effect accepted before the response path fails.
         throw new Error("secret-handler-boom");
       }, ["emit_progress"]);
       const crashed = await invoke("emit_progress", randomUUID(), { message: "handler crash probe" });
       assert.equal(crashed.statusCode, 500, crashed.payload);
       assert.equal(crashed.json().error_code, "HANDLER_FAILED");
-      assert.equal(crashed.json().repair.category, "transient_retryable");
+      assert.equal(crashed.json().repair.category, "unknown_external_effect");
+      assert.equal(crashed.json().retryable, false);
+      assert.equal(sideEffects, 1);
+      assert.match(crashed.json().repair.next_action, /不得自动重试/);
       assert.equal(JSON.stringify(crashed.json()).includes("secret-handler-boom"), false);
       registerRuntimeHandler(jobId, async () => {
         throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", "字段不符合契约。", {
@@ -205,21 +210,49 @@ if (!testDatabaseUrl) {
           VALUES(${fixtureJob},${projectId},${canvasId},'audit','running',${sql.json(snapshot)},now(),3600,now()+interval '1 hour')`;
         await sql.begin(tx => createAttempt(tx as unknown as typeof sql, fixtureJob));
         const fixtureGrant = await mintJobCapabilityToken(fixtureJob);
-        registerRuntimeHandler(fixtureJob, async () => {
+        let acceptedEffects = 0;
+        registerRuntimeHandler(fixtureJob, async (context) => {
           assert.notEqual(sample.source, "schema", "invalid schema must not reach handler");
-          if (sample.source === "platform_failure") throw new Error("fixture-private-marker");
+          if (sample.source === "platform_failure") {
+            if (context.completionPhase === "prepare") throw new Error("fixture-private-marker");
+            assert.equal(context.completionPhase, undefined);
+            acceptedEffects++; // Synthetic effect accepted before the response fails.
+            throw new Error("fixture-private-marker");
+          }
           throw new PlatformRuntimeHandlerError("OPERATION_REJECTED", sample.message, {
             statusCode: 422, errorCode: sample.code, retryable: sample.retryable,
             path: sample.path ?? undefined,
           });
         }, operations);
+        // The frozen constructor baseline predates durable completion preparation.
+        // Its generic HANDLER_FAILED projection must now be exercised through an
+        // ordinary handler; completion prepare itself accepts no external effect.
+        if (sample.source === "platform_failure") {
+          const preparation = await app.inject({ method: "POST", url: `/control/v1/jobs/${fixtureJob}/operations/mark_job_done`,
+            headers: { authorization: `Bearer ${fixtureGrant.token}`, "idempotency-key": randomUUID(), "x-deepsonar-proposal-revision": "0" },
+            payload: { summary: "fixture-private-marker" } });
+          assert.equal(preparation.statusCode, 503);
+          assert.equal(preparation.json().error_code, "HANDLER_UNAVAILABLE");
+          assert.equal(preparation.json().accepted, false);
+          assert.equal(preparation.json().retryable, true);
+          assert.equal(preparation.json().repair.category, "transient_retryable");
+          assert.equal(acceptedEffects, 0, "completion preparation has not accepted an external effect");
+        }
+        const operation = sample.source === "platform_failure" ? "emit_progress" : sample.operation;
         const key = randomUUID();
-        const replay = await app.inject({ method: "POST", url: `/control/v1/jobs/${fixtureJob}/operations/${sample.operation}`,
+        const replay = await app.inject({ method: "POST", url: `/control/v1/jobs/${fixtureJob}/operations/${operation}`,
           headers: { authorization: `Bearer ${fixtureGrant.token}`, "idempotency-key": key, "x-deepsonar-proposal-revision": "0" },
-          payload: sample.payload ?? { summary: "fixture-private-marker" } });
-        assert.equal(replay.statusCode, sample.source === "platform_failure" ? 503 : 422, sample.id);
+          payload: sample.source === "platform_failure" ? { message: "fixture-private-marker" } : sample.payload ?? { summary: "fixture-private-marker" } });
+        assert.equal(replay.statusCode, sample.source === "platform_failure" ? 500 : 422, sample.id);
         const body = replay.json();
         assert.equal(body.accepted, false, sample.id);
+        assert.equal(body.repair.operation, operation, sample.id);
+        if (sample.source === "platform_failure") {
+          assert.equal(body.error_code, "HANDLER_FAILED");
+          assert.equal(body.retryable, false);
+          assert.equal(acceptedEffects, 1);
+          assert.match(body.repair.next_action, /不得自动重试/);
+        }
         assert.equal(body.repair.category, sample.category, sample.id);
         assert.equal(body.repair.idempotency_key, key, sample.id);
         assert.deepEqual(body.repair.observed_shape, sample.observed_shape, sample.id);

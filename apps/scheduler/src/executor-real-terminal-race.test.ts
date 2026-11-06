@@ -59,7 +59,14 @@ test("executeReal: first accepted human cannot be overwritten by a preflight alr
 test("executeReal: accepted human rejects both completion prepare and commit", { timeout: 5000 }, async () => {
   const terminals = await runExecutor(async () => {
     await call("request_human", human);
-    await assert.rejects(call("mark_job_done", done, { completionPhase: "prepare" }), exclusive);
+    await assert.rejects(call("mark_job_done", done, { completionPhase: "prepare" }), error => {
+      assert.ok(error instanceof PlatformRuntimeHandlerError);
+      assert.equal(error.rejection?.category, "permanent_failure");
+      assert.equal(error.rejection?.retryable, false);
+      assert.equal(error.rejection?.details?.accepted_terminal, "human");
+      assert.match(error.rejection?.next_action ?? "", /等待原提案结算/);
+      return exclusive(error);
+    });
     await assert.rejects(call("mark_job_done", done, { completionPhase: "commit" }), exclusive);
     assert.equal(completionReady(), false);
   });

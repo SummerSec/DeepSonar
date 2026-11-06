@@ -30,6 +30,7 @@ test("recovery is the fourth strict XOR branch, not an intents/Plan authority sh
 
 test("recovery proposals are exact scope/revision/hash/strategy and cannot carry effect evidence", () => {
   assert.equal(CompletionRecoveryDecision.parse({ ...recovery, reason: "  stop safely  ", action: "stop" }).reason, "stop safely");
+  assert.equal(CompletionRecoveryDecision.safeParse({ ...recovery, action: "release_stale" }).success, true);
   for (const patch of [
     { action: "retry" }, { action: "new_attempt" }, { target_attempt_id: "guess" },
     { expected_recovery_revision: 0 }, { expected_recovery_revision: 1.5 }, { expected_recovery_revision: Number.MAX_SAFE_INTEGER + 1 },

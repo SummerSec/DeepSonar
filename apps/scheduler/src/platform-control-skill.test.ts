@@ -40,9 +40,13 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   assert.match(content, /persisted_deferred/);
   assert.match(content, /查询只读取持久结果，不恢复执行器本地完成门/);
   assert.match(content, /必须使用原 key、revision 和完全相同 payload 再 POST 一次/);
+  assert.match(content, /recovery_stale.*新投影不授予新权限.*原冻结 grant.*release_stale/);
+  assert.match(content, /不对账、不停止目标、不清除 unknown，也不申请新执行权/);
+  assert.match(content, /旧 Hub 正常结算、无阻塞未知效果、原期限\/预算\/权限仍有效/);
+  // Reviewed static Skill now includes the governed stale-grant exit contract (#903).
   assert.equal(
     DEEPSONAR_CONTROL_SKILL_SHA256,
-    "2be21c2a94594d51da7abccc2e47ac0f0bc1f5f218dcfa0120313fd7dafd100b",
+    "00632baf8e50625b1ba38097fe4fcab724cd258f7a3adbb7178e7bc4bb51eb0d",
   );
 });
 

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { parse, stringify } from "yaml";
 import { DSH_PI_COMPAT_SYSTEM_PROMPT, projectDshSystemPrompt } from "./dsh-request-frame.js";
 import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
 import { buildDshPiAiRuntimeProjection, defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiSettings } from "./dsh-pi-ai.js";
@@ -122,4 +123,35 @@ test("DSH defaults mirror settings.yaml llm-pi-ai sections", () => {
   assert.deepEqual(parsed.modelIds, ["gpt-5.6-sol"]);
   assert.match(String(settings.config), /llm-pi-ai:/);
   assert.match(String(settings.config), /agent-default-model:/);
+});
+
+
+test("DSH supports native provider headers and preserves them in runtime generation", () => {
+  const document = parse(thirdPartySettings.config);
+  document["llm-pi-ai"].providers.xxxx.headers = {
+    "X-Business-Unknown": "value", "anthropic-beta": "future-beta", "x-empty": "",
+    authorization: "synthetic-secret", "x-api-key": "synthetic-secret",
+    connection: "x-hop", "x-hop": "consume", "x-deepsonar-request-id": "consume",
+  };
+  const settings = { ...thirdPartySettings, config: stringify(document) };
+  const expected = { "x-business-unknown": "value", "anthropic-beta": "future-beta", "x-empty": "" };
+  assert.deepEqual(parseDshPiAiSettings(settings, "openai").profile.headers, expected);
+  const projection = buildDshPiAiRuntimeProjection({ settingsConfig: settings,
+    credentialProvider: "openai", gatewayBaseUrl: "http://127.0.0.1/gateway" });
+  assert.deepEqual(projection.config.providers.xxxx?.headers, expected);
+  assert.equal(JSON.stringify(projection).includes("synthetic-secret"), false);
+});
+
+test("DSH rejects malformed provider headers without enabling model or nested headers", () => {
+  for (const headers of [{ "x-raw": "\rvalue" }, { "x-raw": "value\n" },
+    { "X-Route": "first", "x-route": "second" }, ["not-a-map"]]) {
+    const document = parse(thirdPartySettings.config);
+    document["llm-pi-ai"].providers.xxxx.headers = headers;
+    assert.throws(() => parseDshPiAiSettings({ ...thirdPartySettings, config: stringify(document) }, "openai"),
+      /provider headers 无效/u);
+  }
+  const document = parse(thirdPartySettings.config);
+  document["llm-pi-ai"].providers.xxxx.models[0].headers = { "x-business": "unsupported" };
+  assert.throws(() => parseDshPiAiSettings({ ...thirdPartySettings, config: stringify(document) }, "openai"),
+    /禁止字段 headers/u);
 });

@@ -113,7 +113,7 @@ export async function createPlanExecutionFixture() {
       headers: { authorization: `Bearer ${runtimes.get(job)!.token}`, "idempotency-key": key,
         ...(operation === "mark_job_done" ? { "x-deepsonar-proposal-revision": "0" } : {}) }, payload: payload as never,
     });
-    const fixture = async (objectivePatch = executionObjective()) => {
+    const fixture = async (objectivePatch = executionObjective(), snapshotFields: Record<string, unknown> = {}) => {
       const project = randomUUID(), canvas = randomUUID(), hub = randomUUID(), root = randomUUID();
       await sql`INSERT INTO projects(id,name,config_json) VALUES(${project},'Plan v2 fixture',${sql.json({ rules: { hubEnabled: false, maxIntentsPerDecision: 8 } })})`;
       await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvas},${project},'Scoped execution',${sql.json({ network_policy: { allow_egress: false } })})`;
@@ -122,7 +122,7 @@ export async function createPlanExecutionFixture() {
       assert.equal(patched.statusCode, 200, patched.payload);
       const objective = patched.json().plan_objective;
       await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
-        VALUES(${hub},${project},${canvas},'hub_reason','pending',${sql.json({ name: "hub_reason", role_kind: "hub", platform_tools: operations, network_policy: { allow_egress: false } })},
+        VALUES(${hub},${project},${canvas},'hub_reason','pending',${sql.json({ name: "hub_reason", role_kind: "hub", platform_tools: operations, network_policy: { allow_egress: false }, ...snapshotFields })},
           ${sql.json({ graph_query: { projected_node_ids: [root] } })})`;
       await start(hub);
       return { project, canvas, hub, root, objective };

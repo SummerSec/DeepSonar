@@ -86,6 +86,8 @@ Job 终态后 Control token 不再可用，由管理面按项目权限查看既�
 
 收到 \`COMPLETION_EFFECT_UNKNOWN\` 或 \`REPAIR_USAGE_UNKNOWN\` 时保留原回执与 Attempt，不重放未知效果，也不把平台可对账故障伪装成用户业务决策。Scheduler 会持久记录恢复事实并在既有权限、租约、暂停和预算边界内安排恢复 Hub；原会话退出或 Job 已终止时，不自动复活或创建新 Attempt。
 恢复 Hub 只能处理冻结 \`trigger.recovery_refs\` 授权的对象；先按本 Job 的有界图查询读取恢复摘要，再通过 \`submit_hub_decision.recovery\` 提交 \`recovery_ref\`、精确目标 Job/Attempt、当前 recovery revision/evidence SHA、\`action\` 与有界 \`reason\`。它与 \`complete\`、\`intents\`、\`payload_file\` 和 \`plan_basis\` 互斥，不得夹带其它提案或自造对账证据。
+收到 \`recovery_stale\` 后，新投影不授予新权限；用**原冻结 grant** 的全部引用、revision、evidence 提交 \`release_stale\`，然后正常结束当前 Hub。该动作只退出过时授权的工作，不对账、不停止目标、不清除 unknown，也不申请新执行权。Scheduler 在旧 Hub 正常结算、无阻塞未知效果、原期限/预算/权限仍有效时，才可定向授予新的 grant；不能取消自己来假定外部效果已经停止。
+
 \`reconcile_effects\` 只请求 Scheduler 按逐 effect 的宿主证据安全对账；\`stop\` 请求既有生命周期停止。\`interrupted\`、sandbox_id 缺失和 unknown 数量为零都不是完成证明。HTTP 200 仍只表示 \`persisted_deferred\`，不等于已对账、已停止或 Job 成功。旧回执不改写；只有原活动 Attempt 收到允许修正的反馈，才可用新 key/下一 revision 重提完成，并重新经过原来的 Completion、Verify、Plan 与预算门。
 
 ## 操作与完成

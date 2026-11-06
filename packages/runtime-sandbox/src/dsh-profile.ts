@@ -1,5 +1,6 @@
 import { stringify } from "yaml";
 import { DSH_PI_COMPAT_SYSTEM_PROMPT } from "./dsh-request-frame.js";
+import { DSH_REQUEST_BUDGET_PLUGIN } from "./dsh-request-budget.js";
 
 export const DSH_VERSION = "0.2.1-rc.2";
 export const DSH_HOME = "/workspace/.deepsonar-home/.dsh";
@@ -16,6 +17,7 @@ export function buildDshProfilePatch(options: {
   taskMode?: "standard" | "ptc";
   cwd: string;
   home?: string;
+  governedRequestBudget?: boolean;
 }): string {
   const home = options.home ?? DSH_HOME;
   const rows: Plugin[] = [];
@@ -36,6 +38,7 @@ export function buildDshProfilePatch(options: {
   add("tools", "tools", { mode: options.taskMode === "ptc" ? "ptc" : "native" });
   add("agent-loop", "agent-loop", { agents: [] });
   add("llm-pi-ai", "llm-pi-ai", options.providerConfig);
+  if (options.governedRequestBudget) rows[rows.length - 1]!.name = DSH_REQUEST_BUDGET_PLUGIN;
   add("sandbox", "sandbox-local");
   add("sandbox-policy", "sandbox-policy", { mode: "danger-full-access", workspaceRoot: options.cwd });
   add("subprocess", "subprocess-local");

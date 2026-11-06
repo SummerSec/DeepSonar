@@ -1,3 +1,6 @@
+import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
+import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
+import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { DeviceRequirement, FindingProtocolConfig, RuntimeProfileOverridePayload, TaskContract, normalizeTaskContract, taskContractWarnings } from "@deepsonar/shared-types";
 import { z } from "zod";
@@ -28,6 +31,9 @@ import {
   frozenSnapshotStaleDetail,
   isSnapshotUnresolvableError,
   requeueJob,
+  RecoveryTransitionError,
+  JOB_NOT_RESUMABLE,
+  requeueTargetAuthorizationBlockers,
   revokeOldRuntimeGrants,
   type SnapshotStaleDetail,
 } from "../job-control/rerun.js";
@@ -945,7 +951,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       }
       const interruptedWorkers = await tx`
         SELECT j.id, j.project_id, j.canvas_id, j.finding_id, j.type, j.status,
-               j.payload_json, j.agent_snapshot_json, j.sandbox_id, j.created_at
+               j.payload_json, j.agent_snapshot_json, j.sandbox_id, j.created_at, j.timeout_sec
         FROM jobs j
         LEFT JOIN agent_roles r ON r.name = j.type
         LEFT JOIN LATERAL (
@@ -971,6 +977,20 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           )
         ORDER BY j.created_at ASC, j.id ASC
         FOR UPDATE OF j`;
+      const repairAdmissions = new Map<string, Awaited<ReturnType<typeof readRepairRequeueAdmission>>>();
+      for (const worker of interruptedWorkers) {
+        await tx`SELECT id FROM job_attempts WHERE job_id=${String(worker.id)} ORDER BY attempt_no FOR UPDATE`;
+        try { await inspectGatewayRequestBudget(tx, String(worker.id), worker.agent_snapshot_json); }
+        catch (error) {
+          if (!(error instanceof GatewayRequestBudgetError)) throw error;
+          return { jobs: [], active: [], stale: [], convergence: null,
+            repairBlocked: { job_id: String(worker.id), code: error.code, reason: error.message } };
+        }
+        const admission = await readRepairRequeueAdmission(tx, String(worker.id));
+        if (admission.blocker) return { jobs: [], active: [], stale: [], convergence: null,
+          repairBlocked: { job_id: String(worker.id), ...admission.blocker } };
+        repairAdmissions.set(String(worker.id), admission);
+      }
       const stale: SnapshotStaleDetail[] = [];
       for (const worker of interruptedWorkers) {
         const detail = await frozenSnapshotStaleDetail(tx, worker as Record<string, unknown>);
@@ -986,6 +1006,14 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           convergence: null,
         };
       }
+      for (const worker of interruptedWorkers) {
+        const blockers = await requeueTargetAuthorizationBlockers(tx, worker, worker.agent_snapshot_json, "resume-frozen");
+        if (blockers.length) return { jobs: [], active: [], stale: [], convergence: null,
+          authorizationBlocked: { job_id: String(worker.id), blockers } };
+      }
+      for (const worker of interruptedWorkers) {
+        await ensureGatewayRequestBudget(tx, String(worker.id), worker.agent_snapshot_json);
+      }
       const convergence = interruptedWorkers.length > 0
         ? await patchCanvasConvergence(tx, canvasId, {
             hub_paused: false,
@@ -997,6 +1025,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       const rerunJobs: Array<Record<string, unknown>> = [];
       const lifecycle = createSqlJobLifecycleApplication(tx);
       for (const worker of interruptedWorkers) {
+        const repair = repairAdmissions.get(String(worker.id));
+        if (repair?.budget && repair.deadline) await admitRepairGeneration(tx, String(worker.id),
+          repair.budget.receipt_ref, repair.deadline, "resume-frozen");
         await markAttemptInterrupted(tx, worker.id as string, "任务使用旧冻结快照重新执行启动中断 Job");
         await revokeOldRuntimeGrants(tx, worker.id as string, "task_resume_frozen");
         const row = await lifecycle.transitionJob(worker.id as string, "pending", {
@@ -1008,7 +1039,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           heartbeat_at: null,
           sandbox_id: null,
         });
-        if (!row) continue;
+        if (!row) throw new RecoveryTransitionError(String(worker.id), String(worker.status));
         await normalizePendingJobPriority(worker.id as string, tx);
         rerunJobs.push({ ...worker, status: row.status });
       }
@@ -1025,7 +1056,21 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         stale: [] as SnapshotStaleDetail[],
         convergence,
       };
+    }).catch((error: unknown) => {
+      if (!(error instanceof RecoveryTransitionError)) throw error;
+      return { jobs: [] as Array<Record<string, unknown>>, active: [] as Array<Record<string, unknown>>,
+        stale: [] as SnapshotStaleDetail[], convergence: null,
+        repairBlocked: { job_id: error.jobId, code: JOB_NOT_RESUMABLE, reason: error.message } };
     });
+    if ("authorizationBlocked" in interruptedBatch && interruptedBatch.authorizationBlocked) {
+      return reply.code(409).send({ error: "目标授权已失效；先修复授权", error_code: "TARGET_AUTHORIZATION_BLOCKED",
+        ...interruptedBatch.authorizationBlocked, next_action: "fix-target-authorization" });
+    }
+    if ("repairBlocked" in interruptedBatch && interruptedBatch.repairBlocked) {
+      return reply.code(409).send({ error: interruptedBatch.repairBlocked.reason,
+        error_code: interruptedBatch.repairBlocked.code, job_id: interruptedBatch.repairBlocked.job_id,
+        next_action: "inspect-job-recovery" });
+    }
     if (interruptedBatch.stale.length > 0) {
       const details = interruptedBatch.stale;
       return reply.code(409).send({
@@ -1091,6 +1136,11 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           next_action: "rerun-current",
         });
       }
+      if (resumed.kind === "not_resumable") return reply.code(409).send({
+        error: resumed.reason ?? "Job 当前不允许恢复", error_code: resumed.error_code ?? "JOB_NOT_RESUMABLE",
+        job_id: resumable.id, next_action: "inspect-job-recovery" });
+      if (resumed.kind === "target_authorization_blocked") return reply.code(409).send({
+        error: "目标授权已失效；先修复授权", error_code: "TARGET_AUTHORIZATION_BLOCKED", blockers: resumed.blockers });
       if (resumed.kind === "ok") {
         const convergence = await patchCanvasConvergence(sql, canvasId, {
           hub_paused: false,

@@ -43,3 +43,7 @@ v1 在本轮修复分支实现，测试与接线见 [完成回执专题](../../R
 ## 验证
 
 对应需求与入口见 [追溯矩阵](../traceability.md)、[运行时视图](../06-runtime-view.md)、[安全视图](../10-security-and-trust-boundaries.md)及[专题](../../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。必须覆盖真实 PostgreSQL 并发/CAS/回滚、旧锁序 40P01 负对照、原回执不可变、跨项目/Attempt/快照拒绝、重启/重复唤醒、预算/deadline、pause/human、精确用量与无资源投影负例。仅 Actions 运行测试/build/typecheck；测试存在不代表真实模型效果或正式发布完成。
+
+## 后续扩展（2026-11-05）
+
+[ADR 0016](0016-repair-execution-generations.md)增加显式准入的新执行代际及原 grant 的 stale Hub 无效果退出；上述 v1 决策保留为历史，不表示后续实现仍缺少该有限能力。

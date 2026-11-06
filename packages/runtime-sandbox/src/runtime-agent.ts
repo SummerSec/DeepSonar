@@ -29,6 +29,8 @@ import { PiRpcDriver } from "./pi-rpc-driver.js";
 import { createStdinCloseKiller } from "./runtime-stdin-close.js";
 import { PiObservationalMemoryTextRedactor } from "./pi-observational-memory.js";
 import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
+import { MODEL_REQUEST_POLICY_PATH, MODEL_REQUEST_POLICY_SOURCE } from "./model-request-policy.js";
+import { PI_MAIN_REQUEST_BUDGET_PATH, PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
 
 
 export type ReasoningEffort = string;
@@ -1351,10 +1353,20 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     await host.uploadFile(content, normalized);
   }
 
-  // 2. 沙箱只当执行宿主：由 Runtime Adapter 直接驱动官方 CLI 协议，不走 SDK daemon/relay。
+  // 2. Runtime Adapter 驱动官方 CLI 协议；HTTP 准入层不改写已形成请求。
   //    语义事件只接受 Job 级控制 API；CLI 流里的伪造控制 MCP tool call 只告警，不映射为事件。
   const cliEnv = runtimeCliEnv(spec.env);
+  const piMainBudgetEnabled = spec.provider === "pi" && Boolean(cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
+  if (cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM) {
+    if (!cliEnv.DEEPSONAR_GATEWAY_TOKEN) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
+    await host.run(`mkdir -p -- ${shellQuote(RUNTIME_DIR)}`);
+    await host.uploadFile(MODEL_REQUEST_POLICY_SOURCE, MODEL_REQUEST_POLICY_PATH);
+  }
   await ensureRuntimeHome(host);
+  if (piMainBudgetEnabled) {
+    await host.run(`mkdir -p -- ${shellQuote(path.posix.dirname(PI_MAIN_REQUEST_BUDGET_PATH))}`);
+    await host.uploadFile(PI_MAIN_REQUEST_BUDGET_SOURCE, PI_MAIN_REQUEST_BUDGET_PATH);
+  }
   await materializeAgentFiles(host, spec, cliEnv);
   const mcpConfigPath = `${RUNTIME_DIR}/mcp.json`;
   if (spec.provider !== "pi") {
@@ -1406,7 +1418,10 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     mcpConfigPath,
     ...(systemPromptPath ? { systemPromptPath } : {}),
     ...(spec.contextIdentity ? { contextIdentity: spec.contextIdentity } : {}),
-    ...(spec.piExtensions ? { piExtensions: spec.piExtensions } : {}),
+    // Runtime-owned protocol adapter, separate from optional frozen capability extensions.
+    ...(spec.piExtensions || piMainBudgetEnabled ? {
+      piExtensions: [...(spec.piExtensions ?? []), ...(piMainBudgetEnabled ? [PI_MAIN_REQUEST_BUDGET_PATH] : [])],
+    } : {}),
   };
   let exec = await adapter.start(adapterContext);
   const adapterState: AdapterRuntimeState = {
@@ -1540,10 +1555,14 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
           if (chunk.type === "stderr") {
             const stderrChunk = chunk.chunk ?? "";
             attemptStderrTail = (attemptStderrTail + stderrEvidence.push(stderrChunk)).slice(-2000);
-            if (omEnabled) {
+            if (omEnabled || piMainBudgetEnabled) {
               extensionLoadTail += stderrChunk;
               if (extensionLoadTail.includes("Failed to load extension:")) {
-                fatalOutputError = "PI_OM_EXTENSION_LOAD_FAILED";
+                fatalOutputError = omEnabled ? "PI_OM_EXTENSION_LOAD_FAILED" : "PI_MAIN_BUDGET_EXTENSION_LOAD_FAILED";
+                throw new Error(fatalOutputError);
+              }
+              if (piMainBudgetEnabled && extensionLoadTail.includes("PI_MAIN_BUDGET_")) {
+                fatalOutputError = "PI_MAIN_BUDGET_EXTENSION_FAILED";
                 throw new Error(fatalOutputError);
               }
               extensionLoadTail = extensionLoadTail.slice(-128);

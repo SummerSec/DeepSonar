@@ -9,8 +9,17 @@ on:
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
+      - "agent-harness/claude-request-budget-cli.test.ts"
+      - "agent-harness/tsconfig.claude-budget.json"
+      - "agent-harness/run-claude-budget-isolated.mjs"
       - "agent-harness/rea-runtime/**"
       - "agent-harness/opensandbox/*rea*"
+      - "agent-harness/opensandbox/*om-provider-headers*"
+      - "agent-harness/pi-observational-memory-governed.ts"
+      - "apps/scheduler/src/gateway*.ts"
+      - "apps/scheduler/src/provider-custom-headers.ts"
+      - "apps/scheduler/src/provider-settings.ts"
+      - "apps/scheduler/src/pi-extensions.ts"
       - "deploy/docker-compose.opensandbox.yml"
       - "deploy/opensandbox/**"
       - "agent-harness/test-reverse-*"
@@ -45,8 +54,17 @@ on:
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
+      - "agent-harness/claude-request-budget-cli.test.ts"
+      - "agent-harness/tsconfig.claude-budget.json"
+      - "agent-harness/run-claude-budget-isolated.mjs"
       - "agent-harness/rea-runtime/**"
       - "agent-harness/opensandbox/*rea*"
+      - "agent-harness/opensandbox/*om-provider-headers*"
+      - "agent-harness/pi-observational-memory-governed.ts"
+      - "apps/scheduler/src/gateway*.ts"
+      - "apps/scheduler/src/provider-custom-headers.ts"
+      - "apps/scheduler/src/provider-settings.ts"
+      - "apps/scheduler/src/pi-extensions.ts"
       - "deploy/docker-compose.opensandbox.yml"
       - "deploy/opensandbox/**"
       - "agent-harness/test-reverse-*"
@@ -217,4 +235,170 @@ jobs:
         if: ${{ always() }}
         env:
           OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
-        run: docker compose -f deploy/docker-compose.opensandbox.yml down -v
+        run: |
+          docker compose -f deploy/docker-compose.opensandbox.yml down -v
+
+  claude-budget-acceptance:
+    needs: plan
+    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      # Each independent matrix builds the exact checkout on its native host.
+      - name: Prepare hosted runner disk for native base
+        run: node .github/ci/prepare-hosted-runner-disk.mjs
+      - name: Install Job integration dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @deepsonar/shared-types build
+          pnpm --filter @deepsonar/runtime-manual-contract build
+          pnpm --filter @deepsonar/runtime-sandbox build
+      - name: Build current native base
+        run: |
+          set -euo pipefail
+          docker buildx build --builder default --load --platform "${{ matrix.platform }}" \
+            --build-arg TOOLSET=base --tag deepsonar-base:reverse-ci --file deploy/Dockerfile.agent .
+      - name: Locked Claude CLI static budget acceptance (synthetic upstream only)
+        id: acceptance
+        env:
+          CLAUDE_BUDGET_IMAGE: deepsonar-base:reverse-ci
+        run: pnpm ci:integration:claude-request-budget
+      - name: Report Claude acceptance
+        if: ${{ always() }}
+        env:
+          ACCEPTANCE_RESULT: ${{ steps.acceptance.outcome }}
+        run: |
+          echo "### Claude native budget acceptance (${{ matrix.arch }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "Result: ${ACCEPTANCE_RESULT}; network-none container, synthetic upstream only." >> "$GITHUB_STEP_SUMMARY"
+
+  pi-om-acceptance:
+    needs: plan
+    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: deepsonar-ci-pass
+          POSTGRES_DB: deepsonar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U deepsonar -d deepsonar"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      # Each independent matrix builds the exact checkout on its native host.
+      - name: Prepare hosted runner disk for native base
+        run: node .github/ci/prepare-hosted-runner-disk.mjs
+      - name: Install Job integration dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @deepsonar/shared-types build
+          pnpm --filter @deepsonar/runtime-manual-contract build
+          pnpm --filter @deepsonar/runtime-sandbox build
+      - name: Build current native base
+        run: |
+          set -euo pipefail
+          docker buildx build --builder default --load --platform "${{ matrix.platform }}" \
+            --build-arg TOOLSET=base --tag deepsonar-base:reverse-ci --file deploy/Dockerfile.agent .
+      - name: Start pinned OpenSandbox for real Job acceptance
+        env:
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/docker-compose.opensandbox.yml up -d
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18081/health; then exit 0; fi
+            sleep 2
+          done
+          echo "Pinned OpenSandbox server did not become healthy" >&2
+          exit 1
+      - name: Prepare immutable loopback image for OM Job creation
+        run: |
+          set -euo pipefail
+          docker run -d --name om-provider-registry -p 127.0.0.1:15000:5000 \
+            registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+          node agent-harness/opensandbox/om-provider-headers-image.mjs
+      - name: Created and dispatched Pi OM provider headers (synthetic upstream only)
+        id: acceptance
+        env:
+          TEST_DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/postgres
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+          OPEN_SANDBOX_DOMAIN: 127.0.0.1:18081
+          OM_PROVIDER_HEADERS_REPORT_DIR: ${{ github.workspace }}/om-provider-headers-evidence/${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          pnpm ci:integration:om-provider-headers
+      - name: Report Pi OM acceptance
+        if: ${{ always() }}
+        env:
+          ACCEPTANCE_RESULT: ${{ steps.acceptance.outcome }}
+        run: |
+          echo "### Pi/OM created Job acceptance (${{ matrix.arch }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "Result: ${ACCEPTANCE_RESULT}; isolated database, loopback synthetic upstream." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: om-provider-headers-evidence-${{ matrix.arch }}
+          path: om-provider-headers-evidence/${{ matrix.arch }}
+          if-no-files-found: error
+      - name: Clean real Job acceptance services
+        if: ${{ always() }}
+        env:
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+        run: |
+          trap 'docker rm -fv om-provider-registry || true' EXIT
+          docker compose -f deploy/docker-compose.opensandbox.yml down -v
+
+  reverse-runtime-acceptance:
+    needs: [plan, reverse-runtime-images, claude-budget-acceptance, pi-om-acceptance]
+    if: always() && (needs.plan.result != 'success' || needs.plan.outputs.mode == 'ready-full')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every native acceptance matrix
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          REVERSE_RESULT: ${{ needs.reverse-runtime-images.result }}
+          CLAUDE_RESULT: ${{ needs.claude-budget-acceptance.result }}
+          PI_OM_RESULT: ${{ needs.pi-om-acceptance.result }}
+        run: |
+          printf '### Native runtime acceptance\n\n| Check | Result |\n| --- | --- |\n| Plan | %s |\n| Reverse/REA | %s |\n| Claude | %s |\n| Pi/OM | %s |\n' \
+            "$PLAN_RESULT" "$REVERSE_RESULT" "$CLAUDE_RESULT" "$PI_OM_RESULT" >> "$GITHUB_STEP_SUMMARY"
+          test "$PLAN_RESULT" = success
+          test "$REVERSE_RESULT" = success
+          test "$CLAUDE_RESULT" = success
+          test "$PI_OM_RESULT" = success

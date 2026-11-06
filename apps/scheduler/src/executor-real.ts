@@ -1,9 +1,11 @@
+import { registerRuntimeTerminalState } from "./domains/platform-api/registry.js";
 import { taskContractPrompt } from "./task-contract-preflight.js";
 import { prepareCompletionPayload } from "./completion-payload.js";
 import { normalizeArchivedReaFact } from "./domains/cli-capability/rea-cli-fact.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  MODEL_REQUEST_POLICY_BASE_URL,
   contextIdentity,
   normalizeRuntimeErrorDetails,
   requireAgentCliRuntimeAdapter,
@@ -109,7 +111,7 @@ import {
   materializeProviderSettings,
   routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
-import { snapshotUpstreamModel } from "./provider-effective-model.js";
+import { frozenClaudeLaunchModel, snapshotUpstreamModel } from "./provider-effective-model.js";
 import {
   buildJobSharedAssetCatalog,
   SHARED_ASSETS_READONLY_ROOT,
@@ -304,14 +306,10 @@ export function assertSemanticTerminalExclusivity(
   state: { done: unknown; hub: unknown; human: unknown },
   eventType: "done" | "hub_decision" | "human",
 ): void {
-  if (eventType === "human") {
-    if (state.human) throw toolBoundaryError("duplicateToolCall", "request_human 每个 Job 只能调用一次");
-    if (state.done || state.hub) throw toolBoundaryError("duplicateToolCall", "request_human 不得与 mark_job_done 或 submit_hub_decision 同时调用");
-    return;
-  }
-  if (state.human) {
-    const conflictingTool = eventType === "done" ? "mark_job_done" : "submit_hub_decision";
-    throw toolBoundaryError("duplicateToolCall", `${conflictingTool} 不得与 request_human 同时调用`);
+  const accepted = state.human ? "human" : state.done ? "done" : state.hub ? "hub_decision" : null;
+  if ((eventType === "human" && accepted) || (eventType !== "human" && accepted === "human")) {
+    throw new ControlInputError("duplicate_tool_call", `已接受 ${accepted}；不能提交相冲突的终态。`, undefined,
+      { accepted_terminal: accepted });
   }
 }
 
@@ -829,6 +827,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       registerJobEvidenceSecrets(jobId, [observationalMemoryGatewayToken]);
     }
     env.DEEPSONAR_GATEWAY_TOKEN = gatewayToken;
+    env.DEEPSONAR_REQUEST_POLICY_UPSTREAM = config.gateway.sandboxUrl;
     if (provider === "pi" && !materializedProviderConfig) {
       runtimeConfigFiles = materializeProviderSettings({
         agentCli: "pi",
@@ -845,10 +844,10 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       runtimeConfigFiles = routeMaterializedProviderFilesThroughGateway({
         agentCli: provider,
         files: runtimeConfigFiles,
-        gatewayBaseUrl: config.gateway.sandboxUrl,
+        gatewayBaseUrl: gatewayToken ? MODEL_REQUEST_POLICY_BASE_URL : config.gateway.sandboxUrl,
         jobToken: jt.plaintext,
         ...(observationalMemory
-          ? { observationalMemory: { config: observationalMemory, backgroundToken: observationalMemoryGatewayToken ?? "" } }
+          ? { observationalMemory: { config: observationalMemory, backgroundToken: observationalMemoryGatewayToken ?? "", gatewayBaseUrl: config.gateway.sandboxUrl } }
           : {}),
       });
       for (const key of mapping.secretKeys) delete env[key];
@@ -858,7 +857,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
     if (!materializedProviderConfig && provider !== "pi") {
       for (const k of mapping.secretKeys) env[k] = jt.plaintext;
       if (mapping.baseUrlKey) {
-        env[mapping.baseUrlKey] = config.gateway.sandboxUrl;
+        env[mapping.baseUrlKey] = MODEL_REQUEST_POLICY_BASE_URL;
       }
     }
     if (provider === "dsh") {
@@ -1713,7 +1712,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
           {
             statusCode: error.retryable ? 422 : 409,
             errorCode: error.code,
-            retryable: error.retryable,
+            retryable: error.details?.accepted_terminal ? false : error.retryable,
+            ...(error.details?.accepted_terminal ? { category: "permanent_failure" as const,
+              next_action: "终态提案已接受；停止提交冲突终态，等待原提案结算并读取当前状态。" } : {}),
             ...(error.path ? { path: error.path } : {}),
             ...(error.details ? { details: error.details } : {}),
           },
@@ -1745,11 +1746,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     settings_config_json: snapshot.settings_config_json,
     config_files: runtimeConfigFiles,
   });
-  const runtimeModel = piLaunch?.cliModel ?? model;
+  const runtimeModel = provider === "claude-code" ? frozenClaudeLaunchModel(snapshot) : piLaunch?.cliModel ?? model;
   const dshProvider = runtimeAdapter.projectRuntime?.({
     settingsConfig: snapshot.settings_config_json,
     credentialProvider: activeCredentialProvider ?? "",
-    gatewayBaseUrl: config.gateway.sandboxUrl,
+    gatewayBaseUrl: gatewayToken ? MODEL_REQUEST_POLICY_BASE_URL : config.gateway.sandboxUrl,
     model,
     contextWindowTokens: snapshot.context_window_tokens,
     reasoning,
@@ -1814,6 +1815,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         readSandboxWorkspaceFileForRuntime = readWorkspaceFile;
         if (platformApiEnabled) {
           registerRuntimeHandler(jobId, runtimePlatformHandler, platformOperations);
+          registerRuntimeTerminalState(jobId, attemptId!, () => semanticState.human ? "human"
+            : semanticState.done ? "done" : semanticState.hub ? "hub_decision" : null, () => semanticState.human?.subject ?? null);
           platformRuntimeRegistered = true;
         }
         const disposeHumanMessages = await registerHumanMessageRuntime(jobId, { sendMessage, writeWorkspaceFile });

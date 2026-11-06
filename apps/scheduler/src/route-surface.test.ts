@@ -171,6 +171,8 @@ const INTERNAL_ROUTE_ALLOWLIST = new Set([
   // Model Gateway 代理：Job token 自鉴权，不是管理面。
   "DELETE /gateway/*",
   "GET /gateway/*",
+  "HEAD /gateway/*",
+  "OPTIONS /gateway/*",
   "PATCH /gateway/*",
   "POST /gateway/*",
   "PUT /gateway/*",

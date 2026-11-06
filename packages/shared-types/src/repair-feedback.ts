@@ -22,6 +22,7 @@ const PERMANENT_CONTROL_CODES = new Set([
   "tool_not_allowed",
   "job_not_running",
   "forbidden_control_file",
+  "pi_om_configuration_invalid",
 ]);
 
 export const RepairFeedbackRemainingBudget = z
@@ -106,7 +107,6 @@ export function describeObservedShape(value: unknown): Record<string, unknown> {
 const TRANSIENT_CONTROL_CODES = new Set([
   "event_rate_limited",
   "HANDLER_UNAVAILABLE",
-  "HANDLER_FAILED",
 ]);
 
 export function repairCategoryForControlFailure(input: {
@@ -114,12 +114,12 @@ export function repairCategoryForControlFailure(input: {
   retryable?: boolean;
   statusCode?: number;
 }): RepairFeedbackCategory {
+  if (input.code === "HANDLER_FAILED" || (input.statusCode === 500 || input.statusCode === 503)
+    && !TRANSIENT_CONTROL_CODES.has(input.code)) return "unknown_external_effect";
   if (input.code === "plan_unknown_effect") return "unknown_external_effect";
   if (
     TRANSIENT_CONTROL_CODES.has(input.code)
     || input.statusCode === 429
-    || input.statusCode === 503
-    || input.statusCode === 500
   ) {
     return "transient_retryable";
   }
@@ -217,11 +217,17 @@ function nextActionFor(input: {
   path?: string;
   expected?: unknown;
 }): string {
+  if (input.code === "pi_om_configuration_invalid") {
+    return "停止此提案并交平台管理员修复 OM 配额配置；Agent 不得自行扩额或换 key 自动重试。配置修复后由宿主重新准入。";
+  }
+  if (input.code === "recovery_stale") {
+    return "当前恢复 grant 已过时；用本 Hub 原冻结 grant 的引用/revision/evidence 提交 release_stale 并正常退出。不得用新投影扩大 grant；后续授权由 Scheduler 决定。";
+  }
   if (input.code === "HANDLER_UNAVAILABLE") {
     return "平台运行时 handler 暂时不可用；使用同一 Idempotency-Key 重试，不要改写 payload。";
   }
   if (input.code === "HANDLER_FAILED") {
-    return "平台执行失败且未返回业务拒绝；使用同一 Idempotency-Key 重试，不要改写 payload。";
+    return "平台执行失败且效果未知；先查询原回执和当前状态并对账，不得自动重试或换 key 重放。";
   }
   if (input.category === "transient_retryable") {
     return "等待 advertised retry_after_sec 后，使用同一 Idempotency-Key 重试。";

@@ -107,7 +107,7 @@ Gateway 503 仅在内核明确证明请求尚未启动时可降级；`unknown` �
 
 [共享资产生命周期锁](../../apps/scheduler/src/shared-asset-lifecycle.ts)使用独立 PostgreSQL session 串行同 Job 的 prepare 与 cleanup，不占住业务连接池等待外部 provision。准备要求当前最新 active Attempt，锁保持到 runner 验证只读挂载并提交资源绑定/running CAS；旧 finally、Reaper 和扫描器在获得锁后重新读取归属，active/新 Attempt 拒绝删除。Docker 的实际 volume/helper 名称由独立 generation 决定，prepare 只操作本 generation；cleanup 固定资源快照后重验独立 session 许可，每次破坏性操作或重试前再检查，不能失锁后采纳后继资源。Docker 再严格验证 managed/Job/generation 标签，helper 用 inspect 得到的不可变容器 ID 清理，卷非 force 删除；精确不存在、fenced skip 与失败分别处理。完整边界见[共享资产专题](../SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。续租由[Attempt lease helper](../../apps/scheduler/src/attempt-lease.ts)维护精确 registration 与 stop closure，旧 finally 不删除新 timer；alive 探测后再次核归属，在短 Job → 最新 Attempt 事务中检查 active/cancel 与 Job/Attempt 双 sandbox 绑定，旧 tick 不续后继 lease。无服务 timer 与真实 PostgreSQL 归属回归均已接源码，实际结果以最终 Actions 为准。
 
-完成被未知效果或未知修正用量阻断时，原负回执与宿主恢复事实同事务落库；原 key 重放保持原结果。Reaper 的既有 tick 按有界 keyset 扫描恢复根，冻结原 deadline 与有限 wake，不能自动执行对账。只有带 Scheduler 冻结引用的去重 Hub 可提出 `reconcile_effects` 或 `stop`，沿原 Control/语义事务重新校验权限、scope、快照和证据 CAS。对账只消费精确 effect 的持久用量证据；中断、缺少句柄或零 unknown 不证明资源停止。原会话仍活动时重新完成仍走全部既有门；退出会话/新 Attempt 的完整继续执行仍未交付。pause、auto-stop、人工与 Verify 等待保持权威。见 [FR-CTRL-010](01-system-specification.md#fr-ctrl-010-完成未知效果的受治理恢复)、[ADR 0015](adr/0015-governed-completion-recovery.md)和[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。
+完成被未知效果或未知修正用量阻断时，原负回执与宿主恢复事实同事务落库；原 key 重放保持原结果。Reaper 的既有 tick 按有界 keyset 扫描恢复根，冻结原 deadline 与有限 wake，不能自动执行对账。只有带 Scheduler 冻结引用的去重 Hub 可提出 `reconcile_effects` 或 `stop`，沿原 Control/语义事务重新校验权限、scope、快照和证据 CAS。对账只消费精确 effect 的持久用量证据；中断、缺少句柄或零 unknown 不证明资源停止。原会话仍活动时重新完成仍走全部既有门；显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](../AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录。pause、auto-stop、人工与 Verify 等待保持权威。见 [FR-CTRL-010](01-system-specification.md#fr-ctrl-010-完成未知效果的受治理恢复)、[ADR 0015](adr/0015-governed-completion-recovery.md)和[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。
 
 上述修复已接入现有 Actions 脚本；本分支最终 SHA 的 PostgreSQL、完整核心及镜像验收尚未执行通过，源码存在不作为运行证据。
 
@@ -135,6 +135,10 @@ RPC 按[帧与保存预算](../../packages/runtime-sandbox/src/pi-rpc-output.ts)
 ## Pi 会话观测记忆（#815）
 
 只有能力组合显式选择已注册 OM 时，新 Job 才冻结插件/配置/模型；Scheduler 物化受审 wrapper 的字面配置 loader，并签发与 main 分离的 `observational_memory` Gateway token。`requires_egress=false` 不放宽业务网络，`requires_gateway=true` 要求所有后台模型调用走冻结路由。当前 Session 的私有配置与身份守卫拒绝环境覆盖、配置漂移及切换/分叉，不回读最新设置。
+
+恢复在替换旧快照前持久化内核请求策略回执（含未签发 token 的 workload），批量先全体只读检查再写入；异常回滚策略、rate-limit 与执行状态。显式重新冻结保留已授权扩展 ID 并重验当前准入，与创建共用 quota/profile/launch 冻结边界。Gateway 消费策略回执的联合验收仍须包含 #928 consumer。
+
+Gateway 与手动恢复使用同一 workload token allowance；历史 OM token 保留该 Job 的 main/background 计费隔离，即使重新冻结不再启用 OM。上限与已结算用量连续继承，未知后台效果仍阻断新代际。
 
 新 Job 的 `freezePiExtensions` 从 Scheduler 选定 `runtimeImage.image_version` 执行 [shared registry](../../packages/shared-types/src/pi-extensions.ts) 的 OM 专属下限，缺失/非法/旧 metadata 拒绝，历史冻结快照不重写。[runtime-adapters](../../packages/runtime-sandbox/src/runtime-adapters.ts) 在 Pi 启动/恢复及首个 prompt 前执行独立 [内容 guard](../../packages/runtime-sandbox/src/pi-memory-image-guard.ts)；缺少 canonical package/entry/wrapper 时不启动 `runAsync`/RPC。实际本地镜像正负例、canonical RPC 与回归证据集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
 
@@ -190,6 +194,15 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 
 该 v1 路线修订仅作为不可变历史记录读取；当前路线修改使用上文 v2 `execution_route` CAS。历史事件、快照和回执不改写，未知效果、待结算回执或失效目标都不能借旧协议恢复执行。详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。
 
+
+## Model Gateway 透明传输与结算（#923）
+
+请求按原 token、Job/Attempt、冻结模型和预算准入后，经单次 HTTP 交换转发原始 body、路径/query 和端到端头。客户端请求流先有界收全，响应/SSE 即时发送且遵守背压/取消；usage 仅旁路观察。CLI alias 移至请求生成层，预算不符在出站前明确拒绝。OM wrapper 为请求登记 UUID，收到模型终止结果后查询同 Job/Attempt/token/workload 的持久 effect/usage 状态，仅 settled 才提交；未知保持硬失败。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与 [ADR 0017](adr/0017-transparent-gateway-settlement.md)。本分支最终 SHA Actions 待验。
+
+#923 主执行启动/恢复由上传的[请求准入适配器](../../packages/runtime-sandbox/src/model-request-policy.ts)包装，三 CLI 主 endpoint 只在运行时投影到 loopback，OM 保持真实 Gateway。每次模型 JSON 查询自身 workload allowance，已有 cap/usage 合规才原字节转发，否则拒绝。Pi 已接 SDK 生成前逐次配置，Claude 只接启动/resume 静态 cap；DSH 共用 SDK 生成前 adapter 已接。Claude Code 2.1.312 的启动上限与运行中余额不足时明确拒绝并提示，是用户已接受的兼容限制；不修改已形成 body，不要求逐请求自动适配，该范围决定不再阻塞发布。未准入 quota/DB 回滚拒绝用原 events 的 scoped kernel 回执确认 not_started；保存失败 unknown，同 UUID 不重发。无新 schema/模型账本，Actions 待验。
+
 ## 操作员效果结清（#899）
 
 FR-JOB-005 的人工路径复用 `job_attempt_effects`：同一 UPDATE 排除 active Attempt 并只写未结清行；已结清证据不可覆盖，不改变 Attempt 程序计数器或 replay policy。CLI 将本次单条写入结果与独立全局计数分开，计数失败不能宣称清空；字段和退出契约见[部署说明](../../deploy/README.md#未知效果的人工结清899)。隔离 PostgreSQL 回归覆盖真实内核结算和锁竞争，最终 SHA Actions 成功才作为工程验收，未执行生产升级。
+
+Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freeze，Control Intent 预检与最终 ingestion 均执行；最终事务在 pending Job 公开前冻结 runtime knobs、OM 配额、profile 与 launch。保留原 audit timeout、parent/finding/payload/priority 和图身份，shared assets 仅由既有 materializer 记录一次；冻结或图写入失败回滚整次 ingestion。

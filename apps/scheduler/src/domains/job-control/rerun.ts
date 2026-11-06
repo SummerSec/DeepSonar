@@ -1,3 +1,8 @@
+import { freezeJobRuntimeConfiguration } from "../../job-runtime-freeze.js";
+import { parseFrozenPiExtensions } from "../../pi-extensions.js";
+import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
+import { readRepairRequeueAdmission } from "./repair-admission.js";
+import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
 import { normalizeTaskContract, normalizeTaskGoalReviewRequest } from "@deepsonar/shared-types";
 import { taskContractDigest } from "../../task-outcome-snapshot.js";
 import { freezeGoalReviewAssignment, goalReviewDigest } from "../../task-goal-review-source.js";
@@ -41,6 +46,9 @@ type GovernedSnapshotIdentity = {
   upstream_model: string | null;
   credential_id: string | null;
   credential_provider: string | null;
+  gateway_provider_binding_version: number | null;
+  gateway_provider_binding_credential_id: string | null;
+  gateway_provider_binding_fingerprint: string | null;
   dsh_task_mode: string | null;
   reasoning: string | null;
   context_window_tokens: number | null;
@@ -73,6 +81,14 @@ export type RequeueJobResult =
   | { kind: "target_authorization_blocked"; detail: SnapshotStaleDetail; blockers: TaskContractFeedback[]; provenance?: JobProvenance }
   | { kind: "snapshot_stale"; detail: SnapshotStaleDetail; provenance?: JobProvenance };
 
+/** Throw inside recovery transactions; translate only after PostgreSQL rolled back. */
+export class RecoveryTransitionError extends Error {
+  constructor(readonly jobId: string, readonly status: string, readonly provenance?: JobProvenance) {
+    super("恢复状态转换未完成；本次恢复已全部回滚，请检查当前 Job 状态");
+    this.name = "RecoveryTransitionError";
+  }
+}
+
 const resumableStatuses = new Set<string>(RESUMABLE_JOB_STATUSES);
 
 function objectValue(value: unknown): SnapshotObject {
@@ -99,12 +115,16 @@ export function governedSnapshotIdentity(snapshot: unknown): GovernedSnapshotIde
   const value = objectValue(snapshot);
   const runtime = objectValue(value.agent_runtime);
   const image = objectValue(value.runtime_image);
+  const providerBinding = objectValue(value.gateway_provider_binding);
   return {
     agent_cli: nullableString(value.agent_cli),
     model: nullableString(value.model),
     upstream_model: nullableString(value.upstream_model),
     credential_id: nullableString(value.credential_id),
     credential_provider: nullableString(value.credential_provider),
+    gateway_provider_binding_version: nullableNumber(providerBinding.version),
+    gateway_provider_binding_credential_id: nullableString(providerBinding.credential_id),
+    gateway_provider_binding_fingerprint: nullableString(providerBinding.fingerprint),
     dsh_task_mode: nullableString(value.dsh_task_mode),
     reasoning: nullableString(value.reasoning),
     context_window_tokens: nullableNumber(value.context_window_tokens),
@@ -201,10 +221,12 @@ export async function frozenSnapshotStaleDetail(
   }
 }
 
-/** Hub 冻结的 image_key 是该 Job 的镜像身份；resume/rerun 不得掉回角色缺省。 */
-export function frozenRuntimeImageOverride(snapshot: unknown): { runtimeImageKey: string } | undefined {
+/** Preserve the original image and extension selection; re-resolve their current admission and configuration. */
+export function frozenRuntimeImageOverride(snapshot: unknown): { runtimeImageKey?: string; piExtensionIds?: string[] } | undefined {
   const key = runtimeImageKeyFromSnapshot(snapshot);
-  return key ? { runtimeImageKey: key } : undefined;
+  const extensions = parseFrozenPiExtensions(objectValue(snapshot).pi_extensions).map(extension => extension.id);
+  return key || extensions.length ? { ...(key ? { runtimeImageKey: key } : {}),
+    ...(extensions.length ? { piExtensionIds: extensions } : {}) } : undefined;
 }
 
 export async function resolveCurrentSnapshotForExistingJob(
@@ -218,7 +240,7 @@ export async function resolveCurrentSnapshotForExistingJob(
       ...parseRelatedFindingIds(payload),
     ]),
   ];
-  const current = await freezeAgentSnapshotNetworkPolicy(
+  const resolved = await freezeAgentSnapshotNetworkPolicy(
     tx,
     String(job.canvas_id),
     await resolveAgentSnapshotForJob(
@@ -229,6 +251,9 @@ export async function resolveCurrentSnapshotForExistingJob(
       frozenRuntimeImageOverride(job.agent_snapshot_json),
     ),
   );
+  const { snapshotWithKnobs: current } = await freezeJobRuntimeConfiguration(tx,
+    { projectId: String(job.project_id), type: String(job.type),
+      ...(typeof job.timeout_sec === "number" ? { timeoutSec: job.timeout_sec } : {}) }, resolved);
   const previous = objectValue(job.agent_snapshot_json).task_goal_review;
   if (previous === undefined && payload.goal_review === undefined) return current;
   // The existing assignment is the authority, never the mutable rerun payload.
@@ -264,6 +289,29 @@ async function resetReportState(tx: typeof sql, jobId: string): Promise<void> {
   await tx`
     UPDATE finding_reports SET status = 'pending', error = NULL, updated_at = now()
     WHERE report_job_id = ${jobId} AND status = 'failed'`;
+}
+
+/** Shared read-only target authorization gate; callers hold Canvas -> Job. */
+export async function requeueTargetAuthorizationBlockers(tx: typeof sql, job: Record<string, unknown>,
+  currentSnapshot: unknown, mode: "resume-frozen" | "rerun-current"): Promise<TaskContractFeedback[]> {
+  const storedSnapshot = objectValue(job.agent_snapshot_json);
+  const storedTargetAuthorization = storedSnapshot.target_authorization;
+  const currentSnapshotObject = objectValue(currentSnapshot);
+  const targetAuthorization = mode === "resume-frozen" ? storedTargetAuthorization : currentSnapshotObject.target_authorization;
+  const executionSnapshot = mode === "resume-frozen" ? storedSnapshot : currentSnapshotObject;
+  const taskContract = frozenTaskContract(executionSnapshot);
+  if (!taskContract) return [];
+  const payload = objectValue(job.payload_json);
+  const rules = await rulesForProject(tx, String(job.project_id));
+  return taskContractPreflight(tx, String(job.project_id), taskContract,
+    Boolean(objectValue(executionSnapshot.network_policy).allow_egress) && rules.allowEgress, {
+      principalId: targetAuthorization && typeof targetAuthorization === "object" && !Array.isArray(targetAuthorization)
+        && typeof (targetAuthorization as SnapshotObject).principal_id === "string"
+        ? (targetAuthorization as SnapshotObject).principal_id as string : null,
+      content: typeof payload.content === "string" ? payload.content : undefined,
+      frozenTargetAuthorization: targetAuthorization,
+      requireFrozenTargetAuthorization: true,
+    });
 }
 
 /**
@@ -312,7 +360,7 @@ export async function requeueJob(
     }
     const [job] = await tx`
       SELECT id, project_id, canvas_id, finding_id, type, status, payload_json,
-             agent_snapshot_json, sandbox_id, priority
+             agent_snapshot_json, sandbox_id, priority, timeout_sec
       FROM jobs WHERE id = ${jobId} FOR UPDATE`;
     if (!job) return { kind: "not_found" as const };
     const status = String(job.status);
@@ -362,44 +410,35 @@ export async function requeueJob(
     // Target authorization is a live, read-only authority check.  It runs
     // before Attempt interruption, grant revocation, or the pending transition
     // so a revoked/expired target cannot make a new historical side effect.
-    const storedSnapshot = objectValue(job.agent_snapshot_json);
-    const storedTargetAuthorization = storedSnapshot.target_authorization;
-    const currentSnapshotObject = objectValue(currentSnapshot);
-    const targetAuthorizationForCheck = mode === "resume-frozen"
-      ? storedTargetAuthorization
-      : currentSnapshotObject.target_authorization;
-    const taskContract = frozenTaskContract(currentSnapshot);
-    if (taskContract) {
-      const targetAuthorization = targetAuthorizationForCheck;
-      const payload = objectValue(job.payload_json);
-      const rules = await rulesForProject(tx, String(job.project_id));
-      const blockers = await taskContractPreflight(
-        tx,
-        String(job.project_id),
-        taskContract,
-        Boolean(objectValue(currentSnapshot.network_policy).allow_egress) && rules.allowEgress,
-        {
-          principalId: targetAuthorization && typeof targetAuthorization === "object" && !Array.isArray(targetAuthorization)
-            && typeof (targetAuthorization as SnapshotObject).principal_id === "string"
-            ? (targetAuthorization as SnapshotObject).principal_id as string
-            : null,
-          content: typeof payload.content === "string" ? payload.content : undefined,
-          frozenTargetAuthorization: targetAuthorization,
-          requireFrozenTargetAuthorization: true,
+    const blockers = await requeueTargetAuthorizationBlockers(tx, job, currentSnapshot, mode);
+    if (blockers.length > 0) {
+      return {
+        kind: "target_authorization_blocked" as const,
+        detail: {
+          job_id: jobId,
+          stale_fields: ["target_authorization"],
+          resolution_error: "目标授权 authority 未确认当前项目、目标、主体、动作或前置条件",
         },
-      );
-      if (blockers.length > 0) {
-        return {
-          kind: "target_authorization_blocked" as const,
-          detail: {
-            job_id: jobId,
-            stale_fields: ["target_authorization"],
-            resolution_error: "目标授权 authority 未确认当前项目、目标、主体、动作或前置条件",
-          },
-          blockers,
-          provenance,
-        };
-      }
+        blockers,
+        provenance,
+      };
+    }
+
+    // Fence effect intent writers before inspecting the old ledger. An idle DB
+    // observation alone cannot prove that a concurrent old runner stayed idle.
+    await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no FOR UPDATE`;
+    try { await inspectGatewayRequestBudget(tx, jobId, job.agent_snapshot_json); }
+    catch (error) {
+      if (!(error instanceof GatewayRequestBudgetError)) throw error;
+      return { kind: "not_resumable" as const, status, provenance, reason: error.message, error_code: error.code };
+    }
+
+    const repairAdmission = await readRepairRequeueAdmission(tx, jobId);
+    if (repairAdmission.blocker) return { kind: "not_resumable" as const, status, provenance,
+      reason: repairAdmission.blocker.reason, error_code: repairAdmission.blocker.code };
+    await ensureGatewayRequestBudget(tx, jobId, job.agent_snapshot_json);
+    if (repairAdmission.budget && repairAdmission.deadline) {
+      await admitRepairGeneration(tx, jobId, repairAdmission.budget.receipt_ref, repairAdmission.deadline, mode);
     }
 
     // waiting_human may still own the previous active Attempt. Close it as an
@@ -429,7 +468,7 @@ export async function requeueJob(
       finished_at: null,
       heartbeat_at: null,
     });
-    if (!transitioned) return { kind: "not_resumable" as const, status, provenance };
+    if (!transitioned) throw new RecoveryTransitionError(jobId, status, provenance);
     const updated = {
       id: job.id,
       project_id: job.project_id,
@@ -453,6 +492,10 @@ export async function requeueJob(
       previous_sandbox_id: nullableString(job.sandbox_id),
       provenance,
     };
+  }).catch((error: unknown) => {
+    if (!(error instanceof RecoveryTransitionError)) throw error;
+    return { kind: "not_resumable" as const, status: error.status, provenance: error.provenance,
+      reason: error.message, error_code: JOB_NOT_RESUMABLE };
   });
   if (result.kind === "ok" && result.previous_sandbox_id) {
     await runner.destroy({ sandboxId: result.previous_sandbox_id }).catch((error) => {

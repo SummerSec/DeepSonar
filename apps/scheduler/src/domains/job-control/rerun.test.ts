@@ -1,3 +1,4 @@
+import { freezePiExtensions } from "../../pi-extensions.js";
 import assert from "node:assert/strict";
 import { buildRepairFeedback } from "@deepsonar/shared-types";
 import test from "node:test";
@@ -137,6 +138,14 @@ test("frozen Hub runtime_image_key is the override used to resolve current ident
   assert.equal(frozenRuntimeImageOverride({}), undefined);
 });
 
+test("rerun preserves only previously admitted Pi extension ids and revalidates malformed history", () => {
+  const extensions = freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base",
+    { provider: "anthropic", model: "synthetic-model" }, "99.0.0");
+  assert.deepEqual(frozenRuntimeImageOverride({ runtime_image_key: "deepsonar-base", pi_extensions: extensions }),
+    { runtimeImageKey: "deepsonar-base", piExtensionIds: ["pi-observational-memory"] });
+  assert.throws(() => frozenRuntimeImageOverride({ runtime_image_key: "deepsonar-base", pi_extensions: [{ id: "unregistered" }] }));
+});
+
 test("SnapshotUnresolvableError preserves ModelCatalogMismatchError repair for HTTP 409 (#681)", () => {
   const catalog = ["DeepSeek-V4.1-Flash", "GLM-5.3", "GLM-5.3-Flash"];
   const repair = buildRepairFeedback({
@@ -171,4 +180,18 @@ test("SnapshotUnresolvableError preserves ModelCatalogMismatchError repair for H
   // Job rerun path: detail.repair extras merge
   const fromDetail = currentSnapshotUnresolvableBody("解析模型 missing-model …", { repair });
   assert.deepEqual((fromDetail.repair?.expected as { sample?: string[] } | undefined)?.sample, catalog);
+});
+
+
+test("legacy provider binding and business configuration drift require explicit refreeze", () => {
+  const binding = { version: 1, credential_id: base.credential_id, fingerprint: `sha256:${"a".repeat(64)}` };
+  const current = { ...base, gateway_provider_binding: binding };
+  assert.deepEqual(snapshotIdentityDrift(base, current), [
+    "gateway_provider_binding_version", "gateway_provider_binding_credential_id", "gateway_provider_binding_fingerprint",
+  ]);
+  assert.deepEqual(snapshotIdentityDrift(current, { ...current,
+    gateway_provider_binding: { ...binding, fingerprint: `sha256:${"b".repeat(64)}` },
+  }), ["gateway_provider_binding_fingerprint"]);
+  assert.deepEqual(snapshotIdentityDrift(current, structuredClone(current)), []);
+  assert.equal(Object.hasOwn(base, "gateway_provider_binding"), false, "comparison never backfills historical snapshots");
 });

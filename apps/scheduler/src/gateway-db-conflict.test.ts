@@ -3,6 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test, { mock, type TestContext } from "node:test";
 import Fastify from "fastify";
+import { Readable } from "node:stream";
 import type { GatewayWorkload } from "./gateway-om-budget.js";
 
 process.env.AGENT_MODE = "fake";
@@ -13,8 +14,8 @@ process.env.DEEPSONAR_MASTER_KEY = randomBytes(32).toString("hex");
 // This transactional SQL double faults at commit, after the quota/effect writes,
 // so a retry must discard both before attempting admission again.
 type Row = Record<string, unknown>;
-type Store = { usedRequests: number; usedTokens: number; effects: Row[]; ledger: Row[] };
-const emptyStore = (): Store => ({ usedRequests: 0, usedTokens: 0, effects: [], ledger: [] });
+type Store = { usedRequests: number; usedTokens: number; effects: Row[]; ledger: Row[]; receipts: Row[] };
+const emptyStore = (): Store => ({ usedRequests: 0, usedTokens: 0, effects: [], ledger: [], receipts: [] });
 let store = emptyStore();
 let workload: GatewayWorkload = "main";
 let admissionAttempts = 0;
@@ -45,14 +46,35 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
     const query = input.join("?").replace(/\s+/gu, " ").trim();
     const state = current();
     const rows = (): Row[] => {
+      if (query.startsWith("SELECT effect_id FROM job_attempt_effects")) return state.effects.filter((effect) =>
+        (effect.resource_identity_json as Row)?.job_token_id === values[2] && (effect.intent_json as Row)?.gateway_request_id === values[3]);
+      if (query.startsWith("SELECT status FROM jobs")) return [{ status: "running" }];
+      if (query.startsWith("SELECT id FROM job_tokens")) return values[0] === tokenId ? [{ id: tokenId }] : [];
+      if (query.startsWith("SELECT id FROM job_attempts")) return values[0] === attemptId ? [{ id: attemptId }] : [];
+      if (query.startsWith("SELECT payload_json FROM events")) return state.receipts.filter((row) => row.event_id === values[2]);
+      if (query.startsWith("SELECT COALESCE(MAX(job_seq)")) return [{ next: state.receipts.length + 1 }];
+      if (query.startsWith("INSERT INTO event_dedup")) return [];
+      if (query.startsWith("INSERT INTO events(")) {
+        state.receipts.push({ event_id: values[1], payload_json: values[4] }); return [];
+      }
+      if (query.startsWith("INSERT INTO job_event_rate_limits") || query.startsWith("UPDATE job_event_rate_limits")) return [];
+      if (query.includes("FROM job_event_rate_limits")) return [{ job_id: jobId, window_started_at: new Date(),
+        progress_count: 0, standard_count: 0, terminal_count: 0 }];
+      if (query.startsWith("SELECT e.status, e.settlement_json, l.settlement_status, l.source")) {
+        return state.effects.filter((entry) => (entry.intent_json as Row)?.gateway_request_id === values[3]).map((effect) => ({
+          ...effect, settlement_status: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.settlement_status,
+          source: state.ledger.find((entry) => entry.effect_id === effect.effect_id)?.source,
+        }));
+      }
       if (query.startsWith("SELECT jt.*")) return [tokenRow(state)];
-      if (query.startsWith("SELECT * FROM credentials")) return [{ ...encrypted, provider: "openai", kind: "llm_provider", status: "active",
-        agent_cli: "pi", public_metadata_json: { base_url: "http://127.0.0.1:14100" }, model_catalog_json: [] }];
+      if (query.startsWith("SELECT * FROM credentials")) return [credential];
       if (query.startsWith("SELECT status, project_id, agent_snapshot_json FROM jobs")) {
         onAdmission();
         return [{ status: "running", project_id: projectId, agent_snapshot_json: snapshot }];
       }
       if (query.startsWith("SELECT id, workload, used_requests")) return [tokenRow(state)];
+      if (query.startsWith("SELECT workload,max_requests,request_total_limit FROM job_tokens")) return [tokenRow(state)];
+      if (query.startsWith("SELECT count(*)::int AS count FROM job_attempts")) return [{ count: 1 }];
       if (query.startsWith("SELECT status,lease_expires_at")) return [{ status: "running", leased: true, within_time: true }];
       if (query.startsWith("SELECT event_id,payload_json FROM events")) return [];
       if (query.startsWith("SELECT MIN(")) return [{ cap: null }];
@@ -116,17 +138,26 @@ const fakeSql = Object.assign(makeSql(() => store), {
 });
 const database = await import("./db.js");
 mock.module(new URL("./db.js", import.meta.url), { namedExports: { ...database, sql: fakeSql } });
+const transport = await import("./gateway-transparent-http.js");
+let upstreamImpl: typeof transport.requestGatewayHttp;
+mock.module(new URL("./gateway-transparent-http.js", import.meta.url), { namedExports: {
+  ...transport, requestGatewayHttp: (input: Parameters<typeof transport.requestGatewayHttp>[0]) => upstreamImpl(input),
+} });
 const { registerGateway, hashJobToken } = await import("./gateway.js");
 const { encryptSecret } = await import("./credentials.js");
+const { freezeGatewayProviderBinding } = await import("./gateway-provider-binding.js");
 const { freezePiExtensions } = await import("./pi-extensions.js");
 const { renderMetrics } = await import("./metrics.js");
 const { createFailureBoundary } = await import(new URL("../../../agent-harness/fixtures/pi-om-boundary-unit.mjs", import.meta.url).href);
 const { PI_RPC_TRANSPORT_TRANSIENT_RESPONSE } = await import(new URL("../../../agent-harness/fixtures/pi-om-real-rpc.mjs", import.meta.url).href);
 const conflictFixture = JSON.parse(readFileSync(new URL("../../../agent-harness/fixtures/pi-om-db-conflict.json", import.meta.url), "utf8"));
 const encrypted = encryptSecret("offline-fixture-only");
+const credential = { id: credentialId, ...encrypted, provider: "openai", kind: "llm_provider", status: "active",
+  agent_cli: "pi", public_metadata_json: { base_url: "http://127.0.0.1:14100" }, model_catalog_json: [],
+  settings_config_json: { providers: { openai: { api: "openai-completions", models: [{ id: model }] } } } };
 const snapshot = { agent_cli: "pi", model, upstream_model: model, pi_provider: "openai", credential_id: credentialId,
-  credential_provider: "openai", runtime_knobs: { job_token_max_requests: 0 }, config_files: [],
-  settings_config_json: { providers: { openai: { api: "openai-completions", models: [{ id: model }] } } },
+  credential_provider: "openai", runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} }, config_files: [],
+  settings_config_json: credential.settings_config_json, gateway_provider_binding: freezeGatewayProviderBinding(credential),
   pi_extensions: freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", { provider: "openai", model }, "0.6.3") };
 
 function setup(t: TestContext, selected: GatewayWorkload, code: string, failures: number, upstreamStatus = 200,
@@ -139,18 +170,24 @@ function setup(t: TestContext, selected: GatewayWorkload, code: string, failures
   app.setErrorHandler((error, _req, reply) => { errors.push(error); return reply.code(500).send({ error: "unhandled_database_error" }); });
   registerGateway(app);
   t.after(() => app.close());
-  const upstream = t.mock.method(globalThis, "fetch", async (url: unknown) => {
-    assert.equal(url, "http://127.0.0.1:14100/v1/chat/completions");
+  const upstream = t.mock.fn(async (input: Parameters<typeof transport.requestGatewayHttp>[0]) => {
+    assert.equal(input.url, "http://127.0.0.1:14100/v1/chat/completions");
     assert.equal(store.usedRequests, 1, "admission must commit before sending upstream");
     assert.equal(store.effects.length, 1);
     if (upstreamError) throw upstreamError;
-    return new Response(JSON.stringify(upstreamBody ?? { object: "chat.completion", model,
+    const body = JSON.stringify(upstreamBody ?? { object: "chat.completion", model,
       choices: [{ index: 0, finish_reason: "stop", message: { content: "offline" } }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }),
-    { status: upstreamStatus, headers: { "content-type": "application/json" } });
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    return Object.assign(Readable.from([Buffer.from(body)], { objectMode: false }), { statusCode: upstreamStatus, statusMessage: "Fixture",
+      headers: { "content-type": "application/json" }, rawHeaders: ["content-type", "application/json"], rawTrailers: [] }) as unknown as Awaited<ReturnType<typeof transport.requestGatewayHttp>>;
   });
-  return { errors, upstream, request: () => app.inject({ method: "POST", url: "/gateway/v1/chat/completions",
-    headers: { authorization: `Bearer ${token}` }, payload: { model, messages: [{ role: "user", content: "offline" }] } }) };
+  upstreamImpl = upstream;
+  const requestId = randomUUID();
+  return { errors, upstream, receipt: async () => (await app.inject({ method: "GET", url: `/gateway/_settlement/${requestId}`,
+    headers: { authorization: `Bearer ${token}` } })).json(),
+    request: () => app.inject({ method: "POST", url: "/gateway/v1/chat/completions",
+    headers: { authorization: `Bearer ${token}`, "x-deepsonar-request-id": requestId },
+    payload: { model, messages: [{ role: "user", content: "offline" }] } }) };
 }
 
 async function conflictCount(code: string, exhausted = false): Promise<number> {
@@ -160,11 +197,11 @@ async function conflictCount(code: string, exhausted = false): Promise<number> {
   return line ? Number(line.slice(prefix.length)) : 0;
 }
 
-async function assertConsumer(response: { statusCode: number; body: string }, degraded: boolean) {
+async function assertConsumer(response: { statusCode: number; body: string }, degraded: boolean, receipt = { status: "unknown" } as Row) {
   const body = JSON.parse(response.body);
   // Exercise both the full HTTP envelope and the SDK's message-only error text.
-  for (const error of [`${response.statusCode} ${response.body}`, `${response.statusCode}: ${body.error.message}`]) {
-    const boundary = await createFailureBoundary(error);
+  for (const error of [`${response.statusCode} ${response.body}`, `${response.statusCode}: ${body.error?.message ?? "upstream response"}`]) {
+    const boundary = await createFailureBoundary(error, receipt);
     try {
       if (degraded) {
         await boundary.event("agent_start");
@@ -216,7 +253,8 @@ for (const selected of ["main", "observational_memory"] as const) {
       assert.deepEqual(fixture.errors, []);
       assert.equal(admissionAttempts, 3);
       assert.equal(fixture.upstream.mock.callCount(), 0);
-      assert.deepEqual(store, emptyStore());
+      assert.deepEqual({ ...store, receipts: [] }, emptyStore());
+      assert.equal(store.receipts.length, 1, "a separate durable no-effect receipt survives the rolled-back admission");
       assert.deepEqual(rollbacks.map((state) => [state.usedRequests, state.effects.length]), [[1, 1], [1, 1], [1, 1]]);
       const body = response.json();
       assert.equal(body.error_code, "database_conflict");
@@ -226,7 +264,7 @@ for (const selected of ["main", "observational_memory"] as const) {
       else { assert.equal(body.error.type, "database_conflict"); assert.equal(body.error.effect_status, undefined); }
       assert.equal(await conflictCount(code), before + 3);
       assert.equal(await conflictCount(code, true), exhaustedBefore + 1);
-      await assertConsumer(response, selected === "observational_memory");
+      await assertConsumer(response, selected === "observational_memory", selected === "observational_memory" ? await fixture.receipt() : { status: "unknown" });
     });
   }
 
@@ -278,8 +316,8 @@ for (const spoof of [false, true]) {
     const fixture = setup(t, "observational_memory", "40P01", 0, 503,
       spoof ? conflictFixture : { error: { type: "overloaded_error", message: "offline upstream unavailable" } });
     const response = await fixture.request();
-    assert.equal(response.statusCode, 409, response.body);
-    assert.equal(response.json().error.type, "workload_usage_unknown");
+    assert.equal(response.statusCode, 503, response.body);
+    assert.equal((await fixture.receipt()).status, "unknown");
     assert.equal(fixture.upstream.mock.callCount(), 1);
     assert.equal(store.effects[0]?.status, "unknown");
     assert.equal(store.ledger[0]?.settlement_status, "unknown");
@@ -308,7 +346,7 @@ test("OM native pre-request failure emits the real RPC carrier only after durabl
   assert.equal(store.ledger.length, 1);
   assert.equal(store.ledger[0]?.total_tokens, 0);
   assert.equal(store.ledger[0]?.settlement_status, "settled");
-  await assertConsumer(response, true);
+  await assertConsumer(response, true, await fixture.receipt());
 });
 
 test("OM pre-request failure remains hard when zero-usage settlement cannot commit", async (t) => {
@@ -336,8 +374,8 @@ test("OM settlement conflict is not retried or relabeled not_started after upstr
   settlementError = databaseError;
   t.mock.method(console, "error", () => {});
   const response = await fixture.request();
-  assert.equal(response.statusCode, 409, response.body);
-  assert.equal(response.json().error.type, "workload_usage_unknown");
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal((await fixture.receipt()).status, "pending");
   assert.equal(admissionAttempts, 1);
   assert.equal(settlementAttempts, 1);
   assert.equal(fixture.upstream.mock.callCount(), 1);

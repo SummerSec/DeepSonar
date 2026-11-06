@@ -1,4 +1,4 @@
-import type { RepairFeedbackCategory } from "@deepsonar/shared-types";
+import type { RepairFeedbackCategory, HumanPayload } from "@deepsonar/shared-types";
 
 /**
  * Process-local bridge between a running Agent Job and the Platform Tool API.
@@ -184,6 +184,22 @@ export const platformRuntimeHandlerRegistry: RuntimeHandlerRegistry = new InMemo
 
 export const runtimeHandlerRegistry = platformRuntimeHandlerRegistry;
 
+export type RuntimeTerminalState = "human" | "done" | "hub_decision" | null;
+const terminalStateReaders = new Map<string, { attemptId: string; read: () => RuntimeTerminalState; humanSubject?: () => HumanPayload["subject"] | null }>();
+/** Host-only, read-only projection. The callback cannot be supplied by Control input. */
+export function registerRuntimeTerminalState(jobId: string, attemptId: string, read: () => RuntimeTerminalState, humanSubject?: () => HumanPayload["subject"] | null): void {
+  terminalStateReaders.set(jobId, { attemptId, read, humanSubject });
+}
+export function readRuntimeTerminalState(jobId: string, attemptId: string): RuntimeTerminalState {
+  const reader = terminalStateReaders.get(jobId);
+  return reader?.attemptId === attemptId ? reader.read() : null;
+}
+
+export function readRuntimeHumanSubject(jobId: string, attemptId: string): HumanPayload["subject"] | null {
+  const reader = terminalStateReaders.get(jobId);
+  return reader?.attemptId === attemptId && reader.read() === "human" ? reader.humanSubject?.() ?? null : null;
+}
+
 export function registerRuntimeHandler(
   jobId: string,
   handler: PlatformRuntimeHandler,
@@ -202,6 +218,7 @@ export function registerRuntimeHandler(
 }
 
 export function unregisterRuntimeHandler(jobId: string, operationId?: string): boolean {
+  if (operationId === undefined) terminalStateReaders.delete(jobId);
   return platformRuntimeHandlerRegistry.unregister(jobId, operationId);
 }
 

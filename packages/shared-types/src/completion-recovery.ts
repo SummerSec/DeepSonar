@@ -10,7 +10,7 @@ export const CompletionRecoveryDecision = z.object({
   target_attempt_id: z.string().uuid(),
   expected_recovery_revision: revision,
   expected_evidence_sha256: sha256,
-  action: z.enum(["reconcile_effects", "stop"]),
+  action: z.enum(["reconcile_effects", "stop", "release_stale"]),
   reason: z.string().trim().min(1).max(500).regex(/\S/u),
 }).strict();
 export type CompletionRecoveryDecision = z.infer<typeof CompletionRecoveryDecision>;

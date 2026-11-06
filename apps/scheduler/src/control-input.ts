@@ -26,6 +26,7 @@ export const CONTROL_INPUT_ERROR_CODES = {
   invalidCredential: "invalid_credential",
   invalidModel: "invalid_model",
   runtimeImageNotReady: "runtime_image_not_ready",
+  piOmConfigurationInvalid: "pi_om_configuration_invalid",
   invalidVerification: "invalid_verification",
   invalidProgress: "invalid_progress",
   invalidDone: "invalid_done",
@@ -75,6 +76,7 @@ function inputShape(value: unknown): string {
 const AGENT_CORRECTABLE_CONTROL_CODES: ReadonlySet<ControlInputErrorCode> = new Set([
   CONTROL_INPUT_ERROR_CODES.invalidPayload,
   CONTROL_INPUT_ERROR_CODES.planStale,
+  CONTROL_INPUT_ERROR_CODES.recoveryStale,
   CONTROL_INPUT_ERROR_CODES.planContext,
   CONTROL_INPUT_ERROR_CODES.planBudget,
   CONTROL_INPUT_ERROR_CODES.planUnproven,

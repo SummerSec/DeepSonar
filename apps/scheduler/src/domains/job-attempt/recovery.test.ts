@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CompletionRecoveryDecision } from "@deepsonar/shared-types";
+import { CompletionRecoveryDecision, repairFeedbackFromControlRejection } from "@deepsonar/shared-types";
+import { ControlInputError } from "../../control-input.js";
 import { completionRecoveryFeedback, completionRecoveryIdentity, recoveryGrantForHub, recoveryUsageIsKnown,
   type CompletionRecoveryEvidence, type CompletionRecoveryState } from "./recovery.js";
 
@@ -70,4 +71,17 @@ test("unknown-effect feedback preserves key/revision/bounds and reports omitted 
   assert.deepEqual(feedback.accepted_effects, evidence.acceptedEffects);
   assert.equal((feedback.expected as Record<string, unknown>).accepted_effects_remaining, 39);
   assert.match(feedback.next_action!, /新 key|不要重放/);
+});
+
+// The runner must receive a correctable withdrawal instruction, never a new grant.
+test("stale recovery feedback permits only an original-grant withdrawal", () => {
+  const error = new ControlInputError("recovery_stale", "Frozen recovery observation changed", "recovery");
+  assert.equal(error.retryable, true);
+  const feedback = repairFeedbackFromControlRejection({ operation: "submit_hub_decision", code: error.code,
+    message: error.message, retryable: error.retryable, statusCode: 422 });
+  assert.equal(feedback.category, "model_correctable");
+  assert.match(feedback.next_action!, /release_stale/);
+  assert.match(feedback.next_action!, /原冻结 grant/);
+  assert.deepEqual(recoveryGrantForHub(hub, { ...decision, action: "release_stale" }), grant);
+  assert.throws(() => recoveryGrantForHub(hub, { ...decision, action: "release_stale", expected_recovery_revision: 4 }), /recovery_not_authorized/);
 });

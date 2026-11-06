@@ -297,9 +297,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-CTRL-010 完成未知效果的受治理恢复
 
-- **规范要求**：`COMPLETION_EFFECT_UNKNOWN` / `REPAIR_USAGE_UNKNOWN` 必须保留原负回执，并在同一 Job 事务持久化宿主恢复事实；恢复 Hub 只能处理 Scheduler 明确授予的 project/Canvas/Job/Attempt/快照引用，以 revision 与证据摘要 CAS 提交 `reconcile_effects` 或 `stop`。恢复不得与 complete、intents、payload_file 或 plan_basis 混合。只能用精确 effect 的既有宿主证据纯数据库对账，禁止重放未知外部动作、复活终态或自动 succeeded；原活动 Attempt 修正后仍须通过原 Completion/Verify/Plan 门。
+- **规范要求**：`COMPLETION_EFFECT_UNKNOWN` / `REPAIR_USAGE_UNKNOWN` 必须保留原负回执，并在同一 Job 事务持久化宿主恢复事实；恢复 Hub 只能处理 Scheduler 明确授予的 project/Canvas/Job/Attempt/快照引用，以 revision 与证据摘要 CAS 提交 `reconcile_effects` 或 `stop`；已启动 stale Hub 可用原 grant 提交无目标效果的 `release_stale` 并正常退出。恢复不得与 complete、intents、payload_file 或 plan_basis 混合。只能用精确 effect 的既有宿主证据纯数据库对账，禁止重放未知外部动作、复活终态或自动 succeeded；原活动 Attempt 修正后仍须通过原 Completion/Verify/Plan 门。
 - **决策来源**：#874 将“终态不能提交”收敛为持久可观察、去重且有界的恢复过程，而不扩大模型的权限与副作用边界；见 [ADR-0015](adr/0015-governed-completion-recovery.md)。
-- **实现状态**：当前修复分支实现 v1，最终 SHA 的 Actions 尚待验收。独立复核发现已排队但从未启动的恢复 Hub 可因迟到证据失效而阻塞后续恢复，已补严格持久绑定、无任何 Attempt/effect 的失效 Hub 收口源码，覆盖证据变化、原 deadline 与原执行关闭，仍待实际 PG 验收；不会放宽旧 grant、重置原期限或额度。已退出会话或新 Attempt 的完整继续执行不属于 v1，不据回执恢复原运行器。
+- **实现状态**：当前修复分支实现 v1，最终 SHA 的 Actions 尚待验收。独立复核发现已排队但从未启动的恢复 Hub 可因迟到证据失效而阻塞后续恢复，已补严格持久绑定、无任何 Attempt/effect 的失效 Hub 收口源码，覆盖证据变化、原 deadline 与原执行关闭，仍待实际 PG 验收；不会放宽旧 grant、重置原期限或额度。v1 不提供新执行；#903 通过 [ADR 0016](adr/0016-repair-execution-generations.md)增加显式准入的新执行代际，Gateway/完成门共享归属并保留原期限/累计预算。历史回执不授权恢复。
 - **代码入口**：[恢复 schema](../../packages/shared-types/src/completion-recovery.ts)、[恢复事实与泵](../../apps/scheduler/src/domains/job-attempt/recovery.ts)、[回执事务](../../apps/scheduler/src/domains/event-ingestion/completion-receipt.ts)、[Hub application](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Reaper](../../apps/scheduler/src/reaper.ts)。
 - **验证证据**：`pnpm ci:unit:completion-recovery`、`pnpm ci:integration:completion-recovery`、`pnpm ci:integration:platform-api`；核对原 key/revision 重放、跨项目/Attempt/快照拒绝、无权恢复引用、并发 CAS、重启去重、未知/缺失 usage、pause/human 门及 deadline/额度停止。入口并非已执行结果，详细范围见[完成回执专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。
 
@@ -680,9 +680,9 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### FR-CRED-003 Model Gateway 唯一出口
 
-- **规范要求**：真实模型请求必须经 Scheduler-owned Model Gateway/受控 proxy，Job 只持短期 token；Gateway 必须按 Job deadline、allowed_models、请求/Token 额度和脱敏规则转发，不得把长期 Provider key 注入 Sandbox。
-- **决策来源**：模型请求是外部副作用和计费边界，统一出口才能限额、审计和撤销。
-- **实现状态**：as-built；用量写 `job_usage_ledger`，不保存 prompt/completion/headers。已接入 `main` 与 `observational_memory` 的内核签发 token 身份，后台只能访问冻结的 provider/model/route；总用量与 memory 归因分开，质量/任务单位成本不把后台调用冒充主执行效果。终态撤销和 Job 状态更新共用同一终态事务，未知/待结算用量不被吞掉。
+- **规范要求**：真实模型请求必须经 Scheduler-owned Model Gateway/受控 proxy，Job 只持短期 token；Gateway 必须按 Job deadline、allowed_models、请求/Token 额度和脱敏规则准入，不得把长期 Provider key 注入 Sandbox。放行后保持业务请求/响应原始字节与端到端头；仅处理认证、绑定目标和必要 HTTP 边界，不隐式重试/重定向或静默改写模型/输出参数。
+- **决策来源**：模型请求是外部副作用和计费边界，统一出口才能限额、审计和撤销；#923 及 [ADR 0017](adr/0017-transparent-gateway-settlement.md)要求透明数据面与准入/结算分离。
+- **实现状态**：as-built；用量写 `job_usage_ledger`，不保存 prompt/completion/headers。已接入 `main` 与 `observational_memory` 的内核签发 token 身份，后台只能访问冻结的 provider/model/route；总用量与 memory 归因分开，质量/任务单位成本不把后台调用冒充主执行效果。终态撤销和 Job 状态更新共用同一终态事务，未知/待结算用量不被吞掉。#923 分支实现原始有界请求、单次 HTTP/SSE 传输及 OM scoped 结算查询，wrapper 确认 durable settled 前不提交终止结果；最终 SHA Actions 待验，协议限制见[专题](../MODEL_GATEWAY_TRANSPARENCY.md)。
 - **代码入口**：[Gateway](../../apps/scheduler/src/gateway.ts)、[Gateway guard](../../apps/scheduler/src/domains/provider-adapter/gateway-guard.ts)、[Gateway tests](../../apps/scheduler/src/gateway-usage.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`。
 
@@ -946,9 +946,9 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### NFR-PERF-004 Gateway/Evidence 有界传输
 
-- **规范要求**：Gateway 请求体、尝试次数与重试延迟必须遵守[Gateway 源码上限](../../apps/scheduler/src/gateway.ts)；Evidence 流读取/解压/记录/保留按[证据实现](../../apps/scheduler/src/evidence.ts)有界，超限必须截断并标记，不得无界缓冲。
+- **规范要求**：Gateway 请求体及观察副本必须遵守[Gateway 源码上限](../../apps/scheduler/src/gateway.ts)，透明上游只发起一次交换；响应写入遵守背压和取消；Evidence 流读取/解压/记录/保留按[证据实现](../../apps/scheduler/src/evidence.ts)有界，超限必须截断并标记，不得无界缓冲。
 - **决策来源**：上游和压缩流都可能提供恶意大输入，边界必须在 host 侧执行。
-- **实现状态**：as-built；无独立 SLA，只有上述代码/配置边界。
+- **实现状态**：as-built；无独立 SLA。#923 分支将请求流有界收全后准入，响应即时转发；压缩仅解码观察副本，不改转发表示。最终 SHA 验证待完成，见[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)。
 - **代码入口**：[Gateway constants](../../apps/scheduler/src/gateway.ts)、[Evidence limits](../../apps/scheduler/src/evidence.ts)、[stream tests](../../apps/scheduler/src/evidence-stream.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:recovery`、`pnpm ci:unit:runtime-sandbox`。
 

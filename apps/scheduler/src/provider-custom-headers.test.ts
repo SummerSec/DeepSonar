@@ -5,6 +5,7 @@ import { extractBaseUrlFromSettings } from "./provider-settings.js";
 import {
   composeUpstreamRequestHeaders,
   isForbiddenProviderHeader,
+  hasInvalidProviderHeaders,
   PROVIDER_CUSTOM_HEADER_LIMITS,
   providerCustomHeadersFromSettings,
   sanitizeProviderCustomHeaders,
@@ -16,49 +17,33 @@ import {
 
 test("configured provider headers are lower-cased and preserved", () => {
   const { headers, rejected } = sanitizeProviderCustomHeaders({ "X-Traffic-Type": " eval " });
-  assert.deepEqual(headers, { "x-traffic-type": "eval" });
+  assert.deepEqual(headers, { "x-traffic-type": " eval " });
   assert.deepEqual(rejected, []);
 });
 
-test("authentication, framing, transport and control headers cannot be configured", () => {
-  const attempt = sanitizeProviderCustomHeaders({
-    authorization: "Bearer attacker",
-    "x-api-key": "sk-attacker",
-    "anthropic-api-key": "deepsonarjob_12345678_leaked",
-    "proxy-authorization": "Basic x",
-    host: "internal.example",
-    "content-length": "1",
-    "content-type": "text/plain",
-    accept: "*/*",
-    connection: "close",
-    "transfer-encoding": "chunked",
-    "user-agent": "spoofed",
-    "x-app": "spoofed",
-    "anthropic-version": "1999-01-01",
-    "anthropic-beta": "x",
-    "x-deepsonar-job": "1",
-    "x-traffic-type": "eval",
-  });
-  assert.deepEqual(attempt.headers, { "x-traffic-type": "eval" });
-  for (const name of [
-    "authorization",
-    "x-api-key",
-    "anthropic-api-key",
-    "proxy-authorization",
-    "host",
-    "content-length",
-    "content-type",
-    "accept",
-    "connection",
-    "transfer-encoding",
-    "user-agent",
-    "x-app",
-    "anthropic-version",
-    "anthropic-beta",
-    "x-deepsonar-job",
-  ]) {
-    assert.ok(attempt.rejected.includes(`forbidden:${name}`), `${name} must be refused`);
+test("authentication, framing and exact controls are consumed; business protocol headers remain", () => {
+  const forbidden = ["authorization", "x-api-key", "api-key", "anthropic-api-key",
+    "proxy-authorization", "host", "content-length", "connection", "transfer-encoding",
+    "x-deepsonar-job", "x-deepsonar-workload", "x-deepsonar-request-id"];
+  for (const name of forbidden) {
+    const resolution = sanitizeProviderCustomHeaders({ [name]: "synthetic" });
+    assert.deepEqual(resolution.headers, {});
+    assert.deepEqual(resolution.rejected, [`forbidden:${name}`]);
+    assert.equal(hasInvalidProviderHeaders(resolution), false);
   }
+  const allowed = { "content-type": "application/json", accept: "*/*", "accept-encoding": "gzip",
+    "user-agent": "fixture-cli", "x-app": "fixture", "anthropic-version": "2023-06-01",
+    "anthropic-beta": "new-feature", "anthropic-future-extension": "yes", "proxy-business": "yes",
+    "x-deepsonar-business-extension": "yes", "x-traffic-type": "eval", cookie: "route=fixture",
+    "x-empty": "" };
+  assert.deepEqual(sanitizeProviderCustomHeaders(allowed), { headers: allowed, rejected: [] });
+});
+
+test("Connection nominates additional transport fields without reserving their prefix", () => {
+  const resolution = sanitizeProviderCustomHeaders({ Connection: "X-Route, x-transport",
+    "X-Route": "hop-only", "x-transport": "hop-only", "x-transport-business": "keep" });
+  assert.deepEqual(resolution.headers, { "x-transport-business": "keep" });
+  assert.deepEqual(resolution.rejected, ["forbidden:connection", "forbidden:x-route", "forbidden:x-transport"]);
 });
 
 test("header injection, illegal names and oversized values are refused", () => {
@@ -71,7 +56,7 @@ test("header injection, illegal names and oversized values are refused", () => {
 
   const badName = sanitizeProviderCustomHeaders({ "x bad": "1", "x:y": "1", "": "1" });
   assert.deepEqual(badName.headers, {});
-  assert.equal(badName.rejected.filter((reason) => reason.startsWith("invalid_name:")).length, 3);
+  assert.equal(badName.rejected.filter((reason) => reason.startsWith("invalid_name")).length, 3);
 
   const longName = sanitizeProviderCustomHeaders({ [`x-${"a".repeat(PROVIDER_CUSTOM_HEADER_LIMITS.maxNameLength)}`]: "1" });
   assert.deepEqual(longName.headers, {});
@@ -85,8 +70,16 @@ test("header injection, illegal names and oversized values are refused", () => {
   assert.deepEqual(nonString.headers, { "x-ok": "1" });
   assert.deepEqual(nonString.rejected, ["invalid_value:x-num"]);
 
-  const empty = sanitizeProviderCustomHeaders({ "x-empty": "   " });
-  assert.deepEqual(empty.headers, {});
+  const empty = sanitizeProviderCustomHeaders({ "x-empty": "", "x-space": "   " });
+  assert.deepEqual(empty.headers, { "x-empty": "", "x-space": "   " });
+  for (const resolution of [injection, nul, badName, longName, longValue, nonString]) {
+    assert.equal(hasInvalidProviderHeaders(resolution), true);
+  }
+  for (const value of ["a\u0001b", "a\u007fb", "你好"]) {
+    assert.equal(hasInvalidProviderHeaders(sanitizeProviderCustomHeaders({ "x-illegal": value })), true);
+  }
+  assert.equal(hasInvalidProviderHeaders(sanitizeProviderCustomHeaders({ " x-name ": "value" })), true);
+  assert.equal(hasInvalidProviderHeaders(sanitizeProviderCustomHeaders({ "X-Route": "a", "x-route": "b" })), true);
 });
 
 test("header count is capped instead of silently truncating", () => {
@@ -98,10 +91,10 @@ test("header count is capped instead of silently truncating", () => {
   assert.deepEqual(capped.rejected, ["too_many_headers"]);
 });
 
-test("forbidden helper covers prefixes and exact names", () => {
-  assert.equal(isForbiddenProviderHeader("X-DeepSonar-Anything"), true);
-  assert.equal(isForbiddenProviderHeader("proxy-x"), true);
-  assert.equal(isForbiddenProviderHeader("anthropic-anything"), true);
+test("forbidden helper never reserves business prefixes", () => {
+  assert.equal(isForbiddenProviderHeader("X-DeepSonar-Anything"), false);
+  assert.equal(isForbiddenProviderHeader("proxy-x"), false);
+  assert.equal(isForbiddenProviderHeader("anthropic-anything"), false);
   assert.equal(isForbiddenProviderHeader("x-traffic-type"), false);
 });
 
@@ -234,4 +227,145 @@ test("compose keeps authentication final and lets configured headers ride below 
   const sanitized = sanitizeProviderCustomHeaders({ authorization: "Bearer attacker" }).headers;
   const final = composeUpstreamRequestHeaders({ configured: sanitized, auth: { authorization: "Bearer real" } });
   assert.equal(final.authorization, "Bearer real");
+});
+test("Pi 1.4.0 inference layers are provider then override then selected definition; catalog is provider only", () => {
+  const settings = { providers: { fixture: { baseUrl: "http://127.0.0.1/v1",
+    headers: { "X-Route": "provider", "x-provider": "p" },
+    modelOverrides: { selected: { headers: { "x-route": "override", "x-override": "o" } } },
+    models: [{ id: "selected", headers: { "X-Route": "model", "x-model": "m" } },
+      { id: "other", headers: { "x-other": "never" } }],
+  } } };
+  assert.deepEqual(providerCustomHeadersFromSettings(settings, undefined, { purpose: "catalog" }).headers,
+    { "x-route": "provider", "x-provider": "p" });
+  assert.deepEqual(providerCustomHeadersFromSettings(settings, undefined, { purpose: "inference", model: "selected" }),
+    { headers: { "x-route": "model", "x-provider": "p", "x-override": "o", "x-model": "m" }, rejected: [] });
+  assert.deepEqual(providerCustomHeadersFromSettings(settings, undefined,
+    { purpose: "inference", model: "other-builtin" }),
+    { headers: { "x-route": "provider", "x-provider": "p" }, rejected: [] });
+});
+
+test("inference refuses duplicate models, ambiguous providers and model endpoint changes", () => {
+  for (const settings of [
+    { providers: { a: { models: [{ id: "m" }, { id: "m" }] } } },
+    { providers: { a: { models: [{ id: "m" }] }, b: { models: [{ id: "m" }] } } },
+    { providers: { a: { baseUrl: "http://127.0.0.1/v1", models: [{ id: "m", baseUrl: "http://127.0.0.1/other" }] } } },
+  ]) {
+    const result = providerCustomHeadersFromSettings(settings, undefined, { purpose: "inference", model: "m" });
+    assert.deepEqual(result.headers, {});
+    assert.equal(hasInvalidProviderHeaders(result), true);
+    assert.match(result.rejected[0]!, /^invalid_model:/u);
+  }
+});
+
+test("invalid model header layers cannot be repaired by a higher precedence layer", () => {
+  for (const headers of [{ "x-raw": "\rvalue" }, { "x-raw": "value\n" },
+    { "X-Raw": "first", "x-raw": "second" }]) {
+    const result = providerCustomHeadersFromSettings({ providers: { a: {
+      headers, models: [{ id: "m", headers: { "x-raw": "replacement" } }],
+    } } }, undefined, { purpose: "inference", model: "m" });
+    assert.equal(hasInvalidProviderHeaders(result), true);
+    assert.deepEqual(result.headers, {});
+  }
+  assert.equal(hasInvalidProviderHeaders(sanitizeProviderCustomHeaders({ authorization: "key\n" })), true);
+  assert.equal(hasInvalidProviderHeaders(sanitizeProviderCustomHeaders({ Authorization: "a", authorization: "b" })), true);
+});
+
+test("inference never resolves another provider's model and supports built-in override-only definitions", () => {
+  const result = providerCustomHeadersFromSettings({ providers: {
+    a: { baseUrl: "http://127.0.0.1/v1", models: [{ id: "a-model" }] },
+    b: { baseUrl: "http://127.0.0.1/other", models: [{ id: "b-model", headers: { "x-secret-route": "b" } }] },
+  } }, "http://127.0.0.1/v1", { purpose: "inference", model: "b-model" });
+  assert.deepEqual(result, { headers: {}, rejected: [] }, "another provider model must not contribute headers");
+  assert.deepEqual(providerCustomHeadersFromSettings({ providers: { a: {
+    headers: { "x-layer": "provider" }, modelOverrides: { builtin: { headers: { "x-layer": "override" } } },
+  } } }, undefined, { purpose: "inference", model: "builtin" }),
+  { headers: { "x-layer": "override" }, rejected: [] });
+});
+
+test("frozen provider disambiguates shared endpoint and model without consulting default route", () => {
+  const providers = {
+    a: { baseUrl: "http://127.0.0.1/v1", models: [{ id: "same", headers: { "x-model": "a" } }], headers: { "x-route": "a" } },
+    b: { baseUrl: "http://127.0.0.1/v1", models: [{ id: "same", headers: { "x-model": "b" } }], headers: { "x-route": "b" } },
+  };
+  const document = { "llm-pi-ai": { providers }, "agent-default-model": { provider: "a", model: "same" } };
+  for (const settings of [{ providers }, document, { config: document }, { config: stringify(document) }]) {
+    const result = providerCustomHeadersFromSettings(settings, "http://127.0.0.1/v1",
+      { purpose: "inference", model: "same", provider: "b" });
+    assert.deepEqual(result, { headers: { "x-route": "b", "x-model": "b" }, rejected: [] });
+    for (const selection of [
+      { purpose: "inference" as const, model: "same", provider: "missing" },
+    ]) assert.equal(hasInvalidProviderHeaders(providerCustomHeadersFromSettings(settings, "http://127.0.0.1/v1", selection)), true);
+  }
+});
+
+test("frozen provider headers require the same explicitly bound endpoint", () => {
+  const settings = { providers: {
+    a: { baseUrl: "http://127.0.0.1/v1", models: [{ id: "same" }], headers: { "x-route": "a" } },
+    b: { baseUrl: "http://127.0.0.1/other", models: [{ id: "same" }], headers: { "x-route": "b" } },
+  } };
+  for (const bound of [undefined, "http://127.0.0.1/v1", "invalid-url"]) {
+    const result = providerCustomHeadersFromSettings(settings, bound,
+      { purpose: "inference", model: "same", provider: "b" });
+    assert.deepEqual(result.headers, {});
+    assert.equal(hasInvalidProviderHeaders(result), true);
+    assert.deepEqual(result.rejected, ["invalid_model:provider_endpoint_mismatch"]);
+  }
+});
+
+test("frozen provider without declared endpoint inherits only the explicit bound target", () => {
+  const settings = { providers: {
+    a: { baseUrl: "http://127.0.0.1/other", models: [{ id: "same" }], headers: { "x-route": "a" } },
+    b: { api: "openai-completions", models: [{ id: "same" }], headers: { "x-route": "b" } },
+  } };
+  const selection = { purpose: "inference" as const, model: "same", provider: "b" };
+  assert.deepEqual(providerCustomHeadersFromSettings(settings, "http://127.0.0.1/bound", selection),
+    { headers: { "x-route": "b" }, rejected: [] });
+  assert.equal(hasInvalidProviderHeaders(providerCustomHeadersFromSettings(settings, undefined, selection)), true);
+});
+
+test("remote-discovered inference models work with default credentials and header-only profiles", () => {
+  for (const [settings, expected] of [
+    [{}, {}],
+    [null, {}],
+    [{ providers: { single: { headers: { "X-Tenant": "fixture" } } } }, { "x-tenant": "fixture" }],
+  ] as const) {
+    assert.deepEqual(providerCustomHeadersFromSettings(settings, "http://127.0.0.1/bound",
+      { purpose: "inference", model: "remote-discovered" }), { headers: expected, rejected: [] });
+  }
+});
+
+test("frozen built-in providers work without a configured provider catalog", () => {
+  const selection = { purpose: "inference" as const, provider: "builtin", model: "remote-model" };
+  for (const settings of [null, {}, { providers: {} }]) {
+    assert.deepEqual(providerCustomHeadersFromSettings(settings, "http://127.0.0.1/v1", selection),
+      { headers: {}, rejected: [] });
+  }
+  assert.deepEqual(providerCustomHeadersFromSettings({ headers: { "x-top-level": "bound" } },
+    "http://127.0.0.1/v1", selection), { headers: { "x-top-level": "bound" }, rejected: [] });
+  assert.deepEqual(providerCustomHeadersFromSettings({ providers: { builtin: {
+    modelOverrides: { "remote-model": { headers: { "x-override": "builtin" } } },
+  } } }, "http://127.0.0.1/v1", selection), { headers: { "x-override": "builtin" }, rejected: [] });
+  for (const settings of [
+    { providers: { other: { headers: { "x-other": "never" } } } },
+    { env: { OPENAI_BASE_URL: "http://127.0.0.1/other" }, headers: { "x-other": "never" } },
+  ]) {
+    const result = providerCustomHeadersFromSettings(settings, "http://127.0.0.1/v1", selection);
+    assert.deepEqual(result.headers, {});
+    assert.equal(hasInvalidProviderHeaders(result), true);
+  }
+});
+
+
+test("partial model overrides and custom models retain provider defaults for other built-ins", () => {
+  for (const partial of [
+    { modelOverrides: { customized: { headers: { "x-layer": "override" } } } },
+    { models: [{ id: "customized", headers: { "x-layer": "definition" } }] },
+    { modelOverrides: { customized: { headers: { "x-layer": "override" } } },
+      models: [{ id: "custom", headers: { "x-custom": "never" } }] },
+  ]) {
+    const settings = { providers: { builtin: { ...partial, headers: { "x-layer": "provider" } } } };
+    assert.deepEqual(providerCustomHeadersFromSettings(settings, "http://127.0.0.1/v1",
+      { purpose: "inference", model: "other-builtin", provider: "builtin" }),
+      { headers: { "x-layer": "provider" }, rejected: [] });
+  }
 });

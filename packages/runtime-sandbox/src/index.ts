@@ -133,6 +133,7 @@ export type {
   RuntimeRunOptions,
 } from "./runtime-host.js";
 export { assertWorkspaceWritePath, shellQuote } from "./runtime-host.js";
+export { MODEL_REQUEST_POLICY_BASE_URL, MODEL_REQUEST_POLICY_PATH, MODEL_REQUEST_POLICY_SOURCE, modelRequestPolicyCommand } from "./model-request-policy.js";
 export type {
   AgentCommandConfig,
   AgentMcpConfig,
@@ -375,3 +376,6 @@ export type {
   ContextTransformManifest,
   ContextTransformStage,
 } from "./context-contract.js";
+
+export { hasInvalidProviderHeaders, sanitizeProviderCustomHeaders, isForbiddenProviderHeader,
+  PROVIDER_CUSTOM_HEADER_LIMITS, type ProviderCustomHeaderResolution, type ProviderCustomHeaders } from "./provider-header-policy.js";

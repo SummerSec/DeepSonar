@@ -60,6 +60,23 @@ async function fakeGateway(scenario, options = {}) {
   const requests = [];
   const server = createServer(async (req, res) => {
     try {
+      if (req.method === "GET" && req.url === "/om/_allowance") {
+        assert.equal(req.headers.authorization, "Bearer offline-observational_memory");
+        res.writeHead(scenario === "quota" ? 429 : 200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ remaining_tokens: scenario === "quota" ? 0 : 128 }));
+        return;
+      }
+      if (req.method === "GET" && req.url.startsWith("/om/_settlement/")) {
+        assert.equal(req.headers.authorization, "Bearer offline-observational_memory");
+        const requestId = req.url.slice("/om/_settlement/".length);
+        const row = requests.find((entry) => entry.request_id === requestId);
+        const status = !row ? "not_found" : ["transient", "database-conflict"].includes(scenario)
+          ? "not_started" : row.status === 200 && scenario !== "protocol" ? "settled" : "unknown";
+        res.writeHead(row ? 200 : 404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ status, ...(status === "not_started"
+          ? { reason: scenario === "quota" ? "quota_exhausted" : "gateway_transient" } : {}) }));
+        return;
+      }
       let text = "";
       for await (const chunk of req) {
         text += chunk;
@@ -76,7 +93,14 @@ async function fakeGateway(scenario, options = {}) {
       // Synthetic usage follows request size so the real plugin's progress
       // watermark sees new context rather than an impossible constant window.
       const promptTokens = Math.max(1, Math.ceil(Buffer.byteLength(text) / 4));
-      const row = { workload, model: body.model, stage, status: 200, input_bytes: Buffer.byteLength(text), total_tokens: promptTokens + 16,
+      if (workload === "observational_memory") {
+        assert.match(req.headers["x-deepsonar-request-id"], /^[a-f0-9-]{36}$/u);
+        const outputLimit = body.max_completion_tokens ?? body.max_tokens;
+        assert.ok(Number.isSafeInteger(outputLimit) && outputLimit > 0 && outputLimit <= 128,
+          "actual SDK payload must honor the control allowance before reaching Gateway");
+        assert.equal(body.stream_options?.include_usage, true);
+      }
+      const row = { workload, request_id: req.headers["x-deepsonar-request-id"], model: body.model, stage, status: 200, input_bytes: Buffer.byteLength(text), total_tokens: promptTokens + 16,
         tool_acks: body.messages.filter((message) => message.role === "tool").map((message) =>
           typeof message.content === "string" ? message.content.slice(0, 512) : "nontext") };
       requests.push(row);

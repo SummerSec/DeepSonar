@@ -1,3 +1,4 @@
+import type { GatewayProviderBinding } from "../../gateway-provider-binding.js";
 import type { RuntimeImageSnapshot } from "../../runtime-images.js";
 import type { MissingModule } from "../../skill-sources.js";
 import type { FrozenCapabilityPack } from "../capability-pack/catalog.js";
@@ -44,6 +45,8 @@ export interface RoleRuntimeSnapshotResult {
   credential_id: string | null;
   credential_name: string | null;
   credential_provider: string | null;
+  /** Nonsecret credential configuration binding; absent legacy Jobs must be regenerated. */
+  gateway_provider_binding?: GatewayProviderBinding;
   modules: string[];
   module_selectors: string[];
   expanded_modules: {

@@ -1,6 +1,6 @@
 /**
  * Frontend RepairFeedback projection (#449 / #446).
- * Backend durable RepairFeedback is not shipped yet; classify the data we already have.
+ * Historical diagnostics are distinct from host-authorized current actions.
  */
 
 export const REPAIR_CATEGORIES = [
@@ -44,10 +44,10 @@ export const REPAIR_CATEGORY_META: Record<
     allowUnconditionalRetry: false,
   },
   transient_retryable: {
-    label: "可安全重试",
+    label: "需检查恢复条件",
     tone: "#e8bd70",
     confirmRequired: false,
-    allowUnconditionalRetry: true,
+    allowUnconditionalRetry: false,
   },
   unknown_external_effect: {
     label: "需要确认",
@@ -63,7 +63,7 @@ export const REPAIR_CATEGORY_META: Record<
   },
 };
 
-const MODEL_CORRECTABLE = /invalid_payload|unknown_field|invalid_node_ref|invalid_role|invalid_done|invalid_human|invalid_verification|invalid_progress|invalid_reference|schema|SNAPSHOT_STALE|INVALID_TASK_INTENT/i;
+const MODEL_CORRECTABLE = /invalid_payload|unknown_field|invalid_node_ref|invalid_role|invalid_done|invalid_human|invalid_verification|invalid_progress|invalid_reference|schema|INVALID_TASK_INTENT/i;
 const TRANSIENT = /timeout|orphan|econnreset|etimedout|429|502|503|504|temporar|retry|unreachable|rate_limited/i;
 const FIELD_PATH = /(?:field|path|at)\s+[`'"]?([A-Za-z_][\w.[\]]*)|[A-Za-z_][\w]*\[[0-9]+\](?:\.[A-Za-z_][\w]*)+/;
 
@@ -105,12 +105,13 @@ export function classifyRepairCategory(input: {
   error?: string | null;
   hasUnknownEffects?: boolean;
   hasEffectLedger?: boolean;
+  canCorrect?: boolean;
 }): RepairCategory {
   if (input.hasUnknownEffects) return "unknown_external_effect";
   const status = (input.status ?? "").trim().toLowerCase();
   const { code, message } = parseErrorCode(input.error);
   const haystack = `${code ?? ""} ${message}`;
-  if (MODEL_CORRECTABLE.test(haystack) || MODEL_CORRECTABLE.test(code ?? "")) return "model_correctable";
+  if (input.canCorrect && status === "running" && MODEL_CORRECTABLE.test(haystack)) return "model_correctable";
   const looksTransient = status === "timeout" || status === "orphan" || TRANSIENT.test(haystack);
   if (looksTransient) {
     return input.hasEffectLedger ? "transient_retryable" : "unknown_external_effect";
@@ -126,6 +127,7 @@ export function projectRepairFeedback(input: {
   acceptedEffects?: readonly { effect_kind?: string | null; effect_id?: string | null; status?: string | null }[];
   remainingBudget?: string | null;
   hasEffectLedger?: boolean;
+  currentState?: { authority: "scheduler"; status: string; allowed_actions: readonly string[]; blocker: string | null } | null;
 }): RepairFeedback {
   const unknownEffects = input.unknownEffects ?? [];
   const hasUnknownEffects = unknownEffects.length > 0;
@@ -134,6 +136,8 @@ export function projectRepairFeedback(input: {
     error: input.error,
     hasUnknownEffects,
     hasEffectLedger: input.hasEffectLedger,
+    canCorrect: input.currentState?.authority === "scheduler" && input.currentState.status === input.status
+      && input.currentState.allowed_actions.includes("correct_proposal"),
   });
   const { code, message } = parseErrorCode(input.error);
   const unknownViews: RepairUnknownEffect[] = unknownEffects.map((effect) => ({
@@ -172,9 +176,9 @@ function expectedShape(category: RepairCategory, code: string | null): string | 
 function alternativesFor(category: RepairCategory): string[] {
   switch (category) {
     case "model_correctable":
-      return ["把字段路径与期望形状发回同一会话", "按当前配置重冻后再提交"];
+      return ["按宿主当前许可修正字段和提案"];
     case "transient_retryable":
-      return ["使用同一 Job 安全重试", "等待瞬时故障恢复后再试"];
+      return ["读取宿主恢复投影；效果已结算仍须重新检查生命周期和授权"];
     case "unknown_external_effect":
       return [];
     case "permanent_failure":
@@ -187,13 +191,13 @@ function nextStepFor(category: RepairCategory, unknownEffects: readonly RepairUn
     case "model_correctable":
       return "把出错字段、期望形状和当前观测发回模型，不要无上下文重放。";
     case "transient_retryable":
-      return "可以按同一会话安全重试；次数用尽后再转人工。";
+      return "先读取宿主当前允许动作；历史错误和已结算账本均不授予同会话重试权限。";
     case "unknown_external_effect":
       if (unknownEffects.length > 0 && unknownEffects.every((effect) => effect.effect_kind === "provision")) {
         return "沙箱创建处于未知窗口，可能已有残留。先确认外部状态再决定是否重跑，不要当成无外部后果。";
       }
       return "先确认未决外部效果。未确认前不能当作普通失败，也不能无条件重试。";
     case "permanent_failure":
-      return "需要人工判断原因和影响，再决定是否换配置重跑。";
+      return "读取宿主当前状态，区分平台恢复阻塞与真正需要人的决策；不自动换配置重跑。";
   }
 }

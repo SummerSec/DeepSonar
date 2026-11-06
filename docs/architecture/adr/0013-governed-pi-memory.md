@@ -6,6 +6,8 @@
 > 来源：#815 A/B/C；实现核对基线为 2026-10-31 当前根代码与下方源码入口
 > 关联需求：FR-CAP-009 / NFR-SEC-001
 
+> 后续机制补充（2026-11-05）：[ADR 0017](0017-transparent-gateway-settlement.md) 将响应传输与持久结算确认分离；本 ADR 的准入、权限与 unknown 边界保持，历史运行证据不覆盖新实现。
+
 ## 背景
 
 Pi 已有受治理的扩展边界：扩展必须进入平台注册表并预装在准入镜像，Job 创建时冻结 package、version、integrity、entry、workspace path 和兼容镜像；运行时保持 `--no-extensions`，只注入显式 `-e` stub。当前根 registry 已含 `pi-web-access` 与 pinned `pi-observational-memory@3.1.4`。OM 会在 turn/compaction 后台发起 observer、reflector、dropper 或 catch-up 模型请求，并把 observation/reflection、recall 结果和压缩上下文带入 session/archive，因此它同时触及模型 Gateway、Job 用量、RPC 白名单、配置覆盖、秘密脱敏和镜像准入。

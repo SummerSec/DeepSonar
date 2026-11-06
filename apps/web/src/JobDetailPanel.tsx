@@ -351,13 +351,15 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
         type: detail.job.type,
         status: detail.job.status,
         error: detail.job.error,
+        execution_state: detail.job.execution_state,
         project_id: "",
         canvas_id: null,
       },
       effects: detail.effects,
     })
     : { actions: [], repair: null };
-  const allowJobRetry = !jobProjection.repair || jobProjection.repair.category !== "unknown_external_effect";
+  const allowJobRetry = detail?.job.execution_state?.authority === "scheduler"
+    && detail.job.execution_state.allowed_actions.includes("request_recovery") === true;
   const archivedBlocks = useMemo(() => recordsToStreamBlocks(stream), [stream]);
 
   const loadMoreStream = async () => {

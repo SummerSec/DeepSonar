@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  applyGatewayOutboundModelRewrite,
   containsGatewayApiErrorFrame,
   containsAnthropicRefusalFailureCarrier,
   containsReservedGatewayTransientEnvelope,
@@ -10,9 +9,7 @@ import {
   extractUpstreamReportingModel,
   extractUsageBreakdown,
   joinGatewayUpstreamUrl,
-  rewriteGatewayOutboundModel,
   upstreamAuthHeaders,
-  gatewayInboundProtocolHeaders,
   upstreamFinalAuthHeaders,
   upstreamProtocolHeaders,
 } from "./gateway.js";
@@ -70,34 +67,6 @@ test("gateway auth composition keeps protocol defaults separate from final auth"
   assert.deepEqual(upstreamFinalAuthHeaders("unknown", "sk-test"), {});
 });
 
-// #918: the old `/^anthropic-/` passthrough also matched `anthropic-api-key`, which
-// `extractInboundJobToken` accepts as an inbound Job token — a static path for sending the
-// Job token upstream. The allowlist is now exact.
-test("only allowlisted CLI protocol headers are forwarded upstream", () => {
-  const jobToken = "deepsonarjob_12345678_test-token-value";
-  const forwarded = gatewayInboundProtocolHeaders({
-    authorization: `Bearer ${jobToken}`,
-    "x-api-key": jobToken,
-    "anthropic-api-key": jobToken,
-    "anthropic-version": "2023-06-01",
-    "anthropic-beta": "fine-grained-tool-streaming",
-    "user-agent": "claude-cli/2.1.312 (external, cli)",
-    "x-app": "cli",
-    "x-traffic-type": "eval",
-    cookie: "session=1",
-    "x-deepsonar-job": "internal",
-  });
-  assert.deepEqual(forwarded, {
-    "anthropic-version": "2023-06-01",
-    "anthropic-beta": "fine-grained-tool-streaming",
-    "user-agent": "claude-cli/2.1.312 (external, cli)",
-    "x-app": "cli",
-  });
-  assert.ok(!JSON.stringify(forwarded).includes(jobToken), "the inbound Job token never rides along");
-  assert.deepEqual(gatewayInboundProtocolHeaders({ "anthropic-api-key": jobToken }), {});
-  assert.deepEqual(gatewayInboundProtocolHeaders({ "x-app": ["cli", "other"] }), { "x-app": "cli" });
-});
-
 test("凭据 base_url 已含 /v1 时去掉 Claude Code 重复的版本前缀", () => {
   assert.equal(
     joinGatewayUpstreamUrl("http://127.0.0.1/v1", "v1/messages"),
@@ -113,61 +82,19 @@ test("凭据 base_url 已含 /v1 时去掉 Claude Code 重复的版本前缀", (
   );
 });
 
-test("Gateway 出站把 Claude CLI 别名改写成冻结的 upstream_model", () => {
+test("Gateway prefix mapping uses the complete exact configured path and preserves raw query", () => {
   assert.equal(
-    rewriteGatewayOutboundModel({ requestModel: "fable", upstreamModel: "grok-4.6" }),
-    "grok-4.6",
+    joinGatewayUpstreamUrl("http://127.0.0.1/tenant/v1", "v1/a%2Fb", "?a=1&a=2&empty=&q=%252F+%20"),
+    "http://127.0.0.1/tenant/v1/v1/a%2Fb?a=1&a=2&empty=&q=%252F+%20",
   );
   assert.equal(
-    rewriteGatewayOutboundModel({ requestModel: "Fable", upstreamModel: "grok-4.6" }),
-    "grok-4.6",
+    joinGatewayUpstreamUrl("http://127.0.0.1/tenant/v1", "tenant/v1/messages"),
+    "http://127.0.0.1/tenant/v1/messages",
   );
   assert.equal(
-    rewriteGatewayOutboundModel({ requestModel: "sonnet", upstreamModel: "claude-sonnet-4-5" }),
-    "claude-sonnet-4-5",
+    joinGatewayUpstreamUrl("http://127.0.0.1/v1", "V1/messages"),
+    "http://127.0.0.1/v1/V1/messages",
   );
-  assert.equal(
-    rewriteGatewayOutboundModel({ requestModel: "grok-4.6", upstreamModel: "grok-4.6" }),
-    "grok-4.6",
-  );
-  assert.equal(
-    rewriteGatewayOutboundModel({ requestModel: "fable", upstreamModel: null }),
-    "fable",
-  );
-  assert.equal(
-    rewriteGatewayOutboundModel({ requestModel: "fable", upstreamModel: "  " }),
-    "fable",
-  );
-});
-
-test("Gateway 出站 body 按冻结 snapshot.upstream_model 改写 CLI 别名", () => {
-  const snapshot = {
-    model: "fable",
-    upstream_model: "grok-4.6",
-    runtime_image: { image_key: "base" },
-  };
-  const body = { model: "fable", stream: true, max_tokens: 16 };
-  const rewritten = applyGatewayOutboundModelRewrite(body, snapshot);
-  assert.notEqual(rewritten, body);
-  assert.deepEqual(rewritten, { model: "grok-4.6", stream: true, max_tokens: 16 });
-
-  const mixed = applyGatewayOutboundModelRewrite({ model: "Fable" }, snapshot);
-  assert.equal((mixed as { model: string }).model, "grok-4.6");
-
-  const upstreamId = { model: "grok-4.6" };
-  assert.equal(applyGatewayOutboundModelRewrite(upstreamId, snapshot), upstreamId);
-
-  const alias = { model: "fable" };
-  assert.equal(applyGatewayOutboundModelRewrite(alias, { upstream_model: null }), alias);
-  assert.equal(applyGatewayOutboundModelRewrite(alias, { model: "fable" }), alias);
-  assert.equal(applyGatewayOutboundModelRewrite(alias, null), alias);
-
-  assert.equal(applyGatewayOutboundModelRewrite(null, snapshot), null);
-  assert.equal(applyGatewayOutboundModelRewrite("fable", snapshot), "fable");
-  const arrayBody = [{ model: "fable" }];
-  assert.equal(applyGatewayOutboundModelRewrite(arrayBody, snapshot), arrayBody);
-  const noModel = { stream: true };
-  assert.equal(applyGatewayOutboundModelRewrite(noModel, snapshot), noModel);
 });
 
 test("OpenAI usage 字段可解析，重复完整行不会重复计费", () => {
@@ -215,14 +142,6 @@ test("尽力解析上游响应中的 reporting model", () => {
   assert.equal(extractUpstreamReportingModel('{"id":"1","model":"deepseek-chat","usage":{"input_tokens":1}}'), "deepseek-chat");
   assert.equal(extractUpstreamReportingModel("not-json"), null);
   assert.equal(extractUpstreamReportingModel(""), null);
-});
-
-test("Gateway 出站改写会剥掉快照 cli-default 前缀", () => {
-  const body = { model: "opus" };
-  const rewritten = applyGatewayOutboundModelRewrite(body, {
-    upstream_model: "cli-default:claude-opus-5",
-  });
-  assert.deepEqual(rewritten, { model: "claude-opus-5" });
 });
 
 test("provider bodies cannot claim the Kernel-owned not_started envelope", () => {

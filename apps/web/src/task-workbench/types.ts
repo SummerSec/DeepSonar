@@ -2,7 +2,7 @@ import type { TaskLifecycleStatus } from "../task-lifecycle";
 
 /** UI 投影，不替换后端 Job/Finding/Fact/Report 真相。 */
 
-export type TaskActionKind = "human_decision" | "model_repair" | "transient_retry" | "unknown_effect";
+export type TaskActionKind = "human_decision" | "model_repair" | "transient_retry" | "unknown_effect" | "platform_blocker";
 export type TaskActionPriority = "critical" | "high" | "normal" | "low";
 export type TaskTraceKind = "intent" | "plan" | "capability" | "run" | "evidence" | "decision" | "report";
 export type TaskCognitionStatus = "unknown" | "supported" | "conflict" | "refuted" | "needs_human";
