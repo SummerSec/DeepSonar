@@ -103,12 +103,34 @@ test("已信任源列表为空时不产生任何调用", async () => {
   assert.equal(called, 0);
 });
 
-test("停止时中止进行中的一轮刷新", async () => {
-  let aborted = false;
+test("启动后不立刻跑第一轮：不与启动同步并发写同一源", async () => {
+  let called = 0;
   const stop = startSkillSourceRefreshLoop({
     intervalSec: 3600,
     listSources: async () => [target("src-1")],
+    sync: async () => {
+      called += 1;
+      return { modules: 1, changed: false, skipped: true };
+    },
+    runStaleAlert: false,
+    warn: () => {},
+  });
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  stop();
+  assert.equal(called, 0);
+});
+
+test("收到中止信号时本轮刷新整体退出，不吞掉取消", async () => {
+  const controller = new AbortController();
+  let aborted = false;
+  let started!: () => void;
+  const syncStarted = new Promise<void>((resolve) => { started = resolve; });
+  const running = refreshTrustedSkillSourcesOnce({
+    listSources: async () => [target("src-1")],
     sync: async (_id, _syncedBy, signal) => {
+      started();
       return new Promise<never>((_resolve, reject) => {
         signal.addEventListener("abort", () => {
           aborted = true;
@@ -117,16 +139,14 @@ test("停止时中止进行中的一轮刷新", async () => {
       });
     },
     timeoutMs: 60_000,
-    runStaleAlert: false,
+    retryDelaysMs: [1],
+    sleep: noSleep,
     warn: () => {},
+    signal: controller.signal,
   });
-  for (let attempt = 0; attempt < 20 && !aborted; attempt++) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  stop();
-  for (let attempt = 0; attempt < 20 && !aborted; attempt++) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
+  await syncStarted;
+  controller.abort(new Error("已停止"));
+  await assert.rejects(running, /已停止/);
   assert.equal(aborted, true);
 });
 
