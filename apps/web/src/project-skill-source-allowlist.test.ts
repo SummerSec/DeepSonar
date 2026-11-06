@@ -5,6 +5,7 @@ import test from "node:test";
 const panel = readFileSync(new URL("./components/ProjectSkillSourceAllowlistPanel.tsx", import.meta.url), "utf8");
 const settings = readFileSync(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
 const roleConfig = readFileSync(new URL("./RoleConfigEditor.tsx", import.meta.url), "utf8");
+const readiness = readFileSync(new URL("./skill-source-readiness.ts", import.meta.url), "utf8");
 
 test("项目设置挂载 Skill 源白名单面板，并强调控制面/Hub 选型", () => {
   assert.match(settings, /ProjectSkillSourceAllowlistPanel/);
@@ -47,7 +48,8 @@ test("#953 状态与阻塞原因来自共用判定模型，登记成功不表述
 test("#953 权限不足时说明缺少 skills:write 与具体下一步", () => {
   assert.match(panel, /canAccessAnyScope\(me, \["skills:write"\]\)/);
   assert.match(panel, /skillSourceWritePermissionHint/);
-  assert.match(panel, /缺少 skills:write 权限/);
+  assert.match(readiness, /缺少 skills:write 权限/);
+  assert.match(readiness, /管理员/);
 });
 
 test("#953 添加入口不使用原生 select，也不放宽 URL 校验收口", () => {
