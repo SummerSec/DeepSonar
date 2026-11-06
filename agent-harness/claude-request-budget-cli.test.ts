@@ -53,23 +53,32 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
   const delivered: Buffer[] = [];
   const policyStatuses: number[] = [];
   const policyErrors: string[] = [];
-  const progressEvidence = () => ({
-    result_received: resultReceived,
-    result_is_error: resultError,
-    refusal_code_visible: output.includes(refusal),
-    refusal_hint_visible: output.includes("Configure supported CLI options before generating a new request")
-      && output.includes("the formed request was not rewritten or sent"),
-    tool_succeeded: captured.some(raw => {
-      const body = JSON.parse(raw.toString("utf8"));
-      return (body.messages ?? []).flatMap((message: any) => Array.isArray(message.content) ? message.content : [])
-        .some((block: any) => {
-          if (block.type !== "tool_result" || block.tool_use_id !== "synthetic-bash-tool" || block.is_error === true) return false;
-          const value = typeof block.content === "string" ? block.content : Array.isArray(block.content)
-            ? block.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") : "";
-          return value.trim() === sentinel;
-        });
-    }),
-  });
+  const progressEvidence = () => {
+    const results = captured.flatMap(raw => {
+      try {
+        const body = JSON.parse(raw.toString("utf8"));
+        return (Array.isArray(body.messages) ? body.messages : [])
+          .flatMap((message: any) => Array.isArray(message.content) ? message.content : [])
+          .filter((block: any) => block.type === "tool_result" && block.tool_use_id === "synthetic-bash-tool");
+      } catch { return []; } // Diagnostics must not obscure the original failure.
+    });
+    const matchesSentinel = (block: any) => {
+      const value = typeof block.content === "string" ? block.content : Array.isArray(block.content)
+        ? block.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") : "";
+      return value.trim() === sentinel;
+    };
+    return {
+      result_seen: resultReceived, result_is_error: resultError,
+      stdin_ended: cli?.stdin?.writableEnded === true,
+      refusal_code_visible: output.includes(refusal),
+      refusal_hint_visible: output.includes("Configure supported CLI options before generating a new request")
+        && output.includes("the formed request was not rewritten or sent"),
+      tool_result_present: results.length > 0,
+      tool_result_success: results.some((block: any) => block.is_error !== true),
+      sentinel_matches: results.some(matchesSentinel),
+      tool_succeeded: results.some((block: any) => block.is_error !== true && matchesSentinel(block)),
+    };
+  };
   const remote = http.createServer((req, res) => {
     void (async () => {
       assert.equal(req.headers.authorization, `Bearer ${token}`);
