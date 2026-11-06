@@ -22,6 +22,7 @@ const PERMANENT_CONTROL_CODES = new Set([
   "tool_not_allowed",
   "job_not_running",
   "forbidden_control_file",
+  "pi_om_configuration_invalid",
 ]);
 
 export const RepairFeedbackRemainingBudget = z
@@ -216,6 +217,9 @@ function nextActionFor(input: {
   path?: string;
   expected?: unknown;
 }): string {
+  if (input.code === "pi_om_configuration_invalid") {
+    return "停止此提案并交平台管理员修复 OM 配额配置；Agent 不得自行扩额或换 key 自动重试。配置修复后由宿主重新准入。";
+  }
   if (input.code === "recovery_stale") {
     return "当前恢复 grant 已过时；用本 Hub 原冻结 grant 的引用/revision/evidence 提交 release_stale 并正常退出。不得用新投影扩大 grant；后续授权由 Scheduler 决定。";
   }

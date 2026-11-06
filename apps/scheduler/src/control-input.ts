@@ -26,6 +26,7 @@ export const CONTROL_INPUT_ERROR_CODES = {
   invalidCredential: "invalid_credential",
   invalidModel: "invalid_model",
   runtimeImageNotReady: "runtime_image_not_ready",
+  piOmConfigurationInvalid: "pi_om_configuration_invalid",
   invalidVerification: "invalid_verification",
   invalidProgress: "invalid_progress",
   invalidDone: "invalid_done",

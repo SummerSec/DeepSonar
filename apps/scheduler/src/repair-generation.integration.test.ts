@@ -600,6 +600,97 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           api.unregisterRuntimeHandler(jobId);
         };
         try {
+          for (const quotaCase of ["valid", "missing_allocation", "exceeds_total"] as const) {
+            await t.test(`Control Hub Pi+OM ${quotaCase}: freeze before pending or reject before ingestion`, async () => {
+              await setPlan(10, 8, 2);
+              if (quotaCase === "missing_allocation") delete process.env.DEEPSONAR_PI_OM_MAIN_MAX_REQUESTS;
+              if (quotaCase === "exceeds_total") process.env.DEEPSONAR_PI_OM_BACKGROUND_MAX_REQUESTS = "3";
+              const { ControlInputError } = await import("./control-input.js");
+              const { frozenRuntimeKnobsFromSnapshot } = await import("./runtime-knobs.js");
+              const { buildAgentRuntimeLaunchSpecification } = await import("@deepsonar/runtime-sandbox");
+              const canvasId = randomUUID(), hubId = randomUUID(), rootId = randomUUID();
+              await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${projectId},'synthetic OM Hub',
+                ${sql.json({ network_policy: { allow_egress: false } })})`;
+              await sql`INSERT INTO canvas_nodes(id,canvas_id,node_type,title,status,body_json)
+                VALUES(${rootId},${canvasId},'root','synthetic scope','active','{}')`;
+              const hubSnapshot = { name: "hub_reason", role_kind: "hub", platform_tools: ["submit_hub_decision"] };
+              await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json,started_at,timeout_sec,lease_expires_at)
+                VALUES(${hubId},${projectId},${canvasId},'hub_reason','running',${sql.json(hubSnapshot)},
+                  ${sql.json({ graph_query: { projected_node_ids: [rootId] } })},now(),3600,now()+interval '1 hour')`;
+              await sql.begin(tx => attempts.createAttempt(tx as unknown as typeof sql, hubId));
+              const grant = await api.mintJobCapabilityToken(hubId);
+              let preflights = 0, ingestions = 0;
+              api.registerRuntimeHandler(hubId, async context => {
+                try {
+                  preflights++;
+                  await core.preflightDeferredSemanticEvent(hubId, "hub_decision", context.input);
+                  ingestions++;
+                  await core.ingestEvent(hubId, { v: 1, event_id: context.eventId, type: "hub_decision", payload: context.input } as never);
+                  return { accepted: true, event_id: context.eventId };
+                } catch (error) {
+                  if (!(error instanceof ControlInputError)) throw error;
+                  throw new api.PlatformRuntimeHandlerError("OPERATION_REJECTED", error.message, {
+                    statusCode: error.retryable ? 422 : 409, errorCode: error.code, retryable: error.retryable,
+                    path: error.path, details: error.details,
+                  });
+                }
+              }, ["submit_hub_decision"]);
+              const capture = async () => JSON.parse(JSON.stringify(await Promise.all([
+                sql`SELECT to_jsonb(j) AS row FROM jobs j WHERE canvas_id=${canvasId} ORDER BY id`,
+                sql`SELECT to_jsonb(n) AS row FROM canvas_nodes n WHERE canvas_id=${canvasId} ORDER BY id`,
+                sql`SELECT to_jsonb(e) AS row FROM canvas_edges e WHERE canvas_id=${canvasId} ORDER BY id`,
+                sql`SELECT to_jsonb(c) AS row FROM canvases c WHERE id=${canvasId}`,
+                sql`SELECT to_jsonb(e) AS row FROM events e WHERE job_id=${hubId} ORDER BY job_seq`,
+                sql`SELECT to_jsonb(d) AS row FROM event_dedup d WHERE job_id=${hubId} ORDER BY event_id`,
+              ])));
+              try {
+                const before = await capture(), calls = upstreamCalls;
+                const response = await withCatalog(async () => app.inject({ method: "POST",
+                  url: `/control/v1/jobs/${hubId}/operations/submit_hub_decision`,
+                  headers: { authorization: `Bearer ${grant.token}`, "idempotency-key": randomUUID() },
+                  payload: { intents: [{ role: roleName, from: [rootId], description: `Synthetic OM Hub ${quotaCase}`,
+                    prompt: "Read only this synthetic Canvas scope and retain evidence.", agent_cli: "pi",
+                    runtime_image_key: "deepsonar-base", pi_extension_ids: ["pi-observational-memory"] }] } }));
+                assert.equal(preflights, 1, response.body);
+                assert.equal(upstreamCalls, calls, "snapshot admission never runs a model or image");
+                const children = await sql`SELECT * FROM jobs WHERE parent_job_id=${hubId}`;
+                if (quotaCase === "valid") {
+                  assert.equal(response.statusCode, 200, response.body); assert.equal(ingestions, 1);
+                  assert.equal(children.length, 1); assert.equal(children[0].status, "pending");
+                  const snapshot = children[0].agent_snapshot_json;
+                  const knobs = frozenRuntimeKnobsFromSnapshot(snapshot); assert.ok(knobs);
+                  assert.equal(knobs.job_token_max_requests, 10);
+                  assert.equal(knobs.timeout_sec, children[0].timeout_sec);
+                  assert.equal(snapshot.agent_cli, "pi");
+                  const om = snapshot.pi_extensions.find((extension: { id: string }) => extension.id === "pi-observational-memory").observational_memory;
+                  assert.deepEqual(om.request_budget, { total_requests: 10, main_requests: 8, background_requests: 2 });
+                  assert.deepEqual(snapshot.runtime_profile.native_options.pi.observational_memory, om);
+                  assert.deepEqual(snapshot.agent_runtime_launch,
+                    buildAgentRuntimeLaunchSpecification(snapshot.runtime_profile, snapshot.runtime_image.image_key));
+                  assert.ok(snapshot.runtime_profile.profile_fingerprint);
+                  const [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${children[0].id} AND node_type='intent'`;
+                  assert.ok(node); assert.equal(children[0].payload_json.intent_node_id, node.id);
+                } else {
+                  assert.equal(response.statusCode, 409, response.body); assert.equal(ingestions, 0);
+                  const body = response.json();
+                  assert.equal(body.accepted, false); assert.equal(body.retryable, false);
+                  assert.equal(body.error_code, "pi_om_configuration_invalid");
+                  assert.equal(body.repair.category, "permanent_failure");
+                  assert.deepEqual(body.repair.expected, { kind: "platform_owned_om_quota", owner: "platform_administrator",
+                    reason: quotaCase === "missing_allocation" ? "PI_OM_FINITE_ALLOCATION_REQUIRED" : "PI_OM_ALLOCATION_EXCEEDS_TOTAL" });
+                  assert.match(body.repair.next_action, /平台管理员/);
+                  assert.match(body.repair.next_action, /不得自行扩额或换 key 自动重试/);
+                  assert.equal(body.repair.accepted_effects, undefined);
+                  assert.equal(children.length, 0);
+                  assert.deepEqual(await capture(), before, "preflight rejection must leave no Job, graph or accepted semantic effects");
+                }
+              } finally {
+                api.unregisterRuntimeHandler(hubId);
+                await sql`UPDATE jobs SET status='cancelled' WHERE canvas_id=${canvasId}`;
+                await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${canvasId}`;
+              }
+            });
+          }
           for (const initial of ["repair-main-only", "ordinary-main-only", "no-token"] as const) {
             await t.test(`durable request policy survives ${initial} and two real refreezes`, async () => {
               config.gateway.repairMaxTokens = 200;

@@ -175,3 +175,5 @@ FR-FIND-008 增加 `/program-materials` 的登记/读取、单材料读取/撤�
 Job-scoped `submit_plan` 当前严格要求 `{plan: PlanV2, revision: execution_route}`；`submit_plan_result` 同样只接收 v2。objective/revision、owner、route CAS、Plan SHA 与已派发 task 的字节身份必须匹配；模型只能调整未派发路线，不能重置 lifetime 计数。v1 Plan/Result 只供历史读；普通 HubIntent 走原 handler，不制造新的 v1 `plan_protocol`，不可变 v1 与 `hub_intent_adapter` 审计只作历史解析。接纳 receipt 查询只恢复原响应，不证明执行或语义完成；工程执行投影和操作员完成门分开。机器字段以 [plan.ts](../../packages/shared-types/src/plan.ts)、[objective](../../apps/scheduler/src/domains/plan-protocol/objective.ts)和[任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)为准。
 
 #903 的当前 `execution_state` 与历史回执分离、恢复代际及 HTTP 分类见 [生命周期契约](../AGENT_REPAIR_LIFECYCLE.md)。
+
+Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_configuration_invalid`，`retryable=false`，RepairFeedback 为 `permanent_failure`；`expected` 保留受控 reason 与 `platform_administrator` owner，下一步要求平台修复后重新准入，不授予 Agent 扩额或自动重试权。仅映射已知配额异常；其他 DB、schema、resolver 错误不降级为确定无效果。

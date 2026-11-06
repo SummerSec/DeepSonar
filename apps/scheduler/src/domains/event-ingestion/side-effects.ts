@@ -958,9 +958,21 @@ export function createEventIngestionSideEffectApplication(
     }
     // Read-only preparation shared by Control preflight and final ingestion.
     // Final apply resolves again under its transaction before publishing pending.
-    snapshot = (await freezeJobRuntimeConfiguration(tx, {
-      projectId: String(job.project_id), type: baseRole, timeoutSec: validation.rules.auditTimeoutSec,
-    }, snapshot)).snapshotWithKnobs;
+    try {
+      snapshot = (await freezeJobRuntimeConfiguration(tx, {
+        projectId: String(job.project_id), type: baseRole, timeoutSec: validation.rules.auditTimeoutSec,
+      }, snapshot)).snapshotWithKnobs;
+    } catch (error) {
+      // Only known host-owned quota failures are classified. Unexpected resolver,
+      // DB or schema failures retain their original unknown/error semantics.
+      const reason = error instanceof Error ? error.message.split(":", 1)[0] : "";
+      if (!["PI_OM_FINITE_ALLOCATION_REQUIRED", "PI_OM_ALLOCATION_EXCEEDS_TOTAL",
+        "PI_OM_BACKGROUND_REQUEST_LIMIT_EXCEEDS_ALLOCATION", "PI_OM_PLATFORM_ENV_INVALID",
+        "PI_OM_TOTAL_REQUESTS_INVALID", "PI_OM_QUOTA_NOT_PLATFORM_OWNED"].includes(reason)) throw error;
+      throw new ControlInputError("pi_om_configuration_invalid",
+        "平台 OM 配额配置无法安全冻结；请由平台管理员修复配置，Agent 不得扩大额度。",
+        "intents.pi_extension_ids", { expected: { kind: "platform_owned_om_quota", owner: "platform_administrator", reason } });
+    }
     if (intent.goal_review) {
       snapshot = await freezeGoalReviewAssignment(tx, String(job.project_id), canvasId, snapshot, intent.goal_review);
     }

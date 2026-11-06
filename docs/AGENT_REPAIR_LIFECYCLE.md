@@ -54,3 +54,5 @@
 无 repair root 的额度负例通过两个真实 loopback Gateway grant 累积结算：请求 4+4 达到主上限 8、token 10+10 达到主上限 20。resume、rerun-current、resume-session 均断言额度错误、没有额外上游调用且整批持久状态不变；未手工写费用账本或请求计数，测试仍待 Actions 运行。
 
 Hub 普通 Intent 和 PlanTask 创建也经过统一 `freezeJobRuntimeConfiguration`，不再把缺 runtime knobs 的 resolver 快照直接公开为 pending Job。`plan-execution.integration.test.ts` 使用真实 Control→ingestion 创建并检查完整 knobs/profile/launch，以及普通 Intent、PlanTask 图写入故障后的原子回滚；仅合成夹具，新增断言尚未运行。
+
+专门 Hub Pi+OM 回归位于 `repair-generation.integration.test.ts`：正式 Control `submit_hub_decision` → 只读预检 → ingestion 以真实 resolver 创建 pending Worker，不回填快照；检查 10/8/2 配额、完整 knobs、profile 与 launch 一致。缺少有限分配、分配超过总额均在预检返回 `pi_om_configuration_invalid` / `permanent_failure`，指向平台管理员且禁止 Agent 扩额或换 key 自动重试；断言无 ingestion、子 Job、图或已接受语义效果。此新增合成覆盖尚未运行，不代表真实模型或镜像验证。
