@@ -64,6 +64,27 @@ function exchange(base, path, method, rawHeaders, body, signal, rawTrailers = []
   });
 }
 
+const ALLOWANCE_TIMEOUT_MS = 15_000;
+const PENDING_ALLOWANCE = ['JOB_TOKEN_USAGE_PENDING','REPAIR_USAGE_PENDING'];
+
+function refusalCode(bytes) {
+  try { return JSON.parse(bytes.toString('utf8')).error?.type; } catch { return undefined; }
+}
+
+/** The single allowance shape check; the projection itself is never cached. */
+export function allowanceValue(bytes) {
+  const value = JSON.parse(bytes.toString('utf8'));
+  if (!value || typeof value.policy_required !== 'boolean' || (value.remaining_tokens !== null
+    && (!Number.isSafeInteger(value.remaining_tokens) || value.remaining_tokens < 0))) fail('MODEL_REQUEST_POLICY_ALLOWANCE_INVALID');
+  return value;
+}
+
+/** A settled response can reach the client before its ledger commit; only this read
+ * projection is polled, and no model request or unknown effect is ever replayed. */
+export function allowancePending(response, bytes) {
+  return response.statusCode === 409 && PENDING_ALLOWANCE.includes(refusalCode(bytes));
+}
+
 export function prepareModelRequest(body, route, allowance) {
   if (!allowance || typeof allowance.policy_required !== 'boolean' || (allowance.remaining_tokens !== null
     && (!Number.isSafeInteger(allowance.remaining_tokens) || allowance.remaining_tokens < 0))) fail('MODEL_REQUEST_POLICY_ALLOWANCE_INVALID');
@@ -174,7 +195,7 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
       let bytes = await collect(req);
       const modelRequest = req.method === 'POST' && /^\/(?:v1\/)?(?:messages|chat\/completions|responses|completions)$/.test(route);
       if (modelRequest) {
-        const allowanceSignal = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
+        const allowanceSignal = AbortSignal.any([signal, AbortSignal.timeout(ALLOWANCE_TIMEOUT_MS)]);
         let allowanceResponse, allowanceBytes;
         for (;;) {
           try {
@@ -185,20 +206,14 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
             if (allowanceSignal.aborted && !signal.aborted && allowanceBytes && allowanceResponse?.statusCode === 409) break;
             throw error;
           }
-          let code;
-          try { code = JSON.parse(allowanceBytes.toString('utf8')).error?.type; } catch { /* Forward malformed refusals without guessing. */ }
-          if (allowanceResponse.statusCode !== 409 || !['JOB_TOKEN_USAGE_PENDING','REPAIR_USAGE_PENDING'].includes(code)) break;
-          // The preceding response can arrive before its ledger commit. Poll only
-          // this read-only projection; never replay a model request or an unknown effect.
+          if (!allowancePending(allowanceResponse, allowanceBytes)) break;
           try { await delay(100, undefined, { signal: allowanceSignal }); }
           catch (error) { if (signal.aborted) throw error; break; }
         }
         if (allowanceResponse.statusCode !== 200) {
           res.writeHead(allowanceResponse.statusCode ?? 502, headers(allowanceResponse.rawHeaders)); res.end(allowanceBytes); return;
         }
-        const allowance = JSON.parse(allowanceBytes.toString('utf8'));
-        if (typeof allowance.policy_required !== 'boolean' || (allowance.remaining_tokens !== null
-          && (!Number.isSafeInteger(allowance.remaining_tokens) || allowance.remaining_tokens < 0))) fail('MODEL_REQUEST_POLICY_ALLOWANCE_INVALID');
+        const allowance = allowanceValue(allowanceBytes);
         if (allowance.policy_required) {
           if (!/(?:^application\/json|\+json)(?:;|$)/i.test(String(req.headers['content-type'] ?? ''))
             || (req.headers['content-encoding'] && req.headers['content-encoding'] !== 'identity')) fail('MODEL_REQUEST_POLICY_JSON_REQUIRED');
@@ -241,25 +256,48 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
   } };
 }
 
-export async function prepareClaudeLaunch(command, environment, settings = []) {
-  const base = new URL(environment.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
-  const response = await exchange(base, base.pathname.replace(/\/+$/, '') + '/_allowance', 'GET',
-    ['authorization','Bearer ' + environment.DEEPSONAR_GATEWAY_TOKEN], null, AbortSignal.timeout(15_000));
-  const bytes = await collect(response, 65536);
-  if (response.statusCode !== 200) fail('MODEL_REQUEST_POLICY_ALLOWANCE_UNAVAILABLE');
-  const allowance = JSON.parse(bytes.toString('utf8'));
-  if (typeof allowance.policy_required !== 'boolean' || (allowance.remaining_tokens !== null
-    && (!Number.isSafeInteger(allowance.remaining_tokens) || allowance.remaining_tokens < 0))) fail('MODEL_REQUEST_POLICY_ALLOWANCE_INVALID');
-  if (allowance.remaining_tokens === null) return { command, env: environment };
+/** The same bounded, pending-aware allowance read the per-request admission uses. */
+export async function readLaunchAllowance(base, token) {
+  const signal = AbortSignal.timeout(ALLOWANCE_TIMEOUT_MS);
+  for (;;) {
+    const response = await exchange(base, base.pathname.replace(/\/+$/, '') + '/_allowance', 'GET',
+      ['authorization','Bearer ' + token], null, signal);
+    const bytes = await collect(response, 65536);
+    if (response.statusCode === 200) return allowanceValue(bytes);
+    if (!allowancePending(response, bytes)) fail('MODEL_REQUEST_POLICY_ALLOWANCE_UNAVAILABLE');
+    // Starting a CLI is a generation boundary like any other: wait out the ledger
+    // commit within the same 15s bound instead of failing the whole launch.
+    try { await delay(100, undefined, { signal }); } catch { fail('MODEL_REQUEST_POLICY_ALLOWANCE_UNAVAILABLE'); }
+  }
+}
+
+/** Single source of truth for the native Claude output cap: fresh allowance in,
+ * stricter existing configuration preserved, unlimited only when the Gateway says so. */
+export function claudeOutputCap(allowance, ceilings = []) {
+  if (allowance.remaining_tokens === null) return null;
   if (allowance.remaining_tokens === 0) fail('MODEL_REQUEST_POLICY_EXHAUSTED', 429);
   let cap = allowance.remaining_tokens;
-  for (const value of [environment.CLAUDE_CODE_MAX_OUTPUT_TOKENS, ...settings.map(setting => setting?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS)]) {
-    if (value !== undefined) {
-      const parsed = Number(value);
-      if (!Number.isSafeInteger(parsed) || parsed < 1) fail('MODEL_REQUEST_POLICY_CLAUDE_CAP_INVALID');
-      cap = Math.min(cap, parsed);
-    }
+  for (const value of ceilings) {
+    if (value === undefined) continue;
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed) || parsed < 1) fail('MODEL_REQUEST_POLICY_CLAUDE_CAP_INVALID');
+    cap = Math.min(cap, parsed);
   }
+  return cap;
+}
+
+// Claude Code 2.1.312 reads this cap from its process environment when it forms a
+// request, so it is re-derived from a fresh bounded allowance at every generation
+// boundary the platform owns: the initial start and each --resume. Requests formed
+// inside one process (tool loops, automatic compaction, Task subagents inheriting the
+// environment) keep that cap; when the allowance shrank, the admission layer refuses
+// them locally with zero egress instead of rewriting a formed body. Adapting inside a
+// live process would require rewriting the body or restarting the CLI mid-turn, which
+// the accepted 2026-11-06 scope excludes; session resume is the supported boundary.
+export async function prepareClaudeLaunch(command, environment, settings = []) {
+  const allowance = await readLaunchAllowance(new URL(environment.DEEPSONAR_REQUEST_POLICY_UPSTREAM), environment.DEEPSONAR_GATEWAY_TOKEN);
+  const cap = claudeOutputCap(allowance, [environment.CLAUDE_CODE_MAX_OUTPUT_TOKENS, ...settings.map(setting => setting?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS)]);
+  if (cap === null) return { command, env: environment };
   const configuration = JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } });
   // Only generated numeric settings are appended, never user-controlled shell text.
   return { command: command + " --settings '" + configuration + "'",
