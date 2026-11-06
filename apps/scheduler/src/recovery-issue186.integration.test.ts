@@ -223,6 +223,8 @@ if (!testDatabaseUrl) {
     } finally {
       await sql`DELETE FROM canvas_changes WHERE canvas_id = ${canvasId}`;
       await sql`DELETE FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
+      await sql`DELETE FROM event_dedup WHERE job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})`;
+      await sql`DELETE FROM events WHERE job_id IN (SELECT id FROM jobs WHERE canvas_id = ${canvasId})`;
       await sql`DELETE FROM jobs WHERE canvas_id = ${canvasId}`;
       await sql`DELETE FROM canvases WHERE id = ${canvasId}`;
       // audit_logs is intentionally append-only and retains its project FK.

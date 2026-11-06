@@ -61,8 +61,8 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
     };
     const { freezeJobRuntimeConfiguration } = await import("./job-runtime-freeze.js");
     const readBudget = (jobId: string) => sql.begin(tx => budgets.readRepairTokenBudget(tx as unknown as typeof sql, jobId));
-    const request = (token: string, model = "model-a") => app.inject({ method: "POST", url: "/gateway/v1/messages",
-      headers: { authorization: `Bearer ${token}` }, payload: { model, max_tokens: 10, messages: [{ role: "user", content: "synthetic" }] } });
+    const request = (token: string, model = "model-a", maxTokens = 10) => app.inject({ method: "POST", url: "/gateway/v1/messages",
+      headers: { authorization: `Bearer ${token}` }, payload: { model, max_tokens: maxTokens, messages: [{ role: "user", content: "synthetic" }] } });
     const settled = async (jobId: string, count: number) => {
       for (let i = 0; i < 100; i++) {
         const [row] = await sql`SELECT count(*)::int AS count FROM job_usage_ledger WHERE job_id=${jobId} AND settlement_status='settled'`;
@@ -109,7 +109,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       assert.equal(rejected.statusCode, 422, rejected.body); assert.equal(prepared, 0);
       for (let i = 0; i < 3; i++) assert.deepEqual((await propose(oldKey, 0, invalid)).json(), rejected.json());
       const oldReceipt = await receipts.readCompletionReceipt(sql, jobId, oldKey);
-      assert.equal((await request(oldGateway.plaintext)).statusCode, 200); await settled(jobId, 1);
+      assert.equal((await request(oldGateway.plaintext, "model-a", Math.min(10, repairLimit))).statusCode, 200); await settled(jobId, 1);
       const before = await readBudget(jobId); assert.ok(before); assert.equal(before.known_tokens, 4); assert.equal(before.remaining_tokens, repairLimit - 4);
       const stop = async (status: "failed" | "waiting_human") => {
         if (status === "failed") await attempts.settleAttemptTerminal(sql, jobId, "failed", { reason: "synthetic known failure" });
