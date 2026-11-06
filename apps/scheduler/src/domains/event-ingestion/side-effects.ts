@@ -1,3 +1,4 @@
+import { freezeJobRuntimeConfiguration } from "../../job-runtime-freeze.js";
 import { freezeGoalReviewAssignment } from "../../task-goal-review-source.js";
 import { prepareTaskGoalReview } from "../../task-goal-review.js";
 import { assertNoGoalReviewAuthority } from "../../task-goal-review-input.js";
@@ -955,6 +956,11 @@ export function createEventIngestionSideEffectApplication(
       }
       throw error;
     }
+    // Read-only preparation shared by Control preflight and final ingestion.
+    // Final apply resolves again under its transaction before publishing pending.
+    snapshot = (await freezeJobRuntimeConfiguration(tx, {
+      projectId: String(job.project_id), type: baseRole, timeoutSec: validation.rules.auditTimeoutSec,
+    }, snapshot)).snapshotWithKnobs;
     if (intent.goal_review) {
       snapshot = await freezeGoalReviewAssignment(tx, String(job.project_id), canvasId, snapshot, intent.goal_review);
     }
@@ -1200,7 +1206,10 @@ export function createEventIngestionSideEffectApplication(
       await validatePlanDecision(tx,jobId,job,parsed.data.plan_basis,'human',{eventId:services.eventId});
       return;
     }
-    await validateHubDecision(tx, jobId, job as Record<string, unknown>, payload, services, "preflight");
+    const validation = await validateHubDecision(tx, jobId, job as Record<string, unknown>, payload, services, "preflight");
+    if (validation) for (const intent of validation.submittedIntents.slice(0, validation.rules.maxIntentsPerDecision)) {
+      await prepareHubIntent(tx, job as Record<string, unknown>, validation, intent, services, "skip");
+    }
   }
 
   async function applySideEffects(

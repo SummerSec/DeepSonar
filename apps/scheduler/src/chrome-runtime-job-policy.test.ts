@@ -165,6 +165,8 @@ test("all direct Job creation paths freeze policy before INSERT", () => {
   const materializer = eventSideEffectsSource.slice(eventSideEffectsSource.indexOf("async function materializePreparedHubIntent"), eventSideEffectsSource.indexOf("async function materializePlanTask"));
   assert.match(materializer, /snapshot,[\s\S]*\} = prepared;/);
   assert.match(materializer, /agent_snapshot_json: snapshot as never/);
+  const preparation = eventSideEffectsSource.slice(eventSideEffectsSource.indexOf("async function prepareHubIntent"), eventSideEffectsSource.indexOf("async function materializePreparedHubIntent"));
+  assert.match(preparation, /await freezeJobRuntimeConfiguration\(tx,/);
 });
 
 test("Chrome runtimes raise stall floors without changing the global 900s default", () => {

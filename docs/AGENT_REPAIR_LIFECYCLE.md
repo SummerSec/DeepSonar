@@ -52,3 +52,5 @@
 普通恢复即使从未产生 rejected completion，也必须通过暂停、所有旧未结算效果、已接受完成与累计模型额度的只读准入；只有修复 revision/deadline 依赖 repair root。无 root 的单 Job resume/rerun-current 与 sibling 批次负例验证拒绝不修改原状态。隔离数据库的第二 sibling 策略 INSERT 故障测试以非事务 sequence 作为到达见证，确认第一份策略回执及双方 dedup/rate-limit 写入后才抛错，再比较整批持久状态全部回滚；此测试已编写但尚未执行。
 
 无 repair root 的额度负例通过两个真实 loopback Gateway grant 累积结算：请求 4+4 达到主上限 8、token 10+10 达到主上限 20。resume、rerun-current、resume-session 均断言额度错误、没有额外上游调用且整批持久状态不变；未手工写费用账本或请求计数，测试仍待 Actions 运行。
+
+Hub 普通 Intent 和 PlanTask 创建也经过统一 `freezeJobRuntimeConfiguration`，不再把缺 runtime knobs 的 resolver 快照直接公开为 pending Job。`plan-execution.integration.test.ts` 使用真实 Control→ingestion 创建并检查完整 knobs/profile/launch，以及普通 Intent、PlanTask 图写入故障后的原子回滚；仅合成夹具，新增断言尚未运行。

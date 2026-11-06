@@ -191,3 +191,5 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 ## Plan 未派发路线修订（#775 v1 历史）
 
 该 v1 路线修订仅作为不可变历史记录读取；当前路线修改使用上文 v2 `execution_route` CAS。历史事件、快照和回执不改写，未知效果、待结算回执或失效目标都不能借旧协议恢复执行。详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。
+
+Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freeze，Control Intent 预检与最终 ingestion 均执行；最终事务在 pending Job 公开前冻结 runtime knobs、OM 配额、profile 与 launch。保留原 audit timeout、parent/finding/payload/priority 和图身份，shared assets 仅由既有 materializer 记录一次；冻结或图写入失败回滚整次 ingestion。

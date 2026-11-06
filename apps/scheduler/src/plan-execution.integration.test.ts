@@ -7,6 +7,21 @@ import { createPlanExecutionFixture, executionObjective } from "./plan-execution
 test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes -> graph projection", { skip: !process.env.TEST_DATABASE_URL }, async () => {
   const h = await createPlanExecutionFixture();
   try {
+    const { frozenRuntimeKnobsFromSnapshot } = await import("./runtime-knobs.js");
+    const { buildAgentRuntimeLaunchSpecification } = await import("@deepsonar/runtime-sandbox");
+    const assertFrozenChild = async (job: Awaited<ReturnType<typeof h.children>>[number]) => {
+      const snapshot = job.agent_snapshot_json;
+      const knobs = frozenRuntimeKnobsFromSnapshot(snapshot);
+      assert.ok(knobs, "ingestion must create complete frozen runtime knobs without fixture backfill");
+      const [row] = await h.sql`SELECT timeout_sec,parent_job_id,status FROM jobs WHERE id=${String(job.id)}`;
+      assert.equal(row.timeout_sec, knobs.timeout_sec);
+      assert.equal(row.status, "pending");
+      assert.ok(row.parent_job_id);
+      assert.equal(snapshot.role_runtime_knobs, undefined);
+      assert.ok(snapshot.runtime_profile.profile_fingerprint);
+      assert.deepEqual(snapshot.agent_runtime_launch, buildAgentRuntimeLaunchSpecification(
+        snapshot.runtime_profile, snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key ?? ""));
+    };
     const objective = executionObjective(); objective.budget.max_tasks = 2;
     const f = await h.fixture(objective), proposal = h.proposal(f);
     const [ownerBefore] = await h.sql`SELECT status,
@@ -22,6 +37,7 @@ test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes 
     assert.equal(replay.statusCode, 200, replay.payload);
     let jobs = await h.children(f.hub);
     assert.equal(jobs.length, 1, "only the ready root is dispatched; transport replay creates nothing");
+    await assertFrozenChild(jobs[0]);
     assert.equal(jobs[0].agent_snapshot_json.role_kind, "role");
     assert.equal(jobs[0].agent_snapshot_json.network_policy.allow_egress, false);
     assert.ok(jobs[0].agent_snapshot_json.platform_tools.includes("emit_fact"));
@@ -31,6 +47,7 @@ test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes 
     jobs = await h.children(f.hub);
     assert.equal(jobs.length, 2, "matching retained output releases the dependent task");
     const second = jobs.find((job) => job.id !== first)!;
+    await assertFrozenChild(second);
     assert.deepEqual(second.payload_json.plan_context.dependency_outputs[0].artifact_ids, [output.id]);
     assert.equal(second.payload_json.plan_context.dependency_outputs[0].attempt_id, output.attempt);
     const edges = await h.sql`SELECT edge_type FROM canvas_edges
@@ -76,6 +93,7 @@ test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes 
     }] });
     assert.equal(ordinaryDecision.statusCode, 200, ordinaryDecision.payload);
     assert.equal((await h.children(terminal.hub)).length, 1);
+    await assertFrozenChild((await h.children(terminal.hub))[0]);
     const [ordinaryHub] = await h.sql`SELECT payload_json FROM jobs WHERE id=${terminal.hub}`;
     assert.equal(ordinaryHub.payload_json.plan_protocol, undefined, "ordinary Hub decisions cannot manufacture a new historical v1 audit");
     const [{ mintJobToken }, { encryptSecret }] = await Promise.all([
@@ -109,5 +127,47 @@ test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes 
     assert.equal(revoked.revoke_reason, "job_succeeded");
     const denied = await h.invoke(terminal.hub, "mark_job_done", { summary: "Late completion cannot reuse the revoked Control token" });
     assert.equal(denied.statusCode, 401);
+    for (const kind of ["hub_decision", "plan"] as const) {
+      const failed = await h.fixture();
+      if (kind === "hub_decision") await h.sql`UPDATE canvases SET target_json=target_json-'plan_objective' WHERE id=${failed.canvas}`;
+      const payload = kind === "plan" ? h.proposal(failed, [h.task("rollback", failed.root)]) : { intents: [{
+        role: "explore", from: [failed.root], description: "Synthetic atomic freeze rollback",
+        prompt: "Retain evidence only within this synthetic Canvas.",
+      }] };
+      const capture = async () => JSON.parse(JSON.stringify(await Promise.all([
+        h.sql`SELECT to_jsonb(j) AS row FROM jobs j WHERE canvas_id=${failed.canvas} ORDER BY id`,
+        h.sql`SELECT to_jsonb(n) AS row FROM canvas_nodes n WHERE canvas_id=${failed.canvas} ORDER BY id`,
+        h.sql`SELECT to_jsonb(e) AS row FROM canvas_edges e WHERE canvas_id=${failed.canvas} ORDER BY id`,
+        h.sql`SELECT to_jsonb(c) AS row FROM canvases c WHERE id=${failed.canvas}`,
+        h.sql`SELECT to_jsonb(e) AS row FROM events e WHERE job_id=${failed.hub} ORDER BY job_seq`,
+        h.sql`SELECT to_jsonb(d) AS row FROM event_dedup d WHERE job_id=${failed.hub} ORDER BY event_id`,
+        h.sql`SELECT to_jsonb(a) AS row FROM job_shared_asset_versions a
+          WHERE job_id IN (SELECT id FROM jobs WHERE canvas_id=${failed.canvas}) ORDER BY job_id,version_id`,
+      ])));
+      // Isolated fixture DB only. Throw after the frozen child INSERT, at its
+      // graph materialization, to prove both paths roll back the whole ingestion.
+      await h.sql.unsafe(`CREATE FUNCTION reject_frozen_child_graph() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.canvas_id='${failed.canvas}' AND NEW.node_type='intent' THEN
+          IF NOT EXISTS (SELECT 1 FROM jobs WHERE id=NEW.job_id AND status='pending'
+            AND agent_snapshot_json->'runtime_knobs'->>'timeout_sec'=timeout_sec::text
+            AND agent_snapshot_json ? 'agent_runtime_launch') THEN
+            RAISE EXCEPTION 'frozen child fixture prerequisites missing';
+          END IF;
+          RAISE EXCEPTION 'synthetic frozen child graph failure';
+        END IF;
+        RETURN NEW; END $$`);
+      await h.sql.unsafe("CREATE TRIGGER reject_frozen_child_graph BEFORE INSERT ON canvas_nodes FOR EACH ROW EXECUTE FUNCTION reject_frozen_child_graph()");
+      try {
+        const before = await capture();
+        await assert.rejects(h.core.ingestEvent(failed.hub, {
+          v: 1, event_id: randomUUID(), type: kind, payload,
+        } as never), /synthetic frozen child graph failure/);
+        assert.deepEqual(await capture(), before, "Job, graph, plan state, assets and event identity must roll back together");
+        assert.equal((await h.children(failed.hub)).length, 0);
+      } finally {
+        await h.sql.unsafe("DROP TRIGGER reject_frozen_child_graph ON canvas_nodes");
+        await h.sql.unsafe("DROP FUNCTION reject_frozen_child_graph()");
+      }
+    }
   } finally { await h.close(); }
 });
