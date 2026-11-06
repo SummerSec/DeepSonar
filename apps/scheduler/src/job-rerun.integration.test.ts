@@ -111,10 +111,6 @@ if (!testDatabaseUrl) {
           ${id.slice(0, 16)}, 'cret', 'active', ${cli}, ${sql.json(settings)})`;
       }
 
-      const withFixtureKnobs = (snapshot: Awaited<ReturnType<typeof coreModule.resolveAgentSnapshotForJob>>, maxRequests = 0) => ({
-        ...snapshot, runtime_knobs: { stall_sec: 600, job_token_max_requests: maxRequests,
-          timeout_sec: 3600, provision_timeout_sec: 600, sources: {} },
-      });
       const { freezeJobRuntimeConfiguration } = await import("./job-runtime-freeze.js");
       const currentSnapshot = async (targetCanvasId = canvasId) => {
         const resolved = await snapshotModule.freezeAgentSnapshotNetworkPolicy(sql, targetCanvasId,
@@ -683,13 +679,15 @@ if (!testDatabaseUrl) {
           VALUES(${quotaConfigId},${quotaRoleId},'claude-code','model-a',${sql.json({ jobTokenMaxRequests: 20 })})`;
         for (const replacementCap of [0, 20]) {
           await sql`UPDATE role_configs SET runtime_knobs_json=${sql.json({ jobTokenMaxRequests: 20 })},version=version+1 WHERE id=${quotaConfigId}`;
-          const quotaCanvas = `quota-${randomUUID()}`, quotaJob = randomUUID();
+          const quotaCanvas = randomUUID(), quotaJob = randomUUID();
           await sql`INSERT INTO canvases(id,project_id,title,target_json)
             VALUES(${quotaCanvas},${projectId},'Quota recovery',${sql.json({ network_policy: { allow_egress: false } })})`;
           await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status,body_json)
             VALUES(${quotaCanvas},'root','Quota recovery','active','{}')`;
-          const frozen = await snapshotModule.freezeAgentSnapshotNetworkPolicy(sql, quotaCanvas,
-            withFixtureKnobs(await coreModule.resolveAgentSnapshotForJob(sql, projectId, quotaRole), 20));
+          const resolved = await snapshotModule.freezeAgentSnapshotNetworkPolicy(sql, quotaCanvas,
+            await coreModule.resolveAgentSnapshotForJob(sql, projectId, quotaRole));
+          const { snapshotWithKnobs: frozen } = await freezeJobRuntimeConfiguration(sql,
+            { projectId, type: quotaRole, timeoutSec: 3600, maxRequests: 20 }, resolved);
           await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
             VALUES(${quotaJob},${projectId},${quotaCanvas},${quotaRole},'running',${sql.json(frozen as never)},now(),3600,now()+interval '1 hour')`;
           await sql`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
