@@ -50,3 +50,5 @@ Job 锁下的额度预留、usage/effect 原子结算、终态撤销与主后台
 用户已批准 Claude Code 2.1.312 保留 start/resume 原生启动输出上限。运行中余额不足时明确拒绝并提示，不修改已形成的 HTTP body，不要求逐请求自动适配；此行为作为已接受的兼容限制，取代原决策中将 Claude 动态余额缺口列为发布阻塞的范围判断。透明传输、冻结权限和预算准入要求不变。
 
 该范围决定不再阻塞发布，但不构成真实 Claude CLI 或真实模型测试通过的证据。#903 的恢复联合验收及最终 SHA Actions 仍须完成，历史测试结果不能代替当前提交验收。
+
+确定的本地输出额度不符/耗尽使用 HTTP 400 `invalid_request_error` 与 `x-should-retry: false`，原稳定标识放入 `error.code`，可读说明写入 `error.message`。这是避免锁定 Claude SDK/外层将 409/429 当暂态重试的本地准入协议，不改上游或 allowance 错误响应，也不解除预算门。真实 CLI 终态与提示可见性仍以最终 SHA Actions 为准。
