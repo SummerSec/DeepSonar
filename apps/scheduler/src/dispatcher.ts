@@ -151,6 +151,7 @@ export function isRetryableContextWindowExceeded(error: unknown): boolean {
 import { finalizeReportJob } from "./report.js";
 import { buildEvidenceSnapshot, canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
 import { fakeFindingPayload, fakeVerificationFact, fakeVerifyDone } from "./fake-agent-evidence.js";
+import { jobSkillCatalogStaleNotice, type FrozenJobSkillCatalog } from "./job-skill-catalog.js";
 import {
   assertChromeRuntimeEgressAllowed,
   requireFrozenSnapshotAllowEgress,
@@ -1820,7 +1821,9 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
     if (!canvasId) return;
     const [{ next_x }] = await tx<[{ next_x: number }]>`
       SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
-    const roleSnapshot = job.agent_snapshot_json as { role_kind?: string; ui_color?: string | null } | null;
+    const roleSnapshot = job.agent_snapshot_json as { role_kind?: string; ui_color?: string | null; job_skill_catalog?: FrozenJobSkillCatalog } | null;
+    // #954：陈旧 Skill 目录不阻断 Job，但必须在画布留可见的 warning 级记录。
+    const skillCatalogWarning = jobSkillCatalogStaleNotice(roleSnapshot?.job_skill_catalog);
     const [node] = await tx`
       INSERT INTO canvas_nodes ${tx({
         canvas_id: canvasId,
@@ -1834,6 +1837,7 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
           ...(roleSnapshot?.role_kind === "role" && roleSnapshot.ui_color
             ? { ui_color: roleSnapshot.ui_color }
             : {}),
+          ...(skillCatalogWarning ? { skill_catalog_warning: skillCatalogWarning } : {}),
         } as never,
         x: next_x,
         y: 300,

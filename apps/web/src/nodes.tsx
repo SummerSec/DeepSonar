@@ -326,6 +326,13 @@ function BaseNode({ data }: NodeProps<DEEPSONARNode>) {
             {n.title}
           </div>
 
+          {/* #954：Skill 目录陈旧时，在 Job 节点留一条 warning 级记录 */}
+          {typeof n.body_json?.skill_catalog_warning === "string" && (
+            <div className="mt-1.5 rounded border border-amber-400/30 bg-amber-400/[.08] px-1.5 py-1 font-mono text-[10px] leading-snug text-amber-300">
+              {n.body_json.skill_catalog_warning}
+            </div>
+          )}
+
           {/* 底栏元信息 */}
           <div className="mt-1.5 flex items-center gap-2">
             {location && (

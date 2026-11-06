@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { audit } from "../../audit.js";
+import { config } from "../../config.js";
 import { sql } from "../../db.js";
 import { validationHttpError } from "../../http-validation-error.js";
+import { skillSourceAgeSeconds } from "../../skill-freshness.js";
 import { syncSkillSource, validateSourceUrl } from "../../skill-sources.js";
 import {
   listProjectSkillSourceBindings,
@@ -17,11 +19,27 @@ const SkillSourceBody = z.object({
 
 export function registerSkillSourceRoutes(app: FastifyInstance): void {
   // ---------- Git 模块源（§8.2） ----------
-  app.get("/skill-sources", async () =>
-    sql`SELECT id, name, repo_url, branch, synced_at, created_at,
+  // #954：`age_seconds` / `stale` 与指标、告警共用 skill-freshness 口径；
+  // `stale` 以 2×refreshIntervalSec 判定（周期刷新被关闭时才用 Job 快照阈值）。
+  app.get("/skill-sources", async () => {
+    const rows = await sql`SELECT id, name, repo_url, branch, synced_at, created_at,
                trust_status, enabled, last_commit_sha, last_content_hash, synced_by,
                jsonb_array_length(catalog_json) AS module_count
-        FROM skill_sources ORDER BY created_at DESC`);
+        FROM skill_sources ORDER BY created_at DESC`;
+    const nowMs = Date.now();
+    const refreshIntervalSec = config.skillSources.refreshIntervalSec;
+    const graceSec = refreshIntervalSec > 0
+      ? refreshIntervalSec * 2
+      : config.skillSources.staleAfterDays * 86_400;
+    return rows.map((row) => {
+      const ageSeconds = skillSourceAgeSeconds(row.synced_at as string | null, nowMs);
+      return {
+        ...row,
+        age_seconds: ageSeconds,
+        stale: ageSeconds === null || ageSeconds > graceSec,
+      };
+    });
+  });
 
   // 目录详情（模块列表；文件内容不下发，太大了）
   app.get("/skill-sources/:id", async (req, reply) => {
@@ -63,10 +81,15 @@ export function registerSkillSourceRoutes(app: FastifyInstance): void {
   });
 
   // 同步：浅克隆 → 扫描 SKILL.md/commands → catalog 落库（内容缓存，运行不再访问 Git）
+  // #954：默认先 ls-remote 探针，远端 HEAD 未变只前移 synced_at；`?force=1` 强扣内容。
   app.post("/skill-sources/:id/sync", async (req, reply) => {
     const { id } = req.params as { id: string };
+    const query = req.query as { force?: string } | undefined;
+    const force = query?.force === "1" || query?.force === "true";
     try {
-      const r = await syncSkillSource(id, req.actor?.name ?? null);
+      const r = await syncSkillSource(id, req.actor?.name ?? null, undefined, {
+        skipIfUnchanged: !force,
+      });
       await audit(req, { action: "skill_source.sync", resourceType: "skill_source", resourceId: id, after: r });
       return { ok: true, ...r };
     } catch (e) {

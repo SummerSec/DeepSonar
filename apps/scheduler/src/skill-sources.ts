@@ -19,6 +19,8 @@ import { recordSystemAudit } from "./audit.js";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import { persistSkillSourceManifest } from "./job-skill-catalog.js";
+import { probeSkillSourceRemoteHead, skipUnchangedSourceSync } from "./skill-source-drift.js";
+import { inc } from "./metrics.js";
 
 export {
   parseModuleSelector,
@@ -562,7 +564,6 @@ export async function cloneSkillSource(input: {
   }
 }
 
-
 /** Suggest a replacement module id when an old selector no longer exists in catalog (#664). */
 export function suggestMigratedModuleId(
   oldId: string,
@@ -732,6 +733,8 @@ export interface SkillSourceSyncResult {
   previous_content_hash: string | null;
   last_content_hash: string | null;
   synced_at: string;
+  /** #954: 探针判定远端 HEAD 与本地 `last_commit_sha` 相同，未重新拉取内容。 */
+  skipped: boolean;
   /** Present after catalog write: RoleConfig selector migrate/remove vs new catalog (#664). */
   selector_cleanup: SkillSourceSelectorCleanupSummary;
 }
@@ -752,6 +755,15 @@ export async function syncSkillSource(
   sourceId: string,
   syncedBy?: string | null,
   signal?: AbortSignal,
+  options: {
+    /** #954: 先 ls-remote 探针，远端 HEAD 与本地 commit 相同时只刷新 synced_at。 */
+    skipIfUnchanged?: boolean;
+    probeHead?: (input: {
+      repoUrl: string;
+      branch: string;
+      signal?: AbortSignal;
+    }) => Promise<string | null>;
+  } = {},
 ): Promise<SkillSourceSyncResult> {
   if (signal?.aborted) throw abortReason(signal, `skill source ${sourceId} sync`);
   const [src] = await sql`SELECT * FROM skill_sources WHERE id = ${sourceId}`;
@@ -763,6 +775,27 @@ export async function syncSkillSource(
   const previousContentHash = typeof src.last_content_hash === "string" && src.last_content_hash.trim()
     ? src.last_content_hash.trim()
     : null;
+  const previousCatalog = Array.isArray(src.catalog_json)
+    ? (src.catalog_json as unknown[]).filter(isCatalogModule)
+    : [];
+
+  if (options.skipIfUnchanged) {
+    const skipped = await skipUnchangedSourceSync({
+      sourceId,
+      syncedBy,
+      src: {
+        id: String(src.id),
+        repo_url: String(src.repo_url),
+        branch: String(src.branch),
+        last_commit_sha: previousCommitSha,
+        last_content_hash: previousContentHash,
+        catalog_json: previousCatalog,
+      },
+      signal,
+      probe: options.probeHead ?? probeSkillSourceRemoteHead,
+    });
+    if (skipped) return skipped;
+  }
 
   const tmp = mkdtempSync(path.join(os.tmpdir(), "deepsonar-src-"));
   try {
@@ -788,9 +821,6 @@ export async function syncSkillSource(
       sourceId, commitSha: lastCommitSha, catalog,
     });
     assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
-    const previousCatalog = Array.isArray(src.catalog_json)
-      ? (src.catalog_json as unknown[]).filter(isCatalogModule)
-      : [];
     const previousIds = new Set(previousCatalog.map((module) => module.id));
     const newIds = new Set(catalog.map((module) => module.id));
     // Diff retained for audit/observability; healing keys off absences in newIds.
@@ -832,15 +862,18 @@ export async function syncSkillSource(
         },
       });
     }
+    const changed = skillSourceCatalogChanged({
+      previousCommitSha,
+      previousContentHash,
+      lastCommitSha,
+      lastContentHash,
+    });
+    if (changed) inc("deepsonar_skill_catalog_changed_total", { source: String(src.name) });
 
     return {
       modules: catalog.length,
-      changed: skillSourceCatalogChanged({
-        previousCommitSha,
-        previousContentHash,
-        lastCommitSha,
-        lastContentHash,
-      }),
+      changed,
+      skipped: false,
       previous_commit_sha: previousCommitSha,
       last_commit_sha: lastCommitSha,
       previous_content_hash: previousContentHash,

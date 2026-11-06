@@ -86,6 +86,8 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 
 **Job 快照冻结**：创建时冻结 `module_selectors`、digest、模块内容 hash 与 missing；物化只认快照。Job 创建后的 skill_source sync **不影响**进行中 Job，只影响下一 Job。
 
+**源保鲜（#954）**：模块源刷新是**周期行为**，不是启动副作用。`DEEPSONAR_SKILL_SOURCE_REFRESH_INTERVAL_SEC` 驱动 scheduler-owned 串行刷新循环，每轮先用 `git ls-remote` 比对远端 HEAD，未变化只前移 `synced_at`；启动同步与周期刷新全关时启动告警而不静默。刷新只更新候选目录、不提权，新内容仍受 `trust_status` 门控。陈旧度以 `synced_at` 为唯一口径（[skill-freshness.ts](apps/scheduler/src/skill-freshness.ts)）：指标 `deepsonar_skill_source_age_seconds{source}`、`GET /skill-sources` 的 `age_seconds`/`stale`、Job 快照的 `source_synced_at`/`age_seconds`/`stale` 都用同一换算；超过 `DEEPSONAR_SKILL_SOURCE_STALE_AFTER_DAYS` 时只在画布 Job 节点留 warning 级记录，不阻断 Job、不改变准入判定。配置与默认值以 [config.ts](apps/scheduler/src/config.ts) 为准，本文不复制数字。
+
 **平台控制 Skill**：`deepsonar-control` 仍对真实 Job **强制注入**，不可被业务 RoleConfig 同名覆盖，也不计入项目 Skill 源白名单。
 
 **RoleConfig `modules_json` 为过渡态 / 缺省建议**：仍可勾选，但候选必须 ⊆ 项目白名单；`expandModules` / role-runtime-snapshot 路径在项目范围 fail-closed。迁移：首次读取项目 Skill 设置时，把历史 RoleConfig selector 引用的源种子为启用，禁止静默丢配置。

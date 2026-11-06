@@ -32,6 +32,16 @@ interface Gauge {
   query: () => Promise<number>;
 }
 
+interface LabeledGaugeSample {
+  labels: Record<string, string>;
+  value: number;
+}
+
+interface LabeledGauge {
+  help: string;
+  query: () => Promise<LabeledGaugeSample[]>;
+}
+
 /** 抓取时现算的 gauge（DB 是唯一真相，进程重启不丢） */
 const GAUGES: Record<string, Gauge> = {
   deepsonar_jobs_active: {
@@ -67,6 +77,21 @@ const GAUGES: Record<string, Gauge> = {
     query: async () =>
       (await sql<[{ n: number }]>`
         SELECT COUNT(*)::int AS n FROM audit_logs`)[0].n,
+  },
+};
+
+/** 带标签的抓取期 gauge（#954）：低基数标签（源名）按行展开，缺省无样本即不输出。 */
+const LABELED_GAUGES: Record<string, LabeledGauge> = {
+  deepsonar_skill_source_age_seconds: {
+    help: "Seconds since the last successful sync of a trusted+enabled Skill source",
+    query: async () => (await sql<Array<{ name: string; age: number | string | null }>>`
+      SELECT name, EXTRACT(EPOCH FROM (now() - COALESCE(synced_at, created_at)))::float8 AS age
+        FROM skill_sources
+       WHERE enabled = true AND trust_status = 'trusted'
+       ORDER BY name ASC`).map((row) => ({
+      labels: { source: String(row.name) },
+      value: Math.max(0, Number(row.age ?? 0)),
+    })),
   },
 };
 
@@ -120,6 +145,8 @@ const HELP: Record<string, string> = {
   deepsonar_opensandbox_upload_alerts_total: "Ops alerts emitted for persistent OpenSandbox upload failures",
   deepsonar_opensandbox_upload_self_heal_total: "OpenSandbox upload circuit self-heal attempts by result",
   deepsonar_opensandbox_upload_probe_failures_total: "OpenSandbox pre-dispatch upload probe failures",
+  deepsonar_skill_source_sync_failures_total: "Skill source sync failures by source (boot / scheduled / manual)",
+  deepsonar_skill_catalog_changed_total: "Skill source syncs whose catalog commit/content actually changed, by source",
 };
 
 const PROCESS_GAUGE_HELP: Record<string, string> = {
@@ -150,6 +177,14 @@ export async function renderMetrics(): Promise<string> {
       out.push(`${name} ${await g.query()}`);
     } catch {
       out.push(`${name} 0`);
+    }
+  }
+  for (const [name, g] of Object.entries(LABELED_GAUGES)) {
+    out.push(`# HELP ${name} ${g.help}`, `# TYPE ${name} gauge`);
+    try {
+      for (const sample of await g.query()) out.push(`${key(name, sample.labels)} ${sample.value}`);
+    } catch {
+      // 抓取失败不伪造 0 样本以外的语义：未启用任何源时没有标签样本是合法的。
     }
   }
   for (const [name, help] of Object.entries(PROCESS_GAUGE_HELP)) {

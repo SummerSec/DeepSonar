@@ -3,7 +3,7 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import { setSharedAssetBlobStoreForTests, type BlobStore } from "./blob-store/index.js";
 import { contentHashOf, listAvailableSkillsFromCatalog, pullSkillFromCatalog, type SourceModule } from "./skill-sources.js";
-import { encodeSkillSourceManifest, freezeJobSkillCatalog, loadJobSkillCatalog, pullFrozenJobSkill, JobSkillCatalogError } from "./job-skill-catalog.js";
+import { encodeSkillSourceManifest, freezeJobSkillCatalog, jobSkillCatalogStaleNotice, loadJobSkillCatalog, pullFrozenJobSkill, JobSkillCatalogError } from "./job-skill-catalog.js";
 import { sharedAssetBlobUri } from "./blob-store/index.js";
 import { listHubSkillSourceCatalog } from "./domains/project-skill-allowlist/catalog.js";
 import { handleCapabilityDiscovery } from "./domains/capability-pack/discovery.js";
@@ -18,7 +18,10 @@ function skill(name: string, body: string): SourceModule {
   return { id: name, kind: "skill", plugin: "(root)", name, description: name, files: { "SKILL.md": body } };
 }
 
-type Source = { source_instance_id: string; id: string; name: string; enabled: boolean; trust_status: string; last_commit_sha: string; last_content_hash: string; catalog_json: SourceModule[]; catalog_snapshot_hash: string | null; revocation_epoch: string };
+type Source = { source_instance_id: string; id: string; name: string; enabled: boolean; trust_status: string; last_commit_sha: string; last_content_hash: string; catalog_json: SourceModule[]; catalog_snapshot_hash: string | null; revocation_epoch: string; synced_at: string | null };
+
+const SYNCED_AT = "2026-11-06T00:00:00.000Z";
+const NOW_MS = Date.parse("2026-11-06T06:00:00.000Z");
 
 function fixture() {
   const blobs = new Map<string, Buffer>();
@@ -31,9 +34,9 @@ function fixture() {
   };
   setSharedAssetBlobStoreForTests(store);
   const sources: Source[] = [
-    { source_instance_id: A, id: A, name: "A", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("alpha", "v1")], catalog_snapshot_hash: null, revocation_epoch: "0" },
-    { source_instance_id: B, id: B, name: "B", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("beta", "v1")], catalog_snapshot_hash: null, revocation_epoch: "0" },
-    { source_instance_id: HIDDEN, id: HIDDEN, name: "Hidden", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("hidden", "private")], catalog_snapshot_hash: null, revocation_epoch: "0" },
+    { source_instance_id: A, id: A, name: "A", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("alpha", "v1")], catalog_snapshot_hash: null, revocation_epoch: "0", synced_at: SYNCED_AT },
+    { source_instance_id: B, id: B, name: "B", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("beta", "v1")], catalog_snapshot_hash: null, revocation_epoch: "0", synced_at: SYNCED_AT },
+    { source_instance_id: HIDDEN, id: HIDDEN, name: "Hidden", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("hidden", "private")], catalog_snapshot_hash: null, revocation_epoch: "0", synced_at: SYNCED_AT },
   ];
   for (const source of sources) {
     source.last_content_hash = contentHashOf(source.catalog_json);
@@ -207,5 +210,39 @@ test("missing CAS bytes return a stable, sanitized catalog error", async () => {
     blobs.clear();
     await assert.rejects(loadJobSkillCatalog(db, PROJECT, frozen),
       (error) => error instanceof JobSkillCatalogError && error.error_code === "JOB_SKILL_CATALOG_INTEGRITY");
+  } finally { setSharedAssetBlobStoreForTests(null); }
+});
+
+test("#954 快照冻结 Skill 目录新鲜度，陈旧时不阻断但给出 warning 文案", async () => {
+  const { db, sources } = fixture();
+  try {
+    const fresh = await freezeJobSkillCatalog(db, PROJECT, { staleAfterDays: 7, nowMs: NOW_MS });
+    assert.equal(fresh.stale, false);
+    assert.equal(fresh.stale_after_days, 7);
+    assert.equal(fresh.max_age_seconds, 6 * 3600);
+    assert.deepEqual(fresh.sources.map((source) => source.age_seconds), [21_600, 21_600]);
+    assert.deepEqual(fresh.sources.map((source) => source.source_synced_at), [SYNCED_AT, SYNCED_AT]);
+    assert.equal(jobSkillCatalogStaleNotice(fresh), null);
+    // 新鲜度字段参与完整性校验：篡改 stale 必须被拒绝。
+    await assert.rejects(
+      loadJobSkillCatalog(db, PROJECT, { ...fresh, stale: true }),
+      (error) => error instanceof JobSkillCatalogError && error.error_code === "JOB_SKILL_CATALOG_INTEGRITY",
+    );
+
+    const stale = await freezeJobSkillCatalog(db, PROJECT, {
+      staleAfterDays: 7,
+      nowMs: Date.parse("2026-12-06T00:00:00.000Z"),
+    });
+    assert.equal(stale.stale, true);
+    assert.equal(stale.max_age_seconds, 30 * 86_400);
+    assert.match(jobSkillCatalogStaleNotice(stale) ?? "", /30 天未刷新/);
+    // 陈旧只是证据：目录仍可读，不改变准入。
+    assert.deepEqual((await loadJobSkillCatalog(db, PROJECT, stale)).map((source) => source.id), [A, B]);
+
+    sources[0]!.synced_at = null;
+    const neverSynced = await freezeJobSkillCatalog(db, PROJECT, { staleAfterDays: 7, nowMs: NOW_MS });
+    assert.equal(neverSynced.stale, true);
+    assert.equal(neverSynced.sources[0]!.age_seconds, null);
+    assert.match(jobSkillCatalogStaleNotice(neverSynced) ?? "", /从未成功同步/);
   } finally { setSharedAssetBlobStoreForTests(null); }
 });
