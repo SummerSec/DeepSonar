@@ -1,17 +1,39 @@
 ## [Unreleased]
 
+## [0.6.15] - 2026-11-06
+
 ### 修复
+
+- **修复链的执行生命周期（#903 / #930）**：新增 append-only 修复代际、后续 Attempt 的 fencing、累计预算校验，并把恢复准入与请求策略持久化在 resume / rerun-current / 批量恢复的事务中应用（部分失败回滚）；正常创建、恢复、Hub Intent 与 PlanTask 子 Job 共用同一运行快照冻结，Pi OM 分配校验与管理员可见的配置失败显式报出。历史回执不改写，pending / unknown 效果仍保守准入。本条为 #903 的执行生命周期闭环，恢复链其余范围按技术评论继续跟踪，不据此关单。
+
+- **未发布的 0.6.14 内容随本版交付**。v0.6.14 的 tag 保留，但其 Release 运行 `42037159429` 未产出冻结载荷（原因见 0.6.14 区段），因此 #910 / #912 的 Hub Plan 范围修正与 #916 的 Reverse 原生 CI 磁盘准备随本版一起交付。
+
+- **Pi 完成修正链的派发落地（#913 / #919）**：会话已有被接纳的终态后，Gateway 对再次请求返回的 `COMPLETION_ALREADY_ACCEPTED` 拒绝不再被当作运行器失败抛出，Hub 派发提案按既有派生语义收口。没有已接纳终态的会话、宿主语义校验失败与普通运行器错误仍 fail closed；完成门、attempt fencing 与历史回执不变。
+
+- **项目默认账号的显式选择与修复导航（#914 / #929）**：引用失效或存在多个匹配账号时，用户可从 Job 错误导航进入项目设置显式选择、更换或清除默认账号，默认变化同笔清除旧 `default_model_ref` / `fallback_model_refs`；保存显示服务器实际结果，加载成功前禁止保存，失败保留草稿。只有 `SNAPSHOT_STALE` 加结构化 `repair.code` 才指向账号修复，普通快照漂移、权限、租约与预算错误不冒充；无自动重跑，不改冻结快照。
 
 - **Release resume 的原发布证据绑定**：默认分支恢复代码先校验原运行、成功阶段、不可变 tag 与 artifact 归档摘要，再复用冻结载荷和签名回执独立恢复 writeback / publish；不重建或重签镜像。拒绝错源、替换、缺失、过期及多 attempt 证据；发布查询错误不再被当作 Release 不存在，gate 使用实际签名目录。
 
 - **发布回写 PR 的检查状态文案（#920 评审）**：创建 PR 时仅说明等待该 PR 的 `ci-summary` 与适用专项，不再在检查运行前宣称“已通过”。生成正文同时明确自动化身份；离线回归校验创建早于检查读取且正文没有提前通过声明。
-- **Provider 删除与项目引用的一致性（#914 服务端切片）**：仍被项目白名单/默认账号引用的凭据以稳定 `CREDENTIAL_PROJECT_REFERENCE` 拒绝删除；impact 的项目列表与计数遵守调用者可见范围，删除完整性另按全局引用核对。项目 settings PATCH 在事务中验证并锁住有效、active、可访问的凭据，即使省略模型字段也不能写入悬挂 UUID；不把显式空白名单改成未收紧。GET 和启动清理使用原值 CAS；Skill 标记与 convergence 快捷规则仅更新当前 JSONB 对应字段，导入合并在事务锁内回读，避免无关写入复活旧账号引用。配置项目锁采用 `FOR NO KEY UPDATE`，与凭据迁移的外键 `KEY SHARE` 兼容。真实 PostgreSQL 回归覆盖两项目隔离、双向删除/写入、GET/Skill 交错及 Credential 项目迁移；默认账号选择 UX 的完整收口仍未交付。
-- **Provider 自定义请求头与所选上游一致（#918 / #921）**：Gateway、模型目录发现与推理探测共用服务端配置头解析。官方 Pi 顶层对象、config 对象及 config YAML 复用已有解析器；头只来自当前 endpoint 对应的 profile，空头集合不会借用其他 provider 的租户头，metadata 覆盖与 profile 不匹配时不混用。认证、逐跳/framing 处理与 Job 权限边界保持不变；完整业务透传另由 #923 跟踪，不冒充本片已实现。
+- **Provider 删除与项目引用的一致性（#914 服务端切片）**：仍被项目白名单/默认账号引用的凭据以稳定 `CREDENTIAL_PROJECT_REFERENCE` 拒绝删除；impact 的项目列表与计数遵守调用者可见范围，删除完整性另按全局引用核对。项目 settings PATCH 在事务中验证并锁住有效、active、可访问的凭据，即使省略模型字段也不能写入悬挂 UUID；不把显式空白名单改成未收紧。GET 和启动清理使用原值 CAS；Skill 标记与 convergence 快捷规则仅更新当前 JSONB 对应字段，导入合并在事务锁内回读，避免无关写入复活旧账号引用。配置项目锁采用 `FOR NO KEY UPDATE`，与凭据迁移的外键 `KEY SHARE` 兼容。真实 PostgreSQL 回归覆盖两项目隔离、双向删除/写入、GET/Skill 交错及 Credential 项目迁移。本条记录 #925 服务端切片；默认账号选择与修复导航由本版 #929 补齐，见前条。
+- **Provider 自定义请求头与所选上游一致（#918 / #921）**：Gateway、模型目录发现与推理探测共用服务端配置头解析。官方 Pi 顶层对象、config 对象及 config YAML 复用已有解析器；头只来自当前 endpoint 对应的 profile，空头集合不会借用其他 provider 的租户头，metadata 覆盖与 profile 不匹配时不混用。认证、逐跳/framing 处理与 Job 权限边界保持不变；本条仅记录配置头切片；本版 #923 / #928 的完整业务透传见下文。
 
 - **任务删除/归档的提交边界（#904、#917 评审）**：知识工作、版本、提案、分配、评估、回执与设备租约历史都进入保留判定；仅清理任务的知识使用记录，不删除不可变治理证据或设备租约审计。删除和归档遵守 claim advisory → Canvas → Job → Attempt 锁序，事务内取消不调用 provision abort/provider cancel，真实提交后才执行资源清理。取消后注入 SQL 失败的 PostgreSQL 回归验证 Job/Attempt 恢复且 provider 未被中断；独立 session 回归验证归档先等待 Canvas，而非先占 Job。
-- **单条效果结清如实报告剩余量（#908、#917 评审）**：活动 Attempt 的效果仍交内核结算；操作员结清输出实际查询的未结算数，不再固定报零。
+- **单条效果结清如实报告剩余量（#899、#908、#917、#926）**：活动 Attempt 的效果仍交内核结算；结清一条历史效果但仍有残留时返回成功并单独报告 `backlog_clear=false` 与真实全局计数，重复、未命中与 active 目标返回失败，查询失败不再报告残留为零。单条人工审计、不重放与 replay policy 边界保持原样。
+
+### 变更
+
+- **Model Gateway 透明传输（#923 / #928）**：获准请求只替换认证与服务器绑定目标，方法、原始 path/query、端到端业务头与 body 字节不再经业务白名单、JSON 重序列化或模型参数改写；上游状态码、响应头与 SSE 按原始字节返回，不隐式重试、不跟随跳转、不自动解压。Job token 不转给上游；入站与最终出站 target（含一次百分号解码）以及 body/header/trailer 都做精确凭据检查；同层 Provider 配置中同名大小写冲突、重复认证、原值 CR/LF 与非法 framing 明确拒绝；合法重复端到端业务头保留，逐跳头在连接边界消费。新 Job 快照记录 `gateway_provider_binding`，route/header/model 配置变化返回 `GATEWAY_PROVIDER_BINDING_CHANGED`，不把旧租户头发给新目标。请求预算在生成前应用（Claude / Pi / DSH 各自的锁定入口），不靠代理改写已形成的请求。边界与未完项见 [透明传输专题](docs/MODEL_GATEWAY_TRANSPARENCY.md) 与 [ADR 0017](docs/architecture/adr/0017-transparent-gateway-settlement.md)。
+
+- **开发分支按用途命名（#931 / #933）**：禁止以 AI / Agent 工具名开头（`agent`、`codex`、`cursor`、`claude`、`copilot`、`chatgpt`、`gemini`、`openai`，含 `/`、`-`、`_` 与嵌套路径、不区分大小写），推荐 `feat/`、`fix/`、`docs/`、`refactor/`、`test/`、`chore/` 前缀。规则唯一实现在 `agent-harness/branch-name-policy.mjs` 并由 `ci:unit:ci-routing` 回归；GitHub ruleset 20986002 同步到 32 条模式后，原 PR 作者报告 refs API 探针对 `agent/`、`Agent/`、`agent-`、`agent_`、`codex-` 拒绝、对 `feat/` 允许；这不是本次独立复验，服务端大小写与嵌套匹配差异仍待评审收口，不声明所有组合与本地规则一致。既有分支、历史引用与 tag 不变。
+
+### 升级注意事项
+
+- schema 仍为 67（2026-11-06 源码核对），本版无新增 schema 迁移。历史请求策略缺失/非法或多 Attempt 缺少策略回执时拒绝恢复，不补造额度；pending/unknown 效果须先结算。Claude Code 运行中额度不足仍可显式拒绝，DSH 不承诺持久会话恢复。工程基线与正式发布证据的区别见[发布说明](docs/RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。
 
 ## [0.6.14] - 2026-11-05
+
+> **该 tag 保留，未产出正式发布**：`v0.6.14` 的 [Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 在 `reverse-image-builds (arm64)` 的 REA Job 验收中失败：`timeout` 是该验收用例的预期模式，而创建 sandbox 时 Egress sidecar 启动失败（`Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)`），该用例实际得到 `failed`；验收记录只有一次 Attempt，`sandbox_id` 为空、`retry_scheduled` 为空、`redispatch_calls=0`。这只证明创建阶段 sidecar 启动失败，不证明重试耗尽或真实运行超时，更深层基础设施原因尚未由该证据确定。`prepare-release` 起的后续阶段全部跳过，没有冻结载荷、签名或 GitHub Release。按发布守则保留该 tag 与已推送镜像，不移动、不覆盖；本版内容随 `0.6.15` 一起交付，成功升级基线仍是 `v0.6.13`。
 
 ### 修复
 
@@ -21,7 +43,7 @@
 
 ### 已知问题
 
-- **Pi 完成修正链的派发阻塞（#913）仍未修复**。本版只修正 Plan 提示词范围及其摘要校验，完成接纳后的正常退出、回执结算与 Worker 派发仍由 #903 / #913 跟踪。
+- **Pi 完成修正链的派发阻塞（#913）在本 tag 上仍未修复**。该 tag 只修正 Plan 提示词范围及其摘要校验，完成接纳后的正常退出、回执结算与 Worker 派发仍由 #903 / #913 跟踪。该缺陷已由后续 #919 修复并随 `0.6.15` 发布，本节保留为当时事实。
 
 ## [0.6.13] - 2026-11-05
 
@@ -1572,3 +1594,5 @@
 [0.6.13]: https://github.com/SummerSec/DeepSonar/compare/v0.6.12...v0.6.13
 
 [0.6.14]: https://github.com/SummerSec/DeepSonar/compare/v0.6.13...v0.6.14
+
+[0.6.15]: https://github.com/SummerSec/DeepSonar/compare/v0.6.14...v0.6.15

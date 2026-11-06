@@ -1,9 +1,9 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；v0.6.14 的发布运行失败，未产出完整冻结载荷；不代表正式发布完成**。
-> 同步日期：2026-11-05
+> 状态：**运维 as-built；v0.6.15 为当前发布候选，尚未 tag/发布；v0.6.14 的 tag 保留但未产出正式发布**。
+> 同步日期：2026-11-06
 >
-> 2026-11-05 核对 GitHub：最新成功正式版仍为 [v0.6.13](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.13)，正式发布时间为 `2026-11-05T13:02:09Z`，tag commit 为 `71cefc0b34d3eddf771a6a39decba6fa003b6ac6`。最高既有版本 tag 是保留的 [v0.6.14](https://github.com/SummerSec/DeepSonar/tree/v0.6.14)；其 [Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 失败，未产出完整冻结载荷，不能视为成功正式版或使用本恢复入口补发。`v0.6.13...v0.6.14` 仅是该历史候选的 compare，不指定下一版本；下一版本由主线程在最终发布准备时确定。[Pi 完成修正阻塞 #913](https://github.com/SummerSec/DeepSonar/issues/913) 已于 `2026-11-05T15:40:59Z` 关闭（completed），不再列为未修复；issue 关闭不等于新版本、签名/catalog 或生产验收完成。最终目标 SHA 的适用 Actions 与实际发布证据须分别核验；历史版本记录见 [CHANGELOG](../CHANGELOG.md)。
+> 2026-11-06 核对 GitHub：最新成功正式版仍为 [v0.6.13](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.13)，正式发布时间为 `2026-11-05T13:02:09Z`，tag commit 为 `71cefc0b34d3eddf771a6a39decba6fa003b6ac6`；bundled 清单与 `deploy/.env.example` 的 `DEEPSONAR_VERSION` 同为 `0.6.13`。最高既有版本 tag 是保留的 [v0.6.14](https://github.com/SummerSec/DeepSonar/tree/v0.6.14)；其 [Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 在 `reverse-image-builds (arm64)` 的 REA Job 验收创建 sandbox 阶段返回 `Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)`；timeout 只是用例预期，记录仅一个约 209ms 的 Attempt，sandbox_id / retry_scheduled 为空且 redispatch_calls=0，不证明重试耗尽、真实运行超时或底层根因。没有冻结载荷，不能视为成功正式版，也不能使用本恢复入口补发（恢复只接受有 GitHub archive digest 的完整原产物）。本轮发布候选定为 **v0.6.15**，compare 为 `v0.6.14...v0.6.15`（发布时前一版本按除目标外最高 `v*` tag 取 v0.6.14，包括失败 tag），成功升级基线仍为 v0.6.13；[Pi 完成修正阻塞 #913](https://github.com/SummerSec/DeepSonar/issues/913) 已于 `2026-11-05T15:40:59Z` 关闭。最终目标 SHA 的适用 Actions 与实际发布证据须分别核验；历史版本记录见 [CHANGELOG](../CHANGELOG.md)。
 >
 > **历史 v0.6.4 发布准备基线（2026-11-02，保留历史来源）**。准备时最近正式版为 [v0.6.2](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.2)，于 2026-10-31T09:05:38Z 正式发布，非 draft / prerelease；tag 指向包含 Web 隔离构建修复的 `347385a53f43d15a53175226528af10a692f6f9e`。[v0.6.3 的 Release](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 失败，已有部分镜像但未完成正式发行。按用户 2026-11-02 的选择，保留其 tag 和既有镜像，改发 **v0.6.4**；Git compare 起点为 v0.6.3，成功升级基线仍为 v0.6.2（schema 65 → 67）。本轮范围沿用[原范围决定](<../AGENTS.md#豁免范围>)，不移动旧 tag 或覆盖旧镜像。这里核对发布元数据与源码关系，不重新声明附件、签名或各通道镜像已逐项复验。
 >
@@ -16,20 +16,18 @@
 独立 `release-writeback` 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` 与 `deploy/.env.example` 中的 `DEEPSONAR_VERSION` 及三条平台镜像 digest 引用（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE`，按本次发布的 index digest 重新 inspect 写入，#740）**通过 bot 分支 PR 与必需检查合入仓库默认分支**（`chore(release): sync runtime-image-registry.json and image tag for vX.Y.Z`），用于更新内置 bundled 回退清单与部署示例版本。发布准备阶段不得手写运行镜像 digest 或提前改写 bundled 清单；v0.5.3 的 Chrome / ClickHouse 六个产品选择已知陈旧，须在新 Release 真实发布证据与最终 payload 门禁通过后由 workflow 回写纠正。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。**回写必须通过默认分支的 required check（#865 / #877）**：默认分支要求 `ci-summary`，而**直推会被规则拒绝**——即使 `ci-summary` 已经在同一个 SHA 上通过（v0.6.7 实测：日志先出现 `ci-summary passed on 8f3479d4`，随后 `push declined due to repository rule violations`，Release 未创建，最终由人工从 bot 分支开 PR 才把清单合并进去）。因此回写不再直推，而是**走与人工合并相同的路径**：
 
 1. 回写提交推到 `bot/sync-runtime-registry-v<version>` 分支；
-2. `GITHUB_TOKEN` 推送的分支不会自动触发 workflow，显式 `gh workflow run ci.yml --ref <branch>`；
-3. 轮询该 SHA 的 `ci-summary`，只有 `success` 才继续（`failure`/`cancelled`/`timed_out`/`skipped` 或 90 分钟无结论即失败，默认分支不动）；
-4. 打开（或复用已存在的）回写 PR，轮询 `mergeStateStatus` 直到 `CLEAN`，再 `gh pr merge --merge`；
-5. 合并后用 `compare` 校验默认分支确实包含该回写提交，然后删除 bot 分支。
+2. 创建或复用回写 PR，通过正常 PR 事件进入检查，不手动 dispatch 另一条与 PR 检查汇总无关的运行；
+3. 等待该 PR、该 head 的 `ci-summary` 成功及可合并状态；失败或等待批准时明确停止，不绕过 required checks；
+4. 正常执行 `gh pr merge --merge`，随后 `assertLanded` 用 compare 核对默认分支包含回写提交；
+5. 落地核验成功后删除 bot 分支。
 
-失败语义：dispatch 失败、检查失败/超时、PR 无法合并（`DIRTY`/`CONFLICTING`/`BEHIND`）、合并命令失败、`compare` 未包含该提交，任何一种都**不移动默认分支**并把 bot 分支留在原地供排查；错误信息保留远端 `remote:` 行（规则拒绝的原因），不再只给退出码。
+核对基线：2026-11-06，[实现](../agent-harness/release-writeback.mjs)默认轮询上限为 90 次、轮询间隔 60 秒；API/命令耗时另计，不是严格 90 分钟墙钟预算。`DIRTY`/`CONFLICTING` 明确拒绝，其他尚不可合并状态等待到轮询上限。合并前检查失败不会由脚本执行合并；合并命令结果未知、合并后 compare 或分支清理失败时，默认分支可能已经更新，必须先查询 PR/默认分支/远端分支再决定恢复，不承诺回滚或 bot 分支一定保留。错误信息保留远端 `remote:` 规则拒绝原因。
 
 要放行的是**同一条门禁**，不是绕过它：不要为 bot 配置 ruleset bypass、不要直推、也不要用可写 PAT 跳过必需检查。
 
-**发布按阶段可重入（#893）**：`release.yml` 的末端不再是「一个 job 里的两个不可逆动作」，而是两个独立阶段，都只消费同一份冻结载荷：`release-publish`（校验签名载荷 → 建 Release，Release 已存在则不改写）与 `release-writeback`（同步 bundled 清单与 `.env.example`，内容一致则早退）。写回阶段带 `continue-on-error`：失败会以失败 job 的形式可见，但**不会扣住已经可以发布的 Release**；反之 Release 已存在也不会阻塞写回。两段实现分别在 `agent-harness/release-publish.sh` 与 `agent-harness/release-writeback.sh`，被发布流程与 `.github/workflows/release-resume.yml` 共用。当某一阶段失败时，用默认分支上的 **Release resume** 手动触发，输入 `X.Y.Z`、原 `source_run_id` 与 `writeback | publish | both`。恢复身份、证据来源及拒绝条件见下节；它不重建或重新签名镜像。已正式存在的 Release 不改写；默认分支两个文件均一致时回写早退，尚未落地的 bot 分支仍走原 PR/required checks，相同完整树复用原 head 保留检查；默认分支已有更高版本时拒绝旧版回写。 前置条件：仓库必须允许 GitHub Actions 创建 PR（Settings → Actions → General → “Allow GitHub Actions to create and approve pull requests”，API 为 `repos/<owner>/<repo>/actions/permissions/workflow` 的 `can_approve_pull_request_reviews=true`）。回写脚本在动任何分支之前先检查该开关，关闭时立即以 `WRITEBACK_PR_PERMISSION_MISSING` 单条可执行提示失败，而不是先等满一轮门禁再报 GraphQL 错误（v0.6.8 实测：22 分钟后才失败）。bot 分支由 workflow 独占且可丢弃，因此用 `--force-with-lease` 覆盖上一次尝试留下的同名分支，避免非快进推送把发布卡死。
+**发布按阶段可重入（#893）**：`release.yml` 的末端不再是「一个 job 里的两个不可逆动作」，而是两个独立阶段，都只消费同一份冻结载荷：`release-publish`（校验签名载荷 → 建 Release，Release 已存在则不改写）与 `release-writeback`（同步 bundled 清单与 `.env.example`，内容一致则早退）。写回阶段带 `continue-on-error`：失败会以失败 job 的形式可见，但**不会扣住已经可以发布的 Release**；反之 Release 已存在也不会阻塞写回。两段实现分别在 `agent-harness/release-publish.sh` 与 `agent-harness/release-writeback.sh`，被发布流程与 `.github/workflows/release-resume.yml` 共用。当某一阶段失败时，用默认分支上的 **Release resume** 手动触发，输入 `X.Y.Z`、原 `source_run_id` 与 `writeback | publish | both`。恢复身份、证据来源及拒绝条件见下节；它不重建或重新签名镜像。已正式存在的 Release 不改写；默认分支两个文件均一致时回写早退，尚未落地的 bot 分支仍走原 PR/required checks，相同完整树复用原 head 保留检查；默认分支已有更高版本时拒绝旧版回写。 前置条件：仓库必须允许 GitHub Actions 创建 PR（Settings → Actions → General → “Allow GitHub Actions to create and approve pull requests”，API 为 `repos/<owner>/<repo>/actions/permissions/workflow` 的 `can_approve_pull_request_reviews=true`）。回写脚本在动任何分支之前先检查该开关，明确读到关闭时立即以 `WRITEBACK_PR_PERMISSION_MISSING` 单条可执行提示失败，权限端点不可读时记录未确认并继续到实际 PR 操作，不等于已证明允许；而不是先等满一轮门禁再报 GraphQL 错误（v0.6.8 实测：22 分钟后才失败）。bot 分支由 workflow 独占且可丢弃，因此用 `--force-with-lease` 覆盖上一次尝试留下的同名分支，避免非快进推送把发布卡死。
 
-**一次人工批准是这条路径的固有成本（#887）**：由 `GITHUB_TOKEN` 创建的 PR 被 GitHub 当作外部贡献者，它的 workflow 运行不会自动开始，而是**等待维护者在 Actions 里批准**；等待期间 PR 的检查汇总为空，回写若按「检查未结论」继续轮询就会白等到预算耗尽（v0.6.10 实测：08:37 建 PR，gate 停在待批准约一小时，回写在 10:08 以 `WRITEBACK_CHECK_TIMEOUT` 失败）。现在回写会识别这种运行（`status=waiting` 或 `conclusion=action_required`）并**立即**以 `WRITEBACK_RUN_AWAITING_APPROVAL` 失败，消息里给出该 run 与 PR 编号、以及「在 Actions 里批准后重跑本次 release job」。
-
-这是选择「不放宽必需检查」的代价：没有给 bot 配 ruleset bypass、也没有用可写 PAT 跳过门禁，所以每次发版需要维护者点一次批准。批准后 PR 变为 `CLEAN`，回写会按原门禁合并；发布是独立阶段。若回写已退出，可用恢复入口选择 writeback，清单与部署示例均一致时早退。v0.6.6 因直推被拒（`Required status check "ci-summary" is expected`）而没产出 Release，v0.6.7 因“直推即使检查已通过仍被拒”而没产出 Release，本条据此把回写改为 PR 合并。
+**维护者批准按实际运行状态处理（#887）**：若 GitHub 将回写 PR 的 Actions 运行置于 `status=waiting` 或 `conclusion=action_required`，脚本以 `WRITEBACK_RUN_AWAITING_APPROVAL` 停止并提供 run/PR 线索。维护者核实并批准该运行后，可恢复 writeback，再按原 required checks 和合并门禁继续。并非每次发布都必然等待批准，也不承诺批准恰好一次或批准后立即 `CLEAN`。历史 v0.6.10 曾等待批准并耗尽轮询预算；该事实不能替代当前运行状态查询。独立 publish 不受此批准等待阻塞。
 
 ## 恢复身份与原发布证据
 
@@ -42,6 +40,12 @@
 限制：只接受原运行 attempt 1；GitHub artifact API 不提供可靠的跨重跑 attempt 绑定，所以多 attempt、缺失/过期/重复 artifact、无 API archive digest、错误工作流/仓库/版本/commit、缺失成功阶段、下载或 API 失败均 fail closed。不能从本地副本或自报 receipt 修补这些缺口。真实恢复须另行授权；合成测试不代表已恢复任何旧版本。v0.6.14 run `42037159429` 未产生完整冻结载荷，不能恢复。
 
 Release 查询仅明确的 API 404 可进入 create，401/403/网络错误不当作缺失；已有正式 Release 的预期附件必须完整、已上传且 API digest 与冻结内容一致才幂等早退；缺件/不同内容或 draft/prerelease 冲突均停止供对账，不覆盖或补传。create 前在共享并发锁内分页查询已发布正式版本；存在更高稳定版本时显式 `--latest=false`，避免旧版本恢复倒退 latest/官方远端目录；查询失败停止。create 的未知结果不在同次执行自动重放，下一次恢复先查询现状。回写仍可能因 bot PR 等待批准或 required checks 失败而停止；不会绕过权限或检查。回归由 `ci:unit:runtime-registry` 的 Actions gate 执行，Draft 快检也显式运行恢复及原签名测试；覆盖合成冻结产物、假 API、受控发布命令与临时 Git 回写，不连接生产或真实模型。
+
+## v0.6.15 集成证据与升级边界
+
+2026-11-06 发布协调者完成日志验收的基线为 main `616d7a3651c0e0b89d9457f4f435c02f51f8561b`：核心 [42157394479](https://github.com/SummerSec/DeepSonar/actions/runs/42157394479)（gate/ci-summary）、Reverse [42157394594](https://github.com/SummerSec/DeepSonar/actions/runs/42157394594)（REA、Claude、Pi OM 双架构）、Mobile [42157394279](https://github.com/SummerSec/DeepSonar/actions/runs/42157394279)、Chrome [42157394517](https://github.com/SummerSec/DeepSonar/actions/runs/42157394517)、OpenHarmony [42157394433](https://github.com/SummerSec/DeepSonar/actions/runs/42157394433)、ClickHouse [42157395633](https://github.com/SummerSec/DeepSonar/actions/runs/42157395633) 均成功。该基线包含 #925/#926/#927/#928/#929/#930；不是后续 release-prep head、正式产物或生产/真实模型的通过证明。#934 egress sidecar 预拉取尚未计入此基线，须另验其合入与最终 SHA。
+
+schema 仍为 67（2026-11-06 对照 `apps/scheduler/src/schema-version.ts` 与 schema 基线），本轮未引入 schema 迁移；不为发布机械修改私有 package 版本。历史 Job 的请求策略缺失/非法，或多 Attempt 缺少策略回执时保持 fail closed，不补造无限预算；pending/unknown 效果仍阻止新代际。修复入队不等于执行完成，不静默修改旧快照。Claude Code 的运行中额度不足仍可明确拒绝并提示；DSH 不承诺持久会话恢复。详见[透明传输](MODEL_GATEWAY_TRANSPARENCY.md)与[修复生命周期](AGENT_REPAIR_LIFECYCLE.md)。
 
 ## 控制面镜像平台矩阵（#598）
 
@@ -68,13 +72,13 @@ CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚�
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。
 
-发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-05 当前候选为 v0.6.14，预期 compare 为 `v0.6.13...v0.6.14`，最近正式升级基线为 v0.6.13，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
+发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-06 当前候选为 v0.6.15，预期 compare 为 `v0.6.14...v0.6.15`（前一版本按除目标外最高 `v*` tag 取保留的失败 tag v0.6.14），最近正式升级基线为 v0.6.13，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
 
 ```bash
 pnpm ci:unit:docs-freshness
 pnpm ci:unit:changelog
 # 本轮真实 changelog 区段（仅在 Actions 执行）：
-node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.14 --previous-version 0.6.13 --tag v0.6.14
+node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.15 --previous-version 0.6.14 --tag v0.6.15
 pnpm typecheck
 pnpm build
 pnpm ci:images

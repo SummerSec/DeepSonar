@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-05
+> 同步日期：2026-11-06
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
@@ -260,7 +260,7 @@ Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报
 
 Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`unknown`/`pending` 保持硬失败，不能以 provider 5xx 文案替代效果 authority。#873 的 OM admission 回滚耗尽与已持久结算的请求前 transport 使用同一个宿主 error.message carrier，覆盖 SDK 只保留内层消息的路径；上游请求与结算不作为可重试 admission 重放。
 
-#874 的[完成恢复 v1](docs/REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)由原负回执、宿主恢复事实和去重 Hub 驱动。只有 Scheduler 冻结引用授权的严格对账/停止提案能进入原 Control 与语义事务；精确 effect/ledger 才能结算，原 key 不改写，原 deadline/预算、pause、人工、Verify 和完成门保持有效。Reaper 复用原 tick 做有界扫描，不自动对账或复活终态；显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](docs/AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录。共享卷同时受独立 PG session 的同 Job 生命周期锁和最新 Attempt fence 保护，锁保持至挂载与资源绑定完成，Docker volume/helper 使用独立 generation 名称，prepare 不采纳后继资源；清理快照后及破坏性调用前重验 session 许可。续租用精确 Attempt/sandbox registration 和 Job → 最新 Attempt 事务，旧 finally/tick 不能操作新 owner；详见[资产专题](docs/SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。本轮完整最终 SHA Actions 尚待验收。
+#874 的[完成恢复 v1](docs/REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)由原负回执、宿主恢复事实和去重 Hub 驱动。只有 Scheduler 冻结引用授权的严格对账/停止提案能进入原 Control 与语义事务；精确 effect/ledger 才能结算，原 key 不改写，原 deadline/预算、pause、人工、Verify 和完成门保持有效。Reaper 复用原 tick 做有界扫描，不自动对账或复活终态；显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](docs/AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录。共享卷同时受独立 PG session 的同 Job 生命周期锁和最新 Attempt fence 保护，锁保持至挂载与资源绑定完成，Docker volume/helper 使用独立 generation 名称，prepare 不采纳后继资源；清理快照后及破坏性调用前重验 session 许可。续租用精确 Attempt/sandbox registration 和 Job → 最新 Attempt 事务，旧 finally/tick 不能操作新 owner；详见[资产专题](docs/SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。本轮main 616d7a36 工程验收见[发布基线](docs/RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
 
 `finalizeJob` 的已核验终态路径把 Job/model token、Control token、audit 与终态收口放在同一事务；终态后实际 HTTP 请求断言为 401。`gateway-token-revocation.ts` 复用调用方 Job 锁，不另取独立 Job 锁，也不吞掉失败。该核验只约束此 core finalizeJob 路径，不推断所有 drain/Reaper 清理路径都具有相同实现。
 
@@ -290,7 +290,7 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 **凭据先行解析（#757）：** Scheduler 先按项目作用域、active 状态、Provider、模型要求及显式项目白名单形成候选，再从凭据的排他 `agent_cli` 决定运行 CLI。单候选不受项目/全局软偏好误筛；Hub 显式 CLI 是硬约束，冲突仍以 `provider_credential_cli_mismatch` 拒绝。跨 CLI 多候选按项目 `default_agent_cli`、全局 RoleConfig 显式 CLI 消歧；全局种子 `agent_cli=NULL` 表示未指定偏好，用户显式选择 `claude-code` 才是偏好。没有可用偏好且无法唯一解析时返回 `provider_credential_multi_match`；项目默认凭据只在最终候选内选择。readiness 与新 Job 快照复用同一凭据解析函数。项目 RoleConfig 的 `agent_cli` / `model` 已停止写入和暴露并清空，项目运行身份从 Agent 设置声明。CLI 与凭据白名单分别可选收紧，读取不会把当前 active 凭据 ID 自动持久化；显式名单或默认凭据引用删除、停用、不可访问项时返回 `provider_credential_allowlist_stale` 及管理员修复指引，不能静默扩大名单。账号 × CLI 排他、六档并发、密钥隔离、镜像准入及历史 Job 快照不变。
 
-#914 当前仅交付[项目凭据引用保护切片](docs/architecture/09-interface-specs.md#项目凭据引用保护914-切片)：impact 按项目 scope 过滤，DELETE 独立拒绝全局尚存引用，设置写入在事务内与删除共用凭据行锁并重验全部引用；保留缺键与显式空白名单语义，不改写历史 Job。完整默认账号 UX 未由此交付，最终 SHA Actions 仍须另验。
+#914 的 #925 服务端切片已交付[项目凭据引用保护切片](docs/architecture/09-interface-specs.md#项目凭据引用保护914-切片)：impact 按项目 scope 过滤，DELETE 独立拒绝全局尚存引用，设置写入在事务内与删除共用凭据行锁并重验全部引用；保留缺键与显式空白名单语义，不改写历史 Job。默认账号显式选择与修复导航由 #929 补齐；已合入 main 的工程证据见[发布基线](docs/RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，后续 SHA 另验。
 
 旧库升级不能从 CLI 值猜测种子来源：本地 `db:rebuild` 对版本未知或低于 v60、目标至少 v60 且需复制旧角色身份的库执行身份复核；需要重置时，只有管理员显式 `--reset-role-identity` 才丢弃旧角色 CLI/项目模型并保留全局模型和历史 Job，须有备份或明确保留 staging。宿主维护升级另按目标计划审批身份重置风险。详见[数据库升级说明](database/README.md#v60-角色身份复核757)及[维护升级说明](deploy/README.md)。
 

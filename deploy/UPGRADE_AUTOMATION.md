@@ -26,7 +26,7 @@ node agent-harness/platform-signature-release.mjs < reviewed-signature-input.jso
 node agent-harness/platform-signature-release.mjs --execute --policy /private/signature-policy.json < reviewed-signature-input.json
 ```
 
-用户于 2026-10-22 明确批准本发布权限及新版签名。`release.yml` 将最终产物准备、签名与正式发布分成有依赖的 job：`prepare-release` 保留既有最终 inspect 和清单校验，冻结产物与 catalog hash；`platform-signatures` 从同一次运行读取冻结清单，校验正式 tag、实际 checkout SHA 和版本，签三个 GHCR index 并独立验签；`release` 只接受成功签名且与冻结清单绑定的回执，随后发布附件并回写 bundled 清单。签名失败不降级为无签名 Release。
+用户于 2026-10-22 明确批准本发布权限及新版签名。`release.yml` 将最终产物准备、签名与正式发布分成有依赖的 job：`prepare-release` 保留既有最终 inspect 和清单校验，冻结产物与 catalog hash；`platform-signatures` 从同一次运行读取冻结清单，校验正式 tag、实际 checkout SHA 和版本，签三个 GHCR index 并独立验签；独立 `release-publish` / `release-writeback` 消费成功签名且与冻结清单绑定的回执，分别发布附件与通过 bot PR/required checks 回写 bundled 清单；写回失败不阻塞独立发布，恢复和失败边界见[发布运行手册](../docs/RELEASE_RUNTIME_IMAGES.md)。签名失败不降级为无签名 Release。
 
 新增权限仅在 `platform-signatures` 中为 `id-token: write`；该 job 使用 `contents: read` 和既有 `packages: write`。复用现有 `GITHUB_TOKEN` 登录 GHCR，不创建长期私钥、PAT 或 OAuth 应用，不增加仓库全局令牌权限。GitHub OIDC 签发短期身份，Fulcio 产生证书，签名与身份进入公开 Rekor/GHCR 记录。只对正式稳定 tag 的三个平台镜像签名，不扩展到 ACR、Docker Hub 或 Agent runtime。
 

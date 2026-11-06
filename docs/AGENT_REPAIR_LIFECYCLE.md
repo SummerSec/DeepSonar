@@ -1,7 +1,7 @@
 # Agent 错误反馈与执行恢复（#903）
 
-> 状态：实现与回归接线；最终 SHA 的 GitHub Actions 结果以 PR 为准，未执行项不能算通过
-> 同步日期：2026-11-05
+> 状态：as-built；#930 与 #928 已合入 main 616d7a36，工程证据见下文，后续 SHA 另验
+> 同步日期：2026-11-06
 
 这是 [完成回执](REPAIR_FEEDBACK_DONE_REPAIR.md)的生命周期扩展。设计取舍见 [ADR 0016](architecture/adr/0016-repair-execution-generations.md)。#911 已合入 Knowledge/Skill 分类透传；#919（#913）已合入仅在宿主接受完成后识别结构化 Gateway 拒绝的运行器处理。本次不重复这两片，也不把工程证据写成真实模型试验。
 
@@ -9,7 +9,7 @@
 
 同 Job 的修复次数、revision、token 根与已知/未知用量累计保留。`resume` 保留原冻结快照且拒绝身份漂移；`rerun-current` 重新核对当前配置和目标授权。存在拒绝历史时，两者仅在旧效果全部结算、原期限未到、预算仍允许且未暂停/接受完成时追加新代际。锁顺序为 Canvas → Job → Attempt；与旧 effect intent 写入、Dispatcher 领取互斥。 pending 转换意外返回空结果时抛错回滚整个事务，再在事务外映射业务拒绝；批量恢复不得跳过失败成员并提交其他成员。隔离 SQL 触发器故障注入覆盖该回滚边界。
 
-恢复事务在旧快照仍可用时调用共享 `inspectGatewayRequestBudget`，通过全部只读门后再调用 `ensureGatewayRequestBudget`，把完整原请求策略保存在内核 `control_receipt`，包括从未签发 token 的 workload。普通无修复回执的恢复也执行该步骤；批量先检查所有成员，再写入。历史策略缺失/非法保持明确拒绝，rate-limit、dedup、policy receipt 与 pending 转换共同回滚。Gateway mint/admission 消费这些策略回执属于 #928 联合交付，不能把本分支仅保存回执当作请求上限已经端到端执行。
+恢复事务在旧快照仍可用时调用共享 `inspectGatewayRequestBudget`，通过全部只读门后再调用 `ensureGatewayRequestBudget`，把完整原请求策略保存在内核 `control_receipt`，包括从未签发 token 的 workload。普通无修复回执的恢复也执行该步骤；批量先检查所有成员，再写入。历史策略缺失/非法保持明确拒绝，rate-limit、dedup、policy receipt 与 pending 转换共同回滚。Gateway mint/admission 消费策略回执已由 #928 与 #930 联合合入；请求上限的组合工程证据见下文，不由单独保存回执推定。
 
 `rerun-current` 保留原已授权 Pi 扩展选择并重新经过当前镜像/扩展准入。创建与恢复共用 `job-runtime-freeze.ts`，按平台配置一致重冻 quota、runtime knobs、profile 和 launch；较大的新配置不会授权提高旧 Job 持久请求策略。
 
@@ -21,7 +21,7 @@
 
 ## 审计矩阵
 
-下表“实现”指当前分支源码及接线；不是未运行测试的通过结论。
+下表“实现”指已合入源码及接线；不是未运行测试的通过结论。
 
 | operation / 原因 × 当前状态 | 接受/未知效果与反馈 | 合法下一步 / 终止条件 | 实现与工程入口 |
 | --- | --- | --- | --- |
@@ -42,17 +42,19 @@
 
 ## 验证边界与注意力成本
 
-本地只进行静态阅读与 `git diff --check`；测试、构建、typecheck 在 GitHub Actions。联合请求额度回归依赖 #928 consumer：真实创建/HTTP 恢复/Dispatcher 后首次 OM token 仍受旧 10/8/2 策略约束，并覆盖未签发任何 token、连续恢复和非法原策略整批拒绝。该联合代码尚未运行。新增恢复测试覆盖 OM main90/后台15/主上限100 的恢复与重新冻结最终结算、main 耗尽和旧后台 pending/unknown 的无变更拒绝，以及重冻后旧模型拒绝/新模型成功。使用隔离随机 PostgreSQL、假凭据、loopback 假上游和受控 runtime handler；真实 HTTP handler、预算、回执和最终 ingestion 属于工程覆盖，不是生产运行或真实模型理解。当前源码存在不等于最终 SHA 全绿。
+本地只进行静态阅读与 `git diff --check`；测试、构建、typecheck 在 GitHub Actions。联合请求额度回归依赖 #928 consumer：真实创建/HTTP 恢复/Dispatcher 后首次 OM token 仍受旧 10/8/2 策略约束，并覆盖未签发任何 token、连续恢复和非法原策略整批拒绝。该联合代码已包含在下述 main 工程验收基线。新增恢复测试覆盖 OM main90/后台15/主上限100 的恢复与重新冻结最终结算、main 耗尽和旧后台 pending/unknown 的无变更拒绝，以及重冻后旧模型拒绝/新模型成功。使用隔离随机 PostgreSQL、假凭据、loopback 假上游和受控 runtime handler；真实 HTTP handler、预算、回执和最终 ingestion 属于工程覆盖，不是生产运行或真实模型理解。当前源码存在不等于最终 SHA 全绿。
 
 界面复用已有 Job 诊断和恢复入口，不增加通知/配置；当前状态明确区分等待人、平台对账和可请求恢复。没有宿主许可时不显示“安全重试”，减少用户误判和重复点击；响应仍需服务端实时准入。
 
 
 当前状态保留 `accepted_terminal=human` 的接受事实，并返回 `human_wait_kind` / `wait_owner`。credential 指向平台管理员修复，authorization 指向有权限的操作员；high_risk_action、business_decision 和 Finding 判断仍是明确人工决策。无类型历史只提示检查，不猜测需要回复 Agent。此分类不解除人工等待、不自动恢复、不授予授权。任务级批量恢复与单 Job 恢复共用实时目标授权预检；全批次通过后才改变 convergence、代际、Attempt 或 grants。
 
-普通恢复即使从未产生 rejected completion，也必须通过暂停、所有旧未结算效果、已接受完成与累计模型额度的只读准入；只有修复 revision/deadline 依赖 repair root。无 root 的单 Job resume/rerun-current 与 sibling 批次负例验证拒绝不修改原状态。隔离数据库的第二 sibling 策略 INSERT 故障测试以非事务 sequence 作为到达见证，确认第一份策略回执及双方 dedup/rate-limit 写入后才抛错，再比较整批持久状态全部回滚；此测试已编写但尚未执行。
+普通恢复即使从未产生 rejected completion，也必须通过暂停、所有旧未结算效果、已接受完成与累计模型额度的只读准入；只有修复 revision/deadline 依赖 repair root。无 root 的单 Job resume/rerun-current 与 sibling 批次负例验证拒绝不修改原状态。隔离数据库的第二 sibling 策略 INSERT 故障测试以非事务 sequence 作为到达见证，确认第一份策略回执及双方 dedup/rate-limit 写入后才抛错，再比较整批持久状态全部回滚；该测试的工程证据归属下述 main 验收基线。
 
-无 repair root 的额度负例通过两个真实 loopback Gateway grant 累积结算：请求 4+4 达到主上限 8、token 10+10 达到主上限 20。resume、rerun-current、resume-session 均断言额度错误、没有额外上游调用且整批持久状态不变；未手工写费用账本或请求计数，测试仍待 Actions 运行。
+无 repair root 的额度负例通过两个真实 loopback Gateway grant 累积结算：请求 4+4 达到主上限 8、token 10+10 达到主上限 20。resume、rerun-current、resume-session 均断言额度错误、没有额外上游调用且整批持久状态不变；未手工写费用账本或请求计数，工程证据归属下述 main 验收基线。
 
-Hub 普通 Intent 和 PlanTask 创建也经过统一 `freezeJobRuntimeConfiguration`，不再把缺 runtime knobs 的 resolver 快照直接公开为 pending Job。`plan-execution.integration.test.ts` 使用真实 Control→ingestion 创建并检查完整 knobs/profile/launch，以及普通 Intent、PlanTask 图写入故障后的原子回滚；仅合成夹具，新增断言尚未运行。
+Hub 普通 Intent 和 PlanTask 创建也经过统一 `freezeJobRuntimeConfiguration`，不再把缺 runtime knobs 的 resolver 快照直接公开为 pending Job。`plan-execution.integration.test.ts` 使用真实 Control→ingestion 创建并检查完整 knobs/profile/launch，以及普通 Intent、PlanTask 图写入故障后的原子回滚；仅合成夹具，工程证据归属下述 main 验收基线。
 
-专门 Hub Pi+OM 回归位于 `repair-generation.integration.test.ts`：正式 Control `submit_hub_decision` → 只读预检 → ingestion 以真实 resolver 创建 pending Worker，不回填快照；检查 10/8/2 配额、完整 knobs、profile 与 launch 一致。缺少有限分配、分配超过总额均在预检返回 `pi_om_configuration_invalid` / `permanent_failure`，指向平台管理员且禁止 Agent 扩额或换 key 自动重试；断言无 ingestion、子 Job、图或已接受语义效果。此新增合成覆盖尚未运行，不代表真实模型或镜像验证。
+专门 Hub Pi+OM 回归位于 `repair-generation.integration.test.ts`：正式 Control `submit_hub_decision` → 只读预检 → ingestion 以真实 resolver 创建 pending Worker，不回填快照；检查 10/8/2 配额、完整 knobs、profile 与 launch 一致。缺少有限分配、分配超过总额均在预检返回 `pi_om_configuration_invalid` / `permanent_failure`，指向平台管理员且禁止 Agent 扩额或换 key 自动重试；断言无 ingestion、子 Job、图或已接受语义效果。此合成覆盖归属下述 main 验收基线，不代表真实模型验证。
+
+2026-11-06 工程证据：发布协调者已验收 main `616d7a3651c0e0b89d9457f4f435c02f51f8561b` 的核心与五项专项 Actions 日志，链接集中见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。后续提交仍须独立检查，不证明正式发布、生产或真实模型结果。

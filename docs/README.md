@@ -1,12 +1,12 @@
 # DeepSonar 文档索引
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-05
+> 同步日期：2026-11-06
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
 
-> **v0.6.14 发布准备（2026-11-05）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)。Plan 范围修正与其他已合入补丁列于 [CHANGELOG](../CHANGELOG.md)，[#913 完成修正阻塞](https://github.com/SummerSec/DeepSonar/issues/913) 仍为已知问题。最终 main Actions 与正式产物成功状态分别核对。
+> **v0.6.15 发布准备（2026-11-06）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)。Plan 范围修正与其他已合入补丁列于 [CHANGELOG](../CHANGELOG.md)，[#913](https://github.com/SummerSec/DeepSonar/issues/913) 的 accepted-terminal 窄修复已由 #919 合入，#930 增加受治理修复代际。最终 main Actions 与正式产物成功状态分别核对。
 
-#914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由独立变更处理，不能据此视为整个 issue 完成。最终 SHA Actions 待验收。
+#914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由 #925 交付，UI 由 #929 交付；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，不代表自动重跑或快照改写。
 
 > **注意力原则（#830）**：单一权威定义见 [DESIGN](../DESIGN.md#核心理念优化人的注意力)，开发与贡献入口引用同一[工程评审及正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)。NFR-UX-001 登记约束与验证范围；本次只落实设计/评审依据，不改变运行时、UI 或授权，也不宣称注意力收益。
 
@@ -17,7 +17,7 @@
 
 > **Finding quality engineering (2026-11-01, #770/#819)**: Identity/relation and lexical/weak-candidate mechanisms remain distinct. The agreed schema67 engineering slice merged via #831 includes protocol/freeze/exposure receipts, exact-bigint CAS, bounded actual-SQL observations/recomputed reports and protected structural review/revoke. [FR-FIND-007/009](<architecture/01-system-specification.md>), [ADR 0014](<architecture/adr/0014-operator-finding-identity.md>) and [evaluation status](<PROJECT_FINDING_EVALUATION.md>) preserve not_evaluated/published=false. Host external-fact verification, current certificates/promotion/guarded publication are missing; independent labels/aliases/provenance, verified family/asset partitions and pre-access adopted thresholds remain unverified. Source-loader capture is TCB evidence, not self-signature or human-quality proof. The engineering slice passed the exact-main Actions listed below and #819 closed within the agreed scope; deferred quality and Host certification/promotion are not delivered.
 
-> **当前稳定性修复（2026-11-04，#871/#873/#874）**：Gateway admission 纯数据库有界重试、SDK error.message 的宿主安全降级 carrier、分候选页独立事务的 Canvas-first 领取与忙锁补槽，以及[跨 Attempt 共享卷生命周期](SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)在当前修复分支整合；[完成恢复 v1](REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)使用持久宿主事实、去重 Hub 与严格对账/停止提案。完整最终 SHA Actions 尚待验收，显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录，正式版本状态另行核对。
+> **当前稳定性修复（2026-11-04，#871/#873/#874）**：Gateway admission 纯数据库有界重试、SDK error.message 的宿主安全降级 carrier、分候选页独立事务的 Canvas-first 领取与忙锁补槽，以及[跨 Attempt 共享卷生命周期](SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)在已合入主线整合；[完成恢复 v1](REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)使用持久宿主事实、去重 Hub 与严格对账/停止提案。main 616d7a36 工程验收见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验，显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录，正式版本状态另行核对。
 
 > **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
@@ -28,7 +28,7 @@
 
 > **账号修复审查补强（2026-10-18，#748 / #749）**：普通编辑保留 Claude 独立 tier；上游错误摘要覆盖配置秘密与 C1 控制字符；探测结果回写按配置、CLI 和项目核对；Windows 基线重建支持 CRLF/LF。详见 [`../DESIGN.md`](../DESIGN.md) §8 与 [凭据解析运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)。
 
-> **凭据引用保护（2026-11-05，#914 切片）**：项目范围 impact、全局删除完整性与设置/删除共用凭据行锁已接线；真实 PG 双会话与 scoped HTTP 回归复用 `pnpm ci:integration:credential-delete`。保留空白名单与冻结 Job，不提供新编辑器或自动扩权修复；完整默认账号 UX 未交付，最终 Actions 尚待验收。详见[接口规格](architecture/09-interface-specs.md#项目凭据引用保护914-切片)。
+> **凭据引用保护（2026-11-05，#914 切片）**：项目范围 impact、全局删除完整性与设置/删除共用凭据行锁已接线；真实 PG 双会话与 scoped HTTP 回归复用 `pnpm ci:integration:credential-delete`。保留空白名单与冻结 Job，不提供新编辑器或自动扩权修复；本句仅描述 #925 服务端切片，#929 已补齐显式默认账号选择与修复导航；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。详见[接口规格](architecture/09-interface-specs.md#项目凭据引用保护914-切片)。
 
 > **凭据解析同步（2026-10-21，#757）**：Provider/model/项目授权先形成候选，凭据决定 CLI；readiness 与 Job 共用解析，区分全局种子无偏好和用户显式偏好。项目 RoleConfig 不再暴露可写却不生效的 CLI/model，未收紧白名单读取不固化凭据 ID。详见 [运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)、[数据架构](architecture/08-data-architecture.md)与[接口规范](architecture/09-interface-specs.md)。
 
@@ -79,7 +79,7 @@
 | [USAGE_LIMITS.md](USAGE_LIMITS.md) | **as-built** | 用量预算默认不限、显式限额、历史冻结策略及保留安全边界 |
 | [AI_NATIVE_TRUSTED_KERNEL.md](AI_NATIVE_TRUSTED_KERNEL.md) | **长期提案 + 已实现边界（2026-10-31）** | `RepairFeedback`、目标授权及 Plan v2 工程边界已有实现；完整长期协议、当前回放/组合验证与独立质量分别登记 |
 | [PI_OBSERVATIONAL_MEMORY_INTEGRATION.md](PI_OBSERVATIONAL_MEMORY_INTEGRATION.md) | **#815 A 工程与本地镜像准入已验** | canonical 固定发布物、独立 wrapper 指纹、opt-in 冻结配置/模型；OM 专属版本准入与生产内容守卫已验证，镜像证据集中见 RPC 专题 |
-| [MODEL_GATEWAY_TRANSPARENCY.md](MODEL_GATEWAY_TRANSPARENCY.md) | **#923 分支实现，Actions 待验** | 原始请求/响应、HTTP 边界、显式预算拒绝与 OM 持久确认；有界请求流限制和验收入口 |
+| [MODEL_GATEWAY_TRANSPARENCY.md](MODEL_GATEWAY_TRANSPARENCY.md) | **#928 已合入；main 616d7a36 工程验收** | 原始请求/响应、HTTP 边界、显式预算拒绝与 OM 持久确认；有界请求流限制和验收入口 |
 | [PI_OBSERVATIONAL_MEMORY_GATEWAY.md](PI_OBSERVATIONAL_MEMORY_GATEWAY.md) | **#815 B 工程已随 #831 Actions 验收** | 内核 workload 凭据、冻结路由、额度/归因、pending/unknown 与终态撤销；历史 Gateway budget/SQL/HTTP 证据保留原范围，后续修复 SHA、发布与收益结论另计 |
 | [PI_OBSERVATIONAL_MEMORY_RPC.md](PI_OBSERVATIONAL_MEMORY_RPC.md) | **#815 C 实际本地镜像 RPC/启动拒绝已验** | 本地 base 镜像身份、canonical package/lock/manifest/wrapper 预检、已安装真实 RPC 与独立生产 guard 正负例的唯一详细记录；#831 工程 Actions 已验收，后续修复 SHA/发布通道及收益另计 |
 | [SUPERAGENT_GAP_RESEARCH.md](SUPERAGENT_GAP_RESEARCH.md) | **研究结论（#833）** | DeepSeek Super Agent 与现有设计的差距评估：结论是不新增系统或功能层，已有 Hub/Intent/Job、能力发现、Skill 拉取、项目知识与成果评价覆盖大部分能力；效果改善仍无对照证据，后续只按现有架构推进。 |
