@@ -51,6 +51,8 @@ jobs:
       required_suites: ${{ steps.plan.outputs.required_suites }}
       fast_suites: ${{ steps.plan.outputs.fast_suites }}
       reasons: ${{ steps.plan.outputs.reasons }}
+      # #961: Chrome Fuzz ARM 构建/冒烟是否属于本次必跑集合（plan 判定，跳过必须可解释）
+      chrome_fuzz_arm: ${{ steps.plan.outputs.chrome_fuzz_arm }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -983,7 +985,9 @@ jobs:
   chrome-fuzz-arm64-build:
     runs-on: ubuntu-latest
     needs: changes
-    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
+    # #961: 只有运行计划判定本次改动可能影响 V8 构建时才起这组 ARM 门禁；
+    # plan 失败/分类失败/非 PR 事件在模型里一律 fail closed 为 required。
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full' && needs.changes.outputs.chrome_fuzz_arm == 'required'
     timeout-minutes: 240
     permissions:
       contents: read
@@ -1090,7 +1094,7 @@ jobs:
   chrome-fuzz-arm64:
     needs: [changes, chrome-fuzz-arm64-build]
     runs-on: ubuntu-24.04-arm
-    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full' && needs.chrome-fuzz-arm64-build.result == 'success'
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full' && needs.changes.outputs.chrome_fuzz_arm == 'required' && needs.chrome-fuzz-arm64-build.result == 'success'
     timeout-minutes: 30
     permissions:
       contents: read
@@ -1213,6 +1217,7 @@ jobs:
           IMAGES: ${{ needs.runtime-images.result }}
           FUZZ_BUILD: ${{ needs.chrome-fuzz-arm64-build.result }}
           FUZZ: ${{ needs.chrome-fuzz-arm64.result }}
+          FUZZ_ARM_REQUIRED: ${{ needs.changes.outputs.chrome_fuzz_arm }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$1"; exit 1; }
@@ -1238,17 +1243,34 @@ jobs:
             fi
           }
 
+          # #961: ARM Chrome Fuzz 只在计划判定 required 时必跑。跳过必须来自计划
+          # （chrome_fuzz_arm=skipped），失败/取消永远不能放行。
+          [[ "$FUZZ_ARM_REQUIRED" == "required" || "$FUZZ_ARM_REQUIRED" == "skipped" ]] || fail "missing or invalid chrome_fuzz_arm output: ${FUZZ_ARM_REQUIRED:-<empty>}"
+          check_planned() {
+            local name="$1" result="$2"
+            case "$result" in
+              failure|cancelled) fail "$name did not complete cleanly: $result" ;;
+            esac
+            if [ "$FUZZ_ARM_REQUIRED" = "required" ]; then
+              [ "$result" = "success" ] || fail "$name is required by the run plan but got: $result"
+            else
+              [ "$result" = "skipped" ] || [ "$result" = "success" ] || fail "$name result unexpected for a planned skip: $result"
+            fi
+          }
+
           check_heavy windows-upgrade-backend "$WINDOWS"
           check_heavy crash-recovery "$CRASH"
           check_heavy lexical-pressure "$LEXICAL"
           check_heavy pi-om-growth "$PIOM"
           check_heavy gate "$GATE"
           check_heavy runtime-images "$IMAGES"
-          check_heavy chrome-fuzz-arm64-build "$FUZZ_BUILD"
-          check_heavy chrome-fuzz-arm64 "$FUZZ"
+          check_planned chrome-fuzz-arm64-build "$FUZZ_BUILD"
+          check_planned chrome-fuzz-arm64 "$FUZZ"
 
           if [ "$DOCS_ONLY" = "true" ]; then
             echo "docs-only change: docs-freshness passed; heavy jobs skipped as expected"
+          elif [ "$FUZZ_ARM_REQUIRED" = "skipped" ]; then
+            echo "full run: docs-freshness and heavy jobs passed; Chrome Fuzz ARM skipped by the run plan (inputs unchanged)"
           else
             echo "full run: docs-freshness and all heavy jobs passed"
           fi

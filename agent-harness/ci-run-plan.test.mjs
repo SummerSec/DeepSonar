@@ -315,3 +315,19 @@ test("#961 a deleted or renamed Chrome fuzz input still keeps the ARM gate requi
   });
   assert.equal(renamed.chromeFuzzArm, true);
 });
+
+// #961: the plan alone changes nothing — the workflow must consume it, and the
+// summary must judge the ARM pair by the plan instead of requiring them always.
+test("#961 ci.yml wires the Chrome Fuzz ARM gate to the run plan", () => {
+  const workflow = readFileSync(`${ROOT}/.github/workflows/ci.yml`, "utf8");
+  assert.match(workflow, /chrome_fuzz_arm: \$\{\{ steps\.plan\.outputs\.chrome_fuzz_arm \}\}/u);
+  assert.match(workflow, /needs\.changes\.outputs\.chrome_fuzz_arm == 'required'/u);
+  const armGateCount = (workflow.match(/needs\.changes\.outputs\.chrome_fuzz_arm == 'required'/gu) ?? []).length;
+  assert.ok(armGateCount >= 2, "both the ARM build and its native smoke must be gated by the plan");
+  assert.match(workflow, /FUZZ_ARM_REQUIRED: \$\{\{ needs\.changes\.outputs\.chrome_fuzz_arm \}\}/u);
+  assert.match(workflow, /missing or invalid chrome_fuzz_arm output/u);
+  assert.match(workflow, /check_planned chrome-fuzz-arm64-build/u);
+  assert.match(workflow, /check_planned chrome-fuzz-arm64/u);
+  // 失败/取消必须在 check_planned 里先被拒绝，不能被「计划说可跳过」吞掉。
+  assert.match(workflow, /failure\|cancelled\) fail "\$name did not complete cleanly/u);
+});
