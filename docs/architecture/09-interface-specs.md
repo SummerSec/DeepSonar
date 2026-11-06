@@ -110,6 +110,8 @@ Gateway 的请求次数额度在 Job 锁内跨 token/Attempt 累计；撤销/过
 
 ## 稳定错误和 RepairFeedback
 
+#951 候选在实际 `executeReal` 运行结束后的本地缺 done 路径使用 `AGENT_COMPLETION_UNOBSERVED`；原 runner/语义错误仍保留原错误对象/分类。诊断写入现有 Job Evidence stream，由既有项目/Job 权限读取，不增加公开 transcript/工具输入或新恢复接口。原控制回执按 Job/Attempt/snapshot/receipt identity 验证后只投影元数据；接纳或 done 事件存在不表示最终 Job 成功，读取不可用不表示无提案、零用量或可重放。终态 token 失效后应由有权用户通过既有 Job 详情/证据检查，不建议猜测新 token/key。详细字段及候选待验范围见[完成失败诊断](../AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)。
+
 | 层 | 典型错误 | 调用方动作 |
 | --- | --- | --- |
 | 认证/作用域 | 未认证、项目越界、token 过期/撤销 | 停止调用并重新走管理授权；不能用新输入绕过 scope |
