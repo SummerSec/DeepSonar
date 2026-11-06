@@ -83,6 +83,8 @@ OM 响应不再由 Gateway 缓冲后换成结算错误。受审 [wrapper](../age
 
 配额拒绝及已回滚的 admission 数据库冲突耗尽，也必须有持久的宿主无外部效果回执才允许 OM 可见降级。[admission receipt helper](../apps/scheduler/src/gateway-admission-receipt.ts) 在确认未发上游、且失败 admission 已回滚后，另开事务复用 `events` 的 `control_receipt`：`operation=gateway_admission`、`authority=kernel`，按 Job/Attempt/token/workload/请求 UUID 绑定，复用事件限流与 dedup。它不创建模型 effect、不增加模型请求计数或 usage，不改 schema。查询同 scope 回执得到 `not_started` 才能按已知 quota/transient 降级；保存失败、缺失或不匹配保持 unknown。相同 UUID 不得重新发起上游请求。请求前 transport 的原 effect/零用量结算路径保持独立，不能与未准入回执混淆。
 
+Reverse 工作流将 Claude、Pi/OM 和 Reverse/REA 分为三个独立原生双架构 job 矩阵；各自从同一 checkout 构建 base，不依赖另一专项通过后才启动。Claude 与 Pi/OM 各有独立结果摘要，Pi/OM 保留原有证据附件。最终 `reverse-runtime-acceptance` 汇总必须同时取得三组 success；失败、取消或未运行不能替代通过，未使用 continue-on-error。拆分后的精确 SHA 仍须经 Actions 验证。
+
 ## 验收范围
 
 合成凭据、合成 Job token、隔离 PostgreSQL 和 loopback 假上游是本轮证据来源，不访问真实模型或生产。新增 [传输测试](../apps/scheduler/src/gateway-transparent-http.test.ts)、[端到端测试](../apps/scheduler/src/gateway-transparent.integration.test.ts)，并更新已有 provider、budget、OM 与 wrapper 回归；[主 CLI 请求准入测试](../packages/runtime-sandbox/src/model-request-policy.test.ts)验证适配器与 CLI 形状的合成请求，不能冒充实际三 CLI 运行证据；实际 Actions 接线以 [package scripts](../package.json) 和 [工作流](../.github/workflows/ci.yml) 为准。
