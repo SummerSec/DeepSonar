@@ -130,6 +130,9 @@ jobs:
       - name: CI routing and failure propagation regression
         run: pnpm ci:unit:ci-routing
 
+      - name: OM fixture completion receipt regression
+        run: python3 agent-harness/opensandbox/om-provider-headers-completion.test.py
+
       - name: Docs freshness guard (version literals, pnpm scripts, links, removed mechanisms)
         run: pnpm ci:unit:docs-freshness
 
