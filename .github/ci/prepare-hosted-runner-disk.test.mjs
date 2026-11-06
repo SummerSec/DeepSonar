@@ -109,30 +109,67 @@ test("cleanup failures still run after diagnostics and report the allowlisted pa
 
 const reverseWorkflow = readFileSync(new URL("../workflows/reverse-runtime.yml", import.meta.url), "utf8");
 
-test("Reverse matrix prepares disk before installs, builds and measured native smoke", () => {
-  const job = reverseWorkflow.split("  reverse-runtime-images:\n")[1];
-  assert.ok(job, "native acceptance job must exist");
-  assert.match(job, /runner: ubuntu-24\.04\n/);
-  assert.match(job, /runner: ubuntu-24\.04-arm\n/);
-  const steps = job.split(/\n      - /).slice(1);
-  const prep = steps.filter((step) => step.includes("run: node .github/ci/prepare-hosted-runner-disk.mjs"));
-  assert.equal(prep.length, 1, "both architectures share exactly one disk preparation step");
-  assert.doesNotMatch(prep[0], /if:|continue-on-error:|--dry-run|DISK_PREP_DRY_RUN|\|\|/);
-  assert.match(prep[0], /run: node \.github\/ci\/prepare-hosted-runner-disk\.mjs\s*$/);
-  const prepIndex = steps.indexOf(prep[0]);
-  for (const marker of ["actions/checkout@", "actions/setup-node@"]) {
-    const index = steps.findIndex((step) => step.includes(marker));
-    assert.ok(index >= 0 && index < prepIndex, `${marker} must precede disk preparation`);
-  }
-  for (const marker of [
-    "pnpm install --frozen-lockfile",
+function reverseJob(name) {
+  const job = reverseWorkflow.split(`  ${name}:\n`)[1]?.split(/\n  [a-z][\w-]*:/)[0];
+  assert.ok(job, `${name} job must exist`);
+  return job;
+}
+
+const acceptanceJobs = {
+  "reverse-runtime-images": [
     "sudo apt-get update",
-    "Build current native base",
     "Build native Reverse runtime",
     "node agent-harness/reverse-native-smoke.mjs",
+    "pnpm ci:integration:rea-job",
+  ],
+  "claude-budget-acceptance": ["pnpm ci:integration:claude-request-budget"],
+  "pi-om-acceptance": [
+    "Prepare immutable loopback image for OM Job creation",
+    "pnpm ci:integration:om-provider-headers",
+  ],
+};
+
+for (const [name, acceptanceMarkers] of Object.entries(acceptanceJobs)) {
+  test(`${name} prepares disk exactly once before its installs, builds and acceptance`, () => {
+    const job = reverseJob(name);
+    assert.match(job, /needs: plan\n/);
+    assert.match(job, /fail-fast: false/);
+    assert.match(job, /arch: amd64\n\s+platform: linux\/amd64\n\s+runner: ubuntu-24\.04\n/);
+    assert.match(job, /arch: arm64\n\s+platform: linux\/arm64\n\s+runner: ubuntu-24\.04-arm\n/);
+    assert.doesNotMatch(job, /continue-on-error:|setup-qemu-action|packages: write/);
+    const steps = job.split(/\n      - /).slice(1);
+    const prep = steps.filter((step) => step.includes("run: node .github/ci/prepare-hosted-runner-disk.mjs"));
+    assert.equal(prep.length, 1, "each independent native matrix must prepare its own disk exactly once");
+    assert.doesNotMatch(prep[0], /if:|continue-on-error:|--dry-run|DISK_PREP_DRY_RUN|\|\|/);
+    assert.match(prep[0], /run: node \.github\/ci\/prepare-hosted-runner-disk\.mjs\s*$/);
+    const prepIndex = steps.indexOf(prep[0]);
+    for (const marker of ["actions/checkout@", "actions/setup-node@"]) {
+      const index = steps.findIndex((step) => step.includes(marker));
+      assert.ok(index >= 0 && index < prepIndex, `${marker} must precede disk preparation`);
+    }
+    for (const [index, step] of steps.entries()) {
+      if (/pnpm install|pnpm .* build|docker buildx build|sudo apt-get/.test(step)) {
+        assert.ok(index > prepIndex, "every install/build step must follow disk preparation");
+      }
+    }
+    for (const marker of ["pnpm install --frozen-lockfile", "Build current native base", ...acceptanceMarkers]) {
+      const index = steps.findIndex((step) => step.includes(marker));
+      assert.ok(index > prepIndex, `${marker} must follow disk preparation`);
+    }
+  });
+}
+
+test("native acceptance summary requires every independent matrix to succeed", () => {
+  const job = reverseJob("reverse-runtime-acceptance");
+  assert.match(job, /needs: \[plan, reverse-runtime-images, claude-budget-acceptance, pi-om-acceptance\]/);
+  assert.match(job, /if: always\(\) && \(needs\.plan\.result != 'success' \|\| needs\.plan\.outputs\.mode == 'ready-full'\)/);
+  assert.doesNotMatch(job, /continue-on-error:/);
+  for (const [variable, dependency] of [
+    ["PLAN", "plan"], ["REVERSE", "reverse-runtime-images"],
+    ["CLAUDE", "claude-budget-acceptance"], ["PI_OM", "pi-om-acceptance"],
   ]) {
-    const index = steps.findIndex((step) => step.includes(marker));
-    assert.ok(index > prepIndex, `${marker} must follow disk preparation`);
+    assert.ok(job.includes(`${variable}_RESULT: ` + "${{ needs." + dependency + ".result }}"));
+    assert.ok(job.includes(`test "$${variable}_RESULT" = success`));
   }
 });
 
