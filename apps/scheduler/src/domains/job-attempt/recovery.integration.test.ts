@@ -117,8 +117,9 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       const state = (await recovery.readCompletionRecovery(db, f.jobId, f.attemptId))!;
       return wake(db, job, state);
     });
-    const hubFor = async (f: Fixture) => {
-      const [hub] = await sql`SELECT * FROM jobs WHERE canvas_id=${f.canvasId} AND type='hub_reason' ORDER BY created_at DESC,id DESC LIMIT 1`;
+    const hubFor = async (f: Fixture, expectedHubId: string | null = null) => {
+      const [hub] = await sql`SELECT * FROM jobs WHERE canvas_id=${f.canvasId} AND type='hub_reason'
+        AND (${expectedHubId}::uuid IS NULL OR id=${expectedHubId}::uuid) ORDER BY created_at DESC,id DESC LIMIT 1`;
       assert.ok(hub);
       assert.deepEqual(hub.agent_snapshot_json.runtime_knobs, hubSnapshot.runtime_knobs);
       assert.equal(hub.timeout_sec, hubSnapshot.runtime_knobs.timeout_sec);
@@ -127,8 +128,8 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
     const decisionFor = (state: CompletionRecoveryState, action = "reconcile_effects") => ({ recovery_ref: state.recovery_ref,
       target_job_id: state.target_job_id, target_attempt_id: state.target_attempt_id, expected_recovery_revision: state.recovery_revision,
       expected_evidence_sha256: state.evidence_sha256, action, reason: "Model reason is not evidence; consult the exact durable ledger" });
-    const runHub = async (f: Fixture) => {
-      const hub = await hubFor(f);
+    const runHub = async (f: Fixture, expectedHubId: string | null = null) => {
+      const hub = await hubFor(f, expectedHubId);
       await sql`UPDATE jobs SET status='running',started_at=clock_timestamp(),lease_expires_at=clock_timestamp()+interval '1 hour' WHERE id=${hub.id}`;
       await sql.begin(tx => attempts.createAttempt(tx as unknown as Db, String(hub.id)));
       const token = await api.mintJobCapabilityToken(String(hub.id));
@@ -467,7 +468,8 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       assert.equal(await recovery.pendingCompletionRecoveryClaimTarget(sql, { id }), null, "a newly arrived ledger invalidates the frozen evidence hash");
       const refreshed = await observe(f);
       assert.ok(refreshed.recovery_revision > state.recovery_revision);
-      const { hub: running } = await runHub(f);
+      // The newer forged clone remains denied; run the original Scheduler-bound Hub.
+      const { hub: running } = await runHub(f, id);
       await assert.rejects(recovery.validateCompletionRecoveryDecision(sql, running, decisionFor(state)), assertCode("recovery_stale"));
       await sql.begin(tx => attempts.markAttemptInterrupted(tx as unknown as Db, f.jobId, "session exited"));
       await sql.begin(tx => attempts.createAttempt(tx as unknown as Db, f.jobId));
