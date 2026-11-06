@@ -3,6 +3,13 @@ import copy
 import importlib.util
 import pathlib
 import unittest
+import contextlib
+import http.server
+import json
+import socket
+import threading
+import time
+import urllib.parse
 
 
 spec = importlib.util.spec_from_file_location(
@@ -181,6 +188,175 @@ class CompletionProtocolTests(unittest.TestCase):
             fixture = Fixture(posts=[(409, {})], receipt=receipt)
             self.assertEqual(fixture.run()["om_completion"], "stopped")
             self.assertEqual(fixture.post_count, 1)
+
+
+class LoopbackServer:
+    """Only synthetic loopback data; blocked handlers always have a release path."""
+    secret = "fixture-private-response-and-token-sentinel"
+
+    def __init__(self, mode):
+        self.mode = mode
+        self.calls = []
+        self.lock = threading.Lock()
+        self.release = threading.Event()
+        self.disconnected = threading.Event()
+        owner = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                owner.handle(self)
+
+            def do_POST(self):
+                owner.handle(self)
+
+        class Server(http.server.ThreadingHTTPServer):
+            daemon_threads = True
+
+            def handle_error(self, request, client_address):
+                # Expected disconnects must not print request/response data.
+                pass
+
+        self.server = Server(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever,
+                                       kwargs={"poll_interval": 0.02}, daemon=True)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, *args):
+        self.release.set()
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    @property
+    def url(self):
+        return f"http://127.0.0.1:{self.server.server_port}/control/v1/jobs/job"
+
+    def snapshot(self):
+        with self.lock:
+            return copy.deepcopy(self.calls)
+
+    def reply(self, handler, body):
+        data = json.dumps(body).encode()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Length", str(len(data)))
+        handler.end_headers()
+        handler.wfile.write(data)
+        handler.wfile.flush()
+
+    def drip(self, handler, chunked):
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json")
+        if chunked:
+            handler.send_header("Transfer-Encoding", "chunked")
+        else:
+            handler.send_header("Content-Length", "1000000")
+        handler.end_headers()
+        data = ('{"private":"' + self.secret).encode()
+        try:
+            while not self.release.is_set():
+                wire = (f"{len(data):x}\r\n".encode() + data + b"\r\n") if chunked else data
+                handler.wfile.write(wire)
+                handler.wfile.flush()
+                data = b"x"
+                # Progress much more frequently than the socket timeout: only
+                # the parent's absolute deadline can bound this response.
+                self.release.wait(0.02)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            self.disconnected.set()
+        finally:
+            handler.close_connection = True
+
+    def handle(self, handler):
+        parsed = urllib.parse.urlsplit(handler.path)
+        receipt = urllib.parse.parse_qs(parsed.query).get("receipt_key", [None])[0]
+        body = handler.rfile.read(int(handler.headers.get("Content-Length", "0")))
+        with self.lock:
+            self.calls.append({"method": handler.command, "receipt": receipt,
+                               "key": handler.headers.get("Idempotency-Key"),
+                               "revision": handler.headers.get("X-Deepsonar-Proposal-Revision"),
+                               "path": parsed.path, "body": body.decode()})
+        if self.mode == "headers":
+            self.release.wait(5)
+            return
+        if self.mode in ("chunked", "body"):
+            self.drip(handler, self.mode == "chunked")
+            return
+        if handler.command == "POST":
+            if self.mode == "shared":
+                self.release.wait(0.15)
+                # Unknown POST outcome: no response headers or result body.
+                handler.close_connection = True
+                with contextlib.suppress(OSError):
+                    handler.connection.shutdown(socket.SHUT_RDWR)
+                handler.connection.close()
+            else:
+                self.reply(handler, accepted())
+            return
+        if receipt is not None:
+            self.drip(handler, True)
+            return
+        if self.mode == "shared":
+            self.release.wait(0.3)
+        self.reply(handler, {"execution_state": state(), "private": self.secret})
+
+
+class CompletionHttpDeadlineTests(unittest.TestCase):
+    def assert_stopped_and_quiet(self, server, budget=0.8):
+        started = time.monotonic()
+        result = client.run_http(server.url, server.secret, budget_seconds=budget)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result, client.stopped("OM_COMPLETION_WAIT_EXHAUSTED"))
+        self.assertLess(elapsed, 3, "hard deadline must include blocked response reads")
+        self.assertNotIn(server.secret, json.dumps(result))
+        before = server.snapshot()
+        time.sleep(0.15)
+        self.assertEqual(server.snapshot(), before, "no worker may issue requests after return")
+        return elapsed
+
+    def test_real_http_fast_acceptance(self):
+        with LoopbackServer("success") as server:
+            result = client.run_http(server.url, server.secret, budget_seconds=2)
+            self.assertEqual(result, {"om_completion": "accepted"})
+            calls = server.snapshot()
+            self.assertEqual([call["method"] for call in calls], ["GET", "POST"])
+            self.assertTrue(all(call["path"] == "/control/v1/jobs/job/operations/mark_job_done"
+                                for call in calls))
+            self.assertEqual(calls[1]["revision"], "0")
+            self.assertEqual(json.loads(calls[1]["body"]), client.PAYLOAD)
+            self.assertNotIn(server.secret, json.dumps(result))
+
+    def test_slow_headers_are_bounded(self):
+        with LoopbackServer("headers") as server:
+            self.assert_stopped_and_quiet(server)
+            self.assertEqual([call["method"] for call in server.snapshot()], ["GET"])
+
+    def test_continuous_chunked_and_body_progress_cannot_extend_deadline(self):
+        for mode in ("chunked", "body"):
+            with self.subTest(mode=mode), LoopbackServer(mode) as server:
+                self.assert_stopped_and_quiet(server)
+                self.assertTrue(server.disconnected.wait(1.5), "worker socket must close after deadline")
+                self.assertEqual([call["method"] for call in server.snapshot()], ["GET"])
+
+    def test_state_post_and_receipt_share_one_absolute_budget(self):
+        with LoopbackServer("shared") as server:
+            elapsed = self.assert_stopped_and_quiet(server)
+            self.assertLess(elapsed, 1.3, "earlier state/POST time must consume the same budget")
+            calls = server.snapshot()
+            self.assertEqual([call["method"] for call in calls], ["GET", "POST", "GET"])
+            self.assertIsNone(calls[0]["receipt"])
+            self.assertIsNotNone(calls[1]["key"])
+            self.assertEqual(calls[2]["receipt"], calls[1]["key"])
+            self.assertEqual(calls[1]["revision"], "0")
+            self.assertTrue(server.disconnected.wait(1.5), "receipt connection must terminate")
 
 
 if __name__ == "__main__":

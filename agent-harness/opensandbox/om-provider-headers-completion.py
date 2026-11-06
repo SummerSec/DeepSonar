@@ -1,5 +1,6 @@
 """Synthetic OM fixture client; all completion authority remains in Control API."""
 import json
+import multiprocessing
 import os
 import time
 import urllib.error
@@ -9,6 +10,10 @@ import uuid
 
 PAYLOAD = {"summary": "Real Pi and OM completed the offline provider-header acceptance."}
 RECOVERABLE = {"COMPLETION_EFFECT_UNKNOWN", "REPAIR_USAGE_PENDING", "REPAIR_USAGE_UNKNOWN"}
+STOP_CODES = {"OM_COMPLETION_" + code for code in (
+    "INACTIVE", "INITIAL_STATE_CONFLICT", "NOT_ALLOWED", "BUDGET_EXHAUSTED",
+    "RESTORE_NOT_ALLOWED", "RESTORE_UNCONFIRMED", "REJECTED", "IDENTITY_CONFLICT",
+    "RECOVERY_STOPPED", "REVISION_CONFLICT", "WAIT_EXHAUSTED", "CLIENT_ERROR")}
 
 
 def stopped(code):
@@ -22,13 +27,14 @@ def accepted(body, revision):
 
 
 def run(exchange, clock=time.monotonic, pause=time.sleep,
-        new_key=lambda: str(uuid.uuid4()), budget_seconds=90):
+        new_key=lambda: str(uuid.uuid4()), budget_seconds=90, deadline=None):
     """Unknown transport never authorizes POST; receipt reads have no side effects.
 
     The injected transport is also used by offline tests. Neither its exceptions
     nor response bodies are included in the returned, public diagnostic object.
     """
-    deadline = clock() + budget_seconds
+    if deadline is None:
+        deadline = clock() + budget_seconds
 
     def request(method, receipt_key=None, proposal=None):
         remaining = deadline - clock()
@@ -150,10 +156,10 @@ def run(exchange, clock=time.monotonic, pause=time.sleep,
     return stopped("OM_COMPLETION_WAIT_EXHAUSTED")
 
 
-def main():
+def _http_worker(output, base_url, token, deadline):
     try:
-        url = os.environ["DEEPSONAR_API_BASE_URL"].rstrip("/") + "/operations/mark_job_done"
-        auth = "Bearer " + os.environ["DEEPSONAR_API_TOKEN"]
+        url = base_url.rstrip("/") + "/operations/mark_job_done"
+        auth = "Bearer " + token
 
         def exchange(method, receipt_key=None, proposal=None, timeout=10):
             headers = {"Authorization": auth, "Content-Type": "application/json"}
@@ -173,7 +179,60 @@ def main():
             with response:
                 return response.status, json.loads(response.read(262145))
 
-        result = run(exchange)
+        result = run(exchange, deadline=deadline)
+    except Exception:
+        result = stopped("OM_COMPLETION_CLIENT_ERROR")
+    try:
+        output.send(result)
+    except (BrokenPipeError, EOFError, OSError):
+        pass
+    finally:
+        output.close()
+
+
+def run_http(base_url, token, budget_seconds=90):
+    # Linux native fixture: fork also works when the program is supplied via
+    # stdin. One parent-owned deadline covers startup, DNS/connect, headers,
+    # streaming bodies and every protocol query/retry. Socket idle timeouts alone
+    # cannot bound a peer that continuously drips bytes.
+    deadline = time.monotonic() + budget_seconds
+    context = multiprocessing.get_context("fork")
+    receiver, sender = context.Pipe(duplex=False)
+    worker = context.Process(target=_http_worker, args=(sender, base_url, token, deadline), daemon=True)
+    try:
+        if time.monotonic() >= deadline:
+            return stopped("OM_COMPLETION_WAIT_EXHAUSTED")
+        worker.start()
+        sender.close()
+        if not receiver.poll(max(0, deadline - time.monotonic())):
+            return stopped("OM_COMPLETION_WAIT_EXHAUSTED")
+        result = receiver.recv()
+        if time.monotonic() >= deadline:
+            return stopped("OM_COMPLETION_WAIT_EXHAUSTED")
+        if result == {"om_completion": "accepted"}:
+            return result
+        if (isinstance(result, dict) and set(result) == {"om_completion", "code"}
+                and result.get("om_completion") == "stopped" and result.get("code") in STOP_CODES):
+            return result
+        return stopped("OM_COMPLETION_CLIENT_ERROR")
+    except Exception:
+        return stopped("OM_COMPLETION_CLIENT_ERROR")
+    finally:
+        # Even a successful child must be gone before returning. Killing a
+        # timed-out client does NOT undo a POST already delivered to Scheduler;
+        # no new helper/key may be started to guess its outcome.
+        if worker.pid is not None:
+            if worker.is_alive():
+                worker.kill()
+            worker.join()
+        receiver.close()
+        sender.close()
+        worker.close()
+
+
+def main():
+    try:
+        result = run_http(os.environ["DEEPSONAR_API_BASE_URL"], os.environ["DEEPSONAR_API_TOKEN"])
     except Exception:
         result = stopped("OM_COMPLETION_CLIENT_ERROR")
     print(json.dumps(result, separators=(",", ":")))
