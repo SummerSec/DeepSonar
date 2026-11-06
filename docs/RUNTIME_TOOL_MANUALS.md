@@ -2,7 +2,7 @@
 
 > **状态：as-built**（#588）。索引：[`README.md`](README.md)。镜像选择见 [`RUNTIME_ROLE_IMAGE_MATRIX.md`](RUNTIME_ROLE_IMAGE_MATRIX.md)，OCI 目录契约见 [`RUNTIME_IMAGE_REGISTRY_CONTRACT.md`](RUNTIME_IMAGE_REGISTRY_CONTRACT.md)。
 
-全部 14 个官方运行镜像都携带当前版本的完整工具手册，固定根目录为 `/opt/deepsonar/manuals/`。这份资料面向沙箱内 Worker，可在断网环境读取；宿主仓库文档和外部网站不属于运行时依赖。
+全部 11 个官方运行镜像都携带当前版本的完整工具手册，固定根目录为 `/opt/deepsonar/manuals/`。这份资料面向沙箱内 Worker，可在断网环境读取；宿主仓库文档和外部网站不属于运行时依赖。
 
 ## 镜像内契约
 
@@ -29,12 +29,12 @@ pnpm ci:images
 node agent-harness/test-runtime-manuals-runtime.mjs <image-ref> <image-key>
 ```
 
-仓库级门禁检查 14 个镜像、必填章节、工具和包装入口覆盖、禁止空泛引用以及 Dockerfile 集成。运行时门禁用 `--network none`、丢弃 capabilities 和 `no-new-privileges` 启动实际镜像，重算摘要，并确认全部文档在镜像内物理可读。依赖真机、外部服务或联网下载的示例必须在条目中标为 `device_required`、`service_required` 或 `unverified`，不得标成实测成功。
+仓库级门禁检查 11 个镜像、必填章节、工具和包装入口覆盖、禁止空泛引用以及 Dockerfile 集成。运行时门禁用 `--network none`、丢弃 capabilities 和 `no-new-privileges` 启动实际镜像，重算摘要，并确认全部文档在镜像内物理可读。依赖真机、外部服务或联网下载的示例必须在条目中标为 `device_required`、`service_required` 或 `unverified`，不得标成实测成功。
 
 ## Language-server capability modules
 
-`clangd` in `deepsonar-chrome-audit` / `deepsonar-clickhouse-audit` is documented as the governed `language-server.clangd` capability module: Hub proposes, Scheduler freezes id/version/image/config fingerprint, and Agents must not apt-install LSPs or silently fall back to an undeclared clangd process. Missing `compile_commands.json` or an incompatible image yields structured `capability_unavailable`.
+`clangd` in `deepsonar-chrome-audit` is documented as the governed `language-server.clangd` capability module: Hub proposes, Scheduler freezes id/version/image/config fingerprint, and Agents must not apt-install LSPs or silently fall back to an undeclared clangd process. Missing `compile_commands.json` or an incompatible image yields structured `capability_unavailable`.
 
 ## 语言服务器能力（#604）
 
-Chrome Audit / ClickHouse Audit 的 `clangd` 条目绑定受治理能力 `language-server.clangd`。详见 [`LANGUAGE_SERVER_CAPABILITIES.md`](LANGUAGE_SERVER_CAPABILITIES.md)：Scheduler 准入、Job 快照冻结、受控 Adapter；缺 `compile_commands.json` 返回 `capability_unavailable`；禁止运行时安装 LSP；LSP 结果不是 Finding。
+Chrome Audit 的 `clangd` 条目绑定受治理能力 `language-server.clangd`。详见 [`LANGUAGE_SERVER_CAPABILITIES.md`](LANGUAGE_SERVER_CAPABILITIES.md)：Scheduler 准入、Job 快照冻结、受控 Adapter；缺 `compile_commands.json` 返回 `capability_unavailable`；禁止运行时安装 LSP；LSP 结果不是 Finding。

@@ -23,7 +23,6 @@ test("catalog registers language-server.clangd with clangd metadata for C/C++ au
   assert.deepEqual(module.languages, ["c", "cpp"]);
   assert.deepEqual(module.compatible_images, [
     "deepsonar-chrome-audit",
-    "deepsonar-clickhouse-audit",
   ]);
   assert.deepEqual(module.operations, [
     "definition",
@@ -99,7 +98,7 @@ test("admission rejects unregistered, incompatible image, missing precondition, 
 test("admission freezes id/version/image/config fingerprint into job snapshot shape", () => {
   const admitted = admitLanguageServerCapability({
     capabilityId: LANGUAGE_SERVER_CLANGD_ID,
-    imageKey: "deepsonar-clickhouse-audit",
+    imageKey: "deepsonar-chrome-audit",
     hasCompileCommands: true,
   });
   assert.equal(admitted.ok, true);
@@ -107,7 +106,7 @@ test("admission freezes id/version/image/config fingerprint into job snapshot sh
 
   const frozen = FrozenLanguageServerCapability.parse(admitted.frozen);
   assert.equal(frozen.id, LANGUAGE_SERVER_CLANGD_ID);
-  assert.equal(frozen.image_key, "deepsonar-clickhouse-audit");
+  assert.equal(frozen.image_key, "deepsonar-chrome-audit");
   assert.equal(frozen.server, "clangd");
   assert.match(frozen.config_fingerprint, /^sha256:[a-f0-9]{64}$/);
   assert.equal(frozen.read_only, true);
@@ -117,7 +116,7 @@ test("admission freezes id/version/image/config fingerprint into job snapshot sh
   const module = findLanguageServerCapability(LANGUAGE_SERVER_CLANGD_ID)!;
   const again = freezeLanguageServerCapability({
     module,
-    imageKey: "deepsonar-clickhouse-audit",
+    imageKey: "deepsonar-chrome-audit",
   });
   assert.equal(again.config_fingerprint, frozen.config_fingerprint);
 });

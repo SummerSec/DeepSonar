@@ -11,9 +11,6 @@ export const OFFICIAL_RUNTIME_IMAGES = Object.freeze([
   "deepsonar-chrome-test",
   "deepsonar-chrome-audit",
   "deepsonar-chrome-fuzz",
-  "deepsonar-clickhouse-test",
-  "deepsonar-clickhouse-audit",
-  "deepsonar-clickhouse-fuzz",
   "deepsonar-openharmony-test",
   "deepsonar-openharmony-audit",
   "deepsonar-openharmony-fuzz",
@@ -156,9 +153,6 @@ function dockerfileFor(imageKey) {
     "chrome-test": "Dockerfile.agent-chrome-test",
     "chrome-audit": "Dockerfile.agent-chrome-audit",
     "chrome-fuzz": "Dockerfile.agent-chrome-fuzz",
-    "clickhouse-test": "Dockerfile.agent-clickhouse-test",
-    "clickhouse-audit": "Dockerfile.agent-clickhouse-audit",
-    "clickhouse-fuzz": "Dockerfile.agent-clickhouse-fuzz",
   };
   return join(root, "deploy", aliases[suffix] ?? `Dockerfile.agent-${suffix}`);
 }

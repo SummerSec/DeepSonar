@@ -16,9 +16,6 @@ test("Hub catalog capability fields cover official specialty keys Hub must match
     "deepsonar-chrome-test",
     "deepsonar-chrome-audit",
     "deepsonar-chrome-fuzz",
-    "deepsonar-clickhouse-test",
-    "deepsonar-clickhouse-audit",
-    "deepsonar-clickhouse-fuzz",
     "deepsonar-openharmony-test",
     "deepsonar-mobile",
     "deepsonar-reverse",
@@ -36,8 +33,6 @@ test("Hub catalog capability fields cover official specialty keys Hub must match
   assert.ok(hubRuntimeImageCapability("deepsonar-reverse").capabilities.includes("binary.rea.cli"));
   assert.match(hubRuntimeImageCapability("deepsonar-chrome-test").selection_hints.join(" "), /CDP|Chromium/);
   assert.ok(hubRuntimeImageCapability("deepsonar-chrome-audit").capabilities.includes("language-server.clangd"));
-  assert.ok(hubRuntimeImageCapability("deepsonar-clickhouse-audit").capabilities.includes("language-server.clangd"));
-  assert.match(hubRuntimeImageCapability("deepsonar-clickhouse-test").selection_hints.join(" "), /ClickHouse/);
 });
 
 test("unknown image keys still expose fail-closed capability boundaries for Hub", () => {

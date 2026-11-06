@@ -29,7 +29,7 @@ is frozen. Catalog reuse requires an exact canonical digest match, or proof
 that the immutable candidate index contains exactly the tested runnable
 platform manifest digests. A source-cache/fingerprint hit alone does not prove
 reuse and must never select the first catalog row without content comparison.
-For Chrome and ClickHouse Audit/Test/Fuzz with both architecture caches hit,
+For Chrome Audit/Test/Fuzz with both architecture caches hit,
 the release resolves each tested wrapper/index to one runnable manifest for
 its platform, then compares the exact `linux/amd64` / `linux/arm64` manifest
 digest map against the immutable catalog candidate. Attestation descriptors

@@ -399,11 +399,11 @@ test("official OpenSandbox image list requires pinned registry keys", () => {
   const unpublished = listOfficialOpenSandboxRuntimeImages({
     images: [
       ...images,
-      { image_key: "deepsonar-clickhouse-audit", versions: [] },
+      { image_key: "deepsonar-chrome-audit", versions: [] },
     ],
   });
   assert.equal(unpublished.length, OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS.length);
-  assert.ok(!unpublished.some((item) => item.key === "deepsonar-clickhouse-audit"));
+  assert.ok(!unpublished.some((item) => item.key === "deepsonar-chrome-audit"));
   assert.throws(
     () => listOfficialOpenSandboxRuntimeImages({
       images: images.map((item, index) => index === 0 ? { ...item, versions: [] } : item),

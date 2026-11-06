@@ -149,7 +149,7 @@ pnpm ci:images
   **注意 GitHub 把 `skipped` 的 required check 视为满足**：跳过本身挡不住合并，要阻止 Draft 合并必须靠 ruleset / 单独的 required check，不能依赖本工作流的跳过行为。
 - 连续推送时 Draft 每次都有实际快检；同一 SHA 从 Draft 转 Ready 会重新出计划并跑完整验收，不需要再推空 commit。旧 run 的绿灯不能顶替最新候选。
 - 手动运行某个工作流强制该工作流完整验收；`push@main` 不进入快路。
-- 专家套件（reverse / chrome / clickhouse / mobile / openharmony）的路径基线直接读各自 workflow 的 `pull_request.paths`，因此清单不会与计划漂移。
+- 专家套件（reverse / chrome / mobile / openharmony）的路径基线直接读各自 workflow 的 `pull_request.paths`，因此清单不会与计划漂移。
 - 五个专家工作流各自跑同一个 `ci-run-plan.mjs`（不是五份判断），重活矩阵只在 `mode == ready-full` 时启动；`push@main` 与手动运行仍是完整验收。专家套件的 PR 触发保留，尚未迁移到 `ci.yml` 的 `workflow_call` 统一入口。
 - 改分类器、汇总或本套路由本身时按高风险改动处理：需要独立评审与完整验收，不能用自己的快检规则给自己放行。
 - 出现漏测、重复触发或 required check 错配时，先把 `CI_PR_MODE` 设回 `full`（或删掉变量），再修路由。

@@ -105,9 +105,9 @@ test("内置注册表明确、不可变且能力完整", () => {
   assert.throws(() => requireAgentCliRuntimeAdapter("pi", "untrusted-image"), /AGENT_CLI_IMAGE_INCOMPATIBLE/);
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-openharmony-audit").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-chrome-test").id, "claude-code");
+  assert.equal(requireAgentCliRuntimeAdapter("pi", "deepsonar-mobile").id, "pi");
+  assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-chrome-test").id, "claude-code");
   assert.equal(requireAgentCliRuntimeAdapter("pi", "deepsonar-chrome-fuzz").id, "pi");
-  assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-clickhouse-test").id, "claude-code");
-  assert.equal(requireAgentCliRuntimeAdapter("pi", "deepsonar-clickhouse-fuzz").id, "pi");
   assert.equal(requireAgentCliRuntimeAdapter("claude-code", "deepsonar-mobile").id, "claude-code");
   assert.deepEqual(agentCliIdsCompatibleWithImage("deepsonar-kali-minimal"), ["claude-code", "dsh", "pi"]);
   assert.deepEqual(agentCliIdsCompatibleWithImage("deepsonar-chrome-fuzz"), ["claude-code", "pi"]);

@@ -86,9 +86,10 @@
 | [PI_OBSERVATIONAL_MEMORY.md](PI_OBSERVATIONAL_MEMORY.md) | **#815 A 历史评审背景** | 当前实现细则以上述集成/Gateway/RPC 专题为准；早期比例方案不能覆盖当前显式分配契约，v0.6.2 镜像不含 OM |
 | [PROGRAM_ELIGIBILITY.md](PROGRAM_ELIGIBILITY.md) | **#822 as-built 工程边界** | 操作员见证材料与独立评审、证据失效和当前资格投影；不认证外部官方真实性，不授予目标执行或任务完成 authority |
 | [RUNTIME_IMAGE_REGISTRY_CONTRACT.md](RUNTIME_IMAGE_REGISTRY_CONTRACT.md) | **as-built**（#70 / #417） | 官方镜像 catalog v2、通道、平台/运行时版本轴、`min_runtime_image` fail-closed |
+| [DEPRECATIONS.md](DEPRECATIONS.md) | **下线记录**（#952） | 物理下线能力清单：ClickHouse 运行镜像族的删除范围、保留的不可变历史、既有库清理 SQL 与 fail-closed 边界 |
 | [RUNTIME_TEST_TOOLCHAINS.md](RUNTIME_TEST_TOOLCHAINS.md) | **as-built；执行证据另计** | Kali Test / Verify Base 与 Mobile 边界；OH Fuzz 匹配 LLVM/AFL 工具链与原生 sanitizer 回归；#754 Rust ASC 默认、Python 显式回退及真实 APK/双架构验收边界 |
 | [RUNTIME_ROLE_IMAGE_MATRIX.md](RUNTIME_ROLE_IMAGE_MATRIX.md) | **as-built**（#565 / #588） | 角色×官方镜像默认、工具范围、不包含、Scheduler 边界注入；#588 起每镜附带 `/opt/deepsonar/manuals` 工具说明书与 CI 门禁 |
-| [RUNTIME_TOOL_MANUALS.md](RUNTIME_TOOL_MANUALS.md) | **as-built**（#588） | 14 个官方镜像的离线工具手册契约、发现方式、构建与验收门禁 |
+| [RUNTIME_TOOL_MANUALS.md](RUNTIME_TOOL_MANUALS.md) | **as-built**（#588） | 11 个官方镜像的离线工具手册契约、发现方式、构建与验收门禁 |
 | [语言服务器能力](LANGUAGE_SERVER_CAPABILITIES.md) | #604 受治理 `language-server.clangd`（phase 1） |
 | [通用 CLI 能力包](CLI_CAPABILITIES.md) | #611 受治理通用 CLI（`deepsonar.cli-capability/v1`，phase 1） |
 | [REA CLI 深度二进制解析](REA_CLI_CAPABILITIES.md) | **v0.5.5 已发布**（#718）：`deepsonar-reverse` canonical digest 与三通道 inspect 证据已回写 bundled registry；原生双架构 OCI、真实 OpenSandbox Job、reverse 发布与不可变 catalog 链；保持项目 opt-in 边界 |
@@ -162,7 +163,7 @@
 | #157 / #158 | **已关**；共享资产孤儿卷回收、官方 `deepsonar-assets-helper` 发布与 busybox pin 回退、provision admission |
 | #243 Windows deploy.ps1 | **已关**；UTF-8 BOM + ASCII，避免 PS 5.1 代码页 ParserError；pull/up 与 `deploy.sh` 对齐 |
 | #251 任务下发后改标题/内容 | **已关**；`PATCH /tasks/:canvasId` 就地改 title/content，不改写冻结 Job 快照 |
-| #257 Chrome / 长工具 stall 误杀 | **已关**；在飞 `tool.call` + 有效 lease 不判停滞；chrome/clickhouse-audit/test/fuzz 有 stall 下限，全局默认仍 900s |
+| #257 Chrome / 长工具 stall 误杀 | **已关**；在飞 `tool.call` + 有效 lease 不判停滞；chrome-audit/test/fuzz 有 stall 下限，全局默认仍 900s |
 | #263 配置中心 / 运行时护栏 | **Batch 1 as-built**（stall / token 上限 / audit·verify·provision 超时落库 + Web 配置中心）；lease / Reaper 间隔 / Gateway 超时 / 镜像 pins 与巡检仍走 env |
 | #267 / #266 官方镜像不预装决策扫描器 | **已关**；工具助力、扫描不决策；Semgrep / gitleaks / shellcheck 与 Chrome 固定扫描入口已从官方运行时移除；Job token / Provider 密钥仍精确 `[REDACTED]` |
 | #159 / #160 / #387 | **已关**；Fact 工作台与独立证据信任态保留（#387），不并入 Finding Verify；Session 时间线覆盖当前三类归档 + leftover 只读 |

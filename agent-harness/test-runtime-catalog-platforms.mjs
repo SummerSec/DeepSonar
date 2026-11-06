@@ -20,7 +20,7 @@ import { assertCatalogMatchesRuntimeSources, compareCatalogVersionLabels } from 
 
 const platforms = ["linux/amd64", "linux/arm64"];
 const imageKeys = [
-  ...["chrome", "clickhouse"].flatMap((family) =>
+  ...["chrome"].flatMap((family) =>
     ["audit", "test", "fuzz"].map((role) => `deepsonar-${family}-${role}`)),
   "deepsonar-reverse",
 ];
@@ -505,7 +505,7 @@ for (const outcome of ["match", "stale", "source failure", "catalog failure", "m
   });
 }
 
-for (const family of ["Chrome", "ClickHouse"]) {
+for (const family of ["Chrome"]) {
   for (const outcome of ["match", "stale", "source failure", "catalog failure"]) {
     test(`${family} cache-hit workflow ${outcome} reaches only its authorized assembly branch`, posixMockOptions, () => {
       const name = family === "Reverse" ? "reverse" : `${family.toLowerCase()}-test`;

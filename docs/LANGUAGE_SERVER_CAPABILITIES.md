@@ -11,7 +11,7 @@ DeepSonar 将语言服务器建模为**受治理、可插拔**的 Agent 能力�
 | id | `language-server.clangd` |
 | languages | `c`, `cpp` |
 | server | `clangd`（版本绑定审计镜像） |
-| compatible_images | `deepsonar-chrome-audit`, `deepsonar-clickhouse-audit` |
+| compatible_images | `deepsonar-chrome-audit` |
 | requires | `compile_commands.json` |
 | operations | `definition` / `references` / `hover` / `document_symbol` / `workspace_symbol` / `diagnostics` |
 | read_only / network | `true` / `disabled` |
@@ -20,7 +20,7 @@ DeepSonar 将语言服务器建模为**受治理、可插拔**的 Agent 能力�
 ## 控制面流程
 
 1. **目录**：`list_capabilities` / `describe_capability` 返回 `language-server.clangd`；`describe_capability` 额外附带完整 `language_server` 元数据。
-2. **Hub**：只能引用目录中已登记能力；`list_available_runtime_images` 的 chrome/clickhouse audit 条目能力标签含 `language-server.clangd`。
+2. **Hub**：只能引用目录中已登记能力；`list_available_runtime_images` 的 chrome audit 条目能力标签含 `language-server.clangd`。
 3. **Scheduler 校验**：`admitLanguageServerCapability` 对未登记、镜像不兼容、缺 `compile_commands.json`、或运行时安装请求返回结构化 `capability_unavailable`（不得静默降级为裸 `clangd` shell）。
 4. **Job 快照**：兼容审计镜像在创建 Job 时冻结 `language_server`（id / version / image_key / config_fingerprint / limits）。
 5. **Adapter**：`agent-harness/language-server-adapter.mjs` 仅暴露受控操作；限制超时、调用次数、响应大小与工作区路径沙箱。结果 schema 为 `deepsonar.language-server-result/v1`，`is_finding: false`。

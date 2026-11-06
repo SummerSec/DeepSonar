@@ -214,7 +214,7 @@ if (!testDatabaseUrl) {
         const [hub] = await sql`SELECT id, runtime_image_key FROM role_configs WHERE project_id IS NULL
           AND role_id = (SELECT id FROM agent_roles WHERE name = 'hub_reason' AND project_id IS NULL)`;
         try {
-          for (const imageKey of ["deepsonar-chrome-audit", "deepsonar-clickhouse-audit"]) {
+          for (const imageKey of ["deepsonar-chrome-audit"]) {
             await sql`UPDATE role_configs SET runtime_image_key = ${imageKey} WHERE id = ${hub.id}`;
             const legacy = await app.inject({ method: "POST", url: `/projects/${projectId}/tasks`, headers,
               payload: { title: `Legacy ${imageKey}`, content: "Inspect target", allow_egress: true } });

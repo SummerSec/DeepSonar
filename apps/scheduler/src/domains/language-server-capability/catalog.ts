@@ -17,7 +17,6 @@ export const LANGUAGE_SERVER_CLANGD_ID = "language-server.clangd" as const;
 
 const CLANGD_COMPATIBLE_IMAGES = [
   "deepsonar-chrome-audit",
-  "deepsonar-clickhouse-audit",
 ] as const;
 
 const CLANGD_OPERATIONS = [
@@ -53,7 +52,6 @@ export const LANGUAGE_SERVER_CAPABILITY_MANIFESTS: readonly LsManifest[] = [
     },
     manual_paths: [
       "agent-harness/runtime-manuals/catalog.json#deepsonar-chrome-audit/clangd",
-      "agent-harness/runtime-manuals/catalog.json#deepsonar-clickhouse-audit/clangd",
     ],
     summary:
       "Governed read-only clangd for C/C++ audit images; Hub proposes, Scheduler freezes; agents must not apt-install LSPs.",
