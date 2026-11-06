@@ -39,6 +39,8 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
   const dir = await mkdtemp(path.join(tmpdir(), "claude-native-budget-"));
   let stage = "image-version";
   let output = "";
+  let resultReceived = false;
+  let resultError = false;
   let exitCode: number | null = null;
   let exitSignal: string | null = null;
   let cli: ChildProcess | undefined;
@@ -51,6 +53,32 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
   const delivered: Buffer[] = [];
   const policyStatuses: number[] = [];
   const policyErrors: string[] = [];
+  const progressEvidence = () => {
+    const results = captured.flatMap(raw => {
+      try {
+        const body = JSON.parse(raw.toString("utf8"));
+        return (Array.isArray(body.messages) ? body.messages : [])
+          .flatMap((message: any) => Array.isArray(message.content) ? message.content : [])
+          .filter((block: any) => block.type === "tool_result" && block.tool_use_id === "synthetic-bash-tool");
+      } catch { return []; } // Diagnostics must not obscure the original failure.
+    });
+    const matchesSentinel = (block: any) => {
+      const value = typeof block.content === "string" ? block.content : Array.isArray(block.content)
+        ? block.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") : "";
+      return value.trim() === sentinel;
+    };
+    return {
+      result_seen: resultReceived, result_is_error: resultError,
+      stdin_ended: cli?.stdin?.writableEnded === true,
+      refusal_code_visible: output.includes(refusal),
+      refusal_hint_visible: output.includes("Configure supported CLI options before generating a new request")
+        && output.includes("the formed request was not rewritten or sent"),
+      tool_result_present: results.length > 0,
+      tool_result_success: results.some((block: any) => block.is_error !== true),
+      sentinel_matches: results.some(matchesSentinel),
+      tool_succeeded: results.some((block: any) => block.is_error !== true && matchesSentinel(block)),
+    };
+  };
   const remote = http.createServer((req, res) => {
     void (async () => {
       assert.equal(req.headers.authorization, `Bearer ${token}`);
@@ -108,8 +136,11 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
         res.writeHead(reply.statusCode!, reply.headers);
         reply.on("data", chunk => { response.push(Buffer.from(chunk)); res.write(chunk); });
         reply.on("end", () => {
-          if (reply.statusCode === 409) {
-            try { policyErrors.push(JSON.parse(Buffer.concat(response).toString("utf8")).error.message); }
+          if (reply.statusCode === 400) {
+            try {
+              assert.equal(reply.headers["x-should-retry"], "false");
+              policyErrors.push(JSON.parse(Buffer.concat(response).toString("utf8")).error.code);
+            }
             catch { errors.push("invalid-policy-refusal"); }
           }
           res.end();
@@ -156,7 +187,7 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
       collect(chunk); stdoutPending += chunk.toString("utf8");
       const lines = stdoutPending.split("\n"); stdoutPending = lines.pop()!;
       for (const line of lines) {
-        try { if (JSON.parse(line).type === "result") cli?.stdin?.end(); } catch { /* Non-JSON diagnostics remain captured. */ }
+        try { const event = JSON.parse(line); if (event.type === "result") { resultReceived = true; resultError = event.is_error === true; cli?.stdin?.end(); } } catch { /* Non-JSON diagnostics remain captured. */ }
       }
     });
     cli.stderr!.on("data", collect);
@@ -172,7 +203,9 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     })]);
     stage = "assert-captured-native-requests";
     assert.deepEqual(errors, []);
-    assert.ok(captured.length >= 2, "real CLI must form a follow-up tool turn");
+    assert.equal(captured.length, 2, "one real tool continuation, then a terminal local rejection without retries");
+    assert.equal(resultReceived, true, "CLI emits its native terminal result before stdin closes");
+    assert.equal(resultError, true, "budget refusal must terminate as a native error, not successful completion");
     assert.equal(delivered.length, 1);
     assert.equal(createHash("sha256").update(captured[0]!).digest("hex"), createHash("sha256").update(delivered[0]!).digest("hex"), "formed request bytes preserved");
     for (const raw of captured.slice(1)) {
@@ -186,14 +219,14 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
         : result.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n");
       assert.equal(text.trim(), sentinel, "Bash must return exactly the synthetic printf output");
     }
-    assert.deepEqual(policyStatuses, [200, ...captured.slice(1).map(() => 409)]);
+    assert.deepEqual(policyStatuses, [200, ...captured.slice(1).map(() => 400)]);
     assert.deepEqual(policyErrors, captured.slice(1).map(() => refusal));
     assert.ok(output.includes(refusal), "CLI must display the admission refusal code");
     assert.ok(output.includes("Configure supported CLI options before generating a new request")
       && output.includes("the formed request was not rewritten or sent"), "CLI must display the clear budget refusal hint");
     assert.ok(allowanceQueries >= 3, "launch and each model request query fresh allowance");
     t.diagnostic(JSON.stringify({ cli: "2.1.312", model_requests: captured.length, upstream_requests: delivered.length,
-      auxiliary_calls: auxiliaryCalls, allowance_queries: allowanceQueries, refusal_visible: true, exit_code: exitCode,
+      auxiliary_calls: auxiliaryCalls, allowance_queries: allowanceQueries, refusal_visible: true, exit_code: exitCode, ...progressEvidence(),
       first_body_sha256: createHash("sha256").update(delivered[0]!).digest("hex") }));
   } catch (error) {
     const category = /unknown option|unrecognized option|invalid option/iu.test(output) ? "unknown-option"
@@ -203,7 +236,7 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
       : stage === "image-version" ? "image-version"
       : exitCode === null ? "timeout-or-startup" : "unclassified-cli-failure";
     t.diagnostic(JSON.stringify({ stage, category, exit_code: exitCode, exit_signal: exitSignal, error: error instanceof Error ? error.name : "UnknownError",
-      model_requests: captured.length, upstream_requests: delivered.length, auxiliary_calls: auxiliaryCalls, policy_statuses: policyStatuses }));
+      model_requests: captured.length, upstream_requests: delivered.length, auxiliary_calls: auxiliaryCalls, policy_statuses: policyStatuses, ...progressEvidence() }));
     throw error;
   } finally {
     cli?.kill("SIGKILL");

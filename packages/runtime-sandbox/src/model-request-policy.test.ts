@@ -92,7 +92,8 @@ test("three CLI request shapes preserve compliant bytes and refuse requests need
     }
     const beforeMissingLimit = received.length;
     const missingLimit = await request("v1/chat/completions", { model: "pi-fixture", stream: true });
-    assert.equal(missingLimit.status, 409);
+    assert.equal(missingLimit.status, 400);
+    assert.equal(missingLimit.headers["x-should-retry"], "false");
     assert.equal(received.length, beforeMissingLimit, "missing output/usage options must be set before forming the HTTP body");
     for (const code of ["JOB_TOKEN_USAGE_PENDING", "REPAIR_USAGE_PENDING"]) {
       pendingReplies = [code];
@@ -108,14 +109,16 @@ test("three CLI request shapes preserve compliant bytes and refuse requests need
       const queriesBefore = allowanceQueries;
       const denied = await request("v1/messages", { model: "fixture", max_tokens: 3 });
       assert.equal(denied.status, code); assert.equal(received.length, before);
+      assert.equal(denied.headers["x-should-retry"], undefined, "allowance errors retain their own retry contract");
       assert.equal(allowanceQueries, queriesBefore + 1, "unknown usage and quota denial are returned without polling");
     }
     allowanceStatus = 200;
-    for (const code of [307, 429, 503]) {
+    for (const code of [307, 400, 409, 429, 503]) {
       responseStatus = code;
       const count = received.length;
       const result = await request("v1/messages", { model: "fixture", max_tokens: 3 });
       assert.equal(result.status, code); assert.equal(result.headers["retry-after"], "9");
+      assert.equal(result.headers["x-should-retry"], undefined, "do not attach local refusal semantics to upstream errors");
       assert.deepEqual(result.bytes, compressed); assert.equal(received.length, count + 1);
     }
   } finally { await policy.close(); await close(remote); await file.close(); }
@@ -266,17 +269,20 @@ test("accepted Claude scope keeps the launch cap static and refuses later insuff
     const first = await send(); assert.equal(first.status, 200); await first.arrayBuffer();
     assert.deepEqual(received, [raw], "compliant formed request reaches the fake upstream byte for byte");
     remaining = 7;
-    const insufficient = await send(); assert.equal(insufficient.status, 409);
+    const insufficient = await send(); assert.equal(insufficient.status, 400);
+    assert.equal(insufficient.headers.get("x-should-retry"), "false");
     const rejection = await insufficient.json() as any;
-    assert.equal(rejection.error.message, "MODEL_REQUEST_POLICY_PREGENERATION_REQUIRED");
-    assert.match(rejection.error.hint, /not rewritten or sent/u);
+    assert.equal(rejection.error.code, "MODEL_REQUEST_POLICY_PREGENERATION_REQUIRED");
+    assert.equal(rejection.error.type, "invalid_request_error");
+    assert.match(rejection.error.message, /not rewritten or sent/u);
     assert.equal(received.length, 1, "no smaller rewritten request or implicit retry reaches upstream");
     assert.equal(launch.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "20", "no claim of per-request native cap updates");
     remaining = 0;
-    const exhausted = await send(); assert.equal(exhausted.status, 429);
+    const exhausted = await send(); assert.equal(exhausted.status, 400);
+    assert.equal(exhausted.headers.get("x-should-retry"), "false");
     const failure = await exhausted.json() as any;
-    assert.equal(failure.error.message, "MODEL_REQUEST_POLICY_EXHAUSTED");
-    assert.match(failure.error.hint, /preserve cumulative usage/u);
+    assert.equal(failure.error.code, "MODEL_REQUEST_POLICY_EXHAUSTED");
+    assert.match(failure.error.message, /preserve cumulative usage/u);
     assert.equal(received.length, 1);
   } finally { await policy.close(); await close(remote); await file.close(); }
 });

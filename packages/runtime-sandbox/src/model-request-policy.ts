@@ -223,8 +223,14 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
           ? 'Request output or usage options do not satisfy the current budget. Configure supported CLI options before generating a new request; the formed request was not rewritten or sent.'
           : code === 'MODEL_REQUEST_POLICY_EXHAUSTED'
             ? 'The current token budget is exhausted. This request was not sent; operator action must preserve cumulative usage.' : undefined;
-        res.writeHead(Number.isInteger(error.status) ? error.status : 502, {'content-type':'application/json'});
-        res.end(JSON.stringify({error:{type:'request_admission_policy',message:code,...(hint ? {hint} : {})}}));
+        // Deterministic local budget rejection is not a transient provider
+        // conflict/quota response. Claude's SDK and outer loop retry 409/429;
+        // both honor x-should-retry:false and render error.message, not hint.
+        const terminalBudget = hint !== undefined;
+        res.writeHead(terminalBudget ? 400 : Number.isInteger(error.status) ? error.status : 502,
+          {'content-type':'application/json', ...(terminalBudget ? {'x-should-retry':'false'} : {})});
+        res.end(JSON.stringify({error:{type:terminalBudget ? 'invalid_request_error' : 'request_admission_policy',
+          code, message:hint ? code + ': ' + hint : code, ...(hint ? {hint} : {})}}));
       }
     } finally { controllers.delete(controller); res.off('close',disconnected); }
   });

@@ -452,10 +452,10 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
             const beforeRefusal = captured.length;
             const signed = await send(policyAddress.port, `/gateway${fixture.route}`, "POST",
               [...rawHeaders, "content-digest", digest], [oversized]);
-            assert.equal(signed.status, 409, "a required edit cannot silently invalidate a supplied digest");
+            assert.equal(signed.status, 400, "a required edit cannot silently invalidate a supplied digest");
             assert.equal(captured.length, beforeRefusal);
             const adapted = await send(policyAddress.port, `/gateway${fixture.route}`, "POST", rawHeaders, [oversized]);
-            assert.equal(adapted.status, 409, "unsigned formed requests must also be refused rather than edited");
+            assert.equal(adapted.status, 400, "unsigned formed requests must also be refused rather than edited");
             assert.equal(captured.length, beforeRefusal);
             const [usage] = await sql`SELECT count(*)::int AS requests, sum(total_tokens)::int AS tokens,
               bool_and(settlement_status='settled') AS settled FROM job_usage_ledger WHERE job_id=${boundedJobId}`;
