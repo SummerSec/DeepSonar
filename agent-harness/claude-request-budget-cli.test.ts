@@ -50,9 +50,11 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
   let auxiliaryCalls = 0;
   const errors: string[] = [];
   const captured: Buffer[] = [];
+  const requestEvidence: Record<string, unknown>[] = [];
   const delivered: Buffer[] = [];
   const policyStatuses: number[] = [];
   const policyErrors: string[] = [];
+  const nativeToolResults: Array<{ stdout?: unknown; stderr?: unknown; interrupted?: unknown }> = [];
   const progressEvidence = () => {
     const results = captured.flatMap(raw => {
       try {
@@ -73,6 +75,15 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
       refusal_code_visible: output.includes(refusal),
       refusal_hint_visible: output.includes("Configure supported CLI options before generating a new request")
         && output.includes("the formed request was not rewritten or sent"),
+      native_tool_results: nativeToolResults.map(result => ({
+        stdout_is_string: typeof result.stdout === "string", stderr_is_string: typeof result.stderr === "string",
+        stdout_matches: typeof result.stdout === "string" && result.stdout.trim() === sentinel,
+        stdout_bytes: typeof result.stdout === "string" ? Buffer.byteLength(result.stdout) : null,
+        stderr_empty: result.stderr === "", stderr_bytes: typeof result.stderr === "string" ? Buffer.byteLength(result.stderr) : null,
+        stderr_sha256: typeof result.stderr === "string" ? createHash("sha256").update(result.stderr).digest("hex") : null,
+        cwd_reset_note: typeof result.stderr === "string" && result.stderr.includes("Shell cwd was reset to"),
+        interrupted: result.interrupted === true,
+      })),
       tool_result_present: results.length > 0,
       tool_result_success: results.some((block: any) => block.is_error !== true),
       sentinel_matches: results.some(matchesSentinel),
@@ -128,7 +139,30 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
       assert.equal(req.method, "POST");
       assert.ok(route === "/gateway/v1/messages" || route === "/gateway/v1/messages/count_tokens", "unexpected CLI auxiliary route");
       const raw = await bytes(req);
-      if (route === "/gateway/v1/messages") captured.push(raw);
+      if (route === "/gateway/v1/messages") {
+        captured.push(raw);
+        const body = JSON.parse(raw.toString("utf8"));
+        const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
+        const results = (body.messages ?? []).flatMap((message: any) => Array.isArray(message.content) ? message.content : [])
+          .filter((block: any) => block.type === "tool_result" && block.tool_use_id === "synthetic-bash-tool");
+        requestEvidence.push({
+          sequence: captured.length, body_sha256: createHash("sha256").update(raw).digest("hex"),
+          stream: body.stream === true, stream_field_present: Object.hasOwn(body, "stream"),
+          frozen_model: body.model === "claude-sonnet-4-5", max_tokens: body.max_tokens,
+          messages_sha256: digest(body.messages), system_sha256: digest(body.system), tools_sha256: digest(body.tools),
+          message_count: body.messages?.length, tool_count: body.tools?.length,
+          sdk_retry_count: /^\d{1,3}$/u.test(String(req.headers["x-stainless-retry-count"])) ? Number(req.headers["x-stainless-retry-count"]) : null,
+          sdk_helper_stream: req.headers["x-stainless-helper-method"] === "stream",
+          tool_results: results.map((block: any) => {
+            const value = typeof block.content === "string" ? block.content : Array.isArray(block.content)
+              ? block.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") : "";
+            return { is_error: block.is_error === true, text_bytes: Buffer.byteLength(value), text_sha256: digest(value),
+              exact_sentinel: value.trim() === sentinel, contains_sentinel: value.includes(sentinel),
+              stdout_tag: value.includes("<stdout>"), stderr_tag: value.includes("<stderr>"),
+              system_reminder_tag: value.includes("<system-reminder>"), persisted_output_tag: value.includes("<persisted-output>") };
+          }),
+        });
+      }
       const local = `http://127.0.0.1:${(policy.server.address() as AddressInfo).port}`;
       const forwarded = http.request(local + req.url, { method: req.method, headers: req.rawHeaders }, reply => {
         if (route === "/gateway/v1/messages") policyStatuses.push(reply.statusCode!);
@@ -187,7 +221,13 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
       collect(chunk); stdoutPending += chunk.toString("utf8");
       const lines = stdoutPending.split("\n"); stdoutPending = lines.pop()!;
       for (const line of lines) {
-        try { const event = JSON.parse(line); if (event.type === "result") { resultReceived = true; resultError = event.is_error === true; cli?.stdin?.end(); } } catch { /* Non-JSON diagnostics remain captured. */ }
+        try {
+          const event = JSON.parse(line);
+          if (event.type === "user" && Array.isArray(event.message?.content)
+            && event.message.content.some((block: any) => block.type === "tool_result" && block.tool_use_id === "synthetic-bash-tool")
+            && event.tool_use_result && typeof event.tool_use_result === "object") nativeToolResults.push(event.tool_use_result);
+          if (event.type === "result") { resultReceived = true; resultError = event.is_error === true; cli?.stdin?.end(); }
+        } catch { /* Non-JSON diagnostics remain captured. */ }
       }
     });
     cli.stderr!.on("data", collect);
@@ -203,16 +243,29 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     })]);
     stage = "assert-captured-native-requests";
     assert.deepEqual(errors, []);
-    assert.equal(captured.length, 2, "one real tool continuation, then a terminal local rejection without retries");
+    assert.equal(captured.length, 3, "one initial stream, one tool continuation and one native non-stream recovery attempt");
+    const requestBodies = captured.map(raw => JSON.parse(raw.toString("utf8")));
+    assert.deepEqual(requestBodies.map(body => body.stream === true), [true, true, false]);
+    assert.equal(requestBodies[2].stream, false, "locked CLI explicitly requests non-stream recovery");
+    for (const field of ["messages", "system", "tools"]) {
+      const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
+      assert.equal(hash(requestBodies[2][field]), hash(requestBodies[1][field]), `non-stream recovery preserves ${field}`);
+    }
     assert.equal(resultReceived, true, "CLI emits its native terminal result before stdin closes");
     assert.equal(resultError, true, "budget refusal must terminate as a native error, not successful completion");
     // Locked 2.1.312 runHeadless maps result.is_error to shutdownSync(1).
     assert.equal(exitCode, 1, "native error result must exit with the pinned CLI error code");
     assert.equal(exitSignal, null, "signal termination cannot satisfy native error completion");
     assert.equal(delivered.length, 1);
+    assert.equal(nativeToolResults.length, 1, "exactly one correlated native Bash result");
+    assert.equal(typeof nativeToolResults[0].stdout, "string");
+    assert.ok((nativeToolResults[0].stdout as string).trim() === sentinel, "native Bash stdout is exactly the fixture sentinel");
+    assert.ok(nativeToolResults[0].stderr === "", "do not hide Bash errors or environment warnings");
+    assert.equal(nativeToolResults[0].interrupted, false);
     assert.equal(createHash("sha256").update(captured[0]!).digest("hex"), createHash("sha256").update(delivered[0]!).digest("hex"), "formed request bytes preserved");
     for (const raw of captured.slice(1)) {
       const body = JSON.parse(raw.toString("utf8"));
+      assert.ok(body.model === "claude-sonnet-4-5", "native recovery retains the frozen model");
       assert.equal(body.max_tokens, 4096, "running CLI retains its launch cap");
       const result = body.messages.flatMap((message: any) => Array.isArray(message.content) ? message.content : [])
         .find((block: any) => block.type === "tool_result" && block.tool_use_id === "synthetic-bash-tool");
@@ -220,7 +273,7 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
       assert.notEqual(result.is_error, true, "Bash must execute successfully, not merely echo a rejected command");
       const text = typeof result.content === "string" ? result.content
         : result.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n");
-      assert.equal(text.trim(), sentinel, "Bash must return exactly the synthetic printf output");
+      assert.ok(text.trim() === sentinel, "Bash must return exactly the synthetic printf output");
     }
     assert.deepEqual(policyStatuses, [200, ...captured.slice(1).map(() => 400)]);
     assert.deepEqual(policyErrors, captured.slice(1).map(() => refusal));
@@ -230,7 +283,7 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     assert.ok(allowanceQueries >= 3, "launch and each model request query fresh allowance");
     t.diagnostic(JSON.stringify({ cli: "2.1.312", model_requests: captured.length, upstream_requests: delivered.length,
       auxiliary_calls: auxiliaryCalls, allowance_queries: allowanceQueries, refusal_visible: true, exit_code: exitCode, ...progressEvidence(),
-      first_body_sha256: createHash("sha256").update(delivered[0]!).digest("hex") }));
+      request_shapes: requestEvidence, first_body_sha256: createHash("sha256").update(delivered[0]!).digest("hex") }));
   } catch (error) {
     const category = /unknown option|unrecognized option|invalid option/iu.test(output) ? "unknown-option"
       : /not logged in|invalid api key|authentication|login required/iu.test(output) ? "authentication"
@@ -239,7 +292,7 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
       : stage === "image-version" ? "image-version"
       : exitCode === null ? "timeout-or-startup" : "unclassified-cli-failure";
     t.diagnostic(JSON.stringify({ stage, category, exit_code: exitCode, exit_signal: exitSignal, error: error instanceof Error ? error.name : "UnknownError",
-      model_requests: captured.length, upstream_requests: delivered.length, auxiliary_calls: auxiliaryCalls, policy_statuses: policyStatuses, ...progressEvidence() }));
+      model_requests: captured.length, upstream_requests: delivered.length, auxiliary_calls: auxiliaryCalls, policy_statuses: policyStatuses, request_shapes: requestEvidence, ...progressEvidence() }));
     throw error;
   } finally {
     cli?.kill("SIGKILL");
