@@ -187,7 +187,7 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       const planAudit = PlanAuditRecord.parse({ v: 2, source: "submit_plan", raw: plan, trimmed: plan,
         trim_reasons: [], result: null, termination_reason: null, updated_at: new Date().toISOString() });
       await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
-        VALUES(${planOwner},${f.projectId},${f.canvasId},'hub_reason','succeeded',${sql.json(hubSnapshot)},${sql.json({ plan_protocol: planAudit })})`;
+        VALUES(${planOwner},${f.projectId},${f.canvasId},'hub_reason','succeeded',${sql.json(z.json().parse(hubSnapshot))},${sql.json({ plan_protocol: planAudit })})`;
       await sql`UPDATE canvases SET target_json=${sql.json(z.json().parse(target))} WHERE id=${f.canvasId}`;
       const [persistedTarget] = await sql`SELECT jsonb_typeof(target_json) AS kind,target_json FROM canvases WHERE id=${f.canvasId}`;
       assert.equal(persistedTarget.kind, "object", "Plan fixture must retain a JSON object, not a pre-serialized JSON string");
@@ -449,7 +449,7 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       await sql`UPDATE jobs SET payload_json=${sql.json(payload)} WHERE id=${id}`;
       const forged = randomUUID();
       await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
-        VALUES(${forged},${f.projectId},${f.canvasId},'hub_reason','pending',${sql.json(hubSnapshot)},${sql.json(payload)})`;
+        VALUES(${forged},${f.projectId},${f.canvasId},'hub_reason','pending',${sql.json(z.json().parse(hubSnapshot))},${sql.json(payload)})`;
       await sql`UPDATE jobs SET status='failed' WHERE id=${id}`;
       assert.equal(await recovery.pendingCompletionRecoveryClaimTarget(sql, { id: forged }), null, "with no other active Hub, copying a grant still cannot copy its durable wake binding");
       await sql`UPDATE jobs SET status='failed' WHERE id=${forged}`;
@@ -495,7 +495,7 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
           const id = randomUUID();
           await sql`UPDATE jobs SET status='cancelled' WHERE id=${hub.id}`;
           await sql`INSERT INTO jobs(id,project_id,canvas_id,type,agent_snapshot_json,payload_json)
-            VALUES(${id},${f.projectId},${f.canvasId},'hub_reason',${sql.json(hubSnapshot)},${sql.json(hub.payload_json)})`;
+            VALUES(${id},${f.projectId},${f.canvasId},'hub_reason',${sql.json(z.json().parse(hubSnapshot))},${sql.json(hub.payload_json)})`;
           hub = await readJob(id);
         }
         if (gate === "wake_dedup") await sql`DELETE FROM event_dedup WHERE event_id=${recovery.completionRecoveryIdentity(f.jobId, f.attemptId, `wake:${first.evidence_sha256}`)}`;
