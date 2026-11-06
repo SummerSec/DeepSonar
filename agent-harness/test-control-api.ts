@@ -46,8 +46,9 @@ const failOnLegacyControlText = (text: string, label: string): void => {
 
 const skillContent = DEEPSONAR_CONTROL_SKILL.files["SKILL.md"];
 assert.equal(DEEPSONAR_CONTROL_SKILL_NAME, "deepsonar-control");
-// Reviewed Plan v2, complete-objective bootstrap and governed completion-recovery guidance.
-const expectedSkillSha256 = "2be21c2a94594d51da7abccc2e47ac0f0bc1f5f218dcfa0120313fd7dafd100b";
+// Reviewed Plan v2, complete-objective bootstrap and governed completion-recovery guidance,
+// including #903 stale-grant exit without reconciliation or new execution authority.
+const expectedSkillSha256 = "00632baf8e50625b1ba38097fe4fcab724cd258f7a3adbb7178e7bc4bb51eb0d";
 const canonicalSkillBytes = Buffer.from(
   `{"name":"deepsonar-control","files":{"SKILL.md":${JSON.stringify(skillContent)}}}`,
   "utf8",
@@ -82,6 +83,9 @@ assert.match(skillContent, /model_correctable/);
 assert.match(skillContent, /X-DeepSonar-Proposal-Revision/);
 assert.match(skillContent, /查询只读取持久结果，不恢复执行器本地完成门/);
 assert.match(skillContent, /原 key、revision 和完全相同 payload 再 POST/);
+assert.match(skillContent, /recovery_stale.*新投影不授予新权限.*原冻结 grant.*release_stale/);
+assert.match(skillContent, /不对账、不停止目标、不清除 unknown，也不申请新执行权/);
+assert.match(skillContent, /旧 Hub 正常结算、无阻塞未知效果、原期限\/预算\/权限仍有效/);
 failOnLegacyControlText(skillContent, "静态控制 Skill");
 
 const overriddenSkills = injectPlatformControlSkill([
