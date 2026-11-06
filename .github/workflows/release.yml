@@ -3213,16 +3213,17 @@ jobs:
           # "Egress sidecar container failed to start (DOCKER::SANDBOX_START_FAILED)".
           # Pull it here with bounded retries so the real acceptance run neither
           # races a cold pull nor hides an unavailable image behind sandbox 500s.
-          image="$(grep -oE 'docker\.io/opensandbox/egress@sha256:[0-9a-f]{64}' deploy/opensandbox/config.toml | head -1)"
-          if [ -z "$image" ]; then
+          if ! image="$(grep -oE 'docker\.io/opensandbox/egress@sha256:[0-9a-f]{64}' deploy/opensandbox/config.toml | head -1)" || [ -z "$image" ]; then
             echo "pinned egress sidecar image not found in deploy/opensandbox/config.toml" >&2
             exit 1
           fi
           echo "egress sidecar image: $image"
           for attempt in 1 2 3 4; do
             if docker pull "$image"; then exit 0; fi
-            echo "egress sidecar pull attempt $attempt failed; retrying" >&2
-            sleep $((attempt * 10))
+            if [ "$attempt" -lt 4 ]; then
+              echo "egress sidecar pull attempt $attempt failed; retrying" >&2
+              sleep $((attempt * 10))
+            fi
           done
           echo "pinned egress sidecar image could not be pulled: $image" >&2
           exit 1

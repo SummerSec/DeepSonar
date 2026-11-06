@@ -123,7 +123,7 @@ jobs:
 
       - name: Release recovery behavior and original signature identity
         run: |
-          node --test agent-harness/release-resume.test.mjs agent-harness/platform-signature-publication.test.mjs
+          node --test agent-harness/release-resume.test.mjs agent-harness/platform-signature-publication.test.mjs agent-harness/egress-prepull.test.mjs
           node agent-harness/test-release-stages.mjs
           node agent-harness/test-release-writeback-order.mjs
 
@@ -1126,7 +1126,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Release recovery evidence regressions
-        run: node --test agent-harness/release-resume.test.mjs agent-harness/platform-signature-publication.test.mjs
+        run: node --test agent-harness/release-resume.test.mjs agent-harness/platform-signature-publication.test.mjs agent-harness/egress-prepull.test.mjs
 
       - name: Workspace typecheck
         run: pnpm -r typecheck
