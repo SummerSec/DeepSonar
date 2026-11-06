@@ -195,6 +195,12 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 该 v1 路线修订仅作为不可变历史记录读取；当前路线修改使用上文 v2 `execution_route` CAS。历史事件、快照和回执不改写，未知效果、待结算回执或失效目标都不能借旧协议恢复执行。详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。
 
 
+## 创建入口的完整运行冻结（#943 / #948）
+
+当前修复把 task retry、自动 Hub、Verify、人工补证及 Task/Finding Report 接到 [`job-runtime-freeze.ts`](../../apps/scheduler/src/job-runtime-freeze.ts)，与普通创建共用 runtime knobs、OM quota、profile/launch 的冻结规则；Job timeout 列使用同一冻结值。retry 在原 dispatcher-advisory/Canvas 事务内、清理旧画布之前冻结；冻结失败或后续插入失败保留旧任务。既有 Intent/PlanTask 已使用该规则，不增加第二执行路径。
+
+缺损历史快照仍明确拒绝，不自动用当前配置重建预算；管理恢复反馈增加缺失字段，不声称具备安全重放证据。范围、残留恢复项与 Actions 入口见[生命周期专题](../AGENT_REPAIR_LIFECYCLE.md#创建入口补齐与缺损快照诊断943--948)；本切片最终 SHA 验收待完成。
+
 ## Model Gateway 透明传输与结算（#923）
 
 请求按原 token、Job/Attempt、冻结模型和预算准入后，经单次 HTTP 交换转发原始 body、路径/query 和端到端头。客户端请求流先有界收全，响应/SSE 即时发送且遵守背压/取消；usage 仅旁路观察。CLI alias 移至请求生成层，预算不符在出站前明确拒绝。OM wrapper 为请求登记 UUID，收到模型终止结果后查询同 Job/Attempt/token/workload 的持久 effect/usage 状态，仅 settled 才提交；未知保持硬失败。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与 [ADR 0017](adr/0017-transparent-gateway-settlement.md)。本分支最终 SHA Actions 待验。

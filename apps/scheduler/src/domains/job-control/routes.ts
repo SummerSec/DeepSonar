@@ -72,6 +72,8 @@ function sendRequeueError(
         ?? `Job 状态 ${result.status} 不允许重新入队；仅 failed/timeout/orphan/waiting_human 可操作`,
       error_code: result.error_code ?? JOB_NOT_RESUMABLE,
       status: result.status,
+      ...(result.missing_fields ? { missing_fields: result.missing_fields } : {}),
+      ...(result.next_action ? { next_action: result.next_action } : {}),
       ...(result.provenance ? { provenance: result.provenance } : {}),
     });
   }

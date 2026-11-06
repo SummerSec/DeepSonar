@@ -5,6 +5,7 @@ import {
   envRuntimeKnobDefaults,
   freezeRuntimeKnobs,
   frozenRuntimeKnobsFromSnapshot,
+  missingFrozenKnobFields,
   jobTokenQuotaExhausted,
   mergeRoleRuntimeKnobOverrides,
   parseRuntimeKnobOverride,
@@ -142,6 +143,16 @@ test("frozen snapshot knobs round-trip and reject partial blobs", () => {
   const frozen = freezeRuntimeKnobs(resolveRuntimeKnobs({ jobType: "audit", env, role: { stallSec: 600 } }));
   assert.deepEqual(frozenRuntimeKnobsFromSnapshot({ runtime_knobs: frozen }), frozen);
   assert.equal(frozenRuntimeKnobsFromSnapshot({ runtime_knobs: { stall_sec: 900 } }), null);
+  assert.deepEqual(missingFrozenKnobFields({ runtime_knobs: frozen }), []);
+  assert.deepEqual(missingFrozenKnobFields({}), ["agent_snapshot_json.runtime_knobs"]);
+  assert.deepEqual(missingFrozenKnobFields(null), ["agent_snapshot_json"]);
+  for (const field of ["stall_sec", "job_token_max_requests", "timeout_sec", "provision_timeout_sec"] as const) {
+    const { [field]: _removed, ...partial } = frozen;
+    for (const value of [partial, { ...frozen, [field]: -1 }, { ...frozen, [field]: "100" }, { ...frozen, [field]: 1.5 }]) {
+      assert.deepEqual(missingFrozenKnobFields({ runtime_knobs: value }), [`agent_snapshot_json.runtime_knobs.${field}`]);
+      assert.equal(frozenRuntimeKnobsFromSnapshot({ runtime_knobs: value }), null);
+    }
+  }
 });
 
 test("job timeout may be shorter than the platform 60s floor", () => {

@@ -3,6 +3,7 @@ import { searchFindingLexical } from "../project-finding-research/lexical-search
 import { readFeatureStatus } from "../project-finding-research/store.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { freezeJobRuntimeConfiguration } from "../../job-runtime-freeze.js";
 import { audit } from "../../audit.js";
 import {
   fixedPriorityForJob,
@@ -425,6 +426,8 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
         canvasId,
         await resolveAgentSnapshotForJob(tx, finding.project_id as string, role, [id]),
       );
+      const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(
+        tx, { projectId: String(finding.project_id), type: role }, snapshot);
       const description = role === "review" ? "人工发起独立复核" : "人工发起运行实测";
       const prompt = role === "review"
         ? `对 Finding ${id} 做独立复核。核对其证据、可达路径与反例；通过 emit_fact 提交 verification.evidence_kind=review 的结构化证据，必须绑定该 finding_id 与实际 subject_revision。`
@@ -447,12 +450,12 @@ export function registerFindingVerificationRoutes(app: FastifyInstance): void {
               manual_override: true,
             },
           } as never,
-          agent_snapshot_json: snapshot as never,
-          timeout_sec: rules.auditTimeoutSec,
+          agent_snapshot_json: runtimeSnapshot as never,
+          timeout_sec: knobs.timeoutSec,
           followup_depth: followupDepth,
         })}
         RETURNING id`;
-      await recordJobSharedAssets(tx, job.id as string, snapshot.shared_assets ?? []);
+      await recordJobSharedAssets(tx, job.id as string, runtimeSnapshot.shared_assets ?? []);
       const [{ next_y }] = await tx<[{ next_y: number }]>`
         SELECT COALESCE(MAX(y), 60) + 140 AS next_y
         FROM canvas_nodes WHERE canvas_id = ${canvasId} AND node_type = 'intent'`;

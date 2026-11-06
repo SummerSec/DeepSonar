@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { sql } from "./db.js";
 import { observationalMemoryConfig, parseFrozenPiExtensions } from "./pi-extensions.js";
 import { resolveObservationalMemoryBudget } from "./gateway-om-budget.js";
-import { frozenRuntimeKnobsFromSnapshot } from "./runtime-knobs.js";
+import { frozenRuntimeKnobsFromSnapshot, missingFrozenKnobFields } from "./runtime-knobs.js";
 import { consumeEventRateLimit } from "./domains/event-ingestion/rate-limit.js";
 
 type Database = typeof sql;
@@ -10,8 +10,11 @@ export type GatewayRequestBudget = {
   version: 1; total_requests: number; main_requests: number; background_requests: number;
 };
 export class GatewayRequestBudgetError extends Error {
-  constructor(readonly code: "GATEWAY_REQUEST_BUDGET_INVALID" | "GATEWAY_REQUEST_BUDGET_HISTORY_MISSING") {
-    super(code);
+  constructor(readonly code: "GATEWAY_REQUEST_BUDGET_INVALID" | "GATEWAY_REQUEST_BUDGET_HISTORY_MISSING",
+    readonly missing_fields: string[] = []) {
+    super(missing_fields.length
+      ? `${code}: field ${missing_fields.join(", ")} 缺失或非法；预算无法从冻结快照解析，须先核对历史策略与执行效果，不能按当前配置猜测或重置额度`
+      : code);
   }
 }
 const invalid = () => new GatewayRequestBudgetError("GATEWAY_REQUEST_BUDGET_INVALID");
@@ -42,10 +45,9 @@ function parsePolicy(value: unknown): GatewayRequestBudget {
 function snapshotPolicy(snapshot: unknown): GatewayRequestBudget {
   try {
     const row = record(snapshot);
-    // FrozenRuntimeKnobs always materializes this number. Missing legacy or
-    // damaged fields are not evidence that the original policy was unlimited.
+    // Missing or damaged knobs do not prove the original policy was unlimited.
     const knobs = frozenRuntimeKnobsFromSnapshot(row);
-    if (!knobs) throw invalid();
+    if (!knobs) throw new GatewayRequestBudgetError("GATEWAY_REQUEST_BUDGET_INVALID", missingFrozenKnobFields(row));
     const main = cap(knobs.job_token_max_requests);
     if (!["pi", "claude-code", "dsh"].includes(String(row.agent_cli))) throw invalid();
     if ((row.agent_cli === "pi" || row.pi_extensions !== undefined) && !Array.isArray(row.pi_extensions)) throw invalid();
@@ -59,7 +61,10 @@ function snapshotPolicy(snapshot: unknown): GatewayRequestBudget {
     const plan = resolveObservationalMemoryBudget({ config: om, jobTokenMaxRequests: main });
     return { version: 1, total_requests: plan.total_requests, main_requests: plan.main_requests,
       background_requests: plan.background_requests };
-  } catch { throw invalid(); }
+  } catch (error) {
+    if (error instanceof GatewayRequestBudgetError) throw error;
+    throw invalid();
+  }
 }
 function eventIdentity(jobId: string, policy: GatewayRequestBudget): string {
   return `gateway-request-budget:${createHash("sha256").update(JSON.stringify([jobId, policy])).digest("hex")}`;
