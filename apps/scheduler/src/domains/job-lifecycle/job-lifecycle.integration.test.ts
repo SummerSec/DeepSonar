@@ -153,7 +153,7 @@ if (!testDatabaseUrl) {
           }
           const effectId = randomUUID();
           await sql`INSERT INTO job_attempt_effects(id,attempt_id,job_id,effect_id,effect_kind,status,replay_policy)
-            VALUES(${effectId},${attempt.id},${blockedId},'agent_run:fixture','agent_run',${effectStatus},'never')`;
+            VALUES(${effectId},${String(attempt.id)},${blockedId},'agent_run:fixture','agent_run',${effectStatus},'never')`;
           const beforeJob = [...await sql`SELECT * FROM jobs WHERE id=${blockedId}`];
           const beforeAttempt = [...await sql`SELECT * FROM job_attempts WHERE job_id=${blockedId}`];
           const beforeEffect = [...await sql`SELECT * FROM job_attempt_effects WHERE id=${effectId}`];
