@@ -68,11 +68,13 @@ if (!testDatabaseUrl) {
       await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({})})`;
-      const snapshot = await runtimeSnapshotModule.freezeAgentSnapshotNetworkPolicy(
+      const resolved = await runtimeSnapshotModule.freezeAgentSnapshotNetworkPolicy(
         sql,
         canvasId,
         await coreModule.resolveAgentSnapshotForJob(sql, projectId, "audit"),
       );
+      const { freezeJobRuntimeConfiguration } = await import("./job-runtime-freeze.js");
+      const { snapshotWithKnobs: snapshot } = await freezeJobRuntimeConfiguration(sql, { projectId, type: "audit" }, resolved);
       await sql`
         INSERT INTO jobs (
           id, project_id, canvas_id, type, status, priority, payload_json,
@@ -159,6 +161,17 @@ if (!testDatabaseUrl) {
         assert.equal((stream.json() as { items: unknown[] }).items.length, 1);
       }
 
+      const blocked = await app.inject({ method: "POST", url: `/tasks/${canvasId}/resume-session` });
+      assert.equal(blocked.statusCode, 409, blocked.payload);
+      assert.equal(blocked.json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+      const { settleEffectByOperator } = await import("./domains/job-attempt/reconcile-effects-runner.js");
+      const effectsToSettle = await sql`SELECT id FROM job_attempt_effects WHERE job_id=ANY(${workerIds}) ORDER BY id`;
+      for (const effect of effectsToSettle) {
+        assert.equal((await settleEffectByOperator(sql, { effect_id: String(effect.id), outcome: "applied_run_terminated",
+          operation_id: "synthetic-boot-exit", evidence: "Synthetic fixture worker is stopped; no external runner exists." })).settled, true);
+      }
+      const settledEffects = await sql`SELECT status,replay_policy FROM job_attempt_effects
+        WHERE job_id=ANY(${workerIds}) ORDER BY job_id`;
       const resumeResponses = await Promise.all([
         app.inject({ method: "POST", url: `/tasks/${canvasId}/resume-session` }),
         app.inject({ method: "POST", url: `/tasks/${canvasId}/resume-session` }),
@@ -188,7 +201,7 @@ if (!testDatabaseUrl) {
         SELECT status, replay_policy FROM job_attempt_effects
         WHERE job_id = ANY(${workerIds})
         ORDER BY job_id`;
-      assert.deepEqual(effectsAfterResume, oldEffects, "resume must not replay or rewrite unknown effects");
+      assert.deepEqual(effectsAfterResume, settledEffects, "resume must preserve the explicit settlement and never replay old effects");
 
       const claimed = await dispatcherModule.claimPendingJobs();
       const claimedIds = new Set(claimed.map((job) => String(job.id)));

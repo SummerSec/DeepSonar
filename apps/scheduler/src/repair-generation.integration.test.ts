@@ -49,8 +49,15 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
     // module import. Never call Dispatcher/provision/model execution in this scope.
     const withCatalog = async <T>(read: () => Promise<T>): Promise<T> => {
       const old = config.runtime.agentMode;
+      const oldKubernetes = config.runtime.openSandbox.kubernetes;
+      // Catalog-only remote-runtime admission: this fixture has no host Docker
+      // image and never provisions. The already imported runner remains fake.
       Reflect.set(config.runtime, "agentMode", "real");
-      try { return await read(); } finally { Reflect.set(config.runtime, "agentMode", old); }
+      Reflect.set(config.runtime.openSandbox, "kubernetes", true);
+      try { return await read(); } finally {
+        Reflect.set(config.runtime, "agentMode", old);
+        Reflect.set(config.runtime.openSandbox, "kubernetes", oldKubernetes);
+      }
     };
     const { freezeJobRuntimeConfiguration } = await import("./job-runtime-freeze.js");
     const readBudget = (jobId: string) => sql.begin(tx => budgets.readRepairTokenBudget(tx as unknown as typeof sql, jobId));
@@ -67,7 +74,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
     const setup = async (repairLimit = 30, existingCanvasId?: string, snapshotOverrides: Record<string, unknown> = {}, mainCap = 40) => {
       Reflect.set(config.gateway, "repairMaxTokens", repairLimit);
       await sql`UPDATE role_configs SET model='model-a',version=version+1 WHERE id=${roleConfigId}`;
-      const canvasId = existingCanvasId ?? `repair-${randomUUID()}`, jobId = randomUUID();
+      const canvasId = existingCanvasId ?? randomUUID(), jobId = randomUUID();
       if (!existingCanvasId) {
         await sql`INSERT INTO canvases(id,project_id,title,target_json)
           VALUES(${canvasId},${projectId},'synthetic repair',${sql.json({ network_policy: { allow_egress: false } })})`;
@@ -571,7 +578,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           process.env.DEEPSONAR_PI_OM_BACKGROUND_MAX_REQUESTS = String(background);
           await sql`UPDATE role_configs SET runtime_knobs_json=${sql.json({ jobTokenMaxRequests: total })} WHERE id=${roleConfigId}`;
         };
-        const createPolicyJob = async (canvasId = `policy-${randomUUID()}`) => {
+        const createPolicyJob = async (canvasId = randomUUID()) => {
           await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${projectId},'synthetic policy',
             ${sql.json({ network_policy: { allow_egress: false } })}) ON CONFLICT(id) DO NOTHING`;
           const resolved = await withCatalog(async () => snapshots.freezeAgentSnapshotNetworkPolicy(sql, canvasId,

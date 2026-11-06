@@ -290,7 +290,7 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET status = 'succeeded', finished_at = now() WHERE id = ${resumeJobId}`;
 
       // rerun-current replaces only the snapshot/execution state. Payload,
-      // parent linkage, Canvas graph, and already-unknown effects remain exact.
+      // parent linkage and Canvas graph remain exact; unknown effects require explicit reconciliation.
       const parent = await insertJob({ status: "succeeded", payload: { marker: "parent" } });
       const rerunJob = await insertJob({
         status: "orphan",
@@ -323,11 +323,19 @@ if (!testDatabaseUrl) {
       const [attemptBefore] = await sql`
         SELECT status, phase, outcome_json, error, finished_at, updated_at
         FROM job_attempts WHERE id = ${String(oldAttempt.id)}`;
+      await sql`UPDATE role_configs SET model = 'model-current', version = version + 1 WHERE id = ${roleConfigId}`;
+      const blocked = await post(rerunJobId, "rerun-current");
+      assert.equal(blocked.statusCode, 409, blocked.payload);
+      assert.equal(blocked.json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+      const { settleEffectByOperator } = await import("./domains/job-attempt/reconcile-effects-runner.js");
+      const [unknownEffect] = await sql`SELECT id FROM job_attempt_effects
+        WHERE attempt_id=${String(oldAttempt.id)} AND effect_id='agent-run'`;
+      assert.equal((await settleEffectByOperator(sql, { effect_id: String(unknownEffect.id), outcome: "applied_run_terminated",
+        operation_id: "synthetic-rerun-exit", evidence: "Synthetic fixture runner exited; no external execution was started." })).settled, true);
       const [effectBefore] = await sql`
         SELECT status, replay_policy, settlement_json, error, settled_at, updated_at
         FROM job_attempt_effects
         WHERE attempt_id = ${String(oldAttempt.id)} AND effect_id = 'agent-run'`;
-      await sql`UPDATE role_configs SET model = 'model-current', version = version + 1 WHERE id = ${roleConfigId}`;
       const rerunCurrent = await post(rerunJobId, "rerun-current");
       assert.equal(rerunCurrent.statusCode, 200, rerunCurrent.payload);
       assert.equal(rerunCurrent.json().execution, "current_snapshot");
@@ -422,9 +430,8 @@ if (!testDatabaseUrl) {
       await attemptModule.settleAttemptTerminal(sql, raceJobId, "succeeded", { reason: "fixture" });
       await sql`UPDATE jobs SET status = 'succeeded', finished_at = now() WHERE id = ${raceJobId}`;
 
-      // waiting_human owns a live Attempt. Requeue closes that Attempt,
-      // converts its in-flight effect to unknown, revokes the old execution,
-      // and clears the sandbox pointer before exposing pending.
+      // waiting_human owns a live Attempt. Pending effects first block recovery;
+      // only after the fake runner reports exit may requeue close ownership.
       const waitingSnapshot = await currentSnapshot();
       const waitingJob = await insertJob({
         status: "waiting_human",
@@ -443,6 +450,12 @@ if (!testDatabaseUrl) {
         step: 1,
         replayPolicy: "never",
       });
+      const waitingBlocked = await post(waitingJobId, "rerun-current");
+      assert.equal(waitingBlocked.statusCode, 409, waitingBlocked.payload);
+      assert.equal(waitingBlocked.json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+      await attemptModule.settleEffect(sql, String(waitingAttempt.id), "waiting-agent-run", {
+        status: "settled", outcome: { fixture: "fake runner exit observed" },
+      });
       const waitingResponse = await post(waitingJobId, "rerun-current");
       assert.equal(waitingResponse.statusCode, 200, waitingResponse.payload);
       const [waitingAfter] = await sql`SELECT status, sandbox_id FROM jobs WHERE id = ${waitingJobId}`;
@@ -453,7 +466,7 @@ if (!testDatabaseUrl) {
         WHERE attempt_id = ${String(waitingAttempt.id)} AND effect_id = 'waiting-agent-run'`;
       assert.deepEqual(waitingAfter, { status: "pending", sandbox_id: null });
       assert.deepEqual(waitingAttemptAfter, { status: "interrupted", phase: "interrupted" });
-      assert.deepEqual(waitingEffectAfter, { status: "unknown", replay_policy: "never" });
+      assert.deepEqual(waitingEffectAfter, { status: "settled", replay_policy: "never" });
       await sql`UPDATE jobs SET status = 'cancelled', finished_at = now() WHERE id = ${waitingJobId}`;
 
       const taskWaitingCanvasId = randomUUID();
@@ -482,6 +495,12 @@ if (!testDatabaseUrl) {
         kind: "agent_run",
         step: 1,
         replayPolicy: "never",
+      });
+      const taskWaitingBlocked = await app.inject({ method: "POST", url: `/tasks/${taskWaitingCanvasId}/resume-session` });
+      assert.equal(taskWaitingBlocked.statusCode, 409, taskWaitingBlocked.payload);
+      assert.equal(taskWaitingBlocked.json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+      await attemptModule.settleEffect(sql, String(taskWaitingAttempt.id), "task-waiting-agent-run", {
+        status: "settled", outcome: { fixture: "fake runner exit observed" },
       });
       const taskWaitingResume = await app.inject({
         method: "POST",
