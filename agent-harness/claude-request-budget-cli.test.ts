@@ -206,6 +206,9 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     assert.equal(captured.length, 2, "one real tool continuation, then a terminal local rejection without retries");
     assert.equal(resultReceived, true, "CLI emits its native terminal result before stdin closes");
     assert.equal(resultError, true, "budget refusal must terminate as a native error, not successful completion");
+    // Locked 2.1.312 runHeadless maps result.is_error to shutdownSync(1).
+    assert.equal(exitCode, 1, "native error result must exit with the pinned CLI error code");
+    assert.equal(exitSignal, null, "signal termination cannot satisfy native error completion");
     assert.equal(delivered.length, 1);
     assert.equal(createHash("sha256").update(captured[0]!).digest("hex"), createHash("sha256").update(delivered[0]!).digest("hex"), "formed request bytes preserved");
     for (const raw of captured.slice(1)) {
