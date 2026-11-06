@@ -215,6 +215,8 @@ export function buildRunPlan({
     docsOnly: false,
     requiredSuites: [],
     fastSuites: [],
+    // #961: 默认必须跑 ARM 门禁；只有明确判定「与 Chrome 构建输入无关」的分支才置 false。
+    chromeFuzzArm: true,
     tiered,
     reasons: [],
     base: base ?? "",
