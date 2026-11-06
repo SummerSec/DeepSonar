@@ -186,14 +186,11 @@ export async function freezeJobSkillCatalog(
     max_age_seconds: maxAgeSeconds,
     stale,
     catalog_hash: sha256(canonical(frozenCatalogHashInput({
-      schema: SCHEMA,
-      project_id: projectId,
       sources,
       extensions,
       stale_after_days: staleAfterDays,
       max_age_seconds: maxAgeSeconds,
       stale,
-      catalog_hash: "",
     }, projectId))),
   };
 }
@@ -220,7 +217,10 @@ export function injectFrozenJobSkillExtensions(
   return frozen;
 }
 
-function frozenCatalogHashInput(frozen: FrozenJobSkillCatalog, projectId: string): Record<string, unknown> {
+function frozenCatalogHashInput(
+  frozen: Pick<FrozenJobSkillCatalog, "sources" | "extensions" | "stale_after_days" | "max_age_seconds" | "stale">,
+  projectId: string,
+): Record<string, unknown> {
   return {
     project_id: projectId,
     sources: frozen.sources,

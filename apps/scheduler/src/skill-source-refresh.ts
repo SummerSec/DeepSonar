@@ -271,7 +271,8 @@ export function startSkillSourceRefreshLoop(deps: SkillSourceRefreshDeps & {
     }
   };
 
-  void pass();
+  // 不在启动瞬间跑第一轮：启动同步（若开启）正在克隆同一批源，立刻再跑会并发写同一行。
+  // 首轮在第一个周期到达时开始；关掉启动同步时也最多等一个 refreshIntervalSec。
   timer = setInterval(() => void pass(), intervalSec * 1000);
   timer.unref?.();
   console.log(`[skills] 模块源周期刷新已启用：每 ${intervalSec}s 检查一次`);
