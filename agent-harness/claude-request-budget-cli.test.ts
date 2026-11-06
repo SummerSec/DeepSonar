@@ -54,7 +54,7 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
   const delivered: Buffer[] = [];
   const policyStatuses: number[] = [];
   const policyErrors: string[] = [];
-  const nativeToolResults: Array<{ stdout?: unknown; stderr?: unknown; interrupted?: unknown }> = [];
+  const nativeToolResults: Array<Record<string, unknown>> = [];
   const progressEvidence = () => {
     const results = captured.flatMap(raw => {
       try {
@@ -77,12 +77,18 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
         && output.includes("the formed request was not rewritten or sent"),
       native_tool_results: nativeToolResults.map(result => ({
         stdout_is_string: typeof result.stdout === "string", stderr_is_string: typeof result.stderr === "string",
-        stdout_matches: typeof result.stdout === "string" && result.stdout.trim() === sentinel,
+        stdout_equals_sentinel: typeof result.stdout === "string" && result.stdout.trim() === sentinel,
+        stdout_sha256: typeof result.stdout === "string" ? createHash("sha256").update(result.stdout).digest("hex") : null,
         stdout_bytes: typeof result.stdout === "string" ? Buffer.byteLength(result.stdout) : null,
         stderr_empty: result.stderr === "", stderr_bytes: typeof result.stderr === "string" ? Buffer.byteLength(result.stderr) : null,
         stderr_sha256: typeof result.stderr === "string" ? createHash("sha256").update(result.stderr).digest("hex") : null,
         cwd_reset_note: typeof result.stderr === "string" && result.stderr.includes("Shell cwd was reset to"),
         interrupted: result.interrupted === true,
+        background_task: typeof result.backgroundTaskId === "string", backgrounded_by_user: result.backgroundedByUser === true,
+        timed_out: typeof result.timedOutAfterMs === "number", background_cwd_hint: typeof result.backgroundCwdHint === "string",
+        raw_output_file: typeof result.rawOutputPath === "string", persisted_output: typeof result.persistedOutputPath === "string",
+        persisted_output_size: typeof result.persistedOutputSize === "number" ? result.persistedOutputSize : null,
+        stale_read_hint: typeof result.staleReadFileStateHint === "string", rate_limit_hint: typeof result.ghRateLimitHint === "string",
       })),
       tool_result_present: results.length > 0,
       tool_result_success: results.some((block: any) => block.is_error !== true),
@@ -262,6 +268,9 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     assert.ok((nativeToolResults[0].stdout as string).trim() === sentinel, "native Bash stdout is exactly the fixture sentinel");
     assert.ok(nativeToolResults[0].stderr === "", "do not hide Bash errors or environment warnings");
     assert.equal(nativeToolResults[0].interrupted, false);
+    for (const field of ["backgroundTaskId", "timedOutAfterMs", "rawOutputPath", "persistedOutputPath"]) {
+      assert.ok(nativeToolResults[0][field] === undefined, `tiny synchronous printf must not require ${field}`);
+    }
     assert.equal(createHash("sha256").update(captured[0]!).digest("hex"), createHash("sha256").update(delivered[0]!).digest("hex"), "formed request bytes preserved");
     for (const raw of captured.slice(1)) {
       const body = JSON.parse(raw.toString("utf8"));
