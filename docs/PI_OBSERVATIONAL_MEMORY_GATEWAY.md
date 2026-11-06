@@ -1,5 +1,5 @@
 > 状态：as-built（#815 B 的 Gateway、账本与用量投影；本地替身和隔离 SQL 验证不代表真实模型效果或完整平台验收）
-> 同步日期：2026-11-03
+> 同步日期：2026-11-05
 
 # Pi Observational Memory Gateway
 
@@ -17,7 +17,7 @@ Job model。OM 的 `source_model` 必须等于主 Job 的 frozen model，不能�
 OM token 保存唯一的 `expected_provider`、`expected_model` 和 `expected_route`。
 协议来自 frozen Pi provider/model profile；model 的 `api` 覆盖 provider `api`。
 已有 frozen `models.json` 损坏、缺少 provider/model 或协议不受支持时直接拒绝，
-不能改读另一份 settings 配置来延续请求。OM 不经过 main CLI alias rewrite，
+不能改读另一份 settings 配置来延续请求。Gateway 不再执行任何 CLI alias rewrite，
 只能向精确 route 提交指定模型的 POST。
 
 每次请求在 Job 锁内重新检查冻结范围、token、有效期和 Job 状态。Job 进入
@@ -66,24 +66,31 @@ token 的历史计数。main reservation 在第一个后台 token 签发之前�
 可以降级的配额 429。main 的独立准入不消费这些后台额度。
 
 每次后台准入只发起一次上游尝试，包括 unlimited 配额；不自动重放可能已经产生
-外部效果的请求。后台 JSON/SSE 响应在内存中有界缓冲，最多 16 MiB；只有现有严格
-协议 scanner 确认 terminal usage，且数据库结算成功后，才返回正常响应。
-错误状态、断流、超限、缺失或伪造 usage 均进入 unknown 并返回明确的 409；provider 5xx/error prose 不自动等价于“请求未开始”。只有内核已证明 admission 未提交、或 known-never-started transport 且零用量结算已提交，才能按 `gateway_transient` + `effect_status=not_started` 走可见降级。
+外部效果的请求。后台 JSON/SSE 响应按原始字节及时转发，不在 Gateway 缓冲后换成结算错误（#923）。只有严格协议 scanner 确认 terminal usage、数据库结算成功，且 wrapper 从 scoped 只读查询确认 durable settled，才提交模型终止结果。
+错误状态、断流、观察超限、缺失或伪造 usage 均进入 unknown；wrapper 通过结算查询硬失败，不改写已交付的上游状态或正文。provider 5xx/error prose 不自动等价于“请求未开始”。只有内核已证明 admission 未提交、或 known-never-started transport 且零用量结算已提交，才能按 `gateway_transient` + `effect_status=not_started` 走可见降级。
 上游请求/响应正文不落库。
 
 当前请求前失败分类只接受 Node 原生连接或 DNS 错误链，见
 [`gateway-om-budget.ts`](../apps/scheduler/src/gateway-om-budget.ts)。每个聚合错误叶子都须符合要求；超时、连接后断流、权限或协议错误不能继承一个连接失败 cause 后降级。返回 `503 gateway_transient` 前，Gateway 必须在 Job 锁内核对当前 pending reservation、写入 settled 零用量账本并持久结算 `never_started`，请求次数不退还。结算冲突或写入失败仍返回对账错误。provider 自报的同名 JSON、SSE error 和 Pi 会转述的 Anthropic refusal 字段不能冒充内核结果。零外部用量不等于已经完成价格计算。
 
 usage、effect settlement 和 token counter 在同一事务内写入。账本事务失败时，
-原 effect 保持 pending，调用方得到对账错误，后续后台请求不能再次出站；不能在
+原 effect 保持 pending，wrapper 的持久确认失败，后续后台请求不能再次出站；不能在
 内存中补造成功账单。权限、provider/model/route、snapshot、完整性、协议、撤销和
 未知外部效果错误都保留硬失败边界。
 
+## 透明传输后的持久确认（#923）
+
+受审 wrapper 每次请求创建 UUID，通过 `x-deepsonar-request-id` 交给 Gateway；该控制头不出站，UUID 登记在原 effect intent。模型终止结果先由 wrapper 持有，只有冻结 Gateway 的 `GET /gateway/_settlement/:id` 返回同 Job/当前 Attempt/token/workload 的 settled 才可提交。pending/not_found 只能有界等待，unknown、查询失败或超时硬失败；never_started 必须来自宿主持久账本，不能从 Provider 文案推断。查询不新增模型请求计数，不绕过 token 失效或终态撤销。
+
+有限输出预算由受审 wrapper 在请求生成前读取 `_allowance` 的 `remaining_tokens` 提示并显式限制 SDK `options.maxTokens`；SDK 最小输出要求无法满足时明确拒绝。OM 用当前后台 token/活动 Attempt 读取自己的额度；接口也服务 main 生成层但不混用两种 workload。查询不预留、不消耗模型请求配额，pending/unknown 保持拒绝；并发下最终请求仍由 Gateway 锁内复核，不能以旧提示绕过额度。Gateway 只准入或拒绝，不修改原 body。请求流仍有界收全，响应及时透传和旁路观察；范围、限制、回归入口及待验状态见[透明传输专题](MODEL_GATEWAY_TRANSPARENCY.md)与 [ADR 0017](architecture/adr/0017-transparent-gateway-settlement.md)。以下既有本地通过记录属于历史版本，不能作为 #923 最终 SHA 验收。
+
+配额拒绝及已回滚的 admission 数据库冲突耗尽，也必须有持久的宿主无外部效果回执才允许 OM 可见降级。[admission receipt helper](../apps/scheduler/src/gateway-admission-receipt.ts) 在确认未发上游、且失败 admission 已回滚后，另开事务复用 `events` 的 `control_receipt`：`operation=gateway_admission`、`authority=kernel`，按 Job/Attempt/token/workload/请求 UUID 绑定，复用事件限流与 dedup。它不创建模型 effect、不增加模型请求计数或 usage，不改 schema。查询同 scope 回执得到 `not_started` 才能按已知 quota/transient 降级；保存失败、缺失或不匹配保持 unknown。策略无效或历史缺失的确定准入拒绝另返回 `policy_rejected` scoped 回执，只允许 wrapper 分类为 `PI_OM_REQUEST_POLICY_INVALID` / `PI_OM_REQUEST_POLICY_HISTORY_MISSING` 硬失败，不允许 quota/transient 软降级、重试或解除历史 unknown/pending。缺失或写失败仍 unknown。相同 UUID 不得重新发起上游请求。请求前 transport 的原 effect/零用量结算路径保持独立，不能与未准入回执混淆。
+
 ## Admission 数据库冲突与 SDK 消息（#871/#873）
 
-[纯数据库重试 helper](../apps/scheduler/src/db-conflict-retry.ts)只重试已回滚的完整 admission 事务，SQLSTATE 限定 `40P01` / `40001` / `55P03`；次数与退避以源码为准。额度预留、effect intent 和账本检查全部在提交前完成，提交成功后上游请求只发一次。非冲突错误保持原异常；耗尽返回 `503`，不留下部分 reservation/effect/usage。main workload 保留 `database_conflict`，OM 仅在已回滚、上游未调用的条件下使用宿主 `gateway_transient/not_started`。
+[纯数据库重试 helper](../apps/scheduler/src/db-conflict-retry.ts)只重试已回滚的完整 admission 事务，SQLSTATE 限定 `40P01` / `40001` / `55P03`；次数与退避以源码为准。额度预留、effect intent 和账本检查全部在提交前完成，提交成功后上游请求只发一次。非冲突错误保持原异常；耗尽返回 `503`，不留下部分 reservation/effect/usage。main workload 保留 `database_conflict`，OM 仅在已回滚、上游未调用且独立 admission 无效果回执已持久化后，才通过 scoped 查询确认 `not_started` 并可见降级；保存失败保持 unknown。
 
-OM 的该 admission 分类和已持久结算的请求前 transport 共同使用[生产 error.message carrier](../apps/scheduler/src/gateway.ts)，内层消息保留结构化宿主标记，使 Pi SDK 丢弃外层 envelope 后仍能消费；canonical RPC 夹具不再人工补写消息。pending/unknown、普通或伪造 Provider 503、上游已运行后的 settlement failure 均不能借此降级。真实 handler body 与实际内层 message 双路径送入生产 wrapper 的回归见 [Gateway 测试](../apps/scheduler/src/gateway-db-conflict.test.ts)；retry 与 exhaustion 分开计数，metric 标签限定 workload 与允许的 SQLSTATE/unknown，不写每请求标识；宿主日志关联 Job/Attempt，不复制上游正文。
+错误仍可携带[生产 error.message carrier](../apps/scheduler/src/gateway.ts)供诊断，但 #923 wrapper 不再把内层消息当成降级 authority；它查询 scoped 持久回执，区分未准入事件回执和请求前 transport 的 effect/零用量结算。pending/unknown、普通或伪造 Provider 503、上游已运行后的 settlement failure 均不能借此降级。真实 handler body 与实际内层 message 双路径送入生产 wrapper 的回归见 [Gateway 测试](../apps/scheduler/src/gateway-db-conflict.test.ts)；retry 与 exhaustion 分开计数，metric 标签限定 workload 与允许的 SQLSTATE/unknown，不写每请求标识；宿主日志关联 Job/Attempt，不复制上游正文。
 
 本轮分支已接现有 `pnpm ci:unit:executor-real`、PostgreSQL Gateway 与[真实镜像 RPC](PI_OBSERVATIONAL_MEMORY_RPC.md)门禁。Draft SHA 的快检不代表 PostgreSQL/镜像或最终完整工程验收；最终候选 Actions 尚待通过，不推导真实模型质量或成本收益。
 
@@ -135,3 +142,5 @@ D:\nodejs\node.exe apps\scheduler\node_modules\tsx\dist\cli.mjs --test --test-co
 RPC、封装预检和独立生产启动守卫正负例已通过，集中见
 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；
 发布镜像/平台与 registry/catalog 证据仍另验，质量和成本收益保持 `unknown`。
+
+主执行的三 CLI 使用独立沙箱请求生成适配器，OM 后台保持真实 Gateway endpoint 与受审 wrapper；两条生成路径共用 allowance 提示和最终锁内准入，但不共享 workload 授权。

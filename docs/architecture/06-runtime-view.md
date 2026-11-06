@@ -194,8 +194,15 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 
 该 v1 路线修订仅作为不可变历史记录读取；当前路线修改使用上文 v2 `execution_route` CAS。历史事件、快照和回执不改写，未知效果、待结算回执或失效目标都不能借旧协议恢复执行。详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。
 
-Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freeze，Control Intent 预检与最终 ingestion 均执行；最终事务在 pending Job 公开前冻结 runtime knobs、OM 配额、profile 与 launch。保留原 audit timeout、parent/finding/payload/priority 和图身份，shared assets 仅由既有 materializer 记录一次；冻结或图写入失败回滚整次 ingestion。
+
+## Model Gateway 透明传输与结算（#923）
+
+请求按原 token、Job/Attempt、冻结模型和预算准入后，经单次 HTTP 交换转发原始 body、路径/query 和端到端头。客户端请求流先有界收全，响应/SSE 即时发送且遵守背压/取消；usage 仅旁路观察。CLI alias 移至请求生成层，预算不符在出站前明确拒绝。OM wrapper 为请求登记 UUID，收到模型终止结果后查询同 Job/Attempt/token/workload 的持久 effect/usage 状态，仅 settled 才提交；未知保持硬失败。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与 [ADR 0017](adr/0017-transparent-gateway-settlement.md)。本分支最终 SHA Actions 待验。
+
+#923 主执行启动/恢复由上传的[请求准入适配器](../../packages/runtime-sandbox/src/model-request-policy.ts)包装，三 CLI 主 endpoint 只在运行时投影到 loopback，OM 保持真实 Gateway。每次模型 JSON 查询自身 workload allowance，已有 cap/usage 合规才原字节转发，否则拒绝。Pi 已接 SDK 生成前逐次配置，Claude 只接启动/resume 静态 cap；DSH 共用 SDK 生成前 adapter 已接。Claude Code 2.1.312 的启动上限与运行中余额不足时明确拒绝并提示，是用户已接受的兼容限制；不修改已形成 body，不要求逐请求自动适配，该范围决定不再阻塞发布。未准入 quota/DB 回滚拒绝用原 events 的 scoped kernel 回执确认 not_started；保存失败 unknown，同 UUID 不重发。无新 schema/模型账本，Actions 待验。
 
 ## 操作员效果结清（#899）
 
 FR-JOB-005 的人工路径复用 `job_attempt_effects`：同一 UPDATE 排除 active Attempt 并只写未结清行；已结清证据不可覆盖，不改变 Attempt 程序计数器或 replay policy。CLI 将本次单条写入结果与独立全局计数分开，计数失败不能宣称清空；字段和退出契约见[部署说明](../../deploy/README.md#未知效果的人工结清899)。隔离 PostgreSQL 回归覆盖真实内核结算和锁竞争，最终 SHA Actions 成功才作为工程验收，未执行生产升级。
+
+Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freeze，Control Intent 预检与最终 ingestion 均执行；最终事务在 pending Job 公开前冻结 runtime knobs、OM 配额、profile 与 launch。保留原 audit timeout、parent/finding/payload/priority 和图身份，shared assets 仅由既有 materializer 记录一次；冻结或图写入失败回滚整次 ingestion。

@@ -1,3 +1,4 @@
+import type { MigrationConnection } from "./migration-runner.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -79,9 +80,12 @@ if (!testDatabaseUrl) {
       await sql`
         INSERT INTO canvas_nodes (canvas_id, node_type, title, status, body_json)
         VALUES (${canvasId}, 'root', 'root', 'active', ${sql.json({ marker: "keep-root" })})`;
-      await sql`
-        INSERT INTO agent_roles (id, name, title, description, builtin, kind, ui_color)
-        VALUES (${roleId}, ${roleName}, 'Rerun fixture', 'Issue 202 fixture', false, 'role', '#c084fc')`;
+      const { allocateRoleUiColor } = await import("./role-colors.js");
+      await sql.begin(async tx => {
+        const color = await allocateRoleUiColor(tx as unknown as typeof sql);
+        await tx`INSERT INTO agent_roles (id, name, title, description, builtin, kind, ui_color)
+          VALUES (${roleId}, ${roleName}, 'Rerun fixture', 'Issue 202 fixture', false, 'role', ${color})`;
+      });
       await sql`
         INSERT INTO role_configs (id, role_id, project_id, agent_cli, model)
         VALUES (${roleConfigId}, ${roleId}, NULL, 'claude-code', 'model-a')`;
@@ -107,6 +111,10 @@ if (!testDatabaseUrl) {
           ${id.slice(0, 16)}, 'cret', 'active', ${cli}, ${sql.json(settings)})`;
       }
 
+      const withFixtureKnobs = (snapshot: Awaited<ReturnType<typeof coreModule.resolveAgentSnapshotForJob>>, maxRequests = 0) => ({
+        ...snapshot, runtime_knobs: { stall_sec: 600, job_token_max_requests: maxRequests,
+          timeout_sec: 3600, provision_timeout_sec: 600, sources: {} },
+      });
       const { freezeJobRuntimeConfiguration } = await import("./job-runtime-freeze.js");
       const currentSnapshot = async (targetCanvasId = canvasId) => {
         const resolved = await snapshotModule.freezeAgentSnapshotNetworkPolicy(sql, targetCanvasId,
@@ -164,6 +172,30 @@ if (!testDatabaseUrl) {
       };
       const post = (jobId: string, action: "resume" | "rerun-current") =>
         app.inject({ method: "POST", url: `/jobs/${jobId}/${action}` });
+
+      // Pre-binding Jobs cannot resume into a later Gateway rejection. Refusal is
+      // read-only: migration must use the explicit governed recovery operation.
+      const legacySnapshot = { ...baselineSnapshot };
+      delete legacySnapshot.gateway_provider_binding;
+      const legacyJob = await insertJob({ status: "failed", snapshot: legacySnapshot });
+      const legacyRefused = await post(String(legacyJob.id), "resume");
+      assert.equal(legacyRefused.statusCode, 409, legacyRefused.payload);
+      assert.ok(legacyRefused.json().stale_fields.includes("gateway_provider_binding_fingerprint"));
+      const [legacyAfter] = await sql`SELECT status, agent_snapshot_json FROM jobs WHERE id=${String(legacyJob.id)}`;
+      assert.equal(legacyAfter.status, "failed");
+      assert.deepEqual(legacyAfter.agent_snapshot_json, legacySnapshot);
+      const [legacyAttempts] = await sql`SELECT count(*)::int AS n FROM job_attempts WHERE job_id=${String(legacyJob.id)}`;
+      assert.equal(legacyAttempts.n, 0);
+      const legacyRefrozen = await post(String(legacyJob.id), "rerun-current");
+      assert.equal(legacyRefrozen.statusCode, 200, legacyRefrozen.payload);
+      const [legacyReady] = await sql`SELECT id, status, agent_snapshot_json FROM jobs WHERE id=${String(legacyJob.id)}`;
+      assert.equal(legacyReady.id, legacyJob.id);
+      assert.equal(legacyReady.status, "pending");
+      assert.deepEqual(legacyReady.agent_snapshot_json.gateway_provider_binding, baselineSnapshot.gateway_provider_binding);
+      // This fixture has never run and has no effects or repair receipts. It is
+      // not evidence that an unknown-effect execution can safely be replayed.
+      await sql`UPDATE jobs SET status='cancelled',finished_at=now() WHERE id=${String(legacyJob.id)}`;
+
 
       // #914: rerun-current cannot repair dangling current configuration itself.
       // Repeated refusal preserves the frozen snapshot and creates no Attempt;
@@ -330,7 +362,7 @@ if (!testDatabaseUrl) {
       const { settleEffectByOperator } = await import("./domains/job-attempt/reconcile-effects-runner.js");
       const [unknownEffect] = await sql`SELECT id FROM job_attempt_effects
         WHERE attempt_id=${String(oldAttempt.id)} AND effect_id='agent-run'`;
-      assert.equal((await settleEffectByOperator(sql, { effect_id: String(unknownEffect.id), outcome: "applied_run_terminated",
+      assert.equal((await settleEffectByOperator(sql as unknown as MigrationConnection, { effect_id: String(unknownEffect.id), outcome: "applied_run_terminated",
         operation_id: "synthetic-rerun-exit", evidence: "Synthetic fixture runner exited; no external execution was started." })).settled, true);
       const [effectBefore] = await sql`
         SELECT status, replay_policy, settlement_json, error, settled_at, updated_at
@@ -625,6 +657,108 @@ if (!testDatabaseUrl) {
       assert.deepEqual(singleResume.json().job_ids, [String(singleJob.id)]);
       const [singleAfter] = await sql`SELECT status FROM jobs WHERE id = ${String(singleJob.id)}`;
       assert.equal(singleAfter.status, "failed");
+
+      // #928: exercise the actual recovery route before issuing a replacement
+      // ordinary token. The frozen Job-wide cap and its consumed 19/20 survive.
+      const { mintJobToken } = await import("./gateway.js");
+      const quotaUpstream = fastifyModule.default();
+      let quotaUpstreamCalls = 0;
+      quotaUpstream.post("/v1/messages", async () => {
+        quotaUpstreamCalls++;
+        return { id: "offline-quota", type: "message", role: "assistant", model: "model-a",
+          content: [{ type: "text", text: "offline" }], stop_reason: "end_turn",
+          usage: { input_tokens: 1, output_tokens: 1 } };
+      });
+      const quotaUrl = await quotaUpstream.listen({ host: "127.0.0.1", port: 0 });
+      try {
+        await sql`UPDATE credentials SET public_metadata_json=${sql.json({ base_url: quotaUrl })} WHERE id=${baselineCredentialId}`;
+        const quotaRoleId = randomUUID(), quotaConfigId = randomUUID();
+        const quotaRole = `quota_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+        await sql.begin(async tx => {
+          const color = await allocateRoleUiColor(tx as unknown as typeof sql);
+          await tx`INSERT INTO agent_roles(id,name,title,description,builtin,kind,ui_color)
+            VALUES(${quotaRoleId},${quotaRole},'Quota recovery','Offline quota recovery',false,'role',${color})`;
+        });
+        await sql`INSERT INTO role_configs(id,role_id,agent_cli,model,runtime_knobs_json)
+          VALUES(${quotaConfigId},${quotaRoleId},'claude-code','model-a',${sql.json({ jobTokenMaxRequests: 20 })})`;
+        for (const replacementCap of [0, 20]) {
+          await sql`UPDATE role_configs SET runtime_knobs_json=${sql.json({ jobTokenMaxRequests: 20 })},version=version+1 WHERE id=${quotaConfigId}`;
+          const quotaCanvas = `quota-${randomUUID()}`, quotaJob = randomUUID();
+          await sql`INSERT INTO canvases(id,project_id,title,target_json)
+            VALUES(${quotaCanvas},${projectId},'Quota recovery',${sql.json({ network_policy: { allow_egress: false } })})`;
+          await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status,body_json)
+            VALUES(${quotaCanvas},'root','Quota recovery','active','{}')`;
+          const frozen = await snapshotModule.freezeAgentSnapshotNetworkPolicy(sql, quotaCanvas,
+            withFixtureKnobs(await coreModule.resolveAgentSnapshotForJob(sql, projectId, quotaRole), 20));
+          await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+            VALUES(${quotaJob},${projectId},${quotaCanvas},${quotaRole},'running',${sql.json(frozen as never)},now(),3600,now()+interval '1 hour')`;
+          await sql`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
+            VALUES(${quotaCanvas},${quotaJob},'intent','Quota recovery','running','{}')`;
+          const oldQuotaAttempt = await attemptModule.createAttempt(sql, quotaJob, attemptIdentity(frozen));
+          const oldToken = await mintJobToken({ jobId: quotaJob, projectId, credentialId: baselineCredentialId, maxRequests: 20 });
+          const send = (plaintext: string) => app.inject({ method: "POST", url: "/gateway/v1/messages",
+            headers: { authorization: `Bearer ${plaintext}` }, payload: { model: "model-a", max_tokens: 1, messages: [] } });
+          for (let i = 0; i < 19; i++) {
+            const response = await send(oldToken.plaintext);
+            assert.equal(response.statusCode, 200, response.body);
+          }
+          const waitForQuotaSettlement = async (expected: number) => {
+            for (let poll = 0; poll < 200; poll++) {
+              const [row] = await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id=${quotaJob} AND settlement_status='settled'`;
+              if (row.n === expected) return;
+              await new Promise(resolve => setTimeout(resolve, 10));
+            }
+            assert.fail(`quota fixture expected ${expected} settled requests`);
+          };
+          await waitForQuotaSettlement(19);
+          await attemptModule.markAttemptInterrupted(sql, quotaJob, "quota recovery fixture");
+          await sql`UPDATE jobs SET status='orphan',finished_at=now() WHERE id=${quotaJob}`;
+          await sql`UPDATE role_configs SET runtime_knobs_json=${sql.json({ jobTokenMaxRequests: replacementCap })},version=version+1 WHERE id=${quotaConfigId}`;
+          const [oldAttemptEvidence] = await sql`SELECT * FROM job_attempts WHERE id=${String(oldQuotaAttempt.id)}`;
+          const oldEffects = [...await sql`SELECT * FROM job_attempt_effects WHERE attempt_id=${String(oldQuotaAttempt.id)} ORDER BY id`];
+          const oldPolicies = [...await sql`SELECT event_id,payload_json FROM events WHERE job_id=${quotaJob}
+            AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget' ORDER BY job_seq`];
+          assert.ok(oldPolicies.length > 0, "first mint durably freezes the request policy");
+          const recovery = await post(quotaJob, "rerun-current");
+          assert.equal(recovery.statusCode, 200, recovery.body);
+          const [requeued] = await sql`SELECT status,agent_snapshot_json FROM jobs WHERE id=${quotaJob}`;
+          assert.equal(requeued.status, "pending");
+          const [revoked] = await sql`SELECT status,used_requests FROM job_tokens WHERE id=${oldToken.id}`;
+          assert.equal(revoked.status, "revoked"); assert.equal(revoked.used_requests, 19);
+          const claims = await dispatcherModule.claimPendingJobs();
+          assert.equal(claims.filter(job => job.id === quotaJob).length, 1);
+          const [activeQuotaAttempt] = await sql`SELECT id,attempt_no FROM job_attempts WHERE job_id=${quotaJob} AND status='active'`;
+          assert.ok(activeQuotaAttempt); assert.equal(activeQuotaAttempt.attempt_no, 2);
+          await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '1 hour' WHERE id=${quotaJob}`;
+          const replacement = await mintJobToken({ jobId: quotaJob, projectId, credentialId: baselineCredentialId, maxRequests: replacementCap });
+          const [limits] = await sql`SELECT max_requests,request_total_limit FROM job_tokens WHERE id=${replacement.id}`;
+          assert.equal(limits.max_requests, 20); assert.equal(limits.request_total_limit, 20);
+          const beforeCalls = quotaUpstreamCalls;
+          const responses = await Promise.all([send(replacement.plaintext), send(replacement.plaintext)]);
+          assert.deepEqual(responses.map(response => response.statusCode).sort(), [200, 429]);
+          assert.equal(quotaUpstreamCalls, beforeCalls + 1);
+          const state = async () => ({
+            tokens: [...await sql`SELECT id,used_requests,used_tokens FROM job_tokens WHERE job_id=${quotaJob} ORDER BY id`],
+            effects: [...await sql`SELECT * FROM job_attempt_effects WHERE job_id=${quotaJob} ORDER BY id`],
+            ledger: [...await sql`SELECT * FROM job_usage_ledger WHERE job_id=${quotaJob} ORDER BY id`],
+          });
+          await waitForQuotaSettlement(20);
+          const beforeDenied = await state();
+          assert.equal((await send(replacement.plaintext)).statusCode, 429);
+          assert.deepEqual(await state(), beforeDenied);
+          assert.equal(quotaUpstreamCalls, beforeCalls + 1);
+          const [oldAttemptAfter] = await sql`SELECT * FROM job_attempts WHERE id=${String(oldQuotaAttempt.id)}`;
+          assert.deepEqual(oldAttemptAfter, oldAttemptEvidence);
+          const policiesAfter = [...await sql`SELECT event_id,payload_json FROM events WHERE job_id=${quotaJob}
+            AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget' ORDER BY job_seq`];
+          for (const oldPolicy of oldPolicies) assert.deepEqual(policiesAfter.find(row => row.event_id === oldPolicy.event_id), oldPolicy);
+
+          assert.deepEqual([...await sql`SELECT * FROM job_attempt_effects WHERE attempt_id=${String(oldQuotaAttempt.id)} ORDER BY id`], oldEffects);
+          await attemptModule.settleAttemptTerminal(sql, quotaJob, "succeeded", { reason: "fixture" });
+          await sql`UPDATE jobs SET status='succeeded',finished_at=now() WHERE id=${quotaJob}`;
+        }
+      } finally { await quotaUpstream.close(); }
+
     } finally {
       if (closeApp) await closeApp().catch(() => {});
       if (endSql) await endSql().catch(() => {});

@@ -1,0 +1,9 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "typeRoots": ["../apps/scheduler/node_modules/@types"]
+  },
+  "include": ["claude-request-budget-cli.test.ts"]
+}

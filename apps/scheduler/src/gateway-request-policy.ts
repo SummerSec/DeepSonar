@@ -53,7 +53,9 @@ function snapshotPolicy(snapshot: unknown): GatewayRequestBudget {
     // total=0: freezeObservationalMemoryQuota and its shared schema define this
     // shape. Missing OM extension metadata still fails parseFrozenPiExtensions.
     const om = observationalMemoryConfig(parseFrozenPiExtensions(row.pi_extensions));
-    if (!om) return { version: 1, total_requests: 0, main_requests: main, background_requests: 0 };
+    // This frozen knob is a Job request ceiling, including when the Job has
+    // only main today. Enabling OM in a later generation cannot erase it.
+    if (!om) return { version: 1, total_requests: main, main_requests: main, background_requests: 0 };
     const plan = resolveObservationalMemoryBudget({ config: om, jobTokenMaxRequests: main });
     return { version: 1, total_requests: plan.total_requests, main_requests: plan.main_requests,
       background_requests: plan.background_requests };

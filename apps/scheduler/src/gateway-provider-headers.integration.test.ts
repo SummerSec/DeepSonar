@@ -36,14 +36,25 @@ test("configured provider headers reach the upstream and the Job token never doe
     import("./domains/job-attempt/application.js"),
   ]);
 
+  const { freezeGatewayProviderBinding } = await import("./gateway-provider-binding.js");
+  const { providerSettingsForJobSnapshot } = await import("./provider-settings.js");
   const upstream = Fastify();
   const otherUpstream = Fastify();
   const app = Fastify();
   const received: Array<Record<string, unknown>> = [];
   const otherReceived: Array<Record<string, unknown>> = [];
+  const rawBodies: string[] = [];
+  let requireBusinessHeader = false;
+  const missingHeaderBody = '{"error":{"type":"fixture_business_header_required","message":"missing routing label"}}';
   for (const [server, requests] of [[upstream, received], [otherUpstream, otherReceived]] as const) {
-    server.post("/v1/chat/completions", async (req) => {
+    server.removeContentTypeParser("application/json");
+    server.addContentTypeParser("application/json", { parseAs: "string" }, (_req, body, done) => done(null, body));
+    server.post("/v1/chat/completions", async (req, reply) => {
       requests.push({ ...(req.headers as Record<string, unknown>) });
+      rawBodies.push(String(req.body));
+      if (requireBusinessHeader && req.headers["x-business-route"] !== "synthetic-route") {
+        return reply.code(429).header("content-type", "application/json").header("x-fixture-error", "upstream").send(missingHeaderBody);
+      }
       return {
         object: "chat.completion",
         choices: [{ index: 0, finish_reason: "stop", message: { content: "fixture" } }],
@@ -75,23 +86,36 @@ test("configured provider headers reach the upstream and the Job token never doe
           providers: { relay: { headers: { "X-Traffic-Type": "eval", "x-tenant": "acme", "x-api-key": "must-not-apply" } } },
         })})`;
 
-    const jobId = randomUUID();
+    const createBoundJob = async (model = "offline", maxRequests = 10) => {
+      const [credential] = await sql`SELECT * FROM credentials WHERE id=${credentialId}`;
+      const binding = freezeGatewayProviderBinding(credential as never);
+      const jobId = randomUUID();
+      const snapshot = { name: "audit", agent_cli: "claude-code", runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} }, platform_tools: ["mark_job_done"], model, upstream_model: model,
+        credential_id: credentialId, credential_provider: "openai", gateway_provider_binding: binding,
+        settings_config_json: providerSettingsForJobSnapshot(credential.settings_config_json, credential.agent_cli) };
+      await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+        VALUES(${jobId},${projectId},'audit','running',${sql.json(snapshot as never)},now(),3600,now()+interval '1 hour')`;
+      await sql.begin((tx) => createAttempt(tx as unknown as typeof sql, jobId));
+      return gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests, maxTokens: 0 });
+    };
+    const token = await createBoundJob();
+    const legacyJobId = randomUUID();
     await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
-      VALUES(${jobId},${projectId},'audit','running',
-        ${sql.json({ name: "audit", platform_tools: ["mark_job_done"] })},now(),3600,now()+interval '1 hour')`;
-    await sql.begin((tx) => createAttempt(tx as unknown as typeof sql, jobId));
-    const token = await gateway.mintJobToken({ jobId, projectId, credentialId, maxRequests: 10, maxTokens: 0 });
+      VALUES(${legacyJobId},${projectId},'audit','running',${sql.json({ name: "legacy fixture", credential_id: credentialId })},
+        now(),3600,now()+interval '1 hour')`;
+    await sql.begin(tx => createAttempt(tx as unknown as typeof sql, legacyJobId));
+    await assert.rejects(gateway.mintJobToken({ jobId: legacyJobId, projectId, credentialId }), /GATEWAY_PROVIDER_BINDING_MISSING/);
+
 
     const response = await app.inject({
       method: "POST",
       url: "/gateway/v1/chat/completions",
       headers: {
         authorization: `Bearer ${token.plaintext}`,
-        // The sandbox tries to spoof the same header plus carry the Job token on an
-        // Anthropic auth carrier; neither may decide the upstream routing attribute or
-        // leak the token.
+        // Business headers override credential defaults; all inbound authentication
+        // carriers are consumed before the server generates upstream authentication.
         "anthropic-api-key": token.plaintext,
-        "x-traffic-type": "sandbox-spoofed",
+        "x-traffic-type": "client-traffic",
         "x-deepsonar-job": "internal",
         "user-agent": "claude-cli/2.1.312 (external, cli)",
       },
@@ -101,9 +125,9 @@ test("configured provider headers reach the upstream and the Job token never doe
     assert.equal(received.length, 1, "the fake upstream must have been called once");
 
     const headers = received[0]!;
-    assert.equal(headers["x-traffic-type"], "eval", "the credential's configured header wins over sandbox input");
+    assert.equal(headers["x-traffic-type"], "client-traffic", "client business headers override configured defaults");
     assert.equal(headers["x-tenant"], "acme");
-    assert.equal(headers["user-agent"], "claude-cli/2.1.312 (external, cli)", "allowlisted CLI protocol headers still pass");
+    assert.equal(headers["user-agent"], "claude-cli/2.1.312 (external, cli)", "CLI protocol headers pass");
     assert.equal(headers["x-deepsonar-job"], undefined, "internal control headers are never forwarded");
     assert.equal(headers["anthropic-api-key"], undefined, "the inbound Job token carrier is never forwarded");
     assert.equal(headers.authorization, "Bearer offline-fixture-only", "authentication comes from the bound credential");
@@ -138,9 +162,15 @@ test("configured provider headers reach the upstream and the Job token never doe
       const metadata = "baseUrl" in fixture ? { base_url: fixture.baseUrl } : {};
       await sql`UPDATE credentials SET public_metadata_json = ${sql.json(metadata)},
         settings_config_json = ${sql.json(fixture.settings)} WHERE id = ${credentialId}`;
+      if ("baseUrl" in fixture) {
+        await assert.rejects(createBoundJob(), /GATEWAY_PROVIDER_ENDPOINT_MISMATCH/);
+        assert.equal(received.length + otherReceived.length, 0);
+        continue;
+      }
+      const freshToken = await createBoundJob();
       const result = await app.inject({ method: "POST", url: "/gateway/v1/chat/completions",
-        headers: { authorization: `Bearer ${token.plaintext}`, "anthropic-api-key": token.plaintext,
-          "x-tenant": "sandbox-spoofed", "x-untrusted": "must-not-forward", "x-traffic-type": "sandbox-spoofed",
+        headers: { authorization: `Bearer ${freshToken.plaintext}`, "anthropic-api-key": freshToken.plaintext,
+          "x-unknown-protocol": "client-extension",
           "user-agent": "claude-cli/2.1.312 (external, cli)" },
         payload: { model: "offline", messages: [] } });
       assert.equal(result.statusCode, 200, result.payload);
@@ -149,12 +179,116 @@ test("configured provider headers reach the upstream and the Job token never doe
       const outbound = fixture.target[0]!;
       assert.equal(outbound["x-tenant"], fixture.tenant ?? undefined);
       assert.equal(outbound["x-traffic-type"], fixture.tenant ? "eval" : undefined);
-      assert.equal(outbound["x-untrusted"], undefined);
+      assert.equal(outbound["x-unknown-protocol"], "client-extension");
       assert.equal(outbound["anthropic-api-key"], undefined);
       assert.equal(outbound["x-api-key"], undefined);
       assert.equal(outbound["user-agent"], "claude-cli/2.1.312 (external, cli)");
       assert.equal(outbound.authorization, "Bearer offline-fixture-only");
-      assert.ok(!Object.values(outbound).some((value) => String(value).includes(token.plaintext)));
+      assert.ok(!Object.values(outbound).some((value) => String(value).includes(freshToken.plaintext)));
+    }
+    const call = (value: { plaintext: string }, model = "offline", headers: Record<string, string> = {}) => app.inject({
+      method: "POST", url: "/gateway/v1/chat/completions",
+      headers: { authorization: `Bearer ${value.plaintext}`, ...headers }, payload: { model, messages: [] },
+    });
+    const modelSettings = { providers: { relay: { baseUrl: firstUrl,
+      headers: { "x-tenant": "tenant-a", "x-layer": "provider", "x-provider-only": "default" },
+      models: [{ id: "offline", headers: { "x-layer": "model-a", "x-model-only": "a" } },
+        { id: "other", headers: { "x-layer": "model-b", "x-model-only": "b" } }],
+    } } };
+    await sql`UPDATE credentials SET public_metadata_json='{}',settings_config_json=${sql.json(modelSettings)} WHERE id=${credentialId}`;
+    for (const [model, layer, selected] of [["offline", "model-a", "a"], ["other", "model-b", "b"]]) {
+      const scopedToken = await createBoundJob(model);
+      const response = await call(scopedToken, model);
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(received.at(-1)!["x-layer"], layer);
+      assert.equal(received.at(-1)!["x-model-only"], selected);
+      assert.equal(received.at(-1)!["x-provider-only"], "default");
+      const override = await call(scopedToken, model, { "x-layer": "client", "x-model-only": "client-value" });
+      assert.equal(override.statusCode, 200, override.body);
+      assert.equal(received.at(-1)!["x-layer"], "client");
+      assert.equal(received.at(-1)!["x-model-only"], "client-value");
+    }
+    const frozenA = await createBoundJob();
+    assert.equal((await call(frozenA, "offline", { "x-tenant": "a" })).statusCode, 200);
+    const rotated = encryptSecret("offline-rotated-key");
+    await sql`UPDATE credentials SET ciphertext=${rotated.ciphertext},nonce=${rotated.nonce},auth_tag=${rotated.auth_tag} WHERE id=${credentialId}`;
+    const rotatedResponse = await call(frozenA, "offline", { "x-tenant": "a", "x-layer": "client-layer" });
+    assert.equal(rotatedResponse.statusCode, 200, rotatedResponse.body);
+    assert.equal(received.at(-1)!.authorization, "Bearer offline-rotated-key");
+    assert.equal(received.at(-1)!["x-tenant"], "a");
+    assert.equal(received.at(-1)!["x-layer"], "client-layer");
+    const rotatedDefaults = await call(frozenA);
+    assert.equal(rotatedDefaults.statusCode, 200, rotatedDefaults.body);
+    assert.equal(received.at(-1)!.authorization, "Bearer offline-rotated-key");
+    assert.equal(received.at(-1)!["x-tenant"], "tenant-a");
+    assert.equal(received.at(-1)!["x-layer"], "model-a");
+    // Each independent route attribute invalidates the old token before either target is called.
+    const independentChanges = [
+      { label: "route only", relay: { ...modelSettings.providers.relay, baseUrl: `${otherUrl}/v1` } },
+      { label: "provider headers only", relay: { ...modelSettings.providers.relay,
+        headers: { ...modelSettings.providers.relay.headers, "x-tenant": "changed-provider" } } },
+      { label: "model headers only", relay: { ...modelSettings.providers.relay,
+        models: modelSettings.providers.relay.models.map(model => model.id === "offline"
+          ? { ...model, headers: { ...model.headers, "x-model-only": "changed-model" } } : model) } },
+    ];
+    for (const fixture of independentChanges) {
+      const beforeA = received.length, beforeB = otherReceived.length;
+      await sql`UPDATE credentials SET settings_config_json=${sql.json({ providers: { relay: fixture.relay } })} WHERE id=${credentialId}`;
+      const changed = await call(frozenA, "offline", { "x-tenant": "a" });
+      assert.equal(changed.statusCode, 409, `${fixture.label}: ${changed.body}`);
+      assert.equal(changed.json().error.type, "GATEWAY_PROVIDER_BINDING_CHANGED", fixture.label);
+      assert.equal(received.length, beforeA, `${fixture.label}: original target must not receive a request`);
+      assert.equal(otherReceived.length, beforeB, `${fixture.label}: alternate target must not receive a request`);
+    }
+
+    await sql`UPDATE credentials SET settings_config_json=${sql.json(modelSettings)} WHERE id=${credentialId}`;
+    const businessToken = await createBoundJob();
+    // Identical raw business payload and target; only the required business header differs.
+    const rawBusinessBody = '{ "model" : "offline", "messages": [], "extension": {"keep":true} }';
+    const businessCall = (value: { plaintext: string }, includeHeader: boolean) => app.inject({
+      method: "POST", url: "/gateway/v1/chat/completions",
+      headers: { authorization: `Bearer ${value.plaintext}`, "content-type": "application/json",
+        ...(includeHeader ? { "x-business-route": "synthetic-route" } : {}) },
+      payload: rawBusinessBody,
+    });
+    requireBusinessHeader = true;
+    const beforeBusinessA = received.length, beforeBusinessB = otherReceived.length;
+    const acceptedBusiness = await businessCall(businessToken, true);
+    assert.equal(acceptedBusiness.statusCode, 200, acceptedBusiness.body);
+    const missingBusiness = await businessCall(businessToken, false);
+    assert.equal(missingBusiness.statusCode, 429, missingBusiness.body);
+    assert.equal(missingBusiness.body, missingHeaderBody, "upstream error body must remain byte-identical");
+    assert.equal(missingBusiness.headers["x-fixture-error"], "upstream");
+    assert.equal(received.length, beforeBusinessA + 2, "both business-header comparison requests reach the same upstream");
+    assert.equal(otherReceived.length, beforeBusinessB);
+    assert.equal(received[beforeBusinessA]!["x-business-route"], "synthetic-route");
+    assert.equal(received[beforeBusinessA + 1]!["x-business-route"], undefined);
+    assert.deepEqual(rawBodies.slice(-2), [rawBusinessBody, rawBusinessBody], "Gateway must not rewrite either body");
+
+    const limitedToken = await createBoundJob("offline", 1);
+    const firstLimited = await businessCall(limitedToken, true);
+    assert.equal(firstLimited.statusCode, 200, firstLimited.body);
+    const beforeQuotaA = received.length, beforeQuotaB = otherReceived.length;
+    const exhausted = await businessCall(limitedToken, true);
+    assert.equal(exhausted.statusCode, 429, exhausted.body);
+    assert.equal(exhausted.json().error.type, "quota_exhausted", "local quota denial must differ from upstream 429");
+    assert.equal(exhausted.headers["x-fixture-error"], undefined);
+    assert.equal(received.length, beforeQuotaA, "local request quota exhaustion has zero original-target egress");
+    assert.equal(otherReceived.length, beforeQuotaB, "local request quota exhaustion has zero alternate-target egress");
+    requireBusinessHeader = false;
+
+    // Invalid profiles cannot create a frozen Job, and existing tokens cannot send through them.
+    for (const invalid of [{ "X-Tenant": "a", "x-tenant": "b" }, { "x-tenant": "\r\na" }, { "x-tenant": "a\r\n" }]) {
+      await sql`UPDATE credentials SET settings_config_json=${sql.json({ providers: { relay: {
+        baseUrl: firstUrl, models: [{ id: "offline", headers: invalid }],
+      } } })} WHERE id=${credentialId}`;
+      const before = received.length + otherReceived.length;
+      await assert.rejects(createBoundJob(), /Invalid Provider headers in Job configuration/);
+      assert.equal(received.length + otherReceived.length, before);
+      const rejected = await call(frozenA);
+      assert.equal(rejected.statusCode, 502, rejected.body);
+      assert.equal(rejected.json().error.type, "invalid_provider_headers");
+      assert.equal(received.length + otherReceived.length, before);
     }
   } finally {
     await app.close();

@@ -79,6 +79,7 @@
 | [USAGE_LIMITS.md](USAGE_LIMITS.md) | **as-built** | 用量预算默认不限、显式限额、历史冻结策略及保留安全边界 |
 | [AI_NATIVE_TRUSTED_KERNEL.md](AI_NATIVE_TRUSTED_KERNEL.md) | **长期提案 + 已实现边界（2026-10-31）** | `RepairFeedback`、目标授权及 Plan v2 工程边界已有实现；完整长期协议、当前回放/组合验证与独立质量分别登记 |
 | [PI_OBSERVATIONAL_MEMORY_INTEGRATION.md](PI_OBSERVATIONAL_MEMORY_INTEGRATION.md) | **#815 A 工程与本地镜像准入已验** | canonical 固定发布物、独立 wrapper 指纹、opt-in 冻结配置/模型；OM 专属版本准入与生产内容守卫已验证，镜像证据集中见 RPC 专题 |
+| [MODEL_GATEWAY_TRANSPARENCY.md](MODEL_GATEWAY_TRANSPARENCY.md) | **#923 分支实现，Actions 待验** | 原始请求/响应、HTTP 边界、显式预算拒绝与 OM 持久确认；有界请求流限制和验收入口 |
 | [PI_OBSERVATIONAL_MEMORY_GATEWAY.md](PI_OBSERVATIONAL_MEMORY_GATEWAY.md) | **#815 B 工程已随 #831 Actions 验收** | 内核 workload 凭据、冻结路由、额度/归因、pending/unknown 与终态撤销；历史 Gateway budget/SQL/HTTP 证据保留原范围，后续修复 SHA、发布与收益结论另计 |
 | [PI_OBSERVATIONAL_MEMORY_RPC.md](PI_OBSERVATIONAL_MEMORY_RPC.md) | **#815 C 实际本地镜像 RPC/启动拒绝已验** | 本地 base 镜像身份、canonical package/lock/manifest/wrapper 预检、已安装真实 RPC 与独立生产 guard 正负例的唯一详细记录；#831 工程 Actions 已验收，后续修复 SHA/发布通道及收益另计 |
 | [SUPERAGENT_GAP_RESEARCH.md](SUPERAGENT_GAP_RESEARCH.md) | **研究结论（#833）** | DeepSeek Super Agent 与现有设计的差距评估：结论是不新增系统或功能层，已有 Hub/Intent/Job、能力发现、Skill 拉取、项目知识与成果评价覆盖大部分能力；效果改善仍无对照证据，后续只按现有架构推进。 |

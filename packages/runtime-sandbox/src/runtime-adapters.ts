@@ -7,6 +7,7 @@ import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
 import { PI_MEMORY_IMAGE_GUARD_SOURCE } from "./pi-memory-image-guard.js";
 import { isPiObservationalMemoryCustomType, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 import { isPiObservationalMemoryExpectedWorkerFailure } from "./pi-observational-memory.js";
+import { modelRequestPolicyCommand } from "./model-request-policy.js";
 
 export type AgentCliId = "claude-code" | "dsh" | "pi";
 
@@ -398,7 +399,7 @@ function sandboxClaude(
   if (context.model) command += ` --model ${shellQuote(context.model)}`;
   if (context.reasoning) command += ` --effort ${shellQuote(context.reasoning)}`;
   if (context.systemPromptPath) command += ` --append-system-prompt "$(cat ${shellQuote(context.systemPromptPath)})"`;
-  return host.runAsync(command, {
+  return host.runAsync(modelRequestPolicyCommand(command, context.env, "claude-code"), {
     cwd: context.cwd,
     env: { CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: "70", ...context.env },
   });
@@ -643,7 +644,7 @@ async function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessio
   if (launch.provider) command += ` --provider ${shellQuote(launch.provider)}`;
   if (context.reasoning) command += ` --thinking ${shellQuote(context.reasoning)}`;
   if (context.systemPromptPath) command += ` --append-system-prompt \"$(cat ${shellQuote(context.systemPromptPath)})\"`;
-  return host.runAsync(command, { cwd: context.cwd, env: context.env });
+  return host.runAsync(modelRequestPolicyCommand(command, context.env), { cwd: context.cwd, env: context.env });
 }
 
 const pi = Object.freeze<RuntimeAdapter>({
@@ -686,11 +687,17 @@ function dshSystemPromptAssignment(systemPromptPath?: string, projectedPrompt?: 
 
 function sandboxDsh(host: RuntimeHost, context: AdapterStartContext): Promise<RuntimeProcess> {
   if (!context.dshProvider) throw new Error("DSH_PROVIDER_CONFIG_MISSING");
+  const profile = context.dshProvider.config.providers[context.dshProvider.provider];
+  const budgetIdentity = context.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM ? JSON.stringify({
+    provider: context.dshProvider.provider, id: context.dshProvider.model,
+    api: profile?.api, baseUrl: profile?.baseURL,
+  }) : undefined;
   const command = `${dshSystemPromptAssignment(context.systemPromptPath, context.dshProvider.systemPrompt)}node ${DSH_BIN} --profile ${DSH_PROFILE}`;
-  return host.runAsync(command, {
+  return host.runAsync(modelRequestPolicyCommand(command, context.env), {
     cwd: context.cwd,
     env: {
       ...context.env,
+      ...(budgetIdentity ? { DEEPSONAR_DSH_FROZEN_IDENTITY: budgetIdentity } : {}),
       DSH_HOME: "/workspace/.deepsonar-home/.dsh",
       DSH_SESSION_ROOT: "/workspace/.deepsonar-home/.dsh/sessions",
       DSH_CWD: context.cwd,
@@ -710,6 +717,7 @@ async function materializeDsh(context: AdapterStartContext): Promise<void> {
     providerConfig: context.dshProvider.config,
     taskMode: context.dshTaskMode,
     cwd: context.cwd,
+    governedRequestBudget: Boolean(context.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM),
   }), `${profilePath}/cordis.patch.yml`);
   // Re-materialize every launch so an old home-level override cannot augment the
   // frozen Job composition. The profile itself has no inherited bundles.

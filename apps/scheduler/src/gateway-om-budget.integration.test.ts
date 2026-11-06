@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import net from "node:net";
 import test from "node:test";
 import postgres from "postgres";
@@ -7,7 +7,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
-test("OM Gateway enforces frozen workload quotas and durable attribution over offline HTTP", { skip: !databaseUrl, timeout: 30_000 }, async (t) => {
+test("OM Gateway enforces frozen workload quotas and durable attribution over offline HTTP", { skip: !databaseUrl, timeout: 120_000 }, async (t) => {
   const adminUrl = new URL(databaseUrl!);
   adminUrl.pathname = "/postgres";
   const admin = postgres(adminUrl.toString(), { max: 1 });
@@ -41,6 +41,8 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     import("./domains/job-attempt/application.js"),
     import("./pi-extensions.js"),
   ]);
+  const { freezeGatewayProviderBinding } = await import("./gateway-provider-binding.js");
+  const { ensureGatewayRequestBudget, inspectGatewayRequestBudget } = await import("./gateway-request-policy.js");
   const Fastify = fastifyModule.default;
   const { sql, migrate } = db;
   const { mintJobToken, revokeJobTokens } = gateway;
@@ -55,8 +57,10 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     await upstream.close();
     await sql.end({ timeout: 5 });
   };
-  let upstreamMode: "ok" | "unknown" | "missing_usage" | "stream" | "partial_stream" | "error_frame" | "anthropic_refusal_503" | "anthropic_refusal_429" | "anthropic_refusal_safe" | "oversized" | "redirect" | "spoof" | "reset" = "ok";
+  let upstreamMode: "ok" | "unknown" | "missing_usage" | "stream" | "partial_stream" | "error_frame" | "anthropic_refusal_503" | "anthropic_refusal_429" | "anthropic_refusal_safe" | "oversized" | "redirect" | "spoof" | "policy_spoof" | "reset" = "ok";
   let upstreamCalls = 0;
+  let lastUpstreamPath = "";
+  let lastUpstreamHeaders: Record<string, unknown> = {};
   let redirectTargetUrl = "";
   let backgroundEntered: (() => void) | undefined;
   let backgroundRelease: Promise<void> | undefined;
@@ -65,6 +69,8 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
 
   const respond = async (request: FastifyRequest, reply: FastifyReply) => {
     upstreamCalls += 1;
+    lastUpstreamPath = request.url;
+    lastUpstreamHeaders = { ...request.headers };
     if (request.url === "/v1/responses") {
       backgroundOutputLimit = (request.body as Record<string, unknown>).max_output_tokens;
       backgroundEntered?.();
@@ -85,6 +91,10 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     if (upstreamMode === "reset") {
       reply.raw.destroy();
       return;
+    }
+    if (upstreamMode === "policy_spoof") {
+      return reply.code(409).send({ error: { type: "GATEWAY_REQUEST_BUDGET_INVALID", message: "PI_OM_REQUEST_POLICY_INVALID" },
+        status: "policy_rejected", reason: "request_policy_invalid" });
     }
     if (upstreamMode === "spoof") {
       return reply.code(503).header("x-deepsonar-effect-status", "not_started").send({
@@ -140,6 +150,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
     } : response;
   };
+  upstream.post("/responses", respond);
   upstream.post("/v1/responses", respond);
   upstream.post("/v1/chat/completions", respond);
   upstream.post("/v1/messages", respond);
@@ -159,7 +170,9 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
   if (!baseExtension?.observational_memory) throw new Error("OM extension fixture was not registered");
   const baseObservationalMemory = baseExtension.observational_memory;
   const settingsConfig = {
-    providers: { openai: { api: "openai-responses", models: [{ id: "main-model" }] } },
+    providers: { openai: { api: "openai-responses", headers: { "x-om-provider": "frozen-provider", "x-om-precedence": "provider" },
+      models: [{ id: "main-model", headers: { "x-om-model": "frozen-main", "x-om-precedence": "model" } },
+        { id: "other-model", headers: { "x-om-model": "must-not-leak" } }] } },
   };
   const anthropicSettingsConfig = {
     providers: { anthropic: { api: "anthropic-messages", models: [{ id: "main-model" }] } },
@@ -258,9 +271,11 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       status: "running" | "succeeded" = "running",
       options: Parameters<typeof makeSnapshot>[1] = {},
       jobCredentialId = credentialId,
+      ordinary = false,
     ) => {
       const jobId = randomUUID();
-      const snapshot = makeSnapshot(jobCredentialId, options);
+      const [boundCredential] = await sql`SELECT * FROM credentials WHERE id=${jobCredentialId}`;
+      const snapshot = { ...makeSnapshot(jobCredentialId, options), ...(ordinary ? { pi_extensions: [] } : {}), gateway_provider_binding: freezeGatewayProviderBinding(boundCredential as never) };
       await sql`INSERT INTO jobs(
         id, project_id, type, status, agent_snapshot_json, started_at, timeout_sec, lease_expires_at
       ) VALUES (
@@ -279,18 +294,92 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       ttlSec: 3600,
       ...limits,
     });
-    const request = (token: string, options: {
+    const correlations = new WeakMap<object, { token: string; id: string }>();
+    const receiptFor = async (response: object) => {
+      const correlation = correlations.get(response)!;
+      const receipt = await app.inject({ method: "GET", url: `/gateway/_settlement/${correlation.id}`,
+        headers: { authorization: `Bearer ${correlation.token}` } });
+      return receipt.json();
+    };
+    const request = async (token: string, options: {
       workload?: "main" | "observational_memory"; model?: string; path?: string;
-      claimedWorkload?: string; method?: "POST" | "DELETE";
+      claimedWorkload?: string; method?: "POST" | "DELETE"; maxTokens?: number;
     } = {}) => {
       const workload = options.workload ?? "observational_memory";
-      return app.inject({
+      const id = randomUUID();
+      const route = options.path ?? (workload === "main" ? "v1/chat/completions" : "v1/responses");
+      const response = await app.inject({
         method: options.method ?? "POST",
-        url: `/gateway/${options.path ?? (workload === "main" ? "v1/chat/completions" : "v1/responses")}`,
-        headers: { authorization: `Bearer ${token}`, "x-deepsonar-workload": options.claimedWorkload ?? "main" },
-         payload: { model: options.model ?? "main-model", messages: [] },
+        url: `/gateway/${route}`,
+        headers: { authorization: `Bearer ${token}`, "x-deepsonar-request-id": id,
+          "x-deepsonar-workload": options.claimedWorkload ?? "main" },
+         payload: { model: options.model ?? "main-model", messages: [], [route.endsWith("responses") ? "max_output_tokens" : "max_tokens"]: options.maxTokens ?? 1 },
       });
+      correlations.set(response, { token, id });
+      return response;
     };
+
+    // The real Pi/OpenAI SDK appends /responses to the configured /gateway
+    // base. Exercise that spelling against the real authorization/SQL handler,
+    // with both a root and a /v1 server-bound upstream base.
+    for (const basePrefix of ["", "/v1"]) {
+      await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}${basePrefix}` })}
+        WHERE id = ${credentialId}`;
+      const relativeJob = await createJob("running", { backgroundMaxTokens: 128 });
+      const relativeToken = await issue(relativeJob.jobId, "observational_memory");
+      const allowance = await app.inject({ method: "GET", url: "/gateway/_allowance",
+        headers: { authorization: `Bearer ${relativeToken.plaintext}` } });
+      assert.equal(allowance.statusCode, 200, allowance.body);
+      assert.equal(allowance.json().remaining_tokens, 128);
+      const relativeResponse = await request(relativeToken.plaintext, { path: "responses", maxTokens: allowance.json().remaining_tokens });
+      assert.equal(relativeResponse.statusCode, 200, relativeResponse.body);
+      assert.equal(lastUpstreamPath, `${basePrefix}/responses`, "only the bound base controls prefix mapping");
+      assert.equal((await receiptFor(relativeResponse)).status, "settled");
+      assert.equal(lastUpstreamHeaders["x-om-provider"], "frozen-provider");
+      assert.equal(lastUpstreamHeaders["x-om-model"], "frozen-main", "OM fills headers from its frozen source model only");
+      assert.equal(lastUpstreamHeaders["x-om-precedence"], "model");
+    }
+    await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })}
+      WHERE id = ${credentialId}`;
+
+    const { persistNoEffectReceipt, readNoEffectReceipt } = await import("./gateway-admission-receipt.js");
+    const receiptJob = await createJob();
+    const receiptToken = await issue(receiptJob.jobId, "observational_memory");
+    const receiptScope = { jobId: receiptJob.jobId, attemptId: receiptJob.attemptId, tokenId: receiptToken.id,
+      workload: "observational_memory" as const, requestId: randomUUID() };
+    assert.equal(await persistNoEffectReceipt(sql, { ...receiptScope, reason: "gateway_transient" }), true);
+    assert.equal(await persistNoEffectReceipt(sql, { ...receiptScope, reason: "gateway_transient" }), true);
+    assert.equal(await persistNoEffectReceipt(sql, { ...receiptScope, reason: "quota_exhausted" }), false);
+    assert.deepEqual(await readNoEffectReceipt(sql, receiptScope), { status: "not_started", reason: "gateway_transient" });
+    for (const patch of [{ tokenId: randomUUID() }, { attemptId: randomUUID() }, { jobId: randomUUID() },
+      { workload: "main" as const }, { requestId: randomUUID() }]) {
+      assert.equal(await readNoEffectReceipt(sql, { ...receiptScope, ...patch }), null);
+      assert.equal(await persistNoEffectReceipt(sql, { ...receiptScope, ...patch, reason: "gateway_transient" }),
+        "requestId" in patch, "only a fresh request in the same authenticated scope may get a new receipt");
+    }
+    const [receiptCounters] = await sql`SELECT used_requests,used_tokens FROM job_tokens WHERE id=${receiptToken.id}`;
+    assert.equal(Number(receiptCounters.used_requests), 0);
+    assert.equal(Number(receiptCounters.used_tokens), 0);
+    const restarted = Fastify();
+    gateway.registerGateway(restarted);
+    try {
+      const restored = await restarted.inject({ method: "GET", url: `/gateway/_settlement/${receiptScope.requestId}`,
+        headers: { authorization: `Bearer ${receiptToken.plaintext}` } });
+      assert.equal(restored.statusCode, 200, restored.body);
+      assert.deepEqual(restored.json(), { status: "not_started", reason: "gateway_transient" });
+      const wrongToken = await issue(receiptJob.jobId, "main");
+      assert.equal((await restarted.inject({ method: "GET", url: `/gateway/_settlement/${receiptScope.requestId}`,
+        headers: { authorization: `Bearer ${wrongToken.plaintext}` } })).statusCode, 404);
+    } finally { await restarted.close(); }
+    await sql.unsafe(`CREATE FUNCTION reject_no_effect_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'offline receipt write failure'; END $$`);
+    await sql.unsafe(`CREATE TRIGGER reject_no_effect_fixture BEFORE INSERT ON events
+      FOR EACH ROW WHEN (NEW.job_id='${receiptJob.jobId}'::uuid) EXECUTE FUNCTION reject_no_effect_fixture()`);
+    const failedReceiptScope = { ...receiptScope, requestId: randomUUID() };
+    assert.equal(await persistNoEffectReceipt(sql, { ...failedReceiptScope, reason: "gateway_transient" }), false);
+    assert.equal(await readNoEffectReceipt(sql, failedReceiptScope), null);
+    await sql.unsafe('DROP TRIGGER reject_no_effect_fixture ON events');
+    await sql.unsafe('DROP FUNCTION reject_no_effect_fixture()');
 
     const primary = await createJob();
     const snapshotBeforeMint = structuredClone(primary.snapshot);
@@ -315,6 +404,18 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       request(memoryToken.plaintext),
     ]);
     assert.deepEqual(backgroundResults.map((response) => response.statusCode).sort((a, b) => a - b), [200, 429]);
+    const quotaResponse = backgroundResults.find((response) => response.statusCode === 429)!;
+    const quotaReceipt = await receiptFor(quotaResponse);
+    assert.equal(quotaReceipt.status, "not_started");
+    assert.equal(quotaReceipt.reason, "quota_exhausted");
+    const { createFailureBoundary } = await import(new URL("../../../agent-harness/fixtures/pi-om-boundary-unit.mjs", import.meta.url).href);
+    const quotaBoundary = await createFailureBoundary(`${quotaResponse.statusCode} ${quotaResponse.body}`, quotaReceipt);
+    try {
+      await quotaBoundary.event("agent_start"); await quotaBoundary.event("agent_before_settle");
+      assert.equal(quotaBoundary.messages[0]?.details.code, "PI_OM_WORKER_QUOTA_EXHAUSTED");
+      assert.equal(quotaBoundary.entries.length, 0);
+    } finally { quotaBoundary.close(); }
+
     const mainAfterBackground = await request(mainToken.plaintext, { workload: "main", claimedWorkload: "observational_memory" });
     assert.equal(mainAfterBackground.statusCode, 200, "background 429 does not consume or fail main reserve");
 
@@ -324,6 +425,427 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       request(rotatedMain.plaintext, { workload: "main" }),
     ]);
     assert.deepEqual(concurrentMain.map((response) => response.statusCode).sort((a, b) => a - b), [200, 429]);
+
+    // Recovery keeps every historical reservation, including revoked and expired tokens.
+    const awaitSettled = async (jobId: string, expected: number) => {
+      for (let poll = 0; poll < 200; poll++) {
+        const [row] = await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id=${jobId} AND settlement_status='settled'`;
+        if (row.n === expected) return;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.fail(`expected ${expected} settled requests for ${jobId}`);
+    };
+    const usageState = async (jobId: string) => ({
+      tokens: [...await sql`SELECT id, used_requests, used_tokens FROM job_tokens WHERE job_id=${jobId} ORDER BY id`],
+      effects: [...await sql`SELECT * FROM job_attempt_effects WHERE job_id=${jobId} ORDER BY id`],
+      ledger: [...await sql`SELECT * FROM job_usage_ledger WHERE job_id=${jobId} ORDER BY id`],
+    });
+    const recoverFixture = async (job: Awaited<ReturnType<typeof createJob>>, snapshot: unknown) => {
+      return sql.begin(async rawTx => {
+        const tx = rawTx as unknown as typeof sql;
+        const [current] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${job.jobId} FOR UPDATE`;
+        await ensureGatewayRequestBudget(tx, job.jobId, current.agent_snapshot_json);
+        await attemptApi.markAttemptInterrupted(tx, job.jobId, "offline recovery fixture");
+        await tx`UPDATE job_tokens SET status='revoked',revoked_at=now(),revoke_reason='cancelled',expires_at=now()-interval '1 minute' WHERE job_id=${job.jobId}`;
+        await tx`UPDATE jobs SET status='pending',agent_snapshot_json=${tx.json(snapshot as never)} WHERE id=${job.jobId}`;
+        const next = await createAttempt(tx, job.jobId);
+        await tx`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '1 hour' WHERE id=${job.jobId}`;
+        return String(next.id);
+      });
+    };
+    const policyReceipts = async (jobId: string) => [...await sql`SELECT event_id,payload_json FROM events
+      WHERE job_id=${jobId} AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget' ORDER BY job_seq`];
+    const recoveryState = async (jobId: string) => ({
+      jobs: [...await sql`SELECT * FROM jobs WHERE id=${jobId}`],
+      attempts: [...await sql`SELECT * FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no`],
+      tokens: [...await sql`SELECT * FROM job_tokens WHERE job_id=${jobId} ORDER BY id`],
+      events: [...await sql`SELECT * FROM events WHERE job_id=${jobId} ORDER BY job_seq`],
+      dedup: [...await sql`SELECT * FROM event_dedup WHERE job_id=${jobId} ORDER BY event_id`],
+      rate: [...await sql`SELECT * FROM job_event_rate_limits WHERE job_id=${jobId}`],
+      usage: await usageState(jobId),
+    });
+    // First-Attempt legacy/damaged snapshots must not establish an unlimited
+    // policy. All invalid shapes are persisted before their first Attempt.
+    const policyTemplate = makeSnapshot(credentialId);
+    const without = (value: Record<string, unknown>, field: string) => {
+      const copy = { ...value }; delete copy[field]; return copy;
+    };
+    const invalidInitialSnapshots: Array<[string, Record<string, unknown>]> = [
+      ["empty", {}],
+      ["missing runtime knobs", without(policyTemplate, "runtime_knobs")],
+      ["null runtime knobs", { ...policyTemplate, runtime_knobs: null }],
+      ["missing CLI", without(policyTemplate, "agent_cli")],
+      ["missing Pi extensions", without(policyTemplate, "pi_extensions")],
+      ["null Pi extensions", { ...policyTemplate, pi_extensions: null }],
+      ["invalid OM", { ...policyTemplate, pi_extensions: [{ id: "pi-observational-memory", observational_memory: {} }] }],
+      ...["stall_sec", "job_token_max_requests", "timeout_sec", "provision_timeout_sec"].flatMap(field => [
+        [`missing ${field}`, { ...policyTemplate, runtime_knobs: without(policyTemplate.runtime_knobs, field) }],
+        [`null ${field}`, { ...policyTemplate, runtime_knobs: { ...policyTemplate.runtime_knobs, [field]: null } }],
+      ] as Array<[string, Record<string, unknown>]>),
+    ];
+    for (const [label, snapshot] of invalidInitialSnapshots) {
+      const id = randomUUID();
+      await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+        VALUES(${id},${projectId},'audit','running',${sql.json(snapshot as never)},now(),3600,now()+interval '1 hour')`;
+      await createAttempt(sql, id);
+      const before = await recoveryState(id), calls = upstreamCalls;
+      assert.equal(before.attempts.length, 1); assert.equal(before.tokens.length, 0);
+      await assert.rejects(inspectGatewayRequestBudget(sql, id, snapshot), /GATEWAY_REQUEST_BUDGET_INVALID/, label);
+      await assert.rejects(sql.begin(async rawTx => {
+        const tx = rawTx as unknown as typeof sql;
+        const [current] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${id} FOR UPDATE`;
+        return ensureGatewayRequestBudget(tx, id, current.agent_snapshot_json);
+      }), /GATEWAY_REQUEST_BUDGET_INVALID/, label);
+      assert.deepEqual(await recoveryState(id), before, label);
+      assert.equal(upstreamCalls, calls);
+    }
+    const unlimitedOm = makeSnapshot(credentialId, { totalRequests: 0, backgroundMaxTokens: 0 });
+    for (const [label, snapshot] of [
+      ["explicit zero ordinary", { ...unlimitedOm, agent_cli: "claude-code", pi_extensions: [] }],
+      ["Pi empty extensions", { ...unlimitedOm, pi_extensions: [] }],
+      ["unlimited OM without request_budget", unlimitedOm],
+    ] as const) {
+      const id = randomUUID();
+      await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+        VALUES(${id},${projectId},'audit','running',${sql.json(snapshot)},now(),3600,now()+interval '1 hour')`;
+      await createAttempt(sql, id);
+      const before = await recoveryState(id);
+      const unlimitedPolicy = { version: 1, total_requests: 0, main_requests: 0, background_requests: 0 };
+      assert.deepEqual(await inspectGatewayRequestBudget(sql, id, snapshot), unlimitedPolicy, label);
+      assert.deepEqual(await recoveryState(id), before, label);
+      await sql.begin(async rawTx => {
+        const tx = rawTx as unknown as typeof sql;
+        const [row] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${id} FOR UPDATE`;
+        assert.deepEqual(await ensureGatewayRequestBudget(tx, id, row.agent_snapshot_json), unlimitedPolicy, label);
+      });
+      assert.deepEqual((await policyReceipts(id))[0]!.payload_json.policy, unlimitedPolicy, label);
+    }
+    // Read-only inspection is not an implicit migration, including on a fresh connection.
+    const inspected = await createJob("running", { totalRequests: 3, mainRequests: 2, backgroundRequests: 1 });
+    const inspectionBefore = await recoveryState(inspected.jobId);
+    const expectedPolicy = { version: 1, total_requests: 3, main_requests: 2, background_requests: 1 };
+    assert.deepEqual(await inspectGatewayRequestBudget(sql, inspected.jobId, inspected.snapshot), expectedPolicy);
+    assert.deepEqual(await recoveryState(inspected.jobId), inspectionBefore);
+    await sql.begin(async rawTx => {
+      const tx = rawTx as unknown as typeof sql;
+      const [row] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${inspected.jobId} FOR UPDATE`;
+      assert.deepEqual(await ensureGatewayRequestBudget(tx, inspected.jobId, row.agent_snapshot_json), expectedPolicy);
+      const writes = async () => ({
+        events: [...await tx`SELECT * FROM events WHERE job_id=${inspected.jobId} ORDER BY job_seq`],
+        dedup: [...await tx`SELECT * FROM event_dedup WHERE job_id=${inspected.jobId} ORDER BY event_id`],
+        rate: [...await tx`SELECT * FROM job_event_rate_limits WHERE job_id=${inspected.jobId}`],
+      });
+      const afterFirstEnsure = await writes();
+      assert.deepEqual(await ensureGatewayRequestBudget(tx, inspected.jobId, row.agent_snapshot_json), expectedPolicy);
+      assert.deepEqual(await writes(), afterFirstEnsure, "idempotent ensure consumes no extra rate limit or event write");
+    });
+    assert.equal((await policyReceipts(inspected.jobId)).length, 1);
+    const restartDb = postgres(isolatedUrl.toString(), { max: 1 });
+    try {
+      assert.deepEqual(await inspectGatewayRequestBudget(restartDb as unknown as typeof sql, inspected.jobId, inspected.snapshot), expectedPolicy);
+    } finally { await restartDb.end(); }
+    assert.equal((await policyReceipts(inspected.jobId)).length, 1);
+
+    for (const mintMainFirst of [false, true]) {
+      const unminted = await createJob("running", { totalRequests: 3, mainRequests: 2, backgroundRequests: 1, backgroundMaxTokens: 0 });
+      if (mintMainFirst) {
+        const value = await issue(unminted.jobId, "main");
+        assert.equal((await request(value.plaintext, { workload: "main" })).statusCode, 200);
+        await awaitSettled(unminted.jobId, 1);
+        assert.deepEqual((await policyReceipts(unminted.jobId))[0]!.payload_json.policy, expectedPolicy);
+      } else assert.equal((await policyReceipts(unminted.jobId)).length, 0);
+      const larger = { ...unminted.snapshot,
+        ...makeSnapshot(credentialId, { totalRequests: 8, mainRequests: 4, backgroundRequests: 4, backgroundMaxTokens: 0 }) };
+      await recoverFixture(unminted, larger);
+      const retained = await policyReceipts(unminted.jobId);
+      assert.equal(retained.length, 1);
+      assert.deepEqual(retained[0]!.payload_json.policy, expectedPolicy);
+      const firstOm = await issue(unminted.jobId, "observational_memory");
+      const [cap] = await sql`SELECT max_requests,request_total_limit FROM job_tokens WHERE id=${firstOm.id}`;
+      assert.equal(cap.max_requests, 1); assert.equal(cap.request_total_limit, 3);
+      assert.equal((await request(firstOm.plaintext)).statusCode, 200);
+      await awaitSettled(unminted.jobId, mintMainFirst ? 2 : 1);
+      const beforeCalls = upstreamCalls;
+      const rejected = await request(firstOm.plaintext);
+      assert.equal(rejected.statusCode, 429);
+      assert.equal((await receiptFor(rejected)).status, "not_started");
+      await recoverFixture(unminted, { ...unminted.snapshot, ...makeSnapshot(credentialId, { totalRequests: 0, backgroundMaxTokens: 0 }) });
+      const thirdOm = await issue(unminted.jobId, "observational_memory");
+      const beforeDenied = await usageState(unminted.jobId);
+      assert.equal((await request(thirdOm.plaintext)).statusCode, 429);
+      assert.equal(upstreamCalls, beforeCalls);
+      assert.deepEqual(await usageState(unminted.jobId), beforeDenied);
+      assert.deepEqual(await policyReceipts(unminted.jobId), retained, "later unlimited generations preserve the original receipt");
+    }
+    for (const corruption of ["missing_history", "negative", "policy_version", "envelope_version", "other_job_event_id", "authority"] as const) {
+      const damagedPolicy = await createJob();
+      if (corruption !== "missing_history") {
+        await issue(damagedPolicy.jobId, "main");
+        const [receipt] = await policyReceipts(damagedPolicy.jobId);
+        const payload = structuredClone(receipt!.payload_json);
+        let eventId = String(receipt!.event_id);
+        if (corruption === "negative") payload.policy.background_requests = -1;
+        if (corruption === "policy_version") payload.policy.version = 2;
+        if (corruption === "envelope_version") payload.v = 2;
+        if (corruption === "authority") payload.authority = "client";
+        if (corruption === "other_job_event_id") {
+          eventId = `gateway-request-budget:${createHash("sha256").update(JSON.stringify([randomUUID(), payload.policy])).digest("hex")}`;
+        }
+        await sql`UPDATE events SET payload_json=${sql.json(payload)},event_id=${eventId}
+          WHERE job_id=${damagedPolicy.jobId} AND payload_json->>'operation'='gateway_request_budget'`;
+      } else {
+        // Legacy multi-Attempt history has no authoritative policy receipt.
+        await attemptApi.markAttemptInterrupted(sql, damagedPolicy.jobId, "legacy missing policy fixture");
+        await createAttempt(sql, damagedPolicy.jobId);
+      }
+      const before = await recoveryState(damagedPolicy.jobId), calls = upstreamCalls;
+      const expected = corruption !== "missing_history" ? /GATEWAY_REQUEST_BUDGET_INVALID/ : /GATEWAY_REQUEST_BUDGET_HISTORY_MISSING/;
+      await assert.rejects(inspectGatewayRequestBudget(sql, damagedPolicy.jobId, damagedPolicy.snapshot), expected, corruption);
+      await assert.rejects(recoverFixture(damagedPolicy, damagedPolicy.snapshot), expected, corruption);
+      assert.deepEqual(await recoveryState(damagedPolicy.jobId), before, corruption);
+      assert.equal(upstreamCalls, calls);
+    }
+    // Production wrapper -> HTTP control bridge -> real SQL Gateway. The SDK
+    // double only generates provider-shaped requests; it supplies no receipts.
+    for (const failure of ["invalid", "missing", "receipt_failure", "wrong_scope", "forged_provider"] as const) {
+      const governedJob = await createJob("running", { totalRequests: 0, backgroundMaxTokens: 0 });
+      await recoverFixture(governedJob, governedJob.snapshot);
+      const governedToken = await issue(governedJob.jobId, "observational_memory");
+      const otherScopeToken = await issue(governedJob.jobId, "main");
+      const [active] = await sql`SELECT id FROM job_attempts WHERE job_id=${governedJob.jobId} AND status='active'`;
+      const frozenOm = governedJob.snapshot.pi_extensions[0]!.observational_memory;
+      assert.ok(frozenOm);
+      let modelCalls = 0, allowanceCalls = 0;
+      const settlementPaths: string[] = [];
+      let wrapperRequestId = "";
+      let baseline: Awaited<ReturnType<typeof usageState>> | undefined;
+      let originalEffects: unknown;
+      let modelStatus = 0;
+      const beforeUpstream = upstreamCalls;
+      if (failure === "receipt_failure") {
+        await sql.unsafe(`CREATE FUNCTION reject_policy_admission_receipt() RETURNS trigger LANGUAGE plpgsql AS $$
+          BEGIN RAISE EXCEPTION 'offline policy admission receipt failure'; END $$`);
+        await sql.unsafe(`CREATE TRIGGER reject_policy_admission_receipt BEFORE INSERT ON events
+          FOR EACH ROW WHEN (NEW.job_id='${governedJob.jobId}'::uuid AND NEW.payload_json->>'operation'='gateway_admission')
+          EXECUTE FUNCTION reject_policy_admission_receipt()`);
+      }
+      const boundary = await createFailureBoundary("unused SDK fallback", undefined, {
+        config: frozenOm, token: governedToken.plaintext, api: "openai-responses",
+        controlRequest: async (input: { path: string; headers: Record<string, string> }) => {
+          assert.equal(input.headers.authorization, `Bearer ${governedToken.plaintext}`);
+          const path = input.path.replace(/^\/om(?=\/)/u, "/gateway");
+          const isAllowance = path === "/gateway/_allowance";
+          if (isAllowance) allowanceCalls++;
+          else { assert.match(path, /^\/gateway\/_settlement\/[a-f0-9-]{36}$/u); settlementPaths.push(path); }
+          const response = await app.inject({ method: "GET", url: path,
+            headers: { authorization: `Bearer ${!isAllowance && failure === "wrong_scope" ? otherScopeToken.plaintext : governedToken.plaintext}` } });
+          if (isAllowance) assert.equal(response.statusCode, 200, response.body);
+          return { statusCode: response.statusCode, body: response.body };
+        },
+        modelRequest: async (input: { model: Record<string, unknown>; options: Record<string, unknown> }) => {
+          modelCalls++;
+          assert.equal(allowanceCalls, 1, "policy corruption happens only after real allowance succeeds");
+          const headers = input.options.headers as Record<string, string>;
+          wrapperRequestId = headers["x-deepsonar-request-id"]!;
+          assert.match(wrapperRequestId, /^[a-f0-9-]{36}$/u);
+          assert.equal((input.model.headers as Record<string, string>)["x-deepsonar-request-id"], wrapperRequestId);
+          if (failure !== "forged_provider") {
+            // Deliberate isolated-DB fault injection, NOT the recovery algorithm.
+            // Normal recovery above appends/preserves policy receipts.
+            if (failure === "missing") {
+              await sql`DELETE FROM events WHERE job_id=${governedJob.jobId}
+                AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget'`;
+            } else {
+              await sql`UPDATE events SET payload_json=jsonb_set(payload_json,'{authority}','"untrusted"')
+                WHERE job_id=${governedJob.jobId} AND payload_json->>'operation'='gateway_request_budget'`;
+            }
+            // Prior unresolved model effects must survive this new admission denial.
+            for (const status of ["effect_pending", "unknown"] as const) {
+              await attemptApi.beginEffect(sql, String(active.id), { effectId: `prior-${status}`,
+                kind: "gateway_model_request", step: 1, replayPolicy: "never", intent: { workload: "main" } });
+              if (status === "unknown") await sql`UPDATE job_attempt_effects SET status='unknown'
+                WHERE attempt_id=${active.id} AND effect_id='prior-unknown'`;
+            }
+            originalEffects = [...await sql`SELECT * FROM job_attempt_effects WHERE job_id=${governedJob.jobId} ORDER BY id`];
+          } else upstreamMode = "policy_spoof";
+          baseline = await usageState(governedJob.jobId);
+          const response = await app.inject({ method: "POST", url: "/gateway/v1/responses",
+            headers: { ...headers, authorization: `Bearer ${governedToken.plaintext}` },
+            payload: { model: frozenOm.source_model, max_output_tokens: input.options.maxTokens ?? 16, input: [] } });
+          modelStatus = response.statusCode;
+          return { statusCode: response.statusCode, body: response.body };
+        },
+      });
+      try {
+        await boundary.event("agent_start");
+        const code = failure === "invalid" ? /PI_OM_REQUEST_POLICY_INVALID/
+          : failure === "missing" ? /PI_OM_REQUEST_POLICY_HISTORY_MISSING/ : /PI_OM_UNKNOWN_EFFECT/;
+        await assert.rejects(boundary.event("agent_before_settle"), code, failure);
+        await assert.rejects(boundary.event("session_before_compact"), code, failure);
+        await assert.rejects(boundary.event("agent_before_settle"), code, "a later settle must not replay the worker");
+        assert.equal(modelCalls, 1); assert.equal(allowanceCalls, 1);
+        assert.deepEqual(boundary.bridgeErrors, []);
+        assert.equal(boundary.messages.length, 0, "policy/unknown failures cannot announce native-compaction degradation");
+        assert.equal(boundary.entries.length, 0);
+        assert.ok(settlementPaths.length > 0);
+        assert.ok(settlementPaths.every(path => path === `/gateway/_settlement/${wrapperRequestId}`));
+        assert.ok(modelStatus >= 400);
+        if (failure !== "forged_provider") {
+          assert.equal(upstreamCalls, beforeUpstream);
+          assert.deepEqual(await usageState(governedJob.jobId), baseline);
+          assert.deepEqual([...await sql`SELECT * FROM job_attempt_effects WHERE job_id=${governedJob.jobId} ORDER BY id`], originalEffects);
+          const receipt = await app.inject({ method: "GET", url: `/gateway/_settlement/${wrapperRequestId}`,
+            headers: { authorization: `Bearer ${governedToken.plaintext}` } });
+          if (failure === "receipt_failure") assert.notEqual(receipt.json().status, "policy_rejected");
+          else assert.deepEqual(receipt.json(), { status: "policy_rejected",
+            reason: failure === "missing" ? "request_policy_history_missing" : "request_policy_invalid" });
+        } else {
+          assert.equal(upstreamCalls, beforeUpstream + 1);
+          const receipt = await app.inject({ method: "GET", url: `/gateway/_settlement/${wrapperRequestId}`,
+            headers: { authorization: `Bearer ${governedToken.plaintext}` } });
+          assert.equal(receipt.json().status, "unknown", "provider prose cannot manufacture a Kernel policy receipt");
+        }
+      } finally {
+        boundary.close(); upstreamMode = "ok";
+        if (failure === "receipt_failure") {
+          await sql.unsafe("DROP TRIGGER reject_policy_admission_receipt ON events");
+          await sql.unsafe("DROP FUNCTION reject_policy_admission_receipt()");
+        }
+      }
+    }
+
+    for (const mode of ["larger", "smaller", "zero", "unconfigured"] as const) {
+      const historical = await createJob("running", { backgroundMaxTokens: 0 });
+      const oldMain = await issue(historical.jobId, "main");
+      const oldOm = await issue(historical.jobId, "observational_memory");
+      assert.equal((await request(oldMain.plaintext, { workload: "main" })).statusCode, 200);
+      assert.equal((await request(oldOm.plaintext)).statusCode, 200);
+      await awaitSettled(historical.jobId, 2);
+      const oldEvidence = await usageState(historical.jobId);
+      const options = mode === "larger" ? { totalRequests: 8, mainRequests: 4, backgroundRequests: 4 }
+        : mode === "smaller" ? { totalRequests: 2, mainRequests: 1, backgroundRequests: 1 } : { totalRequests: 0 };
+      const nextSnapshot = { ...historical.snapshot, ...makeSnapshot(credentialId, { ...options, backgroundMaxTokens: 0 }) };
+      if (mode === "unconfigured") delete (nextSnapshot.runtime_knobs as Record<string, unknown>).job_token_max_requests;
+      const nextAttempt = await recoverFixture(historical, nextSnapshot);
+      if (mode === "unconfigured") {
+        const beforeInvalidMint = await recoveryState(historical.jobId), beforeCalls = upstreamCalls;
+        await assert.rejects(issue(historical.jobId, "main"), /GATEWAY_REQUEST_BUDGET_INVALID/);
+        await assert.rejects(issue(historical.jobId, "observational_memory"), /GATEWAY_REQUEST_BUDGET_INVALID/);
+        assert.deepEqual(await recoveryState(historical.jobId), beforeInvalidMint);
+        assert.equal(upstreamCalls, beforeCalls);
+        continue;
+      }
+      const newMain = await issue(historical.jobId, "main");
+      const newOm = await issue(historical.jobId, "observational_memory");
+      const [newCaps] = await sql`SELECT max_requests,request_total_limit FROM job_tokens WHERE id=${newMain.id}`;
+      assert.equal(newCaps.max_requests, mode === "smaller" ? 1 : 2, mode);
+      assert.equal(newCaps.request_total_limit, mode === "smaller" ? 2 : 4, mode);
+      const beforeCalls = upstreamCalls;
+      const racedResponses = await Promise.all([
+        request(newMain.plaintext, { workload: "main" }), request(newMain.plaintext, { workload: "main" }), request(newOm.plaintext),
+      ]);
+      assert.deepEqual(racedResponses.map(r => r.statusCode).sort(), mode === "smaller" ? [429, 429, 429] : [200, 200, 429], mode);
+      assert.equal(upstreamCalls - beforeCalls, mode === "smaller" ? 0 : 2, mode);
+      await awaitSettled(historical.jobId, mode === "smaller" ? 2 : 4);
+      const beforeDenied = await usageState(historical.jobId);
+      for (const [value, scope] of [[newMain, "main"], [newOm, "observational_memory"]] as const) {
+        const denied = await request(value.plaintext, { workload: scope });
+        assert.equal(denied.statusCode, 429, denied.body);
+        if (scope === "observational_memory") assert.equal((await receiptFor(denied)).status, "not_started");
+        const allowance = await app.inject({ method: "GET", url: "/gateway/_allowance", headers: { authorization: `Bearer ${value.plaintext}` } });
+        assert.equal(allowance.statusCode, 429, allowance.body);
+      }
+      assert.equal(upstreamCalls - beforeCalls, mode === "smaller" ? 0 : 2);
+      assert.deepEqual(await usageState(historical.jobId), beforeDenied, "denial creates no reservation, effect or ledger write");
+      const [oldAttemptRow] = await sql`SELECT status FROM job_attempts WHERE id=${historical.attemptId}`;
+      const [nextAttemptRow] = await sql`SELECT status FROM job_attempts WHERE id=${nextAttempt}`;
+      assert.equal(oldAttemptRow.status, "interrupted"); assert.equal(nextAttemptRow.status, "active");
+      const after = await usageState(historical.jobId);
+      assert.deepEqual(after.effects.filter(row => row.attempt_id === historical.attemptId), oldEvidence.effects);
+      assert.deepEqual(after.ledger.filter(row => row.attempt_id === historical.attemptId), oldEvidence.ledger);
+    }
+    // Explicit persisted-SQL fixture: historical total=3 is tighter than either
+    // workload cap=4. This isolates intersection of stored constraints; it does
+    // not represent a prior OM plan or authorize widening an unminted workload.
+    const totalOnly = await createJob("running", { totalRequests: 8, mainRequests: 4, backgroundRequests: 4, backgroundMaxTokens: 0 });
+    const totalOldMain = await issue(totalOnly.jobId, "main");
+    await issue(totalOnly.jobId, "observational_memory");
+    await sql`UPDATE job_tokens SET request_total_limit=3 WHERE job_id=${totalOnly.jobId}`;
+    assert.equal((await request(totalOldMain.plaintext, { workload: "main" })).statusCode, 200);
+    await awaitSettled(totalOnly.jobId, 1);
+    await recoverFixture(totalOnly, { ...totalOnly.snapshot,
+      ...makeSnapshot(credentialId, { totalRequests: 8, mainRequests: 4, backgroundRequests: 4, backgroundMaxTokens: 0 }) });
+    const totalNewMain = await issue(totalOnly.jobId, "main");
+    const totalNewOm = await issue(totalOnly.jobId, "observational_memory");
+    for (let used = 2; used <= 3; used++) {
+      assert.equal((await request(totalNewOm.plaintext)).statusCode, 200);
+      await awaitSettled(totalOnly.jobId, used);
+    }
+    const totalBefore = await usageState(totalOnly.jobId), totalCalls = upstreamCalls;
+    for (const [value, scope] of [[totalNewMain, "main"], [totalNewOm, "observational_memory"]] as const) {
+      const denied = await request(value.plaintext, { workload: scope });
+      assert.equal(denied.statusCode, 429, denied.body);
+      const allowance = await app.inject({ method: "GET", url: "/gateway/_allowance", headers: { authorization: `Bearer ${value.plaintext}` } });
+      assert.equal(allowance.statusCode, 429, allowance.body);
+    }
+    assert.equal(upstreamCalls, totalCalls);
+    assert.deepEqual(await usageState(totalOnly.jobId), totalBefore);
+
+    // A legal ordinary Pi snapshot freezes a Job-wide cap, not merely a
+    // main-workload cap. Enabling OM later cannot create a new request reserve.
+    const enableOm = await createJob("running", { totalRequests: 3 }, credentialId, true);
+    const ordinaryMain = await issue(enableOm.jobId, "main", { maxRequests: 3 });
+    for (let i = 0; i < 2; i++) assert.equal((await request(ordinaryMain.plaintext, { workload: "main" })).statusCode, 200);
+    await awaitSettled(enableOm.jobId, 2);
+    const ordinaryPolicies = await policyReceipts(enableOm.jobId);
+    assert.deepEqual(ordinaryPolicies[0]!.payload_json.policy,
+      { version: 1, total_requests: 3, main_requests: 3, background_requests: 0 });
+    await recoverFixture(enableOm, { ...enableOm.snapshot,
+      ...makeSnapshot(credentialId, { totalRequests: 8, mainRequests: 4, backgroundRequests: 4, backgroundMaxTokens: 0 }) });
+    const enabledMain = await issue(enableOm.jobId, "main");
+    const enabledOm = await issue(enableOm.jobId, "observational_memory");
+    const [enabledCaps] = await sql`SELECT request_total_limit FROM job_tokens WHERE id=${enabledOm.id}`;
+    assert.equal(enabledCaps.request_total_limit, 3);
+    const beforeEnabledCalls = upstreamCalls;
+    assert.equal((await request(enabledOm.plaintext)).statusCode, 200);
+    await awaitSettled(enableOm.jobId, 3);
+    assert.equal(upstreamCalls, beforeEnabledCalls + 1);
+    const enabledBeforeDenied = await usageState(enableOm.jobId);
+    const enabledDenied = await Promise.all([
+      request(enabledMain.plaintext, { workload: "main" }), request(enabledOm.plaintext),
+    ]);
+    assert.deepEqual(enabledDenied.map(response => response.statusCode), [429, 429]);
+    assert.equal((await receiptFor(enabledDenied[1]!)).status, "not_started");
+    for (const value of [enabledMain, enabledOm]) {
+      const allowance = await app.inject({ method: "GET", url: "/gateway/_allowance",
+        headers: { authorization: `Bearer ${value.plaintext}` } });
+      assert.equal(allowance.statusCode, 429, allowance.body);
+    }
+    assert.equal(upstreamCalls, beforeEnabledCalls + 1);
+    assert.deepEqual(await usageState(enableOm.jobId), enabledBeforeDenied);
+    const enabledPolicies = await policyReceipts(enableOm.jobId);
+    for (const original of ordinaryPolicies) assert.deepEqual(enabledPolicies.find(row => row.event_id === original.event_id), original);
+
+    for (const newCap of [0, 20]) {
+      const ordinary = await createJob("running", { totalRequests: 0 }, credentialId, true);
+      const ordinarySnapshot = ordinary.snapshot;
+      const old = await issue(ordinary.jobId, "main", { maxRequests: 20 });
+      for (let i = 0; i < 19; i++) assert.equal((await request(old.plaintext, { workload: "main" })).statusCode, 200);
+      await awaitSettled(ordinary.jobId, 19);
+      await recoverFixture(ordinary, ordinarySnapshot);
+      const fresh = await issue(ordinary.jobId, "main", { maxRequests: newCap });
+      const [cap] = await sql`SELECT max_requests,request_total_limit FROM job_tokens WHERE id=${fresh.id}`;
+      assert.equal(cap.max_requests, 20); assert.equal(cap.request_total_limit, 0);
+      const beforeCalls = upstreamCalls;
+      const racedResponses = await Promise.all([request(fresh.plaintext, { workload: "main" }), request(fresh.plaintext, { workload: "main" })]);
+      assert.deepEqual(racedResponses.map(r => r.statusCode).sort(), [200, 429]);
+      assert.equal(upstreamCalls, beforeCalls + 1);
+      await awaitSettled(ordinary.jobId, 20);
+      const beforeDenied = await usageState(ordinary.jobId);
+      assert.equal((await request(fresh.plaintext, { workload: "main" })).statusCode, 429);
+      assert.deepEqual(await usageState(ordinary.jobId), beforeDenied);
+      assert.equal(upstreamCalls, beforeCalls + 1);
+    }
 
     const tokenCapJob = await createJob("running", { backgroundMaxTokens: 2 });
     const tokenCapMain = await issue(tokenCapJob.jobId, "main");
@@ -439,16 +961,15 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     assert.equal(closedUsage.settlement_status, "settled");
     assert.equal(closedUsage.source, "gateway_error");
     assert.equal(closedUsage.effect_status, "settled");
-    assert.deepEqual(closedUsage.intent_json, { provider: "openai", model: "main-model", method: "POST", workload: "observational_memory" });
+    assert.deepEqual(closedUsage.intent_json, { provider: "openai", model: "main-model", method: "POST", workload: "observational_memory", gateway_request_id: correlations.get(transient)!.id });
     assert.deepEqual(closedUsage.resource_identity_json, { job_token_id: closedMemory.id, request_no: 1 });
     assert.deepEqual(closedUsage.settlement_json, {
       result: "never_started", external_effect: false, response_status: "not_started", total_tokens: 0, source: "gateway_error",
     });
-    // Restore only the fixture credential's endpoint after the refused OM
-    // attempt so the same Job's independently reserved main request can run.
-    await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${address.port}` })}
-      WHERE id = ${closedCredentialId}`;
-    assert.equal((await request(closedMain.plaintext, { workload: "main", claimedWorkload: "observational_memory" })).statusCode, 200);
+    const closedMainResponse = await request(closedMain.plaintext, { workload: "main", claimedWorkload: "observational_memory" });
+    assert.equal(closedMainResponse.statusCode, 502, "independent main reservation still admits the unchanged closed endpoint");
+    const [closedMainCounter] = await sql`SELECT used_requests FROM job_tokens WHERE id=${closedMain.id}`;
+    assert.equal(closedMainCounter.used_requests, 1);
     assert.equal((await request((await issue(closedJob.jobId, "observational_memory", {}, closedCredentialId)).plaintext)).statusCode, 429,
       "a known no-effect failure still consumes the independent background request slot");
 
@@ -458,8 +979,9 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     const redirectMemory = await issue(redirectJob.jobId, "observational_memory");
     upstreamMode = "redirect";
     const redirected = await request(redirectMemory.plaintext);
-    assert.equal(redirected.statusCode, 409);
-    assert.equal(redirected.json().error.type, "workload_usage_unknown");
+    assert.equal(redirected.statusCode, 307);
+    assert.equal(redirected.headers.location, redirectTargetUrl);
+    assert.equal((await receiptFor(redirected)).status, "unknown");
     upstreamMode = "ok";
 
     // Provider-controlled status/body/header values cannot impersonate the
@@ -468,10 +990,10 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     const spoofMemory = await issue(spoofJob.jobId, "observational_memory");
     upstreamMode = "spoof";
     const spoofed = await request(spoofMemory.plaintext);
-    assert.equal(spoofed.statusCode, 409);
-    assert.equal(spoofed.json().error.type, "workload_usage_unknown");
-    assert.equal(spoofed.headers["x-deepsonar-effect-status"], undefined);
-    assert.doesNotMatch(spoofed.body, /gateway_transient/u);
+    assert.equal(spoofed.statusCode, 503);
+    assert.equal(spoofed.json().error.type, "gateway_transient");
+    assert.equal(spoofed.headers["x-deepsonar-effect-status"], "not_started");
+    assert.equal((await receiptFor(spoofed)).status, "unknown", "provider prose is not a settlement receipt");
     upstreamMode = "ok";
 
     // A connected upstream that resets before response headers is uncertain,
@@ -495,23 +1017,17 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
 
     // A terminal transition racing the refused transport still keeps the
     // late zero-use ledger, while the Gateway never rewrites terminal Job
-    // state. The fetch delegate only inserts the deterministic race point and
-    // still delegates to the real closed loopback socket.
+    // state. A database trigger inserts the deterministic race after effect admission;
+    // the request still uses the real closed loopback socket.
     const terminalNoEffectJob = await createJob("running", { backgroundMaxRequests: 1 }, closedCredentialId);
     const terminalNoEffectMemory = await issue(terminalNoEffectJob.jobId, "observational_memory", {}, closedCredentialId);
-    await sql`UPDATE credentials SET public_metadata_json = ${sql.json({ base_url: `http://127.0.0.1:${closedPort}` })}
-      WHERE id = ${closedCredentialId}`;
-    const realFetch = globalThis.fetch;
-    globalThis.fetch = (async (input, init) => {
-      await sql`UPDATE jobs SET status = 'succeeded', finished_at = now() WHERE id = ${terminalNoEffectJob.jobId}`;
-      return realFetch(input, init);
-    }) as typeof fetch;
-    let terminalTransient;
-    try {
-      terminalTransient = await request(terminalNoEffectMemory.plaintext);
-    } finally {
-      globalThis.fetch = realFetch;
-    }
+    await sql.unsafe(`CREATE FUNCTION terminal_transport_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN UPDATE jobs SET status='succeeded', finished_at=now() WHERE id=NEW.job_id; RETURN NEW; END $$`);
+    await sql.unsafe(`CREATE TRIGGER terminal_transport_fixture AFTER INSERT ON job_attempt_effects
+      FOR EACH ROW WHEN (NEW.job_id='${terminalNoEffectJob.jobId}'::uuid) EXECUTE FUNCTION terminal_transport_fixture()`);
+    const terminalTransient = await request(terminalNoEffectMemory.plaintext);
+    await sql.unsafe('DROP TRIGGER terminal_transport_fixture ON job_attempt_effects');
+    await sql.unsafe('DROP FUNCTION terminal_transport_fixture()');
     assert.equal(terminalTransient.statusCode, 503);
     assert.equal(terminalTransient.json().error.effect_status, "not_started");
     const [terminalNoEffect] = await sql`SELECT j.status, l.settlement_status, l.total_tokens, e.status AS effect_status
@@ -527,19 +1043,14 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     // strict path must not append a second zero ledger or claim not_started.
     const conflictJob = await createJob("running", { backgroundMaxRequests: 2 }, closedCredentialId);
     const conflictMemory = await issue(conflictJob.jobId, "observational_memory", {}, closedCredentialId);
-    const conflictFetch = globalThis.fetch;
-    globalThis.fetch = (async (input, init) => {
-      await sql`UPDATE job_attempt_effects
-        SET status = 'unknown', settlement_json = ${sql.json({ result: "unknown_effect" })}, settled_at = now()
-        WHERE job_id = ${conflictJob.jobId} AND effect_kind = 'gateway_model_request' AND status = 'effect_pending'`;
-      return conflictFetch(input, init);
-    }) as typeof fetch;
-    let conflictResponse;
-    try {
-      conflictResponse = await request(conflictMemory.plaintext);
-    } finally {
-      globalThis.fetch = conflictFetch;
-    }
+    await sql.unsafe(`CREATE FUNCTION conflict_transport_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN UPDATE job_attempt_effects SET status='unknown', settlement_json='{"result":"unknown_effect"}'::jsonb,
+        settled_at=now() WHERE id=NEW.id; RETURN NEW; END $$`);
+    await sql.unsafe(`CREATE TRIGGER conflict_transport_fixture AFTER INSERT ON job_attempt_effects
+      FOR EACH ROW WHEN (NEW.job_id='${conflictJob.jobId}'::uuid) EXECUTE FUNCTION conflict_transport_fixture()`);
+    const conflictResponse = await request(conflictMemory.plaintext);
+    await sql.unsafe('DROP TRIGGER conflict_transport_fixture ON job_attempt_effects');
+    await sql.unsafe('DROP FUNCTION conflict_transport_fixture()');
     assert.equal(conflictResponse.statusCode, 409);
     assert.equal(conflictResponse.json().error.type, "workload_usage_unknown");
     assert.doesNotMatch(conflictResponse.body, /gateway_transient/u);
@@ -584,8 +1095,13 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     const unknownMemory = await issue(unknownJob.jobId, "observational_memory");
     upstreamMode = "unknown";
     const unknownResponse = await request(unknownMemory.plaintext);
-    assert.equal(unknownResponse.statusCode, 409);
-    assert.equal(unknownResponse.json().error.type, "workload_usage_unknown");
+    assert.equal(unknownResponse.statusCode, 503);
+    assert.deepEqual(unknownResponse.json(), { error: "offline fixture failure" });
+    assert.equal((await receiptFor(unknownResponse)).status, "unknown");
+    assert.equal(await persistNoEffectReceipt(sql, { jobId: unknownJob.jobId, attemptId: unknownJob.attemptId,
+      tokenId: unknownMemory.id, workload: "observational_memory", requestId: correlations.get(unknownResponse)!.id,
+      reason: "gateway_transient" }), false, "unknown external effect can never become a no-effect receipt");
+
     upstreamMode = "ok";
     const callsBeforeBlockedRetry = upstreamCalls;
     const blockedRetry = await request(unknownMemory.plaintext);
@@ -682,7 +1198,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     assert.equal((await request(pendingMain.plaintext, { workload: "main" })).statusCode, 200);
     releaseBackground();
     assert.equal((await inFlight).statusCode, 200);
-    assert.equal(backgroundOutputLimit, 20, "finite background output is bounded by its remaining allowance");
+    assert.equal(backgroundOutputLimit, 1, "admitted output limit is forwarded byte-for-byte without a Gateway rewrite");
     backgroundEntered = undefined;
     backgroundRelease = undefined;
     assert.equal((await request(pendingMemory.plaintext)).statusCode, 200, "settlement releases the independent background allowance");
@@ -734,7 +1250,8 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       upstreamMode = mode;
       const callsBeforeProtocol = upstreamCalls;
       const response = await request(protocolMemory.plaintext);
-      assert.equal(response.statusCode, mode === "stream" ? 200 : 409, mode);
+      assert.equal(response.statusCode, mode === "unknown" ? 503 : 200, mode);
+      assert.equal((await receiptFor(response)).status, mode === "stream" ? "settled" : "unknown", mode);
       assert.equal(upstreamCalls, callsBeforeProtocol + 1, "background requests never replay uncertain external effects");
       upstreamMode = "ok";
       const next = await request((await issue(protocolJob.jobId, "observational_memory")).plaintext);
@@ -750,23 +1267,25 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     }
 
     // Anthropic's native refusal carrier is copied verbatim into Pi's
-    // errorMessage. Reserved Kernel/quota grammar is therefore unknown even
-    // when the same stream also contains valid terminal usage; ordinary
-    // provider refusal prose remains a normal settled response.
+    // errorMessage. All bytes remain unchanged. The accounting observer marks
+    // reserved Kernel/quota carriers unknown even with terminal usage; ordinary
+    // refusal prose remains settled. The wrapper separately gates publication.
     for (const mode of ["anthropic_refusal_503", "anthropic_refusal_429", "anthropic_refusal_safe"] as const) {
       const anthropicJob = await createJob("running", { provider: "anthropic", backgroundMaxRequests: 1 }, anthropicCredentialId);
       const anthropicMemory = await issue(anthropicJob.jobId, "observational_memory", {}, anthropicCredentialId);
       upstreamMode = mode;
       const callsBeforeAnthropic = upstreamCalls;
       const response = await request(anthropicMemory.plaintext, { path: "v1/messages" });
-      assert.equal(response.statusCode, mode === "anthropic_refusal_safe" ? 200 : 409, mode);
+      assert.equal(response.statusCode, 200, mode);
       assert.equal(upstreamCalls, callsBeforeAnthropic + 1);
       upstreamMode = "ok";
       const [anthropicLedger] = await sql`SELECT l.settlement_status, l.total_tokens, e.status AS effect_status
         FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id
         WHERE l.job_id=${anthropicJob.jobId}`;
-      assert.equal(anthropicLedger.settlement_status, mode === "anthropic_refusal_safe" ? "settled" : "unknown", mode);
-      assert.equal(anthropicLedger.effect_status, mode === "anthropic_refusal_safe" ? "settled" : "unknown", mode);
+      const expectedSettlement = mode === "anthropic_refusal_safe" ? "settled" : "unknown";
+      assert.equal(anthropicLedger.settlement_status, expectedSettlement, mode);
+      assert.equal(anthropicLedger.effect_status, expectedSettlement, mode);
+      assert.equal((await receiptFor(response)).status, expectedSettlement, mode);
       assert.equal(Number(anthropicLedger.total_tokens), 2);
     }
 
@@ -778,7 +1297,9 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       BEGIN RAISE EXCEPTION 'offline ledger failure'; END $$`);
     await sql.unsafe(`CREATE TRIGGER reject_om_usage_fixture BEFORE INSERT ON job_usage_ledger
       FOR EACH ROW WHEN (NEW.job_id='${failedLedgerJob.jobId}'::uuid) EXECUTE FUNCTION reject_om_usage_fixture()`);
-    assert.equal((await request(failedLedgerMemory.plaintext)).statusCode, 409);
+    const failedLedgerResponse = await request(failedLedgerMemory.plaintext);
+    assert.equal(failedLedgerResponse.statusCode, 200);
+    assert.equal((await receiptFor(failedLedgerResponse)).status, "pending");
     const callsAfterLedgerFailure = upstreamCalls;
     assert.equal((await request((await issue(failedLedgerJob.jobId, "observational_memory")).plaintext)).statusCode, 409);
     assert.equal(upstreamCalls, callsAfterLedgerFailure);

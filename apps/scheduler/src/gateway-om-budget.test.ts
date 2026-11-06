@@ -227,3 +227,26 @@ test("AggregateError degrades only when every bounded leaf proves pre-connect", 
   for (let i = 0; i < 10; i++) deep = { cause: deep };
   assert.equal(isKnownObservationalMemoryPreRequestFailure(deep), false);
 });
+
+
+test("OM authorizes exact SDK-relative OpenAI resources without changing path or model", () => {
+  for (const [canonical, relative] of [["v1/chat/completions", "chat/completions"], ["v1/responses", "responses"]]) {
+    for (const upstreamPath of [canonical, relative]) {
+      const input = { workload: "observational_memory" as const, requestModel: "frozen-model",
+        expectedModel: "frozen-model", expectedRoute: canonical, upstreamPath };
+      assert.doesNotThrow(() => assertObservationalMemoryRequestScope(input));
+      assert.equal(input.upstreamPath, upstreamPath, "authorization does not rewrite the original request");
+      expectCode(() => assertObservationalMemoryRequestScope({ ...input, requestModel: "other" }), "FROZEN_WORKLOAD_MODEL_MISMATCH");
+    }
+    for (const upstreamPath of ["v2/responses", "v2/chat/completions", "v1/messages", "messages", "models",
+      "v1/v1/responses", "responses/extra", "responses%2fextra", "chat%2fcompletions", "../responses",
+      canonical === "v1/responses" ? "chat/completions" : "responses"]) {
+      expectCode(() => assertObservationalMemoryRequestScope({ workload: "observational_memory",
+        requestModel: "frozen-model", expectedModel: "frozen-model", expectedRoute: canonical, upstreamPath }),
+      "FROZEN_WORKLOAD_ROUTE_MISMATCH");
+    }
+  }
+  expectCode(() => assertObservationalMemoryRequestScope({ workload: "observational_memory",
+    requestModel: "frozen-model", expectedModel: "frozen-model", expectedRoute: "v1/messages", upstreamPath: "messages" }),
+  "FROZEN_WORKLOAD_ROUTE_MISMATCH");
+});

@@ -181,3 +181,17 @@ test("SnapshotUnresolvableError preserves ModelCatalogMismatchError repair for H
   const fromDetail = currentSnapshotUnresolvableBody("解析模型 missing-model …", { repair });
   assert.deepEqual((fromDetail.repair?.expected as { sample?: string[] } | undefined)?.sample, catalog);
 });
+
+
+test("legacy provider binding and business configuration drift require explicit refreeze", () => {
+  const binding = { version: 1, credential_id: base.credential_id, fingerprint: `sha256:${"a".repeat(64)}` };
+  const current = { ...base, gateway_provider_binding: binding };
+  assert.deepEqual(snapshotIdentityDrift(base, current), [
+    "gateway_provider_binding_version", "gateway_provider_binding_credential_id", "gateway_provider_binding_fingerprint",
+  ]);
+  assert.deepEqual(snapshotIdentityDrift(current, { ...current,
+    gateway_provider_binding: { ...binding, fingerprint: `sha256:${"b".repeat(64)}` },
+  }), ["gateway_provider_binding_fingerprint"]);
+  assert.deepEqual(snapshotIdentityDrift(current, structuredClone(current)), []);
+  assert.equal(Object.hasOwn(base, "gateway_provider_binding"), false, "comparison never backfills historical snapshots");
+});

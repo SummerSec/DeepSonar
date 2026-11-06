@@ -1,3 +1,4 @@
+import type { MigrationConnection } from "./migration-runner.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -167,7 +168,7 @@ if (!testDatabaseUrl) {
       const { settleEffectByOperator } = await import("./domains/job-attempt/reconcile-effects-runner.js");
       const effectsToSettle = await sql`SELECT id FROM job_attempt_effects WHERE job_id=ANY(${workerIds}) ORDER BY id`;
       for (const effect of effectsToSettle) {
-        assert.equal((await settleEffectByOperator(sql, { effect_id: String(effect.id), outcome: "applied_run_terminated",
+        assert.equal((await settleEffectByOperator(sql as unknown as MigrationConnection, { effect_id: String(effect.id), outcome: "applied_run_terminated",
           operation_id: "synthetic-boot-exit", evidence: "Synthetic fixture worker is stopped; no external runner exists." })).settled, true);
       }
       const settledEffects = await sql`SELECT status,replay_policy FROM job_attempt_effects

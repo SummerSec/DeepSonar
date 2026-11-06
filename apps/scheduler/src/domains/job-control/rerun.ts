@@ -46,6 +46,9 @@ type GovernedSnapshotIdentity = {
   upstream_model: string | null;
   credential_id: string | null;
   credential_provider: string | null;
+  gateway_provider_binding_version: number | null;
+  gateway_provider_binding_credential_id: string | null;
+  gateway_provider_binding_fingerprint: string | null;
   dsh_task_mode: string | null;
   reasoning: string | null;
   context_window_tokens: number | null;
@@ -112,12 +115,16 @@ export function governedSnapshotIdentity(snapshot: unknown): GovernedSnapshotIde
   const value = objectValue(snapshot);
   const runtime = objectValue(value.agent_runtime);
   const image = objectValue(value.runtime_image);
+  const providerBinding = objectValue(value.gateway_provider_binding);
   return {
     agent_cli: nullableString(value.agent_cli),
     model: nullableString(value.model),
     upstream_model: nullableString(value.upstream_model),
     credential_id: nullableString(value.credential_id),
     credential_provider: nullableString(value.credential_provider),
+    gateway_provider_binding_version: nullableNumber(providerBinding.version),
+    gateway_provider_binding_credential_id: nullableString(providerBinding.credential_id),
+    gateway_provider_binding_fingerprint: nullableString(providerBinding.fingerprint),
     dsh_task_mode: nullableString(value.dsh_task_mode),
     reasoning: nullableString(value.reasoning),
     context_window_tokens: nullableNumber(value.context_window_tokens),

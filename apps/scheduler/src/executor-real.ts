@@ -5,6 +5,7 @@ import { normalizeArchivedReaFact } from "./domains/cli-capability/rea-cli-fact.
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  MODEL_REQUEST_POLICY_BASE_URL,
   contextIdentity,
   normalizeRuntimeErrorDetails,
   requireAgentCliRuntimeAdapter,
@@ -110,7 +111,7 @@ import {
   materializeProviderSettings,
   routeMaterializedProviderFilesThroughGateway,
 } from "./provider-settings.js";
-import { snapshotUpstreamModel } from "./provider-effective-model.js";
+import { frozenClaudeLaunchModel, snapshotUpstreamModel } from "./provider-effective-model.js";
 import {
   buildJobSharedAssetCatalog,
   SHARED_ASSETS_READONLY_ROOT,
@@ -826,6 +827,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       registerJobEvidenceSecrets(jobId, [observationalMemoryGatewayToken]);
     }
     env.DEEPSONAR_GATEWAY_TOKEN = gatewayToken;
+    env.DEEPSONAR_REQUEST_POLICY_UPSTREAM = config.gateway.sandboxUrl;
     if (provider === "pi" && !materializedProviderConfig) {
       runtimeConfigFiles = materializeProviderSettings({
         agentCli: "pi",
@@ -842,10 +844,10 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
       runtimeConfigFiles = routeMaterializedProviderFilesThroughGateway({
         agentCli: provider,
         files: runtimeConfigFiles,
-        gatewayBaseUrl: config.gateway.sandboxUrl,
+        gatewayBaseUrl: gatewayToken ? MODEL_REQUEST_POLICY_BASE_URL : config.gateway.sandboxUrl,
         jobToken: jt.plaintext,
         ...(observationalMemory
-          ? { observationalMemory: { config: observationalMemory, backgroundToken: observationalMemoryGatewayToken ?? "" } }
+          ? { observationalMemory: { config: observationalMemory, backgroundToken: observationalMemoryGatewayToken ?? "", gatewayBaseUrl: config.gateway.sandboxUrl } }
           : {}),
       });
       for (const key of mapping.secretKeys) delete env[key];
@@ -855,7 +857,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
     if (!materializedProviderConfig && provider !== "pi") {
       for (const k of mapping.secretKeys) env[k] = jt.plaintext;
       if (mapping.baseUrlKey) {
-        env[mapping.baseUrlKey] = config.gateway.sandboxUrl;
+        env[mapping.baseUrlKey] = MODEL_REQUEST_POLICY_BASE_URL;
       }
     }
     if (provider === "dsh") {
@@ -1744,11 +1746,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     settings_config_json: snapshot.settings_config_json,
     config_files: runtimeConfigFiles,
   });
-  const runtimeModel = piLaunch?.cliModel ?? model;
+  const runtimeModel = provider === "claude-code" ? frozenClaudeLaunchModel(snapshot) : piLaunch?.cliModel ?? model;
   const dshProvider = runtimeAdapter.projectRuntime?.({
     settingsConfig: snapshot.settings_config_json,
     credentialProvider: activeCredentialProvider ?? "",
-    gatewayBaseUrl: config.gateway.sandboxUrl,
+    gatewayBaseUrl: gatewayToken ? MODEL_REQUEST_POLICY_BASE_URL : config.gateway.sandboxUrl,
     model,
     contextWindowTokens: snapshot.context_window_tokens,
     reasoning,

@@ -136,3 +136,14 @@ FR-FIND-008 只信任经过权限校验的操作员材料准入和独立评审�
 ### #778 条件建议的信任边界
 
 作者 applicability sidecar 与调用者 target 均为声明，不能改变 Job 快照或成为事实。在线建议仅检查本项目冻结精确版本；外国条目不进入候选、诊断、计数或排序。CAS 后整批复查版本及 item 撤销，选择事务锁定版本与 item 再查，后续 pull 仍独立授权。选择回执不是使用记录或权限票据，未知质量/token 余额不补估值；描述文本不参与匹配。详见[专题](../SKILL_SUGGESTIONS.md)。
+
+
+## 透明代理的最小边界（#923）
+
+未知业务头默认保留，不能以泛前缀过滤代替权限检查。认证载体由 Gateway 消费并以绑定凭据重新生成；目标 authority 只来自服务器 base URL，Connection 指定字段和非法 framing 在 HTTP 边界处理，重定向不改变目标。配置头继续绑定 #921 选定 endpoint/profile。usage 与原始响应分离；客户端收到业务数据不表示 durable settlement，OM wrapper 必须查当前 Job/Attempt/token/workload 的宿主回执，Provider 内容不能冒充 settled 或 not_started。冻结模型、主后台预算、终态撤销和未知效果规则保持。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)及 [ADR 0017](adr/0017-transparent-gateway-settlement.md)，本分支最终 SHA Actions 待验。
+
+#923 同时拒绝重复认证字段和业务字段中的入站 Job token；上游 header/trailer 与跨 chunk 原始 body 的绑定 key 明文回显会中止。gzip/deflate/br 在每段原压缩字节转发前由独立解码观察扫描，未知编码、非法压缩或解码超限断流；该机制不能推定任意业务自定义编码/变换的 key echo 已受保护；限制见[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)。
+
+`/gateway/_allowance` 向当前有效 token/Attempt 的自身 workload 提供预算交集提示；main 与后台不互读额度。只读无预留、不消耗模型请求配额；pending/unknown 拒绝，最终请求仍锁内重新准入。沙箱生成适配器只持 Job token，不授予绕过预算/模型/目标的能力。
+
+quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/gateway_admission` 确认 not_started；回执有 kernel authority、完整 scope、UUID 去重与事件限流，写入失败保持 unknown。Provider 原文不能替代回执。

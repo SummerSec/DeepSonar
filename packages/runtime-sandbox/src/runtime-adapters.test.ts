@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parse } from "yaml";
 import { buildDshProfilePatch, DSH_PROFILE_MANIFEST } from "./dsh-profile.js";
+import { DSH_REQUEST_BUDGET_PLUGIN } from "./dsh-request-budget.js";
 import { preferInnerJsonErrorMessage } from "./embedded-error-message.js";
 import {
   DSH_PI_COMPAT_SYSTEM_PROMPT,
@@ -885,6 +886,12 @@ test("DSH Docker smoke uses the production allowlisted profile tree", async () =
     const options = { taskMode, cwd: "/workspace", providerConfig };
     const production = parse(buildDshProfilePatch(options).replace(/^\s+personaPrefix:.*$/mu, "        personaPrefix: DeepSonar isolated SDK smoke"));
     assert.deepEqual(production, JSON.parse(smoke.buildDshProfilePatch(options)));
+    const governed = parse(buildDshProfilePatch({ ...options, governedRequestBudget: true })
+      .replace(/^\s+personaPrefix:.*$/mu, "        personaPrefix: DeepSonar isolated SDK smoke"));
+    const expected = structuredClone(production);
+    expected[0].insert.find((plugin: { id: string }) => plugin.id === "llm-pi-ai").name = DSH_REQUEST_BUDGET_PLUGIN;
+    assert.deepEqual(governed, expected, "budgeting replaces exactly one official provider entry without adding a bypass");
+    assert.equal(governed[0].insert.filter((plugin: { name: string }) => plugin.name === "@deepseek-ai/dsh-llm-pi-ai").length, 0);
   }
 });
 

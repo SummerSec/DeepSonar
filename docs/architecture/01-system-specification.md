@@ -680,9 +680,9 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### FR-CRED-003 Model Gateway 唯一出口
 
-- **规范要求**：真实模型请求必须经 Scheduler-owned Model Gateway/受控 proxy，Job 只持短期 token；Gateway 必须按 Job deadline、allowed_models、请求/Token 额度和脱敏规则转发，不得把长期 Provider key 注入 Sandbox。
-- **决策来源**：模型请求是外部副作用和计费边界，统一出口才能限额、审计和撤销。
-- **实现状态**：as-built；用量写 `job_usage_ledger`，不保存 prompt/completion/headers。已接入 `main` 与 `observational_memory` 的内核签发 token 身份，后台只能访问冻结的 provider/model/route；总用量与 memory 归因分开，质量/任务单位成本不把后台调用冒充主执行效果。终态撤销和 Job 状态更新共用同一终态事务，未知/待结算用量不被吞掉。
+- **规范要求**：真实模型请求必须经 Scheduler-owned Model Gateway/受控 proxy，Job 只持短期 token；Gateway 必须按 Job deadline、allowed_models、请求/Token 额度和脱敏规则准入，不得把长期 Provider key 注入 Sandbox。放行后保持业务请求/响应原始字节与端到端头；仅处理认证、绑定目标和必要 HTTP 边界，不隐式重试/重定向或静默改写模型/输出参数。
+- **决策来源**：模型请求是外部副作用和计费边界，统一出口才能限额、审计和撤销；#923 及 [ADR 0017](adr/0017-transparent-gateway-settlement.md)要求透明数据面与准入/结算分离。
+- **实现状态**：as-built；用量写 `job_usage_ledger`，不保存 prompt/completion/headers。已接入 `main` 与 `observational_memory` 的内核签发 token 身份，后台只能访问冻结的 provider/model/route；总用量与 memory 归因分开，质量/任务单位成本不把后台调用冒充主执行效果。终态撤销和 Job 状态更新共用同一终态事务，未知/待结算用量不被吞掉。#923 分支实现原始有界请求、单次 HTTP/SSE 传输及 OM scoped 结算查询，wrapper 确认 durable settled 前不提交终止结果；最终 SHA Actions 待验，协议限制见[专题](../MODEL_GATEWAY_TRANSPARENCY.md)。
 - **代码入口**：[Gateway](../../apps/scheduler/src/gateway.ts)、[Gateway guard](../../apps/scheduler/src/domains/provider-adapter/gateway-guard.ts)、[Gateway tests](../../apps/scheduler/src/gateway-usage.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`。
 
@@ -946,9 +946,9 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### NFR-PERF-004 Gateway/Evidence 有界传输
 
-- **规范要求**：Gateway 请求体、尝试次数与重试延迟必须遵守[Gateway 源码上限](../../apps/scheduler/src/gateway.ts)；Evidence 流读取/解压/记录/保留按[证据实现](../../apps/scheduler/src/evidence.ts)有界，超限必须截断并标记，不得无界缓冲。
+- **规范要求**：Gateway 请求体及观察副本必须遵守[Gateway 源码上限](../../apps/scheduler/src/gateway.ts)，透明上游只发起一次交换；响应写入遵守背压和取消；Evidence 流读取/解压/记录/保留按[证据实现](../../apps/scheduler/src/evidence.ts)有界，超限必须截断并标记，不得无界缓冲。
 - **决策来源**：上游和压缩流都可能提供恶意大输入，边界必须在 host 侧执行。
-- **实现状态**：as-built；无独立 SLA，只有上述代码/配置边界。
+- **实现状态**：as-built；无独立 SLA。#923 分支将请求流有界收全后准入，响应即时转发；压缩仅解码观察副本，不改转发表示。最终 SHA 验证待完成，见[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)。
 - **代码入口**：[Gateway constants](../../apps/scheduler/src/gateway.ts)、[Evidence limits](../../apps/scheduler/src/evidence.ts)、[stream tests](../../apps/scheduler/src/evidence-stream.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:recovery`、`pnpm ci:unit:runtime-sandbox`。
 

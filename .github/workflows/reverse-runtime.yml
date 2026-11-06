@@ -9,8 +9,17 @@ on:
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
+      - "agent-harness/claude-request-budget-cli.test.ts"
+      - "agent-harness/tsconfig.claude-budget.json"
+      - "agent-harness/run-claude-budget-isolated.mjs"
       - "agent-harness/rea-runtime/**"
       - "agent-harness/opensandbox/*rea*"
+      - "agent-harness/opensandbox/*om-provider-headers*"
+      - "agent-harness/pi-observational-memory-governed.ts"
+      - "apps/scheduler/src/gateway*.ts"
+      - "apps/scheduler/src/provider-custom-headers.ts"
+      - "apps/scheduler/src/provider-settings.ts"
+      - "apps/scheduler/src/pi-extensions.ts"
       - "deploy/docker-compose.opensandbox.yml"
       - "deploy/opensandbox/**"
       - "agent-harness/test-reverse-*"
@@ -45,8 +54,17 @@ on:
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
+      - "agent-harness/claude-request-budget-cli.test.ts"
+      - "agent-harness/tsconfig.claude-budget.json"
+      - "agent-harness/run-claude-budget-isolated.mjs"
       - "agent-harness/rea-runtime/**"
       - "agent-harness/opensandbox/*rea*"
+      - "agent-harness/opensandbox/*om-provider-headers*"
+      - "agent-harness/pi-observational-memory-governed.ts"
+      - "apps/scheduler/src/gateway*.ts"
+      - "apps/scheduler/src/provider-custom-headers.ts"
+      - "apps/scheduler/src/provider-settings.ts"
+      - "apps/scheduler/src/pi-extensions.ts"
       - "deploy/docker-compose.opensandbox.yml"
       - "deploy/opensandbox/**"
       - "agent-harness/test-reverse-*"
@@ -169,6 +187,10 @@ jobs:
           set -euo pipefail
           docker buildx build --builder default --load --platform "${{ matrix.platform }}" \
             --build-arg TOOLSET=base --tag deepsonar-base:reverse-ci --file deploy/Dockerfile.agent .
+      - name: Locked Claude CLI static budget acceptance (synthetic upstream only)
+        env:
+          CLAUDE_BUDGET_IMAGE: deepsonar-base:reverse-ci
+        run: pnpm ci:integration:claude-request-budget
       - name: Build native Reverse runtime
         run: |
           set -euo pipefail
@@ -201,6 +223,27 @@ jobs:
           set -euo pipefail
           export REA_JOB_IMAGE="$(docker image inspect --format '{{.Id}}' deepsonar-reverse:native-ci)"
           pnpm ci:integration:rea-job
+      - name: Prepare immutable loopback image for OM Job creation
+        run: |
+          set -euo pipefail
+          docker run -d --name om-provider-registry -p 127.0.0.1:15000:5000 \
+            registry@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+          node agent-harness/opensandbox/om-provider-headers-image.mjs
+      - name: Created and dispatched Pi OM provider headers (synthetic upstream only)
+        env:
+          TEST_DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/postgres
+          OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
+          OPEN_SANDBOX_DOMAIN: 127.0.0.1:18081
+          OM_PROVIDER_HEADERS_REPORT_DIR: ${{ github.workspace }}/om-provider-headers-evidence/${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          pnpm ci:integration:om-provider-headers
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: om-provider-headers-evidence-${{ matrix.arch }}
+          path: om-provider-headers-evidence/${{ matrix.arch }}
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
@@ -217,4 +260,6 @@ jobs:
         if: ${{ always() }}
         env:
           OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
-        run: docker compose -f deploy/docker-compose.opensandbox.yml down -v
+        run: |
+          trap 'docker rm -fv om-provider-registry || true' EXIT
+          docker compose -f deploy/docker-compose.opensandbox.yml down -v

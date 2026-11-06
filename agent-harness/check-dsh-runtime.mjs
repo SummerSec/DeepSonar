@@ -30,6 +30,8 @@ for (const [manifestPath, dockerPath] of [["./runtime-images.json", "../deploy/D
   assert.ok(docker.includes(`ARG DSH_INTEGRITY=${manifest.npm["@deepseek-ai/dsh"].integrity}`));
   assert.match(docker, /COPY agent-harness\/dsh-runtime\/package-lock\.json \/opt\/deepsonar\/dsh\/package-lock\.json/u);
   assert.match(docker, /npm ci --omit=dev --ignore-scripts --no-audit --no-fund/u);
+  assert.ok(docker.includes('node /opt/deepsonar/dsh-request-budget-install.mjs /opt/deepsonar/dsh /opt/deepsonar/request-budget-source'),
+    'governed provider artifact must be built into every DSH runtime image');
   assert.doesNotMatch(docker, /dsh-sdk-jsonrpc-demo|dsh-agent-spine-demo|dsh-reasoning-settings|DSH_CODE_RUNTIME/u);
 }
 for (const taskMode of ["standard", "ptc"]) {

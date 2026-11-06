@@ -898,3 +898,21 @@ test("project Pi default model with a slash passes the full snapshot admission",
   assert.equal(result.pi_provider, "custom");
   assert.equal(result.credential_id, credentialId);
 });
+
+test("Job freezes raw credential binding independently of the selected role model", async () => {
+  const { freezeGatewayProviderBinding } = await import("../../gateway-provider-binding.js");
+  const credential = {
+    id: "cred-bound", name: "synthetic", provider: "anthropic", status: "active", project_id: null,
+    agent_cli: "claude-code", public_metadata_json: {}, meta_json: {},
+    settings_config_json: { env: { ANTHROPIC_MODEL: "model-a", ANTHROPIC_DEFAULT_HAIKU_MODEL: "model-b" } },
+  };
+  const bindings = [];
+  for (const model of ["model-a", "model-b"]) {
+    const snapshot = await resolveAgentSnapshotForJob(snapshotDb({ projectCfg: undefined,
+      globalCfg: { id: "global-bound", version: 1, agent_cli: "claude-code", model, modules_json: [] }, credential }),
+    "project-1", "audit", { modelRef: model });
+    assert.deepEqual(snapshot.gateway_provider_binding, freezeGatewayProviderBinding(credential));
+    bindings.push(snapshot.gateway_provider_binding);
+  }
+  assert.deepEqual(bindings[0], bindings[1]);
+});

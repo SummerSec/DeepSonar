@@ -1,3 +1,4 @@
+import { freezeGatewayProviderBinding } from "../../gateway-provider-binding.js";
 import {
   buildRepairFeedback,
   PlatformToolName,
@@ -790,6 +791,10 @@ async function resolveAgentSnapshotForJobUnchecked(
     credential_id: (llm?.id as string) ?? null,
     credential_name: (llm?.name as string) ?? null,
     credential_provider: (llm?.provider as string) ?? null,
+    ...(llm ? { gateway_provider_binding: freezeGatewayProviderBinding({
+      id: llm.id, provider: llm.provider, agent_cli: llm.agent_cli,
+      settings_config_json: llm.settings_config_json, public_metadata_json: llm.public_metadata_json,
+    }) } : {}),
     modules,
     module_selectors: [...modules],
     expanded_modules: expanded.resolved_modules,

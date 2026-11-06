@@ -98,6 +98,8 @@ Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、�
 
 ## Gateway、流和导入接口
 
+Gateway 的请求次数额度在 Job 锁内跨 token/Attempt 累计；撤销/过期 token 仍参与用量与有限上限求交，普通 main 与 OM 均不能通过恢复、换 token 或新配置的 0/未配置重置额度。首次 mint 用内核 `control_receipt/gateway_request_budget` 冻结包括未签发 workload 的完整策略，后续只可追加收紧；恢复必须在替换旧快照前同事务保存旧策略。缺失或损坏的冻结策略明确拒绝，mint 固化交集，`_allowance` 在请求额度耗尽时返回 `JOB_REQUEST_EXHAUSTED`，最终 dispatch 仍重新准入；拒绝无模型出站、模型 effect 或请求计数变化。策略无效/历史缺失的模型准入拒绝保存 scoped `policy_rejected` settlement 回执，OM 仅凭可信回执分类为不可重试策略硬失败，不使用 quota/transient 软降级路径。详见[透明预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)。
+
 - **Model Gateway：** Provider 选择、凭据、网络、模型和用量归 Scheduler 所有。Gateway 上游请求/响应体不落库（usage 计数除外）；Job 执行流由 Evidence writer 归档并对已登记的运行时 secret 脱敏。Provider 错误不成为 Agent 可伪造的语义事件。实现见 [`gateway.ts`](../../apps/scheduler/src/gateway.ts) 与 [`evidence.ts`](../../apps/scheduler/src/evidence.ts)。
 - **过程流：** WS 使用一次性 ticket、项目/Job scope 和本地 Evidence catch-up。stream-bus 只做实时投递；本地副本不可见时返回 `visibility=unavailable`，不能从另一副本补造原始流。终端 WS 另有更严格的 control/admin scope、lease、帧大小和空闲限制。
 - **导入/导出：** transfer 域校验格式、hash、版本/计数、项目 scope、路径和 provenance。导入可以保留历史 Job 的终态、旧 Attempt/effect 和 provenance，但不能恢复历史 token、沙箱或 secret，也不能直接授权新的 active execution；需要重跑时必须按当前 admission 和 snapshot 重新治理。导入与导出均审计。
@@ -192,6 +194,14 @@ FR-FIND-008 增加 `/program-materials` 的登记/读取、单材料读取/撤�
 
 Job-scoped `submit_plan` 当前严格要求 `{plan: PlanV2, revision: execution_route}`；`submit_plan_result` 同样只接收 v2。objective/revision、owner、route CAS、Plan SHA 与已派发 task 的字节身份必须匹配；模型只能调整未派发路线，不能重置 lifetime 计数。v1 Plan/Result 只供历史读；普通 HubIntent 走原 handler，不制造新的 v1 `plan_protocol`，不可变 v1 与 `hub_intent_adapter` 审计只作历史解析。接纳 receipt 查询只恢复原响应，不证明执行或语义完成；工程执行投影和操作员完成门分开。机器字段以 [plan.ts](../../packages/shared-types/src/plan.ts)、[objective](../../apps/scheduler/src/domains/plan-protocol/objective.ts)和[任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)为准。
 
+
+## 透明数据面与 scoped 回执（#923）
+
+Model Gateway 支持原始方法/相对路径/query、未知端到端头及原始 body；保留上游状态、错误、头和 SSE，不隐式重试或重定向。Host、认证及必要逐跳/framing 在内核边界处理。`x-deepsonar-request-id` 是被消费的精确控制字段；`GET /gateway/_settlement/:id` 是当前 Job/Attempt/token/workload 范围内、不可缓存的只读结算查询，不是上游路由或模型调用。返回 settled、not_started、policy_rejected、pending、unknown 或 not_found，不泄露其他 scope 的 ledger。预算准入可返回 `GATEWAY_OUTPUT_BUDGET_REQUIRED`，客户端须显式提供受预算约束的输出参数。原始请求流有界缓冲、HEAD/OPTIONS、编码及升级限制见[契约](../MODEL_GATEWAY_TRANSPARENCY.md)，实现见[Gateway](../../apps/scheduler/src/gateway.ts)。
+
+`GET /gateway/_allowance` 接受当前有效的 main 或 observational_memory token 与活动 Attempt，返回 `{ remaining_tokens: null | number, policy_required: boolean }`，禁止缓存。查询在 Job 锁内读取原预算，不预留、不增加模型请求计数；main 取 Job 总量或 OM main-workload 额度与修正链余额的交集，后台保持自身额度。pending/unknown 拒绝；返回提示后最终出站仍须锁内重验，不能扩大授权。主执行由沙箱请求生成适配器处理输出参数，OM 由受审 wrapper 处理；两者都不替代 Gateway 准入。
+
+配额/已回滚 DB admission 拒绝的 `not_started` 查询来自同 scope 的宿主 `events.control_receipt`（`operation=gateway_admission`、`authority=kernel`），不以错误正文授权降级；无持久回执则 unknown，同 UUID 不得重发。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)。
 #903 的当前 `execution_state` 与历史回执分离、恢复代际及 HTTP 分类见 [生命周期契约](../AGENT_REPAIR_LIFECYCLE.md)。
 
 Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_configuration_invalid`，`retryable=false`，RepairFeedback 为 `permanent_failure`；`expected` 保留受控 reason 与 `platform_administrator` owner，下一步要求平台修复后重新准入，不授予 Agent 扩额或自动重试权。仅映射已知配额异常；其他 DB、schema、resolver 错误不降级为确定无效果。

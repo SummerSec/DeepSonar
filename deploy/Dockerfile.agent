@@ -38,6 +38,8 @@ RUN set -eu; \
 
 COPY agent-harness/dsh-runtime/package.json /opt/deepsonar/dsh/package.json
 COPY agent-harness/dsh-runtime/package-lock.json /opt/deepsonar/dsh/package-lock.json
+COPY agent-harness/dsh-request-budget-install.mjs /opt/deepsonar/dsh-request-budget-install.mjs
+COPY packages/runtime-sandbox/src/dsh-request-budget.ts packages/runtime-sandbox/src/pi-main-request-budget.ts /opt/deepsonar/request-budget-source/
 
 RUN set -eu; \
   test "$(npm view @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} dist.integrity)" = "$CLAUDE_CODE_INTEGRITY"; \
@@ -46,6 +48,7 @@ RUN set -eu; \
   test "$(node -e 'const p=require("/opt/deepsonar/dsh/package-lock.json").packages["node_modules/@deepseek-ai/dsh"]; process.stdout.write(p?.integrity ?? "")')" = "$DSH_INTEGRITY"; \
   cd /opt/deepsonar/dsh; \
   npm ci --omit=dev --ignore-scripts --no-audit --no-fund; \
+  node /opt/deepsonar/dsh-request-budget-install.mjs /opt/deepsonar/dsh /opt/deepsonar/request-budget-source; \
   npm install -g --omit=dev --no-audit --no-fund \
     @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
     @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}; \

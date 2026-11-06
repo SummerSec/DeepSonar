@@ -85,7 +85,18 @@ test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes 
     assert.equal((await h.children(multi.hub)).length, 2, "a revised route releases new dependent work");
     assert.equal((await h.state(multi.canvas)).plan_execution.lifetime_rounds, 2);
 
-    const terminal = await h.fixture();
+    const [{ mintJobToken }, { encryptSecret }] = await Promise.all([
+      import("./gateway.js"), import("./credentials.js"),
+    ]);
+    const credential = randomUUID();
+    const encrypted = encryptSecret(`fixture-${randomUUID()}`);
+    await h.sql`INSERT INTO credentials(id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4,status)
+      VALUES(${credential},'terminal fixture','llm_provider','openai',${encrypted.ciphertext},
+        ${encrypted.nonce},${encrypted.auth_tag},'fixture','only','disabled')`;
+    const { freezeGatewayProviderBinding } = await import("./gateway-provider-binding.js");
+    const [boundCredential] = await h.sql`SELECT * FROM credentials WHERE id=${credential}`;
+    const terminal = await h.fixture(executionObjective(), { agent_cli: "claude-code", runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} }, credential_id: credential, credential_provider: "openai",
+      settings_config_json: {}, gateway_provider_binding: freezeGatewayProviderBinding(boundCredential as never) });
     await h.sql`UPDATE canvases SET target_json=target_json-'plan_objective' WHERE id=${terminal.canvas}`;
     const ordinaryDecision = await h.invoke(terminal.hub, "submit_hub_decision", { intents: [{
       role: "explore", from: [terminal.root], description: "Read the authorized scope through an ordinary Hub Intent",
@@ -96,14 +107,9 @@ test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes 
     await assertFrozenChild((await h.children(terminal.hub))[0]);
     const [ordinaryHub] = await h.sql`SELECT payload_json FROM jobs WHERE id=${terminal.hub}`;
     assert.equal(ordinaryHub.payload_json.plan_protocol, undefined, "ordinary Hub decisions cannot manufacture a new historical v1 audit");
-    const [{ mintJobToken }, { encryptSecret }] = await Promise.all([
-      import("./gateway.js"), import("./credentials.js"),
-    ]);
-    const credential = randomUUID();
-    const encrypted = encryptSecret(`fixture-${randomUUID()}`);
-    await h.sql`INSERT INTO credentials(id,name,kind,provider,ciphertext,nonce,auth_tag,fingerprint,last4)
-      VALUES(${credential},'terminal fixture','llm_provider','openai',${encrypted.ciphertext},
-        ${encrypted.nonce},${encrypted.auth_tag},'fixture','only')`;
+    // The model-token fixture must not become a selectable account for the
+    // preceding fake Plan child admission. Activate it only for token lifecycle checks.
+    await h.sql`UPDATE credentials SET status='active' WHERE id=${credential}`;
     const modelToken = await mintJobToken({ jobId: terminal.hub, projectId: terminal.project, credentialId: credential });
     await assert.rejects(h.sql.begin(async (tx) => {
       await h.core.finalizeJob(tx as unknown as typeof h.sql, terminal.hub, "succeeded", { summary: "Rolled back terminal proposal" });

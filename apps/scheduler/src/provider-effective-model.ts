@@ -153,13 +153,18 @@ export function resolveEffectiveModel(input: {
 
 /**
  * Runtime wire ID from a frozen snapshot.
- * Strips `cli-default:` so concurrency gates and Gateway outbound rewrite get a real model id.
+ * Strips `cli-default:` so concurrency gates and request generators get a real model id.
  */
 export function snapshotUpstreamModel(snapshot: { model?: unknown; upstream_model?: unknown }): string | null {
   const upstream = typeof snapshot.upstream_model === "string" ? snapshot.upstream_model.trim() : "";
   if (upstream) return bareUpstreamModelId(upstream);
   const requested = typeof snapshot.model === "string" ? snapshot.model.trim() : "";
   return requested || null;
+}
+
+/** #923: resolve Claude aliases before request generation, never inside the proxy. */
+export function frozenClaudeLaunchModel(snapshot: { model?: unknown; upstream_model?: unknown }): string | undefined {
+  return snapshotUpstreamModel(snapshot) ?? undefined;
 }
 
 export class ModelCatalogMismatchError extends Error {
