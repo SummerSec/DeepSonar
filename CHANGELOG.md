@@ -6,8 +6,6 @@
 
 - **修复链的执行生命周期（#903 / #930）**：新增 append-only 修复代际、后续 Attempt 的 fencing、累计预算校验，并把恢复准入与请求策略持久化在 resume / rerun-current / 批量恢复的事务中应用（部分失败回滚）；正常创建、恢复、Hub Intent 与 PlanTask 子 Job 共用同一运行快照冻结，Pi OM 分配校验与管理员可见的配置失败显式报出。历史回执不改写，pending / unknown 效果仍保守准入。本条为 #903 的执行生命周期闭环，恢复链其余范围按技术评论继续跟踪，不据此关单。
 
-- **未发布的 0.6.14 内容随本版交付**。v0.6.14 的 tag 保留，但其 Release 运行 `42037159429` 未产出冻结载荷（原因见 0.6.14 区段），因此 #910 / #912 的 Hub Plan 范围修正与 #916 的 Reverse 原生 CI 磁盘准备随本版一起交付。
-
 - **Pi 完成修正链的派发落地（#913 / #919）**：会话已有被接纳的终态后，Gateway 对再次请求返回的 `COMPLETION_ALREADY_ACCEPTED` 拒绝不再被当作运行器失败抛出，Hub 派发提案按既有派生语义收口。没有已接纳终态的会话、宿主语义校验失败与普通运行器错误仍 fail closed；完成门、attempt fencing 与历史回执不变。
 
 - **项目默认账号的显式选择与修复导航（#914 / #929）**：引用失效或存在多个匹配账号时，用户可从 Job 错误导航进入项目设置显式选择、更换或清除默认账号，默认变化同笔清除旧 `default_model_ref` / `fallback_model_refs`；保存显示服务器实际结果，加载成功前禁止保存，失败保留草稿。只有 `SNAPSHOT_STALE` 加结构化 `repair.code` 才指向账号修复，普通快照漂移、权限、租约与预算错误不冒充；无自动重跑，不改冻结快照。
@@ -21,6 +19,10 @@
 - **任务删除/归档的提交边界（#904、#917 评审）**：知识工作、版本、提案、分配、评估、回执与设备租约历史都进入保留判定；仅清理任务的知识使用记录，不删除不可变治理证据或设备租约审计。删除和归档遵守 claim advisory → Canvas → Job → Attempt 锁序，事务内取消不调用 provision abort/provider cancel，真实提交后才执行资源清理。取消后注入 SQL 失败的 PostgreSQL 回归验证 Job/Attempt 恢复且 provider 未被中断；独立 session 回归验证归档先等待 Canvas，而非先占 Job。
 - **单条效果结清如实报告剩余量（#899、#908、#917、#926）**：活动 Attempt 的效果仍交内核结算；结清一条历史效果但仍有残留时返回成功并单独报告 `backlog_clear=false` 与真实全局计数，重复、未命中与 active 目标返回失败，查询失败不再报告残留为零。单条人工审计、不重放与 replay policy 边界保持原样。
 
+- **准入拒绝的持久 no-effect 回执有了真实桥接回归（#923 / #936）**：Gateway 对请求数额度耗尽、workload token cap 耗尽与准入事务有界重试耗尽都会按同 Job/Attempt/token/workload/请求 UUID 写持久回执，wrapper 只在读到该回执时把已知额度耗尽降级为可见诊断；新增回归覆盖首次与重新实例化后的 wrapper 经真实桥接读到回执，以及没有回执时保持 hard unknown 的反例。
+- **生成前预算适配的边界被固定（#923 / #935）**：Claude 的上限只在平台拥有的生成边界（启动与每次 `--resume`）用同一次有界额度查询重算，存活进程内不逐请求改写已形成 body；DSH 在锁定 SDK 的生成前入口把超预算调用夹到余额、预算内调用按引用透传。
+- **Reverse 原生验收不再被 egress sidecar 冷拉取打断（#923 / #937）**：验收用例在创建 sandbox 前从 `deploy/opensandbox/config.toml` 取出按 digest 钉死的 sidecar 镜像并有界重试预拉，取不到时给出明确的运行时不可用错误，而不是 sandbox 层的无信息 500。
+
 ### 变更
 
 - **Model Gateway 透明传输（#923 / #928）**：获准请求只替换认证与服务器绑定目标，方法、原始 path/query、端到端业务头与 body 字节不再经业务白名单、JSON 重序列化或模型参数改写；上游状态码、响应头与 SSE 按原始字节返回，不隐式重试、不跟随跳转、不自动解压。Job token 不转给上游；入站与最终出站 target（含一次百分号解码）以及 body/header/trailer 都做精确凭据检查；同层 Provider 配置中同名大小写冲突、重复认证、原值 CR/LF 与非法 framing 明确拒绝；合法重复端到端业务头保留，逐跳头在连接边界消费。新 Job 快照记录 `gateway_provider_binding`，route/header/model 配置变化返回 `GATEWAY_PROVIDER_BINDING_CHANGED`，不把旧租户头发给新目标。请求预算在生成前应用（Claude / Pi / DSH 各自的锁定入口），不靠代理改写已形成的请求。边界与未完项见 [透明传输专题](docs/MODEL_GATEWAY_TRANSPARENCY.md) 与 [ADR 0017](docs/architecture/adr/0017-transparent-gateway-settlement.md)。
@@ -33,7 +35,7 @@
 
 ## [0.6.14] - 2026-11-05
 
-> **该 tag 保留，未产出正式发布**：`v0.6.14` 的 [Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 在 `reverse-image-builds (arm64)` 的 REA Job 验收中失败：`timeout` 是该验收用例的预期模式，而创建 sandbox 时 Egress sidecar 启动失败（`Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)`），该用例实际得到 `failed`；验收记录只有一次 Attempt，`sandbox_id` 为空、`retry_scheduled` 为空、`redispatch_calls=0`。这只证明创建阶段 sidecar 启动失败，不证明重试耗尽或真实运行超时，更深层基础设施原因尚未由该证据确定。`prepare-release` 起的后续阶段全部跳过，没有冻结载荷、签名或 GitHub Release。按发布守则保留该 tag 与已推送镜像，不移动、不覆盖；本版内容随 `0.6.15` 一起交付，成功升级基线仍是 `v0.6.13`。
+> **v0.6.14 已正式发布（2026-11-06）**：首次 [Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 在 `reverse-image-builds (arm64)` 的 REA Job 验收中失败——`timeout` 是该用例的预期模式，而创建 sandbox 时 Egress sidecar 启动失败（`Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)`），实测得到 `failed`；验收记录只有一次 Attempt、`sandbox_id` 为空、`retry_scheduled` 为空、`redispatch_calls=0`。该失败只证明创建阶段的 sidecar 启动失败，不证明重试耗尽或运行超时。随后按发布守则复用同一次运行的冻结载荷完成正式发布，`v0.6.14` 现有一个 GitHub Release（5 个附件），tag 未移动、镜像未覆盖。该版本的内容（#910 / #912、#916）随 `v0.6.14` 交付，不重复计入 `0.6.15`。
 
 ### 修复
 
