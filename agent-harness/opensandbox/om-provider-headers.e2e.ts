@@ -333,8 +333,15 @@ try {
     settlement_status: row.settlement_status, input_tokens: row.input_tokens, output_tokens: row.output_tokens, total_tokens: row.total_tokens }));
 } catch (error) {
   report.status = "failed";
-  report.error = error instanceof Error ? { name: error.name, message: error.message.replace(/http:\/\/[^\s]+/gu, "[loopback]")
-    .replaceAll(OM_HEADERS_SECRET, "[synthetic-key]").replace(/Bearer\s+[^\s"']+/giu, "Bearer [redacted]") } : { name: "HarnessError" };
+  report.error = { name: "HarnessError", code: "OM_HARNESS_FAILED" };
+  try {
+    diagnostics ??= await createOmFailureDiagnostics(root);
+    const allowedNames = new Set(["Error", "AssertionError", "TypeError", "RangeError", "SyntaxError", "AbortError", "TimeoutError"]);
+    report.error = { name: error instanceof Error && allowedNames.has(error.name) ? error.name : "HarnessError",
+      code: "OM_HARNESS_FAILED", summary: diagnostics.summarize(error) };
+  } catch {
+    report.error = { name: "HarnessError", code: "OM_HARNESS_FAILED", diagnostic_code: "OM_ERROR_SUMMARY_FAILED" };
+  }
   console.error(JSON.stringify({ status: report.status, stage: report.stage, error: report.error }));
   process.exitCode = 1;
 } finally {
