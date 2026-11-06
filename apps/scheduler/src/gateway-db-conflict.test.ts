@@ -14,7 +14,7 @@ process.env.DEEPSONAR_MASTER_KEY = randomBytes(32).toString("hex");
 // This transactional SQL double faults at commit, after the quota/effect writes,
 // so a retry must discard both before attempting admission again.
 type Row = Record<string, unknown>;
-type Store = { usedRequests: number; usedTokens: number; effects: Row[]; ledger: Row[]; receipts: Row[] };
+type Store = { usedRequests: number; usedTokens: number; effects: Row[]; ledger: Row[]; receipts: Row[]; receiptsWriteFailure?: boolean };
 const emptyStore = (): Store => ({ usedRequests: 0, usedTokens: 0, effects: [], ledger: [], receipts: [] });
 let store = emptyStore();
 let workload: GatewayWorkload = "main";
@@ -55,6 +55,7 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
       if (query.startsWith("SELECT COALESCE(MAX(job_seq)")) return [{ next: state.receipts.length + 1 }];
       if (query.startsWith("INSERT INTO event_dedup")) return [];
       if (query.startsWith("INSERT INTO events(")) {
+        if (state.receiptsWriteFailure) throw new Error("offline receipt write failure");
         state.receipts.push({ event_id: values[1], payload_json: values[4] }); return [];
       }
       if (query.startsWith("INSERT INTO job_event_rate_limits") || query.startsWith("UPDATE job_event_rate_limits")) return [];
@@ -72,8 +73,12 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
         onAdmission();
         return [{ status: "running", project_id: projectId, agent_snapshot_json: snapshot }];
       }
+      if (query.startsWith("SELECT status, agent_snapshot_json FROM jobs")) {
+        return [{ status: "running", agent_snapshot_json: snapshot }];
+      }
       if (query.startsWith("SELECT id, workload, used_requests")) return [tokenRow(state)];
       if (query.startsWith("SELECT workload,max_requests,request_total_limit FROM job_tokens")) return [tokenRow(state)];
+      if (query.startsWith("SELECT workload, used_requests, max_requests, request_total_limit FROM job_tokens")) return [tokenRow(state)];
       if (query.startsWith("SELECT count(*)::int AS count FROM job_attempts")) return [{ count: 1 }];
       if (query.startsWith("SELECT status,lease_expires_at")) return [{ status: "running", leased: true, within_time: true }];
       if (query.startsWith("SELECT event_id,payload_json FROM events")) return [];
@@ -183,7 +188,10 @@ function setup(t: TestContext, selected: GatewayWorkload, code: string, failures
   });
   upstreamImpl = upstream;
   const requestId = randomUUID();
-  return { errors, upstream, receipt: async () => (await app.inject({ method: "GET", url: `/gateway/_settlement/${requestId}`,
+  return { errors, upstream,
+    inject: (input: { method: "GET" | "POST"; url: string; headers?: Record<string, string>; payload?: unknown }) =>
+      app.inject(input as unknown as { method: "GET" | "POST"; url: string; headers?: Record<string, string>; payload?: object }),
+    receipt: async () => (await app.inject({ method: "GET", url: `/gateway/_settlement/${requestId}`,
     headers: { authorization: `Bearer ${token}` } })).json(),
     request: () => app.inject({ method: "POST", url: "/gateway/v1/chat/completions",
     headers: { authorization: `Bearer ${token}`, "x-deepsonar-request-id": requestId },
@@ -382,4 +390,113 @@ test("OM settlement conflict is not retried or relabeled not_started after upstr
   assert.equal(store.effects[0]?.status, "effect_pending");
   assert.equal(store.ledger.length, 0);
   await assertConsumer(response, false);
+});
+
+// Real Gateway↔wrapper bridge over the rolled-back admission: each fresh
+// wrapper instance must degrade only on the durable, scoped no-effect receipt
+// it reads back over the real settlement endpoint — never on the 503 prose.
+for (const stage of ["fresh", "reinstantiated"] as const) {
+  test(`OM rollback leaves a durable receipt the ${stage === "fresh" ? "first" : "re-instantiated"} wrapper reads over the real bridge`, async (t) => {
+    const fixture = setup(t, "observational_memory", "40P01", 3);
+    const posts: string[] = [];
+    const spawnBridge = async () => await createFailureBoundary("unused SDK fallback", undefined, {
+      token, api: "openai-completions",
+      controlRequest: async (input: { path: string; headers: Record<string, string> }) => {
+        assert.equal(input.headers.authorization, `Bearer ${token}`);
+        const path = input.path.replace(/^\/om(?=\/)/u, "/gateway");
+        const response = await fixture.inject({ method: "GET", url: path, headers: input.headers });
+        return { statusCode: response.statusCode, body: response.body };
+      },
+      modelRequest: async (input: { options: Record<string, unknown> }) => {
+        const headers = input.options.headers as Record<string, string>;
+        const requestId = headers["x-deepsonar-request-id"]!;
+        assert.match(requestId, /^[a-f0-9-]{36}$/u);
+        posts.push(requestId);
+        const response = await fixture.inject({ method: "POST", url: "/gateway/v1/chat/completions",
+          headers: { ...headers, authorization: `Bearer ${token}` },
+          payload: { model, messages: [{ role: "user", content: "offline" }] } });
+        assert.equal(response.statusCode, 503, response.body);
+        assert.deepEqual(JSON.parse(response.body), conflictFixture);
+        return { statusCode: response.statusCode, body: response.body };
+      },
+    });
+    const boundary = await spawnBridge();
+    try {
+      await boundary.event("agent_start");
+      await boundary.event("agent_before_settle");
+      assert.deepEqual(boundary.bridgeErrors, []);
+      assert.equal(boundary.messages[0]?.customType, "deepsonar.om.status");
+      assert.equal(boundary.messages[0]?.details.code, "PI_OM_WORKER_TRANSIENT");
+      assert.equal(boundary.messages[0]?.details.fallback, "native_compaction");
+      assert.equal(boundary.messages.length, 1, "the safe fallback must be reported exactly once");
+      assert.equal(boundary.entries.length, 0);
+      assert.deepEqual({ usedRequests: store.usedRequests, effects: store.effects.length,
+        ledger: store.ledger.length, receipts: store.receipts.length },
+        { usedRequests: 0, effects: 0, ledger: 0, receipts: posts.length },
+        "the rollback must leave no admission effect and exactly one durable receipt per wrapper request");
+      assert.equal(admissionAttempts, 3);
+      assert.equal(fixture.upstream.mock.callCount(), 0, "an admission that exhausts retries never reaches upstream");
+
+      if (stage === "reinstantiated") {
+        // A fully re-created wrapper (same token, fresh process state) must read
+        // its own freshly persisted proof the same way.
+        failuresRemaining = 3;
+        const wrapper = await spawnBridge();
+        try {
+          await wrapper.event("agent_start");
+          await wrapper.event("agent_before_settle");
+          assert.equal(wrapper.messages[0]?.details.code, "PI_OM_WORKER_TRANSIENT");
+          assert.equal(wrapper.entries.length, 0);
+        } finally { wrapper.close(); }
+      }
+
+      // Restart read-back over the real settlement endpoint: the persisted
+      // receipts stay recoverable for every scope they were written for.
+      const restarted = Fastify();
+      registerGateway(restarted);
+      try {
+        for (const requestId of posts) {
+          const reread = await restarted.inject({ method: "GET", url: `/gateway/_settlement/${requestId}`,
+            headers: { authorization: `Bearer ${token}` } });
+          assert.equal(reread.statusCode, 200, reread.body);
+          assert.deepEqual(reread.json(), { status: "not_started", reason: "gateway_transient" });
+        }
+      } finally { await restarted.close(); }
+    } finally { boundary.close(); }
+  });
+}
+
+test("OM rollback without a persisted no-effect receipt stays a hard unknown for the wrapper", async (t) => {
+  t.mock.method(console, "error", () => {});
+  const fixture = setup(t, "observational_memory", "40P01", 3);
+  store.receiptsWriteFailure = true;
+  let rejected = false;
+  const boundary = await createFailureBoundary("unused SDK fallback", undefined, {
+    token, api: "openai-completions",
+    controlRequest: async (input: { path: string; headers: Record<string, string> }) => {
+      const path = input.path.replace(/^\/om(?=\/)/u, "/gateway");
+      const response = await fixture.inject({ method: "GET", url: path, headers: input.headers });
+      return { statusCode: response.statusCode, body: response.body };
+    },
+    modelRequest: async (input: { options: Record<string, unknown> }) => {
+      const headers = input.options.headers as Record<string, string>;
+      assert.match(headers["x-deepsonar-request-id"]!, /^[a-f0-9-]{36}$/u);
+      const response = await fixture.inject({ method: "POST", url: "/gateway/v1/chat/completions",
+        headers: { ...headers, authorization: `Bearer ${token}` },
+        payload: { model, messages: [{ role: "user", content: "offline" }] } });
+      rejected = response.statusCode === 503;
+      return { statusCode: response.statusCode, body: response.body };
+    },
+  });
+  try {
+    await boundary.event("agent_start").catch(() => {});
+    await assert.rejects(boundary.event("agent_before_settle"), /PI_OM_UNKNOWN_EFFECT/u);
+    await assert.rejects(boundary.event("session_before_compact"), /PI_OM_UNKNOWN_EFFECT/u);
+    assert.ok(rejected, "the wrapper request was still rejected by the gateway");
+    assert.equal(boundary.messages.length, 0, "missing durable proof never announces a safe fallback");
+    assert.equal(boundary.entries.length, 0);
+    assert.equal(store.receipts.length, 0, "the failed receipt write must not leave a receipt behind");
+    assert.deepEqual({ usedRequests: store.usedRequests, effects: store.effects.length, ledger: store.ledger.length },
+      { usedRequests: 0, effects: 0, ledger: 0 });
+  } finally { boundary.close(); }
 });

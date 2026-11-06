@@ -416,6 +416,88 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       assert.equal(quotaBoundary.entries.length, 0);
     } finally { quotaBoundary.close(); }
 
+    // Real Gateway→wrapper trusted-admission rejection: the wrapper allowance
+    // passes (no request capital yet), a genuine Job request consumes the last
+    // background slot, and the wrapper's own POST is rejected with 429 before
+    // any effect row. The wrapper must degrade only on the durable no-effect
+    // receipt it reads back over the real settlement endpoint — never on the
+    // untrusted 429 body — and the proof must survive a gateway restart,
+    // remain scoped to the consuming token/workload, and leave usage untouched.
+    const wrapperBudget = await createJob("running", { backgroundRequests: 1, backgroundMaxTokens: 128 });
+    const wrapperMemory = await issue(wrapperBudget.jobId, "observational_memory");
+    const frozenOmWrapper = wrapperBudget.snapshot.pi_extensions[0]!.observational_memory;
+    let bridgeRequestId = "";
+    let allowanceCalls = 0;
+    const wrapperBoundary = await createFailureBoundary("unused SDK fallback", undefined, {
+      config: frozenOmWrapper, token: wrapperMemory.plaintext, api: "openai-responses",
+      controlRequest: async (input: { path: string; headers: Record<string, string> }) => {
+        assert.equal(input.headers.authorization, `Bearer ${wrapperMemory.plaintext}`);
+        const path = input.path.replace(/^\/om(?=\/)/u, "/gateway");
+        if (path === "/gateway/_allowance") allowanceCalls++;
+        else assert.match(path, /^\/gateway\/_settlement\/[a-f0-9-]{36}$/u);
+        const response = await app.inject({ method: "GET", url: path, headers: input.headers });
+        return { statusCode: response.statusCode, body: response.body };
+      },
+      modelRequest: async (input: { model: Record<string, unknown>; options: Record<string, unknown> }) => {
+        const headers = input.options.headers as Record<string, string>;
+        bridgeRequestId = headers["x-deepsonar-request-id"]!;
+        assert.match(bridgeRequestId, /^[a-f0-9-]{36}$/u);
+        // Same Job/token UUID header the gateway attributes the receipt with.
+        assert.equal((input.model.headers as Record<string, string>)["x-deepsonar-request-id"], bridgeRequestId);
+        // Run after the wrapper's own allowance (which saw a free background
+        // slot) and before the wrapper POST: this is the only deterministic
+        // sequence in which a trusted admission 429 can reach the wrapper.
+        const consume = await request(wrapperMemory.plaintext);
+        assert.equal(consume.statusCode, 200, consume.body);
+        const gated = await app.inject({ method: "POST", url: "/gateway/v1/responses",
+          headers: { ...headers, authorization: `Bearer ${wrapperMemory.plaintext}` },
+          payload: { model: frozenOmWrapper.source_model, max_output_tokens: input.options.maxTokens ?? 16, input: [] } });
+        assert.equal(gated.statusCode, 429, gated.body);
+        assert.equal(gated.json().error.type, "quota_exhausted");
+        return { statusCode: gated.statusCode, body: gated.body };
+      },
+    });
+    try {
+      await wrapperBoundary.event("agent_start");
+      await wrapperBoundary.event("agent_before_settle");
+      assert.equal(allowanceCalls, 1, "the wrapper degraded on a settlement receipt, not on a depleted allowance");
+      assert.equal(wrapperBoundary.messages[0]?.customType, "deepsonar.om.status");
+      assert.equal(wrapperBoundary.messages[0]?.details.code, "PI_OM_WORKER_QUOTA_EXHAUSTED");
+      assert.equal(wrapperBoundary.messages[0]?.details.fallback, "native_compaction");
+      assert.equal(wrapperBoundary.entries.length, 0);
+      assert.deepEqual(wrapperBoundary.bridgeErrors, []);
+      const wrapperReceipt = await app.inject({ method: "GET", url: `/gateway/_settlement/${bridgeRequestId}`,
+        headers: { authorization: `Bearer ${wrapperMemory.plaintext}` } });
+      assert.equal(wrapperReceipt.statusCode, 200, wrapperReceipt.body);
+      assert.deepEqual(wrapperReceipt.json(), { status: "not_started", reason: "quota_exhausted" });
+      const [wrapperEffect] = await sql`SELECT effect_id FROM job_attempt_effects
+        WHERE job_id=${wrapperBudget.jobId} AND intent_json->>'gateway_request_id'=${bridgeRequestId}`;
+      assert.equal(wrapperEffect, undefined, "a rejected admission must not invent an effect row");
+      const [receiptRow] = await sql`SELECT payload_json FROM events WHERE job_id=${wrapperBudget.jobId}
+        AND type='control_receipt' AND payload_json->>'operation'='gateway_admission'
+        AND payload_json->>'request_id'=${bridgeRequestId}`;
+      assert.ok(receiptRow, "the rejection kept a scoped durable admission receipt");
+      assert.equal((receiptRow as { payload_json?: Record<string, unknown> }).payload_json?.request_id, bridgeRequestId);
+      const wrapperLedger = await sql`SELECT workload, total_tokens, settlement_status FROM job_usage_ledger
+        WHERE job_id=${wrapperBudget.jobId} ORDER BY workload`;
+      assert.deepEqual(wrapperLedger.map((row) => [row.workload, row.settlement_status]),
+        [["observational_memory", "settled"]], "only the admitted background request entered the ledger");
+
+      // The same durable proof must be readable by a fresh Gateway process and
+      // must stay scoped to the consuming token/workload.
+      const restarted = Fastify();
+      gateway.registerGateway(restarted);
+      try {
+        const reread = await restarted.inject({ method: "GET", url: `/gateway/_settlement/${bridgeRequestId}`,
+          headers: { authorization: `Bearer ${wrapperMemory.plaintext}` } });
+        assert.equal(reread.statusCode, 200, reread.body);
+        assert.deepEqual(reread.json(), { status: "not_started", reason: "quota_exhausted" });
+        const wrongWorkload = await issue(wrapperBudget.jobId, "main");
+        assert.equal((await restarted.inject({ method: "GET", url: `/gateway/_settlement/${bridgeRequestId}`,
+          headers: { authorization: `Bearer ${wrongWorkload.plaintext}` } })).statusCode, 404);
+      } finally { await restarted.close(); }
+    } finally { wrapperBoundary.close(); }
+
     const mainAfterBackground = await request(mainToken.plaintext, { workload: "main", claimedWorkload: "observational_memory" });
     assert.equal(mainAfterBackground.statusCode, 200, "background 429 does not consume or fail main reserve");
 
