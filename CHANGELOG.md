@@ -23,6 +23,8 @@
 
 ### 变更
 
+- **Model Gateway 透明传输（#923 / #928）**：获准请求只替换认证与服务器绑定目标，方法、原始 path/query、端到端业务头与 body 字节不再经业务白名单、JSON 重序列化或模型参数改写；上游状态码、响应头与 SSE 按原始字节返回，不隐式重试、不跟随跳转、不自动解压。Job token 不转给上游；入站与最终出站 target（含一次百分号解码）以及 body/header/trailer 都做精确凭据检查；同名大小写重复、原值 CR/LF、逐跳与 framing 非法一律明确拒绝。新 Job 快照记录 `gateway_provider_binding`，route/header/model 配置变化返回 `GATEWAY_PROVIDER_BINDING_CHANGED`，不把旧租户头发给新目标。请求预算在生成前应用（Claude / Pi / DSH 各自的锁定入口），不靠代理改写已形成的请求。边界与未完项见 [透明传输专题](docs/MODEL_GATEWAY_TRANSPARENCY.md) 与 [ADR 0017](docs/architecture/adr/0017-transparent-gateway-settlement.md)。
+
 - **开发分支按用途命名（#931 / #933）**：禁止以 AI / Agent 工具名开头（`agent`、`codex`、`cursor`、`claude`、`copilot`、`chatgpt`、`gemini`、`openai`，含 `/`、`-`、`_` 与嵌套路径、不区分大小写），推荐 `feat/`、`fix/`、`docs/`、`refactor/`、`test/`、`chore/` 前缀。规则唯一实现在 `agent-harness/branch-name-policy.mjs` 并由 `ci:unit:ci-routing` 回归；GitHub ruleset 20986002 同步到 32 条模式后，`agent/`、`Agent/`、`agent-`、`agent_`、`codex-` 经 refs API 实测被拒，`feat/` 正常创建。既有分支、历史引用与 tag 不变。
 
 ## [0.6.14] - 2026-11-05
