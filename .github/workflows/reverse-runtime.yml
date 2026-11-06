@@ -9,6 +9,8 @@ on:
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
+      - "agent-harness/claude-request-budget-cli.test.ts"
+      - "agent-harness/tsconfig.claude-budget.json"
       - "agent-harness/rea-runtime/**"
       - "agent-harness/opensandbox/*rea*"
       - "agent-harness/opensandbox/*om-provider-headers*"
@@ -51,6 +53,8 @@ on:
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
+      - "agent-harness/claude-request-budget-cli.test.ts"
+      - "agent-harness/tsconfig.claude-budget.json"
       - "agent-harness/rea-runtime/**"
       - "agent-harness/opensandbox/*rea*"
       - "agent-harness/opensandbox/*om-provider-headers*"
@@ -181,6 +185,10 @@ jobs:
           set -euo pipefail
           docker buildx build --builder default --load --platform "${{ matrix.platform }}" \
             --build-arg TOOLSET=base --tag deepsonar-base:reverse-ci --file deploy/Dockerfile.agent .
+      - name: Locked Claude CLI static budget acceptance (synthetic upstream only)
+        env:
+          CLAUDE_BUDGET_IMAGE: deepsonar-base:reverse-ci
+        run: pnpm ci:integration:claude-request-budget
       - name: Build native Reverse runtime
         run: |
           set -euo pipefail
