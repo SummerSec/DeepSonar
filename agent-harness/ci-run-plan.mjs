@@ -139,6 +139,56 @@ export function fastSuitesFor(paths) {
     .map((route) => route.script);
 }
 
+/**
+ * #961: inputs that invalidate the Chrome Fuzz V8 ARM gate even when no file
+ * under the chrome specialist filter changed. The ARM gate derives from
+ * `deepsonar-base` and shares the fingerprint/cache mechanism with the other
+ * image jobs, so a base, fingerprint or routing change must keep it required.
+ * Routing changes themselves are included on purpose: the plan model may not
+ * grant itself a cheaper path.
+ */
+export const CHROME_FUZZ_ARM_PINNED_INPUTS = Object.freeze([
+  "deploy/Dockerfile.agent",
+  "agent-harness/runtime-images.json",
+  "agent-harness/image-build-fingerprint.mjs",
+  "agent-harness/resolve-image-src-cache.sh",
+  "agent-harness/runtime-manuals/**",
+  "agent-harness/materialize-runtime-manuals.mjs",
+  ".dockerignore",
+  ".github/workflows/ci.yml",
+  "agent-harness/ci-run-plan.mjs",
+  "agent-harness/classify-ci-changes.mjs",
+]);
+
+/**
+ * Decide whether this run must execute the Chrome Fuzz ARM build + native smoke.
+ *
+ * Fail closed: a failed plan or an unreadable diff keeps the gate required.
+ * Every "not required" answer carries a reason so `ci-summary` can explain the
+ * skip instead of silently accepting it (#961 acceptance).
+ */
+export function chromeFuzzArmRequirement({
+  status,
+  mode,
+  paths = [],
+  suitePaths = {},
+} = {}) {
+  if (status !== PLAN_STATUSES.OK) {
+    return { required: true, reason: "chrome_fuzz_plan_failed_fail_closed" };
+  }
+  if (mode === RUN_MODES.DOCS) {
+    return { required: false, reason: "chrome_fuzz_docs_only" };
+  }
+  if (mode === RUN_MODES.DRAFT_FAST) {
+    return { required: false, reason: "chrome_fuzz_draft_fast_path" };
+  }
+  const chromeInputs = [...(suitePaths.chrome ?? []), ...CHROME_FUZZ_ARM_PINNED_INPUTS];
+  if (paths.some((path) => matchesAnyPath(chromeInputs, path))) {
+    return { required: true, reason: "chrome_fuzz_inputs_changed" };
+  }
+  return { required: false, reason: "chrome_fuzz_inputs_unchanged" };
+}
+
 /** Only `tiered` enables the Draft split; unset, invalid or `full` restore full PR runs. */
 export const isTiered = (ciPrMode) => String(ciPrMode ?? "").trim() === TIERED_MODE;
 
@@ -173,11 +223,13 @@ export function buildRunPlan({
 
   if (eventName !== "pull_request") {
     plan.reasons.push("non_pull_request_event");
+    plan.reasons.push("chrome_fuzz_required_non_pull_request");
     return plan;
   }
   if (!base || !head) {
     plan.status = PLAN_STATUSES.FAILED;
     plan.reasons.push("missing_pull_request_revision");
+    plan.reasons.push("chrome_fuzz_plan_failed_fail_closed");
     plan.requiredSuites = suites;
     plan.fastSuites = [...new Set(FAST_SUITE_ROUTES.map((route) => route.script))];
     return plan;
@@ -191,6 +243,7 @@ export function buildRunPlan({
   } catch {
     plan.status = PLAN_STATUSES.FAILED;
     plan.reasons.push("diff_read_failed");
+    plan.reasons.push("chrome_fuzz_plan_failed_fail_closed");
     plan.requiredSuites = suites;
     plan.fastSuites = [...new Set(FAST_SUITE_ROUTES.map((route) => route.script))];
     return plan;
@@ -200,6 +253,7 @@ export function buildRunPlan({
   if (classification.status === CLASSIFIER_STATUSES.FAILED) {
     plan.status = PLAN_STATUSES.FAILED;
     plan.reasons.push(`classifier_failed:${classification.reason}`);
+    plan.reasons.push("chrome_fuzz_plan_failed_fail_closed");
     plan.requiredSuites = suites;
     plan.fastSuites = [...new Set(FAST_SUITE_ROUTES.map((route) => route.script))];
     return plan;
@@ -210,6 +264,8 @@ export function buildRunPlan({
     plan.mode = RUN_MODES.DOCS;
     plan.docsOnly = true;
     plan.reasons.push("docs_only");
+    plan.chromeFuzzArm = false;
+    plan.reasons.push("chrome_fuzz_docs_only");
     return plan;
   }
 
@@ -222,15 +278,27 @@ export function buildRunPlan({
     // Rollback path: keep the pre-#836 full PR acceptance for code changes and
     // let every specialist run from its own pull_request trigger.
     plan.reasons.push("ci_pr_mode_full");
+    plan.chromeFuzzArm = true;
+    plan.reasons.push("chrome_fuzz_required_full_mode");
     return plan;
   }
   if (draft) {
     plan.mode = RUN_MODES.DRAFT_FAST;
     plan.reasons.push("draft_fast_path");
+    plan.chromeFuzzArm = false;
+    plan.reasons.push("chrome_fuzz_draft_fast_path");
     return plan;
   }
   plan.reasons.push("ready_for_review_full_path");
   plan.requiredSuites = matched;
+  const arm = chromeFuzzArmRequirement({
+    status: plan.status,
+    mode: plan.mode,
+    paths,
+    suitePaths,
+  });
+  plan.chromeFuzzArm = arm.required;
+  plan.reasons.push(arm.reason);
   return plan;
 }
 
@@ -282,6 +350,7 @@ function writeGitHubOutput(plan) {
     `tiered=${plan.tiered}`,
     `required_suites=${plan.requiredSuites.join(",")}`,
     `fast_suites=${plan.fastSuites.join(",")}`,
+    `chrome_fuzz_arm=${plan.chromeFuzzArm ? "required" : "skipped"}`,
     `reasons=${plan.reasons.join(",")}`,
     `base=${plan.base}`,
     `head=${plan.head}`,

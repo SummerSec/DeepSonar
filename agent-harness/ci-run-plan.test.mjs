@@ -11,6 +11,8 @@ import {
   RUN_MODES,
   SPECIALIST_WORKFLOWS,
   buildRunPlan,
+  CHROME_FUZZ_ARM_PINNED_INPUTS,
+  chromeFuzzArmRequirement,
   isTiered,
   loadSuitePaths,
   matchSuites,
@@ -225,4 +227,91 @@ test("every specialist workflow gates its heavy matrix on the same run plan", ()
     assert.ok(workflow.on.push, `${suite} must keep push@main`);
     assert.ok("workflow_dispatch" in workflow.on, `${suite} must keep a manual entry`);
   }
+});
+
+// #961: the Chrome Fuzz V8 ARM build+smoke gate is expensive, so unrelated Ready
+// PRs must not start it — but every "skip" answer must be explainable, and any
+// input that can invalidate the build must keep it required.
+test("#961 Chrome Fuzz ARM gate is required by its own inputs", () => {
+  for (const path of [
+    "deploy/Dockerfile.agent-chrome-fuzz",
+    "deploy/chrome-fuzz-env.sh",
+    "agent-harness/chrome-fuzz-runtime.json",
+  ]) {
+    assert.equal(
+      chromeFuzzArmRequirement({ status: PLAN_STATUSES.OK, mode: RUN_MODES.READY_FULL, paths: [path], suitePaths: SUITE_PATHS }).required,
+      true,
+      `${path} must keep the ARM gate required`,
+    );
+  }
+});
+
+test("#961 base image, fingerprint and routing inputs keep the ARM gate required", () => {
+  for (const path of CHROME_FUZZ_ARM_PINNED_INPUTS) {
+    const probe = path.endsWith("/**") ? path.replace("**", "some.md") : path;
+    const verdict = chromeFuzzArmRequirement({
+      status: PLAN_STATUSES.OK, mode: RUN_MODES.READY_FULL, paths: [probe], suitePaths: SUITE_PATHS,
+    });
+    assert.equal(verdict.required, true, `${probe} must keep the ARM gate required`);
+    assert.ok(verdict.reason.length > 0);
+  }
+});
+
+test("#961 unrelated business changes skip the ARM gate with an explicit reason", () => {
+  const plan = buildRunPlan({
+    ...pr, draft: false, suitePaths: SUITE_PATHS,
+    diffBytes: diff(change("apps/scheduler/src/dispatcher.ts"), change("apps/web/src/App.tsx")),
+  });
+  assert.equal(plan.mode, RUN_MODES.READY_FULL);
+  assert.equal(plan.chromeFuzzArm, false);
+  assert.ok(plan.reasons.includes("chrome_fuzz_inputs_unchanged"));
+});
+
+test("#961 the ARM gate cannot be skipped by a failed or unreadable diff", () => {
+  const missingRevision = buildRunPlan({ eventName: "pull_request", base: "", head: "", suitePaths: SUITE_PATHS });
+  assert.equal(missingRevision.status, PLAN_STATUSES.FAILED);
+  assert.equal(missingRevision.chromeFuzzArm, true);
+  assert.ok(missingRevision.reasons.includes("chrome_fuzz_plan_failed_fail_closed"));
+
+  const failedClassifier = buildRunPlan({
+    ...pr, draft: false, suitePaths: SUITE_PATHS,
+    diffBytes: diff(change("apps/web/src/App.tsx")),
+    classifier: { status: "failed", reason: "synthetic" },
+  });
+  assert.equal(failedClassifier.status, PLAN_STATUSES.FAILED);
+  assert.equal(failedClassifier.chromeFuzzArm, true);
+});
+
+test("#961 docs-only, Draft and full-mode rollback each answer deterministically", () => {
+  const docs = buildRunPlan({ ...pr, draft: false, suitePaths: SUITE_PATHS, diffBytes: diff(change("docs/README.md")) });
+  assert.equal(docs.mode, RUN_MODES.DOCS);
+  assert.equal(docs.chromeFuzzArm, false);
+
+  const draft = buildRunPlan({ ...pr, draft: true, suitePaths: SUITE_PATHS, diffBytes: diff(change("apps/web/src/App.tsx")) });
+  assert.equal(draft.mode, RUN_MODES.DRAFT_FAST);
+  assert.equal(draft.chromeFuzzArm, false);
+
+  const full = buildRunPlan({
+    ...pr, ciPrMode: "full", draft: false, suitePaths: SUITE_PATHS,
+    diffBytes: diff(change("apps/web/src/App.tsx")),
+  });
+  assert.equal(full.chromeFuzzArm, true, "the pre-#836 rollback path never narrows the ARM gate");
+  assert.ok(full.reasons.includes("chrome_fuzz_required_full_mode"));
+
+  const nonPr = buildRunPlan({ eventName: "push", suitePaths: SUITE_PATHS });
+  assert.equal(nonPr.chromeFuzzArm, true);
+});
+
+test("#961 a deleted or renamed Chrome fuzz input still keeps the ARM gate required", () => {
+  const deleted = buildRunPlan({
+    ...pr, draft: false, suitePaths: SUITE_PATHS,
+    diffBytes: diff(["D", "deploy/Dockerfile.agent-chrome-fuzz"]),
+  });
+  assert.equal(deleted.chromeFuzzArm, true);
+
+  const renamed = buildRunPlan({
+    ...pr, draft: false, suitePaths: SUITE_PATHS,
+    diffBytes: diff(["R100", "deploy/chrome-fuzz-smoke.sh", "deploy/chrome-fuzz-smoke-v2.sh"]),
+  });
+  assert.equal(renamed.chromeFuzzArm, true);
 });
