@@ -3205,6 +3205,28 @@ jobs:
           docker pull --platform "${{ matrix.platform }}" "$image_ref"
           node agent-harness/test-runtime-manuals-runtime.mjs "$image_ref" --image-key deepsonar-reverse --platform "${{ matrix.platform }}"
           node agent-harness/reverse-native-smoke.mjs --image "$image_ref" --arch "${{ matrix.arch }}" --evidence-dir "reverse-evidence/${{ matrix.arch }}"
+      - name: Pre-pull the pinned sandbox egress sidecar
+        run: |
+          set -euo pipefail
+          # OpenSandbox pulls this image lazily while creating a sandbox; a slow
+          # or rate-limited pull then surfaces only as
+          # "Egress sidecar container failed to start (DOCKER::SANDBOX_START_FAILED)".
+          # Pull it here with bounded retries so the real acceptance run neither
+          # races a cold pull nor hides an unavailable image behind sandbox 500s.
+          if ! image="$(grep -oE 'docker\.io/opensandbox/egress@sha256:[0-9a-f]{64}' deploy/opensandbox/config.toml | head -1)" || [ -z "$image" ]; then
+            echo "pinned egress sidecar image not found in deploy/opensandbox/config.toml" >&2
+            exit 1
+          fi
+          echo "egress sidecar image: $image"
+          for attempt in 1 2 3 4; do
+            if docker pull "$image"; then exit 0; fi
+            if [ "$attempt" -lt 4 ]; then
+              echo "egress sidecar pull attempt $attempt failed; retrying" >&2
+              sleep $((attempt * 10))
+            fi
+          done
+          echo "pinned egress sidecar image could not be pulled: $image" >&2
+          exit 1
       - name: Start pinned OpenSandbox for real Job acceptance
         env:
           OPEN_SANDBOX_API_KEY: reverse-ci-ephemeral-fixture-key
