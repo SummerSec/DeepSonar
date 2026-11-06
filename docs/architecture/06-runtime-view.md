@@ -1,7 +1,7 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-05
+> 同步日期：2026-11-06
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -25,7 +25,7 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 项目 CLI/Provider 管理页独立加载账号列表，区分加载中、加载失败与成功空列表。只有成功读取当前项目可见账号后才判定默认账号和白名单引用失效；未加载成功时保存 CLI 不能清除默认账号或写入空凭据白名单。Pi 模型快照对账号目录中含 `/` 的完整模型 ID 保持一致，CLI 路由单独冻结，详见 [CLI 运行时契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-coding-agent-rpc140)。
 
-#914 的项目账号引用 DELETE/设置事务、scope 过滤及双向竞态回归见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)；运行期停用和既有失效引用仍按上述解析门 fail closed，不代表完整默认账号 UX 已交付。
+#914 的项目账号引用 DELETE/设置事务、scope 过滤及双向竞态回归见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)；运行期停用和既有失效引用仍按上述解析门 fail closed，#929 已另行交付默认账号选择与修复导航，不自动重跑或改写旧快照。
 
 实现入口：[凭据解析](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[快照组装](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[readiness](../../apps/scheduler/src/readiness.ts)。
 
@@ -109,7 +109,7 @@ Gateway 503 仅在内核明确证明请求尚未启动时可降级；`unknown` �
 
 完成被未知效果或未知修正用量阻断时，原负回执与宿主恢复事实同事务落库；原 key 重放保持原结果。Reaper 的既有 tick 按有界 keyset 扫描恢复根，冻结原 deadline 与有限 wake，不能自动执行对账。只有带 Scheduler 冻结引用的去重 Hub 可提出 `reconcile_effects` 或 `stop`，沿原 Control/语义事务重新校验权限、scope、快照和证据 CAS。对账只消费精确 effect 的持久用量证据；中断、缺少句柄或零 unknown 不证明资源停止。原会话仍活动时重新完成仍走全部既有门；显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](../AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录。pause、auto-stop、人工与 Verify 等待保持权威。见 [FR-CTRL-010](01-system-specification.md#fr-ctrl-010-完成未知效果的受治理恢复)、[ADR 0015](adr/0015-governed-completion-recovery.md)和[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。
 
-上述修复已接入现有 Actions 脚本；本分支最终 SHA 的 PostgreSQL、完整核心及镜像验收尚未执行通过，源码存在不作为运行证据。
+上述修复已接入现有 Actions 脚本；main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验，源码存在不作为运行证据。
 
 ## OpenSandbox upgrade and recovery boundary (IR-001/003)
 

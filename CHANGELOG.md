@@ -16,16 +16,20 @@
 
 - **发布回写 PR 的检查状态文案（#920 评审）**：创建 PR 时仅说明等待该 PR 的 `ci-summary` 与适用专项，不再在检查运行前宣称“已通过”。生成正文同时明确自动化身份；离线回归校验创建早于检查读取且正文没有提前通过声明。
 - **Provider 删除与项目引用的一致性（#914 服务端切片）**：仍被项目白名单/默认账号引用的凭据以稳定 `CREDENTIAL_PROJECT_REFERENCE` 拒绝删除；impact 的项目列表与计数遵守调用者可见范围，删除完整性另按全局引用核对。项目 settings PATCH 在事务中验证并锁住有效、active、可访问的凭据，即使省略模型字段也不能写入悬挂 UUID；不把显式空白名单改成未收紧。GET 和启动清理使用原值 CAS；Skill 标记与 convergence 快捷规则仅更新当前 JSONB 对应字段，导入合并在事务锁内回读，避免无关写入复活旧账号引用。配置项目锁采用 `FOR NO KEY UPDATE`，与凭据迁移的外键 `KEY SHARE` 兼容。真实 PostgreSQL 回归覆盖两项目隔离、双向删除/写入、GET/Skill 交错及 Credential 项目迁移。本条记录 #925 服务端切片；默认账号选择与修复导航由本版 #929 补齐，见前条。
-- **Provider 自定义请求头与所选上游一致（#918 / #921）**：Gateway、模型目录发现与推理探测共用服务端配置头解析。官方 Pi 顶层对象、config 对象及 config YAML 复用已有解析器；头只来自当前 endpoint 对应的 profile，空头集合不会借用其他 provider 的租户头，metadata 覆盖与 profile 不匹配时不混用。认证、逐跳/framing 处理与 Job 权限边界保持不变；完整业务透传另由 #923 跟踪，不冒充本片已实现。
+- **Provider 自定义请求头与所选上游一致（#918 / #921）**：Gateway、模型目录发现与推理探测共用服务端配置头解析。官方 Pi 顶层对象、config 对象及 config YAML 复用已有解析器；头只来自当前 endpoint 对应的 profile，空头集合不会借用其他 provider 的租户头，metadata 覆盖与 profile 不匹配时不混用。认证、逐跳/framing 处理与 Job 权限边界保持不变；本条仅记录配置头切片；本版 #923 / #928 的完整业务透传见下文。
 
 - **任务删除/归档的提交边界（#904、#917 评审）**：知识工作、版本、提案、分配、评估、回执与设备租约历史都进入保留判定；仅清理任务的知识使用记录，不删除不可变治理证据或设备租约审计。删除和归档遵守 claim advisory → Canvas → Job → Attempt 锁序，事务内取消不调用 provision abort/provider cancel，真实提交后才执行资源清理。取消后注入 SQL 失败的 PostgreSQL 回归验证 Job/Attempt 恢复且 provider 未被中断；独立 session 回归验证归档先等待 Canvas，而非先占 Job。
 - **单条效果结清如实报告剩余量（#899、#908、#917、#926）**：活动 Attempt 的效果仍交内核结算；结清一条历史效果但仍有残留时返回成功并单独报告 `backlog_clear=false` 与真实全局计数，重复、未命中与 active 目标返回失败，查询失败不再报告残留为零。单条人工审计、不重放与 replay policy 边界保持原样。
 
 ### 变更
 
-- **Model Gateway 透明传输（#923 / #928）**：获准请求只替换认证与服务器绑定目标，方法、原始 path/query、端到端业务头与 body 字节不再经业务白名单、JSON 重序列化或模型参数改写；上游状态码、响应头与 SSE 按原始字节返回，不隐式重试、不跟随跳转、不自动解压。Job token 不转给上游；入站与最终出站 target（含一次百分号解码）以及 body/header/trailer 都做精确凭据检查；同名大小写重复、原值 CR/LF、逐跳与 framing 非法一律明确拒绝。新 Job 快照记录 `gateway_provider_binding`，route/header/model 配置变化返回 `GATEWAY_PROVIDER_BINDING_CHANGED`，不把旧租户头发给新目标。请求预算在生成前应用（Claude / Pi / DSH 各自的锁定入口），不靠代理改写已形成的请求。边界与未完项见 [透明传输专题](docs/MODEL_GATEWAY_TRANSPARENCY.md) 与 [ADR 0017](docs/architecture/adr/0017-transparent-gateway-settlement.md)。
+- **Model Gateway 透明传输（#923 / #928）**：获准请求只替换认证与服务器绑定目标，方法、原始 path/query、端到端业务头与 body 字节不再经业务白名单、JSON 重序列化或模型参数改写；上游状态码、响应头与 SSE 按原始字节返回，不隐式重试、不跟随跳转、不自动解压。Job token 不转给上游；入站与最终出站 target（含一次百分号解码）以及 body/header/trailer 都做精确凭据检查；同层 Provider 配置中同名大小写冲突、重复认证、原值 CR/LF 与非法 framing 明确拒绝；合法重复端到端业务头保留，逐跳头在连接边界消费。新 Job 快照记录 `gateway_provider_binding`，route/header/model 配置变化返回 `GATEWAY_PROVIDER_BINDING_CHANGED`，不把旧租户头发给新目标。请求预算在生成前应用（Claude / Pi / DSH 各自的锁定入口），不靠代理改写已形成的请求。边界与未完项见 [透明传输专题](docs/MODEL_GATEWAY_TRANSPARENCY.md) 与 [ADR 0017](docs/architecture/adr/0017-transparent-gateway-settlement.md)。
 
-- **开发分支按用途命名（#931 / #933）**：禁止以 AI / Agent 工具名开头（`agent`、`codex`、`cursor`、`claude`、`copilot`、`chatgpt`、`gemini`、`openai`，含 `/`、`-`、`_` 与嵌套路径、不区分大小写），推荐 `feat/`、`fix/`、`docs/`、`refactor/`、`test/`、`chore/` 前缀。规则唯一实现在 `agent-harness/branch-name-policy.mjs` 并由 `ci:unit:ci-routing` 回归；GitHub ruleset 20986002 同步到 32 条模式后，`agent/`、`Agent/`、`agent-`、`agent_`、`codex-` 经 refs API 实测被拒，`feat/` 正常创建。既有分支、历史引用与 tag 不变。
+- **开发分支按用途命名（#931 / #933）**：禁止以 AI / Agent 工具名开头（`agent`、`codex`、`cursor`、`claude`、`copilot`、`chatgpt`、`gemini`、`openai`，含 `/`、`-`、`_` 与嵌套路径、不区分大小写），推荐 `feat/`、`fix/`、`docs/`、`refactor/`、`test/`、`chore/` 前缀。规则唯一实现在 `agent-harness/branch-name-policy.mjs` 并由 `ci:unit:ci-routing` 回归；GitHub ruleset 20986002 同步到 32 条模式后，原 PR 作者报告 refs API 探针对 `agent/`、`Agent/`、`agent-`、`agent_`、`codex-` 拒绝、对 `feat/` 允许；这不是本次独立复验，服务端大小写与嵌套匹配差异仍待评审收口，不声明所有组合与本地规则一致。既有分支、历史引用与 tag 不变。
+
+### 升级注意事项
+
+- schema 仍为 67（2026-11-06 源码核对），本版无新增 schema 迁移。历史请求策略缺失/非法或多 Attempt 缺少策略回执时拒绝恢复，不补造额度；pending/unknown 效果须先结算。Claude Code 运行中额度不足仍可显式拒绝，DSH 不承诺持久会话恢复。工程基线与正式发布证据的区别见[发布说明](docs/RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。
 
 ## [0.6.14] - 2026-11-05
 

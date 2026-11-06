@@ -107,7 +107,7 @@ JSON
 
 `scan` / `apply` 的 summary 是有限扫描、排除 active 的分类结果，不能当全局升级许可；`settle` 的全局计数也只是观察时点。升级控制器仍独立检查效果、Job、维护身份、暂停与审批，不得修改维护状态绕过门禁。active 拒绝与内核后续结算、双连接竞争、CLI 计数和 plan gate 回归接在 `pnpm ci:integration:platform-upgrade` 的隔离 PostgreSQL Actions 中；本地不执行。工程验收须以最终 SHA 的完整 Actions 成功为准；本变更没有执行 s66 人工结清或生产升级，也不证明现场已恢复。
 
-默认关闭的 `upgrade auto`、维护窗口、签名准入和禁用调度模板见 [自动升级说明](UPGRADE_AUTOMATION.md)。生产 Release keyless 签名权限及实际正向链路尚未启用或验收，不能据临时密钥测试宣称生产无人值守升级已可用。
+默认关闭的 `upgrade auto`、维护窗口、签名准入和禁用调度模板见 [自动升级说明](UPGRADE_AUTOMATION.md)。正式 tag 的 keyless 签名机制已接线，仅签名 job 获得 OIDC 权限；每版真实正向签名与验签仍以对应 Release 证据单独核验，不能据临时密钥测试宣称生产无人值守升级已可用。
 
 ```bash
 ./deploy/deploy.sh upgrade check --to vX.Y.Z

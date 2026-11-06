@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-05
+> 同步日期：2026-11-06
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -131,7 +131,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：每次成功领取（claim）必须建立 Scheduler 拥有的 Attempt；Attempt 携带快照身份、沙箱身份、取消标记和效果账本，不得把 prompt 或 Provider 原文写入 Attempt 账本。被忙 Canvas/Job 锁跳过的候选不得消耗本次领取槽位或阻止继续检查后续可运行候选。
 - **决策来源**：Attempt 是一次执行的审计边界，不能将模型原文混入生命周期账本。
-- **实现状态**：claim 与 Attempt 创建原子提交；#871 修复分支按有界 keyset 候选页分别开启事务，每页重新获取 claim advisory lock 并计算暂停/配额，按排序 Canvas → project → Job → Attempt 锁序核验 scope 与状态。仅成功领取计入槽位；忙锁跳过后可继续当前页，提交并释放本页锁后才读取下一页，不持 Job/Attempt 锁回头获取新 Canvas。最终 SHA Actions 尚待验收。
+- **实现状态**：claim 与 Attempt 创建原子提交；#871 修复分支按有界 keyset 候选页分别开启事务，每页重新获取 claim advisory lock 并计算暂停/配额，按排序 Canvas → project → Job → Attempt 锁序核验 scope 与状态。仅成功领取计入槽位；忙锁跳过后可继续当前页，提交并释放本页锁后才读取下一页，不持 Job/Attempt 锁回头获取新 Canvas。main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
 - **代码入口**：[Attempt 应用](../../apps/scheduler/src/domains/job-attempt/)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[Attempt model](../../apps/scheduler/src/domains/job-attempt/model.ts)。
 - **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:integration:dispatch-limits`；真实 PG 的 busy Canvas 不占其 Job、独立 Canvas 仍可领取，Attempt 字段仍受原白名单约束。
 
@@ -187,7 +187,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：provision 只有在明确宿主证据证明外部创建未开始时，才可显式记为 `settled` 且 outcome 为 `never_started`。`sandbox_id` 缺失/存在、没有日志或未看到迟到句柄均不能单独证明未开始/已停止；无法证明的 pending provision 在终态收口后仍为 unknown，已显式结算的真实 never_started 不改写。
 - **决策来源**：只有明确证明没有外部后果才能安全结束；#874 按 [ADR-0015](adr/0015-governed-completion-recovery.md)收窄历史的无 sandbox 推断，保留迟到 handle、timeout/cancel/orphan 的未知语义。
-- **实现状态**：当前修复分支去除终态 helper 的无 sandbox 自动结算；最终 SHA 的 Actions 尚待验收。
+- **实现状态**：已合入主线去除终态 helper 的无 sandbox 自动结算；main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
 - **代码入口**：[Attempt model](../../apps/scheduler/src/domains/job-attempt/model.ts)、[Attempt 应用](../../apps/scheduler/src/domains/job-attempt/application.ts)、[Attempt PostgreSQL 回归](../../apps/scheduler/src/domains/job-attempt/application.integration.test.ts)。
 - **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`；分别覆盖有/无 sandbox 仍 pending 的 provision、显式 prior never_started、迟到 handle 与运行中断。
 
@@ -299,7 +299,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：`COMPLETION_EFFECT_UNKNOWN` / `REPAIR_USAGE_UNKNOWN` 必须保留原负回执，并在同一 Job 事务持久化宿主恢复事实；恢复 Hub 只能处理 Scheduler 明确授予的 project/Canvas/Job/Attempt/快照引用，以 revision 与证据摘要 CAS 提交 `reconcile_effects` 或 `stop`；已启动 stale Hub 可用原 grant 提交无目标效果的 `release_stale` 并正常退出。恢复不得与 complete、intents、payload_file 或 plan_basis 混合。只能用精确 effect 的既有宿主证据纯数据库对账，禁止重放未知外部动作、复活终态或自动 succeeded；原活动 Attempt 修正后仍须通过原 Completion/Verify/Plan 门。
 - **决策来源**：#874 将“终态不能提交”收敛为持久可观察、去重且有界的恢复过程，而不扩大模型的权限与副作用边界；见 [ADR-0015](adr/0015-governed-completion-recovery.md)。
-- **实现状态**：当前修复分支实现 v1，最终 SHA 的 Actions 尚待验收。独立复核发现已排队但从未启动的恢复 Hub 可因迟到证据失效而阻塞后续恢复，已补严格持久绑定、无任何 Attempt/effect 的失效 Hub 收口源码，覆盖证据变化、原 deadline 与原执行关闭，仍待实际 PG 验收；不会放宽旧 grant、重置原期限或额度。v1 不提供新执行；#903 通过 [ADR 0016](adr/0016-repair-execution-generations.md)增加显式准入的新执行代际，Gateway/完成门共享归属并保留原期限/累计预算。历史回执不授权恢复。
+- **实现状态**：已合入主线实现 v1，main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。独立复核发现已排队但从未启动的恢复 Hub 可因迟到证据失效而阻塞后续恢复，已补严格持久绑定、无任何 Attempt/effect 的失效 Hub 收口源码，覆盖证据变化、原 deadline 与原执行关闭，PG 工程证据归属上述 main 验收基线；不会放宽旧 grant、重置原期限或额度。v1 不提供新执行；#903 通过 [ADR 0016](adr/0016-repair-execution-generations.md)增加显式准入的新执行代际，Gateway/完成门共享归属并保留原期限/累计预算。历史回执不授权恢复。
 - **代码入口**：[恢复 schema](../../packages/shared-types/src/completion-recovery.ts)、[恢复事实与泵](../../apps/scheduler/src/domains/job-attempt/recovery.ts)、[回执事务](../../apps/scheduler/src/domains/event-ingestion/completion-receipt.ts)、[Hub application](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Reaper](../../apps/scheduler/src/reaper.ts)。
 - **验证证据**：`pnpm ci:unit:completion-recovery`、`pnpm ci:integration:completion-recovery`、`pnpm ci:integration:platform-api`；核对原 key/revision 重放、跨项目/Attempt/快照拒绝、无权恢复引用、并发 CAS、重启去重、未知/缺失 usage、pause/human 门及 deadline/额度停止。入口并非已执行结果，详细范围见[完成回执专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。
 
@@ -672,17 +672,17 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：Hub 选择 Provider/model 必须来自当前 Job 可见、active 且 CLI 兼容的 catalog；Provider 健康、模型目录和 alias policy 必须在快照解析时校验，不兼容或未知值必须 fail closed。
 - **决策来源**：凭据、模型、CLI 和镜像是组合约束，不能由 prompt 绕过目录。
-- **实现状态**：as-built；model catalog 默认不允许未知 alias passthrough。#757 的 readiness 与 Job 共用凭据先行解析：Provider/model/项目授权先筛候选，唯一账号决定 CLI，Hub 显式 CLI 保持硬约束；跨 CLI 多候选以项目/全局显式偏好消歧，种子 NULL 不构成偏好。白名单读取不自动种 ID，显式不可用引用要求管理员修复，不扩大授权。#914 的引用保护切片在设置事务内重验所有保留/新增凭据，并与 DELETE 共用凭据行锁；项目 impact 按 actor scope 过滤，删除独立检查全局引用，拒绝时不自动修复白名单。完整默认账号 UX 未由此交付，详见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)。
+- **实现状态**：as-built；model catalog 默认不允许未知 alias passthrough。#757 的 readiness 与 Job 共用凭据先行解析：Provider/model/项目授权先筛候选，唯一账号决定 CLI，Hub 显式 CLI 保持硬约束；跨 CLI 多候选以项目/全局显式偏好消歧，种子 NULL 不构成偏好。白名单读取不自动种 ID，显式不可用引用要求管理员修复，不扩大授权。#914 的引用保护切片在设置事务内重验所有保留/新增凭据，并与 DELETE 共用凭据行锁；项目 impact 按 actor scope 过滤，删除独立检查全局引用，拒绝时不自动修复白名单。此处为 #925 服务端切片；#929 已交付默认账号显式选择与修复导航，详见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)。
 - **代码入口**：[Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts)、[model admission](../../apps/scheduler/src/domains/provider-adapter/model-catalog-admit.ts)、[resolve credential](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)。
 - **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（#757 假凭据与隔离数据库，含 readiness/快照一致性和历史快照不变）；`pnpm ci:integration:credential-delete`（#914 scoped HTTP 与 PostgreSQL 双向竞态）。
 
-Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；仅列出 active、项目可见且在启用范围内的候选。默认变化同步清除旧模型引用，加载失败不清配置；保存采用服务端结果。单 Job 重跑错误只按结构化原因导向配置入口，不自动执行。代码见[面板](../../apps/web/src/components/ProjectCliProviderAllowlistPanel.tsx)与[错误导航](../../apps/web/src/useJobRerun.tsx)。Web 回归随 `pnpm ci:unit:credential-compatibility`，resolver/rerun 回归随 `pnpm ci:unit:capability-pack` / `pnpm ci:integration:recovery`；最终 SHA Actions 待验收。
+Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；仅列出 active、项目可见且在启用范围内的候选。默认变化同步清除旧模型引用，加载失败不清配置；保存采用服务端结果。单 Job 重跑错误只按结构化原因导向配置入口，不自动执行。代码见[面板](../../apps/web/src/components/ProjectCliProviderAllowlistPanel.tsx)与[错误导航](../../apps/web/src/useJobRerun.tsx)。Web 回归随 `pnpm ci:unit:credential-compatibility`，resolver/rerun 回归随 `pnpm ci:unit:capability-pack` / `pnpm ci:integration:recovery`；main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
 
 ### FR-CRED-003 Model Gateway 唯一出口
 
 - **规范要求**：真实模型请求必须经 Scheduler-owned Model Gateway/受控 proxy，Job 只持短期 token；Gateway 必须按 Job deadline、allowed_models、请求/Token 额度和脱敏规则准入，不得把长期 Provider key 注入 Sandbox。放行后保持业务请求/响应原始字节与端到端头；仅处理认证、绑定目标和必要 HTTP 边界，不隐式重试/重定向或静默改写模型/输出参数。
 - **决策来源**：模型请求是外部副作用和计费边界，统一出口才能限额、审计和撤销；#923 及 [ADR 0017](adr/0017-transparent-gateway-settlement.md)要求透明数据面与准入/结算分离。
-- **实现状态**：as-built；用量写 `job_usage_ledger`，不保存 prompt/completion/headers。已接入 `main` 与 `observational_memory` 的内核签发 token 身份，后台只能访问冻结的 provider/model/route；总用量与 memory 归因分开，质量/任务单位成本不把后台调用冒充主执行效果。终态撤销和 Job 状态更新共用同一终态事务，未知/待结算用量不被吞掉。#923 分支实现原始有界请求、单次 HTTP/SSE 传输及 OM scoped 结算查询，wrapper 确认 durable settled 前不提交终止结果；最终 SHA Actions 待验，协议限制见[专题](../MODEL_GATEWAY_TRANSPARENCY.md)。
+- **实现状态**：as-built；用量写 `job_usage_ledger`，不保存 prompt/completion/headers。已接入 `main` 与 `observational_memory` 的内核签发 token 身份，后台只能访问冻结的 provider/model/route；总用量与 memory 归因分开，质量/任务单位成本不把后台调用冒充主执行效果。终态撤销和 Job 状态更新共用同一终态事务，未知/待结算用量不被吞掉。#923 / #928 已合入原始有界请求、单次 HTTP/SSE 传输及 OM scoped 结算查询，wrapper 确认 durable settled 前不提交终止结果；main 616d7a36 工程证据见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，后续 SHA 另验，协议限制见[专题](../MODEL_GATEWAY_TRANSPARENCY.md)。
 - **代码入口**：[Gateway](../../apps/scheduler/src/gateway.ts)、[Gateway guard](../../apps/scheduler/src/domains/provider-adapter/gateway-guard.ts)、[Gateway tests](../../apps/scheduler/src/gateway-usage.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`。
 
@@ -778,7 +778,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Job 必须按 project/Finding scope 解析当前 asset versions，计算 selection revision，记录 `job_shared_asset_versions` 并以只读路径挂载；进行中 Job 不得因后续资产版本变化而漂移。
 - **决策来源**：执行需要稳定材料，资产更新应影响下一次 Job 而不是当前快照。
-- **实现状态**：mount path 固定在 `/workspace/.deepsonar/shared/` 下；#871 修复分支用独立 PG session 持有同 Job 的准备/清理锁直至只读 mount 与绑定提交，删除时重验最新 Attempt 与 Docker generation。当前最终 SHA Actions 尚待验收。
+- **实现状态**：mount path 固定在 `/workspace/.deepsonar/shared/` 下；#871 修复分支用独立 PG session 持有同 Job 的准备/清理锁直至只读 mount 与绑定提交，删除时重验最新 Attempt 与 Docker generation。main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
 - **代码入口**：[Asset selection](../../apps/scheduler/src/domains/shared-assets/application.ts)、[runtime sandbox volume](../../packages/runtime-sandbox/src/shared-assets-volume.ts)、[生命周期锁](../../apps/scheduler/src/shared-asset-lifecycle.ts)、[资产专题](../SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。
 - **验证证据**：`pnpm ci:unit:shared-assets`、`pnpm ci:integration:shared-assets-volume`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`；覆盖严格 ownership/generation、non-force、两种 old-finally/new-prepare 交错及 stale owner 拒绝。
 
@@ -886,7 +886,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **决策来源**：调度器和外部执行器的时序不可靠；数据库锁只保护持久状态，不能把外部网络清理错误地描述为同一事务。
 - **实现状态**：部分达标；Reaper 和取消路径使用事务、锁序与状态条件更新，外部清理通过独立幂等入口回收；跨事务清理与 Canvas/Job 并行竞态仍需按具体 effect identity 做人工核查。
 - **代码入口**：[Job lifecycle recovery](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[attempt cancellation](../../apps/scheduler/src/domains/job-attempt/provision-cancellation.ts)、[Attempt lease](../../apps/scheduler/src/attempt-lease.ts)、[recovery tests](../../apps/scheduler/src/recovery-issue186.integration.test.ts)。
-- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:recovery`、`pnpm ci:smoke:opensandbox-reaper`；本轮补精确 timer stop、迟到 alive、Job 锁等待后 owner 换代及 Job/Attempt 双 sandbox 续租拒绝源码，实际结果仍待最终 Actions。
+- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:recovery`、`pnpm ci:smoke:opensandbox-reaper`；本轮补精确 timer stop、迟到 alive、Job 锁等待后 owner 换代及 Job/Attempt 双 sandbox 续租拒绝源码，main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
 
 ### NFR-REL-003 运维重试投影
 
