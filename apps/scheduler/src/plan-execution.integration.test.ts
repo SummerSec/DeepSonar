@@ -110,29 +110,38 @@ test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes 
     // The model-token fixture must not become a selectable account for the
     // preceding fake Plan child admission. Activate it only for token lifecycle checks.
     await h.sql`UPDATE credentials SET status='active' WHERE id=${credential}`;
-    const modelToken = await mintJobToken({ jobId: terminal.hub, projectId: terminal.project, credentialId: credential });
-    await assert.rejects(h.sql.begin(async (tx) => {
-      await h.core.finalizeJob(tx as unknown as typeof h.sql, terminal.hub, "succeeded", { summary: "Rolled back terminal proposal" });
-      throw new Error("rollback terminal fixture");
-    }), /rollback terminal fixture/);
-    const [rolledBack] = await h.sql`SELECT j.status,t.status AS token_status,
-      (SELECT count(*)::int FROM job_capability_tokens c WHERE c.job_id=j.id AND c.revoked_at IS NULL) AS active_capabilities
-      FROM jobs j JOIN job_tokens t ON t.job_id=j.id WHERE j.id=${terminal.hub} AND t.id=${modelToken.id}`;
-    assert.equal(rolledBack.status, "running");
-    assert.equal(rolledBack.token_status, "active", "terminal rollback must also restore the model credential");
-    assert.equal(rolledBack.active_capabilities, 1, "Control revocation participates in the same rollback");
-    const [rolledBackAudit] = await h.sql`SELECT count(*)::int AS count FROM audit_logs
-      WHERE action='job_token.revoke' AND resource_id=${modelToken.id}`;
-    assert.equal(rolledBackAudit.count, 0);
-    await h.finish(terminal.hub);
-    await assert.rejects(h.start(terminal.hub), /fixture start must claim a pending Job once/);
-    assert.equal((await h.sql`SELECT status FROM jobs WHERE id=${terminal.hub}`)[0].status, "succeeded",
-      "fixture startup cannot revive terminal Jobs");
-    const [revoked] = await h.sql`SELECT status,revoke_reason FROM job_tokens WHERE id=${modelToken.id}`;
-    assert.equal(revoked.status, "revoked");
-    assert.equal(revoked.revoke_reason, "job_succeeded");
-    const denied = await h.invoke(terminal.hub, "mark_job_done", { summary: "Late completion cannot reuse the revoked Control token" });
-    assert.equal(denied.statusCode, 401);
+    try {
+      const modelToken = await mintJobToken({ jobId: terminal.hub, projectId: terminal.project, credentialId: credential });
+      await assert.rejects(h.sql.begin(async (tx) => {
+        await h.core.finalizeJob(tx as unknown as typeof h.sql, terminal.hub, "succeeded", { summary: "Rolled back terminal proposal" });
+        throw new Error("rollback terminal fixture");
+      }), /rollback terminal fixture/);
+      const [rolledBack] = await h.sql`SELECT j.status,t.status AS token_status,
+        (SELECT count(*)::int FROM job_capability_tokens c WHERE c.job_id=j.id AND c.revoked_at IS NULL) AS active_capabilities
+        FROM jobs j JOIN job_tokens t ON t.job_id=j.id WHERE j.id=${terminal.hub} AND t.id=${modelToken.id}`;
+      assert.equal(rolledBack.status, "running");
+      assert.equal(rolledBack.token_status, "active", "terminal rollback must also restore the model credential");
+      assert.equal(rolledBack.active_capabilities, 1, "Control revocation participates in the same rollback");
+      const [rolledBackAudit] = await h.sql`SELECT count(*)::int AS count FROM audit_logs
+        WHERE action='job_token.revoke' AND resource_id=${modelToken.id}`;
+      assert.equal(rolledBackAudit.count, 0);
+      await h.finish(terminal.hub);
+      await assert.rejects(h.start(terminal.hub), /fixture start must claim a pending Job once/);
+      assert.equal((await h.sql`SELECT status FROM jobs WHERE id=${terminal.hub}`)[0].status, "succeeded",
+        "fixture startup cannot revive terminal Jobs");
+      const [revoked] = await h.sql`SELECT status,revoke_reason FROM job_tokens WHERE id=${modelToken.id}`;
+      assert.equal(revoked.status, "revoked");
+      assert.equal(revoked.revoke_reason, "job_succeeded");
+      const denied = await h.invoke(terminal.hub, "mark_job_done", { summary: "Late completion cannot reuse the revoked Control token" });
+      assert.equal(denied.statusCode, 401);
+    } finally {
+      // This intentionally unbound global account exists only to exercise token
+      // revocation. Restore the preceding fake admission catalog for both graph
+      // rollback cases; an active account would require real CLI authorization.
+      await h.sql`UPDATE credentials SET status='disabled' WHERE id=${credential}`;
+    }
+    const [terminalCredential] = await h.sql`SELECT status FROM credentials WHERE id=${credential}`;
+    assert.equal(terminalCredential.status, "disabled", "terminal token fixture must not leak into child admission");
     for (const kind of ["hub_decision", "plan"] as const) {
       const failed = await h.fixture();
       if (kind === "hub_decision") await h.sql`UPDATE canvases SET target_json=target_json-'plan_objective' WHERE id=${failed.canvas}`;
