@@ -1,17 +1,15 @@
 /** Real pinned Claude CLI, synthetic provider only; not a Scheduler/launch acceptance. */
 import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
-import { MODEL_REQUEST_POLICY_SOURCE } from "../packages/runtime-sandbox/src/model-request-policy.js";
-import { AGENT_CLI_RUNTIME_ADAPTERS } from "../packages/runtime-sandbox/src/runtime-adapters.js";
 
 const run = promisify(execFile);
 const token = "synthetic-claude-budget-token";
@@ -38,8 +36,6 @@ async function bytes(req: http.IncomingMessage) {
 }
 
 test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-budget tool turn", { timeout: 180_000 }, async t => {
-  const image = process.env.CLAUDE_BUDGET_IMAGE?.trim() || "deepsonar-base:reverse-ci";
-  const containerName = `claude-budget-${randomUUID()}`;
   const dir = await mkdtemp(path.join(tmpdir(), "claude-native-budget-"));
   let stage = "image-version";
   let output = "";
@@ -89,7 +85,7 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
         { type: "message_start", message: { id: "synthetic-message", type: "message", role: "assistant", model: body.model,
           content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 100, output_tokens: 0 } } },
         { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "synthetic-bash-tool", name: "Bash", input: {} } },
-        { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ command: `printf '%s\\n' '${sentinel}'`, description: "Print synthetic budget sentinel" }) } },
+        { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ command: `printf '%s' '${sentinel}'`, description: "Print synthetic budget sentinel" }) } },
         { type: "content_block_stop", index: 0 },
         { type: "message_delta", delta: { stop_reason: "tool_use", stop_sequence: null }, usage: { output_tokens: 32 } },
         { type: "message_stop" },
@@ -125,11 +121,16 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     })().catch(() => { errors.push("capture-contract"); res.writeHead(500).end(); });
   });
   try {
-    const version = await run("docker", ["run", "--rm", "--network", "none", "--entrypoint", "claude", image, "--version"], { timeout: 30_000 });
+    const interfaces = Object.values(networkInterfaces()).flatMap(entries => entries ?? []);
+    assert.ok(interfaces.length > 0 && interfaces.every(entry => entry.internal), "acceptance container must expose only loopback interfaces");
+    const fixture = JSON.parse(await readFile("/acceptance/runtime-fixture.json", "utf8")) as { policySource: string; encodedInput: string };
+    assert.equal(typeof fixture.policySource, "string"); assert.ok(fixture.policySource.length > 0);
+    assert.equal(typeof fixture.encodedInput, "string"); assert.ok(fixture.encodedInput.endsWith("\n"));
+    const version = await run("claude", ["--version"], { timeout: 30_000 });
     assert.match(version.stdout, /^2\.1\.312\b/u, "execute the production pinned CLI");
     stage = "prepare-native-launch";
     const script = path.join(dir, "policy.mjs");
-    await writeFile(script, MODEL_REQUEST_POLICY_SOURCE);
+    await writeFile(script, fixture.policySource);
     const api = await import(pathToFileURL(script).href);
     const upstream = await listen(remote);
     policy = await api.startModelRequestPolicy({ upstream: upstream + "/gateway", token, port: 0 });
@@ -142,12 +143,10 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
         MAX_THINKING_TOKENS: "0" });
     assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "4096");
-    const args = ["run", "--rm", "-i", "--name", containerName, "--network", "host", "--user", "1000:1000",
-      "--tmpfs", "/tmp:mode=1777", "-w", "/tmp", "--entrypoint", "/bin/bash"];
-    for (const [name, value] of Object.entries(prepared.env)) args.push("-e", `${name}=${value}`);
-    args.push(image, "-c", `mkdir -p "$CLAUDE_CONFIG_DIR" && exec ${prepared.command}`);
     stage = "native-cli-tool-loop";
-    cli = spawn("docker", args, { stdio: ["pipe", "pipe", "pipe"] });
+    cli = spawn("/bin/bash", ["-c", `mkdir -p "$CLAUDE_CONFIG_DIR" && exec ${prepared.command}`], {
+      cwd: "/tmp", env: { ...process.env, ...prepared.env }, stdio: ["pipe", "pipe", "pipe"],
+    });
     let stdoutPending = "";
     const collect = (chunk: Buffer) => {
       output += chunk.toString("utf8");
@@ -162,11 +161,11 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     });
     cli.stderr!.on("data", collect);
     const finished = new Promise<void>((resolve, reject) => {
-      cli!.once("error", () => reject(new Error("Claude Docker process failed to start")));
+      cli!.once("error", () => reject(new Error("Claude process failed to start")));
       cli!.once("close", (code, signal) => { exitCode = code; exitSignal = signal; resolve(); });
     });
     cli.stdin!.on("error", () => { errors.push("cli-stdin"); });
-    cli.stdin!.write(AGENT_CLI_RUNTIME_ADAPTERS["claude-code"].encodeInput("Run the supplied synthetic Bash tool once, then report its result."));
+    cli.stdin!.write(fixture.encodedInput);
     await Promise.race([finished, new Promise<never>((_, reject) => {
       const timer = setTimeout(() => reject(new Error("Pinned Claude did not finish the offline budget-refusal turn")), 120_000);
       timer.unref(); finished.finally(() => clearTimeout(timer)).catch(() => {});
@@ -207,7 +206,6 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
       model_requests: captured.length, upstream_requests: delivered.length, auxiliary_calls: auxiliaryCalls, policy_statuses: policyStatuses }));
     throw error;
   } finally {
-    await run("docker", ["rm", "-f", containerName], { timeout: 15_000 }).catch(() => {});
     cli?.kill("SIGKILL");
     await close(capture); await policy?.close(); await close(remote);
     await rm(dir, { recursive: true, force: true });

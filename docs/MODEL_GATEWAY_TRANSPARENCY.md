@@ -73,7 +73,7 @@ usage scanner 只观察副本，压缩响应仍按原压缩字节转发；无法
 
 **已接受的 Claude 兼容限制（2026-11-06）：** 用户批准 Claude Code 2.1.312 保留 start/resume 的原生启动输出上限；运行中余额不足时明确拒绝并提示，不修改已形成 body，不要求逐请求自动适配。该范围决定不再阻塞发布，也不代表三 CLI 都能自动适应动态余额。DSH 的完整受治理 adapter 已接入；#903 恢复联合验收及最终 SHA Actions 仍须闭合。此决定不证明真实 Claude CLI 或真实模型测试通过，不能据此宣称 #923 全部验收完成。 `ci:unit:runtime-sandbox` 中的启动/恢复选项回归与静态 cap→余额下降合成 HTTP 回归分别验证生成前选项、合规原字节（含大整数）、不足额度 409 和耗尽 429 零出站；本地拒绝保留稳定错误码并附说明，不修改上游错误正文。这些是合成适配器验收，不是实际 Claude 多轮进程验收。
 
-另增 `ci:integration:claude-request-budget` 的[真实锁定 CLI 验收](../agent-harness/claude-request-budget-cli.test.ts)，由 Reverse 工作流在两种原生架构的当前 base 镜像构建后执行。它使用合成认证与本地假上游，核对 Claude 2.1.312 版本、启动输出上限、工具续轮后余额下降的零上游拒绝与 CLI 可见提示，并对照已准入请求的原始字节；不要求真实账号、不允许跳过替代通过。此入口尚待精确 SHA Actions 执行，不代表已经证明离线 CLI 可运行，也不替代正式 Job/账本或恢复联合验收。
+另增 `ci:integration:claude-request-budget` 的[真实锁定 CLI 验收](../agent-harness/claude-request-budget-cli.test.ts)，由 Reverse 工作流在两种原生架构的当前 base 镜像构建后执行。运行器把编译后的用例与生产策略/输入编码结果放入只读夹具目录，整个测试（CLI、捕获代理、准入服务及假上游）在同一个 `--network none` 容器的 loopback 内执行；不挂载 Docker socket、不使用 host 网络，且用例断言没有非内部网络接口。它使用合成认证，核对 Claude 2.1.312 版本、启动输出上限、工具续轮后余额下降的零上游拒绝与 CLI 可见提示，并对照已准入请求的原始字节；不要求真实账号、不允许跳过替代通过。此入口尚待精确 SHA Actions 执行，不代表已经证明离线 CLI 可运行，也不替代正式 Job/账本或恢复联合验收。
 
 OM 在受审 wrapper 的请求生成层读取相同 allowance。wrapper 在生成请求前将 `options.maxTokens` 限制到该 allowance；Responses SDK 的最小输出值无法容纳时明确拒绝（当前 SDK 下限为 16，核对基线 2026-11-05）。pending/unknown 不允许协商下一次请求。此结果只是生成参数的提示，Gateway 出站前仍在 Job 锁内重核额度和冻结权限，竞态不能扩大 allowance。
 
