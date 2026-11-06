@@ -85,7 +85,7 @@ export async function invokeDurableCompletion(input: {
       });
     }
   }
-  if (!result.receipt && result.statusCode >= 400 && !result.body.repair) {
+  if (!result.receipt && result.statusCode >= 400 && !("repair" in result.body && result.body.repair)) {
     const code = String(result.body.error_code ?? "COMPLETION_REJECTED");
     const uncertain = code === "COMPLETION_RECEIPT_UNCERTAIN";
     const correctable = code === "COMPLETION_REVISION_CONFLICT";

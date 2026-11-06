@@ -65,7 +65,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       assert.fail("synthetic Gateway settlement did not finish");
     };
     const setup = async (repairLimit = 30, existingCanvasId?: string, snapshotOverrides: Record<string, unknown> = {}, mainCap = 40) => {
-      config.gateway.repairMaxTokens = repairLimit;
+      Reflect.set(config.gateway, "repairMaxTokens", repairLimit);
       await sql`UPDATE role_configs SET model='model-a',version=version+1 WHERE id=${roleConfigId}`;
       const canvasId = existingCanvasId ?? `repair-${randomUUID()}`, jobId = randomUUID();
       if (!existingCanvasId) {
@@ -131,7 +131,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
     for (const status of ["failed", "waiting_human"] as const) for (const mode of ["resume", "rerun-current"] as const) {
       await t.test(`${status} -> ${mode} -> new owner -> Gateway -> accepted done -> succeeded`, async () => {
         const f = await setup(); await f.stop(status);
-        config.gateway.repairMaxTokens = 300; // Configuration changes must not refresh this root's frozen cap.
+        Reflect.set(config.gateway, "repairMaxTokens", 300); // Configuration changes must not refresh this root's frozen cap.
         if (mode === "rerun-current") {
           await sql`UPDATE role_configs SET model='model-b',version=version+1 WHERE id=${roleConfigId}`;
           assert.equal((await f.recover("resume")).json().error_code, "SNAPSHOT_STALE");
@@ -693,7 +693,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           }
           for (const initial of ["repair-main-only", "ordinary-main-only", "no-token"] as const) {
             await t.test(`durable request policy survives ${initial} and two real refreezes`, async () => {
-              config.gateway.repairMaxTokens = 200;
+              Reflect.set(config.gateway, "repairMaxTokens", 200);
               await setPlan(10, 8, 2);
               const f = await createPolicyJob();
               const first = await startPolicyJob(f.jobId);
