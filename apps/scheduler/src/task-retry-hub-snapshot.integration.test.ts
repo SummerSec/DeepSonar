@@ -117,24 +117,68 @@ if (!testDatabaseUrl) {
       await sql`UPDATE credentials SET agent_cli = 'pi', settings_config_json = ${sql.json({
         providers: { custom: { api: "openai-completions", models: [{ id: modelId }] } },
       })} WHERE id = ${credentialId}`;
+      await sql`UPDATE role_configs SET runtime_knobs_json=${sql.json({
+        stallSec: 300, jobTokenMaxRequests: 80, timeoutSec: 7_200,
+      })} WHERE id=${hubConfig.id}`;
+      await sql`UPDATE global_settings SET rules_json=rules_json || ${sql.json({
+        stallSec: 900, jobTokenMaxRequests: 200, auditTimeoutSec: 18_000, provisionTimeoutSec: 900,
+      })} WHERE id='global'`;
       await sql`UPDATE projects SET config_json = ${sql.json({
         enabled_agent_clis: ["pi"], default_agent_cli: "pi",
         default_credential_id: credentialId, default_model_ref: modelId,
+        rules: { stallSec: 200, jobTokenMaxRequests: 50, auditTimeoutSec: 5_000 },
       })} WHERE id = ${projectId}`;
       const created = await app.inject({
         method: "POST", url: `/projects/${projectId}/tasks`,
         payload: { title: "Pi slash model", content: "Verify the configured model identity" },
       });
       assert.equal(created.statusCode, 201, created.payload);
+      // A failure after the reset must roll the whole transaction back.
+      const beforeReset = [...await sql`SELECT * FROM canvas_nodes WHERE canvas_id=${canvasId} ORDER BY id`];
+      await sql.unsafe(`CREATE FUNCTION reject_retry_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF NEW.payload_json #>> '{trigger,restart}' = 'true' THEN RAISE EXCEPTION 'retry insert fixture'; END IF;
+          RETURN NEW;
+        END $$;
+        CREATE TRIGGER reject_retry_fixture BEFORE INSERT ON jobs FOR EACH ROW EXECUTE FUNCTION reject_retry_fixture()`);
+      const rolledBack = await app.inject({ method: "POST", url: `/tasks/${canvasId}/retry` });
+      assert.equal(rolledBack.statusCode, 500, rolledBack.payload);
+      assert.deepEqual([...await sql`SELECT * FROM canvas_nodes WHERE canvas_id=${canvasId} ORDER BY id`], beforeReset);
+      assert.equal((await sql`SELECT status FROM jobs WHERE id=${succeededJobId}`)[0]?.status, "succeeded");
+      await sql.unsafe("DROP TRIGGER reject_retry_fixture ON jobs; DROP FUNCTION reject_retry_fixture()");
       const retried = await app.inject({ method: "POST", url: `/tasks/${canvasId}/retry` });
       assert.equal(retried.statusCode, 201, retried.payload);
-      const snapshots = await sql`SELECT agent_snapshot_json FROM jobs WHERE project_id = ${projectId}`;
+      const snapshots = await sql`SELECT id,timeout_sec,agent_snapshot_json FROM jobs WHERE project_id = ${projectId}`;
       assert.equal(snapshots.length, 2);
+      const { inspectGatewayRequestBudget, ensureGatewayRequestBudget } = await import("./gateway-request-policy.js");
+      const expectedKnobs = {
+        stall_sec: 300, job_token_max_requests: 80, timeout_sec: 7_200, provision_timeout_sec: 900,
+        sources: { stallSec: "role", jobTokenMaxRequests: "role", timeoutSec: "role", provisionTimeoutSec: "platform" },
+      };
       for (const row of snapshots) {
         assert.equal(row.agent_snapshot_json.model, modelId);
         assert.equal(row.agent_snapshot_json.upstream_model, modelId);
         assert.equal(row.agent_snapshot_json.pi_provider, "custom");
+        assert.deepEqual(row.agent_snapshot_json.runtime_knobs, expectedKnobs);
+        assert.equal(row.timeout_sec, expectedKnobs.timeout_sec);
+        assert.equal(row.agent_snapshot_json.network_policy.allow_egress, false);
+        const expectedPolicy = { version: 1, total_requests: 80, main_requests: 80, background_requests: 0 };
+        assert.deepEqual(await inspectGatewayRequestBudget(sql, String(row.id), row.agent_snapshot_json), expectedPolicy);
+        await sql.begin(async rawTx => {
+          // SAFETY: postgres.js transaction handles have the same tagged-template interface.
+          const tx = rawTx as unknown as typeof sql;
+          await tx`SELECT id FROM jobs WHERE id=${String(row.id)} FOR UPDATE`;
+          assert.deepEqual(await ensureGatewayRequestBudget(tx, String(row.id), row.agent_snapshot_json), expectedPolicy);
+        });
       }
+      // Automatic Hub wakeups go through the same frozen contract.
+      await sql`UPDATE jobs SET status='succeeded',finished_at=now() WHERE canvas_id=${canvasId}`;
+      const autoWake = await app.inject({ method: "POST", url: `/tasks/${canvasId}/resume-session` });
+      assert.equal(autoWake.statusCode, 200, autoWake.payload);
+      const [woken] = await sql`SELECT agent_snapshot_json,timeout_sec FROM jobs WHERE canvas_id=${canvasId} AND status='pending'`;
+      assert.ok(woken, autoWake.payload);
+      assert.deepEqual(woken.agent_snapshot_json.runtime_knobs, expectedKnobs);
+      assert.equal(woken.timeout_sec, expectedKnobs.timeout_sec);
 
       // #490: an archived canvas must answer retry/resume with a stable error_code.
       await sql`UPDATE canvases SET status = 'archived', archived_at = now() WHERE id = ${canvasId}`;

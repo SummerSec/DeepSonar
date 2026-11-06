@@ -156,8 +156,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **规范要求**：系统必须在 Job 创建时冻结 CLI、Provider/model、运行时镜像 digest、工具/能力、Finding protocol、网络策略、设备需求和 runtime knobs；适用的目标 grant 与可选记忆策略也须冻结。Dispatcher 不得回读最新 RoleConfig 代替快照，实时撤权检查只能收紧冻结权限。
 - **决策来源**：执行结果要能按当时的权限、镜像和配置重放审计。
 - **实现状态**：as-built；快照身份和 schema 版本进入 `agent_snapshot_json`；目标 grant 只从 Scheduler 的可信输入或系统审计继承，调用方同名字段不会成为 authority。Pi 观测记忆的独立实现与未验收范围见 FR-CAP-009。
-- **代码入口**：[运行时快照应用](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[Provider freeze](../../apps/scheduler/src/domains/provider-adapter/freeze.ts)、[Agent profile](../../apps/scheduler/src/agent-runtime-profile.ts)。
-- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:credential-compatibility`；人工在创建后修改角色并核对执行输入不变。
+- **代码入口**：[运行时快照应用](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[Provider freeze](../../apps/scheduler/src/domains/provider-adapter/freeze.ts)、[Agent profile](../../apps/scheduler/src/agent-runtime-profile.ts)、[共享完整冻结](../../apps/scheduler/src/job-runtime-freeze.ts)。
+- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:credential-compatibility`；人工在创建后修改角色并核对执行输入不变。#943/#948 补齐 retry/自动 Hub/Verify/补证/Report 的完整冻结，HTTP 创建与恢复拒绝回归复用 `pnpm ci:integration:recovery` / `pnpm ci:integration:platform-api`；最终 SHA Actions 待验，历史缺损快照的可信补冻恢复尚未交付。
 
 ### FR-JOB-010 Claim、并发和 Lease
 

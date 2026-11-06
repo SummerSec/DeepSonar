@@ -16,7 +16,16 @@ const record = (value: unknown): Record<string, unknown> | null => value !== nul
 /** resolution_error contains human text, not a stable machine-code prefix. */
 export function classifyJobRerunError(error: unknown, projectId: string | null): Feedback {
   const fallback = { message: error instanceof Error ? error.message : String(error), repair: null };
-  if (!(error instanceof ApiRequestError) || error.status !== 409 || error.errorCode !== "SNAPSHOT_STALE") return fallback;
+  if (!(error instanceof ApiRequestError) || error.status !== 409) return fallback;
+  const budgetBody = record(error.taskContractFeedback);
+  if (error.errorCode === "GATEWAY_REQUEST_BUDGET_INVALID" && Array.isArray(budgetBody?.missing_fields)) {
+    const missing = budgetBody.missing_fields.filter((field): field is string => typeof field === "string");
+    if (missing.length) return {
+      message: `冻结快照预算字段缺失或非法（${missing.join(", ")}）。请先核对 Job 的历史策略和执行效果；当前配置不能证明旧预算，也不会自动补冻或重置额度。`,
+      repair: null,
+    };
+  }
+  if (error.errorCode !== "SNAPSHOT_STALE") return fallback;
   const body = record(error.taskContractFeedback);
   const unresolved = (typeof body?.resolution_error === "string" && body.resolution_error.trim().length > 0)
     || (Array.isArray(body?.stale_fields) && body.stale_fields.includes("current_snapshot_unresolvable"));
