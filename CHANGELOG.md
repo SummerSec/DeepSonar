@@ -13,7 +13,7 @@
 - **Release resume 的原发布证据绑定**：默认分支恢复代码先校验原运行、成功阶段、不可变 tag 与 artifact 归档摘要，再复用冻结载荷和签名回执独立恢复 writeback / publish；不重建或重签镜像。拒绝错源、替换、缺失、过期及多 attempt 证据；发布查询错误不再被当作 Release 不存在，gate 使用实际签名目录。
 
 - **发布回写 PR 的检查状态文案（#920 评审）**：创建 PR 时仅说明等待该 PR 的 `ci-summary` 与适用专项，不再在检查运行前宣称“已通过”。生成正文同时明确自动化身份；离线回归校验创建早于检查读取且正文没有提前通过声明。
-- **Provider 删除与项目引用的一致性（#914 服务端切片）**：仍被项目白名单/默认账号引用的凭据以稳定 `CREDENTIAL_PROJECT_REFERENCE` 拒绝删除；impact 的项目列表与计数遵守调用者可见范围，删除完整性另按全局引用核对。项目 settings PATCH 在事务中验证并锁住有效、active、可访问的凭据，即使省略模型字段也不能写入悬挂 UUID；不把显式空白名单改成未收紧。GET 和启动清理使用原值 CAS；Skill 标记与 convergence 快捷规则仅更新当前 JSONB 对应字段，导入合并在事务锁内回读，避免无关写入复活旧账号引用。配置项目锁采用 `FOR NO KEY UPDATE`，与凭据迁移的外键 `KEY SHARE` 兼容。真实 PostgreSQL 回归覆盖两项目隔离、双向删除/写入、GET/Skill 交错及 Credential 项目迁移；默认账号选择 UX 的完整收口仍未交付。
+- **Provider 删除与项目引用的一致性（#914 服务端切片）**：仍被项目白名单/默认账号引用的凭据以稳定 `CREDENTIAL_PROJECT_REFERENCE` 拒绝删除；impact 的项目列表与计数遵守调用者可见范围，删除完整性另按全局引用核对。项目 settings PATCH 在事务中验证并锁住有效、active、可访问的凭据，即使省略模型字段也不能写入悬挂 UUID；不把显式空白名单改成未收紧。GET 和启动清理使用原值 CAS；Skill 标记与 convergence 快捷规则仅更新当前 JSONB 对应字段，导入合并在事务锁内回读，避免无关写入复活旧账号引用。配置项目锁采用 `FOR NO KEY UPDATE`，与凭据迁移的外键 `KEY SHARE` 兼容。真实 PostgreSQL 回归覆盖两项目隔离、双向删除/写入、GET/Skill 交错及 Credential 项目迁移。本条记录 #925 服务端切片；默认账号选择与修复导航由本版 #929 补齐，见前条。
 - **Provider 自定义请求头与所选上游一致（#918 / #921）**：Gateway、模型目录发现与推理探测共用服务端配置头解析。官方 Pi 顶层对象、config 对象及 config YAML 复用已有解析器；头只来自当前 endpoint 对应的 profile，空头集合不会借用其他 provider 的租户头，metadata 覆盖与 profile 不匹配时不混用。认证、逐跳/framing 处理与 Job 权限边界保持不变；完整业务透传另由 #923 跟踪，不冒充本片已实现。
 
 - **任务删除/归档的提交边界（#904、#917 评审）**：知识工作、版本、提案、分配、评估、回执与设备租约历史都进入保留判定；仅清理任务的知识使用记录，不删除不可变治理证据或设备租约审计。删除和归档遵守 claim advisory → Canvas → Job → Attempt 锁序，事务内取消不调用 provision abort/provider cancel，真实提交后才执行资源清理。取消后注入 SQL 失败的 PostgreSQL 回归验证 Job/Attempt 恢复且 provider 未被中断；独立 session 回归验证归档先等待 Canvas，而非先占 Job。
@@ -21,7 +21,7 @@
 
 ## [0.6.14] - 2026-11-05
 
-> **该 tag 保留，未产出正式发布**：`v0.6.14` 的 [Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 在 `reverse-image-builds (arm64)` 的 REA Job 验收步骤重试到超时后仍返回 `Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)`，`prepare-release` 起的后续阶段全部跳过，没有冻结载荷、签名或 GitHub Release。按发布守则保留该 tag 与已推送镜像，不移动、不覆盖；本版内容随 `0.6.15` 一起交付，成功升级基线仍是 `v0.6.13`。
+> **该 tag 保留，未产出正式发布**：`v0.6.14` 的 [Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 在 `reverse-image-builds (arm64)` 的 REA Job 验收中失败：`timeout` 是该验收用例的预期模式，而创建 sandbox 时 Egress sidecar 启动失败（`Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)`），该用例实际得到 `failed`；验收记录只有一次 Attempt，`sandbox_id` 为空、`retry_scheduled` 为空、`redispatch_calls=0`。这只证明创建阶段 sidecar 启动失败，不证明重试耗尽或真实运行超时，更深层基础设施原因尚未由该证据确定。`prepare-release` 起的后续阶段全部跳过，没有冻结载荷、签名或 GitHub Release。按发布守则保留该 tag 与已推送镜像，不移动、不覆盖；本版内容随 `0.6.15` 一起交付，成功升级基线仍是 `v0.6.13`。
 
 ### 修复
 
