@@ -56,7 +56,17 @@ export function registerSkillSourceRoutes(app: FastifyInstance): void {
       return reply.code(201).send(row);
     } catch (e) {
       if (e instanceof Error && "code" in e && (e as { code: string }).code === "23505") {
-        return reply.code(409).send({ error: "同名模块源已存在" });
+        // #953：项目侧当场登记时，重复名称必须能直接接回已有源，而不是让用户 switch 页面重找。
+        const [existing] = await sql`
+          SELECT id, name, repo_url, branch, trust_status, enabled, synced_at
+          FROM skill_sources WHERE name = ${body.name}`;
+        return reply.code(409).send({
+          error_code: "SKILL_SOURCE_NAME_TAKEN",
+          error: existing
+            ? `同名模块源已存在（已登记为「${String(existing.name)}」）：请在源列表里直接同步、信任并启用它`
+            : "同名模块源已存在",
+          existing: existing ?? null,
+        });
       }
       throw e;
     }
