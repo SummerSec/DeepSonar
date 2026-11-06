@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createOmFailureDiagnostics, observeOmRuntime } from "./om-provider-headers-diagnostics.js";
 import { OM_HEADERS_MODEL, OM_HEADERS_PROVIDER, OM_HEADERS_SECRET, startOmHeaderModel, type OmHeaderCall } from "./om-provider-headers-model.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -26,6 +27,10 @@ let databaseName: string | undefined, childId: string | undefined, hubId: string
 let drain: (() => Promise<void>) | undefined;
 let unregister: ((id: string) => void) | undefined;
 let cancelChild: ((id: string) => Promise<unknown>) | undefined;
+let diagnostics: Awaited<ReturnType<typeof createOmFailureDiagnostics>> | undefined;
+let runtimeObservation: ReturnType<typeof observeOmRuntime> | undefined;
+let unsubscribeRuntime: (() => void) | undefined;
+const runtimeEventCounts: Record<string, number> = {};
 let model: Awaited<ReturnType<typeof startOmHeaderModel>> | undefined;
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 try {
@@ -87,7 +92,7 @@ try {
   await db.migrate(); assert.ok(await workers.seedLocalWorkerNode());
   app = Fastify({ logger: false }); api.registerPlatformControlRoutes(app); gateway.registerGateway(app);
   await app.listen({ host: "0.0.0.0", port: 3100 });
-  const projectId = randomUUID(), canvasId = randomUUID(), rootNode = randomUUID(), credentialId = randomUUID();
+  const projectId = randomUUID(), credentialId = randomUUID();
   await sql`INSERT INTO projects(id,name,config_json) VALUES(${projectId},'OM header acceptance',${sql.json({
     enabled_agent_clis: ["pi"], default_agent_cli: "pi", default_credential_id: credentialId, default_model_ref: OM_HEADERS_MODEL,
     rules: { hubEnabled: false, maxIntentsPerDecision: 1, jobTokenMaxRequests: 0 },
@@ -146,9 +151,13 @@ try {
     await sql`INSERT INTO role_configs(role_id,agent_cli,model,runtime_image_key,runtime_knobs_json)
       VALUES(${role.id},'pi',${OM_HEADERS_MODEL},'deepsonar-base',${sql.json({ jobTokenMaxRequests: 0, timeoutSec: 600, stallSec: 180 })})`;
   }
-  await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${projectId},'OM header acceptance',
-    ${sql.json({ network_policy: { allow_egress: false }, convergence: { hub_paused: true, auto_stopped: false, paused_reason: "bootstrap_fixture" } })})`;
-  await sql`INSERT INTO canvas_nodes(id,canvas_id,node_type,title,status,body_json) VALUES(${rootNode},${canvasId},'root','Offline scope','active','{}')`;
+  report.stage = "formal-canvas-create";
+  const canvasId = await core.ensureCanvasForTask({ projectId, title: "OM header acceptance",
+    target: { network_policy: { allow_egress: false }, convergence: { hub_paused: true, auto_stopped: false, paused_reason: "bootstrap_fixture" } } });
+  const [canvas] = await sql`SELECT target_json FROM canvases WHERE id=${canvasId} AND project_id=${projectId}`;
+  assert.ok(canvas.target_json.effective_finding_protocol, "formal Canvas creation freezes its required finding protocol");
+  const roots = await sql`SELECT id FROM canvas_nodes WHERE canvas_id=${canvasId} AND node_type='root'`;
+  assert.equal(roots.length, 1); const rootNode = String(roots[0].id);
   report.stage = "bootstrap-hub-create";
   const parent = await core.createJob({ projectId, canvasId, type: "hub_reason", maxRequests: 0,
     payload: { graph_query: { projected_node_ids: [rootNode] } } });
@@ -242,6 +251,15 @@ try {
     om_source_model: om.source_model, launch_sha256: createHash("sha256").update(JSON.stringify(snapshot.agent_runtime_launch)).digest("hex") };
   await sql.begin((tx: any) => core.finalizeJob(tx, hubId!, "succeeded", { summary: "Bootstrap proposal accepted" }));
   api.unregisterRuntimeHandler(hubId);
+  diagnostics = await createOmFailureDiagnostics(root);
+  runtimeObservation = observeOmRuntime(runner, diagnostics.summarize);
+  const { subscribeStream } = await import("../../apps/scheduler/src/stream-bus.js");
+  const allowedRuntimeTypes = new Set(["run.started", "run.completed", "run.settled", "run.agent_end", "run.retrying", "run.retry_skipped",
+    "tool.call.started", "tool.call.completed", "text.delta", "reasoning.delta"]);
+  unsubscribeRuntime = subscribeStream(childId, item => {
+    const type = allowedRuntimeTypes.has(item.type) ? item.type : "other";
+    runtimeEventCounts[type] = (runtimeEventCounts[type] ?? 0) + 1;
+  });
   report.stage = "real-dispatch-and-om";
   assert.equal(await dispatcher.dispatchOnce(), 1);
   const readOmLedger = async () => sql`SELECT l.*,e.status AS effect_status,e.job_id AS effect_job_id,
@@ -322,11 +340,23 @@ try {
 } finally {
   if (hubId) unregister?.(hubId);
   if (sql && childId && report.status !== "passed") {
+    // Read the original execution before cancellation/destruction changes any
+    // state. Never requeue, replace its request key, or repair its snapshot.
+    try {
+      diagnostics ??= await createOmFailureDiagnostics(root);
+      report.execution_diagnostics = { ...await diagnostics.read(sql, childId), runtime_method_trace: runtimeObservation?.trace ?? [], runtime_event_counts: runtimeEventCounts,
+        cli_start_evidence: runtimeEventCounts["run.started"] ? "observed" : "not_observed_not_proof_of_absence" };
+      console.error(JSON.stringify({ stage: report.stage, execution_diagnostics: report.execution_diagnostics }));
+    } catch {
+      report.execution_diagnostics = { read_failed: true, code: "OM_EXECUTION_DIAGNOSTIC_READ_FAILED" };
+    }
     const [row] = await sql`SELECT status,sandbox_id FROM jobs WHERE id=${childId}`.catch(() => []);
     report.child_status = row?.status ?? null;
     await cancelChild?.(childId).catch(() => {});
     if (row?.sandbox_id) await runner?.destroy({ sandboxId: row.sandbox_id }).catch(() => {});
   }
+  runtimeObservation?.close();
+  unsubscribeRuntime?.();
   await drain?.().catch(() => {});
   await app?.close().catch(() => {}); await model?.close().catch(() => {});
   await sql?.end({ timeout: 5 }).catch(() => {});
