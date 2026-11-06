@@ -15,6 +15,11 @@ const run = promisify(execFile);
 const token = "synthetic-claude-budget-token";
 const sentinel = "CLAUDE_BUDGET_SYNTHETIC_BASH_COMPLETED";
 const refusal = "MODEL_REQUEST_POLICY_PREGENERATION_REQUIRED";
+const optionalThinkingBeta = "thinking-token-count-2026-05-13";
+const keptReminderBeta = "mid-conversation-system-clear-at-2026-08-21";
+// Locked CLI's native total_tokens reminder: 15,000,000 minus the first
+// synthetic response's 100 input + 32 output tokens. This is not Gateway allowance.
+const expectedModelToolText = `${sentinel}\n\n<system-reminder>\n<total_tokens>14999868 tokens left</total_tokens>\n</system-reminder>`;
 async function listen(server: http.Server) {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -51,6 +56,7 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
   const errors: string[] = [];
   const captured: Buffer[] = [];
   const requestEvidence: Record<string, unknown>[] = [];
+  let compatibilityBranch = "unconfirmed";
   const delivered: Buffer[] = [];
   const policyStatuses: number[] = [];
   const policyErrors: string[] = [];
@@ -70,7 +76,7 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
       return value.trim() === sentinel;
     };
     return {
-      result_seen: resultReceived, result_is_error: resultError,
+      result_seen: resultReceived, result_is_error: resultError, compatibility_branch: compatibilityBranch,
       stdin_ended: cli?.stdin?.writableEnded === true,
       refusal_code_visible: output.includes(refusal),
       refusal_hint_visible: output.includes("Configure supported CLI options before generating a new request")
@@ -151,7 +157,11 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
         const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
         const results = (body.messages ?? []).flatMap((message: any) => Array.isArray(message.content) ? message.content : [])
           .filter((block: any) => block.type === "tool_result" && block.tool_use_id === "synthetic-bash-tool");
+        const betaHeader = req.headers["anthropic-beta"];
+        const betas = (Array.isArray(betaHeader) ? betaHeader.join(",") : betaHeader ?? "").split(",").map(value => value.trim()).filter(Boolean);
         requestEvidence.push({
+          optional_thinking_beta: betas.includes(optionalThinkingBeta), kept_reminder_beta: betas.includes(keptReminderBeta),
+          other_betas_sha256: digest(betas.filter(value => value !== optionalThinkingBeta && value !== keptReminderBeta).sort()),
           sequence: captured.length, body_sha256: createHash("sha256").update(raw).digest("hex"),
           stream: body.stream === true, stream_field_present: Object.hasOwn(body, "stream"),
           frozen_model: body.model === "claude-sonnet-4-5", max_tokens: body.max_tokens,
@@ -163,7 +173,7 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
             const value = typeof block.content === "string" ? block.content : Array.isArray(block.content)
               ? block.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n") : "";
             return { is_error: block.is_error === true, text_bytes: Buffer.byteLength(value), text_sha256: digest(value),
-              exact_sentinel: value.trim() === sentinel, contains_sentinel: value.includes(sentinel),
+              exact_sentinel: value.trim() === sentinel, model_result_matches: value === expectedModelToolText, contains_sentinel: value.includes(sentinel),
               stdout_tag: value.includes("<stdout>"), stderr_tag: value.includes("<stderr>"),
               system_reminder_tag: value.includes("<system-reminder>"), persisted_output_tag: value.includes("<persisted-output>") };
           }),
@@ -249,13 +259,23 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     })]);
     stage = "assert-captured-native-requests";
     assert.deepEqual(errors, []);
-    assert.equal(captured.length, 3, "one initial stream, one tool continuation and one native non-stream recovery attempt");
+    assert.equal(captured.length, 3, "one initial stream, one tool continuation and one optional-beta compatibility attempt");
     const requestBodies = captured.map(raw => JSON.parse(raw.toString("utf8")));
-    assert.deepEqual(requestBodies.map(body => body.stream === true), [true, true, false]);
-    assert.equal(requestBodies[2].stream, false, "locked CLI explicitly requests non-stream recovery");
+    assert.deepEqual(requestBodies.map(body => body.stream === true), [true, true, true]);
+    // Locked CW and R6/onError each have a one-shot compatibility path before
+    // ordinary HTTP retry classification. Prove precisely one known removal;
+    // no added marker, unrelated beta change or body regeneration is accepted.
+    const markerFields = ["optional_thinking_beta", "kept_reminder_beta"];
+    const removed = markerFields.filter(field => requestEvidence[1][field] === true && requestEvidence[2][field] === false);
+    assert.equal(removed.length, 1, "exactly one source-verified compatibility beta must be removed");
+    for (const field of markerFields.filter(field => field !== removed[0])) assert.equal(requestEvidence[2][field], requestEvidence[1][field]);
+    compatibilityBranch = removed[0] === "optional_thinking_beta" ? "thinking-token-count" : "kept-reminder-clear-at";
+    assert.equal(requestEvidence[2].other_betas_sha256, requestEvidence[1].other_betas_sha256);
+    assert.deepEqual(requestEvidence.slice(1).map(row => row.sdk_retry_count), [0, 0]);
+    assert.equal(requestEvidence[2].body_sha256, requestEvidence[1].body_sha256, "compatibility retry preserves every request body byte");
     for (const field of ["messages", "system", "tools"]) {
       const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
-      assert.equal(hash(requestBodies[2][field]), hash(requestBodies[1][field]), `non-stream recovery preserves ${field}`);
+      assert.equal(hash(requestBodies[2][field]), hash(requestBodies[1][field]), `optional-beta compatibility attempt preserves ${field}`);
     }
     assert.equal(resultReceived, true, "CLI emits its native terminal result before stdin closes");
     assert.equal(resultError, true, "budget refusal must terminate as a native error, not successful completion");
@@ -282,7 +302,7 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
       assert.notEqual(result.is_error, true, "Bash must execute successfully, not merely echo a rejected command");
       const text = typeof result.content === "string" ? result.content
         : result.content.filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n");
-      assert.ok(text.trim() === sentinel, "Bash must return exactly the synthetic printf output");
+      assert.ok(text === expectedModelToolText, "model-visible result must equal native stdout plus the exact locked total_tokens reminder");
     }
     assert.deepEqual(policyStatuses, [200, ...captured.slice(1).map(() => 400)]);
     assert.deepEqual(policyErrors, captured.slice(1).map(() => refusal));
