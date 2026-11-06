@@ -12,6 +12,7 @@ ARG HDC_SDK_URL=https://repo.huaweicloud.com/openharmony/os/6.0-Release/ohos-sdk
 ARG HDC_SDK_SHA256=a315834ac133625efc912bd078f3e2b2550868d04aef1b5aa4f9679c8b3c9d8e
 ARG HDC_SHA256=a72d26110eb6af8391c74325183b419c28355027ce9d68fcc528437fdf21eb6e
 ARG HDC_LIBUSB_SHARED_SHA256=431e69ebe2f87ac693c3dae032ec82baa3196b9d403139ae9775ccbaf9227887
+RUN printf 'Acquire::Retries "8";\n' > /etc/apt/apt.conf.d/80-retries
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential ccache cmake ninja-build git-lfs python3-requests python-is-python3 openssh-client rsync patch \

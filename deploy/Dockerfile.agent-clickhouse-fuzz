@@ -25,6 +25,7 @@ RUN set -eux; \
   rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
   printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list; \
   printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/%s bookworm-security main\n' "$DEBIAN_SECURITY_SNAPSHOT" >>/etc/apt/sources.list; \
+  printf 'Acquire::Retries "8";\n' > /etc/apt/apt.conf.d/80-retries; \
   apt-get update; \
   apt-get install -y --no-install-recommends --allow-downgrades \
     ca-certificates curl file git pkg-config clang-16 lld-16 llvm-16 libclang-rt-16-dev libfuzzer-16-dev afl++ binutils ninja-build cmake \
