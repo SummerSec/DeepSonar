@@ -40,7 +40,7 @@ test("three CLI request shapes preserve compliant bytes and refuse requests need
   let responseStatus = 200;
   const received: Array<{ url: string; headers: http.IncomingHttpHeaders; raw: string[]; body: Record<string, unknown> }> = [];
   const compressed = gzipSync(Buffer.from("synthetic error"));
-  const remote = http.createServer(async (req, res) => {
+  const remote = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {
     if (req.url === "/gateway/_allowance") {
       allowanceQueries++;
       assert.equal(req.headers.authorization, "Bearer synthetic-main-token");
@@ -65,7 +65,7 @@ test("three CLI request shapes preserve compliant bytes and refuse requests need
   const request = (route: string, payload: unknown, headers: string[] = []) => new Promise<{ status: number; headers: http.IncomingHttpHeaders; bytes: Buffer }>((resolve, reject) => {
     const bytes = Buffer.from(JSON.stringify(payload));
     const req = http.request(`${local}/gateway/${route}`, { method: "POST", headers: ["Host", new URL(local).host, "Authorization", "Bearer synthetic-main-token", "Content-Type", "application/json",
-      "Content-Length", String(bytes.length), ...headers] }, async (res) => {
+      "Content-Length", String(bytes.length), ...headers] }, async (res: http.IncomingMessage) => {
       const chunks: Buffer[] = [];
       for await (const chunk of res) chunks.push(Buffer.from(chunk));
       resolve({ status: res.statusCode!, headers: res.headers, bytes: Buffer.concat(chunks) });
@@ -162,7 +162,7 @@ test("byte validation preserves every compliant byte and refuses required policy
 test("Claude launch and resume prepare the native output option before the CLI forms requests", async () => {
   const file = await fixture();
   let remaining: number | null = 20;
-  const server = http.createServer((req,res) => {
+  const server = http.createServer((req: http.IncomingMessage, res: http.ServerResponse) => {
     assert.equal(req.url, "/gateway/_allowance");
     assert.equal(req.headers.authorization, "Bearer synthetic-main-token");
     res.setHeader("content-type", "application/json");
@@ -187,6 +187,47 @@ test("Claude launch and resume prepare the native output option before the CLI f
   } finally { await close(server); await file.close(); }
 });
 
+test("Claude re-derives the native cap at each start and resume from a fresh bounded allowance", { timeout: 20_000 }, async () => {
+  const file = await fixture();
+  let remaining: number | null = 1000;
+  let pending = 1;
+  let status = 200;
+  let queries = 0;
+  const server = http.createServer((req: http.IncomingMessage, res: http.ServerResponse) => {
+    assert.equal(req.url, "/gateway/_allowance");
+    queries++;
+    res.setHeader("content-type", "application/json");
+    if (pending > 0) { pending--; res.writeHead(409).end(JSON.stringify({ error: { type: "JOB_TOKEN_USAGE_PENDING" } })); return; }
+    res.writeHead(status).end(JSON.stringify(status === 200
+      ? { remaining_tokens: remaining, policy_required: true } : { error: { type: "JOB_TOKEN_USAGE_UNKNOWN" } }));
+  });
+  const base = await listen(server);
+  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" };
+  try {
+    const first = await file.api.prepareClaudeLaunch("claude -p", env);
+    assert.equal(first.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "1000");
+    assert.equal(queries, 2, "a pending ledger commit is waited out within the same bound as admission");
+    const durable = first.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS;
+    remaining = 700;
+    const resumed = await file.api.prepareClaudeLaunch("claude -p --resume fixture", env);
+    assert.equal(resumed.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "700", "the next generation boundary follows the shrunken allowance");
+    assert.equal(resumed.command, "claude -p --resume fixture --settings '{\"env\":{\"CLAUDE_CODE_MAX_OUTPUT_TOKENS\":\"700\"}}'");
+    assert.equal(durable, "1000", "the live process cap is never rewritten in place");
+    status = 409;
+    const before = queries;
+    await assert.rejects(file.api.prepareClaudeLaunch("claude -p --resume fixture", env), /ALLOWANCE_UNAVAILABLE/u);
+    assert.equal(queries, before + 1, "a non-pending allowance refusal is not polled");
+
+    const cap = file.api.claudeOutputCap;
+    assert.equal(cap({ remaining_tokens: null, policy_required: true }), null);
+    assert.equal(cap({ remaining_tokens: 40, policy_required: true }), 40);
+    assert.equal(cap({ remaining_tokens: 40, policy_required: true }, [undefined, "9", 30]), 9);
+    assert.throws(() => cap({ remaining_tokens: 0, policy_required: true }), /EXHAUSTED/u);
+    assert.throws(() => cap({ remaining_tokens: 40, policy_required: true }, ["0"]), /CLAUDE_CAP_INVALID/u);
+    assert.throws(() => cap({ remaining_tokens: 40, policy_required: true }, ["1.5"]), /CLAUDE_CAP_INVALID/u);
+  } finally { await close(server); await file.close(); }
+});
+
 test("all three CLI starts and supported resumes use the explicit wrapper without changing their stdin protocol", async () => {
   const commands: string[] = [];
   const host = {
@@ -207,7 +248,7 @@ test("all three CLI starts and supported resumes use the explicit wrapper withou
 
 test("wrapper preserves child stdin/exit, owns the fixed port and cleans up on signals", { timeout: 20_000 }, async () => {
   const file = await fixture();
-  const remote = http.createServer((_req, res) => res.end("unused"));
+  const remote = http.createServer((_req: http.IncomingMessage, res: http.ServerResponse) => res.end("unused"));
   const upstream = `${await listen(remote)}/gateway`;
   const start = (program: string): ChildProcess => spawn(process.execPath, [file.script, "--", `${shellQuote(process.execPath)} -e ${shellQuote(program)}`],
     { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" } });
@@ -222,7 +263,7 @@ test("wrapper preserves child stdin/exit, owns the fixed port and cleans up on s
     const [echo] = await once(active.stdout!, "data");
     assert.equal(String(echo), "input-frame\n");
     const duplicate = start("process.stdout.write('MUST_NOT_LAUNCH')");
-    let output = ""; duplicate.stdout!.on("data", chunk => { output += chunk; });
+    let output = ""; duplicate.stdout!.on("data", (chunk: Buffer) => { output += chunk; });
     assert.equal((await once(duplicate, "exit"))[0], 78, "a second CLI cannot reuse the first CLI's policy listener");
     assert.equal(output, "");
     active.kill("SIGTERM"); await exit;
@@ -245,7 +286,7 @@ test("accepted Claude scope keeps the launch cap static and refuses later insuff
   const file = await fixture();
   let remaining = 20;
   const received: Buffer[] = [];
-  const remote = http.createServer(async (req, res) => {
+  const remote = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {
     if (req.url === "/gateway/_allowance") {
       res.setHeader("content-type", "application/json");
       res.end(JSON.stringify({ remaining_tokens: remaining, policy_required: true }));
