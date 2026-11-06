@@ -185,13 +185,7 @@ export async function freezeJobSkillCatalog(
     stale_after_days: staleAfterDays,
     max_age_seconds: maxAgeSeconds,
     stale,
-    catalog_hash: sha256(canonical(frozenCatalogHashInput({
-      sources,
-      extensions,
-      stale_after_days: staleAfterDays,
-      max_age_seconds: maxAgeSeconds,
-      stale,
-    }, projectId))),
+    catalog_hash: sha256(canonical(frozenCatalogHashInput({ sources, extensions }, projectId))),
   };
 }
 
@@ -201,11 +195,14 @@ export async function freezeJobSkillCatalog(
  */
 export function jobSkillCatalogStaleNotice(frozen: FrozenJobSkillCatalog | undefined): string | null {
   if (!frozen?.stale) return null;
+  // 只要有一个源从未成功同步，提示就必须说「从未同步」，不能被更"年轻"的源稀释成 0 天。
+  if (frozen.sources.some((source) => (source.age_seconds ?? null) === null)) {
+    return staleSkillCatalogMessage(null);
+  }
   const ages = frozen.sources
     .map((source) => source.age_seconds)
     .filter((age): age is number => typeof age === "number");
-  const oldest = ages.length > 0 ? Math.max(...ages) : null;
-  return staleSkillCatalogMessage(oldest);
+  return staleSkillCatalogMessage(ages.length > 0 ? Math.max(...ages) : null);
 }
 
 /** Only a dedicated future project-source admission path may inject extensions. */
@@ -217,18 +214,20 @@ export function injectFrozenJobSkillExtensions(
   return frozen;
 }
 
+/**
+ * catalog_hash 只覆盖**身份**（源实例、commit、内容 hash、撤销纪元、扩展边界）。
+ * #954 的新鲜度字段（`source_synced_at` / `age_seconds` / `stale`）是给人和画布看的
+ * 证据，不参与准入；把它们写进 hash 会让同一份冻结输入因墙上时钟不同而得到不同
+ * hash，破坏「相同输入幂等」。老快照没有这些字段时 hash 保持一致。
+ */
 function frozenCatalogHashInput(
-  frozen: Pick<FrozenJobSkillCatalog, "sources" | "extensions" | "stale_after_days" | "max_age_seconds" | "stale">,
+  frozen: Pick<FrozenJobSkillCatalog, "sources" | "extensions">,
   projectId: string,
 ): Record<string, unknown> {
   return {
     project_id: projectId,
-    sources: frozen.sources,
-    extensions: frozen.extensions,
-    // 老快照没有 #954 新鲜度字段：保持缺席（undefined）才能与其原 hash 一致。
-    ...(frozen.stale_after_days === undefined ? {} : { stale_after_days: frozen.stale_after_days }),
-    ...(frozen.max_age_seconds === undefined ? {} : { max_age_seconds: frozen.max_age_seconds }),
-    ...(frozen.stale === undefined ? {} : { stale: frozen.stale }),
+    sources: frozen.sources.map(({ source_synced_at: _syncedAt, age_seconds: _age, ...identity }) => identity),
+    extensions: frozen.extensions.map(({ source_synced_at: _syncedAt, age_seconds: _age, ...identity }) => identity),
   };
 }
 

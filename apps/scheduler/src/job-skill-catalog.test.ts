@@ -223,9 +223,19 @@ test("#954 快照冻结 Skill 目录新鲜度，陈旧时不阻断但给出 warn
     assert.deepEqual(fresh.sources.map((source) => source.age_seconds), [21_600, 21_600]);
     assert.deepEqual(fresh.sources.map((source) => source.source_synced_at), [SYNCED_AT, SYNCED_AT]);
     assert.equal(jobSkillCatalogStaleNotice(fresh), null);
-    // 新鲜度字段参与完整性校验：篡改 stale 必须被拒绝。
+    // 新鲜度是证据、不是身份：同一份冻结输入在不同时间必须得到同一个 catalog_hash。
+    const later = await freezeJobSkillCatalog(db, PROJECT, {
+      staleAfterDays: 7,
+      nowMs: Date.parse("2026-11-06T06:00:05.000Z"),
+    });
+    assert.equal(later.catalog_hash, fresh.catalog_hash);
+    assert.notEqual(later.sources[0]!.age_seconds, fresh.sources[0]!.age_seconds);
+    // 身份字段变化仍然破坏完整性校验。
     await assert.rejects(
-      loadJobSkillCatalog(db, PROJECT, { ...fresh, stale: true }),
+      loadJobSkillCatalog(db, PROJECT, {
+        ...fresh,
+        sources: [fresh.sources[0]!, { ...fresh.sources[1]!, commit_sha: "tampered" }],
+      }),
       (error) => error instanceof JobSkillCatalogError && error.error_code === "JOB_SKILL_CATALOG_INTEGRITY",
     );
 
