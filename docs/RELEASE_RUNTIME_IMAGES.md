@@ -1,6 +1,6 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；v0.6.15 为当前发布候选，尚未 tag/发布；v0.6.14 已正式发布，回写尚未完成（2026-11-06 核对）**。
+> 状态：**运维 as-built；v0.6.15 为当前发布候选，尚未 tag/发布；v0.6.14 已正式发布，回写已通过 #938 合入（2026-11-06 核对）**。
 > 同步日期：2026-11-06
 >
 > 2026-11-06 核对 GitHub：最新正式版已推进到 [v0.6.14](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.14)（2026-11-06T05:16:02Z 发布，非 draft/prerelease，5 个附件，tag commit `06e5597d07727ef055aa5094b5af3726de609aef`，tag 未移动）；此前 v0.6.13 保持不可变。2026-11-06 核对 main `713a3a79`：bundled 清单与 `deploy/.env.example` 仍为 `0.6.13`；[attempt 2](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429/attempts/2) 总结虽为 success，writeback job `127726870988` 实际失败于 `WRITEBACK_RUN_AWAITING_APPROVAL`，[#938](https://github.com/SummerSec/DeepSonar/pull/938) 尚待审批/合并。正式 Release 不证明回写或部署完成；这里只核对运行元数据、阶段结论及附件清单，未重新逐通道 inspect 镜像或验签。旧 tag 脚本没有新版防降级回写检查，不应据旧日志重跑旧发布 job。本轮候选为 **v0.6.15**，compare 为 `v0.6.14...v0.6.15`，成功升级基线为 v0.6.14。发布前集成的验收与未完成项见 [v0.6.15 证据与升级边界](#v0615-集成证据与升级边界)；最终目标 SHA 的适用 Actions 与实际发布证据须分别核验。
