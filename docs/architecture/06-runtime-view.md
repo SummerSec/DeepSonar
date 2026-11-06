@@ -195,7 +195,7 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 
 请求按原 token、Job/Attempt、冻结模型和预算准入后，经单次 HTTP 交换转发原始 body、路径/query 和端到端头。客户端请求流先有界收全，响应/SSE 即时发送且遵守背压/取消；usage 仅旁路观察。CLI alias 移至请求生成层，预算不符在出站前明确拒绝。OM wrapper 为请求登记 UUID，收到模型终止结果后查询同 Job/Attempt/token/workload 的持久 effect/usage 状态，仅 settled 才提交；未知保持硬失败。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与 [ADR 0017](adr/0017-transparent-gateway-settlement.md)。本分支最终 SHA Actions 待验。
 
-#923 主执行启动/恢复由上传的[请求准入适配器](../../packages/runtime-sandbox/src/model-request-policy.ts)包装，三 CLI 主 endpoint 只在运行时投影到 loopback，OM 保持真实 Gateway。每次模型 JSON 查询自身 workload allowance，已有 cap/usage 合规才原字节转发，否则拒绝。Pi 已接 SDK 生成前逐次配置，Claude 只接启动/resume 静态 cap；DSH 共用 SDK 生成前 adapter 已接，Claude 动态余额仍是兼容阻塞。未准入 quota/DB 回滚拒绝用原 events 的 scoped kernel 回执确认 not_started；保存失败 unknown，同 UUID 不重发。无新 schema/模型账本，Actions 待验。
+#923 主执行启动/恢复由上传的[请求准入适配器](../../packages/runtime-sandbox/src/model-request-policy.ts)包装，三 CLI 主 endpoint 只在运行时投影到 loopback，OM 保持真实 Gateway。每次模型 JSON 查询自身 workload allowance，已有 cap/usage 合规才原字节转发，否则拒绝。Pi 已接 SDK 生成前逐次配置，Claude 只接启动/resume 静态 cap；DSH 共用 SDK 生成前 adapter 已接。Claude Code 2.1.312 的启动上限与运行中余额不足时明确拒绝并提示，是用户已接受的兼容限制；不修改已形成 body，不要求逐请求自动适配，该范围决定不再阻塞发布。未准入 quota/DB 回滚拒绝用原 events 的 scoped kernel 回执确认 not_started；保存失败 unknown，同 UUID 不重发。无新 schema/模型账本，Actions 待验。
 
 ## 操作员效果结清（#899）
 

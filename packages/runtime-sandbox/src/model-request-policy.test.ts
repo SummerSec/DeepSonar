@@ -237,3 +237,46 @@ test("wrapper preserves child stdin/exit, owns the fixed port and cleans up on s
     await close(probe);
   } finally { if (active && active.exitCode === null && active.signalCode === null) active.kill("SIGKILL"); await close(remote); await file.close(); }
 });
+
+test("accepted Claude scope keeps the launch cap static and refuses later insufficient allowance without rewriting", { timeout: 20_000 }, async () => {
+  const file = await fixture();
+  let remaining = 20;
+  const received: Buffer[] = [];
+  const remote = http.createServer(async (req, res) => {
+    if (req.url === "/gateway/_allowance") {
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ remaining_tokens: remaining, policy_required: true }));
+      return;
+    }
+    assert.equal(req.url, "/gateway/v1/messages");
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    received.push(Buffer.concat(chunks));
+    res.setHeader("content-type", "application/json"); res.end('{"content":[]}');
+  });
+  const base = await listen(remote);
+  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" };
+  const policy = await file.api.startModelRequestPolicy({ upstream: env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token: env.DEEPSONAR_GATEWAY_TOKEN, port: 0 });
+  const endpoint = `http://127.0.0.1:${(policy.server.address() as AddressInfo).port}/gateway/v1/messages`;
+  try {
+    const launch = await file.api.prepareClaudeLaunch("claude -p", env);
+    assert.equal(launch.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "20");
+    const raw = Buffer.from('{ "model":"claude-fixture", "max_tokens":20, "messages":[], "extension_id":9007199254740993 }');
+    const send = () => fetch(endpoint, { method: "POST", headers: { authorization: "Bearer synthetic-main-token", "content-type": "application/json" }, body: raw });
+    const first = await send(); assert.equal(first.status, 200); await first.arrayBuffer();
+    assert.deepEqual(received, [raw], "compliant formed request reaches the fake upstream byte for byte");
+    remaining = 7;
+    const insufficient = await send(); assert.equal(insufficient.status, 409);
+    const rejection = await insufficient.json() as any;
+    assert.equal(rejection.error.message, "MODEL_REQUEST_POLICY_PREGENERATION_REQUIRED");
+    assert.match(rejection.error.hint, /not rewritten or sent/u);
+    assert.equal(received.length, 1, "no smaller rewritten request or implicit retry reaches upstream");
+    assert.equal(launch.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "20", "no claim of per-request native cap updates");
+    remaining = 0;
+    const exhausted = await send(); assert.equal(exhausted.status, 429);
+    const failure = await exhausted.json() as any;
+    assert.equal(failure.error.message, "MODEL_REQUEST_POLICY_EXHAUSTED");
+    assert.match(failure.error.hint, /preserve cumulative usage/u);
+    assert.equal(received.length, 1);
+  } finally { await policy.close(); await close(remote); await file.close(); }
+});

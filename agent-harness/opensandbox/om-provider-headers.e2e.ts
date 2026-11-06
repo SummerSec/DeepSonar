@@ -230,6 +230,10 @@ try {
   const om = snapshot.pi_extensions.find((extension: any) => extension.id === "pi-observational-memory")?.observational_memory;
   assert.ok(om); assert.equal(om.source_provider, OM_HEADERS_PROVIDER); assert.equal(om.source_model, OM_HEADERS_MODEL);
   assert.equal(om.observeAfterTokens, 10000, "no test-only threshold or plugin override");
+  assert.equal(om.request_budget, undefined, "explicit unlimited request policy has no finite OM allocation");
+  assert.deepEqual(snapshot.runtime_profile.native_options.pi?.observational_memory, om);
+  assert.deepEqual(snapshot.agent_runtime_launch.native_options.observational_memory, om);
+  assert.equal(snapshot.agent_runtime_launch.profile_fingerprint, snapshot.runtime_profile.profile_fingerprint);
   assert.ok(snapshot.agent_runtime_launch); assert.equal(snapshot.runtime_image.image_ref, imageRef);
   assert.equal(snapshot.runtime_image.image_digest, imageDigest);
   const snapshotSha = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");

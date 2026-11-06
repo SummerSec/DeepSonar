@@ -217,7 +217,15 @@ export async function startModelRequestPolicy({ upstream, token, port = 38127 })
     } catch (error) {
       controller.abort();
       if (res.headersSent || res.destroyed) res.destroy();
-      else { res.writeHead(Number.isInteger(error.status) ? error.status : 502, {'content-type':'application/json'}); res.end(JSON.stringify({error:{type:'request_admission_policy',message: /^MODEL_REQUEST_POLICY_/.test(error.message) ? error.message : 'MODEL_REQUEST_POLICY_FAILED'}})); }
+      else {
+        const code = /^MODEL_REQUEST_POLICY_/.test(error.message) ? error.message : 'MODEL_REQUEST_POLICY_FAILED';
+        const hint = code === 'MODEL_REQUEST_POLICY_PREGENERATION_REQUIRED'
+          ? 'Request output or usage options do not satisfy the current budget. Configure supported CLI options before generating a new request; the formed request was not rewritten or sent.'
+          : code === 'MODEL_REQUEST_POLICY_EXHAUSTED'
+            ? 'The current token budget is exhausted. This request was not sent; operator action must preserve cumulative usage.' : undefined;
+        res.writeHead(Number.isInteger(error.status) ? error.status : 502, {'content-type':'application/json'});
+        res.end(JSON.stringify({error:{type:'request_admission_policy',message:code,...(hint ? {hint} : {})}}));
+      }
     } finally { controllers.delete(controller); res.off('close',disconnected); }
   });
   await new Promise((resolve,reject) => { server.once('error',reject); server.listen(port,'127.0.0.1',resolve); });
