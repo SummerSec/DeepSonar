@@ -4,6 +4,8 @@
 
 ### 修复
 
+- **修复链的执行生命周期（#903 / #930）**：新增 append-only 修复代际、后续 Attempt 的 fencing、累计预算校验，并把恢复准入与请求策略持久化在 resume / rerun-current / 批量恢复的事务中应用（部分失败回滚）；正常创建、恢复、Hub Intent 与 PlanTask 子 Job 共用同一运行快照冻结，Pi OM 分配校验与管理员可见的配置失败显式报出。历史回执不改写，pending / unknown 效果仍保守准入。本条为 #903 的执行生命周期闭环，恢复链其余范围按技术评论继续跟踪，不据此关单。
+
 - **未发布的 0.6.14 内容随本版交付**。v0.6.14 的 tag 保留，但其 Release 运行 `42037159429` 未产出冻结载荷（原因见 0.6.14 区段），因此 #910 / #912 的 Hub Plan 范围修正与 #916 的 Reverse 原生 CI 磁盘准备随本版一起交付。
 
 - **Pi 完成修正链的派发落地（#913 / #919）**：会话已有被接纳的终态后，Gateway 对再次请求返回的 `COMPLETION_ALREADY_ACCEPTED` 拒绝不再被当作运行器失败抛出，Hub 派发提案按既有派生语义收口。没有已接纳终态的会话、宿主语义校验失败与普通运行器错误仍 fail closed；完成门、attempt fencing 与历史回执不变。
@@ -18,6 +20,10 @@
 
 - **任务删除/归档的提交边界（#904、#917 评审）**：知识工作、版本、提案、分配、评估、回执与设备租约历史都进入保留判定；仅清理任务的知识使用记录，不删除不可变治理证据或设备租约审计。删除和归档遵守 claim advisory → Canvas → Job → Attempt 锁序，事务内取消不调用 provision abort/provider cancel，真实提交后才执行资源清理。取消后注入 SQL 失败的 PostgreSQL 回归验证 Job/Attempt 恢复且 provider 未被中断；独立 session 回归验证归档先等待 Canvas，而非先占 Job。
 - **单条效果结清如实报告剩余量（#899、#908、#917、#926）**：活动 Attempt 的效果仍交内核结算；结清一条历史效果但仍有残留时返回成功并单独报告 `backlog_clear=false` 与真实全局计数，重复、未命中与 active 目标返回失败，查询失败不再报告残留为零。单条人工审计、不重放与 replay policy 边界保持原样。
+
+### 变更
+
+- **开发分支按用途命名（#931 / #933）**：禁止以 AI / Agent 工具名开头（`agent`、`codex`、`cursor`、`claude`、`copilot`、`chatgpt`、`gemini`、`openai`，含 `/`、`-`、`_` 与嵌套路径、不区分大小写），推荐 `feat/`、`fix/`、`docs/`、`refactor/`、`test/`、`chore/` 前缀。规则唯一实现在 `agent-harness/branch-name-policy.mjs` 并由 `ci:unit:ci-routing` 回归；GitHub ruleset 20986002 同步到 32 条模式后，`agent/`、`Agent/`、`agent-`、`agent_`、`codex-` 经 refs API 实测被拒，`feat/` 正常创建。既有分支、历史引用与 tag 不变。
 
 ## [0.6.14] - 2026-11-05
 
