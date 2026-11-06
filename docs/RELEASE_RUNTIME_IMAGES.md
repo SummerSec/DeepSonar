@@ -1,9 +1,9 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；v0.6.14 的发布运行失败，未产出完整冻结载荷；不代表正式发布完成**。
-> 同步日期：2026-11-05
+> 状态：**运维 as-built；v0.6.15 为当前发布候选，尚未 tag/发布；v0.6.14 的 tag 保留但未产出正式发布**。
+> 同步日期：2026-11-06
 >
-> 2026-11-05 核对 GitHub：最新成功正式版仍为 [v0.6.13](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.13)，正式发布时间为 `2026-11-05T13:02:09Z`，tag commit 为 `71cefc0b34d3eddf771a6a39decba6fa003b6ac6`。最高既有版本 tag 是保留的 [v0.6.14](https://github.com/SummerSec/DeepSonar/tree/v0.6.14)；其 [Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 失败，未产出完整冻结载荷，不能视为成功正式版或使用本恢复入口补发。`v0.6.13...v0.6.14` 仅是该历史候选的 compare，不指定下一版本；下一版本由主线程在最终发布准备时确定。[Pi 完成修正阻塞 #913](https://github.com/SummerSec/DeepSonar/issues/913) 已于 `2026-11-05T15:40:59Z` 关闭（completed），不再列为未修复；issue 关闭不等于新版本、签名/catalog 或生产验收完成。最终目标 SHA 的适用 Actions 与实际发布证据须分别核验；历史版本记录见 [CHANGELOG](../CHANGELOG.md)。
+> 2026-11-06 核对 GitHub：最新成功正式版仍为 [v0.6.13](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.13)，正式发布时间为 `2026-11-05T13:02:09Z`，tag commit 为 `71cefc0b34d3eddf771a6a39decba6fa003b6ac6`；bundled 清单与 `deploy/.env.example` 的 `DEEPSONAR_VERSION` 同为 `0.6.13`。最高既有版本 tag 是保留的 [v0.6.14](https://github.com/SummerSec/DeepSonar/tree/v0.6.14)；其 [Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 在 `reverse-image-builds (arm64)` 的 REA Job 验收步骤重试到超时后仍返回 `Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)`，没有冻结载荷，不能视为成功正式版，也不能使用本恢复入口补发（恢复只接受有 GitHub archive digest 的完整原产物）。本轮发布候选定为 **v0.6.15**，compare 为 `v0.6.14...v0.6.15`（发布时前一版本按除目标外最高 `v*` tag 取 v0.6.14，包括失败 tag），成功升级基线仍为 v0.6.13；[Pi 完成修正阻塞 #913](https://github.com/SummerSec/DeepSonar/issues/913) 已于 `2026-11-05T15:40:59Z` 关闭。最终目标 SHA 的适用 Actions 与实际发布证据须分别核验；历史版本记录见 [CHANGELOG](../CHANGELOG.md)。
 >
 > **历史 v0.6.4 发布准备基线（2026-11-02，保留历史来源）**。准备时最近正式版为 [v0.6.2](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.2)，于 2026-10-31T09:05:38Z 正式发布，非 draft / prerelease；tag 指向包含 Web 隔离构建修复的 `347385a53f43d15a53175226528af10a692f6f9e`。[v0.6.3 的 Release](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 失败，已有部分镜像但未完成正式发行。按用户 2026-11-02 的选择，保留其 tag 和既有镜像，改发 **v0.6.4**；Git compare 起点为 v0.6.3，成功升级基线仍为 v0.6.2（schema 65 → 67）。本轮范围沿用[原范围决定](<../AGENTS.md#豁免范围>)，不移动旧 tag 或覆盖旧镜像。这里核对发布元数据与源码关系，不重新声明附件、签名或各通道镜像已逐项复验。
 >
@@ -68,13 +68,13 @@ CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚�
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。
 
-发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-05 当前候选为 v0.6.14，预期 compare 为 `v0.6.13...v0.6.14`，最近正式升级基线为 v0.6.13，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
+发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-06 当前候选为 v0.6.15，预期 compare 为 `v0.6.14...v0.6.15`（前一版本按除目标外最高 `v*` tag 取保留的失败 tag v0.6.14），最近正式升级基线为 v0.6.13，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
 
 ```bash
 pnpm ci:unit:docs-freshness
 pnpm ci:unit:changelog
 # 本轮真实 changelog 区段（仅在 Actions 执行）：
-node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.14 --previous-version 0.6.13 --tag v0.6.14
+node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.15 --previous-version 0.6.14 --tag v0.6.15
 pnpm typecheck
 pnpm build
 pnpm ci:images

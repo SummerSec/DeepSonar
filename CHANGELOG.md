@@ -1,6 +1,14 @@
 ## [Unreleased]
 
+## [0.6.15] - 2026-11-06
+
 ### 修复
+
+- **未发布的 0.6.14 内容随本版交付**。v0.6.14 的 tag 保留，但其 Release 运行 `42037159429` 未产出冻结载荷（原因见 0.6.14 区段），因此 #910 / #912 的 Hub Plan 范围修正与 #916 的 Reverse 原生 CI 磁盘准备随本版一起交付。
+
+- **Pi 完成修正链的派发落地（#913 / #919）**：会话已有被接纳的终态后，Gateway 对再次请求返回的 `COMPLETION_ALREADY_ACCEPTED` 拒绝不再被当作运行器失败抛出，Hub 派发提案按既有派生语义收口。没有已接纳终态的会话、宿主语义校验失败与普通运行器错误仍 fail closed；完成门、attempt fencing 与历史回执不变。
+
+- **项目默认账号的显式选择与修复导航（#914 / #929）**：引用失效或存在多个匹配账号时，用户可从 Job 错误导航进入项目设置显式选择、更换或清除默认账号，默认变化同笔清除旧 `default_model_ref` / `fallback_model_refs`；保存显示服务器实际结果，加载成功前禁止保存，失败保留草稿。只有 `SNAPSHOT_STALE` 加结构化 `repair.code` 才指向账号修复，普通快照漂移、权限、租约与预算错误不冒充；无自动重跑，不改冻结快照。
 
 - **Release resume 的原发布证据绑定**：默认分支恢复代码先校验原运行、成功阶段、不可变 tag 与 artifact 归档摘要，再复用冻结载荷和签名回执独立恢复 writeback / publish；不重建或重签镜像。拒绝错源、替换、缺失、过期及多 attempt 证据；发布查询错误不再被当作 Release 不存在，gate 使用实际签名目录。
 
@@ -9,9 +17,11 @@
 - **Provider 自定义请求头与所选上游一致（#918 / #921）**：Gateway、模型目录发现与推理探测共用服务端配置头解析。官方 Pi 顶层对象、config 对象及 config YAML 复用已有解析器；头只来自当前 endpoint 对应的 profile，空头集合不会借用其他 provider 的租户头，metadata 覆盖与 profile 不匹配时不混用。认证、逐跳/framing 处理与 Job 权限边界保持不变；完整业务透传另由 #923 跟踪，不冒充本片已实现。
 
 - **任务删除/归档的提交边界（#904、#917 评审）**：知识工作、版本、提案、分配、评估、回执与设备租约历史都进入保留判定；仅清理任务的知识使用记录，不删除不可变治理证据或设备租约审计。删除和归档遵守 claim advisory → Canvas → Job → Attempt 锁序，事务内取消不调用 provision abort/provider cancel，真实提交后才执行资源清理。取消后注入 SQL 失败的 PostgreSQL 回归验证 Job/Attempt 恢复且 provider 未被中断；独立 session 回归验证归档先等待 Canvas，而非先占 Job。
-- **单条效果结清如实报告剩余量（#908、#917 评审）**：活动 Attempt 的效果仍交内核结算；操作员结清输出实际查询的未结算数，不再固定报零。
+- **单条效果结清如实报告剩余量（#899、#908、#917、#926）**：活动 Attempt 的效果仍交内核结算；结清一条历史效果但仍有残留时返回成功并单独报告 `backlog_clear=false` 与真实全局计数，重复、未命中与 active 目标返回失败，查询失败不再报告残留为零。单条人工审计、不重放与 replay policy 边界保持原样。
 
 ## [0.6.14] - 2026-11-05
+
+> **该 tag 保留，未产出正式发布**：`v0.6.14` 的 [Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 在 `reverse-image-builds (arm64)` 的 REA Job 验收步骤重试到超时后仍返回 `Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)`，`prepare-release` 起的后续阶段全部跳过，没有冻结载荷、签名或 GitHub Release。按发布守则保留该 tag 与已推送镜像，不移动、不覆盖；本版内容随 `0.6.15` 一起交付，成功升级基线仍是 `v0.6.13`。
 
 ### 修复
 
@@ -21,7 +31,7 @@
 
 ### 已知问题
 
-- **Pi 完成修正链的派发阻塞（#913）仍未修复**。本版只修正 Plan 提示词范围及其摘要校验，完成接纳后的正常退出、回执结算与 Worker 派发仍由 #903 / #913 跟踪。
+- **Pi 完成修正链的派发阻塞（#913）在本 tag 上仍未修复**。该 tag 只修正 Plan 提示词范围及其摘要校验，完成接纳后的正常退出、回执结算与 Worker 派发仍由 #903 / #913 跟踪。该缺陷已由后续 #919 修复并随 `0.6.15` 发布，本节保留为当时事实。
 
 ## [0.6.13] - 2026-11-05
 
@@ -1572,3 +1582,5 @@
 [0.6.13]: https://github.com/SummerSec/DeepSonar/compare/v0.6.12...v0.6.13
 
 [0.6.14]: https://github.com/SummerSec/DeepSonar/compare/v0.6.13...v0.6.14
+
+[0.6.15]: https://github.com/SummerSec/DeepSonar/compare/v0.6.14...v0.6.15
