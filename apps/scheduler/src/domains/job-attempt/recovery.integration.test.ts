@@ -34,6 +34,7 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
     const api = await import("../platform-api/index.js");
     const { ControlInputError } = await import("../../control-input.js");
     const core = await import("../../core.js");
+    const { freezeRuntimeKnobs, resolveRuntimeKnobs } = await import("../../runtime-knobs.js");
     const { default: Fastify } = await import("fastify");
     const app = Fastify();
     const registered = new Set<string>();
@@ -44,7 +45,10 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
     api.registerPlatformControlRoutes(app);
     await app.ready();
     const targetSnapshot = { name: "audit", agent_cli: "claude-code", platform_tools: ["mark_job_done"], network_policy: { allow_egress: false } };
-    const hubSnapshot = { name: "hub_reason", role_kind: "hub", agent_cli: "claude-code", platform_tools: ["submit_hub_decision", "mark_job_done"], network_policy: { allow_egress: false } };
+    // This resolver fixture must supply the same frozen creation contract as core.
+    const hubSnapshot = { name: "hub_reason", role_kind: "hub", agent_cli: "claude-code", platform_tools: ["submit_hub_decision", "mark_job_done"],
+      network_policy: { allow_egress: false },
+      runtime_knobs: freezeRuntimeKnobs(resolveRuntimeKnobs({ jobType: "hub_reason", job: { timeoutSec: 3600 } })) };
     const readJob = async (id: string, db = sql) => (await db`SELECT * FROM jobs WHERE id=${id}`)[0]!;
     const lock = async (db: Db, id: string) => {
       const job = await readJob(id, db);
@@ -113,7 +117,13 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       const state = (await recovery.readCompletionRecovery(db, f.jobId, f.attemptId))!;
       return wake(db, job, state);
     });
-    const hubFor = async (f: Fixture) => (await sql`SELECT * FROM jobs WHERE canvas_id=${f.canvasId} AND type='hub_reason' ORDER BY created_at DESC,id DESC LIMIT 1`)[0]!;
+    const hubFor = async (f: Fixture) => {
+      const [hub] = await sql`SELECT * FROM jobs WHERE canvas_id=${f.canvasId} AND type='hub_reason' ORDER BY created_at DESC,id DESC LIMIT 1`;
+      assert.ok(hub);
+      assert.deepEqual(hub.agent_snapshot_json.runtime_knobs, hubSnapshot.runtime_knobs);
+      assert.equal(hub.timeout_sec, hubSnapshot.runtime_knobs.timeout_sec);
+      return hub;
+    };
     const decisionFor = (state: CompletionRecoveryState, action = "reconcile_effects") => ({ recovery_ref: state.recovery_ref,
       target_job_id: state.target_job_id, target_attempt_id: state.target_attempt_id, expected_recovery_revision: state.recovery_revision,
       expected_evidence_sha256: state.evidence_sha256, action, reason: "Model reason is not evidence; consult the exact durable ledger" });
