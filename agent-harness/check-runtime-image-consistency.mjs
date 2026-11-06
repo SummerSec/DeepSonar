@@ -1038,6 +1038,7 @@ expect(
 );
 const chromeReleaseBlock = releaseWorkflow.slice(
   releaseWorkflow.indexOf("  chrome-images:"),
+  releaseWorkflow.indexOf("\n  kali-minimal:"),
 );
 expect(
   chromeReleaseBlock.includes('selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"') &&
