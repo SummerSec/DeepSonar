@@ -1,9 +1,9 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；v0.6.15 为当前发布候选，尚未 tag/发布；v0.6.14 的 tag 保留但未产出正式发布**。
+> 状态：**运维 as-built；v0.6.15 为当前发布候选，尚未 tag/发布；v0.6.14 已正式发布，回写尚未完成（2026-11-06 核对）**。
 > 同步日期：2026-11-06
 >
-> 2026-11-06 核对 GitHub：最新正式版已推进到 [v0.6.14](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.14)（2026-11-06 发布，5 个附件，tag commit `06e5597d07727ef055aa5094b5af3726de609aef`，tag 未移动）；此前 v0.6.13 保持不可变。本轮候选为 **v0.6.15**，compare 为 `v0.6.14...v0.6.15`，成功升级基线为 v0.6.14。发布前集成的验收与未完成项见 [v0.6.15 证据与升级边界](#v0615-集成证据与升级边界)；最终目标 SHA 的适用 Actions 与实际发布证据须分别核验。
+> 2026-11-06 核对 GitHub：最新正式版已推进到 [v0.6.14](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.14)（2026-11-06T05:16:02Z 发布，非 draft/prerelease，5 个附件，tag commit `06e5597d07727ef055aa5094b5af3726de609aef`，tag 未移动）；此前 v0.6.13 保持不可变。2026-11-06 核对 main `713a3a79`：bundled 清单与 `deploy/.env.example` 仍为 `0.6.13`；[attempt 2](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429/attempts/2) 总结虽为 success，writeback job `127726870988` 实际失败于 `WRITEBACK_RUN_AWAITING_APPROVAL`，[#938](https://github.com/SummerSec/DeepSonar/pull/938) 尚待审批/合并。正式 Release 不证明回写或部署完成；这里只核对运行元数据、阶段结论及附件清单，未重新逐通道 inspect 镜像或验签。旧 tag 脚本没有新版防降级回写检查，不应据旧日志重跑旧发布 job。本轮候选为 **v0.6.15**，compare 为 `v0.6.14...v0.6.15`，成功升级基线为 v0.6.14。发布前集成的验收与未完成项见 [v0.6.15 证据与升级边界](#v0615-集成证据与升级边界)；最终目标 SHA 的适用 Actions 与实际发布证据须分别核验。
 >
 > **历史 v0.6.4 发布准备基线（2026-11-02，保留历史来源）**。准备时最近正式版为 [v0.6.2](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.2)，于 2026-10-31T09:05:38Z 正式发布，非 draft / prerelease；tag 指向包含 Web 隔离构建修复的 `347385a53f43d15a53175226528af10a692f6f9e`。[v0.6.3 的 Release](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 失败，已有部分镜像但未完成正式发行。按用户 2026-11-02 的选择，保留其 tag 和既有镜像，改发 **v0.6.4**；Git compare 起点为 v0.6.3，成功升级基线仍为 v0.6.2（schema 65 → 67）。本轮范围沿用[原范围决定](<../AGENTS.md#豁免范围>)，不移动旧 tag 或覆盖旧镜像。这里核对发布元数据与源码关系，不重新声明附件、签名或各通道镜像已逐项复验。
 >
@@ -37,7 +37,7 @@
 
 完整归档验证后，才从受信任归档取得 freeze/receipt 哈希，复用 `checkPublication` 与 `checkSignatureReceipt` 校验所有冻结附件、目标 metadata、原正向签名验证和负向篡改证明以及固定 cosign/根摘要。恢复不修改 `GITHUB_*`、不调用 signing、不增加 OIDC/持久凭据或新信任根；原 `releaseIdentity` 正式 tag 门禁不变。发布 gate 使用调用方的 signature directory。远端 tag 在证据检查后再次核对，不移动 tag；平台管理员另行并发移动 tag 不在恢复允许行为内。
 
-限制：只接受原运行 attempt 1；GitHub artifact API 不提供可靠的跨重跑 attempt 绑定，所以多 attempt、缺失/过期/重复 artifact、无 API archive digest、错误工作流/仓库/版本/commit、缺失成功阶段、下载或 API 失败均 fail closed。不能从本地副本或自报 receipt 修补这些缺口。真实恢复须另行授权；合成测试不代表已恢复任何旧版本。v0.6.14 run `42037159429` 未产生完整冻结载荷，不能恢复。
+限制：只接受原运行 attempt 1；GitHub artifact API 不提供可靠的跨重跑 attempt 绑定，所以多 attempt、缺失/过期/重复 artifact、无 API archive digest、错误工作流/仓库/版本/commit、缺失成功阶段、下载或 API 失败均 fail closed。不能从本地副本或自报 receipt 修补这些缺口。真实恢复须另行授权；合成测试不代表已恢复任何旧版本。v0.6.14 run `42037159429` 的 attempt 1 未产生冻结载荷；attempt 2 重跑相关阶段后产生了新载荷与签名并发布。该 run 现在因多 attempt 不满足本恢复入口的严格条件，不能使用 release-resume；不通过放宽门禁补回写。
 
 Release 查询仅明确的 API 404 可进入 create，401/403/网络错误不当作缺失；已有正式 Release 的预期附件必须完整、已上传且 API digest 与冻结内容一致才幂等早退；缺件/不同内容或 draft/prerelease 冲突均停止供对账，不覆盖或补传。create 前在共享并发锁内分页查询已发布正式版本；存在更高稳定版本时显式 `--latest=false`，避免旧版本恢复倒退 latest/官方远端目录；查询失败停止。create 的未知结果不在同次执行自动重放，下一次恢复先查询现状。回写仍可能因 bot PR 等待批准或 required checks 失败而停止；不会绕过权限或检查。回归由 `ci:unit:runtime-registry` 的 Actions gate 执行，Draft 快检也显式运行恢复及原签名测试；覆盖合成冻结产物、假 API、受控发布命令与临时 Git 回写，不连接生产或真实模型。
 
@@ -72,7 +72,7 @@ CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚�
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。
 
-发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-06 当前候选为 v0.6.15，预期 compare 为 `v0.6.14...v0.6.15`（前一版本按除目标外最高 `v*` tag 取保留的失败 tag v0.6.14），最近正式升级基线为 v0.6.13，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
+发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-06 当前候选为 v0.6.15，预期 compare 为 `v0.6.14...v0.6.15`（前一版本按除目标外最高 `v*` tag 取已正式发布的 v0.6.14），最近正式升级基线为 v0.6.14，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
 
 ```bash
 pnpm ci:unit:docs-freshness

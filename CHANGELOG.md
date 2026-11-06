@@ -35,7 +35,7 @@
 
 ## [0.6.14] - 2026-11-05
 
-> **v0.6.14 已正式发布（2026-11-06）**：首次 [Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 在 `reverse-image-builds (arm64)` 的 REA Job 验收中失败——`timeout` 是该用例的预期模式，而创建 sandbox 时 Egress sidecar 启动失败（`Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)`），实测得到 `failed`；验收记录只有一次 Attempt、`sandbox_id` 为空、`retry_scheduled` 为空、`redispatch_calls=0`。该失败只证明创建阶段的 sidecar 启动失败，不证明重试耗尽或运行超时。随后按发布守则复用同一次运行的冻结载荷完成正式发布，`v0.6.14` 现有一个 GitHub Release（5 个附件），tag 未移动、镜像未覆盖。该版本的内容（#910 / #912、#916）随 `v0.6.14` 交付，不重复计入 `0.6.15`。
+> **v0.6.14 已正式发布（2026-11-06）**：[Release run 42037159429](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429) 的 attempt 1 在 `reverse-image-builds (arm64)` 的 REA Job 验收中失败——`timeout` 是该用例的预期模式，而创建 sandbox 时 Egress sidecar 启动失败（`Egress sidecar container failed to start. (500; DOCKER::SANDBOX_START_FAILED)`），实测得到 `failed`；验收记录只有一次 Attempt、`sandbox_id` 为空、`retry_scheduled` 为空、`redispatch_calls=0`。该失败只证明创建阶段的 sidecar 启动失败，不证明重试耗尽或运行超时。attempt 1 的 prepare-release、platform-signatures 与 release-publish 均 skipped，没有冻结载荷可复用。同一 run 的 [attempt 2](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429/attempts/2) 重跑相关阶段，分别于 2026-11-06T05:15:10Z 和 05:15:47Z 新生成冻结载荷 `13478624844` 与签名证据 `13479262779`，再于 05:16:02Z 发布原 tag（非 draft/prerelease，5 个附件）。这不是 release-resume，也没有发布本轮新代码；tag 仍指向 `06e5597d07727ef055aa5094b5af3726de609aef`。上述元数据不替代逐通道镜像 inspect 或重新验签，也不证明镜像是否覆盖。writeback job `127726870988` 失败；2026-11-06 核对 [#938](https://github.com/SummerSec/DeepSonar/pull/938) 仍待审批/合并，main bundled 清单和部署示例仍为 0.6.13，整体 run success 不代表回写成功。本轮新代码仍须经新的 v0.6.15 发布。该版本的内容（#910 / #912、#916）随 `v0.6.14` 交付，不重复计入 `0.6.15`。
 
 ### 修复
 
