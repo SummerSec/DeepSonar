@@ -620,6 +620,8 @@ export interface JobDetail {
   job: {
     execution_state?: JobExecutionState | null;
     id: string;
+    /** Returned by the Job detail API; older projections may omit it. */
+    project_id?: string;
     type: string;
     status: string;
     error: string | null;
@@ -1170,6 +1172,11 @@ export interface CredentialImpact {
   };
   scans: {
     active: { count: number; items: Array<Record<string, unknown>> };
+  };
+  /** Actor-visible project config references; count includes items beyond the bounded list. */
+  project_references: {
+    count: number;
+    items: Array<{ project_id: string; project_name: string | null; enabled: boolean; default: boolean }>;
   };
 }
 

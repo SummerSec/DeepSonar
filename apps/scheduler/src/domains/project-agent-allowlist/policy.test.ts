@@ -54,6 +54,24 @@ test("model defaults and fallback refs stay paired with the selected Provider", 
   const cleared = applyProjectAgentAllowlistPatch(cfg, { default_credential_id: null });
   assert.equal(cleared.default_model_ref, null);
   assert.deepEqual(cleared.fallback_model_refs, []);
+  assert.equal(Object.hasOwn(cfg, "default_model_ref"), false);
+  assert.equal(Object.hasOwn(cfg, "fallback_model_refs"), false);
+});
+
+test("patch: shrinking credential whitelist clears paired models but preserves the deny-all key", () => {
+  const id = "11111111-1111-4111-8111-111111111111";
+  const cfg: Record<string, unknown> = {
+    enabled_credential_ids: [id], default_credential_id: id,
+    default_model_ref: "model-a", fallback_model_refs: ["model-b"],
+  };
+  applyProjectAgentAllowlistPatch(cfg, { enabled_credential_ids: [] });
+  assert.deepEqual(cfg, { enabled_credential_ids: [] });
+});
+
+test("patch: explicit model or fallback refs without a default credential are rejected", () => {
+  for (const patch of [{ default_model_ref: "model-a" }, { fallback_model_refs: ["model-b"] }]) {
+    assert.throws(() => applyProjectAgentAllowlistPatch({}, patch), /必须绑定缺省 Provider/);
+  }
 });
 
 test("assert: 未配置不阻断；配置后 fail-closed", () => {

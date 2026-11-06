@@ -31,6 +31,23 @@ test("credential OpenAPI exposes safe metadata, health and impact/model APIs", (
   });
 });
 
+test("credential project-reference OpenAPI documents scoped impact and global rejection", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const schemas = (document.components as Record<string, unknown>).schemas as Record<string, Record<string, any>>;
+  assert.ok(schemas.CredentialImpact.required.includes("project_references"));
+  assert.match(schemas.CredentialImpact.properties.project_references.description, /actor 可见项目/);
+  const deletion = paths["/credentials/{id}"].delete;
+  const rejection = deletion.responses["409"].content["application/json"].schema.allOf[1].properties;
+  assert.ok(rejection.error_code.enum.includes("CREDENTIAL_PROJECT_REFERENCE"));
+  assert.equal(rejection.next_action.type, "string");
+  assert.match(deletion.description, /所有项目/);
+  assert.doesNotMatch(deletion.responses["409"].description, /RoleConfig/);
+  const settings = paths["/projects/{id}/settings"].patch;
+  assert.match(settings.description, /provider_credential_allowlist_stale/);
+  assert.ok(settings.requestBody.content["application/json"].schema.properties.fallback_model_refs);
+});
+
 test("credential batch and picker OpenAPI contracts are strict and typed", () => {
   const document = buildOpenApiDocument();
   const paths = document.paths as Record<string, Record<string, unknown>>;

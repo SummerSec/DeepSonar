@@ -1,8 +1,10 @@
+import { ProjectCredentialRepairLinks } from "./components/ProjectCredentialRepairLinks";
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle, LockKey, PencilSimple, Plugs, Trash, Warning } from "@phosphor-icons/react";
 import {
   api,
   type Project,
+  type CredentialImpact,
   type ProviderAccountCatalogItemView,
   type ProviderCredential,
 } from "./api";
@@ -67,6 +69,7 @@ export function ProviderAccountFlow({
   const [repairProvider, setRepairProvider] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [projectReferences, setProjectReferences] = useState<CredentialImpact["project_references"] | null>(null);
   const [notice, setNotice] = useState("");
   const [testing, setTesting] = useState(false);
   const [createName, setCreateName] = useState("");
@@ -125,7 +128,8 @@ export function ProviderAccountFlow({
   }, []);
 
   useEffect(() => { if (notice) showToast(notice, "ok"); }, [notice]);
-  useEffect(() => { if (error) showToast(error, "error"); }, [error]);
+  useEffect(() => { if (error) showToast(error, "error"); else setProjectReferences(null); }, [error]);
+  useEffect(() => { setProjectReferences(null); }, [selectedCredentialId, actorProjectId]);
 
   useEffect(() => {
     if (!createProvider) {
@@ -385,6 +389,7 @@ export function ProviderAccountFlow({
   };
 
   const deleteAccount = async (credential: ProviderCredential) => {
+    setProjectReferences(null);
     setBusy(true);
     setError("");
     try {
@@ -399,6 +404,22 @@ export function ProviderAccountFlow({
       }
       if (activeScans > 0) {
         setError(`无法删除「${credential.name}」：仍有 ${activeScans} 个进行中的镜像准入扫描引用该凭据。`);
+        return;
+      }
+      // Project references block deletion even when no Job is running.
+      const projectRefs = liveImpact.project_references.items;
+      const projectRefCount = liveImpact.project_references.count;
+      if (projectRefCount > 0) {
+        setProjectReferences(liveImpact.project_references);
+        const names = projectRefs
+          .slice(0, 3)
+          .map((ref) => `${ref.project_name ?? ref.project_id}${ref.default ? "（缺省账号）" : "（启用账号）"}`)
+          .join("、");
+        setError(
+          `无法删除「${credential.name}」：${projectRefCount} 个可见项目仍引用该账号（${names}`
+          + `${projectRefCount > 3 ? " 等" : ""}）。请先在项目 Agent 设置里移除或替换引用，再删除；`
+          + `如需禁用所有账号，保留显式空白名单，不要删除白名单键扩大授权。`,
+        );
         return;
       }
       const historical = liveImpact.jobs.terminal_historical.count;
@@ -466,6 +487,7 @@ export function ProviderAccountFlow({
 
       {notice && <div className="provider-flow-notice"><CheckCircle size={15} /> {notice}</div>}
       {error && <div className="provider-flow-error"><Warning size={15} /> {error}</div>}
+      {projectReferences && <ProjectCredentialRepairLinks references={projectReferences} />}
 
       <div className="provider-flow-grid">
         <div className="provider-flow-card provider-flow-account-card">

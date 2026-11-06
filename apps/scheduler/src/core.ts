@@ -709,8 +709,9 @@ export async function scrubLeftoverStoredRules(
     const removedProtocol = Object.keys(stripped).length !== Object.keys(next.rules).length;
     if (next.removedKeys.length === 0 && !removedProtocol) continue;
     cfg.rules = stripped;
-    await db`UPDATE projects SET config_json = ${db.json(cfg as never)} WHERE id = ${project.id}`;
-    projectCount += 1;
+    const updated = await db`UPDATE projects SET config_json = ${db.json(cfg as never)}
+      WHERE id = ${project.id} AND config_json = ${db.json(project.config_json as never)} RETURNING id`;
+    projectCount += updated.length;
   }
   return { global, projects: projectCount };
 }
@@ -740,13 +741,17 @@ export async function scrubRedundantConfigSurface(
     if (protocol.changed) {
       cfg.finding_protocol = protocol.next;
       changed = true;
-      protocols += 1;
     }
-    if (scrubStoredProjectImagePolicy(cfg)) {
-      changed = true;
-      imagePolicies += 1;
+    const imageChanged = scrubStoredProjectImagePolicy(cfg);
+    if (imageChanged) changed = true;
+    if (changed) {
+      const updated = await db`UPDATE projects SET config_json = ${db.json(cfg as never)}
+        WHERE id = ${project.id} AND config_json = ${db.json(project.config_json as never)} RETURNING id`;
+      if (updated.length > 0) {
+        if (protocol.changed) protocols += 1;
+        if (imageChanged) imagePolicies += 1;
+      }
     }
-    if (changed) await db`UPDATE projects SET config_json = ${db.json(cfg as never)} WHERE id = ${project.id}`;
   }
 
   const canvases = await db`

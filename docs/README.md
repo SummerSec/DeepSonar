@@ -6,6 +6,8 @@
 
 > **v0.6.14 发布准备（2026-11-05）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)。Plan 范围修正与其他已合入补丁列于 [CHANGELOG](../CHANGELOG.md)，[#913 完成修正阻塞](https://github.com/SummerSec/DeepSonar/issues/913) 仍为已知问题。最终 main Actions 与正式产物成功状态分别核对。
 
+#914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由独立变更处理，不能据此视为整个 issue 完成。最终 SHA Actions 待验收。
+
 > **注意力原则（#830）**：单一权威定义见 [DESIGN](../DESIGN.md#核心理念优化人的注意力)，开发与贡献入口引用同一[工程评审及正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)。NFR-UX-001 登记约束与验证范围；本次只落实设计/评审依据，不改变运行时、UI 或授权，也不宣称注意力收益。
 
 > **任务目标证据（#767）**：契约、候选、来源隔离评审、非 Finding 结果与确定性报告已接线。可信只读 authority/grant 绑定当前身份、动作、前提和版本，子/系统 Job 统一继承并在 provision/重跑实时重核，见 [ADR 0011](architecture/adr/0011-trusted-target-authorization.md)。独立程序资格由 [#822 操作员评审](PROGRAM_ELIGIBILITY.md) 投影；目标授权、技术 Verify、判据、Plan 完成与资格各自分责。无契约仍 unassessed，验收见[矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
@@ -25,6 +27,8 @@
 > **项目知识（2026-10-20，#752）**：schema v61；Job 冻结目录、项目 Memory/Skill 生命周期、精确跨项目 Skill 授权、独立 case×arm 评测、持久回执与管理页见 [PROJECT_KNOWLEDGE.md](PROJECT_KNOWLEDGE.md)。实现状态与模型效果试验分开记录。 #903 的 Knowledge/Skill 分类透传与离线验证边界见[拒绝反馈](PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。
 
 > **账号修复审查补强（2026-10-18，#748 / #749）**：普通编辑保留 Claude 独立 tier；上游错误摘要覆盖配置秘密与 C1 控制字符；探测结果回写按配置、CLI 和项目核对；Windows 基线重建支持 CRLF/LF。详见 [`../DESIGN.md`](../DESIGN.md) §8 与 [凭据解析运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)。
+
+> **凭据引用保护（2026-11-05，#914 切片）**：项目范围 impact、全局删除完整性与设置/删除共用凭据行锁已接线；真实 PG 双会话与 scoped HTTP 回归复用 `pnpm ci:integration:credential-delete`。保留空白名单与冻结 Job，不提供新编辑器或自动扩权修复；完整默认账号 UX 未交付，最终 Actions 尚待验收。详见[接口规格](architecture/09-interface-specs.md#项目凭据引用保护914-切片)。
 
 > **凭据解析同步（2026-10-21，#757）**：Provider/model/项目授权先形成候选，凭据决定 CLI；readiness 与 Job 共用解析，区分全局种子无偏好和用户显式偏好。项目 RoleConfig 不再暴露可写却不生效的 CLI/model，未收紧白名单读取不固化凭据 ID。详见 [运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)、[数据架构](architecture/08-data-architecture.md)与[接口规范](architecture/09-interface-specs.md)。
 
@@ -209,3 +213,7 @@
 - [当前 Job 的 Skill 条件建议](SKILL_SUGGESTIONS.md)：#778 本项目精确版本条件匹配、选择声明回执与非模型验收矩阵；不自动启用，不声称效果或成本收益。
 
 - [沙箱 Pi 观测记忆决策](PI_OBSERVATIONAL_MEMORY_DECISIONS.md)与 [ADR 0013](architecture/adr/0013-governed-pi-memory.md)：已定边界保持不变；实际本地镜像 RPC、独立生产 guard 与 OM 专属版本准入已验，细节集中见 [RPC 专题](PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。本轮工程已随 [#831 在 fdb55a01 主线 Actions 验收](<TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA、发布通道/平台与 registry/catalog 仍另验，质量/成本收益 unknown。
+
+发布恢复的 as-built 身份/证据与限制已于 2026-11-05 对照[发布专题](RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)同步；真实恢复未经本次执行。
+
+#899 的[操作员效果结清契约](../deploy/README.md#未知效果的人工结清899)区分单条成功、全局残留和未核验状态；隔离 PostgreSQL/CLI 回归接入 Actions，最终 SHA 工程验收与 s66 现场升级分别留证。

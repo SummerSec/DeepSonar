@@ -1,17 +1,5 @@
-# #893: resume a release without rebuilding images.
-#
-# A full release is a long chain whose last two stages are irreversible
-# external effects. When such a stage fails (ruleset rejection, missing
-# pull-request permission, a bot PR waiting for approval, a flaky runner),
-# the original run's artifacts are still valid, so the fix is to re-run the
-# stage rather than the pipeline.
-#
-# Usage: Actions -> "Release resume" -> Run workflow
-#   version        X.Y.Z of the release to complete
-#   source_run_id  the release.yml run whose artifacts are reused
-#   stages         writeback | publish | both
+# Recovery executes reviewed control code, never rebuilds or signs images.
 name: Release resume
-
 on:
   workflow_dispatch:
     inputs:
@@ -19,7 +7,7 @@ on:
         description: "Release version (X.Y.Z)"
         required: true
       source_run_id:
-        description: "release.yml run id with platform-release-payload"
+        description: "Original release.yml run (attempt 1, retained payload and signatures)"
         required: true
       stages:
         description: "Which stage(s) to resume"
@@ -27,78 +15,51 @@ on:
         default: both
         type: choice
         options: [both, writeback, publish]
-
 permissions:
   contents: write
   actions: read
   checks: read
   pull-requests: write
-
+# Serialize with the original publisher, including different versions' writebacks.
 concurrency:
-  group: release-resume-${{ github.repository }}-${{ inputs.version }}
+  group: release-runtime-images-${{ github.repository }}
   cancel-in-progress: false
-
 jobs:
   resume:
+    strategy:
+      fail-fast: false
+      matrix:
+        stage: ${{ fromJSON(inputs.stages == 'both' && '["writeback","publish"]' || format('["{0}"]', inputs.stages)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      VERSION: ${{ inputs.version }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+      STAGES: ${{ inputs.stages }}
+      DEFAULT_BRANCH: main
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: 校验输入
-        env:
-          VERSION: ${{ inputs.version }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          STAGES: ${{ inputs.stages }}
+      - name: Reject dispatch outside the default branch before checkout
         run: |
           set -euo pipefail
-          version_re='^[0-9]+\.[0-9]+\.[0-9]+$'
-          run_re='^[0-9]+$'
-          [[ "$VERSION" =~ $version_re ]] || {
-            echo "version must be X.Y.Z" >&2; exit 1; }
-          [[ "$SOURCE_RUN_ID" =~ $run_re ]] || {
-            echo "source_run_id must be numeric" >&2; exit 1; }
-          case "$STAGES" in
-            writeback|publish|both) ;;
-            *) echo "unknown stages: $STAGES" >&2; exit 1 ;;
-          esac
-          git rev-parse "v${VERSION}" >/dev/null 2>&1 || {
-            echo "tag v${VERSION} does not exist" >&2; exit 1; }
-
+          [[ "$GITHUB_REPOSITORY" == 'SummerSec/DeepSonar' ]]
+          [[ "$GITHUB_REF" == 'refs/heads/main' ]]
+          [[ "$GITHUB_WORKFLOW_REF" == 'SummerSec/DeepSonar/.github/workflows/release-resume.yml@refs/heads/main' ]]
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ inputs.version }}
+          fetch-tags: true
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-
-      # Reusing the original artifacts is what makes the resume cheap.
-      - name: 复用原运行的冻结载荷
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-        run: |
-          set -euo pipefail
-          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name platform-release-payload --dir frozen-release
-          gh run download "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --name platform-signature-evidence --dir signature-evidence
-          ls -1 frozen-release | head
-
+      - name: Verify source run, immutable tag, artifact archives and signature receipt
+        run: node agent-harness/release-resume.mjs
       - name: 回写 bundled 清单（P3）
-        if: ${{ inputs.stages != 'publish' }}
-        env:
-          VERSION: ${{ inputs.version }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: bash agent-harness/release-writeback.sh frozen-release
-
+        if: matrix.stage == 'writeback'
+        run: |
+          node agent-harness/platform-signature-publication.mjs gate frozen-release signature-evidence
+          bash agent-harness/release-writeback.sh frozen-release
       - name: 创建 Release（P4）
-        if: ${{ inputs.stages != 'writeback' }}
-        env:
-          VERSION: ${{ inputs.version }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: >
-          bash agent-harness/release-publish.sh
-          frozen-release signature-evidence
+        if: matrix.stage == 'publish'
+        run: bash agent-harness/release-publish.sh frozen-release signature-evidence

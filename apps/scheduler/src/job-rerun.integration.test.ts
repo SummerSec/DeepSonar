@@ -165,6 +165,51 @@ if (!testDatabaseUrl) {
       const post = (jobId: string, action: "resume" | "rerun-current") =>
         app.inject({ method: "POST", url: `/jobs/${jobId}/${action}` });
 
+      // #914: rerun-current cannot repair dangling current configuration itself.
+      // Repeated refusal preserves the frozen snapshot and creates no Attempt;
+      // only an explicit settings repair permits the user's subsequent rerun.
+      const staleCredentialId = randomUUID();
+      const staleConfigJob = await insertJob({ status: "failed", payload: { marker: "stale-config" } });
+      const staleConfigJobId = String(staleConfigJob.id);
+      for (const currentConfig of [
+        { enabled_credential_ids: [baselineCredentialId, staleCredentialId] },
+        { default_credential_id: staleCredentialId },
+        { enabled_credential_ids: [baselineCredentialId, staleCredentialId], default_credential_id: staleCredentialId },
+      ]) {
+        await sql`UPDATE projects SET config_json = ${sql.json(currentConfig)} WHERE id = ${projectId}`;
+        for (let retry = 0; retry < 2; retry += 1) {
+          const refused = await post(staleConfigJobId, "rerun-current");
+          assert.equal(refused.statusCode, 409, refused.payload);
+          assert.equal(refused.json().error_code, "SNAPSHOT_STALE");
+          assert.equal(refused.json().next_action, "fix-current-configuration");
+          assert.deepEqual(refused.json().stale_fields, ["current_snapshot_unresolvable"]);
+          assert.equal(refused.json().repair.code, "provider_credential_allowlist_stale");
+          assert.equal(refused.json().repair.next_action, "repair_project_credential_allowlist");
+        }
+        const [unchanged] = await sql`SELECT status, agent_snapshot_json, payload_json FROM jobs WHERE id = ${staleConfigJobId}`;
+        assert.equal(unchanged.status, "failed");
+        assert.deepEqual(unchanged.agent_snapshot_json, baselineSnapshot);
+        assert.deepEqual(unchanged.payload_json, { marker: "stale-config" });
+        const [attemptCount] = await sql`SELECT count(*)::int AS count FROM job_attempts WHERE job_id = ${staleConfigJobId}`;
+        assert.equal(attemptCount.count, 0);
+      }
+      const repaired = await app.inject({
+        method: "PATCH", url: `/projects/${projectId}/settings`,
+        payload: { enabled_credential_ids: [baselineCredentialId], default_credential_id: baselineCredentialId },
+      });
+      assert.equal(repaired.statusCode, 200, repaired.payload);
+      const [stillFailed] = await sql`SELECT status, agent_snapshot_json, payload_json FROM jobs WHERE id = ${staleConfigJobId}`;
+      assert.equal(stillFailed.status, "failed", "settings repair must not automatically rerun a Job");
+      assert.deepEqual(stillFailed.agent_snapshot_json, baselineSnapshot, "settings repair does not rewrite a frozen Job");
+      assert.deepEqual(stillFailed.payload_json, { marker: "stale-config" });
+      const explicitlyRerun = await post(staleConfigJobId, "rerun-current");
+      assert.equal(explicitlyRerun.statusCode, 200, explicitlyRerun.payload);
+      const [repairedJob] = await sql`SELECT status, agent_snapshot_json FROM jobs WHERE id = ${staleConfigJobId}`;
+      assert.equal(repairedJob.status, "pending");
+      assert.equal(repairedJob.agent_snapshot_json.credential_id, baselineCredentialId);
+      await sql`UPDATE jobs SET status = 'cancelled', finished_at = now() WHERE id = ${staleConfigJobId}`;
+      await sql`UPDATE projects SET config_json = '{}'::jsonb WHERE id = ${projectId}`;
+
       // Model, CLI, and Credential drift all reject old-snapshot resume.
       // #674: governed identity comes from the global RoleConfig (project rows
       // no longer supply model/CLI). After restoring the exact identity, the

@@ -19,7 +19,25 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 项目 RoleConfig 写入拒绝 `agent_cli` / `model`，读取不暴露这两个字段；全局 CLI 接受 NULL 表示未指定偏好。项目 RoleConfig 导出不含这两项，导入含这两项（即使为 NULL）也拒绝；全局导入未指定 CLI 保持 NULL。项目 Agent 设置分别表达 CLI 和凭据白名单是否显式收紧，`credential_ids_configured` 区分未配置与空名单，设置读取不持久化凭据 ID。readiness 的检查项可携带与 Job 解析同源的 RepairFeedback；悬空/停用白名单要求管理员修复，不能通过 Agent 提交账号 ID 或 OCI 地址绕过（#757）。
 
+### 项目凭据引用保护（#914 切片）
+
+`GET /credentials/:id` 的 impact 与 `GET /credentials/:id/impact` 只返回 actor 可见项目的 `project_references`；count 是该作用域完整计数，items 按[引用查询](../../apps/scheduler/src/credential-project-references.ts)有界返回。能读取全局凭据不表示能读取其他项目的名称、UUID 或配置关系。DELETE 的完整性判定另查所有项目：仍有 `enabled_credential_ids` 或 `default_credential_id` 引用时返回 `409 CREDENTIAL_PROJECT_REFERENCE` 和修复指引，但拒绝响应仍只展示可见引用。
+
+设置 PATCH 在项目 `FOR NO KEY UPDATE` 锁内合并配置，按 UUID 顺序取得与 DELETE 共用的凭据行锁，持有至事务提交；该项目锁保护配置写入，同时允许凭据迁移的外键 `KEY SHARE`，避免 Project/Credential 反向等待。DELETE 不靠锁定扫描时已有的引用项目提供互斥。设置写入重验新增及保留的全部引用是否存在、active、属于全局或当前项目，省略模型字段不绕过；失效返回 `400 provider_credential_allowlist_stale`，配置原样保留。模型/回退仍按缺省账号的配置名单重验；清除或收窄掉缺省账号时清除配对模型，显式提交无账号的模型拒绝。缺少白名单键继续不收紧，显式 `[]` 继续禁止所有账号；不自动删键、替换账号或改写历史 Job。此片复用既有设置和删除反馈，**不代表 #914 完整默认账号 UX 已交付**。
+
+不修改凭据的配置入口不能复制旧整对象来回写账号引用：Skill configured 标记与 convergence 快捷规则使用当前 JSONB 的字段级更新，启动清理使用原配置 CAS，导入合并在事务中锁定项目后重新读取当前值。这样不会在账号替换/删除后复活旧引用；这些机制不授予新凭据、不清历史快照，也不把显式空白名单扩大为未收紧。
+
+行为入口是 `pnpm ci:integration:credential-delete`：包括实际 HTTP 两项目负例与 PostgreSQL 双会话 delete-first/write-first 屏障，覆盖仅白名单、仅缺省及同时引用。测试接线不代表最终 SHA Actions 已通过。注意力成本：在删除前显示阻塞与既有修复位置，不增加编辑器、设置或自动修复决策；不以减少打扰扩大授权。
+
 管理认证入口有明确的健康、schema、bootstrap、Worker 注册和 WS ticket 例外；`/gateway` 与 `/control/v1/jobs` 使用独立的 Job-scoped 凭据。认证失败和授权拒绝会审计但不记录 token、Provider 原文或内部堆栈。旧配置不通过转换继续运行，不能用另一个认证面绕过当前契约。
+
+### 项目默认 Provider 账号选择（#914）
+
+项目 Provider 面板通过既有 settings PATCH 显式设置、更换或清除 `default_credential_id`。候选须是 active、全局或当前项目可见、在项目凭据与 CLI 启用范围内的 Provider；未配置凭据白名单表示未收紧，显式 `[]` 没有候选，不自动选择其他账号。现有失效引用清理控件继续保留；默认账号不可用时要求用户明确清除或更换，加载失败不能视作空名单并清掉配置。
+
+默认账号变化时，Web 同笔提交 `default_model_ref: null` 和 `fallback_model_refs: []`，避免旧账号模型默默沿用；保存后以服务端返回为准并刷新，失败保留未保存状态。同项目健康检查返回等价设置时保留编辑草稿（不以数组对象身份判定变更）；真实服务端配置变化加载新值并提示重新确认，取消和项目切换仍重置草稿。账号连接与模型配置链接到既有 Credentials 页面。该 UI 切片不改变后端引用保护、resolver fail-closed、历史快照或 Job 恢复机制，不自动重跑任务，也不代表 #914 全部验收完成；最终 SHA Actions 结果另计。
+
+Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操作，读取 `SNAPSHOT_STALE` 响应的当前解析失败标记和结构化 `repair.code`。`resolution_error` 是人类可读文本，不按文案猜测机器原因：仅 `provider_credential_allowlist_stale` / `provider_credential_multi_match` 导向已知 Job 项目的 `settings?tab=roles` 和凭据配置页；普通快照身份漂移及其他权限、预算、租约拒绝不冒充账号失效。导航不发起重跑；保存配置后仍由用户确认后续执行。确认取消、重复点击、路由/项目切换及卸载用请求身份隔离迟到响应，已经入队但刷新失败与入队被拒绝分别展示。测试接在 `pnpm ci:unit:credential-compatibility`；最终 Actions 结果另记。resolver 的缺失/停用/跨项目引用与空名单拒绝、`rerun-current` 连续拒绝后仅由显式修复和再次执行恢复的回归分别接在 `pnpm ci:unit:capability-pack` 与 `pnpm ci:integration:recovery`；配置保存不改冻结快照，不自动入队。
 
 ### Finding 项目查询（#770 切片 B）
 
