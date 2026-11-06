@@ -1254,7 +1254,8 @@ jobs:
             if [ "$FUZZ_ARM_REQUIRED" = "required" ]; then
               [ "$result" = "success" ] || fail "$name is required by the run plan but got: $result"
             else
-              [ "$result" = "skipped" ] || [ "$result" = "success" ] || fail "$name result unexpected for a planned skip: $result"
+              # 计划判定无需 ARM 时必须是 skipped：真的跑了说明计划与运行不一致，同样 fail closed。
+              [ "$result" = "skipped" ] || fail "$name ran even though the run plan skipped it: $result"
             fi
           }
 
