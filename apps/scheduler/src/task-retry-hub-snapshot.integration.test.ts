@@ -130,7 +130,7 @@ if (!testDatabaseUrl) {
       })} WHERE id = ${projectId}`;
       const created = await app.inject({
         method: "POST", url: `/projects/${projectId}/tasks`,
-        payload: { title: "Pi slash model", content: "Verify the configured model identity" },
+        payload: { title: "Pi slash model", content: "Verify the configured model identity", allow_egress: false },
       });
       assert.equal(created.statusCode, 201, created.payload);
       // A failure after the reset must roll the whole transaction back.
