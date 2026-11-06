@@ -20,6 +20,7 @@ import {
   CLASSIFIER_MODES,
   CLASSIFIER_STATUSES,
   classifyRecords,
+  isDocsOnlyPath,
   parseGitNameStatusZ,
 } from "./classify-ci-changes.mjs";
 
@@ -160,6 +161,14 @@ export const CHROME_FUZZ_ARM_PINNED_INPUTS = Object.freeze([
   "agent-harness/classify-ci-changes.mjs",
 ]);
 
+/** Reviewed business paths that neither the base nor Chrome runtime consumes. */
+export const CHROME_FUZZ_ARM_NON_IMAGE_INPUTS = Object.freeze([
+  "apps/scheduler/**",
+  "apps/web/**",
+  "packages/shared-types/**",
+  "database/**",
+]);
+
 /**
  * Decide whether this run must execute the Chrome Fuzz ARM build + native smoke.
  *
@@ -182,9 +191,15 @@ export function chromeFuzzArmRequirement({
   if (mode === RUN_MODES.DRAFT_FAST) {
     return { required: false, reason: "chrome_fuzz_draft_fast_path" };
   }
-  const chromeInputs = [...(suitePaths.chrome ?? []), ...CHROME_FUZZ_ARM_PINNED_INPUTS];
+  if (paths.length === 0 || !suitePaths.chrome?.length) {
+    return { required: true, reason: "chrome_fuzz_inputs_missing_fail_closed" };
+  }
+  const chromeInputs = [...suitePaths.chrome, ...CHROME_FUZZ_ARM_PINNED_INPUTS];
   if (paths.some((path) => matchesAnyPath(chromeInputs, path))) {
     return { required: true, reason: "chrome_fuzz_inputs_changed" };
+  }
+  if (paths.some((path) => !isDocsOnlyPath(path) && !matchesAnyPath(CHROME_FUZZ_ARM_NON_IMAGE_INPUTS, path))) {
+    return { required: true, reason: "chrome_fuzz_unknown_input_fail_closed" };
   }
   return { required: false, reason: "chrome_fuzz_inputs_unchanged" };
 }

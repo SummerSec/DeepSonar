@@ -2,8 +2,11 @@
 // must never turn a missing/partial diff into a smaller required set.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   FAST_SUITE_ROUTES,
@@ -265,6 +268,68 @@ test("#961 unrelated business changes skip the ARM gate with an explicit reason"
   assert.equal(plan.mode, RUN_MODES.READY_FULL);
   assert.equal(plan.chromeFuzzArm, false);
   assert.ok(plan.reasons.includes("chrome_fuzz_inputs_unchanged"));
+});
+
+test("#961 unknown, transitive base and missing inputs never authorize an ARM skip", () => {
+  for (const paths of [
+    ["some/new/tool.txt"],
+    ["agent-harness/dsh-runtime/package-lock.json"],
+    ["agent-harness/pi-observational-memory-governed.ts"],
+    ["packages/runtime-sandbox/src/dsh-request-budget.ts"],
+    [".github/ci/prepare-hosted-runner-disk.mjs"],
+    ["apps/web/src/App.tsx", "some/new/tool.txt"],
+  ]) {
+    const plan = buildRunPlan({
+      ...pr, draft: false, suitePaths: SUITE_PATHS,
+      diffBytes: diff(...paths.map(change)),
+    });
+    assert.equal(plan.chromeFuzzArm, true, paths.join(", "));
+    assert.ok(plan.reasons.includes("chrome_fuzz_unknown_input_fail_closed"));
+  }
+  for (const record of [
+    ["D", "unknown/build-input.txt"],
+    ["R100", "unknown/build-input.txt", "apps/web/src/input.txt"],
+    ["R100", "apps/web/src/input.txt", "unknown/build-input.txt"],
+  ]) {
+    assert.equal(buildRunPlan({ ...pr, suitePaths: SUITE_PATHS, diffBytes: diff(record) }).chromeFuzzArm, true);
+  }
+  assert.equal(buildRunPlan({ ...pr, suitePaths: SUITE_PATHS, diffBytes: Buffer.alloc(0) }).chromeFuzzArm, true);
+  assert.equal(buildRunPlan({ ...pr, diffBytes: diff(change("apps/web/src/App.tsx")) }).chromeFuzzArm, true);
+
+  const businessAndDocs = buildRunPlan({
+    ...pr, suitePaths: SUITE_PATHS,
+    diffBytes: diff(change("apps/web/src/App.tsx"), change("docs/README.md")),
+  });
+  assert.equal(businessAndDocs.chromeFuzzArm, false);
+});
+
+test("#961 actual CLI writes fail-closed ARM outputs, not just helper verdicts", () => {
+  const dir = mkdtempSync(join(tmpdir(), "deepsonar-arm-plan-"));
+  try {
+    const cases = [
+      { args: ["--event-name", "push"], required: true, status: 0 },
+      { args: ["--event-name", "workflow_dispatch"], required: true, status: 0 },
+      { args: ["--event-name", "pull_request"], required: true, status: 1 },
+      { bytes: Buffer.from("M\0unknown/input"), required: true, status: 1 },
+      { bytes: diff(change("unknown/input")), required: true, status: 0 },
+      { bytes: diff(change("apps/web/src/App.tsx")), required: false, status: 0 },
+    ];
+    for (const [index, entry] of cases.entries()) {
+      const output = join(dir, `output-${index}`);
+      const input = join(dir, `diff-${index}`);
+      const args = entry.args ?? ["--event-name", "pull_request", "--base", "base", "--head", "head", "--diff-file", input];
+      if (entry.bytes) writeFileSync(input, entry.bytes);
+      const run = spawnSync(process.execPath, [join(ROOT, "agent-harness/ci-run-plan.mjs"), ...args, "--root", ROOT, "--ci-pr-mode", "tiered"], {
+        cwd: ROOT, env: { ...process.env, GITHUB_OUTPUT: output }, encoding: "utf8",
+      });
+      assert.equal(run.status, entry.status, run.stderr);
+      const plan = JSON.parse(run.stdout);
+      assert.equal(plan.chromeFuzzArm, entry.required);
+      assert.match(readFileSync(output, "utf8"), new RegExp(`^chrome_fuzz_arm=${entry.required ? "required" : "skipped"}$`, "m"));
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("#961 the ARM gate cannot be skipped by a failed or unreadable diff", () => {
