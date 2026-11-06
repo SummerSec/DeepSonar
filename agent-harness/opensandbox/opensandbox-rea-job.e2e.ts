@@ -68,6 +68,28 @@ try {
   process.env.DEEPSONAR_SHARED_ASSETS_HELPER_IMAGE = helperImage;
   report.shared_assets_helper = { image: helperImage };
 
+  // OpenSandbox pulls its egress sidecar lazily while creating a sandbox, so a cold or
+  // rate-limited pull surfaces only as the opaque
+  // "Egress sidecar container failed to start (500; DOCKER::SANDBOX_START_FAILED)".
+  // The server pins that image by digest in its own config; pull exactly that reference
+  // first so an unavailable image is reported as such instead of as a sandbox failure.
+  const egressImage = /image\s*=\s*"([^"]*opensandbox\/egress@sha256:[0-9a-f]{64})"/u
+    .exec(await readFile(path.join(root, "deploy/opensandbox/config.toml"), "utf8"))?.[1];
+  assert.ok(egressImage, "REA_JOB_RUNTIME_UNAVAILABLE: pinned egress sidecar image is not declared in deploy/opensandbox/config.toml");
+  let egressPulled = false;
+  for (const attempt of [1, 2, 3, 4]) {
+    try {
+      execFileSync("docker", ["pull", egressImage], { encoding: "utf8", stdio: "inherit" });
+      egressPulled = true;
+      break;
+    } catch {
+      report.egress_sidecar = { image: egressImage, pull_attempts: attempt, pulled: false };
+      await sleep(attempt * 10_000);
+    }
+  }
+  assert.ok(egressPulled, `REA_JOB_RUNTIME_UNAVAILABLE: pinned egress sidecar image could not be pulled: ${egressImage}`);
+  report.egress_sidecar = { image: egressImage, pulled: true };
+
   const postgres = (await import(schedulerRequire.resolve("postgres"))).default;
   const adminUrl = new URL(process.env.TEST_DATABASE_URL!);
   adminUrl.pathname = "/postgres"; adminUrl.search = "";
