@@ -192,6 +192,24 @@ test("every specialist workflow gates its heavy matrix on the same run plan", ()
     assert.equal(workflow.jobs.plan.outputs.mode, "${{ steps.plan.outputs.mode }}");
     for (const [id, job] of Object.entries(workflow.jobs)) {
       if (id === "plan") continue;
+      if (suite === "reverse" && id === "reverse-runtime-acceptance") {
+        assert.deepEqual(job.needs, ["plan", "reverse-runtime-images", "claude-budget-acceptance", "pi-om-acceptance"]);
+        assert.equal(job.if, "always() && (needs.plan.result != 'success' || needs.plan.outputs.mode == 'ready-full')");
+        assert.equal(job.strategy, undefined, "the summary must not start another heavy matrix");
+        assert.equal(job.services, undefined, "the summary must not start services");
+        assert.equal(job["continue-on-error"], undefined);
+        const step = job.steps.find((candidate) => candidate.name === "Require every native acceptance matrix");
+        assert.ok(step, "the summary must verify all dependency results");
+        assert.equal(step["continue-on-error"], undefined);
+        for (const [variable, dependency] of [
+          ["PLAN", "plan"], ["REVERSE", "reverse-runtime-images"],
+          ["CLAUDE", "claude-budget-acceptance"], ["PI_OM", "pi-om-acceptance"],
+        ]) {
+          assert.equal(step.env[`${variable}_RESULT`], "${{ needs." + dependency + ".result }}");
+          assert.ok(step.run.includes(`test "$${variable}_RESULT" = success`), "skips and failures cannot satisfy the summary");
+        }
+        continue;
+      }
       assert.deepEqual(job.needs, "plan", `${suite}/${id} must depend on the plan`);
       assert.match(job.if, /needs\.plan\.outputs\.mode == 'ready-full'/, `${suite}/${id} must skip on Draft`);
     }
