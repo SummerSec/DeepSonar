@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
+import test, { after, before, describe } from "node:test";
 import { createPlanExecutionFixture } from "./plan-execution-test-fixture.js";
 
 const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
-test("historical Pi session preview/download redact before truncation and preserve immutable source bytes", { skip: !process.env.TEST_DATABASE_URL }, async () => {
-  const h = await createPlanExecutionFixture();
-  try {
+describe("Pi session and RPC evidence", { skip: !process.env.TEST_DATABASE_URL }, () => {
+  // Scheduler modules cache their SQL connection; keep one fixture for this file.
+  let h: Awaited<ReturnType<typeof createPlanExecutionFixture>>;
+  before(async () => { h = await createPlanExecutionFixture(); });
+  after(async () => { await h?.close(); });
+
+  test("historical Pi session preview/download redact before truncation and preserve immutable source bytes", async () => {
     const { JobEvidenceWriter, SESSION_VIEW_MAX_BYTES } = await import("./evidence.js");
     const f = await h.fixture();
     const canary = "HISTORICAL_OM_PRIVATE_CANARY";
@@ -66,5 +70,66 @@ test("historical Pi session preview/download redact before truncation and preser
     assert.equal(nativeDownload.statusCode, 200);
     assert.equal(nativeDownload.payload, nativeContent, "other CLI sessions retain their ordinary quoted input exactly");
     assert.equal(nativeDownload.headers["x-deepsonar-session-projection"], undefined);
-  } finally { await h.close(); }
+  });
+
+  test("#990 orphan evidence merges unfinalized RPC index with raw streams after restart", async () => {
+    const { JobEvidenceWriter } = await import("./evidence.js");
+    const f = await h.fixture();
+    const writer = new JobEvidenceWriter(f.hub, "pi", "rpc-inflight");
+    await writer.appendNormalized({ type: "text.delta", delta: "persisted before RPC" });
+    const ref = await writer.appendRuntimeArtifact({ name: "pi-rpc-abcd-1.json", content: "{}" });
+    await h.sql`UPDATE jobs SET status='orphan' WHERE id=${f.hub}`;
+    const resumed = new JobEvidenceWriter(f.hub, "pi", "rpc-inflight");
+    const response = await h.app.inject({ method: "GET", url: `/jobs/${f.hub}/evidence` });
+    assert.equal(response.statusCode, 200, response.payload);
+    const manifest = response.json().manifest;
+    assert.equal(manifest.inflight, true);
+    assert.equal(manifest.finalized_at, null);
+    assert.ok(manifest.capture_error.includes("Session 无法跨容器恢复"));
+    assert.ok(manifest.files.some((file: { path: string; sha256: string | null }) => file.path === ref && file.sha256 !== null));
+    const stream = manifest.files.find((file: { path: string }) => file.path === "attempts/rpc-inflight/stream.ndjson");
+    assert.equal(stream.kind, "stream");
+    assert.equal(stream.inflight, true);
+    assert.equal(stream.sha256, null);
+    assert.ok(stream.bytes > 0);
+    await resumed.finalize();
+  });
+
+  test("#990 capture previews round-trip complete text, arrays and leaf refs through the HTTP reader", async () => {
+    const { JobEvidenceWriter } = await import("./evidence.js");
+    const { PiRpcOutputCapture, PI_RPC_ARCHIVE_FIELD, PI_RPC_REF_FIELD, PI_RPC_INLINE_BYTES } = await import("@deepsonar/runtime-sandbox");
+    const f = await h.fixture();
+    const writer = new JobEvidenceWriter(f.hub, "pi", "rpc-http");
+    const capture = new PiRpcOutputCapture({ uploadFile: async () => {} }, [], artifact => writer.appendRuntimeArtifact(artifact), () => {});
+    const cases = [
+      { record: { type: "message_update", text: "中".repeat(400_000) }, pointer: "/text", value: "中".repeat(400_000) },
+      { record: { type: "message_end", message: { role: "assistant", stopReason: "end_turn", content: Array.from({ length: 160 }, (_, i) => ({ type: "text", text: `${i}:` + "x".repeat(8000) })) } }, pointer: "/message/content", value: undefined },
+      { record: { type: "tool_execution_start", toolCallId: "call-1", toolName: "write", args: { content: "z".repeat(PI_RPC_INLINE_BYTES + 1024) } }, pointer: "/args/content", value: "z".repeat(PI_RPC_INLINE_BYTES + 1024) },
+      { record: { type: "response", id: "preview-ref", command: "get_state", success: true, values: Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`k${i}`, { text: "测🙂".repeat(2000) }])) }, pointer: "/values/k0/text", value: "测🙂".repeat(2000) },
+    ];
+    for (const item of cases) {
+      const output = await capture.prepare(item.record, Buffer.byteLength(JSON.stringify(item.record)));
+      const archive = output[PI_RPC_ARCHIVE_FIELD] as { path: string; sha256: string; bytes: number };
+      assert.ok(archive, "every preview has a durable archive association");
+      const q = new URLSearchParams({ path: archive.path, attempt_id: "rpc-http", sha256: archive.sha256, pointer: item.pointer });
+      if (output.values) {
+        const ref = ((output.values as Record<string, Record<string, unknown>>).k0!.text) as Record<string, unknown>;
+        assert.equal(ref[PI_RPC_REF_FIELD], archive.path);
+        q.set("bytes", String(ref.bytes));
+      }
+      const response = await h.app.inject({ method: "GET", url: `/jobs/${f.hub}/evidence/runtime?${q}` });
+      assert.equal(response.statusCode, 200, response.payload.slice(0, 200));
+      const expected = item.value ?? (item.record as { message: { content: unknown } }).message.content;
+      assert.deepEqual(response.json().value, expected);
+      assert.equal(response.json().source.sha256, archive.sha256);
+      if (output.args) assert.equal(((output.args as Record<string, unknown>).content as Record<string, unknown>)[PI_RPC_REF_FIELD], archive.path);
+      const wrong = await h.app.inject({ method: "GET", url: `/jobs/${f.hub}/evidence/runtime?${q}&unexpected=true` });
+      assert.equal(wrong.statusCode, 400);
+      assert.equal(wrong.json().error_code, "PI_RPC_READ_INVALID");
+      q.set("attempt_id", "other-attempt");
+      const crossAttempt = await h.app.inject({ method: "GET", url: `/jobs/${f.hub}/evidence/runtime?${q}` });
+      assert.equal(crossAttempt.statusCode, 404);
+    }
+    await writer.finalize();
+  });
 });

@@ -1463,6 +1463,21 @@ const OPS: Op[] = [
   },
   {
     method: "get",
+    path: "/jobs/{id}/evidence/runtime",
+    summary: "按完整归档和 JSON Pointer 回读 Pi RPC 载荷",
+    description: "只读当前 Job manifest 中所选 Attempt 的 immutable vendor_export RPC JSON，不读沙箱路径。校验完整源字节与 manifest/请求 SHA 后，先执行 Pi 观察记忆脱敏，再解析 RFC 6901 pointer；空 pointer 返回完整 JSON。value 不使用预览截断。source 描述源归档；bytes/sha256 描述实际选中值（字符串为 UTF-8，其他值为 JSON）。可选 bytes 校验选中值长度。读取字节/并发预算以 runtime-evidence.ts 为准；缺失、不可见、哈希/长度不符、非法指针或超预算均明确拒绝。此接口不触发 Agent 输入或控制副作用。",
+    scope: "tasks:read",
+    tags: ["Jobs"],
+    query: {
+      path: { type: "string", required: true, description: "$piArchive.path / $piRef 对应的 Attempt 留存相对路径" },
+      attempt_id: { type: "string", required: true },
+      sha256: { type: "string", required: true, description: "完整脱敏 RPC JSON 的 SHA-256" },
+      pointer: { type: "string", description: "RFC 6901 JSON Pointer，默认空串选择根 JSON" },
+      bytes: { type: "integer", minimum: 0, description: "可选的选中值 UTF-8/JSON 字节数断言" },
+    },
+  },
+  {
+    method: "get",
     path: "/jobs/{id}/evidence/session",
     summary: "查看 Agent CLI Session",
     description:

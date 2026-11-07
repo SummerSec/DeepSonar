@@ -2,6 +2,7 @@ import { readCompletionExecutionState } from "../platform-api/completion-state.j
 import { TaskGoalReviewRequest, normalizeTaskContract } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { registerRuntimeEvidenceRoutes } from "./runtime-evidence-routes.js";
 import { z } from "zod";
 import { projectPlanGaps } from "../plan-protocol/gap-projection.js";
 import { audit } from "../../audit.js";
@@ -121,6 +122,7 @@ export function isPublicJobTypeAllowed(
 }
 
 export function registerJobControlRoutes(app: FastifyInstance): void {
+  registerRuntimeEvidenceRoutes(app);
   // ---------- Jobs ----------
   app.post("/jobs", async (req, reply) => {
     const body = CreateJobBody.parse(req.body);

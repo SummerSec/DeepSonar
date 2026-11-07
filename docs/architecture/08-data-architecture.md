@@ -88,6 +88,10 @@ OM 的 package/version/integrity/entry、wrapper 指纹、Job/当前 Session 配
 
 Session observation/reflection、fold/recall 正文只用于上下文；新归档、RPC 大帧副本和 viewer 脱敏保留身份与来源元数据，物理归档不使 memory 成为 Fact/Evidence authority。历史 HTTP preview/download 已在预览截断或发送前按 Pi header/manifest 独立执行结构化脱敏，immutable archive metadata 保持不变，projection bytes/SHA/Content-Digest 另报，相关真实路由集成已通过。实际本地构建镜像的 RPC、独立生产 guard 及封装/版本准入回归也已通过，集中见 [RPC 边界](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；Gateway 已知请求前失败须持久结算零用量/effect `never_started` 才能降级，详情见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。最终组合 CI 与发布证据仍另验，不推导质量或成本收益。
 
+### Pi RPC 归档索引与读取（#990 切片）
+
+大事件的完整脱敏 JSON 仍保存在 `attempts/<attempt>/runtime/`，但文件落盘后立即原子发布到现有 Job evidence manifest，索引确认先于引用返回；不新增 schema 或独立账本。重建 writer 从该 Attempt 的持久文件元数据计算已用额度，已有归档不覆盖，未登记文件不会被读取入口当作可信引用。新回读在返回值前校验源长度与 SHA，`source` 元数据保持不可变，RFC 6901 选择和 OM 脱敏后的返回值字节/hash 单独报告；不存在或不可见的本地字节明确拒绝，不跨副本补造。契约及最终 SHA 待验范围见 [Pi RPC 专题](../PI_RPC_PAYLOAD_LIMITS.md)。
+
 ## 运行身份与可选白名单（#757）
 
 全局 `role_configs.agent_cli=NULL` 是未指定偏好的显式存储语义；种子不再写入 `claude-code`。用户保存的非空值是跨 CLI 候选的偏好，不能排除唯一有效凭据。项目 RoleConfig 不持有 `agent_cli` / `model`，管理写入拒绝这两项，读取不暴露，遗留值清空。已有 Job 的 `agent_snapshot_json` 仍是冻结历史真相，不参与清理或重新解析。

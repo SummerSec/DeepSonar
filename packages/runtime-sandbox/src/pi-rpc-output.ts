@@ -7,6 +7,8 @@ export const PI_RPC_CAPTURE_BYTES = 128 * 1024 * 1024;
 export type RuntimeArtifactWriter = (artifact: { name: string; content: string }) => Promise<string>;
 const PAYLOAD_KEYS = new Set(["text", "delta", "output", "result", "error", "errorMessage", "message"]);
 
+/** #990: root association with the full redacted event in durable Attempt evidence. */
+export const PI_RPC_ARCHIVE_FIELD = "$piArchive";
 /** #944: inline marker pointing at the archived capture of one oversized subtree. */
 export const PI_RPC_REF_FIELD = "$piRef";
 /** #944: per-string inline budget once an event is still above the bound after preview. */
@@ -43,7 +45,7 @@ class ReportedCaptureError extends Error {}
  */
 function referenceOversized(
   value: unknown,
-  options: { refPath: string; sha256: string; budget: number; pointer?: string; refs: RefReplacement[] },
+  options: { refPath: string; sha256: string; budget: number; source: unknown; pointer?: string; refs: RefReplacement[] },
 ): unknown {
   const { refPath, sha256, budget, refs } = options;
   const pointer = options.pointer ?? "";
@@ -53,20 +55,23 @@ function referenceOversized(
   // Arrays are bounded by `PI_RPC_PREVIEW_MAX_ELEMENTS` in the preview instead.
   if (Array.isArray(value)) {
     return value.map((entry, index) =>
-      referenceOversized(entry, { refPath, sha256, budget, refs, pointer: `${pointer}/${index}` }));
+      referenceOversized(entry, { refPath, sha256, budget, refs, source: Array.isArray(options.source) ? options.source[index] : undefined, pointer: `${pointer}/${index}` }));
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key,
       referenceOversized(entry, {
         refPath, sha256, budget, refs,
+        source: options.source && typeof options.source === "object" ? (options.source as Record<string, unknown>)[key] : undefined,
         pointer: `${pointer}/${key.replace(/~/gu, "~0").replace(/\//gu, "~1")}`,
       })]));
   }
   if (!pointer || PI_RPC_CONTROL_PATHS.has(pointer) || typeof value !== "string") return value;
   const size = Buffer.byteLength(value);
   if (size <= budget) return value;
-  refs.push({ pointer, bytes: size });
-  return { [PI_RPC_REF_FIELD]: refPath, pointer, sha256, bytes: size };
+  if (typeof options.source !== "string") throw new Error("PI_RPC_REFERENCE_SOURCE_MISMATCH");
+  const sourceBytes = Buffer.byteLength(options.source);
+  refs.push({ pointer, bytes: sourceBytes });
+  return { [PI_RPC_REF_FIELD]: refPath, pointer, sha256, bytes: sourceBytes };
 }
 
 /** No structural/identity fields are removed. Only known textual payloads get bounded previews. */
@@ -124,8 +129,10 @@ export class PiRpcOutputCapture {
     const safeRecord = redactPiObservationalMemory(record) as Record<string, unknown>;
     if (originalBytes <= PI_RPC_INLINE_BYTES) return safeRecord;
     try {
+      if (Object.hasOwn(safeRecord, PI_RPC_ARCHIVE_FIELD)) throw new Error("PI_RPC_ARCHIVE_FIELD_COLLISION");
       if (!this.archive) throw new Error("PI_RPC_CAPTURE_UNAVAILABLE");
-      const content = JSON.stringify(project(safeRecord, this.secrets, false));
+      const full = project(safeRecord, this.secrets, false);
+      const content = JSON.stringify(full);
       const bytes = Buffer.byteLength(content);
       if (this.sequence >= 128 || this.retainedBytes + bytes > this.budget) throw new Error("PI_RPC_CAPTURE_BUDGET_EXCEEDED");
       const name = `pi-rpc-${this.runId}-${++this.sequence}.json`;
@@ -139,8 +146,10 @@ export class PiRpcOutputCapture {
         truncated: true, original_bytes: originalBytes, retained_bytes: bytes, capture_complete: true,
         sha256, hash_scope: "redacted_json", path, evidence_path: evidencePath });
 
+      const archive = { path: evidencePath, sha256, bytes };
       const projected = project(safeRecord, this.secrets, true) as Record<string, unknown>;
-      if (Buffer.byteLength(JSON.stringify(projected)) <= PI_RPC_INLINE_BYTES) return projected;
+      const preview = { ...projected, [PI_RPC_ARCHIVE_FIELD]: archive };
+      if (Buffer.byteLength(JSON.stringify(preview)) <= PI_RPC_INLINE_BYTES) return preview;
 
       // #944: the redacted preview is still over the inline bound. Replacing the
       // whole event with a bare reference used to lose its semantics (the driver
@@ -148,11 +157,14 @@ export class PiRpcOutputCapture {
       // `unknown_runtime`, tool starts and `message_end` stop reasons vanished).
       // Keep the event and every control field, and point at the archived copy
       // for the oversized payload instead.
-      let candidate = projected;
+      let candidate: Record<string, unknown> = preview;
       const refs: RefReplacement[] = [];
       for (const budget of [PI_RPC_REF_FIELD_BYTES, PI_RPC_REF_FIELD_BYTES / 4, PI_RPC_REF_FIELD_BYTES / 16]) {
         refs.length = 0;
-        candidate = referenceOversized(projected, { refPath: path, sha256, budget, refs }) as Record<string, unknown>;
+        candidate = {
+          ...referenceOversized(projected, { refPath: evidencePath, sha256, budget, source: full, refs }) as Record<string, unknown>,
+          [PI_RPC_ARCHIVE_FIELD]: archive,
+        };
         if (Buffer.byteLength(JSON.stringify(candidate)) <= PI_RPC_INLINE_BYTES) break;
       }
       const preserved = typeof candidate.type === "string" && candidate.type === safeRecord.type;

@@ -445,7 +445,7 @@ v0.6.3 集成核对（2026-11-01）：[#831](https://github.com/SummerSec/DeepSo
 
 ### Pi 大输出证据边界（#765）
 
-RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-output.ts)有界校验；受支持大事件先落完整脱敏 JSON 到 workspace 与 Attempt evidence，再交付文本预览。运行级保存预算包括恢复进程，控制字段不丢弃，捕获失败不能结算成功。路径、hash 范围与测试边界见 [CLI 契约](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)；此实现不证明生产审计覆盖。
+RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-output.ts)有界校验；受支持大事件先落完整脱敏 JSON 到 workspace 与 Attempt evidence，再交付文本预览。运行级保存预算包括恢复进程，控制字段不丢弃，捕获失败不能结算成功。#990 将每个大预览关联到持久 manifest 已确认的完整归档；同 Attempt 额度跨 writer 重建保留，Management 按 Job/Attempt/源 hash 与 JSON Pointer 显式回读，保持既有任务读取权限，不自动装入模型上下文。路径、hash 范围、固定读取预算与待验边界见 [Pi RPC 专题](docs/PI_RPC_PAYLOAD_LIMITS.md)；本切片最终 SHA Actions 待验，发送侧/冻结 knobs/真实 80 MiB E2E 未交付，不证明生产审计覆盖。
 
 程序规则独立评审（#767，本片已通过离线行为验收）复用 goal_review，对 supplied bounty Finding 增加 program_rule:<ruleid>，通用目标判据保持不变。requirement satisfied 表示满足，exclusion satisfied 表示未命中；报告独立呈现 program_rule_review，不把通用判据满足当程序规则完成。该路径仅复核 operator_supplied 材料，不认证官方规则、授权或 eligible。独立程序资格另由 [#822 操作员准入与评审](docs/PROGRAM_ELIGIBILITY.md) 绑定当前 Finding/Verify/材料/证据后投影，不自动提交漏洞，也不代替适用攻击链或 knownness 核验。详见[评审边界](docs/TASK_GOAL_REVIEW.md)。
 

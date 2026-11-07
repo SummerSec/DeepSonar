@@ -106,6 +106,7 @@ GET /jobs
 GET /jobs/:id
 GET /jobs/:id/events
 GET /jobs/:id/evidence
+GET /jobs/:id/evidence/runtime
 GET /jobs/:id/evidence/session
 GET /jobs/:id/evidence/session/download
 GET /jobs/:id/evidence/stream
@@ -353,6 +354,7 @@ GET /jobs
 GET /jobs/{id}
 GET /jobs/{id}/events
 GET /jobs/{id}/evidence
+GET /jobs/{id}/evidence/runtime
 GET /jobs/{id}/evidence/session
 GET /jobs/{id}/evidence/session/download
 GET /jobs/{id}/evidence/stream

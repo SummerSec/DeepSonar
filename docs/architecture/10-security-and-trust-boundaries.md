@@ -49,6 +49,10 @@ flowchart LR
 | Plane（未实现占位） → Scheduler | 当前没有外部调用、配置、事件 dedup 或回执路径；未来集成须单独定义来源标识、作用域和审计 | 当前不存在集成失败路径；不得把占位描述解释为 as-built 外部边界 |
 | Scheduler → Web/WS | 一次性 ticket、Job/project scope、本地 Evidence 可见性、消息大小和背压 | 不可见时 `visibility=unavailable`；关闭流而不伪造补读 |
 
+## Pi RPC 归档引用不是管理授权（#990 切片）
+
+`$piArchive/$piRef` 只关联已保存内容，不给沙箱/Agent 增加 Management 读取权限或执行副作用。新完整回读沿用 `tasks:read` 与早期项目/Job 鉴权，严格核验 Attempt 路径、manifest 成员和实际源字节 SHA/长度；不可见、不符、未登记或越界文件拒绝，不读任意宿主/workspace 路径。读取前完整执行共享 OM 脱敏，源与返回投影 hash 分开；固定单入口源字节/并发界限不等于整个进程 RSS 保证。新增 HTTP 权限、源损坏与投影回归仅在 Actions 验证，最终 SHA 待验；详见 [Pi RPC 专题](../PI_RPC_PAYLOAD_LIMITS.md)。
+
 ## Skill 候选不是授权（#960）
 
 既有控制面 live A 的授权事实保持，不额外伪造历史批准，不在 sync 自动发布 B。手动/boot/周期及多实例入口共享同源 session advisory lock，长 clone 不持有业务行事务，不阻塞撤信任/禁用；stage 短事务锁 source 后复核捕获身份与 AbortSignal，失效结果不能落入新配置或重建后的同 ID source。系统审计在显式事务内失败会回滚发布/selector heal，禁止先报批准成功。

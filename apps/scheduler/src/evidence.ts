@@ -2,7 +2,7 @@ import type { SessionBundle } from "@deepsonar/runtime-sandbox";
 import { redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { appendFile, mkdir, open, opendir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, lstat, mkdir, open, opendir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import path from "node:path";
 import { createGunzip, gzip } from "node:zlib";
@@ -117,11 +117,25 @@ function manifestRel(jobId: string): string {
   return path.posix.join("jobs", jobId, "manifest.json");
 }
 
-async function atomicWrite(filePath: string, data: Buffer | string): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
+async function atomicWrite(filePath: string, data: Buffer | string, durable = false): Promise<void> {
+  const created = await mkdir(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(tmp, data);
+  if (durable) {
+    const handle = await open(tmp, "wx");
+    try { await handle.writeFile(data); await handle.sync(); } finally { await handle.close(); }
+  } else await writeFile(tmp, data);
   await rename(tmp, filePath);
+  if (durable && process.platform !== "win32") {
+    let directory = path.dirname(path.resolve(filePath));
+    const stop = created ? path.dirname(path.resolve(created)) : directory;
+    // Persist every newly created directory entry, not only the file's parent.
+    for (;;) {
+      const handle = await open(directory, "r");
+      try { await handle.sync(); } finally { await handle.close(); }
+      if (directory === stop) break;
+      directory = path.dirname(directory);
+    }
+  }
 }
 
 async function metaFor(root: string, filePath: string, name: string, kind: EvidenceFileMeta["kind"]): Promise<EvidenceFileMeta> {
@@ -158,9 +172,8 @@ export class JobEvidenceWriter {
   private readonly streamPath: string;
   private queue: Promise<void> = Promise.resolve();
   private session: SessionBundle | undefined;
+  private runtimeCaptureError: string | undefined;
   private sequence = 0;
-  private runtimeFiles: EvidenceFileMeta[] = [];
-  private runtimeBytes = 0;
   private pending = 0;
   private readonly safeAttemptId: string;
 
@@ -204,17 +217,53 @@ export class JobEvidenceWriter {
     return this.safeAttemptId;
   }
 
-  /** Redacted RPC files are durable before returning their attempt-scoped evidence reference. */
+  /** Commit immutable bytes and their index before publishing a reference, including before finalize/restart. */
   async appendRuntimeArtifact(artifact: { name: string; content: string }): Promise<string> {
     if (!/^pi-rpc-[a-f0-9-]+-[0-9]+\.json$/.test(artifact.name)) throw new Error("Invalid runtime artifact name");
-    const bytes = Buffer.byteLength(artifact.content);
-    if (this.runtimeFiles.length >= 128 || this.runtimeBytes + bytes > 128 * 1024 * 1024) throw new Error("Runtime artifact budget exceeded");
-    this.runtimeBytes += bytes;
     const target = path.join(this.attemptRoot, "runtime", artifact.name);
-    await atomicWrite(target, artifact.content);
     const meta: EvidenceFileMeta = { name: artifact.name, path: path.relative(this.root, target).split(path.sep).join("/"),
-      kind: "vendor_export", bytes, sha256: sha256(artifact.content) };
-    this.runtimeFiles.push(meta);
+      kind: "vendor_export", bytes: Buffer.byteLength(artifact.content), sha256: sha256(artifact.content) };
+    this.pending += 1;
+    const operation = this.queue.then(async () => {
+      try {
+        const previous = await readEvidenceManifest(this.jobId);
+        const retained = previous?.files.filter(file => file.path.startsWith(`attempts/${this.safeAttemptId}/runtime/`)) ?? [];
+        if (retained.some(file => file.path === meta.path) || existsSync(target)) throw new Error("Runtime artifact already exists");
+        const usage = new Map(retained.map(file => [path.basename(file.path), file.bytes]));
+        const runtimeDir = path.dirname(target);
+        // Failed index commits and interrupted temporary writes still consume
+        // the Attempt budget, but are never published as trusted references.
+        const directory = await opendir(runtimeDir).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return undefined;
+          throw error;
+        });
+        if (directory) for await (const entry of directory) {
+          const info = await lstat(path.join(runtimeDir, entry.name));
+          if (!info.isFile()) throw new Error("Runtime artifact budget unavailable");
+          usage.set(entry.name, Math.max(usage.get(entry.name) ?? 0, info.size));
+          if (usage.size >= 128 || [...usage.values()].reduce((sum, bytes) => sum + bytes, 0) + meta.bytes > 128 * 1024 * 1024) {
+            throw new Error("Runtime artifact budget exceeded");
+          }
+        }
+        if (usage.size >= 128 || [...usage.values()].reduce((sum, bytes) => sum + bytes, 0) + meta.bytes > 128 * 1024 * 1024) {
+          throw new Error("Runtime artifact budget exceeded");
+        }
+        await atomicWrite(target, artifact.content, true);
+        const manifest: JobEvidenceManifest = {
+          v: 1, job_id: this.jobId, cli: this.cli, session_id: previous?.session_id ?? null,
+          created_at: previous?.created_at ?? new Date().toISOString(), finalized_at: null,
+          files: [...(previous?.files ?? []), meta],
+          ...(previous?.capture_error ? { capture_error: previous.capture_error } : {}),
+        };
+        await atomicWrite(path.join(this.root, "manifest.json"), JSON.stringify(manifest, null, 2), true);
+      } catch (error) {
+        this.runtimeCaptureError = "Runtime artifact capture failed";
+        throw error;
+      } finally { this.pending -= 1; }
+    });
+    // Reject this capture without poisoning diagnostic writes and finalization.
+    this.queue = operation.catch(() => {});
+    await operation;
     return meta.path;
   }
 
@@ -227,7 +276,7 @@ export class JobEvidenceWriter {
     await (otlpQueues.get(this.jobId) ?? Promise.resolve());
     await mkdir(this.attemptRoot, { recursive: true });
     const previous = await readEvidenceManifest(this.jobId);
-    const files: EvidenceFileMeta[] = [...this.runtimeFiles];
+    const files: EvidenceFileMeta[] = [];
 
     if (existsSync(this.streamPath)) {
       const raw = await readFile(this.streamPath);
@@ -266,11 +315,11 @@ export class JobEvidenceWriter {
       created_at: previous?.created_at ?? new Date().toISOString(),
       finalized_at: new Date().toISOString(),
       files: [...new Map(mergedFiles.map((file) => [file.path, file])).values()],
-      ...(previous?.capture_error || this.session?.captureError || captureError
-        ? { capture_error: [previous?.capture_error, this.session?.captureError, captureError].filter(Boolean).join("；") }
+      ...(previous?.capture_error || this.session?.captureError || captureError || this.runtimeCaptureError
+        ? { capture_error: [previous?.capture_error, this.session?.captureError, captureError, this.runtimeCaptureError].filter(Boolean).join("；") }
         : {}),
     };
-    await atomicWrite(path.join(this.root, "manifest.json"), JSON.stringify(manifest, null, 2));
+    await atomicWrite(path.join(this.root, "manifest.json"), JSON.stringify(manifest, null, 2), true);
     otlpQueues.delete(this.jobId);
     if (otlpPaths.get(this.jobId) === otlpPath) otlpPaths.delete(this.jobId);
     if (activeWriters.get(this.jobId) === this) activeWriters.delete(this.jobId);
@@ -335,7 +384,9 @@ export async function readEvidenceManifestOrInflight(
   options: { cli?: string | null; captureError?: string } = {},
 ): Promise<JobEvidenceManifest | null> {
   const finalized = await readEvidenceManifest(jobId);
-  if (finalized) return finalized;
+  if (finalized?.finalized_at) return finalized;
+  const captureError = [...new Set([finalized?.capture_error, options.captureError].filter(Boolean))].join("；");
+  const partial = finalized ? { ...finalized, inflight: true, ...(captureError ? { capture_error: captureError } : {}) } : null;
 
   const root = jobDir(jobId);
   const attemptsRoot = path.join(root, "attempts");
@@ -347,7 +398,7 @@ export async function readEvidenceManifestOrInflight(
   try {
     directory = await opendir(attemptsRoot);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return partial;
     throw error;
   }
   try {
@@ -382,20 +433,21 @@ export async function readEvidenceManifestOrInflight(
   } finally {
     await directory.close().catch(() => {});
   }
-  if (files.length === 0) return null;
+  if (files.length === 0) return partial;
   files.sort((left, right) => left.path.localeCompare(right.path));
   return {
+    ...(partial ?? {}),
     v: 1,
     job_id: jobId,
-    cli: options.cli?.trim() || "unknown",
-    session_id: null,
-    created_at: new Date(Number.isFinite(createdAt) ? createdAt : Date.now()).toISOString(),
+    cli: finalized?.cli || options.cli?.trim() || "unknown",
+    session_id: finalized?.session_id ?? null,
+    created_at: finalized?.created_at ?? new Date(Number.isFinite(createdAt) ? createdAt : Date.now()).toISOString(),
     finalized_at: null,
-    files,
-    synthetic: true,
+    files: [...new Map([...(finalized?.files ?? []), ...files].map(file => [file.path, file])).values()],
+    ...(!finalized ? { synthetic: true } : {}),
     inflight: true,
     ...(truncated ? { truncated: true } : {}),
-    ...(options.captureError ? { capture_error: options.captureError } : {}),
+    ...(captureError ? { capture_error: captureError } : {}),
   };
 }
 
@@ -458,7 +510,7 @@ export async function readSessionArtifact(
     } catch { /* A different CLI's first record is not a Pi header. */ }
   }
   let content = original;
-  if (manifest?.cli === "pi" || piHeader) {
+  if (manifest?.cli === "pi" || piHeader || /^attempts\/[^/]+\/runtime\/pi-rpc-[a-f0-9-]+-[0-9]+\.json$/.test(meta.path)) {
     const text = original.toString("utf8");
     const redacted = redactPiObservationalMemoryText(text);
     if (redacted !== text) content = Buffer.from(redacted, "utf8");

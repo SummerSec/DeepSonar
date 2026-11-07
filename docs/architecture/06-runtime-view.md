@@ -155,6 +155,8 @@ The 2026-11-01 [SDK binding](../../packages/runtime-sandbox/src/opensandbox-sdk-
 
 RPC 按[帧与保存预算](../../packages/runtime-sandbox/src/pi-rpc-output.ts)有界扫描；受支持大事件在 workspace 与 Attempt evidence 保存完整脱敏 JSON 后，才生成文本预览。控制字段保留，错误响应不得变成成功；恢复进程共享运行级保存预算，写盘、超额与损坏明确失败并记录 capture_complete=false。元数据与 hash 范围见 [CLI 契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)，真实生产重跑未验证。
 
+#990 的大事件预览保留 `$piArchive` 完整关联，叶子 `$piRef` 使用持久 Attempt evidence 路径；文本及数组前缀不冒充完整内容。Scheduler 串行提交文件和现有 manifest 索引后才发布引用，同 Attempt 已用额度从持久索引恢复，不覆盖旧文件。显式只读回读不触发模型请求或状态转换；协议、读取预算和未交付 sender/冻结 knobs/80 MiB E2E 见 [Pi RPC 专题](../PI_RPC_PAYLOAD_LIMITS.md)，最终 SHA Actions 待验。
+
 ## Pi 会话观测记忆（#815）
 
 只有能力组合显式选择已注册 OM 时，新 Job 才冻结插件/配置/模型；Scheduler 物化受审 wrapper 的字面配置 loader，并签发与 main 分离的 `observational_memory` Gateway token。`requires_egress=false` 不放宽业务网络，`requires_gateway=true` 要求所有后台模型调用走冻结路由。当前 Session 的私有配置与身份守卫拒绝环境覆盖、配置漂移及切换/分叉，不回读最新设置。

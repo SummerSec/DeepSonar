@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -21,6 +24,7 @@ if (!testDatabaseUrl) {
     const targetUrl = new URL(testDatabaseUrl);
     targetUrl.pathname = `/${databaseName}`;
     targetUrl.search = "";
+    const blob = await mkdtemp(path.join(tmpdir(), "authz-rpc-"));
     let databaseCreated = false;
     let closeApp: (() => Promise<unknown>) | null = null;
     let endSql: (() => Promise<unknown>) | null = null;
@@ -32,6 +36,7 @@ if (!testDatabaseUrl) {
       process.env.DEEPSONAR_AUTH_REQUIRED = "true";
       process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
       process.env.AGENT_MODE = "fake";
+      process.env.BLOB_DIR = blob;
 
       const [fastifyModule, websocketModule, dbModule, routesModule, authModule, usersModule] = await Promise.all([
         import("fastify"),
@@ -267,6 +272,31 @@ if (!testDatabaseUrl) {
           (${randomUUID()}, ${ownProjectId}, ${ownJobId}, 'own-fp', 'own finding', 'own'),
           (${randomUUID()}, ${otherProjectId}, ${otherJobId}, 'other-fp', 'secret finding', 'leaked')`;
 
+      // #990 full RPC reads inherit task-read and the existing early job tenancy hook.
+      {
+        const { JobEvidenceWriter } = await import("./evidence.js");
+        const { createHash } = await import("node:crypto");
+        const writer = new JobEvidenceWriter(ownJobId, "pi", "authz-rpc");
+        const content = JSON.stringify({ type: "response", text: "private own output" });
+        const archivePath = await writer.appendRuntimeArtifact({ name: "pi-rpc-abcd-1.json", content });
+        const query = new URLSearchParams({ path: archivePath, attempt_id: "authz-rpc",
+          sha256: createHash("sha256").update(content).digest("hex"), pointer: "/text" });
+        const url = `/jobs/${ownJobId}/evidence/runtime?${query}`;
+        const ownRead = await inject("GET", url, projectTok.headers);
+        assert.equal(ownRead.statusCode, 200, ownRead.payload);
+        assert.equal(JSON.parse(ownRead.payload).value, "private own output");
+        const otherRead = await inject("GET", url, otherProjectTok.headers);
+        assert.equal(otherRead.statusCode, 403, otherRead.payload);
+        assert.equal(JSON.parse(otherRead.payload).error_code, "PROJECT_MISMATCH");
+        assert.ok(!otherRead.payload.includes("private own output"));
+        const writeOnly = await insertToken("rpc-write-only", ["tasks:write"], ownProjectId);
+        const missingScope = await inject("GET", url, writeOnly.headers);
+        assert.equal(missingScope.statusCode, 403, missingScope.payload);
+        const noToken = await inject("GET", url, {});
+        assert.equal(noToken.statusCode, 401, noToken.payload);
+        await writer.finalize();
+      }
+
       const catalogMutations: Array<[HttpMethod, string, unknown]> = [
         ["PATCH", "/runtime-images/registry/channel", { channel: "github" }],
         ["POST", "/runtime-images/registry/sync", {}],
@@ -399,6 +429,7 @@ if (!testDatabaseUrl) {
       if (endSql) await endSql();
       if (databaseCreated) await admin.unsafe(`DROP DATABASE IF EXISTS "${databaseName}"`);
       await admin.end({ timeout: 5 });
+      await rm(blob, { recursive: true, force: true });
     }
   });
 }
