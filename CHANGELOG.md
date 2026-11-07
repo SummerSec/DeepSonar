@@ -21,6 +21,11 @@
 - **Pi 输出截断与有界恢复（#958）**：`stopReason=length` 不再当作正常结束，记录截断诊断后进入有界恢复（同 Session 查状态 → 必要时 compact → 短反馈继续，最多两次，每步重查完成门、租约与未知效果）；有效压缩需摘要与 `tokensBefore` 证据，连续无进展或 provider 内部连续截断时明确停止，并在最终错误里保留 length 次数、冻结模型预算与恢复尝试。`/models` 的 `context_length`/`max_output_tokens` 逐字段保留并冻结 configured/declared/effective/source，Pi `contextWindow`/`maxTokens` 与冻结预算同源物化；不新增 Role/Job 输出配置 API，不回写历史 Job。
 
 
+### 升级注意事项
+
+- **本版要求 schema 68**（`apps/scheduler/src/schema-version.ts`）。上一正式版 v0.6.14 与 v0.6.15 tag 都是 schema 67，schema 68 由 #954/#960 的 Skill 源发布隔离引入，因此 v0.6.16 是**首个要求 68 的版本**。仓库没有就地升级路径：非空数据库版本不匹配时 Scheduler 会直接拒绝启动（`database schema v67 does not match this Scheduler's v68 ... backup if needed, then rebuild from database/schema.sql`），升级前须按[发布专题](docs/RELEASE_RUNTIME_IMAGES.md#发布前门禁)做受治理备份与重建并完成验收，不能把 schema 67 的库直接交给 v0.6.16。
+- 历史请求策略缺失/非法或多 Attempt 缺少策略回执时仍拒绝恢复，不补造额度；pending/unknown 效果须先结算。Pi 侧 `length` 截断现在会进入有界恢复，最多两次，耗尽后明确停止并保留截断原因、冻结预算与恢复尝试。
+
 ## [0.6.15] - 2026-11-06
 
 ### 修复
