@@ -286,6 +286,8 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 配置优先级为 **Job > 角色/项目 > 平台 > env 引导**。项目只能收紧（`sandbox_limits` / `platform_tools` / `runtime_knobs` 相对平台或全局取 min / AND），不能放宽安全硬门；更高沙箱配额由平台 env / 镜像地板抬高，不开放项目放宽（#697）。Job 执行只认创建时的 `agent_snapshot_json`，不在 Dispatcher 运行时回退到最新 RoleConfig。
 
+#943/#948 的[创建入口冻结修复](docs/AGENT_REPAIR_LIFECYCLE.md#创建入口补齐与缺损快照诊断943--948)补齐 retry、自动 Hub、Verify、补证和 Report；与普通创建使用相同冻结规则及 timeout 值。缺损历史快照仍 fail closed，管理诊断说明缺失字段与历史核对要求，不能以空账本推断安全补冻；可信恢复部分仍跟踪，最终 SHA Actions 待验。
+
 **凭据与运行时插件边界（#632、#679、#690、#658、#707）：** Provider Credential 是可信内核持有的秘密资产；Provider/模型适配能力应由受治理插件描述，RoleConfig 与 Capability Pack 声明能力需求，不绑定账号 ID。账号 × Agent CLI 为 1:1 排他绑定（方案 A）：`llm_provider` 必须声明 `agent_cli`，使用期四层同口径 fail-closed——写入校验、项目账号目录交集、候选解析（`resolve-credential`，无软回退）、Job 快照 / readiness——任一层不匹配即拒绝，不得拖到执行期再发现归属错误。Job 创建时 Scheduler 在项目授权范围内解析 Provider、模型及秘密资源，只冻结非敏感插件/模型引用与策略。Pi 注册扩展也由角色能力插件组合，不由 `RoleConfig.pi_extensions` 管理。`role_credentials`、`POST /credentials/batch-bind`、`RoleConfig.pi_extensions` 与运行时回退已按 #690 删除；Hub 只提案 provider/model/extension 能力需求，Scheduler 在项目授权目录内解析凭据。发现 API / 模型目录结果本身不是授权。运行中与终态 Job 快照永远冻结，不因配置变化改写。
 
 **凭据先行解析（#757）：** Scheduler 先按项目作用域、active 状态、Provider、模型要求及显式项目白名单形成候选，再从凭据的排他 `agent_cli` 决定运行 CLI。单候选不受项目/全局软偏好误筛；Hub 显式 CLI 是硬约束，冲突仍以 `provider_credential_cli_mismatch` 拒绝。跨 CLI 多候选按项目 `default_agent_cli`、全局 RoleConfig 显式 CLI 消歧；全局种子 `agent_cli=NULL` 表示未指定偏好，用户显式选择 `claude-code` 才是偏好。没有可用偏好且无法唯一解析时返回 `provider_credential_multi_match`；项目默认凭据只在最终候选内选择。readiness 与新 Job 快照复用同一凭据解析函数。项目 RoleConfig 的 `agent_cli` / `model` 已停止写入和暴露并清空，项目运行身份从 Agent 设置声明。CLI 与凭据白名单分别可选收紧，读取不会把当前 active 凭据 ID 自动持久化；显式名单或默认凭据引用删除、停用、不可访问项时返回 `provider_credential_allowlist_stale` 及管理员修复指引，不能静默扩大名单。账号 × CLI 排他、六档并发、密钥隔离、镜像准入及历史 Job 快照不变。
