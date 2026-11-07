@@ -2,6 +2,7 @@ import {
   FROZEN_PROVIDER_MODEL_SNAPSHOT_SCHEMA,
   FrozenProviderModelSnapshot,
   type FrozenModelDescriptor,
+  type ModelTokenBudget,
   type FrozenProviderModelSnapshot as FrozenSnap,
 } from "@deepsonar/shared-types";
 import { findProviderAdapter } from "./catalog.js";
@@ -19,6 +20,7 @@ export function freezeProviderModelSnapshot(input: {
   descriptorsJson?: unknown;
   catalogRevision?: string | null;
   contextWindow?: number | null;
+  modelBudget?: ModelTokenBudget;
   compatibleAgentClis?: Array<"claude-code" | "pi" | "dsh">;
   /** Explicit project/platform passthrough opt-in; default false. */
   passthrough?: boolean;
@@ -50,20 +52,24 @@ export function freezeProviderModelSnapshot(input: {
   const matched = findDescriptorForModel(catalog, upstream);
   let modelDescriptor: FrozenModelDescriptor | null = freezeDescriptorOrNull(matched);
 
-  // Passthrough / empty catalog: still record a minimal descriptor when we have an ID.
-  if (!modelDescriptor && upstream && passthrough) {
+  // Job creation already admitted this configured id; a missing discovery row
+  // cannot discard the frozen client budget. This does not grant passthrough.
+  if (!modelDescriptor && upstream && (passthrough || input.modelBudget)) {
     modelDescriptor = freezeDescriptorOrNull(
       resolveModelDescriptorCatalog({
         provider,
         catalogJson: [upstream],
         catalogRevision: revision,
         compatibleAgentClis: input.compatibleAgentClis,
-        healthStatus: "passthrough_allowed",
-        contextWindow: input.contextWindow ?? null,
+        healthStatus: passthrough ? "passthrough_allowed" : "unsupported",
+        contextWindow: input.modelBudget?.context_window_tokens.effective ?? input.contextWindow ?? null,
       })[0] ?? null,
     );
   }
 
+  if (modelDescriptor && !matched && input.modelBudget) {
+    modelDescriptor = { ...modelDescriptor, max_output_tokens: input.modelBudget.max_output_tokens.effective };
+  }
   return FrozenProviderModelSnapshot.parse({
     schema: FROZEN_PROVIDER_MODEL_SNAPSHOT_SCHEMA,
     adapter_id: adapter.adapter_id,

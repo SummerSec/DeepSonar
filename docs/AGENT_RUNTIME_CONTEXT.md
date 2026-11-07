@@ -29,6 +29,8 @@ Scheduler 记录初始输入、GraphScope、预算省略和摘要交接；每个
 
 同一 `event_id` 携带相同内容时重复处理无副作用。事件缺失身份或摘要、复用 ID 携带不同内容、revision 跳跃、输入链不一致或身份不一致都会拒绝。Provider 只提供不可验证的压缩提示时记录 `unknown`；适配器明确不支持时记录 `unsupported`，两者都不增加 revision。
 
+#958 的 Pi length 恢复使用原生 `compact` 与同 Session 续写。可用摘要仅是摘要观测，不代表上下文 token 已减少；空摘要、thinking-only 与 compaction start/end 不能作为成功证据。原生事件未提供完整身份/连续 digest 时保持 `context.compaction_unknown`，不补造 `context.compacted` 或推进 revision。有界恢复计数、后续有效响应与诊断见[预算与恢复专题](PI_MODEL_BUDGET_RECOVERY.md)；最终 SHA Actions 待验。
+
 ## 恢复
 
 首次运行时捕获稳定 `sessionId` 后，将实际会话身份绑定到活动 Attempt；Pi 同时持久化受治理工作区内的精确 `sessionFile`，后续报告不同会话或文件会立即拒绝。恢复前由 Scheduler 重新读取活动 Attempt 的 `state_json`，并匹配 `context_id`、revision、adapter/runtime 身份、变换链摘要和已绑定会话身份。实际身份来源缺失或匹配失败都拒绝恢复。禁止选择 latest、创建新会话、使用进程内缓存自证身份或以静态快照代替实际身份。

@@ -51,7 +51,7 @@ if (!testDatabaseUrl) {
     const { migrate, sql } = dbModule;
     endSql = () => sql.end({ timeout: 5 });
     const { registerRoutes } = routesModule;
-    const { encryptSecret, fingerprintOf, last4Of, UNKNOWN_PROVIDER_ERROR } = credentialsModule;
+    const { encryptSecret, fingerprintOf, last4Of, UNKNOWN_PROVIDER_ERROR, normalizeModelCatalog } = credentialsModule;
     const { runPlatformExport } = platformModule;
     const { runExport } = exportModule;
     const { loadPackFile, openDeepsonarPack, readJsonl, removeFileSafe } = packModule;
@@ -251,7 +251,7 @@ if (!testDatabaseUrl) {
       const [catalogued] = await sql<{ health_status: string; model_catalog_json: string }[]>`
         SELECT health_status, model_catalog_json FROM credentials WHERE id = ${credentialId}`;
       assert.equal(catalogued?.health_status, "ok");
-      assert.deepEqual(jsonValue(catalogued?.model_catalog_json), ["model-a", "model-z"]);
+      assert.deepEqual(normalizeModelCatalog(jsonValue(catalogued?.model_catalog_json)), ["model-a", "model-z"]);
 
       globalThis.fetch = (async () => new Response(`secret upstream body: ${secret}`, { status: 500 })) as typeof fetch;
       const modelsFailure = await request("POST", `/credentials/${credentialId}/models`, {});

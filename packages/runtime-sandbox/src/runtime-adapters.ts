@@ -7,6 +7,7 @@ import type { RuntimeHost, RuntimeProcess } from "./runtime-host.js";
 import { PI_MEMORY_IMAGE_GUARD_SOURCE } from "./pi-memory-image-guard.js";
 import { isPiObservationalMemoryCustomType, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 import { isPiObservationalMemoryExpectedWorkerFailure } from "./pi-observational-memory.js";
+import { isCorrectablePiCompactionError } from "./pi-length-recovery.js";
 import { modelRequestPolicyCommand } from "./model-request-policy.js";
 import { DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from "./dsh-runtime-image-guard.js";
 
@@ -132,6 +133,7 @@ export interface AdapterRuntimeState {
   dshChildParents?: Map<string, string>;
   dshActiveChildren?: Set<string>;
   failed?: boolean;
+  piLengthTruncated?: boolean;
   errorDetail?: string;
   runnerErrorSource?: "structured_terminal" | "process";
 }
@@ -541,8 +543,11 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     state.runnerErrorSource = runnerErrorSource;
     return [{ ...event, ...(runnerErrorSource ? { runnerErrorSource } : {}) }];
   };
-  if (type === "compaction_end" && line.result === null) {
-    return fail("Pi context compaction failed");
+  if (type === "compaction_end" && line.aborted === true) return fail("Pi context compaction aborted", "process");
+  if (type === "compaction_end" && line.result === null && !state.piLengthTruncated) return fail("Pi context compaction failed");
+  if (type === "compaction_end" && !line.result && typeof line.errorMessage === "string"
+    && !isCorrectablePiCompactionError(line.errorMessage)) {
+    return failRuntime(line.errorMessage, "Pi context compaction failed", "process");
   }
   const contextEvents = contextEventFromLine(line, state);
   if (contextEvents.length > 0) return contextEvents;
@@ -592,16 +597,22 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     const text = piMessageText(message);
     const unseen = text ? unseenCompleteText(state, "text", text) : undefined;
     if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
+    if (stopReason === "length") {
+      state.piLengthTruncated = true;
+      return [{ type: "runtime.diagnostic", code: "PI_RESPONSE_TRUNCATED", stop_reason: "length" },
+        ...(unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [])];
+    }
     if (!unseen && isEmptyPiModelResponse(message, state)) {
       return fail("PI_EMPTY_MODEL_RESPONSE");
     }
     return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
   }
   if (type === "agent_settled") {
-    if (line.aborted === true) return fail("Pi agent aborted");
+    if (line.aborted === true) return fail("Pi agent aborted", "process");
     if (state.failed) return [{ type: "result", subtype: "error", is_error: true, result: state.errorDetail ?? "Pi runtime failed",
       ...(state.runnerErrorSource ? { runnerErrorSource: state.runnerErrorSource } : {}) }];
-    return [{ type: "agent_settled", session_id: state.sessionId, session_file: state.sessionFile, result: state.finalText ?? "" }];
+    return [{ type: "agent_settled", session_id: state.sessionId, session_file: state.sessionFile, result: state.finalText ?? "",
+      ...(state.piLengthTruncated ? { truncated: true, stop_reason: "length" } : {}) }];
   }
   if (type === "agent_end") return [{ type: "agent_end" }];
   if (type === "error" || type === "extension_error") {

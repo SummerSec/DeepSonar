@@ -62,6 +62,7 @@ export {
   ComponentMaterializationFailureReason,
   isForbiddenRuntimeInstallCommand,
 } from "./extension-materialization.js";
+export { ModelLimitSource, ModelTokenBudget } from "./model-budget.js";
 export {
   PROVIDER_ADAPTER_SCHEMA,
   MODEL_DESCRIPTOR_SCHEMA,

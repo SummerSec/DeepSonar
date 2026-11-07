@@ -51,7 +51,11 @@ test("a late duplicate reply to a retransmit is ignored, not a mismatch", async 
     const reply = { type: "response", id: stateId, command: "get_state", success: true, data: { sessionId: "s1", sessionFile } };
     assert.equal(await driver.observe(reply), true, "the first reply is accepted");
     // The prompt triggered by get_state is still outstanding; ignore it here.
-    assert.equal(await driver.observe(reply), true, "the duplicate reply is tolerated");
+    assert.equal(await driver.observe(reply), false, "the duplicate reply is tolerated but not redispatched to recovery");
+    await driver.queryState();
+    const writes = proc.writes.length;
+    assert.equal(await driver.observe(reply), false, "an older state must not settle a new recovery query");
+    assert.equal(proc.writes.length, writes, "the duplicate cannot replay bootstrap or issue a recovery input");
     assert.equal(driver.error, undefined);
   } finally {
     driver.dispose();

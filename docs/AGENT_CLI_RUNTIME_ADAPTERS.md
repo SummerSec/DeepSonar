@@ -270,6 +270,10 @@ Pi 的启动命令由适配器固定为 `pi --mode rpc --no-approve --no-extensi
 U+2028/U+2029 仍保留为数据。
 半帧、非法 UTF-8、空行、超过硬上限的行和未知事件均 fail closed，`finish()` 会显式拒绝尾部残帧。
 
+### Pi 模型预算与 length（#958）
+
+选定模型的 `contextWindow/maxTokens` 从创建期冻结预算物化，显式配置优先于目录声明，未知 CLI 默认不伪造。assistant `stopReason=length` 保留 text/tool/thinking-only 形状，不走通用完成 nudge；同一精确 Session 内按原生命周期与预算作有界恢复。诊断 `get_state` 不重发 bootstrap，手动 `compact` 不改变模型或压缩设置；空摘要和 start/end 不证明进展，也不发布缺身份/digest 的压缩成功事件。已接受完成正常结算，accepted human/cancel/timeout/未知效果停止新增请求；真实进程/Provider 错误来源不被覆盖。详见[预算与恢复专题](PI_MODEL_BUDGET_RECOVERY.md)及其 Actions 入口，最终 SHA 待验。
+
 ### Pi 大输出与证据（#765）
 
 Framer 按 LF 逐帧累计字节，惰性消费每帧；单次 SDK chunk 再大也只按 16Ki 字符/字节切片扫描。

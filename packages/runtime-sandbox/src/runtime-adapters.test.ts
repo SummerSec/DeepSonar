@@ -543,6 +543,32 @@ test("Pi RPC failure markers become explicit error results and settlement cannot
   assert.equal(settled[0]?.result, "Pi message ended: aborted");
 });
 
+for (const content of [
+  [{ type: "text", text: "partial response" }],
+  [{ type: "toolCall", name: "write", arguments: '{"content":"partial' }],
+  [{ type: "thinking", thinking: "reasoning only" }],
+]) {
+  test(`#958 Pi length ${content[0]!.type} is explicit truncation, not ordinary settled or immediate failure`, () => {
+    const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+    const state = {};
+    const events = adapter.decodeOutput({ type: "message_end", message: { role: "assistant", stopReason: "length", content,
+      usage: { input: 124_024, output: 1 } } }, state);
+    assert.ok(events.some(event => event.code === "PI_RESPONSE_TRUNCATED" && event.stop_reason === "length"));
+    assert.ok(events.every(event => event.is_error !== true && event.type !== "result"));
+    const settled = adapter.decodeOutput({ type: "agent_settled", aborted: false }, state);
+    assert.equal(settled[0]?.type, "agent_settled");
+    assert.equal(settled[0]?.truncated, true);
+    assert.equal(settled[0]?.stop_reason, "length");
+    const compaction = adapter.decodeOutput({ type: "compaction_end", reason: "threshold", result: null, aborted: false }, state);
+    assert.ok(compaction.every(event => event.type === "context.compaction_unknown"));
+    const failed = adapter.decodeOutput({ type: "compaction_end", reason: "threshold", result: null,
+      errorMessage: "Auto-compaction failed: 403 Forbidden; generation hit the token cap and the summary is incomplete" }, state);
+    assert.equal(failed[0]?.is_error, true);
+    assert.equal(failed[0]?.runnerErrorSource, "process");
+    assert.match(String(failed[0]?.result), /403 Forbidden/u);
+  });
+}
+
 test("Pi RPC response failures remain failed through settlement", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
   const state = {};

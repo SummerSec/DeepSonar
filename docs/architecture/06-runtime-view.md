@@ -145,6 +145,12 @@ The 2026-11-01 [SDK binding](../../packages/runtime-sandbox/src/opensandbox-sdk-
 
 中断续做读取固定目标 journal，重复步骤前核对实际回执。激活前失败回源并保持暂停；激活成功或结果不明时不允许自动回旧数据。维护状态机、宿主/受管 SSH 和显式恢复领取已有实现；schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。具体历史基线与隔离环境见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)，不能据此推定 Windows Docker 全流程、断电或真实模型验证已完成。
 
+## Pi 预算与截断恢复（#958）
+
+创建期保留同账号、同模型的 Provider 声明限制与来源，显式配置优先，逐字段冻结 `model_budget` 并投影 Pi `contextWindow/maxTokens`。原生 `get_state` 的实际限制只与冻结输入并列诊断，不修改快照或额度。`length` 不触发通用完成催促；runner 在精确同 Session 内先检查状态，再按压力作必要 compact 和短续写，恢复次数累计有界。
+
+每个查询/压缩/续写前，[恢复守卫](../../apps/scheduler/src/pi-runtime-recovery-guard.ts)复用既有完成状态：活动 Attempt、原 lease/deadline/预算、预留或已接受终态及未知效果。异步后再核本地终态，取消/人工等待/超时不新增恢复请求；最终 Gateway/Control 仍重新准入。摘要观测不等于上下文变小，start/end 或 reasoning-only 不能证明压缩有效；无完整上下文身份/digest 保持 unknown。耗尽保留 length/预算/次数与具体原因；已接受完成仍按原协议结算，不覆盖真实进程失败。源代码、合成/实际 SDK 与 HTTP/PG 回归分层见[专题](../PI_MODEL_BUDGET_RECOVERY.md)，最终 SHA Actions 待验。
+
 ## Pi 大输出捕获（#765）
 
 RPC 按[帧与保存预算](../../packages/runtime-sandbox/src/pi-rpc-output.ts)有界扫描；受支持大事件在 workspace 与 Attempt evidence 保存完整脱敏 JSON 后，才生成文本预览。控制字段保留，错误响应不得变成成功；恢复进程共享运行级保存预算，写盘、超额与损坏明确失败并记录 capture_complete=false。元数据与 hash 范围见 [CLI 契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)，真实生产重跑未验证。

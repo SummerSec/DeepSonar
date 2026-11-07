@@ -92,6 +92,62 @@ test("real pi-ai 1.4.0 nonadaptive thinking refuses insufficient allowance and c
   } finally { await f.close(); }
 });
 
+test("#958 real pi-ai preserves both OpenAI output fields and exposes the one-token context clamp as length", async () => {
+  const module = await loadRealSdkExtension();
+  for (const field of ["max_tokens", "max_completion_tokens"]) {
+    const bodies: Record<string, any>[] = [], failures: unknown[] = [];
+    let lowBudget = false;
+    const server = http.createServer(async (req, res) => {
+      try {
+        if (req.url === "/gateway/_allowance") {
+          res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ policy_required: true, remaining_tokens: null }));
+          return;
+        }
+        assert.equal(req.url, "/v1/chat/completions");
+        assert.equal(req.headers.authorization, "Bearer synthetic-main-token");
+        const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
+        bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        const envelope = { id: "synthetic-budget", object: "chat.completion.chunk", created: 1, model: "synthetic-model" };
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`data: ${JSON.stringify({ ...envelope, choices: [{ index: 0, delta: { role: "assistant", content: lowBudget ? "x" : "synthetic reply" }, finish_reason: null }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ ...envelope, choices: [{ index: 0, delta: {}, finish_reason: lowBudget ? "length" : "stop" }], usage: { prompt_tokens: 1, completion_tokens: lowBudget ? 1 : 8, total_tokens: lowBudget ? 2 : 9 } })}\n\n`);
+        res.end("data: [DONE]\n\n");
+      } catch (error) { failures.push(error); res.writeHead(500).end("synthetic fixture failed"); }
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const model = { id: "synthetic-model", name: "Synthetic", provider: "synthetic-provider", api: "openai-completions",
+      baseUrl: base + "/v1", reasoning: false, input: ["text"], contextWindow: 1_000_000, maxTokens: 64_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat: { maxTokensField: field } };
+    let start: any, wrapped: any;
+    module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base + "/gateway", DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" })({
+      on(_name: string, handler: any) { start = handler; },
+      registerProvider(_name: string, config: any) { wrapped = config.streamSimple; },
+    });
+    try {
+      start({}, { model, modelRegistry: { getRegisteredProviderConfig() { return undefined; } } });
+      const request = async () => {
+        const events: any[] = [];
+        for await (const event of wrapped(model, { messages: [{ role: "user", content: "synthetic", timestamp: 1 }] }, { signal: AbortSignal.timeout(10_000) })) events.push(event);
+        return events.at(-1);
+      };
+      assert.equal((await request()).type, "done");
+      assert.equal(bodies[0]![field], 64_000);
+      assert.equal(bodies[0]![field === "max_tokens" ? "max_completion_tokens" : "max_tokens"], undefined);
+      assert.equal(bodies[0]!.stream_options.include_usage, true);
+      // The locked SDK clamps generation options, not the frozen declared limit.
+      model.contextWindow = 1024; lowBudget = true;
+      const truncated = await request();
+      assert.equal(truncated.type, "done"); assert.equal(truncated.reason, "length");
+      assert.equal(bodies[1]![field], 1);
+      assert.equal(model.maxTokens, 64_000, "request clamp must not mutate the frozen model output limit");
+      assert.equal(bodies.length, 2); assert.deepEqual(failures, []);
+    } finally {
+      server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  }
+});
+
 test("real pi-ai adaptive branches retain reasoning across the legacy threshold without body edits", async () => {
   for (const compat of [{ forceAdaptiveThinking: true }, { supportsMidConvoEffort: true }]) {
     const f = await fixture(compat);

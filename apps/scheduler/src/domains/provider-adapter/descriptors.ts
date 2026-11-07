@@ -67,8 +67,11 @@ export function resolveModelDescriptorCatalog(input: {
   healthStatus?: ModelCatalogHealthStatus;
   contextWindow?: number | null;
 }): Descriptor[] {
-  if (Array.isArray(input.descriptorsJson) && input.descriptorsJson.length > 0) {
-    return input.descriptorsJson.map((row) => ModelDescriptor.parse(row));
+  const structured = input.descriptorsJson ?? input.catalogJson;
+  if (Array.isArray(structured) && structured.some((row) => row && typeof row === "object")) {
+    const descriptors = structured.map((row) => ModelDescriptor.parse(row));
+    if (descriptors.some((row) => row.provider !== input.provider)) throw new Error("model descriptor provider mismatch");
+    return descriptors.map((row) => ({ ...row, ...(input.healthStatus ? { health_status: input.healthStatus } : {}) }));
   }
   return descriptorsFromStringCatalog({
     provider: input.provider,

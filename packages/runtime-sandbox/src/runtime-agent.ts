@@ -26,12 +26,9 @@ import {
 import type { AgentRuntimeLaunchSpecification } from "./agent-runtime-profile-adapters.js";
 import { assertWorkspaceWritePath, shellQuote, type RuntimeHost } from "./runtime-host.js";
 import { PiRpcDriver } from "./pi-rpc-driver.js";
-import {
-  PiRpcChunkAssembler,
-  isPiRpcChunkFrame,
-  piRpcChunkingEnabled,
-  type PiRpcChunkFrame,
-} from "./pi-rpc-chunking.js";
+import { PiLengthRecovery, PI_LENGTH_RECOVERY_MESSAGE, PI_LENGTH_COMPACTION_INSTRUCTIONS,
+  piRecoveryGuardReason, type PiRecoveryAction, type RuntimeModelBudget } from "./pi-length-recovery.js";
+import { PiRpcChunkAssembler, isPiRpcChunkFrame, piRpcChunkingEnabled, type PiRpcChunkFrame } from "./pi-rpc-chunking.js";
 import { createStdinCloseKiller } from "./runtime-stdin-close.js";
 import { PiObservationalMemoryTextRedactor } from "./pi-observational-memory.js";
 import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
@@ -91,6 +88,10 @@ export interface RealAgentSpec {
    * mark_job_done）还没齐，驱动层会用 nudgeMessage 催促同一会话继续，最多 3 次。
    */
   completionGate?: () => boolean;
+  /** Scheduler-owned lifecycle/effect/budget authority, rechecked before each Pi recovery command. */
+  recoveryGuard?: () => { allowed: boolean; reason?: string } | Promise<{ allowed: boolean; reason?: string }>;
+  /** Diagnostic copy of immutable Job model limits; never used to expand a request allowance. */
+  modelBudget?: RuntimeModelBudget;
   /** 门禁未过时的催促消息（executor 按角色协议给出） */
   nudgeMessage?: string;
   /** 流式进度回调（已节流） */
@@ -1454,7 +1455,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   };
   let piDriver = spec.provider === "pi" ? new PiRpcDriver(exec, resetPiTurn) : undefined;
   const writeInitialMessage = async (content: string) => {
-    if (piDriver) await piDriver.initialize(content);
+    if (piDriver) await piDriver.initialize(content, assertPiResumeAllowed);
     else await writeEncoded(adapter.encodeInput(content, adapterState));
   };
   const writeSteerMessage = async (content: string) => {
@@ -1495,6 +1496,9 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   let runnerErrorSource: RealAgentResult["runnerErrorSource"];
   let semanticErrorDetails: RuntimeErrorDetails | undefined;
   let nudgesLeft = 3;
+  const piRecovery = spec.provider === "pi" ? new PiLengthRecovery(spec.modelBudget,
+    value => redactToolTelemetry(redactRuntimeSecrets(value, secretValues), undefined, 0, secretValues)) : undefined;
+  let piRecoveryStopped = false;
   let sessionResumeAttempts = 0;
   let resumeSkipNotice: string | undefined;
   const sessionResumeMessage = "上游请求暂时失败，请在当前会话中继续完成原任务，不要开启新会话；不要重复已成功的工具调用或副作用，只继续未完成的步骤。";
@@ -1548,6 +1552,31 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     void exec.closeStdin().catch(() => {});
     stdinCloseKiller.afterClose(reason);
   };
+  const recoveryEvent = (code: string, extra: Record<string, unknown> = {}) => spec.onEvent?.(
+    redactRuntimeSecrets({ type: "runtime.diagnostic", code, ...piRecovery?.diagnostic(), ...extra }, secretValues) as Record<string, unknown>);
+  const assertPiResumeAllowed = async (): Promise<void> => {
+    if (!piRecovery?.lengthCount) return;
+    const guard = await spec.recoveryGuard?.() ?? { allowed: false, reason: "guard_missing" };
+    const reason = spec.completionGate?.() === true ? "completion_accepted" : guard.allowed !== true ? piRecoveryGuardReason(guard.reason) : undefined;
+    if (reason) {
+      piRecoveryStopped = true;
+      recoveryEvent("PI_LENGTH_RECOVERY_STOPPED", { reason, cause: "process_resume" });
+      throw new Error(`PI_LENGTH_RECOVERY_STOPPED: ${reason}; prior_runner_error=${runError ?? "unknown"}`);
+    }
+  };
+  const performPiRecovery = async (action: PiRecoveryAction): Promise<void> => {
+    if (!piRecovery || !piDriver || piRecoveryStopped) return;
+    const outcome = await piRecovery.perform(action, { guard: spec.recoveryGuard, completionGate: spec.completionGate,
+      emit: recoveryEvent, state: () => piDriver!.queryState(),
+      compact: () => piDriver!.compact(PI_LENGTH_COMPACTION_INSTRUCTIONS), send: () => writeFollowUpMessage(PI_LENGTH_RECOVERY_MESSAGE) });
+    attemptFinalText = "";
+    attemptTerminalResult = outcome.isError === undefined ? undefined : { isError: outcome.isError,
+      ...(outcome.error ? { errorDetail: outcome.error, runnerErrorSource: "process" as const } : {}) };
+    terminalOutcome = outcome.isError === undefined ? undefined : outcome.isError ? "failure" : "success";
+    runnerErrorSource = outcome.isError ? "process" : undefined;
+    runError = outcome.error;
+    if (outcome.isError !== undefined) { piRecoveryStopped = true; closeStdin("terminal_result"); }
+  };
   if (!adapter.capabilities.incrementalMessages) closeStdin("initial_input");
   try {
     while (true) {
@@ -1556,18 +1585,13 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       let processError: unknown;
       let extensionLoadTail = "";
       const piFramer = spec.provider === "pi" ? new PiJsonlFramer(piRpcMaxEventBytes()) : undefined;
-      // #944: chunk reassembly is opt-in; when off the wire format is unchanged.
-      // A group that misses its deadline must fail the attempt even if the stream
-      // then goes silent, so the timer terminates the process instead of relying
-      // on the read loop to notice.
+      // #944: opt-in reassembly; its deadline timer also fails a silent stream.
       const piChunks = spec.provider === "pi" && piRpcChunkingEnabled()
-        ? new PiRpcChunkAssembler({
-            onExpire: () => {
-              processError ??= new Error("PI_RPC_CHUNK_INCOMPLETE");
-              fatalOutputError ??= "PI_RPC_CHUNK_INCOMPLETE";
-              void exec.kill().catch(() => {});
-            },
-          })
+        ? new PiRpcChunkAssembler({ onExpire: () => {
+            processError ??= new Error("PI_RPC_CHUNK_INCOMPLETE");
+            fatalOutputError ??= "PI_RPC_CHUNK_INCOMPLETE";
+            void exec.kill().catch(() => {});
+          } })
         : undefined;
       try {
         for await (const chunk of exec) {
@@ -1631,11 +1655,26 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
             const rawParsed = piFramer && recordBytes > PI_RPC_INLINE_BYTES
               ? await piDriver!.whileCapturing(() => piOutput.prepare(record!, recordBytes))
               : record;
+            if (piRecoveryStopped) continue;
             if (piDriver && !await piDriver.observe(rawParsed)) continue;
-            const decodedEvents = applyRuntimeOutput(adapter, rawParsed, adapterState);
+            const wasTruncated = piRecovery?.truncated;
+            const recoveryAction = piRecovery?.observe(rawParsed);
+            if (wasTruncated && piRecovery && !piRecovery.truncated) recoveryEvent("PI_LENGTH_RECOVERY_PROGRESS", { evidence: "valid_response" });
+            if (piRecovery) adapterState.piLengthTruncated = piRecovery.truncated;
+            const decodedEvents = recoveryAction && rawParsed.type === "response" && rawParsed.command === "compact"
+              ? [] : applyRuntimeOutput(adapter, rawParsed, adapterState);
             await observeSessionIdentity({ sessionId: adapterState.sessionId, sessionFile: adapterState.sessionFile });
             bindObservedResumeIdentity();
+            if (recoveryAction) {
+              await performPiRecovery(recoveryAction);
+              continue;
+            }
             for (const parsed of decodedEvents) {
+              if (parsed.type === "agent_settled" && piRecovery?.truncated && !adapterState.failed && spec.completionGate?.() !== true) {
+                recoveryEvent("PI_RESPONSE_TRUNCATED");
+                await performPiRecovery(piRecovery.begin());
+                continue;
+              }
               if (parsed.type === "runtime_outbound" && typeof parsed.content === "string") {
                 await writeEncoded(parsed.content);
                 continue;
@@ -1698,6 +1737,10 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
                 runError = resolveTerminalRunError(outcome);
               }
               if (outcome.finalText !== undefined) {
+                if (outcome.isError !== true && piRecovery?.lengthCount && spec.completionGate?.() !== true) {
+                  const authority = await spec.recoveryGuard?.() ?? { allowed: false, reason: "guard_missing" };
+                  if (!authority.allowed || spec.completionGate?.() === true) { await performPiRecovery("stop"); continue; }
+                }
                 // 每次完成门尝试都有独立终态。后续成功清除临时 Provider 错误；
                 // 重试耗尽时以最后一次失败为准。
                 attemptFinalText = outcome.finalText;
@@ -1780,7 +1823,8 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
         : processError && !(attemptTerminalResult?.isError === false && attemptCloseReason === "terminal_result")
           ? {
               observed: true,
-              error: processErrorText || "agent CLI 运行失败",
+              error: piRecoveryStopped && attemptTerminalResult?.errorDetail
+                ? `${attemptTerminalResult.errorDetail}; shutdown_transport=${processErrorText || "unknown"}` : processErrorText || "agent CLI 运行失败",
               terminalOutcome: "failure",
               runnerErrorSource: "process",
             }
@@ -1798,7 +1842,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
           ? "process"
           : attemptOutcome.runnerErrorSource;
       }
-      if (!resumedExec && !semanticError && attemptOutcome.error) {
+      if (!resumedExec && !semanticError && !piRecoveryStopped && attemptOutcome.error) {
         const reason = classifyCliSessionResumeError(attemptOutcome.error);
         if (reason === "context_window_exceeded") {
           const notice = "context_window_exceeded:compaction_required";
@@ -1822,11 +1866,12 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
             spec.onEvent?.({ type: "run.retrying", reason, attempt, delayMs });
             await waitForCliSessionResume(attempt);
             try {
+              await assertPiResumeAllowed();
               await assertResumeIdentity();
               resumedExec = await adapter.resume({ ...adapterContext, ...(expectedContextIdentity ? { contextIdentity: expectedContextIdentity } : {}), input: sessionResumeMessage, sessionId, ...(sessionFile ? { sessionFile } : {}) });
               resumedInput = sessionResumeMessage;
             } catch (resumeError) {
-              if (resumeError instanceof Error && resumeError.message.startsWith("CONTEXT_RESUME_")) throw resumeError;
+              if (piRecoveryStopped || resumeError instanceof Error && resumeError.message.startsWith("CONTEXT_RESUME_")) throw resumeError;
               const detail = runtimeErrorText(resumeError).slice(0, 280) || "unknown_resume_error";
               spec.onWarning?.({ code: "cli_session_resume_failed", detail });
               runError = `AGENT_CLI_RESUME_FAILED: ${adapter.id}`;
@@ -1928,6 +1973,10 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     await host.run(`rm -f -- ${cleanupPaths.map((p) => shellQuote(p)).join(" ")}`).catch(() => {});
   }
 
+  if (piRecovery?.lengthCount) {
+    recoveryEvent("PI_LENGTH_RECOVERY_FINAL");
+    if (runError) runError += `; pi_length_recovery=${JSON.stringify(piRecovery.diagnostic())}`;
+  }
   return {
     text: redactRuntimeText(finalText, secretValues),
     files,

@@ -1,12 +1,13 @@
 import {
   CREDENTIAL_MODEL_ID_MAX_LENGTH,
-  CREDENTIAL_MODEL_CATALOG_MAX,
   CredentialMetadataError,
   normalizeModelCatalog,
   projectCredentialMetadata,
   isProviderKnown,
   type CredentialHealthErrorCategory,
 } from "./credentials.js";
+import type { ModelDescriptor } from "@deepsonar/shared-types";
+import { descriptorsFromModelDiscovery } from "./domains/provider-adapter/model-discovery.js";
 import { claudeCliFingerprintHeaders } from "./claude-cli-fingerprint.js";
 import { composeUpstreamRequestHeaders, hasInvalidProviderHeaders, providerCustomHeadersFromSettings } from "./provider-custom-headers.js";
 import { collectSecretValues, redactSecretAssignments } from "./credential-secret-projection.js";
@@ -52,6 +53,7 @@ export type CredentialProbeResult = {
   upstream_error?: UpstreamErrorSummary;
   /** 模型级失败（402/403/配额）后补做的目录发现结果；仅在目录可达时出现，由路由回填 model_catalog_json。 */
   model_catalog?: string[];
+  model_descriptors?: ModelDescriptor[];
   model_catalog_source_url?: string;
   model_catalog_fetched_at?: string;
 };
@@ -67,6 +69,7 @@ type CredentialProbePath = "inference" | "models";
 /** Optional Provider /models catalog. Probe failure never throws for network/HTTP/empty responses. */
 export type ModelCatalogDiscovery = {
   models: string[];
+  model_descriptors: ModelDescriptor[];
   source_url?: string;
   fetched_at: string | null;
   available: boolean;
@@ -592,6 +595,7 @@ async function summarizeInferenceFailure(
     ...(catalog?.available && catalog.fetched_at
       ? {
         model_catalog: catalog.models,
+        model_descriptors: catalog.model_descriptors,
         ...(catalog.source_url ? { model_catalog_source_url: catalog.source_url } : {}),
         model_catalog_fetched_at: catalog.fetched_at,
       }
@@ -703,12 +707,6 @@ function modelRows(payload: unknown): unknown[] {
   return [];
 }
 
-function modelId(row: unknown): string {
-  if (typeof row === "string") return row;
-  if (row && typeof row === "object" && "id" in row && typeof row.id === "string") return row.id;
-  return "";
-}
-
 async function summarizeCatalogResponse(
   result: CandidateRequestResult,
   inferenceMissing: { status: number } | null,
@@ -752,6 +750,7 @@ function catalogUnavailable(
 ): ModelCatalogDiscovery {
   return {
     models: [],
+    model_descriptors: [],
     fetched_at: null,
     available: false,
     category,
@@ -775,13 +774,13 @@ async function discoverModelCatalogWithSecret(
       return catalogUnavailable(category, discoveryDetail(result.status, category), safeSourceUrl(result.url));
     }
     const payload = await readJsonBounded(result.response);
-    const models = normalizeModelCatalog(modelRows(payload).map(modelId))
-      .slice(0, CREDENTIAL_MODEL_CATALOG_MAX)
-      .map((model) => model.slice(0, CREDENTIAL_MODEL_ID_MAX_LENGTH));
+    const fetchedAt = now();
+    const descriptors = descriptorsFromModelDiscovery({ provider: cred.provider, rows: modelRows(payload), catalogRevision: fetchedAt });
     return {
-      models,
+      models: descriptors.map((row) => row.model_id),
+      model_descriptors: descriptors,
       source_url: safeSourceUrl(result.url),
-      fetched_at: now(),
+      fetched_at: fetchedAt,
       available: true,
     };
   } catch (error) {
