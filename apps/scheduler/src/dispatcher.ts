@@ -1805,6 +1805,7 @@ async function executeFake(jobId: string, type: string) {
 export async function ensureJobNode(jobId: string, job: Record<string, unknown>, db: typeof sql = sql) {
   // intent 节点由 hub_decision 随角色 job 同事务创建（1:1）；已有节点则只同步运行态。
   // 变更日志触发器会在节点行锁之后再锁 canvases，所以这里必须 Canvas-first。
+  // 只认 job.canvas_id；缺少绑定就不创建节点，不回读项目旧画布。
   const canvasId = (job.canvas_id as string | null) ?? null;
   if (!canvasId) return;
   const roleSnapshot = job.agent_snapshot_json as { role_kind?: string; ui_color?: string | null; job_skill_catalog?: FrozenJobSkillCatalog } | null;
