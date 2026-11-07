@@ -1,16 +1,21 @@
-/** Build only the credential edits explicitly made in project settings. */
+/** Build only the account/model edits explicitly made in project settings. */
 export function credentialSelectionPatch(input: {
   credentialSelectionChanged: boolean;
   credIds: string[];
   defaultCredentialId: string | null;
   selectedDefaultCredentialId: string | null;
   credentialListLoaded: boolean;
-}): { enabled_credential_ids?: string[]; default_credential_id?: string | null; default_model_ref?: null; fallback_model_refs?: string[] } {
+  modelSelectionChanged?: boolean;
+  selectedDefaultModelRef?: string | null;
+}): { enabled_credential_ids?: string[]; default_credential_id?: string | null; default_model_ref?: string | null; fallback_model_refs?: string[] } {
   if (!input.credentialListLoaded) return {};
   return {
     ...(input.credentialSelectionChanged ? { enabled_credential_ids: input.credIds } : {}),
     ...(input.selectedDefaultCredentialId !== input.defaultCredentialId
       ? { default_credential_id: input.selectedDefaultCredentialId, default_model_ref: null, fallback_model_refs: [] } : {}),
+    ...(input.modelSelectionChanged ? {
+      default_model_ref: input.selectedDefaultCredentialId ? input.selectedDefaultModelRef ?? null : null,
+    } : {}),
   };
 }
 

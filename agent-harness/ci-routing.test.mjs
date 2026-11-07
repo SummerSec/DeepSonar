@@ -18,6 +18,8 @@ const heavy = ["windows-upgrade-backend", "crash-recovery", "lexical-pressure", 
 const resultVars = ["WINDOWS", "CRASH", "LEXICAL", "PIOM", "GATE", "IMAGES", "FUZZ_BUILD", "FUZZ"];
 const runSummary = (overrides = {}) => spawnSync("bash", ["-c", summary], {
   env: { ...process.env, CHANGES: "success", DOCS: "success", DOCS_ONLY: "false", MODE: "ready-full", PLAN_STATUS: "ok",
+    // #961: the ARM pair is judged by the plan, so the default fixture must answer it.
+    FUZZ_ARM_REQUIRED: "required",
     ...Object.fromEntries(resultVars.map((name) => [name, "success"])), ...overrides }, encoding: "utf8",
 });
 
@@ -70,7 +72,7 @@ test("actual classifier handles docs, runtime inputs, unknowns, rename/delete an
 
 test("actual summary rejects failures, cancellation, missing outputs and unexpected skips", () => {
   assert.equal(runSummary().status, 0);
-  const docs = { MODE: "docs", DOCS_ONLY: "true", ...Object.fromEntries(resultVars.map((name) => [name, "skipped"])) };
+  const docs = { MODE: "docs", DOCS_ONLY: "true", FUZZ_ARM_REQUIRED: "skipped", ...Object.fromEntries(resultVars.map((name) => [name, "skipped"])) };
   assert.equal(runSummary(docs).status, 0);
   for (const result of ["failure", "cancelled", "skipped", ""]) {
     for (const name of ["CHANGES", "DOCS", ...resultVars]) {
@@ -88,6 +90,18 @@ test("actual summary rejects failures, cancellation, missing outputs and unexpec
   assert.notEqual(runSummary({ PLAN_STATUS: "failed" }).status, 0);
   assert.notEqual(runSummary({ PLAN_STATUS: "" }).status, 0);
   assert.notEqual(runSummary({ ...docs, DOCS_ONLY: "false" }).status, 0, "docs tier must report docs_only=true");
+
+  // #961: the ARM pair is judged by the run plan instead of always being required.
+  const armSkipped = { FUZZ_ARM_REQUIRED: "skipped", FUZZ_BUILD: "skipped", FUZZ: "skipped" };
+  assert.equal(runSummary(armSkipped).status, 0, "plan-authorized skip must pass");
+  for (const FUZZ_ARM_REQUIRED of ["", "unknown", "required "]) {
+    assert.notEqual(runSummary({ FUZZ_ARM_REQUIRED }).status, 0, `chrome_fuzz_arm=${JSON.stringify(FUZZ_ARM_REQUIRED)}`);
+  }
+  assert.notEqual(runSummary({ FUZZ_ARM_REQUIRED: "required", FUZZ_BUILD: "skipped" }).status, 0, "required but skipped");
+  assert.notEqual(runSummary({ ...armSkipped, FUZZ_BUILD: "success" }).status, 0, "planned skip must not silently run");
+  for (const result of ["failure", "cancelled"]) {
+    assert.notEqual(runSummary({ ...armSkipped, FUZZ: result }).status, 0, `planned skip with ${result}`);
+  }
 });
 
 test("workflow really runs docs and regressions and preserves full-run dependencies", () => {
@@ -149,7 +163,7 @@ test("docs-only runs the real freshness gate: good links pass, broken links fail
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT; // Child must start its own test runner, not inherit this worker.
   const runDocs = () => spawnSync("pnpm", ["ci:unit:docs-freshness"], { cwd: root, env, encoding: "utf8" });
-  const docsResults = { DOCS_ONLY: "true", ...Object.fromEntries(resultVars.map((name) => [name, "skipped"])) };
+  const docsResults = { DOCS_ONLY: "true", FUZZ_ARM_REQUIRED: "skipped", ...Object.fromEntries(resultVars.map((name) => [name, "skipped"])) };
   try {
     writeFileSync(fixture, "[README](../README.md)\n[Wrapped README](<../README.md>)\n");
     const good = runDocs();

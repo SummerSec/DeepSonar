@@ -332,6 +332,38 @@ test("reapWaitingHumanTimeout re-checks the deadline and honours reconciliation 
   assert.deepEqual(updates, [], "a Job unblocked by reconciliation must not be failed immediately");
 });
 
+test("reapWaitingHumanTimeout preserves unresolved effects with and without reconciliation progress", async () => {
+  for (const withProgress of [false, true]) {
+    const queries: string[] = [];
+    const unknownId = "44444444-4444-4444-4444-444444444444";
+    const db = Object.assign(
+      // SAFETY: this mock implements the tagged reads and begin used by this lifecycle path.
+      ((strings: TemplateStringsArray) => {
+        const query = strings.join(" ").replace(/\s+/gu, " ").trim();
+        queries.push(query);
+        return query.includes("SELECT jobs.id::text AS id FROM jobs") ? [{ id: "job-wait-effect" }] : [];
+      }) as unknown as typeof sql,
+      {
+        json: (value: unknown) => value,
+        begin: async (work: (tx: typeof sql) => Promise<unknown>) => work(db),
+        unsafe: async (text: string) => {
+          queries.push(text.replace(/\s+/gu, " ").trim());
+          if (!text.includes("FROM job_attempt_effects e")) return [{ id: "33333333-3333-3333-3333-333333333333" }];
+          const residue = [{ id: unknownId, effect_kind: "agent_run", attempt_status: "interrupted",
+            sandbox_id: null, usage_rows: 0, canvas_node_id: null }];
+          return withProgress ? [...residue, { id: "33333333-3333-3333-3333-333333333333",
+            effect_kind: "gateway_model_request", attempt_status: "interrupted", sandbox_id: null,
+            usage_rows: 1, canvas_node_id: null }] : residue;
+        },
+      },
+    );
+    assert.deepEqual(await createSqlJobLifecycleApplication(db).reapWaitingHumanTimeout(1800), []);
+    assert.ok(queries.some(query => query.includes("ORDER BY attempt_no FOR UPDATE")));
+    assert.equal(queries.some(query => query.includes("UPDATE jobs SET status = 'failed'")), false,
+      "a remaining agent_run is not a human timeout, even if another effect was settled");
+  }
+});
+
 test("reapWaitingHumanTimeout still fails when the deadline expired and nothing was settled", async () => {
   const queries: string[] = [];
   const db = Object.assign(
@@ -358,6 +390,8 @@ test("reapWaitingHumanTimeout still fails when the deadline expired and nothing 
   // during this batch cannot be punished for the earlier wait.
   assert.match(update, /e\.type = 'human'/u);
   assert.match(update, /::int \* interval '1 second'/u);
+  assert.match(update, /NOT EXISTS \( SELECT 1 FROM job_attempt_effects e WHERE e\.job_id=jobs\.id AND e\.status <> 'settled' \)/u,
+    "active and planned effects excluded from reconciliation still block the final verdict");
 });
 
 test("reapStalledExecution casts interpolated stall seconds to int before * interval", async () => {

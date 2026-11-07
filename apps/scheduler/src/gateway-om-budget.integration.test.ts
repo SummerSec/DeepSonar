@@ -42,7 +42,8 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     import("./pi-extensions.js"),
   ]);
   const { freezeGatewayProviderBinding } = await import("./gateway-provider-binding.js");
-  const { ensureGatewayRequestBudget, inspectGatewayRequestBudget } = await import("./gateway-request-policy.js");
+  const { ensureGatewayRequestBudget, inspectGatewayRequestBudget, GatewayRequestBudgetError } = await import("./gateway-request-policy.js");
+  const { missingFrozenKnobFields } = await import("./runtime-knobs.js");
   const Fastify = fastifyModule.default;
   const { sql, migrate } = db;
   const { mintJobToken, revokeJobTokens } = gateway;
@@ -572,7 +573,12 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
       await createAttempt(sql, id);
       const before = await recoveryState(id), calls = upstreamCalls;
       assert.equal(before.attempts.length, 1); assert.equal(before.tokens.length, 0);
-      await assert.rejects(inspectGatewayRequestBudget(sql, id, snapshot), /GATEWAY_REQUEST_BUDGET_INVALID/, label);
+      await assert.rejects(inspectGatewayRequestBudget(sql, id, snapshot), (error: unknown) => {
+        assert.ok(error instanceof GatewayRequestBudgetError);
+        assert.equal(error.code, "GATEWAY_REQUEST_BUDGET_INVALID", label);
+        assert.deepEqual(error.missing_fields, missingFrozenKnobFields(snapshot), label);
+        return true;
+      });
       await assert.rejects(sql.begin(async rawTx => {
         const tx = rawTx as unknown as typeof sql;
         const [current] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${id} FOR UPDATE`;

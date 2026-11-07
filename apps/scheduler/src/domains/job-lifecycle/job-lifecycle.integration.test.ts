@@ -139,6 +139,39 @@ if (!testDatabaseUrl) {
       assert.match(String(staleHuman.error), /人工等待超时/);
       assert.equal(freshHuman.status, "waiting_human");
 
+      // The reconcile scan omits active Attempts and planned effects. They must
+      // still block the timeout; an empty scan is not a settled Job.
+      for (const active of [false, true]) {
+        for (const effectStatus of ["planned", "effect_pending", "unknown"] as const) {
+          const blockedId = await insertJob("waiting_human");
+          await sql`INSERT INTO events(job_id,event_id,job_seq,type,payload_json,created_at)
+            VALUES(${blockedId},${randomUUID()},1,'human',${sql.json({ reason: "effect blocker fixture" })},now()-interval '10 seconds')`;
+          const attempt = await createAttempt(sql, blockedId, { agent_cli: "claude-code" });
+          if (!active) {
+            const { markAttemptInterrupted } = await import("../job-attempt/application.js");
+            await markAttemptInterrupted(sql, blockedId, "inactive effect fixture");
+          }
+          const effectId = randomUUID();
+          await sql`INSERT INTO job_attempt_effects(id,attempt_id,job_id,effect_id,effect_kind,status,replay_policy)
+            VALUES(${effectId},${String(attempt.id)},${blockedId},'agent_run:fixture','agent_run',${effectStatus},'never')`;
+          const beforeJob = [...await sql`SELECT * FROM jobs WHERE id=${blockedId}`];
+          const beforeAttempt = [...await sql`SELECT * FROM job_attempts WHERE job_id=${blockedId}`];
+          const beforeEffect = [...await sql`SELECT * FROM job_attempt_effects WHERE id=${effectId}`];
+          for (let tick = 0; tick < 2; tick += 1) {
+            const reaped = await app.reapWaitingHumanTimeout(2);
+            assert.equal(reaped.some(row => row.id === blockedId), false, `${active}/${effectStatus}`);
+            assert.deepEqual([...await sql`SELECT * FROM jobs WHERE id=${blockedId}`], beforeJob);
+            assert.deepEqual([...await sql`SELECT * FROM job_attempts WHERE job_id=${blockedId}`], beforeAttempt);
+            assert.deepEqual([...await sql`SELECT * FROM job_attempt_effects WHERE id=${effectId}`], beforeEffect);
+          }
+          // Explicit kernel/operator settlement, not the timeout, removes the blocker.
+          await sql`UPDATE job_attempt_effects SET status='settled',settlement_json=${sql.json({ outcome: "not_applied", evidence: "isolated test fixture" })}
+            WHERE id=${effectId}`;
+          assert.equal((await app.reapWaitingHumanTimeout(2)).some(row => row.id === blockedId), true);
+          assert.equal((await sql`SELECT status FROM jobs WHERE id=${blockedId}`)[0].status, "failed");
+        }
+      }
+
       const resetClaimed = await insertJob("claimed");
       const resetProvision = await insertJob("provisioning");
       const safeRequeue = await insertJob("provisioning");

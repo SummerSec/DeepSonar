@@ -7,6 +7,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseDeclaredQuantities, type QuantityAnchor } from "@deepsonar/shared-types";
 import { config } from "./config.js";
+import { isRetryableDatabaseConflict } from "./db-conflict-retry.js";
+import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { taskReportCoverageOk } from "./report-coverage.js";
 import { sql } from "./db.js";
 import {
@@ -14,7 +16,6 @@ import {
   maybeTriggerHub,
   patchCanvasConvergence,
   resolveAgentSnapshotForJob,
-  rulesForProject,
 } from "./core.js";
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapshot/index.js";
@@ -952,7 +953,9 @@ export async function maybeDispatchFindingReport(
     canvasId,
     await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report", [findingId]),
   );
-  const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
+  const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(
+    // SAFETY: postgres.js transaction handles have the same tagged-template interface.
+    tx as unknown as typeof sql, { projectId, type: "report" }, snapshot);
   const input = await buildFindingReportInput(findingId, version, tx as unknown as typeof sql);
   const inputJson = JSON.stringify(input);
   const inputSha = sha256(inputJson);
@@ -968,7 +971,7 @@ export async function maybeDispatchFindingReport(
       project_id: projectId,
       canvas_id: canvasId,
       finding_id: findingId,
-      agent_snapshot_json: snapshot as never,
+      agent_snapshot_json: runtimeSnapshot as never,
       type: "report",
       priority: fixedPriorityForJob({ type: "report", purpose: "report" }),
       ingress_key: ingressKey,
@@ -980,11 +983,11 @@ export async function maybeDispatchFindingReport(
         report_version: version,
         report_input_uri: inputUri,
       } as never,
-      timeout_sec: rules.auditTimeoutSec,
+      timeout_sec: knobs.timeoutSec,
       followup_depth: 0,
     })}
     RETURNING id`;
-  await recordJobSharedAssets(tx as unknown as typeof sql, job.id as string, snapshot.shared_assets ?? []);
+  await recordJobSharedAssets(tx as unknown as typeof sql, job.id as string, runtimeSnapshot.shared_assets ?? []);
   if (!job?.id) return { dispatched: false, reason: "insert_failed" };
   await tx`
     INSERT INTO finding_reports ${tx({
@@ -1190,11 +1193,11 @@ export async function maybeDispatchReport(
       WHERE id = ${existing.id as string}`;
   }
 
-  const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   let resolvedSnapshot: Awaited<ReturnType<typeof resolveAgentSnapshotForJob>>;
   try {
     resolvedSnapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report");
   } catch (e) {
+    if (isRetryableDatabaseConflict(e)) throw e;
     console.warn(`[report] resolve snapshot failed:`, e);
     return { dispatched: false, reason: "no_report_role" };
   }
@@ -1203,6 +1206,9 @@ export async function maybeDispatchReport(
     canvasId,
     resolvedSnapshot,
   );
+  const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(
+    // SAFETY: postgres.js transaction handles have the same tagged-template interface.
+    tx as unknown as typeof sql, { projectId, type: "report" }, snapshot);
   // 显式创建可运行 Report Job：持有 ingress 的旧终态 Job 先 retire，再 INSERT（不用 ON CONFLICT DO NOTHING 绑回 failed Job）
   const ingressKey = `report:${canvasId}`;
   const [held] = await tx`
@@ -1219,7 +1225,8 @@ export async function maybeDispatchReport(
       WHERE id = ${held.id as string}`;
   }
 
-  // 派发前冻结版本化输入，供 Report Agent 与终态收口共同消费。
+  // Canvas 锁内写入派发输入：仅相同摘要复用版本，否则使用尚未提交的新版本。
+  // 文件不随 SQL 回滚；包含本段的混合 I/O 事务不能直接整体交给纯数据库重试器。
   const dir = reportDir(canvasId, version);
   await mkdir(dir, { recursive: true });
   const inputPath = path.join(dir, "report-input.json");
@@ -1230,7 +1237,7 @@ export async function maybeDispatchReport(
     INSERT INTO jobs ${tx({
       project_id: projectId,
       canvas_id: canvasId,
-      agent_snapshot_json: snapshot as never,
+      agent_snapshot_json: runtimeSnapshot as never,
       type: "report",
       priority: fixedPriorityForJob({ type: "report", purpose: "report" }),
       ingress_key: ingressKey,
@@ -1247,11 +1254,11 @@ export async function maybeDispatchReport(
         inconclusive_count: reportInput.statistics.inconclusive_count,
         excluded_count: reportInput.statistics.excluded_count,
       } as never,
-      timeout_sec: rules.auditTimeoutSec,
+      timeout_sec: knobs.timeoutSec,
       followup_depth: 0,
     })}
     RETURNING id`;
-  await recordJobSharedAssets(tx as unknown as typeof sql, job.id as string, (snapshot as { shared_assets?: Parameters<typeof recordJobSharedAssets>[2] }).shared_assets ?? []);
+  await recordJobSharedAssets(tx as unknown as typeof sql, job.id as string, runtimeSnapshot.shared_assets ?? []);
   const reportJobId = job?.id as string | undefined;
   if (!reportJobId) return { dispatched: false, reason: "insert_failed" };
 
@@ -1452,6 +1459,7 @@ async function settleFailedTaskReport(
     try {
       dispatched = await maybeDispatchReport(tx, canvasId, { excludeJobId: jobId });
     } catch (error) {
+      if (isRetryableDatabaseConflict(error)) throw error;
       console.warn(`[report] canvas ${canvasId} 报告自动再派异常，收口 Root:`, error);
       dispatched = { dispatched: false, reason: "dispatch_threw" };
     }

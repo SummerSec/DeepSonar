@@ -182,7 +182,9 @@ async function closeOrphanJob(
   options: { deferCanvasAdvance: boolean },
 ): Promise<void> {
   const jobId = String(job.id);
+  // #945: 收口可派 Report 并写输入文件；未拆开混合 I/O 前不整体自动重试。
   await sql.begin(async (txRaw) => {
+    // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
     const tx = txRaw as unknown as typeof sql;
     await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null);
     await tx`

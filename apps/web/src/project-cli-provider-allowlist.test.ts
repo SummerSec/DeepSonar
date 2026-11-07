@@ -10,6 +10,7 @@ import { ProjectCliProviderAllowlistPanel } from "./components/ProjectCliProvide
 
 const panel = readFileSync(new URL("./components/ProjectCliProviderAllowlistPanel.tsx", import.meta.url), "utf8");
 const settings = readFileSync(new URL("./SettingsPanel.tsx", import.meta.url), "utf8");
+const modelSelect = readFileSync(new URL("./components/ProjectDefaultModelSelect.tsx", import.meta.url), "utf8");
 
 function renderCredentialPanel(credentialLoadState: "loading" | "error" | "loaded") {
   return renderToStaticMarkup(createElement(ProjectCliProviderAllowlistPanel, {
@@ -19,6 +20,7 @@ function renderCredentialPanel(credentialLoadState: "loading" | "error" | "loade
     enabledCredentialIds: ["missing"],
     credentialIdsConfigured: true,
     defaultCredentialId: "missing",
+    defaultModelRef: "missing-model",
     credentialLoadState,
     onSaved: () => {},
   }));
@@ -56,7 +58,10 @@ test("Provider 白名单面板不展示上游模型目录诊断", () => {
   assert.match(panel, /连接失败/);
   assert.doesNotMatch(panel, /model-catalog-health|modelHealthLabel|modelDescriptorsForCredential/);
   assert.doesNotMatch(panel, /modelSummary|credentialCatalogState|credentialModels/);
-  assert.doesNotMatch(panel, /模型目录未探测|上游模型目录|上游探测到|连接 \/ 目录失败|刷新中|目录/);
+  assert.doesNotMatch(panel + modelSelect, /model_catalog_json|health\.model_catalog|modelDescriptorsForCredential/);
+  assert.doesNotMatch(panel, /模型目录未探测|上游模型目录|上游探测到|连接 \/ 目录失败/);
+  assert.match(panel, /modelIds\(defaultCredential\)/);
+  assert.match(modelSelect, /任务显式 modelRef → 项目默认模型 → 全局角色模型/);
 });
 
 
@@ -70,7 +75,8 @@ test("compatibleAgentClisForCredential 以 credential.agent_cli 独占，不按 
 
 test("ordinary save does not pin dynamic credential scope or erase preferences", () => {
   assert.match(settings, /credentialIdsConfigured=\{settings\?\.credential_ids_configured/);
-  assert.match(panel, /credentialSelectionPatch\(\{ credentialSelectionChanged, credIds, defaultCredentialId, selectedDefaultCredentialId, credentialListLoaded \}\)/);
+  assert.match(panel, /modelSelectionChanged, selectedDefaultModelRef/);
+  assert.match(settings, /defaultModelRef=\{settings\?\.default_model_ref \?\? null\}/);
   assert.doesNotMatch(panel, /default_agent_cli: null|default_model_ref: null/);
   assert.deepEqual(credentialSelectionPatch({ credentialSelectionChanged: false, credIds: [], defaultCredentialId: "default", selectedDefaultCredentialId: "default", credentialListLoaded: true }), {});
   assert.match(panel, /未收紧凭据范围/);
@@ -95,11 +101,11 @@ test("unavailable explicit credential references can only be removed by an expli
 test("loading or failed credential reads never offer to remove default or allowlist references", () => {
   const loading = renderCredentialPanel("loading");
   assert.match(loading, /正在加载 Provider 账号/);
-  assert.doesNotMatch(loading, /移除失效引用|清除失效默认引用/);
+  assert.doesNotMatch(loading, /移除失效引用|清除失效默认引用|清除失效默认模型/);
 
   const failed = renderCredentialPanel("error");
   assert.match(failed, /Provider 账号加载失败/);
-  assert.doesNotMatch(failed, /移除失效引用|清除失效默认引用/);
+  assert.doesNotMatch(failed, /移除失效引用|清除失效默认引用|清除失效默认模型/);
 });
 
 test("a successful empty credential read still offers explicit stale-reference repair", () => {
@@ -130,7 +136,7 @@ test("clearing an unavailable default alone keeps dynamic credential scope uncon
   assert.deepEqual(patch, { default_credential_id: null, default_model_ref: null, fallback_model_refs: [] });
   assert.equal(Object.hasOwn(patch, "enabled_credential_ids"), false);
   assert.match(panel, /清除失效默认引用/);
-  assert.match(panel, /onClick=\{\(\) => \{ markDraftEdited\(\); setSelectedDefaultCredentialId\(null\); \}\}/);
+  assert.match(panel, /onClick=\{\(\) => selectDefaultCredential\(null\)\}/);
 });
 
 test("allowlist edits never silently clear or replace a default", () => {
@@ -178,6 +184,7 @@ test("default selector shows invalid state, explicit choice and credentials navi
   assert.match(panel, /if \(unavailableDefault\)/);
   assert.match(panel, /const result = await api\.patchSettings/);
   assert.match(panel, /setSelectedDefaultCredentialId\(result\.default_credential_id\)/);
+  assert.match(panel, /setSelectedDefaultModelRef\(result\.default_model_ref \?\? null\)/);
   assert.match(panel, /onSaved\(result\)/);
   assert.match(settings, /setSettings\(saved\)/);
 });
@@ -202,7 +209,7 @@ test("user selects and clears a default; PATCH result is reflected and a failed 
   let saved: ProjectSettings | undefined;
   let callbackCount = 0;
   const props = { projectId: "project-a", credentials, enabledAgentClis: ["pi"] as ["pi"], enabledCredentialIds: ["a", "b", "other-cli"],
-    credentialIdsConfigured: true, defaultCredentialId: null as string | null,
+    credentialIdsConfigured: true, defaultCredentialId: null as string | null, defaultModelRef: null as string | null,
     credentialLoadState: "loaded" as "loaded" | "error", onSaved: (value?: ProjectSettings) => { saved = value; callbackCount += 1; } };
   const render = () => act(async () => { root.render(createElement(ProjectCliProviderAllowlistPanel, props)); });
   const click = async (button: Element | null | undefined) => {
@@ -305,6 +312,133 @@ test("user selects and clears a default; PATCH result is reflected and a failed 
   }
 });
 
+test("model patches preserve ordinary saves and require explicit selection, including after an account change", () => {
+  const draft = { credentialSelectionChanged: false, credIds: ["a", "b"], defaultCredentialId: "a", selectedDefaultCredentialId: "a", credentialListLoaded: true };
+  assert.deepEqual(credentialSelectionPatch({ ...draft, selectedDefaultModelRef: "old" }), {});
+  assert.deepEqual(credentialSelectionPatch({ ...draft, modelSelectionChanged: true, selectedDefaultModelRef: "new" }), { default_model_ref: "new" });
+  assert.deepEqual(credentialSelectionPatch({ ...draft, modelSelectionChanged: true, selectedDefaultModelRef: null }), { default_model_ref: null });
+  assert.deepEqual(credentialSelectionPatch({ ...draft, selectedDefaultCredentialId: "b", modelSelectionChanged: true, selectedDefaultModelRef: "new" }), {
+    default_credential_id: "b", default_model_ref: "new", fallback_model_refs: [],
+  });
+  assert.deepEqual(credentialSelectionPatch({ ...draft, selectedDefaultCredentialId: null, modelSelectionChanged: true, selectedDefaultModelRef: "old" }), {
+    default_credential_id: null, default_model_ref: null, fallback_model_refs: [],
+  });
+  assert.deepEqual(credentialSelectionPatch({ ...draft, credentialListLoaded: false, modelSelectionChanged: true, selectedDefaultModelRef: null }), {});
+});
+
+test("project default model is explicit, uses configured ids, preserves invalid refs and reflects saved results", async () => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
+  const replacements = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element, Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true };
+  const previous = new Map(Object.keys(replacements).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(replacements)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  const original = api.patchSettings;
+  const container = dom.window.document.getElementById("root")!;
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container);
+  const credentials = ["a", "b"].map((id): ProviderCredential => ({ id, name: id, kind: "llm_provider", provider: "fixture", agent_cli: "pi", status: "active", project_id: null,
+    key_version: 1, public_metadata_json: {}, fingerprint: `fixture-${id}`, last4: "test",
+    last_used_at: null, rotated_at: null, created_at: "2026-11-07T00:00:00.000Z", created_by: null,
+    settings_config_json: { providers: { fixture: { models: (id === "a" ? ["model-a", "model-b"] : ["model-c"]).map((model) => ({ id: model })) } } },
+    model_catalog_json: ["probe-only"], health: { status: "ok", model_catalog: ["health-only"],
+      last_tested_at: null, error_category: null, detail: null, model_catalog_fetched_at: null },
+  }));
+  let response = { enabled_credential_ids: ["a", "b"], default_credential_id: "a", default_model_ref: "model-a" } as ProjectSettings;
+  const requests: Array<Parameters<typeof api.patchSettings>[1]> = [];
+  api.patchSettings = async (_projectId, body) => { requests.push(body); return response; };
+  const props = { projectId: "project-a", credentials, enabledAgentClis: ["pi"] as ["pi"], enabledCredentialIds: ["a", "b"],
+    credentialIdsConfigured: true, defaultCredentialId: "a" as string | null, defaultModelRef: null as string | null,
+    credentialLoadState: "loaded" as "loaded" | "error", onSaved: () => {} };
+  const render = () => act(async () => { root.render(createElement(ProjectCliProviderAllowlistPanel, props)); });
+  const trigger = (label = "项目默认模型") => container.querySelector(`[aria-label="${label}"]`)!;
+  const button = (label: string) => Array.from(container.querySelectorAll("button")).find((entry) => entry.textContent?.trim() === label);
+  const save = () => Array.from(container.querySelectorAll("button")).find((entry) => /^(保存|已保存|保存失败|保存中…)$/.test(entry.textContent?.trim() ?? ""))!;
+  const click = async (element: Element | undefined | null) => { assert.ok(element); await act(async () => { (element as HTMLElement).click(); }); };
+  const choose = async (label: string, value: string) => {
+    await click(trigger(label));
+    await click(Array.from(dom.window.document.querySelectorAll('[role="option"]')).find((entry) => entry.textContent?.includes(value)));
+  };
+  try {
+    await render();
+    assert.match(container.textContent!, /未设置项目默认模型：沿用全局角色模型/);
+    await click(trigger());
+    assert.deepEqual(Array.from(dom.window.document.querySelectorAll('[role="option"]')).map((entry) => entry.textContent), ["model-a", "model-b"]);
+    await click(Array.from(dom.window.document.querySelectorAll('[role="option"]')).find((entry) => entry.textContent === "model-b"));
+    await click(save());
+    assert.deepEqual(requests.at(-1), { enabled_agent_clis: ["pi"], default_model_ref: "model-b" });
+    assert.match(trigger().textContent!, /model-a/, "response wins over the submitted model-b draft");
+    props.defaultModelRef = "model-a";
+    await render();
+    await click(save());
+    assert.deepEqual(requests.at(-1), { enabled_agent_clis: ["pi"] }, "ordinary save does not erase default/fallback models");
+
+    await choose("项目默认模型", "model-b");
+    api.patchSettings = async () => { throw new Error("fixture model save interrupted"); };
+    await click(save());
+    assert.match(save().textContent!, /保存失败/);
+    assert.match(trigger().textContent!, /model-b/, "failed write preserves the explicit model draft");
+    api.patchSettings = async (_projectId, body) => { requests.push(body); return response; };
+    props.credentialLoadState = "error";
+    await render();
+    assert.equal(save().disabled, true);
+    assert.equal(trigger().matches(":disabled"), true);
+    assert.match(container.textContent!, /当前选择的项目默认模型（保存后生效）：model-b/);
+    assert.doesNotMatch(container.textContent!, /清除失效默认模型/);
+    props.credentialLoadState = "loaded";
+    await render();
+    await click(save());
+    assert.deepEqual(requests.at(-1), { enabled_agent_clis: ["pi"], default_model_ref: "model-b" });
+    await click(trigger());
+    await click(Array.from(dom.window.document.querySelectorAll("button")).find((entry) => entry.textContent === "清空"));
+    response = { ...response, default_model_ref: null };
+    await click(save());
+    assert.deepEqual(requests.at(-1), { enabled_agent_clis: ["pi"], default_model_ref: null });
+    assert.match(container.textContent!, /未设置项目默认模型：沿用全局角色模型/);
+
+    await choose("项目默认模型", "model-a");
+    response = { ...response, default_model_ref: "model-a" };
+    await click(save());
+    await choose("项目默认账号", "b · fixture");
+    assert.match(trigger().textContent!, /未设置，沿用全局角色模型/, "account change clears the old model without automatically choosing its single candidate");
+    await choose("项目默认模型", "model-c");
+    response = { ...response, default_credential_id: "b", default_model_ref: "model-c" };
+    await click(save());
+    assert.deepEqual(requests.at(-1), { enabled_agent_clis: ["pi"], default_credential_id: "b", default_model_ref: "model-c", fallback_model_refs: [] });
+    props.defaultCredentialId = "b"; props.defaultModelRef = "model-c";
+    await render();
+    await click(trigger("项目默认账号"));
+    await click(Array.from(dom.window.document.querySelectorAll("button")).find((entry) => entry.textContent === "清空"));
+    assert.match(container.textContent!, /未设置项目默认模型：沿用全局角色模型/);
+    response = { ...response, default_credential_id: null, default_model_ref: null };
+    await click(save());
+    assert.deepEqual(requests.at(-1), { enabled_agent_clis: ["pi"], default_credential_id: null, default_model_ref: null, fallback_model_refs: [] });
+
+    props.defaultCredentialId = "a"; props.defaultModelRef = "missing-model";
+    await render();
+    assert.match(container.textContent!, /默认模型 missing-model 不在默认账号当前配置的模型名单中/);
+    assert.equal(save().disabled, true);
+    await click(button("清除失效默认模型"));
+    assert.equal(save().disabled, false);
+    response = { ...response, default_credential_id: "a" };
+    await click(save());
+    assert.deepEqual(requests.at(-1), { enabled_agent_clis: ["pi"], default_model_ref: null });
+    props.defaultModelRef = null;
+    props.credentials = credentials.map((entry) => ({ ...entry, settings_config_json: {} }));
+    await render();
+    assert.match(container.textContent!, /默认账号的配置中没有模型/);
+    await click(trigger());
+    assert.equal(dom.window.document.querySelectorAll('[role="option"]').length, 0, "probe catalogs cannot provide options for an empty configured list");
+  } finally {
+    await act(async () => root.unmount());
+    api.patchSettings = original;
+    dom.window.close();
+    for (const [key, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
+});
+
 test("parent settings reload after probes preserves drafts before and during the request", async () => {
   const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
   const replacements = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
@@ -316,7 +450,11 @@ test("parent settings reload after probes preserves drafts before and during the
   const container = dom.window.document.getElementById("root")!;
   const { createRoot } = await import("react-dom/client");
   const root = createRoot(container);
-  const credentials = ["a", "b"].map((id) => ({ id, name: id, kind: "llm_provider", provider: "fixture", agent_cli: "pi", status: "active", project_id: null })) as ProviderCredential[];
+  const credentials = ["a", "b"].map((id): ProviderCredential => ({ id, name: id, kind: "llm_provider", provider: "fixture", agent_cli: "pi", status: "active", project_id: null,
+    key_version: 1, public_metadata_json: {}, fingerprint: `fixture-${id}`, last4: "test",
+    last_used_at: null, rotated_at: null, created_at: "2026-11-07T00:00:00.000Z", created_by: null,
+    settings_config_json: { providers: { fixture: { models: [{ id: "model-a" }, { id: "model-b" }] } } },
+  }));
   let finishProbe!: (result: Awaited<ReturnType<typeof api.testCredential>>) => void;
   let replaceServer!: (value: ProjectSettings) => void;
   let reloads = 0;
@@ -324,7 +462,8 @@ test("parent settings reload after probes preserves drafts before and during the
   api.testCredential = () => new Promise((resolve) => { finishProbe = resolve; });
   api.patchSettings = async (_id, body) => {
     requests.push(body);
-    return { enabled_agent_clis: ["pi"], enabled_credential_ids: ["a", "b"], default_credential_id: body.default_credential_id ?? null } as ProjectSettings;
+    return { enabled_agent_clis: ["pi"], enabled_credential_ids: ["a", "b"], default_credential_id: body.default_credential_id ?? null,
+      default_model_ref: body.default_model_ref ?? null } as ProjectSettings;
   };
   function Parent({ initialDefault }: { initialDefault: string | null }) {
     const [server, setServer] = useState({ enabled_agent_clis: ["pi"], enabled_credential_ids: ["a", "b"], default_credential_id: initialDefault } as ProjectSettings);
@@ -332,6 +471,7 @@ test("parent settings reload after probes preserves drafts before and during the
     return createElement(ProjectCliProviderAllowlistPanel, {
       projectId: "project-a", credentials, credentialLoadState: "loaded", enabledAgentClis: server.enabled_agent_clis as ["pi"],
       enabledCredentialIds: server.enabled_credential_ids, credentialIdsConfigured: true, defaultCredentialId: server.default_credential_id,
+      defaultModelRef: server.default_model_ref ?? null,
       // Model the real parent's reload: successful or failed probes both return
       // equivalent settings with freshly allocated (and possibly reordered) arrays.
       onSaved: (result?: ProjectSettings) => {
@@ -349,6 +489,8 @@ test("parent settings reload after probes preserves drafts before and during the
   const chooseB = async () => {
     await click(trigger());
     await click(Array.from(dom.window.document.querySelectorAll('[role="option"]')).find((option) => option.textContent?.includes("b · fixture")));
+    await click(container.querySelector('[aria-label="项目默认模型"]'));
+    await click(Array.from(dom.window.document.querySelectorAll('[role="option"]')).find((option) => option.textContent === "model-b"));
   };
   try {
     for (const initialDefault of [null, "a"]) {
@@ -362,8 +504,9 @@ test("parent settings reload after probes preserves drafts before and during the
           await act(async () => finishProbe({ ok, detail: ok ? undefined : "fixture failure" } as Awaited<ReturnType<typeof api.testCredential>>));
           assert.equal(reloads, beforeReload + 1, "probe must exercise the parent settings refresh");
           assert.match(trigger().textContent!, /b · fixture/, "equivalent server arrays must not erase unsaved B");
+          assert.match(container.querySelector('[aria-label="项目默认模型"]')!.textContent!, /model-b/, "equivalent settings refresh preserves explicit model draft");
           await click(button("保存"));
-          assert.deepEqual(requests.at(-1), { enabled_agent_clis: ["pi"], default_credential_id: "b", default_model_ref: null, fallback_model_refs: [] });
+          assert.deepEqual(requests.at(-1), { enabled_agent_clis: ["pi"], default_credential_id: "b", default_model_ref: "model-b", fallback_model_refs: [] });
           assert.match(trigger().textContent!, /b · fixture/, "successful save applies the server result");
         }
       }
@@ -390,6 +533,12 @@ test("parent settings reload after probes preserves drafts before and during the
     await chooseB();
     await click(button("取消未保存变更"));
     assert.match(trigger().textContent!, /未设置默认账号/);
+    await act(async () => replaceServer({ enabled_agent_clis: ["pi"], enabled_credential_ids: ["a", "b"], default_credential_id: "a", default_model_ref: "model-a" } as ProjectSettings));
+    await click(container.querySelector('[aria-label="项目默认模型"]'));
+    await click(Array.from(dom.window.document.querySelectorAll('[role="option"]')).find((option) => option.textContent === "model-b"));
+    await act(async () => replaceServer({ enabled_agent_clis: ["pi"], enabled_credential_ids: ["a", "b"], default_credential_id: "a", default_model_ref: null } as ProjectSettings));
+    assert.match(container.querySelector('[aria-label="项目默认模型"]')!.textContent!, /未设置，沿用全局角色模型/, "a genuine server model-only change resets the draft");
+    assert.match(container.textContent!, /项目账号配置已在服务端变更/);
   } finally {
     await act(async () => root.unmount());
     api.patchSettings = originalPatch;

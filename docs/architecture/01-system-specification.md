@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-06
+> 同步日期：2026-11-07
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -156,8 +156,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **规范要求**：系统必须在 Job 创建时冻结 CLI、Provider/model、运行时镜像 digest、工具/能力、Finding protocol、网络策略、设备需求和 runtime knobs；适用的目标 grant 与可选记忆策略也须冻结。Dispatcher 不得回读最新 RoleConfig 代替快照，实时撤权检查只能收紧冻结权限。
 - **决策来源**：执行结果要能按当时的权限、镜像和配置重放审计。
 - **实现状态**：as-built；快照身份和 schema 版本进入 `agent_snapshot_json`；目标 grant 只从 Scheduler 的可信输入或系统审计继承，调用方同名字段不会成为 authority。Pi 观测记忆的独立实现与未验收范围见 FR-CAP-009。
-- **代码入口**：[运行时快照应用](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[Provider freeze](../../apps/scheduler/src/domains/provider-adapter/freeze.ts)、[Agent profile](../../apps/scheduler/src/agent-runtime-profile.ts)。
-- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:credential-compatibility`；人工在创建后修改角色并核对执行输入不变。
+- **代码入口**：[运行时快照应用](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[Provider freeze](../../apps/scheduler/src/domains/provider-adapter/freeze.ts)、[Agent profile](../../apps/scheduler/src/agent-runtime-profile.ts)、[共享完整冻结](../../apps/scheduler/src/job-runtime-freeze.ts)。
+- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:credential-compatibility`；人工在创建后修改角色并核对执行输入不变。#943/#948 补齐 retry/自动 Hub/Verify/补证/Report 的完整冻结，HTTP 创建与恢复拒绝回归复用 `pnpm ci:integration:recovery` / `pnpm ci:integration:platform-api`；最终 SHA Actions 待验，历史缺损快照的可信补冻恢复尚未交付。
 
 ### FR-JOB-010 Claim、并发和 Lease
 
@@ -205,7 +205,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **决策来源**：运维判定和外部清理是平台责任，迟到回调不能重新取得执行权。
 - **实现状态**：as-built；Reaper 和状态条件更新复用 Job/Attempt effect identity。终态 model token 与 Control token 撤销在同一 Job 终态事务内完成，不另取 Job lock，也不吞掉撤销异常；回滚夹具保持 Job/model token/Control token/audit 原子性，终态后的真实 HTTP 请求返回 401。
 - **代码入口**：[Dispatcher/Reaper](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[token revocation](../../apps/scheduler/src/gateway-token-revocation.ts)、[配置](../../apps/scheduler/src/config.ts)。
-- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-reaper`；`terminal-bootstrap-regression.log` 记录 12 pass/0 skip，覆盖 bootstrap、ordinary Hub 无 v1 audit、依赖执行和 terminal rollback；人工重复取消/迟到回调核对稳定结果。
+- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-reaper`；`terminal-bootstrap-regression.log` 记录 12 pass/0 skip，覆盖 bootstrap、ordinary Hub 无 v1 audit、依赖执行和 terminal rollback；人工重复取消/迟到回调核对稳定结果。#946 的未知/未结清效果不能被记为人的超时，active/inactive Attempt 与 planned/pending/unknown、多 tick 和正常到期回归接 `pnpm ci:integration:job-lifecycle`；最终 SHA Actions 待验，真实通知投递计时仍未实现。
 
 ### FR-JOB-014 重试创建新 Attempt
 
@@ -676,7 +676,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 - **代码入口**：[Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts)、[model admission](../../apps/scheduler/src/domains/provider-adapter/model-catalog-admit.ts)、[resolve credential](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)。
 - **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（#757 假凭据与隔离数据库，含 readiness/快照一致性和历史快照不变）；`pnpm ci:integration:credential-delete`（#914 scoped HTTP 与 PostgreSQL 双向竞态）。
 
-Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；仅列出 active、项目可见且在启用范围内的候选。默认变化同步清除旧模型引用，加载失败不清配置；保存采用服务端结果。单 Job 重跑错误只按结构化原因导向配置入口，不自动执行。代码见[面板](../../apps/web/src/components/ProjectCliProviderAllowlistPanel.tsx)与[错误导航](../../apps/web/src/useJobRerun.tsx)。Web 回归随 `pnpm ci:unit:credential-compatibility`，resolver/rerun 回归随 `pnpm ci:unit:capability-pack` / `pnpm ci:integration:recovery`；main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
+Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；仅列出 active、项目可见且在启用范围内的候选。#966 补齐同一账号下的显式默认模型选择/清除，模型候选只取账号已配置名单；账号变更不沿用旧模型，加载失败不清配置，普通保存保留未编辑选择，保存采用服务端结果。CLI 启用范围不等于模型默认值；解析继续采用显式任务/Hub 提案 → 项目默认模型 → 全局角色模型，不自动任选。任务创建在提交区保留结构化模型冲突及修复导航，不回显原始 Provider 错误、不自动重试；新回归入口为 `pnpm ci:unit:task-intent` 与既有 credential-compatibility，最终 SHA Actions 待验。单 Job 重跑错误只按结构化原因导向配置入口，不自动执行。代码见[面板](../../apps/web/src/components/ProjectCliProviderAllowlistPanel.tsx)与[错误导航](../../apps/web/src/useJobRerun.tsx)。Web 回归随 `pnpm ci:unit:credential-compatibility`，resolver/rerun 回归随 `pnpm ci:unit:capability-pack` / `pnpm ci:integration:recovery`；main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
 
 ### FR-CRED-003 Model Gateway 唯一出口
 
@@ -916,7 +916,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Report 和 Research 的可选投影失败必须持久化失败原因、保留主事实并使用有界恢复；不得通过回滚外层事务或无限 retry 丢失/重复核心结果。
 - **决策来源**：交付增强失败不应破坏已确认事实，恢复必须可观察、可停止。
-- **实现状态**：as-built；Report 自动重试 1 次，Research 使用 savepoint。
+- **实现状态**：as-built；Report 自动重试 1 次，Research 使用 savepoint。#945 保留报告再派/快照解析与 Hub 收敛中的原始数据库冲突，供安全事务边界识别，而非吞错后在 aborted 事务中继续查询；可派报告写文件的 Verify/orphan 混合 I/O 恢复入口仍不新增整体自动重试；普通业务派发错误保持既有 Root 收口，不把 `25P02` 泛化为可重试。报告输入文件的幂等写条件与非 SQL 回滚边界见[运行时视图](06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)，不是新的 Agent/外部效果重放许可。
 - **代码入口**：[report recovery](../../apps/scheduler/src/report-failure-recovery.ts)、[research best effort](../../apps/scheduler/src/domains/finding-research/application.ts)、[report tests](../../apps/scheduler/src/report-failure-recovery.test.ts)。
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`。
 
