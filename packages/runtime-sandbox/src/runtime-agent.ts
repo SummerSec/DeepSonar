@@ -1558,11 +1558,11 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     if (!piRecovery?.lengthCount) return;
     const guard = await spec.recoveryGuard?.() ?? { allowed: false, reason: "guard_missing" };
     const reason = spec.completionGate?.() === true ? "completion_accepted" : guard.allowed !== true ? piRecoveryGuardReason(guard.reason) : undefined;
-    if (reason) {
-      piRecoveryStopped = true;
-      recoveryEvent("PI_LENGTH_RECOVERY_STOPPED", { reason, cause: "process_resume" });
-      throw new Error(`PI_LENGTH_RECOVERY_STOPPED: ${reason}; prior_runner_error=${runError ?? "unknown"}`);
-    }
+    if (!reason) return;
+    piRecoveryStopped = true;
+    recoveryEvent("PI_LENGTH_RECOVERY_STOPPED", { reason, cause: "process_resume" });
+    attemptTerminalResult = { isError: true, errorDetail: `PI_LENGTH_RECOVERY_STOPPED: ${reason}; prior_runner_error=${runError ?? "unknown"}`, runnerErrorSource: "process" };
+    throw new Error(attemptTerminalResult.errorDetail);
   };
   const performPiRecovery = async (action: PiRecoveryAction): Promise<void> => {
     if (!piRecovery || !piDriver || piRecoveryStopped) return;
