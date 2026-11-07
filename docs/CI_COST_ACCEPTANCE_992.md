@@ -1,6 +1,6 @@
 # CI 路由、失败重跑与成本验收（#992）
 
-> 状态：路由/五片隔离、依赖审计与成本观测已实现；受控故障/同 SHA 原生失败重跑及三组同形文档对照已通过。实现提交的完整工程验收以 [#995 最新候选 Checks](https://github.com/SummerSec/DeepSonar/pull/995/checks) 为准，不以实验绿灯替代。PR→main 跨提交证据复用未实现、未启用。
+> 状态：路由/五片隔离与成本观测已随 [#995](https://github.com/SummerSec/DeepSonar/pull/995) 合并；既有故障/原生重跑及文档对照证据不外推为复用收益。本分支追加 §6 输入冻结前置切片，源码/锁已接线，最终 SHA Actions 原生验收待执行；三个固定 hooks 已静态核实无二次下载；安装结果 guard 与原生执行仍待最终 SHA 核验。PR→main 跨运行复用仍未实现、未启用。
 > 同步日期：2026-11-08
 
 对应 [NFR-OPS-003](architecture/01-system-specification.md#nfr-ops-003-发布与文档保鲜)；规范归属为[工程规格](architecture/11-engineering-specs.md#4-测试分层与实际接线)。本片承接已落地的 #972/#976，不重复宣称从零拆片或路由；不涉及 #990、生产、真实模型、合并或发布。
@@ -130,8 +130,27 @@ before 的 `requiredSuites=[]` / `reverseSuites=[]`，所以这是**核心重活
 [#992 的独立 PR→main 复用建议](https://github.com/SummerSec/DeepSonar/issues/992#issuecomment-6707927411)尚未实现。本片保持 main 集成 smoke、当前提交汇总和发布门禁完整执行：
 
 - #989 的 preview/main tree 相同，是候选而非授权；#993 的 tree 不同，直接拒绝。
-- 当前原生构建还包含可变 Action tag、未全量锁定的 apt/transitive npm 解析；只比较仓库 tree 不能证明有效输入相同。
+- §6 固定可枚举的 APT/npm 输入，但 lifecycle、Action 与实际 builder 等完整有效身份尚未收口；只比较仓库 tree 不能证明有效输入相同。
 - #975 base 标签绑定 checkout SHA，不可把 PR artifact 改名或改标签冒充 main 产物。
 - 可信成功来源、完整双架构/套件、workflow/script/toolchain/lock/base digest/构建参数/环境权限及内容摘要/有效期任一缺失，仍执行原验收。fork、不可信或失败/取消的来源不进入可信发布缓存。
 
 未交付跨提交复用不写成已优化；也不把两次完整原生运行的总时间直接列为可节省成本。
+
+## 6. 基础构建输入冻结（#992前置切片）
+
+核对基线：2026-11-08，本分支源码接线；**不是 PR→main 复用已交付**。本片固定现有 base 的可枚举依赖，版本权威仍在 [Dockerfile](../deploy/Dockerfile.agent) 与下列机器文件，不更新 Job/CLI 选择或镜像准入。
+
+| 输入 | 来源与构建方式 | 拒绝边界 |
+| --- | --- | --- |
+| Claude / Pi / Pi SDK | [base CLI manifest](../agent-harness/base-cli-runtime/package.json) 与[完整 v3 lock](../agent-harness/base-cli-runtime/package-lock.json)；canonical 临时 prefix `npm ci` 保留原生 hooks，标准全局 hoist/bin，保留 npm/corepack | Docker ARG 的角色版本与锁根不符即拒绝，不使用全局 `npm ci`、私有 SDK 查找 shim 或漂移安装 |
+| Pi OM / SDK | [OM manifest](../agent-harness/pi-extensions-base-runtime/package.json) 与[完整 v3 lock](../agent-harness/pi-extensions-base-runtime/package-lock.json)；原 canonical prefix，禁用 lifecycle | 保持现有 OM wrapper/冻结/独立 Gateway 治理；不是新扩展或权限 |
+| Debian APT | [唯一快照身份](../agent-harness/base-apt-runtime.json) 与[源/cache verifier](../agent-harness/base-apt-inputs.mjs)；HTTPS 由固定 Node parent CA 引导，APT 继续验证签名并在安装前核对实际 lists 的 signed InRelease SHA | 未知字段、镜像不可获取、预取或实际消费 cache 的身份不同均拒绝；历史快照仅关闭 valid-until 时效检查，不关闭 GPG/TLS、不回退 live |
+| Pi find 使用的 fd | 固定双架构 musl 资产与 SHA，验证后才提取；系统 PATH、许可证保留；安装时检查 `--no-require-git` | 系统旧 fd 版本不满足 Pi 参数时不能充当等价版本；不改 Pi offline/发现 flags、版本或 RPC 协议 |
+
+`image-build-fingerprint.mjs` 的 base/audit 配置与 Reverse shared 输入同步覆盖新锁/快照/verifier；PR 与 main 的触发路径均保留。指纹只作输入候选信号，**不授权跨运行产物或测试结论复用**。既有五片 gate、main 的全部当前测试/smoke/汇总和发布门未减覆盖。
+
+**lifecycle 静态收口与安装结果：** [审计身份](../agent-harness/base-cli-lifecycle.json) 固定三个普通 registry 安装 hooks 的版本/命令/文件 SHA，公开精确 tarball SRI 已核对，源码无二次下载。Claude 缺 optional native 时会软成功并留下可执行占位，不能以 `npm ci` 或 `test -x` 当作安装完成；[guard](../agent-harness/base-cli-install.mjs) 核实际 linux/glibc/arch、locked native 身份、最终入口流式内容 SHA 和 global/PATH realpath，失败拒绝。保留 hooks，不修改 vendor 或加 fallback；guard 和镜像内真实 npm/native 执行仍待 Actions。critical Action、实际 builder/backend、parent native child digest、工作区模式/link/context 和完整 ARG/env/权限的跨运行输入身份亦尚未实现。不能把这些缺项长期标为 unknown 后宣称复用可用，或仅以事后 rootfs SHA 掩盖输入缺口。
+
+**验证状态：** [APT 回归](../agent-harness/base-apt-inputs.test.mjs) 与 [CLI 安装回归](../agent-harness/base-cli-install.test.mjs) 已接 `ci:unit:ci-routing`；涵盖严格快照、SHA/实际 cache、CA 引导、npm closure/角色根及 fd 资产。这里只完成静态 hash/元数据核对和 `git diff --check`；tests/build/typecheck/安装都仅在 Actions 执行，原生双架构 base/派生镜像与真实 CLI 套件尚待最终 SHA。未取得命中与三组可比 PR→main 成本样本，收益保持 `unknown`，不关闭 #992。
+
+长期取舍见 [ADR 0018](architecture/adr/0018-frozen-base-build-inputs.md)。更新依赖时同步版本根、完整锁、快照/资产摘要与指纹/触发路径，再跑最终候选门禁；不可通过 live/fallback 延续旧输入语义。

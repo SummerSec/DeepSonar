@@ -6,6 +6,9 @@ on:
   # Ready transition would otherwise never re-plan or run this matrix.
   pull_request:
     paths:
+      - "agent-harness/base-cli-lifecycle.json"
+      - "agent-harness/base-cli-install.mjs"
+      - "agent-harness/base-cli-install.test.mjs"
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
@@ -31,6 +34,11 @@ on:
       - "agent-harness/fixtures/reverse-sample/**"
       - "agent-harness/runtime-images.json"
       - "agent-harness/dsh-runtime/**"
+      - "agent-harness/base-cli-runtime/**"
+      - "agent-harness/pi-extensions-base-runtime/**"
+      - "agent-harness/base-apt-runtime.json"
+      - "agent-harness/base-apt-inputs.mjs"
+      - "agent-harness/base-apt-inputs.test.mjs"
       - "agent-harness/dsh-request-budget-install.mjs"
       - "pnpm-workspace.yaml"
       - "tsconfig.base.json"
@@ -59,6 +67,9 @@ on:
   push:
     branches: [main]
     paths:
+      - "agent-harness/base-cli-lifecycle.json"
+      - "agent-harness/base-cli-install.mjs"
+      - "agent-harness/base-cli-install.test.mjs"
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
@@ -84,6 +95,11 @@ on:
       - "agent-harness/fixtures/reverse-sample/**"
       - "agent-harness/runtime-images.json"
       - "agent-harness/dsh-runtime/**"
+      - "agent-harness/base-cli-runtime/**"
+      - "agent-harness/pi-extensions-base-runtime/**"
+      - "agent-harness/base-apt-runtime.json"
+      - "agent-harness/base-apt-inputs.mjs"
+      - "agent-harness/base-apt-inputs.test.mjs"
       - "agent-harness/dsh-request-budget-install.mjs"
       - "pnpm-workspace.yaml"
       - "tsconfig.base.json"

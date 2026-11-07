@@ -27,6 +27,14 @@ export const PRESETS = {
   "deepsonar-base": {
     dockerfile: "deploy/Dockerfile.agent",
     paths: [
+      "agent-harness/base-apt-runtime.json",
+      "agent-harness/base-apt-inputs.mjs",
+      "agent-harness/base-cli-lifecycle.json",
+      "agent-harness/base-cli-install.mjs",
+      "agent-harness/base-cli-runtime/package.json",
+      "agent-harness/base-cli-runtime/package-lock.json",
+      "agent-harness/pi-extensions-base-runtime/package.json",
+      "agent-harness/pi-extensions-base-runtime/package-lock.json",
       "agent-harness/runtime-images.json",
       "agent-harness/dsh-runtime/package.json",
       "agent-harness/dsh-runtime/package-lock.json",
@@ -44,6 +52,14 @@ export const PRESETS = {
   "deepsonar-audit": {
     dockerfile: "deploy/Dockerfile.agent",
     paths: [
+      "agent-harness/base-apt-runtime.json",
+      "agent-harness/base-apt-inputs.mjs",
+      "agent-harness/base-cli-lifecycle.json",
+      "agent-harness/base-cli-install.mjs",
+      "agent-harness/base-cli-runtime/package.json",
+      "agent-harness/base-cli-runtime/package-lock.json",
+      "agent-harness/pi-extensions-base-runtime/package.json",
+      "agent-harness/pi-extensions-base-runtime/package-lock.json",
       "agent-harness/runtime-images.json",
       "agent-harness/dsh-runtime/package.json",
       "agent-harness/dsh-runtime/package-lock.json",

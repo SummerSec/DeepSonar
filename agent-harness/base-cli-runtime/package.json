@@ -1,0 +1,8 @@
+{
+  "name": "@deepsonar/base-cli-runtime",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.312",
+    "@earendil-works/pi-coding-agent": "1.4.0"
+  }
+}
