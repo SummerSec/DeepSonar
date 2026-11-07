@@ -14,8 +14,8 @@ const workflow = parse(source);
 const jobs = workflow.jobs;
 const classify = jobs.changes.steps.find((step) => step.id === "classify").run;
 const summary = jobs["ci-summary"].steps.find((step) => step.name === "Verify required results").run;
-const heavy = ["windows-upgrade-backend", "crash-recovery", "lexical-pressure", "pi-om-growth", "gate", "runtime-images", "chrome-fuzz-arm64-build", "chrome-fuzz-arm64"];
-const resultVars = ["WINDOWS", "CRASH", "LEXICAL", "PIOM", "GATE", "IMAGES", "FUZZ_BUILD", "FUZZ"];
+const heavy = ["windows-upgrade-backend", "crash-recovery", "lexical-pressure", "pi-om-growth", "gate-contract", "gate-db-core", "gate-db-domain", "gate-e2e", "runtime-images", "chrome-fuzz-arm64-build", "chrome-fuzz-arm64"];
+const resultVars = ["WINDOWS", "CRASH", "LEXICAL", "PIOM", "GATE_CONTRACT", "GATE_DB_CORE", "GATE_DB_DOMAIN", "GATE_E2E", "IMAGES", "FUZZ_BUILD", "FUZZ"];
 const runSummary = (overrides = {}) => spawnSync("bash", ["-c", summary], {
   env: { ...process.env, CHANGES: "success", DOCS: "success", DOCS_ONLY: "false", MODE: "ready-full", PLAN_STATUS: "ok",
     // #961: the ARM pair is judged by the plan, so the default fixture must answer it.
@@ -105,7 +105,15 @@ test("actual summary rejects failures, cancellation, missing outputs and unexpec
 });
 
 test("workflow really runs docs and regressions and preserves full-run dependencies", () => {
-  assert.ok(jobs.gate.steps.some((s) => s.name === "File size ratchet guard" && s.run === "pnpm ci:unit:file-size" && !s.if && !s["continue-on-error"]));
+  // #972: gate 拆成 4 个分片后，File size ratchet guard 仍须恰好落在某一片且无豁免。
+  const fileSizeShard = ["gate-contract", "gate-db-core", "gate-db-domain", "gate-e2e"]
+    .map((name) => jobs[name])
+    .find((job) => job && job.steps.some((s) => s.name === "File size ratchet guard"));
+  assert.ok(fileSizeShard, "File size ratchet guard 必须落在某个 gate 分片");
+  const fileSizeStep = fileSizeShard.steps.find((s) => s.name === "File size ratchet guard");
+  assert.equal(fileSizeStep.run, "pnpm ci:unit:file-size");
+  assert.equal(fileSizeStep.if, undefined);
+  assert.equal(fileSizeStep["continue-on-error"], undefined);
   const docs = jobs["docs-freshness"];
   assert.equal(docs.if, undefined);
   assert.equal(docs.steps.find((s) => s.uses === "actions/checkout@v4").with["fetch-depth"], 0);
@@ -138,6 +146,18 @@ test("workflow really runs docs and regressions and preserves full-run dependenc
     assert.ok(jobs[name].if.startsWith("always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'"));
   }
   assert.ok(jobs["chrome-fuzz-arm64"].if.includes("needs.chrome-fuzz-arm64-build.result == 'success'"));
+});
+
+test("#972 gate 拆成 4 个有界并行分片：if 一致且 contract 无服务", () => {
+  const shards = ["gate-contract", "gate-db-core", "gate-db-domain", "gate-e2e"];
+  for (const name of shards) {
+    assert.ok(jobs[name], `分片 ${name} 必须存在`);
+    assert.ok(
+      jobs[name].if.startsWith("always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'"),
+      `${name} 的 if 必须以 ready-full 门禁开头`,
+    );
+  }
+  assert.equal(jobs["gate-contract"].services, undefined, "gate-contract 不声明 services.postgres");
 });
 
 test("ARM64 guard normalizes scalar/array needs and retains all original safeguards", () => {

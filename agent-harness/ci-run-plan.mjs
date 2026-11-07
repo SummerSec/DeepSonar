@@ -16,6 +16,8 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { matchesAnyPath } from "./path-match.mjs";
+import { classifyPackageJsonChange, planReverseSuites } from "./reverse-suite-plan.mjs";
 import {
   CLASSIFIER_MODES,
   CLASSIFIER_STATUSES,
@@ -104,27 +106,9 @@ export function readWorkflowPullRequestPaths(contents) {
   return paths;
 }
 
-const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-
-/** Translate a workflows `paths` pattern into a matcher. */
-export function pathPatternToRegExp(pattern) {
-  const segments = String(pattern).split("/");
-  const source = segments
-    .map((segment, index) => {
-      if (segment === "**") return index === segments.length - 1 ? "(?:.*)?" : "(?:[^/]+/)*";
-      const body = escapeRegExp(segment).replaceAll("\\*", "[^/]*");
-      return index === segments.length - 1 ? body : `${body}/`;
-    })
-    .join("");
-  return new RegExp(`^${source}$`, "u");
-}
-
-export function matchesPathPattern(pattern, path) {
-  return pathPatternToRegExp(pattern).test(path);
-}
-
-export const matchesAnyPath = (patterns, path) =>
-  patterns.some((pattern) => matchesPathPattern(pattern, path));
+// #976: the matcher lives in path-match.mjs so the Reverse suite plan can use
+// it without importing this module. Re-exported here to keep the existing API.
+export { matchesAnyPath, matchesPathPattern, pathPatternToRegExp } from "./path-match.mjs";
 
 /** Suites whose declared path filter is hit by any changed path, in stable order. */
 export function matchSuites(suitePaths, paths) {
@@ -220,6 +204,10 @@ export function buildRunPlan({
   classifier,
   ciPrMode,
   suitePaths = {},
+  // #976: package.json contents at base/head, used for the field-level impact
+  // check. Missing contents keep every Reverse suite required (fail closed).
+  packageJsonBase,
+  packageJsonHead,
 } = {}) {
   const suites = Object.keys(suitePaths).sort();
   const tiered = isTiered(ciPrMode);
@@ -231,16 +219,43 @@ export function buildRunPlan({
     fastSuites: [],
     // #961: 默认必须跑 ARM 门禁；只有明确判定「与 Chrome 构建输入无关」的分支才置 false。
     chromeFuzzArm: true,
+    // #976: Reverse/Pi-OM/Claude sub-suites this run must execute. Default is
+    // the full set; only an evidence-backed branch narrows it.
+    reverseSuites: [],
     tiered,
     reasons: [],
     base: base ?? "",
     head: head ?? "",
   };
 
+  // #976: captured while the diff is parsed so the Reverse sub-suite plan sees
+  // the same records/paths as the specialist suite matching.
+  let diffRecords = [];
+  let diffPaths = [];
+  const finalize = (candidate) => {
+    const packageJsonChanged = diffPaths.includes("package.json");
+    const impact = packageJsonChanged
+      ? classifyPackageJsonChange({ baseText: packageJsonBase, headText: packageJsonHead })
+      : { impact: "none", reasons: [] };
+    const reverse = planReverseSuites({
+      status: candidate.status,
+      mode: candidate.mode,
+      tiered: candidate.tiered,
+      eventName,
+      records: diffRecords,
+      paths: diffPaths,
+      packageJsonImpact: impact.impact,
+      packageJsonReasons: impact.reasons,
+    });
+    candidate.reverseSuites = reverse.suites;
+    candidate.reasons.push(...reverse.reasons.map((reason) => `reverse:${reason}`));
+    return candidate;
+  };
+
   if (eventName !== "pull_request") {
     plan.reasons.push("non_pull_request_event");
     plan.reasons.push("chrome_fuzz_required_non_pull_request");
-    return plan;
+    return finalize(plan);
   }
   if (!base || !head) {
     plan.status = PLAN_STATUSES.FAILED;
@@ -248,7 +263,7 @@ export function buildRunPlan({
     plan.reasons.push("chrome_fuzz_plan_failed_fail_closed");
     plan.requiredSuites = suites;
     plan.fastSuites = [...new Set(FAST_SUITE_ROUTES.map((route) => route.script))];
-    return plan;
+    return finalize(plan);
   }
 
   let records;
@@ -262,7 +277,7 @@ export function buildRunPlan({
     plan.reasons.push("chrome_fuzz_plan_failed_fail_closed");
     plan.requiredSuites = suites;
     plan.fastSuites = [...new Set(FAST_SUITE_ROUTES.map((route) => route.script))];
-    return plan;
+    return finalize(plan);
   }
 
   const classification = classifier ?? classifyRecords(records, { eventName, base, head });
@@ -272,17 +287,19 @@ export function buildRunPlan({
     plan.reasons.push("chrome_fuzz_plan_failed_fail_closed");
     plan.requiredSuites = suites;
     plan.fastSuites = [...new Set(FAST_SUITE_ROUTES.map((route) => route.script))];
-    return plan;
+    return finalize(plan);
   }
 
+  diffRecords = records;
   const paths = records.flatMap((record) => (record.status[0] === "R" || record.status[0] === "C" ? record.paths : record.paths));
+  diffPaths = paths;
   if (classification.mode === CLASSIFIER_MODES.DOCS_ONLY) {
     plan.mode = RUN_MODES.DOCS;
     plan.docsOnly = true;
     plan.reasons.push("docs_only");
     plan.chromeFuzzArm = false;
     plan.reasons.push("chrome_fuzz_docs_only");
-    return plan;
+    return finalize(plan);
   }
 
   const matched = matchSuites(suitePaths, paths);
@@ -296,14 +313,14 @@ export function buildRunPlan({
     plan.reasons.push("ci_pr_mode_full");
     plan.chromeFuzzArm = true;
     plan.reasons.push("chrome_fuzz_required_full_mode");
-    return plan;
+    return finalize(plan);
   }
   if (draft) {
     plan.mode = RUN_MODES.DRAFT_FAST;
     plan.reasons.push("draft_fast_path");
     plan.chromeFuzzArm = false;
     plan.reasons.push("chrome_fuzz_draft_fast_path");
-    return plan;
+    return finalize(plan);
   }
   plan.reasons.push("ready_for_review_full_path");
   plan.requiredSuites = matched;
@@ -315,7 +332,7 @@ export function buildRunPlan({
   });
   plan.chromeFuzzArm = arm.required;
   plan.reasons.push(arm.reason);
-  return plan;
+  return finalize(plan);
 }
 
 function readGitDiff(base, head, cwd = process.cwd()) {
@@ -367,10 +384,27 @@ function writeGitHubOutput(plan) {
     `required_suites=${plan.requiredSuites.join(",")}`,
     `fast_suites=${plan.fastSuites.join(",")}`,
     `chrome_fuzz_arm=${plan.chromeFuzzArm ? "required" : "skipped"}`,
+    `reverse_suites=${plan.reverseSuites.join(",")}`,
     `reasons=${plan.reasons.join(",")}`,
     `base=${plan.base}`,
     `head=${plan.head}`,
   ].join("\n") + "\n");
+}
+
+/**
+ * #976: read `package.json` at a revision so the field-level impact check can
+ * compare base and head. Any failure returns undefined, which the plan treats
+ * as "cannot prove independence" and keeps every Reverse suite required.
+ */
+function readPackageJsonAt(revision, cwd = process.cwd()) {
+  if (!revision) return undefined;
+  const output = spawnSync("git", ["show", `${revision}:package.json`], {
+    cwd,
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (output.error || output.status !== 0) return undefined;
+  return output.stdout.toString("utf8");
 }
 
 function main() {
@@ -383,6 +417,8 @@ function main() {
     draft: options.draft,
     ciPrMode: options.ciPrMode ?? process.env[CI_PR_MODE_VARIABLE],
     suitePaths: loadSuitePaths(root),
+    packageJsonBase: readPackageJsonAt(options.base, root),
+    packageJsonHead: readPackageJsonAt(options.head, root),
     ...(options.diffFile ? { diffBytes: readFileSync(options.diffFile) } : {}),
   });
   writeGitHubOutput(plan);
