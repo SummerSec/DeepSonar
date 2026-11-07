@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createRequire } from "node:module";
 import test from "node:test";
 import { hasChromeArm64Gate } from "./ci-chrome-arm64-gate.mjs";
+import { GATE_SHARDS, GATE_SHARD_RESULT_VARS } from "./gate-shards.mjs";
 
 const { parse, stringify } = createRequire(new URL("../apps/scheduler/package.json", import.meta.url))("yaml");
 const root = new URL("../", import.meta.url);
@@ -14,8 +15,8 @@ const workflow = parse(source);
 const jobs = workflow.jobs;
 const classify = jobs.changes.steps.find((step) => step.id === "classify").run;
 const summary = jobs["ci-summary"].steps.find((step) => step.name === "Verify required results").run;
-const heavy = ["windows-upgrade-backend", "crash-recovery", "lexical-pressure", "pi-om-growth", "gate-contract", "gate-db-core", "gate-db-domain", "gate-e2e", "runtime-images", "chrome-fuzz-arm64-build", "chrome-fuzz-arm64"];
-const resultVars = ["WINDOWS", "CRASH", "LEXICAL", "PIOM", "GATE_CONTRACT", "GATE_DB_CORE", "GATE_DB_DOMAIN", "GATE_E2E", "IMAGES", "FUZZ_BUILD", "FUZZ"];
+const heavy = ["windows-upgrade-backend", "crash-recovery", "lexical-pressure", "pi-om-growth", ...GATE_SHARDS, "runtime-images", "chrome-fuzz-arm64-build", "chrome-fuzz-arm64"];
+const resultVars = ["WINDOWS", "CRASH", "LEXICAL", "PIOM", ...Object.values(GATE_SHARD_RESULT_VARS), "IMAGES", "FUZZ_BUILD", "FUZZ"];
 const runSummary = (overrides = {}) => spawnSync("bash", ["-c", summary], {
   env: { ...process.env, CHANGES: "success", DOCS: "success", DOCS_ONLY: "false", MODE: "ready-full", PLAN_STATUS: "ok",
     // #961: the ARM pair is judged by the plan, so the default fixture must answer it.
@@ -28,7 +29,11 @@ test("actual classifier handles docs, runtime inputs, unknowns, rename/delete an
   const git = (...args) => execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
   try {
     git("init", "-q"); git("config", "user.email", "ci@example.invalid"); git("config", "user.name", "CI fixture");
-    writeFileSync(join(dir, "README.md"), "initial\n"); git("add", "."); git("commit", "-qm", "base");
+    writeFileSync(join(dir, "README.md"), "initial\n");
+    mkdirSync(join(dir, "docs"));
+    writeFileSync(join(dir, "CHANGELOG.md"), "initial\n");
+    writeFileSync(join(dir, "docs/PI_RPC_PAYLOAD_LIMITS.md"), "initial\n");
+    git("add", "."); git("commit", "-qm", "base");
     const base = git("rev-parse", "HEAD");
     mkdirSync(join(dir, "agent-harness"), { recursive: true });
     writeFileSync(join(dir, "agent-harness/classify-ci-changes.mjs"), readFileSync(new URL("agent-harness/classify-ci-changes.mjs", root)));
@@ -43,6 +48,8 @@ test("actual classifier handles docs, runtime inputs, unknowns, rename/delete an
     assert.equal(classifyHead(), "docs_only=false", "empty diff");
     for (const [files, expected] of [
       [["README.md"], true], [["docs/README.md"], true], [["docs/architecture/README.md"], true],
+      [["CHANGELOG.md", "docs/PI_RPC_PAYLOAD_LIMITS.md"], true],
+      [["CHANGELOG.md", "docs/PI_RPC_PAYLOAD_LIMITS.md", "skills/audit/SKILL.md"], false],
       [["docs/guide.md"], false], [["docs/architecture/new.md"], false], [["docs/说明 文档.md"], false],
       [["docs/README.md "], false],
       [["LICENSE"], true], [["README.md", "apps/new.ts"], false],
@@ -105,8 +112,8 @@ test("actual summary rejects failures, cancellation, missing outputs and unexpec
 });
 
 test("workflow really runs docs and regressions and preserves full-run dependencies", () => {
-  // #972: gate 拆成 4 个分片后，File size ratchet guard 仍须恰好落在某一片且无豁免。
-  const fileSizeShard = ["gate-contract", "gate-db-core", "gate-db-domain", "gate-e2e"]
+  // #972/#992: 分片变化不能豁免 file-size 门禁。
+  const fileSizeShard = GATE_SHARDS
     .map((name) => jobs[name])
     .find((job) => job && job.steps.some((s) => s.name === "File size ratchet guard"));
   assert.ok(fileSizeShard, "File size ratchet guard 必须落在某个 gate 分片");
@@ -148,8 +155,8 @@ test("workflow really runs docs and regressions and preserves full-run dependenc
   assert.ok(jobs["chrome-fuzz-arm64"].if.includes("needs.chrome-fuzz-arm64-build.result == 'success'"));
 });
 
-test("#972 gate 拆成 4 个有界并行分片：if 一致且 contract 无服务", () => {
-  const shards = ["gate-contract", "gate-db-core", "gate-db-domain", "gate-e2e"];
+test("#972/#992 gate 的五个有界分片：if 一致且 contract/runtime 无服务", () => {
+  const shards = GATE_SHARDS;
   for (const name of shards) {
     assert.ok(jobs[name], `分片 ${name} 必须存在`);
     assert.ok(
@@ -158,6 +165,7 @@ test("#972 gate 拆成 4 个有界并行分片：if 一致且 contract 无服务
     );
   }
   assert.equal(jobs["gate-contract"].services, undefined, "gate-contract 不声明 services.postgres");
+  assert.equal(jobs["gate-runtime"].services, undefined, "gate-runtime 不声明 services.postgres");
 });
 
 test("ARM64 guard normalizes scalar/array needs and retains all original safeguards", () => {

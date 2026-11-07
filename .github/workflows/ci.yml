@@ -23,6 +23,11 @@ on:
       - "LICENSE"
       - "THIRD_PARTY_NOTICES.md"
   workflow_dispatch:
+    inputs:
+      isolation_probe:
+        description: "#992: fail gate-runtime on attempt 1, then verify native failed-job rerun"
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -288,7 +293,7 @@ jobs:
           path: artifacts/pi-om-growth
           if-no-files-found: warn
 
-  # 有界并发分片 1/4（并发上限为 4）：纯无服务单测/契约/静态检查，不声明 services.postgres；4 片各自独立生命周期、各自 install/build，不复用跨提交结果。
+  # 无服务契约/静态检查；运行时与 SDK 已分离到 gate-runtime（#992）。
   gate-contract:
     runs-on: ubuntu-24.04
     needs: changes
@@ -318,22 +323,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r typecheck
       - run: pnpm -r build
-      - name: Runtime image definition consistency
-        run: pnpm ci:images
-      - name: Runtime image registry contract unit
-        run: pnpm ci:unit:runtime-images
-      - name: Runtime resource cleanup and disk pressure unit
-        run: pnpm ci:unit:runtime-cleanup
-      - name: Image admission registry selection unit
-        run: pnpm ci:unit:image-admission
-      - name: Runtime image destination evidence unit
-        run: pnpm ci:unit:runtime-image-record
-      - name: Runtime image registry generator compatibility
-        run: pnpm ci:unit:runtime-registry
-      - name: Locked native SDK and DSH CLI budget regression (synthetic upstream only)
-        run: pnpm ci:integration:request-budget-sdk
-      - name: Locked Pi provider composition and header regression (synthetic upstream only)
-        run: pnpm ci:integration:provider-headers-sdk
       - name: Target image offline upgrade configuration preflight
         run: pnpm ci:unit:platform-upgrade-preflight
       - name: Pinned cosign ephemeral-key verification (no production identity)
@@ -424,12 +413,6 @@ jobs:
         run: pnpm ci:unit:verify-eligibility
       - name: Canvas Fact contract unit
         run: pnpm ci:unit:canvas-facts
-      - name: Real executor fact verification unit
-        run: pnpm ci:unit:executor-real
-      - name: Credential and CLI compatibility unit
-        run: pnpm ci:unit:credential-compatibility
-      - name: Runtime sandbox semantic tool unit
-        run: pnpm ci:unit:runtime-sandbox
       - name: OpenSandbox production compose merge
         run: |
           tmp="$(mktemp -d)"
@@ -488,7 +471,54 @@ jobs:
       - name: Authorization boundary unit
         run: pnpm ci:unit:authz
 
-  # 有界并发分片 2/4（并发上限为 4）：DB 核心集成，services.postgres 与原 gate 完全相同；4 片各自独立生命周期、各自 install/build，不复用跨提交结果。
+  # #992：运行时/锁版本 SDK 独立失败域；与其他 gate 只共享 changes 依赖。
+  # 不声明数据库，不串联其他 gate，也不复用测试通过结论。原套件恰好迁移一次。
+  gate-runtime:
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r build
+      - name: Runtime image definition consistency
+        run: pnpm ci:images
+      - name: Runtime image registry contract unit
+        run: pnpm ci:unit:runtime-images
+      - name: Runtime resource cleanup and disk pressure unit
+        run: pnpm ci:unit:runtime-cleanup
+      - name: Image admission registry selection unit
+        run: pnpm ci:unit:image-admission
+      - name: Runtime image destination evidence unit
+        run: pnpm ci:unit:runtime-image-record
+      - name: Runtime image registry generator compatibility
+        run: pnpm ci:unit:runtime-registry
+      - name: Locked native SDK and DSH CLI budget regression (synthetic upstream only)
+        run: pnpm ci:integration:request-budget-sdk
+      - name: Locked Pi provider composition and header regression (synthetic upstream only)
+        run: pnpm ci:integration:provider-headers-sdk
+      - name: Real executor fact verification unit
+        run: pnpm ci:unit:executor-real
+      - name: Credential and CLI compatibility unit
+        run: pnpm ci:unit:credential-compatibility
+      - name: Runtime sandbox semantic tool unit
+        run: pnpm ci:unit:runtime-sandbox
+      - name: Controlled first-attempt isolation probe
+        if: github.event_name == 'workflow_dispatch' && inputs.isolation_probe && github.run_attempt == 1
+        run: |
+          echo "::error::CI_ISOLATION_PROBE: intentional gate-runtime failure; use Re-run failed jobs"
+          exit 1
+
+  # 数据库核心集成：各 job 的 PostgreSQL、文件与生命周期保持隔离。
   gate-db-core:
     runs-on: ubuntu-24.04
     needs: changes
@@ -650,7 +680,7 @@ jobs:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:role-config
 
-  # 有界并发分片 3/4（并发上限为 4）：DB 领域集成与 Docker 只读卷校验，services.postgres 与原 gate 完全相同；4 片各自独立生命周期、各自 install/build，不复用跨提交结果。
+  # 数据库领域集成与 Docker 只读卷校验；独立服务与构建，不复用测试结论。
   gate-db-domain:
     runs-on: ubuntu-24.04
     needs: changes
@@ -750,7 +780,7 @@ jobs:
       - name: Job 控制 API-only 契约冒烟
         run: pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-api.ts
 
-  # 有界并发分片 4/4（并发上限为 4）：3100/3101 进程与同库 setval 竞态，e2e 步骤必须同片；services.postgres 与原 gate 完全相同；4 片各自独立生命周期、各自 install/build，不复用跨提交结果。
+  # 3100/3101 进程与同库 setval 竞态相关 e2e 必须同片，保留独立 PostgreSQL。
   gate-e2e:
     runs-on: ubuntu-24.04
     needs: changes
@@ -1224,7 +1254,7 @@ jobs:
     # block a Draft merge; blocking Draft merges must come from policy (ruleset /
     # separate required check), not from this workflow's skip.
     if: always() && needs.changes.outputs.mode != 'draft-fast'
-    needs: [changes, docs-freshness, windows-upgrade-backend, crash-recovery, lexical-pressure, pi-om-growth, gate-contract, gate-db-core, gate-db-domain, gate-e2e, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
+    needs: [changes, docs-freshness, windows-upgrade-backend, crash-recovery, lexical-pressure, pi-om-growth, gate-contract, gate-runtime, gate-db-core, gate-db-domain, gate-e2e, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1240,6 +1270,7 @@ jobs:
           LEXICAL: ${{ needs.lexical-pressure.result }}
           PIOM: ${{ needs.pi-om-growth.result }}
           GATE_CONTRACT: ${{ needs.gate-contract.result }}
+          GATE_RUNTIME: ${{ needs.gate-runtime.result }}
           GATE_DB_CORE: ${{ needs.gate-db-core.result }}
           GATE_DB_DOMAIN: ${{ needs.gate-db-domain.result }}
           GATE_E2E: ${{ needs.gate-e2e.result }}
@@ -1288,13 +1319,14 @@ jobs:
             fi
           }
 
-          # 必须逐片 success，不能只靠聚合结果：4 个分片各自是独立门禁。
+          # 必须逐片 success，不能只靠聚合结果：五个分片各自是独立门禁。
           # 显式期望矩阵校验：分片缺失/变量为空/结果值未知一律 fail closed。
-          EXPECTED_GATE_SHARDS="gate-contract gate-db-core gate-db-domain gate-e2e"
+          EXPECTED_GATE_SHARDS="gate-contract gate-runtime gate-db-core gate-db-domain gate-e2e"
           KNOWN_GATE_RESULTS="success failure cancelled skipped timed_out neutral"
           for shard in $EXPECTED_GATE_SHARDS; do
             case "$shard" in
               gate-contract) shard_result="${GATE_CONTRACT:-}" ;;
+              gate-runtime) shard_result="${GATE_RUNTIME:-}" ;;
               gate-db-core) shard_result="${GATE_DB_CORE:-}" ;;
               gate-db-domain) shard_result="${GATE_DB_DOMAIN:-}" ;;
               gate-e2e) shard_result="${GATE_E2E:-}" ;;
@@ -1312,6 +1344,7 @@ jobs:
           check_heavy lexical-pressure "$LEXICAL"
           check_heavy pi-om-growth "$PIOM"
           check_heavy gate-contract "$GATE_CONTRACT"
+          check_heavy gate-runtime "$GATE_RUNTIME"
           check_heavy gate-db-core "$GATE_DB_CORE"
           check_heavy gate-db-domain "$GATE_DB_DOMAIN"
           check_heavy gate-e2e "$GATE_E2E"

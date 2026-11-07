@@ -42,6 +42,7 @@ export const DOCS_ONLY_PATHS = Object.freeze([
   "docs/ISSUE_752_TRIAL.md",
   "docs/LANGUAGE_SERVER_CAPABILITIES.md",
   "docs/ONE_CLICK_DEPLOYMENT.md",
+  "docs/PI_RPC_PAYLOAD_LIMITS.md",
   "docs/PLAN_BOUNDED_INTENT_DESIGN.md",
   "docs/PLAN_GAP_PROJECTION.md",
   "docs/PROJECT_FINDING_EVALUATION.md",
