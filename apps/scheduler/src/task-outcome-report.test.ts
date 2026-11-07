@@ -3,7 +3,8 @@ import test from "node:test";
 import { normalizeTaskContract, normalizeCandidateOutcomeClaim } from "@deepsonar/shared-types";
 import { findingProposalToArtifact } from "./domains/artifacts/model.js";
 import { taskContractDigest } from "./task-outcome-snapshot.js";
-import { projectTaskOutcomeReport, renderTaskOutcomeReport, type TaskOutcomeReportInput, type OutcomeReportFindingSource } from "./task-outcome-report.js";
+import type { sql } from "./db.js";
+import { loadTaskOutcomeReport, projectTaskOutcomeReport, renderTaskOutcomeReport, type TaskOutcomeReportInput, type OutcomeReportFindingSource } from "./task-outcome-report.js";
 
 const fact = "00000000-0000-4000-8000-000000000001";
 const contract = normalizeTaskContract({ schema_version: 1, template_id: "engineering", template_version: 1,
@@ -170,4 +171,37 @@ test("near-limit Finding contract is stored once and projection fits the existin
   const inputBytes = Buffer.byteLength(JSON.stringify({ task_outcome: result, finding: { id: "finding", summary: "Small technical record" }, evidence: {} }));
   assert.ok(inputBytes < 40000, String(inputBytes));
   assert.ok(result.findings[0].gaps.includes("source_contract_mismatch"));
+});
+
+test("#945 a retryable lock conflict in the task-result scan reaches the retry boundary", async () => {
+  // A deadlock while loading one task result used to be flattened into
+  // `task_result_validation_unavailable`. That hides the conflict from
+  // `withOperationConflictRetry` and, since the transaction is already aborted,
+  // every later query only reports 25P02 — so the orphan-report re-dispatch would
+  // roll back and leave the Report stuck on `generating`.
+  const proposal = {
+    schema_version: 1 as const, kind: "delivery" as const, task_contract_sha256: digest, target: "parser",
+    criterion_ids: ["objective"], method: "unit", observed: "ok", limitations: [], evidence_refs: [fact],
+  };
+  const conflict = Object.assign(new Error("deadlock detected"), { code: "40P01" });
+  // Any later read must not be mistaken for the conflict, otherwise the
+  // assertion would pass even when the guard is missing.
+  const unexpected = new Error("unexpected query after the conflict");
+  // The declaration request validates ids as UUIDs; a non-UUID would be rejected
+  // as a business error before any query ran and never reach the guard.
+  const artifactId = "00000000-0000-4000-8000-000000000002";
+  const db = (async (strings: TemplateStringsArray) => {
+    const query = strings.join("?");
+    if (query.includes("FROM canvases")) return [{ target_json: { task_contract: contract } }];
+    if (query.includes("agent_snapshot_json->'task_contract' AS task_contract FROM jobs")) return [];
+    if (query.includes("FROM findings f JOIN jobs")) return [];
+    if (query.includes("SELECT a.id,a.node_id,a.job_id,a.extensions_json FROM artifacts a")) {
+      return [{ id: artifactId, node_id: fact, job_id: "maker", extensions_json: { task_result: { proposal } } }];
+    }
+    // `loadTaskResultDeclaration` is the deep read inside the guarded catch.
+    if (query.includes("FROM canvas_nodes n JOIN artifacts a ON a.id::text=n.body_json->>'artifact_id'")) throw conflict;
+    throw unexpected;
+  }) as unknown as typeof sql;
+
+  await assert.rejects(loadTaskOutcomeReport(db, "canvas", "project"), (error) => error === conflict);
 });

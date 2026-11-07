@@ -137,3 +137,25 @@ test("legacy unsupported contradiction is retained as invalid and never loaded a
   assert.deepEqual(loaded.reviews[0].criteria, []);
   assert.deepEqual(loaded.reviews[0].blockedReasons, ["goal_review_result_invalid"]);
 });
+
+test("#945 a retryable lock conflict in the review scan reaches the retry boundary", async () => {
+  const { db, state, job, result } = await fixture();
+  const prepared = await prepareTaskGoalReview(db, job, attempt, result);
+  state.attemptStatus = "succeeded";
+  state.reviews = [{ id: id(20), job_id: reviewer, attempt_id: attempt, job_status: "succeeded", artifact_status: "submitted",
+    artifact_kind: "task.goal_evaluation", superseded_at: null, fact_id: id(21), verification_status: "unverified",
+    agent_snapshot_json: job.agent_snapshot_json, artifact_key: prepared.artifactKey,
+    extensions_json: { task_goal_review: prepared.extension }, payload_json: { artifact: { goal_review: result } } }];
+
+  // The row scan itself succeeds; the first deep read inside the loop deadlocks.
+  // Swallowing it here would record "validation unavailable" and, because the
+  // transaction is already aborted, every later query would only report 25P02 —
+  // which the retry boundary correctly refuses to retry.
+  const conflict = Object.assign(new Error("deadlock detected"), { code: "40P01" });
+  const conflictDb = (async (strings: TemplateStringsArray) => {
+    if (strings.join("?").includes("FROM artifacts a JOIN jobs")) return state.reviews;
+    throw conflict;
+  }) as unknown as typeof sql;
+
+  await assert.rejects(loadTaskGoalReviews(conflictDb, project, canvas), (error) => error === conflict);
+});

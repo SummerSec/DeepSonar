@@ -1,6 +1,7 @@
 import { TaskGoalReviewAssignment, TaskGoalReviewResult, normalizeTaskGoalReviewResult } from "@deepsonar/shared-types";
 import type { sql } from "./db.js";
 import { ControlInputError } from "./control-input.js";
+import { isRetryableDatabaseConflict } from "./db-conflict-retry.js";
 import { goalReviewDigest, loadGoalReviewSource } from "./task-goal-review-source.js";
 import { criterionEvidenceBudget, type EvidenceReadBudget } from "./domains/plan-protocol/criterion-evidence.js";
 import { loadGoalReviewEvidence, type GoalReviewEvidenceBinding } from "./task-goal-review-evidence.js";
@@ -134,6 +135,10 @@ export async function loadTaskGoalReviews(db: typeof sql, projectId: string, can
       if (goalReviewDigest(evidence.bindings) !== goalReviewDigest(extension.evidence_bindings)) denied("goal_review_evidence_changed");
       review.criteria = result.criteria;
     } catch (error) {
+      // #945 review P2: same as the outcome-report scan — a lock conflict is not
+      // a review verdict. Rethrow so the enclosing transaction can retry instead
+      // of recording "validation unavailable" for every remaining row.
+      if (isRetryableDatabaseConflict(error)) throw error;
       const code = error instanceof ControlInputError ? object(error.details?.task_goal_review).code : undefined;
       if (code === "goal_review_evidence_unavailable_or_budget_exceeded" && !blockedReasons.includes("goal_review_evidence_scan_incomplete")) blockedReasons.push("goal_review_evidence_scan_incomplete");
       review.blockedReasons.push(typeof code === "string" ? code : "goal_review_validation_unavailable");
