@@ -241,7 +241,10 @@ test("v1 single image_ref is normalized to a known channel without changing the 
 });
 
 test("official runtime versions require strict offline manual metadata", () => {
-  assert.equal(OFFICIAL_RUNTIME_IMAGE_KEYS.length, 14);
+  assert.equal(OFFICIAL_RUNTIME_IMAGE_KEYS.length, 11);
+  for (const role of ["audit", "test", "fuzz"]) {
+    assert.equal(isOfficialRuntimeImageKey(`deepsonar-clickhouse-${role}`), false);
+  }
   assert.equal(isOfficialRuntimeImageKey("deepsonar-base"), true);
   assert.equal(isOfficialRuntimeImageKey("third-party-toolbox"), false);
   const manual = { ...OFFICIAL_MANUAL, count: 2 };

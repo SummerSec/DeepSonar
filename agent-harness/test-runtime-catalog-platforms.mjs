@@ -20,7 +20,7 @@ import { assertCatalogMatchesRuntimeSources, compareCatalogVersionLabels } from 
 
 const platforms = ["linux/amd64", "linux/arm64"];
 const imageKeys = [
-  ...["chrome", "clickhouse"].flatMap((family) =>
+  ...["chrome"].flatMap((family) =>
     ["audit", "test", "fuzz"].map((role) => `deepsonar-${family}-${role}`)),
   "deepsonar-reverse",
 ];
@@ -285,11 +285,11 @@ function checkFinal(fixture, inspectManifest = inspector(fixture.manifests).insp
   return assertCatalogMatchesRuntimeSources({ ...fixture, inspectManifest });
 }
 
-test("final catalog proves all seven products and all fourteen tested platform children", () => {
+test("final catalog proves every retained product and its tested platform children", () => {
   const fixture = finalCatalogFixture();
   const mock = inspector(fixture.manifests);
-  assert.equal(fixture.builds.length, 14);
-  assert.equal(checkFinal(fixture, mock.inspectManifest), 7);
+  assert.equal(fixture.builds.length, imageKeys.length * platforms.length);
+  assert.equal(checkFinal(fixture, mock.inspectManifest), imageKeys.length);
   assert.deepEqual(new Set(mock.calls), new Set(fixture.manifests.keys()), "every source and every available channel must be inspected");
 });
 
@@ -308,7 +308,7 @@ test("final catalog accepts differing older history without inspecting unselecte
   const fixture = finalCatalogFixture();
   const historical = differentCatalogVersion(fixture, "0.4.16");
   const mock = inspector(fixture.manifests);
-  assert.equal(checkFinal(fixture, mock.inspectManifest), 7);
+  assert.equal(checkFinal(fixture, mock.inspectManifest), imageKeys.length);
   assert.ok(Object.values(historical.registry_refs).every((imageRef) => !mock.calls.includes(imageRef)));
 });
 
@@ -326,7 +326,7 @@ for (const matches of [true, false]) {
     delete current.registry_refs.dockerhub;
     current.registry_evidence.dockerhub = { available: false, provenance: "unavailable", reason: "credentials_missing" };
     if (matches) fixture.manifests.set(historical.registry_refs.dockerhub, index({ "linux/amd64": digest(100), "linux/arm64": digest(101) }));
-    if (matches) assert.equal(checkFinal(fixture), 7);
+    if (matches) assert.equal(checkFinal(fixture), imageKeys.length);
     else assertFailClosed(() => checkFinal(fixture), /dockerhub.*does not match tested platform manifests/);
   });
 }
@@ -337,7 +337,7 @@ for (const staleLatest of [false, true]) {
     fixture.catalog.images[0].versions[0].version = staleLatest ? "0.5.9" : "0.5.10";
     differentCatalogVersion(fixture, staleLatest ? "0.5.10" : "0.5.9");
     if (staleLatest) assertFailClosed(() => checkFinal(fixture), /does not match tested platform manifests/);
-    else assert.equal(checkFinal(fixture), 7);
+    else assert.equal(checkFinal(fixture), imageKeys.length);
   });
 }
 
@@ -347,7 +347,7 @@ for (const root of [190, 800]) {
     fixture.catalog.images[0].versions[0].version = "0.5.10";
     differentCatalogVersion(fixture, "0.05.010", root);
     assert.equal(compareCatalogVersionLabels("0.5.10", "0.05.010"), 0);
-    if (root < 200) assert.equal(checkFinal(fixture), 7);
+    if (root < 200) assert.equal(checkFinal(fixture), imageKeys.length);
     else assertFailClosed(() => checkFinal(fixture), /does not match tested platform manifests/);
   });
 }
@@ -357,7 +357,7 @@ test("latest selection filters out rows for unrelated platforms before ordering"
   const otherPlatform = differentCatalogVersion(fixture, "0.6.0");
   otherPlatform.platforms = ["linux/s390x"];
   const mock = inspector(fixture.manifests);
-  assert.equal(checkFinal(fixture, mock.inspectManifest), 7);
+  assert.equal(checkFinal(fixture, mock.inspectManifest), imageKeys.length);
   assert.ok(Object.values(otherPlatform.registry_refs).every((imageRef) => !mock.calls.includes(imageRef)));
 });
 
@@ -402,12 +402,20 @@ test("final equality remains mandatory when one build is fresh", () => {
 });
 
 for (const channel of ["github", "dockerhub", "aliyun-acr"]) {
-  test(`final catalog rejects a ${channel} child-payload mismatch`, () => {
-    const fixture = finalCatalogFixture();
-    const row = fixture.catalog.images[5].versions[0];
-    fixture.manifests.set(row.registry_refs[channel], index({ "linux/amd64": digest(110), "linux/arm64": digest(999) }));
-    assertFailClosed(() => checkFinal(fixture));
-  });
+  for (const imageKey of imageKeys) {
+    test(`final catalog rejects a ${channel} child-payload mismatch for ${imageKey}`, () => {
+      const fixture = finalCatalogFixture();
+      const product = fixture.catalog.images.find((image) => image.image_key === imageKey);
+      assert.ok(product, `retained product ${imageKey} must exist in the fixture`);
+      const row = product.versions[0];
+      const manifest = clone(fixture.manifests.get(row.registry_refs[channel]));
+      const arm64 = manifest.manifests.find((child) => child.platform?.architecture === "arm64");
+      assert.ok(arm64, "fixture must contain the tested arm64 child");
+      arm64.digest = digest(999);
+      fixture.manifests.set(row.registry_refs[channel], manifest);
+      assertFailClosed(() => checkFinal(fixture), /does not match tested platform manifests/);
+    });
+  }
   test(`final catalog rejects failed ${channel} inspection`, () => {
     const fixture = finalCatalogFixture();
     fixture.manifests.set(fixture.catalog.images[0].versions[0].registry_refs[channel], new Error("registry inspection failed"));
@@ -505,7 +513,7 @@ for (const outcome of ["match", "stale", "source failure", "catalog failure", "m
   });
 }
 
-for (const family of ["Chrome", "ClickHouse"]) {
+for (const family of ["Chrome"]) {
   for (const outcome of ["match", "stale", "source failure", "catalog failure"]) {
     test(`${family} cache-hit workflow ${outcome} reaches only its authorized assembly branch`, posixMockOptions, () => {
       const name = family === "Reverse" ? "reverse" : `${family.toLowerCase()}-test`;

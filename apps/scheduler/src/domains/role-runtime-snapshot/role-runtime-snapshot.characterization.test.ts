@@ -46,25 +46,17 @@ test("role/runtime snapshot keeps scheduler-owned role aliases and toolchain pol
   assert.doesNotMatch(source, /jobType === "audit_module"\) return "audit"/);
 });
 
-test("specialty image boundary injects for any role; chrome/clickhouse peer mobile/OH", () => {
+test("specialty image boundary injects for any role; chrome peer mobile/OH", () => {
   assert.match(
     withRuntimeTestToolchainPolicy("audit", "custom", "deepsonar-chrome-test") ?? "",
     /Chrome CDP runtime/,
-  );
-  assert.match(
-    withRuntimeTestToolchainPolicy("explore", null, "deepsonar-clickhouse-test") ?? "",
-    /ClickHouse official runtime/,
   );
   assert.match(
     withRuntimeTestToolchainPolicy("hub_reason", "hub", "deepsonar-chrome-audit") ?? "",
     /Chrome\/C\+\+ audit toolchain/,
   );
   assert.match(
-    withRuntimeTestToolchainPolicy("verify", null, "deepsonar-clickhouse-fuzz") ?? "",
-    /ClickHouse fuzz runtime/,
-  );
-  assert.match(
-    withRuntimeTestToolchainPolicy("verify", null, "deepsonar-clickhouse-fuzz") ?? "",
+    withRuntimeTestToolchainPolicy("verify", null, "deepsonar-chrome-fuzz") ?? "",
     /Runtime test toolchain/,
   );
   assert.doesNotMatch(
@@ -82,9 +74,6 @@ test("specialty image boundary injects for any role; chrome/clickhouse peer mobi
     "deepsonar-chrome-test",
     "deepsonar-chrome-audit",
     "deepsonar-chrome-fuzz",
-    "deepsonar-clickhouse-test",
-    "deepsonar-clickhouse-audit",
-    "deepsonar-clickhouse-fuzz",
     "deepsonar-openharmony-test",
     "deepsonar-openharmony-audit",
     "deepsonar-openharmony-fuzz",
@@ -101,9 +90,6 @@ test("specialty image boundary injects for any role; chrome/clickhouse peer mobi
     "deepsonar-chrome-test",
     "deepsonar-chrome-audit",
     "deepsonar-chrome-fuzz",
-    "deepsonar-clickhouse-test",
-    "deepsonar-clickhouse-audit",
-    "deepsonar-clickhouse-fuzz",
     "deepsonar-openharmony-test",
     "deepsonar-mobile",
     "deepsonar-reverse",
@@ -120,7 +106,6 @@ test("角色×镜像矩阵文档与默认 Role 镜像、专项 policy 对齐", (
   assert.match(matrix, /deepsonar-audit/);
   assert.match(matrix, /deepsonar-base/);
   assert.match(matrix, /deepsonar-chrome-test/);
-  assert.match(matrix, /deepsonar-clickhouse-test/);
   assert.match(matrix, /deepsonar-mobile/);
   assert.match(matrix, /deepsonar-reverse/);
   assert.match(matrix, /needs_human/);

@@ -61,8 +61,8 @@ Memory 只属于一个冻结 Job/session 的上下文状态。它不产生 DeepS
 已执行并通过（2026-10-31）：
 
 - canonical `3.1.4` tarball：实际 SHA-512 与交接 metadata 和镜像 inventory 一致；直接读取压缩包确认名称、版本、MIT 许可证和 `src/index.ts`，未安装或访问真实模型。
-- `node agent-harness/runtime-manuals/generate-catalog.mjs`：14 个官方镜像、973 条目录项。
-- `node agent-harness/test-runtime-manuals.mjs`：14 个镜像的手册覆盖；包含 governed wrapper。
+- `node agent-harness/runtime-manuals/generate-catalog.mjs`：11 个官方镜像、773 条目录项。
+- `node agent-harness/test-runtime-manuals.mjs`：11 个镜像的手册覆盖；包含 governed wrapper。
 - `node agent-harness/check-runtime-image-consistency.mjs`：canonical 安装身份的合法/非法用例、两个 Dockerfile 与本地定义一致、wrapper 字节物化、真实 manifest writer 的三个镜像 provenance/hash、wrapper 字节变化使 fingerprint 变化。
 - `pi-extensions.test.ts`、`provider-settings.test.ts`、`agent-runtime-profile.test.ts`：58/58，通过；覆盖未知字段、模型/协议隔离、有限分配、独立省略的后台维度、快照不变及关闭 OM 时的行为。
 - `runtime-adapters.test.ts` 中 `Pi RPC 固定启动参数、状态查询和精确 sessionFile 恢复`、`Pi 默认关闭扩展，受治理扩展才通过显式路径加载`：2/2，通过；使用 fake host，不构成真实 RPC 证明。

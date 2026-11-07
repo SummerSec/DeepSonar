@@ -11,7 +11,7 @@
 >
 > Scheduler / runtime-sandbox 契约修复的**部署生效与自检**：[`RUNTIME_IMAGE_CONTRACT_DEPLOY.md`](RUNTIME_IMAGE_CONTRACT_DEPLOY.md)（#636）。
 
-`.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony、Chrome、ClickHouse 与 Mobile 专项镜像与 Reverse 原生双架构镜像，最后由 `prepare-release` 合并真实的 buildx manifest digest 并冻结载荷，`platform-signatures` 验签后交给独立 `release-publish` / `release-writeback`。发布阶段把 `runtime-image-registry.json` 与 Management Skill 等冻结文件作为 GitHub Release 附件。合并前的核心定义与 base/audit/Kali 门禁在 `.github/workflows/ci.yml`；Chrome amd64 合同冒烟在 `.github/workflows/chrome-runtime.yml`，ClickHouse amd64 合同冒烟在 `.github/workflows/clickhouse-runtime.yml`，OpenHarmony test/audit/fuzz amd64/arm64 专项冒烟在 `.github/workflows/openharmony-runtime.yml`，Mobile amd64/arm64 专项冒烟在 `.github/workflows/mobile-runtime.yml`。`deepsonar-reverse` 在 `.github/workflows/reverse-runtime.yml` 使用原生 amd64/arm64 runner 构建当前 base+reverse，执行 ELF/.so/PE REA/Ghidra、真实 `docker save` / cgroup / 取消测量和 OpenSandbox Job；release 对缓存与 fresh child 执行相同门禁。脚本已接线不等于实际运行已通过。
+`.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony、Chrome 与 Mobile 专项镜像与 Reverse 原生双架构镜像，最后由 `prepare-release` 合并真实的 buildx manifest digest 并冻结载荷，`platform-signatures` 验签后交给独立 `release-publish` / `release-writeback`。发布阶段把 `runtime-image-registry.json` 与 Management Skill 等冻结文件作为 GitHub Release 附件。合并前的核心定义与 base/audit/Kali 门禁在 `.github/workflows/ci.yml`；Chrome amd64 合同冒烟在 `.github/workflows/chrome-runtime.yml`，OpenHarmony test/audit/fuzz amd64/arm64 专项冒烟在 `.github/workflows/openharmony-runtime.yml`，Mobile amd64/arm64 专项冒烟在 `.github/workflows/mobile-runtime.yml`。`deepsonar-reverse` 在 `.github/workflows/reverse-runtime.yml` 使用原生 amd64/arm64 runner 构建当前 base+reverse，执行 ELF/.so/PE REA/Ghidra、真实 `docker save` / cgroup / 取消测量和 OpenSandbox Job；release 对缓存与 fresh child 执行相同门禁。脚本已接线不等于实际运行已通过。
 
 独立 `release-writeback` 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` 与 `deploy/.env.example` 中的 `DEEPSONAR_VERSION` 及三条平台镜像 digest 引用（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE`，按本次发布的 index digest 重新 inspect 写入，#740）**通过 bot 分支 PR 与必需检查合入仓库默认分支**（`chore(release): sync runtime-image-registry.json and image tag for vX.Y.Z`），用于更新内置 bundled 回退清单与部署示例版本。发布准备阶段不得手写运行镜像 digest 或提前改写 bundled 清单；v0.5.3 的 Chrome / ClickHouse 六个产品选择已知陈旧，须在新 Release 真实发布证据与最终 payload 门禁通过后由 workflow 回写纠正。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。**回写必须通过默认分支的 required check（#865 / #877）**：默认分支要求 `ci-summary`，而**直推会被规则拒绝**——即使 `ci-summary` 已经在同一个 SHA 上通过（v0.6.7 实测：日志先出现 `ci-summary passed on 8f3479d4`，随后 `push declined due to repository rule violations`，Release 未创建，最终由人工从 bot 分支开 PR 才把清单合并进去）。因此回写不再直推，而是**走与人工合并相同的路径**：
 
@@ -110,13 +110,13 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 
 ## 清单与校验
 
-清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出或经证明可复用的真实 digest 生成，必需产品集合包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit、OpenHarmony Fuzz、Chrome Audit、Chrome Test、Chrome Fuzz、ClickHouse Audit、ClickHouse Test、ClickHouse Fuzz、Mobile 与 Reverse 十四项。尚未首发的产品在源码内置 bundled 清单中保持 `versions: []`；`deepsonar-reverse` 已在 v0.5.5 由 Release 回写 `0.5.5` + canonical digest。只有 Release 对两个平台完成真实构建 / 缓存复用验收、发布和 inspect 后，生成器才会写入版本与 digest。空版本条目不能代替 Release 要求的真实 descriptor。
+清单由 `agent-harness/generate-runtime-image-registry.mjs` 根据各镜像构建输出或经证明可复用的真实 digest 生成，必需产品集合包含 Base、Audit、Kali Minimal、OpenHarmony Test、OpenHarmony Audit、OpenHarmony Fuzz、Chrome Audit、Chrome Test、Chrome Fuzz、Mobile 与 Reverse 十一项。尚未首发的产品在源码内置 bundled 清单中保持 `versions: []`；`deepsonar-reverse` 已在 v0.5.5 由 Release 回写 `0.5.5` + canonical digest。只有 Release 对两个平台完成真实构建 / 缓存复用验收、发布和 inspect 后，生成器才会写入版本与 digest。空版本条目不能代替 Release 要求的真实 descriptor。
 
 **一版本多平台**：v2 多架构发布时，每条 canonical 版本记录的 `platforms` 同时列出 `linux/amd64` / `linux/arm64`，`digest` 是共享 manifest/index digest，`size_bytes` 为目标平台压缩层大小上限；不能按架构拆成两条同版本 alias。生成器可保留既有历史版本数组，最终 payload 门禁按 Scheduler 的通道 / 平台 latest-version 排序核对实际选中的版本，见下文。旧 v1 清单仍按一平台一版本解析（当前代码残留的兼容路径，非新发布契约）；Scheduler 消费平台全局 `runtime_registry_channel` 对应的 v2 不可变引用，缺少选定通道引用时 fail closed。
 
 **版本轴拆开（#417）**：`vX.Y.Z` 是平台 Release 版本（changelog、`DEEPSONAR_VERSION`、scheduler/web/image-admission；部署按 digest 引用平台镜像，`DEEPSONAR_IMAGE_TAG` 已删除）。运行时产品的 `versions[].version` 按已证明的镜像内容决定：只有 catalog 已有本轮精确 canonical digest，或其不可变 index 已证明包含与本轮验收完全相同的 runnable 平台 manifest 集合，才可复用该行的 version + digest。summary 写 `image build unchanged; version kept`，且不对 ACR/GHCR/Docker Hub 打新的平台 version tag。source-cache / fingerprint 命中本身不能证明任意 catalog 行可复用；不得直接取 `versions[0]`。缓存 payload 无匹配 catalog 行时仍发布 version tag，并由 `record-runtime-image-digest.mjs` 对已发布通道做真实 inspect 补记一行，不编造 `registry_evidence`。平台清单同时写出 `platform_version` 与 `min_runtime_image`（默认下限来自 `agent-harness/min-runtime-image.json`）。可选 `platform` 段（#740 P1 第 2 片）携带结构化升级信息：`version` / `commit_sha` / DeepSonar `schema_version`，以及 scheduler / web / image-admission 的 index digest 与 `linux/amd64` / `linux/arm64` child digest（GHCR / ACR / Docker Hub 通道证据与运行镜像 v2 同形）。Scheduler 在清单同步路径上做只读版本发现并写入 `platform_update_checks`；缺省 `platform` 时仍可用 `platform_version` 比较。Release workflow 从三类平台镜像 descriptor 生成 `platform` 段，要求发布 commit、schema、双架构 child digest 和各通道证据完整；最终 payload 门禁重新 inspect 每个通道并核对 index / child digest，缺失或不一致立即失败。回写部署示例前校验四个版本 / 镜像变量恰好各一行，再按所选通道写不可变引用。digest Compose 契约已落地（#740 P1 第 3 片：Compose 每个平台镜像一个完整 digest 引用变量，`/health.version` 只认 `DEEPSONAR_VERSION`）；人工执行的 `deploy.sh upgrade` 与 PowerShell 入口见 [部署脚本](../deploy/README.md)。维护控制器已实现跨 schema 计划、显式审批、数据库身份隔离、候选库重建及安全恢复；实际演练范围见 [升级演练](../deploy/UPGRADE_REHEARSAL.md)。这不授权无人值守跨 schema 升级；P2 自动策略仅允许同 schema 的补丁版本。
 
-**Chrome / ClickHouse 双架构缓存复用（v0.5.4 修正）**：Audit、Test、Fuzz 在 amd64 与 arm64 同时命中 source-cache 后，先将本轮已验收的每架构 wrapper/index 解析为该目标平台唯一的 runnable manifest digest。用候选 catalog 的不可变 digest inspect runnable descriptors，再比较精确的 `linux/amd64` / `linux/arm64` → manifest digest 映射；attestation descriptor 不计入 payload，也不能充当 runnable manifest。只有平台集合和每个平台 digest 完全相同才复用 catalog canonical digest。缺失、重复、歧义的 runnable descriptor，或解析 / inspect 错误均 fail closed；不同 payload / 无匹配 catalog 行只作为复用未命中，改用本轮已测试缓存子镜像重新组装 index，再发布所有配置通道并收集新 inspect 证据。最后选入 catalog 的 canonical digest 必须包含本轮实际测试的两个子 manifest；不要求无关 wrapper / attestation 的 index digest 相等。其他调用方按精确 canonical digest 的复用方式仍有效。
+**Chrome 双架构缓存复用（v0.5.4 修正）**：Audit、Test、Fuzz 在 amd64 与 arm64 同时命中 source-cache 后，先将本轮已验收的每架构 wrapper/index 解析为该目标平台唯一的 runnable manifest digest。用候选 catalog 的不可变 digest inspect runnable descriptors，再比较精确的 `linux/amd64` / `linux/arm64` → manifest digest 映射；attestation descriptor 不计入 payload，也不能充当 runnable manifest。只有平台集合和每个平台 digest 完全相同才复用 catalog canonical digest。缺失、重复、歧义的 runnable descriptor，或解析 / inspect 错误均 fail closed；不同 payload / 无匹配 catalog 行只作为复用未命中，改用本轮已测试缓存子镜像重新组装 index，再发布所有配置通道并收集新 inspect 证据。最后选入 catalog 的 canonical digest 必须包含本轮实际测试的两个子 manifest；不要求无关 wrapper / attestation 的 index digest 相等。其他调用方按精确 canonical digest 的复用方式仍有效。
 
 **运行时版本轴独立于平台版本（#864 评审结论，含 floor 反例）**：`versions[].version` 表示「哪一次发布首次产出该 digest」，不随平台版本变化——内容未变时保留原 `version` + `digest`（summary 写 `image build unchanged; version kept`）。
 
@@ -130,7 +130,7 @@ ACR 仓库需要设为公开或启用匿名拉取，才能供中国区部署直�
 
 迁移：既有清单不做重标，`deepsonar-reverse` 回到真实构建版本 `0.6.4`（digest `62adab41…` 未变）。若某次平台发布确实要求更晚的 reverse，就必须真实重建 / 重新发布 reverse 并产出新 digest，而不是改标签。
 
-**最终清单 payload 门禁**：`agent-harness/check-runtime-catalog-platforms.mjs` 必须收到 Chrome / ClickHouse Audit、Test、Fuzz 及 Reverse 七个产品 × amd64 / arm64 的全部 14 份 native-smoke artifact。它从这些已测试 wrapper 重新解析 runnable manifest，并按 Scheduler 相同的 latest-version 排序为每个通道 / 平台解析实际 selected version；每个可用通道内的 amd64 / arm64 必须选中同一条 canonical 双平台记录，拆成不同平台版本的选择明确 fail closed，不能因任意历史行匹配就冒充 Scheduler 实际选择。随后重新 inspect 生成清单中 GHCR 及每个 available 的 Docker Hub / ACR 所选不可变 index，逐个平台核对实际子 manifest digest；不信任 cache-hit 标志、version 标签或 descriptor 自报的平台摘要。该门禁只校验目录的 bulk/latest 选择，不改写或覆盖既有 Job 冻结 / 钉死的 digest。未选中的历史行可以保留；缺失或歧义的选择、任一可用通道选到陈旧 payload、artifact 缺件 / 重复、解析 / inspect 失败均 fail closed。最终 Release job 使用既有凭据在本 job 登录 GHCR 及已配置的 Docker Hub / ACR，不依赖其他 job 的登录状态。此门禁在生成清单后、Release asset 上传及 bundled / 部署 tag 回写前执行；仅本次 catalog 修正不改运行镜像输入与 fingerprint，也不跳过 native smoke；v0.5.4 包含的其他变更（包括 #718 共享手册输入）仍可能触发重建。
+**最终清单 payload 门禁**：`agent-harness/check-runtime-catalog-platforms.mjs` 必须收到 Chrome Audit、Test、Fuzz 及 Reverse 四个产品 × amd64 / arm64 的全部 8 份 native-smoke artifact。它从这些已测试 wrapper 重新解析 runnable manifest，并按 Scheduler 相同的 latest-version 排序为每个通道 / 平台解析实际 selected version；每个可用通道内的 amd64 / arm64 必须选中同一条 canonical 双平台记录，拆成不同平台版本的选择明确 fail closed，不能因任意历史行匹配就冒充 Scheduler 实际选择。随后重新 inspect 生成清单中 GHCR 及每个 available 的 Docker Hub / ACR 所选不可变 index，逐个平台核对实际子 manifest digest；不信任 cache-hit 标志、version 标签或 descriptor 自报的平台摘要。该门禁只校验目录的 bulk/latest 选择，不改写或覆盖既有 Job 冻结 / 钉死的 digest。未选中的历史行可以保留；缺失或歧义的选择、任一可用通道选到陈旧 payload、artifact 缺件 / 重复、解析 / inspect 失败均 fail closed。最终 Release job 使用既有凭据在本 job 登录 GHCR 及已配置的 Docker Hub / ACR，不依赖其他 job 的登录状态。此门禁在生成清单后、Release asset 上传及 bundled / 部署 tag 回写前执行；仅本次 catalog 修正不改运行镜像输入与 fingerprint，也不跳过 native smoke；v0.5.4 包含的其他变更（包括 #718 共享手册输入）仍可能触发重建。
 
 **真实 digest 来自构建输出或经不可变 registry inspect 证明可复用的 catalog 内容**，不会手写伪造。发布成功后：
 
@@ -225,34 +225,13 @@ multi-architecture gate：Chrome Fuzz amd64 按正常目标架构构建，arm64 
 digest，发布 GHCR 以及配置的 ACR、Docker Hub 标签，检查每个目标，并且只上传
 `record-runtime-image-digest.mjs` 接受的记录。
 
-## ClickHouse specialist release contract
+## ClickHouse specialist contract（已下线，#952）
 
-The ClickHouse source pins are kept in `deploy/clickhouse-runtime-sources.json`
-and are consumed by the Test/Fuzz Dockerfiles and the consistency gate:
-
-- Official unmodified LTS `clickhouse-common-static` `v26.3.28.5` is installed
-  from ClickHouse GitHub Releases. The amd64 and arm64 tarball URLs, sizes, and
-  SHA-256 values are pinned separately; the installer rejects any URL that is
-  not `https://github.com/ClickHouse/ClickHouse/releases/download/*`.
-- ClickHouse Test ships `clickhouse-local` plus a governed
-  `clickhouse-server.sh` that listens only on `127.0.0.1` and keeps `--path`
-  under `/workspace/*`. HTTP smoke hits `/ping` and `SELECT 40 + 2`.
-- ClickHouse Fuzz installs the same official binary plus Clang-16 /
-  compiler-rt / libFuzzer / AFL++. It does **not** compile ClickHouse from
-  source. `clickhouse-fuzz-env.sh` and `clickhouse-fuzz-smoke.sh` refuse a
-  missing or unofficial binary; there is no toy harness fallback.
-- Audit is a C++ toolchain image (git / CMake / Ninja / Clang / binutils) with
-  no platform scan script or rule pack.
-
-The ClickHouse images are all project opt-in and have no global role defaults.
-Jobs using them require canvas `allow_egress=true` so agents can clone
-in-scope source. `clickhouse-runtime.yml` builds amd64 and runs the
-contract/smoke harness when its Dockerfiles, descriptors/scripts,
-`.dockerignore`, shared fingerprint/cache mechanism, or workflow changes.
-`release.yml` is the authoritative multi-architecture gate: every image is
-built natively on `ubuntu-latest` (amd64) and `ubuntu-24.04-arm` (arm64),
-smoked on that architecture, then assembled into a multi-arch index. Unlike
-Chrome Fuzz, there is no QEMU/cross-compile exception.
+ClickHouse 专项镜像族（`deepsonar-clickhouse-audit` / `-test` / `-fuzz`）已按 #952 物理下线：
+构建资产、注册表条目、专用 workflow 与 release job 均已删除，平台不再提供该运行镜像。
+需要 ClickHouse 证据的任务改用 `deepsonar-base` / `deepsonar-audit`，并在沙箱内自行准备
+工具；历史 Job 快照仍可追溯当时的 digest 记录。下线清单与 ops 清理 SQL 见
+[`DEPRECATIONS.md`](DEPRECATIONS.md)。
 
 ## OpenHarmony specialist CI contract
 
@@ -308,7 +287,7 @@ LLVM 14 对照 7/20 失败，匹配 LLVM 19 候选 20/20 通过，均保留原 f
 - 两架构都完成离线手册、真实 CLI / ELF / `.so` / PE、压缩镜像体积、资源与取消测量，以及真实 OpenSandbox Job，才保存 native child artifact、钉 src cache、放行 index 组装。
 - 首期预算仍为 2800 MiB；每个成功 run 的 `reverse-native-evidence-<arch>/measurements.json` 才是 OCI 实测。`reverse-job-evidence-<arch>` 证明隔离测试环境中的实际 Job 路径，不冒充生产准入。
 - 既有版本标签包含 index wrapper 在内不可变。手动触发使用已验证的 release version；若已有标签与本次测试 payload 不同，或多个目的地已有不同 index digest，发布直接拒绝。匹配时保留旧 index bytes，仅补缺失目的地；不能靠改注释重打同版本。
-- 最终 catalog 检查 reverse 及 Chrome/ClickHouse 的 14 个原生 child，并重验所有可用通道。没有真实 `reverse.json` 或通道证据不得发布完整 catalog；不改动任何生产项目启用状态。
+- 最终 catalog 检查 reverse 及 Chrome 的 8 个原生 child，并重验所有可用通道。没有真实 `reverse.json` 或通道证据不得发布完整 catalog；不改动任何生产项目启用状态。
 
 ## 正式版本签名发布门禁
 
