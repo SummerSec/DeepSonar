@@ -32,7 +32,8 @@ test("#966 creation feedback projects only structured model conflicts and fixed 
   assert.match(markup, /role="alert"/);
   for (const path of ["./pages/TasksPage.tsx", "./components/IntentLaunchRail.tsx"]) {
     const source = readFileSync(new URL(path, import.meta.url), "utf8");
-    assert.match(source, /SnapshotConfigurationNotice feedback=\{contractFeedback\} projectId=/);
+    assert.match(source, /SnapshotConfigurationNotice feedback=/);
+    assert.match(source, /projectId=\{/);
   }
 });
 

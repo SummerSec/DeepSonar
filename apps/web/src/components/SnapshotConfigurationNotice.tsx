@@ -1,3 +1,4 @@
+import type { ReadinessResponse } from "@deepsonar/shared-types";
 import type { TaskContractFeedback } from "../task-contract-editor";
 
 const record = (value: unknown): Record<string, unknown> | null => value !== null && typeof value === "object" && !Array.isArray(value)
@@ -9,11 +10,8 @@ function modelId(value: unknown): string | null {
     && !/[\s\u0000-\u001f\u007f]/u.test(value) && !value.includes("://") ? value : null;
 }
 
-export function snapshotConfigurationFeedback(value: unknown) {
-  const body = record(value);
-  if (body?.error_code !== "SNAPSHOT_STALE" || !Array.isArray(body.stale_fields)
-    || !body.stale_fields.includes("current_snapshot_unresolvable")) return null;
-  const repair = record(body.repair), expected = record(repair?.expected);
+function modelConfigurationFeedback(value: unknown) {
+  const repair = record(value), expected = record(repair?.expected);
   const modelConflict = repair?.path === "model_ref" && (
     (repair.code === "provider_credential_no_match" && expected?.kind === "project_authorized_model")
     || ((repair.code === "model_not_in_catalog" || repair.code === "model_passthrough_disabled") && expected?.kind === "account_configured_model_id")
@@ -24,9 +22,29 @@ export function snapshotConfigurationFeedback(value: unknown) {
   return { modelConflict, requestedModel, candidates };
 }
 
+export function snapshotConfigurationFeedback(value: unknown) {
+  const body = record(value);
+  if (body?.error_code !== "SNAPSHOT_STALE" || !Array.isArray(body.stale_fields)
+    || !body.stale_fields.includes("current_snapshot_unresolvable")) return null;
+  return modelConfigurationFeedback(body.repair);
+}
+
+function readinessConfigurationFeedback(readiness: ReadinessResponse | null | undefined, projectId: string | null) {
+  if (!readiness || readiness.ready || !projectId || readiness.scope.kind !== "project"
+    || readiness.scope.project_id !== projectId) return null;
+  for (const check of readiness.checks) {
+    if (check.state !== "fail") continue;
+    const detail = modelConfigurationFeedback(check.repair);
+    if (detail.modelConflict) return detail;
+  }
+  return null;
+}
+
 /** Durable feedback beside task submission; configuration navigation never retries a task. */
-export function SnapshotConfigurationNotice({ feedback, projectId }: { feedback: TaskContractFeedback; projectId: string | null }) {
-  const detail = snapshotConfigurationFeedback(feedback);
+export function SnapshotConfigurationNotice({ feedback, projectId, readiness }: {
+  feedback: TaskContractFeedback; projectId: string | null; readiness?: ReadinessResponse | null;
+}) {
+  const detail = snapshotConfigurationFeedback(feedback) ?? readinessConfigurationFeedback(readiness, projectId);
   if (!detail) return null;
   return <div role="alert" className="theme-input-surface mt-3 space-y-2 rounded-lg border p-3 text-sm leading-6 text-zinc-200">
     <p className="font-medium">任务未创建：当前运行配置无法解析</p>
