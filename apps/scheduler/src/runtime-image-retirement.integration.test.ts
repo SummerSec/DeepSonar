@@ -107,6 +107,66 @@ if (!databaseUrl) {
       assert.equal((await sql`SELECT s.id FROM runtime_image_scans s JOIN runtime_image_versions v ON v.id = s.runtime_image_version_id
         WHERE v.runtime_image_id = ANY(${ids.map((id) => id.imageId)}::uuid[])`).length, 0);
       assert.deepEqual(await history(), before, "no historical Job, evidence ref, audit or version rebinding");
+      // Old enabled bindings/role selections cannot veto a channel change for current products.
+      const currentId = randomUUID();
+      const currentVersionId = randomUUID();
+      const currentKey = "deepsonar-channel-current";
+      const currentDigest = `sha256:${"b".repeat(64)}`;
+      const currentRef = `ghcr.io/example/${currentKey}@${currentDigest}`;
+      const targetRef = `docker.io/example/${currentKey}@${currentDigest}`;
+      await sql`INSERT INTO runtime_images (id, image_key, name, publisher, source_kind, official)
+        VALUES (${currentId}, ${currentKey}, 'current channel fixture', 'fixture', 'official', true)`;
+      await sql`INSERT INTO runtime_image_versions (id, runtime_image_id, version, image_ref, resolved_ref, digest, trust_status, platforms_json, scan_summary_json)
+        VALUES (${currentVersionId}, ${currentId}, '999.0.0', ${currentRef}, ${currentRef}, ${currentDigest}, 'trusted',
+          ${sql.json([runtime.hostRuntimePlatform()])}, ${sql.json({ manual: raw.images[0].versions[0].manual })})`;
+      await sql`INSERT INTO runtime_image_version_refs (version_id, channel, image_ref, resolved_ref, digest)
+        VALUES (${currentVersionId}, 'github', ${currentRef}, ${currentRef}, ${currentDigest}),
+               (${currentVersionId}, 'dockerhub', ${targetRef}, ${targetRef}, ${currentDigest})`;
+      for (const imageId of [...ids.map((id) => id.imageId), currentId]) {
+        await sql`INSERT INTO project_runtime_images (project_id, runtime_image_id, enabled) VALUES (${projectId}, ${imageId}, true)`;
+      }
+      await sql`UPDATE role_configs SET runtime_image_key = ${ids[0]!.imageKey} WHERE project_id IS NULL`;
+      await sql`UPDATE role_configs rc SET runtime_image_key = ${currentKey} FROM agent_roles r
+        WHERE rc.role_id = r.id AND rc.project_id IS NULL AND r.name = 'audit'`;
+      const rolesBefore = await sql`SELECT * FROM role_configs ORDER BY id`;
+      const historyBeforeChannel = await history();
+      const { config } = await import("./config.js");
+      const { activateRuntimeImageConfiguration } = await import("./runtime-image-config-activation.js");
+      const previousRuntime = { agentMode: config.runtime.agentMode, provider: config.runtime.provider };
+      config.runtime.agentMode = "real";
+      config.runtime.provider = "opensandbox";
+      try {
+        const snapshots = await runtime.resolveConfiguredRuntimeImagesForChannel(sql, "dockerhub");
+        assert.deepEqual(snapshots.map((snapshot) => [snapshot.image_key, snapshot.image_ref]), [[currentKey, targetRef]]);
+        await assert.rejects(runtime.resolveConfiguredRuntimeImagesForChannel(sql, "aliyun-acr"), runtime.RuntimeImageChannelUnavailableError,
+          "current products still enforce the selected-channel contract");
+        const activation = await activateRuntimeImageConfiguration({
+          refs: snapshots.map((snapshot) => ({ image_key: snapshot.image_key, image_ref: snapshot.image_ref })),
+          purpose: "retirement-channel-fixture",
+          requestPreparation: async (refs) => {
+            assert.deepEqual(refs, [{ image_key: currentKey, image_ref: targetRef }]);
+            return { ready: true }; // Inject readiness: no Docker inspection/pull in this PG contract test.
+          },
+          persist: () => sql.begin(async (tx) => runtime.updateRuntimeRegistryChannel(tx as unknown as typeof sql, "dockerhub")),
+        });
+        assert.equal(activation.status, "saved");
+        assert.equal(await runtime.readRuntimeRegistryChannel(sql), "dockerhub");
+        for (const { imageId } of ids) {
+          const url = `/projects/${projectId}/runtime-images/${imageId}`;
+          const disabled = await app.inject({ method: "PUT", url, payload: { enabled: false } });
+          assert.equal(disabled.statusCode, 200, disabled.payload);
+          assert.equal(disabled.json().enabled, false);
+          const enabled = await app.inject({ method: "PUT", url, payload: { enabled: true } });
+          assert.equal(enabled.statusCode, 410);
+          assert.equal(enabled.json().error_code, "RUNTIME_IMAGE_RETIRED");
+          const [binding] = await sql`SELECT enabled FROM project_runtime_images WHERE project_id = ${projectId} AND runtime_image_id = ${imageId}`;
+          assert.equal(binding!.enabled, false, "failed re-enable must not undo the user's restriction");
+        }
+      } finally {
+        Object.assign(config.runtime, previousRuntime);
+      }
+      assert.deepEqual(await sql`SELECT * FROM role_configs ORDER BY id`, rolesBefore, "channel preparation does not replace retired role selections with base");
+      assert.deepEqual(await history(), historyBeforeChannel, "channel change and binding disable preserve historical facts/versions");
       // Removed official identity and even an absent DB row cannot permit third-party re-registration.
       await sql`UPDATE runtime_images SET official = false, source_kind = 'third_party' WHERE id = ${ids[1]!.imageId}`;
       await sql`DELETE FROM runtime_images WHERE id = ${ids[2]!.imageId}`;

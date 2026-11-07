@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { assertCurrentRuntimeImageKey, isRetiredRuntimeImageKey, RuntimeImageRetiredError } from "@deepsonar/shared-types";
+import { assertCurrentRuntimeImageKey, isRetiredRuntimeImageKey, RETIRED_RUNTIME_IMAGE_KEYS, RuntimeImageRetiredError } from "@deepsonar/shared-types";
 import { currentRuntimeImageRegistry } from "./runtime-image-retirement.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -1900,6 +1900,7 @@ export async function resolveStartupRuntimeImages(
   for (const role of roles) {
     const key = typeof role.runtime_image_key === "string" ? role.runtime_image_key : null;
     const imageKey = key || defaultRuntimeImageKey(String(role.name));
+    if (isRetiredRuntimeImageKey(imageKey)) continue; // Exclude from warmup, never replace the configured identity.
     const meta = await lookup(imageKey);
     if (!isStartupRequiredRuntimeImage(meta)) {
       console.log(`[runtime-images] startup warmup skips project-opt-in image ${imageKey} (bootstrap has no project semantics)`);
@@ -1923,7 +1924,9 @@ export async function resolveConfiguredRuntimeImagesForChannel(
   const enabled = await db`
     SELECT pri.runtime_image_id
     FROM project_runtime_images pri
-    WHERE pri.enabled = true`;
+    JOIN runtime_images ri ON ri.id = pri.runtime_image_id
+    WHERE pri.enabled = true
+      AND ri.image_key <> ALL(${[...RETIRED_RUNTIME_IMAGE_KEYS]}::text[])`;
   for (const row of enabled) {
     const snapshot = await selectRuntimeImageSnapshot(
       db,

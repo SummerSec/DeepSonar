@@ -1005,9 +1005,9 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const [image] = await sql`
       SELECT id, image_key, enabled, official, visible_project_ids
       FROM runtime_images WHERE id = ${imageId}`;
-    const retired = denyRetiredRuntimeImage(reply, image?.image_key);
-    if (retired) return retired;
-    if (!image?.enabled) return reply.code(404).send({ error: "runtime image not found or disabled" });
+    const retired = isRetiredRuntimeImageKey(image?.image_key);
+    if (retired && body.enabled) return denyRetiredRuntimeImage(reply, image?.image_key);
+    if (!image || (!image.enabled && !retired)) return reply.code(404).send({ error: "runtime image not found or disabled" });
     const imageKey = String(image.image_key);
     if (imageKey === PLATFORM_BASE_RUNTIME_IMAGE_KEY && body.enabled === false) {
       return reply.code(400).send({
@@ -1018,7 +1018,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const visibleIds = Array.isArray(image.visible_project_ids)
       ? (image.visible_project_ids as unknown[]).map(String)
       : [];
-    if (image.official !== true) {
+    if (image.official !== true && !retired) {
       if (!visibleIds.includes(String(id))) {
         return reply.code(403).send({
           error: "第三方镜像未绑定到本项目可见范围，不能启用或排除",
