@@ -1,10 +1,14 @@
 ## [Unreleased]
 
+## [0.6.16] - 2026-11-07
+
 ### 变更
 
 - **CI 执行成本与分层（#971–#976）**：串行 `gate` 拆为 `gate-contract` / `gate-db-core` / `gate-db-domain` / `gate-e2e` 四个有界并行分片，`ci-summary` 按 `EXPECTED_GATE_SHARDS` 期望矩阵逐片要求 `success`，缺片、取消、超时、失败或结果值未知一律拒绝；宿主磁盘准备改为按实测可用空间预算清理，达标即跳过、逐项删且每步重测、全删不足即失败；`kali-minimal` 去掉重复的 GHA `mode=max` 大层导出，可用 `RUNTIME_CACHE_KALI_GHA` 切回 `min`/`max`；Reverse 家族按 `reverse`/`claude`/`pi-om` 三份显式依赖清单分流，`package.json` 只对新增且不被专项消费的 `ci:unit:*` 测试脚本判无影响；Reverse base 复用默认关闭，开启后每架构只构建一次当前 checkout 的 base 并按不可变标签共享。真实冷/热/失效三组样本与 gate 墙钟/runner-minutes 前后对照尚未累积，本条不宣称提速比例。
 
 - **Chrome Fuzz ARM 构建层与镜像缓存命名空间（#961 P2/P3）**：V8 编译阶段改用按 digest 钉死的 `V8_BUILDER_IMAGE`，不再继承 `BASE_IMAGE`，builder 自行安装 CA 证书与 `xz-utils`/`unzip`，base 的运行时变化不再使下载/GN/编译层失效；运行时阶段仍跟随本次 base。内容指纹同时给出 `ci_src_tag`（`src-ci-<fp>`）与 `release_src_tag`（`src-release-<fp>`）：四个 CI workflow 只读写前者，`release.yml` 只读写后者，历史 `src-<fp>` 已无消费方，避免 PR 产物让发布跳过真实构建。
+
+- **CI 运行计划自解释（#992）**：`ci-run-plan.mjs` 把本次运行计划写成 `GITHUB_STEP_SUMMARY` 摘要 —— 模式、计划状态、`base → head`、是否 tiered、Chrome Fuzz ARM 是否必跑、Reverse 实际执行与跳过的子套件，以及每条 reason 的人读说明；未登记 token 原样保留（`未登记原因：<token>`），`reasons` 为空时显式标为按 fail closed 处理，不暗示干净跳过。跳过说明按 docs / draft-fast / 按输入收窄分别生成，不把模式跳过说成「已证明无关」。工程规范同时写明失败重跑的粒度是 job 而非 step：Re-run failed jobs 会整段重跑该 job 且下游随之重跑，降本杠杆是拆出可单独重跑的 job 与同 run 同 SHA 复用产物，不得跨提交复用「测试已通过」的结论。不改变任何路由判定、门禁强度或凭据范围。
 
 ### 修复
 
@@ -14,6 +18,15 @@
 
 - **Pi OM / DSH 镜像治理（#979）**：启动前校验镜像内 DSH/Pi OM 治理产物与 wrapper 的精确 SHA-256，陈旧镜像不再被静默复用；OM 准入下限保持 `0.6.3`，不得高于随仓库 catalog 的实际发布版本（由回归钉住）。旧冻结 Job 不重写快照，不冒充正式 Release。
 
+- **Pi RPC 大载荷链路（#944）**：单事件硬上限抬到 256 MiB（默认仍 8 MiB，可用 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 覆盖）；新增 `chunk` 帧重组（`DEEPSONAR_PI_RPC_CHUNKING` 灰度，默认关；30s 为真实 deadline，静默流到期即终止进程）；脱敏预览仍超 1 MiB 时保留事件与控制字段，只把超长字符串换成 `$piRef` 指针、数组按 128 项有界预览，无法压进上限时仍 fail closed；`prompt` 不重传（固定 Pi 1.4.0 不按请求 id 去重），只有 `get_state` 等只读命令同字节重试 3 次。分片产出方是外部 Pi CLI，本仓库只交付接收侧与灰度开关。
+
+- **Pi 输出截断与有界恢复（#958）**：`stopReason=length` 不再当作正常结束，记录截断诊断后进入有界恢复（同 Session 查状态 → 必要时 compact → 短反馈继续，最多两次，每步重查完成门、租约与未知效果）；有效压缩需摘要与 `tokensBefore` 证据，连续无进展或 provider 内部连续截断时明确停止，并在最终错误里保留 length 次数、冻结模型预算与恢复尝试。`/models` 的 `context_length`/`max_output_tokens` 逐字段保留并冻结 configured/declared/effective/source，Pi `contextWindow`/`maxTokens` 与冻结预算同源物化；不新增 Role/Job 输出配置 API，不回写历史 Job。
+
+
+### 升级注意事项
+
+- **本版要求 schema 68**（`apps/scheduler/src/schema-version.ts`）。上一正式版 v0.6.14 与 v0.6.15 tag 都是 schema 67，schema 68 由 #954/#960 的 Skill 源发布隔离引入，因此 v0.6.16 是**首个要求 68 的版本**。仓库没有就地升级路径：非空数据库版本不匹配时 Scheduler 会直接拒绝启动（`database schema v67 does not match this Scheduler's v68 ... backup if needed, then rebuild from database/schema.sql`），升级前须按[发布专题](docs/RELEASE_RUNTIME_IMAGES.md#发布前门禁)做受治理备份与重建并完成验收，不能把 schema 67 的库直接交给 v0.6.16。
+- 历史请求策略缺失/非法或多 Attempt 缺少策略回执时仍拒绝恢复，不补造额度；pending/unknown 效果须先结算。Pi 侧 `length` 截断现在会进入有界恢复，最多两次，耗尽后明确停止并保留截断原因、冻结预算与恢复尝试。
 
 ## [0.6.15] - 2026-11-06
 
@@ -1613,3 +1626,5 @@
 [0.6.14]: https://github.com/SummerSec/DeepSonar/compare/v0.6.13...v0.6.14
 
 [0.6.15]: https://github.com/SummerSec/DeepSonar/compare/v0.6.14...v0.6.15
+
+[0.6.16]: https://github.com/SummerSec/DeepSonar/compare/v0.6.15...v0.6.16

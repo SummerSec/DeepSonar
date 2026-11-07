@@ -1,9 +1,11 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；v0.6.15 tag 的发布失败，部分镜像已推送但未形成正式 Release；v0.6.14 为最新正式版（2026-11-07 核对）**。
+> 状态：**运维 as-built；v0.6.15 tag 的发布失败，部分镜像已推送但未形成正式 Release；v0.6.14 为最新正式版；v0.6.16 为当前发布候选，尚未 tag（2026-11-07 核对）**。
 > 同步日期：2026-11-07
 >
 > 2026-11-07 核对 GitHub：[v0.6.15 发布运行](https://github.com/SummerSec/DeepSonar/actions/runs/42178680573) 在 Chrome / ClickHouse 子镜像构建失败，未完成最终 catalog、签名和正式 Release；不可把单个镜像 tag 当作整版发布。最新正式版仍为 [v0.6.14](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.14)，main `16ed0726` 的 bundled 清单与部署示例均已回写到 `0.6.14`。DSH/Pi OM 的旧镜像问题、三款已推送镜像的实物核验和恢复限制见 [#979 诊断与恢复](RUNTIME_IMAGE_GOVERNANCE_979.md)。原 v0.6.15 tag/已有镜像保持不可变；新的发布须重新确认目标版本、compare 和最终 SHA Actions，不能沿用旧准备状态。
+>
+> **v0.6.16 发布准备（2026-11-07）**。当前候选为 **v0.6.16**，compare 为 `v0.6.15...v0.6.16`。前一版本按「除目标外最高 Git `v*` tag」取 [v0.6.15](https://github.com/SummerSec/DeepSonar/actions/runs/42178680573) 指向的 `2b51080431826308c3fdc28cef8e7955ac7f16e6` —— 该 tag 的 Release 在 Chrome / ClickHouse 子镜像失败、未形成正式 Release，但仍参与比较，不移动也不复用。本候选范围为 **#944（Pi RPC 大载荷接收侧）** 与 **#958（Pi 输出截断与有界恢复、模型预算贯通）**，叠加 `[Unreleased]` 中已合入的 #971–#976、#961 P2/P3、#967、#945、#979。**整版候选要求 schema 68**（`apps/scheduler/src/schema-version.ts`）：v0.6.14 与 v0.6.15 tag 都是 schema 67，schema 68 由 #954/#960 的 Skill 源发布隔离引入，所以 v0.6.16 是首个要求 68 的版本；仓库没有就地升级路径，非空库版本不匹配时 Scheduler 拒绝启动并提示先备份再按 `database/schema.sql` 重建，升级前须完成受治理备份/重建与验收。本 PR 自身不改 schema、迁移或任何运行时行为；产品版本仍只由 tag 注入的 `DEEPSONAR_VERSION` 决定，不改私有 package 版本。前置条件：#984 与 #989 必须先在最终 main 上合并并通过适用 Actions，之后才在本候选提交上打不可变 `v0.6.16`。
 >
 > **历史 v0.6.4 发布准备基线（2026-11-02，保留历史来源）**。准备时最近正式版为 [v0.6.2](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.2)，于 2026-10-31T09:05:38Z 正式发布，非 draft / prerelease；tag 指向包含 Web 隔离构建修复的 `347385a53f43d15a53175226528af10a692f6f9e`。[v0.6.3 的 Release](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 失败，已有部分镜像但未完成正式发行。按用户 2026-11-02 的选择，保留其 tag 和既有镜像，改发 **v0.6.4**；Git compare 起点为 v0.6.3，成功升级基线仍为 v0.6.2（schema 65 → 67）。本轮范围沿用[原范围决定](<../AGENTS.md#豁免范围>)，不移动旧 tag 或覆盖旧镜像。这里核对发布元数据与源码关系，不重新声明附件、签名或各通道镜像已逐项复验。
 >
@@ -72,13 +74,13 @@ CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚�
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。
 
-发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-06 当前候选为 v0.6.15，预期 compare 为 `v0.6.14...v0.6.15`（前一版本按除目标外最高 `v*` tag 取已正式发布的 v0.6.14），最近正式升级基线为 v0.6.14，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
+发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-07 当前候选为 v0.6.16，预期 compare 为 `v0.6.15...v0.6.16`（前一版本按除目标外最高 `v*` tag 取 v0.6.15；该 tag 的 Release 失败但仍参与比较），最近正式升级基线为 v0.6.14，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
 
 ```bash
 pnpm ci:unit:docs-freshness
 pnpm ci:unit:changelog
 # 本轮真实 changelog 区段（仅在 Actions 执行）：
-node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.15 --previous-version 0.6.14 --tag v0.6.15
+node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.16 --previous-version 0.6.15 --tag v0.6.16
 pnpm typecheck
 pnpm build
 pnpm ci:images
