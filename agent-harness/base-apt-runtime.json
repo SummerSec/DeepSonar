@@ -1,0 +1,8 @@
+{
+  "snapshot": "20261107T000000Z",
+  "inReleases": {
+    "bookworm": "77737fa4b34f2693e982cc9ee35736816c35a7778fc2d326cc1bbf5b301fe1aa",
+    "bookworm-updates": "d225061918bca9252e2b5f1d6fca5dec7aa0f56ac48f386b0b9e7f8287302f73",
+    "bookworm-security": "8f621cfc7c3b38f9c7b0e13f9eb18e8f8a5166c242e51a0ff57539a34bc00981"
+  }
+}

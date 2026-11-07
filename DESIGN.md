@@ -326,6 +326,8 @@ OpenSandbox upgrade baseline (2026-11-01): installed SDK 1.2 and canonical serve
 
 #952/#964 的[退休镜像软件边界](docs/DEPRECATIONS.md#软件拒绝边界9642026-11-07-核对)以共享精确 key 策略阻断旧目录/DB 行回流市场、重新登记、启用和新执行；queued pull/scan 在外部 pull 前重验，历史冻结快照、Evidence 和审计不改写。原始目录完整校验后才输出带 `excluded_retired_image_keys` 的当前产品投影，不把投影冒充签名原文。软件拦截已落盘，最终 SHA Actions 待验；运营清库/GC 未执行且不作为本轮验收前置。
 
+基础镜像的 CLI/OM npm closure、Debian 快照 InRelease 和 fd 原生资产按固定来源/摘要构建（#992 输入冻结前置切片），不回退 live 源；实际安装仍保留 CLI 原生 hooks。锁文件与验证边界见 [CI 构建输入](docs/CI_COST_ACCEPTANCE_992.md#6-基础构建输入冻结992前置切片) 和 [ADR 0018](docs/architecture/adr/0018-frozen-base-build-inputs.md)。本分支尚待最终 SHA Actions 原生双架构验证；不代表 PR→main 构建复用、测试复用或成本收益已实现。
+
 运行镜像必须来自已准入市场。第三方镜像先经 `apps/image-admission` 扫描、批准，再由平台绑定可见项目后项目启用；Agent 不能提交任意 OCI 地址。镜像和平台版本分开管理，执行永远使用不可变 digest，不使用可变 `latest`。出网权限在 Canvas/Job 快照中冻结，禁止出网的沙箱只能通过固定 Gateway 访问模型。
 
 部署成功门（#726）：`deploy.sh` / `deploy.ps1` 必须保留 Compose 失败语义和原始错误码诊断（shell 以原码退出，PowerShell 抛错并非零退出），并在有界等待内验证初始化任务、依赖服务、Web/Scheduler 容器及入口健康 JSON 的顶层 `ok=true` 与 `ready=true`；HTTP 200 或容器 Running 只证明存活，不能替代就绪。探针与诊断子命令也须受超时约束，日志脱敏。

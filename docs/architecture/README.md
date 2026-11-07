@@ -34,7 +34,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 
 #954/#960 的全局 Skill 源修复映射 [IR-007](01-system-specification.md#ir-007-git-skill-source)、[FR-CAP-003](01-system-specification.md#fr-cap-003-受治理-skill-拉取)、[FR-KNOW-002](01-system-specification.md#fr-know-002-跨项目-skill-精确授权)：sync 只候选、全局管理员精确 hash+epoch 审批、跨实例同源锁、旧 Job CAS/撤销边界不变。schema68 的已批准/候选元数据见[数据](08-data-architecture.md#skill-源已批准目录与候选960)，管理授权与全局启用影响见[接口](09-interface-specs.md#全局-skill-源候选审批960)，健康观测/既有画布节点 warning 见[运行时](06-runtime-view.md#skill-源检查审批与-job-观察954960)。回归已编写接线但本次未运行，本地测试/构建/typecheck/DB 均未执行，最终 SHA Actions 待验；[风险](12-risks-and-tech-debt.md#skill-源修复与剩余证据边界960)只保留实际证据缺口，不把已修复核心重新列作未来设计。
 
-#992 对应 NFR-OPS-003：既有五片 gate、Reverse 实际消费路由和只读 attempt 成本观测归属[工程规范](11-engineering-specs.md#4-测试分层与实际接线)；真实故障/原生重跑与三组同形文档对照已通过，记录见 [CI 验收](../CI_COST_ACCEPTANCE_992.md)。不新增跨提交通过结论复用，main/发布保障不变。
+#992 对应 NFR-OPS-003：既有五片 gate、Reverse 实际消费路由和只读 attempt 成本观测归属[工程规范](11-engineering-specs.md#4-测试分层与实际接线)；真实故障/原生重跑与三组同形文档对照已通过，记录见 [CI 验收](../CI_COST_ACCEPTANCE_992.md)。不新增跨提交通过结论复用，main/发布保障不变。#992 输入冻结前置切片的 npm closure、快照/原生资产身份见 [CI 构建输入](../CI_COST_ACCEPTANCE_992.md#6-基础构建输入冻结992前置切片)、[运行时](06-runtime-view.md#基础镜像构建输入992-前置切片)、[信任边界](10-security-and-trust-boundaries.md)和 [ADR 0018](adr/0018-frozen-base-build-inputs.md)；源码接线尚待最终 SHA Actions 原生验收，复用仍未实现。
 
 ## 1. 阅读路径与目录
 

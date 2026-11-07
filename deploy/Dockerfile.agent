@@ -13,6 +13,10 @@ ARG FILE_VERSION=1:5.44-3
 ARG UNZIP_VERSION=6.0-28
 ARG XZ_VERSION=5.4.1-1+deb12u2
 ARG BINUTILS_VERSION=2.40-2
+ARG TARGETARCH
+ARG FD_VERSION=10.3.0
+ARG FD_AMD64_SHA256=2b6bfaae8c48f12050813c2ffe1884c61ea26e750d803df9c9114550a314cd14
+ARG FD_ARM64_SHA256=996b9b1366433b211cb3bbedba91c9dbce2431842144d925428ead0adf32020b
 ARG CLAUDE_CODE_VERSION=2.1.312
 ARG CLAUDE_CODE_INTEGRITY=sha512-/gx8byG8VOm4YoNuT5tal/Ov5Z5oydJzZkmHCJcBFLbNGGpyYDbKA/CNdB+iIKwcLQC8pVwBoj6Dt7H3L2J5bw==
 ARG PI_CODING_AGENT_VERSION=1.4.0
@@ -24,44 +28,73 @@ ARG PI_WEB_ACCESS_INTEGRITY=sha512-1l4sAWYkFhiBynJf/mXuxmCHxjhiAyWJ4rfQVFu8UPa0J
 ARG PI_OBSERVATIONAL_MEMORY_VERSION=3.1.4
 ARG PI_OBSERVATIONAL_MEMORY_INTEGRITY=sha512-jgQbFyLMs4wWhkf6F0voOgzMwtIXsb8+ks0MsPKpPxkdpyMX5E/el6Mk/vJ40m8GlKwBIsCKjL1r7Z2U8dCtmA==
 
+COPY agent-harness/base-apt-runtime.json agent-harness/base-apt-inputs.mjs /opt/deepsonar/
+COPY agent-harness/base-cli-lifecycle.json agent-harness/base-cli-install.mjs /opt/deepsonar/
 RUN set -eu; \
+  node /opt/deepsonar/base-apt-inputs.mjs /opt/deepsonar/base-apt-runtime.json; \
   test "$TOOLSET" = base -o "$TOOLSET" = audit; \
   packages="git=${GIT_VERSION} python3=${PYTHON_VERSION} ca-certificates=${CA_CERTIFICATES_VERSION} curl=${CURL_VERSION} ripgrep=${RIPGREP_VERSION} jq=${JQ_VERSION} libjq1=${JQ_VERSION} file=${FILE_VERSION} unzip=${UNZIP_VERSION} xz-utils=${XZ_VERSION}"; \
   if [ "$TOOLSET" = audit ]; then packages="$packages binutils=${BINUTILS_VERSION}"; fi; \
   for attempt in 1 2 3; do \
-    if apt-get -o Acquire::Retries=3 update && apt-get -o Acquire::Retries=3 install -y --no-install-recommends $packages; then break; fi; \
+    if apt-get -o Acquire::Retries=3 update; then \
+      node /opt/deepsonar/base-apt-inputs.mjs /opt/deepsonar/base-apt-runtime.json verify-lists; \
+      if apt-get -o Acquire::Retries=3 install -y --no-install-recommends $packages; then break; fi; \
+    fi; \
     if [ "$attempt" = 3 ]; then exit 1; fi; \
     rm -rf /var/lib/apt/lists/*; sleep 2; \
   done; \
   rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
     /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*
 
+# Pi's find tool needs --no-require-git (fd >= 8.7); bookworm fd-find is older.
+# A PATH binary also avoids Pi's unverified releases/latest download at runtime.
+RUN set -eu; \
+  case "$TARGETARCH" in \
+    amd64) target=x86_64; sha="$FD_AMD64_SHA256" ;; \
+    arm64) target=aarch64; sha="$FD_ARM64_SHA256" ;; \
+    *) echo "Unsupported fd architecture: $TARGETARCH" >&2; exit 1 ;; \
+  esac; \
+  name="fd-v${FD_VERSION}-${target}-unknown-linux-musl"; \
+  curl -fsSL --retry 3 --max-time 60 "https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/${name}.tar.gz" -o /tmp/fd.tar.gz; \
+  echo "$sha  /tmp/fd.tar.gz" | sha256sum -c -; \
+  tar -xzf /tmp/fd.tar.gz -C /tmp "$name/fd" "$name/LICENSE-MIT" "$name/LICENSE-APACHE"; \
+  install -m 0755 "/tmp/$name/fd" /usr/local/bin/fd; \
+  mkdir -p /usr/local/share/licenses/fd; \
+  cp "/tmp/$name/LICENSE-MIT" "/tmp/$name/LICENSE-APACHE" /usr/local/share/licenses/fd/; \
+  fd --no-require-git --glob --max-results 1 '*' /tmp >/dev/null; \
+  rm -rf "/tmp/$name" /tmp/fd.tar.gz
+
+COPY agent-harness/base-cli-runtime/package.json /opt/deepsonar/base-cli/package.json
+COPY agent-harness/base-cli-runtime/package-lock.json /opt/deepsonar/base-cli/package-lock.json
+COPY agent-harness/pi-extensions-base-runtime/package.json /opt/deepsonar/pi-extensions/package.json
+COPY agent-harness/pi-extensions-base-runtime/package-lock.json /opt/deepsonar/pi-extensions/package-lock.json
 COPY agent-harness/dsh-runtime/package.json /opt/deepsonar/dsh/package.json
 COPY agent-harness/dsh-runtime/package-lock.json /opt/deepsonar/dsh/package-lock.json
 COPY agent-harness/dsh-request-budget-install.mjs /opt/deepsonar/dsh-request-budget-install.mjs
 COPY packages/runtime-sandbox/src/dsh-request-budget.ts packages/runtime-sandbox/src/pi-main-request-budget.ts /opt/deepsonar/request-budget-source/
 
 RUN set -eu; \
-  test "$(npm view @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} dist.integrity)" = "$CLAUDE_CODE_INTEGRITY"; \
-  test "$(npm view @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION} dist.integrity)" = "$PI_CODING_AGENT_INTEGRITY"; \
+  node -e 'const p=require("/opt/deepsonar/base-cli/package-lock.json").packages; for(const [name,version,integrity] of [["@anthropic-ai/claude-code",process.argv[1],process.argv[2]],["@earendil-works/pi-coding-agent",process.argv[3],process.argv[4]]]) if(p["node_modules/"+name]?.version!==version||p["node_modules/"+name]?.integrity!==integrity) throw new Error("BASE_CLI_LOCK_IDENTITY_MISMATCH");' "$CLAUDE_CODE_VERSION" "$CLAUDE_CODE_INTEGRITY" "$PI_CODING_AGENT_VERSION" "$PI_CODING_AGENT_INTEGRITY"; \
   test "$(node -e 'const p=require("/opt/deepsonar/dsh/package-lock.json").packages["node_modules/@deepseek-ai/dsh"]; process.stdout.write(p?.version ?? "")')" = "$DSH_VERSION"; \
   test "$(node -e 'const p=require("/opt/deepsonar/dsh/package-lock.json").packages["node_modules/@deepseek-ai/dsh"]; process.stdout.write(p?.integrity ?? "")')" = "$DSH_INTEGRITY"; \
   cd /opt/deepsonar/dsh; \
   npm ci --omit=dev --ignore-scripts --no-audit --no-fund; \
   node /opt/deepsonar/dsh-request-budget-install.mjs /opt/deepsonar/dsh /opt/deepsonar/request-budget-source; \
-  npm install -g --omit=dev --no-audit --no-fund \
-    @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
-    @earendil-works/pi-coding-agent@${PI_CODING_AGENT_VERSION}; \
+  npm ci --omit=dev --no-audit --no-fund --prefix /opt/deepsonar/base-cli; \
+  cp -a /opt/deepsonar/base-cli/node_modules/. "$(npm root -g)/"; \
+  rm -rf /opt/deepsonar/base-cli/node_modules; \
+  ln -sf /usr/local/lib/node_modules/.bin/claude /usr/local/bin/claude; \
+  ln -sf /usr/local/lib/node_modules/.bin/pi /usr/local/bin/pi; \
+  node /opt/deepsonar/base-cli-install.mjs "$(npm root -g)" /opt/deepsonar/base-cli/package-lock.json /usr/local/bin "$TARGETARCH"; \
   test -x node_modules/@deepseek-ai/dsh/lib/bin.js; \
   ln -sf /opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh; \
   npm cache clean --force
 
 RUN set -eu; \
   test "$TOOLSET" = base -o "$TOOLSET" = audit; \
-  test "$(npm view pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION} dist.integrity)" = "$PI_OBSERVATIONAL_MEMORY_INTEGRITY"; \
-  mkdir -p /opt/deepsonar/pi-extensions; \
-  npm install --omit=dev --ignore-scripts --save-exact --no-audit --no-fund --prefix /opt/deepsonar/pi-extensions \
-    pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION}; \
+  test "$(node -e 'const p=require("/opt/deepsonar/pi-extensions/package-lock.json").packages["node_modules/pi-observational-memory"]; process.stdout.write(p?.version ?? "")')" = "$PI_OBSERVATIONAL_MEMORY_VERSION"; \
+  test "$(node -e 'const p=require("/opt/deepsonar/pi-extensions/package-lock.json").packages["node_modules/pi-observational-memory"]; process.stdout.write(p?.integrity ?? "")')" = "$PI_OBSERVATIONAL_MEMORY_INTEGRITY"; \
+  npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix /opt/deepsonar/pi-extensions; \
   node -e 'const fs=require("node:fs"),root=process.argv[3]||"/opt/deepsonar/pi-extensions",p=JSON.parse(fs.readFileSync(root+"/package-lock.json")).packages["node_modules/pi-observational-memory"],installed=JSON.parse(fs.readFileSync(root+"/node_modules/pi-observational-memory/package.json")); if(p?.version!==process.argv[1]||p?.integrity!==process.argv[2]||p?.resolved!=="https://registry.npmjs.org/pi-observational-memory/-/pi-observational-memory-"+process.argv[1]+".tgz"||installed.name!=="pi-observational-memory"||installed.version!==process.argv[1]||installed.license!=="MIT"||!fs.existsSync(root+"/node_modules/pi-observational-memory/src/index.ts")) throw new Error("PI_OM_INSTALL_IDENTITY_MISMATCH");' "$PI_OBSERVATIONAL_MEMORY_VERSION" "$PI_OBSERVATIONAL_MEMORY_INTEGRITY"; \
   if [ "$TOOLSET" != audit ]; then npm cache clean --force; exit 0; fi; \
   test "$(npm view pi-web-access@${PI_WEB_ACCESS_VERSION} dist.integrity)" = "$PI_WEB_ACCESS_INTEGRITY"; \

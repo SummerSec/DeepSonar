@@ -1,9 +1,15 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
+
+## 基础镜像构建输入（#992 前置切片）
+
+[base Dockerfile](../../deploy/Dockerfile.agent) 使用完整 CLI/OM npm 锁、固定 Debian 快照及 fd 双架构资产；CLI 原生 hooks 继续执行，标准全局布局保留 Pi SDK 解析，自有 npm/corepack 不由全局安装清空。OM/DSH 仍使用原 canonical prefix。HTTPS 快照先由固定 Node parent 的 CA 引导，再校验实际 APT cache 中的 signed InRelease 身份后安装；不回退 live。
+
+源码/锁/验证入口及尚未执行的原生验收见 [CI 构建输入](../CI_COST_ACCEPTANCE_992.md#6-基础构建输入冻结992前置切片)。这是构建依赖冻结，不改 Job 快照、权限、CLI 版本或恢复；PR→main 复用仍未实现，当前提交全部测试和发布门保持。
 
 ## Finding quality worker and preload (#819, 2026-11-01 merged engineering slice)
 

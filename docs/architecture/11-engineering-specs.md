@@ -91,6 +91,8 @@ Control API 的每个 operation 必须经过三层校验：
 
 运行时能力缺失返回结构化 `capability_unavailable` 或稳定准入错误，不通过包管理器、下载脚本或未登记命令静默安装。镜像目录、签名/扫描、版本引用和 pull/reconcile 的细则见 [ADR 0006](adr/0006-runtime-image-admission.md)。
 
+基础镜像的有效依赖按[冻结输入契约](../CI_COST_ACCEPTANCE_992.md#6-基础构建输入冻结992前置切片)与 [ADR 0018](adr/0018-frozen-base-build-inputs.md)维护：npm 全闭包、Debian 实际 signed InRelease、原生 fd 资产均有固定来源/摘要；失败不放开源。更改版本须同步锁与元数据，并在最终 SHA Actions 验证双架构原生安装及既有测试。输入冻结不是跨运行通过证据，PR→main 复用仍未实现，main 全部测试/smoke/汇总和发布门不得跳过。
+
 ### 3.4 Pi 观测内存的条件准入（#815）
 
 当前根代码已实现 Pi 扩展注册、Job snapshot 冻结、镜像预装 stub、OM wrapper、Gateway workload、RPC 白名单和 session/archive 边界；新 Job 默认不启用，必须由 Hub 能力组合显式 opt-in。以下区分已接入实现、不变边界和仍未闭合的启用验收；任何尚未执行的真实 RPC、Docker 或模型证据都不能写成通过：
