@@ -133,6 +133,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | GET | /jobs/:id | tasks:read | 详情（含事件）；`query_plane=current`，含导入 `provenance` |
 | GET | /jobs/:id/events | tasks:read | 语义事件分页（`cursor/limit`）；`query_plane=history`，含 `attempt_id` |
 | GET | /jobs/:id/evidence | tasks:read | 运行证据 manifest 与 transcript URI；finalized manifest 缺失但 `attempts/*/stream.ndjson` 存在时返回有界 synthetic/inflight manifest；已销毁容器中的 Session 不伪造，以 `capture_error` 明示 |
+| GET | /jobs/:id/evidence/runtime | tasks:read | #990 完整 Pi RPC 回读：必填 `path/attempt_id/sha256`，可选 RFC 6901 `pointer`（空串选根）及选中值 `bytes` 断言；只读本 Job manifest 已索引的所选 Attempt 归档，先核验实际源 hash/长度，再 OM 脱敏、返回完整 typed `value`。`source` 为不可变归档元数据，返回 `bytes/sha256` 为实际值；缺损、越界、字段/指针非法、hash/长度不符或超读取预算明确拒绝。不触发 Agent 输入，预算/详细协议见 [Pi RPC 专题](../../../docs/PI_RPC_PAYLOAD_LIMITS.md) 与 `apps/scheduler/src/runtime-evidence.ts`（核对 2026-11-08；最终 Actions 待验收） |
 | GET | /jobs/:id/evidence/session | tasks:read | 会话证据：默认主 Session；`artifacts` 列出 main/subagent/vendor_export；`?path=` 切换。DSH 当前 live capture 是 `sessions/<project>/<sessionId>/session.v4.jsonl`，历史 viewer 仍可读旧代归档。在线预览 8 MiB |
 | GET | /jobs/:id/evidence/session/download | tasks:read | 下载所选 Session 归档全文；`?path=` 与查看接口相同 |
 | GET | /jobs/:id/evidence/stream | tasks:read | 证据流分页（`cursor/limit/tail`） |
