@@ -252,7 +252,16 @@ test("Finding backup restore uses private connection environment and redacts chi
 
 test("CI dump and restore clients are pinned to the PostgreSQL 16 service", async () => {
   const workflow = await readFile(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8");
-  assert.match(workflow, /  gate:\n    runs-on: ubuntu-24\.04/);
+  // #972: the serial `gate` job is now four bounded shards. Every shard that
+  // starts the PostgreSQL service must still pin the PG16 client, so assert the
+  // DB-bearing shards instead of one monolithic job name.
+  for (const shard of ["gate-db-core", "gate-db-domain", "gate-e2e"]) {
+    assert.match(
+      workflow,
+      new RegExp(`\\n  ${shard}:\\n    runs-on: ubuntu-24\\.04`),
+      `${shard} must run on the pinned Ubuntu image`,
+    );
+  }
   assert.match(workflow, /image: postgres:16-alpine/);
   assert.match(workflow, /apt-get install -y postgresql-client-16\b/);
   assert.match(workflow, /echo "\/usr\/lib\/postgresql\/16\/bin" >> "\$GITHUB_PATH"/);
@@ -266,7 +275,9 @@ test("CI uses installed PG16 without apt and rejects mismatched clients", async 
   const { join } = await import("node:path");
   const { spawnSync } = await import("node:child_process");
   const workflow = await readFile(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const block = workflow.match(/      - name: Select PostgreSQL 16 client[^\n]*\n        run: \|\n([\s\S]*?)\n\n/);
+  // After the #972 split this step may be followed directly by another step
+  // (no blank line), so end the capture at the next step marker or blank line.
+  const block = workflow.match(/      - name: Select PostgreSQL 16 client[^\n]*\n        run: \|\n([\s\S]*?)(?=\n      - |\n\n)/);
   assert.ok(block, "execute the actual CI setup script");
   const directory = await mkdtemp(join(tmpdir(), "deepsonar-pg16-setup-"));
   try {
