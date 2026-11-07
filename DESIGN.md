@@ -94,7 +94,7 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 
 **平台控制 Skill**：`deepsonar-control` 仍对真实 Job **强制注入**，不可被业务 RoleConfig 同名覆盖，也不计入项目 Skill 源白名单。
 
-**项目侧就地登记（#953）**：项目「Skill 源启用白名单」可同时登记新源，但复用的仍是平台同一套控制面——`POST /skill-sources` 的 https/host 校验、默认 `quarantined`+未启用、审计、以及后续同步与 `trust` 审批。入口放在项目上下文只为省掉跳去全局「模块源」的成本，**不新增第二套准入**：登记成功不等于已可运行，更不等于自动信任，也不改变其它项目授权。面板按「平台信任 → 平台启用 → 同步目录非空 → 本项目启用」逐条展示阻塞原因与下一步（[skill-source-readiness.ts](apps/web/src/skill-source-readiness.ts)），权限不足时明说缺 `skills:write`。
+**项目侧就地登记（#953）**：有全局源管理权限的操作者可在项目页登记或复用同一仓库/分支，仍通过平台 HTTPS/host 校验与默认隔离，不新增准入通道。同步仅产生候选，精确 hash/epoch/实例审批后才发布；批准并启用会影响所有未显式停用该源的项目后续 Job，必须明确确认全局作用域，不能表述为还须各项目逐一勾选。项目限定令牌只能修改本项目启停，不能登记/同步/批准平台源。面板的真实可用性来自服务器持久选择与平台已批准目录；未保存草稿单列、刷新保留，迟到响应按项目 owner 隔离，不把候选、同步时间或前端勾选当成授权（[状态推导](apps/web/src/skill-source-readiness.ts)）。
 
 **RoleConfig `modules_json` 为过渡态 / 缺省建议**：仍可勾选，但候选必须 ⊆ 项目白名单；`expandModules` / role-runtime-snapshot 路径在项目范围 fail-closed。迁移：首次读取项目 Skill 设置时，把历史 RoleConfig selector 引用的源种子为启用，禁止静默丢配置。
 

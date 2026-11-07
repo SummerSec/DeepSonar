@@ -248,7 +248,8 @@ for (const returnToA of [false, true]) {
       await f.click(f.button("保存"));
       await f.render("B");
       assert.equal(f.checkbox("B-skills").checked, true, "A draft must not migrate to B");
-      assert.doesNotMatch(f.container.textContent!, /fixture-skills/);
+      assert.equal(f.container.querySelector('input[aria-label="fixture-skills 本项目启用"]'), null,
+        "the A source control is absent; a legitimate shared repository URL may still be visible in B");
       if (returnToA) await f.render("A");
       const name = returnToA ? "fixture-skills" : "B-skills";
       const newSave = deferred<ProjectSkillSourceBinding>();
