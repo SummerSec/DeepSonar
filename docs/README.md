@@ -13,6 +13,10 @@
 
 > **Job 侧数据库冲突（#945）**：工具活动进度保持 Canvas-first。新 Task/Finding Report 的精确输入字节随 SQL 提交，领取后才投影文件；Verify/orphan 收口现可沿用纯数据库有界重试，成功报告输出仍禁止整体重放。历史缺冻结字节不补造，冲突文件不覆盖，原始 SQLSTATE 与未知效果边界不变；见[运行时视图](architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)和[数据契约](architecture/08-data-architecture.md#report-输入与文件投影945)。回归覆盖晚期 SQL 回滚、终态重复与文件摘要/归属，最终 SHA Actions 待验，未执行本地测试/构建/typecheck。
 
+> **CI 执行成本与分层（#971–#976，2026-11-07）**：串行 `gate` 拆为 `gate-contract` / `gate-db-core` / `gate-db-domain` / `gate-e2e` 四个有界并行分片，`ci-summary` 按 `EXPECTED_GATE_SHARDS` 期望矩阵逐片要求 `success`，完整套件归属以 [`gate-shards.mjs`](../agent-harness/gate-shards.mjs) 的覆盖率断言为准；`prepare-hosted-runner-disk` 改为按 `df -Pk /` 实测空间预算清理（达标即跳过、逐项删且每步重测、全删不足即失败）；`kali-minimal` 去掉重复的 GHA `mode=max` 大层导出，`RUNTIME_CACHE_KALI_GHA` 可切回 `min`/`max`；Reverse 家族按 `reverse`/`claude`/`pi-om` 三份显式依赖清单分流，`package.json` 只对「新增且不被专项消费的 `ci:unit:*` 测试脚本」判无影响；Reverse base 复用默认关闭，开启后每架构只构建一次当前 checkout 的 base 并按不可变标签共享。规范正文见[工程规范](architecture/11-engineering-specs.md#4-测试分层与实际接线)，`gate` 运行计划见 [AGENTS](../AGENTS.md#ci-gate何时触发何时必须等)。真实冷/热/失效三组样本与 gate 墙钟/runner-minutes 前后对照尚未累积，本节不宣称提速比例。
+
+> **提示与错误反馈统一（#967，2026-11-07）**：全局 Toast 增加 `warn` 语义、同文案去重合并（最多 4 条且优先淘汰非 sticky）、按严重程度分层停留（成功 3.2s / 警告 6s / 错误 8s），错误用 `role=alert` + `assertive`、成功与警告保持 `polite`；悬停与焦点改为两个独立 hold，集合为空才恢复计时，去重刷新在暂停时只收敛预算；每条可手动关闭、详情折叠复制、支持一个恢复动作。页面自有 flash 收敛到 `useFlashMessage`（新提示取消旧定时器、卸载清理），`HelpTip` 支持 Escape 关闭并保留触发器焦点。Toast 颜色改语义 token 并纳入 WCAG AA 断言。实现依据仍是 [注意力原则](../DESIGN.md#核心理念优化人的注意力)与[工程评审正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)；真实浏览器逐主题截图与键盘/触屏回归未执行。
+
 > **注意力原则（#830）**：单一权威定义见 [DESIGN](../DESIGN.md#核心理念优化人的注意力)，开发与贡献入口引用同一[工程评审及正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)。NFR-UX-001 登记约束与验证范围；本次只落实设计/评审依据，不改变运行时、UI 或授权，也不宣称注意力收益。
 
 > **任务目标证据（#767）**：契约、候选、来源隔离评审、非 Finding 结果与确定性报告已接线。可信只读 authority/grant 绑定当前身份、动作、前提和版本，子/系统 Job 统一继承并在 provision/重跑实时重核，见 [ADR 0011](architecture/adr/0011-trusted-target-authorization.md)。独立程序资格由 [#822 操作员评审](PROGRAM_ELIGIBILITY.md) 投影；目标授权、技术 Verify、判据、Plan 完成与资格各自分责。无契约仍 unassessed，验收见[矩阵](TASK_DISPATCH_ACCEPTANCE.md)。
@@ -234,10 +238,10 @@
 
 #899 的[操作员效果结清契约](../deploy/README.md#未知效果的人工结清899)区分单条成功、全局残留和未核验状态；隔离 PostgreSQL/CLI 回归接入 Actions，最终 SHA 工程验收与 s66 现场升级分别留证。
 
-- [运行镜像构建分项量测（#961 P0）](RUNTIME_BUILD_TIMING.md)：分项观测与可信默认分支采集器来源校验已接线；缺少不可变 checkout 或关键输入证据时保持 unknown，不进入正式中位数/P95，旧回填只保留历史观测身份。受控样本与 P2 的 V8 builder/toolchain 缓存拆分仍未交付；最终候选 Actions 另验，不宣称提速。
+- [运行镜像构建分项量测（#961 P0）](RUNTIME_BUILD_TIMING.md)：分项观测与可信默认分支采集器来源校验已接线；缺少不可变 checkout 或关键输入证据时保持 unknown，不进入正式中位数/P95，旧回填只保留历史观测身份。受控样本仍未累积；P2 的 V8 builder 已随 #961 P2 交付（builder 固定到不可变 digest，不再继承 `BASE_IMAGE`），toolchain 缓存拆分仍未交付；最终候选 Actions 另验，不宣称提速。
 
 - [集成测试共享连接池 teardown 待办清单（#971）](INTEGRATION_POOL_TEARDOWN.md)：三个 gate 长尾套件在 `finally` 末尾显式 `sql.end({ timeout: 5 })`，其余 18 个长尾套件的逐个核对顺序与「未机械批量替换」边界。纯 Node 契约回归见 `apps/scheduler/src/integration-pool-teardown.test.mjs`。#972 的 gate 四分片清单与覆盖率断言见 `agent-harness/gate-shards.mjs`；#973 的按空间预算清盘见 `.github/ci/prepare-hosted-runner-disk.mjs`；#974 的 Kali 缓存导出策略见 `agent-harness/runtime-image-cache-policy.mjs`。以上均不宣称任何提速比例，真实前后对照样本仍待线上累积。
 
 - Reverse 家族子套件分流与 base 复用（#975/#976）：`agent-harness/reverse-suite-plan.mjs` 按 `reverse` / `claude` / `pi-om` 三份显式依赖清单计划，shared 与 routing 输入一律保守全跑；`package.json` 仅「新增且不被专项消费的 `ci:unit:*` 测试脚本」可判无影响，依赖/lockfile/脚本删改/删除改名/解析失败/缺 SHA 全部 fail closed。`reverse-runtime-acceptance` 逐项核对计划与实际。`vars.REVERSE_BASE_REUSE=on` 才启用每架构一次的不可变 base artifact 共享，默认保持原路径。以上均不宣称提速比例，真实前后对照样本仍待线上累积。
 
-- Chrome Fuzz ARM 构建层优化（#961 P2/P3）：V8 编译阶段改用按 digest 钉死的 `V8_BUILDER_IMAGE`，不再继承 `${BASE_IMAGE}`，base 的运行时变化不再使下载/GN/编译层失效；运行时阶段仍跟随本次 base。指纹新增 `ci_src_tag`（`src-ci-<fp>`），CI 四个 workflow 只读写该命名空间，`release.yml` 保留 `src-<fp>`，避免 PR 产物让发布跳过真实构建。契约回归见 `agent-harness/image-cache-trust.test.mjs`。真实冷/热/失效三组样本仍待线上累积，本文不宣称提速比例。
+- Chrome Fuzz ARM 构建层优化（#961 P2/P3）：V8 编译阶段改用按 digest 钉死的 `V8_BUILDER_IMAGE`，不再继承 `${BASE_IMAGE}`，base 的运行时变化不再使下载/GN/编译层失效；运行时阶段仍跟随本次 base。指纹新增 `ci_src_tag`（`src-ci-<fp>`）与 `release_src_tag`（`src-release-<fp>`）：CI 四个 workflow 只读写前者，`release.yml` 只读写后者，历史 `src-<fp>` 已无消费方，避免 PR 产物让发布跳过真实构建。契约回归见 `agent-harness/image-cache-trust.test.mjs`。真实冷/热/失效三组样本仍待线上累积，本文不宣称提速比例。
