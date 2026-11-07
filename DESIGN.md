@@ -6,8 +6,6 @@
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
 
-#966 的项目默认模型与任务创建诊断复用现有 settings/RepairFeedback：启用 CLI 不自动替换模型；显式提案 → 项目默认模型 → 全局角色模型的优先级不变。模型候选只取账号已配置名单，提交区显示冲突与配置导航，不自动重试或改写历史快照。见[接口与注意力成本](docs/architecture/09-interface-specs.md#项目默认模型与创建冲突966)；最终 SHA Actions 待验。
-
 ## 1. 设计判断
 
 DeepSonar 的产品形态是“可信执行内核 + 可组合能力”。模型负责理解目标、选择能力、提出计划、读取状态、修正错误和判断业务收敛；内核负责把这些提案变成有权限、有预算、有证据、有账本的执行。
@@ -174,6 +172,8 @@ Gateway 请求额度跨 token/Attempt 累计，含撤销和过期 token；普通
 
 `accepted` 的目标语义是 durable receipt。已有 Job/Attempt/effect 账本仍是事实边界：`effect_pending` 或 `unknown` 不是普通模型错误，`replay_policy=never` 时禁止自动猜测重放。完整 Proposal/Receipt/Settlement 和失败检查点仍是长期演进项。
 
+#951 的[完成失败诊断候选](docs/AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)将 Job/Attempt、当前可归属产出及原回执状态写入既有受权限保护的 Evidence；缺 done 只表示本地未观察到完成，不推定 Agent 故意跳过或平台责任。有产出、接纳回执、持久 done 事件均不能单独授予成功或重放；未知和不可归属字段明确保留未知。候选最终 SHA Actions 待验，不新增终态、权限、配置或控制通道。
+
 A 阶段错误矩阵、冻结契约回放及持久性缺口见 [#776 基线](docs/REPAIR_FEEDBACK_BASELINE.md)；不代表同会话修复或模型质量已验收。
 
 [#776 B](docs/REPAIR_FEEDBACK_DONE_REPAIR.md)仅为 mark_job_done 增加原 Control 通道上的持久拒绝/接受回执与 revision；persisted_deferred 不等于效果结算，#776 限定 C 扩展已交付；通用完成门仍属后续范围，真实模型质量未验证且按本次要求豁免。C0 仅对已获图查询权限的 Hub 无效引用提供 scoped 刷新指引，不引入图版本锁或自动授权。 C1 将既有 Hub complete 预检的完成门缺失项投影为有界反馈，不改变门判定或 Verify 技术结论，也不将该投影当作已接受效果回执。
@@ -295,6 +295,8 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 **凭据先行解析（#757）：** Scheduler 先按项目作用域、active 状态、Provider、模型要求及显式项目白名单形成候选，再从凭据的排他 `agent_cli` 决定运行 CLI。单候选不受项目/全局软偏好误筛；Hub 显式 CLI 是硬约束，冲突仍以 `provider_credential_cli_mismatch` 拒绝。跨 CLI 多候选按项目 `default_agent_cli`、全局 RoleConfig 显式 CLI 消歧；全局种子 `agent_cli=NULL` 表示未指定偏好，用户显式选择 `claude-code` 才是偏好。没有可用偏好且无法唯一解析时返回 `provider_credential_multi_match`；项目默认凭据只在最终候选内选择。readiness 与新 Job 快照复用同一凭据解析函数。项目 RoleConfig 的 `agent_cli` / `model` 已停止写入和暴露并清空，项目运行身份从 Agent 设置声明。CLI 与凭据白名单分别可选收紧，读取不会把当前 active 凭据 ID 自动持久化；显式名单或默认凭据引用删除、停用、不可访问项时返回 `provider_credential_allowlist_stale` 及管理员修复指引，不能静默扩大名单。账号 × CLI 排他、六档并发、密钥隔离、镜像准入及历史 Job 快照不变。
 
 #914 的 #925 服务端切片已交付[项目凭据引用保护切片](docs/architecture/09-interface-specs.md#项目凭据引用保护914-切片)：impact 按项目 scope 过滤，DELETE 独立拒绝全局尚存引用，设置写入在事务内与删除共用凭据行锁并重验全部引用；保留缺键与显式空白名单语义，不改写历史 Job。默认账号显式选择与修复导航由 #929 补齐；已合入 main 的工程证据见[发布基线](docs/RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，后续 SHA 另验。
+
+#966 的项目默认模型与任务创建诊断复用现有 settings/RepairFeedback：启用 CLI 不自动替换模型；显式提案 → 项目默认模型 → 全局角色模型的优先级不变。模型候选只取账号已配置名单，预检与 POST 失败在提交区显示冲突与配置导航，按实际项目隔离，不自动重试或改写历史快照。见[接口与注意力成本](docs/architecture/09-interface-specs.md#项目默认模型与创建冲突966)；最终 SHA Actions 待验。
 
 旧库升级不能从 CLI 值猜测种子来源：本地 `db:rebuild` 对版本未知或低于 v60、目标至少 v60 且需复制旧角色身份的库执行身份复核；需要重置时，只有管理员显式 `--reset-role-identity` 才丢弃旧角色 CLI/项目模型并保留全局模型和历史 Job，须有备份或明确保留 staging。宿主维护升级另按目标计划审批身份重置风险。详见[数据库升级说明](database/README.md#v60-角色身份复核757)及[维护升级说明](deploy/README.md)。
 

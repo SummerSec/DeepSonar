@@ -28,11 +28,23 @@
 
 已启动 stale Recovery Hub 用原 grant 提交 `release_stale` 后正常结束；读取新投影不扩大旧 grant。退出动作不对账、不改变目标状态。原 Hub 存在未知效果时，后继 Hub 仍不能获得执行权；新 wake 继续消耗原根额度和期限。
 
+## 完成失败诊断候选（#951）
+
+完成失败诊断已随 #963 合入并工程收口（2026-11-07 核对）；后续提交按各自最终 SHA Actions 另验，不改变完成门或已有 Job 状态。`executeReal` 在运行器异常、最终语义/runner 失败及本地未观察到 done 时，先向现有受权限保护的 normalized evidence stream 写一条版本化 `run.completion_diagnostic`，再完成归档和保留原失败；正常接纳完成不生成缺失完成诊断。缺 done 使用 `AGENT_COMPLETION_UNOBSERVED`，不把“未观察到”命名为 Agent 故意跳过，也不凭同现的预算/HTTP 错误推定平台责任。
+
+诊断只含 Job/Attempt 身份、最后已持久化工具名称/结果类别/证据游标、宿主拒绝码，以及 Job/evidence/原 completion 回执引用。工具参数、返回正文、summary 和 transcript 尾部不复制进诊断或公开日志。`last_persisted_tool` 的时间为宿主看到持久化完成的时间，不是模型读取或执行 ACK。真实控制错误和运行器异常仍保留原抛出对象/错误分类。
+
+只读统计通过 `artifacts.source_event_id` 与同 Job、同 Attempt 的事件关联 Artifact 版本记录和当前 Finding 投影；历史 Attempt 不能充作本轮产出。没有事件归属的 Job Artifact 独立记为未归属；报告表没有 Attempt 身份，`reports=null` 并说明不可归属，不假造本轮零报告。产出数量不是完成、Verify、效果结清或可重放的证明。
+
+完成回执按原 Job/Attempt、冻结 snapshot digest 和内核 receipt identity 复核，只投影 key/revision/状态/拒绝码，不回显输入。区分未观察到持久回执、拒绝、接纳待结算、done 事件已持久化及未知；done 事件存在仍不是 Job 终态成功。读取/归档失败分别明确记 unavailable，不推断零费用、零产出或无提案；原回执不改写，不换 key 重发、刷新预算或增加 `succeeded_with_warning`/开关。下一步仅由有权用户检查原回执、证据及既有治理恢复门。
+
+实现入口为 [诊断收集器](../apps/scheduler/src/completion-failure-diagnostic.ts)；接线复用 `pnpm ci:unit:executor-real` 与 `pnpm ci:integration:recovery`。单元、真实 executor 替身及隔离 PostgreSQL 回归覆盖异常保留、正常完成不误报、跨 Attempt 产出隔离、拒绝/接纳/事件状态和不可变原回执。这里的源码与断言不代表已执行通过；生产归因、全量记录覆盖及没有 Attempt 归属的报告统计仍未验证。
+
 ## 人工等待超时与未结清效果（#946）
 
 2026-11-06 核对 `c0809b3e`：人工等待已有独立配置和最近 human 事件时钟；但定向对账报告残留时，旧路径只追加“先对账”的文案，随后仍把 Job 写成 failed/human_timeout。本切片在 Job → Attempt 锁下执行检查：有残留或本轮有结算进展保留 waiting_human；最终 UPDATE 还要求该 Job 的全部效果为 settled，覆盖对账扫描排除的 active Attempt 和 planned 效果。被阻断的 Job 不进入 Reaper 的终态返回列表，因此不触发 human_timeout 计数、终态清理或 Canvas 失败推进。
 
-不刷新原 deadline、预算、token 或 Attempt，不自动重放/结算未知效果，不改 Finding、Report 或已接受人工请求。人工等待仍可被已有显式取消/回复流程处理；本切片不证明所有回复恢复路径已满足效果门。`human_messages.delivered_at` 表示人给 Agent 的消息已注入，不是 Agent 请求已经投递给人的证据；“实际通知投递后计时”未在此实现，#946 保持开放。
+不刷新原 deadline、预算、token 或 Attempt，不自动重放/结算未知效果，不改 Finding、Report 或已接受人工请求。人工等待仍可被已有显式取消/回复流程处理；本切片不证明所有回复恢复路径已满足效果门。`human_messages.delivered_at` 表示人给 Agent 的消息已注入，不是 Agent 请求已经投递给人的证据；“实际通知投递后计时”未在此实现；#946 的未结清效果误判核心故障已工程收口，通知计时仍是独立未交付范围。
 
 `pnpm ci:unit:job-lifecycle` / `pnpm ci:integration:job-lifecycle` 的既有入口增加未知效果、部分对账进展、active/inactive Attempt × planned/pending/unknown、多 tick 无变更、显式结算后正常到期的回归。仅合成 SQL/替身，最终 SHA GitHub Actions 待验；本机不运行测试、构建或 typecheck。
 
