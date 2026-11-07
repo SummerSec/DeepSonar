@@ -474,13 +474,65 @@ test("#992 a plan without reasons says so instead of implying a clean skip", () 
   assert.match(text, /\*\*Reverse 子套件\*\*：全部跳过/u);
 });
 
-test("#992 package.json reasons decode to the field that forced a full run", () => {
-  const text = explainRunPlan({
-    mode: "ready-full", status: "ok",
-    reasons: ["reverse:package_json_field_changed:dependencies", "reverse:package_json_script_removed:ci:unit:x"],
+// #992 review P2: the first version of this test hand-built the token
+// `reverse:package_json_field_changed:dependencies`, which the real chain never
+// emits. Build the plan instead so the double prefix
+// (`reverse:` + `reverse_package_json_` + `package_json_*`) is exercised.
+function packageJsonPlan(base, head, path = "package.json") {
+  return buildRunPlan({
+    ...pr,
+    diffBytes: diff(change(path)),
+    suitePaths: SUITE_PATHS,
+    packageJsonBase: typeof base === "string" ? base : JSON.stringify(base),
+    packageJsonHead: typeof head === "string" ? head : JSON.stringify(head),
   });
+}
+
+test("#992 a package.json field change decodes through the real reason chain", () => {
+  const plan = packageJsonPlan({ name: "x", dependencies: { a: "1" } }, { name: "x", dependencies: { a: "2" } });
+  const token = plan.reasons.find((reason) => reason.includes("package_json_field_changed"));
+  assert.equal(token, "reverse:reverse_package_json_package_json_field_changed:dependencies",
+    "the token carries the wrapper prefixes the decoder must strip");
+  const text = explainRunPlan(plan);
+  assert.ok(text.includes(`\`${token}\``), "the raw token stays visible");
   assert.match(text, /package\.json 字段变化（dependencies）：Reverse 全跑/u);
-  assert.match(text, /package\.json 删除了脚本（ci:unit:x）：Reverse 全跑/u);
+  assert.doesNotMatch(text, /未登记原因/u);
+});
+
+test("#992 a removed script and an unparseable package.json decode too", () => {
+  const removed = packageJsonPlan({ scripts: { "ci:unit:a": "node --test a.test.mjs" } }, { scripts: {} });
+  assert.match(explainRunPlan(removed), /package\.json 删除了脚本（ci:unit:a）：Reverse 全跑/u);
+
+  const broken = packageJsonPlan("{not json", "{}");
+  assert.match(explainRunPlan(broken), /package\.json 无法解析：Reverse 全跑/u);
+});
+
+test("#992 a shared Reverse input decodes to the fail-closed reason", () => {
+  const plan = buildRunPlan({ ...pr, diffBytes: diff(change("packages/runtime-sandbox/src/a.ts")), suitePaths: SUITE_PATHS });
+  const token = plan.reasons.find((reason) => reason.endsWith("reverse_shared_inputs_changed"));
+  assert.ok(token, `expected a shared-input reason, got ${plan.reasons.join(",")}`);
+  assert.match(explainRunPlan(plan), /命中 Reverse 共享输入（base\/锁文件\/runtime-sandbox 等）：全跑/u);
+});
+
+// #992 review P2: an empty Reverse suite list has three different causes, so the
+// skip sentence must follow the mode instead of always claiming "proven unrelated".
+test("#992 the skip sentence names the real reason for each mode", () => {
+  const draft = buildRunPlan({
+    ...pr, draft: true,
+    diffBytes: diff(change("packages/runtime-sandbox/src/a.ts")), suitePaths: SUITE_PATHS,
+  });
+  assert.equal(draft.mode, "draft-fast");
+  assert.deepEqual(draft.reverseSuites, []);
+  assert.match(explainRunPlan(draft), /\*\*Reverse 跳过\*\*：[^\n]*（原因：Draft PR 只跑 draft-fast 快速套件）/u);
+
+  const docs = buildRunPlan({ ...pr, diffBytes: diff(change("docs/README.md")), suitePaths: SUITE_PATHS });
+  assert.equal(docs.mode, "docs");
+  assert.match(explainRunPlan(docs), /（原因：纯文档变更）/u);
+
+  const unrelated = buildRunPlan({ ...pr, diffBytes: diff(change("apps/web/src/main.tsx")), suitePaths: SUITE_PATHS });
+  assert.equal(unrelated.mode, "ready-full");
+  assert.deepEqual(unrelated.reverseSuites, []);
+  assert.match(explainRunPlan(unrelated), /（原因：改动都落在 Reverse 输入之外，已证明无关）/u);
 });
 
 test("#992 the CLI writes the explanation to GITHUB_STEP_SUMMARY", () => {

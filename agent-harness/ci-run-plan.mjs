@@ -398,45 +398,93 @@ const REASON_TEXT = Object.freeze({
   chrome_fuzz_inputs_changed: "命中 Chrome 专项或 ARM 固定输入：必跑",
   chrome_fuzz_unknown_input_fail_closed: "存在既非文档也非已知非镜像输入的路径：fail closed 必跑",
   chrome_fuzz_inputs_unchanged: "改动都不影响 ARM 镜像与冒烟：跳过",
-  reverse_docs_paths_only: "仅文档路径：Reverse 三个子套件都不需要跑",
-  reverse_inputs_unchanged: "Reverse 输入未变化：三个子套件都不需要跑",
-  reverse_full_mode: "非 PR 或未启用 tiered：Reverse 保留全量",
+  // Reverse 判定：planReverseSuites 在 reason 前统一加 `reverse_`，
+  // buildRunPlan 再加 `reverse:`，所以真实 token 形如
+  // `reverse:reverse_package_json_package_json_field_changed:dependencies`。
+  reverse_plan_failed_fail_closed: "运行计划未成功：Reverse 三个子套件 fail closed 全跑",
+  reverse_non_pull_request_full: "非 PR 事件：Reverse 保留全量",
+  reverse_docs_only: "纯文档变更：Reverse 三个子套件都不跑",
+  reverse_draft_fast_path: "Draft PR：Reverse 三个子套件都不跑",
+  reverse_full_mode: "未启用 tiered：Reverse 保留全量",
+  reverse_inputs_missing_fail_closed: "缺少变更路径：Reverse fail closed 全跑",
+  reverse_package_json_unknown_fail_closed: "package.json 影响未知：Reverse fail closed 全跑",
+  reverse_unsafe_change_status: "存在删除/改名/复制：无法证明无关，Reverse 全跑",
+  reverse_routing_inputs_changed: "命中 Reverse 路由输入：全跑",
+  reverse_shared_inputs_changed: "命中 Reverse 共享输入（base/锁文件/runtime-sandbox 等）：全跑",
+  reverse_docs_paths_only: "改动都是文档：Reverse 三个子套件都不跑",
+  reverse_inputs_unchanged: "改动都落在 Reverse 输入之外：三个子套件都不跑",
   package_json_missing: "缺少 package.json 内容：无法证明独立，Reverse 全跑",
   package_json_unparseable: "package.json 无法解析：Reverse 全跑",
   package_json_not_object: "package.json 顶层不是对象：Reverse 全跑",
   package_json_scripts_not_object: "package.json 的 scripts 不是对象：Reverse 全跑",
+  package_json_scripts_unchanged: "package.json 只增删了不相关字段之外的内容：不扩大范围",
 });
+
+function explainPackageJson(token) {
+  const [head, ...rest] = token.split(":");
+  const detail = rest.join(":");
+  switch (head) {
+    case "package_json_field_changed": return `package.json 字段变化（${detail}）：Reverse 全跑`;
+    case "package_json_script_removed": return `package.json 删除了脚本（${detail}）：Reverse 全跑`;
+    case "package_json_script_modified": return `package.json 修改了已有脚本（${detail}）：Reverse 全跑`;
+    case "package_json_script_added_consumed": return `新增脚本被专项消费（${detail}）：Reverse 全跑`;
+    case "package_json_script_added_not_test": return `新增脚本不是 ci:unit:* 测试入口（${detail}）：Reverse 全跑`;
+    case "package_json_script_added_not_test_command": return `新增脚本命令不含 --test（${detail}）：Reverse 全跑`;
+    case "package_json_added_test_script": return `新增了独立测试脚本（${detail}）：不扩大范围`;
+    default: return undefined;
+  }
+}
 
 function explainReason(reason) {
   const raw = String(reason ?? "").trim();
   if (!raw) return "";
   if (REASON_TEXT[raw]) return REASON_TEXT[raw];
   if (raw.startsWith("reverse:")) {
+    // `planReverseSuites` 已给 reason 加了 `reverse_` 前缀，这里剥掉再解释，
+    // 否则 `package_json_*` 永远匹配不到（#992 review P2）。
     const inner = raw.slice("reverse:".length);
-    if (inner.startsWith("reverse_suite:")) return `计划执行 Reverse 子套件：${inner.slice("reverse_suite:".length)}`;
-    if (REASON_TEXT[inner]) return REASON_TEXT[inner];
-    if (inner.startsWith("package_json_field_changed:")) return `package.json 字段变化（${inner.slice("package_json_field_changed:".length)}）：Reverse 全跑`;
-    if (inner.startsWith("package_json_script_removed:")) return `package.json 删除了脚本（${inner.slice("package_json_script_removed:".length)}）：Reverse 全跑`;
-    if (inner.startsWith("package_json_script_modified:")) return `package.json 修改了已有脚本（${inner.slice("package_json_script_modified:".length)}）：Reverse 全跑`;
-    if (inner.startsWith("package_json_script_added_consumed:")) return `新增脚本被专项消费（${inner.slice("package_json_script_added_consumed:".length)}）：Reverse 全跑`;
-    if (inner.startsWith("package_json_script_added_not_test:")) return `新增脚本不是测试入口（${inner.slice("package_json_script_added_not_test:".length)}）：Reverse 全跑`;
-    if (inner.startsWith("package_json_script_added_not_test_command:")) return `新增脚本命令不含 --test（${inner.slice("package_json_script_added_not_test_command:".length)}）：Reverse 全跑`;
-    return `Reverse 判定：${inner}`;
+    // `reverse_suite:<name>` 不能再剥 `reverse_`，否则会变成 `suite:<name>`
+    // 而丢掉「这是 Reverse 子套件」的语义。
+    if (inner.startsWith("reverse_suite:")) {
+      return `计划执行 Reverse 子套件：${inner.slice("reverse_suite:".length)}`;
+    }
+    const token = inner.startsWith("reverse_") ? inner.slice("reverse_".length) : inner;
+    // `reverse_package_json_` 又套了一层 `package_json_*`，所以要试两种形态：
+    // `reverse_package_json_package_json_field_changed:dependencies` 的真实字段
+    // 判定在第二次剥离之后。
+    const variants = [token];
+    if (token.startsWith("package_json_package_json_")) variants.push(token.slice("package_json_".length));
+    for (const candidate of variants) {
+      if (REASON_TEXT[`reverse_${candidate}`]) return REASON_TEXT[`reverse_${candidate}`];
+      if (REASON_TEXT[candidate]) return REASON_TEXT[candidate];
+      if (candidate.startsWith("reverse_suite:")) return `计划执行 Reverse 子套件：${candidate.slice("reverse_suite:".length)}`;
+      const pkg = explainPackageJson(candidate);
+      if (pkg) return pkg;
+    }
+    return `Reverse 判定：${token}`;
   }
   if (raw.startsWith("suite:")) return `命中专项 workflow：${raw.slice("suite:".length)}`;
   if (raw.startsWith("classifier_failed:")) return `变更分类失败（${raw.slice("classifier_failed:".length)}）：fail closed 保守全跑`;
   if (raw.startsWith("chrome_fuzz_")) return `Chrome Fuzz ARM 判定：${raw.slice("chrome_fuzz_".length)}`;
+  const pkg = explainPackageJson(raw);
+  if (pkg) return pkg;
   return `未登记原因：${raw}`;
 }
 
 /**
- * #992: the plan explains itself.
+ * #992: why were the Reverse suites skipped?
  *
- * The token list already existed in `reasons`, but it was only visible as a raw
- * comma string in the job log. This renders the same facts as a summary so a
- * reviewer can answer "why did this run / why was it skipped" without reading
- * the routing scripts.
+ * `planReverseSuites` returns an empty suite list in three different situations
+ * (docs-only, Draft fast path, and "inputs proven unrelated"), so a single
+ * canned sentence would misattribute the reason (#992 review P2).
  */
+function reverseSkipReason(plan, reasons) {
+  if (plan.mode === "docs") return "纯文档变更";
+  if (plan.mode === "draft-fast") return "Draft PR 只跑 draft-fast 快速套件";
+  if (reasons.some((reason) => String(reason).endsWith("reverse_docs_paths_only"))) return "改动都是文档";
+  return "改动都落在 Reverse 输入之外，已证明无关";
+}
+
 export function explainRunPlan(plan = {}) {
   const reasons = Array.isArray(plan.reasons) ? plan.reasons : [];
   const required = Array.isArray(plan.requiredSuites) ? plan.requiredSuites : [];
@@ -466,7 +514,7 @@ export function explainRunPlan(plan = {}) {
   lines.push(`**Reverse 子套件**：${reverse.length ? reverse.map((name) => `\`${name}\``).join("、") : "全部跳过"}`);
   if (skippedReverse.length) {
     lines.push("");
-    lines.push(`**Reverse 跳过**：${skippedReverse.map((name) => `\`${name}\``).join("、")}（仅当计划为 PR + tiered 且已证明无关时才会跳过）`);
+    lines.push(`**Reverse 跳过**：${skippedReverse.map((name) => `\`${name}\``).join("、")}（原因：${reverseSkipReason(plan, reasons)}）`);
   }
   lines.push("");
   lines.push("> 跳过判定只缩小范围，不放宽门禁：失败、取消、缺片或应跑误跳过都会被 `ci-summary` / `reverse-runtime-acceptance` 拒绝。");
