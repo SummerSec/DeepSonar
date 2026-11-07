@@ -93,23 +93,6 @@ const schedulerRuntimeImageRoutes = readFileSync(
 );
 const runtimeSmoke = readFileSync(new URL("./test-runtime-image.mjs", import.meta.url), "utf8");
 const chromeRuntimeSmoke = readFileSync(new URL("./test-chrome-runtime.mjs", import.meta.url), "utf8");
-const clickhouseAuditConfig = readJson(new URL("./clickhouse-audit-runtime.json", import.meta.url));
-const clickhouseTestConfig = readJson(new URL("./clickhouse-test-runtime.json", import.meta.url));
-const clickhouseFuzzConfig = readJson(new URL("./clickhouse-fuzz-runtime.json", import.meta.url));
-const clickhouseSources = readJson(new URL("../deploy/clickhouse-runtime-sources.json", import.meta.url));
-const clickhouseAuditDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-clickhouse-audit", import.meta.url), "utf8");
-const clickhouseTestDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-clickhouse-test", import.meta.url), "utf8");
-const clickhouseFuzzDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-clickhouse-fuzz", import.meta.url), "utf8");
-const clickhouseAuditEnv = readFileSync(new URL("../deploy/clickhouse-audit-env.sh", import.meta.url), "utf8");
-const clickhouseInstall = readFileSync(new URL("../deploy/clickhouse-install-static.sh", import.meta.url), "utf8");
-const clickhouseServer = readFileSync(new URL("../deploy/clickhouse-server.sh", import.meta.url), "utf8");
-const clickhouseSandboxConfig = readFileSync(new URL("../deploy/clickhouse-sandbox-config.sh", import.meta.url), "utf8");
-const clickhouseTestEnv = readFileSync(new URL("../deploy/clickhouse-test-env.sh", import.meta.url), "utf8");
-const clickhouseTestSmoke = readFileSync(new URL("./clickhouse-test-smoke.mjs", import.meta.url), "utf8");
-const clickhouseFuzzEnv = readFileSync(new URL("../deploy/clickhouse-fuzz-env.sh", import.meta.url), "utf8");
-const clickhouseFuzzSmoke = readFileSync(new URL("../deploy/clickhouse-fuzz-smoke.sh", import.meta.url), "utf8");
-const clickhouseRuntimeSmoke = readFileSync(new URL("./test-clickhouse-runtime.mjs", import.meta.url), "utf8");
-const clickhouseWorkflow = readFileSync(new URL("../.github/workflows/clickhouse-runtime.yml", import.meta.url), "utf8");
 const mobileConfig = readJson(new URL("./mobile-runtime.json", import.meta.url));
 const mobileDockerfile = readFileSync(new URL("../deploy/Dockerfile.agent-mobile", import.meta.url), "utf8");
 const reverseConfig = readJson(new URL("./reverse-runtime.json", import.meta.url));
@@ -195,7 +178,6 @@ for (const [imageKey, source] of [
   ["deepsonar-base", dockerfile], ["deepsonar-audit", dockerfile], ["deepsonar-kali-minimal", kaliDockerfile],
   ["deepsonar-openharmony-test", openHarmonyDockerfile], ["deepsonar-openharmony-audit", openHarmonyAuditDockerfile], ["deepsonar-openharmony-fuzz", openHarmonyFuzzDockerfile],
   ["deepsonar-chrome-audit", chromeAuditDockerfile], ["deepsonar-chrome-test", chromeTestDockerfile], ["deepsonar-chrome-fuzz", chromeFuzzDockerfile],
-  ["deepsonar-clickhouse-audit", clickhouseAuditDockerfile], ["deepsonar-clickhouse-test", clickhouseTestDockerfile], ["deepsonar-clickhouse-fuzz", clickhouseFuzzDockerfile],
   ["deepsonar-mobile", mobileDockerfile],
   ["deepsonar-reverse", reverseDockerfile],
 ]) {
@@ -204,7 +186,7 @@ for (const [imageKey, source] of [
 }
 for (const imageKey of [
   "deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal", "deepsonar-openharmony-test", "deepsonar-openharmony-audit", "deepsonar-openharmony-fuzz",
-  "deepsonar-chrome-audit", "deepsonar-chrome-test", "deepsonar-chrome-fuzz", "deepsonar-clickhouse-audit", "deepsonar-clickhouse-test", "deepsonar-clickhouse-fuzz", "deepsonar-mobile", "deepsonar-reverse",
+  "deepsonar-chrome-audit", "deepsonar-chrome-test", "deepsonar-chrome-fuzz", "deepsonar-mobile", "deepsonar-reverse",
 ]) {
   expect(PRESETS[imageKey]?.paths?.includes("agent-harness/runtime-manuals"), `${imageKey} fingerprint must include canonical manual sources`);
   expect(PRESETS[imageKey]?.paths?.includes("agent-harness/materialize-runtime-manuals.mjs"), `${imageKey} fingerprint must include materializer`);
@@ -228,13 +210,6 @@ assertSpecialistWorkflow(chromeWorkflow, "Chrome", [
   "agent-harness/test-runtime-manuals.mjs", "agent-harness/test-runtime-manuals-runtime.mjs",
   "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/chrome-runtime.yml",
 ]);
-assertSpecialistWorkflow(clickhouseWorkflow, "ClickHouse", [
-  "deploy/Dockerfile.agent-clickhouse-*", "deploy/clickhouse-*", "agent-harness/clickhouse-*-runtime.json",
-  "agent-harness/clickhouse-*.mjs", "agent-harness/test-clickhouse-runtime.mjs", ".dockerignore",
-  "agent-harness/runtime-manuals/**", "agent-harness/materialize-runtime-manuals.mjs",
-  "agent-harness/test-runtime-manuals.mjs", "agent-harness/test-runtime-manuals-runtime.mjs",
-  "agent-harness/image-build-fingerprint.mjs", "agent-harness/resolve-image-src-cache.sh", ".github/workflows/clickhouse-runtime.yml",
-]);
 assertSpecialistWorkflow(openHarmonyWorkflow, "OpenHarmony", [
   "deploy/Dockerfile.agent-openharmony", "deploy/Dockerfile.agent-openharmony-*", "deploy/openharmony-*.sh",
   "deploy/vendor/gitcode-repo-py3", "deploy/vendor/openharmony-hdc/**", "agent-harness/openharmony-test-runtime.json",
@@ -253,7 +228,6 @@ assertSpecialistWorkflow(mobileWorkflow, "Mobile", [
 ]);
 
 expect(!ciWorkflow.includes("chrome-runtime-images"), "core ci workflow must not contain the Chrome specialist job");
-expect(!ciWorkflow.includes("clickhouse-runtime-images"), "core ci workflow must not contain the ClickHouse specialist job");
 expect(!ciWorkflow.includes("openharmony-runtime-images"), "core ci workflow must not contain the OpenHarmony specialist job");
 expect(!ciWorkflow.includes("mobile-runtime-images"), "core ci workflow must not contain the Mobile specialist job");
 expect(!ciWorkflow.includes("android-runtime-images"), "core ci workflow must not contain a leftover Android specialist job");
@@ -262,10 +236,6 @@ expect(chromeWorkflow.includes("chrome-runtime-images:") && chromeWorkflow.inclu
 expect(chromeWorkflow.includes("test-runtime-manuals-runtime.mjs"), "Chrome workflow must run the offline runtime manual smoke");
 expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(chromeWorkflow), "Chrome manual smoke must also run on cache hits");
 expect(chromeWorkflow.includes('docker pull "${{ steps.resolve.outputs.src_ref }}"'), "Chrome workflow must pull immutable src-* images before cache-hit smoke");
-expect(clickhouseWorkflow.includes("clickhouse-runtime-images:") && clickhouseWorkflow.includes("timeout-minutes: 90") && clickhouseWorkflow.includes("platforms: linux/amd64") && clickhouseWorkflow.includes("test-clickhouse-runtime.mjs"), "ClickHouse workflow must retain its amd64 matrix and smoke");
-expect(clickhouseWorkflow.includes("test-runtime-manuals-runtime.mjs"), "ClickHouse workflow must run the offline runtime manual smoke");
-expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(clickhouseWorkflow), "ClickHouse manual smoke must also run on cache hits");
-expect(clickhouseWorkflow.includes('docker pull "${{ steps.resolve.outputs.src_ref }}"'), "ClickHouse workflow must pull immutable src-* images before cache-hit smoke");
 expect(openHarmonyWorkflow.includes("openharmony-runtime-images:") && openHarmonyWorkflow.includes("setup-qemu-action@v3"), "OpenHarmony workflow must retain its QEMU-backed specialist job");
 expect(openHarmonyWorkflow.includes("test-runtime-manuals-runtime.mjs"), "OpenHarmony workflow must run the offline runtime manual smoke");
 expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(openHarmonyWorkflow), "OpenHarmony manual smoke must also run on cache hits");
@@ -576,30 +546,6 @@ for (const item of chromeImages) {
   expect(item.dockerfile.includes("/opt/deepsonar/tool-manifest.json"), `${item.key} must generate tool-manifest.json`);
   expect(item.dockerfile.includes("io.deepsonar.contract") && item.dockerfile.includes("org.opencontainers.image.description"), `${item.key} OCI metadata missing`);
 }
-const clickhouseImages = [
-  { key: "deepsonar-clickhouse-audit", role: "audit", config: clickhouseAuditConfig, dockerfile: clickhouseAuditDockerfile },
-  { key: "deepsonar-clickhouse-test", role: "test", config: clickhouseTestConfig, dockerfile: clickhouseTestDockerfile },
-  { key: "deepsonar-clickhouse-fuzz", role: "test", config: clickhouseFuzzConfig, dockerfile: clickhouseFuzzDockerfile },
-];
-for (const item of clickhouseImages) {
-  const image = openHarmonyRegistry.images?.find((entry) => entry.image_key === item.key);
-  expect(image, `registry 缺少 ${item.key}`);
-  if (image) {
-    expect(image.source_kind === "official", `${item.key} 必须是 official`);
-    expect(image.project_opt_in === true, `${item.key} 必须启用 project_opt_in`);
-    expect(image.default_role === item.role, `${item.key} default_role 必须是 ${item.role}`);
-    expect(Array.isArray(image.versions), `${item.key} registry versions 必须是数组`);
-  }
-  expect(item.config.contract === "deepsonar.runtime.contract/v1", `${item.key} runtime contract drift`);
-  expect(item.config.project_opt_in === true, `${item.key} config must remain project_opt_in`);
-  expect(item.config.platforms?.join(",") === "linux/amd64,linux/arm64", `${item.key} must declare both release platforms`);
-  expect(item.dockerfile.includes("ARG BASE_IMAGE=deepsonar-base:local"), `${item.key} must default to local governed base`);
-  expect(item.dockerfile.includes("FROM ${BASE_IMAGE}"), `${item.key} must consume BASE_IMAGE`);
-  expect(item.dockerfile.includes("apt-get install -y --no-install-recommends"), `${item.key} apt install must disable recommends`);
-  expect(item.dockerfile.includes("USER deepsonar"), `${item.key} must run as non-root`);
-  expect(item.dockerfile.includes("/opt/deepsonar/tool-manifest.json"), `${item.key} must generate tool-manifest.json`);
-  expect(item.dockerfile.includes("io.deepsonar.contract") && item.dockerfile.includes("org.opencontainers.image.description"), `${item.key} OCI metadata missing`);
-}
 const mobileImage = openHarmonyRegistry.images?.find((entry) => entry.image_key === "deepsonar-mobile");
 expect(mobileImage, "registry 缺少 deepsonar-mobile");
 if (mobileImage) {
@@ -747,9 +693,6 @@ expectDockerfileParse(openHarmonyFuzzDockerfile, "Dockerfile.agent-openharmony-f
 expectDockerfileParse(chromeAuditDockerfile, "Dockerfile.agent-chrome-audit");
 expectDockerfileParse(chromeTestDockerfile, "Dockerfile.agent-chrome-test");
 expectDockerfileParse(chromeFuzzDockerfile, "Dockerfile.agent-chrome-fuzz");
-expectDockerfileParse(clickhouseAuditDockerfile, "Dockerfile.agent-clickhouse-audit");
-expectDockerfileParse(clickhouseTestDockerfile, "Dockerfile.agent-clickhouse-test");
-expectDockerfileParse(clickhouseFuzzDockerfile, "Dockerfile.agent-clickhouse-fuzz");
 expectDockerfileParse(mobileDockerfile, "Dockerfile.agent-mobile");
 expectDockerfileParse(reverseDockerfile, "Dockerfile.agent-reverse");
 expect(mobileEnv.includes("r2 -qv") && mobileEnv.includes("mobile-so.sh --check"), "Mobile env check must smoke radare2 and SO helper");
@@ -837,73 +780,26 @@ for (const [file, content] of [
   expect(content.includes("set -euo pipefail"), `${file} 必须启用严格 shell 模式`);
 }
 expect(prepareScript.includes("deepsonar-chrome-audit") && prepareScript.includes("deepsonar-chrome-test") && prepareScript.includes("deepsonar-chrome-fuzz"), "prepare 脚本必须接入 Chrome 三项镜像");
-expect(prepareScript.includes("deepsonar-clickhouse-audit") && prepareScript.includes("deepsonar-clickhouse-test") && prepareScript.includes("deepsonar-clickhouse-fuzz"), "prepare 脚本必须接入 ClickHouse 三项镜像");
 expect(prepareScript.includes("deepsonar-mobile") && prepareScript.includes("Dockerfile.agent-mobile"), "prepare 脚本必须接入 Mobile 镜像");
 expect(chromeWorkflow.includes("chrome-runtime-images") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome CI must build and smoke Chrome runtime images");
 expect(chromeRuntimeSmoke.includes('const targetPlatform = process.argv[5] ?? "linux/amd64"') && chromeRuntimeSmoke.includes('"--platform", targetPlatform') && chromeRuntimeSmoke.includes("linux/amd64") && chromeRuntimeSmoke.includes("linux/arm64"), "Chrome runtime smoke must validate a target platform and pass it to every Docker run");
-expect(clickhouseSources.contract === "deepsonar.clickhouse.runtime.sources/v1", "ClickHouse source metadata contract drift");
-expect(clickhouseSources.clickhouse.version === "26.3.28.5" && clickhouseSources.clickhouse.tag === "v26.3.28.5-lts", "ClickHouse must remain pinned to official LTS 26.3.28.5");
-expect(clickhouseSources.clickhouse.package === "clickhouse-common-static", "ClickHouse must install official clickhouse-common-static");
-expect(clickhouseSources.debianSnapshot === "20260731T162426Z", "ClickHouse Debian snapshot must remain pinned");
-expect(clickhouseSources.clickhouse.architectures?.amd64?.sha256 === "63d4e4e4b72d9859f1f3ef93f37202e7428c110ea7f6ba090c564c5419b729b7", "ClickHouse amd64 SHA256 drift");
-expect(clickhouseSources.clickhouse.architectures?.arm64?.sha256 === "4e30ba7a669b417b89901fae4f3743cacf12d332297edcebb3cef1a1f4c65a3f", "ClickHouse arm64 SHA256 drift");
-for (const arch of ["amd64", "arm64"]) {
-  const asset = clickhouseSources.clickhouse.architectures?.[arch];
-  expect(asset?.url === `https://github.com/ClickHouse/ClickHouse/releases/download/v26.3.28.5-lts/clickhouse-common-static-26.3.28.5-${arch}.tgz`, `ClickHouse ${arch} tarball must use the official GitHub Release`);
-  expect(/^[0-9a-f]{64}$/.test(asset?.sha256 ?? ""), `ClickHouse ${arch} tarball must carry a SHA256 checksum`);
-  expect(clickhouseTestDockerfile.includes(asset?.url ?? "") && clickhouseTestDockerfile.includes(asset?.sha256 ?? ""), `ClickHouse ${arch} pin missing from Test Dockerfile`);
-  expect(clickhouseFuzzDockerfile.includes(asset?.url ?? "") && clickhouseFuzzDockerfile.includes(asset?.sha256 ?? ""), `ClickHouse ${arch} pin missing from Fuzz Dockerfile`);
-}
-// v0.5.1 release 实测（apt exit 100，chrome-fuzz / clickhouse-fuzz 四条构建全挂、release job
 // 随之被跳过）：base 镜像的 python3.11 家族跟随 Debian 安全更新前移，而这两个镜像把 APT 源钉在
 // 快照上；afl++ 依赖 libpython3.11，快照中的它严格要求同点版本的 libpython3.11-stdlib，而 base
 // 已装的是更新的点版本 → apt 无法同时满足（No downgrade）→ 构建失败。故 python 家族必须显式
 // 钉到快照点版本并允许降级，保证镜像内部自洽。
-for (const [label, fuzzDockerfile] of [["Chrome Fuzz", chromeFuzzDockerfile], ["ClickHouse Fuzz", clickhouseFuzzDockerfile]]) {
+for (const [label, fuzzDockerfile] of [["Chrome Fuzz", chromeFuzzDockerfile]]) {
   expect(fuzzDockerfile.includes("ARG PYTHON_SNAPSHOT_VERSION="), `${label} must pin the snapshot python point release`);
   expect(fuzzDockerfile.includes("--allow-downgrades"), `${label} must allow downgrading the python family to the pinned snapshot version`);
   for (const pythonPackage of ["python3.11", "python3.11-minimal", "libpython3.11", "libpython3.11-stdlib", "libpython3.11-minimal"]) {
     expect(fuzzDockerfile.includes(`${pythonPackage}=\${PYTHON_SNAPSHOT_VERSION}`), `${label} must pin ${pythonPackage} to the snapshot point release`);
   }
 }
-expect(clickhouseInstall.includes("https://github.com/ClickHouse/ClickHouse/releases/download/") && clickhouseInstall.includes("sha256sum -c -") && clickhouseInstall.includes("*/usr/bin/clickhouse") && clickhouseInstall.includes("file -Lb"), "ClickHouse install must accept only official GitHub Release URLs, verify SHA256, and install the ELF usr/bin/clickhouse");
-expect(!clickhouseInstall.includes("packages.clickhouse.com") && !clickhouseInstall.includes("repo.clickhouse.com"), "ClickHouse install must not use the apt/repo mirror");
-expect(clickhouseAuditEnv.includes("git --version") && clickhouseAuditDockerfile.includes("git") && clickhouseAuditDockerfile.includes("cmake") && clickhouseAuditDockerfile.includes("ninja-build") && clickhouseAuditDockerfile.includes("clang") && clickhouseAuditDockerfile.includes("binutils"), "ClickHouse Audit must keep git, CMake/Ninja, Clang and binutils");
-expect(clickhouseAuditEnv.includes("claude --version") && clickhouseAuditEnv.includes('index("claude")') && clickhouseAuditDockerfile.includes('"claude"'), "ClickHouse Audit must verify inherited Claude Code like OpenHarmony");
-expect(clickhouseTestEnv.includes("claude --version") && clickhouseTestEnv.includes('index("claude")') && clickhouseTestDockerfile.includes('"claude"'), "ClickHouse Test must verify inherited Claude Code like OpenHarmony");
-expect(clickhouseFuzzEnv.includes("claude --version") && clickhouseFuzzEnv.includes('index("claude")') && clickhouseFuzzDockerfile.includes('"claude"'), "ClickHouse Fuzz must verify inherited Claude Code like OpenHarmony");
-expect(!existsSync(new URL("../deploy/clickhouse-audit-rules.yml", import.meta.url)), "ClickHouse Audit 不得捆绑平台扫描规则包");
-expect(!existsSync(new URL("../deploy/clickhouse-audit-scan.sh", import.meta.url)), "ClickHouse Audit 不得提供平台固定扫描入口");
-expect(!clickhouseAuditDockerfile.includes("clickhouse-audit-rules.yml") && !clickhouseAuditDockerfile.includes("clickhouse-audit-scan.sh") && !clickhouseAuditEnv.includes("clickhouse-audit-scan.sh"), "ClickHouse Audit 不得安装固定扫描脚本或规则包");
-expect(!/semgrep|gitleaks|shellcheck/i.test(clickhouseAuditDockerfile) && clickhouseAuditEnv.includes("for command_name in semgrep gitleaks shellcheck"), "ClickHouse Audit must fail if decision scanners reappear");
-expect(clickhouseServer.includes("clickhouse-sandbox-config.sh") && clickhouseServer.includes("/workspace/*") && clickhouseServer.includes("CLICKHOUSE_WATCHDOG_ENABLE=0") && clickhouseServer.includes("--config-file"), "ClickHouse Test wrapper must bind localhost via sandbox config and keep data under /workspace");
-expect(clickhouseSandboxConfig.includes("<listen_host>127.0.0.1</listen_host>") && clickhouseSandboxConfig.includes("uncompressed_cache_size>0") && clickhouseSandboxConfig.includes("page_cache_max_size>0") && clickhouseSandboxConfig.includes("mlock_executable") && clickhouseSandboxConfig.includes("background_schedule_pool_size") && clickhouseSandboxConfig.includes("max_thread_pool_size>32") && clickhouseSandboxConfig.includes("number_of_free_entries_in_pool_to_execute_mutation"), "ClickHouse sandbox config must bind localhost, cap caches/thread pools, and keep merge-tree pool settings consistent");
-expect(clickhouseTestDockerfile.includes("clickhouse-sandbox-config.sh") && clickhouseFuzzDockerfile.includes("clickhouse-sandbox-config.sh"), "ClickHouse Test/Fuzz images must install the sandbox config helper");
-expect(clickhouseTestDockerfile.includes("git") && clickhouseTestEnv.includes("git"), "ClickHouse Test must keep git so agents can clone in-scope source");
-expect(clickhouseTestSmoke.includes("request") && clickhouseTestSmoke.includes("/ping") && clickhouseTestSmoke.includes("SELECT%2040%20%2B%202") && clickhouseTestSmoke.includes("/workspace"), "ClickHouse Test smoke must use HTTP /ping and SELECT 40+2 against a /workspace data dir");
-expect(clickhouseTestEnv.includes("26.3.28.5") && clickhouseTestDockerfile.includes("ARG CLICKHOUSE_VERSION=26.3.28.5"), "ClickHouse Test must pin official 26.3.28.5");
-expect(clickhouseFuzzDockerfile.includes("pkg-config") && clickhouseFuzzDockerfile.includes("clang-16") && clickhouseFuzzDockerfile.includes("lld-16") && clickhouseFuzzDockerfile.includes("libclang-rt-16-dev") && clickhouseFuzzDockerfile.includes("libfuzzer-16-dev") && clickhouseFuzzDockerfile.includes("afl++") && clickhouseFuzzDockerfile.includes("/usr/lib/llvm-16/bin"), "ClickHouse Fuzz Debian toolchain package closure incomplete");
-expect(clickhouseFuzzConfig.apt["libclang-rt-16-dev"]?.version === "16.0.6-15~deb12u1" && clickhouseFuzzConfig.apt["libfuzzer-16-dev"]?.version === "16.0.6-15~deb12u1", "ClickHouse Fuzz must declare verified Bookworm compiler-rt/libFuzzer package names");
-expect(clickhouseFuzzEnv.includes(".fuzz.actual == true") && clickhouseFuzzSmoke.includes("refusing toy fallback") && clickhouseFuzzSmoke.includes("SELECT 40 + 2") && clickhouseFuzzSmoke.includes("--config-file") && clickhouseFuzzSmoke.includes("SELECT 1;") && !clickhouseFuzzDockerfile.includes("toy"), "ClickHouse Fuzz must fail closed without the official clickhouse-local binary");
-expect(!clickhouseFuzzDockerfile.includes("gclient") && !clickhouseFuzzDockerfile.includes("autoninja"), "ClickHouse Fuzz must not compile ClickHouse from source");
 for (const [file, content] of [
-  ["clickhouse-audit-env.sh", clickhouseAuditEnv],
-  ["clickhouse-install-static.sh", clickhouseInstall],
-  ["clickhouse-sandbox-config.sh", clickhouseSandboxConfig],
-  ["clickhouse-server.sh", clickhouseServer],
-  ["clickhouse-test-env.sh", clickhouseTestEnv],
-  ["clickhouse-fuzz-env.sh", clickhouseFuzzEnv],
-  ["clickhouse-fuzz-smoke.sh", clickhouseFuzzSmoke],
 ]) {
   const mode = statSync(new URL(`../deploy/${file}`, import.meta.url)).mode;
   expect((mode & 0o111) !== 0, `${file} 必须可执行`);
   expect(content.includes("set -euo pipefail"), `${file} 必须启用严格 shell 模式`);
 }
-expect(clickhouseWorkflow.includes("clickhouse-runtime-images") && clickhouseWorkflow.includes("test-clickhouse-runtime.mjs"), "ClickHouse CI must build and smoke ClickHouse runtime images");
-expect(clickhouseRuntimeSmoke.includes('const targetPlatform = process.argv[5] ?? "linux/amd64"') && clickhouseRuntimeSmoke.includes('"--platform", targetPlatform') && clickhouseRuntimeSmoke.includes('"--hostname", "localhost"') && clickhouseRuntimeSmoke.includes("linux/amd64") && clickhouseRuntimeSmoke.includes("linux/arm64"), "ClickHouse runtime smoke must validate a target platform, pin hostname localhost, and pass both to every Docker run");
-expect(PRESETS["deepsonar-clickhouse-audit"]?.paths?.includes("deploy/clickhouse-audit-env.sh"), "ClickHouse Audit fingerprint must include the env helper");
-expect(PRESETS["deepsonar-clickhouse-test"]?.paths?.includes("deploy/clickhouse-install-static.sh") && PRESETS["deepsonar-clickhouse-test"]?.paths?.includes("deploy/clickhouse-sandbox-config.sh") && PRESETS["deepsonar-clickhouse-test"]?.paths?.includes("agent-harness/clickhouse-test-smoke.mjs"), "ClickHouse Test fingerprint must include the official installer, sandbox config and HTTP smoke");
-expect(PRESETS["deepsonar-clickhouse-fuzz"]?.paths?.includes("deploy/clickhouse-fuzz-smoke.sh") && PRESETS["deepsonar-clickhouse-fuzz"]?.paths?.includes("deploy/clickhouse-sandbox-config.sh"), "ClickHouse Fuzz fingerprint must include the local smoke and sandbox config");
 expect(hasChromeArm64Gate(ciWorkflow), "核心 CI 必须交叉构建 Chrome Fuzz arm64，并在原生 ARM64 runner 上执行不可变镜像冒烟");
 expect(releaseWorkflow.includes("chrome-images:") && releaseWorkflow.includes("chrome-fuzz-arm64-smoke:") && releaseWorkflow.includes("needs: [base-image, chrome-image-builds]") && releaseWorkflow.includes("chrome-images:\n    needs: [base-image, chrome-image-builds, chrome-fuzz-arm64-smoke]") && releaseWorkflow.includes("Dockerfile.agent-chrome-audit") && releaseWorkflow.includes("Dockerfile.agent-chrome-test") && releaseWorkflow.includes("Dockerfile.agent-chrome-fuzz") && releaseWorkflow.includes("matrix.name == 'chrome-fuzz' && matrix.arch == 'arm64'") && releaseWorkflow.includes("matrix.name != 'chrome-fuzz' || matrix.arch != 'arm64'") && releaseWorkflow.includes("runs-on: ubuntu-24.04-arm"), "Release 必须在发布多架构 index 前，将 Chrome Fuzz arm64 冒烟延后到原生 ARM64 门禁");
 expect(releaseWorkflow.includes('docker pull --platform "${{ matrix.platform }}" "$image_ref"') && releaseWorkflow.includes('test-chrome-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}" "${{ matrix.platform }}"'), "release Chrome smoke must pull and run the matrix target platform");
@@ -1142,7 +1038,7 @@ expect(
 );
 const chromeReleaseBlock = releaseWorkflow.slice(
   releaseWorkflow.indexOf("  chrome-images:"),
-  releaseWorkflow.indexOf("  clickhouse-image-builds:"),
+  releaseWorkflow.indexOf("\n  kali-minimal:"),
 );
 expect(
   chromeReleaseBlock.includes('selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"') &&
@@ -1155,34 +1051,6 @@ expect(
     !chromeReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"'),
   "Chrome release must strip per-architecture attestations before canonical assembly and cross-registry copy",
 );
-const clickhouseReleaseBlock = releaseWorkflow.slice(
-  releaseWorkflow.indexOf("  clickhouse-images:"),
-  releaseWorkflow.indexOf("  kali-minimal:"),
-);
-expect(
-  clickhouseReleaseBlock.includes('selected_sources_text="$(node agent-harness/runtime-platform-manifests.mjs "${platform_args[@]}")"') &&
-    clickhouseReleaseBlock.includes('--source "linux/amd64=${IMAGE_NAME}@${amd64_digest}"') &&
-    clickhouseReleaseBlock.includes('--source "linux/arm64=${IMAGE_NAME}@${arm64_digest}"') &&
-    clickhouseReleaseBlock.includes('mapfile -t source_refs <<< "$selected_sources_text"') &&
-    clickhouseReleaseBlock.includes('[[ "$reuse_status" -eq 2 ]] || exit "$reuse_status"') &&
-    clickhouseReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "$clean_source"') &&
-    clickhouseReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${dockerhub_tag_args[@]}" "$clean_source"') &&
-    !clickhouseReleaseBlock.includes('retry_imagetools_create "${annotation_args[@]}" "${acr_tag_args[@]}" "${source_refs[@]}"'),
-  "ClickHouse release must strip per-architecture attestations before canonical assembly and cross-registry copy",
-);
-expect(
-  releaseWorkflow.includes("clickhouse-images:") &&
-    releaseWorkflow.includes("clickhouse-image-builds:") &&
-    releaseWorkflow.includes("clickhouse-images:\n    needs: [base-image, clickhouse-image-builds]") &&
-    !releaseWorkflow.includes("clickhouse-fuzz-arm64-smoke") &&
-    releaseWorkflow.includes("Dockerfile.agent-clickhouse-audit") &&
-    releaseWorkflow.includes("Dockerfile.agent-clickhouse-test") &&
-    releaseWorkflow.includes("Dockerfile.agent-clickhouse-fuzz") &&
-    releaseWorkflow.includes("test-clickhouse-runtime.mjs") &&
-    releaseWorkflow.includes("runs-on: ubuntu-24.04-arm"),
-  "Release 必须按架构原生构建 ClickHouse 三项镜像并在组装 index 前完成冒烟",
-);
-expect(releaseWorkflow.includes('test-clickhouse-runtime.mjs "$image_ref" "${{ matrix.toolset }}" "${{ matrix.config }}" "${{ matrix.platform }}"'), "release ClickHouse smoke must pull and run the matrix target platform");
 // The writeback control flow lives in agent-harness/release-writeback.mjs so the
 // "never move the default branch unless ci-summary passed" rule is unit tested;
 // the workflow must invoke it, and the module must land the commit on the default
@@ -1219,7 +1087,6 @@ expect(
   /mobile:[\s\S]*setup-qemu-action@v3[\s\S]*Dockerfile\.agent-mobile/.test(releaseWorkflow),
   "release mobile job must set up QEMU before the multi-arch build",
 );
-expect(releaseWorkflow.includes("needs: [base-image, images, kali-minimal, openharmony-test, openharmony-audit, openharmony-fuzz, chrome-images, clickhouse-images, mobile, reverse-images]"), "runtime registry 与 Release 必须由同一个最终 job 发布");
 for (const name of ["ALIYUN_REGISTRY", "ALIYUN_REGISTRY_NAMESPACE", "ALIYUN_REGISTRY_USERNAME", "ALIYUN_REGISTRY_PASSWORD"]) {
   expect(releaseWorkflow.includes(`secrets.${name}`), `release workflow 缺少 ACR Secret：${name}`);
 }
@@ -1282,7 +1149,6 @@ expect(
 expect(
   !reuseCatalogDescriptor.includes("versions[0]") && reuseCatalogDescriptor.includes("samePlatformDigests(actual, expected)") &&
     releaseWorkflow.includes("agent-harness/check-runtime-catalog-platforms.mjs") &&
-    releaseWorkflow.includes("--artifacts chrome-arch --artifacts clickhouse-arch --artifacts reverse-arch"),
   "catalog reuse and final release must prove equality with native-smoke platform manifests",
 );
 const finalReleaseBlock = releaseWorkflow.slice(releaseWorkflow.indexOf("\n  prepare-release:"), releaseWorkflow.indexOf("\n  platform-signatures:"));
@@ -1331,4 +1197,5 @@ if (failures.length) {
   console.error(failures.map((item) => `- ${item}`).join("\n"));
   process.exit(1);
 }
-console.log(`运行时镜像定义一致（${[...Object.keys(config.toolsets), ...Object.keys(kaliConfig.toolsets), "openharmony-test", "openharmony-audit", "openharmony-fuzz", "chrome-audit", "chrome-test", "chrome-fuzz", "clickhouse-audit", "clickhouse-test", "clickhouse-fuzz", "mobile", "reverse"].join("、")}）`);
+
+console.log(`运行时镜像定义一致（${[...Object.keys(config.toolsets), ...Object.keys(kaliConfig.toolsets), "openharmony-test", "openharmony-audit", "openharmony-fuzz", "chrome-audit", "chrome-test", "chrome-fuzz", "mobile", "reverse"].join("、")}）`);

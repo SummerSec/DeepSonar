@@ -114,6 +114,6 @@ pnpm ci:images
 
 `reverse-images` 只有在双架构真实门禁成功后，才从这两个已测试 child manifest 组装 canonical index，写 `reverse.json` 并走既有 GHCR / 已配置 Docker Hub / 已配置 ACR 镜像发布和 inspect 证据链。已有版本标签只能复用相同的 index digest，不能因为子 payload 一致而移动到另一个 wrapper digest；无法 inspect、冲突或已配置通道失败一律阻止生成完整发布清单。
 
-最终 Release job 包含 reverse 依赖、离线手册和 catalog/platform payload 一致性检查（7 个专项产品、14 个原生 child），生成器继续强制要求 `reverse.json`。不得以空 descriptor、手写 digest、复制其它产品记录或删必需产品绕过首次发布。
+最终 Release job 包含 reverse 依赖、离线手册和 catalog/platform payload 一致性检查（4 个专项产品、8 个原生 child），生成器继续强制要求 `reverse.json`。不得以空 descriptor、手写 digest、复制其它产品记录或删必需产品绕过首次发布。
 
 v0.5.5 Release（run [38506851988](https://github.com/SummerSec/DeepSonar/actions/runs/38506851988)、附件 `deepsonar-reverse-evidence-0.5.5.tar.gz`）已满足关闭条件：双架构 native + `identity_kind=published-manifest` 真实 Job（success/verify/failure/cancel/timeout；独立 Verify `final_outcome=rework`）、canonical index digest 与三通道 inspect、registry `versions` 回写，以及官方 catalog → trusted 准入边界（见 `reverse-runtime-project-opt-in.test.ts`）。项目须显式启用；**不**自动改全局默认。

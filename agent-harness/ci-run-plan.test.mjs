@@ -31,7 +31,7 @@ const SUITE_PATHS = loadSuitePaths(ROOT);
 const SUITES = Object.keys(SUITE_PATHS).sort();
 
 test("specialist suite paths are read from the workflows that own them", () => {
-  assert.deepEqual(SUITES, ["chrome", "clickhouse", "mobile", "openharmony", "reverse"]);
+  assert.deepEqual(SUITES, ["chrome", "mobile", "openharmony", "reverse"]);
   for (const suite of SUITES) {
     assert.ok(SUITE_PATHS[suite].length > 3, `${suite} must keep its declared filter`);
     assert.ok(!SUITE_PATHS[suite].includes("**"), `${suite} must not be widened to a catch-all`);
@@ -66,7 +66,6 @@ test("each specialist suite is hit by its own inputs and missed by unrelated one
   const allMatched = matchSuites(SUITE_PATHS, [
     "packages/runtime-sandbox/src/sandbox.ts",
     "deploy/Dockerfile.chrome-audit",
-    "deploy/Dockerfile.clickhouse-test",
     "deploy/Dockerfile.mobile-test",
     "deploy/Dockerfile.openharmony-test",
   ]);

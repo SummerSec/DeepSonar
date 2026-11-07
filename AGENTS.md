@@ -151,8 +151,9 @@ pnpm ci:images
 - 连续推送时 Draft 每次都有实际快检；同一 SHA 从 Draft 转 Ready 会重新出计划并跑完整验收，不需要再推空 commit。旧 run 的绿灯不能顶替最新候选。
 - 手动运行某个工作流强制该工作流完整验收；`push@main` 不进入快路。
 - #961 的核心 Chrome Fuzz ARM build/native smoke 由同一运行计划决定：tiered Ready PR 仅在全部改动属于已核对的非镜像业务输入或原文档白名单时可跳过两项；Chrome/base/路由输入、未知路径、空 diff 或分析失败保守必跑。`ci-summary` 必须核对计划与结果一致，缺输出、失败、取消或意外跳过不能放行；main、手动运行与 `CI_PR_MODE=full` 仍完整验收。
-- 专家套件（reverse / chrome / clickhouse / mobile / openharmony）的路径基线直接读各自 workflow 的 `pull_request.paths`，因此清单不会与计划漂移。
-- 五个专家工作流各自跑同一个 `ci-run-plan.mjs`（不是五份判断），重活矩阵只在 `mode == ready-full` 时启动；`push@main` 与手动运行仍是完整验收。专家套件的 PR 触发保留，尚未迁移到 `ci.yml` 的 `workflow_call` 统一入口。
+- 专家套件（reverse / chrome / mobile / openharmony）的路径基线直接读各自 workflow 的 `pull_request.paths`，因此清单不会与计划漂移。
+
+- 四个专家工作流各自跑同一个 `ci-run-plan.mjs`（不是四份判断），重活矩阵只在 `mode == ready-full` 时启动；`push@main` 与手动运行仍是完整验收。专家套件的 PR 触发保留，尚未迁移到 `ci.yml` 的 `workflow_call` 统一入口。
 - 改分类器、汇总或本套路由本身时按高风险改动处理：需要独立评审与完整验收，不能用自己的快检规则给自己放行。
 - 出现漏测、重复触发或 required check 错配时，先把 `CI_PR_MODE` 设回 `full`（或删掉变量），再修路由。
 - 现状核对（2026-11-03）：`main` 的 active ruleset `main required ci-summary` 要求 `ci-summary`，另有 AI 工具分支前缀规则；没有 merge queue。required check 不替代最终 SHA 的全部适用检查或人工合并授权。启用 merge queue 必须同时加 `merge_group: checks_requested` 并验队列 SHA，**没有队列就不要先加 `merge_group`**（死配置）。

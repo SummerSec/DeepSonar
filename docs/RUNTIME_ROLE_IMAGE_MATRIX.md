@@ -10,9 +10,9 @@
 
 | 条件 | 注入内容 |
 | --- | --- |
-| **任意角色**，且冻结镜像属于 14 个官方 key | `### Runtime tool manuals (Scheduler policy)`：先读 `/opt/deepsonar/manuals/index.json`，再按任务读取具体章节；手册不授予权限 |
+| **任意角色**，且冻结镜像属于 11 个官方 key | `### Runtime tool manuals (Scheduler policy)`：先读 `/opt/deepsonar/manuals/index.json`，再按任务读取具体章节；手册不授予权限 |
 | 角色 `test`，或 `verify` 且镜像 ≠ `deepsonar-base` | `### Runtime test toolchain (Scheduler policy)`（禁止 Job 内 bootstrap JDK/Maven/…；缺工具按角色证据边界报告） |
-| **任意角色**，且冻结镜像属于官方专项 key（见下表「Scheduler 边界」列） | 对应 chrome / clickhouse / openharmony / mobile / reverse 专项能力边界 |
+| **任意角色**，且冻结镜像属于官方专项 key（见下表「Scheduler 边界」列） | 对应 chrome / openharmony / mobile / reverse 专项能力边界 |
 | 角色走 `deepsonar-base` / `deepsonar-audit` / `deepsonar-kali-minimal` 且非上表 test/verify 动态路径 | 仍注入短索引提示，不注入整本手册或专项能力百科 |
 
 专项 key 列表锁定在 `SPECIALTY_RUNTIME_IMAGE_POLICIES`（`apps/scheduler/src/domains/role-runtime-snapshot/runtime-image-boundary-policy.ts`）。
@@ -43,21 +43,18 @@
 | `image_key` | 默认适用角色 | 工具摘要（预装） | 明确不包含 | 缺能力纪律 | Scheduler 边界 |
 | --- | --- | --- | --- | --- | --- |
 | `deepsonar-base` | explore / analyze / review / code / hub / verify / report | Node 22 + 受治理通用 CLI 能力 id（`text.search.rg` / `json.query.jq` / `source.control.git` / `file.inspect.file` / `evidence.hash.sha256sum` / `execution.timeout` / `archive.extract` 等，见 #611） | JDK/Maven/Go/Rust 完整矩阵、Kali metapackage、专项浏览器/DB/设备协议；`fd`/`yq`/`diff`/`patch` phase 1 仅目录登记 | 缺命令 → 说明限制 / `capability_unavailable`；动态 verify 不得用静态叙述冒充 runtime | 无专项块（verify+非 base 才有 Runtime test 块） |
-| `deepsonar-audit` | audit | Base 受治理 CLI 能力 + binutils 等审计辅助；**不**预装 Semgrep/gitleaks/shellcheck 决策扫描器 | SAST/密钥扫描器、Chrome/ClickHouse/设备协议全家桶；`fd`/`yq`/`diff`/`patch` 未钉死 | 同左；Finding 仍须可复查证据；CLI 输出不得直接升格 Finding | 无专项块 |
+| `deepsonar-audit` | audit | Base 受治理 CLI 能力 + binutils 等审计辅助；**不**预装 Semgrep/gitleaks/shellcheck 决策扫描器 | SAST/密钥扫描器、Chrome/设备协议全家桶；`fd`/`yq`/`diff`/`patch` 未钉死 | 同左；Finding 仍须可复查证据；CLI 输出不得直接升格 Finding | 无专项块 |
 | `deepsonar-kali-minimal` | test（默认） | Temurin 8/11/17 + Maven 3.9.16、Python 3.10–3.14+uv、Go、Rust；无预置 `.m2` | Kali metapackage/GUI、DinD、完整 DB/Compose | Runtime test 纪律；缺工具按角色证据边界报告 | Runtime test（test / 动态 verify） |
 | `deepsonar-chrome-test` | 项目覆盖 test/verify/… | 钉死 Chromium + CDP（playwright-core connectOverCDP） | 第二套 Chromium、完整 Playwright browsers、Selenium Grid、桌面 GUI | CDP/浏览器不可用 → 按角色证据边界报告；禁止源码叙述冒充 DOM | **任意角色**注入 Chrome CDP |
 | `deepsonar-chrome-audit` | 项目覆盖 audit/… | git + Clang/LLVM + binutils；Agent 自选检查 | 固定扫描脚本/规则包、Chromium 浏览器本体、决策扫描器 | 缺工具 → 按角色证据边界报告；禁止把静态 C++ 当浏览器结果 | **任意角色**注入 Chrome/C++ audit |
 | `deepsonar-chrome-fuzz` | 项目覆盖 test/… | 钉死 V8 `d8` + libFuzzer/AFL++/sanitizer | toy d8、第二套 V8、完整 Chrome 浏览器 | 缺 d8/构建失败 → 按角色证据边界报告 | **任意角色**注入 Chrome/V8 fuzz |
-| `deepsonar-clickhouse-test` | 项目覆盖 test/verify/… | 钉死官方 ClickHouse LTS（server/client/local） | apt/非官方包、DinD、toy SQL harness | 官方二进制不可用 → 按角色证据边界报告 | **任意角色**注入 ClickHouse official |
-| `deepsonar-clickhouse-audit` | 项目覆盖 audit/… | git + CMake/Ninja + Clang/LLVM + binutils | 固定扫描脚本、本镜像内 CH server、决策扫描器 | 缺工具 → 按角色证据边界报告 | **任意角色**注入 ClickHouse/C++ audit |
-| `deepsonar-clickhouse-fuzz` | 项目覆盖 test/… | 官方 clickhouse-local + Clang sanitizer + AFL++/libFuzzer | toy harness 冒充官方 binary | 缺官方 binary → 按角色证据边界报告 | **任意角色**注入 ClickHouse fuzz |
 | `deepsonar-openharmony-test` | 项目覆盖 test/… | 源码同步/构建 + 官方 `hdc` 设备协议 | DevEco/完整 SDK、把 gdb/strace 当设备协议 | `hdc list targets` 空 → 按角色证据边界报告 | **任意角色**注入 OH hdc |
 | `deepsonar-openharmony-audit` | 项目覆盖 audit/… | 主机 Clang/tidy/cppcheck/sparse + ASan/UBSan | 设备协议 hdc、密钥扫描器、DevEco | 缺主机工具 → 按角色证据边界报告；禁止把构建日志写成设备结果 | **任意角色**注入 OH host audit |
 | `deepsonar-openharmony-fuzz` | 项目覆盖 test/… | 主机 libFuzzer/AFL++ + sanitizer | DevEco、toy harness | 缺工具链 → 按角色证据边界报告 | **任意角色**注入 OH host fuzz |
 | `deepsonar-mobile` | 项目覆盖 audit/test/… | Android JADX/apktool/…/rust-asc（droidasc 兼容；droidasc-python 显式回退）/apkcheckpack/adb/Frida；iOS libimobiledevice；OH HAP/hdc；`.so` radare2/LIEF | MobSF/jadx-gui/Burp/IDA/Ghidra/DevEco/第三方 MCP/mitmproxy；禁止 droidasc `--gui` | 空 adb/hdc/idevice → 按角色证据边界报告；勿用 JADX/droidasc 叙述冒充设备/流量 | **任意角色**注入 Mobile protocols |
 | `deepsonar-reverse` | 项目覆盖 audit/analyze/… | 钉死 REA CLI 6.4.0 + Ghidra 12.1.4 + 完整 JDK 21；能力 id `binary.rea.cli`；amd64 实测见 `reverse-amd64-measurements.json`；压缩预算暂定 2800 MiB；Job 建议 ≥4 GiB；schema 官方目录种子（project_opt_in，#691 项目可排除）；v0.5.5 digest `sha256:45b53827…` 已回写 registry | MCP、常驻 REA、Hopper/IDA、动态调试；非全局默认；不进入 mobile；原生双架构 CI/真实 Job/三通道发布已实证（#718 关闭） | REA/Ghidra 不可用 → 按角色证据边界报告；勿用 binutils/radare2 冒充深度反编译 | **任意角色**注入 Reverse / REA+Ghidra |
 
-Harness 出处：`agent-harness/chrome-*-runtime.json`、`clickhouse-*-runtime.json`、`mobile-runtime.json`、`reverse-runtime.json`、`openharmony-test-runtime.json`、`kali-minimal-runtime.json`、`runtime-images.json`；Dockerfile 头注释、`tool-manifest.json` 与 `runtime-manuals/catalog.json` 为构建期契约。完整手册在镜像内固定为 `/opt/deepsonar/manuals/`，Worker 按 `index.json` 定位当前镜像的工具章节。
+Harness 出处：`agent-harness/chrome-*-runtime.json`、`mobile-runtime.json`、`reverse-runtime.json`、`openharmony-test-runtime.json`、`kali-minimal-runtime.json`、`runtime-images.json`；Dockerfile 头注释、`tool-manifest.json` 与 `runtime-manuals/catalog.json` 为构建期契约。完整手册在镜像内固定为 `/opt/deepsonar/manuals/`，Worker 按 `index.json` 定位当前镜像的工具章节。
 
 ## Hub 目录与操作者 UI
 

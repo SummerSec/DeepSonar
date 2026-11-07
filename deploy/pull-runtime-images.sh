@@ -4,7 +4,7 @@ set -euo pipefail
 registry_file="deploy/runtime-image-registry.json"
 # Pull by each product's catalog version/digest, never by DEEPSONAR_IMAGE_TAG.
 # Platform 0.2.10 does not imply kali:0.2.10 when that product's fingerprint
-# was unchanged. Chrome / ClickHouse specialist keys use the same
+# was unchanged. Chrome specialist keys use the same
 # immutable digest-only path. Empty bundled versions stay skipped until
 # Release records a real amd64/arm64 artifact.
 temp_file=""
