@@ -134,6 +134,7 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM jobs WHERE project_id = ${projectId}`;
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
       await deleteProjectsLeavingAuditShells(sql, [projectId]);
+      await sql.end({ timeout: 5 });
     }
   });
 }

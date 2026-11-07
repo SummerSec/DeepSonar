@@ -59,6 +59,7 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM canvases WHERE project_id = ${projectId}`;
       await deleteProjectsLeavingAuditShells(sql, [projectId]);
       await app.close();
+      await sql.end({ timeout: 5 });
     }
   });
 }
