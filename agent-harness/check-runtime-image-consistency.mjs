@@ -32,6 +32,10 @@ function readJson(source) {
 }
 
 const config = readJson(new URL("./runtime-images.json", import.meta.url));
+const baseCliPackage = readJson(new URL("./base-cli-runtime/package.json", import.meta.url));
+const baseCliLock = readJson(new URL("./base-cli-runtime/package-lock.json", import.meta.url));
+const baseExtensionPackage = readJson(new URL("./pi-extensions-base-runtime/package.json", import.meta.url));
+const baseExtensionLock = readJson(new URL("./pi-extensions-base-runtime/package-lock.json", import.meta.url));
 const dockerfile = readFileSync(new URL("../deploy/Dockerfile.agent", import.meta.url), "utf8");
 const localDefinition = readFileSync(new URL("./image.mjs", import.meta.url), "utf8");
 const writeManifest = readFileSync(new URL("./write-tool-manifest.mjs", import.meta.url), "utf8");
@@ -274,7 +278,9 @@ expect(claudeManifest?.integrity === "sha512-/gx8byG8VOm4YoNuT5tal/Ov5Z5oydJzZkm
 expect(kaliConfig.npm[claudePackage]?.integrity === claudeManifest?.integrity, "base/Kali Claude Code integrity must match");
 for (const imageDockerfile of [dockerfile, kaliDockerfile]) {
   expect(imageDockerfile.includes(`ARG CLAUDE_CODE_INTEGRITY=${claudeManifest.integrity}`), "Claude Code integrity must be pinned in Docker ARG");
-  expect(imageDockerfile.includes("npm view @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} dist.integrity"), "Claude Code integrity must be verified during the image build");
+  if (imageDockerfile === kaliDockerfile) {
+    expect(imageDockerfile.includes("npm view @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} dist.integrity"), "Kali Claude Code integrity must be verified during the image build");
+  }
 }
 const piPackage = "@earendil-works/pi-coding-agent";
 const piManifest = config.npm[piPackage];
@@ -282,9 +288,54 @@ expect(piManifest?.version === "1.4.0", "Pi Coding Agent version must remain pin
 expect(piManifest?.integrity === "sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==", "Pi Coding Agent integrity drift");
 const piInstallRef = `${piPackage}@\${PI_CODING_AGENT_VERSION}`;
 const piIntegrityCheck = `npm view ${piInstallRef} dist.integrity`;
-expect(dockerfile.includes("ARG PI_CODING_AGENT_VERSION=1.4.0") && dockerfile.includes(piInstallRef), "Pi Coding Agent must be installed from the pinned Docker ARG");
+expect(dockerfile.includes(`ARG PI_CODING_AGENT_VERSION=${piManifest.version}`), "base Pi Coding Agent Docker ARG must remain pinned");
 expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_VERSION=1.4.0") && kaliDockerfile.includes(piInstallRef), "Kali Pi Coding Agent must be installed from the pinned Docker ARG");
-expect(dockerfile.includes("ARG PI_CODING_AGENT_INTEGRITY=sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==") && dockerfile.includes(piIntegrityCheck), "Pi Coding Agent integrity must be verified during the base image build");
+expect(dockerfile.includes(`ARG PI_CODING_AGENT_INTEGRITY=${piManifest.integrity}`), "base Pi Coding Agent Docker ARG integrity must remain pinned");
+const expectBaseLock = (manifest, lock, name, entry) => {
+  const locked = lock.packages?.[`node_modules/${name}`];
+  expect(lock.lockfileVersion === 3 && manifest.dependencies?.[name] === entry.version
+    && lock.packages?.[""]?.dependencies?.[name] === entry.version && locked?.version === entry.version
+    && locked?.integrity === entry.integrity
+    && locked?.resolved === `https://registry.npmjs.org/${name}/-/${name.split("/").at(-1)}-${entry.version}.tgz`,
+  `${name} must have the exact declared version/resolved/SRI in its private complete lock`);
+};
+for (const [name, entry] of [[claudePackage, claudeManifest], [piPackage, piManifest]]) {
+  expectBaseLock(baseCliPackage, baseCliLock, name, entry);
+}
+for (const file of ["package.json", "package-lock.json"]) {
+  expect(dockerfile.includes(`COPY agent-harness/base-cli-runtime/${file} /opt/deepsonar/base-cli/${file}`), "base CLI must consume its reviewed private manifest and lock");
+}
+const cliInstallLine = dockerfile.split(/\r?\n/).find((line) => line.includes("npm ci") && line.includes("--prefix /opt/deepsonar/base-cli"));
+expect(cliInstallLine?.trim() === 'npm ci --omit=dev --no-audit --no-fund --prefix /opt/deepsonar/base-cli; \\', "base CLI must actually install the frozen lock with lifecycle scripts enabled and no dry-run");
+expect(dockerfile.includes('node /opt/deepsonar/base-cli-install.mjs "$(npm root -g)" /opt/deepsonar/base-cli/package-lock.json /usr/local/bin "$TARGETARCH"'), "base CLI must verify installed native identities after its standard global hoist");
+const cliLockCommand = dockerfile.match(/node -e '([^']*BASE_CLI_LOCK_IDENTITY_MISMATCH[^']*)' "\$CLAUDE_CODE_VERSION" "\$CLAUDE_CODE_INTEGRITY" "\$PI_CODING_AGENT_VERSION" "\$PI_CODING_AGENT_INTEGRITY";\s*\\/);
+expect(Boolean(cliLockCommand), "base CLI lock predicate and all four runtime Docker ARGs must be bound in the same command");
+if (cliLockCommand) {
+  const cliArgs = [claudeManifest.version, claudeManifest.integrity, piManifest.version, piManifest.integrity];
+  const checkCliLock = (lock, args = cliArgs) => new Script(cliLockCommand[1]).runInNewContext({
+    process: { argv: ["node", ...args] },
+    require: (name) => {
+      if (name !== "/opt/deepsonar/base-cli/package-lock.json") throw new Error(`unexpected base CLI lock path: ${name}`);
+      return lock;
+    },
+  });
+  checkCliLock(baseCliLock);
+  for (const name of [claudePackage, piPackage]) {
+    for (const patch of [{ version: "0.0.0" }, { integrity: "sha512-unadmitted" }]) {
+      const changed = { ...baseCliLock, packages: { ...baseCliLock.packages, [`node_modules/${name}`]: { ...baseCliLock.packages[`node_modules/${name}`], ...patch } } };
+      let rejected = false;
+      try { checkCliLock(changed); } catch (error) { rejected = error.message === "BASE_CLI_LOCK_IDENTITY_MISMATCH"; }
+      expect(rejected, `base CLI install predicate must reject changed ${name} ${Object.keys(patch)[0]}`);
+    }
+  }
+  for (const index of [0, 1, 2, 3]) {
+    const args = [...cliArgs];
+    args[index] = index % 2 ? "sha512-unadmitted" : "0.0.0";
+    let rejected = false;
+    try { checkCliLock(baseCliLock, args); } catch (error) { rejected = error.message === "BASE_CLI_LOCK_IDENTITY_MISMATCH"; }
+    expect(rejected, `base CLI install predicate must reject changed Docker ARG ${index + 1}`);
+  }
+}
 expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_INTEGRITY=sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==") && kaliDockerfile.includes(piIntegrityCheck), "Kali Pi Coding Agent integrity must be verified during the image build");
 const sharedPiExtensions = readFileSync(new URL("../packages/shared-types/src/pi-extensions.ts", import.meta.url), "utf8");
 const basePiWeb = config.piExtensions?.["pi-web-access"];
@@ -313,12 +364,19 @@ expect(Array.isArray(kaliOm?.compatible_image_keys) && kaliOm.compatible_image_k
 expect(sharedPiExtensions.includes('id: "pi-observational-memory"') && sharedPiExtensions.includes(baseOm.version) && sharedPiExtensions.includes(baseOm.integrity) && sharedPiExtensions.includes('entry: "src/index.ts"'), "shared-types OM registry drifted from runtime-images.json");
 expect(dockerfile.includes(`ARG PI_OBSERVATIONAL_MEMORY_VERSION=${baseOm.version}`) && dockerfile.includes(`ARG PI_OBSERVATIONAL_MEMORY_INTEGRITY=${baseOm.integrity}`), "Dockerfile.agent must pin OM");
 expect(kaliDockerfile.includes(`ARG PI_OBSERVATIONAL_MEMORY_VERSION=${kaliOm.version}`) && kaliDockerfile.includes(`ARG PI_OBSERVATIONAL_MEMORY_INTEGRITY=${kaliOm.integrity}`), "Kali Dockerfile must pin OM");
-expect(dockerfile.includes("npm view pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION} dist.integrity") && dockerfile.includes("pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION}"), "Dockerfile.agent must integrity-check and install OM");
+expectBaseLock(baseExtensionPackage, baseExtensionLock, baseOm.package, baseOm);
+for (const file of ["package.json", "package-lock.json"]) {
+  expect(dockerfile.includes(`COPY agent-harness/pi-extensions-base-runtime/${file} /opt/deepsonar/pi-extensions/${file}`), "base OM must consume its reviewed private manifest and lock");
+}
+const omInstallLine = dockerfile.split(/\r?\n/).find((line) => line.includes("npm ci") && line.includes("--prefix /opt/deepsonar/pi-extensions"));
+expect(omInstallLine?.trim() === 'npm ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix /opt/deepsonar/pi-extensions; \\', "base OM must actually install its frozen lock with lifecycle scripts disabled and no dry-run");
 expect(kaliDockerfile.includes("npm view pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION} dist.integrity") && kaliDockerfile.includes("pi-observational-memory@${PI_OBSERVATIONAL_MEMORY_VERSION}"), "Kali Dockerfile must integrity-check and install OM");
 for (const [name, source] of [["base/audit", dockerfile], ["Kali", kaliDockerfile]]) {
   expect(source.includes(`node -e '${OM_INSTALL_IDENTITY_CHECK}'`), `${name} must verify the installed canonical OM lock identity`);
-  expect(/npm install --omit=dev --ignore-scripts --save-exact[^\n]+\\\r?\n\s+pi-observational-memory/u.test(source), `${name} must install the exact OM version with lifecycle scripts disabled before the identity check`);
-  expect(!/npm install[^\n]*(?:--force|--legacy-peer-deps)/u.test(source), `${name} must not override peer admission`);
+  if (name === "Kali") {
+    expect(/npm install --omit=dev --ignore-scripts --save-exact[^\n]+\\\r?\n\s+pi-observational-memory/u.test(source), `${name} must install the exact OM version with lifecycle scripts disabled before the identity check`);
+  }
+  expect(!/npm (?:install|ci)[^\n]*(?:--force|--legacy-peer-deps)/u.test(source), `${name} must not override peer admission`);
 }
 // Exercise the same install predicate used by both Dockerfiles and image.mjs.
 // npm's archive SRI verification is followed by this pinned lock comparison;
