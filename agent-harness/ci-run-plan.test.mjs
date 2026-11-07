@@ -14,6 +14,7 @@ import {
   RUN_MODES,
   SPECIALIST_WORKFLOWS,
   buildRunPlan,
+  explainRunPlan,
   CHROME_FUZZ_ARM_PINNED_INPUTS,
   chromeFuzzArmRequirement,
   isTiered,
@@ -440,4 +441,68 @@ test("#976 the run plan carries a fail-closed Reverse sub-suite decision", () =>
   // Same diff without readable contents must keep every suite (fail closed).
   const unknown = buildRunPlan({ ...base, diffBytes: diff(record("M", "package.json")) });
   assert.deepEqual(unknown.reverseSuites, ["reverse", "claude", "pi-om"]);
+});
+
+// #992: the plan must explain itself in the summary instead of leaving reviewers
+// to decode a comma-separated token list.
+test("#992 the plan explanation renders the decision and its reasons", () => {
+  const plan = buildRunPlan({ ...pr, diffBytes: diff(change("agent-harness/run-claude-budget-isolated.mjs")), suitePaths: SUITE_PATHS });
+  const text = explainRunPlan(plan);
+  assert.match(text, /### CI 运行计划/);
+  assert.match(text, new RegExp(`\\| 模式 \\| \`${plan.mode}\` \\|`, "u"));
+  assert.match(text, new RegExp(`\\| 计划状态 \\| \`${plan.status}\` \\|`, "u"));
+  assert.match(text, /\| tiered 分层 \| 启用 \|/u);
+  // Every emitted token appears verbatim, so the summary never hides a reason.
+  for (const reason of plan.reasons) assert.ok(text.includes(`\`${reason}\``), `${reason} must be quoted verbatim`);
+  // Known tokens are decoded; the raw token stays next to its explanation.
+  assert.match(text, /`ready_for_review_full_path`：Ready PR：走完整验收/u);
+  assert.match(text, /`suite:reverse`：命中专项 workflow：reverse/u);
+  assert.match(text, /`reverse:reverse_suite:claude`：计划执行 Reverse 子套件：claude/u);
+  // Planned vs skipped suites are stated explicitly.
+  assert.match(text, /\*\*Reverse 子套件\*\*：`claude`/u);
+  assert.match(text, /\*\*Reverse 跳过\*\*：`reverse`、`pi-om`/u);
+});
+
+test("#992 unknown reasons stay visible instead of being dropped", () => {
+  const text = explainRunPlan({ mode: "ready-full", status: "ok", reasons: ["some_new_reason:detail"] });
+  assert.match(text, /`some_new_reason:detail`：未登记原因：some_new_reason:detail/u);
+});
+
+test("#992 a plan without reasons says so instead of implying a clean skip", () => {
+  const text = explainRunPlan({ mode: "ready-full", status: "ok", reasons: [] });
+  assert.match(text, /无（计划未记录原因，按 fail closed 处理）/u);
+  assert.match(text, /\*\*Reverse 子套件\*\*：全部跳过/u);
+});
+
+test("#992 package.json reasons decode to the field that forced a full run", () => {
+  const text = explainRunPlan({
+    mode: "ready-full", status: "ok",
+    reasons: ["reverse:package_json_field_changed:dependencies", "reverse:package_json_script_removed:ci:unit:x"],
+  });
+  assert.match(text, /package\.json 字段变化（dependencies）：Reverse 全跑/u);
+  assert.match(text, /package\.json 删除了脚本（ci:unit:x）：Reverse 全跑/u);
+});
+
+test("#992 the CLI writes the explanation to GITHUB_STEP_SUMMARY", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plan-summary-"));
+  const summary = join(dir, "summary.md");
+  const output = join(dir, "output.txt");
+  writeFileSync(summary, "");
+  try {
+    const diffFile = join(dir, "diff.bin");
+    writeFileSync(diffFile, diff(change("agent-harness/run-claude-budget-isolated.mjs")));
+    const result = spawnSync(process.execPath, [join(ROOT, "agent-harness/ci-run-plan.mjs"), "--event-name", "pull_request",
+      "--base", "b", "--head", "h", "--ci-pr-mode", "tiered", "--root", ROOT, "--diff-file", diffFile], {
+      cwd: ROOT,
+      env: { ...process.env, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const written = readFileSync(summary, "utf8");
+    assert.match(written, /### CI 运行计划/u);
+    assert.match(written, /判定依据/u);
+    assert.match(readFileSync(output, "utf8"), /reverse_suites=claude/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -373,6 +373,106 @@ function parseArgs(argv) {
   return options;
 }
 
+/**
+ * #992: human-readable reasons for the tokens the plan actually emits.
+ *
+ * Unknown tokens are printed verbatim instead of being dropped, so adding a new
+ * reason can never make the summary silently less complete.
+ */
+const REASON_TEXT = Object.freeze({
+  non_pull_request_event: "非 PR 事件：按主干/手动全量验收，不做范围收窄",
+  missing_pull_request_revision: "缺少 PR base/head：fail closed，保守全跑",
+  chrome_fuzz_required_non_pull_request: "非 PR 事件：Chrome Fuzz ARM 必跑",
+  chrome_fuzz_plan_failed_fail_closed: "运行计划未成功：Chrome Fuzz ARM fail closed 必跑",
+  diff_parsed: "diff 解析成功，按变更路径判定",
+  diff_read_failed: "diff 读取失败：fail closed，保守全跑",
+  docs_only: "仅命中纯文档白名单，跳过核心重活",
+  chrome_fuzz_docs_only: "纯文档变更：Chrome Fuzz ARM 跳过",
+  no_specialist_suite_matched: "没有命中任何专项 workflow 的路径基线",
+  ci_pr_mode_full: "CI_PR_MODE 不是 tiered（或为 full）：按完整 PR 验收",
+  chrome_fuzz_required_full_mode: "ready-full：Chrome Fuzz ARM 属于必跑集合",
+  draft_fast_path: "Draft PR：只跑 draft-fast 快速套件",
+  chrome_fuzz_draft_fast_path: "Draft PR：Chrome Fuzz ARM 跳过",
+  ready_for_review_full_path: "Ready PR：走完整验收",
+  chrome_fuzz_inputs_missing_fail_closed: "缺少 Chrome 路径基线或 diff 为空：fail closed 必跑",
+  chrome_fuzz_inputs_changed: "命中 Chrome 专项或 ARM 固定输入：必跑",
+  chrome_fuzz_unknown_input_fail_closed: "存在既非文档也非已知非镜像输入的路径：fail closed 必跑",
+  chrome_fuzz_inputs_unchanged: "改动都不影响 ARM 镜像与冒烟：跳过",
+  reverse_docs_paths_only: "仅文档路径：Reverse 三个子套件都不需要跑",
+  reverse_inputs_unchanged: "Reverse 输入未变化：三个子套件都不需要跑",
+  reverse_full_mode: "非 PR 或未启用 tiered：Reverse 保留全量",
+  package_json_missing: "缺少 package.json 内容：无法证明独立，Reverse 全跑",
+  package_json_unparseable: "package.json 无法解析：Reverse 全跑",
+  package_json_not_object: "package.json 顶层不是对象：Reverse 全跑",
+  package_json_scripts_not_object: "package.json 的 scripts 不是对象：Reverse 全跑",
+});
+
+function explainReason(reason) {
+  const raw = String(reason ?? "").trim();
+  if (!raw) return "";
+  if (REASON_TEXT[raw]) return REASON_TEXT[raw];
+  if (raw.startsWith("reverse:")) {
+    const inner = raw.slice("reverse:".length);
+    if (inner.startsWith("reverse_suite:")) return `计划执行 Reverse 子套件：${inner.slice("reverse_suite:".length)}`;
+    if (REASON_TEXT[inner]) return REASON_TEXT[inner];
+    if (inner.startsWith("package_json_field_changed:")) return `package.json 字段变化（${inner.slice("package_json_field_changed:".length)}）：Reverse 全跑`;
+    if (inner.startsWith("package_json_script_removed:")) return `package.json 删除了脚本（${inner.slice("package_json_script_removed:".length)}）：Reverse 全跑`;
+    if (inner.startsWith("package_json_script_modified:")) return `package.json 修改了已有脚本（${inner.slice("package_json_script_modified:".length)}）：Reverse 全跑`;
+    if (inner.startsWith("package_json_script_added_consumed:")) return `新增脚本被专项消费（${inner.slice("package_json_script_added_consumed:".length)}）：Reverse 全跑`;
+    if (inner.startsWith("package_json_script_added_not_test:")) return `新增脚本不是测试入口（${inner.slice("package_json_script_added_not_test:".length)}）：Reverse 全跑`;
+    if (inner.startsWith("package_json_script_added_not_test_command:")) return `新增脚本命令不含 --test（${inner.slice("package_json_script_added_not_test_command:".length)}）：Reverse 全跑`;
+    return `Reverse 判定：${inner}`;
+  }
+  if (raw.startsWith("suite:")) return `命中专项 workflow：${raw.slice("suite:".length)}`;
+  if (raw.startsWith("classifier_failed:")) return `变更分类失败（${raw.slice("classifier_failed:".length)}）：fail closed 保守全跑`;
+  if (raw.startsWith("chrome_fuzz_")) return `Chrome Fuzz ARM 判定：${raw.slice("chrome_fuzz_".length)}`;
+  return `未登记原因：${raw}`;
+}
+
+/**
+ * #992: the plan explains itself.
+ *
+ * The token list already existed in `reasons`, but it was only visible as a raw
+ * comma string in the job log. This renders the same facts as a summary so a
+ * reviewer can answer "why did this run / why was it skipped" without reading
+ * the routing scripts.
+ */
+export function explainRunPlan(plan = {}) {
+  const reasons = Array.isArray(plan.reasons) ? plan.reasons : [];
+  const required = Array.isArray(plan.requiredSuites) ? plan.requiredSuites : [];
+  const fast = Array.isArray(plan.fastSuites) ? plan.fastSuites : [];
+  const reverse = Array.isArray(plan.reverseSuites) ? plan.reverseSuites : [];
+  const skippedReverse = ["reverse", "claude", "pi-om"].filter((suite) => !reverse.includes(suite));
+  const lines = [
+    "### CI 运行计划（#992）",
+    "",
+    "| 项 | 值 |",
+    "| --- | --- |",
+    `| 模式 | \`${plan.mode ?? "unknown"}\` |`,
+    `| 计划状态 | \`${plan.status ?? "unknown"}\` |`,
+    `| 基线 → 头部 | \`${String(plan.base ?? "").slice(0, 12)}\` → \`${String(plan.head ?? "").slice(0, 12)}\` |`,
+    `| 纯文档 | ${plan.docsOnly ? "是" : "否"} |`,
+    `| tiered 分层 | ${plan.tiered ? "启用" : "未启用（完整验收）"} |`,
+    `| 核心必需专项 | ${required.length ? required.map((name) => `\`${name}\``).join("、") : "无"} |`,
+    `| 快速套件 | ${fast.length ? fast.map((name) => `\`${name}\``).join("、") : "无"} |`,
+    `| Chrome Fuzz ARM | ${plan.chromeFuzzArm ? "必跑" : "跳过"} |`,
+    "",
+    "**判定依据**",
+    "",
+  ];
+  if (reasons.length === 0) lines.push("- 无（计划未记录原因，按 fail closed 处理）");
+  for (const reason of reasons) lines.push(`- \`${reason}\`：${explainReason(reason)}`);
+  lines.push("");
+  lines.push(`**Reverse 子套件**：${reverse.length ? reverse.map((name) => `\`${name}\``).join("、") : "全部跳过"}`);
+  if (skippedReverse.length) {
+    lines.push("");
+    lines.push(`**Reverse 跳过**：${skippedReverse.map((name) => `\`${name}\``).join("、")}（仅当计划为 PR + tiered 且已证明无关时才会跳过）`);
+  }
+  lines.push("");
+  lines.push("> 跳过判定只缩小范围，不放宽门禁：失败、取消、缺片或应跑误跳过都会被 `ci-summary` / `reverse-runtime-acceptance` 拒绝。");
+  return `${lines.join("\n")}\n`;
+}
+
 function writeGitHubOutput(plan) {
   const outputPath = process.env.GITHUB_OUTPUT;
   if (!outputPath) return;
@@ -423,6 +523,10 @@ function main() {
   });
   writeGitHubOutput(plan);
   console.log(JSON.stringify(plan, null, 2));
+  // #992: GitHub sets GITHUB_STEP_SUMMARY for every step; writing here keeps the
+  // explanation available without changing any workflow file.
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (summaryPath) appendFileSync(summaryPath, explainRunPlan(plan));
   if (plan.status === PLAN_STATUSES.FAILED) process.exitCode = 1;
 }
 
