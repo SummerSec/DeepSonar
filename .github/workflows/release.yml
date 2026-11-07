@@ -205,7 +205,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build
         if: ${{ steps.resolve.outputs.skip != 'true' }}
@@ -233,7 +233,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-base
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
           SKIP: ${{ steps.resolve.outputs.skip }}
           REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
@@ -458,7 +458,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build
         if: ${{ steps.resolve.outputs.skip != 'true' }}
@@ -485,7 +485,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
           SKIP: ${{ steps.resolve.outputs.skip }}
           REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
@@ -754,7 +754,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - name: Prepare hosted runner disk for Chrome Fuzz arm64
         if: ${{ matrix.name == 'chrome-fuzz' && matrix.arch == 'arm64' && steps.resolve.outputs.skip != 'true' }}
@@ -789,7 +789,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
           SKIP: ${{ steps.resolve.outputs.skip }}
           REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
@@ -1201,7 +1201,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ steps.release.outputs.image_name }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - name: Free disk for Kali multi-arch build
         if: ${{ steps.resolve.outputs.skip != 'true' }}
@@ -1273,7 +1273,7 @@ jobs:
           SKIP: ${{ steps.resolve.outputs.skip }}
           SOURCE_DIGEST: ${{ steps.resolve.outputs.digest }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
           AMD64_DIGEST: ${{ steps.build-amd64.outputs.digest }}
           ARM64_DIGEST: ${{ steps.build-arm64.outputs.digest }}
           GHCR_TAGS: ${{ steps.meta.outputs.tags }}
@@ -1549,7 +1549,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build
         if: ${{ steps.resolve.outputs.skip != 'true' }}
@@ -1576,7 +1576,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-test
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
           SKIP: ${{ steps.resolve.outputs.skip }}
           REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
@@ -1785,7 +1785,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build
         if: ${{ steps.resolve.outputs.skip != 'true' }}
@@ -1812,7 +1812,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-audit
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
           SKIP: ${{ steps.resolve.outputs.skip }}
           REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
@@ -1921,7 +1921,7 @@ jobs:
       digest: ${{ steps.candidate.outputs.digest }}
       skip: ${{ steps.resolve.outputs.skip }}
       fingerprint: ${{ steps.fingerprint.outputs.fingerprint }}
-      src_tag: ${{ steps.fingerprint.outputs.src_tag }}
+      release_src_tag: ${{ steps.fingerprint.outputs.release_src_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -1976,7 +1976,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build
         if: ${{ steps.resolve.outputs.skip != 'true' }}
@@ -2199,7 +2199,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-openharmony-fuzz
           FINGERPRINT: ${{ needs.openharmony-fuzz-build.outputs.fingerprint }}
-          SRC_TAG: ${{ needs.openharmony-fuzz-build.outputs.src_tag }}
+          SRC_TAG: ${{ needs.openharmony-fuzz-build.outputs.release_src_tag }}
           SKIP: ${{ needs.openharmony-fuzz-build.outputs.skip }}
           DIGEST: ${{ needs.openharmony-fuzz-build.outputs.digest }}
         run: |
@@ -2406,7 +2406,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - id: build
         if: ${{ steps.resolve.outputs.skip != 'true' }}
@@ -2433,7 +2433,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-mobile
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
           SKIP: ${{ steps.resolve.outputs.skip }}
           REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
@@ -2684,7 +2684,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - name: Record reused Reverse image
         if: ${{ steps.resolve.outputs.skip == 'true' }}
@@ -2716,7 +2716,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-${{ matrix.name }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
           SKIP: ${{ steps.resolve.outputs.skip }}
           REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}
@@ -2791,7 +2791,7 @@ jobs:
         env:
           IMAGE_NAME: ${{ env.REGISTRY }}/${{ steps.release.outputs.owner }}/deepsonar-reverse
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.release_src_tag }}
           DIGEST: ${{ steps.image.outputs.digest }}
         run: bash agent-harness/resolve-image-src-cache.sh pin
       - uses: actions/upload-artifact@v4

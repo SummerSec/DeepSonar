@@ -99,7 +99,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # #971/#972/#973/#974/#975/#976：纯 Node 契约回归，无数据库、无 pnpm 依赖，与清盘安全单测同批。
+      # #961/#971/#972/#973/#974/#975/#976：纯 Node 契约回归，无数据库、无 pnpm 依赖，与清盘安全单测同批。
       # 每个新测试的入口必须在此显式列出，否则加了文件也不会被门禁执行。
       - name: perf(ci) contract regressions and hosted runner disk safety
         run: |
@@ -109,7 +109,8 @@ jobs:
             agent-harness/runtime-image-cache-policy.test.mjs \
             agent-harness/gate-shards.test.mjs \
             agent-harness/reverse-base-identity.test.mjs \
-            agent-harness/reverse-suite-plan.test.mjs
+            agent-harness/reverse-suite-plan.test.mjs \
+            agent-harness/image-cache-trust.test.mjs
 
       - uses: pnpm/action-setup@v4
 
@@ -912,7 +913,7 @@ jobs:
         env:
           IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.ci_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - name: Record reused image
         if: ${{ steps.resolve.outputs.skip == 'true' }}
@@ -950,7 +951,7 @@ jobs:
           node agent-harness/runtime-image-cache-policy.mjs \
             --toolset "${{ matrix.toolset }}" \
             --owner "${{ steps.ns.outputs.owner }}" \
-            --src-tag "${{ steps.fingerprint.outputs.src_tag }}" \
+            --src-tag "${{ steps.fingerprint.outputs.ci_src_tag }}" \
             --kali-gha-mode "${KALI_GHA_MODE}" \
             --event-name "${{ github.event_name }}"
       - name: Build official runtime
@@ -1065,7 +1066,7 @@ jobs:
         env:
           IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.ci_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - name: Prepare hosted runner disk for Chrome Fuzz arm64
         if: ${{ steps.resolve.outputs.skip != 'true' }}
@@ -1089,7 +1090,7 @@ jobs:
           sbom: true
           cache-from: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz:buildcache-arm64
-            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz:${{ steps.fingerprint.outputs.src_tag }}
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz:${{ steps.fingerprint.outputs.ci_src_tag }}
             type=gha,scope=chrome-fuzz-arm64
           cache-to: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz:buildcache-arm64,mode=max,ignore-error=true
@@ -1100,7 +1101,7 @@ jobs:
         env:
           IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-chrome-fuzz
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.ci_src_tag }}
           SKIP: ${{ steps.resolve.outputs.skip }}
           REUSE_DIGEST: ${{ steps.resolve.outputs.digest }}
           BUILD_DIGEST: ${{ steps.build.outputs.digest }}

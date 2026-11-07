@@ -157,6 +157,9 @@ pnpm ci:images
 - 连续推送时 Draft 每次都有实际快检；同一 SHA 从 Draft 转 Ready 会重新出计划并跑完整验收，不需要再推空 commit。旧 run 的绿灯不能顶替最新候选。
 - 手动运行某个工作流强制该工作流完整验收；`push@main` 不进入快路。
 - #961 的核心 Chrome Fuzz ARM build/native smoke 由同一运行计划决定：tiered Ready PR 仅在全部改动属于已核对的非镜像业务输入或原文档白名单时可跳过两项；Chrome/base/路由输入、未知路径、空 diff 或分析失败保守必跑。`ci-summary` 必须核对计划与结果一致，缺输出、失败、取消或意外跳过不能放行；main、手动运行与 `CI_PR_MODE=full` 仍完整验收。
+
+- #961 P2：`deploy/Dockerfile.agent-chrome-fuzz` 的 V8 编译阶段 `FROM --platform=$BUILDPLATFORM ${V8_BUILDER_IMAGE}` 用的是**按 digest 钉死的 builder 镜像**（与 base 同源的 node bookworm-slim），不再继承 `${BASE_IMAGE}`；只有 `runtime-rootfs` 跟随本次解析出的 base。这样 base 的运行时变化（CLI 版本、手册、包装脚本）不会让 V8 下载/GN/编译层失效。改 builder 镜像或 V8/depot_tools/compiler-rt 版本时，Dockerfile 内容变化会自然改变指纹；不要改成可变 tag。
+- #961 P3：`image-build-fingerprint.mjs` 输出三个互不复用的命名空间——`src_tag`（`src-<fp>`，历史遗留，**已无消费方**）、`ci_src_tag`（`src-ci-<fp>`，CI 读写）、`release_src_tag`（`src-release-<fp>`，release 读写）。`ci.yml`/`chrome-runtime.yml`/`mobile-runtime.yml`/`openharmony-runtime.yml` 只用 `ci_src_tag`；`release.yml` 只用 `release_src_tag`。**release 不得再查 `src-<fp>`**：该 tag 在本改动前可由 PR job 推送，而 `resolve-image-src-cache.sh` 只要能解析出 digest 就回 `skip=true`，等于让发布跳过真实构建。改这条边界必须同步 `agent-harness/image-cache-trust.test.mjs`。
 - 专家套件（reverse / chrome / mobile / openharmony）的路径基线直接读各自 workflow 的 `pull_request.paths`，因此清单不会与计划漂移。
 
 - 四个专家工作流各自跑同一个 `ci-run-plan.mjs`（不是四份判断），重活矩阵只在 `mode == ready-full` 时启动；`push@main` 与手动运行仍是完整验收。专家套件的 PR 触发保留，尚未迁移到 `ci.yml` 的 `workflow_call` 统一入口。

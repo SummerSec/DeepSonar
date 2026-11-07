@@ -142,7 +142,7 @@ jobs:
         env:
           IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.ci_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - name: Record reused image
         if: ${{ steps.resolve.outputs.skip == 'true' }}
@@ -169,7 +169,7 @@ jobs:
           build-args: BASE_IMAGE=${{ steps.base-image.outputs.ref }}
           cache-from: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci
-            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:${{ steps.fingerprint.outputs.src_tag }}
+            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:${{ steps.fingerprint.outputs.ci_src_tag }}
             type=gha,scope=runtime-${{ matrix.toolset }}
           cache-to: |
             type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci,mode=max,ignore-error=true
@@ -183,7 +183,7 @@ jobs:
         shell: bash
         env:
           IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.ci_src_tag }}
           LOCAL_TAG: deepsonar-${{ matrix.toolset }}:ci
         run: |
           set -euo pipefail

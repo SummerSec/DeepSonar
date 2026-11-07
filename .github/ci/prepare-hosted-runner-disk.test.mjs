@@ -402,6 +402,7 @@ test("Reverse PR and main path filters include disk preparation and its safety r
     "agent-harness/gate-shards.test.mjs",
     "agent-harness/reverse-base-identity.test.mjs",
     "agent-harness/reverse-suite-plan.test.mjs",
+    "agent-harness/image-cache-trust.test.mjs",
   ]) {
     assert.ok(docsJob.includes(file), `disk safety and wiring regressions must run even on Draft PRs: missing ${file}`);
   }

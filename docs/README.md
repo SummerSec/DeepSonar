@@ -237,3 +237,5 @@
 - [集成测试共享连接池 teardown 待办清单（#971）](INTEGRATION_POOL_TEARDOWN.md)：三个 gate 长尾套件在 `finally` 末尾显式 `sql.end({ timeout: 5 })`，其余 18 个长尾套件的逐个核对顺序与「未机械批量替换」边界。纯 Node 契约回归见 `apps/scheduler/src/integration-pool-teardown.test.mjs`。#972 的 gate 四分片清单与覆盖率断言见 `agent-harness/gate-shards.mjs`；#973 的按空间预算清盘见 `.github/ci/prepare-hosted-runner-disk.mjs`；#974 的 Kali 缓存导出策略见 `agent-harness/runtime-image-cache-policy.mjs`。以上均不宣称任何提速比例，真实前后对照样本仍待线上累积。
 
 - Reverse 家族子套件分流与 base 复用（#975/#976）：`agent-harness/reverse-suite-plan.mjs` 按 `reverse` / `claude` / `pi-om` 三份显式依赖清单计划，shared 与 routing 输入一律保守全跑；`package.json` 仅「新增且不被专项消费的 `ci:unit:*` 测试脚本」可判无影响，依赖/lockfile/脚本删改/删除改名/解析失败/缺 SHA 全部 fail closed。`reverse-runtime-acceptance` 逐项核对计划与实际。`vars.REVERSE_BASE_REUSE=on` 才启用每架构一次的不可变 base artifact 共享，默认保持原路径。以上均不宣称提速比例，真实前后对照样本仍待线上累积。
+
+- Chrome Fuzz ARM 构建层优化（#961 P2/P3）：V8 编译阶段改用按 digest 钉死的 `V8_BUILDER_IMAGE`，不再继承 `${BASE_IMAGE}`，base 的运行时变化不再使下载/GN/编译层失效；运行时阶段仍跟随本次 base。指纹新增 `ci_src_tag`（`src-ci-<fp>`），CI 四个 workflow 只读写该命名空间，`release.yml` 保留 `src-<fp>`，避免 PR 产物让发布跳过真实构建。契约回归见 `agent-harness/image-cache-trust.test.mjs`。真实冷/热/失效三组样本仍待线上累积，本文不宣称提速比例。
