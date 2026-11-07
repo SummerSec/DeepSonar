@@ -1,5 +1,20 @@
 ## [Unreleased]
 
+### 变更
+
+- **CI 执行成本与分层（#971–#976）**：串行 `gate` 拆为 `gate-contract` / `gate-db-core` / `gate-db-domain` / `gate-e2e` 四个有界并行分片，`ci-summary` 按 `EXPECTED_GATE_SHARDS` 期望矩阵逐片要求 `success`，缺片、取消、超时、失败或结果值未知一律拒绝；宿主磁盘准备改为按实测可用空间预算清理，达标即跳过、逐项删且每步重测、全删不足即失败；`kali-minimal` 去掉重复的 GHA `mode=max` 大层导出，可用 `RUNTIME_CACHE_KALI_GHA` 切回 `min`/`max`；Reverse 家族按 `reverse`/`claude`/`pi-om` 三份显式依赖清单分流，`package.json` 只对新增且不被专项消费的 `ci:unit:*` 测试脚本判无影响；Reverse base 复用默认关闭，开启后每架构只构建一次当前 checkout 的 base 并按不可变标签共享。真实冷/热/失效三组样本与 gate 墙钟/runner-minutes 前后对照尚未累积，本条不宣称提速比例。
+
+- **Chrome Fuzz ARM 构建层与镜像缓存命名空间（#961 P2/P3）**：V8 编译阶段改用按 digest 钉死的 `V8_BUILDER_IMAGE`，不再继承 `BASE_IMAGE`，builder 自行安装 CA 证书与 `xz-utils`/`unzip`，base 的运行时变化不再使下载/GN/编译层失效；运行时阶段仍跟随本次 base。内容指纹同时给出 `ci_src_tag`（`src-ci-<fp>`）与 `release_src_tag`（`src-release-<fp>`）：四个 CI workflow 只读写前者，`release.yml` 只读写后者，历史 `src-<fp>` 已无消费方，避免 PR 产物让发布跳过真实构建。
+
+### 修复
+
+- **提示与错误反馈统一（#967）**：Toast 增加 `warn` 语义、同文案去重合并、按严重程度分层停留、悬停与焦点双 hold 暂停、手动关闭与详情复制、可挂恢复动作；页面自有 flash 收敛到 `useFlashMessage`，`HelpTip` 支持 Escape 关闭并保留触发器焦点；Toast 颜色改语义 token 并纳入 WCAG AA 断言。逐主题浏览器截图与键盘/触屏回归未执行。
+
+- **Job 侧数据库冲突的可重试边界（#945）**：新 Task/Finding Report 的精确输入字节随 SQL 提交、领取后才投影文件；孤儿 Report 收口与终态重试共用同一套纯数据库有界重试，深层读取不再把可重试冲突压成业务缺口。成功报告输出仍禁止整体重放，历史缺冻结字节不补造，原始 SQLSTATE 与未知效果边界不变。
+
+- **Pi OM / DSH 镜像治理（#979）**：启动前校验镜像内 DSH/Pi OM 治理产物与 wrapper 的精确 SHA-256，陈旧镜像不再被静默复用；OM 准入下限保持 `0.6.3`，不得高于随仓库 catalog 的实际发布版本（由回归钉住）。旧冻结 Job 不重写快照，不冒充正式 Release。
+
+
 ## [0.6.15] - 2026-11-06
 
 ### 修复
