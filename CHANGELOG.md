@@ -2,6 +2,8 @@
 
 ## [0.6.16] - 2026-11-07
 
+> 本节出现的阈值与计数（单事件上限、分片大小、超时、预览上限、恢复次数等）取自本版发布提交的代码常量，以 `packages/runtime-sandbox/src/pi-rpc-*.ts`、`pi-length-recovery.ts` 为准（核对 2026-11-07）；常量变化时以代码为准，不把本节数字当作独立事实来源。
+
 ### 变更
 
 - **CI 执行成本与分层（#971–#976）**：串行 `gate` 拆为 `gate-contract` / `gate-db-core` / `gate-db-domain` / `gate-e2e` 四个有界并行分片，`ci-summary` 按 `EXPECTED_GATE_SHARDS` 期望矩阵逐片要求 `success`，缺片、取消、超时、失败或结果值未知一律拒绝；宿主磁盘准备改为按实测可用空间预算清理，达标即跳过、逐项删且每步重测、全删不足即失败；`kali-minimal` 去掉重复的 GHA `mode=max` 大层导出，可用 `RUNTIME_CACHE_KALI_GHA` 切回 `min`/`max`；Reverse 家族按 `reverse`/`claude`/`pi-om` 三份显式依赖清单分流，`package.json` 只对新增且不被专项消费的 `ci:unit:*` 测试脚本判无影响；Reverse base 复用默认关闭，开启后每架构只构建一次当前 checkout 的 base 并按不可变标签共享。真实冷/热/失效三组样本与 gate 墙钟/runner-minutes 前后对照尚未累积，本条不宣称提速比例。
