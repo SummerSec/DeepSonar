@@ -1539,6 +1539,7 @@ export async function recoverVerifyJobTerminal(
   jobId: string,
   jobStatus: "failed" | "timeout" | "orphan" | "cancelled",
   error?: string | null,
+  options: { deferHub?: boolean } = {},
 ): Promise<void> {
   // #945: Hub 收敛可派 Report 并写输入文件，尚非纯数据库重试边界。
   await sql.begin(async (txRaw) => {
@@ -1551,7 +1552,7 @@ export async function recoverVerifyJobTerminal(
       error: error ?? null,
       summary: null,
     });
-    if (closed.forceHub) {
+    if (closed.forceHub && !options.deferHub) {
       await maybeTriggerHub(
         tx,
         {

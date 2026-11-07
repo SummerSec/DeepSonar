@@ -239,6 +239,60 @@ if (!testDatabaseUrl) {
       assert.ok(await noStartModule.hasGatewaySnapshotNoStartProof(sql, checkpointId, checkpointState.agent_snapshot_json));
       await sql`UPDATE jobs SET status='cancelled' WHERE canvas_id=${checkpointCanvas} AND status='pending'`;
 
+      // Verify has a separate terminal recovery transaction. It must close its
+      // round/Finding without resolving or creating a replacement Hub after preflight.
+      const [projectBeforeVerify] = await sql`SELECT config_json FROM projects WHERE id=${projectId}`;
+      try {
+        for (const resolvableHub of [false, true]) {
+          const projectConfig = { ...projectBeforeVerify.config_json, rules: { maxVerificationRounds: 0, maxAutoRetries: 3 },
+            ...(resolvableHub ? { default_credential_id: baselineCredentialId, default_model_ref: "model-a" } : {}) };
+          await sql`UPDATE projects SET config_json=${sql.json(projectConfig)} WHERE id=${projectId}`;
+          if (resolvableHub) {
+            assert.ok(await coreModule.resolveAgentSnapshotForJob(sql, projectId, "hub_reason"));
+          } else {
+            await assert.rejects(coreModule.resolveAgentSnapshotForJob(sql, projectId, "hub_reason"), /多个|multi|默认|default/i);
+          }
+          const verifyCanvas = `verify-preflight-${randomUUID()}`;
+          await sql`INSERT INTO canvases(id,project_id,title,target_json)
+            VALUES(${verifyCanvas},${projectId},'Verify preflight fixture',${sql.json({ network_policy: { allow_egress: false } })})`;
+          const origin = await insertJob({ canvas: verifyCanvas, status: "succeeded" });
+          const findingId = randomUUID();
+          await sql`INSERT INTO findings(id,project_id,job_id,fingerprint,title,severity,verify_status,raw_json)
+            VALUES(${findingId},${projectId},${String(origin.id)},${findingId},'Verify preflight fixture','medium','verifying',${sql.json({})})`;
+          const verify = await insertJob({ canvas: verifyCanvas, status: "pending", snapshot: unfrozenSnapshot });
+          const verifyId = String(verify.id);
+          await sql`UPDATE jobs SET type='verify_finding',finding_id=${findingId},started_at=NULL,finished_at=NULL,error=NULL WHERE id=${verifyId}`;
+          await sql`INSERT INTO finding_verification_rounds(finding_id,attempt,verify_job_id,status,requirements_json,evidence_snapshot_json)
+            VALUES(${findingId},1,${verifyId},'running',${sql.json({})},${sql.json({})})`;
+          provisionCalls = 0;
+          fixtureRuntime.agentMode = "real";
+          fixtureRuntime.provider = "fake";
+          runner.provision = async () => { provisionCalls += 1; throw new Error("preflight must fence Verify runtime IO"); };
+          try {
+            assert.equal(await dispatcherModule.dispatchOnce(), 1);
+            await dispatcherModule.drainInFlight();
+          } finally {
+            fixtureRuntime.agentMode = previousMode;
+            fixtureRuntime.provider = previousProvider;
+            runner.provision = previousProvision;
+          }
+          assert.equal(provisionCalls, 0);
+          const [terminalVerify] = await sql`SELECT status,error FROM jobs WHERE id=${verifyId}`;
+          assert.equal(terminalVerify.status, "failed", String(terminalVerify.error));
+          const [round] = await sql`SELECT status,finished_at,error FROM finding_verification_rounds WHERE verify_job_id=${verifyId}`;
+          assert.equal(round.status, "failed");
+          assert.ok(round.finished_at);
+          assert.match(String(round.error), /runtime_knobs/);
+          assert.equal((await sql`SELECT verify_status FROM findings WHERE id=${findingId}`)[0].verify_status, "pending");
+          assert.equal((await sql`SELECT count(*)::int AS n FROM jobs WHERE canvas_id=${verifyCanvas} AND type='hub_reason'`)[0].n, 0);
+          const beforeDuplicate = [...await sql`SELECT * FROM finding_verification_rounds WHERE verify_job_id=${verifyId}`];
+          await coreModule.recoverVerifyJobTerminal(verifyId, "failed", "duplicate preflight callback", { deferHub: true });
+          assert.deepEqual([...await sql`SELECT * FROM finding_verification_rounds WHERE verify_job_id=${verifyId}`], beforeDuplicate);
+        }
+      } finally {
+        await sql`UPDATE projects SET config_json=${sql.json(projectBeforeVerify.config_json)} WHERE id=${projectId}`;
+      }
+
       const firstPreflightFailure = async () => {
         const job = await insertJob({ status: "claimed", snapshot: unfrozenSnapshot });
         const id = String(job.id);

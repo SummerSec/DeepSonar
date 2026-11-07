@@ -1496,7 +1496,7 @@ async function runJob(jobId: string) {
     });
     const failed = failedRow ? [failedRow] : [];
     if (failed[0]?.type === "verify_finding") {
-      await recoverVerifyJobTerminal(jobId, "failed", msg).catch((err) =>
+      await recoverVerifyJobTerminal(jobId, "failed", msg, { deferHub: gatewaySnapshotPreflightRejected }).catch((err) =>
         console.error(`[dispatcher] verify recovery failed:`, err),
       );
     }
