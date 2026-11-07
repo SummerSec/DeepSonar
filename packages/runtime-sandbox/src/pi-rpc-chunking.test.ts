@@ -154,3 +154,34 @@ test("defaults stay within the documented bounds", () => {
   assert.equal(PI_RPC_CHUNK_MAX_PENDING, 8);
   assert.ok(PI_RPC_CHUNK_BYTES_DEFAULT < 8 * 1024 * 1024, "chunks must fit the default per-event bound");
 });
+
+test("the deadline fires on a silent stream without another frame", async () => {
+  const expired: string[] = [];
+  // Real clock on purpose: the point is that no further frame is needed.
+  const assembler = new PiRpcChunkAssembler({ timeoutMs: 20, onExpire: (id) => expired.push(id) });
+  try {
+    assembler.accept(frame({ id: "silent", seq: 1, total: 2 }));
+    assert.equal(assembler.idle, false);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.deepEqual(expired, ["silent"], "the group expires while the stream stays open and quiet");
+    assert.equal(assembler.idle, true, "the buffered bytes are released");
+  } finally {
+    assembler.dispose();
+  }
+});
+
+test("completing a group cancels its deadline", async () => {
+  const expired: string[] = [];
+  const assembler = new PiRpcChunkAssembler({ timeoutMs: 20, onExpire: (id) => expired.push(id) });
+  try {
+    const record = { type: "message_end", value: "ok" };
+    const frames = chunkPiRpcRecord(record, { id: "done", chunkBytes: 8 });
+    let last: Record<string, unknown> | undefined;
+    for (const chunk of frames) last = assembler.accept(chunk);
+    assert.deepEqual(last, record);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.deepEqual(expired, [], "a completed group must not report an expiry");
+  } finally {
+    assembler.dispose();
+  }
+});

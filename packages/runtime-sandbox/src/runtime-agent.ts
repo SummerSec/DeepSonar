@@ -1557,7 +1557,18 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       let extensionLoadTail = "";
       const piFramer = spec.provider === "pi" ? new PiJsonlFramer(piRpcMaxEventBytes()) : undefined;
       // #944: chunk reassembly is opt-in; when off the wire format is unchanged.
-      const piChunks = spec.provider === "pi" && piRpcChunkingEnabled() ? new PiRpcChunkAssembler() : undefined;
+      // A group that misses its deadline must fail the attempt even if the stream
+      // then goes silent, so the timer terminates the process instead of relying
+      // on the read loop to notice.
+      const piChunks = spec.provider === "pi" && piRpcChunkingEnabled()
+        ? new PiRpcChunkAssembler({
+            onExpire: () => {
+              processError ??= new Error("PI_RPC_CHUNK_INCOMPLETE");
+              fatalOutputError ??= "PI_RPC_CHUNK_INCOMPLETE";
+              void exec.kill().catch(() => {});
+            },
+          })
+        : undefined;
       try {
         for await (const chunk of exec) {
           if (chunk.type === "stderr") {
@@ -1743,6 +1754,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
           processError ??= new Error("PI_RPC_CHUNK_INCOMPLETE");
           fatalOutputError ??= "PI_RPC_CHUNK_INCOMPLETE";
         }
+        piChunks?.dispose();
       }
       attemptStderrTail = (attemptStderrTail + stderrEvidence.flushPending()).slice(-2000);
       if (adapter.outputMode === "plain-final" && !processError) {

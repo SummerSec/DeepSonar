@@ -81,6 +81,8 @@ interface PendingGroup {
   parts: Map<number, Buffer>;
   bytes: number;
   startedAt: number;
+  /** Real deadline: fires without waiting for the next frame on the stream. */
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -97,6 +99,17 @@ export class PiRpcChunkAssembler {
       maxPending?: number;
       maxParts?: number;
       now?: () => number;
+      /**
+       * Called when a group passes its deadline while the stream is silent.
+       * The runner wires this to its process-termination path so an incomplete
+       * record fails the attempt instead of holding memory indefinitely.
+       */
+      onExpire?: (id: string) => void;
+      /**
+       * Arm real deadline timers. Defaults to on, except when a custom `now` is
+       * injected: that means the caller drives the clock and calls `sweep()`.
+       */
+      armTimers?: boolean;
     } = {},
   ) {}
 
@@ -105,6 +118,7 @@ export class PiRpcChunkAssembler {
   private get maxPending() { return this.options.maxPending ?? PI_RPC_CHUNK_MAX_PENDING; }
   private get maxParts() { return this.options.maxParts ?? PI_RPC_CHUNK_MAX_PARTS; }
   private now() { return (this.options.now ?? Date.now)(); }
+  private get armTimers() { return this.options.armTimers ?? !this.options.now; }
 
   /** Bytes currently held for incomplete groups. */
   get pendingBytes(): number {
@@ -115,6 +129,26 @@ export class PiRpcChunkAssembler {
 
   get pendingGroups(): number {
     return this.groups.size;
+  }
+
+  /** Remove a group and cancel its deadline timer. */
+  private drop(id: string): void {
+    const group = this.groups.get(id);
+    if (!group) return;
+    if (group.timer) clearTimeout(group.timer);
+    this.groups.delete(id);
+  }
+
+  /** A group passed its deadline while nothing else arrived on the stream. */
+  private expire(id: string): void {
+    if (!this.groups.has(id)) return;
+    this.drop(id);
+    this.options.onExpire?.(id);
+  }
+
+  /** Clear every timer; called when the attempt ends. */
+  dispose(): void {
+    for (const id of [...this.groups.keys()]) this.drop(id);
   }
 
   /**
@@ -135,8 +169,15 @@ export class PiRpcChunkAssembler {
       if (this.groups.size >= this.maxPending) throw new Error("PI_RPC_CHUNK_TOO_MANY_PENDING");
       group = { total: frame.total, parts: new Map(), bytes: 0, startedAt: this.now() };
       this.groups.set(frame.id, group);
+      // #944 review P2: `sweep()` only runs when another frame arrives, so a
+      // half-received group on a silent stream never expired. A real timer makes
+      // the deadline independent of the read loop.
+      if (this.armTimers) {
+        group.timer = setTimeout(() => this.expire(frame.id), this.timeoutMs);
+        group.timer.unref?.();
+      }
     } else if (group.total !== frame.total) {
-      this.groups.delete(frame.id);
+      this.drop(frame.id);
       throw new Error("PI_RPC_CHUNK_TOTAL_MISMATCH");
     }
 
@@ -145,21 +186,21 @@ export class PiRpcChunkAssembler {
       // Idempotent replay: identical bytes are ignored, conflicting bytes are a
       // corrupt stream rather than a retry.
       if (!existing.equals(slice)) {
-        this.groups.delete(frame.id);
+        this.drop(frame.id);
         throw new Error("PI_RPC_CHUNK_DUPLICATE_CONFLICT");
       }
       return undefined;
     }
 
     if (group.bytes + slice.length > this.hardMaxBytes) {
-      this.groups.delete(frame.id);
+      this.drop(frame.id);
       throw new Error("PI_RPC_MESSAGE_TOO_LARGE");
     }
     group.parts.set(frame.seq, slice);
     group.bytes += slice.length;
     if (group.parts.size < group.total) return undefined;
 
-    this.groups.delete(frame.id);
+    this.drop(frame.id);
     const ordered: Buffer[] = [];
     for (let seq = 1; seq <= group.total; seq += 1) {
       const part = group.parts.get(seq);
@@ -184,7 +225,7 @@ export class PiRpcChunkAssembler {
       if (now - group.startedAt >= this.timeoutMs) expired.push(id);
     }
     if (!expired.length) return;
-    for (const id of expired) this.groups.delete(id);
+    for (const id of expired) this.drop(id);
     throw new Error("PI_RPC_CHUNK_INCOMPLETE");
   }
 
