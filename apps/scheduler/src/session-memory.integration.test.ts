@@ -2,14 +2,18 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
+import test, { after, before, describe } from "node:test";
 import { createPlanExecutionFixture } from "./plan-execution-test-fixture.js";
 
 const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
-test("historical Pi session preview/download redact before truncation and preserve immutable source bytes", { skip: !process.env.TEST_DATABASE_URL }, async () => {
-  const h = await createPlanExecutionFixture();
-  try {
+describe("Pi session and RPC evidence", { skip: !process.env.TEST_DATABASE_URL }, () => {
+  // Scheduler modules cache their SQL connection; keep one fixture for this file.
+  let h: Awaited<ReturnType<typeof createPlanExecutionFixture>>;
+  before(async () => { h = await createPlanExecutionFixture(); });
+  after(async () => { await h?.close(); });
+
+  test("historical Pi session preview/download redact before truncation and preserve immutable source bytes", async () => {
     const { JobEvidenceWriter, SESSION_VIEW_MAX_BYTES } = await import("./evidence.js");
     const f = await h.fixture();
     const canary = "HISTORICAL_OM_PRIVATE_CANARY";
@@ -66,12 +70,9 @@ test("historical Pi session preview/download redact before truncation and preser
     assert.equal(nativeDownload.statusCode, 200);
     assert.equal(nativeDownload.payload, nativeContent, "other CLI sessions retain their ordinary quoted input exactly");
     assert.equal(nativeDownload.headers["x-deepsonar-session-projection"], undefined);
-  } finally { await h.close(); }
-});
+  });
 
-test("#990 orphan evidence merges unfinalized RPC index with raw streams after restart", { skip: !process.env.TEST_DATABASE_URL }, async () => {
-  const h = await createPlanExecutionFixture();
-  try {
+  test("#990 orphan evidence merges unfinalized RPC index with raw streams after restart", async () => {
     const { JobEvidenceWriter } = await import("./evidence.js");
     const f = await h.fixture();
     const writer = new JobEvidenceWriter(f.hub, "pi", "rpc-inflight");
@@ -92,12 +93,9 @@ test("#990 orphan evidence merges unfinalized RPC index with raw streams after r
     assert.equal(stream.sha256, null);
     assert.ok(stream.bytes > 0);
     await resumed.finalize();
-  } finally { await h.close(); }
-});
+  });
 
-test("#990 capture previews round-trip complete text, arrays and leaf refs through the HTTP reader", { skip: !process.env.TEST_DATABASE_URL }, async () => {
-  const h = await createPlanExecutionFixture();
-  try {
+  test("#990 capture previews round-trip complete text, arrays and leaf refs through the HTTP reader", async () => {
     const { JobEvidenceWriter } = await import("./evidence.js");
     const { PiRpcOutputCapture, PI_RPC_ARCHIVE_FIELD, PI_RPC_REF_FIELD, PI_RPC_INLINE_BYTES } = await import("@deepsonar/runtime-sandbox");
     const f = await h.fixture();
@@ -133,5 +131,5 @@ test("#990 capture previews round-trip complete text, arrays and leaf refs throu
       assert.equal(crossAttempt.statusCode, 404);
     }
     await writer.finalize();
-  } finally { await h.close(); }
+  });
 });
