@@ -100,6 +100,13 @@ test("live REA acceptance drives kernel requeues and retains failure diagnostics
   assert.match(run, /assert\.equal\(row\.status, expectedStatus/);
   assert.match(run, /sandbox leaked/);
   assert.match(run, /terminal Job tokens must be revoked/);
+  const runtimeAssertion = run.indexOf("assert.ok(attempts.some(");
+  const tokenQuery = run.indexOf("const tokens = await sql");
+  assert.ok(runtimeAssertion >= 0 && tokenQuery > runtimeAssertion,
+    "a provision failure must report the unstarted runtime before token assertions");
+  assert.match(run, /expected runtime scenario was not reached; terminal_error=\$\{row\.error/);
+  assert.match(run, /modelTokens\.length > 0 && modelTokens\.every/,
+    "the pre-start diagnostic must not weaken required model token creation or revocation");
 });
 
 // Execute only the actual request builders: no actor workload, sandbox, or model.
