@@ -17,6 +17,7 @@ import {
   resolveImportedRoleUiColor,
 } from "../role-colors.js";
 import { sql } from "../db.js";
+import { registerSkillSource } from "../domains/skill-source/registration.js";
 import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
 import { rewriteFindingProtocolMode } from "../finding-protocol.js";
 import { parseRuntimeKnobOverride } from "../runtime-knobs.js";
@@ -534,23 +535,11 @@ export async function applyPlatformImport(
       let srcN = 0;
       for (const s of sources) {
         const name = String(s.name);
-        const [ex] = await tx`SELECT id, trust_status FROM skill_sources WHERE name = ${name}`;
-        if (ex) {
-          await tx`
-            UPDATE skill_sources SET
-              repo_url = ${String(s.repo_url)},
-              branch = ${String(s.branch ?? "main")}
-            WHERE name = ${name}`;
-        } else {
-          await tx`
-            INSERT INTO skill_sources ${tx({
-              name,
-              repo_url: String(s.repo_url),
-              branch: String(s.branch ?? "main"),
-              trust_status: "quarantined",
-              enabled: false,
-            })}`;
-        }
+        // Registration reuses an exact repository/ref identity, never overwrites a same-name authority.
+        // SAFETY: transaction handles provide the SQL helper interface required by registration.
+        await registerSkillSource(tx as unknown as typeof sql, {
+          name, repo_url: String(s.repo_url), branch: String(s.branch ?? "main"),
+        });
         srcN++;
       }
       summary.skill_sources = srcN;

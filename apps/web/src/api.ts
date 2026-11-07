@@ -782,6 +782,19 @@ export interface FindingLink {
 /** Git 模块源（§8.2） */
 export type SkillTrustStatus = "quarantined" | "trusted" | "disabled";
 
+export interface SkillSourceCandidate {
+  schema: "deepsonar.skill-source-candidate/v1";
+  source_instance_id: string;
+  repo_url: string;
+  branch: string;
+  revocation_epoch: string;
+  commit_sha: string | null;
+  content_hash: string;
+  module_count: number;
+  synced_at: string;
+  synced_by: string | null;
+}
+
 export interface SkillSource {
   id: string;
   name: string;
@@ -795,7 +808,14 @@ export interface SkillSource {
   last_commit_sha?: string | null;
   last_content_hash?: string | null;
   synced_by?: string | null;
-  /** #954：距上次成功同步的秒数；null = 从未同步。 */
+  source_instance_id?: string;
+  revocation_epoch?: string;
+  catalog_snapshot_hash?: string | null;
+  candidate_hash?: string | null;
+  candidate_json?: SkillSourceCandidate | null;
+  last_checked_at?: string | null;
+  last_sync_error?: string | null;
+  /** #954/#960：距已批准 live 目录成功核验的秒数；null = 从未核验。 */
   age_seconds?: number | null;
   /** #954：超过 2×refreshIntervalSec（或 Job 快照阈值）未同步。 */
   stale?: boolean;
@@ -807,7 +827,14 @@ export interface ProjectSkillSourceBinding {
   name: string;
   repo_url: string;
   branch: string;
-  trust_status: string;
+  trust_status: SkillTrustStatus;
+  source_instance_id?: string;
+  revocation_epoch?: string;
+  catalog_snapshot_hash?: string | null;
+  candidate_hash?: string | null;
+  candidate_json?: SkillSourceCandidate | null;
+  last_checked_at?: string | null;
+  last_sync_error?: string | null;
   source_enabled: boolean;
   project_enabled: boolean;
   module_count: number;
@@ -2754,12 +2781,13 @@ export const api = {
   skillSources: () => get<SkillSource[]>("/skill-sources"),
   skillSource: (id: string) => get<SkillSourceDetail>(`/skill-sources/${id}`),
   createSkillSource: (s: { name: string; repo_url: string; branch: string }) =>
-    send<SkillSource>("POST", "/skill-sources", s),
+    send<SkillSource & { existing: boolean }>("POST", "/skill-sources", s),
   syncSkillSource: (id: string) =>
     send<{
       ok: boolean;
       modules: number;
       changed: boolean;
+      candidate_hash?: string | null;
       previous_commit_sha: string | null;
       last_commit_sha: string | null;
       previous_content_hash: string | null;
@@ -2767,8 +2795,12 @@ export const api = {
       synced_at: string;
     }>("POST", `/skill-sources/${id}/sync`),
   deleteSkillSource: (id: string) => send<{ ok: boolean }>("DELETE", `/skill-sources/${id}`),
-  trustSkillSource: (id: string, trust_status: SkillTrustStatus) =>
-    send<SkillSource>("POST", `/skill-sources/${id}/trust`, { trust_status }),
+  trustSkillSource: (id: string, trust_status: SkillTrustStatus, options: {
+    expected_epoch: string;
+    expected_instance_id: string;
+    candidate_hash?: string;
+    enabled?: boolean;
+  }) => send<SkillSource>("POST", `/skill-sources/${id}/trust`, { trust_status, ...options }),
   /** 用户认证 */
   authStatus: () => get<AuthStatus>("/auth/status"),
   authMe: () => get<AuthMe>("/auth/me"),

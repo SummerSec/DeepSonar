@@ -1,5 +1,5 @@
 import { ProjectRuntimeImageAuthority } from "./components/ProjectRuntimeImageAuthority";
-import { ArrowsClockwise, FloppyDisk, GearSix, PencilSimple, Plus, Trash, X } from "@phosphor-icons/react";
+import { FloppyDisk, GearSix, PencilSimple, Plus, Trash, X } from "@phosphor-icons/react";
 import { ROLE_UI_COLOR_PATTERN } from "@deepsonar/shared-types";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -43,7 +43,8 @@ import { HelpTip } from "./ui";
 import { ProjectCliProviderAllowlistPanel } from "./components/ProjectCliProviderAllowlistPanel";
 import { ProjectSkillSourceAllowlistPanel } from "./components/ProjectSkillSourceAllowlistPanel";
 import { inferToastKind, showToast } from "./toast";
-import { formatSkillSourceSyncFlash } from "./skill-source-sync-flash";
+import { SkillSourceCatalogActions } from "./components/SkillSourceCatalogActions";
+import { formatSkillSourceRegistrationFlash } from "./skill-source-sync-flash";
 import { ProjectJobQuotaSection } from "./components/ProjectJobQuotaSection";
 
 /**
@@ -128,7 +129,7 @@ export function SettingsPanel({
   const [projConfigs, setProjConfigs] = useState<ProjectRoleConfigEntry[]>([]);
   const [configRoleId, setConfigRoleId] = useState<string | null>(null);
   const [configBusy, setConfigBusy] = useState(false);
-  const [syncing, setSyncing] = useState<string | null>(null);
+  const canManageSources = canAccessAnyScope(me, ["skills:write"]) && !me?.actor?.project_id;
   const [msg, setMsg] = useState<string | null>(null);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
 
@@ -206,6 +207,7 @@ export function SettingsPanel({
     }
     if (dataNeeds.modules && canAccessAnyScope(me, ["skills:read"]) && (canLoadTab("roles") || canLoadTab("sources"))) api.skillSources()
       .then(async (list) => {
+        if (credentialRequest !== credentialRequestId.current) return;
         setSources(list);
         // 拉各源目录（模块勾选列表用）
         const details: Record<string, SkillSourceDetail> = {};
@@ -219,7 +221,7 @@ export function SettingsPanel({
               .catch(() => {}),
           ),
         );
-        setSourceDetails(details);
+        if (credentialRequest === credentialRequestId.current) setSourceDetails(details);
       })
       .catch(() => {});
   };
@@ -1083,7 +1085,7 @@ export function SettingsPanel({
               模块源
               <HelpTip>
                 Agent 的插件 / skill 集中托管在 Git 仓库（默认内置 <code>DeepSonar-Skills</code>
-                ）。同步后扫描出全部模块，在「角色配置」里按角色勾选下发；内容随同步缓存，跑任务不再访问 Git。
+                ）。同步只暂存候选；显式批准并启用后，所有未显式停用此源的项目后续 Job 默认可用，无需各项目勾选。不会修改已创建 Job 快照。
               </HelpTip>
             </div>
 
@@ -1093,13 +1095,13 @@ export function SettingsPanel({
                   <span className="text-[14px] font-medium text-zinc-100">{s.name}</span>
                   <span className="font-mono text-[12px] text-zinc-500">{s.branch}</span>
                   {(() => {
-                    const trust = s.trust_status ?? "trusted";
+                    const trust = s.trust_status;
                     const badge =
                       trust === "trusted" && s.enabled
                         ? { text: "已信任", cls: "border-emerald-800/60 text-emerald-300" }
                         : trust === "disabled"
                           ? { text: "已禁用", cls: "border-red-900/60 text-red-300" }
-                          : { text: "待审批", cls: "border-amber-800/60 text-amber-300" };
+                          : { text: trust ? "待审批" : "状态未知", cls: "border-amber-800/60 text-amber-300" };
                     return (
                       <span className={`rounded border px-1.5 py-px font-mono text-[11px] ${badge.cls}`}>
                         {badge.text}
@@ -1107,7 +1109,7 @@ export function SettingsPanel({
                     );
                   })()}
                   <span className="ml-auto font-mono text-[12px] text-zinc-600">
-                    {s.module_count ?? sourceDetails[s.id]?.catalog_json.length ?? 0} 模块
+                    {s.module_count ?? sourceDetails[s.id]?.catalog_json.length ?? "未知"} 模块
                   </span>
                 </div>
                 <div className="mt-0.5 truncate font-mono text-[12px] text-zinc-600">{s.repo_url}</div>
@@ -1116,84 +1118,41 @@ export function SettingsPanel({
                   {s.last_content_hash ? ` · hash ${s.last_content_hash.slice(0, 10)}` : ""}
                   {s.synced_by ? ` · by ${s.synced_by}` : ""}
                 </div>
-                <div className="mt-1.5 flex items-center gap-2">
+                <div className="mt-1 font-mono text-[11px] text-zinc-500">
+                  最近检查：{s.last_checked_at ? new Date(s.last_checked_at).toLocaleString() : "未知"}
+                  {s.last_sync_error && <span className="text-amber-300"> · {s.last_sync_error}</span>}
+                </div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-2">
                   <span className="font-mono text-[12px] text-zinc-600">
-                    {`${s.synced_at ? `同步于 ${new Date(s.synced_at).toLocaleString()}` : "未同步"}${s.age_seconds == null ? " · 从未成功同步" : ` · ${s.stale ? "陈旧" : "新鲜"}（${Math.floor(s.age_seconds / 3600)}h）`}`}
+                    {`${s.synced_at ? `live 核验于 ${new Date(s.synced_at).toLocaleString()}` : "live 未核验"}${s.age_seconds === undefined ? " · 新鲜度未知" : s.age_seconds === null ? " · 从未成功核验" : ` · ${s.stale === undefined ? "状态未知" : s.stale ? "陈旧" : "新鲜"}（${Math.floor(s.age_seconds / 3600)}h）`}`}
                   </span>
-                  <span className="ml-auto flex items-center gap-1.5">
-                    {s.trust_status !== "trusted" && (
-                      <button
-                        onClick={async () => {
-                          await api.trustSkillSource(s.id, "trusted").catch((e) => flash(String(e)));
-                          flash("已批准下发");
-                          reload();
-                        }}
-                        className="rounded-md border border-emerald-900/60 px-2 py-0.5 font-mono text-[12px] text-emerald-300 transition-colors hover:bg-emerald-950/40"
-                      >
-                        批准
-                      </button>
-                    )}
-                    {s.trust_status === "trusted" && (
-                      <button
-                        onClick={async () => {
-                          await api.trustSkillSource(s.id, "quarantined").catch((e) => flash(String(e)));
-                          flash("已撤回信任（回到隔离区）");
-                          reload();
-                        }}
-                        className="rounded-md border border-amber-900/60 px-2 py-0.5 font-mono text-[12px] text-amber-300 transition-colors hover:bg-amber-950/40"
-                      >
-                        隔离
-                      </button>
-                    )}
-                    {s.trust_status !== "disabled" && (
-                      <button
-                        onClick={async () => {
-                          await api.trustSkillSource(s.id, "disabled").catch((e) => flash(String(e)));
-                          flash("已禁用");
-                          reload();
-                        }}
-                        className="rounded-md border border-red-900/60 px-2 py-0.5 font-mono text-[12px] text-red-300 transition-colors hover:bg-red-950/40"
-                      >
-                        禁用
-                      </button>
-                    )}
-                    <button
+                  <div className="ml-auto flex items-center gap-1.5">
+                    <SkillSourceCatalogActions source={s} scopeKey={projectId ?? globalSection}
+                      onChanged={async () => {
+                        const request = credentialRequestId.current;
+                        const list = await api.skillSources();
+                        if (request === credentialRequestId.current) setSources(list);
+                      }} />
+                    {canManageSources && <button
+                      title="删除平台源"
                       onClick={async () => {
-                        setSyncing(s.id);
-                        try {
-                          const r = await api.syncSkillSource(s.id);
-                          flash(formatSkillSourceSyncFlash(r));
-                          reload();
-                        } catch (e) {
-                          flash(`同步失败：${e instanceof Error ? e.message : e}`);
-                        } finally {
-                          setSyncing(null);
-                        }
-                      }}
-                      disabled={syncing === s.id}
-                      className="flex items-center gap-1 rounded-md border border-ink-700 px-2 py-0.5 font-mono text-[12px] text-zinc-400 transition-colors hover:border-ink-600 hover:text-zinc-200 disabled:opacity-50"
-                    >
-                      <ArrowsClockwise size={11} className={syncing === s.id ? "animate-spin" : ""} />
-                      {syncing === s.id ? "同步中…" : "同步"}
-                    </button>
-                    <button
-                      onClick={async () => {
-                        await api.deleteSkillSource(s.id).catch(() => {});
-                        flash("已删除");
+                        try { await api.deleteSkillSource(s.id); }
+                        catch (e) { flash(`删除失败：${String(e)}`); return; }
+                        flash("已删除平台源");
                         reload();
                       }}
                       className="flex items-center gap-1 rounded-md border border-red-900/60 px-2 py-0.5 font-mono text-[12px] text-red-300 transition-colors hover:bg-red-950/40"
                     >
                       <Trash size={11} />
-                    </button>
-                  </span>
+                    </button>}
+                  </div>
                 </div>
               </div>
             ))}
 
-            <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
+            {canManageSources && <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
               <span className="font-mono text-[12px] uppercase tracking-[0.14em] text-zinc-500">
-                添加模块源
+                登记平台模块源
               </span>
               <input
                 value={newSource.name}
@@ -1217,13 +1176,13 @@ export function SettingsPanel({
                 onClick={async () => {
                   if (!newSource.name.trim() || !newSource.repo_url.trim()) return flash("名称与仓库地址必填");
                   try {
-                    await api.createSkillSource({
+                    const registered = await api.createSkillSource({
                       name: newSource.name.trim(),
                       repo_url: newSource.repo_url.trim(),
                       branch: newSource.branch.trim() || "main",
                     });
                     setNewSource({ name: "", repo_url: "", branch: "main" });
-                    flash("已添加，点「同步」扫描模块");
+                    flash(formatSkillSourceRegistrationFlash(registered));
                     reload();
                   } catch (e) {
                     flash(`添加失败：${e instanceof Error ? e.message : e}`);
@@ -1231,9 +1190,9 @@ export function SettingsPanel({
                 }}
                 className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400"
               >
-                <Plus size={13} weight="bold" className="block" />添加
+                <Plus size={13} weight="bold" className="block" />登记
               </button>
-            </div>
+            </div>}
           </div>
         )}
       </div>

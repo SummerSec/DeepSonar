@@ -1,6 +1,6 @@
 # 项目 Memory 与 Skill
 
-> 状态：#752 实现；同步日期：2026-11-05（本次核对拒绝反馈切片）。代码、[schema 基线](../database/schema.sql)和测试是事实入口。模型效果与生产试验结果需要独立记录，不能由状态机夹具推定。
+> 状态：#752 实现；同步日期：2026-11-07（#960 候选 CAS 保留根；既有拒绝反馈边界不变）。代码、[schema 基线](../database/schema.sql)和测试是事实入口。模型效果与生产试验结果需要独立记录，不能由状态机夹具推定。
 
 项目知识分为 Memory（有来源的简短事实）和 Skill（触发条件、步骤、输入输出、不适用边界）。两者有稳定身份、不可变版本和 active 指针。草稿、候选和评测资料不进入普通 Job 目录。
 
@@ -72,7 +72,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 六张领域表为 work、items、versions、proposals、evaluations、receipts；assignments、grants、usages 是权限和执行基础记录。项目/Job/Attempt 复合外键防止伪造 provenance，receipt 和 evaluation 只追加。Skill bundle 仅允许 `SKILL.md` 与安全路径下的文本 references，总量 128 KiB / 20 文件。
 
-`planKnowledgeBlobReachability` 提供只读离线根审计：所有历史版本（含 retired/revoked）、work/assignment 输入、历史 Job 目录、源清单及共享资产版本均保留。没有引用的索引字节也仅列为保留项，当前没有自动 GC。
+`planKnowledgeBlobReachability` 提供只读离线根审计：所有历史版本（含 retired/revoked）、work/assignment 输入、历史 Job 目录、源清单及共享资产版本均保留。#960 将全局源的 `catalog_snapshot_hash` 与待批 `candidate_hash` 都作为同类 `skill_source` 根；候选字节保留至指针被覆盖/清除或 source 删除，移除某个引用不移除其它历史 Job/版本保留根。保留不是授权，新 Job 仍只冻结已批准 live 指针。没有引用的索引字节也仅列为保留项，当前没有自动 GC（`deletion_enabled=false`）。[现有真实 PG 可达性回归](../apps/scheduler/src/domains/project-knowledge/reachability.integration.test.ts)覆盖候选覆盖/删除后的根变化及冻结 live，沿既有知识集成 CI 入口；本次仅编写和静态核对，未执行本地测试。
 
 ## 验证与运维
 

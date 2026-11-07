@@ -7,6 +7,8 @@
 
 > **v0.6.15 发布准备（2026-11-06）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)。Plan 范围修正与其他已合入补丁列于 [CHANGELOG](../CHANGELOG.md)，[#913](https://github.com/SummerSec/DeepSonar/issues/913) 的 accepted-terminal 窄修复已由 #919 合入，#930 增加受治理修复代际。最终 main Actions 与正式产物成功状态分别核对。
 
+> **全局 Skill 源发布隔离（#954/#960，2026-11-07）**：当前源码将手动/boot/周期 sync 限为候选，只有全局管理主体按候选 hash+epoch 显式批准才发布；既有 live 授权和旧 Job CAS 不迁移，显式撤销 epoch 保持。schema68 元数据、同源 session 锁与 CAS/事务 fence 见[数据归属](architecture/08-data-architecture.md#skill-源已批准目录与候选960)，管理员/项目边界与全局启用影响见[审批接口](architecture/09-interface-specs.md#全局-skill-源候选审批960)。同 hash 有效 live 健康核验可续鲜，不同候选不替 A 续鲜；从未成功为 null/+Inf，既有 Job/Intent 节点原位更新 warning。IR-007/FR-CAP-003/FR-KNOW-002、trace 和视图已同步；回归仅编写/静态核对，schema68 rebuild/恢复与最终 SHA Actions 待验，未运行本地测试、构建、typecheck 或数据库。风险与验收证据分离见[风险登记](architecture/12-risks-and-tech-debt.md#skill-源修复与剩余证据边界960)。
+
 #914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由 #925 交付，UI 由 #929 交付；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，不代表自动重跑或快照改写。
 
 > **Job 侧数据库冲突（#945）**：现有有界重试覆盖三个已核对纯数据库入口，Hub/报告保留原始 SQLSTATE；Verify/orphan 混合 I/O 恢复入口暂不整体重试，保留 #945 跟踪；不把 `25P02` 或未知外部效果当作安全重试依据。报告输入写入的幂等条件与非 SQL 回滚边界见[运行时视图](architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)。回归已接线，最终 SHA Actions 待验，未执行本地测试/构建/typecheck。

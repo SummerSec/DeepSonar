@@ -29,6 +29,14 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 实现入口：[凭据解析](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[快照组装](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[readiness](../../apps/scheduler/src/readiness.ts)。
 
+## Skill 源检查、审批与 Job 观察（#954/#960）
+
+[同步服务](../../apps/scheduler/src/skill-sources.ts)由手动、启动和周期入口共用；同源跨实例 session advisory lock 覆盖 probe→clone→scan→CAS→stage，业务 source 行事务仅用于最终暂存。探针只接受配置 branch 的完整 ref，SHA 未变也必须有匹配且健康的 CAS 证据才 skip；否则重 clone 或明确失败，不自动切默认 branch。stage 复核当前实例/repo/branch/epoch、非 disabled 和取消信号；信任/启用变化不等待网络 clone。新内容只是 pending candidate，周期 `updated`/`unchanged` 及日志明确区分候选暂存与 live 核验，不代表发布。失败重试有界，错误结果/日志/指标仅输出安全有限类别。
+
+只有有效 live 同 hash 的健康核验可推进 `synced_at`。候选 B 不给 A 续鲜；[Job 冻结](../../apps/scheduler/src/job-skill-catalog.ts)仍取 A 的 CAS 身份，并将年龄及 `source_update_pending` 作为不进 `catalog_hash` 的创建期观察。[Dispatcher](../../apps/scheduler/src/dispatcher.ts)对当前 canvas_id+job_id 的既有 Job/Intent 节点更新 `body_json.skill_catalog_warning`，保留其它 body 与原生命周期处理，不重复补节点/边，不覆盖其它类型或画布，也不把 warning 当权限门。显式审批 B 的原子发布及旧 Job/撤销规则见[接口](09-interface-specs.md#全局-skill-源候选审批960)和[数据](08-data-architecture.md#skill-源已批准目录与候选960)。
+
+[服务 PG 回归](../../apps/scheduler/src/skill-source-catalog-lifecycle.integration.test.ts)、[Canvas PG 回归](../../apps/scheduler/src/dispatcher-skill-warning.integration.test.ts)、既有 Job catalog/refresh/metrics 单测已编写接入现有 CI 门；本次未运行本地测试、构建、typecheck 或数据库，最终 SHA Actions 待验。阈值和默认值按[配置源码](../../apps/scheduler/src/config.ts)与[统一换算](../../apps/scheduler/src/skill-freshness.ts)核对，不复制可变数字。
+
 ## 正常链路
 
 ```mermaid

@@ -32,6 +32,8 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 
 #923 将模型数据面与结算确认分离，关联 FR-CRED-003/004、FR-CAP-009 和 NFR-PERF-004；[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)拥有原始字节、HTTP 边界、预算拒绝及 OM 查询契约，[ADR 0017](adr/0017-transparent-gateway-settlement.md)记录迁移。#928 已合入 main 616d7a36，工程证据见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
 
+#954/#960 的全局 Skill 源修复映射 [IR-007](01-system-specification.md#ir-007-git-skill-source)、[FR-CAP-003](01-system-specification.md#fr-cap-003-受治理-skill-拉取)、[FR-KNOW-002](01-system-specification.md#fr-know-002-跨项目-skill-精确授权)：sync 只候选、全局管理员精确 hash+epoch 审批、跨实例同源锁、旧 Job CAS/撤销边界不变。schema68 的已批准/候选元数据见[数据](08-data-architecture.md#skill-源已批准目录与候选960)，管理授权与全局启用影响见[接口](09-interface-specs.md#全局-skill-源候选审批960)，健康观测/既有画布节点 warning 见[运行时](06-runtime-view.md#skill-源检查审批与-job-观察954960)。回归已编写接线但本次未运行，本地测试/构建/typecheck/DB 均未执行，最终 SHA Actions 待验；[风险](12-risks-and-tech-debt.md#skill-源修复与剩余证据边界960)只保留实际证据缺口，不把已修复核心重新列作未来设计。
+
 ## 1. 阅读路径与目录
 
 | 文件 | 回答的问题 | 状态 |
@@ -75,6 +77,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 | 资源阈值与性能 | 04；[config](../../apps/scheduler/src/config.ts) | §9.2、§12 | 已迁入；不沿用旧默认值清单 |
 | Model Gateway 透明传输 | [透明传输契约](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM 结算](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)；06/09/10 | 历史代理描述不作为现行契约 | #923 单次原始传输、准入拒绝与 scoped 持久确认，Actions 待验 |
 | 安全与隔离 | 10；[设备边界](../DEVICE_ACCESS.md)、[共享资产](../SHARED_ASSET_BLOB_STORE.md) | §9.1 | 概览已迁入，专题保留细则 |
+| 全局 Git Skill 源发布与新鲜度 | IR-007、FR-CAP-003/FR-KNOW-002；[候选数据](08-data-architecture.md#skill-源已批准目录与候选960)、[审批接口](09-interface-specs.md#全局-skill-源候选审批960)；06/10 | 旧 §8.4 仅历史对照 | #960 schema68：既有 live 不迁移，sync 只候选，精确 hash+epoch 显式批准；旧 Job 不改，健康检查与 pending 分离；最终 Actions 待验 |
 | 项目 Memory / Skill | 01 中 FR-KNOW；05–10 相关视图；[项目知识专题](../PROJECT_KNOWLEDGE.md) | 本期新增 | #752 分支实现与验证范围分开记录；专题拥有工作流和字段细则 |
 | 可信目标执行授权 | FR-TASK-006；06/09/10；[ADR-0011](adr/0011-trusted-target-authorization.md)、[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md) | 本期新增 | 只读 authority、immutable grant、中央继承、实时重核；不执行目标动作 |
 | Plan v2 有界执行 | FR-CAP-006、FR-HUB-002/003/005；06/08/09；[ADR-0012](adr/0012-plan-v2-execution.md)、[Plan 专题](../PLAN_GAP_PROJECTION.md) | 本期新增 | 当前写入只接收 v2；objective CAS、lifetime 预算与实际输出来源；writer 已物理删除（2026-10-31），历史本地 replay/negative gate 保留原范围，本轮工程已随 #831 Actions 验收，后续修复 SHA 另验 |
