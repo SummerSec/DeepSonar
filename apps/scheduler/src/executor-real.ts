@@ -78,6 +78,7 @@ import { REPORT_QUANTITY_VERBATIM_NOTE } from "./report-numeric-fidelity.js";
 import { publishStream } from "./stream-bus.js";
 import { CONTROL_MCP_NAME, CONTROL_SEMANTIC_EVENT_TYPES } from "./platform-control.js";
 import { subscribeCanvasUpdates } from "./canvas-updates.js";
+import { persistJobToolProgress } from "./domains/canvas/job-tool-progress.js";
 import { platformToolGuide, PLATFORM_CONTROL_CALLING_RULES } from "./platform-tools.js";
 import {
   filterFrozenSharedAssets,
@@ -1870,9 +1871,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
           const now = Date.now();
           if (now - lastActionPush > 1500) {
             lastActionPush = now;
-            void sql`
-              UPDATE canvas_nodes SET body_json = body_json || ${sql.json({ last_progress: { message: action, kind: "tool" } })}, updated_at = now()
-              WHERE job_id = ${jobId} AND node_type = 'job'`.catch(() => {});
+            void persistJobToolProgress(sql, { canvasId, jobId, action }).catch(() => {});
           }
         } else if (type === "tool.call.completed") {
           const toolName = String(e.toolName ?? "tool");

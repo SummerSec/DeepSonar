@@ -11,7 +11,7 @@
 
 #914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由 #925 交付，UI 由 #929 交付；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，不代表自动重跑或快照改写。
 
-> **Job 侧数据库冲突（#945）**：现有有界重试覆盖三个已核对纯数据库入口，Hub/报告保留原始 SQLSTATE；Verify/orphan 混合 I/O 恢复入口暂不整体重试，保留 #945 跟踪；不把 `25P02` 或未知外部效果当作安全重试依据。报告输入写入的幂等条件与非 SQL 回滚边界见[运行时视图](architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)。回归已接线，最终 SHA Actions 待验，未执行本地测试/构建/typecheck。
+> **Job 侧数据库冲突（#945）**：工具活动进度投影修复 Canvas-first 锁序并沿用纯数据库有界重试；原有有界重试覆盖三个已核对纯数据库入口，Hub/报告保留原始 SQLSTATE；Verify/orphan 混合 I/O 恢复入口暂不整体重试，保留 #945 跟踪；不把 `25P02` 或未知外部效果当作安全重试依据。报告输入写入的幂等条件与非 SQL 回滚边界见[运行时视图](architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)。回归已接线，最终 SHA Actions 待验，未执行本地测试/构建/typecheck。
 
 > **注意力原则（#830）**：单一权威定义见 [DESIGN](../DESIGN.md#核心理念优化人的注意力)，开发与贡献入口引用同一[工程评审及正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)。NFR-UX-001 登记约束与验证范围；本次只落实设计/评审依据，不改变运行时、UI 或授权，也不宣称注意力收益。
 
