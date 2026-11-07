@@ -21,6 +21,7 @@ import {
 } from "./evidence.js";
 import { config } from "./config.js";
 import { encodeCursor } from "./pagination.js";
+import { readRuntimeArtifact } from "./runtime-evidence.js";
 
 const gzipP = promisify(gzip);
 const gunzipP = promisify(gunzip);
@@ -366,6 +367,11 @@ test("#765 large RPC artifact survives finalization with an attempt-scoped hash 
   try {
     const reference = await writer.appendRuntimeArtifact(artifact);
     assert.equal(await readFile(path.join(root, reference), "utf8"), artifact.content);
+    const sourceHash = createHash("sha256").update(artifact.content).digest("hex");
+    const beforeFinalize = await readRuntimeArtifact(jobId, { path: reference, attempt_id: "rpc-capture", sha256: sourceHash, pointer: "/text", bytes: 1_200_000 });
+    assert.equal(beforeFinalize.value, "中".repeat(400_000), "read full UTF-8 text before finalize, not an inline preview");
+    assert.equal(beforeFinalize.source.sha256, sourceHash);
+    assert.notEqual(beforeFinalize.sha256, sourceHash, "payload and archive hashes have different scopes");
     const { manifest } = await writer.finalize();
     const entry = manifest.files.find(f => f.path === reference)!;
     assert.equal(entry.bytes, Buffer.byteLength(artifact.content));
@@ -374,5 +380,117 @@ test("#765 large RPC artifact survives finalization with an attempt-scoped hash 
     assert.equal((await readSessionArtifact(jobId, reference))?.content.toString("utf8"), artifact.content);
     assert.equal(await readSessionArtifact(jobId, "attempts/other/runtime/unknown.json"), null);
     await assert.rejects(writer.appendRuntimeArtifact({ ...artifact, name: "../other-attempt/secret.json" }), /Invalid runtime artifact name/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("#990 RPC read verifies source, pointers, typed arrays and missing local bytes after restart", async () => {
+  const jobId = "00000000-0000-4000-8000-000000000990";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const writer = new JobEvidenceWriter(jobId, "pi", "rpc-read");
+  const name = "pi-rpc-12345678-1234-4000-8000-123456789012-1.json";
+  const value = { message: { content: Array.from({ length: 160 }, (_, i) => ({ type: "text", text: `block-${i}` })) }, "a/b~c": { "": "完整正文" } };
+  const content = JSON.stringify(value);
+  try {
+    const ref = await writer.appendRuntimeArtifact({ name, content });
+    const input = { path: ref, attempt_id: "rpc-read", sha256: createHash("sha256").update(content).digest("hex") };
+    const resumed = new JobEvidenceWriter(jobId, "pi", "rpc-read");
+    const array = await readRuntimeArtifact(jobId, { ...input, pointer: "/message/content" });
+    assert.deepEqual(array.value, value.message.content);
+    assert.equal(array.encoding, "json");
+    assert.equal(array.bytes, Buffer.byteLength(JSON.stringify(value.message.content)));
+    assert.equal((await readRuntimeArtifact(jobId, { ...input, pointer: "/a~1b~0c/", bytes: 12 })).value, "完整正文");
+    assert.deepEqual((await readRuntimeArtifact(jobId, input)).value, value);
+    for (const [change, code] of [
+      [{ attempt_id: "other-attempt" }, "PI_RPC_ARCHIVE_NOT_FOUND"],
+      [{ path: "../outside.json" }, "PI_RPC_ARCHIVE_NOT_FOUND"],
+      [{ sha256: "0".repeat(64) }, "PI_RPC_ARCHIVE_HASH_MISMATCH"],
+      [{ pointer: "/message/content/160" }, "PI_RPC_POINTER_NOT_FOUND"],
+      [{ pointer: "/message/content/01" }, "PI_RPC_POINTER_NOT_FOUND"],
+      [{ pointer: "/__proto__" }, "PI_RPC_POINTER_NOT_FOUND"],
+      [{ pointer: "/bad~2escape" }, "PI_RPC_POINTER_INVALID"],
+      [{ pointer: "/a~1b~0c/", bytes: 4 }, "PI_RPC_PAYLOAD_SIZE_MISMATCH"],
+    ] as const) await assert.rejects(readRuntimeArtifact(jobId, { ...input, ...change }), new RegExp(code));
+    const pending = readRuntimeArtifact(jobId, input);
+    await assert.rejects(readRuntimeArtifact(jobId, input), /PI_RPC_READ_BUSY/);
+    await pending;
+    await resumed.finalize();
+    assert.deepEqual((await readRuntimeArtifact(jobId, input)).value, value);
+    await writeFile(path.join(root, ref), content.replace("block-159", "wrong-159"));
+    await assert.rejects(readRuntimeArtifact(jobId, input), /PI_RPC_ARCHIVE_HASH_MISMATCH/);
+    await rm(path.join(root, ref));
+    await assert.rejects(readRuntimeArtifact(jobId, input), /PI_RPC_ARCHIVE_UNAVAILABLE/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("#990 historical RPC reads redact OM before selecting pointers and preserve source identity", async () => {
+  const jobId = "00000000-0000-4000-8000-000000000993";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const writer = new JobEvidenceWriter(jobId, "claude-code", "rpc-history");
+  const content = JSON.stringify({ type: "response", success: false, state: { customType: "om.observations.recorded",
+    data: { content: "RPC_PRIVATE_OM_CANARY" } } });
+  try {
+    const ref = await writer.appendRuntimeArtifact({ name: "pi-rpc-abcd-1.json", content });
+    const input = { path: ref, attempt_id: "rpc-history", sha256: createHash("sha256").update(content).digest("hex") };
+    const selected = await readRuntimeArtifact(jobId, { ...input, pointer: "/state/data/content" });
+    assert.equal(selected.value, "[REDACTED: observational-memory]");
+    assert.equal(selected.source.sha256, input.sha256);
+    assert.equal(selected.sha256, createHash("sha256").update(String(selected.value)).digest("hex"));
+    assert.equal((await readRuntimeArtifact(jobId, { ...input, pointer: "/success", bytes: 5 })).value, false);
+    const session = await readSessionArtifact(jobId, ref);
+    assert.ok(session);
+    assert.ok(!session.content.toString("utf8").includes("RPC_PRIVATE_OM_CANARY"), "mixed CLI manifests still redact runtime RPC files");
+    assert.equal(await readFile(path.join(root, ref), "utf8"), content, "projection never rewrites source");
+    const manifestPath = path.join(root, "manifest.json");
+    const manifestText = await readFile(manifestPath, "utf8");
+    const oversized = JSON.parse(manifestText);
+    oversized.files[0].bytes = 128 * 1024 * 1024 + 1;
+    await writeFile(manifestPath, JSON.stringify(oversized));
+    await assert.rejects(readRuntimeArtifact(jobId, input), /PI_RPC_READ_BUDGET_EXCEEDED/);
+    await writeFile(manifestPath, manifestText);
+    assert.equal((await readRuntimeArtifact(jobId, input)).source.sha256, input.sha256, "budget rejection releases the read slot");
+    const invalid = "{invalid json";
+    const invalidPath = await writer.appendRuntimeArtifact({ name: "pi-rpc-abcd-2.json", content: invalid });
+    await assert.rejects(readRuntimeArtifact(jobId, { ...input, path: invalidPath, sha256: createHash("sha256").update(invalid).digest("hex") }), /PI_RPC_ARCHIVE_INVALID_JSON/);
+    await writer.finalize();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("#990 RPC archive count budget and immutability survive a new writer for the same Attempt", async () => {
+  const jobId = "00000000-0000-4000-8000-000000000991";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const prefix = "pi-rpc-12345678-1234-4000-8000-123456789012-";
+  try {
+    const writer = new JobEvidenceWriter(jobId, "pi", "rpc-budget");
+    for (let i = 1; i <= 128; i++) await writer.appendRuntimeArtifact({ name: `${prefix}${i}.json`, content: "{}" });
+    const resumed = new JobEvidenceWriter(jobId, "pi", "rpc-budget");
+    await assert.rejects(resumed.appendRuntimeArtifact({ name: `${prefix}129.json`, content: "{}" }), /Runtime artifact budget exceeded/);
+    const another = new JobEvidenceWriter(jobId, "pi", "rpc-budget");
+    await assert.rejects(another.appendRuntimeArtifact({ name: `${prefix}1.json`, content: "{\"replacement\":true}" }), /Runtime artifact already exists/);
+    const ref = `attempts/rpc-budget/runtime/${prefix}1.json`;
+    assert.equal(await readFile(path.join(root, ref), "utf8"), "{}");
+    await another.appendNormalized({ type: "runtime.diagnostic", code: "PI_RPC_CAPTURE_WRITE_FAILED" });
+    const finalized = await another.finalize();
+    assert.equal(finalized.manifest.capture_error, "Runtime artifact capture failed");
+    assert.ok(finalized.manifest.files.some(file => file.kind === "stream"), "rejected capture does not poison finalization");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("#990 unindexed archives and interrupted temporary writes consume restart budgets without becoming references", async () => {
+  const jobId = "00000000-0000-4000-8000-000000000994";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const runtimeDir = path.join(root, "attempts", "rpc-unindexed", "runtime");
+  try {
+    await mkdir(runtimeDir, { recursive: true });
+    await Promise.all(Array.from({ length: 126 }, (_, index) => writeFile(path.join(runtimeDir, `pi-rpc-abcd-${index}.json`), "{}")));
+    await writeFile(path.join(runtimeDir, "pi-rpc-abcd-127.json.1.1.tmp"), "{}");
+    await writeFile(path.join(runtimeDir, "pi-rpc-abcd-128.json.1.1.tmp"), "{}");
+    const writer = new JobEvidenceWriter(jobId, "pi", "rpc-unindexed");
+    await assert.rejects(writer.appendRuntimeArtifact({ name: "pi-rpc-abcd-129.json", content: "{}" }), /Runtime artifact budget exceeded/);
+    await writer.appendNormalized({ type: "runtime.diagnostic", code: "PI_RPC_CAPTURE_WRITE_FAILED" });
+    const finalized = await writer.finalize();
+    assert.ok(finalized.manifest.files.every(file => file.kind !== "vendor_export"), "unindexed captures never become trusted references");
+    assert.equal(finalized.manifest.capture_error, "Runtime artifact capture failed");
+    const ref = "attempts/rpc-unindexed/runtime/pi-rpc-abcd-0.json";
+    await assert.rejects(readRuntimeArtifact(jobId, { path: ref, attempt_id: "rpc-unindexed", sha256: createHash("sha256").update("{}").digest("hex") }), /PI_RPC_ARCHIVE_NOT_FOUND/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

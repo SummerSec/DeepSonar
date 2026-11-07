@@ -143,6 +143,10 @@ Gateway 的请求次数额度在 Job 锁内跨 token/Attempt 累计；撤销/过
 
 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)给 mark_job_done 增加必填 proposal revision header、原 key 的只读回执查询和持久拒绝计数。原 Control 权限仍有效；accepted/persisted_deferred 不是终态或效果结算。
 
+## Pi RPC 完整归档回读（#990 切片）
+
+`GET /jobs/:id/evidence/runtime` 是 Management 只读接口，沿用 `tasks:read` 和项目/Job 鉴权，不新增 Control operation。严格 query 选择 `path/attempt_id/sha256`、可选 RFC 6901 `pointer` 和返回值 `bytes` 校验；仅读取该 Job manifest 的对应 Attempt RPC 文件。先校验不可变源长度/hash，再完整脱敏、选值；`value` 保持类型，`source` 与返回值 hash/字节范围明确分离。未知字段、源冲突、Pointer/字节/预算/本地可见性错误返回稳定 `PI_RPC_*`，忙返回可审查拒绝，不以预览降级成成功。既有证据列表/下载按需访问，无新开关、通知或自动大输入。完整字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 和 [Pi RPC 专题](../PI_RPC_PAYLOAD_LIMITS.md)，最终 SHA Actions 待验。
+
 ## 稳定错误和 RepairFeedback
 
 #951 候选在实际 `executeReal` 运行结束后的本地缺 done 路径使用 `AGENT_COMPLETION_UNOBSERVED`；原 runner/语义错误仍保留原错误对象/分类。诊断写入现有 Job Evidence stream，由既有项目/Job 权限读取，不增加公开 transcript/工具输入或新恢复接口。原控制回执按 Job/Attempt/snapshot/receipt identity 验证后只投影元数据；接纳或 done 事件存在不表示最终 Job 成功，读取不可用不表示无提案、零用量或可重放。终态 token 失效后应由有权用户通过既有 Job 详情/证据检查，不建议猜测新 token/key。详细字段及候选待验范围见[完成失败诊断](../AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)。

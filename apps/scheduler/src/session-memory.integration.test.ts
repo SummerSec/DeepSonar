@@ -68,3 +68,44 @@ test("historical Pi session preview/download redact before truncation and preser
     assert.equal(nativeDownload.headers["x-deepsonar-session-projection"], undefined);
   } finally { await h.close(); }
 });
+
+test("#990 capture previews round-trip complete text, arrays and leaf refs through the HTTP reader", { skip: !process.env.TEST_DATABASE_URL }, async () => {
+  const h = await createPlanExecutionFixture();
+  try {
+    const { JobEvidenceWriter } = await import("./evidence.js");
+    const { PiRpcOutputCapture, PI_RPC_ARCHIVE_FIELD, PI_RPC_REF_FIELD, PI_RPC_INLINE_BYTES } = await import("@deepsonar/runtime-sandbox");
+    const f = await h.fixture();
+    const writer = new JobEvidenceWriter(f.hub, "pi", "rpc-http");
+    const capture = new PiRpcOutputCapture({ uploadFile: async () => {} }, [], artifact => writer.appendRuntimeArtifact(artifact), () => {});
+    const cases = [
+      { record: { type: "message_update", text: "中".repeat(400_000) }, pointer: "/text", value: "中".repeat(400_000) },
+      { record: { type: "message_end", message: { role: "assistant", stopReason: "end_turn", content: Array.from({ length: 160 }, (_, i) => ({ type: "text", text: `${i}:` + "x".repeat(8000) })) } }, pointer: "/message/content", value: undefined },
+      { record: { type: "tool_execution_start", toolCallId: "call-1", toolName: "write", args: { content: "z".repeat(PI_RPC_INLINE_BYTES + 1024) } }, pointer: "/args/content", value: "z".repeat(PI_RPC_INLINE_BYTES + 1024) },
+      { record: { type: "response", id: "preview-ref", command: "get_state", success: true, values: Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`k${i}`, { text: "测🙂".repeat(2000) }])) }, pointer: "/values/k0/text", value: "测🙂".repeat(2000) },
+    ];
+    for (const item of cases) {
+      const output = await capture.prepare(item.record, Buffer.byteLength(JSON.stringify(item.record)));
+      const archive = output[PI_RPC_ARCHIVE_FIELD] as { path: string; sha256: string; bytes: number };
+      assert.ok(archive, "every preview has a durable archive association");
+      const q = new URLSearchParams({ path: archive.path, attempt_id: "rpc-http", sha256: archive.sha256, pointer: item.pointer });
+      if (output.values) {
+        const ref = ((output.values as Record<string, Record<string, unknown>>).k0!.text) as Record<string, unknown>;
+        assert.equal(ref[PI_RPC_REF_FIELD], archive.path);
+        q.set("bytes", String(ref.bytes));
+      }
+      const response = await h.app.inject({ method: "GET", url: `/jobs/${f.hub}/evidence/runtime?${q}` });
+      assert.equal(response.statusCode, 200, response.payload.slice(0, 200));
+      const expected = item.value ?? (item.record as { message: { content: unknown } }).message.content;
+      assert.deepEqual(response.json().value, expected);
+      assert.equal(response.json().source.sha256, archive.sha256);
+      if (output.args) assert.equal(((output.args as Record<string, unknown>).content as Record<string, unknown>)[PI_RPC_REF_FIELD], archive.path);
+      const wrong = await h.app.inject({ method: "GET", url: `/jobs/${f.hub}/evidence/runtime?${q}&unexpected=true` });
+      assert.equal(wrong.statusCode, 400);
+      assert.equal(wrong.json().error_code, "PI_RPC_READ_INVALID");
+      q.set("attempt_id", "other-attempt");
+      const crossAttempt = await h.app.inject({ method: "GET", url: `/jobs/${f.hub}/evidence/runtime?${q}` });
+      assert.equal(crossAttempt.statusCode, 404);
+    }
+    await writer.finalize();
+  } finally { await h.close(); }
+});

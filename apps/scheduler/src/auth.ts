@@ -156,6 +156,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /jobs/:id": "tasks:read",
   "GET /jobs/:id/events": "tasks:read",
   "GET /jobs/:id/evidence": "tasks:read",
+  "GET /jobs/:id/evidence/runtime": "tasks:read",
   "GET /jobs/:id/evidence/session": "tasks:read",
   "GET /jobs/:id/evidence/session/download": "tasks:read",
   "GET /jobs/:id/evidence/stream": "tasks:read",
