@@ -87,10 +87,10 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 | 事件窗口或图查询预算耗尽 | 429 或预算错误，反馈当前状态和剩余预算 | 用新的有界查询/延迟重试修复；不扩大 Job scope |
 | provisioning 在外部效果开始前已知失败 | 记录失败并按已知可重试策略决定新 Attempt；Job 进入失败或受控 retry | 只有明确安全的 provisioning 重试允许继续；不重复未知外部效果 |
 | effect intent 已写但外部结果未知（例如沙箱句柄/销毁回执缺失） | Attempt effect 标记 `unknown`，Job 进入 orphan/对账路径，保留 effect id | **禁止自动重放未知效果**；由对账或人工确认后采取下一步 |
-| 已接受 done 后 CLI 再请求模型 | 仅对具有结构化终态来源的精确 Gateway 完成拒绝放行原 Hub/done bundle；进程退出、缺终态、传输/诊断或语义失败不覆盖 | 不重试进程、不重放未知效果，仍过原 ingestion/lifecycle 门；来源契约与离线回归见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919) |
+| 已接受 done 后 CLI 再请求模型 | 仅对具有结构化终态来源的精确 Gateway 完成拒绝放行原 Hub/done bundle；#947 候选补齐 `409` / `409:` 后接空格的精确前缀，并从 Pi `message_end` 解码结果覆盖终态归一化与原 bundle 唯一结算；进程退出、缺终态、传输/诊断、语义失败与 Repair usage 拒绝不覆盖 | 不重试进程、不重放未知效果，仍过原 ingestion/lifecycle 门；最终 SHA Actions 待验，来源契约与离线回归见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919) |
 | 用户取消或 deadline 超时 | 以状态 CAS 收敛 Job/Attempt，停止 lease，撤销 token，执行可重复清理 | 迟到回调不能复活 Job；清理自身若未知也保留 unknown 记录 |
 | Scheduler 重启 | preparing 且没有 effect 的 Job 可回 pending；已发 intent、未结算或有外部句柄的 Attempt 走 unknown/orphan | Reaper/reconcile 先对账再清理；不能把“没有日志”当作“没有效果” |
-| Agent 调用 `request_human` | 执行器在异步预检前后检查完成预留及终态互斥，防止等待期间已接受完成或人工请求后再覆盖；记录 human message，Job 进入 `waiting_human`；人工回复另走 ACK operation | ACK 与 injected 分离；有回复可回 pending，等待人工预算超时由 Reaper 将 Job 置为 `failed` 并以 `human_timeout` 记因 |
+| Agent 调用 `request_human` | 执行器在异步预检前后检查完成预留及终态互斥，防止等待期间已接受完成或人工请求后再覆盖；记录 human message，Job 进入 `waiting_human`；人工回复另走 ACK operation | ACK 与 injected 分离；独立预算到期且全部效果已结清、无本轮对账进展时才 failed/human_timeout；未结清的 active/planned/pending/unknown 效果保留等待，不推进 Canvas 失败，见 [#946 切片](../AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)，最终 SHA 待验 |
 | Verify 等待证据、回到 rework 或进入 needs_human | Verify 域拥有 round 状态；Agent 的合法 verdict 是 `confirmed`、`rework`、`needs_human` 或 `refuted`，Scheduler 可按收敛政策把结果记录为 `inconclusive` | 不以 Agent 总结替代证据门；不可判定结果显式保留 |
 | Research 失败 | 在研究 run 中记录失败；savepoint 不回滚主 Finding/Report | 可重新发起有界研究，但不能修改 Verify、严重性或 Fact 状态 |
 | Report 失败或输入变化 | 保留旧成功版本，记录当前版本失败或追加新版本 | 报告投影失败不改写内部 Artifact/Finding/Evidence |
@@ -194,6 +194,12 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 
 该 v1 路线修订仅作为不可变历史记录读取；当前路线修改使用上文 v2 `execution_route` CAS。历史事件、快照和回执不改写，未知效果、待结算回执或失效目标都不能借旧协议恢复执行。详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。
 
+
+## 创建入口的完整运行冻结（#943 / #948）
+
+当前修复把 task retry、自动 Hub、Verify、人工补证及 Task/Finding Report 接到 [`job-runtime-freeze.ts`](../../apps/scheduler/src/job-runtime-freeze.ts)，与普通创建共用 runtime knobs、OM quota、profile/launch 的冻结规则；Job timeout 列使用同一冻结值。retry 在原 dispatcher-advisory/Canvas 事务内、清理旧画布之前冻结；冻结失败或后续插入失败保留旧任务。既有 Intent/PlanTask 已使用该规则，不增加第二执行路径。
+
+缺损历史快照仍明确拒绝，不自动用当前配置重建预算；管理恢复反馈增加缺失字段，不声称具备安全重放证据。范围、残留恢复项与 Actions 入口见[生命周期专题](../AGENT_REPAIR_LIFECYCLE.md#创建入口补齐与缺损快照诊断943--948)；本切片最终 SHA 验收待完成。
 
 ## Model Gateway 透明传输与结算（#923）
 

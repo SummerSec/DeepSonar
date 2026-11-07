@@ -169,6 +169,24 @@ if (!testDatabaseUrl) {
       const post = (jobId: string, action: "resume" | "rerun-current") =>
         app.inject({ method: "POST", url: `/jobs/${jobId}/${action}` });
 
+      // First-Attempt missing knobs remain a read-only rejection, even if a
+      // freshly resolved snapshot exists: absence of ledger rows is not proof of no effect.
+      const { runtime_knobs: _missingKnobs, ...unfrozenSnapshot } = baselineSnapshot;
+      const unfrozenJob = await insertJob({ status: "failed", snapshot: unfrozenSnapshot });
+      const beforeUnfrozen = [...await sql`SELECT * FROM jobs WHERE id=${String(unfrozenJob.id)}`];
+      for (const action of ["resume", "rerun-current"] as const) {
+        const denied = await post(String(unfrozenJob.id), action);
+        assert.equal(denied.statusCode, 409, denied.payload);
+        assert.equal(denied.json().error_code, "GATEWAY_REQUEST_BUDGET_INVALID");
+        assert.deepEqual(denied.json().missing_fields, ["agent_snapshot_json.runtime_knobs"]);
+        assert.equal(denied.json().next_action, "inspect-job-recovery");
+        assert.deepEqual([...await sql`SELECT * FROM jobs WHERE id=${String(unfrozenJob.id)}`], beforeUnfrozen);
+        for (const table of ["job_attempts", "job_tokens", "events"] as const) {
+          const [count] = await sql`SELECT count(*)::int AS n FROM ${sql(table)} WHERE job_id=${String(unfrozenJob.id)}`;
+          assert.equal(count.n, 0, `${action}: ${table} must not gain guessed history`);
+        }
+      }
+
       // Pre-binding Jobs cannot resume into a later Gateway rejection. Refusal is
       // read-only: migration must use the explicit governed recovery operation.
       const legacySnapshot = { ...baselineSnapshot };

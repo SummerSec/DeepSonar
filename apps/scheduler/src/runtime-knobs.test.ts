@@ -5,6 +5,7 @@ import {
   envRuntimeKnobDefaults,
   freezeRuntimeKnobs,
   frozenRuntimeKnobsFromSnapshot,
+  missingFrozenKnobFields,
   jobTokenQuotaExhausted,
   mergeRoleRuntimeKnobOverrides,
   parseRuntimeKnobOverride,
@@ -142,6 +143,16 @@ test("frozen snapshot knobs round-trip and reject partial blobs", () => {
   const frozen = freezeRuntimeKnobs(resolveRuntimeKnobs({ jobType: "audit", env, role: { stallSec: 600 } }));
   assert.deepEqual(frozenRuntimeKnobsFromSnapshot({ runtime_knobs: frozen }), frozen);
   assert.equal(frozenRuntimeKnobsFromSnapshot({ runtime_knobs: { stall_sec: 900 } }), null);
+  assert.deepEqual(missingFrozenKnobFields({ runtime_knobs: frozen }), []);
+  assert.deepEqual(missingFrozenKnobFields({}), ["agent_snapshot_json.runtime_knobs"]);
+  assert.deepEqual(missingFrozenKnobFields(null), ["agent_snapshot_json"]);
+  for (const field of ["stall_sec", "job_token_max_requests", "timeout_sec", "provision_timeout_sec"] as const) {
+    const { [field]: _removed, ...partial } = frozen;
+    for (const value of [partial, { ...frozen, [field]: -1 }, { ...frozen, [field]: "100" }, { ...frozen, [field]: 1.5 }]) {
+      assert.deepEqual(missingFrozenKnobFields({ runtime_knobs: value }), [`agent_snapshot_json.runtime_knobs.${field}`]);
+      assert.equal(frozenRuntimeKnobsFromSnapshot({ runtime_knobs: value }), null);
+    }
+  }
 });
 
 test("job timeout may be shorter than the platform 60s floor", () => {
@@ -164,6 +175,29 @@ test("project cannot override provisionTimeoutSec", () => {
   });
   assert.equal(resolved.provisionTimeoutSec, 400);
   assert.equal(resolved.sources.provisionTimeoutSec, "platform");
+});
+
+test("budget inspection names a damaged snapshot root before any database access", async () => {
+  const { GatewayRequestBudgetError, inspectGatewayRequestBudget } = await import("./gateway-request-policy.js");
+  let queries = 0;
+  const noDatabase = async () => { queries += 1; assert.fail("damaged snapshots must be refused before budget history reads"); };
+  // This rejection-only SQL stub must never be called; it has no database or write surface.
+  const db = noDatabase as unknown as Parameters<typeof inspectGatewayRequestBudget>[0];
+  for (const snapshot of [undefined, null, [], true, 7, "private-snapshot-content"]) {
+    await assert.rejects(inspectGatewayRequestBudget(db, "snapshot-fixture", snapshot), (error: unknown) => {
+      assert.ok(error instanceof GatewayRequestBudgetError);
+      assert.equal(error.code, "GATEWAY_REQUEST_BUDGET_INVALID");
+      assert.deepEqual(error.missing_fields, ["agent_snapshot_json"]);
+      assert.doesNotMatch(error.message, /private-snapshot-content/);
+      return true;
+    });
+  }
+  await assert.rejects(inspectGatewayRequestBudget(db, "snapshot-fixture", {}), (error: unknown) => {
+    assert.ok(error instanceof GatewayRequestBudgetError);
+    assert.deepEqual(error.missing_fields, ["agent_snapshot_json.runtime_knobs"]);
+    return true;
+  });
+  assert.equal(queries, 0, "no policy, token, receipt or Attempt history is read or changed");
 });
 
 test("env defaults stay aligned with bootstrap config", () => {

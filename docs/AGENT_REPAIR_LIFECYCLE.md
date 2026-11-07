@@ -13,11 +13,28 @@
 
 `rerun-current` 保留原已授权 Pi 扩展选择并重新经过当前镜像/扩展准入。创建与恢复共用 `job-runtime-freeze.ts`，按平台配置一致重冻 quota、runtime knobs、profile 和 launch；较大的新配置不会授权提高旧 Job 持久请求策略。
 
+### 创建入口补齐与缺损快照诊断（#943 / #948）
+
+2026-11-06 核对 `c0809b3e`：task retry、自动 Hub、Verify、人工补证及两类 Report 直接插入 resolver 快照，缺少完整 runtime freeze；普通 Intent/PlanTask 已冻结，不重复改造。本切片在原事务内调用共享冻结器，冻结结果与 `jobs.timeout_sec` 保持一致；retry 在清空旧画布前冻结，插入故障回滚旧任务，不另开创建事务。网络、设备、种子、共享资产和完成/验证门不放宽。
+
+预算错误继续使用 `GATEWAY_REQUEST_BUDGET_INVALID`，缺损 knobs 在管理恢复响应增加 `missing_fields` 与 `next_action=inspect-job-recovery`；Web 展示字段和核对历史的责任，不冒充额度耗尽或账号错误。旧快照仍先于新配置接受预算历史校验，缺损快照、未结算/未知效果不会因空 token/receipt 查询被补冻；恢复闭环的可信未执行证据仍由 #943 跟踪，不能以本切片关闭整单。#948 的 Pi allowance/request 其他错误也未据此宣布解决。
+
+回归扩展现有 `task-retry-hub-snapshot.integration.test.ts`、`job-rerun.integration.test.ts`、Gateway 预算集成及 Web 测试：检查真实 HTTP 创建/retry/Hub 唤醒的完整冻结、覆盖来源及预算准入，注入 retry INSERT 故障验证回滚，缺字段恢复拒绝无历史写入。入口为 `pnpm ci:integration:recovery`、`pnpm ci:integration:platform-api`、`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:credential-compatibility`；最终 SHA 的 GitHub Actions 尚待执行，本机不运行测试、构建或 typecheck。
+
+
 恢复准入与 Gateway 使用共享 main token allowance：OM 的已结算后台用量不消耗 main reserve；同 Job 已有 OM token 历史时，即使 `rerun-current` 不再选择 OM，也保留 workload 计费隔离和历史有限上限。未启用过 OM 的 Job 继续使用全 Job token 额度。此隔离不豁免旧后台 pending/unknown effect：建立新代际前仍须全部结算。请求次数上限是独立约束，不因本 token allowance 修正而扩大。 allowance 将尚无账本的 pending reservation 返回为 `JOB_TOKEN_USAGE_PENDING`，不冒充 unknown 或零成本；未知/缺失结算仍返回 `JOB_TOKEN_USAGE_UNKNOWN`。两者均不授予新代际。
 
 代际事件保存 `supersedes_attempt_id`、`previous_chain_status=superseded` 和唯一下一 `target_attempt_no`。待领取时 owner 为空，不能用于模型调用；领取后 Gateway 和完成门共同解析相同 owner。原负回执/费用不修改，模型调用继续归因到原 repair receipt；新完成提案使用累计下一 revision。原 key 查询和传输重放保持原结果，不把历史 next_action 当成当前许可。手动入口的成功只表示已入队；完成必须等新 Attempt 通过完成门和终态结算。
 
 已启动 stale Recovery Hub 用原 grant 提交 `release_stale` 后正常结束；读取新投影不扩大旧 grant。退出动作不对账、不改变目标状态。原 Hub 存在未知效果时，后继 Hub 仍不能获得执行权；新 wake 继续消耗原根额度和期限。
+
+## 人工等待超时与未结清效果（#946）
+
+2026-11-06 核对 `c0809b3e`：人工等待已有独立配置和最近 human 事件时钟；但定向对账报告残留时，旧路径只追加“先对账”的文案，随后仍把 Job 写成 failed/human_timeout。本切片在 Job → Attempt 锁下执行检查：有残留或本轮有结算进展保留 waiting_human；最终 UPDATE 还要求该 Job 的全部效果为 settled，覆盖对账扫描排除的 active Attempt 和 planned 效果。被阻断的 Job 不进入 Reaper 的终态返回列表，因此不触发 human_timeout 计数、终态清理或 Canvas 失败推进。
+
+不刷新原 deadline、预算、token 或 Attempt，不自动重放/结算未知效果，不改 Finding、Report 或已接受人工请求。人工等待仍可被已有显式取消/回复流程处理；本切片不证明所有回复恢复路径已满足效果门。`human_messages.delivered_at` 表示人给 Agent 的消息已注入，不是 Agent 请求已经投递给人的证据；“实际通知投递后计时”未在此实现，#946 保持开放。
+
+`pnpm ci:unit:job-lifecycle` / `pnpm ci:integration:job-lifecycle` 的既有入口增加未知效果、部分对账进展、active/inactive Attempt × planned/pending/unknown、多 tick 无变更、显式结算后正常到期的回归。仅合成 SQL/替身，最终 SHA GitHub Actions 待验；本机不运行测试、构建或 typecheck。
 
 ## 审计矩阵
 
