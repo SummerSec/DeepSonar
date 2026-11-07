@@ -46,6 +46,14 @@ if (!databaseUrl) {
       ]);
       assert.deepEqual(requests.map((r) => r.statusCode).sort(), [200, 201]);
       const source = requests[0]!.json();
+      const { assertImportedSourceIdentities } = await import("./domains/skill-source/registration.js");
+      for (const suffix of ["fixture/greet", "plugin:fixture", "source:*"]) {
+        const raw = `${source.id}:${suffix}`;
+        assert.doesNotThrow(() => assertImportedSourceIdentities([raw], new Map([[source.id, source.id]])));
+        assert.throws(() => assertImportedSourceIdentities([raw], new Map([[source.id, randomUUID()]])),
+          (error: unknown) => error instanceof Error && "error_code" in error && error.error_code === "SKILL_SOURCE_SELECTOR_IDENTITY_MISMATCH");
+        assert.equal(raw, `${source.id}:${suffix}`, "import validation never rewrites source-scoped selector history");
+      }
       assert.equal(source.id, requests[1]!.json().id);
       assert.equal(source.trust_status, "quarantined"); assert.equal(source.enabled, false);
       const conflict = await app.inject({ method: "POST", url: "/skill-sources", payload: { name: source.name, repo_url: "https://github.com/fixture-org/other.git" } });
@@ -68,7 +76,7 @@ if (!databaseUrl) {
       assert.equal(saved.statusCode, 200, saved.payload); assert.equal(saved.json().project_enabled, false);
       projectScope = null;
       const [current] = await sql`SELECT * FROM skill_sources WHERE id=${source.id}`;
-      const catalog = [{ id: "skill:fixture/greet", kind: "skill" as const, plugin: "fixture", name: "greet", description: "fixture", files: { "SKILL.md": "# Greet\n" } }];
+      const catalog = [{ id: "fixture/greet", kind: "skill" as const, plugin: "fixture", name: "greet", description: "fixture", files: { "SKILL.md": "# Greet\n" } }];
       const commit = "a".repeat(40);
       const hash = await persistSkillSourceManifest(sql as never, { sourceId: source.id, commitSha: commit, catalog });
       const candidate = { schema: "deepsonar.skill-source-candidate/v1", source_instance_id: current!.source_instance_id,

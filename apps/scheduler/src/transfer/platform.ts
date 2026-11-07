@@ -4,7 +4,7 @@
  */
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { validateModuleSelectors } from "@deepsonar/shared-types";
+import { validateModuleSelectors, MODULE_SELECTOR_SOURCE_ID_RE } from "@deepsonar/shared-types";
 import {
   projectCredentialMetadata,
   projectCredentialProvider,
@@ -17,7 +17,7 @@ import {
   resolveImportedRoleUiColor,
 } from "../role-colors.js";
 import { sql } from "../db.js";
-import { registerSkillSource } from "../domains/skill-source/registration.js";
+import { registerSkillSource, assertImportedSourceIdentities, SkillSourceRegistrationError } from "../domains/skill-source/registration.js";
 import { parseSandboxLimitsOverride } from "../domains/role-runtime-snapshot/sandbox-limits.js";
 import { rewriteFindingProtocolMode } from "../finding-protocol.js";
 import { parseRuntimeKnobOverride } from "../runtime-knobs.js";
@@ -533,13 +533,27 @@ export async function applyPlatformImport(
       // skill sources
       const sources = readJsonl(pack.files, "data/skill-sources.jsonl");
       let srcN = 0;
+      const sourceIdentities = new Map<string, string>();
       for (const s of sources) {
-        const name = String(s.name);
+        if (typeof s.name !== "string" || typeof s.repo_url !== "string" || (s.branch !== undefined && typeof s.branch !== "string")) {
+          throw new SkillSourceRegistrationError("SKILL_SOURCE_URL_INVALID");
+        }
+        const name = s.name;
         // Registration reuses an exact repository/ref identity, never overwrites a same-name authority.
         // SAFETY: transaction handles provide the SQL helper interface required by registration.
-        await registerSkillSource(tx as unknown as typeof sql, {
-          name, repo_url: String(s.repo_url), branch: String(s.branch ?? "main"),
+        const registered = await registerSkillSource(tx as unknown as typeof sql, {
+          name, repo_url: s.repo_url, branch: s.branch ?? "main",
         });
+        if (s.source_id !== undefined) {
+          if (typeof s.source_id !== "string" || !MODULE_SELECTOR_SOURCE_ID_RE.test(s.source_id)) {
+            throw new SkillSourceRegistrationError("SKILL_SOURCE_IDENTITY_AMBIGUOUS");
+          }
+          const original = s.source_id.toLowerCase(), target = String(registered.row.id);
+          if (sourceIdentities.has(original) && sourceIdentities.get(original) !== target) {
+            throw new SkillSourceRegistrationError("SKILL_SOURCE_IDENTITY_AMBIGUOUS");
+          }
+          sourceIdentities.set(original, target);
+        }
         srcN++;
       }
       summary.skill_sources = srcN;
@@ -568,6 +582,7 @@ export async function applyPlatformImport(
         const moduleSelectors = rc.modules_json == null
           ? []
           : validateModuleSelectors(rc.modules_json, `全局 RoleConfig ${roleName}.modules_json`);
+        assertImportedSourceIdentities(moduleSelectors, sourceIdentities);
         const sandboxLimits = parseSandboxLimitsOverride(rc.sandbox_limits_json);
         const runtimeKnobs = parseRuntimeKnobOverride(rc.runtime_knobs_json);
         if (Object.keys(sandboxLimits).length > 0) {
