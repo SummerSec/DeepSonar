@@ -8,6 +8,8 @@
 
 - **Chrome Fuzz ARM 构建层与镜像缓存命名空间（#961 P2/P3）**：V8 编译阶段改用按 digest 钉死的 `V8_BUILDER_IMAGE`，不再继承 `BASE_IMAGE`，builder 自行安装 CA 证书与 `xz-utils`/`unzip`，base 的运行时变化不再使下载/GN/编译层失效；运行时阶段仍跟随本次 base。内容指纹同时给出 `ci_src_tag`（`src-ci-<fp>`）与 `release_src_tag`（`src-release-<fp>`）：四个 CI workflow 只读写前者，`release.yml` 只读写后者，历史 `src-<fp>` 已无消费方，避免 PR 产物让发布跳过真实构建。
 
+- **CI 运行计划自解释（#992）**：`ci-run-plan.mjs` 把本次运行计划写成 `GITHUB_STEP_SUMMARY` 摘要 —— 模式、计划状态、`base → head`、是否 tiered、Chrome Fuzz ARM 是否必跑、Reverse 实际执行与跳过的子套件，以及每条 reason 的人读说明；未登记 token 原样保留（`未登记原因：<token>`），`reasons` 为空时显式标为按 fail closed 处理，不暗示干净跳过。跳过说明按 docs / draft-fast / 按输入收窄分别生成，不把模式跳过说成「已证明无关」。工程规范同时写明失败重跑的粒度是 job 而非 step：Re-run failed jobs 会整段重跑该 job 且下游随之重跑，降本杠杆是拆出可单独重跑的 job 与同 run 同 SHA 复用产物，不得跨提交复用「测试已通过」的结论。不改变任何路由判定、门禁强度或凭据范围。
+
 ### 修复
 
 - **提示与错误反馈统一（#967）**：Toast 增加 `warn` 语义、同文案去重合并、按严重程度分层停留、悬停与焦点双 hold 暂停、手动关闭与详情复制、可挂恢复动作；页面自有 flash 收敛到 `useFlashMessage`，`HelpTip` 支持 Escape 关闭并保留触发器焦点；Toast 颜色改语义 token 并纳入 WCAG AA 断言。逐主题浏览器截图与键盘/触屏回归未执行。
