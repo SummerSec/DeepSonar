@@ -27,6 +27,7 @@ import {
 import { relayTargetHost, startGatewayUpstreamSocket } from "./gateway-upstream-socket.js";
 import { startRuntimeImageWarmupOnBoot, prepareRuntimeImageWarmupForMaintenance } from "./runtime-image-warmup.js";
 import { startSkillSourceBootSync } from "./skill-sources.js";
+import { startSkillSourceRefreshLoop, warnIfSkillSourcesNeverRefresh } from "./skill-source-refresh.js";
 import { dispatcherRuntimeStatus, markDispatcherEnabled } from "./startup-status.js";
 import { normalizePendingJobPriorities, scrubLeftoverStoredRules, scrubRedundantConfigSurface } from "./core.js";
 import { scrubIgnoredProjectRoleConfigIdentity } from "./domains/role-runtime-snapshot/index.js";
@@ -80,6 +81,11 @@ async function main() {
     },
     start: (registerStop) => {
       registerStop(startSkillSourceBootSync());
+      warnIfSkillSourcesNeverRefresh({
+        bootSync: config.skillSources.bootSync,
+        refreshIntervalSec: config.skillSources.refreshIntervalSec,
+      });
+      registerStop(startSkillSourceRefreshLoop());
       registerStop(startReaper());
       registerStop(startTransferWorker());
       registerStop(startFindingFeatureWorker());

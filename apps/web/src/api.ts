@@ -795,6 +795,10 @@ export interface SkillSource {
   last_commit_sha?: string | null;
   last_content_hash?: string | null;
   synced_by?: string | null;
+  /** #954：距上次成功同步的秒数；null = 从未同步。 */
+  age_seconds?: number | null;
+  /** #954：超过 2×refreshIntervalSec（或 Job 快照阈值）未同步。 */
+  stale?: boolean;
 }
 
 

@@ -1118,7 +1118,7 @@ export function SettingsPanel({
                 </div>
                 <div className="mt-1.5 flex items-center gap-2">
                   <span className="font-mono text-[12px] text-zinc-600">
-                    {s.synced_at ? `同步于 ${new Date(s.synced_at).toLocaleString()}` : "未同步"}
+                    {`${s.synced_at ? `同步于 ${new Date(s.synced_at).toLocaleString()}` : "未同步"}${s.age_seconds == null ? " · 从未成功同步" : ` · ${s.stale ? "陈旧" : "新鲜"}（${Math.floor(s.age_seconds / 3600)}h）`}`}
                   </span>
                   <span className="ml-auto flex items-center gap-1.5">
                     {s.trust_status !== "trusted" && (

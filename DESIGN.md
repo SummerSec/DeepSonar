@@ -88,6 +88,8 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 
 **Job 快照冻结**：创建时冻结 `module_selectors`、digest、模块内容 hash 与 missing；物化只认快照。Job 创建后的 skill_source sync **不影响**进行中 Job，只影响下一 Job。
 
+**源保鲜（#954）**：模块源刷新是**周期行为**，不是启动副作用。`DEEPSONAR_SKILL_SOURCE_REFRESH_INTERVAL_SEC` 驱动 scheduler-owned 串行刷新循环，每轮先用 `git ls-remote` 比对远端 HEAD，未变化只前移 `synced_at`；启动同步与周期刷新全关时启动告警而不静默。刷新只更新候选目录、不提权，新内容仍受 `trust_status` 门控。陈旧度以 `synced_at` 为唯一口径（[skill-freshness.ts](apps/scheduler/src/skill-freshness.ts)）：指标 `deepsonar_skill_source_age_seconds{source}`、`GET /skill-sources` 的 `age_seconds`/`stale`、Job 快照的 `source_synced_at`/`age_seconds`/`stale` 都用同一换算；超过 `DEEPSONAR_SKILL_SOURCE_STALE_AFTER_DAYS` 时只在画布 Job 节点留 warning 级记录，不阻断 Job、不改变准入判定。配置与默认值以 [config.ts](apps/scheduler/src/config.ts) 为准，本文不复制数字。
+
 **平台控制 Skill**：`deepsonar-control` 仍对真实 Job **强制注入**，不可被业务 RoleConfig 同名覆盖，也不计入项目 Skill 源白名单。
 
 **项目侧就地登记（#953）**：项目「Skill 源启用白名单」可同时登记新源，但复用的仍是平台同一套控制面——`POST /skill-sources` 的 https/host 校验、默认 `quarantined`+未启用、审计、以及后续同步与 `trust` 审批。入口放在项目上下文只为省掉跳去全局「模块源」的成本，**不新增第二套准入**：登记成功不等于已可运行，更不等于自动信任，也不改变其它项目授权。面板按「平台信任 → 平台启用 → 同步目录非空 → 本项目启用」逐条展示阻塞原因与下一步（[skill-source-readiness.ts](apps/web/src/skill-source-readiness.ts)），权限不足时明说缺 `skills:write`。

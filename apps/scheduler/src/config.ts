@@ -504,6 +504,16 @@ export const config = {
     bootSync: bool("DEEPSONAR_SKILL_SOURCE_BOOT_SYNC", true),
     /** 启动同步单次超时（秒）；超时后后台重试，不阻塞 listen。 */
     bootSyncTimeoutSec: int("DEEPSONAR_SKILL_SOURCE_BOOT_SYNC_TIMEOUT_SEC", 20),
+    /** #954：模块源周期刷新间隔（秒）；0 = 关闭。刷新是周期行为，不依赖启动同步。 */
+    refreshIntervalSec: boundedNonNegativeInt(
+      "DEEPSONAR_SKILL_SOURCE_REFRESH_INTERVAL_SEC",
+      3600,
+      7 * 24 * 3600,
+    ),
+    /** #954：周期刷新单个源的超时（秒）；超时只影响本轮的该源。 */
+    refreshTimeoutSec: boundedInt("DEEPSONAR_SKILL_SOURCE_REFRESH_TIMEOUT_SEC", 60, 600),
+    /** #954：Job 快照内的 skill 目录超过该天数视为陈旧，在画布 Job 节点留 warning。 */
+    staleAfterDays: boundedInt("DEEPSONAR_SKILL_SOURCE_STALE_AFTER_DAYS", 7, 365),
   },
 
   /** 可信运行镜像目录由数据库管理；环境变量只负责引导官方 digest 与 registry 边界。 */

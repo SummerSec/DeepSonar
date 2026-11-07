@@ -1095,8 +1095,9 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **规范要求**：Skill source 同步必须由 Scheduler 受控浅克隆、扫描和缓存 `SKILL.md`/commands，运行 Job 只能读取已缓存且 trusted+enabled 的 selector/content hash，不得在任务执行时任意访问 Git 网络。
 - **决策来源**：Skill 源是外部供应链，运行期网络访问会破坏快照和审计。
 - **实现状态**：as-built；内容在 sync 时缓存，Job 内拉取不重新访问 Git。
-- **代码入口**：[skill source routes](../../apps/scheduler/src/domains/skill-source/routes.ts)、[skill source tests](../../apps/scheduler/src/skill-source-sync.test.ts)、[schema](../../database/schema.sql)。
-- **验证证据**：`pnpm ci:unit:startup-gate`、`pnpm ci:unit:capability-pack`、`pnpm ci:integration:platform-api`。
+- **保鲜（#954）**：同步是周期行为，不依赖启动副作用。`DEEPSONAR_SKILL_SOURCE_REFRESH_INTERVAL_SEC`（`0` 关闭）驱动串行刷新，先用 `git ls-remote` 比对远端 HEAD，未变化只前移 `synced_at`；启动同步与周期刷新全关时启动告警。刷新只更新候选目录、**不提权**，新内容仍需显式信任。陈旧度经 `deepsonar_skill_source_age_seconds{source}` 暴露，超过 `2 × refreshIntervalSec` 由刷新循环告警；Job 创建时把 `source_synced_at` / `age_seconds` / `stale` 冻结进 `job_skill_catalog`，超过 `DEEPSONAR_SKILL_SOURCE_STALE_AFTER_DAYS` 时只在画布 Job 节点留 warning 记录，不阻断 Job、不改变准入。配置项与默认值以 `apps/scheduler/src/config.ts` 为准。
+- **代码入口**：[skill source routes](../../apps/scheduler/src/domains/skill-source/routes.ts)、[周期刷新](../../apps/scheduler/src/skill-source-refresh.ts)、[新鲜度口径](../../apps/scheduler/src/skill-freshness.ts)、[Job 快照冻结](../../apps/scheduler/src/job-skill-catalog.ts)、[skill source tests](../../apps/scheduler/src/skill-source-sync.test.ts)、[schema](../../database/schema.sql)。
+- **验证证据**：`pnpm ci:unit:startup-gate`、`pnpm ci:unit:capability-pack`、`pnpm ci:unit:project-knowledge`、`pnpm ci:integration:platform-api`。
 
 ### IR-008 Prometheus/Health 观测端点
 
