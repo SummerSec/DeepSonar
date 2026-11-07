@@ -1,4 +1,4 @@
-/** Chrome / ClickHouse 长工具镜像的 stall 下限；不抬高全局 DEEPSONAR_JOB_STALL_SEC。 */
+/** Chrome 长工具镜像的 stall 下限；不抬高全局 DEEPSONAR_JOB_STALL_SEC。 */
 export const CHROME_JOB_STALL_SEC = Object.freeze({
   "deepsonar-chrome-audit": 5_400,
   "deepsonar-chrome-test": 5_400,
@@ -8,15 +8,8 @@ export const CHROME_JOB_STALL_SEC = Object.freeze({
 /** Hub 读大图时常 15 分钟内发不出 tool.call；心跳不算进度。 */
 export const HUB_JOB_STALL_SEC = 5_400;
 
-export const CLICKHOUSE_JOB_STALL_SEC = Object.freeze({
-  "deepsonar-clickhouse-audit": 5_400,
-  "deepsonar-clickhouse-test": 5_400,
-  "deepsonar-clickhouse-fuzz": 10_800,
-});
-
 const SPECIALIST_JOB_STALL_SEC = Object.freeze({
   ...CHROME_JOB_STALL_SEC,
-  ...CLICKHOUSE_JOB_STALL_SEC,
 });
 
 export const TOOL_CALL_STARTED_PREFIX = "tool.call.started";

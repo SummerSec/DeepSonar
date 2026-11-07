@@ -22,18 +22,6 @@ const OFFICIAL_RUNTIME_IMAGE_BOUNDARIES: Readonly<Record<string, RuntimeImageBou
     toolset: "钉死 V8 d8 + libFuzzer/AFL++",
     not_included: "toy d8、完整 Chrome 浏览器",
   },
-  "deepsonar-clickhouse-test": {
-    toolset: "钉死官方 ClickHouse LTS server/client/local",
-    not_included: "非官方包、DinD、toy SQL harness",
-  },
-  "deepsonar-clickhouse-audit": {
-    toolset: "CMake/Ninja + Clang/LLVM 源码检查",
-    not_included: "本镜像 CH server、固定扫描脚本",
-  },
-  "deepsonar-clickhouse-fuzz": {
-    toolset: "官方 clickhouse-local + sanitizer/AFL++",
-    not_included: "toy harness 冒充官方 binary",
-  },
   "deepsonar-openharmony-test": {
     toolset: "源码同步/构建 + 官方 hdc",
     not_included: "DevEco/完整 SDK；勿把 gdb 当设备协议",
@@ -86,9 +74,6 @@ export const WEB_SPECIALTY_IMAGE_KEYS = Object.freeze([
   "deepsonar-chrome-test",
   "deepsonar-chrome-audit",
   "deepsonar-chrome-fuzz",
-  "deepsonar-clickhouse-test",
-  "deepsonar-clickhouse-audit",
-  "deepsonar-clickhouse-fuzz",
   "deepsonar-openharmony-test",
   "deepsonar-openharmony-audit",
   "deepsonar-openharmony-fuzz",

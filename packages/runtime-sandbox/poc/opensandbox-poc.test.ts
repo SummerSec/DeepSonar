@@ -396,14 +396,17 @@ test("official OpenSandbox image list requires pinned registry keys", () => {
     () => listOfficialOpenSandboxRuntimeImages({ images: [{ image_key: "deepsonar-base", versions: [{ image_ref: "latest" }] }] }),
     /OPENSANDBOX_POC_REGISTRY_UNPINNED/,
   );
+  // Mobile is optional; Chrome audit is already present in the required fixture.
+  const unpublishedKey = "deepsonar-mobile";
+  assert.ok(!images.some((item) => String(item.image_key) === unpublishedKey));
   const unpublished = listOfficialOpenSandboxRuntimeImages({
     images: [
       ...images,
-      { image_key: "deepsonar-clickhouse-audit", versions: [] },
+      { image_key: unpublishedKey, versions: [] },
     ],
   });
   assert.equal(unpublished.length, OPENSANDBOX_POC_REQUIRED_IMAGE_KEYS.length);
-  assert.ok(!unpublished.some((item) => item.key === "deepsonar-clickhouse-audit"));
+  assert.ok(!unpublished.some((item) => item.key === unpublishedKey));
   assert.throws(
     () => listOfficialOpenSandboxRuntimeImages({
       images: images.map((item, index) => index === 0 ? { ...item, versions: [] } : item),

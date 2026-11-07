@@ -43,7 +43,6 @@ export const TIERED_MODE = "tiered";
 export const SPECIALIST_WORKFLOWS = Object.freeze({
   reverse: ".github/workflows/reverse-runtime.yml",
   chrome: ".github/workflows/chrome-runtime.yml",
-  clickhouse: ".github/workflows/clickhouse-runtime.yml",
   mobile: ".github/workflows/mobile-runtime.yml",
   openharmony: ".github/workflows/openharmony-runtime.yml",
 });

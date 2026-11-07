@@ -8,7 +8,7 @@ import {
 } from "./runtime-platform-manifests.mjs";
 
 const IMAGE_KEYS = [
-  ...["chrome", "clickhouse"].flatMap((family) =>
+  ...["chrome"].flatMap((family) =>
     ["audit", "test", "fuzz"].map((role) => `deepsonar-${family}-${role}`)),
   "deepsonar-reverse",
 ];
