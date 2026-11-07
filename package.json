@@ -164,7 +164,7 @@
     "research:evaluate:offline": "pnpm --filter @deepsonar/scheduler exec tsx src/domains/project-finding-research/offline-evaluation-cli.ts",
     "ci:unit:finding-offline-evaluation": "pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/project-finding-research/offline-evaluation.test.ts src/domains/project-finding-research/candidate-backlog-probe.test.ts",
     "ci:probe:project-finding-backlog": "pnpm --filter @deepsonar/scheduler exec tsx src/domains/project-finding-research/candidate-backlog-probe.ts",
-    "ci:unit:management-skill": "python3 -m unittest discover -s skills/deepsonar-management/scripts -p 'test_*.py'"
+    "ci:unit:management-skill": "python3 -m unittest discover -s skills/deepsonar-management/scripts -p 'test_*.py' && pnpm --filter @deepsonar/shared-types build && pnpm --filter @deepsonar/scheduler exec tsx --test src/management-skill-contract.test.ts"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

@@ -1,6 +1,6 @@
 # CI 路由、失败重跑与成本验收（#992）
 
-> 状态：原 issue 主体的路由/五片隔离已实现；本次依赖审计与成本观测补丁待最终 SHA Actions。受控故障与同 SHA 原生失败重跑已通过，三组文档路径对照正在取证。PR→main 跨提交证据复用未实现、未启用。
+> 状态：路由/五片隔离、依赖审计与成本观测已实现；受控故障/同 SHA 原生失败重跑及三组同形文档对照已通过。实现提交的完整工程验收以 [#995 最新候选 Checks](https://github.com/SummerSec/DeepSonar/pull/995/checks) 为准，不以实验绿灯替代。PR→main 跨提交证据复用未实现、未启用。
 > 同步日期：2026-11-08
 
 对应 [NFR-OPS-003](architecture/01-system-specification.md#nfr-ops-003-发布与文档保鲜)；规范归属为[工程规格](architecture/11-engineering-specs.md#4-测试分层与实际接线)。本片承接已落地的 #972/#976，不重复宣称从零拆片或路由；不涉及 #990、生产、真实模型、合并或发布。
@@ -65,9 +65,61 @@ node agent-harness/ci-run-cost.mjs \
 
 ## 4. 三组对照与验收状态
 
-受控对照聚焦 #994 文档误路由：改动形状固定为前述两个文档，baseline 使用 [42379055886](https://github.com/SummerSec/DeepSonar/actions/runs/42379055886) 的原 SHA，修复侧使用基于本补丁的同形验证 PR；分别记录至少三个不同 attempt。除明确的 CI 实验改动外，应用、依赖锁、镜像和测试输入必须核对相同；每组保留事件、base/head、真实 checkout/tree、runner/工具版本、原始时间与缓存观测。不把不同输入、取消、缺数据或重复同一 attempt 充作三个样本。
+### 4.1 实际 PR、固定输入与完整结果
 
-当前仅已确认 baseline 原始事件为 PR，`CI_PR_MODE=tiered`，原因是精确文档未列白名单；`requiredSuites=[]` / `reverseSuites=[]`，因此这是**核心重活误触发，不是该轮 Reverse 误跑**。对照数字收集完成前不填写提速比例；文档路由实验也不能外推为镜像冷/热/失效的 P95 收益。
+对照聚焦 #994 文档误路由。before 是 [#994](https://github.com/SummerSec/DeepSonar/pull/994) 的 [run 42379055886](https://github.com/SummerSec/DeepSonar/actions/runs/42379055886)，after 是独立验证 [#998](https://github.com/SummerSec/DeepSonar/pull/998) 的 [run 42391567585](https://github.com/SummerSec/DeepSonar/actions/runs/42391567585)。两侧各取 attempt 1/2/3，六次均 completed/success；同侧通过原生完整 rerun 取样，没有推空提交，也没有把同一个 attempt 重复计数。#998 仅验证、不合并。
+
+| 身份 | before | after |
+| --- | --- | --- |
+| event / Draft / 变量 | `pull_request` / false / `tiered` | `pull_request` / false / `tiered` |
+| base | `5dc0b67ee4f44191e62137c806b73f84f6f162f2` | `7b792a0d6ac867669849c4551ef9ef0a4a87f509` |
+| PR head | `2713e0e4eaa7c297c9ce88cc39a64fd366669357` | `6218dbf495d75f4e072eb41a51ab4e903a70b74a` |
+| 实际 checkout（三轮日志一致） | `1b960eb4e0bbbbbefc6ecc674eb4df0f9f56cf74` | `3be6d74507493a0086d1544cdfc7b193e74f36fd` |
+| 实际 tree | `c37b04470436c1d39bca60d7e53cc8638b64908a` | `46027b0719bcbfff119342ed58288a4c258158a6` |
+| 两个改动路径 | [CHANGELOG](../CHANGELOG.md) + [Pi RPC 文档](PI_RPC_PAYLOAD_LIMITS.md) | 同左，均为 `M` |
+| 分类与实际执行 | `path_not_allowlisted` → `ready-full`；16 个 job 执行 | `all_paths_allowlisted` → `docs`；仅 changes/docs-freshness/ci-summary 执行 |
+
+两侧完整 tree 因 CI 实验和文档改动不同，但 Git 差异逐项核对为 CI/workflow/对应回归及文档，应用和运行时测试未修改。共同的有效输入对象如下；这些身份只对应上述实验 checkout，不把之后 #995 同步 main 的新源码混入对照：
+
+| 输入 | 两侧相同的 Git 对象 |
+| --- | --- |
+| [apps](../apps) | `70cee41b119e6e0a9194ca74337db33089d7cd51` |
+| [packages](../packages) | `221831426065cf3a2baf556a43a1fc9f89d64eaa` |
+| [deploy](../deploy) | `359f0d7d7bae254997fe6b20c623df50b5a54782` |
+| [依赖锁](../pnpm-lock.yaml) | `8c35ea76da1e4f434fc15b18c0a5f45bcccf695e` |
+| [package.json](../package.json) | `6f3b17a79386225384037e7f8169e63ebdd4fd66` |
+| [workspace 配置](../pnpm-workspace.yaml) | `3ff5faaaf5f139c707e338e7e89e51606e9e0ace` |
+| [compiler 配置](../tsconfig.base.json) | `954baed84d0164d386fa685d4b7f279d947a6e81` |
+
+before 的 `requiredSuites=[]` / `reverseSuites=[]`，所以这是**核心重活误触发，不是该轮 Reverse 误跑**。after 三轮均 `docsOnly=true`、`chromeFuzzArm=false`、`reverseSuites=[]`，五片 gate、镜像矩阵、Chrome ARM、Windows 等重活均实际 skipped；三轮文档 job 各通过 97 项纯 Node 契约，以及既有路由/文档保鲜检查，汇总亦成功。
+
+### 4.2 实测成本
+
+完成后读取精确 attempt API 与全部 jobs；before 每轮返回 18/18 条记录（16 执行、2 跳过），after 17/17（3 执行、14 跳过）。下表墙钟按 §3 的 job-span 口径；排队及阶段时间均为跨 job 累加，单位秒，runner-minutes 是未取整的执行时长/60，不是计费分钟。
+
+| before → after attempt | 墙钟 s | 排队合计 s | runner-minutes | 公共 setup 合计 s | typecheck / workspace build 合计 s | artifact 步骤合计 s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| [1](https://github.com/SummerSec/DeepSonar/actions/runs/42379055886/attempts/1) → [1](https://github.com/SummerSec/DeepSonar/actions/runs/42391567585/attempts/1) | 583 → 43 | 98 → 5 | 39.80 → 0.78 | 169 → 16 | 148 / 320 → 0 / 0 | 4 → 0 |
+| [2](https://github.com/SummerSec/DeepSonar/actions/runs/42379055886/attempts/2) → [2](https://github.com/SummerSec/DeepSonar/actions/runs/42391567585/attempts/2) | 599 → 49 | 35 → 8 | 43.92 → 0.80 | 176 → 15 | 175 / 384 → 0 / 0 | 4 → 0 |
+| [3](https://github.com/SummerSec/DeepSonar/actions/runs/42379055886/attempts/3) → [3](https://github.com/SummerSec/DeepSonar/actions/runs/42391567585/attempts/3) | 627 → 49 | 36 → 6 | 41.70 → 0.95 | 168 → 17 | 164 / 348 → 0 / 0 | 5 → 0 |
+
+公共 setup 只计观测器明确识别的 job/container 初始化、checkout、Node/pnpm 与 frozen install 等步骤，其他构建准备仍在总执行时间内；阶段分类不是全部执行的拆账。原始执行合计分别为 before `2388/2635/2502` 秒、after `47/48/57` 秒。after 的零 build/传输来自计划允许的未执行，不是复用产物或测试通过证据。
+
+| attempt | before 起止（2026-11-07 UTC） | after 起止（2026-11-07 UTC） |
+| --- | --- | --- |
+| 1 | 13:54:00–14:03:43 | 16:29:50–16:30:33 |
+| 2 | 15:58:45–16:08:44 | 16:32:22–16:33:11 |
+| 3 | 16:12:54–16:23:21 | 16:34:32–16:35:21 |
+
+### 4.3 工具、缓存与结论边界
+
+六轮公共 docs-freshness 日志均记录 runner `2.338.2`、`ubuntu-24.04 / 20261101.360.1`、Node `v24.22.2`、pnpm `9.15.9`；changes job 则同为 `ubuntu-26.04 / 20261101.186.1`。实际解析的公共 Actions 亦相同：checkout `11d5960a326750d5838078e36cf38b85af677262`、pnpm setup `b906affcce14559ad1aafd4ab0e942779e9f58b1`、Node setup `49933ea5288caeca8642d1e84afbd3f7d6820020`。日志入口为各 attempt 的 changes/docs-freshness job；after 的计划同时打印 base/head、两条 `M` 路径和 checkout/tree。
+
+六轮 docs-freshness 的 pnpm 缓存均命中同一 key `node-cache-Linux-x64-pnpm-5fa9fd02eb6f1fc7ce73c0d4c3d41d1897df67d544bf44223ea877a8d93cb27a`。未人为清空缓存，也未证明所有重任务的外部镜像/网络/cache 环境相同；这些是**固定业务输入的文档路由观察**，不是受控冷/热/失效镜像 benchmark，不计算 P95，也不外推为 gate 拆片或 PR→main 复用收益。
+
+最初的 [#998 试跑](https://github.com/SummerSec/DeepSonar/actions/runs/42390747146)在旧缓存契约的“权限块必须等于 4”断言失败，未计入上表。修正为精确要求新增 ci-summary 仅 `contents: read` / `actions: read` 后，才冻结以上 base/head 并连续取得三次成功；原有禁止 `actions: write` 与 `continue-on-error` 的断言保留，没有降低门禁来获得样本。
+
+最终实现还需独立的完整验收：本报告的 #998 文档绿灯及旧提交的隔离探针，不代替 [#995 最新候选的全部适用 Checks](https://github.com/SummerSec/DeepSonar/pull/995/checks)。同步 main 时保留 #996 的管理 CLI/文档契约；只解决集成冲突，不合并 PR 或修改仓库策略。
 
 ## 5. 复用的保留边界
 

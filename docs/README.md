@@ -1,7 +1,7 @@
 # DeepSonar 文档索引
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 > **Pi 模型预算与截断（#958）**：[预算与恢复专题](PI_MODEL_BUDGET_RECOVERY.md)记录发现声明/显式配置/CLI 观测分层、创建期冻结、同 Session 有界恢复及压缩无进展停止；不扩大权限/额度，不伪造上下文证据。行为回归与实际锁版本 SDK、HTTP/PG 入口已接既有 Actions，最终 SHA 待验；本地与生产验证均未执行。
 > **#951 完成失败诊断**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)登记当前 Attempt 可归属产出、原回执状态和受权限保护证据；有产出不升级成功，不伪造未知字段或自动重放。核心缺诊断已随 #963 合入并工程收口（2026-11-07 核对）；后续提交按各自最终 SHA 另验，全量覆盖和生产归因仍未验证。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
@@ -14,7 +14,7 @@
 
 > **Job 侧数据库冲突（#945）**：工具活动进度保持 Canvas-first。新 Task/Finding Report 的精确输入字节随 SQL 提交，领取后才投影文件；Verify/orphan 收口现可沿用纯数据库有界重试，成功报告输出仍禁止整体重放。历史缺冻结字节不补造，冲突文件不覆盖，原始 SQLSTATE 与未知效果边界不变；见[运行时视图](architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)和[数据契约](architecture/08-data-architecture.md#report-输入与文件投影945)。回归覆盖晚期 SQL 回滚、终态重复与文件摘要/归属，最终 SHA Actions 待验，未执行本地测试/构建/typecheck。
 
-> **CI 执行成本与分层（#971–#976/#992，2026-11-07）**：`gate` 为 `gate-contract` / `gate-runtime` / `gate-db-core` / `gate-db-domain` / `gate-e2e` 五个有界并行分片；运行时/锁版本 SDK 与其他契约独立失败重跑，精确修复 #994 两文档白名单；计划解释包含实际事件/变量、checkout commit/tree 与 Git 状态/命中路径；#995 补齐 Reverse 的 PR/main 路由触发并取消输入覆盖回归中的路由豁免，缺项在核心 docs-freshness 阻断。手动 `isolation_probe` 的同 SHA 原生失败重跑已通过；本次进一步核对 base COPY/专用与其他镜像输入，并在核心/Reverse 汇总增加只读成本观测，区分排队、执行和保留结果，证据与三组对照状态见 [#992 验收记录](CI_COST_ACCEPTANCE_992.md)。`ci-summary` 按 `EXPECTED_GATE_SHARDS` 期望矩阵逐片要求 `success`，完整套件归属以 [`gate-shards.mjs`](../agent-harness/gate-shards.mjs) 的覆盖率断言为准；`prepare-hosted-runner-disk` 改为按 `df -Pk /` 实测空间预算清理（达标即跳过、逐项删且每步重测、全删不足即失败）；`kali-minimal` 去掉重复的 GHA `mode=max` 大层导出，`RUNTIME_CACHE_KALI_GHA` 可切回 `min`/`max`；Reverse 家族按 `reverse`/`claude`/`pi-om` 三份显式依赖清单分流，`package.json` 只对「新增且不被专项消费的 `ci:unit:*` 测试脚本」判无影响；Reverse base 复用默认关闭，开启后每架构只构建一次当前 checkout 的 base 并按不可变标签共享。规范正文见[工程规范](architecture/11-engineering-specs.md#4-测试分层与实际接线)，`gate` 运行计划见 [AGENTS](../AGENTS.md#ci-gate何时触发何时必须等)。真实冷/热/失效三组样本与 gate 墙钟/runner-minutes 前后对照尚未累积，本节不宣称提速比例。
+> **CI 执行成本与分层（#971–#976/#992，2026-11-08）**：`gate` 为 `gate-contract` / `gate-runtime` / `gate-db-core` / `gate-db-domain` / `gate-e2e` 五个有界并行分片；运行时/锁版本 SDK 与其他契约独立失败重跑，精确修复 #994 两文档白名单；计划解释包含实际事件/变量、checkout commit/tree 与 Git 状态/命中路径；#995 补齐 Reverse 的 PR/main 路由触发并取消输入覆盖回归中的路由豁免，缺项在核心 docs-freshness 阻断。手动 `isolation_probe` 的同 SHA 原生失败重跑已通过；本次进一步核对 base COPY/专用与其他镜像输入，并在核心/Reverse 汇总增加只读成本观测，区分排队、执行和保留结果；三组同形文档对照均成功，详见 [#992 验收记录](CI_COST_ACCEPTANCE_992.md)。`ci-summary` 按 `EXPECTED_GATE_SHARDS` 期望矩阵逐片要求 `success`，完整套件归属以 [`gate-shards.mjs`](../agent-harness/gate-shards.mjs) 的覆盖率断言为准；`prepare-hosted-runner-disk` 改为按 `df -Pk /` 实测空间预算清理（达标即跳过、逐项删且每步重测、全删不足即失败）；`kali-minimal` 去掉重复的 GHA `mode=max` 大层导出，`RUNTIME_CACHE_KALI_GHA` 可切回 `min`/`max`；Reverse 家族按 `reverse`/`claude`/`pi-om` 三份显式依赖清单分流，`package.json` 只对「新增且不被专项消费的 `ci:unit:*` 测试脚本」判无影响；Reverse base 复用默认关闭，开启后每架构只构建一次当前 checkout 的 base 并按不可变标签共享。规范正文见[工程规范](architecture/11-engineering-specs.md#4-测试分层与实际接线)，`gate` 运行计划见 [AGENTS](../AGENTS.md#ci-gate何时触发何时必须等)。文档路由数据不外推为镜像冷/热/失效或 gate 拆片自身收益，这两类对照尚未完成。
 
 > **提示与错误反馈统一（#967，2026-11-07）**：全局 Toast 增加 `warn` 语义、同文案去重合并（最多 4 条且优先淘汰非 sticky）、按严重程度分层停留（成功 3.2s / 警告 6s / 错误 8s），错误用 `role=alert` + `assertive`、成功与警告保持 `polite`；悬停与焦点改为两个独立 hold，集合为空才恢复计时，去重刷新在暂停时只收敛预算；每条可手动关闭、详情折叠复制、支持一个恢复动作。页面自有 flash 收敛到 `useFlashMessage`（新提示取消旧定时器、卸载清理），`HelpTip` 支持 Escape 关闭并保留触发器焦点。Toast 颜色改语义 token 并纳入 WCAG AA 断言。实现依据仍是 [注意力原则](../DESIGN.md#核心理念优化人的注意力)与[工程评审正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)；真实浏览器逐主题截图与键盘/触屏回归未执行。
 
@@ -91,6 +91,7 @@
 | 文档 | 状态 | 说明 |
 |------|------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | **历史对照 / 已迁移入口（#741）** | 每个一级章节标注权威目标；现行细则按 architecture 归属表定位，不从旧 MVP 草图推导实现 |
+| [Management Skill](../skills/deepsonar-management/SKILL.md) | **当前契约修复（#996）** | Prompt-only RoleConfig 同步、credential-first 与项目 CLI/Provider 白名单；旧角色开关拒绝、schema 引用保鲜与真实请求体回归接现有 Actions，验证结果以最终 SHA 为准 |
 | [AGENT_CLI_RUNTIME_ADAPTERS.md](AGENT_CLI_RUNTIME_ADAPTERS.md) | **as-built** | 当前三类 Agent CLI 适配器、能力、Session 归档+查看器接入清单；DSH 0.2.1-rc.2 profile/SDK smoke、异步子代理完成边界与 v4 归档；**#389 DSH/Pi 解码三类契约与钉死版本夹具矩阵**；[#919 runner 失败来源与已接受完成的限定结算](AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)；#947 候选补齐实际 Pi `409:` 完成拒绝格式，不放行 usage/未知效果错误，最终 SHA Actions 待验；离线测试不代替最终 SHA Actions；leftover Codex/OpenCode 只读 |
 | [AGENT_RUNTIME_CONTEXT.md](AGENT_RUNTIME_CONTEXT.md) | **as-built**（#138） | context_id / compaction / 恢复身份 |
 | [Pi 模型预算与截断恢复](PI_MODEL_BUDGET_RECOVERY.md) | **进行中**（#958，源码接线，最终 Actions 待验） | 发现限制与来源、不可变预算、Pi 投影、length 有界恢复、压缩无进展与原生命周期 |

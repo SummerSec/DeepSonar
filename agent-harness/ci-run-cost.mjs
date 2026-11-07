@@ -102,7 +102,7 @@ export function summarizeRunCost({ run, jobs, previousJobs = [] } = {}) {
     tested_checkout_sha: "unknown",
     complete,
     workflow_wall_ms: duration(run.run_started_at, end),
-    // A rerun's original created_at is NOT the time that attempt was requested.
+    // Do not infer a rerun's request-to-start queue from API created_at.
     initial_queue_ms: attempt === 1 ? duration(run.created_at, run.run_started_at) : null,
     queue_ms: total(rows.map((job) => job.queue_ms)),
     runner_ms: total(rows.map((job) => job.runner_ms)),
@@ -149,7 +149,9 @@ export function renderRunCost(report) {
   const lines = [
     "\n## CI cost observations (#992)", "",
     `Run ${report.source.run_id}, attempt ${report.source.attempt}; head \`${cell(report.source.head_sha)}\`; ${report.complete ? "complete" : "partial (summary/current jobs still running)"}.`,
-    `Workflow job-span: ${seconds(report.workflow_wall_ms)} s; runner execution: ${report.runner_ms === null ? "unknown" : (report.runner_ms / 60_000).toFixed(2)} runner-minutes.`,
+    `Workflow job-span: ${seconds(report.workflow_wall_ms)} s; runner execution: ${report.runner_ms === null
+      ? `unknown (observed completed-job subtotal ${(report.observed_completed_runner_ms / 60_000).toFixed(2)} runner-minutes)`
+      : `${(report.runner_ms / 60_000).toFixed(2)} runner-minutes`}.`,
     "Runner-minutes are elapsed execution, not rounded/billed minutes. Queue uses job created_at → started_at; pre-job time includes needs/evaluation, not runner queue.",
     "Missing data stays unknown. Retained results are matched against the previous attempt API before assigning zero additional cost; new job IDs alone do not prove rerunning.",
     "This is not a verified benchmark, cache hit or permission to reuse test success; the tested checkout is not inferred from head_sha.", "",

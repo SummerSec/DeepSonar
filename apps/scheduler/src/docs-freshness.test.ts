@@ -4,7 +4,7 @@
  * 发版前的人工保鲜清单见 `AGENTS.md` 的「发布前的文档保鲜（发版硬门）」；
  * 本套件把其中可机检的部分变成会失败的断言：
  *
- *   1. `AGENTS.md` / `DESIGN.md` / `docs/**` 里的 schema 主线版本 == `SCHEMA_VERSION`；
+ *   1. `AGENTS.md` / `DESIGN.md` / `docs/**` / `skills/**` 里的当前 schema 版本 == `SCHEMA_VERSION`；
  *   2. as-built 文档里引用的 `pnpm <script>` 都存在于根 `package.json`；
  *   3. 文档里的相对链接与图片都有目标文件；
  *   4. 已删机制（`project_managed` / `image_strategy` / `role_runtime_images` / `项目镜像策略`）
@@ -108,6 +108,68 @@ function read(relative: string): string {
 }
 
 
+/** 只识别当前状态断言；历史迁移、产品/工具版本不属于数据库主线编号。 */
+function currentSchemaVersions(markdown: string): string[] {
+  const subjects = [
+    "当前主线",
+    "(?:远端\\s*)?origin/main\\s*(?:当前|最新)\\s*(?:schema\\s*)?(?:版本|基线)",
+    "(?:当前|最新)\\s*(?:数据库\\s*)?(?:schema|SCHEMA_VERSION)\\s*(?:(?:版本|基线)\\s*)?",
+    "(?:数据库\\s*)?schema\\s*(?:当前|最新)\\s*(?:(?:版本|基线)\\s*)?",
+    "schema\\s*(?:版本|基线)\\s*(?:当前|最新)",
+  ];
+  // 整数编号必须完整匹配，不能把 v0.6.16、v24-beta 或 v24foo 截成 schema 编号。
+  const declaration = new RegExp(`(?:${subjects.join("|")})\\s*(?:为|是|[:：=])?\\s*v?(\\d+)(?![\\dA-Za-z_+-]|\\.\\d)`, "gi");
+  const versions: string[] = [];
+  const body = stripFences(markdown).replace(/[`*]/g, "");
+  for (const match of body.matchAll(declaration)) {
+    const prefix = body.slice(0, match.index).split(/[。；;\n]/).at(-1)!;
+    // 限定语必须紧邻声明之前；文首同步日期、声明后的核对日期/历史说明不能豁免当前断言。
+    if (/(?:历史(?:记录|版本|快照|迁移)?|迁移记录|当时|(?:引用)?示例|引用原文)\s*[:：]?\s*[「“"']?\s*$/.test(prefix)) continue;
+    if (/\b\d{4}-\d{2}-\d{2}\b(?:\s*(?:核对|记录|时))?\s*[)）]?\s*[:：，,]?\s*$/.test(prefix)) continue;
+    versions.push(match[1]!);
+  }
+  return versions;
+}
+
+test("#996 旧 origin/main 最新基线断言不能因未同步 checkout 的附注漏检", () => {
+  for (const checkout of ["工作树", "checkout", "工作树/checkout"]) {
+    const old = `远端 origin/main 最新基线为 v24，当前未同步${checkout}仍可能是 v23`;
+    assert.deepEqual(currentSchemaVersions(old), ["24"], old);
+    assert.deepEqual(currentSchemaVersions(`| schema 版本 | 以运行中 \`/schema\` 为准；${old.replace("origin/main", "\`origin/main\`")} |`), ["24"]);
+    // 与仓库门禁相同的比较：已有正确声明也不能掩盖另一处旧断言。
+    assert.deepEqual(currentSchemaVersions(`当前主线 v68\n${old}`).filter((version) => version !== "68"), ["24"]);
+  }
+});
+
+test("#996 当前 schema 声明保留旧句式并覆盖版本、基线与内联格式", () => {
+  for (const statement of [
+    "当前主线 v24", "当前主线\nv24", "当前 schema v24", "当前数据库 schema 版本为 24",
+    "最新 schema 基线：v24", "schema 当前版本是 v24", "schema 版本当前为 24",
+    "当前 SCHEMA_VERSION = 24", "> **当前主线** `v24`", "远端 `origin/main` 最新基线为 **v24**",
+    "当前主线 v24（2026-11-07 核对；历史 v23 只作参考）",
+    "同步日期：2026-11-07\n当前主线 v24", "历史 schema v23，当前主线 v24",
+    "引用示例：当前主线 v23；当前 schema v24", "历史记录：当前主线 v23，当前 schema v24",
+  ]) assert.deepEqual(currentSchemaVersions(statement), ["24"], statement);
+  assert.deepEqual(currentSchemaVersions("当前主线 v68\r\n当前 schema v24"), ["68", "24"]);
+});
+
+test("#996 历史版本、日期记录、引用示例与产品工具版本无需追平 schema", () => {
+  for (const statement of [
+    "历史记录：当前主线 v24", "当时当前 schema 为 v24", "迁移记录：当前主线 v24",
+    "2026-10-01：当前主线 v24", "截至 2026-10-01，远端 origin/main 最新基线为 v24",
+    "2026-10-01 核对：当前 schema 版本为 v24", "引用原文：“当前主线 v24”",
+    "引用示例：「当前主线 v24」", "示例：`当前 schema v24`",
+    "```md\n当前主线 v24\n```", "~~~~md\r\n远端 origin/main 最新基线为 v24\r\n~~~~",
+    "schema 基线由 v65 推进到 v66；已验收历史 schema67；v62/v63/v64 用于备份恢复",
+    "**项目知识（2026-10-20，#752）**：schema v61；Job 冻结目录保持历史真相",
+    "当前产品版本 v0.6.16；当前主线 v0.6.16；origin/main 最新基线为 v0.6.16",
+    "当前 REA v24；当前 Ghidra v12；当前 JDK v21；最新 schema v24-beta；当前 schema v24foo",
+  ]) {
+    assert.deepEqual(currentSchemaVersions(statement), [], statement);
+    assert.deepEqual(currentSchemaVersions(`${statement}\n当前主线 v68`), ["68"], statement);
+  }
+});
+
 test("#696 文档声明的 schema 主线版本与 SCHEMA_VERSION 一致", () => {
   const source = read("apps/scheduler/src/schema-version.ts");
   const version = /SCHEMA_VERSION\s*=\s*(\d+)/.exec(source)?.[1];
@@ -116,14 +178,14 @@ test("#696 文档声明的 schema 主线版本与 SCHEMA_VERSION 一致", () => 
   const declared = new Map<string, Set<string>>();
   // skills/** 也纳入：技能文档里写错主线版本同样会误导操作者。
   for (const file of ["AGENTS.md", "DESIGN.md", ...relativeFiles("docs", [".md"]), ...relativeFiles("skills", [".md"])]) {
-    for (const match of read(file).matchAll(/当前主线\s*v(\d+)/g)) {
-      const seen = declared.get(match[1]!) ?? new Set<string>();
+    for (const declaredVersion of currentSchemaVersions(read(file))) {
+      const seen = declared.get(declaredVersion) ?? new Set<string>();
       seen.add(file);
-      declared.set(match[1]!, seen);
+      declared.set(declaredVersion, seen);
     }
   }
 
-  assert.ok(declared.has(version), `没有任何文档声明当前主线 v${version}（找到了 ${[...declared.keys()].join(", ") || "无"}）`);
+  assert.ok(declared.has(version), `没有任何文档声明当前 schema v${version}（找到了 ${[...declared.keys()].join(", ") || "无"}）`);
   const stale = [...declared.entries()].filter(([declaredVersion]) => declaredVersion !== version);
   assert.deepEqual(
     stale.map(([declaredVersion, files]) => `v${declaredVersion} → ${[...files].join(", ")}`),

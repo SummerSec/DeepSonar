@@ -1,7 +1,7 @@
 # 11. 工程规范
 
 > 状态：**as-built（#741 PR 5 回填）**。本文记录当前仓库开发、验证和文档治理必须遵守的工程规则；实现冲突时以代码、schema、OpenAPI 和测试为准。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 
 本文是 DeepSonar 的开发规范视图。它把可重复的工程约束、测试分层、文档保鲜和发布前核查集中在一个位置；新架构事实以 [`docs/architecture/README.md`](README.md)、相关架构视图、追溯矩阵和 ADR 为准，`DESIGN.md`、`docs/README.md` 与其他专题文档提供摘要或专题证据。
 
@@ -141,7 +141,7 @@ Control API 的每个 operation 必须经过三层校验：
 
 失败重跑的粒度是 **job 而不是 step**：GitHub 的 “Re-run failed jobs” 会整段重跑该 job 的步骤，相关下游也会重跑，不存在从失败 step 原地续跑。所以降低重试成本的杠杆是把昂贵的独立套件拆成可单独重跑的 job（各自保持 DB/端口/服务/文件隔离），以及在同一 run、同 SHA、同平台与输入身份下复用准备产物；**不得**跨提交复用「测试已通过」的结论。`ci-summary` 与 `reverse-runtime-acceptance` 始终核对计划与实际结果，失败、取消、缺片或应跑误跳过都不放行——跳过判定只缩小范围，不放宽门禁。
 
-#992 的失败隔离实证入口是现有 `ci` 手动运行的 `isolation_probe`（默认关闭，2026-11-07）：只有手动且第一次 attempt 才在 `gate-runtime` 完成真实套件后故意失败；PR/main 不注入故障。[真实运行](https://github.com/SummerSec/DeepSonar/actions/runs/42387980272)的第一轮仅 runtime 探针与汇总失败，其余独立分片成功；原生 `--failed` 第二轮成功。GitHub 会为保留的成功结果生成新 job ID/attempt，必须比较原执行时间、runner 与步骤，不能以 ID 未变作为证明。详见 [#992 验收记录](../CI_COST_ACCEPTANCE_992.md)；三组成本对照与本次补丁最终 SHA 另验，不把结构拆分推导为性能收益。诊断开关不绕过测试、权限或结果检查，也不提供任意 step 续跑。
+#992 的失败隔离实证入口是现有 `ci` 手动运行的 `isolation_probe`（默认关闭，2026-11-07）：只有手动且第一次 attempt 才在 `gate-runtime` 完成真实套件后故意失败；PR/main 不注入故障。[真实运行](https://github.com/SummerSec/DeepSonar/actions/runs/42387980272)的第一轮仅 runtime 探针与汇总失败，其余独立分片成功；原生 `--failed` 第二轮成功。GitHub 会为保留的成功结果生成新 job ID/attempt，必须比较原执行时间、runner 与步骤，不能以 ID 未变作为证明。详见 [#992 验收记录](../CI_COST_ACCEPTANCE_992.md)；同形文档三组对照已完成，最终实现以最新候选的完整检查验收，不把结构拆分推导为性能收益。诊断开关不绕过测试、权限或结果检查，也不提供任意 step 续跑。
 
 #992 进一步核对 base 的直接 COPY 输入及工作流实际构建的两个 Dockerfile：专用 Reverse 镜像只需 REA，精确审定的其他派生镜像不触发本工作流原生重活，未知 Dockerfile、shared/routing/锁文件仍全跑；base 内 DSH installer 与 OM 治理代码不能漏掉共享消费。核心与 Reverse 汇总通过 [只读观测器](../../agent-harness/ci-run-cost.mjs)直接说明本 attempt 的排队、执行、重复 setup/build 和 artifact 步骤成本；仅增加 job 级 `contents/actions: read`，不读取长期 secret 或执行外部 artifact。未完成/缺数据记 unknown，保留旧结果须有前一 attempt API 匹配证据；观测不替代原汇总、更不授权跨提交复用。当前 API 观测不进入 [#970 可信 benchmark 历史](../RUNTIME_BUILD_TIMING.md)。
 
@@ -164,6 +164,8 @@ Chrome Fuzz ARM64 的 CI/Release cache miss 构建前执行[受控宿主磁盘�
 允许不更新文档的例外：局部实现未改变外部契约、架构边界、状态、不变量、测试接线和已有 as-built 描述。PR 必须写明核对过的文件及无需更新的理由；不能为了“保鲜”机械改同步日期。所有新架构文档前 12 行包含 `状态` 和 `同步日期：YYYY-MM-DD`，日期表示最近一次事实核对而不是编辑时间。
 
 发版、修改 `CHANGELOG.md`、创建或移动 `v*` tag 前，执行 [`AGENTS.md`](../../AGENTS.md) 的文档保鲜清单：schema 主线版本与代码一致、文档命令和链接可解析、已删机制只作解释性出现、as-built 段落人工对照代码、可变数字带核对基线，并核对状态索引和发布证据。`pnpm ci:unit:docs-freshness` 只能覆盖其中的机检项，不能替代语义审查。
+
+#996 的版本回归同时覆盖 Skill 中的「当前主线」和「最新基线为」等当前 schema 声明，并保留明确历史记录；可复用 Skill 优先链接同 checkout 的 schema 基线与 `SCHEMA_VERSION`，不复制临时工作树状态。CLI 端点存在不代表请求体合法：`pnpm ci:unit:management-skill` 在原 Python 回归之外，用真实 Zod 契约检查 Prompt 同步的 PUT 与非 Prompt 字段往返。两套入口均由现有 [CI workflow](../../.github/workflows/ci.yml) 的 docs-freshness job 调用，不以静态对账代替实际 Actions 结果。
 
 **可变数字的时效要求（人工项）**：env 默认值、阈值、上限、超时、计数、池大小、冻结额度这类会随代码变化的值，只能二选一——写核对基线（`main <sha>` 或 `YYYY-MM-DD`），或不复制数字、直接链接代码与权威文档（如 [`USAGE_LIMITS.md`](../USAGE_LIMITS.md)）。同一数字已存在于权威文档时，其他文档应链接而不复述。禁止「本 PR 基线默认 N」这类无归属写法；这类漂移机检抓不到，实测案例是默认请求额度从 500 改为 0 后，一份标了基线但正文复述旧数字的文档在门禁全绿的情况下过期了一整轮。
 

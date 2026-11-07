@@ -50,7 +50,7 @@ findings:write
 | --- | --- |
 | 查看/改角色注册表、RoleConfig、全局/项目设置、凭据 | `agents:read`、`agents:write` |
 | 查看 Provider 目录/详情/影响/兼容性/缓存模型 | `agents:read` |
-| 创建/改/轮换/测试 Credential、刷新模型目录、批量绑定 | `agents:write` |
+| 创建/改/轮换/测试 Credential、刷新模型目录、修改项目 CLI/Provider 白名单 | `agents:write` |
 | 管理 Skill 模块源（同步/信任审批） | `skills:read`、`skills:write` |
 | 查看镜像市场 | `images:read` |
 | 导入镜像、重扫、项目启停/固定版本 | `images:manage` |

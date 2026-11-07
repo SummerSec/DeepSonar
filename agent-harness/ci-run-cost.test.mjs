@@ -56,6 +56,7 @@ test("an in-progress summary reports partial observations without pretending the
   assert.equal(result.runner_ms, null);
   assert.equal(result.observed_completed_runner_ms, 37_000);
   assert.match(renderRunCost(result), /partial/u);
+  assert.match(renderRunCost(result), /observed completed-job subtotal 0\.62 runner-minutes/u);
 });
 
 test("retry cost counts this attempt only, never the original run's creation gap", () => {
