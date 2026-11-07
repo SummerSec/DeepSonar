@@ -30,8 +30,8 @@ test("#953 项目面板无论有无源都提供自定义添加入口，并复用
   // 添加入口不在 sources.length 分支里：空态与有源时都能登记。
   assert.match(panel, /添加 Skill 源/);
   assert.match(panel, /api\.createSkillSource/);
-  assert.match(panel, /api\.syncSkillSource/);
-  assert.match(panel, /api\.trustSkillSource/);
+  assert.match(panel, /SkillSourceCatalogActions/);
+  assert.doesNotMatch(panel, /api\.(syncSkillSource|trustSkillSource)/);
   assert.match(panel, /官方源只是预置项/);
   // 不允许绕过平台准入：没有直接写库或跳过信任的路径。
   assert.doesNotMatch(panel, /trust_status: "trusted".*create/);
