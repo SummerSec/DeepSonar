@@ -1,3 +1,4 @@
+import { PI_EXTENSION_REGISTRY } from "@deepsonar/shared-types";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -492,7 +493,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       await sql`UPDATE role_configs SET agent_cli='pi' WHERE id=${roleConfigId}`;
       await sql`UPDATE credentials SET agent_cli='pi',settings_config_json=${sql.json(settings)} WHERE id=${credentialId}`;
       const extensions = freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base",
-        { provider: "anthropic", model: "model-a", thinking: "low" }, "0.6.3");
+        { provider: "anthropic", model: "model-a", thinking: "low" }, PI_EXTENSION_REGISTRY["pi-observational-memory"].min_runtime_image_version);
       assert.ok(extensions[0]?.observational_memory);
       const omExtensions = [{ ...extensions[0]!, observational_memory: {
         ...extensions[0]!.observational_memory!, background_limits: { max_requests: 0, max_tokens: 50 },

@@ -2,7 +2,74 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { DSH_REQUEST_BUDGET_SOURCE } from "./dsh-request-budget.js";
+import { createHash } from "node:crypto";
+import { runInNewContext } from "node:vm";
+import { DSH_REQUEST_BUDGET_SOURCE, DSH_REQUEST_BUDGET_VENDOR_SHA256 } from "./dsh-request-budget.js";
+import { DSH_REQUEST_BUDGET_ARTIFACT_SHA256, DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from "./dsh-runtime-image-guard.js";
+
+test("DSH image preflight rejects old, incomplete and mismatched governed plugin content", () => {
+  const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+  const root = "/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh-llm-pi-ai";
+  const vendor = "synthetic pinned vendor";
+  const artifact = "synthetic governed artifact";
+  const manifestPath = root + "/lib/deepsonar-request-budget.manifest.json";
+  const manifest = { version: 1, vendorVersion: "0.2.1-rc.2", sdkVersion: "1.4.0",
+    vendorSha256: hash(vendor), artifactSha256: hash(artifact), helperSha256: hash(DSH_REQUEST_BUDGET_SOURCE) };
+  const valid = new Map([
+    [root + "/package.json", JSON.stringify({ name: "@deepseek-ai/dsh-llm-pi-ai", version: "0.2.1-rc.2" })],
+    [manifestPath, JSON.stringify(manifest)],
+    [root + "/lib/index.js", vendor], [root + "/lib/deepsonar-index.js", artifact],
+    [root + "/lib/deepsonar-request-budget.mjs", DSH_REQUEST_BUDGET_SOURCE],
+    ["/opt/deepsonar/dsh/node_modules/@earendil-works/pi-ai/package.json", JSON.stringify({ name: "@earendil-works/pi-ai", version: "1.4.0" })],
+  ]);
+  const check = (files: Map<string, string>) => {
+    const output = { stdout: "", stderr: "", exitCode: 0 };
+    const guard = DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE
+      .replace(DSH_REQUEST_BUDGET_VENDOR_SHA256, hash(vendor))
+      .replace(DSH_REQUEST_BUDGET_ARTIFACT_SHA256, hash(artifact));
+    runInNewContext(guard, {
+      require: (name: string) => {
+        if (name === "node:crypto") return { createHash };
+        assert.equal(name, "node:fs");
+        return { readFileSync: (file: string) => {
+          if (!files.has(file)) throw new Error("ENOENT");
+          return files.get(file);
+        } };
+      },
+      process: { stdout: { write: (value: string) => { output.stdout += value; } },
+        stderr: { write: (value: string) => { output.stderr += value; } },
+        set exitCode(value: number) { output.exitCode = value; } },
+    });
+    return output;
+  };
+  assert.deepEqual(check(valid), { stdout: "DSH_REQUEST_BUDGET_IMAGE_READY\n", stderr: "", exitCode: 0 });
+  for (const missing of valid.keys()) {
+    const files = new Map(valid); files.delete(missing);
+    assert.equal(check(files).exitCode, 78, missing);
+  }
+  for (const field of ["version", "vendorVersion", "sdkVersion", "vendorSha256", "helperSha256", "artifactSha256"]) {
+    const files = new Map(valid); files.set(manifestPath, JSON.stringify({ ...manifest, [field]: "stale" }));
+    assert.equal(check(files).exitCode, 78, field);
+  }
+  for (const file of ["index.js", "deepsonar-index.js", "deepsonar-request-budget.mjs"]) {
+    const files = new Map(valid); files.set(root + "/lib/" + file, "changed bytes");
+    assert.equal(check(files).exitCode, 78, file);
+  }
+  // A self-consistent image manifest is not authority to choose executable code.
+  for (const replacement of [vendor, "arbitrary ungoverned entrypoint"]) {
+    const files = new Map(valid);
+    files.set(root + "/lib/deepsonar-index.js", replacement);
+    files.set(manifestPath, JSON.stringify({ ...manifest, artifactSha256: hash(replacement) }));
+    assert.deepEqual(check(files), { stdout: "", stderr: "DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID\n", exitCode: 78 });
+  }
+  // Even a self-consistent old manifest cannot opt into the current helper policy.
+  const stale = new Map(valid);
+  stale.set(root + "/lib/deepsonar-request-budget.mjs", "old helper");
+  stale.set(manifestPath, JSON.stringify({ ...manifest, helperSha256: hash("old helper") }));
+  assert.equal(check(stale).exitCode, 78);
+  const oldImage = new Map([[root + "/package.json", valid.get(root + "/package.json")!], [root + "/lib/index.js", vendor]]);
+  assert.deepEqual(check(oldImage), { stdout: "", stderr: "DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID\n", exitCode: 78 });
+});
 
 async function policyFixture() {
   const policy = await import(`data:text/javascript;base64,${Buffer.from(DSH_REQUEST_BUDGET_SOURCE).toString("base64")}`);

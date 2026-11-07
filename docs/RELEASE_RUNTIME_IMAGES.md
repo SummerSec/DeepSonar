@@ -1,9 +1,9 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；v0.6.15 为当前发布候选，尚未 tag/发布；v0.6.14 已正式发布，回写尚未完成（2026-11-06 核对）**。
-> 同步日期：2026-11-06
+> 状态：**运维 as-built；v0.6.15 tag 的发布失败，部分镜像已推送但未形成正式 Release；v0.6.14 为最新正式版（2026-11-07 核对）**。
+> 同步日期：2026-11-07
 >
-> 2026-11-06 核对 GitHub：最新正式版已推进到 [v0.6.14](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.14)（2026-11-06T05:16:02Z 发布，非 draft/prerelease，5 个附件，tag commit `06e5597d07727ef055aa5094b5af3726de609aef`，tag 未移动）；此前 v0.6.13 保持不可变。2026-11-06 核对 main `713a3a79`：bundled 清单与 `deploy/.env.example` 仍为 `0.6.13`；[attempt 2](https://github.com/SummerSec/DeepSonar/actions/runs/42037159429/attempts/2) 总结虽为 success，writeback job `127726870988` 实际失败于 `WRITEBACK_RUN_AWAITING_APPROVAL`，[#938](https://github.com/SummerSec/DeepSonar/pull/938) 尚待审批/合并。正式 Release 不证明回写或部署完成；这里只核对运行元数据、阶段结论及附件清单，未重新逐通道 inspect 镜像或验签。旧 tag 脚本没有新版防降级回写检查，不应据旧日志重跑旧发布 job。本轮候选为 **v0.6.15**，compare 为 `v0.6.14...v0.6.15`，成功升级基线为 v0.6.14。发布前集成的验收与未完成项见 [v0.6.15 证据与升级边界](#v0615-集成证据与升级边界)；最终目标 SHA 的适用 Actions 与实际发布证据须分别核验。
+> 2026-11-07 核对 GitHub：[v0.6.15 发布运行](https://github.com/SummerSec/DeepSonar/actions/runs/42178680573) 在 Chrome / ClickHouse 子镜像构建失败，未完成最终 catalog、签名和正式 Release；不可把单个镜像 tag 当作整版发布。最新正式版仍为 [v0.6.14](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.14)，main `16ed0726` 的 bundled 清单与部署示例均已回写到 `0.6.14`。DSH/Pi OM 的旧镜像问题、三款已推送镜像的实物核验和恢复限制见 [#979 诊断与恢复](RUNTIME_IMAGE_GOVERNANCE_979.md)。原 v0.6.15 tag/已有镜像保持不可变；新的发布须重新确认目标版本、compare 和最终 SHA Actions，不能沿用旧准备状态。
 >
 > **历史 v0.6.4 发布准备基线（2026-11-02，保留历史来源）**。准备时最近正式版为 [v0.6.2](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.2)，于 2026-10-31T09:05:38Z 正式发布，非 draft / prerelease；tag 指向包含 Web 隔离构建修复的 `347385a53f43d15a53175226528af10a692f6f9e`。[v0.6.3 的 Release](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 失败，已有部分镜像但未完成正式发行。按用户 2026-11-02 的选择，保留其 tag 和既有镜像，改发 **v0.6.4**；Git compare 起点为 v0.6.3，成功升级基线仍为 v0.6.2（schema 65 → 67）。本轮范围沿用[原范围决定](<../AGENTS.md#豁免范围>)，不移动旧 tag 或覆盖旧镜像。这里核对发布元数据与源码关系，不重新声明附件、签名或各通道镜像已逐项复验。
 >

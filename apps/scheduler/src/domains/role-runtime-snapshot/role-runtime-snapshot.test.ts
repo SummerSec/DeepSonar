@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { PI_EXTENSION_REGISTRY } from "@deepsonar/shared-types";
 
 process.env.AGENT_MODE = "fake";
+const OM_MIN_IMAGE_VERSION = PI_EXTENSION_REGISTRY["pi-observational-memory"].min_runtime_image_version!;
 
 type SnapshotDb = ((strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>) & {
   json?: (value: unknown) => unknown;
@@ -417,6 +419,8 @@ test("OM freeze caller admits only the selected immutable image version", async 
   const previousAgentMode = config.runtime.agentMode;
   Reflect.set(config.runtime, "agentMode", "real");
   try {
+    // #979 review P1: the floor is 0.6.3 again, so only versions below it (and
+    // malformed ones) are rejected; 0.6.3/0.6.4/0.6.14 are admitted.
     for (const version of [null, "configured-local", "0.6.2", "0.6.3garbage"]) {
       const queries: string[] = [];
       await assert.rejects(
@@ -427,7 +431,7 @@ test("OM freeze caller admits only the selected immutable image version", async 
           piExtensionIds: ["pi-observational-memory"],
           // Untrusted task metadata is intentionally ignored by the resolver.
           ...({
-            runtimeImageVersion: "0.6.3",
+            runtimeImageVersion: OM_MIN_IMAGE_VERSION,
             runtimeImageDigest: `sha256:${"c".repeat(64)}`,
           } as unknown as Parameters<typeof resolveAgentSnapshotForJob>[3]),
         }),
@@ -440,7 +444,7 @@ test("OM freeze caller admits only the selected immutable image version", async 
     const queries: string[] = [];
     const admitted = await resolveAgentSnapshotForJob(snapshotDb({
       projectConfig: {}, projectCfg: undefined, globalCfg, credential,
-      runtimeImage: { version: "0.6.3", digest: `sha256:${"d".repeat(64)}` }, queries,
+      runtimeImage: { version: OM_MIN_IMAGE_VERSION, digest: `sha256:${"d".repeat(64)}` }, queries,
     }), "project-1", "audit", {
       piExtensionIds: ["pi-observational-memory"],
       ...({
@@ -448,7 +452,7 @@ test("OM freeze caller admits only the selected immutable image version", async 
         runtimeImageDigest: `sha256:${"e".repeat(64)}`,
       } as unknown as Parameters<typeof resolveAgentSnapshotForJob>[3]),
     });
-    assert.equal(admitted.runtime_image.image_version, "0.6.3");
+    assert.equal(admitted.runtime_image.image_version, OM_MIN_IMAGE_VERSION);
     assert.equal(admitted.runtime_image.image_digest, `sha256:${"d".repeat(64)}`);
     assert.equal(admitted.pi_extensions[0]?.id, "pi-observational-memory");
     assert.equal(queries.some((query) => /\b(?:INSERT|UPDATE|DELETE)\b/i.test(query)), false);
@@ -479,7 +483,7 @@ test("OM Job persistence freezes platform quotas into matching snapshot/profile/
           models: [{ id: "fixture-model" }],
         },
       },
-      runtimeImage: { version: "0.6.3" },
+      runtimeImage: { version: OM_MIN_IMAGE_VERSION },
     }), "project-1", "audit", { piExtensionIds: ["pi-observational-memory"] });
   } finally {
     Reflect.set(config.runtime, "agentMode", previousAgentMode);

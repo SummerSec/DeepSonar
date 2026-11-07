@@ -1,3 +1,4 @@
+import { PI_EXTENSION_REGISTRY } from "@deepsonar/shared-types";
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import net from "node:net";
@@ -165,7 +166,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     "pi",
     "deepsonar-base",
     { provider: "openai", model: "main-model", thinking: "low" },
-    "0.6.3", // Catalog metadata fixture; actual installed bytes are checked by the image RPC gate.
+    PI_EXTENSION_REGISTRY["pi-observational-memory"].min_runtime_image_version, // Catalog metadata fixture; actual installed bytes are checked by the image RPC gate.
   );
   const baseExtension = frozenExtensions[0];
   if (!baseExtension?.observational_memory) throw new Error("OM extension fixture was not registered");
