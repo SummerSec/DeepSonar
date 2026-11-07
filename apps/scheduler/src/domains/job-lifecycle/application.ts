@@ -362,16 +362,15 @@ export function createSqlJobLifecycleApplication(
     },
 
     /**
-     * waiting_human 独立预算（#536）：从最近一次 `human` 事件起算，超时 → failed。
-     * 0 关闭。时钟不复用 started_at / audit timeout，也不改 Finding verify_status。
+     * waiting_human 独立预算（#536）：最近一次 human 事件到期且效果已结清时才 failed。
+     * 0 关闭；未结清效果或本轮对账进展保留等待，不重放也不刷新期限。
      */
     async reapWaitingHumanTimeout(waitingHumanSec) {
       const budget = Number.isSafeInteger(waitingHumanSec) ? waitingHumanSec : 0;
       if (budget <= 0) return [];
       return atomically(async (tx) => {
-        // #874: reconcile this Job's external effects before blaming the human.
-        // Lock order stays Job → effects here, matching human-messages.ts (Job lock,
-        // then Attempt, then effect) so the pre-timeout pass cannot invert it.
+        // Reconciliation and the timeout verdict share Job -> Attempt locks.
+        // An active writer must not create a new effect between inspection and verdict.
         const candidates = await tx`
           SELECT jobs.id::text AS id FROM jobs
           WHERE status = 'waiting_human'
@@ -386,26 +385,28 @@ export function createSqlJobLifecycleApplication(
         const result: Array<{ id: string; sandbox_id: string | null }> = [];
         for (const candidate of candidates as unknown as Array<{ id: string }>) {
           const jobId = String(candidate.id);
+          await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no FOR UPDATE`;
           const outcome = await reconcileJobEffects(
             tx as unknown as MigrationConnection,
             jobId,
             `reaper-timeout:${jobId}`,
           ).catch(() => null);
           if (!outcome) continue;
-          // A pass that actually settled the blocker earns this Job one more tick: the
-          // completion path may now succeed, so failing it in the same breath would
-          // throw away the reconciliation we just performed. The next tick applies
-          // nothing (the rows are settled) and the timeout applies normally.
-          if (outcome.remaining === 0 && outcome.applied > 0) continue;
-          const suffix = outcome.remaining > 0
-            ? `；平台侧外部效果未结算（${outcome.remainingKinds.join(",")}），需先对账再判定超时`
-            : "";
+          // Unknown effects are a platform reconciliation blocker, not a human fault.
+          // Any reconciliation progress gets a tick for the existing completion/reply path.
+          if (outcome.remaining > 0 || outcome.applied > 0) continue;
           const updated = await tx`
             UPDATE jobs SET status = 'failed', finished_at = now(),
-                            error = COALESCE(error, '') || ${`人工等待超时（Reaper 判定）${suffix}`},
+                            error = COALESCE(error, '') || ${"人工等待超时（Reaper 判定）"},
                             lease_expires_at = NULL, heartbeat_at = NULL
             WHERE id = ${jobId}
               AND status = 'waiting_human'
+              -- Reconciliation excludes active Attempts and planned effects; their
+              -- absence from its result is not proof that the whole Job is settled.
+              AND NOT EXISTS (
+                SELECT 1 FROM job_attempt_effects e
+                WHERE e.job_id=jobs.id AND e.status <> 'settled'
+              )
               -- Re-check the deadline: a human reply during this batch resets the
               -- budget and this Job must not be killed for the earlier wait.
               AND COALESCE(

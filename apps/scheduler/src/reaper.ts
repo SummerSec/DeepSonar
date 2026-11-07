@@ -27,7 +27,7 @@ import { triggerCompletionRecovery } from "./core.js";
  * Reaper（§3.3 兜底）：调度器唯一可信的终局判定者
  * - 超时：started_at + timeout_sec 到期 → timeout
  * - 孤儿：lease 过期 → orphan（沙箱可能已死/调度器崩溃后恢复）
- * - waiting_human：最近一次 human 事件超过独立预算 → failed(human_timeout)
+ * - waiting_human：最近一次 human 事件超过独立预算且无未结清效果/本轮对账进展 → failed(human_timeout)
  * - dangling human 投影：无类型/无目标/无处理入口的 open 节点 → expired
  */
 

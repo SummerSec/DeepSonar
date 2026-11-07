@@ -281,9 +281,9 @@ export function isSemanticAgentRunError(result: {
   return result.errorKind === "semantic" || result.error?.startsWith("语义事件处理失败:") === true;
 }
 
-/** #913: only a structured completion refusal may settle an already accepted done. */
+/** #913/#947: only a structured completion refusal may settle an already accepted done. */
 const ACCEPTED_COMPLETION_REFUSAL =
-  /^(?:Pi message ended: error: )?(?:409 )?(?:COMPLETION_ALREADY_ACCEPTED|Completion already accepted; reconcile its receipt|A completion is already durably accepted; read its receipt)$/i;
+  /^(?:Pi message ended: error: )?(?:409:? )?(?:COMPLETION_ALREADY_ACCEPTED|Completion already accepted; reconcile its receipt|A completion is already durably accepted; read its receipt)$/i;
 
 export function acceptedCompletionSupersedesRunnerFailure(
   result: Pick<RealAgentResult, "error" | "errorKind" | "terminalOutcome" | "runnerErrorSource">,

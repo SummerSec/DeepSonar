@@ -205,7 +205,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **决策来源**：运维判定和外部清理是平台责任，迟到回调不能重新取得执行权。
 - **实现状态**：as-built；Reaper 和状态条件更新复用 Job/Attempt effect identity。终态 model token 与 Control token 撤销在同一 Job 终态事务内完成，不另取 Job lock，也不吞掉撤销异常；回滚夹具保持 Job/model token/Control token/audit 原子性，终态后的真实 HTTP 请求返回 401。
 - **代码入口**：[Dispatcher/Reaper](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[token revocation](../../apps/scheduler/src/gateway-token-revocation.ts)、[配置](../../apps/scheduler/src/config.ts)。
-- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-reaper`；`terminal-bootstrap-regression.log` 记录 12 pass/0 skip，覆盖 bootstrap、ordinary Hub 无 v1 audit、依赖执行和 terminal rollback；人工重复取消/迟到回调核对稳定结果。
+- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-reaper`；`terminal-bootstrap-regression.log` 记录 12 pass/0 skip，覆盖 bootstrap、ordinary Hub 无 v1 audit、依赖执行和 terminal rollback；人工重复取消/迟到回调核对稳定结果。#946 的未知/未结清效果不能被记为人的超时，active/inactive Attempt 与 planned/pending/unknown、多 tick 和正常到期回归接 `pnpm ci:integration:job-lifecycle`；最终 SHA Actions 待验，真实通知投递计时仍未实现。
 
 ### FR-JOB-014 重试创建新 Attempt
 
