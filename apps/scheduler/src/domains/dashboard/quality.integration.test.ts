@@ -184,6 +184,7 @@ if (!testDatabaseUrl) {
       await sql`DELETE FROM canvases WHERE project_id = ANY(${[projectId, otherProjectId]}::uuid[])`;
       await deleteProjectsLeavingAuditShells(sql, [projectId, otherProjectId]);
       await app.close();
+      await sql.end({ timeout: 5 });
     }
   });
 }
