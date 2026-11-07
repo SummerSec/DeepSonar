@@ -62,7 +62,7 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.doesNotMatch(reaperSource, /UPDATE\s+jobs\s+SET\s+status/);
   assert.match(lifecycleSource, /runtime_activity,inflight_tool/);
   assert.match(lifecycleSource, /deepsonar-chrome-fuzz/);
-  assert.match(lifecycleSource, /deepsonar-clickhouse-fuzz/);
+  assert.match(lifecycleSource, /deepsonar-chrome-fuzz/);
   assert.match(lifecycleSource, /HUB_JOB_STALL_SEC/);
   assert.match(lifecycleSource, /WHEN 'hub_reason'/);
   assert.match(lifecycleSource, /tool\.call\.started/);

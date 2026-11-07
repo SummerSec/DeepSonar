@@ -14,7 +14,7 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + Job-scoped HTTP API 控
 
 ### 离线工具手册
 
-`runtime-manuals/catalog.json` 是 14 个官方运行镜像的手册单一来源。构建时 `materialize-runtime-manuals.mjs` 读取当前镜像最终 `tool-manifest.json`，把公共和镜像专属条目展开为 `/opt/deepsonar/manuals/index.json`、`INDEX.md` 与逐工具 Markdown，并把手册契约、版本、路径和 SHA-256 回写工具清单。最终镜像不能只引用基础镜像文档。
+`runtime-manuals/catalog.json` 是 11 个官方运行镜像（#952 下线后）的手册单一来源。构建时 `materialize-runtime-manuals.mjs` 读取当前镜像最终 `tool-manifest.json`，把公共和镜像专属条目展开为 `/opt/deepsonar/manuals/index.json`、`INDEX.md` 与逐工具 Markdown，并把手册契约、版本、路径和 SHA-256 回写工具清单。最终镜像不能只引用基础镜像文档。
 
 每个工具或包装入口都说明使用场景、选型依据、前置条件、调用、输出解释、失败分类、组合流程、证据留存与版本限制。`test-runtime-manuals.mjs` 做仓库级完整性检查；`test-runtime-manuals-runtime.mjs` 在断网容器内检查实际文件和摘要。Worker 启动只得到索引位置，按任务读取章节；手册不改变 Scheduler 冻结的权限、网络和预算。
 

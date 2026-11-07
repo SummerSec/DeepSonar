@@ -5,7 +5,7 @@
  * Injection rule (withRuntimeTestToolchainPolicy):
  * - Runtime test toolchain block: role `test`, or `verify` when image is not deepsonar-base.
  * - Specialty image boundary: ANY role when resolved image_key is in SPECIALTY_RUNTIME_IMAGE_POLICIES
- *   (chrome-*, clickhouse-*, openharmony-*, mobile, reverse). Base / audit / kali alone do not get a specialty block.
+ *   (chrome-*, openharmony-*, mobile, reverse). Base / audit / kali alone do not get a specialty block.
  */
 
 export const OPENHARMONY_HDC_POLICY = `### OpenHarmony hdc device protocol (Scheduler policy)
@@ -49,30 +49,6 @@ This Job uses deepsonar-chrome-fuzz. Dynamic evidence must come from the pinned 
 - Do not rename toy harnesses to d8. Do not install a second V8, full Chromium browser, or substitute fuzz binaries.
 - Build/smoke failure or missing d8 → report the blocker using the role-scoped runtime evidence policy below. Never invent crash repros from source comments.`;
 
-export const CLICKHOUSE_TEST_RUNTIME_POLICY = `### ClickHouse official runtime (Scheduler policy)
-
-This Job uses deepsonar-clickhouse-test. Dynamic evidence must come from the pinned official ClickHouse LTS binary (clickhouse / clickhouse-client / clickhouse-local / clickhouse-server wrappers).
-
-- Read /opt/deepsonar/manuals/INDEX.md for tool usage manuals (when/how/failure/evidence), then /opt/deepsonar/tool-manifest.json and confirm clickhouse.official and the pinned version. Prefer image entrypoints (clickhouse-test-env.sh / clickhouse-server.sh).
-- Do not install ClickHouse from apt, Docker-in-Docker, or unofficial builds. Do not substitute a toy SQL harness for the official binary.
-- If the official binary is missing or the server cannot start under frozen egress/listen policy, report the blocker using the role-scoped runtime evidence policy below. Never invent query results from schema narration.`;
-
-export const CLICKHOUSE_AUDIT_RUNTIME_POLICY = `### ClickHouse/C++ audit toolchain (Scheduler policy)
-
-This Job uses deepsonar-clickhouse-audit. Evidence is Agent-led ClickHouse/C++ source inspection with git, CMake/Ninja, Clang/LLVM and binutils.
-
-- Read /opt/deepsonar/manuals/INDEX.md for tool usage manuals (when/how/failure/evidence), then /opt/deepsonar/tool-manifest.json. Use cmake, ninja, clang, clang-tidy, clangd, llvm, objdump, readelf, llvm-nm, python3 as needed.
-- The platform does not ship a fixed scan script, rule pack, or the ClickHouse server binary in this audit image.
-- Do not install official clickhouse-server here as a substitute for deepsonar-clickhouse-test, and do not install decision scanners. Missing tools → report the blocker using the role-scoped runtime evidence policy below.`;
-
-export const CLICKHOUSE_FUZZ_RUNTIME_POLICY = `### ClickHouse fuzz runtime (Scheduler policy)
-
-This Job uses deepsonar-clickhouse-fuzz. Dynamic evidence must come from the pinned official clickhouse-local plus the image Clang/LLVM sanitizer and AFL++/libFuzzer toolchain.
-
-- Read /opt/deepsonar/manuals/INDEX.md for tool usage manuals (when/how/failure/evidence), then /opt/deepsonar/tool-manifest.json and confirm clickhouse.official and fuzz.target. Prefer image entrypoints and the official clickhouse-local binary.
-- Do not substitute a toy harness for clickhouse-local. Sanitizer rebuilds may help find issues; qualification still requires the unmodified official binary where applicable.
-- Missing official binary or toolchain → report the blocker using the role-scoped runtime evidence policy below. Never invent crash results from source narration.`;
-
 export const OPENHARMONY_AUDIT_RUNTIME_POLICY = `### OpenHarmony host audit toolchain (Scheduler policy)
 
 This Job uses deepsonar-openharmony-audit. Evidence is host-side static analysis (Clang/clang-tidy/cppcheck/sparse + ASan/UBSan build support), not the hdc device protocol.
@@ -110,9 +86,6 @@ export const SPECIALTY_RUNTIME_IMAGE_POLICIES: ReadonlyArray<SpecialtyRuntimeIma
   { image_key: "deepsonar-chrome-test", marker: "### Chrome CDP runtime (Scheduler policy)", body: CHROME_TEST_RUNTIME_POLICY },
   { image_key: "deepsonar-chrome-audit", marker: "### Chrome/C++ audit toolchain (Scheduler policy)", body: CHROME_AUDIT_RUNTIME_POLICY },
   { image_key: "deepsonar-chrome-fuzz", marker: "### Chrome/V8 fuzz runtime (Scheduler policy)", body: CHROME_FUZZ_RUNTIME_POLICY },
-  { image_key: "deepsonar-clickhouse-test", marker: "### ClickHouse official runtime (Scheduler policy)", body: CLICKHOUSE_TEST_RUNTIME_POLICY },
-  { image_key: "deepsonar-clickhouse-audit", marker: "### ClickHouse/C++ audit toolchain (Scheduler policy)", body: CLICKHOUSE_AUDIT_RUNTIME_POLICY },
-  { image_key: "deepsonar-clickhouse-fuzz", marker: "### ClickHouse fuzz runtime (Scheduler policy)", body: CLICKHOUSE_FUZZ_RUNTIME_POLICY },
   { image_key: "deepsonar-openharmony-test", marker: "### OpenHarmony hdc device protocol (Scheduler policy)", body: OPENHARMONY_HDC_POLICY },
   { image_key: "deepsonar-openharmony-audit", marker: "### OpenHarmony host audit toolchain (Scheduler policy)", body: OPENHARMONY_AUDIT_RUNTIME_POLICY },
   { image_key: "deepsonar-openharmony-fuzz", marker: "### OpenHarmony host fuzz toolchain (Scheduler policy)", body: OPENHARMONY_FUZZ_RUNTIME_POLICY },

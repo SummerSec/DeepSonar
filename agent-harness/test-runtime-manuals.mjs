@@ -11,9 +11,6 @@ export const OFFICIAL_RUNTIME_IMAGES = Object.freeze([
   "deepsonar-chrome-test",
   "deepsonar-chrome-audit",
   "deepsonar-chrome-fuzz",
-  "deepsonar-clickhouse-test",
-  "deepsonar-clickhouse-audit",
-  "deepsonar-clickhouse-fuzz",
   "deepsonar-openharmony-test",
   "deepsonar-openharmony-audit",
   "deepsonar-openharmony-fuzz",
@@ -156,9 +153,6 @@ function dockerfileFor(imageKey) {
     "chrome-test": "Dockerfile.agent-chrome-test",
     "chrome-audit": "Dockerfile.agent-chrome-audit",
     "chrome-fuzz": "Dockerfile.agent-chrome-fuzz",
-    "clickhouse-test": "Dockerfile.agent-clickhouse-test",
-    "clickhouse-audit": "Dockerfile.agent-clickhouse-audit",
-    "clickhouse-fuzz": "Dockerfile.agent-clickhouse-fuzz",
   };
   return join(root, "deploy", aliases[suffix] ?? `Dockerfile.agent-${suffix}`);
 }
@@ -247,7 +241,7 @@ export function runStaticManualGate() {
     ? catalog.images.map((item) => item?.image_key ?? item?.imageKey).filter((item) => typeof item === "string")
     : catalog.images && typeof catalog.images === "object" ? Object.keys(catalog.images) : [];
   if (keys.length !== OFFICIAL_RUNTIME_IMAGES.length || OFFICIAL_RUNTIME_IMAGES.some((key) => !keys.includes(key))) {
-    fail(`catalog must contain exactly the 14 official images; got ${keys.join(", ")}`);
+    fail(`catalog must contain exactly the ${OFFICIAL_RUNTIME_IMAGES.length} official images; got ${keys.join(", ")}`);
   }
   const baseEntries = entriesFor(imageCatalog(catalog, "deepsonar-base"), "deepsonar-base");
   const inheritedCommands = new Set(baseEntries

@@ -46,9 +46,9 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
   list_available_runtime_images: [
     "### `list_available_runtime_images` — 查询 Hub 当前可提案的运行镜像",
     "- 参数：无参数，调用时传空对象 `{}`。",
-    "- 时机：**凡派发 Worker 且任务可能需要非缺省工具链时必须先调用**（移动端 APK、浏览器 CDP、ClickHouse、OpenHarmony、多语言动态 PoC 等）；不要凭记忆猜 image_key。",
+    "- 时机：**凡派发 Worker 且任务可能需要非缺省工具链时必须先调用**（移动端 APK、浏览器 CDP、OpenHarmony、多语言动态 PoC 等）；不要凭记忆猜 image_key。",
     "- 返回每条含：`image_key`、`name`、`description`、`compatible_agent_clis`、`purpose`（用途）、`tool_summary`（预装工具）、`not_included`（明确不包含）、`suited_roles`、`suited_evidence`、`selection_hints`（任务→镜像匹配提示）、`capabilities`（能力标签），以及实时 `readiness`（ready/preparing/unavailable/error）、`preparing`、`error_code`、脱敏 `error`、`checked_at`。",
-    "- 选择纪律：按本轮任务证据需求匹配 `purpose` / `capabilities` / `selection_hints`（例：APK→mobile，Chromium/CDP→chrome-test，官方 ClickHouse SQL→clickhouse-test，hdc 设备→openharmony-test，Java/Python/Go/Rust PoC→kali-minimal）；再核对角色 CLI ∈ `compatible_agent_clis` 且 `readiness=ready`。intent.`runtime_image_key` 只能原样复制返回的 image_key；省略则按角色缺省镜像。不得填写 OCI/digest/目录外 key（`invalid_runtime_image`）；非 ready 整单拒绝（`runtime_image_not_ready`）。",
+    "- 选择纪律：按本轮任务证据需求匹配 `purpose` / `capabilities` / `selection_hints`（例：APK→mobile，Chromium/CDP→chrome-test，hdc 设备→openharmony-test，Java/Python/Go/Rust PoC→kali-minimal）；再核对角色 CLI ∈ `compatible_agent_clis` 且 `readiness=ready`。intent.`runtime_image_key` 只能原样复制返回的 image_key；省略则按角色缺省镜像。不得填写 OCI/digest/目录外 key（`invalid_runtime_image`）；非 ready 整单拒绝（`runtime_image_not_ready`）。",
     "- 示例：`{}`",
   ].join("\n"),
   list_capabilities: [

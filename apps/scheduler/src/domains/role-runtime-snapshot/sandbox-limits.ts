@@ -37,12 +37,6 @@ export const CHROME_RUNTIME_IMAGE_KEYS = new Set([
   "deepsonar-chrome-fuzz",
 ]);
 
-export const CLICKHOUSE_RUNTIME_IMAGE_KEYS = new Set([
-  "deepsonar-clickhouse-audit",
-  "deepsonar-clickhouse-test",
-  "deepsonar-clickhouse-fuzz",
-]);
-
 /**
  * Enforce the scheduler-owned network policy for browser runtimes.  Keep this
  * at the snapshot boundary so create/retry/dispatch paths share one rule and
@@ -56,11 +50,6 @@ export function assertChromeRuntimeEgressAllowed(
   if (CHROME_RUNTIME_IMAGE_KEYS.has(key) && allowEgress !== true) {
     throw new Error(
       `Chrome runtime ${key} requires canvas network_policy.allow_egress=true`,
-    );
-  }
-  if (CLICKHOUSE_RUNTIME_IMAGE_KEYS.has(key) && allowEgress !== true) {
-    throw new Error(
-      `ClickHouse runtime ${key} requires canvas network_policy.allow_egress=true`,
     );
   }
 }

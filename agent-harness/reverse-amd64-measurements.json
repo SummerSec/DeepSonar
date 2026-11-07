@@ -25,7 +25,7 @@
     "oci_compressed_measured_mib": null,
     "oci_compressed_pending_reason": "validation host 无 docker；待首次 reverse-runtime/release 构建后用 docker save|gzip 实测",
     "provisional_maxSizeMiB": 2800,
-    "provisional_basis": "base 预算 505 + Ghidra PUBLIC zip/JDK/rea 增量，并留 margin；对齐 clickhouse-fuzz 量级"
+    "provisional_basis": "base 预算 505 + Ghidra PUBLIC zip/JDK/rea 增量，并留 margin；对齐 chrome-fuzz 量级"
   },
   "samples": {
     "sample_elf_sha256": "a46dcd52416dfc8b81f75191ed1b7e2890c9885cb3868bad069a516bcb4551c6",
