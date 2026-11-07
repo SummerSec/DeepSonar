@@ -336,10 +336,13 @@ test("project default model is explicit, uses configured ids, preserves invalid 
   const container = dom.window.document.getElementById("root")!;
   const { createRoot } = await import("react-dom/client");
   const root = createRoot(container);
-  const credentials = ["a", "b"].map((id) => ({ id, name: id, kind: "llm_provider", provider: "fixture", agent_cli: "pi", status: "active", project_id: null,
+  const credentials = ["a", "b"].map((id): ProviderCredential => ({ id, name: id, kind: "llm_provider", provider: "fixture", agent_cli: "pi", status: "active", project_id: null,
+    key_version: 1, public_metadata_json: {}, fingerprint: `fixture-${id}`, last4: "test",
+    last_used_at: null, rotated_at: null, created_at: "2026-11-07T00:00:00.000Z", created_by: null,
     settings_config_json: { providers: { fixture: { models: (id === "a" ? ["model-a", "model-b"] : ["model-c"]).map((model) => ({ id: model })) } } },
-    model_catalog_json: ["probe-only"], health: { status: "ok", model_catalog: ["health-only"] },
-  })) as ProviderCredential[];
+    model_catalog_json: ["probe-only"], health: { status: "ok", model_catalog: ["health-only"],
+      last_tested_at: null, error_category: null, detail: null, model_catalog_fetched_at: null },
+  }));
   let response = { enabled_credential_ids: ["a", "b"], default_credential_id: "a", default_model_ref: "model-a" } as ProjectSettings;
   const requests: Array<Parameters<typeof api.patchSettings>[1]> = [];
   api.patchSettings = async (_projectId, body) => { requests.push(body); return response; };
@@ -447,9 +450,11 @@ test("parent settings reload after probes preserves drafts before and during the
   const container = dom.window.document.getElementById("root")!;
   const { createRoot } = await import("react-dom/client");
   const root = createRoot(container);
-  const credentials = ["a", "b"].map((id) => ({ id, name: id, kind: "llm_provider", provider: "fixture", agent_cli: "pi", status: "active", project_id: null,
+  const credentials = ["a", "b"].map((id): ProviderCredential => ({ id, name: id, kind: "llm_provider", provider: "fixture", agent_cli: "pi", status: "active", project_id: null,
+    key_version: 1, public_metadata_json: {}, fingerprint: `fixture-${id}`, last4: "test",
+    last_used_at: null, rotated_at: null, created_at: "2026-11-07T00:00:00.000Z", created_by: null,
     settings_config_json: { providers: { fixture: { models: [{ id: "model-a" }, { id: "model-b" }] } } },
-  })) as ProviderCredential[];
+  }));
   let finishProbe!: (result: Awaited<ReturnType<typeof api.testCredential>>) => void;
   let replaceServer!: (value: ProjectSettings) => void;
   let reloads = 0;
