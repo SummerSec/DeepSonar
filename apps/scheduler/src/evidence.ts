@@ -118,7 +118,7 @@ function manifestRel(jobId: string): string {
 }
 
 async function atomicWrite(filePath: string, data: Buffer | string, durable = false): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
+  const created = await mkdir(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   if (durable) {
     const handle = await open(tmp, "wx");
@@ -126,8 +126,15 @@ async function atomicWrite(filePath: string, data: Buffer | string, durable = fa
   } else await writeFile(tmp, data);
   await rename(tmp, filePath);
   if (durable && process.platform !== "win32") {
-    const directory = await open(path.dirname(filePath), "r");
-    try { await directory.sync(); } finally { await directory.close(); }
+    let directory = path.dirname(path.resolve(filePath));
+    const stop = created ? path.dirname(path.resolve(created)) : directory;
+    // Persist every newly created directory entry, not only the file's parent.
+    for (;;) {
+      const handle = await open(directory, "r");
+      try { await handle.sync(); } finally { await handle.close(); }
+      if (directory === stop) break;
+      directory = path.dirname(directory);
+    }
   }
 }
 
@@ -224,11 +231,13 @@ export class JobEvidenceWriter {
         if (retained.some(file => file.path === meta.path) || existsSync(target)) throw new Error("Runtime artifact already exists");
         const usage = new Map(retained.map(file => [path.basename(file.path), file.bytes]));
         const runtimeDir = path.dirname(target);
-        await mkdir(runtimeDir, { recursive: true });
         // Failed index commits and interrupted temporary writes still consume
         // the Attempt budget, but are never published as trusted references.
-        const directory = await opendir(runtimeDir);
-        for await (const entry of directory) {
+        const directory = await opendir(runtimeDir).catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return undefined;
+          throw error;
+        });
+        if (directory) for await (const entry of directory) {
           const info = await lstat(path.join(runtimeDir, entry.name));
           if (!info.isFile()) throw new Error("Runtime artifact budget unavailable");
           usage.set(entry.name, Math.max(usage.get(entry.name) ?? 0, info.size));
@@ -310,7 +319,7 @@ export class JobEvidenceWriter {
         ? { capture_error: [previous?.capture_error, this.session?.captureError, captureError, this.runtimeCaptureError].filter(Boolean).join("；") }
         : {}),
     };
-    await atomicWrite(path.join(this.root, "manifest.json"), JSON.stringify(manifest, null, 2));
+    await atomicWrite(path.join(this.root, "manifest.json"), JSON.stringify(manifest, null, 2), true);
     otlpQueues.delete(this.jobId);
     if (otlpPaths.get(this.jobId) === otlpPath) otlpPaths.delete(this.jobId);
     if (activeWriters.get(this.jobId) === this) activeWriters.delete(this.jobId);
