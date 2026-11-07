@@ -141,7 +141,9 @@ Control API 的每个 operation 必须经过三层校验：
 
 失败重跑的粒度是 **job 而不是 step**：GitHub 的 “Re-run failed jobs” 会整段重跑该 job 的步骤，相关下游也会重跑，不存在从失败 step 原地续跑。所以降低重试成本的杠杆是把昂贵的独立套件拆成可单独重跑的 job（各自保持 DB/端口/服务/文件隔离），以及在同一 run、同 SHA、同平台与输入身份下复用准备产物；**不得**跨提交复用「测试已通过」的结论。`ci-summary` 与 `reverse-runtime-acceptance` 始终核对计划与实际结果，失败、取消、缺片或应跑误跳过都不放行——跳过判定只缩小范围，不放宽门禁。
 
-#992 的失败隔离实证入口是现有 `ci` 手动运行的 `isolation_probe`（默认关闭，2026-11-07）：只有手动且第一次 attempt 才在 `gate-runtime` 完成真实套件后故意失败；PR/main 不注入故障。第一次汇总必须失败，使用 GitHub 原生 “Re-run failed jobs” 后核对同 SHA 的 runtime/summary 重跑、其他 job ID 保留以及最终汇总。测试代码已接线，真实故障/重跑与前后三次可比耗时、排队和 runner-minutes 尚待 Actions 取证；不能把结构拆分或普通成功 run 当成已经实测节省。该诊断开关不绕过测试、权限或结果检查，也不提供任意 step 续跑。
+#992 的失败隔离实证入口是现有 `ci` 手动运行的 `isolation_probe`（默认关闭，2026-11-07）：只有手动且第一次 attempt 才在 `gate-runtime` 完成真实套件后故意失败；PR/main 不注入故障。[真实运行](https://github.com/SummerSec/DeepSonar/actions/runs/42387980272)的第一轮仅 runtime 探针与汇总失败，其余独立分片成功；原生 `--failed` 第二轮成功。GitHub 会为保留的成功结果生成新 job ID/attempt，必须比较原执行时间、runner 与步骤，不能以 ID 未变作为证明。详见 [#992 验收记录](../CI_COST_ACCEPTANCE_992.md)；三组成本对照与本次补丁最终 SHA 另验，不把结构拆分推导为性能收益。诊断开关不绕过测试、权限或结果检查，也不提供任意 step 续跑。
+
+#992 进一步核对 base 的直接 COPY 输入及工作流实际构建的两个 Dockerfile：专用 Reverse 镜像只需 REA，精确审定的其他派生镜像不触发本工作流原生重活，未知 Dockerfile、shared/routing/锁文件仍全跑；base 内 DSH installer 与 OM 治理代码不能漏掉共享消费。核心与 Reverse 汇总通过 [只读观测器](../../agent-harness/ci-run-cost.mjs)直接说明本 attempt 的排队、执行、重复 setup/build 和 artifact 步骤成本；仅增加 job 级 `contents/actions: read`，不读取长期 secret 或执行外部 artifact。未完成/缺数据记 unknown，保留旧结果须有前一 attempt API 匹配证据；观测不替代原汇总、更不授权跨提交复用。当前 API 观测不进入 [#970 可信 benchmark 历史](../RUNTIME_BUILD_TIMING.md)。
 
 镜像构建的缓存与磁盘准备各有独立边界。#974 起 `runtime-images` 的 `cache-from`/`cache-to` 由 [`runtime-image-cache-policy.mjs`](../../agent-harness/runtime-image-cache-policy.mjs) 按 toolset 计算：所有 toolset 恒保留两个 registry 读与 GHA 读回退；`base`/`audit` 的写出与历史两行逐字一致；`kali-minimal` 默认只保留 registry `mode=max,ignore-error=true`，去掉重复的 GHA `mode=max` 大层导出，可用仓库变量 `RUNTIME_CACHE_KALI_GHA` 切回 `min`/`max`，非法值 fail closed。#961 P3 起内容指纹同时给出 `ci_src_tag`（`src-ci-<fp>`，CI 读写）与 `release_src_tag`（`src-release-<fp>`，仅发布读写）；四个 CI workflow 只用前者，`release.yml` 只用后者，历史 `src-<fp>` 已无消费方——否则 PR 产物可以让发布跳过真实构建。
 

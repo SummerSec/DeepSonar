@@ -9,6 +9,7 @@ import {
   REVERSE_SHARED_INPUTS,
   REVERSE_SUITES,
   REVERSE_SUITE_INPUTS,
+  REVERSE_UNRELATED_IMAGE_INPUTS,
   SPECIALIST_CONSUMED_SCRIPTS,
   classifyPackageJsonChange,
   planReverseSuites,
@@ -46,7 +47,7 @@ test("docs and draft tiers skip the heavy suites", () => {
 
 test("each suite is hit by its own inputs and only its own", () => {
   assert.deepEqual(plan({ paths: ["agent-harness/run-claude-budget-isolated.mjs"] }).suites, ["claude"]);
-  assert.deepEqual(plan({ paths: ["agent-harness/pi-observational-memory-governed.ts"] }).suites, ["pi-om"]);
+  assert.deepEqual(plan({ paths: ["apps/scheduler/src/gateway-provider-headers.integration.test.ts"] }).suites, ["pi-om"]);
   assert.deepEqual(plan({ paths: ["agent-harness/rea-runtime/loop.ts"] }).suites, ["reverse"]);
   assert.deepEqual(plan({ paths: ["skills/deepsonar-rea-cli/SKILL.md"] }).suites, ["reverse"]);
   assert.deepEqual(
@@ -76,6 +77,68 @@ test("shared base, lockfile, sandbox and routing inputs force every suite", () =
   // The routing lists may not drift from what the plan actually honours.
   assert.ok(REVERSE_ROUTING_INPUTS.includes("agent-harness/reverse-suite-plan.mjs"));
   assert.ok(REVERSE_SHARED_INPUTS.includes("pnpm-lock.yaml"));
+});
+
+test("#992 image consumers are separated without exempting unknown or unsafe inputs", () => {
+  assert.deepEqual(plan({ paths: ["deploy/Dockerfile.agent-reverse"] }).suites, ["reverse"]);
+  for (const path of REVERSE_UNRELATED_IMAGE_INPUTS) {
+    const result = plan({ paths: [path], records: [record("M", path)] });
+    assert.deepEqual(result.suites, [], path);
+    assert.deepEqual(result.reasons, ["reverse_reviewed_other_image_only"]);
+    assert.deepEqual(plan({ paths: [path, "agent-harness/run-claude-budget-isolated.mjs"] }).suites, ["claude"]);
+    assert.deepEqual(plan({ paths: [path, "deploy/Dockerfile.agent-reverse"] }).suites, ["reverse"]);
+    for (const shared of ["deploy/Dockerfile.agent", "deploy/Dockerfile.agent-new-unknown", "pnpm-lock.yaml", "agent-harness/ci-run-plan.mjs"]) {
+      assert.deepEqual(plan({ paths: [path, shared] }).suites, REVERSE_SUITES);
+    }
+    for (const status of ["D", "R100", "C100"]) {
+      assert.deepEqual(plan({ paths: [path], records: [record(status, path)] }).suites, REVERSE_SUITES);
+    }
+    for (const override of [{ eventName: "push" }, { eventName: "workflow_dispatch" }, { tiered: false }, { status: "failed" }]) {
+      assert.deepEqual(plan({ paths: [path], ...override }).suites, REVERSE_SUITES);
+    }
+  }
+  // The workflow builds these two Dockerfiles only. Adding a new consumer must
+  // trigger review of the exact exclusions above, not silently inherit them.
+  const consumed = [...workflow.matchAll(/--file (deploy\/Dockerfile\.[a-z-]+)/gu)].map((match) => match[1]);
+  assert.deepEqual([...new Set(consumed)].sort(), ["deploy/Dockerfile.agent", "deploy/Dockerfile.agent-reverse"]);
+});
+
+test("#992 every local base COPY input is shared, including installer and OM governed code", () => {
+  const base = readFileSync(`${ROOT}/deploy/Dockerfile.agent`, "utf8");
+  assert.doesNotMatch(base, /^ADD /mu, "review any new ADD dependency explicitly");
+  const copies = [...base.matchAll(/^COPY (.+)$/gmu)].map((match) => match[1]).filter((line) => !line.startsWith("--from="));
+  assert.ok(copies.length > 0);
+  for (const line of copies) {
+    assert.ok(!["[", "]", "\\"].some((character) => line.includes(character)) && !line.startsWith("--"),
+      "review changed COPY syntax rather than guessing dependencies");
+    const tokens = line.trim().split(/\s+/u);
+    assert.ok(tokens.length >= 2, "each COPY must expose source and destination");
+    for (const path of tokens.slice(0, -1)) {
+      const sample = path === "agent-harness/runtime-manuals" ? `${path}/catalog.json` : path;
+      assert.deepEqual(plan({ paths: [sample], records: [record("M", sample)] }).suites, REVERSE_SUITES, sample);
+      for (const event of ["pull_request", "push"]) {
+        assert.ok(declaredTriggerPaths(event).some((pattern) => matchesPathPattern(pattern, sample)), `${event}: missing ${sample}`);
+      }
+    }
+  }
+  for (const path of ["pnpm-workspace.yaml", "tsconfig.base.json"]) {
+    assert.deepEqual(plan({ paths: [path] }).suites, REVERSE_SUITES);
+  }
+});
+
+test("#992 other-image changes retain core acceptance and the actual specialist plan", () => {
+  const suitePaths = loadSuitePaths(ROOT);
+  for (const path of REVERSE_UNRELATED_IMAGE_INPUTS) {
+    const input = { eventName: "pull_request", base: "base", head: "head", ciPrMode: "tiered", suitePaths,
+      diffBytes: Buffer.from(["M", path, "M", "CHANGELOG.md", ""].join("\0")) };
+    const result = buildRunPlan(input);
+    assert.equal(result.mode, "ready-full");
+    assert.equal(result.docsOnly, false);
+    assert.deepEqual(result.reverseSuites, []);
+    assert.ok(result.requiredSuites.includes("reverse"), "the wide workflow still starts its plan and checks legal skips");
+    assert.deepEqual(buildRunPlan({ ...input, draft: true }).reverseSuites, []);
+    assert.deepEqual(buildRunPlan({ ...input, ciPrMode: "full" }).reverseSuites, REVERSE_SUITES);
+  }
 });
 
 test("delete, rename and copy records fail closed", () => {

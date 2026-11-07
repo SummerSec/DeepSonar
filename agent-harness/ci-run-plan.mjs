@@ -422,6 +422,7 @@ const REASON_TEXT = Object.freeze({
   reverse_unsafe_change_status: "存在删除/改名/复制：无法证明无关，Reverse 全跑",
   reverse_routing_inputs_changed: "命中 Reverse 路由输入：全跑",
   reverse_shared_inputs_changed: "命中 Reverse 共享输入（base/锁文件/runtime-sandbox 等）：全跑",
+  reverse_reviewed_other_image_only: "仅修改已核对的其他镜像 Dockerfile：未消费这些文件的 Reverse/Claude/Pi-OM 均跳过；未知镜像仍全跑",
   reverse_docs_paths_only: "改动都是文档：Reverse 三个子套件都不跑",
   reverse_inputs_unchanged: "改动都落在 Reverse 输入之外：三个子套件都不跑",
   package_json_missing: "缺少 package.json 内容：无法证明独立，Reverse 全跑",

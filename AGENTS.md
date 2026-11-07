@@ -139,6 +139,8 @@ pnpm ci:images
 
 **#976 起 Reverse 家族按子套件分流**：`agent-harness/reverse-suite-plan.mjs` 把 Reverse workflow 的宽 `pull_request.paths` 拆成 `reverse` / `claude` / `pi-om` 三份显式依赖清单，外加 shared（共享 base、lockfile、runtime-sandbox、沙箱启动器）与 routing（本模块、`ci-run-plan.mjs`、`classify-ci-changes.mjs`、`path-match.mjs`、workflow 自身）两组保守输入。`ci-run-plan.mjs` 输出 `reverse_suites`，三个重活 job 各自按计划决定是否启动；`reverse-runtime-acceptance` 逐项核对计划与实际：计划内必须 `success`，计划外必须 `skipped`，失败/取消/超时永远拒绝。`package.json` 只做字段级安全分类——仅「新增且不被三个专项消费、命令含 `--test`、名字为 `ci:unit:*`」的脚本可判无影响；依赖、lockfile、脚本删改、删除/改名、解析失败、缺 SHA 一律全跑。
 
+**#992 的输入审计与成本观测**：Reverse 专用 Dockerfile 只需 Reverse/REA，精确核对的其他镜像 Dockerfile 不需三套原生任务；未知 Dockerfile、共享 base 的直接 COPY 输入和 workspace/compiler 配置仍全跑，不能把 base 内的 OM 治理代码当作 Pi 私有输入。核心/Reverse 汇总增加 [只读 job 成本观测](agent-harness/ci-run-cost.mjs)，区分 needs 等待、runner queue、setup/build/传输与真实执行，不替代原结果检查。GitHub 原生失败重跑可能给保留结果生成新 ID，必须比较各 attempt 的执行时间/runner/步骤，不能按 ID 变化推算重跑成本。实际故障与对照证据集中在 [#992 验收记录](docs/CI_COST_ACCEPTANCE_992.md)，PR→main 跨提交结论复用未实现。
+
 **#975 的 Reverse base 复用默认关闭**：`vars.REVERSE_BASE_REUSE=on` 时才启用「每架构只构建一次当前 checkout 的 base、按不可变 SHA/架构/平台/工具集标签共享 artifact」，消费者 `docker load` 后必须校验标签；未开启时保持原来每个 job 各自构建的路径，零行为变化。
 
 ## PR 的 Draft / Ready 分层（#836）

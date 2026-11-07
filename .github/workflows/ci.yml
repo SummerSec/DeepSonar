@@ -113,6 +113,7 @@ jobs:
             apps/scheduler/src/integration-pool-teardown.test.mjs \
             agent-harness/runtime-image-cache-policy.test.mjs \
             agent-harness/gate-shards.test.mjs \
+            agent-harness/ci-run-cost.test.mjs \
             agent-harness/reverse-base-identity.test.mjs \
             agent-harness/reverse-suite-plan.test.mjs \
             agent-harness/image-cache-trust.test.mjs
@@ -1249,6 +1250,10 @@ jobs:
   # 稳定的 required 汇总检查：显式核对分类器、文档门禁与应运行的重活结果。
   # 不用 echo success 占位；「跳过」与「失败」必须区分，避免 docs-only 掩盖真实失败。
   ci-summary:
+    # #992: read only this run's job metadata; acceptance still uses needs results.
+    permissions:
+      contents: read
+      actions: read
     # Draft runs emit ci-preview instead of ci-summary. Note: GitHub counts a
     # SKIPPED required check as satisfied, so skipping ci-summary does not itself
     # block a Draft merge; blocking Draft merges must come from policy (ruleset /
@@ -1359,3 +1364,15 @@ jobs:
           else
             echo "full run: docs-freshness and all heavy jobs passed"
           fi
+      - uses: actions/checkout@v4
+        if: always()
+        with:
+          persist-credentials: false
+      - name: Explain actual job queue and execution costs
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node agent-harness/ci-run-cost.mjs \
+            --repository "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --summary "$GITHUB_STEP_SUMMARY"

@@ -69,3 +69,7 @@ PR 事件只运行 `regression` job 的两个 Node 测试文件。`collect` job 
 原 v1 在 2026-11-07 从 30 个历史 CI run 写出 21 条观测，旧筛选器称其中 8 条“可比”：unknown 4 条的中位数为 8,544,000 ms、P95 8,584,000 ms；warm 4 条的中位数为 48,000 ms、P95 56,000 ms。原采集者还记录了 PR workflow 上传同名 artifact 的现象。
 
 这些是旧实现输出的历史描述，不是本轮重新运行或核验结果。#970 评审已确认其 collector 来源隔离和 PR tested SHA 口径不足；缺少 v2 provenance 与不可变 checkout/上下文证据，不纳入新的正式历史，不重复发布为可比 P95，也不能推导任何速度收益。原 run 观测不被补签或改写。
+
+## 7. #992 的工作流成本观测不是本页的正式 benchmark
+
+[#992 验收记录](CI_COST_ACCEPTANCE_992.md)增加核心/Reverse 汇总中的[只读观测器](../agent-harness/ci-run-cost.mjs)，直接列出当前 attempt 的 job queue、执行、setup/typecheck/build 和 artifact 步骤时间，并用前一 attempt 的 API 证据排除原生失败重跑中保留的旧执行成本。这是独立的工作流路由/重试观察，不修改本页 collector、历史 trust 清单或 v2 筛选器。未知 tested checkout、环境或缓存状态仍保持 unknown；#994 同形文档路由对照不能冒充冷/热/失效的可信镜像 benchmark。

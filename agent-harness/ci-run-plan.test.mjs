@@ -567,6 +567,14 @@ test("#992 a shared Reverse input decodes to the fail-closed reason", () => {
   assert.match(explainRunPlan(plan), /命中 Reverse 共享输入（base\/锁文件\/runtime-sandbox 等）：全跑/u);
 });
 
+test("#992 reviewed other-image skips explain the exact boundary", () => {
+  const plan = buildRunPlan({ ...pr, diffBytes: diff(change("deploy/Dockerfile.agent-mobile")), suitePaths: SUITE_PATHS });
+  assert.equal(plan.mode, "ready-full");
+  assert.deepEqual(plan.reverseSuites, []);
+  assert.match(explainRunPlan(plan), /仅修改已核对的其他镜像 Dockerfile/u);
+  assert.match(explainRunPlan(plan), /未知镜像仍全跑/u);
+});
+
 // #992 review P2: an empty Reverse suite list has three different causes, so the
 // skip sentence must follow the mode instead of always claiming "proven unrelated".
 test("#992 the skip sentence names the real reason for each mode", () => {

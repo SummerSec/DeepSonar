@@ -36,6 +36,7 @@ export const DOCS_ONLY_PATHS = Object.freeze([
   "docs/ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md",
   "docs/AI_NATIVE_TRUSTED_KERNEL.md",
   "docs/CLI_CAPABILITIES.md",
+  "docs/CI_COST_ACCEPTANCE_992.md",
   "docs/DEVICE_ACCESS.md",
   "docs/EVIDENCE_TRACE.md",
   "docs/EXTENSION_MATERIALIZATION.md",
