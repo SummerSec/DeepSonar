@@ -411,3 +411,32 @@ test("#765 file count remains bounded when redaction shrinks very large payloads
   await assert.rejects(capture.prepare({ type: "message_update", text: secret }, secret.length + 40), /PI_RPC_CAPTURE_BUDGET_EXCEEDED/);
   assert.equal(writes, 128);
 });
+
+test("#958 a length-truncated Pi turn is not followed by a completion nudge", async () => {
+  // Before the fix `stopReason=length` fell through as a normal end, so the host
+  // kept sending the generic nudge (3 times) and the Job finally reported only
+  // "未通过 mark_job_done". The real cause and its output budget must survive.
+  const fake = host(() => new PiProcess((record, process) => {
+    if (record.type === "get_state") state(process, record);
+    else if (record.type === "prompt") {
+      process.emit({ type: "response", id: record.id, command: "prompt", success: true, data: { disposition: "started" } });
+      process.emit({ type: "agent_start" });
+      process.emit({ type: "message_end", message: { role: "assistant", stopReason: "length",
+        content: [{ type: "thinking", thinking: "..." }], usage: { input: 124024, output: 1 } } });
+      process.emit({ type: "agent_end" });
+      process.emit({ type: "agent_settled", aborted: false });
+    }
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial",
+    completionGate: () => false });
+
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(result.runnerErrorSource, "process");
+  assert.match(result.error ?? "", /PI_OUTPUT_TRUNCATED:thinking_only/u);
+  assert.match(result.error ?? "", /output_tokens=1/u, "the observed output budget is kept in the error");
+  assert.deepEqual(
+    fake.processes[0]!.commands.map((command) => command.type),
+    ["get_state", "prompt"],
+    "a truncated turn must not consume the completion-nudge budget",
+  );
+});

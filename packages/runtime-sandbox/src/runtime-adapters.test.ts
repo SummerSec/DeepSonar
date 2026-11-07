@@ -13,6 +13,7 @@ import {
 import { mapCliEvent } from "./runtime-agent.js";
 import {
   AGENT_CLI_RUNTIME_ADAPTERS,
+  PI_COMPACTION_MAX_ROUNDS_WITHOUT_PROGRESS,
   resolvePiCliLaunchFlags,
   resolvePiCliModelId,
   splitPiModelRef,
@@ -1081,5 +1082,57 @@ test("DSH failed/cancelled children release only their own work and leave recove
     assert.deepEqual(decode("session.status", { sessionId: "root", status: "idle" }), []);
     decode("subagent.finished", { parentSessionId: "root", childSessionId: "slow", status: "ok", stopReason: "completed" });
     assert.equal(decode("session.status", { sessionId: "root", status: "idle" })[0]?.type, "agent_settled");
+  }
+});
+
+// #958: `stopReason=length` is a runtime failure, not a normal end. Falling
+// through let the host keep sending the generic completion nudge and the Job
+// finally reported only "未通过 mark_job_done", hiding the truncation.
+for (const [label, message, expected] of [
+  ["thinking-only", { role: "assistant", stopReason: "length", content: [{ type: "thinking", thinking: "..." }] }, "thinking_only"],
+  ["truncated text", { role: "assistant", stopReason: "length", content: [{ type: "text", text: "half a sen" }] }, "text"],
+  ["cut-off tool call", { role: "assistant", stopReason: "length", content: [{ type: "toolCall", id: "t1", name: "write" }] }, "tool_args_incomplete"],
+  ["no content", { role: "assistant", stopReason: "length" }, "empty"],
+] as const) {
+  test(`Pi length truncation fails closed with a stable reason (${label})`, () => {
+    const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+    const state: Record<string, unknown> = {};
+    const events = adapter.decodeOutput({ type: "message_end", message }, state);
+    const result = events.find((event) => event.type === "result");
+    assert.equal(result?.is_error, true, "a truncated message must not look like a clean end");
+    assert.match(String(result?.result), new RegExp(`^PI_OUTPUT_TRUNCATED:${expected}:`, "u"));
+    const diagnostic = events.find((event) => event.code === "pi_output_truncated");
+    assert.ok(diagnostic, "the truncation kind is reported as evidence");
+    assert.equal(diagnostic!.truncation, expected);
+    // The completion gate must still see a failure, so no nudge can be issued.
+    const settled = adapter.decodeOutput({ type: "agent_settled", result: "" }, state);
+    assert.equal(settled[0]?.is_error, true);
+    assert.match(String(settled[0]?.result), /PI_OUTPUT_TRUNCATED/u);
+  });
+}
+
+test("Pi stops bounded when compaction keeps running without new output", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state: Record<string, unknown> = {};
+  for (let round = 1; round <= PI_COMPACTION_MAX_ROUNDS_WITHOUT_PROGRESS; round += 1) {
+    const events = adapter.decodeOutput({ type: "compaction_start" }, state);
+    assert.ok(events.every((event) => event.type !== "result"), `round ${round} must stay recoverable`);
+  }
+  const stopped = adapter.decodeOutput({ type: "compaction_start" }, state);
+  const result = stopped.find((event) => event.type === "result");
+  assert.equal(result?.is_error, true);
+  assert.match(String(result?.result), /^PI_COMPACTION_NO_PROGRESS:/u);
+});
+
+test("Pi compaction counter resets after real assistant text", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state: Record<string, unknown> = {};
+  for (let round = 0; round < PI_COMPACTION_MAX_ROUNDS_WITHOUT_PROGRESS; round += 1) {
+    adapter.decodeOutput({ type: "compaction_start" }, state);
+  }
+  adapter.decodeOutput({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "progress" }] } }, state);
+  for (let round = 0; round < PI_COMPACTION_MAX_ROUNDS_WITHOUT_PROGRESS; round += 1) {
+    const events = adapter.decodeOutput({ type: "compaction_start" }, state);
+    assert.ok(events.every((event) => event.type !== "result"), "progress must buy a fresh budget");
   }
 });

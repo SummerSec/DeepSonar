@@ -134,6 +134,13 @@ export interface AdapterRuntimeState {
   failed?: boolean;
   errorDetail?: string;
   runnerErrorSource?: "structured_terminal" | "process";
+  /**
+   * #958: consecutive compaction observations since the last usable assistant
+   * output. A Pi run that keeps compacting without ever producing text is stuck
+   * in the truncation loop this issue is about; it must stop bounded instead of
+   * burning the whole completion-nudge budget.
+   */
+  compactionWithoutProgress?: number;
 }
 
 export interface RuntimeAdapter {
@@ -500,6 +507,46 @@ function piUsageTokens(value: unknown): { input: number; output: number } {
   };
 }
 
+/** #958: 连续多少次「压缩但没有新助手输出」就判定为无进展并终止。 */
+export const PI_COMPACTION_MAX_ROUNDS_WITHOUT_PROGRESS = 4;
+
+type PiTruncation = { code: "tool_args_incomplete" | "text" | "thinking_only" | "empty"; detail: string };
+
+/**
+ * #958: 区分 `stopReason=length` 的三种现场。
+ *
+ * 不完整工具参数最危险（工具调用只写了一半），其次是被截断的正文；只有
+ * reasoning 时用户看不到任何可用内容。分类结果写进稳定错误码，便于按类型统计。
+ */
+function classifyPiTruncation(message: Record<string, unknown> | undefined): PiTruncation {
+  const content = Array.isArray(message?.content) ? message!.content as unknown[] : [];
+  const blocks = content.filter((item): item is Record<string, unknown> =>
+    Boolean(item) && typeof item === "object" && !Array.isArray(item));
+  const type = (block: Record<string, unknown>) => String(block.type ?? "");
+  if (blocks.some((block) => ["toolCall", "tool_use", "tool_call"].includes(type(block)))) {
+    return { code: "tool_args_incomplete", detail: "tool arguments were cut off" };
+  }
+  if (blocks.some((block) => type(block) === "text" && typeof block.text === "string" && block.text.length > 0)) {
+    return { code: "text", detail: "text output reached the model output limit" };
+  }
+  if (blocks.some((block) => ["thinking", "reasoning"].includes(type(block)))) {
+    return { code: "thinking_only", detail: "only reasoning tokens were produced" };
+  }
+  return { code: "empty", detail: "no usable content was produced" };
+}
+
+/** #958: 记录一次压缩观测；超过上限时返回终止事件。 */
+function notePiCompaction(state: AdapterRuntimeState): Record<string, unknown>[] | undefined {
+  const rounds = (state.compactionWithoutProgress ?? 0) + 1;
+  state.compactionWithoutProgress = rounds;
+  if (rounds <= PI_COMPACTION_MAX_ROUNDS_WITHOUT_PROGRESS) return undefined;
+  state.failed = true;
+  state.errorDetail = `PI_COMPACTION_NO_PROGRESS: ${rounds} consecutive compactions without new assistant output`;
+  state.runnerErrorSource = "process";
+  return [{ type: "result", subtype: "error", is_error: true,
+    result: state.errorDetail, runnerErrorSource: "process" }];
+}
+
 function isEmptyPiModelResponse(message: unknown, state: AdapterRuntimeState): boolean {
   if (state.finalText || state.streamedText) return false;
   const text = piMessageText(message);
@@ -542,7 +589,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
   const contextEvents = contextEventFromLine(line, state);
   if (contextEvents.length > 0) return contextEvents;
   const contextObservation = contextObservationFromProviderLine(line);
-  if (contextObservation.length > 0) return contextObservation;
+  if (contextObservation.length > 0) return notePiCompaction(state) ?? contextObservation;
   if (type === "response") {
     if (line.command === "get_state" && line.success === true) piSessionState(line, state);
     if (line.success === false) {
@@ -563,7 +610,10 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
       ? line.assistantMessageEvent as Record<string, unknown>
       : {};
     if (String(event.type ?? "") === "error") return fail(textFrom(event.error ?? event.message) ?? "Pi assistant message failed", "process");
-    return piTextFromMessageEvent(line, state);
+    const updateEvents = piTextFromMessageEvent(line, state);
+    // #958: real assistant text is progress; it resets the stalled-compaction counter.
+    if (updateEvents.some((entry) => entry.type === "assistant")) state.compactionWithoutProgress = 0;
+    return updateEvents;
   }
   if (type === "message_end") {
     const message = line.message && typeof line.message === "object" && !Array.isArray(line.message)
@@ -584,9 +634,30 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
       const fallback = `Pi message ended: ${stopReason}`;
       return failRuntime(raw ? `${fallback}: ${raw}` : undefined, fallback, stopReason === "aborted" ? "process" : undefined);
     }
+    if (stopReason === "length") {
+      // #958: `length` used to fall through as a normal end. With a thinking-only
+      // or empty body the host then kept sending the generic completion nudge and
+      // the Job finally reported "未通过 mark_job_done", losing the real cause.
+      // Truncation is a runtime failure: record a stable reason plus the observed
+      // output budget, and let the completion gate see an error it cannot satisfy.
+      const truncation = classifyPiTruncation(message);
+      const usage = piUsageTokens(message);
+      state.failed = true;
+      state.errorDetail = `PI_OUTPUT_TRUNCATED:${truncation.code}: Pi message truncated: length `
+        + `(${truncation.detail}, output_tokens=${usage.output}, input_tokens=${usage.input})`;
+      state.runnerErrorSource = "process";
+      return [
+        { type: "runtime.diagnostic", code: "pi_output_truncated", truncation: truncation.code,
+          output_tokens: usage.output, input_tokens: usage.input },
+        { type: "result", subtype: "error", is_error: true, result: state.errorDetail, runnerErrorSource: "process" },
+      ];
+    }
     const text = piMessageText(message);
     const unseen = text ? unseenCompleteText(state, "text", text) : undefined;
-    if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
+    if (unseen) {
+      state.finalText = `${state.finalText ?? ""}${unseen}`;
+      state.compactionWithoutProgress = 0;
+    }
     if (!unseen && isEmptyPiModelResponse(message, state)) {
       return fail("PI_EMPTY_MODEL_RESPONSE");
     }

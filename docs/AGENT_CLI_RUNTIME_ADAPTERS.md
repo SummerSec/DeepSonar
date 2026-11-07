@@ -270,6 +270,25 @@ Pi 的启动命令由适配器固定为 `pi --mode rpc --no-approve --no-extensi
 U+2028/U+2029 仍保留为数据。
 半帧、非法 UTF-8、空行、超过硬上限的行和未知事件均 fail closed，`finish()` 会显式拒绝尾部残帧。
 
+### Pi 输出截断与压缩无进展（#958）
+
+`stopReason=length` 是运行期失败，不是正常结束。此前它走普通结束分支：只有 thinking 或空正文时不命中空响应检查，宿主继续发送通用完成催交（最多 3 次），最终只留下「未通过 mark_job_done」，真实原因被掩盖。
+
+当前 `decodePi` 对 `length` 直接 fail closed，并写出稳定错误码 `PI_OUTPUT_TRUNCATED:<kind>`，`kind` 按现场区分：
+
+| kind | 判定 | 含义 |
+| --- | --- | --- |
+| `tool_args_incomplete` | `content` 含 `toolCall`/`tool_use` 块 | 工具参数被截断，调用只写了一半 |
+| `text` | 含非空 `text` 块 | 正文撞到模型输出上限 |
+| `thinking_only` | 只含 `thinking`/`reasoning` 块 | 输出预算全部被 reasoning 消耗 |
+| `empty` | 无可用内容 | 模型未产出任何可用内容 |
+
+错误串同时带上观测到的 `output_tokens` / `input_tokens`，并额外发出 `runtime.diagnostic` / `pi_output_truncated`（含 `truncation` 与两个 token 数）作为 Job 证据。由于 `agent_settled` 看到的是失败结果，完成门不会再发催交。
+
+压缩侧另有有界停止：连续 `PI_COMPACTION_MAX_ROUNDS_WITHOUT_PROGRESS`（4）次压缩观测之间没有任何新的助手正文时，报 `PI_COMPACTION_NO_PROGRESS` 并终止；出现正文即重置计数。这样「压缩但不产出」的死循环不会耗尽整个催交预算。
+
+未交付：模型预算元数据（`/models` 的 `context_length`/`max_output_tokens` → descriptor → Job 冻结 → Pi `contextWindow`/`maxTokens`）的贯通仍在 #958 内跟踪，本切片只保证截断被正确归因，不改变预算来源。
+
 ### Pi 大输出与证据（#765）
 
 Framer 按 LF 逐帧累计字节，惰性消费每帧；单次 SDK chunk 再大也只按 16Ki 字符/字节切片扫描。
