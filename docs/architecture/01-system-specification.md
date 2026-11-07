@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-06
+> 同步日期：2026-11-07
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -916,7 +916,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Report 和 Research 的可选投影失败必须持久化失败原因、保留主事实并使用有界恢复；不得通过回滚外层事务或无限 retry 丢失/重复核心结果。
 - **决策来源**：交付增强失败不应破坏已确认事实，恢复必须可观察、可停止。
-- **实现状态**：as-built；Report 自动重试 1 次，Research 使用 savepoint。
+- **实现状态**：as-built；Report 自动重试 1 次，Research 使用 savepoint。#945 保留报告再派/快照解析与 Hub 收敛中的原始数据库冲突，供安全事务边界识别，而非吞错后在 aborted 事务中继续查询；可派报告写文件的 Verify/orphan 混合 I/O 恢复入口仍不新增整体自动重试；普通业务派发错误保持既有 Root 收口，不把 `25P02` 泛化为可重试。报告输入文件的幂等写条件与非 SQL 回滚边界见[运行时视图](06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)，不是新的 Agent/外部效果重放许可。
 - **代码入口**：[report recovery](../../apps/scheduler/src/report-failure-recovery.ts)、[research best effort](../../apps/scheduler/src/domains/finding-research/application.ts)、[report tests](../../apps/scheduler/src/report-failure-recovery.test.ts)。
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`。
 

@@ -1,13 +1,15 @@
 # DeepSonar 文档索引
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-06
-> **#951 完成失败诊断候选**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)登记当前 Attempt 可归属产出、原回执状态和受权限保护证据；有产出不升级成功，不伪造未知字段或自动重放。源码/断言已接线，最终 SHA Actions、全量覆盖和生产归因待验。
+> 同步日期：2026-11-07
+> **#951 完成失败诊断**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)登记当前 Attempt 可归属产出、原回执状态和受权限保护证据；有产出不升级成功，不伪造未知字段或自动重放。核心缺诊断已随 #963 合入并工程收口（2026-11-07 核对）；后续提交按各自最终 SHA 另验，全量覆盖和生产归因仍未验证。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
 
 > **v0.6.15 发布准备（2026-11-06）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)。Plan 范围修正与其他已合入补丁列于 [CHANGELOG](../CHANGELOG.md)，[#913](https://github.com/SummerSec/DeepSonar/issues/913) 的 accepted-terminal 窄修复已由 #919 合入，#930 增加受治理修复代际。最终 main Actions 与正式产物成功状态分别核对。
 
 #914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由 #925 交付，UI 由 #929 交付；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，不代表自动重跑或快照改写。
+
+> **Job 侧数据库冲突（#945）**：现有有界重试覆盖三个已核对纯数据库入口，Hub/报告保留原始 SQLSTATE；Verify/orphan 混合 I/O 恢复入口暂不整体重试，保留 #945 跟踪；不把 `25P02` 或未知外部效果当作安全重试依据。报告输入写入的幂等条件与非 SQL 回滚边界见[运行时视图](architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)。回归已接线，最终 SHA Actions 待验，未执行本地测试/构建/typecheck。
 
 > **注意力原则（#830）**：单一权威定义见 [DESIGN](../DESIGN.md#核心理念优化人的注意力)，开发与贡献入口引用同一[工程评审及正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)。NFR-UX-001 登记约束与验证范围；本次只落实设计/评审依据，不改变运行时、UI 或授权，也不宣称注意力收益。
 
@@ -20,7 +22,7 @@
 
 > **当前稳定性修复（2026-11-04，#871/#873/#874）**：Gateway admission 纯数据库有界重试、SDK error.message 的宿主安全降级 carrier、分候选页独立事务的 Canvas-first 领取与忙锁补槽，以及[跨 Attempt 共享卷生命周期](SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)在已合入主线整合；[完成恢复 v1](REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)使用持久宿主事实、去重 Hub 与严格对账/停止提案。main 616d7a36 工程验收见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验，显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录，正式版本状态另行核对。
 
-> **人工等待效果门（#946，2026-11-06）**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)记录未结清效果/本轮对账进展保留 waiting_human，最终 SQL 覆盖 active/planned 效果，避免进入 human_timeout/终态清理。Actions 回归待验；通知投递计时未实现，不据此关闭整单。
+> **人工等待效果门（#946，2026-11-06）**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)记录未结清效果/本轮对账进展保留 waiting_human，最终 SQL 覆盖 active/planned 效果，避免进入 human_timeout/终态清理。#957 最终提交的完整 Actions 已通过，核心误判已合入并关闭 #946（2026-11-07 核对）；通知投递计时仍是未交付的独立范围，不冒充已实现。
 
 > **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
