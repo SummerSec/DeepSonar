@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { withOperationConflictRetry } from "../../db-conflict-retry.js";
+import type { HubCanvasConvergence, HubOrchestrationPorts, HubOrchestrationTransaction } from "./ports.js";
 import {
   createHubOrchestrationApplication,
   formatVerifyUnclosedPausedReason,
@@ -136,6 +138,132 @@ test("Hub application keeps no-op guards before touching the transaction", async
   });
   assert.equal(queryCount, 0, "invalid and recursive Hub wakeups must stop before SQL");
 });
+
+function settlementFixture(branch: "stalled" | "guardrail" | "report-dispatch", failure: unknown, abortOnFailure = true) {
+  let remainingFailures = 1;
+  let attempts = 0;
+  let settlementCalls = 0;
+  let reportCalls = 0;
+  let queriesAfterAbort = 0;
+  let gateCalls = 0;
+  const patches: Array<Partial<HubCanvasConvergence>> = [];
+  const run = async () => {
+    attempts += 1;
+    let aborted = false; // Each run models a fresh outer transaction.
+    const query = async (strings: TemplateStringsArray) => {
+      const text = strings.join("?").replace(/\s+/gu, " ").trim();
+      if (aborted) {
+        queriesAfterAbort += 1;
+        throw Object.assign(new Error("current transaction is aborted"), { code: "25P02" });
+      }
+      if (text === "SELECT fixture_settle" || text === "SELECT fixture_report") {
+        if (text === "SELECT fixture_report") reportCalls += 1;
+        else settlementCalls += 1;
+        const injectFailure = branch === "report-dispatch" ? text === "SELECT fixture_report" : text === "SELECT fixture_settle";
+        if (injectFailure && remainingFailures > 0) {
+          remainingFailures -= 1;
+          aborted = abortOnFailure;
+          throw failure;
+        }
+        return [];
+      }
+      if (text.startsWith("SELECT status FROM canvas_nodes")) return [{ status: "running" }];
+      if (text.startsWith("SELECT r.id, r.finding_id")) return [];
+      if (text.startsWith("SELECT 1 FROM finding_verification_rounds")) return branch === "stalled" ? [{ found: 1 }] : [];
+      if (text.includes("AS hub_rounds FROM jobs")) return [{ hub_rounds: 3 }];
+      if (text.startsWith("SELECT f.id, f.verify_status")) return [{ id: "finding", verify_status: "pending", requirements_json: {}, evidence_snapshot_json: {} }];
+      if (text.includes("AS count FROM jobs")) return [{ count: 3 }];
+      if (text.startsWith("SELECT 1 FROM jobs")) return [];
+      if (text === "SELECT fixture_gate" || text === "UPDATE fixture_convergence" || text.startsWith("UPDATE canvas_nodes SET")) return [];
+      throw new Error(`unexpected fixture SQL: ${text}`);
+    };
+    const tx = Object.assign(query, { json: (value: unknown) => value }) as unknown as HubOrchestrationTransaction;
+    const settle = (inner: HubOrchestrationTransaction) => inner`SELECT fixture_settle`;
+    const ports: HubOrchestrationPorts = {
+      rulesForProject: async () => ({ minVerifySeverity: "high", auditTimeoutSec: 60, hubEnabled: true, maxHubRounds: 3 }),
+      lockCanvasForConvergence: async () => true,
+      readCanvasConvergence: async () => ({ hub_paused: false, auto_stopped: false }),
+      patchCanvasConvergence: async (inner, _id, patch) => {
+        await inner`UPDATE fixture_convergence`;
+        patches.push(patch);
+        return { hub_paused: false, auto_stopped: false, ...patch };
+      },
+      careSeverities: () => ["critical", "high"],
+      resolveAgentSnapshotForJob: async () => { throw new Error("settlement branch must not create a Hub Job"); },
+      recordJobSharedAssets: async () => {},
+      fixedPriorityForJob: () => 500,
+      insertEdgeIfAbsent: async () => {},
+      settleCanvasFindingsAtGuardrail: settle,
+      evaluateAnalysisCompleteGate: async (inner) => {
+        await inner`SELECT fixture_gate`;
+        gateCalls += 1;
+        return { ok: branch === "report-dispatch", blockers: branch === "report-dispatch" ? [] : ["fixture"] };
+      },
+      hasSucceededRoleWork: async () => false,
+      maybeDispatchReport: async (inner) => {
+        if (branch !== "report-dispatch") throw new Error("blocked gate must not dispatch a Report");
+        await inner`SELECT fixture_report`;
+      },
+      settleStalledFinding: async (inner) => { await settle(inner); return true; },
+    };
+    const app = createHubOrchestrationApplication(tx, ports);
+    await app.maybeTriggerHub(tx, { id: "worker", project_id: "project", canvas_id: "canvas", type: "audit" });
+  };
+  return { run, patches, reportCalls: () => reportCalls, counts: () => ({ attempts, settlementCalls, queriesAfterAbort, gateCalls }) };
+}
+
+// The retry examples below use SQL-only stub ports, not production Report I/O.
+for (const branch of ["stalled", "guardrail", "report-dispatch"] as const) {
+  for (const code of ["40P01", "40001", "55P03"]) {
+    for (const wrapped of [false, true]) {
+      test(`#945 ${branch} preserves ${wrapped ? "wrapped " : ""}${code} for the outer transaction`, async () => {
+        const conflict = Object.assign(new Error(`fixture ${code}`), { code });
+        const failure = wrapped ? new Error("fixture wrapper", { cause: conflict }) : conflict;
+        const fixture = settlementFixture(branch, failure);
+        await assert.rejects(fixture.run, (error: unknown) => error === failure);
+        assert.deepEqual(fixture.counts(), { attempts: 1, settlementCalls: 1, queriesAfterAbort: 0, gateCalls: branch === "report-dispatch" ? 1 : 0 });
+        assert.equal(fixture.reportCalls(), branch === "report-dispatch" ? 1 : 0);
+        assert.deepEqual(fixture.patches, [], "failed operation must not fall through to convergence updates");
+      });
+
+      test(`#945 ${branch} recovers through the outer retry after ${wrapped ? "wrapped " : ""}${code}`, async () => {
+        const conflict = Object.assign(new Error(`fixture ${code}`), { code });
+        const failure = wrapped ? new Error("fixture wrapper", { cause: conflict }) : conflict;
+        const fixture = settlementFixture(branch, failure);
+        const observed: unknown[] = [];
+        await withOperationConflictRetry("unit_hub_settlement", fixture.run, {
+          sleep: async () => {},
+          onConflict: (error) => { observed.push(error); },
+        });
+        assert.equal(observed.length, 1);
+        assert.equal(observed[0], failure, "the retry receives the original error object");
+        assert.deepEqual(fixture.counts(), { attempts: 2, settlementCalls: 2, queriesAfterAbort: 0, gateCalls: branch === "report-dispatch" ? 2 : branch === "guardrail" ? 1 : 0 });
+        if (branch === "report-dispatch") {
+          assert.equal(fixture.reportCalls(), 2, "the SQL-only report stub succeeds in the fresh transaction");
+          assert.deepEqual(fixture.patches, []);
+        } else {
+          assert.equal(fixture.patches.length, 1, "only the successful transaction advances convergence");
+          assert.equal(fixture.patches[0].auto_stopped, true);
+        }
+      });
+    }
+  }
+
+  test(`#945 ${branch} still isolates non-conflict business errors`, async () => {
+    const failure = new Error("fixture business settlement failure");
+    const fixture = settlementFixture(branch, failure, false);
+    await withOperationConflictRetry("unit_hub_settlement", fixture.run, { sleep: async () => {} });
+    assert.deepEqual(fixture.counts(), { attempts: 1, settlementCalls: 1, queriesAfterAbort: 0, gateCalls: branch !== "stalled" ? 1 : 0 });
+    if (branch === "report-dispatch") {
+      assert.equal(fixture.reportCalls(), 1, "non-conflict report errors remain isolated without an outer retry");
+      assert.deepEqual(fixture.patches, []);
+    } else {
+      assert.equal(fixture.patches.length, 1);
+      assert.equal(fixture.patches[0].auto_stopped, true);
+      assert.match(fixture.patches[0].paused_reason!, branch === "stalled" ? /^verify_unclosed:/u : /^budget_exhausted:/u);
+    }
+  });
+}
 
 test("Hub application stop path writes paused_reason for verify-unclosed (#574)", () => {
   const application = readFileSync(new URL("./application.ts", import.meta.url), "utf8");

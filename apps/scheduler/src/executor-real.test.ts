@@ -23,9 +23,104 @@ import {
 import { ControlInputError } from "./control-input.js";
 import { expandModules } from "./skill-sources.js";
 import { platformToolGuide, PLATFORM_CONTROL_CALLING_RULES } from "./platform-tools.js";
+import { createCompletionFailureDiagnostics, readCompletionFailureDiagnostic } from "./completion-failure-diagnostic.js";
+import { completionInputDigest, completionReceiptId } from "./domains/event-ingestion/completion-receipt.js";
+import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 
 const findingId = "00000000-0000-4000-8000-000000000011";
 const intentNodeId = "00000000-0000-4000-8000-000000000012";
+
+const diagnosticInput = { jobId: "00000000-0000-4000-8000-000000000101", attemptId: "00000000-0000-4000-8000-000000000102", snapshot: { agent_cli: "pi" } };
+const diagnosticKey = "00000000-0000-4000-8000-000000000103";
+function diagnosticDatabase(options: { receipt?: unknown; done?: boolean; fail?: boolean; scope?: boolean; outputs?: Record<string, unknown> } = {}) {
+  const queries: string[] = [];
+  const tagged = async (strings: TemplateStringsArray, ...values: unknown[]) => {
+    const query = strings.join("?").replace(/\s+/g, " ").trim();
+    queries.push(query);
+    assert.match(query, /^SELECT /, "diagnostics must never mutate completion/usage/history");
+    assert.ok(values.includes(diagnosticInput.jobId));
+    assert.ok(values.includes(diagnosticInput.attemptId));
+    if (options.fail) throw new Error("private database failure");
+    if (query.startsWith("SELECT j.id")) return options.scope === false ? [] : [{ id: diagnosticInput.jobId }];
+    if (query.includes("AS artifacts")) return [options.outputs ?? { artifacts: "2", findings: "1", facts: "0", unattributed_job_artifacts: "0" }];
+    if (query.startsWith("SELECT event_id,payload_json")) return options.receipt ? [{ event_id: completionReceiptId(diagnosticInput.jobId, diagnosticKey), payload_json: options.receipt }] : [];
+    if (query.startsWith("SELECT event_id FROM events")) return options.done ? [{ event_id: "persisted" }] : [];
+    assert.fail("unexpected diagnostic query");
+  };
+  // SAFETY: this read-only fixture implements the tagged-template surface used by the collector; no transactions or effects.
+  return { db: tagged as unknown as Parameters<typeof readCompletionFailureDiagnostic>[1], queries };
+}
+function diagnosticReceipt(status: "rejected" | "persisted_deferred") {
+  return { v: 1, operation: "mark_job_done", idempotency_key: diagnosticKey, proposal_revision: 0,
+    attempt_id: diagnosticInput.attemptId, snapshot_digest: completionInputDigest(diagnosticInput.snapshot), status,
+    result: { statusCode: status === "rejected" ? 409 : 200,
+      body: { accepted: status !== "rejected", error_code: status === "rejected" ? "invalid_done" : undefined, private_payload: "never expose summary or input" } } };
+}
+
+test("completion diagnostic keeps current-Attempt output distinct from completion authority", async () => {
+  const fixture = diagnosticDatabase();
+  const result = await readCompletionFailureDiagnostic(diagnosticInput, fixture.db);
+  assert.equal(result.completion_state, "no_durable_receipt_observed");
+  assert.deepEqual(result.output_counts, { scope: "event_attributed_current_attempt", artifacts: 2, findings: 1, facts: 0,
+    reports: null, report_attribution: "report tables have no Attempt identity", unattributed_job_artifacts: 0 });
+  assert.ok(fixture.queries.some(query => query.includes("e.event_id=a.source_event_id") && query.includes("e.attempt_id=?")));
+  assert.equal(result.next_action, "inspect_original_receipt_and_evidence");
+});
+
+for (const [status, done, expected] of [["rejected", false, "rejected"], ["persisted_deferred", false, "accepted_awaiting_settlement"],
+  ["persisted_deferred", true, "done_event_persisted"]] as const) {
+  test(`completion diagnostic distinguishes ${expected} without fabricating succeeded`, async () => {
+    const fixture = diagnosticDatabase({ receipt: diagnosticReceipt(status), done });
+    const result = await readCompletionFailureDiagnostic(diagnosticInput, fixture.db);
+    assert.equal(result.completion_state, expected);
+    assert.match(JSON.stringify(result.references), /receipt_key=00000000-0000-4000-8000-000000000103/);
+    assert.doesNotMatch(JSON.stringify(result), /never expose summary|succeeded/);
+  });
+}
+
+test("completion diagnostic treats foreign/corrupt receipts and unavailable reads as unknown, not zero", async () => {
+  for (const patch of [{ attempt_id: intentNodeId }, { snapshot_digest: "foreign" }, { idempotency_key: findingId },
+    { status: "rejected", result: { statusCode: 200, body: { accepted: true } } }]) {
+    const fixture = diagnosticDatabase({ receipt: { ...diagnosticReceipt("persisted_deferred"), ...patch } });
+    const result = await readCompletionFailureDiagnostic(diagnosticInput, fixture.db);
+    assert.equal(result.completion_state, "unknown");
+    assert.equal(result.receipt, undefined);
+  }
+  const failed = await readCompletionFailureDiagnostic(diagnosticInput, diagnosticDatabase({ fail: true }).db);
+  assert.equal(failed.completion_state, "unknown"); assert.equal(failed.output_counts, null);
+  assert.doesNotMatch(JSON.stringify(failed), /private database failure/);
+  const denied = diagnosticDatabase({ scope: false });
+  assert.equal((await readCompletionFailureDiagnostic(diagnosticInput, denied.db)).read_status, "scope_unavailable");
+  assert.equal(denied.queries.length, 1);
+});
+
+test("completion diagnostic records persisted tool category and host rejection without inputs or error text", async () => {
+  const rows: Record<string, unknown>[] = [];
+  const recorder = createCompletionFailureDiagnostics({ ...diagnosticInput, database: diagnosticDatabase().db,
+    writer: { async appendNormalized(row) { rows.push(row); return rows.length; } } });
+  recorder.observePersisted({ type: "tool.call.completed", toolName: "Bash", isError: true, input: "secret-input", result: "secret-output" }, 17);
+  const failure = new PlatformRuntimeHandlerError("OPERATION_REJECTED", "private rejection", { statusCode: 409, errorCode: "invalid_done", retryable: true });
+  const handler = recorder.wrapControlHandler(async () => { throw failure; });
+  await assert.rejects(handler({ jobId: diagnosticInput.jobId, projectId: findingId, canvasId: null,
+    operationId: "mark_job_done", input: "secret-summary", eventId: diagnosticKey, tokenId: "secret-token", idempotencyKey: diagnosticKey }), error => error === failure);
+  await recorder.capture({ phase: "completion_missing", host_done_observed: false });
+  assert.equal(rows.length, 1); assert.equal(rows[0].type, "run.completion_diagnostic");
+  assert.deepEqual((rows[0].last_persisted_tool as { evidence_seq: number }).evidence_seq, 17);
+  assert.match(JSON.stringify(rows[0].last_host_rejection), /invalid_done/);
+  assert.doesNotMatch(JSON.stringify(rows[0]), /secret-|private rejection/);
+  const error = recorder.missingCompletionError();
+  assert.match(error.message, /^AGENT_COMPLETION_UNOBSERVED:/);
+  assert.match(error.message, /diagnostic=persisted/);
+  assert.match(error.message, /未观察到完成不等于没有提交/);
+});
+
+test("completion diagnostic capture failure remains explicit and never authorizes replay", async () => {
+  const recorder = createCompletionFailureDiagnostics({ ...diagnosticInput, database: diagnosticDatabase({ fail: true }).db,
+    writer: { async appendNormalized() { throw new Error("private storage error"); } } });
+  await recorder.capture({ phase: "runner_exception", host_done_observed: false, runner_error_source: "process" });
+  assert.match(recorder.missingCompletionError().message, /diagnostic=unavailable/);
+  assert.doesNotMatch(recorder.missingCompletionError().message, /private storage error/);
+});
 
 test("payload_file expansion uses the semantic byte ceiling and returns stable retryable input errors", async () => {
   let requestedMax = 0;

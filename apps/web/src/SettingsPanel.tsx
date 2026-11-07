@@ -702,6 +702,7 @@ export function SettingsPanel({
                   enabledCredentialIds={settings?.enabled_credential_ids ?? []}
                   credentialIdsConfigured={settings?.credential_ids_configured ?? false}
                   defaultCredentialId={settings?.default_credential_id ?? null}
+                  defaultModelRef={settings?.default_model_ref ?? null}
                   onSaved={(saved) => {
                     if (saved) setSettings(saved);
                     reload();

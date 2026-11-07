@@ -1,4 +1,5 @@
 import { sql } from "../../db.js";
+import { frozenRuntimeKnobsFromSnapshot } from "../../runtime-knobs.js";
 import { ControlInputError } from "../../control-input.js";
 import { planContext } from "../plan-protocol/objective.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
@@ -6,6 +7,7 @@ import { extractDispatchPrompt } from "../../job-dispatch-prompt.js";
 import { CompletionRecoveryGrant } from "@deepsonar/shared-types";
 import { completionRecoveryCanWake, completionRecoveryVerifyBlocked, recordCompletionRecoveryWake, type CompletionRecoveryState } from "../job-attempt/recovery.js";
 import { inc } from "../../metrics.js";
+import { isRetryableDatabaseConflict } from "../../db-conflict-retry.js";
 import {
   formatVerifyUnclosedPausedReason,
   hubRoundLimitLabel,
@@ -322,9 +324,10 @@ export function createHubOrchestrationApplication(
       // #890: settle by reason classification. A stalled wake or an exhausted budget is
       // a fact about our machinery, so it converges as inconclusive; only a capability
       // boundary (credential/device/business decision) becomes needs_human.
-      await ports.settleStalledFinding(tx, item.id, item.reason).catch((e) =>
-        console.error(`[hub] settle stalled finding ${item.id} failed:`, e),
-      );
+      await ports.settleStalledFinding(tx, item.id, item.reason).catch((e) => {
+        if (isRetryableDatabaseConflict(e)) throw e;
+        console.error(`[hub] settle stalled finding ${item.id} failed:`, e);
+      });
     }
 
     const pausedReason = formatVerifyUnclosedPausedReason({ inconclusive, pending });
@@ -492,9 +495,10 @@ export function createHubOrchestrationApplication(
       const limitLabel = hubRoundLimitLabel(rules.maxHubRounds);
       console.warn(`[hub] 画布 ${canvasId} 已达 hub 决策轮次上限 ${limitLabel}，停止自驱`);
       inc("deepsonar_hub_budget_exhausted_total", { limit: limitLabel });
-      await ports.settleCanvasFindingsAtGuardrail(tx, canvasId, "budget_exhausted").catch((e) =>
-        console.error(`[hub] settle findings at maxHubRounds failed:`, e),
-      );
+      await ports.settleCanvasFindingsAtGuardrail(tx, canvasId, "budget_exhausted").catch((e) => {
+        if (isRetryableDatabaseConflict(e)) throw e;
+        console.error(`[hub] settle findings at maxHubRounds failed:`, e);
+      });
       const gate = await ports.evaluateAnalysisCompleteGate(tx, canvasId, {
         excludeJobId: (job.id as string) ?? null,
       });
@@ -512,9 +516,10 @@ export function createHubOrchestrationApplication(
           WHERE canvas_id = ${canvasId} AND node_type = 'root'
             AND status IS DISTINCT FROM 'succeeded'
             AND status IS DISTINCT FROM 'reporting'`;
-        await ports.maybeDispatchReport(tx, canvasId).catch((e) =>
-          console.error(`[hub] auto report after maxHubRounds failed:`, e),
-        );
+        await ports.maybeDispatchReport(tx, canvasId).catch((e) => {
+          if (isRetryableDatabaseConflict(e)) throw e;
+          console.error(`[hub] auto report after maxHubRounds failed:`, e);
+        });
       } else {
         const noRole = !(await ports.hasSucceededRoleWork(tx, canvasId));
         await ports.patchCanvasConvergence(tx, canvasId, {
@@ -548,6 +553,8 @@ export function createHubOrchestrationApplication(
       canvasId,
       await ports.resolveAgentSnapshotForJob(tx, projectId, "hub_reason", triggerFindingId ? [triggerFindingId] : []) as object,
     );
+    const knobs = frozenRuntimeKnobsFromSnapshot(snapshot);
+    if (!knobs) throw new Error("Hub creation requires frozen runtime_knobs");
     const [canvas] = await tx`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
     // SAFETY: planContext uses tagged reads on this same PostgreSQL handle;
     // it does not open another connection or transaction.
@@ -564,7 +571,7 @@ export function createHubOrchestrationApplication(
           ...hubPayload,
           dispatched_prompt: extractDispatchPrompt("hub_reason", hubPayload, canvas?.target_json),
         } as never,
-        timeout_sec: rules.auditTimeoutSec,
+        timeout_sec: knobs.timeout_sec,
         followup_depth: 0,
       })}
       RETURNING id`;

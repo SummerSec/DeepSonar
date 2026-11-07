@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-05
+> 同步日期：2026-11-07
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -35,9 +35,22 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 项目 Provider 面板通过既有 settings PATCH 显式设置、更换或清除 `default_credential_id`。候选须是 active、全局或当前项目可见、在项目凭据与 CLI 启用范围内的 Provider；未配置凭据白名单表示未收紧，显式 `[]` 没有候选，不自动选择其他账号。现有失效引用清理控件继续保留；默认账号不可用时要求用户明确清除或更换，加载失败不能视作空名单并清掉配置。
 
-默认账号变化时，Web 同笔提交 `default_model_ref: null` 和 `fallback_model_refs: []`，避免旧账号模型默默沿用；保存后以服务端返回为准并刷新，失败保留未保存状态。同项目健康检查返回等价设置时保留编辑草稿（不以数组对象身份判定变更）；真实服务端配置变化加载新值并提示重新确认，取消和项目切换仍重置草稿。账号连接与模型配置链接到既有 Credentials 页面。该 UI 切片不改变后端引用保护、resolver fail-closed、历史快照或 Job 恢复机制，不自动重跑任务，也不代表 #914 全部验收完成；最终 SHA Actions 结果另计。
+默认账号变化时，Web 清除旧模型和备用模型引用；若用户同次为新账号显式选择模型，则同笔提交新 `default_model_ref` 和 `fallback_model_refs: []`，否则提交 `default_model_ref: null`。项目默认模型通过同一 settings PATCH 显式选择或清除，候选只取账号 `settings_config_json` 中已配置的模型，不用探测目录扩大候选；空目录或多候选均不自动选择。普通保存保留未编辑的模型，失效模型保留可见且要求显式修复。保存后以服务端返回为准并刷新，失败保留未保存状态。同项目健康检查返回等价设置时保留编辑草稿（不以数组对象身份判定变更）；真实服务端配置变化加载新值并提示重新确认，取消和项目切换仍重置草稿。账号连接与模型配置链接到既有 Credentials 页面。该 UI 切片不改变后端引用保护、resolver fail-closed、历史快照或 Job 恢复机制，不自动重跑任务，也不代表 #914 全部验收完成；最终 SHA Actions 结果另计。
 
 Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操作，读取 `SNAPSHOT_STALE` 响应的当前解析失败标记和结构化 `repair.code`。`resolution_error` 是人类可读文本，不按文案猜测机器原因：仅 `provider_credential_allowlist_stale` / `provider_credential_multi_match` 导向已知 Job 项目的 `settings?tab=roles` 和凭据配置页；普通快照身份漂移及其他权限、预算、租约拒绝不冒充账号失效。导航不发起重跑；保存配置后仍由用户确认后续执行。确认取消、重复点击、路由/项目切换及卸载用请求身份隔离迟到响应，已经入队但刷新失败与入队被拒绝分别展示。测试接在 `pnpm ci:unit:credential-compatibility`；最终 Actions 结果另记。resolver 的缺失/停用/跨项目引用与空名单拒绝、`rerun-current` 连续拒绝后仅由显式修复和再次执行恢复的回归分别接在 `pnpm ci:unit:capability-pack` 与 `pnpm ci:integration:recovery`；配置保存不改冻结快照，不自动入队。
+
+### 项目默认模型与创建冲突（#966）
+
+项目 CLI/凭据启用范围仅约束候选，不自动确定模型。任务/Hub 显式提案优先于项目配对默认模型，再沿用全局角色模型；不恢复项目 RoleConfig 身份覆盖。入口 Hub 与后续 Worker 共用该解析路径，账号范围、健康、模型名单及镜像准入保持 fail closed。
+
+任务创建 POST 失败在提交区复用现有 `SNAPSHOT_STALE`、`stale_fields` 与 `repair`；快捷创建还读取 `ready=false` 预检中失败 check 的同一 `repair`，不必等到 POST 才显示冲突，且拒绝时不调用创建 API。两者仅从已知模型冲突的 `expected` 中投影请求模型和有界候选，过滤非法标识/URL，不回显原始 `resolution_error`、Provider 文本或堆栈；候选样本不是完整目录。预检 scope 必须匹配当前项目，POST 拒绝绑定发起项目；切换项目清除旧反馈，迟到响应不能给新项目显示旧模型或配置入口。其他解析失败只显示固定配置检查说明，普通身份漂移及权限错误不冒充模型冲突。提示持续保留至下次提交、项目切换或表单关闭，并提供已知项目设置、凭据及全局角色入口；导航不自动执行任务。
+
+| 注意力成本 | 本切片处理 |
+| --- | --- |
+| 用户需要决定 | 显式选择项目默认账号/模型，或修正全局角色默认；不替用户任选候选 |
+| 减少的负担 | 避免把“仅启用 Pi”误当作默认模型已配置，创建失败后可直接看到冲突和修复位置 |
+| 新增代价与去重 | 沿用已有 settings 字段和可搜索选择器；提交区只投影可行动诊断，不重复输出完整错误链 |
+| 可审查证据 | 配置 PATCH/回显、空目录和多候选、Hub/Worker 优先级、诊断脱敏与两处创建接线；`pnpm ci:unit:web-quick-start` 的真实组件回归覆盖失败预检不创建任务、项目切换和迟到反馈隔离；最终 SHA Actions 待验，未运行本地或生产验证 |
 
 ### Finding 项目查询（#770 切片 B）
 
@@ -100,6 +113,8 @@ Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、�
 
 Gateway 的请求次数额度在 Job 锁内跨 token/Attempt 累计；撤销/过期 token 仍参与用量与有限上限求交，普通 main 与 OM 均不能通过恢复、换 token 或新配置的 0/未配置重置额度。首次 mint 用内核 `control_receipt/gateway_request_budget` 冻结包括未签发 workload 的完整策略，后续只可追加收紧；恢复必须在替换旧快照前同事务保存旧策略。缺失或损坏的冻结策略明确拒绝，mint 固化交集，`_allowance` 在请求额度耗尽时返回 `JOB_REQUEST_EXHAUSTED`，最终 dispatch 仍重新准入；拒绝无模型出站、模型 effect 或请求计数变化。策略无效/历史缺失的模型准入拒绝保存 scoped `policy_rejected` settlement 回执，OM 仅凭可信回执分类为不可重试策略硬失败，不使用 quota/transient 软降级路径。详见[透明预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)。
 
+缺损 runtime knobs 的预算拒绝继续保留 `GATEWAY_REQUEST_BUDGET_INVALID`。管理恢复入口在该类拒绝中返回稳定字段路径 `missing_fields` 和 `next_action=inspect-job-recovery`，单 Job 和任务恢复保留相同诊断；这不是额度耗尽或自动补冻许可。Web 仅展示历史核对说明，不跳转账号配置、不自动重跑。详见 [#943/#948 切片](../AGENT_REPAIR_LIFECYCLE.md#创建入口补齐与缺损快照诊断943--948)，最终 SHA Actions 待验。
+
 - **Model Gateway：** Provider 选择、凭据、网络、模型和用量归 Scheduler 所有。Gateway 上游请求/响应体不落库（usage 计数除外）；Job 执行流由 Evidence writer 归档并对已登记的运行时 secret 脱敏。Provider 错误不成为 Agent 可伪造的语义事件。实现见 [`gateway.ts`](../../apps/scheduler/src/gateway.ts) 与 [`evidence.ts`](../../apps/scheduler/src/evidence.ts)。
 - **过程流：** WS 使用一次性 ticket、项目/Job scope 和本地 Evidence catch-up。stream-bus 只做实时投递；本地副本不可见时返回 `visibility=unavailable`，不能从另一副本补造原始流。终端 WS 另有更严格的 control/admin scope、lease、帧大小和空闲限制。
 - **导入/导出：** transfer 域校验格式、hash、版本/计数、项目 scope、路径和 provenance。导入可以保留历史 Job 的终态、旧 Attempt/effect 和 provenance，但不能恢复历史 token、沙箱或 secret，也不能直接授权新的 active execution；需要重跑时必须按当前 admission 和 snapshot 重新治理。导入与导出均审计。
@@ -109,6 +124,8 @@ Gateway 的请求次数额度在 Job 锁内跨 token/Attempt 累计；撤销/过
 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)给 mark_job_done 增加必填 proposal revision header、原 key 的只读回执查询和持久拒绝计数。原 Control 权限仍有效；accepted/persisted_deferred 不是终态或效果结算。
 
 ## 稳定错误和 RepairFeedback
+
+#951 候选在实际 `executeReal` 运行结束后的本地缺 done 路径使用 `AGENT_COMPLETION_UNOBSERVED`；原 runner/语义错误仍保留原错误对象/分类。诊断写入现有 Job Evidence stream，由既有项目/Job 权限读取，不增加公开 transcript/工具输入或新恢复接口。原控制回执按 Job/Attempt/snapshot/receipt identity 验证后只投影元数据；接纳或 done 事件存在不表示最终 Job 成功，读取不可用不表示无提案、零用量或可重放。终态 token 失效后应由有权用户通过既有 Job 详情/证据检查，不建议猜测新 token/key。详细字段及候选待验范围见[完成失败诊断](../AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)。
 
 | 层 | 典型错误 | 调用方动作 |
 | --- | --- | --- |

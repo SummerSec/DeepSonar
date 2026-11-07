@@ -3,6 +3,7 @@ import { TaskGoalReviewRequest } from "@deepsonar/shared-types";
 import { invalidControlPayload } from "./control-input.js";
 import { LEFTOVER_RULE_ALIAS_KEYS } from "./settings-validation.js";
 import { persistPreparedJob } from "./job-creation.js";
+import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { freezeProjectKnowledgeCatalog } from "./domains/project-knowledge/catalog-snapshot.js";
 import { onKnowledgeJobTerminal } from "./domains/project-knowledge/recovery.js";
 import path from "node:path";
@@ -26,6 +27,7 @@ import {
 import { isProviderKnown } from "./credentials.js";
 import { sql } from "./db.js";
 import { inc } from "./metrics.js";
+import { withOperationConflictRetry } from "./db-conflict-retry.js";
 import { recordSystemAudit } from "./audit.js";
 import {
   createRoleRuntimeSnapshotApplication,
@@ -159,10 +161,11 @@ export async function preflightDeferredSemanticEvent(
   type: "hub_decision" | "human",
   payload: unknown,
 ): Promise<void> {
-  await sql.begin(async (tx) => {
+  // #945：死锁/序列化失败是平台内部事务顺序问题，不该把整轮 Job 判失败。
+  await withOperationConflictRetry("preflight_deferred_side_effects", () => sql.begin(async (tx) => {
     // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as Tx.
     await eventIngestionSideEffectApplication.preflightDeferredSideEffects(tx as unknown as Tx, jobId, type, payload);
-  });
+  }));
 }
 
 // ---------- 项目规则（决策层）：projects.config_json.rules 覆盖 + env 兜底 ----------
@@ -1008,7 +1011,9 @@ export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assi
 
 export async function createJob(input: CreateJobInput) {
   try {
-    const job = await sql.begin((tx) => createJobInTransaction(tx as unknown as Tx, input));
+    const job = await withOperationConflictRetry("create_job", () =>
+      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as Tx.
+      sql.begin((tx) => createJobInTransaction(tx as unknown as Tx, input)));
     inc("deepsonar_jobs_created_total", { type: input.type });
     const providerModel = job.snapshotWithKnobs && typeof job.snapshotWithKnobs === "object"
       ? (job.snapshotWithKnobs as { provider_model?: { passthrough?: boolean; upstream_model_id?: string | null; cli_model_id?: string | null; catalog_revision?: string | null; model_descriptor?: { health_status?: string } | null } }).provider_model
@@ -1068,7 +1073,9 @@ export function stripFindingProtocolFromRules(rules: Record<string, unknown>): R
  * 新建时同事务写 root 节点（body_json 带目标）。返回 canvas_id。
  */
 export async function ensureCanvasForTask(input: EnsureCanvasInput): Promise<string> {
-  return sql.begin((tx) => ensureCanvasForTaskInTransaction(tx as unknown as Tx, input));
+  return withOperationConflictRetry("ensure_canvas_for_task", () =>
+    // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as Tx.
+    sql.begin((tx) => ensureCanvasForTaskInTransaction(tx as unknown as Tx, input)));
 }
 
 export async function ensureCanvasForTaskInTransaction(tx: Tx, input: EnsureCanvasInput): Promise<string> {
@@ -1249,8 +1256,11 @@ const hubOrchestrationApplication = createHubOrchestrationApplication(sql, {
   patchCanvasConvergence: async (tx, canvasId, patch) =>
     patchCanvasConvergence(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, canvasId, patch),
   careSeverities,
-  resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = []) =>
-    resolveAgentSnapshotForJob(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, projectId, type, findingIds),
+  resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = []) => {
+    const resolved = await resolveAgentSnapshotForJob(tx, projectId, type, findingIds);
+    // The Hub domain inserts in this transaction; freeze through the same creation rule here.
+    return (await freezeJobRuntimeConfiguration(tx, { projectId, type }, resolved)).snapshotWithKnobs;
+  },
   recordJobSharedAssets: async (tx, jobId, snapshot) =>
     recordJobSharedAssets(
       /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
@@ -1530,6 +1540,7 @@ export async function recoverVerifyJobTerminal(
   jobStatus: "failed" | "timeout" | "orphan" | "cancelled",
   error?: string | null,
 ): Promise<void> {
+  // #945: Hub 收敛可派 Report 并写输入文件，尚非纯数据库重试边界。
   await sql.begin(async (txRaw) => {
     const tx = /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ txRaw as unknown as Tx;
     const [job] = await tx`SELECT type, finding_id, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;

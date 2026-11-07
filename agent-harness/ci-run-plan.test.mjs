@@ -2,8 +2,11 @@
 // must never turn a missing/partial diff into a smaller required set.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   FAST_SUITE_ROUTES,
@@ -11,6 +14,8 @@ import {
   RUN_MODES,
   SPECIALIST_WORKFLOWS,
   buildRunPlan,
+  CHROME_FUZZ_ARM_PINNED_INPUTS,
+  chromeFuzzArmRequirement,
   isTiered,
   loadSuitePaths,
   matchSuites,
@@ -225,4 +230,169 @@ test("every specialist workflow gates its heavy matrix on the same run plan", ()
     assert.ok(workflow.on.push, `${suite} must keep push@main`);
     assert.ok("workflow_dispatch" in workflow.on, `${suite} must keep a manual entry`);
   }
+});
+
+// #961: the Chrome Fuzz V8 ARM build+smoke gate is expensive, so unrelated Ready
+// PRs must not start it — but every "skip" answer must be explainable, and any
+// input that can invalidate the build must keep it required.
+test("#961 Chrome Fuzz ARM gate is required by its own inputs", () => {
+  for (const path of [
+    "deploy/Dockerfile.agent-chrome-fuzz",
+    "deploy/chrome-fuzz-env.sh",
+    "agent-harness/chrome-fuzz-runtime.json",
+  ]) {
+    assert.equal(
+      chromeFuzzArmRequirement({ status: PLAN_STATUSES.OK, mode: RUN_MODES.READY_FULL, paths: [path], suitePaths: SUITE_PATHS }).required,
+      true,
+      `${path} must keep the ARM gate required`,
+    );
+  }
+});
+
+test("#961 base image, fingerprint and routing inputs keep the ARM gate required", () => {
+  for (const path of CHROME_FUZZ_ARM_PINNED_INPUTS) {
+    const probe = path.endsWith("/**") ? path.replace("**", "some.md") : path;
+    const verdict = chromeFuzzArmRequirement({
+      status: PLAN_STATUSES.OK, mode: RUN_MODES.READY_FULL, paths: [probe], suitePaths: SUITE_PATHS,
+    });
+    assert.equal(verdict.required, true, `${probe} must keep the ARM gate required`);
+    assert.ok(verdict.reason.length > 0);
+  }
+});
+
+test("#961 unrelated business changes skip the ARM gate with an explicit reason", () => {
+  const plan = buildRunPlan({
+    ...pr, draft: false, suitePaths: SUITE_PATHS,
+    diffBytes: diff(change("apps/scheduler/src/dispatcher.ts"), change("apps/web/src/App.tsx")),
+  });
+  assert.equal(plan.mode, RUN_MODES.READY_FULL);
+  assert.equal(plan.chromeFuzzArm, false);
+  assert.ok(plan.reasons.includes("chrome_fuzz_inputs_unchanged"));
+});
+
+test("#961 unknown, transitive base and missing inputs never authorize an ARM skip", () => {
+  for (const paths of [
+    ["some/new/tool.txt"],
+    ["agent-harness/dsh-runtime/package-lock.json"],
+    ["agent-harness/pi-observational-memory-governed.ts"],
+    ["packages/runtime-sandbox/src/dsh-request-budget.ts"],
+    [".github/ci/prepare-hosted-runner-disk.mjs"],
+    ["apps/web/src/App.tsx", "some/new/tool.txt"],
+  ]) {
+    const plan = buildRunPlan({
+      ...pr, draft: false, suitePaths: SUITE_PATHS,
+      diffBytes: diff(...paths.map(change)),
+    });
+    assert.equal(plan.chromeFuzzArm, true, paths.join(", "));
+    assert.ok(plan.reasons.includes("chrome_fuzz_unknown_input_fail_closed"));
+  }
+  for (const record of [
+    ["D", "unknown/build-input.txt"],
+    ["R100", "unknown/build-input.txt", "apps/web/src/input.txt"],
+    ["R100", "apps/web/src/input.txt", "unknown/build-input.txt"],
+  ]) {
+    assert.equal(buildRunPlan({ ...pr, suitePaths: SUITE_PATHS, diffBytes: diff(record) }).chromeFuzzArm, true);
+  }
+  assert.equal(buildRunPlan({ ...pr, suitePaths: SUITE_PATHS, diffBytes: Buffer.alloc(0) }).chromeFuzzArm, true);
+  assert.equal(buildRunPlan({ ...pr, diffBytes: diff(change("apps/web/src/App.tsx")) }).chromeFuzzArm, true);
+
+  const businessAndDocs = buildRunPlan({
+    ...pr, suitePaths: SUITE_PATHS,
+    diffBytes: diff(change("apps/web/src/App.tsx"), change("docs/README.md")),
+  });
+  assert.equal(businessAndDocs.chromeFuzzArm, false);
+});
+
+test("#961 actual CLI writes fail-closed ARM outputs, not just helper verdicts", () => {
+  const dir = mkdtempSync(join(tmpdir(), "deepsonar-arm-plan-"));
+  try {
+    const cases = [
+      { args: ["--event-name", "push"], required: true, status: 0 },
+      { args: ["--event-name", "workflow_dispatch"], required: true, status: 0 },
+      { args: ["--event-name", "pull_request"], required: true, status: 1 },
+      { bytes: Buffer.from("M\0unknown/input"), required: true, status: 1 },
+      { bytes: diff(change("unknown/input")), required: true, status: 0 },
+      { bytes: diff(change("apps/web/src/App.tsx")), required: false, status: 0 },
+    ];
+    for (const [index, entry] of cases.entries()) {
+      const output = join(dir, `output-${index}`);
+      const input = join(dir, `diff-${index}`);
+      const args = entry.args ?? ["--event-name", "pull_request", "--base", "base", "--head", "head", "--diff-file", input];
+      if (entry.bytes) writeFileSync(input, entry.bytes);
+      const run = spawnSync(process.execPath, [join(ROOT, "agent-harness/ci-run-plan.mjs"), ...args, "--root", ROOT, "--ci-pr-mode", "tiered"], {
+        cwd: ROOT, env: { ...process.env, GITHUB_OUTPUT: output }, encoding: "utf8",
+      });
+      assert.equal(run.status, entry.status, run.stderr);
+      const plan = JSON.parse(run.stdout);
+      assert.equal(plan.chromeFuzzArm, entry.required);
+      assert.match(readFileSync(output, "utf8"), new RegExp(`^chrome_fuzz_arm=${entry.required ? "required" : "skipped"}$`, "m"));
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("#961 the ARM gate cannot be skipped by a failed or unreadable diff", () => {
+  const missingRevision = buildRunPlan({ eventName: "pull_request", base: "", head: "", suitePaths: SUITE_PATHS });
+  assert.equal(missingRevision.status, PLAN_STATUSES.FAILED);
+  assert.equal(missingRevision.chromeFuzzArm, true);
+  assert.ok(missingRevision.reasons.includes("chrome_fuzz_plan_failed_fail_closed"));
+
+  const failedClassifier = buildRunPlan({
+    ...pr, draft: false, suitePaths: SUITE_PATHS,
+    diffBytes: diff(change("apps/web/src/App.tsx")),
+    classifier: { status: "failed", reason: "synthetic" },
+  });
+  assert.equal(failedClassifier.status, PLAN_STATUSES.FAILED);
+  assert.equal(failedClassifier.chromeFuzzArm, true);
+});
+
+test("#961 docs-only, Draft and full-mode rollback each answer deterministically", () => {
+  const docs = buildRunPlan({ ...pr, draft: false, suitePaths: SUITE_PATHS, diffBytes: diff(change("docs/README.md")) });
+  assert.equal(docs.mode, RUN_MODES.DOCS);
+  assert.equal(docs.chromeFuzzArm, false);
+
+  const draft = buildRunPlan({ ...pr, draft: true, suitePaths: SUITE_PATHS, diffBytes: diff(change("apps/web/src/App.tsx")) });
+  assert.equal(draft.mode, RUN_MODES.DRAFT_FAST);
+  assert.equal(draft.chromeFuzzArm, false);
+
+  const full = buildRunPlan({
+    ...pr, ciPrMode: "full", draft: false, suitePaths: SUITE_PATHS,
+    diffBytes: diff(change("apps/web/src/App.tsx")),
+  });
+  assert.equal(full.chromeFuzzArm, true, "the pre-#836 rollback path never narrows the ARM gate");
+  assert.ok(full.reasons.includes("chrome_fuzz_required_full_mode"));
+
+  const nonPr = buildRunPlan({ eventName: "push", suitePaths: SUITE_PATHS });
+  assert.equal(nonPr.chromeFuzzArm, true);
+});
+
+test("#961 a deleted or renamed Chrome fuzz input still keeps the ARM gate required", () => {
+  const deleted = buildRunPlan({
+    ...pr, draft: false, suitePaths: SUITE_PATHS,
+    diffBytes: diff(["D", "deploy/Dockerfile.agent-chrome-fuzz"]),
+  });
+  assert.equal(deleted.chromeFuzzArm, true);
+
+  const renamed = buildRunPlan({
+    ...pr, draft: false, suitePaths: SUITE_PATHS,
+    diffBytes: diff(["R100", "deploy/chrome-fuzz-smoke.sh", "deploy/chrome-fuzz-smoke-v2.sh"]),
+  });
+  assert.equal(renamed.chromeFuzzArm, true);
+});
+
+// #961: the plan alone changes nothing — the workflow must consume it, and the
+// summary must judge the ARM pair by the plan instead of requiring them always.
+test("#961 ci.yml wires the Chrome Fuzz ARM gate to the run plan", () => {
+  const workflow = readFileSync(`${ROOT}/.github/workflows/ci.yml`, "utf8");
+  assert.match(workflow, /chrome_fuzz_arm: \$\{\{ steps\.plan\.outputs\.chrome_fuzz_arm \}\}/u);
+  assert.match(workflow, /needs\.changes\.outputs\.chrome_fuzz_arm == 'required'/u);
+  const armGateCount = (workflow.match(/needs\.changes\.outputs\.chrome_fuzz_arm == 'required'/gu) ?? []).length;
+  assert.ok(armGateCount >= 2, "both the ARM build and its native smoke must be gated by the plan");
+  assert.match(workflow, /FUZZ_ARM_REQUIRED: \$\{\{ needs\.changes\.outputs\.chrome_fuzz_arm \}\}/u);
+  assert.match(workflow, /missing or invalid chrome_fuzz_arm output/u);
+  assert.match(workflow, /check_planned chrome-fuzz-arm64-build/u);
+  assert.match(workflow, /check_planned chrome-fuzz-arm64/u);
+  // 失败/取消必须在 check_planned 里先被拒绝，不能被「计划说可跳过」吞掉。
+  assert.match(workflow, /failure\|cancelled\) fail "\$name did not complete cleanly/u);
 });

@@ -8,6 +8,7 @@
  * 因此重试不会重复计费、不会重复发送模型请求，也不会绕过 unknown effect 的规则。
  * 已经发出外部请求之后的重试不在本模块范围内。
  */
+import { inc } from "./metrics.js";
 
 export const DB_CONFLICT_MAX_ATTEMPTS = 3;
 /** 冲突退避基数（毫秒）；第 n 次冲突等待 base * 2^(n-1)。 */
@@ -77,4 +78,40 @@ export async function withDatabaseConflictRetry<T>(
     }
   }
   throw new DatabaseConflictExhaustedError(attempts, lastError);
+}
+
+const SQLSTATE_LABEL_CODES = new Set(["40P01", "40001", "55P03"]);
+
+function sqlstateLabel(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && SQLSTATE_LABEL_CODES.has(code) ? code : "unknown";
+}
+
+/**
+ * #945：给具体事务入口用的一层包装。
+ *
+ * 行为与 `withDatabaseConflictRetry` 完全一致（同一个重试器、同一套退避），
+ * 额外做两件事：把 `{operation, code}` 写进现有指标，并保证耗尽时抛出的是
+ * `DatabaseConflictExhaustedError`（可诊断、不污染成 PostgresError 原文）。
+ *
+ * 新增模块而不是另建重试器：仓库已经有一套有界重试（#871），一个系统只应该有
+ * 一个重试语义；此处只是把它接到此前漏接的事务入口上。
+ */
+export async function withOperationConflictRetry<T>(
+  operation: string,
+  run: (attempt: number) => Promise<T>,
+  options: DatabaseConflictRetryOptions = {},
+): Promise<T> {
+  const attempts = Math.max(1, Math.trunc(options.attempts ?? DB_CONFLICT_MAX_ATTEMPTS));
+  return withDatabaseConflictRetry(run, {
+    ...options,
+    onConflict(error, attempt) {
+      const labels = { operation, code: sqlstateLabel(error) };
+      inc("deepsonar_database_conflict_retries_total", labels);
+      const exhausted = attempt === attempts;
+      if (exhausted) inc("deepsonar_database_conflict_exhausted_total", labels);
+      console.warn("[db-conflict] recoverable conflict", { ...labels, attempt, exhausted });
+      options.onConflict?.(error, attempt);
+    },
+  });
 }

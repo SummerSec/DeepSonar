@@ -4,6 +4,7 @@
 > CLI versions live in `agent-harness/runtime-images.json` and
 > `packages/runtime-sandbox/src/runtime-adapters.ts`. New CLI onboarding must also
 > cover Session archive + Web session viewer (below). Index: [`README.md`](README.md).
+> Synchronization: 2026-11-06; #947's completion-refusal format fix is a candidate pending final-SHA Actions.
 
 Issue #100 defines the boundary between Scheduler-owned execution policy and
 provider-specific CLI protocols.
@@ -62,6 +63,18 @@ and ingestion gates remain authoritative; this does not retry a process or
 reconcile unknown effects. Regression entry points are `ci:unit:runtime-sandbox`
 and `ci:unit:executor-real`; these are offline engineering fixtures, not live
 CLI/model or final-SHA Actions acceptance.
+
+#947's candidate recognizes both exact HTTP status prefixes `409` and `409:`,
+each followed by a space, including Pi's decoded `message_end` error wrapper. The regression passes that
+real decoder result through terminal-process normalization into `executeReal`,
+then checks one settlement of the original accepted Hub/done identities. No
+accepted completion or prepare-only still fails; process/nonzero-exit, missing
+provenance and semantic failures still fail. `Repair usage is not settled` and
+other 409s remain rejected: their original request/effect receipts require
+separate reconciliation, never a repeated model call or zeroed usage. These
+assertions are wired to `ci:unit:executor-real`; final-SHA Actions and the issue's
+production-frequency criterion are not yet verified. This format correction
+does not implement the remaining usage-reconciliation part of #947.
 
 DSH vendor dialect (official `settings.yaml` parse, secret-key reject, single
 route/profile rewrite onto the Job Gateway, pi-compatible `input[0]` frame, and
