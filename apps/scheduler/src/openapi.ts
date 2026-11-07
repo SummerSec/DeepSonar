@@ -2564,6 +2564,8 @@ const OPS: Op[] = [
     method: "post",
     path: "/skill-sources",
     summary: "登记模块源",
+    description:
+      "新源默认隔离（quarantined）且未启用：登记成功不等于已可运行，也不自动信任。#953：名称重复返回 409，body 的 existing 字段指向已登记源，调用方应改为对该源同步/信任/启用，而不是重复登记。项目上下文登记与平台登记使用同一套 URL 校验、默认隔离与审计；登记不改变其它项目的授权。",
     scope: "skills:write",
     tags: ["Skills"],
     body: {

@@ -4,6 +4,7 @@ import { useAuth } from "../auth";
 import { canAccessAnyScope } from "../permissions";
 import { formatSkillSourceSyncFlash } from "../skill-source-sync-flash";
 import { useConfirmDialog } from "./ConfirmDialog";
+import { showToast } from "../toast";
 
 const actionClass = "rounded-md border border-ink-700 px-2 py-1 font-mono text-zinc-300 transition-colors hover:border-ink-600 disabled:cursor-not-allowed disabled:opacity-50";
 
@@ -22,7 +23,7 @@ export function SkillSourceCatalogActions({ source, disabled = false, onChanged,
   const canManage = canAccessAnyScope(me, ["skills:write"]) && !me?.actor?.project_id;
   // A new object is a generation, not just a value: A → B → A must fence A's late work.
   const key = JSON.stringify([scopeKey, source.id, source.name, source.trust_status, source.enabled,
-    source.source_instance_id, source.revocation_epoch, source.candidate_hash, source.candidate_json, canManage, disabled]);
+    source.source_instance_id, source.revocation_epoch, source.candidate_hash, source.candidate_json, canManage]);
   const fence = useRef({ key, mounted: true });
   if (fence.current.key !== key) fence.current = { key, mounted: true };
   const changedRef = useRef(onChanged);
@@ -73,12 +74,15 @@ export function SkillSourceCatalogActions({ source, disabled = false, onChanged,
         }
       } catch (error) {
         if (!current()) return;
-        setNotice({ token, text: `${action === "sync" ? "同步" : "操作"}失败：${error instanceof Error ? error.message : String(error)}` });
+        const failure = `${action === "sync" ? "同步" : "操作"}失败：${error instanceof Error ? error.message : String(error)}`;
+        setNotice({ token, text: failure });
+        showToast(failure, "error");
         try { if (current()) await refresh(); } catch { /* Keep the write error; metadata refresh is best effort. */ }
         return;
       }
       if (!current()) return;
       setNotice({ token, text: result });
+      showToast(result, "ok");
       try { await refresh(); }
       catch (error) {
         if (current()) setNotice({ token, text: `${result}；刷新失败，请重新加载元数据：${error instanceof Error ? error.message : String(error)}` });
