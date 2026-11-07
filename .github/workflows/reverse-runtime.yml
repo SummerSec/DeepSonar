@@ -132,8 +132,65 @@ jobs:
             --ci-pr-mode "${CI_PR_MODE:-}" \
             --root .
 
-  reverse-runtime-images:
+  # #975: build the current checkout's base once per architecture and share it
+  # with the three heavy jobs through a run-scoped artifact. Off by default: it
+  # only runs when REVERSE_BASE_REUSE=on, so the unchanged default path keeps
+  # building the base independently in every job. No registry, no `latest`; the
+  # image is identified by immutable SHA/arch/platform/toolset labels that each
+  # consumer re-verifies after `docker load`.
+  reverse-base:
     needs: plan
+    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full' && vars.REVERSE_BASE_REUSE == 'on'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare hosted runner disk for shared base
+        run: node .github/ci/prepare-hosted-runner-disk.mjs
+      - id: identity
+        name: Resolve immutable base identity
+        run: |
+          node agent-harness/reverse-base-identity.mjs \
+            --sha "${{ github.sha }}" --arch "${{ matrix.arch }}" --platform "${{ matrix.platform }}"
+      - name: Build current native base once per architecture
+        env:
+          # JSON array from the identity step; parsed into a bash array below so
+          # no label value is ever re-split or shell-evaluated.
+          LABEL_ARGS_JSON: ${{ steps.identity.outputs.label_args }}
+        run: |
+          set -euo pipefail
+          mapfile -t label_args < <(node -e 'for (const arg of JSON.parse(process.argv[1])) console.log(arg)' "$LABEL_ARGS_JSON")
+          if [ "${#label_args[@]}" -eq 0 ]; then
+            echo "empty base identity label args; refusing to build an unlabelled base" >&2
+            exit 1
+          fi
+          docker buildx build --builder default --load --platform "${{ matrix.platform }}" \
+            --build-arg TOOLSET=base "${label_args[@]}" \
+            --tag "deepsonar-base:reverse-ci-${{ matrix.arch }}" --file deploy/Dockerfile.agent .
+          docker image inspect --format '{{json .Config.Labels}}' "deepsonar-base:reverse-ci-${{ matrix.arch }}" > "$RUNNER_TEMP/base-labels.json"
+          node agent-harness/reverse-base-identity.mjs --verify \
+            --labels-json-file "$RUNNER_TEMP/base-labels.json" \
+            --sha "${{ github.sha }}" --arch "${{ matrix.arch }}" --platform "${{ matrix.platform }}"
+          docker save "deepsonar-base:reverse-ci-${{ matrix.arch }}" | gzip -1 > "$RUNNER_TEMP/${{ steps.identity.outputs.save_file }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.identity.outputs.artifact_name }}
+          path: ${{ runner.temp }}/${{ steps.identity.outputs.save_file }}
+          if-no-files-found: error
+          retention-days: 1
+
+  reverse-runtime-images:
+    needs: [plan, reverse-base]
     if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
@@ -182,7 +239,26 @@ jobs:
       # Use the local Docker builder so the second build consumes precisely the
       # base built from this checkout. PRs do not receive registry credentials,
       # write source caches, publish tags, or use QEMU for native acceptance.
+      # #975: when REVERSE_BASE_REUSE=on the base arrives as a run artifact and
+      # the local build below is skipped; otherwise this stays byte-for-byte the
+      # original per-job build.
+      - uses: actions/download-artifact@v4
+        if: ${{ vars.REVERSE_BASE_REUSE == 'on' }}
+        with:
+          name: reverse-base-${{ matrix.arch }}
+          path: ${{ runner.temp }}/reverse-base
+      - name: Load and verify shared base
+        if: ${{ vars.REVERSE_BASE_REUSE == 'on' }}
+        run: |
+          set -euo pipefail
+          gzip -dc "$RUNNER_TEMP/reverse-base/reverse-base-${{ matrix.arch }}.tar.gz" | docker load
+          docker image inspect --format '{{json .Config.Labels}}' "deepsonar-base:reverse-ci-${{ matrix.arch }}" > "$RUNNER_TEMP/base-labels.json"
+          node agent-harness/reverse-base-identity.mjs --verify \
+            --labels-json-file "$RUNNER_TEMP/base-labels.json" \
+            --sha "${{ github.sha }}" --arch "${{ matrix.arch }}" --platform "${{ matrix.platform }}"
+          docker tag "deepsonar-base:reverse-ci-${{ matrix.arch }}" deepsonar-base:reverse-ci
       - name: Build current native base
+        if: ${{ vars.REVERSE_BASE_REUSE != 'on' }}
         run: |
           set -euo pipefail
           docker buildx build --builder default --load --platform "${{ matrix.platform }}" \
@@ -261,7 +337,7 @@ jobs:
           docker compose -f deploy/docker-compose.opensandbox.yml down -v
 
   claude-budget-acceptance:
-    needs: plan
+    needs: [plan, reverse-base]
     if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -291,7 +367,25 @@ jobs:
           pnpm --filter @deepsonar/shared-types build
           pnpm --filter @deepsonar/runtime-manual-contract build
           pnpm --filter @deepsonar/runtime-sandbox build
+      # #975: shared-base path, gated by REVERSE_BASE_REUSE; when off the
+      # original local build below runs unchanged.
+      - uses: actions/download-artifact@v4
+        if: ${{ vars.REVERSE_BASE_REUSE == 'on' }}
+        with:
+          name: reverse-base-${{ matrix.arch }}
+          path: ${{ runner.temp }}/reverse-base
+      - name: Load and verify shared base
+        if: ${{ vars.REVERSE_BASE_REUSE == 'on' }}
+        run: |
+          set -euo pipefail
+          gzip -dc "$RUNNER_TEMP/reverse-base/reverse-base-${{ matrix.arch }}.tar.gz" | docker load
+          docker image inspect --format '{{json .Config.Labels}}' "deepsonar-base:reverse-ci-${{ matrix.arch }}" > "$RUNNER_TEMP/base-labels.json"
+          node agent-harness/reverse-base-identity.mjs --verify \
+            --labels-json-file "$RUNNER_TEMP/base-labels.json" \
+            --sha "${{ github.sha }}" --arch "${{ matrix.arch }}" --platform "${{ matrix.platform }}"
+          docker tag "deepsonar-base:reverse-ci-${{ matrix.arch }}" deepsonar-base:reverse-ci
       - name: Build current native base
+        if: ${{ vars.REVERSE_BASE_REUSE != 'on' }}
         run: |
           set -euo pipefail
           docker buildx build --builder default --load --platform "${{ matrix.platform }}" \
@@ -310,7 +404,7 @@ jobs:
           echo "Result: ${ACCEPTANCE_RESULT}; network-none container, synthetic upstream only." >> "$GITHUB_STEP_SUMMARY"
 
   pi-om-acceptance:
-    needs: plan
+    needs: [plan, reverse-base]
     if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
@@ -351,7 +445,25 @@ jobs:
           pnpm --filter @deepsonar/shared-types build
           pnpm --filter @deepsonar/runtime-manual-contract build
           pnpm --filter @deepsonar/runtime-sandbox build
+      # #975: shared-base path, gated by REVERSE_BASE_REUSE; when off the
+      # original local build below runs unchanged.
+      - uses: actions/download-artifact@v4
+        if: ${{ vars.REVERSE_BASE_REUSE == 'on' }}
+        with:
+          name: reverse-base-${{ matrix.arch }}
+          path: ${{ runner.temp }}/reverse-base
+      - name: Load and verify shared base
+        if: ${{ vars.REVERSE_BASE_REUSE == 'on' }}
+        run: |
+          set -euo pipefail
+          gzip -dc "$RUNNER_TEMP/reverse-base/reverse-base-${{ matrix.arch }}.tar.gz" | docker load
+          docker image inspect --format '{{json .Config.Labels}}' "deepsonar-base:reverse-ci-${{ matrix.arch }}" > "$RUNNER_TEMP/base-labels.json"
+          node agent-harness/reverse-base-identity.mjs --verify \
+            --labels-json-file "$RUNNER_TEMP/base-labels.json" \
+            --sha "${{ github.sha }}" --arch "${{ matrix.arch }}" --platform "${{ matrix.platform }}"
+          docker tag "deepsonar-base:reverse-ci-${{ matrix.arch }}" deepsonar-base:reverse-ci
       - name: Build current native base
+        if: ${{ vars.REVERSE_BASE_REUSE != 'on' }}
         run: |
           set -euo pipefail
           docker buildx build --builder default --load --platform "${{ matrix.platform }}" \
@@ -420,6 +532,7 @@ jobs:
         run: |
           printf '### Native runtime acceptance\n\n| Check | Result |\n| --- | --- |\n| Plan | %s |\n| Reverse/REA | %s |\n| Claude | %s |\n| Pi/OM | %s |\n' \
             "$PLAN_RESULT" "$REVERSE_RESULT" "$CLAUDE_RESULT" "$PI_OM_RESULT" >> "$GITHUB_STEP_SUMMARY"
+          # base 复用开启时由各消费者在 load 后校验 SHA/架构/平台/工具集标签，缺失或不匹配即该 job 失败，acceptance 逐 job 要求 success 已覆盖。
           test "$PLAN_RESULT" = success
           test "$REVERSE_RESULT" = success
           test "$CLAUDE_RESULT" = success
