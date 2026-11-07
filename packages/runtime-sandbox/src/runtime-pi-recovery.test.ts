@@ -385,8 +385,11 @@ test("#765 persistence backpressure does not expire provider ACK timers", async 
       assert.equal(driver.error, undefined);
       assert.equal(proc.ended, false);
     });
-    await new Promise(resolve => setTimeout(resolve, 30));
+    // #944: the ACK deadline now retries before failing, so wait out the full
+    // retry budget (15 + 15 + 30 + 60ms) instead of the first window.
+    await new Promise(resolve => setTimeout(resolve, 250));
     assert.match(driver.error?.message ?? "", /PI_RPC_ACK_TIMEOUT/);
+    assert.ok(proc.commands.length > 1, "the input is retransmitted before the Job fails");
   } finally { driver.dispose(); }
 });
 

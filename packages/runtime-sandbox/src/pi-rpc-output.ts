@@ -58,18 +58,34 @@ export class PiRpcOutputCapture {
       const content = JSON.stringify(project(safeRecord, this.secrets, false));
       const bytes = Buffer.byteLength(content);
       if (this.sequence >= 128 || this.retainedBytes + bytes > this.budget) throw new Error("PI_RPC_CAPTURE_BUDGET_EXCEEDED");
-      const projected = project(safeRecord, this.secrets, true) as Record<string, unknown>;
-      if (Buffer.byteLength(JSON.stringify(projected)) > PI_RPC_INLINE_BYTES) throw new Error("PI_RPC_UNSUPPORTED_LARGE_STRUCTURE");
       const name = `pi-rpc-${this.runId}-${++this.sequence}.json`;
       const path = `/workspace/.deepsonar-rpc-output/${name}`;
       // Host and archive failures are terminal. Never emit capture_complete before both writes resolve.
       await this.write(() => this.host.uploadFile(content, path));
       const evidencePath = await this.write(() => this.archive!({ name, content }));
       this.retainedBytes += bytes;
+      const sha256 = createHash("sha256").update(content).digest("hex");
       this.emit({ type: "runtime.diagnostic", code: "pi_rpc_output_filed", event_type: safeRecord.type,
         truncated: true, original_bytes: originalBytes, retained_bytes: bytes, capture_complete: true,
-        sha256: createHash("sha256").update(content).digest("hex"), hash_scope: "redacted_json",
-        path, evidence_path: evidencePath });
+        sha256, hash_scope: "redacted_json", path, evidence_path: evidencePath });
+
+      const projected = project(safeRecord, this.secrets, true) as Record<string, unknown>;
+      if (Buffer.byteLength(JSON.stringify(projected)) > PI_RPC_INLINE_BYTES) {
+        // #944: an event whose redacted preview is still larger than the inline
+        // bound used to fail the whole Job (PI_RPC_UNSUPPORTED_LARGE_STRUCTURE).
+        // Hand back a reference instead: the full redacted payload is already
+        // durable in the attempt capture, and the caller reads it by path.
+        return {
+          type: "runtime.rpc_reference",
+          __ref: path,
+          sha256,
+          bytes,
+          evidence_path: evidencePath,
+          event_type: typeof safeRecord.type === "string" ? safeRecord.type : "unknown",
+          original_bytes: originalBytes,
+          redacted: true,
+        };
+      }
       return projected;
     } catch (error) {
       // Exception messages from storage may contain paths/credentials; only stable codes escape.

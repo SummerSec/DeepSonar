@@ -179,7 +179,8 @@ export const CONTROL_RUNTIME_CAPABILITIES: readonly (keyof AgentCliCapabilities)
  * 并允许 `DEEPSONAR_PI_RPC_MAX_EVENT_BYTES` 在 1MB–64MB 之间覆盖。
  */
 export const PI_RPC_MAX_EVENT_BYTES_DEFAULT = 8 * 1024 * 1024;
-export const PI_RPC_MAX_EVENT_BYTES_LIMIT = 64 * 1024 * 1024;
+/** #944: operators may raise the per-event bound up to the 256 MiB hard cap. */
+export const PI_RPC_MAX_EVENT_BYTES_LIMIT = PI_RPC_HARD_MAX_BYTES;
 
 export function piRpcMaxEventBytes(env: NodeJS.ProcessEnv = process.env): number {
   const raw = env.DEEPSONAR_PI_RPC_MAX_EVENT_BYTES?.trim();
@@ -191,7 +192,8 @@ export function piRpcMaxEventBytes(env: NodeJS.ProcessEnv = process.env): number
   return value;
 }
 
-export { PiJsonlFramer } from "./pi-jsonl-framer.js";
+export { PiJsonlFramer, PI_RPC_HARD_MAX_BYTES } from "./pi-jsonl-framer.js";
+import { PI_RPC_HARD_MAX_BYTES } from "./pi-jsonl-framer.js";
 
 const PI_RPC_EVENT_TYPES = new Set([
   "response",
@@ -243,6 +245,9 @@ export function parsePiJsonlRecord(line: string, maxBytes = piRpcMaxEventBytes()
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("PI_RPC_RECORD_NOT_OBJECT");
   const record = value as Record<string, unknown>;
+  // #944: chunk frames are validated (id/seq/total/base64/size) by the assembler,
+  // not by the event allowlist, so they pass through here untouched.
+  if (record.type === "chunk") return record;
   if (typeof record.type !== "string" || !PI_RPC_EVENT_TYPES.has(record.type)) {
     throw new Error("PI_RPC_UNEXPECTED_EVENT");
   }

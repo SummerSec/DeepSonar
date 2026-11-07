@@ -954,7 +954,10 @@ test("#765 上限默认 8MB 且可由环境变量在 1MB–64MB 内覆盖", () =
   assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: String(2 * 1024 * 1024) }), 2 * 1024 * 1024);
   assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: "1024" }), 8 * 1024 * 1024, "低于下限回落默认");
   assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: "abc" }), 8 * 1024 * 1024);
-  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: String(128 * 1024 * 1024) }), 8 * 1024 * 1024, "高于上限回落默认");
+  // #944: the hard cap is 256 MiB now, so a raised bound is honoured up to it.
+  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: String(128 * 1024 * 1024) }), 128 * 1024 * 1024, "128 MiB 现在在上限内");
+  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: String(256 * 1024 * 1024) }), 256 * 1024 * 1024, "硬上限本身可用");
+  assert.equal(piRpcMaxEventBytes({ DEEPSONAR_PI_RPC_MAX_EVENT_BYTES: String(256 * 1024 * 1024 + 1) }), 8 * 1024 * 1024, "高于硬上限回落默认");
 });
 
 test("#765 2MB 级事件在默认上限下不再被判超限", () => {

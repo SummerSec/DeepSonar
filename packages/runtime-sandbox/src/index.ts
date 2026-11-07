@@ -323,6 +323,21 @@ export {
   resolvePiCliModelId,
   splitPiModelRef,
 } from "./runtime-adapters.js";
+export {
+  PI_RPC_CHUNK_BYTES_DEFAULT,
+  PI_RPC_CHUNK_HARD_MAX_BYTES,
+  PI_RPC_CHUNK_MAX_PARTS,
+  PI_RPC_CHUNK_MAX_PENDING,
+  PI_RPC_CHUNK_TIMEOUT_MS,
+  PI_RPC_CHUNK_TYPE,
+  PI_RPC_CHUNKING_ENV,
+  PiRpcChunkAssembler,
+  chunkPiRpcRecord,
+  isPiRpcChunkFrame,
+  piRpcChunkingEnabled,
+  type PiRpcChunkFrame,
+} from "./pi-rpc-chunking.js";
+export { ACK_MEMORY, MAX_ACK_RETRIES } from "./pi-rpc-driver.js";
 export type {
   AgentCliCapabilities,
   AgentCliId,

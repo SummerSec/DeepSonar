@@ -1,5 +1,10 @@
 import type { RuntimeProcess } from "./runtime-host.js";
 
+/** #944: how many times an unacknowledged input is resent before the Job fails. */
+export const MAX_ACK_RETRIES = 3;
+/** #944: bounded memory of settled ids so late duplicate replies stay harmless. */
+export const ACK_MEMORY = 256;
+
 /** One process, one serialized command stream. Never replay an unacknowledged input. */
 export class PiRpcDriver {
   private serial = 0;
@@ -10,6 +15,13 @@ export class PiRpcDriver {
   private bootstrap = "";
   private beforePrompt?: () => Promise<void>;
   private commands = new Map<string, string>();
+  /** #944: last serialized payload per id so an unacknowledged input can be resent. */
+  private payloads = new Map<string, string>();
+  /** #944: how many times each id has been retransmitted. */
+  private attempts = new Map<string, number>();
+  /** #944: ids already acknowledged, so a duplicate reply to a retransmit is not a mismatch. */
+  private acked: string[] = [];
+  private readonly ackedSet = new Set<string>();
   private timers = new Map<string, ReturnType<typeof setTimeout> | undefined>();
   private captureDepth = 0;
   private startPending = false;
@@ -24,7 +36,38 @@ export class PiRpcDriver {
   ) {}
 
   private watch(id: string, code: string): void {
-    this.timers.set(id, this.captureDepth ? undefined : setTimeout(() => this.fail(code), this.timeoutMs));
+    this.timers.set(id, this.captureDepth ? undefined : setTimeout(() => this.onAckTimeout(id, code), this.timeoutMs));
+  }
+
+  /**
+   * #944: `PI_RPC_INPUT_UNACKNOWLEDGED` used to be terminal on the first missed
+   * ACK, even though the same input often succeeds on a retry. Resend the exact
+   * bytes (same id) up to MAX_ACK_RETRIES times with exponential backoff, then
+   * fail. The receiver dedupes by id, so a late first ACK is harmless.
+   */
+  private onAckTimeout(id: string, code: string): void {
+    if (this.error) return;
+    const attempt = this.attempts.get(id) ?? 0;
+    const payload = this.payloads.get(id);
+    if (attempt >= MAX_ACK_RETRIES || payload === undefined) {
+      this.fail(code);
+      return;
+    }
+    this.attempts.set(id, attempt + 1);
+    const backoff = Math.min(this.timeoutMs * 2 ** attempt, this.timeoutMs * 4);
+    const next = this.writes.then(() => this.process.write(payload));
+    this.writes = next.catch(() => {});
+    this.timers.set(id, this.captureDepth ? undefined : setTimeout(() => this.onAckTimeout(id, code), backoff));
+  }
+
+  private rememberAck(id: string): void {
+    if (this.ackedSet.has(id)) return;
+    this.ackedSet.add(id);
+    this.acked.push(id);
+    while (this.acked.length > ACK_MEMORY) {
+      const evicted = this.acked.shift();
+      if (evicted) this.ackedSet.delete(evicted);
+    }
   }
 
   private watchStart(): void {
@@ -57,7 +100,9 @@ export class PiRpcDriver {
     const id = `deepsonar-${++this.serial}`;
     this.commands.set(id, String(command.type));
     this.watch(id, `PI_RPC_ACK_TIMEOUT: ${String(command.type)}`);
-    const next = this.writes.then(() => this.process.write(`${JSON.stringify({ ...command, id })}\n`));
+    const payload = `${JSON.stringify({ ...command, id })}\n`;
+    this.payloads.set(id, payload);
+    const next = this.writes.then(() => this.process.write(payload));
     this.writes = next.catch(() => {});
     return next;
   }
@@ -87,10 +132,19 @@ export class PiRpcDriver {
     if (this.error) throw this.error;
     if (record.type === "response") {
       const id = typeof record.id === "string" ? record.id : "";
-      if (!this.timers.has(id) || this.commands.get(id) !== record.command) throw new Error("PI_RPC_RESPONSE_ID_MISMATCH");
+      if (!this.timers.has(id)) {
+        // A retransmit can produce a second reply for an id we already settled.
+        // Treat it as the duplicate it is instead of failing the Job.
+        if (this.ackedSet.has(id)) return true;
+        throw new Error("PI_RPC_RESPONSE_ID_MISMATCH");
+      }
+      if (this.commands.get(id) !== record.command) throw new Error("PI_RPC_RESPONSE_ID_MISMATCH");
       clearTimeout(this.timers.get(id));
       this.timers.delete(id);
       this.commands.delete(id);
+      this.payloads.delete(id);
+      this.attempts.delete(id);
+      this.rememberAck(id);
       if (record.success !== true) return true; // Adapter owns the terminal error detail.
       if (record.command === "prompt") {
         const disposition = (record.data as { disposition?: unknown } | undefined)?.disposition;
@@ -139,6 +193,8 @@ export class PiRpcDriver {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.commands.clear();
+    this.payloads.clear();
+    this.attempts.clear();
     clearTimeout(this.startTimer);
     this.startTimer = undefined;
     this.startPending = false;
