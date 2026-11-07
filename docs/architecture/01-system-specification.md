@@ -630,7 +630,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 ### FR-IMG-001 可信运行时镜像目录
 
-- **规范要求**：运行时镜像必须来自平台目录，版本必须具备不可变 digest、contract/platform/tool/scan/signature 证据和 trusted 状态；Agent、Hub、任务内容不得提交任意 OCI 引用。
+- **规范要求**：运行时镜像必须来自平台目录，版本必须具备不可变 digest、contract/platform/tool/scan/signature 证据和 trusted 状态；Agent、Hub、任务内容不得提交任意 OCI 引用。精确退休产品不得由旧目录、历史 DB 行或第三方重新登记回流当前市场；原文件完整校验与当前产品投影必须分开，投影不得冒充原签名输入。
 - **决策来源**：镜像是执行供应链和权限边界，产品身份与不可变版本必须分离。
 - **实现状态**：部分达标；准入状态和 digest 约束在目录与 Job snapshot 中保存，签名/SBOM 结果取决于 trust policy 与 registry evidence；未启用签名策略时官方 catalog 可为 `signature: skipped`，真实验证仍需部署证据。
 - **代码入口**：[runtime image schema](../../database/schema.sql)、[image routes](../../apps/scheduler/src/domains/runtime-image/routes.ts)、[registry contract](../../apps/scheduler/src/runtime-image-registry-contract.ts)。
@@ -640,7 +640,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：镜像发布/启用必须经扫描、批准、通道 evidence 和平台兼容性检查；启动 warmup 或通道 pull 未就绪时，Job 创建/派发必须返回可重试的 `runtime_image_not_ready`，不得使用未核验镜像。
 - **决策来源**：目录存在不代表当前宿主或通道可执行，readiness 必须区别准备中、不可用和错误。
-- **实现状态**：as-built；同 digest 通道重试最多使用一次额外 pull attempt，失败保持 fail closed。
+- **实现状态**：as-built；同 digest 通道重试最多使用一次额外 pull attempt，失败保持 fail closed。#964 已补[精确退休软件拦截](../DEPRECATIONS.md#软件拒绝边界9642026-11-07-核对)：新登记/启用/批准/复扫/pull 和直接版本 ID 解析拒绝，queued pull/scan 在副作用前重验，tracked-tag/周期复扫不生新任务；历史 Job/Evidence/审计不改写。HTTP/PG 与副作用契约回归接入 `pnpm ci:integration:runtime-image-promotions`、`pnpm ci:unit:runtime-images`、`pnpm ci:unit:image-admission`，最终 SHA Actions 待验；运营清理未执行且非本轮工程验收前置。
 - **代码入口**：[runtime image readiness](../../apps/scheduler/src/runtime-image-readiness.ts)、[pull/reconcile](../../apps/scheduler/src/runtime-image-reconcile.ts)、[image tests](../../apps/scheduler/src/runtime-image-readiness.test.ts)。
 - **验证证据**：`pnpm ci:unit:runtime-images`、`pnpm ci:integration:runtime-image-channels`、`pnpm ci:unit:runtime-registry`；OpenHarmony Fuzz 的 [原生行为回归](<../../agent-harness/test-openharmony-fuzz-runtime.mjs>)由专项 CI 与 Release 对 fresh/reuse 候选同样执行，覆盖默认工具链、两种 engine、PIE 与 sanitizer 真实报告，见[发布契约](<../RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)。入口存在不等于通过，按最终 SHA / 镜像 digest 的 Actions 结果验收。
 

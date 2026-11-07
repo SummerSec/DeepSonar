@@ -1,5 +1,8 @@
 # Official runtime-image registry contract (Issue #70, Slices A+B+C)
 
+> 状态：as-built；#964 当前产品投影与退休拒绝已落盘，最终 SHA Actions 待验。
+> 同步日期：2026-11-07
+
 > **Status: as-built (2026-10-15); v0.5.5 shipped and wrote Reverse `0.5.5` back to the bundled registry with three-channel inspect evidence. v0.5.6 is in release preparation (#736 / #730 / #734); its tag-triggered Release evidence is still the hard gate.**
 > Index: [`README.md`](README.md). Release procedure:
 > [`RELEASE_RUNTIME_IMAGES.md`](RELEASE_RUNTIME_IMAGES.md).
@@ -14,6 +17,24 @@ evidence for the same canonical digest; the resulting local image is checked
 against that frozen digest. This transport fallback does not change the global
 channel, selected version, or historical Job snapshot. A missing digest or
 unverified/different-digest reference cannot use this fallback and fails closed.
+
+## Current-product retirement projection (#964)
+
+The Scheduler validates the complete original remote/upload/bundled asset before applying
+[the exact shared retirement policy](../packages/shared-types/src/runtime-image-retirement.ts).
+The current catalog excludes retired products and declares `excluded_retired_image_keys` as
+server-owned projection metadata. It preserves source/platform/staleness metadata and all
+other valid products; this filtered JSON is **not** the original signed release asset and
+must not be presented as its signature input. Trusted historical DB rows cannot refill
+retired products through registry overrides. Existing immutable Job snapshots, Evidence
+and audit records remain unchanged and do not authorize new execution.
+
+Management APIs return `410` / `error_code: RUNTIME_IMAGE_RETIRED` for retired new admission,
+enablement, rescan and pull requests, including direct version-ID resolution. Queued pulls
+and admission scans recheck before external pull; tracked tags and periodic rescans cannot
+create work for retired products. Software guards and CI regressions are implemented;
+final-SHA Actions are pending. Operational cleanup/GC has not run and is not a prerequisite
+for this software acceptance. See [retirement boundaries](DEPRECATIONS.md#软件拒绝边界9642026-11-07-核对).
 
 ## v2 shape
 

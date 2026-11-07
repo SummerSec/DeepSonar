@@ -2,6 +2,7 @@ import { readRepairTokenBudget, assertRepairExecutionOwner } from "./domains/eve
 import { frozenTaskContract, taskContractPreflight, TaskContractBlockedError } from "./task-contract-preflight.js";
 import {tickKnowledgeBeforeDispatch} from "./dispatcher-knowledge-gate.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
+import { assertCurrentRuntimeImageKey } from "@deepsonar/shared-types";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import { config, managesHostDockerRuntime } from "./config.js";
@@ -1028,7 +1029,11 @@ async function runJob(jobId: string) {
         });
       if (blockers.length) throw new TaskContractBlockedError(blockers);
     }
+    if (useReal && (typeof snapshot.runtime_image?.image_key !== "string" || !snapshot.runtime_image.image_key.trim())) {
+      throw new Error("RUNTIME_IMAGE_SNAPSHOT_INVALID: missing frozen runtime_image.image_key");
+    }
     const runtimeImageKey = String(snapshot.runtime_image?.image_key ?? snapshot.runtime_image_key ?? "");
+    assertCurrentRuntimeImageKey(runtimeImageKey); // Reject new execution, never rewrite archived snapshot bytes.
     // Hub 与 Worker 共用 Job 创建时冻结的 allow_egress。
     const allowEgress = useReal && snapshotAllowEgress;
     assertChromeRuntimeEgressAllowed(runtimeImageKey, snapshotAllowEgress);

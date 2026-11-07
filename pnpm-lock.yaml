@@ -39,6 +39,9 @@ importers:
       '@deepsonar/runtime-manual-contract':
         specifier: workspace:*
         version: link:../../packages/runtime-manual-contract
+      '@deepsonar/shared-types':
+        specifier: workspace:*
+        version: link:../../packages/shared-types
       postgres:
         specifier: ^3.4.9
         version: 3.4.9

@@ -1,4 +1,5 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
+import { isRetiredRuntimeImageKey, RETIRED_RUNTIME_IMAGE_KEYS, RuntimeImageRetiredError } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
 import { config, managesHostDockerRuntime } from "../../config.js";
@@ -104,6 +105,12 @@ function denyProjectScopedCatalog(
   return reply.code(403).send({ error, error_code: PROJECT_SCOPE_FORBIDDEN });
 }
 
+function denyRetiredRuntimeImage(reply: FastifyReply, imageKey: unknown): unknown | null {
+  if (!isRetiredRuntimeImageKey(imageKey)) return null;
+  const error = new RuntimeImageRetiredError(String(imageKey));
+  return reply.code(error.statusCode).send({ error: error.message, error_code: error.code, image_key: error.imageKey });
+}
+
 export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   // ---------- 可信运行时镜像目录 / 市场（P1-P3） ----------
   // Platform-only mutations: catalog sync/apply/pull, import, digest, rescan,
@@ -158,7 +165,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
                  v.promoted_at DESC NULLS LAST, v.approved_at DESC NULLS LAST, v.created_at DESC
         LIMIT 1
       ) latest ON true
-      WHERE (${search}::text IS NULL OR ri.name ILIKE ${search} OR ri.image_key ILIKE ${search}
+      WHERE ri.image_key <> ALL(${[...RETIRED_RUNTIME_IMAGE_KEYS]}::text[])
+        AND (${search}::text IS NULL OR ri.name ILIKE ${search} OR ri.image_key ILIKE ${search}
              OR ri.publisher ILIKE ${search})
       ORDER BY ri.official DESC, ri.name`;
     return rows.map((row) => ({
@@ -352,6 +360,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       if (error instanceof z.ZodError) {
         return reply.code(400).send({ error: error.issues[0]?.message ?? "无效的拉取请求" });
       }
+      if (error instanceof RuntimeImageRetiredError) return denyRetiredRuntimeImage(reply, error.imageKey);
       const message = sanitizeRuntimeImageError(error) || "启动镜像拉取失败";
       if (error instanceof RuntimeImageChannelUnavailableError) {
         return reply.code(error.statusCode).send({
@@ -412,6 +421,7 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
   const inspectLocalRuntimeImageForProduct = async (productId: string, imageRef: string) => {
     const [image] = await sql`SELECT id, image_key, official, enabled FROM runtime_images WHERE id = ${productId}`;
     if (!image) return { image: null, inspection: null } as const;
+    if (isRetiredRuntimeImageKey(image.image_key)) return { image, inspection: null } as const;
     const refs = await sql`
       SELECT image_ref, resolved_ref FROM runtime_image_versions
       WHERE runtime_image_id = ${productId}`;
@@ -449,6 +459,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const body = LocalRuntimeImageInspectBody.parse(req.body);
     const result = await inspectLocalRuntimeImageForProduct(id, body.image_ref);
     if (!result.image) return reply.code(404).send({ error: "runtime image not found" });
+    const retired = denyRetiredRuntimeImage(reply, result.image.image_key);
+    if (retired) return retired;
     return reply.send({
       product_id: id,
       product_key: result.image.image_key,
@@ -471,6 +483,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     }
     const result = await inspectLocalRuntimeImageForProduct(id, body.image_ref);
     if (!result.image) return reply.code(404).send({ error: "runtime image not found" });
+    const retired = denyRetiredRuntimeImage(reply, result.image.image_key);
+    if (retired) return retired;
     if (!result.image.official) {
       return reply.code(400).send({
         error: "本地直接采用仅适用于官方产品；第三方镜像仍须经过导入、准入扫描与管理员批准",
@@ -604,6 +618,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const { id } = req.params as { id: string };
     const [image] = await sql`SELECT * FROM runtime_images WHERE id = ${id}`;
     if (!image) return reply.code(404).send({ error: "runtime image not found" });
+    const retired = denyRetiredRuntimeImage(reply, image.image_key);
+    if (retired) return retired;
     const versions = await sql`
       SELECT v.*,
              COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.created_at DESC)
@@ -625,6 +641,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const body = OfficialRuntimeImageDigestBody.parse(req.body);
     const [image] = await sql`SELECT * FROM runtime_images WHERE id = ${id}`;
     if (!image) return reply.code(404).send({ error: "runtime image not found" });
+    const retired = denyRetiredRuntimeImage(reply, image.image_key);
+    if (retired) return retired;
     if (!image.official) {
       return reply.code(400).send({ error: "仅官方镜像可通过此接口登记 digest；第三方请走导入 + 准入扫描 + 批准" });
     }
@@ -714,6 +732,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const denied = denyProjectScopedCatalog(req, reply);
     if (denied) return denied;
     const body = ManualRuntimeImageDigestBody.parse(req.body);
+    const retired = denyRetiredRuntimeImage(reply, body.image_key);
+    if (retired) return retired;
     const digest = immutableDigest(body.image_ref);
     if (!digest) return reply.code(400).send({ error: "必须使用不可变引用 name@sha256:64hex" });
     if (!config.images.isRegistryAllowed(body.image_ref)) {
@@ -774,6 +794,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const denied = denyProjectScopedCatalog(req, reply);
     if (denied) return denied;
     const body = RuntimeImageImportBody.parse(req.body);
+    const retired = denyRetiredRuntimeImage(reply, body.image_key);
+    if (retired) return retired;
     if (isOfficialRuntimeImageKey(body.image_key)) {
       return reply.code(400).send({ error: "official runtime images must come from the server-owned catalog and admission flow" });
     }
@@ -856,6 +878,11 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const denied = denyProjectScopedCatalog(req, reply);
     if (denied) return denied;
     const { id } = req.params as { id: string };
+    const [product] = await sql`
+      SELECT ri.image_key FROM runtime_image_versions v
+      JOIN runtime_images ri ON ri.id = v.runtime_image_id WHERE v.id = ${id}`;
+    const retired = denyRetiredRuntimeImage(reply, product?.image_key);
+    if (retired) return retired;
     const [version] = await sql`
       UPDATE runtime_image_versions SET
         trust_status = CASE WHEN trust_status = 'trusted' THEN 'trusted' ELSE 'quarantined' END,
@@ -880,6 +907,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       SELECT v.*, ri.image_key FROM runtime_image_versions v
       JOIN runtime_images ri ON ri.id = v.runtime_image_id WHERE v.id = ${id}`;
     if (!before) return reply.code(404).send({ error: "version not found" });
+    const retired = denyRetiredRuntimeImage(reply, before.image_key);
+    if (retired) return retired;
     if (body.status === "trusted") {
       const [scan] = await sql`
         SELECT id, status FROM runtime_image_scans WHERE runtime_image_version_id = ${id}
@@ -976,6 +1005,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const [image] = await sql`
       SELECT id, image_key, enabled, official, visible_project_ids
       FROM runtime_images WHERE id = ${imageId}`;
+    const retired = denyRetiredRuntimeImage(reply, image?.image_key);
+    if (retired) return retired;
     if (!image?.enabled) return reply.code(404).send({ error: "runtime image not found or disabled" });
     const imageKey = String(image.image_key);
     if (imageKey === PLATFORM_BASE_RUNTIME_IMAGE_KEY && body.enabled === false) {
@@ -1052,6 +1083,8 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     const body = RuntimeImageVisibilityBody.parse(req.body);
     const [image] = await sql`SELECT id, image_key, official, visible_project_ids FROM runtime_images WHERE id = ${id}`;
     if (!image) return reply.code(404).send({ error: "runtime image not found" });
+    const retired = denyRetiredRuntimeImage(reply, image.image_key);
+    if (retired) return retired;
     if (image.official === true) {
       return reply.code(400).send({
         error: "官方镜像对所有项目默认可见，无需设置 visible_project_ids",

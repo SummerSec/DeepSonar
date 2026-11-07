@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { assertCurrentRuntimeImageKey, isRetiredRuntimeImageKey, RuntimeImageRetiredError } from "@deepsonar/shared-types";
+import { currentRuntimeImageRegistry } from "./runtime-image-retirement.js";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { isOfficialRuntimeImageKey, runtimeManualFromScanSummary, type RuntimeManualMetadata } from "./runtime-image-manual.js";
@@ -454,6 +456,9 @@ export class RuntimeImagePinStaleError extends Error {
 }
 
 export function runtimeImageHttpError(error: unknown): { statusCode: number; body: Record<string, unknown> } | null {
+  if (error instanceof RuntimeImageRetiredError) {
+    return { statusCode: error.statusCode, body: { error: error.message, error_code: error.code, image_key: error.imageKey } };
+  }
   if (error instanceof RuntimeImageBelowPlatformMinError) {
     return {
       statusCode: error.statusCode,
@@ -820,18 +825,8 @@ async function loadBundledRuntimeImageRegistry(): Promise<RuntimeImageRegistry> 
   for (const filePath of candidates) {
     try {
       const file = await readFile(filePath, "utf8");
-      const raw = JSON.parse(file) as { images?: Array<{ versions?: unknown[] }> };
-      // Pre-manual catalog rows (e.g. v0.4.5) are product skeletons only: drop
-      // versions that lack offline manuals so the fail-closed parser can load.
-      if (Array.isArray(raw.images)) {
-        for (const image of raw.images) {
-          if (!Array.isArray(image.versions)) continue;
-          image.versions = image.versions.filter((version) => {
-            return Boolean(version && typeof version === "object" && !Array.isArray(version) && (version as { manual?: unknown }).manual);
-          });
-        }
-      }
-      return parseRegistry(raw);
+      // Validate the original asset in full before any current-product projection.
+      return parseRegistry(JSON.parse(file) as unknown);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw new Error(`读取运行时镜像注册表失败（${filePath}）：${error instanceof Error ? error.message : String(error)}`);
@@ -931,7 +926,7 @@ export async function loadRuntimeImageRegistry(options: { refreshRemote?: boolea
       min_runtime_image: resolveMinRuntimeImage(remote, bundled) ?? undefined,
       platform_version: remote.platform_version ?? bundled.platform_version,
       images,
-      source: "remote" as const,
+      source: remote.source === "upload" ? "upload" as const : "remote" as const,
       fallback: false,
       // 服务上次成功清单时带上诊断与 stale 标记；平台更新检查据此不降级。
       error: remoteRegistryCache?.error ?? null,
@@ -943,10 +938,10 @@ export async function loadRuntimeImageRegistry(options: { refreshRemote?: boolea
       checked_at: checkedAt,
     };
     rememberAppliedMinRuntimeImage(merged.min_runtime_image ?? null);
-    return merged;
+    return currentRuntimeImageRegistry(merged);
   }
   rememberAppliedMinRuntimeImage(bundled.min_runtime_image ?? null);
-  return {
+  return currentRuntimeImageRegistry({
     ...bundled,
     source: "bundled",
     fallback: true,
@@ -957,7 +952,7 @@ export async function loadRuntimeImageRegistry(options: { refreshRemote?: boolea
       ? new Date(remoteRegistryCache.last_success_at).toISOString()
       : undefined,
     checked_at: checkedAt,
-  };
+  });
 }
 
 function envOfficialOverrides(): Array<{ image_key: string; image_ref: string }> {
@@ -971,7 +966,7 @@ function envOfficialOverrides(): Array<{ image_key: string; image_ref: string }>
 
 export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageRegistry> {
   const registry = await loadRuntimeImageRegistry();
-  const images = registry.images.map((image) => ({ ...image, versions: [...image.versions] }));
+  const images = currentRuntimeImageRegistry(registry).images.map((image) => ({ ...image, versions: [...image.versions] }));
   for (const override of envOfficialOverrides()) {
     const image = images.find((item) => item.image_key === override.image_key);
     if (!image || image.versions.length > 0) continue;
@@ -996,6 +991,7 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
     JOIN runtime_image_versions v ON v.runtime_image_id = ri.id
     WHERE ri.official = true AND v.trust_status = 'trusted'`;
   for (const row of trustedVersions) {
+    if (isRetiredRuntimeImageKey(row.image_key)) continue;
     const rowImageRef = typeof row.image_ref === "string" ? row.image_ref : null;
     const rowResolvedRef = typeof row.resolved_ref === "string" ? row.resolved_ref : null;
     const legacyRefCandidates = [rowImageRef, rowResolvedRef]
@@ -1082,12 +1078,12 @@ export async function runtimeImageRegistryWithOverrides(): Promise<RuntimeImageR
   }
   // #763：只替换 images，其余顶层字段（stale / consecutive_failures / last_success_at /
   // platform / platform_version / min_runtime_image）原样保留，否则诊断状态与平台元数据会被静默丢弃。
-  return { ...registry, images };
+  return { ...currentRuntimeImageRegistry(registry), images };
 }
 
 /** 导出仅为覆盖 override 投影的字段保留语义（#763）。 */
 export function registryWithEnvOverrides(registry: RuntimeImageRegistry): RuntimeImageRegistry {
-  const images = registry.images.map((image) => ({ ...image, versions: [...image.versions] }));
+  const images = currentRuntimeImageRegistry(registry).images.map((image) => ({ ...image, versions: [...image.versions] }));
   for (const override of envOfficialOverrides()) {
     const image = images.find((item) => item.image_key === override.image_key);
     if (!image || image.versions.length > 0) continue;
@@ -1095,7 +1091,7 @@ export function registryWithEnvOverrides(registry: RuntimeImageRegistry): Runtim
   }
   // #763：只替换 images，其余顶层字段（stale / consecutive_failures / last_success_at /
   // platform / platform_version / min_runtime_image）原样保留，否则诊断状态与平台元数据会被静默丢弃。
-  return { ...registry, images };
+  return { ...currentRuntimeImageRegistry(registry), images };
 }
 
 /**
@@ -1158,7 +1154,7 @@ export async function applyOfficialRuntimeCatalog(
     const sourceImage = loadedRegistry.images.find((item) => item.image_key === override.image_key);
     return sourceImage && sourceImage.versions.length === 0 ? [override.image_key] : [];
   }));
-  const registry = applyEnv ? registryWithEnvOverrides(loadedRegistry) : loadedRegistry;
+  const registry = currentRuntimeImageRegistry(applyEnv ? registryWithEnvOverrides(loadedRegistry) : loadedRegistry);
   const selectedRefs = new Map<RuntimeImageRegistryVersion, string>();
   // 先完成纯函数预检，避免清单只同步了前半部分后才因 registry 不匹配失败。
   for (const item of registry.images) {
@@ -1570,6 +1566,7 @@ export async function runRuntimeImagePreparationTask(
       item.started_at = new Date().toISOString();
       await persistRuntimeImagePullTask(task);
       try {
+        assertCurrentRuntimeImageKey(item.image_key);
         item.target_digest = item.target_digest ?? immutableDigest(item.image_ref);
         const result = await prepare(item.image_ref);
         item.status = "succeeded";
@@ -1586,7 +1583,7 @@ export async function runRuntimeImagePreparationTask(
         item.failure_class = typeof meta.failure_class === "string"
           ? meta.failure_class
           : classifyRuntimeImagePullFailure(error);
-        item.error_code = item.failure_class === "digest_missing"
+        item.error_code = error instanceof RuntimeImageRetiredError ? error.code : item.failure_class === "digest_missing"
           ? "digest_missing"
           : item.failure_class === "auth"
             ? "auth_failed"
@@ -1639,6 +1636,7 @@ function uniqueRuntimeImagePreparationRefs(
   const seen = new Set<string>();
   const unique: Array<{ image_key: string; image_ref: string }> = [];
   for (const item of refs) {
+    assertCurrentRuntimeImageKey(item.image_key);
     const digest = immutableDigest(item.image_ref);
     const key = digest ?? item.image_ref;
     if (seen.has(key)) continue;
@@ -1719,6 +1717,7 @@ export async function requestRuntimeImagePreparation(
 ): Promise<{ ready: true } | { ready: false; task: RuntimeImagePullTask }> {
   const missing: Array<{ image_key: string; image_ref: string }> = [];
   for (const item of refs) {
+    assertCurrentRuntimeImageKey(item.image_key);
     try {
       await assertRuntimeImageAvailable(item.image_ref, dependencies.inspect);
     } catch (error) {
@@ -1731,6 +1730,8 @@ export async function requestRuntimeImagePreparation(
 }
 
 export async function startRuntimeImagePull(input: StartRuntimeImagePullInput = {}): Promise<RuntimeImagePullTask> {
+  for (const key of input.image_keys ?? []) assertCurrentRuntimeImageKey(key.trim());
+  for (const item of input.items ?? []) assertCurrentRuntimeImageKey(item.image_key.trim());
   if (input.items && input.items.length > 0) {
     const exact: Array<{ image_key: string; image_ref: string }> = [];
     for (const item of input.items) {
@@ -2073,6 +2074,7 @@ export async function listHubRuntimeImageCatalog(
     ORDER BY ri.official DESC, ri.image_key`;
   const minRuntimeImage = platformMinRuntimeImage();
   const entries = await Promise.all(rows.map(async (row) => {
+    if (isRetiredRuntimeImageKey(row.image_key)) return null;
     const entry = toHubRuntimeImageCatalogEntry(row);
     if (!entry) return null;
     if (isRuntimeImageBelowPlatformMin({
@@ -2101,6 +2103,7 @@ export async function resolveRuntimeImageForJob(
   channelOverride?: RuntimeImageRegistryChannel,
 ): Promise<RuntimeImageSnapshot> {
   const imageKey = configuredKey || defaultRuntimeImageKey(roleName);
+  assertCurrentRuntimeImageKey(imageKey);
   if (config.runtime.agentMode === "fake") return fakeSnapshot(imageKey);
   const selectedChannel = channelOverride ?? await readRuntimeRegistryChannel(db, "share");
   const [image] = await db`
@@ -2183,6 +2186,8 @@ async function selectRuntimeImageSnapshot(
   selectedChannel: RuntimeImageRegistryChannel,
   projectId?: string | null,
 ): Promise<RuntimeImageSnapshot> {
+  const [product] = await db`SELECT image_key FROM runtime_images WHERE id = ${imageId}`;
+  if (product) assertCurrentRuntimeImageKey(String(product.image_key));
   const hostPlatform = hostRuntimePlatform();
   const row = await queryExecutableRuntimeImageVersion(db, imageId, selectedVersionId, selectedChannel, hostPlatform);
   if (!row && selectedVersionId) {

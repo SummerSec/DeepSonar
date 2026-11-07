@@ -1,7 +1,7 @@
 # 07 部署视图
 
 > 状态：**as-built**（#741）。描述生产 Compose、运行时网络、镜像准入、远程 Worker/设备和多副本限制；地址与凭据由部署环境提供。
-> 同步日期：2026-11-01
+> 同步日期：2026-11-07
 
 部署事实来自 `deploy/` 下的 Compose 文件、运行时包和镜像准入代码。下图省略了环境变量值、镜像摘要和密钥，只保留拓扑和连接方向。当前 Compose 的 Scheduler、Web、image-admission 平台服务各由一个 Release 同步的完整不可变引用选择（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:...`，#740 P1 第 3 片），部署版本由显式 `DEEPSONAR_VERSION` 声明；`DEEPSONAR_IMAGE_TAG` 已删除，`deploy.sh` / `deploy.ps1` 对旧变量与非 digest 引用 fail closed。OpenSandbox/Worker 的基础服务同样由 Compose 使用摘要固定。Job runtime image 则必须经过准入并在快照中保存解析后的不可变 digest，二者不能混为一谈。#745 的 `platform` catalog 用于版本发现；发布路径还提供经 inspect 校验的平台 digest，宿主升级据此选择目标。原同 schema 路径保留，维护升级的身份隔离、候选库和受管节点路径已接线，不能由模块存在推定真实部署验收通过。平台镜像的 registry 通道由 `deploy/platform-release-catalog.mjs` 单点定义，升级沿用当前部署通道而不静默迁移，签名验证固定 GHCR（#842）。
 
@@ -53,6 +53,8 @@ flowchart LR
 ```
 
 镜像准入按 `DEEPSONAR_COSIGN_*` 配置检查签名或 keyless identity/issuer、扫描结果、不可变摘要和运行时工具手册契约；未启用签名策略时，官方 catalog 可记录 `signature: skipped`，这不等于已完成签名验证。第三方镜像的 critical/secret 扫描失败会阻止信任；官方镜像的结果也会记录和告警。`image-admission` 直接拉取并检查 Registry，然后把 digest、扫描和 trust 状态写入 PostgreSQL；Scheduler 读取这些管理表，创建 Job 时把可用镜像选择冻结。Agent、Hub、导入包和任意管理文本不能提交新的 OCI 源。实现参考 [`trust-policy.ts`](../../apps/image-admission/src/trust-policy.ts)、[`cosign-verify.ts`](../../apps/image-admission/src/cosign-verify.ts) 和 [`runtime-manual-contract`](../../packages/runtime-manual-contract/src/index.ts)。
+
+#952/#964 的[退休镜像策略](../DEPRECATIONS.md#软件拒绝边界9642026-11-07-核对)在 Scheduler 当前目录/管理 API 和 admission Worker 共用精确 key 判定。旧 remote 与 trusted DB 管理行不能回流当前市场；新登记、批准、启用、复扫、pull 和直接版本 ID 解析 fail closed，queued pull/scan 在外部 pull 前重验，tracked tags / 周期复扫不再生成工作。原发布目录先完整校验再作带 exclusions 的产品投影，历史快照/Evidence/审计不删除或重绑。种子删除不改 schema 结构；运营清库/GC 未执行，不作为本轮软件验收前置。回归已接 CI，最终 SHA Actions 待验。
 
 OpenHarmony Fuzz 的工具链与发布检查（核对 2026-11-01）见[发布契约](<../RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)和[工具链边界](<../RUNTIME_TEST_TOOLCHAINS.md>)。镜像内 Clang/compiler-rt 与 AFL++ 插件匹配；现有专项 CI 和 Release 对 fresh / reused 候选均执行双架构原生 sanitizer 与真实 harness 编译回归，失败阻止后续发布。QEMU 的静态 ELF 检查不冒充动态执行，缓存命中不代表当前宿主可运行；合成回归不证明 OpenHarmony 产品、真机或生产质量。具体运行结果以修复 PR / Release 的精确 SHA 与镜像摘要证据为准。
 

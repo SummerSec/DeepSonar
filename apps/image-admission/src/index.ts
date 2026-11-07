@@ -1,3 +1,4 @@
+import { assertCurrentRuntimeImageKey, isRetiredRuntimeImageKey, RETIRED_RUNTIME_IMAGE_KEYS, RuntimeImageRetiredError } from "@deepsonar/shared-types";
 import { AdmissionMaintenanceBlocked, createAdmissionMaintenanceGate, type AdmissionUpgradeState } from "./maintenance.js";
 import { execFile, spawn } from "node:child_process";
 import { createDecipheriv, randomUUID } from "node:crypto";
@@ -11,7 +12,7 @@ import {
   skippedSignatureResult,
   wrapCosignVerifyError,
 } from "./cosign-verify.js";
-import { normalizePreferredRegistry, selectAdmissionImageRef } from "./registry-ref.js";
+import { normalizePreferredRegistry, pullAdmissionRuntimeImage, selectAdmissionImageRef } from "./registry-ref.js";
 import { resolveScannerImages, type ScannerName } from "./scanner-config.js";
 import {
   evaluateVulnerabilityAdmissionPolicy,
@@ -164,7 +165,10 @@ async function claimScan(): Promise<Record<string, unknown> | null> {
       UPDATE runtime_image_versions SET
         trust_status = CASE WHEN trust_status = 'trusted' THEN 'trusted' ELSE 'scanning' END,
         updated_at = now()
-      WHERE id = ${scan.runtime_image_version_id as string} AND trust_status <> 'revoked'`;
+      WHERE id = ${scan.runtime_image_version_id as string} AND trust_status <> 'revoked'
+        AND runtime_image_id NOT IN (
+          SELECT id FROM runtime_images WHERE image_key = ANY(${[...RETIRED_RUNTIME_IMAGE_KEYS]}::text[])
+        )`;
     const [row] = await tx`
       SELECT s.id AS scan_id, s.result_json AS scan_seed, v.*, ri.image_key, ri.source_kind
       FROM runtime_image_scans s
@@ -192,6 +196,7 @@ async function claimScan(): Promise<Record<string, unknown> | null> {
 }
 
 async function inspectAndScanAuthorized(row: Record<string, unknown>) {
+  assertCurrentRuntimeImageKey(String(row.image_key));
   const scanId = row.scan_id as string;
   const versionId = row.id as string;
   if (row.scan_selection_error) throw new Error(String(row.scan_selection_error));
@@ -203,7 +208,7 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
   if (!allowedRegistries.has(registryOf(imageRef))) throw new Error(`registry not allowed: ${registryOf(imageRef)}`);
 
   await sql`UPDATE runtime_image_scans SET status = 'running' WHERE id = ${scanId}`;
-  await docker(["pull", imageRef]);
+  await pullAdmissionRuntimeImage(String(row.image_key), imageRef, (ref) => docker(["pull", ref]));
   const inspect = JSON.parse(await docker(["image", "inspect", imageRef]))[0] as Record<string, unknown>;
   const repoDigests = (inspect.RepoDigests as string[] | undefined) ?? [];
   const resolvedRef = /@sha256:[0-9a-f]{64}$/.test(imageRef) ? imageRef : repoDigests[0];
@@ -327,6 +332,7 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
 }
 
 async function inspectAndScan(row: Record<string, unknown>) {
+  assertCurrentRuntimeImageKey(String(row.image_key));
   if (row.scan_selection_error) throw new Error(String(row.scan_selection_error));
   const closeRegistrySession = await registrySession(row);
   try { await inspectAndScanAuthorized(row); }
@@ -359,6 +365,13 @@ async function writeAdmissionAudit(action: string, row: Record<string, unknown>,
 }
 
 async function fail(row: Record<string, unknown>, error: unknown) {
+  if (error instanceof RuntimeImageRetiredError) {
+    await sql`
+      UPDATE runtime_image_scans SET status = 'failed', error = ${error.message},
+        result_json = COALESCE(result_json, '{}'::jsonb) || ${sql.json({ error_code: error.code })},
+        finished_at = now() WHERE id = ${String(row.scan_id)}`;
+    return; // Preserve historical versions, Jobs, snapshots and audit facts.
+  }
   const message = error instanceof Error ? error.message : String(error);
   const scanSeed = row.scan_seed && typeof row.scan_seed === "object"
     ? row.scan_seed as Record<string, unknown>
@@ -423,7 +436,7 @@ async function tick() {
 /** 只发现新 digest，不自动替换；新版本仍从 quarantined 开始。 */
 async function checkTrackedTags() {
   const tracked = await sql`
-    SELECT v.id, v.runtime_image_id, v.version, v.image_ref, v.digest
+    SELECT v.id, v.runtime_image_id, v.version, v.image_ref, v.digest, ri.image_key
     FROM runtime_image_versions v
     JOIN runtime_images ri ON ri.id = v.runtime_image_id
     WHERE v.trust_status = 'trusted' AND ri.enabled = true
@@ -437,8 +450,9 @@ async function checkTrackedTags() {
         )
       )`;
   for (const row of tracked) {
+    if (isRetiredRuntimeImageKey(row.image_key)) continue;
     try {
-      await docker(["pull", row.image_ref as string]);
+      await pullAdmissionRuntimeImage(String(row.image_key), String(row.image_ref), (ref) => docker(["pull", ref]));
       const raw = JSON.parse(await docker(["image", "inspect", row.image_ref as string]))[0] as { RepoDigests?: string[] };
       const resolved = raw.RepoDigests?.[0];
       const digest = resolved?.match(/@(sha256:[0-9a-f]{64})$/)?.[1];
@@ -468,7 +482,9 @@ async function queueContinuousRescans() {
   await sql`
     INSERT INTO runtime_image_scans (runtime_image_version_id)
     SELECT v.id FROM runtime_image_versions v
+    JOIN runtime_images ri ON ri.id = v.runtime_image_id
     WHERE v.trust_status = 'trusted'
+      AND ri.image_key <> ALL(${[...RETIRED_RUNTIME_IMAGE_KEYS]}::text[])
       AND COALESCE(v.scanned_at, '-infinity'::timestamptz) < now() - (${Math.round(continuousRescanMs / 1000)} * interval '1 second')
       AND (
         v.promoted_at IS NOT NULL
