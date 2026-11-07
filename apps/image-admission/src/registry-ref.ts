@@ -1,4 +1,16 @@
+import { assertCurrentRuntimeImageKey } from "@deepsonar/shared-types";
+
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+
+/** Last side-effect boundary for queued scans and tracked-tag discovery. */
+export async function pullAdmissionRuntimeImage(
+  imageKey: string,
+  imageRef: string,
+  pull: (imageRef: string) => Promise<unknown>,
+): Promise<void> {
+  assertCurrentRuntimeImageKey(imageKey);
+  await pull(imageRef);
+}
 
 export function normalizePreferredRegistry(value: string): string {
   const normalized = value.trim().toLowerCase().replace(/\/+$/, "");
@@ -30,6 +42,7 @@ export function selectAdmissionImageRef(input: {
   preferredRegistry?: string;
   registryRefs?: readonly string[];
 }): string {
+  assertCurrentRuntimeImageKey(input.imageKey);
   if (input.sourceKind !== "official") return input.imageRef;
   const preferred = normalizePreferredRegistry(input.preferredRegistry ?? "");
   if (!preferred) return input.imageRef;

@@ -1,5 +1,8 @@
 # 已下线能力（DEPRECATIONS）
 
+> 状态：物理下线与软件拒绝已落盘，最终 SHA Actions 待验；运营清理未执行。
+> 同步日期：2026-11-07
+
 本文件记录**物理下线**的能力：不只是停止推荐，而是代码、构建资产、注册表条目与流水线都已删除。
 已下线能力不保留兼容层、双读双写或「仍在但禁用」的开关；旧配置或旧引用必须 fail closed。
 
@@ -37,6 +40,27 @@ ClickHouse 审计能力，走「`deepsonar-base` / `deepsonar-audit` + 沙箱内
 - `audit_logs` 中的历史记录**不删除**（审计不可删）。
 - 历史 Job 的 `agent_snapshot_json.runtime_image` 冻结快照不变，仍可追溯当时 digest。
 - `CHANGELOG.md` 的历史发布条目保留原文。
+
+### 软件拒绝边界（#964，2026-11-07 核对）
+
+[共享退休策略](../packages/shared-types/src/runtime-image-retirement.ts)只精确拒绝上述三个完整 key，
+不按前缀匹配，不把 lookalike 或其它合法产品一起停用。原始 remote / upload / bundled 目录先完整校验，
+随后由 [当前产品投影](../apps/scheduler/src/runtime-image-retirement.ts)排除退休 key；API 的
+`excluded_retired_image_keys` 是服务端策略元数据，不属于原始发布制品或签名原文。
+其余产品和原目录的 platform / source / stale 等元数据保留，不把投影 JSON 冒充原签名输入。
+
+旧数据库管理行可为历史保留，但不能回填到当前市场、Hub 目录或 registry override；
+manual/import、官方登记、本地采用、启用、批准、复扫、新 Job 和直接版本 ID 解析均拒绝退休产品，
+管理 API 返回 `410` / `error_code: RUNTIME_IMAGE_RETIRED`。新拉取请求和已有 queued pull/scan
+在外部 pull 前再次拒绝；tracked-tag discovery 和周期复扫不能为退休产品创建新版本或扫描任务。
+不删除、重绑或改写历史 Job frozenSnapshot、Evidence、事件和审计；旧 Job 不能因此获得新执行许可。
+删除目录种子不改变 schema 结构，不 bump schema 版本，也不恢复旧输入或增加兼容 fallback。
+
+软件拦截已落盘，验收仍待最终 SHA Actions；本轮未执行本地测试、构建、typecheck、容器、数据库或生产实测。
+[HTTP/PG 回归](../apps/scheduler/src/runtime-image-retirement.integration.test.ts)接入
+`pnpm ci:integration:runtime-image-promotions`；目录和排队拉取回归接入 `pnpm ci:unit:runtime-images`，
+Worker pull 副作用边界回归接入 `pnpm ci:unit:image-admission`，均由既有核心 CI 调用。
+运营清库/GC 未执行，且不是本轮软件工程验收前置条件。
 
 ### 运维清理（既有部署库，需单独授权执行）
 

@@ -127,6 +127,8 @@ export interface RuntimeImageRegistry {
   /** Platform-declared minimum official runtime-image version. */
   min_runtime_image?: MinRuntimeImageRequirement;
   images: RuntimeImageRegistryImage[];
+  /** Server-owned current-product projection, not part of the original release asset/signature. */
+  excluded_retired_image_keys?: string[];
   /** Scheduler-owned provenance metadata; never an OCI channel selector. */
   source?: RuntimeImageRegistryMetadataSource;
   fallback?: boolean;

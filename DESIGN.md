@@ -314,6 +314,8 @@ OpenSandbox upgrade baseline (2026-11-01): installed SDK 1.2 and canonical serve
 
 **Model Gateway 透明传输（#923）：** 新 Job 冻结非秘密 provider 配置摘要，secret-only 轮换可用，目标/业务头变化及旧 Job 缺绑定明确拒绝；目录与推理/model 默认头分层，客户端业务头优先。旧 Job 的显式 refreeze 与未知效果恢复边界见专题，需与 #903 联合验收。 已授权请求保持原始方法、路径/query、端到端头与 body；绑定认证、目标和 HTTP framing 由内核控制，不隐式重试/重定向或改写模型/输出参数。请求流先有界收全再准入；响应/SSE 原字节及时转发，usage 旁路观察。三 CLI 主请求经沙箱显式准入适配器核对原预算 allowance，合规原字节转发，不合规直接拒绝；Pi 通过原生 provider SDK hook 逐次准备 cap/usage，Claude 只接启动/resume 原生上限；DSH 通过锁版本/摘要的独立 vendor adapter 在 SDK 调用前逐次协商；Claude Code 2.1.312 保留 start/resume 原生启动输出上限，运行中余额不足时明确拒绝并提示，不修改已形成 body；用户已接受此兼容限制，不要求逐请求自动适配，该范围决定不再阻塞发布。quota/DB 回滚降级依赖原 events 的 scoped kernel 无效果回执，同 UUID 不重发；OM wrapper 在 scoped 持久结算确认前不提交终止结果，保持 pending/unknown 与主后台隔离。详见[透明传输契约](docs/MODEL_GATEWAY_TRANSPARENCY.md)及 [ADR 0017](docs/architecture/adr/0017-transparent-gateway-settlement.md)。#923 最终 SHA Actions 待验，不继承历史通过记录。
 
+#952/#964 的[退休镜像软件边界](docs/DEPRECATIONS.md#软件拒绝边界9642026-11-07-核对)以共享精确 key 策略阻断旧目录/DB 行回流市场、重新登记、启用和新执行；queued pull/scan 在外部 pull 前重验，历史冻结快照、Evidence 和审计不改写。原始目录完整校验后才输出带 `excluded_retired_image_keys` 的当前产品投影，不把投影冒充签名原文。软件拦截已落盘，最终 SHA Actions 待验；运营清库/GC 未执行且不作为本轮验收前置。
+
 运行镜像必须来自已准入市场。第三方镜像先经 `apps/image-admission` 扫描、批准，再由平台绑定可见项目后项目启用；Agent 不能提交任意 OCI 地址。镜像和平台版本分开管理，执行永远使用不可变 digest，不使用可变 `latest`。出网权限在 Canvas/Job 快照中冻结，禁止出网的沙箱只能通过固定 Gateway 访问模型。
 
 部署成功门（#726）：`deploy.sh` / `deploy.ps1` 必须保留 Compose 失败语义和原始错误码诊断（shell 以原码退出，PowerShell 抛错并非零退出），并在有界等待内验证初始化任务、依赖服务、Web/Scheduler 容器及入口健康 JSON 的顶层 `ok=true` 与 `ready=true`；HTTP 200 或容器 Running 只证明存活，不能替代就绪。探针与诊断子命令也须受超时约束，日志脱敏。

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizePreferredRegistry, selectAdmissionImageRef } from "./registry-ref.js";
+import { normalizePreferredRegistry, pullAdmissionRuntimeImage, selectAdmissionImageRef } from "./registry-ref.js";
+import { RETIRED_RUNTIME_IMAGE_KEYS, RuntimeImageRetiredError } from "@deepsonar/shared-types";
 
 const digest = `sha256:${"a".repeat(64)}`;
 const ghcr = `ghcr.io/summersec/deepsonar-base@${digest}`;
@@ -71,4 +72,18 @@ test("第三方镜像不受官方 registry 选源影响", () => {
 
 test("部署 registry 配置拒绝 URL 形式", () => {
   assert.throws(() => normalizePreferredRegistry("https://crpi.example.com/summersec"), /基址/);
+});
+
+test("retired queued scans and tracked tags never reach the external pull boundary", async () => {
+  const pulled: string[] = [];
+  for (const key of RETIRED_RUNTIME_IMAGE_KEYS) {
+    for (const sourceKind of ["official", "third_party"]) {
+      assert.throws(() => selectAdmissionImageRef({ sourceKind, imageKey: key, imageRef: ghcr }), RuntimeImageRetiredError);
+    }
+    await assert.rejects(pullAdmissionRuntimeImage(key, ghcr, async (ref) => { pulled.push(ref); }),
+      (error: unknown) => error instanceof RuntimeImageRetiredError && error.code === "RUNTIME_IMAGE_RETIRED");
+    assert.deepEqual(pulled, []);
+  }
+  await pullAdmissionRuntimeImage("deepsonar-clickhouse-audit-custom", ghcr, async (ref) => { pulled.push(ref); });
+  assert.deepEqual(pulled, [ghcr], "lookalikes remain legitimate products");
 });

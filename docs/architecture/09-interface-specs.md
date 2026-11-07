@@ -13,6 +13,10 @@
 
 当前 `reference-http/v1` 的身份与动作正向判权由宿主配置的只读 `deepsonar.target-authorization/v1` authority 提供，严格核对 principal/scope/action/prerequisite/content/contract/config/authority revision 和 freshness。任务不能指定 authority URL/secret 或自带 grant；系统审计保存无密钥 grant，子/系统 Job 统一继承，provision/rerun 实时复核。缺失或变化 grant 使用不可重试 `target_authorization_grant_invalid`；其他拒绝/传输错误按授权域稳定错误返回，均不执行目标动作。详见 [ADR 0011](adr/0011-trusted-target-authorization.md)及[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
 
+## 退休运行镜像（#964）
+
+运行镜像市场不返回[精确退休 key](../../packages/shared-types/src/runtime-image-retirement.ts)的旧 DB 行；registry API 是原目录完整校验后的当前产品投影，明确携带 `excluded_retired_image_keys`，不能冒充原发布签名原文。退休产品的 manual/import、官方登记/本地采用、启用/批准/复扫和定向拉取请求返回 `410` 与稳定 `error_code: RUNTIME_IMAGE_RETIRED`，直接版本 ID 解析也不能绕过。历史 usage / Job、Evidence 与审计读取保留，不赋予新执行许可。排队 pull/scan 的副作用前拒绝及未执行的运营清理见[下线专题](../DEPRECATIONS.md#软件拒绝边界9642026-11-07-核对)；HTTP/PG 回归接入既有 promotions CI，最终 SHA Actions 待验。
+
 ## Management API
 
 Management API 面向用户、Web 和受信任自动化，包含项目/任务、Canvas、Job 控制、Finding/报告、设置、镜像、凭据、设备、Worker、导入导出、平台 claim、只读平台版本发现和审计等入口。管理员只读 `GET /platform/updates` 读取 catalog 同步路径最近一次写入的当前部署与 `platform` 信息比较结果；它不触发新的比较，也不执行升级、apply 或 rollback，项目 token 不能调用。管理 API token 以 hash/prefix 存储，明文只在创建或轮换时返回；token scope 与 path project scope 同时校验。Provider credential 与平台 API token 分离，凭据密文使用 nonce/auth tag 存储，常规 credential projection 不含 ciphertext；现有设置编辑契约允许特定 `settings_config` 字段携带账户配置值，因此该响应仍受管理 scope、审计和脱敏规则约束。Job snapshot 投影不携带长期 secret。
