@@ -51,6 +51,7 @@ export const REVERSE_ROUTING_INPUTS = Object.freeze([
   ".github/workflows/release.yml",
   "agent-harness/ci-run-plan.mjs",
   "agent-harness/classify-ci-changes.mjs",
+  "agent-harness/path-match.mjs",
   "agent-harness/reverse-suite-plan.mjs",
 ]);
 

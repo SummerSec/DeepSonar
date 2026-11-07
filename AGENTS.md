@@ -137,7 +137,7 @@ pnpm ci:images
 
 **#972/#992 的 `gate` 为五个有界并行分片**（2026-11-07 核对）：`gate-contract`（无服务单测/契约）、`gate-runtime`（运行时/锁版本 SDK/真实 executor 单测，两片均不声明 `services.postgres`）、`gate-db-core` / `gate-db-domain`（各自独立 PostgreSQL 服务与库）、`gate-e2e`（scheduler 3100/3101 与同库 setval 竞态相关的启动/端到端冒烟必须同片）。每片独立 `needs: changes`、独立 `install`/`typecheck`/`build` 生命周期，不复用跨提交结果；`ci-summary` 用 `EXPECTED_GATE_SHARDS` 显式期望矩阵逐片要求 `success`，缺片/取消/超时/失败一律拒绝。完整套件清单与归属以 `agent-harness/gate-shards.mjs` 及 `agent-harness/gate-shards.test.mjs` 的覆盖率断言为准（每个原套件恰好覆盖一次），改 gate 步骤必须同步更新该清单。#971/#972/#973/#974 的纯 Node 契约回归统一在 `docs-freshness` job 的 `perf(ci) contract regressions and hosted runner disk safety` step 显式列出，新增测试文件必须同步加到该 step 才会被门禁执行。
 
-**#976 起 Reverse 家族按子套件分流**：`agent-harness/reverse-suite-plan.mjs` 把 Reverse workflow 的宽 `pull_request.paths` 拆成 `reverse` / `claude` / `pi-om` 三份显式依赖清单，外加 shared（共享 base、lockfile、runtime-sandbox、沙箱启动器）与 routing（本模块、`ci-run-plan.mjs`、`classify-ci-changes.mjs`、workflow 自身）两组保守输入。`ci-run-plan.mjs` 输出 `reverse_suites`，三个重活 job 各自按计划决定是否启动；`reverse-runtime-acceptance` 逐项核对计划与实际：计划内必须 `success`，计划外必须 `skipped`，失败/取消/超时永远拒绝。`package.json` 只做字段级安全分类——仅「新增且不被三个专项消费、命令含 `--test`、名字为 `ci:unit:*`」的脚本可判无影响；依赖、lockfile、脚本删改、删除/改名、解析失败、缺 SHA 一律全跑。
+**#976 起 Reverse 家族按子套件分流**：`agent-harness/reverse-suite-plan.mjs` 把 Reverse workflow 的宽 `pull_request.paths` 拆成 `reverse` / `claude` / `pi-om` 三份显式依赖清单，外加 shared（共享 base、lockfile、runtime-sandbox、沙箱启动器）与 routing（本模块、`ci-run-plan.mjs`、`classify-ci-changes.mjs`、`path-match.mjs`、workflow 自身）两组保守输入。`ci-run-plan.mjs` 输出 `reverse_suites`，三个重活 job 各自按计划决定是否启动；`reverse-runtime-acceptance` 逐项核对计划与实际：计划内必须 `success`，计划外必须 `skipped`，失败/取消/超时永远拒绝。`package.json` 只做字段级安全分类——仅「新增且不被三个专项消费、命令含 `--test`、名字为 `ci:unit:*`」的脚本可判无影响；依赖、lockfile、脚本删改、删除/改名、解析失败、缺 SHA 一律全跑。
 
 **#975 的 Reverse base 复用默认关闭**：`vars.REVERSE_BASE_REUSE=on` 时才启用「每架构只构建一次当前 checkout 的 base、按不可变 SHA/架构/平台/工具集标签共享 artifact」，消费者 `docker load` 后必须校验标签；未开启时保持原来每个 job 各自构建的路径，零行为变化。
 
@@ -160,7 +160,7 @@ pnpm ci:images
 
 - #961 P2：`deploy/Dockerfile.agent-chrome-fuzz` 的 V8 编译阶段 `FROM --platform=$BUILDPLATFORM ${V8_BUILDER_IMAGE}` 用的是**按 digest 钉死的 builder 镜像**（与 base 同源的 node bookworm-slim），不再继承 `${BASE_IMAGE}`；只有 `runtime-rootfs` 跟随本次解析出的 base。这样 base 的运行时变化（CLI 版本、手册、包装脚本）不会让 V8 下载/GN/编译层失效。改 builder 镜像或 V8/depot_tools/compiler-rt 版本时，Dockerfile 内容变化会自然改变指纹；不要改成可变 tag。
 - #961 P3：`image-build-fingerprint.mjs` 输出三个互不复用的命名空间——`src_tag`（`src-<fp>`，历史遗留，**已无消费方**）、`ci_src_tag`（`src-ci-<fp>`，CI 读写）、`release_src_tag`（`src-release-<fp>`，release 读写）。`ci.yml`/`chrome-runtime.yml`/`mobile-runtime.yml`/`openharmony-runtime.yml` 只用 `ci_src_tag`；`release.yml` 只用 `release_src_tag`。**release 不得再查 `src-<fp>`**：该 tag 在本改动前可由 PR job 推送，而 `resolve-image-src-cache.sh` 只要能解析出 digest 就回 `skip=true`，等于让发布跳过真实构建。改这条边界必须同步 `agent-harness/image-cache-trust.test.mjs`。
-- 专家套件（reverse / chrome / mobile / openharmony）的路径基线直接读各自 workflow 的 `pull_request.paths`，因此清单不会与计划漂移。
+- 专家套件（reverse / chrome / mobile / openharmony）的路径基线直接读各自 workflow 的 `pull_request.paths`。Reverse 的 shared/routing/suite 输入还必须被 PR 与 push@main 的触发过滤覆盖，路由文件不能豁免；核心 `docs-freshness` 中的 `agent-harness/reverse-suite-plan.test.mjs` 检查该契约及缺项反例（#995）。`ci-summary` 不跨工作流聚合结果，合并前仍须核对各适用专项的实际检查。
 
 - 四个专家工作流各自跑同一个 `ci-run-plan.mjs`（不是四份判断），重活矩阵只在 `mode == ready-full` 时启动；`push@main` 与手动运行仍是完整验收。专家套件的 PR 触发保留，尚未迁移到 `ci.yml` 的 `workflow_call` 统一入口。
 - 改分类器、汇总或本套路由本身时按高风险改动处理：需要独立评审与完整验收，不能用自己的快检规则给自己放行。

@@ -15,6 +15,7 @@ import {
   verifyReverseSuiteResults,
 } from "./reverse-suite-plan.mjs";
 import { matchesPathPattern } from "./path-match.mjs";
+import { buildRunPlan, loadSuitePaths } from "./ci-run-plan.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const workflow = readFileSync(`${ROOT}/.github/workflows/reverse-runtime.yml`, "utf8");
@@ -65,6 +66,8 @@ test("shared base, lockfile, sandbox and routing inputs force every suite", () =
     ".github/workflows/release.yml",
     ".github/workflows/reverse-runtime.yml",
     "agent-harness/ci-run-plan.mjs",
+    "agent-harness/classify-ci-changes.mjs",
+    "agent-harness/path-match.mjs",
     "agent-harness/reverse-suite-plan.mjs",
     "agent-harness/reverse-base-identity.mjs",
   ]) {
@@ -166,29 +169,75 @@ test("the Reverse workflow consumes the plan instead of running every matrix", (
   assert.doesNotMatch(workflow, /continue-on-error:/u);
 });
 
-test("the suite inputs are covered by the workflow's own declared filter", () => {
-  const block = workflow.split("  pull_request:")[1]?.split("  push:")[0] ?? "";
-  const declared = [...block.matchAll(/^      - "(.+)"$/gmu)].map((match) => match[1]);
-  assert.ok(declared.length > 30, "the Reverse filter must stay declared");
+function declaredTriggerPaths(eventName) {
+  const block = workflow.split(`  ${eventName}:`)[1]?.split(/^  [a-z_]+:/mu)[0] ?? "";
+  return [...block.matchAll(/^      - "(.+)"$/gmu)].map((match) => match[1]);
+}
+
+function assertTriggerCoverage(declared, eventName) {
+  assert.ok(declared.length > 30, `${eventName}: the Reverse filter must stay declared`);
   const covered = [...REVERSE_SHARED_INPUTS, ...REVERSE_ROUTING_INPUTS, ...Object.values(REVERSE_SUITE_INPUTS).flat()];
   for (const pattern of covered) {
-    if (REVERSE_ROUTING_INPUTS.includes(pattern)) {
-      // Routing files are pinned on purpose even when the workflow filter does
-      // not name them: the plan may not grant itself a cheaper path (#961
-      // discipline). They still force every suite via the routing check.
-      continue;
-    }
-    // A pattern may be covered by a broader declared glob (e.g.
-    // `agent-harness/reverse-*` covers `reverse-base-identity.mjs`), so match a
-    // representative path instead of requiring a literal duplicate.
+    // Routing has no exemption: a plan inside an untriggered workflow cannot
+    // enforce any suite. This contract runs in core docs-freshness as well.
+    // A broader glob may cover an input, e.g. reverse-* covers reverse-base-identity.mjs.
     const sample = pattern.replaceAll("*", "x");
     assert.ok(
       declared.some((glob) => matchesPathPattern(glob, sample)),
-      `${pattern} must stay declared by the Reverse filter`,
+      `${eventName}: ${pattern} must stay declared by the Reverse filter`,
     );
   }
   for (const pattern of declared) {
     if (pattern === "package.json") continue;
-    assert.ok(covered.includes(pattern), `${pattern} is declared but not assigned to any suite or shared list`);
+    assert.ok(covered.includes(pattern), `${eventName}: ${pattern} is declared but not assigned to any suite or shared list`);
+  }
+}
+
+test("#992 suite, shared and routing inputs are covered by both PR and main triggers", () => {
+  for (const eventName of ["pull_request", "push"]) {
+    assertTriggerCoverage(declaredTriggerPaths(eventName), eventName);
+  }
+});
+
+test("#992 removing any routing trigger is rejected even if the plan still requires it", () => {
+  for (const eventName of ["pull_request", "push"]) {
+    const declared = declaredTriggerPaths(eventName);
+    for (const path of REVERSE_ROUTING_INPUTS) {
+      const missing = declared.filter((glob) => !matchesPathPattern(glob, path));
+      assert.throws(() => assertTriggerCoverage(missing, eventName), /must stay declared by the Reverse filter/u, `${eventName}: ${path}`);
+    }
+  }
+});
+
+test("#992 routing diffs trigger Reverse and retain full Ready acceptance after Draft", () => {
+  const suitePaths = loadSuitePaths(ROOT);
+  const pr = { eventName: "pull_request", base: "base-sha", head: "head-sha", ciPrMode: "tiered", suitePaths };
+  const diff = (...records) => Buffer.from(records.flat().join("\0") + "\0", "utf8");
+  for (const path of REVERSE_ROUTING_INPUTS) {
+    assert.ok(suitePaths.reverse.some((glob) => matchesPathPattern(glob, path)), `${path}: workflow must start`);
+    for (const records of [
+      [["M", path]],
+      [["M", "CHANGELOG.md"], ["M", "docs/PI_RPC_PAYLOAD_LIMITS.md"], ["M", path]],
+      [["D", path]],
+      [["R100", path, "docs/README.md"]],
+      [["R100", "docs/README.md", path]],
+    ]) {
+      const input = { ...pr, diffBytes: diff(...records) };
+      const draft = buildRunPlan({ ...input, draft: true });
+      assert.equal(draft.mode, "draft-fast");
+      assert.deepEqual(draft.reverseSuites, []);
+      const ready = buildRunPlan({ ...input, draft: false });
+      assert.equal(ready.status, "ok");
+      assert.equal(ready.mode, "ready-full");
+      assert.equal(ready.docsOnly, false);
+      assert.ok(ready.requiredSuites.includes("reverse"), `${path}: core and specialist plans must agree`);
+      assert.deepEqual(ready.reverseSuites, REVERSE_SUITES);
+    }
+  }
+  for (const path of ["CHANGELOG.md", "docs/PI_RPC_PAYLOAD_LIMITS.md", "apps/web/src/App.tsx"]) {
+    for (const eventName of ["pull_request", "push"]) {
+      assert.ok(!declaredTriggerPaths(eventName).some((glob) => matchesPathPattern(glob, path)), `${path}: do not widen unrelated triggers`);
+    }
+    assert.deepEqual(buildRunPlan({ ...pr, diffBytes: diff(["M", path]) }).reverseSuites, []);
   }
 });

@@ -9,6 +9,10 @@ on:
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
+      # #992: the plan cannot enforce required suites unless the workflow starts.
+      - "agent-harness/ci-run-plan.mjs"
+      - "agent-harness/classify-ci-changes.mjs"
+      - "agent-harness/path-match.mjs"
       - "agent-harness/claude-request-budget-cli.test.ts"
       - "agent-harness/tsconfig.claude-budget.json"
       - "agent-harness/run-claude-budget-isolated.mjs"
@@ -54,6 +58,10 @@ on:
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
+      # #992: the plan cannot enforce required suites unless the workflow starts.
+      - "agent-harness/ci-run-plan.mjs"
+      - "agent-harness/classify-ci-changes.mjs"
+      - "agent-harness/path-match.mjs"
       - "agent-harness/claude-request-budget-cli.test.ts"
       - "agent-harness/tsconfig.claude-budget.json"
       - "agent-harness/run-claude-budget-isolated.mjs"
