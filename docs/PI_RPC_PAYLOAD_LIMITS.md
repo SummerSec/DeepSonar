@@ -32,7 +32,7 @@
 
 实际做法：
 
-1. 先把完整脱敏 JSON 写入 `/workspace/.deepsonar-rpc-output/` 与 Attempt 留存目录；Scheduler 串行提交文件及既有 Job evidence manifest 索引后才返回路径，不依赖运行结束的 `finalize`。同一 Attempt 的累计文件数/字节从持久索引读取，重建 writer 不重置预算，已有文件不覆盖；落盘但尚未索引的归档及中断的临时文件也有界计入预算，但不发布为可信引用。新归档与索引在返回前执行文件同步和 POSIX 新建目录链同步（Windows 为文件同步），finalize 替换同一索引时仍保留该持久写语义；归档拒绝不阻断后续失败诊断和 finalize。捕获侧运行预算与 Scheduler Attempt 预算均受代码上限约束；
+1. 先把完整脱敏 JSON 写入 `/workspace/.deepsonar-rpc-output/` 与 Attempt 留存目录；Scheduler 串行提交文件及既有 Job evidence manifest 索引后才返回路径，不依赖运行结束的 `finalize`。同一 Attempt 的累计文件数/字节从持久索引读取，重建 writer 不重置预算，已有文件不覆盖；落盘但尚未索引的归档及中断的临时文件也有界计入预算，但不发布为可信引用。新归档与索引在返回前执行文件同步和 POSIX 新建目录链同步（Windows 为文件同步），finalize 替换同一索引时仍保留该持久写语义；归档拒绝不阻断后续失败诊断和 finalize。未 finalize 的索引读取仍合并既有有界 raw stream 扫描及重启 capture_error，不因提前索引而隐藏过程流；raw stream 保持 inflight / sha256=null。捕获侧运行预算与 Scheduler Attempt 预算均受代码上限约束；
 2. 保留 `type` 与全部控制字段（`id`、`command`、`success`、`disposition`、`toolCallId`、`toolName`、`isError`、`message.role`、`stopReason` 等）；
 3. **只替换超长的叶子字符串**，容器类型一律不动：`message.content` 必须仍是数组（`piMessageText` 按数组读正文），`args` / `result` 必须仍是对象。替换形式为
    `{"$piRef": <Attempt evidence path>, "pointer": "/args/script", "sha256": ..., "bytes": ...}`。引用中的 SHA 是完整脱敏归档 SHA，`bytes` 是叶子字符串 UTF-8 字节数；

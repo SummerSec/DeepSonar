@@ -69,6 +69,32 @@ test("historical Pi session preview/download redact before truncation and preser
   } finally { await h.close(); }
 });
 
+test("#990 orphan evidence merges unfinalized RPC index with raw streams after restart", { skip: !process.env.TEST_DATABASE_URL }, async () => {
+  const h = await createPlanExecutionFixture();
+  try {
+    const { JobEvidenceWriter } = await import("./evidence.js");
+    const f = await h.fixture();
+    const writer = new JobEvidenceWriter(f.hub, "pi", "rpc-inflight");
+    await writer.appendNormalized({ type: "text.delta", delta: "persisted before RPC" });
+    const ref = await writer.appendRuntimeArtifact({ name: "pi-rpc-abcd-1.json", content: "{}" });
+    await h.sql`UPDATE jobs SET status='orphan' WHERE id=${f.hub}`;
+    const resumed = new JobEvidenceWriter(f.hub, "pi", "rpc-inflight");
+    const response = await h.app.inject({ method: "GET", url: `/jobs/${f.hub}/evidence` });
+    assert.equal(response.statusCode, 200, response.payload);
+    const manifest = response.json().manifest;
+    assert.equal(manifest.inflight, true);
+    assert.equal(manifest.finalized_at, null);
+    assert.ok(manifest.capture_error.includes("Session 无法跨容器恢复"));
+    assert.ok(manifest.files.some((file: { path: string; sha256: string | null }) => file.path === ref && file.sha256 !== null));
+    const stream = manifest.files.find((file: { path: string }) => file.path === "attempts/rpc-inflight/stream.ndjson");
+    assert.equal(stream.kind, "stream");
+    assert.equal(stream.inflight, true);
+    assert.equal(stream.sha256, null);
+    assert.ok(stream.bytes > 0);
+    await resumed.finalize();
+  } finally { await h.close(); }
+});
+
 test("#990 capture previews round-trip complete text, arrays and leaf refs through the HTTP reader", { skip: !process.env.TEST_DATABASE_URL }, async () => {
   const h = await createPlanExecutionFixture();
   try {

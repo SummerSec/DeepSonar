@@ -384,7 +384,9 @@ export async function readEvidenceManifestOrInflight(
   options: { cli?: string | null; captureError?: string } = {},
 ): Promise<JobEvidenceManifest | null> {
   const finalized = await readEvidenceManifest(jobId);
-  if (finalized) return finalized;
+  if (finalized?.finalized_at) return finalized;
+  const captureError = [...new Set([finalized?.capture_error, options.captureError].filter(Boolean))].join("；");
+  const partial = finalized ? { ...finalized, inflight: true, ...(captureError ? { capture_error: captureError } : {}) } : null;
 
   const root = jobDir(jobId);
   const attemptsRoot = path.join(root, "attempts");
@@ -396,7 +398,7 @@ export async function readEvidenceManifestOrInflight(
   try {
     directory = await opendir(attemptsRoot);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return partial;
     throw error;
   }
   try {
@@ -431,20 +433,21 @@ export async function readEvidenceManifestOrInflight(
   } finally {
     await directory.close().catch(() => {});
   }
-  if (files.length === 0) return null;
+  if (files.length === 0) return partial;
   files.sort((left, right) => left.path.localeCompare(right.path));
   return {
+    ...(partial ?? {}),
     v: 1,
     job_id: jobId,
-    cli: options.cli?.trim() || "unknown",
-    session_id: null,
-    created_at: new Date(Number.isFinite(createdAt) ? createdAt : Date.now()).toISOString(),
+    cli: finalized?.cli || options.cli?.trim() || "unknown",
+    session_id: finalized?.session_id ?? null,
+    created_at: finalized?.created_at ?? new Date(Number.isFinite(createdAt) ? createdAt : Date.now()).toISOString(),
     finalized_at: null,
-    files,
-    synthetic: true,
+    files: [...new Map([...(finalized?.files ?? []), ...files].map(file => [file.path, file])).values()],
+    ...(!finalized ? { synthetic: true } : {}),
     inflight: true,
     ...(truncated ? { truncated: true } : {}),
-    ...(options.captureError ? { capture_error: options.captureError } : {}),
+    ...(captureError ? { capture_error: captureError } : {}),
   };
 }
 

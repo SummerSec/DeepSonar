@@ -422,6 +422,36 @@ test("#990 RPC read verifies source, pointers, typed arrays and missing local by
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("#990 partial RPC manifests preserve inflight streams and restart capture warnings", async () => {
+  const jobId = "00000000-0000-4000-8000-000000000996";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const writer = new JobEvidenceWriter(jobId, "pi", "rpc-partial");
+  try {
+    await writer.appendNormalized({ type: "text.delta", delta: "persisted before RPC" });
+    const warning = "Session cannot be recovered after restart";
+    const before = await readEvidenceManifestOrInflight(jobId, { captureError: warning });
+    assert.equal(before?.synthetic, true);
+    const ref = await writer.appendRuntimeArtifact({ name: "pi-rpc-abcd-1.json", content: "{}" });
+    const resumed = new JobEvidenceWriter(jobId, "pi", "rpc-partial");
+    const partial = await readEvidenceManifestOrInflight(jobId, { captureError: warning });
+    assert.equal(partial?.inflight, true);
+    assert.equal(partial?.synthetic, undefined, "the durable archive index is not fabricated");
+    assert.equal(partial?.capture_error, warning);
+    assert.ok(partial?.files.some(file => file.path === ref && file.sha256 !== null));
+    const stream = partial?.files.find(file => file.path === "attempts/rpc-partial/stream.ndjson");
+    assert.equal(stream?.kind, "stream");
+    assert.equal(stream?.inflight, true);
+    assert.equal(stream?.sha256, null);
+    assert.ok(stream!.bytes > 0);
+    assert.equal(partial?.files.length, 2);
+    await resumed.finalize();
+    const finished = await readEvidenceManifestOrInflight(jobId);
+    assert.ok(finished?.finalized_at);
+    assert.equal(finished?.inflight, undefined);
+    assert.ok(finished?.files.some(file => file.path.endsWith("stream.ndjson.gz") && file.sha256 !== null));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("#990 historical RPC reads redact OM before selecting pointers and preserve source identity", async () => {
   const jobId = "00000000-0000-4000-8000-000000000993";
   const root = path.join(config.storage.blobDir, "jobs", jobId);
