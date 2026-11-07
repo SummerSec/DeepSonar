@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseDeclaredQuantities, type QuantityAnchor } from "@deepsonar/shared-types";
 import { config } from "./config.js";
+import { isRetryableDatabaseConflict } from "./db-conflict-retry.js";
 import { taskReportCoverageOk } from "./report-coverage.js";
 import { sql } from "./db.js";
 import {
@@ -1195,6 +1196,7 @@ export async function maybeDispatchReport(
   try {
     resolvedSnapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report");
   } catch (e) {
+    if (isRetryableDatabaseConflict(e)) throw e;
     console.warn(`[report] resolve snapshot failed:`, e);
     return { dispatched: false, reason: "no_report_role" };
   }
@@ -1219,7 +1221,8 @@ export async function maybeDispatchReport(
       WHERE id = ${held.id as string}`;
   }
 
-  // 派发前冻结版本化输入，供 Report Agent 与终态收口共同消费。
+  // Canvas 锁内写入派发输入：仅相同摘要复用版本，否则使用尚未提交的新版本。
+  // 文件不随 SQL 回滚；包含本段的混合 I/O 事务不能直接整体交给纯数据库重试器。
   const dir = reportDir(canvasId, version);
   await mkdir(dir, { recursive: true });
   const inputPath = path.join(dir, "report-input.json");
@@ -1452,6 +1455,7 @@ async function settleFailedTaskReport(
     try {
       dispatched = await maybeDispatchReport(tx, canvasId, { excludeJobId: jobId });
     } catch (error) {
+      if (isRetryableDatabaseConflict(error)) throw error;
       console.warn(`[report] canvas ${canvasId} 报告自动再派异常，收口 Root:`, error);
       dispatched = { dispatched: false, reason: "dispatch_threw" };
     }

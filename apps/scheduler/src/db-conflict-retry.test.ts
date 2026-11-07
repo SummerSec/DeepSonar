@@ -15,7 +15,7 @@ test("only deadlock, serialization and lock-timeout errors are retryable", () =>
   for (const code of ["40P01", "40001", "55P03"]) {
     assert.equal(isRetryableDatabaseConflict(conflict(code)), true, `${code} must be retryable`);
   }
-  for (const code of ["23505", "23503", "42P01", "57014", "08006"]) {
+  for (const code of ["23505", "23503", "25P02", "42P01", "57014", "08006"]) {
     assert.equal(isRetryableDatabaseConflict(conflict(code)), false, `${code} must not be retried`);
   }
   assert.equal(isRetryableDatabaseConflict(null), false);
@@ -127,15 +127,15 @@ test("#945 the Job-facing transaction entrances stay wrapped", () => {
     [core, "preflight_deferred_side_effects"],
     [core, "create_job"],
     [core, "ensure_canvas_for_task"],
-    [core, "verify_terminal_recovery"],
-    [reconcile, "reconcile_close_orphan_job"],
   ]) {
     assert.ok(
       source.includes(`withOperationConflictRetry("${operation}"`),
       `${operation} must stay wrapped in the bounded database-conflict retry`,
     );
   }
-  // 这几个入口原先裸用 sql.begin：回归时必须能被这条断言抓住。
+  assert.doesNotMatch(core, /withOperationConflictRetry\("verify_terminal_recovery"/u);
+  assert.doesNotMatch(reconcile, /withOperationConflictRetry\("reconcile_close_orphan_job"/u);
+  // 混合 I/O 的收口入口不能仅因 SQL 回滚就被整体重放。
   assert.doesNotMatch(core, /await sql\.begin\(\(tx\) => createJobInTransaction/u);
   assert.doesNotMatch(core, /return sql\.begin\(\(tx\) => ensureCanvasForTaskInTransaction/u);
 });

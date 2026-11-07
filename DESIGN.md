@@ -1,10 +1,12 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-06
+> 同步日期：2026-11-07
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
+
+#945 沿用现有数据库冲突重试器覆盖 Job/Canvas 创建和 deferred 预检；可派 Report 写输入文件的 Verify/orphan 混合 I/O 恢复入口暂不整体重试；Hub/报告内部必须保留原始锁冲突，不能吞掉后将 `25P02` 当成另一种安全重试信号。报告冻结输入的文件写入不随 SQL 回滚，具体幂等条件和未提交文件边界见[运行时视图](docs/architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)。不重放已开始的模型或未知效果；最终 SHA Actions 待验。
 
 ## 1. 设计判断
 

@@ -1536,7 +1536,8 @@ export async function recoverVerifyJobTerminal(
   jobStatus: "failed" | "timeout" | "orphan" | "cancelled",
   error?: string | null,
 ): Promise<void> {
-  await withOperationConflictRetry("verify_terminal_recovery", () => sql.begin(async (txRaw) => {
+  // #945: Hub 收敛可派 Report 并写输入文件，尚非纯数据库重试边界。
+  await sql.begin(async (txRaw) => {
     const tx = /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ txRaw as unknown as Tx;
     const [job] = await tx`SELECT type, finding_id, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
     if (!job || job.type !== "verify_finding" || !job.finding_id) return;
@@ -1567,7 +1568,7 @@ export async function recoverVerifyJobTerminal(
         },
       );
     }
-  }));
+  });
 }
 
 export type CanvasJobTerminalStatus = HubCanvasJobTerminalStatus;

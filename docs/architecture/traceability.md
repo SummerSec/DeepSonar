@@ -1,7 +1,7 @@
 # DeepSonar 需求追溯矩阵
 
 > 状态：**as-built + 追溯登记**。#871/#873/#874 的当前修复接线与历史验收分开；每行把规格编号接到视图、ADR、代码和可复验入口，测试命令不表示本次已执行通过。
-> 同步日期：2026-11-06
+> 同步日期：2026-11-07
 > **v0.6.3 本轮追溯口径（2026-11-01）**：强关系条目中的独立人工质量/隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开建议属于暂缓范围，不作本轮 PR 合并、工程 issue 收口或发布前置条件。原规格、需求行和 ADR 保留，现有工程测试/权限/CAS/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；矩阵中的历史质量缺口不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
 矩阵首列是规格正文中定义的裸 ID，每个 ID 只出现一行。架构视图和 ADR 使用当前架构目录中的相对链接；代码入口直接复用规格正文来源；验收列复用同一编号的真实测试入口或人工核查。测试命令是入口，不代表当前文档同步重新执行或真实沙箱试验通过。
@@ -121,7 +121,7 @@
 | NFR-REL-003 | [运行时视图](06-runtime-view.md)；[数据架构](08-data-architecture.md) | [ADR-0005](adr/0005-event-evidence-stream.md) | [Job recovery](../../apps/scheduler/src/domains/job-lifecycle/application.ts)；[Web retry projection](../../apps/web/src)；[RepairFeedback](../../packages/shared-types/src/repair-feedback.ts) | `pnpm ci:unit:web-facts`、`pnpm ci:unit:recovery`；人工核对 timeout/orphan 有 pending effect 时为 `needs_confirmation`，不推荐 `retry_same_session`。 |
 | NFR-REL-008 | [运行时视图](06-runtime-view.md)；[数据架构](08-data-architecture.md) | [ADR-0005](adr/0005-event-evidence-stream.md) | [Effect schema](../../database/schema.sql)；[Job recovery](../../apps/scheduler/src/domains/job-lifecycle/application.ts)；[reconcile](../../apps/scheduler/src/reconcile.ts) | `pnpm ci:unit:recovery`、`pnpm ci:integration:recovery`、`pnpm ci:smoke:opensandbox-reconcile`。 |
 | NFR-REL-004 | [数据架构](08-data-architecture.md)；[部署视图](07-deployment-view.md) | [ADR-0005](adr/0005-event-evidence-stream.md) | [evidence stream](../../apps/scheduler/src/evidence.ts) | `pnpm ci:unit:recovery`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:web-facts`；人工验证多副本无共享卷。 |
-| NFR-REL-005 | [运行时视图](06-runtime-view.md)；[质量属性](04-quality-attributes.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [report recovery](../../apps/scheduler/src/report-failure-recovery.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`。 |
+| NFR-REL-005 | [运行时视图](06-runtime-view.md)；[质量属性](04-quality-attributes.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [report recovery](../../apps/scheduler/src/report-failure-recovery.ts)；[事务冲突重试](../../apps/scheduler/src/db-conflict-retry.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:bounded-contexts`（#945 报告/Hub 原始锁冲突与业务错误隔离）、`pnpm ci:unit:executor-real`、`pnpm ci:integration:recovery`（真实交叉更新）；`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`；最终 SHA Actions 待验。 |
 | NFR-PERF-001 | [质量属性](04-quality-attributes.md)；[接口规格](09-interface-specs.md) | — | [config graph limits](../../apps/scheduler/src/config.ts) | `pnpm ci:unit:graph-references`、`pnpm ci:integration:graph-references`；人工核对配置变更仍受上限约束。 |
 | NFR-PERF-002 | [质量属性](04-quality-attributes.md)；[接口规格](09-interface-specs.md) | — | [event rate policy](../../apps/scheduler/src/domains/event-ingestion/rate-limit.ts) | `pnpm ci:unit:event-rate-limit`、`pnpm ci:integration:event-rate-limit`。 |
 | NFR-PERF-003 | [质量属性](04-quality-attributes.md)；[部署视图](07-deployment-view.md) | — | [sandbox limits](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts) | `pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:dispatch-limits`。 |

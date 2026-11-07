@@ -1,12 +1,14 @@
 # DeepSonar 文档索引
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-06
+> 同步日期：2026-11-07
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
 
 > **v0.6.15 发布准备（2026-11-06）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)。Plan 范围修正与其他已合入补丁列于 [CHANGELOG](../CHANGELOG.md)，[#913](https://github.com/SummerSec/DeepSonar/issues/913) 的 accepted-terminal 窄修复已由 #919 合入，#930 增加受治理修复代际。最终 main Actions 与正式产物成功状态分别核对。
 
 #914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由 #925 交付，UI 由 #929 交付；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，不代表自动重跑或快照改写。
+
+> **Job 侧数据库冲突（#945）**：现有有界重试覆盖三个已核对纯数据库入口，Hub/报告保留原始 SQLSTATE；Verify/orphan 混合 I/O 恢复入口暂不整体重试，保留 #945 跟踪；不把 `25P02` 或未知外部效果当作安全重试依据。报告输入写入的幂等条件与非 SQL 回滚边界见[运行时视图](architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)。回归已接线，最终 SHA Actions 待验，未执行本地测试/构建/typecheck。
 
 > **注意力原则（#830）**：单一权威定义见 [DESIGN](../DESIGN.md#核心理念优化人的注意力)，开发与贡献入口引用同一[工程评审及正反例](architecture/11-engineering-specs.md#11-注意力成本评审830)。NFR-UX-001 登记约束与验证范围；本次只落实设计/评审依据，不改变运行时、UI 或授权，也不宣称注意力收益。
 
