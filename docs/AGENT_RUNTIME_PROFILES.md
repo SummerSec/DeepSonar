@@ -23,6 +23,8 @@ Profile 不能扩大项目已启用的 Provider、模型目录、Agent CLI、镜
 
 Hub 在派发 intent 前调用 `list_available_providers`，Scheduler 在 preflight 和事务内再次校验 `model_ref` 与 `model_requirements`，再把最终 Provider、模型描述和 adapter 版本冻结进 Job snapshot。任务创建也可以提交受限的 `runtime_profile` 覆盖（模型、推理等级、上下文预算）；覆盖只在 Job 创建边界合并，运行中的 Job 不重新读取项目设置。
 
+#958 在现有 Job snapshot 顶层增加 `model_budget`，由同一创建边界逐字段记录上下文/输出的显式配置、Provider 声明、客户端选值和来源；不把未知 CLI 默认猜成统一值，也不把声明当实测容量。Pi 选定模型的 `contextWindow/maxTokens` 与该投影一致，运行观测只作诊断，不回写历史快照。输出显式配置沿用 Pi 原生 `maxTokens`，不新增 Role/Job API；完整优先级、缺失/非法值及回归见[预算专题](PI_MODEL_BUDGET_RECOVERY.md)。最终 SHA Actions 待验。
+
 三种 adapter 的物化和启动仍由 [`packages/runtime-sandbox/src/runtime-adapters.ts`](../packages/runtime-sandbox/src/runtime-adapters.ts) 与 Scheduler executor 负责。Profile 只描述最终冻结输入，不能被 Agent、Hub 或运行中 Job 修改。
 
 验证入口：

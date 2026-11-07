@@ -35,6 +35,12 @@
 
 管理员审批证明的是平台对该精确内容的准入决定，不认证上游 Git 作者、内容无恶意或模型使用效果。同 hash 健康证据只对应最近一次成功核验，年龄指标不是实时 CAS 可用性认证；失败另以安全错误分类展示。缺失原 CAS 可以重 clone 同 hash 恢复；损坏缓存被存储后端拒绝覆盖或无法还原原已批准 hash 时必须明确 failed/待审批，不能改旧 Job 指针去读取不同内容。已有 live/历史批准不伪造迁移，历史 Job 冻结与显式撤销 epoch 不得为修复表面健康而修改。运行机制和数据边界见[IR-007](01-system-specification.md#ir-007-git-skill-source)、[候选数据](08-data-architecture.md#skill-源已批准目录与候选960)和[接口](09-interface-specs.md#全局-skill-源候选审批960)。
 
+### Pi 模型预算与恢复证据边界（#958）
+
+当前源码保留发现限制/来源并在创建期冻结，Pi length 改为同 Session 有界反馈及必要 compact；空摘要/start-end 不记为压缩成功，原完成/人工等待/lease/deadline/预算及未知效果守卫不放宽。回归覆盖配置链路、生产 runner RPC、真实锁版本 SDK 与隔离 HTTP/PG，最终 SHA Actions 尚待验，源码接线不证明已通过。
+
+Provider 声明、客户端冻结值与实际 CLI 观测分层，均不能替代真实上游容量试验或证明模型能理解续写反馈。无完整上下文身份/digest 仍记 unknown，不通过补造变换证据清除失败。本轮不要求生产链重跑，亦不宣称容量、成本/质量或 SLA 改善；字段/停止原因与验收入口见[专题](../PI_MODEL_BUDGET_RECOVERY.md)。
+
 ### 任务下发校验的证据边界（#767）
 
 共享契约已减少结构化字段与场景要求的入口漂移，但字段齐全不证明描述真实、目标可执行或模型结果一致。当前仅有 Scheduler-owned 的 `reference-http/v1` 目标授权适配器，并不是通用目标账号/租户/角色/资源归属与外部业务写权限探测器；也不从凭据公开元数据推断目标授权。authority、action、prerequisite、scope、revision、freshness 和 binding 任一未知或不一致时 fail closed，客户端 `verified`、模板默认权限和旧 grant 不能绕过。模板预算是规划信息，不替代既有内核资源预算；任意自然语言的语义归一化、自动安全拆分和真实模型质量提升仍需单独评测。

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { call, completionReady, completionDiagnosticEvidence, jobId, attemptId, rootId, runExecutor, setPreflight, terminalBundleCalls, terminalEvents } from "./executor-real-terminal-race.fixture.js";
+import { call, completionReady, completionDiagnosticEvidence, frozenRuntimeBudget, piRecoveryAllowed, jobId, attemptId, rootId, runExecutor, setPreflight, terminalBundleCalls, terminalEvents } from "./executor-real-terminal-race.fixture.js";
 import { getAgentCliRuntimeAdapter, resolveTerminalProcessOutcome, type RealAgentResult } from "@deepsonar/runtime-sandbox";
 import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 
@@ -39,6 +39,35 @@ test("executeReal: accepted normal completion creates no missing-completion diag
   });
   assert.equal(terminalBundleCalls(), 1); assert.deepEqual(completionDiagnosticEvidence(), []);
 });
+test("#958 executeReal passes the frozen Pi budget and fences prepared/accepted completion without another SQL read", async () => {
+  const budget: import("@deepsonar/shared-types").ModelTokenBudget = {
+    context_window_tokens: { configured: null, declared: 1_000_000, effective: 1_000_000, source: "provider_declared" },
+    max_output_tokens: { configured: 64_000, declared: null, effective: 64_000, source: "credential_settings" },
+    catalog_revision: "fixture:958",
+  };
+  const terminals = await runExecutor(async () => {
+    assert.deepEqual(frozenRuntimeBudget(), budget);
+    const eventId = randomUUID();
+    await call("mark_job_done", done, { eventId, completionPhase: "prepare" });
+    assert.deepEqual(await piRecoveryAllowed(), { allowed: false, reason: "terminal_prepared" });
+    await call("mark_job_done", done, { eventId, completionPhase: "commit" });
+    assert.equal(completionReady(), true);
+    assert.deepEqual(await piRecoveryAllowed(), { allowed: false, reason: "completion_accepted" });
+  }, "role", false, "pi", budget);
+  assert.deepEqual(terminals.map(event => event.type), ["done"]);
+  assert.deepEqual(completionDiagnosticEvidence(), []);
+});
+
+test("#958 executeReal leaves historical Pi budget unknown and prevents recovery after accepted human", async () => {
+  const terminals = await runExecutor(async () => {
+    assert.equal(frozenRuntimeBudget(), undefined);
+    await call("request_human", human);
+    assert.equal(completionReady(), false);
+    assert.deepEqual(await piRecoveryAllowed(), { allowed: false, reason: "waiting_human" });
+  }, "role", false, "pi");
+  assert.deepEqual(terminals.map(event => event.type), ["human"]);
+});
+
 function barrier() {
   let release!: () => void;
   const promise = new Promise<void>(resolve => { release = resolve; });

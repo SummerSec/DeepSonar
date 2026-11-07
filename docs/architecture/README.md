@@ -72,6 +72,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 | 构件与依赖 | 05；[bounded contexts / 锁序](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | §4.4、§5、§11 | 构件地图已迁入；锁序专题保留权威 |
 | API 与修复 | 09；[OpenAPI](../../apps/scheduler/src/openapi.ts) / shared-types | §7、§8 控制通道 | 已迁入；字段由机器契约维护 |
 | CLI 与运行上下文 | [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[runtime context](../AGENT_RUNTIME_CONTEXT.md)、[profiles](../AGENT_RUNTIME_PROFILES.md) | §8.1–8.2 | 专题保留权威，03/05/09 引用 |
+| Pi 模型预算与截断恢复 | FR-CRED-002、FR-JOB-009/013/014、IR-002；06/08/09；[预算与恢复专题](../PI_MODEL_BUDGET_RECOVERY.md) | 本期新增 | #958 声明/配置/实际 CLI 分层、不可变快照和同 Session 有界恢复；最终 Actions 待验，真实容量未知 |
 | 镜像与部署 | 07；[镜像目录契约](../RUNTIME_IMAGE_REGISTRY_CONTRACT.md)、[部署](../ONE_CLICK_DEPLOYMENT.md)、[发布契约](<../RELEASE_RUNTIME_IMAGES.md>) | §8.3、§9 资源 | 已迁入概览；FR-IMG-001/002 的 OH Fuzz 匹配工具链与 fresh/reuse 原生 sanitizer 回归见发布专题，实际执行结果单独留证 |
 | OpenSandbox upgrade | IR-001/003; 06/07/08/10; [upgrade record](../OPENSANDBOX_1_2_UPGRADE.md), [canonical pins](../../packages/runtime-sandbox/src/opensandbox-version.ts) | Historical versions retained | SDK/images updated; direct ingress and Scheduler recovery unchanged; local unit vs actual server/live/native/final-SHA proof separated |
 | 资源阈值与性能 | 04；[config](../../apps/scheduler/src/config.ts) | §9.2、§12 | 已迁入；不沿用旧默认值清单 |

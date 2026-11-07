@@ -148,7 +148,7 @@ if (!testDatabaseUrl) {
             error: { message: "该令牌无权访问模型 grok-4.6 key=local-gateway-key", type: "new_api_error" },
           }), { status: 403 });
         }
-        return Response.json({ data: [{ id: "model-c" }, { id: "model-b" }] });
+        return Response.json({ data: [{ id: "model-c" }, { id: "model-b", context_length: 1_000_000, max_output_tokens: 64_000 }] });
       }) as typeof fetch;
       const forbidden = await request("POST", `/credentials/${credentialId}/test`, {});
       assert.equal(forbidden.statusCode, 200, forbidden.payload);
@@ -167,7 +167,18 @@ if (!testDatabaseUrl) {
       assert.match(forbiddenRow?.health_detail ?? "", /new_api_error：该令牌无权访问模型 grok-4\.6/u);
       assert.match(forbiddenRow?.health_detail ?? "", /当前模型 grok-4\.6 不可用，可用：model-b、model-c/u);
       assert.equal(forbiddenRow?.health_detail.includes("local-gateway-key"), false);
-      assert.deepEqual(forbiddenRow?.model_catalog_json, ["model-b", "model-c"]);
+      const { normalizeModelCatalog } = await import("./credentials.js");
+      assert.deepEqual(normalizeModelCatalog(forbiddenRow?.model_catalog_json), ["model-b", "model-c"]);
+      const persisted = forbiddenRow?.model_catalog_json as Array<{ model_id: string; context_window: number | null; max_output_tokens: number | null; limit_source: { trust: string } }>;
+      assert.equal(persisted[0]?.context_window, 1_000_000);
+      assert.equal(persisted[0]?.max_output_tokens, 64_000);
+      assert.equal(persisted[0]?.limit_source.trust, "provider_declared");
+      const readCatalog = json(await request("GET", `/credentials/${credentialId}/models`));
+      assert.deepEqual(readCatalog.models, ["model-b", "model-c"]);
+      const readDescriptors = readCatalog.model_descriptors as typeof persisted;
+      assert.equal(readDescriptors[0]?.context_window, 1_000_000);
+      assert.equal(readDescriptors[0]?.max_output_tokens, 64_000);
+      assert.equal(readDescriptors[0]?.limit_source.trust, "provider_declared");
       assert.notEqual(forbiddenRow?.model_catalog_fetched_at, null);
 
       // 402 配额耗尽写入 schema 约束的 quota_exhausted 类别。
@@ -181,7 +192,7 @@ if (!testDatabaseUrl) {
       const [quotaRow] = await sql<{ health_error_category: string; model_catalog_json: unknown; model_catalog_fetched_at: string | null }[]>`
         SELECT health_error_category, model_catalog_json, model_catalog_fetched_at FROM credentials WHERE id = ${credentialId}`;
       assert.equal(quotaRow?.health_error_category, "quota_exhausted");
-      assert.deepEqual(quotaRow?.model_catalog_json, ["model-b", "model-c"]);
+      assert.deepEqual(quotaRow?.model_catalog_json, forbiddenRow?.model_catalog_json);
       assert.equal(String(quotaRow?.model_catalog_fetched_at), String(forbiddenRow?.model_catalog_fetched_at));
     } finally {
       globalThis.fetch = originalFetch;

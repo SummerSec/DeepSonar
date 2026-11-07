@@ -959,7 +959,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     const result = await testCredential(cred as never);
     // 模型级失败（402/403/配额）补做的目录发现结果一并回填，UI 才能提示可用模型（#748）。
     const discoveredCatalog = result.model_catalog && result.model_catalog_fetched_at
-      ? normalizeModelCatalog(result.model_catalog)
+      ? result.model_descriptors ?? normalizeModelCatalog(result.model_catalog)
       : null;
     const [updated] = await sql`
       UPDATE credentials SET
@@ -1032,7 +1032,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         model_descriptors: result.available
           ? resolveModelDescriptorCatalog({
               provider: body.provider,
-              catalogJson: result.models,
+              catalogJson: result.model_descriptors,
               catalogRevision: result.fetched_at ?? `preview:${body.provider}`,
             })
           : [],
@@ -1174,7 +1174,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
       const models = available ? normalizeModelCatalog(result.models) : [];
       const modelDescriptors = resolveModelDescriptorCatalog({
         provider: String(cred.provider),
-        catalogJson: models,
+        catalogJson: available ? result.model_descriptors : [],
         catalogRevision: result.fetched_at ?? `probe:${String(cred.provider)}`,
         healthStatus: available ? "verified" : "probe_failed",
       });
@@ -1193,7 +1193,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
           health_status = ${available ? "ok" : "error"},
           health_error_category = ${category},
           health_detail = ${detail},
-          model_catalog_json = ${sql.json(models as never)},
+          model_catalog_json = ${sql.json(modelDescriptors as never)},
           model_catalog_fetched_at = ${fetchedAt}
         WHERE id = ${id}
           AND key_version = ${cred.key_version}

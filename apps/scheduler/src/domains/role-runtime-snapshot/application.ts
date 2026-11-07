@@ -29,6 +29,7 @@ import {
   assertResolvedModelInCredentialCatalog,
   extractModelsFromSettings,
   projectProviderRuntimeSnapshot,
+  providerModelBudget,
   resolveModelSource,
   snapshotUpstreamModel,
 } from "../../provider-settings.js";
@@ -54,6 +55,7 @@ import {
 } from "../provider-adapter/index.js";
 import { resolveCredentialModelRef } from "../provider-adapter/resolve-credential.js";
 import { ModelCatalogMismatchError } from "../../provider-effective-model.js";
+import { descriptorsWithClientBudgets, resolveModelTokenBudget } from "../provider-adapter/model-budget.js";
 import { expandModules, resolveEffectiveModuleSelectors, type MissingModule } from "../../skill-sources.js";
 import { freezeJobSkillCatalog } from "../../job-skill-catalog.js";
 import { normalizeRoleUiColor } from "../../role-colors.js";
@@ -489,13 +491,29 @@ async function resolveAgentSnapshotForJobUnchecked(
       ? llm.agent_cli.trim()
       : agentCli;
     const configuredModelIds = extractModelsFromSettings(settingsConfig, credentialAgentCli);
-    const catalog = resolveModelDescriptorCatalog({
-      provider: String(llm.provider ?? ""),
-      catalogJson: configuredModelIds,
-      catalogRevision: typeof llm.model_catalog_fetched_at === "string"
-        ? llm.model_catalog_fetched_at
-        : `credential:${String(llm.id)}`,
-      compatibleAgentClis: agentCli === "claude-code" || agentCli === "pi" || agentCli === "dsh" ? [agentCli] : undefined,
+    const resolvedSelection = selectedModel ? resolveCredentialModelRef(settingsConfig, agentCli, selectedModel) : null;
+    const budgetInputs = {
+      roleContextWindowTokens: options?.runtimeProfile?.context_window_tokens ?? cfg?.context_window_tokens,
+      contextSource: options?.runtimeProfile?.context_window_tokens != null ? "job" as const : "role_config" as const,
+    };
+    const catalog = descriptorsWithClientBudgets({
+      descriptors: resolveModelDescriptorCatalog({
+        provider: String(llm.provider ?? ""),
+        catalogJson: configuredModelIds,
+        catalogRevision: typeof llm.model_catalog_fetched_at === "string"
+          ? llm.model_catalog_fetched_at
+          : `credential:${String(llm.id)}`,
+        compatibleAgentClis: agentCli === "claude-code" || agentCli === "pi" || agentCli === "dsh" ? [agentCli] : undefined,
+      }),
+      budgetForModel: (model) => model === resolvedSelection
+        ? providerModelBudget({ agentCli, model: selectedModel, settingsConfig,
+            credentialProvider: String(llm!.provider), catalogJson: llm!.model_catalog_json, ...budgetInputs })
+        // An unselected bare id may exist on multiple Pi routes. Its observed
+        // declarations can filter candidates, but must not choose a native route.
+        : resolveModelTokenBudget({ provider: String(llm!.provider), modelId: model,
+            catalogJson: llm!.model_catalog_json, ...budgetInputs,
+            credentialContextWindowTokens: settingsConfig && typeof settingsConfig === "object"
+              ? (settingsConfig as Record<string, unknown>).context_window_tokens : null }),
     });
     // #697: RoleConfig.allow_model_catalog_passthrough no longer authorizes; only
     // platform env + admin project Agent allowlist (#679 deviation 1 item 3).
@@ -525,15 +543,24 @@ async function resolveAgentSnapshotForJobUnchecked(
     } as never;
     const eligible = selectModelsForRequirements(catalog, normalizedRequirements);
     const eligibleIds = new Set(eligible.map((row) => row.model_id));
-    const fallback = agentAllowlist.fallback_model_refs.find((ref) => eligibleIds.has(ref));
-    if (!selectedModel && fallback) selectedModel = fallback;
+    const isEligibleModelRef = (ref: string) => {
+      const id = resolveCredentialModelRef(settingsConfig, agentCli, ref);
+      const descriptor = catalog.find((row) => row.model_id === id);
+      if (!descriptor) return false;
+      const budget = providerModelBudget({ agentCli, model: ref, settingsConfig,
+        credentialProvider: String(llm!.provider), catalogJson: llm!.model_catalog_json, ...budgetInputs });
+      return selectModelsForRequirements(descriptorsWithClientBudgets({ descriptors: [descriptor], budgetForModel: () => budget }), normalizedRequirements).length > 0;
+    };
+    const fallbackModelRef = () => agentAllowlist.fallback_model_refs.find(isEligibleModelRef);
+    if (!selectedModel) selectedModel = fallbackModelRef() ?? null;
     if (!selectedModel && requirements && eligible.length > 0) selectedModel = eligible[0]!.model_id;
     // Prefer first account-configured model when RoleConfig/project default is empty (#679).
     if (!selectedModel && configuredModelIds.length > 0) selectedModel = configuredModelIds[0]!;
-    if (selectedModel && catalog.length > 0 && !allowPassthrough && !eligibleIds.has(resolveCredentialModelRef(settingsConfig, agentCli, selectedModel) ?? selectedModel)) {
+    if (selectedModel && catalog.length > 0 && !allowPassthrough && !isEligibleModelRef(selectedModel)) {
       if (requestedModelRef) {
         throwModelCapabilityMismatch(selectedModel, [...eligibleIds]);
       }
+      const fallback = fallbackModelRef();
       if (fallback) selectedModel = fallback;
       else if (configuredModelIds.includes(selectedModel)) {
         // selectedModel is an account-configured id; capability filter may have excluded it —
@@ -542,7 +569,7 @@ async function resolveAgentSnapshotForJobUnchecked(
         selectedModel = configuredModelIds[0]!;
       }
     }
-    if (requirements && selectedModel && !allowPassthrough && !eligibleIds.has(resolveCredentialModelRef(settingsConfig, agentCli, selectedModel) ?? selectedModel)) {
+    if (requirements && selectedModel && !allowPassthrough && !isEligibleModelRef(selectedModel)) {
       throwModelCapabilityMismatch(selectedModel, [...eligibleIds]);
     }
   }
@@ -550,6 +577,9 @@ async function resolveAgentSnapshotForJobUnchecked(
     agentCli,
     roleModel: selectedModel,
     roleContextWindowTokens: options?.runtimeProfile?.context_window_tokens ?? cfg?.context_window_tokens,
+    contextSource: options?.runtimeProfile?.context_window_tokens != null ? "job" : "role_config",
+    credentialProvider: llm ? String(llm.provider) : null,
+    catalogJson: llm?.model_catalog_json,
     settingsConfig,
     // SAFETY: manualConfigFiles 由上方 `SELECT path, content, content_sha256` 直接投影（未取 cfg 时为 []），
     // 形状即查询列；下游只读这三个字段。
@@ -763,6 +793,7 @@ async function resolveAgentSnapshotForJobUnchecked(
       catalogJson: llm.model_catalog_json,
       catalogRevision: `credential:${String(llm.id)}`,
       contextWindow: providerSnapshot.context_window_tokens,
+      modelBudget: providerSnapshot.model_budget,
       compatibleAgentClis: agentCli === "claude-code" || agentCli === "pi" || agentCli === "dsh"
         ? [agentCli]
         : undefined,
@@ -821,7 +852,8 @@ async function resolveAgentSnapshotForJobUnchecked(
     instructions_markdown: withRuntimeTestToolchainPolicy(governedRoleName, effectiveInstructions ?? null, runtimeImage.image_key),
     ...(roleDefinition ? { role_profile: roleDefinition } : {}),
     platform_tools: platformTools as PlatformToolName[],
-    context_window_tokens: options?.runtimeProfile?.context_window_tokens ?? contextWindowTokens,
+    context_window_tokens: contextWindowTokens,
+    model_budget: providerSnapshot.model_budget,
     settings_config_json: snapshotSettingsConfig,
     config_files: providerSnapshot.config_files,
     pi_extensions: frozenPiExtensions,

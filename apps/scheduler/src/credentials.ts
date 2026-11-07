@@ -2,7 +2,7 @@ import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { parseCredentialMasterKey, decryptCredentialWithKey } from "./credential-crypto.js";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { isCurrentAgentCli, rejectNonCurrentAgentCli } from "@deepsonar/shared-types";
+import { isCurrentAgentCli, rejectNonCurrentAgentCli, ModelDescriptor } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 
 /**
@@ -282,8 +282,10 @@ export function normalizeModelCatalog(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
   const output: string[] = [];
   for (const value of input) {
-    if (typeof value !== "string") continue;
-    const model = value.trim();
+    const descriptor = typeof value === "string" ? null : ModelDescriptor.safeParse(value);
+    const id = typeof value === "string" ? value : descriptor?.success ? descriptor.data.model_id : null;
+    if (id === null) continue;
+    const model = id.trim();
     if (!model || model.length > CREDENTIAL_MODEL_ID_MAX_LENGTH || CONTROL_CHARACTER.test(model)) continue;
     if (!output.includes(model)) output.push(model);
     if (output.length >= CREDENTIAL_MODEL_CATALOG_MAX) break;

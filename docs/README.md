@@ -2,6 +2,7 @@
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
 > 同步日期：2026-11-07
+> **Pi 模型预算与截断（#958）**：[预算与恢复专题](PI_MODEL_BUDGET_RECOVERY.md)记录发现声明/显式配置/CLI 观测分层、创建期冻结、同 Session 有界恢复及压缩无进展停止；不扩大权限/额度，不伪造上下文证据。行为回归与实际锁版本 SDK、HTTP/PG 入口已接既有 Actions，最终 SHA 待验；本地与生产验证均未执行。
 > **#951 完成失败诊断**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)登记当前 Attempt 可归属产出、原回执状态和受权限保护证据；有产出不升级成功，不伪造未知字段或自动重放。核心缺诊断已随 #963 合入并工程收口（2026-11-07 核对）；后续提交按各自最终 SHA 另验，全量覆盖和生产归因仍未验证。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
 
@@ -92,6 +93,7 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | **历史对照 / 已迁移入口（#741）** | 每个一级章节标注权威目标；现行细则按 architecture 归属表定位，不从旧 MVP 草图推导实现 |
 | [AGENT_CLI_RUNTIME_ADAPTERS.md](AGENT_CLI_RUNTIME_ADAPTERS.md) | **as-built** | 当前三类 Agent CLI 适配器、能力、Session 归档+查看器接入清单；DSH 0.2.1-rc.2 profile/SDK smoke、异步子代理完成边界与 v4 归档；**#389 DSH/Pi 解码三类契约与钉死版本夹具矩阵**；[#919 runner 失败来源与已接受完成的限定结算](AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)；#947 候选补齐实际 Pi `409:` 完成拒绝格式，不放行 usage/未知效果错误，最终 SHA Actions 待验；离线测试不代替最终 SHA Actions；leftover Codex/OpenCode 只读 |
 | [AGENT_RUNTIME_CONTEXT.md](AGENT_RUNTIME_CONTEXT.md) | **as-built**（#138） | context_id / compaction / 恢复身份 |
+| [Pi 模型预算与截断恢复](PI_MODEL_BUDGET_RECOVERY.md) | **进行中**（#958，源码接线，最终 Actions 待验） | 发现限制与来源、不可变预算、Pi 投影、length 有界恢复、压缩无进展与原生命周期 |
 | [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | **as-built**（#37） | 领域拆分与锁序；非「待实施」 |
 | [USAGE_LIMITS.md](USAGE_LIMITS.md) | **as-built** | 用量预算默认不限、显式限额、历史冻结策略及保留安全边界 |
 | [AI_NATIVE_TRUSTED_KERNEL.md](AI_NATIVE_TRUSTED_KERNEL.md) | **长期提案 + 已实现边界（2026-10-31）** | `RepairFeedback`、目标授权及 Plan v2 工程边界已有实现；完整长期协议、当前回放/组合验证与独立质量分别登记 |

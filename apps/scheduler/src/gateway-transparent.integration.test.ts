@@ -396,7 +396,7 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
     await t.test("upstream truncation is not disguised as a successful complete body", async () => {
       await assert.rejects(via("/v1/interrupted"));
     });
-    await t.test("main admission adapter preserves formed requests using fresh SQL allowances for three CLI shapes", async () => {
+    await t.test("main admission adapter preserves formed requests and both OpenAI output fields using fresh SQL allowances", async () => {
       const directory = await mkdtemp(path.join(tmpdir(), "gateway-main-policy-"));
       try {
         const modulePath = path.join(directory, "model-request-policy.mjs");
@@ -407,6 +407,9 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
             body: { model: "fixture-model", max_tokens: 100, messages: [], extension: { preserve: true } } },
           { cli: "pi", route: "/v1/chat/completions", field: "max_tokens",
             body: { model: "fixture-model", max_tokens: 100, stream: true, stream_options: { future: "keep" },
+              messages: [], extension: { preserve: true } } },
+          { cli: "pi", route: "/v1/chat/completions", field: "max_completion_tokens",
+            body: { model: "fixture-model", max_completion_tokens: 100, stream: true, stream_options: { future: "keep" },
               messages: [], extension: { preserve: true } } },
           { cli: "dsh", route: "/v1/responses", field: "max_output_tokens",
             body: { model: "fixture-model", max_output_tokens: 100, input: [], extension: { preserve: true } } },
