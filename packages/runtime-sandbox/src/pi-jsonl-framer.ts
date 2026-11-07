@@ -1,5 +1,12 @@
-/** Hard RPC envelope bound. Large payloads below this bound are filed, never guessed or dropped. */
-export const PI_RPC_HARD_MAX_BYTES = 64 * 1024 * 1024;
+/**
+ * Hard RPC envelope bound. Large payloads below this bound are filed, never
+ * guessed or dropped.
+ *
+ * #944: raised from 64 MiB to 256 MiB. This is the absolute protection, not a
+ * normal path: chunked frames stay small, and a single oversized line only gets
+ * this far when an operator explicitly raises the per-event bound.
+ */
+export const PI_RPC_HARD_MAX_BYTES = 256 * 1024 * 1024;
 
 export interface PiJsonlFrame { line: string; bytes: number }
 

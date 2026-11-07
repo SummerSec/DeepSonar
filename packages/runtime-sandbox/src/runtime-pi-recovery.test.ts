@@ -385,8 +385,11 @@ test("#765 persistence backpressure does not expire provider ACK timers", async 
       assert.equal(driver.error, undefined);
       assert.equal(proc.ended, false);
     });
-    await new Promise(resolve => setTimeout(resolve, 30));
+    // #944: the ACK deadline now retries before failing, so wait out the full
+    // retry budget (15 + 15 + 30 + 60ms) instead of the first window.
+    await new Promise(resolve => setTimeout(resolve, 250));
     assert.match(driver.error?.message ?? "", /PI_RPC_ACK_TIMEOUT/);
+    assert.ok(proc.commands.length > 1, "the input is retransmitted before the Job fails");
   } finally { driver.dispose(); }
 });
 
@@ -410,4 +413,83 @@ test("#765 file count remains bounded when redaction shrinks very large payloads
   for (let i = 0; i < 128; i++) await capture.prepare({ type: "message_update", text: secret }, secret.length + 40);
   await assert.rejects(capture.prepare({ type: "message_update", text: secret }, secret.length + 40), /PI_RPC_CAPTURE_BUDGET_EXCEEDED/);
   assert.equal(writes, 128);
+});
+
+test("production Pi runner keeps a tool start whose args exceed the inline bound", async () => {
+  const events: Record<string, unknown>[] = [];
+  const artifacts: { name: string; content: string }[] = [];
+  // `script` is not a known payload key, so the redacted preview keeps it whole
+  // and the event lands above the 1 MiB inline bound.
+  const huge = "a".repeat(2 * 1024 * 1024);
+  const fake = host(() => new PiProcess((record, process) => {
+    if (record.type === "get_state") state(process, record);
+    else if (record.type === "prompt") {
+      process.emit({ type: "response", id: record.id, command: "prompt", success: true, data: { disposition: "started" } });
+      process.emit({ type: "agent_start" });
+      process.emit({ type: "tool_execution_start", toolCallId: "tool-big", toolName: "bash", args: { script: huge } });
+      process.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } });
+      process.emit({ type: "agent_settled", aborted: false });
+    }
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial",
+    onRuntimeArtifact: async (a) => { artifacts.push(a); return `attempts/test/runtime/${a.name}`; },
+    onEvent: (e) => events.push(e) });
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.terminalOutcome, "success");
+
+  // The whole point: the tool start is still dispatched, with its identity, and
+  // only the oversized argument became a pointer into the archived capture.
+  const started = events.find((event) => event.type === "tool.call.started");
+  assert.ok(started, "an oversized tool argument must not swallow the event");
+  assert.equal(started!.callId, "tool-big");
+  assert.equal(started!.toolName, "bash");
+  const input = started!.input as Record<string, unknown>;
+  assert.match(String((input.script as Record<string, unknown>).$piRef), /pi-rpc-.+\.json$/u);
+  assert.equal((input.script as Record<string, unknown>).pointer, "/args/script");
+
+  const referenced = events.filter((event) => event.code === "pi_rpc_payload_referenced");
+  assert.equal(referenced.length, 1, "the substitution is announced to the consumer");
+  assert.deepEqual(referenced[0]!.pointers, ["/args/script"]);
+  assert.equal(artifacts.length, 1, "the full redacted payload is still durable");
+  assert.ok(artifacts[0]!.content.includes(huge));
+});
+
+test("production Pi runner keeps the body of a multi-block message_end", async () => {
+  // #944 review P1: 400 blocks of 3000 bytes each stay under the per-string
+  // preview limit, so the event is only oversized as a whole. Replacing the
+  // `message.content` array with a pointer made `piMessageText` return undefined
+  // and the final body disappeared. The preview must cap the array instead and
+  // keep its type.
+  const events: Record<string, unknown>[] = [];
+  const blocks = Array.from({ length: 400 }, (_, index) => ({ type: "text", text: `${String(index).padStart(3, "0")}-${"a".repeat(2996)}` }));
+  const expected = blocks.map((block) => block.text).join("");
+  assert.ok(Buffer.byteLength(expected) > 1024 * 1024, "the fixture must exceed the inline bound");
+
+  const fake = host(() => new PiProcess((record, process) => {
+    if (record.type === "get_state") state(process, record);
+    else if (record.type === "prompt") {
+      process.emit({ type: "response", id: record.id, command: "prompt", success: true, data: { disposition: "started" } });
+      process.emit({ type: "agent_start" });
+      process.emit({ type: "message_end", message: { role: "assistant", content: blocks } });
+      process.emit({ type: "agent_settled", aborted: false });
+    }
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial",
+    onRuntimeArtifact: async (a) => `attempts/test/runtime/${a.name}`,
+    onEvent: (e) => events.push(e) });
+
+  assert.equal(result.error, undefined, "a bounded preview must not fail the attempt");
+  assert.equal(result.terminalOutcome, "success");
+  // The preview keeps a bounded prefix of the body instead of dropping it, and
+  // that prefix must be a byte-exact prefix of the real text (no corruption).
+  assert.ok(result.text.length > 0, "the final body must survive the preview");
+  assert.ok(expected.startsWith(result.text), "the delivered body must be an exact prefix of the archived body");
+
+  const diagnostics = events.filter((event) => event.code === "pi_rpc_output_filed");
+  assert.equal(diagnostics.length, 1, "the full body is archived");
+  assert.ok(
+    !events.some((event) => event.code === "pi_rpc_payload_referenced"),
+    "a capped array must not be replaced by a pointer",
+  );
 });
