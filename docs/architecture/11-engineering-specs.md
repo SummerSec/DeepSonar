@@ -1,7 +1,7 @@
 # 11. 工程规范
 
 > 状态：**as-built（#741 PR 5 回填）**。本文记录当前仓库开发、验证和文档治理必须遵守的工程规则；实现冲突时以代码、schema、OpenAPI 和测试为准。
-> 同步日期：2026-11-05
+> 同步日期：2026-11-07
 
 本文是 DeepSonar 的开发规范视图。它把可重复的工程约束、测试分层、文档保鲜和发布前核查集中在一个位置；新架构事实以 [`docs/architecture/README.md`](README.md)、相关架构视图、追溯矩阵和 ADR 为准，`DESIGN.md`、`docs/README.md` 与其他专题文档提供摘要或专题证据。
 
@@ -125,7 +125,9 @@ Control API 的每个 operation 必须经过三层校验：
 
 单元测试不替代 PostgreSQL 集成，typecheck 不替代行为测试，fake 模式冒烟不替代真实沙箱或多架构镜像证据。`ci:unit:ci-test-hook` 维护 `*.test.ts` 的脚本接线棘轮；它不能证明对应 script 已被 workflow 调用，workflow 仍需人工核对。测试数据库或真实沙箱不可用时保留跳过/未执行事实，不改写为成功。
 
-当前 CI 在单 workflow 内分类 PR：只有新增/修改且位于 [明确文件白名单](../../agent-harness/classify-ci-changes.mjs) 内的纯文本文件可跳过重活；不按 Markdown 后缀或 docs/skills 目录前缀放行。运行时手册、Skill、提示、配置、未知路径、混合改动、删除及重命名都运行全量。分类器使用 NUL 分隔的 Git diff 保留文件名身份。文档保鲜与 `pnpm ci:unit:ci-routing` 始终执行，ci-summary 验证分类结果、文档与每个应运行 job，失败、取消或意外跳过不能通过。分类失败/缺失输出不允许走文档路径；已触发的 push 与 workflow_dispatch 强制 full。
+当前 CI 在单 workflow 内分类 PR：只有新增/修改且位于 [明确文件白名单](../../agent-harness/classify-ci-changes.mjs) 内的纯文本文件可跳过核心重活；不按 Markdown 后缀或 docs/skills 目录前缀放行。运行时手册、Skill、提示、配置、未知路径、混合改动、删除及重命名不能获得 docs-only。分类器使用 NUL 分隔的 Git diff 保留文件名身份。文档保鲜与 `pnpm ci:unit:ci-routing` 始终执行，ci-summary 验证分类结果、文档与每个应运行 job，失败、取消或意外跳过不能通过。分类失败/缺失输出不允许走文档路径；已触发的 push 与 workflow_dispatch 强制 full。
+
+#961 的 Chrome Fuzz ARM build/native smoke 使用同一[运行计划](../../agent-harness/ci-run-plan.mjs)：tiered Ready PR 只有全部路径属于已核对的非镜像业务输入或原文档白名单时才可跳过 ARM 两项，其他核心检查照常运行。Chrome 专项、base 构建输入、路由自身、未知路径、空 diff、缺失专项路径与分析失败均保守必跑；改名同时核对源和目标。`ci-summary` 只接受计划 `required` 对应两项 success、或计划 `skipped` 对应两项 skipped，缺失/非法输出及失败/取消都拒绝。main push、手动运行和 `CI_PR_MODE=full` 保留完整 ARM 验收；V8 分层缓存与可比性能样本仍在 #961 跟踪，不能以路由接线宣称已提速。
 
 #825 的 Web 构建使用[独立 build 配置](../../apps/web/tsconfig.build.json)隔离测试文件，入口见 [package.json](../../apps/web/package.json)；测试仍由各自 CI suite 执行，不能把排除测试编译解释为行为测试通过。新增 ADR 路径与本次 Management Skill API 修改不因 Markdown 后缀自动获得 docs-only 分类。
 

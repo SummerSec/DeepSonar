@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import { call, completionReady, completionDiagnosticEvidence, jobId, attemptId, rootId, runExecutor, setPreflight, terminalBundleCalls, terminalEvents } from "./executor-real-terminal-race.fixture.js";
-import { resolveTerminalProcessOutcome, type RealAgentResult } from "@deepsonar/runtime-sandbox";
+import { getAgentCliRuntimeAdapter, resolveTerminalProcessOutcome, type RealAgentResult } from "@deepsonar/runtime-sandbox";
 import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 
 const done = { summary: "Completion accepted during the bounded offline race." };
@@ -157,6 +157,23 @@ const structuredRefusal: RealAgentResult = { text: "", files: {}, errorKind: "ru
   ...resolveTerminalProcessOutcome({ exitCode: 0,
     terminalResult: { isError: true, errorDetail: completionRefusal } }) };
 
+function piMessageFailure(errorMessage: string): RealAgentResult {
+  const adapter = getAgentCliRuntimeAdapter("pi");
+  assert.ok(adapter);
+  const [terminal] = adapter.decodeOutput({ type: "message_end", message: {
+    role: "assistant", stopReason: "error", errorMessage,
+  } }, {});
+  assert.equal(terminal.type, "result");
+  assert.equal(terminal.is_error, true);
+  assert.ok(typeof terminal.result === "string");
+  assert.equal(terminal.runnerErrorSource, undefined);
+  // Mirror runtime-agent's structured-result normalization, without inventing the error string.
+  return { text: "", files: {}, errorKind: "runner",
+    ...resolveTerminalProcessOutcome({ exitCode: 0,
+      terminalResult: { isError: true, errorDetail: terminal.result } }) };
+}
+const piRefusal = piMessageFailure("409: Completion already accepted; reconcile its receipt");
+
 async function acceptHubAndDone() {
   const hubId = randomUUID(), doneId = randomUUID();
   await call("submit_hub_decision", hub, { eventId: hubId });
@@ -167,29 +184,31 @@ async function acceptHubAndDone() {
   return [hubId, doneId];
 }
 
-test("executeReal: structured Gateway refusal settles the original accepted Hub/done exactly once", async () => {
-  let ids: string[] = [];
-  const terminals = await runExecutor(async () => {
-    ids = await acceptHubAndDone();
-    return structuredRefusal;
-  }, "hub");
-  assert.equal(terminalBundleCalls(), 1);
-  assert.deepEqual(terminals.map(event => event.type), ["hub_decision", "done"]);
-  assert.deepEqual(terminals.map(event => event.event_id), ids);
-  assert.deepEqual(terminals.map(event => event.payload), [hub, done]);
-});
-
-for (const phase of ["none", "prepare"] as const) {
-  test(`executeReal: structured refusal with ${phase} completion does not finalize`, async () => {
-    await assert.rejects(runExecutor(async () => {
-      await call("submit_hub_decision", hub);
-      if (phase === "prepare") await call("mark_job_done", done, { completionPhase: "prepare" });
-      assert.equal(completionReady(), false);
-      return structuredRefusal;
-    }, "hub"), /agent 运行失败: 409 Completion already accepted/);
-    assert.equal(terminalBundleCalls(), 0);
-    assert.deepEqual(terminalEvents(), []);
+for (const [format, result] of [["409 space", structuredRefusal], ["Pi message_end 409 colon", piRefusal]] as const) {
+  test(`executeReal: ${format} refusal settles the original accepted Hub/done exactly once`, async () => {
+    let ids: string[] = [];
+    const terminals = await runExecutor(async () => {
+      ids = await acceptHubAndDone();
+      return result;
+    }, "hub");
+    assert.equal(terminalBundleCalls(), 1);
+    assert.deepEqual(terminals.map(event => event.type), ["hub_decision", "done"]);
+    assert.deepEqual(terminals.map(event => event.event_id), ids);
+    assert.deepEqual(terminals.map(event => event.payload), [hub, done]);
   });
+
+  for (const phase of ["none", "prepare"] as const) {
+    test(`executeReal: ${format} refusal with ${phase} completion does not finalize`, async () => {
+      await assert.rejects(runExecutor(async () => {
+        await call("submit_hub_decision", hub);
+        if (phase === "prepare") await call("mark_job_done", done, { completionPhase: "prepare" });
+        assert.equal(completionReady(), false);
+        return result;
+      }, "hub"), /agent 运行失败:.*409:? Completion already accepted/);
+      assert.equal(terminalBundleCalls(), 0);
+      assert.deepEqual(terminalEvents(), []);
+    });
+  }
 }
 
 const rejectedResults: Array<[string, RealAgentResult]> = [
@@ -204,6 +223,14 @@ const rejectedResults: Array<[string, RealAgentResult]> = [
   ["missing provenance", { ...structuredRefusal, runnerErrorSource: undefined }],
   ["arbitrary structured diagnostic", { ...structuredRefusal, error: `unrelated diagnostic: ${completionRefusal}` }],
   ["semantic failure", { ...structuredRefusal, errorKind: "semantic" }],
+  ["Pi colon refusal with process failure", { ...piRefusal, runnerErrorSource: "process" }],
+  ["Pi colon refusal without provenance", { ...piRefusal, runnerErrorSource: undefined }],
+  ["Pi colon refusal with semantic failure", { ...piRefusal, errorKind: "semantic" }],
+  ["Pi colon refusal after exit 137", { ...piRefusal,
+    ...resolveTerminalProcessOutcome({ exitCode: 137, closeReason: "terminal_result",
+      terminalResult: { isError: true, errorDetail: piRefusal.error } }) }],
+  ["Pi repair usage not settled", piMessageFailure("409: Repair usage is not settled; reconcile the existing request before continuing")],
+  ["Pi unrelated 409", piMessageFailure("409: Request rejected; inspect its policy")],
   ...["cancelled", "timeout", "lease expired", "COMPLETION_EFFECT_UNKNOWN"].map(reason => [reason,
     { ...structuredRefusal, error: `${reason}: ${completionRefusal}` }] as [string, RealAgentResult]),
 ];
