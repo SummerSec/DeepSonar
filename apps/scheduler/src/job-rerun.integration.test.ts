@@ -209,17 +209,21 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET started_at=NULL,finished_at=NULL,error=NULL WHERE id=${checkpointId}`;
       const { config } = await import("./config.js");
       const { runner } = await import("./runtime.js");
-      // Narrow test-only override; production configuration remains readonly.
-      const fixtureRuntime = config.runtime as { agentMode: string };
-      const previousMode = fixtureRuntime.agentMode, previousProvision = runner.provision;
+      // Run real preflight with the already-created fake runner; do not probe
+      // a nonexistent OpenSandbox server before the malformed Job is claimed.
+      const fixtureRuntime = config.runtime as { agentMode: string; provider: string };
+      const previousMode = fixtureRuntime.agentMode, previousProvider = fixtureRuntime.provider;
+      const previousProvision = runner.provision;
       let provisionCalls = 0;
       fixtureRuntime.agentMode = "real";
+      fixtureRuntime.provider = "fake";
       runner.provision = async () => { provisionCalls += 1; throw new Error("preflight must fence runtime IO"); };
       try {
         assert.equal(await dispatcherModule.dispatchOnce(), 1);
         await dispatcherModule.drainInFlight();
       } finally {
         fixtureRuntime.agentMode = previousMode;
+        fixtureRuntime.provider = previousProvider;
         runner.provision = previousProvision;
       }
       assert.equal(provisionCalls, 0);
