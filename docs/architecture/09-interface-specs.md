@@ -23,6 +23,12 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 项目 RoleConfig 写入拒绝 `agent_cli` / `model`，读取不暴露这两个字段；全局 CLI 接受 NULL 表示未指定偏好。项目 RoleConfig 导出不含这两项，导入含这两项（即使为 NULL）也拒绝；全局导入未指定 CLI 保持 NULL。项目 Agent 设置分别表达 CLI 和凭据白名单是否显式收紧，`credential_ids_configured` 区分未配置与空名单，设置读取不持久化凭据 ID。readiness 的检查项可携带与 Job 解析同源的 RepairFeedback；悬空/停用白名单要求管理员修复，不能通过 Agent 提交账号 ID 或 OCI 地址绕过（#757）。
 
+### 管理 Skill 的当前契约（#996）
+
+[Management Skill](../../skills/deepsonar-management/SKILL.md)及 Python CLI 跟随现有 credential-first 契约：RoleConfig 不再写账号绑定或 `reasoning`；项目角色由 Hub/Job 在可见目录内选择，不提供角色启用开关。旧 `project-settings update --roles` 在发请求前明确拒绝，项目 CLI/Provider 白名单仍是授权边界，不因删角色开关而放宽。
+
+`role-configs sync-builtin-prompts` 从同 checkout 的 schema 基线读取 Prompt，把全局 GET 投影映射到现有严格 PUT，仅替换指令；空 CLI、DSH 模式、上下文窗口、runtime knobs、工具/能力与配置文件内容保持原值，缺失必要字段时停止而非补默认。相同 Prompt 和 dry-run 不写入；不改项目覆盖、Job 快照或服务端协议。`pnpm ci:unit:management-skill` 用离线 CLI 请求经过真实 `RoleConfigPutBody` 校验非 Prompt 字段往返及删除参数拒绝；运行结果以最终 SHA 的 Actions 为准，不能由端点覆盖或 dry-run 推定。
+
 ### 全局 Skill 源候选审批（#960）
 
 平台源是全局供应链控制面，不属于单个项目：源登记、同步、删除、信任/启用操作要求全局管理授权，项目受限主体不能凭项目权限修改所有项目可见的源。`POST /skill-sources/:id/sync` 仅核验并暂存候选，force 只要求重拉内容，不绕过 branch、CAS、取消、身份或审批门；返回的本次 SHA/hash 与 `updated` 不表示已发布。列表/详情分别展示已批准 live 与 nullable candidate 元数据、最近检查及安全错误分类，不能把 B 的核验时间覆盖成 A 的新鲜度。

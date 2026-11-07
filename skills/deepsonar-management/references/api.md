@@ -249,7 +249,7 @@ Scheduler 普通有限 tick 只追加一个 heldout subject 的实际当前 SQL 
 
 这些路由不改变技术 Verify、Finding disposition 或 Job 生命周期，也不创建第二执行通道。资格投影不能替代 `operator_attestation`、verified Fact 或完整完成门。
 
-### 设置（规则与角色启停）
+### 设置（规则与项目 Agent 授权）
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
@@ -258,8 +258,12 @@ Scheduler 普通有限 tick 只追加一个 heldout subject 的实际当前 SQL 
 | POST | /platform/claims/pause | admin | `{reason: platform_upgrade\|maintenance, note?}`（strict，note ≤500）。持久化、跨副本生效、重启保持；只阻止新领取，不取消在途 Job。同原因幂等 `changed=false`；其他原因已暂停 409 `PLATFORM_CLAIMS_ALREADY_PAUSED`。审计 `platform.claims_pause` |
 | POST | /platform/claims/resume | admin | `{reason?}`：带 reason 时仅当前原因一致才解除，否则 409 `PLATFORM_CLAIMS_PAUSE_REASON_MISMATCH`；未暂停幂等。`pg_notify` 唤醒调度，审计 `platform.claims_resume` |
 | PATCH | /global-settings | agents:write | `{rules: {...}, finding_protocol?}` 合并；`finding_protocol` 只走顶层。claim 读 effective 并由 `pg_notify` 唤醒；库 `rules_json` 优先，并发默认以 [config](../../../apps/scheduler/src/config.ts)为准，Finding 协议版本/模式以运行时 OpenAPI 为准 |
-| GET | /projects/:id/settings | agents:read | 项目规则覆盖 + 角色启用 + `effective_rules.maxConcurrentJobs` / `maxConcurrentJobsSource` + `active_jobs` |
-| PATCH | /projects/:id/settings | agents:write | `{rules?, roles?: {enabled: string[] \| null}, finding_protocol?}`；`rules.maxConcurrentJobs` 为 `0–1000` 或 `null`（清除继承全局）；`enabled: null` 恢复默认 |
+| GET | /projects/:id/settings | agents:read | 项目规则、Finding 协议、设备接入、CLI/Provider 白名单及显式默认值、effective 设置与 `active_jobs`；`credential_ids_configured` 区分未配置和显式空名单 |
+| PATCH | /projects/:id/settings | agents:write | 支持 `rules`、`finding_protocol`、`device_access_enabled` 与项目 Agent 授权字段，完整形状和配额边界见 [SettingsPatchBody](../../../apps/scheduler/src/settings-validation.ts)；省略字段保持原值，`rules.maxConcurrentJobs: null` 清除项目覆盖 |
+
+项目不再提供角色启用开关；角色由 Hub/Job 在平台角色及本项目自有角色中选择。CLI 的旧 `project-settings update --roles` 会在发送请求前报错，不应把服务端剥离未知 `roles` 字段后的响应当成设置成功。项目授权并未取消：`enabled_agent_clis`、`enabled_credential_ids` 收窄 CLI/Provider 候选；显式空凭据名单禁止所有账号，未配置则动态继承项目可访问账号。`default_agent_cli`、`default_credential_id`、`default_model_ref` 与 `fallback_model_refs` 是范围内的软缺省，不扩大白名单；无效或不可访问引用必须修复，不能自动换账号。
+
+CLI 的 `project-settings update` 只封装 `--rules` 和 `--finding-protocol`。修改白名单等其他支持字段，使用这里的 PATCH HTTP 契约或 Web 项目 Agent 设置；不要发明 CLI 参数，也不要将它们塞入 `rules`。
 
 ### 角色注册表（agent_roles）
 
@@ -269,67 +273,53 @@ Scheduler 普通有限 tick 只追加一个 heldout subject 的实际当前 SQL 
 | POST | /agent-roles | agents:write | `{name, title?, description?}`；name 即 job.type |
 | PATCH | /agent-roles/:id | agents:write | 部分更新（name 不可改） |
 | DELETE | /agent-roles/:id | agents:write | `kind=role` 均可删除；system/hub 返回 409 |
-| GET | /projects/:id/roles | agents:read | 项目视角启用状态 |
+| GET | /projects/:id/roles | agents:read | 平台工作角色与本项目自有工作角色；`enabled` / `default_enabled` 为 true，不是可编辑的项目开关 |
 
 ### RoleConfig（角色 → agent 配置；声明式全量替换）
 
-PUT body：
+全局 PUT 示例（字段以严格的 [RoleConfigPutBody](../../../apps/scheduler/src/role-config-schema.ts) 为准；不是重置现有配置的建议）：
 
 ```json
 {
-  "dsh_task_mode": "standard | ptc",
-  "env_keys": ["..."],
-  "env_vars": { "KEY": "value" },
-  "modules": [
-    "<source_id>:<module_id>",
-    "<source_id>:plugin:<plugin_path>",
-    "<source_id>:source:*"
-  ],
+  "agent_cli": null,
+  "dsh_task_mode": "standard",
+  "model": null,
+  "context_window_tokens": null,
+  "env_keys": [],
+  "env_vars": {},
+  "modules": [],
   "skills": [],
   "commands": [],
   "mcps": [],
   "subagents": [],
-  "platform_tools": {
-    "emit_progress": true,
-    "emit_fact": true,
-    "mark_job_done": true,
-    "request_human": false
-  },
-  "instructions_markdown": "string | null",
-  "runtime_image_key": "string | null",
-  "sandbox_limits": {
-    "cpu": 2,
-    "memoryMiB": 4096,
-    "pidsLimit": 256
-  },
-  "credentials": [{ "credential_id": "uuid", "purpose": "llm" }],
-  "config_files": [{ "path": ".claude/settings.json", "content": "{...}" }]
+  "platform_tools": {},
+  "instructions_markdown": null,
+  "runtime_image_key": null,
+  "runtime_knobs": {},
+  "config_files": []
 }
 ```
 
-项目 RoleConfig 的 PUT 不接受或持久化 `agent_cli` / `model`；这两个字段只可由平台管理员写入全局 RoleConfig（全局读取可见，项目读取不暴露）。运行时身份以凭据的 `agent_cli` 与 `settings_config_json` 模型目录为准，Hub 的 provider/model selector 和项目 Agent allowlist 只能提出或收窄候选，不能由项目 RoleConfig 自报模型或 CLI。
+项目 RoleConfig 的 PUT 不接受或持久化 `agent_cli` / `model`；这两个字段只可写入全局 RoleConfig（项目读取不暴露）。全局 `agent_cli: null` 表示没有 CLI 偏好，`model: null` 表示没有角色模型覆盖。项目 RoleConfig 也不能指定 `runtime_image_key`。运行时身份以凭据的 `agent_cli` 与 `settings_config_json` 模型目录为准，Hub 的 provider/model selector 和项目 Agent allowlist 只能提出或收窄候选，不能由项目 RoleConfig 自报模型或 CLI。
 
-保存前服务端校验：env 白名单、镜像可信目录、Credential 项目边界、配置文件路径白名单与密钥特征扫描，**越界一律 400**。
+RoleConfig 不再接受 `credentials` / `reasoning` 或账号绑定；未知字段严格拒绝，不提供旧请求兼容。`dsh_task_mode` 接受 `standard` / `ptc`；上下文窗口、runtime knobs 与配置文件校验以 [值校验](../../../apps/scheduler/src/role-config-values.ts)为准。保存前服务端检查 env 白名单、镜像可信目录、资源上限、工具/能力以及配置文件路径和密钥特征；Credential 项目范围与 CLI/Provider 兼容性由项目设置及 credential-first 解析另行校验，不能用 RoleConfig 绕过。
 
-`source_id` 必须是固定格式 UUID；selector 原样落库。`plugin:` 和 `source:*` 在创建下一 Job 时按当前 trusted/enabled catalog 展开，因此同步后的新增模块会跟随组选择器进入新快照；历史 Job 不会漂移。导入导出会保留合法 selector，路径中的 `..`、绝对路径、空段和未知保留前缀会被拒绝。
+GET 的 `env_vars_json`、`modules_json`、`skills_json`、`commands_json`、`mcps_json`、`subagents_json`、`platform_tools_json`、`sandbox_limits_json`、`runtime_knobs_json` 对应 PUT 中去掉 `_json` 的字段；`config_files` 写入只含 `path` / `content`，不回传内容摘要或数据库元数据。`role-configs sync-builtin-prompts` 按此映射保留当前全局配置，仅替换 Prompt；有差异才 PUT，`--dry-run` 或相同 Prompt 不写入。它不更新项目覆盖或历史 Job，目标部署不满足当前契约时必须停止。
+
+`modules` 接受 `<source_id>:<module_id>`、`<source_id>:plugin:<plugin_path>` 或 `<source_id>:source:*`。`source_id` 必须是固定格式 UUID；selector 原样落库。`plugin:` 和 `source:*` 在创建下一 Job 时按当前 trusted/enabled catalog 展开，因此同步后的新增模块会跟随组选择器进入新快照；历史 Job 不会漂移。导入导出会保留合法 selector，路径中的 `..`、绝对路径、空段和未知保留前缀会被拒绝。
 
 常见 400：
 - `runtime_image_key 没有可信版本: <key>` — 市场 catalog 有 key 不等于有 `trust_status=trusted` 的版本；先配置 `DEEPSONAR_OFFICIAL_*_IMAGE=@sha256:...` 重启，或 import+approve。
 - 建任务 / 开始任务时若市场 key 只有 `revoked` 版本，返回 `409 RUNTIME_IMAGE_REVOKED`；若版本存在但尚未 trusted，返回 `409 RUNTIME_IMAGE_NOT_TRUSTED`。这两种都不是 `RUNTIME_IMAGE_PLATFORM_UNAVAILABLE`（后者只表示 trusted 版本未声明宿主平台）。
-- 凭据 `purpose` 必须是 **`llm`** 才会进入模型通道；其它 purpose 不会被 Executor 当作 LLM key。
+- `credentials` / `reasoning` 等已移除的 RoleConfig 输入字段会被严格 schema 拒绝；模型推理配置应在 Credential 的 `settings_config` 中设置。
 
 `platform_tools` 接受平台工具**全集**中的任意工具名（每个 Agent 均可勾选，不再按 role/kind 裁剪 list）；未声明的工具默认启用。仅 **`mark_job_done`** 为形成合法终态所必需，不可关闭。授权以 Job 冻结的 `platform_tools` 快照为准。Hub 需要派发时由 `list_available_roles({})` 按需返回数据库中的项目可用工作角色；返回值排除 system/hub 角色，决策落地时服务端再次严格校验且不做默认回退。其他工具关闭后不会进入当次 Job 控制 API allowlist，也不会进入动态 `AGENTS.md`、`CLAUDE.md` 的可用工具说明。
 
 DSH 运行时固定为官方 `@deepseek-ai/dsh@0.2.1-rc.2`，由隔离 `agent-harness/dsh-runtime/package-lock.json` 冻结，镜像在 `/opt/deepsonar/dsh` 使用 `npm ci --omit=dev --ignore-scripts --no-audit --no-fund` 安装，入口为 `dsh --profile`。Job 创建时将 `dsh_task_mode=standard|ptc` 冻结：standard 使用 native tools，ptc 使用 `run_code`。`deepsonar` profile 的 `bundles: []` 与显式 allowlist 不启动 UI/web，不使用 settings/credential discovery、native DeepSeek routes、plugin-manager、telemetry 或 home overrides；skills 只从 Scheduler 物化的 `.dsh/skills` 根发现。Provider route/model 只经 Model Gateway，沙箱仅获得短期 Gateway token。官方 JSON-RPC 仅支持 initialize/prompt/shutdown，同进程 follow-up 可用；跨进程持久 resume 不支持，不会静默新建会话或重试。
 
-`runtime_image_key`：
-- `null` = 系统底座（调度默认 deepsonar-base）
-- 官方 Chrome 产品 key 包括 `deepsonar-chrome-audit`、`deepsonar-chrome-test`、`deepsonar-chrome-fuzz`；移动端为 `deepsonar-mobile`；以运行时 registry 为准
-- 官方 catalog（含 `project_opt_in` 专项如 OpenHarmony）可先写入 RoleConfig
-- Job 解析时：官方非 opt-in 默认可跑；opt-in / 第三方仍要求**项目启用**
-- 与镜像市场列表对齐（enabled 官方全量可选）
+`runtime_image_key` 仅可配置全局 RoleConfig：`null` 表示系统底座，非空 key 须来自可信且启用的市场目录，不能提交任意 OCI 地址。Job 解析跟随平台目录；官方默认可用，第三方须平台可见且项目启用。`project_opt_in` 只是元数据，不恢复项目钉版本。
 
-`sandbox_limits` 是项目 RoleConfig 的唯一覆盖入口（不是全局 RoleConfig）；项目 RoleConfig 读取投影字段名为 `sandbox_limits_json`。Schema v24 的字段仍服从服务端硬上限，Job 创建时冻结。
+非空 `sandbox_limits` 只用于项目 RoleConfig 的资源覆盖；读取字段名为 `sandbox_limits_json`，全局保持空对象。资源维度与上限以 [sandbox limits 校验](../../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)为准，Job 创建时冻结。
 
 Job 创建时必须冻结完整运行快照：平台/项目 Agent allowlist 与 Hub selector 先确定候选，Scheduler 在项目/全局可用范围内解析 credential；运行身份优先来自 Credential 的 `agent_cli` 与 `settings_config_json` 模型目录，平台默认/全局 RoleConfig 仅作软缺省，项目 RoleConfig 的同名遗留字段不生效。`reasoning` 只从 Credential `settings_config_json` 读取。DSH 快照还冻结官方 profile 版本、`dsh_task_mode`、Gateway route/model 与短期 token 注入策略；当前 adapter `persistentSessionResume=false`。快照含 effective `model`、物化后的 CLI 配置文件、Provider-owned `reasoning`、`credential_id` 与 `runtime_image`（digest）。**改 RoleConfig 或 Credential 不影响已创建 Job**。
 
@@ -345,16 +335,14 @@ OM 新 Job 还按 [shared registry](../../../packages/shared-types/src/pi-extens
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /role-configs/global | agents:read | 全局缺省清单（含 credentials / config_files） |
-| GET | /role-configs/bindable | agents:read | Provider 绑定选择器元数据（含 `agent_cli` / `runtime_image_key` / `can_bind` / `id` / `role_id`） |
-| PATCH | /role-configs/:id/agent-cli | agents:write | `:id` 为 RoleConfig UUID；仅改 `agent_cli`；已绑 LLM 时校验 CLI↔Provider，兼容则同步凭据 `agent_cli` |
-| PATCH | /role-configs/:id/runtime-image | agents:write | `:id` 为 RoleConfig UUID；仅改 `runtime_image_key`（`null`=系统底座）；不改写凭据/文件 |
+| GET | /role-configs/global | agents:read | 全局缺省清单与 `config_files`；不含 Credential 绑定 |
+| GET | /role-configs/bindable | agents:read | RoleConfig 选择器元数据（含 `agent_cli` / `runtime_image_key` / `id` / `role_id`）；`can_bind` 恒为 false，不是账号绑定入口 |
+| PATCH | /role-configs/:id/agent-cli | agents:write | `:id` 为全局 RoleConfig UUID；仅修改 CLI 偏好，不修改 Credential；项目 RoleConfig 拒绝 |
+| PATCH | /role-configs/:id/runtime-image | agents:write | `:id` 为全局 RoleConfig UUID；仅改 `runtime_image_key`（`null`=系统底座），不改文件；项目 RoleConfig 拒绝 |
 | PUT | /role-configs/global/:roleId | agents:write | `:roleId` 为角色 UUID；全局 upsert 并递增 version。全局显式 CLI 是候选消歧偏好，账号由 Scheduler credential-first 解析；不恢复旧角色账号绑定 |
 | GET | /projects/:id/role-configs | agents:read | 各角色来源 project / global / none；`project_config` 返回实时完整项目覆盖 |
-| PUT | /projects/:id/role-configs/:roleId | agents:write | `:roleId` 为角色 UUID；项目覆盖；普通角色须已启用（409）；绑定 LLM 凭据兼容则跟随最新 `agent_cli` |
+| PUT | /projects/:id/role-configs/:roleId | agents:write | `:roleId` 为角色 UUID；写入项目覆盖，不检查旧角色启用清单；拒绝 `agent_cli` / `model`，不绑定或修改 Credential |
 | DELETE | /projects/:id/role-configs/:roleId | agents:write | `:roleId` 为角色 UUID；删除覆盖，回落全局 |
-
-仓库管理 CLI 提供 `role-configs sync-builtin-prompts`：从 `database/schema.sql` 的单一基线提取内置 Prompt，读取线上全局 RoleConfig 后仅替换 `instructions_markdown`，保留模型、凭据、镜像、模块和配置文件；可先用 `--dry-run` 查看 Prompt 哈希。
 
 ### 运行时镜像市场
 
@@ -520,7 +508,7 @@ Agent 侧对应受治理 operation 是 `request_project_knowledge` / `search_pro
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | GET | /readiness | agents:read | 全局只读预检；返回 `deepsonar.readiness/v1`、`ready`、稳定 `checks[]`、网络策略和非敏感 role/credential/image 摘要。 |
-| GET | /projects/:id/readiness | agents:read | 按项目启用角色、RoleConfig 覆盖和项目网络默认值预检。 |
+| GET | /projects/:id/readiness | agents:read | 按项目 CLI/Provider 候选、可用角色、RoleConfig 覆盖和项目网络默认值预检。 |
 
 两个端点都接受可选查询参数 `allow_egress=true|false`（只模拟一次任务网络覆盖，不写入项目/画布）以及 `material_source=workspace_or_offline|external_or_workspace|declared|unspecified`。未声明 `material_source` 时保持 `unspecified`，不会因为允许出网就推断任务需要外部材料。`checks[].code` 是稳定机器码；通常 `severity=error` 会令 `ready=false`，此外全局 real 概览若镜像必须由具体项目启用，也会以 `RUNTIME_IMAGE_PROJECT_SCOPE_REQUIRED` 标记 unresolved 并保持 `ready=false`，需要改用项目端点确认。
 
@@ -540,14 +528,14 @@ Credential 连接测试和模型目录只读取 Scheduler append-only audit evid
 | 401 | 未认证或 Token 无效/过期/已吊销 |
 | 403 | Scope 不足或项目级 Token 跨项目 |
 | 404 | 资源不存在 |
-| 409 | 冲突（同名、终态 resume、未启用角色配项目覆盖等） |
+| 409 | 冲突（同名、Job 恢复状态/快照冲突、仍被引用的 Credential 删除等） |
 | 502 | 上游失败（Git 同步等） |
 
 ## 幂等
 
 - 任务创建：`jobs.ingress_key` 唯一；重复提交返回既有 Job。
 - 事件注入：`(project_id, source, event_id)` 幂等。
-- RoleConfig PUT：声明式全量替换 credentials/config_files，重复提交安全。
+- RoleConfig PUT：声明式全量替换配置和 `config_files`；先 GET 并保留非目标字段，不提交已移除的 Credential 绑定。重复 PUT 仍会递增版本并写审计；Prompt 同步仅在文本有差异时发送。
 - 无 body 的 POST（sync / test / resume / model refresh 等）**不要**带 `Content-Type: application/json`，否则 Fastify 可能 400；cancel 只有传 force/reason 时才带 JSON body。
 
 ## Job 状态与运维
@@ -559,7 +547,7 @@ pending → claimed → provisioning → running → waiting_human → succeeded
 - `POST /jobs/:id/resume`：使用旧冻结快照重新执行；导入 cancelled 返回 `409 JOB_IMPORTED_READONLY`；当前受治理身份与旧快照不同或无法解析时稳定返回 `409 SNAPSHOT_STALE`，不静默使用旧模型。
 - `POST /jobs/:id/rerun-current`：在 Dispatcher admission lock 与 Canvas→Job 行锁下完整重冻当前快照后原子转 `pending`；running/claimed/provisioning/pending 均返回 `409 JOB_NOT_RESUMABLE`。
 - 改 `apps/scheduler/src` 触发 tsx watch 时，**running → orphan**；resume 后继续。
-- schema 版本：以运行中 `/schema` 为准；远端 `origin/main` 最新基线为 v24，当前未同步 checkout 仍可能是 v23。空库套对应 checkout 的 `database/schema.sql`，非空只校验版本与表结构。版本不符 fail closed，无增量 migration——备份后重建库。
+- schema 基线：读取同一 checkout 的 [schema.sql](../../../database/schema.sql)和 [SCHEMA_VERSION](../../../apps/scheduler/src/schema-version.ts)，核对目标部署的源码/镜像版本及启动校验结果；`/schema` 发现的是 HTTP 契约，不代替数据库版本校验。空库套对应基线，非空库版本与表结构不符即 fail closed；没有增量 migration，重建前必须授权并备份。
 - 清业务数据**禁止** `TRUNCATE projects CASCADE`（会连带 credentials/role_configs）。导出包不含凭据明文。
 
 ## 将目标评审显式关联到 Plan 判据

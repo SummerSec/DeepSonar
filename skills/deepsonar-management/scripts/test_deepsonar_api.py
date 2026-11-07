@@ -206,6 +206,33 @@ class DeepSonarApiCliTest(unittest.TestCase):
             ],
         )
 
+    def test_project_settings_rejects_every_roles_value_before_any_request(self):
+        for value in ("explore,analyze", "null", "", None, True):
+            for extra in ({}, {"rules": '{"maxHubRounds": 8}'},
+                          {"finding-protocol": '{"mode": "hybrid"}'},
+                          {"rules": "invalid JSON", "finding-protocol": "invalid JSON"}):
+                with self.subTest(value=value, extra=extra):
+                    with self.assertRaisesRegex(self.module["ApiError"], "角色由 Hub/Job 选择.*CLI/Provider 项目授权仍有效"):
+                        self.run_command("project-settings.update", ["project-id"], {"roles": value, **extra})
+                    self.assertEqual(self.calls, [])
+        for argument in ("--roles=null", "--roles="):
+            pos, flags = self.module["parse_flags"](["project-id", argument, "--rules", "{}"])
+            with self.assertRaisesRegex(self.module["ApiError"], "--roles 已移除"):
+                self.run_command("project-settings.update", pos, flags)
+            self.assertEqual(self.calls, [])
+
+    def test_project_settings_keeps_rules_and_finding_protocol(self):
+        rules = {"maxHubRounds": 8, "minVerifySeverity": "high"}
+        protocol = {"mode": "hybrid", "allowed_profiles": ["vulnerability", "engineering"]}
+        for fields in ({"rules": rules}, {"finding_protocol": protocol},
+                       {"rules": rules, "finding_protocol": protocol}):
+            flags = {key.replace("_", "-"): json.dumps(value) for key, value in fields.items()}
+            self.run_command("project-settings.update", ["project-id"], flags)
+            self.assertEqual(self.calls[-1], ("PATCH", "/projects/project-id/settings", fields))
+        with self.assertRaisesRegex(self.module["ApiError"], "至少提供 --rules 或 --finding-protocol"):
+            self.run_command("project-settings.update", ["project-id"])
+        self.assertEqual(len(self.calls), 3)
+
     def test_credential_read_and_refresh_use_distinct_methods(self):
         self.run_command("credentials.models", ["credential-id"])
         self.run_command("credentials.models-refresh", ["credential-id"])

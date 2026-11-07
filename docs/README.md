@@ -91,6 +91,7 @@
 | 文档 | 状态 | 说明 |
 |------|------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | **历史对照 / 已迁移入口（#741）** | 每个一级章节标注权威目标；现行细则按 architecture 归属表定位，不从旧 MVP 草图推导实现 |
+| [Management Skill](../skills/deepsonar-management/SKILL.md) | **当前契约修复（#996）** | Prompt-only RoleConfig 同步、credential-first 与项目 CLI/Provider 白名单；旧角色开关拒绝、schema 引用保鲜与真实请求体回归接现有 Actions，验证结果以最终 SHA 为准 |
 | [AGENT_CLI_RUNTIME_ADAPTERS.md](AGENT_CLI_RUNTIME_ADAPTERS.md) | **as-built** | 当前三类 Agent CLI 适配器、能力、Session 归档+查看器接入清单；DSH 0.2.1-rc.2 profile/SDK smoke、异步子代理完成边界与 v4 归档；**#389 DSH/Pi 解码三类契约与钉死版本夹具矩阵**；[#919 runner 失败来源与已接受完成的限定结算](AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)；#947 候选补齐实际 Pi `409:` 完成拒绝格式，不放行 usage/未知效果错误，最终 SHA Actions 待验；离线测试不代替最终 SHA Actions；leftover Codex/OpenCode 只读 |
 | [AGENT_RUNTIME_CONTEXT.md](AGENT_RUNTIME_CONTEXT.md) | **as-built**（#138） | context_id / compaction / 恢复身份 |
 | [Pi 模型预算与截断恢复](PI_MODEL_BUDGET_RECOVERY.md) | **进行中**（#958，源码接线，最终 Actions 待验） | 发现限制与来源、不可变预算、Pi 投影、length 有界恢复、压缩无进展与原生命周期 |
