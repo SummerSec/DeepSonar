@@ -113,11 +113,13 @@ before 的 `requiredSuites=[]` / `reverseSuites=[]`，所以这是**核心重活
 
 ### 4.3 工具、缓存与结论边界
 
-六轮公共 docs-freshness 日志均记录 runner `2.338.2`、`ubuntu-24.04 / 20261101.360.1`、Node `v24.22.2`、pnpm `9.15.9`；changes job 则同为 `ubuntu-26.04 / 20261101.186.1`。实际解析的公共 Actions 亦相同：checkout `11d5960a326750d5838078e36cf38b85af677262`、pnpm setup `b906affcce14559ad1aafd4ab0e942779e9f58b1`、Node setup `49933ea5288caeca8642d1e84afbd3f7d6820020`。日志入口为各 attempt 的 changes/docs-freshness job；after 的计划同时打印 base/head、两条 `M` 路径和 checkout/tree。
+六轮公共 docs-freshness 日志均记录 runner `2.338.2`、`ubuntu-24.04 / 20261101.360.1`、Node `v24.22.2`、pnpm `9.15.9`；changes job 则同为 `ubuntu-26.04 / 20261101.186.1`。实际解析的公共 Actions 亦相同：checkout `11d5960a326750d5838078e36cf38b85af677262`、`pnpm/action-setup@v4` `b906affcce14559ad1aafd4ab0e942779e9f58b1`、Node setup `49933ea5288caeca8642d1e84afbd3f7d6820020`。日志入口为各 attempt 的 changes/docs-freshness job；after 的计划同时打印 base/head、两条 `M` 路径和 checkout/tree。
 
 六轮 docs-freshness 的 pnpm 缓存均命中同一 key `node-cache-Linux-x64-pnpm-5fa9fd02eb6f1fc7ce73c0d4c3d41d1897df67d544bf44223ea877a8d93cb27a`。未人为清空缓存，也未证明所有重任务的外部镜像/网络/cache 环境相同；这些是**固定业务输入的文档路由观察**，不是受控冷/热/失效镜像 benchmark，不计算 P95，也不外推为 gate 拆片或 PR→main 复用收益。
 
 最初的 [#998 试跑](https://github.com/SummerSec/DeepSonar/actions/runs/42390747146)在旧缓存契约的“权限块必须等于 4”断言失败，未计入上表。修正为精确要求新增 ci-summary 仅 `contents: read` / `actions: read` 后，才冻结以上 base/head 并连续取得三次成功；原有禁止 `actions: write` 与 `continue-on-error` 的断言保留，没有降低门禁来获得样本。
+
+证据补丁在 `27d13444` 的[首轮全量 CI](https://github.com/SummerSec/DeepSonar/actions/runs/42393257104)通过 97 项纯 Node 契约，但文档中 Action 的不准确简称被脚本存在性检查拒绝；已改为准确 Action ID，不放宽检查、不改变上述采样输入。该失败不记为工程验收通过。
 
 最终实现还需独立的完整验收：本报告的 #998 文档绿灯及旧提交的隔离探针，不代替 [#995 最新候选的全部适用 Checks](https://github.com/SummerSec/DeepSonar/pull/995/checks)。同步 main 时保留 #996 的管理 CLI/文档契约；只解决集成冲突，不合并 PR 或修改仓库策略。
 
