@@ -603,7 +603,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
   }
   if (type === "agent_settled") {
-    if (line.aborted === true) return fail("Pi agent aborted");
+    if (line.aborted === true) return fail("Pi agent aborted", "process");
     if (state.failed) return [{ type: "result", subtype: "error", is_error: true, result: state.errorDetail ?? "Pi runtime failed",
       ...(state.runnerErrorSource ? { runnerErrorSource: state.runnerErrorSource } : {}) }];
     return [{ type: "agent_settled", session_id: state.sessionId, session_file: state.sessionFile, result: state.finalText ?? "",

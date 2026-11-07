@@ -27,7 +27,7 @@ import type { AgentRuntimeLaunchSpecification } from "./agent-runtime-profile-ad
 import { assertWorkspaceWritePath, shellQuote, type RuntimeHost } from "./runtime-host.js";
 import { PiRpcDriver } from "./pi-rpc-driver.js";
 import { PiLengthRecovery, PI_LENGTH_RECOVERY_MESSAGE, PI_LENGTH_COMPACTION_INSTRUCTIONS,
-  type PiRecoveryAction, type RuntimeModelBudget } from "./pi-length-recovery.js";
+  piRecoveryGuardReason, type PiRecoveryAction, type RuntimeModelBudget } from "./pi-length-recovery.js";
 import { createStdinCloseKiller } from "./runtime-stdin-close.js";
 import { PiObservationalMemoryTextRedactor } from "./pi-observational-memory.js";
 import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
@@ -1454,7 +1454,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   };
   let piDriver = spec.provider === "pi" ? new PiRpcDriver(exec, resetPiTurn) : undefined;
   const writeInitialMessage = async (content: string) => {
-    if (piDriver) await piDriver.initialize(content);
+    if (piDriver) await piDriver.initialize(content, assertPiResumeAllowed);
     else await writeEncoded(adapter.encodeInput(content, adapterState));
   };
   const writeSteerMessage = async (content: string) => {
@@ -1495,7 +1495,8 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   let runnerErrorSource: RealAgentResult["runnerErrorSource"];
   let semanticErrorDetails: RuntimeErrorDetails | undefined;
   let nudgesLeft = 3;
-  const piRecovery = spec.provider === "pi" ? new PiLengthRecovery(spec.modelBudget) : undefined;
+  const piRecovery = spec.provider === "pi" ? new PiLengthRecovery(spec.modelBudget,
+    value => redactToolTelemetry(redactRuntimeSecrets(value, secretValues), undefined, 0, secretValues)) : undefined;
   let piRecoveryStopped = false;
   let sessionResumeAttempts = 0;
   let resumeSkipNotice: string | undefined;
@@ -1552,6 +1553,16 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   };
   const recoveryEvent = (code: string, extra: Record<string, unknown> = {}) => spec.onEvent?.(
     redactRuntimeSecrets({ type: "runtime.diagnostic", code, ...piRecovery?.diagnostic(), ...extra }, secretValues) as Record<string, unknown>);
+  const assertPiResumeAllowed = async (): Promise<void> => {
+    if (!piRecovery?.lengthCount) return;
+    const guard = await spec.recoveryGuard?.() ?? { allowed: false, reason: "guard_missing" };
+    const reason = spec.completionGate?.() === true ? "completion_accepted" : guard.allowed !== true ? piRecoveryGuardReason(guard.reason) : undefined;
+    if (reason) {
+      piRecoveryStopped = true;
+      recoveryEvent("PI_LENGTH_RECOVERY_STOPPED", { reason, cause: "process_resume" });
+      throw new Error(`PI_LENGTH_RECOVERY_STOPPED: ${reason}; prior_runner_error=${runError ?? "unknown"}`);
+    }
+  };
   const performPiRecovery = async (action: PiRecoveryAction): Promise<void> => {
     if (!piRecovery || !piDriver || piRecoveryStopped) return;
     const outcome = await piRecovery.perform(action, { guard: spec.recoveryGuard, completionGate: spec.completionGate,
@@ -1709,8 +1720,8 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
                 runError = resolveTerminalRunError(outcome);
               }
               if (outcome.finalText !== undefined) {
-                if (outcome.isError !== true && piRecovery?.lengthCount && spec.recoveryGuard && spec.completionGate?.() !== true) {
-                  const authority = await spec.recoveryGuard();
+                if (outcome.isError !== true && piRecovery?.lengthCount && spec.completionGate?.() !== true) {
+                  const authority = await spec.recoveryGuard?.() ?? { allowed: false, reason: "guard_missing" };
                   if (!authority.allowed || spec.completionGate?.() === true) { await performPiRecovery("stop"); continue; }
                 }
                 // 每次完成门尝试都有独立终态。后续成功清除临时 Provider 错误；
@@ -1832,11 +1843,12 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
             spec.onEvent?.({ type: "run.retrying", reason, attempt, delayMs });
             await waitForCliSessionResume(attempt);
             try {
+              await assertPiResumeAllowed();
               await assertResumeIdentity();
               resumedExec = await adapter.resume({ ...adapterContext, ...(expectedContextIdentity ? { contextIdentity: expectedContextIdentity } : {}), input: sessionResumeMessage, sessionId, ...(sessionFile ? { sessionFile } : {}) });
               resumedInput = sessionResumeMessage;
             } catch (resumeError) {
-              if (resumeError instanceof Error && resumeError.message.startsWith("CONTEXT_RESUME_")) throw resumeError;
+              if (piRecoveryStopped || resumeError instanceof Error && resumeError.message.startsWith("CONTEXT_RESUME_")) throw resumeError;
               const detail = runtimeErrorText(resumeError).slice(0, 280) || "unknown_resume_error";
               spec.onWarning?.({ code: "cli_session_resume_failed", detail });
               runError = `AGENT_CLI_RESUME_FAILED: ${adapter.id}`;

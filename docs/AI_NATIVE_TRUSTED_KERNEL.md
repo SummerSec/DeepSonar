@@ -176,6 +176,8 @@ proposed
 
 “直到成功”不是无限重试：同一 Session 受 repair attempt、token、时间、事件额度和副作用预算限制。预算耗尽时必须明确进入 `blocked` 或 `needs_human`，保留修复检查点和完整反馈；不能重复发送相同错误后静默杀死 Job，也不能把失败伪装成成功。
 
+#958 的 Pi `length` 恢复是这个原则的内部运行器切片，不另建 Proposal/Receipt authority：创建期冻结客户端预算及声明来源，每次同 Session 状态查询、必要压缩或续写均复用活动 Attempt、原 lease/deadline、预算、终态与未知效果守卫。短反馈要求读取现有回执、仅继续未完成部分；预留/接受完成、已接受人工等待、取消/超时及未知效果不新增恢复请求。压缩摘要仅是观测，start/end 不证明上下文减小，不凭不完整身份/digest 发布成功；耗尽保留具体原因和原进程失败来源。[预算与恢复专题](PI_MODEL_BUDGET_RECOVERY.md)区分合成 runner、真实 SDK、HTTP/PG 回归及尚待最终 SHA Actions 的工程证据，不宣称真实模型理解或容量验证。
+
 ## 7. Proposal、Receipt、Settlement 与现有 Attempt/effect
 
 现有 Job/Attempt/effect 边界是可信内核的基础，不应绕过：

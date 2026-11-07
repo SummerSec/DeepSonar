@@ -14,6 +14,8 @@ const live = (): State => ({ authority: "scheduler", status: "running", active_a
 
 test("#958 Pi recovery uses the existing completion authority and exact Attempt", () => {
   assert.deepEqual(piRecoveryPermission(live(), attemptId), { allowed: true });
+  assert.deepEqual(piRecoveryPermission(live(), ""), { allowed: false, reason: "attempt_identity_missing" });
+  assert.deepEqual(piRecoveryPermission(live(), randomUUID()), { allowed: false, reason: "attempt_identity_mismatch" });
   for (const state of [null, { ...live(), active_attempt_id: randomUUID() },
     { ...live(), status: "pending" }, { ...live(), allowed_actions: [] },
     { ...live(), blocker: "execution_inactive" }, { ...live(), blocker: "repair_generation_not_owned" }]) {
@@ -31,7 +33,9 @@ test("#958 Pi recovery uses the existing completion authority and exact Attempt"
 });
 
 test("#958 accepted or prepared terminal prevents even a recovery SQL read", async () => {
-  const db = (() => { throw new Error("must not query after terminal acceptance"); }) as unknown as typeof sql;
+  const db = (() => { throw new Error("must not query after terminal acceptance or without identity"); }) as unknown as typeof sql;
+  assert.deepEqual(await createPiRuntimeRecoveryGuard(db, randomUUID(), "", () => ({ done: null, human: null, prepared: false }))(),
+    { allowed: false, reason: "attempt_identity_missing" });
   for (const [terminal, reason] of [
     [{ done: null, human: {}, prepared: false }, "waiting_human"],
     [{ done: {}, human: null, prepared: false }, "completion_accepted"],
@@ -49,8 +53,8 @@ function storage(onRead: () => void, override: Record<string, unknown> = {}) {
       onRead(); return [{ status: "running", leased: true, within_time: true, ...override }];
     }
     if (query.includes("SELECT id,status,cancel_requested")) return [{ id: attemptId, status: "active", cancel_requested: false, ...override }];
-    if (query.includes("AS revision")) return [{ count: 0, revision: null }];
-    if (query.includes("SELECT COUNT(*)::int AS count FROM job_attempt_effects")) return [{ count: 0 }];
+    if (query.includes("AS revision")) return [{ count: 0, revision: null, ...override }];
+    if (query.includes("SELECT COUNT(*)::int AS count FROM job_attempt_effects")) return [{ count: override.effect_count ?? 0 }];
     if (query.includes("FROM events")) return [];
     throw new Error(`unexpected query: ${query}`);
   }, { begin: async (callback: (tx: unknown) => Promise<unknown>) => callback(db) }) as unknown as typeof sql;
@@ -66,6 +70,12 @@ test("#958 recovery rereads live lease/deadline/cancel and terminal after awaiti
     for (const override of [{ leased: false }, { within_time: false }, { cancel_requested: true }, { status: "cancelled" }]) {
       assert.equal((await createPiRuntimeRecoveryGuard(storage(() => {}, override), jobId, attemptId, () => terminal)()).allowed, false);
     }
+    assert.deepEqual(await createPiRuntimeRecoveryGuard(storage(() => {}, { effect_count: 1 }), jobId, attemptId, () => terminal)(),
+      { allowed: false, reason: "unknown_external_effect" });
+    assert.deepEqual(await createPiRuntimeRecoveryGuard(storage(() => {}, { count: 10_000 }), jobId, attemptId, () => terminal)(),
+      { allowed: false, reason: "budget_exhausted" });
+    assert.deepEqual(await createPiRuntimeRecoveryGuard(storage(() => {}, { id: randomUUID() }), jobId, attemptId, () => terminal)(),
+      { allowed: false, reason: "attempt_identity_mismatch" });
     const guard = createPiRuntimeRecoveryGuard(storage(() => { terminal = { ...terminal, human: {} }; }), jobId, attemptId, () => terminal);
     assert.deepEqual(await guard(), { allowed: false, reason: "waiting_human" });
   } finally { unregisterRuntimeHandler(jobId); }

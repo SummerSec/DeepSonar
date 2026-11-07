@@ -13,6 +13,10 @@ interface RuntimeModelLimit {
   source: "job" | "role_config" | "credential_settings" | "provider_declared" | "cli_default";
 }
 export type PiRecoveryAction = "state" | "compact" | "continue" | "stop";
+export function piRecoveryGuardReason(reason?: string): string {
+  return ["waiting_human", "cancelled", "timeout", "completion_accepted", "terminal_prepared", "unknown_external_effect",
+    "lease_expired", "inactive", "budget_exhausted", "guard_missing", "attempt_identity_missing", "attempt_identity_mismatch", "unknown"].includes(reason ?? "") ? reason! : "unknown";
+}
 export const PI_LENGTH_RECOVERY_MAX_ATTEMPTS = 2;
 export const PI_LENGTH_RECOVERY_MESSAGE = "本轮 Pi 响应因 length 被截断，未证明任务完成，剩余可用输出额度未知。请在当前 Session 读取已有状态与工具/控制回执，仅继续未完成的步骤；用短文本和小块完整工具参数修正，不重复旧 prompt、已接受的提案或已成功的工具调用。效果 pending/unknown 或回执不明时先查询，禁止重放；不能修正则明确说明阻塞。原完成门与预算不变。";
 export const PI_LENGTH_COMPACTION_INSTRUCTIONS = "Create a concise checkpoint of the existing goal, constraints, accepted effects and receipts, unfinished steps, and unknown effects that must not be replayed. Do not perform tools or claim completion. Preserve the original authorization and budgets.";
@@ -29,6 +33,8 @@ export class PiLengthRecovery {
   noProgressCompactions = 0;
   validResponses = 0;
   stopCode = "PI_LENGTH_RECOVERY_EXHAUSTED";
+  private stopReason = "attempts_exhausted";
+  private compactionsWithoutResponse = 0;
   private consecutiveLengths = 0;
   private phase?: "state" | "compact" | "after_compact";
   private manualEndObserved = false;
@@ -36,15 +42,24 @@ export class PiLengthRecovery {
   private lastLength: Record<string, unknown> = {};
   private lastCompaction: Record<string, unknown> = {};
   private actualModel: Record<string, unknown> = {};
+  private observedState: Record<string, unknown> = {};
 
-  constructor(private readonly frozenBudget?: RuntimeModelBudget) {}
+  constructor(private readonly frozenBudget?: RuntimeModelBudget, private readonly redactedProjection?: (value: unknown) => unknown) {}
+
+  private projection(value: unknown): Record<string, unknown> {
+    const projected = this.redactedProjection?.(value);
+    const text = typeof projected === "string" ? projected : projected === undefined ? undefined : JSON.stringify(projected);
+    return { scope: "observed_redacted_projection", text_projection_bytes: text === undefined ? null : Buffer.byteLength(text, "utf8"),
+      text_projection_sha256: text === undefined ? null : createHash("sha256").update(text).digest("hex") };
+  }
 
   diagnostic(): Record<string, unknown> {
     return { stop_reason: "length", truncated: this.truncated, length_count: this.lengthCount,
       recovery_attempts: this.attempts, recovery_limit: PI_LENGTH_RECOVERY_MAX_ATTEMPTS,
       compaction_count: this.compactionCount, no_progress_compactions: this.noProgressCompactions,
+      compactions_without_response: this.compactionsWithoutResponse,
       valid_responses: this.validResponses, last_length: this.lastLength, last_compaction: this.lastCompaction,
-      actual_model: this.actualModel, frozen_model_budget: this.frozenBudget ?? null,
+      actual_model: this.actualModel, observed_state: this.observedState, frozen_model_budget: this.frozenBudget ?? null,
       remaining_request_budget: "unknown", context_identity: "unknown" };
   }
 
@@ -65,16 +80,14 @@ export class PiLengthRecovery {
     compact: () => Promise<void>;
     send: () => Promise<void>;
   }): Promise<{ isError?: boolean; error?: string }> {
-    const guard = await control.guard?.();
+    const guard = await control.guard?.() ?? { allowed: false, reason: "guard_missing" };
     // Recheck after the asynchronous authority read: an accepted completion wins.
     if (control.completionGate?.() === true) {
       control.emit("PI_LENGTH_RECOVERY_STOPPED", { reason: "completion_accepted" });
       return { isError: false };
     }
     if (action === "stop" || guard && guard.allowed !== true) {
-      const reasons = new Set(["waiting_human", "cancelled", "timeout", "completion_accepted", "terminal_prepared",
-        "unknown_external_effect", "lease_expired", "inactive", "budget_exhausted", "unknown"]);
-      const reason = guard && guard.allowed !== true ? reasons.has(guard.reason ?? "") ? guard.reason! : "unknown" : "attempts_exhausted";
+      const reason = guard && guard.allowed !== true ? piRecoveryGuardReason(guard.reason) : this.stopReason;
       const code = guard && guard.allowed !== true ? "PI_LENGTH_RECOVERY_STOPPED" : this.stopCode;
       control.emit(code, { reason });
       return { isError: true, error: `${code}: ${reason}; stopReason=length; recovery_attempts=${this.attempts}` };
@@ -95,10 +108,11 @@ export class PiLengthRecovery {
     const before = number(result.tokensBefore);
     const after = number(result.estimatedTokensAfter);
     this.compactionCount++;
+    if (this.truncated) this.compactionsWithoutResponse++;
     this.lastCompaction = { evidence: valid ? "summary_observed" : "no_summary", tokens_before: before,
       estimated_tokens_after: after, estimated_reduction: before !== null && after !== null ? after < before : null,
-      summary_sha256: valid ? createHash("sha256").update(summary).digest("hex") : null,
-      summary_bytes: Buffer.byteLength(summary), usage: this.usage(result.usage) };
+      summary_projection: this.projection(valid ? summary : undefined),
+      observed_summary_bytes: Buffer.byteLength(summary), usage: this.usage(result.usage) };
     // An estimate is not actual context usage. Neither it nor a summary clears truncation.
     this.summarySinceLength ||= valid;
     if (valid) this.noProgressCompactions = 0;
@@ -121,12 +135,14 @@ export class PiLengthRecovery {
         this.consecutiveLengths++;
         this.summarySinceLength = false;
         const content = Array.isArray(message.content) ? message.content.map(object) : [];
-        this.lastLength = { usage: this.usage(message.usage), content_shape: {
-          text_blocks: content.filter(block => block.type === "text").length,
-          thinking_blocks: content.filter(block => block.type === "thinking").length,
-          tool_blocks: content.filter(block => block.type === "toolCall").length } };
+        const bytes = (type: string, field: string) => content.filter(block => block.type === type)
+          .reduce((total, block) => total + Buffer.byteLength(typeof block[field] === "string" ? block[field] as string : JSON.stringify(block[field]) ?? ""), 0);
+        this.lastLength = { ...this.projection(content), usage: this.usage(message.usage), content_shape: {
+          text_blocks: content.filter(block => block.type === "text").length, observed_text_bytes: bytes("text", "text"),
+          thinking_blocks: content.filter(block => block.type === "thinking").length, observed_thinking_bytes: bytes("thinking", "thinking"),
+          tool_blocks: content.filter(block => block.type === "toolCall").length, observed_tool_arguments_bytes: bytes("toolCall", "arguments") } };
         // Also bound provider-internal compact/retry loops which never reach agent_settled.
-        if (this.consecutiveLengths >= PI_LENGTH_RECOVERY_MAX_ATTEMPTS + 2) return "stop";
+        if (this.consecutiveLengths >= PI_LENGTH_RECOVERY_MAX_ATTEMPTS + 2) { this.stopReason = "provider_length_loop"; return "stop"; }
       } else if (["stop", "toolUse"].includes(String(message.stopReason))) {
         const content = Array.isArray(message.content) ? message.content.map(object) : [];
         if (content.some(block => block.type === "text" && typeof block.text === "string" && block.text.trim()
@@ -135,6 +151,7 @@ export class PiLengthRecovery {
           this.truncated = false;
           this.validResponses++;
           this.consecutiveLengths = 0;
+          this.compactionsWithoutResponse = 0;
           this.noProgressCompactions = 0;
         }
       }
@@ -144,9 +161,15 @@ export class PiLengthRecovery {
       this.compaction(record.result);
       if (record.errorMessage !== undefined && !isCorrectablePiCompactionError(record.errorMessage)) return;
       if (this.phase === "compact") this.manualEndObserved = true;
+      if (this.truncated && this.compactionsWithoutResponse >= 3 && this.phase !== "compact") {
+        this.stopCode = "PI_COMPACTION_NO_PROGRESS";
+        this.stopReason = "compaction_without_valid_response";
+        return "stop";
+      }
       // One failed compaction still gets actionable feedback. Repeated failures cannot loop forever.
       if (this.truncated && this.noProgressCompactions >= 2 && this.attempts > 0 && this.phase !== "compact") {
         this.stopCode = "PI_COMPACTION_NO_PROGRESS";
+        this.stopReason = "compaction_without_summary";
         return "stop";
       }
     }
@@ -154,11 +177,15 @@ export class PiLengthRecovery {
     if (record.command === "get_state" && record.success === true) {
       const data = object(record.data);
       const model = object(data.model);
+      this.observedState = { is_streaming: typeof data.isStreaming === "boolean" ? data.isStreaming : null,
+        is_compacting: typeof data.isCompacting === "boolean" ? data.isCompacting : null,
+        pending_messages: number(data.pendingMessageCount), message_count: number(data.messageCount) };
       this.actualModel = { context_window_tokens: number(model.contextWindow), max_output_tokens: number(model.maxTokens),
         auto_compaction_enabled: typeof data.autoCompactionEnabled === "boolean" ? data.autoCompactionEnabled : null };
       if (!this.phase || this.phase === "compact") return;
       if (data.isStreaming !== false || data.isCompacting !== false || data.pendingMessageCount !== 0) {
         this.stopCode = "PI_LENGTH_RECOVERY_SESSION_NOT_IDLE";
+        this.stopReason = "session_not_idle";
         return "stop";
       }
       if (this.phase === "after_compact") { this.phase = undefined; return "continue"; }

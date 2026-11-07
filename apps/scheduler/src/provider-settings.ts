@@ -516,6 +516,8 @@ export function materializeProviderSettings(input: {
       ? configuredProviders
       : { deepsonar: source };
     const selectedRaw = input.overrides?.model?.trim() || extractModelFromSettings("pi", settings);
+    const maxOutputTokens = input.overrides?.max_output_tokens == null ? null
+      : resolveModelTokenBudget({ nativeMaxTokens: input.overrides.max_output_tokens }).max_output_tokens.effective;
     const selected = selectedRaw ? resolvePiCliLaunchSelection({ model: selectedRaw, settingsConfig: settings }) : null;
     const selectedModelId = selected?.cliModel;
     const preferredProvider = selected?.provider || official?.route || null;
@@ -547,7 +549,7 @@ export function materializeProviderSettings(input: {
       if (providerId === ownerProvider) {
         const target = models.find((model) => model.id === selectedModelId) ?? models[0];
         if (target && contextWindowTokens != null) target.contextWindow = contextWindowTokens;
-        if (target && input.overrides?.max_output_tokens != null) target.maxTokens = input.overrides.max_output_tokens;
+        if (target && maxOutputTokens != null) target.maxTokens = maxOutputTokens;
       }
       provider.models = models;
       return [providerId, provider];
@@ -641,8 +643,10 @@ export function projectProviderRuntimeSnapshot(input: {
   const hasSettings = hasProviderSettingsConfig(input.settingsConfig);
   const settingsConfig = providerSettingsForJobSnapshot(input.settingsConfig, input.agentCli);
   const roleModel = input.roleModel?.trim() || null;
+  let model = roleModel ?? (hasSettings ? resolveRequestedModel({ roleModel: null, agentCli: input.agentCli, settingsConfig }) : null)
+    ?? input.defaultModel ?? null;
   const modelBudget = providerModelBudget({
-    agentCli: input.agentCli, model: roleModel, settingsConfig,
+    agentCli: input.agentCli, model, settingsConfig,
     roleContextWindowTokens: input.roleContextWindowTokens, contextSource: input.contextSource,
     credentialProvider: input.credentialProvider, catalogJson: input.catalogJson,
     configFiles: hasSettings ? undefined : input.manualConfigFiles,
@@ -653,12 +657,11 @@ export function projectProviderRuntimeSnapshot(input: {
     : null;
   const manualConfigFiles = input.manualConfigFiles ?? [];
   let configFiles = manualConfigFiles;
-  let model = roleModel ?? input.defaultModel ?? null;
   if (hasSettings) {
     const materialized = materializeProviderSettings({
       agentCli: input.agentCli,
       settingsConfig,
-      overrides: { model: roleModel, reasoning, context_window_tokens: contextWindowTokens, max_output_tokens: modelBudget.max_output_tokens.effective },
+      overrides: { model, reasoning, context_window_tokens: contextWindowTokens, max_output_tokens: modelBudget.max_output_tokens.effective },
     });
     if (materialized.length > 0) {
       const materializedPaths = new Set(materialized.map((item) => item.path));
@@ -666,11 +669,23 @@ export function projectProviderRuntimeSnapshot(input: {
         ? [...materialized, ...manualConfigFiles.filter((item) => !materializedPaths.has(item.path))]
         : materialized;
     }
-    if (!roleModel) {
-      model = resolveRequestedModel({ roleModel: null, agentCli: input.agentCli, settingsConfig })
-        ?? input.defaultModel
-        ?? null;
-    }
+  } else if (input.agentCli === "pi" && model) {
+    const selected = resolvePiCliLaunchSelection({ model, settingsConfig, configFiles });
+    configFiles = manualConfigFiles.map((item) => {
+      if (item.path !== ".pi/agent/models.json") return item;
+      const document = asObject(JSON.parse(item.content));
+      const provider = asObject(asObject(document.providers)[selected.provider]);
+      const target = Array.isArray(provider.models)
+        ? provider.models.find((row) => asObject(row).id === selected.cliModel)
+        : asObject(provider.models)[selected.cliModel];
+      if (!target || typeof target !== "object" || Array.isArray(target)) throw new Error("PI_SELECTED_MODEL_NOT_MATERIALIZED");
+      const entry = asObject(target);
+      let changed = false;
+      for (const [key, value] of [["contextWindow", contextWindowTokens], ["maxTokens", modelBudget.max_output_tokens.effective]] as const) {
+        if (value != null && entry[key] !== value) { entry[key] = value; changed = true; }
+      }
+      return changed ? file(item.path, JSON.stringify(document, null, 2) + "\n") : item;
+    });
   }
   const modelSource = resolveModelSource({
     roleModel: roleModel,

@@ -32,7 +32,7 @@ export function descriptorsFromModelDiscovery(input: {
     const merge = (key: "context" | "output") => {
       const first = declarations[0]![key];
       return declarations.every((row) => row[key].value === first.value && row[key].status === first.status)
-        ? first : { value: null, field: first.field, status: "invalid" as const };
+        ? first : { value: null, field: declarations.find((row) => row[key].field !== null)?.[key].field ?? first.field, status: "invalid" as const };
     };
     const context = merge("context"), output = merge("output");
     const source: ModelLimitSource = {
