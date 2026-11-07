@@ -40,35 +40,98 @@ ClickHouse 审计能力，走「`deepsonar-base` / `deepsonar-audit` + 沙箱内
 
 ### 运维清理（既有部署库，需单独授权执行）
 
-仓库没有增量迁移链（`database/schema.sql` 是唯一基线，非空库版本不匹配即 fail closed），
-而 `runtime_image_*` 是管理数据而非 schema。因此**既有库的清理属于独立运维动作**，
-不在本仓库代码里自动执行；执行前先确认无在跑的 ClickHouse Job（下式应为 0），再按引用顺序删除：
+仓库没有增量迁移链（`database/schema.sql` 是唯一基线），既有库的管理数据清理是独立运维动作，
+必须单独授权。本 PR 不执行此 SQL，也不声称已有部署数据已经清零。
+
+执行前停止 Scheduler / 镜像扫描与拉取写入，做完整数据库备份并验证可恢复；仅备份
+`runtime_images` 不能恢复版本、扫描、项目绑定或拉取账本。先人工重新配置引用这三个 key 的
+RoleConfig，不自动改成其它镜像。以下事务再次核对：目标 Job 必须为 0（包含历史 Job），
+旧 RoleConfig 引用必须为 0，不得有包含目标项的在途拉取任务；任一不满足即整笔回滚。
+历史 Job、RoleConfig 与 `audit_logs` 不会被此清理改写。
+
+精确匹配三个 key，不按前缀删除第三方镜像。`runtime_image_scans` 经版本外键清理；
+`runtime_image_pull_tasks` 是批次账本，混合批次只移除目标项并重算计数/终态，保留剩余项顺序；
+仅含目标项的批次才删除。中断批次保持 interrupted，成功批次清空批次错误。
+在停写期间以 `psql -v ON_ERROR_STOP=1` 执行，完成后复核目标目录、版本、扫描、引用、项目绑定
+及拉取 JSON 项为 0，非目标数据和审计记录保持不变。下列事务可重复执行。
 
 ```sql
--- 1) 先确认没有 Job 精确使用该镜像族（应为 0）
-SELECT count(*) FROM jobs
- WHERE agent_snapshot_json #>> '{runtime_image,image_key}' LIKE 'deepsonar-clickhouse%';
-
--- 2) 记录删除前证据（供审计与回滚）
-CREATE TABLE IF NOT EXISTS runtime_image_retired_952 AS
-SELECT * FROM runtime_images WHERE image_key LIKE 'deepsonar-clickhouse%';
-
--- 3) 按引用顺序删除（幂等：重复执行不报错、不误删）
 BEGIN;
-DELETE FROM runtime_image_version_refs
- WHERE version_id IN (SELECT v.id FROM runtime_image_versions v
-                       JOIN runtime_images i ON i.id = v.runtime_image_id
-                      WHERE i.image_key LIKE 'deepsonar-clickhouse%');
-DELETE FROM runtime_image_scans
- WHERE runtime_image_id IN (SELECT id FROM runtime_images WHERE image_key LIKE 'deepsonar-clickhouse%');
-DELETE FROM runtime_image_pull_tasks
- WHERE runtime_image_id IN (SELECT id FROM runtime_images WHERE image_key LIKE 'deepsonar-clickhouse%');
-DELETE FROM runtime_image_versions
- WHERE runtime_image_id IN (SELECT id FROM runtime_images WHERE image_key LIKE 'deepsonar-clickhouse%');
-DELETE FROM runtime_images WHERE image_key LIKE 'deepsonar-clickhouse%';
-COMMIT;
+LOCK TABLE jobs, role_configs, runtime_images, runtime_image_versions,
+  runtime_image_version_refs, runtime_image_scans, project_runtime_images,
+  runtime_image_pull_tasks IN SHARE ROW EXCLUSIVE MODE;
+CREATE TEMP TABLE retired_runtime_keys (image_key text PRIMARY KEY) ON COMMIT DROP;
+INSERT INTO retired_runtime_keys VALUES
+  ('deepsonar-clickhouse-audit'),
+  ('deepsonar-clickhouse-test'),
+  ('deepsonar-clickhouse-fuzz');
 
--- 4) 复核：上述 5 张表相关行数应为 0，audit_logs 行数不减
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM jobs j JOIN retired_runtime_keys k
+    ON j.agent_snapshot_json #>> '{runtime_image,image_key}' = k.image_key) THEN
+    RAISE EXCEPTION 'retired runtime still has Job history; cleanup refused';
+  END IF;
+  IF EXISTS (SELECT 1 FROM role_configs r JOIN retired_runtime_keys k
+    ON r.runtime_image_key = k.image_key) THEN
+    RAISE EXCEPTION 'reconfigure retired runtime RoleConfig before cleanup';
+  END IF;
+  IF EXISTS (SELECT 1 FROM runtime_image_pull_tasks t,
+    LATERAL jsonb_array_elements(t.items_json) item
+    JOIN retired_runtime_keys k ON item->>'image_key' = k.image_key
+    WHERE t.status IN ('queued', 'running')) THEN
+    RAISE EXCEPTION 'retired runtime pull task is still in flight';
+  END IF;
+END;
+$$;
+
+CREATE TEMP TABLE retired_pull_tasks ON COMMIT DROP AS
+SELECT t.task_id FROM runtime_image_pull_tasks t
+WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(t.items_json) item
+  JOIN retired_runtime_keys k ON item->>'image_key' = k.image_key);
+
+UPDATE runtime_image_pull_tasks t
+SET items_json = COALESCE((
+  SELECT jsonb_agg(item ORDER BY ordinal)
+  FROM jsonb_array_elements(t.items_json) WITH ORDINALITY AS entry(item, ordinal)
+  WHERE NOT EXISTS (SELECT 1 FROM retired_runtime_keys k
+    WHERE k.image_key = item->>'image_key')
+), '[]'::jsonb)
+WHERE t.task_id IN (SELECT task_id FROM retired_pull_tasks);
+
+DELETE FROM runtime_image_pull_tasks
+WHERE task_id IN (SELECT task_id FROM retired_pull_tasks) AND items_json = '[]'::jsonb;
+
+WITH counts AS (
+  SELECT t.task_id, count(*)::int AS total,
+    count(*) FILTER (WHERE item->>'status' IN ('succeeded', 'failed'))::int AS completed,
+    count(*) FILTER (WHERE item->>'status' = 'failed')::int AS failed
+  FROM runtime_image_pull_tasks t,
+    LATERAL jsonb_array_elements(t.items_json) item
+  WHERE t.task_id IN (SELECT task_id FROM retired_pull_tasks)
+  GROUP BY t.task_id
+)
+UPDATE runtime_image_pull_tasks t
+SET total = c.total, completed = c.completed,
+  status = CASE WHEN t.status = 'interrupted' THEN 'interrupted'
+    WHEN c.completed < c.total THEN t.status
+    WHEN c.failed > 0 THEN 'failed' ELSE 'succeeded' END,
+  error = CASE WHEN t.status <> 'interrupted' AND c.completed = c.total AND c.failed = 0 THEN NULL ELSE t.error END,
+  error_code = CASE WHEN t.status <> 'interrupted' AND c.completed = c.total AND c.failed = 0 THEN NULL ELSE t.error_code END
+FROM counts c WHERE t.task_id = c.task_id;
+
+DELETE FROM runtime_image_version_refs r USING runtime_image_versions v,
+  runtime_images i, retired_runtime_keys k
+WHERE r.version_id = v.id AND v.runtime_image_id = i.id AND i.image_key = k.image_key;
+DELETE FROM runtime_image_scans s USING runtime_image_versions v,
+  runtime_images i, retired_runtime_keys k
+WHERE s.runtime_image_version_id = v.id AND v.runtime_image_id = i.id AND i.image_key = k.image_key;
+DELETE FROM project_runtime_images p USING runtime_images i, retired_runtime_keys k
+WHERE p.runtime_image_id = i.id AND i.image_key = k.image_key;
+DELETE FROM runtime_image_versions v USING runtime_images i, retired_runtime_keys k
+WHERE v.runtime_image_id = i.id AND i.image_key = k.image_key;
+DELETE FROM runtime_images i USING retired_runtime_keys k WHERE i.image_key = k.image_key;
+COMMIT;
 ```
 
 容器仓库侧的不可变 tag / manifest 不再有生产者；如需回收 blob，按平台既有 registry 运维流程处理，
