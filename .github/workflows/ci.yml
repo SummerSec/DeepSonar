@@ -923,6 +923,19 @@ jobs:
       - name: Set up Buildx for image build
         if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/setup-buildx-action@v3
+      - id: cache_policy
+        name: Compute runtime cache policy
+        if: ${{ steps.resolve.outputs.skip != 'true' }}
+        shell: bash
+        env:
+          KALI_GHA_MODE: ${{ vars.RUNTIME_CACHE_KALI_GHA }}
+        run: |
+          node agent-harness/runtime-image-cache-policy.mjs \
+            --toolset "${{ matrix.toolset }}" \
+            --owner "${{ steps.ns.outputs.owner }}" \
+            --src-tag "${{ steps.fingerprint.outputs.src_tag }}" \
+            --kali-gha-mode "${KALI_GHA_MODE}" \
+            --event-name "${{ github.event_name }}"
       - name: Build official runtime
         if: ${{ steps.resolve.outputs.skip != 'true' }}
         uses: docker/build-push-action@v6
@@ -934,13 +947,8 @@ jobs:
           build-args: ${{ matrix.build_args }}
           # Registry cache 扛大层；ignore-error 避免 fork PR 无 packages:write 时失败
           # 不 pin 多架构 src-*（CI 仅 amd64，避免覆盖 release 的 multi-arch index）
-          cache-from: |
-            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci
-            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:${{ steps.fingerprint.outputs.src_tag }}
-            type=gha,scope=runtime-${{ matrix.toolset }}
-          cache-to: |
-            type=registry,ref=ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}:buildcache-ci,mode=max,ignore-error=true
-            type=gha,mode=max,scope=runtime-${{ matrix.toolset }}
+          cache-from: ${{ steps.cache_policy.outputs.cache_from }}
+          cache-to: ${{ steps.cache_policy.outputs.cache_to }}
       - name: Load reused runtime for offline validation
         if: ${{ steps.resolve.outputs.skip == 'true' }}
         env:
