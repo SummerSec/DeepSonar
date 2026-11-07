@@ -8,6 +8,8 @@ import { HelpTip } from "../ui";
 import { showToast } from "../toast";
 import { SearchableSelect } from "../SearchableSelect";
 import { CREDENTIAL_ACCOUNT_HREF } from "../settings-tabs";
+import { modelIds } from "../provider-account-helpers";
+import { ProjectDefaultModelSelect } from "./ProjectDefaultModelSelect";
 
 const AGENT_CLIS = ["claude-code", "pi", "dsh"] as const;
 type AgentCli = (typeof AGENT_CLIS)[number];
@@ -62,6 +64,7 @@ export function ProjectCliProviderAllowlistPanel({
   enabledCredentialIds,
   credentialIdsConfigured,
   defaultCredentialId,
+  defaultModelRef,
   onSaved,
 }: {
   projectId: string;
@@ -71,12 +74,15 @@ export function ProjectCliProviderAllowlistPanel({
   enabledCredentialIds: string[];
   credentialIdsConfigured: boolean;
   defaultCredentialId: string | null;
+  defaultModelRef: string | null;
   onSaved: (settings?: ProjectSettings) => void;
 }) {
   const [clis, setClis] = useState<AgentCli[]>(enabledAgentClis.length ? enabledAgentClis : ["claude-code"]);
   const [credIds, setCredIds] = useState<string[]>(enabledCredentialIds);
   const [credentialSelectionChanged, setCredentialSelectionChanged] = useState(false);
   const [selectedDefaultCredentialId, setSelectedDefaultCredentialId] = useState(defaultCredentialId);
+  const [selectedDefaultModelRef, setSelectedDefaultModelRef] = useState(defaultModelRef);
+  const [modelSelectionChanged, setModelSelectionChanged] = useState(false);
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -106,6 +112,8 @@ export function ProjectCliProviderAllowlistPanel({
     setCredIds(enabledCredentialIds);
     setCredentialSelectionChanged(false);
     setSelectedDefaultCredentialId(defaultCredentialId);
+    setSelectedDefaultModelRef(defaultModelRef);
+    setModelSelectionChanged(false);
     setSaved(false);
     setFailed(false);
     setConfigurationRefreshed(false);
@@ -113,7 +121,7 @@ export function ProjectCliProviderAllowlistPanel({
   // Health probes reload settings with new arrays. Only a semantic configuration
   // change (or project switch) may replace the draft; allowlist order is irrelevant.
   const configurationKey = JSON.stringify([projectId, [...enabledAgentClis].sort(),
-    [...enabledCredentialIds].sort(), credentialIdsConfigured, defaultCredentialId]);
+    [...enabledCredentialIds].sort(), credentialIdsConfigured, defaultCredentialId, defaultModelRef]);
   const previousConfiguration = useRef({ projectId, key: configurationKey });
   useEffect(() => {
     const previous = previousConfiguration.current;
@@ -121,7 +129,7 @@ export function ProjectCliProviderAllowlistPanel({
     previousConfiguration.current = { projectId, key: configurationKey };
     resetDraft();
     setConfigurationRefreshed(previous.projectId === projectId && !saved);
-  }, [projectId, configurationKey, enabledAgentClis, enabledCredentialIds, credentialIdsConfigured, defaultCredentialId]);
+  }, [projectId, configurationKey, enabledAgentClis, enabledCredentialIds, credentialIdsConfigured, defaultCredentialId, defaultModelRef]);
 
   const llmCredentials = useMemo(
     () => credentialLoadState === "loaded" ? credentials.filter((c) => c.kind === "llm_provider" && (c.project_id == null || c.project_id === projectId)) : [],
@@ -134,7 +142,17 @@ export function ProjectCliProviderAllowlistPanel({
   const unavailableDefault = credentialListLoaded && defaultCredentialUnavailable(selectedDefaultCredentialId, defaultCandidates);
   const defaultChanged = selectedDefaultCredentialId !== defaultCredentialId;
   const unavailableIds = credIds.filter((id) => !llmCredentials.some((credential) => credential.id === id && credential.status === "active"));
+  const defaultCredential = defaultCandidates.find((credential) => credential.id === selectedDefaultCredentialId) ?? null;
+  const models = modelIds(defaultCredential);
+  const unavailableModel = credentialListLoaded && Boolean(selectedDefaultModelRef && !models.includes(selectedDefaultModelRef));
   const markDraftEdited = () => { setSaved(false); };
+  const selectDefaultCredential = (id: string | null) => {
+    if (!credentialListLoaded || busy || id === selectedDefaultCredentialId) return;
+    markDraftEdited();
+    setSelectedDefaultCredentialId(id);
+    setSelectedDefaultModelRef(null);
+    setModelSelectionChanged(true);
+  };
   const removeUnavailableReferences = () => {
     if (!credentialListLoaded) return;
     markDraftEdited();
@@ -205,6 +223,10 @@ export function ProjectCliProviderAllowlistPanel({
       showToast("请显式清除或更换不在可用范围内的默认账号", "error");
       return;
     }
+    if (unavailableModel) {
+      showToast("请显式清除或更换默认账号中不可用的默认模型", "error");
+      return;
+    }
     const request = {};
     saveRequest.current = request;
     const isCurrent = () => mounted.current && currentProject.current === projectId && saveRequest.current === request;
@@ -214,13 +236,16 @@ export function ProjectCliProviderAllowlistPanel({
     try {
       const result = await api.patchSettings(projectId, {
         enabled_agent_clis: clis,
-        ...credentialSelectionPatch({ credentialSelectionChanged, credIds, defaultCredentialId, selectedDefaultCredentialId, credentialListLoaded }),
+        ...credentialSelectionPatch({ credentialSelectionChanged, credIds, defaultCredentialId, selectedDefaultCredentialId, credentialListLoaded,
+          modelSelectionChanged, selectedDefaultModelRef }),
       });
       if (!isCurrent()) return;
       showToast("已保存，下一 Job 生效", "ok");
       setSaved(true);
       setCredIds(result.enabled_credential_ids);
       setSelectedDefaultCredentialId(result.default_credential_id);
+      setSelectedDefaultModelRef(result.default_model_ref ?? null);
+      setModelSelectionChanged(false);
       setCredentialSelectionChanged(false);
       onSaved(result);
     } catch (error) {
@@ -238,7 +263,7 @@ export function ProjectCliProviderAllowlistPanel({
         <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
           <span>CLI / Provider 启用</span>
           <HelpTip>
-            启用边界；Hub 从已启用项组合 CLI×Provider×镜像。模型 / CLI 选择由 Hub 与 RoleConfig 负责；账号并发在凭据页。
+            启用边界；Hub 从已启用项组合 CLI×Provider×镜像。项目默认模型可在下方显式设置，不改变全局角色配置；账号并发在凭据页。
           </HelpTip>
         </div>
       </div>
@@ -330,7 +355,7 @@ export function ProjectCliProviderAllowlistPanel({
           {unavailableDefault && (
             <div role="alert" className="mt-2 text-[12px] text-amber-400/90">
               默认账号已删除、停用、不再可访问，或不在当前账号 / CLI 启用范围内。
-              <button type="button" onClick={() => { markDraftEdited(); setSelectedDefaultCredentialId(null); }} disabled={busy}
+              <button type="button" onClick={() => selectDefaultCredential(null)} disabled={busy}
                 className="ml-2 underline">清除失效默认引用</button>
             </div>
           )}
@@ -348,15 +373,18 @@ export function ProjectCliProviderAllowlistPanel({
           <SearchableSelect
             key={`${credentialLoadState}:${busy}`}
             value={selectedDefaultCredentialId ?? ""}
-            onChange={(id) => { if (credentialListLoaded && !busy) { markDraftEdited(); setSelectedDefaultCredentialId(id || null); } }}
+            onChange={(id) => selectDefaultCredential(id || null)}
             options={defaultCandidates.map((credential) => ({ value: credential.id, label: `${credential.name || "未命名"} · ${credential.provider} · #${credential.id.slice(0, 8)}` }))}
             placeholder={!credentialListLoaded ? "账号尚未加载，保留原默认引用" : selectedDefaultCredentialId ? "当前默认账号不可用，请清除或更换" : "未设置默认账号"}
             ariaLabel="项目默认账号"
             emptyText="当前启用范围内没有可用账号"
           />
-          <p className="text-[12px] text-zinc-400">多个账号同时满足执行条件时，可明确选择默认账号消除歧义。更换或清除默认账号会同时清除项目模型及备用模型引用，下一 Job 重新解析模型。</p>
-          {defaultChanged && <p role="status" className="text-[12px] text-amber-400/90">默认账号变更将在保存后生效；项目模型及备用模型引用将清除。</p>}
+          <p className="text-[12px] text-zinc-400">多个账号同时满足执行条件时，可明确选择默认账号消除歧义。更换或清除默认账号会同时清除项目模型及备用模型引用；可为新账号显式选择新的默认模型，下一 Job 生效。</p>
+          {defaultChanged && <p role="status" className="text-[12px] text-amber-400/90">默认账号变更将在保存后生效；原模型及备用模型引用将清除，仅保存为新账号显式选择的默认模型。</p>}
         </fieldset>
+        <ProjectDefaultModelSelect value={selectedDefaultModelRef} models={models} hasDefaultCredential={defaultCredential !== null}
+          loaded={credentialListLoaded} busy={busy} unavailable={unavailableModel}
+          onChange={(model) => { markDraftEdited(); setSelectedDefaultModelRef(model); setModelSelectionChanged(true); }} />
         <a href={CREDENTIAL_ACCOUNT_HREF} className="block text-[12px] text-acc-300 underline">前往凭据页配置 Provider 连接与模型</a>
 
         <button type="button" onClick={resetDraft} disabled={busy}
@@ -364,7 +392,7 @@ export function ProjectCliProviderAllowlistPanel({
         <button
           type="button"
           onClick={save}
-          disabled={busy || probeAction !== null || unavailableDefault || !credentialListLoaded}
+          disabled={busy || probeAction !== null || unavailableDefault || unavailableModel || !credentialListLoaded}
           className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-wait disabled:opacity-60"
         >
           <FloppyDisk size={13} /> {busy ? "保存中…" : saved ? "已保存" : failed ? "保存失败" : "保存"}

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AuthMe, AuthStatus, Project } from "./api.js";
+import { act, createElement } from "react";
+import { JSDOM } from "jsdom";
+import { api, type AuthMe, type AuthStatus, type Project } from "./api.js";
 import {
   createProjectSpace,
   hasActiveProjects,
@@ -23,7 +25,7 @@ import {
   shouldShowQuickStartRail,
   type QuickStartApi,
 } from "./dashboard-quick-start.js";
-import type { ReadinessResponse } from "@deepsonar/shared-types";
+import { buildRepairFeedback, type ReadinessResponse } from "@deepsonar/shared-types";
 
 const project: Project = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -298,4 +300,122 @@ test("a legacy create with contract warning remains a successful handoff", async
   if (result.kind !== "success") assert.fail("created task must remain available");
   assert.equal(result.task.canvas_id, "created-canvas");
   assert.deepEqual(result.task.task_contract_warnings, [warning]);
+});
+
+test("#969 real quick-start preflight shows safe model conflicts without creating a task or leaking another project's feedback", async () => {
+  const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
+  const replacements = {
+    window: dom.window, document: dom.window.document, localStorage: dom.window.localStorage,
+    HTMLElement: dom.window.HTMLElement, HTMLInputElement: dom.window.HTMLInputElement,
+    HTMLTextAreaElement: dom.window.HTMLTextAreaElement, Element: dom.window.Element, Node: dom.window.Node,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  const previous = new Map(Object.keys(replacements).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries(replacements)) {
+    Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  }
+  const original = { authStatus: api.authStatus, readiness: api.readiness, createTask: api.createTask, health: api.health };
+  const projectB: Project = { ...project, id: "22222222-2222-4222-8222-222222222222", name: "项目 B" };
+  const modelConflict: ReadinessResponse = {
+    ...readiness(false),
+    checks: [{
+      code: "HUB_SNAPSHOT_UNRESOLVABLE", state: "fail", severity: "error", message: "项目 A 模型配置冲突",
+      fix: { action: "role_config", scope: "project", project_id: project.id,
+        href: `/projects/${project.id}/settings?tab=roles`, target: "配置项目 A 模型" },
+      repair: buildRepairFeedback({
+        category: "model_correctable", code: "provider_credential_no_match", operation: "resolve_agent_snapshot",
+        path: "model_ref", message: "raw-provider-diagnostic-must-not-render",
+        expected: { kind: "project_authorized_model", model_ref: "role-default", sample: ["vendor/model-a"] },
+      }),
+    }],
+  };
+  const readinessProjects: string[] = [];
+  let taskCreates = 0;
+  let delayReadiness = false;
+  const deferred: { resolve?: (result: ReadinessResponse) => void } = {};
+  api.authStatus = async () => ({ ...authStatus, auth_required: false });
+  api.health = async () => ({
+    ok: true, ready: true, version: "fixture", ts: 0,
+    runtime_images: { status: "ready", error: null, retry_at: null },
+    dispatcher: { enabled: true, started_at: null },
+    opensandbox: { level: "skipped", domain: "", ready: true },
+  });
+  api.readiness = async (projectId) => {
+    assert.equal(projectId, project.id, "both submitted preflights belong to project A");
+    readinessProjects.push(projectId);
+    return delayReadiness ? new Promise<ReadinessResponse>((resolve) => { deferred.resolve = resolve; }) : modelConflict;
+  };
+  api.createTask = async () => {
+    taskCreates += 1;
+    return { canvas_id: "unexpected-canvas", job: { id: "unexpected-job", status: "pending" } };
+  };
+  const { createRoot } = await import("react-dom/client");
+  const { MemoryRouter } = await import("react-router-dom");
+  const { AuthProvider } = await import("./auth.js");
+  const { IntentLaunchRail } = await import("./components/IntentLaunchRail.js");
+  const container = dom.window.document.getElementById("root")!;
+  const root = createRoot(container);
+  const projectSettingsHref = `/projects/${project.id}/settings?tab=roles`;
+  const click = async (element: Element | null | undefined) => {
+    assert.ok(element, "the real component must expose the requested control");
+    assert.ok(element instanceof dom.window.HTMLElement);
+    await act(async () => { element.click(); });
+  };
+  const chooseProject = async (name: string) => {
+    await click(container.querySelector('[aria-label="项目空间"]'));
+    await click(Array.from(dom.window.document.querySelectorAll('[role="option"]')).find((option) => option.textContent === name));
+    assert.equal(dom.window.document.querySelectorAll('[role="option"]').length, 0, "choosing a portal option closes the real select");
+  };
+  const submit = async () => {
+    const form = container.querySelector("form");
+    assert.ok(form);
+    await act(async () => { form.dispatchEvent(new dom.window.Event("submit", { bubbles: true, cancelable: true })); });
+  };
+  const assertNoProjectAFeedback = () => {
+    assert.doesNotMatch(container.textContent ?? "", /role-default|vendor\/model-a|项目 A 模型配置冲突|raw-provider-diagnostic-must-not-render/);
+    assert.equal(container.querySelector(`a[href="${projectSettingsHref}"]`), null);
+    assert.equal(container.querySelector(".intent-launch-readiness"), null, "the whole old-project preflight panel must stay hidden");
+  };
+  try {
+    await act(async () => {
+      root.render(createElement(MemoryRouter, { initialEntries: ["/"] }, createElement(AuthProvider, {
+        children: createElement(IntentLaunchRail, { projects: [project, projectB], forcedNewProject: false }),
+      })));
+    });
+    assert.match(container.querySelector('[aria-label="项目空间"]')?.textContent ?? "", /本地项目/);
+    await click(Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "问题调查"));
+    await submit();
+    assert.deepEqual(readinessProjects, [project.id]);
+    assert.equal(taskCreates, 0, "a failed readiness must stop before POST /tasks");
+    assert.match(container.textContent ?? "", /role-default/);
+    assert.match(container.textContent ?? "", /vendor\/model-a/);
+    assert.match(container.textContent ?? "", /项目 A 模型配置冲突/);
+    assert.doesNotMatch(container.textContent ?? "", /raw-provider-diagnostic-must-not-render/);
+    assert.ok(container.querySelector(`a[href="${projectSettingsHref}"]`), "preflight model conflicts provide the owning project's settings navigation");
+
+    await chooseProject(projectB.name);
+    assertNoProjectAFeedback();
+
+    await chooseProject(project.name);
+    delayReadiness = true;
+    await submit();
+    assert.deepEqual(readinessProjects, [project.id, project.id]);
+    assert.ok(deferred.resolve, "the second project A readiness remains pending");
+    await chooseProject(projectB.name);
+    await act(async () => { deferred.resolve?.(modelConflict); });
+    assert.match(container.querySelector('[aria-label="项目空间"]')?.textContent ?? "", /项目 B/);
+    assertNoProjectAFeedback();
+    assert.equal(taskCreates, 0, "a late failed preflight cannot create a task for either project");
+  } finally {
+    await act(async () => { deferred.resolve?.(modelConflict); root.unmount(); });
+    api.authStatus = original.authStatus;
+    api.readiness = original.readiness;
+    api.createTask = original.createTask;
+    api.health = original.health;
+    dom.window.close();
+    for (const [key, descriptor] of previous) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
 });

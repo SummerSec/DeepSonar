@@ -19,6 +19,7 @@ const { config } = await import("../../config.js");
 
 function snapshotDb(input: {
   projectConfig?: unknown;
+  role?: Record<string, unknown>;
   projectCfg: Record<string, unknown> | undefined;
   globalCfg: Record<string, unknown> | undefined;
   credential?: Record<string, unknown>;
@@ -29,7 +30,7 @@ function snapshotDb(input: {
     const sql = strings.join("?");
     input.queries?.push(sql);
     if (sql.includes("FROM agent_roles")) {
-      return [{ id: "role-audit", name: "audit", description: "audit", kind: "role", ui_color: "#f59e0b" }];
+      return [input.role ?? { id: "role-audit", name: "audit", description: "audit", kind: "role", ui_color: "#f59e0b" }];
     }
     if (sql.includes("FROM projects")) {
       return [{ config_json: input.projectConfig }];
@@ -897,6 +898,37 @@ test("project Pi default model with a slash passes the full snapshot admission",
   assert.equal(result.upstream_model, modelId);
   assert.equal(result.pi_provider, "custom");
   assert.equal(result.credential_id, credentialId);
+});
+
+test("#966 CLI enablement never chooses a model; explicit project defaults and proposals work for Hub and Worker", async () => {
+  const credentialId = "edc9a7b5-51bf-40e8-aef2-e96e91aa4750";
+  const model = "vendor/model-a", proposedModel = "vendor/model-b";
+  const credential = {
+    id: credentialId, name: "project Pi", provider: "openai", status: "active", project_id: null,
+    agent_cli: "pi", meta_json: {}, public_metadata_json: {},
+    settings_config_json: { providers: { custom: { api: "openai-completions", models: [{ id: model }, { id: proposedModel }] } } },
+  };
+  for (const jobType of ["hub_reason", "audit"]) {
+    const fixture = {
+      projectConfig: { enabled_agent_clis: ["pi"] }, projectCfg: undefined,
+      role: { id: `role-${jobType}`, name: jobType, description: jobType, kind: jobType === "hub_reason" ? "hub" : "role", ui_color: "#f59e0b" },
+      globalCfg: { id: `global-${jobType}`, version: 1, agent_cli: "pi", model: "role-default", modules_json: [] }, credential,
+    };
+    await assert.rejects(resolveAgentSnapshotForJob(snapshotDb(fixture), "project-1", jobType), (error: unknown) => {
+      assert.ok(error instanceof SnapshotUnresolvableError);
+      assert.equal(error.repair?.code, "provider_credential_no_match");
+      assert.equal(error.repair?.path, "model_ref");
+      assert.deepEqual(error.repair?.expected, { kind: "project_authorized_model", model_ref: "role-default", sample: [model, proposedModel] });
+      return true;
+    });
+    const configured = { ...fixture, projectConfig: { ...fixture.projectConfig, default_credential_id: credentialId, default_model_ref: model } };
+    const snapshot = await resolveAgentSnapshotForJob(snapshotDb(configured), "project-1", jobType);
+    assert.equal(snapshot.model, model);
+    assert.equal(snapshot.agent_cli, "pi");
+    assert.equal(snapshot.credential_id, credentialId);
+    const proposed = await resolveAgentSnapshotForJob(snapshotDb(configured), "project-1", jobType, { modelRef: proposedModel });
+    assert.equal(proposed.model, proposedModel, "an explicit governed proposal precedes the project default");
+  }
 });
 
 test("Job freezes raw credential binding independently of the selected role model", async () => {

@@ -100,6 +100,7 @@
 | [通用 CLI 能力包](CLI_CAPABILITIES.md) | #611 受治理通用 CLI（`deepsonar.cli-capability/v1`，phase 1） |
 | [REA CLI 深度二进制解析](REA_CLI_CAPABILITIES.md) | **v0.5.5 已发布**（#718）：`deepsonar-reverse` canonical digest 与三通道 inspect 证据已回写 bundled registry；原生双架构 OCI、真实 OpenSandbox Job、reverse 发布与不可变 catalog 链；保持项目 opt-in 边界 |
 | [Agent Runtime Profiles](AGENT_RUNTIME_PROFILES.md) | #613 Provider / 模型 / CLI 统一运行时 Profile（`deepsonar.agent-runtime-profile/v1`，phase 1） |
+| [项目默认模型与创建冲突](architecture/09-interface-specs.md#项目默认模型与创建冲突966) | **#966 候选，最终 SHA 待验** | 启用范围与显式默认模型分开；预检/POST 同源诊断、项目隔离，不自动重试。 |
 | [SHARED_ASSET_BLOB_STORE.md](SHARED_ASSET_BLOB_STORE.md) | **as-built**（#41） | 共享资产 BlobStore fs\|s3 |
 | [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布** | `v*` tag / release.yml；v0.6.0 正式 Release 与附件已核对，镜像验签和部署验收分别留证；双架构缓存复用须证明 runnable payload 一致 |
 | [runtime-image-pull-partial-failure.md](runbooks/runtime-image-pull-partial-failure.md) | **运维 runbook**（#724） | 拉取部分失败：真实尝试计数、定向重拉、本地对账/修复与远端 unsupported 边界、readiness 复核 |

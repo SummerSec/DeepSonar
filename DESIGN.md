@@ -298,6 +298,8 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 #914 的 #925 服务端切片已交付[项目凭据引用保护切片](docs/architecture/09-interface-specs.md#项目凭据引用保护914-切片)：impact 按项目 scope 过滤，DELETE 独立拒绝全局尚存引用，设置写入在事务内与删除共用凭据行锁并重验全部引用；保留缺键与显式空白名单语义，不改写历史 Job。默认账号显式选择与修复导航由 #929 补齐；已合入 main 的工程证据见[发布基线](docs/RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，后续 SHA 另验。
 
+#966 的项目默认模型与任务创建诊断复用现有 settings/RepairFeedback：启用 CLI 不自动替换模型；显式提案 → 项目默认模型 → 全局角色模型的优先级不变。模型候选只取账号已配置名单，预检与 POST 失败在提交区显示冲突与配置导航，按实际项目隔离，不自动重试或改写历史快照。见[接口与注意力成本](docs/architecture/09-interface-specs.md#项目默认模型与创建冲突966)；最终 SHA Actions 待验。
+
 旧库升级不能从 CLI 值猜测种子来源：本地 `db:rebuild` 对版本未知或低于 v60、目标至少 v60 且需复制旧角色身份的库执行身份复核；需要重置时，只有管理员显式 `--reset-role-identity` 才丢弃旧角色 CLI/项目模型并保留全局模型和历史 Job，须有备份或明确保留 staging。宿主维护升级另按目标计划审批身份重置风险。详见[数据库升级说明](database/README.md#v60-角色身份复核757)及[维护升级说明](deploy/README.md)。
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
