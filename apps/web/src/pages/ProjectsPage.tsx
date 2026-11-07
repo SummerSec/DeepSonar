@@ -12,6 +12,8 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type Project } from "../api";
+import { showToast } from "../toast";
+import { useFlashMessage } from "../use-flash-message";
 import { SearchableMultiSelect } from "../SearchableSelect";
 import { IntentLaunchRail } from "../components/IntentLaunchRail";
 import { NewProjectForm } from "../components/NewProjectForm";
@@ -41,7 +43,7 @@ export function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [msg, setMsg] = useState<string | null>(null);
+  const { message: msg, flash } = useFlashMessage(3200);
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter[]>(["active"]);
@@ -57,18 +59,24 @@ export function ProjectsPage() {
         setLoading(false);
       })
       .catch((e) => {
-        setError(String(e));
+        const detail = String(e);
+        setError(detail);
         setLoading(false);
+        // #967: the inline banner sits at the top of the page content. A
+        // viewport-fixed copy with a retry action keeps a failure discoverable
+        // when the user is scrolled down or the list is long.
+        showToast("项目列表加载失败", "error", {
+          detail,
+          sticky: true,
+          action: { label: "重试", onClick: () => { void reload(); } },
+        });
       });
 
   useEffect(() => {
     reload();
   }, []);
 
-  const flash = (message: string) => {
-    setMsg(message);
-    setTimeout(() => setMsg(null), 3200);
-  };
+
 
   const archivedCount = projects.filter((p) => p.status === "archived").length;
   const activeCount = projects.filter((p) => p.status === "active").length;
@@ -215,8 +223,18 @@ export function ProjectsPage() {
       </div>
 
       {error && (
-        <div className="mb-4 rounded-2xl bg-red-950/20 px-4 py-3 text-[12px] text-red-300 ring-1 ring-red-500/20">
-          {error}
+        <div
+          role="alert"
+          className="mb-4 flex items-start gap-3 rounded-2xl bg-red-950/20 px-4 py-3 text-[12px] text-red-300 ring-1 ring-red-500/20"
+        >
+          <span className="min-w-0 flex-1 break-words">{error}</span>
+          <button
+            type="button"
+            className="shrink-0 rounded-md px-2 py-1 font-mono text-[11px] ring-1 ring-red-400/30 hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+            onClick={() => { void reload(); }}
+          >
+            重试
+          </button>
         </div>
       )}
       {msg && (

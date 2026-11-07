@@ -22,6 +22,7 @@ import {
   type FindingReport,
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
+import { useFlashMessage } from "./use-flash-message";
 import { FindingCandidates } from "./FindingCandidates";
 import { FindingLexicalSearch } from "./FindingLexicalSearch";
 import { SearchableSelect } from "./SearchableSelect";
@@ -124,7 +125,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [verificationAction, setVerificationAction] = useState<"needs_human" | "verify" | "review" | "test" | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  const { message: msg, flash } = useFlashMessage(2800);
   const [note, setNote] = useState("");
   const [verifyReason, setVerifyReason] = useState("");
   const [comment, setComment] = useState("");
@@ -208,10 +209,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
     };
   }, [findingReport?.id, findingReport?.status]);
 
-  const flash = (m: string) => {
-    setMsg(m);
-    setTimeout(() => setMsg(null), 2800);
-  };
+
 
   const f = detail?.finding;
   const comments: FindingComment[] = detail?.comments ?? [];

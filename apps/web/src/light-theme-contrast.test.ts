@@ -219,3 +219,28 @@ test("existing dark and porcelain/mist picker identities stay in place", () => {
   assert.equal(token(mist, "--bg"), "#dfe3e9");
   assert.equal(token(mist, "--text"), "#171e28");
 });
+
+// #967: toast text must stay readable in every scheme; the component rule now
+// reads semantic tokens instead of hardcoded hex, so this can be asserted.
+test("toast surfaces meet WCAG 2.2 AA contrast in both schemes", () => {
+  const light = cssBlock('html[data-color-scheme="light"]');
+  const dark = cssBlock(":root");
+  for (const [scheme, block] of [["light", light], ["dark", dark]] as const) {
+    for (const kind of ["ok", "warn", "error"] as const) {
+      const foreground = token(block, `--toast-${kind}-fg`);
+      const background = token(block, `--toast-${kind}-bg`);
+      const ratio = contrastRatio(foreground, background);
+      assert.ok(
+        ratio >= 4.5,
+        `${scheme} toast ${kind} ${foreground} on ${background} is ${ratio.toFixed(2)}:1, need 4.5:1`,
+      );
+    }
+  }
+  // The component rule must consume the tokens, not reintroduce hex values.
+  const toastRule = cssBlock(".app-toast");
+  assert.match(toastRule, /var\(--toast-ok-bg\)/);
+  assert.match(toastRule, /var\(--toast-ok-fg\)/);
+  assert.match(toastRule, /pointer-events:\s*auto/);
+  assert.match(styles, /\.app-toast\.is-warn\s*\{[^}]*var\(--toast-warn-bg\)/);
+  assert.match(styles, /\.app-toast\.is-error\s*\{[^}]*var\(--toast-error-bg\)/);
+});

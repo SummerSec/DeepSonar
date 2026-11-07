@@ -1,5 +1,6 @@
 import { ArrowUpRight, CircleNotch } from "@phosphor-icons/react";
 import {
+  type KeyboardEvent,
   useCallback,
   useEffect,
   useId,
@@ -201,6 +202,16 @@ export function HelpTip({
     setOpen(true);
   };
 
+  // #967: Escape closes the tip and keeps focus on the trigger, so keyboard
+  // users are not left with a tooltip they cannot dismiss.
+  const closeFromKeyboard = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key !== "Escape" || !open) return;
+    event.preventDefault();
+    event.stopPropagation();
+    cancelClose();
+    setOpen(false);
+  };
+
   return (
     <span className="help-tip">
       <button
@@ -220,6 +231,7 @@ export function HelpTip({
         onMouseLeave={scheduleClose}
         onFocus={show}
         onBlur={scheduleClose}
+        onKeyDown={closeFromKeyboard}
       >
         ?
       </button>
