@@ -137,7 +137,7 @@ For every available channel the recorder runs
 requires its human-readable `Digest:` to equal the build canonical digest.
 Only that inspected digest reference is emitted. The recorder also records
 the GHCR platform descriptor/size evidence used by the size gate. The release
-job requires one descriptor for each of the 14 official products and emits
+job requires one descriptor for each of the 11 official products (after #952 retirement) and emits
 one canonical v2 record per product version (all platforms in a single
 `versions[]` entry). It may preserve historical versions on a digest hit; it
 validates the result, uploads

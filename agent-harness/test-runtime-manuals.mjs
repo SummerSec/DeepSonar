@@ -241,7 +241,7 @@ export function runStaticManualGate() {
     ? catalog.images.map((item) => item?.image_key ?? item?.imageKey).filter((item) => typeof item === "string")
     : catalog.images && typeof catalog.images === "object" ? Object.keys(catalog.images) : [];
   if (keys.length !== OFFICIAL_RUNTIME_IMAGES.length || OFFICIAL_RUNTIME_IMAGES.some((key) => !keys.includes(key))) {
-    fail(`catalog must contain exactly the 14 official images; got ${keys.join(", ")}`);
+    fail(`catalog must contain exactly the ${OFFICIAL_RUNTIME_IMAGES.length} official images; got ${keys.join(", ")}`);
   }
   const baseEntries = entriesFor(imageCatalog(catalog, "deepsonar-base"), "deepsonar-base");
   const inheritedCommands = new Set(baseEntries
