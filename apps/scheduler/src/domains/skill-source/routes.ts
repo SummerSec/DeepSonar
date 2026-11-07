@@ -42,7 +42,7 @@ async function denyProjectScopedManagement(req: FastifyRequest, reply: FastifyRe
   return true;
 }
 
-export function registerSkillSourceRoutes(app: FastifyInstance): void {
+export function registerSkillSourceRoutes(app: FastifyInstance, synchronize: typeof syncSkillSource = syncSkillSource): void {
   app.get("/skill-sources", async () => {
     const rows = await sql`SELECT *, jsonb_array_length(catalog_json) AS module_count FROM skill_sources ORDER BY created_at DESC`;
     const nowMs = Date.now();
@@ -89,7 +89,7 @@ export function registerSkillSourceRoutes(app: FastifyInstance): void {
     const { id } = SourceParams.parse(req.params);
     const query = req.query as { force?: string } | undefined;
     try {
-      const result = await syncSkillSource(id, req.actor?.name ?? null, undefined, {
+      const result = await synchronize(id, req.actor?.name ?? null, undefined, {
         skipIfUnchanged: query?.force !== "1" && query?.force !== "true",
       });
       await audit(req, { action: "skill_source.sync", resourceType: "skill_source", resourceId: id,

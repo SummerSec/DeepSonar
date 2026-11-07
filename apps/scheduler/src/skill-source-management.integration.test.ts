@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -23,8 +23,8 @@ if (!databaseUrl) {
     try {
       await admin.unsafe(`CREATE DATABASE "${name}"`); created = true;
       process.env.DATABASE_URL = target.toString(); process.env.BLOB_DIR = blobDir; process.env.AGENT_MODE = "fake";
-      const [{ sql, migrate }, { registerSkillSourceRoutes }, { validationHttpError }, { persistSkillSourceManifest },
-        { contentHashOf }, { default: Fastify }] = await Promise.all([
+      const [{ sql, migrate }, { registerSkillSourceRoutes }, { validationHttpError }, { freezeJobSkillCatalog },
+        { syncSkillSource }, { default: Fastify }] = await Promise.all([
         import("./db.js"), import("./domains/skill-source/routes.js"), import("./http-validation-error.js"),
         import("./job-skill-catalog.js"), import("./skill-sources.js"), import("fastify"),
       ]);
@@ -39,7 +39,20 @@ if (!databaseUrl) {
         const mapped = validationHttpError(error);
         reply.code(mapped?.statusCode ?? 500).send(mapped?.body ?? { error: "fixture unexpected error" });
       });
-      registerSkillSourceRoutes(app); await app.ready();
+      const commit = "a".repeat(40);
+      registerSkillSourceRoutes(app, (id, actor, signal, options) => syncSkillSource(id, actor, signal, {
+        ...options, db: sql, databaseUrl: target.toString(),
+        execFile: async (_command, args) => {
+          if (args[0] === "clone") {
+            const directory = path.join(String(args.at(-1)), "stable-id");
+            await mkdir(directory, { recursive: true });
+            await writeFile(path.join(directory, "SKILL.md"), "---\nname: fixture\ndescription: fixture\n---\nrouted candidate content");
+            return { stdout: "" };
+          }
+          assert.equal(args.at(-1), "HEAD"); return { stdout: commit };
+        },
+      }));
+      await app.ready();
       const requests = await Promise.all([
         app.inject({ method: "POST", url: "/skill-sources", payload: { name: `source-${randomUUID()}`, repo_url: "https://github.com/Fixture-Org/Source.git", branch: "main" } }),
         app.inject({ method: "POST", url: "/skill-sources", payload: { name: `source-${randomUUID()}`, repo_url: "https://github.com/fixture-org/source/", branch: "refs/heads/main" } }),
@@ -75,15 +88,14 @@ if (!databaseUrl) {
       const saved = await app.inject({ method: "PUT", url: `/projects/${projectA}/skill-sources/${source.id}`, payload: { enabled: false } });
       assert.equal(saved.statusCode, 200, saved.payload); assert.equal(saved.json().project_enabled, false);
       projectScope = null;
+      const synced = await app.inject({ method: "POST", url: `/skill-sources/${source.id}/sync?force=1` });
+      assert.equal(synced.statusCode, 200, synced.payload);
+      const hash = synced.json().candidate_hash;
+      assert.match(hash, /^[0-9a-f]{64}$/);
       const [current] = await sql`SELECT * FROM skill_sources WHERE id=${source.id}`;
-      const catalog = [{ id: "fixture/greet", kind: "skill" as const, plugin: "fixture", name: "greet", description: "fixture", files: { "SKILL.md": "# Greet\n" } }];
-      const commit = "a".repeat(40);
-      const hash = await persistSkillSourceManifest(sql as never, { sourceId: source.id, commitSha: commit, catalog });
-      const candidate = { schema: "deepsonar.skill-source-candidate/v1", source_instance_id: current!.source_instance_id,
-        repo_url: current!.repo_url, branch: current!.branch, revocation_epoch: String(current!.revocation_epoch),
-        commit_sha: commit, content_hash: contentHashOf(catalog), module_count: 1, synced_at: new Date().toISOString(),
-        synced_by: "fixture", files: { secret: "synthetic-candidate-body-must-not-leak" } };
-      await sql`UPDATE skill_sources SET candidate_hash=${hash}, candidate_json=${sql.json(candidate)} WHERE id=${source.id}`;
+      assert.equal(current!.catalog_snapshot_hash, null, "HTTP sync cannot publish unapproved content");
+      assert.equal(current!.enabled, false);
+      await sql`UPDATE skill_sources SET candidate_json = candidate_json || ${sql.json({ files: { secret: "synthetic-candidate-body-must-not-leak" } })} WHERE id=${source.id}`;
       const detail = await app.inject({ method: "GET", url: `/skill-sources/${source.id}` });
       assert.equal(detail.json().candidate_hash, hash);
       assert.doesNotMatch(detail.payload, /synthetic-candidate-body-must-not-leak/);
@@ -95,9 +107,14 @@ if (!databaseUrl) {
         const [unchanged] = await sql`SELECT catalog_snapshot_hash, trust_status, enabled FROM skill_sources WHERE id=${source.id}`;
         assert.equal(unchanged!.catalog_snapshot_hash, null); assert.equal(unchanged!.trust_status, "quarantined"); assert.equal(unchanged!.enabled, false);
       }
+      const beforeApproval = await freezeJobSkillCatalog(sql as never, projectB);
+      assert.equal(beforeApproval.sources.some((entry) => entry.source_id === source.id), false);
       const approved = await app.inject({ method: "POST", url: `/skill-sources/${source.id}/trust`, payload: nonce });
       assert.equal(approved.statusCode, 200, approved.payload); assert.equal(approved.json().catalog_snapshot_hash, hash);
       assert.equal(approved.json().candidate_hash, null); assert.equal(approved.json().enabled, true);
+      const afterApproval = await freezeJobSkillCatalog(sql as never, projectB);
+      assert.equal(afterApproval.sources.find((entry) => entry.source_id === source.id)?.manifest_hash, hash);
+      assert.equal(beforeApproval.sources.some((entry) => entry.source_id === source.id), false, "old frozen catalog stays unchanged");
       for (const [id, expected] of [[projectA, false], [projectB, true]] as const) {
         const response = await app.inject({ method: "GET", url: `/projects/${id}/skill-sources` });
         assert.equal(response.statusCode, 200, response.payload);
