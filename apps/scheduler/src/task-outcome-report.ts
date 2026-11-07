@@ -9,6 +9,7 @@ import { taskContractDigest } from "./task-outcome-snapshot.js";
 import { loadTaskResultDeclaration, loadTaskResultSource } from "./task-result-source.js";
 import { criterionEvidenceBudget, type EvidenceReadBudget } from "./domains/plan-protocol/criterion-evidence.js";
 import { ControlInputError } from "./control-input.js";
+import { isRetryableDatabaseConflict } from "./db-conflict-retry.js";
 import type { TaskProgramRuleReview } from "./task-program-rule-report.js";
 import type { ProgramEligibilityProjection } from "@deepsonar/shared-types";
 import { loadProgramEligibilityProjections } from "./domains/program-eligibility/store.js";
@@ -182,6 +183,12 @@ async function loadReportTaskResults(db: typeof sql, projectId: string, canvasId
       }
       result.assessment = "not_assessed";
     } catch (error) {
+      // #945 review P2: a retryable lock conflict must reach the transaction
+      // retry boundary instead of being flattened into a business gap. Once the
+      // transaction is aborted every later query only reports 25P02, which is
+      // correctly not retried, so swallowing the original conflict here would
+      // silently disable the recovery this slice adds.
+      if (isRetryableDatabaseConflict(error)) throw error;
       const code = error instanceof ControlInputError ? record(error.details?.task_goal_review).code : undefined;
       const reason = typeof code === "string" ? code : "task_result_validation_unavailable";
       result.gaps.push(reason);

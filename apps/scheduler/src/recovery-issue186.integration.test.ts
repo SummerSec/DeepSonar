@@ -124,7 +124,26 @@ if (!testDatabaseUrl) {
       const lifecycle = lifecycleModule.createSqlJobLifecycleApplication();
       const orphaned = await lifecycle.reconcileRunning();
       assert.deepEqual(new Set(orphaned.map((job) => String(job.id))), new Set(workerIds));
-      await reconcileModule.finalizeBootOrphanJobs(orphaned);
+      const suffix = randomUUID().replaceAll("-", "");
+      const sequence = `orphan_retry_${suffix}`, trigger = `orphan_retry_${suffix}`, fn = `orphan_retry_fn_${suffix}`;
+      await sql.unsafe(`CREATE SEQUENCE ${sequence}`);
+      await sql.unsafe(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+        IF NEW.canvas_id = '${canvasId}' AND NEW.job_id IS NOT NULL
+          AND OLD.status IS DISTINCT FROM NEW.status AND nextval('${sequence}') = 1 THEN
+          RAISE EXCEPTION 'injected orphan serialization conflict' USING ERRCODE = '40001';
+        END IF; RETURN NEW; END $$`);
+      await sql.unsafe(`CREATE TRIGGER ${trigger} BEFORE UPDATE ON canvas_nodes FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+      try {
+        await reconcileModule.finalizeBootOrphanJobs(orphaned);
+        assert.equal(Number((await sql.unsafe(`SELECT last_value FROM ${sequence}`))[0].last_value), 6,
+          "one rolled-back projection plus five committed sibling projections");
+        assert.equal((await sql`SELECT count(*)::int AS n FROM canvas_nodes
+          WHERE job_id=ANY(${workerIds}) AND status='failed'`)[0].n, 5);
+      } finally {
+        await sql.unsafe(`DROP TRIGGER IF EXISTS ${trigger} ON canvas_nodes`);
+        await sql.unsafe(`DROP FUNCTION IF EXISTS ${fn}()`);
+        await sql.unsafe(`DROP SEQUENCE IF EXISTS ${sequence}`);
+      }
 
       const [hubCountAfterBoot] = await sql`
         SELECT count(*)::int AS count FROM jobs

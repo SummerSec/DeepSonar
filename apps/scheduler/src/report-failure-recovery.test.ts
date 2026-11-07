@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { isRetryableDatabaseConflict, withOperationConflictRetry } from "./db-conflict-retry.js";
 import {
   MAX_AUTOMATIC_REPORT_RETRIES,
@@ -121,4 +125,83 @@ test("Root stays reporting only while a new report Job is in flight or the gate 
   assert.equal(shouldKeepRootReporting({ reason: "report_job_exists" }), true);
   assert.equal(shouldKeepRootReporting({ reason: "active_work" }), false);
   assert.equal(shouldKeepRootReporting({ reason: "already_succeeded" }), false);
+});
+
+function frozenReportFixture(findingScoped = false) {
+  const projectId = "10000000-0000-4000-8000-000000000001";
+  const findingId = "20000000-0000-4000-8000-000000000002";
+  const canvasId = "frozen-report-canvas";
+  const input = findingScoped
+    ? { scope: "finding", report_version: 1, project: { id: projectId }, task: { canvas_id: canvasId }, finding: { id: findingId }, text: "完整冻结输入 ✓" }
+    : { task: { canvas_id: canvasId, project_id: projectId }, text: "完整冻结输入 ✓" };
+  const json = JSON.stringify(input, null, 2);
+  const payload = {
+    kind: findingScoped ? "finding_report" : "task_report", report_version: 1,
+    ...(findingScoped ? { finding_id: findingId } : {}),
+    report_input_uri: findingScoped ? `finding-reports/${findingId}/v1/report-input.json` : `reports/${canvasId}/v1/report-input.json`,
+    report_input_sha256: createHash("sha256").update(json).digest("hex"), report_input_json: json,
+  };
+  return { type: "report", project_id: projectId, canvas_id: canvasId, finding_id: findingScoped ? findingId : null, payload_json: payload };
+}
+
+test("#945 exact SQL-frozen Report input validates digest and both scope identities", async () => {
+  process.env.AGENT_MODE = "fake";
+  const { readFrozenReportInput } = await import("./report-input.js");
+  for (const findingScoped of [false, true]) {
+    const job = frozenReportFixture(findingScoped);
+    assert.equal(readFrozenReportInput(job).toString("utf8"), job.payload_json.report_input_json);
+    const metadata = { input_uri: job.payload_json.report_input_uri, input_sha256: job.payload_json.report_input_sha256, version: 1 };
+    assert.equal(readFrozenReportInput(job, metadata).toString("utf8"), job.payload_json.report_input_json);
+    assert.throws(() => readFrozenReportInput(job, { ...metadata, version: 2 }), /IDENTITY_INVALID/);
+    assert.throws(() => readFrozenReportInput({ ...job, project_id: "another-project" }), /IDENTITY_INVALID/);
+    assert.throws(() => readFrozenReportInput({ ...job, canvas_id: "another-canvas" }), /IDENTITY_INVALID/);
+    assert.throws(() => readFrozenReportInput({ ...job, payload_json: { ...job.payload_json, report_input_uri: "../outside.json" } }), /IDENTITY_INVALID/);
+    assert.throws(() => readFrozenReportInput({ ...job, payload_json: { ...job.payload_json, report_input_json: "{}" } }), /DIGEST_MISMATCH/);
+    assert.throws(() => readFrozenReportInput({ ...job, payload_json: { ...job.payload_json, report_input_json: undefined } }), /FROZEN_MISSING/);
+  }
+  const finding = frozenReportFixture(true);
+  assert.throws(() => readFrozenReportInput({ ...finding, finding_id: "30000000-0000-4000-8000-000000000003" }), /IDENTITY_INVALID/);
+});
+
+test("#945 post-claim materialization is exact, idempotent and never overwrites historical input", async () => {
+  process.env.AGENT_MODE = "fake";
+  const [{ materializeReportInput }, { config }] = await Promise.all([import("./report-input.js"), import("./config.js")]);
+  const storage = config.storage as { blobDir: string };
+  const previous = storage.blobDir;
+  const root = await mkdtemp(path.join(os.tmpdir(), "deepsonar-report-input-"));
+  assert.ok(path.isAbsolute(root) && path.basename(root).startsWith("deepsonar-report-input-"));
+  storage.blobDir = root;
+  try {
+    const job = frozenReportFixture();
+    const target = path.join(root, job.payload_json.report_input_uri);
+    await assert.rejects(materializeReportInput({ ...job, payload_json: { ...job.payload_json, report_input_json: "{}" } }), /DIGEST_MISMATCH/);
+    await assert.rejects(readFile(target), { code: "ENOENT" });
+    await materializeReportInput(job);
+    await materializeReportInput(job);
+    assert.equal(await readFile(target, "utf8"), job.payload_json.report_input_json);
+    assert.deepEqual(await readdir(path.dirname(target)), ["report-input.json"]);
+    await writeFile(target, "preserved conflicting history");
+    await assert.rejects(materializeReportInput(job), /existing input is preserved/);
+    assert.equal(await readFile(target, "utf8"), "preserved conflicting history");
+    assert.deepEqual(await readdir(path.dirname(target)), ["report-input.json"]);
+  } finally {
+    storage.blobDir = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("#945 terminal retry callbacks admit Report inputs through SQL, never filesystem or runtime replay", () => {
+  const report = readFileSync(new URL("./report.ts", import.meta.url), "utf8");
+  const findingDispatch = report.slice(report.indexOf("export async function maybeDispatchFindingReport"), report.indexOf("async function bounceReportGateToHub"));
+  const taskDispatch = report.slice(report.indexOf("export async function maybeDispatchReport"), report.indexOf("async function finalizeFindingReportJob"));
+  for (const dispatch of [findingDispatch, taskDispatch]) {
+    assert.match(dispatch, /report_input_json:/);
+    assert.doesNotMatch(dispatch, /await (?:mkdir|writeFile|readReportBlob)\(/);
+  }
+  const core = readFileSync(new URL("./core.ts", import.meta.url), "utf8");
+  const orphan = readFileSync(new URL("./reconcile.ts", import.meta.url), "utf8");
+  assert.match(core, /withOperationConflictRetry\("recover_verify_terminal"/);
+  assert.match(orphan, /withOperationConflictRetry\("close_orphan_job"/);
+  const dispatcher = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  assert.match(dispatcher, /assertFrozenCliCapabilities\(snapshot\);\s*if \(job.type === "report"\) await materializeReportInput\(job\);/);
 });
