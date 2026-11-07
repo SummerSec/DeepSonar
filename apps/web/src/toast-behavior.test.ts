@@ -25,10 +25,17 @@ test("toast host announces severity per item and exposes real controls", () => {
   assert.match(toast, /<details className="app-toast-detail">/, "long detail is collapsed behind a disclosure");
   assert.match(toast, /复制/, "technical detail can be copied");
   assert.match(toast, /toast\.action\?\.onClick\(\)/, "recovery actions are wired");
-  assert.match(toast, /pauseToast\(toast\.id\)/);
-  assert.match(toast, /resumeToast\(toast\.id\)/);
+  // #967 review P2: hover and focus are independent holds, so the host must
+  // name the reason and must not release focus when it moves inside the toast.
+  assert.match(toast, /pauseToast\(toast\.id, "hover"\)/);
+  assert.match(toast, /resumeToast\(toast\.id, "hover"\)/);
+  assert.match(toast, /pauseToast\(toast\.id, "focus"\)/);
+  assert.match(toast, /resumeToast\(toast\.id, "focus"\)/);
+  assert.match(toast, /event\.currentTarget\.contains\(next\)/, "internal focus moves must keep the hold");
+  assert.match(toast, /export type ToastHold = "hover" \| "focus"/);
   assert.match(toast, /addToast\(items, incoming\)/, "duplicate messages are merged by the model");
-  assert.match(toast, /for \(const id of \[\.\.\.timers\.keys\(\)\]\) clearTimer\(id\)/, "timers are cleared on unmount");
+  assert.match(toast, /for \(const id of \[\.\.\.timers\.keys\(\)\]\) forget\(id\)/, "timers are cleared on unmount");
+  assert.match(toast, /for \(const id of \[\.\.\.holds\.keys\(\)\]\) forget\(id\)/, "holds are cleared on unmount");
   assert.doesNotMatch(toast, /window\.setTimeout\(\(\) => \{\s*items = items\.filter/, "no untracked one-shot timers");
 });
 
