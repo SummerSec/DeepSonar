@@ -250,7 +250,7 @@ if (!testDatabaseUrl) {
           if (resolvableHub) {
             assert.ok(await coreModule.resolveAgentSnapshotForJob(sql, projectId, "hub_reason"));
           } else {
-            await assert.rejects(coreModule.resolveAgentSnapshotForJob(sql, projectId, "hub_reason"), /多个|multi|默认|default/i);
+            await assert.rejects(coreModule.resolveAgentSnapshotForJob(sql, projectId, "hub_reason"), /凭据|credential/i);
           }
           const verifyCanvas = `verify-preflight-${randomUUID()}`;
           await sql`INSERT INTO canvases(id,project_id,title,target_json)
