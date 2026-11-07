@@ -1,3 +1,4 @@
+import { PI_EXTENSION_REGISTRY } from "@deepsonar/shared-types";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -163,7 +164,7 @@ const credential = { id: credentialId, ...encrypted, provider: "openai", kind: "
 const snapshot = { agent_cli: "pi", model, upstream_model: model, pi_provider: "openai", credential_id: credentialId,
   credential_provider: "openai", runtime_knobs: { job_token_max_requests: 0, stall_sec: 600, timeout_sec: 3600, provision_timeout_sec: 600, sources: {} }, config_files: [],
   settings_config_json: credential.settings_config_json, gateway_provider_binding: freezeGatewayProviderBinding(credential),
-  pi_extensions: freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", { provider: "openai", model }, "0.6.3") };
+  pi_extensions: freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", { provider: "openai", model }, PI_EXTENSION_REGISTRY["pi-observational-memory"].min_runtime_image_version) };
 
 function setup(t: TestContext, selected: GatewayWorkload, code: string, failures: number, upstreamStatus = 200,
   upstreamBody?: unknown, upstreamError?: Error) {

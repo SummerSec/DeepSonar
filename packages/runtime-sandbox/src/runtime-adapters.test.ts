@@ -341,6 +341,25 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
 
 });
 
+test("governed DSH rejects an incompatible image before launching or registering providers", async () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
+  for (const exitCode of [0, 78]) {
+    const fake = fakeSandbox(exitCode);
+    const context = { host: fake.host, env: { DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://gateway/gateway" },
+      cwd: "/workspace", input: "task", dshProvider: testDshProvider() };
+    if (exitCode === 0) {
+      await adapter.start(context);
+      assert.equal(fake.commands.length, 1);
+    } else {
+      await assert.rejects(adapter.start(context), /DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID: select a verified runtime image/);
+      assert.equal(fake.commands.length, 0, "do not reach Cordis' misleading no-adapter error");
+    }
+    assert.equal(fake.runCommands.length, 1);
+    assert.match(fake.runCommands[0]!, /deepsonar-request-budget\.manifest\.json/);
+    assert.equal(fake.uploads.length, 0, "do not patch or downgrade the immutable image at launch");
+  }
+});
+
 test("Pi JSONL framing 跨任意 UTF-8 分块并保留 Unicode 行分隔符数据", () => {
   const record = { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "前\u2028中\u2029后" } };
   const bytes = new TextEncoder().encode(`${JSON.stringify(record)}\r\n`);

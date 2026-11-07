@@ -8,6 +8,7 @@ import { PI_MEMORY_IMAGE_GUARD_SOURCE } from "./pi-memory-image-guard.js";
 import { isPiObservationalMemoryCustomType, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 import { isPiObservationalMemoryExpectedWorkerFailure } from "./pi-observational-memory.js";
 import { modelRequestPolicyCommand } from "./model-request-policy.js";
+import { DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from "./dsh-runtime-image-guard.js";
 
 export type AgentCliId = "claude-code" | "dsh" | "pi";
 
@@ -682,8 +683,12 @@ function dshSystemPromptAssignment(systemPromptPath?: string, projectedPrompt?: 
   return `DSH_SYSTEM_PROMPT="$( { printf '%s\\n\\n' ${leading}; cat ${shellQuote(systemPromptPath)}; } )" `;
 }
 
-function sandboxDsh(host: RuntimeHost, context: AdapterStartContext): Promise<RuntimeProcess> {
+async function sandboxDsh(host: RuntimeHost, context: AdapterStartContext): Promise<RuntimeProcess> {
   if (!context.dshProvider) throw new Error("DSH_PROVIDER_CONFIG_MISSING");
+  if (context.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM) {
+    const checked = await host.run(`node -e ${shellQuote(DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE)}`, { timeoutMs: 10_000 });
+    if (checked.exitCode !== 0) throw new Error("DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID: select a verified runtime image containing the current governed DSH plugin; an older Release catalog may not include it (#979)");
+  }
   const profile = context.dshProvider.config.providers[context.dshProvider.provider];
   const budgetIdentity = context.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM ? JSON.stringify({
     provider: context.dshProvider.provider, id: context.dshProvider.model,

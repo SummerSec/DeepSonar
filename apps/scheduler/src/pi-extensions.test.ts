@@ -141,12 +141,17 @@ test("OM admission uses the Scheduler-selected immutable image version", () => {
       /PI_EXTENSION_RUNTIME_IMAGE_VERSION_INVALID:pi-observational-memory/,
     );
   }
-  assert.throws(
-    () => freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", model, "0.6.2"),
-    /PI_EXTENSION_RUNTIME_IMAGE_VERSION_UNSUPPORTED:pi-observational-memory:0\.6\.2:0\.6\.3/,
-  );
+  for (const imageKey of ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]) {
+    for (const version of ["0.6.2", "0.6.3", "0.6.4", "0.6.14"]) {
+      assert.throws(
+        () => freezePiExtensions(["pi-observational-memory"], "pi", imageKey, model, version),
+        /PI_EXTENSION_RUNTIME_IMAGE_VERSION_UNSUPPORTED:pi-observational-memory/,
+      );
+    }
+    assert.doesNotThrow(() => freezePiExtensions(["pi-observational-memory"], "pi", imageKey, model, OM_MIN_IMAGE_VERSION));
+  }
   assert.doesNotThrow(
-    () => freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", model, "v0.6.3-linux-amd64"),
+    () => freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", model, `v${OM_MIN_IMAGE_VERSION}-linux-amd64`),
   );
   // The minimum is extension-specific; a non-OM extension keeps its existing
   // image-key-only contract even when the authoritative version is absent.

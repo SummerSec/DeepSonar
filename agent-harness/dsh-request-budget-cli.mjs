@@ -1,6 +1,6 @@
 // Run with tsx: imports the actual production profile, never a parallel fixture profile.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDshProfilePatch, DSH_PROFILE, DSH_PROFILE_MANIFEST } from '../packages/runtime-sandbox/src/dsh-profile.ts';
 import { DSH_REQUEST_BUDGET_PLUGIN } from '../packages/runtime-sandbox/src/dsh-request-budget.ts';
+import { DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from '../packages/runtime-sandbox/src/dsh-runtime-image-guard.ts';
 import { installDshRequestBudget } from './dsh-request-budget-install.mjs';
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -15,6 +16,22 @@ const installRoot = resolve(process.env.DSH_REQUEST_BUDGET_INSTALL_ROOT ?? join(
 const bin = join(installRoot, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
 assert.equal(JSON.parse(await readFile(join(installRoot, 'node_modules/@deepseek-ai/dsh/package.json'), 'utf8')).version, '0.2.1-rc.2');
 const artifact = await installDshRequestBudget(installRoot, join(repository, 'packages/runtime-sandbox/src'));
+// #979: execute the production preflight against the real, pinned installation,
+// without a model request. Substitute only the filesystem root used by this CI fixture.
+const imageGuard = DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE.replaceAll('/opt/deepsonar/dsh', () => JSON.stringify(installRoot).slice(1, -1));
+const checkImage = () => spawnSync(process.execPath, ['-e', imageGuard], { encoding: 'utf8' });
+const readyImage = checkImage();
+assert.equal(readyImage.status, 0, readyImage.stderr);
+const governedBytes = await readFile(artifact);
+try {
+  await rm(artifact);
+  const missing = checkImage();
+  assert.equal(missing.status, 78);
+  assert.match(missing.stderr, /DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID/);
+} finally {
+  await writeFile(artifact, governedBytes);
+}
+assert.equal(checkImage().status, 0);
 const root = await mkdtemp(join(tmpdir(), 'deepsonar-dsh-budget-cli-'));
 const provider = 'synthetic-dsh';
 const model = 'synthetic-cli-model';

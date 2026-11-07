@@ -649,6 +649,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 - **规范要求**：Hub 只能从本轮实时可用目录选择 image_key；Scheduler 必须检查 project 可见性、CLI 兼容性、trusted version 和平台，随后冻结 digest；Dispatcher 只能 inspect 冻结 ref，不得执行期回读目录或拉取任意 tag。
 - **决策来源**：选择和执行之间不能产生供应链漂移，Job 历史必须追溯到当时 digest。
 - **实现状态**：目录与快照边界已实现，项目只能收紧可见集合。OM 按 shared registry 的专属下限校验 Scheduler 选定的 `runtimeImage.image_version`，缺失/非法/旧 metadata fail closed；历史冻结字节不变。实际本地 base 镜像的内容/RPC 与缺包/缺 wrapper 生产 guard 拒绝已验证，详见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。v0.6.2 镜像不含 OM；本地 image ID 不证明发布 manifest/catalog digest 或其他平台已验收。
+- **#979 修复边界**：镜像内治理组件在启动前按内容契约校验，DSH 缺失预算插件、Pi OM 旧 wrapper 失败关闭；新 OM 版本下限与历史冻结镜像内容检查分别负责，不自动改写旧 Job。新增回归待最终 SHA Actions，正式目录恢复仍受发布门禁约束，见 [诊断与恢复](../RUNTIME_IMAGE_GOVERNANCE_979.md)。
 - **代码入口**：[Hub image capability](../../apps/scheduler/src/hub-runtime-image-capability.ts)、[image boundary policy](../../apps/scheduler/src/domains/role-runtime-snapshot/runtime-image-boundary-policy.ts)、[OM 版本准入](../../apps/scheduler/src/pi-extensions.ts)、[生产内容守卫](../../packages/runtime-sandbox/src/pi-memory-image-guard.ts)、[OpenAPI](../../apps/scheduler/src/openapi.ts)。
 - **验证证据**：`pnpm ci:unit:runtime-images`、`pnpm ci:integration:hub-runtime-image`、`pnpm ci:unit:bounded-contexts` 是既有入口；OM 专属准入与实际 Docker 证据见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)，本轮工程验收见[#831 Actions 摘要](<../TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA 与正式发布镜像仍另验。
 

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { runInNewContext } from "node:vm";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { CLI_SESSION_ADAPTERS } from "./cli-session-adapters.js";
@@ -11,6 +13,36 @@ import {
   PiObservationalMemoryTextRedactor,
 } from "./pi-observational-memory.js";
 import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
+import { PI_MEMORY_GOVERNED_WRAPPER_SHA256, PI_MEMORY_IMAGE_GUARD_SOURCE } from "./pi-memory-image-guard.js";
+
+test("OM image guard requires the current governed wrapper, not only a nonempty file", () => {
+  const source = readFileSync(new URL("../../../agent-harness/pi-observational-memory-governed.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.equal(createHash("sha256").update(source).digest("hex"), PI_MEMORY_GOVERNED_WRAPPER_SHA256,
+    "a changed wrapper requires an explicit runtime contract update");
+  const check = (wrapper: string) => {
+    const output = { exitCode: 0, stderr: "", stdout: "" };
+    runInNewContext(PI_MEMORY_IMAGE_GUARD_SOURCE, {
+      require: (name: string) => {
+        if (name === "node:crypto") return { createHash };
+        assert.equal(name, "node:fs");
+        return {
+          statSync: () => ({ isFile: () => true, size: 100 }),
+          readFileSync: (file: string) => file.endsWith("/package.json")
+            ? JSON.stringify({ name: "pi-observational-memory", version: "3.1.4", license: "MIT", pi: { extensions: ["./src/index.ts"] } })
+            : wrapper,
+        };
+      },
+      process: { stdout: { write: (value: string) => { output.stdout += value; } },
+        stderr: { write: (value: string) => { output.stderr += value; } },
+        set exitCode(value: number) { output.exitCode = value; } },
+    });
+    return output;
+  };
+  assert.deepEqual(check(source), { exitCode: 0, stdout: "PI_OM_RUNTIME_IMAGE_READY\n", stderr: "" });
+  for (const wrapper of ["old nonempty wrapper without request correlation", source + "\n", ""]) {
+    assert.deepEqual(check(wrapper), { exitCode: 78, stdout: "", stderr: "PI_OM_RUNTIME_IMAGE_CONTENT_INVALID\n" });
+  }
+});
 
 const MEMORY_TEXT = "private decision and source text";
 const REDACTED = "[REDACTED: observational-memory]";
