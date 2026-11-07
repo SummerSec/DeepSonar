@@ -44,10 +44,11 @@ function parsePolicy(value: unknown): GatewayRequestBudget {
 }
 function snapshotPolicy(snapshot: unknown): GatewayRequestBudget {
   try {
-    const row = record(snapshot);
+    // Inspect the root too: record() would discard its actionable field path.
     // Missing or damaged knobs do not prove the original policy was unlimited.
-    const knobs = frozenRuntimeKnobsFromSnapshot(row);
-    if (!knobs) throw new GatewayRequestBudgetError("GATEWAY_REQUEST_BUDGET_INVALID", missingFrozenKnobFields(row));
+    const knobs = frozenRuntimeKnobsFromSnapshot(snapshot);
+    if (!knobs) throw new GatewayRequestBudgetError("GATEWAY_REQUEST_BUDGET_INVALID", missingFrozenKnobFields(snapshot));
+    const row = record(snapshot);
     const main = cap(knobs.job_token_max_requests);
     if (!["pi", "claude-code", "dsh"].includes(String(row.agent_cli))) throw invalid();
     if ((row.agent_cli === "pi" || row.pi_extensions !== undefined) && !Array.isArray(row.pi_extensions)) throw invalid();

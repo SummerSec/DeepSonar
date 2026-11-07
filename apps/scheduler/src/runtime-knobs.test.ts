@@ -177,6 +177,29 @@ test("project cannot override provisionTimeoutSec", () => {
   assert.equal(resolved.sources.provisionTimeoutSec, "platform");
 });
 
+test("budget inspection names a damaged snapshot root before any database access", async () => {
+  const { GatewayRequestBudgetError, inspectGatewayRequestBudget } = await import("./gateway-request-policy.js");
+  let queries = 0;
+  const noDatabase = async () => { queries += 1; assert.fail("damaged snapshots must be refused before budget history reads"); };
+  // This rejection-only SQL stub must never be called; it has no database or write surface.
+  const db = noDatabase as unknown as Parameters<typeof inspectGatewayRequestBudget>[0];
+  for (const snapshot of [undefined, null, [], true, 7, "private-snapshot-content"]) {
+    await assert.rejects(inspectGatewayRequestBudget(db, "snapshot-fixture", snapshot), (error: unknown) => {
+      assert.ok(error instanceof GatewayRequestBudgetError);
+      assert.equal(error.code, "GATEWAY_REQUEST_BUDGET_INVALID");
+      assert.deepEqual(error.missing_fields, ["agent_snapshot_json"]);
+      assert.doesNotMatch(error.message, /private-snapshot-content/);
+      return true;
+    });
+  }
+  await assert.rejects(inspectGatewayRequestBudget(db, "snapshot-fixture", {}), (error: unknown) => {
+    assert.ok(error instanceof GatewayRequestBudgetError);
+    assert.deepEqual(error.missing_fields, ["agent_snapshot_json.runtime_knobs"]);
+    return true;
+  });
+  assert.equal(queries, 0, "no policy, token, receipt or Attempt history is read or changed");
+});
+
 test("env defaults stay aligned with bootstrap config", () => {
   const defaults = envRuntimeKnobDefaults();
   assert.equal(typeof defaults.stallSec, "number");
