@@ -142,13 +142,17 @@ test("OM admission uses the Scheduler-selected immutable image version", () => {
     );
   }
   for (const imageKey of ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]) {
-    for (const version of ["0.6.2", "0.6.3", "0.6.4", "0.6.14"]) {
+    for (const version of ["0.5.9", "0.6.0", "0.6.2"]) {
       assert.throws(
         () => freezePiExtensions(["pi-observational-memory"], "pi", imageKey, model, version),
         /PI_EXTENSION_RUNTIME_IMAGE_VERSION_UNSUPPORTED:pi-observational-memory/,
       );
     }
-    assert.doesNotThrow(() => freezePiExtensions(["pi-observational-memory"], "pi", imageKey, model, OM_MIN_IMAGE_VERSION));
+    // The floor must not outrun the catalog: everything the bundled catalog
+    // actually advertises has to pass admission (see the consistency test below).
+    for (const version of [OM_MIN_IMAGE_VERSION, "0.6.3", "0.6.4", "0.6.14"]) {
+      assert.doesNotThrow(() => freezePiExtensions(["pi-observational-memory"], "pi", imageKey, model, version));
+    }
   }
   assert.doesNotThrow(
     () => freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", model, `v${OM_MIN_IMAGE_VERSION}-linux-amd64`),
@@ -394,4 +398,37 @@ test("runtime profiles bind OM to the same Job model, Pi route, and admitted ext
     { native_options: { ...profile.native_options, pi: { ...profile.native_options.pi, model: "other-model" } } },
     { native_options: { ...profile.native_options, pi: { ...profile.native_options.pi, extensions: [] } } },
   ]) assert.equal(AgentRuntimeProfile.safeParse({ ...profile, ...patch }).success, false);
+});
+
+test("#979 the bundled catalog can satisfy the OM admission floor", () => {
+  // The floor is enforced against the Scheduler-selected catalog version. If the
+  // bundled catalog cannot satisfy it, every new OM Job fails at creation with
+  // PI_EXTENSION_RUNTIME_IMAGE_VERSION_UNSUPPORTED:...:<floor> and the product
+  // ships with no usable OM at all — the exact regression this test exists for.
+  // Stale wrappers are still rejected at launch by the exact-SHA-256 content
+  // guard, which is what actually protects #979.
+  const registry = JSON.parse(
+    readFileSync(new URL("../../../deploy/runtime-image-registry.json", import.meta.url), "utf8"),
+  ) as { images?: { name?: string; versions?: { version?: string }[] }[] };
+  const baseVersions = (registry.images ?? [])
+    .filter((image) => image.name === "DeepSonar Base")
+    .flatMap((image) => image.versions ?? [])
+    .map((entry) => String(entry.version ?? ""))
+    .filter(Boolean);
+  assert.ok(baseVersions.length > 0, "the bundled catalog must advertise a DeepSonar Base version");
+
+  const model = { provider: "openai", model: "gpt-5.6", thinking: "low" };
+  const admits = (version: string) => {
+    try {
+      freezePiExtensions(["pi-observational-memory"], "pi", "deepsonar-base", model, version);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  assert.ok(
+    baseVersions.some(admits),
+    `OM floor ${OM_MIN_IMAGE_VERSION} is unsatisfiable by the bundled catalog base versions [${baseVersions.join(", ")}]; `
+      + "ship a release that carries the current wrapper before raising the floor",
+  );
 });

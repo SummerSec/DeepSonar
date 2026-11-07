@@ -21,7 +21,7 @@ DSH 0.2.1-rc.2 的 `subagent` 立即返回 activation，父会话首次 idle 不
 
 DSH 的受治理插件固化在镜像内。设置 `DEEPSONAR_REQUEST_POLICY_UPSTREAM` 时，启动前检查插件 manifest、vendor/artifact/helper 字节和 SDK 版本，helper 必须匹配当前 Scheduler 的请求预算源，artifact 必须匹配 Scheduler 固定的治理入口摘要，不能由镜像自身 manifest 选择可执行代码；缺失或陈旧返回 `DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID`，不让 Cordis 吞掉加载错误后报 provider 未注册。无 Gateway 的独立 CLI 路径不因此新增检查，受治理路径不回退原始 adapter。
 
-Pi 主请求预算扩展及 Claude 请求包装仍由 `runtime-agent` 每次启动上传。Pi 可选 OM 则是镜像内 wrapper：新 Job 最低运行镜像为 `0.6.15`，启动/恢复前还校验当前 wrapper 字节摘要；旧冻结 Job 不重新写入快照，仍由内容守卫拒绝。npm 包版本和非空文件不能证明存在 request-id/allowance/settlement 契约。源码、真实 OCI 核验与发布/运维边界见 [#979 诊断与恢复](RUNTIME_IMAGE_GOVERNANCE_979.md)。新增回归待最终 SHA Actions，未执行真实模型或生产任务。
+Pi 主请求预算扩展及 Claude 请求包装仍由 `runtime-agent` 每次启动上传。Pi 可选 OM 则是镜像内 wrapper：新 Job 最低运行镜像保持 `0.6.3`（下限不得高于随仓库 catalog 实际发布的版本，否则 OM 准入会把所有新 Job 挡在创建阶段），启动/恢复前校验当前 wrapper 的精确 SHA-256，陈旧 wrapper 由内容守卫拒绝；旧冻结 Job 不重新写入快照，仍由内容守卫拒绝。npm 包版本和非空文件不能证明存在 request-id/allowance/settlement 契约。源码、真实 OCI 核验与发布/运维边界见 [#979 诊断与恢复](RUNTIME_IMAGE_GOVERNANCE_979.md)。新增回归待最终 SHA Actions，未执行真实模型或生产任务。
 
 ## Contract
 

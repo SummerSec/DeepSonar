@@ -419,7 +419,9 @@ test("OM freeze caller admits only the selected immutable image version", async 
   const previousAgentMode = config.runtime.agentMode;
   Reflect.set(config.runtime, "agentMode", "real");
   try {
-    for (const version of [null, "configured-local", "0.6.2", "0.6.3", "0.6.4", "0.6.14", "0.6.3garbage"]) {
+    // #979 review P1: the floor is 0.6.3 again, so only versions below it (and
+    // malformed ones) are rejected; 0.6.3/0.6.4/0.6.14 are admitted.
+    for (const version of [null, "configured-local", "0.6.2", "0.6.3garbage"]) {
       const queries: string[] = [];
       await assert.rejects(
         () => resolveAgentSnapshotForJob(snapshotDb({

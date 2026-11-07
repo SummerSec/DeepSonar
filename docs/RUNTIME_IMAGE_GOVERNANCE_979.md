@@ -11,7 +11,7 @@
 
 - **DSH**：启动前校验当前预算插件 manifest、vendor/artifact/helper 内容和 SDK 版本；治理入口的 SHA-256 由 Scheduler 固定，不能只与镜像自身 manifest 对照。即使把入口替换为原始 vendor 并同步改写 manifest 摘要，也必须拒绝。缺失或陈旧返回 `DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID`，不启动 CLI，不回退未受治理的 vendor adapter。
 - **Pi 主请求**：预算扩展由 `runtime-agent` 每次启动上传，不依赖 DSH 插件入口。
-- **Pi 可选 Observational Memory**：wrapper 固化在镜像内。旧 wrapper 不提供当前 Gateway 要求的 `x-deepsonar-request-id`，后台请求会被 `missing_gateway_request_id` 拒绝。新 OM Job 最低镜像版本更新到 `0.6.15`；每次启动/恢复还要求 wrapper 的 SHA-256 与当前源码一致。旧冻结 Job 不重新写快照，不能只靠新建时的版本下限解决。
+- **Pi 可选 Observational Memory**：wrapper 固化在镜像内。旧 wrapper 不提供当前 Gateway 要求的 `x-deepsonar-request-id`，后台请求会被 `missing_gateway_request_id` 拒绝。新 OM Job 的最低镜像版本仍为 `0.6.3`：把它抬到尚未正式发布的 `0.6.15` 会让随仓库 catalog（base `0.6.4`）永远无法满足准入，OM 在发布新版本前完全不可用。真正的保护是每次启动/恢复都要求 wrapper 的 SHA-256 与当前源码一致，陈旧 wrapper 一律拒绝。旧冻结 Job 不重新写快照，不能只靠新建时的版本下限解决。
 - **Claude Code**：请求包装由 `runtime-agent` 上传，未发现 DSH/OM 这条镜像内组件滞后的相同根因。这不是对 Claude 全部行为或真实模型的验收结论。
 
 ## 已核实的发布状态

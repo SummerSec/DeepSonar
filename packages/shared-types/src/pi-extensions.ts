@@ -12,8 +12,15 @@ export const PI_OBSERVATIONAL_MEMORY_VERSION = "3.1.4" as const;
 /**
  * The first runtime-image version supported by OM admission. This is an
  * extension-specific requirement, not the platform-wide runtime-image floor.
+ *
+ * #979 review P1: this must stay satisfiable by the bundled catalog. The stale
+ * wrapper that #979 is about is rejected at launch by the exact-SHA-256 content
+ * guard (`pi-memory-image-guard.ts`), so the version floor is not what protects
+ * us. Raising it to a version that no released image carries (0.6.15 had no
+ * completed Release) only makes every new OM Job fail admission while the
+ * catalog still advertises 0.6.4. `pi-extensions.test.ts` pins the two together.
  */
-export const PI_OBSERVATIONAL_MEMORY_MIN_RUNTIME_IMAGE_VERSION = "0.6.15" as const;
+export const PI_OBSERVATIONAL_MEMORY_MIN_RUNTIME_IMAGE_VERSION = "0.6.3" as const;
 export const PI_OBSERVATIONAL_MEMORY_INTEGRITY = "sha512-jgQbFyLMs4wWhkf6F0voOgzMwtIXsb8+ks0MsPKpPxkdpyMX5E/el6Mk/vJ40m8GlKwBIsCKjL1r7Z2U8dCtmA==" as const;
 export const PI_OBSERVATIONAL_MEMORY_ENTRY = "src/index.ts" as const;
 export const PI_OBSERVATIONAL_MEMORY_PROVIDER = "__deepsonar_observational_memory" as const;
