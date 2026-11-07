@@ -3,7 +3,7 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import { setSharedAssetBlobStoreForTests, type BlobStore } from "./blob-store/index.js";
 import { contentHashOf, listAvailableSkillsFromCatalog, pullSkillFromCatalog, type SourceModule } from "./skill-sources.js";
-import { encodeSkillSourceManifest, freezeJobSkillCatalog, loadJobSkillCatalog, pullFrozenJobSkill, JobSkillCatalogError } from "./job-skill-catalog.js";
+import { encodeSkillSourceManifest, freezeJobSkillCatalog, jobSkillCatalogStaleNotice, loadJobSkillCatalog, pullFrozenJobSkill, JobSkillCatalogError } from "./job-skill-catalog.js";
 import { sharedAssetBlobUri } from "./blob-store/index.js";
 import { listHubSkillSourceCatalog } from "./domains/project-skill-allowlist/catalog.js";
 import { handleCapabilityDiscovery } from "./domains/capability-pack/discovery.js";
@@ -18,7 +18,10 @@ function skill(name: string, body: string): SourceModule {
   return { id: name, kind: "skill", plugin: "(root)", name, description: name, files: { "SKILL.md": body } };
 }
 
-type Source = { source_instance_id: string; id: string; name: string; enabled: boolean; trust_status: string; last_commit_sha: string; last_content_hash: string; catalog_json: SourceModule[]; catalog_snapshot_hash: string | null; revocation_epoch: string };
+type Source = { source_instance_id: string; id: string; name: string; enabled: boolean; trust_status: string; last_commit_sha: string; last_content_hash: string; catalog_json: SourceModule[]; catalog_snapshot_hash: string | null; revocation_epoch: string; synced_at: string | null; candidate_hash?: string | null };
+
+const SYNCED_AT = "2026-11-06T00:00:00.000Z";
+const NOW_MS = Date.parse("2026-11-06T06:00:00.000Z");
 
 function fixture() {
   const blobs = new Map<string, Buffer>();
@@ -31,9 +34,9 @@ function fixture() {
   };
   setSharedAssetBlobStoreForTests(store);
   const sources: Source[] = [
-    { source_instance_id: A, id: A, name: "A", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("alpha", "v1")], catalog_snapshot_hash: null, revocation_epoch: "0" },
-    { source_instance_id: B, id: B, name: "B", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("beta", "v1")], catalog_snapshot_hash: null, revocation_epoch: "0" },
-    { source_instance_id: HIDDEN, id: HIDDEN, name: "Hidden", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("hidden", "private")], catalog_snapshot_hash: null, revocation_epoch: "0" },
+    { source_instance_id: A, id: A, name: "A", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("alpha", "v1")], catalog_snapshot_hash: null, revocation_epoch: "0", synced_at: SYNCED_AT },
+    { source_instance_id: B, id: B, name: "B", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("beta", "v1")], catalog_snapshot_hash: null, revocation_epoch: "0", synced_at: SYNCED_AT },
+    { source_instance_id: HIDDEN, id: HIDDEN, name: "Hidden", enabled: true, trust_status: "trusted", last_commit_sha: "v1", last_content_hash: "", catalog_json: [skill("hidden", "private")], catalog_snapshot_hash: null, revocation_epoch: "0", synced_at: SYNCED_AT },
   ];
   for (const source of sources) {
     source.last_content_hash = contentHashOf(source.catalog_json);
@@ -47,7 +50,7 @@ function fixture() {
     const query = strings.join("?");
     if (query.includes("FROM skill_sources ss") && query.includes("ORDER BY")) {
       return sources.filter((source) => source.enabled && source.trust_status === "trusted" && bindings.get(source.id)?.enabled !== false)
-        .map((source) => ({ ...source, module_count: source.catalog_json.length, project_revocation_epoch: bindings.get(source.id)?.revocation_epoch ?? "0" }));
+        .map((source) => ({ ...source, module_count: source.catalog_json.length, source_update_pending: Boolean(source.candidate_hash && source.candidate_hash !== source.catalog_snapshot_hash), project_revocation_epoch: bindings.get(source.id)?.revocation_epoch ?? "0" }));
     }
     if (query.includes("FROM skill_sources ss") && query.includes("WHERE ss.id =")) {
       const source = sources.find((item) => item.id === values[1]);
@@ -207,5 +210,71 @@ test("missing CAS bytes return a stable, sanitized catalog error", async () => {
     blobs.clear();
     await assert.rejects(loadJobSkillCatalog(db, PROJECT, frozen),
       (error) => error instanceof JobSkillCatalogError && error.error_code === "JOB_SKILL_CATALOG_INTEGRITY");
+  } finally { setSharedAssetBlobStoreForTests(null); }
+});
+
+test("pending candidate is frozen only as an observation and never changes approved hashes or old Job reads", async () => {
+  const { db, sources } = fixture();
+  try {
+    const approved = await freezeJobSkillCatalog(db, PROJECT, { nowMs: NOW_MS });
+    sources[0]!.candidate_hash = "f".repeat(64);
+    const pending = await freezeJobSkillCatalog(db, PROJECT, { nowMs: NOW_MS });
+    assert.equal(pending.catalog_hash, approved.catalog_hash);
+    assert.equal(pending.sources[0]!.manifest_hash, approved.sources[0]!.manifest_hash);
+    assert.equal(pending.sources[0]!.commit_sha, approved.sources[0]!.commit_sha);
+    assert.equal(pending.sources[0]!.source_update_pending, true);
+    assert.equal(pending.sources[0]!.source_synced_at, SYNCED_AT);
+    assert.match(jobSkillCatalogStaleNotice(pending) ?? "", /待审批候选/);
+    assert.deepEqual((await loadJobSkillCatalog(db, PROJECT, pending))[0]!.catalog, sources[0]!.catalog_json);
+    // Old snapshots omitted the observation; their existing hash stays readable.
+    const historical = { ...approved, sources: approved.sources.map(({ source_update_pending: _pending, ...identity }) => identity) };
+    assert.deepEqual(await loadJobSkillCatalog(db, PROJECT, historical), await loadJobSkillCatalog(db, PROJECT, approved));
+    // Even changed observational metadata cannot enlarge the grant or corrupt identity hash.
+    const observationsOnly = { ...pending, sources: pending.sources.map(source => ({ ...source, source_update_pending: false })) };
+    assert.deepEqual(await loadJobSkillCatalog(db, PROJECT, observationsOnly), await loadJobSkillCatalog(db, PROJECT, approved));
+  } finally { setSharedAssetBlobStoreForTests(null); }
+});
+
+test("#954 快照冻结 Skill 目录新鲜度，陈旧时不阻断但给出 warning 文案", async () => {
+  const { db, sources } = fixture();
+  try {
+    const fresh = await freezeJobSkillCatalog(db, PROJECT, { staleAfterDays: 7, nowMs: NOW_MS });
+    assert.equal(fresh.stale, false);
+    assert.equal(fresh.stale_after_days, 7);
+    assert.equal(fresh.max_age_seconds, 6 * 3600);
+    assert.deepEqual(fresh.sources.map((source) => source.age_seconds), [21_600, 21_600]);
+    assert.deepEqual(fresh.sources.map((source) => source.source_synced_at), [SYNCED_AT, SYNCED_AT]);
+    assert.equal(jobSkillCatalogStaleNotice(fresh), null);
+    // 新鲜度是证据、不是身份：同一份冻结输入在不同时间必须得到同一个 catalog_hash。
+    const later = await freezeJobSkillCatalog(db, PROJECT, {
+      staleAfterDays: 7,
+      nowMs: Date.parse("2026-11-06T06:00:05.000Z"),
+    });
+    assert.equal(later.catalog_hash, fresh.catalog_hash);
+    assert.notEqual(later.sources[0]!.age_seconds, fresh.sources[0]!.age_seconds);
+    // 身份字段变化仍然破坏完整性校验。
+    await assert.rejects(
+      loadJobSkillCatalog(db, PROJECT, {
+        ...fresh,
+        sources: [fresh.sources[0]!, { ...fresh.sources[1]!, commit_sha: "tampered" }],
+      }),
+      (error) => error instanceof JobSkillCatalogError && error.error_code === "JOB_SKILL_CATALOG_INTEGRITY",
+    );
+
+    const stale = await freezeJobSkillCatalog(db, PROJECT, {
+      staleAfterDays: 7,
+      nowMs: Date.parse("2026-12-06T00:00:00.000Z"),
+    });
+    assert.equal(stale.stale, true);
+    assert.equal(stale.max_age_seconds, 30 * 86_400);
+    assert.match(jobSkillCatalogStaleNotice(stale) ?? "", /30 天未刷新/);
+    // 陈旧只是证据：目录仍可读，不改变准入。
+    assert.deepEqual((await loadJobSkillCatalog(db, PROJECT, stale)).map((source) => source.id), [A, B]);
+
+    sources[0]!.synced_at = null;
+    const neverSynced = await freezeJobSkillCatalog(db, PROJECT, { staleAfterDays: 7, nowMs: NOW_MS });
+    assert.equal(neverSynced.stale, true);
+    assert.equal(neverSynced.sources[0]!.age_seconds, null);
+    assert.match(jobSkillCatalogStaleNotice(neverSynced) ?? "", /从未成功同步/);
   } finally { setSharedAssetBlobStoreForTests(null); }
 });

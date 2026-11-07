@@ -88,6 +88,10 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 
 **Job 快照冻结**：创建时冻结 `module_selectors`、digest、模块内容 hash 与 missing；物化只认快照。Job 创建后的 skill_source sync **不影响**进行中 Job，只影响下一 Job。
 
+**源保鲜与发布（#954/#960）**：已有 live 目录是控制面已接受的授权事实，不迁移为候选或重造历史审批。手动、启动、周期同步共用跨实例同源 session advisory lock，clone/scan/CAS 后只暂存候选；不会改 live、trust/enabled、撤销 epoch 或 RoleConfig。远端探针精确匹配配置 branch；SHA 未变仍须验证原 manifest hash、来源、commit、数量与内容 hash，缺损不能报健康。只有当前 trusted+enabled 的**同一 live hash**健康核验可前移 `synced_at`，不同候选 B 不能把已批准 A 伪装为新鲜。全局管理员按明确候选 hash、expected epoch 及所见 source instance 审批，短事务重验实例/repo/branch/epoch/CAS 后原子发布、heal selectors 和审计；新 Job 才冻结 B，旧 Job A 继续读取原 CAS，不改快照或 token。显式禁用/撤信任仍按原 epoch 撤权。
+
+新鲜度以已批准目录的 `synced_at` 为准（[统一换算](apps/scheduler/src/skill-freshness.ts)）；从未成功核验时 API/Job 年龄为 null、Prometheus 年龄为合法 `+Inf`，不用创建时间或零冒充健康。Job 的 `source_update_pending` 只是冻结的待审提示，与年龄等观测字段一样排除 `catalog_hash`，不改变权限或旧冻结哈希。陈旧/候选 warning 更新当前 Canvas 的既有 Job/Intent 节点单一字段，不重复建节点、不覆盖其它正文或终态。周期结果明确区分候选暂存与 live 核验，失败只保留安全有限错误码。schema68 的字段、审批边界与未执行验收见[数据](docs/architecture/08-data-architecture.md#skill-源已批准目录与候选960)、[接口](docs/architecture/09-interface-specs.md#全局-skill-源候选审批960)、[IR-007](docs/architecture/01-system-specification.md#ir-007-git-skill-source)；配置与默认值只按 [config.ts](apps/scheduler/src/config.ts) 核对。
+
 **平台控制 Skill**：`deepsonar-control` 仍对真实 Job **强制注入**，不可被业务 RoleConfig 同名覆盖，也不计入项目 Skill 源白名单。
 
 **RoleConfig `modules_json` 为过渡态 / 缺省建议**：仍可勾选，但候选必须 ⊆ 项目白名单；`expandModules` / role-runtime-snapshot 路径在项目范围 fail-closed。迁移：首次读取项目 Skill 设置时，把历史 RoleConfig selector 引用的源种子为启用，禁止静默丢配置。

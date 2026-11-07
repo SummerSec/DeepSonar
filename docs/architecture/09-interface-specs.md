@@ -23,6 +23,16 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 项目 RoleConfig 写入拒绝 `agent_cli` / `model`，读取不暴露这两个字段；全局 CLI 接受 NULL 表示未指定偏好。项目 RoleConfig 导出不含这两项，导入含这两项（即使为 NULL）也拒绝；全局导入未指定 CLI 保持 NULL。项目 Agent 设置分别表达 CLI 和凭据白名单是否显式收紧，`credential_ids_configured` 区分未配置与空名单，设置读取不持久化凭据 ID。readiness 的检查项可携带与 Job 解析同源的 RepairFeedback；悬空/停用白名单要求管理员修复，不能通过 Agent 提交账号 ID 或 OCI 地址绕过（#757）。
 
+### 全局 Skill 源候选审批（#960）
+
+平台源是全局供应链控制面，不属于单个项目：源登记、同步、删除、信任/启用操作要求全局管理授权，项目受限主体不能凭项目权限修改所有项目可见的源。`POST /skill-sources/:id/sync` 仅核验并暂存候选，force 只要求重拉内容，不绕过 branch、CAS、取消、身份或审批门；返回的本次 SHA/hash 与 `updated` 不表示已发布。列表/详情分别展示已批准 live 与 nullable candidate 元数据、最近检查及安全错误分类，不能把 B 的核验时间覆盖成 A 的新鲜度。
+
+`POST /skill-sources/:id/trust` 的 trusted 请求必须携带明确的 `candidate_hash`（SHA-256 hex）、字符串 `expected_epoch` 及调用者所见的 `expected_instance_id`，不接受只点 trusted 而隐式采用最新/旧 live 目录。服务按 source 行锁精确核对 hash、epoch、请求期望实例、描述符实例/repo/branch 和 CAS；删除重建同 ID/hash/epoch 也不能消费旧实例的审批。失败保持 live 与 RoleConfig 原样；过期审批应刷新候选再明确决定，不自动批准另一份内容。quarantined/disabled 管理写入同样校验调用者所见实例与 epoch，防止迟到请求修改重建后的新实例。审批 actor 只取认证主体，不取 body。登记按受支持的规范仓库/分支身份复用，不覆盖同名异源。平台包若声明的源 UUID 经登记落到另一目标 UUID，而导入角色仍引用原 UUID，则拒绝整个事务；不改写 selector raw，也不重绑旧 Job。操作者须按目标目录明确重配置该引用。项目 DTO 的 `project_enabled` 表示已保存选择（缺行继承默认），真实准入仍另取平台 trusted+enabled 与有效批准目录交集。批准默认启用（显式 enabled 按本次请求），发布与 selector heal、系统审计在同事务提交，请求审计另保留 HTTP 主体/请求上下文。机器字段、稳定错误映射以[源路由](../../apps/scheduler/src/domains/skill-source/routes.ts)和[审批服务](../../apps/scheduler/src/skill-source-catalog-lifecycle.ts)为准。
+
+全局 enabled 影响所有未显式收紧的项目，不是当前项目开关。项目源绑定只能进一步禁用平台已批准源，不能批准候选或扩大权限。批准 B 后新 Job 冻结 B；已有 Job A 不切换 CAS，不因批准 B 自动撤权。显式 disabled/撤信任则沿原 source/project epoch 撤销旧 Job 读取；重新启用或再次批准也不能恢复旧 epoch Job。disabled 源需先转回 quarantined（仍不启用），同步生成当前 epoch 绑定候选后再审批；同字节 hash 也不能在无效 live 上免审批。
+
+注意力成本：复用既有源管理和信任操作，明确“已批准可下发”与“候选待审批”，让管理者只批准确切版本；同 hash 健康检查不反复要求审批，但缺损、失败和 pending 不伪装为健康。Job/Canvas 的陈旧与待审 warning 是创建期观察，不阻断任务或获得额外权限。验证入口为 `pnpm ci:unit:startup-gate`、`pnpm ci:unit:project-knowledge`、`pnpm ci:integration:platform-api`；本次仅静态核对，最终 SHA 的 HTTP 权限/请求回归与 Actions 结果仍须单独验收。
+
 ### 项目凭据引用保护（#914 切片）
 
 `GET /credentials/:id` 的 impact 与 `GET /credentials/:id/impact` 只返回 actor 可见项目的 `project_references`；count 是该作用域完整计数，items 按[引用查询](../../apps/scheduler/src/credential-project-references.ts)有界返回。能读取全局凭据不表示能读取其他项目的名称、UUID 或配置关系。DELETE 的完整性判定另查所有项目：仍有 `enabled_credential_ids` 或 `default_credential_id` 引用时返回 `409 CREDENTIAL_PROJECT_REFERENCE` 和修复指引，但拒绝响应仍只展示可见引用。

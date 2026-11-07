@@ -152,6 +152,7 @@ export function isRetryableContextWindowExceeded(error: unknown): boolean {
 import { finalizeReportJob } from "./report.js";
 import { buildEvidenceSnapshot, canvasFindingsConverged, collectEvidenceSnapshot } from "./verify.js";
 import { fakeFindingPayload, fakeVerificationFact, fakeVerifyDone } from "./fake-agent-evidence.js";
+import { jobSkillCatalogStaleNotice, type FrozenJobSkillCatalog } from "./job-skill-catalog.js";
 import {
   assertChromeRuntimeEgressAllowed,
   requireFrozenSnapshotAllowEgress,
@@ -1806,26 +1807,34 @@ async function executeFake(jobId: string, type: string) {
   return; // done 由 runJob 兜底
 }
 
-async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
+export async function ensureJobNode(jobId: string, job: Record<string, unknown>, db: typeof sql = sql) {
   // intent 节点由 hub_decision 随角色 job 同事务创建（1:1）；已有节点则只同步运行态。
   // 变更日志触发器会在节点行锁之后再锁 canvases，所以这里必须 Canvas-first。
+  // 只认 job.canvas_id；缺少绑定就不创建节点，不回读项目旧画布。
   const canvasId = (job.canvas_id as string | null) ?? null;
-  await sql.begin(async (txRaw) => {
+  if (!canvasId) return;
+  const roleSnapshot = job.agent_snapshot_json as { role_kind?: string; ui_color?: string | null; job_skill_catalog?: FrozenJobSkillCatalog } | null;
+  // Frozen observations only: warning does not alter Skill admission or Job state.
+  const skillCatalogWarning = jobSkillCatalogStaleNotice(roleSnapshot?.job_skill_catalog);
+  await db.begin(async (txRaw) => {
     const tx = txRaw as unknown as typeof sql;
     if (!(await lockCanvasForConvergence(tx, canvasId))) return;
-    const existing = await tx`SELECT id, node_type FROM canvas_nodes WHERE job_id = ${jobId}`;
+    const existing = await tx`SELECT id, node_type FROM canvas_nodes
+      WHERE canvas_id = ${canvasId} AND job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})`;
     if (existing.length > 0) {
       // resume 重跑的 job：节点已在（上一轮终态），同步回 running
       await tx`
         UPDATE canvas_nodes SET status = 'running', updated_at = now()
-        WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent"]}) AND status = 'pending'`;
+        WHERE canvas_id = ${canvasId} AND job_id = ${jobId} AND node_type = ANY(${["job", "intent"]}) AND status = 'pending'`;
+      await tx`UPDATE canvas_nodes SET body_json = CASE WHEN ${skillCatalogWarning !== null}
+          THEN jsonb_set(body_json, '{skill_catalog_warning}', ${tx.json(skillCatalogWarning as never)}, true)
+          ELSE body_json - 'skill_catalog_warning' END, updated_at = now()
+        WHERE canvas_id = ${canvasId} AND job_id = ${jobId} AND node_type = ANY(${["job", "intent"]})
+          AND (body_json->>'skill_catalog_warning') IS DISTINCT FROM ${skillCatalogWarning}`;
       return;
     }
-    // 一任务一画布：只认 job.canvas_id。projects.canvas_id 假身份已删，缺画布则不补节点。
-    if (!canvasId) return;
     const [{ next_x }] = await tx<[{ next_x: number }]>`
       SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes WHERE canvas_id = ${canvasId}`;
-    const roleSnapshot = job.agent_snapshot_json as { role_kind?: string; ui_color?: string | null } | null;
     const [node] = await tx`
       INSERT INTO canvas_nodes ${tx({
         canvas_id: canvasId,
@@ -1839,6 +1848,7 @@ async function ensureJobNode(jobId: string, job: Record<string, unknown>) {
           ...(roleSnapshot?.role_kind === "role" && roleSnapshot.ui_color
             ? { ui_color: roleSnapshot.ui_color }
             : {}),
+          ...(skillCatalogWarning ? { skill_catalog_warning: skillCatalogWarning } : {}),
         } as never,
         x: next_x,
         y: 300,

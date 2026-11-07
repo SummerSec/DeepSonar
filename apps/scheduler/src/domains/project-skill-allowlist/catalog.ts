@@ -1,3 +1,4 @@
+import { safeSkillSourceCandidate } from "../skill-source/metadata.js";
 import type { RoleRuntimeSnapshotTransaction } from "../role-runtime-snapshot/ports.js";
 import { loadJobSkillCatalog, type FrozenJobSkillCatalog } from "../../job-skill-catalog.js";
 import {
@@ -123,6 +124,13 @@ export interface ProjectSkillSourceBindingView {
   last_commit_sha: string | null;
   last_content_hash: string | null;
   synced_at: string | null;
+  source_instance_id?: string;
+  revocation_epoch?: string;
+  catalog_snapshot_hash?: string | null;
+  candidate_hash?: string | null;
+  candidate_json?: unknown;
+  last_checked_at?: string | null;
+  last_sync_error?: string | null;
 }
 
 /** List platform skill sources with project enablement (trust baseline). */
@@ -131,12 +139,16 @@ export async function listProjectSkillSourceBindings(
   projectId: string,
 ): Promise<{ configured: boolean; sources: ProjectSkillSourceBindingView[] }> {
   const { allowlist } = await ensureProjectSkillAllowlist(db, projectId, { persist: true });
-  const enabled = new Set(allowlist.enabled_skill_source_ids.map((id) => id.toLowerCase()));
+
   const rows = await db`
     SELECT ss.id, ss.name, ss.repo_url, ss.branch, ss.trust_status, ss.enabled,
            ss.last_commit_sha, ss.last_content_hash, ss.synced_at,
+            ss.source_instance_id, ss.revocation_epoch::text, ss.catalog_snapshot_hash,
+            ss.candidate_hash, ss.candidate_json, ss.last_checked_at, ss.last_sync_error,
+            (pss.enabled IS DISTINCT FROM false) AS project_selected,
            jsonb_array_length(ss.catalog_json) AS module_count
     FROM skill_sources ss
+     LEFT JOIN project_skill_sources pss ON pss.skill_source_id = ss.id AND pss.project_id = ${projectId}
     ORDER BY ss.name, ss.id` as Array<{
     id: string;
     name: string;
@@ -148,6 +160,10 @@ export async function listProjectSkillSourceBindings(
     last_content_hash: string | null;
     synced_at: string | Date | null;
     module_count: number | string | null;
+    source_instance_id?: string; revocation_epoch?: string; catalog_snapshot_hash?: string | null;
+    candidate_hash?: string | null; candidate_json?: unknown;
+    last_checked_at?: string | Date | null; last_sync_error?: string | null;
+    project_selected?: boolean;
   }>;
   return {
     configured: allowlist.configured,
@@ -158,8 +174,13 @@ export async function listProjectSkillSourceBindings(
       branch: row.branch,
       trust_status: row.trust_status,
       source_enabled: row.enabled === true,
-      // Trusted+enabled sources default on; non-trusted stay off unless explicitly enabled.
-      project_enabled: enabled.has(row.id.toLowerCase()),
+      // This is the persisted project choice; trust/enabled/catalog remain independent runtime gates.
+      project_enabled: row.project_selected === true,
+      source_instance_id: row.source_instance_id, revocation_epoch: row.revocation_epoch,
+      catalog_snapshot_hash: row.catalog_snapshot_hash, candidate_hash: row.candidate_hash,
+      candidate_json: safeSkillSourceCandidate(row.candidate_json),
+      last_checked_at: row.last_checked_at instanceof Date ? row.last_checked_at.toISOString() : row.last_checked_at,
+      last_sync_error: row.last_sync_error,
       module_count: Number(row.module_count ?? 0),
       last_commit_sha: row.last_commit_sha,
       last_content_hash: row.last_content_hash,
@@ -178,6 +199,8 @@ export async function setProjectSkillSourceEnabled(
   const [src] = await db`
     SELECT id, name, repo_url, branch, trust_status, enabled,
            last_commit_sha, last_content_hash, synced_at,
+            source_instance_id, revocation_epoch::text, catalog_snapshot_hash,
+            candidate_hash, candidate_json, last_checked_at, last_sync_error,
            jsonb_array_length(catalog_json) AS module_count
     FROM skill_sources WHERE id = ${skillSourceId}` as Array<{
     id: string;
@@ -190,6 +213,10 @@ export async function setProjectSkillSourceEnabled(
     last_content_hash: string | null;
     synced_at: string | Date | null;
     module_count: number | string | null;
+    source_instance_id?: string; revocation_epoch?: string; catalog_snapshot_hash?: string | null;
+    candidate_hash?: string | null; candidate_json?: unknown;
+    last_checked_at?: string | Date | null; last_sync_error?: string | null;
+    project_selected?: boolean;
   }>;
   if (!src) throw new Error("skill source not found");
 
@@ -214,8 +241,7 @@ export async function setProjectSkillSourceEnabled(
     await db`UPDATE projects SET config_json = config_json || ${jsonParam(db, flag) as never} WHERE id = ${projectId}`;
   }
 
-  // Recompute effective availability so UI reflects trust-minus-disable.
-  const available = new Set((await loadAvailableIds(db, projectId)).map((id) => id.toLowerCase()));
+  // Confirm the persisted choice, not whether the platform currently grants this source.
   return {
     skill_source_id: src.id,
     name: src.name,
@@ -223,7 +249,12 @@ export async function setProjectSkillSourceEnabled(
     branch: src.branch,
     trust_status: src.trust_status,
     source_enabled: src.enabled === true,
-    project_enabled: available.has(src.id.toLowerCase()),
+    project_enabled: enabled,
+    source_instance_id: src.source_instance_id, revocation_epoch: src.revocation_epoch,
+    catalog_snapshot_hash: src.catalog_snapshot_hash, candidate_hash: src.candidate_hash,
+    candidate_json: safeSkillSourceCandidate(src.candidate_json),
+    last_checked_at: src.last_checked_at instanceof Date ? src.last_checked_at.toISOString() : src.last_checked_at,
+    last_sync_error: src.last_sync_error,
     module_count: Number(src.module_count ?? 0),
     last_commit_sha: src.last_commit_sha,
     last_content_hash: src.last_content_hash,

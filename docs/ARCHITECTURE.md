@@ -683,6 +683,8 @@ RoleConfig 不要求每个角色绑定市场镜像。空 `runtime_image_key` 表
 
 ### 8.4 Git 模块源（skill_sources）
 
+> 历史对照：下列 sync 后直接生效的旧叙述不再表示当前发布契约。#960 的已批准 A / 待审 B、全局管理员 hash+epoch 审批、同源锁及旧 Job 冻结边界，以[现行数据](architecture/08-data-architecture.md#skill-源已批准目录与候选960)、[接口](architecture/09-interface-specs.md#全局-skill-源候选审批960)和 [IR-007](architecture/01-system-specification.md#ir-007-git-skill-source)为准。
+
 项目级表 `project_skill_sources`（#603/#691）只保留显式停用：平台 trusted+enabled 源默认进入本项目 Job 快照可见集合。RoleConfig `modules_json` 为空时不再预装业务 Skill；Agent/Worker 在 Job 内通过 `list_available_skills` / `search_skills` 自主选择，再调用 `pull_skill` 拉取具体 Skill 文件并读取 `SKILL.md`。拉取只允许平台 trusted+enabled 且未被项目停用的源，并由 Job token、操作 allowlist、预算、网络策略和内容 hash 重新校验；Skill 不能扩大 Job 权限。Hub `list_available_skill_sources` 只返回源摘要。平台 `deepsonar-control` Skill 继续强制注入。跨任务业务身份复用写成受治理 Skill，而不是项目级 `agent_roles`。
 
 

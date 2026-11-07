@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 67);
+INSERT INTO schema_meta (id, version) VALUES ('global', 68);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1266,6 +1266,10 @@ CREATE TABLE skill_sources (
   branch text NOT NULL DEFAULT 'main',
   catalog_json jsonb NOT NULL DEFAULT '[]',
   catalog_snapshot_hash text REFERENCES shared_asset_blobs(content_sha256),
+  candidate_hash text REFERENCES shared_asset_blobs(content_sha256),
+  candidate_json jsonb,
+  last_checked_at timestamptz,
+  last_sync_error text CHECK (last_sync_error IN ('sync_failed', 'sync_cancelled', 'source_changed', 'source_disabled', 'manifest_invalid', 'lock_lost')),
   revocation_epoch bigint NOT NULL DEFAULT 0 CHECK (revocation_epoch >= 0),
   trust_status text NOT NULL DEFAULT 'quarantined',
   enabled boolean NOT NULL DEFAULT false,
