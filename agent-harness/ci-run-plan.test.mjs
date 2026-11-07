@@ -14,6 +14,7 @@ import {
   RUN_MODES,
   SPECIALIST_WORKFLOWS,
   buildRunPlan,
+  explainRunPlan,
   CHROME_FUZZ_ARM_PINNED_INPUTS,
   chromeFuzzArmRequirement,
   isTiered,
@@ -440,4 +441,120 @@ test("#976 the run plan carries a fail-closed Reverse sub-suite decision", () =>
   // Same diff without readable contents must keep every suite (fail closed).
   const unknown = buildRunPlan({ ...base, diffBytes: diff(record("M", "package.json")) });
   assert.deepEqual(unknown.reverseSuites, ["reverse", "claude", "pi-om"]);
+});
+
+// #992: the plan must explain itself in the summary instead of leaving reviewers
+// to decode a comma-separated token list.
+test("#992 the plan explanation renders the decision and its reasons", () => {
+  const plan = buildRunPlan({ ...pr, diffBytes: diff(change("agent-harness/run-claude-budget-isolated.mjs")), suitePaths: SUITE_PATHS });
+  const text = explainRunPlan(plan);
+  assert.match(text, /### CI 运行计划/);
+  assert.match(text, new RegExp(`\\| 模式 \\| \`${plan.mode}\` \\|`, "u"));
+  assert.match(text, new RegExp(`\\| 计划状态 \\| \`${plan.status}\` \\|`, "u"));
+  assert.match(text, /\| tiered 分层 \| 启用 \|/u);
+  // Every emitted token appears verbatim, so the summary never hides a reason.
+  for (const reason of plan.reasons) assert.ok(text.includes(`\`${reason}\``), `${reason} must be quoted verbatim`);
+  // Known tokens are decoded; the raw token stays next to its explanation.
+  assert.match(text, /`ready_for_review_full_path`：Ready PR：走完整验收/u);
+  assert.match(text, /`suite:reverse`：命中专项 workflow：reverse/u);
+  assert.match(text, /`reverse:reverse_suite:claude`：计划执行 Reverse 子套件：claude/u);
+  // Planned vs skipped suites are stated explicitly.
+  assert.match(text, /\*\*Reverse 子套件\*\*：`claude`/u);
+  assert.match(text, /\*\*Reverse 跳过\*\*：`reverse`、`pi-om`/u);
+});
+
+test("#992 unknown reasons stay visible instead of being dropped", () => {
+  const text = explainRunPlan({ mode: "ready-full", status: "ok", reasons: ["some_new_reason:detail"] });
+  assert.match(text, /`some_new_reason:detail`：未登记原因：some_new_reason:detail/u);
+});
+
+test("#992 a plan without reasons says so instead of implying a clean skip", () => {
+  const text = explainRunPlan({ mode: "ready-full", status: "ok", reasons: [] });
+  assert.match(text, /无（计划未记录原因，按 fail closed 处理）/u);
+  assert.match(text, /\*\*Reverse 子套件\*\*：全部跳过/u);
+});
+
+// #992 review P2: the first version of this test hand-built the token
+// `reverse:package_json_field_changed:dependencies`, which the real chain never
+// emits. Build the plan instead so the double prefix
+// (`reverse:` + `reverse_package_json_` + `package_json_*`) is exercised.
+function packageJsonPlan(base, head, path = "package.json") {
+  return buildRunPlan({
+    ...pr,
+    diffBytes: diff(change(path)),
+    suitePaths: SUITE_PATHS,
+    packageJsonBase: typeof base === "string" ? base : JSON.stringify(base),
+    packageJsonHead: typeof head === "string" ? head : JSON.stringify(head),
+  });
+}
+
+test("#992 a package.json field change decodes through the real reason chain", () => {
+  const plan = packageJsonPlan({ name: "x", dependencies: { a: "1" } }, { name: "x", dependencies: { a: "2" } });
+  const token = plan.reasons.find((reason) => reason.includes("package_json_field_changed"));
+  assert.equal(token, "reverse:reverse_package_json_package_json_field_changed:dependencies",
+    "the token carries the wrapper prefixes the decoder must strip");
+  const text = explainRunPlan(plan);
+  assert.ok(text.includes(`\`${token}\``), "the raw token stays visible");
+  assert.match(text, /package\.json 字段变化（dependencies）：Reverse 全跑/u);
+  assert.doesNotMatch(text, /未登记原因/u);
+});
+
+test("#992 a removed script and an unparseable package.json decode too", () => {
+  const removed = packageJsonPlan({ scripts: { "ci:unit:a": "node --test a.test.mjs" } }, { scripts: {} });
+  assert.match(explainRunPlan(removed), /package\.json 删除了脚本（ci:unit:a）：Reverse 全跑/u);
+
+  const broken = packageJsonPlan("{not json", "{}");
+  assert.match(explainRunPlan(broken), /package\.json 无法解析：Reverse 全跑/u);
+});
+
+test("#992 a shared Reverse input decodes to the fail-closed reason", () => {
+  const plan = buildRunPlan({ ...pr, diffBytes: diff(change("packages/runtime-sandbox/src/a.ts")), suitePaths: SUITE_PATHS });
+  const token = plan.reasons.find((reason) => reason.endsWith("reverse_shared_inputs_changed"));
+  assert.ok(token, `expected a shared-input reason, got ${plan.reasons.join(",")}`);
+  assert.match(explainRunPlan(plan), /命中 Reverse 共享输入（base\/锁文件\/runtime-sandbox 等）：全跑/u);
+});
+
+// #992 review P2: an empty Reverse suite list has three different causes, so the
+// skip sentence must follow the mode instead of always claiming "proven unrelated".
+test("#992 the skip sentence names the real reason for each mode", () => {
+  const draft = buildRunPlan({
+    ...pr, draft: true,
+    diffBytes: diff(change("packages/runtime-sandbox/src/a.ts")), suitePaths: SUITE_PATHS,
+  });
+  assert.equal(draft.mode, "draft-fast");
+  assert.deepEqual(draft.reverseSuites, []);
+  assert.match(explainRunPlan(draft), /\*\*Reverse 跳过\*\*：[^\n]*（原因：Draft PR 只跑 draft-fast 快速套件）/u);
+
+  const docs = buildRunPlan({ ...pr, diffBytes: diff(change("docs/README.md")), suitePaths: SUITE_PATHS });
+  assert.equal(docs.mode, "docs");
+  assert.match(explainRunPlan(docs), /（原因：纯文档变更）/u);
+
+  const unrelated = buildRunPlan({ ...pr, diffBytes: diff(change("apps/web/src/main.tsx")), suitePaths: SUITE_PATHS });
+  assert.equal(unrelated.mode, "ready-full");
+  assert.deepEqual(unrelated.reverseSuites, []);
+  assert.match(explainRunPlan(unrelated), /（原因：改动都落在 Reverse 输入之外，已证明无关）/u);
+});
+
+test("#992 the CLI writes the explanation to GITHUB_STEP_SUMMARY", () => {
+  const dir = mkdtempSync(join(tmpdir(), "plan-summary-"));
+  const summary = join(dir, "summary.md");
+  const output = join(dir, "output.txt");
+  writeFileSync(summary, "");
+  try {
+    const diffFile = join(dir, "diff.bin");
+    writeFileSync(diffFile, diff(change("agent-harness/run-claude-budget-isolated.mjs")));
+    const result = spawnSync(process.execPath, [join(ROOT, "agent-harness/ci-run-plan.mjs"), "--event-name", "pull_request",
+      "--base", "b", "--head", "h", "--ci-pr-mode", "tiered", "--root", ROOT, "--diff-file", diffFile], {
+      cwd: ROOT,
+      env: { ...process.env, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const written = readFileSync(summary, "utf8");
+    assert.match(written, /### CI 运行计划/u);
+    assert.match(written, /判定依据/u);
+    assert.match(readFileSync(output, "utf8"), /reverse_suites=claude/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

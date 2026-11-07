@@ -135,6 +135,10 @@ Control API 的每个 operation 必须经过三层校验：
 
 `ci` 的串行 `gate` 已拆为四个有界并行分片（#972）：`gate-contract`（无服务单测/契约，不声明 `services.postgres`）、`gate-db-core` / `gate-db-domain`（各自独立 PostgreSQL 服务与库）、`gate-e2e`（scheduler 3100/3101 与同库 `setval` 竞态相关的启动/端到端冒烟必须同片）。每片独立 `needs: changes`、独立 `install`/`typecheck`/`build` 生命周期，不复用跨提交结果；`ci-summary` 用 `EXPECTED_GATE_SHARDS` 显式期望矩阵逐片要求 `success`，缺片、取消、超时、失败或结果值未知一律拒绝。原 `gate` 的每个 `ci:*` 套件必须恰好归属一片，覆盖率由 [`gate-shards.test.mjs`](../../agent-harness/gate-shards.mjs) 断言；改 gate 步骤必须同步该清单，不能靠删测试或放宽门禁达标。
 
+运行计划必须自解释（#992）：`ci-run-plan.mjs` 把同一份判定写入 `GITHUB_STEP_SUMMARY`，包含模式、计划状态、`base → head`、是否 tiered、Chrome Fuzz ARM 是否必跑、Reverse 实际执行与跳过的子套件，以及**每条 reason 的人读说明**。未登记的新 reason 会原样打印（`未登记原因：<token>`），不会因为没写文案就被吞掉；reason 为空时明确写「按 fail closed 处理」而不是暗示干净跳过。仓库变量 `CI_PR_MODE` 当前为 `tiered`（2026-11-07 核对），即 PR 按影响范围收窄、`main` 与手动运行保持全量；变量未设置、非法或为 `full` 时回退完整 PR 验收。
+
+失败重跑的粒度是 **job 而不是 step**：GitHub 的 “Re-run failed jobs” 会整段重跑该 job 的步骤，相关下游也会重跑，不存在从失败 step 原地续跑。所以降低重试成本的杠杆是把昂贵的独立套件拆成可单独重跑的 job（各自保持 DB/端口/服务/文件隔离），以及在同一 run、同 SHA、同平台与输入身份下复用准备产物；**不得**跨提交复用「测试已通过」的结论。`ci-summary` 与 `reverse-runtime-acceptance` 始终核对计划与实际结果，失败、取消、缺片或应跑误跳过都不放行——跳过判定只缩小范围，不放宽门禁。
+
 镜像构建的缓存与磁盘准备各有独立边界。#974 起 `runtime-images` 的 `cache-from`/`cache-to` 由 [`runtime-image-cache-policy.mjs`](../../agent-harness/runtime-image-cache-policy.mjs) 按 toolset 计算：所有 toolset 恒保留两个 registry 读与 GHA 读回退；`base`/`audit` 的写出与历史两行逐字一致；`kali-minimal` 默认只保留 registry `mode=max,ignore-error=true`，去掉重复的 GHA `mode=max` 大层导出，可用仓库变量 `RUNTIME_CACHE_KALI_GHA` 切回 `min`/`max`，非法值 fail closed。#961 P3 起内容指纹同时给出 `ci_src_tag`（`src-ci-<fp>`，CI 读写）与 `release_src_tag`（`src-release-<fp>`，仅发布读写）；四个 CI workflow 只用前者，`release.yml` 只用后者，历史 `src-<fp>` 已无消费方——否则 PR 产物可以让发布跳过真实构建。
 
 Chrome Fuzz ARM64 的 CI/Release cache miss 构建前执行[受控宿主磁盘准备](../../.github/ci/prepare-hosted-runner-disk.mjs)。#973 起它先读 `df -Pk /` 的可用空间：达标即跳过，不足才按显式 SDK 白名单逐项删除、每步重测、达标即停，全删仍不足则明确失败；`df` 解析失败直接报错而不是回退 0 继续删，dry-run 不调用 `sudo` 也不谎称达标。可删路径仍是固定白名单，工作区与 Docker 状态受保护。always-running docs-freshness job 另运行该脚本的 mock 安全测试。实际磁盘耗尽证据、信任限制和待验证运行见[发布专题](../RELEASE_RUNTIME_IMAGES.md#chrome-fuzz-arm64-的宿主磁盘准备)；不以清理测试代替原生构建或 smoke。
