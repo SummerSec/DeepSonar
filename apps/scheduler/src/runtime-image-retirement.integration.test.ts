@@ -133,8 +133,8 @@ if (!databaseUrl) {
       const { config } = await import("./config.js");
       const { activateRuntimeImageConfiguration } = await import("./runtime-image-config-activation.js");
       const previousRuntime = { agentMode: config.runtime.agentMode, provider: config.runtime.provider };
-      config.runtime.agentMode = "real";
-      config.runtime.provider = "opensandbox";
+      Reflect.set(config.runtime, "agentMode", "real");
+      Reflect.set(config.runtime, "provider", "opensandbox");
       try {
         const snapshots = await runtime.resolveConfiguredRuntimeImagesForChannel(sql, "dockerhub");
         assert.deepEqual(snapshots.map((snapshot) => [snapshot.image_key, snapshot.image_ref]), [[currentKey, targetRef]]);
