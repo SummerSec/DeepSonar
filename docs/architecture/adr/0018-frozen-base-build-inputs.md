@@ -1,7 +1,7 @@
 # ADR 0018：基础镜像依赖使用固定来源与摘要，失败不回退 live
 
 > 状态：**已采纳构建边界**；本分支的输入冻结前置实现尚待最终 SHA Actions 原生验收。跨运行复用未实现，决策不代表其已交付。
-> 日期：2026-11-08
+> 同步日期：2026-11-08
 > 来源：[#992](https://github.com/SummerSec/DeepSonar/issues/992)、[NFR-OPS-003](../01-system-specification.md#nfr-ops-003-发布与文档保鲜)、[CI 构建输入](../../CI_COST_ACCEPTANCE_992.md#6-基础构建输入冻结992前置切片)
 
 ## 背景
