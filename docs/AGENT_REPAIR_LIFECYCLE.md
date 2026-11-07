@@ -1,7 +1,7 @@
 # Agent 错误反馈与执行恢复（#903）
 
-> 状态：as-built；#930 与 #928 已合入 main 616d7a36，工程证据见下文，后续 SHA 另验
-> 同步日期：2026-11-06
+> 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；本分支 #943 可信显式恢复已接线，最终 SHA Actions 待验
+> 同步日期：2026-11-07
 
 这是 [完成回执](REPAIR_FEEDBACK_DONE_REPAIR.md)的生命周期扩展。设计取舍见 [ADR 0016](architecture/adr/0016-repair-execution-generations.md)。#911 已合入 Knowledge/Skill 分类透传；#919（#913）已合入仅在宿主接受完成后识别结构化 Gateway 拒绝的运行器处理。本次不重复这两片，也不把工程证据写成真实模型试验。
 
@@ -17,10 +17,25 @@
 
 2026-11-06 核对 `c0809b3e`：task retry、自动 Hub、Verify、人工补证及两类 Report 直接插入 resolver 快照，缺少完整 runtime freeze；普通 Intent/PlanTask 已冻结，不重复改造。本切片在原事务内调用共享冻结器，冻结结果与 `jobs.timeout_sec` 保持一致；retry 在清空旧画布前冻结，插入故障回滚旧任务，不另开创建事务。网络、设备、种子、共享资产和完成/验证门不放宽。
 
-预算错误继续使用 `GATEWAY_REQUEST_BUDGET_INVALID`，缺损 knobs 在管理恢复响应增加 `missing_fields` 与 `next_action=inspect-job-recovery`；Web 展示字段和核对历史的责任，不冒充额度耗尽或账号错误。旧快照仍先于新配置接受预算历史校验，缺损快照、未结算/未知效果不会因空 token/receipt 查询被补冻；恢复闭环的可信未执行证据仍由 #943 跟踪，不能以本切片关闭整单。#948 的 Pi allowance/request 其他错误也未据此宣布解决。
+创建冻结与缺字段诊断已由 #956 合入；这本身不授权旧 Job 恢复。#943 的后续可信显式恢复见下节，不能因为 empty token/receipt 或 failed 状态推定 no-start。#948 的 Pi allowance/request 其他错误不由本切片宣布解决。
 
 回归扩展现有 `task-retry-hub-snapshot.integration.test.ts`、`job-rerun.integration.test.ts`、Gateway 预算集成及 Web 测试：检查真实 HTTP 创建/retry/Hub 唤醒的完整冻结、覆盖来源及预算准入，注入 retry INSERT 故障验证回滚，缺字段恢复拒绝无历史写入。入口为 `pnpm ci:integration:recovery`、`pnpm ci:integration:platform-api`、`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:credential-compatibility`；最终 SHA 的 GitHub Actions 尚待执行，本机不运行测试、构建或 typecheck。
 
+
+### 缺损快照的可信显式恢复（#943）
+
+2026-11-07 源码核对（开发基线 main `551a2689`）：普通 mint、运行及 `resume` 仍只认旧冻结输入，缺损字段明确拒绝，不暗中加载当前 RoleConfig。单 Job `rerun-current` 是显式的新执行授权，重新冻结当前配置并重新检查 target authority、镜像、扩展及权限；它不是旧协议兼容或无条件重放。可信预算准入有两个独立来源：
+
+- 完整、版本/宿主身份和确定性 event ID 均有效的 `gateway_request_budget` 内核回执，保留总/main/background 全部原策略，包括从未 mint 的 workload。与当前配置、全部历史回执和所有撤销/过期 token 的有限上限取交集；旧 knobs 若仍有合法请求上限也必须保留。损坏回执/残留非法上限不得忽略。
+- 仅针对创建时整段缺失 `runtime_knobs` 的首次执行前失败：真实 Dispatcher 在任何 runtime IO 前执行预算检查，失败时以 Canvas → Job → Attempt 锁保存 `gateway_snapshot_preflight` 内核回执。写入时核对当前 claimed Job、唯一首次 active/preparing Attempt、未绑定资源、原完整快照摘要以及无 effect/token/capability/usage/其他事件历史；重复 checkpoint 不重复写。预算 preflight 拒绝不自动派新 Hub；独立 Verify 恢复事务仍关闭失败 round 并结算 Finding，但同样禁止此次收口触发 Hub。失败 Job/Attempt、节点及 Verify round 结算不应因下游当前配置无法解析而回滚，仍待显式恢复。恢复重验 Job/Attempt/snapshot 摘要、宿主身份、事件 ID 与完整空历史，不能把失败状态、空 token 查询、没有 sandbox ID 或 Provider 异常当作替代证明。
+
+两条路径都在 Canvas → Job → 全部 Attempts 锁下只读预检；unknown/pending/planned effect、未知 token 用量、已接受完成、暂停、修正期限/次数或累计额度耗尽仍阻止入队。全部门通过后才在同一事务追加原生预算回执、撤旧 grant、安装新执行快照和转 pending；原 Attempt/回执/费用/修正链及 deadline 不重写、不补造。新 policy 更大或 0 不删除旧有限上限；更小交集已经耗尽则沿用 `REPAIR_REQUESTS_EXHAUSTED` 明确拒绝。
+
+`resume` 的 `GATEWAY_REQUEST_BUDGET_INVALID` 仍带 `missing_fields`。只有核验上述 rerun-current 条件通过时，诊断返回 `next_action=rerun-current`；否则 `inspect-job-recovery`。诊断本身没有写入效果。显式恢复缺少完整可信预算或执行前证明时为 `GATEWAY_REQUEST_BUDGET_HISTORY_MISSING`，包括未部署此 checkpoint 的历史缺损 Job；不能为使它们恢复补造证明。Web 只展示宿主下一步，让用户明确选择，不增加轮询/通知/配置、不自动补冻或重跑、不跳转无关账号设置。批量 resume 仍按旧快照保守准入，不借单 Job 显式操作绕过全批事务。
+
+实现入口为 [`gateway-request-policy.ts`](../apps/scheduler/src/gateway-request-policy.ts)、[`gateway-snapshot-no-start.ts`](../apps/scheduler/src/gateway-snapshot-no-start.ts)、[`dispatcher.ts`](../apps/scheduler/src/dispatcher.ts)、[`rerun.ts`](../apps/scheduler/src/domains/job-control/rerun.ts)和 [`useJobRerun.tsx`](../apps/web/src/useJobRerun.tsx)。遵循 [ADR 0016](architecture/adr/0016-repair-execution-generations.md) 与 [ADR 0017](architecture/adr/0017-transparent-gateway-settlement.md) 的现有回执/累计预算决定，不新增 schema、状态或执行通道。preflight no-start 不是 Gateway transport settlement、Agent ACK 或模型成功。
+
+回归扩展既有 `job-rerun.integration.test.ts` / Web 测试：真实 Dispatcher 的执行前拒绝（runtime sentinel 不得调用）与 checkpoint helper 的持久去重 → 真实 HTTP 只读反馈 → 显式补冻 → 真实领取/新 Attempt → 生产 Gateway mint；完整历史预算恢复和原 Attempt/receipt 不变；无证明、错误宿主身份、快照变化、多 Attempt、pending/unknown effect 及撤销 token 的已耗尽上限拒绝后比较完整原状态。此链不调用上游模型，mint 成功不表示 Agent 完成。入口已接 `ci:integration:recovery` / `ci:unit:credential-compatibility`，最终 SHA Actions 待验；本机未运行测试/构建/typecheck，不声称生产旧 Job 已恢复或模型效果收益。
 
 恢复准入与 Gateway 使用共享 main token allowance：OM 的已结算后台用量不消耗 main reserve；同 Job 已有 OM token 历史时，即使 `rerun-current` 不再选择 OM，也保留 workload 计费隔离和历史有限上限。未启用过 OM 的 Job 继续使用全 Job token 额度。此隔离不豁免旧后台 pending/unknown effect：建立新代际前仍须全部结算。请求次数上限是独立约束，不因本 token allowance 修正而扩大。 allowance 将尚无账本的 pending reservation 返回为 `JOB_TOKEN_USAGE_PENDING`，不冒充 unknown 或零成本；未知/缺失结算仍返回 `JOB_TOKEN_USAGE_UNKNOWN`。两者均不授予新代际。
 

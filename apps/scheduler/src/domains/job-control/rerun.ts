@@ -1,6 +1,6 @@
 import { freezeJobRuntimeConfiguration } from "../../job-runtime-freeze.js";
 import { parseFrozenPiExtensions } from "../../pi-extensions.js";
-import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
+import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, inspectRerunGatewayRequestBudget, ensureRerunGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
 import { readRepairRequeueAdmission } from "./repair-admission.js";
 import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
 import { normalizeTaskContract, normalizeTaskGoalReviewRequest } from "@deepsonar/shared-types";
@@ -78,7 +78,7 @@ export type RequeueJobResult =
     }
   | { kind: "not_found" }
   | { kind: "not_resumable"; status: string; reason?: string; error_code?: string; provenance?: JobProvenance;
-      missing_fields?: string[]; next_action?: "inspect-job-recovery" }
+      missing_fields?: string[]; next_action?: "inspect-job-recovery" | "rerun-current" }
   | { kind: "target_authorization_blocked"; detail: SnapshotStaleDetail; blockers: TaskContractFeedback[]; provenance?: JobProvenance }
   | { kind: "snapshot_stale"; detail: SnapshotStaleDetail; provenance?: JobProvenance };
 
@@ -428,18 +428,33 @@ export async function requeueJob(
     // Fence effect intent writers before inspecting the old ledger. An idle DB
     // observation alone cannot prove that a concurrent old runner stayed idle.
     await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no FOR UPDATE`;
-    try { await inspectGatewayRequestBudget(tx, jobId, job.agent_snapshot_json); }
+    try {
+      if (mode === "rerun-current") await inspectRerunGatewayRequestBudget(tx, jobId, job.agent_snapshot_json, currentSnapshot);
+      else await inspectGatewayRequestBudget(tx, jobId, job.agent_snapshot_json);
+    }
     catch (error) {
       if (!(error instanceof GatewayRequestBudgetError)) throw error;
+      let nextAction: "inspect-job-recovery" | "rerun-current" = "inspect-job-recovery";
+      if (mode === "resume-frozen" && error.missing_fields.length) {
+        try {
+          await inspectRerunGatewayRequestBudget(tx, jobId, job.agent_snapshot_json, currentSnapshot);
+          const admission = await readRepairRequeueAdmission(tx, jobId);
+          if (!admission.blocker && !(await requeueTargetAuthorizationBlockers(tx, job, currentSnapshot, "rerun-current")).length) {
+            nextAction = "rerun-current";
+          }
+        } catch (recoveryError) {
+          if (!(recoveryError instanceof GatewayRequestBudgetError)) throw recoveryError;
+        }
+      }
       return { kind: "not_resumable" as const, status, provenance, reason: error.message, error_code: error.code,
-        ...(error.missing_fields.length ? { missing_fields: error.missing_fields } : {}),
-        next_action: "inspect-job-recovery" as const };
+        ...(error.missing_fields.length ? { missing_fields: error.missing_fields } : {}), next_action: nextAction };
     }
 
     const repairAdmission = await readRepairRequeueAdmission(tx, jobId);
     if (repairAdmission.blocker) return { kind: "not_resumable" as const, status, provenance,
       reason: repairAdmission.blocker.reason, error_code: repairAdmission.blocker.code };
-    await ensureGatewayRequestBudget(tx, jobId, job.agent_snapshot_json);
+    if (mode === "rerun-current") await ensureRerunGatewayRequestBudget(tx, jobId, job.agent_snapshot_json, currentSnapshot);
+    else await ensureGatewayRequestBudget(tx, jobId, job.agent_snapshot_json);
     if (repairAdmission.budget && repairAdmission.deadline) {
       await admitRepairGeneration(tx, jobId, repairAdmission.budget.receipt_ref, repairAdmission.deadline, mode);
     }

@@ -18,10 +18,12 @@ export function classifyJobRerunError(error: unknown, projectId: string | null):
   const fallback = { message: error instanceof Error ? error.message : String(error), repair: null };
   if (!(error instanceof ApiRequestError) || error.status !== 409) return fallback;
   const budgetBody = record(error.taskContractFeedback);
-  if (error.errorCode === "GATEWAY_REQUEST_BUDGET_INVALID" && Array.isArray(budgetBody?.missing_fields)) {
+  if (["GATEWAY_REQUEST_BUDGET_INVALID", "GATEWAY_REQUEST_BUDGET_HISTORY_MISSING"].includes(error.errorCode ?? "") && Array.isArray(budgetBody?.missing_fields)) {
     const missing = budgetBody.missing_fields.filter((field): field is string => typeof field === "string");
     if (missing.length) return {
-      message: `冻结快照预算字段缺失或非法（${missing.join(", ")}）。请先核对 Job 的历史策略和执行效果；当前配置不能证明旧预算，也不会自动补冻或重置额度。`,
+      message: budgetBody?.next_action === "rerun-current"
+        ? `旧冻结快照字段不完整（${missing.join(", ")}）。平台已核对可信预算或执行前证明及当前恢复条件；可明确选择按当前配置重跑，保留历史额度和执行记录，不会自动重跑。`
+        : `冻结快照预算字段缺失或非法（${missing.join(", ")}）。请先核对 Job 的历史策略和执行效果；当前配置不能证明旧预算，也不会自动补冻或重置额度。` + (error.errorCode === "GATEWAY_REQUEST_BUDGET_HISTORY_MISSING" ? " 缺少可信的完整预算回执或宿主执行前证明，不能补造证明。" : ""),
       repair: null,
     };
   }

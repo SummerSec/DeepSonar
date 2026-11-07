@@ -1,4 +1,6 @@
 import { readRepairTokenBudget, assertRepairExecutionOwner } from "./domains/event-ingestion/repair-token-budget.js";
+import { frozenGatewayRequestBudget, GatewayRequestBudgetError } from "./gateway-request-policy.js";
+import { recordGatewaySnapshotNoStart } from "./gateway-snapshot-no-start.js";
 import { frozenTaskContract, taskContractPreflight, TaskContractBlockedError } from "./task-contract-preflight.js";
 import {tickKnowledgeBeforeDispatch} from "./dispatcher-knowledge-gate.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
@@ -987,6 +989,7 @@ async function runJob(jobId: string) {
   let attemptId: string | null = null;
   let provisionEffectId: string | null = null;
   let provisionAttempted = false;
+  let gatewaySnapshotPreflightRejected = false;
   let activeAttempt: Record<string, unknown> | null = null;
   let platformCapability: PreparedPlatformCapability | null = null;
   /** 设备租约（#495）：申请到之后必须在 finally 释放，Reaper 兜底过期。 */
@@ -1005,6 +1008,18 @@ async function runJob(jobId: string) {
     const useReal = config.runtime.agentMode === "real" && (await isRealType(job.type as string));
     const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
+    // First pre-call checkpoint: establish durable no-start authority before any
+    // runtime IO. The failed admission never starts an Agent or guesses a budget.
+    if (useReal) {
+      try { frozenGatewayRequestBudget(snapshot); }
+      catch (error) {
+        gatewaySnapshotPreflightRejected = error instanceof GatewayRequestBudgetError;
+        if (error instanceof GatewayRequestBudgetError && error.missing_fields.length) {
+          await recordGatewaySnapshotNoStart(sql, { jobId, attemptId, snapshot });
+        }
+        throw error;
+      }
+    }
     assertFrozenCliCapabilities(snapshot);
     // Fail closed before sandbox provision when a Pi catalog id cannot be
     // mapped to one authenticated models.json route.
@@ -1462,7 +1477,9 @@ async function runJob(jobId: string) {
         UPDATE canvas_nodes SET status = 'failed', updated_at = now()
         WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]}) AND status IN ('running','pending')`;
       if (row) await advancePlanTaskAfterTerminalJob(tx, jobId);
-      if (row && row.type !== "report" && canvasId && locator) {
+      // A rejected pre-call snapshot needs explicit recovery, not a fresh Hub;
+      // downstream configuration resolution must not roll back this terminal settlement.
+      if (row && !gatewaySnapshotPreflightRejected && row.type !== "report" && canvasId && locator) {
         await advanceCanvasAfterTerminalJob(
           tx,
           {
@@ -1479,7 +1496,7 @@ async function runJob(jobId: string) {
     });
     const failed = failedRow ? [failedRow] : [];
     if (failed[0]?.type === "verify_finding") {
-      await recoverVerifyJobTerminal(jobId, "failed", msg).catch((err) =>
+      await recoverVerifyJobTerminal(jobId, "failed", msg, { deferHub: gatewaySnapshotPreflightRejected }).catch((err) =>
         console.error(`[dispatcher] verify recovery failed:`, err),
       );
     }
