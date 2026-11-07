@@ -278,34 +278,21 @@ jobs:
           path: artifacts/pi-om-growth
           if-no-files-found: warn
 
-  gate:
+  # 有界并发分片 1/4（并发上限为 4）：纯无服务单测/契约/静态检查，不声明 services.postgres；4 片各自独立生命周期、各自 install/build，不复用跨提交结果。
+  gate-contract:
     runs-on: ubuntu-24.04
     needs: changes
     if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
     timeout-minutes: 40
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: deepsonar
-          POSTGRES_PASSWORD: deepsonar-ci-pass
-          POSTGRES_DB: deepsonar
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U deepsonar -d deepsonar"
-          --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - uses: pnpm/action-setup@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-
       - name: Select PostgreSQL 16 client (matches the service)
         run: |
           if ! test -x /usr/lib/postgresql/16/bin/pg_dump || ! test -x /usr/lib/postgresql/16/bin/pg_restore; then
@@ -318,45 +305,27 @@ jobs:
           [[ "$dump_version" == "pg_dump (PostgreSQL) 16."* ]] || exit 1
           [[ "$restore_version" == "pg_restore (PostgreSQL) 16."* ]] || exit 1
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
-
       - run: pnpm install --frozen-lockfile
-
+      - run: pnpm -r typecheck
+      - run: pnpm -r build
       - name: Runtime image definition consistency
         run: pnpm ci:images
-
       - name: Runtime image registry contract unit
         run: pnpm ci:unit:runtime-images
-
       - name: Runtime resource cleanup and disk pressure unit
         run: pnpm ci:unit:runtime-cleanup
-
       - name: Image admission registry selection unit
         run: pnpm ci:unit:image-admission
-
       - name: Runtime image destination evidence unit
         run: pnpm ci:unit:runtime-image-record
-
       - name: Runtime image registry generator compatibility
         run: pnpm ci:unit:runtime-registry
-
-      - name: Runtime image promotion reconciliation (channel-only v2 fixture)
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:runtime-image-promotions
-
-      - run: pnpm -r typecheck
-
-      - run: pnpm -r build
-
       - name: Locked native SDK and DSH CLI budget regression (synthetic upstream only)
         run: pnpm ci:integration:request-budget-sdk
-
       - name: Locked Pi provider composition and header regression (synthetic upstream only)
         run: pnpm ci:integration:provider-headers-sdk
-
       - name: Target image offline upgrade configuration preflight
         run: pnpm ci:unit:platform-upgrade-preflight
-
       - name: Pinned cosign ephemeral-key verification (no production identity)
         shell: bash
         run: |
@@ -369,306 +338,88 @@ jobs:
           chmod 700 "$verifier"
           DEEPSONAR_TEST_COSIGN="$verifier" DEEPSONAR_TEST_COSIGN_SHA256="$verifier_sha" \
             node --test deploy/platform-upgrade-signature.integration.test.mjs
-
       - name: Maintenance and managed node upgrade unit
         run: pnpm ci:unit:platform-upgrade-maintenance
-
-      - name: Isolated database upgrade and worker fencing
-        env:
-          DEEPSONAR_FENCE_PG_TEST: "1"
-          UPGRADE_SCHEMA_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-          UPGRADE_SCHEMA_TEST_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:platform-upgrade
-
       - name: Scheduler startup gate unit
         run: pnpm ci:unit:startup-gate
-
       - name: Capability Pack contract and discovery unit
         run: pnpm ci:unit:capability-pack
       - name: Project knowledge strict contracts and scope unit
         run: pnpm ci:unit:project-knowledge
-      - name: Project knowledge PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:project-knowledge
-
       - name: Scheduler public Job role enablement gate
         run: pnpm --filter @deepsonar/scheduler exec tsx --test src/domains/job-control/routes.test.ts
-
       - name: Scheduler Job lifecycle characterization
         run: pnpm ci:unit:job-lifecycle
-
-      - name: Scheduler Job lifecycle PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:job-lifecycle
-
       - name: Scheduler orphan recovery evidence unit
         run: pnpm ci:unit:recovery
-
       - name: Governed completion recovery contracts and unit
         run: pnpm ci:unit:completion-recovery
-
-      - name: Governed completion recovery PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-          DEEPSONAR_HUB_ENABLED: "true"
-        run: pnpm ci:integration:completion-recovery
       - name: Device broker unit
         run: pnpm ci:unit:device-broker
-
       - name: Device lease contract unit
         run: pnpm ci:unit:device-lease
-
-      - name: Device lease PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/postgres
-        run: pnpm ci:integration:device-lease
-
-
-      - name: Scheduler orphan recovery PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-          DEEPSONAR_HUB_ENABLED: "true"
-        run: pnpm ci:integration:recovery
-
       - name: Scheduler bounded-context characterization guardrails
         run: pnpm ci:unit:scheduler-characterization
-
-      - name: Scheduler bounded-context ownership guardrails
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:unit:bounded-contexts
-
       - name: Test wiring ratchet guard
         run: pnpm ci:unit:ci-test-hook
-
       - name: File size ratchet guard
         run: pnpm ci:unit:file-size
-
       - name: Authenticated report download web unit
         run: pnpm ci:unit:web-report-download
-
       - name: Projects intent launch web unit
         run: pnpm ci:unit:web-quick-start
-
       - name: Canvas Fact workbench web unit
         run: pnpm ci:unit:web-facts
-
       - name: Agent Session viewer web unit
         run: pnpm ci:unit:web-session-viewer
-
       - name: Report download OpenAPI unit
         run: pnpm ci:unit:report-download-openapi
-
-      - name: Authenticated report download Fastify integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:report-download
-
-      - name: Per-Finding report PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:finding-report
-
       - name: Finding protocol and CVSS unit
         run: pnpm ci:unit:finding-protocol
-
       - name: Finding offline evaluation unit
         run: pnpm ci:unit:finding-offline-evaluation
-
       - name: Finding research ranking unit
         run: pnpm ci:unit:finding-research
-
       - name: Finding governed quality unit and real module entrypoints
         run: pnpm ci:unit:finding-quality
-
-      - name: Finding protocol PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:finding-protocol
-
       - name: Finding durable candidate Web behavior
         run: pnpm ci:unit:finding-candidates-web
       - name: Finding lexical search Web behavior
         run: pnpm ci:unit:finding-lexical-web
-      - name: Finding research PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:finding-research
-
-      - name: Finding governed quality PostgreSQL and stored-session HTTP integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: |
-          test -n "$TEST_DATABASE_URL"
-          pnpm ci:integration:finding-quality
-
       - name: Shared assets contract unit
         run: pnpm ci:unit:shared-assets
-
-      - name: Shared assets PostgreSQL and API integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:shared-assets
-
-      - name: Shared assets real Docker read-only volume
-        env:
-          RUN_DOCKER_SHARED_ASSETS_TEST: "1"
-        run: pnpm ci:integration:shared-assets-volume
-
-      - name: Incremental migration chain (fresh, v12 upgrade, rollback/retry, concurrency)
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:unit:migrations
-
       - name: Role color unit and projection tests
         run: pnpm ci:unit:role-colors
-
-      - name: Role color Postgres/API integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:role-colors
-
-      - name: Dispatcher claim Postgres integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:dispatch-limits
-
-      - name: Event ingestion Canvas-first Postgres integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:event-ingestion
-
-      - name: Semantic event authorization Postgres integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:event-authorization
-
       - name: Plan protocol unit
         run: pnpm ci:unit:plan-protocol
-
-      - name: Plan protocol Postgres integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:plan-protocol
-
       - name: Plan frozen offline replay unit
         run: pnpm ci:unit:plan-replay
-
-      - name: Plan frozen offline SQL and HTTP replay
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:plan-replay
-
-      - name: Upload Plan offline replay report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: plan-offline-replay
-          path: artifacts/plan-replay/*.json
-          if-no-files-found: warn
-
-      - name: Hub runtime image proposal Postgres integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:hub-runtime-image
-
       - name: Semantic event rate-limit unit
         run: pnpm ci:unit:event-rate-limit
-
       - name: Login brute-force rate-limit unit
         run: pnpm ci:unit:login-rate-limit
-
       - name: Windows deploy.ps1 encoding and pull semantics
         run: pnpm ci:unit:deploy-ps1
-
       - name: Control-plane multi-arch pins (#598)
         run: pnpm ci:unit:control-plane-platforms
-
-      - name: Semantic event rate-limit Postgres integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:event-rate-limit
-
       - name: Hub graph reference unit
         run: pnpm ci:unit:graph-references
-
-      - name: Hub graph reference Postgres integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:graph-references
-
       - name: Compose task unit
         run: pnpm ci:unit:compose-tasks
-
       - name: Task intent edit unit
         run: pnpm ci:unit:task-intent
-
-      - name: Task intent edit PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:task-intent
-
       - name: Searchable dropdown unit and adoption guard
         run: pnpm ci:unit:searchable-selects
-
-      - name: Compose task PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:compose-tasks
-
-      - name: Canvas lifecycle projection Postgres integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:canvas-lifecycle
-
-      - name: Dashboard overview PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:dashboard-overview
-
       - name: Verify eligibility unit
         run: pnpm ci:unit:verify-eligibility
-
       - name: Canvas Fact contract unit
         run: pnpm ci:unit:canvas-facts
-
-      - name: Canvas Fact and manual verification PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:canvas-facts
-
       - name: Real executor fact verification unit
         run: pnpm ci:unit:executor-real
-
       - name: Credential and CLI compatibility unit
         run: pnpm ci:unit:credential-compatibility
-
-      - name: Credential delete PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:credential-delete
-
-      - name: Project export ACTIVE_JOBS and custom modules PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:transfer-export
-
-      - name: Credential catalog probe soft-degrade PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:credential-catalog
-
-      - name: RoleConfig agent_cli follow PostgreSQL integration
-        env:
-          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
-        run: pnpm ci:integration:role-config
-
       - name: Runtime sandbox semantic tool unit
         run: pnpm ci:unit:runtime-sandbox
-
       - name: OpenSandbox production compose merge
         run: |
           tmp="$(mktemp -d)"
@@ -700,7 +451,6 @@ jobs:
             exit 1
           fi
           grep -E 'required variable DEEPSONAR_(SCHEDULER_IMAGE|WEB_IMAGE|IMAGE_ADMISSION_IMAGE)' "$tmp/legacy.out"
-
       - name: OpenSandbox host overlay gateway upstream
         run: |
           tmp="$(mktemp -d)"
@@ -725,51 +475,316 @@ jobs:
           printf '%s\n' "$rendered" | grep -F "http://host.docker.internal:14100/gateway"
           ! printf '%s\n' "$rendered" | grep -F "http://127.0.0.1:14100/gateway"
           ! printf '%s\n' "$rendered" | grep -F "http://127.0.0.1:13100/gateway"
+      - name: Authorization boundary unit
+        run: pnpm ci:unit:authz
 
+  # 有界并发分片 2/4（并发上限为 4）：DB 核心集成，services.postgres 与原 gate 完全相同；4 片各自独立生命周期、各自 install/build，不复用跨提交结果。
+  gate-db-core:
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: deepsonar-ci-pass
+          POSTGRES_DB: deepsonar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U deepsonar -d deepsonar"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Select PostgreSQL 16 client (matches the service)
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/pg_dump || ! test -x /usr/lib/postgresql/16/bin/pg_restore; then
+            sudo apt-get update && sudo apt-get install -y postgresql-client-16
+          fi
+          dump_version="$(/usr/lib/postgresql/16/bin/pg_dump --version)"
+          restore_version="$(/usr/lib/postgresql/16/bin/pg_restore --version)"
+          echo "$dump_version"
+          echo "$restore_version"
+          [[ "$dump_version" == "pg_dump (PostgreSQL) 16."* ]] || exit 1
+          [[ "$restore_version" == "pg_restore (PostgreSQL) 16."* ]] || exit 1
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r build
+      - name: Runtime image promotion reconciliation (channel-only v2 fixture)
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:runtime-image-promotions
+      - name: Isolated database upgrade and worker fencing
+        env:
+          DEEPSONAR_FENCE_PG_TEST: "1"
+          UPGRADE_SCHEMA_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          UPGRADE_SCHEMA_TEST_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:platform-upgrade
+      - name: Project knowledge PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:project-knowledge
+      - name: Scheduler Job lifecycle PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:job-lifecycle
+      - name: Governed completion recovery PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          DEEPSONAR_HUB_ENABLED: "true"
+        run: pnpm ci:integration:completion-recovery
+      - name: Device lease PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: postgres://deepsonar:deepsonar-ci-pass@127.0.0.1:5432/postgres
+        run: pnpm ci:integration:device-lease
+      - name: Scheduler orphan recovery PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          DEEPSONAR_HUB_ENABLED: "true"
+        run: pnpm ci:integration:recovery
+      - name: Scheduler bounded-context ownership guardrails
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:unit:bounded-contexts
+      - name: Incremental migration chain (fresh, v12 upgrade, rollback/retry, concurrency)
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:unit:migrations
+      - name: Role color Postgres/API integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:role-colors
+      - name: Dispatcher claim Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:dispatch-limits
+      - name: Event ingestion Canvas-first Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:event-ingestion
+      - name: Semantic event authorization Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:event-authorization
+      - name: Plan protocol Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:plan-protocol
+      - name: Plan frozen offline SQL and HTTP replay
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:plan-replay
+      - name: Upload Plan offline replay report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-offline-replay
+          path: artifacts/plan-replay/*.json
+          if-no-files-found: warn
+      - name: Hub runtime image proposal Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:hub-runtime-image
+      - name: Semantic event rate-limit Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:event-rate-limit
+      - name: Hub graph reference Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:graph-references
+      - name: Task intent edit PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:task-intent
+      - name: Compose task PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:compose-tasks
+      - name: Canvas lifecycle projection Postgres integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:canvas-lifecycle
+      - name: Dashboard overview PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:dashboard-overview
+      - name: Canvas Fact and manual verification PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:canvas-facts
+      - name: Credential delete PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:credential-delete
+      - name: Project export ACTIVE_JOBS and custom modules PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:transfer-export
+      - name: Credential catalog probe soft-degrade PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:credential-catalog
+      - name: RoleConfig agent_cli follow PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:role-config
+
+  # 有界并发分片 3/4（并发上限为 4）：DB 领域集成与 Docker 只读卷校验，services.postgres 与原 gate 完全相同；4 片各自独立生命周期、各自 install/build，不复用跨提交结果。
+  gate-db-domain:
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: deepsonar-ci-pass
+          POSTGRES_DB: deepsonar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U deepsonar -d deepsonar"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Select PostgreSQL 16 client (matches the service)
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/pg_dump || ! test -x /usr/lib/postgresql/16/bin/pg_restore; then
+            sudo apt-get update && sudo apt-get install -y postgresql-client-16
+          fi
+          dump_version="$(/usr/lib/postgresql/16/bin/pg_dump --version)"
+          restore_version="$(/usr/lib/postgresql/16/bin/pg_restore --version)"
+          echo "$dump_version"
+          echo "$restore_version"
+          [[ "$dump_version" == "pg_dump (PostgreSQL) 16."* ]] || exit 1
+          [[ "$restore_version" == "pg_restore (PostgreSQL) 16."* ]] || exit 1
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r build
+      - name: Authenticated report download Fastify integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:report-download
+      - name: Per-Finding report PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:finding-report
+      - name: Finding protocol PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:finding-protocol
+      - name: Finding research PostgreSQL integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:finding-research
+      - name: Finding governed quality PostgreSQL and stored-session HTTP integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: |
+          test -n "$TEST_DATABASE_URL"
+          pnpm ci:integration:finding-quality
+      - name: Shared assets PostgreSQL and API integration
+        env:
+          TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+        run: pnpm ci:integration:shared-assets
+      - name: Shared assets real Docker read-only volume
+        env:
+          RUN_DOCKER_SHARED_ASSETS_TEST: "1"
+        run: pnpm ci:integration:shared-assets-volume
       - name: Platform API Job capability PostgreSQL integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:platform-api
-
-      - name: Authorization boundary unit
-        run: pnpm ci:unit:authz
-
       - name: Token, job, image, and transfer authorization Postgres integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:authz-boundaries
-
       - name: Default human admin and account integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:users-auth
-
       - name: Login brute-force rate-limit Postgres integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
         run: pnpm ci:integration:login-rate-limit
-
       - name: Convergence recovery Postgres integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
           DEEPSONAR_HUB_ENABLED: "true"
         run: pnpm ci:integration:convergence-recovery
-
       - name: Verify eligibility Postgres integration
         env:
           TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
           DEEPSONAR_HUB_ENABLED: "true"
         run: pnpm ci:integration:verify-eligibility
-
       - name: Job 控制 API-only 契约冒烟
         run: pnpm --filter @deepsonar/scheduler exec tsx ../../agent-harness/test-control-api.ts
 
+  # 有界并发分片 4/4（并发上限为 4）：3100/3101 进程与同库 setval 竞态，e2e 步骤必须同片；services.postgres 与原 gate 完全相同；4 片各自独立生命周期、各自 install/build，不复用跨提交结果。
+  gate-e2e:
+    runs-on: ubuntu-24.04
+    needs: changes
+    if: always() && !cancelled() && needs.changes.outputs.mode == 'ready-full'
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deepsonar
+          POSTGRES_PASSWORD: deepsonar-ci-pass
+          POSTGRES_DB: deepsonar
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U deepsonar -d deepsonar"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Select PostgreSQL 16 client (matches the service)
+        run: |
+          if ! test -x /usr/lib/postgresql/16/bin/pg_dump || ! test -x /usr/lib/postgresql/16/bin/pg_restore; then
+            sudo apt-get update && sudo apt-get install -y postgresql-client-16
+          fi
+          dump_version="$(/usr/lib/postgresql/16/bin/pg_dump --version)"
+          restore_version="$(/usr/lib/postgresql/16/bin/pg_restore --version)"
+          echo "$dump_version"
+          echo "$restore_version"
+          [[ "$dump_version" == "pg_dump (PostgreSQL) 16."* ]] || exit 1
+          [[ "$restore_version" == "pg_restore (PostgreSQL) 16."* ]] || exit 1
+          echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r build
       - name: Runtime test policy smoke
         run: pnpm ci:smoke:runtime-policy
-
       - name: Scheduler convergence regression
         run: pnpm ci:smoke:convergence
-
       - name: Start scheduler (fake, no auth)
         env:
           AGENT_MODE: fake
@@ -786,23 +801,18 @@ jobs:
           echo "scheduler failed to become healthy" >&2
           cat /tmp/scheduler-3100.log >&2
           exit 1
-
       - name: Roles API smoke
         env:
           DEEPSONAR_EXPECT_HUB_ENABLED: "false"
         run: python agent-harness/test-roles-api.py
-
       - name: Runtime image marketplace API smoke
         run: python agent-harness/test-runtime-images-api.py
-
       - name: Hub loop smoke
         env:
           DEEPSONAR_HUB_SMOKE_TIMEOUT: "300"
         run: python agent-harness/test-hub-loop.py
-
       - name: Local project / task API smoke
         run: python agent-harness/test-local-project-api.py
-
       - name: Start scheduler (auth required)
         env:
           AGENT_MODE: fake
@@ -829,13 +839,11 @@ jobs:
           echo "auth scheduler failed to become healthy" >&2
           cat /tmp/scheduler-3101.log >&2
           exit 1
-
       - name: Auth API smoke
         env:
           DEEPSONAR_BASE: http://127.0.0.1:3101
           DEEPSONAR_ADMIN_TOKEN: boot-secret
         run: python agent-harness/test-auth-api.py
-
       - name: Dump scheduler logs on failure
         if: failure()
         run: |
@@ -1206,7 +1214,7 @@ jobs:
     # block a Draft merge; blocking Draft merges must come from policy (ruleset /
     # separate required check), not from this workflow's skip.
     if: always() && needs.changes.outputs.mode != 'draft-fast'
-    needs: [changes, docs-freshness, windows-upgrade-backend, crash-recovery, lexical-pressure, pi-om-growth, gate, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
+    needs: [changes, docs-freshness, windows-upgrade-backend, crash-recovery, lexical-pressure, pi-om-growth, gate-contract, gate-db-core, gate-db-domain, gate-e2e, runtime-images, chrome-fuzz-arm64-build, chrome-fuzz-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -1221,7 +1229,10 @@ jobs:
           CRASH: ${{ needs.crash-recovery.result }}
           LEXICAL: ${{ needs.lexical-pressure.result }}
           PIOM: ${{ needs.pi-om-growth.result }}
-          GATE: ${{ needs.gate.result }}
+          GATE_CONTRACT: ${{ needs.gate-contract.result }}
+          GATE_DB_CORE: ${{ needs.gate-db-core.result }}
+          GATE_DB_DOMAIN: ${{ needs.gate-db-domain.result }}
+          GATE_E2E: ${{ needs.gate-e2e.result }}
           IMAGES: ${{ needs.runtime-images.result }}
           FUZZ_BUILD: ${{ needs.chrome-fuzz-arm64-build.result }}
           FUZZ: ${{ needs.chrome-fuzz-arm64.result }}
@@ -1267,11 +1278,33 @@ jobs:
             fi
           }
 
+          # 必须逐片 success，不能只靠聚合结果：4 个分片各自是独立门禁。
+          # 显式期望矩阵校验：分片缺失/变量为空/结果值未知一律 fail closed。
+          EXPECTED_GATE_SHARDS="gate-contract gate-db-core gate-db-domain gate-e2e"
+          KNOWN_GATE_RESULTS="success failure cancelled skipped timed_out neutral"
+          for shard in $EXPECTED_GATE_SHARDS; do
+            case "$shard" in
+              gate-contract) shard_result="${GATE_CONTRACT:-}" ;;
+              gate-db-core) shard_result="${GATE_DB_CORE:-}" ;;
+              gate-db-domain) shard_result="${GATE_DB_DOMAIN:-}" ;;
+              gate-e2e) shard_result="${GATE_E2E:-}" ;;
+              *) fail "unknown gate shard in expected matrix: $shard" ;;
+            esac
+            [ -n "$shard_result" ] || fail "missing result for gate shard: $shard"
+            case " $KNOWN_GATE_RESULTS " in
+              *" $shard_result "*) ;;
+              *) fail "unknown result value for gate shard $shard: $shard_result" ;;
+            esac
+          done
+
           check_heavy windows-upgrade-backend "$WINDOWS"
           check_heavy crash-recovery "$CRASH"
           check_heavy lexical-pressure "$LEXICAL"
           check_heavy pi-om-growth "$PIOM"
-          check_heavy gate "$GATE"
+          check_heavy gate-contract "$GATE_CONTRACT"
+          check_heavy gate-db-core "$GATE_DB_CORE"
+          check_heavy gate-db-domain "$GATE_DB_DOMAIN"
+          check_heavy gate-e2e "$GATE_E2E"
           check_heavy runtime-images "$IMAGES"
           check_planned chrome-fuzz-arm64-build "$FUZZ_BUILD"
           check_planned chrome-fuzz-arm64 "$FUZZ"
