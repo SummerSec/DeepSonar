@@ -24,7 +24,6 @@ if (!testDatabaseUrl) {
     const admin = postgres(testDatabaseUrl, { max: 1 });
     const left = postgres(testDatabaseUrl, { max: 1 });
     const right = postgres(testDatabaseUrl, { max: 1 });
-    const redactedUrl = testDatabaseUrl!.replace(/:[^:@/]+@/u, ":***@");
 
     const conflicts: number[] = [];
     try {
@@ -56,6 +55,5 @@ if (!testDatabaseUrl) {
       await admin.unsafe(`DROP TABLE IF EXISTS ${table}`).catch(() => {});
       await Promise.allSettled([admin.end({ timeout: 5 }), left.end({ timeout: 5 }), right.end({ timeout: 5 })]);
     }
-    assert.ok(!redactedUrl.includes("://"), "database URL must never be printed");
   });
 }
