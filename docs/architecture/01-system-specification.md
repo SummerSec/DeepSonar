@@ -331,7 +331,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Agent 必须先从 trusted+enabled 源 `list_available_skills`/`search_skills` 取得 selector 与 content hash，再通过 `pull_skill` 拉取有界文件；拉取不得安装任意包或改变 Job 权限，不得读取未冻结或未授权来源。
 - **决策来源**：业务 Skill 可插拔但不能成为绕过平台准入的安装入口。
-- **实现状态**：as-built；内容 hash、源信任和 Job token 均重新校验。 #778 增加独立[离线适用证据校验](../../agent-harness/capability-applicability/README.md)，仅验证导出的一致性及 JSON 断言，不改变在线拉取或证明方法有效。
+- **实现状态**：as-built；内容 hash、源信任和 Job token 均重新校验。#960 的 sync 只暂存候选，不改已批准 live；新 Job 在显式 hash+epoch 审批前仍冻结 A，批准 B 不切换旧 Job A。候选/年龄 warning 是排除 `catalog_hash` 的观测，不扩大授权。详见 [IR-007](#ir-007-git-skill-source)。 #778 增加独立[离线适用证据校验](../../agent-harness/capability-applicability/README.md)，仅验证导出的一致性及 JSON 断言，不改变在线拉取或证明方法有效。
 - **代码入口**：[Skill operation registry](../../apps/scheduler/src/domains/platform-api/operations.ts)、[Skill source route](../../apps/scheduler/src/domains/skill-source/routes.ts)、[Skill pull 测试](../../apps/scheduler/src/skill-pull.test.ts)。
 - **验证证据**：`pnpm ci:unit:startup-gate`、`pnpm ci:unit:capability-pack`、`pnpm ci:integration:platform-api`。
 
@@ -386,7 +386,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：项目知识默认私有；来源项目有 `projects:write` 权限的管理者只能授予接收项目已审批的精确 Skill 版本。授权不得审批草稿/候选、扩及未来版本，亦不得传递来源 Memory、Evidence、凭据或执行权限。Job 创建时冻结精确目录，读取时与当前版本/授权撤销及全局源和项目禁用的不可逆 epoch、源 instance 身份取交集；重新启用或重新授权不得扩大旧 Job 的冻结范围。
 - **决策来源**：发现目录不是授权，跨项目复用只能以最小范围、可撤销的内容许可实现；详见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
-- **实现状态**：#752 独立试验分支已实现精确 grant、批准版本校验、冻结目录和读取复核；真实多副本和生产权限试验尚未执行。
+- **实现状态**：#752 独立试验分支已实现精确 grant、批准版本校验、冻结目录和读取复核。#960 的全局源候选不继承 live 授权；批准 B 只影响后续 Job，旧 Job A 保留原 CAS；显式禁用/撤信任仍按不可逆 epoch 拒读，恢复同 hash 也须当前 epoch 候选审批，不能恢复旧 epoch Job。真实多副本和生产权限试验尚未执行，本次服务/PG 回归只编写未运行。
 - **代码入口**：[授权策略](../../apps/scheduler/src/domains/project-knowledge/grant-policy.ts)、[目录冻结](../../apps/scheduler/src/domains/project-knowledge/catalog-snapshot.ts)、[全局源快照](../../apps/scheduler/src/job-skill-catalog.ts)。
 - **验证证据**：`pnpm ci:integration:project-knowledge`；人工以两个项目核对未审批版本拒授、旧 Job 不见新授权、撤销后拒读（生产环境未执行）。
 
@@ -1092,10 +1092,11 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### IR-007 Git Skill Source
 
-- **规范要求**：Skill source 同步必须由 Scheduler 受控浅克隆、扫描和缓存 `SKILL.md`/commands，运行 Job 只能读取已缓存且 trusted+enabled 的 selector/content hash，不得在任务执行时任意访问 Git 网络。
+- **规范要求**：Skill source 同步必须由 Scheduler 受控浅克隆、扫描和缓存 `SKILL.md`/commands；新内容只能暂存候选，由全局管理主体精确确认候选 hash 与当前 epoch 后原子发布，不得在 trusted 源上因自动同步隐式发布。运行 Job 只能读取已冻结且 trusted+enabled 范围内的 selector/content hash，不得在任务执行时任意访问 Git 网络。
 - **决策来源**：Skill 源是外部供应链，运行期网络访问会破坏快照和审计。
 - **实现状态**：as-built；内容在 sync 时缓存，Job 内拉取不重新访问 Git。
-- **保鲜（#954）**：同步是周期行为，不依赖启动副作用。`DEEPSONAR_SKILL_SOURCE_REFRESH_INTERVAL_SEC`（`0` 关闭）驱动串行刷新，先用 `git ls-remote` 比对远端 HEAD，未变化只前移 `synced_at`；启动同步与周期刷新全关时启动告警。刷新只更新候选目录、**不提权**，新内容仍需显式信任。陈旧度经 `deepsonar_skill_source_age_seconds{source}` 暴露，超过 `2 × refreshIntervalSec` 由刷新循环告警；Job 创建时把 `source_synced_at` / `age_seconds` / `stale` 冻结进 `job_skill_catalog`，超过 `DEEPSONAR_SKILL_SOURCE_STALE_AFTER_DAYS` 时只在画布 Job 节点留 warning 记录，不阻断 Job、不改变准入。配置项与默认值以 `apps/scheduler/src/config.ts` 为准。
+- **保鲜与发布隔离（#954/#960）**：周期检查与 boot/manual 共用跨实例同源 session advisory lock，网络 clone 不持业务行锁；仅原完整 ref 的 SHA 匹配且 CAS 原字节/hash/source/commit/count/content 健康时可 skip。不同内容只保存候选，不能改 live/trust/enabled/epoch/RoleConfig。全局管理员显式提交候选 hash、expected epoch 与所见 source instance，短事务精确重验实例/repo/branch/epoch/CAS，原子发布、heal 和审计；已有 live 授权不自动迁移或重造历史审批，旧 Job 不改写。
+- **观察而非权限**：只有当前有效 live 同 hash 健康核验可推进 `synced_at`，候选 B 不给 A 续鲜；从未成功时 API/Job 年龄保留 null、Prometheus 输出合法 `+Inf`，不回退创建时间。年龄、阈值及 `source_update_pending` 排除 `catalog_hash`，旧冻结 hash 不变。陈旧/待审 warning 更新当前画布已有 Job/Intent 节点单一正文键，不重复建节点，不覆盖其它正文/终态或变成准入门。周期结果明确候选暂存而非已发布，错误仅有限安全码。配置/告警阈值只按 [config](../../apps/scheduler/src/config.ts) 和 [freshness](../../apps/scheduler/src/skill-freshness.ts) 核对；schema68 元数据与审批细则见[数据](08-data-architecture.md#skill-源已批准目录与候选960)及[接口](09-interface-specs.md#全局-skill-源候选审批960)。本次回归仅编写和静态接线核对，最终 Actions 待验。
 - **代码入口**：[skill source routes](../../apps/scheduler/src/domains/skill-source/routes.ts)、[周期刷新](../../apps/scheduler/src/skill-source-refresh.ts)、[新鲜度口径](../../apps/scheduler/src/skill-freshness.ts)、[Job 快照冻结](../../apps/scheduler/src/job-skill-catalog.ts)、[skill source tests](../../apps/scheduler/src/skill-source-sync.test.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:startup-gate`、`pnpm ci:unit:capability-pack`、`pnpm ci:unit:project-knowledge`、`pnpm ci:integration:platform-api`。
 

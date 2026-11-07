@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-11-05
+> 同步日期：2026-11-07
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
@@ -46,7 +46,17 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及质量协议/观察账本；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。#831 合入的工程基线 `fdb55a01` 已在 [Actions CI](https://github.com/SummerSec/DeepSonar/actions/runs/41298113058) 完成真实 schema67 rebuild、PGDMP 备份/pg_restore 恢复及 Finding-quality PostgreSQL/HTTP/worker 验收；历史本地结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，不能代替后续 SHA 的检查。
 
-保鲜门禁的单处编号核对：当前主线 v67（核对日期 2026-11-01，已验收工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096`；正式发行尚未完成）。`ca7d841c` 的 schema66 重建/恢复证据仍只代表 2026-10-31 的历史切片；schema67 的独立工程证据见上述 Actions。后续 #838 修复的完整检查及最终 main 须另验，不能把编号或历史绿灯当成新 SHA 的验收。
+保鲜门禁的单处编号核对：当前主线 v68（指当前集成目标基线，不声明已合并或已发布；2026-11-07 源码核对，Skill 源候选发布隔离；本次未执行 rebuild、测试、构建或 typecheck，最终 SHA Actions 待验）。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。历史绿灯不能代替 schema68 及最终提交的工程验收。
+
+### Skill 源已批准目录与候选（#960）
+
+`skill_sources.catalog_json/catalog_snapshot_hash/last_commit_sha/last_content_hash/synced_at` 始终描述当前已发布目录 A；承认既有控制面 live 授权事实，不自动复制旧值到候选，不重造历史批准。schema68 仅增加默认 NULL 的 `candidate_hash`（FK 指向 `shared_asset_blobs`）、`candidate_json`、`last_checked_at`、`last_sync_error`，不增加增量 ALTER。已有非空库须遵守基线版本/结构 fail-closed 与受控重建纪律；本次未在本地重建数据库。
+
+候选描述符为 `deepsonar.skill-source-candidate/v1`，仅保存 `source_instance_id`、`repo_url`、`branch`、字符串 `revocation_epoch`、`commit_sha`、`content_hash`、`module_count`、`synced_at`、`synced_by` 元数据。完整模块及文件文本仍在现有不可变 CAS manifest；校验原始 manifest bytes 的 hash，不对 JSONB 再编码后与原 hash 比较。live 与 candidate 指针都作为[只读可达性审计](../../apps/scheduler/src/domains/project-knowledge/reachability.ts)的 `skill_source` 保留根；候选覆盖、批准清除或删除 source 后仅移除该引用，历史 Job/版本等其它根仍可保留原字节。当前 planner 的 `deletion_enabled=false`，不启用自动 GC；保留候选字节不等于给 Job 授权。候选 B 的暂存或健康检查不能改 A 的正文、指针、commit、hash、信任、启用或 RoleConfig；仅有效 live 同 hash 的健康核验允许前移 A 的 `synced_at`。检查成功/失败时间与安全有限错误码单独存列，不能保存 Git stderr、凭据或 URL 查询。
+
+显式审批在 source 行锁短事务中精确 CAS 比较候选 hash、expected epoch、调用者所见的 expected source instance 与描述符身份，并从 CAS 验证来源、commit、模块数量和内容 hash 后发布；删除/重建同 source ID 即使重用 hash/epoch，也必须拒绝旧实例审批请求；live `synced_at` 采用候选实际核验时间，清候选并在同事务完成 selector heal、批准与正文变化审计（包括模块 ID 不变而正文变化）。显式传事务的系统审计失败会回滚发布和 heal，不在事务外预报成功。[生命周期服务](../../apps/scheduler/src/skill-source-catalog-lifecycle.ts)及[真实 PG 服务回归](../../apps/scheduler/src/skill-source-catalog-lifecycle.integration.test.ts)为实现入口。
+
+新 Job 只冻结 A 的原 CAS/commit/content/instance/epoch；候选是否存在以 `source_update_pending` 作为观察保存，连同年龄等观测字段排除 `catalog_hash`，缺省该字段的旧冻结哈希保持可读。批准 B 只改变后续 Job，不能重绑旧 Job A 的 manifest 或修改 token/epoch 来掩盖拒绝；显式禁用/撤信任仍以不可逆 epoch 收紧旧 Job。没有成功时间的年龄不回退 `created_at`：API/Job 保留 null，Prometheus 使用合法 `+Inf`。数据与服务回归接在既有 project-knowledge/platform-api CI 入口，本次仅静态核对接线，未运行测试。
 
 ### 任务契约快照（#767）
 

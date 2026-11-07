@@ -16,6 +16,9 @@ export async function planKnowledgeBlobReachability(db: KnowledgeDb) {
   for (const row of await db`SELECT content_sha256 FROM shared_asset_versions`) add(row.content_sha256, "shared_asset_version");
   for (const row of await db`SELECT content_sha256 FROM project_knowledge_versions`) add(row.content_sha256, "knowledge_version");
   for (const row of await db`SELECT catalog_snapshot_hash FROM skill_sources WHERE catalog_snapshot_hash IS NOT NULL`) add(row.catalog_snapshot_hash, "skill_source");
+  // Retention is not authorization: pending bytes stay rooted until replaced or
+  // the source is removed, but Job grants still come only from the live pointer.
+  for (const row of await db`SELECT candidate_hash FROM skill_sources WHERE candidate_hash IS NOT NULL`) add(row.candidate_hash, "skill_source");
   for (const row of await db`SELECT input_manifest_json FROM project_knowledge_work`) manifests(row.input_manifest_json, "work");
   for (const row of await db`SELECT input_manifest_json FROM project_knowledge_job_assignments`) manifests(row.input_manifest_json, "assignment");
   for (const row of await db`SELECT agent_snapshot_json FROM jobs`) {

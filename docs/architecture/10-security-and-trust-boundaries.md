@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-05
+> 同步日期：2026-11-07
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -35,6 +35,7 @@ flowchart LR
 | 用户/Web → Management | token hash/prefix、scope、项目 path、请求 schema、审计；Web 不挂载 DB/Blob | 认证/授权拒绝，不产生领域副作用 |
 | Agent/模型 → Control | capability token、Job/Canvas/project 绑定、snapshot hash、operation allowlist、严格 shared schema、引用可见性、预算、幂等 | 401/403/409/422/429 或 RepairFeedback；不接受普通文本伪造事件 |
 | Scheduler → Trusted target authority | 仅使用 Scheduler 宿主配置的 URL、authority ID、secret 引用和动作链；请求绑定项目/目标/认证主体/tenant/role/resource、必需前置条件、内容与契约 SHA、派生 revision 和 freshness；response 严格复核作用域、精确动作、前置条件、authority revision 与 expiry | deny、撤权、过期、配置漂移、binding/前置条件不匹配、超时、重定向、secret 缺失或响应越界均 fail closed；secret 不进 Job snapshot、audit、feedback 或 Evidence，authority 不执行目标动作 |
+| Git Skill 源 → 已批准全局目录 | 全局管理授权；sync 只stage，审批精确绑定候选 hash、epoch、调用者期望实例及 source instance/repo/branch，并校验原 CAS bytes、来源、commit、模块数量与内容 hash；发布/heal/审计同事务 | SHA 未变但缺损不能报健康；旧审批、配置漂移、取消、disabled 或跨来源候选 fail closed；全局 enabled 不得由项目受限主体修改 |
 | 项目知识/跨项目 Skill → Job | #752 分支只冻结本项目 active 或精确获授且已审批的 Skill 版本；读取再验版本、grant、source instance 与撤销 epoch；候选与来源 Memory/Evidence 均不继承授权 | 撤销后拒读；新 grant/重新启用不扩张旧 Job；试验 arm/audience 越界拒绝 |
 | Scheduler → Provider | Provider 目录、凭据解密投递、模型/网络快照、响应脱敏、用量 ledger | 受限重试或失败；原文不进控制事件，不暴露长期密钥 |
 | Scheduler → OpenSandbox | 镜像摘要、资源、网络 egress、凭据短期注入、Attempt effect、lease、清理回执 | 已知无效果失败可按策略处理；未知效果标记 unknown/orphan，禁止自动重放 |
@@ -45,6 +46,12 @@ flowchart LR
 | Canvas/Evidence → Verify/Report | 结构化 Fact、Artifact、Evidence manifest、输入 hash、验证门和权限 | 缺证据进入 waiting/rework/needs_human；投影失败不改写事实 |
 | Plane（未实现占位） → Scheduler | 当前没有外部调用、配置、事件 dedup 或回执路径；未来集成须单独定义来源标识、作用域和审计 | 当前不存在集成失败路径；不得把占位描述解释为 as-built 外部边界 |
 | Scheduler → Web/WS | 一次性 ticket、Job/project scope、本地 Evidence 可见性、消息大小和背压 | 不可见时 `visibility=unavailable`；关闭流而不伪造补读 |
+
+## Skill 候选不是授权（#960）
+
+既有控制面 live A 的授权事实保持，不额外伪造历史批准，不在 sync 自动发布 B。手动/boot/周期及多实例入口共享同源 session advisory lock，长 clone 不持有业务行事务，不阻塞撤信任/禁用；stage 短事务锁 source 后复核捕获身份与 AbortSignal，失效结果不能落入新配置或重建后的同 ID source。系统审计在显式事务内失败会回滚发布/selector heal，禁止先报批准成功。
+
+新 Job 只冻结已批准 A；旧 Job 只读取各自 CAS 并重验当前 source/project epoch，不用当前 live B 指针拒绝旧 A，也不改 manifest、Job snapshot、token 或 epoch 来掩盖身份错误。候选与新鲜度观察全部排除授权 hash；pending/陈旧 warning 不改变 scope 或运行权限。只有有效 live 的同 hash 健康核验可更新 live 成功时间，候选 B 的成功检查不能给 A “续鲜”；从未成功的监控值明确 unknown/+Inf，失败仅保留安全有限类别。权限/API 细则见[候选审批](09-interface-specs.md#全局-skill-源候选审批960)，数据归属见[已批准与候选](08-data-architecture.md#skill-源已批准目录与候选960)。本次只做源码/接线静态核对，真实 PG/HTTP/并发回归尚待最终 Actions。
 
 ## 恢复与共享资源归属（#871/#874）
 

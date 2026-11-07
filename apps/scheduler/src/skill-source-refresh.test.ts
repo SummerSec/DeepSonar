@@ -32,6 +32,21 @@ test("远端 HEAD 未变时只前移 synced_at，状态记 unchanged", async () 
   ]);
 });
 
+test("candidate updated/unchanged stays explicitly pending and errors retain only safe codes", async () => {
+  const warned: string[] = [];
+  const outcomes = await refreshTrustedSkillSourcesOnce({
+    listSources: async () => [target("new"), target("cached"), target("live"), target("failed")],
+    sync: async id => {
+      if (id === "failed") throw new Error("fatal https://user:secret@127.0.0.1/repo?token=secret");
+      return { modules: 1, changed: id === "new", skipped: id !== "new", candidate_hash: id === "live" ? null : "a".repeat(64) };
+    }, maxAttempts: 1, warn: message => warned.push(message),
+  });
+  assert.deepEqual(outcomes.map(o => [o.status, o.source_update_pending, o.error]), [
+    ["updated", true, null], ["unchanged", true, null], ["unchanged", false, null], ["failed", undefined, "sync_failed"],
+  ]);
+  assert.ok(warned.every(message => !message.includes("secret") && !message.includes("https://")));
+});
+
 test("目录真的变化时记 updated，失败源不影响其它源", async () => {
   const outcomes = await refreshTrustedSkillSourcesOnce({
     listSources: async () => [target("src-a"), target("src-b")],
@@ -49,7 +64,7 @@ test("目录真的变化时记 updated，失败源不影响其它源", async () 
     ["src-a", "failed", 2],
     ["src-b", "updated", 1],
   ]);
-  assert.match(outcomes[0]!.error ?? "", /不可达/);
+  assert.equal(outcomes[0]!.error, "sync_failed");
 });
 
 test("单源失败按有界重试后收敛到 failed，不无限重试", async () => {
@@ -86,7 +101,7 @@ test("单源超时不拖住整轮（runWithTimeout 生效）", async () => {
     warn: () => {},
   });
   assert.equal(outcomes[0]?.status, "failed");
-  assert.match(outcomes[0]?.error ?? "", /20ms 后超时/);
+  assert.equal(outcomes[0]?.error, "sync_timeout");
   assert.equal(outcomes[1]?.status, "unchanged");
 });
 

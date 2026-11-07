@@ -2,8 +2,17 @@ import assert from "node:assert/strict";
 import { mock, test } from "node:test";
 
 // The exporter and process counters are real; only scrape-time database gauges are stubbed.
+let skillSourceRows: Array<{ name: string; age: number | null }> = [];
 mock.module(new URL("./db.js", import.meta.url), {
-  namedExports: { sql: async () => [{ n: 0, paused: false }] },
+  namedExports: { sql: async (strings: TemplateStringsArray) => {
+    const query = strings.join("?");
+    if (query.includes("FROM skill_sources")) {
+      assert.ok(query.includes("now() - synced_at"));
+      assert.ok(!query.includes("created_at"), "creation time cannot masquerade as a successful sync");
+      return skillSourceRows;
+    }
+    return [{ n: 0, paused: false }];
+  } },
 });
 const { inc, renderMetrics } = await import("./metrics.js");
 
@@ -25,6 +34,19 @@ test("Prometheus exports gateway database conflict counts with workload and SQLS
   assert.match(output, /^# HELP deepsonar_gateway_db_conflict_exhausted_total .+$/mu);
   assert.match(output, /^# TYPE deepsonar_gateway_db_conflict_exhausted_total counter$/mu);
   assert.match(output, /^deepsonar_gateway_db_conflict_exhausted_total\{workload="observational_memory",code="55P03"\} 1$/mu);
+});
+
+test("never verified Skill age is valid Prometheus +Inf, not creation age or fake zero", async () => {
+  skillSourceRows = [{ name: 'never\\verified\n"source"', age: null }, { name: "approved", age: 90 }];
+  try {
+    const output = await renderMetrics();
+    const samples = output.split("\n").filter(line => line.startsWith("deepsonar_skill_source_age_seconds{"));
+    assert.deepEqual(samples, [
+      'deepsonar_skill_source_age_seconds{source="never\\\\verified\\n\\"source\\""} +Inf',
+      'deepsonar_skill_source_age_seconds{source="approved"} 90',
+    ]);
+    assert.ok(!output.includes(" Infinity"));
+  } finally { skillSourceRows = []; }
 });
 
 test("Prometheus exports context database conflict counts with operation and SQLSTATE labels", async () => {

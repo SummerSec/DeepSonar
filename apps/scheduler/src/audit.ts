@@ -120,27 +120,35 @@ export async function audit(req: FastifyRequest, entry: AuditEntry): Promise<voi
   }
 }
 
-/** Fire-and-forget system audit without an HTTP request (Job freeze / background). */
-export async function recordSystemAudit(entry: AuditEntry & {
-  actorId?: string;
-}): Promise<void> {
+type SystemAuditEntry = AuditEntry & { actorId?: string };
+
+async function writeSystemAudit(entry: SystemAuditEntry, db: typeof sql): Promise<void> {
+  await db`
+    INSERT INTO audit_logs ${db({
+      actor_type: "system",
+      actor_id: entry.actorId ?? "scheduler",
+      action: entry.action,
+      project_id: entry.projectId ?? null,
+      resource_type: entry.resourceType ?? null,
+      resource_id: entry.resourceId ?? null,
+      request_id: null,
+      ip: null,
+      user_agent: null,
+      before_json: entry.before === undefined ? null : db.json(entry.before as never),
+      after_json: entry.after === undefined ? null : db.json(entry.after as never),
+      result: entry.result ?? "ok",
+      error_code: entry.errorCode ?? null,
+    })}`;
+}
+
+/** Explicit DB/transaction callers require a durable audit; background callers remain best-effort. */
+export async function recordSystemAudit(entry: SystemAuditEntry, db?: typeof sql): Promise<void> {
+  if (db) {
+    await writeSystemAudit(entry, db);
+    return;
+  }
   try {
-    await sql`
-      INSERT INTO audit_logs ${sql({
-        actor_type: "system",
-        actor_id: entry.actorId ?? "scheduler",
-        action: entry.action,
-        project_id: entry.projectId ?? null,
-        resource_type: entry.resourceType ?? null,
-        resource_id: entry.resourceId ?? null,
-        request_id: null,
-        ip: null,
-        user_agent: null,
-        before_json: entry.before === undefined ? null : sql.json(entry.before as never),
-        after_json: entry.after === undefined ? null : sql.json(entry.after as never),
-        result: entry.result ?? "ok",
-        error_code: entry.errorCode ?? null,
-      })}`;
+    await writeSystemAudit(entry, sql);
   } catch (e) {
     console.error(`[audit] 系统审计写入失败 ${entry.action}:`, e instanceof Error ? e.message : e);
   }
