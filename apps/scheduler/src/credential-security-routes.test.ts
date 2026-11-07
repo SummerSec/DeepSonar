@@ -19,7 +19,7 @@ test("credential list/detail/impact use the safe projection and bounded impact",
   assert.match(routes, /scans: \{/);
   assert.match(routes, /health_status = \$\{result\.ok \? "ok" : "error"\}/);
   assert.match(routes, /normalizeModelCatalog\(result\.models\)/);
-  assert.match(routes, /model_catalog_json = \$\{sql\.json\(models as never\)\}/);
+  assert.match(routes, /model_catalog_json = \$\{sql\.json\(modelDescriptors as never\)\}/);
   const safeProjection = routes.slice(routes.indexOf("const CRED_SAFE"), routes.indexOf("const CredentialBody"));
   assert.equal(/ciphertext|nonce|auth_tag/.test(safeProjection), false);
 });

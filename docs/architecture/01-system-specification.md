@@ -155,7 +155,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须在 Job 创建时冻结 CLI、Provider/model、运行时镜像 digest、工具/能力、Finding protocol、网络策略、设备需求和 runtime knobs；适用的目标 grant 与可选记忆策略也须冻结。Dispatcher 不得回读最新 RoleConfig 代替快照，实时撤权检查只能收紧冻结权限。
 - **决策来源**：执行结果要能按当时的权限、镜像和配置重放审计。
-- **实现状态**：as-built；快照身份和 schema 版本进入 `agent_snapshot_json`；目标 grant 只从 Scheduler 的可信输入或系统审计继承，调用方同名字段不会成为 authority。Pi 观测记忆的独立实现与未验收范围见 FR-CAP-009。
+- **实现状态**：as-built；快照身份和 schema 版本进入 `agent_snapshot_json`；目标 grant 只从 Scheduler 的可信输入或系统审计继承，调用方同名字段不会成为 authority。Pi 观测记忆的独立实现与未验收范围见 FR-CAP-009。#958 在创建期冻结上下文/输出的 configured、declared、effective、source 与 catalog revision 到 `model_budget`，Pi 物化参数来自同一值；未知 CLI 默认或历史缺字段不伪造补冻，声明不是上游容量证明。详见[预算专题](../PI_MODEL_BUDGET_RECOVERY.md)，最终 SHA Actions 待验。
 - **代码入口**：[运行时快照应用](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[Provider freeze](../../apps/scheduler/src/domains/provider-adapter/freeze.ts)、[Agent profile](../../apps/scheduler/src/agent-runtime-profile.ts)、[共享完整冻结](../../apps/scheduler/src/job-runtime-freeze.ts)。
 - **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:credential-compatibility`；人工在创建后修改角色并核对执行输入不变。#943/#948 补齐 retry/自动 Hub/Verify/补证/Report 的完整冻结，HTTP 创建与恢复拒绝回归复用 `pnpm ci:integration:recovery` / `pnpm ci:integration:platform-api`；#943 补齐[可信显式恢复](../AGENT_REPAIR_LIFECYCLE.md#缺损快照的可信显式恢复943)：完整内核预算回执或宿主持久执行前证明/完整空历史才允许重新准入当前配置，保留历史有限上限、用量和 Attempt；普通 resume 不替换旧快照，不可证明历史及未知效果仍拒绝。HTTP 恢复后实际领取/Gateway mint 和无变更负例已接既有 recovery 入口；最终 SHA Actions 待验。
 
@@ -209,9 +209,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-014 重试创建新 Attempt
 
-- **规范要求**：可重试的 provision、stream 截断或上下文超限必须以有界策略将 Job 重新排队并创建新 Attempt；不得复用已开始的 Attempt 或把未知 Effect 当成安全重试。
+- **规范要求**：可重试的 provision、stream 传输中断或上下文超限在需要重新执行时，必须以有界策略将 Job 重新排队并创建新 Attempt；不得复用已结束的 Attempt 或把未知 Effect 当成安全重试。模型输出 `stopReason=length` 不等于传输中断：已绑定且仍活动的同 Session 可在原权限、完成门、deadline 和预算内有界修正，不重放原输入或未知工具效果。
 - **决策来源**：一次 Attempt 的资源和证据必须可独立结算，重试需要新的身份和审计链。
-- **实现状态**：as-built；Job/Attempt 重试分别计数，外部效果按 replay policy 判定。
+- **实现状态**：as-built；Job/Attempt 重试分别计数，外部效果按 replay policy 判定。#958 的 Pi length 走同 Session 状态查询/必要 compact/短反馈，有界计数跨进程恢复不重置，压缩无进展或权限/生命周期停止保留具体原因；[专题](../PI_MODEL_BUDGET_RECOVERY.md)列出源码与回归，最终 SHA Actions 待验。
 - **代码入口**：[Attempt application](../../apps/scheduler/src/domains/job-attempt/application.ts)、[Job control rerun](../../apps/scheduler/src/domains/job-control/rerun.ts)、[重试测试](../../apps/scheduler/src/dispatcher-provision-retry.test.ts)。
 - **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`。
 
@@ -221,7 +221,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **决策来源**：配置覆盖是权限和资源边界，运行时隐式回退会绕过审计。
 - **实现状态**：as-built；合法范围与覆盖能力见[runtime knobs](../../apps/scheduler/src/runtime-knobs.ts)及[快照限制](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)，并非所有 knobs 都支持 Job/role/project 覆盖。观测记忆在有限 Job 总额下必须显式分配总/主/后台额度，不能按比例猜测或省略分配后放行；冻结总额不限时保持不限，可选后台 cap 只收紧。
 - **代码入口**：[runtime knobs](../../apps/scheduler/src/runtime-knobs.ts)、[runtime knob tests](../../apps/scheduler/src/runtime-knobs.test.ts)、[sandbox limits](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)。
-- **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:bounded-contexts`；人工提交未知字段、超过平台上限和 `provisionTimeoutSec` 的非法低层覆盖。
+- **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:bounded-contexts`；人工提交未知字段、超过平台上限和 `provisionTimeoutSec` 的非法低层覆盖。#958 的模型客户端预算不是平台 lifetime 额度：显式配置优先于发现声明，缺失 CLI 默认保持未知；配置/冻结回归接 `pnpm ci:unit:credential-compatibility` / `pnpm ci:unit:provider-settings`，恢复守卫复用原修正状态，接 `pnpm ci:unit:executor-real`，最终 SHA 待验。
 
 ### FR-CTRL-001 API-only Control 与 RepairFeedback
 
@@ -674,7 +674,8 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 - **规范要求**：Hub 选择 Provider/model 必须来自当前 Job 可见、active 且 CLI 兼容的 catalog；Provider 健康、模型目录和 alias policy 必须在快照解析时校验，不兼容或未知值必须 fail closed。
 - **决策来源**：凭据、模型、CLI 和镜像是组合约束，不能由 prompt 绕过目录。
 - **实现状态**：as-built；model catalog 默认不允许未知 alias passthrough。#757 的 readiness 与 Job 共用凭据先行解析：Provider/model/项目授权先筛候选，唯一账号决定 CLI，Hub 显式 CLI 保持硬约束；跨 CLI 多候选以项目/全局显式偏好消歧，种子 NULL 不构成偏好。白名单读取不自动种 ID，显式不可用引用要求管理员修复，不扩大授权。#914 的引用保护切片在设置事务内重验所有保留/新增凭据，并与 DELETE 共用凭据行锁；项目 impact 按 actor scope 过滤，删除独立检查全局引用，拒绝时不自动修复白名单。此处为 #925 服务端切片；#929 已交付默认账号显式选择与修复导航，详见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)。
-- **代码入口**：[Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts)、[model admission](../../apps/scheduler/src/domains/provider-adapter/model-catalog-admit.ts)、[resolve credential](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)。
+- **代码入口**：[Provider adapter](../../apps/scheduler/src/domains/provider-adapter/catalog.ts)、[model admission](../../apps/scheduler/src/domains/provider-adapter/model-catalog-admit.ts)、[resolve credential](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[限制发现](../../apps/scheduler/src/domains/provider-adapter/model-discovery.ts)、[预算冻结](../../apps/scheduler/src/domains/provider-adapter/model-budget.ts)。
+- **#958 补充契约**：发现限制逐字段保存 provider_declared 来源与 declared/missing/invalid 状态；发现不扩大账号配置模型名单。显式预算优先于声明，运行观测不改冻结；非法显式值拒绝，未知/非法发现值不猜容量。配置/投影回归沿用下列 credential-compatibility / provider-settings，实际锁版本 SDK 输出参数回归接 `pnpm ci:integration:request-budget-sdk`；最终 SHA Actions 待验，详见[专题](../PI_MODEL_BUDGET_RECOVERY.md)。
 - **验证证据**：`pnpm ci:unit:capability-pack`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:provider-settings`、`pnpm ci:integration:role-config`（#757 假凭据与隔离数据库，含 readiness/快照一致性和历史快照不变）；`pnpm ci:integration:credential-delete`（#914 scoped HTTP 与 PostgreSQL 双向竞态）。
 
 Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；仅列出 active、项目可见且在启用范围内的候选。#966 补齐同一账号下的显式默认模型选择/清除，模型候选只取账号已配置名单；账号变更不沿用旧模型，加载失败不清配置，普通保存保留未编辑选择，保存采用服务端结果。CLI 启用范围不等于模型默认值；解析继续采用显式任务/Hub 提案 → 项目默认模型 → 全局角色模型，不自动任选。任务创建在提交区保留结构化模型冲突及修复导航，不回显原始 Provider 错误、不自动重试；新回归入口为 `pnpm ci:unit:task-intent` 与既有 credential-compatibility，最终 SHA Actions 待验。单 Job 重跑错误只按结构化原因导向配置入口，不自动执行。代码见[面板](../../apps/web/src/components/ProjectCliProviderAllowlistPanel.tsx)与[错误导航](../../apps/web/src/useJobRerun.tsx)。Web 回归随 `pnpm ci:unit:credential-compatibility`，resolver/rerun 回归随 `pnpm ci:unit:capability-pack` / `pnpm ci:integration:recovery`；main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
@@ -1055,7 +1056,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Provider 的上游协议必须只由 Gateway adapter 访问，Sandbox 通过短期 Job token 和受控 proxy 发请求；超时、network/http retry 必须受 Job deadline 和 Gateway 上限约束。
 - **决策来源**：Provider 是外部不确定系统，平台需要统一凭据、计费、重试和审计。
-- **实现状态**：as-built；Gateway 请求体、重试和延迟边界以[Gateway 源码](../../apps/scheduler/src/gateway.ts)为准。
+- **实现状态**：as-built；Gateway 请求体、重试和延迟边界以[Gateway 源码](../../apps/scheduler/src/gateway.ts)为准。#958 不改写形成后的 OpenAI `max_tokens/max_completion_tokens`；真实锁版本 SDK 生成参数/上下文 clamp 和 HTTP/PG 原字节回归分别接 `pnpm ci:integration:request-budget-sdk` / `pnpm ci:integration:platform-api`。Pi length 恢复仍受原 Gateway 最终准入，不刷新额度，最终 SHA Actions 待验。
 - **代码入口**：[Gateway](../../apps/scheduler/src/gateway.ts)、[Provider adapter](../../apps/scheduler/src/domains/provider-adapter)、[gateway tests](../../apps/scheduler/src/gateway-retry.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`；真实 Provider 端到端需部署凭据后人工执行。
 

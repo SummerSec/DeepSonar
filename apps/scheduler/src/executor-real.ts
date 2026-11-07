@@ -2,6 +2,7 @@ import { registerRuntimeTerminalState } from "./domains/platform-api/registry.js
 import { taskContractPrompt } from "./task-contract-preflight.js";
 import { prepareCompletionPayload } from "./completion-payload.js";
 import { createCompletionFailureDiagnostics } from "./completion-failure-diagnostic.js";
+import { createPiRuntimeRecoveryGuard } from "./pi-runtime-recovery-guard.js";
 import { normalizeArchivedReaFact } from "./domains/cli-capability/rea-cli-fact.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -1772,6 +1773,10 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       runtimeImageKey: snapshot.runtime_image.image_key,
       model: runtimeModel,
       ...(piLaunch ? { modelProvider: piLaunch.provider } : {}),
+      ...(provider === "pi" ? { modelBudget: snapshot.model_budget,
+        recoveryGuard: createPiRuntimeRecoveryGuard(sql, jobId, attemptId ?? "", () => ({
+          done: semanticState.done, human: semanticState.human, prepared: Boolean(completionReservation || planReservation),
+        })) } : {}),
       reasoning,
       dshProvider,
       dshTaskMode: snapshot.dsh_task_mode,

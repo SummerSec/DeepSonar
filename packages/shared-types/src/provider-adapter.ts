@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ModelLimitSource } from "./model-budget.js";
 
 /** Model/provider-owned reasoning profile token (mirrors shared ReasoningValue). */
 const ReasoningValue = z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/);
@@ -72,6 +73,7 @@ export const ModelDescriptor = z
     display_name: z.string().trim().min(1).max(200),
     context_window: z.number().int().min(1024).max(10_000_000).nullable(),
     max_output_tokens: z.number().int().min(1).max(10_000_000).nullable(),
+    limit_source: ModelLimitSource.optional(),
     supports_tools: z.boolean(),
     supports_streaming: z.boolean(),
     supports_structured_output: z.boolean(),
@@ -96,6 +98,7 @@ export const FrozenModelDescriptor = z
     display_name: z.string().trim().min(1).max(200),
     context_window: z.number().int().min(1024).max(10_000_000).nullable(),
     max_output_tokens: z.number().int().min(1).max(10_000_000).nullable(),
+    limit_source: ModelLimitSource.optional(),
     supports_tools: z.boolean(),
     supports_streaming: z.boolean(),
     supports_structured_output: z.boolean(),
@@ -300,6 +303,7 @@ export function freezeModelDescriptor(row: ModelDescriptor): FrozenModelDescript
     display_name: row.display_name,
     context_window: row.context_window,
     max_output_tokens: row.max_output_tokens,
+    ...(row.limit_source ? { limit_source: row.limit_source } : {}),
     supports_tools: row.supports_tools,
     supports_streaming: row.supports_streaming,
     supports_structured_output: row.supports_structured_output,

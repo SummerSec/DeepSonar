@@ -38,7 +38,9 @@ class PiProcess implements RuntimeProcess {
   }
 }
 function state(process: PiProcess, command: Record<string, unknown>, id = "session-1") {
-  process.emit({ type: "response", id: command.id, command: "get_state", success: true, data: { sessionId: id, sessionFile } });
+  process.emit({ type: "response", id: command.id, command: "get_state", success: true, data: { sessionId: id, sessionFile,
+    isStreaming: false, isCompacting: false, pendingMessageCount: 0, messageCount: 12, autoCompactionEnabled: true,
+    model: { contextWindow: 128_000, maxTokens: 16_384 } } });
 }
 function turn(process: PiProcess, command: Record<string, unknown>, error?: string) {
   process.emit({ type: "response", id: command.id, command: "prompt", success: true, data: { disposition: "started" } });
@@ -241,6 +243,253 @@ test("Pi settlement cannot hide a missing input acknowledgement", async () => {
     assert.equal(await driver.observe({ type: "agent_settled" }), false);
     assert.match(driver.finishError()?.message ?? "", /PI_RPC_INPUT_UNACKNOWLEDGED/);
   } finally { driver.dispose(); }
+});
+
+function lengthTurn(process: PiProcess, command: Record<string, unknown>, content: unknown[], output = 80) {
+  process.emit({ type: "response", id: command.id, command: "prompt", success: true, data: { disposition: "started" } });
+  process.emit({ type: "agent_start" });
+  process.emit({ type: "message_end", message: { role: "assistant", stopReason: "length", content,
+    usage: { input: output === 1 ? 124_024 : 200, output, cacheRead: 0, cacheWrite: 0, totalTokens: 200 + output } } });
+  process.emit({ type: "agent_settled", aborted: false });
+}
+function validTurn(process: PiProcess, command: Record<string, unknown>) {
+  process.emit({ type: "response", id: command.id, command: "prompt", success: true, data: { disposition: "started" } });
+  process.emit({ type: "agent_start" });
+  process.emit({ type: "message_end", message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "fixed" }],
+    usage: { input: 100, output: 8 } } });
+  process.emit({ type: "agent_settled", aborted: false });
+}
+const truncatedShapes = [
+  [{ type: "text", text: "partial" }],
+  [{ type: "toolCall", name: "write", arguments: '{"text":"incomplete' }],
+  [{ type: "thinking", thinking: "reasoning only" }],
+];
+for (const [index, content] of truncatedShapes.entries()) {
+  test(`#958 production length shape ${index} receives actionable feedback, repairs, then uses unchanged completion gate`, async () => {
+    let prompts = 0;
+    const events: Record<string, unknown>[] = [];
+    const fake = host(() => new PiProcess((command, process) => {
+      if (command.type === "get_state") state(process, command);
+      else if (command.type === "prompt") {
+        prompts++;
+        if (prompts === 1) lengthTurn(process, command, content);
+        else {
+          if (prompts === 2) {
+            assert.match(String(command.message), /length.*截断/u);
+            assert.match(String(command.message), /回执.*禁止重放/u);
+            assert.doesNotMatch(String(command.message), /PRIVATE ORIGINAL PROMPT/u);
+          } else assert.equal(command.message, "submit repaired revision with a new key");
+          validTurn(process, command);
+        }
+      } else throw new Error(`unsupported command ${String(command.type)}`);
+    }));
+    const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "PRIVATE ORIGINAL PROMPT",
+      completionGate: () => prompts >= 3, nudgeMessage: "submit repaired revision with a new key", onEvent: event => events.push(event) });
+    assert.equal(result.error, undefined);
+    assert.equal(result.terminalOutcome, "success");
+    assert.equal(prompts, 3);
+    assert.equal(fake.processes.length, 1);
+    assert.deepEqual(fake.processes[0]!.commands.map(command => command.type), ["get_state", "prompt", "get_state", "prompt", "prompt"]);
+    assert.ok(events.some(event => event.code === "PI_LENGTH_RECOVERY_PROGRESS" && event.evidence === "valid_response"));
+    assert.ok(events.some(event => event.code === "PI_LENGTH_RECOVERY_FINAL" && event.recovery_attempts === 1));
+  });
+}
+
+for (const summary of [undefined, "checkpoint without real context reduction"]) {
+  test(`#958 production low-output recovery bounds ${summary ? "summary-only" : "empty-compaction"} without generic nudges`, async () => {
+    const events: Record<string, unknown>[] = [];
+    const contexts: Record<string, unknown>[] = [];
+    let prompts = 0;
+    const fake = host(() => new PiProcess((command, process) => {
+      if (command.type === "get_state") state(process, command);
+      else if (command.type === "prompt") { prompts++; lengthTurn(process, command, truncatedShapes[2]!, 1); }
+      else if (command.type === "compact") {
+        const result = summary ? { summary, firstKeptEntryId: "kept", tokensBefore: 124_024, estimatedTokensAfter: 124_024 } : null;
+        process.emit({ type: "compaction_start", reason: "manual" });
+        process.emit({ type: "compaction_end", reason: "manual", result, aborted: false });
+        process.emit({ type: "response", id: command.id, command: "compact", success: true, data: result });
+      } else throw new Error("unknown operation");
+    }));
+    const frozen = { context_window_tokens: { configured: null, declared: 1_000_000, effective: 1_000_000, source: "provider_declared" as const },
+      max_output_tokens: { configured: null, declared: 64_000, effective: 64_000, source: "provider_declared" as const }, catalog_revision: "frozen" };
+    const original = JSON.stringify(frozen);
+    const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "original", modelBudget: frozen,
+      completionGate: () => false, nudgeMessage: "GENERIC MUST NOT BE SENT", onEvent: event => events.push(event),
+      onContextEvent: event => { contexts.push(event); } });
+    assert.match(result.error ?? "", summary ? /PI_LENGTH_RECOVERY_EXHAUSTED/u : /PI_COMPACTION_NO_PROGRESS/u);
+    assert.match(result.error ?? "", /stopReason=length.*recovery_attempts=2/u);
+    assert.equal(result.runnerErrorSource, "process");
+    assert.equal(result.terminalOutcome, "failure");
+    assert.equal(prompts, 3);
+    assert.equal(fake.processes.length, 1);
+    assert.equal(fake.processes[0]!.commands.filter(command => command.type === "compact").length, 2);
+    assert.ok(fake.processes[0]!.commands.every(command => command.message !== "GENERIC MUST NOT BE SENT"));
+    assert.ok(contexts.every(event => event.type === "context.compaction_unknown"));
+    assert.equal(JSON.stringify(frozen), original);
+    const diagnostic = [...events].reverse().find(event => event.code === "PI_LENGTH_RECOVERY_FINAL")!;
+    assert.deepEqual(diagnostic.actual_model, { context_window_tokens: 128_000, max_output_tokens: 16_384, auto_compaction_enabled: true });
+    assert.deepEqual(diagnostic.frozen_model_budget, frozen);
+    assert.equal(diagnostic.context_identity, "unknown");
+    assert.equal(diagnostic.compaction_count, 2); // compact response does not double-count compaction_end.
+    assert.equal((diagnostic.last_compaction as Record<string, unknown>).evidence, summary ? "summary_observed" : "no_summary");
+    assert.equal(diagnostic.valid_responses, 0);
+  });
+}
+
+for (const reason of ["waiting_human", "cancelled", "timeout", "lease_expired", "unknown_external_effect", "budget_exhausted"]) {
+  test(`#958 production ${reason} authority prevents any length recovery provider request`, async () => {
+    const fake = host(() => new PiProcess((command, process) => {
+      if (command.type === "get_state") state(process, command);
+      else if (command.type === "prompt") lengthTurn(process, command, truncatedShapes[2]!, 1);
+    }));
+    const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "original", completionGate: () => false,
+      recoveryGuard: async () => ({ allowed: false, reason }) });
+    assert.match(result.error ?? "", new RegExp(`PI_LENGTH_RECOVERY_STOPPED: ${reason}`));
+    assert.deepEqual(fake.processes[0]!.commands.map(command => command.type), ["get_state", "prompt"]);
+  });
+}
+
+for (const blockAt of [2, 4]) {
+  test(`#958 production rechecks lifecycle before ${blockAt === 2 ? "compact" : "continuation"}`, async () => {
+    let checks = 0;
+    const fake = host(() => new PiProcess((command, process) => {
+      if (command.type === "get_state") state(process, command);
+      else if (command.type === "prompt") lengthTurn(process, command, truncatedShapes[2]!, 1);
+      else if (command.type === "compact") process.emit({ type: "response", id: command.id, command: "compact", success: true,
+        data: { summary: "checkpoint", firstKeptEntryId: "kept", tokensBefore: 124_024, estimatedTokensAfter: 400 } });
+    }));
+    const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "original", completionGate: () => false,
+      recoveryGuard: async () => ({ allowed: ++checks < blockAt, reason: "waiting_human" }) });
+    assert.match(result.error ?? "", /PI_LENGTH_RECOVERY_STOPPED: waiting_human/u);
+    assert.equal(checks, blockAt);
+    assert.equal(fake.processes[0]!.commands.filter(command => command.type === "prompt").length, 1);
+    assert.equal(fake.processes[0]!.commands.filter(command => command.type === "compact").length, blockAt === 2 ? 0 : 1);
+  });
+}
+
+for (const acceptedAt of ["settled", "compacted"]) {
+  test(`#958 production accepted completion at ${acceptedAt} wins over length without new model requests`, async () => {
+    let done = false;
+    const fake = host(() => new PiProcess((command, process) => {
+      if (command.type === "get_state") state(process, command);
+      else if (command.type === "prompt") { done = acceptedAt === "settled"; lengthTurn(process, command, truncatedShapes[2]!, 1); }
+      else if (command.type === "compact") {
+        done = true;
+        process.emit({ type: "response", id: command.id, command: "compact", success: true,
+          data: { summary: "checkpoint", firstKeptEntryId: "kept", tokensBefore: 124_024 } });
+      }
+    }));
+    const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "original", completionGate: () => done,
+      recoveryGuard: async () => ({ allowed: !done, reason: "completion_accepted" }) });
+    assert.equal(result.error, undefined);
+    assert.equal(result.terminalOutcome, "success");
+    assert.equal(fake.processes[0]!.commands.filter(command => command.type === "prompt").length, 1);
+    assert.equal(fake.processes[0]!.commands.filter(command => command.type === "compact").length, acceptedAt === "settled" ? 0 : 1);
+  });
+}
+
+for (const failure of ["Summarization failed: generation hit the token cap and the summary is incomplete", "403 Forbidden", "Compaction cancelled"]) {
+  test(`#958 production compact failure ${failure} is bounded without error provenance laundering`, async () => {
+    let prompts = 0;
+    const fake = host(() => new PiProcess((command, process) => {
+      if (command.type === "get_state") state(process, command);
+      else if (command.type === "prompt") { prompts++; if (prompts === 1) lengthTurn(process, command, truncatedShapes[2]!, 1); else validTurn(process, command); }
+      else if (command.type === "compact") process.emit({ type: "response", id: command.id, command: "compact", success: false, error: failure });
+    }));
+    const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "original", completionGate: () => prompts >= 2 });
+    if (failure.startsWith("Summarization")) {
+      assert.equal(result.error, undefined);
+      assert.equal(prompts, 2); // One correctable rejection gets feedback, not permanent failure.
+    } else {
+      assert.match(result.error ?? "", new RegExp(failure));
+      assert.equal(result.runnerErrorSource, "process");
+      assert.equal(result.terminalOutcome, "failure");
+      assert.equal(prompts, 1);
+    }
+  });
+}
+
+test("#958 diagnostic get_state cannot replay the bootstrap or replace Session identity", async () => {
+  let queries = 0;
+  const fake = host(() => new PiProcess((command, process) => {
+    if (command.type === "get_state") state(process, command, ++queries === 1 ? "session-1" : "wrong-session");
+    else if (command.type === "prompt") lengthTurn(process, command, truncatedShapes[0]!);
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "bootstrap", completionGate: () => false });
+  assert.match(result.error ?? "", /CONTEXT_RESUME_SESSION_IDENTITY_MISMATCH/u);
+  assert.equal(result.runnerErrorSource, "process");
+  assert.deepEqual(fake.processes[0]!.commands.map(command => command.type), ["get_state", "prompt", "get_state"]);
+});
+
+test("#958 provider-internal length/empty compaction loop stops without a settled event", async () => {
+  const fake = host(() => new PiProcess((command, process) => {
+    if (command.type === "get_state") state(process, command);
+    else if (command.type === "prompt") {
+      process.emit({ type: "response", id: command.id, command: "prompt", success: true, data: { disposition: "started" } });
+      process.emit({ type: "agent_start" });
+      for (let index = 0; index < 8; index++) {
+        process.emit({ type: "message_end", message: { role: "assistant", stopReason: "length", content: truncatedShapes[2], usage: { input: 124_000, output: 1 } } });
+        process.emit({ type: "compaction_start", reason: "threshold" });
+        process.emit({ type: "compaction_end", reason: "threshold", aborted: false });
+      }
+    }
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "bootstrap", completionGate: () => false });
+  assert.match(result.error ?? "", /PI_LENGTH_RECOVERY_EXHAUSTED/u);
+  assert.match(result.error ?? "", /"length_count":4/u);
+  assert.equal(result.terminalOutcome, "failure");
+  assert.deepEqual(fake.processes[0]!.commands.map(command => command.type), ["get_state", "prompt"]);
+});
+
+test("#958 length does not launder a later structured provider refusal even with an accepted completion", async () => {
+  let prompts = 0;
+  const fake = host(() => new PiProcess((command, process) => {
+    if (command.type === "get_state") state(process, command);
+    else if (command.type === "prompt") {
+      prompts++;
+      if (prompts === 1) lengthTurn(process, command, truncatedShapes[0]!);
+      else turn(process, command, completionRefusal);
+    }
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "bootstrap", completionGate: () => prompts >= 2 });
+  assert.match(result.error ?? "", /Pi message ended: error: 409 Completion already accepted/u);
+  assert.equal(result.runnerErrorSource, "structured_terminal");
+  assert.equal(result.terminalOutcome, "failure");
+});
+
+test("#958 successful response does not nudge an accepted human wait after length repair", async () => {
+  let prompts = 0;
+  const fake = host(() => new PiProcess((command, process) => {
+    if (command.type === "get_state") state(process, command);
+    else if (command.type === "prompt") {
+      prompts++;
+      if (prompts === 1) lengthTurn(process, command, truncatedShapes[0]!);
+      else validTurn(process, command);
+    }
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "bootstrap", completionGate: () => false,
+    recoveryGuard: () => ({ allowed: prompts < 2, reason: "waiting_human" }) });
+  assert.match(result.error ?? "", /PI_LENGTH_RECOVERY_STOPPED: waiting_human/u);
+  assert.equal(prompts, 2);
+});
+
+test("#958 concurrent unacknowledged input suppresses length compaction and recovery prompt", async () => {
+  let send: ((content: string) => Promise<void>) | undefined;
+  let sent: Promise<void> | undefined;
+  let prompts = 0;
+  const fake = host(() => new PiProcess((command, process) => {
+    if (command.type === "get_state") state(process, command);
+    else if (command.type === "prompt" && ++prompts === 1) lengthTurn(process, command, truncatedShapes[2]!, 1);
+    else if (command.type === "prompt") { process.ended = true; process.wake?.(); } // no ACK: outcome remains unknown.
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "bootstrap", completionGate: () => false,
+    onRunReady: control => { send = control.sendMessage; }, onEvent: event => {
+      if (event.code === "PI_RESPONSE_TRUNCATED" && !sent) sent = send!("concurrent user message");
+    } });
+  await sent;
+  assert.match(result.error ?? "", /PI_RPC_INPUT_UNACKNOWLEDGED/u);
+  assert.equal(result.runnerErrorSource, "process");
+  assert.deepEqual(fake.processes[0]!.commands.map(command => command.type), ["get_state", "prompt", "prompt"]);
 });
 
 // #765: exercise the production runner, not a duplicate parsing implementation.

@@ -74,6 +74,12 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 目标授权的 host grant 复用 append-only `audit_logs`，固定 system actor 与 `task.target_authorization` action，保存 Canvas/project、内容/契约/revision 及严格无密钥 snapshot；不从任意 Canvas metadata 或调用方同名字段读取 authority。中央子/系统 Job 准入只取最新有效绑定，provision/rerun 另核 live authority；旧行保留不等于可回退授权。见 [grant store](../../apps/scheduler/src/domains/target-authorization/grant.ts)及 [ADR 0011](adr/0011-trusted-target-authorization.md)。
 
+### 模型预算声明与冻结（#958）
+
+既有 `credentials.model_catalog_json` 保存结构化发现描述，`limit_source` 逐字段区分 declared/missing/invalid，信任仅为 `provider_declared`；目录 ID 投影保持可读，但不扩大账号配置模型名单。新 Job 的 `agent_snapshot_json.model_budget` 保存 context/output 的 configured、declared、effective、source 与 catalog revision；未知 CLI 默认为 null，历史缺字段不自动补冻。Pi 物化参数来自同一冻结值，不重新读取当前发现。
+
+沿用现有 JSONB 与 Evidence，无新表/列或第二份用量余额。运行时限制、length 形状、恢复和摘要观测进入受保护运行诊断，不记录正文/密钥，也不凭原生 compaction 事件构造 context digest/revision。完整字段与来源以[共享 schema](../../packages/shared-types/src/model-budget.ts)和[专题](../PI_MODEL_BUDGET_RECOVERY.md)为准，最终 SHA Actions 待验；声明不证明上游容量。
+
 ### Pi 观测记忆的配置、账本与归档（#815）
 
 OM 的 package/version/integrity/entry、wrapper 指纹、Job/当前 Session 配置与模型进入现有冻结快照和 Runtime Profile；不是项目知识库，也不新增 memory 事实表。Gateway 从内核签发的 `job_tokens.workload` 识别后台，不接受客户端 header/body 自报来源；有限总额在所有轮换、撤销及历史 token 上聚合，总/主/后台分配不可隐式转借，冻结总额不限则仍不限。

@@ -25,7 +25,9 @@ import {
   rejectNonCurrentAgentCli,
   type ReasoningValue,
   type PiObservationalMemoryConfig,
+  type ModelTokenBudget,
 } from "@deepsonar/shared-types";
+import { resolveModelTokenBudget } from "./domains/provider-adapter/model-budget.js";
 import { PROVIDER_ENV_MAP } from "./credentials.js";
 import { defaultDshPiAiSettings, parseDshPiAiSettings, readOfficialLlmPiAiDocument, readOfficialLlmPiAiSettings, sanitizeProviderCustomHeaders, hasInvalidProviderHeaders } from "@deepsonar/runtime-sandbox";
 import {
@@ -73,6 +75,7 @@ export interface ProviderSettingsOverrides {
   reasoning?: ReasoningValue | null;
   /** 通用客户端上下文预算；不会改变上游模型能力。 */
   context_window_tokens?: number | null;
+  max_output_tokens?: number | null;
 }
 
 /** 校验通用客户端上下文预算；null 表示沿用 Provider/CLI 默认值。 */
@@ -513,9 +516,9 @@ export function materializeProviderSettings(input: {
       ? configuredProviders
       : { deepsonar: source };
     const selectedRaw = input.overrides?.model?.trim() || extractModelFromSettings("pi", settings);
-    const selected = splitPiModelRef(selectedRaw ?? "");
-    const selectedModelId = selected.modelId || undefined;
-    const preferredProvider = selected.provider || official?.route || null;
+    const selected = selectedRaw ? resolvePiCliLaunchSelection({ model: selectedRaw, settingsConfig: settings }) : null;
+    const selectedModelId = selected?.cliModel;
+    const preferredProvider = selected?.provider || official?.route || null;
     const providerIds = Object.keys(providerSource);
     let ownerProvider = preferredProvider && providerIds.includes(preferredProvider) ? preferredProvider : undefined;
     if (!ownerProvider && selectedModelId) {
@@ -541,9 +544,10 @@ export function materializeProviderSettings(input: {
       if (selectedModelId && providerId === ownerProvider && !models.some((model) => model.id === selectedModelId)) {
         models.unshift({ id: selectedModelId });
       }
-      if (contextWindowTokens != null && providerId === ownerProvider) {
+      if (providerId === ownerProvider) {
         const target = models.find((model) => model.id === selectedModelId) ?? models[0];
-        if (target) target.contextWindow = contextWindowTokens;
+        if (target && contextWindowTokens != null) target.contextWindow = contextWindowTokens;
+        if (target && input.overrides?.max_output_tokens != null) target.maxTokens = input.overrides.max_output_tokens;
       }
       provider.models = models;
       return [providerId, provider];
@@ -575,6 +579,41 @@ export function extractReasoningFromSettings(agentCli: string, settingsConfig: u
   return isCodexReasoningEffort(value) ? value : null;
 }
 
+/** Read only the selected route/model; never borrow another provider's limits. */
+export function providerModelBudget(input: {
+  agentCli: string;
+  model?: string | null;
+  settingsConfig: unknown;
+  catalogJson?: unknown;
+  credentialProvider?: string | null;
+  roleContextWindowTokens?: unknown;
+  contextSource?: "job" | "role_config";
+  configFiles?: readonly MaterializedConfigFile[];
+}): ModelTokenBudget {
+  const settings = asObject(input.settingsConfig);
+  const model = input.model?.trim() || extractModelFromSettings(input.agentCli, settings);
+  let native: Record<string, unknown> = {};
+  let modelId = resolveEffectiveModel({ roleModel: model, agentCli: input.agentCli, settingsConfig: settings }) ?? model;
+  if (input.agentCli === "pi" && model) {
+    const selected = resolvePiCliLaunchSelection({ model, settingsConfig: settings, configFiles: input.configFiles });
+    modelId = selected.cliModel;
+    const provider = asObject(piProviderSource(settings, input.configFiles)[selected.provider]);
+    native = Array.isArray(provider.models)
+      ? asObject(provider.models.find((row) => asObject(row).id === modelId))
+      : asObject(asObject(provider.models)[modelId]);
+  } else if (input.agentCli === "dsh" && model) {
+    const official = readOfficialLlmPiAiSettings(settings);
+    const provider = asObject(official?.providers[official.route]);
+    native = Array.isArray(provider.models) ? asObject(provider.models.find((row) => asObject(row).id === modelId)) : {};
+  }
+  return resolveModelTokenBudget({
+    provider: input.credentialProvider, modelId, catalogJson: input.catalogJson,
+    roleContextWindowTokens: input.roleContextWindowTokens, contextSource: input.contextSource,
+    credentialContextWindowTokens: settings.context_window_tokens,
+    nativeContextWindow: native.contextWindow, nativeMaxTokens: native.maxTokens,
+  });
+}
+
 export interface ProviderRuntimeSnapshotProjection {
   model: string | null;
   upstream_model: string | null;
@@ -582,6 +621,7 @@ export interface ProviderRuntimeSnapshotProjection {
   pi_provider: string | null;
   reasoning: ReasoningValue | null;
   context_window_tokens: number | null;
+  model_budget: ModelTokenBudget;
   settings_config_json: Record<string, unknown>;
   config_files: MaterializedConfigFile[];
 }
@@ -591,17 +631,23 @@ export function projectProviderRuntimeSnapshot(input: {
   agentCli: string;
   roleModel?: string | null;
   roleContextWindowTokens?: unknown;
+  contextSource?: "job" | "role_config";
+  credentialProvider?: string | null;
+  catalogJson?: unknown;
   settingsConfig: unknown;
   manualConfigFiles?: MaterializedConfigFile[];
   defaultModel?: string | null;
 }): ProviderRuntimeSnapshotProjection {
   const hasSettings = hasProviderSettingsConfig(input.settingsConfig);
   const settingsConfig = providerSettingsForJobSnapshot(input.settingsConfig, input.agentCli);
-  const contextWindowTokens = resolveContextWindowTokens({
-    roleContextWindowTokens: input.roleContextWindowTokens,
-    settingsConfig,
-  });
   const roleModel = input.roleModel?.trim() || null;
+  const modelBudget = providerModelBudget({
+    agentCli: input.agentCli, model: roleModel, settingsConfig,
+    roleContextWindowTokens: input.roleContextWindowTokens, contextSource: input.contextSource,
+    credentialProvider: input.credentialProvider, catalogJson: input.catalogJson,
+    configFiles: hasSettings ? undefined : input.manualConfigFiles,
+  });
+  const contextWindowTokens = modelBudget.context_window_tokens.effective;
   const reasoning = hasSettings
     ? extractReasoningFromSettings(input.agentCli, settingsConfig) as ReasoningValue | null
     : null;
@@ -612,7 +658,7 @@ export function projectProviderRuntimeSnapshot(input: {
     const materialized = materializeProviderSettings({
       agentCli: input.agentCli,
       settingsConfig,
-      overrides: { model: roleModel, reasoning, context_window_tokens: contextWindowTokens },
+      overrides: { model: roleModel, reasoning, context_window_tokens: contextWindowTokens, max_output_tokens: modelBudget.max_output_tokens.effective },
     });
     if (materialized.length > 0) {
       const materializedPaths = new Set(materialized.map((item) => item.path));
@@ -642,6 +688,7 @@ export function projectProviderRuntimeSnapshot(input: {
         pi_provider: null,
         reasoning,
         context_window_tokens: contextWindowTokens,
+        model_budget: modelBudget,
         settings_config_json: settingsConfig,
         config_files: configFiles,
       };
@@ -664,6 +711,7 @@ export function projectProviderRuntimeSnapshot(input: {
     pi_provider: input.agentCli === "pi" ? piProvider : null,
     reasoning,
     context_window_tokens: contextWindowTokens,
+    model_budget: modelBudget,
     settings_config_json: settingsConfig,
     config_files: configFiles,
   };

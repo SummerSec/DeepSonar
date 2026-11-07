@@ -10,6 +10,8 @@ export class PiRpcDriver {
   private bootstrap = "";
   private beforePrompt?: () => Promise<void>;
   private commands = new Map<string, string>();
+  private commandTimeouts = new Map<string, number>();
+  private identity?: { sessionId: string; sessionFile: string };
   private timers = new Map<string, ReturnType<typeof setTimeout> | undefined>();
   private captureDepth = 0;
   private startPending = false;
@@ -24,7 +26,7 @@ export class PiRpcDriver {
   ) {}
 
   private watch(id: string, code: string): void {
-    this.timers.set(id, this.captureDepth ? undefined : setTimeout(() => this.fail(code), this.timeoutMs));
+    this.timers.set(id, this.captureDepth ? undefined : setTimeout(() => this.fail(code), this.commandTimeouts.get(id) ?? this.timeoutMs));
   }
 
   private watchStart(): void {
@@ -53,9 +55,10 @@ export class PiRpcDriver {
     void this.process.kill().catch(() => {});
   }
 
-  private command(command: Record<string, unknown>): Promise<void> {
+  private command(command: Record<string, unknown>, timeoutMs = this.timeoutMs): Promise<void> {
     const id = `deepsonar-${++this.serial}`;
     this.commands.set(id, String(command.type));
+    this.commandTimeouts.set(id, timeoutMs);
     this.watch(id, `PI_RPC_ACK_TIMEOUT: ${String(command.type)}`);
     const next = this.writes.then(() => this.process.write(`${JSON.stringify({ ...command, id })}\n`));
     this.writes = next.catch(() => {});
@@ -68,9 +71,24 @@ export class PiRpcDriver {
     await this.command({ type: "get_state" });
   }
 
+  async queryState(): Promise<void> {
+    if (this.error) throw this.error;
+    if (!this.ready) throw new Error("PI_SESSION_NOT_READY");
+    await this.command({ type: "get_state" });
+  }
+
+  async compact(customInstructions: string): Promise<void> {
+    if (this.error) throw this.error;
+    if (!this.ready || this.active || this.timers.size) throw new Error("PI_RPC_COMPACTION_NOT_IDLE");
+    // Unlike input ACK, this response waits for a model-backed summary. Still bounded;
+    // the original Job deadline/lifecycle guard remains authoritative.
+    await this.command({ type: "compact", customInstructions }, 120_000);
+  }
+
   async send(content: string): Promise<void> {
     if (this.error) throw this.error;
     if (!this.ready) throw new Error("PI_SESSION_NOT_READY");
+    if ([...this.commands.values()].includes("compact")) throw new Error("PI_RPC_COMPACTION_IN_PROGRESS");
     // prompt with streamingBehavior is atomic in Pi: it starts an idle loop or
     // queues on a running loop. Bare steer/follow_up can strand input if the
     // process settles between our observation and the RPC handler.
@@ -91,6 +109,7 @@ export class PiRpcDriver {
       clearTimeout(this.timers.get(id));
       this.timers.delete(id);
       this.commands.delete(id);
+      this.commandTimeouts.delete(id);
       if (record.success !== true) return true; // Adapter owns the terminal error detail.
       if (record.command === "prompt") {
         const disposition = (record.data as { disposition?: unknown } | undefined)?.disposition;
@@ -106,12 +125,17 @@ export class PiRpcDriver {
           || data.sessionFile.includes("/../") || data.sessionFile.includes("\0")) {
           throw new Error("PI_SESSION_IDENTITY_MISSING");
         }
-        if (this.expected && (data.sessionId !== this.expected.sessionId || data.sessionFile !== this.expected.sessionFile)) {
+        const expected = this.identity ?? this.expected;
+        if (expected && (data.sessionId !== expected.sessionId || data.sessionFile !== expected.sessionFile)) {
           throw new Error("CONTEXT_RESUME_SESSION_IDENTITY_MISMATCH");
         }
-        this.ready = true;
-        await this.beforePrompt?.();
-        await this.send(this.bootstrap);
+        this.identity = { sessionId: data.sessionId, sessionFile: data.sessionFile };
+        if (!this.ready) {
+          this.ready = true;
+          await this.beforePrompt?.();
+          await this.send(this.bootstrap);
+          this.bootstrap = "";
+        }
       }
     } else if (record.type === "agent_start") {
       if (!this.active) this.resetTurn();
@@ -139,6 +163,7 @@ export class PiRpcDriver {
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
     this.commands.clear();
+    this.commandTimeouts.clear();
     clearTimeout(this.startTimer);
     this.startTimer = undefined;
     this.startPending = false;
