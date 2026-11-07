@@ -112,6 +112,8 @@ Gateway 503 仅在内核明确证明请求尚未启动时可降级；`unknown` �
 
 涉及图投影的事务按 Canvas → Job → Attempt → effects 获取锁；节点/边触发器也会锁 Canvas，不能在持 Job 后才更新节点。claim 按有界 keyset 候选页使用独立事务，每页重新获取 claim advisory lock 并读取平台暂停、活动数与配额。先排序锁 Canvas，再锁项目/Job/Attempt 并核验当前 scope 和调度条件，仅成功领取计入配额；忙锁候选不消耗槽位。需要继续扫描时先提交并释放本页锁，下一页重新按同一锁序开始，不能持 Job/Attempt 锁回头锁新 Canvas。context 的 Job-only 写入在同一 Job → Attempt 事务更新两份投影。仅已回滚的纯数据库事务允许按 [DB conflict helper](../../apps/scheduler/src/db-conflict-retry.ts)有界重试；Gateway 在 admission 提交后只向上游发一次请求，不重放请求或未知效果。
 
+#945 的工具活动进度投影复用 [Canvas-first writer](../../apps/scheduler/src/domains/canvas/job-tool-progress.ts)：在同一事务内先锁 Canvas，再按 Canvas/Job/node_type 更新 `last_progress`，保留其它 body 字段。Canvas 缺失不回退到 Job-only 更新；该可选 UI 投影失败不替换 Agent 结果，只对已回滚的纯数据库写入使用现有有界冲突重试，不重跑工具或 Evidence 写入。`ci:integration:canvas-lifecycle` 接入真实 PostgreSQL 负对照：旧 node-first 更新与 Canvas-first 节点锁构成触发器死锁，新写法两边提交且只增加一条进度 revision；无服务范围/回滚/耗尽回归接 `ci:unit:executor-real`。本次未在本地执行，最终 SHA Actions 待验。
+
 #945 将现有冲突重试器接入已核对的 Job 创建、任务画布创建与 deferred 语义预检三个纯数据库入口，不建立第二套重试语义。Hub 停止/额度收敛与报告再派的业务错误继续按既有规则处理；`40P01` / `40001` / `55P03`（含 cause）必须原样抛回事务边界，避免吞掉后只剩 `25P02`；`25P02` 本身不能证明安全重试。耗尽保留稳定错误码与既有 operation 指标，不重放模型请求或未知效果。
 
 Verify 终态恢复与 orphan 收口可间接派发 Report，尚非纯数据库工作：现有派发在 Canvas 锁内写冻结输入，相同摘要才复用版本，否则使用新版本；文件不随 SQL 回滚，失败轮可能留下无已提交引用的输入。这些条件不证明跨存储原子性，本片撤回这两个混合 I/O 入口的新增自动重试，保留原事务并在 #945 继续跟踪安全边界拆分；不能以输入看似幂等为由放宽上面的纯数据库约束。原始冲突传递与业务错误隔离的无服务回归接在 bounded-contexts / verify-eligibility，真实交叉事务接在 recovery；最终 SHA Actions 待验，生产死锁消失比例未验证。

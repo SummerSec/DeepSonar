@@ -714,7 +714,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Web Canvas 必须只消费服务端节点/边投影和布局提示，不能提交坐标或修改过程真相；可见投影、增量 cursor gap、搜索和展开必须有明确空态/错误态。
 - **决策来源**：布局是展示层，Canvas/API 才是过程事实；读图预算和网络恢复需被用户看见。
-- **实现状态**：as-built；可见投影使用 ELK/固定列策略；全图权威 layout_revision 仍暂缓，不写成当前能力。
+- **实现状态**：as-built；可见投影使用 ELK/固定列策略；全图权威 layout_revision 仍暂缓，不写成当前能力。#945 工具活动进度投影按 Canvas-first 更新同 Canvas/Job 节点，纯数据库有界恢复不重跑工具；真实触发器死锁负对照与新路径投影一致性接现有 canvas-lifecycle，最终 SHA Actions 待验。
 - **代码入口**：[Canvas view](../../apps/web/src/CanvasView.tsx)、[layout](../../apps/web/src/layout.ts)、[Canvas sync](../../apps/web/src/canvas-sync.ts)。
 - **验证证据**：`pnpm ci:unit:web-facts`、`pnpm ci:integration:canvas-lifecycle`；人工核对断线、空图和 cursor gap。
 
