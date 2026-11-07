@@ -175,9 +175,11 @@ test("shared sync success survives a metadata refresh failure without claiming w
     api.projectSkillSources = () => refresh.promise;
     await f.click(f.button("同步候选"));
     const success = f.toast();
+    assert.match(success, /live 目录健康核验完成/, "a successful write result is actually visible before reload finishes");
     assert.doesNotMatch(success, /同步失败/);
     await act(async () => refresh.reject(new Error("fixture metadata refresh unavailable")));
     assert.match(f.toast(), /加载 Skill 源可用性失败.*fixture metadata refresh unavailable/);
+    assert.match(f.container.textContent!, /live 目录健康核验完成/, "metadata failure cannot erase the successful operation receipt");
     assert.doesNotMatch(f.container.textContent!, /同步失败/);
     assert.ok(f.checkbox());
   });
