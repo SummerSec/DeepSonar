@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import postgres from "postgres";
+import { z } from "zod";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -774,6 +775,65 @@ if (!testDatabaseUrl) {
           await sql`UPDATE jobs SET status='succeeded',finished_at=now() WHERE id=${quotaJob}`;
         }
       } finally { await quotaUpstream.close(); }
+
+      // #951: real SQL proves current-Attempt attribution and immutable receipt observations.
+      {
+        const { readCompletionFailureDiagnostic } = await import("./completion-failure-diagnostic.js");
+        const { completionInputDigest, completionReceiptId, completionDoneEventId } = await import("./domains/event-ingestion/completion-receipt.js");
+        const fixture = await insertJob({ status: "running" });
+        const id = String(fixture.id);
+        const prior = await attemptModule.createAttempt(sql, id, attemptIdentity(baselineSnapshot));
+        const addEvent = async (attempt: string, eventId: string, type: string, payload: Record<string, unknown> = {}) => {
+          const [{ seq }] = await sql`SELECT COALESCE(MAX(job_seq),0)+1 AS seq FROM events WHERE job_id=${id}`;
+          await sql`INSERT INTO events(job_id,attempt_id,event_id,job_seq,type,payload_json)
+            VALUES(${id},${attempt},${eventId},${seq},${type},${sql.json(z.json().parse(payload))})`;
+        };
+        const addFinding = async (attempt: string) => {
+          const eventId = randomUUID(), artifactId = randomUUID(), finding = randomUUID();
+          await addEvent(attempt, eventId, "finding");
+          await sql`INSERT INTO artifacts(id,project_id,canvas_id,job_id,artifact_key,kind,source_event_id,source_operation)
+            VALUES(${artifactId},${projectId},${canvasId},${id},${`diagnostic:${artifactId}`},'finding',${eventId},'emit_finding')`;
+          await sql`INSERT INTO findings(id,project_id,job_id,artifact_id,fingerprint,title)
+            VALUES(${finding},${projectId},${id},${artifactId},${finding},'Synthetic diagnostic output')`;
+        };
+        await addFinding(String(prior.id));
+        await attemptModule.markAttemptInterrupted(sql, id, "diagnostic fixture rollover");
+        const current = await attemptModule.createAttempt(sql, id, attemptIdentity(baselineSnapshot));
+        await addFinding(String(current.id));
+        await addEvent(String(current.id), randomUUID(), "fact");
+        await sql`INSERT INTO artifacts(project_id,canvas_id,job_id,artifact_key,kind,source_operation)
+          VALUES(${projectId},${canvasId},${id},${`unattributed:${randomUUID()}`},'finding','emit_finding')`;
+        const beforeJob = [...await sql`SELECT * FROM jobs WHERE id=${id}`];
+        const beforeAttempts = [...await sql`SELECT * FROM job_attempts WHERE job_id=${id} ORDER BY attempt_no`];
+        const input = { jobId: id, attemptId: String(current.id), snapshot: baselineSnapshot };
+        const read = () => readCompletionFailureDiagnostic(input, sql);
+        const first = await read();
+        assert.equal(first.completion_state, "no_durable_receipt_observed");
+        assert.deepEqual(first.output_counts, { scope: "event_attributed_current_attempt", artifacts: 1, findings: 1, facts: 1,
+          reports: null, report_attribution: "report tables have no Attempt identity", unattributed_job_artifacts: 1 });
+        const appendReceipt = async (key: string, accepted: boolean) => {
+          await addEvent(String(current.id), completionReceiptId(id, key), "control_receipt", {
+            v: 1, operation: "mark_job_done", idempotency_key: key, proposal_revision: accepted ? 1 : 0,
+            attempt_id: String(current.id), snapshot_digest: completionInputDigest(baselineSnapshot), status: accepted ? "persisted_deferred" : "rejected",
+            result: { statusCode: accepted ? 200 : 409, body: { accepted, error_code: accepted ? "" : "invalid_done", summary: "do not expose raw summary" } },
+          });
+        };
+        const rejectedKey = randomUUID(), acceptedKey = randomUUID();
+        await appendReceipt(rejectedKey, false);
+        const [originalReceipt] = await sql`SELECT * FROM events WHERE job_id=${id} AND event_id=${completionReceiptId(id, rejectedKey)}`;
+        assert.equal((await read()).completion_state, "rejected");
+        await appendReceipt(acceptedKey, true);
+        const accepted = await read();
+        assert.equal(accepted.completion_state, "accepted_awaiting_settlement");
+        assert.ok(JSON.stringify(accepted.references).includes(`receipt_key=${acceptedKey}`));
+        assert.ok(!JSON.stringify(accepted).includes("do not expose raw summary"));
+        await addEvent(String(current.id), completionDoneEventId(id, acceptedKey), "done");
+        assert.equal((await read()).completion_state, "done_event_persisted");
+        assert.deepEqual([...await sql`SELECT * FROM jobs WHERE id=${id}`], beforeJob);
+        assert.deepEqual([...await sql`SELECT * FROM job_attempts WHERE job_id=${id} ORDER BY attempt_no`], beforeAttempts);
+        const [unchangedReceipt] = await sql`SELECT * FROM events WHERE job_id=${id} AND event_id=${completionReceiptId(id, rejectedKey)}`;
+        assert.deepEqual(unchangedReceipt, originalReceipt);
+      }
 
     } finally {
       if (closeApp) await closeApp().catch(() => {});

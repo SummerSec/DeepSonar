@@ -174,6 +174,8 @@ Gateway 请求额度跨 token/Attempt 累计，含撤销和过期 token；普通
 
 `accepted` 的目标语义是 durable receipt。已有 Job/Attempt/effect 账本仍是事实边界：`effect_pending` 或 `unknown` 不是普通模型错误，`replay_policy=never` 时禁止自动猜测重放。完整 Proposal/Receipt/Settlement 和失败检查点仍是长期演进项。
 
+#951 的[完成失败诊断候选](docs/AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)将 Job/Attempt、当前可归属产出及原回执状态写入既有受权限保护的 Evidence；缺 done 只表示本地未观察到完成，不推定 Agent 故意跳过或平台责任。有产出、接纳回执、持久 done 事件均不能单独授予成功或重放；未知和不可归属字段明确保留未知。候选最终 SHA Actions 待验，不新增终态、权限、配置或控制通道。
+
 A 阶段错误矩阵、冻结契约回放及持久性缺口见 [#776 基线](docs/REPAIR_FEEDBACK_BASELINE.md)；不代表同会话修复或模型质量已验收。
 
 [#776 B](docs/REPAIR_FEEDBACK_DONE_REPAIR.md)仅为 mark_job_done 增加原 Control 通道上的持久拒绝/接受回执与 revision；persisted_deferred 不等于效果结算，#776 限定 C 扩展已交付；通用完成门仍属后续范围，真实模型质量未验证且按本次要求豁免。C0 仅对已获图查询权限的 Hub 无效引用提供 scoped 刷新指引，不引入图版本锁或自动授权。 C1 将既有 Hub complete 预检的完成门缺失项投影为有界反馈，不改变门判定或 Verify 技术结论，也不将该投影当作已接受效果回执。

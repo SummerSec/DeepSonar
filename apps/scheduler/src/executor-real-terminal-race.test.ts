@@ -1,12 +1,44 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { call, completionReady, rootId, runExecutor, setPreflight, terminalBundleCalls, terminalEvents } from "./executor-real-terminal-race.fixture.js";
+import { call, completionReady, completionDiagnosticEvidence, jobId, attemptId, rootId, runExecutor, setPreflight, terminalBundleCalls, terminalEvents } from "./executor-real-terminal-race.fixture.js";
 import { getAgentCliRuntimeAdapter, resolveTerminalProcessOutcome, type RealAgentResult } from "@deepsonar/runtime-sandbox";
 import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 
 const done = { summary: "Completion accepted during the bounded offline race." };
 const human = { reason: "Operator credential authorization is required.", subject: { type: "platform_blocker", kind: "credential" } };
+
+test("executeReal: missing completion persists scoped evidence and keeps failure authoritative", async () => {
+  await assert.rejects(runExecutor(async () => {}), (error: unknown) => {
+    if (!(error instanceof Error)) throw error;
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /^AGENT_COMPLETION_UNOBSERVED:/);
+    assert.match(error.message, /diagnostic=persisted/);
+    return true;
+  });
+  const [diagnostic] = completionDiagnosticEvidence();
+  assert.ok(diagnostic); assert.equal(diagnostic.job_id, jobId); assert.equal(diagnostic.attempt_id, attemptId);
+  assert.equal(diagnostic.completion_state, "no_durable_receipt_observed");
+  assert.equal((diagnostic.reason as { phase: string }).phase, "completion_missing");
+  assert.equal(terminalBundleCalls(), 0); assert.deepEqual(terminalEvents(), []);
+});
+
+test("executeReal: runner exception persists diagnostics without replacing the original cause", async () => {
+  const failure = new Error("original runner failure");
+  await assert.rejects(runExecutor(async () => { throw failure; }), (error: unknown) => error === failure);
+  const [diagnostic] = completionDiagnosticEvidence();
+  assert.ok(diagnostic); assert.equal((diagnostic.reason as { phase: string }).phase, "runner_exception");
+  assert.equal(terminalBundleCalls(), 0); assert.deepEqual(terminalEvents(), []);
+});
+
+test("executeReal: accepted normal completion creates no missing-completion diagnostic", async () => {
+  await runExecutor(async () => {
+    const eventId = randomUUID();
+    await call("mark_job_done", done, { eventId, completionPhase: "prepare" });
+    await call("mark_job_done", done, { eventId, completionPhase: "commit" });
+  });
+  assert.equal(terminalBundleCalls(), 1); assert.deepEqual(completionDiagnosticEvidence(), []);
+});
 function barrier() {
   let release!: () => void;
   const promise = new Promise<void>(resolve => { release = resolve; });
@@ -59,7 +91,8 @@ test("executeReal: first accepted human cannot be overwritten by a preflight alr
 test("executeReal: accepted human rejects both completion prepare and commit", { timeout: 5000 }, async () => {
   const terminals = await runExecutor(async () => {
     await call("request_human", human);
-    await assert.rejects(call("mark_job_done", done, { completionPhase: "prepare" }), error => {
+    await assert.rejects(call("mark_job_done", done, { completionPhase: "prepare" }), (error: unknown) => {
+      if (!(error instanceof PlatformRuntimeHandlerError)) throw error;
       assert.ok(error instanceof PlatformRuntimeHandlerError);
       assert.equal(error.rejection?.category, "permanent_failure");
       assert.equal(error.rejection?.retryable, false);
@@ -267,9 +300,9 @@ test("executeReal: runner failure unregisters a prepared handler and rejects lat
     await call("mark_job_done", done, { completionPhase: "prepare" });
     assert.equal(completionReady(), false);
     throw failure;
-  }, "role", true), error => error === failure);
+  }, "role", true), (error: unknown) => error === failure);
   await assert.rejects(call("mark_job_done", done, { completionPhase: "commit" }),
-    error => error instanceof PlatformRuntimeHandlerError && error.code === "HANDLER_NOT_REGISTERED");
+    (error: unknown) => error instanceof PlatformRuntimeHandlerError && error.code === "HANDLER_NOT_REGISTERED");
   assert.equal(completionReady(), false, "late input cannot open the old completion gate");
 });
 
