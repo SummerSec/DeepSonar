@@ -1,4 +1,5 @@
 import { TaskContractEditor, TaskContractFeedbackView } from "../components/TaskContractEditor";
+import { SnapshotConfigurationNotice } from "../components/SnapshotConfigurationNotice";
 import { parseTaskContractDraft, taskFeedbackItems, type TaskContractFeedback } from "../task-contract-editor";
 import { ApiRequestError } from "../login-error";
 import { AirplaneTakeoff, Archive, ArrowClockwise, ArrowUpRight, Clock, GitMerge, Pause, Play, Plus, Sparkle, Trash, WarningCircle, X } from "@phosphor-icons/react";
@@ -430,6 +431,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
           )}
         </div>
 
+        <SnapshotConfigurationNotice feedback={contractFeedback} projectId={projectId} />
         <div className="mt-6 flex flex-col gap-3 border-t border-white/[.045] pt-4 sm:flex-row sm:items-center">
           <div className={`flex items-center gap-2 text-[11px] ${scheduleIssue ? "text-red-300" : "text-zinc-600"}`}>
             {scheduleIssue ? (

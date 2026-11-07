@@ -1,4 +1,5 @@
 import { TaskContractEditor, TaskContractFeedbackView } from "./TaskContractEditor";
+import { SnapshotConfigurationNotice } from "./SnapshotConfigurationNotice";
 import { parseTaskContractDraft, taskFeedbackItems, type TaskContractFeedback } from "../task-contract-editor";
 import { ApiRequestError } from "../login-error";
 import {
@@ -368,6 +369,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
 
             {operationError && <div className="intent-launch-operation-error" role="alert"><WarningCircle size={16} weight="light" /><div><span>{operationError}</span>{technicalError && <details><summary>技术详情</summary><code>{technicalError}</code></details>}</div></div>}
 
+            <SnapshotConfigurationNotice feedback={contractFeedback} projectId={createdProjectId ?? selectedProject?.id ?? null} />
             <div className="intent-launch-submit-row">
               <div><span className="intent-launch-submit-note"><span className="intent-launch-live-dot" />预检通过后才会创建任务与 Job</span><span className="intent-launch-submit-note">{networkOverrideLabel(networkOverride)}</span></div>
               {createdTaskHref ? <PrimaryButton type="button" onClick={() => navigate(createdTaskHref)}>进入已创建任务</PrimaryButton> : <PrimaryButton type="submit" busy={busy} disabled={!canStart || permissionLoading || Boolean(parsedContract.error)}>{busy ? "检查并进入画布" : <><span>开始任务</span><ArrowRight size={15} weight="light" /></>}</PrimaryButton>}

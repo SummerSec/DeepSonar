@@ -5,6 +5,49 @@ import { normalizeTaskContract, TASK_CONTRACT_TEMPLATE_IDS } from "@deepsonar/sh
 import { parseTaskContractDraft, taskFeedbackItems } from "./task-contract-editor";
 import { quickStartTaskPayload } from "./dashboard-quick-start";
 import { ApiRequestError } from "./login-error";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import { SnapshotConfigurationNotice, snapshotConfigurationFeedback } from "./components/SnapshotConfigurationNotice";
+
+test("#966 creation feedback projects only structured model conflicts and fixed configuration navigation", () => {
+  const body = {
+    error_code: "SNAPSHOT_STALE", stale_fields: ["current_snapshot_unresolvable"],
+    resolution_error: "must-not-render-raw-cause", error: "must-not-render-raw-error",
+    repair: { code: "provider_credential_no_match", path: "model_ref", message: "must-not-render-provider-text",
+      expected: { kind: "project_authorized_model", model_ref: "role-default", sample: ["vendor/model-a", "vendor/model-b"] } },
+  };
+  assert.deepEqual(snapshotConfigurationFeedback(body), {
+    modelConflict: true, requestedModel: "role-default", candidates: ["vendor/model-a", "vendor/model-b"],
+  });
+  const error = new ApiRequestError({ method: "POST", path: "/projects/p/tasks", status: 409, taskContractFeedback: { ...body, task_contract_warnings: [] } });
+  const markup = renderToStaticMarkup(createElement(SnapshotConfigurationNotice, { feedback: error.taskContractFeedback, projectId: "project/a" }));
+  assert.match(markup, /任务未创建/);
+  assert.match(markup, /role-default/);
+  assert.match(markup, /vendor\/model-a/);
+  assert.match(markup, /vendor\/model-b/);
+  assert.match(markup, /href="\/projects\/project%2Fa\/settings\?tab=roles"/);
+  assert.match(markup, /不会自动重试或放宽准入/);
+  assert.doesNotMatch(markup, /must-not-render/);
+  assert.match(markup, /role="alert"/);
+  for (const path of ["./pages/TasksPage.tsx", "./components/IntentLaunchRail.tsx"]) {
+    const source = readFileSync(new URL(path, import.meta.url), "utf8");
+    assert.match(source, /SnapshotConfigurationNotice feedback=\{contractFeedback\} projectId=/);
+  }
+});
+
+test("#966 empty or malformed catalogs never become automatic model selection or expose raw diagnostics", () => {
+  const base = { error_code: "SNAPSHOT_STALE", stale_fields: ["current_snapshot_unresolvable"] };
+  assert.equal(snapshotConfigurationFeedback({}), null);
+  assert.equal(snapshotConfigurationFeedback({ ...base, stale_fields: ["model"] }), null);
+  assert.equal(snapshotConfigurationFeedback({ ...base, error_code: "FORBIDDEN" }), null);
+  assert.deepEqual(snapshotConfigurationFeedback({ ...base, repair: {
+    code: "provider_credential_no_match", path: "model_ref", expected: { kind: "project_authorized_model", model_ref: "https://invalid.example/token", sample: [null, 7, "x\nsecret", "http://invalid.example/key"] },
+  } }), { modelConflict: true, requestedModel: null, candidates: [] });
+  const markup = renderToStaticMarkup(createElement(SnapshotConfigurationNotice, { feedback: { ...base, task_contract_warnings: [] }, projectId: null }));
+  assert.match(markup, /当前运行配置无法解析/);
+  assert.doesNotMatch(markup, /projects\/|默认模型已选择/);
+});
 
 test("omitted and malformed drafts remain distinct; invalid fields are actionable", () => {
   assert.deepEqual(parseTaskContractDraft("  "), { warnings: [] });
