@@ -9,8 +9,17 @@ const PAYLOAD_KEYS = new Set(["text", "delta", "output", "result", "error", "err
 
 /** #944: inline marker pointing at the archived capture of one oversized subtree. */
 export const PI_RPC_REF_FIELD = "$piRef";
-/** #944: per-subtree inline budget once an event is still above the bound after preview. */
+/** #944: per-string inline budget once an event is still above the bound after preview. */
 export const PI_RPC_REF_FIELD_BYTES = 64 * 1024;
+/**
+ * #944: how many elements of one array the inline preview keeps.
+ *
+ * Without this, a `message_end` carrying hundreds of small text blocks stays
+ * above the bound even though every block is already under the per-string
+ * preview limit. Capping keeps the array type (so `piMessageText` still reads
+ * the body) instead of replacing the array with a pointer.
+ */
+export const PI_RPC_PREVIEW_MAX_ELEMENTS = 128;
 /**
  * #944: fields the driver and `decodePi` need in order to keep the event's
  * identity and state transition. They are never replaced by a pointer; if one of
@@ -38,24 +47,24 @@ function referenceOversized(
 ): unknown {
   const { refPath, sha256, budget, refs } = options;
   const pointer = options.pointer ?? "";
-  // Recurse first so the pointer is as deep as possible: a huge tool argument
-  // keeps the rest of its object intact instead of collapsing the whole field.
-  let next: unknown;
+  // Only leaf strings are replaced. Containers must keep their type: the adapter
+  // reads `message.content` as an array and `args`/`result` as objects, so
+  // swapping either for a pointer would drop semantics the event still needs.
+  // Arrays are bounded by `PI_RPC_PREVIEW_MAX_ELEMENTS` in the preview instead.
   if (Array.isArray(value)) {
-    next = value.map((entry, index) =>
+    return value.map((entry, index) =>
       referenceOversized(entry, { refPath, sha256, budget, refs, pointer: `${pointer}/${index}` }));
-  } else if (value && typeof value === "object") {
-    next = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key,
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key,
       referenceOversized(entry, {
         refPath, sha256, budget, refs,
         pointer: `${pointer}/${key.replace(/~/gu, "~0").replace(/\//gu, "~1")}`,
       })]));
-  } else {
-    next = value;
   }
-  if (!pointer || PI_RPC_CONTROL_PATHS.has(pointer)) return next;
-  const size = Buffer.byteLength(JSON.stringify(next) ?? "");
-  if (size <= budget) return next;
+  if (!pointer || PI_RPC_CONTROL_PATHS.has(pointer) || typeof value !== "string") return value;
+  const size = Buffer.byteLength(value);
+  if (size <= budget) return value;
   refs.push({ pointer, bytes: size });
   return { [PI_RPC_REF_FIELD]: refPath, pointer, sha256, bytes: size };
 }
@@ -72,7 +81,15 @@ function project(value: unknown, secrets: readonly string[], preview: boolean, k
     while ((buffer[end]! & 0xc0) === 0x80) end--;
     return buffer.subarray(0, end).toString("utf8") + "\n[TRUNCATED: full redacted RPC event in runtime.diagnostic path]";
   }
-  if (Array.isArray(value)) return value.map((entry) => project(entry, secrets, preview, key, depth + 1));
+  if (Array.isArray(value)) {
+    const mapped = value.map((entry) => project(entry, secrets, preview, key, depth + 1));
+    if (!preview || mapped.length <= PI_RPC_PREVIEW_MAX_ELEMENTS) return mapped;
+    // Keep the array type: the adapter reads `message.content` structurally, so
+    // replacing it would drop the final body. The marker carries no `text`, so
+    // `piMessageText` skips it, and the full array stays in the archive.
+    return [...mapped.slice(0, PI_RPC_PREVIEW_MAX_ELEMENTS),
+      { type: "truncated", omitted: mapped.length - PI_RPC_PREVIEW_MAX_ELEMENTS }];
+  }
   if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([k, v]) => [
     project(k, secrets, false), project(v, secrets, preview, k, depth + 1),
   ]));
