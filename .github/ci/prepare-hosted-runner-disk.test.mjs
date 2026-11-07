@@ -332,7 +332,8 @@ const acceptanceJobs = {
 for (const [name, acceptanceMarkers] of Object.entries(acceptanceJobs)) {
   test(`${name} prepares disk exactly once before its installs, builds and acceptance`, () => {
     const job = reverseJob(name);
-    assert.match(job, /needs: plan\n/);
+    // #976: consumers also wait for the optional shared base artifact.
+    assert.match(job, /needs: \[plan, reverse-base\]\n/);
     assert.match(job, /fail-fast: false/);
     assert.match(job, /arch: amd64\n\s+platform: linux\/amd64\n\s+runner: ubuntu-24\.04\n/);
     assert.match(job, /arch: arm64\n\s+platform: linux\/arm64\n\s+runner: ubuntu-24\.04-arm\n/);
@@ -359,7 +360,7 @@ for (const [name, acceptanceMarkers] of Object.entries(acceptanceJobs)) {
   });
 }
 
-test("native acceptance summary requires every independent matrix to succeed", () => {
+test("native acceptance summary requires every planned matrix to succeed", () => {
   const job = reverseJob("reverse-runtime-acceptance");
   assert.match(job, /needs: \[plan, reverse-runtime-images, claude-budget-acceptance, pi-om-acceptance\]/);
   assert.match(job, /if: always\(\) && \(needs\.plan\.result != 'success' \|\| needs\.plan\.outputs\.mode == 'ready-full'\)/);
@@ -369,8 +370,15 @@ test("native acceptance summary requires every independent matrix to succeed", (
     ["CLAUDE", "claude-budget-acceptance"], ["PI_OM", "pi-om-acceptance"],
   ]) {
     assert.ok(job.includes(`${variable}_RESULT: ` + "${{ needs." + dependency + ".result }}"));
-    assert.ok(job.includes(`test "$${variable}_RESULT" = success`));
   }
+  // #976: the summary verifies each planned suite instead of blindly requiring
+  // every matrix, and an unplanned suite that ran is still a failure.
+  assert.ok(job.includes("PLANNED_SUITES: " + "${{ needs.plan.outputs.reverse_suites }}"));
+  assert.ok(job.includes('[ "$PLAN_RESULT" = success ]'));
+  for (const suite of ["reverse", "claude", "pi-om"]) {
+    assert.ok(job.includes(`$(planned ${suite})`), `the summary must gate ${suite} on the plan`);
+  }
+  assert.match(job, /ran even though the run plan skipped it/);
 });
 
 test("Reverse PR and main path filters include disk preparation and its safety regressions", () => {
@@ -392,6 +400,8 @@ test("Reverse PR and main path filters include disk preparation and its safety r
     "apps/scheduler/src/integration-pool-teardown.test.mjs",
     "agent-harness/runtime-image-cache-policy.test.mjs",
     "agent-harness/gate-shards.test.mjs",
+    "agent-harness/reverse-base-identity.test.mjs",
+    "agent-harness/reverse-suite-plan.test.mjs",
   ]) {
     assert.ok(docsJob.includes(file), `disk safety and wiring regressions must run even on Draft PRs: missing ${file}`);
   }

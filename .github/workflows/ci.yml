@@ -99,7 +99,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # #971/#972/#973/#974：纯 Node 契约回归，无数据库、无 pnpm 依赖，与清盘安全单测同批。
+      # #971/#972/#973/#974/#975/#976：纯 Node 契约回归，无数据库、无 pnpm 依赖，与清盘安全单测同批。
       # 每个新测试的入口必须在此显式列出，否则加了文件也不会被门禁执行。
       - name: perf(ci) contract regressions and hosted runner disk safety
         run: |
@@ -107,7 +107,9 @@ jobs:
             .github/ci/prepare-hosted-runner-disk.test.mjs \
             apps/scheduler/src/integration-pool-teardown.test.mjs \
             agent-harness/runtime-image-cache-policy.test.mjs \
-            agent-harness/gate-shards.test.mjs
+            agent-harness/gate-shards.test.mjs \
+            agent-harness/reverse-base-identity.test.mjs \
+            agent-harness/reverse-suite-plan.test.mjs
 
       - uses: pnpm/action-setup@v4
 

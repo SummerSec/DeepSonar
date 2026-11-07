@@ -111,6 +111,10 @@ jobs:
     outputs:
       mode: ${{ steps.plan.outputs.mode }}
       reasons: ${{ steps.plan.outputs.reasons }}
+      plan_status: ${{ steps.plan.outputs.plan_status }}
+      # #976: comma-separated Reverse-family suites this run must execute
+      # (reverse / claude / pi-om). Empty means the plan proved none apply.
+      reverse_suites: ${{ steps.plan.outputs.reverse_suites }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -140,7 +144,7 @@ jobs:
   # consumer re-verifies after `docker load`.
   reverse-base:
     needs: plan
-    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full' && vars.REVERSE_BASE_REUSE == 'on'
+    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full' && vars.REVERSE_BASE_REUSE == 'on' && needs.plan.outputs.reverse_suites != ''
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -191,7 +195,7 @@ jobs:
 
   reverse-runtime-images:
     needs: [plan, reverse-base]
-    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full'
+    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full' && contains(format(',{0},', needs.plan.outputs.reverse_suites), ',reverse,')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -338,7 +342,7 @@ jobs:
 
   claude-budget-acceptance:
     needs: [plan, reverse-base]
-    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full'
+    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full' && contains(format(',{0},', needs.plan.outputs.reverse_suites), ',claude,')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     strategy:
@@ -405,7 +409,7 @@ jobs:
 
   pi-om-acceptance:
     needs: [plan, reverse-base]
-    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full'
+    if: always() && !cancelled() && needs.plan.outputs.mode == 'ready-full' && contains(format(',{0},', needs.plan.outputs.reverse_suites), ',pi-om,')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     strategy:
@@ -523,17 +527,61 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every native acceptance matrix
+      - name: Require every planned native acceptance matrix
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_STATUS: ${{ needs.plan.outputs.plan_status }}
+          PLANNED_SUITES: ${{ needs.plan.outputs.reverse_suites }}
           REVERSE_RESULT: ${{ needs.reverse-runtime-images.result }}
           CLAUDE_RESULT: ${{ needs.claude-budget-acceptance.result }}
           PI_OM_RESULT: ${{ needs.pi-om-acceptance.result }}
         run: |
+          set -euo pipefail
+          fail() { echo "::error::$1"; exit 1; }
+
           printf '### Native runtime acceptance\n\n| Check | Result |\n| --- | --- |\n| Plan | %s |\n| Reverse/REA | %s |\n| Claude | %s |\n| Pi/OM | %s |\n' \
             "$PLAN_RESULT" "$REVERSE_RESULT" "$CLAUDE_RESULT" "$PI_OM_RESULT" >> "$GITHUB_STEP_SUMMARY"
-          # base 复用开启时由各消费者在 load 后校验 SHA/架构/平台/工具集标签，缺失或不匹配即该 job 失败，acceptance 逐 job 要求 success 已覆盖。
-          test "$PLAN_RESULT" = success
-          test "$REVERSE_RESULT" = success
-          test "$CLAUDE_RESULT" = success
-          test "$PI_OM_RESULT" = success
+
+          [ "$PLAN_RESULT" = success ] || fail "reverse run plan did not succeed: $PLAN_RESULT"
+          [ "$PLAN_STATUS" = ok ] || fail "reverse run plan status is not ok: ${PLAN_STATUS:-<empty>}"
+
+          # #976: 只有计划中的专项才允许运行。计划外的 skipped 才是合法跳过；
+          # 失败/取消/超时永远不能放行，计划内缺跑同样拒绝。不能只看聚合结果。
+          KNOWN_SUITES="reverse claude pi-om"
+          KNOWN_RESULTS="success failure cancelled skipped timed_out action_required neutral"
+          for suite in ${PLANNED_SUITES//,/ }; do
+            case " $KNOWN_SUITES " in
+              *" $suite "*) ;;
+              *) fail "unknown suite in the run plan: $suite" ;;
+            esac
+          done
+
+          check_suite() {
+            local name="$1" planned="$2" result="$3"
+            case " $KNOWN_RESULTS " in
+              *" $result "*) ;;
+              *) fail "unknown result value for $name: ${result:-<empty>}" ;;
+            esac
+            case "$result" in
+              failure|cancelled|timed_out|action_required) fail "$name did not complete cleanly: $result" ;;
+            esac
+            if [ "$planned" = "true" ]; then
+              [ "$result" = success ] || fail "$name is required by the run plan but got: $result"
+            else
+              [ "$result" = skipped ] || fail "$name ran even though the run plan skipped it: $result"
+            fi
+          }
+
+          planned() {
+            case ",$PLANNED_SUITES," in
+              *",$1,"*) printf 'true' ;;
+              *) printf 'false' ;;
+            esac
+          }
+
+          # base 复用开启时由各消费者在 load 后校验 SHA/架构/平台/工具集标签，缺失或不匹配即该 job 失败，这里的逐项 success 已覆盖。
+          check_suite reverse/REA "$(planned reverse)" "$REVERSE_RESULT"
+          check_suite claude "$(planned claude)" "$CLAUDE_RESULT"
+          check_suite pi-om "$(planned pi-om)" "$PI_OM_RESULT"
+
+          echo "reverse acceptance: planned=[$PLANNED_SUITES]; every planned suite succeeded, every unplanned suite stayed skipped"

@@ -203,7 +203,9 @@ test("every specialist workflow gates its heavy matrix on the same run plan", ()
         assert.equal(job.strategy, undefined, "the summary must not start another heavy matrix");
         assert.equal(job.services, undefined, "the summary must not start services");
         assert.equal(job["continue-on-error"], undefined);
-        const step = job.steps.find((candidate) => candidate.name === "Require every native acceptance matrix");
+        // #976: the summary verifies each planned suite instead of blindly
+        // requiring every matrix, so the step and its assertions moved.
+        const step = job.steps.find((candidate) => candidate.name === "Require every planned native acceptance matrix");
         assert.ok(step, "the summary must verify all dependency results");
         assert.equal(step["continue-on-error"], undefined);
         for (const [variable, dependency] of [
@@ -211,11 +213,17 @@ test("every specialist workflow gates its heavy matrix on the same run plan", ()
           ["CLAUDE", "claude-budget-acceptance"], ["PI_OM", "pi-om-acceptance"],
         ]) {
           assert.equal(step.env[`${variable}_RESULT`], "${{ needs." + dependency + ".result }}");
-          assert.ok(step.run.includes(`test "$${variable}_RESULT" = success`), "skips and failures cannot satisfy the summary");
         }
+        assert.equal(step.env.PLANNED_SUITES, "${{ needs.plan.outputs.reverse_suites }}");
+        for (const suite of ["reverse", "claude", "pi-om"]) {
+          assert.ok(step.run.includes(`$(planned ${suite})`), `the summary must gate ${suite} on the plan`);
+        }
+        assert.ok(step.run.includes('[ "$PLAN_RESULT" = success ]'), "a failed plan cannot satisfy the summary");
         continue;
       }
-      assert.deepEqual(job.needs, "plan", `${suite}/${id} must depend on the plan`);
+      // #976: Reverse jobs also wait for the optional shared base artifact.
+      const needs = [job.needs].flat();
+      assert.ok(needs.includes("plan"), `${suite}/${id} must depend on the plan`);
       assert.match(job.if, /needs\.plan\.outputs\.mode == 'ready-full'/, `${suite}/${id} must skip on Draft`);
     }
     // #836 review (P1): a same-SHA Draft -> Ready transition must re-plan and run
@@ -395,4 +403,42 @@ test("#961 ci.yml wires the Chrome Fuzz ARM gate to the run plan", () => {
   assert.match(workflow, /check_planned chrome-fuzz-arm64/u);
   // 失败/取消必须在 check_planned 里先被拒绝，不能被「计划说可跳过」吞掉。
   assert.match(workflow, /failure\|cancelled\) fail "\$name did not complete cleanly/u);
+});
+
+// #976: the run plan now carries the Reverse-family sub-suite decision, and the
+// package.json field-level check is what allows an independent test script to
+// avoid the three heavy native matrices.
+test("#976 the run plan carries a fail-closed Reverse sub-suite decision", () => {
+  const diff = (...records) => Buffer.from(records.flat().join("\0") + "\0", "utf8");
+  const record = (status, path) => [status, path];
+  const base = { ...pr, suitePaths: SUITE_PATHS };
+
+  const shared = buildRunPlan({ ...base, diffBytes: diff(record("M", "packages/runtime-sandbox/src/a.ts")) });
+  assert.deepEqual(shared.reverseSuites, ["reverse", "claude", "pi-om"], "a shared base input keeps every suite");
+
+  const claudeOnly = buildRunPlan({ ...base, diffBytes: diff(record("M", "agent-harness/run-claude-budget-isolated.mjs")) });
+  assert.deepEqual(claudeOnly.reverseSuites, ["claude"]);
+
+  const docs = buildRunPlan({ ...base, diffBytes: diff(record("M", "docs/README.md")) });
+  assert.deepEqual(docs.reverseSuites, []);
+
+  // package.json alone: readable and purely additive => nothing heavy.
+  const packageJsonBase = JSON.stringify({ scripts: { "ci:unit:x": "node --test a.test.mjs" } });
+  const packageJsonHead = JSON.stringify({
+    scripts: {
+      "ci:unit:x": "node --test a.test.mjs",
+      "ci:unit:runtime-timing": "node --test agent-harness/runtime-build-timing.test.mjs",
+    },
+  });
+  const independent = buildRunPlan({
+    ...base,
+    diffBytes: diff(record("M", "package.json")),
+    packageJsonBase,
+    packageJsonHead,
+  });
+  assert.deepEqual(independent.reverseSuites, [], "an independent added test script must not start the heavy matrices");
+
+  // Same diff without readable contents must keep every suite (fail closed).
+  const unknown = buildRunPlan({ ...base, diffBytes: diff(record("M", "package.json")) });
+  assert.deepEqual(unknown.reverseSuites, ["reverse", "claude", "pi-om"]);
 });

@@ -136,6 +136,10 @@ pnpm ci:images
 
 **#972 起 `gate` 已拆为 4 个有界并行分片**：`gate-contract`（无服务单测/契约，不声明 `services.postgres`）、`gate-db-core` / `gate-db-domain`（各自独立 PostgreSQL 服务与库）、`gate-e2e`（scheduler 3100/3101 与同库 setval 竞态相关的启动/端到端冒烟必须同片）。每片独立 `needs: changes`、独立 `install`/`typecheck`/`build` 生命周期，不复用跨提交结果；`ci-summary` 用 `EXPECTED_GATE_SHARDS` 显式期望矩阵逐片要求 `success`，缺片/取消/超时/失败一律拒绝。完整套件清单与归属以 `agent-harness/gate-shards.mjs` 及 `agent-harness/gate-shards.test.mjs` 的覆盖率断言为准（每个原套件恰好覆盖一次），改 gate 步骤必须同步更新该清单。#971/#972/#973/#974 的纯 Node 契约回归统一在 `docs-freshness` job 的 `perf(ci) contract regressions and hosted runner disk safety` step 显式列出，新增测试文件必须同步加到该 step 才会被门禁执行。
 
+**#976 起 Reverse 家族按子套件分流**：`agent-harness/reverse-suite-plan.mjs` 把 Reverse workflow 的宽 `pull_request.paths` 拆成 `reverse` / `claude` / `pi-om` 三份显式依赖清单，外加 shared（共享 base、lockfile、runtime-sandbox、沙箱启动器）与 routing（本模块、`ci-run-plan.mjs`、`classify-ci-changes.mjs`、workflow 自身）两组保守输入。`ci-run-plan.mjs` 输出 `reverse_suites`，三个重活 job 各自按计划决定是否启动；`reverse-runtime-acceptance` 逐项核对计划与实际：计划内必须 `success`，计划外必须 `skipped`，失败/取消/超时永远拒绝。`package.json` 只做字段级安全分类——仅「新增且不被三个专项消费、命令含 `--test`、名字为 `ci:unit:*`」的脚本可判无影响；依赖、lockfile、脚本删改、删除/改名、解析失败、缺 SHA 一律全跑。
+
+**#975 的 Reverse base 复用默认关闭**：`vars.REVERSE_BASE_REUSE=on` 时才启用「每架构只构建一次当前 checkout 的 base、按不可变 SHA/架构/平台/工具集标签共享 artifact」，消费者 `docker load` 后必须校验标签；未开启时保持原来每个 job 各自构建的路径，零行为变化。
+
 ## PR 的 Draft / Ready 分层（#836）
 
 `ci.yml` 按当前 PR 状态出运行计划（`agent-harness/ci-run-plan.mjs`），只有同一个分类器，不另造第二套判断：

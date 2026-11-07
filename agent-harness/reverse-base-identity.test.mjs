@@ -268,13 +268,19 @@ test("consumers keep consuming the mutable tag they always consumed", () => {
   assert.match(jobBlock(text, "claude-budget-acceptance"), /CLAUDE_BUDGET_IMAGE: deepsonar-base:reverse-ci/);
 });
 
-test("acceptance keeps its four original assertions and needs", () => {
+test("acceptance keeps its four dependency results and per-suite verdicts", () => {
   const text = workflowText();
   const block = jobBlock(text, "reverse-runtime-acceptance");
   assert.match(block, /needs: \[plan, reverse-runtime-images, claude-budget-acceptance, pi-om-acceptance\]/);
+  // #976: each planned suite is judged individually; a skipped planned suite or
+  // a suite that ran while unplanned still fails the summary.
   for (const result of ["PLAN_RESULT", "REVERSE_RESULT", "CLAUDE_RESULT", "PI_OM_RESULT"]) {
-    assert.match(block, new RegExp(`test "\\$${result}" = success`));
+    assert.ok(block.includes(`${result}: `), `${result} must stay wired`);
   }
+  for (const suite of ["reverse", "claude", "pi-om"]) {
+    assert.ok(block.includes(`$(planned ${suite})`), `${suite} must be gated on the plan`);
+  }
+  assert.ok(block.includes('[ "$PLAN_RESULT" = success ]'));
   assert.match(block, /base 复用开启时由各消费者在 load 后校验/);
 });
 
