@@ -1,4 +1,6 @@
 import { readRepairTokenBudget, assertRepairExecutionOwner } from "./domains/event-ingestion/repair-token-budget.js";
+import { frozenGatewayRequestBudget, GatewayRequestBudgetError } from "./gateway-request-policy.js";
+import { recordGatewaySnapshotNoStart } from "./gateway-snapshot-no-start.js";
 import { frozenTaskContract, taskContractPreflight, TaskContractBlockedError } from "./task-contract-preflight.js";
 import {tickKnowledgeBeforeDispatch} from "./dispatcher-knowledge-gate.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
@@ -1005,6 +1007,17 @@ async function runJob(jobId: string) {
     const useReal = config.runtime.agentMode === "real" && (await isRealType(job.type as string));
     const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
+    // First pre-call checkpoint: establish durable no-start authority before any
+    // runtime IO. The failed admission never starts an Agent or guesses a budget.
+    if (useReal) {
+      try { frozenGatewayRequestBudget(snapshot); }
+      catch (error) {
+        if (error instanceof GatewayRequestBudgetError && error.missing_fields.length) {
+          await recordGatewaySnapshotNoStart(sql, { jobId, attemptId, snapshot });
+        }
+        throw error;
+      }
+    }
     assertFrozenCliCapabilities(snapshot);
     // Fail closed before sandbox provision when a Pi catalog id cannot be
     // mapped to one authenticated models.json route.

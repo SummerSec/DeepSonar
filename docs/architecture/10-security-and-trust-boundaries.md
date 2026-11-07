@@ -5,6 +5,8 @@
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
+#943 的[可信显式补冻](../AGENT_REPAIR_LIFECYCLE.md#缺损快照的可信显式恢复943)只信内核完整预算回执或 Dispatcher 持久执行前证明；失败状态、缺 token/回执、没有 sandbox ID 和模型声明均不是 no-start authority。Job/全部 Attempt 锁阻止旧效果写入竞态，完整历史核查及当前授权/预算/效果门先于任何入队；无可信证明或未知效果继续拒绝，普通执行/resume 不回退当前配置。源码已接线，最终 SHA Actions 待验。
+
 ## 信任边界图
 
 ```mermaid

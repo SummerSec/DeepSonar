@@ -65,6 +65,19 @@ test("budget snapshot diagnostics name fields without inventing a safe refreeze 
   ]) assert.equal(classifyJobRerunError(error, "p").message, error.message);
 });
 
+test("refreeze feedback offers current rerun only after host proof, never on missing history", () => {
+  const missing_fields = ["agent_snapshot_json.runtime_knobs"];
+  const admitted = classifyJobRerunError(stale({ missing_fields, next_action: "rerun-current" }, 409, "GATEWAY_REQUEST_BUDGET_INVALID"), "p");
+  assert.match(admitted.message, /可明确选择按当前配置重跑/);
+  assert.match(admitted.message, /保留历史额度和执行记录/);
+  assert.match(admitted.message, /不会自动重跑/);
+  assert.equal(admitted.repair, null);
+  const blocked = classifyJobRerunError(stale({ missing_fields, next_action: "inspect-job-recovery" }, 409, "GATEWAY_REQUEST_BUDGET_HISTORY_MISSING"), "p");
+  assert.match(blocked.message, /缺少可信的完整预算回执或宿主执行前证明/);
+  assert.doesNotMatch(blocked.message, /可明确选择按当前配置重跑/);
+  assert.equal(blocked.repair, null);
+});
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;

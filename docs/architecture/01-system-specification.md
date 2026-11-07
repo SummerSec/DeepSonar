@@ -157,7 +157,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **决策来源**：执行结果要能按当时的权限、镜像和配置重放审计。
 - **实现状态**：as-built；快照身份和 schema 版本进入 `agent_snapshot_json`；目标 grant 只从 Scheduler 的可信输入或系统审计继承，调用方同名字段不会成为 authority。Pi 观测记忆的独立实现与未验收范围见 FR-CAP-009。
 - **代码入口**：[运行时快照应用](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[Provider freeze](../../apps/scheduler/src/domains/provider-adapter/freeze.ts)、[Agent profile](../../apps/scheduler/src/agent-runtime-profile.ts)、[共享完整冻结](../../apps/scheduler/src/job-runtime-freeze.ts)。
-- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:credential-compatibility`；人工在创建后修改角色并核对执行输入不变。#943/#948 补齐 retry/自动 Hub/Verify/补证/Report 的完整冻结，HTTP 创建与恢复拒绝回归复用 `pnpm ci:integration:recovery` / `pnpm ci:integration:platform-api`；最终 SHA Actions 待验，历史缺损快照的可信补冻恢复尚未交付。
+- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:credential-compatibility`；人工在创建后修改角色并核对执行输入不变。#943/#948 补齐 retry/自动 Hub/Verify/补证/Report 的完整冻结，HTTP 创建与恢复拒绝回归复用 `pnpm ci:integration:recovery` / `pnpm ci:integration:platform-api`；#943 补齐[可信显式恢复](../AGENT_REPAIR_LIFECYCLE.md#缺损快照的可信显式恢复943)：完整内核预算回执或宿主持久执行前证明/完整空历史才允许重新准入当前配置，保留历史有限上限、用量和 Attempt；普通 resume 不替换旧快照，不可证明历史及未知效果仍拒绝。HTTP 恢复后实际领取/Gateway mint 和无变更负例已接既有 recovery 入口；最终 SHA Actions 待验。
 
 ### FR-JOB-010 Claim、并发和 Lease
 

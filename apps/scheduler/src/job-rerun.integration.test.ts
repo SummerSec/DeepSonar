@@ -178,7 +178,7 @@ if (!testDatabaseUrl) {
       for (const action of ["resume", "rerun-current"] as const) {
         const denied = await post(String(unfrozenJob.id), action);
         assert.equal(denied.statusCode, 409, denied.payload);
-        assert.equal(denied.json().error_code, "GATEWAY_REQUEST_BUDGET_INVALID");
+        assert.equal(denied.json().error_code, action === "resume" ? "GATEWAY_REQUEST_BUDGET_INVALID" : "GATEWAY_REQUEST_BUDGET_HISTORY_MISSING");
         assert.deepEqual(denied.json().missing_fields, ["agent_snapshot_json.runtime_knobs"]);
         assert.equal(denied.json().next_action, "inspect-job-recovery");
         assert.deepEqual([...await sql`SELECT * FROM jobs WHERE id=${String(unfrozenJob.id)}`], beforeUnfrozen);
@@ -187,6 +187,167 @@ if (!testDatabaseUrl) {
           assert.equal(count.n, 0, `${action}: ${table} must not gain guessed history`);
         }
       }
+
+      const budgetModule = await import("./gateway-request-policy.js");
+      const noStartModule = await import("./gateway-snapshot-no-start.js");
+      const gatewayModule = await import("./gateway.js");
+      const recoveryState = async (jobId: string) => {
+        const state: Record<string, unknown> = {};
+        for (const table of ["jobs", "job_attempts", "job_attempt_effects", "job_tokens", "job_capability_tokens",
+          "events", "event_dedup", "job_usage_ledger", "canvas_nodes"] as const) {
+          state[table] = [...await sql`SELECT * FROM ${sql(table)} WHERE ${sql(table === "jobs" ? "id" : "job_id")}=${jobId}`];
+        }
+        return state;
+      };
+      // Exercise the real dispatch checkpoint, not only its SQL seam. The
+      // existing fake runner is fenced by a sentinel: no sandbox/model IO may run.
+      const checkpointCanvas = `checkpoint-${randomUUID()}`;
+      await sql`INSERT INTO canvases(id,project_id,title,target_json)
+        VALUES(${checkpointCanvas},${projectId},'checkpoint fixture',${sql.json({ network_policy: { allow_egress: false } })})`;
+      const checkpointJob = await insertJob({ canvas: checkpointCanvas, status: "pending", snapshot: unfrozenSnapshot });
+      const checkpointId = String(checkpointJob.id);
+      await sql`UPDATE jobs SET started_at=NULL,finished_at=NULL,error=NULL WHERE id=${checkpointId}`;
+      const { config } = await import("./config.js");
+      const { runner } = await import("./runtime.js");
+      const previousMode = config.runtime.agentMode, previousProvision = runner.provision;
+      let provisionCalls = 0;
+      config.runtime.agentMode = "real";
+      runner.provision = async () => { provisionCalls += 1; throw new Error("preflight must fence runtime IO"); };
+      try {
+        assert.equal(await dispatcherModule.dispatchOnce(), 1);
+        await dispatcherModule.drainInFlight();
+      } finally {
+        config.runtime.agentMode = previousMode;
+        runner.provision = previousProvision;
+      }
+      assert.equal(provisionCalls, 0);
+      const [checkpointState] = await sql`SELECT status,error,agent_snapshot_json FROM jobs WHERE id=${checkpointId}`;
+      assert.equal(checkpointState.status, "failed", String(checkpointState.error));
+      assert.match(String(checkpointState.error), /runtime_knobs/);
+      const checkpointReceipts = [...await sql`SELECT payload_json FROM events WHERE job_id=${checkpointId}
+        AND payload_json->>'operation'='gateway_snapshot_preflight'`];
+      assert.equal(checkpointReceipts.length, 1);
+      assert.equal(checkpointReceipts[0].payload_json.status, "not_started");
+      assert.ok(await noStartModule.hasGatewaySnapshotNoStartProof(sql, checkpointId, checkpointState.agent_snapshot_json));
+      await sql`UPDATE jobs SET status='cancelled' WHERE canvas_id=${checkpointCanvas} AND status='pending'`;
+
+      const firstPreflightFailure = async () => {
+        const job = await insertJob({ status: "claimed", snapshot: unfrozenSnapshot });
+        const id = String(job.id);
+        await sql`UPDATE jobs SET started_at=NULL,finished_at=NULL,error=NULL WHERE id=${id}`;
+        const attempt = await attemptModule.createAttempt(sql, id, attemptIdentity(baselineSnapshot));
+        const [frozen] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${id}`;
+        assert.throws(() => budgetModule.frozenGatewayRequestBudget(frozen.agent_snapshot_json), /runtime_knobs/);
+        await noStartModule.recordGatewaySnapshotNoStart(sql, { jobId: id, attemptId: String(attempt.id), snapshot: frozen.agent_snapshot_json });
+        await noStartModule.recordGatewaySnapshotNoStart(sql, { jobId: id, attemptId: String(attempt.id), snapshot: frozen.agent_snapshot_json });
+        await sql.begin(async rawTx => {
+          const tx = rawTx as unknown as typeof sql;
+          await coreModule.lockCanvasForConvergence(tx, canvasId);
+          await tx`SELECT id FROM jobs WHERE id=${id} FOR UPDATE`;
+          await tx`UPDATE jobs SET status='failed',error='snapshot preflight fixture',finished_at=now() WHERE id=${id}`;
+          await attemptModule.settleAttemptTerminal(tx, id, "failed", { reason: "snapshot_preflight" });
+        });
+        return { id, attemptId: String(attempt.id) };
+      };
+
+      // Real production checkpoint helper -> HTTP feedback -> explicit rerun ->
+      // production claim/Attempt -> production Gateway mint; no upstream request.
+      const proved = await firstPreflightFailure();
+      const provedBefore = await recoveryState(proved.id);
+      const diagnosed = await post(proved.id, "resume");
+      assert.equal(diagnosed.statusCode, 409, diagnosed.payload);
+      assert.equal(diagnosed.json().error_code, "GATEWAY_REQUEST_BUDGET_INVALID");
+      assert.equal(diagnosed.json().next_action, "rerun-current");
+      assert.deepEqual(await recoveryState(proved.id), provedBefore);
+      const recovered = await post(proved.id, "rerun-current");
+      assert.equal(recovered.statusCode, 200, recovered.payload);
+      const [refrozen] = await sql`SELECT * FROM jobs WHERE id=${proved.id}`;
+      assert.equal(refrozen.status, "pending");
+      assert.ok(refrozen.agent_snapshot_json.runtime_knobs);
+      assert.deepEqual([...await sql`SELECT * FROM job_attempts WHERE job_id=${proved.id}`], provedBefore.job_attempts);
+      const [proofCount] = await sql`SELECT count(*)::int AS n FROM events WHERE job_id=${proved.id}
+        AND payload_json->>'operation'='gateway_snapshot_preflight'`;
+      assert.equal(proofCount.n, 1, "duplicate checkpoint must not append a second authority");
+      const repeatedBefore = await recoveryState(proved.id);
+      assert.equal((await post(proved.id, "rerun-current")).statusCode, 409);
+      assert.deepEqual(await recoveryState(proved.id), repeatedBefore);
+      const claims = await dispatcherModule.claimPendingJobs();
+      assert.ok(claims.some(row => row.id === proved.id));
+      const attemptsAfterClaim = [...await sql`SELECT * FROM job_attempts WHERE job_id=${proved.id} ORDER BY attempt_no`];
+      assert.equal(attemptsAfterClaim.length, 2);
+      assert.deepEqual(attemptsAfterClaim[0], (provedBefore.job_attempts as unknown[])[0]);
+      const minted = await gatewayModule.mintJobToken({ jobId: proved.id, projectId,
+        credentialId: String(refrozen.agent_snapshot_json.credential_id) });
+      assert.ok(minted.id, "new production Gateway preparation must not fail again on missing knobs");
+      await sql.begin(async rawTx => {
+        const tx = rawTx as unknown as typeof sql;
+        await coreModule.lockCanvasForConvergence(tx, canvasId);
+        await tx`SELECT id FROM jobs WHERE id=${proved.id} FOR UPDATE`;
+        await tx`UPDATE jobs SET status='failed',error='fixture closed without upstream IO' WHERE id=${proved.id}`;
+        await attemptModule.settleAttemptTerminal(tx, proved.id, "failed", { fixture: "no upstream IO" });
+      });
+      await gatewayModule.revokeJobTokens(proved.id, "fixture closed");
+
+      // The durable witness is not reusable after altered identity, new Attempts,
+      // model grants, or even a planned/unknown external effect appears.
+      for (const corruption of ["snapshot", "authority", "attempt", "effect_pending", "unknown"] as const) {
+        const fixture = await firstPreflightFailure();
+        if (corruption === "snapshot") {
+          await sql`UPDATE jobs SET agent_snapshot_json=agent_snapshot_json || ${sql.json({ module_content_hash: "changed-after-proof" })} WHERE id=${fixture.id}`;
+        } else if (corruption === "authority") {
+          await sql`UPDATE events SET payload_json=payload_json || ${sql.json({ authority: "agent" })}
+            WHERE job_id=${fixture.id} AND payload_json->>'operation'='gateway_snapshot_preflight'`;
+        } else if (corruption === "attempt") {
+          await attemptModule.createAttempt(sql, fixture.id, attemptIdentity(baselineSnapshot));
+          await attemptModule.settleAttemptTerminal(sql, fixture.id, "failed", { fixture: "unattested generation" });
+        } else {
+          await sql`INSERT INTO job_attempt_effects(job_id,attempt_id,effect_id,effect_kind,status)
+            VALUES(${fixture.id},${fixture.attemptId},${randomUUID()},'provision',${corruption})`;
+        }
+        const before = await recoveryState(fixture.id);
+        const denied = await post(fixture.id, "rerun-current");
+        assert.equal(denied.statusCode, 409, denied.payload);
+        assert.equal(denied.json().error_code, "GATEWAY_REQUEST_BUDGET_HISTORY_MISSING");
+        assert.equal(denied.json().next_action, "inspect-job-recovery");
+        assert.deepEqual(await recoveryState(fixture.id), before, `${corruption}: refusal must not alter history or expose pending`);
+      }
+
+      // A valid immutable policy receipt is independent authority even if the old
+      // runtime knobs become incomplete. The newly unlimited current config must
+      // retain the original finite ceiling and every original receipt/Attempt.
+      const finiteSnapshot = { ...baselineSnapshot, runtime_knobs: { ...baselineSnapshot.runtime_knobs, job_token_max_requests: 6 } };
+      const receiptJob = await insertJob({ status: "failed", snapshot: finiteSnapshot });
+      const receiptId = String(receiptJob.id);
+      await attemptModule.createAttempt(sql, receiptId, attemptIdentity(finiteSnapshot));
+      await attemptModule.settleAttemptTerminal(sql, receiptId, "failed", { fixture: "historical policy" });
+      await sql.begin(async rawTx => {
+        const tx = rawTx as unknown as typeof sql;
+        await coreModule.lockCanvasForConvergence(tx, canvasId);
+        const [job] = await tx`SELECT agent_snapshot_json FROM jobs WHERE id=${receiptId} FOR UPDATE`;
+        await budgetModule.ensureGatewayRequestBudget(tx, receiptId, job.agent_snapshot_json);
+      });
+      await sql`UPDATE jobs SET agent_snapshot_json=agent_snapshot_json-'runtime_knobs' WHERE id=${receiptId}`;
+      const historicalBefore = await recoveryState(receiptId);
+      assert.equal((await post(receiptId, "resume")).json().next_action, "rerun-current");
+      const receiptRecovered = await post(receiptId, "rerun-current");
+      assert.equal(receiptRecovered.statusCode, 200, receiptRecovered.payload);
+      const [receiptFrozen] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${receiptId}`;
+      assert.equal((await budgetModule.inspectGatewayRequestBudget(sql, receiptId, receiptFrozen.agent_snapshot_json)).total_requests, 6);
+      assert.deepEqual([...await sql`SELECT * FROM job_attempts WHERE job_id=${receiptId}`], historicalBefore.job_attempts);
+      assert.deepEqual([...await sql`SELECT * FROM events WHERE job_id=${receiptId}`], historicalBefore.events);
+      const historicToken = await gatewayModule.mintJobToken({ jobId: receiptId, projectId,
+        credentialId: String(receiptFrozen.agent_snapshot_json.credential_id), maxRequests: 99 });
+      const [limitedToken] = await sql`SELECT max_requests,request_total_limit FROM job_tokens WHERE id=${historicToken.id}`;
+      assert.equal(limitedToken.max_requests, 6);
+      assert.equal(limitedToken.request_total_limit, 6);
+      await sql`UPDATE job_tokens SET used_requests=6 WHERE id=${historicToken.id}`;
+      await gatewayModule.revokeJobTokens(receiptId, "exhausted historical fixture");
+      await sql`UPDATE jobs SET status='failed',agent_snapshot_json=agent_snapshot_json-'runtime_knobs' WHERE id=${receiptId}`;
+      const exhaustedBefore = await recoveryState(receiptId);
+      const exhausted = await post(receiptId, "rerun-current");
+      assert.equal(exhausted.statusCode, 409, exhausted.payload);
+      assert.equal(exhausted.json().error_code, "REPAIR_REQUESTS_EXHAUSTED");
+      assert.deepEqual(await recoveryState(receiptId), exhaustedBefore, "revocation/new config cannot refresh consumed original ceiling");
 
       // Pre-binding Jobs cannot resume into a later Gateway rejection. Refusal is
       // read-only: migration must use the explicit governed recovery operation.

@@ -28,7 +28,7 @@
 
 > **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
-> **创建入口完整冻结（#943/#948，2026-11-06）**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#创建入口补齐与缺损快照诊断943--948)记录 retry/自动 Hub/Verify/补证/Report 的同事务冻结、timeout 一致和缺字段拒绝。回归沿现有 Actions 入口；最终 SHA 待验，旧缺损快照的可信补冻恢复未交付，不据此关闭整单。
+> **创建与可信显式补冻（#943/#948，2026-11-07）**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#缺损快照的可信显式恢复943)记录创建同事务冻结及单 Job rerun-current 的历史预算/宿主执行前证明准入。完整历史求交保留额度、用量和 Attempt；无可信证明、未知效果或耗尽继续拒绝，resume 不替换旧快照。真实 HTTP 恢复、领取/生产 Gateway mint 与无变更负例复用现有 Actions 入口；最终 SHA 待验，不声称生产恢复或模型效果。
 
 > **Pi 大输出（2026-10-29，#765）**：完整 JSON 校验、脱敏 workspace/evidence 双写、128MiB 保存预算与控制帧保留；详见 [CLI 契约](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。生产重跑未验收。
 

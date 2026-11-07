@@ -214,7 +214,7 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 
 当前修复把 task retry、自动 Hub、Verify、人工补证及 Task/Finding Report 接到 [`job-runtime-freeze.ts`](../../apps/scheduler/src/job-runtime-freeze.ts)，与普通创建共用 runtime knobs、OM quota、profile/launch 的冻结规则；Job timeout 列使用同一冻结值。retry 在原 dispatcher-advisory/Canvas 事务内、清理旧画布之前冻结；冻结失败或后续插入失败保留旧任务。既有 Intent/PlanTask 已使用该规则，不增加第二执行路径。
 
-缺损历史快照仍明确拒绝，不自动用当前配置重建预算；管理恢复反馈增加缺失字段，不声称具备安全重放证据。范围、残留恢复项与 Actions 入口见[生命周期专题](../AGENT_REPAIR_LIFECYCLE.md#创建入口补齐与缺损快照诊断943--948)；本切片最终 SHA 验收待完成。
+普通 mint/resume 仍拒绝缺损冻结字段，不回退当前配置。#943 的真实 Dispatcher 在 runtime IO 前记录可核验的 kernel preflight no-start 回执；显式 rerun-current 持有 Canvas → Job → 全部 Attempts，再核对完整预算回执或严格的执行前证明/完整空历史，以原策略和新配置的交集准入。全部效果、预算/期限及授权门通过后才保存策略回执、撤旧 grant 和入队；原 Attempt/用量不重写，无证明或未知效果继续拒绝。详见[可信显式恢复](../AGENT_REPAIR_LIFECYCLE.md#缺损快照的可信显式恢复943)；最终 SHA Actions 待验。
 
 ## Model Gateway 透明传输与结算（#923）
 

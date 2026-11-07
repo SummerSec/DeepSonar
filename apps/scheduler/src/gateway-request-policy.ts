@@ -4,17 +4,18 @@ import { observationalMemoryConfig, parseFrozenPiExtensions } from "./pi-extensi
 import { resolveObservationalMemoryBudget } from "./gateway-om-budget.js";
 import { frozenRuntimeKnobsFromSnapshot, missingFrozenKnobFields } from "./runtime-knobs.js";
 import { consumeEventRateLimit } from "./domains/event-ingestion/rate-limit.js";
+import { hasGatewaySnapshotNoStartProof } from "./gateway-snapshot-no-start.js";
 
 type Database = typeof sql;
 export type GatewayRequestBudget = {
   version: 1; total_requests: number; main_requests: number; background_requests: number;
 };
 export class GatewayRequestBudgetError extends Error {
-  constructor(readonly code: "GATEWAY_REQUEST_BUDGET_INVALID" | "GATEWAY_REQUEST_BUDGET_HISTORY_MISSING",
-    readonly missing_fields: string[] = []) {
-    super(missing_fields.length
+  constructor(readonly code: "GATEWAY_REQUEST_BUDGET_INVALID" | "GATEWAY_REQUEST_BUDGET_HISTORY_MISSING" | "REPAIR_REQUESTS_EXHAUSTED",
+    readonly missing_fields: string[] = [], reason?: string) {
+    super(reason ?? (missing_fields.length
       ? `${code}: field ${missing_fields.join(", ")} 缺失或非法；预算无法从冻结快照解析，须先核对历史策略与执行效果，不能按当前配置猜测或重置额度`
-      : code);
+      : code));
   }
 }
 const invalid = () => new GatewayRequestBudgetError("GATEWAY_REQUEST_BUDGET_INVALID");
@@ -71,18 +72,11 @@ function eventIdentity(jobId: string, policy: GatewayRequestBudget): string {
   return `gateway-request-budget:${createHash("sha256").update(JSON.stringify([jobId, policy])).digest("hex")}`;
 }
 
-/** Caller owns Canvas (if relevant) -> Job locks. Read-only, including failures:
- * suitable for whole-batch recovery preflight before any worker is changed.
- * No policy receipt plus multiple historical Attempts cannot prove the original
- * unminted workload policy; never reconstruct it from the current configuration. */
-export async function inspectGatewayRequestBudget(db: Database, jobId: string, previousSnapshot: unknown): Promise<GatewayRequestBudget> {
-  let policy = snapshotPolicy(previousSnapshot);
+/** Validate historical authority independently of snapshot completeness. */
+async function inspectPolicyHistory(db: Database, jobId: string, initial: GatewayRequestBudget) {
+  let policy = initial;
   const receipts = await db`SELECT event_id,payload_json FROM events WHERE job_id=${jobId}
     AND type='control_receipt' AND payload_json->>'operation'='gateway_request_budget' ORDER BY job_seq`;
-  if (receipts.length === 0) {
-    const [attempts] = await db`SELECT count(*)::int AS count FROM job_attempts WHERE job_id=${jobId}`;
-    if (Number(attempts.count) > 1) throw new GatewayRequestBudgetError("GATEWAY_REQUEST_BUDGET_HISTORY_MISSING");
-  }
   for (const receipt of receipts) {
     const payload = record(receipt.payload_json);
     if (payload.v !== 1 || payload.authority !== "kernel") throw invalid();
@@ -90,18 +84,67 @@ export async function inspectGatewayRequestBudget(db: Database, jobId: string, p
     if (receipt.event_id !== eventIdentity(jobId, stored)) throw invalid();
     policy = intersect(policy, stored);
   }
-  // Tokens are immutable historical constraints, even when revoked or expired.
-  // Job lock serializes mint/admission/recovery; this read does not acquire a
-  // token lock before the recovery owner's Attempt locks.
+  // All historical tokens constrain recovery, including expired/revoked ones.
   const tokens = await db`SELECT workload,max_requests,request_total_limit FROM job_tokens WHERE job_id=${jobId}`;
   for (const token of tokens) {
     if (token.workload !== "main" && token.workload !== "observational_memory") throw invalid();
-    // PostgreSQL int4 NOT NULL columns are numbers; never coerce damaged
-    // null/string input to an unlimited policy.
     const limit = cap(token.max_requests), total = cap(token.request_total_limit);
     policy = intersect(policy, { version: 1, total_requests: total,
       main_requests: token.workload === "main" ? limit : 0,
       background_requests: token.workload === "observational_memory" ? limit : 0 });
+  }
+  return { policy, receipts: receipts.length };
+}
+
+/** Caller owns Canvas (if relevant) -> Job. Ordinary mint/resume never substitutes
+ * current configuration for an incomplete frozen policy. */
+export async function inspectGatewayRequestBudget(db: Database, jobId: string, previousSnapshot: unknown): Promise<GatewayRequestBudget> {
+  const { policy, receipts } = await inspectPolicyHistory(db, jobId, snapshotPolicy(previousSnapshot));
+  if (receipts === 0) {
+    const [attempts] = await db`SELECT count(*)::int AS count FROM job_attempts WHERE job_id=${jobId}`;
+    if (Number(attempts.count) > 1) throw new GatewayRequestBudgetError("GATEWAY_REQUEST_BUDGET_HISTORY_MISSING");
+  }
+  return policy;
+}
+
+/** Dispatch's first checkpoint: validation has no external IO or fallback. */
+export const frozenGatewayRequestBudget = snapshotPolicy;
+
+/** Explicit rerun only, under Canvas -> Job -> all Attempts. A complete kernel
+ * receipt preserves ALL workload caps; otherwise a durable host pre-call witness
+ * plus complete empty history is required. Tokens/failed status alone prove neither. */
+export async function inspectRerunGatewayRequestBudget(db: Database, jobId: string,
+  previousSnapshot: unknown, currentSnapshot: unknown): Promise<GatewayRequestBudget> {
+  const current = snapshotPolicy(currentSnapshot);
+  let policy: GatewayRequestBudget;
+  try {
+    policy = intersect(await inspectGatewayRequestBudget(db, jobId, previousSnapshot), current);
+  } catch (error) {
+    if (!(error instanceof GatewayRequestBudgetError) || error.code !== "GATEWAY_REQUEST_BUDGET_INVALID"
+      || !error.missing_fields.length || error.missing_fields.some(field => !field.startsWith("agent_snapshot_json.runtime_knobs"))) throw error;
+    const history = await inspectPolicyHistory(db, jobId, current);
+    if (history.receipts === 0 && !await hasGatewaySnapshotNoStartProof(db, jobId, previousSnapshot)) {
+      throw new GatewayRequestBudgetError("GATEWAY_REQUEST_BUDGET_HISTORY_MISSING", error.missing_fields,
+        "缺少可信的完整历史预算回执或宿主执行前 no-start 证明；先对账执行/预算历史，不能按当前配置猜测、补造证明或重置额度。");
+    }
+    policy = history.policy;
+    // A partially damaged knob object may still retain a valid original ceiling.
+    const previous = record(previousSnapshot), knobs = previous.runtime_knobs;
+    if (knobs && typeof knobs === "object" && !Array.isArray(knobs) && Object.hasOwn(knobs, "job_token_max_requests")) {
+      const limit = cap((knobs as Record<string, unknown>).job_token_max_requests);
+      policy = intersect(policy, { version: 1, total_requests: limit, main_requests: limit, background_requests: 0 });
+    }
+  }
+  const usages = await db`SELECT workload,used_requests FROM job_tokens WHERE job_id=${jobId}`;
+  let total = 0, main = 0;
+  for (const row of usages) {
+    if (!Number.isSafeInteger(row.used_requests) || row.used_requests < 0) throw invalid();
+    total += row.used_requests;
+    if (row.workload === "main") main += row.used_requests;
+  }
+  if (![total, main].every(value => Number.isSafeInteger(value) && value >= 0)) throw invalid();
+  if ((policy.total_requests > 0 && total >= policy.total_requests) || (policy.main_requests > 0 && main >= policy.main_requests)) {
+    throw new GatewayRequestBudgetError("REPAIR_REQUESTS_EXHAUSTED", [], "新旧策略交集下的累计模型请求额度已耗尽；不能通过补冻、新 token 或新 Attempt 刷新额度。");
   }
   return policy;
 }
@@ -112,6 +155,16 @@ export async function inspectGatewayRequestBudget(db: Database, jobId: string, p
  * Later calls can only tighten. No snapshot, counter, Attempt or grant is changed. */
 export async function ensureGatewayRequestBudget(db: Database, jobId: string, previousSnapshot: unknown): Promise<GatewayRequestBudget> {
   const policy = await inspectGatewayRequestBudget(db, jobId, previousSnapshot);
+  return appendPolicyReceipt(db, jobId, previousSnapshot, policy);
+}
+
+export async function ensureRerunGatewayRequestBudget(db: Database, jobId: string,
+  previousSnapshot: unknown, currentSnapshot: unknown): Promise<GatewayRequestBudget> {
+  const policy = await inspectRerunGatewayRequestBudget(db, jobId, previousSnapshot, currentSnapshot);
+  return appendPolicyReceipt(db, jobId, currentSnapshot, policy);
+}
+
+async function appendPolicyReceipt(db: Database, jobId: string, snapshot: unknown, policy: GatewayRequestBudget): Promise<GatewayRequestBudget> {
   const eventId = eventIdentity(jobId, policy);
   const [existing] = await db`SELECT id FROM events WHERE job_id=${jobId} AND event_id=${eventId}`;
   if (existing) return policy;
@@ -121,6 +174,6 @@ export async function ensureGatewayRequestBudget(db: Database, jobId: string, pr
   await db`INSERT INTO events(job_id,event_id,job_seq,type,payload_json)
     VALUES(${jobId},${eventId},${next},'control_receipt',${db.json({ v: 1, authority: "kernel",
       operation: "gateway_request_budget", policy,
-      snapshot_sha256: createHash("sha256").update(JSON.stringify(previousSnapshot)).digest("hex") })})`;
+      snapshot_sha256: createHash("sha256").update(JSON.stringify(snapshot)).digest("hex") })})`;
   return policy;
 }
