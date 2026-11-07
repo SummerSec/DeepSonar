@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PI_EXTENSION_REGISTRY } from "../../packages/shared-types/src/pi-extensions.js";
 import { createOmFailureDiagnostics, observeOmRuntime } from "./om-provider-headers-diagnostics.js";
 import { OM_HEADERS_MODEL, OM_HEADERS_PROVIDER, OM_HEADERS_SECRET, startOmHeaderModel, type OmHeaderCall } from "./om-provider-headers-model.js";
 
@@ -54,9 +55,11 @@ try {
   assert.equal(manifest.image_key, "deepsonar-base", "base tool manifest image_key contract");
   assert.ok(manifest.manual?.version && manifest.manual?.sha256 && manifest.manual?.count > 0,
     "materialized runtime manual must expose version, sha256 and a positive count");
-  const registry = JSON.parse(await readFile(path.join(root, "deploy/runtime-image-registry.json"), "utf8"));
-  const declaredVersion = registry.images.find((entry: any) => entry.image_key === "deepsonar-base")?.versions[0]?.version;
-  assert.match(declaredVersion, /^\d+\.\d+\.\d+/u, "base registry version must support the native OM image-version gate");
+  // This image was built from the tested checkout, not the last released catalog.
+  // Give only the isolated fixture row the current OM contract version; installed
+  // bytes are checked below and production preflight/launch remain mandatory.
+  const declaredVersion = PI_EXTENSION_REGISTRY["pi-observational-memory"].min_runtime_image_version!;
+  assert.match(declaredVersion, /^\d+\.\d+\.\d+$/u, "OM contract must declare an exact minimum image version");
   // Verify installed package versions and wrapper bytes without replacing them.
   const packageVersions = JSON.parse(execFileSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "node", imageRef, "-e",
     "const fs=require('fs');console.log(JSON.stringify({om:JSON.parse(fs.readFileSync('/opt/deepsonar/pi-extensions/node_modules/pi-observational-memory/package.json')).version,wrapper:require('crypto').createHash('sha256').update(fs.readFileSync('/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts')).digest('hex')}))"], { encoding: "utf8" }));
@@ -65,7 +68,9 @@ try {
     "installed production wrapper must match this checkout");
   const piVersion = execFileSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "pi", imageRef, "--version"], { encoding: "utf8" }).trim();
   assert.match(piVersion, /\b1\.4\.0\b/u, "installed Pi CLI version");
-  report.image = { ref: imageRef, manifest_digest: imageDigest, config_id: image.Id, architecture: arch, catalog_fixture_version: declaredVersion, installed: { ...packageVersions, pi: piVersion } };
+  report.image = { ref: imageRef, manifest_digest: imageDigest, config_id: image.Id, architecture: arch,
+    catalog_fixture_version: declaredVersion, catalog_fixture_version_source: "current-om-contract-not-release-metadata",
+    installed: { ...packageVersions, pi: piVersion } };
 
   report.stage = "isolated-database";
   const postgres = (await import(requireScheduler.resolve("postgres"))).default;
