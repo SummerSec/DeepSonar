@@ -7,6 +7,7 @@ ARG JDK11_IMAGE=eclipse-temurin:11-jdk@sha256:51cad80517b1e18e289460e0a48657374d
 ARG JDK17_IMAGE=eclipse-temurin:17-jdk@sha256:068a8f9ae4b74d9a20de3ecca771ba1a6437f1d7a8a8ad6deaf9dbdd2274397a
 
 FROM ${CA_IMAGE} AS ca-bootstrap
+RUN printf 'Acquire::Retries "8";\n' > /etc/apt/apt.conf.d/80-retries
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
