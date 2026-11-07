@@ -3,6 +3,7 @@ import { TaskGoalReviewRequest } from "@deepsonar/shared-types";
 import { invalidControlPayload } from "./control-input.js";
 import { LEFTOVER_RULE_ALIAS_KEYS } from "./settings-validation.js";
 import { persistPreparedJob } from "./job-creation.js";
+import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { freezeProjectKnowledgeCatalog } from "./domains/project-knowledge/catalog-snapshot.js";
 import { onKnowledgeJobTerminal } from "./domains/project-knowledge/recovery.js";
 import path from "node:path";
@@ -1255,8 +1256,11 @@ const hubOrchestrationApplication = createHubOrchestrationApplication(sql, {
   patchCanvasConvergence: async (tx, canvasId, patch) =>
     patchCanvasConvergence(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, canvasId, patch),
   careSeverities,
-  resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = []) =>
-    resolveAgentSnapshotForJob(/* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql, projectId, type, findingIds),
+  resolveAgentSnapshotForJob: async (tx, projectId, type, findingIds = []) => {
+    const resolved = await resolveAgentSnapshotForJob(tx, projectId, type, findingIds);
+    // The Hub domain inserts in this transaction; freeze through the same creation rule here.
+    return (await freezeJobRuntimeConfiguration(tx, { projectId, type }, resolved)).snapshotWithKnobs;
+  },
   recordJobSharedAssets: async (tx, jobId, snapshot) =>
     recordJobSharedAssets(
       /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,

@@ -156,8 +156,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **规范要求**：系统必须在 Job 创建时冻结 CLI、Provider/model、运行时镜像 digest、工具/能力、Finding protocol、网络策略、设备需求和 runtime knobs；适用的目标 grant 与可选记忆策略也须冻结。Dispatcher 不得回读最新 RoleConfig 代替快照，实时撤权检查只能收紧冻结权限。
 - **决策来源**：执行结果要能按当时的权限、镜像和配置重放审计。
 - **实现状态**：as-built；快照身份和 schema 版本进入 `agent_snapshot_json`；目标 grant 只从 Scheduler 的可信输入或系统审计继承，调用方同名字段不会成为 authority。Pi 观测记忆的独立实现与未验收范围见 FR-CAP-009。
-- **代码入口**：[运行时快照应用](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[Provider freeze](../../apps/scheduler/src/domains/provider-adapter/freeze.ts)、[Agent profile](../../apps/scheduler/src/agent-runtime-profile.ts)。
-- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:credential-compatibility`；人工在创建后修改角色并核对执行输入不变。
+- **代码入口**：[运行时快照应用](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[Provider freeze](../../apps/scheduler/src/domains/provider-adapter/freeze.ts)、[Agent profile](../../apps/scheduler/src/agent-runtime-profile.ts)、[共享完整冻结](../../apps/scheduler/src/job-runtime-freeze.ts)。
+- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:credential-compatibility`；人工在创建后修改角色并核对执行输入不变。#943/#948 补齐 retry/自动 Hub/Verify/补证/Report 的完整冻结，HTTP 创建与恢复拒绝回归复用 `pnpm ci:integration:recovery` / `pnpm ci:integration:platform-api`；最终 SHA Actions 待验，历史缺损快照的可信补冻恢复尚未交付。
 
 ### FR-JOB-010 Claim、并发和 Lease
 
@@ -205,7 +205,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **决策来源**：运维判定和外部清理是平台责任，迟到回调不能重新取得执行权。
 - **实现状态**：as-built；Reaper 和状态条件更新复用 Job/Attempt effect identity。终态 model token 与 Control token 撤销在同一 Job 终态事务内完成，不另取 Job lock，也不吞掉撤销异常；回滚夹具保持 Job/model token/Control token/audit 原子性，终态后的真实 HTTP 请求返回 401。
 - **代码入口**：[Dispatcher/Reaper](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[token revocation](../../apps/scheduler/src/gateway-token-revocation.ts)、[配置](../../apps/scheduler/src/config.ts)。
-- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-reaper`；`terminal-bootstrap-regression.log` 记录 12 pass/0 skip，覆盖 bootstrap、ordinary Hub 无 v1 audit、依赖执行和 terminal rollback；人工重复取消/迟到回调核对稳定结果。
+- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-reaper`；`terminal-bootstrap-regression.log` 记录 12 pass/0 skip，覆盖 bootstrap、ordinary Hub 无 v1 audit、依赖执行和 terminal rollback；人工重复取消/迟到回调核对稳定结果。#946 的未知/未结清效果不能被记为人的超时，active/inactive Attempt 与 planned/pending/unknown、多 tick 和正常到期回归接 `pnpm ci:integration:job-lifecycle`；最终 SHA Actions 待验，真实通知投递计时仍未实现。
 
 ### FR-JOB-014 重试创建新 Attempt
 

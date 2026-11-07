@@ -8,6 +8,7 @@ import path from "node:path";
 import { parseDeclaredQuantities, type QuantityAnchor } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { isRetryableDatabaseConflict } from "./db-conflict-retry.js";
+import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { taskReportCoverageOk } from "./report-coverage.js";
 import { sql } from "./db.js";
 import {
@@ -15,7 +16,6 @@ import {
   maybeTriggerHub,
   patchCanvasConvergence,
   resolveAgentSnapshotForJob,
-  rulesForProject,
 } from "./core.js";
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { freezeAgentSnapshotNetworkPolicy } from "./domains/role-runtime-snapshot/index.js";
@@ -953,7 +953,9 @@ export async function maybeDispatchFindingReport(
     canvasId,
     await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report", [findingId]),
   );
-  const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
+  const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(
+    // SAFETY: postgres.js transaction handles have the same tagged-template interface.
+    tx as unknown as typeof sql, { projectId, type: "report" }, snapshot);
   const input = await buildFindingReportInput(findingId, version, tx as unknown as typeof sql);
   const inputJson = JSON.stringify(input);
   const inputSha = sha256(inputJson);
@@ -969,7 +971,7 @@ export async function maybeDispatchFindingReport(
       project_id: projectId,
       canvas_id: canvasId,
       finding_id: findingId,
-      agent_snapshot_json: snapshot as never,
+      agent_snapshot_json: runtimeSnapshot as never,
       type: "report",
       priority: fixedPriorityForJob({ type: "report", purpose: "report" }),
       ingress_key: ingressKey,
@@ -981,11 +983,11 @@ export async function maybeDispatchFindingReport(
         report_version: version,
         report_input_uri: inputUri,
       } as never,
-      timeout_sec: rules.auditTimeoutSec,
+      timeout_sec: knobs.timeoutSec,
       followup_depth: 0,
     })}
     RETURNING id`;
-  await recordJobSharedAssets(tx as unknown as typeof sql, job.id as string, snapshot.shared_assets ?? []);
+  await recordJobSharedAssets(tx as unknown as typeof sql, job.id as string, runtimeSnapshot.shared_assets ?? []);
   if (!job?.id) return { dispatched: false, reason: "insert_failed" };
   await tx`
     INSERT INTO finding_reports ${tx({
@@ -1191,7 +1193,6 @@ export async function maybeDispatchReport(
       WHERE id = ${existing.id as string}`;
   }
 
-  const rules = await rulesForProject(tx as unknown as typeof sql, projectId);
   let resolvedSnapshot: Awaited<ReturnType<typeof resolveAgentSnapshotForJob>>;
   try {
     resolvedSnapshot = await resolveAgentSnapshotForJob(tx as unknown as typeof sql, projectId, "report");
@@ -1205,6 +1206,9 @@ export async function maybeDispatchReport(
     canvasId,
     resolvedSnapshot,
   );
+  const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(
+    // SAFETY: postgres.js transaction handles have the same tagged-template interface.
+    tx as unknown as typeof sql, { projectId, type: "report" }, snapshot);
   // 显式创建可运行 Report Job：持有 ingress 的旧终态 Job 先 retire，再 INSERT（不用 ON CONFLICT DO NOTHING 绑回 failed Job）
   const ingressKey = `report:${canvasId}`;
   const [held] = await tx`
@@ -1233,7 +1237,7 @@ export async function maybeDispatchReport(
     INSERT INTO jobs ${tx({
       project_id: projectId,
       canvas_id: canvasId,
-      agent_snapshot_json: snapshot as never,
+      agent_snapshot_json: runtimeSnapshot as never,
       type: "report",
       priority: fixedPriorityForJob({ type: "report", purpose: "report" }),
       ingress_key: ingressKey,
@@ -1250,11 +1254,11 @@ export async function maybeDispatchReport(
         inconclusive_count: reportInput.statistics.inconclusive_count,
         excluded_count: reportInput.statistics.excluded_count,
       } as never,
-      timeout_sec: rules.auditTimeoutSec,
+      timeout_sec: knobs.timeoutSec,
       followup_depth: 0,
     })}
     RETURNING id`;
-  await recordJobSharedAssets(tx as unknown as typeof sql, job.id as string, (snapshot as { shared_assets?: Parameters<typeof recordJobSharedAssets>[2] }).shared_assets ?? []);
+  await recordJobSharedAssets(tx as unknown as typeof sql, job.id as string, runtimeSnapshot.shared_assets ?? []);
   const reportJobId = job?.id as string | undefined;
   if (!reportJobId) return { dispatched: false, reason: "insert_failed" };
 

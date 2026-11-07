@@ -34,6 +34,7 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
     const api = await import("../platform-api/index.js");
     const { ControlInputError } = await import("../../control-input.js");
     const core = await import("../../core.js");
+    const { freezeRuntimeKnobs, resolveRuntimeKnobs } = await import("../../runtime-knobs.js");
     const { default: Fastify } = await import("fastify");
     const app = Fastify();
     const registered = new Set<string>();
@@ -44,7 +45,10 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
     api.registerPlatformControlRoutes(app);
     await app.ready();
     const targetSnapshot = { name: "audit", agent_cli: "claude-code", platform_tools: ["mark_job_done"], network_policy: { allow_egress: false } };
-    const hubSnapshot = { name: "hub_reason", role_kind: "hub", agent_cli: "claude-code", platform_tools: ["submit_hub_decision", "mark_job_done"], network_policy: { allow_egress: false } };
+    // This resolver fixture must supply the same frozen creation contract as core.
+    const hubSnapshot = { name: "hub_reason", role_kind: "hub", agent_cli: "claude-code", platform_tools: ["submit_hub_decision", "mark_job_done"],
+      network_policy: { allow_egress: false },
+      runtime_knobs: freezeRuntimeKnobs(resolveRuntimeKnobs({ jobType: "hub_reason", job: { timeoutSec: 3600 } })) };
     const readJob = async (id: string, db = sql) => (await db`SELECT * FROM jobs WHERE id=${id}`)[0]!;
     const lock = async (db: Db, id: string) => {
       const job = await readJob(id, db);
@@ -113,12 +117,19 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       const state = (await recovery.readCompletionRecovery(db, f.jobId, f.attemptId))!;
       return wake(db, job, state);
     });
-    const hubFor = async (f: Fixture) => (await sql`SELECT * FROM jobs WHERE canvas_id=${f.canvasId} AND type='hub_reason' ORDER BY created_at DESC,id DESC LIMIT 1`)[0]!;
+    const hubFor = async (f: Fixture, expectedHubId: string | null = null) => {
+      const [hub] = await sql`SELECT * FROM jobs WHERE canvas_id=${f.canvasId} AND type='hub_reason'
+        AND (${expectedHubId}::uuid IS NULL OR id=${expectedHubId}::uuid) ORDER BY created_at DESC,id DESC LIMIT 1`;
+      assert.ok(hub);
+      assert.deepEqual(hub.agent_snapshot_json.runtime_knobs, hubSnapshot.runtime_knobs);
+      assert.equal(hub.timeout_sec, hubSnapshot.runtime_knobs.timeout_sec);
+      return hub;
+    };
     const decisionFor = (state: CompletionRecoveryState, action = "reconcile_effects") => ({ recovery_ref: state.recovery_ref,
       target_job_id: state.target_job_id, target_attempt_id: state.target_attempt_id, expected_recovery_revision: state.recovery_revision,
       expected_evidence_sha256: state.evidence_sha256, action, reason: "Model reason is not evidence; consult the exact durable ledger" });
-    const runHub = async (f: Fixture) => {
-      const hub = await hubFor(f);
+    const runHub = async (f: Fixture, expectedHubId: string | null = null) => {
+      const hub = await hubFor(f, expectedHubId);
       await sql`UPDATE jobs SET status='running',started_at=clock_timestamp(),lease_expires_at=clock_timestamp()+interval '1 hour' WHERE id=${hub.id}`;
       await sql.begin(tx => attempts.createAttempt(tx as unknown as Db, String(hub.id)));
       const token = await api.mintJobCapabilityToken(String(hub.id));
@@ -177,7 +188,7 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       const planAudit = PlanAuditRecord.parse({ v: 2, source: "submit_plan", raw: plan, trimmed: plan,
         trim_reasons: [], result: null, termination_reason: null, updated_at: new Date().toISOString() });
       await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
-        VALUES(${planOwner},${f.projectId},${f.canvasId},'hub_reason','succeeded',${sql.json(hubSnapshot)},${sql.json({ plan_protocol: planAudit })})`;
+        VALUES(${planOwner},${f.projectId},${f.canvasId},'hub_reason','succeeded',${sql.json(z.json().parse(hubSnapshot))},${sql.json({ plan_protocol: planAudit })})`;
       await sql`UPDATE canvases SET target_json=${sql.json(z.json().parse(target))} WHERE id=${f.canvasId}`;
       const [persistedTarget] = await sql`SELECT jsonb_typeof(target_json) AS kind,target_json FROM canvases WHERE id=${f.canvasId}`;
       assert.equal(persistedTarget.kind, "object", "Plan fixture must retain a JSON object, not a pre-serialized JSON string");
@@ -439,7 +450,7 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       await sql`UPDATE jobs SET payload_json=${sql.json(payload)} WHERE id=${id}`;
       const forged = randomUUID();
       await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
-        VALUES(${forged},${f.projectId},${f.canvasId},'hub_reason','pending',${sql.json(hubSnapshot)},${sql.json(payload)})`;
+        VALUES(${forged},${f.projectId},${f.canvasId},'hub_reason','pending',${sql.json(z.json().parse(hubSnapshot))},${sql.json(payload)})`;
       await sql`UPDATE jobs SET status='failed' WHERE id=${id}`;
       assert.equal(await recovery.pendingCompletionRecoveryClaimTarget(sql, { id: forged }), null, "with no other active Hub, copying a grant still cannot copy its durable wake binding");
       await sql`UPDATE jobs SET status='failed' WHERE id=${forged}`;
@@ -457,7 +468,8 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       assert.equal(await recovery.pendingCompletionRecoveryClaimTarget(sql, { id }), null, "a newly arrived ledger invalidates the frozen evidence hash");
       const refreshed = await observe(f);
       assert.ok(refreshed.recovery_revision > state.recovery_revision);
-      const { hub: running } = await runHub(f);
+      // The newer forged clone remains denied; run the original Scheduler-bound Hub.
+      const { hub: running } = await runHub(f, id);
       await assert.rejects(recovery.validateCompletionRecoveryDecision(sql, running, decisionFor(state)), assertCode("recovery_stale"));
       await sql.begin(tx => attempts.markAttemptInterrupted(tx as unknown as Db, f.jobId, "session exited"));
       await sql.begin(tx => attempts.createAttempt(tx as unknown as Db, f.jobId));
@@ -485,7 +497,7 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
           const id = randomUUID();
           await sql`UPDATE jobs SET status='cancelled' WHERE id=${hub.id}`;
           await sql`INSERT INTO jobs(id,project_id,canvas_id,type,agent_snapshot_json,payload_json)
-            VALUES(${id},${f.projectId},${f.canvasId},'hub_reason',${sql.json(hubSnapshot)},${sql.json(hub.payload_json)})`;
+            VALUES(${id},${f.projectId},${f.canvasId},'hub_reason',${sql.json(z.json().parse(hubSnapshot))},${sql.json(hub.payload_json)})`;
           hub = await readJob(id);
         }
         if (gate === "wake_dedup") await sql`DELETE FROM event_dedup WHERE event_id=${recovery.completionRecoveryIdentity(f.jobId, f.attemptId, `wake:${first.evidence_sha256}`)}`;

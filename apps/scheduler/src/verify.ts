@@ -7,6 +7,7 @@
  */
 import { VerificationEvidence, type VerificationEvidence as VerificationEvidenceType } from "@deepsonar/shared-types";
 import { sql } from "./db.js";
+import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { planCompletionBlockers } from "./domains/plan-protocol/decision.js";
 import { invalidVerification } from "./control-input.js";
 import {
@@ -651,6 +652,9 @@ export async function createVerifyRound(
     opts.canvasId,
     await resolveAgentSnapshotForJob(tx as unknown as typeof sql, opts.projectId, "verify_finding", [findingId]),
   );
+  const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(
+    // SAFETY: postgres.js transaction handles have the same tagged-template interface.
+    tx as unknown as typeof sql, { projectId: opts.projectId, type: "verify_finding" }, snapshot);
   const priority = fixedPriorityForJob({ type: "verify_finding", purpose: "verify", severity });
 
   let verifyJob: { id: string };
@@ -659,7 +663,7 @@ export async function createVerifyRound(
       INSERT INTO jobs ${tx({
         project_id: opts.projectId,
         canvas_id: opts.canvasId,
-        agent_snapshot_json: snapshot as never,
+        agent_snapshot_json: runtimeSnapshot as never,
         parent_job_id: opts.parentJobId,
         finding_id: findingId,
         type: "verify_finding",
@@ -674,12 +678,12 @@ export async function createVerifyRound(
             ? { manual_override: { source: "operator", reason: opts.reason ?? "manual_verify" } }
             : {}),
         } as never,
-        timeout_sec: rules.verifyTimeoutSec,
+        timeout_sec: knobs.timeoutSec,
         followup_depth: opts.followupDepth,
       })}
       RETURNING id`;
     verifyJob = row as { id: string };
-    await recordJobSharedAssets(tx as unknown as typeof sql, verifyJob.id, snapshot.shared_assets ?? []);
+    await recordJobSharedAssets(tx as unknown as typeof sql, verifyJob.id, runtimeSnapshot.shared_assets ?? []);
   } catch (e) {
     // 局部唯一索引：并发下另一活跃 verify 已存在
     const msg = e instanceof Error ? e.message : String(e);

@@ -1,4 +1,5 @@
 import { sql } from "../../db.js";
+import { frozenRuntimeKnobsFromSnapshot } from "../../runtime-knobs.js";
 import { ControlInputError } from "../../control-input.js";
 import { planContext } from "../plan-protocol/objective.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
@@ -552,6 +553,8 @@ export function createHubOrchestrationApplication(
       canvasId,
       await ports.resolveAgentSnapshotForJob(tx, projectId, "hub_reason", triggerFindingId ? [triggerFindingId] : []) as object,
     );
+    const knobs = frozenRuntimeKnobsFromSnapshot(snapshot);
+    if (!knobs) throw new Error("Hub creation requires frozen runtime_knobs");
     const [canvas] = await tx`SELECT target_json FROM canvases WHERE id = ${canvasId}`;
     // SAFETY: planContext uses tagged reads on this same PostgreSQL handle;
     // it does not open another connection or transaction.
@@ -568,7 +571,7 @@ export function createHubOrchestrationApplication(
           ...hubPayload,
           dispatched_prompt: extractDispatchPrompt("hub_reason", hubPayload, canvas?.target_json),
         } as never,
-        timeout_sec: rules.auditTimeoutSec,
+        timeout_sec: knobs.timeout_sec,
         followup_depth: 0,
       })}
       RETURNING id`;
