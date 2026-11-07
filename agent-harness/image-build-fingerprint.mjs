@@ -324,11 +324,16 @@ export function computeFingerprint(opts) {
   const fingerprint = h.digest("hex").slice(0, 32);
   return {
     fingerprint,
+    // #961 P3: three namespaces so no trust boundary can be crossed.
+    //   src-<fp>          legacy; historically written by CI, no longer consumed
+    //   src-ci-<fp>       written and read by CI only
+    //   src-release-<fp>  written and read by release only
+    // Release must not read `src-<fp>`: a PR could have pushed that tag before
+    // this change, and `resolve-image-src-cache.sh` only needs a resolvable
+    // digest to answer skip=true.
     src_tag: `src-${fingerprint}`,
-    // #961 P3: PR/CI builds must never be able to satisfy the release
-    // skip-if-unchanged check. CI writes and reads this namespaced tag; only
-    // release (tag/workflow_dispatch, packages:write) writes `src-<fp>`.
     ci_src_tag: `src-ci-${fingerprint}`,
+    release_src_tag: `src-release-${fingerprint}`,
     platforms,
     preset: opts.preset || "",
   };
@@ -340,6 +345,7 @@ function main() {
     `fingerprint=${result.fingerprint}`,
     `src_tag=${result.src_tag}`,
     `ci_src_tag=${result.ci_src_tag}`,
+    `release_src_tag=${result.release_src_tag}`,
     `platforms=${result.platforms}`,
   ];
   if (result.preset) lines.push(`preset=${result.preset}`);

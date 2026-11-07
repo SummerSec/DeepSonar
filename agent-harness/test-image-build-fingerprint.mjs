@@ -12,6 +12,9 @@ const a = computeFingerprint({ preset: "deepsonar-base" });
 const b = computeFingerprint({ preset: "deepsonar-base" });
 assert(a.fingerprint === b.fingerprint, "fingerprint must be stable");
 assert(a.src_tag === `src-${a.fingerprint}`, "src_tag format");
+assert(a.ci_src_tag === `src-ci-${a.fingerprint}`, "ci_src_tag format");
+assert(a.release_src_tag === `src-release-${a.fingerprint}`, "release_src_tag format");
+assert(new Set([a.src_tag, a.ci_src_tag, a.release_src_tag]).size === 3, "namespaces must be distinct");
 assert(a.fingerprint.length === 32, "fingerprint truncated to 32 hex chars");
 
 const audit = computeFingerprint({ preset: "deepsonar-audit" });

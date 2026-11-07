@@ -14,12 +14,14 @@ const CI_WORKFLOWS = [
   ".github/workflows/openharmony-runtime.yml",
 ];
 
-test("the fingerprint exposes a CI-only src tag namespace", () => {
+test("the fingerprint exposes three separate src tag namespaces", () => {
   const result = computeFingerprint({ preset: "deepsonar-chrome-fuzz", platforms: "linux/arm64" });
   assert.equal(result.src_tag, `src-${result.fingerprint}`);
   assert.equal(result.ci_src_tag, `src-ci-${result.fingerprint}`);
-  assert.notEqual(result.ci_src_tag, result.src_tag, "CI and release must not share a skip tag");
-  assert.ok(result.ci_src_tag.startsWith("src-ci-"));
+  assert.equal(result.release_src_tag, `src-release-${result.fingerprint}`);
+  assert.notEqual(result.ci_src_tag, result.release_src_tag, "CI and release must not share a skip tag");
+  assert.notEqual(result.ci_src_tag, result.src_tag);
+  assert.notEqual(result.release_src_tag, result.src_tag);
 });
 
 test("CI workflows write and read the namespaced tag only", () => {
@@ -33,10 +35,18 @@ test("CI workflows write and read the namespaced tag only", () => {
   }
 });
 
-test("release keeps the trusted src tag and never the CI namespace", () => {
+test("release uses its own namespace and never the legacy or CI tag", () => {
   const release = read(".github/workflows/release.yml");
-  assert.ok(release.includes("steps.fingerprint.outputs.src_tag"), "release owns src-<fp>");
+  assert.ok(release.includes("steps.fingerprint.outputs.release_src_tag"), "release owns src-release-<fp>");
   assert.ok(!release.includes("ci_src_tag"), "release must not read PR-built tags");
+  // The legacy `src-<fp>` tag was writable from PR jobs before this change, so
+  // release must stop consulting it entirely; otherwise an old tag can satisfy
+  // the skip-if-unchanged check.
+  assert.ok(
+    !release.includes("steps.fingerprint.outputs.src_tag"),
+    "release must not consult the legacy src tag",
+  );
+  assert.ok(!/needs\.[\w-]+\.outputs\.src_tag/.test(release), "no job output may forward the legacy tag");
 });
 
 test("the V8 builder is pinned and decoupled from BASE_IMAGE", () => {
