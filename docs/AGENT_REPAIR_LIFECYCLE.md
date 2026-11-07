@@ -27,7 +27,7 @@
 2026-11-07 源码核对（开发基线 main `551a2689`）：普通 mint、运行及 `resume` 仍只认旧冻结输入，缺损字段明确拒绝，不暗中加载当前 RoleConfig。单 Job `rerun-current` 是显式的新执行授权，重新冻结当前配置并重新检查 target authority、镜像、扩展及权限；它不是旧协议兼容或无条件重放。可信预算准入有两个独立来源：
 
 - 完整、版本/宿主身份和确定性 event ID 均有效的 `gateway_request_budget` 内核回执，保留总/main/background 全部原策略，包括从未 mint 的 workload。与当前配置、全部历史回执和所有撤销/过期 token 的有限上限取交集；旧 knobs 若仍有合法请求上限也必须保留。损坏回执/残留非法上限不得忽略。
-- 仅针对创建时整段缺失 `runtime_knobs` 的首次执行前失败：真实 Dispatcher 在任何 runtime IO 前执行预算检查，失败时以 Canvas → Job → Attempt 锁保存 `gateway_snapshot_preflight` 内核回执。写入时核对当前 claimed Job、唯一首次 active/preparing Attempt、未绑定资源、原完整快照摘要以及无 effect/token/capability/usage/其他事件历史；重复 checkpoint 不重复写。恢复重验 Job/Attempt/snapshot 摘要、宿主身份、事件 ID 与完整空历史，不能把失败状态、空 token 查询、没有 sandbox ID 或 Provider 异常当作替代证明。
+- 仅针对创建时整段缺失 `runtime_knobs` 的首次执行前失败：真实 Dispatcher 在任何 runtime IO 前执行预算检查，失败时以 Canvas → Job → Attempt 锁保存 `gateway_snapshot_preflight` 内核回执。写入时核对当前 claimed Job、唯一首次 active/preparing Attempt、未绑定资源、原完整快照摘要以及无 effect/token/capability/usage/其他事件历史；重复 checkpoint 不重复写。预算 preflight 拒绝不自动派新 Hub；失败 Job/Attempt 和节点结算不应因下游当前配置无法解析而回滚，仍待显式恢复。恢复重验 Job/Attempt/snapshot 摘要、宿主身份、事件 ID 与完整空历史，不能把失败状态、空 token 查询、没有 sandbox ID 或 Provider 异常当作替代证明。
 
 两条路径都在 Canvas → Job → 全部 Attempts 锁下只读预检；unknown/pending/planned effect、未知 token 用量、已接受完成、暂停、修正期限/次数或累计额度耗尽仍阻止入队。全部门通过后才在同一事务追加原生预算回执、撤旧 grant、安装新执行快照和转 pending；原 Attempt/回执/费用/修正链及 deadline 不重写、不补造。新 policy 更大或 0 不删除旧有限上限；更小交集已经耗尽则沿用 `REPAIR_REQUESTS_EXHAUSTED` 明确拒绝。
 

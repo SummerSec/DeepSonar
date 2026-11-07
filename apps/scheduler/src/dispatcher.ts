@@ -989,6 +989,7 @@ async function runJob(jobId: string) {
   let attemptId: string | null = null;
   let provisionEffectId: string | null = null;
   let provisionAttempted = false;
+  let gatewaySnapshotPreflightRejected = false;
   let activeAttempt: Record<string, unknown> | null = null;
   let platformCapability: PreparedPlatformCapability | null = null;
   /** 设备租约（#495）：申请到之后必须在 finally 释放，Reaper 兜底过期。 */
@@ -1012,6 +1013,7 @@ async function runJob(jobId: string) {
     if (useReal) {
       try { frozenGatewayRequestBudget(snapshot); }
       catch (error) {
+        gatewaySnapshotPreflightRejected = error instanceof GatewayRequestBudgetError;
         if (error instanceof GatewayRequestBudgetError && error.missing_fields.length) {
           await recordGatewaySnapshotNoStart(sql, { jobId, attemptId, snapshot });
         }
@@ -1475,7 +1477,9 @@ async function runJob(jobId: string) {
         UPDATE canvas_nodes SET status = 'failed', updated_at = now()
         WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]}) AND status IN ('running','pending')`;
       if (row) await advancePlanTaskAfterTerminalJob(tx, jobId);
-      if (row && row.type !== "report" && canvasId && locator) {
+      // A rejected pre-call snapshot needs explicit recovery, not a fresh Hub;
+      // downstream configuration resolution must not roll back this terminal settlement.
+      if (row && !gatewaySnapshotPreflightRejected && row.type !== "report" && canvasId && locator) {
         await advanceCanvasAfterTerminalJob(
           tx,
           {

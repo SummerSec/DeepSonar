@@ -229,6 +229,8 @@ if (!testDatabaseUrl) {
       assert.equal(provisionCalls, 0);
       const [checkpointState] = await sql`SELECT status,error,agent_snapshot_json FROM jobs WHERE id=${checkpointId}`;
       assert.equal(checkpointState.status, "failed", String(checkpointState.error));
+      assert.equal((await sql`SELECT count(*)::int AS n FROM jobs WHERE canvas_id=${checkpointCanvas} AND type='hub_reason'`)[0].n, 0,
+        "a rejected snapshot must settle terminal state without implicitly dispatching a Hub");
       assert.match(String(checkpointState.error), /runtime_knobs/);
       const checkpointReceipts = [...await sql`SELECT payload_json FROM events WHERE job_id=${checkpointId}
         AND payload_json->>'operation'='gateway_snapshot_preflight'`];
