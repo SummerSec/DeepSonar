@@ -1,7 +1,7 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-06
+> 同步日期：2026-11-07
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -88,6 +88,7 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 | provisioning 在外部效果开始前已知失败 | 记录失败并按已知可重试策略决定新 Attempt；Job 进入失败或受控 retry | 只有明确安全的 provisioning 重试允许继续；不重复未知外部效果 |
 | effect intent 已写但外部结果未知（例如沙箱句柄/销毁回执缺失） | Attempt effect 标记 `unknown`，Job 进入 orphan/对账路径，保留 effect id | **禁止自动重放未知效果**；由对账或人工确认后采取下一步 |
 | 已接受 done 后 CLI 再请求模型 | 仅对具有结构化终态来源的精确 Gateway 完成拒绝放行原 Hub/done bundle；#947 候选补齐 `409` / `409:` 后接空格的精确前缀，并从 Pi `message_end` 解码结果覆盖终态归一化与原 bundle 唯一结算；进程退出、缺终态、传输/诊断、语义失败与 Repair usage 拒绝不覆盖 | 不重试进程、不重放未知效果，仍过原 ingestion/lifecycle 门；最终 SHA Actions 待验，来源契约与离线回归见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919) |
+| 运行结束但本地未观察到 done，或运行器失败 | #951 候选在归档前追加受权限保护的 `run.completion_diagnostic`，包含当前 Attempt 产出归属、原完成回执元数据和最后持久化工具类别；缺 done 使用 `AGENT_COMPLETION_UNOBSERVED`，真实 runner/语义错误不被替换 | 有产出不升级成功；未知读取/归属不记为零，不授予重发或新代际；[完成失败诊断候选](../AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)的最终 SHA Actions 待验 |
 | 用户取消或 deadline 超时 | 以状态 CAS 收敛 Job/Attempt，停止 lease，撤销 token，执行可重复清理 | 迟到回调不能复活 Job；清理自身若未知也保留 unknown 记录 |
 | Scheduler 重启 | preparing 且没有 effect 的 Job 可回 pending；已发 intent、未结算或有外部句柄的 Attempt 走 unknown/orphan | Reaper/reconcile 先对账再清理；不能把“没有日志”当作“没有效果” |
 | Agent 调用 `request_human` | 执行器在异步预检前后检查完成预留及终态互斥，防止等待期间已接受完成或人工请求后再覆盖；记录 human message，Job 进入 `waiting_human`；人工回复另走 ACK operation | ACK 与 injected 分离；独立预算到期且全部效果已结清、无本轮对账进展时才 failed/human_timeout；未结清的 active/planned/pending/unknown 效果保留等待，不推进 Canvas 失败，见 [#946 切片](../AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)，最终 SHA 待验 |
@@ -102,6 +103,10 @@ Gateway 503 仅在内核明确证明请求尚未启动时可降级；`unknown` �
 ## 数据库锁序、共享卷与完成恢复（#871/#873/#874）
 
 涉及图投影的事务按 Canvas → Job → Attempt → effects 获取锁；节点/边触发器也会锁 Canvas，不能在持 Job 后才更新节点。claim 按有界 keyset 候选页使用独立事务，每页重新获取 claim advisory lock 并读取平台暂停、活动数与配额。先排序锁 Canvas，再锁项目/Job/Attempt 并核验当前 scope 和调度条件，仅成功领取计入配额；忙锁候选不消耗槽位。需要继续扫描时先提交并释放本页锁，下一页重新按同一锁序开始，不能持 Job/Attempt 锁回头锁新 Canvas。context 的 Job-only 写入在同一 Job → Attempt 事务更新两份投影。仅已回滚的纯数据库事务允许按 [DB conflict helper](../../apps/scheduler/src/db-conflict-retry.ts)有界重试；Gateway 在 admission 提交后只向上游发一次请求，不重放请求或未知效果。
+
+#945 将现有冲突重试器接入已核对的 Job 创建、任务画布创建与 deferred 语义预检三个纯数据库入口，不建立第二套重试语义。Hub 停止/额度收敛与报告再派的业务错误继续按既有规则处理；`40P01` / `40001` / `55P03`（含 cause）必须原样抛回事务边界，避免吞掉后只剩 `25P02`；`25P02` 本身不能证明安全重试。耗尽保留稳定错误码与既有 operation 指标，不重放模型请求或未知效果。
+
+Verify 终态恢复与 orphan 收口可间接派发 Report，尚非纯数据库工作：现有派发在 Canvas 锁内写冻结输入，相同摘要才复用版本，否则使用新版本；文件不随 SQL 回滚，失败轮可能留下无已提交引用的输入。这些条件不证明跨存储原子性，本片撤回这两个混合 I/O 入口的新增自动重试，保留原事务并在 #945 继续跟踪安全边界拆分；不能以输入看似幂等为由放宽上面的纯数据库约束。原始冲突传递与业务错误隔离的无服务回归接在 bounded-contexts / verify-eligibility，真实交叉事务接在 recovery；最终 SHA Actions 待验，生产死锁消失比例未验证。
 
 任务硬删除与归档复用上述锁序（#904 / #917 评审）：claim advisory → Canvas → 排序 Job → Attempt/effects，保留判定与数据库取消同事务；知识治理回执、版本、评估及设备租约历史保持不变，命中时在取消前拒绝。事务调用方通过 `deferProvisionInterruption` 将 provision abort/provider cancel 延后到真实提交成功，之后再销毁 sandbox；取消 CAS 后的 SQL 失败不应改变外部 runner。独立 PostgreSQL 回归覆盖删除回滚、提交后中断与归档/事件交错，最终工程验收仍以当前 SHA 的 Actions 为准。
 
@@ -194,6 +199,12 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 
 该 v1 路线修订仅作为不可变历史记录读取；当前路线修改使用上文 v2 `execution_route` CAS。历史事件、快照和回执不改写，未知效果、待结算回执或失效目标都不能借旧协议恢复执行。详见[路线生命周期](../PLAN_GAP_PROJECTION.md#未派发路线修订)。
 
+
+## 创建入口的完整运行冻结（#943 / #948）
+
+当前修复把 task retry、自动 Hub、Verify、人工补证及 Task/Finding Report 接到 [`job-runtime-freeze.ts`](../../apps/scheduler/src/job-runtime-freeze.ts)，与普通创建共用 runtime knobs、OM quota、profile/launch 的冻结规则；Job timeout 列使用同一冻结值。retry 在原 dispatcher-advisory/Canvas 事务内、清理旧画布之前冻结；冻结失败或后续插入失败保留旧任务。既有 Intent/PlanTask 已使用该规则，不增加第二执行路径。
+
+缺损历史快照仍明确拒绝，不自动用当前配置重建预算；管理恢复反馈增加缺失字段，不声称具备安全重放证据。范围、残留恢复项与 Actions 入口见[生命周期专题](../AGENT_REPAIR_LIFECYCLE.md#创建入口补齐与缺损快照诊断943--948)；本切片最终 SHA 验收待完成。
 
 ## Model Gateway 透明传输与结算（#923）
 

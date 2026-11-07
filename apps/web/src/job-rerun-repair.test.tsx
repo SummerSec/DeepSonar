@@ -51,6 +51,20 @@ test("ordinary drift and current unresolvable configuration have distinct feedba
   assert.equal(classifyJobRerunError(ordinary, "p").message, ordinary.message);
 });
 
+test("budget snapshot diagnostics name fields without inventing a safe refreeze or credential repair", () => {
+  const body = { missing_fields: ["agent_snapshot_json.runtime_knobs.stall_sec"], next_action: "inspect-job-recovery" };
+  const feedback = classifyJobRerunError(stale(body, 409, "GATEWAY_REQUEST_BUDGET_INVALID"), "p");
+  assert.match(feedback.message, /stall_sec/);
+  assert.match(feedback.message, /历史策略和执行效果/);
+  assert.match(feedback.message, /不会自动补冻或重置额度/);
+  assert.equal(feedback.repair, null);
+  for (const error of [
+    stale(body, 500, "GATEWAY_REQUEST_BUDGET_INVALID"),
+    stale({}, 409, "GATEWAY_REQUEST_BUDGET_INVALID"),
+    stale(body, 409, "REPAIR_REQUESTS_EXHAUSTED"),
+  ]) assert.equal(classifyJobRerunError(error, "p").message, error.message);
+});
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: Error) => void;

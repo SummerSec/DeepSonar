@@ -34,6 +34,7 @@ let runnerCalls = 0;
 let bundleCalls = 0;
 let omitRunnerDispose = false;
 let gate: (() => boolean) | undefined;
+let diagnosticRows: Record<string, unknown>[] = [];
 const fakeSql = Object.assign(async (strings: TemplateStringsArray, ...values: unknown[]) => {
   const query = strings.join("?").replace(/\s+/g, " ").trim();
   if (query.startsWith("SELECT * FROM jobs")) return [job];
@@ -43,6 +44,9 @@ const fakeSql = Object.assign(async (strings: TemplateStringsArray, ...values: u
   }
   if (query.startsWith("SELECT id, attempt_no, snapshot_identity_json FROM job_attempts")) return [{ id: attemptId, attempt_no: 1 }];
   if (query.startsWith("UPDATE jobs SET payload_json") || query.startsWith("UPDATE jobs SET transcript_uri")) return [];
+  if (query.startsWith("SELECT j.id FROM jobs j JOIN job_attempts")) { assert.deepEqual(values, [jobId, attemptId]); return [{ id: jobId }]; }
+  if (query.includes("AS artifacts")) return [{ artifacts: "0", findings: "0", facts: "0", unattributed_job_artifacts: "0" }];
+  if (query.startsWith("SELECT event_id,payload_json FROM events")) return [];
   throw new Error(`Unexpected executor database access: ${query}`);
 }, { json: (value: unknown) => value });
 mock.module(new URL("./db.js", import.meta.url), { namedExports: { ...database, sql: fakeSql } });
@@ -92,6 +96,7 @@ mock.module(new URL("./evidence.js", import.meta.url), { namedExports: { ...evid
   JobEvidenceWriter: class {
     attemptId = attemptId;
     setSession() {}
+    async appendNormalized(event: Record<string, unknown>) { diagnosticRows.push(event); return diagnosticRows.length; }
     async finalize() { return { uri: "offline:transcript" }; }
   },
 } });
@@ -122,10 +127,11 @@ export function call(operationId: string, input: unknown, options: Partial<Platf
 }
 export function terminalEvents() { return events.filter(event => ["human", "done", "hub_decision"].includes(event.type)); }
 export function terminalBundleCalls() { return bundleCalls; }
+export function completionDiagnosticEvidence() { return diagnosticRows.filter(row => row.type === "run.completion_diagnostic"); }
 export async function runExecutor(act: () => Promise<void | RealAgentResult>, roleKind = "role", skipRunnerDispose = false) {
   omitRunnerDispose = skipRunnerDispose;
   snapshot.role_kind = roleKind;
-  events = []; runnerCalls = 0; bundleCalls = 0; preflight = async () => {}; gate = undefined; scenario = act;
+  events = []; diagnosticRows = []; runnerCalls = 0; bundleCalls = 0; preflight = async () => {}; gate = undefined; scenario = act;
   const token = "offline-capability";
   try { await executeReal(jobId, "audit", { jobId, token, operationIds: operations, env: {
     DEEPSONAR_JOB_ID: jobId, DEEPSONAR_API_TOKEN: token,

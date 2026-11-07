@@ -286,12 +286,13 @@ try {
       assert.equal(row.status, expectedStatus, `${mode}: ${detail}`);
     }
     assert.equal((await runner.listResources({ jobId: id })).length, 0, `${mode}: sandbox leaked`);
+    assert.ok(attempts.some((attempt: any) => attempt.sandbox_id && attempt.status !== "active"),
+      `${mode}: expected runtime scenario was not reached; terminal_error=${row.error ?? "none"}`);
     const tokens = await sql`SELECT revoked_at FROM job_capability_tokens WHERE job_id=${id}`;
     assert.ok(tokens.length > 0 && tokens.every((token: any) => token.revoked_at), "terminal Job tokens must be revoked");
     const modelTokens = await sql`SELECT status FROM job_tokens WHERE job_id=${id}`;
     assert.ok(modelTokens.length > 0 && modelTokens.every((token: any) => token.status !== "active"), "model tokens must be revoked too");
     assert.ok(!(await runtime.sharedAssetsVolumeManager.listManaged()).some((volume) => volume.jobId === id), "shared-assets mount leaked");
-    assert.ok(attempts.some((attempt: any) => attempt.sandbox_id && attempt.status !== "active"));
     Object.assign(jobReport, { attempts, resources_remaining: 0 });
     await saveReport();
     return row;

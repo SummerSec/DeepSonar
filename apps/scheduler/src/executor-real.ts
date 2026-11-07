@@ -1,6 +1,7 @@
 import { registerRuntimeTerminalState } from "./domains/platform-api/registry.js";
 import { taskContractPrompt } from "./task-contract-preflight.js";
 import { prepareCompletionPayload } from "./completion-payload.js";
+import { createCompletionFailureDiagnostics } from "./completion-failure-diagnostic.js";
 import { normalizeArchivedReaFact } from "./domains/cli-capability/rea-cli-fact.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -14,7 +15,6 @@ import {
   type RealAgentResult,
 } from "@deepsonar/runtime-sandbox";
 import {
-  DonePayload,
   ControlEventEnvelope,
   EmitFactDirectPayload,
   EventEnvelope,
@@ -1592,6 +1592,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   };
   const evidenceWriter = new JobEvidenceWriter(jobId, provider, String(attemptId ?? job.sandbox_id ?? job.id ?? "unknown"));
   const evidenceAttemptId = evidenceWriter.attemptId;
+  const completionDiagnostics = createCompletionFailureDiagnostics({ jobId, attemptId: evidenceAttemptId, snapshot: job.agent_snapshot_json, writer: evidenceWriter, database: sql });
   // 只有证据行持久化后才发布实时流游标。
   let streamPublishTail: Promise<void> = Promise.resolve();
 
@@ -1603,7 +1604,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   registerJobEvidenceSecrets(jobId, [platformToken, gatewayToken].filter((value): value is string => Boolean(value)));
 
   const knowledgeRuntime = createKnowledgeRuntime({ db: sql, governanceHash: PROJECT_KNOWLEDGE_GOVERNANCE_HASH });
-  const runtimePlatformHandler = async (context: PlatformRuntimeHandlerContext): Promise<Record<string, unknown>> => {
+  const runtimePlatformHandler = completionDiagnostics.wrapControlHandler(async (context: PlatformRuntimeHandlerContext): Promise<Record<string, unknown>> => {
     const operation = context.operationId;
     if (!platformOperations.includes(operation)) throw new Error("operation is not enabled for this Job");
     if(context.planPhase==="resolve" && operation==="submit_hub_decision") return {resolved_plan_input:await expandWorkspacePayloadFile("submit_hub_decision",context.input,{readWorkspaceFile:(filePath,maxBytes)=>readSandboxWorkspaceFileForRuntime(filePath,maxBytes)})};
@@ -1729,7 +1730,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     }
     if (operation === "mark_job_done" && context.completionPhase === "commit") completionReservation = null;
     return { accepted: true, operation, completion_ready: Boolean(semanticState.done) };
-  };
+  });
 
   // Runtime callback 使用与平台语义事件相同的沙箱安全文件读取器；
   // 沙箱完成运行准备后才绑定该读取器。
@@ -1853,6 +1854,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         streamPublishTail = streamPublishTail
           .then(() => persisted)
           .then((evidenceSeq) => {
+        completionDiagnostics.observePersisted(e, evidenceSeq);
         // 实时流：选择性字段转发（输入/输出可能很大，只取摘要）
         if (type === "tool.call.started") {
           const toolName = String(e.toolName ?? "tool");
@@ -1896,6 +1898,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   ).catch(async (error) => {
     const message = error instanceof Error ? error.message : String(error);
     await streamPublishTail;
+    await completionDiagnostics.capture({ phase: "runner_exception", host_done_observed: Boolean(semanticState.done), runner_error_source: "process" });
     const evidence = await evidenceWriter.finalize(message);
     await sql`UPDATE jobs SET transcript_uri = ${evidence.uri} WHERE id = ${jobId}`;
     throw error;
@@ -1909,6 +1912,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
 
   evidenceWriter.setSession(result.session);
   await streamPublishTail;
+  if (!semanticState.human && (isSemanticAgentRunError(result) || (isFinalAgentRunnerError(result)
+    && !acceptedCompletionSupersedesRunnerFailure(result, Boolean(semanticState.done))) || !semanticState.done)) {
+    await completionDiagnostics.capture({ phase: isSemanticAgentRunError(result) || isFinalAgentRunnerError(result) ? "runtime_failure" : "completion_missing",
+      host_done_observed: Boolean(semanticState.done), error_kind: result.errorKind, runner_error_source: result.runnerErrorSource });
+  }
   const evidence = await evidenceWriter.finalize(
     isSemanticAgentRunError(result) || isFinalAgentRunnerError(result) ? result.error : undefined,
   );
@@ -1935,7 +1943,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   } else if (isFinalAgentRunnerError(result)) {
     throw reconstructAgentRunError(result.error!, result.errorDetails);
   }
-  if (!semanticState.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
+  if (!semanticState.done) throw completionDiagnostics.missingCompletionError();
 
   // Hub 决策在 Agent 结束后落地：避免工具调用后 Agent 尚未收尾时提前派生下一轮。
   const decision = isHub && semanticState.hub
