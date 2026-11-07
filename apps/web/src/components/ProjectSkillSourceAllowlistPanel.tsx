@@ -178,9 +178,8 @@ export function ProjectSkillSourceAllowlistPanel({
             {permissionHint}
           </div>
         )}
-        {loading ? (
-          <div className="text-[12px] text-zinc-500">加载中…</div>
-        ) : sources.length === 0 ? (
+        {loading && <div role="status" className="text-[12px] text-zinc-500">刷新中…</div>}
+        {sources.length === 0 ? (
           <div className="rounded-md border border-dashed border-ink-700 px-3 py-4 text-[12px] text-zinc-500">
             平台还没有任何 Skill 源。有平台级 skills:write 权限的账号可在下方登记合规仓库，再同步候选并批准启用。
           </div>

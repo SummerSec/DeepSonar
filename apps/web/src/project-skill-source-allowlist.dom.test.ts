@@ -150,6 +150,37 @@ test("unsaved disable survives registration and shared sync failures, then can b
   });
 });
 
+test("shared sync failure remains visible through a deferred metadata refresh", async () => {
+  await withFixture(async (f) => {
+    await f.click(f.checkbox());
+    const refresh = deferred<Awaited<ReturnType<typeof api.projectSkillSources>>>();
+    api.projectSkillSources = () => refresh.promise;
+    await f.click(f.button("同步候选"));
+    assert.match(f.container.textContent!, /同步失败.*403/);
+    assert.match(f.container.textContent!, /刷新中/);
+    assert.equal(f.checkbox().checked, false, "refresh preserves the mounted draft row");
+    await act(async () => refresh.resolve({ configured: true, sources: f.rows.A }));
+    assert.match(f.container.textContent!, /同步失败.*403/);
+    assert.match(f.toast(), /同步失败.*403/);
+    assert.equal(f.checkbox().checked, false);
+  });
+});
+
+test("shared sync success survives a metadata refresh failure without claiming write failure", async () => {
+  await withFixture(async (f) => {
+    api.syncSkillSource = async () => ({ ok: true, modules: 2, changed: false, skipped: true, candidate_hash: null });
+    const refresh = deferred<Awaited<ReturnType<typeof api.projectSkillSources>>>();
+    api.projectSkillSources = () => refresh.promise;
+    await f.click(f.button("同步候选"));
+    const success = f.toast();
+    assert.doesNotMatch(success, /同步失败/);
+    await act(async () => refresh.reject(new Error("fixture metadata refresh unavailable")));
+    assert.match(f.toast(), /加载 Skill 源可用性失败.*fixture metadata refresh unavailable/);
+    assert.doesNotMatch(f.container.textContent!, /同步失败/);
+    assert.ok(f.checkbox());
+  });
+});
+
 test("server false plus unsaved check is not usable; only a confirmed save enables it", async () => {
   const f = await fixture();
   try {
