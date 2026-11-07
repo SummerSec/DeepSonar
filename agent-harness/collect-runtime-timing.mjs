@@ -24,13 +24,14 @@
  *     [--scenario cold|warm|invalidated|unknown|auto] [--failure-class C] \
  *     [--aggregate] [--min-samples 3] [--summary FILE] [--json-out FILE]
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   SCHEMA, SCENARIOS, FAILURE_CLASSES, COMBINED_SMOKE_STAGE, DEFAULT_MIN_SAMPLES,
   newRun, setMeta, startStage, stopStage, skipStage, finalise, summarise,
   markdownRun, aggregate, markdownAggregate, defaultDir,
+  collectorProvenance, hasTrustedProvenance, trustedCollector,
 } from "./runtime-build-timing.mjs";
 
 export const IMAGE_KEY = "deepsonar-chrome-fuzz";
@@ -128,13 +129,18 @@ export function collectRun(payload, opts = {}) {
   const failureClass = opts.failureClass || (outcome === "success" ? "none" : "unknown");
   if (!FAILURE_CLASSES.includes(failureClass)) throw new Error(`invalid failure_class: ${failureClass}`);
 
-  const runId = `gha-${run.id}`;
+  const runAttempt = Number.isSafeInteger(run.run_attempt) && run.run_attempt > 0 ? run.run_attempt : "unknown";
+  const runId = `gha-${run.id}-attempt-${runAttempt}`;
   const timing = newRun({
     runId, image: IMAGE_KEY, platform: PLATFORM, scenario,
     now: run.run_started_at || run.created_at || undefined,
   });
   setMeta(timing, "head_sha", String(run.head_sha || "unknown"));
-  setMeta(timing, "test_sha", String(run.head_sha || "unknown"));
+  // Run metadata is not checkout evidence. In particular a PR head is not its
+  // tested merge commit. Do not consume a payload-supplied tested SHA, or query
+  // today's mutable refs/pull/<n>/merge to fill a historical observation.
+  setMeta(timing, "tested_checkout_sha", "unknown");
+  timing.provenance = opts.collector ? collectorProvenance(opts.collector, opts.policy) : null;
   setMeta(timing, "base_sha", String(opts.baseSha || "unknown"));
   // The Actions job payload exposes step timings but not step outputs.
   setMeta(timing, "fingerprint", "unknown");
@@ -171,12 +177,7 @@ export function collectRun(payload, opts = {}) {
   if (smokeStep) record(timing, COMBINED_SMOKE_STAGE, smokeStep);
 
   const finished = finalise(timing, outcome, failureClass);
-  const state = { ...finished };
-  delete state.summary;
-  const report = {
-    ...finished,
-    summary: summarise(finished),
-    source: {
+  const source = {
       schema: `${SCHEMA}.source`,
       collection: "github-actions-step-timestamps",
       workflow: String(run.name || "unknown"),
@@ -184,13 +185,21 @@ export function collectRun(payload, opts = {}) {
       run_conclusion: String(run.conclusion || "unknown"),
       run_url: String(run.html_url || ""),
       head_branch: String(run.head_branch || ""),
-      head_sha: String(run.head_sha || ""),
+      source_sha: String(run.head_sha || "unknown"),
+      tested_checkout_sha: "unknown",
+      checkout_evidence: "unavailable-in-run-jobs-api",
+      run_attempt: runAttempt,
+      event: String(run.event || "unknown"),
+      repository: String(run.repository?.full_name || "unknown"),
+      workflow_path: String(run.path || "unknown"),
       build_job: buildJob?.name || null,
       smoke_job: smokeJob?.name || null,
       build_step: buildStep?.name || null,
       smoke_step: smokeStep?.name || null,
-    },
   };
+  const state = { ...finished, source };
+  delete state.summary;
+  const report = { ...state, summary: summarise(state) };
   return { runId, state, report };
 }
 
@@ -209,6 +218,28 @@ export function collectAll(payloads, opts = {}) {
     }
   });
   return { collected, skipped };
+}
+
+/** Only import records whose producer was independently verified through Actions.
+ * Legacy samples are never upgraded or stamped with the current collector identity. */
+export function importHistory(directory, outDir, trust, producerRunId) {
+  const result = { imported: 0, excluded: 0 };
+  const producer = trust?.collectors?.find((record) => record.id === producerRunId);
+  if (!trustedCollector(producer, trust?.policy)) return { ...result, excluded: 1, reason: "untrusted artifact producer" };
+  if (!existsSync(directory)) return result;
+  for (const file of readdirSync(directory, { withFileTypes: true })) {
+    if (!file.isFile() || !file.name.endsWith(".json") || file.name.endsWith(".report.json")) continue;
+    let sample;
+    try { sample = JSON.parse(readFileSync(join(directory, file.name), "utf8")); } catch { result.excluded++; continue; }
+    if (!hasTrustedProvenance(sample, trust) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(sample.runId ?? "")) {
+      result.excluded++; continue;
+    }
+    mkdirSync(outDir, { recursive: true });
+    const destination = join(outDir, `${sample.runId}.json`);
+    if (!existsSync(destination)) writeFileSync(destination, `${JSON.stringify(sample, null, 2)}\n`);
+    result.imported++;
+  }
+  return result;
 }
 
 function parseArgs(argv) {
@@ -233,13 +264,21 @@ function appendSummary(path, text) {
 
 function runCli(argv, env = process.env) {
   const args = parseArgs(argv);
+  const trust = args.trust ? JSON.parse(readFileSync(args.trust, "utf8")) : null;
+  if (args["validate-collector"]) {
+    const record = JSON.parse(readFileSync(args["validate-collector"], "utf8"));
+    if (!trustedCollector(record, trust?.policy)) throw new Error("untrusted collector run metadata");
+    return { trusted: true };
+  }
+  if (args["import-history"]) return importHistory(args["import-history"], resolve(args["out-dir"]), trust, Number(args["producer-run-id"]));
   if (!args.input) throw new Error("--input is required");
   if (!existsSync(args.input)) throw new Error(`no input file: ${args.input}`);
   const outDir = resolve(args["out-dir"] || defaultDir());
   mkdirSync(outDir, { recursive: true });
   const payloads = JSON.parse(readFileSync(args.input, "utf8"));
 
-  const opts = {};
+  const opts = { policy: trust?.policy,
+    collector: trust?.collectors?.find((record) => record.id === trust.policy.current_run_id) };
   if (args.scenario && args.scenario !== true && args.scenario !== "auto") opts.scenario = args.scenario;
   if (args["failure-class"] && args["failure-class"] !== true) opts.failureClass = args["failure-class"];
   if (args["base-sha"] && args["base-sha"] !== true) opts.baseSha = args["base-sha"];
@@ -262,7 +301,7 @@ function runCli(argv, env = process.env) {
 
   let result = null;
   if (args.aggregate) {
-    result = aggregate(outDir, Number(args["min-samples"] || DEFAULT_MIN_SAMPLES));
+    result = aggregate(outDir, Number(args["min-samples"] || DEFAULT_MIN_SAMPLES), trust);
     appendSummary(summary, markdownAggregate(result));
     if (args["json-out"] && args["json-out"] !== true) {
       writeFileSync(args["json-out"], `${JSON.stringify(result, null, 2)}\n`);

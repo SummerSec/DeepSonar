@@ -1,121 +1,71 @@
-# 运行镜像构建分项量测（#961 P0）
+# 运行镜像构建分项量测（#970 / #961 P0）
 
-> 状态：**P0 工具与采集链路已交付，并完成 30 个历史 CI run 的只读回填实测；受控 cold / invalidated 标注与「三类各三次」可比样本仍未累积**。本文只描述已落地的工程口径与描述性观测，不描述任何提速结论。
+> 状态：**P0 旁路采集与来源隔离修复已接线，当前修复的最终 SHA Actions 待验**。历史 v1 输出仅作描述性观测，不是可信可比 benchmark；本片不承诺提速。
 > 同步日期：2026-11-07
 
-## 1. 交付范围
+## 1. 范围与接线
 
-[#961](https://github.com/SummerSec/DeepSonar/issues/961) 的 P0 是**可观测性基础设施**：先把运行镜像构建的分项耗时、缓存复用情况和可比样本判定做成可复核的证据，P2 的稳定 V8 builder / toolchain 缓存拆分与「冷 / 热 / 失效各三次 + P95」真实对照必须靠它先攒数据。一次 CI 运行只能产生一个样本，因此本片不承诺任何 benchmark 数字。
-
-本片交付：
+复用 [#961](https://github.com/SummerSec/DeepSonar/issues/961) 的量测工具，不修改现有构建 workflow、ARM 路由、发布门禁或 `ci-summary`。
 
 | 组件 | 文件 | 职责 |
 | --- | --- | --- |
-| 数据模型 / 聚合器 | [`agent-harness/runtime-build-timing.mjs`](../agent-harness/runtime-build-timing.mjs) | 分阶段计时、结构化证据、Markdown 摘要、`GITHUB_OUTPUT`、中位数 / nearest-rank P95、样本门槛 |
-| 离线采集器 | [`agent-harness/collect-runtime-timing.mjs`](../agent-harness/collect-runtime-timing.mjs) | 把 GitHub Actions job/step 时间戳映射成标准 run 记录 |
-| 采集脚本 | [`.github/ci/runtime-timing-collect.sh`](../.github/ci/runtime-timing-collect.sh) | 组装 API payload、回填历史证据 artifact |
-| 独立 workflow | [`.github/workflows/runtime-build-timing.yml`](../.github/workflows/runtime-build-timing.yml) | `workflow_run` / `pull_request` / `workflow_dispatch` 触发，跑回归、采集、聚合、上传 artifact |
-| 单测 | `runtime-build-timing.test.mjs`、`collect-runtime-timing.test.mjs` | 27 个用例，覆盖口径与 fail-closed 边界 |
+| 阶段与聚合 | [runtime-build-timing.mjs](../agent-harness/runtime-build-timing.mjs) | v2 记录、来源核验、上下文未知排除、nearest-rank P95 与样本门槛 |
+| 离线映射 | [collect-runtime-timing.mjs](../agent-harness/collect-runtime-timing.mjs) | Actions run/jobs payload → 原始观测；不联网、不读 token、不接受 payload 自报可信 |
+| API 采集 | [runtime-timing-collect.sh](../.github/ci/runtime-timing-collect.sh) | 只读 Actions API、独立来源清单、受限历史 artifact 下载与导入 |
+| 独立工作流 | [runtime-build-timing.yml](../.github/workflows/runtime-build-timing.yml) | PR 仅回归；默认分支 `workflow_run` / `workflow_dispatch` 才采集、聚合、上传 |
+| 回归 | [阶段测试](../agent-harness/runtime-build-timing.test.mjs)、[采集器测试](../agent-harness/collect-runtime-timing.test.mjs) | 来源隔离、SHA 语义、未知上下文、阶段缺失与样本不足 |
 
-## 2. 为什么不在构建 workflow 里埋点
+`ci.yml` 的 ARM 构建与原生冒烟跨 job；API 时间戳适合保留分项观测，不足以凭空补齐 BuildKit 缓存、fingerprint 或历史 checkout 证据。该方案不接触镜像字节，也不改变任何运行时准入。
 
-`ci.yml` 在 `chrome-fuzz-arm64-build` 构建镜像，在另一个 `chrome-fuzz-arm64` job 里做原生 ARM 冒烟；`release.yml` 的 `chrome-image-builds` / `chrome-fuzz-arm64-smoke` 同样是跨 job。计时状态文件放在 `$RUNNER_TEMP` 只能在同一 job 内共享，跨 job 必须加 artifact 搬运。同时 #964 与 #965 都还在修改 `ci.yml`，三方同时改同一段会制造不必要的合并冲突。
+## 2. 正式历史的信任边界
 
-GitHub Actions API 已经给出每个 step 的 `started_at` / `completed_at`。因此 P0 采用**完全无侵入**的旁路采集：
+PR 事件只运行 `regression` job 的两个 Node 测试文件。`collect` job 显式排除 PR，并只允许仓库默认分支；默认分支采集 checkout 固定到 `github.workflow_sha`，`fetch-depth: 0` 用于验证历史 collector revision 的祖先关系，不 checkout 被观测 PR 的代码。
 
-- 不修改 `ci.yml`、`chrome-runtime.yml`、`release.yml`；
-- 不修改任何门禁条件、运行计划或 `ci-summary` 判定；
-- 采集器只读 Actions API，不需要写权限、不接触构建产物、不缓存凭据；
-- 可以对历史 run 回填，这是攒够每类三次样本的现实途径。
+采集脚本从 GitHub API 读取仓库默认分支、collector workflow ID、当前及历史 collector run。导入前逐项核对：
 
-## 3. 数据口径
+- 运行及 head repository 精确等于当前仓库，branch 等于 API 返回的默认分支；
+- event 只能是 `workflow_run` 或 `workflow_dispatch`，workflow 路径与 ID 必须对应本 collector；
+- 历史 run 必须成功，collector `head_sha` 是固定 checkout 的祖先；当前 run 的 SHA、attempt 与 GitHub 宿主环境一致；
+- artifact 中样本必须是当前 v2 schema，`collector_revision` 精确匹配本版，且 run ID/attempt、仓库、event、branch、workflow 与 collector SHA 全部匹配独立 API 记录。
 
-### 阶段
+下载容器的 producer run 本身也要先通过核验；PR artifact 即使伪造成功 smoke、schema 或另一可信 run 的 provenance，也不能进入正式历史。artifact 内的代码从不执行。聚合器收到的是采集脚本写在 artifact 目录之外的 trust 清单；JSON 自报 provenance 不是信任根。没有独立 trust 清单，正式聚合不接纳任何记录。
 
-`queue`（run 开始 → build job 开始）、`handoff`（build job 结束 → 原生 smoke job 开始）——两者都单列、不计入合计；`download` / `compile` / `export_push`（P2 拆分后才会有）、`build`（BuildKit 整段回退）、`pull`、`smoke`、`native_smoke`。`handoff` 是实测中发现的真实跨 job 间隙（一次 main 运行里约 159 秒），显式记录而不是让它悄悄消失。
+旧 v1 或缺少 provenance 的样本直接排除，不兼容、不迁移，也不由当前 collector 补签。历史 artifact 中保留的原 collector 身份不改写；无法再核验其生产 run 时同样排除。当前采集记录与历史记录按原 run/attempt 去重，重复不增加样本数。
 
-- 当前 Dockerfile 把源码拉取、GN 处理和编译放在一个大 `RUN`，所以只有 `build` 整段计时，**不能用于阶段归因**。
-- 原生冒烟 job 把 `docker pull` 和 `test-chrome-runtime.mjs` 写在同一 step，step 级时间戳拆不开，因此诚实记为合并观测 `native_smoke`。它与拆分的 `pull` + `smoke` 覆盖同一时间窗，端到端合计可比，但两者**绝不叠加**；同时出现时判为口径冲突并排除该样本。
-- src 缓存复用时构建**确实没有发生**。`skipped (observed)` 是明确观测到的 0 ms，带 reason，与「证据缺失」严格区分；缺失阶段仍然不按 0 计。
+## 3. observed head 与 tested checkout 严格分开
 
-### 场景与失败分类
+`provenance.collector_sha` 表示运行采集器代码的 revision；`source.source_sha` / `meta.head_sha` 表示被观测 Actions run 的 `head_sha`，两者不能混用。
 
-`cold` / `warm` / `invalidated` / `unknown`；失败分类 `none` / `apt_external` / `compile` / `cache_invalidation` / `unknown`。
+实际测试版本单列为 `source.tested_checkout_sha` / `meta.tested_checkout_sha`，还须有对应不可变 checkout 证据。当前 run/jobs API 不提供这项证据，因此旁路采集一律记 `unknown`，并标记 `checkout_evidence=unavailable-in-run-jobs-api`。PR 默认 checkout 经常是 merge commit，不是其分支 head；即便输入 payload 自带 `test_sha`、`tested_checkout_sha` 或 provenance 字段，采集器也不采用。不会读取当前 `refs/pull/<n>/merge` 来替历史 run 补猜测试版本。
 
-只有 `build` step 被跳过可以可靠推断为 `warm`。**冷与失效无法从时间戳区分**：需要 BuildKit 的缓存命中事件（P2）。因此采集器默认把重建标为 `unknown`，受控 benchmark 必须通过 `workflow_dispatch` 的 `scenario` 输入显式标注，不允许自动猜测。
+本片不新增日志解析或历史 checkout 证据采集。未来若接入不可变证据，head 与 tested SHA 可以不同；仅已知 head 不足以证明 tested SHA。原始时间戳、run URL、event、branch、source SHA、attempt 仍保留，排除统计不等于删除观测。
 
-### 可比样本判定
+## 4. 阶段、场景与可比筛选
 
-一条记录只有全部满足才算可比并进入中位数 / P95：
+阶段为 `queue`、`handoff`、`download`、`compile`、`export_push`、`build`、`pull`、`smoke`、`native_smoke`。
 
-1. 所需阶段齐全（未拆分时为 `build` + 原生冒烟；拆分后为三项细粒度阶段 + 原生冒烟）；
-2. 没有 `mixedSmoke` 口径冲突；
-3. `outcome == success`，且 `failure_class == none`；
-4. 原生 ARM smoke job 真实成功——**缓存命中不能替代原生冒烟通过**。
+- queue 与跨 job handoff 单列，不计入 build+smoke 合计。
+- 未拆分 BuildKit 时只记录 `build` 整段，不冒充 download/compile/export 分项。
+- 同一步中的 pull+native smoke 只记录 `native_smoke`，与拆分 pull/smoke 不叠加；混用排除。
+- 明确 src 复用而 skipped 是带 reason 的观测零耗时；缺失阶段不是零。
+- `warm` 仅由明确 build skip 推断；重建默认 `unknown`，不能由时间戳猜 cold / invalidated。手动 scenario 只是受控标注，不补齐缺失证据。
 
-`outcome` 按**被测 ARM 链路**（build job + native smoke job）的结论判定，不按整个 CI run 的结论判定：同一 run 里无关的 Windows / 数据库 job 失败，不该让一条完整且原生冒烟已通过的计时证据作废。run 级结论仍写入 `source.run_conclusion` 供追溯；run 或链路被取消时整条排除。
+正式可比样本须来源通过上述核验、阶段齐全无冲突、ARM build/smoke 成功且 failure_class=none，另外 tested checkout SHA、fingerprint、base digest、matched inputs 和 scenario 均已知。任一重要上下文未知，只保留描述性观测，不计入 benchmark。source 与 meta 的 tested SHA/证据冲突也排除。
 
-失败、取消、排队、未分类失败、证据不完整各自单列统计。每个场景的可比样本数 < `minSamples`（默认 3）时**不报告 P95**，只报中位数和「样本不足」。P95 用 nearest-rank，不做插值。
+**当前纯 API 旁路无法满足全部上下文条件，故成功 smoke 或可信 collector 并不意味着有可比样本；可能持续为零，不能为了达到门槛把 unknown 改成已知。** 排除原因分别报告来源未核验、旧 schema、上下文未知、失败、取消、失败未分类、阶段不完整和重复观测。
 
-### 证据字段
+每个场景不足三个已核验可比样本时 P95 为 null，摘要显示“样本不足”；有足够受控样本才使用 nearest-rank。单纯冷热量级差异、跨 PR 的不同输入或缓存状态不构成提速结论。本片没有交付受控冷/热/失效各三次对照。
 
-`base_sha` / `head_sha` / `test_sha` / `fingerprint` / `base_digest` / `src_reuse` / `buildkit_cache` / `matched_inputs` / `failure_class`。Actions job payload 只暴露 step 时间，**不暴露 step outputs**，所以 `fingerprint`、`base_digest`、`buildkit_cache`、`matched_inputs` 在旁路采集下如实写 `unknown`，不伪造。这些字段留给 P2 在 job 内埋点时补齐。
+## 5. 执行链与验证边界
 
-## 4. 采集链路
+默认分支的 collector：回归 → 固定自身 revision → 读取 API 元数据与 run/jobs → 核验历史 producer → 下载/筛选 v2 样本 → 映射当前观测 → 带独立 trust 清单聚合 → summary 与 90 天 artifact。
 
-```
-ci / chrome-runtime / release 完成
-        │ workflow_run
-        ▼
-runtime-build-timing.yml
-        │ gh api: actions/runs/{id} + jobs（分页）
-        ▼
-.github/ci/runtime-timing-collect.sh
-        │ 组装 { run, jobs }[]，并 gh run download 回填历史 artifact
-        ▼
-collect-runtime-timing.mjs（纯离线）
-        │ <gha-{runId}>.json（状态） + .report.json（含来源追溯）
-        ▼
-runtime-build-timing.mjs aggregate
-        │ GITHUB_STEP_SUMMARY + aggregate.json
-        ▼
-artifact: runtime-timing-evidence（保留 90 天）
-```
+`workflow_dispatch` 的 `run_ids` 可定向回填，留空则读取最近 `recent` 个已完成 CI run。历史检索只限默认分支成功 collector，再逐一验证 event/repo/workflow/revision；检索不到或旧 provenance 缺失只会减少可采历史，不会借 PR artifact 补足。release 未具名 build step 仍不猜测；Chrome 专项的 amd64 观测也不能冒充 ARM 样本。
 
-`workflow_dispatch` 可指定逗号分隔的 `run_ids` 做定向回填；留空则取最近 `recent` 次已完成的 `ci` run。每次运行把过去 30 次本 workflow 的成功 artifact 拉回证据目录，同名 run id 以最新采集覆盖，因此聚合是幂等的。`workflow_run` 只携带单个 run id，所以合并后应手动跑一次 **`workflow_dispatch`（`run_ids` 留空）** 初始化历史证据 artifact；否则首次自动运行只有一条样本，摘要会如实显示「样本不足」。
+回归在上述独立 workflow 的 `regression` job，以及现有 `pnpm ci:unit:runtime-timing` 入口接线；测试含伪造可信 provenance 的成功 PR artifact、有效可信历史、旧 schema 排除、缺 checkout 证据及 head/tested SHA 不同等场景。本轮仅静态审查与 `git diff --check`，**未运行本地测试、构建、typecheck、bash/YAML 检查、collector 或任何实测**；新信任链的 Actions 执行证据待最终 SHA 验收，不沿用原 PR 的 27/27 结果。
 
-## 5. 验收与命令
+## 6. 旧版首次回填观测（保留历史，不进入 v2 正式统计）
 
-```bash
-pnpm ci:unit:runtime-timing        # 27 个用例，纯 node --test，无需数据库或 pnpm install
-node --test agent-harness/runtime-build-timing.test.mjs agent-harness/collect-runtime-timing.test.mjs
-```
+原 v1 在 2026-11-07 从 30 个历史 CI run 写出 21 条观测，旧筛选器称其中 8 条“可比”：unknown 4 条的中位数为 8,544,000 ms、P95 8,584,000 ms；warm 4 条的中位数为 48,000 ms、P95 56,000 ms。原采集者还记录了 PR workflow 上传同名 artifact 的现象。
 
-`runtime-build-timing.yml` 的 `量测工具与采集器回归` 步骤直接执行同一组用例，不需要完整 workspace 安装。采集器不联网，job/step 映射全部由 fixture 覆盖。
-
-2026-11-07 另用只读 GitHub Actions API 取回 30 个已完成 `ci` run 的 job payload，在本地跑完整 `collect → aggregate` 链路，核对了真实 step 名（`Build Chrome Fuzz arm64 by digest`、`原生执行 Chrome Fuzz 不可变 digest 冒烟`）、`skipped` 的 src 复用 step、以及跨 job 时间戳。结果见 §7；合并后的首个 `workflow_run` 仍需再核对一次线上 artifact。
-
-## 6. 已知限制与后续
-
-- `release.yml` 的 `docker/build-push-action@v6` step 没有显式 `name`，Actions payload 无法可靠选中它。当前只有 `ci.yml` 的 `Build Chrome Fuzz arm64 by digest` 能产出完整可比样本；其余工作流的 run 会因阶段缺失被正确排除，而不是补一个猜测值。要纳入 release，需要给该 step 具名或提供显式选择器。
-- `chrome-runtime.yml` 是 amd64 专项，不是 #961 的 V8 ARM 目标；不可把它已有的路径 / 缓存策略推广到整个 CI。
-- #965 计划跳过的 ARM run、docs-only 和 Draft 运行不会产生样本，这是预期行为，不是采集失败。
-- P2 仍需：把 Dockerfile 的稳定 builder / toolchain 拆层，输出 `download` / `compile` / `export_push` 真实分项，并暴露缓存命中事件以区分 cold 与 invalidated、补齐 fingerprint 等元数据。
-- P3 仍需：CI / release 兼容缓存复用。
-- **本片不提供受控的三类各三次样本，也不提供任何提速百分比。** 在每类可比样本数达到 3 之前，摘要只会显示「样本不足」。
-
-## 7. 首次历史回填观测（2026-11-07，非受控）
-
-只读拉取 30 个已完成的 `ci` run（2026-11-06 区间），本地跑完整采集与聚合：
-
-| 项 | 结果 |
-| --- | --- |
-| 写入证据 | 21 条（另 9 条为计划跳过 / 无 ARM job，不产样本） |
-| 可比样本 | 8 条 |
-| 排除 | 失败 4、取消 9、未分类失败 0、证据不完整 0 |
-| `unknown`（发生真实 V8 交叉编译） | 4 条，中位数 **8,544,000 ms**（约 142 分钟），P95 8,584,000 ms |
-| `warm`（src 缓存复用，build step skipped） | 4 条，中位数 **48,000 ms**（48 秒），P95 56,000 ms |
-
-逐条核验过 4 条长样本：`chrome-fuzz-arm64-build` 与 `chrome-fuzz-arm64` 两个 job 均 `success`，build step 起止时间约跨 2 小时 22 分；其中两条 run 级 `conclusion=failure` 来自同 run 的其它 job，按 §3 的链路级判定不影响计时证据。原生冒烟与跨 job 交接（`handoff` 约 5 秒；main 一次为 157 秒的 ARM runner 等待）都有独立时间戳。
-
-**这些数字不是 benchmark 结论**：样本来自不同 PR 分支、不同输入与缓存状态，`cold` / `invalidated` 未被显式标注（全部落在 `unknown`），也不是同一改动的前后对照。它们只能说明 P0 已经能把「真实编译」和「src 复用」在量级上分开记录；受控三类对照与任何提速判断仍待 P2 的缓存事件输出和显式 scenario 标注。
+这些是旧实现输出的历史描述，不是本轮重新运行或核验结果。#970 评审已确认其 collector 来源隔离和 PR tested SHA 口径不足；缺少 v2 provenance 与不可变 checkout/上下文证据，不纳入新的正式历史，不重复发布为可比 P95，也不能推导任何速度收益。原 run 观测不被补签或改写。

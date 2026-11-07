@@ -24,7 +24,41 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const SCHEMA = "deepsonar.runtime-build-timing.v1";
+export const SCHEMA = "deepsonar.runtime-build-timing.v2";
+export const COLLECTOR_REVISION = "2";
+export const COLLECTOR_WORKFLOW = ".github/workflows/runtime-build-timing.yml";
+const SHA = /^[0-9a-f]{40}$/;
+
+/** `record` and `policy` come from the collector's Actions API reads, never from an artifact. */
+export function trustedCollector(record, policy) {
+  return Boolean(policy?.repository && policy?.default_branch && Number.isSafeInteger(policy?.workflow_id)
+    && record?.repository?.full_name === policy.repository
+    && record?.head_repository?.full_name === policy.repository
+    && record?.head_branch === policy.default_branch && record?.path === COLLECTOR_WORKFLOW
+    && record?.workflow_id === policy.workflow_id
+    && ["workflow_run", "workflow_dispatch"].includes(record?.event)
+    && SHA.test(record?.head_sha ?? "") && record?.revision_is_ancestor === true
+    && Number.isSafeInteger(record?.id) && record.id > 0
+    && Number.isSafeInteger(record?.run_attempt) && record.run_attempt > 0
+    && (record?.conclusion === "success" || record?.id === policy.current_run_id));
+}
+
+export function collectorProvenance(record, policy) {
+  if (!trustedCollector(record, policy)) return null;
+  return { schema: `${SCHEMA}.provenance`, collector_revision: COLLECTOR_REVISION,
+    repository: policy.repository, workflow: COLLECTOR_WORKFLOW, workflow_id: record.workflow_id,
+    event: record.event, branch: record.head_branch, collector_sha: record.head_sha,
+    collector_run_id: record.id, collector_run_attempt: record.run_attempt };
+}
+
+/** A sample's self-declared provenance is compared to independently fetched run metadata. */
+export function hasTrustedProvenance(sample, trust) {
+  const claimed = sample?.provenance;
+  if (sample?.schema !== SCHEMA || !claimed) return false;
+  const record = trust?.collectors?.find((item) => item.id === claimed.collector_run_id);
+  const expected = collectorProvenance(record, trust?.policy);
+  return Boolean(expected && Object.keys(expected).every((key) => claimed[key] === expected[key]));
+}
 /** Issue #961 asks for these stages; `build` is the honest fallback when
  * BuildKit has not yet been split into download/compile/export (P2), and
  * `native_smoke` is the honest combined observation when the native ARM smoke
@@ -44,7 +78,7 @@ export const FAILURE_CLASSES = Object.freeze([
   "none", "apt_external", "compile", "cache_invalidation", "unknown",
 ]);
 export const META_KEYS = Object.freeze([
-  "base_sha", "head_sha", "test_sha", "fingerprint", "base_digest",
+  "base_sha", "head_sha", "tested_checkout_sha", "fingerprint", "base_digest",
   "src_reuse", "buildkit_cache", "matched_inputs", "failure_class",
 ]);
 export const DEFAULT_MIN_SAMPLES = 3;
@@ -174,7 +208,18 @@ export function summarise(run) {
   const missing = [...expectedBuild, ...expectedSmoke].filter((name) => !measured([name]).length);
   const mixedSmoke = combinedSmoke.length > 0 && splitSmoke.length > 0;
   const evidenceComplete = missing.length === 0 && !mixedSmoke;
-  const comparable = evidenceComplete && run.outcome === "success" && run.meta.failure_class === "none";
+  const unknownContext = ["tested_checkout_sha", "fingerprint", "base_digest", "matched_inputs"]
+    .filter((key) => !run.meta[key] || ["unknown", "n/a"].includes(run.meta[key]));
+  if (!SHA.test(run.meta.tested_checkout_sha ?? "") && !unknownContext.includes("tested_checkout_sha")) unknownContext.push("tested_checkout_sha");
+  if (!/^sha256:[0-9a-f]{64}$/.test(run.meta.base_digest ?? "") && !unknownContext.includes("base_digest")) unknownContext.push("base_digest");
+  if (run.source && (run.source.tested_checkout_sha !== run.meta.tested_checkout_sha
+    || !run.source.checkout_evidence || run.source.checkout_evidence === "unavailable-in-run-jobs-api")) unknownContext.push("checkout_evidence");
+  if (run.scenario === "unknown") unknownContext.push("scenario");
+  const stageSuccess = buildNames.every((name) => run.stages[name].outcome === "success"
+    || (run.stages[name].outcome === "skipped" && run.stages[name].observed === true))
+    && smokeNames.every((name) => run.stages[name].outcome === "success");
+  const comparable = evidenceComplete && unknownContext.length === 0 && stageSuccess
+    && run.outcome === "success" && run.meta.failure_class === "none";
   return {
     total_ms,
     queue_ms: queue.reduce((sum, name) => sum + run.stages[name].duration_ms, 0),
@@ -188,6 +233,7 @@ export function summarise(run) {
     buildGranularity: useDetailed ? "detailed" : "unsplit",
     smokeGranularity: useCombined ? "combined" : "split",
     mixedSmoke,
+    unknownContext,
     comparable,
   };
 }
@@ -209,7 +255,8 @@ export function markdownRun(run) {
     `| run | \`${run.runId}\` |`,
     `| 场景 | \`${run.scenario}\` |`,
     `| 结果 | \`${run.outcome}\` / \`${run.meta.failure_class}\` |`,
-    `| base / head / test SHA | \`${run.meta.base_sha || "n/a"}\` / \`${run.meta.head_sha || "n/a"}\` / \`${run.meta.test_sha || "n/a"}\` |`,
+    `| base / observed head / tested checkout SHA | \`${run.meta.base_sha || "unknown"}\` / \`${run.meta.head_sha || "unknown"}\` / \`${run.meta.tested_checkout_sha || "unknown"}\` |`,
+    `| collector revision / SHA | \`${run.provenance?.collector_revision || "untrusted"}\` / \`${run.provenance?.collector_sha || "unknown"}\` |`,
     `| fingerprint | \`${run.meta.fingerprint || "n/a"}\` |`,
     `| base digest | \`${run.meta.base_digest || "n/a"}\` |`,
     `| src 复用 / BuildKit 缓存 | \`${run.meta.src_reuse || "unknown"}\` / \`${run.meta.buildkit_cache || "unknown"}\` |`,
@@ -231,7 +278,9 @@ export function markdownRun(run) {
   if (!s.evidenceComplete) lines.push("- ⚠️ 证据不完整：缺失阶段不按 0 计，本条不计入可比样本。");
   else if (s.buildGranularity === "unsplit") lines.push("- 当前 BuildKit 构建未拆分 download/compile/export_push，以 `build` 整段计时；可用于整段比较，不能用于阶段归因。");
   if (s.smokeGranularity === "combined") lines.push("- 原生冒烟的 pull 与 test-chrome-runtime 位于同一 Actions step，以 `native_smoke` 合并观测；可用于端到端比较，不能用于 pull/smoke 归因。");
-  if (!s.comparable) lines.push("- 本条不计入可比样本（结果、失败分类或阶段证据不满足条件）。");
+  if (s.unknownContext.length) lines.push(`- 未知重要上下文：${s.unknownContext.join(", ")}；仅保留描述性观测，不计入可比 benchmark。`);
+  if (!s.comparable) lines.push("- 本条不计入可比样本（结果、失败分类、阶段或上下文证据不满足条件）。");
+  lines.push("- 正式历史还须用 Actions API 独立核验 collector provenance；JSON 自报可信不构成证据。");
   return `${lines.join("\n")}\n`;
 }
 
@@ -249,25 +298,38 @@ export function median(values) {
   return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
 }
 
-export function aggregate(dir, minSamples = DEFAULT_MIN_SAMPLES) {
+export function aggregate(dir, minSamples = DEFAULT_MIN_SAMPLES, trust = null) {
+  if (!Number.isSafeInteger(minSamples) || minSamples < DEFAULT_MIN_SAMPLES) {
+    throw new Error(`minSamples must be an integer >= ${DEFAULT_MIN_SAMPLES}`);
+  }
   const root = resolve(dir || defaultDir());
   const files = existsSync(root) ? readdirSync(root).filter((f) => f.endsWith(".json") && !f.endsWith(".report.json")) : [];
   // The aggregate result itself lives in this directory, alongside unrelated
   // artifacts. Only well-formed run records are samples; corrupt files are
   // skipped rather than crashing the whole report.
   const isRun = (r) => r && r.schema === SCHEMA && typeof r.runId === "string" && r.stages && r.meta;
-  const runs = files.map((f) => {
+  const records = files.map((f) => {
     try { return JSON.parse(readFileSync(join(root, f), "utf8")); } catch { return null; }
-  }).filter(isRun);
+  });
+  const runs = records.filter(isRun);
   const groups = {};
-  const excluded = { incomplete: 0, failed: 0, cancelled: 0, unclassified_failure: 0 };
+  const excluded = { incomplete: 0, failed: 0, cancelled: 0, unclassified_failure: 0,
+    untrusted: 0, unknown_context: 0, duplicates: 0,
+    legacy: records.filter((r) => r?.schema === "deepsonar.runtime-build-timing.v1" && r.runId && r.stages).length };
+  const seen = new Set();
   for (const run of runs) {
     const s = summarise(run);
     const scenario = SCENARIOS.includes(run.scenario) ? run.scenario : "unknown";
     groups[scenario] ||= { samples: [], stages: {} };
+    if (!hasTrustedProvenance(run, trust)) { excluded.untrusted += 1; continue; }
+    const identity = `${run.source?.run_id ?? run.runId}:${run.source?.run_attempt ?? 1}`;
+    if (seen.has(identity)) { excluded.duplicates += 1; continue; }
+    seen.add(identity);
     if (run.outcome === "failure") excluded.failed += 1;
     else if (run.outcome === "cancelled") excluded.cancelled += 1;
     else if (run.meta.failure_class !== "none") excluded.unclassified_failure += 1;
+    else if (!s.evidenceComplete) excluded.incomplete += 1;
+    else if (s.unknownContext.length) excluded.unknown_context += 1;
     else if (!s.comparable) excluded.incomplete += 1;
     else groups[scenario].samples.push(s.total_ms);
   }
@@ -288,7 +350,7 @@ export function markdownAggregate(result) {
   const lines = [
     "### #961 冷/热/失效可比样本",
     "",
-    `样本总数 ${result.totalRuns}；排除：失败 ${result.excluded.failed}、取消 ${result.excluded.cancelled}、失败未分类 ${result.excluded.unclassified_failure}、证据不完整 ${result.excluded.incomplete}。`,
+    `观测总数 ${result.totalRuns}；排除：来源未核验 ${result.excluded.untrusted}、旧 schema ${result.excluded.legacy}、上下文未知 ${result.excluded.unknown_context}、失败 ${result.excluded.failed}、取消 ${result.excluded.cancelled}、失败未分类 ${result.excluded.unclassified_failure}、阶段不完整 ${result.excluded.incomplete}、重复观测 ${result.excluded.duplicates}。`,
     "",
     "| 场景 | 可比样本 | 中位数 (ms) | P95 (ms) | 判定 |",
     "| --- | ---: | ---: | ---: | --- |",
@@ -338,7 +400,8 @@ function runCli(argv, env = process.env) {
     throw new Error(`unknown command: ${command}`);
   }
   if (command === "aggregate") {
-    const result = aggregate(dir, Number(args["min-samples"] || DEFAULT_MIN_SAMPLES));
+    const trust = args.trust ? JSON.parse(readFileSync(args.trust, "utf8")) : null;
+    const result = aggregate(dir, Number(args["min-samples"] || DEFAULT_MIN_SAMPLES), trust);
     append(args.summary || env.GITHUB_STEP_SUMMARY, markdownAggregate(result));
     if (args["json-out"]) writeFileSync(args["json-out"], `${JSON.stringify(result, null, 2)}\n`);
     return result;

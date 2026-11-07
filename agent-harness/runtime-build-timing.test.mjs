@@ -23,7 +23,14 @@ import {
   startStage,
   stopStage,
   summarise,
+  SCHEMA, collectorProvenance,
 } from "./runtime-build-timing.mjs";
+
+const policy = { repository: "SummerSec/DeepSonar", default_branch: "main", workflow_id: 700, current_run_id: 9001 };
+const collector = { id: 9001, run_attempt: 1, head_sha: "b".repeat(40), head_branch: "main", event: "workflow_dispatch",
+  path: ".github/workflows/runtime-build-timing.yml", workflow_id: 700, conclusion: "success", revision_is_ancestor: true,
+  repository: { full_name: policy.repository }, head_repository: { full_name: policy.repository } };
+const trust = { policy, collectors: [collector] };
 
 const CLI = fileURLToPath(new URL("./runtime-build-timing.mjs", import.meta.url));
 const T0 = "2026-11-07T00:00:00.000Z";
@@ -31,10 +38,11 @@ const at = (ms) => new Date(Date.parse(T0) + ms).toISOString();
 
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "deepsonar-timing-test-"));
+  writeFileSync(join(dir, "trust.json"), JSON.stringify(trust));
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 function cli(dir, ...args) {
-  return spawnSync(process.execPath, [CLI, "--dir", dir, ...args], { encoding: "utf8" });
+  return spawnSync(process.execPath, [CLI, "--dir", dir, "--trust", join(dir, "trust.json"), ...args], { encoding: "utf8" });
 }
 function ok(result, label) {
   assert.equal(result.status, 0, `${label}: ${result.stderr || result.stdout}`);
@@ -43,6 +51,10 @@ function ok(result, label) {
 function baseRun(overrides = {}) {
   return {
     ...newRun({ runId: "r1", image: "deepsonar-chrome-fuzz", platform: "linux/arm64", scenario: "cold", now: T0 }),
+    // Complete synthetic context is not inferred from an Actions head SHA.
+    meta: { failure_class: "unknown", head_sha: "a".repeat(40), tested_checkout_sha: "c".repeat(40),
+      fingerprint: "fixture-fingerprint", base_digest: `sha256:${"d".repeat(64)}`, matched_inputs: "fixture-inputs" },
+    provenance: collectorProvenance(collector, policy),
     ...overrides,
   };
 }
@@ -154,9 +166,9 @@ test("aggregate groups scenarios, withholds P95 until enough comparable samples"
       writeFileSync(join(dir, `cold-${i}.json`), JSON.stringify(run));
     }
     writeFileSync(join(dir, "warm-0.json"), JSON.stringify(completeRun({ scenario: "warm", offset: 100 })));
-    writeFileSync(join(dir, "failed.json"), JSON.stringify(finalise(completeRun({ scenario: "cold" }), "failure", "apt_external")));
-    writeFileSync(join(dir, "cancelled.json"), JSON.stringify(finalise(completeRun({ scenario: "cold" }), "cancelled", "none")));
-    const result = aggregate(dir, DEFAULT_MIN_SAMPLES);
+    writeFileSync(join(dir, "failed.json"), JSON.stringify(finalise({ ...completeRun({ scenario: "cold" }), runId: "failed" }, "failure", "apt_external")));
+    writeFileSync(join(dir, "cancelled.json"), JSON.stringify(finalise({ ...completeRun({ scenario: "cold" }), runId: "cancelled" }, "cancelled", "none")));
+    const result = aggregate(dir, DEFAULT_MIN_SAMPLES, trust);
     assert.equal(result.totalRuns, 6);
     assert.equal(result.scenarios.cold.count, 3);
     assert.equal(result.scenarios.cold.median_ms, 5900);
@@ -179,7 +191,10 @@ test("real CLI: init -> meta -> stages -> report writes JSON, summary and single
     ok(cli(dir, "init", "--run", "ci-1", "--image", "deepsonar-chrome-fuzz", "--platform", "linux/arm64", "--scenario", "cold"), "init");
     assert.match(cli(dir, "init", "--run", "ci-1", "--image", "x", "--platform", "y").stderr, /already exists/);
     ok(cli(dir, "meta", "--run", "ci-1", "--key", "fingerprint", "--value", "fp-1"), "meta");
-    ok(cli(dir, "meta", "--run", "ci-1", "--key", "base_digest", "--value", "sha256:abc"), "base digest");
+    ok(cli(dir, "meta", "--run", "ci-1", "--key", "base_digest", "--value", `sha256:${"d".repeat(64)}`), "base digest");
+    ok(cli(dir, "meta", "--run", "ci-1", "--key", "head_sha", "--value", "a".repeat(40)), "observed SHA");
+    ok(cli(dir, "meta", "--run", "ci-1", "--key", "tested_checkout_sha", "--value", "c".repeat(40)), "tested SHA differs");
+    ok(cli(dir, "meta", "--run", "ci-1", "--key", "matched_inputs", "--value", "fixture-inputs"), "matched inputs");
     assert.match(cli(dir, "start", "--run", "ci-1", "--stage", "nope").stderr, /unknown stage/);
     ok(cli(dir, "start", "--run", "ci-1", "--stage", "queue"), "start queue");
     ok(cli(dir, "stop", "--run", "ci-1", "--stage", "queue"), "stop queue");
@@ -216,7 +231,7 @@ test("real CLI: aggregate reads only run files and never reports P95 for thin sa
     assert.equal(result.scenarios.warm.p95_ms, null);
     assert.equal(JSON.parse(readFileSync(jsonOut, "utf8")).scenarios.warm.count, 1);
     assert.match(readFileSync(summary, "utf8"), /不报告 P95/);
-    assert.equal(readdirSync(dir).filter((f) => f.endsWith(".json")).length, 3);
+    assert.equal(readdirSync(dir).filter((f) => f.endsWith(".json")).length, 4, "trust manifest is not a timing sample");
   } finally { cleanup(); }
 });
 
@@ -302,4 +317,37 @@ test("CLI skip command writes an observed zero-duration stage", () => {
     assert.equal(run.stages.build.duration_ms, 0);
     assert.equal(run.stages.build.reason, "src cache reused");
   } finally { cleanup(); }
+});
+
+test("formal aggregation rejects legacy/missing/forged producer identity despite successful native smoke", () => {
+  const { dir, cleanup } = fixture();
+  try {
+    const valid = completeRun({ scenario: "warm" });
+    writeFileSync(join(dir, "valid.json"), JSON.stringify(valid));
+    writeFileSync(join(dir, "missing.json"), JSON.stringify({ ...valid, runId: "missing", provenance: undefined }));
+    writeFileSync(join(dir, "forged.json"), JSON.stringify({ ...valid, runId: "forged",
+      provenance: { ...valid.provenance, collector_sha: "e".repeat(40) } }));
+    writeFileSync(join(dir, "legacy.json"), JSON.stringify({ ...valid, runId: "legacy", schema: "deepsonar.runtime-build-timing.v1" }));
+    const result = aggregate(dir, 3, trust);
+    assert.equal(result.schema, SCHEMA);
+    assert.equal(result.excluded.untrusted, 2);
+    assert.equal(result.excluded.legacy, 1);
+    assert.equal(result.scenarios.warm.count, 1, "only independently verified history is eligible");
+    assert.equal(result.scenarios.warm.p95_ms, null);
+    assert.throws(() => aggregate(dir, 0, trust), /minSamples/);
+    assert.throws(() => aggregate(dir, NaN, trust), /minSamples/);
+    assert.equal(aggregate(dir).scenarios.warm.count, 0, "no external trust manifest means no formal samples");
+  } finally { cleanup(); }
+});
+
+test("head and tested checkout SHA are independent; missing important context fails closed", () => {
+  const known = completeRun();
+  assert.notEqual(known.meta.head_sha, known.meta.tested_checkout_sha);
+  assert.equal(summarise(known).comparable, true, "a distinct immutable tested checkout need not equal the observed head");
+  for (const field of ["tested_checkout_sha", "fingerprint", "base_digest", "matched_inputs"]) {
+    const run = { ...known, meta: { ...known.meta, [field]: "unknown" } };
+    assert.equal(summarise(run).comparable, false, field);
+    assert.ok(summarise(run).unknownContext.includes(field));
+  }
+  assert.equal(summarise({ ...known, scenario: "unknown" }).comparable, false);
 });
