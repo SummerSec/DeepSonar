@@ -45,6 +45,7 @@ import { ProjectSkillSourceAllowlistPanel } from "./components/ProjectSkillSourc
 import { inferToastKind, showToast } from "./toast";
 import { SkillSourceCatalogActions } from "./components/SkillSourceCatalogActions";
 import { formatSkillSourceRegistrationFlash } from "./skill-source-sync-flash";
+import { useFlashMessage } from "./use-flash-message";
 import { ProjectJobQuotaSection } from "./components/ProjectJobQuotaSection";
 
 /**
@@ -130,7 +131,7 @@ export function SettingsPanel({
   const [configRoleId, setConfigRoleId] = useState<string | null>(null);
   const [configBusy, setConfigBusy] = useState(false);
   const canManageSources = canAccessAnyScope(me, ["skills:write"]) && !me?.actor?.project_id;
-  const [msg, setMsg] = useState<string | null>(null);
+  const { message: msg, flash: flashMessage } = useFlashMessage(3000);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
 
   const reload = () => {
@@ -240,9 +241,17 @@ export function SettingsPanel({
   }, [globalSection, projectId, searchParams, visibleGlobalTabs]);
 
   const flash = (m: string) => {
-    setMsg(m);
+    const kind = inferToastKind(m);
+    // #967: failures stay inline next to the save action instead of vanishing
+    // after 3s; success keeps the short flash. Both also raise exactly one
+    // toast (identical messages are merged by the toast model).
+    if (kind === "error") {
+      flashMessage(m, { durationMs: 0 });
+      showToast(m, inferToastKind(m));
+      return;
+    }
+    flashMessage(m, { durationMs: 3000 });
     showToast(m, inferToastKind(m));
-    setTimeout(() => setMsg(null), 3000);
   };
 
   const saveRules = async () => {

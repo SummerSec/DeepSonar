@@ -66,6 +66,17 @@
   --surface-node-ink: #e8ecee;
   --surface-command: #070809;
   --surface-error: #1a0d0d;
+  /* #967: toast surfaces are semantic tokens so every scheme and theme can be
+     contrast-checked instead of relying on hardcoded hex in the component rule. */
+  --toast-ok-bg: #0d1612;
+  --toast-ok-fg: #b8e6c8;
+  --toast-ok-border: rgb(104 210 154 / .28);
+  --toast-warn-bg: #1a1409;
+  --toast-warn-fg: #f0d09a;
+  --toast-warn-border: rgb(232 189 112 / .32);
+  --toast-error-bg: #1a0d0d;
+  --toast-error-fg: #f3b4b4;
+  --toast-error-border: rgb(248 113 113 / .28);
   --badge-critical: #ed6a7f;
   --badge-high: #ec8c5d;
   --badge-medium: #e8bd70;
@@ -591,16 +602,60 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .app-toast {
   padding: 10px 14px;
   border-radius: 8px;
-  border: 1px solid rgb(104 210 154 / .28);
-  background: color-mix(in srgb, #0d1612 82%, transparent);
-  color: #b8e6c8;
+  border: 1px solid var(--toast-ok-border);
+  background: var(--toast-ok-bg);
+  color: var(--toast-ok-fg);
   font: 500 12px/1.45 var(--font-mono);
   box-shadow: 0 10px 28px rgba(0, 0, 0, .28);
+  /* The stack is click-through; each toast opts back in so its close, copy and
+     retry controls are actually clickable. */
+  pointer-events: auto;
+}
+.app-toast.is-warn {
+  border-color: var(--toast-warn-border);
+  background: var(--toast-warn-bg);
+  color: var(--toast-warn-fg);
 }
 .app-toast.is-error {
-  border-color: rgb(248 113 113 / .28);
-  background: color-mix(in srgb, var(--surface-error) 82%, transparent);
-  color: #f3b4b4;
+  border-color: var(--toast-error-border);
+  background: var(--toast-error-bg);
+  color: var(--toast-error-fg);
+}
+.app-toast-body { display: flex; align-items: flex-start; gap: 8px; }
+.app-toast-message { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.app-toast-controls { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
+.app-toast-control {
+  padding: 1px 6px;
+  border-radius: 5px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: 600 11px/1.5 var(--font-mono);
+  opacity: .78;
+  cursor: pointer;
+}
+.app-toast-control:hover { opacity: 1; }
+.app-toast-control.is-action { opacity: 1; }
+.app-toast-control:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  opacity: 1;
+}
+.app-toast-detail { margin-top: 6px; }
+.app-toast-detail > summary {
+  cursor: pointer;
+  font: 600 11px/1.5 var(--font-mono);
+  opacity: .82;
+}
+.app-toast-detail > summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.app-toast-detail > pre {
+  margin: 6px 0 0;
+  max-height: 180px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 500 11px/1.5 var(--font-mono);
+  opacity: .92;
 }
 .mobile-island, .mobile-menu { display: none; }
 
@@ -2930,6 +2985,16 @@ html[data-color-scheme="light"] {
   --surface-disabled: #e4e7ec;
   --text-strong: var(--text);
   --text-muted: var(--muted);
+  /* #967: light toast tokens; contrast-checked in light-theme-contrast.test.ts. */
+  --toast-ok-bg: #f4faf6;
+  --toast-ok-fg: #1f5c42;
+  --toast-ok-border: rgb(16 122 90 / .22);
+  --toast-warn-bg: #fdf8ef;
+  --toast-warn-fg: #7a5514;
+  --toast-warn-border: rgb(150 105 20 / .24);
+  --toast-error-bg: #fdf4f4;
+  --toast-error-fg: #8a2b2b;
+  --toast-error-border: rgb(185 50 50 / .22);
 
   --broadcast-source: #087f98;
   --broadcast-target: #6651a6;
@@ -3106,17 +3171,7 @@ html[data-color-scheme="light"] .nav-icon { background: rgba(255,255,255,.55); }
 html[data-color-scheme="light"] .nav-item.is-active { color: #141a22; background: rgb(var(--accent-rgb) / .09); }
 html[data-color-scheme="light"] .rail-status strong { color: #2a3340; }
 html[data-color-scheme="light"] .rail-status small { color: #788290; }
-html[data-color-scheme="light"] .app-toast {
-  border-color: rgb(16 122 90 / .22);
-  background: #f4faf6;
-  color: #1f5c42;
-  box-shadow: 0 10px 24px rgba(20, 28, 40, .08);
-}
-html[data-color-scheme="light"] .app-toast.is-error {
-  border-color: rgb(185 50 50 / .22);
-  background: #fdf4f4;
-  color: #8a2b2b;
-}
+html[data-color-scheme="light"] .app-toast { box-shadow: 0 10px 24px rgba(20, 28, 40, .08); }
 html[data-color-scheme="light"] .page-header::after { color: #8a939f; background: var(--bg); }
 html[data-color-scheme="light"] .secondary-button,
 html[data-color-scheme="light"] .filter-control,

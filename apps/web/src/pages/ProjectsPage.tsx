@@ -9,9 +9,11 @@ import {
   Plus,
   X,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, type Project } from "../api";
+import { dismissToast, showToast } from "../toast";
+import { useFlashMessage } from "../use-flash-message";
 import { SearchableMultiSelect } from "../SearchableSelect";
 import { IntentLaunchRail } from "../components/IntentLaunchRail";
 import { NewProjectForm } from "../components/NewProjectForm";
@@ -41,34 +43,76 @@ export function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [msg, setMsg] = useState<string | null>(null);
+  const { message: msg, flash } = useFlashMessage(3200);
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter[]>(["active"]);
   const [editing, setEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState({ name: "", description: "" });
+  // #967: the sticky failure toast is tied to this page's own recovery path, so
+  // it must disappear when the list recovers (inline retry, background reload)
+  // or when the page unmounts. Without this the fixed toast outlives the error
+  // banner and keeps offering a retry for a problem that is already resolved.
+  const loadErrorToast = useRef<number | null>(null);
+  // #967 review P2: cleanup alone only removed a toast that already existed. A
+  // request still in flight when the page unmounted would later reject and
+  // re-create the sticky toast on top of whatever page the user moved to, with a
+  // retry button bound to an unmounted component. A request generation makes
+  // late results inert, and `disposed` makes them inert after unmount.
+  const requestGeneration = useRef(0);
+  const disposed = useRef(false);
 
-  const reload = () =>
-    api
+  const clearLoadErrorToast = () => {
+    if (loadErrorToast.current === null) return;
+    dismissToast(loadErrorToast.current);
+    loadErrorToast.current = null;
+  };
+
+  const reload = () => {
+    const generation = ++requestGeneration.current;
+    const stillCurrent = () => !disposed.current && generation === requestGeneration.current;
+    return api
       .projects()
       .then((list) => {
+        if (!stillCurrent()) return;
         setProjects(list);
         setError(null);
         setLoading(false);
+        clearLoadErrorToast();
       })
       .catch((e) => {
-        setError(String(e));
+        if (!stillCurrent()) return;
+        const detail = String(e);
+        setError(detail);
         setLoading(false);
+        // #967: the inline banner sits at the top of the page content. A
+        // viewport-fixed copy with a retry action keeps a failure discoverable
+        // when the user is scrolled down or the list is long.
+        clearLoadErrorToast();
+        loadErrorToast.current = showToast("项目列表加载失败", "error", {
+          detail,
+          sticky: true,
+          action: { label: "重试", onClick: () => { void reload(); } },
+        });
       });
+  };
 
+  // #967 review P2: setup and cleanup must be symmetric. `disposed` was only
+  // ever set in cleanup, so React's development StrictMode replay
+  // (setup -> cleanup -> setup) left it true and every later result was dropped,
+  // pinning the page on its loading state. Resetting it in setup keeps the guard
+  // honest, while `requestGeneration` still discards the previous setup's late
+  // results.
   useEffect(() => {
-    reload();
+    disposed.current = false;
+    void reload();
+    return () => {
+      disposed.current = true;
+      clearLoadErrorToast();
+    };
   }, []);
 
-  const flash = (message: string) => {
-    setMsg(message);
-    setTimeout(() => setMsg(null), 3200);
-  };
+
 
   const archivedCount = projects.filter((p) => p.status === "archived").length;
   const activeCount = projects.filter((p) => p.status === "active").length;
@@ -215,8 +259,18 @@ export function ProjectsPage() {
       </div>
 
       {error && (
-        <div className="mb-4 rounded-2xl bg-red-950/20 px-4 py-3 text-[12px] text-red-300 ring-1 ring-red-500/20">
-          {error}
+        <div
+          role="alert"
+          className="mb-4 flex items-start gap-3 rounded-2xl bg-red-950/20 px-4 py-3 text-[12px] text-red-300 ring-1 ring-red-500/20"
+        >
+          <span className="min-w-0 flex-1 break-words">{error}</span>
+          <button
+            type="button"
+            className="shrink-0 rounded-md px-2 py-1 font-mono text-[11px] ring-1 ring-red-400/30 hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+            onClick={() => { void reload(); }}
+          >
+            重试
+          </button>
         </div>
       )}
       {msg && (
