@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
+import { parseModuleSelector } from "@deepsonar/shared-types";
 import { sql } from "../../db.js";
 import { validateSourceUrl } from "../../skill-sources.js";
 
 export class SkillSourceRegistrationError extends Error {
   readonly statusCode: number;
   readonly code: string;
-  constructor(readonly error_code: "SKILL_SOURCE_NAME_CONFLICT" | "SKILL_SOURCE_IDENTITY_AMBIGUOUS" | "SKILL_SOURCE_URL_INVALID") {
+  constructor(readonly error_code: "SKILL_SOURCE_NAME_CONFLICT" | "SKILL_SOURCE_IDENTITY_AMBIGUOUS" | "SKILL_SOURCE_URL_INVALID" | "SKILL_SOURCE_SELECTOR_IDENTITY_MISMATCH") {
     super(error_code);
     this.code = error_code;
     this.statusCode = error_code === "SKILL_SOURCE_URL_INVALID" ? 400 : 409;
@@ -25,6 +26,17 @@ export function canonicalSkillSourceIdentity(repoUrl: string, branch: string): s
   const ref = branch.replace(/^refs\/heads\//, "");
   if (!pathname || !ref || ref !== ref.trim()) throw new SkillSourceRegistrationError("SKILL_SOURCE_URL_INVALID");
   return `${url.origin}${pathname}\n${ref}`;
+}
+
+/** Portable source definitions must not silently rebind preserved selector strings. */
+export function assertImportedSourceIdentities(selectors: readonly string[], identities: ReadonlyMap<string, string>): void {
+  for (const selector of selectors) {
+    const id = parseModuleSelector(selector).source_id;
+    const target = identities.get(id);
+    if (target && target.toLowerCase() !== id) {
+      throw new SkillSourceRegistrationError("SKILL_SOURCE_SELECTOR_IDENTITY_MISMATCH");
+    }
+  }
 }
 
 /** Caller owns a short SQL transaction; every management registration shares this lock. */
