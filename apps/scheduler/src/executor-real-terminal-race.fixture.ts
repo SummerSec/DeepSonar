@@ -124,7 +124,7 @@ const { invokeRuntimeHandler, listRuntimeHandlers } = await import("./domains/pl
 
 export function completionReady() { return gate?.(); }
 export async function piRecoveryAllowed() { assert.ok(recoveryGuard); return recoveryGuard(); }
-export function frozenRuntimeBudget() { return runtimeBudget; }
+export function frozenRuntimeBudget(): import("@deepsonar/shared-types").ModelTokenBudget | undefined { return runtimeBudget; }
 export function setPreflight(callback: (type: string) => Promise<void>) { preflight = callback; }
 export function call(operationId: string, input: unknown, options: Partial<PlatformRuntimeHandlerContext> = {}) {
   return invokeRuntimeHandler({ jobId, projectId, canvasId, operationId, input,
