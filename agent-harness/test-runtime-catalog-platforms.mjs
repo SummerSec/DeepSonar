@@ -402,12 +402,20 @@ test("final equality remains mandatory when one build is fresh", () => {
 });
 
 for (const channel of ["github", "dockerhub", "aliyun-acr"]) {
-  test(`final catalog rejects a ${channel} child-payload mismatch`, () => {
-    const fixture = finalCatalogFixture();
-    const row = fixture.catalog.images[5].versions[0];
-    fixture.manifests.set(row.registry_refs[channel], index({ "linux/amd64": digest(110), "linux/arm64": digest(999) }));
-    assertFailClosed(() => checkFinal(fixture));
-  });
+  for (const imageKey of imageKeys) {
+    test(`final catalog rejects a ${channel} child-payload mismatch for ${imageKey}`, () => {
+      const fixture = finalCatalogFixture();
+      const product = fixture.catalog.images.find((image) => image.image_key === imageKey);
+      assert.ok(product, `retained product ${imageKey} must exist in the fixture`);
+      const row = product.versions[0];
+      const manifest = clone(fixture.manifests.get(row.registry_refs[channel]));
+      const arm64 = manifest.manifests.find((child) => child.platform?.architecture === "arm64");
+      assert.ok(arm64, "fixture must contain the tested arm64 child");
+      arm64.digest = digest(999);
+      fixture.manifests.set(row.registry_refs[channel], manifest);
+      assertFailClosed(() => checkFinal(fixture), /does not match tested platform manifests/);
+    });
+  }
   test(`final catalog rejects failed ${channel} inspection`, () => {
     const fixture = finalCatalogFixture();
     fixture.manifests.set(fixture.catalog.images[0].versions[0].registry_refs[channel], new Error("registry inspection failed"));
