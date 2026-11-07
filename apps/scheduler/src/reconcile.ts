@@ -1,6 +1,7 @@
 import { isManagedRuntimeResource } from "@deepsonar/runtime-sandbox";
 import { sharedAssetsVolumeManager, runner } from "./runtime.js";
 import { sql } from "./db.js";
+import { withOperationConflictRetry } from "./db-conflict-retry.js";
 import { inc, setGauge } from "./metrics.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import {
@@ -182,11 +183,15 @@ async function closeOrphanJob(
   options: { deferCanvasAdvance: boolean },
 ): Promise<void> {
   const jobId = String(job.id);
-  // #945: 收口可派 Report 并写输入文件；未拆开混合 I/O 前不整体自动重试。
-  await sql.begin(async (txRaw) => {
+  // #945: Report admission is SQL-only; token/resource IO remains outside this retry.
+  await withOperationConflictRetry("close_orphan_job", () => sql.begin(async (txRaw) => {
     // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
     const tx = txRaw as unknown as typeof sql;
-    await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null);
+    if (!(await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null))) return;
+    const [lockedJob] = await tx`SELECT canvas_id,status FROM jobs WHERE id = ${jobId} FOR UPDATE`;
+    if (!lockedJob || lockedJob.status !== "orphan") return;
+    if (lockedJob.canvas_id !== job.canvas_id) throw new Error("orphan recovery Canvas changed");
+    await tx`SELECT id FROM job_attempts WHERE job_id = ${jobId} ORDER BY attempt_no, id FOR UPDATE`;
     await tx`
       UPDATE canvas_nodes SET status = 'failed', updated_at = now()
       WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
@@ -199,7 +204,7 @@ async function closeOrphanJob(
     } else if (job.canvas_id && job.type !== "report" && (!options.deferCanvasAdvance || Boolean((job.agent_snapshot_json as Record<string, unknown> | undefined)?.knowledge_assignment))) {
       await advanceCanvasAfterTerminalJob(tx, job, "orphan");
     }
-  }).catch((error) => console.error(`[reconcile] terminal canvas advance failed:`, error));
+  })).catch((error) => console.error(`[reconcile] terminal canvas advance failed:`, error));
   await revokeJobTokens(jobId, "orphan_reconcile").catch(() => {});
   await revokeJobCapabilityTokens(jobId, "orphan_reconcile").catch(() => {});
   if (job.type === "verify_finding") {

@@ -597,7 +597,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **规范要求**：Finding 确认后必须能生成冻结输入的 Finding Report；Canvas 收敛后必须能生成带 `report-input.json` 和 SHA-256 的版本化 Task Report。相同输入幂等复用，输入变化追加版本；报告投影失败不得改写内部 Fact/Finding/Artifact，覆盖门必须按精确 Finding ID 核对章节。
 - **决策来源**：报告是投影，不应改变产生它的事实；版本和摘要是可重建、可审计的交付身份。
 - **实现状态**：as-built；相同成功输入返回已有版本，失败/进行中同输入可复用版本。#767 报告片将完整任务契约/摘要、来源快照、研究准入/技术状态与判据缺口纳入冻结输入与 hash，变化追加版本。新报告统一确定性正文；接入来源隔离的普通 Job 评审后，逐判据区分 satisfied/contradicted/insufficient/conflict/not_assessed，整体可表示部分/全部判据已评价满足但不授权 Plan 完成；无有效依据时仍 blocked/not_assessed，无契约明确未评估；技术数据仅作附录，模型不得覆盖目标结论。历史无投影输入不回写，见[报告防误报](../TASK_OUTCOME_REPORT.md)。
-- **代码入口**：[Report implementation](../../apps/scheduler/src/report.ts)、[Report version](../../apps/scheduler/src/task-report-version.ts)、[schema](../../database/schema.sql)。
+- **代码入口**：[Report implementation](../../apps/scheduler/src/report.ts)、[Report frozen input](../../apps/scheduler/src/report-input.ts)、[Report version](../../apps/scheduler/src/task-report-version.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:report-download`。
 
 来源隔离评审通过既有 Job/HubIntent 请求和 emit_fact.artifact.goal_review 保存版本化 Artifact；maker 与候选证据源 Job 不得自评，最新成功 Attempt、无未知效果及实际留存字节必须重核。有效矛盾为 conflict，失效记录保留缺口；不要求普通 Fact 先人工 verified，不新增整体完成门。详见[判据评审](../TASK_GOAL_REVIEW.md)。
@@ -916,7 +916,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Report 和 Research 的可选投影失败必须持久化失败原因、保留主事实并使用有界恢复；不得通过回滚外层事务或无限 retry 丢失/重复核心结果。
 - **决策来源**：交付增强失败不应破坏已确认事实，恢复必须可观察、可停止。
-- **实现状态**：as-built；Report 自动重试 1 次，Research 使用 savepoint。#945 保留报告再派/快照解析与 Hub 收敛中的原始数据库冲突，供安全事务边界识别，而非吞错后在 aborted 事务中继续查询；可派报告写文件的 Verify/orphan 混合 I/O 恢复入口仍不新增整体自动重试；普通业务派发错误保持既有 Root 收口，不把 `25P02` 泛化为可重试。报告输入文件的幂等写条件与非 SQL 回滚边界见[运行时视图](06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)，不是新的 Agent/外部效果重放许可。
+- **实现状态**：as-built；Report 自动重试 1 次，Research 使用 savepoint。#945 保留报告再派/快照解析与 Hub 收敛中的原始数据库冲突，供安全事务边界识别，而非吞错后在 aborted 事务中继续查询；新 Report 精确输入字节随 Job/Report SQL 提交，领取后才投影文件，Verify/orphan 收口因此在重核终态归属后仅重试 SQL；成功报告输出仍不整体重试。普通业务派发错误保持既有 Root 收口，不把 `25P02` 泛化为可重试；缺少新冻结正文的历史 Job 明确拒绝，不补造字节，见[运行时视图](06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)及[数据契约](08-data-architecture.md#report-输入与文件投影945)。不是新的 Agent/外部效果重放许可。
 - **代码入口**：[report recovery](../../apps/scheduler/src/report-failure-recovery.ts)、[research best effort](../../apps/scheduler/src/domains/finding-research/application.ts)、[report tests](../../apps/scheduler/src/report-failure-recovery.test.ts)。
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`。
 

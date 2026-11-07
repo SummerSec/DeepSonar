@@ -127,6 +127,8 @@ test("#945 the Job-facing transaction entrances stay wrapped", () => {
     [core, "preflight_deferred_side_effects"],
     [core, "create_job"],
     [core, "ensure_canvas_for_task"],
+    [core, "recover_verify_terminal"],
+    [reconcile, "close_orphan_job"],
   ]) {
     assert.ok(
       source.includes(`withOperationConflictRetry("${operation}"`),
@@ -135,7 +137,7 @@ test("#945 the Job-facing transaction entrances stay wrapped", () => {
   }
   assert.doesNotMatch(core, /withOperationConflictRetry\("verify_terminal_recovery"/u);
   assert.doesNotMatch(reconcile, /withOperationConflictRetry\("reconcile_close_orphan_job"/u);
-  // 混合 I/O 的收口入口不能仅因 SQL 回滚就被整体重放。
+  // External IO is still forbidden inside these SQL retry callbacks.
   assert.doesNotMatch(core, /await sql\.begin\(\(tx\) => createJobInTransaction/u);
   assert.doesNotMatch(core, /return sql\.begin\(\(tx\) => ensureCanvasForTaskInTransaction/u);
 });

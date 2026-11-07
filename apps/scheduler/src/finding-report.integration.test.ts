@@ -84,10 +84,28 @@ if (!testDatabaseUrl) {
           'independently confirmed', now()
         )`;
 
-      const results = await Promise.all([
+      // Fault after Job insertion: every SQL write must roll back, without a
+      // filesystem input from the rejected transaction. Sequence is a nontransactional witness.
+      await sql`CREATE SEQUENCE report_input_retry_witness`;
+      await sql`CREATE FUNCTION fail_first_report_input_commit() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          IF nextval('report_input_retry_witness') = 1 THEN
+            RAISE EXCEPTION 'injected report admission serialization conflict' USING ERRCODE = '40001';
+          END IF;
+          RETURN NEW;
+        END $$`;
+      await sql`CREATE TRIGGER report_input_retry BEFORE INSERT ON finding_reports
+        FOR EACH ROW EXECUTE FUNCTION fail_first_report_input_commit()`;
+      const { withOperationConflictRetry } = await import("./db-conflict-retry.js");
+      let conflicts = 0;
+      const enqueue = () => withOperationConflictRetry("finding_report_input_probe", () =>
         sql.begin((tx) => reportModule.maybeDispatchFindingReport(tx as unknown as typeof sql, findingId)),
-        sql.begin((tx) => reportModule.maybeDispatchFindingReport(tx as unknown as typeof sql, findingId)),
-      ]);
+        { baseDelayMs: 0, onConflict: () => { conflicts += 1; } });
+      const results = await Promise.all([enqueue(), enqueue()]);
+      assert.equal(conflicts, 1, "the post-Job SQL conflict must reach the rollback/retry boundary");
+      await sql`DROP TRIGGER report_input_retry ON finding_reports`;
+      await sql`DROP FUNCTION fail_first_report_input_commit()`;
+      await sql`DROP SEQUENCE report_input_retry_witness`;
       assert.equal(results.filter((result) => result.dispatched).length, 1);
       const [report] = await sql`SELECT * FROM finding_reports WHERE finding_id = ${findingId}`;
       assert.equal(report?.version, 1);
@@ -104,8 +122,13 @@ if (!testDatabaseUrl) {
       const [claimedReport] = await sql`SELECT status FROM finding_reports WHERE id = ${report.id as string}`;
       assert.equal(claimedReport.status, "generating");
 
-      const inputPath = path.join(blobDir, String(report.input_uri));
+      const inputPath = path.resolve(blobDir, String(report.input_uri));
+      await assert.rejects(readFile(inputPath), { code: "ENOENT" }, "SQL enqueue/claim must not write filesystem input");
+      const { materializeReportInput } = await import("./report-input.js");
+      const [claimedJob] = await sql`SELECT * FROM jobs WHERE id = ${String(jobs[0].id)}`;
+      await materializeReportInput(claimedJob);
       const inputBytes = await readFile(inputPath);
+      assert.equal(inputBytes.toString("utf8"), (claimedJob.payload_json as Record<string, unknown>).report_input_json);
       assert.equal(createHash("sha256").update(inputBytes).digest("hex"), report.input_sha256);
       const frozen = JSON.parse(inputBytes.toString("utf8"));
       assert.ok(inputBytes.toString("utf8").length <= frozen.input_budget_chars);

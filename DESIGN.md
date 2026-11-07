@@ -6,7 +6,7 @@
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
 
-#945 工具活动进度投影先锁 Canvas 再更新 scoped Job 节点，复用现有纯数据库冲突重试，不重跑工具；其余已核对入口覆盖 Job/Canvas 创建和 deferred 预检；可派 Report 写输入文件的 Verify/orphan 混合 I/O 恢复入口暂不整体重试；Hub/报告内部必须保留原始锁冲突，不能吞掉后将 `25P02` 当成另一种安全重试信号。报告冻结输入的文件写入不随 SQL 回滚，具体幂等条件和未提交文件边界见[运行时视图](docs/architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)。不重放已开始的模型或未知效果；最终 SHA Actions 待验。
+#945 工具活动进度保持 Canvas-first；Job/Canvas 创建和 deferred 预检沿用纯数据库有界冲突重试。Task/Finding Report 的精确输入字节与摘要现随 Job/Report SQL 原子提交，领取后、runtime IO 前才投影输入文件，不覆盖冲突历史；Verify/orphan 收口因此只重试 SQL，按 Canvas → Job → 全部 Attempts 重核终态归属。成功报告输出仍含文件 I/O，不纳入整体重试；原始 SQLSTATE 保留，`25P02` 和未知外部效果不是安全重放依据。历史缺少新冻结字节不重建或补写，详见[运行时视图](docs/architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)及[数据契约](docs/architecture/08-data-architecture.md#report-输入与文件投影945)。最终 SHA Actions 待验。
 
 ## 1. 设计判断
 

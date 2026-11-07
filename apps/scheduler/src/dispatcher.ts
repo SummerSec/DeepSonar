@@ -2,6 +2,7 @@ import { readRepairTokenBudget, assertRepairExecutionOwner } from "./domains/eve
 import { frozenTaskContract, taskContractPreflight, TaskContractBlockedError } from "./task-contract-preflight.js";
 import {tickKnowledgeBeforeDispatch} from "./dispatcher-knowledge-gate.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
+import { materializeReportInput } from "./report-input.js";
 import { assertCurrentRuntimeImageKey } from "@deepsonar/shared-types";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
@@ -1006,6 +1007,7 @@ async function runJob(jobId: string) {
     const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
     assertFrozenCliCapabilities(snapshot);
+    if (job.type === "report") await materializeReportInput(job);
     // Fail closed before sandbox provision when a Pi catalog id cannot be
     // mapped to one authenticated models.json route.
     assertPiSnapshotLaunchSelection(snapshot);

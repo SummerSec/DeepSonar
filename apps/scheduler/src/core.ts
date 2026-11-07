@@ -1540,12 +1540,15 @@ export async function recoverVerifyJobTerminal(
   jobStatus: "failed" | "timeout" | "orphan" | "cancelled",
   error?: string | null,
 ): Promise<void> {
-  // #945: Hub 收敛可派 Report 并写输入文件，尚非纯数据库重试边界。
-  await sql.begin(async (txRaw) => {
+  // #945: Report admission now freezes bytes in SQL; no runtime/filesystem IO is retried.
+  await withOperationConflictRetry("recover_verify_terminal", () => sql.begin(async (txRaw) => {
     const tx = /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ txRaw as unknown as Tx;
-    const [job] = await tx`SELECT type, finding_id, canvas_id, project_id, priority, id FROM jobs WHERE id = ${jobId}`;
-    if (!job || job.type !== "verify_finding" || !job.finding_id) return;
-    if (!(await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null))) return;
+    const [candidate] = await tx`SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
+    if (!candidate || !(await lockCanvasForConvergence(tx, (candidate.canvas_id as string | null) ?? null))) return;
+    const [job] = await tx`SELECT type, finding_id, canvas_id, project_id, priority, id, status FROM jobs WHERE id = ${jobId} FOR UPDATE`;
+    if (!job || job.type !== "verify_finding" || !job.finding_id || job.status !== jobStatus) return;
+    if (job.canvas_id !== candidate.canvas_id) throw new Error("verify recovery Canvas changed");
+    await tx`SELECT id FROM job_attempts WHERE job_id = ${jobId} ORDER BY attempt_no, id FOR UPDATE`;
     const closed = await findingVerification.closeVerifyRound(tx, jobId, {
       jobStatus,
       error: error ?? null,
@@ -1572,7 +1575,7 @@ export async function recoverVerifyJobTerminal(
         },
       );
     }
-  });
+  }));
 }
 
 export type CanvasJobTerminalStatus = HubCanvasJobTerminalStatus;

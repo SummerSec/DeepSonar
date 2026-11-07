@@ -73,7 +73,7 @@ import {
 import { mintJobToken } from "./gateway.js";
 import { collectEvidenceSnapshot, evaluateFindingFactGate, freezeVerifyFindingSubject, projectVerifyEvidenceForPrompt } from "./verify.js";
 import { buildVerifyJobPrompt } from "./verify-prompt.js";
-import { readReportBlob } from "./report.js";
+import { readFrozenReportInput } from "./report-input.js";
 import { REPORT_QUANTITY_VERBATIM_NOTE } from "./report-numeric-fidelity.js";
 import { publishStream } from "./stream-bus.js";
 import { CONTROL_MCP_NAME, CONTROL_SEMANTIC_EVENT_TYPES } from "./platform-control.js";
@@ -1070,7 +1070,7 @@ ${graph.yaml}`;
     if (!inputUri) {
       throw new Error(`report job ${jobId} 缺少 report_input_uri`);
     }
-    const inputBlock = (await readReportBlob(inputUri)).toString("utf8");
+    const inputBlock = readFrozenReportInput(job).toString("utf8");
     if (!inputBlock.trim()) throw new Error(`report job ${jobId} 的 report-input.json 为空`);
     try {
       JSON.parse(inputBlock);

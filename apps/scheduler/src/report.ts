@@ -7,6 +7,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseDeclaredQuantities, type QuantityAnchor } from "@deepsonar/shared-types";
 import { config } from "./config.js";
+import { readFrozenReportInput } from "./report-input.js";
 import { isRetryableDatabaseConflict } from "./db-conflict-retry.js";
 import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { taskReportCoverageOk } from "./report-coverage.js";
@@ -912,6 +913,12 @@ export async function maybeDispatchFindingReport(
   findingId: string,
   opts: { force?: boolean } = {},
 ): Promise<FindingReportDispatchResult> {
+  const [candidate] = await tx`
+    SELECT j.canvas_id FROM findings f JOIN jobs j ON j.id = f.job_id WHERE f.id = ${findingId}`;
+  if (!candidate) return { dispatched: false, reason: "no_finding" };
+  if (!candidate.canvas_id) return { dispatched: false, reason: "no_canvas" };
+  const [canvas] = await tx`SELECT id FROM canvases WHERE id = ${candidate.canvas_id as string} FOR UPDATE`;
+  if (!canvas) return { dispatched: false, reason: "no_canvas" };
   const [finding] = await tx`
     SELECT f.id, f.project_id, f.verify_status, j.canvas_id
     FROM findings f
@@ -921,6 +928,7 @@ export async function maybeDispatchFindingReport(
   if (!finding) return { dispatched: false, reason: "no_finding" };
   if (finding.verify_status !== "confirmed") return { dispatched: false, reason: "not_confirmed" };
   if (!finding.canvas_id) return { dispatched: false, reason: "no_canvas" };
+  if (finding.canvas_id !== candidate.canvas_id) throw new Error("finding Report Canvas changed");
 
   const [latest] = await tx`
     SELECT id, version, status, report_job_id
@@ -959,9 +967,7 @@ export async function maybeDispatchFindingReport(
   const input = await buildFindingReportInput(findingId, version, tx as unknown as typeof sql);
   const inputJson = JSON.stringify(input);
   const inputSha = sha256(inputJson);
-  const dir = findingReportDir(findingId, version);
-  await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, "report-input.json"), inputJson, "utf8");
+  // Freeze exact bytes with the Job/Report SQL commit; filesystem projection is post-claim.
   const inputUri = path.posix.join("finding-reports", findingId, `v${version}`, "report-input.json");
   const reportId = randomUUID();
   const ingressKey = `finding-report:${findingId}:v${version}`;
@@ -982,6 +988,8 @@ export async function maybeDispatchFindingReport(
         finding_report_id: reportId,
         report_version: version,
         report_input_uri: inputUri,
+        report_input_sha256: inputSha,
+        report_input_json: inputJson,
       } as never,
       timeout_sec: knobs.timeoutSec,
       followup_depth: 0,
@@ -1225,12 +1233,8 @@ export async function maybeDispatchReport(
       WHERE id = ${held.id as string}`;
   }
 
-  // Canvas 锁内写入派发输入：仅相同摘要复用版本，否则使用尚未提交的新版本。
-  // 文件不随 SQL 回滚；包含本段的混合 I/O 事务不能直接整体交给纯数据库重试器。
-  const dir = reportDir(canvasId, version);
-  await mkdir(dir, { recursive: true });
-  const inputPath = path.join(dir, "report-input.json");
-  await writeFile(inputPath, inputBytes, "utf8");
+  // Exact frozen bytes and their digest commit atomically with Job/Report.
+  // Dispatcher materializes the file after claim, never inside a SQL retry.
   const inputUri = path.posix.join("reports", canvasId.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 80) || "unknown", `v${version}`, "report-input.json");
 
   const [job] = await tx`
@@ -1247,6 +1251,7 @@ export async function maybeDispatchReport(
         report_version: version,
         report_input_uri: inputUri,
         report_input_sha256: inputSha,
+        report_input_json: inputBytes,
         findings_total: reportInput.statistics.findings_total,
         confirmed_count: reportInput.statistics.confirmed_count,
         needs_human_count: reportInput.statistics.needs_human_count,
@@ -1333,7 +1338,9 @@ async function finalizeFindingReportJob(
   }
 
   try {
-    const inputBytes = await readReportBlob(String(report.input_uri));
+    const inputBytes = readFrozenReportInput(job, {
+      input_uri: report.input_uri, input_sha256: report.input_sha256, version: report.version,
+    });
     const input = JSON.parse(inputBytes.toString("utf8")) as FindingReportInput;
     if (input.scope !== "finding" || input.finding.id !== report.finding_id || input.report_version !== report.version) {
       throw new Error(`finding report ${report.id as string} input identity mismatch`);
@@ -1529,7 +1536,9 @@ export async function finalizeReportJob(
     WHERE canvas_id = ${canvasId} AND report_job_id = ${jobId}
     FOR UPDATE`;
   if (!report) throw new Error(`task report not found for job ${jobId}`);
-  const inputBytes = await readReportBlob(String(report.input_uri));
+  const inputBytes = readFrozenReportInput(job, {
+    input_uri: report.input_uri, input_sha256: report.input_sha256, version: report.version,
+  });
   if (sha256(inputBytes) !== report.input_sha256) {
     throw new Error(`task report input digest mismatch: ${report.id}`);
   }

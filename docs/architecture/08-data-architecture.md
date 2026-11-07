@@ -48,6 +48,12 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 保鲜门禁的单处编号核对：当前主线 v68（指当前集成目标基线，不声明已合并或已发布；2026-11-07 源码核对，Skill 源候选发布隔离；本次未执行 rebuild、测试、构建或 typecheck，最终 SHA Actions 待验）。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。历史绿灯不能代替 schema68 及最终提交的工程验收。
 
+### Report 输入与文件投影（#945）
+
+新 Task/Finding Report 的 `jobs.payload_json.report_input_json` 保存精确 UTF-8 JSON 字符串，不对 JSONB 对象重新编码；`report_input_sha256` 校验该字符串的完整字节。既有 Report 行继续保存 scope/version/Job 外键、`input_uri`、`input_sha256`，与 Job payload 在同一事务提交，状态和版本规则不变；开放冻结正文留在既有 JSONB，不新增 DDL 或 schema 版本。Report 输入的管理真相是该 SQL 冻结字节，文件只是领取后的可恢复投影，未提交事务不能留下新输入文件。
+
+[Report input reader/materializer](../../apps/scheduler/src/report-input.ts)核对 Job 类型、项目/Canvas、Finding、版本、URI 以及可用的 Report 行摘要/身份；文件冲突保留旧字节并拒绝，缺少冻结正文的历史 Job 不从文件或当前事实补读/重建，要求显式创建新报告。历史输出与 Evidence 不迁移，输入文件发布不意味着模型已开始或报告已成功。最终输出仍按原有文件/hash 契约保存，不能把输入分离当作输出和 SQL 的跨存储原子性证明。沿用 [ADR 0004](adr/0004-fact-and-finding-verification.md) 的投影边界，工程证据以最终 Actions 为准。
+
 ### Skill 源已批准目录与候选（#960）
 
 `skill_sources.catalog_json/catalog_snapshot_hash/last_commit_sha/last_content_hash/synced_at` 始终描述当前已发布目录 A；承认既有控制面 live 授权事实，不自动复制旧值到候选，不重造历史批准。schema68 仅增加默认 NULL 的 `candidate_hash`（FK 指向 `shared_asset_blobs`）、`candidate_json`、`last_checked_at`、`last_sync_error`，不增加增量 ALTER。已有非空库须遵守基线版本/结构 fail-closed 与受控重建纪律；本次未在本地重建数据库。

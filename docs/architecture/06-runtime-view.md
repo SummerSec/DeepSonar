@@ -116,7 +116,9 @@ Gateway 503 仅在内核明确证明请求尚未启动时可降级；`unknown` �
 
 #945 将现有冲突重试器接入已核对的 Job 创建、任务画布创建与 deferred 语义预检三个纯数据库入口，不建立第二套重试语义。Hub 停止/额度收敛与报告再派的业务错误继续按既有规则处理；`40P01` / `40001` / `55P03`（含 cause）必须原样抛回事务边界，避免吞掉后只剩 `25P02`；`25P02` 本身不能证明安全重试。耗尽保留稳定错误码与既有 operation 指标，不重放模型请求或未知效果。
 
-Verify 终态恢复与 orphan 收口可间接派发 Report，尚非纯数据库工作：现有派发在 Canvas 锁内写冻结输入，相同摘要才复用版本，否则使用新版本；文件不随 SQL 回滚，失败轮可能留下无已提交引用的输入。这些条件不证明跨存储原子性，本片撤回这两个混合 I/O 入口的新增自动重试，保留原事务并在 #945 继续跟踪安全边界拆分；不能以输入看似幂等为由放宽上面的纯数据库约束。原始冲突传递与业务错误隔离的无服务回归接在 bounded-contexts / verify-eligibility，真实交叉事务接在 recovery；最终 SHA Actions 待验，生产死锁消失比例未验证。
+#945 后续拆开 Report 派发的混合 I/O：Task/Finding Report 在同一 SQL 事务冻结精确 JSON 字符串、SHA-256、scope/version/URI，随 Job 与 Report 行一起提交，不在事务内创建目录或写输入文件。Dispatcher 在领取提交后、runtime IO 前调用[输入投影](../../apps/scheduler/src/report-input.ts)，验证完整字节摘要与 Job 身份，再发布完整文件；已存在相同摘要可复用，不同摘要明确失败且保留旧文件。Executor 与最终报告模板读取同一 SQL 冻结字节，并与 Report 行身份重核，不从当前 Finding/Canvas 重建历史输入。历史 Job 缺冻结字节拒绝执行，显式创建新报告，旧快照/文件不回写。
+
+Verify 终态恢复与 orphan 收口由此成为纯 SQL 边界，复用现有 `withOperationConflictRetry`；每轮按 Canvas → 当前 Job → 全部 Attempts 加锁并重核 scope/终态，不能让旧收口推进新一轮执行。token 撤销、资源清理、输入文件投影和模型运行在重试之外；成功报告的输出文件生成仍是混合 I/O，不因此整体重试。恢复/verify-eligibility/finding-report 的已接线回归覆盖真实 PostgreSQL 晚期 SQLSTATE 回滚后重试、重复终态、唯一版本和冻结字节/文件归属；最终 SHA Actions 待验，生产死锁消失比例未验证。
 
 任务硬删除与归档复用上述锁序（#904 / #917 评审）：claim advisory → Canvas → 排序 Job → Attempt/effects，保留判定与数据库取消同事务；知识治理回执、版本、评估及设备租约历史保持不变，命中时在取消前拒绝。事务调用方通过 `deferProvisionInterruption` 将 provision abort/provider cancel 延后到真实提交成功，之后再销毁 sandbox；取消 CAS 后的 SQL 失败不应改变外部 runner。独立 PostgreSQL 回归覆盖删除回滚、提交后中断与归档/事件交错，最终工程验收仍以当前 SHA 的 Actions 为准。
 
