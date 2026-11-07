@@ -159,6 +159,8 @@ Chrome Fuzz ARM64 的 CI/Release cache miss 构建前执行[受控宿主磁盘�
 
 发版、修改 `CHANGELOG.md`、创建或移动 `v*` tag 前，执行 [`AGENTS.md`](../../AGENTS.md) 的文档保鲜清单：schema 主线版本与代码一致、文档命令和链接可解析、已删机制只作解释性出现、as-built 段落人工对照代码、可变数字带核对基线，并核对状态索引和发布证据。`pnpm ci:unit:docs-freshness` 只能覆盖其中的机检项，不能替代语义审查。
 
+#996 的版本回归同时覆盖 Skill 中的「当前主线」和「最新基线为」等当前 schema 声明，并保留明确历史记录；可复用 Skill 优先链接同 checkout 的 schema 基线与 `SCHEMA_VERSION`，不复制临时工作树状态。CLI 端点存在不代表请求体合法：`pnpm ci:unit:management-skill` 在原 Python 回归之外，用真实 Zod 契约检查 Prompt 同步的 PUT 与非 Prompt 字段往返。两套入口均由现有 [CI workflow](../../.github/workflows/ci.yml) 的 docs-freshness job 调用，不以静态对账代替实际 Actions 结果。
+
 **可变数字的时效要求（人工项）**：env 默认值、阈值、上限、超时、计数、池大小、冻结额度这类会随代码变化的值，只能二选一——写核对基线（`main <sha>` 或 `YYYY-MM-DD`），或不复制数字、直接链接代码与权威文档（如 [`USAGE_LIMITS.md`](../USAGE_LIMITS.md)）。同一数字已存在于权威文档时，其他文档应链接而不复述。禁止「本 PR 基线默认 N」这类无归属写法；这类漂移机检抓不到，实测案例是默认请求额度从 500 改为 0 后，一份标了基线但正文复述旧数字的文档在门禁全绿的情况下过期了一整轮。
 
 ## 6. 变更验收输出

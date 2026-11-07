@@ -297,18 +297,15 @@ def _jobs_create(_pos, f):
 
 
 def _project_settings_update(pos, f):
+    if any(key == "roles" or key.startswith("roles=") for key in f):
+        raise ApiError("--roles 已移除：角色由 Hub/Job 选择；CLI/Provider 项目授权仍有效。请移除 --roles 后重试。")
     body = {}
     if f.get("rules"):
         body["rules"] = parse_json_arg(str(f["rules"]), "--rules")
-    if f.get("roles") is not None:
-        # --roles "explore,analyze" 设启用清单；--roles null 恢复默认（全部内置）
-        roles_val = str(f["roles"])
-        enabled = None if roles_val == "null" else [s.strip() for s in roles_val.split(",") if s.strip()]
-        body["roles"] = {"enabled": enabled}
     if f.get("finding-protocol"):
         body["finding_protocol"] = parse_json_arg(str(f["finding-protocol"]), "--finding-protocol")
     if not body:
-        raise ApiError("至少提供 --rules、--roles 或 --finding-protocol")
+        raise ApiError("至少提供 --rules 或 --finding-protocol")
     return call("PATCH", f"/projects/{need(pos[0] if pos else None, 'projectId')}/settings", body)
 
 
@@ -754,30 +751,33 @@ def _builtin_prompt_templates(schema_path: Path) -> Dict[str, str]:
 
 
 def _role_config_put_body(cfg: dict, instructions: str) -> dict:
-    """把 GET view 转成声明式 PUT body；保留所有用户运行配置，只替换 Prompt。"""
-    return {
-        "agent_cli": cfg.get("agent_cli") or "claude-code",
-        "model": cfg.get("model"),
-        "reasoning": cfg.get("reasoning"),
-        "env_keys": cfg.get("env_keys") or [],
-        "env_vars": cfg.get("env_vars_json") or {},
-        "modules": cfg.get("modules_json") or [],
-        "skills": cfg.get("skills_json") or [],
-        "commands": cfg.get("commands_json") or [],
-        "mcps": cfg.get("mcps_json") or [],
-        "subagents": cfg.get("subagents_json") or [],
-        "platform_tools": dict(cfg.get("platform_tools_json") or {}),
-        "instructions_markdown": instructions,
-        "runtime_image_key": cfg.get("runtime_image_key"),
-        "credentials": [
-            {"credential_id": item["credential_id"], "purpose": item["purpose"]}
-            for item in (cfg.get("credentials") or [])
-        ],
-        "config_files": [
-            {"path": item["path"], "content": item["content"]}
-            for item in (cfg.get("config_files") or [])
-        ],
-    }
+    """按当前全局 GET→PUT 契约只替换 Prompt；缺字段时拒绝，不猜测运行配置。"""
+    try:
+        return {
+            "agent_cli": cfg["agent_cli"],
+            "dsh_task_mode": cfg["dsh_task_mode"],
+            "model": cfg["model"],
+            "allow_model_catalog_passthrough": cfg["allow_model_catalog_passthrough"],
+            "context_window_tokens": cfg["context_window_tokens"],
+            "env_keys": cfg["env_keys"],
+            "env_vars": cfg["env_vars_json"],
+            "modules": cfg["modules_json"],
+            "skills": cfg["skills_json"],
+            "commands": cfg["commands_json"],
+            "mcps": cfg["mcps_json"],
+            "subagents": cfg["subagents_json"],
+            "platform_tools": cfg["platform_tools_json"],
+            "instructions_markdown": instructions,
+            "runtime_image_key": cfg["runtime_image_key"],
+            "sandbox_limits": cfg["sandbox_limits_json"],
+            "runtime_knobs": cfg["runtime_knobs_json"],
+            "config_files": [
+                {"path": item["path"], "content": item["content"]}
+                for item in cfg["config_files"]
+            ],
+        }
+    except KeyError as error:
+        raise ApiError(f"全局 RoleConfig GET 缺少字段 {error.args[0]}；拒绝猜测配置，请核对当前 API 契约") from error
 
 
 def _role_configs_sync_builtin_prompts(_pos, f):
@@ -797,10 +797,9 @@ def _role_configs_sync_builtin_prompts(_pos, f):
         cfg = by_name[role_name]
         before = str(cfg.get("instructions_markdown") or "")
         changed = before != instructions
-        body = _role_config_put_body(cfg, instructions)
         if not dry_run and changed:
             role_id = need(cfg.get("role_id"), f"线上 {role_name}.role_id")
-            call("PUT", f"/role-configs/global/{role_id}", body)
+            call("PUT", f"/role-configs/global/{role_id}", _role_config_put_body(cfg, instructions))
         results.append({
             "role": role_name,
             "changed": changed,
