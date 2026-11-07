@@ -168,7 +168,9 @@ test("shared sync failure remains visible through a deferred metadata refresh", 
 
 test("shared sync success survives a metadata refresh failure without claiming write failure", async () => {
   await withFixture(async (f) => {
-    api.syncSkillSource = async () => ({ ok: true, modules: 2, changed: false, skipped: true, candidate_hash: null });
+    api.syncSkillSource = async () => ({ ok: true, modules: 2, changed: false, candidate_hash: null,
+      previous_commit_sha: null, last_commit_sha: null, previous_content_hash: null, last_content_hash: null,
+      synced_at: "2026-11-07T00:00:00.000Z" });
     const refresh = deferred<Awaited<ReturnType<typeof api.projectSkillSources>>>();
     api.projectSkillSources = () => refresh.promise;
     await f.click(f.button("同步候选"));
