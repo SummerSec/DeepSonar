@@ -15,12 +15,17 @@ import {
   type ParsedModuleSelector,
   validateModuleSelectors,
 } from "@deepsonar/shared-types";
-import { recordSystemAudit } from "./audit.js";
 import { config } from "./config.js";
 import { sql } from "./db.js";
 import { persistSkillSourceManifest } from "./job-skill-catalog.js";
-import { probeSkillSourceRemoteHead, skipUnchangedSourceSync } from "./skill-source-drift.js";
+import { probeSkillSourceRemoteHead } from "./skill-source-drift.js";
 import { inc } from "./metrics.js";
+import {
+  healthySkillSourceRevision, parseSkillSourceCandidate, recordSkillSourceSyncFailure, stageSkillSourceCandidate,
+  withSkillSourceSyncLock, skillSourceSyncErrorCode, SkillSourceCandidateError,
+  SKILL_SOURCE_CANDIDATE_SCHEMA, type SkillSourceCandidate, type SkillSourceState,
+} from "./skill-source-catalog-lifecycle.js";
+export { approveSkillSourceCandidate, SkillSourceCandidateError } from "./skill-source-catalog-lifecycle.js";
 
 export {
   parseModuleSelector,
@@ -538,7 +543,7 @@ export function scanSkillSourceRepo(repoRoot: string): SourceModule[] {
   return modules;
 }
 
-/** 克隆指定分支；只有真实分支错误才允许回退默认分支，取消必须原样中止。 */
+/** Clone only the configured branch; a missing branch is a failed check, not fallback authority. */
 export async function cloneSkillSource(input: {
   repoUrl: string;
   branch: string;
@@ -547,21 +552,11 @@ export async function cloneSkillSource(input: {
   execFile?: GitExecFile;
 }): Promise<void> {
   const run = input.execFile ?? execFileP;
-  try {
-    await run(
-      "git",
-      ["clone", "--depth", "1", "--branch", input.branch, input.repoUrl, input.destination],
-      { timeout: 120_000, signal: input.signal },
-    );
-  } catch (error) {
-    // Abort 只表示本次同步已取消，不能把取消误判成分支不存在而切到默认分支。
-    if (input.signal?.aborted) throw error;
-    await run(
-      "git",
-      ["clone", "--depth", "1", input.repoUrl, input.destination],
-      { timeout: 120_000, signal: input.signal },
-    );
-  }
+  await run(
+    "git",
+    ["clone", "--depth", "1", "--branch", input.branch, input.repoUrl, input.destination],
+    { timeout: 120_000, signal: input.signal },
+  );
 }
 
 /** Suggest a replacement module id when an old selector no longer exists in catalog (#664). */
@@ -735,7 +730,9 @@ export interface SkillSourceSyncResult {
   synced_at: string;
   /** #954: 探针判定远端 HEAD 与本地 `last_commit_sha` 相同，未重新拉取内容。 */
   skipped: boolean;
-  /** Present after catalog write: RoleConfig selector migrate/remove vs new catalog (#664). */
+  /** Null when the checked bytes already equal the live publication. */
+  candidate_hash?: string | null;
+  /** Sync never heals selectors; only explicit candidate approval may do so. */
   selector_cleanup: SkillSourceSelectorCleanupSummary;
 }
 
@@ -750,142 +747,85 @@ export function skillSourceCatalogChanged(input: {
     || (input.previousContentHash ?? "") !== (input.lastContentHash ?? "");
 }
 
-/** 同步一个模块源：浅克隆 → 扫描 → catalog + commit sha + 内容哈希落库。 */
+/** All entry points stage candidates under the same cross-instance session lock. */
 export async function syncSkillSource(
   sourceId: string,
   syncedBy?: string | null,
   signal?: AbortSignal,
   options: {
-    /** #954: 先 ls-remote 探针，远端 HEAD 与本地 commit 相同时只刷新 synced_at。 */
     skipIfUnchanged?: boolean;
-    probeHead?: (input: {
-      repoUrl: string;
-      branch: string;
-      signal?: AbortSignal;
-    }) => Promise<string | null>;
+    probeHead?: (input: { repoUrl: string; branch: string; signal?: AbortSignal }) => Promise<string | null>;
+    /** Service integration fixtures use real isolated PG with deterministic Git I/O. */
+    db?: typeof sql;
+    databaseUrl?: string;
+    execFile?: GitExecFile;
   } = {},
 ): Promise<SkillSourceSyncResult> {
-  if (signal?.aborted) throw abortReason(signal, `skill source ${sourceId} sync`);
-  const [src] = await sql`SELECT * FROM skill_sources WHERE id = ${sourceId}`;
-  if (!src) throw new Error(`skill source ${sourceId} 不存在`);
-  if ((src.trust_status as string) === "disabled") throw new Error("模块源已禁用，不能同步");
-  const previousCommitSha = typeof src.last_commit_sha === "string" && src.last_commit_sha.trim()
-    ? src.last_commit_sha.trim()
-    : null;
-  const previousContentHash = typeof src.last_content_hash === "string" && src.last_content_hash.trim()
-    ? src.last_content_hash.trim()
-    : null;
-  const previousCatalog = Array.isArray(src.catalog_json)
-    ? (src.catalog_json as unknown[]).filter(isCatalogModule)
-    : [];
-
-  if (options.skipIfUnchanged) {
-    const skipped = await skipUnchangedSourceSync({
-      sourceId,
-      syncedBy,
-      src: {
-        id: String(src.id),
-        repo_url: String(src.repo_url),
-        branch: String(src.branch),
-        last_commit_sha: previousCommitSha,
-        last_content_hash: previousContentHash,
-        catalog_json: previousCatalog,
-      },
-      signal,
-      probe: options.probeHead ?? probeSkillSourceRemoteHead,
-    });
-    if (skipped) return skipped;
-  }
-
-  const tmp = mkdtempSync(path.join(os.tmpdir(), "deepsonar-src-"));
-  try {
-    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
-    await cloneSkillSource({
-      repoUrl: src.repo_url as string,
-      branch: src.branch as string,
-      destination: tmp,
-      signal,
-      execFile: execFileP,
-    });
-    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
-    const { stdout: commitSha } = await execFileP(
-      "git",
-      ["-C", tmp, "rev-parse", "HEAD"],
-      { timeout: 15_000, signal },
-    );
-    const catalog = scanSkillSourceRepo(tmp);
-    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
-    const lastCommitSha = commitSha.trim() || null;
-    const lastContentHash = contentHashOf(catalog);
-    const catalogSnapshotHash = await persistSkillSourceManifest(sql as never, {
-      sourceId, commitSha: lastCommitSha, catalog,
-    });
-    assertSyncNotAborted(signal, `skill source ${sourceId} sync`);
-    const previousIds = new Set(previousCatalog.map((module) => module.id));
-    const newIds = new Set(catalog.map((module) => module.id));
-    // Diff retained for audit/observability; healing keys off absences in newIds.
-    const removedCatalogIds = [...previousIds].filter((id) => !newIds.has(id));
-    const addedCatalogIds = [...newIds].filter((id) => !previousIds.has(id));
-
-    const [updated] = await sql`
-      UPDATE skill_sources SET
-        catalog_json = ${sql.json(catalog as never)},
-        synced_at = now(),
-        last_commit_sha = ${lastCommitSha},
-        last_content_hash = ${lastContentHash},
-        catalog_snapshot_hash = ${catalogSnapshotHash},
-        synced_by = ${syncedBy ?? null}
-      WHERE id = ${sourceId}
-      RETURNING synced_at`;
-
-    const selectorCleanup = await healRoleConfigSelectorsAfterSync({
-      sourceId,
-      newCatalogIds: newIds,
-      db: sql,
-      recordAudit: async (entry) => {
-        await recordSystemAudit({
-          ...entry,
-          actorId: syncedBy ?? "skill-source-sync",
-        });
-      },
-    });
-    if (removedCatalogIds.length > 0 || addedCatalogIds.length > 0 || selectorCleanup.role_configs_updated > 0) {
-      await recordSystemAudit({
-        action: "skill_source.catalog_diff",
-        resourceType: "skill_source",
-        resourceId: sourceId,
-        actorId: syncedBy ?? "skill-source-sync",
-        after: {
-          added_module_ids: addedCatalogIds,
-          removed_module_ids: removedCatalogIds,
-          selector_cleanup: selectorCleanup,
-        },
-      });
+  const db = options.db ?? sql;
+  const runGit = options.execFile ?? execFileP;
+  return await withSkillSourceSyncLock(sourceId, signal, async (assertLock) => {
+    const [src] = await db`SELECT * FROM skill_sources WHERE id = ${sourceId}` as SkillSourceState[];
+    if (!src) throw new Error("Skill source not found");
+    if (src.trust_status === "disabled") throw new Error("Skill source disabled");
+    const previousCandidate = parseSkillSourceCandidate(src.candidate_json);
+    const currentCandidate = src.candidate_hash && previousCandidate
+      && previousCandidate.source_instance_id === src.source_instance_id && previousCandidate.repo_url === src.repo_url
+      && previousCandidate.branch === src.branch && previousCandidate.revocation_epoch === String(src.revocation_epoch)
+      ? previousCandidate : null;
+    const previousCommitSha = currentCandidate ? currentCandidate.commit_sha : src.last_commit_sha;
+    const previousContentHash = currentCandidate ? currentCandidate.content_hash : src.last_content_hash;
+    let tmp: string | undefined;
+    try {
+      await assertLock();
+      let revision: Awaited<ReturnType<typeof healthySkillSourceRevision>> = null;
+      if (options.skipIfUnchanged) {
+        const remoteHead = await (options.probeHead ?? probeSkillSourceRemoteHead)({
+          repoUrl: src.repo_url, branch: src.branch, signal,
+        }).catch(() => null);
+        assertSyncNotAborted(signal, "skill source sync");
+        if (remoteHead) revision = await healthySkillSourceRevision(src, remoteHead, db);
+      }
+      const skipped = revision !== null;
+      let hash: string;
+      let candidate: SkillSourceCandidate;
+      if (revision) {
+        hash = revision.hash;
+        candidate = { ...revision.candidate, synced_at: new Date().toISOString(), synced_by: syncedBy ?? null };
+      } else {
+        tmp = mkdtempSync(path.join(os.tmpdir(), "deepsonar-src-"));
+        await cloneSkillSource({ repoUrl: src.repo_url, branch: src.branch, destination: tmp, signal, execFile: runGit });
+        assertSyncNotAborted(signal, "skill source sync");
+        const { stdout } = await runGit("git", ["-C", tmp, "rev-parse", "HEAD"], { timeout: 15_000, signal });
+        const catalog = scanSkillSourceRepo(tmp);
+        assertSyncNotAborted(signal, "skill source sync");
+        const commitSha = String(stdout).trim();
+        hash = await persistSkillSourceManifest(db as never, { sourceId: src.id, commitSha, catalog });
+        candidate = {
+          schema: SKILL_SOURCE_CANDIDATE_SCHEMA, source_instance_id: src.source_instance_id,
+          repo_url: src.repo_url, branch: src.branch, revocation_epoch: String(src.revocation_epoch),
+          commit_sha: commitSha, content_hash: contentHashOf(catalog), module_count: catalog.length,
+          synced_at: new Date().toISOString(), synced_by: syncedBy ?? null,
+        };
+      }
+      const candidateHash = await stageSkillSourceCandidate({ captured: src, hash, candidate, signal, assertLock }, db);
+      const changed = skillSourceCatalogChanged({ previousCommitSha, previousContentHash,
+        lastCommitSha: candidate.commit_sha, lastContentHash: candidate.content_hash });
+      if (changed) inc("deepsonar_skill_catalog_changed_total", { source: src.name });
+      return {
+        modules: candidate.module_count, changed, skipped,
+        candidate_hash: candidateHash,
+        previous_commit_sha: previousCommitSha, last_commit_sha: candidate.commit_sha,
+        previous_content_hash: previousContentHash, last_content_hash: candidate.content_hash,
+        synced_at: candidate.synced_at, selector_cleanup: { role_configs_updated: 0, migrated: [], removed: [] },
+      };
+    } catch (error) {
+      await recordSkillSourceSyncFailure(src, signal?.aborted ? new SkillSourceCandidateError("SKILL_SOURCE_SYNC_CANCELLED") : error, db);
+      // Caller-visible failures are safe too: refresh loops may persist/log this message.
+      throw new Error(skillSourceSyncErrorCode(signal?.aborted ? new SkillSourceCandidateError("SKILL_SOURCE_SYNC_CANCELLED") : error));
+    } finally {
+      if (tmp) rmSync(tmp, { recursive: true, force: true });
     }
-    const changed = skillSourceCatalogChanged({
-      previousCommitSha,
-      previousContentHash,
-      lastCommitSha,
-      lastContentHash,
-    });
-    if (changed) inc("deepsonar_skill_catalog_changed_total", { source: String(src.name) });
-
-    return {
-      modules: catalog.length,
-      changed,
-      skipped: false,
-      previous_commit_sha: previousCommitSha,
-      last_commit_sha: lastCommitSha,
-      previous_content_hash: previousContentHash,
-      last_content_hash: lastContentHash,
-      synced_at: updated?.synced_at instanceof Date
-        ? updated.synced_at.toISOString()
-        : String(updated?.synced_at ?? new Date().toISOString()),
-      selector_cleanup: selectorCleanup,
-    };
-  } finally {
-    rmSync(tmp, { recursive: true, force: true });
-  }
+  }, options.databaseUrl);
 }
 
 /** 模块来源的版本证据（随 Job 快照冻结，§5.1：Job 历史只读快照不受后续同步覆盖） */

@@ -6,9 +6,10 @@
  * 模块源只能靠人工 `POST /skill-sources/:id/sync` 更新，启动时明确 warn。
  *
  * 设计边界：
- * - 只刷新平台 trusted+enabled 源；刷新**不提权**，新内容仍受 `trust_status` 门控。
- * - 串行执行，单源超时不阻塞主循环；失败有界退避重试，不影响调度。
- * - 每次刷新先用 `git ls-remote` 探针比对远端 HEAD，未变化只前移 `synced_at`。
+ * - Only refresh trusted+enabled sources; different bytes stage a candidate, never publish.
+ * - Same-source manual/boot/scheduled work shares the service's cross-instance session lock.
+ * - A matching remote SHA skips clone only with healthy CAS evidence. Only the exact
+ *   effective live manifest may advance live synced_at; pending candidates cannot refresh it.
  */
 import { config } from "./config.js";
 import { sql } from "./db.js";
@@ -29,6 +30,7 @@ export interface SkillSourceSyncOutcome {
   modules: number;
   changed: boolean;
   skipped: boolean;
+  candidate_hash?: string | null;
 }
 
 export type SkillSourceRefreshStatus = "unchanged" | "updated" | "failed";
@@ -40,6 +42,8 @@ export interface SkillSourceRefreshOutcome {
   modules: number | null;
   attempts: number;
   error: string | null;
+  /** Observation only; neither updated nor unchanged means a candidate was published. */
+  source_update_pending?: boolean;
 }
 
 export interface SkillSourceRefreshDeps {
@@ -66,8 +70,12 @@ const DEFAULT_RETRY_DELAYS_MS = [5_000, 15_000] as const;
 /** 连续失败到该次数即视为需要人工介入的告警条件。 */
 export const SKILL_SOURCE_FAILURE_ALERT_THRESHOLD = 3;
 
+const SAFE_SYNC_ERRORS = new Set(["sync_failed", "sync_cancelled", "source_changed", "source_disabled", "manifest_invalid", "lock_lost"]);
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : "";
+  if (SAFE_SYNC_ERRORS.has(message)) return message;
+  if (/ 在 [0-9]+ms 后超时$/.test(message)) return "sync_timeout";
+  return "sync_failed";
 }
 
 function defaultListSources(): Promise<SkillSourceRefreshTarget[]> {
@@ -118,8 +126,10 @@ async function refreshOneSource(
         ctx.signal,
       );
       const status: SkillSourceRefreshStatus = settled.skipped || !settled.changed ? "unchanged" : "updated";
+      const catalogState = typeof settled.candidate_hash === "string" ? "candidate_pending"
+        : settled.candidate_hash === null ? "live_verified" : "unknown";
       console.log(
-        `[skills] scheduled sync source=${source.name} status=${status} modules=${settled.modules} attempts=${attempts}`,
+        `[skills] scheduled sync source=${source.name} status=${status} catalog=${catalogState} live_publication_changed=false modules=${settled.modules} attempts=${attempts}`,
       );
       return {
         source_id: source.id,
@@ -128,11 +138,12 @@ async function refreshOneSource(
         modules: settled.modules,
         attempts,
         error: null,
+        ...(settled.candidate_hash !== undefined ? { source_update_pending: typeof settled.candidate_hash === "string" } : {}),
       };
     } catch (error) {
       if (ctx.signal?.aborted) throw error;
       lastError = errorMessage(error);
-      inc("deepsonar_skill_source_sync_failures_total", { source: source.name });
+      inc("deepsonar_skill_source_sync_failures_total", { source: source.name, reason: lastError });
       ctx.warn(
         `[skills] 模块源 ${source.name} 周期刷新失败（attempt ${attempts}/${ctx.maxAttempts}）: ${lastError}`,
       );
@@ -207,7 +218,7 @@ export async function warnStaleSkillSources(input: {
     if (ageSec !== null && ageSec <= thresholdSec) continue;
     stale.push(row.name);
     warn(
-      `[skills][alert] 模块源 ${row.name} ${
+      `[skills][alert] 模块源 ${row.name} 的已批准目录 ${
         ageSec === null ? "从未成功同步" : `已 ${Math.round(ageSec)}s 未刷新`
       }（告警阈值 ${thresholdSec}s = 2×refreshIntervalSec）`,
     );
@@ -225,7 +236,7 @@ export function warnIfSkillSourcesNeverRefresh(input: {
   const warn = input.warn ?? ((message: string) => console.warn(message));
   warn(
     "[boot] 模块源既没有启动同步也没有周期刷新（DEEPSONAR_SKILL_SOURCE_BOOT_SYNC=false 且 " +
-      "DEEPSONAR_SKILL_SOURCE_REFRESH_INTERVAL_SEC=0）：Skill 目录只会随人工同步更新",
+      "DEEPSONAR_SKILL_SOURCE_REFRESH_INTERVAL_SEC=0）：仅人工检查候选，发布仍需显式审批",
   );
   return true;
 }

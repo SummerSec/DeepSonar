@@ -18,7 +18,7 @@ function skill(name: string, body: string): SourceModule {
   return { id: name, kind: "skill", plugin: "(root)", name, description: name, files: { "SKILL.md": body } };
 }
 
-type Source = { source_instance_id: string; id: string; name: string; enabled: boolean; trust_status: string; last_commit_sha: string; last_content_hash: string; catalog_json: SourceModule[]; catalog_snapshot_hash: string | null; revocation_epoch: string; synced_at: string | null };
+type Source = { source_instance_id: string; id: string; name: string; enabled: boolean; trust_status: string; last_commit_sha: string; last_content_hash: string; catalog_json: SourceModule[]; catalog_snapshot_hash: string | null; revocation_epoch: string; synced_at: string | null; candidate_hash?: string | null };
 
 const SYNCED_AT = "2026-11-06T00:00:00.000Z";
 const NOW_MS = Date.parse("2026-11-06T06:00:00.000Z");
@@ -50,7 +50,7 @@ function fixture() {
     const query = strings.join("?");
     if (query.includes("FROM skill_sources ss") && query.includes("ORDER BY")) {
       return sources.filter((source) => source.enabled && source.trust_status === "trusted" && bindings.get(source.id)?.enabled !== false)
-        .map((source) => ({ ...source, module_count: source.catalog_json.length, project_revocation_epoch: bindings.get(source.id)?.revocation_epoch ?? "0" }));
+        .map((source) => ({ ...source, module_count: source.catalog_json.length, source_update_pending: Boolean(source.candidate_hash && source.candidate_hash !== source.catalog_snapshot_hash), project_revocation_epoch: bindings.get(source.id)?.revocation_epoch ?? "0" }));
     }
     if (query.includes("FROM skill_sources ss") && query.includes("WHERE ss.id =")) {
       const source = sources.find((item) => item.id === values[1]);
@@ -210,6 +210,28 @@ test("missing CAS bytes return a stable, sanitized catalog error", async () => {
     blobs.clear();
     await assert.rejects(loadJobSkillCatalog(db, PROJECT, frozen),
       (error) => error instanceof JobSkillCatalogError && error.error_code === "JOB_SKILL_CATALOG_INTEGRITY");
+  } finally { setSharedAssetBlobStoreForTests(null); }
+});
+
+test("pending candidate is frozen only as an observation and never changes approved hashes or old Job reads", async () => {
+  const { db, sources } = fixture();
+  try {
+    const approved = await freezeJobSkillCatalog(db, PROJECT, { nowMs: NOW_MS });
+    sources[0]!.candidate_hash = "f".repeat(64);
+    const pending = await freezeJobSkillCatalog(db, PROJECT, { nowMs: NOW_MS });
+    assert.equal(pending.catalog_hash, approved.catalog_hash);
+    assert.equal(pending.sources[0]!.manifest_hash, approved.sources[0]!.manifest_hash);
+    assert.equal(pending.sources[0]!.commit_sha, approved.sources[0]!.commit_sha);
+    assert.equal(pending.sources[0]!.source_update_pending, true);
+    assert.equal(pending.sources[0]!.source_synced_at, SYNCED_AT);
+    assert.match(jobSkillCatalogStaleNotice(pending) ?? "", /待审批候选/);
+    assert.deepEqual((await loadJobSkillCatalog(db, PROJECT, pending))[0]!.catalog, sources[0]!.catalog_json);
+    // Old snapshots omitted the observation; their existing hash stays readable.
+    const historical = { ...approved, sources: approved.sources.map(({ source_update_pending: _pending, ...identity }) => identity) };
+    assert.deepEqual(await loadJobSkillCatalog(db, PROJECT, historical), await loadJobSkillCatalog(db, PROJECT, approved));
+    // Even changed observational metadata cannot enlarge the grant or corrupt identity hash.
+    const observationsOnly = { ...pending, sources: pending.sources.map(source => ({ ...source, source_update_pending: false })) };
+    assert.deepEqual(await loadJobSkillCatalog(db, PROJECT, observationsOnly), await loadJobSkillCatalog(db, PROJECT, approved));
   } finally { setSharedAssetBlobStoreForTests(null); }
 });
 

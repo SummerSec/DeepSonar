@@ -28,6 +28,8 @@ export interface FrozenJobSkillSource {
   /** #954: 冻结时的同步时间与年龄。老快照没这两个字段，不能把它们当成新鲜。 */
   source_synced_at?: string | null;
   age_seconds?: number | null;
+  /** Observation only: a saved different candidate is not an approved Job grant. */
+  source_update_pending?: boolean;
 }
 
 export interface FrozenJobSkillCatalog {
@@ -57,6 +59,7 @@ interface SourceRow {
   project_revocation_epoch: string | number | bigint;
   project_enabled?: boolean;
   synced_at?: string | Date | null;
+  source_update_pending?: boolean;
 }
 
 export class JobSkillCatalogError extends Error {
@@ -109,13 +112,50 @@ export async function persistSkillSourceManifest(
   const hash = sha256(bytes);
   const uri = sharedAssetBlobUri(hash);
   const store = getSharedAssetBlobStore();
-  if (!(await store.exists(uri))) await store.put(uri, bytes, { contentType: "application/json" });
+  // Existence is not integrity. Repair only with the exact original CAS bytes;
+  // never rebind an old Job to a newly encoded/different manifest.
+  let healthy = false;
+  try { healthy = sha256(await store.get(uri)) === hash; } catch { /* missing cache */ }
+  if (!healthy) await store.put(uri, bytes, { contentType: "application/json" });
+  if (sha256(await store.get(uri)) !== hash) {
+    throw new JobSkillCatalogError("JOB_SKILL_CATALOG_INTEGRITY", "Skill source manifest persistence failed");
+  }
   // Indexing is idempotent. The caller publishes the pointer only after CAS is durable.
   await db`
     INSERT INTO shared_asset_blobs (content_sha256, bytes, content_type, blob_uri)
     VALUES (${hash}, ${bytes.byteLength}, ${"application/json"}, ${uri})
     ON CONFLICT (content_sha256) DO NOTHING`;
   return hash;
+}
+
+/** Validate the original CAS bytes, not a JSONB re-encoding of the manifest. */
+export async function readSkillSourceManifest(input: {
+  hash: string;
+  sourceId: string;
+  commitSha: string | null;
+  moduleCount: number;
+  contentHash: string;
+}): Promise<SourceModule[]> {
+  if (!HASH_RE.test(input.hash) || !HASH_RE.test(input.contentHash)
+    || !Number.isSafeInteger(input.moduleCount) || input.moduleCount < 0) {
+    throw new JobSkillCatalogError("JOB_SKILL_CATALOG_INTEGRITY", "Skill source manifest metadata invalid");
+  }
+  let bytes: Buffer;
+  try { bytes = await getSharedAssetBlobStore().get(sharedAssetBlobUri(input.hash)); }
+  catch { throw new JobSkillCatalogError("JOB_SKILL_CATALOG_INTEGRITY", "Skill source manifest unavailable"); }
+  if (sha256(bytes) !== input.hash) {
+    throw new JobSkillCatalogError("JOB_SKILL_CATALOG_INTEGRITY", "Skill source manifest hash mismatch");
+  }
+  let manifest: Record<string, unknown>;
+  try { manifest = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>; }
+  catch { throw new JobSkillCatalogError("JOB_SKILL_CATALOG_INTEGRITY", "Skill source manifest invalid"); }
+  if (!manifest || manifest.schema !== MANIFEST_SCHEMA || manifest.source_id !== input.sourceId
+    || manifest.commit_sha !== input.commitSha || !Array.isArray(manifest.catalog)
+    || manifest.catalog.length !== input.moduleCount || !manifest.catalog.every(isModule)
+    || contentHashOf(manifest.catalog) !== input.contentHash) {
+    throw new JobSkillCatalogError("JOB_SKILL_CATALOG_INTEGRITY", "Skill source manifest integrity mismatch");
+  }
+  return manifest.catalog;
 }
 
 /** DB 时间列 → ISO 串；缺值返回 null（= 从未成功同步）。 */
@@ -146,6 +186,7 @@ function frozenEntry(row: SourceRow, nowMs: number): FrozenJobSkillSource {
     project_revocation_epoch: epoch(row.project_revocation_epoch),
     source_synced_at: syncedAt,
     age_seconds: skillSourceAgeSeconds(syncedAt, nowMs),
+    source_update_pending: row.source_update_pending === true,
   };
 }
 
@@ -161,7 +202,8 @@ export async function freezeJobSkillCatalog(
     SELECT ss.id, ss.source_instance_id, ss.name, ss.enabled, ss.trust_status, ss.last_commit_sha,
            ss.last_content_hash, jsonb_array_length(ss.catalog_json) AS module_count, ss.catalog_snapshot_hash,
            ss.revocation_epoch, COALESCE(ps.revocation_epoch, 0) AS project_revocation_epoch,
-           ss.synced_at
+           ss.synced_at,
+            (ss.candidate_hash IS NOT NULL AND ss.candidate_hash IS DISTINCT FROM ss.catalog_snapshot_hash) AS source_update_pending
       FROM skill_sources ss
       LEFT JOIN project_skill_sources ps
         ON ps.skill_source_id = ss.id AND ps.project_id = ${projectId}
@@ -190,19 +232,22 @@ export async function freezeJobSkillCatalog(
 }
 
 /**
- * #954: 画布 warning 用的一句话；非陈旧返回 null。
+ * Canvas warning for stale approved bytes or a saved pending candidate; otherwise null.
  * 只读快照证据，不参与任何准入或状态迁移。
  */
 export function jobSkillCatalogStaleNotice(frozen: FrozenJobSkillCatalog | undefined): string | null {
-  if (!frozen?.stale) return null;
-  // 只要有一个源从未成功同步，提示就必须说「从未同步」，不能被更"年轻"的源稀释成 0 天。
-  if (frozen.sources.some((source) => (source.age_seconds ?? null) === null)) {
-    return staleSkillCatalogMessage(null);
+  if (!frozen) return null;
+  const notices: string[] = [];
+  if (frozen.stale) {
+    // Missing success evidence must not be diluted by a younger source.
+    const ages = frozen.sources.map((source) => source.age_seconds);
+    notices.push(staleSkillCatalogMessage(ages.length === 0 || ages.some((age) => age == null)
+      ? null : Math.max(...ages.filter((age): age is number => typeof age === "number"))));
   }
-  const ages = frozen.sources
-    .map((source) => source.age_seconds)
-    .filter((age): age is number => typeof age === "number");
-  return staleSkillCatalogMessage(ages.length > 0 ? Math.max(...ages) : null);
+  if (frozen.sources.some((source) => source.source_update_pending)) {
+    notices.push("Skill 源有待审批候选；当前 Job 仍使用创建时冻结的已批准目录，不自动切换候选内容。");
+  }
+  return notices.length > 0 ? notices.join(" ") : null;
 }
 
 /** Only a dedicated future project-source admission path may inject extensions. */
@@ -216,7 +261,7 @@ export function injectFrozenJobSkillExtensions(
 
 /**
  * catalog_hash 只覆盖**身份**（源实例、commit、内容 hash、撤销纪元、扩展边界）。
- * #954 的新鲜度字段（`source_synced_at` / `age_seconds` / `stale`）是给人和画布看的
+ * 新鲜度与候选观测（source_synced_at / age_seconds / stale / source_update_pending）是给人和画布看的
  * 证据，不参与准入；把它们写进 hash 会让同一份冻结输入因墙上时钟不同而得到不同
  * hash，破坏「相同输入幂等」。老快照没有这些字段时 hash 保持一致。
  */
@@ -226,8 +271,8 @@ function frozenCatalogHashInput(
 ): Record<string, unknown> {
   return {
     project_id: projectId,
-    sources: frozen.sources.map(({ source_synced_at: _syncedAt, age_seconds: _age, ...identity }) => identity),
-    extensions: frozen.extensions.map(({ source_synced_at: _syncedAt, age_seconds: _age, ...identity }) => identity),
+    sources: frozen.sources.map(({ source_synced_at: _syncedAt, age_seconds: _age, source_update_pending: _pending, ...identity }) => identity),
+    extensions: frozen.extensions.map(({ source_synced_at: _syncedAt, age_seconds: _age, source_update_pending: _pending, ...identity }) => identity),
   };
 }
 
