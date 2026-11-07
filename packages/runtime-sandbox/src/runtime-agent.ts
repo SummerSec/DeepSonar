@@ -28,6 +28,7 @@ import { assertWorkspaceWritePath, shellQuote, type RuntimeHost } from "./runtim
 import { PiRpcDriver } from "./pi-rpc-driver.js";
 import { PiLengthRecovery, PI_LENGTH_RECOVERY_MESSAGE, PI_LENGTH_COMPACTION_INSTRUCTIONS,
   piRecoveryGuardReason, type PiRecoveryAction, type RuntimeModelBudget } from "./pi-length-recovery.js";
+import { PiRpcChunkAssembler, isPiRpcChunkFrame, piRpcChunkingEnabled, type PiRpcChunkFrame } from "./pi-rpc-chunking.js";
 import { createStdinCloseKiller } from "./runtime-stdin-close.js";
 import { PiObservationalMemoryTextRedactor } from "./pi-observational-memory.js";
 import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
@@ -1584,6 +1585,14 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
       let processError: unknown;
       let extensionLoadTail = "";
       const piFramer = spec.provider === "pi" ? new PiJsonlFramer(piRpcMaxEventBytes()) : undefined;
+      // #944: opt-in reassembly; its deadline timer also fails a silent stream.
+      const piChunks = spec.provider === "pi" && piRpcChunkingEnabled()
+        ? new PiRpcChunkAssembler({ onExpire: () => {
+            processError ??= new Error("PI_RPC_CHUNK_INCOMPLETE");
+            fatalOutputError ??= "PI_RPC_CHUNK_INCOMPLETE";
+            void exec.kill().catch(() => {});
+          } })
+        : undefined;
       try {
         for await (const chunk of exec) {
           if (chunk.type === "stderr") {
@@ -1635,9 +1644,17 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
               if (parsedLine.warning) spec.onWarning?.(parsedLine.warning);
               continue; // CLI 的非 JSON 噪音行；后续合法行继续处理
             }
-            const rawParsed = piFramer && frame.bytes > PI_RPC_INLINE_BYTES
-              ? await piDriver!.whileCapturing(() => piOutput.prepare(parsedLine.parsed!, frame.bytes))
-              : parsedLine.parsed;
+            let record = parsedLine.parsed;
+            let recordBytes = frame.bytes;
+            if (piChunks && isPiRpcChunkFrame(record)) {
+              const reassembled = piChunks.accept(record as unknown as PiRpcChunkFrame);
+              if (!reassembled) continue; // still buffering this record
+              record = reassembled;
+              recordBytes = Buffer.byteLength(JSON.stringify(record), "utf8");
+            }
+            const rawParsed = piFramer && recordBytes > PI_RPC_INLINE_BYTES
+              ? await piDriver!.whileCapturing(() => piOutput.prepare(record!, recordBytes))
+              : record;
             if (piRecoveryStopped) continue;
             if (piDriver && !await piDriver.observe(rawParsed)) continue;
             const wasTruncated = piRecovery?.truncated;
@@ -1775,6 +1792,12 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
             if (error instanceof Error && error.message.startsWith("PI_RPC_")) fatalOutputError = error.message;
           }
         }
+        // #944: a half-received chunk group must fail closed, never dispatch partial data.
+        if (piChunks && !piChunks.idle) {
+          processError ??= new Error("PI_RPC_CHUNK_INCOMPLETE");
+          fatalOutputError ??= "PI_RPC_CHUNK_INCOMPLETE";
+        }
+        piChunks?.dispose();
       }
       attemptStderrTail = (attemptStderrTail + stderrEvidence.flushPending()).slice(-2000);
       if (adapter.outputMode === "plain-final" && !processError) {

@@ -115,10 +115,10 @@ Control API 的每个 operation 必须经过三层校验：
 
 | 层级 | 目的与边界 | 当前入口 / 证据 |
 | --- | --- | --- |
-| 静态与构建 | 类型、包边界、生成物和基础编译 | `pnpm typecheck`、`pnpm build`；CI `gate` job 执行 `pnpm -r typecheck` 和 `pnpm -r build` |
+| 静态与构建 | 类型、包边界、生成物和基础编译 | `pnpm typecheck`、`pnpm build`；CI 的四个 gate 分片各自执行 `pnpm -r typecheck` 和 `pnpm -r build`（见下节 CI 分层） |
 | 单元与契约 | 纯函数、Zod/OpenAPI、状态转换、能力和错误反馈 | `pnpm ci:unit:capability-pack`、`pnpm ci:unit:canvas-facts`、`pnpm ci:unit:finding-research`、`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:runtime-images` |
 | bounded-context 与路由守则 | 固定路由面、所有权、事件摄入、生命周期和测试接线 | `pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:unit:ci-test-hook`、`pnpm ci:unit:file-size` |
-| PostgreSQL 集成 | 事务锁、幂等、投影、恢复和跨进程行为 | 需要 `TEST_DATABASE_URL` 的 `pnpm ci:integration:finding-research`、`pnpm ci:integration:finding-protocol`、`pnpm ci:integration:platform-api`、`pnpm ci:integration:event-ingestion` 等；CI gate 显式注入测试数据库 |
+| PostgreSQL 集成 | 事务锁、幂等、投影、恢复和跨进程行为 | 需要 `TEST_DATABASE_URL` 的 `pnpm ci:integration:finding-research`、`pnpm ci:integration:finding-protocol`、`pnpm ci:integration:platform-api`、`pnpm ci:integration:event-ingestion` 等；CI 的 `gate-db-core` / `gate-db-domain` / `gate-e2e` 显式注入测试数据库 |
 | Web 与接口集成 | URL 真相、权限、空态/错误态、刷新和事实投影 | `pnpm ci:unit:web-facts`、`pnpm ci:unit:searchable-selects`、`pnpm ci:integration:report-download` 等；Web 下拉必须通过可搜索选择门禁 |
 | Sandbox / images / smoke | 镜像、OpenSandbox、清理、控制面和真实部署边界 | `pnpm ci:images`、`pnpm ci:smoke:control-api`、`pnpm ci:smoke:hub`、`pnpm ci:unit:runtime-sandbox`；需要真实 Docker、OpenSandbox 或 registry 的测试必须声明前置条件 |
 | 文档与发布门 | 版本字面量、脚本和链接、已删机制、架构文档结构 | `pnpm ci:unit:docs-freshness`；CI 已在 `.github/workflows/ci.yml` 的 docs-freshness job 接线 |
@@ -133,7 +133,11 @@ Control API 的每个 operation 必须经过三层校验：
 
 合并到 `main` 的 push 对文档路径使用 `paths-ignore`，所以纯文档变更是否触发主干 CI 不能靠经验推断，必要时按发布硬门手动补跑并核对 SHA。
 
-Chrome Fuzz ARM64 的 CI/Release cache miss 构建前执行[受控宿主磁盘准备](../../.github/ci/prepare-hosted-runner-disk.mjs)，只清理 GitHub-hosted runner 的显式 SDK 白名单，保护工作区和 Docker 状态。always-running docs-freshness job 另运行该脚本的 mock 安全测试。实际磁盘耗尽证据、信任限制和待验证运行见[发布专题](../RELEASE_RUNTIME_IMAGES.md#chrome-fuzz-arm64-的宿主磁盘准备)；不以清理测试代替原生构建或 smoke。
+`ci` 的串行 `gate` 已拆为四个有界并行分片（#972）：`gate-contract`（无服务单测/契约，不声明 `services.postgres`）、`gate-db-core` / `gate-db-domain`（各自独立 PostgreSQL 服务与库）、`gate-e2e`（scheduler 3100/3101 与同库 `setval` 竞态相关的启动/端到端冒烟必须同片）。每片独立 `needs: changes`、独立 `install`/`typecheck`/`build` 生命周期，不复用跨提交结果；`ci-summary` 用 `EXPECTED_GATE_SHARDS` 显式期望矩阵逐片要求 `success`，缺片、取消、超时、失败或结果值未知一律拒绝。原 `gate` 的每个 `ci:*` 套件必须恰好归属一片，覆盖率由 [`gate-shards.test.mjs`](../../agent-harness/gate-shards.mjs) 断言；改 gate 步骤必须同步该清单，不能靠删测试或放宽门禁达标。
+
+镜像构建的缓存与磁盘准备各有独立边界。#974 起 `runtime-images` 的 `cache-from`/`cache-to` 由 [`runtime-image-cache-policy.mjs`](../../agent-harness/runtime-image-cache-policy.mjs) 按 toolset 计算：所有 toolset 恒保留两个 registry 读与 GHA 读回退；`base`/`audit` 的写出与历史两行逐字一致；`kali-minimal` 默认只保留 registry `mode=max,ignore-error=true`，去掉重复的 GHA `mode=max` 大层导出，可用仓库变量 `RUNTIME_CACHE_KALI_GHA` 切回 `min`/`max`，非法值 fail closed。#961 P3 起内容指纹同时给出 `ci_src_tag`（`src-ci-<fp>`，CI 读写）与 `release_src_tag`（`src-release-<fp>`，仅发布读写）；四个 CI workflow 只用前者，`release.yml` 只用后者，历史 `src-<fp>` 已无消费方——否则 PR 产物可以让发布跳过真实构建。
+
+Chrome Fuzz ARM64 的 CI/Release cache miss 构建前执行[受控宿主磁盘准备](../../.github/ci/prepare-hosted-runner-disk.mjs)。#973 起它先读 `df -Pk /` 的可用空间：达标即跳过，不足才按显式 SDK 白名单逐项删除、每步重测、达标即停，全删仍不足则明确失败；`df` 解析失败直接报错而不是回退 0 继续删，dry-run 不调用 `sudo` 也不谎称达标。可删路径仍是固定白名单，工作区与 Docker 状态受保护。always-running docs-freshness job 另运行该脚本的 mock 安全测试。实际磁盘耗尽证据、信任限制和待验证运行见[发布专题](../RELEASE_RUNTIME_IMAGES.md#chrome-fuzz-arm64-的宿主磁盘准备)；不以清理测试代替原生构建或 smoke。
 
 ## 5. 文档、需求和发布保鲜
 
