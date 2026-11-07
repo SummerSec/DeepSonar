@@ -218,3 +218,5 @@
 发布恢复的 as-built 身份/证据与限制已于 2026-11-05 对照[发布专题](RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)同步；真实恢复未经本次执行。
 
 #899 的[操作员效果结清契约](../deploy/README.md#未知效果的人工结清899)区分单条成功、全局残留和未核验状态；隔离 PostgreSQL/CLI 回归接入 Actions，最终 SHA 工程验收与 s66 现场升级分别留证。
+
+- [运行镜像构建分项量测（#961 P0）](RUNTIME_BUILD_TIMING.md)：分项计时、无侵入采集器、可比样本聚合与 P95 样本门槛已交付，并用 30 个历史 CI run 完成只读回填实测；受控 cold / invalidated 标注与三类各三次样本仍待累积，P2 的 V8 builder / toolchain 缓存拆分与 download/compile/export 分项未交付，不宣称任何提速结论。
