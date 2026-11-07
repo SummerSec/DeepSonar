@@ -24,8 +24,8 @@ function table(name: string): string {
 function has(body: string, value: string): void { assert.ok(body.includes(value), value); }
 const history = ["protocols", "records", "observations"];
 
-test("quality foundation has exactly six stable tables and synchronized schema 67", () => {
-  assert.equal(SCHEMA_VERSION, 67);
+test("quality foundation has exactly six stable tables and synchronized current schema", () => {
+  assert.equal(SCHEMA_VERSION, 68);
   has(schema, `VALUES ('global', ${SCHEMA_VERSION})`);
   const manifest = parseTableManifest(schema);
   assert.deepEqual([...manifest.keys()].filter(name => name.startsWith(prefix)).sort(), Object.keys(expected).map(name => prefix + name).sort());
