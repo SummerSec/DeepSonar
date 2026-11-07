@@ -624,7 +624,7 @@ for (const boundary of ["process_start", "resume_prompt", "undefined_guard"]) {
       recoveryGuard: async () => boundary === "undefined_guard" && prompts >= 2 ? undefined as unknown as { allowed: boolean }
         : { allowed: boundary === "process_start" ? prompts < 2 : !resumedCreated, reason: "waiting_human" } });
     const reason = boundary === "undefined_guard" ? "guard_missing" : "waiting_human";
-    assert.ok(result.error?.startsWith(`PI_LENGTH_RECOVERY_STOPPED: ${reason}; prior_runner_error=Pi message ended: error: HTTP 503`), result.error);
+    assert.ok(result.error?.startsWith(`PI_LENGTH_RECOVERY_STOPPED: ${reason}; prior_runner_error=Pi message ended: error: HTTP 503`), result.error ?? "missing recovery-stop diagnostic");
     assert.equal(result.runnerErrorSource, "process");
     assert.equal(result.terminalOutcome, "failure");
     assert.equal(prompts, 2);
