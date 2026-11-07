@@ -337,7 +337,7 @@ export {
   piRpcChunkingEnabled,
   type PiRpcChunkFrame,
 } from "./pi-rpc-chunking.js";
-export { ACK_MEMORY, MAX_ACK_RETRIES } from "./pi-rpc-driver.js";
+export { ACK_MEMORY, MAX_ACK_RETRIES, RETRYABLE_COMMANDS } from "./pi-rpc-driver.js";
 export { PI_RPC_REF_FIELD, PI_RPC_REF_FIELD_BYTES } from "./pi-rpc-output.js";
 export type {
   AgentCliCapabilities,

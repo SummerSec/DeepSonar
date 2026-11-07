@@ -76,3 +76,25 @@ test("the ack memory stays bounded", () => {
   assert.equal(ACK_MEMORY, 256);
   assert.equal(MAX_ACK_RETRIES, 3);
 });
+
+test("an unacknowledged prompt is never retransmitted", async () => {
+  // Pi 1.4.0 hands every `prompt` frame to `session.prompt` and never keys it by
+  // request id, so a resend could run the same turn twice. Only read-only
+  // commands may be retried; prompt stays fail closed.
+  const proc = new SilentProcess();
+  const driver = new PiRpcDriver(proc, () => {}, undefined, 10);
+  try {
+    await driver.initialize("initial");
+    const stateId = JSON.parse(proc.writes[0]!).id as string;
+    await driver.observe({ type: "response", id: stateId, command: "get_state", success: true, data: { sessionId: "s1", sessionFile } });
+    assert.equal(proc.writes.length, 2, "get_state plus the bootstrap prompt");
+    assert.equal(JSON.parse(proc.writes[1]!).type, "prompt");
+
+    await wait(200);
+    assert.ok(driver.error, "the driver gives up");
+    assert.equal(proc.writes.length, 2, "the prompt is written exactly once");
+    assert.equal(proc.killed, true);
+  } finally {
+    driver.dispose();
+  }
+});

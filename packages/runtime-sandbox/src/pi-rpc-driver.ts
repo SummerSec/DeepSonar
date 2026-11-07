@@ -2,6 +2,15 @@ import type { RuntimeProcess } from "./runtime-host.js";
 
 /** #944: how many times an unacknowledged input is resent before the Job fails. */
 export const MAX_ACK_RETRIES = 3;
+/**
+ * #944: only idempotent, read-only commands may be retransmitted.
+ *
+ * The pinned Pi 1.4.0 RPC handler calls `session.prompt` for every `prompt`
+ * frame and never keys it by request id, so "same id" only correlates the
+ * reply. Resending a prompt can therefore run the model (and its tools) twice.
+ * Anything not listed here fails closed on the first missed ACK.
+ */
+export const RETRYABLE_COMMANDS: ReadonlySet<string> = new Set(["get_state"]);
 /** #944: bounded memory of settled ids so late duplicate replies stay harmless. */
 export const ACK_MEMORY = 256;
 
@@ -41,15 +50,22 @@ export class PiRpcDriver {
 
   /**
    * #944: `PI_RPC_INPUT_UNACKNOWLEDGED` used to be terminal on the first missed
-   * ACK, even though the same input often succeeds on a retry. Resend the exact
-   * bytes (same id) up to MAX_ACK_RETRIES times with exponential backoff, then
-   * fail. The receiver dedupes by id, so a late first ACK is harmless.
+   * ACK, even though a read-only probe often succeeds on a retry. Resend the
+   * exact bytes (same id) up to MAX_ACK_RETRIES times with exponential backoff,
+   * then fail.
+   *
+   * Only `RETRYABLE_COMMANDS` qualifies. A `prompt` is not retransmitted: the
+   * pinned Pi 1.4.0 does not dedupe by request id, so a resend could execute the
+   * same turn twice. For prompt the ACK deadline stays terminal, which also
+   * removes the old conflict where the earlier `watchStart` deadline killed the
+   * process before any retry could run.
    */
   private onAckTimeout(id: string, code: string): void {
     if (this.error) return;
     const attempt = this.attempts.get(id) ?? 0;
     const payload = this.payloads.get(id);
-    if (attempt >= MAX_ACK_RETRIES || payload === undefined) {
+    const command = this.commands.get(id) ?? "";
+    if (attempt >= MAX_ACK_RETRIES || payload === undefined || !RETRYABLE_COMMANDS.has(command)) {
       this.fail(code);
       return;
     }
