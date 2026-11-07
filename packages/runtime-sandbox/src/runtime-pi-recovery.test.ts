@@ -414,3 +414,43 @@ test("#765 file count remains bounded when redaction shrinks very large payloads
   await assert.rejects(capture.prepare({ type: "message_update", text: secret }, secret.length + 40), /PI_RPC_CAPTURE_BUDGET_EXCEEDED/);
   assert.equal(writes, 128);
 });
+
+test("production Pi runner keeps a tool start whose args exceed the inline bound", async () => {
+  const events: Record<string, unknown>[] = [];
+  const artifacts: { name: string; content: string }[] = [];
+  // `script` is not a known payload key, so the redacted preview keeps it whole
+  // and the event lands above the 1 MiB inline bound.
+  const huge = "a".repeat(2 * 1024 * 1024);
+  const fake = host(() => new PiProcess((record, process) => {
+    if (record.type === "get_state") state(process, record);
+    else if (record.type === "prompt") {
+      process.emit({ type: "response", id: record.id, command: "prompt", success: true, data: { disposition: "started" } });
+      process.emit({ type: "agent_start" });
+      process.emit({ type: "tool_execution_start", toolCallId: "tool-big", toolName: "bash", args: { script: huge } });
+      process.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } });
+      process.emit({ type: "agent_settled", aborted: false });
+    }
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial",
+    onRuntimeArtifact: async (a) => { artifacts.push(a); return `attempts/test/runtime/${a.name}`; },
+    onEvent: (e) => events.push(e) });
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.terminalOutcome, "success");
+
+  // The whole point: the tool start is still dispatched, with its identity, and
+  // only the oversized argument became a pointer into the archived capture.
+  const started = events.find((event) => event.type === "tool.call.started");
+  assert.ok(started, "an oversized tool argument must not swallow the event");
+  assert.equal(started!.callId, "tool-big");
+  assert.equal(started!.toolName, "bash");
+  const input = started!.input as Record<string, unknown>;
+  assert.match(String((input.script as Record<string, unknown>).$piRef), /pi-rpc-.+\.json$/u);
+  assert.equal((input.script as Record<string, unknown>).pointer, "/args/script");
+
+  const referenced = events.filter((event) => event.code === "pi_rpc_payload_referenced");
+  assert.equal(referenced.length, 1, "the substitution is announced to the consumer");
+  assert.deepEqual(referenced[0]!.pointers, ["/args/script"]);
+  assert.equal(artifacts.length, 1, "the full redacted payload is still durable");
+  assert.ok(artifacts[0]!.content.includes(huge));
+});

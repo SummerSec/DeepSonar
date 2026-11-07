@@ -7,6 +7,59 @@ export const PI_RPC_CAPTURE_BYTES = 128 * 1024 * 1024;
 export type RuntimeArtifactWriter = (artifact: { name: string; content: string }) => Promise<string>;
 const PAYLOAD_KEYS = new Set(["text", "delta", "output", "result", "error", "errorMessage", "message"]);
 
+/** #944: inline marker pointing at the archived capture of one oversized subtree. */
+export const PI_RPC_REF_FIELD = "$piRef";
+/** #944: per-subtree inline budget once an event is still above the bound after preview. */
+export const PI_RPC_REF_FIELD_BYTES = 64 * 1024;
+/**
+ * #944: fields the driver and `decodePi` need in order to keep the event's
+ * identity and state transition. They are never replaced by a pointer; if one of
+ * them is what overflows, the capture fails closed instead.
+ */
+const PI_RPC_CONTROL_PATHS = new Set([
+  "/type", "/id", "/command", "/success", "/disposition", "/toolCallId", "/toolName",
+  "/isError", "/message/role", "/message/stopReason", "/stopReason", "/aborted",
+]);
+
+interface RefReplacement { pointer: string; bytes: number }
+
+/** Raised when the diagnostic for this failure was already emitted. */
+class ReportedCaptureError extends Error {}
+
+/**
+ * #944: replace oversized subtrees with an inline pointer into the archived
+ * capture, keeping every control/identity/state field intact so the driver and
+ * `decodePi` still see the original event semantics. Returns the rewritten value
+ * plus the pointers it substituted.
+ */
+function referenceOversized(
+  value: unknown,
+  options: { refPath: string; sha256: string; budget: number; pointer?: string; refs: RefReplacement[] },
+): unknown {
+  const { refPath, sha256, budget, refs } = options;
+  const pointer = options.pointer ?? "";
+  // Recurse first so the pointer is as deep as possible: a huge tool argument
+  // keeps the rest of its object intact instead of collapsing the whole field.
+  let next: unknown;
+  if (Array.isArray(value)) {
+    next = value.map((entry, index) =>
+      referenceOversized(entry, { refPath, sha256, budget, refs, pointer: `${pointer}/${index}` }));
+  } else if (value && typeof value === "object") {
+    next = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key,
+      referenceOversized(entry, {
+        refPath, sha256, budget, refs,
+        pointer: `${pointer}/${key.replace(/~/gu, "~0").replace(/\//gu, "~1")}`,
+      })]));
+  } else {
+    next = value;
+  }
+  if (!pointer || PI_RPC_CONTROL_PATHS.has(pointer)) return next;
+  const size = Buffer.byteLength(JSON.stringify(next) ?? "");
+  if (size <= budget) return next;
+  refs.push({ pointer, bytes: size });
+  return { [PI_RPC_REF_FIELD]: refPath, pointer, sha256, bytes: size };
+}
+
 /** No structural/identity fields are removed. Only known textual payloads get bounded previews. */
 function project(value: unknown, secrets: readonly string[], preview: boolean, key = "", depth = 0): unknown {
   if (depth > 64) throw new Error("PI_RPC_STRUCTURE_TOO_DEEP");
@@ -70,24 +123,38 @@ export class PiRpcOutputCapture {
         sha256, hash_scope: "redacted_json", path, evidence_path: evidencePath });
 
       const projected = project(safeRecord, this.secrets, true) as Record<string, unknown>;
-      if (Buffer.byteLength(JSON.stringify(projected)) > PI_RPC_INLINE_BYTES) {
-        // #944: an event whose redacted preview is still larger than the inline
-        // bound used to fail the whole Job (PI_RPC_UNSUPPORTED_LARGE_STRUCTURE).
-        // Hand back a reference instead: the full redacted payload is already
-        // durable in the attempt capture, and the caller reads it by path.
-        return {
-          type: "runtime.rpc_reference",
-          __ref: path,
-          sha256,
-          bytes,
-          evidence_path: evidencePath,
-          event_type: typeof safeRecord.type === "string" ? safeRecord.type : "unknown",
-          original_bytes: originalBytes,
-          redacted: true,
-        };
+      if (Buffer.byteLength(JSON.stringify(projected)) <= PI_RPC_INLINE_BYTES) return projected;
+
+      // #944: the redacted preview is still over the inline bound. Replacing the
+      // whole event with a bare reference used to lose its semantics (the driver
+      // could no longer match a `response` id, `decodePi` saw only
+      // `unknown_runtime`, tool starts and `message_end` stop reasons vanished).
+      // Keep the event and every control field, and point at the archived copy
+      // for the oversized payload instead.
+      let candidate = projected;
+      const refs: RefReplacement[] = [];
+      for (const budget of [PI_RPC_REF_FIELD_BYTES, PI_RPC_REF_FIELD_BYTES / 4, PI_RPC_REF_FIELD_BYTES / 16]) {
+        refs.length = 0;
+        candidate = referenceOversized(projected, { refPath: path, sha256, budget, refs }) as Record<string, unknown>;
+        if (Buffer.byteLength(JSON.stringify(candidate)) <= PI_RPC_INLINE_BYTES) break;
       }
-      return projected;
+      const preserved = typeof candidate.type === "string" && candidate.type === safeRecord.type;
+      if (!refs.length || !preserved || Buffer.byteLength(JSON.stringify(candidate)) > PI_RPC_INLINE_BYTES) {
+        // Cannot stay inside the bound without dropping control fields. Fail
+        // loudly rather than dispatch a record whose semantics changed.
+        this.emit({ type: "runtime.diagnostic", code: "PI_RPC_UNSUPPORTED_LARGE_STRUCTURE",
+          capture_complete: true, event_type: safeRecord.type, original_bytes: originalBytes,
+          retained_bytes: bytes, sha256, path, evidence_path: evidencePath, pointers: refs.length });
+        throw new ReportedCaptureError("PI_RPC_UNSUPPORTED_LARGE_STRUCTURE");
+      }
+      // Announce the substitution so consumers can read the payload by pointer.
+      this.emit({ type: "runtime.diagnostic", code: "pi_rpc_payload_referenced", event_type: safeRecord.type,
+        original_bytes: originalBytes, retained_bytes: bytes, sha256, path, evidence_path: evidencePath,
+        pointer_count: refs.length, pointers: refs.slice(0, 16).map((ref) => ref.pointer) });
+      return candidate;
     } catch (error) {
+      // Already reported with the accurate `capture_complete: true`.
+      if (error instanceof ReportedCaptureError) throw error;
       // Exception messages from storage may contain paths/credentials; only stable codes escape.
       const code = error instanceof Error && /^PI_RPC_[A-Z_]+$/.test(error.message)
         ? error.message : "PI_RPC_CAPTURE_WRITE_FAILED";
