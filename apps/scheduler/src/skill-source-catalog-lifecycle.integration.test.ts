@@ -38,7 +38,7 @@ async function fixture(db: TestSql, bytes: Map<string, Buffer>) {
   await db`INSERT INTO skill_sources(id,name,repo_url,branch,enabled,trust_status,catalog_json,catalog_snapshot_hash,last_commit_sha,last_content_hash,synced_at)
     VALUES(${id},${`fixture-${id}`},'https://127.0.0.1/skills.git','main',true,'trusted',${db.json([module("A")] as never)},
       ${hashA},${A},${contentHashOf([module("A")])},'2026-11-06T00:00:00Z')`;
-  await db`INSERT INTO agent_roles(id,name) VALUES(${agentRoleId},${`fixture-${agentRoleId}`})`;
+  await db`INSERT INTO agent_roles(id,name,ui_color) VALUES(${agentRoleId},${`fixture-${agentRoleId}`},'#123abc')`;
   await db`INSERT INTO role_configs(id,role_id,modules_json) VALUES(${roleId},${agentRoleId},${db.json([`${id}:stable-id`, `${id}:removed`] as never)})`;
   const [{ name }] = await db`SELECT current_database() AS name`;
   const url = new URL(process.env.TEST_DATABASE_URL!); url.pathname = `/${name}`;
