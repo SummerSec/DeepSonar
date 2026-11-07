@@ -209,15 +209,17 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET started_at=NULL,finished_at=NULL,error=NULL WHERE id=${checkpointId}`;
       const { config } = await import("./config.js");
       const { runner } = await import("./runtime.js");
-      const previousMode = config.runtime.agentMode, previousProvision = runner.provision;
+      // Narrow test-only override; production configuration remains readonly.
+      const fixtureRuntime = config.runtime as { agentMode: string };
+      const previousMode = fixtureRuntime.agentMode, previousProvision = runner.provision;
       let provisionCalls = 0;
-      config.runtime.agentMode = "real";
+      fixtureRuntime.agentMode = "real";
       runner.provision = async () => { provisionCalls += 1; throw new Error("preflight must fence runtime IO"); };
       try {
         assert.equal(await dispatcherModule.dispatchOnce(), 1);
         await dispatcherModule.drainInFlight();
       } finally {
-        config.runtime.agentMode = previousMode;
+        fixtureRuntime.agentMode = previousMode;
         runner.provision = previousProvision;
       }
       assert.equal(provisionCalls, 0);

@@ -78,7 +78,7 @@ export type RequeueJobResult =
     }
   | { kind: "not_found" }
   | { kind: "not_resumable"; status: string; reason?: string; error_code?: string; provenance?: JobProvenance;
-      missing_fields?: string[]; next_action?: "inspect-job-recovery" }
+      missing_fields?: string[]; next_action?: "inspect-job-recovery" | "rerun-current" }
   | { kind: "target_authorization_blocked"; detail: SnapshotStaleDetail; blockers: TaskContractFeedback[]; provenance?: JobProvenance }
   | { kind: "snapshot_stale"; detail: SnapshotStaleDetail; provenance?: JobProvenance };
 
