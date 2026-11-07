@@ -1,4 +1,5 @@
 import { TaskContractEditor, TaskContractFeedbackView } from "./TaskContractEditor";
+import { SnapshotConfigurationNotice } from "./SnapshotConfigurationNotice";
 import { parseTaskContractDraft, taskFeedbackItems, type TaskContractFeedback } from "../task-contract-editor";
 import { ApiRequestError } from "../login-error";
 import {
@@ -92,6 +93,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
   const [createdProjectId, setCreatedProjectId] = useState<string | null>(null);
   const [contractDraft, setContractDraft] = useState("");
   const [contractFeedback, setContractFeedback] = useState<TaskContractFeedback>({});
+  const [failedProjectId, setFailedProjectId] = useState<string | null>(null);
   const [createdTaskHref, setCreatedTaskHref] = useState<string | null>(null);
   const parsedContract = parseTaskContractDraft(contractDraft);
   const [title, setTitle] = useState("");
@@ -109,6 +111,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
   const [permissionDenied, setPermissionDenied] = useState(false);
 
   const selectedProject = activeProjects.find((project) => project.id === selectedProjectId) ?? null;
+  const configurationProjectId = selectedProject?.id ?? createdProjectId;
   const isCreatingProject = selectedProjectId === NEW_PROJECT || !activeProjects.length;
   const canStart = hasLaunchWritePermission(status, me, isCreatingProject);
   const permissionLoading = status === null && me === null;
@@ -139,6 +142,8 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
     selectionTouchedRef.current = true;
     setSelectedProjectId(id);
     setReadiness(null);
+    setContractFeedback({});
+    setFailedProjectId(null);
     setOperationError(null);
     setTechnicalError(null);
     setPermissionDenied(false);
@@ -159,6 +164,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
     if (busy || createdTaskHref) return;
     if (parsedContract.error) return setOperationError(parsedContract.error);
     setContractFeedback({});
+    setFailedProjectId(null);
     if (!canStart) {
       setPermissionDenied(true);
       return;
@@ -171,6 +177,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
     setPermissionDenied(false);
     const creatingProject = isCreatingProject && !createdProjectId;
     let createdProject: Project | null = null;
+    let requestProjectId = selectedProject?.id ?? null;
     try {
       const result = await runQuickStart(
         {
@@ -185,6 +192,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
           createProject: async (input) => {
             const project = await api.createProject(input);
             createdProject = project;
+            requestProjectId = project.id;
             setCreatedProjectId(project.id);
             onProjectCreated?.(project);
             selectionTouchedRef.current = true;
@@ -214,7 +222,10 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
         setCreatedTaskHref(href);
       } else navigate(href);
     } catch (error) {
-      if (error instanceof ApiRequestError) setContractFeedback(error.taskContractFeedback);
+      if (error instanceof ApiRequestError) {
+        setContractFeedback(error.taskContractFeedback);
+        setFailedProjectId(requestProjectId);
+      }
       if (isPermissionError(error)) {
         setPermissionDenied(true);
       } else {
@@ -232,7 +243,8 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
     }
   };
 
-  const failures = readiness ? readinessFailures(readiness) : [];
+  const currentReadiness = readiness?.scope.kind === "project" && readiness.scope.project_id === configurationProjectId ? readiness : null;
+  const failures = currentReadiness ? readinessFailures(currentReadiness) : [];
 
   return (
     <section className="intent-launch-rail surface-shell deepsonar-reveal" aria-labelledby={`intent-launch-title-${instanceId}`}>
@@ -318,10 +330,10 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
               </div>
             </details>
 
-            {readiness && !readiness.ready && <div className="intent-launch-readiness" role="alert">
+            {currentReadiness && !currentReadiness.ready && <div className="intent-launch-readiness" role="alert">
               <div className="intent-launch-alert-title"><ShieldWarning size={18} weight="light" /><div><strong>平台暂时不能启动这个任务</strong><span>预检发现 {failures.length} 项需要处理，项目已保留，你可以修复后重试。</span></div></div>
               <ul>{failures.slice(0, 5).map((check) => {
-                const repair = resolveReadinessFix(check.fix, readiness.scope, readiness.scope.project_id ?? selectedProject?.id ?? null);
+                const repair = resolveReadinessFix(check.fix, currentReadiness.scope, configurationProjectId);
                 return (
                   <li key={check.code}>
                     <WarningCircle size={14} weight="light" />
@@ -331,7 +343,7 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
                         ? <a href={repair.href} target="_blank" rel="noreferrer">{repair.target}<ArrowUpRight size={12} /></a>
                         : <Link to={repair.href}>{repair.target}<ArrowUpRight size={12} /></Link>)}
                       {check.code === "RUNTIME_IMAGE_PIN_STALE"
-                        && readiness.scope.project_id
+                        && currentReadiness.scope.project_id
                         && check.runtime_image?.runtime_image_id
                         && check.runtime_image.latest_version_id && (
                         <button
@@ -339,11 +351,11 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
                           className="intent-launch-image-enable"
                           disabled={busy}
                           onClick={async () => {
-                            if (!readiness.scope.project_id || !check.runtime_image?.runtime_image_id || !check.runtime_image.latest_version_id) return;
+                            if (!currentReadiness.scope.project_id || !check.runtime_image?.runtime_image_id || !check.runtime_image.latest_version_id) return;
                             setBusy(true);
                             try {
                               await api.bindProjectRuntimeImage(
-                                readiness.scope.project_id,
+                                currentReadiness.scope.project_id,
                                 check.runtime_image.runtime_image_id,
                                 true,
                               );
@@ -368,6 +380,8 @@ export function IntentLaunchRail({ projects, forcedNewProject = true, onProjectC
 
             {operationError && <div className="intent-launch-operation-error" role="alert"><WarningCircle size={16} weight="light" /><div><span>{operationError}</span>{technicalError && <details><summary>技术详情</summary><code>{technicalError}</code></details>}</div></div>}
 
+            <SnapshotConfigurationNotice feedback={failedProjectId === configurationProjectId ? contractFeedback : {}}
+              projectId={configurationProjectId} readiness={currentReadiness} />
             <div className="intent-launch-submit-row">
               <div><span className="intent-launch-submit-note"><span className="intent-launch-live-dot" />预检通过后才会创建任务与 Job</span><span className="intent-launch-submit-note">{networkOverrideLabel(networkOverride)}</span></div>
               {createdTaskHref ? <PrimaryButton type="button" onClick={() => navigate(createdTaskHref)}>进入已创建任务</PrimaryButton> : <PrimaryButton type="submit" busy={busy} disabled={!canStart || permissionLoading || Boolean(parsedContract.error)}>{busy ? "检查并进入画布" : <><span>开始任务</span><ArrowRight size={15} weight="light" /></>}</PrimaryButton>}

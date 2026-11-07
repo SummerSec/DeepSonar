@@ -5,7 +5,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { DeviceRequirement, FindingProtocolConfig, RuntimeProfileOverridePayload, TaskContract, normalizeTaskContract, taskContractWarnings } from "@deepsonar/shared-types";
 import { z } from "zod";
 import { audit } from "../../audit.js";
-import { config } from "../../config.js";
+import { freezeJobRuntimeConfiguration } from "../../job-runtime-freeze.js";
 import {
   DISPATCH_CLAIM_ADVISORY_KEY,
   advancePlanTaskAfterTerminalJob,
@@ -984,7 +984,8 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         catch (error) {
           if (!(error instanceof GatewayRequestBudgetError)) throw error;
           return { jobs: [], active: [], stale: [], convergence: null,
-            repairBlocked: { job_id: String(worker.id), code: error.code, reason: error.message } };
+            repairBlocked: { job_id: String(worker.id), code: error.code, reason: error.message,
+              missing_fields: error.missing_fields } };
         }
         const admission = await readRepairRequeueAdmission(tx, String(worker.id));
         if (admission.blocker) return { jobs: [], active: [], stale: [], convergence: null,
@@ -1069,6 +1070,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
     if ("repairBlocked" in interruptedBatch && interruptedBatch.repairBlocked) {
       return reply.code(409).send({ error: interruptedBatch.repairBlocked.reason,
         error_code: interruptedBatch.repairBlocked.code, job_id: interruptedBatch.repairBlocked.job_id,
+        ...("missing_fields" in interruptedBatch.repairBlocked ? { missing_fields: interruptedBatch.repairBlocked.missing_fields } : {}),
         next_action: "inspect-job-recovery" });
     }
     if (interruptedBatch.stale.length > 0) {
@@ -1138,7 +1140,8 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       }
       if (resumed.kind === "not_resumable") return reply.code(409).send({
         error: resumed.reason ?? "Job 当前不允许恢复", error_code: resumed.error_code ?? "JOB_NOT_RESUMABLE",
-        job_id: resumable.id, next_action: "inspect-job-recovery" });
+        job_id: resumable.id, ...(resumed.missing_fields ? { missing_fields: resumed.missing_fields } : {}),
+        next_action: "inspect-job-recovery" });
       if (resumed.kind === "target_authorization_blocked") return reply.code(409).send({
         error: "目标授权已失效；先修复授权", error_code: "TARGET_AUTHORIZATION_BLOCKED", blockers: resumed.blockers });
       if (resumed.kind === "ok") {
@@ -1314,6 +1317,10 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           ),
         ),
       );
+      // Freeze before the destructive reset; invalid configuration preserves the old canvas.
+      const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(
+        // SAFETY: postgres.js transaction handles have the same tagged-template interface.
+        tx as unknown as typeof sql, { projectId, type: "hub_reason" }, snapshot);
       await wipeCanvasRuntimeData(tx, canvasId);
 
       // 重置意图上的收敛态与定时门，保留用户任务内容
@@ -1346,7 +1353,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         INSERT INTO jobs ${tx({
           project_id: projectId,
           canvas_id: canvasId,
-          agent_snapshot_json: snapshot as never,
+          agent_snapshot_json: runtimeSnapshot as never,
           type: "hub_reason",
           priority: fixedPriorityForJob({ type: "hub_reason", purpose: "hub" }),
           payload_json: {
@@ -1354,12 +1361,12 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
             scheduling_purpose: "hub",
             ...(retryTarget.runtime_profile ? { runtime_profile: retryTarget.runtime_profile } : {}),
           } as never,
-          timeout_sec: config.timeouts.auditSec,
+          timeout_sec: knobs.timeoutSec,
           followup_depth: 0,
         })}
         RETURNING *`;
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-      await recordJobSharedAssets(tx as unknown as typeof sql, hubJob.id as string, snapshot.shared_assets ?? []);
+      await recordJobSharedAssets(tx as unknown as typeof sql, hubJob.id as string, runtimeSnapshot.shared_assets ?? []);
 
       const [{ next_x }] = await tx<[{ next_x: number }]>`
         SELECT COALESCE(MAX(x + w), 60) + 40 AS next_x FROM canvas_nodes

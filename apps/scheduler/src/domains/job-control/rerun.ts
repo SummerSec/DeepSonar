@@ -77,7 +77,8 @@ export type RequeueJobResult =
       provenance: JobProvenance;
     }
   | { kind: "not_found" }
-  | { kind: "not_resumable"; status: string; reason?: string; error_code?: string; provenance?: JobProvenance }
+  | { kind: "not_resumable"; status: string; reason?: string; error_code?: string; provenance?: JobProvenance;
+      missing_fields?: string[]; next_action?: "inspect-job-recovery" }
   | { kind: "target_authorization_blocked"; detail: SnapshotStaleDetail; blockers: TaskContractFeedback[]; provenance?: JobProvenance }
   | { kind: "snapshot_stale"; detail: SnapshotStaleDetail; provenance?: JobProvenance };
 
@@ -430,7 +431,9 @@ export async function requeueJob(
     try { await inspectGatewayRequestBudget(tx, jobId, job.agent_snapshot_json); }
     catch (error) {
       if (!(error instanceof GatewayRequestBudgetError)) throw error;
-      return { kind: "not_resumable" as const, status, provenance, reason: error.message, error_code: error.code };
+      return { kind: "not_resumable" as const, status, provenance, reason: error.message, error_code: error.code,
+        ...(error.missing_fields.length ? { missing_fields: error.missing_fields } : {}),
+        next_action: "inspect-job-recovery" as const };
     }
 
     const repairAdmission = await readRepairRequeueAdmission(tx, jobId);

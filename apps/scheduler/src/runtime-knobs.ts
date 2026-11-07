@@ -332,6 +332,30 @@ export function freezeRuntimeKnobs(resolved: ResolvedRuntimeKnobs): FrozenRuntim
   };
 }
 
+/** Stable, machine-readable field paths for a snapshot that cannot yield frozen
+ * runtime knobs. Powers the actionable budget diagnostics (#943 / #948): the
+ * error must name the missing field, not just the policy stage. */
+export function missingFrozenKnobFields(snapshot: unknown): string[] {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return ["agent_snapshot_json"];
+  const raw = (snapshot as Record<string, unknown>).runtime_knobs;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return ["agent_snapshot_json.runtime_knobs"];
+  const value = raw as Record<string, unknown>;
+  const missing: string[] = [];
+  if (parseOptionalBoundedInt(value.stall_sec, RUNTIME_KNOB_BOUNDS.stallSec.min, RUNTIME_KNOB_BOUNDS.stallSec.max) === undefined) {
+    missing.push("agent_snapshot_json.runtime_knobs.stall_sec");
+  }
+  if (parseOptionalBoundedInt(value.job_token_max_requests, RUNTIME_KNOB_BOUNDS.jobTokenMaxRequests.min, RUNTIME_KNOB_BOUNDS.jobTokenMaxRequests.max) === undefined) {
+    missing.push("agent_snapshot_json.runtime_knobs.job_token_max_requests");
+  }
+  if (parseOptionalBoundedInt(value.timeout_sec, JOB_TIMEOUT_BOUNDS.min, JOB_TIMEOUT_BOUNDS.max) === undefined) {
+    missing.push("agent_snapshot_json.runtime_knobs.timeout_sec");
+  }
+  if (parseOptionalBoundedInt(value.provision_timeout_sec, RUNTIME_KNOB_BOUNDS.provisionTimeoutSec.min, RUNTIME_KNOB_BOUNDS.provisionTimeoutSec.max) === undefined) {
+    missing.push("agent_snapshot_json.runtime_knobs.provision_timeout_sec");
+  }
+  return missing;
+}
+
 export function frozenRuntimeKnobsFromSnapshot(snapshot: unknown): FrozenRuntimeKnobs | null {
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return null;
   const raw = (snapshot as Record<string, unknown>).runtime_knobs;

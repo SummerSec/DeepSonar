@@ -22,6 +22,7 @@ RUN set -eux; \
   rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
   printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list; \
   printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/%s bookworm-security main\n' "$DEBIAN_SECURITY_SNAPSHOT" >>/etc/apt/sources.list; \
+  printf 'Acquire::Retries "8";\n' > /etc/apt/apt.conf.d/80-retries; \
   apt-get update; \
   apt-get install -y --no-install-recommends ca-certificates curl file jq; \
   case "$TARGETARCH" in \
@@ -29,9 +30,9 @@ RUN set -eux; \
     arm64) chromium_url="$CHROMIUM_ARM64_URL"; chromium_sha256="$CHROMIUM_ARM64_SHA256"; common_url="$CHROMIUM_COMMON_ARM64_URL"; common_sha256="$CHROMIUM_COMMON_ARM64_SHA256" ;; \
     *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
   esac; \
-  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$chromium_url" -o /tmp/chromium.deb; \
+  curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 20 "$chromium_url" -o /tmp/chromium.deb; \
   echo "$chromium_sha256  /tmp/chromium.deb" | sha256sum -c -; \
-  curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$common_url" -o /tmp/chromium-common.deb; \
+  curl -fsSL --retry 8 --retry-all-errors --retry-delay 5 --connect-timeout 20 "$common_url" -o /tmp/chromium-common.deb; \
   echo "$common_sha256  /tmp/chromium-common.deb" | sha256sum -c -; \
   apt-get install -y --no-install-recommends /tmp/chromium-common.deb /tmp/chromium.deb; \
   test "$(chromium --version | awk '{print $2}')" = "${CHROMIUM_VERSION%%-*}"; \
