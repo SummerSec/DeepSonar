@@ -2,6 +2,7 @@
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
 > 同步日期：2026-11-06
+> **#951 完成失败诊断候选**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)登记当前 Attempt 可归属产出、原回执状态和受权限保护证据；有产出不升级成功，不伪造未知字段或自动重放。源码/断言已接线，最终 SHA Actions、全量覆盖和生产归因待验。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
 
 > **v0.6.15 发布准备（2026-11-06）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)。Plan 范围修正与其他已合入补丁列于 [CHANGELOG](../CHANGELOG.md)，[#913](https://github.com/SummerSec/DeepSonar/issues/913) 的 accepted-terminal 窄修复已由 #919 合入，#930 增加受治理修复代际。最终 main Actions 与正式产物成功状态分别核对。
