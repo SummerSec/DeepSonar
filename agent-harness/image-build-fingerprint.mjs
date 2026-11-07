@@ -325,6 +325,10 @@ export function computeFingerprint(opts) {
   return {
     fingerprint,
     src_tag: `src-${fingerprint}`,
+    // #961 P3: PR/CI builds must never be able to satisfy the release
+    // skip-if-unchanged check. CI writes and reads this namespaced tag; only
+    // release (tag/workflow_dispatch, packages:write) writes `src-<fp>`.
+    ci_src_tag: `src-ci-${fingerprint}`,
     platforms,
     preset: opts.preset || "",
   };
@@ -335,6 +339,7 @@ function main() {
   const lines = [
     `fingerprint=${result.fingerprint}`,
     `src_tag=${result.src_tag}`,
+    `ci_src_tag=${result.ci_src_tag}`,
     `platforms=${result.platforms}`,
   ];
   if (result.preset) lines.push(`preset=${result.preset}`);

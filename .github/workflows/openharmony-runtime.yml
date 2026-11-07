@@ -174,7 +174,7 @@ jobs:
         env:
           IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.ci_src_tag }}
         run: bash agent-harness/resolve-image-src-cache.sh resolve
       - name: Record reused OpenHarmony image
         if: ${{ steps.resolve.outputs.skip == 'true' }}
@@ -235,7 +235,7 @@ jobs:
         env:
           IMAGE_NAME: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}
           FINGERPRINT: ${{ steps.fingerprint.outputs.fingerprint }}
-          SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}
+          SRC_TAG: ${{ steps.fingerprint.outputs.ci_src_tag }}
           LOCAL_TAG: deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci
         run: |
           set -euo pipefail

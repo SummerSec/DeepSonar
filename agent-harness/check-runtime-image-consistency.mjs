@@ -199,7 +199,13 @@ const assertSpecialistWorkflow = (workflow, label, paths) => {
   for (const path of paths) expect(workflow.includes(`      - "${path}"`), `${label} workflow path filter missing ${path}`);
   expect(workflow.includes("image-build-fingerprint.mjs"), `${label} workflow must calculate an image fingerprint`);
   expect(workflow.includes("resolve-image-src-cache.sh resolve"), `${label} workflow must resolve immutable src-* cache tags`);
-  expect(workflow.includes("SRC_TAG: ${{ steps.fingerprint.outputs.src_tag }}"), `${label} workflow must pass the fingerprint src tag to cache resolution`);
+  // #961 P3: specialist workflows run on PRs, so they must only read/write the
+  // CI namespaced tag; `src-<fp>` stays reserved for release so a PR build can
+  // never satisfy the release skip-if-unchanged check.
+  const srcTagNamespaces = [...workflow.matchAll(/SRC_TAG: \$\{\{ steps\.fingerprint\.outputs\.(ci_src_tag|src_tag) \}\}/g)].map((match) => match[1]);
+  expect(srcTagNamespaces.length > 0, `${label} workflow must pass the fingerprint src tag to cache resolution`);
+  expect(new Set(srcTagNamespaces).size === 1, `${label} workflow must use a single src tag namespace`);
+  expect(srcTagNamespaces[0] === "ci_src_tag", `${label} workflow must use the ci_src_tag namespace`);
   expect(workflow.includes("steps.resolve.outputs.skip != 'true'") && workflow.includes("steps.resolve.outputs.skip == 'true'"), `${label} workflow must skip unchanged rebuilds`);
   expect(workflow.includes('docker push "${IMAGE_NAME}:${SRC_TAG}"'), `${label} workflow must pin newly built src-* cache tags`);
 };
@@ -750,7 +756,14 @@ expect(chromeFuzzDockerfile.includes(chromeSources.v8.commit) && chromeFuzzDocke
 expect(chromeFuzzDockerfile.indexOf("export DEPOT_TOOLS_UPDATE=0;") > 0 && chromeFuzzDockerfile.indexOf("export DEPOT_TOOLS_UPDATE=0;") < chromeFuzzDockerfile.indexOf("gclient config"), "Chrome Fuzz must disable depot_tools auto-update before gclient so the pinned revision cannot drift");
 expect(chromeFuzzDockerfile.indexOf("/opt/depot_tools/ensure_bootstrap;") > chromeFuzzDockerfile.indexOf("export DEPOT_TOOLS_UPDATE=0;") && chromeFuzzDockerfile.indexOf("/opt/depot_tools/ensure_bootstrap;") < chromeFuzzDockerfile.indexOf("gclient config") && chromeFuzzDockerfile.includes("test -f /opt/depot_tools/python3_bin_reldir.txt") && chromeFuzzDockerfile.indexOf("test -f /opt/depot_tools/python3_bin_reldir.txt") < chromeFuzzDockerfile.indexOf("gclient config"), "Chrome Fuzz must bootstrap pinned depot_tools (python3_bin_reldir.txt) without auto-updating before gclient");
 expect(chromeFuzzDockerfile.includes("pkg-config") && chromeFuzzDockerfile.includes("clang-16") && chromeFuzzDockerfile.includes("lld-16") && chromeFuzzDockerfile.includes("libclang-rt-16-dev") && chromeFuzzDockerfile.includes("libfuzzer-16-dev") && chromeFuzzDockerfile.includes("afl++"), "Chrome Fuzz Debian toolchain package closure incomplete");
-expect(chromeFuzzDockerfile.includes("FROM --platform=$BUILDPLATFORM ${BASE_IMAGE} AS v8-build-rootfs") && !chromeFuzzDockerfile.includes("clang_base_path=\"/usr/lib/llvm-16\"") && chromeFuzzDockerfile.includes("target_cpu=arm64") && chromeFuzzDockerfile.includes("install-sysroot.py --arch=arm64") && chromeFuzzDockerfile.includes("debian_bullseye_arm64-sysroot") && chromeFuzzPreflight.includes("third_party/llvm-build/Release+Asserts/bin/clang++") && chromeFuzzPreflight.includes("--target=aarch64-linux-gnu") && chromeFuzzPreflight.includes("/usr/bin/ninja") && chromeFuzzPreflight.includes("file -Lb") && chromeFuzzPreflight.includes("libclang_rt[.]builtins"), "Chrome Fuzz arm64 must use V8's pinned x86_64 Clang, sysroot, and compiler runtime as a checked cross-toolchain");
+expect(chromeFuzzDockerfile.includes("FROM --platform=$BUILDPLATFORM ${V8_BUILDER_IMAGE} AS v8-build-rootfs") && !chromeFuzzDockerfile.includes("clang_base_path=\"/usr/lib/llvm-16\"") && chromeFuzzDockerfile.includes("target_cpu=arm64") && chromeFuzzDockerfile.includes("install-sysroot.py --arch=arm64") && chromeFuzzDockerfile.includes("debian_bullseye_arm64-sysroot") && chromeFuzzPreflight.includes("third_party/llvm-build/Release+Asserts/bin/clang++") && chromeFuzzPreflight.includes("--target=aarch64-linux-gnu") && chromeFuzzPreflight.includes("/usr/bin/ninja") && chromeFuzzPreflight.includes("file -Lb") && chromeFuzzPreflight.includes("libclang_rt[.]builtins"), "Chrome Fuzz arm64 must use V8's pinned x86_64 Clang, sysroot, and compiler runtime as a checked cross-toolchain");
+// #961 P2: the expensive V8 compile stage is pinned to an immutable builder
+// digest and no longer inherits BASE_IMAGE, so runtime-only base changes reuse
+// the compiled layers instead of re-running the whole build. The final runtime
+// stage must still follow the base the caller resolved.
+expect(/ARG V8_BUILDER_IMAGE=node:22-bookworm-slim@sha256:[0-9a-f]{64}/.test(chromeFuzzDockerfile), "Chrome Fuzz builder image must be pinned by digest");
+expect(!chromeFuzzDockerfile.includes("FROM --platform=$BUILDPLATFORM ${BASE_IMAGE}"), "Chrome Fuzz builder must not inherit BASE_IMAGE");
+expect(chromeFuzzDockerfile.includes("FROM ${BASE_IMAGE} AS runtime-rootfs"), "Chrome Fuzz runtime stage must still follow the resolved base");
 expect(chromeFuzzConfig.apt["libclang-rt-16-dev"]?.version === "16.0.6-15~deb12u1" && chromeFuzzConfig.apt["libfuzzer-16-dev"]?.version === "16.0.6-15~deb12u1", "Chrome Fuzz must declare verified Bookworm compiler-rt/libFuzzer package names");
 expect(chromeFuzzEnv.includes(".fuzz.actual == true") && chromeFuzzSmoke.includes("actual V8 d8") && chromeFuzzSmoke.includes("-runs=1") && !chromeFuzzDockerfile.includes("toy"), "Chrome Fuzz must fail closed without real d8/libFuzzer");
 const chromeFuzzRuntimeFinal = chromeFuzzDockerfile.slice(chromeFuzzDockerfile.indexOf("FROM runtime-rootfs AS runtime-final"));

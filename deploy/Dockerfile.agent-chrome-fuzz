@@ -2,6 +2,17 @@
 # d8 is built from the pinned V8 source revision. The build fails closed if a
 # real d8 cannot be produced; no substitute executable is renamed to d8.
 ARG BASE_IMAGE=deepsonar-base:local
+# #961 P2: the V8 compile stage must not inherit BASE_IMAGE. Otherwise any base
+# change (a runtime CLI bump, a manual, a wrapper script) invalidates the whole
+# download+GN+compile layer and the ARM gate pays the full V8 build again.
+# The builder is pinned to the exact node image digest the base itself is built
+# from, so it is reproducible without tracking the base's mutable tag.
+ARG V8_BUILDER_IMAGE=node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46
+# The pinned builder is a bare Debian/Node slim without a CA bundle, while the
+# original builder inherited one from deepsonar-base. Bootstrap the bundle from
+# Debian's default (http) archive, same idiom as Dockerfile.agent-kali-minimal,
+# so the snapshot sources below can stay https.
+ARG CA_IMAGE=debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
 ARG DEBIAN_SNAPSHOT=20260731T162426Z
 ARG DEBIAN_SECURITY_SNAPSHOT=20260731T162426Z
 # base 镜像的 python3.11 家族跟随 Debian 安全更新前移（libpython3.11-stdlib 的点版本会变），
@@ -21,17 +32,30 @@ ARG COMPILER_RT_COMMIT=53d18800eda3b7407e53366f27ca78e922c6e0db
 # V8's pinned Chromium Clang package is a linux/amd64 host toolchain. Keep the
 # expensive source build on that native host architecture and cross-compile the
 # requested target; the final runtime stage still uses the requested platform.
-FROM --platform=$BUILDPLATFORM ${BASE_IMAGE} AS v8-build-rootfs
+# #961 P2: pinned builder image, not ${BASE_IMAGE}; only the final runtime stage
+# below follows the base the caller resolved for this run.
+FROM ${CA_IMAGE} AS ca-bootstrap
+RUN printf 'Acquire::Retries "8";\n' > /etc/apt/apt.conf.d/80-retries
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+FROM --platform=$BUILDPLATFORM ${V8_BUILDER_IMAGE} AS v8-build-rootfs
 ARG DEBIAN_SNAPSHOT
 ARG DEBIAN_SECURITY_SNAPSHOT
 USER root
+COPY --from=ca-bootstrap /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=ca-bootstrap /usr/lib/ssl/ /usr/lib/ssl/
+# xz-utils/unzip used to come from BASE_IMAGE. The pinned builder installs them
+# itself: install-sysroot.py extracts the arm64 sysroot through `tar xf`, which
+# shells out to xz (verified failure: "tar (child): xz: Cannot exec").
 RUN set -eux; \
   rm -f /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; \
   printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/%s bookworm main\n' "$DEBIAN_SNAPSHOT" >/etc/apt/sources.list; \
   printf 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/%s bookworm-security main\n' "$DEBIAN_SECURITY_SNAPSHOT" >>/etc/apt/sources.list; \
   printf 'Acquire::Retries "8";\n' > /etc/apt/apt.conf.d/80-retries; \
   apt-get update; \
-  apt-get install -y --no-install-recommends ca-certificates curl file git pkg-config binutils ninja-build python3; \
+  apt-get install -y --no-install-recommends ca-certificates curl file git pkg-config binutils ninja-build python3 unzip xz-utils; \
   rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
     /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*
 
