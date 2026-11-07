@@ -97,13 +97,19 @@ export function ProjectsPage() {
       });
   };
 
+  // #967 review P2: setup and cleanup must be symmetric. `disposed` was only
+  // ever set in cleanup, so React's development StrictMode replay
+  // (setup -> cleanup -> setup) left it true and every later result was dropped,
+  // pinning the page on its loading state. Resetting it in setup keeps the guard
+  // honest, while `requestGeneration` still discards the previous setup's late
+  // results.
   useEffect(() => {
-    reload();
-  }, []);
-
-  useEffect(() => () => {
-    disposed.current = true;
-    clearLoadErrorToast();
+    disposed.current = false;
+    void reload();
+    return () => {
+      disposed.current = true;
+      clearLoadErrorToast();
+    };
   }, []);
 
 

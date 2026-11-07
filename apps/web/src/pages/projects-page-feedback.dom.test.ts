@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
-import { act, createElement } from "react";
+import { StrictMode, act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router-dom";
 import { api, type Project } from "../api";
@@ -180,6 +180,109 @@ test("a load failure that lands after the page unmounts does not create a toast"
   } finally {
     // Unmount before closing the DOM: a still-mounted ToastHost would schedule a
     // state update against a disposed window.
+    act(() => root.unmount());
+    clearToasts();
+    api.projects = original;
+    dom.window.close();
+    for (const key of GLOBALS) delete (globalThis as Record<string, unknown>)[key];
+  }
+});
+
+test("the page still loads under StrictMode's effect replay", async () => {
+  // The real entry point (main.tsx) wraps the app in <StrictMode>, which replays
+  // every effect as setup -> cleanup -> setup in development. The unmount guard
+  // must not survive that replay, or the page stays on its loading state.
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://127.0.0.1" });
+  const replacements: Record<string, unknown> = {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element,
+    Node: dom.window.Node,
+    localStorage: dom.window.localStorage,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  for (const [key, value] of Object.entries(replacements)) {
+    Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  }
+  const original = api.projects;
+  const container = dom.window.document.createElement("div");
+  dom.window.document.body.appendChild(container);
+  const root = createRoot(container);
+  let calls = 0;
+
+  try {
+    api.projects = async () => {
+      calls += 1;
+      return [project];
+    };
+
+    await act(async () => {
+      root.render(createElement(StrictMode, null,
+        createElement(MemoryRouter, null, createElement(ToastHost), createElement(ProjectsPage))));
+    });
+
+    assert.ok(calls >= 1, "the replay still issues a request");
+    assert.equal(
+      container.textContent?.includes("fixture-project"),
+      true,
+      "after the StrictMode replay the page must leave loading and render the list",
+    );
+    assert.equal(
+      dom.window.document.querySelectorAll(".app-toast").length,
+      0,
+      "a successful load raises no toast",
+    );
+  } finally {
+    act(() => root.unmount());
+    clearToasts();
+    api.projects = original;
+    dom.window.close();
+    for (const key of GLOBALS) delete (globalThis as Record<string, unknown>)[key];
+  }
+});
+
+test("a StrictMode replay followed by a real unmount still creates no toast", async () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://127.0.0.1" });
+  const replacements: Record<string, unknown> = {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element,
+    Node: dom.window.Node,
+    localStorage: dom.window.localStorage,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  for (const [key, value] of Object.entries(replacements)) {
+    Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  }
+  const original = api.projects;
+  const container = dom.window.document.createElement("div");
+  dom.window.document.body.appendChild(container);
+  const root = createRoot(container);
+  const toasts = () => [...dom.window.document.querySelectorAll(".app-toast")];
+
+  try {
+    let reject!: (reason: Error) => void;
+    const pending = new Promise<Project[]>((_, no) => { reject = no; });
+    api.projects = () => pending;
+
+    await act(async () => {
+      root.render(createElement(StrictMode, null,
+        createElement(MemoryRouter, null, createElement(ToastHost), createElement(ProjectsPage))));
+    });
+    assert.equal(toasts().length, 0, "nothing has failed yet");
+
+    // Drop only the page; ToastHost stays mounted exactly like the real app.
+    act(() => {
+      root.render(createElement(StrictMode, null, createElement(MemoryRouter, null, createElement(ToastHost))));
+    });
+    await act(async () => {
+      reject(new Error("late fixture failure"));
+      await Promise.resolve();
+    });
+    assert.equal(toasts().length, 0, "a late failure after a replay and unmount must stay inert");
+  } finally {
     act(() => root.unmount());
     clearToasts();
     api.projects = original;
