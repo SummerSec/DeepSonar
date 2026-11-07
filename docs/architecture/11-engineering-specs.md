@@ -1,7 +1,7 @@
 # 11. 工程规范
 
 > 状态：**as-built（#741 PR 5 回填）**。本文记录当前仓库开发、验证和文档治理必须遵守的工程规则；实现冲突时以代码、schema、OpenAPI 和测试为准。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 
 本文是 DeepSonar 的开发规范视图。它把可重复的工程约束、测试分层、文档保鲜和发布前核查集中在一个位置；新架构事实以 [`docs/architecture/README.md`](README.md)、相关架构视图、追溯矩阵和 ADR 为准，`DESIGN.md`、`docs/README.md` 与其他专题文档提供摘要或专题证据。
 
@@ -115,7 +115,7 @@ Control API 的每个 operation 必须经过三层校验：
 
 | 层级 | 目的与边界 | 当前入口 / 证据 |
 | --- | --- | --- |
-| 静态与构建 | 类型、包边界、生成物和基础编译 | `pnpm typecheck`、`pnpm build`；CI 的四个 gate 分片各自执行 `pnpm -r typecheck` 和 `pnpm -r build`（见下节 CI 分层） |
+| 静态与构建 | 类型、包边界、生成物和基础编译 | `pnpm typecheck`、`pnpm build`；CI 的五个 gate 分片（2026-11-07）各自执行 `pnpm -r typecheck` 和 `pnpm -r build`（见下节 CI 分层） |
 | 单元与契约 | 纯函数、Zod/OpenAPI、状态转换、能力和错误反馈 | `pnpm ci:unit:capability-pack`、`pnpm ci:unit:canvas-facts`、`pnpm ci:unit:finding-research`、`pnpm ci:unit:verify-eligibility`、`pnpm ci:unit:runtime-images` |
 | bounded-context 与路由守则 | 固定路由面、所有权、事件摄入、生命周期和测试接线 | `pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:unit:ci-test-hook`、`pnpm ci:unit:file-size` |
 | PostgreSQL 集成 | 事务锁、幂等、投影、恢复和跨进程行为 | 需要 `TEST_DATABASE_URL` 的 `pnpm ci:integration:finding-research`、`pnpm ci:integration:finding-protocol`、`pnpm ci:integration:platform-api`、`pnpm ci:integration:event-ingestion` 等；CI 的 `gate-db-core` / `gate-db-domain` / `gate-e2e` 显式注入测试数据库 |
@@ -133,11 +133,17 @@ Control API 的每个 operation 必须经过三层校验：
 
 合并到 `main` 的 push 对文档路径使用 `paths-ignore`，所以纯文档变更是否触发主干 CI 不能靠经验推断，必要时按发布硬门手动补跑并核对 SHA。
 
-`ci` 的串行 `gate` 已拆为四个有界并行分片（#972）：`gate-contract`（无服务单测/契约，不声明 `services.postgres`）、`gate-db-core` / `gate-db-domain`（各自独立 PostgreSQL 服务与库）、`gate-e2e`（scheduler 3100/3101 与同库 `setval` 竞态相关的启动/端到端冒烟必须同片）。每片独立 `needs: changes`、独立 `install`/`typecheck`/`build` 生命周期，不复用跨提交结果；`ci-summary` 用 `EXPECTED_GATE_SHARDS` 显式期望矩阵逐片要求 `success`，缺片、取消、超时、失败或结果值未知一律拒绝。原 `gate` 的每个 `ci:*` 套件必须恰好归属一片，覆盖率由 [`gate-shards.test.mjs`](../../agent-harness/gate-shards.mjs) 断言；改 gate 步骤必须同步该清单，不能靠删测试或放宽门禁达标。
+`ci` 的 `gate` 为五个有界并行分片（#972/#992，2026-11-07）：`gate-contract`（无服务单测/契约）、`gate-runtime`（运行时/锁版本 SDK/executor 单测；两片均不声明 `services.postgres`）、`gate-db-core` / `gate-db-domain`（各自独立 PostgreSQL 服务与库）、`gate-e2e`（scheduler 3100/3101 与同库 `setval` 竞态相关的启动/端到端冒烟必须同片）。每片独立 `needs: changes`、独立 `install`/`typecheck`/`build` 生命周期，不复用跨提交结果；`ci-summary` 用 `EXPECTED_GATE_SHARDS` 显式期望矩阵逐片要求 `success`，缺片、取消、超时、失败或结果值未知一律拒绝。原 `gate` 的每个 `ci:*` 套件必须恰好归属一片，覆盖率由 [`gate-shards.test.mjs`](../../agent-harness/gate-shards.test.mjs) 断言；改 gate 步骤必须同步该清单，不能靠删测试或放宽门禁达标。
 
-运行计划必须自解释（#992）：`ci-run-plan.mjs` 把同一份判定写入 `GITHUB_STEP_SUMMARY`，包含模式、计划状态、`base → head`、是否 tiered、Chrome Fuzz ARM 是否必跑、Reverse 实际执行与跳过的子套件，以及**每条 reason 的人读说明**。未登记的新 reason 会原样打印（`未登记原因：<token>`），不会因为没写文案就被吞掉；reason 为空时明确写「按 fail closed 处理」而不是暗示干净跳过。仓库变量 `CI_PR_MODE` 当前为 `tiered`（2026-11-07 核对），即 PR 按影响范围收窄、`main` 与手动运行保持全量；变量未设置、非法或为 `full` 时回退完整 PR 验收。
+运行计划必须自解释（#992）：`ci-run-plan.mjs` 把同一份判定写入 `GITHUB_STEP_SUMMARY`，包含模式、计划状态、`base → head`、实际 checkout commit/tree、事件、Draft 状态、`CI_PR_MODE` 原值、分类器结果、Git change status/路径、白名单之外的首条命中、是否 tiered、Chrome Fuzz ARM 是否必跑、Reverse 实际执行与跳过的子套件，以及**每条 reason 的人读说明**。路径展示有界，省略数量可见，实际判定始终使用完整 diff；文件名不能注入 summary 标记。#994 的 `CHANGELOG.md` + `docs/PI_RPC_PAYLOAD_LIMITS.md` 已纳入精确白名单回归，混合未知文档/Skill/运行时/路由、删除、改名和分析失败保持 fail closed，不放行目录或扩展名。未登记的新 reason 会原样打印（`未登记原因：<token>`），不会因为没写文案就被吞掉；reason 为空时明确写「按 fail closed 处理」而不是暗示干净跳过。仓库变量 `CI_PR_MODE` 当前为 `tiered`（2026-11-07 核对），即 PR 按影响范围收窄、`main` 与手动运行保持全量；变量未设置、非法或为 `full` 时回退完整 PR 验收。
+
+#995 补齐 Reverse 的触发前提（2026-11-07）：[工作流](../../.github/workflows/reverse-runtime.yml) 的 PR 与 push@main 路径过滤均覆盖 `ci-run-plan.mjs`、`classify-ci-changes.mjs` 及共用的 `path-match.mjs`；[输入覆盖回归](../../agent-harness/reverse-suite-plan.test.mjs) 对 shared、routing 和 suite 输入一视同仁，不再豁免路由文件。该回归在核心 `docs-freshness` 执行，不依赖 Reverse 已启动；任一事件漏掉路由输入会阻断核心检查。联动回归覆盖纯路由/混合文档、删除/双向改名和同 SHA Draft→Ready，不扩大无关文档或 Web 路径的触发。`ci-summary` 仍只聚合本工作流，Reverse 实际执行结果由 `reverse-runtime-acceptance` 核对；触发覆盖回归不冒充跨工作流结果聚合，合并前仍须核对最新候选的全部适用检查。
 
 失败重跑的粒度是 **job 而不是 step**：GitHub 的 “Re-run failed jobs” 会整段重跑该 job 的步骤，相关下游也会重跑，不存在从失败 step 原地续跑。所以降低重试成本的杠杆是把昂贵的独立套件拆成可单独重跑的 job（各自保持 DB/端口/服务/文件隔离），以及在同一 run、同 SHA、同平台与输入身份下复用准备产物；**不得**跨提交复用「测试已通过」的结论。`ci-summary` 与 `reverse-runtime-acceptance` 始终核对计划与实际结果，失败、取消、缺片或应跑误跳过都不放行——跳过判定只缩小范围，不放宽门禁。
+
+#992 的失败隔离实证入口是现有 `ci` 手动运行的 `isolation_probe`（默认关闭，2026-11-07）：只有手动且第一次 attempt 才在 `gate-runtime` 完成真实套件后故意失败；PR/main 不注入故障。[真实运行](https://github.com/SummerSec/DeepSonar/actions/runs/42387980272)的第一轮仅 runtime 探针与汇总失败，其余独立分片成功；原生 `--failed` 第二轮成功。GitHub 会为保留的成功结果生成新 job ID/attempt，必须比较原执行时间、runner 与步骤，不能以 ID 未变作为证明。详见 [#992 验收记录](../CI_COST_ACCEPTANCE_992.md)；同形文档三组对照已完成，最终实现以最新候选的完整检查验收，不把结构拆分推导为性能收益。诊断开关不绕过测试、权限或结果检查，也不提供任意 step 续跑。
+
+#992 进一步核对 base 的直接 COPY 输入及工作流实际构建的两个 Dockerfile：专用 Reverse 镜像只需 REA，精确审定的其他派生镜像不触发本工作流原生重活，未知 Dockerfile、shared/routing/锁文件仍全跑；base 内 DSH installer 与 OM 治理代码不能漏掉共享消费。核心与 Reverse 汇总通过 [只读观测器](../../agent-harness/ci-run-cost.mjs)直接说明本 attempt 的排队、执行、重复 setup/build 和 artifact 步骤成本；仅增加 job 级 `contents/actions: read`，不读取长期 secret 或执行外部 artifact。未完成/缺数据记 unknown，保留旧结果须有前一 attempt API 匹配证据；观测不替代原汇总、更不授权跨提交复用。当前 API 观测不进入 [#970 可信 benchmark 历史](../RUNTIME_BUILD_TIMING.md)。
 
 镜像构建的缓存与磁盘准备各有独立边界。#974 起 `runtime-images` 的 `cache-from`/`cache-to` 由 [`runtime-image-cache-policy.mjs`](../../agent-harness/runtime-image-cache-policy.mjs) 按 toolset 计算：所有 toolset 恒保留两个 registry 读与 GHA 读回退；`base`/`audit` 的写出与历史两行逐字一致；`kali-minimal` 默认只保留 registry `mode=max,ignore-error=true`，去掉重复的 GHA `mode=max` 大层导出，可用仓库变量 `RUNTIME_CACHE_KALI_GHA` 切回 `min`/`max`，非法值 fail closed。#961 P3 起内容指纹同时给出 `ci_src_tag`（`src-ci-<fp>`，CI 读写）与 `release_src_tag`（`src-release-<fp>`，仅发布读写）；四个 CI workflow 只用前者，`release.yml` 只用后者，历史 `src-<fp>` 已无消费方——否则 PR 产物可以让发布跳过真实构建。
 

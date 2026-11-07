@@ -1,8 +1,9 @@
-// issue #972：把 ci.yml 里串行 gate 拆成 4 个有界并行分片后的稳定契约。
+// #972/#992：ci.yml 的有界并行 gate；运行时与 SDK 是独立失败域。
 // 纯静态数据 + fail-closed 校验，无外部依赖，CI 与本地 node --test 均可加载。
 
 export const GATE_SHARDS = Object.freeze([
   "gate-contract",
+  "gate-runtime",
   "gate-db-core",
   "gate-db-domain",
   "gate-e2e",
@@ -10,6 +11,7 @@ export const GATE_SHARDS = Object.freeze([
 
 export const GATE_SHARD_RESULT_VARS = Object.freeze({
   "gate-contract": "GATE_CONTRACT",
+  "gate-runtime": "GATE_RUNTIME",
   "gate-db-core": "GATE_DB_CORE",
   "gate-db-domain": "GATE_DB_DOMAIN",
   "gate-e2e": "GATE_E2E",
@@ -17,15 +19,15 @@ export const GATE_SHARD_RESULT_VARS = Object.freeze({
 
 // 原 gate 中每一个 pnpm ci:* 脚本（按出现顺序列全）及其归属分片。
 export const GATE_SUITE_INVENTORY = Object.freeze([
-  Object.freeze({ suite: "pnpm ci:images", shard: "gate-contract" }),
-  Object.freeze({ suite: "pnpm ci:unit:runtime-images", shard: "gate-contract" }),
-  Object.freeze({ suite: "pnpm ci:unit:runtime-cleanup", shard: "gate-contract" }),
-  Object.freeze({ suite: "pnpm ci:unit:image-admission", shard: "gate-contract" }),
-  Object.freeze({ suite: "pnpm ci:unit:runtime-image-record", shard: "gate-contract" }),
-  Object.freeze({ suite: "pnpm ci:unit:runtime-registry", shard: "gate-contract" }),
+  Object.freeze({ suite: "pnpm ci:images", shard: "gate-runtime" }),
+  Object.freeze({ suite: "pnpm ci:unit:runtime-images", shard: "gate-runtime" }),
+  Object.freeze({ suite: "pnpm ci:unit:runtime-cleanup", shard: "gate-runtime" }),
+  Object.freeze({ suite: "pnpm ci:unit:image-admission", shard: "gate-runtime" }),
+  Object.freeze({ suite: "pnpm ci:unit:runtime-image-record", shard: "gate-runtime" }),
+  Object.freeze({ suite: "pnpm ci:unit:runtime-registry", shard: "gate-runtime" }),
   Object.freeze({ suite: "pnpm ci:integration:runtime-image-promotions", shard: "gate-db-core" }),
-  Object.freeze({ suite: "pnpm ci:integration:request-budget-sdk", shard: "gate-contract" }),
-  Object.freeze({ suite: "pnpm ci:integration:provider-headers-sdk", shard: "gate-contract" }),
+  Object.freeze({ suite: "pnpm ci:integration:request-budget-sdk", shard: "gate-runtime" }),
+  Object.freeze({ suite: "pnpm ci:integration:provider-headers-sdk", shard: "gate-runtime" }),
   Object.freeze({ suite: "pnpm ci:unit:platform-upgrade-preflight", shard: "gate-contract" }),
   Object.freeze({ suite: "pnpm ci:unit:platform-upgrade-maintenance", shard: "gate-contract" }),
   Object.freeze({ suite: "pnpm ci:integration:platform-upgrade", shard: "gate-db-core" }),
@@ -93,13 +95,13 @@ export const GATE_SUITE_INVENTORY = Object.freeze([
   Object.freeze({ suite: "pnpm ci:unit:verify-eligibility", shard: "gate-contract" }),
   Object.freeze({ suite: "pnpm ci:unit:canvas-facts", shard: "gate-contract" }),
   Object.freeze({ suite: "pnpm ci:integration:canvas-facts", shard: "gate-db-core" }),
-  Object.freeze({ suite: "pnpm ci:unit:executor-real", shard: "gate-contract" }),
-  Object.freeze({ suite: "pnpm ci:unit:credential-compatibility", shard: "gate-contract" }),
+  Object.freeze({ suite: "pnpm ci:unit:executor-real", shard: "gate-runtime" }),
+  Object.freeze({ suite: "pnpm ci:unit:credential-compatibility", shard: "gate-runtime" }),
   Object.freeze({ suite: "pnpm ci:integration:credential-delete", shard: "gate-db-core" }),
   Object.freeze({ suite: "pnpm ci:integration:transfer-export", shard: "gate-db-core" }),
   Object.freeze({ suite: "pnpm ci:integration:credential-catalog", shard: "gate-db-core" }),
   Object.freeze({ suite: "pnpm ci:integration:role-config", shard: "gate-db-core" }),
-  Object.freeze({ suite: "pnpm ci:unit:runtime-sandbox", shard: "gate-contract" }),
+  Object.freeze({ suite: "pnpm ci:unit:runtime-sandbox", shard: "gate-runtime" }),
   Object.freeze({ suite: "pnpm ci:integration:platform-api", shard: "gate-db-domain" }),
   Object.freeze({ suite: "pnpm ci:unit:authz", shard: "gate-contract" }),
   Object.freeze({ suite: "pnpm ci:integration:authz-boundaries", shard: "gate-db-domain" }),

@@ -84,6 +84,40 @@ test("docs-only changes plan a docs run with no heavy or specialist work", () =>
   assert.equal(plan.status, PLAN_STATUSES.OK);
 });
 
+test("#992 #994 documents drive the actual classifier-to-plan path without heavy jobs", () => {
+  const documents = [change("CHANGELOG.md"), change("docs/PI_RPC_PAYLOAD_LIMITS.md")];
+  for (const draft of [false, true]) {
+    const plan = buildRunPlan({ ...pr, draft, suitePaths: SUITE_PATHS, diffBytes: diff(...documents) });
+    assert.equal(plan.mode, RUN_MODES.DOCS);
+    assert.equal(plan.docsOnly, true);
+    assert.equal(plan.chromeFuzzArm, false);
+    assert.deepEqual(plan.requiredSuites, []);
+    assert.deepEqual(plan.reverseSuites, []);
+    assert.ok(plan.reasons.includes("reverse:reverse_docs_only"));
+  }
+  for (const extra of [
+    change("docs/new-unreviewed.md"), change("skills/audit/SKILL.md"),
+    change("packages/runtime-sandbox/src/runtime-agent.ts"), change("deploy/Dockerfile.agent"),
+    change("agent-harness/classify-ci-changes.mjs"),
+    ["D", "docs/PI_RPC_PAYLOAD_LIMITS.md"],
+    ["R100", "docs/PI_RPC_PAYLOAD_LIMITS.md", "docs/README.md"],
+  ]) {
+    const plan = buildRunPlan({ ...pr, draft: false, diffBytes: diff(...documents, extra) });
+    assert.equal(plan.mode, RUN_MODES.READY_FULL, extra.join(":"));
+    assert.equal(plan.docsOnly, false);
+    assert.equal(plan.chromeFuzzArm, true);
+  }
+  for (const input of [
+    { base: "" }, { diffBytes: Buffer.from("M\0docs/PI_RPC_PAYLOAD_LIMITS.md", "utf8") },
+  ]) {
+    const plan = buildRunPlan({ ...pr, draft: false, diffBytes: diff(...documents), ...input });
+    assert.equal(plan.status, PLAN_STATUSES.FAILED);
+    assert.equal(plan.docsOnly, false);
+    assert.equal(plan.chromeFuzzArm, true);
+    assert.deepEqual(plan.reverseSuites, ["reverse", "claude", "pi-om"]);
+  }
+});
+
 test("a Draft PR plans the fast path and defers every specialist suite", () => {
   const plan = buildRunPlan({ ...pr, draft: true, suitePaths: SUITE_PATHS, diffBytes: diff(change("packages/runtime-sandbox/src/index.ts")) });
   assert.equal(plan.mode, RUN_MODES.DRAFT_FAST);
@@ -443,6 +477,25 @@ test("#976 the run plan carries a fail-closed Reverse sub-suite decision", () =>
   assert.deepEqual(unknown.reverseSuites, ["reverse", "claude", "pi-om"]);
 });
 
+test("#992 explanations retain exact configuration, status and trigger beyond the bounded preview", () => {
+  const records = Array.from({ length: 129 }, () => change("docs/README.md"));
+  records.push(change("packages/runtime-sandbox/src/runtime-agent.ts"));
+  const plan = buildRunPlan({ ...pr, draft: false, diffBytes: diff(...records) });
+  assert.equal(plan.inputs.event, "pull_request");
+  assert.equal(plan.inputs.draft, false);
+  assert.equal(plan.inputs.ciPrMode, "tiered");
+  assert.equal(plan.inputs.classifier.reason, "path_not_allowlisted");
+  assert.equal(plan.inputs.changes.length, 128);
+  assert.equal(plan.inputs.omittedChanges, 2);
+  assert.deepEqual(plan.inputs.classifierTrigger.paths, ["packages/runtime-sandbox/src/runtime-agent.ts"]);
+  assert.match(explainRunPlan(plan), /runtime-agent\.ts/u);
+  const unsafe = buildRunPlan({ ...pr, diffBytes: diff(change("docs/<script>\n```\n.md")) });
+  const summary = explainRunPlan(unsafe);
+  assert.ok(!summary.includes("<script>"));
+  assert.ok(summary.includes("&lt;script&gt;"));
+  assert.equal(summary.match(/^```/gmu).length, 2, "path cannot forge a fenced summary section");
+});
+
 // #992: the plan must explain itself in the summary instead of leaving reviewers
 // to decode a comma-separated token list.
 test("#992 the plan explanation renders the decision and its reasons", () => {
@@ -512,6 +565,14 @@ test("#992 a shared Reverse input decodes to the fail-closed reason", () => {
   const token = plan.reasons.find((reason) => reason.endsWith("reverse_shared_inputs_changed"));
   assert.ok(token, `expected a shared-input reason, got ${plan.reasons.join(",")}`);
   assert.match(explainRunPlan(plan), /命中 Reverse 共享输入（base\/锁文件\/runtime-sandbox 等）：全跑/u);
+});
+
+test("#992 reviewed other-image skips explain the exact boundary", () => {
+  const plan = buildRunPlan({ ...pr, diffBytes: diff(change("deploy/Dockerfile.agent-mobile")), suitePaths: SUITE_PATHS });
+  assert.equal(plan.mode, "ready-full");
+  assert.deepEqual(plan.reverseSuites, []);
+  assert.match(explainRunPlan(plan), /仅修改已核对的其他镜像 Dockerfile/u);
+  assert.match(explainRunPlan(plan), /未知镜像仍全跑/u);
 });
 
 // #992 review P2: an empty Reverse suite list has three different causes, so the

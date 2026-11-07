@@ -19,7 +19,9 @@ export const REVERSE_SUITES = Object.freeze(["reverse", "claude", "pi-om"]);
 /**
  * Inputs every specialist consumes: the shared base image, the pinned
  * toolchain/manual inputs, the sandbox launcher, the lockfile and the
- * workflow/release routing that decides how they run.
+ * workflow/release routing that decides how they run. The Dockerfile wildcard
+ * also fails closed on unknown new images; audited child-image exceptions are
+ * handled explicitly below, after the unsafe-status and routing checks.
  */
 export const REVERSE_SHARED_INPUTS = Object.freeze([
   "deploy/Dockerfile.agent*",
@@ -27,6 +29,10 @@ export const REVERSE_SHARED_INPUTS = Object.freeze([
   "deploy/opensandbox/**",
   "agent-harness/runtime-images.json",
   "agent-harness/dsh-runtime/**",
+  "agent-harness/dsh-request-budget-install.mjs",
+  "agent-harness/pi-observational-memory-governed.ts",
+  "pnpm-workspace.yaml",
+  "tsconfig.base.json",
   "agent-harness/write-tool-manifest.mjs",
   "agent-harness/runtime-manuals/**",
   "agent-harness/materialize-runtime-manuals.mjs",
@@ -50,13 +56,31 @@ export const REVERSE_ROUTING_INPUTS = Object.freeze([
   ".github/workflows/reverse-runtime.yml",
   ".github/workflows/release.yml",
   "agent-harness/ci-run-plan.mjs",
+  "agent-harness/ci-run-cost.mjs",
   "agent-harness/classify-ci-changes.mjs",
+  "agent-harness/path-match.mjs",
   "agent-harness/reverse-suite-plan.mjs",
 ]);
+
+// #992: audited child Dockerfiles are not inputs to the base/Reverse builds.
+// Keep the broad workflow filter and unknown Dockerfiles fail-closed; never turn
+// all deploy/Dockerfile.agent* paths into an exemption. Delete/rename still run all.
+export const REVERSE_UNRELATED_IMAGE_INPUTS = Object.freeze([
+  "deploy/Dockerfile.agent-chrome-audit",
+  "deploy/Dockerfile.agent-chrome-fuzz",
+  "deploy/Dockerfile.agent-chrome-test",
+  "deploy/Dockerfile.agent-kali-minimal",
+  "deploy/Dockerfile.agent-mobile",
+  "deploy/Dockerfile.agent-openharmony",
+  "deploy/Dockerfile.agent-openharmony-audit",
+  "deploy/Dockerfile.agent-openharmony-fuzz",
+]);
+const REVERSE_ONLY_DOCKERFILE = "deploy/Dockerfile.agent-reverse";
 
 /** Per-suite inputs, taken from the Reverse workflow's declared filter. */
 export const REVERSE_SUITE_INPUTS = Object.freeze({
   reverse: Object.freeze([
+    REVERSE_ONLY_DOCKERFILE,
     "deploy/reverse-*.sh",
     "agent-harness/reverse-*",
     "agent-harness/rea-runtime/**",
@@ -79,7 +103,6 @@ export const REVERSE_SUITE_INPUTS = Object.freeze({
   ]),
   "pi-om": Object.freeze([
     "agent-harness/opensandbox/*om-provider-headers*",
-    "agent-harness/pi-observational-memory-governed.ts",
     "apps/scheduler/src/gateway*.ts",
     "apps/scheduler/src/provider-custom-headers.ts",
     "apps/scheduler/src/provider-settings.ts",
@@ -200,8 +223,13 @@ export function planReverseSuites({
   if (paths.some((path) => matchesAnyPath(REVERSE_ROUTING_INPUTS, path))) {
     return failClosed("reverse_routing_inputs_changed");
   }
-  if (paths.some((path) => matchesAnyPath(REVERSE_SHARED_INPUTS, path))) {
+  const sharedPaths = paths.filter((path) => path !== REVERSE_ONLY_DOCKERFILE && !REVERSE_UNRELATED_IMAGE_INPUTS.includes(path));
+  if (sharedPaths.some((path) => matchesAnyPath(REVERSE_SHARED_INPUTS, path))) {
     return failClosed("reverse_shared_inputs_changed");
+  }
+  if (paths.some((path) => REVERSE_UNRELATED_IMAGE_INPUTS.includes(path))
+      && paths.every((path) => isDocsOnlyPath(path) || REVERSE_UNRELATED_IMAGE_INPUTS.includes(path))) {
+    return { suites: [], reasons: ["reverse_reviewed_other_image_only"], narrowed: true };
   }
 
   const suites = REVERSE_SUITES.filter((suite) =>

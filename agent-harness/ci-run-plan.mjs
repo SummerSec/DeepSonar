@@ -226,6 +226,10 @@ export function buildRunPlan({
     reasons: [],
     base: base ?? "",
     head: head ?? "",
+    inputs: {
+      event: eventName ?? "unknown", draft: Boolean(draft), ciPrMode: ciPrMode ?? "",
+      classifier: null, changes: [], omittedChanges: 0,
+    },
   };
 
   // #976: captured while the diff is parsed so the Reverse sub-suite plan sees
@@ -281,6 +285,13 @@ export function buildRunPlan({
   }
 
   const classification = classifier ?? classifyRecords(records, { eventName, base, head });
+  plan.inputs.classifier = classification;
+  plan.inputs.classifierTrigger = records.find((record) =>
+    !["M", "A"].includes(record.status) || record.paths.some((path) => !isDocsOnlyPath(path))) ?? null;
+  // Explanatory only: decisions above/below still consume the entire diff.
+  // Keep summaries bounded and retain Git's change status, including both rename sides.
+  plan.inputs.changes = records.slice(0, 128);
+  plan.inputs.omittedChanges = Math.max(0, records.length - 128);
   if (classification.status === CLASSIFIER_STATUSES.FAILED) {
     plan.status = PLAN_STATUSES.FAILED;
     plan.reasons.push(`classifier_failed:${classification.reason}`);
@@ -411,6 +422,7 @@ const REASON_TEXT = Object.freeze({
   reverse_unsafe_change_status: "存在删除/改名/复制：无法证明无关，Reverse 全跑",
   reverse_routing_inputs_changed: "命中 Reverse 路由输入：全跑",
   reverse_shared_inputs_changed: "命中 Reverse 共享输入（base/锁文件/runtime-sandbox 等）：全跑",
+  reverse_reviewed_other_image_only: "仅修改已核对的其他镜像 Dockerfile：未消费这些文件的 Reverse/Claude/Pi-OM 均跳过；未知镜像仍全跑",
   reverse_docs_paths_only: "改动都是文档：Reverse 三个子套件都不跑",
   reverse_inputs_unchanged: "改动都落在 Reverse 输入之外：三个子套件都不跑",
   package_json_missing: "缺少 package.json 内容：无法证明独立，Reverse 全跑",
@@ -517,6 +529,12 @@ export function explainRunPlan(plan = {}) {
     lines.push(`**Reverse 跳过**：${skippedReverse.map((name) => `\`${name}\``).join("、")}（原因：${reverseSkipReason(plan, reasons)}）`);
   }
   lines.push("");
+  // JSON escapes embedded newlines; HTML escaping also prevents filenames or
+  // variable values from forging summary markup. No shell eval / path links.
+  lines.push("**实际输入与命中路径**（完整 diff 用于决策，下列最多展示 128 条）", "", "```json");
+  lines.push(JSON.stringify({ checkout: plan.checkout ?? null, ...plan.inputs }, null, 2)
+    .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;"));
+  lines.push("```", "");
   lines.push("> 跳过判定只缩小范围，不放宽门禁：失败、取消、缺片或应跑误跳过都会被 `ci-summary` / `reverse-runtime-acceptance` 拒绝。");
   return `${lines.join("\n")}\n`;
 }
@@ -569,6 +587,12 @@ function main() {
     packageJsonHead: readPackageJsonAt(options.head, root),
     ...(options.diffFile ? { diffBytes: readFileSync(options.diffFile) } : {}),
   });
+  const identity = spawnSync("git", ["rev-parse", "HEAD", "HEAD^{tree}"], {
+    cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+  });
+  const [sha, tree] = String(identity.stdout ?? "").trim().split(/\s+/u);
+  plan.checkout = identity.status === 0 && /^[0-9a-f]{40}$/u.test(sha ?? "") && /^[0-9a-f]{40}$/u.test(tree ?? "")
+    ? { sha, tree } : null;
   writeGitHubOutput(plan);
   console.log(JSON.stringify(plan, null, 2));
   // #992: GitHub sets GITHUB_STEP_SUMMARY for every step; writing here keeps the

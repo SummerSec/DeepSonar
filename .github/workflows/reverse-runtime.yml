@@ -9,6 +9,11 @@ on:
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
+      # #992: the plan cannot enforce required suites unless the workflow starts.
+      - "agent-harness/ci-run-plan.mjs"
+      - "agent-harness/ci-run-cost.mjs"
+      - "agent-harness/classify-ci-changes.mjs"
+      - "agent-harness/path-match.mjs"
       - "agent-harness/claude-request-budget-cli.test.ts"
       - "agent-harness/tsconfig.claude-budget.json"
       - "agent-harness/run-claude-budget-isolated.mjs"
@@ -26,6 +31,9 @@ on:
       - "agent-harness/fixtures/reverse-sample/**"
       - "agent-harness/runtime-images.json"
       - "agent-harness/dsh-runtime/**"
+      - "agent-harness/dsh-request-budget-install.mjs"
+      - "pnpm-workspace.yaml"
+      - "tsconfig.base.json"
       - "agent-harness/write-tool-manifest.mjs"
       - "agent-harness/runtime-manuals/**"
       - "agent-harness/materialize-runtime-manuals.mjs"
@@ -54,6 +62,11 @@ on:
       - "deploy/Dockerfile.agent*"
       - "deploy/reverse-*.sh"
       - "agent-harness/reverse-*"
+      # #992: the plan cannot enforce required suites unless the workflow starts.
+      - "agent-harness/ci-run-plan.mjs"
+      - "agent-harness/ci-run-cost.mjs"
+      - "agent-harness/classify-ci-changes.mjs"
+      - "agent-harness/path-match.mjs"
       - "agent-harness/claude-request-budget-cli.test.ts"
       - "agent-harness/tsconfig.claude-budget.json"
       - "agent-harness/run-claude-budget-isolated.mjs"
@@ -71,6 +84,9 @@ on:
       - "agent-harness/fixtures/reverse-sample/**"
       - "agent-harness/runtime-images.json"
       - "agent-harness/dsh-runtime/**"
+      - "agent-harness/dsh-request-budget-install.mjs"
+      - "pnpm-workspace.yaml"
+      - "tsconfig.base.json"
       - "agent-harness/write-tool-manifest.mjs"
       - "agent-harness/runtime-manuals/**"
       - "agent-harness/materialize-runtime-manuals.mjs"
@@ -522,6 +538,10 @@ jobs:
           docker compose -f deploy/docker-compose.opensandbox.yml down -v
 
   reverse-runtime-acceptance:
+    # Read-only job metadata; no package writes, artifacts from other runs or secrets.
+    permissions:
+      contents: read
+      actions: read
     needs: [plan, reverse-runtime-images, claude-budget-acceptance, pi-om-acceptance]
     if: always() && (needs.plan.result != 'success' || needs.plan.outputs.mode == 'ready-full')
     runs-on: ubuntu-latest
@@ -585,3 +605,15 @@ jobs:
           check_suite pi-om "$(planned pi-om)" "$PI_OM_RESULT"
 
           echo "reverse acceptance: planned=[$PLANNED_SUITES]; every planned suite succeeded, every unplanned suite stayed skipped"
+      - uses: actions/checkout@v4
+        if: always()
+        with:
+          persist-credentials: false
+      - name: Explain actual job queue and execution costs
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node agent-harness/ci-run-cost.mjs \
+            --repository "$GITHUB_REPOSITORY" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" \
+            --summary "$GITHUB_STEP_SUMMARY"

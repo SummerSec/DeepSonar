@@ -61,6 +61,26 @@ test("classifies safe docs, mixed changes, deletes, and runtime-like paths conse
   }
 });
 
+test("#992 the exact #994 two-document shape is safe, not a Markdown directory exemption", () => {
+  const documents = [record("M", "CHANGELOG.md"), record("M", "docs/PI_RPC_PAYLOAD_LIMITS.md")];
+  assert.deepEqual(classifyRecords(documents, pr), {
+    mode: CLASSIFIER_MODES.DOCS_ONLY, status: CLASSIFIER_STATUSES.OK,
+    reason: "all_paths_allowlisted", changedCount: 2,
+  });
+  for (const path of [
+    "docs/PI_RPC_PAYLOAD_LIMITS.md.bak", "docs/PI_RPC_PAYLOAD_LIMITS_UNKNOWN.md",
+    "docs/runtime/prompt.md", "skills/audit/SKILL.md", "deploy/Dockerfile.agent",
+    "packages/runtime-sandbox/src/runtime-agent.ts", ".github/workflows/ci.yml",
+  ]) {
+    assert.equal(classifyRecords([...documents, record("M", path)], pr).mode, CLASSIFIER_MODES.FULL, path);
+  }
+  for (const status of ["D", "R100", "C100", "T"]) {
+    const paths = /^[RC]/u.test(status)
+      ? ["docs/PI_RPC_PAYLOAD_LIMITS.md", "docs/README.md"] : ["docs/PI_RPC_PAYLOAD_LIMITS.md"];
+    assert.equal(classifyRecords([record(status, ...paths)], pr).mode, CLASSIFIER_MODES.FULL, status);
+  }
+});
+
 test("non-PR events, missing revisions, and failed Git reads fail closed", () => {
   const missingEvent = classifyPullRequest({ ...pr, eventName: undefined });
   assert.equal(missingEvent.status, CLASSIFIER_STATUSES.FAILED);

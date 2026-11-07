@@ -400,6 +400,8 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 
 未来实现必须先更新本表和相关专题文档，明确哪些是 as-built、哪些是进行中、哪些只是提案。不能用旧 Issue、历史 `*_PLAN.md` 或静态角色名称推断当前实现。
 
+工程验收 #992：现有五片 gate 与 Reverse 显式消费路由保留，成本观测区分排队、实际执行及原生重跑的保留结果，不替代稳定汇总或授权复用成功结论。依赖审计、真实故障与三组对照状态以 [CI 验收记录](docs/CI_COST_ACCEPTANCE_992.md)为准；同 tree 的 PR→main 复用仍未实现，main 与发布保障不削减。
+
 v0.6.3 集成核对（2026-11-01）：[#831](https://github.com/SummerSec/DeepSonar/pull/831) 已在最终 PR 检查全绿后合并至 `fdb55a01b1e02b5b9078586923a8d506ce5bb096`，该主线的六个适用 Actions 工作流全绿，包含 schema67 的真实 PostgreSQL 重建/备份恢复；本轮工程 issue 已收口。上述证据只覆盖该 SHA，不覆盖后续修复。正式 [Release](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 的 OpenHarmony Fuzz 新构建出现 sanitizer 启动崩溃；旧主线的 OH 缓存命中不能替代新候选运行证据。本修复使 LLVM/compiler-rt 与 AFL++ 插件匹配，并把 fresh/reuse 候选的双原生架构行为检查接入既有 CI/Release，细则及诊断证据见[发布专题](<docs/RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)；修复的最终 SHA、镜像通道、签名和正式附件仍须实际通过。v0.6.2 保持不可变；v0.6.3 尚未正式发布，现有 tag 不因本修复自动移动。独立质量与 Host 证书/晋升/强关系建议按本轮范围暂缓，质量保持 unknown/not_evaluated；#833/#834 忽略、#835 为后续机器验证，不替代当前红灯修复。
 
 ## 13. 实现硬约束

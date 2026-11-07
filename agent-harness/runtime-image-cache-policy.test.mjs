@@ -224,7 +224,9 @@ test("ci.yml wires cache_policy outputs and preserves all guards", () => {
   assert.ok(ci.includes("Free disk for Kali toolchain image"));
   assert.ok(ci.includes("Record reused image"));
   assert.ok(ci.includes("Load reused runtime for offline validation"));
-  assert.equal((ci.match(/^\s*permissions:\s*$/gm) || []).length, 4, "no new permissions block");
+  const summaryPermissions = ci.match(/^  ci-summary:\n[\s\S]*?    permissions:\n((?:      [^\n]+\n)+)/m)?.[1];
+  assert.equal(summaryPermissions, "      contents: read\n      actions: read\n", "#992 summary is strictly read-only");
+  assert.equal((ci.match(/^\s*permissions:\s*$/gm) || []).length, 5, "only the reviewed read-only summary block was added");
   assert.ok(!ci.includes("continue-on-error"), "no continue-on-error added");
   assert.ok(!/actions:\s*write/.test(ci), "no elevated actions permission");
 });
