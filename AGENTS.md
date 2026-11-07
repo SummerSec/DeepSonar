@@ -134,6 +134,8 @@ pnpm ci:images
 
 `gate` 里的守则套件分散在多个脚本（如 `ci:unit:searchable-selects` 禁止原生 `<select>`、`ci:unit:file-size` 文件体量棘轮、`ci:unit:bounded-contexts` 固定路由面与 bounded-context 所有权、`ci:unit:docs-freshness` 文档保鲜），`ci:unit:web-facts` 覆盖不到：Web 或路由面改动要按需补跑，否则 CI 才第一次报错。`ci:unit:authz` 内的 `ci-test-hook.test.ts` 保证每个被跟踪的 `*.test.ts` 都有测试入口引用（未接线的进 `apps/scheduler/src/ci-test-hook.manifest.json` 基线，只能缩小），但**脚本本身是否被 workflow 调用仍需人工确认**：全量脚本见根目录 `package.json`，已进 CI 的以 `.github/workflows/ci.yml` 为准（`ci:unit:bounded-contexts` 自 #684 起已进 CI；`ci:unit:file-size` 自 2026-10-31 起在 gate 中显式执行，此前仅通过 `ci:unit:authz` 的文件列表间接运行，调整该列表会让棘轮静默失效）。测试数据库需要 `TEST_DATABASE_URL`；只依赖真实沙箱的测试要明确检查运行时是否可用。镜像改动还要检查 Dockerfile、`.dockerignore`、runtime registry fingerprint、平台架构和体积预算。
 
+**#972 起 `gate` 已拆为 4 个有界并行分片**：`gate-contract`（无服务单测/契约，不声明 `services.postgres`）、`gate-db-core` / `gate-db-domain`（各自独立 PostgreSQL 服务与库）、`gate-e2e`（scheduler 3100/3101 与同库 setval 竞态相关的启动/端到端冒烟必须同片）。每片独立 `needs: changes`、独立 `install`/`typecheck`/`build` 生命周期，不复用跨提交结果；`ci-summary` 用 `EXPECTED_GATE_SHARDS` 显式期望矩阵逐片要求 `success`，缺片/取消/超时/失败一律拒绝。完整套件清单与归属以 `agent-harness/gate-shards.mjs` 及 `agent-harness/gate-shards.test.mjs` 的覆盖率断言为准（每个原套件恰好覆盖一次），改 gate 步骤必须同步更新该清单。#971/#972/#973/#974 的纯 Node 契约回归统一在 `docs-freshness` job 的 `perf(ci) contract regressions and hosted runner disk safety` step 显式列出，新增测试文件必须同步加到该 step 才会被门禁执行。
+
 ## PR 的 Draft / Ready 分层（#836）
 
 `ci.yml` 按当前 PR 状态出运行计划（`agent-harness/ci-run-plan.mjs`），只有同一个分类器，不另造第二套判断：

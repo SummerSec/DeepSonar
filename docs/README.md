@@ -226,3 +226,5 @@
 发布恢复的 as-built 身份/证据与限制已于 2026-11-05 对照[发布专题](RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)同步；真实恢复未经本次执行。
 
 #899 的[操作员效果结清契约](../deploy/README.md#未知效果的人工结清899)区分单条成功、全局残留和未核验状态；隔离 PostgreSQL/CLI 回归接入 Actions，最终 SHA 工程验收与 s66 现场升级分别留证。
+
+- [集成测试共享连接池 teardown 待办清单（#971）](INTEGRATION_POOL_TEARDOWN.md)：三个 gate 长尾套件在 `finally` 末尾显式 `sql.end({ timeout: 5 })`，其余 18 个长尾套件的逐个核对顺序与「未机械批量替换」边界。纯 Node 契约回归见 `apps/scheduler/src/integration-pool-teardown.test.mjs`。#972 的 gate 四分片清单与覆盖率断言见 `agent-harness/gate-shards.mjs`；#973 的按空间预算清盘见 `.github/ci/prepare-hosted-runner-disk.mjs`；#974 的 Kali 缓存导出策略见 `agent-harness/runtime-image-cache-policy.mjs`。以上均不宣称任何提速比例，真实前后对照样本仍待线上累积。

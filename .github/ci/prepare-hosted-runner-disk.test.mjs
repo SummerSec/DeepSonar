@@ -383,6 +383,16 @@ test("Reverse PR and main path filters include disk preparation and its safety r
   }
   const ci = readFileSync(new URL("../workflows/ci.yml", import.meta.url), "utf8");
   const docsJob = ci.split("  docs-freshness:\n")[1]?.split(/\n  [a-z][\w-]*:/)[0];
-  assert.ok(docsJob?.includes("run: node --test .github/ci/prepare-hosted-runner-disk.test.mjs"),
-    "disk safety and wiring regressions must run even on Draft PRs");
+  // #971/#972/#974: the disk safety unit now shares one explicit `node --test`
+  // step with the other pure-Node perf(ci) contract regressions, so assert the
+  // whole listed set instead of one single-line `run:` string.
+  assert.ok(docsJob?.includes("node --test"), "disk safety must still run in the docs-freshness job");
+  for (const file of [
+    ".github/ci/prepare-hosted-runner-disk.test.mjs",
+    "apps/scheduler/src/integration-pool-teardown.test.mjs",
+    "agent-harness/runtime-image-cache-policy.test.mjs",
+    "agent-harness/gate-shards.test.mjs",
+  ]) {
+    assert.ok(docsJob.includes(file), `disk safety and wiring regressions must run even on Draft PRs: missing ${file}`);
+  }
 });
