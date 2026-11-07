@@ -125,6 +125,7 @@ pnpm ci:unit:web-facts
 pnpm ci:unit:searchable-selects     # gate 守则：Web 下拉必须用可搜索选择原语
 pnpm ci:unit:file-size              # gate 守则：文件体量棘轮（max-lines）
 pnpm ci:unit:docs-freshness         # gate 守则：文档保鲜（版本字面量 / pnpm 脚本 / 链接 / 已删机制）
+pnpm ci:unit:runtime-timing         # #961 P0：分项量测与离线采集器回归，见 docs/RUNTIME_BUILD_TIMING.md
 pnpm ci:integration:finding-research
 pnpm ci:integration:platform-api
 pnpm ci:smoke:control-api

@@ -1,0 +1,114 @@
+name: runtime-build-timing
+
+# #961 P0 — comparable, fail-closed timing evidence for Chrome Fuzz arm64.
+#
+# ci.yml builds the image in `chrome-fuzz-arm64-build` and natively smokes it
+# in a separate `chrome-fuzz-arm64` job; release.yml does the same. A timing
+# state file cannot cross jobs without an artifact hop, and #964/#965 are both
+# still editing ci.yml. The Actions API already exposes step timestamps, so
+# this workflow stays completely outside the build path: no build workflow is
+# modified, no gate is weakened, and historical runs can be backfilled so
+# cold / warm / invalidated samples can actually reach three per scenario.
+on:
+  workflow_run:
+    workflows: [ci, chrome-runtime, release]
+    types: [completed]
+  pull_request:
+    paths:
+      - "agent-harness/runtime-build-timing.mjs"
+      - "agent-harness/runtime-build-timing.test.mjs"
+      - "agent-harness/collect-runtime-timing.mjs"
+      - "agent-harness/collect-runtime-timing.test.mjs"
+      - ".github/ci/runtime-timing-collect.sh"
+      - ".github/workflows/runtime-build-timing.yml"
+  workflow_dispatch:
+    inputs:
+      run_ids:
+        description: "逗号分隔的 Actions run id；留空则回填最近 N 次已完成的 ci run"
+        required: false
+        default: ""
+      recent:
+        description: "回填最近多少次 ci run"
+        required: false
+        default: "20"
+      scenario:
+        description: "受控 benchmark 标注；auto 由采集器按 step 结论推断"
+        required: false
+        type: choice
+        default: auto
+        options: [auto, cold, warm, invalidated, unknown]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: runtime-build-timing
+  cancel-in-progress: false
+
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: 量测工具与采集器回归
+        run: node --test agent-harness/runtime-build-timing.test.mjs agent-harness/collect-runtime-timing.test.mjs
+
+  collect:
+    needs: regression
+    # PR code is exercised only by regression; it cannot produce official history.
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: 采集 job/step 时间戳并回填历史证据
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_IDS: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.run_ids }}
+          RECENT_LIMIT: ${{ inputs.recent || '20' }}
+          HISTORY_LIMIT: "30"
+          SOURCE_WORKFLOW: ci.yml
+          INPUT_JSON: ${{ runner.temp }}/runtime-timing/input.json
+          OUT_DIR: ${{ runner.temp }}/runtime-timing/evidence
+          TIMING_HISTORY: ${{ runner.temp }}/runtime-timing/history
+          TRUST_JSON: ${{ runner.temp }}/runtime-timing/trust.json
+        run: bash .github/ci/runtime-timing-collect.sh
+
+      - name: 生成分项证据、Markdown 摘要与可比样本聚合
+        env:
+          SCENARIO: ${{ inputs.scenario || 'auto' }}
+          INPUT_JSON: ${{ runner.temp }}/runtime-timing/input.json
+          OUT_DIR: ${{ runner.temp }}/runtime-timing/evidence
+        run: |
+          set -euo pipefail
+          node agent-harness/collect-runtime-timing.mjs \
+            --input "$INPUT_JSON" \
+            --out-dir "$OUT_DIR" \
+            --scenario "$SCENARIO" \
+            --trust "$RUNNER_TEMP/runtime-timing/trust.json" \
+            --aggregate \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --json-out "$OUT_DIR/aggregate.json"
+
+      - name: 上传可比样本证据
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-timing-evidence
+          path: ${{ runner.temp }}/runtime-timing/evidence/
+          retention-days: 90
+          if-no-files-found: warn

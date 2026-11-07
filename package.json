@@ -9,6 +9,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "ci:unit:runtime-timing": "node --test agent-harness/runtime-build-timing.test.mjs agent-harness/collect-runtime-timing.test.mjs",
     "dev": "pnpm --filter @deepsonar/scheduler dev",
     "dev:web": "pnpm --filter @deepsonar/web dev",
     "build": "pnpm -r build",
