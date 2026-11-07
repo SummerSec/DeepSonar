@@ -77,6 +77,9 @@ test("a successful inline retry clears the sticky load-failure toast", async () 
     assert.equal(toasts().length, 0, "the sticky failure toast is cleared on success");
   } finally {
     act(() => root.unmount());
+    // Unmount before closing the DOM: a still-mounted ToastHost would schedule a
+    // state update against a disposed window.
+    act(() => root.unmount());
     clearToasts();
     api.projects = original;
     dom.window.close();
@@ -112,9 +115,72 @@ test("unmounting the page clears its sticky failure toast", async () => {
     await act(async () => { await Promise.resolve(); });
     assert.equal(toasts().length, 1, "the failure toast is shown");
 
-    act(() => root.unmount());
+    // Unmount ONLY the page: ToastHost stays mounted, which is how the real app
+    // behaves (it is a sibling of the router outlet). Unmounting the root would
+    // hide the store leak because the portal disappears with it.
+    act(() => {
+      root.render(createElement(MemoryRouter, null, createElement(ToastHost)));
+    });
     assert.equal(toasts().length, 0, "leaving the page must not leave a fixed toast behind");
   } finally {
+    // Unmount before closing the DOM: a still-mounted ToastHost would schedule a
+    // state update against a disposed window.
+    act(() => root.unmount());
+    clearToasts();
+    api.projects = original;
+    dom.window.close();
+    for (const key of GLOBALS) delete (globalThis as Record<string, unknown>)[key];
+  }
+});
+
+test("a load failure that lands after the page unmounts does not create a toast", async () => {
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://127.0.0.1" });
+  const replacements: Record<string, unknown> = {
+    window: dom.window,
+    document: dom.window.document,
+    HTMLElement: dom.window.HTMLElement,
+    Element: dom.window.Element,
+    Node: dom.window.Node,
+    localStorage: dom.window.localStorage,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  for (const [key, value] of Object.entries(replacements)) {
+    Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
+  }
+  const original = api.projects;
+  const container = dom.window.document.createElement("div");
+  dom.window.document.body.appendChild(container);
+  const root = createRoot(container);
+  const toasts = () => [...dom.window.document.querySelectorAll(".app-toast")];
+
+  try {
+    // Deferred so the request is still pending when the page unmounts.
+    let reject!: (reason: Error) => void;
+    const pending = new Promise<Project[]>((_, no) => { reject = no; });
+    api.projects = () => pending;
+
+    await act(async () => {
+      root.render(createElement(MemoryRouter, null, createElement(ToastHost), createElement(ProjectsPage)));
+    });
+    assert.equal(toasts().length, 0, "nothing has failed yet");
+
+    act(() => {
+      root.render(createElement(MemoryRouter, null, createElement(ToastHost)));
+    });
+    await act(async () => {
+      reject(new Error("late fixture failure"));
+      await Promise.resolve();
+    });
+
+    assert.equal(
+      toasts().length,
+      0,
+      "a failure that lands after navigation must not resurrect the sticky toast",
+    );
+  } finally {
+    // Unmount before closing the DOM: a still-mounted ToastHost would schedule a
+    // state update against a disposed window.
+    act(() => root.unmount());
     clearToasts();
     api.projects = original;
     dom.window.close();

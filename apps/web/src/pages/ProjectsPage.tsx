@@ -54,6 +54,13 @@ export function ProjectsPage() {
   // or when the page unmounts. Without this the fixed toast outlives the error
   // banner and keeps offering a retry for a problem that is already resolved.
   const loadErrorToast = useRef<number | null>(null);
+  // #967 review P2: cleanup alone only removed a toast that already existed. A
+  // request still in flight when the page unmounted would later reject and
+  // re-create the sticky toast on top of whatever page the user moved to, with a
+  // retry button bound to an unmounted component. A request generation makes
+  // late results inert, and `disposed` makes them inert after unmount.
+  const requestGeneration = useRef(0);
+  const disposed = useRef(false);
 
   const clearLoadErrorToast = () => {
     if (loadErrorToast.current === null) return;
@@ -61,16 +68,20 @@ export function ProjectsPage() {
     loadErrorToast.current = null;
   };
 
-  const reload = () =>
-    api
+  const reload = () => {
+    const generation = ++requestGeneration.current;
+    const stillCurrent = () => !disposed.current && generation === requestGeneration.current;
+    return api
       .projects()
       .then((list) => {
+        if (!stillCurrent()) return;
         setProjects(list);
         setError(null);
         setLoading(false);
         clearLoadErrorToast();
       })
       .catch((e) => {
+        if (!stillCurrent()) return;
         const detail = String(e);
         setError(detail);
         setLoading(false);
@@ -84,12 +95,16 @@ export function ProjectsPage() {
           action: { label: "重试", onClick: () => { void reload(); } },
         });
       });
+  };
 
   useEffect(() => {
     reload();
   }, []);
 
-  useEffect(() => () => clearLoadErrorToast(), []);
+  useEffect(() => () => {
+    disposed.current = true;
+    clearLoadErrorToast();
+  }, []);
 
 
 
