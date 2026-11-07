@@ -5,7 +5,7 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import { runInNewContext } from "node:vm";
 import { DSH_REQUEST_BUDGET_SOURCE, DSH_REQUEST_BUDGET_VENDOR_SHA256 } from "./dsh-request-budget.js";
-import { DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from "./dsh-runtime-image-guard.js";
+import { DSH_REQUEST_BUDGET_ARTIFACT_SHA256, DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from "./dsh-runtime-image-guard.js";
 
 test("DSH image preflight rejects old, incomplete and mismatched governed plugin content", () => {
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -24,7 +24,10 @@ test("DSH image preflight rejects old, incomplete and mismatched governed plugin
   ]);
   const check = (files: Map<string, string>) => {
     const output = { stdout: "", stderr: "", exitCode: 0 };
-    runInNewContext(DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE.replace(DSH_REQUEST_BUDGET_VENDOR_SHA256, hash(vendor)), {
+    const guard = DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE
+      .replace(DSH_REQUEST_BUDGET_VENDOR_SHA256, hash(vendor))
+      .replace(DSH_REQUEST_BUDGET_ARTIFACT_SHA256, hash(artifact));
+    runInNewContext(guard, {
       require: (name: string) => {
         if (name === "node:crypto") return { createHash };
         assert.equal(name, "node:fs");
@@ -51,6 +54,13 @@ test("DSH image preflight rejects old, incomplete and mismatched governed plugin
   for (const file of ["index.js", "deepsonar-index.js", "deepsonar-request-budget.mjs"]) {
     const files = new Map(valid); files.set(root + "/lib/" + file, "changed bytes");
     assert.equal(check(files).exitCode, 78, file);
+  }
+  // A self-consistent image manifest is not authority to choose executable code.
+  for (const replacement of [vendor, "arbitrary ungoverned entrypoint"]) {
+    const files = new Map(valid);
+    files.set(root + "/lib/deepsonar-index.js", replacement);
+    files.set(manifestPath, JSON.stringify({ ...manifest, artifactSha256: hash(replacement) }));
+    assert.deepEqual(check(files), { stdout: "", stderr: "DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID\n", exitCode: 78 });
   }
   // Even a self-consistent old manifest cannot opt into the current helper policy.
   const stale = new Map(valid);

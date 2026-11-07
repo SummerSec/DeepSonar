@@ -346,7 +346,8 @@ test("governed DSH rejects an incompatible image before launching or registering
   for (const exitCode of [0, 78]) {
     const fake = fakeSandbox(exitCode);
     const context = { host: fake.host, env: { DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://gateway/gateway" },
-      cwd: "/workspace", input: "task", dshProvider: testDshProvider() };
+      cwd: "/workspace", input: "task", dshProvider: testDshProvider(),
+      mcpConfigPath: "/workspace/.deepsonar/mcp.json" };
     if (exitCode === 0) {
       await adapter.start(context);
       assert.equal(fake.commands.length, 1);

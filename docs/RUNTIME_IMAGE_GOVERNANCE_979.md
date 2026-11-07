@@ -9,7 +9,7 @@
 
 同类检查结果：
 
-- **DSH**：启动前校验当前预算插件 manifest、vendor/artifact/helper 内容和 SDK 版本；缺失或陈旧返回 `DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID`，不启动 CLI，不回退未受治理的 vendor adapter。
+- **DSH**：启动前校验当前预算插件 manifest、vendor/artifact/helper 内容和 SDK 版本；治理入口的 SHA-256 由 Scheduler 固定，不能只与镜像自身 manifest 对照。即使把入口替换为原始 vendor 并同步改写 manifest 摘要，也必须拒绝。缺失或陈旧返回 `DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID`，不启动 CLI，不回退未受治理的 vendor adapter。
 - **Pi 主请求**：预算扩展由 `runtime-agent` 每次启动上传，不依赖 DSH 插件入口。
 - **Pi 可选 Observational Memory**：wrapper 固化在镜像内。旧 wrapper 不提供当前 Gateway 要求的 `x-deepsonar-request-id`，后台请求会被 `missing_gateway_request_id` 拒绝。新 OM Job 最低镜像版本更新到 `0.6.15`；每次启动/恢复还要求 wrapper 的 SHA-256 与当前源码一致。旧冻结 Job 不重新写快照，不能只靠新建时的版本下限解决。
 - **Claude Code**：请求包装由 `runtime-agent` 上传，未发现 DSH/OM 这条镜像内组件滞后的相同根因。这不是对 Claude 全部行为或真实模型的验收结论。
@@ -51,5 +51,5 @@
 - FR-IMG-003 / NFR-SEC-004：DSH 与 OM 镜像内容检查，复用既有不可变镜像与冻结边界，无新 API/schema 或 ADR 决策。
 - `pnpm ci:unit:runtime-sandbox`：旧/缺失/篡改 DSH 插件和旧 OM wrapper 拒绝、合格内容正例、启动/恢复前拦截。
 - `pnpm ci:unit:credential-compatibility`：OM 专属最低版本准入，其他 Pi 扩展不受影响。
-- `pnpm ci:integration:request-budget-sdk`：真实钉死 DSH 安装执行生产内容守卫，删除治理入口时拒绝并恢复正例；上游仍为合成 loopback。
+- `pnpm ci:integration:request-budget-sdk`：真实钉死 DSH 安装执行生产内容守卫。仅在夹具内把 installer 的两个 SDK 路径字面量恢复为镜像规范路径，核对生成入口与 Scheduler 固定摘要一致；删除入口或用原始 vendor 替换并同步改写 manifest 时均拒绝，恢复正例后再还原夹具路径和原 manifest。生产守卫不规范化代码字节；上游仍为合成 loopback。
 - 文档保鲜、类型检查及其余适用完整 CI 按最终 SHA Actions 验收。本地仅审查 diff/读取 OCI，不运行 tests/build/typecheck；未发布、未部署、未重跑生产或调用真实模型。
