@@ -6,6 +6,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import postgres from "postgres";
 import {
+  baselineTransactionBody,
   MIGRATE_LOCK_ID,
   parseTableManifest,
   runMigrations,
@@ -87,6 +88,21 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   assert.equal(manifest.has("schema_meta"), true);
   assert.equal(manifest.has("projects"), true);
   assert.equal(manifest.has("schema_migrations"), false);
+});
+
+test("rebuild baseline transaction rejects early publication and preserves the controlled body", async () => {
+  const body = await readFile(SCHEMA_FILE, "utf8");
+  const transaction = baselineTransactionBody(body);
+  assert.ok(transaction.includes("CREATE TABLE projects"));
+  assert.ok(transaction.includes("INSERT INTO schema_meta"));
+  assert.doesNotMatch(transaction, /\b(?:BEGIN|COMMIT|ROLLBACK)\s*;/i);
+  assert.equal(baselineTransactionBody(body.replace(/\n/g, "\r\n")).replace(/\r\n/g, "\n"), transaction);
+  for (const invalid of [
+    "CREATE TABLE projects (id uuid);",
+    "BEGIN; CREATE TABLE projects (id uuid); COMMIT; CREATE TABLE leaked (id int);",
+    "BEGIN; CREATE TABLE projects (id uuid); COMMIT; SELECT 1; COMMIT;",
+    "BEGIN; CREATE TABLE projects (id uuid); ROLLBACK; COMMIT;",
+  ]) assert.throws(() => baselineTransactionBody(invalid), { message: "schema_rebuild_baseline_transaction_invalid" });
 });
 
 test("boot path reconciles owned sequences after structure checks", async () => {

@@ -279,6 +279,15 @@ function baselineVersion(body: string, expected: number, label: string): void {
   }
 }
 
+/** Extract the single transaction body of the controlled schema baseline. */
+export function baselineTransactionBody(sql: string): string {
+  const match = /^(?:\s|--[^\n]*(?:\n|$))*BEGIN\s*;([\s\S]*?)COMMIT\s*;\s*$/i.exec(sql);
+  if (!match || /\b(?:BEGIN|COMMIT|ROLLBACK|START\s+TRANSACTION)\s*;/i.test(match[1])) {
+    throw new Error("schema_rebuild_baseline_transaction_invalid");
+  }
+  return match[1];
+}
+
 /**
  * Bootstrap an empty database from schema.sql, or verify a non-empty database
  * is already at SCHEMA_VERSION.  No incremental upgrades.
@@ -290,6 +299,7 @@ export async function runMigrations(
   options: {
     schemaFile?: string;
     targetVersion?: number;
+    beforeBaselineCommit?: (db: MigrationConnection) => Promise<void>;
   } = {},
 ): Promise<string[]> {
   const targetVersion = options.targetVersion ?? SCHEMA_VERSION;
@@ -300,14 +310,35 @@ export async function runMigrations(
 
   const state = await readSchemaState(db);
   if (state.table_count === 0) {
-    await db.unsafe(latestBody);
-    await assertStructure(db, expectedManifest, `fresh baseline v${targetVersion}`);
-    await reconcileOwnedSequences(db);
-    const version = await readSchemaVersion(db);
-    if (version !== targetVersion) {
-      throw new Error(
-        `fresh baseline left schema_meta at v${version}; expected v${targetVersion}`,
-      );
+    const beforeCommit = options.beforeBaselineCommit;
+    const body = beforeCommit ? baselineTransactionBody(latestBody) : latestBody;
+    const apply = async (): Promise<void> => {
+      await db.unsafe(body);
+      await assertStructure(db, expectedManifest, `fresh baseline v${targetVersion}`);
+      await reconcileOwnedSequences(db);
+      const version = await readSchemaVersion(db);
+      if (version !== targetVersion) {
+        throw new Error(
+          `fresh baseline left schema_meta at v${version}; expected v${targetVersion}`,
+        );
+      }
+      await beforeCommit?.(db);
+    };
+    if (beforeCommit) {
+      await db.unsafe("BEGIN");
+      try {
+        await apply();
+        await db.unsafe("COMMIT");
+      } catch (error) {
+        try {
+          await db.unsafe("ROLLBACK");
+        } catch (rollbackError) {
+          throw new AggregateError([error, rollbackError], "schema baseline failed and its transaction could not be rolled back");
+        }
+        throw error;
+      }
+    } else {
+      await apply();
     }
     return ["database/schema.sql"];
   }

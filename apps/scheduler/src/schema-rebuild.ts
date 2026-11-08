@@ -2,9 +2,10 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { MIGRATE_LOCK_ID, parseTableManifest, runMigrations, SCHEMA_FILE, type MigrationConnection } from "./migration-runner.js";
+import { baselineTransactionBody, MIGRATE_LOCK_ID, parseTableManifest, runMigrations, SCHEMA_FILE, type MigrationConnection } from "./migration-runner.js";
 import { assertOwnedSequencesAligned, preparePublicSearchPath, reconcileOwnedSequences } from "./owned-sequences.js";
 import { SCHEMA_VERSION } from "./schema-version.js";
+import { capturePublicAcl, restorePublicSchemaAcl, restorePublicObjectAcl } from "./schema-rebuild-acl.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -429,8 +430,6 @@ async function recreatePublicSchema(db: MigrationConnection): Promise<void> {
   await db.unsafe("DROP EXTENSION IF EXISTS pg_trgm CASCADE");
   await db.unsafe("DROP SCHEMA public CASCADE");
   await db.unsafe("CREATE SCHEMA public");
-  await db.unsafe("GRANT ALL ON SCHEMA public TO CURRENT_USER");
-  await db.unsafe("GRANT ALL ON SCHEMA public TO public");
   await preparePublicSearchPath(db);
 }
 
@@ -498,6 +497,8 @@ export async function rebuildSchemaToLatest(
   const targetVersion = options.targetVersion ?? SCHEMA_VERSION;
   const schemaFile = options.schemaFile ?? SCHEMA_FILE;
   const schemaSql = readFileSync(schemaFile, "utf8");
+  // Reject an unsupported transaction wrapper before moving any source table.
+  baselineTransactionBody(schemaSql);
   const warnings: string[] = options.resetRoleIdentity
     ? ["explicit role identity reset: CLI preferences and project models will not be copied; reconfigure after rebuild"] : [];
   const plan = await planSchemaRebuild(db, options);
@@ -540,6 +541,7 @@ export async function rebuildSchemaToLatest(
     }
   }
 
+  const acl = await capturePublicAcl(db);
   if (options.terminateScheduler !== false) {
     const terminated = await terminateSchedulerBackends(db);
     if (terminated > 0) warnings.push(`terminated ${terminated} deepsonar-scheduler connection(s)`);
@@ -551,7 +553,13 @@ export async function rebuildSchemaToLatest(
   }
   const sourceTables = await movePublicTablesToStaging(db);
   await recreatePublicSchema(db);
-  const applied = await runMigrations(db, { schemaFile, targetVersion });
+  await restorePublicSchemaAcl(db, acl);
+  // Publish recreated objects and their narrowed ACLs in one transaction;
+  // broad defaults must never authorize persistent DDL on historical objects.
+  const applied = await runMigrations(db, {
+    schemaFile, targetVersion,
+    beforeBaselineCommit: (transaction) => restorePublicObjectAcl(transaction, acl),
+  });
   if (applied.length === 0) {
     throw new Error("fresh baseline was not applied after recreating the public schema");
   }
@@ -592,6 +600,7 @@ export async function rebuildSchemaToLatest(
   await ensureOfficialSeeds(db, schemaSql);
   await reconcileOwnedSequences(db);
   await runMigrations(db, { schemaFile, targetVersion });
+  await restorePublicObjectAcl(db, acl);
 
   if (!options.keepStaging) {
     await db.unsafe(`DROP SCHEMA IF EXISTS ${quoteIdent(REBUILD_STAGING_SCHEMA)} CASCADE`);
