@@ -3003,7 +3003,7 @@ const OPS: Op[] = [
     path: "/findings/{id}/comments",
     summary: "新增 Finding 评论",
     description:
-      "request_hub 默认 true：已 confirmed 的 Finding 评论后会按人工消息唤醒 Hub 再决策；响应 hub 字段回报是否入队及原因（not_confirmed / request_hub_false）。",
+      "request_hub 默认 true：已 confirmed 的 Finding 评论后按既有暂停、轮次等准入尝试唤醒 Hub；已停止 objective 返回 hub.hub_queued=false、reason=plan_objective_stopped，评论仍以 201 保存，但不创建人工节点或清除暂停原因。该请求不具有 run-hub-now 的 manual 权限，也不修改 objective revision/预算。响应 hub 字段回报是否入队及原因（含 not_confirmed / request_hub_false）。",
     scope: "findings:write",
     tags: ["Findings"],
     successStatus: "201",

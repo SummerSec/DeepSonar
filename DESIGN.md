@@ -6,6 +6,8 @@
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
 
+#1002 P1-6 为 Canvas 边和人工消息的节点引用外键增加前导列索引，任务 retry 的单事务重置、外键与项目范围保持不变；不提高 timeout 或分批提交。基线同步与索引前后计划/HTTP 回滚隔离证据见[数据库说明](database/README.md#canvas-节点引用索引1002-p1-6)，最终 SHA Actions 待验，现场延迟仍未归因。
+
 #945 工具活动进度保持 Canvas-first；Job/Canvas 创建和 deferred 预检沿用纯数据库有界冲突重试。Task/Finding Report 的精确输入字节与摘要现随 Job/Report SQL 原子提交，领取后、runtime IO 前才投影输入文件，不覆盖冲突历史；Verify/orphan 收口因此只重试 SQL，按 Canvas → Job → 全部 Attempts 重核终态归属。成功报告输出仍含文件 I/O，不纳入整体重试；原始 SQLSTATE 保留，`25P02` 和未知外部效果不是安全重放依据。历史缺少新冻结字节不重建或补写，详见[运行时视图](docs/architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)及[数据契约](docs/architecture/08-data-architecture.md#report-输入与文件投影945)。最终 SHA Actions 待验。
 
 > **#979 运行镜像治理**：DSH 与 Pi OM 在启动前核对镜像内治理代码，旧快照保持不可变；[诊断与恢复](docs/RUNTIME_IMAGE_GOVERNANCE_979.md)区分代码修复、OCI 内容证据与正式发布。
@@ -148,7 +150,7 @@ Gateway 区分总量与 memory 归因，对 pending/unknown 保守记账并在�
 
 ### 4.2 Plan
 
-#775 当前新执行只接收 [Plan v2](packages/shared-types/src/plan.ts)；v1 只读保留于不可变审计与报告历史，不能作为新执行输入。objective 内部 `v:1`、`input_sha256`、`status` 与 `updated_at` 只是读取 metadata，不是执行 fallback；提交的 Plan 严格保持 `v:2`。授权用户以 CAS 写入 Canvas objective、完成策略和显式有限预算；模型只能提出与该 objective/revision 精确一致的路线及结果，不能重写目标、判据或重置 lifetime 计数。路线允许在累计任务、轮次、并行与无进展护栏内多轮重规划；已消费的 continue 语义事件以当前 owner/Canvas/项目与 Plan 身份绑定的持久水位去重，回调和重启不再重计，活动/ready 工作延后评估，新事件仍消耗预算，见 [Plan 重建规则](docs/PLAN_GAP_PROJECTION.md#多轮推进重启与停止)。
+#775 当前新执行只接收 [Plan v2](packages/shared-types/src/plan.ts)；v1 只读保留于不可变审计与报告历史，不能作为新执行输入。objective 内部 `v:1`、`input_sha256`、`status` 与 `updated_at` 只是读取 metadata，不是执行 fallback；提交的 Plan 严格保持 `v:2`。授权用户以 CAS 写入 Canvas objective、完成策略和显式有限预算；模型只能提出与该 objective/revision 精确一致的路线及结果，不能重写目标、判据或重置 lifetime 计数。路线允许在累计任务、轮次、并行与无进展护栏内多轮重规划；已消费的 continue 语义事件以当前 owner/Canvas/项目与 Plan 身份绑定的持久水位去重，回调和重启不再重计，活动/ready 工作延后评估，新事件仍消耗预算，见 [Plan 重建规则](docs/PLAN_GAP_PROJECTION.md#多轮推进重启与停止)。普通自动 Hub 唤醒不复活 `status=stopped` 的 objective；显式 run-hub-now 与受治理恢复仍走原准入；Finding 评论 request_hub 对停止目标先明确拒绝唤醒，保留评论而不清除暂停或创建人工节点，不自动关闭已接受的人工等待。
 
 可执行 PlanTask 复用现有 Hub Intent admission 与 Job/Attempt/effect 路径。依赖就绪须核对当前成功 Attempt、语义来源事件、未被替代的 Artifact、`plan.output` 对期望输出的精确关联，以及宿主实际留存字节/hash；模型自报 done 或 Job 成功本身不够。输出关联是工程关联，不证明语义满足。接纳与 CAS 回执、依赖执行和终止原因均保留持久来源；具体规则见 [ADR 0012](docs/architecture/adr/0012-plan-v2-execution.md)和[运行时视图](docs/architecture/06-runtime-view.md)。
 

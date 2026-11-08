@@ -49,9 +49,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须支持任务启动、暂停、继续执行、重试、取消、归档和取消归档，并保留归档任务的 Canvas、Job、Evidence 与 Report 引用；`resume-session` 只能恢复仍可识别的 Job/Attempt 账本或创建受治理的新执行，不得宣称跨进程恢复 CLI/模型会话；归档不得默默物理删除历史真相。
 - **决策来源**：运维操作和审计需要可恢复的历史，取消必须传播到在途执行；跨进程 Session resume 没有当前实现证据，必须与任务级继续执行语义分开。
-- **实现状态**：部分达标；任务归档/取消归档和受限 `resume-session` 入口已实现并保留历史引用，但跨进程 CLI/模型会话恢复不是当前能力；显式硬删除端点仍需按本规范人工区分。
+- **实现状态**：部分达标；任务归档/取消归档和受限 `resume-session` 入口已实现并保留历史引用，但跨进程 CLI/模型会话恢复不是当前能力；显式硬删除端点仍需按本规范人工区分。#1002 P1-6 只为现有任务 retry 的节点引用外键增加索引，不修改删除事务、外键或项目范围。
 - **代码入口**：[项目任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Job 重跑集成测试](../../apps/scheduler/src/job-rerun.integration.test.ts)、[恢复集成测试](../../apps/scheduler/src/recovery-issue186.integration.test.ts)、[schema](../../database/schema.sql)。
-- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`；人工分别验证 archive/unarchive 与 `resume-session`，并核对没有把 Session archive 当作跨进程 resume（入口，未在本任务执行）。
+- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`；人工分别验证 archive/unarchive 与 `resume-session`，并核对没有把 Session archive 当作跨进程 resume（入口，未在本任务执行）；#1002 P1-6 的索引前后计划与 HTTP retry 回滚/成功/跨项目隔离回归复用 recovery，基线重建复用 `pnpm ci:unit:migrations`，最终 SHA Actions 待验，不证明现场延迟。
 
 ### FR-TASK-006 版本化任务契约与派发前校验
 
@@ -107,9 +107,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Hub 必须在角色 Job 终态后按事件触发下一轮或 Report；Verify 等待证据时必须按证据签名/门禁指纹唤醒，重复无进展达到配置上限时必须记录停止原因并可请求人工，不得静默空转。
 - **决策来源**：事件驱动避免定时轮询，证据未变化时需要明确阻塞而不是无限派发。
-- **实现状态**：as-built；无进展上限见[配置](../../apps/scheduler/src/config.ts)，预算和暂停原因均持久化。
+- **实现状态**：as-built；无进展上限见[配置](../../apps/scheduler/src/config.ts)，预算和暂停原因均持久化。#1002 P0-3 普通自动/idle/非人工 force 唤醒在 Canvas 锁内拒绝已停止 objective 的后继 Hub；不改写历史人工等待或 unknown effect，显式 run-hub-now 与 completion recovery 仍由原准入约束；Finding 评论 request_hub 在已停止 objective 下先返回 plan_objective_stopped，保留评论但不写人工节点或清除暂停原因。
 - **代码入口**：[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Hub 策略](../../apps/scheduler/src/domains/hub-orchestration/policy.ts)、[配置](../../apps/scheduler/src/config.ts)。
-- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:smoke:convergence`。
+- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:smoke:convergence`；#1002 P0-3 的现有 Hub characterization 与 `plan-execution-stops.integration.test.ts` 已接 `ci:unit:bounded-contexts` / `ci:integration:plan-protocol`，最终 SHA Actions 待验。
 
 ### FR-HUB-005 决策必须有可执行理由和提示词
 

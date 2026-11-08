@@ -48,6 +48,48 @@ test("Plan v2 rejects unretained/mismatched outputs, unauthorized partial routes
       assert.equal((await h.children(f.hub)).length, 1, mode);
       assert.equal((await h.state(f.canvas)).plan_execution.stop_reason, mode === "unknown" ? "unknown_external_effect" : "missing_output", mode);
       assert.equal((await h.state(f.canvas)).plan_objective.status, "stopped");
+      if (mode === "missing_bytes") {
+        const stopped = await h.state(f.canvas);
+        await h.sql`UPDATE projects SET config_json=${h.sql.json({ rules: { hubEnabled: true, maxIntentsPerDecision: 8 } })} WHERE id=${f.project}`;
+        await h.finish(f.hub);
+        assert.equal((await h.sql`SELECT status FROM jobs WHERE id=${f.hub}`)[0].status, "succeeded");
+        const events = await h.sql`SELECT to_jsonb(e) AS row FROM events e WHERE job_id=ANY(${[f.hub, child]}::uuid[]) ORDER BY id`;
+        for (const options of [{}, { idleWake: true }, { force: true }]) {
+          await h.sql.begin(async tx => {
+            await h.core.maybeTriggerHub(tx as unknown as typeof h.sql,
+              { id: child, canvas_id: f.canvas, project_id: f.project, type: "explore" }, options);
+          });
+        }
+        assert.equal((await h.sql`SELECT id FROM jobs WHERE canvas_id=${f.canvas} AND type='hub_reason'`).length, 1,
+          "terminal and repeated idle/forced callbacks cannot create a doomed Hub for a stopped objective");
+        assert.equal((await h.sql`SELECT id FROM canvas_nodes WHERE canvas_id=${f.canvas} AND node_type='human'`).length, 0);
+        assert.equal((await h.sql`SELECT status FROM canvas_nodes WHERE id=${f.root}`)[0].status, "active",
+          "stopping a route must not claim analysis completion or dispatch a Report");
+        assert.deepEqual(await h.state(f.canvas), stopped, "terminal callbacks preserve the stopped objective and lifetime budget");
+        assert.deepEqual(await h.sql`SELECT to_jsonb(e) AS row FROM events e WHERE job_id=ANY(${[f.hub, child]}::uuid[]) ORDER BY id`, events);
+        const findingId = randomUUID(), findingNode = randomUUID();
+        await h.sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
+          VALUES(${findingNode},${f.canvas},${child},'finding','Retained comment fixture','active','{}')`;
+        await h.sql`INSERT INTO findings(id,project_id,job_id,node_id,fingerprint,title,severity,summary,verify_status,disposition)
+          VALUES(${findingId},${f.project},${child},${findingNode},${findingId},'Retained comment fixture','high','Offline confirmed Finding','confirmed','confirmed_vuln')`;
+        await h.core.patchCanvasConvergence(h.sql, f.canvas, {
+          auto_stopped: true, hub_paused: false, paused_reason: "stopped-comment-fixture", paused_at: "2026-01-01T00:00:00Z",
+        });
+        const beforeComment = await h.state(f.canvas);
+        const [rootBefore] = await h.sql`SELECT body_json FROM canvas_nodes WHERE id=${f.root}`;
+        for (const payload of [{ body: "Retain the comment without restarting the stopped route" },
+          { body: "Repeated explicit review request", request_hub: true }]) {
+          const comment = await h.app.inject({ method: "POST", url: `/findings/${findingId}/comments`, payload });
+          assert.equal(comment.statusCode, 201, comment.payload);
+          assert.deepEqual(comment.json().hub, { hub_queued: false, reason: "plan_objective_stopped", canvas_id: f.canvas });
+          assert.deepEqual(await h.state(f.canvas), beforeComment, "refused comments cannot clear pause/objective/budget");
+          assert.deepEqual((await h.sql`SELECT body_json FROM canvas_nodes WHERE id=${f.root}`)[0], rootBefore);
+          assert.equal((await h.sql`SELECT id FROM canvas_nodes WHERE canvas_id=${f.canvas} AND node_type='human'`).length, 0);
+          assert.equal((await h.sql`SELECT id FROM jobs WHERE canvas_id=${f.canvas} AND type='hub_reason'`).length, 1);
+        }
+        assert.equal((await h.sql`SELECT id FROM finding_comments WHERE finding_id=${findingId}`).length, 2);
+        assert.deepEqual(await h.sql`SELECT to_jsonb(e) AS row FROM events e WHERE job_id=ANY(${[f.hub, child]}::uuid[]) ORDER BY id`, events);
+      }
     }
 
     for (const role of ["hub_reason", "verify_finding", "report", "unadmitted-role"]) {
