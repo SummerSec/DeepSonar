@@ -82,8 +82,24 @@ if (!testDatabaseUrl) {
       const { localWorkerFromEnv } = await import("./model.js");
       const seed = localWorkerFromEnv({ nodeId: `${prefix}-local`, endpoint: "127.0.0.1:18081", protocol: "http", apiKey: "fixture-local-old-key" });
       await applyLocalWorkerSeed(seed);
-      await recordSandboxLease({ sandboxId: `${prefix}-local-live`, workerId: seed.id, jobId: liveJobId });
-      await assert.rejects(() => applyLocalWorkerSeed({ ...seed, endpoint: "127.0.0.1:18082", apiKey: "fixture-local-new-key" }), /worker endpoint cannot change/);
+      let seedOutcome: Promise<unknown> = Promise.resolve(undefined);
+      await sql.begin(async tx => {
+        await tx`SELECT id FROM worker_nodes WHERE id=${seed.id} FOR UPDATE`;
+        seedOutcome = applyLocalWorkerSeed({ ...seed, endpoint: "127.0.0.1:18082", apiKey: "fixture-local-new-key" })
+          .then(() => undefined, error => error);
+        const deadline = Date.now() + 5000;
+        for (;;) {
+          const [activity] = await tx`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid<>pg_backend_pid()
+            AND wait_event_type='Lock' AND query LIKE '%worker_nodes%') AS blocked`;
+          if (activity.blocked) break;
+          assert.ok(Date.now() < deadline, "seed must wait for the worker ownership lock");
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        await tx`INSERT INTO worker_sandbox_leases(sandbox_id,worker_id,job_id)
+          VALUES(${`${prefix}-local-live`},${seed.id},${liveJobId})`;
+      });
+      const seedError = await seedOutcome;
+      assert.ok(seedError instanceof Error); assert.match(seedError.message, /worker endpoint cannot change/);
       assert.equal(workerApiKey(seed.id), "fixture-local-old-key", "failed owner change cannot replace its key");
       await sql`DELETE FROM worker_sandbox_leases WHERE sandbox_id=${`${prefix}-local-live`}`;
       await recordSandboxLease({ sandboxId: `${prefix}-dead`, workerId: ids[0]!, jobId: deadJobId });
