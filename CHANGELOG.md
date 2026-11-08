@@ -13,6 +13,8 @@
 
 - **人工等待修正链交接（#1002 P1-4，#1012）**：宿主确认原 sandbox 已消失且同一活动 Attempt 的 human 接受事实仍匹配后，结清正常等待的 pending agent_run；清理失败、unknown、取消或外来归属不结清，不补 usage。回复/忽略带修正根的 waiting_human Job 时，复用原预算、期限、暂停及效果门，先建立 resume-frozen 代际并原子撤销旧 Gateway/Control 凭证再入队；重复请求不增加代际，具体拒绝回滚消息与状态。不刷新原用量/回执、不绕过 unknown effect，injected 仍不是 Agent ACK。
 
+- **Pi 已接受完成的拒绝反馈（#1011）**：主请求预算扩展只保留 Gateway 精确 COMPLETION_ALREADY_ACCEPTED，SDK error update 等待 message_end；宿主已有真实回执时继续原结算，不将已接受完成泛化为预算错误。其他额度、未知用量、归属和真实进程失败仍拒绝，不额外请求模型或重放效果。
+
 ### 改进
 
 - **单 effect 人工结算入口（#1002 P1-9，#1009）**：Management API 复用 Scheduler 内核的精确 effect 结算，要求 admin 与项目 scope、明确 outcome/证据及 operation ID；相同规范化输入幂等，冲突与活动 Attempt 拒绝。保留真实认证 Actor（其 ID 可为空），不伪造缺失用量、恢复额度、自动重排 Job 或重放未知请求。

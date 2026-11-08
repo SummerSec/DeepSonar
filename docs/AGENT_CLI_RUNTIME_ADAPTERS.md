@@ -4,7 +4,7 @@
 > CLI versions live in `agent-harness/runtime-images.json` and
 > `packages/runtime-sandbox/src/runtime-adapters.ts`. New CLI onboarding must also
 > cover Session archive + Web session viewer (below). Index: [`README.md`](README.md).
-> Synchronization: 2026-11-06; #947's completion-refusal format fix is a candidate pending final-SHA Actions.
+> Synchronization: 2026-11-08; #1011 retains the exact Pi main-allowance completion refusal; final-SHA Actions are pending.
 
 Issue #100 defines the boundary between Scheduler-owned execution policy and
 provider-specific CLI protocols.
@@ -66,7 +66,11 @@ Gateway `COMPLETION_ALREADY_ACCEPTED` refusal or either registered gate message
 missing provenance, semantic errors and cancellation/timeout/lease/unknown-effect
 failures cannot activate this override. Original receipt, permission, lifecycle
 and ingestion gates remain authoritative; this does not retry a process or
-reconcile unknown effects. Regression entry points are `ci:unit:runtime-sandbox`
+reconcile unknown effects.
+
+本轮原生 Pi/OM 归档发现：宿主已有 `persisted_deferred` 完成回执，下一次主请求 allowance 返回精确 `409 / error.type=COMPLETION_ALREADY_ACCEPTED`，但扩展曾丢弃该码并报泛化预算失败。现在只透传这一个固定码，不透传 Gateway/Provider 原文、不请求模型；其他状态、未知用量、额度或执行归属拒绝仍 fail closed。Pi SDK 的完整 assistant error update 只在该精确码时等待后续 `message_end`，单独 update 不制造终态；非零退出、传输、取消和缺失终态仍保留 process 来源。最终结算仍要求宿主实际接受原完成回执并通过既有 `executeReal` 限定门，不能由 CLI 文本宣称完成。新增 SDK 边界与生产 runner 回放接既有 runtime-sandbox；新 SHA 原生双架构 Pi/OM 与完整 Actions 尚待执行。
+
+Regression entry points are `ci:unit:runtime-sandbox`
 and `ci:unit:executor-real`; these are offline engineering fixtures, not live
 CLI/model or final-SHA Actions acceptance.
 
@@ -97,7 +101,7 @@ The current registry (`AGENT_CLI_RUNTIME_ADAPTERS`) contains three write/run CLI
 | Adapter | CLI | Protocol | Incremental messages | Context policy | `context_window_tokens` materialization | Structured reasoning |
 | --- | --- | --- | --- | --- | --- | --- |
 | `claude-code` | Claude Code 2.1.312 | `stream-json` + governed `--include-partial-messages` | yes | Automatic compaction; defaults `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` to `70`, with an explicit environment value taking precedence | 无受支持的绝对窗口落点；只冻结/展示，不注入伪造 flag/env | `stream_event` thinking/text deltas and complete assistant blocks |
-| `pi` | Pi Coding Agent 1.1.0 | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
+| `pi` | Pi Coding Agent 1.4.0（核对 2026-11-08） | `pi --mode rpc --no-approve` 严格 LF JSONL | yes | 自动上下文策略由 Pi 管理；恢复只接受 `get_state` 返回的精确 `sessionFile` | `models.json` model `contextWindow` | `message_update` 的结构化文本/思考事件 |
 | `dsh` | DeepSeek Harness 0.2.1-rc.2 | 官方 `dsh --profile` SDK JSON-RPC launcher，严格 LF JSONL；RoleConfig 可冻结 Standard（native tools）或 PTC（`run_code`） | yes | `compaction-basic` 自动压缩；同进程 `session/prompt` follow-up；跨进程持久 Session resume 不支持 | DSH profile / Gateway model 配置 | `session.event` 的结构化 reasoning 事件 |
 
 DSH 的首条 system 消息由适配器通过 `DSH_SYSTEM_PROMPT` 投影到 pi-compatible

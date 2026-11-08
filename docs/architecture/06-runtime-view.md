@@ -239,6 +239,8 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 
 #923 主执行启动/恢复由上传的[请求准入适配器](../../packages/runtime-sandbox/src/model-request-policy.ts)包装，三 CLI 主 endpoint 只在运行时投影到 loopback，OM 保持真实 Gateway。每次模型 JSON 查询自身 workload allowance，已有 cap/usage 合规才原字节转发，否则拒绝。Pi 已接 SDK 生成前逐次配置，Claude 只接启动/resume 静态 cap；DSH 共用 SDK 生成前 adapter 已接。Claude Code 2.1.312 的启动上限与运行中余额不足时明确拒绝并提示，是用户已接受的兼容限制；不修改已形成 body，不要求逐请求自动适配，该范围决定不再阻塞发布。未准入 quota/DB 回滚拒绝用原 events 的 scoped kernel 回执确认 not_started；保存失败 unknown，同 UUID 不重发。无新 schema/模型账本，Actions 待验。
 
+#1011 原生 Pi/OM 回归暴露主 allowance 将已接受完成的精确拒绝码丢弃成泛化预算错误。主扩展只保留 HTTP409 / COMPLETION_ALREADY_ACCEPTED，SDK 的完整 assistant error update 等待 message_end 后才建立终态来源；实际持久完成回执与既有 executor 门共同决定原结算。缺终态、非零退出、未知用量和其他预算拒绝不放行，不重放模型/效果；离线回放、原生双架构与最终 SHA 验收见[CLI 契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)，当前新 SHA Actions 待验。
+
 ## 操作员效果结清（#899）
 
 FR-JOB-005 的人工路径复用 `job_attempt_effects`：同一 UPDATE 排除 active Attempt 并只写未结清行；已结清证据不可覆盖，不改变 Attempt 程序计数器或 replay policy。CLI 将本次单条写入结果与独立全局计数分开，计数失败不能宣称清空；字段和退出契约见[部署说明](../../deploy/README.md#未知效果的人工结清899)。隔离 PostgreSQL 回归覆盖真实内核结算和锁竞争，最终 SHA Actions 成功才作为工程验收，未执行生产升级。

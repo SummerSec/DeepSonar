@@ -572,7 +572,15 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     const event = line.assistantMessageEvent && typeof line.assistantMessageEvent === "object" && !Array.isArray(line.assistantMessageEvent)
       ? line.assistantMessageEvent as Record<string, unknown>
       : {};
-    if (String(event.type ?? "") === "error") return fail(textFrom(event.error ?? event.message) ?? "Pi assistant message failed", "process");
+    if (String(event.type ?? "") === "error") {
+      const message = event.error && typeof event.error === "object" && !Array.isArray(event.error)
+        ? event.error as Record<string, unknown> : undefined;
+      // The SDK emits this update before message_end. Wait for the final structured
+      // refusal instead of shutting down while that same message is still streaming.
+      if (message?.role === "assistant" && message.stopReason === "error"
+        && message.errorMessage === "COMPLETION_ALREADY_ACCEPTED") return [];
+      return fail(textFrom(event.error ?? event.message) ?? "Pi assistant message failed", "process");
+    }
     return piTextFromMessageEvent(line, state);
   }
   if (type === "message_end") {

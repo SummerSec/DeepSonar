@@ -112,6 +112,27 @@ test("pending settlement polls only allowance; unknown usage and mismatched iden
   } finally { await f.close(); }
 });
 
+test("only the exact Gateway completion refusal survives allowance negotiation without a model request", async () => {
+  const f = await fixture();
+  try {
+    f.replies.push({ status: 409, body: { error: { type: "COMPLETION_ALREADY_ACCEPTED", message: "private ignored message" } } });
+    assert.equal((await f.request())[0].error.errorMessage, "COMPLETION_ALREADY_ACCEPTED");
+    assert.equal(f.delegates.length, 0);
+    for (const reply of [
+      { status: 401, body: { error: { type: "COMPLETION_ALREADY_ACCEPTED" } } },
+      { status: 409, body: { error: { message: "COMPLETION_ALREADY_ACCEPTED" } } },
+      { status: 409, body: { error: { type: "JOB_TOKEN_USAGE_UNKNOWN" } } },
+      { status: 409, body: { error: { type: "REPAIR_ATTEMPT_CHANGED" } } },
+      { status: 429, body: { error: { type: "JOB_REQUEST_EXHAUSTED" } } },
+    ]) {
+      f.replies.push(reply);
+      assert.equal((await f.request())[0].error.errorMessage, "PI_MAIN_BUDGET_ALLOWANCE_DENIED");
+    }
+    assert.equal(f.delegates.length, 0);
+    assert.equal(f.queries.length, 6);
+  } finally { await f.close(); }
+});
+
 test("Anthropic thinking rejects insufficient room before delegation; adaptive thinking and Responses keep SDK caps", async () => {
   for (const api of ["anthropic-messages", "openai-responses"]) {
     const f = await fixture(api);

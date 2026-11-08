@@ -998,7 +998,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：新增治理 CLI 必须同时提供 runtime adapter、session archive adapter、Web viewer parser、契约测试和原始归档下载；不完整接入不得作为新 Job 默认值。
 - **决策来源**：只接通启动而没有归档/查看会丢失执行真相。
-- **实现状态**：当前治理 CLI 的 adapter/archive/viewer 已接线，历史只读不扩展新运行时。可选 OM 的 wrapper/RPC 和历史 HTTP preview/download 脱敏已核验；本地实际构建镜像的已安装 canonical Pi/OM RPC、生产内容守卫正负例与适配器回归也已通过。本轮工程验收见[#831 Actions 摘要](<../TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA、其他镜像/平台和发布 registry/catalog 仍另验；场景、身份与分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
+- **实现状态**：当前治理 CLI 的 adapter/archive/viewer 已接线，历史只读不扩展新运行时。#1011 修正 Pi 主请求扩展丢失已接受完成的精确 Gateway 拒绝码及 streaming error 提前关闭：只保留固定码、等待 message_end，由实际持久回执决定原完成结算；未知用量、缺终态与进程失败不放行，新增回放和原生 Pi/OM 最终 SHA Actions 待验。可选 OM 的 wrapper/RPC 和历史 HTTP preview/download 脱敏已核验；本地实际构建镜像的已安装 canonical Pi/OM RPC、生产内容守卫正负例与适配器回归也已通过。本轮工程验收见[#831 Actions 摘要](<../TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA、其他镜像/平台和发布 registry/catalog 仍另验；场景、身份与分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
 - **代码入口**：[CLI adapter docs](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[runtime adapters](../../packages/runtime-sandbox/src)、[session viewer](../../apps/web/src/session-viewer)。
 - **验证证据**：`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:web-session-viewer`、`pnpm ci:unit:credential-compatibility` 是既有入口；Session 集成、实际镜像 RPC/guard 与适配器回归见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md)，当前根套件及最终组合 CI 边界见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
 

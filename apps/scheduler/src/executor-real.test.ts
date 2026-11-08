@@ -624,6 +624,10 @@ test("an accepted completion supersedes the Gateway's already-accepted refusal",
   }
   assert.equal(acceptedCompletionSupersedesRunnerFailure({ ...refusal,
     error: `Pi message ended: error: ${refusal.error}` }, true), true);
+  const sdkRefusal = { ...refusal, error: "Pi message ended: error: COMPLETION_ALREADY_ACCEPTED" };
+  assert.equal(acceptedCompletionSupersedesRunnerFailure(sdkRefusal, true), true);
+  assert.equal(acceptedCompletionSupersedesRunnerFailure(sdkRefusal, false), false);
+  assert.equal(acceptedCompletionSupersedesRunnerFailure({ ...sdkRefusal, runnerErrorSource: "process" }, true), false);
 
   // The branch must exist *before* the unconditional runner-failure throw, otherwise the
   // accepted terminal never reaches the settling block below it.
