@@ -158,7 +158,11 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
       } else if (gate.startsWith("accepted_")) await appendEvent(f, "control_receipt", {
         operation: gate === "accepted_human" ? "request_human" : "mark_job_done", status: "persisted_deferred",
       });
-      else if (gate === "cancel") await db`UPDATE job_attempts SET cancel_requested=true WHERE id=${f.attemptId}`;
+      else if (gate === "cancel") await db.begin(async raw => {
+        const tx = raw as unknown as Db;
+        await tx`SELECT id FROM jobs WHERE id=${f.jobId} FOR UPDATE`;
+        await attempts.requestAttemptCancel(tx, f.jobId, "fixture cancellation");
+      });
       else if (gate === "terminal") await input.setJobStatus(f.jobId, "timeout");
       else if (gate === "foreign_project") {
         const other = await setup(); await db`UPDATE jobs SET project_id=${other.projectId} WHERE id=${f.jobId}`;
