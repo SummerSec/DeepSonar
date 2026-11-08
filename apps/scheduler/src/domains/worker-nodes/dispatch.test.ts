@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   OpenSandboxRunner,
   type OpenSandboxClient,
+  type OpenSandboxConnection,
   type OpenSandboxCreateInput,
   type OpenSandboxSession,
 } from "@deepsonar/runtime-sandbox";
@@ -175,7 +176,7 @@ test("create failure releases the claim reservation and does not fall back to a 
   assert.deepEqual(released, ["reserve-w1"]);
 });
 
-test("worker plane destroy releases the lease even if the node destroy throws", async () => {
+test("worker plane destroy retains ownership when the exact node destroy throws", async () => {
   const local = worker("local");
   const leases = new Map<string, string>();
   const client = createWorkerPlaneOpenSandboxClient({
@@ -200,7 +201,53 @@ test("worker plane destroy releases the lease even if the node destroy throws", 
   const session = await client.create(emptyCreate());
   assert.equal(leases.size, 1);
   await assert.rejects(() => client.destroy!(session.id), /node destroy failed/);
-  assert.equal(leases.size, 0);
+  assert.equal(leases.get(session.id), local.id);
+});
+
+test("missing keys, missing owner, live resources and incomplete owner queries never prove destroy", async () => {
+  for (const mode of ["key", "owner", "node", "alive", "list", "unsupported"] as const) {
+    let released = 0, destroys = 0;
+    const client = createWorkerPlaneOpenSandboxClient({
+      createClient: () => ({
+        create: async () => fakeSession("remote-sb"), connect: async () => undefined,
+        destroy: mode === "unsupported" ? undefined : async () => { destroys++; },
+        list: async () => {
+          if (mode === "list") throw new Error("synthetic owner query failed");
+          return mode === "alive" ? [{ resourceId: "remote-sb", jobId: "j", attemptId: "a" }] : [];
+        },
+      }),
+      listWorkers: async () => mode === "node" ? [] : [worker("w1")],
+      lookupLease: async () => mode === "owner" ? null : "w1",
+      releaseLease: async () => { released++; }, apiKeyOf: () => mode === "key" ? undefined : "fixture-node-key",
+    });
+    await assert.rejects(() => client.destroy!("remote-sb"));
+    assert.equal(released, 0, mode); assert.equal(destroys, mode === "alive" || mode === "list" ? 1 : 0, mode);
+  }
+});
+
+test("destroy refreshes cached clients when the owner endpoint or key changes", async () => {
+  for (const change of ["endpoint", "key"] as const) {
+    let node = worker("w1"), key = "fixture-old-key", released = 0;
+    const connections: OpenSandboxConnection[] = [];
+    const client = createWorkerPlaneOpenSandboxClient({
+      createClient: connection => {
+        connections.push(connection);
+        const current = connection.domain === "127.0.0.1:18082" || connection.apiKey === "fixture-new-key";
+        return {
+          create: async () => fakeSession("historical-sb"), connect: async () => fakeSession("historical-sb"),
+          destroy: async () => {},
+          list: async () => current ? [{ resourceId: "current-sb", jobId: "j", attemptId: "a" }] : [],
+        };
+      },
+      listWorkers: async () => [node], lookupLease: async () => node.id,
+      apiKeyOf: () => key, releaseLease: async () => { released++; },
+    });
+    await client.connect("historical-sb");
+    if (change === "endpoint") node = { ...node, endpoint: "127.0.0.1:18082" }; else key = "fixture-new-key";
+    await assert.rejects(() => client.destroy!("current-sb"), /WORKER_PLANE_RESOURCE_STILL_PRESENT/);
+    assert.equal(connections.length, 2, change); assert.equal(released, 0, change);
+    assert.equal(connections[1]!.domain, node.endpoint); assert.equal(connections[1]!.apiKey, key);
+  }
 });
 
 function contractSession(id: string): OpenSandboxSession {

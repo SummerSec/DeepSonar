@@ -22,7 +22,12 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 70);
+  assert.equal(SCHEMA_VERSION, 71);
+  for (const definition of [
+    "CREATE INDEX project_finding_candidate_sources_finding_idx ON project_finding_candidate_sources(project_id, finding_id)",
+    "CREATE INDEX project_finding_candidate_edges_left_finding_idx ON project_finding_candidate_edges(project_id, left_id)",
+    "CREATE INDEX project_finding_candidate_edges_right_finding_idx ON project_finding_candidate_edges(project_id, right_id)",
+  ]) assert.ok(body.includes(definition), definition);
   assert.doesNotMatch(body, /plane_project_id|plane_issue_id/);
   const transferExport = await readFile(new URL("./transfer/export.ts", import.meta.url), "utf8");
   const transferImport = await readFile(new URL("./transfer/import.ts", import.meta.url), "utf8");

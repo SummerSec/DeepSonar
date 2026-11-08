@@ -9,6 +9,7 @@ import {
   OpenSandboxRunner,
   openSandboxCreateExtensions,
   evaluateOpenSandboxAlive,
+  describeProvisionFailure,
   formatGatewayHostsBindFailure,
   gatewayHostsBindCommand,
   gatewayHostsDockerExecArgs,
@@ -236,6 +237,7 @@ test("OpenSandbox runner constructor omits pids when kubernetesResources is set"
 });
 
 test("OpenSandbox runner provisions, exposes host, and verifies contract", async () => {
+  let diagnostics = 0;
   const client = fakeClient();
   const runner = new OpenSandboxRunner(client);
   const handle = await runner.provision({
@@ -246,7 +248,10 @@ test("OpenSandbox runner provisions, exposes host, and verifies contract", async
     limits,
     expectedContract: "deepsonar.runtime/v1",
     expectedToolsManifestSha256: "aa".repeat(32),
+    onFailure: async () => { diagnostics += 1; },
   });
+  assert.equal(diagnostics, 0);
+  assert.ok(!Object.hasOwn(client.created[0]!, "onFailure"), "host callback must not cross the provider boundary");
   assert.equal(handle.sandboxId, "sbx-1");
   assert.equal(client.created[0]?.timeoutSeconds, null);
   const host = runner.hostOf(handle);
@@ -1128,4 +1133,87 @@ test("OpenSandbox contract mismatch still calls client.destroy", async () => {
     expectedContract: "deepsonar.runtime/v1",
   }), /contract mismatch/);
   assert.ok(destroyed >= 1);
+});
+
+test("provision diagnostic retains fixed signals, not SDK secrets/body/stack or getters", () => {
+  const secret = "fixture-secret-that-must-not-be-persisted";
+  const error = Object.assign(new Error(`failed with ${secret}`), { statusCode: 500,
+    error: { code: "DOCKER::SANDBOX_EXECD_DISTRIBUTION_FAILED", message: `write |1: broken pipe ${secret}`, body: { token: secret } } });
+  const diagnostic = describeProvisionFailure(error, "create", false, false);
+  assert.deepEqual(diagnostic, { stage: "create", session_observed: false, cancelled: false, http_status: 500,
+    signals: { execd_distribution_failed: true, broken_pipe: true, connection_reset: false, timeout: false } });
+  assert.ok(!JSON.stringify(diagnostic).includes(secret));
+  const hostile = Object.defineProperty({}, "message", { get() { throw new Error(secret); } });
+  assert.equal(describeProvisionFailure(hostile, "gateway", true, false).signals.broken_pipe, false);
+  assert.equal(describeProvisionFailure({ statusCode: 99999 }, "create", false, false).http_status, null);
+});
+
+test("create failure awaits diagnostic before label cleanup and preserves opaque original error", async () => {
+  const client = fakeClient();
+  const original = Object.assign(new Error("execd distribution failed"), { error: { code: "DOCKER::SANDBOX_EXECD_DISTRIBUTION_FAILED", message: "broken pipe" }, statusCode: 500 });
+  const order: string[] = [];
+  let creates = 0;
+  client.create = async () => { creates += 1; throw original; };
+  client.list = async () => { order.push("cleanup"); return []; };
+  const runner = new OpenSandboxRunner(client);
+  await assert.rejects(runner.provision({ jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222", image: "img@sha256:" + "a".repeat(64), network: "none", limits,
+    onFailure: async diagnostic => {
+      assert.equal(diagnostic.stage, "create");
+      assert.equal(diagnostic.session_observed, false, "no observed handle is not no-start evidence");
+      await Promise.resolve(); order.push("persisted");
+    },
+  }), error => error === original);
+  assert.deepEqual(order, ["persisted", "cleanup"]);
+  assert.equal(creates, 1, "diagnostics do not authorize create replay");
+});
+
+test("contract diagnostic failure still destroys the observed sandbox and preserves contract refusal", async () => {
+  const session = fakeSession();
+  const client = fakeClient(session);
+  let destroyed = false;
+  let diagnostic: ReturnType<typeof describeProvisionFailure> | undefined;
+  client.destroy = async () => { destroyed = true; };
+  client.list = async () => [];
+  const runner = new OpenSandboxRunner(client);
+  await assert.rejects(runner.provision({ jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222", image: "img@sha256:" + "a".repeat(64), network: "none", limits,
+    expectedContract: "another-contract",
+    onFailure: async value => {
+      diagnostic = value;
+      throw new Error("audit storage unavailable");
+    },
+  }), /runtime contract mismatch/);
+  assert.equal(diagnostic?.stage, "runtime_contract");
+  assert.equal(diagnostic?.session_observed, true);
+  assert.equal(destroyed, true);
+  assert.equal(runner.hostOf({ sandboxId: session.id }), undefined);
+});
+
+test("cancelled create records cancellation and still destroys late resources", { timeout: 10_000 }, async () => {
+  const client = fakeClient();
+  let resolveCreate!: (session: OpenSandboxSession) => void;
+  let resolveDestroyed!: () => void;
+  const created = new Promise<OpenSandboxSession>(resolve => { resolveCreate = resolve; });
+  const destroyed = new Promise<void>(resolve => { resolveDestroyed = resolve; });
+  client.create = () => created;
+  client.destroy = async () => { resolveDestroyed(); };
+  client.list = async () => [];
+  const controller = new AbortController();
+  let diagnostics = 0;
+  let diagnostic: ReturnType<typeof describeProvisionFailure> | undefined;
+  const runner = new OpenSandboxRunner(client);
+  const work = runner.provision({ jobId: "11111111-1111-4111-8111-111111111111",
+    attemptId: "22222222-2222-4222-8222-222222222222", image: "img@sha256:" + "a".repeat(64), network: "none", limits,
+    signal: controller.signal,
+    onFailure: async value => { diagnostics += 1; diagnostic = value; },
+  });
+  controller.abort();
+  await assert.rejects(work, /provision 已取消/);
+  assert.equal(diagnostics, 1);
+  assert.equal(diagnostic?.cancelled, true);
+  assert.equal(diagnostic?.session_observed, false);
+  assert.equal(diagnostic?.stage, "create");
+  resolveCreate(fakeSession("late-resource"));
+  await destroyed;
 });

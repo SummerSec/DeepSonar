@@ -37,6 +37,8 @@
 
 > **人工等待效果门（#946，2026-11-06）**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)记录未结清效果/本轮对账进展保留 waiting_human，最终 SQL 覆盖 active/planned 效果，避免进入 human_timeout/终态清理。#957 最终提交的完整 Actions 已通过，核心误判已合入并关闭 #946（2026-11-07 核对）；通知投递计时仍是未交付的独立范围，不冒充已实现。
 
+> **人工等待修正链交接（2026-11-08，#1012）**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)记录宿主确认精确 sandbox 消失后原子撤销旧 grants、再收口正常等待 run；所有普通回复/忽略核对原冻结请求策略并通过共享累计额度、暂停、已接受完成与效果门，仅有修正根时核原期限并建立 resume-frozen 代际；具体拒绝回滚消息/节点/状态，重复提交不重复交接，注入与显式 ACK 不合并。#1011 补现有对账 loop 的可达重入，HTTP ready 后精确 owner 销毁/分页核验，缺 key/不可达/资源仍在保持未结清；run/grants/lease 同事务收口，不缩窄 Job 级未知效果门。原清理 SQL 失败→重建 runner/loop 和 key 丢失/恢复→HTTP 续接/Gateway/完成回归已接 recovery，最终 SHA Actions 待验，不声称真实 OS 重启或生产旧 Job 已恢复。
+
 > **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
 > **创建与可信显式补冻（#943/#948，2026-11-07）**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#缺损快照的可信显式恢复943)记录创建同事务冻结及单 Job rerun-current 的历史预算/宿主执行前证明准入。完整历史求交保留额度、用量和 Attempt；无可信证明、未知效果或耗尽继续拒绝，resume 不替换旧快照。真实 HTTP 恢复、领取/生产 Gateway mint 与无变更负例复用现有 Actions 入口；最终 SHA 待验，不声称生产恢复或模型效果。
@@ -50,7 +52,7 @@
 
 > **凭据引用保护（2026-11-05，#914 切片）**：项目范围 impact、全局删除完整性与设置/删除共用凭据行锁已接线；真实 PG 双会话与 scoped HTTP 回归复用 `pnpm ci:integration:credential-delete`。保留空白名单与冻结 Job，不提供新编辑器或自动扩权修复；本句仅描述 #925 服务端切片，#929 已补齐显式默认账号选择与修复导航；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。详见[接口规格](architecture/09-interface-specs.md#项目凭据引用保护914-切片)。
 
-> **Canvas 引用索引（2026-11-08，#1002 P1-6）**：[数据库说明](../database/README.md#canvas-节点引用索引1002-p1-6)与[数据视图](architecture/08-data-architecture.md#canvas-节点引用索引1002-p1-6)记录边/人工消息节点外键索引；在 P1-7A 基线上推进集成版本，不修改 retry 的单事务、外键或项目范围。合成 SQL 计划及实际 HTTP 回滚/成功隔离已接 recovery，最终 SHA Actions 待验，生产延迟根因与容量未验证。
+> **Canvas 引用索引（2026-11-08，#1002 P1-6）**：[数据库说明](../database/README.md#canvas-节点引用索引1002-p1-6)与[数据视图](architecture/08-data-architecture.md#canvas-节点引用索引1002-p1-6)记录边/人工消息节点与 Finding 候选完整外键前缀索引；在已合入主线基线上推进候选版本，不修改 retry 的单事务、外键或项目范围。合成节点/多 generation Finding 级联 SQL 计划与 buffer 对照及实际 HTTP 完整回滚/成功隔离已接 recovery，最终 SHA Actions 待验，生产延迟根因与容量未验证。
 
 > **历史凭据删除（2026-11-08，#1002 P1-7A）**：删除前撤销全部 Gateway token，再脱离秘密凭据，保留 token/用量账本身份及历史有限额度；无凭据 token 仅允许 revoked，不复活旧授权，不自动清配置。真实账本/预算/HTTP 与精确旧基线重建、备份恢复已接现有 Actions，最终 SHA 待验。详见[历史预算契约](MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)及[数据架构](architecture/08-data-architecture.md)。
 
@@ -102,7 +104,7 @@
 |------|------|------|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | **历史对照 / 已迁移入口（#741）** | 每个一级章节标注权威目标；现行细则按 architecture 归属表定位，不从旧 MVP 草图推导实现 |
 | [Management Skill](../skills/deepsonar-management/SKILL.md) | **当前契约修复（#996）** | Prompt-only RoleConfig 同步、credential-first 与项目 CLI/Provider 白名单；旧角色开关拒绝、schema 引用保鲜与真实请求体回归接现有 Actions，验证结果以最终 SHA 为准 |
-| [AGENT_CLI_RUNTIME_ADAPTERS.md](AGENT_CLI_RUNTIME_ADAPTERS.md) | **as-built** | 当前三类 Agent CLI 适配器、能力、Session 归档+查看器接入清单；DSH 0.2.1-rc.2 profile/SDK smoke、异步子代理完成边界与 v4 归档；**#389 DSH/Pi 解码三类契约与钉死版本夹具矩阵**；[#919 runner 失败来源与已接受完成的限定结算](AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)；#947 候选补齐实际 Pi `409:` 完成拒绝格式，不放行 usage/未知效果错误，最终 SHA Actions 待验；离线测试不代替最终 SHA Actions；leftover Codex/OpenCode 只读 |
+| [AGENT_CLI_RUNTIME_ADAPTERS.md](AGENT_CLI_RUNTIME_ADAPTERS.md) | **as-built** | 当前三类 Agent CLI 适配器、能力、Session 归档+查看器接入清单；DSH 0.2.1-rc.2 profile/SDK smoke、异步子代理完成边界与 v4 归档；**#389 DSH/Pi 解码三类契约与钉死版本夹具矩阵**；[#919 runner 失败来源与已接受完成的限定结算](AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)；#947 候选补齐实际 Pi `409:` 完成拒绝格式；#1011 / #1015 主 allowance 通过私有宿主错误身份保留精确完成拒绝并等待 SDK message_end，不放行 usage/未知效果或缺终态，最终 SHA 原生 Pi/OM 与完整 Actions 待验；离线测试不代替最终 SHA Actions；leftover Codex/OpenCode 只读 |
 | [AGENT_RUNTIME_CONTEXT.md](AGENT_RUNTIME_CONTEXT.md) | **as-built**（#138） | context_id / compaction / 恢复身份 |
 | [Pi 模型预算与截断恢复](PI_MODEL_BUDGET_RECOVERY.md) | **进行中**（#958，源码接线，最终 Actions 待验） | 发现限制与来源、不可变预算、Pi 投影、length 有界恢复、压缩无进展与原生命周期 |
 | [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | **as-built**（#37） | 领域拆分与锁序；非「待实施」 |
@@ -126,10 +128,10 @@
 | [Agent Runtime Profiles](AGENT_RUNTIME_PROFILES.md) | #613 Provider / 模型 / CLI 统一运行时 Profile（`deepsonar.agent-runtime-profile/v1`，phase 1） |
 | [项目默认模型与创建冲突](architecture/09-interface-specs.md#项目默认模型与创建冲突966) | **#966 候选，最终 SHA 待验** | 启用范围与显式默认模型分开；预检/POST 同源诊断、项目隔离，不自动重试。 |
 | [SHARED_ASSET_BLOB_STORE.md](SHARED_ASSET_BLOB_STORE.md) | **as-built**（#41） | 共享资产 BlobStore fs\|s3 |
-| [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布** | `v*` tag / release.yml；v0.6.0 正式 Release 与附件已核对，镜像验签和部署验收分别留证；双架构缓存复用须证明 runnable payload 一致 |
+| [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布准备（2026-11-08）** | v0.6.16 正式 Release 元数据已核对；v0.6.17 的 #1011 已聚合 #1002 来源，组合及最终 main 完整 SHA Actions 待验后 tag；schema68 → 当前源码基线、签名/通道 payload 与回写分别留证，不宣称部署通过 |
 | [runtime-image-pull-partial-failure.md](runbooks/runtime-image-pull-partial-failure.md) | **运维 runbook**（#724） | 拉取部分失败：真实尝试计数、定向重拉、本地对账/修复与远端 unsupported 边界、readiness 复核 |
 | [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md) | **运维/发布** | Compose 一键部署、真实 readiness 门禁与有界失败诊断；实机兼容性需单独验证 |
-| [OPENSANDBOX_1_2_UPGRADE.md](OPENSANDBOX_1_2_UPGRADE.md) | **Source upgrade + local unit verification (2026-11-01)** | Canonical SDK/images, unchanged direct/isolation/recovery boundaries, explicit `wakeRetryEnabled=false`; pinned-server parsing/live/native and exact-SHA CI remain separate |
+| [OPENSANDBOX_1_2_UPGRADE.md](OPENSANDBOX_1_2_UPGRADE.md) | **源码升级/资源 init/失败诊断（2026-11-08）** | SDK/image 与既有恢复边界不变；same-Engine 声明拒绝和正常清理前的非秘密 Job/Attempt 审计均已接线；组合最终 SHA Actions 待验，逐容器/远端 enforcement、现场并发因果及 D-10 分开保留 |
 | [RELEASE_READINESS_POST_v0.4.4.md](RELEASE_READINESS_POST_v0.4.4.md) | **运维/发布** | v0.4.4→当前 main 升级/部署/合并后验收闭环（#582）；区分代码/CI 已核实与实机延期 |
 
 ---

@@ -1,11 +1,23 @@
 # OpenSandbox 1.2 upgrade and recovery boundaries
 
-> 状态：**Source upgrade, historical local unit verification and scoped hosted pinned-server parsing**; combined-head CI and live/native execution remain separate.
-> 同步日期：2026-11-01
+> 状态：**源码升级、受管资源声明预检与 provision 失败诊断已接线；当前组合待最终 SHA Actions**。历史验收、逐容器执行、远端/live/native 证据分别保留，不推导现场因果。
+> 同步日期：2026-11-08
 
 Verification baseline: the 2026-11-01 integration worktree, not a released or native-validated deployment. This updates [IR-001](architecture/01-system-specification.md#ir-001-scheduler-runtime-adapter-与-model-gateway) and [IR-003](architecture/01-system-specification.md#ir-003-opensandbox-与-worker-node) without changing Scheduler recovery or execution authority; see [runtime](architecture/06-runtime-view.md), [deployment](architecture/07-deployment-view.md) and [security](architecture/10-security-and-trust-boundaries.md).
 
 Independent SDK provenance (historical): sibling worktree `DeepSonar-opensandbox-1.2`, branch `agent/opensandbox-1.2-upgrade`, clean main base `e219b53f1e4101b1b64fc97537c15f8eb582d87f` (2026-11-01). Only SDK/pin/config/tests/OpenSandbox documentation hunks were ported there from mixed source commit `7f9241f2373bb25f73f230ab7580eab19803678d`; no earlier ancestry, Plan, Finding research, authorization or Pi packaging changes were imported into that independent worktree. This does not describe the later integrated tree's scope.
+
+## Managed Docker resource preflight (#1002 P2-11)
+
+The first-party [development](../deploy/docker-compose.opensandbox.yml), [production](../deploy/docker-compose.opensandbox.prod.yml) and [Worker](../deploy/docker-compose.worker.yml) Compose files add an `opensandbox-resource-preflight` init dependency. It uses the same immutable server image and the same Engine socket source as the OpenSandbox service, not Scheduler's local Docker client or a remotely guessed endpoint. The [curated reader](../deploy/opensandbox/resource-preflight.py) issues only bounded, timed `GET /info`; it does not create or remove containers, change controllers or print Engine payloads/driver errors. It receives no Provider/Job credentials, uses no network, drops capabilities and mounts its script/socket read-only. A read-only socket mount is not an HTTP authorization boundary; the reader's fixed operation is the relevant restriction.
+
+Explicitly disabled CPU quota/memory/PIDs, rootless cgroups v1 or the Engine warning that limits are unsupported produce `SANDBOX_RESOURCE_LIMITS_UNSUPPORTED`. Missing/non-boolean capabilities, unconfirmed rootless cgroup version, invalid/oversized replies, unavailable sockets or transport errors produce `SANDBOX_RESOURCE_LIMITS_UNKNOWN`. Both exit nonzero and prevent a normal dependency-respecting Compose start from admitting OpenSandbox; the existing Podman Scheduler `service_started` compatibility overlay does not weaken this `service_completed_successfully` dependency. Operators must configure a capable Engine/controller delegation, not raise Job ceilings or bypass the guard. There is no new skip flag or Agent decision.
+
+This is an init-container declaration check, not proof of effective limits in each sandbox. A previously completed init can be reused by Compose; daemon/controller changes, unattended service restarts, explicit `--no-deps` starts, external OpenSandbox and Kubernetes are not continuously gated by this slice. See [remaining resource trust debt](architecture/12-risks-and-tech-debt.md#2-当前实现债务). The original ceiling/isolation requirements are not relaxed, and the check cannot make historical jobs `succeeded` or label unknown effects safe to replay.
+
+Attention cost: one existing deployment failure path shows a stable reason and concrete Engine/controller action; no periodic notifications, additional settings or per-Job model prompt is added. Limits/read budgets remain code facts, not copied operational defaults.
+
+The existing [runtime suite](../packages/runtime-sandbox/src/opensandbox-config-schema-gate.test.ts) invokes six stdlib rejection/transport/redaction tests inside the actual pinned server Python, a real hosted Engine read and a no-socket rejection. [Compose regressions](../packages/runtime-sandbox/src/opensandbox-deploy.test.ts) check image/socket identity and the mandatory dependency. `pnpm ci:unit:runtime-sandbox` is actually called by core CI; the unrelated isolated `load_config` parser implementation remains socket-free. Source and tests are written; final-SHA Actions/native/per-container proof is not inferred or yet claimed for this slice.
 
 ## Official sources and canonical pins
 
@@ -22,6 +34,18 @@ Independent SDK provenance (historical): sibling worktree `DeepSonar-opensandbox
 4. Historical SDK 1.1 Job pins are not rewritten/rebound to 1.2; installed-version mismatch fails closed. No database schema change is made. Create still forwards frozen resources/network/volumes with `timeoutSeconds=null`. Scheduler owns Job deadline, Attempt/effect, lease, cancellation, cleanup and unknown effects. No new SDK lifecycle/autoPause/Vault integration, knobs, session reuse or execution channel is introduced.
 5. SDK 1.2 enables wake retries by default for a 503 carrying `OpenSandbox-Wake: expired`; that upstream marker is not platform effect-settlement authority. [Connection construction](../packages/runtime-sandbox/src/opensandbox-sdk-client.ts) explicitly sets `wakeRetryEnabled=false`, disables metrics and keeps the existing proxy and 180-second timeout. Create, connect and upload transport replacement must not silently opt into replay. Existing Scheduler-owned bounded recovery and upload classification remain. `withTransportIfMissing()` clones and owns operation transports for an uninitialized ConnectionConfig; caller-initialized configs are borrowed and remain caller-owned. The client singleton stays uninitialized. Upload recycling closes the previous local transport and supplies a genuinely new uninitialized ConnectionConfig to `Sandbox.connect`, preserving those connection policies without killing/recreating the remote sandbox or blindly pre-initializing with `withFreshTransport()`.
 6. The installed SDK public declarations inspected on 2026-11-01 expose no first-class PTY or extraHosts/hostAliases API. [Execd WebSocket PTY mapping](../packages/runtime-sandbox/src/opensandbox-pty.ts) and [hosts binding](../packages/runtime-sandbox/src/opensandbox.ts) remain DeepSonar-owned. Frames, endpoints/headers, Docker Engine injection, Kubernetes create-only isolation and guest USER are unchanged.
+
+## Provision 失败诊断（#1002）
+
+[OpenSandbox adapter](../packages/runtime-sandbox/src/opensandbox.ts) 在正常失败清理前提供宿主 callback，阶段为 create、runtime contract、shared assets、runtime manual 或 gateway；[Dispatcher](../apps/scheduler/src/dispatcher.ts) 通过现有 [audit sink](../apps/scheduler/src/audit.ts) 追加 `job.provision_failed`，使用 `deepsonar.provision-failure/v1` 关联当前 Job/Attempt。只保存是否观察到会话、是否取消、合法 HTTP 状态及 execd distribution、broken pipe、connection reset、timeout 的固定布尔信号；不保存任意 provider code/message、响应 body、堆栈、Job env 或 capability token。
+
+审计不是第二个 effect/恢复状态。正常失败路径等待持久写入后再沿用现有清理；写入失败只记录固定宿主提示，继续清理并抛出原错误。SDK 或取消路径可能已先清理资源，不能承诺取得 server/execd 原始日志，也不保留可能含凭据的失败容器。`session_observed=false` 不是 no-start；已经尝试 create 的未知效果、迟到资源和取消 fencing 仍按原生命周期处理，不扩大预算、重试 create 或推断降低并发已解决问题。
+
+| 注意力成本 | 自动处理 | 保留给人的判断 |
+| --- | --- | --- |
+| 单次失败排障 | 在既有审计中合并固定诊断，维持清理；不新增通知、设置或工作流 | 结合确切 Attempt、镜像、Engine/execd 证据确认现场根因；信号存在不等于因果已证实 |
+
+回归接线：`pnpm ci:unit:runtime-sandbox` 覆盖非秘密信号、getter 拒绝、正常清理前 callback、审计失败不遮蔽原错误、成功不记录、取消及迟到资源；`pnpm ci:unit:scheduler-characterization` 核对 durable audit 与未知 create 的 source wiring。现有 `pnpm ci:integration:dispatch-limits` 保留真实持久 effect 的 no-start/unknown 区分。此改动未在本机执行测试，最终候选 Actions 待验；这些替身/源码检查不证明现场 Podman 并发因果、丢失的 execd 日志或容量收益。
 
 ## Verification layers and remaining proof
 

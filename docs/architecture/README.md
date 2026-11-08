@@ -38,6 +38,8 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 
 #992 对应 NFR-OPS-003：既有五片 gate、Reverse 实际消费路由和只读 attempt 成本观测归属[工程规范](11-engineering-specs.md#4-测试分层与实际接线)；真实故障/原生重跑与三组同形文档对照已通过，记录见 [CI 验收](../CI_COST_ACCEPTANCE_992.md)。不新增跨提交通过结论复用，main/发布保障不变。#992 输入冻结前置切片的 npm closure、快照/原生资产身份见 [CI 构建输入](../CI_COST_ACCEPTANCE_992.md#6-基础构建输入冻结992前置切片)、[运行时](06-runtime-view.md#基础镜像构建输入992-前置切片)、[信任边界](10-security-and-trust-boundaries.md)和 [ADR 0018](adr/0018-frozen-base-build-inputs.md)；源码接线尚待最终 SHA Actions 原生验收，复用仍未实现。
 
+#1011 在现有 Scheduler 对账 loop 补正常人工等待的精确清理重入及持久 worker owner 保全，映射 FR-CANVAS-004 与[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)、[运行时](06-runtime-view.md)和[安全](10-security-and-trust-boundaries.md)。HTTP ready 后才启用外部清理，未知效果门不缩窄，无新服务/回执账本；原 destroy→SQL 失败→模拟重启/key 恢复→owner 确认→原子结算→HTTP 后继回归已接线，最终 SHA Actions 待验，未声称真实 OS/生产重启。
+
 ## 1. 阅读路径与目录
 
 | 文件 | 回答的问题 | 状态 |
@@ -73,12 +75,13 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 | 系统范围与角色 | 02；03 | §1–2、§15 | 概览已迁入，旧文历史对照 |
 | 实体与数据真相 | 08；schema | §3 实体、§6、§17.1–17.4 | 已迁入，字段不复制 SQL 草图 |
 | 生命周期与恢复 | 06；[Attempt 实现](../../apps/scheduler/src/domains/job-attempt/index.ts) | §3 状态机、§4、§8 图循环、文末资格与排序 | 已迁入，细节回到代码和行为测试 |
+| 人工等待修正链交接 | FR-CANVAS-004；06/09；[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012) | #1012 / #1002 P1-4 | 精确 sandbox 消失/同 Attempt human 证据下原子撤销旧 grants 并收口 run，未知/清理或撤销失败/取消不改；普通及修正根共享原准入，仅修正根追加代际，消息/节点/状态全回滚；受控清理及实际 Control/HTTP/Gateway/完成回归接 recovery，最终 SHA Actions 待验 |
 | 构件与依赖 | 05；[bounded contexts / 锁序](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | §4.4、§5、§11 | 构件地图已迁入；锁序专题保留权威 |
 | API 与修复 | 09；[OpenAPI](../../apps/scheduler/src/openapi.ts) / shared-types | §7、§8 控制通道 | 已迁入；字段由机器契约维护 |
-| CLI 与运行上下文 | [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[runtime context](../AGENT_RUNTIME_CONTEXT.md)、[profiles](../AGENT_RUNTIME_PROFILES.md)、[Pi RPC 大载荷](../PI_RPC_PAYLOAD_LIMITS.md) | §8.1–8.2 | 专题保留权威，03/05/09 引用；#990 完整归档/索引/Pointer 回读归 06/08/09/10，NFR-REL-004/NFR-SEC-003，最终 SHA Actions 待验，sender/冻结 knobs/80 MiB E2E 未交付 |
+| CLI 与运行上下文 | [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[runtime context](../AGENT_RUNTIME_CONTEXT.md)、[profiles](../AGENT_RUNTIME_PROFILES.md)、[Pi RPC 大载荷](../PI_RPC_PAYLOAD_LIMITS.md) | §8.1–8.2 | 专题保留权威，03/05/09 引用；#1011 Pi 主 allowance 完成拒绝与 streaming/message_end 来源沿 NFR-EVO-003，最终 SHA 原生 Pi/OM 待验；#990 完整归档/索引/Pointer 回读归 06/08/09/10，NFR-REL-004/NFR-SEC-003，最终 SHA Actions 待验，sender/冻结 knobs/80 MiB E2E 未交付 |
 | Pi 模型预算与截断恢复 | FR-CRED-002、FR-JOB-009/013/014、IR-002；06/08/09；[预算与恢复专题](../PI_MODEL_BUDGET_RECOVERY.md) | 本期新增 | #958 声明/配置/实际 CLI 分层、不可变快照和同 Session 有界恢复；最终 Actions 待验，真实容量未知 |
 | 镜像与部署 | 07；[镜像目录契约](../RUNTIME_IMAGE_REGISTRY_CONTRACT.md)、[部署](../ONE_CLICK_DEPLOYMENT.md)、[发布契约](<../RELEASE_RUNTIME_IMAGES.md>) | §8.3、§9 资源 | 已迁入概览；FR-IMG-001/002 的 OH Fuzz 匹配工具链与 fresh/reuse 原生 sanitizer 回归见发布专题，实际执行结果单独留证 |
-| OpenSandbox upgrade | IR-001/003; 06/07/08/10; [upgrade record](../OPENSANDBOX_1_2_UPGRADE.md), [canonical pins](../../packages/runtime-sandbox/src/opensandbox-version.ts) | Historical versions retained | SDK/images updated; direct ingress and Scheduler recovery unchanged; local unit vs actual server/live/native/final-SHA proof separated |
+| OpenSandbox upgrade / resource init | IR-001/003、NFR-PERF-003; 06/07/08/10/12; [upgrade/resource record](../OPENSANDBOX_1_2_UPGRADE.md), [canonical pins](../../packages/runtime-sandbox/src/opensandbox-version.ts) | Historical versions retained | SDK/direct ingress/recovery unchanged; #1002 P2-11 same-Engine init rejects unsupported/unknown declarations, final-SHA Actions pending; per-container/remote enforcement remains D-10 |
 | 资源阈值与性能 | 04；[config](../../apps/scheduler/src/config.ts) | §9.2、§12 | 已迁入；不沿用旧默认值清单 |
 | Canvas 节点引用索引 | FR-TASK-004、CON-003；08；[数据库说明](../../database/README.md#canvas-节点引用索引1002-p1-6) | 任务 retry 仍为单事务 | #1002 P1-6 外键前导索引；SQL 计划/HTTP 回滚隔离与基线重建接现有 Actions，最终 SHA 待验，不证明现场容量或延迟 |
 | Model Gateway 透明传输 | [透明传输契约](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM 结算](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)；06/08/09/10 | 历史代理描述不作为现行契约 | #923 单次原始传输、准入拒绝与 scoped 持久确认；#1002 凭据删除保留 token/账本与历史额度，最终 SHA Actions 待验 |

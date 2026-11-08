@@ -76,12 +76,14 @@ async function policyFixture() {
   return policy;
 }
 
-async function allowanceServer(state: { remaining: number | null; policyRequired: boolean }) {
+async function allowanceServer(state: { remaining: number | null; policyRequired: boolean;
+  denial?: { status: number; type?: string; message: string } }) {
   const server = http.createServer((request, response) => {
     assert.equal(request.url, "/gateway/_allowance");
     assert.equal(request.headers.authorization, "Bearer synthetic-main-token");
-    response.writeHead(200, { "content-type": "application/json" })
-      .end(JSON.stringify({ remaining_tokens: state.remaining, policy_required: state.policyRequired }));
+    const body = state.denial ? { error: { type: state.denial.type, message: state.denial.message } }
+      : { remaining_tokens: state.remaining, policy_required: state.policyRequired };
+    response.writeHead(state.denial?.status ?? 200, { "content-type": "application/json" }).end(JSON.stringify(body));
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   return {
@@ -92,6 +94,35 @@ async function allowanceServer(state: { remaining: number | null; policyRequired
     },
   };
 }
+
+test("DSH shared allowance preserves exact accepted completion and rejects other denial messages", async () => {
+  const policy = await policyFixture();
+  const state = { remaining: 64, policyRequired: true,
+    denial: { status: 409, type: "COMPLETION_ALREADY_ACCEPTED" as string | undefined,
+      message: "COMPLETION_ALREADY_ACCEPTED synthetic-secret" } };
+  const upstream = await allowanceServer(state);
+  try {
+    const model = Object.freeze({ provider: "fixture", id: "fixture-model", api: "openai-completions", baseUrl: upstream.root, maxTokens: 256 });
+    const options = Object.freeze({ apiKey: "synthetic-main-token", maxTokens: 128 });
+    const identity = { ...model, gatewayRoot: upstream.root, token: options.apiKey };
+    const call = () => policy.prepareSdkCall({ model, options, frozenIdentity: identity });
+    await assert.rejects(call(), { message: "COMPLETION_ALREADY_ACCEPTED" });
+    for (const [status, type] of [
+      [401, "COMPLETION_ALREADY_ACCEPTED"], [429, "COMPLETION_ALREADY_ACCEPTED"],
+      [409, "COMPLETION_ALREADY_ACCEPTED_suffix"], [409, "JOB_TOKEN_EXHAUSTED"],
+      [409, "JOB_TOKEN_USAGE_UNKNOWN"], [409, "REPAIR_ATTEMPT_CHANGED"], [409, undefined],
+    ] as const) {
+      Object.assign(state.denial, { status, type });
+      await assert.rejects(call(), (error: Error) => {
+        assert.equal(error.message, "PI_MAIN_BUDGET_ALLOWANCE_DENIED", `${status} ${type}`);
+        assert.doesNotMatch(error.message, /synthetic-secret/u);
+        return true;
+      });
+    }
+    assert.equal(model.maxTokens, 256);
+    assert.equal(options.maxTokens, 128);
+  } finally { await upstream.close(); }
+});
 
 test("DSH request generation reads each allowance, preserves frozen inputs and rejects identities", async () => {
   const policy = await policyFixture();

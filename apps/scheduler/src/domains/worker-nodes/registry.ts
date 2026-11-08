@@ -185,8 +185,14 @@ function capacityJson(capacity: WorkerCapacity) {
 
 /** Scheduler-owned local seed only. Remote register must not take this path. */
 async function upsertLocalNode(input: PersistNodeInput): Promise<DispatchableWorker> {
-  rememberWorkerApiKey(input.id, input.apiKey);
-  const [row] = await sql<WorkerRow[]>`
+  const row = await sql.begin(async tx => {
+    // Establish the row before locking it, including concurrent first seeds.
+    // The FK then serializes new lease inserts with this endpoint change.
+    await tx`INSERT INTO worker_nodes(id,endpoint,api_key_fingerprint,node_token_hash,node_token_prefix)
+      VALUES(${input.id},${input.endpoint},${fingerprintApiKey(input.apiKey)},${input.token.hash},${input.token.prefix})
+      ON CONFLICT(id) DO NOTHING`;
+    await tx`SELECT id FROM worker_nodes WHERE id=${input.id} FOR UPDATE`;
+    const [upserted] = await tx<WorkerRow[]>`
     INSERT INTO worker_nodes (
       id, endpoint, protocol, kind, status, api_key_fingerprint,
       node_token_hash, node_token_prefix, capacity_json, labels_json,
@@ -210,7 +216,13 @@ async function upsertLocalNode(input: PersistNodeInput): Promise<DispatchableWor
       protocol_version = excluded.protocol_version, platform_version = excluded.platform_version,
       deployment_generation = excluded.deployment_generation, last_heartbeat_at = now(),
       updated_at = now()
+    WHERE (worker_nodes.endpoint = excluded.endpoint AND worker_nodes.protocol = excluded.protocol)
+      OR NOT EXISTS (SELECT 1 FROM worker_sandbox_leases WHERE worker_id = worker_nodes.id)
     RETURNING *`;
+    if (!upserted) throw new WorkerNodeError("WORKER_NODE_BUSY", "worker endpoint cannot change while sandbox ownership is retained", 409);
+    return upserted;
+  });
+  rememberWorkerApiKey(input.id, input.apiKey);
   const counts = await leaseCounts();
   return fromRow(row, counts.get(row.id) ?? 0);
 }
@@ -492,7 +504,14 @@ export async function lookupSandboxLease(sandboxId: string): Promise<string | nu
 }
 
 export async function releaseSandboxLease(sandboxId: string): Promise<void> {
-  await sql`DELETE FROM worker_sandbox_leases WHERE sandbox_id = ${sandboxId}`;
+  // Retain the exact owner across destroy -> failed run-settlement commit. A
+  // restarted Scheduler must never infer disappearance from a missing API key.
+  await sql`DELETE FROM worker_sandbox_leases l WHERE l.sandbox_id = ${sandboxId}
+    AND NOT EXISTS (SELECT 1 FROM jobs j JOIN job_attempt_effects e ON e.job_id=j.id
+      WHERE j.status='waiting_human' AND j.sandbox_id=l.sandbox_id
+        AND e.effect_kind='agent_run' AND e.status<>'settled'
+        AND e.resource_identity_json->>'sandbox_id'=l.sandbox_id
+        AND (l.attempt_id IS NULL OR e.attempt_id::text=l.attempt_id))`;
 }
 
 /** Job statuses that may still hold a live sandbox and therefore a lease. */

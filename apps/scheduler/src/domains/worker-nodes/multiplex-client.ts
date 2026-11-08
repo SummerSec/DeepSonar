@@ -53,7 +53,7 @@ export function createNeedsLocalWorker(input: Pick<OpenSandboxCreateInput, "volu
 }
 
 export function createWorkerPlaneOpenSandboxClient(options: WorkerPlaneDeps): OpenSandboxClient {
-  const clients = new Map<string, OpenSandboxClient>();
+  const clients = new Map<string, { connection: OpenSandboxConnection; client: OpenSandboxClient }>();
   const listWorkers = options.listWorkers ?? listWorkerNodes;
   const claimWorker = options.claimWorker ?? claimWorkerForDispatch;
   const finalizeLease = options.finalizeLease ?? finalizeSandboxLease;
@@ -66,9 +66,10 @@ export function createWorkerPlaneOpenSandboxClient(options: WorkerPlaneDeps): Op
     const connection = connectionOf(node, apiKeyOf);
     if (!connection) return null;
     const cached = clients.get(node.id);
-    if (cached) return cached;
+    if (cached && cached.connection.domain === connection.domain
+      && cached.connection.protocol === connection.protocol && cached.connection.apiKey === connection.apiKey) return cached.client;
     const created = options.createClient(connection);
-    clients.set(node.id, created);
+    clients.set(node.id, { connection, client: created });
     return created;
   }
 
@@ -119,21 +120,22 @@ export function createWorkerPlaneOpenSandboxClient(options: WorkerPlaneDeps): Op
       return undefined;
     },
     async destroy(id) {
-      try {
-        const workerId = await lookupLease(id);
-        const nodes = await listWorkers();
-        const node = workerId ? nodes.find((item) => item.id === workerId) : undefined;
-        const client = node ? clientFor(node) : null;
-        if (client?.destroy) await client.destroy(id);
-        else {
-          for (const candidate of nodes) {
-            const next = clientFor(candidate);
-            if (next?.destroy) await next.destroy(id).catch(() => {});
-          }
-        }
-      } finally {
-        await releaseLease(id);
+      const workerId = await lookupLease(id);
+      if (!workerId) throw new Error("WORKER_PLANE_SANDBOX_OWNER_UNKNOWN");
+      const node = (await listWorkers()).find(item => item.id === workerId);
+      if (!node) throw new Error("WORKER_PLANE_SANDBOX_OWNER_UNAVAILABLE");
+      const client = clientFor(node);
+      if (!client) throw new Error("WORKER_PLANE_API_KEY_MISSING");
+      if (!client.destroy) throw new Error("WORKER_PLANE_DESTROY_UNSUPPORTED");
+      await client.destroy(id);
+      // Only this persisted owner is authoritative. A partial multi-worker list
+      // (especially before remote keys return after restart) cannot prove exit.
+      if ((await client.list()).some(resource => resource.resourceId === id)) {
+        throw new Error("WORKER_PLANE_RESOURCE_STILL_PRESENT");
       }
+      // Failed/unconfirmed destroys keep ownership and capacity. The registry
+      // also retains a waiting_human run's lease until its SQL settlement commits.
+      await releaseLease(id);
     },
     async list(filter) {
       const items = [];

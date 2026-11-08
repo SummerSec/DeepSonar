@@ -1,7 +1,7 @@
 # 07 部署视图
 
 > 状态：**as-built**（#741）。描述生产 Compose、运行时网络、镜像准入、远程 Worker/设备和多副本限制；地址与凭据由部署环境提供。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 
 部署事实来自 `deploy/` 下的 Compose 文件、运行时包和镜像准入代码。下图省略了环境变量值、镜像摘要和密钥，只保留拓扑和连接方向。当前 Compose 的 Scheduler、Web、image-admission 平台服务各由一个 Release 同步的完整不可变引用选择（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:...`，#740 P1 第 3 片），部署版本由显式 `DEEPSONAR_VERSION` 声明；`DEEPSONAR_IMAGE_TAG` 已删除，`deploy.sh` / `deploy.ps1` 对旧变量与非 digest 引用 fail closed。OpenSandbox/Worker 的基础服务同样由 Compose 使用摘要固定。Job runtime image 则必须经过准入并在快照中保存解析后的不可变 digest，二者不能混为一谈。#745 的 `platform` catalog 用于版本发现；发布路径还提供经 inspect 校验的平台 digest，宿主升级据此选择目标。原同 schema 路径保留，维护升级的身份隔离、候选库和受管节点路径已接线，不能由模块存在推定真实部署验收通过。平台镜像的 registry 通道由 `deploy/platform-release-catalog.mjs` 单点定义，升级沿用当前部署通道而不静默迁移，签名验证固定 GHCR（#842）。
 
@@ -61,6 +61,10 @@ OpenHarmony Fuzz 的工具链与发布检查（核对 2026-11-01）见[发布契
 ## OpenSandbox upgrade deployment baseline (IR-001/003)
 
 2026-11-01: installed SDK and server/execd/egress indices are pinned by [version facts](../../packages/runtime-sandbox/src/opensandbox-version.ts), with [package](../../packages/runtime-sandbox/package.json)/[lockfile](../../pnpm-lock.yaml), Compose/config and fixtures upgraded together. All deployed Docker/Kubernetes/external-cluster TOMLs remain direct; a pin upgrade does not opt into gateway. Future gateway changes need nested ingress.gateway/route preflight and independent target-backend validation, not an obsolete unsupported-backend claim. Existing capabilities/no-new-privileges/resources, create TTL null, renewfalse, DNS/IPv6 and Kata/PVC policy are unchanged. Artifact descriptor inspection and local units do not prove pinned-server parsing, native/live/actual PTY or exact-SHA CI; see the [single upgrade record](../OPENSANDBOX_1_2_UPGRADE.md).
+
+## 受管 Docker 资源声明预检（#1002 P2-11）
+
+开发、生产 OpenSandbox overlay 和远程 Worker 的依赖链新增 `opensandbox-resource-preflight`。它用相同固定 server image、相同 Engine socket，只读检查 CPU/memory/PIDs 声明；unsupported/unknown 非零退出，普通 Compose 启动不得越过该 init。Podman 的 Scheduler healthcheck 兼容不解除此依赖。检查不是逐容器强制证明，也不持续覆盖复用的已完成 init、服务重启、`--no-deps`、外部 OpenSandbox 或 Kubernetes；实现与 Actions 边界见[权威专题](../OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11)，剩余缺口登记 D-10。
 
 ## Pi 扩展部署与观测内存准入（#815）
 

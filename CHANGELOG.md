@@ -1,5 +1,33 @@
 ## [Unreleased]
 
+## [0.6.17] - 2026-11-08
+
+### 修复
+
+- **任务创建目标绑定（#1002 P0-2，#1003）**：初始人工 objective 在 finding protocol、网络与 compose seeds 完成规范化/冻结后，与 Canvas/root 在同一事务中绑定输入摘要；新建目标不再因平台补齐字段而立即失效。保留真实输入变化、CAS revision 和历史 objective 的严格校验，不要求补一次 PATCH，也不静默重算历史摘要。
+- **删除凭据的历史用量（#1002 P1-7A，#1004）**：删除长期凭据时保留并撤销历史 Gateway token，解除 credential 关联但维持账本对原 token 的引用；丢失凭据的 token 不可恢复为 active。活动 Job、项目配置/扫描引用仍拒绝删除，不级联删账或重置跨 token/Attempt 的预算。
+- **Task retry 的节点与 Finding 候选引用索引（#1002 P1-6，#1007/#1011）**：为 Canvas 边及人工消息节点外键、Finding 候选 sources/edges 的完整项目+Finding 级联前缀添加索引，避免只依赖中间含 generation 的排序索引；删除顺序、事务、权限与超时不变。执行计划与合成原子回归不作为现场容量或耗时收益结论。
+- **直接数据库重建权限（#1002 P2-13，#1005）**：保存源 public schema、仍存在对象/列的有效 ACL、grant option 与 schema-local default privileges；基线与原对象/列权限在同一发布事务中提交，提交前失败回滚，不留下宽默认 TRIGGER 的持久挂载窗口。历史回填后续失败仍拒绝私有列读取；不猜测 runtime 角色、不无条件给 PUBLIC CREATE，不承诺保留 object owner/grantor。受管升级 runtime_ready fence 不变。
+- **stopped Plan 的自动 Hub（#1002 P0-3，#1006）**：在现有 Canvas 锁下拒绝普通自动、idle 及非人工 force 唤醒，避免建立注定被目标门拒绝的新 Hub。Finding 评论仍以 201 保留，但 stopped 目标在人工节点/convergence 副作用前返回 plan_objective_stopped；request_hub 不获得 manual 权限。主动人工与受治理的完成恢复入口不变，不自动转换历史人工等待或伪造完成结果。
+- **受管 OpenSandbox 资源声明（#1002 P2-11，#1008）**：正常第一方依赖初次启动通过同 Engine 的只读声明预检，拒绝不支持/未知 CPU、memory、PIDs 及 rootless cgroups v1；不冒充每个容器、持续、外部 endpoint 或 Kubernetes 的资源强制执行证明，completed-init 复用与 --no-deps 的边界保留。
+
+- **人工等待修正链交接（#1002 P1-4，#1012）**：宿主确认原 sandbox 已消失且同一活动 Attempt 的 human 接受事实仍匹配后，原子撤销旧运行 grants 再结清正常等待的 pending agent_run；清理/撤销失败、unknown、取消或外来归属不结清，不补 usage。所有 waiting_human 回复/忽略都核原冻结请求策略和共享额度、暂停、已接受完成及效果门；仅有修正根时额外检查原期限并建立 resume-frozen 代际，旧 Gateway/Control 凭证与入队原子撤销；重复请求不增加代际，具体拒绝回滚消息与状态。不刷新原用量/回执、不绕过 unknown effect，injected 仍不是 Agent ACK。
+
+- **Pi 已接受完成的拒绝反馈（#1011）**：主请求预算扩展只保留 Gateway 精确 COMPLETION_ALREADY_ACCEPTED，SDK error update 等待 message_end；宿主已有真实回执时继续原结算，不将已接受完成泛化为预算错误。其他额度、未知用量、归属和真实进程失败仍拒绝，不额外请求模型或重放效果。
+
+### 改进
+
+- **单 effect 人工结算入口（#1002 P1-9，#1009）**：Management API 复用 Scheduler 内核的精确 effect 结算，要求 admin 与项目 scope、明确 outcome/证据及 operation ID；相同规范化输入幂等，冲突与活动 Attempt 拒绝。保留真实认证 Actor（其 ID 可为空），不伪造缺失用量、恢复额度、自动重排 Job 或重放未知请求。
+- **provision 失败诊断（#1002 P2-10，#1010）**：正常清理前通过已有审计持久化 Job/Attempt、实际阶段与固定非秘密传输信号；写失败不替代原错误或中断清理，取消及迟到资源处理不变。不保存 SDK 原文/堆栈/env，不保留可能含凭据的失败容器；未观察到句柄不是未启动证明，也不声称现场降低并发的因果已验证。
+- **Pi RPC 完整归档与指针回读（#990，#1000）**：在早期归档索引、迟到/孤儿过程流与 capture 之间保留完整归档耐久性，通过已有 Management 项目权限回读并校验范围/字节摘要。不交付上游 chunk sender，不改变固定 Pi，也不冒充真实大输入端到端验收。
+- **CI 路由与冻结 BASE 安装输入（#992，#995/#1001）**：按实际消费依赖精确路由文档/Reverse 专项，独立 runtime gate 分片并暴露 attempt 成本；冻结 CLI 完整 npm closure、正常安装 hooks 与实际 native guard、APT snapshot/InRelease 和 fd 校验输入。不更换 Pi，不交付跨运行 BASE proof 复用或将既有 PR 绿灯代替最新 main 验收。
+- **Management Skill 契约（#996）**：同步当前 schema 事实与真实 API 请求体，保留历史记录，避免 Skill/CLI 继续发送已变更的 Prompt 等契约。
+
+### 升级与未验证范围
+
+- 本版目标 schema71；v0.6.16 为 schema68（核对 2026-11-08）。非空库必须先按受治理流程备份/重建并核验列交集回填，没有增量 ALTER 或旧配置 fallback。私有 package 版本不是产品版本。
+- 已冻结 Job 的历史预算、Evidence、回执和未知效果不改写；缺少可信历史仍 fail closed。#834 账号池继续暂缓。生产部署、真实模型/独立质量、现场并发根因和容量收益未验证，不用工程 CI 冒充这些结论。
+
 ## [0.6.16] - 2026-11-07
 
 > 本节出现的阈值与计数（单事件上限、分片大小、超时、预览上限、恢复次数等）取自本版发布提交的代码常量，以 `packages/runtime-sandbox/src/pi-rpc-*.ts`、`pi-length-recovery.ts` 为准（核对 2026-11-07）；常量变化时以代码为准，不把本节数字当作独立事实来源。
@@ -1630,3 +1658,4 @@
 [0.6.15]: https://github.com/SummerSec/DeepSonar/compare/v0.6.14...v0.6.15
 
 [0.6.16]: https://github.com/SummerSec/DeepSonar/compare/v0.6.15...v0.6.16
+[0.6.17]: https://github.com/SummerSec/DeepSonar/compare/v0.6.16...v0.6.17

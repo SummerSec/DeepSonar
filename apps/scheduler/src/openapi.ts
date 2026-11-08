@@ -1090,7 +1090,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/canvases/{id}/messages",
     summary: "向 Hub 或运行节点发送人工消息",
-    description: "message_id 是客户端 UUID 幂等键。无附件只需 tasks:write；attachment_version_ids 非空时还需 assets:read（assets:manage/admin 隐式满足），且只接受同项目 active project-scope 资产。消息先持久化；sendMessage 前确定失败记 failed，sendMessage 已尝试后的不确定结果记 unknown 且不会自动重发。",
+    description: "message_id 是客户端 UUID 幂等键。无附件只需 tasks:write；attachment_version_ids 非空时还需 assets:read（assets:manage/admin 隐式满足），且只接受同项目 active project-scope 资产。消息先持久化；所有 waiting_human 回复在同一事务核对原冻结请求策略和累计额度、暂停、已接受完成及全部效果门；仅有修正根时额外核原期限并建立 resume-frozen 代际，再关闭旧 Attempt、原子撤销旧 Gateway/Control grants 并入队；拒绝返回具体 409 error_code，消息与状态一起回滚。同 message_id 重复提交不建立第二代际。sendMessage 前确定失败记 failed，sendMessage 已尝试后的不确定结果记 unknown 且不会自动重发。",
     scope: "tasks:write",
     tags: ["Tasks"],
     body: {
@@ -1117,7 +1117,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/canvases/{id}/human-nodes/{nodeId}/ignore",
     summary: "忽略未处理的人工介入",
-    description: "将 open 的 human 节点标为 ignored。若对应 Job 仍为 waiting_human，则关闭旧 Attempt 并恢复为 pending，让 Agent 在图上看到忽略决议后继续推进。已忽略的请求幂等返回。",
+    description: "将 open 的 human 节点标为 ignored。若对应 Job 仍为 waiting_human，则关闭旧 Attempt 并恢复为 pending；所有 waiting_human Job 先核原冻结请求策略并通过累计额度、暂停、已接受完成与效果门，仅有修正根时核原期限并建立 resume-frozen 代际，旧运行 grants 与入队原子撤销，拒绝返回具体 409 error_code 且节点和状态一起回滚。已忽略的请求幂等返回；忽略不表示 Agent ACK 或任务完成。",
     scope: "jobs:control",
     tags: ["Tasks"],
   },

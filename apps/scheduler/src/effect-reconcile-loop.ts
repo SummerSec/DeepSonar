@@ -26,6 +26,8 @@ export type EffectReconcileLoopOptions = {
   nextOperationId?: () => string;
   onResult?: (result: ReconcileResult, operationId: string) => void;
   onError?: (error: unknown) => void;
+  /** Existing host cleanup, retried without replaying Agent/model effects. */
+  humanWaitReconcile?: () => Promise<unknown>;
 };
 
 export interface EffectReconcileLoop {
@@ -52,14 +54,18 @@ export function startEffectReconcileLoop(options: EffectReconcileLoopOptions): E
     running = true;
     const operationId = nextOperationId();
     try {
-      const result = await runEffectReconcile(options.db, { action: "apply", operation_id: operationId, limit });
-      options.onResult?.(result, operationId);
+      let result: ReconcileResult | null = null;
+      try {
+        result = await runEffectReconcile(options.db, { action: "apply", operation_id: operationId, limit });
+        options.onResult?.(result, operationId);
+      } catch (error) {
+        options.onError?.(error);
+      }
+      // Independent pass, even if generic effect reconciliation failed. It
+      // uses exact-owner destroy, never an incomplete list as exit evidence.
+      try { await options.humanWaitReconcile?.(); }
+      catch (error) { options.onError?.(error); }
       return result;
-    } catch (error) {
-      // A reconciliation failure must never take the Scheduler down or silently
-      // disappear: it is reported and retried on the next tick.
-      options.onError?.(error);
-      return null;
     } finally {
       running = false;
     }

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { MigrationConnection } from "./migration-runner.js";
 import { DEFAULT_EFFECT_RECONCILE_LIMIT, startEffectReconcileLoop } from "./effect-reconcile-loop.js";
@@ -77,20 +78,47 @@ test("undecided effects are left unknown and never replay anything", async () =>
   }
 });
 
-test("a failing pass is reported and never crashes the loop", async () => {
+test("a failing pass is reported and does not suppress exact human-wait cleanup", async () => {
   const errors: unknown[] = [];
+  let humanPasses = 0;
   const db = Object.assign(async () => [], {
     unsafe: async () => { throw new Error("database is down"); },
   }) as unknown as MigrationConnection;
-  const loop = startEffectReconcileLoop({ db, intervalMs: 60_000, onError: (error) => errors.push(error) });
+  const loop = startEffectReconcileLoop({ db, intervalMs: 60_000, onError: (error) => errors.push(error),
+    humanWaitReconcile: async () => { humanPasses++; },
+  });
   try {
     const result = await loop.runOnce();
     assert.equal(result, null);
     assert.equal(errors.length, 1);
     assert.match(String((errors[0] as Error).message), /database is down/u);
+    assert.equal(humanPasses, 1);
   } finally {
     loop.stop();
   }
+});
+
+test("human cleanup failure is reported and can retry on the next existing pass", async () => {
+  const { db } = fakeConnection([]);
+  const errors: unknown[] = [];
+  let calls = 0;
+  const loop = startEffectReconcileLoop({ db, intervalMs: 60_000, onError: error => errors.push(error),
+    humanWaitReconcile: async () => { if (++calls === 1) throw new Error("synthetic owner unavailable"); },
+  });
+  try {
+    assert.ok(await loop.runOnce()); assert.equal(errors.length, 1);
+    assert.ok(await loop.runOnce()); assert.equal(calls, 2); assert.equal(errors.length, 1);
+    loop.stop(); await loop.runOnce(); assert.equal(calls, 2);
+  } finally { loop.stop(); }
+});
+
+test("boot enables human cleanup only after HTTP can accept worker heartbeats", () => {
+  const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+  assert.match(source, /if \(!humanWaitCleanupReady\) return;/);
+  assert.ok(source.indexOf("humanWaitCleanupReady = true") > source.indexOf("await app.listen("));
+  assert.ok(source.indexOf("void effectReconcile.runOnce()") > source.indexOf("await app.listen("));
+  assert.match(source, /reconcileHumanWaitRuns\(sql, runner, DEFAULT_EFFECT_RECONCILE_LIMIT, humanWaitCleanupCursor\)/);
+  assert.match(source, /humanWaitCleanupCursor = result\.nextJobId/);
 });
 
 test("stop() makes later passes no-ops and the default limit is bounded", async () => {

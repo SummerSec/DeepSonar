@@ -22,7 +22,7 @@ async function load() {
   return await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 }
 
-async function fixture(api = "openai-completions") {
+async function fixture(api = "openai-completions", delegateFailure?: Error) {
   const module = await load();
   const queries: string[] = [];
   const delegates: Array<{ model: any; context: any; options: any }> = [];
@@ -48,6 +48,7 @@ async function fixture(api = "openai-completions") {
   module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: url, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
     async function* (selected: any, context: any, options: any) {
       delegates.push({ model: selected, context, options });
+      if (delegateFailure) throw delegateFailure;
       yield { type: "done", message: { provider: selected.provider, model: selected.id } };
     })(pi);
   hooks.get("session_start")!({}, ctx);
@@ -109,6 +110,66 @@ test("pending settlement polls only allowance; unknown usage and mismatched iden
     }
     assert.equal((await f.request({ apiKey: "synthetic-background-token" }))[0].type, "error");
     assert.equal(f.queries.length, 4); assert.equal(f.delegates.length, 1);
+  } finally { await f.close(); }
+});
+
+test("accepted completion allowance preserves the fixed stop code without generating an SDK request", async () => {
+  const f = await fixture();
+  try {
+    f.replies.push({ status: 409, body: { error: {
+      type: "COMPLETION_ALREADY_ACCEPTED", message: "untrusted provider detail synthetic-secret",
+    } } });
+    const events = await f.request();
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, "error");
+    assert.equal(events[0].error.stopReason, "error");
+    assert.equal(events[0].error.errorMessage, "COMPLETION_ALREADY_ACCEPTED");
+    assert.equal(f.queries.length, 1);
+    assert.equal(f.delegates.length, 0);
+    assert.doesNotMatch(JSON.stringify(events), /synthetic-secret/u);
+
+    f.replies.push({ status: 409, body: { error: { type: "JOB_TOKEN_USAGE_UNKNOWN" } } });
+    assert.equal((await f.request())[0].error.errorMessage, "PI_MAIN_BUDGET_ALLOWANCE_DENIED");
+    assert.equal(f.delegates.length, 0, "a later unknown effect retains its failure semantics");
+    assert.equal((await f.request())[0].type, "done");
+    assert.equal(f.delegates.length, 1, "the completion signal does not persist into later requests");
+  } finally { await f.close(); }
+});
+
+test("allowance errors require the exact completion status and type and never expose untrusted messages", async () => {
+  const f = await fixture();
+  try {
+    for (const [status, type] of [
+      [400, "COMPLETION_ALREADY_ACCEPTED"],
+      [401, "COMPLETION_ALREADY_ACCEPTED"],
+      [429, "COMPLETION_ALREADY_ACCEPTED"],
+      [502, "COMPLETION_ALREADY_ACCEPTED"],
+      [409, "COMPLETION_ALREADY_ACCEPTED_suffix"],
+      [409, "JOB_TOKEN_EXHAUSTED"],
+      [409, "REPAIR_ATTEMPT_CHANGED"],
+      [429, "JOB_REQUEST_EXHAUSTED"],
+      [409, "REPAIR_USAGE_UNKNOWN"],
+      [409, undefined],
+    ] as const) {
+      f.replies.push({ status, body: { error: { type,
+        message: "COMPLETION_ALREADY_ACCEPTED PI_MAIN_BUDGET_COMPLETION_ALREADY_ACCEPTED synthetic-secret",
+      } } });
+      const events = await f.request();
+      assert.equal(events[0].error.errorMessage, "PI_MAIN_BUDGET_ALLOWANCE_DENIED", `${status} ${type}`);
+      assert.doesNotMatch(JSON.stringify(events), /synthetic-secret/u);
+      assert.equal(f.delegates.length, 0);
+    }
+    f.replies.push({ status: 200, body: { error: { type: "COMPLETION_ALREADY_ACCEPTED" } } });
+    assert.equal((await f.request())[0].error.errorMessage, "PI_MAIN_BUDGET_ALLOWANCE_INVALID");
+    assert.equal(f.delegates.length, 0);
+  } finally { await f.close(); }
+});
+
+test("an SDK error message cannot forge the host allowance completion signal", async () => {
+  const f = await fixture("openai-completions", new Error("COMPLETION_ALREADY_ACCEPTED"));
+  try {
+    assert.equal((await f.request())[0].error.errorMessage, "PI_MAIN_BUDGET_REQUEST_FAILED");
+    assert.equal(f.delegates.length, 1);
   } finally { await f.close(); }
 });
 

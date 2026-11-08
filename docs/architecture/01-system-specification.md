@@ -49,9 +49,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须支持任务启动、暂停、继续执行、重试、取消、归档和取消归档，并保留归档任务的 Canvas、Job、Evidence 与 Report 引用；`resume-session` 只能恢复仍可识别的 Job/Attempt 账本或创建受治理的新执行，不得宣称跨进程恢复 CLI/模型会话；归档不得默默物理删除历史真相。
 - **决策来源**：运维操作和审计需要可恢复的历史，取消必须传播到在途执行；跨进程 Session resume 没有当前实现证据，必须与任务级继续执行语义分开。
-- **实现状态**：部分达标；任务归档/取消归档和受限 `resume-session` 入口已实现并保留历史引用，但跨进程 CLI/模型会话恢复不是当前能力；显式硬删除端点仍需按本规范人工区分。#1002 P1-6 只为现有任务 retry 的节点引用外键增加索引，不修改删除事务、外键或项目范围。
+- **实现状态**：部分达标；任务归档/取消归档和受限 `resume-session` 入口已实现并保留历史引用，但跨进程 CLI/模型会话恢复不是当前能力；显式硬删除端点仍需按本规范人工区分。#1002 P1-6 只为现有任务 retry 的节点引用与 Finding 候选级联外键增加完整前缀索引，不修改删除事务、外键或项目范围。
 - **代码入口**：[项目任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[Job 重跑集成测试](../../apps/scheduler/src/job-rerun.integration.test.ts)、[恢复集成测试](../../apps/scheduler/src/recovery-issue186.integration.test.ts)、[schema](../../database/schema.sql)。
-- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`；人工分别验证 archive/unarchive 与 `resume-session`，并核对没有把 Session archive 当作跨进程 resume（入口，未在本任务执行）；#1002 P1-6 的索引前后计划与 HTTP retry 回滚/成功/跨项目隔离回归复用 recovery，基线重建复用 `pnpm ci:unit:migrations`，最终 SHA Actions 待验，不证明现场延迟。
+- **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`；人工分别验证 archive/unarchive 与 `resume-session`，并核对没有把 Session archive 当作跨进程 resume（入口，未在本任务执行）；#1002 P1-6 的节点引用/多 generation 候选级联索引前后计划与 buffer 对照、HTTP retry 回滚/成功/跨项目完整行隔离回归复用 recovery，基线重建复用 `pnpm ci:unit:migrations`，最终 SHA Actions 待验，不证明现场延迟。
 
 ### FR-TASK-006 版本化任务契约与派发前校验
 
@@ -179,7 +179,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：当外部效果无法证明未发生（`effect_pending` / `unknown`，含崩溃、超时、取消后的未证实窗口）时，系统必须将 Attempt/Job 标为不可自动重放路径，通常进入 `orphan`/对账/人工路径，清理 Token、沙箱、画布同步和租约；`replay_policy` 不得被本次结算改宽。
 - **决策来源**：未知效果是事实状态，不是普通 transient error；猜测重放可能重复创建资源或修改目标。
-- **实现状态**：as-built；`effect_pending`/`unknown` 与 `replay_policy=never` 被单独处理并进入清理/对账路径。#899 允许对非 active 历史效果提供受审计单条人工证据，CLI 单条成功与全局残留分开，未核验计数不报零；#1002 P1-9 在同一结清内核新增 admin/项目归属限定 Management 单条入口，精确重试与活动/排队/覆盖拒绝；不扩大重放、恢复预算或维护权限。
+- **实现状态**：as-built；`effect_pending`/`unknown` 与 `replay_policy=never` 被单独处理并进入清理/对账路径。#899 允许对非 active 历史效果提供受审计单条人工证据，CLI 单条成功与全局残留分开，未核验计数不报零；#1002 P1-9 在同一结清内核新增 admin/项目归属限定 Management 单条入口，精确重试与活动/排队/覆盖拒绝；不扩大重放、恢复预算或维护权限。#1012 正常人工等待的 pending agent_run 仅在宿主已确认原 sandbox 消失且同一活动 Attempt/持久 human 事件仍匹配时，先原子撤销旧运行 grants 再结清；等待标签或中断状态不是退出证明，unknown/清理失败/取消与其他效果仍闭锁。
 - **代码入口**：[Attempt 应用](../../apps/scheduler/src/domains/job-attempt/application.ts)、[reconcile](../../apps/scheduler/src/reconcile.ts)、[Effect schema](../../database/schema.sql)、[工作台重试投影](../../apps/web/src)。
 - **验证证据**：`pnpm ci:unit:recovery`、`pnpm ci:integration:recovery`、`pnpm ci:smoke:opensandbox-reconcile`；人工核对 unknown 不提示安全重放；#1002 Management 的真实 HTTP 权限/跨项目/Job、精确重试/竞争/原生锁忙及 unknown 用量/已耗预算不变接 recovery（最终 SHA 待验）；#899 实际 CLI、active 拒绝/内核结算、竞争与 plan gate 的隔离 PostgreSQL 回归见 `pnpm ci:integration:platform-upgrade`，最终 SHA Actions 结果另计。
 
@@ -418,9 +418,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：人工消息必须区分 planned/injected/acknowledged/unknown/failed；`injected` 只表示写入 Agent 输入，ACK 必须来自显式 `ack_human_message` operation，普通文本不得隐式确认。
 - **决策来源**：运输成功不等于模型读取和处理成功，人工介入必须可追踪。
-- **实现状态**：as-built；消息与 ACK 有独立时间戳和审计字段。
+- **实现状态**：as-built；消息与 ACK 有独立时间戳和审计字段。#1012 补齐所有 waiting_human 回复/忽略的共享安全准入；只有修正根存在时追加代际：宿主先以原 sandbox 已消失的清理结果收口同一 Attempt 的正常人工等待 run，不改变未知用量；Canvas → Job 锁内复用原额度、期限、暂停与效果门，核对并保存原冻结请求策略，有修正根时建立 resume-frozen 代际，再关闭旧 Attempt、原子撤销旧 Gateway/Control 凭证和入队；拒绝回滚消息/节点/状态，重复提交不重复代际，不重置历史根或预算。
 - **代码入口**：[human messages](../../apps/scheduler/src/domains/canvas/human-messages.ts)、[schema](../../database/schema.sql)、[Web message tests](../../apps/web/src/human-messages.test.ts)。
-- **验证证据**：`pnpm ci:unit:canvas-facts`、`pnpm ci:unit:web-facts`、`pnpm ci:integration:canvas-facts`。
+- **验证证据**：`pnpm ci:unit:canvas-facts`、`pnpm ci:unit:web-facts`、`pnpm ci:integration:canvas-facts`；`pnpm ci:integration:recovery` 的真实 HTTP 回复/忽略 → 领取/新 owner → Gateway → 完成，以及阻塞无写入回归；最终 SHA Actions 待验。
 
 ### FR-ART-001 Artifact 作为内部写入真相
 
@@ -942,7 +942,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Sandbox resource override 必须不超过平台 ceiling；CPU、memoryMiB、pidsLimit 的合法范围与 server 缺省见[快照限制](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)，并启用 capDropAll/noNewPrivileges。
 - **决策来源**：资源预算和进程隔离是多租户可靠性与安全的共同边界。
-- **实现状态**：as-built；项目只能收紧平台值，未知字段拒绝。
+- **实现状态**：as-built；项目只能收紧平台值，未知字段拒绝。#1002 P2-11 的受管 Docker init 拒绝 unsupported/unknown Engine 声明；不是逐容器强制证明，剩余 D-10 见[资源预检](../OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11)，最终 SHA Actions 待验。
 - **代码入口**：[sandbox limits](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)、[sandbox tests](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.test.ts)、[runtime sandbox](../../packages/runtime-sandbox/src)。
 - **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:dispatch-limits`。
 
@@ -958,9 +958,9 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：所有安全相关配置、权限决定、Job/Attempt 状态、Control 事件、外部效果和设备/镜像动作必须有可查询审计或指标；audit_logs 必须 append-only，指标不得包含秘密或客户原文。
 - **决策来源**：发生故障或争议时必须能区分提案、接受、执行、结算和终态。
-- **实现状态**：as-built；管理面提供 audit/metrics/Job 详情查询。
-- **代码入口**：[audit routes](../../apps/scheduler/src/domains/audit/routes.ts)、[audit implementation](../../apps/scheduler/src/audit.ts)、[metrics](../../apps/scheduler/src/metrics.ts)。
-- **验证证据**：`pnpm ci:unit:authz`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:unit:dashboard-overview`。
+- **实现状态**：as-built；管理面提供 audit/metrics/Job 详情查询。#1002 provision 失败诊断追加到现有审计，关联 Job/Attempt，只保留固定非秘密信号；不证明远端未启动或授予重试。
+- **代码入口**：[audit routes](../../apps/scheduler/src/domains/audit/routes.ts)、[audit implementation](../../apps/scheduler/src/audit.ts)、[metrics](../../apps/scheduler/src/metrics.ts)、[OpenSandbox adapter](../../packages/runtime-sandbox/src/opensandbox.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)。
+- **验证证据**：`pnpm ci:unit:authz`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:unit:dashboard-overview`、`pnpm ci:unit:runtime-sandbox`（诊断脱敏、清理次序、原错误及迟到资源保留）；最终 SHA Actions 待验，现场 execd/并发根因不由替身测试证明。
 
 ### NFR-OBS-002 Evidence stream 可见性与截断说明
 
@@ -998,7 +998,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：新增治理 CLI 必须同时提供 runtime adapter、session archive adapter、Web viewer parser、契约测试和原始归档下载；不完整接入不得作为新 Job 默认值。
 - **决策来源**：只接通启动而没有归档/查看会丢失执行真相。
-- **实现状态**：当前治理 CLI 的 adapter/archive/viewer 已接线，历史只读不扩展新运行时。可选 OM 的 wrapper/RPC 和历史 HTTP preview/download 脱敏已核验；本地实际构建镜像的已安装 canonical Pi/OM RPC、生产内容守卫正负例与适配器回归也已通过。本轮工程验收见[#831 Actions 摘要](<../TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA、其他镜像/平台和发布 registry/catalog 仍另验；场景、身份与分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
+- **实现状态**：当前治理 CLI 的 adapter/archive/viewer 已接线，历史只读不扩展新运行时。#1011 修正 Pi 主请求扩展丢失已接受完成的精确 Gateway 拒绝码及 streaming error 提前关闭：只保留固定码、等待 message_end，由实际持久回执决定原完成结算；未知用量、缺终态与进程失败不放行，新增回放和原生 Pi/OM 最终 SHA Actions 待验。可选 OM 的 wrapper/RPC 和历史 HTTP preview/download 脱敏已核验；本地实际构建镜像的已安装 canonical Pi/OM RPC、生产内容守卫正负例与适配器回归也已通过。本轮工程验收见[#831 Actions 摘要](<../TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)，后续修复 SHA、其他镜像/平台和发布 registry/catalog 仍另验；场景、身份与分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)。
 - **代码入口**：[CLI adapter docs](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[runtime adapters](../../packages/runtime-sandbox/src)、[session viewer](../../apps/web/src/session-viewer)。
 - **验证证据**：`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:web-session-viewer`、`pnpm ci:unit:credential-compatibility` 是既有入口；Session 集成、实际镜像 RPC/guard 与适配器回归见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md)，当前根套件及最终组合 CI 边界见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)。
 
@@ -1064,7 +1064,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Scheduler 必须通过受治理 OpenSandbox/Worker Node adapter 创建、监视、取消和清理 Sandbox；节点注册、heartbeat、endpoint、capacity 和 sandbox lease 必须写入 Worker registry，Scheduler 不得把 Worker 当作第二状态真相。
 - **决策来源**：执行资源可能远程、多副本或短暂不可用，控制面需要可替换 adapter 和持久节点目录。
-- **实现状态**：as-built；节点 catalog 在 Postgres，OpenSandbox key 仅驻留 Scheduler 内存并持久化 fingerprint。
+- **实现状态**：as-built；节点 catalog 在 Postgres，OpenSandbox key 仅驻留 Scheduler 内存并持久化 fingerprint。受管 Docker/Worker 新增相同 Engine 的 init 声明预检（#1002 P2-11）；普通依赖启动 fail closed，不改变注册/Job 控制边界，不认证外部节点逐容器限额。
 - **代码入口**：[Worker registry](../../apps/scheduler/src/domains/worker-nodes/registry.ts)、[OpenSandbox adapter](../../packages/runtime-sandbox/src/opensandbox.ts)、[worker routes](../../apps/scheduler/src/domains/worker-nodes/routes.ts)。
 - **验证证据**：`pnpm ci:unit:runtime-cleanup`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:smoke:opensandbox-api`、`pnpm ci:smoke:opensandbox-dispatch`。
 
