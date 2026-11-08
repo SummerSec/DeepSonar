@@ -176,6 +176,12 @@ Control handler 的错误响应保持稳定 code 和人类可读消息；下游�
 
 Hub `complete` 被现有分析完成门拒绝时，保持 `invalid_payload` / `complete` 路径，通过 `repair.expected` 提供由宿主门结果生成的有界缺失项。自由文本标题、证据正文与内部错误不进入该投影；反馈不是状态锁或效果接受凭据，提交仍须通过当前权限、引用及最终完成门。详见 [C1 边界](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
+## 管理员单条效果结清（#1002 P1-9）
+
+`POST /jobs/{id}/effects/{effectId}/settlement` 属于 Management 而非 Job Control；现有 admin 主体与同项目 Job/Attempt/effect 归属同时成立才能提交单条外部事实，jobs:control 不升级为该权限。机器 body 由[路由严格 Zod](../../apps/scheduler/src/domains/job-control/effect-settlement-routes.ts)与 OpenAPI 维护。重复 operation id 只重读相同规范化提交；变更/覆盖、排队/活动执行或原生锁忙明确409，不转自动重试。
+
+成功只确认 effect 的持久人工见证，不写 usage、预算、恢复根、Job 状态或全局升级许可；历史已结清证据不可改写。字段、鉴权、稳定错误与注意力边界见[部署入口说明](../../deploy/README.md#管理-api-的单条效果结清1002-p1-9)。实际 HTTP/Postgres 回归已接 recovery，路由/权限/OpenAPI 清单随同更新；最终 SHA Actions 待验。
+
 ## 宿主维护升级接口
 
 平台版本发现 API 保持只读，不能触发 Compose 变更。宿主维护控制器使用固定目标、结构计划 hash、generation 和部署绑定推进；风险计划需要明确批准，角色身份清除不是维护许可的隐含动作。目标 schema CLI 以 stdin 接收连接及动作，plan 使用只读事务，apply 只接受归属明确的候选库；返回结构化错误，不输出驱动原始错误或秘密。管理入口在 preparing 或身份不匹配时拒绝业务请求；当前宿主动作包括 `check`、`apply`、`rollback`、`resume-rollback`，风险批准使用 `--approve-plan-hash`，受管清单使用 `--nodes`。`--reset-role-identity` 已接 #758 目标重建，只在明确选择并批准对应 hash 时清角色 CLI 与项目 model，保留全局 model 和历史快照。`resume-rollback` 已接本地回执与维护源代的受管节点恢复；旧源没有维护契约且含远程节点时仍保持隔离。最终组合基线的多节点升级、第二代失败回滚和显式恢复已有隔离演练证据，范围见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)；不等同于 Windows Docker 或真实模型验收。具体参数以 [部署说明](../../deploy/README.md) 为准。[ADR 0008](adr/0008-maintenance-candidate-upgrade.md) 规定了激活未知不得回旧的恢复边界。

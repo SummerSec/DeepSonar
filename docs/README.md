@@ -33,6 +33,8 @@
 
 > **当前稳定性修复（2026-11-04，#871/#873/#874）**：Gateway admission 纯数据库有界重试、SDK error.message 的宿主安全降级 carrier、分候选页独立事务的 Canvas-first 领取与忙锁补槽，以及[跨 Attempt 共享卷生命周期](SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)在已合入主线整合；[完成恢复 v1](REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)使用持久宿主事实、去重 Hub 与严格对账/停止提案。main 616d7a36 工程验收见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验，显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录，正式版本状态另行核对。
 
+> **管理效果结清（#1002 P1-9，2026-11-08）**：[单条入口](../deploy/README.md#管理-api-的单条效果结清1002-p1-9)在既有内核增加 admin/同项目 Job/Attempt 限定的 HTTP 见证，精确重复读原结果、不覆盖旧证据；不补写 unknown 用量、不退还额度、不自动恢复 Job。真实 HTTP/SQL 权限、竞争和预算不变已接 recovery，当前最终 SHA Actions 待验；宿主 CLI 的单条/全局计数边界保留。
+
 > **人工等待效果门（#946，2026-11-06）**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)记录未结清效果/本轮对账进展保留 waiting_human，最终 SQL 覆盖 active/planned 效果，避免进入 human_timeout/终态清理。#957 最终提交的完整 Actions 已通过，核心误判已合入并关闭 #946（2026-11-07 核对）；通知投递计时仍是未交付的独立范围，不冒充已实现。
 
 > **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。

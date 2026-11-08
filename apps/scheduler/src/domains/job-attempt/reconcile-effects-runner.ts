@@ -205,6 +205,7 @@ ORDER BY e.created_at, e.id`;
 export async function settleEffectByOperator(
   db: MigrationConnection,
   input: OperatorSettleInput,
+  actor?: { type: string; id: string | null; name: string },
 ): Promise<{ settled: boolean; effect_id: string; outcome: OperatorSettleOutcome }> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(input.effect_id)) {
     throw new Error("INVALID_EFFECT_ID");
@@ -221,6 +222,7 @@ export async function settleEffectByOperator(
     reconciled_by: "operator-settlement",
     reconcile_operation_id: input.operation_id,
     operator_evidence: input.evidence.trim(),
+    ...(actor ? { operator_actor: actor } : {}),
   });
   // #908 review P1: an effect belonging to a still-active attempt must never be settled
   // from the outside — the kernel still owns that outcome, and settling it would pre-empt

@@ -82,6 +82,12 @@ The 2026-11-01 upgrade preserves Scheduler authority: [connectionConfig](../../p
 
 #1002 P2-11 的受管 Docker init 只读取 OpenSandbox 所用 Engine 的能力声明，不接受模型或 RoleConfig 自报“limits 已强制”。读不到或已声明不支持时阻止依赖启动；socket 只读挂载本身不是 Engine API 权限隔离。该 init 不证明逐容器 enforcement，未受管端点、重启或复用 init 的剩余信任缺口见 [D-10](12-risks-and-tech-debt.md#2-当前实现债务)；原资源隔离要求不因此降级。详见[资源预检](../OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11)。
 
+## 管理员效果见证（#1002 P1-9）
+
+[单条效果结清](../../deploy/README.md#管理-api-的单条效果结清1002-p1-9)只接受现有 admin 主体与服务端推导的同项目/Job/Attempt 归属；Job token、普通 jobs:control、请求体自报 actor/连接/批量目标都不能取得权限。开发模式沿用既有 internal actor 配置，不新增认证旁路。活动/排队执行仍由内核拥有，已有证据不可覆盖；成功原子记录认证账户身份，不证明独立自然人或 Provider 账单真实性。
+
+外部事实的人工见证不是 Gateway 用量凭据或恢复授权。missing/unknown ledger、已耗预算、Repair deadline、执行 fencing 和 replay_policy 继续按原边界拒绝；API 不回写账单、不入队、不执行外部动作。验收包括真实 HTTP 权限、跨项目/Job、竞争/原生锁忙与历史额度不变，最终 SHA Actions 待验。
+
 ## Finding quality trust boundaries (#819, 2026-11-01 merged engineering slice)
 
 [Quality management](<../../apps/scheduler/src/domains/project-finding-research/quality-api.ts>) requires authenticated user-session admin/operator plus admin scope and early same-project ownership. Account identity proves a platform principal, not a distinct natural human; API/bootstrap/internal/Job actors cannot supply independent review authority. Strict protocol/dataset/review bodies reject caller actor/time/pass flags. Raw holdout exposure commits before parsing/limits/admission and survives subsequent rejection; a reused unknown-raw key is a pre-body conflict, not new exposure.

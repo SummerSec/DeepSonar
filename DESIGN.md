@@ -262,6 +262,8 @@ Finding 变为 `confirmed` 后，Scheduler 生成冻结输入的 Finding Report�
 
 ## 7. Job、Attempt 和恢复
 
+#1002 P1-9 的[管理员单条效果见证](deploy/README.md#管理-api-的单条效果结清1002-p1-9)复用现有结清内核与 effect JSON，admin 和同项目/Job/Attempt 归属共同准入，拒绝活动/排队执行和覆盖旧证据。精确重复只读原结果；不自动入队、不扩大 replay policy、不补写 unknown 用量或退还历史预算。它不是维修链恢复或全局排空许可，实际 HTTP/SQL 回归已接 recovery，最终 SHA Actions 待验。
+
 Job 状态为：
 
 ```text
