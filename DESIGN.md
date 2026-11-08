@@ -316,7 +316,7 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 旧库升级不能从 CLI 值猜测种子来源：本地 `db:rebuild` 对版本未知或低于 v60、目标至少 v60 且需复制旧角色身份的库执行身份复核；需要重置时，只有管理员显式 `--reset-role-identity` 才丢弃旧角色 CLI/项目模型并保留全局模型和历史 Job，须有备份或明确保留 staging。宿主维护升级另按目标计划审批身份重置风险。详见[数据库升级说明](database/README.md#v60-角色身份复核757)及[维护升级说明](deploy/README.md)。
 
-#1002 P2-13 的直接数据库重建保存并恢复源 `public` 的有效 ACL 与默认授权，在历史行回填提交之前先恢复对象/列级权限，后续失败也不暴露默认授权读取私有列的窗口；保留仍存在对象的 grant option，不按角色前缀猜测身份或扩大 PUBLIC CREATE；新增对象只使用原默认授权，详见[数据库授权保全](database/README.md#重建授权保全1002-p2-13)。角色身份和受控维护 `runtime_ready` 权限边界不变，最终 SHA Actions 待验。
+#1002 P2-13 的直接数据库重建保存并恢复源 `public` 的有效 ACL 与默认授权，把受控基线创建与对象/列级权限恢复一起提交，提交前失败回滚新对象；不先发布宽默认 TRIGGER 等权限而留下持久 DDL，历史回填后续失败仍不暴露私有列；保留仍存在对象的 grant option，不按角色前缀猜测身份或扩大 PUBLIC CREATE；新增对象只使用原默认授权，详见[数据库授权保全](database/README.md#重建授权保全1002-p2-13)。角色身份和受控维护 `runtime_ready` 权限边界不变，最终 SHA Actions 待验。
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
 

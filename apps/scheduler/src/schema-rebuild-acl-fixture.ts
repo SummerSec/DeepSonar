@@ -19,6 +19,7 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
   const database = `acl_rebuild_${suffix}`;
   const runtime = `acl_runtime_${suffix}"scope`;
   const reader = `acl_reader_${suffix}`;
+  const privateSchema = `acl_private_${suffix}`;
   const adminUrl = new URL(testUrl);
   adminUrl.pathname = "/postgres";
   const admin = postgres(adminUrl.toString(), { max: 1 });
@@ -28,19 +29,47 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
   const readerDb = postgres(targetUrl.toString(), { max: 1, prepare: false });
   const project = randomUUID();
   let observedCopies = 0;
+  let unpublishedChecks = 0;
+  let publishedChecks = 0;
+  const attemptTrigger = async (unpublished: boolean): Promise<void> => {
+    await assert.rejects(readerDb.unsafe(`CREATE TRIGGER acl_private_capture AFTER UPDATE ON public.projects
+      FOR EACH ROW EXECUTE FUNCTION ${quote(privateSchema)}.capture_private()`), (error: unknown) => {
+      if (typeof error !== "object" || error === null || !("code" in error)) return false;
+      return (unpublished ? ["42P01", "42501", "57014"] : ["42501"]).includes(String(error.code));
+    });
+  };
+  const checkNoTriggerOrLeak = async (ownerConnection: MigrationConnection): Promise<void> => {
+    const [triggers] = await ownerConnection<{ count: number }>`SELECT count(*)::int AS count
+      FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace
+      WHERE n.nspname='public' AND t.tgname='acl_private_capture'`;
+    assert.equal(triggers?.count, 0);
+    const [leaks] = await readerDb.unsafe<{ count: number }[]>(`SELECT count(*)::int AS count FROM ${quote(privateSchema)}.leaks`);
+    assert.equal(leaks?.count, 0);
+  };
   const checkReader = async (): Promise<void> => {
     const rows = await readerDb<{ name: string }[]>`SELECT name FROM public.projects`;
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.name, "acl-column-only");
     await assert.rejects(readerDb`SELECT config_json FROM public.projects`, { code: "42501" });
   };
-  const reserveWithCopyCheck = async (failAfterCopy: boolean) => {
+  const reserveWithCopyCheck = async (failAfterCopy: boolean, failBeforeCommit = false) => {
     const session = await db.reserve();
     return new Proxy(session, {
       get(target, property, receiver) {
         if (property !== "unsafe") return Reflect.get(target, property, receiver);
         return async (query: string) => {
+          if (query === "COMMIT" && failBeforeCommit) throw new Error("acl_rebuild_injected_publication_failure");
           const result = await target.unsafe(query);
+          if (query.includes("CREATE TABLE schema_meta")) {
+            // Probe the former baseline-COMMIT window using an independent role.
+            await attemptTrigger(true);
+            unpublishedChecks += 1;
+          }
+          if (query === "COMMIT") {
+            await attemptTrigger(false);
+            await checkNoTriggerOrLeak(target as unknown as MigrationConnection);
+            publishedChecks += 1;
+          }
           if (query.startsWith('INSERT INTO public."projects" ')) {
             const [copied] = await target`SELECT config_json FROM public.projects WHERE id=${project}`;
             assert.deepEqual(copied?.config_json, { private: "acl-old-private-sentinel" });
@@ -75,14 +104,30 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
     }
     // Defaults grant whole-table SELECT to future tables, but the source
     // projects table intentionally exposes only its name column.
-    await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE ${quote(owner.name)} IN SCHEMA public GRANT SELECT ON TABLES TO ${quote(reader)}`);
+    await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE ${quote(owner.name)} IN SCHEMA public GRANT SELECT, TRIGGER ON TABLES TO ${quote(reader)}`);
     await db`INSERT INTO projects (id, name, config_json) VALUES (${project}, 'acl-column-only', '{"private":"acl-old-private-sentinel"}'::jsonb)`;
+    await db.unsafe(`CREATE SCHEMA ${quote(privateSchema)} AUTHORIZATION ${quote(reader)}`);
     await readerDb.unsafe(`SET ROLE ${quote(reader)}`);
+    await readerDb.unsafe("SET statement_timeout = '1s'");
+    await readerDb.unsafe(`CREATE TABLE ${quote(privateSchema)}.leaks (payload jsonb)`);
+    await readerDb.unsafe(`CREATE FUNCTION ${quote(privateSchema)}.capture_private() RETURNS trigger
+      LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+      BEGIN INSERT INTO ${quote(privateSchema)}.leaks VALUES (NEW.config_json); RETURN NEW; END $$`);
+    const [permissions] = await db<{ trigger: boolean; execute: boolean }[]>`SELECT
+      has_table_privilege(${reader}, 'public.projects', 'TRIGGER') AS trigger,
+      has_function_privilege(${reader}, ${`${quote(privateSchema)}.capture_private()`}, 'EXECUTE') AS execute`;
+    assert.deepEqual(permissions, { trigger: false, execute: true });
+    await attemptTrigger(false);
     await checkReader();
     const before = await capturePublicAcl(connection);
     const beforeRoles = await db`SELECT rolname, rolsuper, rolinherit, rolcreaterole, rolcreatedb, rolcanlogin FROM pg_roles WHERE rolname IN (${runtime}, ${reader}) ORDER BY rolname`;
     const schemaFile = path.join(temporary, "schema.sql");
-    await writeFile(schemaFile, `${await readFile(SCHEMA_FILE, "utf8")}\nCREATE TABLE deepsonar_acl_future (id bigserial PRIMARY KEY, value text);\nCREATE FUNCTION deepsonar_acl_future_fn() RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;\n`);
+    const baseline = await readFile(SCHEMA_FILE, "utf8");
+    await writeFile(schemaFile, baseline.replace(/COMMIT;\s*$/, `
+CREATE TABLE deepsonar_acl_future (id bigserial PRIMARY KEY, value text);
+CREATE FUNCTION deepsonar_acl_future_fn() RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
+COMMIT;
+`));
     const plan = await rebuildSchemaOnReservedSession(
       () => db.reserve() as unknown as Promise<MigrationConnection & { release: () => void }>,
       { mode: "plan", force: true, schemaFile, dump: false, terminateScheduler: false },
@@ -95,6 +140,13 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
     );
     assert.equal(result.applied, true);
     assert.equal(observedCopies, 1);
+    assert.equal(unpublishedChecks, 1);
+    assert.equal(publishedChecks, 1);
+    await db`UPDATE projects SET config_json=config_json WHERE id=${project}`;
+    await checkNoTriggerOrLeak(connection);
+    const [futureTrigger] = await db<{ allowed: boolean }[]>`SELECT
+      has_table_privilege(${reader}, 'public.deepsonar_acl_future', 'TRIGGER') AS allowed`;
+    assert.equal(futureTrigger?.allowed, true);
     const after = await capturePublicAcl(connection);
     const grants = normalize(after);
     for (const [object, acl] of normalize(before)) assert.equal(grants.get(object), acl, object);
@@ -137,7 +189,22 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
       { mode: "apply", force: true, schemaFile, dump: false, terminateScheduler: false },
     ), { message: "acl_rebuild_injected_copy_failure" });
     assert.equal(observedCopies, 2);
+    assert.equal(unpublishedChecks, 2);
+    assert.equal(publishedChecks, 2);
     await checkReader();
+    await db`UPDATE projects SET config_json=config_json WHERE id=${project}`;
+    await checkNoTriggerOrLeak(connection);
+    // A failure before publication rolls back all newly created public objects.
+    await assert.rejects(rebuildSchemaOnReservedSession(
+      () => reserveWithCopyCheck(false, true),
+      { mode: "apply", force: true, schemaFile, dump: false, terminateScheduler: false },
+    ), { message: "acl_rebuild_injected_publication_failure" });
+    assert.equal(unpublishedChecks, 3);
+    assert.equal(publishedChecks, 2);
+    assert.equal(observedCopies, 2);
+    const [rolledBack] = await db<{ projects: string | null }[]>`SELECT to_regclass('public.projects')::text AS projects`;
+    assert.equal(rolledBack?.projects, null);
+    await checkNoTriggerOrLeak(connection);
   } finally {
     await readerDb.end();
     await db.end();

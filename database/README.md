@@ -66,11 +66,11 @@ bigserial 列（不信任 `pg_get_serial_sequence`，避免打到随后被丢掉
 再断言一次；Scheduler 启动对已漂移的序列自动 `setval`，对不齐 fail closed。
 ### 重建授权保全（#1002 P2-13）
 
-直接 `db:rebuild` 在移动源表前保存 `public` 的 schema、表/列、序列、函数与类型有效 ACL，以及 schema-local 默认授权。重建 schema 后先恢复 schema/default ACL，再套基线；在任何历史数据回填提交之前，对仍存在的对象恢复原有效权限与 grant option，回填与序列校准后再核对恢复。不能先按较宽默认授权提交历史数据、最后才收紧权限；回填后续失败也不得留下默认授权读取历史私有列的窗口。新增对象使用原已声明的默认授权，删除的对象不获得替代授权。数据库级默认授权不变。未知授权种类在破坏性重建前拒绝。
+直接 `db:rebuild` 在移动源表前保存 `public` 的 schema、表/列、序列、函数与类型有效 ACL，以及 schema-local 默认授权。重建 schema 后先恢复 schema/default ACL；受控基线的单 BEGIN/COMMIT wrapper 在破坏性步骤前验证，执行时由 runner 管理事务，将基线创建、结构校验和原对象/列 ACL 恢复一起提交。仍存在的对象不能以较宽默认权限先对其他连接可见，否则 TRIGGER 等权限可留下撤权后仍存活的 DDL。提交前失败回滚新对象；历史回填与序列校准后仍核对恢复 ACL，后续失败也不得暴露历史私有列。本发布事务不表示源表暂存和整轮历史回填均已事务化。新增对象使用原已声明的默认授权，删除的对象不获得替代授权。数据库级默认授权不变。未知授权种类在破坏性重建前拒绝。
 
 不按角色名前缀推断运行身份，不创建角色、修改 LOGIN/成员关系或扩大权限；尤其不再无条件给 `PUBLIC` 增加 schema CREATE。对象仍由基线重建流程创建，本切片不承诺保留对象 owner 或原 grantor 身份。没有源默认授权的新对象不猜测运行时授权；受控维护升级仍由既有 `runtime_ready` 阶段为已核验的专用 runtime 身份完成目标库授权。
 
-[隔离 PostgreSQL 回归](../apps/scheduler/src/schema-rebuild-acl-fixture.ts)验证只读 plan、运行时 audit identity/新序列写入、默认授权的新表/函数、列级只读和 grant option、拒绝创建表/越权读写以及角色身份不变；另用独立只读连接在历史行提交后、最终授权步骤前核对列级拒绝，并注入后续回填失败检查拒绝仍保持，已接 `pnpm ci:unit:migrations`；最终 SHA Actions 待验，本地与生产数据库未执行。
+[隔离 PostgreSQL 回归](../apps/scheduler/src/schema-rebuild-acl-fixture.ts)验证只读 plan、运行时 audit identity/新序列写入、默认授权的新表/函数、列级只读和 grant option、拒绝创建表/越权读写以及角色身份不变；另用独立受限连接与私有 SECURITY DEFINER 触发函数，在基线发布前后尝试安装历史表触发器，验证拒绝或有界阻塞、无新增触发器和后续写入泄露；注入提交前失败验证新对象回滚，并保留历史行提交后与后续回填失败的列级拒绝检查，已接 `pnpm ci:unit:migrations`；最终 SHA Actions 待验，本地与生产数据库未执行。
 
 `--force` 才允许在已是当前版本、结构未知或仍有活跃 Job
 时继续。这不是 Scheduler 启动时的自动升级，也不是 #34 增量 migration。

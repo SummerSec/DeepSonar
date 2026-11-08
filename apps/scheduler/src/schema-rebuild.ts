@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { MIGRATE_LOCK_ID, parseTableManifest, runMigrations, SCHEMA_FILE, type MigrationConnection } from "./migration-runner.js";
+import { baselineTransactionBody, MIGRATE_LOCK_ID, parseTableManifest, runMigrations, SCHEMA_FILE, type MigrationConnection } from "./migration-runner.js";
 import { assertOwnedSequencesAligned, preparePublicSearchPath, reconcileOwnedSequences } from "./owned-sequences.js";
 import { SCHEMA_VERSION } from "./schema-version.js";
 import { capturePublicAcl, restorePublicSchemaAcl, restorePublicObjectAcl } from "./schema-rebuild-acl.js";
@@ -497,6 +497,8 @@ export async function rebuildSchemaToLatest(
   const targetVersion = options.targetVersion ?? SCHEMA_VERSION;
   const schemaFile = options.schemaFile ?? SCHEMA_FILE;
   const schemaSql = readFileSync(schemaFile, "utf8");
+  // Reject an unsupported transaction wrapper before moving any source table.
+  baselineTransactionBody(schemaSql);
   const warnings: string[] = options.resetRoleIdentity
     ? ["explicit role identity reset: CLI preferences and project models will not be copied; reconfigure after rebuild"] : [];
   const plan = await planSchemaRebuild(db, options);
@@ -552,14 +554,15 @@ export async function rebuildSchemaToLatest(
   const sourceTables = await movePublicTablesToStaging(db);
   await recreatePublicSchema(db);
   await restorePublicSchemaAcl(db, acl);
-  const applied = await runMigrations(db, { schemaFile, targetVersion });
+  // Publish recreated objects and their narrowed ACLs in one transaction;
+  // broad defaults must never authorize persistent DDL on historical objects.
+  const applied = await runMigrations(db, {
+    schemaFile, targetVersion,
+    beforeBaselineCommit: (transaction) => restorePublicObjectAcl(transaction, acl),
+  });
   if (applied.length === 0) {
     throw new Error("fresh baseline was not applied after recreating the public schema");
   }
-
-  // The baseline commits its own transaction. Restore narrowed object/column
-  // grants before any historical rows can be committed under broader defaults.
-  await restorePublicObjectAcl(db, acl);
 
   const targetColumns = await readColumnMap(db, "public");
   const sourceColumns = await readColumnMap(db, REBUILD_STAGING_SCHEMA);
