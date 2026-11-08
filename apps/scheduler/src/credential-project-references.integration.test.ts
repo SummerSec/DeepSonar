@@ -91,17 +91,19 @@ if (testDatabaseUrl) {
       const a = await project("visible A", { enabled_credential_ids: [shared], default_credential_id: shared });
       const b = await project("private B", { enabled_credential_ids: [shared], default_credential_id: shared });
       for (const [index, projectId] of [a, b].entries()) {
-        const jobId = randomUUID(), tokenId = randomUUID();
+        const jobId = randomUUID(), tokenId = randomUUID(), attemptId = randomUUID();
         await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json)
           VALUES(${jobId},${projectId},'scope-history','succeeded',${sql.json({ credential_id: shared })})`;
+        await sql`INSERT INTO job_attempts(id,job_id,attempt_no,status,phase)
+          VALUES(${attemptId},${jobId},1,'succeeded','terminal')`;
         await sql`INSERT INTO job_tokens(id,job_id,project_id,credential_id,token_prefix,token_hash,
           max_requests,request_total_limit,max_tokens,expected_provider,expected_model,expected_route,status,expires_at)
           VALUES(${tokenId},${jobId},${projectId},${shared},${tokenId.slice(0,8)},${tokenId.replaceAll('-','')},
             2,2,100,'openai','model-a','v1/chat/completions','expired',now())`;
         for (let requestNo = 1; requestNo <= (index === 0 ? 2 : 1); requestNo++) {
-          await sql`INSERT INTO job_usage_ledger(job_id,project_id,job_token_id,effect_id,request_no,provider,model,
+          await sql`INSERT INTO job_usage_ledger(job_id,project_id,attempt_id,job_token_id,effect_id,request_no,provider,model,
             input_tokens,output_tokens,total_tokens)
-            VALUES(${jobId},${projectId},${tokenId},${`scope-history.${requestNo}`},${requestNo},'openai','model-a',1,1,2)`;
+            VALUES(${jobId},${projectId},${attemptId},${tokenId},${`scope-history.${requestNo}`},${requestNo},'openai','model-a',1,1,2)`;
         }
       }
       for (const suffix of ["", "/impact"]) {
