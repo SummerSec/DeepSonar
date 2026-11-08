@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 69);
+INSERT INTO schema_meta (id, version) VALUES ('global', 70);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1166,6 +1166,8 @@ CREATE TABLE human_messages (
 );
 CREATE INDEX human_messages_canvas_idx ON human_messages (canvas_id, planned_at DESC, id DESC);
 CREATE INDEX human_messages_target_idx ON human_messages (target_job_id, delivery_status, planned_at);
+CREATE INDEX human_messages_human_node_idx ON human_messages (human_node_id);
+CREATE INDEX human_messages_target_node_idx ON human_messages (target_node_id);
 
 CREATE TABLE human_message_attachments (
   message_id uuid NOT NULL REFERENCES human_messages(id) ON DELETE CASCADE,
@@ -1194,6 +1196,8 @@ CREATE TABLE canvas_edges (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX canvas_edges_canvas_idx ON canvas_edges (canvas_id);
+CREATE INDEX canvas_edges_from_node_idx ON canvas_edges (from_node_id);
+CREATE INDEX canvas_edges_to_node_idx ON canvas_edges (to_node_id);
 
 -- Durable per-canvas L0 projection log.  The projection is captured at write
 -- time, so a later delta never joins mutable node/edge rows and cannot race a

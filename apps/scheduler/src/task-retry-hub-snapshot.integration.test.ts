@@ -133,6 +133,8 @@ if (!testDatabaseUrl) {
         payload: { title: "Pi slash model", content: "Verify the configured model identity", allow_egress: false },
       });
       assert.equal(created.statusCode, 201, created.payload);
+      const { prepareCanvasRetryFkFixture, assertCanvasRetryReferences } = await import("./canvas-retry-fk-fixture.js");
+      const fkFixture = await prepareCanvasRetryFkFixture(sql, canvasId, succeededJobId);
       // A failure after the reset must roll the whole transaction back.
       const beforeReset = [...await sql`SELECT * FROM canvas_nodes WHERE canvas_id=${canvasId} ORDER BY id`];
       await sql.unsafe(`CREATE FUNCTION reject_retry_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -145,9 +147,11 @@ if (!testDatabaseUrl) {
       assert.equal(rolledBack.statusCode, 500, rolledBack.payload);
       assert.deepEqual([...await sql`SELECT * FROM canvas_nodes WHERE canvas_id=${canvasId} ORDER BY id`], beforeReset);
       assert.equal((await sql`SELECT status FROM jobs WHERE id=${succeededJobId}`)[0]?.status, "succeeded");
+      await assertCanvasRetryReferences(sql, fkFixture, false);
       await sql.unsafe("DROP TRIGGER reject_retry_fixture ON jobs; DROP FUNCTION reject_retry_fixture()");
       const retried = await app.inject({ method: "POST", url: `/tasks/${canvasId}/retry` });
       assert.equal(retried.statusCode, 201, retried.payload);
+      await assertCanvasRetryReferences(sql, fkFixture, true);
       const snapshots = await sql`SELECT id,timeout_sec,agent_snapshot_json FROM jobs WHERE project_id = ${projectId}`;
       assert.equal(snapshots.length, 2);
       const { inspectGatewayRequestBudget, ensureGatewayRequestBudget } = await import("./gateway-request-policy.js");
