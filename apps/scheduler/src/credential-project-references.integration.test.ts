@@ -90,6 +90,20 @@ if (testDatabaseUrl) {
       const shared = await credential();
       const a = await project("visible A", { enabled_credential_ids: [shared], default_credential_id: shared });
       const b = await project("private B", { enabled_credential_ids: [shared], default_credential_id: shared });
+      for (const [index, projectId] of [a, b].entries()) {
+        const jobId = randomUUID(), tokenId = randomUUID();
+        await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json)
+          VALUES(${jobId},${projectId},'scope-history','succeeded',${sql.json({ credential_id: shared })})`;
+        await sql`INSERT INTO job_tokens(id,job_id,project_id,credential_id,token_prefix,token_hash,
+          max_requests,request_total_limit,max_tokens,expected_provider,expected_model,expected_route,status,expires_at)
+          VALUES(${tokenId},${jobId},${projectId},${shared},${tokenId.slice(0,8)},${tokenId.replaceAll('-','')},
+            2,2,100,'openai','model-a','v1/chat/completions','expired',now())`;
+        for (let requestNo = 1; requestNo <= (index === 0 ? 2 : 1); requestNo++) {
+          await sql`INSERT INTO job_usage_ledger(job_id,project_id,job_token_id,effect_id,request_no,provider,model,
+            input_tokens,output_tokens,total_tokens)
+            VALUES(${jobId},${projectId},${tokenId},${`scope-history.${requestNo}`},${requestNo},'openai','model-a',1,1,2)`;
+        }
+      }
       for (const suffix of ["", "/impact"]) {
         await t.test(`scoped GET /credentials/:id${suffix} hides other project ids, names and counts`, async () => {
           actor = { type: "api_token", id: null, name: "project A reader", projectId: a, scopes: ["agents:read"] };
@@ -97,6 +111,7 @@ if (testDatabaseUrl) {
           assert.equal(response.statusCode, 200, response.payload);
           const impact = suffix ? response.json() : response.json().impact;
           assert.equal(impact.project_references.count, 1);
+          assert.deepEqual(impact.usage_history, { token_generations: 1, ledger_entries: 2 });
           assert.deepEqual(impact.project_references.items, [{ project_id: a, project_name: "visible A", enabled: true, default: true }]);
           assert.equal(response.payload.includes(b), false);
           assert.equal(response.payload.includes("private B"), false);
@@ -108,6 +123,7 @@ if (testDatabaseUrl) {
       await t.test("global DELETE refuses hidden project references without changing configs or secrets", async () => {
         const detail = await app.inject({ method: "GET", url: `/credentials/${shared}/impact` });
         assert.equal(detail.json().project_references.count, 2);
+        assert.deepEqual(detail.json().usage_history, { token_generations: 2, ledger_entries: 3 });
         const before = await config(b);
         const response = await remove(shared);
         assert.equal(response.statusCode, 409, response.payload);

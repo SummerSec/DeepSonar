@@ -665,7 +665,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：Provider/Git/OCI credential 必须由 Scheduler 加密保存，管理 API 只能返回受控 metadata/配置投影；长期 secret 不得进入 Job snapshot、Sandbox、Canvas、Evidence、日志或 transfer 普通数据。
 - **决策来源**：凭据是内核资产，模型和执行沙箱只应获得短期、最小化的引用。
-- **实现状态**：as-built；ciphertext/nonce/auth_tag 落库，secret 读取与管理响应分离。#1002 P1-7A 删除秘密凭据前撤销全部 Gateway token，仅 revoked 行可脱离凭据；保留历史 token/usage ledger 身份、用量和有限额度，不改写 Job 快照、自动清理项目引用或授权恢复。详见[删除接口](09-interface-specs.md#项目凭据引用保护914-切片)。
+- **实现状态**：as-built；ciphertext/nonce/auth_tag 落库，secret 读取与管理响应分离。#1002 P1-7A 删除秘密凭据前撤销全部 Gateway token，仅 revoked 行可脱离凭据；保留历史 token/usage ledger 身份、用量和有限额度，不改写 Job 快照、自动清理项目引用或授权恢复。impact 的 usage_history 只返回 actor 范围内完整 token 生成与账本引用计数，不暴露内容或因账本多引用重复计 token。详见[删除接口](09-interface-specs.md#项目凭据引用保护914-切片)。
 - **代码入口**：[credentials schema](../../database/schema.sql)、[credential projection](../../apps/scheduler/src/domains/credential/projection.ts)、[secret projection](../../apps/scheduler/src/credential-secret-projection.ts)。
 - **验证证据**：`pnpm ci:unit:credential-compatibility`、`pnpm ci:integration:credential-delete`、`pnpm ci:unit:authz`；#1002 的真实账本删除、各 token 状态、预算不重置与 HTTP 拒绝沿用 credential-delete，精确历史基线重建/PGDMP 恢复接 `pnpm ci:unit:migrations`；最终 SHA Actions 待验。
 

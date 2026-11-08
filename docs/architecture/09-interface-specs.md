@@ -41,7 +41,7 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 ### 项目凭据引用保护（#914 切片）
 
-`GET /credentials/:id` 的 impact 与 `GET /credentials/:id/impact` 只返回 actor 可见项目的 `project_references`；count 是该作用域完整计数，items 按[引用查询](../../apps/scheduler/src/credential-project-references.ts)有界返回。能读取全局凭据不表示能读取其他项目的名称、UUID 或配置关系。DELETE 的完整性判定另查所有项目：仍有 `enabled_credential_ids` 或 `default_credential_id` 引用时返回 `409 CREDENTIAL_PROJECT_REFERENCE` 和修复指引，但拒绝响应仍只展示可见引用。
+`GET /credentials/:id` 的 impact 与 `GET /credentials/:id/impact` 只返回 actor 可见项目的 `project_references`；count 是该作用域完整计数，items 按[引用查询](../../apps/scheduler/src/credential-project-references.ts)有界返回。能读取全局凭据不表示能读取其他项目的名称、UUID 或配置关系。#1002 P1-7 的 `usage_history` 返回 actor 范围内全部状态的 `token_generations` 和 `ledger_entries`，按精确同 Job/项目账本引用计数；多条账本不重复计 token，不返回历史内容或扩大可见范围，见[历史预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)。DELETE 的完整性判定另查所有项目：仍有 `enabled_credential_ids` 或 `default_credential_id` 引用时返回 `409 CREDENTIAL_PROJECT_REFERENCE` 和修复指引，但拒绝响应仍只展示可见引用。
 
 设置 PATCH 在项目 `FOR NO KEY UPDATE` 锁内合并配置，按 UUID 顺序取得与 DELETE 共用的凭据行锁，持有至事务提交；该项目锁保护配置写入，同时允许凭据迁移的外键 `KEY SHARE`，避免 Project/Credential 反向等待。DELETE 不靠锁定扫描时已有的引用项目提供互斥。设置写入重验新增及保留的全部引用是否存在、active、属于全局或当前项目，省略模型字段不绕过；失效返回 `400 provider_credential_allowlist_stale`，配置原样保留。模型/回退仍按缺省账号的配置名单重验；清除或收窄掉缺省账号时清除配对模型，显式提交无账号的模型拒绝。缺少白名单键继续不收紧，显式 `[]` 继续禁止所有账号；不自动删键、替换账号或改写历史 Job。此片复用既有设置和删除反馈，**不代表 #914 完整默认账号 UX 已交付**。
 

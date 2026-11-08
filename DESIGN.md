@@ -312,7 +312,7 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 #914 的 #925 服务端切片已交付[项目凭据引用保护切片](docs/architecture/09-interface-specs.md#项目凭据引用保护914-切片)：impact 按项目 scope 过滤，DELETE 独立拒绝全局尚存引用，设置写入在事务内与删除共用凭据行锁并重验全部引用；保留缺键与显式空白名单语义，不改写历史 Job。默认账号显式选择与修复导航由 #929 补齐；已合入 main 的工程证据见[发布基线](docs/RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，后续 SHA 另验。
 
-#1002 P1-7A 的[凭据删除与历史预算](docs/MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)在原删除事务先撤销全部 Gateway token，再移除秘密凭据；只有 revoked 历史 token 可脱离凭据，token/usage ledger 身份、已用额度和有限上限原样保留。未结束 Job、扫描及项目引用仍阻止删除，不清配置、不改写冻结 Job、不为历史恢复扩大额度；数据库目标与重建验证见[数据架构](docs/architecture/08-data-architecture.md)，最终 SHA Actions 待验。
+#1002 P1-7A 的[凭据删除与历史预算](docs/MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)在原删除事务先撤销全部 Gateway token，再移除秘密凭据；只有 revoked 历史 token 可脱离凭据，token/usage ledger 身份、已用额度和有限上限原样保留。凭据 impact 的 usage_history 只展示 actor 范围内 token 生成与账本引用计数，不暴露历史内容或其他项目统计。未结束 Job、扫描及项目引用仍阻止删除，不清配置、不改写冻结 Job、不为历史恢复扩大额度；数据库目标与重建验证见[数据架构](docs/architecture/08-data-architecture.md)，最终 SHA Actions 待验。
 
 #966 的项目默认模型与任务创建诊断复用现有 settings/RepairFeedback：启用 CLI 不自动替换模型；显式提案 → 项目默认模型 → 全局角色模型的优先级不变。模型候选只取账号已配置名单，预检与 POST 失败在提交区显示冲突与配置导航，按实际项目隔离，不自动重试或改写历史快照。见[接口与注意力成本](docs/architecture/09-interface-specs.md#项目默认模型与创建冲突966)；最终 SHA Actions 待验。
 

@@ -1194,6 +1194,7 @@ export interface ApiToken {
 
 export interface CredentialImpact {
   credential_id: string;
+  usage_history: { token_generations: number; ledger_entries: number };
   role_configs: { count: number; items: Array<Record<string, unknown>> };
   jobs: {
     pending_unclaimed: { count: number; items: Array<Record<string, unknown>> };
