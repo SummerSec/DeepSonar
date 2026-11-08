@@ -78,6 +78,22 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
     dedup: await db`SELECT * FROM event_dedup WHERE job_id=${f.jobId} ORDER BY event_id`,
   });
 
+  const assertScopedCanvas = async (f: Fixture, before: Awaited<ReturnType<typeof state>>, after: Awaited<ReturnType<typeof state>>) => {
+    assert.equal(before.canvas.length, 1); assert.equal(after.canvas.length, 1);
+    // Node projection writes advance the authoritative audit cursor. Every
+    // other Canvas column, including target/convergence and retention floor,
+    // must remain byte-for-byte equal; the journal must name only this Hub.
+    assert.deepEqual(after.canvas[0], { ...before.canvas[0], change_revision: after.canvas[0].change_revision });
+    const owned = before.nodes.filter(node => node.job_id === f.jobId && ["job", "intent"].includes(node.node_type)).map(node => String(node.id));
+    assert.ok(owned.length > 0);
+    const changes = await db`SELECT revision,entity_type,entity_id,op FROM canvas_changes WHERE canvas_id=${f.canvasId}
+      AND revision>${before.canvas[0].change_revision} AND revision<=${after.canvas[0].change_revision} ORDER BY revision`;
+    assert.equal(BigInt(String(after.canvas[0].change_revision)) - BigInt(String(before.canvas[0].change_revision)), BigInt(owned.length * 2));
+    assert.equal(changes.length, owned.length * 2, "kernel stop and Reaper each project only the captured Hub nodes");
+    assert.ok(changes.every(change => change.entity_type === "node" && change.op === "upsert" && owned.includes(change.entity_id)));
+    for (const id of owned) assert.equal(changes.filter(change => change.entity_id === id).length, 2);
+  };
+
   await t.test("real Reaper automatically stops ordinary/directed Hubs without completion, redispatch or invented usage", async () => {
     for (const order of ["ordinary", "target_first", "hub_first"] as const) {
       const prepared = order === "ordinary" ? { hub: await hub(), target: await setup() } : await input.directedHub(order);
@@ -86,7 +102,8 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
         const s = await state(other);
         return { jobs: s.jobs.filter(job => job.id === other.jobId), attempts: s.attempts, effects: s.effects,
           ledger: s.ledger, tokens: s.tokens, grants: s.grants, events: s.events, dedup: s.dedup,
-          canvas: s.canvas, nodes: s.nodes.filter(node => node.job_id !== f.jobId) };
+          canvas: other.canvasId === f.canvasId ? s.canvas.map(({ change_revision: _revision, ...canvas }) => canvas) : s.canvas,
+          nodes: s.nodes.filter(node => node.job_id !== f.jobId) };
       };
       const frozen = await stopObjective(f), targetBefore = await targetState();
       const sandbox = `platform-stop-${randomUUID()}`;
@@ -122,7 +139,7 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
           assert.equal(after.canvas[0].target_json.convergence.paused_reason, "plan_objective_stopped");
           assert.equal(after.nodes.find(node => node.node_type === "root")!.body_json.platform_stop.outcome, "inconclusive");
         } else {
-          assert.deepEqual(after.canvas, before.canvas, "directed stop cannot pause the target Canvas");
+          await assertScopedCanvas(f, before, after);
           assert.deepEqual(after.nodes.filter(node => node.job_id !== f.jobId), before.nodes.filter(node => node.job_id !== f.jobId));
         }
         assert.equal(after.nodes.find(node => node.job_id === f.jobId)!.body_json.platform_stop.outcome, "inconclusive");
@@ -198,7 +215,7 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
       const after = await state(f);
       assert.equal(after.jobs.find(job => job.id === f.jobId)!.status, "failed");
       assert.equal(after.nodes.find(node => node.job_id === f.jobId)!.body_json.platform_stop.outcome, "inconclusive");
-      assert.deepEqual(after.canvas, before.canvas, gate);
+      await assertScopedCanvas(f, before, after);
       assert.deepEqual(after.nodes.filter(node => node.job_id !== f.jobId), before.nodes.filter(node => node.job_id !== f.jobId), gate);
       assert.deepEqual(after.jobs.filter(job => job.id !== f.jobId), before.jobs.filter(job => job.id !== f.jobId), "no peer mutation or Report creation");
     }

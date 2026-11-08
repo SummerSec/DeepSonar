@@ -23,6 +23,8 @@
 
 本分支在现有 Reaper pass 接入 [Hub 停止器](../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)。只扫描同项目/Canvas 的活动 `hub_reason`，在 Canvas → Job → 全部 Attempts → lease 锁内重核最新唯一活动且未取消的执行身份。当前完整 persisted objective 已停止，或内核完成回执次数、已知修正 token / 原冻结 deadline 确已耗尽时，复用 `failExecution` / `settleAttemptTerminal` 和原 token 撤销事务结束本 Hub，在本 Hub 节点持久化 `platform_stop` / `outcome=inconclusive` 和可行动下一步。只有普通 Hub、同 Canvas 无其他非终态 Job 且 root 尚在可运行状态时才投影 Canvas/root 暂停；directed Hub、活动同伴或已进入分析完成/报告的 root 保留共享 Canvas/root 不变。随后走 Reaper 原资源清理，跳过此停止事件的 Plan/Canvas 自动推进，不需模型再提交合法终态提案，也不由本停止事件派发新 Job/Report 或宣称任务完成。分页额度与修正上限只指向上述代码和原回执，不复制可变数字；遍历游标在每批后前进/环回，事务失败保留原事实供后续 pass 重核。
 
+共享 Canvas/root 的不变指业务字段，不冻结过程审计游标：现有 `canvas_nodes_revision_change` 会为当前 Hub 节点投影推进 `change_revision`。隔离回归保持目标、convergence、状态、retention floor 和其他节点严格不变，并核对该 revision 区间的 `canvas_changes` 只能是当前 Hub 节点 upsert，不得夹带 meta/edge/其他 Job 变化；不同 Canvas 的目标仍保持完整行不变。
+
 预算出口只认可原 `mark_job_done` rejected 回执的版本、结果、Job-scoped `completionReceiptId`、同 Job durable dedup 及 event/payload Attempt 归属；未知状态、缺证明或跨 Job 回执不能耗尽当前执行。历史回执跨 Attempt 保留，但必须由原 repair owner/受治理 generation 授权当前 Attempt，不能通过换执行重置或借用预算。
 
 这不是普通 Hub 可借用的 directed recovery 权限：即使当前 Hub 带真实 frozen recovery grant，也只结束该 Hub，不执行 grant 的 target stop/reconcile，不改 target 的快照、回执、效果或预算。失败终态按既有内核规则保留 pending/unknown 为 unknown，资源销毁不是 Provider 用量证据；不补账、不退额度或自动 replay。取消、终态、sandbox/lease 归属不符拒绝；已接受 human/完成回执即使尚未 deferred apply，也不被替换。所有 waiting_human（包括真实业务、授权及高风险等待）保留。不能按 Agent 标签或 reason 文本分类历史人工请求，本切片不声称任意 platform_blocker 或全部原 P0-3 已交付。
