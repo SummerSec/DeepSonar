@@ -116,6 +116,9 @@ test("refused human-wait cleanup never falls back to ordinary destruction", asyn
   assert.equal(transactions, 1); assert.equal(destroys, 0);
   await cleanupDispatcherSandbox(db as never, runner, { jobId: "fixture-job", sandboxId: "fixture-sandbox" });
   assert.equal(transactions, 1); assert.equal(destroys, 0, "missing Attempt does not authorize unfenced wait cleanup");
+  await cleanupDispatcherSandbox(db as never, runner,
+    { jobId: "fixture-job", attemptId: null, sandboxId: "fixture-sandbox" });
+  assert.equal(transactions, 1); assert.equal(destroys, 0, "null Attempt does not authorize unfenced wait cleanup");
 });
 
 test("provision diagnostic uses the durable audit sink without serializing Job env or raw failures", () => {

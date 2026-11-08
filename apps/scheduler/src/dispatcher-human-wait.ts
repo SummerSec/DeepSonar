@@ -8,7 +8,7 @@ import { revokeOldRuntimeGrants } from "./domains/job-control/rerun.js";
 export async function cleanupDispatcherSandbox(
   db: typeof sql,
   runner: Pick<SandboxRunner, "destroy">,
-  input: { jobId: string; attemptId?: string; sandboxId: string },
+  input: { jobId: string; attemptId?: string | null; sandboxId: string },
 ): Promise<void> {
   const [job] = await db`SELECT status FROM jobs WHERE id=${input.jobId}`;
   if (job?.status === "waiting_human") {
