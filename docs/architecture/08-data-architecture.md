@@ -20,6 +20,10 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 [`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前集成版本以该常量与基线一致性为准，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
 
 
+### 直接重建的授权保全（#1002 P2-13）
+
+`db:rebuild` 在移动源表前捕获 `public` 的有效 ACL 与 schema-local 默认授权，恢复原 schema/default 后，基线创建与仍存在的表/列、序列、函数、类型 ACL 恢复在同一发布事务提交，再回填历史数据并核对 ACL；提交前失败回滚新对象。不得先发布带宽默认 TRIGGER 等权限的旧对象，避免撤权后仍存活的触发器；后续回填失败仍不暴露私有数据。源表暂存与整轮回填不因此成为单事务。原 grant option 保留，新增对象只使用原默认授权。没有角色名推断、角色身份修改或无条件 PUBLIC CREATE；对象 owner/grantor 不在本切片的保留承诺内。完整范围、拒绝路径和隔离 Actions 回归见[数据库说明](../../database/README.md#重建授权保全1002-p2-13)。不变更 schema 基线或启动 fail-closed；最终 SHA Actions 待验。
+
 ## OpenSandbox pin 与不可变 Job 快照（IR-001/003）
 
 2026-11-01：本次只升级 [SDK/镜像版本事实](../../packages/runtime-sandbox/src/opensandbox-version.ts)及相应依赖、部署和测试；数据库 schema 不变。新 Job 从当前版本事实冻结 pin，已创建 Job 的 SDK 1.1 pin、镜像、Evidence 与审计仍是历史真相，不自动重写或重新绑定为 1.2。SDK 安装版本与冻结 pin 不一致时 binding fail closed，不以最新默认值补齐旧快照。详见 [独立升级记录](../OPENSANDBOX_1_2_UPGRADE.md)。
@@ -50,7 +54,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及质量协议/观察账本；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。#831 合入的工程基线 `fdb55a01` 已在 [Actions CI](https://github.com/SummerSec/DeepSonar/actions/runs/41298113058) 完成真实 schema67 rebuild、PGDMP 备份/pg_restore 恢复及 Finding-quality PostgreSQL/HTTP/worker 验收；历史本地结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，不能代替后续 SHA 的检查。
 
-保鲜门禁的单处编号核对：当前主线 v70（2026-11-08 核对已合入 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619`，不是已发布编号；#1002 P1-7A 保留已撤销 token 与用量账本，P1-6 增加 Canvas 节点引用索引）。该 SHA 核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功；本机未执行 rebuild、测试、构建或 typecheck，后续发布组合的最终 SHA 必须另验。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。历史绿灯不能代替当前基线及最终提交的工程验收。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
+保鲜门禁的单处编号核对：当前主线 v70（2026-11-08 核对 main `30860441eb8f89cb6db7e35746fbf194feeba45f`，含凭据历史保全、Canvas 引用索引及 stopped Hub 准入；不是已发布编号）。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替发布准备组合及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
 
 ### Canvas 节点引用索引（#1002 P1-6）
 
