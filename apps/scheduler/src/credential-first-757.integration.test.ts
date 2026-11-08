@@ -185,7 +185,7 @@ if (!testDatabaseUrl) {
               payload: { model: "claude-sonnet-4", max_tokens: 1, messages: [{ role: "user", content: "fixture request" }] } });
             assert.equal(response.statusCode, 200, response.payload);
             const [usage] = await sql`SELECT count(*)::int AS entries FROM job_usage_ledger l JOIN job_tokens tok ON tok.id=l.job_token_id
-              WHERE l.job_id=${job.id} AND l.project_id=${projectId} AND tok.credential_id=${credentialId} AND l.status='settled'`;
+              WHERE l.job_id=${job.id} AND l.project_id=${projectId} AND tok.credential_id=${credentialId} AND l.settlement_status='settled'`;
             assert.equal(usage.entries, 1, "execution settles usage against its own frozen account");
             await assert.rejects(() => gateway.mintJobToken({ jobId: String(job.id), projectId,
               credentialId: selected[1-index]!, workload: "main", ttlSec: 3600 }), "another pool account cannot replace this Job's frozen identity");
