@@ -1522,6 +1522,16 @@ const OPS: Op[] = [
   },
   { method: "post", path: "/jobs/{id}/cancel", summary: "取消 job", scope: "jobs:control", tags: ["Jobs"] },
   {
+    method: "post", path: "/jobs/{id}/effects/{effectId}/settlement",
+    summary: "由管理员以单条人工证据结清历史 effect", scope: "admin", tags: ["Jobs"],
+    description: "仅同 Job 的非活动历史 unknown/effect_pending。项目限定 admin 仍受资源归属约束；jobs:control 和 Job token 不授予此权限。同 operation_id、相同规范化 payload 重放原结清结果；同 key 改内容或另 key 覆盖已结清证据返回409。活动/排队 Job 或活动 Attempt 返回409 EFFECT_KERNEL_OWNED，原生结算锁竞争返回409 EFFECT_SETTLEMENT_BUSY。成功仅写 effect 的人工证据与认证主体；不重排 Job、不改 replay_policy、不补写未知用量或退还预算，也不等于维修链已恢复。",
+    body: { type: "object", additionalProperties: false, required: ["outcome", "evidence", "operation_id"], properties: {
+      outcome: { type: "string", enum: ["not_applied", "applied_run_terminated", "delivered"] },
+      evidence: { type: "string", minLength: 8, maxLength: 512, description: "管理员确认结果的书面依据；trim 后校验，不填凭据或 Provider 原文" },
+      operation_id: { type: "string", minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._:-]{1,128}$", description: "同 effect 的稳定操作标识；传输重试保持内容不变" },
+    } },
+  },
+  {
     method: "post",
     path: "/jobs/{id}/resume",
     summary: "使用旧冻结快照重新执行（同 Job、新 Attempt）",

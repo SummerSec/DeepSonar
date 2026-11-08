@@ -78,6 +78,22 @@ Linux 使用 `flock` 和文件/目录 `fsync`；Windows 原生后端使用本地
 
 部署目标身份同样不依赖 `docker context`：`DOCKER_CONTEXT` → `DOCKER_HOST` → `docker info` 报出的 engine id / 主机名，取第一个可用的**真实**身份；三者都没有时升级直接拒绝启动，不用占位符。
 
+### 管理 API 的单条效果结清（#1002 P1-9）
+
+核对基线：2026-11-08。`POST /jobs/{id}/effects/{effectId}/settlement` 在 Management API 上复用下面的单条结清内核，不接受连接参数或批量目标。需要现有 `admin` 主体；项目限定管理员仍只能处理自己的 Job，普通 `jobs:control`、Gateway/Job capability token 不取得这项权限。Body 的严格机器契约以 [路由 Zod](../apps/scheduler/src/domains/job-control/effect-settlement-routes.ts) 和 [OpenAPI](../apps/scheduler/src/openapi.ts) 为准，只包含 `outcome`、有界书面 `evidence` 与稳定 `operation_id`；不要把秘密或 Provider 原文写入依据。
+
+```json
+{"outcome":"applied_run_terminated","evidence":"<管理员依据原宿主回执确认的结果>","operation_id":"operator.1002.1"}
+```
+
+服务端按 Dispatcher → Canvas → Job 取准入锁，重验同 Job/Attempt 的 effect；排队/活动 Job、任何 active Attempt、已结清或非 unknown/effect_pending 的目标都不能被新提案覆盖。原生结算锁忙返回 `409 EFFECT_SETTLEMENT_BUSY`，不持有 Job 锁等待原生写入。首次成功原子保存认证主体于 `settlement_json.operator_actor`，人工依据与 operation id 留在原效果行；审计只复制结构化标识，不复制任意依据正文。
+
+同 effect、同 operation id、相同规范化内容的重试返回原持久结果并标 `replayed=true`；改内容返回 `409 OPERATOR_SETTLEMENT_CONFLICT`，另一 key 覆盖返回 `409 EFFECT_ALREADY_SETTLED`。路径目标不匹配不泄漏另一 Job 的效果；坏输入返回400，缺权限/跨项目拒绝。`GET /jobs/{id}` 仍是效果与用量的读取入口。200 / `effect_status=settled` 只确认这条管理员见证已保存，**不**证明计费已对账、Job 已恢复或全局 backlog 已清空。
+
+该 API 不入队、不执行外部效果、不扩大 replay policy、不修改 Job/Attempt、token 用量/冻结额度、Repair 根/deadline 或 usage ledger。缺失/unknown 用量不能通过人工关闭 effect 变成零，也不会自动获得重跑许可。它不新增页面、通知或自动批量处置；只在需要补充一条外部事实时占用管理员注意力，相同提交重读已存结果而非反复改 key。
+
+隔离 PostgreSQL/真实 HTTP 回归 `job-effect-settlement.integration.test.ts` 已接现有 `pnpm ci:integration:recovery`，覆盖权限/跨项目、活动/排队、精确重试/内容冲突/竞争、原生锁忙、真实 Gateway token 的管理拒绝、已耗额度与 unknown ledger 保持原值。最终 SHA 的完整 Actions 尚待执行；未执行生产人工结清，不宣称现场维修链已恢复。下方 CLI 的独立全局计数/退出契约保持不变，不能把单条 API 结果当作维护升级许可。
+
 ### 未知效果的人工结清（#899）
 
 对账 CLI 的 `apply` 只结清能由平台证据判定的效果。`interrupted` 尝试上的 `agent_run` 在没有正面退出证据时不可自动判定，会让升级计划一直停在 `UNSETTLED_SOURCE_EFFECTS`。此时用一次性人工结清，而不是手改库：

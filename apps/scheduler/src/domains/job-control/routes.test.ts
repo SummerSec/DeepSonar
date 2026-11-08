@@ -2,8 +2,22 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { isPublicJobTypeAllowed } from "./routes.js";
+import { OperatorSettlementBody } from "./effect-settlement-routes.js";
+import { actorHasScope, requiredScopeForRoute } from "../../auth.js";
 
 const enabledRoles = [{ name: "explore" }, { name: "review" }];
+
+test("operator settlement keeps strict single-effect input and admin authority", () => {
+  const body = { outcome: "not_applied", evidence: "  operator inspected original host receipt  ", operation_id: "settle.1002:1" };
+  assert.equal(OperatorSettlementBody.parse(body).evidence, body.evidence.trim());
+  for (const patch of [{ evidence: "short" }, { evidence: "x".repeat(513) }, { outcome: "safe_to_retry" },
+    { operation_id: "new key" }, { connection: { password: "must-not-accept" } }, { job_id: "caller-scope" }]) {
+    assert.equal(OperatorSettlementBody.safeParse({ ...body, ...patch }).success, false);
+  }
+  const scope = requiredScopeForRoute("POST", "/jobs/:id/effects/:effectId/settlement");
+  assert.equal(scope, "admin");
+  assert.equal(actorHasScope({ type: "api_token", id: "token", name: "controller", projectId: null, scopes: ["jobs:control"] }, scope), false);
+});
 
 test("public POST /jobs rejects an ordinary role disabled for the project", () => {
   assert.equal(isPublicJobTypeAllowed("analyze", enabledRoles), false);

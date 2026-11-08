@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
@@ -257,6 +257,8 @@ Research 失败必须显式记录并保留候选 Finding。与 Finding/报告写
 Finding 变为 `confirmed` 后，Scheduler 生成冻结输入的 Finding Report；Canvas 收敛后生成版本化 Task Report。相同输入幂等，输入变化追加版本，生成失败只更新报告行，不改写 Finding 状态。SARIF 和其它外部格式是 Projection，不是内部写入真相。 Task Report 的覆盖门逐项核对精确且唯一的 Finding ID 是否位于正确状态二级章节，标题或“待人工”等词不能代替覆盖。缺项、错栏、重复 ID 或数值口径失真时，从冻结输入生成确定性完整模板，保留全部 Finding ID；模型 `summary` 的[共享 schema 字节上限](packages/shared-types/src/index.ts)不限制最终模板报告，长输入允许模型只提交有界摘要。
 
 ## 7. Job、Attempt 和恢复
+
+#1002 P1-9 的[管理员单条效果见证](deploy/README.md#管理-api-的单条效果结清1002-p1-9)复用现有结清内核与 effect JSON，admin 和同项目/Job/Attempt 归属共同准入，拒绝活动/排队执行和覆盖旧证据。精确重复只读原结果；不自动入队、不扩大 replay policy、不补写 unknown 用量或退还历史预算。它不是维修链恢复或全局排空许可，实际 HTTP/SQL 回归已接 recovery，最终 SHA Actions 待验。
 
 Job 状态为：
 

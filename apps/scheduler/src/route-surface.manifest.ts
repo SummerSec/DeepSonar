@@ -212,6 +212,7 @@ POST /imports/:id/cancel
 POST /imports/:id/preview
 POST /jobs
 POST /jobs/:id/cancel
+POST /jobs/:id/effects/:effectId/settlement
 POST /jobs/:id/resume
 POST /jobs/:id/rerun-current
 POST /platform/claims/pause
@@ -453,6 +454,7 @@ POST /imports/{id}/cancel
 POST /imports/{id}/preview
 POST /jobs
 POST /jobs/{id}/cancel
+POST /jobs/{id}/effects/{effectId}/settlement
 POST /jobs/{id}/rerun-current
 POST /jobs/{id}/resume
 POST /platform/claims/pause

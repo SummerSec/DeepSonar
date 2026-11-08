@@ -242,4 +242,6 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 
 FR-JOB-005 的人工路径复用 `job_attempt_effects`：同一 UPDATE 排除 active Attempt 并只写未结清行；已结清证据不可覆盖，不改变 Attempt 程序计数器或 replay policy。CLI 将本次单条写入结果与独立全局计数分开，计数失败不能宣称清空；字段和退出契约见[部署说明](../../deploy/README.md#未知效果的人工结清899)。隔离 PostgreSQL 回归覆盖真实内核结算和锁竞争，最终 SHA Actions 成功才作为工程验收，未执行生产升级。
 
+#1002 P1-9 的 Management [单条接口](../../deploy/README.md#管理-api-的单条效果结清1002-p1-9)复用同一结清内核，在 Dispatcher → Canvas → Job 锁内重验资源/执行归属，拒绝新的活动/排队目标并对原生效果锁使用有界拒绝。同 key/payload 重读已存结果，不改变 replay policy、Job/Attempt、历史预算或 unknown ledger；认证主体与人工依据保存在原 effect，无新状态机或控制通道。HTTP 权限、竞争和用量不变回归复用现有 recovery CI，当前最终 SHA Actions 待验。
+
 Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freeze，Control Intent 预检与最终 ingestion 均执行；最终事务在 pending Job 公开前冻结 runtime knobs、OM 配额、profile 与 launch。保留原 audit timeout、parent/finding/payload/priority 和图身份，shared assets 仅由既有 materializer 记录一次；冻结或图写入失败回滚整次 ingestion。

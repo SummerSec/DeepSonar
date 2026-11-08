@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -169,6 +169,12 @@ Control handler 的错误响应保持稳定 code 和人类可读消息；下游�
 `submit_hub_decision` 的可修正 `invalid_node_ref` 可返回由当前 Job principal 生成的 `current_state_ref`，仅当 Canvas 存在且 token 已允许 `graph_query`。该链接 GET 只读 operation Schema，需按 `next_action` POST 有界查询；每次查询和重提重新鉴权/校验，不授予新权限，也不提供图版本锁。无权限时停止猜测，详见 [C0 边界](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
 Hub `complete` 被现有分析完成门拒绝时，保持 `invalid_payload` / `complete` 路径，通过 `repair.expected` 提供由宿主门结果生成的有界缺失项。自由文本标题、证据正文与内部错误不进入该投影；反馈不是状态锁或效果接受凭据，提交仍须通过当前权限、引用及最终完成门。详见 [C1 边界](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
+
+## 管理员单条效果结清（#1002 P1-9）
+
+`POST /jobs/{id}/effects/{effectId}/settlement` 属于 Management 而非 Job Control；现有 admin 主体与同项目 Job/Attempt/effect 归属同时成立才能提交单条外部事实，jobs:control 不升级为该权限。机器 body 由[路由严格 Zod](../../apps/scheduler/src/domains/job-control/effect-settlement-routes.ts)与 OpenAPI 维护。重复 operation id 只重读相同规范化提交；变更/覆盖、排队/活动执行或原生锁忙明确409，不转自动重试。
+
+成功只确认 effect 的持久人工见证，不写 usage、预算、恢复根、Job 状态或全局升级许可；历史已结清证据不可改写。字段、鉴权、稳定错误与注意力边界见[部署入口说明](../../deploy/README.md#管理-api-的单条效果结清1002-p1-9)。实际 HTTP/Postgres 回归已接 recovery，路由/权限/OpenAPI 清单随同更新；最终 SHA Actions 待验。
 
 ## 宿主维护升级接口
 
