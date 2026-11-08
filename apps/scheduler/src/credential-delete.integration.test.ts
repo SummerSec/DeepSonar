@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import test from "node:test";
 import postgres from "postgres";
 
@@ -210,17 +210,71 @@ if (!testDatabaseUrl) {
         INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
         VALUES (${historicalJobId}, ${projectId}, ${canvasId}, 'delete_test', 'succeeded',
           ${sql.json({ name: "delete_test", model: "model-a", credential_id: historicalId })})`;
-      await sql`
-        INSERT INTO job_tokens (job_id, project_id, credential_id, token_prefix, token_hash, max_requests, expires_at)
-        VALUES (${historicalJobId}, ${projectId}, ${historicalId}, ${historicalId.slice(0, 8)}, 'hash', 8, now() + interval '1 hour')`;
+      const historicalAttempt = randomUUID();
+      await sql`INSERT INTO job_attempts(id,job_id,attempt_no,status,phase)
+        VALUES(${historicalAttempt},${historicalJobId},1,'succeeded','terminal')`;
+      const tokenIds: string[] = [], plaintexts: string[] = [];
+      for (const [index, status] of ['active', 'expired', 'exhausted', 'revoked'].entries()) {
+        const tokenId = randomUUID(), prefix = tokenId.slice(0, 8);
+        const plaintext = `deepsonarjob_${prefix}_offline-test-secret`;
+        const workload = index % 2 === 0 ? 'main' : 'observational_memory';
+        tokenIds.push(tokenId); plaintexts.push(plaintext);
+        await sql`INSERT INTO job_tokens(id,job_id,project_id,credential_id,token_prefix,token_hash,
+          max_requests,request_total_limit,max_tokens,workload,expected_provider,expected_model,expected_route,
+          used_requests,used_tokens,status,expires_at,revoked_at,revoke_reason)
+          VALUES(${tokenId},${historicalJobId},${projectId},${historicalId},${prefix},
+            ${createHash('sha256').update(plaintext).digest('hex')},${index % 2 === 0 ? 4 : 2},6,100,${workload},
+            'openai','model-a','v1/chat/completions',${index % 2 === 0 ? 2 : 1},15,${status},now()+interval '1 hour',
+            ${status === 'revoked' ? new Date('2026-01-01T00:00:00Z') : null},${status === 'revoked' ? 'job_succeeded' : null})`;
+        await sql`INSERT INTO job_usage_ledger(job_id,project_id,attempt_id,job_token_id,effect_id,request_no,
+          provider,model,input_tokens,output_tokens,total_tokens,cache_read_input_tokens,workload)
+          VALUES(${historicalJobId},${projectId},${historicalAttempt},${tokenId},${`credential.delete.${index}`},
+            ${index + 1},'openai','model-a',10,5,15,3,${workload})`;
+      }
+      const tokenHistory = await sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${historicalJobId} ORDER BY id`;
+      const usageHistory = await sql`SELECT to_jsonb(t) AS row FROM job_usage_ledger t WHERE job_id=${historicalJobId} ORDER BY id`;
+      const { readHistoricalRequestBudget } = await import('./gateway-request-budget.js');
+      const requestHistory = await readHistoricalRequestBudget(sql, historicalJobId, 'main');
+      assert.deepEqual(requestHistory, { totalUsed: 6, workloadUsed: 4, totalLimit: 6, workloadLimit: 4, exhausted: true });
       const historicalDelete = await request("DELETE", `/credentials/${historicalId}`);
       assert.equal(historicalDelete.statusCode, 200, historicalDelete.payload);
       assert.equal(json(historicalDelete).revoked_job_token_count, 1);
       const [jobStill] = await sql`SELECT status, agent_snapshot_json FROM jobs WHERE id = ${historicalJobId}`;
       assert.equal(jobStill?.status, "succeeded");
       assert.equal((jobStill?.agent_snapshot_json as { credential_id: string }).credential_id, historicalId);
-      const [tokenGone] = await sql`SELECT id FROM job_tokens WHERE credential_id = ${historicalId}`;
-      assert.equal(tokenGone, undefined);
+      const [credentialGone] = await sql`SELECT id FROM credentials WHERE id=${historicalId}`;
+      assert.equal(credentialGone, undefined);
+      const retainedTokens = await sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${historicalJobId} ORDER BY id`;
+      assert.equal(retainedTokens.length, tokenHistory.length);
+      for (const [index, retained] of retainedTokens.entries()) {
+        const before = tokenHistory[index].row;
+        assert.deepEqual({ ...retained.row, credential_id: before.credential_id, status: before.status,
+          revoked_at: before.revoked_at, revoke_reason: before.revoke_reason }, before,
+          'deletion must preserve token identity, workload, all used counts and finite ceilings');
+        assert.equal(retained.row.credential_id, null);
+        assert.equal(retained.row.status, 'revoked');
+        assert.ok(retained.row.revoked_at);
+        assert.equal(retained.row.revoke_reason, before.revoke_reason ?? 'credential_deleted');
+        if (before.revoked_at) assert.equal(retained.row.revoked_at, before.revoked_at);
+      }
+      const retainedUsage = await sql`SELECT to_jsonb(t) AS row FROM job_usage_ledger t WHERE job_id=${historicalJobId} ORDER BY id`;
+      assert.deepEqual(retainedUsage, usageHistory, 'ledger rows and token/Attempt/effect references are immutable');
+      assert.deepEqual(await readHistoricalRequestBudget(sql, historicalJobId, 'main'), requestHistory,
+        'credential deletion cannot refresh exhausted Job request quota');
+      const background = await readHistoricalRequestBudget(sql, historicalJobId, 'observational_memory');
+      assert.deepEqual(background, { totalUsed: 6, workloadUsed: 2, totalLimit: 6, workloadLimit: 2, exhausted: true });
+      for (const status of ['active', 'expired', 'exhausted']) {
+        await assert.rejects(sql`UPDATE job_tokens SET status=${status} WHERE id=${tokenIds[0]}`, { code: '23514' });
+      }
+      await assert.rejects(sql`DELETE FROM job_tokens WHERE id=${tokenIds[0]}`, { code: '23503' });
+      for (const plaintext of plaintexts) {
+        const denied = await app.inject({ method: 'POST', url: '/gateway/v1/chat/completions',
+          headers: { authorization: `Bearer ${plaintext}` }, payload: { model: 'model-a', messages: [] } });
+        assert.equal(denied.statusCode, 401, denied.payload);
+      }
+      const repeatDelete = await request('DELETE', `/credentials/${historicalId}`);
+      assert.equal(repeatDelete.statusCode, 404, repeatDelete.payload);
+      assert.deepEqual(await readHistoricalRequestBudget(sql, historicalJobId, 'main'), requestHistory);
 
       const ociId = await insertCredential("oci-account", { kind: "oci_registry", provider: "ghcr.io" });
       const imageId = randomUUID();
