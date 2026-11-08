@@ -132,7 +132,7 @@ export async function createPlanExecutionFixture() {
       prompt: "Read only the authorized Canvas scope and retain a concrete output for the next task.",
       from: [root], depends_on, inputs: [], expected_outputs: [`${id} output`],
     });
-    const proposal = (f: Awaited<ReturnType<typeof fixture>>, tasks: SubmitPlanPayload["plan"]["tasks"] = [task("collect", f.root), task("verify", f.root, ["collect"])], previous?: SubmitPlanPayload["plan"]) => SubmitPlanPayload.parse({
+    const proposal = (f: { hub: string; root: string; objective: Awaited<ReturnType<typeof fixture>>["objective"] }, tasks: SubmitPlanPayload["plan"]["tasks"] = [task("collect", f.root), task("verify", f.root, ["collect"])], previous?: SubmitPlanPayload["plan"]) => SubmitPlanPayload.parse({
       plan: { v: 2, objective_id: f.objective.objective_id, objective_revision: f.objective.revision,
         route_revision: String(BigInt(previous?.route_revision ?? "0") + 1n), goal: f.objective.goal,
         assumptions: [], tasks, completion: f.objective.completion, budget: f.objective.budget, open_questions: [] },
