@@ -84,9 +84,14 @@ if (!testDatabaseUrl) {
       const createdCanvasId = createdTask.json().canvas_id as string;
       const [createdCanvas] = await sql`SELECT target_json FROM canvases WHERE id = ${createdCanvasId}`;
       const { readPersistedPlanObjective } = await import("./domains/plan-protocol/objective.js");
+      const { taskInputSha256 } = await import("./domains/plan-protocol/task-input.js");
       const createdObjective = readPersistedPlanObjective(createdCanvas.target_json);
       assert.ok(createdObjective, "the creation request must persist the user objective");
       assert.equal(createdObjective.revision, "1", "a first objective starts at revision 1");
+      assert.equal(createdObjective.input_sha256, taskInputSha256("Created with an objective", createdCanvas.target_json),
+        "creation must hash the complete persisted target, including frozen protocol and network policy");
+      const [createdRoot] = await sql`SELECT body_json FROM canvas_nodes WHERE canvas_id=${createdCanvasId} AND node_type='root'`;
+      assert.deepEqual(createdRoot.body_json.target, createdCanvas.target_json);
       assert.match(String(createdObjective.goal), /scoped execution evidence/u, createdObjective.goal);
       // The authenticated user owns it, so the PATCH entry can keep revising it with CAS.
       const reviseCreated = await app.inject({
@@ -99,6 +104,15 @@ if (!testDatabaseUrl) {
       assert.equal(reviseCreated.json().plan_objective.revision, "2");
       assert.equal(reviseCreated.json().plan_objective.objective_id, createdObjective.objective_id,
         "the creation and PATCH paths must agree on the objective identity");
+      const [beforeRejectedCreation] = await sql`SELECT count(*)::int AS count FROM canvases WHERE project_id=${projectId}`;
+      const staleCreation = await app.inject({
+        method: "POST", url: `/projects/${projectId}/tasks`, headers,
+        payload: { title: "Invalid initial revision", content: "No existing objective can have revision one", plan_objective: objective("1") },
+      });
+      assert.equal(staleCreation.statusCode, 409, staleCreation.payload);
+      assert.equal(staleCreation.json().error_code, "plan_stale_revision");
+      const [afterRejectedCreation] = await sql`SELECT count(*)::int AS count FROM canvases WHERE project_id=${projectId}`;
+      assert.equal(afterRejectedCreation.count, beforeRejectedCreation.count, "rejected initial CAS creates no Canvas or root");
       // A creation request that omits the objective behaves exactly as before.
       const withoutObjective = await app.inject({
         method: "POST",

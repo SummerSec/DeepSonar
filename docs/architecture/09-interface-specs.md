@@ -231,6 +231,8 @@ FR-FIND-008 增加 `/program-materials` 的登记/读取、单材料读取/撤�
 
 ## Plan v2 目标与路线 CAS（#775）
 
+`POST /projects/:id/tasks` 可携带初始 `plan_objective`（expected revision `null` 或 `0`），复用相同用户 CAS 规则，在 protocol/网络/compose 种子冻结后绑定最终输入 SHA，并与 Canvas/root 同事务持久化；非法初始 revision 不留下画布。既有 Job-scoped 读取仍拒绝输入漂移，详细规则见[用户目标与路线身份](../PLAN_GAP_PROJECTION.md#用户目标与路线身份)。
+
 `PATCH /tasks/:canvasId` 是 Management `tasks:write` 入口，按认证 actor 的项目权限与 Canvas 行锁校验 `plan_objective.expected_revision`；授权用户显式提供 goal、completion 和有限 lifetime budget，响应返回当前 objective/revision。活跃及历史 Job snapshot/Attempt/事件不被编辑；模型不能调用该管理输入改写目标。
 
 Job-scoped `submit_plan` 当前严格要求 `{plan: PlanV2, revision: execution_route}`；`submit_plan_result` 同样只接收 v2。objective/revision、owner、route CAS、Plan SHA 与已派发 task 的字节身份必须匹配；模型只能调整未派发路线，不能重置 lifetime 计数。v1 Plan/Result 只供历史读；普通 HubIntent 走原 handler，不制造新的 v1 `plan_protocol`，不可变 v1 与 `hub_intent_adapter` 审计只作历史解析。接纳 receipt 查询只恢复原响应，不证明执行或语义完成；工程执行投影和操作员完成门分开。机器字段以 [plan.ts](../../packages/shared-types/src/plan.ts)、[objective](../../apps/scheduler/src/domains/plan-protocol/objective.ts)和[任务路由](../../apps/scheduler/src/domains/project-task/routes.ts)为准。
