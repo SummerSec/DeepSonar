@@ -82,6 +82,10 @@ Job 详情、Job 列表及任务画布的单 Job 重跑错误保留原确认操�
 
 本切片不提供猜测资产/版本筛选、关联边或数据完整性承诺。来源提前去重修复、权威特征覆盖率与样本质量、查询规模性能需分别验收；字面文本检索不是语义同一性判断。既有默认无分页 API 窗口仍供其他调用方使用，项目页面不再依赖该窗口。
 
+### Finding 评论的停止目标拒绝（#1002）
+
+`POST /findings/:id/comments` 的 `request_hub`（默认 true）只请求按原准入唤醒，不授予 `run-hub-now` 的 manual 权限。已停止 objective 在 Canvas 锁内、人工节点和 convergence 写入前返回 `hub_queued=false`、`reason=plan_objective_stopped`；评论仍以 201 保存，停止/暂停原因、轮次和预算不变。默认与显式重复请求的真实 HTTP/SQL 回归复用 [Plan stops suite](../../apps/scheduler/src/plan-execution-stops.integration.test.ts)，最终 SHA Actions 待验。
+
 ## Finding 操作员见证身份与强关系接口（#819）
 
 以下八个 Management API 操作在根认证和项目 scope hook 后注册；读接口要求 `findings:read`，身份 source/mapping 写接口要求 `admin`。项目受限主体只能访问自己的 Finding/Canvas；Job capability token 不进入这些 Management API，也不能写入身份登记。完整字段、严格未知字段拒绝、OpenAPI scope 和稳定错误响应以 [relation routes](../../apps/scheduler/src/domains/project-finding-research/relation-routes.ts)、[relation OpenAPI](../../apps/scheduler/src/domains/project-finding-research/relation-openapi.ts)、[`auth.ts`](../../apps/scheduler/src/auth.ts) 和 [shared relation schema](../../apps/scheduler/src/domains/project-finding-research/relation-schemas.ts) 为准。

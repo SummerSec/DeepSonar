@@ -107,9 +107,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Hub 必须在角色 Job 终态后按事件触发下一轮或 Report；Verify 等待证据时必须按证据签名/门禁指纹唤醒，重复无进展达到配置上限时必须记录停止原因并可请求人工，不得静默空转。
 - **决策来源**：事件驱动避免定时轮询，证据未变化时需要明确阻塞而不是无限派发。
-- **实现状态**：as-built；无进展上限见[配置](../../apps/scheduler/src/config.ts)，预算和暂停原因均持久化。
+- **实现状态**：as-built；无进展上限见[配置](../../apps/scheduler/src/config.ts)，预算和暂停原因均持久化。#1002 P0-3 普通自动/idle/非人工 force 唤醒在 Canvas 锁内拒绝已停止 objective 的后继 Hub；不改写历史人工等待或 unknown effect，显式 run-hub-now 与 completion recovery 仍由原准入约束；Finding 评论 request_hub 在已停止 objective 下先返回 plan_objective_stopped，保留评论但不写人工节点或清除暂停原因。
 - **代码入口**：[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Hub 策略](../../apps/scheduler/src/domains/hub-orchestration/policy.ts)、[配置](../../apps/scheduler/src/config.ts)。
-- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:smoke:convergence`。
+- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:smoke:convergence`；#1002 P0-3 的现有 Hub characterization 与 `plan-execution-stops.integration.test.ts` 已接 `ci:unit:bounded-contexts` / `ci:integration:plan-protocol`，最终 SHA Actions 待验。
 
 ### FR-HUB-005 决策必须有可执行理由和提示词
 
