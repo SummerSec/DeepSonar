@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
@@ -32,8 +32,8 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 | `canvas_nodes`、`canvas_edges`、`canvas_changes` | Intent、Fact、Artifact、Finding、Job 等过程图和 revision | 节点/边由拥有域写入；变更日志有可见 floor；Agent 不能提交坐标或任意终态 |
 | `jobs`、`job_attempts` | 逻辑任务和一次执行尝试 | Job 有冻结 `agent_snapshot_json`；一个 Job 同时最多一个 active Attempt |
 | `job_attempt_effects` | provision、agent run、清理等外部效果意图和 settlement | `effect_pending`/`unknown` 保护崩溃恢复；effect id 幂等；未知不得自动重放 |
-| `job_tokens`、`job_capability_tokens` | Gateway workload 凭据与独立 Job-scoped Control 能力 | Gateway 区分 `main` / `observational_memory`、冻结 provider/model/route 及有限分配；终态撤销，凭据不取得管理权限 |
-| `job_usage_ledger` | Gateway 观测用量、workload 归因和结算 | 新记录绑定 `job_token_id`；总量与 memory 用量分开，历史缺失引用保持历史读取，不补造来源 |
+| `job_tokens`、`job_capability_tokens` | Gateway workload 凭据与独立 Job-scoped Control 能力 | Gateway 区分 `main` / `observational_memory`、冻结 provider/model/route 及有限分配；终态撤销。凭据删除先撤销全部 token，再由 `ON DELETE SET NULL` 脱离秘密凭据；只有 revoked token 可无凭据，历史身份、累计用量和有限额度保留 |
+| `job_usage_ledger` | Gateway 观测用量、workload 归因和结算 | 新记录绑定 `job_token_id`；总量与 memory 用量分开，凭据删除不删除 token 或修改账本引用/用量；历史缺失引用保持历史读取，不补造来源 |
 | `events`、`event_dedup`、`job_event_rate_limits` | 语义事件、Job 序列和 durable 限流 | event id、Job sequence 和事件 dedup 约束重复；原始运行流不进入 events |
 | `artifacts`、`artifact_claims`、`artifact_evidence`、`artifact_relations` | 版本化内部写入真相 | claim/evidence polarity 和 relation 类型结构化保存，旧版本可追溯 |
 | `findings`、`finding_verification_rounds` | Finding 处置和 Verify 门 | `verify_status` 与人的 `disposition` 分离；round 保存 eligibility/evidence/rework 状态 |
@@ -50,7 +50,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及质量协议/观察账本；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。#831 合入的工程基线 `fdb55a01` 已在 [Actions CI](https://github.com/SummerSec/DeepSonar/actions/runs/41298113058) 完成真实 schema67 rebuild、PGDMP 备份/pg_restore 恢复及 Finding-quality PostgreSQL/HTTP/worker 验收；历史本地结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，不能代替后续 SHA 的检查。
 
-保鲜门禁的单处编号核对：当前主线 v68（指当前集成目标基线，不声明已合并或已发布；2026-11-07 源码核对，Skill 源候选发布隔离；本次未执行 rebuild、测试、构建或 typecheck，最终 SHA Actions 待验）。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。历史绿灯不能代替 schema68 及最终提交的工程验收。
+保鲜门禁的单处编号核对：当前主线 v69（指当前集成目标基线，不声明已合并或已发布；2026-11-08 源码核对，#1002 P1-7A 保留已撤销 token 与用量账本；本次未执行 rebuild、测试、构建或 typecheck，最终 SHA Actions 待验）。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。历史绿灯不能代替当前基线及最终提交的工程验收。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
 
 ### Report 输入与文件投影（#945）
 

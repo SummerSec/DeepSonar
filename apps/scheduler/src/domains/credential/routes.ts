@@ -894,12 +894,17 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         };
       }
 
+      // Retain ledger provenance and lifetime request/limit history. The credential
+      // FK detaches only revoked rows; no token generation is erased or reactivated.
       const revokedTokens = await tx`
-        UPDATE job_tokens
-        SET status = 'revoked', revoked_at = COALESCE(revoked_at, now()), revoke_reason = 'credential_deleted'
-        WHERE credential_id = ${id} AND status = 'active'
-        RETURNING id`;
-      await tx`DELETE FROM job_tokens WHERE credential_id = ${id}`;
+        WITH previous AS (
+          SELECT id, status FROM job_tokens WHERE credential_id = ${id} FOR UPDATE
+        )
+        UPDATE job_tokens AS token
+        SET status = 'revoked', revoked_at = COALESCE(token.revoked_at, now()),
+          revoke_reason = COALESCE(token.revoke_reason, 'credential_deleted')
+        FROM previous WHERE token.id = previous.id
+        RETURNING token.id, previous.status AS previous_status`;
       const [deleted] = await tx`
         DELETE FROM credentials
         WHERE id = ${id}
@@ -916,7 +921,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         provider: String(existing.provider),
         project_id: existing.project_id ? String(existing.project_id) : null,
         unbound_role_config_count: 0,
-        revoked_job_token_count: revokedTokens.length,
+        revoked_job_token_count: revokedTokens.filter((token) => token.previous_status === "active").length,
         impact,
       };
     });

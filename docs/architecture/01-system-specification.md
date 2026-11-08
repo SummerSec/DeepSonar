@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -17,9 +17,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须允许在活跃项目下创建任务；每次创建必须对应一张 Canvas，并把目标、约束和触发来源写入画布，不得在已归档项目上新建任务或建立绕过 Canvas 的第二任务真相。
 - **决策来源**：Canvas 是 Hub、Job、Fact、Finding 和 Report 的共同边界，项目 scope 需要在创建时确定。
-- **实现状态**：as-built；`canvases` 以 `project_id` 外键保存任务并关联 Job。
+- **实现状态**：as-built；`canvases` 以 `project_id` 外键保存任务并关联 Job。创建时的可选初始 objective 按用户 CAS 校验，输入 SHA 绑定完成 protocol、网络与 compose 种子冻结的最终 title/target，与 root 同事务保存；不自动重绑历史目标。
 - **代码入口**：[task 路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[数据库基线](../../database/schema.sql)、[设计摘要](../../DESIGN.md)。
-- **验证证据**：`pnpm ci:unit:task-intent`、`pnpm ci:integration:task-intent`；人工核对 `POST /projects/{id}/tasks` 的 project scope 和 Canvas 行。
+- **验证证据**：`pnpm ci:unit:task-intent`、`pnpm ci:integration:task-intent`；人工核对 `POST /projects/{id}/tasks` 的 project scope 和 Canvas 行。初始 objective 摘要、CAS 拒绝不建画布、Job-scoped bootstrap 与重放/漂移回归见 `pnpm ci:integration:plan-protocol`；最终 SHA Actions 另核。
 
 ### FR-TASK-002 创建后派发 Hub Job
 
@@ -665,9 +665,9 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：Provider/Git/OCI credential 必须由 Scheduler 加密保存，管理 API 只能返回受控 metadata/配置投影；长期 secret 不得进入 Job snapshot、Sandbox、Canvas、Evidence、日志或 transfer 普通数据。
 - **决策来源**：凭据是内核资产，模型和执行沙箱只应获得短期、最小化的引用。
-- **实现状态**：as-built；ciphertext/nonce/auth_tag 落库，secret 读取与管理响应分离。
+- **实现状态**：as-built；ciphertext/nonce/auth_tag 落库，secret 读取与管理响应分离。#1002 P1-7A 删除秘密凭据前撤销全部 Gateway token，仅 revoked 行可脱离凭据；保留历史 token/usage ledger 身份、用量和有限额度，不改写 Job 快照、自动清理项目引用或授权恢复。详见[删除接口](09-interface-specs.md#项目凭据引用保护914-切片)。
 - **代码入口**：[credentials schema](../../database/schema.sql)、[credential projection](../../apps/scheduler/src/domains/credential/projection.ts)、[secret projection](../../apps/scheduler/src/credential-secret-projection.ts)。
-- **验证证据**：`pnpm ci:unit:credential-compatibility`、`pnpm ci:integration:credential-delete`、`pnpm ci:unit:authz`。
+- **验证证据**：`pnpm ci:unit:credential-compatibility`、`pnpm ci:integration:credential-delete`、`pnpm ci:unit:authz`；#1002 的真实账本删除、各 token 状态、预算不重置与 HTTP 拒绝沿用 credential-delete，精确历史基线重建/PGDMP 恢复接 `pnpm ci:unit:migrations`；最终 SHA Actions 待验。
 
 ### FR-CRED-002 Provider/model catalog 与兼容性
 
@@ -692,7 +692,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Job Gateway token 和 Control capability token 必须具有独立身份、有效期、请求/Token额度和撤销原因；Job 进入任何终态后必须撤销，不得跨 Job 复用。
 - **决策来源**：不同调用面需要不同最小权限，终态后继续访问会形成迟到写入和费用泄露。
-- **实现状态**：as-built；`job_tokens` 与 `job_capability_tokens` 分表维护，Gateway token 以 workload 区分主执行/观测记忆。有限总额跨轮换/撤销 token 聚合，后台 pending/unknown 保守阻断，所有 Job 终态撤销两类 workload token；已有用量与未知效果不因撤销被抹去。终态 model token、Control token、Job 状态和 audit 在同一事务中提交，不另取 Job lock，也不以 best-effort 吞异常。
+- **实现状态**：as-built；`job_tokens` 与 `job_capability_tokens` 分表维护，Gateway token 以 workload 区分主执行/观测记忆。有限总额跨轮换/撤销 token 聚合，后台 pending/unknown 保守阻断，所有 Job 终态撤销两类 workload token；已有用量与未知效果不因撤销被抹去。终态 model token、Control token、Job 状态和 audit 在同一事务中提交，不另取 Job lock，也不以 best-effort 吞异常。#1002 P1-7A 删除凭据保留全部历史 Gateway token 及累计用量/有限上限，只撤销并脱离秘密凭据，不删除账本引用或恢复已用额度；新增 HTTP/PG 与重建回归待最终 SHA Actions。
 - **代码入口**：[Gateway token lifecycle](../../apps/scheduler/src/gateway.ts)、[token revocation transaction](../../apps/scheduler/src/gateway-token-revocation.ts)、[platform token store](../../apps/scheduler/src/domains/platform-api/tokens.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:capability-pack`、`pnpm ci:unit:job-lifecycle`；terminal bootstrap/revocation fixture 12 pass/0 skip，回滚与终态后的实际 HTTP 401 已核验。
 

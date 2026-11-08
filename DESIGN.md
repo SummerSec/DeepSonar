@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
@@ -151,6 +151,8 @@ Gateway 区分总量与 memory 归因，对 pending/unknown 保守记账并在�
 #775 当前新执行只接收 [Plan v2](packages/shared-types/src/plan.ts)；v1 只读保留于不可变审计与报告历史，不能作为新执行输入。objective 内部 `v:1`、`input_sha256`、`status` 与 `updated_at` 只是读取 metadata，不是执行 fallback；提交的 Plan 严格保持 `v:2`。授权用户以 CAS 写入 Canvas objective、完成策略和显式有限预算；模型只能提出与该 objective/revision 精确一致的路线及结果，不能重写目标、判据或重置 lifetime 计数。路线允许在累计任务、轮次、并行与无进展护栏内多轮重规划；已消费的 continue 语义事件以当前 owner/Canvas/项目与 Plan 身份绑定的持久水位去重，回调和重启不再重计，活动/ready 工作延后评估，新事件仍消耗预算，见 [Plan 重建规则](docs/PLAN_GAP_PROJECTION.md#多轮推进重启与停止)。普通自动 Hub 唤醒不复活 `status=stopped` 的 objective；显式人工与受治理恢复仍走原准入，不自动关闭已接受的人工等待。
 
 可执行 PlanTask 复用现有 Hub Intent admission 与 Job/Attempt/effect 路径。依赖就绪须核对当前成功 Attempt、语义来源事件、未被替代的 Artifact、`plan.output` 对期望输出的精确关联，以及宿主实际留存字节/hash；模型自报 done 或 Job 成功本身不够。输出关联是工程关联，不证明语义满足。接纳与 CAS 回执、依赖执行和终止原因均保留持久来源；具体规则见 [ADR 0012](docs/architecture/adr/0012-plan-v2-execution.md)和[运行时视图](docs/architecture/06-runtime-view.md)。
+
+创建任务携带初始 objective 时，输入 SHA 绑定已完成 protocol、网络与 compose 种子冻结的最终 Canvas/root 输入，不需要额外 PATCH；历史目标不会自动重绑，见 [用户目标与路线身份](docs/PLAN_GAP_PROJECTION.md#用户目标与路线身份)。
 
 Hub 只在当前 Job scope 内按需读图：初始 L0/overview 只提供有界 handle；`graph_query(kind=plan_objective)` 独立于已接受 Plan 返回该 Job 可见的 `items[0]` 完整持久化 objective tuple，不提供 selectors、cross-scope 或 wholeGraph。预算或 input hash 不满足时如实失败，不返回可被误当作完整读取的部分 tuple。
 
@@ -305,6 +307,8 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 **凭据先行解析（#757）：** Scheduler 先按项目作用域、active 状态、Provider、模型要求及显式项目白名单形成候选，再从凭据的排他 `agent_cli` 决定运行 CLI。单候选不受项目/全局软偏好误筛；Hub 显式 CLI 是硬约束，冲突仍以 `provider_credential_cli_mismatch` 拒绝。跨 CLI 多候选按项目 `default_agent_cli`、全局 RoleConfig 显式 CLI 消歧；全局种子 `agent_cli=NULL` 表示未指定偏好，用户显式选择 `claude-code` 才是偏好。没有可用偏好且无法唯一解析时返回 `provider_credential_multi_match`；项目默认凭据只在最终候选内选择。readiness 与新 Job 快照复用同一凭据解析函数。项目 RoleConfig 的 `agent_cli` / `model` 已停止写入和暴露并清空，项目运行身份从 Agent 设置声明。CLI 与凭据白名单分别可选收紧，读取不会把当前 active 凭据 ID 自动持久化；显式名单或默认凭据引用删除、停用、不可访问项时返回 `provider_credential_allowlist_stale` 及管理员修复指引，不能静默扩大名单。账号 × CLI 排他、六档并发、密钥隔离、镜像准入及历史 Job 快照不变。
 
 #914 的 #925 服务端切片已交付[项目凭据引用保护切片](docs/architecture/09-interface-specs.md#项目凭据引用保护914-切片)：impact 按项目 scope 过滤，DELETE 独立拒绝全局尚存引用，设置写入在事务内与删除共用凭据行锁并重验全部引用；保留缺键与显式空白名单语义，不改写历史 Job。默认账号显式选择与修复导航由 #929 补齐；已合入 main 的工程证据见[发布基线](docs/RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，后续 SHA 另验。
+
+#1002 P1-7A 的[凭据删除与历史预算](docs/MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)在原删除事务先撤销全部 Gateway token，再移除秘密凭据；只有 revoked 历史 token 可脱离凭据，token/usage ledger 身份、已用额度和有限上限原样保留。未结束 Job、扫描及项目引用仍阻止删除，不清配置、不改写冻结 Job、不为历史恢复扩大额度；数据库目标与重建验证见[数据架构](docs/architecture/08-data-architecture.md)，最终 SHA Actions 待验。
 
 #966 的项目默认模型与任务创建诊断复用现有 settings/RepairFeedback：启用 CLI 不自动替换模型；显式提案 → 项目默认模型 → 全局角色模型的优先级不变。模型候选只取账号已配置名单，预检与 POST 失败在提交区显示冲突与配置导航，按实际项目隔离，不自动重试或改写历史快照。见[接口与注意力成本](docs/architecture/09-interface-specs.md#项目默认模型与创建冲突966)；最终 SHA Actions 待验。
 

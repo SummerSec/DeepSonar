@@ -1,7 +1,7 @@
 # Plan 缺口投影与操作员证据绑定（#775 A）
 
 > 状态：A 的审计可见性与操作员判据绑定可用；B/v1 保留只读历史，新写入/执行仅允许 C/v2。当前实现包含用户目标 CAS、统一 Hub Intent/Job 准入、Job-scoped objective 读取、留存输出依赖门、多轮路线修订和持久停止投影。真实模型与非模型语义质量未验证。
-> 同步日期：2026-11-01
+> 同步日期：2026-11-08
 
 ## 读取与报告
 
@@ -82,6 +82,8 @@ expected_review_sha256: <当前评审依据摘要>
 本节记录当前实现的 v2 语义。上文 B 的“单步”“每 Canvas 至多一次”和“C 尚未启用”均是 B 首片的历史边界；它们不描述 v2 的新执行协议，也不能作为 v2 的兼容输入。
 
 ### 用户目标与路线身份
+
+授权用户也可在 `POST /projects/{id}/tasks` 中声明初始 `plan_objective`。Scheduler 先完成 Finding protocol、网络策略和 compose 种子摘要冻结，再用最终 title/target 计算 objective 输入 SHA，并在同一事务写入 Canvas 与 root；初始 CAS 使用 expected revision `null` 或 `0`，不需要额外 PATCH 修复。后续输入漂移仍拒绝读取或执行，不自动重绑历史 objective，也不排除冻结字段来放宽摘要校验。#1002 的创建、首个 Job-scoped 读取/路线接纳、传输重放、compose 和漂移负例接入 `pnpm ci:integration:plan-protocol`，最终 SHA 的 Actions 结果另核。
 
 授权用户通过 `PATCH /tasks/{canvasId}` 提交严格的 `plan_objective` CAS。服务端在 Canvas 行锁内递增 `objective.revision`，保存目标、CompletionPolicy、生命周期预算、目标输入 SHA 和状态；objective 内部 `v:1` 等字段只作读取 metadata，模型提交的 Plan 严格为 `v:2`，不能把 metadata 当执行 fallback。模型只能提交与当前目标的完整 goal/completion/budget 恒等的 v2 Plan。目标修订不会改写历史 Jobs、Attempts、事件、Artifact 或报告，也不会重置已消耗的任务数、轮数、无进展计数或 unknown-effect 账本。模型不能使用新标题、新 key、`next_goal` 或路线理由弱化用户标准或重置预算。
 
