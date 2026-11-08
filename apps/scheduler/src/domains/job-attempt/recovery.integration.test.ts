@@ -79,8 +79,8 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       maybeDispatchReport: async () => { throw new Error("no automatic report"); },
       settleStalledFinding: async () => { throw new Error("no implicit human verdict"); },
     });
-    const setup = async () => {
-      const projectId = randomUUID(), canvasId = `recovery-${randomUUID()}`, jobId = randomUUID();
+    const setup = async (jobId = randomUUID()) => {
+      const projectId = randomUUID(), canvasId = `recovery-${randomUUID()}`;
       await sql`INSERT INTO projects(id,name) VALUES(${projectId},'completion recovery integration')`;
       await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${projectId},'recovery',
         '{"network_policy":{"allow_egress":false},"content":"integration"}')`;
@@ -168,9 +168,13 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
     };
     const assertCode = (code: string) => (error: unknown) => error instanceof Error && "code" in error && error.code === code;
 
-    await runHubPlatformStopFixtures(t, { db: sql, setup, app, directedHub: async () => {
-      const target = await setup(); await effect(target); await observe(target); assert.equal(await queue(target), true);
+    await runHubPlatformStopFixtures(t, { db: sql, setup, app, directedHub: async order => {
+      // Minimal/maximal UUIDv4 values force both Canvas Job sort orders; the
+      // actual Hub still gets its normal generated ID and frozen grant.
+      const target = await setup(order === "target_first" ? "00000000-0000-4000-8000-000000000000" : "ffffffff-ffff-4fff-bfff-ffffffffffff");
+      await effect(target); await observe(target); assert.equal(await queue(target), true);
       const { hub } = await runHub(target);
+      assert.equal(target.jobId < String(hub.id), order === "target_first");
       const [attempt] = await sql`SELECT id FROM job_attempts WHERE job_id=${String(hub.id)} AND status='active'`;
       return { target, hub: { projectId: target.projectId, canvasId: target.canvasId,
         jobId: String(hub.id), attemptId: String(attempt.id) } };

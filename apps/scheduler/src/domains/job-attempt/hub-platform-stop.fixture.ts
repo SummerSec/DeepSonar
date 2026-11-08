@@ -10,7 +10,7 @@ type Fixture = { projectId: string; canvasId: string; jobId: string; attemptId: 
 /** Controlled provider plus real Reaper/SQL/Control boundary; not an OS restart or vendor-model experiment. */
 export async function runHubPlatformStopFixtures(t: TestContext, input: {
   db: Db; setup: () => Promise<Fixture>; app: FastifyInstance;
-  directedHub: () => Promise<{ hub: Fixture; target: Fixture }>;
+  directedHub: (order: "target_first" | "hub_first") => Promise<{ hub: Fixture; target: Fixture }>;
 }): Promise<void> {
   const { db, setup, app } = input;
   const api = await import("../platform-api/index.js");
@@ -63,8 +63,8 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
   });
 
   await t.test("real Reaper automatically stops ordinary/directed Hubs without completion, redispatch or invented usage", async () => {
-    for (const directed of [false, true]) {
-      const prepared = directed ? await input.directedHub() : { hub: await hub(), target: await setup() };
+    for (const order of ["ordinary", "target_first", "hub_first"] as const) {
+      const prepared = order === "ordinary" ? { hub: await hub(), target: await setup() } : await input.directedHub(order);
       const f = prepared.hub, other = prepared.target;
       const targetState = async () => {
         const s = await state(other);
@@ -93,13 +93,13 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
         const [highWater] = await db`SELECT COALESCE(max(id),0)::text AS cursor FROM events`;
         const result = await reapOnce(String(highWater.cursor)); assert.equal(result.platformStops, 1);
         assert.deepEqual(destroyed, [sandbox]);
-        const after = await state(f);
-        assert.equal(after.jobs[0].status, "failed"); assert.equal(after.jobs[0].error, "plan_objective_stopped");
+        const after = await state(f), stoppedHub = after.jobs.find(job => job.id === f.jobId)!;
+        assert.equal(stoppedHub.status, "failed"); assert.equal(stoppedHub.error, "plan_objective_stopped");
         assert.equal(after.attempts[0].status, "failed");
         assert.ok(after.effects.every(effect => effect.status === "unknown"));
         assert.ok(after.effects.every(effect => effect.replay_policy === "never"));
         assert.deepEqual(after.ledger, before.ledger); assert.deepEqual(after.events, before.events);
-        assert.deepEqual(after.jobs[0].agent_snapshot_json, before.jobs[0].agent_snapshot_json);
+        assert.deepEqual(stoppedHub.agent_snapshot_json, before.jobs.find(job => job.id === f.jobId)!.agent_snapshot_json);
         assert.deepEqual(after.canvas[0].target_json.plan_objective, frozen.plan_objective);
         assert.equal(after.canvas[0].target_json.convergence.paused_reason, "plan_objective_stopped");
         assert.equal(after.nodes.find(node => node.node_type === "root")!.body_json.platform_stop.outcome, "inconclusive");
