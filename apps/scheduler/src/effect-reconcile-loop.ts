@@ -26,6 +26,12 @@ export type EffectReconcileLoopOptions = {
   nextOperationId?: () => string;
   onResult?: (result: ReconcileResult, operationId: string) => void;
   onError?: (error: unknown) => void;
+  /**
+   * Host-side compensation for `waiting_human` runs whose destroy succeeded but
+   * whose settlement commit was lost. Kept out of `runEffectReconcile`, which by
+   * design excludes active Attempts; replay still requires provider confirmation.
+   */
+  humanWaitReconcile?: () => Promise<unknown>;
 };
 
 export interface EffectReconcileLoop {
@@ -54,6 +60,13 @@ export function startEffectReconcileLoop(options: EffectReconcileLoopOptions): E
     try {
       const result = await runEffectReconcile(options.db, { action: "apply", operation_id: operationId, limit });
       options.onResult?.(result, operationId);
+      // Independent pass: a lost-commit compensation failure must not hide the
+      // primary result or stop the next tick. The generic reconciler keeps its
+      // active-Attempt exclusion; replay has its own provider-backed gate.
+      if (options.humanWaitReconcile) {
+        try { await options.humanWaitReconcile(); }
+        catch (error) { options.onError?.(error); }
+      }
       return result;
     } catch (error) {
       // A reconciliation failure must never take the Scheduler down or silently

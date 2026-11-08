@@ -11,8 +11,15 @@ export async function readRepairRequeueAdmission(db: typeof sql, jobId: string) 
   const [job] = await db`SELECT j.started_at,j.timeout_sec,j.agent_snapshot_json,c.target_json FROM jobs j
     LEFT JOIN canvases c ON c.id=j.canvas_id WHERE j.id=${jobId}`;
   if (canvasExecutionIsPaused(job?.target_json)) return deny("REPAIR_PAUSED", "任务已暂停；恢复修复前需由操作员解除暂停。");
-  const [effects] = await db`SELECT id FROM job_attempt_effects WHERE job_id=${jobId} AND status<>'settled' LIMIT 1`;
-  if (effects) return deny("REPAIR_EFFECT_UNRESOLVED", "旧执行仍有未结算或未知效果；先对账并确认旧执行退出，不能创建新修复代际。");
+  // Job-wide gate is intentional: an unknown or foreign effect must never become
+  // safe just because one human wait was interrupted. Only make the refusal
+  // diagnosable; do not narrow the WHERE clause to a single attempt or effect kind.
+  const [unresolved] = await db`SELECT id,attempt_id,effect_id,effect_kind,status
+    FROM job_attempt_effects WHERE job_id=${jobId} AND status<>'settled' ORDER BY id LIMIT 1`;
+  if (unresolved) {
+    const effect = `${String(unresolved.effect_kind ?? "unknown")}:${String(unresolved.effect_id ?? "unknown")} (status=${String(unresolved.status ?? "unknown")})`.slice(0, 160);
+    return deny("REPAIR_EFFECT_UNRESOLVED", `旧执行仍有未结算或未知效果（${effect}）；先对账并确认旧执行退出，不能创建新修复代际。`);
+  }
   const [requests] = await db`SELECT COALESCE(SUM(used_requests),0) AS used,
     COALESCE(SUM(used_requests) FILTER (WHERE workload='main'),0) AS main_used,
     MIN(request_total_limit) FILTER (WHERE request_total_limit>0) AS total_cap,

@@ -11,6 +11,8 @@ import { drainInFlight, kickDispatcher, startDispatcher } from "./dispatcher.js"
 import { startReaper } from "./reaper.js";
 import { reconcileOnBoot } from "./reconcile.js";
 import { startEffectReconcileLoop } from "./effect-reconcile-loop.js";
+import { reconcileHumanWaitRuns } from "./dispatcher-human-wait.js";
+import { runner } from "./runtime.js";
 import { registerRoutes } from "./routes.js";
 import { startTransferWorker } from "./transfer/worker.js";
 import {
@@ -150,6 +152,7 @@ async function main() {
   // #874：unknown 外部效果在运行期必须有自动对账入口，不能只依赖升级期的人工 CLI。
   const effectReconcile = startEffectReconcileLoop({
     db: sql as unknown as Parameters<typeof startEffectReconcileLoop>[0]["db"],
+    humanWaitReconcile: () => reconcileHumanWaitRuns(sql, runner),
     onResult: (result, operationId) => {
       if (result.applied === 0 && result.remaining_unknown === 0) return;
       console.log(
