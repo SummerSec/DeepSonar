@@ -21,7 +21,7 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 69);
+  assert.equal(SCHEMA_VERSION, 70);
   assert.doesNotMatch(body, /plane_project_id|plane_issue_id/);
   const transferExport = await readFile(new URL("./transfer/export.ts", import.meta.url), "utf8");
   const transferImport = await readFile(new URL("./transfer/import.ts", import.meta.url), "utf8");
@@ -77,6 +77,12 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   assert.match(body, /CREATE TABLE job_usage_ledger\s*\(/i);
   assert.match(body, /job_capability_tokens[\s\S]+operation_ids\s+text\[\]/i);
   assert.match(body, /job_capability_tokens[\s\S]+expires_at\s+timestamptz/i);
+  for (const [table, column, index] of [
+    ["canvas_edges", "from_node_id", "canvas_edges_from_node_idx"],
+    ["canvas_edges", "to_node_id", "canvas_edges_to_node_idx"],
+    ["human_messages", "human_node_id", "human_messages_human_node_idx"],
+    ["human_messages", "target_node_id", "human_messages_target_node_idx"],
+  ]) assert.ok(body.includes(`CREATE INDEX ${index} ON ${table} (${column});`));
   const manifest = parseTableManifest(body);
   assert.equal(manifest.has("schema_meta"), true);
   assert.equal(manifest.has("projects"), true);
