@@ -166,7 +166,7 @@ Gateway 请求额度跨 token/Attempt 累计，含撤销和过期 token；普通
 
 用量额度采用显式配置：普通请求次数、修正 token、验证轮数、图查询累计调用/字节和 LSP 调用未配置时不限，显式正数才限制。非法配置拒绝，已有数据库配置与冻结历史不迁移。协议、权限、租约、资源容量和无进展保护独立保留。完整分类见 [用量限制](docs/USAGE_LIMITS.md)。
 
-#1002 P0-3 的本分支补充由现有 Reaper 对当前内核证明的 stopped objective / 完成修正次数、已知 token、原 deadline 耗尽提供活动 Hub 非成功出口；只结束本 Hub、沿用原清理，不要求模型再找合法完成提案，不借 directed grant 操作 target，不把销毁或 unknown 用量当作成功。accepted human/完成及人工等待保留，原节点记录固定原因/inconclusive/下一步；不按模型标签分类历史业务请求。边界与注意力成本见[生命周期](docs/AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)，最终 SHA Actions 待验；此切片不等于任意 platform_blocker 或原 P0-3 全部完成。
+#1002 P0-3 的本分支补充由现有 Reaper 对当前内核证明的 stopped objective / 完成修正次数、已知 token、原 deadline 耗尽提供活动 Hub 非成功出口；只结束本 Hub、沿用原清理，不要求模型再找合法完成提案，不借 directed grant 操作 target，不把销毁或 unknown 用量当作成功。accepted human/完成及人工等待保留，原 Hub 节点记录固定原因/inconclusive/下一步；预算仅认可原 kernel 回执版本/拒绝结果、Job-scoped ID、同 Job dedup/Attempt 与原 repair owner 证明。directed Hub、活动同伴或报告阶段保留共享 Canvas/root，只有普通无同伴且 root 可运行时才投影整体暂停；该停止事件不自动推进 Plan/Canvas。不按模型标签分类历史业务请求。边界与注意力成本见[生命周期](docs/AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)，最终 SHA Actions 待验；此切片不等于任意 platform_blocker 或原 P0-3 全部完成。
 
 ### 4.3 失败反馈与修正
 

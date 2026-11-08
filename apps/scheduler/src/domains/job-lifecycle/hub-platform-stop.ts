@@ -3,7 +3,7 @@ import { patchCanvasConvergence } from "../../core.js";
 import { revokeJobTokensInTransaction } from "../../gateway-token-revocation.js";
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { settleAttemptTerminal } from "../job-attempt/application.js";
-import { COMPLETION_REPAIR_LIMIT } from "../event-ingestion/completion-receipt.js";
+import { COMPLETION_REPAIR_LIMIT, completionReceiptId } from "../event-ingestion/completion-receipt.js";
 import { readRepairTokenBudget } from "../event-ingestion/repair-token-budget.js";
 import { createSqlJobLifecycleApplication } from "./application.js";
 import { readPersistedPlanObjective } from "../plan-protocol/objective.js";
@@ -13,11 +13,29 @@ type StopCode = "plan_objective_stopped" | "completion_repair_exhausted" | "repa
 /** Kernel facts only: labels and model reasons cannot authorize a stop. */
 async function readStopCode(db: typeof sql, jobId: string, attemptId: string, target: Record<string, unknown>): Promise<StopCode | null> {
   if (readPersistedPlanObjective(target)?.status === "stopped") return "plan_objective_stopped";
-  const [history] = await db`SELECT count(*)::int AS count FROM events WHERE job_id=${jobId}
-    AND type='control_receipt' AND payload_json->>'operation'='mark_job_done'`;
-  if (history.count >= COMPLETION_REPAIR_LIMIT) return "completion_repair_exhausted";
+  const history = await db`SELECT e.event_id,e.attempt_id,e.payload_json,a.job_id AS attempt_job_id,d.job_id AS dedup_job_id
+    FROM events e LEFT JOIN job_attempts a ON a.id=e.attempt_id LEFT JOIN event_dedup d ON d.event_id=e.event_id
+    WHERE e.job_id=${jobId} AND e.type='control_receipt' AND e.payload_json->>'operation'='mark_job_done'
+    ORDER BY e.job_seq LIMIT ${COMPLETION_REPAIR_LIMIT + 1}`;
+  // Validate the existing kernel receipt identity and durable dedup/Attempt
+  // ownership, not arbitrary control_receipt-shaped text. Historical Attempts
+  // remain in the count; the original repair owner below must authorize this
+  // active Attempt, so switching executions cannot reset or steal the budget.
+  for (const event of history) {
+    const receipt = event.payload_json;
+    if (receipt?.v !== 1 || receipt.status !== "rejected" || receipt.operation !== "mark_job_done"
+      || typeof receipt.idempotency_key !== "string" || !receipt.idempotency_key
+      || !Number.isSafeInteger(receipt.proposal_revision) || receipt.proposal_revision < 0
+      || !/^[a-f0-9]{64}$/u.test(String(receipt.input_digest)) || !/^[a-f0-9]{64}$/u.test(String(receipt.snapshot_digest))
+      || receipt.attempt_id !== event.attempt_id || event.attempt_job_id !== jobId || event.dedup_job_id !== jobId
+      || event.event_id !== completionReceiptId(jobId, receipt.idempotency_key)
+      || !Number.isInteger(receipt.result?.statusCode) || receipt.result.statusCode < 400 || receipt.result.statusCode > 599
+      || receipt.result?.body?.accepted !== false) return null;
+  }
+  if (!history.length) return null;
   const budget = await readRepairTokenBudget(db, jobId);
-  if (!budget || budget.attempt_id !== attemptId) return null;
+  if (!budget || budget.attempt_id !== attemptId || budget.receipt_ref !== history[0].event_id) return null;
+  if (history.length >= COMPLETION_REPAIR_LIMIT) return "completion_repair_exhausted";
   if (budget.deadline && Date.parse(budget.deadline) <= Date.now()) return "repair_deadline_exhausted";
   return budget.usage_status === "known" && budget.remaining_tokens === 0 ? "repair_token_exhausted" : null;
 }
@@ -74,15 +92,22 @@ export async function stopPlatformBlockedHubs(input: {
         await settleAttemptTerminal(tx, String(candidate.id), "failed", { reason: code, authority: "scheduler" }, code);
         await revokeJobTokensInTransaction(tx, String(candidate.id), code);
         await revokeJobCapabilityTokens(String(candidate.id), code, tx);
-        await patchCanvasConvergence(tx, String(candidate.canvas_id), {
-          hub_paused: true, auto_stopped: true, paused_reason: code, paused_at: new Date().toISOString(),
-        });
         const stop = { authority: "scheduler", code, outcome: "inconclusive", job_id: String(candidate.id), attempt_id: attemptId,
           next_action: code === "plan_objective_stopped" ? "review_objective" : "review_frozen_repair_budget_and_receipts" };
-        await tx`UPDATE canvas_nodes SET body_json=body_json || ${tx.json({ platform_stop: stop })},updated_at=now()
-          WHERE canvas_id=${candidate.canvas_id} AND node_type='root'`;
+        const [root] = await tx`SELECT id,status FROM canvas_nodes WHERE canvas_id=${candidate.canvas_id} AND node_type='root' FOR UPDATE`;
+        const others = await tx`SELECT id FROM jobs WHERE canvas_id=${candidate.canvas_id} AND id<>${candidate.id}
+          AND status IN ('pending','claimed','provisioning','running','waiting_human') LIMIT 1`;
+        // A directed Hub owns only its execution, not the target's shared
+        // Canvas. A peer or reporting root also prevents whole-task projection.
+        if (job.payload_json?.trigger?.kind !== "completion_recovery" && !others.length
+          && root && ["open", "pending", "running", "active"].includes(String(root.status))) {
+          await patchCanvasConvergence(tx, String(candidate.canvas_id), {
+            hub_paused: true, auto_stopped: true, paused_reason: code, paused_at: new Date().toISOString(),
+          });
+          await tx`UPDATE canvas_nodes SET body_json=body_json || ${tx.json({ platform_stop: stop })},updated_at=now() WHERE id=${root.id}`;
+        }
         await tx`UPDATE canvas_nodes SET status='failed',body_json=body_json || ${tx.json({ platform_stop: stop })},updated_at=now()
-          WHERE job_id=${candidate.id} AND node_type IN ('job','intent')`;
+          WHERE canvas_id=${candidate.canvas_id} AND job_id=${candidate.id} AND node_type IN ('job','intent')`;
         return { ...job, ...stopped, status: "failed", error: code };
       });
       if (stopped) stoppedJobs.push(stopped);

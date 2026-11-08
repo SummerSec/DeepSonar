@@ -11,7 +11,7 @@ DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备�
 
 ## Kernel 门禁不等于模型分类（#1002 P0-3）
 
-[Reaper Hub 停止器](../../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)只使用当前同项目 Canvas、最新唯一活动/未取消 Attempt、完整 stopped objective 及原完成回执/已知修正用量/冻结期限；锁内重核 sandbox/lease 绑定。只停止本 Hub，不借 directed grant 操作 target，不改历史快照/额度/回执或其他效果；pending/unknown 仍按既有失败语义保留 unknown，销毁不是用量证据。accepted human/完成与人工等待不替换，Agent 的 platform_blocker/business_decision 标签或 reason 不能取得停止授权。详见[生命周期](../AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)，最终 Actions 待验，任意历史人工请求的自动分类未交付。
+[Reaper Hub 停止器](../../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)只使用当前同项目 Canvas、最新唯一活动/未取消 Attempt、完整 stopped objective 及原完成回执/已知修正用量/冻结期限；锁内重核 sandbox/lease 绑定。预算证明校验原回执版本/拒绝结果、Job-scoped ID、durable dedup 与 event/payload Attempt 归属，历史计数保留但原 repair owner 必须授权当前执行。只停止本 Hub；directed Hub、活动同伴和报告阶段共享 Canvas/root 不暂停或改写，停止事件不触发 Plan/Canvas 自动推进。普通无同伴且可运行 root 才允许整体暂停投影。不借 directed grant 操作 target，不改历史快照/额度/回执或其他效果；pending/unknown 仍按既有失败语义保留 unknown，销毁不是用量证据。accepted human/完成与人工等待不替换，Agent 的 platform_blocker/business_decision 标签或 reason 不能取得停止授权。详见[生命周期](../AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)，最终 Actions 待验，任意历史人工请求的自动分类未交付。
 
 ## 信任边界图
 

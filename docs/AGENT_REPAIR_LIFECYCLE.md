@@ -21,11 +21,13 @@
 
 ### Kernel 平台门禁出口（#1002 P0-3）
 
-本分支在现有 Reaper pass 接入 [Hub 停止器](../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)。只扫描同项目/Canvas 的活动 `hub_reason`，在 Canvas → Job → 全部 Attempts → lease 锁内重核最新唯一活动且未取消的执行身份。当前完整 persisted objective 已停止，或内核完成回执次数、已知修正 token / 原冻结 deadline 确已耗尽时，复用 `failExecution` / `settleAttemptTerminal` 和原 token 撤销事务结束本 Hub，持久化暂停原因与既有 root/Job 节点的 `platform_stop` / `outcome=inconclusive` 和可行动下一步。随后走 Reaper 原资源清理，不需模型再提交一个完成或停止提案；不派发新 Job/Report，也不宣称任务完成。分页额度与修正上限只指向上述代码和原回执，不复制可变数字；遍历游标在每批后前进/环回，事务失败保留原事实供后续 pass 重核。
+本分支在现有 Reaper pass 接入 [Hub 停止器](../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)。只扫描同项目/Canvas 的活动 `hub_reason`，在 Canvas → Job → 全部 Attempts → lease 锁内重核最新唯一活动且未取消的执行身份。当前完整 persisted objective 已停止，或内核完成回执次数、已知修正 token / 原冻结 deadline 确已耗尽时，复用 `failExecution` / `settleAttemptTerminal` 和原 token 撤销事务结束本 Hub，在本 Hub 节点持久化 `platform_stop` / `outcome=inconclusive` 和可行动下一步。只有普通 Hub、同 Canvas 无其他非终态 Job 且 root 尚在可运行状态时才投影 Canvas/root 暂停；directed Hub、活动同伴或已进入分析完成/报告的 root 保留共享 Canvas/root 不变。随后走 Reaper 原资源清理，跳过此停止事件的 Plan/Canvas 自动推进，不需模型再提交合法终态提案，也不由本停止事件派发新 Job/Report 或宣称任务完成。分页额度与修正上限只指向上述代码和原回执，不复制可变数字；遍历游标在每批后前进/环回，事务失败保留原事实供后续 pass 重核。
+
+预算出口只认可原 `mark_job_done` rejected 回执的版本、结果、Job-scoped `completionReceiptId`、同 Job durable dedup 及 event/payload Attempt 归属；未知状态、缺证明或跨 Job 回执不能耗尽当前执行。历史回执跨 Attempt 保留，但必须由原 repair owner/受治理 generation 授权当前 Attempt，不能通过换执行重置或借用预算。
 
 这不是普通 Hub 可借用的 directed recovery 权限：即使当前 Hub 带真实 frozen recovery grant，也只结束该 Hub，不执行 grant 的 target stop/reconcile，不改 target 的快照、回执、效果或预算。失败终态按既有内核规则保留 pending/unknown 为 unknown，资源销毁不是 Provider 用量证据；不补账、不退额度或自动 replay。取消、终态、sandbox/lease 归属不符拒绝；已接受 human/完成回执即使尚未 deferred apply，也不被替换。所有 waiting_human（包括真实业务、授权及高风险等待）保留。不能按 Agent 标签或 reason 文本分类历史人工请求，本切片不声称任意 platform_blocker 或全部原 P0-3 已交付。
 
-`hub-platform-stop.fixture.ts` 接入已有 `ci:integration:completion-recovery`（gate-db-core）：实际 Reaper、受控 destroy、真实 SQL 和停止后 Control 401，真实 frozen directed Hub 对 target 的执行事实不变；另以隔离内核回执/用量行覆盖次数/token/deadline、未耗尽及 unknown 用量，accepted human/done、等待/取消/终态/归属漂移不变，以及撤销 SQL 失败全回滚和轮转推进。本切片最终 SHA Actions 待验，本地测试/构建/typecheck、生产执行和真实模型理解均未执行。
+`hub-platform-stop.fixture.ts` 接入已有 `ci:integration:completion-recovery`（gate-db-core）：实际 Reaper、受控 destroy、真实 SQL 和停止后 Control 401，真实 frozen directed Hub 对 target 的执行事实及共享 Canvas/root 不变；活动同伴与分析完成/报告 root 不被覆盖或触发 Report。隔离完整回执包含原 kernel ID/dedup/Attempt 绑定，另拒绝非法版本/状态/身份、缺 dedup、外来 Attempt 及未授权旧 owner；以隔离内核回执/用量行覆盖次数/token/deadline、未耗尽及 unknown 用量，accepted human/done、等待/取消/终态/归属漂移不变，以及撤销 SQL 失败全回滚和轮转推进。本切片最终 SHA Actions 待验，本地测试/构建/typecheck、生产执行和真实模型理解均未执行。
 
 | 注意力成本 | 处理方式 |
 | --- | --- |
@@ -34,7 +36,7 @@
 
 ### 人工等待修正链交接（#1012）
 
-真实 `request_human` 接受后，`agent_run` 不因等待标签、执行器返回或数据库中断自动结清。Dispatcher 的 finally 先调用原 Runtime Adapter 的精确 sandbox destroy 并等待资源消失；只有成功后，在 Canvas → Job → 最新 Attempt → effect 锁内核对仍为 waiting_human、同一活动 Attempt/sandbox、未取消及该 Attempt 的持久 human 事件，才在同一事务先撤销旧 Gateway/Control grants、再结清本轮 effect_pending 的 agent_run，并记录 runtime_grants_revoked。撤销或结算失败全回滚；unknown、外来/已结清 run 及其他效果保持不变，历史 token 行、额度和账本不删除。不补写模型用量或结束人工等待。宿主退出证据与授权回复的代际准入是两步，后者仍检查原额度和全部未结清效果。
+真实 `request_human` 接受后，`agent_run` 不因等待标签、执行器返回或数据库中断自动结清。Dispatcher 的 finally 先在 Canvas → Job → 最新 Attempt → effect → lease 锁内核对仍为 waiting_human、同一活动 Attempt/sandbox、未取消及该 Attempt 的持久 human 事件，再保持归属锁调用原 Runtime Adapter 的有界精确 sandbox destroy 并确认消失；只有成功后，才在同一事务撤销旧 Gateway/Control grants、结清本轮 effect_pending 的 agent_run 并释放匹配 lease，记录 runtime_grants_revoked。撤销或结算失败全回滚；unknown、外来/已结清 run 及其他效果保持不变，历史 token 行、额度和账本不删除。不补写模型用量或结束人工等待。宿主退出证据与授权回复的代际准入是两步，后者仍检查原额度和全部未结清效果。
 
 外部 destroy 与 SQL 事务不可能原子提交。#1011 在现有 `effect-reconcile-loop.ts` 启动/周期 pass 接入精确宿主清理重入（HTTP 监听就绪后才启用，不让外部清理 IO 阻断 heartbeat 可达性）：有界扫描仍为 waiting_human、最新 active 且未取消的同 sandbox Attempt、有持久 human 事件和精确 pending agent_run 的 Job，再调用原清理函数；通用对账失败也不取消此独立 pass，不重放 Agent 或模型请求。同一事务先按 Canvas/Job/Attempt/effect/lease 顺序锁定并重新核对绑定，任何外来归属在销毁前拒绝；锁保持到有界 destroy/消失确认与 SQL 结算提交，阻止检查后的 lease 漂移。只结清本轮 run；其他 pending/unknown 效果继续阻断回复/忽略。没有新服务、定时工作流或第二 destroy 回执账本。Dispatcher finally 显式分流：实际 waiting_human 才调用该受锁保护的结算函数，拒绝后不回退无保护销毁；普通成功/失败/取消/超时等收尾仍销毁原捕获 handle，不能把等待专用函数的拒绝当作普通清理已完成。
 

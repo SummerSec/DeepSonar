@@ -121,14 +121,14 @@ export async function reapOnce(recoveryCursor: string | null = null, platformSto
       await tx`
         UPDATE canvas_nodes SET status = 'failed', updated_at = now()
         WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
-      await advancePlanTaskAfterTerminalJob(tx, jobId);
-      if (meta?.canvas_id) await expireDanglingHumanNodes(tx, meta.canvas_id);
+      if (!isPlatformStop) await advancePlanTaskAfterTerminalJob(tx, jobId);
+      if (!isPlatformStop && meta?.canvas_id) await expireDanglingHumanNodes(tx, meta.canvas_id);
       if (meta?.type === "report") {
         await finalizeReportJob(tx, jobId, {
           failed: true,
           error: (meta.error as string) ?? "reaper",
         });
-      } else if (meta?.canvas_id && meta.type !== "report") {
+      } else if (!isPlatformStop && meta?.canvas_id && meta.type !== "report") {
         await advanceCanvasAfterTerminalJob(
           tx,
           {

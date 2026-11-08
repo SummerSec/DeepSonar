@@ -18,7 +18,7 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
   const attempts = await import("./application.js");
   const { applyPlanObjectivePatch } = await import("../plan-protocol/objective.js");
   const { controlInputDigest } = await import("../event-ingestion/control-receipt.js");
-  const { COMPLETION_REPAIR_LIMIT } = await import("../event-ingestion/completion-receipt.js");
+  const { COMPLETION_REPAIR_LIMIT, completionReceiptId } = await import("../event-ingestion/completion-receipt.js");
   const { stopPlatformBlockedHubs } = await import("../job-lifecycle/hub-platform-stop.js");
   const { reapOnce } = await import("../../reaper.js");
   const { runner } = await import("../../runtime.js");
@@ -41,13 +41,19 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
     return frozen;
   };
   const appendEvent = async (f: Fixture, type: "control_receipt" | "human", payload: Record<string, unknown>) => {
-    const key = randomUUID();
+    const receiptKey = randomUUID(), completion = type === "control_receipt" && payload.operation === "mark_job_done";
+    const key = completion ? completionReceiptId(f.jobId, receiptKey) : randomUUID();
+    const value = completion ? { v: 1, idempotency_key: receiptKey, input_digest: controlInputDigest(payload),
+      snapshot_digest: controlInputDigest("controlled snapshot fixture"), proposal_revision: 0, attempt_id: f.attemptId,
+      result: { statusCode: payload.status === "rejected" ? 422 : 200, body: { accepted: payload.status !== "rejected" } },
+      repair_token_limit: null, ...payload } : payload;
     await db.begin(async raw => {
       const tx = raw as unknown as Db;
       await tx`SELECT id FROM jobs WHERE id=${f.jobId} FOR UPDATE`;
       const [{ next }] = await tx`SELECT COALESCE(MAX(job_seq),0)+1 AS next FROM events WHERE job_id=${f.jobId}`;
+      if (completion) await tx`INSERT INTO event_dedup(event_id,job_id) VALUES(${key},${f.jobId})`;
       await tx`INSERT INTO events(job_id,attempt_id,event_id,job_seq,type,payload_json)
-        VALUES(${f.jobId},${f.attemptId},${key},${next},${type},${tx.json(z.json().parse(payload))})`;
+        VALUES(${f.jobId},${f.attemptId},${key},${next},${type},${tx.json(z.json().parse(value))})`;
     });
     return key;
   };
@@ -69,6 +75,7 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
     canvas: await db`SELECT * FROM canvases WHERE id=${f.canvasId}`,
     nodes: await db`SELECT * FROM canvas_nodes WHERE canvas_id=${f.canvasId} ORDER BY id`,
     events: await db`SELECT * FROM events WHERE job_id=${f.jobId} ORDER BY id`,
+    dedup: await db`SELECT * FROM event_dedup WHERE job_id=${f.jobId} ORDER BY event_id`,
   });
 
   await t.test("real Reaper automatically stops ordinary/directed Hubs without completion, redispatch or invented usage", async () => {
@@ -78,9 +85,10 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
       const targetState = async () => {
         const s = await state(other);
         return { jobs: s.jobs.filter(job => job.id === other.jobId), attempts: s.attempts, effects: s.effects,
-          ledger: s.ledger, tokens: s.tokens, grants: s.grants, events: s.events };
+          ledger: s.ledger, tokens: s.tokens, grants: s.grants, events: s.events, dedup: s.dedup,
+          canvas: s.canvas, nodes: s.nodes.filter(node => node.job_id !== f.jobId) };
       };
-      const targetBefore = await targetState(), frozen = await stopObjective(f);
+      const frozen = await stopObjective(f), targetBefore = await targetState();
       const sandbox = `platform-stop-${randomUUID()}`;
       await db`UPDATE jobs SET sandbox_id=${sandbox} WHERE id=${f.jobId}`;
       await db`UPDATE job_attempts SET sandbox_id=${sandbox},state_json=jsonb_set(state_json,'{sandbox_id}',to_jsonb(${sandbox}::text)) WHERE id=${f.attemptId}`;
@@ -110,8 +118,14 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
         assert.deepEqual(after.ledger, before.ledger); assert.deepEqual(after.events, before.events);
         assert.deepEqual(stoppedHub.agent_snapshot_json, before.jobs.find(job => job.id === f.jobId)!.agent_snapshot_json);
         assert.deepEqual(after.canvas[0].target_json.plan_objective, frozen.plan_objective);
-        assert.equal(after.canvas[0].target_json.convergence.paused_reason, "plan_objective_stopped");
-        assert.equal(after.nodes.find(node => node.node_type === "root")!.body_json.platform_stop.outcome, "inconclusive");
+        if (order === "ordinary") {
+          assert.equal(after.canvas[0].target_json.convergence.paused_reason, "plan_objective_stopped");
+          assert.equal(after.nodes.find(node => node.node_type === "root")!.body_json.platform_stop.outcome, "inconclusive");
+        } else {
+          assert.deepEqual(after.canvas, before.canvas, "directed stop cannot pause the target Canvas");
+          assert.deepEqual(after.nodes.filter(node => node.job_id !== f.jobId), before.nodes.filter(node => node.job_id !== f.jobId));
+        }
+        assert.equal(after.nodes.find(node => node.job_id === f.jobId)!.body_json.platform_stop.outcome, "inconclusive");
         assert.equal(after.nodes.filter(node => node.node_type === "human").length, 0);
         assert.equal(after.jobs.length, before.jobs.length, "no successor or Report is dispatched");
         assert.ok(after.grants[0].revoked_at); assert.equal(after.tokens[0].status, "revoked");
@@ -146,6 +160,47 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
         assert.equal(after.jobs[0].error, { receipts: "completion_repair_exhausted", tokens: "repair_token_exhausted", deadline: "repair_deadline_exhausted" }[gate as "receipts" | "tokens" | "deadline"]);
         assert.deepEqual(after.ledger, before.ledger); assert.deepEqual(after.events, before.events);
       }
+    }
+  });
+
+  await t.test("untrusted receipt shape, status, dedup, foreign history and unauthorized old owner cannot exhaust this execution", async () => {
+    for (const gate of ["version", "status", "identity", "dedup", "foreign_attempt", "old_owner"]) {
+      const f = await hub(), keys = await history(f, COMPLETION_REPAIR_LIMIT);
+      if (gate === "version") await db`UPDATE events SET payload_json=jsonb_set(payload_json,'{v}','2') WHERE event_id=${keys[0]}`;
+      else if (gate === "status") await db`UPDATE events SET payload_json=jsonb_set(payload_json,'{status}','"unknown"') WHERE event_id=${keys[0]}`;
+      else if (gate === "identity") await db`UPDATE events SET payload_json=jsonb_set(payload_json,'{idempotency_key}',to_jsonb(${randomUUID()}::text)) WHERE event_id=${keys[0]}`;
+      else if (gate === "dedup") await db`DELETE FROM event_dedup WHERE event_id=${keys[0]}`;
+      else if (gate === "foreign_attempt") {
+        const other = await setup();
+        await db`UPDATE events SET attempt_id=${other.attemptId},payload_json=jsonb_set(payload_json,'{attempt_id}',to_jsonb(${other.attemptId}::text)) WHERE event_id=${keys[0]}`;
+      } else await db.begin(async raw => {
+        const tx = raw as unknown as Db;
+        await tx`SELECT id FROM jobs WHERE id=${f.jobId} FOR UPDATE`;
+        await attempts.settleAttemptTerminal(tx, f.jobId, "failed");
+        await attempts.createAttempt(tx, f.jobId);
+      });
+      const before = await state(f);
+      await stopPlatformBlockedHubs({ db });
+      assert.deepEqual(await state(f), before, gate);
+    }
+  });
+
+  await t.test("scoped Hub exit preserves live peers and reporting roots and cannot dispatch a Report", async () => {
+    for (const gate of ["peer", "analysis_complete", "reporting", "succeeded", "report_failed"]) {
+      const f = await hub(); await stopObjective(f);
+      if (gate === "peer") {
+        const peer = await setup();
+        await db`UPDATE jobs SET project_id=${f.projectId},canvas_id=${f.canvasId} WHERE id=${peer.jobId}`;
+        await db`UPDATE canvas_nodes SET canvas_id=${f.canvasId} WHERE job_id=${peer.jobId}`;
+      } else await db`UPDATE canvas_nodes SET status=${gate} WHERE canvas_id=${f.canvasId} AND node_type='root'`;
+      const before = await state(f), [highWater] = await db`SELECT COALESCE(max(id),0)::text AS cursor FROM events`;
+      await reapOnce(String(highWater.cursor));
+      const after = await state(f);
+      assert.equal(after.jobs.find(job => job.id === f.jobId)!.status, "failed");
+      assert.equal(after.nodes.find(node => node.job_id === f.jobId)!.body_json.platform_stop.outcome, "inconclusive");
+      assert.deepEqual(after.canvas, before.canvas, gate);
+      assert.deepEqual(after.nodes.filter(node => node.job_id !== f.jobId), before.nodes.filter(node => node.job_id !== f.jobId), gate);
+      assert.deepEqual(after.jobs.filter(job => job.id !== f.jobId), before.jobs.filter(job => job.id !== f.jobId), "no peer mutation or Report creation");
     }
   });
 
