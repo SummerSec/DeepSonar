@@ -1,11 +1,17 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；v0.6.15 tag 的发布失败，部分镜像已推送但未形成正式 Release；v0.6.14 为最新正式版；v0.6.16 为当前发布候选，尚未 tag（2026-11-07 核对）**。
-> 同步日期：2026-11-07
+> 状态：**运维 as-built；最新正式版 v0.6.16，v0.6.17 为发布准备候选、尚未 tag（2026-11-08 核对）；v0.6.15 失败 tag/已有镜像保持不可变**。
+> 同步日期：2026-11-08
 >
-> 2026-11-07 核对 GitHub：[v0.6.15 发布运行](https://github.com/SummerSec/DeepSonar/actions/runs/42178680573) 在 Chrome / ClickHouse 子镜像构建失败，未完成最终 catalog、签名和正式 Release；不可把单个镜像 tag 当作整版发布。最新正式版仍为 [v0.6.14](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.14)，main `16ed0726` 的 bundled 清单与部署示例均已回写到 `0.6.14`。DSH/Pi OM 的旧镜像问题、三款已推送镜像的实物核验和恢复限制见 [#979 诊断与恢复](RUNTIME_IMAGE_GOVERNANCE_979.md)。原 v0.6.15 tag/已有镜像保持不可变；新的发布须重新确认目标版本、compare 和最终 SHA Actions，不能沿用旧准备状态。
+> **v0.6.17 发布准备（2026-11-08）**。用户要求先完成 #1002，再发布新版本。最新正式 [v0.6.16](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.16) 于 2026-11-07T16:21:03Z 发布，元数据列出 registry/v2、签名证据、Reverse 证据与 Management Skill 附件；这里核对元数据，不重新声明附件内容/签名/各通道镜像已逐项复验。远端 v0.6.17 尚不存在，候选 compare 为 `v0.6.16...v0.6.17`。
 >
-> **v0.6.16 发布准备（2026-11-07）**。当前候选为 **v0.6.16**，compare 为 `v0.6.15...v0.6.16`。前一版本按「除目标外最高 Git `v*` tag」取 [v0.6.15](https://github.com/SummerSec/DeepSonar/actions/runs/42178680573) 指向的 `2b51080431826308c3fdc28cef8e7955ac7f16e6` —— 该 tag 的 Release 在 Chrome / ClickHouse 子镜像失败、未形成正式 Release，但仍参与比较，不移动也不复用。本候选范围为 **#944（Pi RPC 大载荷接收侧）** 与 **#958（Pi 输出截断与有界恢复、模型预算贯通）**，叠加 `[Unreleased]` 中已合入的 #971–#976、#961 P2/P3、#967、#945、#979。**2026-11-07 发布准备的源码基线要求 schema 68**（当日 `apps/scheduler/src/schema-version.ts`）：v0.6.14 与 v0.6.15 tag 都是 schema 67，schema 68 由 #954/#960 的 Skill 源发布隔离引入，所以 v0.6.16 是首个要求 68 的版本；仓库没有就地升级路径，非空库版本不匹配时 Scheduler 拒绝启动并提示先备份再按 `database/schema.sql` 重建，升级前须完成受治理备份/重建与验收。该次发布准备自身不改 schema、迁移或任何运行时行为；后续 #1002 P1-7A 集成目标见[数据架构](architecture/08-data-architecture.md)，实际发布须按最终源码及 Actions 重核，不能沿用此准备基线。产品版本仍只由 tag 注入的 `DEEPSONAR_VERSION` 决定，不改私有 package 版本。前置条件：#984 与 #989 必须先在最终 main 上合并并通过适用 Actions，之后才在本候选提交上打不可变 `v0.6.16`。
+> #1002 的 #1003（创建期 objective 绑定）、#1004（删除凭据保留 token/用量）、#1007（Canvas 外键引用索引）已合入 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619`，该 SHA 核心 [42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功；#1005（重建 ACL）、#1006（stopped 自动 Hub）、#1008（受管 Engine 资源声明预检）、#1009（单 effect 人工结算）与 #1010（provision 失败诊断）仍待人工合并，不能把本准备分支视为已包含这些修复或用旧 SHA 绿灯给最终组合放行。暂缓 #834 的账号池不实施；未取得的历史预算、现场并发根因、per-container/持续资源约束及真实模型质量仍不宣称解决。后续主线还包含 #996 的 Management CLI 契约、#990 的归档/pointer 回读切片与 #992 的冻结安装输入/CI 分层；不将其称为 Pi chunk sender 或跨运行 BASE proof 复用交付。
+>
+> 升级基线：v0.6.16 为 schema68，当前 main 为 schema70（2026-11-08 核对 [`schema-version.ts`](../apps/scheduler/src/schema-version.ts) 与 `database/schema.sql`）。必须备份并按受治理的基线重建/列交集回填处理非空库；没有增量 ALTER 或静默旧 Job 预算补齐。相关数据边界见[数据架构](architecture/08-data-architecture.md)。发版前重新核对最高既有稳定 tag、所有上述 PR 的落地、最新 main 的文档/changelog 与完整适用 Actions；再创建新的不可变 v0.6.17，不能从此准备基线提前打 tag。私有 package 版本、bundled registry 与部署镜像引用不手改，真实签名/通道 payload 与回写仍由发布工作流留证。
+>
+> **历史 v0.6.15 失败发布核对（2026-11-07）**：[v0.6.15 发布运行](https://github.com/SummerSec/DeepSonar/actions/runs/42178680573) 在 Chrome / ClickHouse 子镜像构建失败，未完成最终 catalog、签名和正式 Release；不可把单个镜像 tag 当作整版发布。当时最新正式版为 [v0.6.14](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.14)，main `16ed0726` 的 bundled 清单与部署示例均已回写到 `0.6.14`。DSH/Pi OM 的旧镜像问题、三款已推送镜像的实物核验和恢复限制见 [#979 诊断与恢复](RUNTIME_IMAGE_GOVERNANCE_979.md)。原 v0.6.15 tag/已有镜像保持不可变；新的发布须重新确认目标版本、compare 和最终 SHA Actions，不能沿用旧准备状态。
+>
+> **历史 v0.6.16 发布准备（2026-11-07，保留当时范围）**。当时候选为 **v0.6.16**，compare 为 `v0.6.15...v0.6.16`。前一版本按「除目标外最高 Git `v*` tag」取 [v0.6.15](https://github.com/SummerSec/DeepSonar/actions/runs/42178680573) 指向的 `2b51080431826308c3fdc28cef8e7955ac7f16e6` —— 该 tag 的 Release 在 Chrome / ClickHouse 子镜像失败、未形成正式 Release，但仍参与比较，不移动也不复用。本候选范围为 **#944（Pi RPC 大载荷接收侧）** 与 **#958（Pi 输出截断与有界恢复、模型预算贯通）**，叠加 `[Unreleased]` 中已合入的 #971–#976、#961 P2/P3、#967、#945、#979。**2026-11-07 发布准备的源码基线要求 schema 68**（当日 `apps/scheduler/src/schema-version.ts`）：v0.6.14 与 v0.6.15 tag 都是 schema 67，schema 68 由 #954/#960 的 Skill 源发布隔离引入，所以 v0.6.16 是首个要求 68 的版本；仓库没有就地升级路径，非空库版本不匹配时 Scheduler 拒绝启动并提示先备份再按 `database/schema.sql` 重建，升级前须完成受治理备份/重建与验收。该次发布准备自身不改 schema、迁移或任何运行时行为；后续 #1002 P1-7A 集成目标见[数据架构](architecture/08-data-architecture.md)，实际发布须按最终源码及 Actions 重核，不能沿用此准备基线。产品版本仍只由 tag 注入的 `DEEPSONAR_VERSION` 决定，不改私有 package 版本。前置条件：#984 与 #989 必须先在最终 main 上合并并通过适用 Actions，之后才在本候选提交上打不可变 `v0.6.16`。
 >
 > **历史 v0.6.4 发布准备基线（2026-11-02，保留历史来源）**。准备时最近正式版为 [v0.6.2](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.2)，于 2026-10-31T09:05:38Z 正式发布，非 draft / prerelease；tag 指向包含 Web 隔离构建修复的 `347385a53f43d15a53175226528af10a692f6f9e`。[v0.6.3 的 Release](https://github.com/SummerSec/DeepSonar/actions/runs/41299685948) 失败，已有部分镜像但未完成正式发行。按用户 2026-11-02 的选择，保留其 tag 和既有镜像，改发 **v0.6.4**；Git compare 起点为 v0.6.3，成功升级基线仍为 v0.6.2（schema 65 → 67）。本轮范围沿用[原范围决定](<../AGENTS.md#豁免范围>)，不移动旧 tag 或覆盖旧镜像。这里核对发布元数据与源码关系，不重新声明附件、签名或各通道镜像已逐项复验。
 >
@@ -15,7 +21,7 @@
 
 `.github/workflows/release.yml` 由 `v*` tag 触发。工作流先发布 `deepsonar-base`，再发布依赖它的 OpenHarmony、Chrome 与 Mobile 专项镜像与 Reverse 原生双架构镜像，最后由 `prepare-release` 合并真实的 buildx manifest digest 并冻结载荷，`platform-signatures` 验签后交给独立 `release-publish` / `release-writeback`。发布阶段把 `runtime-image-registry.json` 与 Management Skill 等冻结文件作为 GitHub Release 附件。合并前的核心定义与 base/audit/Kali 门禁在 `.github/workflows/ci.yml`；Chrome amd64 合同冒烟在 `.github/workflows/chrome-runtime.yml`，OpenHarmony test/audit/fuzz amd64/arm64 专项冒烟在 `.github/workflows/openharmony-runtime.yml`，Mobile amd64/arm64 专项冒烟在 `.github/workflows/mobile-runtime.yml`。`deepsonar-reverse` 在 `.github/workflows/reverse-runtime.yml` 使用原生 amd64/arm64 runner 构建当前 base+reverse，执行 ELF/.so/PE REA/Ghidra、真实 `docker save` / cgroup / 取消测量和 OpenSandbox Job；release 对缓存与 fresh child 执行相同门禁。脚本已接线不等于实际运行已通过。
 
-独立 `release-writeback` 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` 与 `deploy/.env.example` 中的 `DEEPSONAR_VERSION` 及三条平台镜像 digest 引用（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE`，按本次发布的 index digest 重新 inspect 写入，#740）**通过 bot 分支 PR 与必需检查合入仓库默认分支**（`chore(release): sync runtime-image-registry.json and image tag for vX.Y.Z`），用于更新内置 bundled 回退清单与部署示例版本。发布准备阶段不得手写运行镜像 digest 或提前改写 bundled 清单；v0.5.3 的 Chrome / ClickHouse 六个产品选择已知陈旧，须在新 Release 真实发布证据与最终 payload 门禁通过后由 workflow 回写纠正。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。**回写必须通过默认分支的 required check（#865 / #877）**：默认分支要求 `ci-summary`，而**直推会被规则拒绝**——即使 `ci-summary` 已经在同一个 SHA 上通过（v0.6.7 实测：日志先出现 `ci-summary passed on 8f3479d4`，随后 `push declined due to repository rule violations`，Release 未创建，最终由人工从 bot 分支开 PR 才把清单合并进去）。因此回写不再直推，而是**走与人工合并相同的路径**：
+独立 `release-writeback` 在校验通过后，会把生成的 `deploy/runtime-image-registry.json` 与 `deploy/.env.example` 中的 `DEEPSONAR_VERSION` 及三条平台镜像 digest 引用（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE`，按本次发布的 index digest 重新 inspect 写入，#740）**通过 bot 分支 PR 与必需检查合入仓库默认分支**（`chore(release): sync runtime-image-registry.json and image tag for vX.Y.Z`），用于更新内置 bundled 回退清单与部署示例版本。发布准备阶段不得手写运行镜像 digest 或提前改写 bundled 清单。历史 v0.5.3 的 Chrome / ClickHouse 产品选择曾陈旧；当前 ClickHouse 专项已按 #952 下线，不再列入新 Release 产品集合。每次发布都须由真实证据与最终 payload 门禁决定当前清单，再由 workflow 回写。仅当默认分支内容与本次发布不同时才提交；推送到默认分支不会再次触发本 workflow（触发条件只有 `v*` tag）。**回写必须通过默认分支的 required check（#865 / #877）**：默认分支要求 `ci-summary`，而**直推会被规则拒绝**——即使 `ci-summary` 已经在同一个 SHA 上通过（v0.6.7 实测：日志先出现 `ci-summary passed on 8f3479d4`，随后 `push declined due to repository rule violations`，Release 未创建，最终由人工从 bot 分支开 PR 才把清单合并进去）。因此回写不再直推，而是**走与人工合并相同的路径**：
 
 1. 回写提交推到 `bot/sync-runtime-registry-v<version>` 分支；
 2. 创建或复用回写 PR，通过正常 PR 事件进入检查，不手动 dispatch 另一条与 PR 检查汇总无关的运行；
@@ -74,13 +80,13 @@ CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚�
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。
 
-发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-07 当前候选为 v0.6.16，预期 compare 为 `v0.6.15...v0.6.16`（前一版本按除目标外最高 `v*` tag 取 v0.6.15；该 tag 的 Release 失败但仍参与比较），最近正式升级基线为 v0.6.14，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
+发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-08 当前准备候选为 v0.6.17，预期 compare 为 `v0.6.16...v0.6.17`（前一版本按除目标外最高 `v*` tag 取 v0.6.16），最近正式升级基线为 v0.6.16，schema 版本只按源码核对；若候选或最高 tag 已变化，重新核对而不沿用此准备值：
 
 ```bash
 pnpm ci:unit:docs-freshness
 pnpm ci:unit:changelog
 # 本轮真实 changelog 区段（仅在 Actions 执行）：
-node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.16 --previous-version 0.6.15 --tag v0.6.16
+node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.17 --previous-version 0.6.16 --tag v0.6.17
 pnpm typecheck
 pnpm build
 pnpm ci:images
@@ -287,7 +293,7 @@ LLVM 14 对照 7/20 失败，匹配 LLVM 19 候选 20/20 通过，均保留原 f
 
 - 本次 release 的 `base-image.outputs.digest` 进入各架构 fingerprint 与 `BASE_IMAGE`，不使用可变 base tag。Ghidra arm64 decompiler 从固定 PUBLIC zip 的 bundled source 原生构建。
 - 两架构都完成离线手册、真实 CLI / ELF / `.so` / PE、压缩镜像体积、资源与取消测量，以及真实 OpenSandbox Job，才保存 native child artifact、钉 src cache、放行 index 组装。
-- 首期预算仍为 2800 MiB；每个成功 run 的 `reverse-native-evidence-<arch>/measurements.json` 才是 OCI 实测。`reverse-job-evidence-<arch>` 证明隔离测试环境中的实际 Job 路径，不冒充生产准入。
+- 体积预算以 [native common](../agent-harness/reverse-native-common.mjs) 的代码常量为准，不在本文复制可变上限；每个成功 run 的 `reverse-native-evidence-<arch>/measurements.json` 才是 OCI 实测。`reverse-job-evidence-<arch>` 证明隔离测试环境中的实际 Job 路径，不冒充生产准入。
 - 既有版本标签包含 index wrapper 在内不可变。手动触发使用已验证的 release version；若已有标签与本次测试 payload 不同，或多个目的地已有不同 index digest，发布直接拒绝。匹配时保留旧 index bytes，仅补缺失目的地；不能靠改注释重打同版本。
 - 最终 catalog 检查 reverse 及 Chrome 的 8 个原生 child，并重验所有可用通道。没有真实 `reverse.json` 或通道证据不得发布完整 catalog；不改动任何生产项目启用状态。
 
