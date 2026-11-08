@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+#1002 P1-8：[同项目多账号池](architecture/06-runtime-view.md#凭据与-cli-解析757)仅为新 Job 在显式授权、同 Provider/CLI/模型的账号间选择并冻结，沿用默认优先及原 Job 恢复身份/预算门；readiness 不消费轮次，不能借故障自动换 key。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
+
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
 > 同步日期：2026-11-08
 > **Pi 模型预算与截断（#958）**：[预算与恢复专题](PI_MODEL_BUDGET_RECOVERY.md)记录发现声明/显式配置/CLI 观测分层、创建期冻结、同 Session 有界恢复及压缩无进展停止；不扩大权限/额度，不伪造上下文证据。行为回归与实际锁版本 SDK、HTTP/PG 入口已接既有 Actions，最终 SHA 待验；本地与生产验证均未执行。

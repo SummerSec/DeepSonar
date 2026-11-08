@@ -9,7 +9,7 @@ import { parseProjectAgentAllowlist } from "../project-agent-allowlist/policy.js
 const CRED_A = "11111111-1111-4111-8111-111111111111";
 const CRED_B = "22222222-2222-4222-8222-222222222222";
 
-function dbWith(rows: Array<Record<string, unknown>>) {
+function dbWith(rows: Array<Record<string, unknown>>, loads: Array<Record<string, unknown>> = []) {
   const query = async (strings: TemplateStringsArray) => {
     const sql = strings.join("?");
     if (sql.includes("FROM credentials")) {
@@ -18,6 +18,7 @@ function dbWith(rows: Array<Record<string, unknown>>) {
         return true;
       });
     }
+    if (sql.includes("FROM jobs")) return loads;
     return [];
   };
   return Object.assign(query, { json: (value: unknown) => value });
@@ -73,18 +74,56 @@ test("#690 resolve: no match fail-closed", async () => {
   );
 });
 
-test("#690 resolve: multi-match without default fail-closed", async () => {
-  await assert.rejects(
-    () => resolveProviderCredentialForJob({
-      db: dbWith([baseRow(CRED_A), baseRow(CRED_B)]) as never,
-      projectId: "project-1",
-      agentCli: "claude-code",
-      allowlist: allowlist({ enabled_credential_ids: [CRED_A, CRED_B], default_credential_id: null }),
-      provider: "anthropic",
-    }),
-    (error: unknown) => error instanceof ProviderCredentialResolveError
-      && error.code === "provider_credential_multi_match",
-  );
+test("#1002 resolve: an explicitly authorized homogeneous pool can select without a default", async () => {
+  const rows = [baseRow(CRED_B), baseRow(CRED_A)];
+  const before = structuredClone(rows);
+  const resolved = await resolveProviderCredentialForJob({
+    db: dbWith(rows) as never, projectId: "project-1", agentCli: "claude-code",
+    allowlist: allowlist({ enabled_credential_ids: [CRED_A, CRED_B], default_credential_id: null }), provider: "anthropic",
+  });
+  assert.equal(resolved?.id, CRED_A);
+  assert.deepEqual(rows, before, "selection/readiness does not mutate credentials or allocate a turn");
+});
+
+test("#1002 resolve: pool selection prefers active load, then lifetime assignments", async () => {
+  for (const [loads, expected] of [
+    [[{ credential_id: CRED_A, active_jobs: 2, total_jobs: 2 }, { credential_id: CRED_B, active_jobs: 0, total_jobs: 10 }], CRED_B],
+    [[{ credential_id: CRED_A, active_jobs: 0, total_jobs: 2 }, { credential_id: CRED_B, active_jobs: 0, total_jobs: 3 }], CRED_A],
+  ] as const) {
+    const result = await resolveProviderCredentialForJob({ db: dbWith([baseRow(CRED_B), baseRow(CRED_A)], [...loads]) as never,
+      projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: null }), provider: "anthropic" });
+    assert.equal(result?.id, expected);
+  }
+});
+
+test("#1002 resolve: an existing authorized Job identity does not rotate with load", async () => {
+  const result = await resolveProviderCredentialForJob({ db: dbWith([baseRow(CRED_A), baseRow(CRED_B)],
+    [{ credential_id: CRED_A, active_jobs: 20, total_jobs: 20 }]) as never, projectId: "project-1", agentCli: "claude-code",
+    allowlist: allowlist({ default_credential_id: null }), provider: "anthropic", existingCredentialId: CRED_A });
+  assert.equal(result?.id, CRED_A);
+  const overridden = await resolveProviderCredentialForJob({ db: dbWith([baseRow(CRED_A), baseRow(CRED_B)]) as never,
+    projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_B }), existingCredentialId: CRED_A });
+  assert.equal(overridden?.id, CRED_B, "an explicit current configuration still takes precedence");
+});
+
+test("#1002 resolve: heterogeneous model defaults and unconfigured pools retain ambiguity refusal", async () => {
+  for (const [rows, policy] of [
+    [[baseRow(CRED_A), { ...baseRow(CRED_B), settings_config_json: { env: { ANTHROPIC_MODEL: "another-model" } } }], allowlist({ default_credential_id: null })],
+    [[baseRow(CRED_A), baseRow(CRED_B)], allowlist({ enabled_credential_ids: undefined, default_credential_id: null })],
+  ] as const) await assert.rejects(() => resolveProviderCredentialForJob({ db: dbWith([...rows]) as never, projectId: "project-1",
+    agentCli: "claude-code", allowlist: policy, provider: "anthropic" }),
+    error => error instanceof ProviderCredentialResolveError && error.code === "provider_credential_multi_match");
+});
+
+test("#1002 resolve: an out-of-pool old identity cannot widen scope and unknown load fails closed", async () => {
+  const chosen = await resolveProviderCredentialForJob({ db: dbWith([baseRow(CRED_A), baseRow(CRED_B)]) as never,
+    projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ enabled_credential_ids: [CRED_B], default_credential_id: null }),
+    provider: "anthropic", existingCredentialId: CRED_A });
+  assert.equal(chosen?.id, CRED_B);
+  await assert.rejects(() => resolveProviderCredentialForJob({ db: dbWith([baseRow(CRED_A), baseRow(CRED_B)],
+    [{ credential_id: CRED_A, active_jobs: "unknown", total_jobs: 1 }]) as never, projectId: "project-1", agentCli: "claude-code",
+    allowlist: allowlist({ default_credential_id: null }), provider: "anthropic" }),
+    error => error instanceof ProviderCredentialResolveError && error.code === "provider_credential_load_unknown");
 });
 
 test("#690 resolve: default credential wins among multi-match", async () => {

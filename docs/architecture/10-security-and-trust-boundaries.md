@@ -76,6 +76,8 @@ The 2026-11-01 upgrade preserves Scheduler authority: [connectionConfig](../../p
 
 凭据在管理域与运行时域分开：数据库保存加密字段和安全元数据，Job snapshot 只保存引用和经过审计的非秘密选择；Gateway 在 Scheduler 进程内按 Provider 认证转发请求，沙箱只拿到短期 Job token。Gateway 上游请求/响应体不落库，usage ledger 只保存用量计数；Job Evidence writer 在持久化运行流和 OTLP 前对已登记的运行时 secret 脱敏并清理控制字符，事件和审计仍按各自结构化 schema/投影保存。审计保留主体、scope、操作、结果和关联 ID。
 
+#1002 P1-8 的新 Job 池选择只读取同项目现有 Job 的负载投影，且限于显式授权、同 Provider/CLI/解析模型的候选；不把目录、负载或历史 token 当作新增授权。运行中仍使用冻结账号；恢复的原账号偏好是内核私有参数，不接受 Agent 账号 ID，且不能越过当前名单、状态、模型、CLI、身份漂移及累计预算门。没有自动故障换 key、额度退还或未知效果重放。
+
 凭据引用的可见性与删除完整性分别校验：项目 actor 能读取全局账号，但 impact 不得泄露其他项目名称、UUID 或引用计数；DELETE 独立拒绝所有项目尚存的引用。设置写入在事务内持有与删除共用的凭据行锁并验证存在、active 与可见性，不能借省略模型或删除白名单键绕过，见[#914 接口切片](09-interface-specs.md#项目凭据引用保护914-切片)。
 
 权限校验不能替代资源隔离。沙箱网络、文件、设备、共享资产配额、Job 并发和事件预算仍由 Scheduler 和运行时 host 强制；镜像准入只回答“该摘要能否被选择”，不能让镜像取得平台管理权限。涉及 Job/Attempt 的沙箱 provision、Agent run、Gateway 和清理效果按各自 effect/settlement 与对账规则记录；Management 配置、image-admission 扫描和 Registry 发布使用自己的数据库状态与审计，不虚构 Job Attempt 账本。

@@ -4,6 +4,8 @@
 > 同步日期：2026-11-08
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
+#1002 P1-8 的同项目同质多账号池与内核恢复账号偏好映射 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时选择](06-runtime-view.md#凭据与-cli-解析757)及安全视图；复用现有白名单/默认账号操作，不新增池状态或配置。双账号真实 Gateway 的隔离回归接 role-config，最终 SHA Actions 待验。
+
 面向内部开发者和编码 Agent。先读 [DESIGN](../../DESIGN.md) 摘要，再按需求或主题定位；本目录不改变产品行为。需求组织参考 ISO/IEC/IEEE 29148，视图借鉴 arc42 / C4，关注点分离参考 ISO/IEC/IEEE 42010；这不是标准符合性认证。
 
 #1002 P2-13 的直接重建有效 ACL/default 保全及基线/原对象权限同事务发布映射 [CON-003](01-system-specification.md#con-003-单一-schema-基线)、[数据视图](08-data-architecture.md#直接重建的授权保全1002-p2-13)与[数据库说明](../../database/README.md#重建授权保全1002-p2-13)；不代替受控维护的 runtime 身份 fence，不修改角色或扩大 PUBLIC CREATE，最终 SHA Actions 待验。

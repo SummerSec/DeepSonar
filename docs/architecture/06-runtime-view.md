@@ -25,13 +25,16 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 1. Hub 的 Provider/model 需求、项目默认模型和全局角色模型按既有优先级形成模型要求；模型按每张凭据的 CLI 方言核对配置清单。
 2. Hub 显式 CLI 是硬约束，与候选冲突继续 `provider_credential_cli_mismatch`（`permanent_failure`）；不能通过改选 CLI 绕过排他绑定。
-3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件；仍不唯一时返回 `provider_credential_multi_match`，提示收窄需求或由管理员配置默认凭据。
+3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致且没有默认账号，则按同项目非终态 Job 数、历史分配数、稳定 ID 顺序选择新 Job；其他歧义仍返回 `provider_credential_multi_match`。
 4. 未配置凭据白名单时动态读取当前作用域候选，不在读取时写入 ID。显式白名单及默认凭据的删除、停用或不可访问引用返回 `provider_credential_allowlist_stale`（`permanent_failure`），RepairFeedback 指向管理员修复名单；既不扩大授权，也不把权限修复交给模型。
-5. 选中的账号、CLI、Provider/model 按原规则进入新 Job 快照。账号 × CLI 1:1、并发计账和 Gateway 密钥隔离不变；不修改任何已有 Job 快照或镜像准入。
+5. 池选择是现有 Job 历史的只读投影，readiness 不消费分配轮次，不承诺并发创建严格 round-robin，也不表示账号余额或容量。已有 Job 恢复向内核 resolver 提供原冻结账号偏好，只能在当前合法候选内生效；显式当前默认账号仍优先，身份漂移及累计预算校验不变。运行中不换 key、不因故障重选账号或重置预算。
+6. 选中的账号、CLI、Provider/model 按原规则进入新 Job 快照。账号 × CLI 1:1、并发计账和 Gateway 密钥隔离不变；不修改任何已有 Job 快照或镜像准入。
 
 项目 CLI/Provider 管理页独立加载账号列表，区分加载中、加载失败与成功空列表。只有成功读取当前项目可见账号后才判定默认账号和白名单引用失效；未加载成功时保存 CLI 不能清除默认账号或写入空凭据白名单。Pi 模型快照对账号目录中含 `/` 的完整模型 ID 保持一致，CLI 路由单独冻结，详见 [CLI 运行时契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-coding-agent-rpc140)。
 
 #914 的项目账号引用 DELETE/设置事务、scope 过滤及双向竞态回归见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)；运行期停用和既有失效引用仍按上述解析门 fail closed，#929 已另行交付默认账号选择与修复导航，不自动重跑或改写旧快照。
+
+#1002 P1-8 的选择、默认优先、异质池拒绝与恢复偏好回归接 `pnpm ci:unit:capability-pack`；隔离 PostgreSQL 中真实创建两个 Job、不同测试 key 的 Gateway 请求、独立用量归属、停用拒绝与快照不变接现有 `pnpm ci:integration:role-config`。该夹具使用 loopback 上游，不证明厂商模型质量或容量；最终 SHA Actions 待验。没有新增 UI、配置开关、池状态或分配账本；使用现有账号白名单及默认账号清除操作。
 
 实现入口：[凭据解析](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[快照组装](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[readiness](../../apps/scheduler/src/readiness.ts)。
 

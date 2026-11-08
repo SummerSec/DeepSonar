@@ -21,6 +21,8 @@ export type ResolveProviderCredentialInput = {
   provider?: string | null;
   modelRef?: string | null;
   allowPassthrough?: boolean;
+  /** Kernel-only existing Job identity; never an Agent account selector. */
+  existingCredentialId?: string | null;
 };
 
 export type ResolvedProviderCredential = {
@@ -272,6 +274,44 @@ export async function resolveProviderCredentialForJob(
   }
 
   if (pool.length === 1) return pool[0]!;
+
+  // Recovery does not rotate keys because another Job changed the load. The
+  // old identity is only a preference within current authorization/model/CLI
+  // constraints; an explicit configured default above still takes precedence.
+  const existing = input.existingCredentialId ? pool.find(row => row.id === input.existingCredentialId) : undefined;
+  if (existing) return existing;
+
+  const identities = pool.map(row => {
+    const models = extractModelsFromSettings(row.settings_config_json, row.agent_cli!);
+    const model = modelNeed ? resolveCredentialModelRef(row.settings_config_json, row.agent_cli!, modelNeed)
+      : models.length === 1 ? models[0] : null;
+    return model ? JSON.stringify([row.provider, row.agent_cli, model]) : null;
+  });
+  if (input.projectId && input.allowlist.credential_ids_configured && identities.every(identity => identity !== null)
+    && new Set(identities).size === 1) {
+    // Readiness does not consume a turn or mutate an allocation ledger. Each
+    // creation freezes its selected identity; load is a projection of the
+    // existing same-project Jobs, not credential quota or a retry permission.
+    const loads = await input.db`SELECT agent_snapshot_json->>'credential_id' AS credential_id,
+      count(*) FILTER (WHERE status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_jobs,
+      count(*) AS total_jobs FROM jobs WHERE project_id=${input.projectId}
+      AND agent_snapshot_json->>'credential_id'=ANY(${pool.map(row => row.id)}::text[])
+      GROUP BY agent_snapshot_json->>'credential_id'` as Array<{ credential_id: string; active_jobs: unknown; total_jobs: unknown }>;
+    const counts = new Map<string, { active: number; total: number }>();
+    for (const load of loads) {
+      const active = Number(load.active_jobs), total = Number(load.total_jobs);
+      if (!Number.isSafeInteger(active) || !Number.isSafeInteger(total) || active < 0 || total < active) {
+        throwResolve("provider_credential_load_unknown", { message: "凭据 Job 负载无法确认；请重试或核对当前账本",
+          path: "credential", expected: { kind: "known_same_project_job_counts" }, observed: { kind: "invalid_counts" },
+          next_action: "inspect_current_job_history", category: "permanent_failure" });
+      }
+      counts.set(load.credential_id, { active, total });
+    }
+    return [...pool].sort((a, b) => {
+      const left = counts.get(a.id) ?? { active: 0, total: 0 }, right = counts.get(b.id) ?? { active: 0, total: 0 };
+      return left.active - right.active || left.total - right.total || a.id.localeCompare(b.id);
+    })[0]!;
+  }
 
   throwResolve("provider_credential_multi_match", {
     message: `项目授权目录内有 ${pool.length} 个匹配 Provider 凭据，无法唯一解析；请设置项目缺省凭据或收窄白名单`,
