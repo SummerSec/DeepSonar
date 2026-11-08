@@ -4,6 +4,20 @@ import { sql } from "./db.js";
 import { settleEffect } from "./domains/job-attempt/application.js";
 import { revokeOldRuntimeGrants } from "./domains/job-control/rerun.js";
 
+/** Preserve ordinary finally cleanup; a refused human-wait close is never a fallback authorization. */
+export async function cleanupDispatcherSandbox(
+  db: typeof sql,
+  runner: Pick<SandboxRunner, "destroy">,
+  input: { jobId: string; attemptId?: string; sandboxId: string },
+): Promise<void> {
+  const [job] = await db`SELECT status FROM jobs WHERE id=${input.jobId}`;
+  if (job?.status === "waiting_human") {
+    if (input.attemptId) await destroyAndSettleHumanWaitRun(db, runner, { ...input, attemptId: input.attemptId });
+    return;
+  }
+  await runner.destroy({ sandboxId: input.sandboxId });
+}
+
 /** Host-only close: a wait label or an interrupted Attempt is not proof that the run stopped. */
 export async function destroyAndSettleHumanWaitRun(
   db: typeof sql,
