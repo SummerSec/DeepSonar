@@ -17,9 +17,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：系统必须允许在活跃项目下创建任务；每次创建必须对应一张 Canvas，并把目标、约束和触发来源写入画布，不得在已归档项目上新建任务或建立绕过 Canvas 的第二任务真相。
 - **决策来源**：Canvas 是 Hub、Job、Fact、Finding 和 Report 的共同边界，项目 scope 需要在创建时确定。
-- **实现状态**：as-built；`canvases` 以 `project_id` 外键保存任务并关联 Job。
+- **实现状态**：as-built；`canvases` 以 `project_id` 外键保存任务并关联 Job。创建时的可选初始 objective 按用户 CAS 校验，输入 SHA 绑定完成 protocol、网络与 compose 种子冻结的最终 title/target，与 root 同事务保存；不自动重绑历史目标。
 - **代码入口**：[task 路由](../../apps/scheduler/src/domains/project-task/routes.ts)、[数据库基线](../../database/schema.sql)、[设计摘要](../../DESIGN.md)。
-- **验证证据**：`pnpm ci:unit:task-intent`、`pnpm ci:integration:task-intent`；人工核对 `POST /projects/{id}/tasks` 的 project scope 和 Canvas 行。
+- **验证证据**：`pnpm ci:unit:task-intent`、`pnpm ci:integration:task-intent`；人工核对 `POST /projects/{id}/tasks` 的 project scope 和 Canvas 行。初始 objective 摘要、CAS 拒绝不建画布、Job-scoped bootstrap 与重放/漂移回归见 `pnpm ci:integration:plan-protocol`；最终 SHA Actions 另核。
 
 ### FR-TASK-002 创建后派发 Hub Job
 
