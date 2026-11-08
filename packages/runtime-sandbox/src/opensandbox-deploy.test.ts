@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 import {
   OPENSANDBOX_EGRESS_IMAGE,
   OPENSANDBOX_EXECD_IMAGE,
@@ -129,6 +131,25 @@ test("managed OpenSandbox resource preflight shares the server Engine and remain
   const script = readRepo("deploy/opensandbox/resource-preflight.py");
   assert.match(script, /connection\.request\("GET", "\/info"\)/);
   assert.doesNotMatch(script, /connection\.request\("(?:POST|PUT|DELETE)"/);
+});
+
+test("isolated OpenSandbox production smoke stages the exact preflight reader in its project directory", () => {
+  const reader = readFileSync(join(root, "deploy/opensandbox/resource-preflight.py"));
+  for (const file of ["agent-harness/test-opensandbox-poc.ts", "agent-harness/opensandbox/opensandbox-prod-official.poc.ts"]) {
+    const source = readFileSync(join(root, file), "utf8");
+    assert.match(source, /--project-directory/);
+    const copy = source.split("\n").find(line => line.includes('writeFileSync(join(dir, "opensandbox/resource-preflight.py")'));
+    assert.ok(copy, `${file}: isolated project directory must stage its mandatory reader`);
+    const dir = mkdtempSync(join(tmpdir(), "opensandbox-reader-input-"));
+    try {
+      mkdirSync(join(dir, "opensandbox"));
+      // Execute the actual fixture staging statement, not a duplicate copy implementation.
+      runInNewContext(copy, { dir, repoRoot: root, deployDir: join(root, "deploy"), join, readFileSync, writeFileSync }, { timeout: 1000 });
+      assert.deepEqual(readFileSync(join(dir, "opensandbox/resource-preflight.py")), reader);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 });
 
 test("OpenSandbox production overlay is the default real deploy path", () => {
