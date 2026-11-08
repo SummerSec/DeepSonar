@@ -22,7 +22,7 @@ function schemaV68(): string {
     throw new Error("Pinned schema68 unavailable; credential history rebuild requires full Git history without a current-schema fallback.");
   }
   assert.match(schema, /INSERT INTO schema_meta \(id, version\) VALUES \('global', 68\)/);
-  assert.match(schema, /credential_id uuid NOT NULL REFERENCES credentials(id)/);
+  assert.match(schema, /credential_id uuid NOT NULL REFERENCES credentials\(id\)/);
   assert.ok(!schema.includes("job_tokens_credential_check"));
   return schema;
 }
