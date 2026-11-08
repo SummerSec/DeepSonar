@@ -28,10 +28,11 @@ export async function prepareCanvasRetryFkFixture(db: TestSql, canvas: string, j
     [otherHuman, otherCanvas, 'human'], [otherTarget, otherCanvas, 'analysis']] as const) {
     await db`INSERT INTO canvas_nodes(id,canvas_id,node_type,title) VALUES(${id},${owner},${kind},'retry reference')`;
   }
-  await db`INSERT INTO canvas_edges(canvas_id,from_node_id,to_node_id,edge_type)
-    VALUES(${canvas},${human},${target},'retry-fixture')`;
+  const [edge] = await db`INSERT INTO canvas_edges(canvas_id,from_node_id,to_node_id,edge_type)
+    VALUES(${canvas},${human},${target},'retry-fixture') RETURNING id`;
+  const message = randomUUID();
   await db`INSERT INTO human_messages(id,canvas_id,human_node_id,target_kind,target_node_id,target_job_id,body)
-    VALUES(${randomUUID()},${canvas},${human},'job',${target},${job},'retry fixture')`;
+    VALUES(${message},${canvas},${human},'job',${target},${job},'retry fixture')`;
   await db`INSERT INTO canvas_edges(canvas_id,from_node_id,to_node_id,edge_type)
     SELECT ${otherCanvas},${otherHuman}::uuid,${otherTarget}::uuid,'unrelated-fixture' FROM generate_series(1,2048)`;
   await db`INSERT INTO human_messages(id,canvas_id,human_node_id,target_kind,target_node_id,target_job_id,body)
@@ -55,7 +56,8 @@ export async function prepareCanvasRetryFkFixture(db: TestSql, canvas: string, j
       assert.ok((await plan(table, column)).includes(`"Index Name":"${index}"`), `${table}.${column}: reference check must use its leading-column index`);
     }
   });
-  return { canvas, otherCanvas, human, target, before: await references(db, canvas), unrelated: await references(db, otherCanvas) };
+  return { canvas, otherCanvas, human, target, edge: String(edge.id), message,
+    before: await references(db, canvas), unrelated: await references(db, otherCanvas) };
 }
 
 export async function assertCanvasRetryReferences(db: TestSql, fixture: Awaited<ReturnType<typeof prepareCanvasRetryFkFixture>>, reset: boolean): Promise<void> {
@@ -65,8 +67,9 @@ export async function assertCanvasRetryReferences(db: TestSql, fixture: Awaited<
     return;
   }
   const [nodes] = await db`SELECT count(*)::int AS n FROM canvas_nodes WHERE id IN (${fixture.human},${fixture.target})`;
-  const [edges] = await db`SELECT count(*)::int AS n FROM canvas_edges WHERE canvas_id=${fixture.canvas}`;
-  const [messages] = await db`SELECT count(*)::int AS n FROM human_messages WHERE canvas_id=${fixture.canvas}`;
+  // Retry legitimately creates a new root -> Hub edge; only the old identities disappear.
+  const [edges] = await db`SELECT count(*)::int AS n FROM canvas_edges WHERE id=${fixture.edge}`;
+  const [messages] = await db`SELECT count(*)::int AS n FROM human_messages WHERE id=${fixture.message}`;
   assert.equal(nodes.n, 0);
   assert.equal(edges.n, 0);
   assert.equal(messages.n, 0);
