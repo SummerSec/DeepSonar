@@ -1,11 +1,23 @@
 # OpenSandbox 1.2 upgrade and recovery boundaries
 
-> 状态：**Source upgrade, historical local unit verification and scoped hosted pinned-server parsing**; combined-head CI and live/native execution remain separate.
-> 同步日期：2026-11-01
+> 状态：**Source upgrade, scoped hosted parsing and managed resource init**; the new resource slice awaits final-SHA Actions, and per-container/live/native enforcement remains separate.
+> 同步日期：2026-11-08
 
 Verification baseline: the 2026-11-01 integration worktree, not a released or native-validated deployment. This updates [IR-001](architecture/01-system-specification.md#ir-001-scheduler-runtime-adapter-与-model-gateway) and [IR-003](architecture/01-system-specification.md#ir-003-opensandbox-与-worker-node) without changing Scheduler recovery or execution authority; see [runtime](architecture/06-runtime-view.md), [deployment](architecture/07-deployment-view.md) and [security](architecture/10-security-and-trust-boundaries.md).
 
 Independent SDK provenance (historical): sibling worktree `DeepSonar-opensandbox-1.2`, branch `agent/opensandbox-1.2-upgrade`, clean main base `e219b53f1e4101b1b64fc97537c15f8eb582d87f` (2026-11-01). Only SDK/pin/config/tests/OpenSandbox documentation hunks were ported there from mixed source commit `7f9241f2373bb25f73f230ab7580eab19803678d`; no earlier ancestry, Plan, Finding research, authorization or Pi packaging changes were imported into that independent worktree. This does not describe the later integrated tree's scope.
+
+## Managed Docker resource preflight (#1002 P2-11)
+
+The first-party [development](../deploy/docker-compose.opensandbox.yml), [production](../deploy/docker-compose.opensandbox.prod.yml) and [Worker](../deploy/docker-compose.worker.yml) Compose files add an `opensandbox-resource-preflight` init dependency. It uses the same immutable server image and the same Engine socket source as the OpenSandbox service, not Scheduler's local Docker client or a remotely guessed endpoint. The [curated reader](../deploy/opensandbox/resource-preflight.py) issues only bounded, timed `GET /info`; it does not create or remove containers, change controllers or print Engine payloads/driver errors. It receives no Provider/Job credentials, uses no network, drops capabilities and mounts its script/socket read-only. A read-only socket mount is not an HTTP authorization boundary; the reader's fixed operation is the relevant restriction.
+
+Explicitly disabled CPU quota/memory/PIDs, rootless cgroups v1 or the Engine warning that limits are unsupported produce `SANDBOX_RESOURCE_LIMITS_UNSUPPORTED`. Missing/non-boolean capabilities, unconfirmed rootless cgroup version, invalid/oversized replies, unavailable sockets or transport errors produce `SANDBOX_RESOURCE_LIMITS_UNKNOWN`. Both exit nonzero and prevent a normal dependency-respecting Compose start from admitting OpenSandbox; the existing Podman Scheduler `service_started` compatibility overlay does not weaken this `service_completed_successfully` dependency. Operators must configure a capable Engine/controller delegation, not raise Job ceilings or bypass the guard. There is no new skip flag or Agent decision.
+
+This is an init-container declaration check, not proof of effective limits in each sandbox. A previously completed init can be reused by Compose; daemon/controller changes, unattended service restarts, explicit `--no-deps` starts, external OpenSandbox and Kubernetes are not continuously gated by this slice. See [remaining resource trust debt](architecture/12-risks-and-tech-debt.md#2-当前实现债务). The original ceiling/isolation requirements are not relaxed, and the check cannot make historical jobs `succeeded` or label unknown effects safe to replay.
+
+Attention cost: one existing deployment failure path shows a stable reason and concrete Engine/controller action; no periodic notifications, additional settings or per-Job model prompt is added. Limits/read budgets remain code facts, not copied operational defaults.
+
+The existing [runtime suite](../packages/runtime-sandbox/src/opensandbox-config-schema-gate.test.ts) invokes six stdlib rejection/transport/redaction tests inside the actual pinned server Python, a real hosted Engine read and a no-socket rejection. [Compose regressions](../packages/runtime-sandbox/src/opensandbox-deploy.test.ts) check image/socket identity and the mandatory dependency. `pnpm ci:unit:runtime-sandbox` is actually called by core CI; the unrelated isolated `load_config` parser implementation remains socket-free. Source and tests are written; final-SHA Actions/native/per-container proof is not inferred or yet claimed for this slice.
 
 ## Official sources and canonical pins
 

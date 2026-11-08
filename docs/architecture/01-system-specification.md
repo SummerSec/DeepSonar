@@ -942,7 +942,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Sandbox resource override 必须不超过平台 ceiling；CPU、memoryMiB、pidsLimit 的合法范围与 server 缺省见[快照限制](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)，并启用 capDropAll/noNewPrivileges。
 - **决策来源**：资源预算和进程隔离是多租户可靠性与安全的共同边界。
-- **实现状态**：as-built；项目只能收紧平台值，未知字段拒绝。
+- **实现状态**：as-built；项目只能收紧平台值，未知字段拒绝。#1002 P2-11 的受管 Docker init 拒绝 unsupported/unknown Engine 声明；不是逐容器强制证明，剩余 D-10 见[资源预检](../OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11)，最终 SHA Actions 待验。
 - **代码入口**：[sandbox limits](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.ts)、[sandbox tests](../../apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.test.ts)、[runtime sandbox](../../packages/runtime-sandbox/src)。
 - **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:dispatch-limits`。
 
@@ -1064,7 +1064,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：Scheduler 必须通过受治理 OpenSandbox/Worker Node adapter 创建、监视、取消和清理 Sandbox；节点注册、heartbeat、endpoint、capacity 和 sandbox lease 必须写入 Worker registry，Scheduler 不得把 Worker 当作第二状态真相。
 - **决策来源**：执行资源可能远程、多副本或短暂不可用，控制面需要可替换 adapter 和持久节点目录。
-- **实现状态**：as-built；节点 catalog 在 Postgres，OpenSandbox key 仅驻留 Scheduler 内存并持久化 fingerprint。
+- **实现状态**：as-built；节点 catalog 在 Postgres，OpenSandbox key 仅驻留 Scheduler 内存并持久化 fingerprint。受管 Docker/Worker 新增相同 Engine 的 init 声明预检（#1002 P2-11）；普通依赖启动 fail closed，不改变注册/Job 控制边界，不认证外部节点逐容器限额。
 - **代码入口**：[Worker registry](../../apps/scheduler/src/domains/worker-nodes/registry.ts)、[OpenSandbox adapter](../../packages/runtime-sandbox/src/opensandbox.ts)、[worker routes](../../apps/scheduler/src/domains/worker-nodes/routes.ts)。
 - **验证证据**：`pnpm ci:unit:runtime-cleanup`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:smoke:opensandbox-api`、`pnpm ci:smoke:opensandbox-dispatch`。
 
