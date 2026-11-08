@@ -300,7 +300,9 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           sql`SELECT to_jsonb(c) AS row FROM job_capability_tokens c WHERE job_id=${f.jobId} ORDER BY id`,
         ]);
         const before = await capture();
+        let destroys = 0;
         const close = () => destroyAndSettleHumanWaitRun(sql, { destroy: async () => {
+          destroys++;
           if (scenario === "cleanup_failure") throw new Error("synthetic destroy confirmation failed");
         } }, { jobId: f.jobId, attemptId: scenario === "foreign_attempt" ? randomUUID() : String(f.oldAttempt.id),
           sandboxId: scenario === "foreign_sandbox" ? "synthetic-foreign" : f.sandboxId });
@@ -328,6 +330,20 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         }
         await assertNoGeneration(f.jobId);
         assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
+        if (scenario === "grant_cleanup_failure") {
+          await close(); // Re-enter the same owner/effect after the failed DB transaction.
+          assert.equal(destroys, 2);
+          const retried = await capture();
+          const run = retried[0].find(e => e.row.effect_id === "agent_run:1")!.row;
+          assert.equal(run.status, "settled"); assert.equal(run.replay_policy, "never");
+          assert.equal(run.settlement_json.sandbox_destroyed, true);
+          assert.equal(run.settlement_json.runtime_grants_revoked, true);
+          assert.deepEqual(retried[1], before[1]); assert.deepEqual(retried[2], before[2]);
+          assert.deepEqual(retried[4], before[4], "retry cannot invent usage or refresh caps");
+          assertRevokedGrants(before[3], retried[3], true); assertRevokedGrants(before[5], retried[5], false);
+          await assertNoGeneration(f.jobId);
+          assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
+        }
         await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
       });
     }
