@@ -101,7 +101,7 @@ Plan v2 的 bootstrap 要求仅适用于执行型 Plan。未声明 `plan_objecti
 
 ### 多轮推进、重启与停止
 
-每次 Plan owner 或 child Job 终态，以及取消、Reaper、Reconcile 和镜像撤销等生命周期收口路径，都会在原有事务内重建当前状态；重启不依赖进程缓存。旧目标 revision 的 child 回调只能释放其占用的并发槽位，不能用旧输出满足新依赖或完成新目标。历史记录不改写，历史 unknown effect 仍 fail closed。后继任务被撤权时，savepoint 原子撤销整批新派发并持久停止，不回滚前置 Job 已证明的终态成功。
+每次 Plan owner 或 child Job 终态，以及取消、Reaper、Reconcile 和镜像撤销等生命周期收口路径，都会在原有事务内重建当前状态；重启不依赖进程缓存。#1002 P0-3 的普通 Hub 唤醒在 Canvas 锁内读取当前 objective；`status=stopped` 时，自动、idle 与非人工 force 唤醒不创建新 Hub，也不清除停止状态或消耗轮次。显式人工触发与带 Scheduler 冻结引用的 completion recovery 保留原有准入；既有 `waiting_human` 不因 Agent 报告 `platform_blocker` 自动关闭，unknown effect 不变为成功。该切片的单元与 SQL/HTTP 回归已接既有 Actions，最终 SHA 工程验收待核对。旧目标 revision 的 child 回调只能释放其占用的并发槽位，不能用旧输出满足新依赖或完成新目标。历史记录不改写，历史 unknown effect 仍 fail closed。后继任务被撤权时，savepoint 原子撤销整批新派发并持久停止，不回滚前置 Job 已证明的终态成功。
 
 Scheduler 按用户授权的 `max_tasks`、`max_rounds`、`max_parallel_tasks` 和 `max_no_progress_rounds` 控制生命周期。活动 Job 存在时不误判无进展；路线或目标真正变化且无可派发进展时累计无进展轮。持久 `continue` 结果只在没有活动 Job、没有新 ready task 时消费：Scheduler 从当前 owner、Canvas/项目和 objective/route/Plan SHA 严格一致的 `plan_result` 事件解析身份，以精确十进制字符串保存 `plan_execution.last_no_progress_result_event_id` 水位，不经 JavaScript number 转换。相同事件在 owner/child 终态、重复回调或重启重建中不再计数；新事件即使正文相同仍计入下一轮。水位随 lifetime 计数保留，目标 CAS、路线或 owner 变化不能重置；缺失、外域或与当前 audit 不一致的来源 fail closed。达到预算、无进展、依赖失败、缺失结构化输出、任务终态失败或 unknown external effect 时持久写入停止原因。仅所有当前 task 的权威输出齐全，并满足当前 CompletionPolicy 的 positive authority，才可写入 `complete`；模型 `PlanResult.complete` 不能替代 Worker 输出、Verify 门或报告门。
 

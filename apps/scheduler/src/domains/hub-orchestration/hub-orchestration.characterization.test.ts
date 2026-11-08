@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { withOperationConflictRetry } from "../../db-conflict-retry.js";
+import { applyPlanObjectivePatch } from "../plan-protocol/objective.js";
 import type { HubCanvasConvergence, HubOrchestrationPorts, HubOrchestrationTransaction } from "./ports.js";
 import {
   createHubOrchestrationApplication,
@@ -139,6 +140,46 @@ test("Hub application keeps no-op guards before touching the transaction", async
   assert.equal(queryCount, 0, "invalid and recursive Hub wakeups must stop before SQL");
 });
 
+test("stopped objectives suppress automatic and forced Hub wakes without resetting or completing the goal", async () => {
+  const { objective } = applyPlanObjectivePatch({ title: "Stopped goal", target: {}, patch: {
+    expected_revision: null, goal: "Retain scoped output",
+    completion: { mode: "all_tasks", description: "Retain every planned output", required_outputs: [] },
+    budget: { max_tasks: 2, max_rounds: 2, max_no_progress_rounds: 1, max_parallel_tasks: 1 },
+  } });
+  for (const status of [undefined, "active", "completed", "stopped"] as const) {
+    for (const options of [{}, { idleWake: true }, { force: true }, { manual: true }]) {
+      const target = status ? { plan_objective: { ...objective, status } } : {};
+      const original = structuredClone(target);
+      const continued = new Error("continued existing Hub admission");
+      let locked = false;
+      const query = async (strings: TemplateStringsArray) => {
+        assert.ok(locked, "objective admission is serialized by the Canvas lock");
+        const text = strings.join("?").replace(/\s+/gu, " ").trim();
+        if (text.startsWith("SELECT status FROM canvas_nodes")) return [{ status: "active" }];
+        if (text.startsWith("SELECT target_json FROM canvases")) return [{ target_json: target }];
+        throw continued;
+      };
+      const tx = Object.assign(query, { json: (value: unknown) => value }) as unknown as HubOrchestrationTransaction;
+      const app = createHubOrchestrationApplication(tx, {
+        rulesForProject: async () => ({ minVerifySeverity: "high", auditTimeoutSec: 60, hubEnabled: true, maxHubRounds: 3 }),
+        lockCanvasForConvergence: async () => { locked = true; return true; },
+        readCanvasConvergence: async () => { throw continued; },
+        patchCanvasConvergence: async () => { throw new Error("wake must not rewrite convergence"); },
+        careSeverities: () => ["critical", "high"],
+        resolveAgentSnapshotForJob: async () => { throw new Error("wake must not spend a model budget"); },
+        recordJobSharedAssets: async () => {}, fixedPriorityForJob: () => 500, insertEdgeIfAbsent: async () => {},
+        settleCanvasFindingsAtGuardrail: async () => { throw new Error("wake must not settle Findings"); },
+        evaluateAnalysisCompleteGate: async () => { throw continued; }, hasSucceededRoleWork: async () => false,
+        maybeDispatchReport: async () => { throw new Error("stopped does not mean complete"); }, settleStalledFinding: async () => false,
+      });
+      const wake = () => app.maybeTriggerHub(tx, { id: "worker", project_id: "project", canvas_id: "canvas", type: "explore" }, options);
+      if (status === "stopped" && !("manual" in options)) await wake();
+      else await assert.rejects(wake, (error: unknown) => error === continued);
+      assert.deepEqual(target, original, "wake cannot change objective revision, budget or terminal meaning");
+    }
+  }
+});
+
 function settlementFixture(branch: "stalled" | "guardrail" | "report-dispatch", failure: unknown, abortOnFailure = true) {
   let remainingFailures = 1;
   let attempts = 0;
@@ -168,6 +209,7 @@ function settlementFixture(branch: "stalled" | "guardrail" | "report-dispatch", 
         return [];
       }
       if (text.startsWith("SELECT status FROM canvas_nodes")) return [{ status: "running" }];
+      if (text.startsWith("SELECT target_json FROM canvases")) return [{ target_json: {} }];
       if (text.startsWith("SELECT r.id, r.finding_id")) return [];
       if (text.startsWith("SELECT 1 FROM finding_verification_rounds")) return branch === "stalled" ? [{ found: 1 }] : [];
       if (text.includes("AS hub_rounds FROM jobs")) return [{ hub_rounds: 3 }];

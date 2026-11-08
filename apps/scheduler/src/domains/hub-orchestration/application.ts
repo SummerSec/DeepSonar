@@ -1,7 +1,7 @@
 import { sql } from "../../db.js";
 import { frozenRuntimeKnobsFromSnapshot } from "../../runtime-knobs.js";
 import { ControlInputError } from "../../control-input.js";
-import { planContext } from "../plan-protocol/objective.js";
+import { planContext, readPersistedPlanObjective } from "../plan-protocol/objective.js";
 import { freezeAgentSnapshotNetworkPolicy } from "../role-runtime-snapshot/index.js";
 import { extractDispatchPrompt } from "../../job-dispatch-prompt.js";
 import { CompletionRecoveryGrant } from "@deepsonar/shared-types";
@@ -400,6 +400,12 @@ export function createHubOrchestrationApplication(
     if (options.completionRecovery && (options.force || options.manual || options.idleWake
       || !await completionRecoveryCanWake(tx, job, options.completionRecovery))) return;
     if (await rootAnalysisFinished(tx, canvasId)) return;
+
+    if (!options.manual && !options.completionRecovery) {
+      const [canvas] = await tx`SELECT target_json FROM canvases WHERE id=${canvasId} AND project_id=${projectId}`;
+      // A forced/idle wake is not authority to restart a stopped user objective.
+      if (readPersistedPlanObjective(canvas?.target_json)?.status === "stopped") return;
+    }
 
     const convergence = await ports.readCanvasConvergence(tx, canvasId);
     if (!options.manual) {

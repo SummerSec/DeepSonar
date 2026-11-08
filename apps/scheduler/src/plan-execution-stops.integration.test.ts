@@ -48,6 +48,26 @@ test("Plan v2 rejects unretained/mismatched outputs, unauthorized partial routes
       assert.equal((await h.children(f.hub)).length, 1, mode);
       assert.equal((await h.state(f.canvas)).plan_execution.stop_reason, mode === "unknown" ? "unknown_external_effect" : "missing_output", mode);
       assert.equal((await h.state(f.canvas)).plan_objective.status, "stopped");
+      if (mode === "missing_bytes") {
+        const stopped = await h.state(f.canvas);
+        await h.sql`UPDATE projects SET config_json=${h.sql.json({ rules: { hubEnabled: true, maxIntentsPerDecision: 8 } })} WHERE id=${f.project}`;
+        await h.finish(f.hub);
+        assert.equal((await h.sql`SELECT status FROM jobs WHERE id=${f.hub}`)[0].status, "succeeded");
+        const events = await h.sql`SELECT to_jsonb(e) AS row FROM events e WHERE job_id=ANY(${[f.hub, child]}::uuid[]) ORDER BY id`;
+        for (const options of [{}, { idleWake: true }, { force: true }]) {
+          await h.sql.begin(async tx => {
+            await h.core.maybeTriggerHub(tx as unknown as typeof h.sql,
+              { id: child, canvas_id: f.canvas, project_id: f.project, type: "explore" }, options);
+          });
+        }
+        assert.equal((await h.sql`SELECT id FROM jobs WHERE canvas_id=${f.canvas} AND type='hub_reason'`).length, 1,
+          "terminal and repeated idle/forced callbacks cannot create a doomed Hub for a stopped objective");
+        assert.equal((await h.sql`SELECT id FROM canvas_nodes WHERE canvas_id=${f.canvas} AND node_type='human'`).length, 0);
+        assert.equal((await h.sql`SELECT status FROM canvas_nodes WHERE id=${f.root}`)[0].status, "active",
+          "stopping a route must not claim analysis completion or dispatch a Report");
+        assert.deepEqual(await h.state(f.canvas), stopped, "terminal callbacks preserve the stopped objective and lifetime budget");
+        assert.deepEqual(await h.sql`SELECT to_jsonb(e) AS row FROM events e WHERE job_id=ANY(${[f.hub, child]}::uuid[]) ORDER BY id`, events);
+      }
     }
 
     for (const role of ["hub_reason", "verify_finding", "report", "unadmitted-role"]) {
