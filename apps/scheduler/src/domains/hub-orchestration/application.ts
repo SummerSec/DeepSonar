@@ -713,11 +713,20 @@ export function createHubOrchestrationApplication(
     const projectId = finding.project_id as string;
     const preview = input.commentBody.trim().slice(0, 500);
     let hubJobId: string | undefined;
+    let stoppedObjective = false;
 
     await db.begin(async (rawTx) => {
       // SAFETY: rawTx is the open postgres.js transaction; this domain uses
       // only its tagged-query/json operations through the shared handle type.
       const tx = rawTx as unknown as HubOrchestrationTransaction;
+      if (!await ports.lockCanvasForConvergence(tx, canvasId)) return;
+      const [canvas] = await tx`SELECT target_json FROM canvases WHERE id=${canvasId} AND project_id=${projectId}`;
+      if (readPersistedPlanObjective(canvas?.target_json)?.status === "stopped") {
+        // A comment remains recorded, but does not restart the stopped objective
+        // or leave an open human node/clear its explanation after a refused wake.
+        stoppedObjective = true;
+        return;
+      }
       const [findingNode] = finding.node_id
         ? await tx`SELECT id, x, y FROM canvas_nodes WHERE id = ${finding.node_id as string}`
         : [null];
@@ -789,6 +798,7 @@ export function createHubOrchestrationApplication(
       }
     });
 
+    if (stoppedObjective) return { hub_queued: false, reason: "plan_objective_stopped", canvas_id: canvasId };
     if (!hubJobId) {
       const conv = await ports.readCanvasConvergence(db, canvasId);
       if (conv.hub_paused) return { hub_queued: false, reason: "hub_paused", canvas_id: canvasId };
