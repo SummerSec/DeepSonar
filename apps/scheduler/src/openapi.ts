@@ -2704,7 +2704,7 @@ const OPS: Op[] = [
     method: "delete",
     path: "/credentials/{id}",
     summary: "删除已保存的 Provider 账号",
-    description: "有 pending 或 active/frozen Job（claimed/provisioning/running/waiting_human）时返回 409 CREDENTIAL_IN_USE。failed/timeout/orphan 可恢复历史不阻挡删除，影响投影仍列出。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。任何项目 enabled_credential_ids/default_credential_id 引用仍存在时返回 409 CREDENTIAL_PROJECT_REFERENCE 和 next_action；完整性检查覆盖所有项目，impact 只展示 actor 可见项目。删除与项目设置写入共用事务级凭据行锁，不自动改项目白名单。吊销并删除 job_tokens；不改写历史 Job 快照（#690：无 RoleConfig 凭据绑定）。响应与审计不含密文；项目凭据审计保留 project_id。",
+    description: "有 pending 或 active/frozen Job（claimed/provisioning/running/waiting_human）时返回 409 CREDENTIAL_IN_USE。failed/timeout/orphan 可恢复历史不阻挡删除，影响投影仍列出。有 queued/claimed/running 镜像准入扫描时返回 409 CREDENTIAL_SCAN_IN_USE。任何项目 enabled_credential_ids/default_credential_id 引用仍存在时返回 409 CREDENTIAL_PROJECT_REFERENCE 和 next_action；完整性检查覆盖所有项目，impact 只展示 actor 可见项目。删除与项目设置写入共用事务级凭据行锁，不自动改项目白名单。吊销所有关联 job_tokens 并在删除凭据时解绑；保留 token 历史请求/额度与 job_usage_ledger 引用，不重置预算、不改写历史 Job 快照（#690：无 RoleConfig 凭据绑定）。响应与审计不含密文；项目凭据审计保留 project_id。",
     scope: "agents:write",
     tags: ["Credentials"],
     query: {

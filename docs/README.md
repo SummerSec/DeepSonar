@@ -6,7 +6,7 @@
 > **#951 完成失败诊断**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)登记当前 Attempt 可归属产出、原回执状态和受权限保护证据；有产出不升级成功，不伪造未知字段或自动重放。核心缺诊断已随 #963 合入并工程收口（2026-11-07 核对）；后续提交按各自最终 SHA 另验，全量覆盖和生产归因仍未验证。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
 
-> **v0.6.16 发布准备（2026-11-07）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)：compare 为 `v0.6.15...v0.6.16`，前一版本取最高既有 tag v0.6.15（其 Release 在 Chrome / ClickHouse 子镜像失败、未形成正式 Release，但仍参与比较，不移动旧 tag）。范围为 #944 与 #958，叠加已合入的 #971–#976、#961 P2/P3、#967、#945、#979，清单见 [CHANGELOG](../CHANGELOG.md)。**整版候选要求 schema 68**（v0.6.14/v0.6.15 均为 67，schema 68 由 #954/#960 引入，故本版是首个要求 68 的发布；无就地升级路径，非空库须先备份再按 `database/schema.sql` 重建）；本 PR 不改 schema，产品版本只由 tag 注入的 `DEEPSONAR_VERSION` 决定。#984 与 #989 需先合并并通过适用 Actions，之后才打不可变 `v0.6.16`；最终 main Actions 与正式产物成功状态分别核对。
+> **v0.6.16 发布准备（2026-11-07）**。当前候选及前一版本比较基线见[发布专题](RELEASE_RUNTIME_IMAGES.md#发布前门禁)：compare 为 `v0.6.15...v0.6.16`，前一版本取最高既有 tag v0.6.15（其 Release 在 Chrome / ClickHouse 子镜像失败、未形成正式 Release，但仍参与比较，不移动旧 tag）。范围为 #944 与 #958，叠加已合入的 #971–#976、#961 P2/P3、#967、#945、#979，清单见 [CHANGELOG](../CHANGELOG.md)。**2026-11-07 的发布准备基线要求 schema 68**（v0.6.14/v0.6.15 均为 67，schema 68 由 #954/#960 引入，故本版是首个要求 68 的发布；无就地升级路径，非空库须先备份再按 `database/schema.sql` 重建）；该次发布准备不改 schema；后续 #1002 P1-7A 的集成目标见[数据架构](architecture/08-data-architecture.md)，发布时必须按最终源码重核，产品版本只由 tag 注入的 `DEEPSONAR_VERSION` 决定。#984 与 #989 需先合并并通过适用 Actions，之后才打不可变 `v0.6.16`；最终 main Actions 与正式产物成功状态分别核对。
 
 > **全局 Skill 源发布隔离（#954/#960，2026-11-07）**：当前源码将手动/boot/周期 sync 限为候选，只有全局管理主体按候选 hash+epoch 显式批准才发布；既有 live 授权和旧 Job CAS 不迁移，显式撤销 epoch 保持。schema68 元数据、同源 session 锁与 CAS/事务 fence 见[数据归属](architecture/08-data-architecture.md#skill-源已批准目录与候选960)，管理员/项目边界与全局启用影响见[审批接口](architecture/09-interface-specs.md#全局-skill-源候选审批960)。同 hash 有效 live 健康核验可续鲜，不同候选不替 A 续鲜；从未成功为 null/+Inf，既有 Job/Intent 节点原位更新 warning。IR-007/FR-CAP-003/FR-KNOW-002、trace 和视图已同步；回归仅编写/静态核对，schema68 rebuild/恢复与最终 SHA Actions 待验，未运行本地测试、构建、typecheck 或数据库。风险与验收证据分离见[风险登记](architecture/12-risks-and-tech-debt.md#skill-源修复与剩余证据边界960)。
 
@@ -47,6 +47,8 @@
 > **账号修复审查补强（2026-10-18，#748 / #749）**：普通编辑保留 Claude 独立 tier；上游错误摘要覆盖配置秘密与 C1 控制字符；探测结果回写按配置、CLI 和项目核对；Windows 基线重建支持 CRLF/LF。详见 [`../DESIGN.md`](../DESIGN.md) §8 与 [凭据解析运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)。
 
 > **凭据引用保护（2026-11-05，#914 切片）**：项目范围 impact、全局删除完整性与设置/删除共用凭据行锁已接线；真实 PG 双会话与 scoped HTTP 回归复用 `pnpm ci:integration:credential-delete`。保留空白名单与冻结 Job，不提供新编辑器或自动扩权修复；本句仅描述 #925 服务端切片，#929 已补齐显式默认账号选择与修复导航；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。详见[接口规格](architecture/09-interface-specs.md#项目凭据引用保护914-切片)。
+
+> **历史凭据删除（2026-11-08，#1002 P1-7A）**：删除前撤销全部 Gateway token，再脱离秘密凭据，保留 token/用量账本身份及历史有限额度；无凭据 token 仅允许 revoked，不复活旧授权，不自动清配置。真实账本/预算/HTTP 与精确旧基线重建、备份恢复已接现有 Actions，最终 SHA 待验。详见[历史预算契约](MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)及[数据架构](architecture/08-data-architecture.md)。
 
 > **凭据解析同步（2026-10-21，#757）**：Provider/model/项目授权先形成候选，凭据决定 CLI；readiness 与 Job 共用解析，区分全局种子无偏好和用户显式偏好。项目 RoleConfig 不再暴露可写却不生效的 CLI/model，未收紧白名单读取不固化凭据 ID。详见 [运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)、[数据架构](architecture/08-data-architecture.md)与[接口规范](architecture/09-interface-specs.md)。
 
@@ -221,7 +223,7 @@
 
 ## #775 当前执行与证据边界
 
-[Plan v2 决策](architecture/adr/0012-plan-v2-execution.md)与[运行时视图](architecture/06-runtime-view.md)记录当前 objective CAS、有限 lifetime、多轮路线和依赖输出核验；[设计对照](PLAN_BOUNDED_INTENT_DESIGN.md)保留范围分析。历史每 Canvas 一次补证不再描述当前 v2 执行上限；不把 v1 审计只读当作新执行兼容。旧 writer 已于 2026-10-31 物理删除，ADR-0012 的决策文字保持不变。
+[Plan v2 决策](architecture/adr/0012-plan-v2-execution.md)与[运行时视图](architecture/06-runtime-view.md)记录当前 objective CAS、有限 lifetime、多轮路线和依赖输出核验；[设计对照](PLAN_BOUNDED_INTENT_DESIGN.md)保留范围分析。历史每 Canvas 一次补证不再描述当前 v2 执行上限；不把 v1 审计只读当作新执行兼容。旧 writer 已于 2026-10-31 物理删除，ADR-0012 的决策文字保持不变。#1002 的创建初始 objective 绑定最终冻结 Canvas/root 输入见[Plan 专题](PLAN_GAP_PROJECTION.md#用户目标与路线身份)，不自动修补历史目标；对应创建/bootstrap 回归已接入 Actions，最终 SHA 另验。
 
 [#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI十八流程的真实代码、合成协议和未验收边界；不是模型质量报告。
 

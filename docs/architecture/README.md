@@ -80,7 +80,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 | 镜像与部署 | 07；[镜像目录契约](../RUNTIME_IMAGE_REGISTRY_CONTRACT.md)、[部署](../ONE_CLICK_DEPLOYMENT.md)、[发布契约](<../RELEASE_RUNTIME_IMAGES.md>) | §8.3、§9 资源 | 已迁入概览；FR-IMG-001/002 的 OH Fuzz 匹配工具链与 fresh/reuse 原生 sanitizer 回归见发布专题，实际执行结果单独留证 |
 | OpenSandbox upgrade | IR-001/003; 06/07/08/10; [upgrade record](../OPENSANDBOX_1_2_UPGRADE.md), [canonical pins](../../packages/runtime-sandbox/src/opensandbox-version.ts) | Historical versions retained | SDK/images updated; direct ingress and Scheduler recovery unchanged; local unit vs actual server/live/native/final-SHA proof separated |
 | 资源阈值与性能 | 04；[config](../../apps/scheduler/src/config.ts) | §9.2、§12 | 已迁入；不沿用旧默认值清单 |
-| Model Gateway 透明传输 | [透明传输契约](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM 结算](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)；06/09/10 | 历史代理描述不作为现行契约 | #923 单次原始传输、准入拒绝与 scoped 持久确认，Actions 待验 |
+| Model Gateway 透明传输 | [透明传输契约](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM 结算](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)；06/08/09/10 | 历史代理描述不作为现行契约 | #923 单次原始传输、准入拒绝与 scoped 持久确认；#1002 凭据删除保留 token/账本与历史额度，最终 SHA Actions 待验 |
 | 安全与隔离 | 10；[设备边界](../DEVICE_ACCESS.md)、[共享资产](../SHARED_ASSET_BLOB_STORE.md) | §9.1 | 概览已迁入，专题保留细则 |
 | 全局 Git Skill 源发布与新鲜度 | IR-007、FR-CAP-003/FR-KNOW-002；[候选数据](08-data-architecture.md#skill-源已批准目录与候选960)、[审批接口](09-interface-specs.md#全局-skill-源候选审批960)；06/10 | 旧 §8.4 仅历史对照 | #960 schema68：既有 live 不迁移，sync 只候选，精确 hash+epoch 显式批准；旧 Job 不改，健康检查与 pending 分离；最终 Actions 待验 |
 | 项目 Memory / Skill | 01 中 FR-KNOW；05–10 相关视图；[项目知识专题](../PROJECT_KNOWLEDGE.md) | 本期新增 | #752 分支实现与验证范围分开记录；专题拥有工作流和字段细则 |
