@@ -88,6 +88,17 @@ test("source contract: opaque started failure stays unknown; retry requires curr
   // Behavioral proof is in shared-asset-lifecycle.integration.test.ts, not these source assertions.
 });
 
+test("provision diagnostic uses the durable audit sink without serializing Job env or raw failures", () => {
+  const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  const sink = source.slice(source.indexOf("onFailure: async"), source.indexOf("} as Parameters<typeof runner.provision>"));
+  assert.match(sink, /await recordSystemAudit/);
+  assert.match(sink, /action: "job.provision_failed"/);
+  assert.match(sink, /attempt_id: attemptId!/);
+  assert.match(sink, /}, sql\);/);
+  assert.doesNotMatch(sink, /provisionInput\.env|platformCapability|error\.message|stack/);
+  // Runtime callback/cleanup behavior is exercised by opensandbox.test.ts; this checks only Scheduler wiring.
+});
+
 test("Upload failed 500 / UNEXPECTED_RESPONSE is a transient retry candidate, not a create receipt", () => {
   assert.equal(
     isRetryableProvisionFailure(

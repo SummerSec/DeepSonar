@@ -958,9 +958,9 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：所有安全相关配置、权限决定、Job/Attempt 状态、Control 事件、外部效果和设备/镜像动作必须有可查询审计或指标；audit_logs 必须 append-only，指标不得包含秘密或客户原文。
 - **决策来源**：发生故障或争议时必须能区分提案、接受、执行、结算和终态。
-- **实现状态**：as-built；管理面提供 audit/metrics/Job 详情查询。
-- **代码入口**：[audit routes](../../apps/scheduler/src/domains/audit/routes.ts)、[audit implementation](../../apps/scheduler/src/audit.ts)、[metrics](../../apps/scheduler/src/metrics.ts)。
-- **验证证据**：`pnpm ci:unit:authz`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:unit:dashboard-overview`。
+- **实现状态**：as-built；管理面提供 audit/metrics/Job 详情查询。#1002 provision 失败诊断追加到现有审计，关联 Job/Attempt，只保留固定非秘密信号；不证明远端未启动或授予重试。
+- **代码入口**：[audit routes](../../apps/scheduler/src/domains/audit/routes.ts)、[audit implementation](../../apps/scheduler/src/audit.ts)、[metrics](../../apps/scheduler/src/metrics.ts)、[OpenSandbox adapter](../../packages/runtime-sandbox/src/opensandbox.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)。
+- **验证证据**：`pnpm ci:unit:authz`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:unit:dashboard-overview`、`pnpm ci:unit:runtime-sandbox`（诊断脱敏、清理次序、原错误及迟到资源保留）；最终 SHA Actions 待验，现场 execd/并发根因不由替身测试证明。
 
 ### NFR-OBS-002 Evidence stream 可见性与截断说明
 

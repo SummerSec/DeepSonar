@@ -1162,6 +1162,13 @@ async function runJob(jobId: string) {
         limits: snapshot.sandbox_limits,
         // provision 超时或取消时，运行时适配器必须真正终止外部创建并清理迟到资源。
         signal: provisionAbort.signal,
+        onFailure: async (diagnostic: import("@deepsonar/runtime-sandbox").ProvisionFailureDiagnostic) => {
+          await recordSystemAudit({
+            action: "job.provision_failed", projectId: job.project_id as string, resourceType: "job", resourceId: jobId,
+            result: "error", errorCode: "SANDBOX_PROVISION_FAILED",
+            after: { schema: "deepsonar.provision-failure/v1", attempt_id: attemptId!, ...diagnostic },
+          }, sql);
+        },
       } as Parameters<typeof runner.provision>[0] & { signal?: AbortSignal };
       const cancellableRunner = runner as typeof runner & {
         cancelProvision?: (input: { jobId: string; attemptId: string }) => Promise<void>;
