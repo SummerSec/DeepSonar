@@ -12,7 +12,7 @@
 
 #914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由 #925 交付，UI 由 #929 交付；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，不代表自动重跑或快照改写。
 
-> **数据库直接重建授权（#1002 P2-13）**：[数据库说明](../database/README.md#重建授权保全1002-p2-13)记录源有效 ACL 与默认授权保全，不猜测角色、不无条件扩大 PUBLIC CREATE；CON-003、数据/工程视图及既有 migrations PostgreSQL 回归已同步，最终 SHA Actions 待验。本地与生产数据库未执行。
+> **数据库直接重建授权（#1002 P2-13）**：[数据库说明](../database/README.md#重建授权保全1002-p2-13)记录源有效 ACL 与默认授权保全及历史行提交前的对象权限恢复，不猜测角色、不无条件扩大 PUBLIC CREATE；CON-003、数据/工程视图及既有 migrations PostgreSQL 回归已同步，最终 SHA Actions 待验。本地与生产数据库未执行。
 
 > **Job 侧数据库冲突（#945）**：工具活动进度保持 Canvas-first。新 Task/Finding Report 的精确输入字节随 SQL 提交，领取后才投影文件；Verify/orphan 收口现可沿用纯数据库有界重试，成功报告输出仍禁止整体重放。历史缺冻结字节不补造，冲突文件不覆盖，原始 SQLSTATE 与未知效果边界不变；见[运行时视图](architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)和[数据契约](architecture/08-data-architecture.md#report-输入与文件投影945)。回归覆盖晚期 SQL 回滚、终态重复与文件摘要/归属，最终 SHA Actions 待验，未执行本地测试/构建/typecheck。
 

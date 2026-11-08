@@ -61,7 +61,7 @@
 
 `database/schema.sql` 是唯一 schema 基线，当前主线版本由 [`apps/scheduler/src/schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 的 `SCHEMA_VERSION` 导出并与基线校验一致。空库在保留连接和 advisory lock 下套用基线；非空库必须匹配 `schema_meta` 版本和表/列结构，否则拒绝启动。改表时直接修改基线、递增版本并用 `pnpm db:rebuild -- --plan` / `pnpm db:rebuild -- --apply` 走备份、列交集回填和序列校验；不写增量 ALTER 链。详细决策见 [ADR 0002](adr/0002-schema-baseline.md)。
 
-直接重建须保全源库已声明的有效 ACL 与默认授权，不凭角色前缀猜测运行身份，不无条件向 `PUBLIC` 增加 CREATE；现行恢复范围与证据见[数据库说明](../../database/README.md#重建授权保全1002-p2-13)。受控维护升级的专用 runtime 身份授权仍归既有 fenced `runtime_ready`，不能由普通重建越权代替。
+直接重建须在历史数据回填提交前恢复源对象的有效 ACL，不允许先用较宽默认授权暴露历史数据再收紧；须保全源库已声明的有效 ACL 与默认授权，不凭角色前缀猜测运行身份，不无条件向 `PUBLIC` 增加 CREATE；现行恢复范围与证据见[数据库说明](../../database/README.md#重建授权保全1002-p2-13)。受控维护升级的专用 runtime 身份授权仍归既有 fenced `runtime_ready`，不能由普通重建越权代替。
 
 稳定状态和约束写入基线的定列，易变业务内容写入 JSONB。Schema、shared types、OpenAPI 和测试出现分歧时，先修正事实入口和受影响文档，再补齐行为验证。
 

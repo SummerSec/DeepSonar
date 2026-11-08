@@ -557,6 +557,10 @@ export async function rebuildSchemaToLatest(
     throw new Error("fresh baseline was not applied after recreating the public schema");
   }
 
+  // The baseline commits its own transaction. Restore narrowed object/column
+  // grants before any historical rows can be committed under broader defaults.
+  await restorePublicObjectAcl(db, acl);
+
   const targetColumns = await readColumnMap(db, "public");
   const sourceColumns = await readColumnMap(db, REBUILD_STAGING_SCHEMA);
   const foreignKeys = await readForeignKeys(db, "public");

@@ -22,7 +22,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 ### 直接重建的授权保全（#1002 P2-13）
 
-`db:rebuild` 在移动源表前捕获 `public` 的有效 ACL 与 schema-local 默认授权，重建时按原 schema/default → 基线 → 仍存在的表/列、序列、函数、类型 ACL 顺序恢复；原 grant option 保留，新增对象只使用原默认授权。没有角色名推断、角色身份修改或无条件 PUBLIC CREATE；对象 owner/grantor 不在本切片的保留承诺内。完整范围、拒绝路径和隔离 Actions 回归见[数据库说明](../../database/README.md#重建授权保全1002-p2-13)。不变更 schema 基线或启动 fail-closed；最终 SHA Actions 待验。
+`db:rebuild` 在移动源表前捕获 `public` 的有效 ACL 与 schema-local 默认授权，重建时按原 schema/default → 基线 → 仍存在的表/列、序列、函数、类型 ACL → 历史数据回填的顺序执行，回填后再核对 ACL；后续失败不能暴露按较宽默认授权提交的历史私有数据。原 grant option 保留，新增对象只使用原默认授权。没有角色名推断、角色身份修改或无条件 PUBLIC CREATE；对象 owner/grantor 不在本切片的保留承诺内。完整范围、拒绝路径和隔离 Actions 回归见[数据库说明](../../database/README.md#重建授权保全1002-p2-13)。不变更 schema 基线或启动 fail-closed；最终 SHA Actions 待验。
 
 ## OpenSandbox pin 与不可变 Job 快照（IR-001/003）
 

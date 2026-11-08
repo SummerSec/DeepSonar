@@ -25,6 +25,35 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
   const targetUrl = new URL(testUrl);
   targetUrl.pathname = `/${database}`;
   const db = postgres(targetUrl.toString(), { max: 1 });
+  const readerDb = postgres(targetUrl.toString(), { max: 1, prepare: false });
+  const project = randomUUID();
+  let observedCopies = 0;
+  const checkReader = async (): Promise<void> => {
+    const rows = await readerDb<{ name: string }[]>`SELECT name FROM public.projects WHERE id=${project}`;
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]?.name, "acl-column-only");
+    await assert.rejects(readerDb`SELECT config_json FROM public.projects WHERE id=${project}`, { code: "42501" });
+  };
+  const reserveWithCopyCheck = async (failAfterCopy: boolean) => {
+    const session = await db.reserve();
+    return new Proxy(session, {
+      get(target, property, receiver) {
+        if (property !== "unsafe") return Reflect.get(target, property, receiver);
+        return async (query: string) => {
+          const result = await target.unsafe(query);
+          if (query.startsWith('INSERT INTO public."projects" ')) {
+            const [copied] = await target`SELECT config_json FROM public.projects WHERE id=${project}`;
+            assert.deepEqual(copied?.config_json, { private: "acl-old-private-sentinel" });
+            // This connection is independent of the rebuild/advisory-lock session.
+            await checkReader();
+            observedCopies += 1;
+            if (failAfterCopy) throw new Error("acl_rebuild_injected_copy_failure");
+          }
+          return result;
+        };
+      },
+    }) as unknown as MigrationConnection & { release: () => void };
+  };
   const temporary = await mkdtemp(path.join(os.tmpdir(), "deepsonar-acl-rebuild-"));
   try {
     await admin.unsafe(`CREATE DATABASE ${quote(database)}`);
@@ -44,6 +73,12 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
     for (const kind of ["TABLES", "SEQUENCES", "FUNCTIONS"]) {
       await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE ${quote(owner.name)} IN SCHEMA public GRANT ALL ON ${kind} TO ${quote(runtime)}`);
     }
+    // Defaults grant whole-table SELECT to future tables, but the source
+    // projects table intentionally exposes only its name column.
+    await db.unsafe(`ALTER DEFAULT PRIVILEGES FOR ROLE ${quote(owner.name)} IN SCHEMA public GRANT SELECT ON TABLES TO ${quote(reader)}`);
+    await db`INSERT INTO projects (id, name, config_json) VALUES (${project}, 'acl-column-only', '{"private":"acl-old-private-sentinel"}'::jsonb)`;
+    await readerDb.unsafe(`SET ROLE ${quote(reader)}`);
+    await checkReader();
     const before = await capturePublicAcl(connection);
     const beforeRoles = await db`SELECT rolname, rolsuper, rolinherit, rolcreaterole, rolcreatedb, rolcanlogin FROM pg_roles WHERE rolname IN (${runtime}, ${reader}) ORDER BY rolname`;
     const schemaFile = path.join(temporary, "schema.sql");
@@ -55,10 +90,11 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
     assert.equal(plan.applied, false);
     assert.deepEqual(normalize(await capturePublicAcl(connection)), normalize(before));
     const result = await rebuildSchemaOnReservedSession(
-      () => db.reserve() as unknown as Promise<MigrationConnection & { release: () => void }>,
+      () => reserveWithCopyCheck(false),
       { mode: "apply", force: true, schemaFile, dump: false, terminateScheduler: false },
     );
     assert.equal(result.applied, true);
+    assert.equal(observedCopies, 1);
     const after = await capturePublicAcl(connection);
     const grants = normalize(after);
     for (const [object, acl] of normalize(before)) assert.equal(grants.get(object), acl, object);
@@ -94,7 +130,16 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
         EXISTS (SELECT 1 FROM pg_namespace n, LATERAL aclexplode(n.nspacl) x
           WHERE n.nspname = 'public' AND x.grantee = 0 AND x.privilege_type = 'CREATE') AS public_create`;
     assert.deepEqual(options, { runtime_grant: true, reader_grant: true, public_create: false });
+    // An error after the committed historical copy must not leave defaults
+    // exposing the private column while the final ACL pass is never reached.
+    await assert.rejects(rebuildSchemaOnReservedSession(
+      () => reserveWithCopyCheck(true),
+      { mode: "apply", force: true, schemaFile, dump: false, terminateScheduler: false },
+    ), { message: "acl_rebuild_injected_copy_failure" });
+    assert.equal(observedCopies, 2);
+    await checkReader();
   } finally {
+    await readerDb.end();
     await db.end();
     await admin.unsafe(`DROP DATABASE IF EXISTS ${quote(database)}`);
     for (const name of [runtime, reader]) await admin.unsafe(`DROP ROLE IF EXISTS ${quote(name)}`);
