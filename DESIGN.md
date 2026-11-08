@@ -152,6 +152,8 @@ Gateway 区分总量与 memory 归因，对 pending/unknown 保守记账并在�
 
 可执行 PlanTask 复用现有 Hub Intent admission 与 Job/Attempt/effect 路径。依赖就绪须核对当前成功 Attempt、语义来源事件、未被替代的 Artifact、`plan.output` 对期望输出的精确关联，以及宿主实际留存字节/hash；模型自报 done 或 Job 成功本身不够。输出关联是工程关联，不证明语义满足。接纳与 CAS 回执、依赖执行和终止原因均保留持久来源；具体规则见 [ADR 0012](docs/architecture/adr/0012-plan-v2-execution.md)和[运行时视图](docs/architecture/06-runtime-view.md)。
 
+创建任务携带初始 objective 时，输入 SHA 绑定已完成 protocol、网络与 compose 种子冻结的最终 Canvas/root 输入，不需要额外 PATCH；历史目标不会自动重绑，见 [用户目标与路线身份](docs/PLAN_GAP_PROJECTION.md#用户目标与路线身份)。
+
 Hub 只在当前 Job scope 内按需读图：初始 L0/overview 只提供有界 handle；`graph_query(kind=plan_objective)` 独立于已接受 Plan 返回该 Job 可见的 `items[0]` 完整持久化 objective tuple，不提供 selectors、cross-scope 或 wholeGraph。预算或 input hash 不满足时如实失败，不返回可被误当作完整读取的部分 tuple。
 
 `plan_execution.stop_reason=complete` / objective `status=completed` 只记录工程路线输出条件已满足；任务收敛仍另过操作员判据与 Hub/Report 完成门。普通 HubIntent 继续走原 handler，不再制造新的 v1 `plan_protocol`；`applyHubPlanAdapter`、`persistPlanAudit`、副作用 writer 以及 pure legacy `adapt*` helper/type/export 已物理删除。不可变 v1 与 `hub_intent_adapter` 历史审计仍可解析，但不能作为新执行输入或实现债务依据。

@@ -275,12 +275,71 @@ test(
       const directState = (directStateRow?.state ?? {}) as JsonObject;
       assert.equal(Number(directState.bytes ?? 0), directBytes);
 
+      await runCreationBootstrapMatrix(h);
       await runNegativeBootstrapMatrix(h);
     } finally {
       await h.close();
     }
   },
 );
+
+async function runCreationBootstrapMatrix(h: PlanFixture): Promise<void> {
+  const source = await h.fixture();
+  const findingId = randomUUID(), findingNode = randomUUID();
+  await h.sql`INSERT INTO canvas_nodes(id,canvas_id,node_type,title,status,body_json)
+    VALUES(${findingNode},${source.canvas},'finding','Historical seed','active','{}')`;
+  await h.sql`INSERT INTO findings(id,project_id,job_id,node_id,fingerprint,title,severity,profile,summary,verify_status,disposition)
+    VALUES(${findingId},${source.project},${source.hub},${findingNode},${findingId},'Historical seed','medium',
+      'security.vulnerability','Frozen seed summary','pending','open')`;
+  const { taskInputSha256 } = await import("./domains/plan-protocol/task-input.js");
+  const cases = [
+    {},
+    { kind: "standard", allow_egress: false },
+    { kind: "compose", seed_finding_ids: [findingId.toUpperCase()] },
+  ];
+  for (const [index, options] of cases.entries()) {
+    const title = `REST objective bootstrap ${index}`;
+    const created = await h.app.inject({
+      method: "POST", url: `/projects/${source.project}/tasks`,
+      payload: { title, content: "Retain the scoped REST creation evidence", ...options, plan_objective: executionObjective() },
+    });
+    assert.equal(created.statusCode, 201, created.payload);
+    const canvas = String(created.json().canvas_id), hub = String(created.json().job.id);
+    const [stored] = await h.sql`SELECT title,target_json FROM canvases WHERE id=${canvas}`;
+    const [root] = await h.sql`SELECT id,body_json FROM canvas_nodes WHERE canvas_id=${canvas} AND node_type='root'`;
+    assert.deepEqual(root.body_json.target, stored.target_json, "root and Canvas must share the final frozen objective");
+    assert.ok(stored.target_json.effective_finding_protocol);
+    assert.equal(typeof stored.target_json.network_policy.allow_egress, "boolean");
+    if (options.allow_egress === false) assert.equal(stored.target_json.network_policy.allow_egress, false);
+    if (options.kind === "compose") {
+      assert.deepEqual(stored.target_json.seed_finding_ids, [findingId]);
+      assert.equal(stored.target_json.seed_findings[0].summary, "Frozen seed summary");
+      await h.sql`UPDATE findings SET summary='Later project history' WHERE id=${findingId}`;
+    }
+    await h.start(hub);
+    const overview = await h.invoke(hub, "graph_query", { kind: "overview" });
+    assert.equal(overview.statusCode, 200, overview.payload);
+    const read = await readCurrentObjective(h, hub);
+    assert.equal(read.objective.revision, "1", "creation needs no repair PATCH before bootstrap");
+    assert.equal(read.objective.input_sha256, taskInputSha256(stored.title, stored.target_json));
+    assert.deepEqual(read.objective, stored.target_json.plan_objective);
+    const fixture = { project: source.project, canvas, hub, root: String(root.id), objective: read.objective };
+    const proposal = h.proposal(fixture, [h.task("collect", fixture.root)]);
+    const key = randomUUID();
+    const submit = await h.invoke(hub, "submit_plan", proposal, key);
+    assert.equal(submit.statusCode, 200, submit.payload);
+    const replay = await h.invoke(hub, "submit_plan", proposal, key);
+    assert.equal(replay.statusCode, 200, replay.payload);
+    assert.equal((await h.children(hub)).length, 1, "transport replay must not admit a second Worker");
+    const [events] = await h.sql`SELECT count(*)::int AS count FROM events WHERE job_id=${hub} AND type='plan'`;
+    assert.equal(events.count, 1);
+    await h.sql`UPDATE canvases SET target_json=target_json || ${h.sql.json({ content: "Changed actual task input" })} WHERE id=${canvas}`;
+    const drift = await h.invoke(hub, "graph_query", { kind: "plan_objective" });
+    assertRejectedGraphQuery(drift, "plan_stale_revision");
+    assert.deepEqual((await h.state(canvas)).plan_objective, read.objective, "input drift must not silently rewrite a persisted objective");
+    assert.equal((await h.children(hub)).length, 1);
+  }
+}
 
 async function runNegativeBootstrapMatrix(h: PlanFixture): Promise<void> {
   const fixture = await h.fixture(executionObjective());

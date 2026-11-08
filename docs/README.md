@@ -219,7 +219,7 @@
 
 ## #775 当前执行与证据边界
 
-[Plan v2 决策](architecture/adr/0012-plan-v2-execution.md)与[运行时视图](architecture/06-runtime-view.md)记录当前 objective CAS、有限 lifetime、多轮路线和依赖输出核验；[设计对照](PLAN_BOUNDED_INTENT_DESIGN.md)保留范围分析。历史每 Canvas 一次补证不再描述当前 v2 执行上限；不把 v1 审计只读当作新执行兼容。旧 writer 已于 2026-10-31 物理删除，ADR-0012 的决策文字保持不变。
+[Plan v2 决策](architecture/adr/0012-plan-v2-execution.md)与[运行时视图](architecture/06-runtime-view.md)记录当前 objective CAS、有限 lifetime、多轮路线和依赖输出核验；[设计对照](PLAN_BOUNDED_INTENT_DESIGN.md)保留范围分析。历史每 Canvas 一次补证不再描述当前 v2 执行上限；不把 v1 审计只读当作新执行兼容。旧 writer 已于 2026-10-31 物理删除，ADR-0012 的决策文字保持不变。#1002 的创建初始 objective 绑定最终冻结 Canvas/root 输入见[Plan 专题](PLAN_GAP_PROJECTION.md#用户目标与路线身份)，不自动修补历史目标；对应创建/bootstrap 回归已接入 Actions，最终 SHA 另验。
 
 [#776 CLI 离线矩阵](REPAIR_FEEDBACK_CLI_MATRIX.md)记录三CLI十八流程的真实代码、合成协议和未验收边界；不是模型质量报告。
 
