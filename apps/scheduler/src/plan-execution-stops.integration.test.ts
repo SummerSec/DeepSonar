@@ -70,8 +70,8 @@ test("Plan v2 rejects unretained/mismatched outputs, unauthorized partial routes
         const findingId = randomUUID(), findingNode = randomUUID();
         await h.sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
           VALUES(${findingNode},${f.canvas},${child},'finding','Retained comment fixture','active','{}')`;
-        await h.sql`INSERT INTO findings(id,project_id,job_id,node_id,title,severity,summary,verify_status,disposition)
-          VALUES(${findingId},${f.project},${child},${findingNode},'Retained comment fixture','high','Offline confirmed Finding','confirmed','confirmed_vuln')`;
+        await h.sql`INSERT INTO findings(id,project_id,job_id,node_id,fingerprint,title,severity,summary,verify_status,disposition)
+          VALUES(${findingId},${f.project},${child},${findingNode},${findingId},'Retained comment fixture','high','Offline confirmed Finding','confirmed','confirmed_vuln')`;
         await h.core.patchCanvasConvergence(h.sql, f.canvas, {
           auto_stopped: true, hub_paused: false, paused_reason: "stopped-comment-fixture", paused_at: "2026-01-01T00:00:00Z",
         });
