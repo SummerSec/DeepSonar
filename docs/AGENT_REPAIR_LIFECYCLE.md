@@ -1,7 +1,7 @@
 # Agent 错误反馈与执行恢复（#903）
 
 > 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；本分支 #1012 人工等待修正链交接已接线，后续最终 SHA Actions 待验
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
 
 这是 [完成回执](REPAIR_FEEDBACK_DONE_REPAIR.md)的生命周期扩展。设计取舍见 [ADR 0016](architecture/adr/0016-repair-execution-generations.md)。#911 已合入 Knowledge/Skill 分类透传；#919（#913）已合入仅在宿主接受完成后识别结构化 Gateway 拒绝的运行器处理。本次不重复这两片，也不把工程证据写成真实模型试验。
 
@@ -12,6 +12,12 @@
 恢复事务在旧快照仍可用时调用共享 `inspectGatewayRequestBudget`，通过全部只读门后再调用 `ensureGatewayRequestBudget`，把完整原请求策略保存在内核 `control_receipt`，包括从未签发 token 的 workload。普通无修复回执的恢复也执行该步骤；批量先检查所有成员，再写入。历史策略缺失/非法保持明确拒绝，rate-limit、dedup、policy receipt 与 pending 转换共同回滚。Gateway mint/admission 消费策略回执已由 #928 与 #930 联合合入；请求上限的组合工程证据见下文，不由单独保存回执推定。
 
 `rerun-current` 保留原已授权 Pi 扩展选择并重新经过当前镜像/扩展准入。创建与恢复共用 `job-runtime-freeze.ts`，按平台配置一致重冻 quota、runtime knobs、profile 和 launch；较大的新配置不会授权提高旧 Job 持久请求策略。
+
+### Job-scoped model recovery (#1002 P1-9)
+
+同存活 Job 的 Pi 模型请求只有在内核持久证明尚未开始时才自动继续：SDK 生成前查询原 scoped settlement，用新的关联请求 UUID 重新经过原 Gateway admission。它不重新运行 Job/Agent，不复用已结束 Attempt，不刷新修正根、请求/Token 额度、快照或已接受效果。原声明为 never 的 effect 保持已知 never_started，不被置为可重放；新的调用独立计数。SDK 内部重试被禁用；无输出的失败 generation 不留下重复 message_start，partial/unknown/timeout 或查询失败仍停止。
+
+内核恢复许可在新 Job 创建期冻结，消费记录留在现有 effect intent、跨 key/token/Attempt 累计；历史缺许可/完整计数来源不补造。owner、期限、重复原引用与未知效果在同一 Job admission 事务里重新验证，仍使用原修正预算及请求次数求交。具体元数据、权限和回归归属见[透明 Gateway 契约](MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。源码及受控 SDK/真实 SQL/HTTP 回归已接线，最终 SHA Actions 待验，不冒充 native CLI 或 Provider 成功。
 
 ### 人工等待修正链交接（#1012）
 

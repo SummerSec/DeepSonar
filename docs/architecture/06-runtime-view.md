@@ -1,7 +1,7 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -100,6 +100,7 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 | 同一 Idempotency-Key 重复且输入相同 | 所有 operation POST 都要求 UUID key；只读 operation 使用接口层缓存/冲突检查，mutating operation 还由事件/effect durable dedup 保护 | 调用方可安全读取接口结果；同 key 不同 operation/input 返回冲突 |
 | 事件窗口或图查询预算耗尽 | 429 或预算错误，反馈当前状态和剩余预算 | 用新的有界查询/延迟重试修复；不扩大 Job scope |
 | OpenSandbox provision 拒绝或传输失败 | Adapter 在正常清理前提供固定字段诊断，Scheduler 追加 Job/Attempt 关联的 `job.provision_failed` 审计；不保存 SDK body/堆栈/env | 原错误、取消、迟到资源清理和 effect fencing 不变；未观察句柄不等于未启动，审计写失败不阻止清理；见[诊断边界](../OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)，最终 SHA Actions 待验 |
+| main 模型调用在连接/准入前失败且内核有持久 no-start 证明 | Pi SDK 扩展在同存活 Job/Attempt/Session 中重新生成关联请求；Gateway 在原 Job admission 锁内核验 owner/期限/预算/原回执并跨 token/Attempt 消费冻结恢复许可；空失败不留下双 start，SDK 内部重试关闭 | 不重启 Agent、不重放工具或未知效果，不退请求额度；partial/unknown/超时/伪造 Provider 文案停止。见[契约](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)，最终 SHA Actions 待验 |
 | provisioning 在外部效果开始前已知失败 | 记录失败并按已知可重试策略决定新 Attempt；Job 进入失败或受控 retry | 只有明确安全的 provisioning 重试允许继续；不重复未知外部效果 |
 | effect intent 已写但外部结果未知（例如沙箱句柄/销毁回执缺失） | Attempt effect 标记 `unknown`，Job 进入 orphan/对账路径，保留 effect id | **禁止自动重放未知效果**；由对账或人工确认后采取下一步 |
 | 已接受 done 后 CLI 再请求模型 | 仅对具有结构化终态来源的精确 Gateway 完成拒绝放行原 Hub/done bundle；#947 候选补齐 `409` / `409:` 后接空格的精确前缀，并从 Pi `message_end` 解码结果覆盖终态归一化与原 bundle 唯一结算；#1015 候选在原生 SDK allowance 的 HTTP 409 且类型精确匹配时保留固定完成拒绝信号，Pi 私有宿主错误身份隔离 SDK 抛出的同名异常，生成扩展→HTTP 替身→SDK update/end 同 state 解码→原完成结算接入回归；进程退出、缺终态、传输/诊断、语义失败与 Repair usage 拒绝不覆盖 | 不重试进程、不重放未知效果，仍过原 ingestion/lifecycle 门；最终 SHA Actions 待验，来源契约与离线回归见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919) |

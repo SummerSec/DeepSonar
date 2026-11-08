@@ -227,3 +227,49 @@ test("nonadaptive Anthropic thinking validates the exact pinned SDK minimum and 
   assert.throws(() => check({ ...model, compat: { supportsAdaptiveThinking: true } }, { reasoning: "high" }, 32), /THINKING_MINIMUM/u);
   check(model, {}, 32);
 });
+
+test("main recovery buffers only an empty failed generation and requires the authenticated no-start receipt", async () => {
+  for (const mode of ["safe", "unknown", "quota", "partial", "embedded_content"]) {
+    const module = await load();
+    const server = http.createServer((req, res) => {
+      assert.equal(req.headers.authorization, "Bearer synthetic-main-token");
+      const value = req.url === "/gateway/_allowance" ? { remaining_tokens: 100, policy_required: true }
+        : mode === "unknown" ? { status: "unknown" }
+        : { status: "not_started", reason: mode === "quota" ? "quota_exhausted" : "gateway_transient" };
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(value));
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/gateway`;
+      const model = { provider: "fixture", id: "model", api: "openai-completions", baseUrl, maxTokens: 256, compat: {} };
+      const headers = { "X-Deepsonar-Request-Id": "cannot-override", "x-custom": "preserved" };
+      const calls: any[] = []; const context = { messages: [] };
+      let start: any, stream: any;
+      module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
+        async function* (_model: any, ctx: any, options: any) {
+          calls.push(options); assert.equal(ctx, context);
+          yield { type: "start", partial: { content: [] } };
+          if (calls.length === 1) {
+            if (mode === "partial") yield { type: "text_delta", delta: "already-visible" };
+            yield { type: "error", reason: "error", error: { errorMessage: "provider-controlled gateway_transient",
+              content: mode === "embedded_content" ? [{ type: "text", text: "already-visible" }] : [] } };
+          } else yield { type: "done", message: { stopReason: "stop" } };
+        })({ on: (_event: string, callback: any) => { start = callback; }, registerProvider: (_provider: string, config: any) => { stream = config.streamSimple; } });
+      start({}, { model, modelRegistry: {} });
+      const events: any[] = [];
+      for await (const event of stream(model, context, { headers })) events.push(event);
+      assert.equal(calls.length, mode === "safe" ? 2 : 1);
+      assert.equal(events.filter(e => e.type === "error").length, mode === "safe" ? 0 : 1);
+      assert.equal(events.filter(e => e.type === "start").length, 1, "no ghost assistant message from a failed unstarted generation");
+      assert.equal(calls[0].maxRetries, 0);
+      assert.equal(calls[0].headers["x-custom"], "preserved");
+      assert.match(calls[0].headers["x-deepsonar-request-id"], /^[0-9a-f-]{36}$/u);
+      assert.equal(calls[0].headers["X-Deepsonar-Request-Id"], undefined);
+      assert.deepEqual(headers, { "X-Deepsonar-Request-Id": "cannot-override", "x-custom": "preserved" });
+      if (mode === "safe") {
+        assert.notEqual(calls[1].headers["x-deepsonar-request-id"], calls[0].headers["x-deepsonar-request-id"]);
+        assert.equal(calls[1].headers["x-deepsonar-retry-of"], calls[0].headers["x-deepsonar-request-id"]);
+      }
+    } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  }
+});

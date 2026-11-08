@@ -7,7 +7,7 @@ const HOP_BY_HOP = new Set([
 ]);
 const AUTH = new Set(["authorization", "x-api-key", "anthropic-api-key", "proxy-authorization"]);
 const CONTROL = new Set([
-  "x-deepsonar-request-id", "x-deepsonar-job", "x-deepsonar-workload", "x-deepsonar-effect-status", "x-deepsonar-proposal-revision",
+  "x-deepsonar-request-id", "x-deepsonar-retry-of", "x-deepsonar-job", "x-deepsonar-workload", "x-deepsonar-effect-status", "x-deepsonar-proposal-revision",
 ]);
 const TOKEN = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
 

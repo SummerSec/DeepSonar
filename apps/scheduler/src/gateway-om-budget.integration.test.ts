@@ -1050,7 +1050,7 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     assert.equal(closedUsage.settlement_status, "settled");
     assert.equal(closedUsage.source, "gateway_error");
     assert.equal(closedUsage.effect_status, "settled");
-    assert.deepEqual(closedUsage.intent_json, { provider: "openai", model: "main-model", method: "POST", workload: "observational_memory", gateway_request_id: correlations.get(transient)!.id });
+    assert.deepEqual(closedUsage.intent_json, { provider: "openai", model: "main-model", method: "POST", upstream_path: "v1/responses", recovery_policy_version: 1, workload: "observational_memory", gateway_request_id: correlations.get(transient)!.id });
     assert.deepEqual(closedUsage.resource_identity_json, { job_token_id: closedMemory.id, request_no: 1 });
     assert.deepEqual(closedUsage.settlement_json, {
       result: "never_started", external_effect: false, response_status: "not_started", total_tokens: 0, source: "gateway_error",

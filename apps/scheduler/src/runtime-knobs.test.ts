@@ -141,7 +141,12 @@ test("RoleConfig runtime_knobs reject snake_case aliases on write", () => {
 
 test("frozen snapshot knobs round-trip and reject partial blobs", () => {
   const frozen = freezeRuntimeKnobs(resolveRuntimeKnobs({ jobType: "audit", env, role: { stallSec: 600 } }));
+  assert.equal(frozen.gateway_model_retries, 2);
   assert.deepEqual(frozenRuntimeKnobsFromSnapshot({ runtime_knobs: frozen }), frozen);
+  const { gateway_model_retries: _grant, ...historical } = frozen;
+  assert.equal(frozenRuntimeKnobsFromSnapshot({ runtime_knobs: historical })?.gateway_model_retries, undefined,
+    "immutable history does not acquire the new recovery grant by parsing");
+  assert.equal(frozenRuntimeKnobsFromSnapshot({ runtime_knobs: { ...frozen, gateway_model_retries: 3 } }), null);
   assert.equal(frozenRuntimeKnobsFromSnapshot({ runtime_knobs: { stall_sec: 900 } }), null);
   assert.deepEqual(missingFrozenKnobFields({ runtime_knobs: frozen }), []);
   assert.deepEqual(missingFrozenKnobFields({}), ["agent_snapshot_json.runtime_knobs"]);

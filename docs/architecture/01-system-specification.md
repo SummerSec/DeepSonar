@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -695,6 +695,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **实现状态**：as-built；`job_tokens` 与 `job_capability_tokens` 分表维护，Gateway token 以 workload 区分主执行/观测记忆。有限总额跨轮换/撤销 token 聚合，后台 pending/unknown 保守阻断，所有 Job 终态撤销两类 workload token；已有用量与未知效果不因撤销被抹去。终态 model token、Control token、Job 状态和 audit 在同一事务中提交，不另取 Job lock，也不以 best-effort 吞异常。#1002 P1-7A 删除凭据保留全部历史 Gateway token 及累计用量/有限上限，只撤销并脱离秘密凭据，不删除账本引用或恢复已用额度；新增 HTTP/PG 与重建回归待最终 SHA Actions。
 - **代码入口**：[Gateway token lifecycle](../../apps/scheduler/src/gateway.ts)、[token revocation transaction](../../apps/scheduler/src/gateway-token-revocation.ts)、[platform token store](../../apps/scheduler/src/domains/platform-api/tokens.ts)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:capability-pack`、`pnpm ci:unit:job-lifecycle`；terminal bootstrap/revocation fixture 12 pass/0 skip，回滚与终态后的实际 HTTP 401 已核验。
+
+#1002 P1-9 补同存活 Job 的 Pi 模型失败恢复：只有未产生内容且有原 scoped Kernel no-start 证明，才以新关联 UUID 重新准入模型生成；原 Job/Session/Attempt、已接受效果、修正根与累计额度不变。冻结恢复许可与现有 effect intent 计数跨 token/Attempt 保留，旧历史不补造。Provider 错误/partial/unknown/期限/owner/重复引用拒绝，Gateway 保持单次透明交换，不重启 CLI 或自动重放。源码与真实 SQL/HTTP、受控 SDK 回归接 `pnpm ci:integration:platform-api` / `pnpm ci:unit:runtime-sandbox`，最终 SHA Actions 待验，细则见[契约](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。这是模型生成前的失败恢复，不改变 FR-JOB-014 重新运行 Job 时须新 Attempt 的要求。
 
 ### FR-CRED-005 Agent CLI 适配器边界
 

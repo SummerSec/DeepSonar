@@ -1,13 +1,23 @@
 # Model Gateway 透明传输（#923）
 
 > 状态：as-built；#928 已合入 main 616d7a36，工程证据见下文；后续 SHA 另验，不代表真实模型、生产或性能验收。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
 
 ## 边界与入口
 
 [Gateway](../apps/scheduler/src/gateway.ts) 保留 Job/token/Attempt、冻结模型、workload、deadline、预算和 effect/usage ledger 准入。获准请求只替换认证和服务器绑定目标，不通过业务头白名单、JSON 重序列化或模型参数改写改变业务内容。账号池和自动路由治理不在 #923 范围。
 
 [HTTP 传输](../apps/scheduler/src/gateway-transparent-http.ts) 使用 Node HTTP/HTTPS 单次交换，不隐式重试、跟随重定向或自动解压；[策略](../apps/scheduler/src/gateway-transparent-policy.ts) 只观察副本并在请求不满足预算时明确拒绝。内核纯数据库 admission 重试仍只发生在事务已回滚、尚未请求上游时，不代表重放外部调用。
+
+## Job-scoped model recovery (#1002 P1-9)
+
+Pi 的 SDK 生成前扩展为每次 main 调用签发独立 UUID，并禁用不透明 SDK 内部重试。只有本次没有模型内容/工具输出、认证的原 `/_settlement/:id` 返回 `not_started/gateway_transient`，才在原存活 Job/Attempt/Session 内准备新的、关联原 UUID 的模型调用；未运行那次的空 start/error 不提交给 Agent，成功仍只有一个 message start/终态。没有进程重启、Job 入队或旧业务输入/工具效果重放。Provider 429/5xx 文案、timeout、partial output、pending/unknown、查询失败与策略拒绝均不是权限。
+
+新的 `x-deepsonar-retry-of` 是被消费的精确内部请求元数据，不转给 Provider。Gateway 在原 Job 锁/admission 事务内重新检查最新唯一活动未取消 owner、lease/deadline、当前请求/Token/修正预算，以及原同 Job/Attempt/token/main 回执或严格零用量 never_started settlement。已建立 effect 的调用还须同 provider/model/method/path/input digest；原引用最多消费一次。任何其他未知效果或外来 pending run 都阻断；原 effect/replay policy、快照、已接受效果与账本不重写，新调用正常消耗请求额度，不退款。
+
+新 Job 在 `runtime_knobs.gateway_model_retries` 冻结内核恢复许可，上限只见 [runtime knobs](../apps/scheduler/src/runtime-knobs.ts)，不新增用户配置。实际已准入恢复次数由原 `job_attempt_effects.intent_json.gateway_retry_of` 跨 token/Attempt 汇总；每次调用的 `recovery_policy_version` 标明完整计数来源。缺许可、旧历史缺计数来源或耗尽明确拒绝，不因换 key、token、Attempt、重新配置或解析历史而补造额度。事务回滚不能留下仅计数/仅 effect 的半成品。Gateway HTTP 交换仍单次且原字节透明；恢复发生在显式 SDK 生成/准入边界，不借代理重放未知请求。
+
+[SQL/HTTP/扩展回归](../apps/scheduler/src/gateway-model-recovery.integration.test.ts)接既有 `pnpm ci:integration:platform-api`；[SDK 边界回归](../packages/runtime-sandbox/src/pi-main-request-budget.test.ts)接 `pnpm ci:unit:runtime-sandbox`。包含真实闭端口→可信零用量→同 Job 模型生成成功、跨代际累计许可、重复/错 scope/未知/取消/期限及历史拒绝。SDK delegate 和上游是受控替身，不声称 native Pi 进程、真实 Provider、质量或容量；源码接线不等于通过，最终 SHA Actions 待验。本切片不新增 Claude/DSH 自动进程重启，未知效果仍走原受治理对账。
 
 ## 删除凭据与历史预算（#1002 P1-7A）
 

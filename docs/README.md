@@ -1,7 +1,8 @@
 # DeepSonar 文档索引
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
+> **同 Job 模型失败恢复（#1002 P1-9）**：[契约](MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)记录 Pi SDK 的 scoped no-start→新关联模型调用、原 live owner/预算重新准入与跨代际恢复许可。没有 Agent 重启、旧效果重放或退款，unknown/partial/无来源历史拒绝；受控 SDK 与真实 SQL/HTTP 回归已接原 Actions，最终 SHA 待验。
 > **Pi 模型预算与截断（#958）**：[预算与恢复专题](PI_MODEL_BUDGET_RECOVERY.md)记录发现声明/显式配置/CLI 观测分层、创建期冻结、同 Session 有界恢复及压缩无进展停止；不扩大权限/额度，不伪造上下文证据。行为回归与实际锁版本 SDK、HTTP/PG 入口已接既有 Actions，最终 SHA 待验；本地与生产验证均未执行。
 > **#951 完成失败诊断**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)登记当前 Attempt 可归属产出、原回执状态和受权限保护证据；有产出不升级成功，不伪造未知字段或自动重放。核心缺诊断已随 #963 合入并工程收口（2026-11-07 核对）；后续提交按各自最终 SHA 另验，全量覆盖和生产归因仍未验证。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不阻塞本轮 PR、工程 issue 收口或发布。历史非豁免和未交付质量条款不表示本轮追加卡点；已接线工程测试及权限/CAS/发布抑制边界保留，最终 SHA 的现有 GitHub Actions 适用检查须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`。见[最新范围决定](<../AGENTS.md#豁免范围>)和[评估专题](<PROJECT_FINDING_EVALUATION.md>)。
@@ -111,7 +112,7 @@
 | [USAGE_LIMITS.md](USAGE_LIMITS.md) | **as-built** | 用量预算默认不限、显式限额、历史冻结策略及保留安全边界 |
 | [AI_NATIVE_TRUSTED_KERNEL.md](AI_NATIVE_TRUSTED_KERNEL.md) | **长期提案 + 已实现边界（2026-10-31）** | `RepairFeedback`、目标授权及 Plan v2 工程边界已有实现；完整长期协议、当前回放/组合验证与独立质量分别登记 |
 | [PI_OBSERVATIONAL_MEMORY_INTEGRATION.md](PI_OBSERVATIONAL_MEMORY_INTEGRATION.md) | **#815 A 工程与本地镜像准入已验** | canonical 固定发布物、独立 wrapper 指纹、opt-in 冻结配置/模型；OM 专属版本准入与生产内容守卫已验证，镜像证据集中见 RPC 专题 |
-| [MODEL_GATEWAY_TRANSPARENCY.md](MODEL_GATEWAY_TRANSPARENCY.md) | **#928 已合入；main 616d7a36 工程验收** | 原始请求/响应、HTTP 边界、显式预算拒绝与 OM 持久确认；有界请求流限制和验收入口 |
+| [MODEL_GATEWAY_TRANSPARENCY.md](MODEL_GATEWAY_TRANSPARENCY.md) | **#928 已合入；main 616d7a36 工程验收** | 原始请求/响应、HTTP 边界、显式预算拒绝与 scoped 持久确认；#1002 P1-9 同 Job no-start 模型恢复及跨代际许可已接线，最终 SHA 待验 |
 | [PI_OBSERVATIONAL_MEMORY_GATEWAY.md](PI_OBSERVATIONAL_MEMORY_GATEWAY.md) | **#815 B 工程已随 #831 Actions 验收** | 内核 workload 凭据、冻结路由、额度/归因、pending/unknown 与终态撤销；历史 Gateway budget/SQL/HTTP 证据保留原范围，后续修复 SHA、发布与收益结论另计 |
 | [PI_OBSERVATIONAL_MEMORY_RPC.md](PI_OBSERVATIONAL_MEMORY_RPC.md) | **#815 C 实际本地镜像 RPC/启动拒绝已验** | 本地 base 镜像身份、canonical package/lock/manifest/wrapper 预检、已安装真实 RPC 与独立生产 guard 正负例的唯一详细记录；#831 工程 Actions 已验收，后续修复 SHA/发布通道及收益另计 |
 | [SUPERAGENT_GAP_RESEARCH.md](SUPERAGENT_GAP_RESEARCH.md) | **研究结论（#833）** | DeepSeek Super Agent 与现有设计的差距评估：结论是不新增系统或功能层，已有 Hub/Intent/Job、能力发现、Skill 拉取、项目知识与成果评价覆盖大部分能力；效果改善仍无对照证据，后续只按现有架构推进。 |

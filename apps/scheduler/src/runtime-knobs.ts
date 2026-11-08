@@ -42,8 +42,12 @@ export interface ResolvedRuntimeKnobs {
   };
 }
 
+/** Kernel-owned recovery grant, frozen for new Jobs; absent history grants no automatic retries. */
+export const GATEWAY_MODEL_RECOVERY_LIMIT = 2;
+
 /** Frozen onto `agent_snapshot_json.runtime_knobs` so the next Job sees current DB values. */
 export interface FrozenRuntimeKnobs {
+  gateway_model_retries?: number;
   stall_sec: number;
   job_token_max_requests: number;
   timeout_sec: number;
@@ -324,6 +328,7 @@ export function resolveRuntimeKnobs(input: {
 
 export function freezeRuntimeKnobs(resolved: ResolvedRuntimeKnobs): FrozenRuntimeKnobs {
   return {
+    gateway_model_retries: GATEWAY_MODEL_RECOVERY_LIMIT,
     stall_sec: resolved.stallSec,
     job_token_max_requests: resolved.jobTokenMaxRequests,
     timeout_sec: resolved.timeoutSec,
@@ -341,6 +346,10 @@ export function missingFrozenKnobFields(snapshot: unknown): string[] {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return ["agent_snapshot_json.runtime_knobs"];
   const value = raw as Record<string, unknown>;
   const missing: string[] = [];
+  if (value.gateway_model_retries !== undefined
+    && parseOptionalBoundedInt(value.gateway_model_retries, 0, GATEWAY_MODEL_RECOVERY_LIMIT) === undefined) {
+    missing.push("agent_snapshot_json.runtime_knobs.gateway_model_retries");
+  }
   if (parseOptionalBoundedInt(value.stall_sec, RUNTIME_KNOB_BOUNDS.stallSec.min, RUNTIME_KNOB_BOUNDS.stallSec.max) === undefined) {
     missing.push("agent_snapshot_json.runtime_knobs.stall_sec");
   }
@@ -361,6 +370,8 @@ export function frozenRuntimeKnobsFromSnapshot(snapshot: unknown): FrozenRuntime
   const raw = (snapshot as Record<string, unknown>).runtime_knobs;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const value = raw as Record<string, unknown>;
+  const retries = parseOptionalBoundedInt(value.gateway_model_retries, 0, GATEWAY_MODEL_RECOVERY_LIMIT);
+  if (value.gateway_model_retries !== undefined && retries === undefined) return null;
   const stallSec = parseOptionalBoundedInt(value.stall_sec, RUNTIME_KNOB_BOUNDS.stallSec.min, RUNTIME_KNOB_BOUNDS.stallSec.max);
   const jobTokenMaxRequests = parseOptionalBoundedInt(
     value.job_token_max_requests,
@@ -382,6 +393,7 @@ export function frozenRuntimeKnobsFromSnapshot(snapshot: unknown): FrozenRuntime
     return null;
   }
   return {
+    ...(retries === undefined ? {} : { gateway_model_retries: retries }),
     stall_sec: stallSec,
     job_token_max_requests: jobTokenMaxRequests,
     timeout_sec: timeoutSec,
