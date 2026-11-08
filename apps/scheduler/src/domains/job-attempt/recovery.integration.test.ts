@@ -168,7 +168,9 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
     };
     const assertCode = (code: string) => (error: unknown) => error instanceof Error && "code" in error && error.code === code;
 
-    await runHubPlatformStopFixtures(t, { db: sql, setup, app, directedHub: async order => {
+    await runHubPlatformStopFixtures(t, { db: sql, setup, app,
+      setJobStatus: async (jobId, status) => { await sql`UPDATE jobs SET status=${status} WHERE id=${jobId}`; },
+      directedHub: async order => {
       // Minimal/maximal UUIDv4 values force both Canvas Job sort orders; the
       // actual Hub still gets its normal generated ID and frozen grant.
       const target = await setup(order === "target_first" ? "00000000-0000-4000-8000-000000000000" : "ffffffff-ffff-4fff-bfff-ffffffffffff");

@@ -11,6 +11,7 @@ type Fixture = { projectId: string; canvasId: string; jobId: string; attemptId: 
 export async function runHubPlatformStopFixtures(t: TestContext, input: {
   db: Db; setup: () => Promise<Fixture>; app: FastifyInstance;
   directedHub: (order: "target_first" | "hub_first") => Promise<{ hub: Fixture; target: Fixture }>;
+  setJobStatus: (jobId: string, status: "waiting_human" | "timeout") => Promise<void>;
 }): Promise<void> {
   const { db, setup, app } = input;
   const api = await import("../platform-api/index.js");
@@ -39,15 +40,23 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
     await db`UPDATE canvas_nodes SET body_json=body_json || ${db.json(z.json().parse({ target: frozen }))} WHERE canvas_id=${f.canvasId} AND node_type='root'`;
     return frozen;
   };
+  const appendEvent = async (f: Fixture, type: "control_receipt" | "human", payload: Record<string, unknown>) => {
+    const key = randomUUID();
+    await db.begin(async raw => {
+      const tx = raw as unknown as Db;
+      await tx`SELECT id FROM jobs WHERE id=${f.jobId} FOR UPDATE`;
+      const [{ next }] = await tx`SELECT COALESCE(MAX(job_seq),0)+1 AS next FROM events WHERE job_id=${f.jobId}`;
+      await tx`INSERT INTO events(job_id,attempt_id,event_id,job_seq,type,payload_json)
+        VALUES(${f.jobId},${f.attemptId},${key},${next},${type},${tx.json(z.json().parse(payload))})`;
+    });
+    return key;
+  };
   const history = async (f: Fixture, count: number, limit: number | null = null, deadline = new Date(Date.now() + 3_600_000).toISOString()) => {
     const keys: string[] = [];
-    for (let i = 0; i < count; i++) {
-      const key = randomUUID(); keys.push(key);
-      await db`INSERT INTO events(job_id,attempt_id,event_id,type,payload_json) VALUES(${f.jobId},${f.attemptId},${key},'control_receipt',${db.json({
-        operation: "mark_job_done", status: "rejected", attempt_id: f.attemptId, proposal_revision: i,
-        repair_token_limit: limit, execution_deadline: deadline,
-      })})`;
-    }
+    for (let i = 0; i < count; i++) keys.push(await appendEvent(f, "control_receipt", {
+      operation: "mark_job_done", status: "rejected", attempt_id: f.attemptId, proposal_revision: i,
+      repair_token_limit: limit, execution_deadline: deadline,
+    }));
     return keys;
   };
   const state = async (f: Fixture) => ({
@@ -144,12 +153,13 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
     for (const gate of ["business_wait", "authorization_wait", "high_risk_wait", "accepted_human", "accepted_done", "cancel", "terminal", "sandbox_drift", "foreign_project", "malformed_objective"]) {
       const f = await hub(); await stopObjective(f);
       if (gate.endsWith("_wait")) {
-        await db`UPDATE jobs SET status='waiting_human' WHERE id=${f.jobId}`;
-        await db`INSERT INTO events(job_id,attempt_id,event_id,type,payload_json) VALUES(${f.jobId},${f.attemptId},${randomUUID()},'human',${db.json({ reason: "Preserve the accepted request", subject: { type: "platform_blocker", kind: { business_wait: "business_decision", authorization_wait: "authorization", high_risk_wait: "high_risk_action" }[gate as "business_wait" | "authorization_wait" | "high_risk_wait"] } })})`;
-      } else if (gate.startsWith("accepted_")) await db`INSERT INTO events(job_id,attempt_id,event_id,type,payload_json)
-        VALUES(${f.jobId},${f.attemptId},${randomUUID()},'control_receipt',${db.json({ operation: gate === "accepted_human" ? "request_human" : "mark_job_done", status: "persisted_deferred" })})`;
+        await input.setJobStatus(f.jobId, "waiting_human");
+        await appendEvent(f, "human", { reason: "Preserve the accepted request", subject: { type: "platform_blocker", kind: { business_wait: "business_decision", authorization_wait: "authorization", high_risk_wait: "high_risk_action" }[gate as "business_wait" | "authorization_wait" | "high_risk_wait"] } });
+      } else if (gate.startsWith("accepted_")) await appendEvent(f, "control_receipt", {
+        operation: gate === "accepted_human" ? "request_human" : "mark_job_done", status: "persisted_deferred",
+      });
       else if (gate === "cancel") await db`UPDATE job_attempts SET cancel_requested=true WHERE id=${f.attemptId}`;
-      else if (gate === "terminal") await db`UPDATE jobs SET status='timeout' WHERE id=${f.jobId}`;
+      else if (gate === "terminal") await input.setJobStatus(f.jobId, "timeout");
       else if (gate === "foreign_project") {
         const other = await setup(); await db`UPDATE jobs SET project_id=${other.projectId} WHERE id=${f.jobId}`;
       } else if (gate === "malformed_objective") await db`UPDATE canvases SET target_json=jsonb_set(target_json,'{plan_objective}','{"status":"stopped"}') WHERE id=${f.canvasId}`;
