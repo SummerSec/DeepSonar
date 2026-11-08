@@ -54,7 +54,11 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及质量协议/观察账本；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。#831 合入的工程基线 `fdb55a01` 已在 [Actions CI](https://github.com/SummerSec/DeepSonar/actions/runs/41298113058) 完成真实 schema67 rebuild、PGDMP 备份/pg_restore 恢复及 Finding-quality PostgreSQL/HTTP/worker 验收；历史本地结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，不能代替后续 SHA 的检查。
 
-保鲜门禁的单处编号核对：当前主线 v69（指当前集成目标基线，不声明已合并或已发布；2026-11-08 源码核对，#1002 P1-7A 保留已撤销 token 与用量账本；本次未执行 rebuild、测试、构建或 typecheck，最终 SHA Actions 待验）。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。历史绿灯不能代替当前基线及最终提交的工程验收。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
+保鲜门禁的单处编号核对：当前主线 v70（指当前集成目标基线，不声明已合并或已发布；2026-11-08 源码核对，在 #1002 P1-7A 保留已撤销 token 与用量账本的基线上增加 P1-6 Canvas 节点引用索引；本次未执行 rebuild、测试、构建或 typecheck，最终 SHA Actions 待验）。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。历史绿灯不能代替当前基线及最终提交的工程验收。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
+
+### Canvas 节点引用索引（#1002 P1-6）
+
+边的起点/终点与人工消息的 human/target 节点外键均有前导列索引，避免任务 retry 删除节点时逐节点扫描其它 Canvas 的引用。既有 Canvas-first 删除事务、外键与项目隔离不变；不提高 timeout、不分批提交。基线变更继续要求版本同步、备份和全量重建。索引前后 SQL 执行计划与真实 HTTP rollback/成功隔离回归接 `pnpm ci:integration:recovery`，基线/重建门接 `pnpm ci:unit:migrations`；最终 SHA Actions 待验，不作为现场延迟根因或容量证明。权威细则见 [数据库说明](../../database/README.md#canvas-节点引用索引1002-p1-6)。
 
 ### Report 输入与文件投影（#945）
 

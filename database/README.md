@@ -12,6 +12,12 @@ PostgreSQL session 上持有 session advisory lock：
 Scheduler 启动路径不会自动升级旧库。
 
 
+## Canvas 节点引用索引（#1002 P1-6）
+
+`canvas_edges.from_node_id/to_node_id` 与 `human_messages.human_node_id/target_node_id` 均有对应的前导列索引。任务 retry 即使先删除本 Canvas 的边，随后删除节点的外键检查仍会查询全表的剩余引用；只有 `canvas_id` 索引不能避免对其它 Canvas 引用的扫描。索引不改变外键、删除顺序、事务原子性或项目范围，不提高 statement timeout，也不分批提交任务重置。
+
+此切片在 #1002 P1-7A 的集成基线上继续 bump `SCHEMA_VERSION`；旧库仍须受控备份与全基线重建，没有就地增量 DDL。既有 recovery 集成入口增加隔离 PostgreSQL 的索引前后执行计划对照，以及实际 HTTP retry 的失败后完整回滚、成功后引用清理和无关项目数据不变检查。它是合成工程证据，不证明现场 61.6 秒的唯一根因、生产容量或延迟收益；最终 SHA Actions 待验，未在本地或生产运行。
+
 ## #697 sandbox_limits 防御性 clamp（无 schema bump）
 
 生产预期项目 `sandbox_limits_json` 越权行数为 0。生效路径已对平台 env 默认取 **min**，
