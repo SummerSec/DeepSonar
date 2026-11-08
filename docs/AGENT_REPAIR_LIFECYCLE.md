@@ -1,7 +1,7 @@
 # Agent 错误反馈与执行恢复（#903）
 
-> 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；本分支 #943 可信显式恢复已接线，最终 SHA Actions 待验
-> 同步日期：2026-11-07
+> 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；本分支 #1012 人工等待修正链交接已接线，后续最终 SHA Actions 待验
+> 同步日期：2026-11-08
 
 这是 [完成回执](REPAIR_FEEDBACK_DONE_REPAIR.md)的生命周期扩展。设计取舍见 [ADR 0016](architecture/adr/0016-repair-execution-generations.md)。#911 已合入 Knowledge/Skill 分类透传；#919（#913）已合入仅在宿主接受完成后识别结构化 Gateway 拒绝的运行器处理。本次不重复这两片，也不把工程证据写成真实模型试验。
 
@@ -12,6 +12,14 @@
 恢复事务在旧快照仍可用时调用共享 `inspectGatewayRequestBudget`，通过全部只读门后再调用 `ensureGatewayRequestBudget`，把完整原请求策略保存在内核 `control_receipt`，包括从未签发 token 的 workload。普通无修复回执的恢复也执行该步骤；批量先检查所有成员，再写入。历史策略缺失/非法保持明确拒绝，rate-limit、dedup、policy receipt 与 pending 转换共同回滚。Gateway mint/admission 消费策略回执已由 #928 与 #930 联合合入；请求上限的组合工程证据见下文，不由单独保存回执推定。
 
 `rerun-current` 保留原已授权 Pi 扩展选择并重新经过当前镜像/扩展准入。创建与恢复共用 `job-runtime-freeze.ts`，按平台配置一致重冻 quota、runtime knobs、profile 和 launch；较大的新配置不会授权提高旧 Job 持久请求策略。
+
+### 人工等待修正链交接（#1012）
+
+`POST /canvases/:id/messages` 的普通回复与既有 human-node ignore 入口复用同一续接函数。只有 Job 存在原 rejected completion 修正根时，才在已持有 Canvas → Job 锁的事务中调用共享 `readRepairRequeueAdmission`，通过原 deadline、累计请求/token、暂停、已接受完成与全部效果门后追加 `resume-frozen` 代际，再关闭旧 Attempt 和转 pending。原冻结快照、修正根、回执、费用及期限不重写；没有修正根的普通人工等待保持原续接语义。
+
+同 message UUID 的读取在 Canvas 锁内串行化；相同回复和重复忽略只交接一次。准入拒绝通过原 `HumanInterventionError` 返回具体 409 error_code；消息、人工节点、代际和 Job/Attempt 变更在同一事务回滚。pending 转换意外没有结果时同样回滚，不提交只有代际而没有后继 Job 的半成品。恢复权限仍是原消息/忽略入口的权限，不借本修复授权新的执行范围或重放未知效果。
+
+`repair-generation.integration.test.ts` 已加入真实 HTTP 回复/忽略 → Dispatcher 领取与新 owner → Gateway 累计计费 → 完成门/终态结算，以及并发重复、额度/效果/暂停/原期限拒绝与 pending UPDATE 故障的全行回滚断言。消息注入和显式 ACK 仍是两阶段；本回归的 ACK 调用领域 handler，不宣称真实模型已读取，也不冒充完整 Control ACK 传输端到端。运行器和上游为受控替身，最终 SHA 的 `pnpm ci:integration:recovery` Actions 待验，本机未运行测试/构建/typecheck。
 
 ### 创建入口补齐与缺损快照诊断（#943 / #948）
 
@@ -59,7 +67,7 @@
 
 2026-11-06 核对 `c0809b3e`：人工等待已有独立配置和最近 human 事件时钟；但定向对账报告残留时，旧路径只追加“先对账”的文案，随后仍把 Job 写成 failed/human_timeout。本切片在 Job → Attempt 锁下执行检查：有残留或本轮有结算进展保留 waiting_human；最终 UPDATE 还要求该 Job 的全部效果为 settled，覆盖对账扫描排除的 active Attempt 和 planned 效果。被阻断的 Job 不进入 Reaper 的终态返回列表，因此不触发 human_timeout 计数、终态清理或 Canvas 失败推进。
 
-不刷新原 deadline、预算、token 或 Attempt，不自动重放/结算未知效果，不改 Finding、Report 或已接受人工请求。人工等待仍可被已有显式取消/回复流程处理；本切片不证明所有回复恢复路径已满足效果门。`human_messages.delivered_at` 表示人给 Agent 的消息已注入，不是 Agent 请求已经投递给人的证据；“实际通知投递后计时”未在此实现；#946 的未结清效果误判核心故障已工程收口，通知计时仍是独立未交付范围。
+不刷新原 deadline、预算、token 或 Attempt，不自动重放/结算未知效果，不改 Finding、Report 或已接受人工请求。人工等待仍可被已有显式取消/回复流程处理；#946 当时不覆盖所有回复恢复路径。修正根关联的当前回复/忽略共享准入补齐见[交接](#人工等待修正链交接1012)，不把该有限范围扩写为所有普通等待路径已验证。`human_messages.delivered_at` 表示人给 Agent 的消息已注入，不是 Agent 请求已经投递给人的证据；“实际通知投递后计时”未在此实现；#946 的未结清效果误判核心故障已工程收口，通知计时仍是独立未交付范围。
 
 `pnpm ci:unit:job-lifecycle` / `pnpm ci:integration:job-lifecycle` 的既有入口增加未知效果、部分对账进展、active/inactive Attempt × planned/pending/unknown、多 tick 无变更、显式结算后正常到期的回归。仅合成 SQL/替身，最终 SHA GitHub Actions 待验；本机不运行测试、构建或 typecheck。
 

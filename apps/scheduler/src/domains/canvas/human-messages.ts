@@ -5,6 +5,9 @@ import { sql } from "../../db.js";
 import { beginEffect, markAttemptInterrupted, markEffectUnknown, settleEffect } from "../job-attempt/index.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { readSharedAssetBlob } from "../shared-assets/index.js";
+import { readRepairTokenBudget } from "../event-ingestion/repair-token-budget.js";
+import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
+import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
 
 export type HumanMessageStatus = "planned" | "injected" | "acknowledged" | "unknown" | "failed";
 
@@ -163,6 +166,8 @@ export async function createHumanMessage(input: {
 }): Promise<Record<string, unknown>> {
   const attachmentVersionIds = [...new Set(input.attachmentVersionIds)].sort();
   const result = await sql.begin(async (tx) => {
+    const [canvas] = await tx`SELECT id, project_id FROM canvases WHERE id=${input.canvasId} FOR UPDATE`;
+    if (!canvas) throw Object.assign(new Error("canvas not found"), { statusCode: 404 });
     const [existing] = await tx`SELECT * FROM human_messages WHERE id=${input.id}`;
     if (existing) {
       const sameTarget = existing.target_kind === input.target.kind &&
@@ -177,9 +182,6 @@ export async function createHumanMessage(input: {
       }
       return { message: existing, created: false };
     }
-    const [canvas] = await tx`SELECT id, project_id FROM canvases WHERE id=${input.canvasId} FOR UPDATE`;
-    if (!canvas) throw Object.assign(new Error("canvas not found"), { statusCode: 404 });
-
     let targetNode: Record<string, unknown> | undefined;
     let targetJob: Record<string, unknown> | undefined;
     if (input.target.kind === "job") {
@@ -314,6 +316,14 @@ async function resumeWaitingHumanJob(
 ): Promise<boolean> {
   const [job] = await tx`SELECT id, status FROM jobs WHERE id=${jobId} FOR UPDATE`;
   if (!job || String(job.status) !== "waiting_human") return false;
+  // Ordinary human waits keep their existing continuation. Repair-bearing waits
+  // require the same lifetime/unknown-effect admission as explicit recovery.
+  const repair = await readRepairTokenBudget(tx, jobId)
+    ? await readRepairRequeueAdmission(tx, jobId) : null;
+  if (repair?.blocker) throw new HumanInterventionError(409, repair.blocker.code, repair.blocker.reason);
+  if (repair?.budget && repair.deadline) {
+    await admitRepairGeneration(tx, jobId, repair.budget.receipt_ref, repair.deadline, "resume-frozen");
+  }
   await markAttemptInterrupted(tx as unknown as typeof sql, jobId, reason);
   const resumed = await createSqlJobLifecycleApplication(tx as unknown as typeof sql).transitionJob(jobId, "pending", {
     error: null,
@@ -323,7 +333,10 @@ async function resumeWaitingHumanJob(
     finished_at: null,
     heartbeat_at: null,
   });
-  if (!resumed) return false;
+  if (!resumed) {
+    if (repair?.budget) throw new HumanInterventionError(409, "REPAIR_REQUEUE_CHANGED", "Repair continuation could not enter pending; no handoff was committed");
+    return false;
+  }
   await normalizePendingJobPriority(jobId, tx as unknown as typeof sql);
   await tx`
     UPDATE canvas_nodes SET status='pending', updated_at=now()

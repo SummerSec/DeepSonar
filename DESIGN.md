@@ -358,7 +358,7 @@ OpenSandbox upgrade baseline (2026-11-01): installed SDK 1.2 and canonical serve
 
 **过程流持久化边界（#388）：** 确认点是 `JobEvidenceWriter.appendNormalized` 落盘完成；`publishStream` 必须等待该 Promise。排序与去重键为 `attempt_id:seq`。补读/订阅交界：先 `subscribeStream`，再读 evidence 快照，再用该键排空竞态。未落盘窗口标 `unpersisted`；本副本看不到期望文件标 `visibility=unavailable`，WS 关闭码 `4415`。可恢复性：单 Scheduler + 本地 `BLOB_DIR`（默认支持）可在重启/重连后补齐已确认帧并提供本机 live；多 Scheduler + 共享 `BLOB_DIR`（可选支持）任意副本可补读已确认帧，live 仍只在 lease 持有者；多 Scheduler + 本地卷（不支持过程流连续性）非持有者显式 unavailable。跨副本 file-tail 在未证明共享可见性前不做；不引入消息中间件；不承诺零丢失。
 
-人工消息进入 durable inbox ledger，附件先写共享资产再按 message UUID 注入 `/workspace/.deepsonar/inbox/`。`injected` 与显式 ACK 分离；waiting-human 回复会关闭旧 Attempt、恢复 Job 为 pending 并重新唤醒 Dispatcher。普通文本、Session 标题和节点名称都不能伪造 ACK。
+人工消息进入 durable inbox ledger，附件先写共享资产再按 message UUID 注入 `/workspace/.deepsonar/inbox/`。`injected` 与显式 ACK 分离；waiting-human 回复或忽略关闭旧 Attempt、恢复 Job 为 pending。带修正根的 Job 先通过共享原额度/期限/暂停/效果准入，在同一 Canvas → Job 事务建立 resume-frozen 代际，再唤醒 Dispatcher；拒绝返回具体错误并回滚消息、人工节点与状态，不重置 lifetime。重复消息/忽略不重复交接，详见[人工等待修正链交接](docs/AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)。普通文本、Session 标题和节点名称都不能伪造 ACK。
 
 Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、usage 和广播注入，保留原始归档下载。DSH 当前只捕获精确 `sessions/<project>/<sessionId>/session.v4.jsonl`，历史 viewer 仍可读取旧代归档。Session usage 与 Gateway `job_usage_ledger` 是两套口径，不互相冒充定价或对账结果。
 

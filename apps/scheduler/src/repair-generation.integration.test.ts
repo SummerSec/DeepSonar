@@ -225,6 +225,100 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       const [row] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${jobId} AND payload_json->>'subtype'='repair_generation'`;
       assert.equal(row.count, 0);
     };
+    const humans = await import("./domains/canvas/human-messages.js");
+    for (const mode of ["reply", "ignore"] as const) {
+      await t.test(`#1012 ${mode}: one generation, frozen lifetime, delivery and successful completion`, async () => {
+        const f = await setup(); await f.stop("waiting_human");
+        Reflect.set(config.gateway, "repairMaxTokens", 300);
+        const humanNode = randomUUID(), messageId = randomUUID();
+        await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
+          VALUES(${humanNode},${f.canvasId},${f.jobId},'human','synthetic repair wait','open','{}')`;
+        const [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
+        const send = () => mode === "reply"
+          ? app.inject({ method: "POST", url: `/canvases/${f.canvasId}/messages`,
+            payload: { message_id: messageId, target: { kind: "job", node_id: String(node.id) }, body: "Synthetic approved continuation." } })
+          : app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${humanNode}/ignore` });
+        for (const response of await Promise.all([send(), send()])) assert.equal(response.statusCode, mode === "reply" ? 202 : 200, response.body);
+        const [generations] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${f.jobId}
+          AND payload_json->>'subtype'='repair_generation'`;
+        assert.equal(generations.count, 1); assert.equal((await readBudget(f.jobId))?.attempt_id, "");
+        const { next, token } = await f.start();
+        const budget = await readBudget(f.jobId);
+        assert.equal(budget?.attempt_id, String(next.id)); assert.equal(budget?.receipt_ref, f.before?.receipt_ref);
+        assert.equal(budget?.limit_tokens, 30); assert.equal(budget?.known_tokens, 4); assert.equal(budget?.remaining_tokens, 26);
+        assert.equal(budget?.deadline, f.before?.deadline); assert.ok(budget?.generation_ref);
+        assert.notEqual((await request(f.oldGateway.plaintext)).statusCode, 200);
+        assert.notEqual((await f.propose(randomUUID(), 1, "late old callback", f.oldGrant)).statusCode, 200);
+        if (mode === "reply") {
+          let delivered = 0;
+          const unregister = await humans.registerHumanMessageRuntime(f.jobId, {
+            sendMessage: async () => { delivered++; }, writeWorkspaceFile: async () => {},
+          });
+          try {
+            assert.equal(delivered, 1);
+            assert.equal((await humans.acknowledgeHumanMessage(f.jobId, messageId, "synthetic explicit ACK")).delivery_status, "acknowledged");
+          } finally { unregister(); }
+          const [messages] = await sql`SELECT count(*)::int AS count FROM human_messages WHERE target_job_id=${f.jobId}`;
+          assert.equal(messages.count, 1, "concurrent exact reply is idempotent under Canvas lock");
+        }
+        assert.equal((await request(token.plaintext)).statusCode, 200); await settled(f.jobId, 2);
+        assert.equal((await readBudget(f.jobId))?.known_tokens, 8);
+        const key = randomUUID(), summary = "Synthetic human continuation completed without refreshing the repair root.";
+        const response = await f.propose(key, 1, summary); assert.equal(response.statusCode, 200, response.body);
+        await core.ingestEvent(f.jobId, { v: 1, event_id: receipts.completionDoneEventId(f.jobId, key), type: "done", payload: { summary } });
+        const [final] = await sql`SELECT status FROM jobs WHERE id=${f.jobId}`; assert.equal(final.status, "succeeded");
+        assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
+        await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+      });
+      for (const blocker of ["tokens", "requests", "effect", "usage", "paused", "deadline", "transition"] as const) {
+        await t.test(`#1012 ${mode} ${blocker}: actionable denial rolls back message, node and handoff`, async () => {
+          const f = blocker === "deadline" ? await historicalExpired("running") : await setup(blocker === "tokens" ? 4 : 30);
+          await sql`UPDATE jobs SET status='waiting_human' WHERE id=${f.jobId}`; api.unregisterRuntimeHandler(f.jobId);
+          if (blocker === "requests") await sql`UPDATE job_tokens SET max_requests=used_requests WHERE job_id=${f.jobId}`;
+          if (blocker === "effect") await sql`UPDATE job_attempt_effects SET status='unknown' WHERE job_id=${f.jobId}`;
+          if (blocker === "usage") await sql`UPDATE job_usage_ledger SET settlement_status='unknown' WHERE job_id=${f.jobId}`;
+          if (blocker === "paused") await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+          const humanNode = randomUUID(), messageId = randomUUID();
+          await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
+            VALUES(${humanNode},${f.canvasId},${f.jobId},'human','synthetic blocked wait','open','{}')`;
+          let [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
+          if (!node) [node] = await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
+            VALUES(${randomUUID()},${f.canvasId},${f.jobId},'job','synthetic historical wait','waiting_human','{}') RETURNING id`;
+          const state = () => Promise.all([
+            sql`SELECT to_jsonb(j) AS row FROM jobs j WHERE id=${f.jobId}` ,
+            sql`SELECT to_jsonb(a) AS row FROM job_attempts a WHERE job_id=${f.jobId} ORDER BY id`,
+            sql`SELECT to_jsonb(e) AS row FROM events e WHERE job_id=${f.jobId} ORDER BY job_seq`,
+            sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
+            sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`,
+            sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+            sql`SELECT to_jsonb(n) AS row FROM canvas_nodes n WHERE canvas_id=${f.canvasId} ORDER BY id`,
+            sql`SELECT to_jsonb(m) AS row FROM human_messages m WHERE canvas_id=${f.canvasId} ORDER BY id`,
+          ]);
+          const before = await state();
+          if (blocker === "transition") await sql.unsafe(`
+            CREATE FUNCTION deepsonar_test_human_pending_skip() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RETURN NULL; END;$$;
+            CREATE TRIGGER deepsonar_test_human_pending_skip BEFORE UPDATE ON jobs FOR EACH ROW
+              WHEN (OLD.id='${f.jobId}'::uuid AND OLD.status='waiting_human' AND NEW.status='pending')
+              EXECUTE FUNCTION deepsonar_test_human_pending_skip();`);
+          try {
+            for (let repeat = 0; repeat < 2; repeat++) {
+              const response = mode === "reply"
+                ? await app.inject({ method: "POST", url: `/canvases/${f.canvasId}/messages`,
+                  payload: { message_id: messageId, target: { kind: "job", node_id: String(node.id) }, body: "Synthetic denied continuation." } })
+                : await app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${humanNode}/ignore` });
+              assert.equal(response.statusCode, 409, response.body);
+              const expected = { tokens: "REPAIR_TOKEN_EXHAUSTED", requests: "REPAIR_REQUESTS_EXHAUSTED", effect: "REPAIR_EFFECT_UNRESOLVED",
+                usage: "JOB_TOKEN_USAGE_UNKNOWN", paused: "REPAIR_PAUSED", deadline: "REPAIR_DEADLINE_EXHAUSTED", transition: "REPAIR_REQUEUE_CHANGED" };
+              assert.equal(response.json().error_code, expected[blocker]);
+              assert.deepEqual(await state(), before, "denied continuation leaves all durable execution and human state unchanged");
+            }
+            await assertNoGeneration(f.jobId);
+          } finally {
+            if (blocker === "transition") await sql.unsafe("DROP TRIGGER deepsonar_test_human_pending_skip ON jobs; DROP FUNCTION deepsonar_test_human_pending_skip();");
+          }
+        });
+      }
+    }
     const waitForBlockedQuery = async (fragment: string) => {
       for (let i = 0; i < 500; i++) {
         const [row] = await sql`SELECT count(*)::int AS count FROM pg_stat_activity

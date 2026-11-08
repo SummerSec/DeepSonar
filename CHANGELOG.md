@@ -11,6 +11,8 @@
 - **stopped Plan 的自动 Hub（#1002 P0-3，#1006）**：在现有 Canvas 锁下拒绝普通自动、idle 及非人工 force 唤醒，避免建立注定被目标门拒绝的新 Hub。Finding 评论仍以 201 保留，但 stopped 目标在人工节点/convergence 副作用前返回 plan_objective_stopped；request_hub 不获得 manual 权限。主动人工与受治理的完成恢复入口不变，不自动转换历史人工等待或伪造完成结果。
 - **受管 OpenSandbox 资源声明（#1002 P2-11，#1008）**：正常第一方依赖初次启动通过同 Engine 的只读声明预检，拒绝不支持/未知 CPU、memory、PIDs 及 rootless cgroups v1；不冒充每个容器、持续、外部 endpoint 或 Kubernetes 的资源强制执行证明，completed-init 复用与 --no-deps 的边界保留。
 
+- **人工等待修正链交接（#1002 P1-4，#1012）**：回复/忽略带修正根的 waiting_human Job 时，复用原预算、期限、暂停及效果门，先建立 resume-frozen 代际再入队；重复请求不增加代际，具体拒绝回滚消息与状态。不刷新原用量/回执、不绕过 unknown effect，injected 仍不是 Agent ACK。
+
 ### 改进
 
 - **单 effect 人工结算入口（#1002 P1-9，#1009）**：Management API 复用 Scheduler 内核的精确 effect 结算，要求 admin 与项目 scope、明确 outcome/证据及 operation ID；相同规范化输入幂等，冲突与活动 Attempt 拒绝。保留真实认证 Actor（其 ID 可为空），不伪造缺失用量、恢复额度、自动重排 Job 或重放未知请求。

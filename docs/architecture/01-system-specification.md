@@ -418,9 +418,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：人工消息必须区分 planned/injected/acknowledged/unknown/failed；`injected` 只表示写入 Agent 输入，ACK 必须来自显式 `ack_human_message` operation，普通文本不得隐式确认。
 - **决策来源**：运输成功不等于模型读取和处理成功，人工介入必须可追踪。
-- **实现状态**：as-built；消息与 ACK 有独立时间戳和审计字段。
+- **实现状态**：as-built；消息与 ACK 有独立时间戳和审计字段。#1012 补齐修正链关联的 waiting_human 回复/忽略：Canvas → Job 锁内复用原额度、期限、暂停与效果门，建立 resume-frozen 代际后才关闭旧 Attempt 和入队；拒绝回滚消息/节点/状态，重复提交不重复代际，不重置历史根或预算。
 - **代码入口**：[human messages](../../apps/scheduler/src/domains/canvas/human-messages.ts)、[schema](../../database/schema.sql)、[Web message tests](../../apps/web/src/human-messages.test.ts)。
-- **验证证据**：`pnpm ci:unit:canvas-facts`、`pnpm ci:unit:web-facts`、`pnpm ci:integration:canvas-facts`。
+- **验证证据**：`pnpm ci:unit:canvas-facts`、`pnpm ci:unit:web-facts`、`pnpm ci:integration:canvas-facts`；`pnpm ci:integration:recovery` 的真实 HTTP 回复/忽略 → 领取/新 owner → Gateway → 完成，以及阻塞无写入回归；最终 SHA Actions 待验。
 
 ### FR-ART-001 Artifact 作为内部写入真相
 
