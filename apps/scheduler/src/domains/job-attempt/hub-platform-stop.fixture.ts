@@ -171,7 +171,7 @@ export async function runHubPlatformStopFixtures(t: TestContext, input: {
       const first = await stopPlatformBlockedHubs({ db, afterJobId: previous ? String(previous.id) : null, limit: 1 });
       assert.equal(first.nextJobId, blocked.jobId); assert.equal(first.stoppedJobs.length, 0);
       assert.deepEqual(await state(blocked), before);
-      let cursor = first.nextJobId, reached = false;
+      let cursor: string | null = first.nextJobId, reached = false;
       for (let i = 0; i < 40 && !reached; i++) {
         const pass = await stopPlatformBlockedHubs({ db, afterJobId: cursor, limit: 1 }); cursor = pass.nextJobId;
         reached = pass.stoppedJobs.some(job => job.id === healthy.jobId);
