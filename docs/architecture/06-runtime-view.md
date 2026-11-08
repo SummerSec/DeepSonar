@@ -101,7 +101,7 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 | 事件窗口或图查询预算耗尽 | 429 或预算错误，反馈当前状态和剩余预算 | 用新的有界查询/延迟重试修复；不扩大 Job scope |
 | provisioning 在外部效果开始前已知失败 | 记录失败并按已知可重试策略决定新 Attempt；Job 进入失败或受控 retry | 只有明确安全的 provisioning 重试允许继续；不重复未知外部效果 |
 | effect intent 已写但外部结果未知（例如沙箱句柄/销毁回执缺失） | Attempt effect 标记 `unknown`，Job 进入 orphan/对账路径，保留 effect id | **禁止自动重放未知效果**；由对账或人工确认后采取下一步 |
-| 已接受 done 后 CLI 再请求模型 | 仅对具有结构化终态来源的精确 Gateway 完成拒绝放行原 Hub/done bundle；#947 候选补齐 `409` / `409:` 后接空格的精确前缀，并从 Pi `message_end` 解码结果覆盖终态归一化与原 bundle 唯一结算；进程退出、缺终态、传输/诊断、语义失败与 Repair usage 拒绝不覆盖 | 不重试进程、不重放未知效果，仍过原 ingestion/lifecycle 门；最终 SHA Actions 待验，来源契约与离线回归见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919) |
+| 已接受 done 后 CLI 再请求模型 | 仅对具有结构化终态来源的精确 Gateway 完成拒绝放行原 Hub/done bundle；#947 候选补齐 `409` / `409:` 后接空格的精确前缀，并从 Pi `message_end` 解码结果覆盖终态归一化与原 bundle 唯一结算；#1015 候选在原生 SDK allowance 的 HTTP 409 且类型精确匹配时保留固定完成拒绝信号，Pi 私有错误身份防止 SDK 文本伪造，生成扩展→HTTP 替身→Pi 解码→原完成结算接入回归；进程退出、缺终态、传输/诊断、语义失败与 Repair usage 拒绝不覆盖 | 不重试进程、不重放未知效果，仍过原 ingestion/lifecycle 门；最终 SHA Actions 待验，来源契约与离线回归见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919) |
 | 运行结束但本地未观察到 done，或运行器失败 | #951 候选在归档前追加受权限保护的 `run.completion_diagnostic`，包含当前 Attempt 产出归属、原完成回执元数据和最后持久化工具类别；缺 done 使用 `AGENT_COMPLETION_UNOBSERVED`，真实 runner/语义错误不被替换 | 有产出不升级成功；未知读取/归属不记为零，不授予重发或新代际；[完成失败诊断候选](../AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)的最终 SHA Actions 待验 |
 | 用户取消或 deadline 超时 | 以状态 CAS 收敛 Job/Attempt，停止 lease，撤销 token，执行可重复清理 | 迟到回调不能复活 Job；清理自身若未知也保留 unknown 记录 |
 | Scheduler 重启 | preparing 且没有 effect 的 Job 可回 pending；已发 intent、未结算或有外部句柄的 Attempt 走 unknown/orphan | Reaper/reconcile 先对账再清理；不能把“没有日志”当作“没有效果” |

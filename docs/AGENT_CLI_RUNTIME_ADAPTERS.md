@@ -82,6 +82,20 @@ assertions are wired to `ci:unit:executor-real`; final-SHA Actions and the issue
 production-frequency criterion are not yet verified. This format correction
 does not implement the remaining usage-reconciliation part of #947.
 
+#1015 preserves the fixed `COMPLETION_ALREADY_ACCEPTED` signal when the native
+SDK allowance reader receives HTTP 409 with that exact `error.type`. The Pi
+provider wrapper identifies a private host error object and emits the fixed
+code through `message_end`. Response messages are discarded. An SDK-thrown
+Error with the same message cannot enter this private host-error branch. The
+existing SDK event forwarding retains its own trust boundary. The shared DSH
+allowance reader keeps the same precise
+refusal. Other budget, identity and usage failures retain their existing rules.
+The Pi regression connects the generated extension and an HTTP allowance double
+to the production decoder, terminal normalization and executor settlement gate.
+Runtime-process fixtures cover the fixed code as well. These are offline
+engineering regressions wired to the existing runtime-sandbox and executor-real
+suites. Final-SHA Actions results remain pending.
+
 DSH vendor dialect (official `settings.yaml` parse, secret-key reject, single
 route/profile rewrite onto the Job Gateway, pi-compatible `input[0]` frame, and
 Cordis composition) lives in `packages/runtime-sandbox/src/dsh-pi-ai.ts` plus

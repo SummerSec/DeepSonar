@@ -64,17 +64,19 @@ function host(factory: (index: number) => PiProcess, nonempty = true) {
 }
 
 const completionRefusal = "409 Completion already accepted; reconcile its receipt";
-test("production Pi runner retains structured Gateway completion refusal provenance", async () => {
-  const fake = host(() => new PiProcess((record, process) => {
-    if (record.type === "get_state") state(process, record);
-    else if (record.type === "prompt") turn(process, record, completionRefusal);
-  }));
-  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true });
-  assert.equal(result.runnerErrorSource, "structured_terminal");
-  assert.equal(result.error, `Pi message ended: error: ${completionRefusal}`);
-  assert.equal(result.terminalOutcome, "failure");
-  assert.equal(fake.processes.length, 1);
-});
+for (const refusal of [completionRefusal, "COMPLETION_ALREADY_ACCEPTED"]) {
+  test(`production Pi runner retains structured Gateway completion refusal provenance (${refusal})`, async () => {
+    const fake = host(() => new PiProcess((record, process) => {
+      if (record.type === "get_state") state(process, record);
+      else if (record.type === "prompt") turn(process, record, refusal);
+    }));
+    const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true });
+    assert.equal(result.runnerErrorSource, "structured_terminal");
+    assert.equal(result.error, `Pi message ended: error: ${refusal}`);
+    assert.equal(result.terminalOutcome, "failure");
+    assert.equal(fake.processes.length, 1);
+  });
+}
 
 for (const exitCode of [0, 137]) {
   test(`production Pi runner retains missing-terminal process provenance (exit ${exitCode})`, async () => {
