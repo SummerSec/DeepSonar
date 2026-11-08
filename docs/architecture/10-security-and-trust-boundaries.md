@@ -82,7 +82,7 @@ The 2026-11-01 upgrade preserves Scheduler authority: [connectionConfig](../../p
 
 #1002 P2-11 的受管 Docker init 只读取 OpenSandbox 所用 Engine 的能力声明，不接受模型或 RoleConfig 自报“limits 已强制”。读不到或已声明不支持时阻止依赖启动；socket 只读挂载本身不是 Engine API 权限隔离。该 init 不证明逐容器 enforcement，未受管端点、重启或复用 init 的剩余信任缺口见 [D-10](12-risks-and-tech-debt.md#2-当前实现债务)；原资源隔离要求不因此降级。详见[资源预检](../OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11)。
 
-#1011 人工等待的宿主清理重入只使用 SQL lease 的原 worker owner；销毁后核其完整分页资源列表和精确 ID，再在原 Job/Attempt/effect fence 内原子结清 run、撤销 grants 和删除匹配 lease。缺 key、节点不可达或查询失败都保留未结清状态；不能用多节点不完整空列表、connect/isAlive 失败或 kill 已应答证明退出。lease 在未结清正常等待期间保留，阻止本地 endpoint/protocol 漂移；缓存必须匹配当前连接身份。原 Job 级未知效果门不缩窄，operator settlement 的 active Attempt 排除不变。见[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)，最终 SHA 工程回归待验。
+#1011 人工等待的宿主清理重入先在同一事务锁定并核验 Canvas/Job/Attempt/effect/lease，外来绑定在销毁前拒绝，归属锁覆盖有界销毁与结算，不能用扫描时判断授权外部删除。只使用 SQL lease 的原 worker owner，销毁后核其完整分页资源列表和精确 ID，再原子结清 run、撤销 grants 和删除匹配 lease。缺 key、节点不可达或查询失败都保留未结清状态；不能用多节点不完整空列表、connect/isAlive 失败或 kill 已应答证明退出。lease 在未结清正常等待期间保留，阻止本地 endpoint/protocol 漂移；缓存必须匹配当前连接身份。原 Job 级未知效果门不缩窄，operator settlement 的 active Attempt 排除不变。见[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)，最终 SHA 工程回归待验。
 
 ## 管理员效果见证（#1002 P1-9）
 

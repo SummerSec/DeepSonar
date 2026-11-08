@@ -10,8 +10,6 @@ export async function destroyAndSettleHumanWaitRun(
   runner: Pick<SandboxRunner, "destroy">,
   input: { jobId: string; attemptId: string; sandboxId: string },
 ): Promise<boolean> {
-  // OpenSandbox destroy also waits for disappearance. Failure must leave the effect unresolved.
-  await runner.destroy({ sandboxId: input.sandboxId });
   return db.begin(async txRaw => {
     const tx = txRaw as unknown as typeof sql;
     const [locator] = await tx`SELECT canvas_id FROM jobs WHERE id=${input.jobId}`;
@@ -35,6 +33,11 @@ export async function destroyAndSettleHumanWaitRun(
       WHERE sandbox_id=${input.sandboxId} FOR UPDATE`;
     if (lease && ((lease.job_id !== null && lease.job_id !== input.jobId)
       || (lease.attempt_id !== null && lease.attempt_id !== input.attemptId))) return false;
+    // Keep the original owner fenced through bounded destruction and settlement.
+    // The worker registry retains this pending wait lease, so its release path
+    // does not delete/lock the lease from another connection while we hold it.
+    // A failed destroy or SQL commit rolls back all database changes, not the IO.
+    await runner.destroy({ sandboxId: input.sandboxId });
     await revokeOldRuntimeGrants(tx, input.jobId, "dispatcher-human-wait-cleanup");
     const settled = await settleEffect(tx, input.attemptId, effectId, { status: "settled", outcome: {
       result: "applied_run_terminated", reconciled_by: "dispatcher-human-wait-cleanup",

@@ -246,6 +246,18 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         assert.deepEqual(unchanged, prior, "only revocation changes; caps, counters and provenance stay exact");
       }
     };
+    const assertRunSettledAttempts = (before: readonly Record<string, Record<string, unknown>>[], after: readonly Record<string, Record<string, unknown>>[]) => {
+      assert.equal(after.length, before.length);
+      for (let i = 0; i < before.length; i++) {
+        const prior = before[i].row, row = after[i].row;
+        assert.equal(row.phase, "settling");
+        assert.deepEqual(row.state_json, { ...(prior.state_json as Record<string, unknown>), phase: "settling",
+          current_effect_id: null, last_effect: { effect_id: "agent_run:1", status: "settled" } });
+        assert.ok(Date.parse(String(row.updated_at)) >= Date.parse(String(prior.updated_at)));
+        assert.deepEqual({ ...row, phase: prior.phase, state_json: prior.state_json, updated_at: prior.updated_at }, prior,
+          "only the existing kernel settlement transition changes; identity, lifecycle, budgets and outcome stay exact");
+      }
+    };
     const humans = await import("./domains/canvas/human-messages.js");
     const { destroyAndSettleHumanWaitRun, reconcileHumanWaitRuns } = await import("./dispatcher-human-wait.js");
     const acceptedHumanWait = async (accepted = true, withRepairRoot = true, exhaustTokens = false) => {
@@ -342,7 +354,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           await loop.runOnce(); assert.equal(result.settled, 1); assert.equal(result.blocked, 0);
           const after = await capture();
           assert.equal(after[0].find(e => e.row.effect_id === "agent_run:1")!.row.status, "settled");
-          assert.deepEqual(after[1], before[1]); assert.deepEqual(after[2], before[2]); assert.deepEqual(after[4], before[4]);
+          assertRunSettledAttempts(before[1], after[1]); assert.deepEqual(after[2], before[2]); assert.deepEqual(after[4], before[4]);
           assertRevokedGrants(before[3], after[3], true); assertRevokedGrants(before[5], after[5], false); assert.equal(after[6].length, 0);
           assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt); await assertNoGeneration(f.jobId);
           const duplicateCalls = destroys; await loop.runOnce(); assert.equal(destroys, duplicateCalls, "settled waits are not destroyed twice");
@@ -378,11 +390,46 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         const before = await sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`;
         let calls = 0;
         await reconcileHumanWaitRuns(sql, { destroy: async () => { calls++; } }, 500); assert.equal(calls, 0);
-        assert.equal(await destroyAndSettleHumanWaitRun(sql, { destroy: async () => {} },
+        assert.equal(await destroyAndSettleHumanWaitRun(sql, { destroy: async () => { calls++; } },
           { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId }), false);
+        assert.equal(calls, 0, "foreign binding is refused before any destroy call");
         assert.deepEqual(await sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`, before);
         assert.equal((await workers.lookupSandboxLease(f.sandboxId)), workerId);
       } finally {
+        await sql`DELETE FROM worker_sandbox_leases WHERE worker_id=${workerId}`;
+        await sql`DELETE FROM worker_nodes WHERE id=${workerId}`;
+      }
+    });
+    await t.test("#1011 cleanup fences lease ownership across destroy and SQL settlement", async () => {
+      const f = await acceptedHumanWait(), workerId = `hw-${randomUUID()}`;
+      const workers = await import("./domains/worker-nodes/registry.js");
+      await sql`INSERT INTO worker_nodes(id,endpoint,api_key_fingerprint,node_token_hash,node_token_prefix)
+        VALUES(${workerId},'127.0.0.1:18081','fixture-fingerprint',${randomUUID()},'fixture')`;
+      await workers.recordSandboxLease({ sandboxId: f.sandboxId, workerId, jobId: f.jobId, attemptId: String(f.oldAttempt.id) });
+      let drift: Promise<unknown> | undefined, driftFinished = false, destroys = 0;
+      try {
+        const closed = await destroyAndSettleHumanWaitRun(sql, { destroy: async () => {
+          destroys++;
+          drift = sql`UPDATE worker_sandbox_leases SET attempt_id=${randomUUID()} WHERE sandbox_id=${f.sandboxId}`
+            .then(rows => { driftFinished = true; return rows; });
+          const deadline = Date.now() + 5000;
+          for (;;) {
+            const [waiting] = await sql`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid<>pg_backend_pid()
+              AND wait_event_type='Lock' AND query ILIKE '%UPDATE worker_sandbox_leases%') AS blocked`;
+            if (waiting.blocked) break;
+            assert.equal(driftFinished, false, "lease drift must not pass the cleanup owner fence");
+            assert.ok(Date.now() < deadline, "lease drift must wait for the cleanup transaction");
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          assert.equal(driftFinished, false);
+        } }, { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId });
+        assert.equal(closed, true); assert.equal(destroys, 1);
+        await drift;
+        assert.equal((await sql`SELECT sandbox_id FROM worker_sandbox_leases WHERE sandbox_id=${f.sandboxId}`).length, 0);
+        const [run] = await sql`SELECT status FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_id='agent_run:1'`;
+        assert.equal(run.status, "settled");
+      } finally {
+        await drift?.catch(() => {});
         await sql`DELETE FROM worker_sandbox_leases WHERE worker_id=${workerId}`;
         await sql`DELETE FROM worker_nodes WHERE id=${workerId}`;
       }
@@ -427,6 +474,9 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           }
         } else if (scenario === "cleanup_failure") await assert.rejects(close, /synthetic destroy confirmation failed/);
         else await close();
+        if (["unknown_run", "cancelled", "stale_owner", "foreign_attempt", "foreign_sandbox", "no_human"].includes(scenario)) {
+          assert.equal(destroys, 0, "invalid lifecycle/ownership is rejected before destruction");
+        }
         const after = await capture();
         if (scenario === "other_unknown") {
           assert.deepEqual(after[0].filter(e => e.row.effect_id === "unknown-external"), before[0].filter(e => e.row.effect_id === "unknown-external"));
@@ -447,7 +497,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           assert.equal(run.status, "settled"); assert.equal(run.replay_policy, "never");
           assert.equal(run.settlement_json.sandbox_destroyed, true);
           assert.equal(run.settlement_json.runtime_grants_revoked, true);
-          assert.deepEqual(retried[1], before[1]); assert.deepEqual(retried[2], before[2]);
+          assertRunSettledAttempts(before[1], retried[1]); assert.deepEqual(retried[2], before[2]);
           assert.deepEqual(retried[4], before[4], "retry cannot invent usage or refresh caps");
           assertRevokedGrants(before[3], retried[3], true); assertRevokedGrants(before[5], retried[5], false);
           await assertNoGeneration(f.jobId);
@@ -488,7 +538,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         assert.notEqual((await f.propose(randomUUID(), 1, "late callback before reply", f.oldGrant)).statusCode, 200);
         assert.equal(upstreamCalls, callsBeforeFence);
         assert.equal(closed.settlement_json.human_event_id, f.humanEvent);
-        await close(); assert.equal(destroyed, 2);
+        await close(); assert.equal(destroyed, 1, "settled replay does not destroy again");
         assert.deepEqual((await sql`SELECT settlement_json FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_id='agent_run:1'`)[0].settlement_json, closed.settlement_json);
         const afterClose = await Promise.all([
           sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
