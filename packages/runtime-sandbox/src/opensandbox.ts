@@ -18,7 +18,7 @@ import {
   parseToolManifest,
 } from "./runtime-shared.js";
 import { docker } from "./runtime-docker.js";
-import type { ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
+import type { ProvisionFailureDiagnostic, ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
 import { isManagedRuntimeResource, OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META, type OpenSandboxPin } from "./opensandbox-version.js";
 import {
   assertWorkspaceWritePath,
@@ -638,6 +638,22 @@ export async function inspectPreparedSharedAssetsVolume(volumeName: string, jobI
   assertSharedAssetsVolumeOwnership(inspected, volumeName, jobId);
 }
 
+/** Only fixed signals survive: SDK response bodies, messages, stacks and env stay out of audit. */
+export function describeProvisionFailure(error: unknown, stage: ProvisionFailureDiagnostic["stage"], sessionObserved: boolean, cancelled: boolean): ProvisionFailureDiagnostic {
+  const own = (value: unknown, key: string): unknown => {
+    if (!value || typeof value !== "object") return undefined;
+    try { return Object.getOwnPropertyDescriptor(value, key)?.value; } catch { return undefined; }
+  };
+  const sources = [error, own(error, "error"), own(error, "cause")];
+  const text = sources.flatMap(value => [typeof value === "string" ? value : undefined, own(value, "message"), own(value, "code")])
+    .filter((value): value is string => typeof value === "string").map(value => value.slice(0, 8192)).join(" ");
+  const status = sources.map(value => own(value, "statusCode")).find(value => typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599);
+  return { stage, session_observed: sessionObserved, cancelled, http_status: typeof status === "number" ? status : null,
+    signals: { execd_distribution_failed: /(?:DOCKER::)?SANDBOX_EXECD_DISTRIBUTION_FAILED/i.test(text),
+      broken_pipe: /broken pipe|\bEPIPE\b/i.test(text), connection_reset: /connection reset|\bECONNRESET\b/i.test(text),
+      timeout: /timed?\s*out|timeout|\bETIMEDOUT\b/i.test(text) } };
+}
+
 export class OpenSandboxRunner implements SandboxRunner {
   private readonly sessions = new Map<string, OpenSandboxSession>();
   private readonly provisioning = new Map<string, Promise<OpenSandboxSession>>();
@@ -663,12 +679,14 @@ export class OpenSandboxRunner implements SandboxRunner {
     }));
     this.provisioning.set(key, created);
     let session: OpenSandboxSession | undefined;
+    let stage: ProvisionFailureDiagnostic["stage"] = "create";
     try {
       session = await awaitProvisionSession(created, input.signal);
       if (input.signal?.aborted) throw new Error("provision 已取消");
       const live = session;
       this.sessions.set(live.id, live);
       const host = createOpenSandboxRuntimeHost(live);
+      stage = "runtime_contract";
       const contractResult = await host.run(
         `test -d /workspace && test -x /bin/sh${input.sharedAssetsMount ? ` && test -d ${SHARED_ASSETS_MOUNT_PATH}` : ""} && cat /opt/deepsonar/tool-manifest.json`,
         { timeoutMs: 15_000 },
@@ -677,6 +695,7 @@ export class OpenSandboxRunner implements SandboxRunner {
         throw new RuntimeImageContractError("runtime image missing /workspace, /bin/sh, or tool manifest");
       }
       if (input.sharedAssetsMount) {
+        stage = "shared_assets";
         const mounts = await host.run("cat /proc/mounts", { timeoutMs: 5_000 });
         if (mounts.exitCode !== 0) throw new RuntimeImageContractError("shared assets mount probe failed");
         assertSharedAssetsGuestMount(mounts.stdout);
@@ -686,6 +705,7 @@ export class OpenSandboxRunner implements SandboxRunner {
             : (this.options.repairSharedAssetsParent ?? ((repair) => repairSharedAssetsParentViaDockerExec(repair))),
         });
       }
+      stage = "runtime_contract";
       const manifest = parseToolManifest(contractResult.stdout);
       if (input.expectedContract && manifest.contract !== input.expectedContract) {
         throw new RuntimeImageContractError(`runtime contract mismatch: expected ${input.expectedContract}, got ${manifest.contract ?? "missing"}`);
@@ -706,6 +726,7 @@ export class OpenSandboxRunner implements SandboxRunner {
       }
       const expectedManual = input.expectedRuntimeManual;
       if (input.requireRuntimeManual || expectedManual) {
+        stage = "runtime_manual";
         if (input.requireRuntimeManual) {
           if (!expectedManual
             || typeof expectedManual.version !== "string" || expectedManual.version.trim() === ""
@@ -751,6 +772,7 @@ export class OpenSandboxRunner implements SandboxRunner {
         }
       }
       if ((input.network === "restricted" || input.network === "egress") && this.gateway && input.gatewayUpstreamUrl) {
+        stage = "gateway";
         await bindGatewayHostnameAsRoot(live, host, {
           bind: () => this.gateway!.bind({
             sandboxId: live.id,
@@ -767,6 +789,12 @@ export class OpenSandboxRunner implements SandboxRunner {
       }
       return { sandboxId: live.id };
     } catch (error) {
+      try {
+        await input.onFailure?.(describeProvisionFailure(error, stage, Boolean(session), input.signal?.aborted === true));
+      } catch {
+        // A failed diagnostic must not mask the original failure or retain credential-bearing resources.
+        console.error("[opensandbox] provision failure diagnostic persistence failed");
+      }
       if (session) {
         await this.destroyResource({ resourceId: session.id, jobId: input.jobId, attemptId: input.attemptId }).catch(() => {});
       }

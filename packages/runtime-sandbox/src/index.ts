@@ -43,6 +43,16 @@ export interface ProvisionInput {
   kubernetesResources?: boolean;
   /** provision 超时/取消时必须中止外部资源创建。 */
   signal?: AbortSignal;
+  /** Host-only diagnostic sink; never forwarded to the provider or Job snapshot. */
+  onFailure?: (diagnostic: ProvisionFailureDiagnostic) => Promise<void>;
+}
+
+export interface ProvisionFailureDiagnostic {
+  stage: "create" | "runtime_contract" | "shared_assets" | "runtime_manual" | "gateway";
+  session_observed: boolean;
+  cancelled: boolean;
+  http_status: number | null;
+  signals: { execd_distribution_failed: boolean; broken_pipe: boolean; connection_reset: boolean; timeout: boolean };
 }
 
 export interface SharedAssetsMount {

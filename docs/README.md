@@ -129,7 +129,7 @@
 | [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布准备（2026-11-08）** | v0.6.16 正式 Release 元数据已核对，v0.6.17 待 #1002 人工合并及最终 SHA Actions 后 tag；schema68 → 当前源码基线、签名/通道 payload 与回写分别留证，不宣称部署通过 |
 | [runtime-image-pull-partial-failure.md](runbooks/runtime-image-pull-partial-failure.md) | **运维 runbook**（#724） | 拉取部分失败：真实尝试计数、定向重拉、本地对账/修复与远端 unsupported 边界、readiness 复核 |
 | [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md) | **运维/发布** | Compose 一键部署、真实 readiness 门禁与有界失败诊断；实机兼容性需单独验证 |
-| [OPENSANDBOX_1_2_UPGRADE.md](OPENSANDBOX_1_2_UPGRADE.md) | **Source upgrade + managed resource init (2026-11-08)** | Canonical SDK/images and recovery unchanged；#1002 P2-11 same-Engine unsupported/unknown fail closed for ordinary managed dependency starts；final-SHA Actions pending, not per-container/remote enforcement；D-10 retained |
+| [OPENSANDBOX_1_2_UPGRADE.md](OPENSANDBOX_1_2_UPGRADE.md) | **源码升级/资源 init/失败诊断（2026-11-08）** | SDK/image 与既有恢复边界不变；same-Engine 声明拒绝和正常清理前的非秘密 Job/Attempt 审计均已接线；组合最终 SHA Actions 待验，逐容器/远端 enforcement、现场并发因果及 D-10 分开保留 |
 | [RELEASE_READINESS_POST_v0.4.4.md](RELEASE_READINESS_POST_v0.4.4.md) | **运维/发布** | v0.4.4→当前 main 升级/部署/合并后验收闭环（#582）；区分代码/CI 已核实与实机延期 |
 
 ---
