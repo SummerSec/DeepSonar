@@ -150,7 +150,7 @@ Gateway 区分总量与 memory 归因，对 pending/unknown 保守记账并在�
 
 ### 4.2 Plan
 
-#775 当前新执行只接收 [Plan v2](packages/shared-types/src/plan.ts)；v1 只读保留于不可变审计与报告历史，不能作为新执行输入。objective 内部 `v:1`、`input_sha256`、`status` 与 `updated_at` 只是读取 metadata，不是执行 fallback；提交的 Plan 严格保持 `v:2`。授权用户以 CAS 写入 Canvas objective、完成策略和显式有限预算；模型只能提出与该 objective/revision 精确一致的路线及结果，不能重写目标、判据或重置 lifetime 计数。路线允许在累计任务、轮次、并行与无进展护栏内多轮重规划；已消费的 continue 语义事件以当前 owner/Canvas/项目与 Plan 身份绑定的持久水位去重，回调和重启不再重计，活动/ready 工作延后评估，新事件仍消耗预算，见 [Plan 重建规则](docs/PLAN_GAP_PROJECTION.md#多轮推进重启与停止)。
+#775 当前新执行只接收 [Plan v2](packages/shared-types/src/plan.ts)；v1 只读保留于不可变审计与报告历史，不能作为新执行输入。objective 内部 `v:1`、`input_sha256`、`status` 与 `updated_at` 只是读取 metadata，不是执行 fallback；提交的 Plan 严格保持 `v:2`。授权用户以 CAS 写入 Canvas objective、完成策略和显式有限预算；模型只能提出与该 objective/revision 精确一致的路线及结果，不能重写目标、判据或重置 lifetime 计数。路线允许在累计任务、轮次、并行与无进展护栏内多轮重规划；已消费的 continue 语义事件以当前 owner/Canvas/项目与 Plan 身份绑定的持久水位去重，回调和重启不再重计，活动/ready 工作延后评估，新事件仍消耗预算，见 [Plan 重建规则](docs/PLAN_GAP_PROJECTION.md#多轮推进重启与停止)。普通自动 Hub 唤醒不复活 `status=stopped` 的 objective；显式 run-hub-now 与受治理恢复仍走原准入；Finding 评论 request_hub 对停止目标先明确拒绝唤醒，保留评论而不清除暂停或创建人工节点，不自动关闭已接受的人工等待。
 
 可执行 PlanTask 复用现有 Hub Intent admission 与 Job/Attempt/effect 路径。依赖就绪须核对当前成功 Attempt、语义来源事件、未被替代的 Artifact、`plan.output` 对期望输出的精确关联，以及宿主实际留存字节/hash；模型自报 done 或 Job 成功本身不够。输出关联是工程关联，不证明语义满足。接纳与 CAS 回执、依赖执行和终止原因均保留持久来源；具体规则见 [ADR 0012](docs/architecture/adr/0012-plan-v2-execution.md)和[运行时视图](docs/architecture/06-runtime-view.md)。
 
