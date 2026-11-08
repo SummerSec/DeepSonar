@@ -69,7 +69,7 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
     assert.deepEqual(await db`SELECT rolname, rolsuper, rolinherit, rolcreaterole, rolcreatedb, rolcanlogin FROM pg_roles WHERE rolname IN (${runtime}, ${reader}) ORDER BY rolname`, beforeRoles);
     await db.unsafe(`SET ROLE ${quote(runtime)}`);
     try {
-      await db`INSERT INTO audit_logs (actor_type, action, result) VALUES ('system', 'acl.runtime', 'ok')`;
+      await db`INSERT INTO audit_logs (actor_type, actor_id, action, result) VALUES ('system', 'acl-runtime-fixture', 'acl.runtime', 'ok')`;
       const [future] = await db<{ id: string | number }[]>`INSERT INTO deepsonar_acl_future (value) VALUES ('allowed-by-defaults') RETURNING id`;
       assert.equal(Number(future?.id), 1);
       await db`SELECT deepsonar_acl_future_fn()`;
