@@ -71,7 +71,7 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
     const createJob = async (frozenSnapshot = snapshot) => {
       const id = randomUUID();
       await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
-        VALUES(${id},${projectId},'audit','running',${sql.json(frozenSnapshot)},now(),3600,now()+interval '1 hour')`;
+        VALUES(${id},${projectId},'audit','running',${sql.json(JSON.parse(JSON.stringify(frozenSnapshot)))},now(),3600,now()+interval '1 hour')`;
       const a = await sql.begin(tx => attempts.createAttempt(tx as unknown as typeof sql, id));
       return { id, attemptId: String(a.id) };
     };
