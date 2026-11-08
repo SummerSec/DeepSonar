@@ -40,6 +40,8 @@ let contextClamp;
 
 const SUPPORTED = new Set(['anthropic-messages','openai-completions','openai-responses']);
 const OM_PROVIDER = '__deepsonar_observational_memory';
+// Only the host allowance response can create this signal; SDK error text cannot.
+const completionAlreadyAccepted = new Error('COMPLETION_ALREADY_ACCEPTED');
 function fail(code) { throw new Error(code); }
 function endpoint(value) {
   const url = new URL(value);
@@ -64,7 +66,7 @@ export async function readMainAllowance(baseUrl, token, requestSignal) {
     if (response.status === 409 && ['JOB_TOKEN_USAGE_PENDING','REPAIR_USAGE_PENDING'].includes(value?.error?.type)) {
       await delay(100, undefined, { signal }); continue;
     }
-    if (response.status === 409 && value?.error?.type === 'COMPLETION_ALREADY_ACCEPTED') fail('COMPLETION_ALREADY_ACCEPTED');
+    if (response.status === 409 && value?.error?.type === 'COMPLETION_ALREADY_ACCEPTED') throw completionAlreadyAccepted;
     if (response.status !== 200) fail('PI_MAIN_BUDGET_ALLOWANCE_DENIED');
     if (typeof value?.policy_required !== 'boolean' || (value.remaining_tokens !== null
       && (!Number.isSafeInteger(value.remaining_tokens) || value.remaining_tokens < 0))) fail('PI_MAIN_BUDGET_ALLOWANCE_INVALID');
@@ -126,8 +128,8 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
             }
             for await (const event of delegate(prepared.model, context, { ...prepared.options, apiKey: token })) output.push(event);
           } catch (error) {
-            const code = error?.message === 'COMPLETION_ALREADY_ACCEPTED' || /^PI_MAIN_BUDGET_/.test(error?.message ?? '')
-              ? error.message : 'PI_MAIN_BUDGET_REQUEST_FAILED';
+            const code = error === completionAlreadyAccepted ? completionAlreadyAccepted.message
+              : /^PI_MAIN_BUDGET_/.test(error?.message ?? '') ? error.message : 'PI_MAIN_BUDGET_REQUEST_FAILED';
             output.push({ type: 'error', reason: 'error', error: {
               role: 'assistant', content: [], api: requestedModel.api, provider: requestedModel.provider, model: requestedModel.id,
               usage: { input:0, output:0, cacheRead:0, cacheWrite:0, totalTokens:0, cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0} },

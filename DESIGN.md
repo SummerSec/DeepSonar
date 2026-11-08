@@ -322,7 +322,7 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
 
-运行器失败保留结构化终态与宿主进程/传输来源；Pi 主请求 allowance 只透传 Gateway 精确完成拒绝码并等待 SDK 的结构化 message_end，不由 streaming update 制造终态或重放模型请求。已接受完成不能覆盖真实进程失败，限定放行与测试契约见 [CLI adapters](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)。
+运行器失败保留结构化终态与宿主进程/传输来源；Pi 主请求 allowance 只通过私有宿主错误身份保留 Gateway 精确完成拒绝码，隔离 SDK 抛出的同名异常并等待 SDK 的结构化 message_end，不由 streaming update 制造终态或重放模型请求。已接受完成不能覆盖真实进程失败，限定放行与测试契约见 [CLI adapters](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)。
 
 **Pi 模型预算与截断（#958）：** `/models` 限制作为 `provider_declared` 元数据保留，创建时逐字段冻结显式配置、声明、客户端选值及来源到 `model_budget`，Pi 投影 `contextWindow/maxTokens`；未观测的 CLI 默认保持未知，声明不证明真实容量。`length` 的 text/tool/thinking-only 不进入通用完成 nudge，改为同一精确 Session 的有界状态查询、必要压缩与短反馈；每步复用原完成/修正生命周期、lease/deadline、预算和未知效果守卫。压缩 start/end 不证明进展，不补造上下文摘要；耗尽保留截断和具体诊断，已接受完成/人工等待仍是权威。详情与 Actions 入口见[预算与恢复专题](docs/PI_MODEL_BUDGET_RECOVERY.md)，最终 SHA 待验，不宣称上游容量或生产重跑通过。
 
