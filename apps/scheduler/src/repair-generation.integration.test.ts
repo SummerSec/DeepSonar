@@ -576,11 +576,20 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       const closeWait = (f: Awaited<ReturnType<typeof acceptedHumanWait>>) => destroyAndSettleHumanWaitRun(sql,
         { destroy: async handle => { assert.equal(handle.sandboxId, f.sandboxId); } },
         { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId });
+      const restoreActiveGrantsFixture = async (f: Awaited<ReturnType<typeof acceptedHumanWait>>) => {
+        // Simulate historical cleanup retaining the grants minted while running.
+        // This is isolated fixture SQL, not permission to mint in waiting_human.
+        const gatewayRows = await sql`UPDATE job_tokens SET status='active',revoked_at=NULL,revoke_reason=NULL
+          WHERE job_id=${f.jobId} AND status='revoked' RETURNING id`;
+        const controlRows = await sql`UPDATE job_capability_tokens SET revoked_at=NULL,revoke_reason=NULL
+          WHERE job_id=${f.jobId} AND revoked_at IS NOT NULL RETURNING id`;
+        assert.equal(gatewayRows.length, 1); assert.equal(controlRows.length, 1);
+      };
       await t.test(`#1012 ordinary ${mode}: shared gates and grant fencing without a repair generation`, async () => {
         const f = await acceptedHumanWait(true, false), send = await continuation(f);
         assert.equal((await send()).json().error_code, "REPAIR_EFFECT_UNRESOLVED");
         await closeWait(f);
-        const lateToken = await f.mintGateway(), lateControl = await api.mintJobCapabilityToken(f.jobId);
+        await restoreActiveGrantsFixture(f);
         const [frozen] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${f.jobId}`;
         const history = await sql`SELECT id,max_requests,request_total_limit,max_tokens,used_requests,used_tokens
           FROM job_tokens WHERE job_id=${f.jobId} ORDER BY id`;
@@ -593,8 +602,8 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         const { token } = await f.start();
         assert.equal(await readBudget(f.jobId), null);
         const calls = upstreamCalls;
-        assert.notEqual((await request(lateToken.plaintext)).statusCode, 200);
-        assert.notEqual((await f.propose(randomUUID(), 0, "late ordinary callback", lateControl.token)).statusCode, 200);
+        assert.notEqual((await request(f.oldGateway.plaintext)).statusCode, 200);
+        assert.notEqual((await f.propose(randomUUID(), 0, "late ordinary callback", f.oldGrant)).statusCode, 200);
         assert.equal(upstreamCalls, calls);
         assert.equal((await request(token.plaintext)).statusCode, 200); await settled(f.jobId, 2);
         const key = randomUUID(), summary = "Synthetic ordinary wait completed through the normal completion gate.";
@@ -617,7 +626,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           if (blocker === "paused") await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
           if (blocker === "policy") await sql`UPDATE jobs SET agent_snapshot_json=agent_snapshot_json - 'runtime_knobs' WHERE id=${f.jobId}`;
           if (blocker === "transition") {
-            await f.mintGateway(); await api.mintJobCapabilityToken(f.jobId);
+            await restoreActiveGrantsFixture(f);
             await sql.unsafe(`CREATE FUNCTION reject_ordinary_pending_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
               IF NEW.id='${f.jobId}'::uuid AND NEW.status='pending' THEN RETURN NULL; END IF; RETURN NEW; END $$`);
             await sql.unsafe("CREATE TRIGGER reject_ordinary_pending_fixture BEFORE UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION reject_ordinary_pending_fixture()");
