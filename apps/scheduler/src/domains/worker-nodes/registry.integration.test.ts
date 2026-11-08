@@ -89,6 +89,7 @@ if (!testDatabaseUrl) {
           .then(() => undefined, error => error);
         const deadline = Date.now() + 5000;
         for (;;) {
+          await tx`SELECT pg_stat_clear_snapshot()`;
           const [activity] = await tx`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid<>pg_backend_pid()
             AND wait_event_type='Lock' AND query LIKE '%worker_nodes%') AS blocked`;
           if (activity.blocked) break;
