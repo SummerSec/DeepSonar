@@ -123,7 +123,7 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
     const beforeRoles = await db`SELECT rolname, rolsuper, rolinherit, rolcreaterole, rolcreatedb, rolcanlogin FROM pg_roles WHERE rolname IN (${runtime}, ${reader}) ORDER BY rolname`;
     const schemaFile = path.join(temporary, "schema.sql");
     const baseline = await readFile(SCHEMA_FILE, "utf8");
-    await writeFile(schemaFile, baseline.replace(/COMMIT;\s*$/, `
+    await writeFile(schemaFile, baseline.replace(/COMMIT;\s*$/, () => `
 CREATE TABLE deepsonar_acl_future (id bigserial PRIMARY KEY, value text);
 CREATE FUNCTION deepsonar_acl_future_fn() RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
 COMMIT;
