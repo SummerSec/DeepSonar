@@ -1,7 +1,23 @@
 # Phase 2 overlay. Images are immutable digest pins from opensandbox-version.ts.
 #   OPEN_SANDBOX_API_KEY=... docker compose -f deploy/docker-compose.opensandbox.yml up
 services:
+  opensandbox-resource-preflight:
+    image: ${OPENSANDBOX_SERVER_IMAGE:-docker.io/opensandbox/server@sha256:25bebdcf1cf7724eb923faecbdbbf82d4038c6ab35c736151574726d14006f30}
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    entrypoint: ["/app/.venv/bin/python3", "/etc/opensandbox/resource-preflight.py"]
+    volumes:
+      - ./opensandbox/resource-preflight.py:/etc/opensandbox/resource-preflight.py:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
   opensandbox:
+    depends_on:
+      opensandbox-resource-preflight:
+        condition: service_completed_successfully
     image: ${OPENSANDBOX_SERVER_IMAGE:-docker.io/opensandbox/server@sha256:25bebdcf1cf7724eb923faecbdbbf82d4038c6ab35c736151574726d14006f30}
     container_name: deepsonar-opensandbox
     restart: unless-stopped

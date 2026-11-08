@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -17,6 +18,20 @@ import {
 import { OPENSANDBOX_SERVER_IMAGE } from "./opensandbox-version.js";
 
 const root = repoRootFromHere();
+
+function runPinnedResourceProbe(script: string, engine = false) {
+  const bin = process.env.OPENSANDBOX_SCHEMA_GATE_DOCKER?.trim() || "docker";
+  const image = pinnedOpenSandboxServerImage();
+  if (spawnSync(bin, ["image", "inspect", image], { timeout: 30_000 }).status !== 0) {
+    const pulled = spawnSync(bin, ["pull", image], { encoding: "utf8", timeout: 300_000 });
+    assert.equal(pulled.status, 0, redactOpenSandboxSchemaError(pulled.stderr || "pinned image pull failed"));
+  }
+  const args = ["run", "--rm", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+    "--tmpfs=/tmp", "-e", "PYTHONDONTWRITEBYTECODE=1", "-v", join(root, "deploy/opensandbox") + ":/resource-preflight:ro"];
+  if (engine) args.push("-v", "/var/run/docker.sock:/var/run/docker.sock:ro");
+  args.push("--entrypoint", "/app/.venv/bin/python3", image, "/resource-preflight/" + script);
+  return spawnSync(bin, args, { encoding: "utf8", timeout: 180_000 });
+}
 const dockerProbe = probeOpenSandboxSchemaGateDocker();
 const runDockerSchemaGate = dockerProbe.available;
 const skipDockerReason = dockerProbe.available
@@ -32,6 +47,29 @@ if (!dockerProbe.available && schemaGateRequiredInThisEnvironment()) {
     );
   });
 }
+
+test("managed resource preflight rejects unsupported/unknown Engine limits in the actual pinned server Python", { skip: skipDockerReason }, () => {
+  if (!runDockerSchemaGate) return;
+  const result = runPinnedResourceProbe("resource-preflight.test.py");
+  assert.equal(result.status, 0, redactOpenSandboxSchemaError(result.stderr + result.stdout));
+  assert.match(result.stderr, /Ran 6 tests/);
+  assert.match(result.stderr, /OK/);
+});
+
+test("managed resource preflight reads the actual hosted Engine without creating a sandbox", { skip: skipDockerReason }, () => {
+  if (!runDockerSchemaGate) return;
+  const result = runPinnedResourceProbe("resource-preflight.py", true);
+  assert.equal(result.status, 0, redactOpenSandboxSchemaError(result.stdout + result.stderr));
+  assert.match(result.stdout, /SANDBOX_RESOURCE_PREFLIGHT_OK/);
+  assert.match(result.stdout, /not per-container enforcement proof/);
+});
+
+test("managed resource preflight cannot admit a deployment without its Engine socket", { skip: skipDockerReason }, () => {
+  if (!runDockerSchemaGate) return;
+  const result = runPinnedResourceProbe("resource-preflight.py");
+  assert.equal(result.status, 1, redactOpenSandboxSchemaError(result.stdout + result.stderr));
+  assert.match(result.stdout, /SANDBOX_RESOURCE_LIMITS_UNKNOWN/);
+});
 
 test("OpenSandbox schema gate reads server digest from version facts only", () => {
   const image = pinnedOpenSandboxServerImage();

@@ -121,7 +121,7 @@
 | [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布** | `v*` tag / release.yml；v0.6.0 正式 Release 与附件已核对，镜像验签和部署验收分别留证；双架构缓存复用须证明 runnable payload 一致 |
 | [runtime-image-pull-partial-failure.md](runbooks/runtime-image-pull-partial-failure.md) | **运维 runbook**（#724） | 拉取部分失败：真实尝试计数、定向重拉、本地对账/修复与远端 unsupported 边界、readiness 复核 |
 | [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md) | **运维/发布** | Compose 一键部署、真实 readiness 门禁与有界失败诊断；实机兼容性需单独验证 |
-| [OPENSANDBOX_1_2_UPGRADE.md](OPENSANDBOX_1_2_UPGRADE.md) | **Source upgrade + local unit verification (2026-11-01)** | Canonical SDK/images, unchanged direct/isolation/recovery boundaries, explicit `wakeRetryEnabled=false`; pinned-server parsing/live/native and exact-SHA CI remain separate |
+| [OPENSANDBOX_1_2_UPGRADE.md](OPENSANDBOX_1_2_UPGRADE.md) | **Source upgrade + managed resource init (2026-11-08)** | Canonical SDK/images and recovery unchanged；#1002 P2-11 same-Engine unsupported/unknown fail closed for ordinary managed dependency starts；final-SHA Actions pending, not per-container/remote enforcement；D-10 retained |
 | [RELEASE_READINESS_POST_v0.4.4.md](RELEASE_READINESS_POST_v0.4.4.md) | **运维/发布** | v0.4.4→当前 main 升级/部署/合并后验收闭环（#582）；区分代码/CI 已核实与实机延期 |
 
 ---

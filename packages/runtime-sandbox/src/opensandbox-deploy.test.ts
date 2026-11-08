@@ -106,6 +106,31 @@ test("deploy.sh bounds compose up and keeps final readiness gate (#726)", () => 
   assert.match(prod, /silo-init: silo not ready after 120s/);
 });
 
+test("managed OpenSandbox resource preflight shares the server Engine and remains mandatory under Podman compatibility", () => {
+  const readRepo = (file: string) => readFileSync(join(root, file), "utf8");
+  for (const file of ["deploy/docker-compose.opensandbox.yml", "deploy/docker-compose.opensandbox.prod.yml", "deploy/docker-compose.worker.yml"]) {
+    const yaml = readRepo(file);
+    const init = yaml.slice(yaml.indexOf("  opensandbox-resource-preflight:"), yaml.indexOf("\n  opensandbox:"));
+    const server = yaml.slice(yaml.indexOf("\n  opensandbox:"));
+    assert.equal(init.match(/image: ([^\n]+)/)?.[1], server.match(/image: ([^\n]+)/)?.[1]);
+    assert.match(init, /network_mode: none/);
+    assert.match(init, /read_only: true/);
+    assert.match(init, /cap_drop: \[ALL\]/);
+    assert.match(init, /no-new-privileges:true/);
+    assert.match(init, /entrypoint:.*\/app\/\.venv\/bin\/python3.*resource-preflight\.py/);
+    assert.match(init, /resource-preflight\.py:.*:ro/);
+    const socketSource = file.endsWith("opensandbox.yml") ? "/var/run/docker.sock" : "${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}";
+    assert.ok(init.includes(socketSource + ":/var/run/docker.sock:ro"));
+    assert.ok(server.includes(socketSource + ":/var/run/docker.sock"));
+    assert.match(yaml, /\n  opensandbox:\s+depends_on:\s+opensandbox-resource-preflight:\s+condition: service_completed_successfully/);
+  }
+  assert.doesNotMatch(readRepo("deploy/docker-compose.podman-compat.opensandbox.yml"), /opensandbox-resource-preflight|service_completed_successfully/);
+  assert.doesNotMatch(readRepo("deploy/docker-compose.opensandbox.k8s.yml"), /opensandbox-resource-preflight/);
+  const script = readRepo("deploy/opensandbox/resource-preflight.py");
+  assert.match(script, /connection\.request\("GET", "\/info"\)/);
+  assert.doesNotMatch(script, /connection\.request\("(?:POST|PUT|DELETE)"/);
+});
+
 test("OpenSandbox production overlay is the default real deploy path", () => {
   const overlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod.yml"), "utf8");
   const deploySh = readFileSync(join(root, "deploy/deploy.sh"), "utf8");
