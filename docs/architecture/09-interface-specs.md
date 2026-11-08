@@ -47,6 +47,8 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 不修改凭据的配置入口不能复制旧整对象来回写账号引用：Skill configured 标记与 convergence 快捷规则使用当前 JSONB 的字段级更新，启动清理使用原配置 CAS，导入合并在事务中锁定项目后重新读取当前值。这样不会在账号替换/删除后复活旧引用；这些机制不授予新凭据、不清历史快照，也不把显式空白名单扩大为未收紧。
 
+删除终态历史凭据时（#1002 P1-7A），服务在同一事务撤销全部 Gateway token、删除秘密凭据并置空 token 的 credential 外键；保留 token 与 usage ledger 的身份、累计额度和精确用量，不重置预算或改写冻结 Job。无凭据 token 仅允许 revoked，不能再授权请求。`revoked_job_token_count` 继续只统计本次原 active token，重复删除仍为 404；未结束 Job、扫描和项目引用的既有 409 拒绝不变。详见[历史预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)。
+
 行为入口是 `pnpm ci:integration:credential-delete`：包括实际 HTTP 两项目负例与 PostgreSQL 双会话 delete-first/write-first 屏障，覆盖仅白名单、仅缺省及同时引用。测试接线不代表最终 SHA Actions 已通过。注意力成本：在删除前显示阻塞与既有修复位置，不增加编辑器、设置或自动修复决策；不以减少打扰扩大授权。
 
 管理认证入口有明确的健康、schema、bootstrap、Worker 注册和 WS ticket 例外；`/gateway` 与 `/control/v1/jobs` 使用独立的 Job-scoped 凭据。认证失败和授权拒绝会审计但不记录 token、Provider 原文或内部堆栈。旧配置不通过转换继续运行，不能用另一个认证面绕过当前契约。
@@ -236,6 +238,8 @@ plan_gap 的 supplementation_execution 只读提供单次补证状态、来源�
 FR-FIND-008 增加 `/program-materials` 的登记/读取、单材料读取/撤销，以及 `/findings/{id}/program-eligibility` 的当前投影和 `/reviews` 的写入/历史查询。`GET /program-materials` 与单材料读取沿用 `projects:read`，材料登记/撤销沿用 `projects:write`；当前资格/历史评审读取要求 `findings:read`，评审写入要求 `findings:write`。平台材料准入另要求未绑定项目的管理员，项目材料遵守 actor 项目边界；评审写入另校验认证操作员与 maker 隔离。Job capability 不可调用管理写入。输入使用 [shared strict schema](../../packages/shared-types/src/program-eligibility.ts)，主体/权限由宿主推导，不能在请求体自报 reviewer、权限或资格状态；幂等重放仍检查项目范围。接口字段以[域 OpenAPI](../../apps/scheduler/src/domains/program-eligibility/openapi.ts)为准，当前资格在 repeatable-read 读取中重核 Finding/Artifact/Verify Attempt、材料版本和可重读证据；来源或证据变化、材料替代/撤销、多条有效评审冲突、历史损坏/截断或读取预算不足都保持 `blocked`，不由最后写入覆盖历史。该评审是操作员见证，不认证外部官方规则或自然人/模型之间的物理独立性，不改变技术 Verify、任务判据或执行授权；语义见[专题](../PROGRAM_ELIGIBILITY.md)与 [ADR-0010](adr/0010-program-eligibility-authority.md)。
 
 ## Plan v2 目标与路线 CAS（#775）
+
+`POST /projects/:id/tasks` 可携带初始 `plan_objective`（expected revision `null` 或 `0`），复用相同用户 CAS 规则，在 protocol/网络/compose 种子冻结后绑定最终输入 SHA，并与 Canvas/root 同事务持久化；非法初始 revision 不留下画布。既有 Job-scoped 读取仍拒绝输入漂移，详细规则见[用户目标与路线身份](../PLAN_GAP_PROJECTION.md#用户目标与路线身份)。
 
 `PATCH /tasks/:canvasId` 是 Management `tasks:write` 入口，按认证 actor 的项目权限与 Canvas 行锁校验 `plan_objective.expected_revision`；授权用户显式提供 goal、completion 和有限 lifetime budget，响应返回当前 objective/revision。活跃及历史 Job snapshot/Attempt/事件不被编辑；模型不能调用该管理输入改写目标。
 

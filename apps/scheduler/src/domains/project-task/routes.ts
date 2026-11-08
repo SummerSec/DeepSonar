@@ -427,9 +427,8 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
 
     let canvasId: string;
     try {
-      // The objective is validated and stored by the same rules the PATCH endpoint
-      // uses, in the transaction that creates the Canvas, so a freshly created task
-      // can submit Plan v2 without an extra round-trip (#887).
+      // Canvas creation freezes all task inputs before binding the user objective
+      // with the same CAS rules as PATCH, in the Canvas/root transaction (#887, #1002).
       const creationTarget = {
         title: body.title,
         content: body.content,
@@ -445,20 +444,21 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
           ...(body.runtime_profile !== undefined ? { runtime_profile: body.runtime_profile } : {}),
         ...(schedule ? { schedule } : {}),
       } satisfies Record<string, unknown>;
-      const target = body.plan_objective
-        ? applyPlanObjectivePatch({
-            title: body.title,
-            target: creationTarget,
-            patch: body.plan_objective,
-          }).target
-        : creationTarget;
       canvasId = await ensureCanvasForTask({
         projectId: id,
         title: body.title,
         allowComposeSeeds: true,
-        target,
+        target: creationTarget,
+        initialPlanObjective: body.plan_objective,
       });
     } catch (error) {
+      if (error instanceof ControlInputError) {
+        return reply.code(error.code === "plan_stale_revision" ? 409 : error.retryable ? 422 : 409).send({
+          error: error.message,
+          error_code: error.code,
+          ...(error.path ? { path: error.path } : {}),
+        });
+      }
       if (
         error instanceof TaskSeedInputError ||
         (error instanceof Error && error.message.includes("finding protocol"))

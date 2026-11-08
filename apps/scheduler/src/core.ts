@@ -68,6 +68,7 @@ import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
 import { recordJobSharedAssets, resolveSharedAssetSelection } from "./domains/shared-assets/index.js";
 import { freezeTaskSeedTarget, insertTaskSeedProjections } from "./task-compose.js";
+import { applyPlanObjectivePatch, type PlanObjectivePatch } from "./domains/plan-protocol/objective.js";
 import {
   advancePlanTaskAfterTerminal,
   type PlanExecutionPorts,
@@ -1055,6 +1056,8 @@ export interface EnsureCanvasInput {
   triggerPayload?: Record<string, unknown>;
   /** Scheduler-only authority: only the human task route may select project history. */
   allowComposeSeeds?: boolean;
+  /** Authorized human creation input, applied only after the complete target is frozen. */
+  initialPlanObjective?: PlanObjectivePatch;
 }
 
 function parseStoredFindingProtocolConfig(value: unknown) {
@@ -1092,7 +1095,7 @@ export async function ensureCanvasForTaskInTransaction(tx: Tx, input: EnsureCanv
   );
   const taskConfig = parseStoredFindingProtocolConfig(input.target.finding_protocol);
   const effectiveFindingProtocol = resolveFindingProtocol(globalConfig, projectConfig, taskConfig);
-  const target = await freezeTaskSeedTarget(
+  const frozenTarget = await freezeTaskSeedTarget(
     /* SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target. */ tx as unknown as typeof sql,
     input.projectId,
     {
@@ -1105,6 +1108,9 @@ export async function ensureCanvasForTaskInTransaction(tx: Tx, input: EnsureCanv
     },
     input.allowComposeSeeds === true,
   );
+  const target = input.initialPlanObjective
+    ? applyPlanObjectivePatch({ title: input.title, target: frozenTarget, patch: input.initialPlanObjective }).target
+    : frozenTarget;
   let canvasId: string | null = null;
   let created = false;
 

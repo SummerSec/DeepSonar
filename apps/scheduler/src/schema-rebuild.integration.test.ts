@@ -292,4 +292,9 @@ if (testDatabaseUrl) {
     const { runCandidateSchemaRebuildFixture } = await import("./schema-rebuild-candidate-fixture.js");
     await runCandidateSchemaRebuildFixture(testDatabaseUrl);
   });
+
+  test("#1002 credential deletion preserves exact schema68 token/ledger history across a backed-up rebuild", async () => {
+    const { runCredentialSchemaRebuildFixture } = await import("./schema-rebuild-credential-fixture.js");
+    await runCredentialSchemaRebuildFixture(testDatabaseUrl);
+  });
 }
