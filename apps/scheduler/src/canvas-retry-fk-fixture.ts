@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { prepareFindingCandidateRetryFixture, assertFindingCandidateRetryReferences } from "./finding-candidate-retry-fixture.js";
 
 type TestSql = typeof import("./db.js").sql;
 const REFERENCES = [
@@ -56,12 +57,14 @@ export async function prepareCanvasRetryFkFixture(db: TestSql, canvas: string, j
       assert.ok((await plan(table, column)).includes(`"Index Name":"${index}"`), `${table}.${column}: reference check must use its leading-column index`);
     }
   });
-  return { canvas, otherCanvas, human, target, edge: String(edge.id), message,
+  const findingCandidates = await prepareFindingCandidateRetryFixture(db, job, otherJob);
+  return { canvas, otherCanvas, human, target, edge: String(edge.id), message, findingCandidates,
     before: await references(db, canvas), unrelated: await references(db, otherCanvas) };
 }
 
 export async function assertCanvasRetryReferences(db: TestSql, fixture: Awaited<ReturnType<typeof prepareCanvasRetryFkFixture>>, reset: boolean): Promise<void> {
   assert.equal(await references(db, fixture.otherCanvas), fixture.unrelated, "retry cannot change another project's node/message/edge/Job rows");
+  await assertFindingCandidateRetryReferences(db, fixture.findingCandidates, reset);
   if (!reset) {
     assert.equal(await references(db, fixture.canvas), fixture.before, "failure after reset must roll back every task reference and Job");
     return;

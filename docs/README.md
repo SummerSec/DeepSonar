@@ -50,7 +50,7 @@
 
 > **凭据引用保护（2026-11-05，#914 切片）**：项目范围 impact、全局删除完整性与设置/删除共用凭据行锁已接线；真实 PG 双会话与 scoped HTTP 回归复用 `pnpm ci:integration:credential-delete`。保留空白名单与冻结 Job，不提供新编辑器或自动扩权修复；本句仅描述 #925 服务端切片，#929 已补齐显式默认账号选择与修复导航；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。详见[接口规格](architecture/09-interface-specs.md#项目凭据引用保护914-切片)。
 
-> **Canvas 引用索引（2026-11-08，#1002 P1-6）**：[数据库说明](../database/README.md#canvas-节点引用索引1002-p1-6)与[数据视图](architecture/08-data-architecture.md#canvas-节点引用索引1002-p1-6)记录边/人工消息节点外键索引；在 P1-7A 基线上推进集成版本，不修改 retry 的单事务、外键或项目范围。合成 SQL 计划及实际 HTTP 回滚/成功隔离已接 recovery，最终 SHA Actions 待验，生产延迟根因与容量未验证。
+> **Canvas 引用索引（2026-11-08，#1002 P1-6）**：[数据库说明](../database/README.md#canvas-节点引用索引1002-p1-6)与[数据视图](architecture/08-data-architecture.md#canvas-节点引用索引1002-p1-6)记录边/人工消息节点与 Finding 候选完整外键前缀索引；在已合入主线基线上推进候选版本，不修改 retry 的单事务、外键或项目范围。合成节点/多 generation Finding 级联 SQL 计划与 buffer 对照及实际 HTTP 完整回滚/成功隔离已接 recovery，最终 SHA Actions 待验，生产延迟根因与容量未验证。
 
 > **历史凭据删除（2026-11-08，#1002 P1-7A）**：删除前撤销全部 Gateway token，再脱离秘密凭据，保留 token/用量账本身份及历史有限额度；无凭据 token 仅允许 revoked，不复活旧授权，不自动清配置。真实账本/预算/HTTP 与精确旧基线重建、备份恢复已接现有 Actions，最终 SHA 待验。详见[历史预算契约](MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)及[数据架构](architecture/08-data-architecture.md)。
 

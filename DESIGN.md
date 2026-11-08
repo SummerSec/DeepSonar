@@ -6,7 +6,7 @@
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
 
-#1002 P1-6 为 Canvas 边和人工消息的节点引用外键增加前导列索引，任务 retry 的单事务重置、外键与项目范围保持不变；不提高 timeout 或分批提交。基线同步与索引前后计划/HTTP 回滚隔离证据见[数据库说明](database/README.md#canvas-节点引用索引1002-p1-6)，最终 SHA Actions 待验，现场延迟仍未归因。
+#1002 P1-6 为 Canvas 边和人工消息的节点引用外键，以及 Finding 候选 sources/edges 的项目+Finding 级联引用增加完整前导列索引，任务 retry 的单事务重置、外键与项目范围保持不变；不提高 timeout 或分批提交。基线同步与索引前后计划/HTTP 回滚隔离证据见[数据库说明](database/README.md#canvas-节点引用索引1002-p1-6)，最终 SHA Actions 待验，现场延迟仍未归因。
 
 #945 工具活动进度保持 Canvas-first；Job/Canvas 创建和 deferred 预检沿用纯数据库有界冲突重试。Task/Finding Report 的精确输入字节与摘要现随 Job/Report SQL 原子提交，领取后、runtime IO 前才投影输入文件，不覆盖冲突历史；Verify/orphan 收口因此只重试 SQL，按 Canvas → Job → 全部 Attempts 重核终态归属。成功报告输出仍含文件 I/O，不纳入整体重试；原始 SQLSTATE 保留，`25P02` 和未知外部效果不是安全重放依据。历史缺少新冻结字节不重建或补写，详见[运行时视图](docs/architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)及[数据契约](docs/architecture/08-data-architecture.md#report-输入与文件投影945)。最终 SHA Actions 待验。
 

@@ -6,7 +6,7 @@
 
 - **任务创建目标绑定（#1002 P0-2，#1003）**：初始人工 objective 在 finding protocol、网络与 compose seeds 完成规范化/冻结后，与 Canvas/root 在同一事务中绑定输入摘要；新建目标不再因平台补齐字段而立即失效。保留真实输入变化、CAS revision 和历史 objective 的严格校验，不要求补一次 PATCH，也不静默重算历史摘要。
 - **删除凭据的历史用量（#1002 P1-7A，#1004）**：删除长期凭据时保留并撤销历史 Gateway token，解除 credential 关联但维持账本对原 token 的引用；丢失凭据的 token 不可恢复为 active。活动 Job、项目配置/扫描引用仍拒绝删除，不级联删账或重置跨 token/Attempt 的预算。
-- **Task retry 的节点引用索引（#1002 P1-6，#1007）**：为 Canvas 边及人工消息的节点外键引用添加前导列索引，避免清理单 Canvas 时扫描无关引用；删除顺序、事务、权限与超时不变。执行计划与合成原子回归不作为现场容量或耗时收益结论。
+- **Task retry 的节点与 Finding 候选引用索引（#1002 P1-6，#1007/#1011）**：为 Canvas 边及人工消息节点外键、Finding 候选 sources/edges 的完整项目+Finding 级联前缀添加索引，避免只依赖中间含 generation 的排序索引；删除顺序、事务、权限与超时不变。执行计划与合成原子回归不作为现场容量或耗时收益结论。
 - **直接数据库重建权限（#1002 P2-13，#1005）**：保存源 public schema、仍存在对象/列的有效 ACL、grant option 与 schema-local default privileges；基线与原对象/列权限在同一发布事务中提交，提交前失败回滚，不留下宽默认 TRIGGER 的持久挂载窗口。历史回填后续失败仍拒绝私有列读取；不猜测 runtime 角色、不无条件给 PUBLIC CREATE，不承诺保留 object owner/grantor。受管升级 runtime_ready fence 不变。
 - **stopped Plan 的自动 Hub（#1002 P0-3，#1006）**：在现有 Canvas 锁下拒绝普通自动、idle 及非人工 force 唤醒，避免建立注定被目标门拒绝的新 Hub。Finding 评论仍以 201 保留，但 stopped 目标在人工节点/convergence 副作用前返回 plan_objective_stopped；request_hub 不获得 manual 权限。主动人工与受治理的完成恢复入口不变，不自动转换历史人工等待或伪造完成结果。
 - **受管 OpenSandbox 资源声明（#1002 P2-11，#1008）**：正常第一方依赖初次启动通过同 Engine 的只读声明预检，拒绝不支持/未知 CPU、memory、PIDs 及 rootless cgroups v1；不冒充每个容器、持续、外部 endpoint 或 Kubernetes 的资源强制执行证明，completed-init 复用与 --no-deps 的边界保留。
@@ -21,7 +21,7 @@
 
 ### 升级与未验证范围
 
-- 本版目标 schema70；v0.6.16 为 schema68（核对 2026-11-08）。非空库必须先按受治理流程备份/重建并核验列交集回填，没有增量 ALTER 或旧配置 fallback。私有 package 版本不是产品版本。
+- 本版目标 schema71；v0.6.16 为 schema68（核对 2026-11-08）。非空库必须先按受治理流程备份/重建并核验列交集回填，没有增量 ALTER 或旧配置 fallback。私有 package 版本不是产品版本。
 - 已冻结 Job 的历史预算、Evidence、回执和未知效果不改写；缺少可信历史仍 fail closed。#834 账号池继续暂缓。生产部署、真实模型/独立质量、现场并发根因和容量收益未验证，不用工程 CI 冒充这些结论。
 
 ## [0.6.16] - 2026-11-07
