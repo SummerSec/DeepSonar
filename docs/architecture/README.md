@@ -6,6 +6,8 @@
 
 面向内部开发者和编码 Agent。先读 [DESIGN](../../DESIGN.md) 摘要，再按需求或主题定位；本目录不改变产品行为。需求组织参考 ISO/IEC/IEEE 29148，视图借鉴 arc42 / C4，关注点分离参考 ISO/IEC/IEEE 42010；这不是标准符合性认证。
 
+#1002 P2-13 的直接重建有效 ACL/default 保全映射 [CON-003](01-system-specification.md#con-003-单一-schema-基线)、[数据视图](08-data-architecture.md#直接重建的授权保全1002-p2-13)与[数据库说明](../../database/README.md#重建授权保全1002-p2-13)；不代替受控维护的 runtime 身份 fence，不修改角色或扩大 PUBLIC CREATE，最终 SHA Actions 待验。
+
 平台维护升级的当前决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)：宿主、受管 SSH 节点和显式回滚恢复已接线；schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。具体基线与隔离环境见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)；Windows Docker 全流程、断电及真实模型验证不能由这些记录推定，P3 Web 发起仍未实现，不能把该决策等同于 #740 全部交付。
 
 #914 的 #925 服务端切片同步[项目凭据引用保护切片](09-interface-specs.md#项目凭据引用保护914-切片)至 FR-CRED-002、运行时/数据/安全视图及追溯矩阵；scope 过滤与删除/设置事务回归复用现有 credential-delete CI 入口，#929 已补齐默认账号选择与修复导航；工程证据见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。

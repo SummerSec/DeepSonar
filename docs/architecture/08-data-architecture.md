@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
@@ -19,6 +19,10 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 [`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前集成版本以该常量与基线一致性为准，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
 
+
+### 直接重建的授权保全（#1002 P2-13）
+
+`db:rebuild` 在移动源表前捕获 `public` 的有效 ACL 与 schema-local 默认授权，重建时按原 schema/default → 基线 → 仍存在的表/列、序列、函数、类型 ACL 顺序恢复；原 grant option 保留，新增对象只使用原默认授权。没有角色名推断、角色身份修改或无条件 PUBLIC CREATE；对象 owner/grantor 不在本切片的保留承诺内。完整范围、拒绝路径和隔离 Actions 回归见[数据库说明](../../database/README.md#重建授权保全1002-p2-13)。不变更 schema 基线或启动 fail-closed；最终 SHA Actions 待验。
 
 ## OpenSandbox pin 与不可变 Job 快照（IR-001/003）
 

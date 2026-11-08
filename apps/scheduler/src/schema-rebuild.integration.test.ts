@@ -293,3 +293,10 @@ if (testDatabaseUrl) {
     await runCandidateSchemaRebuildFixture(testDatabaseUrl);
   });
 }
+
+if (testDatabaseUrl) {
+  test("#1002 rebuild preserves runtime and narrow ACLs without widening PUBLIC or role identity", async () => {
+    const { runRebuildAclFixture } = await import("./schema-rebuild-acl-fixture.js");
+    await runRebuildAclFixture(testDatabaseUrl);
+  });
+}
