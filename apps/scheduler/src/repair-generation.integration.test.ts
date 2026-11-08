@@ -1,4 +1,4 @@
-import { PI_EXTENSION_REGISTRY } from "@deepsonar/shared-types";
+import { ControlToolPayloadSchemas, PI_EXTENSION_REGISTRY } from "@deepsonar/shared-types";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -98,10 +98,15 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       const oldGateway = await mintGateway();
       const endpoint = `/control/v1/jobs/${jobId}/operations/mark_job_done`;
       let prepared = 0;
-      const register = () => api.registerRuntimeHandler(jobId, context => {
+      const register = () => api.registerRuntimeHandler(jobId, async context => {
+        if (context.operationId === "request_human") {
+          const payload = ControlToolPayloadSchemas.request_human.parse(context.input);
+          await core.ingestEvent(jobId, { v: 1, event_id: context.eventId, type: "human", payload });
+          return { accepted: true };
+        }
         if (context.completionPhase === "prepare") { prepared++; return { completion_prepared: true }; }
         return {};
-      }, ["mark_job_done"]);
+      }, ["mark_job_done", "request_human"]);
       register();
       const propose = (key: string, revision: number, summary: string, token = grant.token) => app.inject({ method: "POST", url: endpoint,
         headers: { authorization: `Bearer ${token}`, "idempotency-key": key, "x-deepsonar-proposal-revision": String(revision) }, payload: { summary } });
@@ -226,18 +231,105 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       assert.equal(row.count, 0);
     };
     const humans = await import("./domains/canvas/human-messages.js");
+    const { destroyAndSettleHumanWaitRun } = await import("./dispatcher-human-wait.js");
+    const acceptedHumanWait = async (accepted = true) => {
+      const f = await setup(), sandboxId = `synthetic-old-${f.jobId}`, humanEvent = randomUUID();
+      await sql.begin(async raw => {
+        const tx = raw as unknown as typeof sql;
+        await tx`UPDATE jobs SET sandbox_id=${sandboxId} WHERE id=${f.jobId}`;
+        await attempts.updateAttemptResource(tx, String(f.oldAttempt.id), { sandboxId, phase: "provisioned" });
+        await attempts.beginEffect(tx, String(f.oldAttempt.id), { effectId: "agent_run:1", kind: "agent_run",
+          resourceIdentity: { job_id: f.jobId, attempt_id: String(f.oldAttempt.id), sandbox_id: sandboxId }, intent: { fixture: "controlled runtime" } });
+      });
+      if (!accepted) {
+        await f.stop("waiting_human");
+        return { ...f, sandboxId, humanEvent, humanNode: "" }; // A label without an accepted human event proves nothing.
+      }
+      const response = await app.inject({ method: "POST", url: `/control/v1/jobs/${f.jobId}/operations/request_human`,
+        headers: { authorization: `Bearer ${f.oldGrant}`, "idempotency-key": humanEvent },
+        payload: { reason: "Synthetic governed wait before host-observed cleanup.", subject: { type: "platform_blocker", kind: "authorization" } } });
+      assert.equal(response.statusCode, 200, response.body);
+      const [human] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='human'`;
+      assert.ok(human); api.unregisterRuntimeHandler(f.jobId);
+      const [acceptedEvent] = await sql`SELECT event_id FROM events WHERE job_id=${f.jobId}
+        AND attempt_id=${String(f.oldAttempt.id)} AND type='human'`;
+      assert.ok(acceptedEvent);
+      return { ...f, sandboxId, humanEvent: String(acceptedEvent.event_id), humanNode: String(human.id) };
+    };
+    for (const scenario of ["cleanup_failure", "unknown_run", "other_unknown", "cancelled", "stale_owner", "foreign_attempt", "foreign_sandbox", "no_human"] as const) {
+      await t.test(`#1012 host cleanup ${scenario}: no invented settlement or replay`, async () => {
+        const f = await acceptedHumanWait(scenario !== "no_human");
+        if (scenario === "unknown_run") await attempts.markEffectUnknown(sql, String(f.oldAttempt.id), "agent_run:1", "synthetic unknown run");
+        if (scenario === "other_unknown") {
+          await attempts.beginEffect(sql, String(f.oldAttempt.id), { effectId: "unknown-external", kind: "gateway_model_request", intent: { fixture: true } });
+          await attempts.markEffectUnknown(sql, String(f.oldAttempt.id), "unknown-external", "synthetic unknown usage");
+        }
+        if (scenario === "cancelled") await attempts.requestAttemptCancel(sql, f.jobId, "synthetic cancellation");
+        if (scenario === "stale_owner") {
+          await attempts.markAttemptInterrupted(sql, f.jobId, "synthetic successor fence");
+          await sql.begin(raw => attempts.createAttempt(raw as unknown as typeof sql, f.jobId));
+        }
+        const capture = () => Promise.all([
+          sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(a) AS row FROM job_attempts a WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(j) AS row FROM jobs j WHERE id=${f.jobId}`,
+          sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(c) AS row FROM job_capability_tokens c WHERE job_id=${f.jobId} ORDER BY id`,
+        ]);
+        const before = await capture();
+        const close = () => destroyAndSettleHumanWaitRun(sql, { destroy: async () => {
+          if (scenario === "cleanup_failure") throw new Error("synthetic destroy confirmation failed");
+        } }, { jobId: f.jobId, attemptId: scenario === "foreign_attempt" ? randomUUID() : String(f.oldAttempt.id),
+          sandboxId: scenario === "foreign_sandbox" ? "synthetic-foreign" : f.sandboxId });
+        if (scenario === "cleanup_failure") await assert.rejects(close, /synthetic destroy confirmation failed/);
+        else await close();
+        const after = await capture();
+        if (scenario === "other_unknown") {
+          assert.deepEqual(after[0].filter(e => e.row.effect_id === "unknown-external"), before[0].filter(e => e.row.effect_id === "unknown-external"));
+          assert.deepEqual(after.slice(2), before.slice(2), "a known run close does not alter Job, tokens or usage");
+        } else assert.deepEqual(after, before);
+        if (f.humanNode) {
+          const denied = await app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${f.humanNode}/ignore` });
+          assert.equal(denied.statusCode, 409, denied.body); assert.equal(denied.json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+        }
+        await assertNoGeneration(f.jobId);
+        assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
+        await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+      });
+    }
     for (const mode of ["reply", "ignore"] as const) {
-      await t.test(`#1012 ${mode}: one generation, frozen lifetime, delivery and successful completion`, async () => {
-        const f = await setup(); await f.stop("waiting_human");
+      await t.test(`#1012 ${mode}: accepted Control human -> host cleanup -> one generation -> Gateway -> completion`, async () => {
+        const f = await acceptedHumanWait();
         Reflect.set(config.gateway, "repairMaxTokens", 300);
-        const humanNode = randomUUID(), messageId = randomUUID();
-        await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
-          VALUES(${humanNode},${f.canvasId},${f.jobId},'human','synthetic repair wait','open','{}')`;
+        const humanNode = f.humanNode, messageId = randomUUID();
         const [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
         const send = () => mode === "reply"
           ? app.inject({ method: "POST", url: `/canvases/${f.canvasId}/messages`,
             payload: { message_id: messageId, target: { kind: "job", node_id: String(node.id) }, body: "Synthetic approved continuation." } })
           : app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${humanNode}/ignore` });
+        const blocked = await send(); assert.equal(blocked.statusCode, 409, blocked.body);
+        assert.equal(blocked.json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+        const unchanged = await Promise.all([
+          sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+        ]);
+        let destroyed = 0;
+        const close = () => destroyAndSettleHumanWaitRun(sql, { destroy: async handle => {
+          assert.equal(handle.sandboxId, f.sandboxId); destroyed++;
+        } }, { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId });
+        await close();
+        const [closed] = await sql`SELECT status,settlement_json,replay_policy FROM job_attempt_effects
+          WHERE job_id=${f.jobId} AND effect_id='agent_run:1'`;
+        assert.equal(closed.status, "settled"); assert.equal(closed.replay_policy, "never");
+        assert.equal(closed.settlement_json.sandbox_destroyed, true);
+        assert.equal(closed.settlement_json.human_event_id, f.humanEvent);
+        await close(); assert.equal(destroyed, 2);
+        assert.deepEqual((await sql`SELECT settlement_json FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_id='agent_run:1'`)[0].settlement_json, closed.settlement_json);
+        assert.deepEqual(await Promise.all([
+          sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+        ]), unchanged, "cleanup cannot settle usage or refresh tokens");
         for (const response of await Promise.all([send(), send()])) assert.equal(response.statusCode, mode === "reply" ? 202 : 200, response.body);
         const [generations] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${f.jobId}
           AND payload_json->>'subtype'='repair_generation'`;
@@ -293,6 +385,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
             sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
             sql`SELECT to_jsonb(n) AS row FROM canvas_nodes n WHERE canvas_id=${f.canvasId} ORDER BY id`,
             sql`SELECT to_jsonb(m) AS row FROM human_messages m WHERE canvas_id=${f.canvasId} ORDER BY id`,
+            sql`SELECT to_jsonb(c) AS row FROM job_capability_tokens c WHERE job_id=${f.jobId} ORDER BY id`,
           ]);
           const before = await state();
           if (blocker === "transition") await sql.unsafe(`

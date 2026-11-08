@@ -179,7 +179,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：当外部效果无法证明未发生（`effect_pending` / `unknown`，含崩溃、超时、取消后的未证实窗口）时，系统必须将 Attempt/Job 标为不可自动重放路径，通常进入 `orphan`/对账/人工路径，清理 Token、沙箱、画布同步和租约；`replay_policy` 不得被本次结算改宽。
 - **决策来源**：未知效果是事实状态，不是普通 transient error；猜测重放可能重复创建资源或修改目标。
-- **实现状态**：as-built；`effect_pending`/`unknown` 与 `replay_policy=never` 被单独处理并进入清理/对账路径。#899 允许对非 active 历史效果提供受审计单条人工证据，CLI 单条成功与全局残留分开，未核验计数不报零；#1002 P1-9 在同一结清内核新增 admin/项目归属限定 Management 单条入口，精确重试与活动/排队/覆盖拒绝；不扩大重放、恢复预算或维护权限。
+- **实现状态**：as-built；`effect_pending`/`unknown` 与 `replay_policy=never` 被单独处理并进入清理/对账路径。#899 允许对非 active 历史效果提供受审计单条人工证据，CLI 单条成功与全局残留分开，未核验计数不报零；#1002 P1-9 在同一结清内核新增 admin/项目归属限定 Management 单条入口，精确重试与活动/排队/覆盖拒绝；不扩大重放、恢复预算或维护权限。#1012 正常人工等待的 pending agent_run 仅在宿主已确认原 sandbox 消失且同一活动 Attempt/持久 human 事件仍匹配时结清；等待标签或中断状态不是退出证明，unknown/清理失败/取消与其他效果仍闭锁。
 - **代码入口**：[Attempt 应用](../../apps/scheduler/src/domains/job-attempt/application.ts)、[reconcile](../../apps/scheduler/src/reconcile.ts)、[Effect schema](../../database/schema.sql)、[工作台重试投影](../../apps/web/src)。
 - **验证证据**：`pnpm ci:unit:recovery`、`pnpm ci:integration:recovery`、`pnpm ci:smoke:opensandbox-reconcile`；人工核对 unknown 不提示安全重放；#1002 Management 的真实 HTTP 权限/跨项目/Job、精确重试/竞争/原生锁忙及 unknown 用量/已耗预算不变接 recovery（最终 SHA 待验）；#899 实际 CLI、active 拒绝/内核结算、竞争与 plan gate 的隔离 PostgreSQL 回归见 `pnpm ci:integration:platform-upgrade`，最终 SHA Actions 结果另计。
 
@@ -418,7 +418,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：人工消息必须区分 planned/injected/acknowledged/unknown/failed；`injected` 只表示写入 Agent 输入，ACK 必须来自显式 `ack_human_message` operation，普通文本不得隐式确认。
 - **决策来源**：运输成功不等于模型读取和处理成功，人工介入必须可追踪。
-- **实现状态**：as-built；消息与 ACK 有独立时间戳和审计字段。#1012 补齐修正链关联的 waiting_human 回复/忽略：Canvas → Job 锁内复用原额度、期限、暂停与效果门，建立 resume-frozen 代际后才关闭旧 Attempt 和入队；拒绝回滚消息/节点/状态，重复提交不重复代际，不重置历史根或预算。
+- **实现状态**：as-built；消息与 ACK 有独立时间戳和审计字段。#1012 补齐修正链关联的 waiting_human 回复/忽略：宿主先以原 sandbox 已消失的清理结果收口同一 Attempt 的正常人工等待 run，不改变未知用量；Canvas → Job 锁内复用原额度、期限、暂停与效果门，建立 resume-frozen 代际后才关闭旧 Attempt、撤销旧 Gateway/Control 凭证和入队；拒绝回滚消息/节点/状态，重复提交不重复代际，不重置历史根或预算。
 - **代码入口**：[human messages](../../apps/scheduler/src/domains/canvas/human-messages.ts)、[schema](../../database/schema.sql)、[Web message tests](../../apps/web/src/human-messages.test.ts)。
 - **验证证据**：`pnpm ci:unit:canvas-facts`、`pnpm ci:unit:web-facts`、`pnpm ci:integration:canvas-facts`；`pnpm ci:integration:recovery` 的真实 HTTP 回复/忽略 → 领取/新 owner → Gateway → 完成，以及阻塞无写入回归；最终 SHA Actions 待验。
 

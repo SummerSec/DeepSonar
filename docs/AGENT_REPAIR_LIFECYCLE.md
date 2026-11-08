@@ -15,11 +15,13 @@
 
 ### 人工等待修正链交接（#1012）
 
-`POST /canvases/:id/messages` 的普通回复与既有 human-node ignore 入口复用同一续接函数。只有 Job 存在原 rejected completion 修正根时，才在已持有 Canvas → Job 锁的事务中调用共享 `readRepairRequeueAdmission`，通过原 deadline、累计请求/token、暂停、已接受完成与全部效果门后追加 `resume-frozen` 代际，再关闭旧 Attempt 和转 pending。原冻结快照、修正根、回执、费用及期限不重写；没有修正根的普通人工等待保持原续接语义。
+真实 `request_human` 接受后，`agent_run` 不因等待标签、执行器返回或数据库中断自动结清。Dispatcher 的 finally 先调用原 Runtime Adapter 的精确 sandbox destroy 并等待资源消失；只有成功后，在 Canvas → Job → 最新 Attempt → effect 锁内核对仍为 waiting_human、同一活动 Attempt/sandbox、未取消及该 Attempt 的持久 human 事件，才结清本轮 effect_pending 的 agent_run。unknown、外来/已结清 run 及其他效果保持不变；清理失败仍闭锁，不补写模型用量或结束人工等待。宿主退出证据与授权回复的代际准入是两步，后者仍检查原额度和全部未结清效果。
+
+`POST /canvases/:id/messages` 的普通回复与既有 human-node ignore 入口复用同一续接函数。只有 Job 存在原 rejected completion 修正根时，才在已持有 Canvas → Job 锁的事务中调用共享 `readRepairRequeueAdmission`，通过原 deadline、累计请求/token、暂停、已接受完成与全部效果门后追加 `resume-frozen` 代际，再关闭旧 Attempt、在同一事务撤销旧 Gateway/Control 运行凭证并转 pending。原冻结快照、修正根、回执、费用及期限不重写；没有修正根的普通人工等待保持原续接语义。
 
 同 message UUID 的读取在 Canvas 锁内串行化；相同回复和重复忽略只交接一次。准入拒绝通过原 `HumanInterventionError` 返回具体 409 error_code；消息、人工节点、代际和 Job/Attempt 变更在同一事务回滚。pending 转换意外没有结果时同样回滚，不提交只有代际而没有后继 Job 的半成品。恢复权限仍是原消息/忽略入口的权限，不借本修复授权新的执行范围或重放未知效果。
 
-`repair-generation.integration.test.ts` 已加入真实 HTTP 回复/忽略 → Dispatcher 领取与新 owner → Gateway 累计计费 → 完成门/终态结算，以及并发重复、额度/效果/暂停/原期限拒绝与 pending UPDATE 故障的全行回滚断言。消息注入和显式 ACK 仍是两阶段；本回归的 ACK 调用领域 handler，不宣称真实模型已读取，也不冒充完整 Control ACK 传输端到端。运行器和上游为受控替身，最终 SHA 的 `pnpm ci:integration:recovery` Actions 待验，本机未运行测试/构建/typecheck。
+`repair-generation.integration.test.ts` 已加入真实 Control request_human → 受控 Runtime Adapter 的宿主清理函数 → HTTP 回复/忽略 → Dispatcher 领取与新 owner → Gateway 累计计费 → 完成门/终态结算，以及清理失败、未知效果、取消、旧 owner/外来 sandbox/无持久 human 事件拒绝，并发重复、额度/效果/暂停/原期限拒绝与 pending UPDATE 故障的全行回滚断言。受控 destroy 证明 Scheduler 接线和 SQL 归属，不冒充实际 OpenSandbox 启停或完整真实 Dispatcher/CLI 运行。消息注入和显式 ACK 仍是两阶段；本回归的 ACK 调用领域 handler，不宣称真实模型已读取，也不冒充完整 Control ACK 传输端到端。运行器和上游为受控替身，最终 SHA 的 `pnpm ci:integration:recovery` Actions 待验，本机未运行测试/构建/typecheck。
 
 ### 创建入口补齐与缺损快照诊断（#943 / #948）
 

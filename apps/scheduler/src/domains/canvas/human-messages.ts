@@ -8,6 +8,7 @@ import { readSharedAssetBlob } from "../shared-assets/index.js";
 import { readRepairTokenBudget } from "../event-ingestion/repair-token-budget.js";
 import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
 import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
+import { revokeOldRuntimeGrants } from "../job-control/rerun.js";
 
 export type HumanMessageStatus = "planned" | "injected" | "acknowledged" | "unknown" | "failed";
 
@@ -325,6 +326,7 @@ async function resumeWaitingHumanJob(
     await admitRepairGeneration(tx, jobId, repair.budget.receipt_ref, repair.deadline, "resume-frozen");
   }
   await markAttemptInterrupted(tx as unknown as typeof sql, jobId, reason);
+  if (repair?.budget) await revokeOldRuntimeGrants(tx, jobId, reason);
   const resumed = await createSqlJobLifecycleApplication(tx as unknown as typeof sql).transitionJob(jobId, "pending", {
     error: null,
     lease_expires_at: null,

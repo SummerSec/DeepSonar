@@ -88,6 +88,13 @@ test("source contract: opaque started failure stays unknown; retry requires curr
   // Behavioral proof is in shared-asset-lifecycle.integration.test.ts, not these source assertions.
 });
 
+test("dispatcher closes accepted human runs only through confirmed exact-sandbox cleanup", () => {
+  const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  const cleanup = source.slice(source.indexOf("} finally {\n    stopLease?.();"), source.indexOf("export async function withProvisionTimeout"));
+  assert.match(cleanup, /destroyAndSettleHumanWaitRun\(sql, runner, \{ jobId, attemptId, sandboxId: h\.sandboxId \}\)/);
+  assert.ok(cleanup.indexOf("destroyAndSettleHumanWaitRun") < cleanup.indexOf("cleanupSharedAssetsForJob"));
+});
+
 test("provision diagnostic uses the durable audit sink without serializing Job env or raw failures", () => {
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
   const sink = source.slice(source.indexOf("onFailure: async"), source.indexOf("} as Parameters<typeof runner.provision>"));

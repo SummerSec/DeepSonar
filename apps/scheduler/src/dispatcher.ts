@@ -1,3 +1,4 @@
+import { destroyAndSettleHumanWaitRun } from "./dispatcher-human-wait.js";
 import { readRepairTokenBudget, assertRepairExecutionOwner } from "./domains/event-ingestion/repair-token-budget.js";
 import { frozenGatewayRequestBudget, GatewayRequestBudgetError } from "./gateway-request-policy.js";
 import { recordGatewaySnapshotNoStart } from "./gateway-snapshot-no-start.js";
@@ -1518,7 +1519,9 @@ async function runJob(jobId: string) {
     stopLease?.();
     if (handle) {
       const h = handle;
-      await runner.destroy(h).catch((e) => {
+      await (attemptId
+        ? destroyAndSettleHumanWaitRun(sql, runner, { jobId, attemptId, sandboxId: h.sandboxId })
+        : runner.destroy(h)).catch((e) => {
         inc("deepsonar_sandbox_cleanup_failed_total");
         console.error(`[dispatcher] 沙箱回收失败 ${h.sandboxId}:`, e);
       });
