@@ -27,14 +27,14 @@ export async function prepareFindingCandidateRetryFixture(db: TestSql, job: stri
       SELECT ${scope},${sourceJob},gen_random_uuid()::text,'synthetic retry Finding','medium'
       FROM generate_series(1,2048)`;
     const generations = Array.from({ length: 4 }, () => randomUUID());
-    await db`INSERT INTO project_finding_candidate_sources(project_id,generation,finding_id,input_digest,lexical_digest,rule_version)
-      SELECT ${scope},g.generation,f.id,'synthetic-input','synthetic-lexical','retry-fixture'
+    await db`INSERT INTO project_finding_candidate_sources(project_id,generation,finding_id,input_digest,lexical_digest,rule_version,examined,rank_truncated)
+      SELECT ${scope},g.generation,f.id,'synthetic-input','synthetic-lexical','retry-fixture',0,false
       FROM findings f CROSS JOIN unnest(${db.array(generations)}::uuid[]) g(generation)
       WHERE f.job_id=${sourceJob}`;
     await db`WITH pairs AS (
         SELECT id AS left_id,lead(id) OVER (ORDER BY id) AS right_id FROM findings WHERE job_id=${sourceJob}
-      ) INSERT INTO project_finding_candidate_edges(project_id,generation,left_id,right_id,kind,score,matched_fields,rule_version)
-      SELECT ${scope},g.generation,p.left_id,p.right_id,'similar',0.5,ARRAY['title'],'retry-fixture'
+      ) INSERT INTO project_finding_candidate_edges(project_id,generation,left_id,right_id,left_input_digest,right_input_digest,left_lexical_digest,right_lexical_digest,kind,score,matched_fields,rule_version)
+      SELECT ${scope},g.generation,p.left_id,p.right_id,'synthetic-input','synthetic-input','synthetic-lexical','synthetic-lexical','similar',0.5,ARRAY['title'],'retry-fixture'
       FROM pairs p CROSS JOIN unnest(${db.array(generations)}::uuid[]) g(generation)
       WHERE p.right_id IS NOT NULL`;
   }
