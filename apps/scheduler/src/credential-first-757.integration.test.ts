@@ -165,6 +165,8 @@ if (!testDatabaseUrl) {
           await sql`UPDATE canvases SET target_json=${sql.json({ network_policy: { allow_egress: false } })} WHERE id=${canvasId}`;
           const firstJob = (await core.createJob({ projectId, canvasId, type: "audit", maxRequests: 2 })).job;
           const secondJob = (await core.createJob({ projectId, canvasId, type: "audit", maxRequests: 2 })).job;
+          assert.ok(firstJob, "first pool Job must be created");
+          assert.ok(secondJob, "second pool Job must be created");
           const selected = [firstJob, secondJob].map(job => String(job.agent_snapshot_json.credential_id));
           assert.deepEqual([...selected].sort(), [...ids].sort(), "both accounts are used without changing the project default");
           const before = [firstJob, secondJob].map(job => structuredClone(job.agent_snapshot_json));
