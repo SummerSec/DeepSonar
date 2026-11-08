@@ -38,6 +38,8 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 
 #992 对应 NFR-OPS-003：既有五片 gate、Reverse 实际消费路由和只读 attempt 成本观测归属[工程规范](11-engineering-specs.md#4-测试分层与实际接线)；真实故障/原生重跑与三组同形文档对照已通过，记录见 [CI 验收](../CI_COST_ACCEPTANCE_992.md)。不新增跨提交通过结论复用，main/发布保障不变。#992 输入冻结前置切片的 npm closure、快照/原生资产身份见 [CI 构建输入](../CI_COST_ACCEPTANCE_992.md#6-基础构建输入冻结992前置切片)、[运行时](06-runtime-view.md#基础镜像构建输入992-前置切片)、[信任边界](10-security-and-trust-boundaries.md)和 [ADR 0018](adr/0018-frozen-base-build-inputs.md)；源码接线尚待最终 SHA Actions 原生验收，复用仍未实现。
 
+#1011 在现有 Scheduler 对账 loop 补正常人工等待的精确清理重入及持久 worker owner 保全，映射 FR-CANVAS-004 与[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)、[运行时](06-runtime-view.md)和[安全](10-security-and-trust-boundaries.md)。HTTP ready 后才启用外部清理，未知效果门不缩窄，无新服务/回执账本；原 destroy→SQL 失败→模拟重启/key 恢复→owner 确认→原子结算→HTTP 后继回归已接线，最终 SHA Actions 待验，未声称真实 OS/生产重启。
+
 ## 1. 阅读路径与目录
 
 | 文件 | 回答的问题 | 状态 |

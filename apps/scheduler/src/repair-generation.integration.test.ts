@@ -247,7 +247,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       }
     };
     const humans = await import("./domains/canvas/human-messages.js");
-    const { destroyAndSettleHumanWaitRun } = await import("./dispatcher-human-wait.js");
+    const { destroyAndSettleHumanWaitRun, reconcileHumanWaitRuns } = await import("./dispatcher-human-wait.js");
     const acceptedHumanWait = async (accepted = true, withRepairRoot = true, exhaustTokens = false) => {
       const f = await setup(30, undefined, {}, 40, withRepairRoot), sandboxId = `synthetic-old-${f.jobId}`, humanEvent = randomUUID();
       await sql.begin(async raw => {
@@ -278,6 +278,115 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       assert.ok(acceptedEvent);
       return { ...f, sandboxId, humanEvent: String(acceptedEvent.event_id), humanNode: String(human.id) };
     };
+    for (const mode of ["reply", "ignore"] as const) {
+      await t.test(`#1011 lost cleanup commit: restarted reconciliation reaches ordinary ${mode}`, async () => {
+        const f = await acceptedHumanWait(true, false), workerId = `hw-${randomUUID()}`;
+        const { OpenSandboxRunner } = await import("@deepsonar/runtime-sandbox");
+        const { createWorkerPlaneOpenSandboxClient } = await import("./domains/worker-nodes/multiplex-client.js");
+        const workers = await import("./domains/worker-nodes/registry.js");
+        const { startEffectReconcileLoop, DEFAULT_EFFECT_RECONCILE_LIMIT } = await import("./effect-reconcile-loop.js");
+        await sql`INSERT INTO worker_nodes(id,endpoint,api_key_fingerprint,node_token_hash,node_token_prefix)
+          VALUES(${workerId},'127.0.0.1:18081','fixture-fingerprint',${randomUUID()},'fixture')`;
+        await workers.recordSandboxLease({ sandboxId: f.sandboxId, workerId, jobId: f.jobId, attemptId: String(f.oldAttempt.id) });
+        let present = true, keepAlive = false, destroys = 0, ownerQueries = 0;
+        const makeRunner = () => new OpenSandboxRunner(createWorkerPlaneOpenSandboxClient({
+          listWorkers: async () => { const node = await workers.getWorkerNode(workerId); return node ? [node] : []; },
+          createClient: () => ({
+            create: async () => { throw new Error("reconciliation must not provision"); }, connect: async () => undefined,
+            destroy: async () => { destroys++; if (!keepAlive) present = false; },
+            list: async () => { ownerQueries++; return present
+              ? [{ resourceId: f.sandboxId, jobId: f.jobId, attemptId: String(f.oldAttempt.id), state: "running" }] : []; },
+          }),
+        }));
+        let runner = makeRunner(), result = { scanned: 0, settled: 0, blocked: 0 };
+        const makeLoop = () => startEffectReconcileLoop({
+          db: sql as unknown as Parameters<typeof startEffectReconcileLoop>[0]["db"],
+          humanWaitReconcile: async () => { result = await reconcileHumanWaitRuns(sql, runner, DEFAULT_EFFECT_RECONCILE_LIMIT); },
+        });
+        let loop = makeLoop();
+        const capture = () => Promise.all([
+          sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(a) AS row FROM job_attempts a WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(j) AS row FROM jobs j WHERE id=${f.jobId}`,
+          sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(c) AS row FROM job_capability_tokens c WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(l) AS row FROM worker_sandbox_leases l WHERE sandbox_id=${f.sandboxId}`,
+        ]);
+        const deny = async () => {
+          const response = await app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${f.humanNode}/ignore`, payload: {} });
+          assert.equal(response.statusCode, 409, response.body); assert.equal(response.json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+        };
+        try {
+          const before = await capture();
+          workers.clearWorkerApiKeysForTests(); // Restart before remote registration/heartbeat is reachable.
+          await loop.runOnce(); assert.equal(result.settled, 0); assert.ok(result.blocked > 0);
+          assert.equal(destroys, 0); assert.equal(ownerQueries, 0); assert.equal(present, true);
+          await deny(); assert.deepEqual(await capture(), before);
+          workers.rememberWorkerApiKey(workerId, "fixture-remote-key");
+          keepAlive = true; await loop.runOnce(); assert.equal(result.settled, 0); assert.equal(present, true);
+          await deny(); assert.deepEqual(await capture(), before, "an acknowledged kill is not disappearance");
+          keepAlive = false;
+          await sql.unsafe("CREATE FUNCTION deepsonar_test_hw_commit_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic human wait commit failure'; END $$");
+          await sql.unsafe("CREATE TRIGGER deepsonar_test_hw_commit_failure BEFORE UPDATE ON job_capability_tokens FOR EACH ROW EXECUTE FUNCTION deepsonar_test_hw_commit_failure()");
+          await assert.rejects(() => destroyAndSettleHumanWaitRun(sql, runner,
+            { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId }), /synthetic human wait commit failure/);
+          assert.equal(present, false);
+          await deny(); assert.deepEqual(await capture(), before, "destroy succeeded but the failed SQL commit retains owner/run/grants");
+          await sql.unsafe("DROP TRIGGER deepsonar_test_hw_commit_failure ON job_capability_tokens");
+          await sql.unsafe("DROP FUNCTION deepsonar_test_hw_commit_failure()");
+          loop.stop(); workers.clearWorkerApiKeysForTests(); runner = makeRunner(); loop = makeLoop();
+          const calls = destroys; await loop.runOnce(); assert.equal(destroys, calls); assert.equal(result.settled, 0);
+          await deny(); assert.deepEqual(await capture(), before);
+          workers.rememberWorkerApiKey(workerId, "fixture-remote-key");
+          await loop.runOnce(); assert.equal(result.settled, 1); assert.equal(result.blocked, 0);
+          const after = await capture();
+          assert.equal(after[0].find(e => e.row.effect_id === "agent_run:1")!.row.status, "settled");
+          assert.deepEqual(after[1], before[1]); assert.deepEqual(after[2], before[2]); assert.deepEqual(after[4], before[4]);
+          assertRevokedGrants(before[3], after[3], true); assertRevokedGrants(before[5], after[5], false); assert.equal(after[6].length, 0);
+          assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt); await assertNoGeneration(f.jobId);
+          const duplicateCalls = destroys; await loop.runOnce(); assert.equal(destroys, duplicateCalls, "settled waits are not destroyed twice");
+          const [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
+          const response = await app.inject(mode === "reply"
+            ? { method: "POST", url: `/canvases/${f.canvasId}/messages`, payload: { message_id: randomUUID(),
+              target: { kind: "job", node_id: String(node.id) }, body: "Continue after owner-confirmed cleanup." } }
+            : { method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${f.humanNode}/ignore`, payload: {} });
+          assert.equal(response.statusCode, mode === "reply" ? 202 : 200, response.body); await assertNoGeneration(f.jobId);
+          const { next, token } = await f.start(); assert.notEqual(String(next.id), String(f.oldAttempt.id));
+          assert.equal((await request(token.plaintext)).statusCode, 200); await settled(f.jobId, 2);
+          const key = randomUUID(), summary = "Synthetic successor after reachable cleanup reconciliation.";
+          const completed = await f.propose(key, 0, summary); assert.equal(completed.statusCode, 200, completed.body);
+          await core.ingestEvent(f.jobId, { v: 1, event_id: receipts.completionDoneEventId(f.jobId, key), type: "done", payload: { summary } });
+          const [final] = await sql`SELECT status FROM jobs WHERE id=${f.jobId}`; assert.equal(final.status, "succeeded");
+          await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+        } finally {
+          loop.stop();
+          await sql.unsafe("DROP TRIGGER IF EXISTS deepsonar_test_hw_commit_failure ON job_capability_tokens");
+          await sql.unsafe("DROP FUNCTION IF EXISTS deepsonar_test_hw_commit_failure()");
+          await sql`DELETE FROM worker_sandbox_leases WHERE worker_id=${workerId}`;
+          await sql`DELETE FROM worker_nodes WHERE id=${workerId}`; workers.clearWorkerApiKeysForTests();
+        }
+      });
+    }
+    await t.test("#1011 foreign lease binding prevents both scanned cleanup and settlement", async () => {
+      const f = await acceptedHumanWait(), workerId = `hw-${randomUUID()}`;
+      const workers = await import("./domains/worker-nodes/registry.js");
+      await sql`INSERT INTO worker_nodes(id,endpoint,api_key_fingerprint,node_token_hash,node_token_prefix)
+        VALUES(${workerId},'127.0.0.1:18081','fixture-fingerprint',${randomUUID()},'fixture')`;
+      await workers.recordSandboxLease({ sandboxId: f.sandboxId, workerId, jobId: f.jobId, attemptId: randomUUID() });
+      try {
+        const before = await sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`;
+        let calls = 0;
+        await reconcileHumanWaitRuns(sql, { destroy: async () => { calls++; } }, 500); assert.equal(calls, 0);
+        assert.equal(await destroyAndSettleHumanWaitRun(sql, { destroy: async () => {} },
+          { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId }), false);
+        assert.deepEqual(await sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`, before);
+        assert.equal((await workers.lookupSandboxLease(f.sandboxId)), workerId);
+      } finally {
+        await sql`DELETE FROM worker_sandbox_leases WHERE worker_id=${workerId}`;
+        await sql`DELETE FROM worker_nodes WHERE id=${workerId}`;
+      }
+    });
     for (const scenario of ["cleanup_failure", "grant_cleanup_failure", "unknown_run", "other_unknown", "cancelled", "stale_owner", "foreign_attempt", "foreign_sandbox", "no_human"] as const) {
       await t.test(`#1012 host cleanup ${scenario}: no invented settlement or replay`, async () => {
         const f = await acceptedHumanWait(scenario !== "no_human");

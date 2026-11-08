@@ -26,6 +26,8 @@ if (!testDatabaseUrl) {
     const {
       claimWorkerForDispatch,
       clearWorkerApiKeysForTests,
+      applyLocalWorkerSeed,
+      workerApiKey,
       heartbeatWorker,
       recordSandboxLease,
       registerRemoteWorker,
@@ -77,6 +79,13 @@ if (!testDatabaseUrl) {
           (${liveJobId}, ${projectId}, ${canvasId}, 'explore', 'running', ${`${prefix}-live`}, ${sql.json(snapshot)}),
           (${deadJobId}, ${projectId}, ${canvasId}, 'explore', 'succeeded', ${`${prefix}-dead`}, ${sql.json(snapshot)})`;
       await recordSandboxLease({ sandboxId: `${prefix}-live`, workerId: ids[0]!, jobId: liveJobId });
+      const { localWorkerFromEnv } = await import("./model.js");
+      const seed = localWorkerFromEnv({ nodeId: `${prefix}-local`, endpoint: "127.0.0.1:18081", protocol: "http", apiKey: "fixture-local-old-key" });
+      await applyLocalWorkerSeed(seed);
+      await recordSandboxLease({ sandboxId: `${prefix}-local-live`, workerId: seed.id, jobId: liveJobId });
+      await assert.rejects(() => applyLocalWorkerSeed({ ...seed, endpoint: "127.0.0.1:18082", apiKey: "fixture-local-new-key" }), /worker endpoint cannot change/);
+      assert.equal(workerApiKey(seed.id), "fixture-local-old-key", "failed owner change cannot replace its key");
+      await sql`DELETE FROM worker_sandbox_leases WHERE sandbox_id=${`${prefix}-local-live`}`;
       await recordSandboxLease({ sandboxId: `${prefix}-dead`, workerId: ids[0]!, jobId: deadJobId });
       await recordSandboxLease({ sandboxId: `${prefix}-gone`, workerId: ids[1]!, jobId: randomUUID() });
       const released = await releaseOrphanSandboxLeases();

@@ -10,7 +10,9 @@ import { migrate, sql, SCHEMA_VERSION } from "./db.js";
 import { drainInFlight, kickDispatcher, startDispatcher } from "./dispatcher.js";
 import { startReaper } from "./reaper.js";
 import { reconcileOnBoot } from "./reconcile.js";
-import { startEffectReconcileLoop } from "./effect-reconcile-loop.js";
+import { DEFAULT_EFFECT_RECONCILE_LIMIT, startEffectReconcileLoop } from "./effect-reconcile-loop.js";
+import { reconcileHumanWaitRuns } from "./dispatcher-human-wait.js";
+import { runner } from "./runtime.js";
 import { registerRoutes } from "./routes.js";
 import { startTransferWorker } from "./transfer/worker.js";
 import {
@@ -148,8 +150,14 @@ async function main() {
   // 重启 reconcile（JOB-04）：先对齐 DB↔docker，再放行调度
   await reconcileOnBoot();
   // #874：unknown 外部效果在运行期必须有自动对账入口，不能只依赖升级期的人工 CLI。
+  let humanWaitCleanupReady = false;
   const effectReconcile = startEffectReconcileLoop({
     db: sql as unknown as Parameters<typeof startEffectReconcileLoop>[0]["db"],
+    humanWaitReconcile: async () => {
+      if (!humanWaitCleanupReady) return;
+      const result = await reconcileHumanWaitRuns(sql, runner, DEFAULT_EFFECT_RECONCILE_LIMIT);
+      if (result.scanned > 0) console.log(`[reconcile] human wait cleanup settled=${result.settled} blocked=${result.blocked}`);
+    },
     onResult: (result, operationId) => {
       if (result.applied === 0 && result.remaining_unknown === 0) return;
       console.log(
@@ -194,6 +202,9 @@ async function main() {
   process.on("SIGTERM", shutdown);
 
   await app.listen({ port: config.port, host: config.host });
+  // Remote heartbeat must be reachable; cleanup IO must not delay HTTP startup.
+  humanWaitCleanupReady = true;
+  void effectReconcile.runOnce();
   console.log(`[boot] scheduler 已启动: http://${config.host}:${config.port}`);
   // #685: bridge deploys keep Scheduler off sandbox networks; the managed proxy
   // reaches it through this socket on a shared volume instead of DNS.

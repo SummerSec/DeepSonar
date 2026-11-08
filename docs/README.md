@@ -37,7 +37,7 @@
 
 > **人工等待效果门（#946，2026-11-06）**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)记录未结清效果/本轮对账进展保留 waiting_human，最终 SQL 覆盖 active/planned 效果，避免进入 human_timeout/终态清理。#957 最终提交的完整 Actions 已通过，核心误判已合入并关闭 #946（2026-11-07 核对）；通知投递计时仍是未交付的独立范围，不冒充已实现。
 
-> **人工等待修正链交接（2026-11-08，#1012）**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)记录宿主确认精确 sandbox 消失后原子撤销旧 grants、再收口正常等待 run；所有普通回复/忽略核对原冻结请求策略并通过共享累计额度、暂停、已接受完成与效果门，仅有修正根时核原期限并建立 resume-frozen 代际；具体拒绝回滚消息/节点/状态，重复提交不重复交接，注入与显式 ACK 不合并。实际 HTTP/PG 与 Gateway/完成闭环已接 recovery，最终 SHA Actions 待验，不声称生产旧 Job 已恢复。
+> **人工等待修正链交接（2026-11-08，#1012）**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)记录宿主确认精确 sandbox 消失后原子撤销旧 grants、再收口正常等待 run；所有普通回复/忽略核对原冻结请求策略并通过共享累计额度、暂停、已接受完成与效果门，仅有修正根时核原期限并建立 resume-frozen 代际；具体拒绝回滚消息/节点/状态，重复提交不重复交接，注入与显式 ACK 不合并。#1011 补现有对账 loop 的可达重入，HTTP ready 后精确 owner 销毁/分页核验，缺 key/不可达/资源仍在保持未结清；run/grants/lease 同事务收口，不缩窄 Job 级未知效果门。原清理 SQL 失败→重建 runner/loop 和 key 丢失/恢复→HTTP 续接/Gateway/完成回归已接 recovery，最终 SHA Actions 待验，不声称真实 OS 重启或生产旧 Job 已恢复。
 
 > **修正 token（2026-10-31，#776 / #817）**：复用 Gateway usage ledger 的独立累计熔断、持久额度与未知用量停止，新链未设置、空白或显式 0 时不限，显式正整数才限制，非法显式配置拒绝启动；历史冻结 null/缺失仍关闭，调用前输入成本仍未知。见 [修正回执](REPAIR_FEEDBACK_DONE_REPAIR.md#独立修正-token-用量与额度)。
 
