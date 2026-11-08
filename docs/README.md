@@ -126,7 +126,7 @@
 | [Agent Runtime Profiles](AGENT_RUNTIME_PROFILES.md) | #613 Provider / 模型 / CLI 统一运行时 Profile（`deepsonar.agent-runtime-profile/v1`，phase 1） |
 | [项目默认模型与创建冲突](architecture/09-interface-specs.md#项目默认模型与创建冲突966) | **#966 候选，最终 SHA 待验** | 启用范围与显式默认模型分开；预检/POST 同源诊断、项目隔离，不自动重试。 |
 | [SHARED_ASSET_BLOB_STORE.md](SHARED_ASSET_BLOB_STORE.md) | **as-built**（#41） | 共享资产 BlobStore fs\|s3 |
-| [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布准备（2026-11-08）** | v0.6.16 正式 Release 元数据已核对，v0.6.17 待 #1002 人工合并及最终 SHA Actions 后 tag；schema68 → 当前源码基线、签名/通道 payload 与回写分别留证，不宣称部署通过 |
+| [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维/发布准备（2026-11-08）** | v0.6.16 正式 Release 元数据已核对；v0.6.17 的 #1011 已聚合 #1002 来源，组合及最终 main 完整 SHA Actions 待验后 tag；schema68 → 当前源码基线、签名/通道 payload 与回写分别留证，不宣称部署通过 |
 | [runtime-image-pull-partial-failure.md](runbooks/runtime-image-pull-partial-failure.md) | **运维 runbook**（#724） | 拉取部分失败：真实尝试计数、定向重拉、本地对账/修复与远端 unsupported 边界、readiness 复核 |
 | [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md) | **运维/发布** | Compose 一键部署、真实 readiness 门禁与有界失败诊断；实机兼容性需单独验证 |
 | [OPENSANDBOX_1_2_UPGRADE.md](OPENSANDBOX_1_2_UPGRADE.md) | **源码升级/资源 init/失败诊断（2026-11-08）** | SDK/image 与既有恢复边界不变；same-Engine 声明拒绝和正常清理前的非秘密 Job/Attempt 审计均已接线；组合最终 SHA Actions 待验，逐容器/远端 enforcement、现场并发因果及 D-10 分开保留 |
