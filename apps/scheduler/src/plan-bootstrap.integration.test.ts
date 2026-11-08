@@ -324,7 +324,19 @@ async function runCreationBootstrapMatrix(h: PlanFixture): Promise<void> {
     assert.equal(read.objective.input_sha256, taskInputSha256(stored.title, stored.target_json));
     assert.deepEqual(read.objective, stored.target_json.plan_objective);
     const fixture = { project: source.project, canvas, hub, root: String(root.id), objective: read.objective };
-    const proposal = h.proposal(fixture, [h.task("collect", fixture.root)]);
+    let scopeFrom = fixture.root;
+    if (options.kind === "compose") {
+      const seeds = await h.invoke(hub, "graph_query", { kind: "findings" });
+      assert.equal(seeds.statusCode, 200, seeds.payload);
+      const items = responseBody(seeds).items;
+      assert.ok(Array.isArray(items), seeds.payload);
+      const seed = (items as JsonObject[]).find((item) => item.imported === true);
+      assert.ok(seed, "compose must read its Canvas-local imported seed before proposing work");
+      assert.equal(seed.readonly, true);
+      assert.notEqual(seed.id, findingId, "project Finding IDs are not Canvas node references");
+      scopeFrom = String(seed.id);
+    }
+    const proposal = h.proposal(fixture, [h.task("collect", scopeFrom)]);
     const key = randomUUID();
     const submit = await h.invoke(hub, "submit_plan", proposal, key);
     assert.equal(submit.statusCode, 200, submit.payload);

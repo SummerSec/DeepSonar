@@ -452,6 +452,13 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         initialPlanObjective: body.plan_objective,
       });
     } catch (error) {
+      if (error instanceof ControlInputError) {
+        return reply.code(error.code === "plan_stale_revision" ? 409 : error.retryable ? 422 : 409).send({
+          error: error.message,
+          error_code: error.code,
+          ...(error.path ? { path: error.path } : {}),
+        });
+      }
       if (
         error instanceof TaskSeedInputError ||
         (error instanceof Error && error.message.includes("finding protocol"))
