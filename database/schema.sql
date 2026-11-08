@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 68);
+INSERT INTO schema_meta (id, version) VALUES ('global', 69);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1470,12 +1470,12 @@ CREATE INDEX credentials_agent_cli_idx
   ON credentials (agent_cli, status, created_at DESC)
   WHERE kind = 'llm_provider';
 
--- 短期 Job Token：仅供无 settings_config_json 的历史 Credential 兼容及受控 OTLP 回传。
+-- Scheduler-owned Gateway Job Token；删除账号只吊销并解绑，保留历史额度和账本引用。
 CREATE TABLE job_tokens (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
   project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  credential_id uuid NOT NULL REFERENCES credentials(id),
+  credential_id uuid REFERENCES credentials(id) ON DELETE SET NULL,
   token_prefix text NOT NULL UNIQUE,
   token_hash text NOT NULL,
   allowed_models text[] NOT NULL DEFAULT '{}',
@@ -1496,6 +1496,8 @@ CREATE TABLE job_tokens (
   created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT job_tokens_status_check
     CHECK (status IN ('active', 'expired', 'exhausted', 'revoked')),
+  CONSTRAINT job_tokens_credential_check
+    CHECK (credential_id IS NOT NULL OR status = 'revoked'),
   CONSTRAINT job_tokens_workload_check
     CHECK (workload IN ('main', 'observational_memory')),
   CONSTRAINT job_tokens_request_total_limit_check
