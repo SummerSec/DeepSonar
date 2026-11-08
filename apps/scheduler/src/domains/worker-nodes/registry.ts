@@ -189,7 +189,7 @@ async function upsertLocalNode(input: PersistNodeInput): Promise<DispatchableWor
     // Establish the row before locking it, including concurrent first seeds.
     // The FK then serializes new lease inserts with this endpoint change.
     await tx`INSERT INTO worker_nodes(id,endpoint,api_key_fingerprint,node_token_hash,node_token_prefix)
-      VALUES(${input.id},${input.endpoint},${input.apiKeyFingerprint},${input.nodeTokenHash},${input.nodeTokenPrefix})
+      VALUES(${input.id},${input.endpoint},${fingerprintApiKey(input.apiKey)},${input.token.hash},${input.token.prefix})
       ON CONFLICT(id) DO NOTHING`;
     await tx`SELECT id FROM worker_nodes WHERE id=${input.id} FOR UPDATE`;
     const [upserted] = await tx<WorkerRow[]>`
