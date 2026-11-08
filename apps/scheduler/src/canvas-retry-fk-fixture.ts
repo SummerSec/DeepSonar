@@ -22,7 +22,8 @@ export async function prepareCanvasRetryFkFixture(db: TestSql, canvas: string, j
   const human = randomUUID(), target = randomUUID(), otherHuman = randomUUID(), otherTarget = randomUUID();
   await db`INSERT INTO projects(id,name) VALUES(${project},'unrelated retry references')`;
   await db`INSERT INTO canvases(id,project_id,title) VALUES(${otherCanvas},${project},'unrelated retry references')`;
-  await db`INSERT INTO jobs(id,project_id,canvas_id,type,status) VALUES(${otherJob},${project},${otherCanvas},'explore','succeeded')`;
+  await db`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
+    VALUES(${otherJob},${project},${otherCanvas},'explore','succeeded','{}'::jsonb)`;
   for (const [id, owner, kind] of [[human, canvas, 'human'], [target, canvas, 'analysis'],
     [otherHuman, otherCanvas, 'human'], [otherTarget, otherCanvas, 'analysis']] as const) {
     await db`INSERT INTO canvas_nodes(id,canvas_id,node_type,title) VALUES(${id},${owner},${kind},'retry reference')`;
