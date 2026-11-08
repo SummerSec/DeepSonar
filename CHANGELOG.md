@@ -11,7 +11,7 @@
 - **stopped Plan 的自动 Hub（#1002 P0-3，#1006）**：在现有 Canvas 锁下拒绝普通自动、idle 及非人工 force 唤醒，避免建立注定被目标门拒绝的新 Hub。Finding 评论仍以 201 保留，但 stopped 目标在人工节点/convergence 副作用前返回 plan_objective_stopped；request_hub 不获得 manual 权限。主动人工与受治理的完成恢复入口不变，不自动转换历史人工等待或伪造完成结果。
 - **受管 OpenSandbox 资源声明（#1002 P2-11，#1008）**：正常第一方依赖初次启动通过同 Engine 的只读声明预检，拒绝不支持/未知 CPU、memory、PIDs 及 rootless cgroups v1；不冒充每个容器、持续、外部 endpoint 或 Kubernetes 的资源强制执行证明，completed-init 复用与 --no-deps 的边界保留。
 
-- **人工等待修正链交接（#1002 P1-4，#1012）**：宿主确认原 sandbox 已消失且同一活动 Attempt 的 human 接受事实仍匹配后，结清正常等待的 pending agent_run；清理失败、unknown、取消或外来归属不结清，不补 usage。回复/忽略带修正根的 waiting_human Job 时，复用原预算、期限、暂停及效果门，先建立 resume-frozen 代际并原子撤销旧 Gateway/Control 凭证再入队；重复请求不增加代际，具体拒绝回滚消息与状态。不刷新原用量/回执、不绕过 unknown effect，injected 仍不是 Agent ACK。
+- **人工等待修正链交接（#1002 P1-4，#1012）**：宿主确认原 sandbox 已消失且同一活动 Attempt 的 human 接受事实仍匹配后，原子撤销旧运行 grants 再结清正常等待的 pending agent_run；清理/撤销失败、unknown、取消或外来归属不结清，不补 usage。所有 waiting_human 回复/忽略都核原冻结请求策略和共享额度、暂停、已接受完成及效果门；仅有修正根时额外检查原期限并建立 resume-frozen 代际，旧 Gateway/Control 凭证与入队原子撤销；重复请求不增加代际，具体拒绝回滚消息与状态。不刷新原用量/回执、不绕过 unknown effect，injected 仍不是 Agent ACK。
 
 - **Pi 已接受完成的拒绝反馈（#1011）**：主请求预算扩展只保留 Gateway 精确 COMPLETION_ALREADY_ACCEPTED，SDK error update 等待 message_end；宿主已有真实回执时继续原结算，不将已接受完成泛化为预算错误。其他额度、未知用量、归属和真实进程失败仍拒绝，不额外请求模型或重放效果。
 

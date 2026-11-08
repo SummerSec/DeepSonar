@@ -68,7 +68,7 @@ failures cannot activate this override. Original receipt, permission, lifecycle
 and ingestion gates remain authoritative; this does not retry a process or
 reconcile unknown effects.
 
-本轮原生 Pi/OM 归档发现：宿主已有 `persisted_deferred` 完成回执，下一次主请求 allowance 返回精确 `409 / error.type=COMPLETION_ALREADY_ACCEPTED`，但扩展曾丢弃该码并报泛化预算失败。现在只透传这一个固定码，不透传 Gateway/Provider 原文、不请求模型；其他状态、未知用量、额度或执行归属拒绝仍 fail closed。Pi SDK 的完整 assistant error update 只在该精确码时等待后续 `message_end`，单独 update 不制造终态；非零退出、传输、取消和缺失终态仍保留 process 来源。最终结算仍要求宿主实际接受原完成回执并通过既有 `executeReal` 限定门，不能由 CLI 文本宣称完成。新增 SDK 边界与生产 runner 回放接既有 runtime-sandbox；新 SHA 原生双架构 Pi/OM 与完整 Actions 尚待执行。
+本轮原生 Pi/OM 归档同时记录宿主 `persisted_deferred` 完成回执和 `PI_MAIN_BUDGET_ALLOWANCE_DENIED`。原失败 allowance 的 HTTP 状态/error.type 未保留，不能把精确 `409 / COMPLETION_ALREADY_ACCEPTED` 定为已证实根因。代码复核确认扩展原先会泛化此固定完成拒绝码，现有窄例外修正该反馈与 SDK 终态时序。现在只透传这一个固定码，不透传 Gateway/Provider 原文、不请求模型；其他状态、未知用量、额度或执行归属拒绝仍 fail closed。Pi SDK 的完整 assistant error update 只在该精确码时等待后续 `message_end`，单独 update 不制造终态；非零退出、传输、取消和缺失终态仍保留 process 来源。最终结算仍要求宿主实际接受原完成回执并通过既有 `executeReal` 限定门，不能由 CLI 文本宣称完成。新增 SDK 边界与生产 runner 回放接既有 runtime-sandbox；新 SHA 原生双架构 Pi/OM 与完整 Actions 尚待执行。
 
 Regression entry points are `ci:unit:runtime-sandbox`
 and `ci:unit:executor-real`; these are offline engineering fixtures, not live

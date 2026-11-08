@@ -2,6 +2,7 @@ import type { SandboxRunner } from "@deepsonar/runtime-sandbox";
 import { lockCanvasForConvergence } from "./core.js";
 import { sql } from "./db.js";
 import { settleEffect } from "./domains/job-attempt/application.js";
+import { revokeOldRuntimeGrants } from "./domains/job-control/rerun.js";
 
 /** Host-only close: a wait label or an interrupted Attempt is not proof that the run stopped. */
 export async function destroyAndSettleHumanWaitRun(
@@ -30,10 +31,13 @@ export async function destroyAndSettleHumanWaitRun(
       AND attempt_id=${input.attemptId} AND effect_id=${effectId} AND effect_kind='agent_run'
       AND status='effect_pending' AND resource_identity_json->>'sandbox_id'=${input.sandboxId} FOR UPDATE`;
     if (!effect) return; // Never reinterpret an unknown, foreign or already settled effect.
-    await settleEffect(tx, input.attemptId, effectId, { status: "settled", outcome: {
+    await revokeOldRuntimeGrants(tx, input.jobId, "dispatcher-human-wait-cleanup");
+    const settled = await settleEffect(tx, input.attemptId, effectId, { status: "settled", outcome: {
       result: "applied_run_terminated", reconciled_by: "dispatcher-human-wait-cleanup",
       sandbox_id: input.sandboxId, human_event_id: String(human.event_id), sandbox_destroyed: true,
+      runtime_grants_revoked: true,
     } });
-    // Keep the waiting Job/Attempt and all Gateway usage unchanged until authorized recovery.
+    if (!settled) throw new Error("HUMAN_WAIT_RUN_SETTLEMENT_CHANGED");
+    // Keep the waiting Job/Attempt and all historical counters and usage unchanged.
   });
 }

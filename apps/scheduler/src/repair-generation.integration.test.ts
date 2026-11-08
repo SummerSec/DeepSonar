@@ -72,7 +72,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       }
       assert.fail("synthetic Gateway settlement did not finish");
     };
-    const setup = async (repairLimit = 30, existingCanvasId?: string, snapshotOverrides: Record<string, unknown> = {}, mainCap = 40) => {
+    const setup = async (repairLimit = 30, existingCanvasId?: string, snapshotOverrides: Record<string, unknown> = {}, mainCap = 40, withRepairRoot = true) => {
       Reflect.set(config.gateway, "repairMaxTokens", repairLimit);
       await sql`UPDATE role_configs SET model='model-a',version=version+1 WHERE id=${roleConfigId}`;
       const canvasId = existingCanvasId ?? randomUUID(), jobId = randomUUID();
@@ -111,12 +111,16 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       const propose = (key: string, revision: number, summary: string, token = grant.token) => app.inject({ method: "POST", url: endpoint,
         headers: { authorization: `Bearer ${token}`, "idempotency-key": key, "x-deepsonar-proposal-revision": String(revision) }, payload: { summary } });
       const oldKey = randomUUID(), invalid = "x".repeat(8193);
-      const rejected = await propose(oldKey, 0, invalid);
-      assert.equal(rejected.statusCode, 422, rejected.body); assert.equal(prepared, 0);
-      for (let i = 0; i < 3; i++) assert.deepEqual((await propose(oldKey, 0, invalid)).json(), rejected.json());
+      if (withRepairRoot) {
+        const rejected = await propose(oldKey, 0, invalid);
+        assert.equal(rejected.statusCode, 422, rejected.body); assert.equal(prepared, 0);
+        for (let i = 0; i < 3; i++) assert.deepEqual((await propose(oldKey, 0, invalid)).json(), rejected.json());
+      }
       const oldReceipt = await receipts.readCompletionReceipt(sql, jobId, oldKey);
       assert.equal((await request(oldGateway.plaintext, "model-a", Math.min(10, repairLimit))).statusCode, 200); await settled(jobId, 1);
-      const before = await readBudget(jobId); assert.ok(before); assert.equal(before.known_tokens, 4); assert.equal(before.remaining_tokens, repairLimit - 4);
+      const before = await readBudget(jobId);
+      if (withRepairRoot) { assert.ok(before); assert.equal(before.known_tokens, 4); assert.equal(before.remaining_tokens, repairLimit - 4); }
+      else { assert.equal(before, null); assert.equal(oldReceipt, null); }
       const stop = async (status: "failed" | "waiting_human") => {
         if (status === "failed") await attempts.settleAttemptTerminal(sql, jobId, "failed", { reason: "synthetic known failure" });
         await sql`UPDATE jobs SET status=${status},finished_at=now() WHERE id=${jobId}`;
@@ -230,10 +234,22 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       const [row] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${jobId} AND payload_json->>'subtype'='repair_generation'`;
       assert.equal(row.count, 0);
     };
+    const assertRevokedGrants = (before: readonly Record<string, Record<string, unknown>>[], after: readonly Record<string, Record<string, unknown>>[], gatewayGrant: boolean) => {
+      assert.equal(after.length, before.length, "grant history is retained");
+      for (let i = 0; i < before.length; i++) {
+        const prior = before[i].row, row = after[i].row;
+        const revoked = gatewayGrant ? prior.status === "active" : prior.revoked_at === null;
+        if (!revoked) { assert.deepEqual(row, prior); continue; }
+        assert.ok(row.revoked_at); assert.equal(row.revoke_reason, "dispatcher-human-wait-cleanup");
+        const unchanged: Record<string, unknown> = { ...row, revoked_at: prior.revoked_at, revoke_reason: prior.revoke_reason };
+        if (gatewayGrant) { assert.equal(row.status, "revoked"); unchanged.status = prior.status; }
+        assert.deepEqual(unchanged, prior, "only revocation changes; caps, counters and provenance stay exact");
+      }
+    };
     const humans = await import("./domains/canvas/human-messages.js");
     const { destroyAndSettleHumanWaitRun } = await import("./dispatcher-human-wait.js");
-    const acceptedHumanWait = async (accepted = true) => {
-      const f = await setup(), sandboxId = `synthetic-old-${f.jobId}`, humanEvent = randomUUID();
+    const acceptedHumanWait = async (accepted = true, withRepairRoot = true, exhaustTokens = false) => {
+      const f = await setup(30, undefined, {}, 40, withRepairRoot), sandboxId = `synthetic-old-${f.jobId}`, humanEvent = randomUUID();
       await sql.begin(async raw => {
         const tx = raw as unknown as typeof sql;
         await tx`UPDATE jobs SET sandbox_id=${sandboxId} WHERE id=${f.jobId}`;
@@ -241,6 +257,12 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         await attempts.beginEffect(tx, String(f.oldAttempt.id), { effectId: "agent_run:1", kind: "agent_run",
           resourceIdentity: { job_id: f.jobId, attempt_id: String(f.oldAttempt.id), sandbox_id: sandboxId }, intent: { fixture: "controlled runtime" } });
       });
+      if (exhaustTokens) {
+        assert.equal(withRepairRoot, false);
+        for (let count = 2; count <= 10; count++) {
+          assert.equal((await request(f.oldGateway.plaintext, "model-a", 4)).statusCode, 200); await settled(f.jobId, count);
+        }
+      }
       if (!accepted) {
         await f.stop("waiting_human");
         return { ...f, sandboxId, humanEvent, humanNode: "" }; // A label without an accepted human event proves nothing.
@@ -256,7 +278,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       assert.ok(acceptedEvent);
       return { ...f, sandboxId, humanEvent: String(acceptedEvent.event_id), humanNode: String(human.id) };
     };
-    for (const scenario of ["cleanup_failure", "unknown_run", "other_unknown", "cancelled", "stale_owner", "foreign_attempt", "foreign_sandbox", "no_human"] as const) {
+    for (const scenario of ["cleanup_failure", "grant_cleanup_failure", "unknown_run", "other_unknown", "cancelled", "stale_owner", "foreign_attempt", "foreign_sandbox", "no_human"] as const) {
       await t.test(`#1012 host cleanup ${scenario}: no invented settlement or replay`, async () => {
         const f = await acceptedHumanWait(scenario !== "no_human");
         if (scenario === "unknown_run") await attempts.markEffectUnknown(sql, String(f.oldAttempt.id), "agent_run:1", "synthetic unknown run");
@@ -282,12 +304,23 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           if (scenario === "cleanup_failure") throw new Error("synthetic destroy confirmation failed");
         } }, { jobId: f.jobId, attemptId: scenario === "foreign_attempt" ? randomUUID() : String(f.oldAttempt.id),
           sandboxId: scenario === "foreign_sandbox" ? "synthetic-foreign" : f.sandboxId });
-        if (scenario === "cleanup_failure") await assert.rejects(close, /synthetic destroy confirmation failed/);
+        if (scenario === "grant_cleanup_failure") {
+          await sql.unsafe(`CREATE FUNCTION reject_human_grant_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+            IF NEW.job_id='${f.jobId}'::uuid THEN RAISE EXCEPTION 'synthetic grant cleanup failed'; END IF;
+            RETURN NEW; END $$`);
+          await sql.unsafe("CREATE TRIGGER reject_human_grant_fixture BEFORE UPDATE ON job_capability_tokens FOR EACH ROW EXECUTE FUNCTION reject_human_grant_fixture()");
+          try { await assert.rejects(close, /synthetic grant cleanup failed/); }
+          finally {
+            await sql.unsafe("DROP TRIGGER reject_human_grant_fixture ON job_capability_tokens");
+            await sql.unsafe("DROP FUNCTION reject_human_grant_fixture()");
+          }
+        } else if (scenario === "cleanup_failure") await assert.rejects(close, /synthetic destroy confirmation failed/);
         else await close();
         const after = await capture();
         if (scenario === "other_unknown") {
           assert.deepEqual(after[0].filter(e => e.row.effect_id === "unknown-external"), before[0].filter(e => e.row.effect_id === "unknown-external"));
-          assert.deepEqual(after.slice(2), before.slice(2), "a known run close does not alter Job, tokens or usage");
+          assert.deepEqual(after[2], before[2]); assert.deepEqual(after[4], before[4]);
+          assertRevokedGrants(before[3], after[3], true); assertRevokedGrants(before[5], after[5], false);
         } else assert.deepEqual(after, before);
         if (f.humanNode) {
           const denied = await app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${f.humanNode}/ignore` });
@@ -313,6 +346,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         const unchanged = await Promise.all([
           sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
           sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(c) AS row FROM job_capability_tokens c WHERE job_id=${f.jobId} ORDER BY id`,
         ]);
         let destroyed = 0;
         const close = () => destroyAndSettleHumanWaitRun(sql, { destroy: async handle => {
@@ -323,13 +357,22 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           WHERE job_id=${f.jobId} AND effect_id='agent_run:1'`;
         assert.equal(closed.status, "settled"); assert.equal(closed.replay_policy, "never");
         assert.equal(closed.settlement_json.sandbox_destroyed, true);
+        assert.equal(closed.settlement_json.runtime_grants_revoked, true);
+        const callsBeforeFence = upstreamCalls;
+        assert.notEqual((await request(f.oldGateway.plaintext)).statusCode, 200);
+        assert.notEqual((await f.propose(randomUUID(), 1, "late callback before reply", f.oldGrant)).statusCode, 200);
+        assert.equal(upstreamCalls, callsBeforeFence);
         assert.equal(closed.settlement_json.human_event_id, f.humanEvent);
         await close(); assert.equal(destroyed, 2);
         assert.deepEqual((await sql`SELECT settlement_json FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_id='agent_run:1'`)[0].settlement_json, closed.settlement_json);
-        assert.deepEqual(await Promise.all([
+        const afterClose = await Promise.all([
           sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
           sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
-        ]), unchanged, "cleanup cannot settle usage or refresh tokens");
+          sql`SELECT to_jsonb(c) AS row FROM job_capability_tokens c WHERE job_id=${f.jobId} ORDER BY id`,
+        ]);
+        assertRevokedGrants(unchanged[0], afterClose[0], true);
+        assertRevokedGrants(unchanged[2], afterClose[2], false);
+        assert.deepEqual(afterClose[1], unchanged[1], "cleanup cannot settle usage or refresh caps");
         for (const response of await Promise.all([send(), send()])) assert.equal(response.statusCode, mode === "reply" ? 202 : 200, response.body);
         const [generations] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${f.jobId}
           AND payload_json->>'subtype'='repair_generation'`;
@@ -517,9 +560,87 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         sql`SELECT to_jsonb(a) AS row FROM job_shared_asset_versions a WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,version_id`,
         sql`SELECT to_jsonb(c) AS row FROM canvases c WHERE id=${canvasId}`,
         sql`SELECT to_jsonb(n) AS row FROM canvas_nodes n WHERE canvas_id=${canvasId} ORDER BY id`,
+        sql`SELECT to_jsonb(m) AS row FROM human_messages m WHERE canvas_id=${canvasId} ORDER BY id`,
       ]);
       return JSON.parse(JSON.stringify(rows));
     };
+    for (const mode of ["reply", "ignore"] as const) {
+      const continuation = async (f: Awaited<ReturnType<typeof acceptedHumanWait>>) => {
+        const [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
+        const messageId = randomUUID();
+        return () => mode === "reply"
+          ? app.inject({ method: "POST", url: `/canvases/${f.canvasId}/messages`, payload: {
+            message_id: messageId, target: { kind: "job", node_id: String(node.id) }, body: "Synthetic ordinary continuation." } })
+          : app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${f.humanNode}/ignore` });
+      };
+      const closeWait = (f: Awaited<ReturnType<typeof acceptedHumanWait>>) => destroyAndSettleHumanWaitRun(sql,
+        { destroy: async handle => { assert.equal(handle.sandboxId, f.sandboxId); } },
+        { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId });
+      await t.test(`#1012 ordinary ${mode}: shared gates and grant fencing without a repair generation`, async () => {
+        const f = await acceptedHumanWait(true, false), send = await continuation(f);
+        assert.equal((await send()).json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+        await closeWait(f);
+        const lateToken = await f.mintGateway(), lateControl = await api.mintJobCapabilityToken(f.jobId);
+        const [frozen] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${f.jobId}`;
+        const history = await sql`SELECT id,max_requests,request_total_limit,max_tokens,used_requests,used_tokens
+          FROM job_tokens WHERE job_id=${f.jobId} ORDER BY id`;
+        for (const response of await Promise.all([send(), send()])) assert.equal(response.statusCode, mode === "reply" ? 202 : 200, response.body);
+        await assertNoGeneration(f.jobId); assert.equal(await readBudget(f.jobId), null);
+        assert.deepEqual(await sql`SELECT id,max_requests,request_total_limit,max_tokens,used_requests,used_tokens
+          FROM job_tokens WHERE job_id=${f.jobId} ORDER BY id`, history);
+        const [fenced] = await sql`SELECT count(*)::int AS count FROM job_tokens WHERE job_id=${f.jobId} AND status='active'`;
+        assert.equal(fenced.count, 0);
+        const { token } = await f.start();
+        assert.equal(await readBudget(f.jobId), null);
+        const calls = upstreamCalls;
+        assert.notEqual((await request(lateToken.plaintext)).statusCode, 200);
+        assert.notEqual((await f.propose(randomUUID(), 0, "late ordinary callback", lateControl.token)).statusCode, 200);
+        assert.equal(upstreamCalls, calls);
+        assert.equal((await request(token.plaintext)).statusCode, 200); await settled(f.jobId, 2);
+        const key = randomUUID(), summary = "Synthetic ordinary wait completed through the normal completion gate.";
+        const completed = await f.propose(key, 0, summary); assert.equal(completed.statusCode, 200, completed.body);
+        await core.ingestEvent(f.jobId, { v: 1, event_id: receipts.completionDoneEventId(f.jobId, key), type: "done", payload: { summary } });
+        const [final] = await sql`SELECT status,agent_snapshot_json FROM jobs WHERE id=${f.jobId}`;
+        assert.equal(final.status, "succeeded"); assert.deepEqual(final.agent_snapshot_json, frozen.agent_snapshot_json);
+        await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+      });
+      for (const blocker of ["tokens", "requests", "effect_pending", "unknown", "usage", "paused", "policy", "transition"] as const) {
+        await t.test(`#1012 ordinary ${mode} ${blocker}: full transaction rollback without a repair root`, async () => {
+          const f = await acceptedHumanWait(true, false, blocker === "tokens");
+          await closeWait(f);
+          if (blocker === "requests") await sql`UPDATE job_tokens SET max_requests=used_requests WHERE job_id=${f.jobId}`;
+          if (blocker === "effect_pending" || blocker === "unknown") {
+            await attempts.beginEffect(sql, String(f.oldAttempt.id), { effectId: "ordinary-unresolved", kind: "gateway_model_request", intent: { fixture: true } });
+            if (blocker === "unknown") await attempts.markEffectUnknown(sql, String(f.oldAttempt.id), "ordinary-unresolved", { fixture: "unknown external result" });
+          }
+          if (blocker === "usage") await sql`UPDATE job_usage_ledger SET settlement_status='unknown' WHERE job_id=${f.jobId}`;
+          if (blocker === "paused") await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+          if (blocker === "policy") await sql`UPDATE jobs SET agent_snapshot_json=agent_snapshot_json - 'runtime_knobs' WHERE id=${f.jobId}`;
+          if (blocker === "transition") {
+            await f.mintGateway(); await api.mintJobCapabilityToken(f.jobId);
+            await sql.unsafe(`CREATE FUNCTION reject_ordinary_pending_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+              IF NEW.id='${f.jobId}'::uuid AND NEW.status='pending' THEN RETURN NULL; END IF; RETURN NEW; END $$`);
+            await sql.unsafe("CREATE TRIGGER reject_ordinary_pending_fixture BEFORE UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION reject_ordinary_pending_fixture()");
+          }
+          try {
+            const send = await continuation(f), before = await captureBatch(f.canvasId, [f.jobId]), calls = upstreamCalls;
+            const code = { tokens: "JOB_TOKEN_EXHAUSTED", requests: "REPAIR_REQUESTS_EXHAUSTED",
+              effect_pending: "REPAIR_EFFECT_UNRESOLVED", unknown: "REPAIR_EFFECT_UNRESOLVED", usage: "JOB_TOKEN_USAGE_UNKNOWN",
+              paused: "REPAIR_PAUSED", policy: "GATEWAY_REQUEST_BUDGET_INVALID", transition: "REPAIR_REQUEUE_CHANGED" }[blocker];
+            for (let retry = 0; retry < 2; retry++) {
+              const response = await send(); assert.equal(response.statusCode, 409, response.body); assert.equal(response.json().error_code, code);
+              assert.deepEqual(await captureBatch(f.canvasId, [f.jobId]), before);
+            }
+            assert.equal(upstreamCalls, calls); await assertNoGeneration(f.jobId); assert.equal(await readBudget(f.jobId), null);
+          } finally {
+            if (blocker === "transition") {
+              await sql.unsafe("DROP TRIGGER reject_ordinary_pending_fixture ON jobs"); await sql.unsafe("DROP FUNCTION reject_ordinary_pending_fixture()");
+            }
+            await sql`UPDATE jobs SET status='cancelled' WHERE id=${f.jobId}`;
+          }
+        });
+      }
+    }
     for (const mode of ["resume", "rerun-current", "batch"] as const) {
       await t.test(`${mode}: an empty pending transition rolls back every recovery mutation`, async () => {
         const first = await setup();

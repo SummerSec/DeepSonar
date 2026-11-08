@@ -15,13 +15,13 @@
 
 ### 人工等待修正链交接（#1012）
 
-真实 `request_human` 接受后，`agent_run` 不因等待标签、执行器返回或数据库中断自动结清。Dispatcher 的 finally 先调用原 Runtime Adapter 的精确 sandbox destroy 并等待资源消失；只有成功后，在 Canvas → Job → 最新 Attempt → effect 锁内核对仍为 waiting_human、同一活动 Attempt/sandbox、未取消及该 Attempt 的持久 human 事件，才结清本轮 effect_pending 的 agent_run。unknown、外来/已结清 run 及其他效果保持不变；清理失败仍闭锁，不补写模型用量或结束人工等待。宿主退出证据与授权回复的代际准入是两步，后者仍检查原额度和全部未结清效果。
+真实 `request_human` 接受后，`agent_run` 不因等待标签、执行器返回或数据库中断自动结清。Dispatcher 的 finally 先调用原 Runtime Adapter 的精确 sandbox destroy 并等待资源消失；只有成功后，在 Canvas → Job → 最新 Attempt → effect 锁内核对仍为 waiting_human、同一活动 Attempt/sandbox、未取消及该 Attempt 的持久 human 事件，才在同一事务先撤销旧 Gateway/Control grants、再结清本轮 effect_pending 的 agent_run，并记录 runtime_grants_revoked。撤销或结算失败全回滚；unknown、外来/已结清 run 及其他效果保持不变，历史 token 行、额度和账本不删除。不补写模型用量或结束人工等待。宿主退出证据与授权回复的代际准入是两步，后者仍检查原额度和全部未结清效果。
 
-`POST /canvases/:id/messages` 的普通回复与既有 human-node ignore 入口复用同一续接函数。只有 Job 存在原 rejected completion 修正根时，才在已持有 Canvas → Job 锁的事务中调用共享 `readRepairRequeueAdmission`，通过原 deadline、累计请求/token、暂停、已接受完成与全部效果门后追加 `resume-frozen` 代际，再关闭旧 Attempt、在同一事务撤销旧 Gateway/Control 运行凭证并转 pending。原冻结快照、修正根、回执、费用及期限不重写；没有修正根的普通人工等待保持原续接语义。
+`POST /canvases/:id/messages` 的普通回复与既有 human-node ignore 入口复用同一续接函数。所有 waiting_human Job 都在 Canvas → Job → 全部 Attempts 锁内，先检查原冻结请求策略，再调用共享 `readRepairRequeueAdmission`；通过暂停、已接受完成、全部未结清效果和累计额度门后保存原策略、关闭旧 Attempt、原子撤销旧 Gateway/Control grants 并转 pending。只有修正根存在时才额外检查原修正期限与预算，并追加 `resume-frozen` 代际；普通无根等待不创建代际，也不能跳过通用安全准入。原冻结快照、回执、历史额度/费用和期限不重写；历史请求策略缺失/非法返回具体 409，不按当前配置补造。
 
 同 message UUID 的读取在 Canvas 锁内串行化；相同回复和重复忽略只交接一次。准入拒绝通过原 `HumanInterventionError` 返回具体 409 error_code；消息、人工节点、代际和 Job/Attempt 变更在同一事务回滚。pending 转换意外没有结果时同样回滚，不提交只有代际而没有后继 Job 的半成品。恢复权限仍是原消息/忽略入口的权限，不借本修复授权新的执行范围或重放未知效果。
 
-`repair-generation.integration.test.ts` 已加入真实 Control request_human → 受控 Runtime Adapter 的宿主清理函数 → HTTP 回复/忽略 → Dispatcher 领取与新 owner → Gateway 累计计费 → 完成门/终态结算，以及清理失败、未知效果、取消、旧 owner/外来 sandbox/无持久 human 事件拒绝，并发重复、额度/效果/暂停/原期限拒绝与 pending UPDATE 故障的全行回滚断言。受控 destroy 证明 Scheduler 接线和 SQL 归属，不冒充实际 OpenSandbox 启停或完整真实 Dispatcher/CLI 运行。消息注入和显式 ACK 仍是两阶段；本回归的 ACK 调用领域 handler，不宣称真实模型已读取，也不冒充完整 Control ACK 传输端到端。运行器和上游为受控替身，最终 SHA 的 `pnpm ci:integration:recovery` Actions 待验，本机未运行测试/构建/typecheck。
+`repair-generation.integration.test.ts` 已加入真实 Control request_human → 受控 Runtime Adapter 的宿主清理函数 → HTTP 回复/忽略 → Dispatcher 领取与新 owner → Gateway 累计计费 → 完成门/终态结算，以及清理/撤销失败、未知效果、取消、旧 owner/外来 sandbox/无持久 human 事件拒绝，并发重复、额度/效果/暂停/原期限拒绝与 pending UPDATE 故障的全行回滚断言。新增无修正根的回复/忽略正例、累计真实 Gateway token 耗尽、请求/未知效果/未知用量/暂停/策略损坏及 pending CAS 拒绝，核对完整历史、消息和 grants 回滚；已编写不等于已执行。受控 destroy 证明 Scheduler 接线和 SQL 归属，不冒充实际 OpenSandbox 启停或完整真实 Dispatcher/CLI 运行。消息注入和显式 ACK 仍是两阶段；本回归的 ACK 调用领域 handler，不宣称真实模型已读取，也不冒充完整 Control ACK 传输端到端。运行器和上游为受控替身，最终 SHA 的 `pnpm ci:integration:recovery` Actions 待验，本机未运行测试/构建/typecheck。
 
 ### 创建入口补齐与缺损快照诊断（#943 / #948）
 
@@ -69,7 +69,7 @@
 
 2026-11-06 核对 `c0809b3e`：人工等待已有独立配置和最近 human 事件时钟；但定向对账报告残留时，旧路径只追加“先对账”的文案，随后仍把 Job 写成 failed/human_timeout。本切片在 Job → Attempt 锁下执行检查：有残留或本轮有结算进展保留 waiting_human；最终 UPDATE 还要求该 Job 的全部效果为 settled，覆盖对账扫描排除的 active Attempt 和 planned 效果。被阻断的 Job 不进入 Reaper 的终态返回列表，因此不触发 human_timeout 计数、终态清理或 Canvas 失败推进。
 
-不刷新原 deadline、预算、token 或 Attempt，不自动重放/结算未知效果，不改 Finding、Report 或已接受人工请求。人工等待仍可被已有显式取消/回复流程处理；#946 当时不覆盖所有回复恢复路径。修正根关联的当前回复/忽略共享准入补齐见[交接](#人工等待修正链交接1012)，不把该有限范围扩写为所有普通等待路径已验证。`human_messages.delivered_at` 表示人给 Agent 的消息已注入，不是 Agent 请求已经投递给人的证据；“实际通知投递后计时”未在此实现；#946 的未结清效果误判核心故障已工程收口，通知计时仍是独立未交付范围。
+不刷新原 deadline、预算、token 或 Attempt，不自动重放/结算未知效果，不改 Finding、Report 或已接受人工请求。人工等待仍可被已有显式取消/回复流程处理；#946 当时不覆盖所有回复恢复路径。普通及修正根关联的回复/忽略共享准入候选见[交接](#人工等待修正链交接1012)，最终 SHA Actions 待验，不扩写为生产普通等待已验证。`human_messages.delivered_at` 表示人给 Agent 的消息已注入，不是 Agent 请求已经投递给人的证据；“实际通知投递后计时”未在此实现；#946 的未结清效果误判核心故障已工程收口，通知计时仍是独立未交付范围。
 
 `pnpm ci:unit:job-lifecycle` / `pnpm ci:integration:job-lifecycle` 的既有入口增加未知效果、部分对账进展、active/inactive Attempt × planned/pending/unknown、多 tick 无变更、显式结算后正常到期的回归。仅合成 SQL/替身，最终 SHA GitHub Actions 待验；本机不运行测试、构建或 typecheck。
 

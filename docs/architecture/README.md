@@ -73,7 +73,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 | 系统范围与角色 | 02；03 | §1–2、§15 | 概览已迁入，旧文历史对照 |
 | 实体与数据真相 | 08；schema | §3 实体、§6、§17.1–17.4 | 已迁入，字段不复制 SQL 草图 |
 | 生命周期与恢复 | 06；[Attempt 实现](../../apps/scheduler/src/domains/job-attempt/index.ts) | §3 状态机、§4、§8 图循环、文末资格与排序 | 已迁入，细节回到代码和行为测试 |
-| 人工等待修正链交接 | FR-CANVAS-004；06/09；[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012) | #1012 / #1002 P1-4 | 精确 sandbox 消失/同 Attempt human 证据的宿主 run 收口，未知/清理失败/取消不改；原准入、同事务代际与消息/节点/状态全回滚；受控清理及实际 Control/HTTP/Gateway/完成回归接 recovery，最终 SHA Actions 待验 |
+| 人工等待修正链交接 | FR-CANVAS-004；06/09；[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012) | #1012 / #1002 P1-4 | 精确 sandbox 消失/同 Attempt human 证据下原子撤销旧 grants 并收口 run，未知/清理或撤销失败/取消不改；普通及修正根共享原准入，仅修正根追加代际，消息/节点/状态全回滚；受控清理及实际 Control/HTTP/Gateway/完成回归接 recovery，最终 SHA Actions 待验 |
 | 构件与依赖 | 05；[bounded contexts / 锁序](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | §4.4、§5、§11 | 构件地图已迁入；锁序专题保留权威 |
 | API 与修复 | 09；[OpenAPI](../../apps/scheduler/src/openapi.ts) / shared-types | §7、§8 控制通道 | 已迁入；字段由机器契约维护 |
 | CLI 与运行上下文 | [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[runtime context](../AGENT_RUNTIME_CONTEXT.md)、[profiles](../AGENT_RUNTIME_PROFILES.md)、[Pi RPC 大载荷](../PI_RPC_PAYLOAD_LIMITS.md) | §8.1–8.2 | 专题保留权威，03/05/09 引用；#1011 Pi 主 allowance 完成拒绝与 streaming/message_end 来源沿 NFR-EVO-003，最终 SHA 原生 Pi/OM 待验；#990 完整归档/索引/Pointer 回读归 06/08/09/10，NFR-REL-004/NFR-SEC-003，最终 SHA Actions 待验，sender/冻结 knobs/80 MiB E2E 未交付 |
