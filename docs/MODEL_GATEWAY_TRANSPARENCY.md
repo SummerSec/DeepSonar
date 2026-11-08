@@ -1,13 +1,19 @@
 # Model Gateway 透明传输（#923）
 
 > 状态：as-built；#928 已合入 main 616d7a36，工程证据见下文；后续 SHA 另验，不代表真实模型、生产或性能验收。
-> 同步日期：2026-11-06
+> 同步日期：2026-11-08
 
 ## 边界与入口
 
 [Gateway](../apps/scheduler/src/gateway.ts) 保留 Job/token/Attempt、冻结模型、workload、deadline、预算和 effect/usage ledger 准入。获准请求只替换认证和服务器绑定目标，不通过业务头白名单、JSON 重序列化或模型参数改写改变业务内容。账号池和自动路由治理不在 #923 范围。
 
 [HTTP 传输](../apps/scheduler/src/gateway-transparent-http.ts) 使用 Node HTTP/HTTPS 单次交换，不隐式重试、跟随重定向或自动解压；[策略](../apps/scheduler/src/gateway-transparent-policy.ts) 只观察副本并在请求不满足预算时明确拒绝。内核纯数据库 admission 重试仍只发生在事务已回滚、尚未请求上游时，不代表重放外部调用。
+
+## 删除凭据与历史预算（#1002 P1-7A）
+
+凭据删除仍拒绝未结束 Job、活动镜像扫描和任何项目配置引用，不替操作者清理白名单或选择替代账号。允许删除时，在原事务内撤销该凭据的全部 Gateway token，再删除秘密凭据；`job_tokens.credential_id` 由外键置空，只有 `revoked` 行允许没有凭据。历史 token 的身份、workload、已用请求/Token 数和有限上限继续保留，`job_usage_ledger` 的 token/Attempt/effect 引用及用量原样保留，Job 冻结快照不改写。既有 `revoked_job_token_count` 仍只统计本次从 active 撤销的行。
+
+删除不是预算退款、效果结算或旧 Job 恢复授权：跨 token/Attempt 的历史有限额度继续参与准入，失去凭据的 token 不能恢复为活动状态；未知效果和历史缺损仍按原规则拒绝。schema 目标与非空库重建要求见[数据架构](architecture/08-data-architecture.md)。新增 HTTP/PG 回归接既有 `pnpm ci:integration:credential-delete`，精确旧基线重建、真实备份恢复接 `pnpm ci:unit:migrations`；本次未运行本地测试、数据库重建、构建或 typecheck，最终 SHA Actions 待验。
 
 ## 路径、方法与字节
 

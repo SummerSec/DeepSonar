@@ -21,7 +21,9 @@ test("DELETE /credentials/:id requires agents:write and serializes with dispatch
   assert.doesNotMatch(handler, /CREDENTIAL_BOUND/);
   assert.doesNotMatch(handler, /role_credentials/);
   assert.match(handler, /CREDENTIAL_SCAN_IN_USE/);
-  assert.match(handler, /DELETE FROM job_tokens WHERE credential_id/);
+  assert.match(handler, /UPDATE job_tokens AS token/);
+  assert.match(handler, /previous.status AS previous_status/);
+  assert.doesNotMatch(handler, /DELETE FROM job_tokens|UPDATE job_usage_ledger|DELETE FROM job_usage_ledger/);
   assert.match(handler, /action: "credential\.delete"/);
   assert.equal(/ciphertext|nonce|auth_tag/.test(handler), false);
 });

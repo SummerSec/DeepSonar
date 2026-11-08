@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -46,6 +46,8 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 设置 PATCH 在项目 `FOR NO KEY UPDATE` 锁内合并配置，按 UUID 顺序取得与 DELETE 共用的凭据行锁，持有至事务提交；该项目锁保护配置写入，同时允许凭据迁移的外键 `KEY SHARE`，避免 Project/Credential 反向等待。DELETE 不靠锁定扫描时已有的引用项目提供互斥。设置写入重验新增及保留的全部引用是否存在、active、属于全局或当前项目，省略模型字段不绕过；失效返回 `400 provider_credential_allowlist_stale`，配置原样保留。模型/回退仍按缺省账号的配置名单重验；清除或收窄掉缺省账号时清除配对模型，显式提交无账号的模型拒绝。缺少白名单键继续不收紧，显式 `[]` 继续禁止所有账号；不自动删键、替换账号或改写历史 Job。此片复用既有设置和删除反馈，**不代表 #914 完整默认账号 UX 已交付**。
 
 不修改凭据的配置入口不能复制旧整对象来回写账号引用：Skill configured 标记与 convergence 快捷规则使用当前 JSONB 的字段级更新，启动清理使用原配置 CAS，导入合并在事务中锁定项目后重新读取当前值。这样不会在账号替换/删除后复活旧引用；这些机制不授予新凭据、不清历史快照，也不把显式空白名单扩大为未收紧。
+
+删除终态历史凭据时（#1002 P1-7A），服务在同一事务撤销全部 Gateway token、删除秘密凭据并置空 token 的 credential 外键；保留 token 与 usage ledger 的身份、累计额度和精确用量，不重置预算或改写冻结 Job。无凭据 token 仅允许 revoked，不能再授权请求。`revoked_job_token_count` 继续只统计本次原 active token，重复删除仍为 404；未结束 Job、扫描和项目引用的既有 409 拒绝不变。详见[历史预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)。
 
 行为入口是 `pnpm ci:integration:credential-delete`：包括实际 HTTP 两项目负例与 PostgreSQL 双会话 delete-first/write-first 屏障，覆盖仅白名单、仅缺省及同时引用。测试接线不代表最终 SHA Actions 已通过。注意力成本：在删除前显示阻塞与既有修复位置，不增加编辑器、设置或自动修复决策；不以减少打扰扩大授权。
 
