@@ -5,6 +5,8 @@
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
+Fact 列表、详情和人工动作响应的只读 `usage` 投影分别描述用途、当前 Finding 实际引用及待处理原因（#1019）。列表采用有界范围查询，详情再读取既有留存证据与当前 Plan 判据；截断与无法确认明确呈现未知。投影不提供写入权限，人工信任、技术验证与完成判据仍走原契约。详见[证据追踪](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)。
+
 ## 任务下发契约（#767）
 
 `POST /projects/{id}/tasks` 可选提交 `task_contract`；类型/版本错误按既有校验错误处理。共享 [TaskContract schema](../../packages/shared-types/src/task-contract.ts) 是字段与模板的唯一机器来源。201 成功返回 `task_contract_warnings`；已提供契约的 objective/targets/scope/evidence/acceptance 基本完整性或必要条件阻塞返回 `409 task_contract_blocked`、`task_contract_blockers` 和 warnings，且不创建 Canvas/Job。每项有 `code/path/message/suggestion`，用于明确补充什么、哪些条件尚不能执行；它们不是完整度分数，也不代表自然语言意图已被理解。未提交契约的自由文本任务继续接受并返回未评估提示，工程场景不强套审计模板。
