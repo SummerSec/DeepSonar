@@ -136,6 +136,106 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         propose, stop, recover, start, prepared: () => prepared, currentGrant: () => grant.token };
     };
 
+    const humanMessages = await import("./domains/canvas/human-messages.js");
+    for (const mode of ["reply", "ignore"] as const) await t.test(`waiting_human ${mode} transfers repair ownership before the next runner`, async () => {
+      const f = await setup();
+      await f.stop("waiting_human");
+      const [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
+      const messageId = randomUUID(), interventionId = randomUUID();
+      await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
+        VALUES(${interventionId},${f.canvasId},${f.jobId},'human','synthetic intervention','open','{}')`;
+      const reply = () => app.inject({ method: "POST", url: `/canvases/${f.canvasId}/messages`,
+        payload: { message_id: messageId, target: { kind: "job", node_id: String(node.id) },
+          body: "Continue with the existing authorization and budget.", attachment_version_ids: [] } });
+      const ignore = () => app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${interventionId}/ignore` });
+      const responses = await Promise.all(mode === "reply" ? [reply(), reply()] : [ignore(), ignore()]);
+      for (const response of responses) assert.equal(response.statusCode, mode === "reply" ? 202 : 200, response.body);
+      const [handoffs] = await sql`SELECT count(*)::int AS count FROM events
+        WHERE job_id=${f.jobId} AND payload_json->>'subtype'='repair_generation'`;
+      assert.equal(handoffs.count, 1, "duplicate human actions allocate only one successor generation");
+      const [oldAttempt] = await sql`SELECT status FROM job_attempts WHERE id=${String(f.oldAttempt.id)}`;
+      assert.equal(oldAttempt.status, "interrupted");
+      const pending = await readBudget(f.jobId);
+      assert.equal(pending?.attempt_id, "", "unclaimed generation cannot authorize the old runner");
+      assert.equal(pending?.receipt_ref, f.before?.receipt_ref);
+      assert.equal(pending?.deadline, f.before?.deadline);
+      assert.equal(pending?.known_tokens, f.before?.known_tokens);
+      assert.equal(pending?.remaining_tokens, f.before?.remaining_tokens);
+      const { next, token } = await f.start();
+      await budgets.assertRepairExecutionOwner(sql, f.jobId, String(next.id));
+      await assert.rejects(budgets.assertRepairExecutionOwner(sql, f.jobId, String(f.oldAttempt.id)),
+        (error: unknown) => error instanceof budgets.RepairTokenBudgetError && error.code === "REPAIR_ATTEMPT_CHANGED");
+      const callCount = upstreamCalls;
+      assert.notEqual((await request(f.oldGateway.plaintext)).statusCode, 200);
+      assert.equal(upstreamCalls, callCount);
+      assert.notEqual((await f.propose(randomUUID(), 1, "late old execution", f.oldGrant)).statusCode, 200);
+      assert.equal((await request(token.plaintext)).statusCode, 200);
+      await settled(f.jobId, 2);
+      assert.equal((await readBudget(f.jobId))?.known_tokens, 8, "human recovery retains cumulative model usage");
+      if (mode === "reply") {
+        const [messageCount] = await sql`SELECT count(*)::int AS count FROM human_messages WHERE id=${messageId}`;
+        assert.equal(messageCount.count, 1);
+        const delivered: string[] = [];
+        const unregister = await humanMessages.registerHumanMessageRuntime(f.jobId, {
+          sendMessage: async (content) => { delivered.push(content); },
+          writeWorkspaceFile: async () => { assert.fail("the reply fixture has no attachments"); },
+        });
+        try {
+          assert.equal(delivered.length, 1);
+          assert.ok(delivered[0]?.includes(messageId));
+          const [injected] = await sql`SELECT delivery_status FROM human_messages WHERE id=${messageId}`;
+          assert.equal(injected.delivery_status, "injected");
+          await humanMessages.acknowledgeHumanMessage(f.jobId, messageId, "Read and incorporated.");
+          await humanMessages.acknowledgeHumanMessage(f.jobId, messageId, "Duplicate acknowledgement.");
+          const [ack] = await sql`SELECT delivery_status,acknowledged_at FROM human_messages WHERE id=${messageId}`;
+          assert.equal(ack.delivery_status, "acknowledged");
+          assert.ok(ack.acknowledged_at);
+          const [count] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${f.jobId} AND type='human_message_acknowledged'`;
+          assert.equal(count.count, 1);
+        } finally { unregister(); }
+      }
+      const key = randomUUID(), summary = "Successor handled the human action and completed.";
+      const completion = await f.propose(key, 1, summary);
+      assert.equal(completion.statusCode, 200, completion.body);
+      await core.ingestEvent(f.jobId, { v: 1, event_id: receipts.completionDoneEventId(f.jobId, key), type: "done", payload: { summary } });
+      const [finished] = await sql`SELECT status FROM jobs WHERE id=${f.jobId}`;
+      assert.equal(finished.status, "succeeded");
+      assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
+      await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+    });
+
+    for (const state of ["effect_pending", "unknown"] as const) await t.test(`human actions reject ${state} effects without partial writes`, async () => {
+      const f = await setup();
+      await attempts.beginEffect(sql, String(f.oldAttempt.id), { effectId: "human-resume-unresolved", kind: "agent_run", replayPolicy: "never" });
+      if (state === "unknown") await attempts.markEffectUnknown(sql, String(f.oldAttempt.id), "human-resume-unresolved", "synthetic unknown");
+      await f.stop("waiting_human");
+      const [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
+      const interventionId = randomUUID(), messageId = randomUUID();
+      await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
+        VALUES(${interventionId},${f.canvasId},${f.jobId},'human','synthetic intervention','open','{}')`;
+      const [before] = await sql`SELECT status,started_at FROM jobs WHERE id=${f.jobId}`;
+      const reply = await app.inject({ method: "POST", url: `/canvases/${f.canvasId}/messages`,
+        payload: { message_id: messageId, target: { kind: "job", node_id: String(node.id) }, body: "Continue.", attachment_version_ids: [] } });
+      const ignore = await app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${interventionId}/ignore` });
+      for (const response of [reply, ignore]) {
+        assert.equal(response.statusCode, 409, response.body);
+        assert.equal(response.json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+      }
+      const [after] = await sql`SELECT status,started_at FROM jobs WHERE id=${f.jobId}`;
+      assert.deepEqual(after, before);
+      const [attempt] = await sql`SELECT status FROM job_attempts WHERE id=${String(f.oldAttempt.id)}`;
+      assert.equal(attempt.status, "active");
+      const [message] = await sql`SELECT count(*)::int AS count FROM human_messages WHERE id=${messageId}`;
+      assert.equal(message.count, 0);
+      const [human] = await sql`SELECT status,body_json FROM canvas_nodes WHERE id=${interventionId}`;
+      assert.equal(human.status, "open");
+      assert.deepEqual(human.body_json, {});
+      const [generation] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${f.jobId} AND payload_json->>'subtype'='repair_generation'`;
+      assert.equal(generation.count, 0);
+      assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
+      await sql`UPDATE jobs SET status='cancelled' WHERE id=${f.jobId}`;
+    });
+
     for (const status of ["failed", "waiting_human"] as const) for (const mode of ["resume", "rerun-current"] as const) {
       await t.test(`${status} -> ${mode} -> new owner -> Gateway -> accepted done -> succeeded`, async () => {
         const f = await setup(); await f.stop(status);

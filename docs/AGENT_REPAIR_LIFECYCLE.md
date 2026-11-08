@@ -1,7 +1,7 @@
 # Agent 错误反馈与执行恢复（#903）
 
 > 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；本分支 #943 可信显式恢复已接线，最终 SHA Actions 待验
-> 同步日期：2026-11-07
+> 同步日期：2026-11-08
 
 这是 [完成回执](REPAIR_FEEDBACK_DONE_REPAIR.md)的生命周期扩展。设计取舍见 [ADR 0016](architecture/adr/0016-repair-execution-generations.md)。#911 已合入 Knowledge/Skill 分类透传；#919（#913）已合入仅在宿主接受完成后识别结构化 Gateway 拒绝的运行器处理。本次不重复这两片，也不把工程证据写成真实模型试验。
 
@@ -12,6 +12,12 @@
 恢复事务在旧快照仍可用时调用共享 `inspectGatewayRequestBudget`，通过全部只读门后再调用 `ensureGatewayRequestBudget`，把完整原请求策略保存在内核 `control_receipt`，包括从未签发 token 的 workload。普通无修复回执的恢复也执行该步骤；批量先检查所有成员，再写入。历史策略缺失/非法保持明确拒绝，rate-limit、dedup、policy receipt 与 pending 转换共同回滚。Gateway mint/admission 消费策略回执已由 #928 与 #930 联合合入；请求上限的组合工程证据见下文，不由单独保存回执推定。
 
 `rerun-current` 保留原已授权 Pi 扩展选择并重新经过当前镜像/扩展准入。创建与恢复共用 `job-runtime-freeze.ts`，按平台配置一致重冻 quota、runtime knobs、profile 和 launch；较大的新配置不会授权提高旧 Job 持久请求策略。
+
+### 人工回复与忽略的修正链交接（#1012）
+
+人工回复与“忽略后继续”共用恢复入口，按 Canvas → Job → Attempt 锁序检查原请求策略、未结清效果、累计预算、原 deadline、暂停与已接受完成。存在拒绝完成回执时，在 pending 暴露前追加 Scheduler-owned `repair_generation`，由精确后继 Attempt 接管原修正链，随后中断旧 Attempt 并撤销旧运行令牌。历史回执、冻结快照、累计用量和原期限继续有效。
+
+准入失败或 pending 转换失败回滚整笔事务，人工回复不遗留无法投递的 planned 消息，忽略操作不误写 ignored。消息接口保留稳定的具体拒绝码。行为回归扩展既有 `repair-generation.integration.test.ts`，通过 `pnpm ci:integration:recovery` 覆盖代际归属与消息注入、ACK、重复回复和拒绝回滚。最终 SHA Actions 待验，真实模型恢复未验证。
 
 ### 创建入口补齐与缺损快照诊断（#943 / #948）
 

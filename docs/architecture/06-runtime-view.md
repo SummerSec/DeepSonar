@@ -94,6 +94,8 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 
 ## 非正常路径
 
+人工回复与忽略 `waiting_human` 请求时，共用原修正链准入检查，在同一事务内授权后继 Attempt、撤销旧令牌并转 pending。阻塞时回复/忽略与状态变更一起回滚。对应 FR-JOB-001 / FR-CANVAS-004，详见[人工恢复交接](../AGENT_REPAIR_LIFECYCLE.md#人工回复与忽略的修正链交接1012)。行为回归接入 `pnpm ci:integration:recovery`，最终 SHA Actions 待验。
+
 | 触发 | Scheduler 响应 | 结果和后续 |
 | --- | --- | --- |
 | 无效 token、Job 不属于项目、operation 不在 allowlist、不可见节点或坏 schema | 所有 operation 先做 token/operation/schema 检查；mutating operation 的 event-ingestion 事务内再次锁 Job、检查 scope/引用/语义状态，失败时回滚整笔副作用；401/403/409/422 按错误类别返回，模型可修正项带 RepairFeedback | 不提交部分事实或外部效果；永久越权不可通过重试修复 |

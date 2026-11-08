@@ -38,6 +38,8 @@ DeepSonar 的产品形态是“可信执行内核 + 可组合能力”。模型�
 
 当前主路径是可运行的 Loop Graph：`Canvas` 是任务，Hub 根据图状态产生 Intent，Scheduler 创建 Job，Worker 在一次性沙箱中执行，结构化事实进入 Canvas，Verify、Research 和 Report 再将结果收敛。现有角色是内置 capability pack 的默认组合；未来可以由模型组合平台已经准入的能力，也可以在受治理范围内生成任务级临时组合。
 
+#1012 的[人工回复恢复](docs/AGENT_REPAIR_LIFECYCLE.md#人工回复与忽略的修正链交接1012)将人工回复和忽略入口接入已有修正链准入与执行代际交接，保留原回执、预算、deadline 和旧执行 fencing。阻塞时事务整体回滚，最终 SHA Actions 待验。
+
 ## 2. 四层真相与职责
 
 | 层 | 唯一职责 | 真相 | 不能做什么 |
