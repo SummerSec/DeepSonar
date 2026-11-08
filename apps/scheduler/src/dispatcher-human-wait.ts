@@ -70,7 +70,7 @@ export async function destroyAndSettleHumanWaitRun(
 }
 
 /** Existing Scheduler reconciliation, not a new service or Agent replay path. */
-export async function reconcileHumanWaitRuns(db: typeof sql, runner: Pick<SandboxRunner, "destroy">, limit: number) {
+export async function reconcileHumanWaitRuns(db: typeof sql, runner: Pick<SandboxRunner, "destroy">, limit: number, afterJobId?: string) {
   const rows = await db`SELECT j.id::text AS job_id,a.id::text AS attempt_id,j.sandbox_id
     FROM jobs j JOIN LATERAL (SELECT id,attempt_no,status,cancel_requested,sandbox_id FROM job_attempts
       WHERE job_id=j.id ORDER BY attempt_no DESC LIMIT 1) a ON true
@@ -82,8 +82,11 @@ export async function reconcileHumanWaitRuns(db: typeof sql, runner: Pick<Sandbo
         AND x.status='effect_pending' AND x.resource_identity_json->>'sandbox_id'=j.sandbox_id)
       AND NOT EXISTS (SELECT 1 FROM worker_sandbox_leases l WHERE l.sandbox_id=j.sandbox_id
         AND ((l.job_id IS NOT NULL AND l.job_id<>j.id::text) OR (l.attempt_id IS NOT NULL AND l.attempt_id<>a.id::text)))
-    ORDER BY j.id LIMIT ${limit}`;
-  const result = { scanned: rows.length, settled: 0, blocked: 0 };
+    ORDER BY (${afterJobId ?? null}::uuid IS NOT NULL AND j.id <= ${afterJobId ?? null}::uuid), j.id LIMIT ${limit}`;
+  // Advance after attempted rows even when their owners fail. Wrap in the same
+  // bounded query; this cursor is traversal only, never authority or settlement.
+  const result = { scanned: rows.length, settled: 0, blocked: 0,
+    nextJobId: rows.length ? String(rows[rows.length - 1]!.job_id) : undefined };
   for (const row of rows) {
     try {
       const settled = await destroyAndSettleHumanWaitRun(db, runner, {

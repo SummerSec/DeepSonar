@@ -151,11 +151,13 @@ async function main() {
   await reconcileOnBoot();
   // #874：unknown 外部效果在运行期必须有自动对账入口，不能只依赖升级期的人工 CLI。
   let humanWaitCleanupReady = false;
+  let humanWaitCleanupCursor: string | undefined;
   const effectReconcile = startEffectReconcileLoop({
     db: sql as unknown as Parameters<typeof startEffectReconcileLoop>[0]["db"],
     humanWaitReconcile: async () => {
       if (!humanWaitCleanupReady) return;
-      const result = await reconcileHumanWaitRuns(sql, runner, DEFAULT_EFFECT_RECONCILE_LIMIT);
+      const result = await reconcileHumanWaitRuns(sql, runner, DEFAULT_EFFECT_RECONCILE_LIMIT, humanWaitCleanupCursor);
+      humanWaitCleanupCursor = result.nextJobId;
       if (result.scanned > 0) console.log(`[reconcile] human wait cleanup settled=${result.settled} blocked=${result.blocked}`);
     },
     onResult: (result, operationId) => {

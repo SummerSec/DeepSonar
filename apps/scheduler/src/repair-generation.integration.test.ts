@@ -290,6 +290,37 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       assert.ok(acceptedEvent);
       return { ...f, sandboxId, humanEvent: String(acceptedEvent.event_id), humanNode: String(human.id) };
     };
+    await t.test("#1011 bounded rotation visits healthy wait behind an unavailable owner, then retries the owner", async () => {
+      const waits = [await acceptedHumanWait(true, false), await acceptedHumanWait(true, false)]
+        .sort((a, b) => a.jobId < b.jobId ? -1 : 1);
+      const [first, second] = waits;
+      const before = await sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${first!.jobId} ORDER BY id`;
+      let available = false, cursor: string | undefined;
+      const calls: string[] = [];
+      const runner = { destroy: async (handle: { sandboxId: string }) => {
+        calls.push(handle.sandboxId);
+        if (handle.sandboxId === first!.sandboxId && !available) throw new Error("synthetic owner unavailable");
+      } };
+      const pass = async () => {
+        const result = await reconcileHumanWaitRuns(sql, runner, 1, cursor);
+        cursor = result.nextJobId; return result;
+      };
+      assert.equal((await pass()).blocked, 1); assert.equal(cursor, first!.jobId);
+      assert.equal((await pass()).settled, 1); assert.equal(cursor, second!.jobId);
+      assert.equal(calls[1], second!.sandboxId, "failed first owner cannot monopolize the limit");
+      assert.deepEqual(await sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${first!.jobId} ORDER BY id`, before);
+      assert.equal((await pass()).blocked, 1, "wrap retries the still unresolved owner");
+      available = true;
+      assert.equal((await pass()).settled, 1);
+      assert.equal((await pass()).scanned, 0); assert.equal(cursor, undefined);
+      for (const f of waits) {
+        const [effect] = await sql`SELECT status FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_id='agent_run:1'`;
+        assert.equal(effect.status, "settled");
+        const [job] = await sql`SELECT status FROM jobs WHERE id=${f.jobId}`;
+        assert.equal(job.status, "waiting_human", "traversal never resumes the Job");
+      }
+      assert.equal(calls.length, 4, "settled rows are never destroyed again");
+    });
     for (const mode of ["reply", "ignore"] as const) {
       await t.test(`#1011 lost cleanup commit: restarted reconciliation reaches ordinary ${mode}`, async () => {
         const f = await acceptedHumanWait(true, false), workerId = `hw-${randomUUID()}`;

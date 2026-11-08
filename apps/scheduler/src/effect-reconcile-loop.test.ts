@@ -117,7 +117,8 @@ test("boot enables human cleanup only after HTTP can accept worker heartbeats", 
   assert.match(source, /if \(!humanWaitCleanupReady\) return;/);
   assert.ok(source.indexOf("humanWaitCleanupReady = true") > source.indexOf("await app.listen("));
   assert.ok(source.indexOf("void effectReconcile.runOnce()") > source.indexOf("await app.listen("));
-  assert.match(source, /reconcileHumanWaitRuns\(sql, runner, DEFAULT_EFFECT_RECONCILE_LIMIT\)/);
+  assert.match(source, /reconcileHumanWaitRuns\(sql, runner, DEFAULT_EFFECT_RECONCILE_LIMIT, humanWaitCleanupCursor\)/);
+  assert.match(source, /humanWaitCleanupCursor = result\.nextJobId/);
 });
 
 test("stop() makes later passes no-ops and the default limit is bounded", async () => {
