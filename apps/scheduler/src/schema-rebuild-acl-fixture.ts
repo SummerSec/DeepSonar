@@ -29,10 +29,10 @@ export async function runRebuildAclFixture(testUrl: string): Promise<void> {
   const project = randomUUID();
   let observedCopies = 0;
   const checkReader = async (): Promise<void> => {
-    const rows = await readerDb<{ name: string }[]>`SELECT name FROM public.projects WHERE id=${project}`;
+    const rows = await readerDb<{ name: string }[]>`SELECT name FROM public.projects`;
     assert.equal(rows.length, 1);
     assert.equal(rows[0]?.name, "acl-column-only");
-    await assert.rejects(readerDb`SELECT config_json FROM public.projects WHERE id=${project}`, { code: "42501" });
+    await assert.rejects(readerDb`SELECT config_json FROM public.projects`, { code: "42501" });
   };
   const reserveWithCopyCheck = async (failAfterCopy: boolean) => {
     const session = await db.reserve();
