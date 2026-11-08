@@ -205,7 +205,7 @@ ORDER BY e.created_at, e.id`;
 export async function settleEffectByOperator(
   db: MigrationConnection,
   input: OperatorSettleInput,
-  actor?: { type: string; id: string; name: string },
+  actor?: { type: string; id: string | null; name: string },
 ): Promise<{ settled: boolean; effect_id: string; outcome: OperatorSettleOutcome }> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(input.effect_id)) {
     throw new Error("INVALID_EFFECT_ID");
