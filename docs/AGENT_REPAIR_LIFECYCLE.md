@@ -19,6 +19,19 @@
 
 内核恢复许可在新 Job 创建期冻结，消费记录留在现有 effect intent、跨 key/token/Attempt 累计；历史缺许可/完整计数来源不补造。owner、期限、重复原引用与未知效果在同一 Job admission 事务里重新验证，仍使用原修正预算及请求次数求交。具体元数据、权限和回归归属见[透明 Gateway 契约](MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。源码及受控 SDK/真实 SQL/HTTP 回归已接线，最终 SHA Actions 待验，不冒充 native CLI 或 Provider 成功。
 
+### Kernel 平台门禁出口（#1002 P0-3）
+
+本分支在现有 Reaper pass 接入 [Hub 停止器](../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)。只扫描同项目/Canvas 的活动 `hub_reason`，在 Canvas → Job → 全部 Attempts → lease 锁内重核最新唯一活动且未取消的执行身份。当前完整 persisted objective 已停止，或内核完成回执次数、已知修正 token / 原冻结 deadline 确已耗尽时，复用 `failExecution` / `settleAttemptTerminal` 和原 token 撤销事务结束本 Hub，持久化暂停原因与既有 root/Job 节点的 `platform_stop` / `outcome=inconclusive` 和可行动下一步。随后走 Reaper 原资源清理，不需模型再提交一个完成或停止提案；不派发新 Job/Report，也不宣称任务完成。分页额度与修正上限只指向上述代码和原回执，不复制可变数字；遍历游标在每批后前进/环回，事务失败保留原事实供后续 pass 重核。
+
+这不是普通 Hub 可借用的 directed recovery 权限：即使当前 Hub 带真实 frozen recovery grant，也只结束该 Hub，不执行 grant 的 target stop/reconcile，不改 target 的快照、回执、效果或预算。失败终态按既有内核规则保留 pending/unknown 为 unknown，资源销毁不是 Provider 用量证据；不补账、不退额度或自动 replay。取消、终态、sandbox/lease 归属不符拒绝；已接受 human/完成回执即使尚未 deferred apply，也不被替换。所有 waiting_human（包括真实业务、授权及高风险等待）保留。不能按 Agent 标签或 reason 文本分类历史人工请求，本切片不声称任意 platform_blocker 或全部原 P0-3 已交付。
+
+`hub-platform-stop.fixture.ts` 接入已有 `ci:integration:completion-recovery`（gate-db-core）：实际 Reaper、受控 destroy、真实 SQL 和停止后 Control 401，真实 frozen directed Hub 对 target 的执行事实不变；另以隔离内核回执/用量行覆盖次数/token/deadline、未耗尽及 unknown 用量，accepted human/done、等待/取消/终态/归属漂移不变，以及撤销 SQL 失败全回滚和轮转推进。本切片最终 SHA Actions 待验，本地测试/构建/typecheck、生产执行和真实模型理解均未执行。
+
+| 注意力成本 | 处理方式 |
+| --- | --- |
+| 已由内核证明无法继续，却要求用户寻找合法模型提案 | Reaper 自动结束本 Hub，原节点显示固定原因、inconclusive 和下一步；不新增设置、通知队列或服务 |
+| 错把业务/权限判断当作系统故障自动关闭 | 保留 accepted human/完成及所有人工等待；仅使用当前内核身份、objective 和冻结预算事实 |
+
 ### 人工等待修正链交接（#1012）
 
 真实 `request_human` 接受后，`agent_run` 不因等待标签、执行器返回或数据库中断自动结清。Dispatcher 的 finally 先调用原 Runtime Adapter 的精确 sandbox destroy 并等待资源消失；只有成功后，在 Canvas → Job → 最新 Attempt → effect 锁内核对仍为 waiting_human、同一活动 Attempt/sandbox、未取消及该 Attempt 的持久 human 事件，才在同一事务先撤销旧 Gateway/Control grants、再结清本轮 effect_pending 的 agent_run，并记录 runtime_grants_revoked。撤销或结算失败全回滚；unknown、外来/已结清 run 及其他效果保持不变，历史 token 行、额度和账本不删除。不补写模型用量或结束人工等待。宿主退出证据与授权回复的代际准入是两步，后者仍检查原额度和全部未结清效果。

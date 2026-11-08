@@ -5,6 +5,7 @@ import postgres from "postgres";
 import { z } from "zod";
 import type { CompletionRecoveryState } from "./recovery.js";
 import type { EffectKind } from "./model.js";
+import { runHubPlatformStopFixtures } from "./hub-platform-stop.fixture.js";
 
 type Db = typeof import("../../db.js").sql;
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
@@ -166,6 +167,14 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       return recovery.pumpCompletionRecoveries({ db, cursor: String(BigInt(root.id) - 1n), limit: 1, wake, stop });
     };
     const assertCode = (code: string) => (error: unknown) => error instanceof Error && "code" in error && error.code === code;
+
+    await runHubPlatformStopFixtures(t, { db: sql, setup, app, directedHub: async () => {
+      const target = await setup(); await effect(target); await observe(target); assert.equal(await queue(target), true);
+      const { hub } = await runHub(target);
+      const [attempt] = await sql`SELECT id FROM job_attempts WHERE job_id=${String(hub.id)} AND status='active'`;
+      return { target, hub: { projectId: target.projectId, canvasId: target.canvasId,
+        jobId: String(hub.id), attemptId: String(attempt.id) } };
+    } });
 
     await t.test("real reapOnce stop adapter closes Attempt, revokes both token classes, audits and projects Canvas/Plan", async () => {
       const f = await setup();

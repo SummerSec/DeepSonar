@@ -46,6 +46,10 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 [服务 PG 回归](../../apps/scheduler/src/skill-source-catalog-lifecycle.integration.test.ts)、[Canvas PG 回归](../../apps/scheduler/src/dispatcher-skill-warning.integration.test.ts)、既有 Job catalog/refresh/metrics 单测已编写接入现有 CI 门；本次未运行本地测试、构建、typecheck 或数据库，最终 SHA Actions 待验。阈值和默认值按[配置源码](../../apps/scheduler/src/config.ts)与[统一换算](../../apps/scheduler/src/skill-freshness.ts)核对，不复制可变数字。
 
+## Kernel 平台门禁出口（#1002 P0-3）
+
+现有 Reaper 在超时/孤儿/取消等生命周期判定后，[有界轮转重核活动 Hub](../../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)的完整 stopped objective 或真实完成修正次数/token/deadline 耗尽。Canvas/Job/Attempt/lease 归属锁内只结束本 Hub并撤销 grants；随后复用原清理流程，root/Job 投影固定原因、inconclusive 与下一步。没有新的模型 stop operation、服务、定时工作流或账本，不把资源清理当作用量/成功证据，也不使用 directed grant 停止 target。已接受 human/完成、人工等待及不确定用量保留；失败轮转供后续 tick 重核。详细边界和注意力评审见[生命周期](../AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)。真实 Reaper/SQL/Control 拒绝与隔离历史回归接 `ci:integration:completion-recovery`，最终 SHA Actions 待验，不等于原 P0-3 全部交付。
+
 ## 正常链路
 
 ```mermaid

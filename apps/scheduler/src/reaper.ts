@@ -22,6 +22,7 @@ import { pumpCompletionRecoveries } from "./domains/job-attempt/recovery.js";
 import { settleAttemptTerminal } from "./domains/job-attempt/index.js";
 import { revokeJobTokensInTransaction } from "./gateway-token-revocation.js";
 import { triggerCompletionRecovery } from "./core.js";
+import { stopPlatformBlockedHubs } from "./domains/job-lifecycle/hub-platform-stop.js";
 
 /**
  * Reaper（§3.3 兜底）：调度器唯一可信的终局判定者
@@ -31,7 +32,7 @@ import { triggerCompletionRecovery } from "./core.js";
  * - dangling human 投影：无类型/无目标/无处理入口的 open 节点 → expired
  */
 
-export async function reapOnce(recoveryCursor: string | null = null): Promise<{
+export async function reapOnce(recoveryCursor: string | null = null, platformStopCursor: string | null = null): Promise<{
   timeouts: number;
   orphans: number;
   provisionStuck: number;
@@ -41,6 +42,8 @@ export async function reapOnce(recoveryCursor: string | null = null): Promise<{
   recoveryStops: number;
   recoveryWakes: number;
   recoveryCursor: string | null;
+  platformStops: number;
+  platformStopCursor: string | null;
 }> {
   const recovery = await pumpCompletionRecoveries({
     cursor: recoveryCursor,
@@ -69,9 +72,11 @@ export async function reapOnce(recoveryCursor: string | null = null): Promise<{
   const orphaned = await lifecycle.reapLeaseOrphans();
   const stalled = await lifecycle.reapStalledExecution(liveRules.stallSec);
   const waitingHumanTimedOut = await lifecycle.reapWaitingHumanTimeout(config.timeouts.waitingHumanSec);
+  const platformStops = await stopPlatformBlockedHubs({ afterJobId: platformStopCursor });
 
   const recoveryStoppedIds = new Set(recovery.stoppedJobs.map((job) => String(job.id)));
-  for (const j of [...timedOut, ...provisionStuck, ...orphaned, ...stalled, ...waitingHumanTimedOut, ...recovery.stoppedJobs]) {
+  const platformStoppedIds = new Set(platformStops.stoppedJobs.map((job) => String(job.id)));
+  for (const j of [...timedOut, ...provisionStuck, ...orphaned, ...stalled, ...waitingHumanTimedOut, ...recovery.stoppedJobs, ...platformStops.stoppedJobs]) {
     const jobId = j.id as string;
     const sandboxId = j.sandbox_id as string | null | undefined;
     if (sandboxId) {
@@ -90,7 +95,9 @@ export async function reapOnce(recoveryCursor: string | null = null): Promise<{
     const isStalled = stalled.some((x) => x.id === jobId);
     const isHumanTimeout = waitingHumanTimedOut.some((x) => x.id === jobId);
     const isRecoveryStop = recoveryStoppedIds.has(jobId);
-    if (isRecoveryStop) inc("deepsonar_jobs_failed_total", { reason: "recovery_stop" });
+    const isPlatformStop = platformStoppedIds.has(jobId);
+    if (isPlatformStop) inc("deepsonar_jobs_failed_total", { reason: "platform_stop" });
+    else if (isRecoveryStop) inc("deepsonar_jobs_failed_total", { reason: "recovery_stop" });
     else if (isTimeout) inc("deepsonar_jobs_failed_total", { reason: "timeout" });
     else if (isProvision) inc("deepsonar_jobs_failed_total", { reason: "provision_stuck" });
     else if (isStalled) inc("deepsonar_jobs_failed_total", { reason: "stalled" });
@@ -99,7 +106,7 @@ export async function reapOnce(recoveryCursor: string | null = null): Promise<{
     // §6.3：终局判定即吊销短期模型 Token
     await revokeJobTokens(jobId, "reaper").catch(() => {});
     await revokeJobCapabilityTokens(jobId, "reaper").catch(() => {});
-    const terminalStatus = isTimeout ? "timeout" : isProvision || isStalled || isHumanTimeout || isRecoveryStop ? "failed" : "orphan";
+    const terminalStatus = isTimeout ? "timeout" : isProvision || isStalled || isHumanTimeout || isRecoveryStop || isPlatformStop ? "failed" : "orphan";
     const [meta] = await sql<{
       id: string;
       type: string;
@@ -176,19 +183,23 @@ export async function reapOnce(recoveryCursor: string | null = null): Promise<{
     recoveryStops: recovery.stoppedJobs.length,
     recoveryWakes: recovery.woken,
     recoveryCursor: recovery.cursor,
+    platformStops: platformStops.stoppedJobs.length,
+    platformStopCursor: platformStops.nextJobId,
   };
 }
 
 export function startReaper() {
   let running = false;
   let recoveryCursor: string | null = null;
+  let platformStopCursor: string | null = null;
   const timer = setInterval(() => {
     if (running) return;
     running = true;
     void (async () => {
-      const result = await reapOnce(recoveryCursor);
+      const result = await reapOnce(recoveryCursor, platformStopCursor);
       recoveryCursor = result.recoveryCursor;
-      if (result.timeouts + result.orphans + result.provisionStuck + result.stalled + result.humanTimeouts + result.expiredHumanNodes + result.recoveryStops + result.recoveryWakes > 0) {
+      platformStopCursor = result.platformStopCursor;
+      if (result.timeouts + result.orphans + result.provisionStuck + result.stalled + result.humanTimeouts + result.expiredHumanNodes + result.recoveryStops + result.recoveryWakes + result.platformStops > 0) {
         console.log("[reaper]", result);
       }
       if (shouldCleanupManagedResources(config.runtime)) {
