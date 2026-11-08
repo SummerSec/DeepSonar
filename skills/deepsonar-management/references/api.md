@@ -1,7 +1,7 @@
 # DeepSonar Management API 契约
 
 > 状态：当前集成分支 API 参考；字段与授权以运行时 schema 和宿主实现为准，未验收范围明确保留。
-> 同步日期：2026-11-05
+> 同步日期：2026-11-08
 
 > **权威机器可读 schema（运行时）**：调度器提供以下豁免鉴权端点，优先以此为准。
 > - `GET /openapi.json` — OpenAPI 3.0.3 完整 JSON
@@ -139,6 +139,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | GET | /jobs/:id/evidence/stream | tasks:read | 证据流分页（`cursor/limit/tail`） |
 | PATCH | /jobs/:id/priority | jobs:control | 仅 pending：`{priority}`；值必须匹配 Scheduler 根据 Job 类型/Finding 严重度计算的固定 priority class，不能任意改分 |
 | POST | /jobs/:id/cancel | jobs:control | 取消（可选 `{force,reason}`；running 回收沙箱） |
+| POST | /jobs/:id/effects/:effectId/settlement | admin | #1002 P1-9 单条历史效果结清，严格 `{outcome,evidence,operation_id}`；项目限定 admin 仍按 Job 归属隔离。只写人工书面依据与真实认证主体，不补未知用量、不重排 Job、不改 replay_policy；不是 Job-scoped Agent operation。协议及字段限制见[单条效果结清](../../../deploy/README.md#管理-api-的单条效果结清1002-p1-9)与 OpenAPI（核对 2026-11-08；最终 Actions 待验收） |
 | POST | /canvases/:id/jobs/cancel-active | jobs:control | 取消画布当前活跃 Jobs |
 | POST | /jobs/:id/resume | jobs:control | failed/timeout/orphan/waiting_human 使用旧冻结快照重新执行（同 Job、新 Attempt）；导入 cancelled 返回 `409 JOB_IMPORTED_READONLY`；当前受治理身份漂移或无法解析时返回 `409 SNAPSHOT_STALE`。这会创建新的执行 Attempt，不承诺跨进程恢复 DSH 持久 Session；DSH 进程级恢复明确返回 `CONTEXT_RESUME_UNSUPPORTED` |
 | POST | /jobs/:id/rerun-current | jobs:control | failed/timeout/orphan/waiting_human 按当前 RoleConfig/Credential/项目网络、共享资产与 runtime image 策略完整重冻后重新执行；保留同 job_id、payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect |
@@ -545,6 +546,7 @@ Credential 连接测试和模型目录只读取 Scheduler append-only audit evid
 pending → claimed → provisioning → running → waiting_human → succeeded|failed|timeout|cancelled|orphan
 ```
 
+- `POST /jobs/:id/effects/:effectId/settlement`：只有管理员能对同 Job、非活动历史 `unknown` / `effect_pending` 提交书面判断。`outcome` 仅 `not_applied`、`applied_run_terminated` 或 `delivered`；同 effect 的 `operation_id` 与规范化 payload 不变时查询原结清结果，改内容或另 key 覆盖原结果返回 409。活动/排队执行仍归内核，拒绝结清；竞争中的原生 settlement 返回 `EFFECT_SETTLEMENT_BUSY`，先读取当前 effect。成功只表示人工事实写入并可通过 `GET /jobs/:id` 回读，不代表自动恢复许可、Provider 账单已确认或未知 Repair 用量可置零。
 - `POST /jobs/:id/resume`：使用旧冻结快照重新执行；导入 cancelled 返回 `409 JOB_IMPORTED_READONLY`；当前受治理身份与旧快照不同或无法解析时稳定返回 `409 SNAPSHOT_STALE`，不静默使用旧模型。
 - `POST /jobs/:id/rerun-current`：在 Dispatcher admission lock 与 Canvas→Job 行锁下完整重冻当前快照后原子转 `pending`；running/claimed/provisioning/pending 均返回 `409 JOB_NOT_RESUMABLE`。
 - 改 `apps/scheduler/src` 触发 tsx watch 时，**running → orphan**；resume 后继续。

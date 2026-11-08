@@ -31,8 +31,8 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 | `projects`、`canvases` | 项目 scope 和任务过程容器 | Canvas 隶属项目；用户、API token、Job 和导入导出均按项目授权 |
 | `canvas_nodes`、`canvas_edges`、`canvas_changes` | Intent、Fact、Artifact、Finding、Job 等过程图和 revision | 节点/边由拥有域写入；变更日志有可见 floor；Agent 不能提交坐标或任意终态 |
 | `jobs`、`job_attempts` | 逻辑任务和一次执行尝试 | Job 有冻结 `agent_snapshot_json`；一个 Job 同时最多一个 active Attempt |
-| `job_attempt_effects` | provision、agent run、清理等外部效果意图和 settlement | `effect_pending`/`unknown` 保护崩溃恢复；effect id 幂等；未知不得自动重放 |
-| `job_tokens`、`job_capability_tokens` | Gateway workload 凭据与独立 Job-scoped Control 能力 | Gateway 区分 `main` / `observational_memory`、冻结 provider/model/route 及有限分配；终态撤销。凭据删除先撤销全部 token，再由 `ON DELETE SET NULL` 脱离秘密凭据；只有 revoked token 可无凭据，历史身份、累计用量和有限额度保留 |
+| `job_attempt_effects` | provision、agent run、清理等外部效果意图和 settlement | `effect_pending`/`unknown` 保护崩溃恢复；effect id 幂等；未知不得自动重放；#1002 [管理员单条见证](../../deploy/README.md#管理-api-的单条效果结清1002-p1-9)复用原 settlement_json 保留依据、操作 id 与认证主体，不覆盖已结清证据/ledger/预算，无 schema 变更 |
+| `job_tokens`、`job_capability_tokens` | Gateway workload 凭据与独立 Job-scoped Control 能力 | Gateway 区分 `main` / `observational_memory`、冻结 provider/model/route 及有限分配；终态撤销。凭据删除先撤销全部 token，再由 `ON DELETE SET NULL` 脱离秘密凭据；只有 revoked token 可无凭据，历史身份、累计用量和有限额度保留；Job token 不取得管理权限 |
 | `job_usage_ledger` | Gateway 观测用量、workload 归因和结算 | 新记录绑定 `job_token_id`；总量与 memory 用量分开，凭据删除不删除 token 或修改账本引用/用量；历史缺失引用保持历史读取，不补造来源 |
 | `events`、`event_dedup`、`job_event_rate_limits` | 语义事件、Job 序列和 durable 限流 | event id、Job sequence 和事件 dedup 约束重复；原始运行流不进入 events |
 | `artifacts`、`artifact_claims`、`artifact_evidence`、`artifact_relations` | 版本化内部写入真相 | claim/evidence polarity 和 relation 类型结构化保存，旧版本可追溯 |

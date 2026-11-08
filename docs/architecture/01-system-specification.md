@@ -179,9 +179,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：当外部效果无法证明未发生（`effect_pending` / `unknown`，含崩溃、超时、取消后的未证实窗口）时，系统必须将 Attempt/Job 标为不可自动重放路径，通常进入 `orphan`/对账/人工路径，清理 Token、沙箱、画布同步和租约；`replay_policy` 不得被本次结算改宽。
 - **决策来源**：未知效果是事实状态，不是普通 transient error；猜测重放可能重复创建资源或修改目标。
-- **实现状态**：as-built；`effect_pending`/`unknown` 与 `replay_policy=never` 被单独处理并进入清理/对账路径。#899 允许对非 active 历史效果提供受审计单条人工证据，CLI 单条成功与全局残留分开，未核验计数不报零；不扩大重放或维护权限。
+- **实现状态**：as-built；`effect_pending`/`unknown` 与 `replay_policy=never` 被单独处理并进入清理/对账路径。#899 允许对非 active 历史效果提供受审计单条人工证据，CLI 单条成功与全局残留分开，未核验计数不报零；#1002 P1-9 在同一结清内核新增 admin/项目归属限定 Management 单条入口，精确重试与活动/排队/覆盖拒绝；不扩大重放、恢复预算或维护权限。
 - **代码入口**：[Attempt 应用](../../apps/scheduler/src/domains/job-attempt/application.ts)、[reconcile](../../apps/scheduler/src/reconcile.ts)、[Effect schema](../../database/schema.sql)、[工作台重试投影](../../apps/web/src)。
-- **验证证据**：`pnpm ci:unit:recovery`、`pnpm ci:integration:recovery`、`pnpm ci:smoke:opensandbox-reconcile`；人工核对 unknown 不提示安全重放；#899 实际 CLI、active 拒绝/内核结算、竞争与 plan gate 的隔离 PostgreSQL 回归见 `pnpm ci:integration:platform-upgrade`，最终 SHA Actions 结果另计。
+- **验证证据**：`pnpm ci:unit:recovery`、`pnpm ci:integration:recovery`、`pnpm ci:smoke:opensandbox-reconcile`；人工核对 unknown 不提示安全重放；#1002 Management 的真实 HTTP 权限/跨项目/Job、精确重试/竞争/原生锁忙及 unknown 用量/已耗预算不变接 recovery（最终 SHA 待验）；#899 实际 CLI、active 拒绝/内核结算、竞争与 plan gate 的隔离 PostgreSQL 回归见 `pnpm ci:integration:platform-upgrade`，最终 SHA Actions 结果另计。
 
 ### FR-JOB-006 provision never_started 结算
 
