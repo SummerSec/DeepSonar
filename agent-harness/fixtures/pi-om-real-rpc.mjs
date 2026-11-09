@@ -34,7 +34,7 @@ function resolveCli(binary) {
   return executable;
 }
 
-async function loadBoundaries(root) {
+export async function loadBoundaries(root) {
   const dir = process.env.DEEPSONAR_RPC_BOUNDARY_DIR ?? path.join(REPO, "packages/runtime-sandbox/src");
   const load = async (name, source) => {
     const file = path.join(root, `${name}.mjs`);
