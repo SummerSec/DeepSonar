@@ -52,12 +52,18 @@ test("knowledge ticks do not kick overdue ordinary jobs back into a paused Dispa
       assert.equal(selfKicks, 0, "an overdue gated Job is not a new external scheduling event");
       assert.equal(ticks, 1, "the Dispatcher becomes idle after the paused claim attempt");
       assert.equal((await sql`SELECT status FROM jobs WHERE id=${jobId}`)[0]?.status, "pending");
-      // External refreshes still wake due work; dispatch-internal refreshes only arm future timers.
+      // External refreshes still wake due work; dispatch-internal refreshes do not repeat overdue task kicks.
       await wake.refreshScheduleWakeFromDb();
       assert.equal(selfKicks, 1);
       await secondTick;
       assert.equal(ticks, 2);
       assert.equal(selfKicks, 1, "the external wake must not create a feedback loop");
+      // Bounded knowledge batches can leave due work after a tick; it still needs a wake.
+      wake.bindScheduleWake(() => { selfKicks++; });
+      await sql`INSERT INTO project_knowledge_work(project_id,trigger_key,governance_hash,state)
+        VALUES(${projectId},${randomUUID()},${"a".repeat(64)},'pending')`;
+      await wake.refreshScheduleWakeFromDb({ kickDueTasks: false });
+      assert.equal(selfKicks, 2, "suppressing ordinary task kicks must not strand due knowledge work");
     } finally { wake.unbindScheduleWake(); tick.mock.restore(); }
   } finally {
     await close();

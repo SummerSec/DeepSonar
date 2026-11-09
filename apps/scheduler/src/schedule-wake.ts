@@ -55,8 +55,8 @@ export function clearScheduleWake(): void {
 }
 
 /** Scan pending task and knowledge schedules and arm their nearest durable deadline. */
-export async function refreshScheduleWakeFromDb(options?: { kickDue?: boolean }): Promise<void> {
-  if (options?.kickDue !== false) refreshRequestsDueKick = true;
+export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boolean }): Promise<void> {
+  if (options?.kickDueTasks !== false) refreshRequestsDueKick = true;
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
     try {
@@ -81,15 +81,16 @@ export async function refreshScheduleWakeFromDb(options?: { kickDue?: boolean })
         }
         if (nearest == null || ms < nearest) nearest = ms;
       }
+      let knowledgeDue = false;
       const knowledgeWake = await readNextKnowledgeWake(sql);
       if (knowledgeWake) {
         const ms = knowledgeWake.getTime();
-        if (ms <= now) hasDue = true;
+        if (ms <= now) knowledgeDue = true;
         else if (nearest == null || ms < nearest) nearest = ms;
       }
       if (nearest != null) armTimer(nearest);
       else clearArmedTimer();
-      if (hasDue && refreshRequestsDueKick) fireKick();
+      if (knowledgeDue || (hasDue && refreshRequestsDueKick)) fireKick();
     } catch (error) {
       console.error("[schedule-wake] refresh failed:", error);
     } finally {
