@@ -143,4 +143,5 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 
 2026-11-01 集成证据：[#831](https://github.com/SummerSec/DeepSonar/pull/831) 在最终 PR 检查全绿后合并至 `fdb55a01b1e02b5b9078586923a8d506ce5bb096`；该主线的六个适用 Actions 工作流全绿，包含真实 schema67 重建和备份恢复，本轮工程 issue 已收口。较早 schema66/SDK-only 和本地记录只作历史，不能覆盖后续修复。OpenHarmony Fuzz 在正式 Release 的新构建失败，当前修复映射 FR-IMG-001/002、07 部署视图及既有 ADR 0006，增加匹配工具链与 fresh/reuse 双原生架构行为证据；[发布专题](<../RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)区分有限诊断、最终修复 SHA 验收和正式发行。v0.6.3 尚未正式发布，v0.6.2 保持不可变；独立质量、Host 证书/晋升/公开强关系建议按本轮决定暂缓，不把工程全绿写成质量通过。
 
+#1018 的[项目任务队列](../PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 72 与验收边界，最终 SHA Actions 待验。
 #1019 的[事实用途与待处理投影](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。

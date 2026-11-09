@@ -347,7 +347,7 @@ test("#969 real quick-start preflight shows safe model conflicts without creatin
   };
   api.createTask = async () => {
     taskCreates += 1;
-    return { canvas_id: "unexpected-canvas", job: { id: "unexpected-job", status: "pending" } };
+    return { canvas_id: "unexpected-canvas", job: { id: "unexpected-job", status: "pending" }, enqueued: false };
   };
   const { createRoot } = await import("react-dom/client");
   const { MemoryRouter } = await import("react-router-dom");

@@ -3,6 +3,7 @@ import { TaskGoalReviewRequest } from "@deepsonar/shared-types";
 import { invalidControlPayload } from "./control-input.js";
 import { LEFTOVER_RULE_ALIAS_KEYS } from "./settings-validation.js";
 import { persistPreparedJob } from "./job-creation.js";
+import { enqueueProjectTask } from "./domains/project-task/task-queue-store.js";
 import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { freezeProjectKnowledgeCatalog } from "./domains/project-knowledge/catalog-snapshot.js";
 import { onKnowledgeJobTerminal } from "./domains/project-knowledge/recovery.js";
@@ -896,6 +897,8 @@ export async function rolesForProject(db: typeof sql, projectId: string): Promis
 // ---------- Job 创建 ----------
 
 export interface CreateJobInput {
+  /** Management task creation only, atomically enroll the first pending Job's Canvas. */
+  enqueue?: boolean;
   projectId: string;
   canvasId?: string;
   parentJobId?: string;
@@ -936,6 +939,7 @@ export function parseRelatedFindingIds(payload: Record<string, unknown>): string
 }
 
 export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assignment?: import("@deepsonar/shared-types").KnowledgeJobAssignment) {
+  if (input.enqueue) await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
   const requestedPayload = { ...(input.payload ?? {}) };
   const systemType = SCHEDULER_SYSTEM_JOB_TYPES.has(String(input.type ?? "").toLowerCase());
   const schedulingPayload = systemType
@@ -1009,7 +1013,12 @@ export async function createJobInTransaction(tx: Tx, input: CreateJobInput, assi
     }
   }
   if (reviewRequest?.success) snapshot = await freezeGoalReviewAssignment(tx, input.projectId, input.canvasId!, snapshot, reviewRequest.data);
-  return persistPreparedJob(tx, input, { snapshot, payload, priority, assignment });
+  const prepared = await persistPreparedJob(tx, input, { snapshot, payload, priority, assignment });
+  if (input.enqueue) {
+    if (!input.canvasId) throw new Error("queued task requires a Canvas");
+    await enqueueProjectTask(tx as unknown as typeof sql, input.projectId, input.canvasId);
+  }
+  return prepared;
 }
 
 export async function createJob(input: CreateJobInput) {

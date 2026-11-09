@@ -269,4 +269,5 @@
 - Chrome Fuzz ARM 构建层优化（#961 P2/P3）：V8 编译阶段改用按 digest 钉死的 `V8_BUILDER_IMAGE`，不再继承 `${BASE_IMAGE}`，base 的运行时变化不再使下载/GN/编译层失效；运行时阶段仍跟随本次 base。指纹新增 `ci_src_tag`（`src-ci-<fp>`）与 `release_src_tag`（`src-release-<fp>`）：CI 四个 workflow 只读写前者，`release.yml` 只读写后者，历史 `src-<fp>` 已无消费方，避免 PR 产物让发布跳过真实构建。契约回归见 `agent-harness/image-cache-trust.test.mjs`。真实冷/热/失效三组样本仍待线上累积，本文不宣称提速比例。
 - [Pi RPC 大载荷链路（#944 / #990）](PI_RPC_PAYLOAD_LIMITS.md)：帧/分片/预览/重试阈值以专题的核对基线和代码为准。#990 的全部大预览归档关联、索引先于引用、Attempt 已用额度恢复和按源 hash/JSON Pointer 完整回读已接线，最终 SHA Actions 待验；发送侧分片、冻结 knobs、真实 Pi 80 MiB E2E 与容量/质量观测仍未交付。不自动加载大正文，`prompt` 仍不重传。
 
+#1018 的[项目任务队列](PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 72 与验收边界，最终 SHA Actions 待验。
 #1019 的[事实用途与待处理投影](EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。

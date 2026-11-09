@@ -16,6 +16,7 @@ export const ACTIVE_TASK_JOB_STATUSES = new Set([
 ]);
 
 export type TaskLifecycleStatus =
+  | "queued"
   | "archived"
   | "scheduled"
   | "pausing"
@@ -28,6 +29,7 @@ export type TaskLifecycleStatus =
   | "idle";
 
 export interface TaskLifecycleInput {
+  queueState?: string | null;
   /** Canvas status from the task list. */
   status?: string | null;
   /** Explicit archive flag for callers that do not carry the canvas status. */
@@ -73,6 +75,7 @@ export const TASK_LIFECYCLE_META: Record<
   TaskLifecycleStatus,
   { label: string; color: string }
 > = {
+  queued: { label: "串行排队中", color: "#7f8796" },
   archived: { label: "已归档", color: "#71717a" },
   scheduled: { label: "定时等待", color: "#a78bfa" },
   pausing: { label: "暂停中", color: "#fbbf24" },
@@ -179,6 +182,8 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
   else if (waitingOnSchedule) status = "scheduled";
   else if (executionState === "pausing") status = "pausing";
   else if (executionState === "paused") status = "paused";
+  else if (input.queueState === "queued" && activeCount > 0 && count(input.executionActiveCount) === 0
+    && !jobs.some((job) => ["claimed", "provisioning", "running", "waiting_human"].includes(normalized(job.status)))) status = "queued";
   else if (activeCount > 0) status = "running";
   else if (hasFailure) status = "failed";
   else if (hasReportPhase) status = "reporting";
@@ -199,7 +204,7 @@ export function deriveTaskLifecycle(input: TaskLifecycleInput): TaskLifecyclePro
     }),
     // Scheduled tasks still occupy the active queue (pending Jobs) so list
     // filters that look at isActive continue to surface them.
-    isActive: status === "running" || status === "scheduled" || status === "pausing",
+    isActive: status === "running" || status === "scheduled" || status === "pausing" || status === "queued",
     activeCount,
     hasJobs,
     endedAt: input.endedAt ?? null,
@@ -215,6 +220,8 @@ export function taskLifecycleReason(input: {
   neverStartedTerminal?: boolean;
 }): string {
   switch (input.status) {
+    case "queued":
+      return "已加入项目串行队列，等待前序任务结束及队列恢复后开始。";
     case "archived":
       return "任务已归档，不再调度新的运行。";
     case "scheduled":

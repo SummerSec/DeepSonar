@@ -260,3 +260,7 @@ FR-JOB-005 的人工路径复用 `job_attempt_effects`：同一 UPDATE 排除 ac
 #1002 P1-9 的 Management [单条接口](../../deploy/README.md#管理-api-的单条效果结清1002-p1-9)复用同一结清内核，在 Dispatcher → Canvas → Job 锁内重验资源/执行归属，拒绝新的活动/排队目标并对原生效果锁使用有界拒绝。同 key/payload 重读已存结果，不改变 replay policy、Job/Attempt、历史预算或 unknown ledger；认证主体与人工依据保存在原 effect，无新状态机或控制通道。HTTP 权限、竞争和用量不变回归复用现有 recovery CI，当前最终 SHA Actions 待验。
 
 Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freeze，Control Intent 预检与最终 ingestion 均执行；最终事务在 pending Job 公开前冻结 runtime knobs、OM 配额、profile 与 launch。保留原 audit timeout、parent/finding/payload/priority 和图身份，shared assets 仅由既有 materializer 记录一次；冻结或图写入失败回滚整次 ingestion。
+
+## 项目队列领取与恢复（#1018）
+
+项目 FIFO 队列在 Dispatcher 的全局 claim 事务锁内判定执行资格，实际 claim 后才标记当前占位。当前 Canvas 的内部 Job 可并行，下一 Canvas 等待治理 root/report 收敛、所有活动 Job 结束与效果结清。失败/取消保留队首并暂停，恢复必须确认当前失败项 ID；手动暂停只挡后续任务。Scheduler 按有界公平轮转对账，重启读取持久记录，硬重试在同一 claim 事务中以新条目 ID 排尾，保留暂停且废止旧失败项确认。Finding 报告再生成不创建任务新代际；终态 membership 保持不变，原报告权限和资源门不变。详见[队列专题](../PROJECT_TASK_QUEUE.md)。
