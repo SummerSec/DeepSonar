@@ -185,7 +185,7 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     id: string,
     actorProjectId: string | null = null,
   ): Promise<Record<string, unknown>> {
-    const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, recoverableJobs, terminalJobs, scanCount, activeScans, projectReferences] = await Promise.all([
+    const [bindingCount, bindings, jobCount, pendingJobs, activeJobs, recoverableJobs, terminalJobs, scanCount, activeScans, projectReferences, usageHistory] = await Promise.all([
       query<{ count: number }[]>`SELECT 0::int AS count`,
       query`SELECT NULL::uuid AS role_config_id WHERE false`,
       query<{ pending_unclaimed: number; active_frozen: number; recoverable: number; terminal_historical: number }[]>`
@@ -257,6 +257,13 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
         ORDER BY s.created_at DESC
         LIMIT 50`,
       credentialProjectReferences(query, id, actorProjectId),
+      query<{ token_generations: number; ledger_entries: number }[]>`
+        SELECT COUNT(DISTINCT t.id)::int AS token_generations, COUNT(l.id)::int AS ledger_entries
+        FROM job_tokens t
+        LEFT JOIN job_usage_ledger l ON l.job_token_id = t.id
+          AND l.job_id = t.job_id AND l.project_id = t.project_id
+        WHERE t.credential_id = ${id}
+          AND (${actorProjectId}::uuid IS NULL OR t.project_id = ${actorProjectId})`,
     ]);
     const counts = jobCount[0] ?? { pending_unclaimed: 0, active_frozen: 0, recoverable: 0, terminal_historical: 0 };
     const item = (job: Record<string, unknown>) => ({
@@ -271,6 +278,10 @@ export function registerCredentialRoutes(app: FastifyInstance): void {
     return {
       credential_id: id,
       project_references: projectReferences,
+      usage_history: {
+        token_generations: Number(usageHistory[0]?.token_generations ?? 0),
+        ledger_entries: Number(usageHistory[0]?.ledger_entries ?? 0),
+      },
       role_configs: {
         count: Number(bindingCount[0]?.count ?? 0),
         items: bindings.map((binding) => ({

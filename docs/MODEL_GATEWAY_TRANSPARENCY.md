@@ -23,6 +23,8 @@ Pi 的 SDK 生成前扩展为每次 main 调用签发独立 UUID，并禁用不�
 
 凭据删除仍拒绝未结束 Job、活动镜像扫描和任何项目配置引用，不替操作者清理白名单或选择替代账号。允许删除时，在原事务内撤销该凭据的全部 Gateway token，再删除秘密凭据；`job_tokens.credential_id` 由外键置空，只有 `revoked` 行允许没有凭据。历史 token 的身份、workload、已用请求/Token 数和有限上限继续保留，`job_usage_ledger` 的 token/Attempt/effect 引用及用量原样保留，Job 冻结快照不改写。既有 `revoked_job_token_count` 仍只统计本次从 active 撤销的行。
 
+凭据详情的 impact 与独立 `/credentials/:id/impact` 返回 `usage_history.token_generations` / `ledger_entries`：包含全部状态的历史 token 生成和精确同 Job/项目的账本引用，按 actor 项目过滤；单个 token 的多条账本不重复计 token。无历史返回零，不暴露 token、账本内容或其他项目计数。只读计数不改变删除保护或历史保留。HTTP/PG 回归覆盖多账本引用、详情与独立入口、删除后的完整历史及项目隔离；项目隔离负例复用已接线的引用查询夹具 `ci:integration:credential-delete`，最终 SHA Actions 另验。
+
 删除不是预算退款、效果结算或旧 Job 恢复授权：跨 token/Attempt 的历史有限额度继续参与准入，失去凭据的 token 不能恢复为活动状态；未知效果和历史缺损仍按原规则拒绝。schema 目标与非空库重建要求见[数据架构](architecture/08-data-architecture.md)。新增 HTTP/PG 回归接既有 `pnpm ci:integration:credential-delete`，精确旧基线重建、真实备份恢复接 `pnpm ci:unit:migrations`；本次未运行本地测试、数据库重建、构建或 typecheck，最终 SHA Actions 待验。
 
 ## 路径、方法与字节
