@@ -51,6 +51,7 @@ test("provision diagnostics commit before cleanup and read back only through the
     const before = await sql`SELECT * FROM job_attempts WHERE id=${f.attemptId}`;
     const effectsBefore = await sql`SELECT * FROM job_attempt_effects WHERE attempt_id=${f.attemptId}`;
     let alive = true, destroys = 0, observedBeforeDestroy = false;
+    let diagnosticFailure: unknown, cleanupReadFailure: unknown;
     const client = {
       create: async () => ({ id: "fixture-provision-sandbox", run: async () => ({ exitCode: 1, stdout: "", stderr: "synthetic-secret" }),
         runAsync: async () => { throw new Error("not used"); }, writeFile: async () => {}, readFile: async () => Buffer.alloc(0),
@@ -58,18 +59,24 @@ test("provision diagnostics commit before cleanup and read back only through the
       connect: async () => undefined,
       list: async () => alive ? [{ resourceId: "fixture-provision-sandbox", jobId: f.jobId, attemptId: f.attemptId }] : [],
       destroy: async () => {
-        const data = await detail(f.jobId);
-        assert.equal(data.provision_diagnostics.length, 1);
-        assert.equal(data.provision_diagnostics[0].stage, "runtime_contract");
-        assert.equal(data.provision_diagnostics[0].session_observed, true);
-        assert.equal(JSON.stringify(data.provision_diagnostics).includes("synthetic-secret"), false);
-        observedBeforeDestroy = true; destroys++; alive = false;
+        try {
+          const data = await detail(f.jobId);
+          assert.equal(data.provision_diagnostics.length, 1);
+          assert.equal(data.provision_diagnostics[0].stage, "runtime_contract");
+          assert.equal(data.provision_diagnostics[0].session_observed, true);
+          assert.equal(JSON.stringify(data.provision_diagnostics).includes("synthetic-secret"), false);
+          observedBeforeDestroy = true; destroys++; alive = false;
+        } catch (error) { cleanupReadFailure = error; throw error; }
       },
     } as OpenSandboxClient;
     const runner = new OpenSandboxRunner(client);
     await assert.rejects(runner.provision({ jobId: f.jobId, attemptId: f.attemptId, limits, image: "fixture-image", network: "none",
-      env: { SYNTHETIC_SECRET: "synthetic-secret" }, onFailure: async d => { await evidence.recordProvisionFailureEvidence(sql, { ...f, diagnostic: d }); } }),
-      /runtime image missing/);
+      env: { SYNTHETIC_SECRET: "synthetic-secret" }, onFailure: async d => {
+        try { await evidence.recordProvisionFailureEvidence(sql, { ...f, diagnostic: d }); }
+        catch (error) { diagnosticFailure = error; throw error; }
+      } }), /runtime image missing/);
+    if (diagnosticFailure !== undefined) throw diagnosticFailure;
+    if (cleanupReadFailure !== undefined) throw cleanupReadFailure;
     assert.equal(observedBeforeDestroy, true); assert.equal(destroys, 1); assert.equal(alive, false);
     const first = (await detail(f.jobId)).provision_diagnostics[0];
     assert.deepEqual((await detail(f.jobId.toUpperCase())).provision_diagnostics, [first],
