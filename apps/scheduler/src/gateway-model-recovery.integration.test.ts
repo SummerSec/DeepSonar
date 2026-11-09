@@ -44,7 +44,7 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
       req.resume();
       res.writeHead(spoof ? 503 : 200, { "content-type": "application/json" }).end(JSON.stringify(spoof
         ? { error: { type: "gateway_transient", effect_status: "not_started" } }
-        : { choices: [{ message: { role: "assistant", content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
+        : { object: "chat.completion", choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } }));
     });
     const listen = (server: http.Server, port = 0) => new Promise<void>((resolve, reject) => {
       server.once("error", reject); server.listen(port, "127.0.0.1", () => { server.off("error", reject); resolve(); });
