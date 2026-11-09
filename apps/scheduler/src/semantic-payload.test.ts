@@ -8,6 +8,7 @@ import {
   EmitFindingPayload,
   FactPayload,
   FindingPayload,
+  HumanRequestGuidance,
   HumanPayload,
   DonePayload,
   QUANTITY_ANCHOR_MAX,
@@ -18,6 +19,12 @@ const fact = { title: "事实标题", description: "This fact includes enough ev
 const finding = {
   title: "认证路径存在重放风险",
   summary: "This finding summary contains enough durable evidence context.",
+};
+const humanGuidance = {
+  question: "请确认是否授权读取隔离测试环境。",
+  required_action: "请通过当前已知且受治理的凭据配置提供只读凭据引用；不要粘贴秘密。",
+  reply_instructions: "请回复已配置的非秘密凭据引用；若没有配置，请明确回复未配置。",
+  after_reply: "收到后只按当前 Job 快照复核；回复本身不扩权、不构成 ACK 或任务完成。",
 };
 
 test("semantic payloads reject truncated direct content at shared boundaries", () => {
@@ -32,15 +39,33 @@ test("semantic payloads reject truncated direct content at shared boundaries", (
 test("request_human requires one explicit structured subject", () => {
   assert.equal(HumanPayload.safeParse({
     reason: "需要人工确认当前风险接受边界。",
+    guidance: humanGuidance,
     subject: { type: "finding", finding_id: "00000000-0000-4000-8000-000000000001", subject_revision: "app@abc123" },
   }).success, true);
   assert.equal(HumanPayload.safeParse({
     reason: "需要人工提供隔离测试账号。",
+    guidance: humanGuidance,
     subject: { type: "platform_blocker", kind: "credential" },
   }).success, true);
   assert.equal(HumanPayload.safeParse({
     reason: "尝试通过自由文本绕过结构化目标。",
+    guidance: humanGuidance,
   }).success, false);
+  assert.equal(HumanPayload.safeParse({
+    reason: "缺少可行动指引的新请求必须被拒绝。",
+    subject: { type: "platform_blocker", kind: "business_decision" },
+  }).success, false);
+});
+
+test("HumanRequestGuidance trims four required fields and rejects blank, short, long, or unknown input", () => {
+  const padded = Object.fromEntries(Object.entries(humanGuidance).map(([key, value]) => [key, ` ${value} `]));
+  assert.deepEqual(HumanRequestGuidance.parse(padded), humanGuidance);
+  assert.equal(HumanRequestGuidance.safeParse({ ...humanGuidance, question: "   " }).success, false);
+  assert.equal(HumanRequestGuidance.safeParse({ ...humanGuidance, required_action: "短" }).success, false);
+  assert.equal(HumanRequestGuidance.safeParse({ ...humanGuidance, reply_instructions: "r".repeat(2001) }).success, false);
+  assert.equal(HumanRequestGuidance.safeParse({ ...humanGuidance, unexpected: "extra" }).success, false);
+  assert.equal(HumanPayload.parse({ reason: "  A sufficiently long human request reason.  ", guidance: humanGuidance,
+    subject: { type: "platform_blocker", kind: "business_decision" } }).reason, "A sufficiently long human request reason.");
 });
 
 test("semantic tool payloads accept exactly one direct object or payload_file", () => {

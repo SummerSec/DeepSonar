@@ -6,6 +6,8 @@
 
 #1002 P1-8 的同项目同质多账号池与内核恢复账号偏好映射 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时选择](06-runtime-view.md#凭据与-cli-解析757)及安全视图；复用现有白名单/默认账号操作，不新增池状态或配置。双账号真实 Gateway 的隔离回归接 role-config，最终 SHA Actions 待验。
 
+2026-11-09 可行动人工请求同步到 [FR-CTRL-004 / FR-WEB-003 / NFR-UX-001](01-system-specification.md)、06/09 视图与[生命周期专题](../AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。新请求完整保存 guidance，L0 保持有界并按需读取 L1；waiting_human Job 当前状态用于待办合并，unknown effect 对账仍单独优先。实现行为与最终 SHA Actions 尚待验收，不宣称注意力收益已测量。
+
 面向内部开发者和编码 Agent。先读 [DESIGN](../../DESIGN.md) 摘要，再按需求或主题定位；本目录不改变产品行为。需求组织参考 ISO/IEC/IEEE 29148，视图借鉴 arc42 / C4，关注点分离参考 ISO/IEC/IEEE 42010；这不是标准符合性认证。
 
 #1002 P2-13 的直接重建有效 ACL/default 保全及基线/原对象权限同事务发布映射 [CON-003](01-system-specification.md#con-003-单一-schema-基线)、[数据视图](08-data-architecture.md#直接重建的授权保全1002-p2-13)与[数据库说明](../../database/README.md#重建授权保全1002-p2-13)；不代替受控维护的 runtime 身份 fence，不修改角色或扩大 PUBLIC CREATE，最终 SHA Actions 待验。
@@ -79,7 +81,8 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 | 系统范围与角色 | 02；03 | §1–2、§15 | 概览已迁入，旧文历史对照 |
 | 实体与数据真相 | 08；schema | §3 实体、§6、§17.1–17.4 | 已迁入，字段不复制 SQL 草图 |
 | 生命周期与恢复 | 06；[Attempt 实现](../../apps/scheduler/src/domains/job-attempt/index.ts) | §3 状态机、§4、§8 图循环、文末资格与排序 | 已迁入，细节回到代码和行为测试 |
-| 人工等待修正链交接 | FR-CANVAS-004；06/09；[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012) | #1012 / #1002 P1-4 | 精确 sandbox 消失/同 Attempt human 证据下原子撤销旧 grants 并收口 run，未知/清理或撤销失败/取消不改；普通及修正根共享原准入，仅修正根追加代际，消息/节点/状态全回滚；受控清理及实际 Control/HTTP/Gateway/完成回归接 recovery，最终 SHA Actions 待验 |
+| Kernel 平台门禁出口 | FR-HUB-004/FR-CTRL-010；06/10；[生命周期](../AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3) | #1002 P0-3 | 现有 Reaper 以当前 stopped objective 或修正次数/已知 token/原 deadline 耗尽结束本 Hub、记录 inconclusive/下一步并走原清理；不借 directed grant 操作 target、不替换 accepted human/完成或人工等待、不 replay unknown；实际 Reaper/SQL/Control 拒绝及隔离历史回归已接，最终 SHA 待验，非原 P0-3 全部交付 |
+| 人工等待与可行动请求 | FR-CTRL-004 / FR-CANVAS-004 / FR-WEB-003 / NFR-UX-001；06/08/09；[生命周期](../AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影) | #1012 / #1002 P1-4 | 精确 sandbox 消失/同 Attempt human 证据下原子撤销旧 grants 并收口 run；严格 guidance 完整保存，L0 有界、L1 按需；waiting_human 才附加当前 Scheduler 状态并与同 Job human node 去重，unknown effect 对账独立优先；普通及修正根共享原准入，ACK/恢复/完成分离；最终 SHA Actions 待验 |
 | 构件与依赖 | 05；[bounded contexts / 锁序](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | §4.4、§5、§11 | 构件地图已迁入；锁序专题保留权威 |
 | API 与修复 | 09；[OpenAPI](../../apps/scheduler/src/openapi.ts) / shared-types | §7、§8 控制通道 | 已迁入；字段由机器契约维护 |
 | CLI 与运行上下文 | [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[runtime context](../AGENT_RUNTIME_CONTEXT.md)、[profiles](../AGENT_RUNTIME_PROFILES.md)、[Pi RPC 大载荷](../PI_RPC_PAYLOAD_LIMITS.md) | §8.1–8.2 | 专题保留权威，03/05/09 引用；#1011 Pi 主 allowance 完成拒绝与 streaming/message_end 来源沿 NFR-EVO-003，最终 SHA 原生 Pi/OM 待验；#990 完整归档/索引/Pointer 回读归 06/08/09/10，NFR-REL-004/NFR-SEC-003，最终 SHA Actions 待验，sender/冻结 knobs/80 MiB E2E 未交付 |

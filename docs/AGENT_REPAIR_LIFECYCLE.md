@@ -1,6 +1,6 @@
 # Agent 错误反馈与执行恢复（#903）
 
-> 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；本分支 #1012 人工等待修正链交接已接线，后续最终 SHA Actions 待验
+> 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；#1012 人工等待修正链交接与本轮可行动请求投影已接线，最终 SHA Actions 待验
 > 同步日期：2026-11-09
 
 这是 [完成回执](REPAIR_FEEDBACK_DONE_REPAIR.md)的生命周期扩展。设计取舍见 [ADR 0016](architecture/adr/0016-repair-execution-generations.md)。#911 已合入 Knowledge/Skill 分类透传；#919（#913）已合入仅在宿主接受完成后识别结构化 Gateway 拒绝的运行器处理。本次不重复这两片，也不把工程证据写成真实模型试验。
@@ -19,9 +19,26 @@
 
 内核恢复许可在新 Job 创建期冻结，消费记录留在现有 effect intent、跨 key/token/Attempt 累计；历史缺许可/完整计数来源不补造。owner、期限、重复原引用与未知效果在同一 Job admission 事务里重新验证，仍使用原修正预算及请求次数求交。具体元数据、权限和回归归属见[透明 Gateway 契约](MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。源码及受控 SDK/真实 SQL/HTTP 回归已接线，最终 SHA Actions 待验，不冒充 native CLI 或 Provider 成功。
 
+### Kernel 平台门禁出口（#1002 P0-3）
+
+本分支在现有 Reaper pass 接入 [Hub 停止器](../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)。只扫描同项目/Canvas 的活动 `hub_reason`，在 Canvas → Job → 全部 Attempts → lease 锁内重核最新唯一活动且未取消的执行身份。当前完整 persisted objective 已停止，或内核完成回执次数、已知修正 token / 原冻结 deadline 确已耗尽时，复用 `failExecution` / `settleAttemptTerminal` 和原 token 撤销事务结束本 Hub，在本 Hub 节点持久化 `platform_stop` / `outcome=inconclusive` 和可行动下一步。只有普通 Hub、同 Canvas 无其他非终态 Job 且 root 尚在可运行状态时才投影 Canvas/root 暂停；directed Hub、活动同伴或已进入分析完成/报告的 root 保留共享 Canvas/root 不变。随后走 Reaper 原资源清理，跳过此停止事件的 Plan/Canvas 自动推进，不需模型再提交合法终态提案，也不由本停止事件派发新 Job/Report 或宣称任务完成。分页额度与修正上限只指向上述代码和原回执，不复制可变数字；遍历游标在每批后前进/环回，事务失败保留原事实供后续 pass 重核。
+
+共享 Canvas/root 的不变指业务字段，不冻结过程审计游标：现有 `canvas_nodes_revision_change` 会为当前 Hub 节点投影推进 `change_revision`。隔离回归保持目标、convergence、状态、retention floor 和其他节点严格不变，并核对该 revision 区间的 `canvas_changes` 只能是当前 Hub 节点 upsert，不得夹带 meta/edge/其他 Job 变化；不同 Canvas 的目标仍保持完整行不变。
+
+预算出口只认可原 `mark_job_done` rejected 回执的版本、结果、Job-scoped `completionReceiptId`、同 Job durable dedup 及 event/payload Attempt 归属；未知状态、缺证明或跨 Job 回执不能耗尽当前执行。历史回执跨 Attempt 保留，但必须由原 repair owner/受治理 generation 授权当前 Attempt，不能通过换执行重置或借用预算。
+
+这不是普通 Hub 可借用的 directed recovery 权限：即使当前 Hub 带真实 frozen recovery grant，也只结束该 Hub，不执行 grant 的 target stop/reconcile，不改 target 的快照、回执、效果或预算。失败终态按既有内核规则保留 pending/unknown 为 unknown，资源销毁不是 Provider 用量证据；不补账、不退额度或自动 replay。取消、终态、sandbox/lease 归属不符拒绝；已接受 human/完成回执即使尚未 deferred apply，也不被替换。所有 waiting_human（包括真实业务、授权及高风险等待）保留。不能按 Agent 标签或 reason 文本分类历史人工请求，本切片不声称任意 platform_blocker 或全部原 P0-3 已交付。
+
+`hub-platform-stop.fixture.ts` 接入已有 `ci:integration:completion-recovery`（gate-db-core）：实际 Reaper、受控 destroy、真实 SQL 和停止后 Control 401，真实 frozen directed Hub 对 target 的执行事实及共享 Canvas/root 不变；活动同伴与分析完成/报告 root 不被覆盖或触发 Report。隔离完整回执包含原 kernel ID/dedup/Attempt 绑定，另拒绝非法版本/状态/身份、缺 dedup、外来 Attempt 及未授权旧 owner；以隔离内核回执/用量行覆盖次数/token/deadline、未耗尽及 unknown 用量，accepted human/done、等待/取消/终态/归属漂移不变，以及撤销 SQL 失败全回滚和轮转推进。本切片最终 SHA Actions 待验，本地测试/构建/typecheck、生产执行和真实模型理解均未执行。
+
+| 注意力成本 | 处理方式 |
+| --- | --- |
+| 已由内核证明无法继续，却要求用户寻找合法模型提案 | Reaper 自动结束本 Hub，原节点显示固定原因、inconclusive 和下一步；不新增设置、通知队列或服务 |
+| 错把业务/权限判断当作系统故障自动关闭 | 保留 accepted human/完成及所有人工等待；仅使用当前内核身份、objective 和冻结预算事实 |
+
 ### 人工等待修正链交接（#1012）
 
-真实 `request_human` 接受后，`agent_run` 不因等待标签、执行器返回或数据库中断自动结清。Dispatcher 的 finally 先调用原 Runtime Adapter 的精确 sandbox destroy 并等待资源消失；只有成功后，在 Canvas → Job → 最新 Attempt → effect 锁内核对仍为 waiting_human、同一活动 Attempt/sandbox、未取消及该 Attempt 的持久 human 事件，才在同一事务先撤销旧 Gateway/Control grants、再结清本轮 effect_pending 的 agent_run，并记录 runtime_grants_revoked。撤销或结算失败全回滚；unknown、外来/已结清 run 及其他效果保持不变，历史 token 行、额度和账本不删除。不补写模型用量或结束人工等待。宿主退出证据与授权回复的代际准入是两步，后者仍检查原额度和全部未结清效果。
+真实 `request_human` 接受后，`agent_run` 不因等待标签、执行器返回或数据库中断自动结清。Dispatcher 的 finally 先在 Canvas → Job → 最新 Attempt → effect → lease 锁内核对仍为 waiting_human、同一活动 Attempt/sandbox、未取消及该 Attempt 的持久 human 事件，再保持归属锁调用原 Runtime Adapter 的有界精确 sandbox destroy 并确认消失；只有成功后，才在同一事务撤销旧 Gateway/Control grants、结清本轮 effect_pending 的 agent_run 并释放匹配 lease，记录 runtime_grants_revoked。撤销或结算失败全回滚；unknown、外来/已结清 run 及其他效果保持不变，历史 token 行、额度和账本不删除。不补写模型用量或结束人工等待。宿主退出证据与授权回复的代际准入是两步，后者仍检查原额度和全部未结清效果。
 
 外部 destroy 与 SQL 事务不可能原子提交。#1011 在现有 `effect-reconcile-loop.ts` 启动/周期 pass 接入精确宿主清理重入（HTTP 监听就绪后才启用，不让外部清理 IO 阻断 heartbeat 可达性）：有界扫描仍为 waiting_human、最新 active 且未取消的同 sandbox Attempt、有持久 human 事件和精确 pending agent_run 的 Job，再调用原清理函数；通用对账失败也不取消此独立 pass，不重放 Agent 或模型请求。同一事务先按 Canvas/Job/Attempt/effect/lease 顺序锁定并重新核对绑定，任何外来归属在销毁前拒绝；锁保持到有界 destroy/消失确认与 SQL 结算提交，阻止检查后的 lease 漂移。只结清本轮 run；其他 pending/unknown 效果继续阻断回复/忽略。没有新服务、定时工作流或第二 destroy 回执账本。Dispatcher finally 显式分流：实际 waiting_human 才调用该受锁保护的结算函数，拒绝后不回退无保护销毁；普通成功/失败/取消/超时等收尾仍销毁原捕获 handle，不能把等待专用函数的拒绝当作普通清理已完成。
 
@@ -32,6 +49,16 @@ Worker-plane 清理只向 SQL lease 记录的 owner 发起 destroy，然后使�
 同 message UUID 的读取在 Canvas 锁内串行化；相同回复和重复忽略只交接一次。准入拒绝通过原 `HumanInterventionError` 返回具体 409 error_code；消息、人工节点、代际和 Job/Attempt 变更在同一事务回滚。pending 转换意外没有结果时同样回滚，不提交只有代际而没有后继 Job 的半成品。恢复权限仍是原消息/忽略入口的权限，不借本修复授权新的执行范围或重放未知效果。
 
 `repair-generation.integration.test.ts` 已加入真实 Control request_human → 受控 Runtime Adapter 的宿主清理函数 → HTTP 回复/忽略 → Dispatcher 领取与新 owner → Gateway 累计计费 → 完成门/终态结算，以及清理/撤销失败、未知效果、取消、旧 owner/外来 sandbox/无持久 human 事件拒绝，并发重复、额度/效果/暂停/原期限拒绝与 pending UPDATE 故障的全行回滚断言。新增无修正根的回复/忽略正例、累计真实 Gateway token 耗尽、请求/未知效果/未知用量/暂停/策略损坏及 pending CAS 拒绝，核对完整历史、消息和 grants 回滚；另覆盖 destroy 已返回而撤销事务失败后的同 owner 清理重入，检查 run/grants 原子收口、原等待、Attempt 身份/预算、用量/回执不变且不创建代际；既有内核 settleEffect 推进 phase=settling、清空 current_effect_id 并记录 last_effect，不把这次合法状态转换误判为预算或归属改写。#1011 新回归通过生产 Control HTTP、OpenSandboxRunner/worker-plane 和现有对账 loop（Provider 为受控替身）覆盖原清理调用 destroy 成功/SQL trigger 故障后结束、清空进程内 remote key 并重建 runner/loop模拟重启、key 恢复但资源仍在拒绝、最终精确 owner 确认消失后 run/grants/lease 原子结算，再实际回复/忽略、领取后继与 Gateway/完成。核对失败时完整原 Job/Attempt/effect/grants/lease/用量不变，成功时严格核对既有内核结算状态变化且不重置账本或原回执；外来 lease 的直接调用必须零 destroy，销毁期间并发 lease 改绑必须等同一清理事务提交；worker 单测另核查询失败与 cache 身份变化，registry SQL 回归在锁等待期间插入 lease，核本地 seed 拒绝端点变更且原 key 保持。已编写不等于已执行，也不冒充真实 OS 进程重启、OpenSandbox 服务端启停或完整真实 Dispatcher/CLI 运行。消息注入和显式 ACK 仍是两阶段；本回归的 ACK 调用领域 handler，不宣称真实模型已读取，也不冒充完整 Control ACK 传输端到端。运行器和上游为受控替身，最终 SHA 的 `pnpm ci:integration:recovery` Actions 待验，本机未运行测试/构建/typecheck。
+
+### 可行动人工请求与待办投影
+
+新的 `request_human` 必须通过严格 `guidance` 契约，字段与长度范围以[接口规范](architecture/09-interface-specs.md#可行动人工请求2026-11-09)为准。Scheduler 将完整请求内容保存在 human 节点 `body_json`；Canvas L0 保持有界摘要，reason 在 L0 最多 500 字符，详情按需读取完整 L1 节点。任何请求节点缺少 guidance（包括历史请求或自动生成的平台等待项）时，Web 明确说明缺少处理指引，不自动迁移、回填或从 reason 猜测建议。
+
+待办和回复界面显示具体动作、回复方式/选项及回复后的业务计划。Hub 动态提示、固定 Control Skill 与内置角色示例也遵循同一指导要求；凭据只指向现有安全配置/授权路径，不能让用户贴入聊天，不得捏造配置入口。Job 列表仅为 `waiting_human` 附加由 `readCompletionExecutionState` 得到的 Scheduler 当前投影，使用有界读取；同 Job 的 human 节点与等待投影合为一个人工待办，独立 unknown effect 对账仍单独显示并保持优先级。
+
+人工请求预览最多加载 12 条 L1，选中的回复请求从完整关联索引解析并额外固定加载（合计最多 13 条、4 路并发）。预览排序改变不会丢弃已打开请求的详情；请求版本变化须重新核对 L1，等待中的 Job 缺少关联请求或尚未核对完整内容时禁止发送。
+
+消息账本记录人工回复，恢复准入决定是否可以重新入队；这两者不替代显式 `ack_human_message`，也不表示 Job 已完成。`injected`、ACK、恢复与完成各保留原有含义。必填 guidance 增加请求编辑成本，预期减少用户理解阻塞、判断回复方式和重复澄清的成本；目前没有测量注意力收益，最终 SHA Actions 尚待验。
 
 ### 创建入口补齐与缺损快照诊断（#943 / #948）
 

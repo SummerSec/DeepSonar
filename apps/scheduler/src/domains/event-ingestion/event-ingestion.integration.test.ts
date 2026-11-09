@@ -410,6 +410,12 @@ if (!testDatabaseUrl) {
       await assert.rejects(
         preflightDeferredSemanticEvent(jobId, "human", {
           reason: "cross-canvas finding requires human review",
+          guidance: {
+            question: "Should this cross-canvas Finding be used to block the current Job?",
+            required_action: "Confirm the exact Finding and canvas association before making a decision.",
+            reply_instructions: "Reply with the Finding reference and whether it belongs to this Job.",
+            after_reply: "The Scheduler will recheck ownership; this reply does not change canvas scope or grant access.",
+          },
           subject: { type: "finding", finding_id: foreignFindingId, subject_revision: "foreign-rev" },
         }),
         (error: unknown) => error instanceof ControlInputError && error.code === "invalid_human" && error.retryable,
@@ -431,6 +437,12 @@ if (!testDatabaseUrl) {
       await sql`UPDATE jobs SET payload_json = ${sql.json({})} WHERE id = ${jobId}`;
       await preflightDeferredSemanticEvent(jobId, "human", {
         reason: "A valid platform authorization blocker is still handled after the agent exits.",
+        guidance: {
+          question: "Is the existing governed authorization reference available for this task?",
+          required_action: "Use only the known governed authorization configuration and provide its non-secret reference.",
+          reply_instructions: "Reply with the non-secret reference or state that no authorization is configured.",
+          after_reply: "The Scheduler rechecks current Job scope; the reply does not grant new permissions or complete the Job.",
+        },
         subject: { type: "platform_blocker", kind: "authorization" },
       });
       const [preflightJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;

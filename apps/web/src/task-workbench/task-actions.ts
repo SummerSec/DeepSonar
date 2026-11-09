@@ -1,6 +1,7 @@
 import { projectRepairFeedback, type RepairFeedback } from "./repair-feedback";
 import { conflictFindingIds, findingVerifyStatus, type OutcomeFact, type OutcomeFinding } from "./task-outcome";
 import type { TaskAction, TaskActionKind, TaskActionPriority } from "./types";
+import type { HumanRequestGuidance } from "@deepsonar/shared-types";
 
 const PRIORITY_RANK: Record<TaskActionPriority, number> = {
   critical: 0,
@@ -51,6 +52,14 @@ export type ActionIntervention = {
   findingId?: string | null;
   jobId?: string | null;
   pending: boolean;
+  guidance?: HumanRequestGuidance | null;
+  guidanceStatus?: "loading" | "error" | "available" | "missing";
+  detailStatus?: "loading" | "error" | "loaded";
+  detailVersionMatches?: boolean;
+  detailError?: string;
+  subjectLabel?: string;
+  subjectKind?: string | null;
+  safetyMessage?: string | null;
 };
 
 export type TaskActionInput = {
@@ -161,6 +170,9 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
   const findings = input.findings ?? [];
   const facts = input.facts ?? [];
   const jobs = input.jobs ?? [];
+  const interventions = input.interventions ?? [];
+  const humanRequestJobs = new Set(interventions.filter((item) => item.pending && item.jobId).map((item) => item.jobId!));
+  const humanRequestFindings = new Set(interventions.filter((item) => item.pending && item.findingId).map((item) => item.findingId!));
   const actions: TaskAction[] = [];
   const conflicts = conflictFindingIds(facts);
   const findingTitle = new Map(findings.map((finding) => [finding.id, finding.title?.trim() || finding.id]));
@@ -182,6 +194,7 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
 
   for (const finding of findings) {
     if (findingVerifyStatus(finding) !== "needs_human") continue;
+    if (humanRequestFindings.has(finding.id)) continue;
     actions.push({
       id: `finding:${finding.id}:needs_human`,
       kind: "human_decision",
@@ -213,22 +226,36 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
     });
   }
 
-  for (const item of input.interventions ?? []) {
+  for (const item of interventions) {
     if (!item.pending) continue;
+    const platformRequest = ["credential", "authorization", "high_risk_action"].includes(item.subjectKind ?? "");
     actions.push({
       id: `human:${item.id}`,
-      kind: "human_decision",
-      title: "运行正在等待你的回复",
-      reason: item.reason || "Agent 请求人工判断",
-      impact: "不回复则该分支会一直挂起",
+      kind: platformRequest ? "platform_blocker" : "human_decision",
+      title: item.guidance?.question || (item.guidanceStatus === "missing" ? "此请求未提供完整操作指引" : "人工请求等待处理"),
+      reason: item.guidance?.question || "请查看完整请求原因与关联证据",
+      impact: item.guidance
+        ? "回复只写入消息账本；恢复仍须宿主重新准入，Agent 确认与任务完成分别记录"
+        : "此请求没有完整操作指引；请查看完整原因或关联证据，不要推测缺失步骤",
       evidence_refs: [
         ...(item.findingId ? [findingRef(item.findingId)] : []),
         ...(item.jobId ? [`job:${item.jobId}`] : []),
+        `human:${item.id}`,
       ],
-      recommended_action: "reply_to_agent",
+      recommended_action: item.jobId ? "reply_to_agent" : "review_evidence",
       reversible: true,
       next_state: "needs_human",
       priority: "high",
+      human_request: {
+        reason: item.reason,
+        guidance: item.guidance ?? null,
+        guidanceStatus: item.guidance ? "available" : item.guidanceStatus ?? "missing",
+        detailStatus: item.detailStatus ?? "loading",
+        detailVersionMatches: item.detailVersionMatches === true,
+        detailError: item.detailError,
+        subjectLabel: item.subjectLabel ?? "人工请求",
+        safetyMessage: item.safetyMessage,
+      },
     });
   }
 
@@ -237,23 +264,26 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
     const current = job.execution_state?.authority === "scheduler" && job.execution_state.status === status
       ? job.execution_state : null;
     if (current && (current.blocker || current.allowed_actions.includes("correct_proposal"))) {
-      const unknown = current.allowed_actions.includes("reconcile_effects");
+      const unknown = current.allowed_actions.includes("reconcile_effects") || current.blocker === "effects_require_reconciliation";
       const human = current.allowed_actions.includes("wait_for_human");
       const platformWait = current.allowed_actions.includes("wait_for_platform");
       const correct = current.allowed_actions.includes("correct_proposal") && Boolean(job.error);
+      const humanRequestExists = humanRequestJobs.has(job.id);
+      if (humanRequestExists && (human || platformWait) && !unknown && !correct) continue;
       if (current.blocker || correct) actions.push({
         id: `job:${job.id}:current`, kind: unknown ? "unknown_effect" : human ? "human_decision" : correct ? "model_repair" : "platform_blocker",
-        title: human ? "已接受人工请求，等待处理" : platformWait ? "已接受平台阻塞，等待配置或授权修复" : correct ? "当前执行可修正提案" : "按宿主当前恢复状态处理",
+        title: human ? humanRequestExists ? "已接受人工请求，等待处理" : "运行等待人工，但缺少可核对的请求内容" : platformWait ? "已接受平台阻塞，等待配置或授权修复" : correct ? "当前执行可修正提案" : "按宿主当前恢复状态处理",
         reason: current.blocker ?? "当前 Attempt 可提交修正；提交时仍会重新准入",
         impact: unknown ? "未决效果必须先对账" : "历史回执不授予继续执行权限",
         evidence_refs: [`job:${job.id}`],
-        recommended_action: unknown ? "confirm_unknown_effect" : human ? "reply_to_agent" : correct ? "correct_proposal"
+        recommended_action: unknown ? "confirm_unknown_effect" : human ? humanRequestExists ? "reply_to_agent" : "inspect_recovery" : correct ? "correct_proposal"
           : platformWait ? "inspect_recovery" : current.allowed_actions.includes("request_recovery") ? "request_recovery" : "inspect_recovery",
-        reversible: !unknown, next_state: status, priority: "high",
+        reversible: !unknown, next_state: status, priority: unknown ? "critical" : "high",
       });
       continue;
     }
     if (status === "waiting_human") {
+      if (humanRequestJobs.has(job.id)) continue;
       actions.push({ id: `job:${job.id}:waiting_human`, kind: "platform_blocker",
         title: "运行等待原因需由宿主确认", reason: "缺少当前恢复投影，不能仅凭 waiting_human 推断需要人的决策",
         impact: "读取当前状态，区分平台对账和已接受的人工请求", evidence_refs: [`job:${job.id}`],

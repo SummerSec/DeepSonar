@@ -28,7 +28,7 @@ DeepSonar 的产品形态是“可信执行内核 + 可组合能力”。模型�
 
 界面与沟通优先呈现可行动的决定、实质阻塞、风险变化和可验收成果；正常运行与重复状态合并展示，证据和执行详情按需展开并保留审计。既有授权内可自行核实和完成的事项先自行处理；必须提问时说明缺失输入、影响和需要的具体决定，不机械重复索取有效授权。
 
-少打扰不能靠隐瞒失败、把不确定性转嫁给用户、默认扩权、自动批准/合并或降低验证要求实现。执行结束、草稿、未知状态分别按其真实证据表达，不冒充目标达成、交付或通过。本节是原则的单一权威定义；[工程评审问题与正反例](docs/architecture/11-engineering-specs.md#11-注意力成本评审830)说明落实方式，[NFR-UX-001](docs/architecture/01-system-specification.md#nfr-ux-001-人的注意力与可行动交互)登记需求与验收。本次只明确设计和开发约束，不宣称已有交互全部满足，也不预设节省比例。
+少打扰不能靠隐瞒失败、把不确定性转嫁给用户、默认扩权、自动批准/合并或降低验证要求实现。执行结束、草稿、未知状态分别按其真实证据表达，不冒充目标达成、交付或通过。本节是原则的单一权威定义；[工程评审问题与正反例](docs/architecture/11-engineering-specs.md#11-注意力成本评审830)说明落实方式，[NFR-UX-001](docs/architecture/01-system-specification.md#nfr-ux-001-人的注意力与可行动交互)登记需求与验收。可行动人工请求用结构化指导减少用户猜测操作和反复澄清，同时增加请求填写、阅读成本；预期收益尚无实测数据。
 
 ### 不向后兼容
 
@@ -165,6 +165,8 @@ Hub 只在当前 Job scope 内按需读图：初始 L0/overview 只提供有界 
 Gateway 请求额度跨 token/Attempt 累计，含撤销和过期 token；普通 main 与 OM 的 total/main/background 请求上限各取历史与当前有限值的最小值，0/未配置不能解除旧有限上限，详见 [透明网关预算](docs/MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)。
 
 用量额度采用显式配置：普通请求次数、修正 token、验证轮数、图查询累计调用/字节和 LSP 调用未配置时不限，显式正数才限制。非法配置拒绝，已有数据库配置与冻结历史不迁移。协议、权限、租约、资源容量和无进展保护独立保留。完整分类见 [用量限制](docs/USAGE_LIMITS.md)。
+
+#1002 P0-3 的本分支补充由现有 Reaper 对当前内核证明的 stopped objective / 完成修正次数、已知 token、原 deadline 耗尽提供活动 Hub 非成功出口；只结束本 Hub、沿用原清理，不要求模型再找合法完成提案，不借 directed grant 操作 target，不把销毁或 unknown 用量当作成功。accepted human/完成及人工等待保留，原 Hub 节点记录固定原因/inconclusive/下一步；预算仅认可原 kernel 回执版本/拒绝结果、Job-scoped ID、同 Job dedup/Attempt 与原 repair owner 证明。directed Hub、活动同伴或报告阶段保留共享 Canvas/root，只有普通无同伴且 root 可运行时才投影整体暂停；该停止事件不自动推进 Plan/Canvas。不按模型标签分类历史业务请求。边界与注意力成本见[生命周期](docs/AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)，最终 SHA Actions 待验；此切片不等于任意 platform_blocker 或原 P0-3 全部完成。
 
 ### 4.3 失败反馈与修正
 
@@ -363,6 +365,8 @@ OpenSandbox upgrade baseline (2026-11-01): installed SDK 1.2 and canonical serve
 **过程流持久化边界（#388）：** 确认点是 `JobEvidenceWriter.appendNormalized` 落盘完成；`publishStream` 必须等待该 Promise。排序与去重键为 `attempt_id:seq`。补读/订阅交界：先 `subscribeStream`，再读 evidence 快照，再用该键排空竞态。未落盘窗口标 `unpersisted`；本副本看不到期望文件标 `visibility=unavailable`，WS 关闭码 `4415`。可恢复性：单 Scheduler + 本地 `BLOB_DIR`（默认支持）可在重启/重连后补齐已确认帧并提供本机 live；多 Scheduler + 共享 `BLOB_DIR`（可选支持）任意副本可补读已确认帧，live 仍只在 lease 持有者；多 Scheduler + 本地卷（不支持过程流连续性）非持有者显式 unavailable。跨副本 file-tail 在未证明共享可见性前不做；不引入消息中间件；不承诺零丢失。
 
 人工消息进入 durable inbox ledger，附件先写共享资产再按 message UUID 注入 `/workspace/.deepsonar/inbox/`。正常 request_human 的 run 不凭等待标签或中断状态结清；Dispatcher 先在同一事务锁定并核验原 Job/Attempt/effect/lease，归属锁保持到有界 sandbox destroy/消失确认与结算，外来绑定在销毁前拒绝；以当前活动 Attempt 的持久 human 事件和精确归属先原子撤销旧运行 grants，再收口本轮 pending agent_run，unknown/清理失败/取消不结清，其他效果及 usage 不改。#1011 由现有 Scheduler 对账 loop 重入该精确清理，处理原 destroy 后 SQL 失败/重启窗口；扫描按已尝试 Job UUID 有界轮转，失败候选不永久占用首批，游标只影响进程内遍历且重启重核；worker-plane 仅向保留 lease 的原 owner 发起销毁并做完整资源查询，缺 key、不可达或资源仍在拒绝，不将不完整多节点列表作为证明，run/grants 与匹配 lease 同事务收口。`injected` 与显式 ACK 分离；waiting-human 回复或忽略关闭旧 Attempt、恢复 Job 为 pending。所有 waiting-human Job 都先核对并保留原冻结请求策略，通过共享累计额度/暂停/已接受完成/效果准入；仅有修正根时额外检查原修正期限并建立 resume-frozen 代际。关闭旧 Attempt、撤销旧 Gateway/Control 凭证和 pending 入队在同一事务完成，再唤醒 Dispatcher；拒绝返回具体错误并回滚消息、人工节点与状态，不重置 lifetime。重复消息/忽略不重复交接，详见[人工等待修正链交接](docs/AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)。普通文本、Session 标题和节点名称都不能伪造 ACK。
+
+新 `request_human` 必须提供严格 `guidance` 对象（字段、trim 与范围见[接口规范](docs/architecture/09-interface-specs.md#可行动人工请求2026-11-09)），完整内容写入 human 节点 `body_json`；L0 只保留有界摘要，详情按需读完整 L1，任何节点缺少指导都明确显示且不自动回填。人工待办显示具体动作、回复方式/选项和回复后的业务计划；同 Job 的 human node 与 `waiting_human` 投影合并显示，独立 unknown effect 对账仍保持优先。Hub 动态提示、固定 Control Skill 和内置角色示例遵循同一要求；凭据不得贴入聊天，也不得捏造配置入口。消息账本、恢复准入、`ack_human_message` 和完成语义各自独立，回复不等于授权、ACK 或任务完成。
 
 Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、usage 和广播注入，保留原始归档下载。DSH 当前只捕获精确 `sessions/<project>/<sessionId>/session.v4.jsonl`，历史 viewer 仍可读取旧代归档。Session usage 与 Gateway `job_usage_ledger` 是两套口径，不互相冒充定价或对账结果。
 

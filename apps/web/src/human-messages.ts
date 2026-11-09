@@ -1,4 +1,5 @@
 import type { CanvasHumanMessage, CanvasHumanMessageStatus, CanvasNode } from "./api.js";
+import type { HumanRequestGuidance } from "@deepsonar/shared-types";
 
 export const HUMAN_MESSAGE_MAX_LENGTH = 8_000;
 export const HUMAN_MESSAGE_ACTIVE_STATUSES = new Set([
@@ -123,6 +124,11 @@ export interface HumanInterventionItem {
   findingId: string | null;
   jobId: string | null;
   pending: boolean;
+  guidance?: HumanRequestGuidance | null;
+  guidanceStatus?: "loading" | "error" | "available" | "missing";
+  detailStatus?: "loading" | "error" | "loaded";
+  detailVersionMatches?: boolean;
+  detailError?: string;
 }
 
 export interface HumanInterventionPrefs {
@@ -175,7 +181,7 @@ export function toggleExpandedId(ids: readonly string[], id: string): string[] {
   return ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id];
 }
 
-function subjectFindingId(node: CanvasNode): string | null {
+export function subjectFindingId(node: CanvasNode): string | null {
   const subject = node.body_json?.subject;
   if (subject && typeof subject === "object" && typeof (subject as Record<string, unknown>).finding_id === "string") {
     return String((subject as Record<string, unknown>).finding_id);
@@ -204,17 +210,33 @@ export function humanInterventionJobId(node: CanvasNode): string | null {
 }
 
 export function listHumanInterventions(nodes: readonly CanvasNode[], limit = 12): HumanInterventionItem[] {
-  return nodes
+  const ordered = nodes
     .filter((node) => node.node_type === "human")
-    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-    .slice(0, limit)
-    .map((node) => ({
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+  const seenPendingJobs = new Set<string>();
+  const pending: CanvasNode[] = [];
+  const processed: CanvasNode[] = [];
+  for (const node of ordered) {
+    if (!isPendingHumanIntervention(node)) {
+      processed.push(node);
+      continue;
+    }
+    const jobId = humanInterventionJobId(node);
+    if (jobId && seenPendingJobs.has(jobId)) continue;
+    if (jobId) seenPendingJobs.add(jobId);
+    pending.push(node);
+  }
+  return [...pending, ...processed].slice(0, limit).map((node) => ({
       node,
       reason: typeof node.body_json?.reason === "string" ? node.body_json.reason : node.title || "等待人工判断",
       findingId: subjectFindingId(node),
       jobId: humanInterventionJobId(node),
       pending: isPendingHumanIntervention(node),
     }));
+}
+
+export function countPendingHumanInterventions(nodes: readonly CanvasNode[]): number {
+  return listHumanInterventions(nodes, nodes.length).filter((item) => item.pending).length;
 }
 
 export function visibleHumanInterventions(
@@ -224,22 +246,53 @@ export function visibleHumanInterventions(
   hiddenIds: readonly string[] = [],
 ): HumanInterventionItem[] {
   if (!hideProcessed) return [...items];
-  const replied = new Set(repliedIds);
   const hidden = new Set(hiddenIds);
-  return items.filter((item) => item.pending && !replied.has(item.node.id) && !hidden.has(item.node.id));
+  return items.filter((item) => item.pending && !hidden.has(item.node.id));
 }
 
 export function countVisiblePendingHumanInterventions(
   items: readonly HumanInterventionItem[],
-  repliedIds: readonly string[] = [],
+  _repliedIds: readonly string[] = [],
   hiddenIds: readonly string[] = [],
 ): number {
-  return visibleHumanInterventions(items, true, repliedIds, hiddenIds).length;
+  return visibleHumanInterventions(items, true, [], hiddenIds).length;
 }
 
 export function openHumanInterventionForJob(nodes: readonly CanvasNode[], jobId: string | null | undefined): CanvasNode | null {
   if (!jobId) return null;
-  return nodes.find((node) => node.node_type === "human" && humanInterventionJobId(node) === jobId && isPendingHumanIntervention(node)) ?? null;
+  return listHumanInterventions(nodes, nodes.length).find((item) => item.pending && item.jobId === jobId)?.node ?? null;
+}
+
+export function humanInterventionKindLabel(node: CanvasNode): string {
+  const subject = node.body_json?.subject;
+  if (!subject || typeof subject !== "object" || Array.isArray(subject)) return "人工请求";
+  const value = subject as Record<string, unknown>;
+  if (value.type === "finding") return "证据判断";
+  if (value.type !== "platform_blocker") return "人工请求";
+  switch (humanInterventionSubjectKind(node)) {
+    case "credential": return "凭据配置";
+    case "authorization": return "授权确认";
+    case "high_risk_action": return "高风险操作确认";
+    case "business_decision": return "业务决定";
+    default: return "平台要求";
+  }
+}
+
+export function humanInterventionSubjectKind(node: CanvasNode): string | null {
+  const subject = node.body_json?.subject;
+  if (!subject || typeof subject !== "object" || Array.isArray(subject)) return null;
+  const value = subject as Record<string, unknown>;
+  return value.type === "platform_blocker" && typeof value.kind === "string" ? value.kind : null;
+}
+
+export function humanInterventionSafetyMessage(node: CanvasNode): string | null {
+  switch (humanInterventionSubjectKind(node)) {
+    case "credential": return "此请求涉及凭据；请使用请求明确且已获准的安全配置方式，未说明入口时先核实配置位置。不要把秘密写进回复或附件。";
+    case "authorization": return "此请求涉及授权；请按现有权限边界核对所需范围，回复本身不会替代平台核验或扩大权限。";
+    case "high_risk_action": return "此请求涉及高风险操作；请按现有授权边界核对，回复不会增加操作权限。";
+    case "business_decision": return "此请求需要业务决定；回复内容不会自动转成平台执行授权。";
+    default: return null;
+  }
 }
 
 export function humanInterventionUiPrefUserKey(me: { user?: { id?: string | null } | null; actor?: { name?: string | null } | null } | null | undefined): string {

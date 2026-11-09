@@ -8,7 +8,13 @@ import { getAgentCliRuntimeAdapter, resolveTerminalProcessOutcome, type RealAgen
 import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 
 const done = { summary: "Completion accepted during the bounded offline race." };
-const human = { reason: "Operator credential authorization is required.", subject: { type: "platform_blocker", kind: "credential" } };
+const humanGuidance = {
+  question: "请确认是否能提供隔离测试环境的凭据引用。",
+  required_action: "请通过当前已知且受治理的凭据配置提供非秘密引用；不要粘贴秘密。",
+  reply_instructions: "请回复已配置的非秘密引用；若没有，请明确回复未配置。",
+  after_reply: "收到后仅核对当前 Job 已有权限；回复不扩权、不构成 ACK 或任务完成。",
+};
+const human = { reason: "Operator credential authorization is required.", guidance: humanGuidance, subject: { type: "platform_blocker", kind: "credential" } };
 
 test("executeReal: missing completion persists scoped evidence and keeps failure authoritative", async () => {
   await assert.rejects(runExecutor(async () => {}), (error: unknown) => {
@@ -117,6 +123,7 @@ test("executeReal: first accepted human cannot be overwritten by a preflight alr
   assert.equal(terminals[0].type, "human");
   assert.equal(terminals[0].event_id, firstId);
   assert.equal((terminals[0].payload as { reason: string }).reason, human.reason);
+  assert.deepEqual((terminals[0].payload as { guidance: typeof humanGuidance }).guidance, human.guidance);
 });
 
 test("executeReal: accepted human rejects both completion prepare and commit", { timeout: 5000 }, async () => {
@@ -400,6 +407,7 @@ test("executeReal: runner failure unregisters a prepared handler and rejects lat
 });
 
 const planHuman = { reason: 'Current evidence needs an operator decision.',
+  guidance: humanGuidance,
   subject: {type:'platform_blocker',kind:'business_decision'},
   plan_basis: {v:1,plan_job_id:randomUUID(),plan_sha256:'a'.repeat(64),criterion_id:'completion',expected_revision:'1',
     expected_task_input_sha256:'b'.repeat(64),expected_projection_sha256:'c'.repeat(64),source_refs:[],outcome:'needs_human',rationale:'Evidence is insufficient for completion.'} };
@@ -424,6 +432,7 @@ test('executeReal: durable Plan prepare is local-only and blocks an older human 
   });
   assert.equal(terminals.length,1);assert.equal(terminals[0].type,'human');
   assert.equal(terminals[0].event_id,eventId);assert.deepEqual((terminals[0].payload as typeof planHuman).plan_basis,planHuman.plan_basis);
+  assert.deepEqual((terminals[0].payload as typeof planHuman).guidance,planHuman.guidance);
 });
 
 test('executeReal: failed Plan persistence releases only its own reservation', {timeout:5000},async()=>{

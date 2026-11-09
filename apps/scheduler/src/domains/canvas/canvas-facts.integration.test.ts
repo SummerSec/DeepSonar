@@ -271,6 +271,12 @@ if (!testDatabaseUrl) {
         role_kind: "hub",
         platform_tools: ["request_human"],
       };
+      const humanGuidance = {
+        question: "请确认是否接受该 Finding 当前证据范围内的风险。",
+        required_action: "请核对所列 Finding 和修订，并给出针对该风险的具体处置决定。",
+        reply_instructions: "请回复 decision=accept 或 decision=reject，并说明对应 Finding 修订。",
+        after_reply: "收到后只按原 Job 权限复核；回复本身不扩权、不构成 ACK 或完成。",
+      };
       const createHumanHub = async (findingId: string, label: string) => {
         const jobId = randomUUID();
         await sql`
@@ -294,6 +300,7 @@ if (!testDatabaseUrl) {
           type: "human",
           payload: {
             reason: "低严重度 Finding 不应阻塞人工处理。",
+            guidance: humanGuidance,
             subject: { type: "finding", finding_id: low.findingId, subject_revision: "app@low" },
           },
         }),
@@ -317,6 +324,7 @@ if (!testDatabaseUrl) {
           type: "human",
           payload: {
             reason: "跨画布 Finding 不得成为当前任务阻塞目标。",
+            guidance: humanGuidance,
             subject: { type: "finding", finding_id: foreignTarget.findingId, subject_revision: "app@foreign" },
           },
         }),
@@ -336,6 +344,13 @@ if (!testDatabaseUrl) {
         type: "human",
         payload: {
           reason: "缺少隔离环境凭据，需要人工安全提供。",
+          guidance: {
+            ...humanGuidance,
+            question: "请确认是否能通过已配置的治理凭据引用访问隔离环境。",
+            required_action: "请提供非秘密凭据引用；不要在回复中粘贴密码或令牌。",
+            reply_instructions: "请回复已配置的非秘密凭据引用；若没有，请回复未配置。",
+            after_reply: "收到后只核对当前 Job 原有权限；回复不创建凭据授权、不确认 ACK 或完成。",
+          },
           subject: { type: "platform_blocker", kind: "credential" },
         },
       });
@@ -350,6 +365,14 @@ if (!testDatabaseUrl) {
         type: "platform_blocker",
         kind: "credential",
       });
+      assert.equal((platformNode[0].body_json as Record<string, unknown>).reason, "缺少隔离环境凭据，需要人工安全提供。");
+      assert.deepEqual((platformNode[0].body_json as Record<string, unknown>).guidance, {
+        ...humanGuidance,
+        question: "请确认是否能通过已配置的治理凭据引用访问隔离环境。",
+        required_action: "请提供非秘密凭据引用；不要在回复中粘贴密码或令牌。",
+        reply_instructions: "请回复已配置的非秘密凭据引用；若没有，请回复未配置。",
+        after_reply: "收到后只核对当前 Job 原有权限；回复不创建凭据授权、不确认 ACK 或完成。",
+      });
       await sql`UPDATE jobs SET status = 'cancelled', finished_at = now() WHERE id = ${platformHub.jobId}`;
 
       const highHub = await createHumanHub(high.findingId, "High human hub");
@@ -359,6 +382,7 @@ if (!testDatabaseUrl) {
         type: "human",
         payload: {
           reason: "高严重度 Finding 需要人工业务决策。",
+          guidance: humanGuidance,
           subject: { type: "finding", finding_id: high.findingId, subject_revision: "app@high" },
         },
       });
@@ -372,6 +396,7 @@ if (!testDatabaseUrl) {
         finding_id: high.findingId,
         subject_revision: "app@high",
       });
+      assert.deepEqual((humanNode[0].body_json as Record<string, unknown>).guidance, humanGuidance);
 
       const manualVerify = await app.inject({
         method: "POST",

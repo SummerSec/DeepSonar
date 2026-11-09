@@ -108,8 +108,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **规范要求**：Hub 必须在角色 Job 终态后按事件触发下一轮或 Report；Verify 等待证据时必须按证据签名/门禁指纹唤醒，重复无进展达到配置上限时必须记录停止原因并可请求人工，不得静默空转。
 - **决策来源**：事件驱动避免定时轮询，证据未变化时需要明确阻塞而不是无限派发。
 - **实现状态**：as-built；无进展上限见[配置](../../apps/scheduler/src/config.ts)，预算和暂停原因均持久化。#1002 P0-3 普通自动/idle/非人工 force 唤醒在 Canvas 锁内拒绝已停止 objective 的后继 Hub；不改写历史人工等待或 unknown effect，显式 run-hub-now 与 completion recovery 仍由原准入约束；Finding 评论 request_hub 在已停止 objective 下先返回 plan_objective_stopped，保留评论但不写人工节点或清除暂停原因。
-- **代码入口**：[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Hub 策略](../../apps/scheduler/src/domains/hub-orchestration/policy.ts)、[配置](../../apps/scheduler/src/config.ts)。
-- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:smoke:convergence`；#1002 P0-3 的现有 Hub characterization 与 `plan-execution-stops.integration.test.ts` 已接 `ci:unit:bounded-contexts` / `ci:integration:plan-protocol`，最终 SHA Actions 待验。
+- **代码入口**：[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Hub 策略](../../apps/scheduler/src/domains/hub-orchestration/policy.ts)、[配置](../../apps/scheduler/src/config.ts)、[Reaper Kernel 门禁停止](../../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)。
+- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:smoke:convergence`；#1002 P0-3 的现有 Hub characterization 与 `plan-execution-stops.integration.test.ts` 已接 `ci:unit:bounded-contexts` / `ci:integration:plan-protocol`。本分支另接 `ci:integration:completion-recovery` 的真实 Reaper/SQL/Control 拒绝与隔离历史回归，验证当前内核 objective/修正次数/已知 token/原期限证明后的本 Hub 非成功出口；accepted human/完成和人工等待不改、directed grant 的 target 不操作。实现和注意力边界见[生命周期](../AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)，最终 SHA Actions 待验，不表示任意 platform_blocker 或原 P0-3 全部交付。
 
 ### FR-HUB-005 决策必须有可执行理由和提示词
 
@@ -273,11 +273,11 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-CTRL-004 受治理语义事件写入
 
-- **规范要求**：Agent 必须通过 `emit_progress`、`emit_fact`、`emit_finding`、`mark_job_done`、`request_human` 等注册 operation 提案语义事件；普通文本、CLI 输出、伪造工具调用、Shell 控制文件或管理 API 不得被当作语义状态。
-- **决策来源**：只有结构化、带 Job 身份的事件才能进入事实和状态机。
-- **实现状态**：as-built；未授权 operation 与禁止控制文件会 fail closed。
-- **代码入口**：[operation definitions](../../apps/scheduler/src/domains/platform-api/operations.ts)、[Control input](../../apps/scheduler/src/control-input.ts)、[平台控制 Skill 测试](../../apps/scheduler/src/platform-control-skill.test.ts)。
-- **验证证据**：`pnpm ci:smoke:control-api`、`pnpm ci:unit:canvas-facts`、`pnpm ci:unit:bounded-contexts`。
+- **规范要求**：Agent 必须通过 `emit_progress`、`emit_fact`、`emit_finding`、`mark_job_done`、`request_human` 等注册 operation 提案语义事件；普通文本、CLI 输出、伪造工具调用、Shell 控制文件或管理 API 不得被当作语义状态。新的 `request_human` 必须带严格 `guidance` 对象，说明问题、用户具体要做的动作、回复方式或可选项，以及回复后的业务计划。Hub 动态提示、固定 Control Skill 和内置角色提问示例都必须遵循同一要求；凭据不得要求用户贴入聊天，也不得捏造配置入口。
+- **决策来源**：只有结构化、带 Job 身份的事件才能进入事实和状态机；人工请求要能直接指导用户完成下一步，不让用户从泛化的阻塞描述中猜测操作。
+- **实现状态**：受治理 Control operation 与拒绝路径 as-built。本轮已为 `request_human` 增加指导契约和提示约束；最终 SHA 的实现核对与 Actions 验收待完成。
+- **代码入口**：[operation definitions](../../apps/scheduler/src/domains/platform-api/operations.ts)、[shared request guidance](../../packages/shared-types/src/human-request.ts)、[event ingestion](../../apps/scheduler/src/domains/event-ingestion/side-effects.ts)、[平台控制 Skill](../../apps/scheduler/src/platform-control-skill.ts)、[Hub 动态提示](../../apps/scheduler/src/executor-real.ts)、[内置角色提示](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)。
+- **验证证据**：`pnpm ci:smoke:control-api`、`pnpm ci:unit:canvas-facts`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:executor-real`、`pnpm ci:integration:platform-api`；检查 strict schema、完整持久化及各提示入口一致性。最终 SHA Actions 尚未执行，不报告为通过。
 
 ### FR-CTRL-005 标准 RepairFeedback
 
@@ -416,7 +416,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-CANVAS-004 人工消息两阶段 ACK
 
-- **规范要求**：人工消息必须区分 planned/injected/acknowledged/unknown/failed；`injected` 只表示写入 Agent 输入，ACK 必须来自显式 `ack_human_message` operation，普通文本不得隐式确认。
+- **规范要求**：人工消息必须区分 planned/injected/acknowledged/unknown/failed；`injected` 只表示写入 Agent 输入，ACK 必须来自显式 `ack_human_message` operation，普通文本不得隐式确认。人工回复、消息账本写入、恢复准入、Agent ACK 与 Job 完成保持独立语义；回复不表示授权、执行恢复、已读或完成。
 - **决策来源**：运输成功不等于模型读取和处理成功，人工介入必须可追踪。
 - **实现状态**：as-built；消息与 ACK 有独立时间戳和审计字段。#1012 补齐所有 waiting_human 回复/忽略的共享安全准入；只有修正根存在时追加代际：宿主先以原 sandbox 已消失的清理结果收口同一 Attempt 的正常人工等待 run，不改变未知用量；Canvas → Job 锁内复用原额度、期限、暂停与效果门，核对并保存原冻结请求策略，有修正根时建立 resume-frozen 代际，再关闭旧 Attempt、原子撤销旧 Gateway/Control 凭证和入队；拒绝回滚消息/节点/状态，重复提交不重复代际，不重置历史根或预算。
 - **代码入口**：[human messages](../../apps/scheduler/src/domains/canvas/human-messages.ts)、[schema](../../database/schema.sql)、[Web message tests](../../apps/web/src/human-messages.test.ts)。
@@ -725,11 +725,11 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### FR-WEB-003 Fact/Finding/Job 详情和人工动作
 
-- **规范要求**：Web 必须分别展示 Fact 证据信任态、Finding verify/disposition/证据链、Job Attempt/Session/工具流/人工消息/用量，并为需要权限的动作显示稳定错误；不得用一个“成功”标签合并这些状态。
-- **决策来源**：不同状态机的责任方不同，用户需要知道执行完成、证据成立和业务处置是否分别完成。
-- **实现状态**：as-built；工作台 Overview/Trace 明确区分 report stale、Fact conflict 和 Job 状态。
-- **代码入口**：[Fact panel](../../apps/web/src/FactDetailPanel.tsx)、[Finding detail](../../apps/web/src/FindingDetailPanel.tsx)、[Job panel](../../apps/web/src/JobDetailPanel.tsx)。
-- **验证证据**：`pnpm ci:unit:web-facts`、`pnpm ci:unit:verify-eligibility`；人工分别操作 Fact/Finding/Job 并核对不串写。
+- **规范要求**：Web 必须分别展示 Fact 证据信任态、Finding verify/disposition/证据链、Job Attempt/Session/工具流/人工消息/用量，并为需要权限的动作显示稳定错误；不得用一个“成功”标签合并这些状态。人工待办和回复界面须显示完整的具体动作、回复方式/选项及回复后的业务计划。L0 维持有界摘要，详细面板按需读取完整 L1 人工节点；任何节点缺少 guidance（包括历史请求和自动生成的平台等待项）时明确显示未提供，不从 reason 猜测或自动回填。Job 列表对 `waiting_human` 投影 Scheduler 当前 `execution_state`；同 Job 的人工节点与等待投影合并为一个人工待办，独立的 unknown effect 对账项仍保持优先并单独可见。凭据说明必须指向已有的安全处理方式，不能要求贴入聊天或虚构配置入口。
+- **决策来源**：不同状态机的责任方不同，用户需要知道执行完成、证据成立和业务处置是否分别完成；一次明确的人工请求应减少用户判断下一步和反复追问所需的注意力。
+- **实现状态**：已有工作台、消息账本、恢复入口和 Scheduler execution-state 投影。本轮补充完整指导读取/呈现、等待项去重与提示约束；最终 SHA 行为及 Actions 验收待核对。
+- **代码入口**：[Fact panel](../../apps/web/src/FactDetailPanel.tsx)、[Finding detail](../../apps/web/src/FindingDetailPanel.tsx)、[Job panel](../../apps/web/src/JobDetailPanel.tsx)、[human message helpers](../../apps/web/src/human-messages.ts)、[Job list projection](../../apps/scheduler/src/domains/job-control/routes.ts)、[execution state](../../apps/scheduler/src/domains/platform-api/completion-state.ts)。
+- **验证证据**：`pnpm ci:unit:web-facts`、`pnpm ci:unit:canvas-facts`、`pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:canvas-facts`、`pnpm ci:integration:platform-api`；最终 SHA Actions 尚未执行。人工核对缺指导提示、节点 L1 读取、切换任务、等待项去重及 unknown effect 保留。
 
 ### FR-WEB-004 报告版本与交付状态
 
@@ -1031,11 +1031,11 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### NFR-UX-001 人的注意力与可行动交互
 
-- **规范要求**：需求、架构、交互及评审遵守 [DESIGN 的单一权威定义](../../DESIGN.md#核心理念优化人的注意力)，评估人工负担与新增配置/通知/决策/维护代价；优先复用和在既有授权内自行处理。可行动决定、实质阻塞、风险变化与可验收成果优先呈现，细节按需展开且保留审计；必须提问时说明缺失输入、影响及具体决定。不得隐瞒失败、默认扩权、自动批准/合并或降低验证标准。
+- **规范要求**：需求、架构、交互及评审遵守 [DESIGN 的单一权威定义](../../DESIGN.md#核心理念优化人的注意力)，评估人工负担与新增配置/通知/决策/维护代价；优先复用和在既有授权内自行处理。可行动决定、实质阻塞、风险变化与可验收成果优先呈现，细节按需展开且保留审计；必须提问时说明缺失输入、影响、具体动作、回复方式和回复后的计划。新的人工请求增加四项结构化指导输入；预期收益是减少用户解读阻塞、查找回复入口和反复澄清的负担，新增字段与阅读内容本身也会增加填写和阅读成本，收益尚无实测数据。不得隐瞒失败、默认扩权、自动批准/合并或降低验证标准。
 - **决策来源**：[#830](https://github.com/SummerSec/DeepSonar/issues/830) 集中明确已有设计方向，不新增执行架构或权限。
-- **实现状态**：开发规范、评审问题和正反例已接入；本次没有运行时或 UI 行为变更，不宣称所有既有交互已满足，也未测量注意力收益。
+- **实现状态**：开发规范、评审问题和正反例已接入；本轮人工请求字段、详情呈现和待办合并按本需求实现，最终 SHA Actions 尚待验收；未测量注意力收益。
 - **代码入口**：[AGENTS](../../AGENTS.md)、[工程评审与示例](11-engineering-specs.md#11-注意力成本评审830)、[贡献入口](../../README.md#反馈与贡献)（本需求仅属开发治理）。
-- **验证证据**：`pnpm ci:unit:docs-freshness`、`git diff --check`；人工核对单一权威定义、入口链接、重复进度/可核实问题/真实阻塞/必要授权/失败/验收六类示例，以及未扩张执行和 UI 范围。
+- **验证证据**：`pnpm ci:unit:docs-freshness`、`git diff --check`；本轮实现另按 FR-CTRL-004 与 FR-WEB-003 的验收入口检查。文档检查和行为测试未在本地运行，最终 SHA Actions 待验；人工核对单一权威定义、入口链接、重复进度/可核实问题/真实阻塞/必要授权/失败/验收六类示例，以及未扩张执行和 UI 范围。
 
 ## 4. 外部接口需求
 

@@ -46,6 +46,10 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 [服务 PG 回归](../../apps/scheduler/src/skill-source-catalog-lifecycle.integration.test.ts)、[Canvas PG 回归](../../apps/scheduler/src/dispatcher-skill-warning.integration.test.ts)、既有 Job catalog/refresh/metrics 单测已编写接入现有 CI 门；本次未运行本地测试、构建、typecheck 或数据库，最终 SHA Actions 待验。阈值和默认值按[配置源码](../../apps/scheduler/src/config.ts)与[统一换算](../../apps/scheduler/src/skill-freshness.ts)核对，不复制可变数字。
 
+## Kernel 平台门禁出口（#1002 P0-3）
+
+现有 Reaper 在超时/孤儿/取消等生命周期判定后，[有界轮转重核活动 Hub](../../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)的完整 stopped objective 或真实完成修正次数/token/deadline 耗尽。Canvas/Job/Attempt/lease 归属锁内只结束本 Hub并撤销 grants；随后复用原清理流程，当前 Hub 节点投影固定原因、inconclusive 与下一步，并跳过该停止事件的 Plan/Canvas 自动推进。只有普通 Hub、没有其他非终态同伴且 root 仍可运行时才暂停 Canvas/root；directed Hub、同伴与分析完成/报告 root 的共享状态保持不变。预算来源必须核对原版本/拒绝结果、Job-scoped receipt ID、同 Job dedup 与 Attempt 绑定，并验证原 repair owner 授权当前执行；不按未知状态或外来历史计数。没有新的模型 stop operation、服务、定时工作流或账本，不把资源清理当作用量/成功证据，也不使用 directed grant 停止 target。已接受 human/完成、人工等待及不确定用量保留；失败轮转供后续 tick 重核。详细边界和注意力评审见[生命周期](../AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)。真实 Reaper/SQL/Control 拒绝与隔离历史回归接 `ci:integration:completion-recovery`，最终 SHA Actions 待验，不等于原 P0-3 全部交付。
+
 ## 正常链路
 
 ```mermaid
@@ -118,6 +122,8 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 | Report 失败或输入变化 | 保留旧成功版本，记录当前版本失败或追加新版本 | 报告投影失败不改写内部 Artifact/Finding/Evidence |
 
 Attempt 的 `job_attempt_effects` 先 `effect_pending` 后 settlement，只有代码明确标记为安全的清理效果可重放；未知效果始终需要对账或人工。控制流和清理路径必须写审计并释放设备租约、共享资产卷、token 和沙箱资源。
+
+新人工请求的 `guidance` 契约和长度范围由[接口规范](09-interface-specs.md#可行动人工请求2026-11-09)拥有。Hub 动态提示、固定 Control Skill 与内置角色示例要给出具体动作、回复方式/选项和回复后的业务计划，并避免请求聊天凭据或杜撰配置入口。Job 列表只为 `waiting_human` 项复用 Scheduler `readCompletionExecutionState` 做有界当前状态读取；同 Job 的人类节点与等待投影归并为一个人工待办，独立 unknown effect 对账项仍保留并优先呈现。宿主消息账本、恢复准入、Agent ACK 与 Job 完成含义不变；完整细节见[人工等待生命周期专题](../AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。本轮最终 SHA Actions 尚待验。
 
 Gateway 503 仅在内核明确证明请求尚未启动时可降级；`unknown` 或 `pending` 必须硬失败，provider 5xx 文案不构成外部效果 authority。
 

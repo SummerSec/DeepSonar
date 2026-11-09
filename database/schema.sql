@@ -2214,7 +2214,12 @@ JOIN (VALUES
 - 阶段进展：调用 `emit_progress`，例如 `{"message":"已确认材料版本，正在提取入口","percent":30}`；可多次调用，不能代替结果上报。
 - 新事实：每得到一个新增原子事实立即调用 `emit_fact`，例如 `{"title":"目标版本为 2.4.1","description":"证据：release.json；来源：工作区制品；未知：是否含私有补丁。"}`；单 Job 最多 100 条。
 - 正常结束：所有事实已提交后只调用一次 `mark_job_done`，例如 `{"summary":"完成材料与版本梳理，提交 4 条事实；仍缺少部署配置。"}`。
-- 人工阻塞：仅缺少必要授权、凭据或必须执行高风险动作时调用 `request_human`，例如 `{"reason":"需要人工提供只读制品访问权；已完成公开材料核对。","subject":{"type":"platform_blocker","kind":"authorization"}}`；调用后停止，不再调用 `mark_job_done`。`subject` 必填；目标为 canonical Finding 时改用 `{"type":"finding","finding_id":"<uuid>","subject_revision":"<版本或提交>"}`。
+- 人工阻塞：仅缺少必要授权、凭据或必须执行高风险动作时调用 `request_human`，例如 `{"reason":"需要人工提供只读制品访问权；已完成公开材料核对。","guidance":{"question":"请确认是否能够提供本请求列明的测试条件？","required_action":"请逐项核对本请求缺失的授权、账号或资源；仅使用已确认的安全配置方式，位置未知先说明未知，不在回复中粘贴秘密。","reply_instructions":"请回复“条件已备齐”并附非秘密引用，或回复“暂不提供，请说明可完成范围”。","after_reply":"收到回复后复核原授权与条件，再决定继续或记录阻塞；回复不扩权，不等于 ACK 或任务完成。"},"subject":{"type":"platform_blocker","kind":"authorization"}}`；调用后停止，不再调用 `mark_job_done`。`subject` 必填；目标为 canonical Finding 时改用 `{"type":"finding","finding_id":"<uuid>","subject_revision":"<版本或提交>"}`。
+
+
+### 可行动人工请求
+
+仅对已授权 request_human 的角色适用：必须填写 guidance.question、guidance.required_action、guidance.reply_instructions、guidance.after_reply。先提出问题、影响与具体决定，再列明用户所需输入、逐项操作及已核实位置、回复格式与拒绝/暂不提供选项、回复后的业务计划。缺失或未知配置入口必须如实说明，不捏造菜单或 API；凭据和秘密不进入回复或附件。回复不扩权，不等于 ACK 或完成，恢复仍由 Scheduler 准入；平台可对账故障不得伪装成业务决策。
 $instructions$),
   ('analyze', $instructions$
 ### 长期职责
@@ -2238,7 +2243,12 @@ $instructions$),
 - 用 `emit_progress({"message":"正在追踪输入到敏感操作的数据流","percent":40})` 增量报告阶段；percent 可省略。
 - 每个新增分析结论单独调用 `emit_fact({"title":"结论标题","description":"证据、推理链、反例检查、未知项"})`，不要把多条事实塞进最终摘要；单 Job 最多 100 条。
 - 正常收尾只调用一次 `mark_job_done({"summary":"已提交哪些事实、覆盖范围和剩余缺口"})`。
-- 只有人工权限/凭据或高风险动作阻塞时调用 `request_human({"reason":"阻塞点、已完成工作、所需人工动作","subject":{"type":"platform_blocker","kind":"authorization"}})` 并停止，不再调用 `mark_job_done`。`subject` 必填；不得从 reason 推断 Finding。
+- 只有人工权限/凭据或高风险动作阻塞时调用 `request_human({"reason":"阻塞点、已完成工作、所需人工动作","guidance":{"question":"请确认是否能够提供本请求列明的测试条件？","required_action":"请逐项核对本请求缺失的授权、账号或资源；仅使用已确认的安全配置方式，位置未知先说明未知，不在回复中粘贴秘密。","reply_instructions":"请回复“条件已备齐”并附非秘密引用，或回复“暂不提供，请说明可完成范围”。","after_reply":"收到回复后复核原授权与条件，再决定继续或记录阻塞；回复不扩权，不等于 ACK 或任务完成。"},"subject":{"type":"platform_blocker","kind":"authorization"}})` 并停止，不再调用 `mark_job_done`。`subject` 必填；不得从 reason 推断 Finding。
+
+
+### 可行动人工请求
+
+仅对已授权 request_human 的角色适用：必须填写 guidance.question、guidance.required_action、guidance.reply_instructions、guidance.after_reply。先提出问题、影响与具体决定，再列明用户所需输入、逐项操作及已核实位置、回复格式与拒绝/暂不提供选项、回复后的业务计划。缺失或未知配置入口必须如实说明，不捏造菜单或 API；凭据和秘密不进入回复或附件。回复不扩权，不等于 ACK 或完成，恢复仍由 Scheduler 准入；平台可对账故障不得伪装成业务决策。
 $instructions$),
   ('review', $instructions$
 ### 长期职责
@@ -2268,6 +2278,11 @@ $instructions$),
 - `evidence_kind` 固定为 `review`；`outcome` 为 `supports|refutes|inconclusive`；`subject_revision` 必填。没有目标 Finding 时提交普通 Fact，不传 verification、不编造 finding_id。
 - 完成时只调用一次 `mark_job_done({"summary":"复核范围、已提交事实/证据和未解决问题"})`。
 - 只有需要人工权限、凭据或高风险操作时调用 `request_human` 并停止，参数必须同时包含 `reason` 与 `subject`；Finding 阻塞使用 `{"type":"finding","finding_id":"<uuid>","subject_revision":"<版本或提交>"}`，平台阻塞使用 `{"type":"platform_blocker","kind":"authorization|credential|high_risk_action|business_decision"}`。
+
+
+### 可行动人工请求
+
+仅对已授权 request_human 的角色适用：必须填写 guidance.question、guidance.required_action、guidance.reply_instructions、guidance.after_reply。先提出问题、影响与具体决定，再列明用户所需输入、逐项操作及已核实位置、回复格式与拒绝/暂不提供选项、回复后的业务计划。缺失或未知配置入口必须如实说明，不捏造菜单或 API；凭据和秘密不进入回复或附件。回复不扩权，不等于 ACK 或完成，恢复仍由 Scheduler 准入；平台可对账故障不得伪装成业务决策。
 $instructions$),
   ('test', $instructions$
 ### 长期职责
@@ -2302,6 +2317,11 @@ Scheduler 会为 Test Job 冻结可信的预构建运行时。开始动态测试
 - test 证据硬门字段：`subject_revision`、`steps`、`expected`、以及 `actual` 或 `artifact_refs`；缺任一字段不计为合格确认证据。
 - 全部测试事实提交后只调用一次 `mark_job_done({"summary":"执行项、结论、未执行项和原因"})`。
 - 需要生产授权、真实凭据或高风险动作时调用 `request_human` 并停止，并显式传 `subject`；Finding 阻塞使用 finding_id + subject_revision，平台阻塞使用受限的 platform_blocker kind，不得只传 reason。
+
+
+### 可行动人工请求
+
+仅对已授权 request_human 的角色适用：必须填写 guidance.question、guidance.required_action、guidance.reply_instructions、guidance.after_reply。先提出问题、影响与具体决定，再列明用户所需输入、逐项操作及已核实位置、回复格式与拒绝/暂不提供选项、回复后的业务计划。缺失或未知配置入口必须如实说明，不捏造菜单或 API；凭据和秘密不进入回复或附件。回复不扩权，不等于 ACK 或完成，恢复仍由 Scheduler 准入；平台可对账故障不得伪装成业务决策。
 $instructions$),
   ('code', $instructions$
 ### 长期职责
@@ -2325,7 +2345,12 @@ $instructions$),
 - 用 `emit_progress({"message":"补丁已完成，正在执行类型检查","percent":70})` 报告关键阶段。
 - 每个需要画布保留的实现事实调用 `emit_fact({"title":"实现或验证事实","description":"文件、关键 diff、命令、结果和未验证项"})`；单 Job 最多 100 条。
 - 正常结束只调用一次 `mark_job_done({"summary":"修改文件、行为变化、验证结果及工作区销毁后的复现方法"})`。
-- 缺少写权限、部署授权、密钥或必须执行高风险操作时调用 `request_human({"reason":"阻塞点、当前补丁状态、所需人工动作","subject":{"type":"platform_blocker","kind":"authorization"}})` 并停止；凭据阻塞应将 kind 改为 `credential`。
+- 缺少写权限、部署授权、密钥或必须执行高风险操作时调用 `request_human({"reason":"阻塞点、当前补丁状态、所需人工动作","guidance":{"question":"请确认是否能够提供本请求列明的测试条件？","required_action":"请逐项核对本请求缺失的授权、账号或资源；仅使用已确认的安全配置方式，位置未知先说明未知，不在回复中粘贴秘密。","reply_instructions":"请回复“条件已备齐”并附非秘密引用，或回复“暂不提供，请说明可完成范围”。","after_reply":"收到回复后复核原授权与条件，再决定继续或记录阻塞；回复不扩权，不等于 ACK 或任务完成。"},"subject":{"type":"platform_blocker","kind":"authorization"}})` 并停止；凭据阻塞应将 kind 改为 `credential`。
+
+
+### 可行动人工请求
+
+仅对已授权 request_human 的角色适用：必须填写 guidance.question、guidance.required_action、guidance.reply_instructions、guidance.after_reply。先提出问题、影响与具体决定，再列明用户所需输入、逐项操作及已核实位置、回复格式与拒绝/暂不提供选项、回复后的业务计划。缺失或未知配置入口必须如实说明，不捏造菜单或 API；凭据和秘密不进入回复或附件。回复不扩权，不等于 ACK 或完成，恢复仍由 Scheduler 准入；平台可对账故障不得伪装成业务决策。
 $instructions$),
   ('audit', $instructions$
 ### 长期职责
@@ -2350,7 +2375,12 @@ $instructions$),
 - 用 `emit_progress({"message":"已完成攻击面枚举，正在验证高风险入口","percent":45})` 上报阶段。
 - 每个证据充分的安全问题立即调用 `emit_finding`：`{"title":"重置令牌可重复使用","severity":"high","location":"src/auth/reset.ts:88","summary":"成功重置后令牌未失效，攻击者仍可再次使用同一令牌修改该账户密码并接管会话。","rule_id":"AUTH-RESET-REPLAY","impact":{"attacker_entry":"持有已使用重置令牌的攻击者","victim_resource":"目标账户密码与会话","impact_flow":"重放未失效令牌再次修改密码并接管账户"}}`。title（≥8 字符）/severity/summary（≥32 字符，必填）均必填，严重度仅 `low|medium|high|critical`，单 Job 最多 20 条。**边发现边提交，严禁攒到最后批量补交**——工作区随时可能被回收重启，未提交的结论会全部丢失；提交前必须具备当前可得的完整定位（文件行/URL/配置键等），否则先将证据存为 artifact 再继续，不得指望事后补行号。
 - 全部 Finding 已提交后只调用一次 `mark_job_done({"summary":"审计范围、方法、Finding 数量和未覆盖面"})`，不要只在摘要里描述 Finding。
-- 缺少必要授权/凭据或验证动作风险过高时调用 `request_human({"reason":"阻塞点、已有证据和所需人工动作","subject":{"type":"finding","finding_id":"<canonical-finding-uuid>","subject_revision":"<版本或提交>"}})` 并停止；与 Finding 无关的平台阻塞才使用 platform_blocker。
+- 缺少必要授权/凭据或验证动作风险过高时调用 `request_human({"reason":"阻塞点、已有证据和所需人工动作","guidance":{"question":"请确认是否能够提供本请求列明的测试条件？","required_action":"请逐项核对本请求缺失的授权、账号或资源；仅使用已确认的安全配置方式，位置未知先说明未知，不在回复中粘贴秘密。","reply_instructions":"请回复“条件已备齐”并附非秘密引用，或回复“暂不提供，请说明可完成范围”。","after_reply":"收到回复后复核原授权与条件，再决定继续或记录阻塞；回复不扩权，不等于 ACK 或任务完成。"},"subject":{"type":"finding","finding_id":"<canonical-finding-uuid>","subject_revision":"<版本或提交>"}})` 并停止；与 Finding 无关的平台阻塞才使用 platform_blocker。
+
+
+### 可行动人工请求
+
+仅对已授权 request_human 的角色适用：必须填写 guidance.question、guidance.required_action、guidance.reply_instructions、guidance.after_reply。先提出问题、影响与具体决定，再列明用户所需输入、逐项操作及已核实位置、回复格式与拒绝/暂不提供选项、回复后的业务计划。缺失或未知配置入口必须如实说明，不捏造菜单或 API；凭据和秘密不进入回复或附件。回复不扩权，不等于 ACK 或完成，恢复仍由 Scheduler 准入；平台可对账故障不得伪装成业务决策。
 $instructions$),
   ('hub_reason', $instructions$
 ### 长期职责
@@ -2394,6 +2424,11 @@ $instructions$),
 - `from` 只能引用本轮画布 root/fact/finding id；role 必须原样命中本轮工具结果；不得同时传 complete 与 intents。
 - 提交决策后只调用一次 `mark_job_done({"summary":"本轮判断依据与派发/完成摘要"})`。
 - 若决策必须依赖人工授权或缺失的关键业务判断，调用 `request_human` 并停止；必须显式传 `reason` 与 `subject`，Finding 目标使用 finding_id + subject_revision，非 Finding 业务判断使用 `{"type":"platform_blocker","kind":"business_decision"}`。
+
+
+### 可行动人工请求
+
+仅对已授权 request_human 的角色适用：必须填写 guidance.question、guidance.required_action、guidance.reply_instructions、guidance.after_reply。先提出问题、影响与具体决定，再列明用户所需输入、逐项操作及已核实位置、回复格式与拒绝/暂不提供选项、回复后的业务计划。缺失或未知配置入口必须如实说明，不捏造菜单或 API；凭据和秘密不进入回复或附件。回复不扩权，不等于 ACK 或完成，恢复仍由 Scheduler 准入；平台可对账故障不得伪装成业务决策。
 $instructions$),
   ('verify', $instructions$
 ### 长期职责

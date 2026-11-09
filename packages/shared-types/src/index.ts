@@ -11,6 +11,8 @@ export * from "./project-knowledge.js";
 import { RepairFeedback as ReadinessRepairFeedback } from "./repair-feedback.js";
 import { CompletionRecoveryDecision } from "./completion-recovery.js";
 export * from "./completion-recovery.js";
+import { HumanRequestGuidance } from "./human-request.js";
+export * from "./human-request.js";
 import {
   DescribeCapabilityPayload,
   ListCapabilitiesPayload,
@@ -726,7 +728,8 @@ export type ProgressPayload = z.infer<typeof ProgressPayload>;
 
 export const HumanPayload = z
   .object({
-    reason: meaningfulText(8, 2000),
+    reason: meaningfulText(8, 2000).trim(),
+    guidance: HumanRequestGuidance,
     plan_basis: PlanDecisionBasis.optional(),
     subject: z.discriminatedUnion("type", [
       z

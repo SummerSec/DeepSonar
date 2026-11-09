@@ -37,6 +37,12 @@ test("historical v1 is immutable/readable, refuses new execution and permits dur
     assert.ok(denied.statusCode >= 400, denied.payload);
     assert.equal((await h.children(f.hub)).length, 0);
     const key = randomUUID(), stop = { reason: "Historical route needs an authorized current objective", subject: { type: "platform_blocker", kind: "business_decision" },
+      guidance: {
+        question: " Please choose whether to stop this historical route or define a new objective. ",
+        required_action: " Review the missing current objective and choose continue only after it is configured through the existing governed path. ",
+        reply_instructions: " Reply with decision=stop or decision=continue and identify the approved objective reference. ",
+        after_reply: " The Scheduler will recheck the original Job scope; this reply is not an ACK, permission grant, or completion. ",
+      },
       plan_basis: { ...basis, outcome: "needs_human", expected_gain: undefined } };
     h.holdPlanCommit.add(f.hub);
     const accepted = await h.invoke(f.hub, "request_human", stop, key);

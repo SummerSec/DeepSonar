@@ -257,6 +257,12 @@ if (!testDatabaseUrl) {
 
       const humanPayload = {
         reason: "operator review",
+        guidance: {
+          question: "Please decide whether this scoped business review can proceed.",
+          required_action: "Review the exact current Job decision and select an allowed outcome.",
+          reply_instructions: "Reply with continue or stop and identify the reviewed item.",
+          after_reply: "The Scheduler will recheck the original scope; the reply is not an ACK or completion.",
+        },
         subject: { type: "platform_blocker", kind: "business_decision" },
       };
       const ingestHuman = (jobId: string) => ingestEvent(jobId, {

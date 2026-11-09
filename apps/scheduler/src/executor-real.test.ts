@@ -513,8 +513,9 @@ test("Hub and Human authoritative preflight runs before claiming the deferred sl
   );
   assert.ok(
     source.indexOf('preflightDeferredSemanticEvent(jobId, "human", p)')
-      < source.indexOf("semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject,"),
+      < source.indexOf("semanticState.human = { eventId, payload: p }"),
   );
+  assert.match(source, /human: \{ eventId: string; payload: HumanPayload \} \| null/);
 });
 
 test("deferred Verify terminal event preserves verdict and missing evidence", () => {
