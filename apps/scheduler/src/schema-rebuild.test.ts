@@ -199,6 +199,7 @@ test("schema baseline serial and IDENTITY primary keys are all in the rebuild re
   assert.deepEqual(
     declared,
     [
+      { table: "project_task_queue_items", column: "id", kind: "serial" },
       { table: "events", column: "id", kind: "serial" },
       { table: "audit_logs", column: "id", kind: "identity" },
       { table: "device_events", column: "id", kind: "serial" },

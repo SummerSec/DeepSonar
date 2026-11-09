@@ -252,6 +252,7 @@ if (!testDatabaseUrl) {
       const claimIds = (await dispatcherModule.claimPendingJobs()).map(job => String(job.id));
       assert.ok(claimIds.includes(regenJob), "the report projection is still claimable");
       assert.ok(claimIds.includes(nextJob), "B starts without waiting for an invented A generation");
+      await sql`UPDATE jobs SET status='running',started_at=clock_timestamp() WHERE id=${regenJob}`;
       await sql.begin(tx => finalizeJob(tx as unknown as typeof sql, regenJob, "succeeded", { summary: "Regenerated Finding report" }));
       const stillCompleted = (await readProjectTaskQueue(sql, projectId)).items.find(item => item.canvas_id === canvasId)!;
       assert.equal(stillCompleted.id, completed.id); assert.equal(stillCompleted.state, "succeeded");
