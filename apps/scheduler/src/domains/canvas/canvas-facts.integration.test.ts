@@ -127,6 +127,7 @@ if (!testDatabaseUrl) {
             ${legalFactId}, ${canvasId}, ${reviewJobId}, 'fact', 'Legal evidence',
             ${sql.json({
               description: "结构化复核证据",
+              quantities: [{ value: 7, unit: "受影响用户", basis: "按受影响账户计" }],
               verification: {
                 finding_id: high.findingId,
                 evidence_kind: "review",
@@ -150,6 +151,13 @@ if (!testDatabaseUrl) {
       await sql`
         INSERT INTO canvas_edges (canvas_id, from_node_id, to_node_id, edge_type)
         VALUES (${canvasId}, ${high.nodeId}, ${legalFactId}, 'reviewed_by')`;
+      await sql`
+        UPDATE findings
+        SET raw_json = ${sql.json({ verification_state: {
+          used_fact_ids: [legalFactId],
+          gate: { result: "failed", missing: ["source_conflict"] },
+        } })}
+        WHERE id = ${high.findingId}`;
 
       const firstPageResponse = await app.inject({ method: "GET", url: `/canvases/${canvasId}/facts?limit=2` });
       assert.equal(firstPageResponse.statusCode, 200, firstPageResponse.payload);
@@ -158,9 +166,25 @@ if (!testDatabaseUrl) {
       assert.equal(firstPage.has_more, true);
       assert.equal(firstPage.items[0].verification, null);
       assert.equal(firstPage.items[1].verification.finding_id, high.findingId);
+      assert.deepEqual(firstPage.items[0].usage, {
+        kind: "observation",
+        finding_usage: "none",
+        attention_required: false,
+        reasons: [],
+        next_action: "none",
+        report_quantity_gate: false,
+        used_by_finding_ids: [],
+        used_by_findings_truncated: false,
+        integrity: { status: "not_applicable", blockers: [] },
+      });
+      assert.equal(firstPage.items[1].usage.kind, "verification");
+      assert.equal(firstPage.items[1].usage.finding_usage, "used", "only current authoritative used_fact_ids means used");
+      assert.equal(firstPage.items[1].usage.attention_required, true, "a used Fact with a current failed gate requires review");
+      assert.equal(firstPage.items[1].usage.report_quantity_gate, true, "verified declared quantities participate in report numeric fidelity");
+      assert.deepEqual(firstPage.items[1].usage.used_by_finding_ids, [high.findingId]);
       assert.deepEqual(Object.keys(firstPage.items[1]).sort(), [
-        "canvas_id", "created_at", "description", "finding", "id", "job", "job_id", "title",
-        "updated_at", "verification", "verification_status",
+        "canvas_id", "created_at", "description", "finding", "id", "job", "job_id", "title", "updated_at",
+        "usage", "verification", "verification_status",
       ]);
 
       const lateFactId = randomUUID();
@@ -179,6 +203,8 @@ if (!testDatabaseUrl) {
       const secondPage = secondPageResponse.json();
       assert.deepEqual(secondPage.items.map((item: { id: string }) => item.id), [spoofFactId]);
       assert.equal(secondPage.items[0].verification, null, "伪造 body_json 不能形成关联");
+      assert.equal(secondPage.items[0].usage.kind, "verification", "review/test metadata remains identifiable when its Finding edge is invalid");
+      assert.equal(secondPage.items[0].usage.finding_usage, "none");
 
       const filtered = await app.inject({
         method: "GET",
@@ -201,6 +227,11 @@ if (!testDatabaseUrl) {
       assert.equal(detail.fact.body_json.verification.subject_revision, "app@abc123");
       assert.equal(detail.finding.id, high.findingId);
       assert.equal(detail.job.id, reviewJobId);
+      assert.equal(detail.fact.usage.finding_usage, "used");
+      assert.equal(detail.fact.usage.integrity.status, "blocked", "detail checks the actually used Fact source integrity");
+      assert.equal(detail.fact.usage.attention_required, true);
+      assert.deepEqual(detail.fact.usage.plan_usage, []);
+      assert.equal(detail.fact.usage.plan_usage_truncated, false);
       assert.equal(detail.trace.edges.some((edge: { edge_type: string }) => edge.edge_type === "reviewed_by"), true);
       assert.equal(detail.trace.nodes.some((node: { id: string }) => node.id === high.nodeId), true);
       assert.equal((await app.inject({ method: "GET", url: `/canvases/${otherCanvasId}/facts/${legalFactId}` })).statusCode, 404);

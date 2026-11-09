@@ -5,6 +5,8 @@
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
+Fact 列表、详情和人工动作响应的只读 `usage` 投影分别描述用途、当前 Finding 实际引用及待处理原因（#1019）。列表采用有界范围查询，详情再读取既有留存证据与当前 Plan 判据；截断与无法确认明确呈现未知。投影不提供写入权限，人工信任、技术验证与完成判据仍走原契约。详见[证据追踪](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)。
+
 ## 任务下发契约（#767）
 
 `POST /projects/{id}/tasks` 可选提交 `task_contract`；类型/版本错误按既有校验错误处理。共享 [TaskContract schema](../../packages/shared-types/src/task-contract.ts) 是字段与模板的唯一机器来源。201 成功返回 `task_contract_warnings`；已提供契约的 objective/targets/scope/evidence/acceptance 基本完整性或必要条件阻塞返回 `409 task_contract_blocked`、`task_contract_blockers` 和 warnings，且不创建 Canvas/Job。每项有 `code/path/message/suggestion`，用于明确补充什么、哪些条件尚不能执行；它们不是完整度分数，也不代表自然语言意图已被理解。未提交契约的自由文本任务继续接受并返回未评估提示，工程场景不强套审计模板。
@@ -41,7 +43,7 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 ### 项目凭据引用保护（#914 切片）
 
-`GET /credentials/:id` 的 impact 与 `GET /credentials/:id/impact` 只返回 actor 可见项目的 `project_references`；count 是该作用域完整计数，items 按[引用查询](../../apps/scheduler/src/credential-project-references.ts)有界返回。能读取全局凭据不表示能读取其他项目的名称、UUID 或配置关系。DELETE 的完整性判定另查所有项目：仍有 `enabled_credential_ids` 或 `default_credential_id` 引用时返回 `409 CREDENTIAL_PROJECT_REFERENCE` 和修复指引，但拒绝响应仍只展示可见引用。
+`GET /credentials/:id` 的 impact 与 `GET /credentials/:id/impact` 只返回 actor 可见项目的 `project_references`；count 是该作用域完整计数，items 按[引用查询](../../apps/scheduler/src/credential-project-references.ts)有界返回。能读取全局凭据不表示能读取其他项目的名称、UUID 或配置关系。#1002 P1-7 的 `usage_history` 返回 actor 范围内全部状态的 `token_generations` 和 `ledger_entries`，按精确同 Job/项目账本引用计数；多条账本不重复计 token，不返回历史内容或扩大可见范围，见[历史预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)。DELETE 的完整性判定另查所有项目：仍有 `enabled_credential_ids` 或 `default_credential_id` 引用时返回 `409 CREDENTIAL_PROJECT_REFERENCE` 和修复指引，但拒绝响应仍只展示可见引用。
 
 设置 PATCH 在项目 `FOR NO KEY UPDATE` 锁内合并配置，按 UUID 顺序取得与 DELETE 共用的凭据行锁，持有至事务提交；该项目锁保护配置写入，同时允许凭据迁移的外键 `KEY SHARE`，避免 Project/Credential 反向等待。DELETE 不靠锁定扫描时已有的引用项目提供互斥。设置写入重验新增及保留的全部引用是否存在、active、属于全局或当前项目，省略模型字段不绕过；失效返回 `400 provider_credential_allowlist_stale`，配置原样保留。模型/回退仍按缺省账号的配置名单重验；清除或收窄掉缺省账号时清除配对模型，显式提交无账号的模型拒绝。缺少白名单键继续不收紧，显式 `[]` 继续禁止所有账号；不自动删键、替换账号或改写历史 Job。此片复用既有设置和删除反馈，**不代表 #914 完整默认账号 UX 已交付**。
 

@@ -231,6 +231,17 @@ if (!testDatabaseUrl) {
           VALUES(${historicalJobId},${projectId},${historicalAttempt},${tokenId},${`credential.delete.${index}`},
             ${index + 1},'openai','model-a',10,5,15,3,${workload})`;
       }
+      // A second ledger reference must not multiply the token generation count.
+      await sql`INSERT INTO job_usage_ledger(job_id,project_id,attempt_id,job_token_id,effect_id,request_no,
+        provider,model,input_tokens,output_tokens,total_tokens,workload)
+        VALUES(${historicalJobId},${projectId},${historicalAttempt},${tokenIds[0]},'credential.delete.extra',5,
+          'openai','model-a',1,1,2,'main')`;
+      for (const url of [`/credentials/${historicalId}/impact`, `/credentials/${historicalId}`]) {
+        const response = await request("GET", url);
+        assert.equal(response.statusCode, 200, response.payload);
+        const value = json(response) as { impact?: { usage_history: unknown }; usage_history?: unknown };
+        assert.deepEqual(value.impact?.usage_history ?? value.usage_history, { token_generations: 4, ledger_entries: 5 });
+      }
       const tokenHistory = await sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${historicalJobId} ORDER BY id`;
       const usageHistory = await sql`SELECT to_jsonb(t) AS row FROM job_usage_ledger t WHERE job_id=${historicalJobId} ORDER BY id`;
       const { readHistoricalRequestBudget } = await import('./gateway-request-budget.js');

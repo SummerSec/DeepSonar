@@ -43,3 +43,5 @@ GitHub Actions：ci:unit:canvas-facts、ci:unit:web-facts、ci:unit:executor-rea
 ## 本轮证据
 
 独立静态评审发现并修正了旧 fixture、未知效果排序、授权/凭据去重、长行显示及回复 ABA 回调竞态；新增 DOM 回归并接入 web-facts。本机仅执行 diff 检查、测试接线/文件行数检查和固定 Skill 文本哈希计算；没有运行测试、构建或 typecheck。最新提交的 Actions 结果在 PR Checks 单独记录，未合并、未部署。
+
+PR 创建后发现主线已推进，已整合 `922ee129` 的事实证据展示与凭据影响账本；保留双方 canvas-facts 测试接线。此为本分支同步，不是 PR 合并或部署。

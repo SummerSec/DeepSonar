@@ -2,6 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { FactEvidenceTable } from "./FactEvidenceTable";
+import type { FactSummary } from "./api";
+import { VERIFICATION_META } from "./semantics";
+import { factUsageAttention } from "./fact-usage-model";
 import { api } from "./api";
 import { appendUniqueRows, initializePageProgress, mergeRefreshedPage } from "./canvas-page-sync";
 import { factHumanActions } from "./fact-verification";
@@ -9,6 +15,67 @@ import { factPageFilterKey, readFactPageFilters, updateFactPageQuery } from "./f
 
 const sourceRoot = path.resolve(import.meta.dirname);
 const source = (name: string) => readFileSync(path.join(sourceRoot, name), "utf8");
+
+function renderFacts(overrides: Partial<FactSummary> = {}) {
+  const fact: FactSummary = {
+    id: "fact-1", canvas_id: "canvas-1", title: "观察接口响应", description: "响应码为 200",
+    verification_status: "unverified", job_id: null,
+    created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z",
+    verification: null, finding: null, job: null,
+    usage: {
+      kind: "observation", finding_usage: "none", attention_required: false,
+      used_by_finding_ids: [], used_by_findings_truncated: false,
+      reasons: [], next_action: "none", report_quantity_gate: false,
+      integrity: { status: "not_applicable", blockers: [] },
+    },
+    ...overrides,
+  };
+  return renderToStaticMarkup(createElement(FactEvidenceTable, {
+    facts: [fact], onOpenFact() {}, onOpenFinding() {}, onOpenJob() {},
+  }));
+}
+
+test("ordinary observations are records with no implied verification backlog", () => {
+  const html = renderFacts();
+  assert.match(html, /已记录 · 未经人工确认/);
+  assert.match(html, /0.*条需处理/);
+  assert.match(html, /过程观察/);
+  assert.doesNotMatch(html, /待验证|deepsonar-live-dot/);
+});
+
+test("historical verifying facts have a static label instead of a live verifier", () => {
+  const html = renderFacts({ verification_status: "verifying" });
+  assert.match(html, /历史验证记录/);
+  assert.doesNotMatch(html, /deepsonar-live-dot/);
+  assert.equal(VERIFICATION_META.verified.label, "人工已确认");
+});
+
+test("adopted evidence keeps manual trust and actionable counts independent", () => {
+  const html = renderFacts({
+    usage: {
+      kind: "verification", finding_usage: "used", attention_required: true,
+      used_by_finding_ids: ["finding-1"], used_by_findings_truncated: false,
+      reasons: ["used_fact_integrity_failed"], next_action: "inspect_finding",
+      report_quantity_gate: false, integrity: { status: "blocked", blockers: [] },
+    },
+  });
+  assert.match(html, /发现验证已采用/);
+  assert.match(html, /1.*条需处理/);
+  assert.match(html, /未经人工确认/);
+  assert.match(html, /查看待处理原因/);
+});
+
+test("bounded lookup uncertainty is separate from known evidence gaps", () => {
+  const usage = {
+    kind: "observation" as const, finding_usage: "none" as const, attention_required: true,
+    used_by_finding_ids: [], used_by_findings_truncated: false,
+    reasons: ["plan_binding_check_required"], next_action: "inspect_plan" as const,
+    report_quantity_gate: false, integrity: { status: "not_applicable" as const, blockers: [] },
+  };
+  assert.equal(factUsageAttention(usage), "inspection");
+  assert.equal(factUsageAttention({ ...usage, reasons: [...usage.reasons, "plan_binding_stale"] }), "action");
+  assert.equal(factUsageAttention({ ...usage, attention_required: false, reasons: [] }), "none");
+});
 
 test("Fact URL 深链与四类服务端筛选可独立更新并保留工作台状态", () => {
   const findingId = "11111111-1111-4111-8111-111111111111";

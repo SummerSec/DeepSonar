@@ -191,10 +191,52 @@ const FactJobSchema = {
   },
 };
 
+const FactUsageSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "finding_usage", "attention_required", "reasons", "next_action", "report_quantity_gate", "used_by_finding_ids", "used_by_findings_truncated", "integrity"],
+  properties: {
+    kind: { type: "string", enum: ["observation", "verification"] },
+    finding_usage: { type: "string", enum: ["none", "linked", "used", "unknown"] },
+    attention_required: { type: "boolean" },
+    reasons: { type: "array", items: { type: "string" } },
+    next_action: { type: "string", enum: ["none", "review_fact", "inspect_finding", "inspect_job", "inspect_plan"] },
+    report_quantity_gate: { type: "boolean", description: "是否当前参与报告的声明数量门禁；只对 verified 且含有效声明数量的 Fact 为 true。" },
+    used_by_finding_ids: { type: "array", maxItems: 10, items: { type: "string", format: "uuid" } },
+    used_by_findings_truncated: { type: "boolean" },
+    integrity: {
+      type: "object", additionalProperties: false, required: ["status", "blockers"],
+      properties: {
+        status: { type: "string", enum: ["not_applicable", "not_checked", "ok", "blocked", "unknown"] },
+        blockers: { type: "array", items: { type: "object", additionalProperties: false, required: ["code", "fact_id"], properties: {
+          code: { type: "string" }, fact_id: { type: "string", format: "uuid", nullable: true },
+        } } },
+      },
+    },
+  },
+};
+
+const FactUsageDetailSchema = {
+  ...FactUsageSchema,
+  required: [...FactUsageSchema.required, "plan_usage", "plan_usage_truncated"],
+  properties: {
+    ...FactUsageSchema.properties,
+    plan_usage: { type: "array", maxItems: 64, items: { type: "object", additionalProperties: false,
+      required: ["plan_job_id", "criterion_id", "state", "reasons"], properties: {
+        plan_job_id: { type: "string", format: "uuid", nullable: true },
+        criterion_id: { type: "string", nullable: true },
+        state: { type: "string" },
+        binding_state: { type: "string" },
+        reasons: { type: "array", items: { type: "string" } },
+      } } },
+    plan_usage_truncated: { type: "boolean" },
+  },
+};
+
 const FactSummarySchema = {
   type: "object",
   additionalProperties: false,
-  required: ["id", "canvas_id", "title", "description", "verification_status", "job_id", "created_at", "updated_at", "verification", "finding", "job"],
+  required: ["id", "canvas_id", "title", "description", "verification_status", "job_id", "created_at", "updated_at", "verification", "finding", "job", "usage"],
   properties: {
     id: { type: "string", format: "uuid" },
     canvas_id: { type: "string", format: "uuid" },
@@ -207,6 +249,7 @@ const FactSummarySchema = {
     verification: FactVerificationSchema,
     finding: FactFindingSchema,
     job: FactJobSchema,
+    usage: FactUsageSchema,
   },
 };
 
@@ -1178,13 +1221,14 @@ const OPS: Op[] = [
           fact: {
             type: "object",
             additionalProperties: false,
-            required: ["id", "canvas_id", "title", "description", "body_json", "verification_status", "job_id", "created_at", "updated_at", "verification"],
+            required: ["id", "canvas_id", "title", "description", "body_json", "verification_status", "job_id", "created_at", "updated_at", "verification", "usage"],
             properties: {
               id: { type: "string", format: "uuid" },
               canvas_id: { type: "string", format: "uuid" },
               title: { type: "string" },
               description: { type: "string" },
               body_json: { type: "object", additionalProperties: true },
+              usage: FactUsageDetailSchema,
               verification_status: { type: "string", enum: ["unverified", "verifying", "verified", "rejected", "needs_human"] },
               job_id: { type: "string", format: "uuid", nullable: true },
               created_at: { type: "string", format: "date-time" },
@@ -2641,7 +2685,7 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/credentials/{id}/impact",
-    summary: "凭据只读影响投影（RoleConfig / pending / active / recoverable / historical Job / 活动扫描）",
+    summary: "凭据只读影响投影（Job / 项目引用 / 历史 token 与账本引用 / 活动扫描）",
     scope: "agents:read",
     tags: ["Credentials"],
     responses: {
@@ -3397,9 +3441,18 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         RuntimeRegistryChannelError: RuntimeRegistryChannelErrorSchema,
         CredentialImpact: {
           type: "object",
-          required: ["credential_id", "role_configs", "jobs", "scans", "project_references"],
+          required: ["credential_id", "role_configs", "jobs", "scans", "project_references", "usage_history"],
           properties: {
             credential_id: { type: "string", format: "uuid" },
+            usage_history: {
+              type: "object",
+              description: "actor 可见项目的全部历史 token 生成与账本引用计数；删除保留这些历史，不返回 token 或账本内容。",
+              required: ["token_generations", "ledger_entries"],
+              properties: {
+                token_generations: { type: "integer", minimum: 0 },
+                ledger_entries: { type: "integer", minimum: 0 },
+              },
+            },
             role_configs: {
               type: "object",
               required: ["count", "items"],

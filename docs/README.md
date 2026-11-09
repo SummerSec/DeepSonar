@@ -58,7 +58,7 @@
 
 > **Canvas 引用索引（2026-11-08，#1002 P1-6）**：[数据库说明](../database/README.md#canvas-节点引用索引1002-p1-6)与[数据视图](architecture/08-data-architecture.md#canvas-节点引用索引1002-p1-6)记录边/人工消息节点与 Finding 候选完整外键前缀索引；在已合入主线基线上推进候选版本，不修改 retry 的单事务、外键或项目范围。合成节点/多 generation Finding 级联 SQL 计划与 buffer 对照及实际 HTTP 完整回滚/成功隔离已接 recovery，最终 SHA Actions 待验，生产延迟根因与容量未验证。
 
-> **历史凭据删除（2026-11-08，#1002 P1-7A）**：删除前撤销全部 Gateway token，再脱离秘密凭据，保留 token/用量账本身份及历史有限额度；无凭据 token 仅允许 revoked，不复活旧授权，不自动清配置。真实账本/预算/HTTP 与精确旧基线重建、备份恢复已接现有 Actions，最终 SHA 待验。详见[历史预算契约](MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)及[数据架构](architecture/08-data-architecture.md)。
+> **历史凭据删除（2026-11-08，#1002 P1-7A）**：删除前撤销全部 Gateway token，再脱离秘密凭据，保留 token/用量账本身份及历史有限额度；无凭据 token 仅允许 revoked，不复活旧授权，不自动清配置。impact 历史 token 生成/账本引用计数与 actor 项目隔离复用既有入口，不返回内容；真实账本/预算/HTTP 与精确旧基线重建、备份恢复已接现有 Actions，最终 SHA 待验。详见[历史预算契约](MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)及[数据架构](architecture/08-data-architecture.md)。
 
 > **凭据解析同步（2026-10-21，#757）**：Provider/model/项目授权先形成候选，凭据决定 CLI；readiness 与 Job 共用解析，区分全局种子无偏好和用户显式偏好。项目 RoleConfig 不再暴露可写却不生效的 CLI/model，未收紧白名单读取不固化凭据 ID。详见 [运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)、[数据架构](architecture/08-data-architecture.md)与[接口规范](architecture/09-interface-specs.md)。
 
@@ -265,3 +265,5 @@
 
 - Chrome Fuzz ARM 构建层优化（#961 P2/P3）：V8 编译阶段改用按 digest 钉死的 `V8_BUILDER_IMAGE`，不再继承 `${BASE_IMAGE}`，base 的运行时变化不再使下载/GN/编译层失效；运行时阶段仍跟随本次 base。指纹新增 `ci_src_tag`（`src-ci-<fp>`）与 `release_src_tag`（`src-release-<fp>`）：CI 四个 workflow 只读写前者，`release.yml` 只读写后者，历史 `src-<fp>` 已无消费方，避免 PR 产物让发布跳过真实构建。契约回归见 `agent-harness/image-cache-trust.test.mjs`。真实冷/热/失效三组样本仍待线上累积，本文不宣称提速比例。
 - [Pi RPC 大载荷链路（#944 / #990）](PI_RPC_PAYLOAD_LIMITS.md)：帧/分片/预览/重试阈值以专题的核对基线和代码为准。#990 的全部大预览归档关联、索引先于引用、Attempt 已用额度恢复和按源 hash/JSON Pointer 完整回读已接线，最终 SHA Actions 待验；发送侧分片、冻结 knobs、真实 Pi 80 MiB E2E 与容量/质量观测仍未交付。不自动加载大正文，`prompt` 仍不重传。
+
+#1019 的[事实用途与待处理投影](EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。

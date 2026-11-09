@@ -33,7 +33,9 @@ import { appendUniqueRows, initializePageProgress, mergeRefreshedPage, type Page
 import { useConfirmDialog } from "../components/ConfirmDialog";
 import { composeRetryErrorMessage } from "../composeTaskModel";
 import { FindingDetailPanel } from "../FindingDetailPanel";
+import { FactEvidenceTable } from "../FactEvidenceTable";
 import { FactDetailPanel } from "../FactDetailPanel";
+import { VERIFICATION_META } from "../semantics";
 import { factPageFilterKey, readFactPageFilters, updateFactPageQuery, type FactFilterKey } from "../fact-page-state";
 import { HumanInterventionBanner } from "../HumanInterventionBanner";
 import { HumanFactCard } from "../HumanFactCard";
@@ -1227,7 +1229,7 @@ export function TaskCanvasPage() {
         {tab === "facts" && (
           <div className={`${taskWorkbenchListPaneClass()} overflow-y-auto p-4 sm:p-6`}>
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-              <SearchableMultiSelect label="验证状态" value={factFilters.verification_status} onChange={(values) => setFactQuery("verification_status", values)} placeholder="全部状态" options={["unverified", "verifying", "verified", "rejected", "needs_human"].map((value) => ({ value, label: value }))} />
+              <SearchableMultiSelect label="人工信任状态" value={factFilters.verification_status} onChange={(values) => setFactQuery("verification_status", values)} placeholder="全部状态" options={["unverified", "verifying", "verified", "rejected", "needs_human"].map((value) => ({ value, label: VERIFICATION_META[value].label }))} />
               <SearchableMultiSelect label="证据类型" value={factFilters.evidence_kind} onChange={(values) => setFactQuery("evidence_kind", values)} placeholder="全部类型" options={[{ value: "review", label: "独立复核" }, { value: "test", label: "运行测试" }]} />
               <SearchableMultiSelect label="关联 Finding" value={factFilters.finding_id} onChange={(values) => setFactQuery("finding_id", values)} placeholder="全部 Finding" options={factFindingFilterOptions} />
               <SearchableMultiSelect label="产出 Job" value={factFilters.job_id} onChange={(values) => setFactQuery("job_id", values)} placeholder="全部 Job" options={factJobFilterOptions} />
@@ -1242,52 +1244,8 @@ export function TaskCanvasPage() {
               <EmptyState title="没有匹配的事实" />
             ) : (
               <>
-                <DataTable>
-                  <table className="w-full min-w-[980px]">
-                    <thead>
-                      <tr>
-                        <th className={thCls}>状态</th>
-                        <th className={thCls}>证据 / 结论</th>
-                        <th className={thCls}>标题</th>
-                        <th className={thCls}>关联 Finding</th>
-                        <th className={thCls}>产出 Job</th>
-                        <th className={thCls}>时间</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {facts.map((fact) => (
-                        <tr key={fact.id} onClick={() => setFactQuery("fact", fact.id)} className="cursor-pointer transition-colors hover:bg-ink-850/80">
-                          <td className={tdCls}><StatusBadge status={fact.verification_status} /></td>
-                          <td className={`${tdCls} font-mono text-[11px] text-zinc-400`}>
-                            {fact.verification ? <><div>{fact.verification.evidence_kind}</div><div className="mt-0.5 text-zinc-600">{fact.verification.outcome}</div></> : "—"}
-                          </td>
-                          <td className={`${tdCls} max-w-[360px]`}>
-                            <div className="break-words font-medium text-zinc-100">{fact.title}</div>
-                            {fact.description && <div className="mt-0.5 line-clamp-2 break-words text-[12px] text-zinc-600">{fact.description}</div>}
-                          </td>
-                          <td className={tdCls} onClick={(event) => event.stopPropagation()}>
-                            {fact.finding ? (
-                              <button type="button" onClick={() => setQuery("finding", fact.finding?.id ?? null)} className="max-w-[220px] text-left text-[12px] text-acc-400 hover:text-acc-300">
-                                <span className="block truncate">{fact.finding.title}</span>
-                                <span className="font-mono text-[9px] text-zinc-600">{fact.finding.id.slice(0, 8)}</span>
-                              </button>
-                            ) : "—"}
-                          </td>
-                          <td className={tdCls} onClick={(event) => event.stopPropagation()}>
-                            {fact.job ? (
-                              <button type="button" onClick={() => setQuery("job", fact.job?.id ?? null)} className="font-mono text-[11px] text-acc-400 hover:text-acc-300">
-                                {fact.job.type} · {fact.job.id.slice(0, 8)}
-                              </button>
-                            ) : fact.job_id ? (
-                              <button type="button" onClick={() => setQuery("job", fact.job_id)} className="font-mono text-[11px] text-acc-400 hover:text-acc-300">{fact.job_id.slice(0, 8)}</button>
-                            ) : "—"}
-                          </td>
-                          <td className={`${tdCls} whitespace-nowrap font-mono text-[11px] text-zinc-500`} title={formatTime(fact.created_at)}>{relativeTime(fact.created_at)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </DataTable>
+                <FactEvidenceTable facts={facts} onOpenFact={(id) => setFactQuery("fact", id)}
+                  onOpenFinding={(id) => setQuery("finding", id)} onOpenJob={(id) => setQuery("job", id)} />
                 {factsHasMore && (
                   <button type="button" disabled={factsLoadingMore} onClick={() => void loadMoreFacts()} className="mt-3 rounded-full px-3 py-1.5 font-mono text-[10px] text-acc-300 ring-1 ring-acc-400/25 hover:bg-acc-400/[.08] disabled:opacity-50">
                     {factsLoadingMore ? "加载中…" : "加载更多事实"}
