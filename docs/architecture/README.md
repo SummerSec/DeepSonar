@@ -12,7 +12,7 @@
 
 平台维护升级的当前决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)：宿主、受管 SSH 节点和显式回滚恢复已接线；schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。具体基线与隔离环境见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)；Windows Docker 全流程、断电及真实模型验证不能由这些记录推定，P3 Web 发起仍未实现，不能把该决策等同于 #740 全部交付。
 
-#914 的 #925 服务端切片同步[项目凭据引用保护切片](09-interface-specs.md#项目凭据引用保护914-切片)至 FR-CRED-002、运行时/数据/安全视图及追溯矩阵；scope 过滤与删除/设置事务回归复用现有 credential-delete CI 入口，#929 已补齐默认账号选择与修复导航；工程证据见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。
+#914 的 #925 服务端切片同步[项目凭据引用保护切片](09-interface-specs.md#项目凭据引用保护914-切片)至 FR-CRED-002、运行时/数据/安全视图及追溯矩阵；scope 过滤与删除/设置事务回归复用现有 credential-delete CI 入口，#1002 P1-7 的历史 token/ledger 引用计数及项目隔离负例使用同一入口，#929 已补齐默认账号选择与修复导航；工程证据见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。
 
 #966 补齐项目显式默认模型和任务创建冲突诊断，继续使用现有 settings/RepairFeedback 与模型优先级；见 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[接口与注意力成本](09-interface-specs.md#项目默认模型与创建冲突966)。不自动选模、不改历史快照，最终 SHA Actions 待验。
 

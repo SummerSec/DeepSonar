@@ -57,7 +57,7 @@
 
 > **Canvas 引用索引（2026-11-08，#1002 P1-6）**：[数据库说明](../database/README.md#canvas-节点引用索引1002-p1-6)与[数据视图](architecture/08-data-architecture.md#canvas-节点引用索引1002-p1-6)记录边/人工消息节点与 Finding 候选完整外键前缀索引；在已合入主线基线上推进候选版本，不修改 retry 的单事务、外键或项目范围。合成节点/多 generation Finding 级联 SQL 计划与 buffer 对照及实际 HTTP 完整回滚/成功隔离已接 recovery，最终 SHA Actions 待验，生产延迟根因与容量未验证。
 
-> **历史凭据删除（2026-11-08，#1002 P1-7A）**：删除前撤销全部 Gateway token，再脱离秘密凭据，保留 token/用量账本身份及历史有限额度；无凭据 token 仅允许 revoked，不复活旧授权，不自动清配置。真实账本/预算/HTTP 与精确旧基线重建、备份恢复已接现有 Actions，最终 SHA 待验。详见[历史预算契约](MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)及[数据架构](architecture/08-data-architecture.md)。
+> **历史凭据删除（2026-11-08，#1002 P1-7A）**：删除前撤销全部 Gateway token，再脱离秘密凭据，保留 token/用量账本身份及历史有限额度；无凭据 token 仅允许 revoked，不复活旧授权，不自动清配置。impact 历史 token 生成/账本引用计数与 actor 项目隔离复用既有入口，不返回内容；真实账本/预算/HTTP 与精确旧基线重建、备份恢复已接现有 Actions，最终 SHA 待验。详见[历史预算契约](MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)及[数据架构](architecture/08-data-architecture.md)。
 
 > **凭据解析同步（2026-10-21，#757）**：Provider/model/项目授权先形成候选，凭据决定 CLI；readiness 与 Job 共用解析，区分全局种子无偏好和用户显式偏好。项目 RoleConfig 不再暴露可写却不生效的 CLI/model，未收紧白名单读取不固化凭据 ID。详见 [运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)、[数据架构](architecture/08-data-architecture.md)与[接口规范](architecture/09-interface-specs.md)。
 

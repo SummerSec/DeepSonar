@@ -2684,7 +2684,7 @@ const OPS: Op[] = [
   {
     method: "get",
     path: "/credentials/{id}/impact",
-    summary: "凭据只读影响投影（RoleConfig / pending / active / recoverable / historical Job / 活动扫描）",
+    summary: "凭据只读影响投影（Job / 项目引用 / 历史 token 与账本引用 / 活动扫描）",
     scope: "agents:read",
     tags: ["Credentials"],
     responses: {
@@ -3440,9 +3440,18 @@ export function buildOpenApiDocument(): Record<string, unknown> {
         RuntimeRegistryChannelError: RuntimeRegistryChannelErrorSchema,
         CredentialImpact: {
           type: "object",
-          required: ["credential_id", "role_configs", "jobs", "scans", "project_references"],
+          required: ["credential_id", "role_configs", "jobs", "scans", "project_references", "usage_history"],
           properties: {
             credential_id: { type: "string", format: "uuid" },
+            usage_history: {
+              type: "object",
+              description: "actor 可见项目的全部历史 token 生成与账本引用计数；删除保留这些历史，不返回 token 或账本内容。",
+              required: ["token_generations", "ledger_entries"],
+              properties: {
+                token_generations: { type: "integer", minimum: 0 },
+                ledger_entries: { type: "integer", minimum: 0 },
+              },
+            },
             role_configs: {
               type: "object",
               required: ["count", "items"],
