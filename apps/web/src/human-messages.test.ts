@@ -229,6 +229,34 @@ test("human detail store caches by updated_at and requires an explicit retry aft
   assert.equal(calls, 2, "the same updated_at remains cached after success");
 });
 
+test("the thirteenth reply request stays loaded when the bounded preview order changes", async () => {
+  const requests = Array.from({ length: 13 }, (_, index) => node({
+    id: `human-${index}`, job_id: `job-${index}`, node_type: "human", status: "open",
+    updated_at: `2026-08-13T00:${String(index).padStart(2, "0")}:00.000Z`,
+  }));
+  const selected = openHumanInterventionForJob(requests, "job-0")!;
+  assert.ok(!listHumanInterventions(requests).some(item => item.node.id === selected.id));
+  let calls = 0;
+  const store = new HumanInterventionDetailStore(async (_canvasId, id) => {
+    calls++;
+    return { ...requests.find(item => item.id === id)!, body_json: { reason: `full ${id}` } };
+  });
+  const preview = listHumanInterventions(requests).map(item => item.node);
+  store.refresh("canvas-1", preview, selected);
+  await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(store.getSnapshot().entries.size, 13);
+  assert.equal(store.getSnapshot().entries.get(selected.id)?.status, "loaded");
+  store.refresh("canvas-1", [...preview].reverse(), selected);
+  assert.equal(calls, 13, "reordering must keep the selected request cached");
+  const [item] = mergeHumanInterventionDetails(listHumanInterventions([selected]), store.getSnapshot().entries);
+  assert.equal(item?.detailVersionMatches, true);
+  assert.equal(item?.reason, "full human-0");
+  const updated = { ...selected, updated_at: "2026-08-14T00:00:00.000Z" };
+  store.refresh("canvas-1", preview, updated);
+  const [stale] = mergeHumanInterventionDetails(listHumanInterventions([updated]), store.getSnapshot().entries);
+  assert.equal(stale?.detailVersionMatches, false, "changed L0 must disable sending until L1 catches up");
+});
+
 test("late human detail responses from a previous task cannot replace current task data", async () => {
   let resolveOld!: (value: CanvasNode) => void;
   const oldRequest = new Promise<CanvasNode>((resolve) => { resolveOld = resolve; });

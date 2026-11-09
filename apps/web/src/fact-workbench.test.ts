@@ -268,7 +268,9 @@ test("人工介入只读取 human 节点结构化关联且有界展示", () => {
   const canvasLayer = page.indexOf("taskWorkbenchCanvasLayerClass(tab === \"canvas\")");
   assert.ok(bannerMount >= 0 && canvasLayer > bannerMount, "人工介入条必须在画布层外，各 Tab 都可点回复");
   assert.match(page, /openHumanReply\(humanMessageTargetNodeFromContext\(item\.node, scopedNodes, jobs\), item\)/);
-  assert.match(page, /useHumanInterventionDetails\(canvasId \?\? "", humanDetailNodes\)/);
+  assert.match(page, /useHumanInterventionDetails\(canvasId \?\? "", humanDetailNodes, composerRequestNode\)/);
+  assert.match(page, /listHumanInterventions\(scopedNodes, scopedNodes\.length\)\.find/);
+  assert.match(page, /mergeHumanInterventionDetails\(listHumanInterventions\(\[composerRequestNode\]\), humanDetailEntries\)/);
   assert.match(page, /mergeHumanInterventionDetails\(humanInterventionSources, humanDetailEntries\)/);
   assert.match(page, /onRetryDetail=\{\(item\) => retryHumanDetail\(item\.node\)\}/);
   assert.match(page, /<HumanMessageComposer/);

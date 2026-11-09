@@ -51,8 +51,10 @@ export function HumanMessageComposer({
   const trimmed = body.trim();
   const jobTarget = nodeEligible ? humanMessageTargetForNode(selectedNode, jobs) : null;
   const target = targetKind === "job" ? jobTarget : targetKind === "hub" ? { kind: "hub" as const } : null;
-  const waitingForCurrentRequest = targetKind === "job" && intervention?.pending
-    && (intervention.detailStatus !== "loaded" || intervention.detailVersionMatches !== true);
+  const waitingJob = selectedNode?.status === "waiting_human"
+    || jobs?.some(job => job.id === selectedNode?.job_id && job.status === "waiting_human");
+  const waitingForCurrentRequest = targetKind === "job" && (waitingJob || intervention?.pending)
+    && (!intervention || intervention.detailStatus !== "loaded" || intervention.detailVersionMatches !== true);
   const canSubmit = Boolean(projectId && target && trimmed.length >= 1 && trimmed.length <= HUMAN_MESSAGE_MAX_LENGTH && !busy && !waitingForCurrentRequest);
   const targetTitle = target?.kind === "hub" ? "Hub" : target?.kind === "job" ? selectedNode?.title ?? "当前运行" : "未选择";
   const totalBytes = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
@@ -121,6 +123,9 @@ export function HumanMessageComposer({
         </header>
 
         <div className="human-message-composer-body">
+          {targetKind === "job" && waitingJob && !intervention && (
+            <p role="alert">尚未取得此运行的人工请求，请等待画布刷新后重新打开回复，核对完整问题再发送。</p>
+          )}
           {intervention && (
             <section className="rounded-xl bg-amber-400/[.04] p-3 ring-1 ring-amber-300/15" aria-label="关联人工请求">
               <div className="font-mono text-[10px] text-amber-300">关联请求 · {humanInterventionKindLabel(intervention.node)}</div>

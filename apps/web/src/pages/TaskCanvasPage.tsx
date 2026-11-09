@@ -199,7 +199,9 @@ export function TaskCanvasPage() {
   const scopedNodes = useMemo(() => nodesCanvasId === canvasId ? nodes : [], [canvasId, nodes, nodesCanvasId]);
   const humanInterventionSources = useMemo(() => listHumanInterventions(scopedNodes), [scopedNodes]);
   const humanDetailNodes = useMemo(() => humanInterventionSources.map((item) => item.node), [humanInterventionSources]);
-  const { entries: humanDetailEntries, retry: retryHumanDetail } = useHumanInterventionDetails(canvasId ?? "", humanDetailNodes);
+  const composerRequestNode = composerOpen && composerCanvasId === canvasId
+    ? scopedNodes.find(node => node.id === composerInterventionId) ?? null : null;
+  const { entries: humanDetailEntries, retry: retryHumanDetail } = useHumanInterventionDetails(canvasId ?? "", humanDetailNodes, composerRequestNode);
   const humanInterventions = useMemo(
     () => mergeHumanInterventionDetails(humanInterventionSources, humanDetailEntries),
     [humanDetailEntries, humanInterventionSources],
@@ -208,7 +210,8 @@ export function TaskCanvasPage() {
     0,
     countPendingHumanInterventions(scopedNodes) - humanInterventionSources.filter((item) => item.pending).length,
   );
-  const composerIntervention = humanInterventions.find((item) => item.node.id === composerInterventionId) ?? null;
+  const composerIntervention = composerRequestNode
+    ? mergeHumanInterventionDetails(listHumanInterventions([composerRequestNode]), humanDetailEntries)[0] ?? null : null;
   const [interventionPrefs, setInterventionPrefs] = useState<HumanInterventionPrefs>(() =>
     readHumanInterventionPrefs(prefUserKey, canvasId ?? ""),
   );
@@ -800,7 +803,7 @@ export function TaskCanvasPage() {
   };
   const openHumanReply = (target: CanvasNode | null, requested?: HumanInterventionItem) => {
     const targetJobId = target?.job_id ?? (typeof target?.body_json?.job_id === "string" ? target.body_json.job_id : null);
-    const intervention = requested ?? humanInterventions.find((item) => item.jobId === targetJobId && item.pending);
+    const intervention = requested ?? listHumanInterventions(scopedNodes, scopedNodes.length).find((item) => item.jobId === targetJobId && item.pending);
     setComposerNode(target);
     setComposerInterventionId(intervention?.node.id ?? null);
     setComposerCanvasId(canvasId ?? null);

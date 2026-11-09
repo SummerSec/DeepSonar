@@ -40,14 +40,16 @@ export class HumanInterventionDetailStore {
     return () => this.listeners.delete(listener);
   };
 
-  refresh(canvasId: string, nodes: readonly CanvasNode[]): void {
+  refresh(canvasId: string, nodes: readonly CanvasNode[], selectedNode?: CanvasNode | null): void {
     if (this.snapshot.canvasId !== canvasId) {
       this.queue = [];
       this.snapshot = { canvasId, entries: new Map() };
       this.publish();
     }
 
-    const requested = nodes.filter((node) => node.node_type === "human").slice(0, MAX_DETAILS);
+    const preview = nodes.filter((node) => node.node_type === "human").slice(0, MAX_DETAILS);
+    const requested = selectedNode?.node_type === "human"
+      ? [selectedNode, ...preview.filter(node => node.id !== selectedNode.id)] : preview;
     const currentIds = new Set(requested.map((node) => node.id));
     const entries = new Map([...this.snapshot.entries].filter(([id]) => currentIds.has(id)));
     const queueBefore = this.queue.length;
@@ -148,7 +150,7 @@ export function mergeHumanInterventionDetails(
   });
 }
 
-export function useHumanInterventionDetails(canvasId: string, nodes: readonly CanvasNode[]) {
+export function useHumanInterventionDetails(canvasId: string, nodes: readonly CanvasNode[], selectedNode?: CanvasNode | null) {
   const storeRef = useRef<HumanInterventionDetailStore | null>(null);
   if (!storeRef.current) {
     storeRef.current = new HumanInterventionDetailStore(async (id, nodeId) => (await api.canvasNode(id, nodeId)).node);
@@ -158,9 +160,9 @@ export function useHumanInterventionDetails(canvasId: string, nodes: readonly Ca
 
   useEffect(() => {
     const unsubscribe = store.subscribe(() => setSnapshot(store.getSnapshot()));
-    store.refresh(canvasId, nodes);
+    store.refresh(canvasId, nodes, selectedNode);
     return unsubscribe;
-  }, [canvasId, nodes, store]);
+  }, [canvasId, nodes, selectedNode, store]);
 
   const retry = useCallback((node: CanvasNode) => store.retry(canvasId, node), [canvasId, store]);
   return {

@@ -3,6 +3,8 @@ import test, { mock } from "node:test";
 import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
 import { api, type CanvasNode } from "./api.js";
+import { listHumanInterventions, openHumanInterventionForJob } from "./human-messages.js";
+import { HumanInterventionDetailStore, mergeHumanInterventionDetails } from "./human-intervention-details.js";
 
 test("a reply saved after leaving and returning to a task cannot close its new draft", async () => {
   const dom = new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>", { url: "http://127.0.0.1" });
@@ -62,6 +64,40 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     assert.equal(container.querySelector("textarea")!.value, "返回 A 后尚未发送的新草稿");
     await act(async () => { send(); await saved; });
     assert.equal(newCallback, 1, "the current mounted composer can still report a successful send");
+
+    act(() => root.render(null));
+    const requests = Array.from({ length: 13 }, (_, index) => ({
+      ...target, id: `human-${index}`, job_id: `job-${index}`, node_type: "human", status: "open",
+      updated_at: `2026-11-09T06:${String(index).padStart(2, "0")}:00.000Z`,
+    }));
+    const selected = openHumanInterventionForJob(requests, "job-0")!;
+    const preview = listHumanInterventions(requests).map(item => item.node);
+    const waitingTarget = { ...target, job_id: "job-0", status: "waiting_human" };
+    const renderWaiting = (intervention: ReturnType<typeof listHumanInterventions>[number] | null) => act(() => root.render(createElement(HumanMessageComposer, {
+      canvasId: "canvas-a", projectId: "project-a", selectedNode: waitingTarget, intervention,
+      onClose: () => {}, onSent: () => { newCallback++; },
+    })));
+    const sendDisabled = () => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "发送消息")!.disabled;
+    renderWaiting(null);
+    type("第十三条请求的草稿");
+    assert.equal(sendDisabled(), true, "a waiting Job without its request must never bypass the guard");
+    const store = new HumanInterventionDetailStore(async (_canvasId, id) => ({
+      ...requests.find(item => item.id === id)!, body_json: { reason: `完整问题 ${id}`, guidance: {
+        question: "是否继续？", required_action: "确认范围", reply_instructions: "回复范围", after_reply: "重新核验准入",
+      } },
+    }));
+    store.refresh("canvas-a", preview, selected);
+    const currentItem = () => mergeHumanInterventionDetails(listHumanInterventions([selected]), store.getSnapshot().entries)[0]!;
+    renderWaiting(currentItem());
+    assert.equal(sendDisabled(), true, "L1 is still loading");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    store.refresh("canvas-a", [...preview].reverse(), selected);
+    renderWaiting(currentItem());
+    assert.match(container.textContent ?? "", /完整问题 human-0/);
+    assert.equal(sendDisabled(), false, "the pinned thirteenth request is verified after preview reordering");
+    renderWaiting({ ...currentItem(), detailVersionMatches: false });
+    assert.equal(sendDisabled(), true, "a changed request version disables the existing draft");
+    assert.equal(createMessage.mock.callCount(), 2, "guarded drafts never reach the message API");
   } finally {
     act(() => root.unmount());
     createMessage.mock.restore();
