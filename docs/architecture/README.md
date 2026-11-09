@@ -81,6 +81,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 | 系统范围与角色 | 02；03 | §1–2、§15 | 概览已迁入，旧文历史对照 |
 | 实体与数据真相 | 08；schema | §3 实体、§6、§17.1–17.4 | 已迁入，字段不复制 SQL 草图 |
 | 生命周期与恢复 | 06；[Attempt 实现](../../apps/scheduler/src/domains/job-attempt/index.ts) | §3 状态机、§4、§8 图循环、文末资格与排序 | 已迁入，细节回到代码和行为测试 |
+| Kernel 平台门禁出口 | FR-HUB-004/FR-CTRL-010；06/10；[生命周期](../AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3) | #1002 P0-3 | 现有 Reaper 以当前 stopped objective 或修正次数/已知 token/原 deadline 耗尽结束本 Hub、记录 inconclusive/下一步并走原清理；不借 directed grant 操作 target、不替换 accepted human/完成或人工等待、不 replay unknown；实际 Reaper/SQL/Control 拒绝及隔离历史回归已接，最终 SHA 待验，非原 P0-3 全部交付 |
 | 人工等待与可行动请求 | FR-CTRL-004 / FR-CANVAS-004 / FR-WEB-003 / NFR-UX-001；06/08/09；[生命周期](../AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影) | #1012 / #1002 P1-4 | 精确 sandbox 消失/同 Attempt human 证据下原子撤销旧 grants 并收口 run；严格 guidance 完整保存，L0 有界、L1 按需；waiting_human 才附加当前 Scheduler 状态并与同 Job human node 去重，unknown effect 对账独立优先；普通及修正根共享原准入，ACK/恢复/完成分离；最终 SHA Actions 待验 |
 | 构件与依赖 | 05；[bounded contexts / 锁序](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | §4.4、§5、§11 | 构件地图已迁入；锁序专题保留权威 |
 | API 与修复 | 09；[OpenAPI](../../apps/scheduler/src/openapi.ts) / shared-types | §7、§8 控制通道 | 已迁入；字段由机器契约维护 |
