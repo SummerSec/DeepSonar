@@ -303,7 +303,7 @@ if (!testDatabaseUrl) {
         return { accepted: true, event_id: context.eventId };
       }, ["request_human"]);
       const humanBase = `/control/v1/jobs/${humanJobId}`;
-      const humanInvoke = (key: string, payload: unknown) => app.inject({
+      const humanInvoke = (key: string, payload: Record<string, unknown>) => app.inject({
         method: "POST",
         url: `${humanBase}/operations/request_human`,
         headers: { authorization: `Bearer ${humanGrant.token}`, "idempotency-key": key },

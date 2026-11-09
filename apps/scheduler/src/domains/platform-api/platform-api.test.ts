@@ -64,13 +64,13 @@ test("request_human OpenAPI requires the strict four-field actionable guidance c
   const operation = (document.paths as Record<string, Record<string, any>>)
     ["/control/v1/jobs/{jobId}/operations/request_human"].post;
   const schema = operation.requestBody.content["application/json"].schema;
-  assert.deepEqual(schema, ControlToolInputSchemasJson.request_human);
   assert.deepEqual(schema.required, ["reason", "guidance", "subject"]);
   assert.equal(schema.additionalProperties, false);
   assert.deepEqual(schema.properties.guidance.required, ["question", "required_action", "reply_instructions", "after_reply"]);
   assert.equal(schema.properties.guidance.additionalProperties, false);
   assert.match(operation.description, /guidance/);
   assert.match(operation.description, /reply/);
+  assert.deepEqual(schema, ControlToolInputSchemasJson.request_human);
 });
 
 test("capability discovery operations are registered read-only Job control APIs", () => {
