@@ -18,6 +18,7 @@ const WAKE_SLACK_MS = 25;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let armedUntilMs: number | null = null;
 let refreshInFlight: Promise<void> | null = null;
+let refreshRequestsDueKick = false;
 let kick: (() => void) | null = null;
 
 /** Wire the dispatcher kick once at boot to avoid a module cycle. */
@@ -54,7 +55,8 @@ export function clearScheduleWake(): void {
 }
 
 /** Scan pending task and knowledge schedules and arm their nearest durable deadline. */
-export async function refreshScheduleWakeFromDb(): Promise<void> {
+export async function refreshScheduleWakeFromDb(options?: { kickDue?: boolean }): Promise<void> {
+  if (options?.kickDue !== false) refreshRequestsDueKick = true;
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
     try {
@@ -67,13 +69,14 @@ export async function refreshScheduleWakeFromDb(): Promise<void> {
           AND c.target_json->'schedule'->>'start_at' IS NOT NULL
         LIMIT 500`;
       let nearest: number | null = null;
+      let hasDue = false;
       const now = Date.now();
       for (const row of rows) {
         const start = readScheduleStartAt(row.target_json);
         if (!start) continue;
         const ms = start.getTime();
         if (ms <= now) {
-          fireKick();
+          hasDue = true;
           continue;
         }
         if (nearest == null || ms < nearest) nearest = ms;
@@ -81,15 +84,17 @@ export async function refreshScheduleWakeFromDb(): Promise<void> {
       const knowledgeWake = await readNextKnowledgeWake(sql);
       if (knowledgeWake) {
         const ms = knowledgeWake.getTime();
-        if (ms <= now) fireKick();
+        if (ms <= now) hasDue = true;
         else if (nearest == null || ms < nearest) nearest = ms;
       }
       if (nearest != null) armTimer(nearest);
       else clearArmedTimer();
+      if (hasDue && refreshRequestsDueKick) fireKick();
     } catch (error) {
       console.error("[schedule-wake] refresh failed:", error);
     } finally {
       refreshInFlight = null;
+      refreshRequestsDueKick = false;
     }
   })();
   return refreshInFlight;

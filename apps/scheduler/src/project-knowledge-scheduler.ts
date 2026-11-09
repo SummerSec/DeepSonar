@@ -17,7 +17,7 @@ export const projectKnowledgeScheduler = {
     await prepareAutomaticKnowledgeWork(sql, PROJECT_KNOWLEDGE_GOVERNANCE_HASH, stopped);
     if (stopped()) return 0;
     const progressed = await workScheduler.tick(stopped);
-    if (!stopped()) await refreshScheduleWakeFromDb();
+    if (!stopped()) await refreshScheduleWakeFromDb({ kickDue: false });
     return progressed;
   },
 };
