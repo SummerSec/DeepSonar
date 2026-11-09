@@ -385,6 +385,8 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
   async function claimPending(stopped: () => boolean): Promise<void> {
     const candidates = await db`SELECT id FROM project_knowledge_work w
       WHERE state='pending' AND next_attempt_at<=now()
+        AND reason IS DISTINCT FROM 'automatic_sources_pending'
+        AND COALESCE(reason,'') NOT LIKE 'automatic_prepare_retry:%'
         AND NOT EXISTS(SELECT 1 FROM project_knowledge_work r WHERE r.project_id=w.project_id AND r.state='running')
       ORDER BY next_attempt_at,id LIMIT 8`;
     for (const candidate of candidates) {
@@ -394,6 +396,8 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
           if (stopped()) return;
           const [locked] = await tx`SELECT id,project_id FROM project_knowledge_work
             WHERE id=${String(candidate.id)} AND state='pending' AND next_attempt_at<=now()
+              AND reason IS DISTINCT FROM 'automatic_sources_pending'
+              AND COALESCE(reason,'') NOT LIKE 'automatic_prepare_retry:%'
             FOR UPDATE SKIP LOCKED`;
           if (stopped() || !locked) return;
           const active = await tx`SELECT 1 FROM project_knowledge_work
@@ -414,7 +418,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     await claimPending(stopped);
     if (stopped()) return 0;
     const rows = await db`SELECT id FROM project_knowledge_work WHERE state='running'
-      ORDER BY updated_at,id LIMIT 16`;
+      ORDER BY (active_job_id IS NULL) DESC,updated_at,id LIMIT 16`;
     let progressed = 0;
     for (const row of rows) {
       if (stopped()) break;

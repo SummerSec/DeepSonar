@@ -1,6 +1,6 @@
 # 项目 Memory 与 Skill
 
-> 状态：#752 实现；同步日期：2026-11-07（#960 候选 CAS 保留根；既有拒绝反馈边界不变）。代码、[schema 基线](../database/schema.sql)和测试是事实入口。模型效果与生产试验结果需要独立记录，不能由状态机夹具推定。
+> 状态：#752 实现；同步日期：2026-11-09（新增成功业务 Job 自动登记和历史补做；本次最终 SHA Actions 待验）。代码、[schema 基线](../database/schema.sql)和测试是事实入口。模型效果与生产试验结果需要独立记录，不能由状态机夹具推定。
 
 项目知识分为 Memory（有来源的简短事实）和 Skill（触发条件、步骤、输入输出、不适用边界）。两者有稳定身份、不可变版本和 active 指针。草稿、候选和评测资料不进入普通 Job 目录。
 
@@ -53,6 +53,24 @@ project、Job、Attempt、actor 和 assignment 均由平台推导，不接受请
 本切片不改变鉴权、lease/Attempt fencing、预算、幂等或未知效果门；跨 Attempt 新执行代际、Recovery Hub ownership、完成门和 Web 恢复投影仍属 #903 后续范围。
 
 ## 工作与结算
+
+### 成功任务自动登记与历史补做
+
+普通业务 Job 和最新 Attempt 成功结算后，Scheduler 在终态事务内以独立 savepoint 登记知识 work，不再仅依赖 Agent 主动请求。来源必须具有冻结的 `request_project_knowledge` 权限，项目仍有效且没有未结算的 `effect_pending` / `unknown` 效果；Hub、Report、知识治理及 trial Job 排除，避免递归。登记失败保留脱敏日志，不回滚业务结果。固定来源 Job trigger key 与已有来源 work 检查保证重复回调和补做不重置预算。
+
+Agent 请求与自动登记创建 work 时在同一事务通知现有 Dispatcher 通道；延迟重试及有界批次剩余项使用已有单一 schedule wake timer，重启从持久 next_attempt_at 重新装载，不依赖轮询。登记只写待准备 work。Dispatcher 先在短事务外读取和校验该来源 Job 自己的 Fact/Evidence，最多20项，每项遵守12KiB上限，并复用其冻结治理方法；之后按 Canvas → Job → work 顺序复核、登记 CAS 元数据并冻结 manifest。待准备 work 不可被 maker 领取。没有可用来源时保留 `completed` 的无操作记录及明确跳过 reason，不产生模型 Job；权限、完整性、未知效果等拒绝保留阻塞原因。Fact 的原验证状态保留，成功 Job 不会把未验证观察变成事实或已验证 Skill。
+
+管理入口 `GET /projects/:id/knowledge/backfill` 分页预览历史 Job 资格、已有 work 和不可执行原因，不读原始会话或写入。`POST` 同路径要求 `projects:write`、精确且不重复的最多5个 `job_ids` 与原因，通过同一登记函数补做；批次含跨项目/不存在来源时整批拒绝。它不恢复旧 token、不改历史快照或 Attempt、不重新执行业务任务、不直接激活候选。现有工作链的独立评测、审查和累计预算继续生效。
+
+已有 work 的预览包含当前 state、stage、reason、累计 Job 数和更新时间，候选尚未产生时也可定位等待、跳过或阻塞。
+
+| 行为 | 注意力成本 | 约束 |
+| --- | --- | --- |
+| 成功任务自动登记 | 不逐任务索取确认，不新增通知；可能增加模型执行 | 沿用项目调度与知识累计预算；无来源不启动模型 |
+| 无来源或治理拒绝 | 操作者按需查询原因 | 保留现有 work 状态和明确 reason，不伪装已新增知识 |
+| 历史批量补做 | 一次查看一页，再提交精确来源 | 只读预览最多20项，写入最多5个 Job，重复不重置预算 |
+
+新行为的数据库与管理权限回归接入既有 `ci:integration:project-knowledge`，完整路由和 scope 回归仍由常规门禁执行。没有相应最终 SHA Actions 或真实 work/Job/version 证据时，不宣称运行平台已启用、历史补做已完成或知识已激活。
 
 `project_knowledge_work` 保存触发去重、stage、generation、当前 Job 和累计预算。Scheduler 为 work 创建独立标准 Canvas；maker、每个 case×arm trial、evaluator、reviewer 都是既有角色的普通 Job，使用现有 Dispatcher、Attempt、沙箱、Model Gateway、归档和终态恢复路径。知识 Job 的终态不触发业务 Hub/Report。
 

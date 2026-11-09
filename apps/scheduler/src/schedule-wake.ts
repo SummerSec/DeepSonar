@@ -8,6 +8,7 @@
 
 import { sql } from "./db.js";
 import { readScheduleStartAt } from "./task-schedule.js";
+import { readNextKnowledgeWake } from "./knowledge-wake.js";
 
 /** Node timers saturate around 2^31-1 ms; clamp and re-arm from DB. */
 const MAX_TIMER_MS = 2_147_483_647;
@@ -52,7 +53,7 @@ export function clearScheduleWake(): void {
   clearArmedTimer();
 }
 
-/** Scan pending jobs and arm the nearest future canvas schedule. */
+/** Scan pending task and knowledge schedules and arm their nearest durable deadline. */
 export async function refreshScheduleWakeFromDb(): Promise<void> {
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
@@ -76,6 +77,12 @@ export async function refreshScheduleWakeFromDb(): Promise<void> {
           continue;
         }
         if (nearest == null || ms < nearest) nearest = ms;
+      }
+      const knowledgeWake = await readNextKnowledgeWake(sql);
+      if (knowledgeWake) {
+        const ms = knowledgeWake.getTime();
+        if (ms <= now) fireKick();
+        else if (nearest == null || ms < nearest) nearest = ms;
       }
       if (nearest != null) armTimer(nearest);
       else clearArmedTimer();

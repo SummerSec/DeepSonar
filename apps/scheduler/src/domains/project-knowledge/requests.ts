@@ -19,7 +19,10 @@ export async function enqueueKnowledgeWork(tx: KnowledgeDb, input: {
   const [created] = await tx`INSERT INTO project_knowledge_work(project_id,origin_job_id,canvas_id,trigger_key,input_manifest_json,governance_hash,reason)
     VALUES(${input.actor.projectId},${input.actor.jobId},${input.actor.canvasId},${triggerKey},${tx.json(manifest as never)},${input.governanceHash},${input.reason})
     ON CONFLICT(project_id,trigger_key) DO NOTHING RETURNING id`;
-  if (created) return String(created.id);
+  if (created) {
+    await tx`SELECT pg_notify('deepsonar_jobs','knowledge_work')`;
+    return String(created.id);
+  }
   const [existing] = await tx`SELECT id FROM project_knowledge_work WHERE project_id=${input.actor.projectId} AND trigger_key=${triggerKey}`;
   if (!existing) return reject("KNOWLEDGE_CONFLICT", "Knowledge work trigger could not be resolved");
   return String(existing.id);

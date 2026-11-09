@@ -135,6 +135,8 @@ Control operation 分为两类：能力发现、graph 查询和 Skill 拉取返�
 
 ## 项目知识接口（#752 分支）
 
+`GET /projects/:id/knowledge/backfill` 提供最多20项的分页只读预览；同路径 `POST` 要求 `projects:write`、最多5个唯一 Job ID 与原因，整批核验项目归属后幂等登记已有知识 work。已有链原样返回，不重置预算；接口不恢复历史 token 或激活候选。
+
 Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、版本、work、评测、usage/feedback、receipt 查询，以及来源项目管理者的精确 Skill 授权和不可逆撤销；grant 入口还要校验该版本已经审批，不能以授权激活 candidate。Job-scoped Control 增加知识搜索/读取、请求整理、提案、评测、审查和反馈；平台推导 project、Job、Attempt 与 stage，不接受调用方自报身份。只读输入受冻结 manifest、audience 和当前权限约束；mutation 经 shared schema、宿主和领域事务校验，返回 `accepted`、operation、`receipt_ref`，同 Job 同 key 同输入返回持久结果，同 key 异输入冲突。当前 Job 可用 `get_knowledge_receipt`，终态历史由项目管理入口查询。接口字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 与[项目知识专题](../PROJECT_KNOWLEDGE.md)；领域 receipt 不等于全平台通用回执。
 
 ## Gateway、流和导入接口
