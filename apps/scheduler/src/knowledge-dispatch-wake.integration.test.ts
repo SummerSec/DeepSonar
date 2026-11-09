@@ -28,7 +28,8 @@ test("knowledge ticks do not kick overdue ordinary jobs back into a paused Dispa
       ${sql.json({ schedule: { start_at: "2020-01-01T00:00:00.000Z", timezone: "Asia/Shanghai", preset: "custom" } })})`;
     await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
       VALUES(${jobId},${projectId},${canvasId},'audit','pending','{}')`;
-    await sql`UPDATE global_settings SET claims_paused=true,claims_pause_reason='maintenance' WHERE id='global'`;
+    await sql`UPDATE global_settings SET claims_paused=true,claims_pause_reason='maintenance',
+      claims_paused_by='fixture',claims_paused_at=clock_timestamp() WHERE id='global'`;
     let ticks = 0, selfKicks = 0;
     let observed!: () => void;
     const firstTick = new Promise<void>(resolve => { observed = resolve; });
