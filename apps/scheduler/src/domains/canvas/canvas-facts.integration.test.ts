@@ -183,8 +183,8 @@ if (!testDatabaseUrl) {
       assert.equal(firstPage.items[1].usage.report_quantity_gate, true, "verified declared quantities participate in report numeric fidelity");
       assert.deepEqual(firstPage.items[1].usage.used_by_finding_ids, [high.findingId]);
       assert.deepEqual(Object.keys(firstPage.items[1]).sort(), [
-        "canvas_id", "created_at", "description", "finding", "id", "job", "job_id", "title", "usage",
-        "updated_at", "verification", "verification_status",
+        "canvas_id", "created_at", "description", "finding", "id", "job", "job_id", "title", "updated_at",
+        "usage", "verification", "verification_status",
       ]);
 
       const lateFactId = randomUUID();
