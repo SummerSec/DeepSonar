@@ -33,7 +33,8 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
     const statusFilter =
       q.status === "all" ? null : q.status === "archived" ? "archived" : "active";
     const rows = await sql`
-      SELECT c.id, c.title, c.target_json, c.created_at,
+      SELECT c.id, c.title, c.target_json,
+        (SELECT qi.state FROM project_task_queue_items qi WHERE qi.canvas_id = c.id AND qi.project_id = c.project_id) AS queue_state, c.created_at,
         c.status, c.archived_at,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
@@ -81,6 +82,7 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
     // pending and waiting_human Jobs) is gone.
     const [canvas] = await sql`
       SELECT c.*,
+        (SELECT qi.state FROM project_task_queue_items qi WHERE qi.canvas_id = c.id AND qi.project_id = c.project_id) AS queue_state,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id) AS job_count,
         (SELECT COUNT(*)::int FROM jobs j WHERE j.canvas_id = c.id
            AND j.status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_count,
@@ -128,7 +130,8 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
       // this same row lock before advancing change_revision, so the returned
       // upper revision and nodes/edges are one consistent snapshot.
       const [canvas] = await tx`
-        SELECT c.id, c.title, c.target_json, c.project_id, c.created_at, c.status, c.archived_at,
+        SELECT c.id, c.title, c.target_json,
+        (SELECT qi.state FROM project_task_queue_items qi WHERE qi.canvas_id = c.id AND qi.project_id = c.project_id) AS queue_state, c.project_id, c.created_at, c.status, c.archived_at,
           c.change_revision, c.change_floor_revision,
           (SELECT n.status FROM canvas_nodes n
            WHERE n.canvas_id = c.id AND n.node_type = 'root'

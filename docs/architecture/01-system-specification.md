@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -28,6 +28,14 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **实现状态**：as-built；任务入口通过 Scheduler 创建 `hub_reason` Job，Hub 角色不存在时 readiness/准入会拒绝。
 - **代码入口**：[任务编排](../../apps/scheduler/src/task-compose.ts)、[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/)、[设计摘要](../../DESIGN.md)。
 - **验证证据**：`pnpm ci:unit:task-intent`、`pnpm ci:integration:task-intent`、`pnpm ci:smoke:hub`；人工核对新任务首个 Job 类型和不可绕过 Hub 的拒绝路径。
+
+### FR-TASK-008 项目任务串行队列
+
+- **规范要求**：用户可将任务加入项目 FIFO 队列，同队列最多一个任务占据执行位置。前驱完整收敛且无活动 Job 或未结清效果时才可启动下一任务。当前任务内部 Job 仍使用既有并发与权限；失败/取消需明确确认具体队首后继续，未知效果、人工等待与任务暂停保留占位。
+- **决策来源**：#1018 减少逐个观察并手动启动任务的操作；项目单队列和失败暂停为本次实施默认值。
+- **实现状态**：schema 71 持久队列与全局 claim 锁接线；创建时原子入队、重启读取和任务页控制已实现，最终候选 Actions 待验。治理恢复后完整成功按成功策略推进，旧成功不能代表新重试完成。
+- **代码入口**：[队列存储](../../apps/scheduler/src/domains/project-task/task-queue-store.ts)、[队列路由](../../apps/scheduler/src/domains/project-task/task-queue-routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[基线](../../database/schema.sql)。
+- **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:web-facts`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:migrations`。场景与边界见[项目任务队列](../PROJECT_TASK_QUEUE.md)。
 
 ### FR-TASK-005 更新任务意图与冻结运行
 

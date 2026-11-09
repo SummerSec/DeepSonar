@@ -164,6 +164,7 @@ import { bindScheduleWake, unbindScheduleWake, refreshScheduleWakeFromDb } from 
 import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
 import { canvasExecutionIsPaused } from "./task-execution-control.js";
 import { readPlatformClaimsControl } from "./domains/platform-claims/store.js";
+import { canClaimQueuedTask, markQueuedTaskClaimed, reconcileProjectTaskQueues } from "./domains/project-task/task-queue-store.js";
 import { hostDiskAllowsDispatch, refreshHostDiskPressure } from "./host-disk.js";
 import { openSandboxAllowsDispatch, refreshOpenSandboxServerStatus } from "./opensandbox-health.js";
 import {
@@ -712,6 +713,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       return stop;
     }
     platformClaimsPauseLogged = null;
+    await reconcileProjectTaskQueues(tx as unknown as typeof sql);
     const lifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
     // global_settings is the scheduler-wide hard cap; per-project
     // maxConcurrentJobs may only tighten maxJobsPerProject at claim time.
@@ -806,8 +808,10 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       // Re-check scope, pause/schedule, graph and quotas from locked rows before CAS.
       if (claimed.length >= slots) break;
       if (!(await eligible(job, graphBatch))) continue;
+      if (job.canvas_id && !await canClaimQueuedTask(tx as unknown as typeof sql, String(job.project_id), job.canvas_id)) continue;
       const row = await lifecycle.claimPendingJob(job.id);
       if (!row) continue;
+      if (job.canvas_id) await markQueuedTaskClaimed(tx as unknown as typeof sql, String(job.project_id), job.canvas_id);
       await createOrGetActiveAttempt(
         tx as unknown as typeof sql, job.id, attemptSnapshotIdentity(job.agent_snapshot_json), { "deepsonar.job": job.id },
       );

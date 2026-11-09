@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -262,3 +262,7 @@ Model Gateway 支持原始方法/相对路径/query、未知端到端头及原�
 #903 的当前 `execution_state` 与历史回执分离、恢复代际及 HTTP 分类见 [生命周期契约](../AGENT_REPAIR_LIFECYCLE.md)。
 
 Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_configuration_invalid`，`retryable=false`，RepairFeedback 为 `permanent_failure`；`expected` 保留受控 reason 与 `platform_administrator` owner，下一步要求平台修复后重新准入，不授予 Agent 扩额或自动重试权。仅映射已知配额异常；其他 DB、schema、resolver 错误不降级为确定无效果。
+
+## 项目任务队列管理（#1018）
+
+创建任务可用 enqueue 原子入队。GET /projects/{id}/task-queue 使用 tasks:read，PATCH 同路径和 POST /projects/{id}/task-queue/items 使用 jobs:control，并校验项目范围。新控制 body 严格拒绝未知字段。失败/取消后恢复必须提交 acknowledge_failed_head 指向明确确认的当前条目，过期身份或未知效果返回稳定 409。队列、Canvas 与 Job 读取为有界诊断，详细字段见 OpenAPI 与[队列专题](../PROJECT_TASK_QUEUE.md)。

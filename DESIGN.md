@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
@@ -429,6 +429,8 @@ v0.6.3 集成核对（2026-11-01）：[#831](https://github.com/SummerSec/DeepSo
 9. **发版前必须做文档保鲜（硬门）**：改 `CHANGELOG.md` / 打 `v*` tag / 建 release 之前，按 [`AGENTS.md`](AGENTS.md) 的「发布前的文档保鲜」清单核一遍——版本字面量、本版已删机制的全仓残留、与代码相反的 as-built 段落、状态索引、命令与链接、**可变数字是否带核对基线**；未通过不得发版，漂移修在同一个 release 分支。可变数字包括 env 默认值、阈值、上限和超时；要么写 `main <sha>` / `YYYY-MM-DD`，要么链接到权威文档（如 [`docs/USAGE_LIMITS.md`](docs/USAGE_LIMITS.md)）而不复述。展开见[工程规范](docs/architecture/11-engineering-specs.md)与[发布流程](docs/RELEASE_RUNTIME_IMAGES.md)。
 
 ## 14. 仓库地图与事实入口
+
+项目提供可选持久 FIFO 任务队列（#1018，schema 71）。完整任务按统一 claim 锁串行取得执行资格，当前任务内部 Job 继续按既有预算和并发执行。等待人工、任务暂停和未决效果保留占位，失败/取消的继续需要确认当前队首身份；治理恢复后完整成功按成功策略推进。队列暂停只阻止后续任务，重试重新排尾。任务页集中显示占位、顺序和原因，减少手动观察并逐个启动的操作。实现与最终 Actions 验收分开记录，详见[项目任务队列](docs/PROJECT_TASK_QUEUE.md)。
 
 | 路径 | 职责 |
 | --- | --- |

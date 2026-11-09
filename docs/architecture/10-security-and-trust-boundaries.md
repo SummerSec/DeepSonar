@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -167,3 +167,7 @@ FR-FIND-008 只信任经过权限校验的操作员材料准入和独立评审�
 `/gateway/_allowance` 向当前有效 token/Attempt 的自身 workload 提供预算交集提示；main 与后台不互读额度。只读无预留、不消耗模型请求配额；pending/unknown 拒绝，最终请求仍锁内重新准入。沙箱生成适配器只持 Job token，不授予绕过预算/模型/目标的能力。
 
 quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/gateway_admission` 确认 not_started；回执有 kernel authority、完整 scope、UUID 去重与事件限流，写入失败保持 unknown。Provider 原文不能替代回执。
+
+## 队列资格与原执行权限（#1018）
+
+任务队列由 Scheduler 持有，模型/插件没有队列控制 operation。入队、暂停、明确继续和 claim 共用事务锁，不能扩大项目、凭据、镜像、网络、预算或 Attempt 身份。当前任务未知效果保留位置，继续队列不构成效果重放或结算授权。失败恢复绑定操作员确认的队首 ID，旧页面不能跳过新失败。队列诊断读取与控制分别依赖 tasks:read 和 jobs:control。

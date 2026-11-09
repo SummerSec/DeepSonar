@@ -37,6 +37,7 @@ export function TaskList({
         <div className="flex flex-col gap-1.5">
           {canvases.map((c) => {
             const lifecycle = deriveTaskLifecycle({
+              queueState: c.queue_state,
               status: c.status,
               activeCount: c.active_count,
               jobCount: c.job_count,

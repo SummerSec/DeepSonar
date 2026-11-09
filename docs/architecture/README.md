@@ -1,7 +1,7 @@
 # DeepSonar 系统架构设计
 
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
 面向内部开发者和编码 Agent。先读 [DESIGN](../../DESIGN.md) 摘要，再按需求或主题定位；本目录不改变产品行为。需求组织参考 ISO/IEC/IEEE 29148，视图借鉴 arc42 / C4，关注点分离参考 ISO/IEC/IEEE 42010；这不是标准符合性认证。
@@ -131,3 +131,5 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 #778 当前 Job 的条件建议与选择回执已同步 FR-CAP-003 / FR-CAP-008、构件/接口/数据/安全视图；[专题](../SKILL_SUGGESTIONS.md)列出非模型验收矩阵及未评估的效果、平台源和 Pack 范围。
 
 2026-11-01 集成证据：[#831](https://github.com/SummerSec/DeepSonar/pull/831) 在最终 PR 检查全绿后合并至 `fdb55a01b1e02b5b9078586923a8d506ce5bb096`；该主线的六个适用 Actions 工作流全绿，包含真实 schema67 重建和备份恢复，本轮工程 issue 已收口。较早 schema66/SDK-only 和本地记录只作历史，不能覆盖后续修复。OpenHarmony Fuzz 在正式 Release 的新构建失败，当前修复映射 FR-IMG-001/002、07 部署视图及既有 ADR 0006，增加匹配工具链与 fresh/reuse 双原生架构行为证据；[发布专题](<../RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)区分有限诊断、最终修复 SHA 验收和正式发行。v0.6.3 尚未正式发布，v0.6.2 保持不可变；独立质量、Host 证书/晋升/公开强关系建议按本轮决定暂缓，不把工程全绿写成质量通过。
+
+#1018 的[项目任务队列](../PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 71 与验收边界，最终 SHA Actions 待验。

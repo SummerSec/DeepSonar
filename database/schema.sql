@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 70);
+INSERT INTO schema_meta (id, version) VALUES ('global', 71);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -47,6 +47,7 @@ CREATE TABLE canvases (
   -- cursor is below this floor must refetch the L0 summary.
   change_floor_revision bigint NOT NULL DEFAULT 0,
   CONSTRAINT canvases_status_check CHECK (status IN ('active', 'archived')),
+  CONSTRAINT canvases_project_id_id_uniq UNIQUE (project_id, id),
   CONSTRAINT canvases_change_revision_check CHECK (change_revision >= 0),
   CONSTRAINT canvases_change_floor_check CHECK (change_floor_revision >= 0 AND change_floor_revision <= change_revision)
 );
@@ -54,6 +55,30 @@ CREATE UNIQUE INDEX canvases_trigger_uniq
   ON canvases (project_id, trigger_source, trigger_event_id)
   WHERE trigger_event_id IS NOT NULL;
 CREATE INDEX canvases_project_idx ON canvases (project_id, status, created_at DESC);
+
+CREATE TABLE project_task_queues (
+  project_id uuid PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  paused boolean NOT NULL DEFAULT false,
+  pause_reason text,
+  reconciled_at timestamptz NOT NULL DEFAULT now(),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE project_task_queue_items (
+  id bigserial PRIMARY KEY,
+  project_id uuid NOT NULL REFERENCES project_task_queues(project_id) ON DELETE CASCADE,
+  canvas_id text NOT NULL UNIQUE,
+  state text NOT NULL DEFAULT 'queued',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  started_at timestamptz,
+  ended_at timestamptz,
+  CONSTRAINT project_task_queue_canvas_fk FOREIGN KEY (project_id, canvas_id)
+    REFERENCES canvases(project_id, id) ON DELETE CASCADE,
+  CONSTRAINT project_task_queue_state_check CHECK (state IN ('queued', 'active', 'succeeded', 'failed', 'cancelled'))
+);
+CREATE UNIQUE INDEX project_task_queue_active_uniq ON project_task_queue_items(project_id) WHERE state = 'active';
+CREATE INDEX project_task_queue_order_idx ON project_task_queue_items(project_id, state, id);
 
 CREATE TABLE jobs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
