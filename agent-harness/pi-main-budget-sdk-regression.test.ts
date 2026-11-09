@@ -49,7 +49,8 @@ async function fixture(compat: Record<string, unknown> = {}) {
     reasoning: true, input: ["text"], maxTokens: 8192, contextWindow: 1000000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat };
   let start: any, wrapped: any;
-  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base + "/gateway", DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" })({
+  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base + "/gateway", DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token",
+    DEEPSONAR_API_TOKEN: "synthetic-control-token", DEEPSONAR_OM_GATEWAY_TOKEN: "synthetic-om-token" })({
     on(name: string, handler: any) { assert.equal(name, "session_start"); start = handler; },
     registerProvider(_name: string, config: any) { wrapped = config.streamSimple; },
   });
@@ -63,6 +64,20 @@ async function fixture(compat: Record<string, unknown> = {}) {
     async close() { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
   };
 }
+
+test("#1032 locked pi-ai sends a credential-free context while preserving request authentication", async () => {
+  const f = await fixture();
+  try {
+    const context = { messages: [{ role: "user", content: 'tool error: synthetic-control-token; auth.json {"key":"synthetic-main-token","om":"synthetic-om-token"}; 界🙂', timestamp: 1 }] };
+    const before = structuredClone(context);
+    assert.equal((await f.request({}, context)).at(-1).type, "done");
+    assert.equal(f.bodies.length, 1);
+    assert.doesNotMatch(JSON.stringify(f.bodies[0]), /synthetic-(?:main|control|om)-token/u);
+    assert.match(JSON.stringify(f.bodies[0]), /\[REDACTED\]/u);
+    assert.match(JSON.stringify(f.bodies[0]), /界🙂/u);
+    assert.deepEqual(context, before);
+  } finally { await f.close(); }
+});
 
 test("real pi-ai 1.4.0 nonadaptive thinking refuses insufficient allowance and context before HTTP", async () => {
   const f = await fixture();

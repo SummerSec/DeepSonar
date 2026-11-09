@@ -7,7 +7,9 @@ import {
 
 // Binds the image-owned wrapper to the allowance/request-id/settlement contract.
 // Kept in sync with agent-harness/pi-observational-memory-governed.ts by regression.
-export const PI_MEMORY_GOVERNED_WRAPPER_SHA256 = "a1facb1ceb9d6b985443cd6bd5c534607638e5973fdfdedb8a4485c659a92761";
+export const PI_MEMORY_GOVERNED_WRAPPER_SHA256 = "424fa2e2f5349b12dc58d45bbe31a33897deccc2ad625b6eb19848415a6d9541";
+// OM imports this image-owned SDK context policy; bind its bytes as well as the wrapper.
+export const PI_MEMORY_CONTEXT_POLICY_SHA256 = "5d784200649bed71080d2c0a0b9c9314726fcbebedbf654e4ef29271f60f5163";
 
 /** Runs inside the selected image before Pi can receive a prompt. */
 export const PI_MEMORY_IMAGE_GUARD_SOURCE = `
@@ -29,6 +31,10 @@ try {
   const wrapper = fs.readFileSync(${JSON.stringify(PI_OBSERVATIONAL_MEMORY_WRAPPER_PATH)});
   if (createHash("sha256").update(wrapper).digest("hex") !== ${JSON.stringify(PI_MEMORY_GOVERNED_WRAPPER_SHA256)}) {
     throw new Error("governed wrapper contract mismatch");
+  }
+  const contextPolicy = fs.readFileSync("/opt/deepsonar/request-budget-source/pi-main-request-budget.ts");
+  if (createHash("sha256").update(contextPolicy).digest("hex") !== ${JSON.stringify(PI_MEMORY_CONTEXT_POLICY_SHA256)}) {
+    throw new Error("model context policy mismatch");
   }
   process.stdout.write("PI_OM_RUNTIME_IMAGE_READY\\n");
 } catch {

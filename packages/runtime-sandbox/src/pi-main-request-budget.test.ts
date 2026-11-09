@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
+import { PI_MAIN_REQUEST_BUDGET_SOURCE, redactPiContextSecrets } from "./pi-main-request-budget.js";
 
 // This is an SDK-boundary double, not evidence of a real Pi process or provider run.
 const streamDouble = `
@@ -45,7 +45,8 @@ async function fixture(api = "openai-completions", delegateFailure?: Error) {
   const pi = { on: (event: string, handler: (...args: any[]) => unknown) => hooks.set(event, handler),
     registerProvider: (provider: string, config: any) => registrations.push({ provider, config }) };
   const ctx = { model, modelRegistry: { getRegisteredProviderConfig: () => registrations.at(-1)?.config } };
-  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: url, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
+  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: url, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token",
+    DEEPSONAR_API_TOKEN: "synthetic-control-token", DEEPSONAR_OM_GATEWAY_TOKEN: "synthetic-om-token" },
     async function* (selected: any, context: any, options: any) {
       delegates.push({ model: selected, context, options });
       if (delegateFailure) throw delegateFailure;
@@ -54,9 +55,9 @@ async function fixture(api = "openai-completions", delegateFailure?: Error) {
   hooks.get("session_start")!({}, ctx);
   return { module, hooks, registrations, ctx, model, delegates, queries, replies,
     allowance(value: number | null, policy = true) { remaining = value; required = policy; },
-    async request(options: any = {}, selected = model) {
+    async request(options: any = {}, selected = model, context: any = { messages: [] }) {
       const events = [];
-      for await (const event of registrations.at(-1)!.config.streamSimple(selected, { messages: [] }, options)) events.push(event);
+      for await (const event of registrations.at(-1)!.config.streamSimple(selected, context, options)) events.push(event);
       return events;
     },
     async close() { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
@@ -92,6 +93,45 @@ test("Pi public provider override negotiates every main SDK request before HTTP 
     f.hooks.get("session_start")!({}, f.ctx);
     assert.equal(f.registrations.at(-1)!.config.streamSimple, registered, "session start does not stack wrappers");
   } finally { await f.close(); }
+});
+
+test("#1032 exact replacement preserves shape, Unicode, non-secrets and overlapping token suffixes", () => {
+  const input = { content: "界🙂 key.prefix.long key.prefix key.prefix.long", null: null, bool: true, n: 1,
+    nested: [{ error: 'quoted "key.prefix.long"', ordinary: "token-like-but-not-a-secret" }] };
+  assert.deepEqual(redactPiContextSecrets(input, ["", "key.prefix", "key.prefix.long"]), {
+    ...input, content: "界🙂 [REDACTED] [REDACTED] [REDACTED]",
+    nested: [{ error: 'quoted "[REDACTED]"', ordinary: "token-like-but-not-a-secret" }],
+  });
+  assert.equal(input.nested[0]!.error, 'quoted "key.prefix.long"');
+  assert.deepEqual(redactPiContextSecrets(input, []), input);
+});
+
+test("#1032 main SDK context redacts env, auth-file, tool errors and memory without changing auth or history", async () => {
+  for (const api of ["anthropic-messages", "openai-completions", "openai-responses"]) {
+    const f = await fixture(api);
+    try {
+      const context = { systemPrompt: "ordinary instruction", messages: [
+        { role: "toolResult", toolCallId: "env-read", toolName: "bash", isError: false, content: [{ type: "text",
+          text: "DEEPSONAR_GATEWAY_TOKEN=synthetic-main-token\nDEEPSONAR_API_TOKEN=synthetic-control-token" }] },
+        { role: "toolResult", toolCallId: "auth-read", toolName: "read", isError: true, content: [{ type: "text",
+          text: '{"key":"synthetic-main-token","background":{"key":"synthetic-om-token"}}' }] },
+        { role: "user", content: "memory included synthetic-control-token; ordinary text 界🙂" },
+      ] };
+      const before = structuredClone(context);
+      for (const policy of [true, false]) {
+        f.allowance(null, policy);
+        assert.equal((await f.request({}, f.model, context)).at(-1).type, "done");
+        const call = f.delegates.at(-1)!;
+        assert.doesNotMatch(JSON.stringify(call.context), /synthetic-(?:main|control|om)-token/u);
+        assert.match(JSON.stringify(call.context), /\[REDACTED\]/u);
+        assert.match(JSON.stringify(call.context), /ordinary text 界🙂/u);
+        assert.equal(call.context.messages[1].isError, true);
+        assert.equal(call.context.messages[1].toolCallId, "auth-read");
+        assert.equal(call.options.apiKey, "synthetic-main-token");
+        assert.deepEqual(context, before, "projection must not rewrite accepted session history");
+      }
+    } finally { await f.close(); }
+  }
 });
 
 test("pending settlement polls only allowance; unknown usage and mismatched identities invoke no SDK request", async () => {

@@ -1,5 +1,23 @@
 export const PI_MAIN_REQUEST_BUDGET_PATH = "/workspace/.deepsonar-home/.pi/agent/extensions/deepsonar-main-request-budget.mjs";
 
+/** SDK context projection only; never mutate stored history or authentication options.
+ * Kept self-contained so the runtime-generated main extension and image OM use the same code.
+ */
+export function redactPiContextSecrets<T>(value: T, secrets: readonly string[]): T {
+  if (typeof value === "string") {
+    let text: string = value;
+    for (const secret of [...secrets].sort((a, b) => b.length - a.length)) {
+      if (secret) text = text.split(secret).join("[REDACTED]");
+    }
+    return text as T;
+  }
+  if (Array.isArray(value)) return value.map(entry => redactPiContextSecrets(entry, secrets)) as T;
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, redactPiContextSecrets(entry, secrets)])) as T;
+  }
+  return value;
+}
+
 /** Shared by SDK request generators; these fields are the pinned SDK's actual branches. */
 export const PI_ANTHROPIC_THINKING_POLICY_SOURCE = String.raw`
 export function assertPiAnthropicThinkingBudget(model, options, effectiveMaxTokens) {
@@ -24,6 +42,8 @@ import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
 ${PI_ANTHROPIC_THINKING_POLICY_SOURCE}
+
+${redactPiContextSecrets.toString()}
 
 // Resolve the SDK's declared public export from the fixed, lockfile-installed runtime.
 // createRequire.resolve cannot resolve this package's import-only export conditions.
@@ -121,6 +141,8 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
   const gateway = endpoint(env.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
   const token = env.DEEPSONAR_GATEWAY_TOKEN;
   if (typeof token !== 'string' || !token) fail('PI_MAIN_BUDGET_TOKEN_MISSING');
+  const secrets = [token, env.DEEPSONAR_API_TOKEN, env.DEEPSONAR_OM_GATEWAY_TOKEN]
+    .filter(value => typeof value === 'string' && value.length > 0);
   return function install(pi) {
     let identity;
     let registered;
@@ -139,6 +161,7 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
             if (requestedModel.provider !== identity.provider || requestedModel.id !== identity.id
               || requestedModel.api !== identity.api || endpoint(requestedModel.baseUrl) !== identity.baseUrl) fail('PI_MAIN_BUDGET_MODEL_CHANGED');
             if (options?.apiKey !== undefined && options.apiKey !== token) fail('PI_MAIN_BUDGET_AUTH_MISMATCH');
+            const safeContext = redactPiContextSecrets(context, secrets);
             let retryOf;
             // Local loop bound is not a grant: admission enforces the original
             // frozen Job-wide cap across requests, tokens and Attempts.
@@ -149,7 +172,7 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
                 && requestedModel.compat?.forceAdaptiveThinking !== true && requestedModel.compat?.supportsMidConvoEffort !== true) {
                 contextClamp ??= loadPiContextClamp();
                 const clamp = await contextClamp;
-                assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamp(prepared.model, context, prepared.options.maxTokens));
+                assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamp(prepared.model, safeContext, prepared.options.maxTokens));
               }
               const requestId = randomUUID();
               const headers = Object.fromEntries(Object.entries(prepared.options?.headers ?? {})
@@ -157,7 +180,7 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
               headers['x-deepsonar-request-id'] = requestId;
               if (retryOf) headers['x-deepsonar-retry-of'] = retryOf;
               let failure, pendingStart, visible = false;
-              for await (const event of delegate(prepared.model, context,
+              for await (const event of delegate(prepared.model, safeContext,
                 { ...prepared.options, headers, maxRetries: 0, apiKey: token })) {
                 if (event.type === 'error') {
                   if (event.error?.content?.length) visible = true;

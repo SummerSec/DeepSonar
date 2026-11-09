@@ -13,13 +13,15 @@ import {
   PiObservationalMemoryTextRedactor,
 } from "./pi-observational-memory.js";
 import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
-import { PI_MEMORY_GOVERNED_WRAPPER_SHA256, PI_MEMORY_IMAGE_GUARD_SOURCE } from "./pi-memory-image-guard.js";
+import { PI_MEMORY_GOVERNED_WRAPPER_SHA256, PI_MEMORY_CONTEXT_POLICY_SHA256, PI_MEMORY_IMAGE_GUARD_SOURCE } from "./pi-memory-image-guard.js";
 
 test("OM image guard requires the current governed wrapper, not only a nonempty file", () => {
   const source = readFileSync(new URL("../../../agent-harness/pi-observational-memory-governed.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.equal(createHash("sha256").update(source).digest("hex"), PI_MEMORY_GOVERNED_WRAPPER_SHA256,
     "a changed wrapper requires an explicit runtime contract update");
-  const check = (wrapper: string) => {
+  const contextPolicy = readFileSync(new URL("./pi-main-request-budget.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  assert.equal(createHash("sha256").update(contextPolicy).digest("hex"), PI_MEMORY_CONTEXT_POLICY_SHA256);
+  const check = (wrapper: string, policy = contextPolicy) => {
     const output = { exitCode: 0, stderr: "", stdout: "" };
     runInNewContext(PI_MEMORY_IMAGE_GUARD_SOURCE, {
       require: (name: string) => {
@@ -29,7 +31,7 @@ test("OM image guard requires the current governed wrapper, not only a nonempty 
           statSync: () => ({ isFile: () => true, size: 100 }),
           readFileSync: (file: string) => file.endsWith("/package.json")
             ? JSON.stringify({ name: "pi-observational-memory", version: "3.1.4", license: "MIT", pi: { extensions: ["./src/index.ts"] } })
-            : wrapper,
+            : file.endsWith("/pi-main-request-budget.ts") ? policy : wrapper,
         };
       },
       process: { stdout: { write: (value: string) => { output.stdout += value; } },
@@ -39,6 +41,9 @@ test("OM image guard requires the current governed wrapper, not only a nonempty 
     return output;
   };
   assert.deepEqual(check(source), { exitCode: 0, stdout: "PI_OM_RUNTIME_IMAGE_READY\n", stderr: "" });
+  for (const policy of ["", contextPolicy + "\n", "old nonempty policy"]) {
+    assert.deepEqual(check(source, policy), { exitCode: 78, stdout: "", stderr: "PI_OM_RUNTIME_IMAGE_CONTENT_INVALID\n" });
+  }
   for (const wrapper of ["old nonempty wrapper without request correlation", source + "\n", ""]) {
     assert.deepEqual(check(wrapper), { exitCode: 78, stdout: "", stderr: "PI_OM_RUNTIME_IMAGE_CONTENT_INVALID\n" });
   }
@@ -227,7 +232,12 @@ async function wrapperFixture(error?: string, receipt: Record<string, unknown> =
   const { createGovernedObservationalMemoryExtension: create, config } = await loaded.loadGovernedBoundary();
   const root = mkdtempSync(path.join(tmpdir(), "om-wrapper-unit-"));
   const oldEnv = { TEMP: process.env.TEMP, TMPDIR: process.env.TMPDIR, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
-    PI_OBSERVATIONAL_MEMORY_PASSIVE: process.env.PI_OBSERVATIONAL_MEMORY_PASSIVE };
+    PI_OBSERVATIONAL_MEMORY_PASSIVE: process.env.PI_OBSERVATIONAL_MEMORY_PASSIVE,
+    DEEPSONAR_GATEWAY_TOKEN: process.env.DEEPSONAR_GATEWAY_TOKEN,
+    DEEPSONAR_API_TOKEN: process.env.DEEPSONAR_API_TOKEN, DEEPSONAR_OM_GATEWAY_TOKEN: process.env.DEEPSONAR_OM_GATEWAY_TOKEN };
+  process.env.DEEPSONAR_GATEWAY_TOKEN = "synthetic-main-token";
+  process.env.DEEPSONAR_API_TOKEN = "synthetic-control-token";
+  process.env.DEEPSONAR_OM_GATEWAY_TOKEN = "offline-unit";
   process.env.TEMP = root;
   process.env.TMPDIR = root;
   process.env.PI_CODING_AGENT_DIR = "/untrusted/home";
@@ -258,7 +268,7 @@ async function wrapperFixture(error?: string, receipt: Record<string, unknown> =
     model: { provider: "main", id: "main", contextWindow: 1000000 },
     sessionManager: { getSessionId: () => "same-job-session", getSessionFile: () => "/workspace/same-job/session.jsonl" },
     modelRegistry: { find: () => model, getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "offline-unit" }),
-      async *streamSimple(selected: unknown, _context: unknown, options: unknown) { calls.push({ selected, options }); if (error) yield { type: "error", error: { errorMessage: error } };
+      async *streamSimple(selected: unknown, context: unknown, options: unknown) { calls.push({ selected, context, options }); if (error) yield { type: "error", error: { errorMessage: error } };
         else yield { type: "done", message: { provider: model.provider, model: model.id } }; } },
   };
   const pi: any = { on: (name: string, handler: (...args: unknown[]) => unknown) => hooks.set(name, [...(hooks.get(name) ?? []), handler]),
@@ -277,6 +287,24 @@ async function wrapperFixture(error?: string, receipt: Record<string, unknown> =
       rmSync(root, { recursive: true, force: true }); },
   };
 }
+
+test("#1032 OM worker context redacts all Job credentials before SDK generation and leaves source history intact", async () => {
+  const f = await wrapperFixture();
+  try {
+    const source = { messages: [{ role: "user", content: [
+      { type: "text", text: 'env: synthetic-main-token synthetic-control-token; auth.json: {"key":"offline-unit"}' },
+    ] }] };
+    const before = structuredClone(source);
+    f.pi.workerContext = source;
+    await f.event("agent_start");
+    await f.event("agent_before_settle");
+    assert.equal(f.calls.length, 1);
+    assert.doesNotMatch(JSON.stringify(f.calls[0].context), /synthetic-(?:main|control)-token|offline-unit/u);
+    assert.match(JSON.stringify(f.calls[0].context), /\[REDACTED\]/u);
+    assert.deepEqual(source, before);
+    assert.equal(f.receiptRequests.length, 1, "credential projection does not skip durable settlement");
+  } finally { f.close(); }
+});
 
 test("wrapper uses frozen config, restores Pi environment, bounds recall and shields renderers", async () => {
   const fixture = await wrapperFixture();
