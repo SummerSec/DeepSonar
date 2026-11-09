@@ -48,7 +48,13 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     render(() => { newCallback++; });
     type("返回 A 后尚未发送的新草稿");
     await act(async () => {
-      save({ id: "saved-a", status: "planned", attachments: [] } as Awaited<ReturnType<typeof api.createCanvasMessage>>);
+      save({
+        id: "saved-a", canvas_id: "canvas-a", human_node_id: "human-a",
+        target_kind: "job", target_node_id: "node-a", target_job_id: "job-a",
+        body: "第一条已授权发送的回复", status: "planned", attachments: [],
+        planned_at: "2026-11-09T06:00:00.000Z", delivered_at: null,
+        acknowledged_at: null, ack_summary: null, error: null,
+      });
       await saved;
     });
     assert.equal(oldCallback, 0, "old saved message must not call the unmounted composer's owner");
