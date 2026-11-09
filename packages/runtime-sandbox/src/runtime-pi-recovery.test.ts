@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { PiRpcOutputCapture } from "./pi-rpc-output.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runRealAgent } from "./runtime-agent.js";
+import { runRealAgent, redactRuntimeSecrets } from "./runtime-agent.js";
+import { createRuntimeWarningReporter, type RuntimeWarning } from "./runtime-warnings.js";
 import { PiRpcDriver } from "./pi-rpc-driver.js";
 import type { RuntimeHost, RuntimeProcess, RuntimeProcessChunk } from "./runtime-host.js";
 
@@ -62,6 +63,64 @@ function host(factory: (index: number) => PiProcess, nonempty = true) {
   };
   return { runtime, processes };
 }
+
+for (const mode of ["progress-only", "unknown", "unknown-failure"]) {
+  test(`#1038 real runner decode/map/warning path: ${mode}`, async () => {
+    const secret = "synthetic-warning-secret";
+    const warnings: RuntimeWarning[] = [], events: Record<string, unknown>[] = [];
+    const fake = host(() => new PiProcess((record, proc) => {
+      if (record.type === "get_state") state(proc, record);
+      else if (record.type === "prompt") {
+        proc.emit({ type: "response", id: record.id, command: "prompt", success: true, data: { disposition: "started" } });
+        proc.emit({ type: "agent_start" });
+        for (let i = 0; i < 50; i++) proc.emit({ type: "tool_execution_update", toolCallId: "call-1", toolName: "bash",
+          partialResult: { content: [{ type: "text", text: `${secret} TOOL_BODY_PRIVATE` }] } });
+        if (mode !== "progress-only") for (let i = 0; i < 25; i++) proc.emit({ type: "tool_execution_update", partialResult: secret });
+        proc.emit({ type: "message_end", message: mode === "unknown-failure"
+          ? { role: "assistant", stopReason: "error", errorMessage: "explicit terminal failure" }
+          : { role: "assistant", content: [{ type: "text", text: "done" }] } });
+        proc.emit({ type: "agent_end" });
+        proc.emit({ type: "agent_settled", aborted: false });
+      }
+    }));
+    const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial", secretValues: [secret],
+      completionGate: () => true, onWarning: w => warnings.push(w), onEvent: e => events.push(e) });
+    assert.equal(events.filter(e => e.type === "tool.call.progress").length, 50);
+    assert.equal(JSON.stringify(events).includes(secret), false);
+    assert.equal(result.terminalOutcome, mode === "unknown-failure" ? "failure" : "success");
+    assert.equal(warnings.length, mode === "progress-only" ? 0 : 2);
+    assert.equal(warnings.reduce((sum, warning) => sum + (warning.occurrences ?? 1), 0), mode === "progress-only" ? 0 : 25);
+    for (const warning of warnings) {
+      assert.equal(warning.code, "unknown_runtime_event");
+      const detail = JSON.parse(warning.detail!);
+      assert.equal(detail.adapter, "pi"); assert.equal(detail.version, "1.4.0");
+      assert.equal(detail.count, detail.phase === "first" ? 1 : 25);
+      assert.match(detail.types[0].hash, /^[a-f0-9]{16}$/u);
+    }
+    assert.doesNotMatch(JSON.stringify(warnings), /synthetic-warning-secret|TOOL_BODY_PRIVATE|tool_execution_update/u);
+  });
+}
+
+test("#1038 type summaries are bounded, redact before hashing and retain total warning occurrences", () => {
+  const warnings: RuntimeWarning[] = [];
+  const secret = "synthetic-warning-type-token";
+  const report = createRuntimeWarningReporter({ id: "pi", version: "1.4.0" }, w => warnings.push(w),
+    text => String(redactRuntimeSecrets(text, [secret])));
+  for (let i = 0; i < 100; i++) for (let n = 0; n < 2; n++) report.warn(
+    { code: "unknown_runtime_event", detail: "unrecognized_stream_type" }, { type: `${secret}-${i}`, body: "PRIVATE BODY" });
+  report.flush();
+  const reports = warnings.length;
+  report.flush();
+  assert.equal(warnings.length, reports, "flush does not double count");
+  assert.ok(reports <= 66, "bounded type buckets plus overflow; no warning per frame");
+  assert.equal(warnings.reduce((sum, w) => sum + (w.occurrences ?? 1), 0), 200);
+  const details = warnings.map(w => JSON.parse(w.detail!));
+  assert.equal(details[0].types[0].hash, createHash("sha256").update(String(redactRuntimeSecrets(`${secret}-0`, [secret]))).digest("hex").slice(0, 16));
+  assert.ok(details.some(d => d.reason === "overflow" && d.phase === "summary"));
+  assert.doesNotMatch(JSON.stringify(warnings), /synthetic-warning-type-token|PRIVATE BODY/u);
+  report.warn({ code: "malformed_runtime_event", detail: "fixed-reason" }, {});
+  assert.deepEqual(warnings.at(-1), { code: "malformed_runtime_event", detail: "fixed-reason" });
+});
 
 const completionRefusal = "409 Completion already accepted; reconcile its receipt";
 for (const refusal of [completionRefusal, "COMPLETION_ALREADY_ACCEPTED"]) {
