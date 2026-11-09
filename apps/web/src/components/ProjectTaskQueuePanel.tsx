@@ -53,7 +53,7 @@ function TaskQueueRow({ projectId, item, order }: { projectId: string; item: Pro
         : "text-zinc-400";
 
   return (
-    <li className="flex min-w-0 items-start gap-3 rounded-lg border border-white/[.045] bg-black/[.08] px-3 py-2.5">
+    <li className="flex min-w-0 items-start gap-3 rounded-lg border border-white/[.045] theme-surface px-3 py-2.5">
       <span className="mt-0.5 w-7 shrink-0 text-right font-mono text-[10px] text-zinc-600">{order ? `${order}.` : "—"}</span>
       <div className="min-w-0 flex-1">
         <Link to={`/projects/${projectId}/tasks/${item.canvas_id}`} className="block truncate text-[12px] font-medium text-zinc-200 hover:text-acc-300">
