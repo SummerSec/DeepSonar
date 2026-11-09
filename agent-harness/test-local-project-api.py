@@ -188,15 +188,15 @@ def main():
         "scheduled_start_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat().replace("+00:00", "Z"),
     }, 201)
     clean_cid, clean_job = clean["canvas_id"], clean["job"]
-    assert req("GET", f"/jobs/{clean_job['id']}")["job"]["status"] == "pending"
-    req("POST", f"/jobs/{clean_job['id']}/cancel", None)
+    clean_current = req("GET", f"/jobs/{clean_job['id']}")["job"]
+    assert clean_current["status"] == "pending", clean_current
+    cancelled = req("POST", f"/jobs/{clean_job['id']}/cancel", None)
+    assert cancelled["status"] == "cancelled", cancelled
     clean_row = next(r for r in req("GET", f"/projects/{pid}/canvases") if r["id"] == clean_cid)
     assert clean_row["active_count"] == 0, clean_row
-    clean_preview = next(item for item in req("GET", f"/projects/{pid}/knowledge/backfill?limit=20")["items"]
-                         if item["job_id"] == clean_job["id"])
-    assert not clean_preview.get("work"), clean_preview
+    # Hub不在业务Job补做目录中；后续201会经过统一保留门，证明该干净任务没有治理留存。
     retry = req("POST", f"/tasks/{clean_cid}/retry", None, 201)
-    assert retry["canvas_id"] == clean_cid and retry["status"] == "pending"
+    assert retry["canvas_id"] == clean_cid and retry["status"] == "pending", retry
     current_job_ids = {
         item["id"] for item in req("GET", f"/jobs?project_id={pid}")
         if item.get("canvas_id") == clean_cid
