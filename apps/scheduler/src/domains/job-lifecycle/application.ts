@@ -517,6 +517,7 @@ export function createSqlJobLifecycleApplication(
     /** 单 Job 取消：只处理活动状态，并清理 lease/heartbeat 元数据。 */
     async cancelJob(jobId, error) {
       const row = await atomically(async (tx) => {
+        await tx`SELECT id FROM jobs WHERE id = ${jobId} FOR UPDATE`;
         await requestAttemptCancel(tx, jobId, error);
         const [row] = await tx`
           UPDATE jobs SET status = 'cancelled', finished_at = now(),

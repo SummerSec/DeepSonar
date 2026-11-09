@@ -97,6 +97,8 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 
 ## 项目知识工作链（#752 分支）
 
+业务 Job/Attempt 成功结算后，Scheduler 在独立 savepoint 幂等登记知识 work；Dispatcher 先异步冻结其自有来源，再允许 maker 领取。空来源保留 completed 跳过记录；治理/Hub/Report Job 不递归触发，未知效果和失效权限停止。历史精确补做复用该链，不重启旧执行，决策见 [ADR-0020](adr/0020-scheduler-knowledge-triggers.md)。
+
 普通 Job 从冻结目录按需搜索、读取 Memory 或拉取 Skill，实际使用生成稳定 usage_ref；有可读来源或反馈证据时可请求整理。Scheduler 创建独立 work/Canvas，依次分派 maker、按 case×arm 分离的 trial Job、evaluator 与 reviewer；这些都是现有 Job/Attempt/沙箱路径，不新增模型执行者，也不触发业务 Hub/Report。trial 只得到相应 arm 和 stage audience 的输入，发布共享资产 JSON 并以 `emit_fact` 引用其版本/hash，评测读取实际 Evidence；缺环境、证据或终态异常保持 `needs_eval`/阻断，不以文字结论晋升。审查通过才在事务中切 active 指针；失败或重启依持久 assignment/receipt 恢复，未知外部效果不自动重放。项目治理 recipe 在 work 创建时冻结，修订仅进入下一 work。详细状态和预算见[项目知识专题](../PROJECT_KNOWLEDGE.md)。现有集成测试使用构造的 Job/Attempt 与 Evidence，未证明真实沙箱或模型效果。
 
 ## 非正常路径
@@ -106,7 +108,7 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 | 无效 token、Job 不属于项目、operation 不在 allowlist、不可见节点或坏 schema | 所有 operation 先做 token/operation/schema 检查；mutating operation 的 event-ingestion 事务内再次锁 Job、检查 scope/引用/语义状态，失败时回滚整笔副作用；401/403/409/422 按错误类别返回，模型可修正项带 RepairFeedback | 不提交部分事实或外部效果；永久越权不可通过重试修复 |
 | 同一 Idempotency-Key 重复且输入相同 | 所有 operation POST 都要求 UUID key；只读 operation 使用接口层缓存/冲突检查，mutating operation 还由事件/effect durable dedup 保护 | 调用方可安全读取接口结果；同 key 不同 operation/input 返回冲突 |
 | 事件窗口或图查询预算耗尽 | 429 或预算错误，反馈当前状态和剩余预算 | 用新的有界查询/延迟重试修复；不扩大 Job scope |
-| OpenSandbox provision 拒绝或传输失败 | Adapter 在正常清理前提供固定字段诊断，Scheduler 追加 Job/Attempt 关联的 `job.provision_failed` 审计；不保存 SDK body/堆栈/env | 原错误、取消、迟到资源清理和 effect fencing 不变；未观察句柄不等于未启动，审计写失败不阻止清理；见[诊断边界](../OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)，最终 SHA Actions 待验 |
+| OpenSandbox provision 拒绝或传输失败 | Adapter 在正常清理前提供固定诊断，首次 Job/Attempt 关联审计及来源引用同事务发布，原 Job GET 有界读回并重核归属/来源；重复保持首份。只追加诊断，不改 lifecycle/effect/预算；不保存 SDK body/堆栈/env 或保留失败容器 | 原错误、取消、迟到资源清理和 effect fencing 不变；未观察句柄不等于未启动，审计写失败不阻止清理；见[诊断边界](../OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)，最终 SHA Actions 待验 |
 | main 模型调用在连接/准入前失败且内核有持久 no-start 证明 | Pi SDK 扩展在同存活 Job/Attempt/Session 中重新生成关联请求；Gateway 在原 Job admission 锁内核验 owner/期限/预算/原回执并跨 token/Attempt 消费冻结恢复许可；空失败不留下双 start，SDK 内部重试关闭 | 不重启 Agent、不重放工具或未知效果，不退请求额度；partial/unknown/超时/伪造 Provider 文案停止。见[契约](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)，最终 SHA Actions 待验 |
 | provisioning 在外部效果开始前已知失败 | 记录失败并按已知可重试策略决定新 Attempt；Job 进入失败或受控 retry | 只有明确安全的 provisioning 重试允许继续；不重复未知外部效果 |
 | effect intent 已写但外部结果未知（例如沙箱句柄/销毁回执缺失） | Attempt effect 标记 `unknown`，Job 进入 orphan/对账路径，保留 effect id | **禁止自动重放未知效果**；由对账或人工确认后采取下一步 |

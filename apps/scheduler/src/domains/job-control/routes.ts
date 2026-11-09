@@ -37,6 +37,7 @@ import { recoverCancelledDerivedJob } from "./recovery.js";
 import { projectJobProviderFields, projectJobSnapshot } from "../credential/projection.js";
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { projectContextDiagnostics } from "../context/index.js";
+import { readProvisionFailureEvidence } from "../../provision-failure-evidence.js";
 import {
   JOB_NOT_CANCELLABLE,
   JOB_NOT_RESUMABLE,
@@ -505,6 +506,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         ? sql`SELECT title, target_json FROM canvases WHERE id = ${job.canvas_id as string}`
         : Promise.resolve([] as Array<{ title?: unknown; target_json?: unknown }>),
     ]);
+    const provisionDiagnostics = await readProvisionFailureEvidence(sql, String(job.id), String(job.project_id), attempts);
     const snapshot = job.agent_snapshot_json;
     const missingModules =
       snapshot && typeof snapshot === "object" && !Array.isArray(snapshot) && Array.isArray((snapshot as Record<string, unknown>).missing_modules)
@@ -552,6 +554,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       })),
       findings,
       attempts,
+      provision_diagnostics: provisionDiagnostics,
       effects,
       broadcasts,
       usage,

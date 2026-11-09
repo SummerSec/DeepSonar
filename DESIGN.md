@@ -120,7 +120,7 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 当前已落地的是第一刀：内置 pack、已信任 Git skill module、RoleConfig 生成只读目录投影；Job 级只读发现操作为 `list_capabilities`、`search_capabilities`、`describe_capability`、`validate_composition`、`preview_materialization`。现有 `explore`、`analyze`、`review`、`test`、`code`、`audit` 作为内置 pack 继续工作，`deepsonar-management` 也可以作为平台能力包被发现。
 Agent 运行中拉取业务 Skill 使用 `list_available_skills`、`search_skills`、`pull_skill`；这些操作返回并校验具体模块文件，但不改变 Job 的平台权限边界。
 
-#752 项目 Memory / Skill 有不可变版本、独立评测审查和持久 receipt/work。平台发现 Skill 指导搜索和使用，Scheduler 管理权限；项目 Skill 默认私有，来源项目可授权精确版本，授权不包含来源 Memory/Evidence 或未来版本。Job 冻结目录与实时撤销取交集，禁用后重启用不恢复旧 Job 权限。试验按 case×arm 分配独立标准 Job 与最小输入，不接业务 Hub/Report。实现、预算、管理 API 与验收边界见 [项目知识](docs/PROJECT_KNOWLEDGE.md)。 Knowledge/Skill 拒绝在领域、runtime 和 Control 工具反馈间保留分类与行动建议；可修正输入与生命周期/权限失效分开，见[反馈切片边界](docs/PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。
+#752 项目 Memory / Skill 有不可变版本、独立评测审查和持久 receipt/work。成功业务 Job 由 Scheduler 幂等登记有界整理，管理者可按精确 Job 补做；无来源留跳过记录，候选仍须独立评测审查。平台发现 Skill 指导搜索和使用，Scheduler 管理权限；项目 Skill 默认私有，来源项目可授权精确版本，授权不包含来源 Memory/Evidence 或未来版本。Job 冻结目录与实时撤销取交集，禁用后重启用不恢复旧 Job 权限。试验按 case×arm 分配独立标准 Job 与最小输入，不接业务 Hub/Report。实现、预算、管理 API 与验收边界见 [项目知识](docs/PROJECT_KNOWLEDGE.md)。 Knowledge/Skill 拒绝在领域、runtime 和 Control 工具反馈间保留分类与行动建议；可修正输入与生命周期/权限失效分开，见[反馈切片边界](docs/PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。
 
 发现不是授权。Scheduler 仍按项目范围、Job 快照、平台工具 allowlist、镜像兼容性和网络策略决定可执行集合。模型不能用 Manifest 扩大 `platform_tools`、凭据、镜像、`allow_egress` 或项目范围。
 
@@ -330,7 +330,7 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 **Pi 模型预算与截断（#958）：** `/models` 限制作为 `provider_declared` 元数据保留，创建时逐字段冻结显式配置、声明、客户端选值及来源到 `model_budget`，Pi 投影 `contextWindow/maxTokens`；未观测的 CLI 默认保持未知，声明不证明真实容量。`length` 的 text/tool/thinking-only 不进入通用完成 nudge，改为同一精确 Session 的有界状态查询、必要压缩与短反馈；每步复用原完成/修正生命周期、lease/deadline、预算和未知效果守卫。压缩 start/end 不证明进展，不补造上下文摘要；耗尽保留截断和具体诊断，已接受完成/人工等待仍是权威。详情与 Actions 入口见[预算与恢复专题](docs/PI_MODEL_BUDGET_RECOVERY.md)，最终 SHA 待验，不宣称上游容量或生产重跑通过。
 
-OpenSandbox provision 失败在正常清理前追加 Job/Attempt 关联的 `job.provision_failed` 宿主审计（#1002）：只保存实际阶段、已观察会话/取消、合法 HTTP 状态和固定传输信号，不保存 SDK 原文、堆栈或环境。未拿到句柄仍不是未启动证明；审计失败不替代原错误，也不停止清理或放开未知效果重试。详见[诊断边界](docs/OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)；最终 SHA Actions 待验，现场 execd 日志和并发根因未验证。
+OpenSandbox provision 失败在正常清理前追加 Job/Attempt 关联的 `job.provision_failed` 宿主审计（#1002）：首次审计与原 Attempt 的只读来源引用同事务持久化，Job GET 以现有项目/Job 权限通过主键引用重新核 scheduler/schema/归属后提供有界 `provision_diagnostics`；不扩大审计权限或回填旧引用，不把诊断当效果结算。只保存实际阶段、已观察会话/取消、合法 HTTP 状态和固定传输信号，不保存 SDK 原文、堆栈或环境。未拿到句柄仍不是未启动证明；审计失败不替代原错误，也不停止清理或放开未知效果重试。详见[诊断边界](docs/OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)；SQL/HTTP/原 runner 清理前读回回归已接既有 Actions，最终 SHA 待验；受控 Provider 不是实机 Engine，现场 execd 原始日志和并发根因仍未验证。
 
 OpenSandbox upgrade baseline (2026-11-01): installed SDK 1.2 and canonical server/execd/egress pins are updated, with explicit SDK `wakeRetryEnabled=false` preserving Scheduler recovery. All deployed TOMLs remain direct; existing isolation/resources/TTL/renew/DNS/IPv6/PVC policy is unchanged. Local SDK regression does not prove new pinned-server parsing, actual PTY, native execution or final-SHA CI; see the [single upgrade record](docs/OPENSANDBOX_1_2_UPGRADE.md). #1002 P2-11 adds a same-Engine declaration init gate for managed Docker/Worker dependency starts, not per-container enforcement or remote-host attestation; rejection/evidence and remaining D-10 are recorded in the [resource preflight section](docs/OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11).
 

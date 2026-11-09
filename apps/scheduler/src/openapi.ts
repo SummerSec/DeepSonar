@@ -1523,7 +1523,7 @@ const OPS: Op[] = [
     path: "/jobs/{id}",
     summary: "Job 详情（含事件）",
     description:
-      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。plan_gaps 提供当前 Plan 内容 SHA、判据 ID 与文本（未加载绑定）；权威绑定状态由冻结报告与 Fact 详情读取。",
+      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。provision_diagnostics 为清理前已持久化的 host 失败诊断，通过原 Attempt 的不可变 system-audit 引用按当前 Job/项目重新验证，仅返回固定阶段/状态/布尔信号及来源；不含 audit 元数据、env、SDK 原文或容器日志，不证明 no-start/用量结算。历史无引用不猜测或回填，条数上限见 provision-failure-evidence.ts。plan_gaps 提供当前 Plan 内容 SHA、判据 ID 与文本（未加载绑定）；权威绑定状态由冻结报告与 Fact 详情读取。",
     scope: "tasks:read",
     tags: ["Jobs"],
   },

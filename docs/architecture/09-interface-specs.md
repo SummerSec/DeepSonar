@@ -25,6 +25,10 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 项目 RoleConfig 写入拒绝 `agent_cli` / `model`，读取不暴露这两个字段；全局 CLI 接受 NULL 表示未指定偏好。项目 RoleConfig 导出不含这两项，导入含这两项（即使为 NULL）也拒绝；全局导入未指定 CLI 保持 NULL。项目 Agent 设置分别表达 CLI 和凭据白名单是否显式收紧，`credential_ids_configured` 区分未配置与空名单，设置读取不持久化凭据 ID。readiness 的检查项可携带与 Job 解析同源的 RepairFeedback；悬空/停用白名单要求管理员修复，不能通过 Agent 提交账号 ID 或 OCI 地址绕过（#757）。
 
+### Job provision 诊断读回（#1002 P2-10）
+
+`GET /jobs/:id` 的 `provision_diagnostics` 复用原 `tasks:read` 项目/Job scope；只查询原 Attempt 上首次 immutable audit 引用，使用数据库规范 Job ID 比较 text 归属（UUID URL 大小写不改变诊断），再核 system/scheduler、项目/Job/Attempt、版本与固定字段，不赋予 audit 管理权限。返回来源/时间及固定阶段、HTTP 状态和布尔信号；未知/旧引用不回填，SDK/body/env/审计元数据和容器日志不进入投影。预算只见[实现](../../apps/scheduler/src/provision-failure-evidence.ts)，正常 Job 无引用不查询 audit。引用与审计同事务在正常清理前发布，不变更 lifecycle/效果/预算；[SQL/HTTP 回归](../../apps/scheduler/src/provision-failure-evidence.integration.test.ts)已接 `pnpm ci:integration:platform-api`，最终 SHA 待验。
+
 ### 管理 Skill 的当前契约（#996）
 
 [Management Skill](../../skills/deepsonar-management/SKILL.md)及 Python CLI 跟随现有 credential-first 契约：RoleConfig 不再写账号绑定或 `reasoning`；项目角色由 Hub/Job 在可见目录内选择，不提供角色启用开关。旧 `project-settings update --roles` 在发请求前明确拒绝，项目 CLI/Provider 白名单仍是授权边界，不因删角色开关而放宽。
@@ -146,6 +150,8 @@ Job 列表只为 `waiting_human` 项附加 Scheduler 当前 `execution_state`，
 合法 action 为 `reconcile_effects` / `stop` / `release_stale`（后者用原 grant 无目标效果退出）；reason 不作为证据。200 `persisted_deferred` 仅证明提案持久接纳，不表示对账执行、Job 成功或模型理解。稳定拒绝码 `recovery_not_authorized`、`recovery_paused`、`recovery_stale`、`recovery_inactive` 默认 fail closed，不能靠自动重试扩大权限。原 completion key 的负回执保持不可变；活动原 Attempt 在证据修复后需用新 revision/key 重新走完成门。详见 [ADR 0015](adr/0015-governed-completion-recovery.md)及[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。当前分支最终 SHA 的 Actions 尚待验收。
 
 ## 项目知识接口（#752 分支）
+
+`GET /projects/:id/knowledge/backfill` 提供最多20项的分页只读预览；同路径 `POST` 要求 `projects:write`、最多5个唯一 Job ID 与原因，整批核验项目归属后幂等登记已有知识 work。已有链原样返回，不重置预算；接口不恢复历史 token 或激活候选。
 
 Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、版本、work、评测、usage/feedback、receipt 查询，以及来源项目管理者的精确 Skill 授权和不可逆撤销；grant 入口还要校验该版本已经审批，不能以授权激活 candidate。Job-scoped Control 增加知识搜索/读取、请求整理、提案、评测、审查和反馈；平台推导 project、Job、Attempt 与 stage，不接受调用方自报身份。只读输入受冻结 manifest、audience 和当前权限约束；mutation 经 shared schema、宿主和领域事务校验，返回 `accepted`、operation、`receipt_ref`，同 Job 同 key 同输入返回持久结果，同 key 异输入冲突。当前 Job 可用 `get_knowledge_receipt`，终态历史由项目管理入口查询。接口字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 与[项目知识专题](../PROJECT_KNOWLEDGE.md)；领域 receipt 不等于全平台通用回执。
 

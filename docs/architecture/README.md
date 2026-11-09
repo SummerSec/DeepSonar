@@ -45,6 +45,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 #1011 在现有 Scheduler 对账 loop 补正常人工等待的精确清理重入及持久 worker owner 保全，映射 FR-CANVAS-004 与[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)、[运行时](06-runtime-view.md)和[安全](10-security-and-trust-boundaries.md)。HTTP ready 后才启用外部清理，未知效果门不缩窄，无新服务/回执账本；原 destroy→SQL 失败→模拟重启/key 恢复→owner 确认→原子结算→HTTP 后继回归已接线，最终 SHA Actions 待验，未声称真实 OS/生产重启。
 
 #1002 P1-9 的同 Job 模型失败恢复关联 FR-CRED-003/004、FR-JOB-014 的重跑区别与 06/09/10：[透明契约](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)拥有 scoped no-start 与关联请求/冻结许可边界，[生命周期](../AGENT_REPAIR_LIFECYCLE.md#job-scoped-model-recovery-1002-p1-9)记录不重启 Agent、不重放/退款及历史拒绝。原 effect intent 跨 token/Attempt 计数，未运行那次的空 start/error 不发布；源码及 SDK/真实 SQL 回归已接线，最终 SHA Actions 待验。
+#1002 P2-10 关联 FR-JOB-006 与 06/08/09/10：原失败诊断与首次 Attempt 来源引用同事务、Job GET 有界按 scheduler/schema/归属重验，复用原 audit 和读权限，不改变生命周期或未知效果。权威边界见[OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)，SQL/HTTP/受控 Provider 回归已接线，最终 SHA Actions 待验。
 
 ## 1. 阅读路径与目录
 
@@ -94,7 +95,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 | Model Gateway 透明传输 | [透明传输契约](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM 结算](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)；06/08/09/10 | 历史代理描述不作为现行契约 | #923 单次原始传输、准入拒绝与 scoped 持久确认；#1002 凭据删除保留 token/账本与历史额度，最终 SHA Actions 待验 |
 | 安全与隔离 | 10；[设备边界](../DEVICE_ACCESS.md)、[共享资产](../SHARED_ASSET_BLOB_STORE.md) | §9.1 | 概览已迁入，专题保留细则 |
 | 全局 Git Skill 源发布与新鲜度 | IR-007、FR-CAP-003/FR-KNOW-002；[候选数据](08-data-architecture.md#skill-源已批准目录与候选960)、[审批接口](09-interface-specs.md#全局-skill-源候选审批960)；06/10 | 旧 §8.4 仅历史对照 | #960 schema68：既有 live 不迁移，sync 只候选，精确 hash+epoch 显式批准；旧 Job 不改，健康检查与 pending 分离；最终 Actions 待验 |
-| 项目 Memory / Skill | 01 中 FR-KNOW；05–10 相关视图；[项目知识专题](../PROJECT_KNOWLEDGE.md) | 本期新增 | #752 分支实现与验证范围分开记录；专题拥有工作流和字段细则 |
+| 项目 Memory / Skill | 01 中 FR-KNOW；05–10 相关视图；[项目知识专题](../PROJECT_KNOWLEDGE.md) | 本期新增 | #752 实现与验证范围分开记录；成功终态自动整理/精确补做见 ADR-0019，最终 SHA Actions 待验；专题拥有工作流和字段细则 |
 | 可信目标执行授权 | FR-TASK-006；06/09/10；[ADR-0011](adr/0011-trusted-target-authorization.md)、[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md) | 本期新增 | 只读 authority、immutable grant、中央继承、实时重核；不执行目标动作 |
 | 管理员单条效果见证 | FR-JOB-005；06/08/09/10；[部署说明](../../deploy/README.md#管理-api-的单条效果结清1002-p1-9) | #1002 P1-9 | admin 与同项目/Job/Attempt 准入，精确重试、不覆盖已结清证据；不补写 unknown 用量、不退还预算或入队；现有 recovery 的实际 HTTP/SQL 回归已接，最终 SHA Actions 待验 |
 | Plan v2 有界执行 | FR-CAP-006、FR-HUB-002/003/004/005；06/08/09；[ADR-0012](adr/0012-plan-v2-execution.md)、[Plan 专题](../PLAN_GAP_PROJECTION.md) | 本期新增 | 当前写入只接收 v2；objective CAS、lifetime 预算与实际输出来源；writer 已物理删除（2026-10-31），历史本地 replay/negative gate 保留原范围，本轮工程已随 #831 Actions 验收，后续修复 SHA 另验 |

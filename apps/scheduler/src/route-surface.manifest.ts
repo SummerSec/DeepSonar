@@ -32,6 +32,8 @@ POST /projects/:id/finding-quality/protocols/:protocolId/reviews
 POST /projects/:id/finding-quality/protocols/:protocolId/revoke
 GET /projects/:id/knowledge/:itemId/versions
 GET /projects/:id/knowledge
+GET /projects/:id/knowledge/backfill
+POST /projects/:id/knowledge/backfill
 GET /projects/:id/knowledge/receipts
 GET /projects/:id/knowledge/receipts/:receiptId
 GET /projects/:id/knowledge/:itemId
@@ -290,6 +292,8 @@ POST /projects/{id}/finding-quality/protocols/{protocolId}/reviews
 POST /projects/{id}/finding-quality/protocols/{protocolId}/revoke
 GET /projects/{id}/knowledge/{itemId}/versions
 GET /projects/{id}/knowledge
+GET /projects/{id}/knowledge/backfill
+POST /projects/{id}/knowledge/backfill
 GET /projects/{id}/knowledge/receipts
 GET /projects/{id}/knowledge/receipts/{receiptId}
 GET /projects/{id}/knowledge/{itemId}

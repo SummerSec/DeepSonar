@@ -86,6 +86,8 @@ The 2026-11-01 upgrade preserves Scheduler authority: [connectionConfig](../../p
 
 凭据引用的可见性与删除完整性分别校验：项目 actor 能读取全局账号，但 impact 不得泄露其他项目名称、UUID 或引用计数；DELETE 独立拒绝所有项目尚存的引用。设置写入在事务内持有与删除共用的凭据行锁并验证存在、active 与可见性，不能借省略模型或删除白名单键绕过，见[#914 接口切片](09-interface-specs.md#项目凭据引用保护914-切片)。
 
+#1002 P2-10 的 [provision 诊断读回](09-interface-specs.md#job-provision-诊断读回1002-p2-10)只提供有界、固定字段的宿主失败事实。来源引用与 append-only 审计同事务，读回仍逐一核 scheduler/schema/项目/Job/Attempt；有引用不等于可信，坏/外来引用拒绝，不扩大 audit 权限或采集不归属的 Engine 日志。无 handle、空日志、诊断或 cleanup 尝试都不证明 no-start；不改变 unknown/replay policy、预算和执行终态。SQL/HTTP/受控 Provider 回归已接线，最终 SHA Actions 待验。
+
 权限校验不能替代资源隔离。沙箱网络、文件、设备、共享资产配额、Job 并发和事件预算仍由 Scheduler 和运行时 host 强制；镜像准入只回答“该摘要能否被选择”，不能让镜像取得平台管理权限。涉及 Job/Attempt 的沙箱 provision、Agent run、Gateway 和清理效果按各自 effect/settlement 与对账规则记录；Management 配置、image-admission 扫描和 Registry 发布使用自己的数据库状态与审计，不虚构 Job Attempt 账本。
 
 #1002 P2-11 的受管 Docker init 只读取 OpenSandbox 所用 Engine 的能力声明，不接受模型或 RoleConfig 自报“limits 已强制”。读不到或已声明不支持时阻止依赖启动；socket 只读挂载本身不是 Engine API 权限隔离。该 init 不证明逐容器 enforcement，未受管端点、重启或复用 init 的剩余信任缺口见 [D-10](12-risks-and-tech-debt.md#2-当前实现债务)；原资源隔离要求不因此降级。详见[资源预检](../OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11)。
@@ -183,3 +185,7 @@ quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/
 ## 队列资格与原执行权限（#1018）
 
 任务队列由 Scheduler 持有，模型/插件没有队列控制 operation。入队、暂停、明确继续和 claim 共用事务锁，不能扩大项目、凭据、镜像、网络、预算或 Attempt 身份。当前任务未知效果保留位置，继续队列不构成效果重放或结算授权。失败恢复绑定操作员确认的队首 ID，旧页面不能跳过新失败。队列诊断读取与控制分别依赖 tasks:read 和 jobs:control。
+
+## 自动知识整理的来源边界
+
+成功结算只允许 Scheduler 登记整理，不代表观察已经验证。来源 Job 必须具有冻结整理权限、最新 Attempt 已成功且无未知外部效果；异步来源准备只读取自己的 Fact/Evidence，并在入库前复核归属与内容hash。补做通过项目管理授权，不能修改旧快照、扩大来源项目、重置已存在work预算或复活旧token。新知识画布从来源Job冻结网络策略继承外联许可，缺失时关闭，不使用项目默认值扩权。治理/trial Job 排除，防止自动根链递归。见[ADR-0020](adr/0020-scheduler-knowledge-triggers.md)。

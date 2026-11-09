@@ -195,6 +195,7 @@ import {
   planAutomaticContextWindowRetry,
 } from "./context-window-exceeded.js";
 import { recordSystemAudit } from "./audit.js";
+import { recordProvisionFailureEvidence } from "./provision-failure-evidence.js";
 
 /**
  * Dispatcher（§4.2 调度循环的 DB 侧）：
@@ -1168,11 +1169,9 @@ async function runJob(jobId: string) {
         // provision 超时或取消时，运行时适配器必须真正终止外部创建并清理迟到资源。
         signal: provisionAbort.signal,
         onFailure: async (diagnostic: import("@deepsonar/runtime-sandbox").ProvisionFailureDiagnostic) => {
-          await recordSystemAudit({
-            action: "job.provision_failed", projectId: job.project_id as string, resourceType: "job", resourceId: jobId,
-            result: "error", errorCode: "SANDBOX_PROVISION_FAILED",
-            after: { schema: "deepsonar.provision-failure/v1", attempt_id: attemptId!, ...diagnostic },
-          }, sql);
+          await recordProvisionFailureEvidence(sql, {
+            jobId, projectId: job.project_id as string, attemptId: attemptId!, diagnostic,
+          });
         },
       } as Parameters<typeof runner.provision>[0] & { signal?: AbortSignal };
       const cancellableRunner = runner as typeof runner & {

@@ -15,6 +15,10 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 沿用 `events.control_receipt` / `event_dedup` / job sequence，不新增表或状态。`gateway_snapshot_preflight` 由 Dispatcher 的执行前 checkpoint 保存，绑定 Job、唯一首次 Attempt 与完整旧 snapshot 摘要；它不是 Gateway transport settlement 或模型 ACK。恢复只读重验宿主身份/事件摘要及全量效果、token、usage 和后续事件，不能仅凭回执存在重放。完整 `gateway_request_budget` 回执独立保留未签发 workload 的原有限策略；新执行不删除/重写历史回执、Attempt、用量或 deadline，细则见[生命周期专题](../AGENT_REPAIR_LIFECYCLE.md#缺损快照的可信显式恢复943)。最终 SHA Actions 待验。
 
+## Provision 诊断来源引用（#1002 P2-10）
+
+沿用 append-only `audit_logs`，首次固定宿主诊断及原 `job_attempts.state_json.provision_failure_audit_id` 在同事务发布，引用重复不覆盖首份。只追加诊断来源，不改 snapshot、phase/status、effect/settlement/replay policy 或预算，不增加表/状态。Job GET 仅用有界合法引用做 audit 主键读取，重核 scheduler、项目/Job/Attempt 与 schema；不读取任意 audit 元数据，坏/外来/旧引用不猜测回填。诊断不是 no-start/用量证明或第二个效果账本。实现/SQL回归及边界见[专题](../OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)，最终 SHA Actions 待验。
+
 ## Schema 基线纪律
 
 [`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v72 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。

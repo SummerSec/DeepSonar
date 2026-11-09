@@ -82,6 +82,8 @@ export type AttemptState = {
   snapshot_identity: AttemptSnapshotIdentity;
   /** 仅保存上下文身份与变换摘要，不保存 prompt 或 provider 原文。 */
   runtime_context?: ContextState;
+  /** First immutable host provision diagnostic in the existing system audit; not a settlement. */
+  provision_failure_audit_id?: string;
   outcome: Record<string, unknown>;
 };
 

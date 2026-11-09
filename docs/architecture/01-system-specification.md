@@ -199,6 +199,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **代码入口**：[Attempt model](../../apps/scheduler/src/domains/job-attempt/model.ts)、[Attempt 应用](../../apps/scheduler/src/domains/job-attempt/application.ts)、[Attempt PostgreSQL 回归](../../apps/scheduler/src/domains/job-attempt/application.integration.test.ts)。
 - **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:job-lifecycle`、`pnpm ci:integration:recovery`；分别覆盖有/无 sandbox 仍 pending 的 provision、显式 prior never_started、迟到 handle 与运行中断。
 
+#1002 P2-10 增清理前固定诊断的 Job 读回：原 Attempt 首次 append-only audit 与来源引用同事务发布，`GET /jobs/:id` 复用原 scope，以主键查引用并重验 scheduler/项目/Job/Attempt/版本，只返回固定诊断字段，不改变上述 no-start/unknown 规则或保留含凭据失败容器。记录不证明结算/可重放，不猜旧引用或原始 Engine 日志。见[专题](../OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)；真实 SQL/HTTP/受控 Provider 回归接 `pnpm ci:integration:platform-api`，最终 SHA 待验。
+
 ### FR-JOB-007 reconcileOnBoot 启动恢复
 
 - **规范要求**：Scheduler 启动时必须在 dispatcher/reaper 前完成 `reconcileOnBoot`：回收孤儿容器与共享资产卷；仅当 Attempt 仍在 `preparing` 且无效果记录时可回到 `pending`；provision 未知效果与 running 中断必须 orphan 并清理，禁止与新调度交错留下半终态。
@@ -384,9 +386,9 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-KNOW-001 项目知识的受治理生命周期
 
-- **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理必须由有来源的当前 Job 请求，经 maker 提案、独立 case×arm Job 试验、evaluator 与 reviewer 审查后才可原子激活；失败、缺证或未知效果不得晋升，旧 active 保留。每阶段只读取冻结且适合其 audience 的输入，实际使用须留下 usage/feedback 与持久 receipt；治理方法的项目 Skill 版本只影响后续 work，不得修改平台硬门。
+- **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理由有来源的当前 Job 请求，或由 Scheduler 在具备冻结整理权限的业务 Job/Attempt 成功结算后幂等登记；项目管理者可按精确成功 Job 补做，不恢复历史执行身份。来源准备异步且有界，无来源记录跳过，失败不回滚主业务；Hub/Report/知识治理 Job 不递归触发。候选经 maker 提案、独立 case×arm Job 试验、evaluator 与 reviewer 审查后才可原子激活；失败、缺证或未知效果不得晋升，旧 active 保留。每阶段只读取冻结且适合其 audience 的输入，实际使用须留下 usage/feedback 与持久 receipt；治理方法的项目 Skill 版本只影响后续 work，不得修改平台硬门。
 - **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；详见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
-- **实现状态**：#752 独立试验分支已接线，schema v61；领域集成测试使用构造的 Job/Attempt 与证据，真实沙箱运行和模型效果尚无本条验收证据，不能推定通过。
+- **实现状态**：成功业务 Job 自动登记、来源准备和项目管理补做已接线，沿用现有 schema 与 work；最终 SHA Actions 待验。#752 独立试验分支已接线，schema v61；领域集成测试使用构造的 Job/Attempt 与证据，真实沙箱运行和模型效果尚无本条验收证据，不能推定通过。
 - **代码入口**：[知识域](../../apps/scheduler/src/domains/project-knowledge/)；[schema 基线](../../database/schema.sql)；[Control 契约](../../packages/shared-types/src/project-knowledge.ts)。
 - **验证证据**：`pnpm ci:unit:project-knowledge`、配置独立 `TEST_DATABASE_URL` 后 `pnpm ci:integration:project-knowledge`；真实沙箱和长期模型效果需 #777 独立试验记录，离线协议/预检已提供；不改变 #752 已完成的实现验收范围。
 

@@ -8,6 +8,7 @@ import { projectScopeAllows } from "../../project-scope.js";
 import { readKnowledgeBlob } from "./blobs.js";
 import type { KnowledgeDb } from "./types.js";
 import { approvedKnowledgeVersion } from "./grant-policy.js";
+import { registerAutomaticKnowledgeRoutes } from "./automatic-routes.js";
 
 const Id = z.string().uuid();
 const Page = z.object({
@@ -89,6 +90,7 @@ export function registerProjectKnowledgeRoutes(
 ): void {
   const db = deps.db ?? sql;
   const recordAudit = deps.recordAudit ?? audit;
+  registerAutomaticKnowledgeRoutes(app, { db, recordAudit });
   app.get("/projects/:id/knowledge", async (req, reply) => {
     try {
       const projectId = Id.parse((req.params as { id: string }).id);
