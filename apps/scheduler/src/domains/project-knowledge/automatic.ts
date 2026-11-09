@@ -8,6 +8,7 @@ import { frozenGovernorRecipe } from "./recipe.js";
 import { resolveKnowledgeSource, recheckKnowledgeSources, type KnowledgeActor } from "./inputs.js";
 import { registerKnowledgeBlob } from "./blobs.js";
 import { KnowledgeOperationError, canonical, sha256, type KnowledgeDb } from "./types.js";
+import { automaticPreparationPredicate, isAutomaticPreparationWork } from "./automatic-marker.js";
 
 type Db = typeof sql;
 type Row = Record<string, unknown>;
@@ -228,10 +229,6 @@ async function lockAutomaticSources(tx: Db, actor: KnowledgeActor, refs: Knowled
   }
 }
 
-function shouldPrepare(reason: unknown): boolean {
-  return reason === "automatic_sources_pending" || /^automatic_prepare_retry:\d+$/.test(String(reason ?? ""));
-}
-
 async function finishWithoutSources(db: Db, workId: string, governanceHash: string, stopped: () => boolean): Promise<boolean> {
   if (stopped()) return false;
   return db.begin(async (raw) => {
@@ -249,10 +246,10 @@ async function finishWithoutSources(db: Db, workId: string, governanceHash: stri
     const [job] = await tx`SELECT id,canvas_id FROM jobs WHERE id=${jobId} FOR UPDATE`;
     assertRunning(stopped);
     if (!job || String(job.canvas_id ?? "") !== String(source.canvas_id ?? "")) return false;
-    const [work] = await tx`SELECT id,project_id,canvas_id,governance_hash,state,reason FROM project_knowledge_work
+    const [work] = await tx`SELECT id,project_id,origin_job_id,trigger_key,canvas_id,governance_hash,state,reason FROM project_knowledge_work
       WHERE id=${workId} FOR UPDATE`;
     assertRunning(stopped);
-    if (!work || work.state !== "pending" || !shouldPrepare(work.reason)) return false;
+    if (!work || work.state !== "pending" || !isAutomaticPreparationWork(work)) return false;
     if (String(work.canvas_id ?? "") !== String(job.canvas_id ?? "")) return false;
     if (String(work.governance_hash) !== governanceHash) {
       assertRunning(stopped);
@@ -306,10 +303,10 @@ async function commitPreparedInputs(
     assertRunning(stopped);
     if (!lockedJob || String(lockedJob.canvas_id ?? "") !== String(candidate.canvas_id ?? "")
       || String(lockedJob.canvas_id ?? "") !== String(input.origin.canvas_id ?? "")) return false;
-    const [work] = await tx`SELECT id,project_id,origin_job_id,canvas_id,governance_hash,state,reason
+    const [work] = await tx`SELECT id,project_id,origin_job_id,trigger_key,canvas_id,governance_hash,state,reason
       FROM project_knowledge_work WHERE id=${input.workId} FOR UPDATE`;
     assertRunning(stopped);
-    if (!work || work.state !== "pending" || !shouldPrepare(work.reason)
+    if (!work || work.state !== "pending" || !isAutomaticPreparationWork(work)
       || String(work.origin_job_id ?? "") !== jobId
       || String(work.canvas_id ?? "") !== String(lockedJob.canvas_id ?? "")) return false;
     if (String(work.governance_hash) !== input.governanceHash) {
@@ -367,13 +364,13 @@ async function recordPreparationFailure(db: Db, workId: string, error: unknown, 
     const reason = code ? `automatic_source_rejected:${code}` : "automatic_source_rejected";
     if (stopped()) return false;
     const [blocked] = await db`UPDATE project_knowledge_work SET state='blocked',reason=${reason},claim_expires_at=NULL,updated_at=now()
-      WHERE id=${workId} AND state='pending' AND (reason='automatic_sources_pending' OR reason LIKE 'automatic_prepare_retry:%')
+      WHERE id=${workId} AND state='pending' AND ${automaticPreparationPredicate(db)}
       RETURNING id`;
     return Boolean(blocked);
   }
-  const [current] = await db`SELECT reason FROM project_knowledge_work WHERE id=${workId} AND state='pending'`;
+  const [current] = await db`SELECT origin_job_id,trigger_key,reason FROM project_knowledge_work WHERE id=${workId} AND state='pending'`;
   if (stopped()) return false;
-  if (!current || !shouldPrepare(current.reason)) return false;
+  if (!current || !isAutomaticPreparationWork(current)) return false;
   const previous = /^automatic_prepare_retry:(\d+)$/.exec(String(current.reason ?? ""));
   const retries = Number(previous?.[1] ?? 0) + 1;
   const exhausted = retries >= 3;
@@ -381,21 +378,21 @@ async function recordPreparationFailure(db: Db, workId: string, error: unknown, 
   if (stopped()) return false;
   const [updated] = await db`UPDATE project_knowledge_work SET state=${exhausted ? "blocked" : "pending"},reason=${reason},
     claim_expires_at=NULL,next_attempt_at=now()+interval '30 seconds',updated_at=now()
-    WHERE id=${workId} AND state='pending' AND reason=${current.reason}
+    WHERE id=${workId} AND state='pending' AND reason=${current.reason} AND ${automaticPreparationPredicate(db)}
     RETURNING id`;
   return Boolean(updated);
 }
 
 async function prepareOne(db: Db, workId: string, governanceHash: string, stopped: () => boolean): Promise<boolean> {
   if (stopped()) return false;
-  const [work] = await db`SELECT id,project_id,origin_job_id,canvas_id,governance_hash,state,reason
+  const [work] = await db`SELECT id,project_id,origin_job_id,trigger_key,canvas_id,governance_hash,state,reason
     FROM project_knowledge_work WHERE id=${workId} AND state='pending'`;
   if (stopped()) return false;
-  if (!work || !work.origin_job_id || !shouldPrepare(work.reason)) return false;
+  if (!work || !work.origin_job_id || !isAutomaticPreparationWork(work)) return false;
   if (String(work.governance_hash) !== governanceHash) {
     if (stopped()) return false;
     const [blocked] = await db`UPDATE project_knowledge_work SET state='blocked',reason='governance_baseline_changed',updated_at=now()
-      WHERE id=${workId} AND state='pending' AND (reason='automatic_sources_pending' OR reason LIKE 'automatic_prepare_retry:%') RETURNING id`;
+      WHERE id=${workId} AND state='pending' AND ${automaticPreparationPredicate(db)} RETURNING id`;
     return Boolean(blocked);
   }
 
@@ -407,14 +404,14 @@ async function prepareOne(db: Db, workId: string, governanceHash: string, stoppe
     if (reason) {
       if (stopped()) return false;
       const [blocked] = await db`UPDATE project_knowledge_work SET state='blocked',reason=${`automatic_source_not_eligible:${reason}`},
-        updated_at=now() WHERE id=${workId} AND state='pending' AND (reason='automatic_sources_pending' OR reason LIKE 'automatic_prepare_retry:%') RETURNING id`;
+        updated_at=now() WHERE id=${workId} AND state='pending' AND ${automaticPreparationPredicate(db)} RETURNING id`;
       return Boolean(blocked);
     }
     if (String(origin!.project_id) !== String(work.project_id)
       || String(origin!.canvas_id ?? "") !== String(work.canvas_id ?? "")) {
       if (stopped()) return false;
       const [blocked] = await db`UPDATE project_knowledge_work SET state='blocked',reason='automatic_source_scope_changed',updated_at=now()
-        WHERE id=${workId} AND state='pending' AND (reason='automatic_sources_pending' OR reason LIKE 'automatic_prepare_retry:%') RETURNING id`;
+        WHERE id=${workId} AND state='pending' AND ${automaticPreparationPredicate(db)} RETURNING id`;
       return Boolean(blocked);
     }
 
@@ -424,7 +421,7 @@ async function prepareOne(db: Db, workId: string, governanceHash: string, stoppe
       if (await hasOwnSources(db, origin!)) {
         if (stopped()) return false;
         const [blocked] = await db`UPDATE project_knowledge_work SET state='blocked',reason='automatic_sources_too_large',updated_at=now()
-          WHERE id=${workId} AND state='pending' AND (reason='automatic_sources_pending' OR reason LIKE 'automatic_prepare_retry:%') RETURNING id`;
+          WHERE id=${workId} AND state='pending' AND ${automaticPreparationPredicate(db)} RETURNING id`;
         return Boolean(blocked);
       }
       return await finishWithoutSources(db, workId, governanceHash, stopped);
@@ -461,7 +458,7 @@ export async function prepareAutomaticKnowledgeWork(
   if (stopped()) return 0;
   const candidates = await db`
     SELECT id FROM project_knowledge_work WHERE state='pending' AND next_attempt_at<=now()
-      AND (reason='automatic_sources_pending' OR reason LIKE 'automatic_prepare_retry:%')
+      AND ${automaticPreparationPredicate(db)}
     ORDER BY next_attempt_at,id LIMIT 8`;
   if (stopped()) return 0;
   let prepared = 0;

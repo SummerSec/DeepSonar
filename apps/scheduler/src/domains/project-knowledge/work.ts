@@ -7,6 +7,7 @@ import type { sql } from "../../db.js";
 import { onKnowledgeJobTerminal } from "./recovery.js";
 import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { canonical, sha256 } from "./types.js";
+import { automaticPreparationPredicate } from "./automatic-marker.js";
 
 type Db = typeof sql;
 type Row = Record<string, unknown>;
@@ -390,8 +391,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
   async function claimPending(stopped: () => boolean): Promise<void> {
     const candidates = await db`SELECT id FROM project_knowledge_work w
       WHERE state='pending' AND next_attempt_at<=now()
-        AND reason IS DISTINCT FROM 'automatic_sources_pending'
-        AND COALESCE(reason,'') NOT LIKE 'automatic_prepare_retry:%'
+        AND NOT ${automaticPreparationPredicate(db)}
         AND NOT EXISTS(SELECT 1 FROM project_knowledge_work r WHERE r.project_id=w.project_id AND r.state='running')
       ORDER BY next_attempt_at,id LIMIT 8`;
     for (const candidate of candidates) {
@@ -401,8 +401,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
           if (stopped()) return;
           const [locked] = await tx`SELECT id,project_id FROM project_knowledge_work
             WHERE id=${String(candidate.id)} AND state='pending' AND next_attempt_at<=now()
-              AND reason IS DISTINCT FROM 'automatic_sources_pending'
-              AND COALESCE(reason,'') NOT LIKE 'automatic_prepare_retry:%'
+              AND NOT ${automaticPreparationPredicate(tx as unknown as Db)}
             FOR UPDATE SKIP LOCKED`;
           if (stopped() || !locked) return;
           const active = await tx`SELECT 1 FROM project_knowledge_work

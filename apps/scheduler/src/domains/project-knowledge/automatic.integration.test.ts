@@ -15,6 +15,8 @@ import { canonical, sha256, type KnowledgeDb } from "./types.js";
 import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { freezeProjectKnowledgeCatalog } from "./catalog-snapshot.js";
 import { GOVERNOR_LOGICAL_KEY } from "./recipe.js";
+import { enqueueKnowledgeWork } from "./requests.js";
+import { resolveKnowledgeSource } from "./inputs.js";
 import { seedKnowledgeJob, withKnowledgeDatabase, type TestSql } from "./test-support.js";
 
 const GOVERNANCE = "a".repeat(64);
@@ -95,6 +97,62 @@ function schedulerFor(db: TestSql) {
     },
   });
 }
+
+test("Agent reasons that resemble preparation markers never rewrite frozen request inputs", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    for (const reason of ["automatic_sources_pending", "automatic_prepare_retry:oops", "automatic_prepare_retry:1"]) {
+      const source = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
+      const factId = await addFact(db, source);
+      const actor = { ...source, snapshot: {} };
+      const sourceRef = { kind: "fact" as const, ref: factId, content_hash: sha256(canonical({
+        kind: "fact", id: factId, body: { observation: "bounded fixture" }, verification_status: "unverified",
+      })) };
+      const manifest = [await resolveKnowledgeSource(db as never, actor, sourceRef)];
+      const workId = await db.begin(raw => enqueueKnowledgeWork(raw as never, {
+        actor, governanceHash: GOVERNANCE, trigger: [sourceRef], manifest, reason,
+      }));
+      assert.equal(await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE), 0);
+      const [work] = await db`SELECT state,reason,input_manifest_json FROM project_knowledge_work WHERE id=${workId}`;
+      assert.equal(work!.state, "pending");
+      assert.equal(work!.reason, reason);
+      assert.deepEqual(work!.input_manifest_json, manifest);
+      assert.equal(await schedulerFor(db).tick(), 1);
+      const [maker] = await db`SELECT input_manifest_json FROM project_knowledge_job_assignments
+        WHERE work_id=${workId} AND stage='maker'`;
+      assert.deepEqual(maker!.input_manifest_json, manifest);
+    }
+  });
+});
+
+test("Scheduler automatic markers retain the eight-item batch and durable retry deadline", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    for (let index = 0; index < 9; index++) {
+      const source = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
+      await markTerminal(db, source.jobId, "succeeded");
+      assert.equal((await queueInTerminalOrder(db, source)).status, "queued");
+    }
+    assert.equal(await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE), 8);
+    assert.equal(await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE), 1);
+
+    const source = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
+    await addFact(db, source);
+    await markTerminal(db, source.jobId, "succeeded");
+    const queued = await queueInTerminalOrder(db, source);
+    assert.ok(queued.work_ref);
+    onBlobPut = () => { throw new Error("fixture_transient_blob_failure"); };
+    assert.equal(await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE), 1);
+    const [retry] = await db`SELECT state,reason,next_attempt_at FROM project_knowledge_work WHERE id=${queued.work_ref}`;
+    assert.equal(retry!.state, "pending");
+    assert.equal(retry!.reason, "automatic_prepare_retry:1");
+    assert.ok(new Date(retry!.next_attempt_at as string).getTime() > Date.now());
+    assert.equal(await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE), 0);
+    assert.equal(await schedulerFor(db).tick(), 0, "an unprepared retry must not reach maker");
+    onBlobPut = undefined;
+    await db`UPDATE project_knowledge_work SET next_attempt_at=now() WHERE id=${queued.work_ref}`;
+    assert.equal(await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE), 1);
+    assert.equal(await schedulerFor(db).tick(), 1);
+  });
+});
 
 test("successful authorized Job queues once, prepares its own Fact, then makes the work claimable", async () => {
   await withKnowledgeDatabase(async (db) => {

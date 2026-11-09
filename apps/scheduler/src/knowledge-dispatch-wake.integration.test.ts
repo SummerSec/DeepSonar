@@ -30,7 +30,7 @@ test("knowledge ticks do not kick overdue ordinary jobs back into a paused Dispa
       VALUES(${jobId},${projectId},${canvasId},'audit','pending','{}')`;
     await sql`UPDATE global_settings SET claims_paused=true,claims_pause_reason='maintenance',
       claims_paused_by='fixture',claims_paused_at=clock_timestamp() WHERE id='global'`;
-    let ticks = 0, selfKicks = 0;
+    let ticks = 0, completedTicks = 0, selfKicks = 0;
     let observed!: () => void;
     const firstTick = new Promise<void>(resolve => { observed = resolve; });
     let observedSecond!: () => void;
@@ -39,6 +39,7 @@ test("knowledge ticks do not kick overdue ordinary jobs back into a paused Dispa
     const tick = mock.method(projectKnowledgeScheduler, "tick", async (stopped?: () => boolean) => {
       ticks++;
       const result = await originalTick(stopped);
+      completedTicks = ticks;
       if (ticks === 1) observed();
       else observedSecond();
       return result;
@@ -58,7 +59,59 @@ test("knowledge ticks do not kick overdue ordinary jobs back into a paused Dispa
       await secondTick;
       assert.equal(ticks, 2);
       assert.equal(selfKicks, 1, "the external wake must not create a feedback loop");
-      // Bounded knowledge batches can leave due work after a tick; it still needs a wake.
+
+      const { queueAutomaticKnowledgeWork } = await import("./domains/project-knowledge/automatic.js");
+      const { PROJECT_KNOWLEDGE_GOVERNANCE_HASH } = await import("./domains/project-knowledge/platform-skills.js");
+      for (let index = 0; index < 9; index++) {
+        const sourceJobId = randomUUID(), attemptId = randomUUID();
+        await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,finished_at)
+          VALUES(${sourceJobId},${projectId},${canvasId},'audit','succeeded',
+            ${sql.json({ platform_tools: ["request_project_knowledge"] })},now())`;
+        await sql`INSERT INTO job_attempts(id,job_id,attempt_no,status,phase,finished_at)
+          VALUES(${attemptId},${sourceJobId},1,'succeeded','terminal',now())`;
+        const queued = await sql.begin(async (tx) => {
+          await tx`SELECT id FROM canvases WHERE id=${canvasId} FOR UPDATE`;
+          await tx`SELECT id FROM jobs WHERE id=${sourceJobId} FOR UPDATE`;
+          return queueAutomaticKnowledgeWork(tx as never, projectId, sourceJobId, PROJECT_KNOWLEDGE_GOVERNANCE_HASH);
+        });
+        assert.equal(queued.status, "queued");
+        assert.ok(queued.work_ref);
+      }
+
+      const jobsBeforeBatch = Number((await sql`SELECT count(*)::int AS count FROM jobs`)[0]?.count);
+      const notifications: string[] = [];
+      const jobListener = await sql.listen("deepsonar_jobs", (payload) => notifications.push(payload));
+      const batchStartTicks = ticks;
+      selfKicks = 0;
+      try {
+        kickDispatcher();
+        const deadline = Date.now() + 5_000;
+        while (Date.now() < deadline) {
+          const [counts] = await sql`SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE state='completed' AND reason='automatic_no_sources')::int AS completed
+            FROM project_knowledge_work
+            WHERE project_id=${projectId} AND trigger_key LIKE 'knowledge:auto:%'`;
+          if (Number(counts?.total) === 9 && Number(counts?.completed) === 9
+            && completedTicks >= batchStartTicks + 2) break;
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        await new Promise<void>(resolve => setImmediate(resolve));
+
+        const automaticWorks = await sql`SELECT state,reason FROM project_knowledge_work
+          WHERE project_id=${projectId} AND trigger_key LIKE 'knowledge:auto:%' ORDER BY created_at,id`;
+        assert.equal(automaticWorks.length, 9);
+        assert.ok(automaticWorks.every((work) => work.state === "completed" && work.reason === "automatic_no_sources"));
+        assert.equal(ticks - batchStartTicks, 2, "the ninth due work is completed by one follow-up Dispatcher pass");
+        assert.equal(selfKicks, 1, "only the remaining knowledge batch causes an internal kick");
+        assert.deepEqual(notifications, [], "empty-source preparation creates no maker Job notification");
+        assert.equal(Number((await sql`SELECT count(*)::int AS count FROM jobs`)[0]?.count), jobsBeforeBatch,
+          "empty-source preparation creates no maker Job");
+        assert.deepEqual((await sql`SELECT status FROM jobs WHERE id=${jobId}`)[0]?.status, "pending",
+          "the overdue ordinary Job remains gated while the knowledge batch drains");
+      } finally {
+        await jobListener.unlisten();
+      }
+      // Ordinary pending knowledge work also retains its wake after automatic preparation drains.
       wake.bindScheduleWake(() => { selfKicks++; });
       await sql`INSERT INTO project_knowledge_work(project_id,trigger_key,governance_hash,state)
         VALUES(${projectId},${randomUUID()},${"a".repeat(64)},'pending')`;

@@ -60,6 +60,8 @@ project、Job、Attempt、actor 和 assignment 均由平台推导，不接受请
 
 Agent 请求与自动登记创建 work 时在同一事务通知现有 Dispatcher 通道；延迟重试及有界批次剩余项使用已有单一 schedule wake timer，重启从持久 next_attempt_at 重新装载，不依赖轮询。登记只写待准备 work。Dispatcher 先在短事务外读取和校验该来源 Job 自己的 Fact/Evidence，最多20项，每项遵守12KiB上限，并复用其冻结治理方法；之后按 Canvas → Job → work 顺序复核、登记 CAS 元数据并冻结 manifest。待准备 work 不可被 maker 领取。没有可用来源时保留 `completed` 的无操作记录及明确跳过 reason，不产生模型 Job；权限、完整性、未知效果等拒绝保留阻塞原因。Fact 的原验证状态保留，成功 Job 不会把未验证观察变成事实或已验证 Skill。
 
+自动准备由 Scheduler 专属的精确触发键 `knowledge:auto:<origin_job_id>` 与合法准备阶段标记共同识别；候选查询、锁后复核、失败更新、普通领取排除和唤醒使用同一判据。Agent 的整理原因是自由文本，即使与内部标记重名，也保留原输入清单并沿普通知识工作路径推进，不能改变机器状态或绕过项目串行门。
+
 知识 tick 内的 schedule refresh 重算未来 timer，不重新 kick 已到期但被 claims 暂停、配额或任务门禁挡住的普通 Job；启动、timer 与外部 refresh 仍可唤醒到期工作。同一在途 refresh 合并外部唤醒请求，避免丢失外部事件或形成普通任务的无退避自唤醒环；有界批次剩余的已到期知识 work 仍保留唤醒，不因普通任务去重而搁置。实际 kickDispatcher → dispatchOnce → 知识 tick → refresh 回归接入知识集成套件，最终 SHA Actions 待验。
 
 管理入口 `GET /projects/:id/knowledge/backfill` 分页预览历史 Job 资格、已有 work 和不可执行原因，不读原始会话或写入。`POST` 同路径要求 `projects:write`、精确且不重复的最多5个 `job_ids` 与原因，通过同一登记函数补做；批次含跨项目/不存在来源时整批拒绝。它不恢复旧 token、不改历史快照或 Attempt、不重新执行业务任务、不直接激活候选。知识工作画布沿用来源 Job 冻结的 `allow_egress`，缺少明确许可时保持关闭，不从项目默认值扩大网络权限；已创建的历史画布不改写。现有工作链的独立评测、审查和累计预算继续生效。
