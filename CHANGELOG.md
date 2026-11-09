@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 修复
+
+- **发布回写结论大小写归一（v0.6.17 发布缺陷）**：`statusCheckRollup` 来自 GraphQL `CheckConclusionState` 枚举，`gh` 输出 `SUCCESS`/`FAILURE` 等大写字面量，而 `agent-harness/release-writeback.mjs` 用小写比较 `success`、`BLOCKING_CONCLUSIONS` 也是小写集合。绿且可合并的回写 PR 因此既不在成功处 break，也不进等待批准分支，静默耗尽 90 次轮询（约 90 分钟）后才判 `WRITEBACK_CHECK_TIMEOUT`。v0.6.17 的 [#1028](https://github.com/SummerSec/DeepSonar/pull/1028) 实际就是 `ci-summary=SUCCESS`、`mergeStateStatus=CLEAN`，由人工合并完成落地。现在 `summaryConclusion` 统一归一为小写，并补大写枚举的回归用例（含 `FAILURE`/`CANCELLED`/`TIMED_OUT`/`SKIPPED` 仍必须阻断）。
+
 ## [0.6.17] - 2026-11-08
 
 ### 修复
