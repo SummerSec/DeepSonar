@@ -242,11 +242,16 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
       const [existing] = canvasId ? await tx`SELECT target_json FROM canvases WHERE id=${canvasId}` : [];
       const target = (existing?.target_json ?? {}) as Row;
       if (target.knowledge_work_id !== workId) {
+        const [origin] = before.origin_job_id ? await tx`SELECT agent_snapshot_json FROM jobs
+          WHERE id=${String(before.origin_job_id)} AND project_id=${String(before.project_id)}` : [];
+        const originSnapshot = (origin?.agent_snapshot_json ?? {}) as Row;
+        const originNetwork = (originSnapshot.network_policy ?? {}) as Row;
         canvasId = await ensureCanvasForTaskInTransaction(tx, {
           projectId: String(before.project_id),
           title: `项目知识整理 ${workId}`,
           target: { kind: "standard", title: `项目知识整理 ${workId}`,
-            goal: "受治理的项目知识整理与独立评测", knowledge_work_id: workId },
+            goal: "受治理的项目知识整理与独立评测", knowledge_work_id: workId,
+            network_policy: { allow_egress: originNetwork.allow_egress === true } },
           triggerSource: "project_knowledge", triggerEventId: workId,
         });
       }

@@ -105,8 +105,8 @@ test("successful authorized Job queues once, prepares its own Fact, then makes t
 
     const queued = await queueInTerminalOrder(db, source);
     assert.equal(queued?.status, "queued");
-    assert.equal(queued?.job_id, source.jobId);
     assert.ok(queued?.work_ref);
+    assert.equal(queued?.job_id, source.jobId);
     const [unprepared] = await db`SELECT state,reason,input_manifest_json FROM project_knowledge_work WHERE id=${queued!.work_ref}`;
     assert.equal(unprepared!.state, "pending");
     assert.equal(unprepared!.reason, "automatic_sources_pending");
@@ -163,6 +163,26 @@ test("repeated automatic and manual requests reuse any existing source work with
   });
 });
 
+test("knowledge Canvas preserves the origin Job's frozen egress policy instead of project defaults", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    for (const allowEgress of [false, true]) {
+      const source = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
+      await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["request_project_knowledge"],
+        network_policy: { allow_egress: allowEgress } })} WHERE id=${source.jobId}`;
+      await addFact(db, source);
+      await markTerminal(db, source.jobId, "succeeded");
+      const queued = await queueInTerminalOrder(db, source);
+      assert.ok(queued.work_ref);
+      await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE);
+      await schedulerFor(db).tick();
+      const [canvas] = await db`SELECT c.target_json FROM project_knowledge_work w
+        JOIN canvases c ON c.id=w.canvas_id WHERE w.id=${queued.work_ref}`;
+      assert.deepEqual((canvas!.target_json as Record<string, unknown>).network_policy,
+        { allow_egress: allowEgress });
+    }
+  });
+});
+
 test("empty sources become a durable completed skip without starting maker", async () => {
   await withKnowledgeDatabase(async (db) => {
     const source = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
@@ -173,6 +193,7 @@ test("empty sources become a durable completed skip without starting maker", asy
 
     const queued = await queueInTerminalOrder(db, source);
     assert.equal(queued?.status, "queued");
+    assert.ok(queued?.work_ref);
     assert.equal(await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE), 1);
     const [work] = await db`SELECT state,stage,reason,input_manifest_json FROM project_knowledge_work WHERE id=${queued!.work_ref}`;
     assert.equal(work!.state, "completed");
@@ -190,6 +211,7 @@ test("stopping before or during source resolution leaves work unprepared and unc
     await markTerminal(db, source.jobId, "succeeded");
     const queued = await queueInTerminalOrder(db, source);
     assert.equal(queued?.status, "queued");
+    assert.ok(queued?.work_ref);
     assert.equal(await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE, () => true), 0);
 
     let stopped = false;
@@ -227,6 +249,7 @@ test("twenty source candidates reserve one manifest slot for the frozen governor
 
     const queued = await queueInTerminalOrder(db, source);
     assert.equal(queued?.status, "queued");
+    assert.ok(queued?.work_ref);
     assert.equal(await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE), 1);
     const [work] = await db`SELECT input_manifest_json FROM project_knowledge_work WHERE id=${queued!.work_ref}`;
     const manifest = work!.input_manifest_json as Array<Record<string, unknown>>;
@@ -313,6 +336,7 @@ test("oversized source is bounded before payload transfer and recorded separatel
     await markTerminal(db, source.jobId, "succeeded");
     const queued = await queueInTerminalOrder(db, source);
     assert.equal(queued?.status, "queued");
+    assert.ok(queued?.work_ref);
     assert.equal(await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE), 1);
     const [work] = await db`SELECT state,reason FROM project_knowledge_work WHERE id=${queued!.work_ref}`;
     assert.equal(work!.state, "blocked");

@@ -6,7 +6,7 @@
 
 普通业务 Job 与最新 Attempt 成功结算后，在现有终态事务中的独立 savepoint 内登记一个知识 work。固定 trigger key 绑定来源 Job，已有该 Job 的整理链则复用；重复回调、重启和补做不能创建新的预算链。Hub、Report、知识治理及 trial Job 排除，避免自触发。
 
-来源 Job 必须具有冻结的 request_project_knowledge 权限，项目仍有效，最新 Attempt 成功且不存在未结算的 effect_pending/unknown 外部效果。失败、孤儿、人工等待和已归档项目不自动整理。知识登记失败不得回滚主任务结算，保留脱敏错误日志，可由补做入口重查。
+新知识画布保留来源Job冻结的allow_egress，缺失时关闭，不能继承更宽的项目默认网络策略。来源 Job 必须具有冻结的 request_project_knowledge 权限，项目仍有效，最新 Attempt 成功且不存在未结算的 effect_pending/unknown 外部效果。失败、孤儿、人工等待和已归档项目不自动整理。知识登记失败不得回滚主任务结算，保留脱敏错误日志，可由补做入口重查。
 
 新 work 使用现有 pending 状态和明确的待准备 reason。Dispatcher 在领取知识 work 前准备输入；未准备 work 不能交给 maker。仅选择该 Job 自己的 Fact/Evidence，最多20项，每项遵守现有12KiB上限，沿用 resolve/recheckKnowledgeSource 和 origin Job 的冻结治理方法。CAS 写在短事务外，注册元数据和完成输入冻结在短事务内。无来源记录为 completed 且 reason 明确为跳过，不产生模型 Job。来源拒绝/撤销为 blocked；不伪造质量、usage 或 accepted 回执。继续使用32 Jobs、1800秒、两次修订的现有上限。
 
