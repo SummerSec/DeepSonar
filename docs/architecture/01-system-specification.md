@@ -108,8 +108,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **规范要求**：Hub 必须在角色 Job 终态后按事件触发下一轮或 Report；Verify 等待证据时必须按证据签名/门禁指纹唤醒，重复无进展达到配置上限时必须记录停止原因并可请求人工，不得静默空转。
 - **决策来源**：事件驱动避免定时轮询，证据未变化时需要明确阻塞而不是无限派发。
 - **实现状态**：as-built；无进展上限见[配置](../../apps/scheduler/src/config.ts)，预算和暂停原因均持久化。#1002 P0-3 普通自动/idle/非人工 force 唤醒在 Canvas 锁内拒绝已停止 objective 的后继 Hub；不改写历史人工等待或 unknown effect，显式 run-hub-now 与 completion recovery 仍由原准入约束；Finding 评论 request_hub 在已停止 objective 下先返回 plan_objective_stopped，保留评论但不写人工节点或清除暂停原因。
-- **代码入口**：[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Hub 策略](../../apps/scheduler/src/domains/hub-orchestration/policy.ts)、[配置](../../apps/scheduler/src/config.ts)。
-- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:smoke:convergence`；#1002 P0-3 的现有 Hub characterization 与 `plan-execution-stops.integration.test.ts` 已接 `ci:unit:bounded-contexts` / `ci:integration:plan-protocol`，最终 SHA Actions 待验。
+- **代码入口**：[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Hub 策略](../../apps/scheduler/src/domains/hub-orchestration/policy.ts)、[配置](../../apps/scheduler/src/config.ts)、[Reaper Kernel 门禁停止](../../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)。
+- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:smoke:convergence`；#1002 P0-3 的现有 Hub characterization 与 `plan-execution-stops.integration.test.ts` 已接 `ci:unit:bounded-contexts` / `ci:integration:plan-protocol`。本分支另接 `ci:integration:completion-recovery` 的真实 Reaper/SQL/Control 拒绝与隔离历史回归，验证当前内核 objective/修正次数/已知 token/原期限证明后的本 Hub 非成功出口；accepted human/完成和人工等待不改、directed grant 的 target 不操作。实现和注意力边界见[生命周期](../AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)，最终 SHA Actions 待验，不表示任意 platform_blocker 或原 P0-3 全部交付。
 
 ### FR-HUB-005 决策必须有可执行理由和提示词
 
