@@ -234,10 +234,9 @@ async function wrapperFixture(error?: string, receipt: Record<string, unknown> =
   const oldEnv = { TEMP: process.env.TEMP, TMPDIR: process.env.TMPDIR, PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
     PI_OBSERVATIONAL_MEMORY_PASSIVE: process.env.PI_OBSERVATIONAL_MEMORY_PASSIVE,
     DEEPSONAR_GATEWAY_TOKEN: process.env.DEEPSONAR_GATEWAY_TOKEN,
-    DEEPSONAR_API_TOKEN: process.env.DEEPSONAR_API_TOKEN, DEEPSONAR_OM_GATEWAY_TOKEN: process.env.DEEPSONAR_OM_GATEWAY_TOKEN };
+    DEEPSONAR_API_TOKEN: process.env.DEEPSONAR_API_TOKEN };
   process.env.DEEPSONAR_GATEWAY_TOKEN = "synthetic-main-token";
   process.env.DEEPSONAR_API_TOKEN = "synthetic-control-token";
-  process.env.DEEPSONAR_OM_GATEWAY_TOKEN = "offline-unit";
   process.env.TEMP = root;
   process.env.TMPDIR = root;
   process.env.PI_CODING_AGENT_DIR = "/untrusted/home";

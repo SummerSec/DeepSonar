@@ -15,7 +15,7 @@ export async function startOmHeaderModel() {
   const probeCalls: Array<{ model: string; providerHeader: string; modelHeader: string; status: number }> = [];
   const errors: string[] = [];
   const credentialProjectionStages = new Set<string>();
-  const credentialNames = ["DEEPSONAR_GATEWAY_TOKEN", "DEEPSONAR_API_TOKEN", "DEEPSONAR_OM_GATEWAY_TOKEN"];
+  const credentialNames = ["DEEPSONAR_GATEWAY_TOKEN", "DEEPSONAR_API_TOKEN"];
   const checkCredentialProjection = (text: string, stage: string) => {
     const envLine = text.match(/OM_CREDENTIAL_ENV (\{[^\n]+\})/u)?.[1];
     if (!envLine) return;
@@ -162,7 +162,7 @@ export async function startOmHeaderModel() {
           assert.ok(bash, "installed Pi must expose its real bash tool");
           // Fits Pi's normal 50 KiB tool-output limit while exceeding OM's
           // unmodified 10k-token observation threshold with diverse source text.
-          tool = { name: bash, arguments: { command: "python3 - <<'PY'\nimport hashlib,json,os\nkeys=['DEEPSONAR_GATEWAY_TOKEN','DEEPSONAR_API_TOKEN','DEEPSONAR_OM_GATEWAY_TOKEN']\nassert all(os.environ.get(k) for k in keys)\nprint('OM_CREDENTIAL_ENV '+json.dumps({k:os.environ[k] for k in keys}))\nwith open('/workspace/.deepsonar-home/.pi/agent/auth.json') as f:\n print('OM_CREDENTIAL_AUTH '+json.dumps(json.load(f)))\nfor i in range(580):\n print('OM_HEADER_SOURCE_'+str(i)+' '+hashlib.sha256(str(i).encode()).hexdigest())\nPY" } };
+          tool = { name: bash, arguments: { command: "python3 - <<'PY'\nimport hashlib,json,os\nkeys=['DEEPSONAR_GATEWAY_TOKEN','DEEPSONAR_API_TOKEN']\nassert all(os.environ.get(k) for k in keys)\nassert not os.environ.get('DEEPSONAR_OM_GATEWAY_TOKEN')\nprint('OM_CREDENTIAL_ENV '+json.dumps({k:os.environ[k] for k in keys}))\nwith open('/workspace/.deepsonar-home/.pi/agent/auth.json') as f:\n print('OM_CREDENTIAL_AUTH '+json.dumps(json.load(f)))\nfor i in range(580):\n print('OM_HEADER_SOURCE_'+str(i)+' '+hashlib.sha256(str(i).encode()).hexdigest())\nPY" } };
         } else if (!completionAllowed) {
           assert.ok(bash);
           tool = { name: bash, arguments: { command: "sleep 1" } };

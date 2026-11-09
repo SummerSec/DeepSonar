@@ -366,8 +366,8 @@ function correlatedHeaders(value: unknown, requestId: string): Record<string, st
 
 function guardedRegistry(registry: unknown, config: FrozenConfig, state: GuardState, assertConfig: () => void): AnyRecord {
   if (!isRecord(registry)) fail("PI_OM_MODEL_REGISTRY_MISSING");
-  const secrets = [process.env.DEEPSONAR_GATEWAY_TOKEN, process.env.DEEPSONAR_API_TOKEN,
-    process.env.DEEPSONAR_OM_GATEWAY_TOKEN].filter((value): value is string => typeof value === "string" && value.length > 0);
+  const secrets = [process.env.DEEPSONAR_GATEWAY_TOKEN, process.env.DEEPSONAR_API_TOKEN]
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
   const assertModel: (model: unknown) => asserts model is AnyRecord = (model) => {
     try {
       if (state.hardFailure) throw state.hardFailure;

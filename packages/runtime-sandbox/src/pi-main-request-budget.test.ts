@@ -44,9 +44,11 @@ async function fixture(api = "openai-completions", delegateFailure?: Error) {
   const registrations: Array<{ provider: string; config: any }> = [];
   const pi = { on: (event: string, handler: (...args: any[]) => unknown) => hooks.set(event, handler),
     registerProvider: (provider: string, config: any) => registrations.push({ provider, config }) };
-  const ctx = { model, modelRegistry: { getRegisteredProviderConfig: () => registrations.at(-1)?.config } };
+  const ctx = { model, modelRegistry: { getRegisteredProviderConfig: () => registrations.at(-1)?.config,
+    getAll: () => [{ ...model, provider: "__deepsonar_observational_memory" }],
+    getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic-om-token" }) } };
   module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: url, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token",
-    DEEPSONAR_API_TOKEN: "synthetic-control-token", DEEPSONAR_OM_GATEWAY_TOKEN: "synthetic-om-token" },
+    DEEPSONAR_API_TOKEN: "synthetic-control-token" },
     async function* (selected: any, context: any, options: any) {
       delegates.push({ model: selected, context, options });
       if (delegateFailure) throw delegateFailure;
@@ -132,6 +134,18 @@ test("#1032 main SDK context redacts env, auth-file, tool errors and memory with
       }
     } finally { await f.close(); }
   }
+});
+
+test("#1032 unavailable OM auth rejects before main input generation without leaking auth details", async () => {
+  const f = await fixture();
+  try {
+    f.ctx.modelRegistry.getApiKeyAndHeaders = async () => ({ ok: false, apiKey: "synthetic-om-token" });
+    const events = await f.request();
+    assert.equal(events.at(-1).error.errorMessage, "PI_MAIN_BUDGET_OM_AUTH_INVALID");
+    assert.equal(f.delegates.length, 0);
+    assert.equal(f.queries.length, 0);
+    assert.doesNotMatch(JSON.stringify(events), /synthetic-om-token/u);
+  } finally { await f.close(); }
 });
 
 test("pending settlement polls only allowance; unknown usage and mismatched identities invoke no SDK request", async () => {
@@ -284,10 +298,13 @@ test("main recovery buffers only an empty failed generation and requires the aut
       const model = { provider: "fixture", id: "model", api: "openai-completions", baseUrl, maxTokens: 256, compat: {} };
       const headers = { "X-Deepsonar-Request-Id": "cannot-override", "x-custom": "preserved" };
       const calls: any[] = []; const context = { messages: [] };
-      let start: any, stream: any;
+      let start: any, stream: any, sdkContext: unknown;
       module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
         async function* (_model: any, ctx: any, options: any) {
-          calls.push(options); assert.equal(ctx, context);
+          assert.deepEqual(ctx, context);
+          if (calls.length) assert.equal(ctx, sdkContext, "recovery reuses the same safe context projection");
+          else sdkContext = ctx;
+          calls.push(options);
           yield { type: "start", partial: { content: [] } };
           if (calls.length === 1) {
             if (mode === "partial") yield { type: "text_delta", delta: "already-visible" };
@@ -295,7 +312,7 @@ test("main recovery buffers only an empty failed generation and requires the aut
               content: mode === "embedded_content" ? [{ type: "text", text: "already-visible" }] : [] } };
           } else yield { type: "done", message: { stopReason: "stop" } };
         })({ on: (_event: string, callback: any) => { start = callback; }, registerProvider: (_provider: string, config: any) => { stream = config.streamSimple; } });
-      start({}, { model, modelRegistry: {} });
+      start({}, { model, modelRegistry: { getAll: () => [] } });
       const events: any[] = [];
       for await (const event of stream(model, context, { headers })) events.push(event);
       assert.equal(calls.length, mode === "safe" ? 2 : 1);

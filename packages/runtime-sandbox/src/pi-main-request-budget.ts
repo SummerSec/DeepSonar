@@ -43,8 +43,6 @@ import { pathToFileURL } from 'node:url';
 
 ${PI_ANTHROPIC_THINKING_POLICY_SOURCE}
 
-${redactPiContextSecrets.toString()}
-
 // Resolve the SDK's declared public export from the fixed, lockfile-installed runtime.
 // createRequire.resolve cannot resolve this package's import-only export conditions.
 export async function loadPiContextClamp(root = '/opt/deepsonar/dsh/node_modules/@earendil-works/pi-ai') {
@@ -141,7 +139,7 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
   const gateway = endpoint(env.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
   const token = env.DEEPSONAR_GATEWAY_TOKEN;
   if (typeof token !== 'string' || !token) fail('PI_MAIN_BUDGET_TOKEN_MISSING');
-  const secrets = [token, env.DEEPSONAR_API_TOKEN, env.DEEPSONAR_OM_GATEWAY_TOKEN]
+  const secrets = [token, env.DEEPSONAR_API_TOKEN]
     .filter(value => typeof value === 'string' && value.length > 0);
   return function install(pi) {
     let identity;
@@ -161,7 +159,16 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
             if (requestedModel.provider !== identity.provider || requestedModel.id !== identity.id
               || requestedModel.api !== identity.api || endpoint(requestedModel.baseUrl) !== identity.baseUrl) fail('PI_MAIN_BUDGET_MODEL_CHANGED');
             if (options?.apiKey !== undefined && options.apiKey !== token) fail('PI_MAIN_BUDGET_AUTH_MISMATCH');
-            const safeContext = redactPiContextSecrets(context, secrets);
+            const requestSecrets = [...secrets];
+            // OM credentials are stored in Pi auth.json, not inherited env.
+            // Resolve through the existing registry before projecting any input.
+            const omModel = ctx.modelRegistry.getAll().find(entry => entry.provider === OM_PROVIDER);
+            if (omModel) {
+              const auth = await ctx.modelRegistry.getApiKeyAndHeaders(omModel);
+              if (auth?.ok !== true || typeof auth.apiKey !== 'string' || !auth.apiKey) fail('PI_MAIN_BUDGET_OM_AUTH_INVALID');
+              requestSecrets.push(auth.apiKey);
+            }
+            const safeContext = redactPiContextSecrets(context, requestSecrets);
             let retryOf;
             // Local loop bound is not a grant: admission enforces the original
             // frozen Job-wide cap across requests, tokens and Attempts.
@@ -226,5 +233,8 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
     });
   };
 }
+// Pi-only context projection stays outside the prefix reused by the DSH installer.
+${redactPiContextSecrets.toString()}
+
 export default function mainRequestBudget(pi) { return createPiMainRequestBudgetExtension()(pi); }
 `;

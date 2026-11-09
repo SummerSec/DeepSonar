@@ -50,11 +50,13 @@ async function fixture(compat: Record<string, unknown> = {}) {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat };
   let start: any, wrapped: any;
   module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base + "/gateway", DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token",
-    DEEPSONAR_API_TOKEN: "synthetic-control-token", DEEPSONAR_OM_GATEWAY_TOKEN: "synthetic-om-token" })({
+    DEEPSONAR_API_TOKEN: "synthetic-control-token" })({
     on(name: string, handler: any) { assert.equal(name, "session_start"); start = handler; },
     registerProvider(_name: string, config: any) { wrapped = config.streamSimple; },
   });
-  start({}, { model, modelRegistry: { getRegisteredProviderConfig() { return undefined; } } });
+  start({}, { model, modelRegistry: { getRegisteredProviderConfig() { return undefined; },
+    getAll: () => [{ ...model, provider: "__deepsonar_observational_memory" }],
+    getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic-om-token" }) } });
   return { model, bodies, allowance(cap: number) { remaining = cap; },
     async request(options = {}, context = { messages: [{ role: "user", content: "synthetic", timestamp: 1 }] }) {
       const events = [];
@@ -140,7 +142,7 @@ test("#958 real pi-ai preserves both OpenAI output fields and exposes the one-to
       registerProvider(_name: string, config: any) { wrapped = config.streamSimple; },
     });
     try {
-      start({}, { model, modelRegistry: { getRegisteredProviderConfig() { return undefined; } } });
+      start({}, { model, modelRegistry: { getRegisteredProviderConfig() { return undefined; }, getAll: () => [] } });
       const request = async () => {
         const events: any[] = [];
         for await (const event of wrapped(model, { messages: [{ role: "user", content: "synthetic", timestamp: 1 }] }, { signal: AbortSignal.timeout(10_000) })) events.push(event);
