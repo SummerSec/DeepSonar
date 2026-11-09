@@ -27,7 +27,7 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 ### Job provision 诊断读回（#1002 P2-10）
 
-`GET /jobs/:id` 的 `provision_diagnostics` 复用原 `tasks:read` 项目/Job scope；只查询原 Attempt 上首次 immutable audit 引用，再核 system/scheduler、项目/Job/Attempt、版本与固定字段，不赋予 audit 管理权限。返回来源/时间及固定阶段、HTTP 状态和布尔信号；未知/旧引用不回填，SDK/body/env/审计元数据和容器日志不进入投影。预算只见[实现](../../apps/scheduler/src/provision-failure-evidence.ts)，正常 Job 无引用不查询 audit。引用与审计同事务在正常清理前发布，不变更 lifecycle/效果/预算；[SQL/HTTP 回归](../../apps/scheduler/src/provision-failure-evidence.integration.test.ts)已接 `pnpm ci:integration:platform-api`，最终 SHA 待验。
+`GET /jobs/:id` 的 `provision_diagnostics` 复用原 `tasks:read` 项目/Job scope；只查询原 Attempt 上首次 immutable audit 引用，使用数据库规范 Job ID 比较 text 归属（UUID URL 大小写不改变诊断），再核 system/scheduler、项目/Job/Attempt、版本与固定字段，不赋予 audit 管理权限。返回来源/时间及固定阶段、HTTP 状态和布尔信号；未知/旧引用不回填，SDK/body/env/审计元数据和容器日志不进入投影。预算只见[实现](../../apps/scheduler/src/provision-failure-evidence.ts)，正常 Job 无引用不查询 audit。引用与审计同事务在正常清理前发布，不变更 lifecycle/效果/预算；[SQL/HTTP 回归](../../apps/scheduler/src/provision-failure-evidence.integration.test.ts)已接 `pnpm ci:integration:platform-api`，最终 SHA 待验。
 
 ### 管理 Skill 的当前契约（#996）
 

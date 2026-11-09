@@ -17,9 +17,10 @@ test("provision diagnostics commit before cleanup and read back only through the
   process.env.DEEPSONAR_AUTH_REQUIRED = "false"; process.env.DEEPSONAR_MASTER_KEY = "44".repeat(32);
   let close = async () => {};
   try {
-    const [fastify, websocket, db, routes, attempts, evidence, audit] = await Promise.all([
+    const [fastify, websocket, db, routes, attempts, evidence, audit, lifecycle] = await Promise.all([
       import("fastify"), import("@fastify/websocket"), import("./db.js"), import("./routes.js"),
       import("./domains/job-attempt/application.js"), import("./provision-failure-evidence.js"), import("./audit.js"),
+      import("./domains/job-lifecycle/application.js"),
     ]);
     const { sql } = db;
     await db.migrate();
@@ -45,6 +46,7 @@ test("provision diagnostics commit before cleanup and read back only through the
     };
     const diagnostic = { stage: "create", session_observed: false, cancelled: false, http_status: 500,
       signals: { execd_distribution_failed: true, broken_pipe: true, connection_reset: false, timeout: false } };
+    const limits = { cpu: 1, memoryMiB: 128, pidsLimit: 64 };
     const f = await create();
     const before = await sql`SELECT * FROM job_attempts WHERE id=${f.attemptId}`;
     const effectsBefore = await sql`SELECT * FROM job_attempt_effects WHERE attempt_id=${f.attemptId}`;
@@ -65,10 +67,13 @@ test("provision diagnostics commit before cleanup and read back only through the
       },
     } as OpenSandboxClient;
     const runner = new OpenSandboxRunner(client);
-    await assert.rejects(runner.provision({ jobId: f.jobId, attemptId: f.attemptId, image: "fixture-image", network: "none",
-      env: { SYNTHETIC_SECRET: "synthetic-secret" }, onFailure: async d => { await evidence.recordProvisionFailureEvidence(sql, { ...f, diagnostic: d }); } }));
+    await assert.rejects(runner.provision({ jobId: f.jobId, attemptId: f.attemptId, limits, image: "fixture-image", network: "none",
+      env: { SYNTHETIC_SECRET: "synthetic-secret" }, onFailure: async d => { await evidence.recordProvisionFailureEvidence(sql, { ...f, diagnostic: d }); } }),
+      /runtime image missing/);
     assert.equal(observedBeforeDestroy, true); assert.equal(destroys, 1); assert.equal(alive, false);
     const first = (await detail(f.jobId)).provision_diagnostics[0];
+    assert.deepEqual((await detail(f.jobId.toUpperCase())).provision_diagnostics, [first],
+      "the same UUID has the same diagnostic regardless of URL casing");
     assert.equal(first.source, "scheduler_audit"); assert.equal(first.attempt_id, f.attemptId);
     assert.equal(first.evidence_scope, "structured_host_diagnostic");
     const [after] = await sql`SELECT * FROM job_attempts WHERE id=${f.attemptId}`;
@@ -85,7 +90,7 @@ test("provision diagnostics commit before cleanup and read back only through the
     const failedRunner = new OpenSandboxRunner({ create: async () => { throw failure; }, connect: async () => undefined,
       list: async () => { cleanupObserved = true; assert.equal((await detail(noHandle.jobId)).provision_diagnostics[0].session_observed, false); return []; },
     });
-    await assert.rejects(failedRunner.provision({ jobId: noHandle.jobId, attemptId: noHandle.attemptId, image: "fixture-image", network: "none",
+    await assert.rejects(failedRunner.provision({ jobId: noHandle.jobId, attemptId: noHandle.attemptId, limits, image: "fixture-image", network: "none",
       onFailure: async d => { await evidence.recordProvisionFailureEvidence(sql, { ...noHandle, diagnostic: d }); } }), error => error === failure);
     assert.equal(cleanupObserved, true);
     const noHandleData = (await detail(noHandle.jobId)).provision_diagnostics[0];
@@ -116,7 +121,7 @@ test("provision diagnostics commit before cleanup and read back only through the
     let failedPersistenceCleanup = 0;
     const persistenceRunner = new OpenSandboxRunner({ create: async () => { throw failure; }, connect: async () => undefined,
       list: async () => { failedPersistenceCleanup++; return []; } });
-    await assert.rejects(persistenceRunner.provision({ jobId: rollback.jobId, attemptId: rollback.attemptId, image: "fixture-image", network: "none",
+    await assert.rejects(persistenceRunner.provision({ jobId: rollback.jobId, attemptId: rollback.attemptId, limits, image: "fixture-image", network: "none",
       onFailure: async d => { await evidence.recordProvisionFailureEvidence(sql, { ...rollback, diagnostic: d }); } }), error => error === failure);
     assert.ok(failedPersistenceCleanup > 0, "failed evidence persistence must not retain resources or mask the original fault");
     assert.equal((await sql`SELECT id FROM audit_logs WHERE resource_id=${rollback.jobId}`).length, 0);
@@ -127,6 +132,54 @@ test("provision diagnostics commit before cleanup and read back only through the
     assert.equal(JSON.stringify((await detail(rollback.jobId)).provision_diagnostics).includes("synthetic-secret"), false);
     assert.equal(evidence.projectProvisionFailure({ ...diagnostic, http_status: 700 }), null);
     assert.equal(evidence.projectProvisionFailure({ ...diagnostic, signals: {} }), null);
+
+    for (const order of ["cancel_first", "diagnostic_first"]) {
+      const race = await create();
+      const cancelDb = postgres(isolated.toString(), { max: 1 });
+      const diagnosticDb = postgres(isolated.toString(), { max: 1 });
+      const cancelName = `cancel_${race.jobId}`, diagnosticName = `diagnostic_${race.jobId}`;
+      await cancelDb`SELECT set_config('application_name',${cancelName},false)`;
+      await diagnosticDb`SELECT set_config('application_name',${diagnosticName},false)`;
+      let cancel!: Promise<unknown>, capture!: Promise<string>;
+      try {
+        await sql.begin(async tx => {
+          await tx`SELECT id FROM jobs WHERE id=${race.jobId} FOR UPDATE`;
+          const startCancel = () => { cancel = cancelDb.begin(async cancelTx => {
+            return lifecycle.createSqlJobLifecycleApplication(cancelTx as unknown as typeof sql)
+              .cancelJob(race.jobId, "concurrent provision cancellation");
+          }); };
+          const startCapture = () => { capture = evidence.recordProvisionFailureEvidence(diagnosticDb as unknown as typeof sql,
+            { ...race, diagnostic }); };
+          if (order === "cancel_first") { startCancel(); startCapture(); } else { startCapture(); startCancel(); }
+          const deadline = Date.now() + 5_000;
+          let waiting = false;
+          while (Date.now() < deadline) {
+            await tx`SELECT pg_stat_clear_snapshot()`;
+            const [row] = await tx`SELECT count(*)::int AS n FROM pg_stat_activity
+              WHERE application_name IN (${cancelName},${diagnosticName}) AND wait_event_type='Lock'`;
+            if (Number(row.n) === 2) { waiting = true; break; }
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          assert.equal(waiting, true, "both paths must wait on the original Job fence");
+          await tx`SELECT id FROM job_attempts WHERE id=${race.attemptId} FOR UPDATE NOWAIT`;
+          // This NOWAIT succeeds only if cancellation has not inverted the order by holding Attempt first.
+        });
+        await Promise.all([cancel, capture]);
+        const state = await detail(race.jobId);
+        assert.equal(state.job.status, "cancelled");
+        assert.equal(state.attempts[0].cancel_requested, true);
+        assert.ok(state.attempts[0].cancel_requested_at);
+        assert.equal(state.provision_diagnostics.length, 1);
+        assert.equal(state.effects[0].status, "unknown");
+        assert.equal(state.effects[0].replay_policy, "never");
+        assert.deepEqual(state.job.agent_snapshot_json, { agent_cli: "pi", model: "fixture" });
+        assert.equal(state.usage.length, 0);
+        assert.equal(await evidence.recordProvisionFailureEvidence(sql, { ...race, diagnostic }), await capture);
+        assert.equal((await sql`SELECT id FROM audit_logs WHERE action='job.provision_failed' AND resource_id=${race.jobId}`).length, 1);
+      } finally {
+        await Promise.all([cancelDb.end({ timeout: 5 }), diagnosticDb.end({ timeout: 5 })]);
+      }
+    }
 
     const cancelled = await create();
     await sql.begin(tx => attempts.requestAttemptCancel(tx as unknown as typeof sql, cancelled.jobId, "fixture cancel"));
