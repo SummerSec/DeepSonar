@@ -182,4 +182,4 @@ quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/
 
 ## 自动知识整理的来源边界
 
-成功结算只允许 Scheduler 登记整理，不代表观察已经验证。来源 Job 必须具有冻结整理权限、最新 Attempt 已成功且无未知外部效果；异步来源准备只读取自己的 Fact/Evidence，并在入库前复核归属与内容hash。补做通过项目管理授权，不能修改旧快照、扩大来源项目、重置已存在work预算或复活旧token。新知识画布从来源Job冻结网络策略继承外联许可，缺失时关闭，不使用项目默认值扩权。治理/trial Job 排除，防止自动根链递归。见[ADR-0019](adr/0019-scheduler-knowledge-triggers.md)。
+成功结算只允许 Scheduler 登记整理，不代表观察已经验证。来源 Job 必须具有冻结整理权限、最新 Attempt 已成功且无未知外部效果；异步来源准备只读取自己的 Fact/Evidence，并在入库前复核归属与内容hash。补做通过项目管理授权，不能修改旧快照、扩大来源项目、重置已存在work预算或复活旧token。新知识画布从来源Job冻结网络策略继承外联许可，缺失时关闭，不使用项目默认值扩权。治理/trial Job 排除，防止自动根链递归。见[ADR-0020](adr/0020-scheduler-knowledge-triggers.md)。
