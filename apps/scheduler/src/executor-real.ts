@@ -287,13 +287,25 @@ export function isSemanticAgentRunError(result: {
 const ACCEPTED_COMPLETION_REFUSAL =
   /^(?:Pi message ended: error: )?(?:409:? )?(?:COMPLETION_ALREADY_ACCEPTED|Completion already accepted; reconcile its receipt|A completion is already durably accepted; read its receipt)$/i;
 
+/** Locally generated exit framing from resolveTerminalProcessOutcome; never provider text. */
+const LOCAL_PROCESS_EXIT_FRAMING = /^agent CLI 退出码 ([1-9][0-9]*): /;
+
 export function acceptedCompletionSupersedesRunnerFailure(
   result: Pick<RealAgentResult, "error" | "errorKind" | "terminalOutcome" | "runnerErrorSource">,
   hasAcceptedTerminal: boolean,
 ): boolean {
-  if (!hasAcceptedTerminal || result.runnerErrorSource !== "structured_terminal") return false;
+  if (!hasAcceptedTerminal) return false;
   if (!isFinalAgentRunnerError(result)) return false;
-  return typeof result.error === "string" && ACCEPTED_COMPLETION_REFUSAL.test(result.error);
+  if (typeof result.error !== "string") return false;
+  if (result.runnerErrorSource === "structured_terminal") return ACCEPTED_COMPLETION_REFUSAL.test(result.error);
+  // #1045: a CLI that exits nonzero after the SDK's exact completion refusal cannot
+  // undo a completion the host already durably accepted. Only our own exit framing
+  // may be stripped; signal-style exits (>=128) and any other residual text keep the
+  // anchored refusal identity failing, so transport/arbitrary diagnostics stay failures.
+  if (result.runnerErrorSource !== "process") return false;
+  const framed = LOCAL_PROCESS_EXIT_FRAMING.exec(result.error);
+  if (framed && Number(framed[1]) >= 128) return false;
+  return ACCEPTED_COMPLETION_REFUSAL.test(framed ? result.error.slice(framed[0].length) : result.error);
 }
 
 export function isFinalAgentRunnerError(result: {

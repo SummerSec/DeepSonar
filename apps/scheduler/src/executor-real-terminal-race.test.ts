@@ -283,8 +283,18 @@ async function acceptHubAndDone() {
   return [hubId, doneId];
 }
 
-for (const [format, result] of [["409 space", structuredRefusal], ["Pi message_end 409 colon", piRefusal],
-  ["Pi allowance code", piMessageFailure("COMPLETION_ALREADY_ACCEPTED")]] as const) {
+for (const [format, result] of [
+  ["409 space", structuredRefusal], ["Pi message_end 409 colon", piRefusal],
+  ["Pi allowance code", piMessageFailure("COMPLETION_ALREADY_ACCEPTED")],
+  // #1045: the CLI exits 1 after the SDK's exact completion refusal; the accepted
+  // completion must still settle, whether the exit is framed locally or synthesized.
+  ["Pi exit 1 after structured allowance refusal", { text: "", files: {}, errorKind: "runner" as const,
+    ...resolveTerminalProcessOutcome({ exitCode: 1, terminalResult: { isError: true,
+      errorDetail: "Pi message ended: error: COMPLETION_ALREADY_ACCEPTED" } }) }],
+  ["Pi exit 1 locally framed refusal", { text: "", files: {}, errorKind: "runner" as const,
+    error: "agent CLI 退出码 1: Pi message ended: error: COMPLETION_ALREADY_ACCEPTED",
+    runnerErrorSource: "process", terminalOutcome: "failure" }],
+] as const) {
   test(`executeReal: ${format} refusal settles the original accepted Hub/done exactly once`, async () => {
     let ids: string[] = [];
     const terminals = await runExecutor(async () => {
@@ -323,9 +333,15 @@ const rejectedResults: Array<[string, RealAgentResult]> = [
   ["missing provenance", { ...structuredRefusal, runnerErrorSource: undefined }],
   ["arbitrary structured diagnostic", { ...structuredRefusal, error: `unrelated diagnostic: ${completionRefusal}` }],
   ["semantic failure", { ...structuredRefusal, errorKind: "semantic" }],
-  ["Pi colon refusal with process failure", { ...piRefusal, runnerErrorSource: "process" }],
+  // #1045 accepts an exact refusal behind a locally framed ordinary exit; the kill
+  // signal and any non-refusal text must keep failing closed.
   ["Pi colon refusal without provenance", { ...piRefusal, runnerErrorSource: undefined }],
   ["Pi colon refusal with semantic failure", { ...piRefusal, errorKind: "semantic" }],
+  ["unrelated process failure after accepted completion", { text: "", files: {}, errorKind: "runner",
+    error: "agent CLI 退出码 1: PI_MAIN_BUDGET_EXHAUSTED", runnerErrorSource: "process", terminalOutcome: "failure" }],
+  ["refusal text with trailing diagnostic", { text: "", files: {}, errorKind: "runner",
+    error: "agent CLI 退出码 1: Pi message ended: error: COMPLETION_ALREADY_ACCEPTED (retry suppressed)",
+    runnerErrorSource: "process", terminalOutcome: "failure" }],
   ["Pi colon refusal after exit 137", { ...piRefusal,
     ...resolveTerminalProcessOutcome({ exitCode: 137, closeReason: "terminal_result",
       terminalResult: { isError: true, errorDetail: piRefusal.error } }) }],
