@@ -48,7 +48,8 @@ test("actions classify conflict, human, repair, retry and unknown effect", () =>
   assert.equal(rows[0]?.kind, "human_decision");
   assert.equal(rows[0]?.priority, "critical");
   assert.match(rows[0]?.title ?? "", /冲突/);
-  assert.ok(rows.some((row) => row.id === "finding:f2:needs_human"));
+  assert.ok(!rows.some((row) => row.id === "finding:f2:needs_human"), "the concrete request replaces its generic Finding wait");
+  assert.ok(rows.some((row) => row.id === "human:h1"));
   assert.ok(rows.some((row) => row.recommended_action === "reply_to_agent"));
   assert.ok(rows.some((row) => row.kind === "platform_blocker"));
   assert.ok(rows.some((row) => row.kind === "transient_retry"));
@@ -164,7 +165,7 @@ test("host current projection governs repair, human wait and recovery independen
       execution_state: { authority: "scheduler", status, allowed_actions, blocker } }] })[0];
   assert.equal(project("running", ["correct_proposal"], null)?.recommended_action, "correct_proposal");
   assert.equal(project("waiting_human", ["reconcile_effects"], "effects_require_reconciliation")?.kind, "unknown_effect");
-  assert.equal(project("waiting_human", ["wait_for_human"], "human_already_accepted")?.recommended_action, "reply_to_agent");
+  assert.equal(project("waiting_human", ["wait_for_human"], "human_already_accepted")?.recommended_action, "inspect_recovery", "without a human node, inspect the current state instead of guessing a reply");
   const platform = project("waiting_human", ["wait_for_platform", "request_recovery"], "platform_blocker_accepted");
   assert.equal(platform?.kind, "platform_blocker");
   assert.equal(platform?.recommended_action, "inspect_recovery", "configuration/authority repair is not an Agent reply or automatic resume");
@@ -175,4 +176,108 @@ test("host current projection governs repair, human wait and recovery independen
   assert.equal(ended?.kind, "platform_blocker");
   assert.notEqual(ended?.recommended_action, "retry_same_session");
   assert.equal(ended?.next_state, "failed");
+});
+
+test("an accepted human request replaces its duplicate waiting_human projection", () => {
+  const guidance = {
+    question: "是否允许这项任务继续？",
+    required_action: "在平台中确认授权范围",
+    reply_instructions: "回复确认的范围，不要粘贴秘密",
+    after_reply: "Agent 会按宿主准入重新提交",
+  };
+  const rows = projectTaskActions({
+    jobs: [{
+      id: "job-human",
+      status: "waiting_human",
+      execution_state: { authority: "scheduler", status: "waiting_human", allowed_actions: ["wait_for_human"], blocker: "human_already_accepted" },
+    }],
+    interventions: [{ id: "human-2", reason: "完整请求原因", findingId: "finding-2", jobId: "job-human", pending: true, guidance, guidanceStatus: "available", subjectKind: "business_decision", subjectLabel: "业务决定" }],
+  });
+  const humanBlockers = rows.filter((row) => row.evidence_refs.includes("job:job-human") && row.kind === "human_decision");
+  assert.equal(humanBlockers.length, 1);
+  assert.equal(humanBlockers[0]?.id, "human:human-2");
+  assert.deepEqual(humanBlockers[0]?.human_request?.guidance, guidance);
+
+  const missingRequest = projectTaskActions({ jobs: [{ id: "job-without-node", status: "waiting_human" }] });
+  assert.equal(missingRequest[0]?.recommended_action, "inspect_recovery", "a missing human node must keep the real recovery projection visible");
+});
+
+test("unknown effects and independent finding conflicts survive human-request deduplication", () => {
+  const human = { id: "human-3", reason: "授权请求", findingId: "finding-3", jobId: "job-3", pending: true };
+  const reconciliation = projectTaskActions({
+    jobs: [{
+      id: "job-3",
+      status: "waiting_human",
+      execution_state: {
+        authority: "scheduler",
+        status: "waiting_human",
+        allowed_actions: ["wait_for_human", "reconcile_effects"],
+        blocker: "effects_require_reconciliation",
+      },
+    }],
+    interventions: [human],
+  });
+  assert.equal(reconciliation[0]?.kind, "unknown_effect", "effect reconciliation keeps its higher priority");
+  assert.ok(reconciliation.some((row) => row.id === "human:human-3"));
+
+  const conflict = projectTaskActions({
+    facts: [
+      { id: "supports", verification: { finding_id: "finding-4", outcome: "supports" } },
+      { id: "refutes", verification: { finding_id: "finding-4", outcome: "refutes" } },
+    ],
+    interventions: [{ id: "human-finding", reason: "请检查证据", findingId: "finding-4", pending: true }],
+  });
+  assert.ok(conflict.some((row) => row.id === "finding:finding-4:conflict"));
+  assert.ok(conflict.some((row) => row.id === "human:human-finding"));
+});
+
+test("a finding request replaces its generic needs_human card while conflict evidence stays separate", () => {
+  const rows = projectTaskActions({
+    findings: [{ id: "finding-request", title: "待人工项目", verify_status: "needs_human" }],
+    facts: [
+      { id: "finding-support", verification: { finding_id: "finding-request", outcome: "supports" } },
+      { id: "finding-refute", verification: { finding_id: "finding-request", outcome: "refutes" } },
+    ],
+    interventions: [{
+      id: "human-finding-request",
+      reason: "请先核对该 Finding 的复现路径",
+      findingId: "finding-request",
+      pending: true,
+      subjectKind: "finding",
+      subjectLabel: "证据判断",
+    }],
+  });
+  assert.ok(rows.some((row) => row.id === "human:human-finding-request"));
+  assert.ok(rows.some((row) => row.id === "finding:finding-request:conflict"));
+  assert.ok(!rows.some((row) => row.id === "finding:finding-request:needs_human"));
+});
+
+test("credential and authorization blockers merge with the accepted human request card", () => {
+  for (const [kind, subjectLabel] of [["credential", "凭据配置"], ["authorization", "授权确认"]] as const) {
+    const rows = projectTaskActions({
+      jobs: [{
+        id: `job-${kind}`,
+        status: "waiting_human",
+        execution_state: {
+          authority: "scheduler",
+          status: "waiting_human",
+          allowed_actions: ["wait_for_platform"],
+          blocker: "platform_blocker_accepted",
+        },
+      }],
+      interventions: [{
+        id: `human-${kind}`,
+        reason: "平台等待当前配置或授权请求",
+        jobId: `job-${kind}`,
+        pending: true,
+        subjectKind: kind,
+        subjectLabel,
+      }],
+    });
+    const blockers = rows.filter((row) => row.evidence_refs.includes(`job:job-${kind}`));
+    assert.equal(blockers.length, 1, `${kind} request and host projection represent one blocker`);
+    assert.equal(blockers[0]?.kind, "platform_blocker");
+    assert.equal(blockers[0]?.human_request?.subjectLabel, subjectLabel);
+    assert.equal(blockers[0]?.recommended_action, "reply_to_agent");
+  }
 });

@@ -108,7 +108,14 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
         const runner = await setup();
         await createEventIngestionApplication(sql, async () => {}).ingestEvent(runner.jobId, {
           v: 1, event_id: randomUUID(), type: "human", payload: {
-            reason: "Synthetic accepted wait preserves its concrete governing subject.", subject: { type: "platform_blocker", kind },
+            reason: "Synthetic accepted wait preserves its concrete governing subject.",
+            guidance: {
+              question: "Is the existing governed platform reference available for this blocker?",
+              required_action: "Confirm the exact platform prerequisite and provide only its non-secret reference.",
+              reply_instructions: "Reply with the non-secret reference or state that the prerequisite is unavailable.",
+              after_reply: "The Scheduler rechecks the original Job scope; this reply does not expand permissions or complete the Job.",
+            },
+            subject: { type: "platform_blocker", kind },
           },
         });
         api.unregisterRuntimeHandler(runner.jobId);

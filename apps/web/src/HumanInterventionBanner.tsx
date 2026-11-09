@@ -2,12 +2,16 @@ import { CaretDown, CaretRight, Eye, EyeSlash, HandPalm, PaperPlaneTilt, Prohibi
 import type { HumanInterventionItem, HumanInterventionPrefs } from "./human-messages";
 import {
   countVisiblePendingHumanInterventions,
+  humanInterventionKindLabel,
+  humanInterventionSafetyMessage,
   toggleExpandedId,
   visibleHumanInterventions,
 } from "./human-messages";
+import { HumanRequestDetails } from "./HumanRequestDetails";
 
 export function HumanInterventionBanner({
   items,
+  undisplayedPendingCount = 0,
   prefs,
   ignoreBusyId,
   onPrefsChange,
@@ -15,8 +19,10 @@ export function HumanInterventionBanner({
   onIgnore,
   onOpenFinding,
   onOpenJob,
+  onRetryDetail,
 }: {
   items: readonly HumanInterventionItem[];
+  undisplayedPendingCount?: number;
   prefs: HumanInterventionPrefs;
   ignoreBusyId?: string | null;
   onPrefsChange: (prefs: HumanInterventionPrefs) => void;
@@ -24,6 +30,7 @@ export function HumanInterventionBanner({
   onIgnore: (item: HumanInterventionItem) => void;
   onOpenFinding: (findingId: string) => void;
   onOpenJob: (jobId: string) => void;
+  onRetryDetail?: (item: HumanInterventionItem) => void;
 }) {
   const replied = new Set(prefs.repliedIds);
   const hidden = new Set(prefs.hiddenIds);
@@ -46,7 +53,7 @@ export function HumanInterventionBanner({
           <h2 className="text-[12px] font-medium text-zinc-300">人工介入</h2>
         </button>
         <span className="font-mono text-[9px] text-zinc-600">
-          {pendingCount} 条待处理{hiddenCount > 0 ? ` · 已隐藏 ${hiddenCount} 条历史` : items.length > pendingCount ? ` · 共 ${items.length} 条` : ""}
+          {pendingCount} 条待处理{undisplayedPendingCount > 0 ? ` · 另有 ${undisplayedPendingCount} 条待处理未展示` : hiddenCount > 0 ? ` · 已隐藏 ${hiddenCount} 条历史` : items.length > pendingCount ? ` · 共 ${items.length} 条` : ""}
         </span>
         <button
           type="button"
@@ -76,22 +83,41 @@ export function HumanInterventionBanner({
                   >
                     {expanded ? <CaretDown size={11} className="mt-0.5 shrink-0 text-zinc-500" /> : <CaretRight size={11} className="mt-0.5 shrink-0 text-zinc-500" />}
                     <span className="min-w-0">
-                      <span className="block break-words text-[12px] text-zinc-300">{item.node.title}</span>
-                      <span className={`mt-1 block break-words text-[11px] leading-4 text-zinc-600${expanded ? "" : " line-clamp-1"}`}>{item.reason}</span>
+                      <span className="block break-words text-[12px] text-zinc-300">{humanInterventionKindLabel(item.node)} · {item.guidance?.question || item.node.title}</span>
+                      <span className={`mt-1 block whitespace-pre-wrap break-words text-[11px] leading-4 text-zinc-600${expanded ? "" : " line-clamp-1"}`}>{item.reason}</span>
+                      {item.detailStatus === "loading" && <span className="mt-1 block text-[10px] text-zinc-500">正在读取完整请求内容…</span>}
+                      {item.detailStatus === "loaded" && item.detailVersionMatches === false && <span className="mt-1 block text-[10px] text-amber-300">请求已更新，正在等画布同步最新状态。</span>}
                     </span>
                   </button>
+                  {item.detailStatus === "error" && (
+                    <p role="alert" className="mt-1 text-[10px] text-amber-300">
+                      完整请求读取失败；当前仅显示 500 字摘要。{" "}
+                      <button type="button" className="underline underline-offset-2" onClick={() => onRetryDetail?.(item)}>重试</button>
+                    </p>
+                  )}
+                  {expanded && <HumanRequestDetails
+                    reason={item.reason}
+                    guidance={item.guidance ?? null}
+                    guidanceStatus={item.guidanceStatus ?? "loading"}
+                    detailStatus={item.detailStatus ?? "loading"}
+                    detailVersionMatches={item.detailVersionMatches === true}
+                    detailError={item.detailError}
+                    safetyMessage={humanInterventionSafetyMessage(item.node)}
+                    onRetry={() => onRetryDetail?.(item)}
+                  />}
                 </div>
                 <div className="flex shrink-0 flex-col gap-1">
-                  {item.pending && !hasReplied && (
+                  {item.pending && item.jobId && (
                     <button
                       type="button"
+                      disabled={item.detailStatus !== "loaded" || item.detailVersionMatches !== true}
                       onClick={() => onReply(item)}
-                      className="inline-flex items-center gap-1 font-mono text-[10px] text-amber-300 hover:text-amber-200"
+                      className="inline-flex items-center gap-1 font-mono text-[10px] text-amber-300 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <PaperPlaneTilt size={12} /> 回复
+                      <PaperPlaneTilt size={12} /> {item.detailStatus === "loaded" && item.detailVersionMatches ? "回复" : "读取完整内容后回复"}
                     </button>
                   )}
-                  {item.pending && !hasReplied && (
+                  {item.pending && item.jobId && (
                     <button
                       type="button"
                       disabled={ignoreBusyId === item.node.id}
@@ -101,7 +127,7 @@ export function HumanInterventionBanner({
                       <Prohibit size={12} /> {ignoreBusyId === item.node.id ? "忽略中…" : "忽略"}
                     </button>
                   )}
-                  {hasReplied && <span className="font-mono text-[10px] text-zinc-600">已回复</span>}
+                  {hasReplied && <span className="font-mono text-[10px] text-zinc-600">已发送消息</span>}
                   {!item.pending && !hasReplied && <span className="font-mono text-[10px] text-zinc-600">{item.node.status === "ignored" ? "已忽略" : "已处理"}</span>}
                   <button
                     type="button"

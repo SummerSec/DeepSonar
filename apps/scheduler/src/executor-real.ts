@@ -330,7 +330,7 @@ export interface DeferredSemanticState {
   executionPlan?: { eventId: string };
   done: { eventId: string; summary: string; verdict?: VerifyVerdict; missingEvidence?: string[] } | null;
   hub: { eventId: string; payload: unknown } | null;
-  human: { eventId: string; reason: string; subject: HumanPayload["subject"]; plan_basis?: HumanPayload["plan_basis"] } | null;
+  human: { eventId: string; payload: HumanPayload } | null;
 }
 
 /**
@@ -354,7 +354,7 @@ export function buildDeferredSemanticTerminalEvents(input: {
       v: 1,
       event_id: state.human.eventId,
       type: "human",
-      payload: { reason: state.human.reason, subject: state.human.subject, ...(state.human.plan_basis ? {plan_basis:state.human.plan_basis} : {}) },
+      payload: state.human.payload,
     }];
   }
   if (!state.done) throw new Error("Agent 未通过 mark_job_done 提交最终摘要");
@@ -953,7 +953,8 @@ ${graph.yaml}
 role 只能原样使用 list_available_roles 本轮返回的 name；不得使用记忆、固定清单或猜测的角色，不得派发 system/hub 角色。
 runtime_image_key 只能原样使用 list_available_runtime_images 本轮返回且 readiness=ready 的 image_key，且须与该角色 CLI 兼容；目录之外或 CLI 不兼容会 invalid_runtime_image，未就绪会 runtime_image_not_ready。
 任务出网策略：${allowEgress ? "本任务允许访问外部网络（Hub 与 Worker 相同）" : "本任务禁止访问模型网关之外的网络（Hub 与 Worker 相同）"}。
-Hub 以读图与下发 prompt 为主；Worker 收到 prompt 后在 /workspace 内自行决定是否以及如何获取代码、网页、制品或其他证据。`;
+Hub 以读图与下发 prompt 为主；Worker 收到 prompt 后在 /workspace 内自行决定是否以及如何获取代码、网页、制品或其他证据。
+人工提问必须可行动：request_human 除 reason 和 subject 外必须提交 guidance.question、guidance.required_action、guidance.reply_instructions、guidance.after_reply。先说明问题、影响及具体决定，再逐项说明用户要准备什么、在哪里操作、怎样回复、拒绝或暂不提供时的选择，以及回复后的业务计划。只引用已核实的安全配置位置，未知时明确说明；凭据不得贴入聊天或附件，不得捏造配置入口。回复不扩权、不等于 ACK 或完成，恢复仍受原权限、预算、期限和效果准入；平台可对账故障不能伪装成业务决策。`;
     initialInput = `普通 Hub 任务没有 plan_objective 声明，当前没有活动 Plan，且不存在历史显式 Plan owner 时，走普通 Hub 路径：按当前任务使用 submit_hub_decision 提交 complete 或 intents。不要仅为满足 Plan v2 指令而调用 plan_objective，也不得仅因 plan_objective 缺失而停止或 request_human。只有当前任务声明了 plan_objective、存在活动 Plan 上下文或历史显式 Plan owner 时，才适用以下执行型 Plan v2 要求。\n\nPlan v2 first submit requirement: before any v2 submit_plan, call graph_query({kind:"plan_objective"}) and require a truncated=false response whose items[0] is the complete current user objective tuple. Submit plan.v=2; copy items[0].objective_id into plan.objective_id and revision.objective_id, copy items[0].revision into plan.objective_revision and revision.expected_objective_revision, and copy goal, completion, and budget unchanged into plan. The objective v=1, input_sha256, status, and updated_at are read metadata, not v2 Plan fields. If the read is unavailable, invalid, incomplete, has an invalid status, or the graph-query budget is too small, stop or request_human for that explicit Plan context; do not fall back to ordinary intents or guess, weaken, or replace the user objective. The YAML plan_objective value is only a bounded read handle, not the complete tuple.\n\n${initialInput}`;
     if (taskTarget.kind === "compose") {
       initialInput += `\n\n${composeHubInstruction()}`;
@@ -1564,7 +1565,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       if(planReservation && !(runtimeControl.planPhase==="commit" && planReservation.eventId===eventId && planReservation.type===event.type)) throw toolBoundaryError("duplicateToolCall","Plan acceptance is pending");
       if(runtimeControl.planPhase==="validate") return;
       if(runtimeControl.planPhase==="prepare") {planReservation={eventId,type:event.type};return;}
-      semanticState.human = { eventId, reason: p.reason.trim(), subject: p.subject, ...(p.plan_basis ? {plan_basis:p.plan_basis} : {}) };
+      semanticState.human = { eventId, payload: p };
       return;
     }
     throw new Error("不支持的语义事件");
@@ -1823,7 +1824,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         if (platformApiEnabled) {
           registerRuntimeHandler(jobId, runtimePlatformHandler, platformOperations);
           registerRuntimeTerminalState(jobId, attemptId!, () => semanticState.human ? "human"
-            : semanticState.done ? "done" : semanticState.hub ? "hub_decision" : null, () => semanticState.human?.subject ?? null);
+            : semanticState.done ? "done" : semanticState.hub ? "hub_decision" : null, () => semanticState.human?.payload.subject ?? null);
           platformRuntimeRegistered = true;
         }
         const disposeHumanMessages = await registerHumanMessageRuntime(jobId, { sendMessage, writeWorkspaceFile });
@@ -1933,7 +1934,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       v: 1,
       event_id: semanticState.human.eventId,
       type: "human",
-      payload: { reason: semanticState.human.reason, subject: semanticState.human.subject, ...(semanticState.human.plan_basis ? {plan_basis:semanticState.human.plan_basis} : {}) },
+      payload: semanticState.human.payload,
     });
     return;
   }

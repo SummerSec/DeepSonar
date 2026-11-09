@@ -2,6 +2,8 @@ import type { TaskLifecycleStatus } from "../task-lifecycle";
 
 /** UI 投影，不替换后端 Job/Finding/Fact/Report 真相。 */
 
+import type { HumanRequestGuidance } from "@deepsonar/shared-types";
+
 export type TaskActionKind = "human_decision" | "model_repair" | "transient_retry" | "unknown_effect" | "platform_blocker";
 export type TaskActionPriority = "critical" | "high" | "normal" | "low";
 export type TaskTraceKind = "intent" | "plan" | "capability" | "run" | "evidence" | "decision" | "report";
@@ -35,6 +37,16 @@ export type TaskAction = {
   next_state: string;
   priority: TaskActionPriority;
   href?: string;
+  human_request?: {
+    reason: string;
+    guidance: HumanRequestGuidance | null;
+    guidanceStatus: "loading" | "error" | "available" | "missing";
+    detailError?: string;
+    detailStatus: "loading" | "error" | "loaded";
+    detailVersionMatches: boolean;
+    subjectLabel: string;
+    safetyMessage?: string | null;
+  };
 };
 
 export type TaskTraceEntry = {

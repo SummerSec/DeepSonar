@@ -1468,6 +1468,7 @@ const OPS: Op[] = [
     method: "get",
     path: "/jobs",
     summary: "Job 列表",
+    description: "waiting_human 项包含与详情同源的 Scheduler execution_state，区分人工决定、配置/授权等待和未知效果对账；该建议不是恢复授权。分页不变，其他状态不额外读取恢复投影。",
     scope: "tasks:read",
     tags: ["Jobs"],
     query: { project_id: { type: "string", format: "uuid" }, status: { type: "string" } },
