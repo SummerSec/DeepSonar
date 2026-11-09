@@ -33,7 +33,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：用户可将任务加入项目 FIFO 队列，同队列最多一个任务占据执行位置。前驱完整收敛且无活动 Job 或未结清效果时才可启动下一任务。当前任务内部 Job 仍使用既有并发与权限；失败/取消需明确确认具体队首后继续，未知效果、人工等待与任务暂停保留占位。
 - **决策来源**：#1018 减少逐个观察并手动启动任务的操作；项目单队列和失败暂停为本次实施默认值。
-- **实现状态**：schema 72 持久队列与全局 claim 锁接线；创建时原子入队、重启读取和任务页控制已实现，最终候选 Actions 待验。治理恢复后完整成功按成功策略推进，旧成功不能代表新重试完成。
+- **实现状态**：schema 72 持久队列与全局 claim 锁接线；创建时原子入队、重启读取和任务页控制已实现，最终候选 Actions 待验。治理恢复后完整成功按成功策略推进，旧成功不能代表新重试完成。硬重试原子建立新队尾位置且保留暂停；独立 Finding 报告再生成不重置任务完成代际。
 - **代码入口**：[队列存储](../../apps/scheduler/src/domains/project-task/task-queue-store.ts)、[队列路由](../../apps/scheduler/src/domains/project-task/task-queue-routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[基线](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:web-facts`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:migrations`。场景与边界见[项目任务队列](../PROJECT_TASK_QUEUE.md)。
 

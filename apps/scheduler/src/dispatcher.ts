@@ -809,10 +809,10 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       // Re-check scope, pause/schedule, graph and quotas from locked rows before CAS.
       if (claimed.length >= slots) break;
       if (!(await eligible(job, graphBatch))) continue;
-      if (job.canvas_id && !await canClaimQueuedTask(/* SAFETY: postgres.js tx handle exposes the same tagged-template interface as sql. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id))) continue;
+      if (job.canvas_id && !await canClaimQueuedTask(/* SAFETY: postgres.js tx handle exposes the same tagged-template interface as sql. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id), job.type === "report" && parseDispatchPayload(job.payload_json).kind === "finding_report")) continue;
       const row = await lifecycle.claimPendingJob(job.id);
       if (!row) continue;
-      if (job.canvas_id) await markQueuedTaskClaimed(/* SAFETY: same postgres.js tx handle; the store only uses the tagged template interface. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id));
+      if (job.canvas_id && !(job.type === "report" && parseDispatchPayload(job.payload_json).kind === "finding_report")) await markQueuedTaskClaimed(/* SAFETY: same postgres.js tx handle; the store only uses the tagged template interface. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id));
       await createOrGetActiveAttempt(
         tx as unknown as typeof sql, job.id, attemptSnapshotIdentity(job.agent_snapshot_json), { "deepsonar.job": job.id },
       );

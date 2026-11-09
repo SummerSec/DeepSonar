@@ -81,9 +81,9 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, kind?, seed_finding_ids?, allow_egress?, schedule_beijing_8am?, scheduled_start_at?, device?, task_contract?}`；`device` = 真实设备需求 `{transport, key?, model?, exclusive?, ttl_sec?, roles?}`（缺省 `roles:["test"]`），冻结进 Job 快照并需要项目先 `device_access_enabled=true`，否则 `409 device_not_authorized`；`kind` 缺省为 `standard` 且禁止种子，`compose` 必须显式提交同项目 1–8 个当前可代入（未否定处置，含未确认）Finding UUID；省略出网字段时继承项目默认值；`scheduled_start_at`（ISO）优先于北京时间 08:00 快捷项 |
-| GET | /projects/:id/task-queue | tasks:read | 项目 FIFO 任务队列：`current`（执行中）、`waiting`（按入队顺序）与 `paused` / `pause_reason`；只读投影，不改变任何 Job 状态 |
-| PATCH | /projects/:id/task-queue | jobs:control | `{paused, acknowledge_failed_head?}` 暂停或恢复队列推进；`acknowledge_failed_head` 仅在暂停时接受，用于显式跳过已失败的队首，不自动重试、不改写历史 |
-| POST | /projects/:id/task-queue/items | jobs:control | `{canvas_id}` 把同项目已有任务追加到队尾；重复入队或状态不符时拒绝，等待项在获得执行资格前不启动 Hub 或其他执行 Job |
+| GET | /projects/:id/task-queue | tasks:read | 项目 FIFO 队列返回 `{project_id, paused, pause_reason, items, has_more}`；`items[].state` 为 `active/queued/succeeded/failed/cancelled`，活动/等待优先、历史随后，最多 100 项，`has_more` 表示截断；只读投影，不改变 Job 状态 |
+| PATCH | /projects/:id/task-queue | jobs:control | `{paused:true}` 暂停推进；恢复为 `{paused:false}`，队列因当前队首失败/取消暂停时，须提交 `{paused:false, acknowledge_failed_head:"当前条目ID"}` 确认跳过；`paused:true` 携带确认被严格 schema 拒绝，旧条目 ID 拒绝；不自动重试、不改写历史 |
+| POST | /projects/:id/task-queue/items | jobs:control | `{canvas_id}` 把同项目已有且含合法 pending 工作的任务追加到队尾；已 queued/active 的重复入队幂等成功，保留条目 ID/位置；终态 membership 的新执行排尾，状态/归属不符时拒绝；等待项获得资格前不启动执行 Job |
 | PATCH | /tasks/:canvasId | tasks:write | 就地更新 `{title?, content?, plan_objective?}`（至少一项）；`plan_objective` 只能由授权用户提交 `{expected_revision, goal, completion, budget}`，在 Canvas 行锁内做当前目标 revision CAS，冲突返回 `409 plan_stale_revision`，不接受 Agent 的 Plan payload。同步 `canvases.title` 与 `target_json.title/content/goal/plan_objective` 及 root 节点；只影响后续 Hub 读图 / 新派生 Job / 显式重试，不改写已冻结 Job `agent_snapshot_json`、Attempt 或事件。归档返回 `409 TASK_ARCHIVED`。`200` 返回当前 `plan_objective` 与 `snapshot_rewritten:false` |
 | POST | /tasks/:canvasId/pause | jobs:control | 幂等 drain pause；阻止该 Canvas 继续 claim，已在 claimed/provisioning/running/waiting_human 的 Job 安全收尾。返回 `execution_state/active_count/pending_count/changed` |
 | POST | /tasks/:canvasId/start | jobs:control | 幂等解除执行门禁并 `pg_notify`；不清 schedule，不重试 failed/orphan/cancelled；归档任务返回 `409 TASK_ARCHIVED` |

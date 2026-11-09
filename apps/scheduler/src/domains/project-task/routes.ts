@@ -1,6 +1,6 @@
 import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
 import { registerProjectTaskQueueRoutes } from "./task-queue-routes.js";
-import { TaskQueueError } from "./task-queue-store.js";
+import { TaskQueueError, restartProjectTaskQueue } from "./task-queue-store.js";
 import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
 import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -1331,6 +1331,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(
         // SAFETY: postgres.js transaction handles have the same tagged-template interface.
         tx as unknown as typeof sql, { projectId, type: "hub_reason" }, snapshot);
+      await restartProjectTaskQueue(tx as unknown as typeof sql, projectId, canvasId);
       await wipeCanvasRuntimeData(tx, canvasId);
 
       // 重置意图上的收敛态与定时门，保留用户任务内容
@@ -1407,6 +1408,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       return { job: hubJob, reason: undefined };
       });
     } catch (error) {
+      if (error instanceof TaskQueueError) return reply.code(error.statusCode).send({ error: error.message, error_code: error.code });
       if (error instanceof TaskSeedInputError) {
         return reply.code(409).send({ error: error.message, error_code: "COMPOSE_SEEDS_STALE" });
       }

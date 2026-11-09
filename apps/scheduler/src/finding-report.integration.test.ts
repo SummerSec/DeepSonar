@@ -219,6 +219,44 @@ if (!testDatabaseUrl) {
       assert.equal(reconciled.status, "failed");
       assert.equal(reconciled.error, "report_failed_before_claim");
 
+      // Rebuild an already completed queued task's Finding report through the real HTTP path.
+      // It is an independent projection and must not invent another task generation.
+      const { enqueueProjectTask, readProjectTaskQueue, reconcileProjectTaskQueues } = await import("./domains/project-task/task-queue-store.js");
+      const { DISPATCH_CLAIM_ADVISORY_KEY, finalizeJob } = await import("./core.js");
+      const withQueueLock = (work: (tx: typeof sql) => Promise<unknown>) => sql.begin(async raw => {
+        const tx = raw as unknown as typeof sql;
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+        return work(tx);
+      });
+      const nextCanvas = randomUUID(), nextJob = randomUUID();
+      await sql`INSERT INTO canvases(id,project_id,title) VALUES(${nextCanvas},${projectId},'Next queue task')`;
+      await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status,body_json)
+        VALUES(${nextCanvas},'root','Next root','active','{}')`;
+      await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,payload_json)
+        VALUES(${nextJob},${projectId},${nextCanvas},'audit','pending','{}','{}')`;
+      // Finish the outstanding v5 projection, then enroll and complete A.
+      await sql.begin(tx => reportModule.finalizeReportJob(tx as unknown as typeof sql, String(fifth.job_id), { summary: "v5" }));
+      await sql`UPDATE jobs SET status='succeeded',started_at=clock_timestamp(),finished_at=clock_timestamp() WHERE canvas_id=${canvasId}`;
+      await sql`UPDATE jobs SET status='pending' WHERE id=${taskReportJobId}`;
+      await withQueueLock(async tx => { await enqueueProjectTask(tx, projectId, canvasId); await enqueueProjectTask(tx, projectId, nextCanvas); });
+      await sql`UPDATE project_task_queue_items SET state='active',started_at=clock_timestamp() WHERE canvas_id=${canvasId}`;
+      await sql`UPDATE jobs SET status='succeeded',started_at=clock_timestamp(),finished_at=clock_timestamp() WHERE id=${taskReportJobId}`;
+      await sql`UPDATE canvas_nodes SET status='succeeded',updated_at=clock_timestamp() WHERE canvas_id=${canvasId} AND node_type='root'`;
+      await withQueueLock(tx => reconcileProjectTaskQueues(tx));
+      const completed = (await readProjectTaskQueue(sql, projectId)).items.find(item => item.canvas_id === canvasId)!;
+      assert.equal(completed.state, "succeeded");
+      const regenerated = await app.inject({ method: "POST", url: `/findings/${findingId}/report` });
+      assert.equal(regenerated.statusCode, 200, regenerated.payload);
+      assert.equal(regenerated.json().dispatched, true);
+      const regenJob = String(regenerated.json().job_id);
+      const claimIds = (await dispatcherModule.claimPendingJobs()).map(job => String(job.id));
+      assert.ok(claimIds.includes(regenJob), "the report projection is still claimable");
+      assert.ok(claimIds.includes(nextJob), "B starts without waiting for an invented A generation");
+      await sql.begin(tx => finalizeJob(tx as unknown as typeof sql, regenJob, "succeeded", { summary: "Regenerated Finding report" }));
+      const stillCompleted = (await readProjectTaskQueue(sql, projectId)).items.find(item => item.canvas_id === canvasId)!;
+      assert.equal(stillCompleted.id, completed.id); assert.equal(stillCompleted.state, "succeeded");
+      assert.equal((await sql`SELECT status FROM finding_reports WHERE report_job_id=${regenJob}`)[0]?.status, "succeeded");
+
       const isolatedFindingId = randomUUID();
       const isolatedVerifyJobId = randomUUID();
       const reviewJobId = randomUUID();

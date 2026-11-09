@@ -75,6 +75,10 @@ test("project queue HTTP enforces permissions, strict input, ownership and durab
     assert.equal(second.statusCode, 200, second.payload);
     assert.equal(second.json().items[0].id, first.json().items[0].id);
     assert.equal(second.json().items[0].state, "queued");
+    assert.deepEqual(Object.keys(second.json()).sort(), ["has_more", "items", "pause_reason", "paused", "project_id"]);
+    assert.equal(second.json().has_more, false);
+    assert.equal((await app.inject({ method: "PATCH", url: path, headers: controller,
+      payload: { paused: true, acknowledge_failed_head: second.json().items[0].id } })).statusCode, 400);
 
     const paused = await app.inject({ method: "PATCH", url: path, headers: controller, payload: { paused: true } });
     assert.equal(paused.statusCode, 200, paused.payload);

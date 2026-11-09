@@ -179,6 +179,31 @@ export async function enqueueProjectTask(
   };
 }
 
+/** Hard retry only: caller holds the claim lock and creates the new Hub in this transaction. */
+export async function restartProjectTaskQueue(tx: Db, projectId: string, canvasId: string): Promise<void> {
+  const [item] = await tx`SELECT id::text, project_id::text, state FROM project_task_queue_items
+    WHERE canvas_id = ${canvasId} FOR UPDATE`;
+  if (!item) return;
+  if (String(item.project_id) !== projectId) throw new TaskQueueError("QUEUE_PROJECT_MISMATCH", "任务队列项目不一致");
+  const [effect] = await tx`SELECT e.id FROM jobs j JOIN job_attempt_effects e ON e.job_id = j.id
+    WHERE j.canvas_id = ${canvasId} AND (e.status IN ('effect_pending','unknown')
+      OR (e.status = 'planned' AND e.effect_kind = 'agent_run')) LIMIT 1`;
+  if (effect) throw new TaskQueueError("QUEUE_UNKNOWN_EFFECT", "任务仍有未结清外部效果，不能重新排队");
+  const [next] = await tx`UPDATE project_task_queue_items
+    SET id = nextval(pg_get_serial_sequence('project_task_queue_items','id')), state = 'queued',
+        created_at = clock_timestamp(), started_at = NULL, ended_at = NULL
+    WHERE id = ${item.id} RETURNING id::text`;
+  // The old failed-head acknowledgement no longer names this execution.
+  // Keep the pause, but require a normal explicit resume instead of a stale ack.
+  await tx`UPDATE project_task_queues SET pause_reason = 'manual', updated_at = clock_timestamp()
+    WHERE project_id = ${projectId} AND paused AND pause_reason IN ('task_failed','task_cancelled')`;
+  await recordSystemAudit({ action: "task_queue.retry_enqueue", projectId,
+    resourceType: "project_task_queue_item", resourceId: String(next.id),
+    before: { canvas_id: canvasId, item_id: String(item.id), state: item.state },
+    after: { canvas_id: canvasId, item_id: String(next.id), state: "queued" },
+  }, tx);
+}
+
 async function readQueueHead(tx: Db, projectId: string): Promise<QueueHead | null> {
   const [head] = await tx<QueueHead[]>`
     SELECT id::text, project_id::text, canvas_id, state, created_at, started_at
@@ -211,6 +236,7 @@ async function readTaskSnapshot(tx: Db, head: QueueHead): Promise<TaskSnapshot |
            (SELECT MIN(j.started_at) FROM jobs j
             WHERE j.canvas_id = c.id AND j.started_at IS NOT NULL AND j.started_at >= ${head.created_at}) AS started_at,
            (SELECT j.status FROM jobs j WHERE j.canvas_id = c.id
+              AND NOT (j.type = 'report' AND COALESCE(j.payload_json->>'kind', '') = 'finding_report')
               AND GREATEST(COALESCE(j.created_at, '-infinity'::timestamptz),
                            COALESCE(j.claimed_at, '-infinity'::timestamptz),
                            COALESCE(j.started_at, '-infinity'::timestamptz),
@@ -239,6 +265,7 @@ async function readTaskSnapshot(tx: Db, head: QueueHead): Promise<TaskSnapshot |
         )), ${head.created_at}::timestamptz)
       ) AS generation_at
       FROM jobs j WHERE j.canvas_id = c.id
+        AND NOT (j.type = 'report' AND COALESCE(j.payload_json->>'kind', '') = 'finding_report')
     ) fence ON true
     WHERE c.id = ${head.canvas_id} AND c.project_id = ${head.project_id}`;
   if (!row) return null;
@@ -361,7 +388,7 @@ export async function reconcileProjectTaskQueues(tx: Db, limit = 32): Promise<nu
  * A retry of a terminal membership is moved to the tail only when a legitimate
  * pending Job exists and no in-flight Job or unresolved external effect remains.
  */
-export async function canClaimQueuedTask(tx: Db, projectId: string, canvasId: string): Promise<boolean> {
+export async function canClaimQueuedTask(tx: Db, projectId: string, canvasId: string, projectionOnly = false): Promise<boolean> {
   const [canvas] = await tx`
     SELECT cv.project_id::text, cv.status, cv.archived_at, p.status AS project_status, p.archived_at AS project_archived_at
     FROM canvases cv JOIN projects p ON p.id = cv.project_id WHERE cv.id = ${canvasId}`;
@@ -383,6 +410,7 @@ export async function canClaimQueuedTask(tx: Db, projectId: string, canvasId: st
   if (!currentMembership) return true;
   if (String(currentMembership.project_id) !== projectId) return false;
   if (isTerminalState(currentMembership.state)) {
+    if (projectionOnly) return true;
     try {
       await enqueueProjectTask(tx, projectId, canvasId);
     } catch (error) {
@@ -508,6 +536,7 @@ export async function readProjectTaskQueue(db: Db, projectId: string): Promise<P
            EXISTS (SELECT 1 FROM jobs j WHERE j.canvas_id = c.id
                    AND j.started_at IS NOT NULL AND j.started_at >= n.created_at) AS has_started,
            (SELECT j.status FROM jobs j WHERE j.canvas_id = c.id
+              AND NOT (j.type = 'report' AND COALESCE(j.payload_json->>'kind', '') = 'finding_report')
               AND GREATEST(COALESCE(j.created_at, '-infinity'::timestamptz),
                            COALESCE(j.claimed_at, '-infinity'::timestamptz),
                            COALESCE(j.started_at, '-infinity'::timestamptz),
@@ -542,6 +571,7 @@ export async function readProjectTaskQueue(db: Db, projectId: string): Promise<P
         )), n.created_at)
       ) AS generation_at
       FROM jobs j WHERE j.canvas_id = c.id
+        AND NOT (j.type = 'report' AND COALESCE(j.payload_json->>'kind', '') = 'finding_report')
     ) fence ON true
     WHERE n.row_no <= 100
     ORDER BY n.row_no`;

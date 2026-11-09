@@ -185,6 +185,60 @@ if (!testDatabaseUrl) {
       assert.deepEqual(woken.agent_snapshot_json.runtime_knobs, expectedKnobs);
       assert.equal(woken.timeout_sec, expectedKnobs.timeout_sec);
 
+      // A hard retry is a new execution even if the failed head is still active.
+      const { readProjectTaskQueue, canClaimQueuedTask } = await import("./domains/project-task/task-queue-store.js");
+      const { DISPATCH_CLAIM_ADVISORY_KEY } = await import("./core.js");
+      for (const pauseReason of ["manual", "task_failed"] as const) {
+        const taskA = await app.inject({ method: "POST", url: `/projects/${projectId}/tasks`,
+          payload: { title: "Retry A", content: "New execution takes a fresh FIFO position", enqueue: true, allow_egress: false } });
+        assert.equal(taskA.statusCode, 201, taskA.payload);
+        const aCanvas = String(taskA.json().canvas_id), aJob = String(taskA.json().job.id);
+        const taskB = await app.inject({ method: "POST", url: `/projects/${projectId}/tasks`,
+          payload: { title: "Waiting B", content: "Must precede the retried task", enqueue: true, allow_egress: false } });
+        assert.equal(taskB.statusCode, 201, taskB.payload);
+        const bCanvas = String(taskB.json().canvas_id);
+        await sql`UPDATE jobs SET status='failed',finished_at=clock_timestamp() WHERE id=${aJob}`;
+        await sql`UPDATE canvas_nodes SET status='failed',updated_at=clock_timestamp() WHERE canvas_id=${aCanvas} AND node_type='root'`;
+        await sql`UPDATE project_task_queue_items SET state='active',started_at=clock_timestamp() WHERE canvas_id=${aCanvas}`;
+        await sql`UPDATE project_task_queues SET paused=true,pause_reason=${pauseReason} WHERE project_id=${projectId}`;
+        const before = await readProjectTaskQueue(sql, projectId);
+        const aBefore = before.items.find(item => item.canvas_id === aCanvas)!;
+        // Failure after queue movement must roll it back together with the wipe.
+        await sql.unsafe(`CREATE FUNCTION queue_retry_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+          IF NEW.payload_json #>> '{trigger,restart}' = 'true' THEN RAISE EXCEPTION 'queue retry rollback'; END IF;
+          RETURN NEW; END $$; CREATE TRIGGER queue_retry_failure BEFORE INSERT ON jobs
+          FOR EACH ROW EXECUTE FUNCTION queue_retry_failure()`);
+        const rejected = await app.inject({ method: "POST", url: `/tasks/${aCanvas}/retry` });
+        assert.equal(rejected.statusCode, 500, rejected.payload);
+        assert.deepEqual(await readProjectTaskQueue(sql, projectId), before);
+        await sql.unsafe("DROP TRIGGER queue_retry_failure ON jobs; DROP FUNCTION queue_retry_failure()");
+        const restarted = await app.inject({ method: "POST", url: `/tasks/${aCanvas}/retry` });
+        assert.equal(restarted.statusCode, 201, restarted.payload);
+        const after = await readProjectTaskQueue(sql, projectId);
+        const aAfter = after.items.find(item => item.canvas_id === aCanvas)!;
+        const bAfter = after.items.find(item => item.canvas_id === bCanvas)!;
+        assert.notEqual(aAfter.id, aBefore.id);
+        assert.ok(BigInt(aAfter.id) > BigInt(bAfter.id), "hard retry must move behind B");
+        assert.equal(aAfter.state, "queued"); assert.equal(aAfter.started_at, null);
+        assert.equal(after.paused, true); assert.equal(after.pause_reason, "manual");
+        await sql.begin(async raw => {
+          const tx = raw as unknown as typeof sql;
+          await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+          assert.equal(await canClaimQueuedTask(tx, projectId, aCanvas), false);
+          assert.equal(await canClaimQueuedTask(tx, projectId, bCanvas), false, "pause remains authoritative");
+        });
+        const resume = await app.inject({ method: "PATCH", url: `/projects/${projectId}/task-queue`, payload: { paused: false } });
+        assert.equal(resume.statusCode, 200, resume.payload);
+        await sql.begin(async raw => {
+          const tx = raw as unknown as typeof sql;
+          await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+          assert.equal(await canClaimQueuedTask(tx, projectId, aCanvas), false);
+          assert.equal(await canClaimQueuedTask(tx, projectId, bCanvas), true);
+        });
+        await sql`UPDATE project_task_queue_items SET state='cancelled',ended_at=clock_timestamp() WHERE project_id=${projectId}`;
+        await sql`UPDATE jobs SET status='cancelled' WHERE canvas_id IN (${aCanvas},${bCanvas})`;
+      }
+
       // #490: an archived canvas must answer retry/resume with a stable error_code.
       await sql`UPDATE canvases SET status = 'archived', archived_at = now() WHERE id = ${canvasId}`;
       for (const url of [`/tasks/${canvasId}/retry`, `/tasks/${canvasId}/resume-session`]) {
