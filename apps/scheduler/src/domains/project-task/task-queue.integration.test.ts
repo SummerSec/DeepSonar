@@ -41,11 +41,16 @@ test("project task queue serializes dispatcher claims and reconciles durable tas
       setProjectTaskQueuePaused,
     } = await import("./task-queue-store.js");
 
-    const withClaimLock = async <T>(work: (tx: typeof sql) => Promise<T>): Promise<T> => sql.begin(async (rawTx) => {
-      const tx = rawTx as unknown as typeof sql;
-      await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
-      return work(tx);
-    });
+    const withClaimLock = async <T>(work: (tx: typeof sql) => Promise<T>): Promise<T> => {
+      const begun = sql.begin(async (rawTx) => {
+        const tx = rawTx as unknown as typeof sql;
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
+        return work(tx);
+      });
+      // postgres.js types a transaction callback result as UnwrapPromiseArray<T> because it also
+      // accepts arrays of promises; every callback here resolves one value, so narrow it back.
+      return (await begun) as T;
+    };
     const reconcile = () => withClaimLock((tx) => reconcileProjectTaskQueues(tx, 32));
     const expectQueueError = async (action: Promise<unknown>, code: string) => {
       await assert.rejects(action, (error: unknown) => error instanceof TaskQueueError && error.code === code);
