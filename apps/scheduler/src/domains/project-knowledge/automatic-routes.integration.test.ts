@@ -16,10 +16,10 @@ test("backfill previews are read-only; exact successful Jobs enqueue once withou
     await db`UPDATE job_attempts SET status='succeeded',phase='terminal',finished_at=now() WHERE id=${source.attemptId}`;
     await db`UPDATE jobs SET status='succeeded',finished_at=now() WHERE id=${second.jobId}`;
     await db`UPDATE job_attempts SET status='succeeded',phase='terminal',finished_at=now() WHERE id=${second.attemptId}`;
-    await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
-      VALUES(${second.canvasId},${second.jobId},'fact','Second observed prerequisite','succeeded','{"observation":"fixture"}')`;
-    await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
-      VALUES(${source.canvasId},${source.jobId},'fact','Observed prerequisite','succeeded','{"observation":"fixture"}')`;
+    await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,verification_status,body_json)
+      VALUES(${second.canvasId},${second.jobId},'fact','Second observed prerequisite','succeeded','unverified','{"observation":"fixture"}')`;
+    await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,verification_status,body_json)
+      VALUES(${source.canvasId},${source.jobId},'fact','Observed prerequisite','succeeded','unverified','{"observation":"fixture"}')`;
     const app = Fastify();
     let actor: Actor = { type: "api_token", id: randomUUID(), name: "fixture",
       projectId: source.projectId, scopes: ["projects:read", "projects:write"] };

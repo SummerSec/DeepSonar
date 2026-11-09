@@ -114,7 +114,7 @@ test("successful authorized Job queues once, prepares its own Fact, then makes t
 
     const scheduler = schedulerFor(db);
     assert.equal(await scheduler.tick(), 0, "unprepared automatic work cannot be claimed by maker");
-    assert.equal((await db`SELECT id FROM project_knowledge_job_assignments WHERE work_id=${queued!.work_ref}`).length, 0);
+    assert.equal((await db`SELECT job_id FROM project_knowledge_job_assignments WHERE work_id=${queued!.work_ref}`).length, 0);
 
     assert.equal(await prepareAutomaticKnowledgeWork(db as never, GOVERNANCE), 1);
     const [prepared] = await db`SELECT state,reason,input_manifest_json FROM project_knowledge_work WHERE id=${queued!.work_ref}`;
