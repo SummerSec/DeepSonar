@@ -1851,7 +1851,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         void emit("progress", { message }).catch(() => {});
       },
       onWarning: (warning) => {
-        inc("deepsonar_control_input_warnings_total", { reason: warning.code });
+        inc("deepsonar_control_input_warnings_total", { reason: warning.code }, warning.occurrences ?? 1);
         console.warn(`[real-agent] ${warning.code} in job ${jobId}: ${warning.detail ?? ""}`);
       },
       onRuntimeArtifact: (artifact) => evidenceWriter.appendRuntimeArtifact(artifact),

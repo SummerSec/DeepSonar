@@ -4,7 +4,7 @@
 > CLI versions live in `agent-harness/runtime-images.json` and
 > `packages/runtime-sandbox/src/runtime-adapters.ts`. New CLI onboarding must also
 > cover Session archive + Web session viewer (below). Index: [`README.md`](README.md).
-> Synchronization: 2026-11-08; #1011 retains the exact Pi main-allowance completion refusal; final-SHA Actions are pending.
+> Synchronization: 2026-11-09; #1038 warning classification/aggregation added; final-SHA Actions are pending.
 
 Issue #100 defines the boundary between Scheduler-owned execution policy and
 provider-specific CLI protocols.
@@ -45,6 +45,14 @@ materialization. The host still owns sandbox lifecycle, the Job-level HTTP
 control API, event validation, completion gates, leases, and all state
 transitions. Output is consumed as structured JSON events; terminal text is
 never scraped.
+
+### 运行时未知事件诊断（#1038）
+
+2026-11-09：`mapCliEvent` 自己报告未识别的归一化类型，runner 不再维护第二份白名单。合法 Pi `tool_execution_update` → `tool_progress` → `tool.call.progress` 仍脱敏投影，不再同时触发未知告警；其他已识别或明确忽略的事件及 Pi 严格 RPC parser 不变。
+
+[告警聚合器](../packages/runtime-sandbox/src/runtime-warnings.ts)在本次 `runRealAgent` 内按脱敏后的原始外层/内层类型摘要聚合，保留 adapter/version、类型 hash/字符长度或形状、count 和 first/summary 阶段，不记录原始类型串、工具/模型正文或样本。分类桶和 overflow 有界，无新配置或后台定时器；首见立即报告，收尾只补发生变化的累计摘要。`occurrences` 是本次报告的新增次数，既有 `deepsonar_control_input_warnings_total{reason=...}` 累加该值，不把日志条数当事件数，也不增加按类型 hash 的高基数指标标签。硬退出前未完成的汇总不是持久计数保证。
+
+未知事件只是诊断，不制造 Control 语义、接受回执、成功/失败或恢复授权。原终态、非零退出、取消、未知效果和完成门不变；现场完成未观测与噪音的因果仍未确认。既有 runtime-sandbox 入口新增真实 runner 的 decode→map→warning 替身回归，覆盖正常进度零告警、真实未知摘要/计数、错误终态、脱敏、overflow 和重复 flush；最终 SHA Actions 待验，不宣称生产频率改善。只减少误报/重复告警，不新增通知、设置或用户操作。
 
 ### Runner failure provenance (#919)
 
