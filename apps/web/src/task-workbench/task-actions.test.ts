@@ -48,7 +48,8 @@ test("actions classify conflict, human, repair, retry and unknown effect", () =>
   assert.equal(rows[0]?.kind, "human_decision");
   assert.equal(rows[0]?.priority, "critical");
   assert.match(rows[0]?.title ?? "", /冲突/);
-  assert.ok(rows.some((row) => row.id === "finding:f2:needs_human"));
+  assert.ok(!rows.some((row) => row.id === "finding:f2:needs_human"), "the concrete request replaces its generic Finding wait");
+  assert.ok(rows.some((row) => row.id === "human:h1"));
   assert.ok(rows.some((row) => row.recommended_action === "reply_to_agent"));
   assert.ok(rows.some((row) => row.kind === "platform_blocker"));
   assert.ok(rows.some((row) => row.kind === "transient_retry"));
