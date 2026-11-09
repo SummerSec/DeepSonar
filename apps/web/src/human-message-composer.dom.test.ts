@@ -66,7 +66,7 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     assert.equal(newCallback, 1, "the current mounted composer can still report a successful send");
 
     act(() => root.render(null));
-    const requests = Array.from({ length: 13 }, (_, index) => ({
+    const requests = Array.from({ length: 13 }, (_, index): CanvasNode => ({
       ...target, id: `human-${index}`, job_id: `job-${index}`, node_type: "human", status: "open",
       updated_at: `2026-11-09T06:${String(index).padStart(2, "0")}:00.000Z`,
     }));
