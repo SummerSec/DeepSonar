@@ -78,10 +78,12 @@ reconcile unknown effects.
 
 #1045: the same narrow override also covers an ordinary nonzero CLI exit that
 follows the SDK's exact completion refusal (`agent CLI 退出码 1: Pi message
-ended: error: COMPLETION_ALREADY_ACCEPTED`). Only the locally generated exit
-framing is stripped before matching the unchanged anchored refusal set; a signal
-exit (`>= 128`), a stderr tail, or any other residual text keeps the runner
-failure, and a completion that was not durably accepted still fails. The
+ended: error: COMPLETION_ALREADY_ACCEPTED`). Only an error carrying the locally generated exit
+framing qualifies, and only that framing is stripped before matching the
+unchanged anchored refusal set; bare process diagnostics without the framing
+(#1016), a signal exit (`>= 128`), a stderr tail, or any other residual text
+keeps the runner failure, and a completion that was not durably accepted still
+fails. The
 process-exit branch in `resolveTerminalProcessOutcome` continues to report
 `process` provenance; the executor decides the narrow settlement, so no new
 success is fabricated for arbitrary exits. Regression: the field-shaped exit-1

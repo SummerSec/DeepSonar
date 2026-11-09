@@ -333,8 +333,9 @@ const rejectedResults: Array<[string, RealAgentResult]> = [
   ["missing provenance", { ...structuredRefusal, runnerErrorSource: undefined }],
   ["arbitrary structured diagnostic", { ...structuredRefusal, error: `unrelated diagnostic: ${completionRefusal}` }],
   ["semantic failure", { ...structuredRefusal, errorKind: "semantic" }],
-  // #1045 accepts an exact refusal behind a locally framed ordinary exit; the kill
-  // signal and any non-refusal text must keep failing closed.
+  // #1045 accepts an exact refusal behind a locally framed ordinary exit; bare process
+  // diagnostics, kill signals and any non-refusal text keep failing closed (#1016).
+  ["Pi colon refusal with bare process failure", { ...piRefusal, runnerErrorSource: "process" }],
   ["Pi colon refusal without provenance", { ...piRefusal, runnerErrorSource: undefined }],
   ["Pi colon refusal with semantic failure", { ...piRefusal, errorKind: "semantic" }],
   ["unrelated process failure after accepted completion", { text: "", files: {}, errorKind: "runner",
