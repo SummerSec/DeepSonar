@@ -2,6 +2,8 @@ import { ArrowSquareOut, Briefcase, FileText, Link as LinkIcon, Prohibit, SealCh
 import { useCallback, useEffect, useState } from "react";
 import { api, type FactDetail } from "./api";
 import { factHumanActions, type HumanFactVerificationStatus } from "./fact-verification";
+import { VERIFICATION_META } from "./semantics";
+import { FactUsagePanel } from "./FactUsagePanel";
 import { MarkdownView } from "./MarkdownView";
 import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 import { useConfirmDialog } from "./components/ConfirmDialog";
@@ -122,7 +124,7 @@ export function FactDetailPanel({
               <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-zinc-500">
                 <span>Fact</span>
                 <span className="text-zinc-400">#{shortId(factId)}</span>
-                {fact && <StatusBadge status={fact.verification_status} />}
+                {fact && <StatusBadge status={fact.verification_status} label={VERIFICATION_META[fact.verification_status]?.label} live={false} />}
               </div>
               <h1 className="mt-2 break-words text-[19px] font-semibold leading-7 text-zinc-50">
                 {fact?.title ?? (notFound ? "Fact 不存在" : "加载中…")}
@@ -133,7 +135,7 @@ export function FactDetailPanel({
                 </p>
               )}
               {humanActions.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-2">
+                <div id="fact-trust-actions" className="mt-3 flex flex-wrap gap-2">
                   {humanActions.includes("verified") && (
                     <button
                       type="button"
@@ -200,6 +202,7 @@ export function FactDetailPanel({
 
         {fact && detail && (
           <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">
+            <FactUsagePanel usage={fact.usage} findingId={finding?.id} jobId={job?.id} onOpenFinding={onOpenFinding} onOpenJob={onOpenJob} />
             <section aria-labelledby="fact-detail-heading">
               <div className="flex items-center gap-2">
                 <FileText size={15} className="text-acc-400" />

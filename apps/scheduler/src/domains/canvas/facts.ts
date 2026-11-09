@@ -7,6 +7,7 @@ import { audit } from "../../audit.js";
 import { sql } from "../../db.js";
 import { cursorForRow, decodeCursor, page } from "../../pagination.js";
 import { evaluateFactVerificationTransition } from "./fact-verification.js";
+import { enrichFactUsageDetail, loadFactUsageBatch, type FactUsageInput } from "./fact-usage.js";
 import { FactListQuery, FactVerificationPatch } from "./fact-contract.js";
 
 type FactDatabase = typeof sql;
@@ -17,9 +18,11 @@ function invalidQuery(reply: FastifyReply) {
 
 async function loadFactSummary(db: FactDatabase, canvasId: string, nodeId: string) {
   const [fact] = await db`
-    SELECT n.id, n.canvas_id, n.title,
+    SELECT n.id, n.canvas_id, c.project_id AS source_project_id, n.title,
            LEFT(COALESCE(n.body_json->>'description', ''), 500) AS description,
            n.verification_status, n.job_id, n.created_at, n.updated_at,
+           n.body_json->'quantities' AS quantities,
+           n.body_json->'verification'->>'evidence_kind' AS usage_evidence_kind,
            CASE WHEN f.id IS NULL THEN NULL ELSE jsonb_build_object(
              'finding_id', f.id,
              'evidence_kind', n.body_json->'verification'->>'evidence_kind',
@@ -65,7 +68,10 @@ async function loadFactSummary(db: FactDatabase, canvasId: string, nodeId: strin
       LIMIT 1
     ) f ON true
     WHERE n.id = ${nodeId} AND n.canvas_id = ${canvasId} AND n.node_type = 'fact'`;
-  return fact;
+  if (!fact) return fact;
+  const usageBatch = await loadFactUsageBatch(db, canvasId, String(fact.source_project_id), [fact as FactUsageInput]);
+  const { source_project_id: _projectId, quantities: _quantities, usage_evidence_kind: _kind, ...summary } = fact;
+  return { ...summary, usage: usageBatch.byFactId.get(String(fact.id)) };
 }
 
 /** 画布内 Fact 的有界列表、完整详情和人工验证动作。 */
@@ -84,7 +90,7 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
     const evidenceKinds = query.evidence_kind ?? [];
     const findingIds = query.finding_id ?? [];
     const jobIds = query.job_id ?? [];
-    const [canvas] = await sql`SELECT id FROM canvases WHERE id = ${id}`;
+    const [canvas] = await sql`SELECT id, project_id FROM canvases WHERE id = ${id}`;
     if (!canvas) {
       return reply.code(404).send({ error: "canvas not found", error_code: "CANVAS_NOT_FOUND" });
     }
@@ -93,6 +99,8 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
       SELECT n.id, n.canvas_id, n.title,
              LEFT(COALESCE(n.body_json->>'description', ''), 500) AS description,
              n.verification_status, n.job_id, n.created_at, n.updated_at,
+             n.body_json->'quantities' AS quantities,
+             n.body_json->'verification'->>'evidence_kind' AS usage_evidence_kind,
              CASE WHEN f.id IS NULL THEN NULL ELSE jsonb_build_object(
                'finding_id', f.id,
                'evidence_kind', n.body_json->'verification'->>'evidence_kind',
@@ -151,9 +159,14 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
       ORDER BY n.created_at DESC, n.id DESC
       LIMIT ${limit + 1}`;
     const items = rows.slice(0, limit);
+    const usageBatch = await loadFactUsageBatch(sql, id, String(canvas.project_id), items as FactUsageInput[]);
+    const projectedItems = items.map((row) => {
+      const { quantities: _quantities, usage_evidence_kind: _kind, ...item } = row;
+      return { ...item, usage: usageBatch.byFactId.get(String(row.id)) };
+    });
     const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
     const hasMore = rows.length > limit;
-    return page(items, {
+    return page(projectedItems, {
       after: query.after ?? null,
       nextCursor: hasMore && last ? cursorForRow("facts", last) : null,
       hasMore,
@@ -167,6 +180,8 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
       SELECT n.id, n.canvas_id, c.project_id AS source_project_id, n.title,
              COALESCE(n.body_json->>'description', '') AS description,
              n.body_json, n.verification_status, n.job_id, n.created_at, n.updated_at,
+             n.body_json->'quantities' AS quantities,
+             n.body_json->'verification'->>'evidence_kind' AS usage_evidence_kind,
              CASE WHEN f.id IS NULL THEN NULL ELSE jsonb_build_object(
                'finding_id', f.id,
                'evidence_kind', n.body_json->'verification'->>'evidence_kind',
@@ -242,12 +257,17 @@ export function registerCanvasFactRoutes(app: FastifyInstance): void {
         ORDER BY created_at, id
         LIMIT 100`,
     ]);
-    const { finding, job, source_project_id, ...factBody } = fact;
     const evidenceBudget = criterionEvidenceBudget();
-    const plan_criterion_source = await loadCriterionSource(sql, id, String(source_project_id), nodeId, evidenceBudget);
-    const plan_bindings = await listFactPlanBindings(sql, String(source_project_id), nodeId);
-    const goal_review_options = await loadPlanGoalReviewOptions(sql, String(source_project_id), id, nodeId, evidenceBudget);
-    return { fact: factBody, finding, job, plan_criterion_source, plan_bindings, goal_review_options, trace: { nodes: traceNodes, edges: traceEdges } };
+    const plan_criterion_source = await loadCriterionSource(sql, id, String(fact.source_project_id), nodeId, evidenceBudget);
+    const plan_bindings = await listFactPlanBindings(sql, String(fact.source_project_id), nodeId);
+    const goal_review_options = await loadPlanGoalReviewOptions(sql, String(fact.source_project_id), id, nodeId, evidenceBudget);
+    const usageBatch = await loadFactUsageBatch(sql, id, String(fact.source_project_id), [fact as FactUsageInput]);
+    const usage = await enrichFactUsageDetail(
+      sql, id, String(fact.source_project_id), String(fact.id),
+      usageBatch.byFactId.get(String(fact.id))!, usageBatch, evidenceBudget,
+    );
+    const { finding, job, source_project_id, quantities: _quantities, usage_evidence_kind: _kind, ...factBody } = fact;
+    return { fact: { ...factBody, usage }, finding, job, plan_criterion_source, plan_bindings, goal_review_options, trace: { nodes: traceNodes, edges: traceEdges } };
   });
 
   app.patch("/canvases/:id/facts/:nodeId/verification", async (req, reply) => {

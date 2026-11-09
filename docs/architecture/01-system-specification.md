@@ -458,7 +458,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Fact 必须拥有独立的 `unverified/verifying/verified/rejected/needs_human` verification_status；人工更新 Fact 状态不得改写 Finding 的 verify_status 或 disposition，报告数量门禁只计入 verified Fact。
 - **决策来源**：证据可信度与命题是否确认是不同维度。
-- **实现状态**：as-built；数据库检查约束只允许 Fact 节点携带该字段。
+- **实现状态**：as-built；数据库检查约束只允许 Fact 节点携带该字段。#1019 的只读用途投影区分记录、关联与实际采用，普通 unverified 不构成人工待办，历史 verifying 静态展示；需要处理的原因及当前判据/证据影响分别可查，详见[事实用途](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)。最终 SHA Actions 验收另记。
 - **代码入口**：[Fact verification](../../apps/scheduler/src/domains/canvas/fact-verification.ts)、[Fact UI](../../apps/web/src/FactDetailPanel.tsx)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:canvas-facts`、`pnpm ci:integration:canvas-facts`、`pnpm ci:unit:web-facts`。
 

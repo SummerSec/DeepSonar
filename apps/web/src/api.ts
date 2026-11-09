@@ -1,6 +1,7 @@
 /** 调度器 API 类型与请求（vite proxy /api → :3100） */
 
 import type { PlatformClaimsStatus } from "./platform-claims";
+import type { FactUsage } from "./fact-usage-model";
 import type { PlatformUpdateStatus } from "./platform-updates";
 import type {
   CanvasLifecycleRollup,
@@ -421,6 +422,7 @@ export interface FactVerification {
 }
 
 export interface FactSummary {
+  usage: FactUsage;
   id: string;
   canvas_id: string;
   title: string;

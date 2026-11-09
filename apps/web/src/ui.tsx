@@ -78,7 +78,7 @@ function badgeFill(token: string, fallback: string): string {
   return `var(${token}, ${fallback})`;
 }
 
-export function StatusBadge({ status, compact = false }: { status: string; compact?: boolean }) {
+export function StatusBadge({ status, compact = false, label, live = true }: { status: string; compact?: boolean; label?: string; live?: boolean }) {
   const fallback = STATUS_COLOR[status] ?? "#7f8796";
   const c = badgeFill(statusBadgeToken(status), fallback);
   return (
@@ -87,8 +87,8 @@ export function StatusBadge({ status, compact = false }: { status: string; compa
       style={{ color: c, background: `color-mix(in srgb, ${c} 10%, transparent)` }}
       title={status}
     >
-      <span className={`status-dot ${["running", "claimed", "provisioning", "verifying"].includes(status) ? "deepsonar-live-dot" : ""}`} style={{ background: c }} />
-      {compact ? status : (STATUS_LABEL[status] ?? status)}
+      <span className={`status-dot ${live && ["running", "claimed", "provisioning", "verifying"].includes(status) ? "deepsonar-live-dot" : ""}`} style={{ background: c }} />
+      {label ?? (compact ? status : (STATUS_LABEL[status] ?? status))}
     </span>
   );
 }

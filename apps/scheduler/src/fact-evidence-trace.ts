@@ -4,7 +4,7 @@
  */
 import { sql } from "./db.js";
 import { inspectFactRetainedEvidence } from "./fact-evidence-retained.js";
-import { criterionEvidenceBudget } from "./domains/plan-protocol/criterion-evidence.js";
+import { criterionEvidenceBudget, type EvidenceReadBudget } from "./domains/plan-protocol/criterion-evidence.js";
 import {
   EVIDENCE_RETENTION_LAYERS,
   evaluateDeclaredDigest,
@@ -100,6 +100,7 @@ export async function loadFactEvidenceTrace(
   tx: Tx,
   finding: Record<string, unknown>,
   verificationRounds: readonly Record<string, unknown>[] = [],
+  evidenceBudget: EvidenceReadBudget = criterionEvidenceBudget(),
 ): Promise<FactEvidenceTraceResponse> {
   const findingId = String(finding.id ?? "");
   const projectId = String(finding.project_id ?? "");
@@ -163,7 +164,6 @@ export async function loadFactEvidenceTrace(
     WHERE n.id = ANY(${usedFactIds}::uuid[]) AND j.project_id=${projectId} AND n.canvas_id=${canvasId} AND j.canvas_id=${canvasId}
     ORDER BY n.id LIMIT 100`;
 
-  const budget = criterionEvidenceBudget();
   const byteVerified = new Set<string>();
   const rows: Record<string, unknown>[] = [];
   for (const row of nodes) {
@@ -177,7 +177,7 @@ export async function loadFactEvidenceTrace(
       && row.artifact_project_id === projectId && row.artifact_canvas_id === canvasId && row.artifact_job_id === jobId
       && row.source_operation === "emit_fact" && verificationIdentity(verification) === verificationIdentity(record(row.source_payload).verification)
       && verification.source_job_id === jobId && verification.source_role === row.job_type;
-    const retained = sourceValid ? await inspectFactRetainedEvidence(jobId, String(row.attempt_id), verification.artifact_refs, budget)
+    const retained = sourceValid ? await inspectFactRetainedEvidence(jobId, String(row.attempt_id), verification.artifact_refs, evidenceBudget)
       : { observed: {}, readable: false, reason: "fact_evidence_source_unavailable_or_changed" };
     if (retained.readable) byteVerified.add(String(row.id));
     rows.push({

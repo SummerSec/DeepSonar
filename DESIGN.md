@@ -244,6 +244,8 @@ Hub 证据等待唤醒以证据签名 / 门禁指纹边沿触发；**从未有�
 
 Fact `verification_status`（证据可信度）、Finding `verify_status`（技术验证）和 Finding `disposition`（人工处置）是三个独立状态机。人工不能直接把 Finding 写成 `confirmed`，也不能把 rejected Fact 直接升为 verified。
 
+Fact 展示区分过程观察、关联证据与当前确认记录实际采用的证据（#1019）。`unverified` 展示为已记录且未经人工确认，历史 `verifying` 静态展示为历史验证记录。只读用途投影给出待处理原因、报告数量影响与当前完成判据关联，详情按既有来源及留存字节检查展示阻塞；达到查询预算时明确未知。列表待处理计数限定为已加载记录，普通观察按需展开。该投影不写入信任状态，也不取代 Verify 或完成门。详见[事实用途](docs/EVIDENCE_TRACE.md#事实用途与待处理投影1019)。
+
 ### 6.2 Research
 
 上游 review/test 可输出正向论据、替代解释、保护条件、反例与未决假设（#579，`research.hypothesis_loop` v1）。「未找到反证」不能自动变成 confirmed；相同输入指纹不得无限再派；反驳后的新假设必须带父命题派生关系。Verify 仍只消费允许的 Fact，不在研究策略中写 verify_status。
