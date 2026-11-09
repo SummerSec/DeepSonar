@@ -18,7 +18,7 @@ test('active generation proceeds after knowledge tick',async()=>{
 test('knowledge claim stops after pending read without starting a transaction',async()=>{
   const {createKnowledgeWorkScheduler}=await import('./domains/project-knowledge/work.js');
   let stopped=false,reads=0;
-  const db=Object.assign(async()=>{reads++;stopped=true;return [{id:'pending'}];},{begin:async()=>{throw Error('must not begin after stop');}});
+  const db=Object.assign(async(parts:TemplateStringsArray)=>{if(/^\s*COALESCE\(\(/.test(parts[0]))return [];reads++;stopped=true;return [{id:'pending'}];},{begin:async()=>{throw Error('must not begin after stop');}});
   const scheduler=createKnowledgeWorkScheduler({db:db as unknown as Parameters<typeof createKnowledgeWorkScheduler>[0]['db'],governanceHash:'a'.repeat(64),
     createJobInTransaction:async()=>{throw Error('must not create');},ensureCanvasForTaskInTransaction:async()=>{throw Error('must not create');}});
   assert.equal(await scheduler.tick(()=>stopped),0);assert.equal(reads,1);
@@ -26,8 +26,8 @@ test('knowledge claim stops after pending read without starting a transaction',a
 test('knowledge claim stops after locked-row read without UPDATE',async()=>{
   const {createKnowledgeWorkScheduler}=await import('./domains/project-knowledge/work.js');
   let stopped=false,queries=0;
-  const tx=async()=>{queries++;stopped=true;return [{id:'pending',project_id:'project'}];};
-  const db=Object.assign(async()=>{queries++;return [{id:'pending'}];},{begin:async(fn:(value:typeof tx)=>Promise<void>)=>fn(tx)});
+  const tx=async(parts:TemplateStringsArray)=>{if(/^\s*COALESCE\(\(/.test(parts[0]))return [];queries++;stopped=true;return [{id:'pending',project_id:'project'}];};
+  const db=Object.assign(async(parts:TemplateStringsArray)=>{if(/^\s*COALESCE\(\(/.test(parts[0]))return [];queries++;return [{id:'pending'}];},{begin:async(fn:(value:typeof tx)=>Promise<void>)=>fn(tx)});
   const scheduler=createKnowledgeWorkScheduler({db:db as unknown as Parameters<typeof createKnowledgeWorkScheduler>[0]['db'],governanceHash:'a'.repeat(64),
     createJobInTransaction:async()=>{throw Error('must not create');},ensureCanvasForTaskInTransaction:async()=>{throw Error('must not create');}});
   assert.equal(await scheduler.tick(()=>stopped),0);assert.equal(queries,2);

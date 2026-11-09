@@ -7,6 +7,7 @@ import type { sql } from "../../db.js";
 import { onKnowledgeJobTerminal } from "./recovery.js";
 import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { canonical, sha256 } from "./types.js";
+import { automaticPreparationPredicate } from "./automatic-marker.js";
 
 type Db = typeof sql;
 type Row = Record<string, unknown>;
@@ -242,11 +243,16 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
       const [existing] = canvasId ? await tx`SELECT target_json FROM canvases WHERE id=${canvasId}` : [];
       const target = (existing?.target_json ?? {}) as Row;
       if (target.knowledge_work_id !== workId) {
+        const [origin] = before.origin_job_id ? await tx`SELECT agent_snapshot_json FROM jobs
+          WHERE id=${String(before.origin_job_id)} AND project_id=${String(before.project_id)}` : [];
+        const originSnapshot = (origin?.agent_snapshot_json ?? {}) as Row;
+        const originNetwork = (originSnapshot.network_policy ?? {}) as Row;
         canvasId = await ensureCanvasForTaskInTransaction(tx, {
           projectId: String(before.project_id),
           title: `项目知识整理 ${workId}`,
           target: { kind: "standard", title: `项目知识整理 ${workId}`,
-            goal: "受治理的项目知识整理与独立评测", knowledge_work_id: workId },
+            goal: "受治理的项目知识整理与独立评测", knowledge_work_id: workId,
+            network_policy: { allow_egress: originNetwork.allow_egress === true } },
           triggerSource: "project_knowledge", triggerEventId: workId,
         });
       }
@@ -385,6 +391,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
   async function claimPending(stopped: () => boolean): Promise<void> {
     const candidates = await db`SELECT id FROM project_knowledge_work w
       WHERE state='pending' AND next_attempt_at<=now()
+        AND NOT ${automaticPreparationPredicate(db)}
         AND NOT EXISTS(SELECT 1 FROM project_knowledge_work r WHERE r.project_id=w.project_id AND r.state='running')
       ORDER BY next_attempt_at,id LIMIT 8`;
     for (const candidate of candidates) {
@@ -394,6 +401,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
           if (stopped()) return;
           const [locked] = await tx`SELECT id,project_id FROM project_knowledge_work
             WHERE id=${String(candidate.id)} AND state='pending' AND next_attempt_at<=now()
+              AND NOT ${automaticPreparationPredicate(tx as unknown as Db)}
             FOR UPDATE SKIP LOCKED`;
           if (stopped() || !locked) return;
           const active = await tx`SELECT 1 FROM project_knowledge_work
@@ -414,7 +422,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     await claimPending(stopped);
     if (stopped()) return 0;
     const rows = await db`SELECT id FROM project_knowledge_work WHERE state='running'
-      ORDER BY updated_at,id LIMIT 16`;
+      ORDER BY (active_job_id IS NULL) DESC,updated_at,id LIMIT 16`;
     let progressed = 0;
     for (const row of rows) {
       if (stopped()) break;

@@ -8,6 +8,7 @@
 
 import { sql } from "./db.js";
 import { readScheduleStartAt } from "./task-schedule.js";
+import { readNextKnowledgeWake } from "./knowledge-wake.js";
 
 /** Node timers saturate around 2^31-1 ms; clamp and re-arm from DB. */
 const MAX_TIMER_MS = 2_147_483_647;
@@ -17,6 +18,7 @@ const WAKE_SLACK_MS = 25;
 let timer: ReturnType<typeof setTimeout> | null = null;
 let armedUntilMs: number | null = null;
 let refreshInFlight: Promise<void> | null = null;
+let refreshRequestsDueKick = false;
 let kick: (() => void) | null = null;
 
 /** Wire the dispatcher kick once at boot to avoid a module cycle. */
@@ -52,8 +54,9 @@ export function clearScheduleWake(): void {
   clearArmedTimer();
 }
 
-/** Scan pending jobs and arm the nearest future canvas schedule. */
-export async function refreshScheduleWakeFromDb(): Promise<void> {
+/** Scan pending task and knowledge schedules and arm their nearest durable deadline. */
+export async function refreshScheduleWakeFromDb(options?: { kickDueTasks?: boolean }): Promise<void> {
+  if (options?.kickDueTasks !== false) refreshRequestsDueKick = true;
   if (refreshInFlight) return refreshInFlight;
   refreshInFlight = (async () => {
     try {
@@ -66,23 +69,33 @@ export async function refreshScheduleWakeFromDb(): Promise<void> {
           AND c.target_json->'schedule'->>'start_at' IS NOT NULL
         LIMIT 500`;
       let nearest: number | null = null;
+      let hasDue = false;
       const now = Date.now();
       for (const row of rows) {
         const start = readScheduleStartAt(row.target_json);
         if (!start) continue;
         const ms = start.getTime();
         if (ms <= now) {
-          fireKick();
+          hasDue = true;
           continue;
         }
         if (nearest == null || ms < nearest) nearest = ms;
       }
+      let knowledgeDue = false;
+      const knowledgeWake = await readNextKnowledgeWake(sql);
+      if (knowledgeWake) {
+        const ms = knowledgeWake.getTime();
+        if (ms <= now) knowledgeDue = true;
+        else if (nearest == null || ms < nearest) nearest = ms;
+      }
       if (nearest != null) armTimer(nearest);
       else clearArmedTimer();
+      if (knowledgeDue || (hasDue && refreshRequestsDueKick)) fireKick();
     } catch (error) {
       console.error("[schedule-wake] refresh failed:", error);
     } finally {
       refreshInFlight = null;
+      refreshRequestsDueKick = false;
     }
   })();
   return refreshInFlight;

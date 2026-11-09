@@ -7,6 +7,7 @@ import type { CreateJobInput, EnsureCanvasInput } from "../../core.js";
 import { createKnowledgeWorkScheduler } from "./work.js";
 import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { KNOWLEDGE_FIXED_CASES } from "./case-policy.js";
+import { enqueueKnowledgeWork } from "./requests.js";
 import { seedKnowledgeJob, withKnowledgeDatabase, type TestSql } from "./test-support.js";
 
 const GOVERNANCE = "a".repeat(64);
@@ -92,6 +93,24 @@ async function assigned(db: TestSql, workId: string, stage: string) {
     JOIN jobs j ON j.id=a.job_id WHERE a.work_id=${workId} AND a.stage=${stage}
     ORDER BY a.created_at,a.job_id`;
 }
+
+test("ordinary Agent work claims despite reasons matching automatic preparation text", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const scheduler = schedulerFor(db);
+    for (const reason of ["automatic_sources_pending", "automatic_prepare_retry:oops", "automatic_prepare_retry:1"]) {
+      const source = await seedKnowledgeJob(db);
+      const workId = await db.begin(raw => enqueueKnowledgeWork(raw as never, {
+        actor: { ...source, snapshot: {} }, governanceHash: GOVERNANCE,
+        trigger: { fixture: randomUUID() }, manifest: [], reason,
+      }));
+      assert.equal(await scheduler.tick(), 1);
+      assert.equal((await assigned(db, workId, "maker")).length, 1);
+      const [work] = await db`SELECT reason,job_count FROM project_knowledge_work WHERE id=${workId}`;
+      assert.equal(work!.reason, reason);
+      assert.equal(work!.job_count, 1);
+    }
+  });
+});
 
 test("knowledge work claims once and freezes an isolated maker Job/Canvas", async () => {
   await withKnowledgeDatabase(async (db) => {
