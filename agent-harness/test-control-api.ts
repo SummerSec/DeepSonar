@@ -47,8 +47,8 @@ const failOnLegacyControlText = (text: string, label: string): void => {
 const skillContent = DEEPSONAR_CONTROL_SKILL.files["SKILL.md"];
 assert.equal(DEEPSONAR_CONTROL_SKILL_NAME, "deepsonar-control");
 // Reviewed Plan v2, complete-objective bootstrap and governed completion-recovery guidance,
-// including #903 stale-grant exit without reconciliation or new execution authority.
-const expectedSkillSha256 = "00632baf8e50625b1ba38097fe4fcab724cd258f7a3adbb7178e7bc4bb51eb0d";
+// including #903 stale-grant exit and actionable human-request guidance.
+const expectedSkillSha256 = "12178ef4a3c7bcc31c4170a0094564767cb096ff55a550398445a25fc894ec10";
 const canonicalSkillBytes = Buffer.from(
   `{"name":"deepsonar-control","files":{"SKILL.md":${JSON.stringify(skillContent)}}}`,
   "utf8",

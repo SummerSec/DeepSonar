@@ -678,6 +678,8 @@ export interface JobSummary {
   canvas_id: string | null;
   type: string;
   status: string;
+  /** Scheduler authority for current waiting_human recovery and authorization. */
+  execution_state?: JobExecutionState | null;
   priority: number;
   error: string | null;
   started_at: string | null;

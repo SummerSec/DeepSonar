@@ -9,8 +9,6 @@ import {
   Note,
   Pause,
   Play,
-  SealCheck,
-  Prohibit,
   SquaresFour,
   Target,
 } from "@phosphor-icons/react";
@@ -40,19 +38,24 @@ import { FactDetailPanel } from "../FactDetailPanel";
 import { VERIFICATION_META } from "../semantics";
 import { factPageFilterKey, readFactPageFilters, updateFactPageQuery, type FactFilterKey } from "../fact-page-state";
 import { HumanInterventionBanner } from "../HumanInterventionBanner";
+import { HumanFactCard } from "../HumanFactCard";
 import { HumanMessageComposer } from "../HumanMessageComposer";
 import {
   humanInterventionUiPrefUserKey,
+  countPendingHumanInterventions,
+  humanInterventionKindLabel,
+  humanInterventionSafetyMessage,
+  humanInterventionSubjectKind,
   humanMessageTargetNodeForJobId,
   humanMessageTargetNodeFromContext,
   jobCanReceiveHumanReply,
   listHumanInterventions,
-  openHumanInterventionForJob,
   readHumanInterventionPrefs,
   writeHumanInterventionPrefs,
   type HumanInterventionItem,
   type HumanInterventionPrefs,
 } from "../human-messages";
+import { isCurrentHumanTaskCallback, mergeHumanInterventionDetails, useHumanInterventionDetails } from "../human-intervention-details";
 import { JobDetailPanel } from "../JobDetailPanel";
 import { UsageLedgerBoard } from "../UsageLedgerBoard";
 import { MarkdownView } from "../MarkdownView";
@@ -118,50 +121,17 @@ async function loadFindingIndex(canvasId: string): Promise<FindingSummary[]> {
   throw new Error("Finding 索引超过 4000 条安全上限");
 }
 
-/** 待人工处理事实卡片：needs_human 的 fact 节点，人工确认 / 明确排除（§5.2-6） */
-function HumanFactCard({ canvasId, node, onDone }: { canvasId: string; node: CanvasNode; onDone: (msg: string) => void }) {
-  const [busy, setBusy] = useState(false);
-  const act = async (status: "verified" | "rejected") => {
-    setBusy(true);
-    try {
-      await api.setFactVerification(canvasId, node.id, status);
-      onDone(status === "verified" ? "已标记为已验证" : "已排除该事实");
-    } catch {
-      // 失败由下一轮轮询呈现
-    } finally {
-      setBusy(false);
-    }
-  };
-  const desc = (node.body_json?.description as string) ?? "";
-  return (
-    <div className="flex flex-col gap-3 rounded-2xl bg-amber-400/[.045] px-4 py-3 ring-1 ring-amber-300/15 sm:flex-row sm:items-center">
-      <div className="min-w-0 flex-1">
-        <div className="text-[14px] font-medium text-zinc-100">{node.title}</div>
-        {desc && <MarkdownView markdown={desc} className="mt-2" />}
-      </div>
-      <button
-        onClick={() => act("verified")}
-        disabled={busy}
-        className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-400/[.06] px-3 py-1.5 font-mono text-[10px] text-emerald-300 ring-1 ring-emerald-300/15 transition-colors hover:bg-emerald-400/[.1] disabled:opacity-50"
-      >
-        <SealCheck size={12} /> 标记已验证
-      </button>
-      <button
-        onClick={() => act("rejected")}
-        disabled={busy}
-        className="flex shrink-0 items-center gap-1 rounded-full bg-red-400/[.05] px-3 py-1.5 font-mono text-[10px] text-red-300 ring-1 ring-red-300/15 transition-colors hover:bg-red-400/[.09] disabled:opacity-50"
-      >
-        <Prohibit size={12} /> 排除
-      </button>
-    </div>
-  );
-}
-
 /** 任务详情：只展示本任务范围 / 本任务发现 / 本任务过程画布（不混其它任务） */
 export function TaskCanvasPage() {
   const confirm = useConfirmDialog();
   const { me } = useAuth();
   const { projectId, canvasId } = useParams<{ projectId: string; canvasId: string }>();
+  const activeCanvasIdRef = useRef<string | null>(canvasId ?? null);
+  activeCanvasIdRef.current = canvasId ?? null;
+  const taskGenerationRef = useRef({ canvasId, generation: 0 });
+  if (taskGenerationRef.current.canvasId !== canvasId) {
+    taskGenerationRef.current = { canvasId, generation: taskGenerationRef.current.generation + 1 };
+  }
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = readTaskWorkbenchView(searchParams);
   const severities = readMultiSearchParam(searchParams, "severity");
@@ -180,6 +150,7 @@ export function TaskCanvasPage() {
 
   const [meta, setMeta] = useState<CanvasData["canvas"] | null>(null);
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
+  const [nodesCanvasId, setNodesCanvasId] = useState<string | null>(null);
   const [findings, setFindings] = useState<FindingSummary[]>([]);
   const [facts, setFacts] = useState<FactSummary[]>([]);
   const [findingIndex, setFindingIndex] = useState<FindingSummary[]>([]);
@@ -222,8 +193,25 @@ export function TaskCanvasPage() {
   const [composerOpen, setComposerOpen] = useState(false);
   const [composerNode, setComposerNode] = useState<CanvasNode | null>(null);
   const [composerInterventionId, setComposerInterventionId] = useState<string | null>(null);
+  const [composerCanvasId, setComposerCanvasId] = useState<string | null>(null);
   const [ignoreBusyId, setIgnoreBusyId] = useState<string | null>(null);
   const prefUserKey = humanInterventionUiPrefUserKey(me);
+  const scopedNodes = useMemo(() => nodesCanvasId === canvasId ? nodes : [], [canvasId, nodes, nodesCanvasId]);
+  const humanInterventionSources = useMemo(() => listHumanInterventions(scopedNodes), [scopedNodes]);
+  const humanDetailNodes = useMemo(() => humanInterventionSources.map((item) => item.node), [humanInterventionSources]);
+  const composerRequestNode = composerOpen && composerCanvasId === canvasId
+    ? scopedNodes.find(node => node.id === composerInterventionId) ?? null : null;
+  const { entries: humanDetailEntries, retry: retryHumanDetail } = useHumanInterventionDetails(canvasId ?? "", humanDetailNodes, composerRequestNode);
+  const humanInterventions = useMemo(
+    () => mergeHumanInterventionDetails(humanInterventionSources, humanDetailEntries),
+    [humanDetailEntries, humanInterventionSources],
+  );
+  const undisplayedPendingInterventions = Math.max(
+    0,
+    countPendingHumanInterventions(scopedNodes) - humanInterventionSources.filter((item) => item.pending).length,
+  );
+  const composerIntervention = composerRequestNode
+    ? mergeHumanInterventionDetails(listHumanInterventions([composerRequestNode]), humanDetailEntries)[0] ?? null : null;
   const [interventionPrefs, setInterventionPrefs] = useState<HumanInterventionPrefs>(() =>
     readHumanInterventionPrefs(prefUserKey, canvasId ?? ""),
   );
@@ -247,12 +235,15 @@ export function TaskCanvasPage() {
     paginationRef.current = { findings: null, jobs: null, facts: null };
     setMeta(null);
     setNodes([]);
+    setNodesCanvasId(null);
     setTaskReport(null);
     setConvergence(null);
     setError(null);
     setComposerOpen(false);
     setComposerNode(null);
     setComposerInterventionId(null);
+    setComposerCanvasId(null);
+    setIgnoreBusyId(null);
     setInterventionPrefs(readHumanInterventionPrefs(prefUserKey, canvasId));
     loadFindingIndex(canvasId)
       .then((rows) => {
@@ -392,7 +383,8 @@ export function TaskCanvasPage() {
     setMeta(canvas.canvas ?? null);
     setNodes(canvas.nodes ?? []);
     setConvergence(canvas.convergence ?? parseConvergenceFromTarget(canvas.canvas?.target_json));
-  }, []);
+    setNodesCanvasId(canvasId ?? null);
+  }, [canvasId]);
 
   const loadMoreFindings = async () => {
     if (!canvasId || !findingsHasMore || !findingsCursor) return;
@@ -732,15 +724,23 @@ export function TaskCanvasPage() {
     findings: findingsForProjection,
     facts,
     jobs,
-    interventions: listHumanInterventions(nodes).map((item) => ({
+    interventions: humanInterventions.map((item) => ({
       id: item.node.id,
       reason: item.reason,
       findingId: item.findingId,
       jobId: item.jobId,
       pending: item.pending,
+      guidance: item.guidance,
+      guidanceStatus: item.guidanceStatus,
+      detailStatus: item.detailStatus,
+      detailVersionMatches: item.detailVersionMatches,
+      detailError: item.detailError,
+      subjectKind: humanInterventionSubjectKind(item.node),
+      subjectLabel: humanInterventionKindLabel(item.node),
+      safetyMessage: humanInterventionSafetyMessage(item.node),
     })),
     reportStale: outcome.report_stale,
-  }), [facts, findingsForProjection, jobs, nodes, outcome.report_stale]);
+  }), [facts, findingsForProjection, humanInterventions, jobs, outcome.report_stale]);
   const trace = useMemo(() => projectTaskTrace({
     objective: outcome.objective,
     createdAt: meta?.created_at ?? outcome.last_updated_at,
@@ -798,15 +798,16 @@ export function TaskCanvasPage() {
   const humanFacts = nodes.filter(
     (n) => n.node_type === "fact" && n.verification_status === "needs_human",
   );
-  const humanInterventions = listHumanInterventions(nodes);
   const updateInterventionPrefs = (prefs: HumanInterventionPrefs) => {
     setInterventionPrefs(prefs);
     if (canvasId) writeHumanInterventionPrefs(prefUserKey, canvasId, prefs);
   };
-  const openHumanReply = (target: CanvasNode | null) => {
+  const openHumanReply = (target: CanvasNode | null, requested?: HumanInterventionItem) => {
     const targetJobId = target?.job_id ?? (typeof target?.body_json?.job_id === "string" ? target.body_json.job_id : null);
+    const intervention = requested ?? listHumanInterventions(scopedNodes, scopedNodes.length).find((item) => item.jobId === targetJobId && item.pending);
     setComposerNode(target);
-    setComposerInterventionId(openHumanInterventionForJob(nodes, targetJobId)?.id ?? null);
+    setComposerInterventionId(intervention?.node.id ?? null);
+    setComposerCanvasId(canvasId ?? null);
     setComposerOpen(true);
   };
   const openAction = (action: { recommended_action: string; evidence_refs: string[] }) => {
@@ -824,12 +825,20 @@ export function TaskCanvasPage() {
     if (findingId) setQuery("finding", findingId);
     else if (factId) setFactQuery("fact", factId);
     else if (jobId) setQuery("job", jobId);
+    else {
+      const humanId = action.evidence_refs.find((ref) => ref.startsWith("human:"))?.slice("human:".length);
+      if (humanId) { setTab("canvas"); setQuery("focusNode", humanId); }
+    }
   };
   const ignoreIntervention = async (item: HumanInterventionItem) => {
     if (!canvasId) return;
+    const requestCanvasId = canvasId;
+    const requestGeneration = taskGenerationRef.current.generation;
+    const isCurrent = () => requestGeneration === taskGenerationRef.current.generation && isCurrentHumanTaskCallback(requestCanvasId, activeCanvasIdRef.current);
     setIgnoreBusyId(item.node.id);
     try {
-      const result = await api.ignoreHumanIntervention(canvasId, item.node.id);
+      const result = await api.ignoreHumanIntervention(requestCanvasId, item.node.id);
+      if (!isCurrent()) return;
       setNodes((current) => current.map((node) => (
         node.id === item.node.id
           ? { ...node, status: "ignored", body_json: { ...node.body_json, resolution: "ignored" } }
@@ -837,13 +846,14 @@ export function TaskCanvasPage() {
             ? { ...node, status: "pending" }
             : node
       )));
-      const js = await api.jobsPage({ canvas_id: canvasId, limit: 50 });
+      const js = await api.jobsPage({ canvas_id: requestCanvasId, limit: 50 });
+      if (!isCurrent()) return;
       setJobs(js.items);
       flash(result.job_resumed ? "已忽略并继续推进" : "已忽略");
     } catch (error) {
-      flash(`忽略失败：${error instanceof Error ? error.message : error}`);
+      if (isCurrent()) flash(`忽略失败：${error instanceof Error ? error.message : error}`);
     } finally {
-      setIgnoreBusyId(null);
+      if (isCurrent()) setIgnoreBusyId(null);
     }
   };
   const visibleFindings = findings.filter(
@@ -1156,13 +1166,15 @@ export function TaskCanvasPage() {
       {humanInterventions.length > 0 && (
         <HumanInterventionBanner
           items={humanInterventions}
+          undisplayedPendingCount={undisplayedPendingInterventions}
           prefs={interventionPrefs}
           ignoreBusyId={ignoreBusyId}
           onPrefsChange={updateInterventionPrefs}
-          onReply={(item) => openHumanReply(humanMessageTargetNodeFromContext(item.node, nodes, jobs))}
+          onReply={(item) => openHumanReply(humanMessageTargetNodeFromContext(item.node, scopedNodes, jobs), item)}
           onIgnore={(item) => void ignoreIntervention(item)}
           onOpenFinding={(findingId) => setQuery("finding", findingId)}
           onOpenJob={(jobId) => setQuery("job", jobId)}
+          onRetryDetail={(item) => retryHumanDetail(item.node)}
         />
       )}
         </>
@@ -1438,7 +1450,7 @@ export function TaskCanvasPage() {
                               <PaperPlaneTilt size={12} /> 回复
                             </button>
                           )}
-                          {openHumanInterventionForJob(nodes, j.id) && (
+                          {humanInterventions.some((row) => row.jobId === j.id && row.pending) && (
                             <button
                               type="button"
                               disabled={ignoreBusyId !== null}
@@ -1540,15 +1552,18 @@ export function TaskCanvasPage() {
           onSendMessage={() => openHumanReply(humanMessageTargetNodeForJobId(selectedJob, nodes, jobs))}
         />
       )}
-      {composerOpen && (
+      {composerOpen && composerCanvasId === canvasId && (
         <HumanMessageComposer
-          key={composerNode?.id ?? "unresolved"}
+          key={`${canvasId}:${composerNode?.id ?? "unresolved"}`}
           canvasId={canvasId}
           projectId={projectId ?? null}
           selectedNode={composerNode}
+          intervention={composerIntervention}
           jobs={jobs}
-          onClose={() => { setComposerOpen(false); setComposerNode(null); setComposerInterventionId(null); }}
+          onRetryIntervention={() => { if (composerIntervention) retryHumanDetail(composerIntervention.node); }}
+          onClose={() => { setComposerOpen(false); setComposerNode(null); setComposerInterventionId(null); setComposerCanvasId(null); }}
           onSent={() => {
+            if (!isCurrentHumanTaskCallback(canvasId ?? null, activeCanvasIdRef.current)) return;
             if (composerInterventionId) {
               updateInterventionPrefs({
                 ...interventionPrefs,
@@ -1558,6 +1573,7 @@ export function TaskCanvasPage() {
             setComposerOpen(false);
             setComposerNode(null);
             setComposerInterventionId(null);
+            setComposerCanvasId(null);
             flash("消息已写入投递账本");
           }}
         />

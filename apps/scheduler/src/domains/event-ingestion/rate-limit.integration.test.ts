@@ -107,6 +107,12 @@ if (!testDatabaseUrl) {
       assert.equal((await app.ingestEvent(jobId, {
         v: 1, event_id: terminalOne, type: "human", payload: {
           reason: "operator review",
+          guidance: {
+            question: "Which concrete business decision is needed for this request?",
+            required_action: "Review the scoped request and choose one of the stated outcomes.",
+            reply_instructions: "Reply with the selected outcome and identify the affected subject.",
+            after_reply: "The Scheduler rechecks the original Job scope; this reply is not an ACK or completion.",
+          },
           subject: { type: "platform_blocker", kind: "business_decision" },
         },
       })).deduped, false);

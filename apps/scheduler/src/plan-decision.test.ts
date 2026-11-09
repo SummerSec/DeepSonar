@@ -5,6 +5,7 @@ import {GraphQueryPayload,HubDecisionPayload,HumanPayload,PlanDecisionBasis,repa
 import {criteriaAuthorizeCompletion} from './domains/plan-protocol/decision.js';
 import {mergePlanRead} from './domains/plan-protocol/gap-query.js';
 import {taskInputSha256} from './domains/plan-protocol/task-input.js';
+import {planSettlementDigest} from './domains/event-ingestion/control-receipt.js';
 import type {CriterionProjection,CriterionState} from './domains/plan-protocol/criterion-model.js';
 import {parseHubDecisionPayload} from './graph.js';
 
@@ -13,6 +14,10 @@ const basis=PlanDecisionBasis.parse({v:1,plan_job_id:randomUUID(),plan_sha256:'a
   expected_revision:'42',expected_task_input_sha256:'b'.repeat(64),expected_projection_sha256:'c'.repeat(64),
   source_refs:[{fact_id:fact,source_sha256:'d'.repeat(64)}],outcome:'continue',rationale:'A scoped evidence gap remains',expected_gain:'Collect the missing execution record'});
 const intent={role:'review',description:'Review scoped execution',prompt:'Review the scoped evidence and retain the missing execution record.',from:[fact]};
+const humanGuidance={question:'Please choose whether this bounded business decision can proceed.',
+  required_action:'Review the exact unresolved criterion and choose one listed outcome without granting new platform permissions.',
+  reply_instructions:'Reply with decision=continue or decision=stop and include the criterion identifier.',
+  after_reply:'The Scheduler will recheck the original Job scope; this reply is not an ACK or completion.'};
 
 test('versioned Plan metadata stays on the existing decision path',()=>{
   assert.equal(repairCategoryForControlFailure({code:'plan_unknown_effect',retryable:false}), 'unknown_external_effect');
@@ -27,9 +32,19 @@ test('versioned Plan metadata stays on the existing decision path',()=>{
   assert.equal(PlanDecisionBasis.safeParse({...basis,expected_revision:'1.5'}).success,false);
   for(const outcome of ['blocked','needs_human'] as const){
     const stop={...basis,outcome,expected_gain:undefined};
-    assert.equal(HumanPayload.safeParse({reason:'Need an authorized semantic assessment',subject:{type:'platform_blocker',kind:'business_decision'},plan_basis:stop}).success,true);
+    assert.equal(HumanPayload.safeParse({reason:'Need an authorized semantic assessment',guidance:humanGuidance,subject:{type:'platform_blocker',kind:'business_decision'},plan_basis:stop}).success,true);
     assert.equal(HubDecisionPayload.safeParse({...decision,plan_basis:stop}).success,false);
   }
+});
+
+test('request_human settlement digest trims all guidance fields with Plan basis',()=>{
+  const payload={reason:' Need an authorized semantic assessment ',
+    guidance:Object.fromEntries(Object.entries(humanGuidance).map(([key,value])=>[key,` ${value} `])),
+    subject:{type:'platform_blocker',kind:'business_decision'},
+    plan_basis:{...basis,outcome:'needs_human' as const,expected_gain:undefined}};
+  const normalized=HumanPayload.parse(payload);
+  assert.equal(normalized.reason,'Need an authorized semantic assessment');
+  assert.equal(planSettlementDigest('request_human',payload),planSettlementDigest('request_human',normalized));
 });
 
 test('complete truth table requires every necessary positively authorized criterion',()=>{
@@ -78,7 +93,10 @@ test('deferred runtime events preserve Plan basis for dispatch, completion and h
   const complete={...basis,outcome:'complete',expected_gain:undefined};
   assert.deepEqual((build(parseHubDecisionPayload({complete:{from:[fact],description:'Reviewed all current criteria'},plan_basis:complete}))[0].payload as any).plan_basis,complete);
   const stop={...basis,outcome:'needs_human' as const,expected_gain:undefined};
-  const events=buildDeferredSemanticTerminalEvents({state:{done:null,hub:null,human:{eventId:randomUUID(),reason:'Need operator assessment',subject:{type:'platform_blocker',kind:'business_decision'},plan_basis:stop}},isHub:true,isVerify:false,hubDecision:null,maxIntentsPerDecision:1,factCount:0,findingCount:0});
+  const humanPayload=HumanPayload.parse({reason:'Need operator assessment',guidance:humanGuidance,
+    subject:{type:'platform_blocker',kind:'business_decision'},plan_basis:stop});
+  const events=buildDeferredSemanticTerminalEvents({state:{done:null,hub:null,human:{eventId:randomUUID(),payload:humanPayload}},isHub:true,isVerify:false,hubDecision:null,maxIntentsPerDecision:1,factCount:0,findingCount:0});
+  assert.deepEqual(events[0].payload,humanPayload);
   assert.deepEqual((events[0].payload as any).plan_basis,stop);
 });
 

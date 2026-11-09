@@ -281,7 +281,12 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       }
       const response = await app.inject({ method: "POST", url: `/control/v1/jobs/${f.jobId}/operations/request_human`,
         headers: { authorization: `Bearer ${f.oldGrant}`, "idempotency-key": humanEvent },
-        payload: { reason: "Synthetic governed wait before host-observed cleanup.", subject: { type: "platform_blocker", kind: "authorization" } } });
+        payload: { reason: "Synthetic governed wait before host-observed cleanup.", guidance: {
+          question: "Please confirm whether this bounded cleanup authorization is available.",
+          required_action: "Use the existing governed authorization configuration and provide only its non-secret reference.",
+          reply_instructions: "Reply with the configured reference or state that no authorization is configured.",
+          after_reply: "The Scheduler rechecks the original Job scope; the reply does not grant permission or mark the Job complete.",
+        }, subject: { type: "platform_blocker", kind: "authorization" } } });
       assert.equal(response.statusCode, 200, response.body);
       const [human] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='human'`;
       assert.ok(human); api.unregisterRuntimeHandler(f.jobId);

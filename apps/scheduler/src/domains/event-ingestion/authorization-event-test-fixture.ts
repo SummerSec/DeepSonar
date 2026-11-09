@@ -64,6 +64,12 @@ export function authorizationEventPayloads(jobId: string) {
     } satisfies SubmitPlanResultPayload,
     human: {
       reason: "late operator decision",
+      guidance: {
+        question: "Which concrete decision is required for this scoped request?",
+        required_action: "Review the current request and choose one of the stated outcomes.",
+        reply_instructions: "Reply with the chosen outcome and identify the affected subject.",
+        after_reply: "The Scheduler rechecks the original Job scope; the reply is not an ACK or completion.",
+      },
       subject: { type: "platform_blocker", kind: "business_decision" },
     },
     done: { summary: "late completion" },

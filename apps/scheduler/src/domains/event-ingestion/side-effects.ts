@@ -1777,7 +1777,12 @@ export function createEventIngestionSideEffectApplication(
           job_id: jobId,
           node_type: "human",
           title: p.reason.slice(0, 200),
-          body_json: { reason: p.reason, subject: p.subject } as never,
+          body_json: {
+            reason: p.reason,
+            subject: p.subject,
+            guidance: p.guidance,
+            ...(p.plan_basis ? { plan_basis: p.plan_basis } : {}),
+          } as never,
           x: jobNode.x + 150,
           y: jobNode.y - 160,
           status: "open",

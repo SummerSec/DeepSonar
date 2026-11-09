@@ -1,6 +1,6 @@
 # Agent 错误反馈与执行恢复（#903）
 
-> 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；本分支 #1012 人工等待修正链交接已接线，后续最终 SHA Actions 待验
+> 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；#1012 人工等待修正链交接与本轮可行动请求投影已接线，最终 SHA Actions 待验
 > 同步日期：2026-11-09
 
 这是 [完成回执](REPAIR_FEEDBACK_DONE_REPAIR.md)的生命周期扩展。设计取舍见 [ADR 0016](architecture/adr/0016-repair-execution-generations.md)。#911 已合入 Knowledge/Skill 分类透传；#919（#913）已合入仅在宿主接受完成后识别结构化 Gateway 拒绝的运行器处理。本次不重复这两片，也不把工程证据写成真实模型试验。
@@ -49,6 +49,16 @@ Worker-plane 清理只向 SQL lease 记录的 owner 发起 destroy，然后使�
 同 message UUID 的读取在 Canvas 锁内串行化；相同回复和重复忽略只交接一次。准入拒绝通过原 `HumanInterventionError` 返回具体 409 error_code；消息、人工节点、代际和 Job/Attempt 变更在同一事务回滚。pending 转换意外没有结果时同样回滚，不提交只有代际而没有后继 Job 的半成品。恢复权限仍是原消息/忽略入口的权限，不借本修复授权新的执行范围或重放未知效果。
 
 `repair-generation.integration.test.ts` 已加入真实 Control request_human → 受控 Runtime Adapter 的宿主清理函数 → HTTP 回复/忽略 → Dispatcher 领取与新 owner → Gateway 累计计费 → 完成门/终态结算，以及清理/撤销失败、未知效果、取消、旧 owner/外来 sandbox/无持久 human 事件拒绝，并发重复、额度/效果/暂停/原期限拒绝与 pending UPDATE 故障的全行回滚断言。新增无修正根的回复/忽略正例、累计真实 Gateway token 耗尽、请求/未知效果/未知用量/暂停/策略损坏及 pending CAS 拒绝，核对完整历史、消息和 grants 回滚；另覆盖 destroy 已返回而撤销事务失败后的同 owner 清理重入，检查 run/grants 原子收口、原等待、Attempt 身份/预算、用量/回执不变且不创建代际；既有内核 settleEffect 推进 phase=settling、清空 current_effect_id 并记录 last_effect，不把这次合法状态转换误判为预算或归属改写。#1011 新回归通过生产 Control HTTP、OpenSandboxRunner/worker-plane 和现有对账 loop（Provider 为受控替身）覆盖原清理调用 destroy 成功/SQL trigger 故障后结束、清空进程内 remote key 并重建 runner/loop模拟重启、key 恢复但资源仍在拒绝、最终精确 owner 确认消失后 run/grants/lease 原子结算，再实际回复/忽略、领取后继与 Gateway/完成。核对失败时完整原 Job/Attempt/effect/grants/lease/用量不变，成功时严格核对既有内核结算状态变化且不重置账本或原回执；外来 lease 的直接调用必须零 destroy，销毁期间并发 lease 改绑必须等同一清理事务提交；worker 单测另核查询失败与 cache 身份变化，registry SQL 回归在锁等待期间插入 lease，核本地 seed 拒绝端点变更且原 key 保持。已编写不等于已执行，也不冒充真实 OS 进程重启、OpenSandbox 服务端启停或完整真实 Dispatcher/CLI 运行。消息注入和显式 ACK 仍是两阶段；本回归的 ACK 调用领域 handler，不宣称真实模型已读取，也不冒充完整 Control ACK 传输端到端。运行器和上游为受控替身，最终 SHA 的 `pnpm ci:integration:recovery` Actions 待验，本机未运行测试/构建/typecheck。
+
+### 可行动人工请求与待办投影
+
+新的 `request_human` 必须通过严格 `guidance` 契约，字段与长度范围以[接口规范](architecture/09-interface-specs.md#可行动人工请求2026-11-09)为准。Scheduler 将完整请求内容保存在 human 节点 `body_json`；Canvas L0 保持有界摘要，reason 在 L0 最多 500 字符，详情按需读取完整 L1 节点。任何请求节点缺少 guidance（包括历史请求或自动生成的平台等待项）时，Web 明确说明缺少处理指引，不自动迁移、回填或从 reason 猜测建议。
+
+待办和回复界面显示具体动作、回复方式/选项及回复后的业务计划。Hub 动态提示、固定 Control Skill 与内置角色示例也遵循同一指导要求；凭据只指向现有安全配置/授权路径，不能让用户贴入聊天，不得捏造配置入口。Job 列表仅为 `waiting_human` 附加由 `readCompletionExecutionState` 得到的 Scheduler 当前投影，使用有界读取；同 Job 的 human 节点与等待投影合为一个人工待办，独立 unknown effect 对账仍单独显示并保持优先级。
+
+人工请求预览最多加载 12 条 L1，选中的回复请求从完整关联索引解析并额外固定加载（合计最多 13 条、4 路并发）。预览排序改变不会丢弃已打开请求的详情；请求版本变化须重新核对 L1，等待中的 Job 缺少关联请求或尚未核对完整内容时禁止发送。
+
+消息账本记录人工回复，恢复准入决定是否可以重新入队；这两者不替代显式 `ack_human_message`，也不表示 Job 已完成。`injected`、ACK、恢复与完成各保留原有含义。必填 guidance 增加请求编辑成本，预期减少用户理解阻塞、判断回复方式和重复澄清的成本；目前没有测量注意力收益，最终 SHA Actions 尚待验。
 
 ### 创建入口补齐与缺损快照诊断（#943 / #948）
 

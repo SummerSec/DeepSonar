@@ -164,7 +164,7 @@ const OPERATION_DESCRIPTIONS: Record<string, { summary: string; description: str
   },
   request_human: {
     summary: "Request human intervention",
-    description: "Request human intervention for an authorization or high-risk block.",
+    description: "Request human intervention with a structured subject and required strict guidance. Guidance must state the missing input, impact, and concrete decision; list executable steps; give a reply format and available choices; and explain the post-reply plan. The four trimmed guidance fields are question (8-240), required_action (8-2000), reply_instructions (8-2000), and after_reply (8-1000). Missing or unknown fields are rejected. Never echo secrets or invent configuration entry points. Replies do not expand permissions, acknowledge a message, or mark work complete; platform blockers must not be framed as user business decisions.",
     readOnly: false,
     eventType: "human",
   },
