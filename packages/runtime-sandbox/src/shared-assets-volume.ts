@@ -136,7 +136,7 @@ function isMissingResourceError(error: unknown, kind: "volume" | "container", na
   // Only an exact daemon diagnostic for this resource is authoritative absence.
   const patterns = [
     `^(?:Error response from daemon: |Error: )?(?:get ${escaped}: no such ${kind}|no such ${kind}:? ["']?${escaped}["']?)$`,
-    `^Error: no ${kind} with (?:name|ID) ["']?${escaped}["']? found(?:: no such ${kind})?$`,
+    `^(?:Error response from daemon: |Error: )no ${kind} with (?:name(?: or ID)?|ID) ["']?${escaped}["']? found(?:: no such ${kind})?$`,
   ];
   return patterns.some((pattern) => new RegExp(pattern, "i").test(detail.trim()));
 }

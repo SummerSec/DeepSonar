@@ -450,6 +450,73 @@ test("removeForJob 只认精确、权威的不存在诊断，volume/container �
   assert.equal(present.volume, null);
 });
 
+for (const prefix of ["Error response from daemon: ", "Error: "]) {
+  for (const goneAt of ["inspect", "rm"] as const) {
+    test(`#1039 ${prefix}missing helper at ${goneAt} continues volume cleanup without retry or rediscovery`, async () => {
+      const state = daemon(volumeInspection());
+      if (goneAt === "rm") state.helper = helperInspection();
+      const delays: number[] = [];
+      state.before = (args) => {
+        const missing = goneAt === "inspect" ? args[0] === "container" : args[0] === "rm";
+        if (missing) {
+          const expected = goneAt === "inspect" ? helperName : helperId;
+          assert.equal(args[2], expected);
+          state.helper = null;
+          throw Object.assign(new Error("Command failed: docker"), {
+            stderr: `${prefix}no container with name or ID "${expected}" found: no such container\n`,
+          });
+        }
+      };
+      const volumes = manager(state, async delay => { delays.push(delay); });
+      await volumes.removeForJob(jobId);
+      assert.equal(state.helper, null); assert.equal(state.volume, null);
+      assert.equal(state.calls.filter(args => args[0] === "container").length, 1);
+      assert.deepEqual(state.calls.filter(args => args[0] === "rm"), goneAt === "rm" ? [["rm", "-f", helperId]] : []);
+      assert.deepEqual(state.calls.filter(args => args[0] === "volume" && args[1] === "rm"), [["volume", "rm", volumeName]]);
+      const cleaned = state.calls.length;
+      await volumes.removeForJob(jobId);
+      assert.ok(state.calls.slice(cleaned).every(args => args[0] === "volume" && args[1] === "ls"),
+        "fresh discovery does not retain an already removed helper/volume");
+      await volumes.removeForJob(jobId, generation); // Explicit repeat also remains idempotent.
+      assert.deepEqual(delays, []);
+    });
+  }
+}
+
+for (const stage of ["inspect", "rm"] as const) {
+  const target = stage === "inspect" ? helperName : helperId;
+  const missing = `Error response from daemon: no container with name or ID "${target}" found: no such container`;
+  const cases = [
+    ["other identity", missing.replace(target, `${target}-other`)],
+    ["other kind", missing.replaceAll("container", "volume")],
+    ["permission", `permission denied: ${missing}`],
+    ["daemon unavailable", "Cannot connect to the Docker daemon"],
+    ["mixed prefix", `transport failed\n${missing}`],
+    ["mixed suffix", `${missing}\npermission denied`],
+    ["incomplete", "no such container"],
+    ["missing prefix", missing.replace("Error response from daemon: ", "")],
+    ["timeout", missing],
+  ];
+  for (const [kind, stderr] of cases) {
+    test(`#1039 ${stage} ${kind} is not authoritative absence`, async () => {
+      const state = daemon(volumeInspection());
+      state.helper = helperInspection();
+      const error = Object.assign(new Error(missing), { stderr, ...(kind === "timeout" ? { code: "ETIMEDOUT" } : {}) });
+      const delays: number[] = [];
+      state.before = args => {
+        if (stage === "inspect" ? args[0] === "container" : args[0] === "rm") throw error;
+      };
+      await assert.rejects(manager(state, async delay => { delays.push(delay); }).removeForJob(jobId, generation),
+        (value: unknown) => value === error);
+      assert.ok(state.volume); assert.equal(state.helper?.Id, helperId);
+      assert.equal(state.calls.some(args => args[0] === "volume" && args[1] === "rm"), false);
+      assert.equal(state.calls.filter(args => stage === "inspect" ? args[0] === "container" : args[0] === "rm").length,
+        stage === "inspect" ? 3 : 1);
+      assert.deepEqual(delays, stage === "inspect" ? [100, 200] : []);
+    });
+  }
+}
+
 for (const error of [
   new Error("no such volume"),
   new Error("volume backend not found"),
