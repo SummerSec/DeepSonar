@@ -78,7 +78,7 @@ if (args[0] === "pull") {
   const execute = (digest = outputs.digest, extraEnv = {}) => {
     const values = { "steps.ns.outputs.owner": "fixture", "matrix.toolset": toolset,
       "matrix.arch": arch, "matrix.platform": `linux/${arch}`,
-      "steps.resolve.outputs.digest": digest, "steps.resolve.outputs.src_ref": outputs.src_ref };
+      "steps.resolve.outputs.digest": digest, "steps.resolve.outputs.src_ref": outputs.src_ref, "steps.resolve.outputs.source_image": `${image}@${digest}` };
     const render = text => text.replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_, key) => {
       assert.ok(Object.hasOwn(values, key), `unknown workflow expression: ${key}`);
       return values[key];

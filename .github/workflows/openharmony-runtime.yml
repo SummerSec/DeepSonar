@@ -184,12 +184,14 @@ jobs:
       - name: Pull reused OpenHarmony image for manual validation
         if: ${{ steps.resolve.outputs.skip == 'true' }}
         env:
-          SOURCE_IMAGE: ghcr.io/${{ steps.ns.outputs.owner }}/deepsonar-${{ matrix.toolset }}@${{ steps.resolve.outputs.digest }}
+          SOURCE_IMAGE: ${{ steps.resolve.outputs.source_image }}
         run: |
           set -euo pipefail
-          [[ "$SOURCE_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]
+          suffix="${SOURCE_IMAGE##*@sha256:}"
+          [[ ${#suffix} == 64 && "$suffix" != *[!0-9a-f]* ]] || exit 1
           docker pull --platform "${{ matrix.platform }}" "$SOURCE_IMAGE"
-          docker tag "$SOURCE_IMAGE" "deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci"
+          tag="deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci"
+          docker tag "$SOURCE_IMAGE" "$tag"
       - name: Set up QEMU for cross-architecture validation
         if: ${{ matrix.toolset != 'openharmony-fuzz' }}
         uses: docker/setup-qemu-action@v3

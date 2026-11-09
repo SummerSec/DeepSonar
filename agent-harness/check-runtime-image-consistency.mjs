@@ -245,11 +245,21 @@ expect(ciWorkflow.includes("toolset: base") && ciWorkflow.includes("toolset: aud
 expect(chromeWorkflow.includes("chrome-runtime-images:") && chromeWorkflow.includes("timeout-minutes: 240") && chromeWorkflow.includes("platforms: linux/amd64") && chromeWorkflow.includes("test-chrome-runtime.mjs"), "Chrome workflow must retain its cold-build allowance, amd64 matrix, and smoke");
 expect(chromeWorkflow.includes("test-runtime-manuals-runtime.mjs"), "Chrome workflow must run the offline runtime manual smoke");
 expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(chromeWorkflow), "Chrome manual smoke must also run on cache hits");
-expect(chromeWorkflow.includes('docker pull "${{ steps.resolve.outputs.src_ref }}"'), "Chrome workflow must pull immutable src-* images before cache-hit smoke");
+// #992: cache-hit loads must be digest-addressed; the mutable src_ref tag could shift between
+// resolve and pull unless the load binds to the resolution-time digest.
+for (const [workflow, label] of [[chromeWorkflow, "Chrome"], [openHarmonyWorkflow, "OpenHarmony"], [mobileWorkflow, "Mobile"]]) {
+  expect(workflow.includes('SOURCE_IMAGE: ${{ steps.resolve.outputs.source_image }}'), `${label} cache-hit load must consume the resolver's digest-validated source_image output`);
+  expect(workflow.includes('"suffix" != *[!0-9a-f]* ]'), `${label} cache-hit load must re-assert the sha256 digest grammar before Docker`);
+  expect(!workflow.includes('steps.resolve.outputs.src_ref\"') && !/SOURCE_IMAGE:[^\n]*src_ref/.test(workflow), `${label} must not address the mutable src_ref tag`);
+}
+const ciLoadStep = ciWorkflow.split("Load reused runtime for offline validation")[1]?.split("\n      - ")[0] ?? "";
+expect(ciLoadStep.includes('SOURCE_IMAGE: ${{ steps.resolve.outputs.source_image }}'), "core cache-hit load must consume the resolver's digest-validated source_image output");
+expect(ciLoadStep.includes('"suffix" != *[!0-9a-f]* ]'), "core cache-hit load must re-assert the sha256 digest grammar before Docker");
+expect(!ciLoadStep.includes('steps.resolve.outputs.src_ref\"'), "core cache-hit load must not address the mutable src_ref tag");
 expect(openHarmonyWorkflow.includes("openharmony-runtime-images:") && openHarmonyWorkflow.includes("setup-qemu-action@v3"), "OpenHarmony workflow must retain its QEMU-backed specialist job");
 expect(openHarmonyWorkflow.includes("test-runtime-manuals-runtime.mjs"), "OpenHarmony workflow must run the offline runtime manual smoke");
 expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(openHarmonyWorkflow), "OpenHarmony manual smoke must also run on cache hits");
-expect(openHarmonyWorkflow.includes('docker pull --platform "${{ matrix.platform }}" "${{ steps.resolve.outputs.src_ref }}"'), "OpenHarmony workflow must pull immutable cache-hit images before manual smoke");
+expect(/SOURCE_IMAGE: \$\{\{ steps\.resolve\.outputs\.source_image \}\}/.test(openHarmonyWorkflow), "OpenHarmony workflow cache-hit load must be digest-addressed");
 expect((openHarmonyWorkflow.match(/toolset: openharmony-test/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two test matrix entries");
 expect((openHarmonyWorkflow.match(/toolset: openharmony-audit/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two audit matrix entries");
 expect((openHarmonyWorkflow.match(/toolset: openharmony-fuzz/g) ?? []).length === 2, "OpenHarmony workflow must retain exactly two fuzz matrix entries");
@@ -776,7 +786,7 @@ expect(PRESETS["deepsonar-mobile"]?.paths?.includes("deploy/mobile-apkcheckpack-
 expect(mobileWorkflow.includes("mobile-runtime-images:") && mobileWorkflow.includes("setup-qemu-action@v3"), "Mobile workflow must retain its QEMU-backed specialist job");
 expect(mobileWorkflow.includes("test-runtime-manuals-runtime.mjs"), "Mobile workflow must run the offline runtime manual smoke");
 expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(mobileWorkflow), "Mobile manual smoke must also run on cache hits");
-expect(mobileWorkflow.includes('docker pull --platform "${{ matrix.platform }}" "${{ steps.resolve.outputs.src_ref }}"'), "Mobile workflow must pull immutable cache-hit images before manual smoke");
+expect(/SOURCE_IMAGE: \$\{\{ steps\.resolve\.outputs\.source_image \}\}/.test(mobileWorkflow), "Mobile workflow cache-hit load must be digest-addressed");
 expect((mobileWorkflow.match(/toolset: mobile/g) ?? []).length === 2, "Mobile workflow must retain exactly two matrix entries");
 expect((mobileWorkflow.match(/platform: linux\/amd64/g) ?? []).length === 1 && (mobileWorkflow.match(/platform: linux\/arm64/g) ?? []).length === 1, "Mobile workflow must retain amd64/arm64 matrix coverage");
 expect(PRESETS["deepsonar-mobile"]?.paths?.includes("agent-harness/mobile-runtime.json"), "Mobile fingerprint must include the runtime manifest");
