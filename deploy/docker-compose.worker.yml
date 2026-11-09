@@ -9,7 +9,23 @@
 # Bind the OpenSandbox port on a private interface reachable from the Scheduler.
 # Do not invent overlay networking; sandbox exec/PTY stays on OPEN_SANDBOX_USE_SERVER_PROXY.
 services:
+  opensandbox-resource-preflight:
+    image: ${OPENSANDBOX_SERVER_IMAGE:-docker.io/opensandbox/server@sha256:25bebdcf1cf7724eb923faecbdbbf82d4038c6ab35c736151574726d14006f30}
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    entrypoint: ["/app/.venv/bin/python3", "/etc/opensandbox/resource-preflight.py"]
+    volumes:
+      - ./opensandbox/resource-preflight.py:/etc/opensandbox/resource-preflight.py:ro
+      - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock:ro
+
   opensandbox:
+    depends_on:
+      opensandbox-resource-preflight:
+        condition: service_completed_successfully
     image: ${OPENSANDBOX_SERVER_IMAGE:-docker.io/opensandbox/server@sha256:25bebdcf1cf7724eb923faecbdbbf82d4038c6ab35c736151574726d14006f30}
     container_name: ${OPEN_SANDBOX_CONTAINER_NAME:-deepsonar-worker-opensandbox}
     restart: unless-stopped

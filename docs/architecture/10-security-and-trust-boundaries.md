@@ -5,6 +5,8 @@
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
+#1002 P1-9 的[同 Job 模型恢复](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)只接受 Kernel 的 scoped no-start 与严格零用量 settlement，不以 Provider 错误或 SDK 文本为 authority。原 Job 锁串行消费既有 effect intent 中的恢复记录，原 owner/lease/deadline/请求及修正额度仍准入；未知效果、旧许可/计数来源缺失、跨 token/Attempt 原引用与已消费引用拒绝。新调用不修改旧 effect 的 never replay policy、不重启 Agent，不退款或补造历史。最终 SHA SQL/SDK Actions 待验。
+
 #943 的[可信显式补冻](../AGENT_REPAIR_LIFECYCLE.md#缺损快照的可信显式恢复943)只信内核完整预算回执或 Dispatcher 持久执行前证明；失败状态、缺 token/回执、没有 sandbox ID 和模型声明均不是 no-start authority。Job/全部 Attempt 锁阻止旧效果写入竞态，完整历史核查及当前授权/预算/效果门先于任何入队；无可信证明或未知效果继续拒绝，普通执行/resume 不回退当前配置。源码已接线，最终 SHA Actions 待验。
 
 ## 信任边界图
@@ -76,9 +78,15 @@ The 2026-11-01 upgrade preserves Scheduler authority: [connectionConfig](../../p
 
 凭据在管理域与运行时域分开：数据库保存加密字段和安全元数据，Job snapshot 只保存引用和经过审计的非秘密选择；Gateway 在 Scheduler 进程内按 Provider 认证转发请求，沙箱只拿到短期 Job token。Gateway 上游请求/响应体不落库，usage ledger 只保存用量计数；Job Evidence writer 在持久化运行流和 OTLP 前对已登记的运行时 secret 脱敏并清理控制字符，事件和审计仍按各自结构化 schema/投影保存。审计保留主体、scope、操作、结果和关联 ID。
 
+#1002 P1-8 的新 Job 池选择只读取同项目现有 Job 的负载投影，且限于显式授权、同 Provider/CLI/解析模型的候选；不把目录、负载或历史 token 当作新增授权。运行中仍使用冻结账号；恢复的原账号偏好是内核私有参数，不接受 Agent 账号 ID，且不能越过当前名单、状态、模型、CLI、身份漂移及累计预算门。没有自动故障换 key、额度退还或未知效果重放。
+
 凭据引用的可见性与删除完整性分别校验：项目 actor 能读取全局账号，但 impact 不得泄露其他项目名称、UUID 或引用计数；DELETE 独立拒绝所有项目尚存的引用。设置写入在事务内持有与删除共用的凭据行锁并验证存在、active 与可见性，不能借省略模型或删除白名单键绕过，见[#914 接口切片](09-interface-specs.md#项目凭据引用保护914-切片)。
 
 权限校验不能替代资源隔离。沙箱网络、文件、设备、共享资产配额、Job 并发和事件预算仍由 Scheduler 和运行时 host 强制；镜像准入只回答“该摘要能否被选择”，不能让镜像取得平台管理权限。涉及 Job/Attempt 的沙箱 provision、Agent run、Gateway 和清理效果按各自 effect/settlement 与对账规则记录；Management 配置、image-admission 扫描和 Registry 发布使用自己的数据库状态与审计，不虚构 Job Attempt 账本。
+
+#1002 P2-11 的受管 Docker init 只读取 OpenSandbox 所用 Engine 的能力声明，不接受模型或 RoleConfig 自报“limits 已强制”。读不到或已声明不支持时阻止依赖启动；socket 只读挂载本身不是 Engine API 权限隔离。该 init 不证明逐容器 enforcement，未受管端点、重启或复用 init 的剩余信任缺口见 [D-10](12-risks-and-tech-debt.md#2-当前实现债务)；原资源隔离要求不因此降级。详见[资源预检](../OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11)。
+
+#1011 人工等待的宿主清理重入先在同一事务锁定并核验 Canvas/Job/Attempt/effect/lease，外来绑定在销毁前拒绝，归属锁覆盖有界销毁与结算，不能用扫描时判断授权外部删除。只使用 SQL lease 的原 worker owner，销毁后核其完整分页资源列表和精确 ID，再原子结清 run、撤销 grants 和删除匹配 lease。缺 key、节点不可达或查询失败都保留未结清状态；不能用多节点不完整空列表、connect/isAlive 失败或 kill 已应答证明退出。lease 在未结清正常等待期间保留，阻止本地 endpoint/protocol 漂移；缓存必须匹配当前连接身份。原 Job 级未知效果门不缩窄，operator settlement 的 active Attempt 排除不变。见[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)，最终 SHA 工程回归待验。
 
 ## 管理员效果见证（#1002 P1-9）
 

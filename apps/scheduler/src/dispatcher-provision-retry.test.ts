@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { classifyDispatcherFailure, formatDispatcherFailureMessage, isRetryableProvisionFailure } from "./dispatcher.js";
 import { countConsumedProvisionRetries, planAutomaticProvisionRetry } from "./provision-retry-budget.js";
+import { cleanupDispatcherSandbox } from "./dispatcher-human-wait.js";
 
 test("OpenSandbox container startup errors retain nested provider details", () => {
   const error = Object.assign(new Error("Egress sidecar container failed to start."), {
@@ -86,6 +87,49 @@ test("source contract: opaque started failure stays unknown; retry requires curr
   assert.match(retry, /COALESCE\(settlement_json @> '\{"result":"never_started","external_effect":false\}'::jsonb, false\)/);
   assert.match(source, /if \(!provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure\(e\)\)/);
   // Behavioral proof is in shared-asset-lifecycle.integration.test.ts, not these source assertions.
+});
+
+test("dispatcher closes accepted human runs only through confirmed exact-sandbox cleanup", () => {
+  const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  const cleanup = source.slice(source.indexOf("} finally {\n    stopLease?.();"), source.indexOf("export async function withProvisionTimeout"));
+  assert.match(cleanup, /cleanupDispatcherSandbox\(sql, runner, \{ jobId, attemptId, sandboxId: h\.sandboxId \}\)/);
+  assert.ok(cleanup.indexOf("cleanupDispatcherSandbox") < cleanup.indexOf("cleanupSharedAssetsForJob"));
+});
+
+test("ordinary terminal finally cleanup destroys once without using the human-wait gate", async () => {
+  for (const status of ["succeeded", "failed", "timeout", "cancelled", "pending"]) {
+    let destroys = 0;
+    const db = Object.assign(async () => [{ status }], { begin: async () => { throw new Error("ordinary cleanup must not enter the human gate"); } });
+    await cleanupDispatcherSandbox(db as never, { destroy: async handle => {
+      assert.equal(handle.sandboxId, "fixture-sandbox"); destroys++;
+    } }, { jobId: "fixture-job", attemptId: "fixture-attempt", sandboxId: "fixture-sandbox" });
+    assert.equal(destroys, 1, status);
+  }
+});
+
+test("refused human-wait cleanup never falls back to ordinary destruction", async () => {
+  let transactions = 0, destroys = 0;
+  const db = Object.assign(async () => [{ status: "waiting_human" }], { begin: async () => { transactions++; return false; } });
+  const runner = { destroy: async () => { destroys++; } };
+  await cleanupDispatcherSandbox(db as never, runner,
+    { jobId: "fixture-job", attemptId: "fixture-attempt", sandboxId: "fixture-sandbox" });
+  assert.equal(transactions, 1); assert.equal(destroys, 0);
+  await cleanupDispatcherSandbox(db as never, runner, { jobId: "fixture-job", sandboxId: "fixture-sandbox" });
+  assert.equal(transactions, 1); assert.equal(destroys, 0, "missing Attempt does not authorize unfenced wait cleanup");
+  await cleanupDispatcherSandbox(db as never, runner,
+    { jobId: "fixture-job", attemptId: null, sandboxId: "fixture-sandbox" });
+  assert.equal(transactions, 1); assert.equal(destroys, 0, "null Attempt does not authorize unfenced wait cleanup");
+});
+
+test("provision diagnostic uses the durable audit sink without serializing Job env or raw failures", () => {
+  const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  const sink = source.slice(source.indexOf("onFailure: async"), source.indexOf("} as Parameters<typeof runner.provision>"));
+  assert.match(sink, /await recordSystemAudit/);
+  assert.match(sink, /action: "job.provision_failed"/);
+  assert.match(sink, /attempt_id: attemptId!/);
+  assert.match(sink, /}, sql\);/);
+  assert.doesNotMatch(sink, /provisionInput\.env|platformCapability|error\.message|stack/);
+  // Runtime callback/cleanup behavior is exercised by opensandbox.test.ts; this checks only Scheduler wiring.
 });
 
 test("Upload failed 500 / UNEXPECTED_RESPONSE is a transient retry candidate, not a create receipt", () => {

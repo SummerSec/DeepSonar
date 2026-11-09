@@ -165,6 +165,7 @@ async function runProdUpCase(): Promise<string> {
   const projectName = `os-prod-up-${process.pid}`;
   mkdirSync(join(dir, "opensandbox"), { recursive: true });
   writeFileSync(join(dir, "opensandbox/config.toml"), readFileSync(join(repoRoot, "deploy/opensandbox/config.toml")));
+  writeFileSync(join(dir, "opensandbox/resource-preflight.py"), readFileSync(join(repoRoot, "deploy/opensandbox/resource-preflight.py")));
   writeFileSync(envFile, [
     "POSTGRES_PASSWORD=poc-opensandbox",
     "BLOB_S3_ACCESS_KEY_ID=poc",

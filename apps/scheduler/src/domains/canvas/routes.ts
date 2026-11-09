@@ -316,16 +316,18 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
       return reply.code(202).send(message);
     } catch (error) {
       const statusCode = Number((error as { statusCode?: number }).statusCode ?? 500);
+      const errorCode = error instanceof HumanInterventionError ? error.errorCode
+        : statusCode === 404 ? "CANVAS_NOT_FOUND" : statusCode === 409 ? "TARGET_NOT_ACTIVE" : "HUMAN_MESSAGE_REJECTED";
       await audit(req, {
         action: "canvas.human_message.create",
         projectId: String(messageCanvas.project_id),
         result: "error",
         resourceId: body.message_id,
-        errorCode: statusCode === 404 ? "CANVAS_NOT_FOUND" : statusCode === 409 ? "TARGET_NOT_ACTIVE" : "HUMAN_MESSAGE_REJECTED",
+        errorCode,
       });
       return reply.code(statusCode).send({
         error: error instanceof Error ? error.message : "human message rejected",
-        error_code: statusCode === 404 ? "CANVAS_NOT_FOUND" : statusCode === 409 ? "TARGET_NOT_ACTIVE" : "HUMAN_MESSAGE_REJECTED",
+        error_code: errorCode,
       });
     }
   });

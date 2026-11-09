@@ -5,6 +5,10 @@ import { sql } from "../../db.js";
 import { beginEffect, markAttemptInterrupted, markEffectUnknown, settleEffect } from "../job-attempt/index.js";
 import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
 import { readSharedAssetBlob } from "../shared-assets/index.js";
+import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
+import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
+import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
+import { revokeOldRuntimeGrants } from "../job-control/rerun.js";
 
 export type HumanMessageStatus = "planned" | "injected" | "acknowledged" | "unknown" | "failed";
 
@@ -163,6 +167,8 @@ export async function createHumanMessage(input: {
 }): Promise<Record<string, unknown>> {
   const attachmentVersionIds = [...new Set(input.attachmentVersionIds)].sort();
   const result = await sql.begin(async (tx) => {
+    const [canvas] = await tx`SELECT id, project_id FROM canvases WHERE id=${input.canvasId} FOR UPDATE`;
+    if (!canvas) throw Object.assign(new Error("canvas not found"), { statusCode: 404 });
     const [existing] = await tx`SELECT * FROM human_messages WHERE id=${input.id}`;
     if (existing) {
       const sameTarget = existing.target_kind === input.target.kind &&
@@ -177,9 +183,6 @@ export async function createHumanMessage(input: {
       }
       return { message: existing, created: false };
     }
-    const [canvas] = await tx`SELECT id, project_id FROM canvases WHERE id=${input.canvasId} FOR UPDATE`;
-    if (!canvas) throw Object.assign(new Error("canvas not found"), { statusCode: 404 });
-
     let targetNode: Record<string, unknown> | undefined;
     let targetJob: Record<string, unknown> | undefined;
     if (input.target.kind === "job") {
@@ -312,9 +315,24 @@ async function resumeWaitingHumanJob(
   jobId: string,
   reason: string,
 ): Promise<boolean> {
-  const [job] = await tx`SELECT id, status FROM jobs WHERE id=${jobId} FOR UPDATE`;
+  const [job] = await tx`SELECT id, status, agent_snapshot_json FROM jobs WHERE id=${jobId} FOR UPDATE`;
   if (!job || String(job.status) !== "waiting_human") return false;
+  await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no FOR UPDATE`;
+  try {
+    await inspectGatewayRequestBudget(tx, jobId, job.agent_snapshot_json);
+  } catch (error) {
+    if (!(error instanceof GatewayRequestBudgetError)) throw error;
+    throw new HumanInterventionError(409, error.code, error.message);
+  }
+  // Ordinary waits share all safety gates; only repair generation needs a root.
+  const repair = await readRepairRequeueAdmission(tx, jobId);
+  if (repair.blocker) throw new HumanInterventionError(409, repair.blocker.code, repair.blocker.reason);
+  await ensureGatewayRequestBudget(tx, jobId, job.agent_snapshot_json);
+  if (repair.budget && repair.deadline) {
+    await admitRepairGeneration(tx, jobId, repair.budget.receipt_ref, repair.deadline, "resume-frozen");
+  }
   await markAttemptInterrupted(tx as unknown as typeof sql, jobId, reason);
+  await revokeOldRuntimeGrants(tx, jobId, reason);
   const resumed = await createSqlJobLifecycleApplication(tx as unknown as typeof sql).transitionJob(jobId, "pending", {
     error: null,
     lease_expires_at: null,
@@ -323,7 +341,7 @@ async function resumeWaitingHumanJob(
     finished_at: null,
     heartbeat_at: null,
   });
-  if (!resumed) return false;
+  if (!resumed) throw new HumanInterventionError(409, "REPAIR_REQUEUE_CHANGED", "Human continuation could not enter pending; no handoff was committed");
   await normalizePendingJobPriority(jobId, tx as unknown as typeof sql);
   await tx`
     UPDATE canvas_nodes SET status='pending', updated_at=now()

@@ -1,4 +1,4 @@
-import { PI_EXTENSION_REGISTRY } from "@deepsonar/shared-types";
+import { ControlToolPayloadSchemas, PI_EXTENSION_REGISTRY } from "@deepsonar/shared-types";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -72,7 +72,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       }
       assert.fail("synthetic Gateway settlement did not finish");
     };
-    const setup = async (repairLimit = 30, existingCanvasId?: string, snapshotOverrides: Record<string, unknown> = {}, mainCap = 40) => {
+    const setup = async (repairLimit = 30, existingCanvasId?: string, snapshotOverrides: Record<string, unknown> = {}, mainCap = 40, withRepairRoot = true) => {
       Reflect.set(config.gateway, "repairMaxTokens", repairLimit);
       await sql`UPDATE role_configs SET model='model-a',version=version+1 WHERE id=${roleConfigId}`;
       const canvasId = existingCanvasId ?? randomUUID(), jobId = randomUUID();
@@ -98,20 +98,29 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       const oldGateway = await mintGateway();
       const endpoint = `/control/v1/jobs/${jobId}/operations/mark_job_done`;
       let prepared = 0;
-      const register = () => api.registerRuntimeHandler(jobId, context => {
+      const register = () => api.registerRuntimeHandler(jobId, async context => {
+        if (context.operationId === "request_human") {
+          const payload = ControlToolPayloadSchemas.request_human.parse(context.input);
+          await core.ingestEvent(jobId, { v: 1, event_id: context.eventId, type: "human", payload });
+          return { accepted: true };
+        }
         if (context.completionPhase === "prepare") { prepared++; return { completion_prepared: true }; }
         return {};
-      }, ["mark_job_done"]);
+      }, ["mark_job_done", "request_human"]);
       register();
       const propose = (key: string, revision: number, summary: string, token = grant.token) => app.inject({ method: "POST", url: endpoint,
         headers: { authorization: `Bearer ${token}`, "idempotency-key": key, "x-deepsonar-proposal-revision": String(revision) }, payload: { summary } });
       const oldKey = randomUUID(), invalid = "x".repeat(8193);
-      const rejected = await propose(oldKey, 0, invalid);
-      assert.equal(rejected.statusCode, 422, rejected.body); assert.equal(prepared, 0);
-      for (let i = 0; i < 3; i++) assert.deepEqual((await propose(oldKey, 0, invalid)).json(), rejected.json());
+      if (withRepairRoot) {
+        const rejected = await propose(oldKey, 0, invalid);
+        assert.equal(rejected.statusCode, 422, rejected.body); assert.equal(prepared, 0);
+        for (let i = 0; i < 3; i++) assert.deepEqual((await propose(oldKey, 0, invalid)).json(), rejected.json());
+      }
       const oldReceipt = await receipts.readCompletionReceipt(sql, jobId, oldKey);
       assert.equal((await request(oldGateway.plaintext, "model-a", Math.min(10, repairLimit))).statusCode, 200); await settled(jobId, 1);
-      const before = await readBudget(jobId); assert.ok(before); assert.equal(before.known_tokens, 4); assert.equal(before.remaining_tokens, repairLimit - 4);
+      const before = await readBudget(jobId);
+      if (withRepairRoot) { assert.ok(before); assert.equal(before.known_tokens, 4); assert.equal(before.remaining_tokens, repairLimit - 4); }
+      else { assert.equal(before, null); assert.equal(oldReceipt, null); }
       const stop = async (status: "failed" | "waiting_human") => {
         if (status === "failed") await attempts.settleAttemptTerminal(sql, jobId, "failed", { reason: "synthetic known failure" });
         await sql`UPDATE jobs SET status=${status},finished_at=now() WHERE id=${jobId}`;
@@ -225,6 +234,433 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       const [row] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${jobId} AND payload_json->>'subtype'='repair_generation'`;
       assert.equal(row.count, 0);
     };
+    const assertRevokedGrants = (before: readonly Record<string, Record<string, unknown>>[], after: readonly Record<string, Record<string, unknown>>[], gatewayGrant: boolean) => {
+      assert.equal(after.length, before.length, "grant history is retained");
+      for (let i = 0; i < before.length; i++) {
+        const prior = before[i].row, row = after[i].row;
+        const revoked = gatewayGrant ? prior.status === "active" : prior.revoked_at === null;
+        if (!revoked) { assert.deepEqual(row, prior); continue; }
+        assert.ok(row.revoked_at); assert.equal(row.revoke_reason, "dispatcher-human-wait-cleanup");
+        const unchanged: Record<string, unknown> = { ...row, revoked_at: prior.revoked_at, revoke_reason: prior.revoke_reason };
+        if (gatewayGrant) { assert.equal(row.status, "revoked"); unchanged.status = prior.status; }
+        assert.deepEqual(unchanged, prior, "only revocation changes; caps, counters and provenance stay exact");
+      }
+    };
+    const assertRunSettledAttempts = (before: readonly Record<string, Record<string, unknown>>[], after: readonly Record<string, Record<string, unknown>>[]) => {
+      assert.equal(after.length, before.length);
+      for (let i = 0; i < before.length; i++) {
+        const prior = before[i].row, row = after[i].row;
+        assert.equal(row.phase, "settling");
+        assert.deepEqual(row.state_json, { ...(prior.state_json as Record<string, unknown>), phase: "settling",
+          current_effect_id: null, last_effect: { effect_id: "agent_run:1", status: "settled" } });
+        assert.ok(Date.parse(String(row.updated_at)) >= Date.parse(String(prior.updated_at)));
+        assert.deepEqual({ ...row, phase: prior.phase, state_json: prior.state_json, updated_at: prior.updated_at }, prior,
+          "only the existing kernel settlement transition changes; identity, lifecycle, budgets and outcome stay exact");
+      }
+    };
+    const humans = await import("./domains/canvas/human-messages.js");
+    const { destroyAndSettleHumanWaitRun, reconcileHumanWaitRuns } = await import("./dispatcher-human-wait.js");
+    const acceptedHumanWait = async (accepted = true, withRepairRoot = true, exhaustTokens = false) => {
+      const f = await setup(30, undefined, {}, 40, withRepairRoot), sandboxId = `synthetic-old-${f.jobId}`, humanEvent = randomUUID();
+      await sql.begin(async raw => {
+        const tx = raw as unknown as typeof sql;
+        await tx`UPDATE jobs SET sandbox_id=${sandboxId} WHERE id=${f.jobId}`;
+        await attempts.updateAttemptResource(tx, String(f.oldAttempt.id), { sandboxId, phase: "provisioned" });
+        await attempts.beginEffect(tx, String(f.oldAttempt.id), { effectId: "agent_run:1", kind: "agent_run",
+          resourceIdentity: { job_id: f.jobId, attempt_id: String(f.oldAttempt.id), sandbox_id: sandboxId }, intent: { fixture: "controlled runtime" } });
+      });
+      if (exhaustTokens) {
+        assert.equal(withRepairRoot, false);
+        for (let count = 2; count <= 10; count++) {
+          assert.equal((await request(f.oldGateway.plaintext, "model-a", 4)).statusCode, 200); await settled(f.jobId, count);
+        }
+      }
+      if (!accepted) {
+        await f.stop("waiting_human");
+        return { ...f, sandboxId, humanEvent, humanNode: "" }; // A label without an accepted human event proves nothing.
+      }
+      const response = await app.inject({ method: "POST", url: `/control/v1/jobs/${f.jobId}/operations/request_human`,
+        headers: { authorization: `Bearer ${f.oldGrant}`, "idempotency-key": humanEvent },
+        payload: { reason: "Synthetic governed wait before host-observed cleanup.", subject: { type: "platform_blocker", kind: "authorization" } } });
+      assert.equal(response.statusCode, 200, response.body);
+      const [human] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='human'`;
+      assert.ok(human); api.unregisterRuntimeHandler(f.jobId);
+      const [acceptedEvent] = await sql`SELECT event_id FROM events WHERE job_id=${f.jobId}
+        AND attempt_id=${String(f.oldAttempt.id)} AND type='human'`;
+      assert.ok(acceptedEvent);
+      return { ...f, sandboxId, humanEvent: String(acceptedEvent.event_id), humanNode: String(human.id) };
+    };
+    await t.test("#1011 bounded rotation visits healthy wait behind an unavailable owner, then retries the owner", async () => {
+      const waits = [await acceptedHumanWait(true, false), await acceptedHumanWait(true, false)]
+        .sort((a, b) => a.jobId < b.jobId ? -1 : 1);
+      const [first, second] = waits;
+      const before = await sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${first!.jobId} ORDER BY id`;
+      let available = false, cursor: string | undefined;
+      const calls: string[] = [];
+      const runner = { destroy: async (handle: { sandboxId: string }) => {
+        calls.push(handle.sandboxId);
+        if (handle.sandboxId === first!.sandboxId && !available) throw new Error("synthetic owner unavailable");
+      } };
+      const pass = async () => {
+        const result = await reconcileHumanWaitRuns(sql, runner, 1, cursor);
+        cursor = result.nextJobId; return result;
+      };
+      assert.equal((await pass()).blocked, 1); assert.equal(cursor, first!.jobId);
+      assert.equal((await pass()).settled, 1); assert.equal(cursor, second!.jobId);
+      assert.equal(calls[1], second!.sandboxId, "failed first owner cannot monopolize the limit");
+      assert.deepEqual(await sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${first!.jobId} ORDER BY id`, before);
+      assert.equal((await pass()).blocked, 1, "wrap retries the still unresolved owner");
+      available = true;
+      assert.equal((await pass()).settled, 1);
+      assert.equal((await pass()).scanned, 0); assert.equal(cursor, undefined);
+      for (const f of waits) {
+        const [effect] = await sql`SELECT status FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_id='agent_run:1'`;
+        assert.equal(effect.status, "settled");
+        const [job] = await sql`SELECT status FROM jobs WHERE id=${f.jobId}`;
+        assert.equal(job.status, "waiting_human", "traversal never resumes the Job");
+      }
+      assert.equal(calls.length, 4, "settled rows are never destroyed again");
+    });
+    for (const mode of ["reply", "ignore"] as const) {
+      await t.test(`#1011 lost cleanup commit: restarted reconciliation reaches ordinary ${mode}`, async () => {
+        const f = await acceptedHumanWait(true, false), workerId = `hw-${randomUUID()}`;
+        const { OpenSandboxRunner } = await import("@deepsonar/runtime-sandbox");
+        const { createWorkerPlaneOpenSandboxClient } = await import("./domains/worker-nodes/multiplex-client.js");
+        const workers = await import("./domains/worker-nodes/registry.js");
+        const { startEffectReconcileLoop, DEFAULT_EFFECT_RECONCILE_LIMIT } = await import("./effect-reconcile-loop.js");
+        await sql`INSERT INTO worker_nodes(id,endpoint,api_key_fingerprint,node_token_hash,node_token_prefix)
+          VALUES(${workerId},'127.0.0.1:18081','fixture-fingerprint',${randomUUID()},'fixture')`;
+        await workers.recordSandboxLease({ sandboxId: f.sandboxId, workerId, jobId: f.jobId, attemptId: String(f.oldAttempt.id) });
+        let present = true, keepAlive = false, destroys = 0, ownerQueries = 0;
+        const makeRunner = () => new OpenSandboxRunner(createWorkerPlaneOpenSandboxClient({
+          listWorkers: async () => { const node = await workers.getWorkerNode(workerId); return node ? [node] : []; },
+          createClient: () => ({
+            create: async () => { throw new Error("reconciliation must not provision"); }, connect: async () => undefined,
+            destroy: async () => { destroys++; if (!keepAlive) present = false; },
+            list: async () => { ownerQueries++; return present
+              ? [{ resourceId: f.sandboxId, jobId: f.jobId, attemptId: String(f.oldAttempt.id), state: "running" }] : []; },
+          }),
+        }));
+        let runner = makeRunner(), result = { scanned: 0, settled: 0, blocked: 0 };
+        const makeLoop = () => startEffectReconcileLoop({
+          db: sql as unknown as Parameters<typeof startEffectReconcileLoop>[0]["db"],
+          humanWaitReconcile: async () => { result = await reconcileHumanWaitRuns(sql, runner, DEFAULT_EFFECT_RECONCILE_LIMIT); },
+        });
+        let loop = makeLoop();
+        const capture = () => Promise.all([
+          sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(a) AS row FROM job_attempts a WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(j) AS row FROM jobs j WHERE id=${f.jobId}`,
+          sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(c) AS row FROM job_capability_tokens c WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(l) AS row FROM worker_sandbox_leases l WHERE sandbox_id=${f.sandboxId}`,
+        ]);
+        const deny = async () => {
+          const response = await app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${f.humanNode}/ignore`, payload: {} });
+          assert.equal(response.statusCode, 409, response.body); assert.equal(response.json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+        };
+        try {
+          const before = await capture();
+          workers.clearWorkerApiKeysForTests(); // Restart before remote registration/heartbeat is reachable.
+          await loop.runOnce(); assert.equal(result.settled, 0); assert.ok(result.blocked > 0);
+          assert.equal(destroys, 0); assert.equal(ownerQueries, 0); assert.equal(present, true);
+          await deny(); assert.deepEqual(await capture(), before);
+          workers.rememberWorkerApiKey(workerId, "fixture-remote-key");
+          keepAlive = true; await loop.runOnce(); assert.equal(result.settled, 0); assert.equal(present, true);
+          await deny(); assert.deepEqual(await capture(), before, "an acknowledged kill is not disappearance");
+          keepAlive = false;
+          await sql.unsafe("CREATE FUNCTION deepsonar_test_hw_commit_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic human wait commit failure'; END $$");
+          await sql.unsafe("CREATE TRIGGER deepsonar_test_hw_commit_failure BEFORE UPDATE ON job_capability_tokens FOR EACH ROW EXECUTE FUNCTION deepsonar_test_hw_commit_failure()");
+          await assert.rejects(() => destroyAndSettleHumanWaitRun(sql, runner,
+            { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId }), /synthetic human wait commit failure/);
+          assert.equal(present, false);
+          await deny(); assert.deepEqual(await capture(), before, "destroy succeeded but the failed SQL commit retains owner/run/grants");
+          await sql.unsafe("DROP TRIGGER deepsonar_test_hw_commit_failure ON job_capability_tokens");
+          await sql.unsafe("DROP FUNCTION deepsonar_test_hw_commit_failure()");
+          loop.stop(); workers.clearWorkerApiKeysForTests(); runner = makeRunner(); loop = makeLoop();
+          const calls = destroys; await loop.runOnce(); assert.equal(destroys, calls); assert.equal(result.settled, 0);
+          await deny(); assert.deepEqual(await capture(), before);
+          workers.rememberWorkerApiKey(workerId, "fixture-remote-key");
+          await loop.runOnce(); assert.equal(result.settled, 1); assert.equal(result.blocked, 0);
+          const after = await capture();
+          assert.equal(after[0].find(e => e.row.effect_id === "agent_run:1")!.row.status, "settled");
+          assertRunSettledAttempts(before[1], after[1]); assert.deepEqual(after[2], before[2]); assert.deepEqual(after[4], before[4]);
+          assertRevokedGrants(before[3], after[3], true); assertRevokedGrants(before[5], after[5], false); assert.equal(after[6].length, 0);
+          assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt); await assertNoGeneration(f.jobId);
+          const duplicateCalls = destroys; await loop.runOnce(); assert.equal(destroys, duplicateCalls, "settled waits are not destroyed twice");
+          const [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
+          const response = await app.inject(mode === "reply"
+            ? { method: "POST", url: `/canvases/${f.canvasId}/messages`, payload: { message_id: randomUUID(),
+              target: { kind: "job", node_id: String(node.id) }, body: "Continue after owner-confirmed cleanup." } }
+            : { method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${f.humanNode}/ignore`, payload: {} });
+          assert.equal(response.statusCode, mode === "reply" ? 202 : 200, response.body); await assertNoGeneration(f.jobId);
+          const { next, token } = await f.start(); assert.notEqual(String(next.id), String(f.oldAttempt.id));
+          assert.equal((await request(token.plaintext)).statusCode, 200); await settled(f.jobId, 2);
+          const key = randomUUID(), summary = "Synthetic successor after reachable cleanup reconciliation.";
+          const completed = await f.propose(key, 0, summary); assert.equal(completed.statusCode, 200, completed.body);
+          await core.ingestEvent(f.jobId, { v: 1, event_id: receipts.completionDoneEventId(f.jobId, key), type: "done", payload: { summary } });
+          const [final] = await sql`SELECT status FROM jobs WHERE id=${f.jobId}`; assert.equal(final.status, "succeeded");
+          await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+        } finally {
+          loop.stop();
+          await sql.unsafe("DROP TRIGGER IF EXISTS deepsonar_test_hw_commit_failure ON job_capability_tokens");
+          await sql.unsafe("DROP FUNCTION IF EXISTS deepsonar_test_hw_commit_failure()");
+          await sql`DELETE FROM worker_sandbox_leases WHERE worker_id=${workerId}`;
+          await sql`DELETE FROM worker_nodes WHERE id=${workerId}`; workers.clearWorkerApiKeysForTests();
+        }
+      });
+    }
+    await t.test("#1011 foreign lease binding prevents both scanned cleanup and settlement", async () => {
+      const f = await acceptedHumanWait(), workerId = `hw-${randomUUID()}`;
+      const workers = await import("./domains/worker-nodes/registry.js");
+      await sql`INSERT INTO worker_nodes(id,endpoint,api_key_fingerprint,node_token_hash,node_token_prefix)
+        VALUES(${workerId},'127.0.0.1:18081','fixture-fingerprint',${randomUUID()},'fixture')`;
+      await workers.recordSandboxLease({ sandboxId: f.sandboxId, workerId, jobId: f.jobId, attemptId: randomUUID() });
+      try {
+        const before = await sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`;
+        let calls = 0;
+        await reconcileHumanWaitRuns(sql, { destroy: async () => { calls++; } }, 500); assert.equal(calls, 0);
+        assert.equal(await destroyAndSettleHumanWaitRun(sql, { destroy: async () => { calls++; } },
+          { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId }), false);
+        assert.equal(calls, 0, "foreign binding is refused before any destroy call");
+        assert.deepEqual(await sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`, before);
+        assert.equal((await workers.lookupSandboxLease(f.sandboxId)), workerId);
+      } finally {
+        await sql`DELETE FROM worker_sandbox_leases WHERE worker_id=${workerId}`;
+        await sql`DELETE FROM worker_nodes WHERE id=${workerId}`;
+      }
+    });
+    await t.test("#1011 cleanup fences lease ownership across destroy and SQL settlement", async () => {
+      const f = await acceptedHumanWait(), workerId = `hw-${randomUUID()}`;
+      const workers = await import("./domains/worker-nodes/registry.js");
+      await sql`INSERT INTO worker_nodes(id,endpoint,api_key_fingerprint,node_token_hash,node_token_prefix)
+        VALUES(${workerId},'127.0.0.1:18081','fixture-fingerprint',${randomUUID()},'fixture')`;
+      await workers.recordSandboxLease({ sandboxId: f.sandboxId, workerId, jobId: f.jobId, attemptId: String(f.oldAttempt.id) });
+      let drift: Promise<unknown> | undefined, driftFinished = false, destroys = 0;
+      try {
+        const closed = await destroyAndSettleHumanWaitRun(sql, { destroy: async () => {
+          destroys++;
+          drift = sql`UPDATE worker_sandbox_leases SET attempt_id=${randomUUID()} WHERE sandbox_id=${f.sandboxId}`
+            .then(rows => { driftFinished = true; return rows; });
+          const deadline = Date.now() + 5000;
+          for (;;) {
+            const [waiting] = await sql`SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid<>pg_backend_pid()
+              AND wait_event_type='Lock' AND query ILIKE '%UPDATE worker_sandbox_leases%') AS blocked`;
+            if (waiting.blocked) break;
+            assert.equal(driftFinished, false, "lease drift must not pass the cleanup owner fence");
+            assert.ok(Date.now() < deadline, "lease drift must wait for the cleanup transaction");
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          assert.equal(driftFinished, false);
+        } }, { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId });
+        assert.equal(closed, true); assert.equal(destroys, 1);
+        await drift;
+        assert.equal((await sql`SELECT sandbox_id FROM worker_sandbox_leases WHERE sandbox_id=${f.sandboxId}`).length, 0);
+        const [run] = await sql`SELECT status FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_id='agent_run:1'`;
+        assert.equal(run.status, "settled");
+      } finally {
+        await drift?.catch(() => {});
+        await sql`DELETE FROM worker_sandbox_leases WHERE worker_id=${workerId}`;
+        await sql`DELETE FROM worker_nodes WHERE id=${workerId}`;
+      }
+    });
+    for (const scenario of ["cleanup_failure", "grant_cleanup_failure", "unknown_run", "other_unknown", "cancelled", "stale_owner", "foreign_attempt", "foreign_sandbox", "no_human"] as const) {
+      await t.test(`#1012 host cleanup ${scenario}: no invented settlement or replay`, async () => {
+        const f = await acceptedHumanWait(scenario !== "no_human");
+        if (scenario === "unknown_run") await attempts.markEffectUnknown(sql, String(f.oldAttempt.id), "agent_run:1", "synthetic unknown run");
+        if (scenario === "other_unknown") {
+          await attempts.beginEffect(sql, String(f.oldAttempt.id), { effectId: "unknown-external", kind: "gateway_model_request", intent: { fixture: true } });
+          await attempts.markEffectUnknown(sql, String(f.oldAttempt.id), "unknown-external", "synthetic unknown usage");
+        }
+        if (scenario === "cancelled") await attempts.requestAttemptCancel(sql, f.jobId, "synthetic cancellation");
+        if (scenario === "stale_owner") {
+          await attempts.markAttemptInterrupted(sql, f.jobId, "synthetic successor fence");
+          await sql.begin(raw => attempts.createAttempt(raw as unknown as typeof sql, f.jobId));
+        }
+        const capture = () => Promise.all([
+          sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(a) AS row FROM job_attempts a WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(j) AS row FROM jobs j WHERE id=${f.jobId}`,
+          sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(c) AS row FROM job_capability_tokens c WHERE job_id=${f.jobId} ORDER BY id`,
+        ]);
+        const before = await capture();
+        let destroys = 0;
+        const close = () => destroyAndSettleHumanWaitRun(sql, { destroy: async () => {
+          destroys++;
+          if (scenario === "cleanup_failure") throw new Error("synthetic destroy confirmation failed");
+        } }, { jobId: f.jobId, attemptId: scenario === "foreign_attempt" ? randomUUID() : String(f.oldAttempt.id),
+          sandboxId: scenario === "foreign_sandbox" ? "synthetic-foreign" : f.sandboxId });
+        if (scenario === "grant_cleanup_failure") {
+          await sql.unsafe(`CREATE FUNCTION reject_human_grant_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+            IF NEW.job_id='${f.jobId}'::uuid THEN RAISE EXCEPTION 'synthetic grant cleanup failed'; END IF;
+            RETURN NEW; END $$`);
+          await sql.unsafe("CREATE TRIGGER reject_human_grant_fixture BEFORE UPDATE ON job_capability_tokens FOR EACH ROW EXECUTE FUNCTION reject_human_grant_fixture()");
+          try { await assert.rejects(close, /synthetic grant cleanup failed/); }
+          finally {
+            await sql.unsafe("DROP TRIGGER reject_human_grant_fixture ON job_capability_tokens");
+            await sql.unsafe("DROP FUNCTION reject_human_grant_fixture()");
+          }
+        } else if (scenario === "cleanup_failure") await assert.rejects(close, /synthetic destroy confirmation failed/);
+        else await close();
+        if (["unknown_run", "cancelled", "stale_owner", "foreign_attempt", "foreign_sandbox", "no_human"].includes(scenario)) {
+          assert.equal(destroys, 0, "invalid lifecycle/ownership is rejected before destruction");
+        }
+        const after = await capture();
+        if (scenario === "other_unknown") {
+          assert.deepEqual(after[0].filter(e => e.row.effect_id === "unknown-external"), before[0].filter(e => e.row.effect_id === "unknown-external"));
+          assert.deepEqual(after[2], before[2]); assert.deepEqual(after[4], before[4]);
+          assertRevokedGrants(before[3], after[3], true); assertRevokedGrants(before[5], after[5], false);
+        } else assert.deepEqual(after, before);
+        if (f.humanNode) {
+          const denied = await app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${f.humanNode}/ignore` });
+          assert.equal(denied.statusCode, 409, denied.body); assert.equal(denied.json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+        }
+        await assertNoGeneration(f.jobId);
+        assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
+        if (scenario === "grant_cleanup_failure") {
+          await close(); // Re-enter the same owner/effect after the failed DB transaction.
+          assert.equal(destroys, 2);
+          const retried = await capture();
+          const run = retried[0].find(e => e.row.effect_id === "agent_run:1")!.row;
+          assert.equal(run.status, "settled"); assert.equal(run.replay_policy, "never");
+          assert.equal(run.settlement_json.sandbox_destroyed, true);
+          assert.equal(run.settlement_json.runtime_grants_revoked, true);
+          assertRunSettledAttempts(before[1], retried[1]); assert.deepEqual(retried[2], before[2]);
+          assert.deepEqual(retried[4], before[4], "retry cannot invent usage or refresh caps");
+          assertRevokedGrants(before[3], retried[3], true); assertRevokedGrants(before[5], retried[5], false);
+          await assertNoGeneration(f.jobId);
+          assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
+        }
+        await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+      });
+    }
+    for (const mode of ["reply", "ignore"] as const) {
+      await t.test(`#1012 ${mode}: accepted Control human -> host cleanup -> one generation -> Gateway -> completion`, async () => {
+        const f = await acceptedHumanWait();
+        Reflect.set(config.gateway, "repairMaxTokens", 300);
+        const humanNode = f.humanNode, messageId = randomUUID();
+        const [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
+        const send = () => mode === "reply"
+          ? app.inject({ method: "POST", url: `/canvases/${f.canvasId}/messages`,
+            payload: { message_id: messageId, target: { kind: "job", node_id: String(node.id) }, body: "Synthetic approved continuation." } })
+          : app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${humanNode}/ignore` });
+        const blocked = await send(); assert.equal(blocked.statusCode, 409, blocked.body);
+        assert.equal(blocked.json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+        const unchanged = await Promise.all([
+          sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(c) AS row FROM job_capability_tokens c WHERE job_id=${f.jobId} ORDER BY id`,
+        ]);
+        let destroyed = 0;
+        const close = () => destroyAndSettleHumanWaitRun(sql, { destroy: async handle => {
+          assert.equal(handle.sandboxId, f.sandboxId); destroyed++;
+        } }, { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId });
+        await close();
+        const [closed] = await sql`SELECT status,settlement_json,replay_policy FROM job_attempt_effects
+          WHERE job_id=${f.jobId} AND effect_id='agent_run:1'`;
+        assert.equal(closed.status, "settled"); assert.equal(closed.replay_policy, "never");
+        assert.equal(closed.settlement_json.sandbox_destroyed, true);
+        assert.equal(closed.settlement_json.runtime_grants_revoked, true);
+        const callsBeforeFence = upstreamCalls;
+        assert.notEqual((await request(f.oldGateway.plaintext)).statusCode, 200);
+        assert.notEqual((await f.propose(randomUUID(), 1, "late callback before reply", f.oldGrant)).statusCode, 200);
+        assert.equal(upstreamCalls, callsBeforeFence);
+        assert.equal(closed.settlement_json.human_event_id, f.humanEvent);
+        await close(); assert.equal(destroyed, 1, "settled replay does not destroy again");
+        assert.deepEqual((await sql`SELECT settlement_json FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_id='agent_run:1'`)[0].settlement_json, closed.settlement_json);
+        const afterClose = await Promise.all([
+          sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+          sql`SELECT to_jsonb(c) AS row FROM job_capability_tokens c WHERE job_id=${f.jobId} ORDER BY id`,
+        ]);
+        assertRevokedGrants(unchanged[0], afterClose[0], true);
+        assertRevokedGrants(unchanged[2], afterClose[2], false);
+        assert.deepEqual(afterClose[1], unchanged[1], "cleanup cannot settle usage or refresh caps");
+        for (const response of await Promise.all([send(), send()])) assert.equal(response.statusCode, mode === "reply" ? 202 : 200, response.body);
+        const [generations] = await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${f.jobId}
+          AND payload_json->>'subtype'='repair_generation'`;
+        assert.equal(generations.count, 1); assert.equal((await readBudget(f.jobId))?.attempt_id, "");
+        const { next, token } = await f.start();
+        const budget = await readBudget(f.jobId);
+        assert.equal(budget?.attempt_id, String(next.id)); assert.equal(budget?.receipt_ref, f.before?.receipt_ref);
+        assert.equal(budget?.limit_tokens, 30); assert.equal(budget?.known_tokens, 4); assert.equal(budget?.remaining_tokens, 26);
+        assert.equal(budget?.deadline, f.before?.deadline); assert.ok(budget?.generation_ref);
+        assert.notEqual((await request(f.oldGateway.plaintext)).statusCode, 200);
+        assert.notEqual((await f.propose(randomUUID(), 1, "late old callback", f.oldGrant)).statusCode, 200);
+        if (mode === "reply") {
+          let delivered = 0;
+          const unregister = await humans.registerHumanMessageRuntime(f.jobId, {
+            sendMessage: async () => { delivered++; }, writeWorkspaceFile: async () => {},
+          });
+          try {
+            assert.equal(delivered, 1);
+            assert.equal((await humans.acknowledgeHumanMessage(f.jobId, messageId, "synthetic explicit ACK")).delivery_status, "acknowledged");
+          } finally { unregister(); }
+          const [messages] = await sql`SELECT count(*)::int AS count FROM human_messages WHERE target_job_id=${f.jobId}`;
+          assert.equal(messages.count, 1, "concurrent exact reply is idempotent under Canvas lock");
+        }
+        assert.equal((await request(token.plaintext)).statusCode, 200); await settled(f.jobId, 2);
+        assert.equal((await readBudget(f.jobId))?.known_tokens, 8);
+        const key = randomUUID(), summary = "Synthetic human continuation completed without refreshing the repair root.";
+        const response = await f.propose(key, 1, summary); assert.equal(response.statusCode, 200, response.body);
+        await core.ingestEvent(f.jobId, { v: 1, event_id: receipts.completionDoneEventId(f.jobId, key), type: "done", payload: { summary } });
+        const [final] = await sql`SELECT status FROM jobs WHERE id=${f.jobId}`; assert.equal(final.status, "succeeded");
+        assert.deepEqual(await receipts.readCompletionReceipt(sql, f.jobId, f.oldKey), f.oldReceipt);
+        await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+      });
+      for (const blocker of ["tokens", "requests", "effect", "usage", "paused", "deadline", "transition"] as const) {
+        await t.test(`#1012 ${mode} ${blocker}: actionable denial rolls back message, node and handoff`, async () => {
+          const f = blocker === "deadline" ? await historicalExpired("running") : await setup(blocker === "tokens" ? 4 : 30);
+          await sql`UPDATE jobs SET status='waiting_human' WHERE id=${f.jobId}`; api.unregisterRuntimeHandler(f.jobId);
+          if (blocker === "requests") await sql`UPDATE job_tokens SET max_requests=used_requests WHERE job_id=${f.jobId}`;
+          if (blocker === "effect") await sql`UPDATE job_attempt_effects SET status='unknown' WHERE job_id=${f.jobId}`;
+          if (blocker === "usage") await sql`UPDATE job_usage_ledger SET settlement_status='unknown' WHERE job_id=${f.jobId}`;
+          if (blocker === "paused") await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+          const humanNode = randomUUID(), messageId = randomUUID();
+          await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
+            VALUES(${humanNode},${f.canvasId},${f.jobId},'human','synthetic blocked wait','open','{}')`;
+          let [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
+          if (!node) [node] = await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
+            VALUES(${randomUUID()},${f.canvasId},${f.jobId},'job','synthetic historical wait','waiting_human','{}') RETURNING id`;
+          const state = () => Promise.all([
+            sql`SELECT to_jsonb(j) AS row FROM jobs j WHERE id=${f.jobId}` ,
+            sql`SELECT to_jsonb(a) AS row FROM job_attempts a WHERE job_id=${f.jobId} ORDER BY id`,
+            sql`SELECT to_jsonb(e) AS row FROM events e WHERE job_id=${f.jobId} ORDER BY job_seq`,
+            sql`SELECT to_jsonb(t) AS row FROM job_tokens t WHERE job_id=${f.jobId} ORDER BY id`,
+            sql`SELECT to_jsonb(e) AS row FROM job_attempt_effects e WHERE job_id=${f.jobId} ORDER BY id`,
+            sql`SELECT to_jsonb(l) AS row FROM job_usage_ledger l WHERE job_id=${f.jobId} ORDER BY id`,
+            sql`SELECT to_jsonb(n) AS row FROM canvas_nodes n WHERE canvas_id=${f.canvasId} ORDER BY id`,
+            sql`SELECT to_jsonb(m) AS row FROM human_messages m WHERE canvas_id=${f.canvasId} ORDER BY id`,
+            sql`SELECT to_jsonb(c) AS row FROM job_capability_tokens c WHERE job_id=${f.jobId} ORDER BY id`,
+          ]);
+          const before = await state();
+          if (blocker === "transition") await sql.unsafe(`
+            CREATE FUNCTION deepsonar_test_human_pending_skip() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RETURN NULL; END;$$;
+            CREATE TRIGGER deepsonar_test_human_pending_skip BEFORE UPDATE ON jobs FOR EACH ROW
+              WHEN (OLD.id='${f.jobId}'::uuid AND OLD.status='waiting_human' AND NEW.status='pending')
+              EXECUTE FUNCTION deepsonar_test_human_pending_skip();`);
+          try {
+            for (let repeat = 0; repeat < 2; repeat++) {
+              const response = mode === "reply"
+                ? await app.inject({ method: "POST", url: `/canvases/${f.canvasId}/messages`,
+                  payload: { message_id: messageId, target: { kind: "job", node_id: String(node.id) }, body: "Synthetic denied continuation." } })
+                : await app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${humanNode}/ignore` });
+              assert.equal(response.statusCode, 409, response.body);
+              const expected = { tokens: "REPAIR_TOKEN_EXHAUSTED", requests: "REPAIR_REQUESTS_EXHAUSTED", effect: "REPAIR_EFFECT_UNRESOLVED",
+                usage: "JOB_TOKEN_USAGE_UNKNOWN", paused: "REPAIR_PAUSED", deadline: "REPAIR_DEADLINE_EXHAUSTED", transition: "REPAIR_REQUEUE_CHANGED" };
+              assert.equal(response.json().error_code, expected[blocker]);
+              assert.deepEqual(await state(), before, "denied continuation leaves all durable execution and human state unchanged");
+            }
+            await assertNoGeneration(f.jobId);
+          } finally {
+            if (blocker === "transition") await sql.unsafe("DROP TRIGGER deepsonar_test_human_pending_skip ON jobs; DROP FUNCTION deepsonar_test_human_pending_skip();");
+          }
+        });
+      }
+    }
     const waitForBlockedQuery = async (fragment: string) => {
       for (let i = 0; i < 500; i++) {
         const [row] = await sql`SELECT count(*)::int AS count FROM pg_stat_activity
@@ -330,9 +766,96 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         sql`SELECT to_jsonb(a) AS row FROM job_shared_asset_versions a WHERE job_id=ANY(${ids}::uuid[]) ORDER BY job_id,version_id`,
         sql`SELECT to_jsonb(c) AS row FROM canvases c WHERE id=${canvasId}`,
         sql`SELECT to_jsonb(n) AS row FROM canvas_nodes n WHERE canvas_id=${canvasId} ORDER BY id`,
+        sql`SELECT to_jsonb(m) AS row FROM human_messages m WHERE canvas_id=${canvasId} ORDER BY id`,
       ]);
       return JSON.parse(JSON.stringify(rows));
     };
+    for (const mode of ["reply", "ignore"] as const) {
+      const continuation = async (f: Awaited<ReturnType<typeof acceptedHumanWait>>) => {
+        const [node] = await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
+        const messageId = randomUUID();
+        return () => mode === "reply"
+          ? app.inject({ method: "POST", url: `/canvases/${f.canvasId}/messages`, payload: {
+            message_id: messageId, target: { kind: "job", node_id: String(node.id) }, body: "Synthetic ordinary continuation." } })
+          : app.inject({ method: "POST", url: `/canvases/${f.canvasId}/human-nodes/${f.humanNode}/ignore` });
+      };
+      const closeWait = (f: Awaited<ReturnType<typeof acceptedHumanWait>>) => destroyAndSettleHumanWaitRun(sql,
+        { destroy: async handle => { assert.equal(handle.sandboxId, f.sandboxId); } },
+        { jobId: f.jobId, attemptId: String(f.oldAttempt.id), sandboxId: f.sandboxId });
+      const restoreActiveGrantsFixture = async (f: Awaited<ReturnType<typeof acceptedHumanWait>>) => {
+        // Simulate historical cleanup retaining the grants minted while running.
+        // This is isolated fixture SQL, not permission to mint in waiting_human.
+        const gatewayRows = await sql`UPDATE job_tokens SET status='active',revoked_at=NULL,revoke_reason=NULL
+          WHERE job_id=${f.jobId} AND status='revoked' RETURNING id`;
+        const controlRows = await sql`UPDATE job_capability_tokens SET revoked_at=NULL,revoke_reason=NULL
+          WHERE job_id=${f.jobId} AND revoked_at IS NOT NULL RETURNING id`;
+        assert.equal(gatewayRows.length, 1); assert.equal(controlRows.length, 1);
+      };
+      await t.test(`#1012 ordinary ${mode}: shared gates and grant fencing without a repair generation`, async () => {
+        const f = await acceptedHumanWait(true, false), send = await continuation(f);
+        assert.equal((await send()).json().error_code, "REPAIR_EFFECT_UNRESOLVED");
+        await closeWait(f);
+        await restoreActiveGrantsFixture(f);
+        const [frozen] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${f.jobId}`;
+        const history = await sql`SELECT id,max_requests,request_total_limit,max_tokens,used_requests,used_tokens
+          FROM job_tokens WHERE job_id=${f.jobId} ORDER BY id`;
+        for (const response of await Promise.all([send(), send()])) assert.equal(response.statusCode, mode === "reply" ? 202 : 200, response.body);
+        await assertNoGeneration(f.jobId); assert.equal(await readBudget(f.jobId), null);
+        assert.deepEqual(await sql`SELECT id,max_requests,request_total_limit,max_tokens,used_requests,used_tokens
+          FROM job_tokens WHERE job_id=${f.jobId} ORDER BY id`, history);
+        const [fenced] = await sql`SELECT count(*)::int AS count FROM job_tokens WHERE job_id=${f.jobId} AND status='active'`;
+        assert.equal(fenced.count, 0);
+        const { token } = await f.start();
+        assert.equal(await readBudget(f.jobId), null);
+        const calls = upstreamCalls;
+        assert.notEqual((await request(f.oldGateway.plaintext)).statusCode, 200);
+        assert.notEqual((await f.propose(randomUUID(), 0, "late ordinary callback", f.oldGrant)).statusCode, 200);
+        assert.equal(upstreamCalls, calls);
+        assert.equal((await request(token.plaintext)).statusCode, 200); await settled(f.jobId, 2);
+        const key = randomUUID(), summary = "Synthetic ordinary wait completed through the normal completion gate.";
+        const completed = await f.propose(key, 0, summary); assert.equal(completed.statusCode, 200, completed.body);
+        await core.ingestEvent(f.jobId, { v: 1, event_id: receipts.completionDoneEventId(f.jobId, key), type: "done", payload: { summary } });
+        const [final] = await sql`SELECT status,agent_snapshot_json FROM jobs WHERE id=${f.jobId}`;
+        assert.equal(final.status, "succeeded"); assert.deepEqual(final.agent_snapshot_json, frozen.agent_snapshot_json);
+        await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+      });
+      for (const blocker of ["tokens", "requests", "effect_pending", "unknown", "usage", "paused", "policy", "transition"] as const) {
+        await t.test(`#1012 ordinary ${mode} ${blocker}: full transaction rollback without a repair root`, async () => {
+          const f = await acceptedHumanWait(true, false, blocker === "tokens");
+          await closeWait(f);
+          if (blocker === "requests") await sql`UPDATE job_tokens SET max_requests=used_requests WHERE job_id=${f.jobId}`;
+          if (blocker === "effect_pending" || blocker === "unknown") {
+            await attempts.beginEffect(sql, String(f.oldAttempt.id), { effectId: "ordinary-unresolved", kind: "gateway_model_request", intent: { fixture: true } });
+            if (blocker === "unknown") await attempts.markEffectUnknown(sql, String(f.oldAttempt.id), "ordinary-unresolved", { fixture: "unknown external result" });
+          }
+          if (blocker === "usage") await sql`UPDATE job_usage_ledger SET settlement_status='unknown' WHERE job_id=${f.jobId}`;
+          if (blocker === "paused") await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
+          if (blocker === "policy") await sql`UPDATE jobs SET agent_snapshot_json=agent_snapshot_json - 'runtime_knobs' WHERE id=${f.jobId}`;
+          if (blocker === "transition") {
+            await restoreActiveGrantsFixture(f);
+            await sql.unsafe(`CREATE FUNCTION reject_ordinary_pending_fixture() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+              IF NEW.id='${f.jobId}'::uuid AND NEW.status='pending' THEN RETURN NULL; END IF; RETURN NEW; END $$`);
+            await sql.unsafe("CREATE TRIGGER reject_ordinary_pending_fixture BEFORE UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION reject_ordinary_pending_fixture()");
+          }
+          try {
+            const send = await continuation(f), before = await captureBatch(f.canvasId, [f.jobId]), calls = upstreamCalls;
+            const code = { tokens: "JOB_TOKEN_EXHAUSTED", requests: "REPAIR_REQUESTS_EXHAUSTED",
+              effect_pending: "REPAIR_EFFECT_UNRESOLVED", unknown: "REPAIR_EFFECT_UNRESOLVED", usage: "JOB_TOKEN_USAGE_UNKNOWN",
+              paused: "REPAIR_PAUSED", policy: "GATEWAY_REQUEST_BUDGET_INVALID", transition: "REPAIR_REQUEUE_CHANGED" }[blocker];
+            for (let retry = 0; retry < 2; retry++) {
+              const response = await send(); assert.equal(response.statusCode, 409, response.body); assert.equal(response.json().error_code, code);
+              assert.deepEqual(await captureBatch(f.canvasId, [f.jobId]), before);
+            }
+            assert.equal(upstreamCalls, calls); await assertNoGeneration(f.jobId); assert.equal(await readBudget(f.jobId), null);
+          } finally {
+            if (blocker === "transition") {
+              await sql.unsafe("DROP TRIGGER reject_ordinary_pending_fixture ON jobs"); await sql.unsafe("DROP FUNCTION reject_ordinary_pending_fixture()");
+            }
+            await sql`UPDATE jobs SET status='cancelled' WHERE id=${f.jobId}`;
+          }
+        });
+      }
+    }
     for (const mode of ["resume", "rerun-current", "batch"] as const) {
       await t.test(`${mode}: an empty pending transition rolls back every recovery mutation`, async () => {
         const first = await setup();

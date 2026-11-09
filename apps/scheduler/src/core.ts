@@ -1670,7 +1670,7 @@ export async function resolveAgentSnapshotForJob(
   projectId: string,
   jobType: string,
   findingIds: string[] = [],
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
+  options?: { existingCredentialId?: string | null; runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
 ): Promise<AgentRuntimeSnapshot> {
   const snapshot = (await roleRuntimeSnapshotApplication.resolveAgentSnapshotForJob(
     db as never,

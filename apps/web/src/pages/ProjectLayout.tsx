@@ -10,7 +10,6 @@ const TABS = [
   { to: "data", label: "数据" },
   { to: "knowledge", label: "知识" },
   { to: "settings", label: "设置" },
-  { to: "images", label: "镜像" },
 ];
 
 /** 项目工作区：提供轻量上下文与项目级分区；任务工作台保留最大画布空间。 */

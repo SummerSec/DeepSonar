@@ -13,7 +13,7 @@
 
 ## 权威与持久化
 
-schema 71 在基线中增加 project_task_queues 与 project_task_queue_items。队列按项目唯一，条目以数据库序号排序，Canvas 外键包含项目归属，部分唯一索引约束每个项目最多一个 active 条目。创建时队列 membership 与首个 pending Job 同事务提交。
+schema 72 在基线中增加 project_task_queues 与 project_task_queue_items。队列按项目唯一，条目以数据库序号排序，Canvas 外键包含项目归属，部分唯一索引约束每个项目最多一个 active 条目。创建时队列 membership 与首个 pending Job 同事务提交。
 
 所有入队、控制、对账和领取沿用 DISPATCH_CLAIM_ADVISORY_KEY 的 PostgreSQL 事务锁。Dispatcher 在真实 Job claim 成功后标记占位，按有限预算检查队列前驱。检查时间持久化用于有界公平轮转；领取候选同时核对其项目队首，避免默认关闭轮询时被其他项目长期阻塞。重启、多副本和重复回调重新读取数据库状态，队列不拥有 Attempt、lease、效果结算或终态 authority。
 

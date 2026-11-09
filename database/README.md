@@ -16,7 +16,9 @@ Scheduler 启动路径不会自动升级旧库。
 
 `canvas_edges.from_node_id/to_node_id` 与 `human_messages.human_node_id/target_node_id` 均有对应的前导列索引。任务 retry 即使先删除本 Canvas 的边，随后删除节点的外键检查仍会查询全表的剩余引用；只有 `canvas_id` 索引不能避免对其它 Canvas 引用的扫描。索引不改变外键、删除顺序、事务原子性或项目范围，不提高 statement timeout，也不分批提交任务重置。
 
-此切片在 #1002 P1-7A 的集成基线上继续 bump `SCHEMA_VERSION`；旧库仍须受控备份与全基线重建，没有就地增量 DDL。既有 recovery 集成入口增加隔离 PostgreSQL 的索引前后执行计划对照，以及实际 HTTP retry 的失败后完整回滚、成功后引用清理和无关项目数据不变检查。它是合成工程证据，不证明现场 61.6 秒的唯一根因、生产容量或延迟收益；最终 SHA Actions 待验，未在本地或生产运行。
+聚合审查另核对现场指出的 `project_finding_candidate_edges` 删除路径：其左右端及 `project_finding_candidate_sources.finding_id` 都以 `(project_id, finding_id)` 形式级联引用 Finding，但旧索引的 `generation` 位于这两个外键列之间。候选基线为三条引用分别增加完整外键前缀索引；多 generation 的合成回归对照真实无匹配 CASCADE DELETE 形状的执行计划与命中/读取 buffer，不强制优化器、不设墙钟阈值，并在实际 HTTP retry 中比较 Finding/候选行的失败回滚、成功清理与无关项目完整行不变。
+
+此切片在主线 schema70 基础上推进候选基线71（2026-11-08 核对），仍按 `SCHEMA_VERSION` 与真实 DDL 同步；旧库须受控备份与全基线重建，没有就地增量 DDL。既有 recovery 集成入口增加隔离 PostgreSQL 的索引前后执行计划对照，以及实际 HTTP retry 的失败后完整回滚、成功后引用清理和无关项目数据不变检查。它是合成工程证据，不证明现场 61.6 秒的唯一根因、生产容量或延迟收益；最终 SHA Actions 待验，未在本地或生产运行。
 
 ## #697 sandbox_limits 防御性 clamp（无 schema bump）
 
@@ -93,4 +95,4 @@ Neon、RDS Query Editor 等 PostgreSQL SQL 控制台执行。仅适配 PostgreSQ
 
 ## 项目任务队列基线（#1018）
 
-schema 71 增加项目队列与条目，Canvas 的项目复合唯一键支持队列归属外键，active 部分唯一索引约束单任务占位。条目使用现有重建支持的序列默认值。新基线仍通过备份、列交集回填和序列校准重建，旧库结构不匹配时启动拒绝；最终 Actions 的迁移与 SQL 行为证据另记。调度语义见[队列专题](../docs/PROJECT_TASK_QUEUE.md)。
+schema 72 增加项目队列与条目，Canvas 的项目复合唯一键支持队列归属外键，active 部分唯一索引约束单任务占位。条目使用现有重建支持的序列默认值。新基线仍通过备份、列交集回填和序列校准重建，旧库结构不匹配时启动拒绝；最终 Actions 的迁移与 SQL 行为证据另记。调度语义见[队列专题](../docs/PROJECT_TASK_QUEUE.md)。

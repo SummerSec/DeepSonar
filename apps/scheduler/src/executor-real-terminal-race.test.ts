@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { call, completionReady, completionDiagnosticEvidence, frozenRuntimeBudget, piRecoveryAllowed, jobId, attemptId, rootId, runExecutor, setPreflight, terminalBundleCalls, terminalEvents } from "./executor-real-terminal-race.fixture.js";
 import { getAgentCliRuntimeAdapter, resolveTerminalProcessOutcome, type RealAgentResult } from "@deepsonar/runtime-sandbox";
@@ -186,12 +188,12 @@ const structuredRefusal: RealAgentResult = { text: "", files: {}, errorKind: "ru
   ...resolveTerminalProcessOutcome({ exitCode: 0,
     terminalResult: { isError: true, errorDetail: completionRefusal } }) };
 
-function piMessageFailure(errorMessage: string): RealAgentResult {
+function piMessageFailure(errorMessage: string, state = {}): RealAgentResult {
   const adapter = getAgentCliRuntimeAdapter("pi");
   assert.ok(adapter);
   const [terminal] = adapter.decodeOutput({ type: "message_end", message: {
     role: "assistant", stopReason: "error", errorMessage,
-  } }, {});
+  } }, state);
   assert.equal(terminal.type, "result");
   assert.equal(terminal.is_error, true);
   assert.ok(typeof terminal.result === "string");
@@ -203,6 +205,67 @@ function piMessageFailure(errorMessage: string): RealAgentResult {
 }
 const piRefusal = piMessageFailure("409: Completion already accepted; reconcile its receipt");
 
+test("executeReal: Pi allowance completion refusal reaches the original accepted settlement", async () => {
+  // Only the SDK stream container is a double. Run the generated host extension,
+  // real HTTP allowance read, Pi decoder and executor completion gate together.
+  const { PI_MAIN_REQUEST_BUDGET_SOURCE } = await import(new URL(
+    "../../../packages/runtime-sandbox/src/pi-main-request-budget.ts", import.meta.url).href);
+  const sdk = `export function createAssistantMessageEventStream() {
+    const events = []; let finish;
+    const ended = new Promise(resolve => { finish = resolve; });
+    return { push: event => events.push(event), end: () => finish(),
+      async *[Symbol.asyncIterator]() { await ended; yield* events; } };
+  }
+  export function streamSimple() { throw new Error('SDK must not be called after completion'); }`;
+  const sdkUrl = `data:text/javascript;base64,${Buffer.from(sdk).toString("base64")}`;
+  const source = PI_MAIN_REQUEST_BUDGET_SOURCE.replace("'@earendil-works/pi-ai/compat'", JSON.stringify(sdkUrl));
+  const module = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+  let queries = 0;
+  const server = http.createServer((req, res) => {
+    assert.equal(req.url, "/gateway/_allowance");
+    assert.equal(req.headers.authorization, "Bearer synthetic-main-token");
+    assert.equal(completionReady(), true);
+    queries++;
+    res.writeHead(409, { "content-type": "application/json" }).end(JSON.stringify({
+      error: { type: "COMPLETION_ALREADY_ACCEPTED", message: "untrusted diagnostic" },
+    }));
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/gateway`;
+    const model = { provider: "synthetic", id: "synthetic", api: "openai-completions", baseUrl };
+    let start!: (event: unknown, ctx: unknown) => void;
+    let stream!: (...args: unknown[]) => AsyncIterable<{ error: { errorMessage: string } }>;
+    module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl,
+      DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" })({
+      on: (_event: string, handler: typeof start) => { start = handler; },
+      registerProvider: (_provider: string, config: { streamSimple: typeof stream }) => { stream = config.streamSimple; },
+    });
+    start({}, { model, modelRegistry: {} });
+    const terminals = await runExecutor(async () => {
+      await acceptHubAndDone();
+      const events = [];
+      for await (const event of stream(model, { messages: [] }, {})) events.push(event);
+      assert.equal(events.length, 1);
+      assert.equal(events[0]!.error.errorMessage, "COMPLETION_ALREADY_ACCEPTED");
+      const adapter = getAgentCliRuntimeAdapter("pi");
+      assert.ok(adapter);
+      const state = { failed: false };
+      assert.deepEqual(adapter.decodeOutput({ type: "message_update", assistantMessageEvent: {
+        type: "error", error: events[0]!.error,
+      } }, state), [], "the SDK update must not terminate the original accepted completion");
+      assert.equal(state.failed, false);
+      return piMessageFailure(events[0]!.error.errorMessage, state);
+    }, "hub", false, "pi");
+    assert.equal(queries, 1);
+    assert.equal(terminalBundleCalls(), 1);
+    assert.deepEqual(terminals.map(event => event.payload), [hub, done]);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
+});
+
 async function acceptHubAndDone() {
   const hubId = randomUUID(), doneId = randomUUID();
   await call("submit_hub_decision", hub, { eventId: hubId });
@@ -213,7 +276,8 @@ async function acceptHubAndDone() {
   return [hubId, doneId];
 }
 
-for (const [format, result] of [["409 space", structuredRefusal], ["Pi message_end 409 colon", piRefusal]] as const) {
+for (const [format, result] of [["409 space", structuredRefusal], ["Pi message_end 409 colon", piRefusal],
+  ["Pi allowance code", piMessageFailure("COMPLETION_ALREADY_ACCEPTED")]] as const) {
   test(`executeReal: ${format} refusal settles the original accepted Hub/done exactly once`, async () => {
     let ids: string[] = [];
     const terminals = await runExecutor(async () => {
@@ -233,7 +297,7 @@ for (const [format, result] of [["409 space", structuredRefusal], ["Pi message_e
         if (phase === "prepare") await call("mark_job_done", done, { completionPhase: "prepare" });
         assert.equal(completionReady(), false);
         return result;
-      }, "hub"), /agent 运行失败:.*409:? Completion already accepted/);
+      }, "hub"), { message: `agent 运行失败: ${result.error}` });
       assert.equal(terminalBundleCalls(), 0);
       assert.deepEqual(terminalEvents(), []);
     });

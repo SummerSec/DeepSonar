@@ -22,7 +22,7 @@ async function load() {
   return await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 }
 
-async function fixture(api = "openai-completions") {
+async function fixture(api = "openai-completions", delegateFailure?: Error) {
   const module = await load();
   const queries: string[] = [];
   const delegates: Array<{ model: any; context: any; options: any }> = [];
@@ -48,6 +48,7 @@ async function fixture(api = "openai-completions") {
   module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: url, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
     async function* (selected: any, context: any, options: any) {
       delegates.push({ model: selected, context, options });
+      if (delegateFailure) throw delegateFailure;
       yield { type: "done", message: { provider: selected.provider, model: selected.id } };
     })(pi);
   hooks.get("session_start")!({}, ctx);
@@ -112,6 +113,66 @@ test("pending settlement polls only allowance; unknown usage and mismatched iden
   } finally { await f.close(); }
 });
 
+test("accepted completion allowance preserves the fixed stop code without generating an SDK request", async () => {
+  const f = await fixture();
+  try {
+    f.replies.push({ status: 409, body: { error: {
+      type: "COMPLETION_ALREADY_ACCEPTED", message: "untrusted provider detail synthetic-secret",
+    } } });
+    const events = await f.request();
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, "error");
+    assert.equal(events[0].error.stopReason, "error");
+    assert.equal(events[0].error.errorMessage, "COMPLETION_ALREADY_ACCEPTED");
+    assert.equal(f.queries.length, 1);
+    assert.equal(f.delegates.length, 0);
+    assert.doesNotMatch(JSON.stringify(events), /synthetic-secret/u);
+
+    f.replies.push({ status: 409, body: { error: { type: "JOB_TOKEN_USAGE_UNKNOWN" } } });
+    assert.equal((await f.request())[0].error.errorMessage, "PI_MAIN_BUDGET_ALLOWANCE_DENIED");
+    assert.equal(f.delegates.length, 0, "a later unknown effect retains its failure semantics");
+    assert.equal((await f.request())[0].type, "done");
+    assert.equal(f.delegates.length, 1, "the completion signal does not persist into later requests");
+  } finally { await f.close(); }
+});
+
+test("allowance errors require the exact completion status and type and never expose untrusted messages", async () => {
+  const f = await fixture();
+  try {
+    for (const [status, type] of [
+      [400, "COMPLETION_ALREADY_ACCEPTED"],
+      [401, "COMPLETION_ALREADY_ACCEPTED"],
+      [429, "COMPLETION_ALREADY_ACCEPTED"],
+      [502, "COMPLETION_ALREADY_ACCEPTED"],
+      [409, "COMPLETION_ALREADY_ACCEPTED_suffix"],
+      [409, "JOB_TOKEN_EXHAUSTED"],
+      [409, "REPAIR_ATTEMPT_CHANGED"],
+      [429, "JOB_REQUEST_EXHAUSTED"],
+      [409, "REPAIR_USAGE_UNKNOWN"],
+      [409, undefined],
+    ] as const) {
+      f.replies.push({ status, body: { error: { type,
+        message: "COMPLETION_ALREADY_ACCEPTED PI_MAIN_BUDGET_COMPLETION_ALREADY_ACCEPTED synthetic-secret",
+      } } });
+      const events = await f.request();
+      assert.equal(events[0].error.errorMessage, "PI_MAIN_BUDGET_ALLOWANCE_DENIED", `${status} ${type}`);
+      assert.doesNotMatch(JSON.stringify(events), /synthetic-secret/u);
+      assert.equal(f.delegates.length, 0);
+    }
+    f.replies.push({ status: 200, body: { error: { type: "COMPLETION_ALREADY_ACCEPTED" } } });
+    assert.equal((await f.request())[0].error.errorMessage, "PI_MAIN_BUDGET_ALLOWANCE_INVALID");
+    assert.equal(f.delegates.length, 0);
+  } finally { await f.close(); }
+});
+
+test("an SDK error message cannot forge the host allowance completion signal", async () => {
+  const f = await fixture("openai-completions", new Error("COMPLETION_ALREADY_ACCEPTED"));
+  try {
+    assert.equal((await f.request())[0].error.errorMessage, "PI_MAIN_BUDGET_REQUEST_FAILED");
+    assert.equal(f.delegates.length, 1);
+  } finally { await f.close(); }
+});
+
 test("Anthropic thinking rejects insufficient room before delegation; adaptive thinking and Responses keep SDK caps", async () => {
   for (const api of ["anthropic-messages", "openai-responses"]) {
     const f = await fixture(api);
@@ -165,4 +226,50 @@ test("nonadaptive Anthropic thinking validates the exact pinned SDK minimum and 
   check({ ...model, compat: { supportsMidConvoEffort: true } }, { reasoning: "high" }, 32);
   assert.throws(() => check({ ...model, compat: { supportsAdaptiveThinking: true } }, { reasoning: "high" }, 32), /THINKING_MINIMUM/u);
   check(model, {}, 32);
+});
+
+test("main recovery buffers only an empty failed generation and requires the authenticated no-start receipt", async () => {
+  for (const mode of ["safe", "unknown", "quota", "partial", "embedded_content"]) {
+    const module = await load();
+    const server = http.createServer((req, res) => {
+      assert.equal(req.headers.authorization, "Bearer synthetic-main-token");
+      const value = req.url === "/gateway/_allowance" ? { remaining_tokens: 100, policy_required: true }
+        : mode === "unknown" ? { status: "unknown" }
+        : { status: "not_started", reason: mode === "quota" ? "quota_exhausted" : "gateway_transient" };
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(value));
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/gateway`;
+      const model = { provider: "fixture", id: "model", api: "openai-completions", baseUrl, maxTokens: 256, compat: {} };
+      const headers = { "X-Deepsonar-Request-Id": "cannot-override", "x-custom": "preserved" };
+      const calls: any[] = []; const context = { messages: [] };
+      let start: any, stream: any;
+      module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
+        async function* (_model: any, ctx: any, options: any) {
+          calls.push(options); assert.equal(ctx, context);
+          yield { type: "start", partial: { content: [] } };
+          if (calls.length === 1) {
+            if (mode === "partial") yield { type: "text_delta", delta: "already-visible" };
+            yield { type: "error", reason: "error", error: { errorMessage: "provider-controlled gateway_transient",
+              content: mode === "embedded_content" ? [{ type: "text", text: "already-visible" }] : [] } };
+          } else yield { type: "done", message: { stopReason: "stop" } };
+        })({ on: (_event: string, callback: any) => { start = callback; }, registerProvider: (_provider: string, config: any) => { stream = config.streamSimple; } });
+      start({}, { model, modelRegistry: {} });
+      const events: any[] = [];
+      for await (const event of stream(model, context, { headers })) events.push(event);
+      assert.equal(calls.length, mode === "safe" ? 2 : 1);
+      assert.equal(events.filter(e => e.type === "error").length, mode === "safe" ? 0 : 1);
+      assert.equal(events.filter(e => e.type === "start").length, 1, "no ghost assistant message from a failed unstarted generation");
+      assert.equal(calls[0].maxRetries, 0);
+      assert.equal(calls[0].headers["x-custom"], "preserved");
+      assert.match(calls[0].headers["x-deepsonar-request-id"], /^[0-9a-f-]{36}$/u);
+      assert.equal(calls[0].headers["X-Deepsonar-Request-Id"], undefined);
+      assert.deepEqual(headers, { "X-Deepsonar-Request-Id": "cannot-override", "x-custom": "preserved" });
+      if (mode === "safe") {
+        assert.notEqual(calls[1].headers["x-deepsonar-request-id"], calls[0].headers["x-deepsonar-request-id"]);
+        assert.equal(calls[1].headers["x-deepsonar-retry-of"], calls[0].headers["x-deepsonar-request-id"]);
+      }
+    } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  }
 });

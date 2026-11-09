@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 import {
   OPENSANDBOX_EGRESS_IMAGE,
   OPENSANDBOX_EXECD_IMAGE,
@@ -104,6 +106,50 @@ test("deploy.sh bounds compose up and keeps final readiness gate (#726)", () => 
   // Default prod path still uses service_healthy; compat is opt-in / Podman auto.
   assert.match(prod, /condition: service_healthy/);
   assert.match(prod, /silo-init: silo not ready after 120s/);
+});
+
+test("managed OpenSandbox resource preflight shares the server Engine and remains mandatory under Podman compatibility", () => {
+  const readRepo = (file: string) => readFileSync(join(root, file), "utf8");
+  for (const file of ["deploy/docker-compose.opensandbox.yml", "deploy/docker-compose.opensandbox.prod.yml", "deploy/docker-compose.worker.yml"]) {
+    const yaml = readRepo(file);
+    const init = yaml.slice(yaml.indexOf("  opensandbox-resource-preflight:"), yaml.indexOf("\n  opensandbox:"));
+    const server = yaml.slice(yaml.indexOf("\n  opensandbox:"));
+    assert.equal(init.match(/image: ([^\n]+)/)?.[1], server.match(/image: ([^\n]+)/)?.[1]);
+    assert.match(init, /network_mode: none/);
+    assert.match(init, /read_only: true/);
+    assert.match(init, /cap_drop: \[ALL\]/);
+    assert.match(init, /no-new-privileges:true/);
+    assert.match(init, /entrypoint:.*\/app\/\.venv\/bin\/python3.*resource-preflight\.py/);
+    assert.match(init, /resource-preflight\.py:.*:ro/);
+    const socketSource = file.endsWith("opensandbox.yml") ? "/var/run/docker.sock" : "${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}";
+    assert.ok(init.includes(socketSource + ":/var/run/docker.sock:ro"));
+    assert.ok(server.includes(socketSource + ":/var/run/docker.sock"));
+    assert.match(yaml, /\n  opensandbox:\s+depends_on:\s+opensandbox-resource-preflight:\s+condition: service_completed_successfully/);
+  }
+  assert.doesNotMatch(readRepo("deploy/docker-compose.podman-compat.opensandbox.yml"), /opensandbox-resource-preflight|service_completed_successfully/);
+  assert.doesNotMatch(readRepo("deploy/docker-compose.opensandbox.k8s.yml"), /opensandbox-resource-preflight/);
+  const script = readRepo("deploy/opensandbox/resource-preflight.py");
+  assert.match(script, /connection\.request\("GET", "\/info"\)/);
+  assert.doesNotMatch(script, /connection\.request\("(?:POST|PUT|DELETE)"/);
+});
+
+test("isolated OpenSandbox production smoke stages the exact preflight reader in its project directory", () => {
+  const reader = readFileSync(join(root, "deploy/opensandbox/resource-preflight.py"));
+  for (const file of ["agent-harness/test-opensandbox-poc.ts", "agent-harness/opensandbox/opensandbox-prod-official.poc.ts"]) {
+    const source = readFileSync(join(root, file), "utf8");
+    assert.match(source, /--project-directory/);
+    const copy = source.split("\n").find(line => line.includes('writeFileSync(join(dir, "opensandbox/resource-preflight.py")'));
+    assert.ok(copy, `${file}: isolated project directory must stage its mandatory reader`);
+    const dir = mkdtempSync(join(tmpdir(), "opensandbox-reader-input-"));
+    try {
+      mkdirSync(join(dir, "opensandbox"));
+      // Execute the actual fixture staging statement, not a duplicate copy implementation.
+      runInNewContext(copy, { dir, repoRoot: root, deployDir: join(root, "deploy"), join, readFileSync, writeFileSync }, { timeout: 1000 });
+      assert.deepEqual(readFileSync(join(dir, "opensandbox/resource-preflight.py")), reader);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
 });
 
 test("OpenSandbox production overlay is the default real deploy path", () => {

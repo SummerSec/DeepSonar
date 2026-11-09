@@ -25,13 +25,16 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 1. Hub 的 Provider/model 需求、项目默认模型和全局角色模型按既有优先级形成模型要求；模型按每张凭据的 CLI 方言核对配置清单。
 2. Hub 显式 CLI 是硬约束，与候选冲突继续 `provider_credential_cli_mismatch`（`permanent_failure`）；不能通过改选 CLI 绕过排他绑定。
-3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件；仍不唯一时返回 `provider_credential_multi_match`，提示收窄需求或由管理员配置默认凭据。
+3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致且没有默认账号，则按同项目非终态 Job 数、历史分配数、稳定 ID 顺序选择新 Job；其他歧义仍返回 `provider_credential_multi_match`。
 4. 未配置凭据白名单时动态读取当前作用域候选，不在读取时写入 ID。显式白名单及默认凭据的删除、停用或不可访问引用返回 `provider_credential_allowlist_stale`（`permanent_failure`），RepairFeedback 指向管理员修复名单；既不扩大授权，也不把权限修复交给模型。
-5. 选中的账号、CLI、Provider/model 按原规则进入新 Job 快照。账号 × CLI 1:1、并发计账和 Gateway 密钥隔离不变；不修改任何已有 Job 快照或镜像准入。
+5. 池选择是现有 Job 历史的只读投影，readiness 不消费分配轮次，不承诺并发创建严格 round-robin，也不表示账号余额或容量。已有 Job 恢复向内核 resolver 提供原冻结账号偏好，只能在当前合法候选内生效；显式当前默认账号仍优先，身份漂移及累计预算校验不变。运行中不换 key、不因故障重选账号或重置预算。
+6. 选中的账号、CLI、Provider/model 按原规则进入新 Job 快照。账号 × CLI 1:1、并发计账和 Gateway 密钥隔离不变；不修改任何已有 Job 快照或镜像准入。
 
 项目 CLI/Provider 管理页独立加载账号列表，区分加载中、加载失败与成功空列表。只有成功读取当前项目可见账号后才判定默认账号和白名单引用失效；未加载成功时保存 CLI 不能清除默认账号或写入空凭据白名单。Pi 模型快照对账号目录中含 `/` 的完整模型 ID 保持一致，CLI 路由单独冻结，详见 [CLI 运行时契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-coding-agent-rpc140)。
 
 #914 的项目账号引用 DELETE/设置事务、scope 过滤及双向竞态回归见[接口规格](09-interface-specs.md#项目凭据引用保护914-切片)；运行期停用和既有失效引用仍按上述解析门 fail closed，#929 已另行交付默认账号选择与修复导航，不自动重跑或改写旧快照。
+
+#1002 P1-8 的选择、默认优先、异质池拒绝与恢复偏好回归接 `pnpm ci:unit:capability-pack`；隔离 PostgreSQL 中真实创建两个 Job、不同测试 key 的 Gateway 请求、独立用量归属、停用拒绝与快照不变接现有 `pnpm ci:integration:role-config`。该夹具使用 loopback 上游，不证明厂商模型质量或容量；最终 SHA Actions 待验。没有新增 UI、配置开关、池状态或分配账本；使用现有账号白名单及默认账号清除操作。
 
 实现入口：[凭据解析](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)、[快照组装](../../apps/scheduler/src/domains/role-runtime-snapshot/application.ts)、[readiness](../../apps/scheduler/src/readiness.ts)。
 
@@ -99,13 +102,15 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 | 无效 token、Job 不属于项目、operation 不在 allowlist、不可见节点或坏 schema | 所有 operation 先做 token/operation/schema 检查；mutating operation 的 event-ingestion 事务内再次锁 Job、检查 scope/引用/语义状态，失败时回滚整笔副作用；401/403/409/422 按错误类别返回，模型可修正项带 RepairFeedback | 不提交部分事实或外部效果；永久越权不可通过重试修复 |
 | 同一 Idempotency-Key 重复且输入相同 | 所有 operation POST 都要求 UUID key；只读 operation 使用接口层缓存/冲突检查，mutating operation 还由事件/effect durable dedup 保护 | 调用方可安全读取接口结果；同 key 不同 operation/input 返回冲突 |
 | 事件窗口或图查询预算耗尽 | 429 或预算错误，反馈当前状态和剩余预算 | 用新的有界查询/延迟重试修复；不扩大 Job scope |
+| OpenSandbox provision 拒绝或传输失败 | Adapter 在正常清理前提供固定字段诊断，Scheduler 追加 Job/Attempt 关联的 `job.provision_failed` 审计；不保存 SDK body/堆栈/env | 原错误、取消、迟到资源清理和 effect fencing 不变；未观察句柄不等于未启动，审计写失败不阻止清理；见[诊断边界](../OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)，最终 SHA Actions 待验 |
+| main 模型调用在连接/准入前失败且内核有持久 no-start 证明 | Pi SDK 扩展在同存活 Job/Attempt/Session 中重新生成关联请求；Gateway 在原 Job admission 锁内核验 owner/期限/预算/原回执并跨 token/Attempt 消费冻结恢复许可；空失败不留下双 start，SDK 内部重试关闭 | 不重启 Agent、不重放工具或未知效果，不退请求额度；partial/unknown/超时/伪造 Provider 文案停止。见[契约](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)，最终 SHA Actions 待验 |
 | provisioning 在外部效果开始前已知失败 | 记录失败并按已知可重试策略决定新 Attempt；Job 进入失败或受控 retry | 只有明确安全的 provisioning 重试允许继续；不重复未知外部效果 |
 | effect intent 已写但外部结果未知（例如沙箱句柄/销毁回执缺失） | Attempt effect 标记 `unknown`，Job 进入 orphan/对账路径，保留 effect id | **禁止自动重放未知效果**；由对账或人工确认后采取下一步 |
-| 已接受 done 后 CLI 再请求模型 | 仅对具有结构化终态来源的精确 Gateway 完成拒绝放行原 Hub/done bundle；#947 候选补齐 `409` / `409:` 后接空格的精确前缀，并从 Pi `message_end` 解码结果覆盖终态归一化与原 bundle 唯一结算；进程退出、缺终态、传输/诊断、语义失败与 Repair usage 拒绝不覆盖 | 不重试进程、不重放未知效果，仍过原 ingestion/lifecycle 门；最终 SHA Actions 待验，来源契约与离线回归见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919) |
+| 已接受 done 后 CLI 再请求模型 | 仅对具有结构化终态来源的精确 Gateway 完成拒绝放行原 Hub/done bundle；#947 候选补齐 `409` / `409:` 后接空格的精确前缀，并从 Pi `message_end` 解码结果覆盖终态归一化与原 bundle 唯一结算；#1015 候选在原生 SDK allowance 的 HTTP 409 且类型精确匹配时保留固定完成拒绝信号，Pi 私有宿主错误身份隔离 SDK 抛出的同名异常，生成扩展→HTTP 替身→SDK update/end 同 state 解码→原完成结算接入回归；进程退出、缺终态、传输/诊断、语义失败与 Repair usage 拒绝不覆盖 | 不重试进程、不重放未知效果，仍过原 ingestion/lifecycle 门；最终 SHA Actions 待验，来源契约与离线回归见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919) |
 | 运行结束但本地未观察到 done，或运行器失败 | #951 候选在归档前追加受权限保护的 `run.completion_diagnostic`，包含当前 Attempt 产出归属、原完成回执元数据和最后持久化工具类别；缺 done 使用 `AGENT_COMPLETION_UNOBSERVED`，真实 runner/语义错误不被替换 | 有产出不升级成功；未知读取/归属不记为零，不授予重发或新代际；[完成失败诊断候选](../AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)的最终 SHA Actions 待验 |
 | 用户取消或 deadline 超时 | 以状态 CAS 收敛 Job/Attempt，停止 lease，撤销 token，执行可重复清理 | 迟到回调不能复活 Job；清理自身若未知也保留 unknown 记录 |
 | Scheduler 重启 | preparing 且没有 effect 的 Job 可回 pending；已发 intent、未结算或有外部句柄的 Attempt 走 unknown/orphan | Reaper/reconcile 先对账再清理；不能把“没有日志”当作“没有效果” |
-| Agent 调用 `request_human` | 执行器在异步预检前后检查完成预留及终态互斥，防止等待期间已接受完成或人工请求后再覆盖；记录 human message，Job 进入 `waiting_human`；人工回复另走 ACK operation | ACK 与 injected 分离；独立预算到期且全部效果已结清、无本轮对账进展时才 failed/human_timeout；未结清的 active/planned/pending/unknown 效果保留等待，不推进 Canvas 失败，见 [#946 切片](../AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)，最终 SHA 待验 |
+| Agent 调用 `request_human` | 执行器在异步预检前后检查完成预留及终态互斥，防止等待期间已接受完成或人工请求后再覆盖；记录 human message，Job 进入 `waiting_human`；Dispatcher 先锁定并核验原 Canvas/Job/Attempt/effect/lease，归属锁覆盖有界 sandbox destroy/消失确认和 SQL 结算，外来绑定零 destroy；以同一活动 Attempt 的持久 human 事件先原子撤销旧 Gateway/Control grants、再结清本轮 pending agent_run，失败/unknown/取消/外来归属不结清，不补写 usage；#1011 在 HTTP ready 后以现有对账 loop 有界重入清理，按已尝试 UUID 轮转并环回，失败项仍未决但不永久占首批；游标仅为进程内遍历状态，重启重新验证，worker-plane 按保留 lease 的原 owner 做完整分页核验，缺 key/不可达/资源仍在不结清，匹配 lease 与 run/grants 原子删除，其他未知效果门保持；人工回复的 injected 与 ACK operation 分离，所有回复/忽略先核原冻结请求策略并通过共享准入，有修正根时才建立 resume-frozen 代际，再关闭旧 Attempt、同事务撤销旧 Gateway/Control 凭证和入队；拒绝全事务回滚，见[交接](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012) | ACK 与 injected 分离；独立预算到期且全部效果已结清、无本轮对账进展时才 failed/human_timeout；未结清的 active/planned/pending/unknown 效果保留等待，不推进 Canvas 失败，见 [#946 切片](../AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)，最终 SHA 待验 |
 | Verify 等待证据、回到 rework 或进入 needs_human | Verify 域拥有 round 状态；Agent 的合法 verdict 是 `confirmed`、`rework`、`needs_human` 或 `refuted`，Scheduler 可按收敛政策把结果记录为 `inconclusive` | 不以 Agent 总结替代证据门；不可判定结果显式保留 |
 | Research 失败 | 在研究 run 中记录失败；savepoint 不回滚主 Finding/Report | 可重新发起有界研究，但不能修改 Verify、严重性或 Fact 状态 |
 | Report 失败或输入变化 | 保留旧成功版本，记录当前版本失败或追加新版本 | 报告投影失败不改写内部 Artifact/Finding/Evidence |
@@ -237,6 +242,8 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 请求按原 token、Job/Attempt、冻结模型和预算准入后，经单次 HTTP 交换转发原始 body、路径/query 和端到端头。客户端请求流先有界收全，响应/SSE 即时发送且遵守背压/取消；usage 仅旁路观察。CLI alias 移至请求生成层，预算不符在出站前明确拒绝。OM wrapper 为请求登记 UUID，收到模型终止结果后查询同 Job/Attempt/token/workload 的持久 effect/usage 状态，仅 settled 才提交；未知保持硬失败。详见[透明传输](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)与 [ADR 0017](adr/0017-transparent-gateway-settlement.md)。本分支最终 SHA Actions 待验。
 
 #923 主执行启动/恢复由上传的[请求准入适配器](../../packages/runtime-sandbox/src/model-request-policy.ts)包装，三 CLI 主 endpoint 只在运行时投影到 loopback，OM 保持真实 Gateway。每次模型 JSON 查询自身 workload allowance，已有 cap/usage 合规才原字节转发，否则拒绝。Pi 已接 SDK 生成前逐次配置，Claude 只接启动/resume 静态 cap；DSH 共用 SDK 生成前 adapter 已接。Claude Code 2.1.312 的启动上限与运行中余额不足时明确拒绝并提示，是用户已接受的兼容限制；不修改已形成 body，不要求逐请求自动适配，该范围决定不再阻塞发布。未准入 quota/DB 回滚拒绝用原 events 的 scoped kernel 回执确认 not_started；保存失败 unknown，同 UUID 不重发。无新 schema/模型账本，Actions 待验。
+
+#1011 原生 Pi/OM 归档同时观察到已接受完成与 PI_MAIN_BUDGET_ALLOWANCE_DENIED；原失败 HTTP 状态/error.type 未保留，不能断言其精确根因。候选修正主 allowance 对固定完成拒绝码的保留和 SDK 终态时序。主扩展只以私有宿主错误身份保留 HTTP409 / COMPLETION_ALREADY_ACCEPTED，SDK 抛出的同名异常不升级为可信拒绝，既有 yielded event 转发保持其独立信任边界；SDK 的完整 assistant error update 等待 message_end 后才建立终态来源；实际持久完成回执与既有 executor 门共同决定原结算。缺终态、非零退出、未知用量和其他预算拒绝不放行，不重放模型/效果；离线回放、原生双架构与最终 SHA 验收见[CLI 契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)，当前新 SHA Actions 待验。
 
 ## 操作员效果结清（#899）
 

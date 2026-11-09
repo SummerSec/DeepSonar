@@ -1,7 +1,7 @@
 # Agent 错误反馈与执行恢复（#903）
 
-> 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；本分支 #943 可信显式恢复已接线，最终 SHA Actions 待验
-> 同步日期：2026-11-07
+> 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；本分支 #1012 人工等待修正链交接已接线，后续最终 SHA Actions 待验
+> 同步日期：2026-11-09
 
 这是 [完成回执](REPAIR_FEEDBACK_DONE_REPAIR.md)的生命周期扩展。设计取舍见 [ADR 0016](architecture/adr/0016-repair-execution-generations.md)。#911 已合入 Knowledge/Skill 分类透传；#919（#913）已合入仅在宿主接受完成后识别结构化 Gateway 拒绝的运行器处理。本次不重复这两片，也不把工程证据写成真实模型试验。
 
@@ -12,6 +12,26 @@
 恢复事务在旧快照仍可用时调用共享 `inspectGatewayRequestBudget`，通过全部只读门后再调用 `ensureGatewayRequestBudget`，把完整原请求策略保存在内核 `control_receipt`，包括从未签发 token 的 workload。普通无修复回执的恢复也执行该步骤；批量先检查所有成员，再写入。历史策略缺失/非法保持明确拒绝，rate-limit、dedup、policy receipt 与 pending 转换共同回滚。Gateway mint/admission 消费策略回执已由 #928 与 #930 联合合入；请求上限的组合工程证据见下文，不由单独保存回执推定。
 
 `rerun-current` 保留原已授权 Pi 扩展选择并重新经过当前镜像/扩展准入。创建与恢复共用 `job-runtime-freeze.ts`，按平台配置一致重冻 quota、runtime knobs、profile 和 launch；较大的新配置不会授权提高旧 Job 持久请求策略。
+
+### Job-scoped model recovery (#1002 P1-9)
+
+同存活 Job 的 Pi 模型请求只有在内核持久证明尚未开始时才自动继续：SDK 生成前查询原 scoped settlement，用新的关联请求 UUID 重新经过原 Gateway admission。它不重新运行 Job/Agent，不复用已结束 Attempt，不刷新修正根、请求/Token 额度、快照或已接受效果。原声明为 never 的 effect 保持已知 never_started，不被置为可重放；新的调用独立计数。SDK 内部重试被禁用；无输出的失败 generation 不留下重复 message_start，partial/unknown/timeout 或查询失败仍停止。
+
+内核恢复许可在新 Job 创建期冻结，消费记录留在现有 effect intent、跨 key/token/Attempt 累计；历史缺许可/完整计数来源不补造。owner、期限、重复原引用与未知效果在同一 Job admission 事务里重新验证，仍使用原修正预算及请求次数求交。具体元数据、权限和回归归属见[透明 Gateway 契约](MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。源码及受控 SDK/真实 SQL/HTTP 回归已接线，最终 SHA Actions 待验，不冒充 native CLI 或 Provider 成功。
+
+### 人工等待修正链交接（#1012）
+
+真实 `request_human` 接受后，`agent_run` 不因等待标签、执行器返回或数据库中断自动结清。Dispatcher 的 finally 先调用原 Runtime Adapter 的精确 sandbox destroy 并等待资源消失；只有成功后，在 Canvas → Job → 最新 Attempt → effect 锁内核对仍为 waiting_human、同一活动 Attempt/sandbox、未取消及该 Attempt 的持久 human 事件，才在同一事务先撤销旧 Gateway/Control grants、再结清本轮 effect_pending 的 agent_run，并记录 runtime_grants_revoked。撤销或结算失败全回滚；unknown、外来/已结清 run 及其他效果保持不变，历史 token 行、额度和账本不删除。不补写模型用量或结束人工等待。宿主退出证据与授权回复的代际准入是两步，后者仍检查原额度和全部未结清效果。
+
+外部 destroy 与 SQL 事务不可能原子提交。#1011 在现有 `effect-reconcile-loop.ts` 启动/周期 pass 接入精确宿主清理重入（HTTP 监听就绪后才启用，不让外部清理 IO 阻断 heartbeat 可达性）：有界扫描仍为 waiting_human、最新 active 且未取消的同 sandbox Attempt、有持久 human 事件和精确 pending agent_run 的 Job，再调用原清理函数；通用对账失败也不取消此独立 pass，不重放 Agent 或模型请求。同一事务先按 Canvas/Job/Attempt/effect/lease 顺序锁定并重新核对绑定，任何外来归属在销毁前拒绝；锁保持到有界 destroy/消失确认与 SQL 结算提交，阻止检查后的 lease 漂移。只结清本轮 run；其他 pending/unknown 效果继续阻断回复/忽略。没有新服务、定时工作流或第二 destroy 回执账本。Dispatcher finally 显式分流：实际 waiting_human 才调用该受锁保护的结算函数，拒绝后不回退无保护销毁；普通成功/失败/取消/超时等收尾仍销毁原捕获 handle，不能把等待专用函数的拒绝当作普通清理已完成。
+
+Worker-plane 清理只向 SQL lease 记录的 owner 发起 destroy，然后使用该 owner 的 SDK 完整分页列表核对精确 resource ID，Runner 继续确认消失。无 owner、节点/key 缺失、查询失败或资源仍在都拒绝；多节点列表会跳过缺 key 节点，因此其空结果本身不是退出证据，connect/isAlive 的失败也不是证明。失败保留 lease；waiting_human 的未结清 run 在外部 destroy 已成功时仍保留 lease，直到 run/grants 结算事务一并删除匹配 lease，保证下一 pass 或重启后仍能找到原 owner。本地 seed 在事务内建立并锁定 worker 行，再核 lease；FK 新 lease 插入与之串行，有 lease 时不能改 endpoint/protocol，提交失败不替换 key。client 缓存匹配当前 endpoint/protocol/key，避免向旧端点错误核验。重启时 remote key 要等待受治理注册/heartbeat 恢复，缺 key 期间仍明确未结清。周期扫描按 Job UUID 有界轮转，游标在同一 Scheduler 进程内随每批最后一个已尝试候选前进，包括失败候选，排序在末尾环回；不可用 owner 不会永久占据固定首批。游标只影响遍历，不提供结算权限、不丢弃失败项，重启从头开始并重新验证事实；空批清空游标。limit=1 的两候选 SQL 回归覆盖前项持续拒绝、后项结算、环回及前项恢复。现有 operator settlement 排除 active Attempt，不能作为此正常等待的自动恢复替代；未知效果、取消或归属不一致继续按原治理路径停止。
+
+`POST /canvases/:id/messages` 的普通回复与既有 human-node ignore 入口复用同一续接函数。所有 waiting_human Job 都在 Canvas → Job → 全部 Attempts 锁内，先检查原冻结请求策略，再调用共享 `readRepairRequeueAdmission`；通过暂停、已接受完成、全部未结清效果和累计额度门后保存原策略、关闭旧 Attempt、原子撤销旧 Gateway/Control grants 并转 pending。只有修正根存在时才额外检查原修正期限与预算，并追加 `resume-frozen` 代际；普通无根等待不创建代际，也不能跳过通用安全准入。原冻结快照、回执、历史额度/费用和期限不重写；历史请求策略缺失/非法返回具体 409，不按当前配置补造。
+
+同 message UUID 的读取在 Canvas 锁内串行化；相同回复和重复忽略只交接一次。准入拒绝通过原 `HumanInterventionError` 返回具体 409 error_code；消息、人工节点、代际和 Job/Attempt 变更在同一事务回滚。pending 转换意外没有结果时同样回滚，不提交只有代际而没有后继 Job 的半成品。恢复权限仍是原消息/忽略入口的权限，不借本修复授权新的执行范围或重放未知效果。
+
+`repair-generation.integration.test.ts` 已加入真实 Control request_human → 受控 Runtime Adapter 的宿主清理函数 → HTTP 回复/忽略 → Dispatcher 领取与新 owner → Gateway 累计计费 → 完成门/终态结算，以及清理/撤销失败、未知效果、取消、旧 owner/外来 sandbox/无持久 human 事件拒绝，并发重复、额度/效果/暂停/原期限拒绝与 pending UPDATE 故障的全行回滚断言。新增无修正根的回复/忽略正例、累计真实 Gateway token 耗尽、请求/未知效果/未知用量/暂停/策略损坏及 pending CAS 拒绝，核对完整历史、消息和 grants 回滚；另覆盖 destroy 已返回而撤销事务失败后的同 owner 清理重入，检查 run/grants 原子收口、原等待、Attempt 身份/预算、用量/回执不变且不创建代际；既有内核 settleEffect 推进 phase=settling、清空 current_effect_id 并记录 last_effect，不把这次合法状态转换误判为预算或归属改写。#1011 新回归通过生产 Control HTTP、OpenSandboxRunner/worker-plane 和现有对账 loop（Provider 为受控替身）覆盖原清理调用 destroy 成功/SQL trigger 故障后结束、清空进程内 remote key 并重建 runner/loop模拟重启、key 恢复但资源仍在拒绝、最终精确 owner 确认消失后 run/grants/lease 原子结算，再实际回复/忽略、领取后继与 Gateway/完成。核对失败时完整原 Job/Attempt/effect/grants/lease/用量不变，成功时严格核对既有内核结算状态变化且不重置账本或原回执；外来 lease 的直接调用必须零 destroy，销毁期间并发 lease 改绑必须等同一清理事务提交；worker 单测另核查询失败与 cache 身份变化，registry SQL 回归在锁等待期间插入 lease，核本地 seed 拒绝端点变更且原 key 保持。已编写不等于已执行，也不冒充真实 OS 进程重启、OpenSandbox 服务端启停或完整真实 Dispatcher/CLI 运行。消息注入和显式 ACK 仍是两阶段；本回归的 ACK 调用领域 handler，不宣称真实模型已读取，也不冒充完整 Control ACK 传输端到端。运行器和上游为受控替身，最终 SHA 的 `pnpm ci:integration:recovery` Actions 待验，本机未运行测试/构建/typecheck。
 
 ### 创建入口补齐与缺损快照诊断（#943 / #948）
 
@@ -59,7 +79,7 @@
 
 2026-11-06 核对 `c0809b3e`：人工等待已有独立配置和最近 human 事件时钟；但定向对账报告残留时，旧路径只追加“先对账”的文案，随后仍把 Job 写成 failed/human_timeout。本切片在 Job → Attempt 锁下执行检查：有残留或本轮有结算进展保留 waiting_human；最终 UPDATE 还要求该 Job 的全部效果为 settled，覆盖对账扫描排除的 active Attempt 和 planned 效果。被阻断的 Job 不进入 Reaper 的终态返回列表，因此不触发 human_timeout 计数、终态清理或 Canvas 失败推进。
 
-不刷新原 deadline、预算、token 或 Attempt，不自动重放/结算未知效果，不改 Finding、Report 或已接受人工请求。人工等待仍可被已有显式取消/回复流程处理；本切片不证明所有回复恢复路径已满足效果门。`human_messages.delivered_at` 表示人给 Agent 的消息已注入，不是 Agent 请求已经投递给人的证据；“实际通知投递后计时”未在此实现；#946 的未结清效果误判核心故障已工程收口，通知计时仍是独立未交付范围。
+不刷新原 deadline、预算、token 或 Attempt，不自动重放/结算未知效果，不改 Finding、Report 或已接受人工请求。人工等待仍可被已有显式取消/回复流程处理；#946 当时不覆盖所有回复恢复路径。普通及修正根关联的回复/忽略共享准入候选见[交接](#人工等待修正链交接1012)，最终 SHA Actions 待验，不扩写为生产普通等待已验证。`human_messages.delivered_at` 表示人给 Agent 的消息已注入，不是 Agent 请求已经投递给人的证据；“实际通知投递后计时”未在此实现；#946 的未结清效果误判核心故障已工程收口，通知计时仍是独立未交付范围。
 
 `pnpm ci:unit:job-lifecycle` / `pnpm ci:integration:job-lifecycle` 的既有入口增加未知效果、部分对账进展、active/inactive Attempt × planned/pending/unknown、多 tick 无变更、显式结算后正常到期的回归。仅合成 SQL/替身，最终 SHA GitHub Actions 待验；本机不运行测试、构建或 typecheck。
 

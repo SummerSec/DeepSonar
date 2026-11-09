@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 71);
+INSERT INTO schema_meta (id, version) VALUES ('global', 72);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -451,6 +451,7 @@ CREATE TABLE project_finding_candidate_sources (
   PRIMARY KEY (project_id, generation, finding_id),
   FOREIGN KEY (project_id, finding_id) REFERENCES findings(project_id, id) ON DELETE CASCADE
 );
+CREATE INDEX project_finding_candidate_sources_finding_idx ON project_finding_candidate_sources(project_id, finding_id);
 CREATE TABLE project_finding_candidate_edges (
   project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   generation uuid NOT NULL,
@@ -471,6 +472,8 @@ CREATE TABLE project_finding_candidate_edges (
   FOREIGN KEY (project_id, right_id) REFERENCES findings(project_id, id) ON DELETE CASCADE
 );
 CREATE INDEX project_finding_candidate_edges_right ON project_finding_candidate_edges(project_id, generation, right_id, left_id);
+CREATE INDEX project_finding_candidate_edges_left_finding_idx ON project_finding_candidate_edges(project_id, left_id);
+CREATE INDEX project_finding_candidate_edges_right_finding_idx ON project_finding_candidate_edges(project_id, right_id);
 
 -- #819: platform-admin-admitted identity manifests. The registry is an
 -- operator-curated attestation boundary; it does not authenticate an external
