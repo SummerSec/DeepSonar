@@ -701,7 +701,7 @@ export function SettingsPanel({
 
             {projectId && (
               <>
-                <ProjectRuntimeImageAuthority />
+                <ProjectRuntimeImageAuthority projectId={projectId} me={me} />
                 <ProjectCliProviderAllowlistPanel
                   key={projectId}
                   projectId={projectId}

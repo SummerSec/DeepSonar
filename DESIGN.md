@@ -366,6 +366,8 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 
 一级导航是态势、项目、Agent、Agent 市场和镜像。治理域拆为 `/settings/credentials`（Provider 账号资产）与 `/agents?tab=roles`（角色职责/指令/工具）。项目授权能力插件、Hub 提案能力需求、Scheduler 在 Job 创建时解析凭据与扩展（#690）。
 
+项目工作区不提供镜像页签或独立镜像页面。具备镜像读取权限且项目范围匹配的用户，可从项目设置进入平台 `/images?project_id=` 视图管理可用镜像（#1020）。普通项目导航减少一个无效入口，项目排除与第三方启用集中在平台镜像目录。
+
 项目 Provider 面板的默认账号选择器（#914 UI 切片）只展示 active、项目可见且符合启用范围的账号，选择、更换和清除都需用户显式操作；缺少凭据白名单与显式空名单保持不同语义。默认账号变化同步提交清除项目默认/备用模型引用，加载失败不清配置，保存结果采用服务端返回。账号连接与模型编辑仍链接到凭据页，不重复建设编辑器；详见[接口语义](docs/architecture/09-interface-specs.md#项目默认-provider-账号选择914)。
 
 

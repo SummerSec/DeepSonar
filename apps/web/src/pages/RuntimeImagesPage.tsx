@@ -816,7 +816,7 @@ export function RuntimeImagesPage() {
             {projectId ? "排除非 base · 启用已绑定第三方（无钉版本）" : "系统底座 · 官方专项 · 第三方隔离准入"}
             <HelpTip label={projectId ? "项目运行镜像说明" : "镜像市场说明"}>
               {projectId
-                ? "系统底座自动用于未绑定专项镜像的角色；官方专项默认对本项目可用（可显式停用），第三方须先启用后才能固定/选用。任务表单不暴露镜像参数。"
+                ? "系统底座恒可用；其它官方镜像默认可用，可按项目排除。第三方须平台绑定可见范围后由项目启用。版本跟随平台通道，Job 创建时冻结 digest。"
                 : "系统运行环境（deepsonar-base）是调度默认底座，与专项镜像（Kali / Audit 等）不同层。「专项」需角色显式绑定；第三方须隔离区准入。共用 digest / 扫描 / 审批证据链，但卡片按类别分区。"}
             </HelpTip>
           </span>
@@ -868,7 +868,7 @@ export function RuntimeImagesPage() {
         <span className="inline-flex items-center font-mono text-[10px] tracking-[.14em] text-zinc-600">
           CPU PLATFORM
           <HelpTip label="CPU 平台筛选说明">
-            一平台一版本；项目可固定某个平台 digest。
+                    按平台筛选版本；Job 创建时冻结所用平台的 digest。
           </HelpTip>
         </span>
         {PLATFORM_FILTERS.map((item) => (
@@ -1451,9 +1451,8 @@ export function RuntimeImagesPage() {
                   .sort((left, right) => Number(right.trust_status === "trusted") - Number(left.trust_status === "trusted") || Number(right.promoted_at !== null) - Number(left.promoted_at !== null))
                   .map((version) => {
                   const approve = canApproveVersion(version);
-                  const isPinned = projectId && selected.image.selected_version_id === version.id;
                   return (
-                    <section key={version.id} className={`min-w-0 rounded-2xl border p-4 ${isPinned ? "border-acc-400/35 bg-acc-400/[.06]" : "theme-surface"}`}>
+                    <section key={version.id} className="theme-surface min-w-0 rounded-2xl border p-4">
                       <div className="flex flex-wrap items-center gap-2">
                         <strong className="break-words font-mono text-sm font-normal">{version.version}</strong>
                         <TrustBadge status={version.trust_status} />
@@ -1464,9 +1463,6 @@ export function RuntimeImagesPage() {
                         ))}
                         {version.promoted_at && (
                           <span className="font-mono text-[8px] text-acc-400">PROMOTED</span>
-                        )}
-                        {isPinned && (
-                          <span className="font-mono text-[8px] text-acc-300">PROJECT PIN</span>
                         )}
                       </div>
                       <p className="theme-muted mt-3 break-all font-mono text-[9px] leading-4">
