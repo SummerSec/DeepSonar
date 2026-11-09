@@ -183,10 +183,15 @@ jobs:
           echo "${{ matrix.toolset }} (${{ matrix.arch }}) build unchanged: reusing immutable src cache; manual validation and all applicable Fuzz behavior checks still run" >> "$GITHUB_STEP_SUMMARY"
       - name: Pull reused OpenHarmony image for manual validation
         if: ${{ steps.resolve.outputs.skip == 'true' }}
+        env:
+          SOURCE_IMAGE: ${{ steps.resolve.outputs.source_image }}
         run: |
           set -euo pipefail
-          docker pull --platform "${{ matrix.platform }}" "${{ steps.resolve.outputs.src_ref }}"
-          docker tag "${{ steps.resolve.outputs.src_ref }}" "deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci"
+          suffix="${SOURCE_IMAGE##*@sha256:}"
+          [[ ${#suffix} == 64 && "$suffix" != *[!0-9a-f]* ]] || exit 1
+          docker pull --platform "${{ matrix.platform }}" "$SOURCE_IMAGE"
+          tag="deepsonar-${{ matrix.toolset }}:${{ matrix.arch }}-ci"
+          docker tag "$SOURCE_IMAGE" "$tag"
       - name: Set up QEMU for cross-architecture validation
         if: ${{ matrix.toolset != 'openharmony-fuzz' }}
         uses: docker/setup-qemu-action@v3

@@ -4,7 +4,9 @@
 # resolve:
 #   IMAGE_NAME=ghcr.io/owner/deepsonar-base FINGERPRINT=... SRC_TAG=src-... \
 #     ./agent-harness/resolve-image-src-cache.sh resolve
-#   → GITHUB_OUTPUT: skip=true|false, digest=sha256:..., src_ref=...
+#   → GITHUB_OUTPUT: skip=true|false, digest=sha256:..., src_ref=..., source_image=...
+#   source_image is nonempty only when digest is a valid sha256 digest; consumers
+#   (#992) load from it so a tag move between resolve and load cannot substitute bytes.
 #
 # pin:
 #   IMAGE_NAME=... FINGERPRINT=... DIGEST=sha256:... SRC_TAG=src-... \
@@ -48,15 +50,17 @@ write_output() {
 case "$mode" in
   resolve)
     write_output src_ref "$src_ref"
-    if digest="$(inspect_digest "$src_ref")"; then
+    if digest="$(inspect_digest "$src_ref")" && [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
       write_output skip true
       write_output digest "$digest"
+      write_output source_image "${image_name}@${digest}"
       if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
         echo "image build unchanged: reuse ${src_ref} @ ${digest}" >> "$GITHUB_STEP_SUMMARY"
       fi
     else
       write_output skip false
       write_output digest ""
+      write_output source_image ""
       if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
         echo "image build cache miss: will build ${src_ref}" >> "$GITHUB_STEP_SUMMARY"
       fi
