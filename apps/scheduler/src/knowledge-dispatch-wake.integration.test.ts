@@ -33,11 +33,14 @@ test("knowledge ticks do not kick overdue ordinary jobs back into a paused Dispa
     let ticks = 0, selfKicks = 0;
     let observed!: () => void;
     const firstTick = new Promise<void>(resolve => { observed = resolve; });
+    let observedSecond!: () => void;
+    const secondTick = new Promise<void>(resolve => { observedSecond = resolve; });
     const originalTick = projectKnowledgeScheduler.tick.bind(projectKnowledgeScheduler);
     const tick = mock.method(projectKnowledgeScheduler, "tick", async (stopped?: () => boolean) => {
       ticks++;
       const result = await originalTick(stopped);
-      observed();
+      if (ticks === 1) observed();
+      else observedSecond();
       return result;
     });
     // Exercise kickDispatcher -> dispatchOnce -> real knowledge tick -> refresh.
@@ -47,13 +50,12 @@ test("knowledge ticks do not kick overdue ordinary jobs back into a paused Dispa
       kickDispatcher();
       await firstTick;
       assert.equal(selfKicks, 0, "an overdue gated Job is not a new external scheduling event");
-      await new Promise(resolve => setTimeout(resolve, 100));
       assert.equal(ticks, 1, "the Dispatcher becomes idle after the paused claim attempt");
       assert.equal((await sql`SELECT status FROM jobs WHERE id=${jobId}`)[0]?.status, "pending");
       // External refreshes still wake due work; dispatch-internal refreshes only arm future timers.
       await wake.refreshScheduleWakeFromDb();
       assert.equal(selfKicks, 1);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await secondTick;
       assert.equal(ticks, 2);
       assert.equal(selfKicks, 1, "the external wake must not create a feedback loop");
     } finally { wake.unbindScheduleWake(); tick.mock.restore(); }
