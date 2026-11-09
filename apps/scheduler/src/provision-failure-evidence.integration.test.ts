@@ -188,6 +188,23 @@ test("provision diagnostics commit before cleanup and read back only through the
       }
     }
 
+    // Read multiple Attempt references as bigint values without JavaScript number rounding.
+    const large = await create();
+    assert.deepEqual((await detail(large.jobId)).provision_diagnostics, []);
+    await sql`SELECT setval(pg_get_serial_sequence('audit_logs','id'), '9007199254740992'::bigint, true)`;
+    const firstLarge = await evidence.recordProvisionFailureEvidence(sql, { ...large, diagnostic });
+    assert.equal(firstLarge, "9007199254740993");
+    assert.equal((await detail(large.jobId)).provision_diagnostics[0].audit_id, firstLarge);
+    await sql.begin(tx => attempts.settleAttemptTerminal(tx as unknown as typeof sql, large.jobId, "failed"));
+    const successor = await sql.begin(tx => attempts.createAttempt(tx as unknown as typeof sql, large.jobId));
+    const secondLarge = await evidence.recordProvisionFailureEvidence(sql, {
+      ...large, attemptId: String(successor.id), diagnostic: { ...diagnostic, stage: "gateway" },
+    });
+    assert.equal(secondLarge, "9007199254740994");
+    const multiple = (await detail(large.jobId)).provision_diagnostics;
+    assert.deepEqual(multiple.map((row: { audit_id: string }) => row.audit_id), [secondLarge, firstLarge]);
+    assert.deepEqual(multiple.map((row: { attempt_id: string }) => row.attempt_id), [String(successor.id), large.attemptId]);
+
     const cancelled = await create();
     await sql.begin(tx => attempts.requestAttemptCancel(tx as unknown as typeof sql, cancelled.jobId, "fixture cancel"));
     await evidence.recordProvisionFailureEvidence(sql, { ...cancelled, diagnostic: { ...diagnostic, cancelled: true, signals: { ...diagnostic.signals, timeout: true } } });
