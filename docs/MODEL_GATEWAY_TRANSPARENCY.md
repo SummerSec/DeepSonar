@@ -23,7 +23,9 @@ Pi 的 SDK 生成前扩展为每次 main 调用签发独立 UUID，并禁用不�
 
 2026-11-09 新增[原生 RPC 夹具](../agent-harness/fixtures/pi-main-recovery-rpc.mjs)，接入既有 `pnpm ci:smoke:pi-rpc` 的 built-image 分支；核心 `runtime-images (base)` 的 `Pi RPC real Docker smoke` 在原生 amd64 执行，镜像缓存命中也不跳过。先验证镜像内 main policy 与当前 checkout 的完整 SHA，再原样物化其生成扩展，由固定 Pi 1.4.0 的真实 loader/SDK 调用 loopback。无 host SDK delegate、导入替换或关闭 Pi 原生 retry；容器沿用断网、只读根、受限资源与定向清理。
 
-新增场景要求：同一存活 PID/Session 内 503 → 带原认证及精确请求 UUID 的 no-start 查询 → 新 UUID/原 retry-of → 唯一成功助手 message_start/message_end；再将测试 allowance 设为耗尽，下一轮不得新增模型 HTTP 请求。相同 503 正文在查询 unknown、错误 reason 或查询拒绝时都不能授权第二个模型请求。输出仅保留版本/源码摘要、场景状态、计数和请求关联，不输出消息正文。
+新增场景要求：同一存活 PID/Session 内 503 → 带原认证及精确请求 UUID 的 no-start 查询 → 新 UUID/原 retry-of → 唯一成功助手 message_start/message_end；再将测试 allowance 设为耗尽，下一轮不得新增模型 HTTP 请求。相同 503 正文在查询 unknown、错误 reason 或查询拒绝时都不能授权第二个模型请求；原 SDK 失败必须成为 CLI 的首个助手失败，allowance 查询次数必须等于首次请求加显式 `auto_retry_start` 次数，不能被后续 allowance 拒绝掩盖错误的内部恢复。输出仅保留版本/源码摘要、场景状态、计数和请求关联，不输出消息正文。
+
+额外的测试用 mutation 对照在独立临时扩展副本中故意放宽 settlement HTTP/status/reason 校验，仍执行真实 Pi/SDK 与查询，并保留 unknown-usage allowance 拒绝；上述负例断言必须检出它。每次精确验证替换位置，报告单独标记 `settlement-acceptance-mutant`、扩展摘要及 `rejected-as-expected`。这不是生产扩展通过证据，不修改镜像内文件、不安装到生产，也不替代未改写扩展的原生场景。
 
 本夹具的 Gateway/allowance/settlement 是受控 HTTP 服务，不是实际 Scheduler 账本证明，也不补造 Job/Attempt 或用量结算；原 SQL/HTTP 准入、跨代际预算、取消/撤权、重复引用与未知效果回归继续独立保留。源码接线不等于通过：最终 SHA Actions 待验，未执行本机测试或生产。失败/退出的 Job、Claude/DSH 自动重启及没有可信 usage 的历史记录仍保持原人工/对账边界，#1036 其余条款不据此关闭。
 

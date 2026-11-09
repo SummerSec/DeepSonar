@@ -99,6 +99,16 @@ async function gatewayFixture(scenario) {
     close: () => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); } };
 }
 
+function assertNativeSettlementRefusal(records, allowanceReads) {
+  const first = records.find(record => record.type === "message_end" && record.message?.role === "assistant");
+  assert.equal(first?.message.stopReason, "error");
+  assert.match(first.message.errorMessage, /synthetic no-start claim/u,
+    "the original SDK failure must reach the CLI, not be replaced by an internal allowance rejection");
+  const nativeRetries = records.filter(record => record.type === "auto_retry_start").length;
+  assert.equal(allowanceReads, 1 + nativeRetries,
+    "only an explicit native retry may read another allowance after settlement refusal");
+}
+
 export async function runNativePiMainRecovery() {
   assert.equal(process.env.DEEPSONAR_PI_IMAGE_PROOF, "1", "native recovery must use the built image, not a host SDK delegate");
   const { executable, metadata } = resolvePiPackage();
@@ -117,8 +127,25 @@ export async function runNativePiMainRecovery() {
     const { PI_MAIN_REQUEST_BUDGET_SOURCE } = await import(pathToFileURL(policyModule).href);
     const extension = path.join(root, "main-request-budget.mjs");
     writeFileSync(extension, PI_MAIN_REQUEST_BUDGET_SOURCE);
-    for (const scenario of ["no-start", "unknown", "wrong-reason", "lookup-denied"]) {
-      const home = path.join(root, scenario, "home"), workspace = path.join(root, scenario, "workspace");
+    // Test-only negative control: still use the real CLI/SDK and authenticated
+    // lookup, but deliberately accept both non-200 and invalid status/reason.
+    // This copy is NEVER the production-path proof above or an installed file.
+    let mutantSource = PI_MAIN_REQUEST_BUDGET_SOURCE;
+    for (const [from, to] of [
+      ["if (response.status !== 200) { await response.body?.cancel(); return false; }",
+        "if (response.status !== 200) { await response.body?.cancel(); return true; }"],
+      ["return value?.status === 'not_started' && value.reason === 'gateway_transient';", "return true;"],
+    ]) {
+      assert.equal(mutantSource.split(from).length, 2, "mutation must target exactly one production guard");
+      mutantSource = mutantSource.replace(from, to);
+    }
+    const mutantExtension = path.join(root, "settlement-mutant.mjs");
+    writeFileSync(mutantExtension, mutantSource);
+    const cases = ["no-start", "unknown", "wrong-reason", "lookup-denied"].flatMap(scenario =>
+      (scenario === "no-start" ? [false] : [false, true]).map(mutated => ({ scenario, mutated })));
+    for (const { scenario, mutated } of cases) {
+      const caseId = `${scenario}${mutated ? "-mutant" : ""}`;
+      const home = path.join(root, caseId, "home"), workspace = path.join(root, caseId, "workspace");
       mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
       const gateway = await gatewayFixture(scenario);
       let client;
@@ -130,7 +157,7 @@ export async function runNativePiMainRecovery() {
           models: [{ id: MODEL, name: MODEL, reasoning: false, input: ["text"], maxTokens: 128, contextWindow: 1000000,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
         } } }));
-        client = new RpcClient(executable, ["--provider", PROVIDER, "--model", MODEL, "-e", extension], {
+        client = new RpcClient(executable, ["--provider", PROVIDER, "--model", MODEL, "-e", mutated ? mutantExtension : extension], {
           cwd: workspace, env: { ...process.env, HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home,
             DEEPSONAR_GATEWAY_TOKEN: TOKEN, DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${gateway.url}/gateway` },
         }, boundary.PiJsonlFramer, line => boundary.parsePiJsonlRecord(line, 8 * 1024 * 1024));
@@ -156,14 +183,23 @@ export async function runNativePiMainRecovery() {
             && record.message.errorMessage === "PI_MAIN_BUDGET_EXHAUSTED"));
         } else {
           assert.equal(gateway.calls.length, 1, "unconfirmed no-start cannot issue another model request");
-          assert.ok(ends.some(record => record.message.stopReason === "error"));
+          if (mutated) {
+            assert.throws(() => assertNativeSettlementRefusal(client.records, gateway.allowances()), {
+              code: "ERR_ASSERTION", message: /original SDK failure must reach the CLI/u,
+            }, "a permissive settlement mutation must not pass the native refusal oracle");
+            const nativeRetries = client.records.filter(record => record.type === "auto_retry_start").length;
+            assert.ok(gateway.allowances() > 1 + nativeRetries, "mutation must expose the hidden internal recovery request");
+          } else assertNativeSettlementRefusal(client.records, gateway.allowances());
         }
         const after = await client.command("get_state");
         assert.equal(after.success, true); assert.equal(after.data.sessionId, before.data.sessionId);
         assert.equal(client.child.pid, pid); assert.equal(client.child.exitCode, null, "same live CLI, no process restart");
         assert.equal(client.records.some(record => record.type === "extension_error"), false, "loader failure cannot satisfy a negative case");
         assert.deepEqual(gateway.errors, []);
-        reports.push({ scenario, status: "passed", model_requests: gateway.calls.length, authenticated_lookups: gateway.lookups.length,
+        reports.push({ scenario, policy_variant: mutated ? "settlement-acceptance-mutant" : "production",
+          status: mutated ? "rejected-as-expected" : "passed",
+          extension_sha256: sha256(mutated ? mutantSource : PI_MAIN_REQUEST_BUDGET_SOURCE),
+          model_requests: gateway.calls.length, authenticated_lookups: gateway.lookups.length,
           allowance_reads: gateway.allowances(), same_live_session: true, requests: gateway.calls });
       } finally { await client?.stop(); await gateway.close(); }
     }
