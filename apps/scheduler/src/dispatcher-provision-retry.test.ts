@@ -124,10 +124,12 @@ test("refused human-wait cleanup never falls back to ordinary destruction", asyn
 test("provision diagnostic uses the durable audit sink without serializing Job env or raw failures", () => {
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
   const sink = source.slice(source.indexOf("onFailure: async"), source.indexOf("} as Parameters<typeof runner.provision>"));
-  assert.match(sink, /await recordSystemAudit/);
-  assert.match(sink, /action: "job.provision_failed"/);
-  assert.match(sink, /attempt_id: attemptId!/);
-  assert.match(sink, /}, sql\);/);
+  assert.match(sink, /await recordProvisionFailureEvidence\(sql/);
+  assert.match(sink, /attemptId: attemptId!/);
+  const evidence = readFileSync(new URL("./provision-failure-evidence.ts", import.meta.url), "utf8");
+  assert.match(evidence, /recordDurableSystemAudit/);
+  assert.match(evidence, /action: "job.provision_failed"/);
+  assert.match(evidence, /assertBoundedJson\(next/);
   assert.doesNotMatch(sink, /provisionInput\.env|platformCapability|error\.message|stack/);
   // Runtime callback/cleanup behavior is exercised by opensandbox.test.ts; this checks only Scheduler wiring.
 });
