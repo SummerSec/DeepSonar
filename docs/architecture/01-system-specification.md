@@ -116,8 +116,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **规范要求**：Hub 必须在角色 Job 终态后按事件触发下一轮或 Report；Verify 等待证据时必须按证据签名/门禁指纹唤醒，重复无进展达到配置上限时必须记录停止原因并可请求人工，不得静默空转。
 - **决策来源**：事件驱动避免定时轮询，证据未变化时需要明确阻塞而不是无限派发。
 - **实现状态**：as-built；无进展上限见[配置](../../apps/scheduler/src/config.ts)，预算和暂停原因均持久化。#1002 P0-3 普通自动/idle/非人工 force 唤醒在 Canvas 锁内拒绝已停止 objective 的后继 Hub；不改写历史人工等待或 unknown effect，显式 run-hub-now 与 completion recovery 仍由原准入约束；Finding 评论 request_hub 在已停止 objective 下先返回 plan_objective_stopped，保留评论但不写人工节点或清除暂停原因。
-- **代码入口**：[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Hub 策略](../../apps/scheduler/src/domains/hub-orchestration/policy.ts)、[配置](../../apps/scheduler/src/config.ts)。
-- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:smoke:convergence`；#1002 P0-3 的现有 Hub characterization 与 `plan-execution-stops.integration.test.ts` 已接 `ci:unit:bounded-contexts` / `ci:integration:plan-protocol`，最终 SHA Actions 待验。
+- **代码入口**：[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/application.ts)、[Hub 策略](../../apps/scheduler/src/domains/hub-orchestration/policy.ts)、[配置](../../apps/scheduler/src/config.ts)、[Reaper Kernel 门禁停止](../../apps/scheduler/src/domains/job-lifecycle/hub-platform-stop.ts)。
+- **验证证据**：`pnpm ci:unit:bounded-contexts`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:smoke:convergence`；#1002 P0-3 的现有 Hub characterization 与 `plan-execution-stops.integration.test.ts` 已接 `ci:unit:bounded-contexts` / `ci:integration:plan-protocol`。本分支另接 `ci:integration:completion-recovery` 的真实 Reaper/SQL/Control 拒绝与隔离历史回归，验证当前内核 objective/修正次数/已知 token/原期限证明后的本 Hub 非成功出口；accepted human/完成和人工等待不改、directed grant 的 target 不操作。实现和注意力边界见[生命周期](../AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)，最终 SHA Actions 待验，不表示任意 platform_blocker 或原 P0-3 全部交付。
 
 ### FR-HUB-005 决策必须有可执行理由和提示词
 
@@ -466,7 +466,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Fact 必须拥有独立的 `unverified/verifying/verified/rejected/needs_human` verification_status；人工更新 Fact 状态不得改写 Finding 的 verify_status 或 disposition，报告数量门禁只计入 verified Fact。
 - **决策来源**：证据可信度与命题是否确认是不同维度。
-- **实现状态**：as-built；数据库检查约束只允许 Fact 节点携带该字段。
+- **实现状态**：as-built；数据库检查约束只允许 Fact 节点携带该字段。#1019 的只读用途投影区分记录、关联与实际采用，普通 unverified 不构成人工待办，历史 verifying 静态展示；需要处理的原因及当前判据/证据影响分别可查，详见[事实用途](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)。最终 SHA Actions 验收另记。
 - **代码入口**：[Fact verification](../../apps/scheduler/src/domains/canvas/fact-verification.ts)、[Fact UI](../../apps/web/src/FactDetailPanel.tsx)、[schema](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:canvas-facts`、`pnpm ci:integration:canvas-facts`、`pnpm ci:unit:web-facts`。
 
@@ -673,7 +673,7 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 
 - **规范要求**：Provider/Git/OCI credential 必须由 Scheduler 加密保存，管理 API 只能返回受控 metadata/配置投影；长期 secret 不得进入 Job snapshot、Sandbox、Canvas、Evidence、日志或 transfer 普通数据。
 - **决策来源**：凭据是内核资产，模型和执行沙箱只应获得短期、最小化的引用。
-- **实现状态**：as-built；ciphertext/nonce/auth_tag 落库，secret 读取与管理响应分离。#1002 P1-7A 删除秘密凭据前撤销全部 Gateway token，仅 revoked 行可脱离凭据；保留历史 token/usage ledger 身份、用量和有限额度，不改写 Job 快照、自动清理项目引用或授权恢复。详见[删除接口](09-interface-specs.md#项目凭据引用保护914-切片)。
+- **实现状态**：as-built；ciphertext/nonce/auth_tag 落库，secret 读取与管理响应分离。#1002 P1-7A 删除秘密凭据前撤销全部 Gateway token，仅 revoked 行可脱离凭据；保留历史 token/usage ledger 身份、用量和有限额度，不改写 Job 快照、自动清理项目引用或授权恢复。impact 的 usage_history 只返回 actor 范围内完整 token 生成与账本引用计数，不暴露内容或因账本多引用重复计 token。详见[删除接口](09-interface-specs.md#项目凭据引用保护914-切片)。
 - **代码入口**：[credentials schema](../../database/schema.sql)、[credential projection](../../apps/scheduler/src/domains/credential/projection.ts)、[secret projection](../../apps/scheduler/src/credential-secret-projection.ts)。
 - **验证证据**：`pnpm ci:unit:credential-compatibility`、`pnpm ci:integration:credential-delete`、`pnpm ci:unit:authz`；#1002 的真实账本删除、各 token 状态、预算不重置与 HTTP 拒绝沿用 credential-delete，精确历史基线重建/PGDMP 恢复接 `pnpm ci:unit:migrations`；最终 SHA Actions 待验。
 

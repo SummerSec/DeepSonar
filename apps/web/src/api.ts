@@ -1,6 +1,7 @@
 /** 调度器 API 类型与请求（vite proxy /api → :3100） */
 
 import type { PlatformClaimsStatus } from "./platform-claims";
+import type { FactUsage } from "./fact-usage-model";
 import type { PlatformUpdateStatus } from "./platform-updates";
 import type {
   CanvasLifecycleRollup,
@@ -443,6 +444,7 @@ export interface FactVerification {
 }
 
 export interface FactSummary {
+  usage: FactUsage;
   id: string;
   canvas_id: string;
   title: string;
@@ -1217,6 +1219,7 @@ export interface ApiToken {
 
 export interface CredentialImpact {
   credential_id: string;
+  usage_history: { token_generations: number; ledger_entries: number };
   role_configs: { count: number; items: Array<Record<string, unknown>> };
   jobs: {
     pending_unclaimed: { count: number; items: Array<Record<string, unknown>> };

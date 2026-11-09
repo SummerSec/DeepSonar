@@ -10,9 +10,9 @@ export const STATUS_COLOR: Record<string, string> = {
 export const SEVERITY_COLOR: Record<string, string> = { low: "#7f8796", medium: "#e8bd70", high: "#ec8c5d", critical: "#ed6a7f" };
 
 export const VERIFICATION_META: Record<string, { label: string; color: string }> = {
-  unverified: { label: "待验证", color: "#7f8796" },
-  verifying: { label: "验证中", color: "#6fbbe8" },
-  verified: { label: "已验证", color: "#65e6b4" },
+  unverified: { label: "已记录 · 未经人工确认", color: "#7f8796" },
+  verifying: { label: "历史验证记录", color: "#7f8796" },
+  verified: { label: "人工已确认", color: "#65e6b4" },
   rejected: { label: "已排除", color: "#ed6a7f" },
   needs_human: { label: "待人工", color: "#e8bd70" },
 };

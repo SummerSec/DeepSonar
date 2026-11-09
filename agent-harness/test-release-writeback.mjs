@@ -278,4 +278,24 @@ for (const conclusion of ["failure", "cancelled", "timed_out", "skipped"]) {
     (error) => error.code === "WRITEBACK_COMMAND_FAILED" && /GH013/.test(error.message) && /ci-summary/.test(error.message));
 }
 
-console.log("release writeback: permission preflight, auth, dispatch, blocking conclusions, timeout, transient retry, PR merge, branch lease, conflicts and landing verification passed");
+// 15. gh renders `statusCheckRollup` conclusions as GraphQL enum literals in upper case.
+//     v0.6.17 PR #1028 was green and mergeable, yet the writeback read "SUCCESS", matched
+//     neither branch below, and failed only after the 90-poll budget as a timeout.
+{
+  const { calls, run } = harness({ conclusions: ["SUCCESS"] });
+  const result = await runWriteback({ ...base, env, run, sleep: quiet });
+  assert.equal(result.conclusion, "success", "an upper-case SUCCESS still breaks the wait loop");
+  assert.equal(result.via, "pr_merge", "the writeback lands instead of timing out");
+  assert.ok(calls.filter((call) => call.includes("statusCheckRollup")).length === 1,
+    "a ready check is read once, not polled to the budget");
+}
+
+// 15b. upper-case blocking conclusions must stay blocking, not fall through to a timeout.
+for (const conclusion of ["FAILURE", "CANCELLED", "TIMED_OUT", "SKIPPED"]) {
+  const { calls, run } = harness({ conclusions: [conclusion] });
+  await assert.rejects(() => runWriteback({ ...base, env, run, sleep: quiet }),
+    (error) => error.code === "WRITEBACK_CHECK_FAILED" && error.message.includes(conclusion.toLowerCase()));
+  neverMutatesMain(calls);
+}
+
+console.log("release writeback: permission preflight, auth, dispatch, blocking conclusions, GraphQL enum case, timeout, transient retry, PR merge, branch lease, conflicts and landing verification passed");

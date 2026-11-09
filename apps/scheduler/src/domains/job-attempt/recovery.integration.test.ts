@@ -5,6 +5,7 @@ import postgres from "postgres";
 import { z } from "zod";
 import type { CompletionRecoveryState } from "./recovery.js";
 import type { EffectKind } from "./model.js";
+import { runHubPlatformStopFixtures } from "./hub-platform-stop.fixture.js";
 
 type Db = typeof import("../../db.js").sql;
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
@@ -78,8 +79,8 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       maybeDispatchReport: async () => { throw new Error("no automatic report"); },
       settleStalledFinding: async () => { throw new Error("no implicit human verdict"); },
     });
-    const setup = async () => {
-      const projectId = randomUUID(), canvasId = `recovery-${randomUUID()}`, jobId = randomUUID();
+    const setup = async (jobId = randomUUID()) => {
+      const projectId = randomUUID(), canvasId = `recovery-${randomUUID()}`;
       await sql`INSERT INTO projects(id,name) VALUES(${projectId},'completion recovery integration')`;
       await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${projectId},'recovery',
         '{"network_policy":{"allow_egress":false},"content":"integration"}')`;
@@ -166,6 +167,20 @@ test("completion recovery: durable PostgreSQL authority, directed admission, rec
       return recovery.pumpCompletionRecoveries({ db, cursor: String(BigInt(root.id) - 1n), limit: 1, wake, stop });
     };
     const assertCode = (code: string) => (error: unknown) => error instanceof Error && "code" in error && error.code === code;
+
+    await runHubPlatformStopFixtures(t, { db: sql, setup, app,
+      setJobStatus: async (jobId, status) => { await sql`UPDATE jobs SET status=${status} WHERE id=${jobId}`; },
+      directedHub: async order => {
+      // Minimal/maximal UUIDv4 values force both Canvas Job sort orders; the
+      // actual Hub still gets its normal generated ID and frozen grant.
+      const target = await setup(order === "target_first" ? "00000000-0000-4000-8000-000000000000" : "ffffffff-ffff-4fff-bfff-ffffffffffff");
+      await effect(target); await observe(target); assert.equal(await queue(target), true);
+      const { hub } = await runHub(target);
+      assert.equal(target.jobId < String(hub.id), order === "target_first");
+      const [attempt] = await sql`SELECT id FROM job_attempts WHERE job_id=${String(hub.id)} AND status='active'`;
+      return { target, hub: { projectId: target.projectId, canvasId: target.canvasId,
+        jobId: String(hub.id), attemptId: String(attempt.id) } };
+    } });
 
     await t.test("real reapOnce stop adapter closes Attempt, revokes both token classes, audits and projects Canvas/Plan", async () => {
       const f = await setup();

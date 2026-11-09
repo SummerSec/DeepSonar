@@ -12,7 +12,7 @@
 
 平台维护升级的当前决策见 [ADR 0008](adr/0008-maintenance-candidate-upgrade.md)：宿主、受管 SSH 节点和显式回滚恢复已接线；schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。具体基线与隔离环境见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)；Windows Docker 全流程、断电及真实模型验证不能由这些记录推定，P3 Web 发起仍未实现，不能把该决策等同于 #740 全部交付。
 
-#914 的 #925 服务端切片同步[项目凭据引用保护切片](09-interface-specs.md#项目凭据引用保护914-切片)至 FR-CRED-002、运行时/数据/安全视图及追溯矩阵；scope 过滤与删除/设置事务回归复用现有 credential-delete CI 入口，#929 已补齐默认账号选择与修复导航；工程证据见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。
+#914 的 #925 服务端切片同步[项目凭据引用保护切片](09-interface-specs.md#项目凭据引用保护914-切片)至 FR-CRED-002、运行时/数据/安全视图及追溯矩阵；scope 过滤与删除/设置事务回归复用现有 credential-delete CI 入口，#1002 P1-7 的历史 token/ledger 引用计数及项目隔离负例使用同一入口，#929 已补齐默认账号选择与修复导航；工程证据见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。
 
 #966 补齐项目显式默认模型和任务创建冲突诊断，继续使用现有 settings/RepairFeedback 与模型优先级；见 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[接口与注意力成本](09-interface-specs.md#项目默认模型与创建冲突966)。不自动选模、不改历史快照，最终 SHA Actions 待验。
 
@@ -79,6 +79,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 | 系统范围与角色 | 02；03 | §1–2、§15 | 概览已迁入，旧文历史对照 |
 | 实体与数据真相 | 08；schema | §3 实体、§6、§17.1–17.4 | 已迁入，字段不复制 SQL 草图 |
 | 生命周期与恢复 | 06；[Attempt 实现](../../apps/scheduler/src/domains/job-attempt/index.ts) | §3 状态机、§4、§8 图循环、文末资格与排序 | 已迁入，细节回到代码和行为测试 |
+| Kernel 平台门禁出口 | FR-HUB-004/FR-CTRL-010；06/10；[生命周期](../AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3) | #1002 P0-3 | 现有 Reaper 以当前 stopped objective 或修正次数/已知 token/原 deadline 耗尽结束本 Hub、记录 inconclusive/下一步并走原清理；不借 directed grant 操作 target、不替换 accepted human/完成或人工等待、不 replay unknown；实际 Reaper/SQL/Control 拒绝及隔离历史回归已接，最终 SHA 待验，非原 P0-3 全部交付 |
 | 人工等待修正链交接 | FR-CANVAS-004；06/09；[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012) | #1012 / #1002 P1-4 | 精确 sandbox 消失/同 Attempt human 证据下原子撤销旧 grants 并收口 run，未知/清理或撤销失败/取消不改；普通及修正根共享原准入，仅修正根追加代际，消息/节点/状态全回滚；受控清理及实际 Control/HTTP/Gateway/完成回归接 recovery，最终 SHA Actions 待验 |
 | 构件与依赖 | 05；[bounded contexts / 锁序](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md) | §4.4、§5、§11 | 构件地图已迁入；锁序专题保留权威 |
 | API 与修复 | 09；[OpenAPI](../../apps/scheduler/src/openapi.ts) / shared-types | §7、§8 控制通道 | 已迁入；字段由机器契约维护 |
@@ -140,3 +141,4 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 2026-11-01 集成证据：[#831](https://github.com/SummerSec/DeepSonar/pull/831) 在最终 PR 检查全绿后合并至 `fdb55a01b1e02b5b9078586923a8d506ce5bb096`；该主线的六个适用 Actions 工作流全绿，包含真实 schema67 重建和备份恢复，本轮工程 issue 已收口。较早 schema66/SDK-only 和本地记录只作历史，不能覆盖后续修复。OpenHarmony Fuzz 在正式 Release 的新构建失败，当前修复映射 FR-IMG-001/002、07 部署视图及既有 ADR 0006，增加匹配工具链与 fresh/reuse 双原生架构行为证据；[发布专题](<../RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)区分有限诊断、最终修复 SHA 验收和正式发行。v0.6.3 尚未正式发布，v0.6.2 保持不可变；独立质量、Host 证书/晋升/公开强关系建议按本轮决定暂缓，不把工程全绿写成质量通过。
 
 #1018 的[项目任务队列](../PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 72 与验收边界，最终 SHA Actions 待验。
+#1019 的[事实用途与待处理投影](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。

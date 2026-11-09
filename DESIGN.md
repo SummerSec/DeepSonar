@@ -166,6 +166,8 @@ Gateway 请求额度跨 token/Attempt 累计，含撤销和过期 token；普通
 
 用量额度采用显式配置：普通请求次数、修正 token、验证轮数、图查询累计调用/字节和 LSP 调用未配置时不限，显式正数才限制。非法配置拒绝，已有数据库配置与冻结历史不迁移。协议、权限、租约、资源容量和无进展保护独立保留。完整分类见 [用量限制](docs/USAGE_LIMITS.md)。
 
+#1002 P0-3 的本分支补充由现有 Reaper 对当前内核证明的 stopped objective / 完成修正次数、已知 token、原 deadline 耗尽提供活动 Hub 非成功出口；只结束本 Hub、沿用原清理，不要求模型再找合法完成提案，不借 directed grant 操作 target，不把销毁或 unknown 用量当作成功。accepted human/完成及人工等待保留，原 Hub 节点记录固定原因/inconclusive/下一步；预算仅认可原 kernel 回执版本/拒绝结果、Job-scoped ID、同 Job dedup/Attempt 与原 repair owner 证明。directed Hub、活动同伴或报告阶段保留共享 Canvas/root，只有普通无同伴且 root 可运行时才投影整体暂停；该停止事件不自动推进 Plan/Canvas。不按模型标签分类历史业务请求。边界与注意力成本见[生命周期](docs/AGENT_REPAIR_LIFECYCLE.md#kernel-平台门禁出口1002-p0-3)，最终 SHA Actions 待验；此切片不等于任意 platform_blocker 或原 P0-3 全部完成。
+
 ### 4.3 失败反馈与修正
 
 插件、Control API、Plan、Artifact、Verify 和 Runtime Adapter 必须使用四类失败语义：
@@ -244,6 +246,8 @@ Hub 证据等待唤醒以证据签名 / 门禁指纹边沿触发；**从未有�
 
 Fact `verification_status`（证据可信度）、Finding `verify_status`（技术验证）和 Finding `disposition`（人工处置）是三个独立状态机。人工不能直接把 Finding 写成 `confirmed`，也不能把 rejected Fact 直接升为 verified。
 
+Fact 展示区分过程观察、关联证据与当前确认记录实际采用的证据（#1019）。`unverified` 展示为已记录且未经人工确认，历史 `verifying` 静态展示为历史验证记录。只读用途投影给出待处理原因、报告数量影响与当前完成判据关联，详情按既有来源及留存字节检查展示阻塞；达到查询预算时明确未知。列表待处理计数限定为已加载记录，普通观察按需展开。该投影不写入信任状态，也不取代 Verify 或完成门。详见[事实用途](docs/EVIDENCE_TRACE.md#事实用途与待处理投影1019)。
+
 ### 6.2 Research
 
 上游 review/test 可输出正向论据、替代解释、保护条件、反例与未决假设（#579，`research.hypothesis_loop` v1）。「未找到反证」不能自动变成 confirmed；相同输入指纹不得无限再派；反驳后的新假设必须带父命题派生关系。Verify 仍只消费允许的 Fact，不在研究策略中写 verify_status。
@@ -312,7 +316,7 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 #914 的 #925 服务端切片已交付[项目凭据引用保护切片](docs/architecture/09-interface-specs.md#项目凭据引用保护914-切片)：impact 按项目 scope 过滤，DELETE 独立拒绝全局尚存引用，设置写入在事务内与删除共用凭据行锁并重验全部引用；保留缺键与显式空白名单语义，不改写历史 Job。默认账号显式选择与修复导航由 #929 补齐；已合入 main 的工程证据见[发布基线](docs/RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，后续 SHA 另验。
 
-#1002 P1-7A 的[凭据删除与历史预算](docs/MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)在原删除事务先撤销全部 Gateway token，再移除秘密凭据；只有 revoked 历史 token 可脱离凭据，token/usage ledger 身份、已用额度和有限上限原样保留。未结束 Job、扫描及项目引用仍阻止删除，不清配置、不改写冻结 Job、不为历史恢复扩大额度；数据库目标与重建验证见[数据架构](docs/architecture/08-data-architecture.md)，最终 SHA Actions 待验。
+#1002 P1-7A 的[凭据删除与历史预算](docs/MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)在原删除事务先撤销全部 Gateway token，再移除秘密凭据；只有 revoked 历史 token 可脱离凭据，token/usage ledger 身份、已用额度和有限上限原样保留。凭据 impact 的 usage_history 只展示 actor 范围内 token 生成与账本引用计数，不暴露历史内容或其他项目统计。未结束 Job、扫描及项目引用仍阻止删除，不清配置、不改写冻结 Job、不为历史恢复扩大额度；数据库目标与重建验证见[数据架构](docs/architecture/08-data-architecture.md)，最终 SHA Actions 待验。
 
 #966 的项目默认模型与任务创建诊断复用现有 settings/RepairFeedback：启用 CLI 不自动替换模型；显式提案 → 项目默认模型 → 全局角色模型的优先级不变。模型候选只取账号已配置名单，预检与 POST 失败在提交区显示冲突与配置导航，按实际项目隔离，不自动重试或改写历史快照。见[接口与注意力成本](docs/architecture/09-interface-specs.md#项目默认模型与创建冲突966)；最终 SHA Actions 待验。
 
