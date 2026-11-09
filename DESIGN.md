@@ -328,6 +328,8 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 运行器失败保留结构化终态与宿主进程/传输来源；Pi 主请求 allowance 只通过私有宿主错误身份保留 Gateway 精确完成拒绝码，隔离 SDK 抛出的同名异常并等待 SDK 的结构化 message_end，不由 streaming update 制造终态或重放模型请求。已接受完成不能覆盖真实进程失败，限定放行与测试契约见 [CLI adapters](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)。
 
+#1032 首片在 Pi 主执行与 OM 的 SDK 调用前共用精确凭据替换，覆盖工具 env/认证文件/错误与来源文本，不修改原 Session 或认证选项；OM 内容准入同时绑定 wrapper 与共享源码。Gateway 原字节守卫保持，尚未实现同 UID 认证隔离或整个 Issue 的诊断/审计要求；[范围与验收](docs/MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)区分源码、待验 Actions 与未执行生产。
+
 **Pi 模型预算与截断（#958）：** `/models` 限制作为 `provider_declared` 元数据保留，创建时逐字段冻结显式配置、声明、客户端选值及来源到 `model_budget`，Pi 投影 `contextWindow/maxTokens`；未观测的 CLI 默认保持未知，声明不证明真实容量。`length` 的 text/tool/thinking-only 不进入通用完成 nudge，改为同一精确 Session 的有界状态查询、必要压缩与短反馈；每步复用原完成/修正生命周期、lease/deadline、预算和未知效果守卫。压缩 start/end 不证明进展，不补造上下文摘要；耗尽保留截断和具体诊断，已接受完成/人工等待仍是权威。详情与 Actions 入口见[预算与恢复专题](docs/PI_MODEL_BUDGET_RECOVERY.md)，最终 SHA 待验，不宣称上游容量或生产重跑通过。
 
 OpenSandbox provision 失败在正常清理前追加 Job/Attempt 关联的 `job.provision_failed` 宿主审计（#1002）：首次审计与原 Attempt 的只读来源引用同事务持久化，Job GET 以现有项目/Job 权限通过主键引用重新核 scheduler/schema/归属后提供有界 `provision_diagnostics`；不扩大审计权限或回填旧引用，不把诊断当效果结算。只保存实际阶段、已观察会话/取消、合法 HTTP 状态和固定传输信号，不保存 SDK 原文、堆栈或环境。未拿到句柄仍不是未启动证明；审计失败不替代原错误，也不停止清理或放开未知效果重试。详见[诊断边界](docs/OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)；SQL/HTTP/原 runner 清理前读回回归已接既有 Actions，最终 SHA 待验；受控 Provider 不是实机 Engine，现场 execd 原始日志和并发根因仍未验证。

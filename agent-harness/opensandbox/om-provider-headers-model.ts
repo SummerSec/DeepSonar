@@ -14,6 +14,19 @@ export async function startOmHeaderModel() {
   const catalogCalls: Array<{ method: string; path: string; providerHeader: string; modelHeader: string; returnedModels: string[] }> = [];
   const probeCalls: Array<{ model: string; providerHeader: string; modelHeader: string; status: number }> = [];
   const errors: string[] = [];
+  const credentialProjectionStages = new Set<string>();
+  const credentialNames = ["DEEPSONAR_GATEWAY_TOKEN", "DEEPSONAR_API_TOKEN"];
+  const checkCredentialProjection = (text: string, stage: string) => {
+    const envLine = text.match(/OM_CREDENTIAL_ENV (\{[^\n]+\})/u)?.[1];
+    if (!envLine) return;
+    const authLine = text.match(/OM_CREDENTIAL_AUTH (\{[^\n]+\})/u)?.[1];
+    assert.ok(authLine, "actual auth-file tool output must accompany env output");
+    const env = JSON.parse(envLine), auth = JSON.parse(authLine);
+    for (const key of credentialNames) assert.equal(env[key], "[REDACTED]", "model-visible env credential must be redacted");
+    assert.equal(auth[OM_HEADERS_PROVIDER]?.key, "[REDACTED]", "main auth-file credential must be redacted");
+    assert.equal(auth.__deepsonar_observational_memory?.key, "[REDACTED]", "OM auth-file credential must be redacted");
+    credentialProjectionStages.add(stage);
+  };
   let observed = false;
   let completionAllowed = false;
   let omSequence = 0;
@@ -78,6 +91,11 @@ export async function startOmHeaderModel() {
       calls.push({ stage, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, model: body.model, providerHeader: String(req.headers["x-fixture-provider"]),
         modelHeader: String(req.headers["x-fixture-model"]), requestId: typeof req.headers["x-deepsonar-request-id"] === "string" ? req.headers["x-deepsonar-request-id"] : null });
       const messages = body.messages ?? [];
+      for (const message of messages) {
+        const text = typeof message.content === "string" ? message.content
+          : (message.content ?? []).filter((part: any) => part.type === "text").map((part: any) => part.text).join("\n");
+        checkCredentialProjection(text, stage);
+      }
       let tool: { name: string; arguments: Record<string, unknown> } | undefined;
       if (stage === "observer") {
         const toolResult = messages.some((message: any) => message.role === "tool");
@@ -144,7 +162,7 @@ export async function startOmHeaderModel() {
           assert.ok(bash, "installed Pi must expose its real bash tool");
           // Fits Pi's normal 50 KiB tool-output limit while exceeding OM's
           // unmodified 10k-token observation threshold with diverse source text.
-          tool = { name: bash, arguments: { command: "python3 - <<'PY'\nimport hashlib\nfor i in range(580):\n print('OM_HEADER_SOURCE_'+str(i)+' '+hashlib.sha256(str(i).encode()).hexdigest())\nPY" } };
+          tool = { name: bash, arguments: { command: "python3 - <<'PY'\nimport hashlib,json,os\nkeys=['DEEPSONAR_GATEWAY_TOKEN','DEEPSONAR_API_TOKEN']\nassert all(os.environ.get(k) for k in keys)\nassert not os.environ.get('DEEPSONAR_OM_GATEWAY_TOKEN')\nprint('OM_CREDENTIAL_ENV '+json.dumps({k:os.environ[k] for k in keys}))\nwith open('/workspace/.deepsonar-home/.pi/agent/auth.json') as f:\n print('OM_CREDENTIAL_AUTH '+json.dumps(json.load(f)))\nfor i in range(580):\n print('OM_HEADER_SOURCE_'+str(i)+' '+hashlib.sha256(str(i).encode()).hexdigest())\nPY" } };
         } else if (!completionAllowed) {
           assert.ok(bash);
           tool = { name: bash, arguments: { command: "sleep 1" } };
@@ -182,6 +200,7 @@ export async function startOmHeaderModel() {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address(); assert.ok(address && typeof address !== "string");
   return { url: `http://127.0.0.1:${address.port}`, calls, catalogCalls, probeCalls, errors, observed: () => observed,
+    credentialProjectionEvidence: () => ({ main: credentialProjectionStages.has("main"), observer: credentialProjectionStages.has("observer") }),
     completionEvidence: () => ({ status: completionStatus, code: completionCode }),
     recallEvidence: () => ({ current_session_read_verified: recalled, successful_reads: recalled ? 1 : 0,
       verified_source_prefix_sha256: recalled ? createHash("sha256").update(sourcePrefix).digest("hex") : null,

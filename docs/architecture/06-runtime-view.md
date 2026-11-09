@@ -251,6 +251,8 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 
 #923 主执行启动/恢复由上传的[请求准入适配器](../../packages/runtime-sandbox/src/model-request-policy.ts)包装，三 CLI 主 endpoint 只在运行时投影到 loopback，OM 保持真实 Gateway。每次模型 JSON 查询自身 workload allowance，已有 cap/usage 合规才原字节转发，否则拒绝。Pi 已接 SDK 生成前逐次配置，Claude 只接启动/resume 静态 cap；DSH 共用 SDK 生成前 adapter 已接。Claude Code 2.1.312 的启动上限与运行中余额不足时明确拒绝并提示，是用户已接受的兼容限制；不修改已形成 body，不要求逐请求自动适配，该范围决定不再阻塞发布。未准入 quota/DB 回滚拒绝用原 events 的 scoped kernel 回执确认 not_started；保存失败 unknown，同 UUID 不重发。无新 schema/模型账本，Actions 待验。
 
+#1032 首片将当前 Job 的 main/Control/OM 凭据在 Pi 主请求与 OM 的 SDK context 字符串投影中精确替换，不改原历史或认证选项；Gateway 原字节拒绝、预算和 settlement 仍独立执行。工具读取 env/认证文件与 OM 来源使用同一函数，镜像 guard 同时绑定 wrapper 和其共享源码。此举不隔离同 UID 工具与认证客户端，完整边界和待验的原生回归见[模型上下文凭据投影](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)。
+
 #1011 原生 Pi/OM 归档同时观察到已接受完成与 PI_MAIN_BUDGET_ALLOWANCE_DENIED；原失败 HTTP 状态/error.type 未保留，不能断言其精确根因。候选修正主 allowance 对固定完成拒绝码的保留和 SDK 终态时序。主扩展只以私有宿主错误身份保留 HTTP409 / COMPLETION_ALREADY_ACCEPTED，SDK 抛出的同名异常不升级为可信拒绝，既有 yielded event 转发保持其独立信任边界；SDK 的完整 assistant error update 等待 message_end 后才建立终态来源；实际持久完成回执与既有 executor 门共同决定原结算。缺终态、非零退出、未知用量和其他预算拒绝不放行，不重放模型/效果；离线回放、原生双架构与最终 SHA 验收见[CLI 契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)，当前新 SHA Actions 待验。
 
 ## 操作员效果结清（#899）

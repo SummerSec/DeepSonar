@@ -699,6 +699,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **代码入口**：[Gateway](../../apps/scheduler/src/gateway.ts)、[Gateway guard](../../apps/scheduler/src/domains/provider-adapter/gateway-guard.ts)、[Gateway tests](../../apps/scheduler/src/gateway-usage.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`。
 
+#1032 的 [Pi context 凭据投影首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)在 SDK 生成前共用当前 main/Control/OM token 的精确替换，不改已生成请求、认证、预算与回执。工具读取 env 和认证文件、错误及 OM 来源的回归接上述 runtime-sandbox、锁版本 request-budget-sdk 与原生 om-provider-headers；最终 SHA Actions 待验，同 UID 凭据隔离和 deny 诊断/审计仍未交付。
+
 ### FR-CRED-004 Token 额度与终态撤销
 
 - **规范要求**：Job Gateway token 和 Control capability token 必须具有独立身份、有效期、请求/Token额度和撤销原因；Job 进入任何终态后必须撤销，不得跨 Job 复用。
@@ -841,10 +843,10 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### NFR-SEC-003 Secret 脱敏、日志和审计红线
 
-- **规范要求**：日志、events、audit_logs、Evidence 和 usage ledger 不得保存 Authorization/Cookie/Provider key/Job token 或完整 prompt/completion；可见错误只能返回脱敏摘要和形状。
+- **规范要求**：日志、events、audit_logs、Evidence 和 usage ledger 不得保存 Authorization/Cookie/Provider key/Job token 或完整 prompt/completion；可见错误只能返回脱敏摘要和形状。模型请求上下文不得携带已知运行时凭据，证据层事后脱敏不能替代模型出口防护。
 - **决策来源**：审计可见性不能以复制长期秘密和客户源码为代价。
 - **实现状态**：audit_logs append-only，Gateway usage 只保存计费/workload 维度和受控计数。OM wrapper、新导出/RPC 副本及历史 Session HTTP preview/download 均在截断或发送前按 Pi header/manifest 结构脱敏；immutable archive metadata 保持不变，projection bytes/SHA/ContentDigest 单独报告。历史 HTTP 出口已有定向集成证据，本地实际镜像 RPC 与生产内容守卫另有直接证据，集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md)；不推导质量或成本收益。
-- **代码入口**：[schema audit comment/trigger](../../database/schema.sql)、[evidence redaction](../../apps/scheduler/src/evidence.ts)、[gateway ledger](../../apps/scheduler/src/gateway.ts)。
+- **代码入口**：[schema audit comment/trigger](../../database/schema.sql)、[evidence redaction](../../apps/scheduler/src/evidence.ts)、[gateway ledger](../../apps/scheduler/src/gateway.ts)、[Pi SDK context projection](../../packages/runtime-sandbox/src/pi-main-request-budget.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:authz`、`pnpm ci:unit:credential-compatibility`；人工抽查日志与 evidence。
 
 ### NFR-SEC-004 镜像与模块供应链

@@ -248,7 +248,7 @@ test("executeReal: Pi allowance completion refusal reaches the original accepted
       on: (_event: string, handler: typeof start) => { start = handler; },
       registerProvider: (_provider: string, config: { streamSimple: typeof stream }) => { stream = config.streamSimple; },
     });
-    start({}, { model, modelRegistry: {} });
+    start({}, { model, modelRegistry: { getAll: () => [] } });
     const terminals = await runExecutor(async () => {
       await acceptHubAndDone();
       const events = [];

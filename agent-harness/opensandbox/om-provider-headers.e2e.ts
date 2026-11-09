@@ -332,6 +332,9 @@ try {
   await drain();
   assert.equal(createHash("sha256").update(JSON.stringify(final.agent_snapshot_json)).digest("hex"), snapshotSha, "no execution-time snapshot backfill");
   assert.deepEqual(model.errors, []); assert.ok(model.observed());
+  assert.deepEqual(model.credentialProjectionEvidence(), { main: true, observer: true },
+    "real env/auth-file tool output must reach main and OM only as redacted context");
+  report.credential_projection = model.credentialProjectionEvidence();
   // After repair, Gateway may correctly reject a further model request once
   // completion is accepted. The final provider turn is not the authority here.
   const completionReceipts = await sql`SELECT payload_json->>'status' AS status,

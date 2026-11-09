@@ -9,6 +9,16 @@
 
 [HTTP 传输](../apps/scheduler/src/gateway-transparent-http.ts) 使用 Node HTTP/HTTPS 单次交换，不隐式重试、跟随重定向或自动解压；[策略](../apps/scheduler/src/gateway-transparent-policy.ts) 只观察副本并在请求不满足预算时明确拒绝。内核纯数据库 admission 重试仍只发生在事务已回滚、尚未请求上游时，不代表重放外部调用。
 
+## Pi 模型上下文凭据投影（#1032 首片）
+
+2026-11-09 源码候选：Pi 主请求在已有 provider `streamSimple` 中，OM 在受审 registry 的 SDK 调用前，共用 [精确替换函数](../packages/runtime-sandbox/src/pi-main-request-budget.ts)。它只投影本次 SDK context 内的字符串值，把当前 main Gateway、Control、OM Gateway token 替换为 `[REDACTED]`；main/Control 取实际运行 env，OM 不在 env 中，主请求与 OM worker 均经现有模型注册表解析其认证值。主请求无法读取已配置 OM 的认证时明确拒绝，不为方便脱敏新增可继承的 secret env。工具 stdout、认证文件内容、工具错误、历史消息和 OM 来源文本因此走同一出口。原 Session 对象、认证选项、工具 ID、错误状态、额度、回执及冻结快照不改写；同次恢复调用重用同一个安全投影，而不是要求该投影与原 Session 对象引用相同。Gateway 的原字节 `credential_in_business_data` 守卫保留，不在代理、`onPayload` 或已序列化 body 上静默修复。
+
+这是模型输入防泄漏，不是操作系统身份隔离：凭据仍用于 CLI 认证，工具进程仍能读取同身份的 env / `auth.json`；搬到同 UID 的 0600 文件不能冒充隔离。任意编码、二进制/图像携密、字段名携密，以及扩展绕过已登记 SDK 出口不在本片替换保证内；现有 Gateway 拒绝边界仍独立生效。#1032 的 A1/A2 认证隔离、稳定终态诊断与 deny 审计/指标、Skill 提示仍未由此片交付，Issue 不据此关闭。
+
+OM 直接加载镜像内现有 request-budget 源码的共享函数，启动 guard 同时核验 wrapper 与该源码的完整 SHA-256；旧/缺损/被替换内容拒绝，不能只核 wrapper 或沿用旧镜像声明。没有新增依赖、配置、状态机、数据库或授权通道，不增加用户操作。Pi 专属替换函数位于 DSH installer 复用的 SDK 政策前缀之外，避免不同 TypeScript 加载器的函数序列化改变 DSH helper 内容身份；不修改 DSH 的固定 vendor/artifact pin。
+
+验收分层：`pnpm ci:unit:runtime-sandbox` 覆盖三协议 SDK 边界、无限/有限政策、env/文件/错误/OM 文本、Unicode、前缀重叠、原历史不变与双内容 guard；`pnpm ci:integration:request-budget-sdk` 用锁定 Pi AI 1.4.0 到 loopback 对照真正生成的请求与认证；已有 `pnpm ci:integration:om-provider-headers` 原生双架构专项改由真实 Pi bash 读取真实物化 env 和 `auth.json`，要求 main/observer 只收到替换结果、原 Gateway/Control 完成及用量归属仍通过。相关脚本已在核心/Reverse Actions 接线，未本机测试/build/typecheck，最终 SHA Actions 待验；未执行生产、真实厂商模型或声明质量收益。
+
 ## Job-scoped model recovery (#1002 P1-9)
 
 Pi 的 SDK 生成前扩展为每次 main 调用签发独立 UUID，并禁用不透明 SDK 内部重试。只有本次没有模型内容/工具输出、认证的原 `/_settlement/:id` 返回 `not_started/gateway_transient`，才在原存活 Job/Attempt/Session 内准备新的、关联原 UUID 的模型调用；未运行那次的空 start/error 不提交给 Agent，成功仍只有一个 message start/终态。没有进程重启、Job 入队或旧业务输入/工具效果重放。Provider 429/5xx 文案、timeout、partial output、pending/unknown、查询失败与策略拒绝均不是权限。
