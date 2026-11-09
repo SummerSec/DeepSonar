@@ -97,8 +97,6 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 
 ## 项目知识工作链（#752 分支）
 
-业务 Job/Attempt 成功结算后，Scheduler 在独立 savepoint 幂等登记知识 work；Dispatcher 先异步冻结其自有来源，再允许 maker 领取。空来源保留 completed 跳过记录；治理/Hub/Report Job 不递归触发，未知效果和失效权限停止。历史精确补做复用该链，不重启旧执行，决策见 [ADR-0020](adr/0020-scheduler-knowledge-triggers.md)。
-
 普通 Job 从冻结目录按需搜索、读取 Memory 或拉取 Skill，实际使用生成稳定 usage_ref；有可读来源或反馈证据时可请求整理。Scheduler 创建独立 work/Canvas，依次分派 maker、按 case×arm 分离的 trial Job、evaluator 与 reviewer；这些都是现有 Job/Attempt/沙箱路径，不新增模型执行者，也不触发业务 Hub/Report。trial 只得到相应 arm 和 stage audience 的输入，发布共享资产 JSON 并以 `emit_fact` 引用其版本/hash，评测读取实际 Evidence；缺环境、证据或终态异常保持 `needs_eval`/阻断，不以文字结论晋升。审查通过才在事务中切 active 指针；失败或重启依持久 assignment/receipt 恢复，未知外部效果不自动重放。项目治理 recipe 在 work 创建时冻结，修订仅进入下一 work。详细状态和预算见[项目知识专题](../PROJECT_KNOWLEDGE.md)。现有集成测试使用构造的 Job/Attempt 与 Evidence，未证明真实沙箱或模型效果。
 
 ## 非正常路径
@@ -260,3 +258,5 @@ FR-JOB-005 的人工路径复用 `job_attempt_effects`：同一 UPDATE 排除 ac
 #1002 P1-9 的 Management [单条接口](../../deploy/README.md#管理-api-的单条效果结清1002-p1-9)复用同一结清内核，在 Dispatcher → Canvas → Job 锁内重验资源/执行归属，拒绝新的活动/排队目标并对原生效果锁使用有界拒绝。同 key/payload 重读已存结果，不改变 replay policy、Job/Attempt、历史预算或 unknown ledger；认证主体与人工依据保存在原 effect，无新状态机或控制通道。HTTP 权限、竞争和用量不变回归复用现有 recovery CI，当前最终 SHA Actions 待验。
 
 Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freeze，Control Intent 预检与最终 ingestion 均执行；最终事务在 pending Job 公开前冻结 runtime knobs、OM 配额、profile 与 launch。保留原 audit timeout、parent/finding/payload/priority 和图身份，shared assets 仅由既有 materializer 记录一次；冻结或图写入失败回滚整次 ingestion。
+
+成功业务 Job 结算后在原事务的 savepoint 中登记知识来源审计元数据；不入整理队列、不新增模型 Job。历史补做为只读分页预览，旧自动 work 不再自动推进；既有 Agent 显式请求流程不变。

@@ -5,7 +5,7 @@ import { readNextKnowledgeWake } from "./knowledge-wake.js";
 import { enqueueKnowledgeWork } from "./domains/project-knowledge/requests.js";
 import { seedKnowledgeJob, withKnowledgeDatabase } from "./domains/project-knowledge/test-support.js";
 
-test("pending knowledge retries and unprepared batches wake without polling, while busy projects do not spin", async () => {
+test("historical automatic work never wakes a new stage; explicit work still observes busy-project admission", async () => {
   await withKnowledgeDatabase(async (db) => {
     const source = await seedKnowledgeJob(db);
     const [active] = await db`INSERT INTO project_knowledge_work(project_id,trigger_key,governance_hash,state)
@@ -14,14 +14,15 @@ test("pending knowledge retries and unprepared batches wake without polling, whi
       VALUES(${source.projectId},${source.jobId},${`knowledge:auto:${source.jobId}`},${"a".repeat(64)},now()+interval '30 seconds') RETURNING id,next_attempt_at`;
     assert.equal(await readNextKnowledgeWake(db as never), null, "ordinary queued work waits for its project's active work");
     await db`UPDATE project_knowledge_work SET reason='automatic_sources_pending' WHERE id=${String(pending!.id)}`;
-    assert.equal((await readNextKnowledgeWake(db as never))!.getTime(),
-      new Date(pending!.next_attempt_at as string).getTime(), "input preparation remains schedulable for a busy project");
+    assert.equal(await readNextKnowledgeWake(db as never), null);
     await db`UPDATE project_knowledge_work SET reason='automatic_prepare_retry:1' WHERE id=${String(pending!.id)}`;
-    assert.equal((await readNextKnowledgeWake(db as never))!.getTime(), new Date(pending!.next_attempt_at as string).getTime());
+    assert.equal(await readNextKnowledgeWake(db as never), null);
     await db`UPDATE project_knowledge_work SET reason='automatic_prepare_retry:oops' WHERE id=${String(pending!.id)}`;
     assert.equal(await readNextKnowledgeWake(db as never), null, "only numeric Scheduler retry markers prepare on a busy project");
     await db`UPDATE project_knowledge_work SET reason=NULL WHERE id=${String(pending!.id)}`;
     await db`UPDATE project_knowledge_work SET state='completed' WHERE id=${String(active!.id)}`;
+    assert.equal(await readNextKnowledgeWake(db as never), null, "automatic work stays deferred even when project becomes idle");
+    await db`UPDATE project_knowledge_work SET trigger_key=${randomUUID()} WHERE id=${String(pending!.id)}`;
     assert.equal((await readNextKnowledgeWake(db as never))!.getTime(), new Date(pending!.next_attempt_at as string).getTime());
     await db`UPDATE project_knowledge_work SET state='blocked' WHERE id=${String(pending!.id)}`;
     assert.equal(await readNextKnowledgeWake(db as never), null);

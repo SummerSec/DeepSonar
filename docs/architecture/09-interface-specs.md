@@ -151,8 +151,6 @@ Job 列表只为 `waiting_human` 项附加 Scheduler 当前 `execution_state`，
 
 ## 项目知识接口（#752 分支）
 
-`GET /projects/:id/knowledge/backfill` 提供最多20项的分页只读预览；同路径 `POST` 要求 `projects:write`、最多5个唯一 Job ID 与原因，整批核验项目归属后幂等登记已有知识 work。已有链原样返回，不重置预算；接口不恢复历史 token 或激活候选。
-
 Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、版本、work、评测、usage/feedback、receipt 查询，以及来源项目管理者的精确 Skill 授权和不可逆撤销；grant 入口还要校验该版本已经审批，不能以授权激活 candidate。Job-scoped Control 增加知识搜索/读取、请求整理、提案、评测、审查和反馈；平台推导 project、Job、Attempt 与 stage，不接受调用方自报身份。只读输入受冻结 manifest、audience 和当前权限约束；mutation 经 shared schema、宿主和领域事务校验，返回 `accepted`、operation、`receipt_ref`，同 Job 同 key 同输入返回持久结果，同 key 异输入冲突。当前 Job 可用 `get_knowledge_receipt`，终态历史由项目管理入口查询。接口字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 与[项目知识专题](../PROJECT_KNOWLEDGE.md)；领域 receipt 不等于全平台通用回执。
 
 ## Gateway、流和导入接口
@@ -282,3 +280,5 @@ Model Gateway 支持原始方法/相对路径/query、未知端到端头及原�
 #903 的当前 `execution_state` 与历史回执分离、恢复代际及 HTTP 分类见 [生命周期契约](../AGENT_REPAIR_LIFECYCLE.md)。#1012 不新增接口：`POST /canvases/:id/messages` 的所有 waiting_human 回复和既有 ignore 入口先检查原冻结请求策略及共享安全门；仅有修正根时建立 resume-frozen 代际，旧运行 grants 与入队原子撤销；原权限、message_id 幂等与 ACK 不变。额度、期限、暂停和未结清效果拒绝返回具体 409 error_code，消息/人工节点/Job/代际共同回滚；202/200 只表示消息接受或忽略/入队，不表示新 Attempt 已执行或完成。
 
 Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_configuration_invalid`，`retryable=false`，RepairFeedback 为 `permanent_failure`；`expected` 保留受控 reason 与 `platform_administrator` owner，下一步要求平台修复后重新准入，不授予 Agent 扩额或自动重试权。仅映射已知配额异常；其他 DB、schema、resolver 错误不降级为确定无效果。
+
+`GET /projects/:id/knowledge/backfill` 要求 `projects:read` 与项目作用域，每页默认10、最多20条，返回当前资格/原因、来源登记及已有 work；不返回来源正文。无对应 POST 补做入口，不创建或恢复执行。

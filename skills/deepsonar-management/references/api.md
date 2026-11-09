@@ -492,8 +492,6 @@ AgentPack（`deepsonar.agentpack/v1`）是 Web 本地导入/安装格式；当�
 
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
-| GET | /projects/:id/knowledge/backfill | projects:read | 历史Job补做只读预览：`limit`最多20、`offset`；返回资格与已有work状态、阶段、reason及累计Job数 |
-| POST | /projects/:id/knowledge/backfill | projects:write | `{job_ids,reason}`：最多5个唯一精确来源；按已有work幂等复用，不重启旧Job、不激活知识；跨项目/缺失来源整批拒绝并审计 |
 | GET | /projects/:id/knowledge | projects:read | 目录：`?kind=&status=&query=&limit=&offset=`（`limit+1` 探测 `next_offset`）；只列元数据与 active 版本 hash |
 | GET | /projects/:id/knowledge/:itemId | projects:read | 条目详情（含 active 版本指针）；不存在 `404 KNOWLEDGE_ITEM_NOT_FOUND` |
 | GET | /projects/:id/knowledge/:itemId/versions | projects:read | 版本历史分页（`limit/offset`），含 `content_sha256`、来源、`revoked_at/reason` |
@@ -586,3 +584,5 @@ goal_review 的 criterion_ids 可选择 `program_rule:<ruleid>`，但必须是 f
 ### Finding 证据完整性诊断
 
 `GET /findings/:id/evidence-trace` 及详情诊断只读核验来源与实际留存字节。逐 Fact 的 `execution_assurance:not_attested`、`runtime_claim_structured`、`retained_bytes_verified` 分开表示执行未认证、结构化声明与字节完整性；trace `runtime_proof=false`，`replay.kind=evidence_integrity_check`，不执行复现命令、不改变 Verify verdict/Plan/资格。精确来源与失败边界见[专题](../../../docs/EVIDENCE_TRACE.md)。
+
+| GET | `/projects/:id/knowledge/backfill` | `projects:read` | 只读历史来源/资格预览，默认10、最多20条；无 POST 执行入口 |

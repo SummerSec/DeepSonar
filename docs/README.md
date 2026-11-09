@@ -53,7 +53,7 @@
 > **Pi 大输出（2026-10-29，#765）**：完整 JSON 校验、脱敏 workspace/evidence 双写、128MiB 保存预算与控制帧保留；详见 [CLI 契约](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-大输出与证据765)。生产重跑未验收。
 
 > **平台升级核查（2026-10-21，#740 / #747）**：官方 digest 清单、严格 dotenv 校验和终态 Attempt 效果排空已接通；维护升级新增数据库身份隔离、源库保全、候选库重建与同目标续做模块。宿主入口、受管 SSH 节点和显式回滚恢复已接线，真实单机/多节点成功场景已通过；最终 schema 61 → 62 组合镜像的 16 项 Compose 场景及独立知识后台停写场景已通过并清理，见 [升级演练](../deploy/UPGRADE_REHEARSAL.md)。配置 preflight 已接密钥格式/密文认证与 当前持久默认组合的 credential-first 解析，外部认证等仍列为未检查；P2 宿主实现已接线，正式 tag 签名发布已获授权并接线，生产验收见对应 Release 证据，P3 Web 发起为可选。决策见 [ADR 0008](architecture/adr/0008-maintenance-candidate-upgrade.md)，验收边界见 [风险记录](architecture/12-risks-and-tech-debt.md)。
-> **项目知识（2026-10-20，#752）**：schema v61；Job 冻结目录、项目 Memory/Skill 生命周期、精确跨项目 Skill 授权、独立 case×arm 评测、持久回执与管理页见 [PROJECT_KNOWLEDGE.md](PROJECT_KNOWLEDGE.md)。实现状态与模型效果试验分开记录。 #903 的 Knowledge/Skill 分类透传与离线验证边界见[拒绝反馈](PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。 成功业务 Job 自动登记、异步来源准备与历史补做入口见[项目知识专题](PROJECT_KNOWLEDGE.md#成功任务自动登记与历史补做)及[ADR-0020](architecture/adr/0020-scheduler-knowledge-triggers.md)，最终 SHA Actions 待验。
+> **项目知识（2026-10-20，#752）**：schema v61；Job 冻结目录、项目 Memory/Skill 生命周期、精确跨项目 Skill 授权、独立 case×arm 评测、持久回执与管理页见 [PROJECT_KNOWLEDGE.md](PROJECT_KNOWLEDGE.md)。实现状态与模型效果试验分开记录。 #903 的 Knowledge/Skill 分类透传与离线验证边界见[拒绝反馈](PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。
 
 > **账号修复审查补强（2026-10-18，#748 / #749）**：普通编辑保留 Claude 独立 tier；上游错误摘要覆盖配置秘密与 C1 控制字符；探测结果回写按配置、CLI 和项目核对；Windows 基线重建支持 CRLF/LF。详见 [`../DESIGN.md`](../DESIGN.md) §8 与 [凭据解析运行时视图](architecture/06-runtime-view.md#凭据与-cli-解析757)。
 
@@ -270,3 +270,5 @@
 - [Pi RPC 大载荷链路（#944 / #990）](PI_RPC_PAYLOAD_LIMITS.md)：帧/分片/预览/重试阈值以专题的核对基线和代码为准。#990 的全部大预览归档关联、索引先于引用、Attempt 已用额度恢复和按源 hash/JSON Pointer 完整回读已接线，最终 SHA Actions 待验；发送侧分片、冻结 knobs、真实 Pi 80 MiB E2E 与容量/质量观测仍未交付。不自动加载大正文，`prompt` 仍不重传。
 
 #1019 的[事实用途与待处理投影](EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。
+
+知识来源登记与只读历史补做预览见 [项目知识](PROJECT_KNOWLEDGE.md)；当前收敛范围见 [ADR 0021](architecture/adr/0021-knowledge-source-preview.md)。
