@@ -117,6 +117,8 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 
 Attempt 的 `job_attempt_effects` 先 `effect_pending` 后 settlement，只有代码明确标记为安全的清理效果可重放；未知效果始终需要对账或人工。控制流和清理路径必须写审计并释放设备租约、共享资产卷、token 和沙箱资源。
 
+新人工请求的 `guidance` 契约和长度范围由[接口规范](09-interface-specs.md#可行动人工请求2026-11-09)拥有。Hub 动态提示、固定 Control Skill 与内置角色示例要给出具体动作、回复方式/选项和回复后的业务计划，并避免请求聊天凭据或杜撰配置入口。Job 列表只为 `waiting_human` 项复用 Scheduler `readCompletionExecutionState` 做有界当前状态读取；同 Job 的人类节点与等待投影归并为一个人工待办，独立 unknown effect 对账项仍保留并优先呈现。宿主消息账本、恢复准入、Agent ACK 与 Job 完成含义不变；完整细节见[人工等待生命周期专题](../AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。本轮最终 SHA Actions 尚待验。
+
 Gateway 503 仅在内核明确证明请求尚未启动时可降级；`unknown` 或 `pending` 必须硬失败，provider 5xx 文案不构成外部效果 authority。
 
 ## 数据库锁序、共享卷与完成恢复（#871/#873/#874）

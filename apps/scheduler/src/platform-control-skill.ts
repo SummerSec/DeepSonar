@@ -16,6 +16,12 @@ description: 使用受治理的 DeepSonar Job 控制 API 提交运行提案、�
 
 这是平台注入的静态 Skill，每个真实 Job 都有一份。RoleConfig 不能按同名替换它。
 
+## 可行动人工请求
+
+request_human 的 reason 说明真实阻塞与已有证据，subject 绑定明确目标；还必须提供严格 guidance：question、required_action、reply_instructions、after_reply 四个字段，不能只提交一段工作汇报。question 先说明问题、影响和需要用户作出的具体决定；required_action 逐项列出用户需要准备的输入、执行的操作和已核实的位置；reply_instructions 写清回复格式、必要的非秘密引用，以及可以拒绝或暂不提供的选择；after_reply 说明收到不同回复后的业务计划。
+凭据只能经已确认且受治理的安全配置方式提供，回复和附件不得包含密码、令牌等秘密；配置入口未知时明确说明未知，不捏造菜单、接口或凭据能力。回复不扩权，不等于 Agent ACK 或任务完成，也不保证恢复：Scheduler 仍核对原权限、预算、期限和未决效果。平台可对账故障不得伪装成人的业务决策。
+只有确需当前用户提供输入或决定时才请求人工；已能在当前授权内核实的事项自行完成。reason 最多 2000 字符；guidance 各字段必须 trim 后非空并满足能力目录返回的长度约束。请求被拒绝时按 RepairFeedback 修正；接纳后停止，不再提交冲突终态。
+
 ## 有界 Plan 决策
 
 本节只适用于显式启用的执行型 Plan。普通 Hub 任务没有 plan_objective 声明，当前没有活动 Plan，且不存在历史显式 Plan owner 时，仍可通过 submit_hub_decision 提交普通 complete 或 intents；不得仅因 plan_objective 缺失而停止或 request_human。已有 plan_objective、活动 Plan 或历史显式 Plan owner 时，如果当前目标读取失败、缺失、状态无效、不完整或预算不足，应停止或 request_human，不得回退普通 intents 来绕过 Plan。

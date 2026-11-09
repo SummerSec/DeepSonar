@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { sql } from '../../db.js';
+import { HumanPayload } from "@deepsonar/shared-types";
 
 /** Shared key ownership, always rechecked under the existing Job transaction lock. */
 export async function readControlReceiptByKey(db: typeof sql, jobId: string, key: string) {
@@ -16,10 +17,10 @@ export function controlInputDigest(input: unknown): string {
   };
   return createHash("sha256").update(canonical(input)).digest("hex");
 }
-/** Mirrors the existing executor's terminal normalization, not an alternate payload schema. */
+/** Mirrors the existing executor's terminal normalization through the shared contract. */
 export function planSettlementDigest(operation:string, input:unknown) {
   const payload=input as Record<string,unknown>;
-  if(operation==='request_human') return controlInputDigest({...payload,reason:String(payload.reason).trim()});
+  if(operation==='request_human') return controlInputDigest(HumanPayload.parse(payload));
   if(Array.isArray(payload.intents)) return controlInputDigest({...payload,intents:payload.intents.map((intent:Record<string,unknown>)=>({
     ...intent,role:String(intent.role).trim(),description:String(intent.description).trim(),prompt:String(intent.prompt).trim(),
   }))});

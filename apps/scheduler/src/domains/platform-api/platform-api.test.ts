@@ -56,6 +56,23 @@ test("dynamic OpenAPI only projects allowlisted concrete operations", () => {
   assert.ok(paths["/control/v1/jobs/{jobId}/operations/emit_progress"].post.responses["503"].content["application/json"].schema.properties.repair);
 });
 
+test("request_human OpenAPI requires the strict four-field actionable guidance contract", () => {
+  const document = buildPlatformOpenApiDocument({
+    jobId: "00000000-0000-4000-8000-000000000001",
+    operationIds: ["request_human"],
+  });
+  const operation = (document.paths as Record<string, Record<string, any>>)
+    ["/control/v1/jobs/{jobId}/operations/request_human"].post;
+  const schema = operation.requestBody.content["application/json"].schema;
+  assert.deepEqual(schema, ControlToolInputSchemasJson.request_human);
+  assert.deepEqual(schema.required, ["reason", "guidance", "subject"]);
+  assert.equal(schema.additionalProperties, false);
+  assert.deepEqual(schema.properties.guidance.required, ["question", "required_action", "reply_instructions", "after_reply"]);
+  assert.equal(schema.properties.guidance.additionalProperties, false);
+  assert.match(operation.description, /guidance/);
+  assert.match(operation.description, /reply/);
+});
+
 test("capability discovery operations are registered read-only Job control APIs", () => {
   for (const operationId of [
     "list_capabilities",

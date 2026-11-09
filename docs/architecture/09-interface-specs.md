@@ -125,6 +125,18 @@ Control API 由 Scheduler 动态注册 operation、schema 和当前 Job 的 allo
 
 Control operation 分为两类：能力发现、graph 查询和 Skill 拉取返回受治理只读结果；`emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human`、人工 ACK 及 Plan/PlanResult 是语义提交。当前 v2 Plan/Result 在事件事务内驱动 Scheduler 复用既有 Intent admission/materializer 执行依赖任务，complete/报告仍受当前全判据 authority 校验。operation 不直接暴露数据库、容器、长期凭据、快照或终态修改；语义副作用只由 event-ingestion/application transaction 执行，v1 历史读取不是新执行输入。
 
+### 可行动人工请求（2026-11-09）
+
+新的 `request_human` 必须在现有 `reason`、`subject` 和适用的 `plan_basis` 之外提供严格的 `guidance` 对象。对象只允许以下四个必填字符串字段；各值按 trim 后校验非空并满足长度范围：`question` 8–240、`required_action` 8–2000、`reply_instructions` 8–2000、`after_reply` 8–1000。`reason` 维持现有 trim 后非空、8–2000 范围。未知字段、缺失字段、超界或 trim 后为空均拒绝，不为旧提案提供兼容转换。
+
+完整接受的人工请求内容写入 human 节点 `body_json`。L0 Canvas 继续提供有界投影，`reason` 在 L0 保持 500 字符上限；授权范围内的 Web 详情按需经现有 L1 节点读取取得完整 guidance 和 reason，不把正文扩展到全图或默认 Agent 上下文。任何节点缺少 `guidance` 时（包括历史请求和自动生成的平台等待项）都明确显示“未提供处理指引”；不自动迁移、补写或根据 reason 生成操作建议。
+
+Hub 动态提示、固定 Control Skill 和内置角色请求示例都必须把 `question`、具体动作、回复方式/选项和回复后的业务计划说清。凭据类阻塞只能说明沿现有安全配置或授权路径处理；不得让用户把凭据粘贴到聊天，也不得发明配置入口。`request_human` 接纳、Web 回复/忽略、host message ledger、恢复准入、`ack_human_message` 和 Job 完成继续是独立语义：回复不授予凭据/目标授权，不证明 Agent 已 ACK，不证明 Dispatcher 已恢复或 Job 已完成。
+
+Job 列表只为 `waiting_human` 项附加 Scheduler 当前 `execution_state`，复用 `readCompletionExecutionState` 并进行有界读取；它是当前状态投影，不产生恢复授权。Web 将同一 Job 的 human 节点与等待投影合并成一个人工待办；独立的 unknown external effect 对账仍单独显示并维持优先级。该投影不改变人工消息账本、ACK、恢复准入或完成协议。
+
+本轮适用代码与行为回归已接入；最终 SHA 的 Actions 尚待执行，不能从文档和源码存在推定验收通过。
+
 ### 完成恢复提案（#874）
 
 `submit_hub_decision` 在既有 complete/intents/payload_file 之外增加严格互斥的 `recovery` 分支，并与 plan_basis 互斥；字段只在[共享 schema](../../packages/shared-types/src/completion-recovery.ts)定义。Scheduler 冻结的 `trigger.recovery_refs` 授予精确 target Job/Attempt、scope、快照、恢复 revision 与 evidence hash；普通 Hub、猜测 UUID 或只读图 metadata 不取得此权限。shared schema、宿主 handler 和最终语义事务复核同一契约及当前 token/lease/allowlist、原预算、授权与证据 CAS。

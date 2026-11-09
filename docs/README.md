@@ -4,6 +4,7 @@
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
 > 同步日期：2026-11-09
+> **可行动人工请求（2026-11-09）**：严格 guidance、完整 body_json、L0/L1 按需读取、waiting_human 当前 Scheduler 投影及同 Job 待办去重已同步到 [FR-CTRL-004 / FR-WEB-003 / NFR-UX-001](architecture/01-system-specification.md)、[接口/运行时视图](architecture/09-interface-specs.md#可行动人工请求2026-11-09)和[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。消息账本、恢复准入、ACK 和完成仍独立；最终 SHA Actions 待验，注意力收益未测量。
 > **同 Job 模型失败恢复（#1002 P1-9）**：[契约](MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)记录 Pi SDK 的 scoped no-start→新关联模型调用、原 live owner/预算重新准入与跨代际恢复许可。没有 Agent 重启、旧效果重放或退款，unknown/partial/无来源历史拒绝；受控 SDK 与真实 SQL/HTTP 回归已接原 Actions，最终 SHA 待验。
 > **Pi 模型预算与截断（#958）**：[预算与恢复专题](PI_MODEL_BUDGET_RECOVERY.md)记录发现声明/显式配置/CLI 观测分层、创建期冻结、同 Session 有界恢复及压缩无进展停止；不扩大权限/额度，不伪造上下文证据。行为回归与实际锁版本 SDK、HTTP/PG 入口已接既有 Actions，最终 SHA 待验；本地与生产验证均未执行。
 > **#951 完成失败诊断**：[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#完成失败诊断候选951)登记当前 Attempt 可归属产出、原回执状态和受权限保护证据；有产出不升级成功，不伪造未知字段或自动重放。核心缺诊断已随 #963 合入并工程收口（2026-11-07 核对）；后续提交按各自最终 SHA 另验，全量覆盖和生产归因仍未验证。

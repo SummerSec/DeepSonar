@@ -1,4 +1,5 @@
 import { readCompletionExecutionState } from "../platform-api/completion-state.js";
+import { withWaitingExecutionStates } from "./list-execution-state.js";
 import { TaskGoalReviewRequest, normalizeTaskContract } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -275,7 +276,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "invalid jobs cursor", error_code: "INVALID_CURSOR" });
     }
     const limit = paginated ? pageLimit(q.limit) : 200;
-    const rows = await sql`
+    const rows = await sql<Array<Record<string, unknown> & { id: string; status: string }>>`
       SELECT j.id, j.project_id, j.canvas_id, j.type, j.status, j.priority, j.error,
              j.started_at, j.finished_at, j.created_at,
              p.name AS project_name, c.title AS canvas_title,
@@ -296,7 +297,8 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
           OR (j.created_at = ${cursor?.created_at ?? null}::timestamptz AND j.id < ${cursor?.id ?? null}::uuid))
       ORDER BY j.created_at DESC, j.id DESC
       LIMIT ${paginated ? limit + 1 : limit}`;
-    const items = rows.slice(0, limit).map((row) => projectJobProviderFields(row as Record<string, unknown>));
+    const items = await withWaitingExecutionStates(rows.slice(0, limit), id => readCompletionExecutionState(sql, id))
+      .then(items => items.map(row => projectJobProviderFields(row as Record<string, unknown>)));
     if (!paginated) return items;
     const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
     const hasMore = rows.length > limit;

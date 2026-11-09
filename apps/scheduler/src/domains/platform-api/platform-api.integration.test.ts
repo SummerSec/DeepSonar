@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import postgres from "postgres";
+import type { HumanPayload as HumanPayloadType } from "@deepsonar/shared-types";
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL?.trim();
 type InjectResponse = { statusCode: number; payload: string; json(): any };
@@ -131,7 +132,15 @@ if (!testDatabaseUrl) {
         ["emit_fact", { title: "missing description" }, "invalid_payload"],
         ["emit_finding", { title: "short", summary: "short" }, "invalid_payload"],
         ["submit_hub_decision", {}, "invalid_payload"],
-        ["request_human", { reason: "missing subject" }, "invalid_human"],
+        ["request_human", {
+          reason: "missing subject",
+          guidance: {
+            question: "Which concrete decision is needed for this request?",
+            required_action: "Review the scoped request and select an available outcome.",
+            reply_instructions: "Reply with the selected outcome and its subject reference.",
+            after_reply: "The Scheduler rechecks the original scope; a reply does not grant access or complete the Job.",
+          },
+        }, "invalid_human"],
       ] as const) {
         const rejected = await invoke(operation, randomUUID(), payload);
         assert.equal(rejected.statusCode, 422, rejected.payload);
@@ -270,6 +279,69 @@ if (!testDatabaseUrl) {
         summary: "Platform API 集成闭环已经完成。",
       })).statusCode, 200);
       assert.deepEqual(calls.map((call) => call.operationId), ["emit_fact", "emit_finding", "submit_hub_decision", "mark_job_done"]);
+
+      const humanJobId = randomUUID();
+      await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, started_at, timeout_sec, lease_expires_at)
+        VALUES (${humanJobId}, ${projectId}, ${canvasId}, 'audit', 'provisioning', ${sql.json({ name: "audit", platform_tools: ["request_human"] })},
+          now(), 3600, now() + interval '1 hour')`;
+      const [humanJobNode] = await sql<{ id: string }[]>`INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+        VALUES (${canvasId}, ${humanJobId}, 'job', 'Actionable human request integration', 'running', ${sql.json({ type: "audit" })}) RETURNING id`;
+      await sql.begin(tx => createAttempt(tx as unknown as typeof sql, humanJobId));
+      const humanGrant = await mintJobCapabilityToken(humanJobId);
+      await sql`UPDATE jobs SET status = 'running', started_at = now() WHERE id = ${humanJobId}`;
+      assert.equal(await activateProvisionedJobCapabilityTokens(humanJobId), 1);
+      const { ingestEvent } = await import("../../core.js");
+      let acceptedHumanCalls = 0;
+      registerRuntimeHandler(humanJobId, async context => {
+        acceptedHumanCalls++;
+        await ingestEvent(humanJobId, {
+          v: 1,
+          event_id: context.eventId,
+          type: "human",
+          payload: context.input,
+        });
+        return { accepted: true, event_id: context.eventId };
+      }, ["request_human"]);
+      const humanBase = `/control/v1/jobs/${humanJobId}`;
+      const humanInvoke = (key: string, payload: unknown) => app.inject({
+        method: "POST",
+        url: `${humanBase}/operations/request_human`,
+        headers: { authorization: `Bearer ${humanGrant.token}`, "idempotency-key": key },
+        payload,
+      }) as unknown as Promise<InjectResponse>;
+      const humanReason = "缺少隔离测试环境凭据，无法继续当前授权范围内的动态复现。";
+      const humanSubject = { type: "platform_blocker", kind: "credential" };
+      const missingGuidance = await humanInvoke(randomUUID(), { reason: humanReason, subject: humanSubject });
+      assert.equal(missingGuidance.statusCode, 422, missingGuidance.payload);
+      assert.equal(missingGuidance.json().error_code, "invalid_human");
+      assert.equal(missingGuidance.json().repair.category, "model_correctable");
+      assert.equal(missingGuidance.json().repair.operation, "request_human");
+      assert.equal(missingGuidance.json().repair.path, "guidance");
+      assert.equal(acceptedHumanCalls, 0, "missing guidance must be rejected before the runtime handler");
+      const lateInstruction = "逐项确认目标主机、端口、用途、授权范围和凭据有效期；继续使用当前 Job 的既有权限边界。".repeat(20);
+      const humanGuidance = {
+        question: "请确认是否能通过已配置的治理凭据引用访问隔离测试环境？",
+        required_action: `请在当前已知且受治理的凭据配置中准备只读凭据引用；不要粘贴秘密。${lateInstruction}`,
+        reply_instructions: "请回复已配置的非秘密凭据引用；若未配置，请明确回复未配置。",
+        after_reply: "收到后将复核原 Job 权限并决定能否继续；回复不扩权、不构成 ACK 或任务完成。",
+      };
+      assert.ok(humanGuidance.required_action.length > 500, "fixture guidance must extend past the old short summary area");
+      const acceptedHuman = await humanInvoke(randomUUID(), { reason: humanReason, subject: humanSubject, guidance: humanGuidance });
+      assert.equal(acceptedHuman.statusCode, 200, acceptedHuman.payload);
+      assert.equal(acceptedHuman.json().accepted, true);
+      assert.equal(acceptedHumanCalls, 1);
+      const [persistedHuman] = await sql<{ status: string; body_json: HumanPayloadType; payload_json: HumanPayloadType }[]>`
+        SELECT j.status, n.body_json, e.payload_json
+        FROM jobs j
+        JOIN canvas_nodes n ON n.job_id = j.id AND n.node_type = 'human'
+        JOIN events e ON e.job_id = j.id AND e.type = 'human'
+        WHERE j.id = ${humanJobId}`;
+      assert.equal(persistedHuman.status, "waiting_human");
+      assert.deepEqual(persistedHuman.body_json, { reason: humanReason, subject: humanSubject, guidance: humanGuidance });
+      assert.deepEqual(persistedHuman.payload_json, { reason: humanReason, subject: humanSubject, guidance: humanGuidance });
+      assert.equal(persistedHuman.body_json.guidance.required_action, humanGuidance.required_action);
+      assert.ok(humanJobNode.id);
+      unregisterRuntimeHandler(humanJobId);
 
       const narrowGrant = await mintJobCapabilityToken(jobId, { operationIds: ["emit_fact"] });
       const denied = await app.inject({

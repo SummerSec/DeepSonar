@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { HumanPayload } from "@deepsonar/shared-types";
 import {
   DEEPSONAR_CONTROL_SKILL,
   DEEPSONAR_CONTROL_SKILL_NAME,
@@ -8,6 +10,7 @@ import {
   injectPlatformControlSkill,
   platformApiBaseUrl,
 } from "./platform-control-skill.js";
+import { platformToolGuide } from "./platform-tools.js";
 
 test("平台控制 Skill 按保留名称保持不可替换", () => {
   const injected = injectPlatformControlSkill([
@@ -46,7 +49,7 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   // Reviewed static Skill now includes the governed stale-grant exit contract (#903).
   assert.equal(
     DEEPSONAR_CONTROL_SKILL_SHA256,
-    "00632baf8e50625b1ba38097fe4fcab724cd258f7a3adbb7178e7bc4bb51eb0d",
+    "12178ef4a3c7bcc31c4170a0094564767cb096ff55a550398445a25fc894ec10",
   );
 });
 
@@ -55,6 +58,37 @@ test("执行型 Plan 约束不会扩展到无 Plan 上下文的普通 Hub 任务
   assert.match(content, /普通 Hub 任务没有 plan_objective 声明，当前没有活动 Plan，且不存在历史显式 Plan owner[\s\S]*submit_hub_decision.*complete 或 intents[\s\S]*不得仅因.*缺失.*request_human/);
   assert.match(content, /执行型 Plan 的新执行必须提交 plan\.v=2/);
   assert.match(content, /已有 plan_objective、活动 Plan 或历史显式 Plan owner[\s\S]*读取失败[\s\S]*request_human[\s\S]*不得回退普通 intents/);
+});
+
+test("静态 Skill 和动态 request_human guide 要求可行动回复且不扩权", () => {
+  const staticContent = DEEPSONAR_CONTROL_SKILL.files["SKILL.md"];
+  const dynamicContent = platformToolGuide(["request_human"]);
+  for (const content of [staticContent, dynamicContent]) {
+    assert.match(content, /guidance/);
+    assert.match(content, /question.*required_action.*reply_instructions.*after_reply/);
+    assert.match(content, /问题.*影响.*具体决定/);
+    assert.match(content, /凭据.*秘密|秘密.*凭据/);
+    assert.match(content, /不扩权/);
+    assert.match(content, /ACK/);
+    assert.match(content, /完成/);
+    assert.match(content, /业务决策|业务判断/);
+  }
+});
+
+test("Hub guidance and built-in role examples use the actionable human contract", () => {
+  const executor = readFileSync(new URL("./executor-real.ts", import.meta.url), "utf8");
+  assert.match(executor, /人工提问必须可行动[\s\S]*guidance\.question.*guidance\.required_action.*guidance\.reply_instructions.*guidance\.after_reply/);
+  const schema = readFileSync(new URL("../../../database/schema.sql", import.meta.url), "utf8");
+  const roles = [...schema.matchAll(/\('([^']+)', \$instructions\$([\s\S]*?)\$instructions\$\)/g)];
+  for (const name of ["explore", "analyze", "review", "test", "code", "audit", "hub_reason"]) {
+    const role = roles.find(match => match[1] === name);
+    assert.ok(role, name);
+    assert.match(role[2]!, /guidance\.question.*guidance\.required_action.*guidance\.reply_instructions.*guidance\.after_reply/, name);
+  }
+  const guide = platformToolGuide(["request_human"]);
+  const examples = [...guide.matchAll(/示例：`([^`]+)`/g)];
+  assert.ok(examples.length > 0);
+  for (const example of examples) assert.equal(HumanPayload.safeParse(JSON.parse(example[1]!)).success, true, example[1]);
 });
 
 test("平台 API 基地址必须可从沙箱访问并指向当前 Job", () => {
