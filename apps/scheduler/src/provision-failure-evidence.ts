@@ -66,8 +66,12 @@ export async function readProvisionFailureEvidence(db: typeof sql, jobId: string
     if (refs.size >= READ_LIMIT) break;
   }
   if (!refs.size) return [];
+  // Bind the references as a value array. Passing the array to the `sql` tag renders a
+  // quoted identifier list (`IN ("1")`), which PostgreSQL rejects with
+  // `column "1" does not exist` and turns the whole Job detail into a 500.
+  const refIds = [...refs.keys()];
   const rows = await db`SELECT id, at, after_json FROM audit_logs
-    WHERE id IN ${db([...refs.keys()])} AND actor_type='system' AND actor_id='scheduler'
+    WHERE id = ANY(${refIds}::bigint[]) AND actor_type='system' AND actor_id='scheduler'
       AND action='job.provision_failed' AND result='error' AND error_code='SANDBOX_PROVISION_FAILED'
       AND project_id=${projectId} AND resource_type='job' AND resource_id=${jobId}
     ORDER BY id DESC LIMIT ${READ_LIMIT}`;
