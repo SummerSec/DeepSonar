@@ -5,7 +5,6 @@ import {
   CREATE_CIRCUIT_COOLDOWN_MS,
   CREATE_CIRCUIT_FAILURES_TO_TRIP,
   CREATE_CIRCUIT_WINDOW_MS,
-  OPENSANDBOX_CREATE_CIRCUIT_OPEN,
   openSandboxCreateCircuitAllowsClaim,
   openSandboxCreateCircuitStatus,
   recordOpenSandboxProvisionFailure,
@@ -84,7 +83,7 @@ test("#1046 failures older than the window no longer trip the circuit", () => {
 
 test("#1046 dispatcher wires the circuit into claims, provision failures and recovery", () => {
   const source = readDispatcher();
-  assert.ok(source.includes(OPENSANDBOX_CREATE_CIRCUIT_OPEN), "claim pause must log the circuit code");
+  assert.ok(source.includes("OPENSANDBOX_CREATE_CIRCUIT_OPEN"), "claim pause must log the circuit code");
   const gate = source.indexOf("openSandboxCreateCircuitAllowsClaim(createCircuit)");
   const claimScan = source.indexOf("type ClaimCursor");
   assert.ok(gate > 0 && gate < claimScan, "the gate must run before claim scanning");
