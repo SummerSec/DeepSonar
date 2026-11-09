@@ -249,12 +249,12 @@ expect(/- name: Offline runtime manual smoke\r?\n\s+run:/.test(chromeWorkflow), 
 // resolve and pull unless the load binds to the resolution-time digest.
 for (const [workflow, label] of [[chromeWorkflow, "Chrome"], [openHarmonyWorkflow, "OpenHarmony"], [mobileWorkflow, "Mobile"]]) {
   expect(workflow.includes('SOURCE_IMAGE: ${{ steps.resolve.outputs.source_image }}'), `${label} cache-hit load must consume the resolver's digest-validated source_image output`);
-  expect(workflow.includes('"suffix" != *[!0-9a-f]* ]'), `${label} cache-hit load must re-assert the sha256 digest grammar before Docker`);
+  expect(workflow.includes('"$suffix" != *[!0-9a-f]* ]'), `${label} cache-hit load must re-assert the sha256 digest grammar before Docker`);
   expect(!workflow.includes('steps.resolve.outputs.src_ref\"') && !/SOURCE_IMAGE:[^\n]*src_ref/.test(workflow), `${label} must not address the mutable src_ref tag`);
 }
 const ciLoadStep = ciWorkflow.split("Load reused runtime for offline validation")[1]?.split("\n      - ")[0] ?? "";
 expect(ciLoadStep.includes('SOURCE_IMAGE: ${{ steps.resolve.outputs.source_image }}'), "core cache-hit load must consume the resolver's digest-validated source_image output");
-expect(ciLoadStep.includes('"suffix" != *[!0-9a-f]* ]'), "core cache-hit load must re-assert the sha256 digest grammar before Docker");
+expect(ciLoadStep.includes('"$suffix" != *[!0-9a-f]* ]'), "core cache-hit load must re-assert the sha256 digest grammar before Docker");
 expect(!ciLoadStep.includes('steps.resolve.outputs.src_ref\"'), "core cache-hit load must not address the mutable src_ref tag");
 expect(openHarmonyWorkflow.includes("openharmony-runtime-images:") && openHarmonyWorkflow.includes("setup-qemu-action@v3"), "OpenHarmony workflow must retain its QEMU-backed specialist job");
 expect(openHarmonyWorkflow.includes("test-runtime-manuals-runtime.mjs"), "OpenHarmony workflow must run the offline runtime manual smoke");
