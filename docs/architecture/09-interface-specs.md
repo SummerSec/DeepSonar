@@ -25,6 +25,10 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 项目 RoleConfig 写入拒绝 `agent_cli` / `model`，读取不暴露这两个字段；全局 CLI 接受 NULL 表示未指定偏好。项目 RoleConfig 导出不含这两项，导入含这两项（即使为 NULL）也拒绝；全局导入未指定 CLI 保持 NULL。项目 Agent 设置分别表达 CLI 和凭据白名单是否显式收紧，`credential_ids_configured` 区分未配置与空名单，设置读取不持久化凭据 ID。readiness 的检查项可携带与 Job 解析同源的 RepairFeedback；悬空/停用白名单要求管理员修复，不能通过 Agent 提交账号 ID 或 OCI 地址绕过（#757）。
 
+### Job provision 诊断读回（#1002 P2-10）
+
+`GET /jobs/:id` 的 `provision_diagnostics` 复用原 `tasks:read` 项目/Job scope；只查询原 Attempt 上首次 immutable audit 引用，再核 system/scheduler、项目/Job/Attempt、版本与固定字段，不赋予 audit 管理权限。返回来源/时间及固定阶段、HTTP 状态和布尔信号；未知/旧引用不回填，SDK/body/env/审计元数据和容器日志不进入投影。预算只见[实现](../../apps/scheduler/src/provision-failure-evidence.ts)，正常 Job 无引用不查询 audit。引用与审计同事务在正常清理前发布，不变更 lifecycle/效果/预算；[SQL/HTTP 回归](../../apps/scheduler/src/provision-failure-evidence.integration.test.ts)已接 `pnpm ci:integration:platform-api`，最终 SHA 待验。
+
 ### 管理 Skill 的当前契约（#996）
 
 [Management Skill](../../skills/deepsonar-management/SKILL.md)及 Python CLI 跟随现有 credential-first 契约：RoleConfig 不再写账号绑定或 `reasoning`；项目角色由 Hub/Job 在可见目录内选择，不提供角色启用开关。旧 `project-settings update --roles` 在发请求前明确拒绝，项目 CLI/Provider 白名单仍是授权边界，不因删角色开关而放宽。

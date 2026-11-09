@@ -122,8 +122,8 @@ export async function audit(req: FastifyRequest, entry: AuditEntry): Promise<voi
 
 type SystemAuditEntry = AuditEntry & { actorId?: string };
 
-async function writeSystemAudit(entry: SystemAuditEntry, db: typeof sql): Promise<void> {
-  await db`
+async function writeSystemAudit(entry: SystemAuditEntry, db: typeof sql): Promise<string> {
+  const [written] = await db`
     INSERT INTO audit_logs ${db({
       actor_type: "system",
       actor_id: entry.actorId ?? "scheduler",
@@ -138,7 +138,13 @@ async function writeSystemAudit(entry: SystemAuditEntry, db: typeof sql): Promis
       after_json: entry.after === undefined ? null : db.json(entry.after as never),
       result: entry.result ?? "ok",
       error_code: entry.errorCode ?? null,
-    })}`;
+    })} RETURNING id`;
+  return String(written.id);
+}
+
+/** A scoped reference into the existing append-only audit, not a second evidence ledger. */
+export async function recordDurableSystemAudit(entry: SystemAuditEntry, db: typeof sql): Promise<string> {
+  return writeSystemAudit(entry, db);
 }
 
 /** Explicit DB/transaction callers require a durable audit; background callers remain best-effort. */
