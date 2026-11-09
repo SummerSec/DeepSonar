@@ -361,7 +361,7 @@ async function resolveAgentSnapshotForJobUnchecked(
   db: RoleRuntimeSnapshotTransaction,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
+  options?: { existingCredentialId?: string | null; runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   const roleName = roleNameForJobType(jobType);
   const [role] = (await db`SELECT id, name, description, kind, ui_color, project_id
@@ -444,6 +444,7 @@ async function resolveAgentSnapshotForJobUnchecked(
       provider: hubProvider,
       modelRef: earlyModelRef ?? agentAllowlist.default_model_ref ?? identity.model,
       allowPassthrough: allowPassthroughForResolve,
+      existingCredentialId: options?.existingCredentialId,
     });
     if (resolved) {
       agentCli = resolved.agent_cli!;
@@ -878,7 +879,7 @@ export async function resolveAgentSnapshotForJob(
   db: RoleRuntimeSnapshotTransaction = DEFAULT_SNAPSHOT_DB,
   projectId: string,
   jobType: string,
-  options?: { runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
+  options?: { existingCredentialId?: string | null; runtimeImageKey?: string | null; agentCli?: string | null; provider?: string | null; modelRef?: string | null; modelRequirements?: Record<string, unknown> | null; runtimeProfile?: import("@deepsonar/shared-types").RuntimeProfileOverridePayload | null; taskPromptOverride?: string | null; roleDefinition?: import("@deepsonar/shared-types").HubRoleDefinitionPayload | null; baseRoleName?: string | null; languageServerCapabilityId?: string | null; cliCapabilityIds?: readonly string[] | null; piExtensionIds?: readonly string[] | null },
 ): Promise<RoleRuntimeSnapshotResult> {
   try {
     return await resolveAgentSnapshotForJobUnchecked(db, projectId, jobType, options);

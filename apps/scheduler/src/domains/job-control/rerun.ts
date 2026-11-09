@@ -249,7 +249,9 @@ export async function resolveCurrentSnapshotForExistingJob(
       String(job.project_id),
       String(job.type),
       findingIds,
-      frozenRuntimeImageOverride(job.agent_snapshot_json),
+      { ...frozenRuntimeImageOverride(job.agent_snapshot_json),
+        existingCredentialId: typeof objectValue(job.agent_snapshot_json).credential_id === "string"
+          ? String(objectValue(job.agent_snapshot_json).credential_id) : null },
     ),
   );
   const { snapshotWithKnobs: current } = await freezeJobRuntimeConfiguration(tx,

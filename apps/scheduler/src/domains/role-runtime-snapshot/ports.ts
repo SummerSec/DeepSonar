@@ -128,6 +128,8 @@ export interface RoleRuntimeSnapshotApplication {
     jobType: string,
     options?: {
       runtimeImageKey?: string | null;
+      /** Kernel-only original credential preference during existing-Job recovery. */
+      existingCredentialId?: string | null;
       /** Hub 提案的 agent_cli；省略时走项目软缺省 / RoleConfig。 */
       agentCli?: string | null;
       /** Hub 提案的 Provider 插件 id（credentials.provider）；禁止提交账号 UUID。Scheduler 在授权目录内解析凭据。 */
