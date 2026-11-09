@@ -57,9 +57,14 @@ function assertOk(result, what) {
   return result;
 }
 
+// `statusCheckRollup` comes from the GraphQL `CheckConclusionState` enum, so gh prints
+// literals in upper case (SUCCESS, FAILURE, CANCELLED, ...). Normalise before comparing:
+// a green release writeback used to read "SUCCESS", match neither the success branch nor
+// `BLOCKING_CONCLUSIONS`, and burn the whole 90-poll budget before failing as a timeout
+// (v0.6.17: PR #1028 was green and mergeable while the writeback waited ~90 minutes).
 function summaryConclusion(result) {
   const text = String(result?.stdout ?? "").trim();
-  return text || "pending";
+  return text ? text.toLowerCase() : "pending";
 }
 
 function parseJson(result, what) {
