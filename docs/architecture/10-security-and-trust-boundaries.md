@@ -1,9 +1,11 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
+
+#1002 P1-9 的[同 Job 模型恢复](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)只接受 Kernel 的 scoped no-start 与严格零用量 settlement，不以 Provider 错误或 SDK 文本为 authority。原 Job 锁串行消费既有 effect intent 中的恢复记录，原 owner/lease/deadline/请求及修正额度仍准入；未知效果、旧许可/计数来源缺失、跨 token/Attempt 原引用与已消费引用拒绝。新调用不修改旧 effect 的 never replay policy、不重启 Agent，不退款或补造历史。最终 SHA SQL/SDK Actions 待验。
 
 #943 的[可信显式补冻](../AGENT_REPAIR_LIFECYCLE.md#缺损快照的可信显式恢复943)只信内核完整预算回执或 Dispatcher 持久执行前证明；失败状态、缺 token/回执、没有 sandbox ID 和模型声明均不是 no-start authority。Job/全部 Attempt 锁阻止旧效果写入竞态，完整历史核查及当前授权/预算/效果门先于任何入队；无可信证明或未知效果继续拒绝，普通执行/resume 不回退当前配置。源码已接线，最终 SHA Actions 待验。
 

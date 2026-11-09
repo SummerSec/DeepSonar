@@ -19,6 +19,7 @@ export function assertPiAnthropicThinkingBudget(model, options, effectiveMaxToke
 export const PI_MAIN_REQUEST_BUDGET_SOURCE = String.raw`
 import { createAssistantMessageEventStream, streamSimple as sdkStreamSimple } from '@earendil-works/pi-ai/compat';
 import { setTimeout as delay } from 'node:timers/promises';
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
@@ -74,6 +75,26 @@ export async function readMainAllowance(baseUrl, token, requestSignal) {
   }
 }
 
+// This authenticated, host-owned route never forwards a provider response. Error
+// prose/status and provider-supplied headers are not no-start evidence.
+export async function readGatewayNoStart(baseUrl, token, requestId, requestSignal) {
+  const signal = AbortSignal.any([...(requestSignal ? [requestSignal] : []), AbortSignal.timeout(15_000)]);
+  try {
+    const response = await fetch(endpoint(baseUrl) + '/_settlement/' + requestId, {
+      headers: { authorization: 'Bearer ' + token }, redirect: 'manual', signal,
+    });
+    if (response.status !== 200) { await response.body?.cancel(); return false; }
+    const chunks = []; let size = 0;
+    if (response.body) for await (const chunk of response.body) {
+      size += chunk.length;
+      if (size > 65536) return false;
+      chunks.push(chunk);
+    }
+    const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    return value?.status === 'not_started' && value.reason === 'gateway_transient';
+  } catch { return false; }
+}
+
 /** SDK inputs only: no onPayload callback, fetch interception or serialized body editing. */
 export function preparePiMainSdkRequest(model, options, allowance) {
   if (!SUPPORTED.has(model.api)) fail('PI_MAIN_BUDGET_PROTOCOL_UNSUPPORTED');
@@ -118,15 +139,52 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
             if (requestedModel.provider !== identity.provider || requestedModel.id !== identity.id
               || requestedModel.api !== identity.api || endpoint(requestedModel.baseUrl) !== identity.baseUrl) fail('PI_MAIN_BUDGET_MODEL_CHANGED');
             if (options?.apiKey !== undefined && options.apiKey !== token) fail('PI_MAIN_BUDGET_AUTH_MISMATCH');
-            const allowance = await readMainAllowance(gateway, token, options?.signal);
-            const prepared = preparePiMainSdkRequest(requestedModel, options, allowance);
-            if (allowance.policy_required && requestedModel.api === 'anthropic-messages' && requestedModel.reasoning && options?.reasoning
-              && requestedModel.compat?.forceAdaptiveThinking !== true && requestedModel.compat?.supportsMidConvoEffort !== true) {
-              contextClamp ??= loadPiContextClamp();
-              const clamp = await contextClamp;
-              assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamp(prepared.model, context, prepared.options.maxTokens));
+            let retryOf;
+            // Local loop bound is not a grant: admission enforces the original
+            // frozen Job-wide cap across requests, tokens and Attempts.
+            for (let retries = 0; retries <= 2; retries++) {
+              const allowance = await readMainAllowance(gateway, token, options?.signal);
+              const prepared = preparePiMainSdkRequest(requestedModel, options, allowance);
+              if (allowance.policy_required && requestedModel.api === 'anthropic-messages' && requestedModel.reasoning && options?.reasoning
+                && requestedModel.compat?.forceAdaptiveThinking !== true && requestedModel.compat?.supportsMidConvoEffort !== true) {
+                contextClamp ??= loadPiContextClamp();
+                const clamp = await contextClamp;
+                assertPiAnthropicThinkingBudget(prepared.model, prepared.options, clamp(prepared.model, context, prepared.options.maxTokens));
+              }
+              const requestId = randomUUID();
+              const headers = Object.fromEntries(Object.entries(prepared.options?.headers ?? {})
+                .filter(([name]) => !['x-deepsonar-request-id','x-deepsonar-retry-of'].includes(name.toLowerCase())));
+              headers['x-deepsonar-request-id'] = requestId;
+              if (retryOf) headers['x-deepsonar-retry-of'] = retryOf;
+              let failure, pendingStart, visible = false;
+              for await (const event of delegate(prepared.model, context,
+                { ...prepared.options, headers, maxRetries: 0, apiKey: token })) {
+                if (event.type === 'error') {
+                  if (event.error?.content?.length) visible = true;
+                  if (failure) {
+                    if (pendingStart) { output.push(pendingStart); pendingStart = undefined; }
+                    visible = true; output.push(failure);
+                  }
+                  failure = event; continue;
+                }
+                if (event.type === 'start' && !visible && !failure && !pendingStart && !event.partial?.content?.length) {
+                  pendingStart = event; continue;
+                }
+                if (pendingStart) { output.push(pendingStart); pendingStart = undefined; }
+                if (failure) { output.push(failure); failure = undefined; visible = true; }
+                if (event.type !== 'start' || event.partial?.content?.length) visible = true;
+                output.push(event);
+              }
+              if (!failure) { if (pendingStart) output.push(pendingStart); break; }
+              if (visible || retries >= 2 || options?.signal?.aborted
+                || !await readGatewayNoStart(gateway, token, requestId, options?.signal)) {
+                if (pendingStart) output.push(pendingStart);
+                output.push(failure); break;
+              }
+              // Do not publish a second message_start for a generation that never ran.
+              retryOf = requestId;
+              await delay(100 * (2 ** retries), undefined, { signal: options?.signal });
             }
-            for await (const event of delegate(prepared.model, context, { ...prepared.options, apiKey: token })) output.push(event);
           } catch (error) {
             const code = error === completionAlreadyAccepted ? completionAlreadyAccepted.message
               : /^PI_MAIN_BUDGET_/.test(error?.message ?? '') ? error.message : 'PI_MAIN_BUDGET_REQUEST_FAILED';

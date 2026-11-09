@@ -156,6 +156,7 @@ if (!testDatabaseUrl) {
       assert.equal(snapshots.length, 2);
       const { inspectGatewayRequestBudget, ensureGatewayRequestBudget } = await import("./gateway-request-policy.js");
       const expectedKnobs = {
+        gateway_model_retries: 2,
         stall_sec: 300, job_token_max_requests: 80, timeout_sec: 7_200, provision_timeout_sec: 900,
         sources: { stallSec: "role", jobTokenMaxRequests: "role", timeoutSec: "role", provisionTimeoutSec: "platform" },
       };

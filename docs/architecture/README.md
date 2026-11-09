@@ -1,7 +1,7 @@
 # DeepSonar 系统架构设计
 
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-09
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
 #1002 P1-8 的同项目同质多账号池与内核恢复账号偏好映射 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时选择](06-runtime-view.md#凭据与-cli-解析757)及安全视图；复用现有白名单/默认账号操作，不新增池状态或配置。双账号真实 Gateway 的隔离回归接 role-config，最终 SHA Actions 待验。
@@ -41,6 +41,8 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 #992 对应 NFR-OPS-003：既有五片 gate、Reverse 实际消费路由和只读 attempt 成本观测归属[工程规范](11-engineering-specs.md#4-测试分层与实际接线)；真实故障/原生重跑与三组同形文档对照已通过，记录见 [CI 验收](../CI_COST_ACCEPTANCE_992.md)。不新增跨提交通过结论复用，main/发布保障不变。#992 输入冻结前置切片的 npm closure、快照/原生资产身份见 [CI 构建输入](../CI_COST_ACCEPTANCE_992.md#6-基础构建输入冻结992前置切片)、[运行时](06-runtime-view.md#基础镜像构建输入992-前置切片)、[信任边界](10-security-and-trust-boundaries.md)和 [ADR 0018](adr/0018-frozen-base-build-inputs.md)；源码接线尚待最终 SHA Actions 原生验收，复用仍未实现。
 
 #1011 在现有 Scheduler 对账 loop 补正常人工等待的精确清理重入及持久 worker owner 保全，映射 FR-CANVAS-004 与[生命周期](../AGENT_REPAIR_LIFECYCLE.md#人工等待修正链交接1012)、[运行时](06-runtime-view.md)和[安全](10-security-and-trust-boundaries.md)。HTTP ready 后才启用外部清理，未知效果门不缩窄，无新服务/回执账本；原 destroy→SQL 失败→模拟重启/key 恢复→owner 确认→原子结算→HTTP 后继回归已接线，最终 SHA Actions 待验，未声称真实 OS/生产重启。
+
+#1002 P1-9 的同 Job 模型失败恢复关联 FR-CRED-003/004、FR-JOB-014 的重跑区别与 06/09/10：[透明契约](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)拥有 scoped no-start 与关联请求/冻结许可边界，[生命周期](../AGENT_REPAIR_LIFECYCLE.md#job-scoped-model-recovery-1002-p1-9)记录不重启 Agent、不重放/退款及历史拒绝。原 effect intent 跨 token/Attempt 计数，未运行那次的空 start/error 不发布；源码及 SDK/真实 SQL 回归已接线，最终 SHA Actions 待验。
 
 ## 1. 阅读路径与目录
 

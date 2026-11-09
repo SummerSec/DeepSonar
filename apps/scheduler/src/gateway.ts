@@ -15,6 +15,7 @@ import { ensureGatewayRequestBudget, inspectGatewayRequestBudget, GatewayRequest
 import { finiteRequestCap, readHistoricalRequestBudget, resolveRequestBudget } from "./gateway-request-budget.js";
 import { persistNoEffectReceipt, readNoEffectReceipt, type GatewayNoEffectReason } from "./gateway-admission-receipt.js";
 import { createGatewayResponseGuard } from "./gateway-response-guard.js";
+import { assertGatewayRecoveryAllowed } from "./gateway-recovery-admission.js";
 import { assertGatewayProviderBinding, GatewayProviderBindingError } from "./gateway-provider-binding.js";
 import { gatewayEndToEndHeaders, appendGatewayHeaders, requestGatewayHttp } from "./gateway-transparent-http.js";
 import { assertGatewayOutputBudget, assertGatewayUnambiguousPolicyJson, gatewayObservationBytes, transparentGatewayUrl } from "./gateway-transparent-policy.js";
@@ -809,7 +810,7 @@ async function trySettleGatewayNoExternalUsage(input: GatewayUsageLedgerInput): 
           zeroLedger.cache_read_input_tokens, zeroLedger.cache_creation_input_tokens, zeroLedger.adjustment_tokens]
           .some((value) => Number(value) !== 0)
         || zeroLedger.settlement_status !== "settled" || zeroLedger.source !== "gateway_error"
-        || zeroLedger.workload !== "observational_memory") {
+        || zeroLedger.workload !== input.workload) {
         throw new Error("gateway no-effect settlement ledger contents were not zero and settled");
       }
       await settleEffect(tx as unknown as typeof sql, input.attemptId, input.effectId, {
@@ -1053,6 +1054,7 @@ async function admitGatewayRequest(
     method: string;
     gatewayInputDigest: () => string;
     clientRequestId?: string;
+    clientRetryOf?: string;
     onRepairBody: (remaining: number | null, budget: Awaited<ReturnType<typeof admitGatewayRepair>>) => void;
   },
 ): Promise<GatewayRequestAdmission> {
@@ -1150,6 +1152,13 @@ async function admitGatewayRequest(
     : Math.min(totalRemaining, repairBudget?.remaining_tokens ?? totalRemaining);
   if (repairBudget) repairBudget.remaining_tokens = remaining;
   input.onRepairBody(remaining, repairBudget);
+  if (input.clientRetryOf) {
+    if (input.workload !== "main" || !input.clientRequestId) {
+      throw new GatewayWorkloadPolicyError("gateway_recovery_scope_invalid", "Recovery requires a main-workload request identity");
+    }
+    await assertGatewayRecoveryAllowed(tx, { ...input, requestId: input.clientRequestId,
+      retryOf: input.clientRetryOf, inputDigest: input.gatewayInputDigest() }, snapshot);
+  }
 
   const [requestCounter] = await tx`
     UPDATE job_tokens
@@ -1170,7 +1179,10 @@ async function admitGatewayRequest(
       provider: input.provider,
       model: input.model.slice(0, 200),
       method: input.method,
+      upstream_path: input.upstreamPath,
+      recovery_policy_version: 1,
       workload: input.workload,
+      ...(input.clientRetryOf ? { gateway_retry_of: input.clientRetryOf } : {}),
       ...(input.clientRequestId ? { gateway_request_id: input.clientRequestId } : {}),
       ...(repairBudget ? { repair_receipt_ref: repairBudget.receipt_ref, repair_reserved_tokens: repairBudget.remaining_tokens } : {}),
     },
@@ -1250,6 +1262,10 @@ export function registerGateway(app: FastifyInstance): void {
         return deny(reply, 401, "job 已结束，token 不可用", "job_inactive");
       }
       const clientRequestId = headerString(req.headers["x-deepsonar-request-id"]);
+      const clientRetryOf = headerString(req.headers["x-deepsonar-retry-of"]);
+      if (clientRetryOf && (!clientRequestId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(clientRetryOf))) {
+        return deny(reply, 400, "Invalid recovery request identity", "invalid_gateway_request_id");
+      }
       if (clientRequestId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(clientRequestId)) {
         return deny(reply, 400, "Invalid request identity", "invalid_gateway_request_id");
       }
@@ -1543,6 +1559,7 @@ export function registerGateway(app: FastifyInstance): void {
           // Repair output may be bounded by onRepairBody.  Hash the final
           // outbound bytes so the effect records the request actually sent.
           clientRequestId: clientRequestId || undefined,
+          clientRetryOf: clientRetryOf || undefined,
           gatewayInputDigest: () => createHash("sha256").update(outboundBuf ?? Buffer.alloc(0)).digest("hex"),
           onRepairBody: (remaining, repairBudget) => {
             if (repairBudget || remaining !== null) {
@@ -1615,8 +1632,7 @@ export function registerGateway(app: FastifyInstance): void {
         upstream = await requestGatewayHttp({ url, method: req.method, headers, body: outboundBuf, trailers: requestTrailers, signal });
       } catch (error) {
         reply.raw.off("close", abortClient);
-        if (workload === "observational_memory"
-          && isKnownObservationalMemoryPreRequestFailure(error)) {
+        if (isKnownObservationalMemoryPreRequestFailure(error)) {
           const settled = await trySettleGatewayNoExternalUsage({
             jobId: String(jt.job_id),
             projectId: String(jt.project_id),
@@ -1638,7 +1654,7 @@ export function registerGateway(app: FastifyInstance): void {
               error: gatewayNotStartedError("upstream unavailable before request start"),
             });
           }
-          return deny(reply, 409, "observational-memory usage requires reconciliation", "workload_usage_unknown");
+          return deny(reply, 409, "Model usage requires reconciliation", workload === "main" ? "JOB_TOKEN_USAGE_UNKNOWN" : "workload_usage_unknown");
         }
         await trySettleGatewayUsage({
           jobId: String(jt.job_id),

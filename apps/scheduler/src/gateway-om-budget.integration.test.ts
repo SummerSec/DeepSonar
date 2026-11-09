@@ -1050,15 +1050,30 @@ test("OM Gateway enforces frozen workload quotas and durable attribution over of
     assert.equal(closedUsage.settlement_status, "settled");
     assert.equal(closedUsage.source, "gateway_error");
     assert.equal(closedUsage.effect_status, "settled");
-    assert.deepEqual(closedUsage.intent_json, { provider: "openai", model: "main-model", method: "POST", workload: "observational_memory", gateway_request_id: correlations.get(transient)!.id });
+    assert.deepEqual(closedUsage.intent_json, { provider: "openai", model: "main-model", method: "POST", upstream_path: "v1/responses", recovery_policy_version: 1, workload: "observational_memory", gateway_request_id: correlations.get(transient)!.id });
     assert.deepEqual(closedUsage.resource_identity_json, { job_token_id: closedMemory.id, request_no: 1 });
     assert.deepEqual(closedUsage.settlement_json, {
       result: "never_started", external_effect: false, response_status: "not_started", total_tokens: 0, source: "gateway_error",
     });
     const closedMainResponse = await request(closedMain.plaintext, { workload: "main", claimedWorkload: "observational_memory" });
-    assert.equal(closedMainResponse.statusCode, 502, "independent main reservation still admits the unchanged closed endpoint");
-    const [closedMainCounter] = await sql`SELECT used_requests FROM job_tokens WHERE id=${closedMain.id}`;
+    assert.equal(closedMainResponse.statusCode, 503, "independent main reservation admits the closed endpoint but proves no request started");
+    assert.equal(closedMainResponse.json().error.type, "gateway_transient");
+    const closedMainReceipt = await receiptFor(closedMainResponse);
+    assert.equal(closedMainReceipt.status, "not_started");
+    assert.equal(closedMainReceipt.reason, "gateway_transient");
+    const [closedMainCounter] = await sql`SELECT used_requests,used_tokens FROM job_tokens WHERE id=${closedMain.id}`;
     assert.equal(closedMainCounter.used_requests, 1);
+    assert.equal(Number(closedMainCounter.used_tokens), 0);
+    const [closedMainLedger] = await sql`SELECT l.total_tokens,l.source,l.settlement_status,e.status,e.replay_policy,e.settlement_json
+      FROM job_usage_ledger l JOIN job_attempt_effects e ON e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id
+      WHERE l.job_token_id=${closedMain.id}`;
+    assert.equal(Number(closedMainLedger.total_tokens), 0);
+    assert.equal(closedMainLedger.source, "gateway_error");
+    assert.equal(closedMainLedger.settlement_status, "settled");
+    assert.equal(closedMainLedger.status, "settled");
+    assert.equal(closedMainLedger.replay_policy, "never");
+    assert.equal(closedMainLedger.settlement_json.result, "never_started");
+    assert.equal(closedMainLedger.settlement_json.external_effect, false);
     assert.equal((await request((await issue(closedJob.jobId, "observational_memory", {}, closedCredentialId)).plaintext)).statusCode, 429,
       "a known no-effect failure still consumes the independent background request slot");
 
