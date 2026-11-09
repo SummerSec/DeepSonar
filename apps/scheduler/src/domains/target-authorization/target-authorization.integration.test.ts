@@ -472,9 +472,15 @@ if (!testDatabaseUrl) {
       const targetActionsBeforeRevocation = fixture.targetPaths.length;
       fixture.revoked = true;
       const { runner } = await import("../../runtime.js");
-      const provision = t.mock.method(runner, "provision", async () => {
-        throw new Error("revoked target must not reach sandbox provision");
+      const deniedJobIds = new Set([negativeId]);
+      const originalProvision = runner.provision.bind(runner);
+      const provision = t.mock.method(runner, "provision", async (input: Parameters<typeof runner.provision>[0]) => {
+        if (deniedJobIds.has(input.jobId)) throw new Error("revoked target must not reach sandbox provision");
+        // Independent knowledge work may now run on its own Canvas. Its noop
+        // sandbox is unrelated to the target-authority grant being revoked.
+        return originalProvision(input);
       });
+      const deniedProvisionCalls = () => provision.mock.calls.filter((call) => deniedJobIds.has(call.arguments[0].jobId)).length;
       await dispatcher.dispatchOnce();
       await dispatcher.drainInFlight(15_000);
       const [revokedJob] = await sql`SELECT status, sandbox_id FROM jobs WHERE id = ${negativeId}`;
@@ -483,7 +489,7 @@ if (!testDatabaseUrl) {
       assert.equal(fixture.targetPaths.length, targetActionsBeforeRevocation, "revocation must block before target actions");
       const [provisionEffects] = await sql`SELECT count(*)::int AS count FROM job_attempt_effects WHERE job_id = ${negativeId} AND effect_kind = 'provision'`;
       assert.equal(provisionEffects.count, 0, "revocation must block before the provision effect");
-      assert.equal(provision.mock.callCount(), 0, "revocation must block before any sandbox provision call");
+      assert.equal(deniedProvisionCalls(), 0, "revocation must block before a provision call for the revoked Job");
       const [attemptCountBeforeRerun] = await sql`SELECT count(*)::int AS count FROM job_attempts WHERE job_id = ${negativeId}`;
       const resume = await app.inject({ method: "POST", url: `/jobs/${negativeId}/resume`, headers });
       assert.equal(resume.statusCode, 409, resume.payload);
@@ -501,7 +507,7 @@ if (!testDatabaseUrl) {
       const [attemptCountAfterDispatch] = await sql`SELECT count(*)::int AS count FROM job_attempts WHERE job_id = ${negativeId}`;
       assert.equal(attemptCountAfterDispatch.count, attemptCountBeforeRerun.count, "the failed Job must not be replayed when follow-on Jobs are claimed");
       assert.equal(fixture.targetPaths.length, targetActionsBeforeRevocation);
-      assert.equal(provision.mock.callCount(), 0);
+      assert.equal(deniedProvisionCalls(), 0);
 
       const [rowsBeforeRejectedCreate] = await sql`
         SELECT (SELECT count(*)::int FROM canvases) AS canvases, (SELECT count(*)::int FROM jobs) AS jobs`;
@@ -532,6 +538,7 @@ if (!testDatabaseUrl) {
       const drift = await core.createJob({ projectId, canvasId, type: "audit", payload: {} });
       assert.ok(drift.job);
       const driftId = String(drift.job.id);
+      deniedJobIds.add(driftId);
       const [beforeDrift] = await sql`SELECT count(*)::int AS count FROM jobs WHERE canvas_id=${canvasId}`;
       process.env.DEEPSONAR_TARGET_AUTHORITY_ID = "changed-authority";
       await dispatcher.dispatchOnce();
@@ -539,7 +546,7 @@ if (!testDatabaseUrl) {
       const [drifted] = await sql`SELECT status, sandbox_id FROM jobs WHERE id=${driftId}`;
       assert.equal(drifted.status, "failed", "authority configuration drift must durably fail the Job even when follow-on Hub admission is denied");
       assert.equal(drifted.sandbox_id, null);
-      assert.equal(provision.mock.callCount(), 0);
+      assert.equal(deniedProvisionCalls(), 0, "authority drift must block the affected Job before provision");
       const [afterDrift] = await sql`SELECT count(*)::int AS count FROM jobs WHERE canvas_id=${canvasId}`;
       assert.equal(afterDrift.count, beforeDrift.count, "denied follow-on admission must not create partial Jobs");
       const convergence = await core.readCanvasConvergence(sql, canvasId);
