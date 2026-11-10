@@ -30,14 +30,25 @@ export const CREATE_CIRCUIT_COOLDOWN_MS = 90 * 1000;
 
 export type OpenSandboxCreateCircuitState = "closed" | "open" | "half_open";
 
+/**
+ * Claim-time probe identity. The circuit does not sample its own state when an
+ * outcome arrives: the claim that admitted the Job carries the canary flag and the
+ * open->half-open episode it was admitted in, so a provision that started earlier
+ * can neither be counted as the probe nor close a circuit opened after it started.
+ */
+export type CreateCircuitProbe = { canary: boolean; episode: number | null };
+
 export type OpenSandboxCreateCircuitStatus = {
   state: OpenSandboxCreateCircuitState;
+  episode: number;
   openedAt: string | null;
   lastTripReason: string | null;
   recentFailures: number;
 };
 
 let state: OpenSandboxCreateCircuitState = "closed";
+/** Bumped on every trip; half-open admissions and their outcomes share one episode. */
+let episode = 0;
 let openedAtMs: number | null = null;
 let lastTripReason: string | null = null;
 let failureTimes: number[] = [];
@@ -52,6 +63,7 @@ export function openSandboxCreateCircuitStatus(): OpenSandboxCreateCircuitStatus
   prune(now);
   return {
     state,
+    episode,
     openedAt: openedAtMs != null ? new Date(openedAtMs).toISOString() : null,
     lastTripReason,
     recentFailures: failureTimes.length,
@@ -64,23 +76,26 @@ export function openSandboxCreateCircuitStatus(): OpenSandboxCreateCircuitStatus
  */
 export function openSandboxCreateCircuitAllowsClaim(
   status: OpenSandboxCreateCircuitStatus = openSandboxCreateCircuitStatus(),
-): { allowed: boolean; canary: boolean } {
-  if (status.state === "closed") return { allowed: true, canary: false };
+): { allowed: boolean; canary: boolean; episode: number | null } {
+  if (status.state === "closed") return { allowed: true, canary: false, episode: null };
   // Half-open admits claims as canaries until a provision outcome arrives. No seat is
   // reserved here: an admitted claim that finds no pending Job must not deadlock the
   // gate, and the existing provisioning concurrency cap bounds concurrent canaries.
-  if (status.state === "half_open") return { allowed: true, canary: true };
+  if (status.state === "half_open") return { allowed: true, canary: true, episode };
   const openedAt = openedAtMs;
   if (openedAt != null && clock() - openedAt >= CREATE_CIRCUIT_COOLDOWN_MS) {
     state = "half_open";
     setGauge("deepsonar_opensandbox_create_circuit", 1);
-    return { allowed: true, canary: true };
+    return { allowed: true, canary: true, episode };
   }
-  return { allowed: false, canary: false };
+  return { allowed: false, canary: false, episode: null };
 }
 
 /** Record a dispatcher-observed provision failure; trip once the window threshold is reached. */
-export function recordOpenSandboxProvisionFailure(reason: string, canary = false): OpenSandboxCreateCircuitStatus {
+export function recordOpenSandboxProvisionFailure(
+  reason: string,
+  probe: CreateCircuitProbe | null = null,
+): OpenSandboxCreateCircuitStatus {
   const now = clock();
   const code = classifyProvisionFailure(reason);
   // #1046: every observed failure counts, including a failed half-open canary. Accounting
@@ -88,17 +103,24 @@ export function recordOpenSandboxProvisionFailure(reason: string, canary = false
   failureTimes.push(now);
   prune(now);
   inc("deepsonar_opensandbox_create_failures_total");
-  if (canary || state === "half_open") {
-    // A failed half-open canary proves the backend is still unstable: reopen immediately.
+  // Only the probe admitted in the current episode can prove the backend is still
+  // unstable on its own; an outcome from an earlier claim is ordinary window evidence.
+  if (probe?.canary === true && probe.episode != null && probe.episode === episode) {
     reTrip(now, code);
-  } else if (state === "closed" && failureTimes.length >= CREATE_CIRCUIT_FAILURES_TO_TRIP) {
+  } else if (failureTimes.length >= CREATE_CIRCUIT_FAILURES_TO_TRIP) {
     reTrip(now, code);
   }
   return openSandboxCreateCircuitStatus();
 }
 
 /** A successful provision closes the circuit (including a successful half-open canary). */
-export function recordOpenSandboxProvisionSuccess(): void {
+export function recordOpenSandboxProvisionSuccess(probe: CreateCircuitProbe | null = null): void {
+  if (state !== "closed" && (probe?.episode == null || probe.episode !== episode)) {
+    // Not the probe of the current episode: this provision began before the circuit
+    // opened (or belongs to an older episode), so it cannot prove recovery.
+    inc("deepsonar_opensandbox_create_circuit_close_ignored_total");
+    return;
+  }
   if (state !== "closed") {
     console.error(`[opensandbox-create-circuit] closed after successful provision (state=${state})`);
     inc("deepsonar_opensandbox_create_circuit_close_total");
@@ -112,6 +134,7 @@ export function recordOpenSandboxProvisionSuccess(): void {
 
 function reTrip(now: number, code: string): void {
   state = "open";
+  episode += 1;
   openedAtMs = now;
   lastTripReason = code;
   setGauge("deepsonar_opensandbox_create_circuit", 1);
@@ -149,6 +172,7 @@ export function shouldLogCreateCircuitPause(): boolean {
 /** Test-only: reset all state and optionally pin the clock. */
 export function resetOpenSandboxCreateCircuitForTests(clockOverride?: () => number): void {
   state = "closed";
+  episode = 0;
   openedAtMs = null;
   lastTripReason = null;
   failureTimes = [];

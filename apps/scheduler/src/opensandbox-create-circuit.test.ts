@@ -27,7 +27,7 @@ test("#1046 create circuit stays closed below the failure threshold and admits c
   recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED");
   const status = openSandboxCreateCircuitStatus();
   assert.equal(status.state, "closed");
-  assert.deepEqual(openSandboxCreateCircuitAllowsClaim(status), { allowed: true, canary: false });
+  assert.deepEqual(openSandboxCreateCircuitAllowsClaim(status), { allowed: true, canary: false, episode: null });
 });
 
 test("#1046 create circuit pauses claims after the configured 5xx burst and holds them during cooldown", () => {
@@ -38,7 +38,7 @@ test("#1046 create circuit pauses claims after the configured 5xx burst and hold
   const status = openSandboxCreateCircuitStatus();
   assert.equal(status.state, "open");
   assert.match(status.lastTripReason ?? "", /SANDBOX_START_FAILED/);
-  assert.deepEqual(openSandboxCreateCircuitAllowsClaim(status), { allowed: false, canary: false });
+  assert.deepEqual(openSandboxCreateCircuitAllowsClaim(status), { allowed: false, canary: false, episode: null });
 });
 
 test("#1046 open circuit admits half-open canary claims after the cooldown without reserving a seat", () => {
@@ -49,9 +49,14 @@ test("#1046 open circuit admits half-open canary claims after the cooldown witho
   advance(CREATE_CIRCUIT_COOLDOWN_MS - 1);
   assert.equal(openSandboxCreateCircuitAllowsClaim().allowed, false, "cooldown must still hold claims");
   advance(1);
-  assert.deepEqual(openSandboxCreateCircuitAllowsClaim(), { allowed: true, canary: true });
+  const admitted = openSandboxCreateCircuitAllowsClaim();
+  assert.equal(admitted.allowed, true);
+  assert.equal(admitted.canary, true);
+  assert.equal(typeof admitted.episode, "number", "the probe carries its episode, not a sampled state");
   // An admitted claim that finds no work must not deadlock the gate.
-  assert.deepEqual(openSandboxCreateCircuitAllowsClaim(), { allowed: true, canary: true });
+  const second = openSandboxCreateCircuitAllowsClaim();
+  assert.equal(second.allowed, true);
+  assert.equal(second.episode, admitted.episode, "every claim in the same half-open window shares one episode");
   assert.equal(openSandboxCreateCircuitStatus().state, "half_open");
 });
 
@@ -61,13 +66,17 @@ test("#1046 failed canary reopens; successful provision closes and clears the fa
   recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED");
   recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED");
   advance(CREATE_CIRCUIT_COOLDOWN_MS);
-  assert.deepEqual(openSandboxCreateCircuitAllowsClaim(), { allowed: true, canary: true });
-  recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED", true);
+  const firstProbe = openSandboxCreateCircuitAllowsClaim();
+  assert.equal(firstProbe.canary, true);
+  recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED",
+    { canary: true, episode: firstProbe.episode });
   const reopened = openSandboxCreateCircuitStatus();
   assert.equal(reopened.state, "open");
   advance(CREATE_CIRCUIT_COOLDOWN_MS);
-  assert.deepEqual(openSandboxCreateCircuitAllowsClaim(), { allowed: true, canary: true });
-  recordOpenSandboxProvisionSuccess();
+  const secondProbe = openSandboxCreateCircuitAllowsClaim();
+  assert.equal(secondProbe.canary, true);
+  assert.notEqual(secondProbe.episode, firstProbe.episode, "each trip opens a new episode");
+  recordOpenSandboxProvisionSuccess({ canary: true, episode: secondProbe.episode });
   const closed = openSandboxCreateCircuitStatus();
   assert.equal(closed.state, "closed");
   assert.equal(closed.recentFailures, 0);
@@ -89,8 +98,10 @@ test("#1046 a failed half-open canary is counted like any other failure", () => 
   recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED");
   recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED");
   advance(CREATE_CIRCUIT_COOLDOWN_MS);
-  assert.deepEqual(openSandboxCreateCircuitAllowsClaim(), { allowed: true, canary: true });
-  const reopened = recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED", true);
+  const probe = openSandboxCreateCircuitAllowsClaim();
+  assert.equal(probe.canary, true);
+  const reopened = recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED",
+    { canary: true, episode: probe.episode });
   assert.equal(reopened.state, "open");
   assert.equal(reopened.recentFailures, 3,
     "the canary failure is counted too: the two original failures are still inside the 5-minute window");
@@ -135,9 +146,34 @@ test("#1046 dispatcher wires the circuit into claims, provision failures and rec
   const claimScan = source.indexOf("type ClaimCursor");
   assert.ok(gate > 0 && gate < claimScan, "the gate must run before claim scanning");
   assert.ok(source.includes("recordOpenSandboxProvisionFailure("), "provision failures must feed the circuit");
-  assert.ok(source.includes("recordOpenSandboxProvisionSuccess()"), "successful provision must close it");
+  assert.ok(source.includes("recordOpenSandboxProvisionSuccess(createProbe)"),
+    "successful provision must close it only through the claim-time probe");
   assert.ok(source.includes("isRetryableProvisionFailure(error)"), "only retryable service shapes should trip");
   assert.ok(source.includes("shouldLogCreateCircuitPause()"), "the pause log must be throttled at the circuit");
+  assert.ok(source.includes("createProbe = createAdmission.canary"),
+    "probe identity must be bound at admission time");
+  assert.ok(!source.includes('openSandboxCreateCircuitStatus().state === "half_open",'),
+    "the outcome must not sample the global circuit state when it is recorded");
+});
+
+test("#1046 an outcome from a claim admitted before the trip cannot close or own the new episode", () => {
+  const { clock, advance } = clockAt();
+  resetOpenSandboxCreateCircuitForTests(clock);
+  recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED");
+  recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED");
+  advance(CREATE_CIRCUIT_COOLDOWN_MS);
+  const probe = openSandboxCreateCircuitAllowsClaim();
+  assert.equal(probe.canary, true);
+  // A provision that was claimed while the circuit was closed carries no probe.
+  recordOpenSandboxProvisionSuccess(null);
+  assert.equal(openSandboxCreateCircuitStatus().state, "half_open",
+    "an earlier ordinary provision cannot prove the probe recovered the backend");
+  // An outcome from a previous episode is equally unable to close the current one.
+  recordOpenSandboxProvisionSuccess({ canary: true, episode: (probe.episode ?? 0) - 1 });
+  assert.equal(openSandboxCreateCircuitStatus().state, "half_open");
+  recordOpenSandboxProvisionSuccess({ canary: true, episode: probe.episode });
+  assert.equal(openSandboxCreateCircuitStatus().state, "closed",
+    "only the probe of the current episode closes the circuit");
 });
 
 function readDispatcher(): string {
