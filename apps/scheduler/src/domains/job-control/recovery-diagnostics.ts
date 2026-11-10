@@ -335,13 +335,16 @@ async function verifyCompletionRepairExhausted(db: Database, jobId: string): Pro
   if (history.length < COMPLETION_REPAIR_LIMIT) return false;
   for (const event of history) {
     const receipt = event.payload_json;
+    const key = receipt.idempotency_key;
+    const revision = receipt.proposal_revision;
+    const statusCode = receipt.result?.statusCode;
     if (receipt?.v !== 1 || receipt.status !== "rejected" || receipt.operation !== "mark_job_done"
-      || typeof receipt.idempotency_key !== "string" || !receipt.idempotency_key
-      || !Number.isSafeInteger(receipt.proposal_revision) || receipt.proposal_revision < 0
-      || !/^[a-f0-9]{64}$/u.test(String(receipt.input_digest)) || !/^[a-f0-9]{64}$/u.test(String(receipt.snapshot_digest))
+      || typeof key !== "string" || !key
+      || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0
+      || !/^[a-f0-9]{64}$/u.test(receipt.input_digest ?? "") || !/^[a-f0-9]{64}$/u.test(receipt.snapshot_digest ?? "")
       || receipt.attempt_id !== event.attempt_id || event.attempt_job_id !== jobId || event.dedup_job_id !== jobId
-      || event.event_id !== completionReceiptId(jobId, receipt.idempotency_key)
-      || !Number.isInteger(receipt.result?.statusCode) || receipt.result.statusCode < 400 || receipt.result.statusCode > 599
+      || event.event_id !== completionReceiptId(jobId, key)
+      || typeof statusCode !== "number" || !Number.isInteger(statusCode) || statusCode < 400 || statusCode > 599
       || receipt.result?.body?.accepted !== false) return false;
   }
   return true;
