@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { CaretDown, CaretRight, Eye, EyeSlash, HandPalm, PaperPlaneTilt, Prohibit } from "@phosphor-icons/react";
 import type { HumanInterventionItem, HumanInterventionPrefs } from "./human-messages";
 import {
@@ -37,20 +38,41 @@ export function HumanInterventionBanner({
   const pendingCount = countVisiblePendingHumanInterventions(items, prefs.repliedIds, prefs.hiddenIds);
   const visible = visibleHumanInterventions(items, prefs.hideProcessed, prefs.repliedIds, prefs.hiddenIds);
   const hiddenCount = items.length - visible.length;
+  // 只有历史、没有待处理项时不该继续占用一条端到端琥珀横幅抢注意力：降级为一行轻量状态。
+  const needsAttention = pendingCount > 0 || undisplayedPendingCount > 0;
+  // 0 待处理时只是「默认收起」，不是「禁止展开」：历史请求的详情与 Finding/Job
+  // 链接仍必须可达；有待处理项时继续尊重用户的 bannerCollapsed 偏好。
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const collapsed = needsAttention ? prefs.bannerCollapsed : !historyOpen;
+  const toggleCollapsed = () => {
+    if (needsAttention) {
+      onPrefsChange({ ...prefs, bannerCollapsed: !prefs.bannerCollapsed });
+      return;
+    }
+    // 历史降噪模式的展开就是「看历史」：把被隐藏的历史一并显示出来。
+    if (!historyOpen && prefs.hideProcessed) onPrefsChange({ ...prefs, hideProcessed: false });
+    setHistoryOpen((value) => !value);
+  };
+
   if (items.length === 0) return null;
 
   return (
-    <section className="relative z-20 mx-3 mb-2 rounded-2xl bg-amber-400/[.06] px-3 py-2 ring-1 ring-amber-300/20 sm:px-4" aria-label="人工介入">
+    <section
+      className={`relative z-20 mx-3 mb-2 rounded-2xl px-3 sm:px-4 ${
+        needsAttention ? "bg-amber-400/[.06] py-2 ring-1 ring-amber-300/20" : "bg-white/[.015] py-1 ring-1 ring-[var(--line)]"
+      }`}
+      aria-label="人工介入"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           className="inline-flex items-center gap-2 text-left"
-          aria-expanded={!prefs.bannerCollapsed}
-          onClick={() => onPrefsChange({ ...prefs, bannerCollapsed: !prefs.bannerCollapsed })}
+          aria-expanded={!collapsed}
+          onClick={toggleCollapsed}
         >
           {prefs.bannerCollapsed ? <CaretRight size={12} className="text-amber-300" /> : <CaretDown size={12} className="text-amber-300" />}
-          <HandPalm size={14} className="text-amber-300" />
-          <h2 className="text-[12px] font-medium text-zinc-300">人工介入</h2>
+          <HandPalm size={14} className={needsAttention ? "text-amber-300" : "text-zinc-600"} />
+          <h2 className={`text-[12px] font-medium ${needsAttention ? "text-zinc-300" : "text-zinc-500"}`}>人工介入</h2>
         </button>
         <span className="font-mono text-[9px] text-zinc-600">
           {pendingCount} 条待处理{undisplayedPendingCount > 0 ? ` · 另有 ${undisplayedPendingCount} 条待处理未展示` : hiddenCount > 0 ? ` · 已隐藏 ${hiddenCount} 条历史` : items.length > pendingCount ? ` · 共 ${items.length} 条` : ""}
@@ -64,7 +86,7 @@ export function HumanInterventionBanner({
           {prefs.hideProcessed ? "显示历史" : "隐藏已处理"}
         </button>
       </div>
-      {!prefs.bannerCollapsed && (
+      {!collapsed && (
         <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
           {visible.length === 0 ? (
             <p className="px-1 py-2 font-mono text-[10px] text-zinc-600">介入项已隐藏，可显示历史恢复查看。</p>

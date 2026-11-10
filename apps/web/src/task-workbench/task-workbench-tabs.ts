@@ -29,6 +29,16 @@ export const TASK_WORKBENCH_VIEW_META: Record<TaskWorkbenchView, { label: string
   report: { label: "报告", hint: "交付结论与版本" },
 };
 
+/**
+ * Tab 徽标只描述「已加载的一页」：请求都是 limit: 50，所以不能当成真实总数。
+ * 没有别页时如实显示数字；还有后续页时显式标 `+`；尚无数据时返回 undefined（不显示 0）。
+ */
+export function taskWorkbenchTabCountLabel(loaded: number, hasMore: boolean): string | undefined {
+  if (loaded > 0 && hasMore) return `${loaded}+`;
+  if (loaded > 0) return `${loaded}`;
+  return undefined;
+}
+
 export function isTaskWorkbenchView(value: string | null | undefined): value is TaskWorkbenchView {
   return typeof value === "string" && VIEW_SET.has(value);
 }

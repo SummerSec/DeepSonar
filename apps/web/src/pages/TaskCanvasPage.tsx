@@ -75,7 +75,7 @@ import {
   projectTaskStatusLines,
 } from "../task-workbench/task-outcome";
 import { projectTaskTrace } from "../task-workbench/task-trace";
-import { readTaskWorkbenchView, writeTaskWorkbenchView, type TaskWorkbenchView } from "../task-workbench/task-workbench-tabs";
+import { readTaskWorkbenchView, taskWorkbenchTabCountLabel, writeTaskWorkbenchView, type TaskWorkbenchView } from "../task-workbench/task-workbench-tabs";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
 import {
   DataTable,
@@ -900,6 +900,14 @@ export function TaskCanvasPage() {
     });
   }, [jobKeyword, jobRoleTypeFilters, jobStatusFilters, jobs]);
   const hasJobFilters = Boolean(jobStatusFilters.length || jobRoleTypeFilters.length || jobKeyword);
+  // 操作列的按钮只在可回复 / 有待处理介入 / Job 活动时出现；整列没有动作时不占宽度。
+  const jobRowHasActions = visibleJobs.some(
+    (job) =>
+      jobCanReceiveHumanReply(job) ||
+      humanInterventions.some((row) => row.jobId === job.id && row.pending) ||
+      ACTIVE_JOB.has(job.status) ||
+      RESUMABLE_JOB.has(job.status),
+  );
 
   const jobElapsed = (job: JobSummary) => {
     if (!job.started_at) return "—";
@@ -907,12 +915,12 @@ export function TaskCanvasPage() {
     return formatElapsed(job.started_at, job.finished_at, clock);
   };
 
-  const tabs: { key: TaskWorkbenchView; count?: number; icon: typeof Graph }[] = [
+  const tabs: { key: TaskWorkbenchView; countLabel?: string; icon: typeof Graph }[] = [
     { key: "overview", icon: SquaresFour },
     { key: "canvas", icon: Graph },
-    { key: "facts", count: facts.length, icon: Note },
-    { key: "findings", count: findings.length, icon: ListBullets },
-    { key: "jobs", count: jobs.length, icon: Target },
+    { key: "facts", countLabel: taskWorkbenchTabCountLabel(facts.length, factsHasMore), icon: Note },
+    { key: "findings", countLabel: taskWorkbenchTabCountLabel(findings.length, findingsHasMore), icon: ListBullets },
+    { key: "jobs", countLabel: taskWorkbenchTabCountLabel(jobs.length, jobsHasMore), icon: Target },
     { key: "report", icon: FileText },
   ];
 
@@ -930,7 +938,6 @@ export function TaskCanvasPage() {
           findingProtocol={findingProtocol}
           decisionLabel={decisionLabel}
           message={msg}
-          taskArchived={taskArchived}
           createdAt={meta?.created_at}
           startExecValue={startExecValue}
           startExecTitle={startExecTitle}
@@ -939,6 +946,7 @@ export function TaskCanvasPage() {
           startedAt={meta?.started_at}
           endValue={isScheduled ? "定时等待" : lifecycleActive ? "进行中" : taskLifecycle.endedAt ? formatTime(taskLifecycle.endedAt) : "—"}
           endTitle={taskLifecycle.endedAt && !lifecycleActive ? formatTime(taskLifecycle.endedAt) : undefined}
+          countsReady={Boolean(meta)}
           actions={(
             <>
           {!taskArchived && (
@@ -1392,7 +1400,7 @@ export function TaskCanvasPage() {
                       <th className={thCls}>模型</th>
                       <th className={thCls}>开始</th>
                       <th className={thCls}>耗时</th>
-                      <th className={thCls}>操作</th>
+                      {jobRowHasActions && <th className={thCls}>操作</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -1402,7 +1410,7 @@ export function TaskCanvasPage() {
                           <StatusBadge status={j.status} />
                           {j.error && (
                             <div
-                              className="mt-0.5 max-w-[240px] truncate font-mono text-[12px] text-red-400"
+                              className="mt-0.5 max-w-[240px] line-clamp-2 font-mono text-[12px] leading-4 text-red-400"
                               title={j.error}
                             >
                               {j.error}
@@ -1411,8 +1419,8 @@ export function TaskCanvasPage() {
                         </td>
                         <td className={`${tdCls} font-mono text-[13px]`}>
                           <div>{j.type}</div>
-                          {j.role_name && (
-                            <div className="mt-0.5 font-mono text-[11px] text-zinc-600">{j.role_name}</div>
+                          {j.role_name && j.role_name !== j.type && (
+                            <div className="mt-0.5 font-mono text-[11px] text-zinc-600">角色 {j.role_name}</div>
                           )}
                         </td>
                         <td className={`${tdCls} font-mono text-[12px]`}>
@@ -1436,6 +1444,7 @@ export function TaskCanvasPage() {
                         >
                           {jobElapsed(j)}
                         </td>
+                        {jobRowHasActions && (
                         <td className={tdCls} onClick={(e) => e.stopPropagation()}>
                           <div className="flex flex-wrap gap-1.5">
                           {jobCanReceiveHumanReply(j) && (
@@ -1521,6 +1530,7 @@ export function TaskCanvasPage() {
                           )}
                           </div>
                         </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>

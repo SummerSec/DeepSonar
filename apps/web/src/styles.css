@@ -1407,7 +1407,8 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   .human-message-composer > footer button { flex: 1; }
 }
 
-@media (max-width: 767px) {
+/* #1057：768–1023 也走移动抽屉，避免 220px 侧栏把内容区压到 540px、状态值被省略号截断 */
+@media (max-width: 1023px) {
   body { overflow: hidden; }
   .desktop-rail { display: none; }
   .app-stage { height: 100dvh; min-height: 100dvh; padding-top: 66px; }
