@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { deriveTaskLifecycle } from "./task-lifecycle";
 import {
   HOUR_OPTIONS,
   MINUTE_OPTIONS,
@@ -99,4 +100,15 @@ test("new task form does not bind a live min to native datetime-local", () => {
   assert.doesNotMatch(tasks, /type="datetime-local"/);
   assert.doesNotMatch(tasks, /\[color-scheme:dark\]/);
   assert.doesNotMatch(tasks, /min=\{toDatetimeLocalValue/);
+});
+
+test("serial queue wait is distinct from execution and yields to current execution evidence", () => {
+  const pending = { queueState: "queued", activeCount: 1, executionActiveCount: 0, jobCount: 1 };
+  const waiting = deriveTaskLifecycle(pending);
+  assert.equal(waiting.status, "queued");
+  assert.equal(waiting.isActive, true);
+  assert.match(waiting.reason, /前序任务/);
+  assert.equal(deriveTaskLifecycle({ ...pending, executionActiveCount: 1 }).status, "running");
+  assert.equal(deriveTaskLifecycle({ ...pending, jobs: [{ status: "running" }] }).status, "running");
+  assert.equal(deriveTaskLifecycle({ ...pending, activeCount: 0 }).status, "idle");
 });

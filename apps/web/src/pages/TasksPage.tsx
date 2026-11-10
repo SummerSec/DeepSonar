@@ -10,6 +10,7 @@ import { DatetimeLocalPicker } from "../DatetimeLocalPicker";
 import { FindingProtocolEditor } from "../FindingProtocolEditor";
 import { SearchableMultiSelect } from "../SearchableSelect";
 import { useConfirmDialog } from "../components/ConfirmDialog";
+import { ProjectTaskQueueEnqueueOption, ProjectTaskQueuePanel, projectTaskQueueCreatedMessage } from "../components/ProjectTaskQueuePanel";
 import { targetLine } from "../TaskList";
 import { ACTIVE_TASK_JOB_STATUSES, deriveTaskLifecycle, readScheduledStartAt } from "../task-lifecycle";
 import { formatBeijingTime, nextBeijing8amLocalValue, parseDatetimeLocalToIso, scheduleTimeIssue } from "../task-schedule";
@@ -29,13 +30,13 @@ const NETWORK_OPTIONS = [
 ];
 
 function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }: { projectId: string; initialSeedIds?: string[]; onDone: (canvasId: string) => void; onCancel: () => void; flash: (message: string) => void }) {
-  const [form, setForm] = useState<{ title: string; content: string; kind: "standard" | "compose"; network: "project" | "allow" | "deny"; schedule: ScheduleMode; startAtLocal: string }>({
+  const [form, setForm] = useState<{ title: string; content: string; kind: "standard" | "compose"; network: "project" | "allow" | "deny"; schedule: ScheduleMode; startAtLocal: string; enqueue: boolean }>({
     title: initialSeedIds.length ? "围绕选中 Finding 继续深挖" : "",
     content: initialSeedIds.length ? "只围绕选中 Finding 做确认、补证或组合链，不扩大资产范围。" : "",
     kind: initialSeedIds.length ? "compose" : "standard",
     network: "project",
     schedule: "immediate",
-    startAtLocal: nextBeijing8amLocalValue(),
+    startAtLocal: nextBeijing8amLocalValue(), enqueue: false,
   });
   const [contractDraft, setContractDraft] = useState("");
   const [contractFeedback, setContractFeedback] = useState<TaskContractFeedback>({});
@@ -137,19 +138,15 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
               ...(parsedContract.contract ? { task_contract: parsedContract.contract } : {}),
               title: form.title.trim(),
               content: form.content.trim(),
-              kind: form.kind,
+              kind: form.kind, ...(form.enqueue ? { enqueue: true } : {}),
               ...(form.kind === "compose" ? { seed_finding_ids: [...selectedSeedIds] } : {}),
               ...(form.network === "project" ? {} : { allow_egress: form.network === "allow" }),
               ...(findingProtocol ? { finding_protocol: findingProtocol } : {}),
               ...(scheduledStartAt ? { scheduled_start_at: scheduledStartAt } : {}),
             });
-            if (result.scheduled_start_at) {
-              flash(`任务已入队，将于 ${formatBeijingTime(result.scheduled_start_at) ?? "计划时间"} 开始执行`);
-            } else {
-              flash("任务已入队，Hub 正在决定执行路径");
-            }
-            if (taskFeedbackItems(result).length) {
-              setContractFeedback(result);
+            flash(projectTaskQueueCreatedMessage(form.enqueue, result.enqueued, result.scheduled_start_at ? formatBeijingTime(result.scheduled_start_at) ?? "计划时间" : null));
+            if (taskFeedbackItems(result).length || result.enqueued) {
+              if (taskFeedbackItems(result).length) setContractFeedback(result);
               setCreatedCanvasId(result.canvas_id);
             } else onDone(result.canvas_id);
           } catch (error) {
@@ -421,6 +418,7 @@ function NewTaskForm({ projectId, initialSeedIds = [], onDone, onCancel, flash }
             )}
           </section>
 
+          <ProjectTaskQueueEnqueueOption checked={form.enqueue} onChange={(enqueue) => setForm({ ...form, enqueue })} disabled={submitting || Boolean(createdCanvasId)} />
           {effectiveFindingProtocol && (
             <FindingProtocolEditor
               value={findingProtocol}
@@ -505,7 +503,7 @@ export function TasksPage() {
       endedAt: c.ended_at,
       startedAt: c.started_at,
       scheduledStartAt: readScheduledStartAt(c.target_json),
-      executionState: c.execution_state,
+      executionState: c.execution_state, queueState: c.queue_state,
       executionActiveCount: c.execution_active_count,
       pendingCount: c.pending_count,
       nowMs: clock,
@@ -524,7 +522,7 @@ export function TasksPage() {
     endedAt: canvas.ended_at,
     startedAt: canvas.started_at,
     scheduledStartAt: readScheduledStartAt(canvas.target_json),
-    executionState: canvas.execution_state,
+    executionState: canvas.execution_state, queueState: canvas.queue_state,
     executionActiveCount: canvas.execution_active_count,
     pendingCount: canvas.pending_count,
     nowMs: clock,
@@ -538,7 +536,7 @@ export function TasksPage() {
 
       <div className="mb-5 flex flex-wrap gap-2"><span className="rounded-full bg-white/[.025] px-3 py-2 font-mono text-[9px] text-zinc-600 ring-1 ring-white/[.045]"><strong className="mr-2 text-zinc-300">{visibleCount}</strong>{filter === "archived" ? "已归档" : "全部任务"}</span><span className="rounded-full bg-run-400/[.055] px-3 py-2 font-mono text-[9px] text-run-400 ring-1 ring-run-400/10"><strong className="mr-2">{activeCount}</strong>正在推进</span><span className="rounded-full bg-high-500/[.055] px-3 py-2 font-mono text-[9px] text-high-500 ring-1 ring-high-500/10"><strong className="mr-2">{findingCount}</strong>风险发现</span></div>
       {error && <div className="mb-4 rounded-2xl bg-red-950/20 px-4 py-3 text-[12px] text-red-300 ring-1 ring-red-500/20">{error}</div>}
-      {msg && <div role="status" className="mb-4 rounded-2xl bg-acc-500/[.07] px-4 py-3 text-[12px] text-acc-300 ring-1 ring-acc-400/15">{msg}</div>}
+      {msg && <div role="status" className="mb-4 rounded-2xl bg-acc-500/[.07] px-4 py-3 text-[12px] text-acc-300 ring-1 ring-acc-400/15">{msg}</div>}<ProjectTaskQueuePanel projectId={projectId} key={projectId} />
       {creating && <NewTaskForm projectId={projectId} initialSeedIds={initialSeedIds} flash={flash} onCancel={() => { setCreating(false); setSearchParams({}, { replace: true }); }} onDone={(canvasId) => navigate(`/projects/${projectId}/tasks/${canvasId}`)} />}
 
       {filtered.length === 0 ? <EmptyState title={canvases.length ? "没有匹配当前筛选的任务" : "下达第一项任务"} hint={canvases.length ? "切换筛选条件可以查看其它任务。" : "描述你真正需要确认的结果，系统会负责拆解、执行、验证与记账。"} action={!canvases.length && project?.status === "active" && filter !== "archived" && <PrimaryButton onClick={() => setCreating(true)}>描述任务</PrimaryButton>} /> : (
@@ -554,7 +552,7 @@ export function TasksPage() {
               endedAt: canvas.ended_at,
               startedAt: canvas.started_at,
               scheduledStartAt,
-              executionState: canvas.execution_state,
+              executionState: canvas.execution_state, queueState: canvas.queue_state,
               executionActiveCount: canvas.execution_active_count,
               pendingCount: canvas.pending_count,
               nowMs: clock,

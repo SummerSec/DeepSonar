@@ -4,6 +4,8 @@
 > 同步日期：2026-11-09
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
+#1032 的 [Pi context 首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)映射 FR-CRED-003 / NFR-SEC-003、06/10 与追溯：主请求/OM 的 SDK 生成前精确替换和双源码镜像 guard，保持 Gateway 原字节、认证及历史；同 UID 隔离和完整诊断/审计未交付，最终 SHA Actions 待验。
+
 #1002 P1-8 的同项目同质多账号池与内核恢复账号偏好映射 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时选择](06-runtime-view.md#凭据与-cli-解析757)及安全视图；复用现有白名单/默认账号操作，不新增池状态或配置。双账号真实 Gateway 的隔离回归接 role-config，最终 SHA Actions 待验。
 
 2026-11-09 可行动人工请求同步到 [FR-CTRL-004 / FR-WEB-003 / NFR-UX-001](01-system-specification.md)、06/09 视图与[生命周期专题](../AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。新请求完整保存 guidance，L0 保持有界并按需读取 L1；waiting_human Job 当前状态用于待办合并，unknown effect 对账仍单独优先。实现行为与最终 SHA Actions 尚待验收，不宣称注意力收益已测量。
@@ -143,6 +145,7 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 
 2026-11-01 集成证据：[#831](https://github.com/SummerSec/DeepSonar/pull/831) 在最终 PR 检查全绿后合并至 `fdb55a01b1e02b5b9078586923a8d506ce5bb096`；该主线的六个适用 Actions 工作流全绿，包含真实 schema67 重建和备份恢复，本轮工程 issue 已收口。较早 schema66/SDK-only 和本地记录只作历史，不能覆盖后续修复。OpenHarmony Fuzz 在正式 Release 的新构建失败，当前修复映射 FR-IMG-001/002、07 部署视图及既有 ADR 0006，增加匹配工具链与 fresh/reuse 双原生架构行为证据；[发布专题](<../RELEASE_RUNTIME_IMAGES.md#openharmony-specialist-ci-contract>)区分有限诊断、最终修复 SHA 验收和正式发行。v0.6.3 尚未正式发布，v0.6.2 保持不可变；独立质量、Host 证书/晋升/公开强关系建议按本轮决定暂缓，不把工程全绿写成质量通过。
 
+#1018 的[项目任务队列](../PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 72 与验收边界，最终 SHA Actions 待验。
 #1019 的[事实用途与待处理投影](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。
 
 成功知识来源登记与只读历史预览的收敛取舍见 [ADR 0021](adr/0021-knowledge-source-preview.md)，取代 ADR 0020 的自动执行方案；schema 基线不变。

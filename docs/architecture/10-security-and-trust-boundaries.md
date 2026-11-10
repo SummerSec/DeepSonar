@@ -82,6 +82,8 @@ The 2026-11-01 upgrade preserves Scheduler authority: [connectionConfig](../../p
 
 凭据在管理域与运行时域分开：数据库保存加密字段和安全元数据，Job snapshot 只保存引用和经过审计的非秘密选择；Gateway 在 Scheduler 进程内按 Provider 认证转发请求，沙箱只拿到短期 Job token。Gateway 上游请求/响应体不落库，usage ledger 只保存用量计数；Job Evidence writer 在持久化运行流和 OTLP 前对已登记的运行时 secret 脱敏并清理控制字符，事件和审计仍按各自结构化 schema/投影保存。审计保留主体、scope、操作、结果和关联 ID。
 
+#1032 的 [Pi context 首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)在 SDK 生成前对当前 Job 已知短期凭据做精确文本替换，覆盖主执行和 OM，不以证据层事后脱敏代替模型出口。认证头与历史不改，Gateway 携密拒绝不放宽；同进程/UID 的工具仍可读 env 和认证文件，不能称为凭据身份隔离或任意编码检测。OM 共享源码与 wrapper 均按完整摘要准入；最终 SHA Actions 待验，其他 CLI、隔离改造与 deny 审计不由该片推定完成。
+
 #1002 P1-8 的新 Job 池选择只读取同项目现有 Job 的负载投影，且限于显式授权、同 Provider/CLI/解析模型的候选；不把目录、负载或历史 token 当作新增授权。运行中仍使用冻结账号；恢复的原账号偏好是内核私有参数，不接受 Agent 账号 ID，且不能越过当前名单、状态、模型、CLI、身份漂移及累计预算门。没有自动故障换 key、额度退还或未知效果重放。
 
 凭据引用的可见性与删除完整性分别校验：项目 actor 能读取全局账号，但 impact 不得泄露其他项目名称、UUID 或引用计数；DELETE 独立拒绝所有项目尚存的引用。设置写入在事务内持有与删除共用的凭据行锁并验证存在、active 与可见性，不能借省略模型或删除白名单键绕过，见[#914 接口切片](09-interface-specs.md#项目凭据引用保护914-切片)。
@@ -182,4 +184,10 @@ FR-FIND-008 只信任经过权限校验的操作员材料准入和独立评审�
 
 quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/gateway_admission` 确认 not_started；回执有 kernel authority、完整 scope、UUID 去重与事件限流，写入失败保持 unknown。Provider 原文不能替代回执。
 
-成功来源登记仅含 Scheduler 审计元数据；冻结权限、成功最新 Attempt、未结算效果、项目状态及来源存在性均需校验。GET 历史预览重新检查当前资格并限制项目和分页，不授予历史执行权限、不创建知识 Job，也不宣称登记保留了来源内容。
+## 队列资格与原执行权限（#1018）
+
+任务队列由 Scheduler 持有，模型/插件没有队列控制 operation。入队、暂停、明确继续和 claim 共用事务锁，不能扩大项目、凭据、镜像、网络、预算或 Attempt 身份。当前任务未知效果保留位置，继续队列不构成效果重放或结算授权。失败恢复绑定操作员确认的队首 ID，旧页面不能跳过新失败。队列诊断读取与控制分别依赖 tasks:read 和 jobs:control。
+
+## 来源登记与历史预览边界（#1035）
+
+成功来源登记仅含 Scheduler 审计元数据；冻结权限、成功最新 Attempt、未结算效果、项目状态及来源存在性均需校验。GET 历史预览重新检查当前资格并限制项目和分页，不授予历史执行权限、不创建知识 Job，也不宣称登记保留了来源内容。 见[ADR-0021](adr/0021-knowledge-source-preview.md)。

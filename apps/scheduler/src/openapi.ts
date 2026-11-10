@@ -191,6 +191,27 @@ const FactJobSchema = {
   },
 };
 
+const ProjectTaskQueueSchema = {
+  type: "object", additionalProperties: false,
+  required: ["project_id", "paused", "pause_reason", "items", "has_more"],
+  properties: {
+    project_id: { type: "string", format: "uuid" }, paused: { type: "boolean" },
+    pause_reason: { type: "string", nullable: true }, has_more: { type: "boolean" },
+    items: { type: "array", maxItems: 100, items: {
+      type: "object", additionalProperties: false,
+      required: ["id", "canvas_id", "title", "state", "created_at", "started_at", "ended_at", "block_reason"],
+      properties: {
+        id: { type: "string" }, canvas_id: { type: "string" }, title: { type: "string" },
+        state: { type: "string", enum: ["queued", "active", "succeeded", "failed", "cancelled"] },
+        created_at: { type: "string", format: "date-time" },
+        started_at: { type: "string", format: "date-time", nullable: true },
+        ended_at: { type: "string", format: "date-time", nullable: true },
+        block_reason: { type: "string", nullable: true },
+      },
+    } },
+  },
+};
+
 const FactUsageSchema = {
   type: "object",
   additionalProperties: false,
@@ -966,6 +987,28 @@ const OPS: Op[] = [
 
   // tasks / canvases
   {
+    method: "get", path: "/projects/{id}/task-queue", scope: "tasks:read", tags: ["Tasks"],
+    summary: "读取项目任务串行队列的当前占位、等待顺序及最近历史",
+    responses: { "200": ProjectTaskQueueSchema },
+  },
+  {
+    method: "patch", path: "/projects/{id}/task-queue", scope: "jobs:control", tags: ["Tasks"],
+    summary: "暂停后续任务或明确继续项目队列",
+    description: "暂停保留当前任务的内部调度。失败或取消后继续会确认结清已结束的当前项；人工等待、任务暂停和未知效果保留占位，未知效果不能通过队列恢复自动重放。",
+    body: { type: "object", additionalProperties: false, required: ["paused"], properties: {
+      paused: { type: "boolean" },
+      acknowledge_failed_head: { type: "string", pattern: "^[1-9][0-9]{0,18}$", description: "恢复失败/取消队首时明确确认的队列条目 ID；当前队首变化时拒绝，不能跳过未确认的新失败。" },
+    } },
+    responses: { "200": ProjectTaskQueueSchema },
+  },
+  {
+    method: "post", path: "/projects/{id}/task-queue/items", scope: "jobs:control", tags: ["Tasks"],
+    summary: "将尚未执行的任务加入项目串行队列",
+    description: "同一任务重复入队保持原顺序，已在执行或有未决效果的任务不能通过入队抢占执行身份。",
+    body: { type: "object", additionalProperties: false, required: ["canvas_id"], properties: { canvas_id: { type: "string", minLength: 1, maxLength: 200 } } },
+    responses: { "200": ProjectTaskQueueSchema },
+  },
+  {
     method: "post",
     path: "/projects/{id}/tasks",
     summary: "创建任务（铸画布 + 入口 job）",
@@ -979,6 +1022,7 @@ const OPS: Op[] = [
           properties: {
             canvas_id: { type: "string" }, job: { type: "object" },
             scheduled_start_at: { type: "string", format: "date-time", nullable: true },
+            enqueued: { type: "boolean" },
             task_contract_warnings: TaskContractFeedbackListSchema,
           },
         } } },
@@ -1002,6 +1046,7 @@ const OPS: Op[] = [
       properties: {
         title: { type: "string" },
         content: { type: "string" },
+        enqueue: { type: "boolean", description: "同首个 pending Job 原子加入项目串行队列；等待前驱整个任务结束才领取。" },
         task_contract: {
           ...z.toJSONSchema(TaskContract, { target: "openapi-3.0", io: "input" }),
           description: "可选结构化契约；JSON UTF-8 最多 20,000 字节，prerequisites.id 必须唯一。已提供契约不论 outcome 省略/task_defined/bounty_submission，都要求目标、资产、范围、证据和验收判据完整；缺项阻塞创建/派发。研究候选须引用同任务 Fact、整个冻结契约摘要与目标判据。赏金仅附加规则：unknown 可补证但拒绝候选，supplied 来源为 operator_supplied，不认证官方真实性。研究候选不等于技术确认、高置信提交资格或任务成功。模板建议不自动成为验收承诺；权限仅能收窄，凭据仅引用，预算为规划字段。",
@@ -1071,8 +1116,8 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", description: "每项投影 execution_state、execution_active_count 与 pending_count。", scope: "tasks:read", tags: ["Tasks"] },
-  { method: "get", path: "/canvases/{id}", summary: "画布节点与边", description: "canvas 投影 execution_state、execution_active_count 与 pending_count。", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", description: "每项投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/canvases/{id}", summary: "画布节点与边", description: "canvas 投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
   {
     method: "get",
     path: "/canvases/{id}/broadcasts",
@@ -1164,7 +1209,7 @@ const OPS: Op[] = [
     scope: "jobs:control",
     tags: ["Tasks"],
   },
-  { method: "get", path: "/canvases/{id}/summary", summary: "画布 L0 骨架（带 durable revision）", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/canvases/{id}/summary", summary: "画布 L0 骨架（带 durable revision）", description: "canvas 包含可空 queue_state（queued/active/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
   {
     method: "get",
     path: "/canvases/{id}/delta",

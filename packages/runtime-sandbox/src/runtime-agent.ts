@@ -34,7 +34,7 @@ import { PiObservationalMemoryTextRedactor } from "./pi-observational-memory.js"
 import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 import { MODEL_REQUEST_POLICY_PATH, MODEL_REQUEST_POLICY_SOURCE } from "./model-request-policy.js";
 import { PI_MAIN_REQUEST_BUDGET_PATH, PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
-
+import { createRuntimeWarningReporter, type RuntimeWarning } from "./runtime-warnings.js";
 
 export type ReasoningEffort = string;
 export { createStdinCloseKiller, DEFAULT_STDIN_CLOSE_KILL_MS } from "./runtime-stdin-close.js";
@@ -114,7 +114,7 @@ export interface RealAgentSpec {
   /** Persist redacted large RPC payload before its control event is consumed. */
   onRuntimeArtifact?: RuntimeArtifactWriter;
   /** 非语义运行流告警；告警不会进入控制事件或写库。 */
-  onWarning?: (warning: { code: string; detail?: string }) => void;
+  onWarning?: (warning: RuntimeWarning) => void;
   /**
    * closeStdin("terminal_result") 后若 CLI 仍驻留等 stdin，有界等待再 kill。
    * 仅测试注入短超时；默认约 8s。initial_input 不会触发。
@@ -1308,6 +1308,7 @@ export function mapCliEvent(
     emit({ type: "run.agent_end" });
     return { semanticEvents, warnings };
   }
+  if (type !== "system") warnings.push({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
   return { semanticEvents, warnings };
 }
 
@@ -1484,6 +1485,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   }
   let semanticError: string | undefined;
   const semanticToolState = createSemanticToolState();
+  const runtimeWarnings = createRuntimeWarningReporter(adapter, spec.onWarning, value => redactSecretValues(value, secretValues));
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
   let progressBuffer = "";
@@ -1717,10 +1719,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
                   progressBuffer += safeEvent.delta as string;
                 }
               }, semanticToolState, secretValues);
-              for (const warning of outcome.warnings) spec.onWarning?.(warning);
-              if (!["system", "assistant", "user", "result", "stream_event", "text.delta", "reasoning.delta", "agent_settled", "agent_end", "runtime.diagnostic"].includes(String(parsed.type))) {
-                spec.onWarning?.({ code: "unknown_runtime_event", detail: "unrecognized_stream_type" });
-              }
+              for (const warning of outcome.warnings) runtimeWarnings.warn(warning, rawParsed);
               // 首次捕获后保持 session ID 不变；恢复进程只能继续原会话，不能把
               // 后续输出中的其他 ID 提升为新的恢复目标。
               await observeSessionIdentity({ sessionId: outcome.sessionId, sessionFile: outcome.sessionFile });
@@ -1926,6 +1925,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     stdinCloseKiller.cancel();
     discardPendingSemanticTools(semanticToolState);
     await disposeSource();
+    runtimeWarnings.flush();
   }
   stderrEvidence.finish();
   if (fatalOutputError) {

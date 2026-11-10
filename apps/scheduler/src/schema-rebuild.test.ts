@@ -90,7 +90,7 @@ test("rebuild plan treats catalog tables as baseline-owned when source is empty"
      CREATE TABLE role_configs (id uuid);`,
   );
   assert.equal(manifest.has("schema_meta"), true);
-  assert.equal(SCHEMA_VERSION, 71);
+  assert.equal(SCHEMA_VERSION, 72);
 });
 
 test("role prompt backfill accepts LF and Windows CRLF baselines", async () => {
@@ -199,6 +199,7 @@ test("schema baseline serial and IDENTITY primary keys are all in the rebuild re
   assert.deepEqual(
     declared,
     [
+      { table: "project_task_queue_items", column: "id", kind: "serial" },
       { table: "events", column: "id", kind: "serial" },
       { table: "audit_logs", column: "id", kind: "identity" },
       { table: "device_events", column: "id", kind: "serial" },

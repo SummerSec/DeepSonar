@@ -1,4 +1,6 @@
 import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
+import { registerProjectTaskQueueRoutes } from "./task-queue-routes.js";
+import { TaskQueueError, restartProjectTaskQueue } from "./task-queue-store.js";
 import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
 import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
@@ -91,6 +93,7 @@ const PatchProjectBody = z.object({
   status: z.enum(["active", "archived"]).optional(),
 });
 const CreateTaskBody = z.object({
+  enqueue: z.boolean().optional(),
   title: z.string().trim().min(1).max(200),
   content: z.string().trim().min(1).max(20_000),
   allow_egress: z.boolean().optional(),
@@ -297,6 +300,7 @@ async function withProjectJobQuota<T extends Record<string, unknown>>(
 }
 
 export function registerProjectTaskRoutes(app: FastifyInstance): void {
+  registerProjectTaskQueueRoutes(app);
   app.get("/projects", async (req) => {
     const actorProjectId = req.actor?.projectId ?? null;
     const rows = await sql`
@@ -477,6 +481,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       createdJob = await createJob({
         projectId: id,
         canvasId,
+        enqueue: body.enqueue,
         type: "hub_reason",
         runtimeProfile: body.runtime_profile ?? null,
         payload: {
@@ -491,6 +496,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       });
     } catch (error) {
       // 设备需求未授权（项目未 opt-in / Phase 1 之外的 transport）必须建任务时就 fail closed。
+      if (error instanceof TaskQueueError) {
+        return reply.code(error.statusCode).send({ error: error.message, error_code: error.code });
+      }
       if (error instanceof DeviceNotAuthorizedError) {
         return reply.code(409).send({ error: error.message, error_code: "device_not_authorized" });
       }
@@ -509,6 +517,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         canvas_id: canvasId,
         allow_egress: body.allow_egress ?? "project_default",
         scheduled_start_at: schedule?.start_at ?? null,
+        enqueued: body.enqueue === true,
         kind: body.kind,
         seed_finding_ids: frozenSeedIds,
       },
@@ -519,6 +528,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       task_contract_warnings: warnings,
       task_contract_blockers: [],
       scheduled_start_at: schedule?.start_at ?? null,
+      enqueued: body.enqueue === true,
     });
   });
 
@@ -1321,6 +1331,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(
         // SAFETY: postgres.js transaction handles have the same tagged-template interface.
         tx as unknown as typeof sql, { projectId, type: "hub_reason" }, snapshot);
+      await restartProjectTaskQueue(tx as unknown as typeof sql, projectId, canvasId);
       await wipeCanvasRuntimeData(tx, canvasId);
 
       // 重置意图上的收敛态与定时门，保留用户任务内容
@@ -1397,6 +1408,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       return { job: hubJob, reason: undefined };
       });
     } catch (error) {
+      if (error instanceof TaskQueueError) return reply.code(error.statusCode).send({ error: error.message, error_code: error.code });
       if (error instanceof TaskSeedInputError) {
         return reply.code(409).send({ error: error.message, error_code: "COMPOSE_SEEDS_STALE" });
       }

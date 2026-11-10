@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
+import { PI_MAIN_REQUEST_BUDGET_SOURCE, redactPiContextSecrets } from "./pi-main-request-budget.js";
 
 // This is an SDK-boundary double, not evidence of a real Pi process or provider run.
 const streamDouble = `
@@ -44,8 +44,11 @@ async function fixture(api = "openai-completions", delegateFailure?: Error) {
   const registrations: Array<{ provider: string; config: any }> = [];
   const pi = { on: (event: string, handler: (...args: any[]) => unknown) => hooks.set(event, handler),
     registerProvider: (provider: string, config: any) => registrations.push({ provider, config }) };
-  const ctx = { model, modelRegistry: { getRegisteredProviderConfig: () => registrations.at(-1)?.config } };
-  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: url, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
+  const ctx = { model, modelRegistry: { getRegisteredProviderConfig: () => registrations.at(-1)?.config,
+    getAll: () => [{ ...model, provider: "__deepsonar_observational_memory" }],
+    getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic-om-token" }) } };
+  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: url, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token",
+    DEEPSONAR_API_TOKEN: "synthetic-control-token" },
     async function* (selected: any, context: any, options: any) {
       delegates.push({ model: selected, context, options });
       if (delegateFailure) throw delegateFailure;
@@ -54,9 +57,9 @@ async function fixture(api = "openai-completions", delegateFailure?: Error) {
   hooks.get("session_start")!({}, ctx);
   return { module, hooks, registrations, ctx, model, delegates, queries, replies,
     allowance(value: number | null, policy = true) { remaining = value; required = policy; },
-    async request(options: any = {}, selected = model) {
+    async request(options: any = {}, selected = model, context: any = { messages: [] }) {
       const events = [];
-      for await (const event of registrations.at(-1)!.config.streamSimple(selected, { messages: [] }, options)) events.push(event);
+      for await (const event of registrations.at(-1)!.config.streamSimple(selected, context, options)) events.push(event);
       return events;
     },
     async close() { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
@@ -91,6 +94,57 @@ test("Pi public provider override negotiates every main SDK request before HTTP 
     const registered = f.registrations[0]!.config.streamSimple;
     f.hooks.get("session_start")!({}, f.ctx);
     assert.equal(f.registrations.at(-1)!.config.streamSimple, registered, "session start does not stack wrappers");
+  } finally { await f.close(); }
+});
+
+test("#1032 exact replacement preserves shape, Unicode, non-secrets and overlapping token suffixes", () => {
+  const input = { content: "界🙂 key.prefix.long key.prefix key.prefix.long", null: null, bool: true, n: 1,
+    nested: [{ error: 'quoted "key.prefix.long"', ordinary: "token-like-but-not-a-secret" }] };
+  assert.deepEqual(redactPiContextSecrets(input, ["", "key.prefix", "key.prefix.long"]), {
+    ...input, content: "界🙂 [REDACTED] [REDACTED] [REDACTED]",
+    nested: [{ error: 'quoted "[REDACTED]"', ordinary: "token-like-but-not-a-secret" }],
+  });
+  assert.equal(input.nested[0]!.error, 'quoted "key.prefix.long"');
+  assert.deepEqual(redactPiContextSecrets(input, []), input);
+});
+
+test("#1032 main SDK context redacts env, auth-file, tool errors and memory without changing auth or history", async () => {
+  for (const api of ["anthropic-messages", "openai-completions", "openai-responses"]) {
+    const f = await fixture(api);
+    try {
+      const context = { systemPrompt: "ordinary instruction", messages: [
+        { role: "toolResult", toolCallId: "env-read", toolName: "bash", isError: false, content: [{ type: "text",
+          text: "DEEPSONAR_GATEWAY_TOKEN=synthetic-main-token\nDEEPSONAR_API_TOKEN=synthetic-control-token" }] },
+        { role: "toolResult", toolCallId: "auth-read", toolName: "read", isError: true, content: [{ type: "text",
+          text: '{"key":"synthetic-main-token","background":{"key":"synthetic-om-token"}}' }] },
+        { role: "user", content: "memory included synthetic-control-token; ordinary text 界🙂" },
+      ] };
+      const before = structuredClone(context);
+      for (const policy of [true, false]) {
+        f.allowance(null, policy);
+        assert.equal((await f.request({}, f.model, context)).at(-1).type, "done");
+        const call = f.delegates.at(-1)!;
+        assert.doesNotMatch(JSON.stringify(call.context), /synthetic-(?:main|control|om)-token/u);
+        assert.match(JSON.stringify(call.context), /\[REDACTED\]/u);
+        assert.match(JSON.stringify(call.context), /ordinary text 界🙂/u);
+        assert.equal(call.context.messages[1].isError, true);
+        assert.equal(call.context.messages[1].toolCallId, "auth-read");
+        assert.equal(call.options.apiKey, "synthetic-main-token");
+        assert.deepEqual(context, before, "projection must not rewrite accepted session history");
+      }
+    } finally { await f.close(); }
+  }
+});
+
+test("#1032 unavailable OM auth rejects before main input generation without leaking auth details", async () => {
+  const f = await fixture();
+  try {
+    f.ctx.modelRegistry.getApiKeyAndHeaders = async () => ({ ok: false, apiKey: "synthetic-om-token" });
+    const events = await f.request();
+    assert.equal(events.at(-1).error.errorMessage, "PI_MAIN_BUDGET_OM_AUTH_INVALID");
+    assert.equal(f.delegates.length, 0);
+    assert.equal(f.queries.length, 0);
+    assert.doesNotMatch(JSON.stringify(events), /synthetic-om-token/u);
   } finally { await f.close(); }
 });
 
@@ -244,10 +298,13 @@ test("main recovery buffers only an empty failed generation and requires the aut
       const model = { provider: "fixture", id: "model", api: "openai-completions", baseUrl, maxTokens: 256, compat: {} };
       const headers = { "X-Deepsonar-Request-Id": "cannot-override", "x-custom": "preserved" };
       const calls: any[] = []; const context = { messages: [] };
-      let start: any, stream: any;
+      let start: any, stream: any, sdkContext: unknown;
       module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: baseUrl, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
         async function* (_model: any, ctx: any, options: any) {
-          calls.push(options); assert.equal(ctx, context);
+          assert.deepEqual(ctx, context);
+          if (calls.length) assert.equal(ctx, sdkContext, "recovery reuses the same safe context projection");
+          else sdkContext = ctx;
+          calls.push(options);
           yield { type: "start", partial: { content: [] } };
           if (calls.length === 1) {
             if (mode === "partial") yield { type: "text_delta", delta: "already-visible" };
@@ -255,7 +312,7 @@ test("main recovery buffers only an empty failed generation and requires the aut
               content: mode === "embedded_content" ? [{ type: "text", text: "already-visible" }] : [] } };
           } else yield { type: "done", message: { stopReason: "stop" } };
         })({ on: (_event: string, callback: any) => { start = callback; }, registerProvider: (_provider: string, config: any) => { stream = config.streamSimple; } });
-      start({}, { model, modelRegistry: {} });
+      start({}, { model, modelRegistry: { getAll: () => [] } });
       const events: any[] = [];
       for await (const event of stream(model, context, { headers })) events.push(event);
       assert.equal(calls.length, mode === "safe" ? 2 : 1);

@@ -1,7 +1,7 @@
 # Shared Asset BlobStore
 
 > 状态：**as-built（#41/#158）与 #871 当前修复边界**。最终修复 SHA 的 Actions 尚待验收；Index: [`README.md`](README.md)。
-> 同步日期：2026-11-03
+> 同步日期：2026-11-09
 
 Shared assets keep **metadata in PostgreSQL** and **bytes in a pluggable BlobStore**.
 
@@ -134,6 +134,12 @@ Dispatcher、Reaper、reconcile 与 managed resource cleanup 均走同一 fence�
 [Docker manager](../packages/runtime-sandbox/src/shared-assets-volume.ts)严格验证 managed/Job/generation 标签。独立审查发现仅用稳定 Job 名称与事后 PID 校验不足：prepare 在 staging 中失锁后可能采纳并删除后继 generation。当前修复分支改为 generation 独占实际 volume/helper 名称，prepare 只创建/清理本 generation；cleanup 快照严格资源后再验 permit，禁止失锁后重新列举采纳新资源。关键破坏性操作/重试前重验生命周期许可，helper 仍只按不可变容器 ID 清理，volume 非 force 删除。隐式无标签资源拒绝接纳。该 P1 修正已随提交 `9c7a8432` 推送，新增 staging 失锁、快照后新增 generation、inspect 后/重试失锁和真实 Docker 双 generation 挂载回归源码；这些行为尚待最终 SHA Actions 实际验收；Kubernetes 不在本轮扩展 generation 语义，独立 POC 也不作为跨进程 PostgreSQL fencing 的证明。
 
 回归入口为 `pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:runtime-sandbox` 与 `pnpm ci:integration:shared-assets-volume`；现有 Actions 实际调用这些脚本。新源码覆盖两种 old-finally/new-prepare 交错、持锁 mount handoff、独立物理 backend 与业务池隔离、stale/cancelled/latest fence、strict Docker identity/generation 和 retry proof。本轮最终 SHA 的 PG/Docker/完整 Actions 尚待执行验收，不从替身或源码断言推导运行成功。
+
+### 精确不存在诊断（#1039）
+
+2026-11-09 核对：共享 Docker/Podman 分类器补充 `Error response from daemon: no container with name or ID "<expected-name-or-id>" found: no such container`，并保留 `Error:` 方言。必须整条诊断匹配本次操作的精确资源类型和名称/不可变 ID；有 stderr 时优先核对 stderr。helper inspect 的明确缺失不退避，removeHelper 直接结束后继续重核并非 force 删除遗留卷；inspect 后按旧 ID 删除时已不存在也保持幂等。后继扫描从 daemon 重新枚举卷，清理成功的卷不会留在该枚举中，不新增或清理第二张容器清单。
+
+权限、daemon 不可达、超时、混合多行、不同资源类型/身份或模糊缺失仍抛原错误；Job/generation 标签、生命周期 permit、替身拒绝及原有有界重试不变。既有 `pnpm ci:unit:runtime-sandbox` 新增报告原句、按 ID 删除竞争、重复清理/再次枚举及错误负例，原 PostgreSQL fencing 与真实 Docker volume 回归继续保留。最终 SHA Actions 待验，未执行生产或实际 Podman；现场日志总量、每容器次数及噪音改善未独立验证，不能由单次 CLI 有界重试推断现场的固定重试轮次。
 
 ## Security notes
 

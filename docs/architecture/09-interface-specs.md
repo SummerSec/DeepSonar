@@ -281,4 +281,10 @@ Model Gateway 支持原始方法/相对路径/query、未知端到端头及原�
 
 Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_configuration_invalid`，`retryable=false`，RepairFeedback 为 `permanent_failure`；`expected` 保留受控 reason 与 `platform_administrator` owner，下一步要求平台修复后重新准入，不授予 Agent 扩额或自动重试权。仅映射已知配额异常；其他 DB、schema、resolver 错误不降级为确定无效果。
 
+## 项目任务队列管理（#1018）
+
+创建任务可用 enqueue 原子入队。GET /projects/{id}/task-queue 使用 tasks:read，PATCH 同路径和 POST /projects/{id}/task-queue/items 使用 jobs:control，并校验项目范围。新控制 body 严格拒绝未知字段。失败/取消后恢复必须提交 acknowledge_failed_head 指向明确确认的当前条目，过期身份或未知效果返回稳定 409。队列、Canvas 与 Job 读取为有界诊断，详细字段见 OpenAPI 与[队列专题](../PROJECT_TASK_QUEUE.md)。
+
+## 项目知识来源与历史资格（#1035）
+
 `GET /projects/:id/knowledge/backfill` 要求 `projects:read` 与项目作用域，每页默认10、最多20条，返回当前资格/原因、来源登记及已有 work；不返回来源正文。无对应 POST 补做入口，不创建或恢复执行。

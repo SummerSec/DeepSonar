@@ -148,13 +148,17 @@ jobs:
         if: ${{ steps.resolve.outputs.skip == 'true' }}
         run: |
           set -euo pipefail
-          echo "${{ matrix.toolset }} build unchanged: reused previously validated immutable src cache; pull and Chrome smoke will run" >> "$GITHUB_STEP_SUMMARY"
+          echo "reuse at resolved digest" >> "$GITHUB_STEP_SUMMARY"
       - name: Pull reused image for smoke
         if: ${{ steps.resolve.outputs.skip == 'true' }}
+        env:
+          SOURCE_IMAGE: ${{ steps.resolve.outputs.source_image }}
         run: |
           set -euo pipefail
-          docker pull "${{ steps.resolve.outputs.src_ref }}"
-          docker tag "${{ steps.resolve.outputs.src_ref }}" "deepsonar-${{ matrix.toolset }}:ci"
+          suffix="${SOURCE_IMAGE##*@sha256:}"
+          [[ ${#suffix} == 64 && "$suffix" != *[!0-9a-f]* ]] || exit 1
+          docker pull "$SOURCE_IMAGE"
+          docker tag "$SOURCE_IMAGE" "deepsonar-${{ matrix.toolset }}:ci"
       - uses: docker/setup-buildx-action@v3
         if: ${{ steps.resolve.outputs.skip != 'true' }}
       - name: Build Chrome specialist runtime
