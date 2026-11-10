@@ -171,12 +171,10 @@ import { openSandboxAllowsDispatch, refreshOpenSandboxServerStatus } from "./ope
 import {
   OPENSANDBOX_CREATE_CIRCUIT_OPEN,
   openSandboxCreateCircuitAllowsClaim,
-  type CreateCircuitProbe,
-  createCircuitProbeFor,
-  shouldLogCreateCircuitPause,
   openSandboxCreateCircuitStatus,
   recordOpenSandboxProvisionFailure,
   recordOpenSandboxProvisionSuccess,
+  createCircuitProbeFor, shouldLogCreateCircuitPause, type CreateCircuitProbe,
 } from "./opensandbox-create-circuit.js";
 import {
   OPENSANDBOX_UPLOAD_CIRCUIT_OPEN,
