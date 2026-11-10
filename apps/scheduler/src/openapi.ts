@@ -1577,6 +1577,21 @@ const OPS: Op[] = [
     } },
   },
   {
+    method: "get", path: "/jobs/{id}/recovery-diagnostics",
+    summary: "读取单 Job 的未结清效果、修正预算与下一步诊断", scope: "admin", tags: ["Jobs"],
+    description: "只读管理面：列出该 Job 的 unknown/effect_pending 效果（含账本结算态与用量是否已知，不含 effect error 原文）与修正预算状态，并引用既有动作入口（单条效果结清、Job 详情与完成回执），不执行任何动作。等待分类与量产未结清效果不含业务文本；人工看原文走 /jobs/{id}/evidence*。项目限定 admin 仍受资源归属约束。",
+  },
+  {
+    method: "get", path: "/jobs/waiting-classification",
+    summary: "跨 Job 等待与终态恢复分类盘点", scope: "admin", tags: ["Jobs"],
+    description: "只读跨 Job 诊断：对 waiting_human/failed/timeout/orphan 按 #1036 A 项给主分类（unknown_effects / confirmed_platform_dead_end / human_decision / authorized_operator / no_signal），附带未结清效果计数与 kind、人工主题 kind、被拒完成次数、objective 停止与修正预算状态。含 project_id（逗号多选，须在当前 admin 范围内）、status 子集与 limit（≤100）；不返回业务文本，单 Job 细节走 /jobs/{id}/recovery-diagnostics。",
+    query: {
+      project_id: { type: "string", description: "逗号分隔的项目 UUID（同维度 OR）" },
+      status: { type: "string", description: "逗号分隔的状态子集：waiting_human/failed/timeout/orphan" },
+      limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
+    },
+  },
+  {
     method: "post",
     path: "/jobs/{id}/resume",
     summary: "使用旧冻结快照重新执行（同 Job、新 Attempt）",

@@ -5,6 +5,7 @@ import { ControlInputError } from "../../control-input.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { registerRuntimeEvidenceRoutes } from "./runtime-evidence-routes.js";
 import { registerEffectSettlementRoutes } from "./effect-settlement-routes.js";
+import { registerRecoveryDiagnosticsRoutes } from "./recovery-diagnostics-routes.js";
 import { z } from "zod";
 import { projectPlanGaps } from "../plan-protocol/gap-projection.js";
 import { audit } from "../../audit.js";
@@ -127,6 +128,7 @@ export function isPublicJobTypeAllowed(
 export function registerJobControlRoutes(app: FastifyInstance): void {
   registerRuntimeEvidenceRoutes(app);
   registerEffectSettlementRoutes(app);
+  registerRecoveryDiagnosticsRoutes(app);
   // ---------- Jobs ----------
   app.post("/jobs", async (req, reply) => {
     const body = CreateJobBody.parse(req.body);
@@ -754,6 +756,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     // 设备租约（#495）：取消即释放，不让设备被终态 Job 占着。
     await releaseDeviceLeasesForJobQuietly(id, "cancelled");
     await sql.begin(async (txRaw) => {
+      // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target.
       const tx = txRaw as unknown as typeof sql;
       await lockCanvasForConvergence(tx, (job.canvas_id as string | null) ?? null);
       await tx`
@@ -787,6 +790,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     const active = await createSqlJobLifecycleApplication().cancelJobsOnCanvas(canvasId, reason);
     if (active.length > 0) {
       await sql.begin(async (txRaw) => {
+        // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as the target.
         const tx = txRaw as unknown as typeof sql;
         await lockCanvasForConvergence(tx, canvasId);
         for (const cancelledJob of active) {

@@ -140,6 +140,8 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | PATCH | /jobs/:id/priority | jobs:control | 仅 pending：`{priority}`；值必须匹配 Scheduler 根据 Job 类型/Finding 严重度计算的固定 priority class，不能任意改分 |
 | POST | /jobs/:id/cancel | jobs:control | 取消（可选 `{force,reason}`；running 回收沙箱） |
 | POST | /jobs/:id/effects/:effectId/settlement | admin | #1002 P1-9 单条历史效果结清，严格 `{outcome,evidence,operation_id}`；项目限定 admin 仍按 Job 归属隔离。只写人工书面依据与真实认证主体，不补未知用量、不重排 Job、不改 replay_policy；不是 Job-scoped Agent operation。协议及字段限制见[单条效果结清](../../../deploy/README.md#管理-api-的单条效果结清1002-p1-9)与 OpenAPI（核对 2026-11-08；最终 Actions 待验收） |
+| GET | /jobs/:id/recovery-diagnostics | admin | #1036 D 只读诊断：单 Job 的 unknown/effect_pending 效果清单（含账本结算态与用量是否已知，不含 effect error 原文）、修正预算状态与既有动作入口引用（单条效果结清、Job 详情、完成回执）；不执行任何动作（核对 2026-11-09） |
+| GET | /jobs/waiting-classification | admin | #1036 A 只读盘点：跨 Job waiting_human/failed/timeout/orphan 按「未知效果 / 平台死路 / 业务决定 / 授权等待 / 无信号」分类，附带未结清效果计数、人工主题 kind、被拒完成次数与修正预算状态；query `project_id`（逗号多选）/ `status` / `limit`（≤100）；不返回业务文本，单 Job 细节走 /jobs/:id/recovery-diagnostics（核对 2026-11-09） |
 | POST | /canvases/:id/jobs/cancel-active | jobs:control | 取消画布当前活跃 Jobs |
 | POST | /jobs/:id/resume | jobs:control | failed/timeout/orphan/waiting_human 使用旧冻结快照重新执行（同 Job、新 Attempt）；导入 cancelled 返回 `409 JOB_IMPORTED_READONLY`；当前受治理身份漂移或无法解析时返回 `409 SNAPSHOT_STALE`。这会创建新的执行 Attempt，不承诺跨进程恢复 DSH 持久 Session；DSH 进程级恢复明确返回 `CONTEXT_RESUME_UNSUPPORTED` |
 | POST | /jobs/:id/rerun-current | jobs:control | failed/timeout/orphan/waiting_human 按当前 RoleConfig/Credential/项目网络、共享资产与 runtime image 策略完整重冻后重新执行；保留同 job_id、payload/parent/canvas/Intent/Fact/Finding 与旧 Attempt/effect |

@@ -112,6 +112,8 @@ GET /jobs/:id/evidence/runtime
 GET /jobs/:id/evidence/session
 GET /jobs/:id/evidence/session/download
 GET /jobs/:id/evidence/stream
+GET /jobs/:id/recovery-diagnostics
+GET /jobs/waiting-classification
 GET /metrics
 GET /openapi.json
 GET /platform/claims
@@ -356,6 +358,7 @@ GET /global-settings
 GET /health
 GET /imports/{id}
 GET /jobs
+GET /jobs/waiting-classification
 GET /jobs/{id}
 GET /jobs/{id}/events
 GET /jobs/{id}/evidence
@@ -363,6 +366,7 @@ GET /jobs/{id}/evidence/runtime
 GET /jobs/{id}/evidence/session
 GET /jobs/{id}/evidence/session/download
 GET /jobs/{id}/evidence/stream
+GET /jobs/{id}/recovery-diagnostics
 GET /metrics
 GET /openapi.json
 GET /platform/claims
