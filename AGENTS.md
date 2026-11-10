@@ -45,7 +45,7 @@
 - GitHub 操作使用宿主提供的 `gh`，维持 `SummerSec` 身份，不另行登录或读取其他账号凭据。Git 提交的作者与提交者均使用 `SummerSec <SummerSec@users.noreply.github.com>`，不修改操作者的全局 Git 身份配置。
 - 在宿主分配的独立 worktree 中开发，不直接在共享主线目录混入其他任务的改动，不直接推送主线绕过 PR。
 - **分支命名（#931）**：按改动用途命名，例如 `feat/<简短主题>`、`fix/<简短主题>`、`docs/<简短主题>`、`refactor/<简短主题>`、`test/<简短主题>`、`chore/<简短主题>`；有 issue 时可写 `fix/123-short-topic`。禁止以 AI / Agent 工具名作为分支名开头（不区分大小写的 `agent`、`codex`、`cursor`、`claude`、`copilot`、`chatgpt`、`gemini`、`openai`，含 `/`、`-`、`_` 与嵌套路径形式）。校验规则以 [`agent-harness/branch-name-policy.mjs`](agent-harness/branch-name-policy.mjs) 为唯一实现，`pnpm ci:unit:ci-routing` 会跑其回归；推送前可用 `node -e "import('./agent-harness/branch-name-policy.mjs').then(m=>m.assertBranchName(process.argv[1]))" <branchname>` 自检。GitHub 的 [Block AI tool branch prefixes](https://github.com/SummerSec/DeepSonar/rules/20986002) ruleset 负责服务端拦截，其模式列表与上述 token 清单一致；仓库外宿主若自行拼分支名前缀，需按同一规则修改。
-- 默认由用户人工审查和合并；CI 通过不等于获得合并授权。只有当前用户明确授权特定任务范围的合并、且授权条件与最终提交的完整检查均满足时，主 Agent 才可执行该范围的合并；不得启用无人值守 `--auto`、自动批准 PR 或降低门禁。本文件不自动变更 Superagent 宿主的默认人工合并策略；下文“合并结果”本身只指整合子 Agent 的工作。
+- 提交 PR 后由用户人工审查和合并。禁止自动合并、调用 `gh pr merge` 或启用 `--auto`；CI 通过不等于获得合并授权。下文主 Agent 的“合并结果”指整合子 Agent 的工作，不授权合并 GitHub PR。
 - **本轮有限授权（2026-11-08，#1002 / #1011 → v0.6.17）**：用户在当前会话明确授权主 Agent 自主做技术决策并合并本轮对应交付 PR，不逐 PR 等待人工合并。执行前必须核查最新 diff、处理实质阻塞评审，确认最终 head 的完整核心与全部适用专项实际全绿，并绑定该 SHA 合并；保存真实 merged/commit 证据。此记录不代替真实会话授权，不扩展其他任务的权限，不启用 `--auto`、自动批准、直推 main 或降低保护规则；生产部署不在授权内。
 - 继续遵守本文件的工程、文档同步和验收规则。交付摘要区分已通过、失败和未执行的验证；没有真实 GitHub 请求到 PR 的端到端运行证据时，不宣称该流程已经实测通过。生产部署、发版和其他不可逆外部操作仍需各自的明确授权。
 
