@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { CaretDown, CaretRight, Eye, EyeSlash, HandPalm, PaperPlaneTilt, Prohibit } from "@phosphor-icons/react";
 import type { HumanInterventionItem, HumanInterventionPrefs } from "./human-messages";
 import {
@@ -37,11 +38,23 @@ export function HumanInterventionBanner({
   const pendingCount = countVisiblePendingHumanInterventions(items, prefs.repliedIds, prefs.hiddenIds);
   const visible = visibleHumanInterventions(items, prefs.hideProcessed, prefs.repliedIds, prefs.hiddenIds);
   const hiddenCount = items.length - visible.length;
-  const collapsed = prefs.bannerCollapsed || (pendingCount === 0 && undisplayedPendingCount === 0);
-  if (items.length === 0) return null;
-
   // 只有历史、没有待处理项时不该继续占用一条端到端琥珀横幅抢注意力：降级为一行轻量状态。
   const needsAttention = pendingCount > 0 || undisplayedPendingCount > 0;
+  // 0 待处理时只是「默认收起」，不是「禁止展开」：历史请求的详情与 Finding/Job
+  // 链接仍必须可达；有待处理项时继续尊重用户的 bannerCollapsed 偏好。
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const collapsed = needsAttention ? prefs.bannerCollapsed : !historyOpen;
+  const toggleCollapsed = () => {
+    if (needsAttention) {
+      onPrefsChange({ ...prefs, bannerCollapsed: !prefs.bannerCollapsed });
+      return;
+    }
+    // 历史降噪模式的展开就是「看历史」：把被隐藏的历史一并显示出来。
+    if (!historyOpen && prefs.hideProcessed) onPrefsChange({ ...prefs, hideProcessed: false });
+    setHistoryOpen((value) => !value);
+  };
+
+  if (items.length === 0) return null;
 
   return (
     <section
@@ -55,7 +68,7 @@ export function HumanInterventionBanner({
           type="button"
           className="inline-flex items-center gap-2 text-left"
           aria-expanded={!collapsed}
-          onClick={() => onPrefsChange({ ...prefs, bannerCollapsed: !prefs.bannerCollapsed })}
+          onClick={toggleCollapsed}
         >
           {prefs.bannerCollapsed ? <CaretRight size={12} className="text-amber-300" /> : <CaretDown size={12} className="text-amber-300" />}
           <HandPalm size={14} className={needsAttention ? "text-amber-300" : "text-zinc-600"} />

@@ -905,7 +905,8 @@ export function TaskCanvasPage() {
     (job) =>
       jobCanReceiveHumanReply(job) ||
       humanInterventions.some((row) => row.jobId === job.id && row.pending) ||
-      ACTIVE_JOB.has(job.status),
+      ACTIVE_JOB.has(job.status) ||
+      RESUMABLE_JOB.has(job.status),
   );
 
   const jobElapsed = (job: JobSummary) => {
@@ -945,6 +946,7 @@ export function TaskCanvasPage() {
           startedAt={meta?.started_at}
           endValue={isScheduled ? "定时等待" : lifecycleActive ? "进行中" : taskLifecycle.endedAt ? formatTime(taskLifecycle.endedAt) : "—"}
           endTitle={taskLifecycle.endedAt && !lifecycleActive ? formatTime(taskLifecycle.endedAt) : undefined}
+          countsReady={Boolean(meta)}
           actions={(
             <>
           {!taskArchived && (
@@ -1408,7 +1410,7 @@ export function TaskCanvasPage() {
                           <StatusBadge status={j.status} />
                           {j.error && (
                             <div
-                              className="mt-0.5 max-w-[240px] truncate font-mono text-[12px] text-red-400"
+                              className="mt-0.5 max-w-[240px] line-clamp-2 font-mono text-[12px] leading-4 text-red-400"
                               title={j.error}
                             >
                               {j.error}

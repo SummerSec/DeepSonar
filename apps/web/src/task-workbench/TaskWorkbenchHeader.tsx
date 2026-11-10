@@ -17,6 +17,7 @@ export function TaskWorkbenchHeader({
   startExecValue,
   startExecTitle,
   lifecycleActive,
+  countsReady = true,
   executionElapsed,
   startedAt,
   endValue,
@@ -34,6 +35,7 @@ export function TaskWorkbenchHeader({
   startExecValue: string;
   startExecTitle?: string;
   lifecycleActive: boolean;
+  countsReady?: boolean;
   executionElapsed: string;
   startedAt?: string | null;
   endValue: string;
@@ -63,22 +65,26 @@ export function TaskWorkbenchHeader({
             </span>
           )}
         </div>
-        <span className="mt-1 block font-mono text-[10px] text-zinc-600">
-          {[
-            decisionLabel
-              ? lifecycleActive
-                ? decisionLabel
-                : `${decisionLabel}（本任务已无活动执行）`
-              : null,
-            `已确认 ${outcome.confirmed_count}`,
-            `待验证 ${outcome.pending_verification_count}`,
-            `待人工 ${outcome.needs_human_count}`,
-            outcome.current_report_version == null ? "报告未生成" : `报告 v${outcome.current_report_version}`,
-          ]
-            .filter(Boolean)
-            .join(" · ")}
-          {message ? ` · ${message}` : ""}
-        </span>
+        {countsReady ? (
+          <span className="mt-1 block font-mono text-[10px] text-zinc-600">
+            {[
+              decisionLabel
+                ? lifecycleActive
+                  ? decisionLabel
+                  : `${decisionLabel}（本任务已无活动执行）`
+                : null,
+              `已确认 ${outcome.confirmed_count}`,
+              `待验证 ${outcome.pending_verification_count}`,
+              `待人工 ${outcome.needs_human_count}`,
+              outcome.current_report_version == null ? "报告未生成" : `报告 v${outcome.current_report_version}`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            {message ? ` · ${message}` : ""}
+          </span>
+        ) : (
+          <span className="mt-1 block font-mono text-[10px] text-zinc-600">状态加载中…</span>
+        )}
         {createdAt && (
           <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[9px] text-zinc-600 sm:grid-cols-4">
             <LifecycleDatum label="创建" value={formatDate(createdAt)} title={formatTime(createdAt)} />

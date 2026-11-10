@@ -80,7 +80,7 @@ test("#1057 工作台交互回归：徽标来源、横幅降噪、自驱标签�
 
   // 只有历史、0 待处理时横幅降级为一行轻量状态，且默认收起
   assert.match(banner, /const needsAttention = pendingCount > 0 \|\| undisplayedPendingCount > 0;/);
-  assert.match(banner, /pendingCount === 0 && undisplayedPendingCount === 0/);
+  assert.match(banner, /const collapsed = needsAttention \? prefs\.bannerCollapsed : !historyOpen;/);
 
   // 任务已无活动执行时，「自驱中」必须带限定语，不能和「结束」并列自相矛盾
   assert.match(header, /\（本任务已无活动执行\）/);
@@ -90,8 +90,23 @@ test("#1057 工作台交互回归：徽标来源、横幅降噪、自驱标签�
   assert.match(shell, /scrollIntoView\(\{ behavior: "smooth", inline: "center"/);
   assert.match(page, /jobRowHasActions && <th className=\{thCls\}>操作<\/th>/);
   assert.match(page, /j\.role_name !== j\.type/);
+  // 操作列条件必须覆盖可重跑 Job，否则 failed/timeout/orphan 的「旧快照重跑」入口会消失
+  assert.match(page, /ACTIVE_JOB\.has\(job\.status\) \|\|\s*RESUMABLE_JOB\.has\(job\.status\),/);
+  // 冷加载不把未加载数据渲染成真实 0
+  assert.match(page, /countsReady=\{Boolean\(meta\)\}/);
+  assert.match(header, /状态加载中…/);
 
   // 总览双列网格两路都有内容，不再留死列；空态文案不再夹带实现说明
   assert.doesNotMatch(overview, /后台刷新不会把你带离当前视图/);
   assert.doesNotMatch(overview, /max-w-5xl gap-4 xl:grid-cols-\[minmax\(0,1\.4fr\)_minmax\(18rem,0\.8fr\)\][\s\S]*?<\/div>\s*<\/div>\n\n/);
+});
+
+test("#1057 响应式：768–1023 走抽屉、状态摘要不再单行截断", () => {
+  const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  const page = readFileSync(new URL("../pages/TaskCanvasPage.tsx", import.meta.url), "utf8");
+  const railBlock = css.indexOf(".desktop-rail { display: none; }");
+  assert.ok(railBlock > 0);
+  const mediaStart = css.lastIndexOf("@media", railBlock);
+  assert.match(css.slice(mediaStart, railBlock), /max-width: 1023px/);
+  assert.match(page, /line-clamp-2 font-mono text-\[12px\] leading-4 text-red-400/);
 });

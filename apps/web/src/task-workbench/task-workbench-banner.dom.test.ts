@@ -72,11 +72,11 @@ function item(overrides: Partial<HumanInterventionItem>): HumanInterventionItem 
   } as unknown as HumanInterventionItem;
 }
 
-function renderBanner(harness: ReturnType<typeof setup>, items: HumanInterventionItem[]) {
+function renderBanner(harness: ReturnType<typeof setup>, items: HumanInterventionItem[], prefs: HumanInterventionPrefs = PREFS) {
   harness.render(
     createElement(HumanInterventionBanner, {
       items,
-      prefs: PREFS,
+      prefs,
       onPrefsChange: () => {},
       onReply: () => {},
       onIgnore: () => {},
@@ -87,17 +87,21 @@ function renderBanner(harness: ReturnType<typeof setup>, items: HumanInterventio
   return harness.container.querySelector("section") as HTMLElement;
 }
 
-test("只有历史、0 条待处理时横幅降噪并默认收起", () => {
+test("只有历史、0 条待处理时横幅降噪并默认收起，但历史必须仍可展开", () => {
   const harness = setup();
   const history = item({ pending: false, node: { id: "node-2", title: "旧的介入", status: "succeeded", node_type: "job", job_id: "job-2" } as never });
-  const banner = renderBanner(harness, [history]);
+  const banner = renderBanner(harness, [history], { ...PREFS, hideProcessed: false });
   try {
     assert.match(banner.className, /bg-white\/\[\.015\]/);
     assert.doesNotMatch(banner.className, /amber/);
     const toggle = banner.querySelector("button[aria-expanded]") as HTMLElement;
     assert.equal(toggle.getAttribute("aria-expanded"), "false");
-    // 历史仍然可达：入口保留，展开后才显示条目
-    assert.match(banner.textContent ?? "", /人工介入/);
+
+    // 关键：默认收起不等于禁止展开——点开后历史请求、Finding/Job 入口必须可达
+    act(() => toggle.click());
+    const reopened = harness.container.querySelector("section") as HTMLElement;
+    assert.equal((reopened.querySelector("button[aria-expanded]") as HTMLElement).getAttribute("aria-expanded"), "true");
+    assert.match(reopened.textContent ?? "", /旧的介入/);
   } finally {
     harness.unmount();
   }
