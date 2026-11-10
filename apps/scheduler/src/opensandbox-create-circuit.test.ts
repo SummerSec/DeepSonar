@@ -128,6 +128,27 @@ test("#1046 circuit state and logs keep only a fixed failure code, never dispatc
     "free text is not promoted into a code");
   assert.equal(classifyProvisionFailure("SANDBOX_START_FAILED"), "SANDBOX_START_FAILED");
   assert.equal(classifyProvisionFailure("docker::sandbox_start_failed"), "unclassified", "codes are upper-case only");
+  assert.equal(classifyProvisionFailure("CONTAINER_START_FAILED"), "CONTAINER_START_FAILED", "known bare codes are allowlisted");
+  assert.equal(classifyProvisionFailure("UNEXPECTED_RESPONSE"), "UNEXPECTED_RESPONSE", "known bare codes are allowlisted");
+  // 评审 #1054：合成错误里的任意大写形状 / 私有标签 / 超长尾部不得被记录为失败码。
+  assert.equal(
+    classifyProvisionFailure("SANDBOX_START_FAILED details=DOCKER::TENANT_PRIVATE_VALUE"),
+    "SANDBOX_START_FAILED",
+    "private namespace values cannot promote; the known bare code still wins",
+  );
+  assert.equal(classifyProvisionFailure("DOCKER::TENANT_PRIVATE_VALUE"), "unclassified",
+    "namespace shape without a known code is unclassified");
+  assert.equal(
+    classifyProvisionFailure("Egress sidecar container failed to start. body=PRIVATE_VALUE"),
+    "unclassified",
+    "synthetic upper-case payload text is not a known code",
+  );
+  assert.equal(
+    classifyProvisionFailure(`A_${"B".repeat(1000)}`),
+    "unclassified",
+    "arbitrary long identifiers are not recorded",
+  );
+  assert.equal(classifyProvisionFailure(""), "unclassified");
 });
 
 test("#1046 claim-pause logging is throttled instead of once per claim call", () => {

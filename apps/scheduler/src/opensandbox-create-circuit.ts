@@ -147,10 +147,20 @@ function reTrip(now: number, code: string): void {
   console.error(`[opensandbox-create-circuit] ${OPENSANDBOX_CREATE_CIRCUIT_OPEN} reason=${code}`);
 }
 
-// Protocol-qualified code first (the shape real dispatcher errors carry), then a bare
-// upper-case identifier with underscores; free text, base64/mixed-case secrets and
-// provider prose never match either alternative.
-const PROVISION_FAILURE_CODE_RE = /\b(?:OPENSANDBOX|OPEN_SANDBOX|SANDBOX|DOCKER)::[A-Z][A-Z0-9_]{1,63}\b|\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,4}\b/u;
+// Known create-path failure codes only (#1046 review): the dispatcher's retryable
+// shapes are these three identifiers (bare or protocol-qualified). Any other value —
+// including arbitrary upper-case/underscore shapes, private labels or long tails —
+// falls back to "unclassified" so the circuit never promotes error content into
+// state or logs.
+const KNOWN_PROVISION_FAILURE_CODES = Object.freeze([
+  "SANDBOX_START_FAILED",
+  "CONTAINER_START_FAILED",
+  "UNEXPECTED_RESPONSE",
+] as const satisfies readonly string[]);
+const PROTOCOL_FAILURE_CODE_RE = /\b(OPENSANDBOX|OPEN_SANDBOX|SANDBOX|DOCKER)::([A-Z][A-Z0-9_]{1,63})\b/u;
+const BARE_FAILURE_CODE_RE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,4}\b/gu;
+const isKnownProvisionCode = (code: unknown): code is (typeof KNOWN_PROVISION_FAILURE_CODES)[number] =>
+  (KNOWN_PROVISION_FAILURE_CODES as readonly string[]).includes(String(code));
 /** One pause log per minute per process: a denial path must not log once per claim call. */
 const CREATE_CIRCUIT_PAUSE_LOG_INTERVAL_MS = 60 * 1000;
 let lastPauseLogAtMs: number | null = null;
@@ -163,8 +173,15 @@ let lastPauseLogAtMs: number | null = null;
  * truncation is not a secret-safe boundary.
  */
 export function classifyProvisionFailure(reason: string): string {
-  const match = PROVISION_FAILURE_CODE_RE.exec(reason);
-  return match ? match[0] : "unclassified";
+  // Allowlist only: protocol-qualified candidates win when their code itself is known
+  // (a private value after the namespace must not promote); otherwise the first known
+  // bare code anywhere in the text. Any other content falls back to "unclassified".
+  const protocol = PROTOCOL_FAILURE_CODE_RE.exec(reason);
+  if (protocol && isKnownProvisionCode(protocol[2])) return protocol[0];
+  for (const bare of reason.matchAll(BARE_FAILURE_CODE_RE)) {
+    if (isKnownProvisionCode(bare[0])) return bare[0];
+  }
+  return "unclassified";
 }
 
 export function shouldLogCreateCircuitPause(): boolean {
