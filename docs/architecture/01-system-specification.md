@@ -29,6 +29,14 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **代码入口**：[任务编排](../../apps/scheduler/src/task-compose.ts)、[Hub 编排](../../apps/scheduler/src/domains/hub-orchestration/)、[设计摘要](../../DESIGN.md)。
 - **验证证据**：`pnpm ci:unit:task-intent`、`pnpm ci:integration:task-intent`、`pnpm ci:smoke:hub`；人工核对新任务首个 Job 类型和不可绕过 Hub 的拒绝路径。
 
+### FR-TASK-008 项目任务串行队列
+
+- **规范要求**：用户可将任务加入项目 FIFO 队列，同队列最多一个任务占据执行位置。前驱完整收敛且无活动 Job 或未结清效果时才可启动下一任务。当前任务内部 Job 仍使用既有并发与权限；失败/取消需明确确认具体队首后继续，未知效果、人工等待与任务暂停保留占位。
+- **决策来源**：#1018 减少逐个观察并手动启动任务的操作；项目单队列和失败暂停为本次实施默认值。
+- **实现状态**：schema 72 持久队列与全局 claim 锁接线；创建时原子入队、重启读取和任务页控制已实现，最终候选 Actions 待验。治理恢复后完整成功按成功策略推进，旧成功不能代表新重试完成。硬重试原子建立新队尾位置且保留暂停；独立 Finding 报告再生成不重置任务完成代际。
+- **代码入口**：[队列存储](../../apps/scheduler/src/domains/project-task/task-queue-store.ts)、[队列路由](../../apps/scheduler/src/domains/project-task/task-queue-routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[基线](../../database/schema.sql)。
+- **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:web-facts`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:migrations`。场景与边界见[项目任务队列](../PROJECT_TASK_QUEUE.md)。
+
 ### FR-TASK-005 更新任务意图与冻结运行
 
 - **规范要求**：系统必须允许更新空闲任务的标题/内容并供后续 Hub 和新 Job 使用；进行中的 Job 必须继续使用创建时的冻结快照，不得被 PATCH 静默改写。
@@ -378,9 +386,11 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-KNOW-001 项目知识的受治理生命周期
 
-- **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理由有来源的当前 Job 请求，或由 Scheduler 在具备冻结整理权限的业务 Job/Attempt 成功结算后幂等登记；项目管理者可按精确成功 Job 补做，不恢复历史执行身份。来源准备异步且有界，无来源记录跳过，失败不回滚主业务；Hub/Report/知识治理 Job 不递归触发。候选经 maker 提案、独立 case×arm Job 试验、evaluator 与 reviewer 审查后才可原子激活；失败、缺证或未知效果不得晋升，旧 active 保留。每阶段只读取冻结且适合其 audience 的输入，实际使用须留下 usage/feedback 与持久 receipt；治理方法的项目 Skill 版本只影响后续 work，不得修改平台硬门。
+成功来源登记与历史补做预览仅保留有界元数据：成功最新 Attempt、冻结整理权限和无未结算效果是资格前提；预览不创建 work/Job。项目批处理、整链 token 预算、schema 变更暂缓，见 [ADR 0021](adr/0021-knowledge-source-preview.md)。
+
+- **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理必须由有来源的当前 Job 请求，经 maker 提案、独立 case×arm Job 试验、evaluator 与 reviewer 审查后才可原子激活；失败、缺证或未知效果不得晋升，旧 active 保留。每阶段只读取冻结且适合其 audience 的输入，实际使用须留下 usage/feedback 与持久 receipt；治理方法的项目 Skill 版本只影响后续 work，不得修改平台硬门。
 - **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；详见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
-- **实现状态**：成功业务 Job 自动登记、来源准备和项目管理补做已接线，沿用现有 schema 与 work；最终 SHA Actions 待验。#752 独立试验分支已接线，schema v61；领域集成测试使用构造的 Job/Attempt 与证据，真实沙箱运行和模型效果尚无本条验收证据，不能推定通过。
+- **实现状态**：#752 独立试验分支已接线，schema v61；领域集成测试使用构造的 Job/Attempt 与证据，真实沙箱运行和模型效果尚无本条验收证据，不能推定通过。
 - **代码入口**：[知识域](../../apps/scheduler/src/domains/project-knowledge/)；[schema 基线](../../database/schema.sql)；[Control 契约](../../packages/shared-types/src/project-knowledge.ts)。
 - **验证证据**：`pnpm ci:unit:project-knowledge`、配置独立 `TEST_DATABASE_URL` 后 `pnpm ci:integration:project-knowledge`；真实沙箱和长期模型效果需 #777 独立试验记录，离线协议/预检已提供；不改变 #752 已完成的实现验收范围。
 
@@ -691,6 +701,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **代码入口**：[Gateway](../../apps/scheduler/src/gateway.ts)、[Gateway guard](../../apps/scheduler/src/domains/provider-adapter/gateway-guard.ts)、[Gateway tests](../../apps/scheduler/src/gateway-usage.test.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`。
 
+#1032 的 [Pi context 凭据投影首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)在 SDK 生成前共用当前 main/Control/OM token 的精确替换，不改已生成请求、认证、预算与回执。工具读取 env 和认证文件、错误及 OM 来源的回归接上述 runtime-sandbox、锁版本 request-budget-sdk 与原生 om-provider-headers；最终 SHA Actions 待验，同 UID 凭据隔离和 deny 诊断/审计仍未交付。
+
 ### FR-CRED-004 Token 额度与终态撤销
 
 - **规范要求**：Job Gateway token 和 Control capability token 必须具有独立身份、有效期、请求/Token额度和撤销原因；Job 进入任何终态后必须撤销，不得跨 Job 复用。
@@ -833,10 +845,10 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### NFR-SEC-003 Secret 脱敏、日志和审计红线
 
-- **规范要求**：日志、events、audit_logs、Evidence 和 usage ledger 不得保存 Authorization/Cookie/Provider key/Job token 或完整 prompt/completion；可见错误只能返回脱敏摘要和形状。
+- **规范要求**：日志、events、audit_logs、Evidence 和 usage ledger 不得保存 Authorization/Cookie/Provider key/Job token 或完整 prompt/completion；可见错误只能返回脱敏摘要和形状。模型请求上下文不得携带已知运行时凭据，证据层事后脱敏不能替代模型出口防护。
 - **决策来源**：审计可见性不能以复制长期秘密和客户源码为代价。
 - **实现状态**：audit_logs append-only，Gateway usage 只保存计费/workload 维度和受控计数。OM wrapper、新导出/RPC 副本及历史 Session HTTP preview/download 均在截断或发送前按 Pi header/manifest 结构脱敏；immutable archive metadata 保持不变，projection bytes/SHA/ContentDigest 单独报告。历史 HTTP 出口已有定向集成证据，本地实际镜像 RPC 与生产内容守卫另有直接证据，集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md)；不推导质量或成本收益。
-- **代码入口**：[schema audit comment/trigger](../../database/schema.sql)、[evidence redaction](../../apps/scheduler/src/evidence.ts)、[gateway ledger](../../apps/scheduler/src/gateway.ts)。
+- **代码入口**：[schema audit comment/trigger](../../database/schema.sql)、[evidence redaction](../../apps/scheduler/src/evidence.ts)、[gateway ledger](../../apps/scheduler/src/gateway.ts)、[Pi SDK context projection](../../packages/runtime-sandbox/src/pi-main-request-budget.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:authz`、`pnpm ci:unit:credential-compatibility`；人工抽查日志与 evidence。
 
 ### NFR-SEC-004 镜像与模块供应链

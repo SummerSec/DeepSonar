@@ -9,6 +9,16 @@
 
 [HTTP 传输](../apps/scheduler/src/gateway-transparent-http.ts) 使用 Node HTTP/HTTPS 单次交换，不隐式重试、跟随重定向或自动解压；[策略](../apps/scheduler/src/gateway-transparent-policy.ts) 只观察副本并在请求不满足预算时明确拒绝。内核纯数据库 admission 重试仍只发生在事务已回滚、尚未请求上游时，不代表重放外部调用。
 
+## Pi 模型上下文凭据投影（#1032 首片）
+
+2026-11-09 源码候选：Pi 主请求在已有 provider `streamSimple` 中，OM 在受审 registry 的 SDK 调用前，共用 [精确替换函数](../packages/runtime-sandbox/src/pi-main-request-budget.ts)。它只投影本次 SDK context 内的字符串值，把当前 main Gateway、Control、OM Gateway token 替换为 `[REDACTED]`；main/Control 取实际运行 env，OM 不在 env 中，主请求与 OM worker 均经现有模型注册表解析其认证值。主请求无法读取已配置 OM 的认证时明确拒绝，不为方便脱敏新增可继承的 secret env。工具 stdout、认证文件内容、工具错误、历史消息和 OM 来源文本因此走同一出口。原 Session 对象、认证选项、工具 ID、错误状态、额度、回执及冻结快照不改写；同次恢复调用重用同一个安全投影，而不是要求该投影与原 Session 对象引用相同。Gateway 的原字节 `credential_in_business_data` 守卫保留，不在代理、`onPayload` 或已序列化 body 上静默修复。
+
+这是模型输入防泄漏，不是操作系统身份隔离：凭据仍用于 CLI 认证，工具进程仍能读取同身份的 env / `auth.json`；搬到同 UID 的 0600 文件不能冒充隔离。任意编码、二进制/图像携密、字段名携密，以及扩展绕过已登记 SDK 出口不在本片替换保证内；现有 Gateway 拒绝边界仍独立生效。#1032 的 A1/A2 认证隔离、稳定终态诊断与 deny 审计/指标、Skill 提示仍未由此片交付，Issue 不据此关闭。
+
+OM 直接加载镜像内现有 request-budget 源码的共享函数，启动 guard 同时核验 wrapper 与该源码的完整 SHA-256；旧/缺损/被替换内容拒绝，不能只核 wrapper 或沿用旧镜像声明。没有新增依赖、配置、状态机、数据库或授权通道，不增加用户操作。Pi 专属替换函数位于 DSH installer 复用的 SDK 政策前缀之外，避免不同 TypeScript 加载器的函数序列化改变 DSH helper 内容身份；不修改 DSH 的固定 vendor/artifact pin。
+
+验收分层：`pnpm ci:unit:runtime-sandbox` 覆盖三协议 SDK 边界、无限/有限政策、env/文件/错误/OM 文本、Unicode、前缀重叠、原历史不变与双内容 guard；`pnpm ci:integration:request-budget-sdk` 用锁定 Pi AI 1.4.0 到 loopback 对照真正生成的请求与认证；已有 `pnpm ci:integration:om-provider-headers` 原生双架构专项改由真实 Pi bash 读取真实物化 env 和 `auth.json`，要求 main/observer 只收到替换结果、原 Gateway/Control 完成及用量归属仍通过。相关脚本已在核心/Reverse Actions 接线，未本机测试/build/typecheck，最终 SHA Actions 待验；未执行生产、真实厂商模型或声明质量收益。
+
 ## Job-scoped model recovery (#1002 P1-9)
 
 Pi 的 SDK 生成前扩展为每次 main 调用签发独立 UUID，并禁用不透明 SDK 内部重试。只有本次没有模型内容/工具输出、认证的原 `/_settlement/:id` 返回 `not_started/gateway_transient`，才在原存活 Job/Attempt/Session 内准备新的、关联原 UUID 的模型调用；未运行那次的空 start/error 不提交给 Agent，成功仍只有一个 message start/终态。没有进程重启、Job 入队或旧业务输入/工具效果重放。Provider 429/5xx 文案、timeout、partial output、pending/unknown、查询失败与策略拒绝均不是权限。
@@ -18,6 +28,16 @@ Pi 的 SDK 生成前扩展为每次 main 调用签发独立 UUID，并禁用不�
 新 Job 在 `runtime_knobs.gateway_model_retries` 冻结内核恢复许可，上限只见 [runtime knobs](../apps/scheduler/src/runtime-knobs.ts)，不新增用户配置。实际已准入恢复次数由原 `job_attempt_effects.intent_json.gateway_retry_of` 跨 token/Attempt 汇总；每次调用的 `recovery_policy_version` 标明完整计数来源。缺许可、旧历史缺计数来源或耗尽明确拒绝，不因换 key、token、Attempt、重新配置或解析历史而补造额度。事务回滚不能留下仅计数/仅 effect 的半成品。Gateway HTTP 交换仍单次且原字节透明；恢复发生在显式 SDK 生成/准入边界，不借代理重放未知请求。
 
 [SQL/HTTP/扩展回归](../apps/scheduler/src/gateway-model-recovery.integration.test.ts)接既有 `pnpm ci:integration:platform-api`；[SDK 边界回归](../packages/runtime-sandbox/src/pi-main-request-budget.test.ts)接 `pnpm ci:unit:runtime-sandbox`。包含真实闭端口→可信零用量→同 Job 模型生成成功、跨代际累计许可、重复/错 scope/未知/取消/期限及历史拒绝。SDK delegate 和上游是受控替身，不声称 native Pi 进程、真实 Provider、质量或容量；源码接线不等于通过，最终 SHA Actions 待验。本切片不新增 Claude/DSH 自动进程重启，未知效果仍走原受治理对账。
+
+### #1036 D：原生 Pi 恢复链的离线回归
+
+2026-11-09 新增[原生 RPC 夹具](../agent-harness/fixtures/pi-main-recovery-rpc.mjs)，接入既有 `pnpm ci:smoke:pi-rpc` 的 built-image 分支；核心 `runtime-images (base)` 的 `Pi RPC real Docker smoke` 在原生 amd64 执行，镜像缓存命中也不跳过。先验证镜像内 main policy 与当前 checkout 的完整 SHA，再原样物化其生成扩展，由固定 Pi 1.4.0 的真实 loader/SDK 调用 loopback。无 host SDK delegate、导入替换或关闭 Pi 原生 retry；容器沿用断网、只读根、受限资源与定向清理。
+
+新增场景要求：同一存活 PID/Session 内 503 → 带原认证及精确请求 UUID 的 no-start 查询 → 新 UUID/原 retry-of → 唯一成功助手 message_start/message_end；再将测试 allowance 设为耗尽，下一轮不得新增模型 HTTP 请求。相同 503 正文在查询 unknown、错误 reason 或查询拒绝时都不能授权第二个模型请求；原 SDK 失败必须成为 CLI 的首个助手失败，allowance 查询次数必须等于首次请求加显式 `auto_retry_start` 次数，不能被后续 allowance 拒绝掩盖错误的内部恢复。输出仅保留版本/源码摘要、场景状态、计数和请求关联，不输出消息正文。
+
+额外的测试用 mutation 对照在独立临时扩展副本中故意放宽 settlement HTTP/status/reason 校验，仍执行真实 Pi/SDK 与查询，并保留 unknown-usage allowance 拒绝；上述负例断言必须检出它。每次精确验证替换位置，报告单独标记 `settlement-acceptance-mutant`、扩展摘要及 `rejected-as-expected`。这不是生产扩展通过证据，不修改镜像内文件、不安装到生产，也不替代未改写扩展的原生场景。
+
+本夹具的 Gateway/allowance/settlement 是受控 HTTP 服务，不是实际 Scheduler 账本证明，也不补造 Job/Attempt 或用量结算；原 SQL/HTTP 准入、跨代际预算、取消/撤权、重复引用与未知效果回归继续独立保留。源码接线不等于通过：最终 SHA Actions 待验，未执行本机测试或生产。失败/退出的 Job、Claude/DSH 自动重启及没有可信 usage 的历史记录仍保持原人工/对账边界，#1036 其余条款不据此关闭。
 
 ## 删除凭据与历史预算（#1002 P1-7A）
 

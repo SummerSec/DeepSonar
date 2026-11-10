@@ -21,7 +21,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 ## Schema 基线纪律
 
-[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v71 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
+[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v72 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
 
 
 ### 直接重建的授权保全（#1002 P2-13）
@@ -58,7 +58,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及质量协议/观察账本；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。#831 合入的工程基线 `fdb55a01` 已在 [Actions CI](https://github.com/SummerSec/DeepSonar/actions/runs/41298113058) 完成真实 schema67 rebuild、PGDMP 备份/pg_restore 恢复及 Finding-quality PostgreSQL/HTTP/worker 验收；历史本地结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，不能代替后续 SHA 的检查。
 
-保鲜门禁的单处编号核对：当前集成候选 v71（2026-11-08 核对 DDL 与 `SCHEMA_VERSION`）；核对 main `30860441eb8f89cb6db7e35746fbf194feeba45f` 的基线为70，含凭据历史保全、Canvas 引用索引及 stopped Hub 准入。候选另补 Finding 候选引用的完整外键前缀索引，不是已发布编号。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替发布准备组合及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
+保鲜门禁的单处编号核对：当前 schema v72，#1018 在 main `396fadab` 的基线71之上增加项目任务队列；该候选最终 SHA Actions 待验。主线已包含凭据历史保全、Canvas 引用索引、stopped Hub 准入及 Finding 候选引用的完整外键前缀索引。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替队列候选及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
 
 ### Canvas 节点引用索引（#1002 P1-6）
 
@@ -273,3 +273,7 @@ OM 客户端请求 UUID 保存在现有 `job_attempt_effects.intent_json.gateway
 
 `events` 中内核 `control_receipt` 的 `gateway_request_budget` operation 保存版本化 total/main/background 请求上限；Job 级确定性 event ID 与 event_dedup 使相同策略幂等，后续记录只收紧。它保存 token 尚未签发时也存在的冻结约束；用量仍来自所有历史 job_tokens，不复制余额。原始值必须在旧快照被替换前验证和持久化；事务和缺失历史的失败边界见[透明预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)。
 #903 的 Scheduler `repair_generation` 复用 events/event_dedup，保存旧链 superseded 与唯一下一 attempt_no；旧 receipt 不更新，费用仍引用原根，见 [ADR 0016](adr/0016-repair-execution-generations.md)。
+
+## 项目任务队列基线（#1018）
+
+schema 72 增加 project_task_queues 与 project_task_queue_items，保存项目级暂停、核查时间、单调序号、占位状态和时间戳。Canvas 复合唯一键与队列外键共同约束项目归属，active 部分唯一索引约束单占位。新任务的队列记录与首 pending Job 同事务，重排与结清追加审计。既有 Job/Attempt、效果和报告仍各自权威，冻结历史不改写。基线不匹配继续 fail closed，通过既有备份及列交集重建验证，最终 Actions 待验。

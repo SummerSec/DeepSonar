@@ -7,7 +7,7 @@ import type { sql } from "../../db.js";
 import { onKnowledgeJobTerminal } from "./recovery.js";
 import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { canonical, sha256 } from "./types.js";
-import { automaticPreparationPredicate } from "./automatic-marker.js";
+import { automaticPreparationPredicate, isAutomaticWork } from "./automatic-marker.js";
 
 type Db = typeof sql;
 type Row = Record<string, unknown>;
@@ -421,13 +421,21 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     if (stopped()) return 0;
     await claimPending(stopped);
     if (stopped()) return 0;
-    const rows = await db`SELECT id FROM project_knowledge_work WHERE state='running'
+    const rows = await db`SELECT id,trigger_key,origin_job_id FROM project_knowledge_work WHERE state='running'
       ORDER BY (active_job_id IS NULL) DESC,updated_at,id LIMIT 16`;
     let progressed = 0;
     for (const row of rows) {
       if (stopped()) break;
       try {
         const workId = String(row.id);
+        if (isAutomaticWork(row)) {
+          // Release the project's running slot after any in-flight stage settles.
+          // This changes no Job, accepted result, or cumulative budget.
+          await db`UPDATE project_knowledge_work SET state='blocked',claim_expires_at=NULL,
+            reason='automatic_execution_deferred',updated_at=now()
+            WHERE id=${workId} AND state='running' AND active_job_id IS NULL`;
+          continue;
+        }
         const prepared = await prepareTrialEvidence(workId);
         if (stopped()) break;
         if (await drive(workId, prepared)) progressed++;

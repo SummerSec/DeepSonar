@@ -88,9 +88,9 @@ export function registerProjectKnowledgeRoutes(
   app: FastifyInstance,
   deps: { db?: Db; recordAudit?: typeof audit } = {},
 ): void {
+  registerAutomaticKnowledgeRoutes(app, deps);
   const db = deps.db ?? sql;
   const recordAudit = deps.recordAudit ?? audit;
-  registerAutomaticKnowledgeRoutes(app, { db, recordAudit });
   app.get("/projects/:id/knowledge", async (req, reply) => {
     try {
       const projectId = Id.parse((req.params as { id: string }).id);

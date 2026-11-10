@@ -1,7 +1,7 @@
 # CI 路由、失败重跑与成本验收（#992）
 
-> 状态：路由/五片隔离与成本观测已随 [#995](https://github.com/SummerSec/DeepSonar/pull/995) 合并；既有故障/原生重跑及文档对照证据不外推为复用收益。本分支追加 §6 输入冻结前置切片，源码/锁已接线，最终 SHA Actions 原生验收待执行；三个固定 hooks 已静态核实无二次下载；安装结果 guard 与原生执行仍待最终 SHA 核验。PR→main 跨运行复用仍未实现、未启用。
-> 同步日期：2026-11-08
+> 状态：路由/五片隔离与成本观测已随 [#995](https://github.com/SummerSec/DeepSonar/pull/995) 合并；输入冻结 #1001 已合并，最终候选/主线验收见[交付记录](https://github.com/SummerSec/DeepSonar/issues/992#issuecomment-6713522110)，§6 保留其提交期边界。§7 的 CI digest 加载修复为新候选，最终 SHA Actions 待验。PR→main 跨运行复用仍未实现、未启用，不外推复用收益。
+> 同步日期：2026-11-09
 
 对应 [NFR-OPS-003](architecture/01-system-specification.md#nfr-ops-003-发布与文档保鲜)；规范归属为[工程规格](architecture/11-engineering-specs.md#4-测试分层与实际接线)。本片承接已落地的 #972/#976，不重复宣称从零拆片或路由；不涉及 #990、生产、真实模型、合并或发布。
 
@@ -154,3 +154,11 @@ before 的 `requiredSuites=[]` / `reverseSuites=[]`，所以这是**核心重活
 **验证状态：** [APT 回归](../agent-harness/base-apt-inputs.test.mjs) 与 [CLI 安装回归](../agent-harness/base-cli-install.test.mjs) 已接 `ci:unit:ci-routing`；涵盖严格快照、SHA/实际 cache、CA 引导、npm closure/角色根及 fd 资产。这里只完成静态 hash/元数据核对和 `git diff --check`；tests/build/typecheck/安装都仅在 Actions 执行，原生双架构 base/派生镜像与真实 CLI 套件尚待最终 SHA。未取得命中与三组可比 PR→main 成本样本，收益保持 `unknown`，不关闭 #992。
 
 长期取舍见 [ADR 0018](architecture/adr/0018-frozen-base-build-inputs.md)。更新依赖时同步版本根、完整锁、快照/资产摘要与指纹/触发路径，再跑最终候选门禁；不可通过 live/fallback 延续旧输入语义。
+
+## 7. CI 缓存解析与加载身份（#992）
+
+核对基线：2026-11-09，main `46c0b15e`。核心 runtime-images 与 Chrome/Mobile/OpenHarmony 专项曾在 resolver 得到 digest 后，仍通过可变 `src_ref` tag 执行 pull/tag；两次操作之间 tag 变化会让实际候选偏离已解析对象。缓存名中的输入指纹不消除这个窗口。
+
+本候选将这四处加载统一改为相同仓库的 `name@sha256:...`，pull 和本地 tag 使用同一引用；保留原平台参数，digest 缺失或非法在调用 Docker 前拒绝，digest 拉取失败不回退 tag、不假装缓存命中成功。resolver、缓存命名空间、构建 miss、权限、矩阵、既有 fresh/reuse smoke 条件与汇总不变。核心 Chrome ARM 的原有 digest 路径和 Release 不在修改范围，CI 产物不晋升为发布来源。
+
+[缓存信任回归](../agent-harness/image-cache-trust.test.mjs)经既有 docs-freshness 的 Node step 执行真实 resolver 和从四个 workflow 提取的 shell，Docker 命令使用隔离替身：模拟 resolve 后 tag 移动、缺失/非法 digest 与拉取失败，并核对后续本地 tag 来源和双架构平台参数。这不是实际 registry 竞态或 PR→main 可信证明复用；新候选完整 Actions、实际镜像检查仍待验。没有新增设置、任务、通知或人工操作；成本收益仍为 unknown，#992 不因本片关闭。

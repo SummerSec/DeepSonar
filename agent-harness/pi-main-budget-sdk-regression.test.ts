@@ -49,11 +49,14 @@ async function fixture(compat: Record<string, unknown> = {}) {
     reasoning: true, input: ["text"], maxTokens: 8192, contextWindow: 1000000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat };
   let start: any, wrapped: any;
-  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base + "/gateway", DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" })({
+  module.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base + "/gateway", DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token",
+    DEEPSONAR_API_TOKEN: "synthetic-control-token" })({
     on(name: string, handler: any) { assert.equal(name, "session_start"); start = handler; },
     registerProvider(_name: string, config: any) { wrapped = config.streamSimple; },
   });
-  start({}, { model, modelRegistry: { getRegisteredProviderConfig() { return undefined; } } });
+  start({}, { model, modelRegistry: { getRegisteredProviderConfig() { return undefined; },
+    getAll: () => [{ ...model, provider: "__deepsonar_observational_memory" }],
+    getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "synthetic-om-token" }) } });
   return { model, bodies, allowance(cap: number) { remaining = cap; },
     async request(options = {}, context = { messages: [{ role: "user", content: "synthetic", timestamp: 1 }] }) {
       const events = [];
@@ -63,6 +66,20 @@ async function fixture(compat: Record<string, unknown> = {}) {
     async close() { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); },
   };
 }
+
+test("#1032 locked pi-ai sends a credential-free context while preserving request authentication", async () => {
+  const f = await fixture();
+  try {
+    const context = { messages: [{ role: "user", content: 'tool error: synthetic-control-token; auth.json {"key":"synthetic-main-token","om":"synthetic-om-token"}; 界🙂', timestamp: 1 }] };
+    const before = structuredClone(context);
+    assert.equal((await f.request({}, context)).at(-1).type, "done");
+    assert.equal(f.bodies.length, 1);
+    assert.doesNotMatch(JSON.stringify(f.bodies[0]), /synthetic-(?:main|control|om)-token/u);
+    assert.match(JSON.stringify(f.bodies[0]), /\[REDACTED\]/u);
+    assert.match(JSON.stringify(f.bodies[0]), /界🙂/u);
+    assert.deepEqual(context, before);
+  } finally { await f.close(); }
+});
 
 test("real pi-ai 1.4.0 nonadaptive thinking refuses insufficient allowance and context before HTTP", async () => {
   const f = await fixture();
@@ -125,7 +142,7 @@ test("#958 real pi-ai preserves both OpenAI output fields and exposes the one-to
       registerProvider(_name: string, config: any) { wrapped = config.streamSimple; },
     });
     try {
-      start({}, { model, modelRegistry: { getRegisteredProviderConfig() { return undefined; } } });
+      start({}, { model, modelRegistry: { getRegisteredProviderConfig() { return undefined; }, getAll: () => [] } });
       const request = async () => {
         const events: any[] = [];
         for await (const event of wrapped(model, { messages: [{ role: "user", content: "synthetic", timestamp: 1 }] }, { signal: AbortSignal.timeout(10_000) })) events.push(event);

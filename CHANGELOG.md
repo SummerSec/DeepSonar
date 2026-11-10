@@ -1,8 +1,40 @@
 ## [Unreleased]
 
+## [0.6.18] - 2026-11-10
+
+### 新增
+
+- **项目 FIFO 串行任务队列（#1018，#1030，ADR-0019）**：任务可原子入队，按入队顺序取得执行资格；前驱 Canvas 的治理结果、报告（存在时）、活动 Job 与效果账本收敛后才自动推进，当前 Canvas 内部仍按既有额度并行。失败/取消保留队首并暂停，恢复必须提交 `acknowledge_failed_head` 指向明确确认的当前条目，过期身份或未知效果返回稳定 409；硬重试在同一 claim 事务中以新条目 ID 排尾，Finding 报告再生成不创建任务新代际。`GET /projects/{id}/task-queue` 用 `tasks:read`，`PATCH` 与 `POST /projects/{id}/task-queue/items` 用 `jobs:control`，新控制 body 严格拒绝未知字段，详见[队列专题](docs/PROJECT_TASK_QUEUE.md)。
+- **事实用途、结果影响与待处理责任（#1019，#1024）**：事实详情新增只读 usage 投影，区分图上关联、当前确认记录实际采用、证据检查与完成判据影响，并显示实际采用对象、报告数量影响、Plan 聚合判据状态和下一步；列表分别汇总已知待处理项与用途待核查项。普通观察按需展开，人工信任仍由操作员确认，技术验证与完成门仍由原权威路径管理；批量查询限制项目/画布与读取预算，截断明确标为未知。无 schema、权限或状态所有权变更。
+
 ### 修复
 
-- **发布回写结论大小写归一（v0.6.17 发布缺陷）**：`statusCheckRollup` 来自 GraphQL `CheckConclusionState` 枚举，`gh` 输出 `SUCCESS`/`FAILURE` 等大写字面量，而 `agent-harness/release-writeback.mjs` 用小写比较 `success`、`BLOCKING_CONCLUSIONS` 也是小写集合。绿且可合并的回写 PR 因此既不在成功处 break，也不进等待批准分支，若不人工介入会耗尽 90 次轮询后判 `WRITEBACK_CHECK_TIMEOUT`（该风险已由回归用例钉住，还原旧实现即复现，**不是线上已跑满约 90 分钟的观测**）。v0.6.17 的实际记录：`release-writeback` 报 `WRITEBACK_RUN_AWAITING_APPROVAL`（job 128976917142，`04:16:45Z–04:18:00Z`），批准回写 PR 的 `ci` 后全绿，另触发的 `release-resume` 作业由维护者于 `04:49:17Z` 以 `The operation was canceled` 终止；[#1028](https://github.com/SummerSec/DeepSonar/pull/1028) 最终由人工合并完成落地。现在 `summaryConclusion` 统一归一为小写，并补大写枚举的回归用例（含 `FAILURE`/`CANCELLED`/`TIMED_OUT`/`SKIPPED` 仍必须阻断）。
+- **人工请求操作指引与等待去重（#1033）**：`request_human` 严格要求 guidance 四字段，贯穿 Control schema、运行时延迟提交、回执归一化与持久化；待办与回复弹窗读取 L1 完整请求，分别显示具体问题、需用户执行的操作、回复方式和回复后的处理计划。同一阻塞合并展示，独立未知效果对账保留优先级，授权/凭据与人工决定按真实类型呈现；旧请求缺失指引和当前版本状态可见，不伪造 ACK。
+- **平台门禁的 kernel 证明非成功出口（#1002 P0-3，#1023）**：完整 stopped objective，或有可信回执证明的修正次数/token/原期限耗尽时，沿既有生命周期结束当前 Hub；不按 Agent 标签关闭历史业务/授权等待，也不改成无条件失败。
+- **同项目授权账号池（#1002 P1-8，#1025）**：显式默认账号优先；无默认时仅在显式授权且同 Provider/CLI/解析模型的池内，按同项目非终态 Job 数、历史分配数与稳定 ID 为新 Job 选账号并冻结。readiness 只读，既有 Job 恢复保留仍合法的原账号偏好；无新配置/游标/分配账本，不承诺严格并发 round-robin，不在运行中因故障换 key，运行中路由仍归 #834。
+- **凭据 impact 的历史用量（#1002 P1-7A，#1021）**：`GET /credentials/{id}/impact` 与详情 impact 增加必返 `usage_history.token_generations` 与 `ledger_entries`，覆盖全部状态 token，一个 token 多条账本不重复计 token，按 actor 项目范围计数；不返回 token/账本内容，不改删除保护、预算、用量或冻结快照。
+- **no-start 模型调用的同 Job 恢复（#1002 P1-9，#1026）**：main 与 OM 共用严格连接前失败/持久零用量结算；Pi 在原存活 Job/Attempt/Session 内只凭认证 scoped no-start 读取结果准备新的关联模型调用，禁用 SDK 不透明重试，失败的空 generation 不留幽灵 assistant/start。Provider 408/429/5xx、timeout、partial、查询失败与未知外部效果不自动重放。
+- **provision 失败诊断前置（#1002 P2-10，#1027）**：原 Job→Attempt 锁内首次 write-once 写入 `job.provision_failed` 审计与 `state_json.provision_failure_audit_id`，重复请求保留首份；不改 lifecycle/phase、effect、快照、预算或 replay policy，不保存 SDK 原文/堆栈/env。#1010 的回调与固定信号已随 #1011 集成，未观察到句柄仍不构成未启动证明。
+- **已接受完成的普通非零退出结算（#1016，#1045/#1047）**：主 allowance 只保留精确 `COMPLETION_ALREADY_ACCEPTED` 的拒绝反馈；进程来源的覆盖文本必须带本地退出码框架（正整数且小于 128），再按原锚定匹配判定，结构化终态、已接受终态与最终运行错误门一并保留。缺终态、transport、非零退出后无拒绝文本、未知用量与其他预算拒绝仍不放行，不额外请求模型或重放效果。
+- **知识沉淀收敛为成功来源登记与只读历史预览（#1034 → #1035，ADR-0020 → ADR-0021）**：成功业务 Job 结算后在原事务 savepoint 中只登记来源审计元数据，不再自动入整理队列或创建知识 Job；`GET /projects/:id/knowledge/backfill` 用 `projects:read` 与项目作用域，每页默认 10、最多 20 条，返回当前资格/原因、来源登记与已有 work，不返回来源正文。无对应 POST 补做入口，历史自动 work 不再自动推进，既有 Agent 显式整理请求流程与预算不变；批处理、整链 token 预算和 schema 改动暂缓。
+- **Pi/OM 模型上下文的 Job 凭据移除（#1032 首片，#1037）**：Pi 主扩展与 OM wrapper 在注册的 SDK 出口按最长优先把已知 Job 凭据替换为 `[REDACTED]`，凭据来自实际认证来源（环境 token、materialized `auth.json`、解析后的 OM provider 认证），OM 认证异常以 `PI_MAIN_BUDGET_OM_AUTH_INVALID` fail closed；不改写 Gateway 业务字节，不改变鉴权参数或历史。
+- 这是模型输入侧首片：同 UID 工具仍可读原始 env/`auth.json`，任意编码、二进制与绕过这些出口的扩展不在覆盖内，因此不构成 OS 凭据隔离，也不关闭 #1032。
+- **工具进度误报警与未知事件诊断（#1038，#1042）**：`tool_execution_update` 在事件映射阶段统一归类为已知进度，移除其后独立的告警白名单；未知事件按有界分组（最多 32 个 reason/type 桶加一个溢出桶）汇总，detail 只含固定 reason、适配器标识与类型摘要（脱敏后前 16 位 SHA-256 与原始长度），不含原始类型或正文。硬退出不保留计数，真实告警仍保留。
+- **资产 helper 缺失与遗留卷回收（#1039，#1041）**：缺失资源诊断额外接受 `Error response from daemon:` / `Error:` 前缀下针对精确转义身份的 `name`/`name or ID`/`ID` 形式，helper 已不存在时继续非强制删除遗留卷；stderr 优先级、超时拒绝、归属/代际/lifecycle 限制、按不可变 helper ID 删除与其他资源错误失败语义不变。
+- **create 路径 5xx 熔断暂停 claim（#1046，#1048）**：Dispatcher 在 upload 检查后、扫描 claim 前读取进程内熔断器：5 分钟内 2 次可重试 provision 失败即暂停新 claim，90 秒冷却后半开，成功 provision 关闭并清空窗口。仅计数既有 `isRetryableProvisionFailure` 判定的失败，List 成功不算 create 可用证明；不新增 server 端点、配置、持久状态或 retry 语义，paused 不等于对未知 POST 失败做 pending 延迟重试。
+
+### 改进
+
+- **Web 清理失效项目镜像页签与钉版本展示（#1020，#1022）**：删除通往已删除路由的「镜像」页签，在项目设置中提供受 `images:read` 与项目范围约束的平台镜像项目视图入口，并清理废弃的项目钉版本文案与标记；无 API、schema 或状态机变更。
+- **发布回写结论大小写归一（#1029，v0.6.17 发布缺陷）**：`summaryConclusion` 统一归一为小写，补大写枚举回归（`FAILURE`/`CANCELLED`/`TIMED_OUT`/`SKIPPED` 仍必须阻断）。v0.6.17 的实际记录是回写作业报 `WRITEBACK_RUN_AWAITING_APPROVAL` 后由人工批准并合并 [#1028](https://github.com/SummerSec/DeepSonar/pull/1028)，不是线上跑满约 90 分钟轮询的观测。
+- **按已解析 digest 加载运行时缓存（#992，#1043）**：`resolve-image-src-cache.sh` 只对精确 `^sha256:[0-9a-f]{64}$` 摘要输出 `source_image=<image>@<digest>`，四个缓存加载点消费该值并在 Docker 前独立复核摘要形状，mobile/OpenHarmony 保留显式 `--platform`；一致性检查改为要求该输出与守卫，禁止回退可变 tag。该切片修复解析与加载之间的内容身份，不实现跨运行可信 proof 复用。
+- **原生 Pi 同会话 no-start 恢复回归（#1036 D，#1040）**：`agent-harness/fixtures/pi-main-recovery-rpc.mjs` 在 built-image 下用安装的 Pi 1.4.0 与生产 wrapper 执行：503 后必须按精确失败 UUID 查认证结算，再以 `x-deepsonar-retry-of` 关联新 UUID，业务体摘要不变；unknown/wrong-reason/denied 三种负例只允许一次模型 POST。另加结算过度放行的策略变异对照，用于证明断言能区分生产与放行实现；这是 CLI 层合成上游证据，不替代真实 Scheduler Job/Attempt 与 SQL 累计预算验收。
+
+### 升级与未验证范围
+
+- 本版目标 schema72；v0.6.17 为 schema71（核对 2026-11-10）。差异是新增 `project_task_queues` 与 `project_task_queue_items` 两张队列表及索引。非空库必须先按受治理流程备份/重建并核验列交集回填，没有增量 ALTER、双读双写或旧配置 fallback；旧配置不符合新契约时 fail closed。
+- 已冻结 Job 的历史预算、Evidence、回执与未知效果不改写；#1036 仍未完成的受控恢复/运维动作、Canvas 大图容量结论、D 的完整同 Job 累计预算证据与真机并发矩阵不在本版。
+- 生产部署、真实模型质量、独立人工标注、现场告警数量与容量收益未验证；#1032 的 OS 凭据隔离、稳定终态诊断与拒绝审计、#1039 的原生 Podman 现场频次、#1046 的现场 4 Job 因果与真实失稳窗口、#992 的真实缓存命中与跨运行 proof 复用均记为未验证。#834 账号池运行中路由、#833 及其他暂缓项继续不实施。
 
 ## [0.6.17] - 2026-11-08
 
@@ -1663,3 +1695,4 @@
 
 [0.6.16]: https://github.com/SummerSec/DeepSonar/compare/v0.6.15...v0.6.16
 [0.6.17]: https://github.com/SummerSec/DeepSonar/compare/v0.6.16...v0.6.17
+[0.6.18]: https://github.com/SummerSec/DeepSonar/compare/v0.6.17...v0.6.18

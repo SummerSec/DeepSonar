@@ -1,6 +1,6 @@
 # 项目 Memory 与 Skill
 
-> 状态：#752 实现；同步日期：2026-11-09（新增成功业务 Job 自动登记和历史补做；本次最终 SHA Actions 待验）。代码、[schema 基线](../database/schema.sql)和测试是事实入口。模型效果与生产试验结果需要独立记录，不能由状态机夹具推定。
+> 状态：#752 实现；同步日期：2026-11-07（#960 候选 CAS 保留根；既有拒绝反馈边界不变）。代码、[schema 基线](../database/schema.sql)和测试是事实入口。模型效果与生产试验结果需要独立记录，不能由状态机夹具推定。
 
 项目知识分为 Memory（有来源的简短事实）和 Skill（触发条件、步骤、输入输出、不适用边界）。两者有稳定身份、不可变版本和 active 指针。草稿、候选和评测资料不进入普通 Job 目录。
 
@@ -54,30 +54,6 @@ project、Job、Attempt、actor 和 assignment 均由平台推导，不接受请
 
 ## 工作与结算
 
-### 成功任务自动登记与历史补做
-
-普通业务 Job 和最新 Attempt 成功结算后，Scheduler 在终态事务内以独立 savepoint 登记知识 work，不再仅依赖 Agent 主动请求。来源必须具有冻结的 `request_project_knowledge` 权限，项目仍有效且没有未结算的 `effect_pending` / `unknown` 效果；Hub、Report、知识治理及 trial Job 排除，避免递归。登记失败保留脱敏日志，不回滚业务结果。固定来源 Job trigger key 与已有来源 work 检查保证重复回调和补做不重置预算。
-
-Agent 请求与自动登记创建 work 时在同一事务通知现有 Dispatcher 通道；延迟重试及有界批次剩余项使用已有单一 schedule wake timer，重启从持久 next_attempt_at 重新装载，不依赖轮询。登记只写待准备 work。Dispatcher 先在短事务外读取和校验该来源 Job 自己的 Fact/Evidence，最多20项，每项遵守12KiB上限，并复用其冻结治理方法；之后按 Canvas → Job → work 顺序复核、登记 CAS 元数据并冻结 manifest。待准备 work 不可被 maker 领取。没有可用来源时保留 `completed` 的无操作记录及明确跳过 reason，不产生模型 Job；权限、完整性、未知效果等拒绝保留阻塞原因。Fact 的原验证状态保留，成功 Job 不会把未验证观察变成事实或已验证 Skill。
-
-自动准备由 Scheduler 专属的精确触发键 `knowledge:auto:<origin_job_id>` 与合法准备阶段标记共同识别；候选查询、锁后复核、失败更新、普通领取排除和唤醒使用同一判据。Agent 的整理原因是自由文本，即使与内部标记重名，也保留原输入清单并沿普通知识工作路径推进，不能改变机器状态或绕过项目串行门。
-
-知识 tick 内的 schedule refresh 重算未来 timer，不重新 kick 已到期但被 claims 暂停、配额或任务门禁挡住的普通 Job；启动、timer 与外部 refresh 仍可唤醒到期工作。同一在途 refresh 合并外部唤醒请求，避免丢失外部事件或形成普通任务的无退避自唤醒环；有界批次剩余的已到期知识 work 仍保留唤醒，不因普通任务去重而搁置。实际 kickDispatcher → dispatchOnce → 知识 tick → refresh 回归接入知识集成套件，最终 SHA Actions 待验。
-
-管理入口 `GET /projects/:id/knowledge/backfill` 分页预览历史 Job 资格、已有 work 和不可执行原因，不读原始会话或写入。`POST` 同路径要求 `projects:write`、精确且不重复的最多5个 `job_ids` 与原因，通过同一登记函数补做；批次含跨项目/不存在来源时整批拒绝。它不恢复旧 token、不改历史快照或 Attempt、不重新执行业务任务、不直接激活候选。知识工作画布沿用来源 Job 冻结的 `allow_egress`，缺少明确许可时保持关闭，不从项目默认值扩大网络权限；已创建的历史画布不改写。现有工作链的独立评测、审查和累计预算继续生效。
-
-已有 work 的预览包含当前 state、stage、reason、累计 Job 数和更新时间，候选尚未产生时也可定位等待、跳过或阻塞。
-
-自动登记同样受既有知识历史保留约束：来源任务产生 work 后，清空历史的硬重试继续以 `TASK_DELETE_KNOWLEDGE_RETAINED` 拒绝，不删除 work、来源 Job、回执或版本来腾出重试机会。需要再次执行业务时使用新任务，或按现有 Job 当前配置重跑入口重新冻结，继续核验其授权、未知效果与预算；这些执行不等于重置原知识工作链。
-
-| 行为 | 注意力成本 | 约束 |
-| --- | --- | --- |
-| 成功任务自动登记 | 不逐任务索取确认，不新增通知；可能增加模型执行 | 沿用项目调度与知识累计预算；无来源不启动模型 |
-| 无来源或治理拒绝 | 操作者按需查询原因 | 保留现有 work 状态和明确 reason，不伪装已新增知识 |
-| 历史批量补做 | 一次查看一页，再提交精确来源 | 只读预览最多20项，写入最多5个 Job，重复不重置预算 |
-
-新行为的数据库与管理权限回归接入既有 `ci:integration:project-knowledge`，完整路由和 scope 回归仍由常规门禁执行。没有相应最终 SHA Actions 或真实 work/Job/version 证据时，不宣称运行平台已启用、历史补做已完成或知识已激活。
-
 `project_knowledge_work` 保存触发去重、stage、generation、当前 Job 和累计预算。Scheduler 为 work 创建独立标准 Canvas；maker、每个 case×arm trial、evaluator、reviewer 都是既有角色的普通 Job，使用现有 Dispatcher、Attempt、沙箱、Model Gateway、归档和终态恢复路径。知识 Job 的终态不触发业务 Hub/Report。
 
 试验组按动作选择 without / baseline / candidate；每组独立 Job、Attempt 和 session。试验 Job 的常规项目知识目录与共享资产下发为空，只能读取该组分配的输入。固定覆盖 target、negative_trigger、missing_input、cross_project、coexistence、revocation。缺环境、缺证据、终态异常或未知外部效果保留 needs_eval/blocked，不能把说明文字当作执行成功。
@@ -125,3 +101,9 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 ### #778 条件建议与选择声明
 
 当前 Job 可在显式授权后使用 `suggest_project_skills` 查看本项目精确 Skill 的条件匹配，再用 `record_skill_choice` 记录 select/reject/none。宿主重算和撤权复查；选择回执不生成 usage 或触发 work，实际拉取/反馈仍走原链路。作者条件、调用者目标和独立效果分开，token 余额与质量未知时不伪造证据。协议、非模型验收和后续边界见[Skill 建议专题](SKILL_SUGGESTIONS.md)。
+
+## 成功来源登记与历史补做预览
+
+成功业务 Job 的来源登记复用 append-only `audit_logs`，仅记录 Job/Attempt/Canvas 引用及 Fact/Evidence 存在标记。`GET /projects/:id/knowledge/backfill` 在项目读权限内分页预览当前补做资格、登记记录和已有 work，不复制来源正文、不登记历史来源、不启动整理。项目批量整理、整链 token 预算和 schema 变更暂缓；旧自动 work 保留历史且不再自动启动后续阶段。登记失败由 savepoint 隔离并告警，不回滚业务成功；未登记的历史 Job 仍可通过预览发现。登记不是知识候选、质量通过或持久内容副本，来源删除后不保证仍可补做。
+
+Barry 的全局 Git Skill 源通过既有 trusted + enabled 同步机制接入，仓库公开性和维护由来源所有者管理；同步现有 Skill 不代表业务任务产生了新沉淀，本版也不自动回写 GitHub。

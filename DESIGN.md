@@ -120,7 +120,7 @@ Artifact、Finding、Fact 的职责不能混写：Artifact 是内部写入真相
 当前已落地的是第一刀：内置 pack、已信任 Git skill module、RoleConfig 生成只读目录投影；Job 级只读发现操作为 `list_capabilities`、`search_capabilities`、`describe_capability`、`validate_composition`、`preview_materialization`。现有 `explore`、`analyze`、`review`、`test`、`code`、`audit` 作为内置 pack 继续工作，`deepsonar-management` 也可以作为平台能力包被发现。
 Agent 运行中拉取业务 Skill 使用 `list_available_skills`、`search_skills`、`pull_skill`；这些操作返回并校验具体模块文件，但不改变 Job 的平台权限边界。
 
-#752 项目 Memory / Skill 有不可变版本、独立评测审查和持久 receipt/work。成功业务 Job 由 Scheduler 幂等登记有界整理，管理者可按精确 Job 补做；无来源留跳过记录，候选仍须独立评测审查。平台发现 Skill 指导搜索和使用，Scheduler 管理权限；项目 Skill 默认私有，来源项目可授权精确版本，授权不包含来源 Memory/Evidence 或未来版本。Job 冻结目录与实时撤销取交集，禁用后重启用不恢复旧 Job 权限。试验按 case×arm 分配独立标准 Job 与最小输入，不接业务 Hub/Report。实现、预算、管理 API 与验收边界见 [项目知识](docs/PROJECT_KNOWLEDGE.md)。 Knowledge/Skill 拒绝在领域、runtime 和 Control 工具反馈间保留分类与行动建议；可修正输入与生命周期/权限失效分开，见[反馈切片边界](docs/PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。
+#752 项目 Memory / Skill 有不可变版本、独立评测审查和持久 receipt/work。平台发现 Skill 指导搜索和使用，Scheduler 管理权限；项目 Skill 默认私有，来源项目可授权精确版本，授权不包含来源 Memory/Evidence 或未来版本。Job 冻结目录与实时撤销取交集，禁用后重启用不恢复旧 Job 权限。试验按 case×arm 分配独立标准 Job 与最小输入，不接业务 Hub/Report。实现、预算、管理 API 与验收边界见 [项目知识](docs/PROJECT_KNOWLEDGE.md)。 Knowledge/Skill 拒绝在领域、runtime 和 Control 工具反馈间保留分类与行动建议；可修正输入与生命周期/权限失效分开，见[反馈切片边界](docs/PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。
 
 发现不是授权。Scheduler 仍按项目范围、Job 快照、平台工具 allowlist、镜像兼容性和网络策略决定可执行集合。模型不能用 Manifest 扩大 `platform_tools`、凭据、镜像、`allow_egress` 或项目范围。
 
@@ -278,7 +278,7 @@ pending → claimed → provisioning → running → succeeded
 
 Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报。`pg_notify('deepsonar_jobs')` 是主要调度唤醒；可以关闭轮询。
 
-每个 Job 领取建立 Scheduler-owned Attempt。claim 按有界 keyset 候选页使用独立事务，每页按 advisory lock → 排序 Canvas → project → Job → Attempt 取锁并重新核验暂停、scope 与配额；只计真实领取，忙锁候选不耗槽位，提交释放本页锁后才检查后续页。外部动作先写 `job_attempt_effects` 的 intent/`effect_pending`，观察到结果后再写 settlement。启动对账按 Attempt phase 和 effect 分类：只有尚未开始且无效果的准备阶段可以回到 `pending`；未知效果统一进入 `orphan`，清理 Token、沙箱、画布同步和租约，禁止自动重放。只有明确宿主证据证明尚未调用外部创建，才可显式把 provision 结算为 `never_started`；缺少 `sandbox_id` 或未见迟到句柄不能证明未开始。已调用 runner 的 opaque 失败、timeout/cancel/orphan 及 pending provision 在终态收口时保持 `unknown`，既有真实 settlement 不改写。自动 provision 重试在 Canvas → Job → 当前最新 Attempt 锁下重核，只接纳无效果或明确 settled/never_started 的原 Attempt；`replay_policy` 不变。规则与本轮待验收边界见 [ADR 0015](docs/architecture/adr/0015-governed-completion-recovery.md)。 运行期不得让 `unknown` 效果把已完成的工作拖死（#874）：attempt 中断时先按既有证据规则结清可判定的在途效果（`gateway_model_request` 有 `job_usage_ledger` 行、`canvas_delivery` 依节点存在性），只把证据不足的保留为 `unknown`；`interrupted` 不加入全局终态枚举（该 attempt 仍可被后续 attempt 续跑），中断数据库状态不证明 runner 已退出，`agent_run` 保持未知。Scheduler 内置周期性效果对账（`runtime-reconcile:` operation_id、5 分钟、上限 500），复用同一 `runEffectReconcile` 语义：只结清 `auto`、`undecided` 维持 `unknown`、从不重放；Reaper 判定 `waiting_human` 超时前先对该 Job 定向对账；存在未结清效果或本轮对账进展时保留等待，最终 UPDATE 也检查对账扫描排除的 active/planned 效果，不把平台待对账记为 human_timeout。该 [#946 切片](docs/AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)的最终 SHA Actions 待验，实际通知投递计时仍未实现。
+每个 Job 领取建立 Scheduler-owned Attempt。claim 按有界 keyset 候选页使用独立事务，每页按 advisory lock → 排序 Canvas → project → Job → Attempt 取锁并重新核验暂停、scope 与配额；只计真实领取，忙锁候选不耗槽位，提交释放本页锁后才检查后续页。外部动作先写 `job_attempt_effects` 的 intent/`effect_pending`，观察到结果后再写 settlement。启动对账按 Attempt phase 和 effect 分类：只有尚未开始且无效果的准备阶段可以回到 `pending`；未知效果统一进入 `orphan`，清理 Token、沙箱、画布同步和租约，禁止自动重放。只有明确宿主证据证明尚未调用外部创建，才可显式把 provision 结算为 `never_started`；缺少 `sandbox_id` 或未见迟到句柄不能证明未开始。已调用 runner 的 opaque 失败、timeout/cancel/orphan 及 pending provision 在终态收口时保持 `unknown`，既有真实 settlement 不改写。自动 provision 重试在 Canvas → Job → 当前最新 Attempt 锁下重核，只接纳无效果或明确 settled/never_started 的原 Attempt；`replay_policy` 不变。 OpenSandbox create 路径另有进程内熔断（#1046）：只统计 dispatcher 自己观测到的可重试 provision 失败（如 `SANDBOX_START_FAILED` / egress sidecar 5xx），5 分钟窗口内 2 次即暂停新 claim；90s 冷却后只放行一个半开 canary，成功关闭、失败重开。list-only 探针仍不能证明 create 可用，该熔断不新增 server 端点、配置或持久状态，也不自动重放已失败 Attempt。规则与本轮待验收边界见 [ADR 0015](docs/architecture/adr/0015-governed-completion-recovery.md)。 运行期不得让 `unknown` 效果把已完成的工作拖死（#874）：attempt 中断时先按既有证据规则结清可判定的在途效果（`gateway_model_request` 有 `job_usage_ledger` 行、`canvas_delivery` 依节点存在性），只把证据不足的保留为 `unknown`；`interrupted` 不加入全局终态枚举（该 attempt 仍可被后续 attempt 续跑），中断数据库状态不证明 runner 已退出，`agent_run` 保持未知。Scheduler 内置周期性效果对账（`runtime-reconcile:` operation_id、5 分钟、上限 500），复用同一 `runEffectReconcile` 语义：只结清 `auto`、`undecided` 维持 `unknown`、从不重放；Reaper 判定 `waiting_human` 超时前先对该 Job 定向对账；存在未结清效果或本轮对账进展时保留等待，最终 UPDATE 也检查对账扫描排除的 active/planned 效果，不把平台待对账记为 human_timeout。该 [#946 切片](docs/AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)的最终 SHA Actions 待验，实际通知投递计时仍未实现。
 
 Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`unknown`/`pending` 保持硬失败，不能以 provider 5xx 文案替代效果 authority。#873 的 OM admission 回滚耗尽与已持久结算的请求前 transport 使用同一个宿主 error.message carrier，覆盖 SDK 只保留内层消息的路径；上游请求与结算不作为可重试 admission 重放。
 
@@ -326,7 +326,9 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
 
-运行器失败保留结构化终态与宿主进程/传输来源；Pi 主请求 allowance 只通过私有宿主错误身份保留 Gateway 精确完成拒绝码，隔离 SDK 抛出的同名异常并等待 SDK 的结构化 message_end，不由 streaming update 制造终态或重放模型请求。已接受完成不能覆盖真实进程失败，限定放行与测试契约见 [CLI adapters](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)。
+运行器失败保留结构化终态与宿主进程/传输来源；Pi 主请求 allowance 只通过私有宿主错误身份保留 Gateway 精确完成拒绝码，隔离 SDK 抛出的同名异常并等待 SDK 的结构化 message_end，不由 streaming update 制造终态或重放模型请求。真实进程失败不因已接受完成被吞掉；唯一窄例外（#1045）是 CLI 在宿主已持久接受完成后以普通非零码退出、且终态错误精确等于完成拒绝身份，仅剥离本机生成的退出码前缀，信号退出（≥128）、stderr 尾文与其它文本仍失败。限定放行与测试契约见 [CLI adapters](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)。
+
+#1032 首片在 Pi 主执行与 OM 的 SDK 调用前共用精确凭据替换，覆盖工具 env/认证文件/错误与来源文本，不修改原 Session 或认证选项；OM 内容准入同时绑定 wrapper 与共享源码。Gateway 原字节守卫保持，尚未实现同 UID 认证隔离或整个 Issue 的诊断/审计要求；[范围与验收](docs/MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)区分源码、待验 Actions 与未执行生产。
 
 **Pi 模型预算与截断（#958）：** `/models` 限制作为 `provider_declared` 元数据保留，创建时逐字段冻结显式配置、声明、客户端选值及来源到 `model_budget`，Pi 投影 `contextWindow/maxTokens`；未观测的 CLI 默认保持未知，声明不证明真实容量。`length` 的 text/tool/thinking-only 不进入通用完成 nudge，改为同一精确 Session 的有界状态查询、必要压缩与短反馈；每步复用原完成/修正生命周期、lease/deadline、预算和未知效果守卫。压缩 start/end 不证明进展，不补造上下文摘要；耗尽保留截断和具体诊断，已接受完成/人工等待仍是权威。详情与 Actions 入口见[预算与恢复专题](docs/PI_MODEL_BUDGET_RECOVERY.md)，最终 SHA 待验，不宣称上游容量或生产重跑通过。
 
@@ -338,7 +340,7 @@ OpenSandbox upgrade baseline (2026-11-01): installed SDK 1.2 and canonical serve
 
 **Model Gateway 目录校验与 alias 语义（#570 / #656 / #679 / #707）：** 选模准入只认账号 `settings_config_json` 按其 Agent CLI 方言解析的模型 ID，探测 `model_catalog_json` 不授予选模资格。Job 先解析 Hub/runtime profile 的 `model_ref`、项目缺省和全局角色模型，并应用受治理的候选、能力与 fallback 规则；未指定时优先取账号已配置模型首项，再由 Provider/CLI 投影补缺省。显式模型没有符合账号配置清单的候选时以 `provider_credential_no_match` 返回结构化 RepairFeedback；选中后的模型准入继续 fail closed。仅无显式模型且名单为空的 CLI 缺省路径允许软降级。应急直通只可由平台 env `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH=true` 或管理员级项目 Agent allowlist `allow_model_catalog_passthrough` 授权，RoleConfig 字段不再授权。真正使用 CLI 内置缺省时，快照以 `cli-default:<name>` 标记，运行时 concurrency / CLI 请求生成层剥掉前缀；`job_usage_ledger.model`、`model_catalog_match` 与尽力读取的 `upstream_reporting_model` 保持各自口径，无上游报告字段不伪造。
 
-**#1002 P1-9 同 Job 模型失败恢复：** Pi 的 SDK 生成前扩展在同存活 Job/Attempt/Session 内，只对无内容且有 scoped Kernel no-start 证明的失败准备新关联请求。内核在原 admission 事务复查 owner/lease/deadline/原预算，并用现有 effect intent 跨 token/Attempt 消费创建期冻结的恢复许可；历史缺许可/计数来源、重复引用、partial/unknown 或 Provider 文案均不授权继续。空失败不留下重复 message_start；原快照、已接受效果和 never replay policy 不改、不退请求额度，不重启 Agent。Gateway 单次原字节传输不变；SDK/SQL 回归已接线，最终 SHA Actions 待验，详见[契约](docs/MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。
+**#1002 P1-9 同 Job 模型失败恢复：** Pi 的 SDK 生成前扩展在同存活 Job/Attempt/Session 内，只对无内容且有 scoped Kernel no-start 证明的失败准备新关联请求。内核在原 admission 事务复查 owner/lease/deadline/原预算，并用现有 effect intent 跨 token/Attempt 消费创建期冻结的恢复许可；历史缺许可/计数来源、重复引用、partial/unknown 或 Provider 文案均不授权继续。空失败不留下重复 message_start；原快照、已接受效果和 never replay policy 不改、不退请求额度，不重启 Agent。Gateway 单次原字节传输不变；SDK/SQL 回归保留，#1036 D 新增固定 Pi 的同进程原生回归（受控 Gateway，不冒充真实账本），最终 SHA Actions 待验，详见[契约](docs/MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。
 
 **Model Gateway 透明传输（#923）：** 新 Job 冻结非秘密 provider 配置摘要，secret-only 轮换可用，目标/业务头变化及旧 Job 缺绑定明确拒绝；目录与推理/model 默认头分层，客户端业务头优先。旧 Job 的显式 refreeze 与未知效果恢复边界见专题，需与 #903 联合验收。 已授权请求保持原始方法、路径/query、端到端头与 body；绑定认证、目标和 HTTP framing 由内核控制，不隐式重试/重定向或改写模型/输出参数。请求流先有界收全再准入；响应/SSE 原字节及时转发，usage 旁路观察。三 CLI 主请求经沙箱显式准入适配器核对原预算 allowance，合规原字节转发，不合规直接拒绝；Pi 通过原生 provider SDK hook 逐次准备 cap/usage，Claude 只接启动/resume 原生上限；DSH 通过锁版本/摘要的独立 vendor adapter 在 SDK 调用前逐次协商；Claude Code 2.1.312 保留 start/resume 原生启动输出上限，运行中余额不足时明确拒绝并提示，不修改已形成 body；用户已接受此兼容限制，不要求逐请求自动适配，该范围决定不再阻塞发布。quota/DB 回滚降级依赖原 events 的 scoped kernel 无效果回执，同 UUID 不重发；OM wrapper 在 scoped 持久结算确认前不提交终止结果，保持 pending/unknown 与主后台隔离。详见[透明传输契约](docs/MODEL_GATEWAY_TRANSPARENCY.md)及 [ADR 0017](docs/architecture/adr/0017-transparent-gateway-settlement.md)。#923 最终 SHA Actions 待验，不继承历史通过记录。
 
@@ -442,6 +444,8 @@ v0.6.3 集成核对（2026-11-01）：[#831](https://github.com/SummerSec/DeepSo
 
 ## 14. 仓库地图与事实入口
 
+项目提供可选持久 FIFO 任务队列（#1018，schema 72）。完整任务按统一 claim 锁串行取得执行资格，当前任务内部 Job 继续按既有预算和并发执行。等待人工、任务暂停和未决效果保留占位，失败/取消的继续需要确认当前队首身份；治理恢复后完整成功按成功策略推进。队列暂停只阻止后续任务，硬重试原子重建队尾位置且保留暂停；独立 Finding 报告再生成不创建任务新代际。任务页集中显示占位、顺序和原因，减少手动观察并逐个启动的操作。实现与最终 Actions 验收分开记录，详见[项目任务队列](docs/PROJECT_TASK_QUEUE.md)。
+
 | 路径 | 职责 |
 | --- | --- |
 | `apps/scheduler` | Fastify API、Dispatcher、Hub、Job lifecycle、Verify、Research、Report、Gateway |
@@ -480,3 +484,5 @@ RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-o
 当前项目 Skill 可通过 `suggest_project_skills` 做精确版本的条件匹配，再用 `record_skill_choice` 保存选择声明回执；宿主重算、撤权复查与原 `pull_skill` 授权独立。作者条件和调用者目标不是独立效果证据，未测质量分母为 0，不自动启用或晋升 Pack。接口、非模型验收矩阵和范围见[Skill 建议专题](docs/SKILL_SUGGESTIONS.md)。
 
 发布恢复仅复用经 GitHub 原运行/成功阶段/artifact 归档摘要绑定的冻结载荷和原签名回执，默认分支恢复身份与原 tag 发布身份分离；不重建镜像、不移动 tag、不重新签名。两阶段独立恢复及拒绝条件见[发布专题](docs/RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)。
+
+成功任务的知识来源仅登记元数据，历史补做仅只读预览；当前不自动启动整理 Agent。边界见 [项目知识](docs/PROJECT_KNOWLEDGE.md)。

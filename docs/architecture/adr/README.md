@@ -1,7 +1,7 @@
 # 架构决策记录（ADR）
 
 > 状态：**历史回填与当前集成决策索引**。0001–0006 保留原回填；0009 仍提议、0010 已采纳，0011–0014 保留各自已定边界，0015 记录本轮受治理完成恢复取舍；决策采纳不代表最终 SHA 工程验收或组合发布完成。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-08
 
 ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」不再只留在 issue 讨论和索引表格里。目录总览与维护流程见 [`../README.md`](../README.md)。事实仍以 [`docs/architecture/README.md`](../README.md)、相关架构视图、代码、schema、OpenAPI 和测试为准；`DESIGN.md` 与 [`docs/README.md`](../../README.md) 提供摘要和专题状态。
 
@@ -65,7 +65,9 @@ ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」
 | [0015](0015-governed-completion-recovery.md) | 完成未知效果由持久宿主事实、去重 Hub 与受治理对账/停止处理 | 已采纳；当前修复分支待最终 SHA Actions，退出会话/新 Attempt 的完整继续执行保留缺口 | #874 / FR-CTRL-010 / FR-JOB-006 |
 | [0017](0017-transparent-gateway-settlement.md) | 透明模型数据面与原账本 scoped 持久结算确认分离 | 已采纳契约；#923 分支实现待最终 SHA Actions，不替代0013权限/未知效果边界 | #923 / FR-CRED-003/004 / FR-CAP-009 / NFR-PERF-004 |
 | [0018](0018-frozen-base-build-inputs.md) | 基础镜像依赖使用固定来源与摘要，失败不回退 live | 已采纳构建边界；前置实现待最终 SHA 原生 Actions；跨运行复用未实现 | #992 / NFR-OPS-003 |
-| [0019](0020-scheduler-knowledge-triggers.md) | Scheduler 为成功业务 Job 幂等登记有界整理与精确历史补做 | 已采纳；实现待最终 SHA Actions，独立质量未验证 | 用户2026-11-09明确要求 / FR-KNOW-001 |
+| [0019](0019-project-task-queue.md) | 项目队列通过既有领取事务授予执行资格 | 已采纳 | #1018，FR-TASK-008；最终 SHA Actions 待验 |
+| [0020](0020-scheduler-knowledge-triggers.md) | Scheduler 为成功业务 Job 幂等登记有界整理与精确历史补做 | 已收敛；自动整理部分由 0021 收窄为只登记成功来源 | 用户2026-11-09明确要求 / FR-KNOW-001 |
+| [0021](0021-knowledge-source-preview.md) | 只登记成功来源并只读预览历史资格 | 已采纳 | #1035，FR-KNOW-001；批处理、整链 token 预算和 schema 改动暂缓 |
 
 ---
 
@@ -108,3 +110,6 @@ ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」
 #770 A 的独立评审提议见 [0009 Finding 来源身份](0009-finding-source-identity.md)。
 
 - [0016：Scheduler 修复执行代际与 stale Hub 退出](0016-repair-execution-generations.md)（扩展 0015 的 v1 继续执行边界）。
+
+- [0020：成功任务自动整理](0020-scheduler-knowledge-triggers.md)（已被0021取代）。
+- [0021：只登记成功来源并预览历史资格](0021-knowledge-source-preview.md)（已采纳；批处理、整链 token 预算和 schema 改动暂缓）。

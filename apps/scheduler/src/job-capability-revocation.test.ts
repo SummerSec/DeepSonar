@@ -101,6 +101,7 @@ async function terminalOwner(ports: Record<string, unknown>) {
 function terminalTransaction(failTable?:"job_tokens"|"job_capability_tokens") {
   let running=true,gatewayActive=true,capabilityActive=true;
   const writes: Array<{table:string;reason:unknown}>=[];let audits=0;
+  const sourceRegistrations: Array<{jobId:string;status:string}>=[];
   const failure=new Error("offline revocation write failed");
   const tx=Object.assign(async(parts:TemplateStringsArray,...values:unknown[])=>{
     const query=parts.join("?").replace(/\s+/gu," ").trim();
@@ -127,13 +128,20 @@ function terminalTransaction(failTable?:"job_tokens"|"job_capability_tokens") {
     if(query.startsWith("SELECT * FROM jobs")) return [{id:"job-fixture"}];
     throw new Error(`unexpected terminal query: ${query}`);
   },{json:(value:unknown)=>value});
-  return {tx,writes,failure,audits:()=>audits};
+  return {tx,writes,sourceRegistrations,failure,audits:()=>audits};
 }
 async function ownerFor(fixture:ReturnType<typeof terminalTransaction>) {
   return terminalOwner({console:{warn:()=>{}},
     lockCanvasForConvergence:async(tx:unknown)=>{assert.equal(tx,fixture.tx);return true;},
     settleAttemptTerminal:async(tx:unknown)=>{assert.equal(tx,fixture.tx);},
     advancePlanTaskAfterTerminal:async(tx:unknown)=>{assert.equal(tx,fixture.tx);},
+    registerKnowledgeSourceAfterTerminal:async(tx:unknown,jobId:string,status:string)=>{
+      assert.equal(tx,fixture.tx,"source registration must use the caller transaction");
+      assert.equal(jobId,"job-fixture");
+      assert.deepEqual(fixture.writes,[{table:"job_tokens",reason:`job_${status}`},
+        {table:"job_capability_tokens",reason:`job_${status}`}],"both token stores must be revoked before source registration");
+      fixture.sourceRegistrations.push({jobId,status});
+    },
     planExecutionPorts:{},inc:()=>{},onKnowledgeJobTerminal:async()=>true,
   });
 }
@@ -143,10 +151,13 @@ for(const status of ["succeeded","failed"] as const) test(`finalizeJob ${status}
   assert.equal(await owner.finalizeJob(f.tx,"job-fixture",status),true);
   assert.deepEqual(f.writes,[{table:"job_tokens",reason:`job_${status}`},{table:"job_capability_tokens",reason:`job_${status}`}]);
   assert.equal(f.audits(),1);
+  assert.deepEqual(f.sourceRegistrations,[{jobId:"job-fixture",status}]);
   assert.equal(await owner.finalizeJob(f.tx,"job-fixture",status),false);
   assert.equal(f.writes.length,2);assert.equal(f.audits(),1);
+  assert.equal(f.sourceRegistrations.length,1,"duplicate terminal must not register again");
 });
 for(const table of ["job_tokens","job_capability_tokens"] as const) test(`finalizeJob propagates ${table} revocation failure for caller rollback`,async()=>{
   const f=terminalTransaction(table),owner=await ownerFor(f);
   await assert.rejects(owner.finalizeJob(f.tx,"job-fixture","failed"),error=>error===f.failure);
+  assert.equal(f.sourceRegistrations.length,0,"revocation failure must propagate before source registration");
 });

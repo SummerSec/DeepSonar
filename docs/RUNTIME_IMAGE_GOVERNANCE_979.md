@@ -3,6 +3,8 @@
 > 状态：**代码修复与 OCI 内容核验；正式 Release/线上目录恢复未完成**。
 > 同步日期：2026-11-07
 
+#1032 首片在 2026-11-09 将 OM 使用的 [SDK context 精确替换](MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)接入同一镜像源码；启动 guard 同时核验 wrapper 和 `/opt/deepsonar/request-budget-source/pi-main-request-budget.ts` 的完整摘要。下文 2026-11-07 的 OCI 记录是历史证据，不能满足新 guard 或证明新功能已发布；新内容及原生双架构 Actions 尚待最终 SHA 验收，旧快照与镜像不可变。
+
 ## 根因和影响
 
 当前平台的 DSH profile 使用镜像内 `deepsonar-index.js`，而官方目录仍提供的 `deepsonar-base:0.6.4` 没有该入口。Cordis 插件加载失败后没有注册 provider route，因此 `no adapter registered for provider` 并不说明 Provider 账号的 route 名配置错误。

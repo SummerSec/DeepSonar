@@ -8,15 +8,8 @@ const get = (path: string, summary: string, query?: Record<string, unknown>): Op
 const post = (path: string, summary: string, body: Record<string, unknown>): Op =>
   ({ method: "post", path, summary, tags: ["Project knowledge"], scope: "projects:write", body });
 export const KNOWLEDGE_MANAGEMENT_OPERATIONS: Op[] = [
-  get(prefix + "/backfill", "只读预览历史 Job 的知识补做资格与已有 work", {
+  get(prefix + "/backfill", "只读预览历史任务来源登记、当前补做资格与已有整理记录；不启动整理", {
     limit: { type: "integer", minimum: 1, maximum: 20, default: 10 }, offset: page.offset,
-  }),
-  post(prefix + "/backfill", "为最多五个精确成功 Job 幂等登记知识整理，不恢复历史执行权限", {
-    type: "object", additionalProperties: false, required: ["job_ids", "reason"],
-    properties: {
-      job_ids: { type: "array", minItems: 1, maxItems: 5, uniqueItems: true, items: { type: "string", format: "uuid" } },
-      reason: { type: "string", minLength: 1, maxLength: 2000 },
-    },
   }),
   get(prefix, "项目知识目录（包含候选和历史状态，无人工激活入口）", { ...page, kind: { type: "string", enum: ["memory", "skill"] }, status: { type: "string", enum: ["draft", "active", "stale", "retired", "revoked"] }, query: { type: "string", maxLength: 200 } }),
   { ...get(prefix + "/receipts", "按原 Job 读取持久操作回执，适用于终态与重启后", { ...page, job_id: { type: "string", format: "uuid" } }), requiredQuery: ["job_id"] },

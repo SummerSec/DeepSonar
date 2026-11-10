@@ -13,6 +13,7 @@ import observationalMemory from "/opt/deepsonar/pi-extensions/node_modules/pi-ob
 // different class identities, so only runtime.js tracks the actual OM tasks.
 import { Runtime } from "/opt/deepsonar/pi-extensions/node_modules/pi-observational-memory/src/runtime.js";
 import { createAssistantMessageEventStream, streamSimple as compatStreamSimple } from "@earendil-works/pi-ai/compat";
+import { redactPiContextSecrets } from "/opt/deepsonar/request-budget-source/pi-main-request-budget.ts";
 
 const VERSION = "3.1.4";
 const INTEGRITY = "sha512-jgQbFyLMs4wWhkf6F0voOgzMwtIXsb8+ks0MsPKpPxkdpyMX5E/el6Mk/vJ40m8GlKwBIsCKjL1r7Z2U8dCtmA==";
@@ -365,6 +366,8 @@ function correlatedHeaders(value: unknown, requestId: string): Record<string, st
 
 function guardedRegistry(registry: unknown, config: FrozenConfig, state: GuardState, assertConfig: () => void): AnyRecord {
   if (!isRecord(registry)) fail("PI_OM_MODEL_REGISTRY_MISSING");
+  const secrets = [process.env.DEEPSONAR_GATEWAY_TOKEN, process.env.DEEPSONAR_API_TOKEN]
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
   const assertModel: (model: unknown) => asserts model is AnyRecord = (model) => {
     try {
       if (state.hardFailure) throw state.hardFailure;
@@ -419,8 +422,9 @@ function guardedRegistry(registry: unknown, config: FrozenConfig, state: GuardSt
           // too, without changing the frozen registry model or route identity.
           requestModel.maxTokens = Math.min(model.maxTokens ?? remaining, remaining);
         }
+        const safeContext = redactPiContextSecrets(context, [...secrets, token]);
         requestStarted = true;
-        const source = stream.call(owner, requestModel, context, requestOptions);
+        const source = stream.call(owner, requestModel, safeContext, requestOptions);
         let terminal: AnyRecord | undefined;
         for await (const event of source) {
           if (event.type === "error") {
