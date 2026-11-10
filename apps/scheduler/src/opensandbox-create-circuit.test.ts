@@ -150,7 +150,7 @@ test("#1046 dispatcher wires the circuit into claims, provision failures and rec
     "successful provision must close it only through the claim-time probe");
   assert.ok(source.includes("isRetryableProvisionFailure(error)"), "only retryable service shapes should trip");
   assert.ok(source.includes("shouldLogCreateCircuitPause()"), "the pause log must be throttled at the circuit");
-  assert.ok(source.includes("createProbe = createAdmission.canary"),
+  assert.ok(source.includes("createProbe = createCircuitProbeFor(createAdmission)"),
     "probe identity must be bound at admission time");
   assert.ok(!source.includes('openSandboxCreateCircuitStatus().state === "half_open",'),
     "the outcome must not sample the global circuit state when it is recorded");

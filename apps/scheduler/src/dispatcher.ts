@@ -172,6 +172,7 @@ import {
   OPENSANDBOX_CREATE_CIRCUIT_OPEN,
   openSandboxCreateCircuitAllowsClaim,
   type CreateCircuitProbe,
+  createCircuitProbeFor,
   shouldLogCreateCircuitPause,
   openSandboxCreateCircuitStatus,
   recordOpenSandboxProvisionFailure,
@@ -668,9 +669,7 @@ function logPlatformClaimsPaused(reason: string | null): void {
  * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
 export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCircuitProbe | null }[]> {
-  // Claim-time create-probe identity for this pass; stays null unless the opensandbox
-  // create circuit admitted these claims as its half-open probe.
-  let createProbe: CreateCircuitProbe | null = null;
+  let createProbe: CreateCircuitProbe | null = null; // claim-time half-open probe identity
   if (managesHostDockerRuntime()) {
     const disk = await refreshHostDiskPressure();
     if (!hostDiskAllowsDispatch(disk)) {
@@ -718,11 +717,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       }
       return [];
     }
-    // The probe identity is bound here, at admission time, not sampled later when the
-    // outcome arrives; a Job claimed while the circuit was closed carries no probe.
-    createProbe = createAdmission.canary
-      ? { canary: true, episode: createAdmission.episode }
-      : null;
+    createProbe = createCircuitProbeFor(createAdmission); // bound here, not sampled at outcome time
   }
   type ClaimCursor = { priority: number; createdAt: string; id: string };
   type ClaimPage = { claimed: { id: string }[]; cursor: ClaimCursor | null; more: boolean };

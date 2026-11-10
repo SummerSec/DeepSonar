@@ -38,6 +38,11 @@ export type OpenSandboxCreateCircuitState = "closed" | "open" | "half_open";
  */
 export type CreateCircuitProbe = { canary: boolean; episode: number | null };
 
+/** Bind an admission result to the probe identity it must be attributed with. */
+export function createCircuitProbeFor(admission: { canary: boolean; episode: number | null }): CreateCircuitProbe | null {
+  return admission.canary ? { canary: true, episode: admission.episode } : null;
+}
+
 export type OpenSandboxCreateCircuitStatus = {
   state: OpenSandboxCreateCircuitState;
   episode: number;
