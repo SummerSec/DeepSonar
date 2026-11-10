@@ -242,6 +242,31 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         [gzipSync(Buffer.from(JSON.stringify({ debug: token.plaintext })))]);
       assert.equal(compressedLeak.status, 400);
       assert.equal(captured.length, before);
+      // #1032: 每次凭据拒绝都必须留下可审计痕迹，而痕迹本身不得携带凭据或请求元数据。
+      const denials = await sql`SELECT actor_type, actor_id, action, project_id, resource_type, resource_id,
+          request_id, ip, user_agent, result, error_code, after_json
+        FROM audit_logs WHERE action = 'gateway.credential_denied' ORDER BY id ASC`;
+      assert.ok(denials.length >= 4, "each credential surface records one denial trace");
+      const surfaces = new Set<string>();
+      for (const row of denials) {
+        assert.equal(row.actor_type, "system", "denial audit must not persist request actor metadata");
+        assert.equal(row.action, "gateway.credential_denied");
+        assert.equal(row.result, "denied");
+        assert.equal(row.error_code, "credential_in_business_data");
+        assert.equal(row.project_id, projectId);
+        assert.equal(row.resource_type, "job_token");
+        assert.equal(row.resource_id, token.id);
+        assert.equal(row.request_id, null);
+        assert.equal(row.ip, null);
+        assert.equal(row.user_agent, null, "raw User-Agent can itself carry the rejected credential");
+        assert.deepEqual(Object.keys(row.after_json as Record<string, unknown>).sort(),
+          ["attempt_id", "job_id", "surface"], "after_json holds only fixed keys");
+        assert.equal((row.after_json as Record<string, unknown>).job_id, jobId);
+        surfaces.add(String((row.after_json as Record<string, unknown>).surface));
+      }
+      assert.deepEqual([...surfaces].sort(), ["body", "request_target", "upstream_data"],
+        "body, request target and business-header rejections each name their surface");
+      assert.ok(!JSON.stringify(denials).includes(token.plaintext), "audit entries never echo the credential");
     });
     await t.test("duplicate policy members cannot exploit different upstream JSON parsers", async () => {
       const before = captured.length;

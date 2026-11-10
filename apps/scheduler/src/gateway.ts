@@ -21,7 +21,7 @@ import { gatewayEndToEndHeaders, appendGatewayHeaders, requestGatewayHttp } from
 import { assertGatewayOutputBudget, assertGatewayUnambiguousPolicyJson, gatewayObservationBytes, transparentGatewayUrl } from "./gateway-transparent-policy.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { audit } from "./audit.js";
+import { audit, recordSystemAudit } from "./audit.js";
 import { config } from "./config.js";
 import { jobTokenQuotaExhausted } from "./runtime-knobs.js";
 import {
@@ -1019,6 +1019,34 @@ function deny(reply: FastifyReply, code: number, error: string, code2: string) {
   return reply.code(code).send({ error: { type: code2, message: error } });
 }
 
+type CredentialDenialSurface = "request_target" | "body" | "upstream_target" | "upstream_data" | "trailers";
+
+/**
+ * #1032：Job 凭据出现在业务数据里时的拒绝必须留下可审计记录，但不能把凭据带进审计。
+ *
+ * `audit()` 会持久化 request_id、IP 与最多 300 字符的原始 User-Agent；这三处都可能
+ * 本身就携带着被拒绝的凭据，因此拒绝记录走系统审计（request 元数据一律为 null），
+ * after 只写固定 surface 枚举与已核验的 UUID。不写请求体、错误原文、header 原文。
+ */
+function auditCredentialDenial(
+  jt: { id?: unknown; job_id?: unknown; attempt_id?: unknown; project_id?: unknown },
+  surface: CredentialDenialSurface,
+): void {
+  void recordSystemAudit({
+    action: "gateway.credential_denied",
+    projectId: typeof jt.project_id === "string" ? jt.project_id : null,
+    resourceType: "job_token",
+    resourceId: typeof jt.id === "string" ? jt.id : null,
+    result: "denied",
+    errorCode: "credential_in_business_data",
+    after: {
+      surface,
+      job_id: typeof jt.job_id === "string" ? jt.job_id : null,
+      attempt_id: typeof jt.attempt_id === "string" ? jt.attempt_id : null,
+    },
+  });
+}
+
 /** Only host-proven no-effect paths may emit this envelope; Pi's SDK may retain only error.message. */
 function gatewayNotStartedError(message: string) {
   const error = { type: "gateway_transient", effect_status: "not_started", message };
@@ -1277,7 +1305,10 @@ export function registerGateway(app: FastifyInstance): void {
       let decodedTarget = req.url;
       try { decodedTarget = observeGatewayTarget(req.url); }
       catch { return deny(reply, 400, "Invalid request target encoding", "invalid_request_target"); }
-      if (req.url.includes(token) || decodedTarget.includes(token)) return deny(reply, 400, "Job credential in request target", "credential_in_business_data");
+      if (req.url.includes(token) || decodedTarget.includes(token)) {
+        auditCredentialDenial(jt, "request_target");
+        return deny(reply, 400, "Job credential in request target", "credential_in_business_data");
+      }
       if (req.url === "/gateway/_allowance") {
         const [credential] = await sql`SELECT * FROM credentials WHERE id = ${jt.credential_id}`;
         if (!credential || credential.status !== "active") return deny(reply, 502, "Bound credential is unavailable", "credential_inactive");
@@ -1375,7 +1406,10 @@ export function registerGateway(app: FastifyInstance): void {
         try { observedRequest = gatewayObservationBytes(outboundBuf, headerString(req.headers["content-encoding"])); }
         catch { observedRequest = null; }
       }
-      if (observedRequest?.includes(token)) return deny(reply, 400, "Job credential in body", "credential_in_business_data");
+      if (observedRequest?.includes(token)) {
+        auditCredentialDenial(jt, "body");
+        return deny(reply, 400, "Job credential in body", "credential_in_business_data");
+      }
       if (observedRequest) {
         try { assertGatewayUnambiguousPolicyJson(observedRequest); }
         catch { return deny(reply, 400, "Ambiguous model or budget members", "ambiguous_policy_json"); }
@@ -1501,7 +1535,10 @@ export function registerGateway(app: FastifyInstance): void {
         let observedTarget = url;
         try { observedTarget = observeGatewayTarget(url); }
         catch { return deny(reply, 400, "Invalid upstream target encoding", "invalid_request_target"); }
-        if (url.includes(token) || observedTarget.includes(token)) return deny(reply, 400, "Job credential in upstream target", "credential_in_business_data");
+        if (url.includes(token) || observedTarget.includes(token)) {
+          auditCredentialDenial(jt, "upstream_target");
+          return deny(reply, 400, "Job credential in upstream target", "credential_in_business_data");
+        }
         const frozenSnapshot = (jt.agent_snapshot_json ?? {}) as Record<string, unknown>;
         const om = workload === "observational_memory"
           ? observationalMemoryConfig(parseFrozenPiExtensions(frozenSnapshot.pi_extensions)) : null;
@@ -1512,6 +1549,7 @@ export function registerGateway(app: FastifyInstance): void {
         if (hasInvalidProviderHeaders(configured)) return deny(reply, 502, "Invalid provider header configuration", "invalid_provider_headers");
         if ((outboundBuf?.includes(token) ?? false) || req.raw.rawHeaders.some((value, i) => i % 2 === 1
           && value.includes(token) && !["authorization", "x-api-key", "anthropic-api-key", "proxy-authorization"].includes(req.raw.rawHeaders[i - 1]!.toLowerCase()))) {
+          auditCredentialDenial(jt, "upstream_data");
           return deny(reply, 400, "Job credential in business data", "credential_in_business_data");
         }
         const connection: string[] = [];
@@ -1520,7 +1558,10 @@ export function registerGateway(app: FastifyInstance): void {
         }
         // Fastify's injected IncomingMessage omits rawTrailers when none exist.
         const inboundTrailers = req.raw.rawTrailers ?? [];
-        if (inboundTrailers.some(value => value.includes(token))) return deny(reply, 400, "Job credential in trailers", "credential_in_business_data");
+        if (inboundTrailers.some(value => value.includes(token))) {
+          auditCredentialDenial(jt, "trailers");
+          return deny(reply, 400, "Job credential in trailers", "credential_in_business_data");
+        }
         requestTrailers = gatewayEndToEndHeaders([...connection, ...inboundTrailers], { request: true });
         headers = appendGatewayHeaders({ ...upstreamProtocolHeaders(safeProvider), ...configured.headers }, req.raw.rawHeaders,
           upstreamFinalAuthHeaders(safeProvider, secret));
