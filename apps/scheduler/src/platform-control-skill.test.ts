@@ -47,13 +47,13 @@ test("平台 Skill 记录 Job 级 API 的发现和调用路径", () => {
   assert.match(content, /不对账、不停止目标、不清除 unknown，也不申请新执行权/);
   assert.match(content, /旧 Hub 正常结算、无阻塞未知效果、原期限\/预算\/权限仍有效/);
   // Reviewed static Skill now includes the governed stale-grant exit contract (#903).
-  assert.match(content, /不要用 `env` \/ `printenv` 批量导出/);
+  assert.match(content, /不要用\s*`env` \/ `printenv` 批量导出/);
   assert.match(content, /credential_in_business_data/);
-  assert.match(content, /模型上下文出口会把它们的原值替换为 `\[REDACTED\]`/);
-  // Reviewed static Skill now includes the env-dump guard (#1032 P2-5).
+  assert.match(content, /只有 Pi 运行时已登记的主请求 \/ OM SDK context 字符串值/);
+  assert.match(content, /其它 CLI 与出口不得假定自动脱敏/);  // Reviewed static Skill now includes the env-dump guard (#1032 P2-5).
   assert.equal(
     DEEPSONAR_CONTROL_SKILL_SHA256,
-    "2a0fb89669fcd6f521d0e0ce768ad8fbee8b3de121e2fe98a6cd95df2098fa08",
+    "61fdf232e879b9a591203df0a6b2eafdefe896ad78f8301a35f115d27cbc9932",
   );
 });
 
