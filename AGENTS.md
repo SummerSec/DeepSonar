@@ -45,7 +45,7 @@
 - GitHub 操作使用宿主提供的 `gh`，维持 `SummerSec` 身份，不另行登录或读取其他账号凭据。Git 提交的作者与提交者均使用 `SummerSec <SummerSec@users.noreply.github.com>`，不修改操作者的全局 Git 身份配置。
 - 在宿主分配的独立 worktree 中开发，不直接在共享主线目录混入其他任务的改动，不直接推送主线绕过 PR。
 - **分支命名（#931）**：按改动用途命名，例如 `feat/<简短主题>`、`fix/<简短主题>`、`docs/<简短主题>`、`refactor/<简短主题>`、`test/<简短主题>`、`chore/<简短主题>`；有 issue 时可写 `fix/123-short-topic`。禁止以 AI / Agent 工具名作为分支名开头（不区分大小写的 `agent`、`codex`、`cursor`、`claude`、`copilot`、`chatgpt`、`gemini`、`openai`，含 `/`、`-`、`_` 与嵌套路径形式）。校验规则以 [`agent-harness/branch-name-policy.mjs`](agent-harness/branch-name-policy.mjs) 为唯一实现，`pnpm ci:unit:ci-routing` 会跑其回归；推送前可用 `node -e "import('./agent-harness/branch-name-policy.mjs').then(m=>m.assertBranchName(process.argv[1]))" <branchname>` 自检。GitHub 的 [Block AI tool branch prefixes](https://github.com/SummerSec/DeepSonar/rules/20986002) ruleset 负责服务端拦截，其模式列表与上述 token 清单一致；仓库外宿主若自行拼分支名前缀，需按同一规则修改。
-- 提交 PR 后由用户人工审查和合并。禁止自动合并、调用 `gh pr merge` 或启用 `--auto`；CI 通过不等于获得合并授权。下文主 Agent 的“合并结果”指整合子 Agent 的工作，不授权合并 GitHub PR。
+- **合并条件**：PR 非草稿态（Ready for review）、`ci-summary` 与全部适用专项在最终 head 上实际通过、评审已通过且无未解决的阻塞意见、改动不属于重大功能变更时，主 Agent 可自主决定并合并，bug 类修复优先适用，不必逐 PR 等待人工合并。任一条件不满足，或改动属于重大功能变更（新增/删除 API 或 schema 契约、安全与权限边界、运行时/镜像准入、发布流程、跨模块重构）时，仍由用户人工审查和合并。任何情况下都不得启用无人值守 `--auto`、自动批准 PR、直推 `main` 或降低 ruleset / required check；合并须绑定通过检查的最终 head SHA 并保存真实 merged / commit 证据。下文主 Agent 的“合并结果”指整合子 Agent 的工作。
 - **本轮有限授权（2026-11-08，#1002 / #1011 → v0.6.17）**：用户在当前会话明确授权主 Agent 自主做技术决策并合并本轮对应交付 PR，不逐 PR 等待人工合并。执行前必须核查最新 diff、处理实质阻塞评审，确认最终 head 的完整核心与全部适用专项实际全绿，并绑定该 SHA 合并；保存真实 merged/commit 证据。此记录不代替真实会话授权，不扩展其他任务的权限，不启用 `--auto`、自动批准、直推 main 或降低保护规则；生产部署不在授权内。
 - 继续遵守本文件的工程、文档同步和验收规则。交付摘要区分已通过、失败和未执行的验证；没有真实 GitHub 请求到 PR 的端到端运行证据时，不宣称该流程已经实测通过。生产部署、发版和其他不可逆外部操作仍需各自的明确授权。
 
@@ -154,7 +154,7 @@ pnpm ci:images
 - 四个专家工作流各自跑同一个 `ci-run-plan.mjs`（不是四份判断），重活矩阵只在 `mode == ready-full` 时启动；`push@main` 与手动运行仍是完整验收。专家套件的 PR 触发保留，尚未迁移到 `ci.yml` 的 `workflow_call` 统一入口。
 - 改分类器、汇总或本套路由本身时按高风险改动处理：需要独立评审与完整验收，不能用自己的快检规则给自己放行。
 - 出现漏测、重复触发或 required check 错配时，先把 `CI_PR_MODE` 设回 `full`（或删掉变量），再修路由。
-- 现状核对（2026-11-03）：`main` 的 active ruleset `main required ci-summary` 要求 `ci-summary`，另有 AI 工具分支前缀规则；没有 merge queue。required check 不替代最终 SHA 的全部适用检查或人工合并授权。启用 merge queue 必须同时加 `merge_group: checks_requested` 并验队列 SHA，**没有队列就不要先加 `merge_group`**（死配置）。
+- 现状核对（2026-11-03）：`main` 的 active ruleset `main required ci-summary` 要求 `ci-summary`，另有 AI 工具分支前缀规则；没有 merge queue。required check 不替代最终 SHA 的全部适用检查，也不单独构成合并许可（合并条件见[开发与交付](#开发与交付)）。启用 merge queue 必须同时加 `merge_group: checks_requested` 并验队列 SHA，**没有队列就不要先加 `merge_group`**（死配置）。
 
 ## 验收边界：不要求生产测试部署（2026-10-31）
 
