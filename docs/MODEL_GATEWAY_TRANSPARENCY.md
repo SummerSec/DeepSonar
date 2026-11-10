@@ -29,6 +29,16 @@ Pi 的 SDK 生成前扩展为每次 main 调用签发独立 UUID，并禁用不�
 
 [SQL/HTTP/扩展回归](../apps/scheduler/src/gateway-model-recovery.integration.test.ts)接既有 `pnpm ci:integration:platform-api`；[SDK 边界回归](../packages/runtime-sandbox/src/pi-main-request-budget.test.ts)接 `pnpm ci:unit:runtime-sandbox`。包含真实闭端口→可信零用量→同 Job 模型生成成功、跨代际累计许可、重复/错 scope/未知/取消/期限及历史拒绝。SDK delegate 和上游是受控替身，不声称 native Pi 进程、真实 Provider、质量或容量；源码接线不等于通过，最终 SHA Actions 待验。本切片不新增 Claude/DSH 自动进程重启，未知效果仍走原受治理对账。
 
+### #1036 D：原生 Pi 恢复链的离线回归
+
+2026-11-09 新增[原生 RPC 夹具](../agent-harness/fixtures/pi-main-recovery-rpc.mjs)，接入既有 `pnpm ci:smoke:pi-rpc` 的 built-image 分支；核心 `runtime-images (base)` 的 `Pi RPC real Docker smoke` 在原生 amd64 执行，镜像缓存命中也不跳过。先验证镜像内 main policy 与当前 checkout 的完整 SHA，再原样物化其生成扩展，由固定 Pi 1.4.0 的真实 loader/SDK 调用 loopback。无 host SDK delegate、导入替换或关闭 Pi 原生 retry；容器沿用断网、只读根、受限资源与定向清理。
+
+新增场景要求：同一存活 PID/Session 内 503 → 带原认证及精确请求 UUID 的 no-start 查询 → 新 UUID/原 retry-of → 唯一成功助手 message_start/message_end；再将测试 allowance 设为耗尽，下一轮不得新增模型 HTTP 请求。相同 503 正文在查询 unknown、错误 reason 或查询拒绝时都不能授权第二个模型请求；原 SDK 失败必须成为 CLI 的首个助手失败，allowance 查询次数必须等于首次请求加显式 `auto_retry_start` 次数，不能被后续 allowance 拒绝掩盖错误的内部恢复。输出仅保留版本/源码摘要、场景状态、计数和请求关联，不输出消息正文。
+
+额外的测试用 mutation 对照在独立临时扩展副本中故意放宽 settlement HTTP/status/reason 校验，仍执行真实 Pi/SDK 与查询，并保留 unknown-usage allowance 拒绝；上述负例断言必须检出它。每次精确验证替换位置，报告单独标记 `settlement-acceptance-mutant`、扩展摘要及 `rejected-as-expected`。这不是生产扩展通过证据，不修改镜像内文件、不安装到生产，也不替代未改写扩展的原生场景。
+
+本夹具的 Gateway/allowance/settlement 是受控 HTTP 服务，不是实际 Scheduler 账本证明，也不补造 Job/Attempt 或用量结算；原 SQL/HTTP 准入、跨代际预算、取消/撤权、重复引用与未知效果回归继续独立保留。源码接线不等于通过：最终 SHA Actions 待验，未执行本机测试或生产。失败/退出的 Job、Claude/DSH 自动重启及没有可信 usage 的历史记录仍保持原人工/对账边界，#1036 其余条款不据此关闭。
+
 ## 删除凭据与历史预算（#1002 P1-7A）
 
 凭据删除仍拒绝未结束 Job、活动镜像扫描和任何项目配置引用，不替操作者清理白名单或选择替代账号。允许删除时，在原事务内撤销该凭据的全部 Gateway token，再删除秘密凭据；`job_tokens.credential_id` 由外键置空，只有 `revoked` 行允许没有凭据。历史 token 的身份、workload、已用请求/Token 数和有限上限继续保留，`job_usage_ledger` 的 token/Attempt/effect 引用及用量原样保留，Job 冻结快照不改写。既有 `revoked_job_token_count` 仍只统计本次从 active 撤销的行。

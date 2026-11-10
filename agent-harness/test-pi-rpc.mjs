@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as piFixture from "./fixtures/pi-om-real-rpc.mjs";
+import { runNativePiMainRecovery } from "./fixtures/pi-main-recovery-rpc.mjs";
 import { assertInstalledPiImage } from "./pi-image-packaging.mjs";
 
 const packagingOnly = process.argv.includes("--packaging-only");
@@ -33,6 +34,7 @@ if (process.argv.includes("--inside")) {
     const reports = await piFixture.runRealPiRpc();
     assert.equal(reports.length, piFixture.PI_RPC_SCENARIOS.length);
     console.log(`Pi 1.4.0 + canonical OM 3.1.4: ${reports.length} offline real-RPC image scenarios passed`);
+    console.log(JSON.stringify({ image_identity: identity, native_main_recovery: await runNativePiMainRecovery() }));
   }
 } else if (process.env.DEEPSONAR_PI_BINARY) {
   assert.equal(packagingOnly, false, "--packaging-only requires the Docker image entrypoint");
@@ -72,6 +74,7 @@ if (process.argv.includes("--inside")) {
     "-v", `${path.join(repo, "packages/runtime-sandbox/src/pi-jsonl-framer.ts")}:/tmp/deepsonar-runtime/pi-jsonl-framer.ts:ro`,
     "-v", `${path.join(repo, "packages/runtime-sandbox/src/runtime-adapters.ts")}:/tmp/deepsonar-runtime/runtime-adapters.ts:ro`,
     "-v", `${path.join(repo, "packages/runtime-sandbox/src/pi-rpc-output.ts")}:/tmp/deepsonar-runtime/pi-rpc-output.ts:ro`,
+    "-v", `${path.join(repo, "packages/runtime-sandbox/src/pi-main-request-budget.ts")}:/tmp/deepsonar-runtime/pi-main-request-budget.ts:ro`,
     "-e", "DEEPSONAR_PI_IMAGE_PROOF=1",
     "-e", "DEEPSONAR_PI_IMAGE_SOURCE_ROOT=/tmp/deepsonar-tests",
     "-e", `DEEPSONAR_PI_WRAPPER_SHA256=${wrapperSha256}`,
