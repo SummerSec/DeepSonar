@@ -55,12 +55,15 @@ export function registerRecoveryDiagnosticsRoutes(app: FastifyInstance): void {
     if (parsed.data.status && parsed.data.status.length !== statuses.length) {
       return fail(reply, 400, "WAITING_CLASSIFICATION_INVALID", "status must be a subset of waiting/terminal recovery set");
     }
-    const projectIds = parsed.data.project_id;
+    const requestedProjectIds = parsed.data.project_id;
     // Every requested project must be in the actor's scope: the list is an
     // inclusion filter, so validating only the first id would leak the rest.
-    if (projectIds.some((id: string) => !projectScopeAllows(actor.projectId, id))) {
+    if (requestedProjectIds.some((id: string) => !projectScopeAllows(actor.projectId, id))) {
       return fail(reply, 403, PROJECT_MISMATCH, "project mismatch");
     }
+    // A project-bound admin is confined to its own project: an empty query must not mean
+    // "all projects", and the caller filter is never authorization (#1036 review).
+    const projectIds = actor.projectId ? [actor.projectId] : requestedProjectIds;
     // List-only read: audit noise would exceed the ledger design; denial path
     // stays in the standard auth pipeline typed above.
     const entries = await readWaitingClassification({ projectIds, statuses: statuses.length ? statuses : undefined, limit: parsed.data.limit });

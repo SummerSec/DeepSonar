@@ -38,6 +38,8 @@ export interface WaitingRow {
   started_at: Date | null;
   finished_at: Date | null;
   human_subject_kind: string | null;
+  /** `human` 事件 subject 的 `type`（`finding` / `platform_blocker` 等），与 kind 分列投影。 */
+  human_subject_type: string | null;
   rejected_completions: number;
   last_completion_receipt: string | null;
   unresolved_effects: number;
@@ -83,9 +85,15 @@ const HUMAN_DECISION_KINDS = new Set(["business_decision", "high_risk_action", "
 const HUMAN_AUTHORIZED_KINDS = new Set(["authorization", "credential"]);
 const HUMAN_TOPIC_KIND_RE = /^[a-z0-9_]{1,48}$/;
 
-function normalizeSubjectKind(value: string | null): string | null {
-  if (value === null || !HUMAN_TOPIC_KIND_RE.test(value)) return null;
-  return value;
+/**
+ * 与 `readCompletionExecutionState` 同一投影：Finding subject 的真实契约是
+ * `{type:"finding", finding_id, subject_revision}`（没有 kind），所以先看 type 再看
+ * 平台阻塞的合法 kind；只有 kind 的历史行仍按 kind 归类，其它一律不猜（null）。
+ */
+function normalizeWaitingHumanSubject(type: string | null, kind: string | null): string | null {
+  if (type === "finding") return "finding";
+  if ((type === null || type === "platform_blocker") && kind !== null && HUMAN_TOPIC_KIND_RE.test(kind)) return kind;
+  return null;
 }
 
 export function waitingRowToEntry(
@@ -99,10 +107,8 @@ export function waitingRowToEntry(
     ? [...new Set(row.unresolved_effect_kinds)].sort()
     : [];
   const completed = row.last_completion_receipt === "persisted_deferred";
+  const subject = normalizeWaitingHumanSubject(row.human_subject_type, row.human_subject_kind);
   const deadlineElapsed = Boolean(budget?.deadline && Date.parse(budget.deadline) <= Date.now());
-  const budgetExhausted = budget
-    ? budget.usage_status !== "known" || deadlineElapsed || budget.remaining_tokens === 0
-    : false;
   // 分类优先级与 #1036 A 一致：未知效果不受其它信号影响；死路只在无未结清
   // 效果时才判，避免把可对账的窗口误报成终点；再按人工类，最后 fallback。
   let category: WaitingCategory;
@@ -110,8 +116,8 @@ export function waitingRowToEntry(
   else if (row.objective_stopped
     || (row.rejected_completions >= COMPLETION_REPAIR_LIMIT && rejectedCompletionVerified !== false)) {
     category = "confirmed_platform_dead_end";
-  } else if (HUMAN_AUTHORIZED_KINDS.has(row.human_subject_kind ?? "")) category = "authorized_operator";
-  else if (HUMAN_DECISION_KINDS.has(row.human_subject_kind ?? "")) category = "human_decision";
+  } else if (HUMAN_AUTHORIZED_KINDS.has(subject ?? "")) category = "authorized_operator";
+  else if (HUMAN_DECISION_KINDS.has(subject ?? "")) category = "human_decision";
   else category = "no_signal";
   return {
     job_id: row.id,
@@ -126,7 +132,7 @@ export function waitingRowToEntry(
     signals: {
       unresolved_effect_count: row.unresolved_effects,
       unresolved_effect_kinds: unresolvedKinds,
-      human_subject_kind: normalizeSubjectKind(row.human_subject_kind),
+      human_subject_kind: subject,
       rejected_completion_count: row.rejected_completions,
       rejected_completion_verified: rejectedCompletionVerified,
       completion_accepted: completed,
@@ -161,6 +167,8 @@ export async function readWaitingClassification(input: {
       j.created_at, j.started_at, j.finished_at,
       (SELECT e.payload_json->'subject'->>'kind' FROM events e
         WHERE e.job_id = j.id AND e.type='human' ORDER BY e.job_seq DESC LIMIT 1) AS human_subject_kind,
+      (SELECT e.payload_json->'subject'->>'type' FROM events e
+        WHERE e.job_id = j.id AND e.type='human' ORDER BY e.job_seq DESC LIMIT 1) AS human_subject_type,
       (SELECT count(*)::int FROM events e WHERE e.job_id = j.id AND e.type='control_receipt'
         AND e.payload_json->>'operation'='mark_job_done' AND e.payload_json->>'status'='rejected') AS rejected_completions,
       (SELECT e.payload_json->>'status' FROM events e
@@ -177,13 +185,11 @@ export async function readWaitingClassification(input: {
       AND (${projectIds.length === 0} OR j.project_id::text = ANY(${projectIds}::text[]))
     ORDER BY j.created_at DESC, j.id DESC
     LIMIT ${limit}`;
-  const budgets = await readRepairTokenBudgets(db, rows.map((row) => String(row.id)));
+  const budgets = await readRepairTokenBudgets(db, rows.map((row: WaitingRow) => String(row.id)));
   const entries: WaitingClassificationEntry[] = [];
   for (const row of rows) {
-    const subject = normalizeSubjectKind(row.human_subject_kind);
     const budget = budgets.get(String(row.id)) ?? null;
-    const normalized: WaitingRow = { ...row, human_subject_kind: subject,
-      objective_stopped: row.objective_raw_status === "stopped" };
+    const normalized: WaitingRow = { ...row, objective_stopped: row.objective_raw_status === "stopped" };
     const verified = row.objective_raw_status === "stopped" || row.rejected_completions < COMPLETION_REPAIR_LIMIT
       ? null : await verifyCompletionRepairExhausted(db, String(row.id));
     entries.push(waitingRowToEntry(normalized, budget, verified));
@@ -214,6 +220,8 @@ export interface RecoveryDiagnostics {
     signals: WaitingClassificationEntry["signals"];
   };
   unresolved_effects: UnresolvedEffectDiagnosticRow[];
+  /** 已由人工结清、但用量账本仍缺失/未知的效果（#1036 D3 的剩余诊断信号）。 */
+  settled_usage_unknown: SettledUsageUnknownDiagnosticRow[];
   repair_budget: {
     receipt_ref: string;
     attempt_id: string;
@@ -228,6 +236,8 @@ export interface RecoveryDiagnostics {
 
 const OPERATOR_NOTE_SETTLE =
   "同 Job 活动或排队执行仍在时拒绝结清；完成后按现有 governance 以单条 evidence 结清该 effect（不回放、不改用量）";
+const OPERATOR_NOTE_SETTLED_USAGE_UNKNOWN =
+  "该效果已由人工结清，但用量账本仍缺失或未知：以 Job 详情/用量账本与 evidence 记录为准，不要重复结清同一效果、不补零也不放宽原预算";
 const OPERATOR_NOTE_JOB = "Job 行包含 attempt/session/用量与错误摘要；原文/会话走 evidence 端点，不在本诊断复述";
 
 /** 单 Job 诊断（#1036 D item3）：人工结清后 usage 仍未知等场景的可查询下一步。 */
@@ -265,6 +275,24 @@ export async function readRecoveryDiagnostics(db0: Database, jobId: string): Pro
         ? null : await verifyCompletionRepairExhausted(db, jobId))
     : null;
   const next_actions: RecoveryDiagnostics["next_actions"] = [];
+  const settledUsageUnknown = await db<SettledUsageUnknownRaw[]>`
+    SELECT e.id::text AS effect_ref, e.effect_kind, e.attempt_id::text AS attempt_id,
+      e.settlement_json->>'reconciled_by' AS reconciled_by,
+      l.settlement_status AS ledger_settlement_status
+    FROM job_attempt_effects e
+    LEFT JOIN job_usage_ledger l ON l.attempt_id = e.attempt_id AND l.effect_id = e.effect_id
+    WHERE e.job_id = ${jobId} AND e.status = 'settled'
+      AND e.settlement_json->>'reconciled_by' = 'operator-settlement'
+      AND (l.settlement_status IS NULL OR l.settlement_status <> 'settled' OR l.total_tokens IS NULL)
+    ORDER BY e.settled_at ASC NULLS LAST, e.id
+    LIMIT ${UNRESOLVED_EFFECT_DIAGNOSTICS_MAX}`;
+  const settledUsage = settledUsageUnknown.map((row: SettledUsageUnknownRaw): SettledUsageUnknownDiagnosticRow => ({
+    effect_id: row.effect_ref,
+    effect_kind: row.effect_kind,
+    attempt_id: row.attempt_id,
+    settled_via: "operator-settlement",
+    ledger_settlement_status: row.ledger_settlement_status,
+  }));
   for (const row of unresolved) {
     next_actions.push({
       action: "settle_effect",
@@ -272,6 +300,10 @@ export async function readRecoveryDiagnostics(db0: Database, jobId: string): Pro
       path: `/jobs/${jobId}/effects/${row.effect_id}/settlement`,
       note: OPERATOR_NOTE_SETTLE,
     });
+  }
+  if (settledUsage.length > 0) {
+    // 已结清的效果不能再建议结清一次：这里只给出“用 missing/unknown”的读取入口。
+    next_actions.push({ action: "inspect_usage", path: `/jobs/${jobId}`, note: OPERATOR_NOTE_SETTLED_USAGE_UNKNOWN });
   }
   next_actions.push({ action: "inspect_job", path: `/jobs/${jobId}`, note: OPERATOR_NOTE_JOB });
   if (unresolved.length === 0 && budget === null) {
@@ -288,6 +320,7 @@ export async function readRecoveryDiagnostics(db0: Database, jobId: string): Pro
         completion_accepted: false, plan_objective_stopped: false },
     },
     unresolved_effects: unresolved,
+    settled_usage_unknown: settledUsage,
     repair_budget: budget ? {
       receipt_ref: budget.receipt_ref,
       attempt_id: budget.attempt_id,
@@ -301,6 +334,19 @@ export async function readRecoveryDiagnostics(db0: Database, jobId: string): Pro
 }
 
 export const UNRESOLVED_EFFECT_DIAGNOSTICS_MAX = 50;
+
+export interface SettledUsageUnknownDiagnosticRow {
+  effect_id: string;
+  effect_kind: string;
+  attempt_id: string;
+  settled_via: "operator-settlement";
+  ledger_settlement_status: string | null;
+}
+
+type SettledUsageUnknownRaw = {
+  effect_ref: string; effect_kind: string; attempt_id: string;
+  reconciled_by: string | null; ledger_settlement_status: string | null;
+};
 
 type UnresolvedEffectDiagnosticRaw = {
   effect_ref: string; effect_kind: string; status: string; step: number;
@@ -360,6 +406,8 @@ async function readWaitingClassificationRowsForJob(db: Database, jobId: string):
       j.created_at, j.started_at, j.finished_at,
       (SELECT e.payload_json->'subject'->>'kind' FROM events e
         WHERE e.job_id = ${jobId} AND e.type='human' ORDER BY e.job_seq DESC LIMIT 1) AS human_subject_kind,
+      (SELECT e.payload_json->'subject'->>'type' FROM events e
+        WHERE e.job_id = ${jobId} AND e.type='human' ORDER BY e.job_seq DESC LIMIT 1) AS human_subject_type,
       (SELECT count(*)::int FROM events e WHERE e.job_id=${jobId} AND e.type='control_receipt'
         AND e.payload_json->>'operation'='mark_job_done' AND e.payload_json->>'status'='rejected') AS rejected_completions,
       (SELECT e.payload_json->>'status' FROM events e
@@ -373,6 +421,5 @@ async function readWaitingClassificationRowsForJob(db: Database, jobId: string):
     FROM jobs j LEFT JOIN canvases c ON c.id = j.canvas_id WHERE j.id=${jobId}`;
   const first = rows[0];
   if (!first) return [];
-  return [{ ...first, human_subject_kind: normalizeSubjectKind(first.human_subject_kind),
-    objective_stopped: first.objective_raw_status === "stopped" }];
+  return [{ ...first, objective_stopped: first.objective_raw_status === "stopped" }];
 }

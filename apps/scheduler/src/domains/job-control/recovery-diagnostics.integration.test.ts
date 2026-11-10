@@ -22,6 +22,9 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
       process.env.DATABASE_URL = url.toString();
       process.env.BLOB_DIR = "/tmp/recovery-diagnostics-blobs";
       process.env.AGENT_MODE = "fake";
+      // #1036 review：企 401/鉴权拒绝必须在鉴权启用时断言；不设这个环境变量时
+      // 无 Token 请求会拿到 INTERNAL 匿名 admin，断言会掩盖真实边界。
+      process.env.DEEPSONAR_AUTH_REQUIRED = "true";
       const [{ default: Fastify }, dbModule, routesModule, authModule, { createAttempt }, receiptModule] = await Promise.all([
         import("fastify"), import("../../db.js"), import("./routes.js"), import("../../auth.js"),
         import("../job-attempt/application.js"), import("../event-ingestion/completion-receipt.js"),
@@ -60,14 +63,18 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
         VALUES(${authorizationJob},${String(authorizationAttempt.id)},${randomUUID()},1,'human',${sql.json({
           reason: `RECOVERY_TEST_REDACTIONS_NONSENSITIVE_${process.pid}`, subject: { type: "platform_blocker", kind: "authorization" },
         })})`;
+      const authorizationEffectOne = randomUUID();
+      const authorizationEffectTwo = randomUUID();
       await sql`INSERT INTO job_attempt_effects(job_id,attempt_id,effect_id,effect_kind,status,replay_policy)
-        VALUES(${authorizationJob},${String(authorizationAttempt.id)},'diag-unknown-1','gateway_model_request','unknown','never')`;
+        VALUES(${authorizationJob},${String(authorizationAttempt.id)},${authorizationEffectOne},'gateway_model_request','unknown','never')`;
       await sql`INSERT INTO job_attempt_effects(job_id,attempt_id,effect_id,effect_kind,status,replay_policy)
-        VALUES(${authorizationJob},${String(authorizationAttempt.id)},'diag-unknown-2','agent_run','effect_pending','never')`;
+        VALUES(${authorizationJob},${String(authorizationAttempt.id)},${authorizationEffectTwo},'agent_run','effect_pending','never')`;
       const businessAttempt = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, businessJob));
       await sql`INSERT INTO events(job_id,attempt_id,event_id,job_seq,type,payload_json)
         VALUES(${businessJob},${String(businessAttempt.id)},${randomUUID()},1,'human',${sql.json({
-          reason: `RECOVERY_TEST_REDACTIONS_NONSENSITIVE_${process.pid}`, subject: { type: "finding", kind: "business_decision" },
+          reason: `RECOVERY_TEST_REDACTIONS_NONSENSITIVE_${process.pid}`,
+          // 真实 Finding subject 契约：只有 type/finding_id/subject_revision，没有 kind。
+          subject: { type: "finding", finding_id: randomUUID(), subject_revision: 1 },
         })})`;
 
       // #1036 A: 达到 COMPLETION_REPAIR_LIMIT 的拒绝回执只有在满足内核身份
@@ -154,6 +161,16 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
       });
       assert.equal(multiProject.statusCode, 403, "every requested project id is scope-checked, not only the first");
       assert.equal(multiProject.json().error_code, "PROJECT_MISMATCH", multiProject.body);
+      // #1036 review P1：项目限定的 admin 在不带 project_id 时也不能盘点到全平台——
+      // 过滤值永远不是授权，范围必须强制收敛到 admin 自身项目。
+      const scopedList = await app.inject({ method: "GET", url: "/jobs/waiting-classification", headers: scopedAdminHeaders });
+      assert.equal(scopedList.statusCode, 200, scopedList.body);
+      const scopedListItems = scopedList.json().items as Array<{ job_id: string; project_id: string }>;
+      assert.ok(scopedListItems.length > 0, "forced self-project scoping still returns rows");
+      assert.ok(scopedListItems.every((row) => row.project_id === projectId),
+        "a project-bound admin without ?project_id only sees its own project");
+      assert.ok(!scopedListItems.some((row) => row.job_id === otherProjectJob), "other-project job never appears");
+      assert.equal(scopedList.json().project_scoped, true, "forced scoping is still reported as scoped");
       const filtered = await app.inject({
         method: "GET", url: "/jobs/waiting-classification?status=failed,timeout", headers: adminHeaders,
       });
@@ -201,6 +218,40 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
       assert.equal(disabled.statusCode, 403, disabled.body);
       const anonymous = await app.inject({ method: "GET", url: `/jobs/${authorizationJob}/recovery-diagnostics` });
       assert.equal(anonymous.statusCode, 401, anonymous.body);
+
+      // #1036 D3 评审回归：人工结清后用量仍未知的效果必须留在诊断面里，且不再建议
+      // 重复结清；先把 attempt 置为非 active，让真实 operator settlement 可以通过。
+      await sql`UPDATE job_attempts SET status='failed' WHERE id=${String(authorizationAttempt.id)}`;
+      const { settleEffectByOperator } = await import("../job-attempt/reconcile-effects-runner.js");
+      const settled = await settleEffectByOperator(sql as unknown as never, {
+        effect_id: authorizationEffectOne, outcome: "not_applied",
+        evidence: `recovery diagnostics regression ${process.pid}`,
+        operation_id: `diag-settle-${process.pid}`,
+      });
+      assert.equal(settled.settled, true, "fixture settlement must go through the real operator path");
+      const afterSettle = await app.inject({
+        method: "GET", url: `/jobs/${authorizationJob}/recovery-diagnostics`, headers: adminHeaders,
+      });
+      assert.equal(afterSettle.statusCode, 200, afterSettle.body);
+      const after = afterSettle.json() as {
+        unresolved_effects: { effect_id: string }[];
+        settled_usage_unknown: { effect_id: string; settled_via: string; ledger_settlement_status: string | null }[];
+        next_actions: { action: string; path: string }[];
+      };
+      assert.deepEqual(
+        [...after.unresolved_effects.map((row) => row.effect_id)].sort(),
+        [authorizationEffectOne, authorizationEffectTwo].filter((id) => id !== authorizationEffectOne).sort(),
+        "the settled effect leaves the pending list while the other stays (order-safe)",
+      );
+      assert.deepEqual(after.settled_usage_unknown.map((row) => row.effect_id), [authorizationEffectOne],
+        "operator-settled effect with a missing usage ledger stays visible");
+      assert.equal(after.settled_usage_unknown[0]?.settled_via, "operator-settlement");
+      assert.equal(after.settled_usage_unknown[0]?.ledger_settlement_status, null, "no usage ledger row was written by settlement");
+      assert.ok(!after.next_actions.some((a) => a.action === "settle_effect" && a.path.includes(authorizationEffectOne)),
+        "一个已人工结清的效果不再出现在结清建议里");
+      assert.ok(after.next_actions.some((a) => a.action === "settle_effect" && a.path.includes(authorizationEffectTwo)),
+        "still-unsettled effects keep their settlement action");
+      assert.ok(after.next_actions.some((a) => a.action === "inspect_usage"), "missing usage gets its own safe read entry");
     } finally {
       if (closeApp) await closeApp().catch(() => undefined);
       if (endSql) await endSql().catch(() => undefined);

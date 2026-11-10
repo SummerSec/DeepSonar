@@ -6,7 +6,7 @@ import { COMPLETION_REPAIR_LIMIT } from "../event-ingestion/completion-receipt.j
 const template = (over: Partial<WaitingRow>): WaitingRow => ({
   id: "00000000-0000-4000-8000-000000000001", project_id: "00000000-0000-4000-8000-000000000002",
   canvas_id: null, type: "audit", status: "waiting_human", created_at: new Date("2026-01-01T00:00:00Z"),
-  started_at: new Date("2026-01-01T00:00:01Z"), finished_at: null, human_subject_kind: null,
+  started_at: new Date("2026-01-01T00:00:01Z"), finished_at: null, human_subject_kind: null, human_subject_type: null,
   rejected_completions: 0, last_completion_receipt: null, unresolved_effects: 0,
   unresolved_effect_kinds: null, objective_raw_status: null, objective_stopped: false,
   ...over,
@@ -94,4 +94,23 @@ test("waiting classification never echoes business payloads; subject kinds are r
   assert.equal(row.signals.human_subject_kind, "business_decision");
   const malformed = waitingRowToEntry(template({ human_subject_kind: "DROP TABLE users" }), budgetNull);
   assert.equal(malformed.signals.human_subject_kind, null, "non-enum subject text reduced to null");
+});
+
+test("waiting classification projects the real human subject contract: finding type before kind", () => {
+  // 真实 Finding subject 的形状是 {type:"finding", finding_id, subject_revision}，没有 kind。
+  const findingOnly = waitingRowToEntry(template({ human_subject_type: "finding", human_subject_kind: null }), budgetNull);
+  assert.equal(findingOnly.category, "human_decision", "finding type alone is a business decision wait");
+  assert.equal(findingOnly.signals.human_subject_kind, "finding");
+  // finding 即使带着旧 kind 也必须按 type 投影，不能退化成旧枚举。
+  const findingWithKind = waitingRowToEntry(template({ human_subject_type: "finding", human_subject_kind: "business_decision" }), budgetNull);
+  assert.equal(findingWithKind.signals.human_subject_kind, "finding");
+  const authorization = waitingRowToEntry(template({ human_subject_type: "platform_blocker", human_subject_kind: "authorization" }), budgetNull);
+  assert.equal(authorization.category, "authorized_operator");
+  // 平台阻塞只接受合法 kind；其它 type 与非法 kind 一律不猜。
+  const illegalKind = waitingRowToEntry(template({ human_subject_type: "platform_blocker", human_subject_kind: "DROP TABLE users" }), budgetNull);
+  assert.equal(illegalKind.signals.human_subject_kind, null);
+  assert.equal(illegalKind.category, "no_signal");
+  const otherType = waitingRowToEntry(template({ human_subject_type: "runtime_subject", human_subject_kind: "authorization" }), budgetNull);
+  assert.equal(otherType.signals.human_subject_kind, null, "non platform_blocker/finding types are not classified by kind");
+  assert.equal(otherType.category, "no_signal");
 });
