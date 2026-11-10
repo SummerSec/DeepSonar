@@ -32,6 +32,16 @@ test("#1032: 凭据守卫拒绝被识别为平台稳定错误码，而非 CLI �
     assert.equal(isCredentialInBusinessDataMessage(observed), true, denial);
     // 裸 400 摘要（无进程框）同样识别，避免依赖 CLI 退出短语的具体措辞。
     assert.equal(isCredentialInBusinessDataMessage(`error: 400: ${denial}`), true, denial);
+    // openai-responses（非 Anthropic Pi 配置的默认 provider）经 Pi 1.4.0
+    // formatProviderError 产出 `<provider> API error (400): <body>`。
+    const providerWrapped =
+      `agent 运行失败: agent CLI 退出码 1: Pi message ended: error: OpenAI API error (400): ${denial}`;
+    assert.equal(isCredentialInBusinessDataMessage(providerWrapped), true, denial);
+    assert.equal(
+      classifyDispatcherFailure(new Error(providerWrapped)).reason,
+      CREDENTIAL_IN_BUSINESS_DATA_REASON,
+      `provider 封装形态必须同样归入稳定码：${denial}`,
+    );
   }
 });
 
@@ -40,6 +50,9 @@ test("#1032: 只有 400 凭据拒绝进入该分类，其它失败保持原判�
     // 非 400 上下文：运维/审计文本里出现同名字样不得改写分类。
     "审计摘要：Job credential in body 命中 2 次",
     "gateway 500: Job credential in body",
+    // provider 封装形态只认 400：(500) 不得进入该分类。
+    "agent 运行失败: agent CLI 退出码 1: Pi message ended: error: OpenAI API error (500): Job credential in body",
+    "error: 500: Job credential in body",
     // 既有重试家族必须不受影响。
     "agent 运行失败: agent CLI 退出码 1: Pi message ended: error: 409: COMPLETION_ALREADY_ACCEPTED",
     "Gateway 429 rate limited",
