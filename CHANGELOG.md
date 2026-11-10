@@ -1,5 +1,19 @@
 ## [Unreleased]
 
+## [0.6.19] - 2026-11-10
+
+### 修复
+
+- **anthropic 兼容流的用量结算（#1059，#1061）**：`message_start.usage` 缺 `output_tokens`（聚合路由的标准形态：start 只带累计 input/cache 快照，output 由 `message_delta` 补全）不再使整条流失败。pending 快照以 `output_tokens: 0` 归一化后仍建立 input/cache 单调性基线，首个 delta 报更低 input/cache 立即 fail closed；缺 usage 对象、非法或分数计数、畸形 `cache_creation`、pending 后无 delta 收尾、未知帧与连续 `message_start` 仍拒信，`strict protocol fixtures` 原则不变。现场同形流（17/17 条 `not_reported` → `REPAIR_USAGE_UNKNOWN` → `RECOVERY_ORIGINAL_EXECUTION_CLOSED` → Job 永久失败）可正常结算；dashboard 的 `not_reported` 可见性未包含（#1059 建议 3 仍 open）。
+- **凭据守卫拒绝的稳定终态码（#1032 P1-3，#1056）**：Dispatcher 分类层识别 Gateway 五种 `deny(400, "Job credential in …")` 文案的两种封装（裸 `400:` 与 provider 的 `(400):`），`jobs.error` 与 Attempt 终态 reason 记为 `credential_in_business_data` 前缀，不再以 CLI 进程退出串收尾；该 reason 不被 provision / 流截断 / 上下文窗口三类自动重试消费，`500` / `(500)` 与审计文本不进入该分类。Gateway 守卫与 #923 透传契约不变。
+- **运行控制 Skill 的 env 导出禁则（#1032 P2-5，#1060）**：`deepsonar-control` 静态 Skill 补「不要批量导出 `env` / `printenv`、不要把 env 原文写进证据、产物或命令输出」，并把脱敏保证限定为 Pi 已登记的主请求 / OM SDK context 精确替换；其它 CLI 与出口不得假定自动脱敏，凭据进入模型输入仍按原值出站，Gateway 400 fail-closed 保留。`DEEPSONAR_CONTROL_SKILL_SHA256` 与两处断言同步。
+
+### 升级与未验证范围
+
+- schema 仍为 72（2026-11-10 核对 `apps/scheduler/src/schema-version.ts` 与 schema 基线），本版无 schema、API 契约、权限或运行时镜像变更；v0.6.18 已是 schema72，非空库无需再次重建。
+- 未包含：#1059 建议 3 的 `not_reported` 可见性、#1032 P0-2 认证隔离（A1/A2）、#1046 P1-3/P1-4、#990 的分片发送与 80 MiB 端到端、#1036 的现场验证项；相关 issue 保持 open。
+- 未验证：生产部署、真实模型与聚合路由现场复现、容量或收益结论；本版以 GitHub Actions 与离线协议 fixture 为工程证据，不宣称质量或现场效果已通过。
+
 ## [0.6.18] - 2026-11-10
 
 ### 新增
@@ -1696,3 +1710,4 @@
 [0.6.16]: https://github.com/SummerSec/DeepSonar/compare/v0.6.15...v0.6.16
 [0.6.17]: https://github.com/SummerSec/DeepSonar/compare/v0.6.16...v0.6.17
 [0.6.18]: https://github.com/SummerSec/DeepSonar/compare/v0.6.17...v0.6.18
+[0.6.19]: https://github.com/SummerSec/DeepSonar/compare/v0.6.18...v0.6.19
