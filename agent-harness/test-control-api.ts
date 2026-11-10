@@ -46,9 +46,10 @@ const failOnLegacyControlText = (text: string, label: string): void => {
 
 const skillContent = DEEPSONAR_CONTROL_SKILL.files["SKILL.md"];
 assert.equal(DEEPSONAR_CONTROL_SKILL_NAME, "deepsonar-control");
-// Reviewed Plan v2, complete-objective bootstrap and governed completion-recovery guidance,
-// including #903 stale-grant exit and actionable human-request guidance.
-const expectedSkillSha256 = "12178ef4a3c7bcc31c4170a0094564767cb096ff55a550398445a25fc894ec10";
+// Reviewed Plan v2, complete-objective bootstrap, governed completion-recovery guidance,
+// including #903 stale-grant exit, actionable human-request guidance and the #1032 P2-5
+// env-dump guard.
+const expectedSkillSha256 = "2a0fb89669fcd6f521d0e0ce768ad8fbee8b3de121e2fe98a6cd95df2098fa08";
 const canonicalSkillBytes = Buffer.from(
   `{"name":"deepsonar-control","files":{"SKILL.md":${JSON.stringify(skillContent)}}}`,
   "utf8",
@@ -86,6 +87,8 @@ assert.match(skillContent, /原 key、revision 和完全相同 payload 再 POST/
 assert.match(skillContent, /recovery_stale.*新投影不授予新权限.*原冻结 grant.*release_stale/);
 assert.match(skillContent, /不对账、不停止目标、不清除 unknown，也不申请新执行权/);
 assert.match(skillContent, /旧 Hub 正常结算、无阻塞未知效果、原期限\/预算\/权限仍有效/);
+assert.match(skillContent, /不要用 `env` \/ `printenv` 批量导出/);
+assert.match(skillContent, /credential_in_business_data/);
 failOnLegacyControlText(skillContent, "静态控制 Skill");
 
 const overriddenSkills = injectPlatformControlSkill([
