@@ -24,6 +24,17 @@ test("waiting classification keeps #1036 A precedence: effects before dead-end, 
 
   const exhausted = waitingRowToEntry(template({ rejected_completions: COMPLETION_REPAIR_LIMIT }), budgetNull);
   assert.equal(exhausted.category, "confirmed_platform_dead_end");
+  assert.equal(exhausted.signals.rejected_completion_verified, null, "below-threshold或未核对时为 null");
+
+  // 回执形状达标但内核身份不成立（event_dedup/Attempt 归属或事件 ID 不符）时不得判死路。
+  const shapeOnly = waitingRowToEntry(template({ rejected_completions: COMPLETION_REPAIR_LIMIT }), budgetNull, false);
+  assert.equal(shapeOnly.category, "no_signal");
+  assert.equal(shapeOnly.signals.rejected_completion_verified, false);
+  assert.equal(shapeOnly.signals.rejected_completion_count, COMPLETION_REPAIR_LIMIT);
+
+  const verified = waitingRowToEntry(template({ rejected_completions: COMPLETION_REPAIR_LIMIT, human_subject_kind: "business_decision" }), budgetNull, true);
+  assert.equal(verified.category, "confirmed_platform_dead_end");
+  assert.equal(verified.signals.rejected_completion_verified, true);
 
   const almost = waitingRowToEntry(template({ rejected_completions: COMPLETION_REPAIR_LIMIT - 1 }), budgetNull);
   assert.notEqual(almost.category, "confirmed_platform_dead_end");
@@ -82,5 +93,5 @@ test("waiting classification never echoes business payloads; subject kinds are r
   }
   assert.equal(row.signals.human_subject_kind, "business_decision");
   const malformed = waitingRowToEntry(template({ human_subject_kind: "DROP TABLE users" }), budgetNull);
-  assert.equal(malformed.signals.human_subject_kind, null, "non-enum subject text reduced to null"); 
+  assert.equal(malformed.signals.human_subject_kind, null, "non-enum subject text reduced to null");
 });

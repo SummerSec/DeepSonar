@@ -12,8 +12,8 @@
  * 证据检索面，人工看原文走 `/jobs/:id/evidence*`。
  */
 import { sql } from "../../db.js";
-import { COMPLETION_REPAIR_LIMIT } from "../event-ingestion/completion-receipt.js";
-import { readRepairTokenBudget, type RepairTokenBudget } from "../event-ingestion/repair-token-budget.js";
+import { COMPLETION_REPAIR_LIMIT, completionReceiptId } from "../event-ingestion/completion-receipt.js";
+import { readRepairTokenBudget, readRepairTokenBudgets, type RepairTokenBudget } from "../event-ingestion/repair-token-budget.js";
 
 type Database = typeof sql;
 
@@ -63,6 +63,12 @@ export interface WaitingClassificationEntry {
     unresolved_effect_kinds: string[];
     human_subject_kind: string | null;
     rejected_completion_count: number;
+    /**
+     * `true` 表示已按内核回执身份（event_dedup/Attempt 归属 + 事件 ID 派生 + 4xx/5xx
+     * accepted:false）逐条核对通过，`false` 表示形状像回执但不满足内核身份、
+     * 不能据此判平台死路，`null` 表示未到阈值、无需核对。
+     */
+    rejected_completion_verified: boolean | null;
     completion_accepted: boolean;
     plan_objective_stopped: boolean;
   };
@@ -82,19 +88,24 @@ function normalizeSubjectKind(value: string | null): string | null {
   return value;
 }
 
-export function waitingRowToEntry(row: WaitingRow, budget: RepairTokenBudget | null): WaitingClassificationEntry {
+export function waitingRowToEntry(
+  row: WaitingRow,
+  budget: RepairTokenBudget | null,
+  /** 只在计数达到阈值时由调用方做内核身份核对；不足阈值时为 null。 */
+  rejectedCompletionVerified: boolean | null = null,
+): WaitingClassificationEntry {
   const unresolvedKinds = Array.isArray(row.unresolved_effect_kinds) ? [...new Set(row.unresolved_effect_kinds)] : [];
   const completed = row.last_completion_receipt === "persisted_deferred";
+  const deadlineElapsed = Boolean(budget?.deadline && Date.parse(budget.deadline) <= Date.now());
   const budgetExhausted = budget
-    ? budget.usage_status !== "known"
-      || Boolean(budget.deadline && Date.parse(budget.deadline) <= Date.now())
-      || budget.remaining_tokens === 0
+    ? budget.usage_status !== "known" || deadlineElapsed || budget.remaining_tokens === 0
     : false;
   // 分类优先级与 #1036 A 一致：未知效果不受其它信号影响；死路只在无未结清
   // 效果时才判，避免把可对账的窗口误报成终点；再按人工类，最后 fallback。
   let category: WaitingCategory;
   if (row.unresolved_effects > 0) category = "unknown_effects";
-  else if (row.objective_stopped || row.rejected_completions >= COMPLETION_REPAIR_LIMIT) {
+  else if (row.objective_stopped
+    || (row.rejected_completions >= COMPLETION_REPAIR_LIMIT && rejectedCompletionVerified !== false)) {
     category = "confirmed_platform_dead_end";
   } else if (HUMAN_AUTHORIZED_KINDS.has(row.human_subject_kind ?? "")) category = "authorized_operator";
   else if (HUMAN_DECISION_KINDS.has(row.human_subject_kind ?? "")) category = "human_decision";
@@ -114,14 +125,14 @@ export function waitingRowToEntry(row: WaitingRow, budget: RepairTokenBudget | n
       unresolved_effect_kinds: unresolvedKinds,
       human_subject_kind: normalizeSubjectKind(row.human_subject_kind),
       rejected_completion_count: row.rejected_completions,
+      rejected_completion_verified: rejectedCompletionVerified,
       completion_accepted: completed,
       plan_objective_stopped: row.objective_stopped,
     },
     budget: budget ? {
       usage_status: budget.usage_status,
       remaining_tokens: budget.remaining_tokens,
-      deadline_exhausted: budgetExhausted && budget.usage_status === "known"
-        && Boolean(budget.deadline && Date.parse(budget.deadline) <= Date.now()),
+      deadline_exhausted: budget.usage_status === "known" && deadlineElapsed,
     } : null,
   };
 }
@@ -160,15 +171,19 @@ export async function readWaitingClassification(input: {
     FROM jobs j
     LEFT JOIN canvases c ON c.id = j.canvas_id
     WHERE j.status = ANY(${statuses}::text[])
-      AND (${projectIds.length === 0} OR NOT (j.project_id::text = ANY(${projectIds}::text[])))
+      AND (${projectIds.length === 0} OR j.project_id::text = ANY(${projectIds}::text[]))
     ORDER BY j.created_at DESC, j.id DESC
     LIMIT ${limit}`;
+  const budgets = await readRepairTokenBudgets(db, rows.map((row) => String(row.id)));
   const entries: WaitingClassificationEntry[] = [];
   for (const row of rows) {
     const subject = normalizeSubjectKind(row.human_subject_kind);
-    const budget = await readRepairTokenBudget(db, String(row.id));
-    entries.push(waitingRowToEntry({ ...row, human_subject_kind: subject,
-      objective_stopped: row.objective_raw_status === "stopped" }, budget));
+    const budget = budgets.get(String(row.id)) ?? null;
+    const normalized: WaitingRow = { ...row, human_subject_kind: subject,
+      objective_stopped: row.objective_raw_status === "stopped" };
+    const verified = row.objective_raw_status === "stopped" || row.rejected_completions < COMPLETION_REPAIR_LIMIT
+      ? null : await verifyCompletionRepairExhausted(db, String(row.id));
+    entries.push(waitingRowToEntry(normalized, budget, verified));
   }
   return entries;
 }
@@ -242,7 +257,9 @@ export async function readRecoveryDiagnostics(db0: Database, jobId: string): Pro
   }));
   const classificationRow: WaitingRow | undefined = waitingRows;
   const entry = classificationRow
-    ? waitingRowToEntry(classificationRow, budget)
+    ? waitingRowToEntry(classificationRow, budget,
+      classificationRow.objective_stopped || classificationRow.rejected_completions < COMPLETION_REPAIR_LIMIT
+        ? null : await verifyCompletionRepairExhausted(db, jobId))
     : null;
   const next_actions: RecoveryDiagnostics["next_actions"] = [];
   for (const row of unresolved) {
@@ -287,6 +304,33 @@ type UnresolvedEffectDiagnosticRaw = {
   ledger_settlement_status: string | null; ledger_usage_tokens: number | string | null;
   replay_policy: string; attempt_id: string;
 };
+
+/**
+ * 与 `hub-platform-stop.ts#readStopCode` 相同的回执身份核对：形状像 mark_job_done
+ * 拒绝的 control_receipt 必须同时具备事件 ID 派生、event_dedup/Attempt 归属、
+ * 4xx/5xx 且 accepted:false，才允许计入"平台死路"。任一条不满足即整组不算。
+ */
+async function verifyCompletionRepairExhausted(db: Database, jobId: string): Promise<boolean> {
+  const history = await db<Array<{ event_id: string; attempt_id: string | null; attempt_job_id: string | null;
+    dedup_job_id: string | null; payload_json: Record<string, any> }>>`
+    SELECT e.event_id,e.attempt_id,e.payload_json,a.job_id AS attempt_job_id,d.job_id AS dedup_job_id
+    FROM events e LEFT JOIN job_attempts a ON a.id=e.attempt_id LEFT JOIN event_dedup d ON d.event_id=e.event_id
+    WHERE e.job_id=${jobId} AND e.type='control_receipt' AND e.payload_json->>'operation'='mark_job_done'
+    ORDER BY e.job_seq LIMIT ${COMPLETION_REPAIR_LIMIT + 1}`;
+  if (history.length < COMPLETION_REPAIR_LIMIT) return false;
+  for (const event of history) {
+    const receipt = event.payload_json;
+    if (receipt?.v !== 1 || receipt.status !== "rejected" || receipt.operation !== "mark_job_done"
+      || typeof receipt.idempotency_key !== "string" || !receipt.idempotency_key
+      || !Number.isSafeInteger(receipt.proposal_revision) || receipt.proposal_revision < 0
+      || !/^[a-f0-9]{64}$/u.test(String(receipt.input_digest)) || !/^[a-f0-9]{64}$/u.test(String(receipt.snapshot_digest))
+      || receipt.attempt_id !== event.attempt_id || event.attempt_job_id !== jobId || event.dedup_job_id !== jobId
+      || event.event_id !== completionReceiptId(jobId, receipt.idempotency_key)
+      || !Number.isInteger(receipt.result?.statusCode) || receipt.result.statusCode < 400 || receipt.result.statusCode > 599
+      || receipt.result?.body?.accepted !== false) return false;
+  }
+  return true;
+}
 
 /** 内部共用：单 Job 的 waiting 行 select（与批量查询同一字段面）。 */
 async function readWaitingClassificationRowsForJob(db: Database, jobId: string): Promise<[WaitingRow] | []> {

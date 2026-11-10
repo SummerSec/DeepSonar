@@ -1584,9 +1584,9 @@ const OPS: Op[] = [
   {
     method: "get", path: "/jobs/waiting-classification",
     summary: "跨 Job 等待与终态恢复分类盘点", scope: "admin", tags: ["Jobs"],
-    description: "只读跨 Job 诊断：对 waiting_human/failed/timeout/orphan 按 #1036 A 项给主分类（unknown_effects / confirmed_platform_dead_end / human_decision / authorized_operator / no_signal），附带未结清效果计数与 kind、人工主题 kind、被拒完成次数、objective 停止与修正预算状态。含 project_id（逗号多选，须在当前 admin 范围内）、status 子集与 limit（≤100）；不返回业务文本，单 Job 细节走 /jobs/{id}/recovery-diagnostics。",
+    description: "只读跨 Job 诊断：对 waiting_human/failed/timeout/orphan 按 #1036 A 项给主分类（unknown_effects / confirmed_platform_dead_end / human_decision / authorized_operator / no_signal），附带未结清效果计数与 kind、人工主题 kind、被拒完成次数与该项是否已按内核回执身份核对、objective 停止与修正预算状态。被拒完成达到修正上限时还会逐条核对事件 ID 派生、event_dedup/Attempt 归属与 4xx accepted:false，只有核对通过才判 confirmed_platform_dead_end。含 project_id（逗号多选，作为包含条件生效，且每个 id 都要在当前 admin 范围内，任一越界整体 403）、status 子集与 limit（≤100）；不返回业务文本，单 Job 细节走 /jobs/{id}/recovery-diagnostics。",
     query: {
-      project_id: { type: "string", description: "逗号分隔的项目 UUID（同维度 OR）" },
+      project_id: { type: "string", description: "逗号分隔的项目 UUID（包含条件，逐项校验项目范围）" },
       status: { type: "string", description: "逗号分隔的状态子集：waiting_human/failed/timeout/orphan" },
       limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
     },

@@ -22,9 +22,9 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
       process.env.DATABASE_URL = url.toString();
       process.env.BLOB_DIR = "/tmp/recovery-diagnostics-blobs";
       process.env.AGENT_MODE = "fake";
-      const [{ default: Fastify }, dbModule, routesModule, authModule, { createAttempt }] = await Promise.all([
+      const [{ default: Fastify }, dbModule, routesModule, authModule, { createAttempt }, receiptModule] = await Promise.all([
         import("fastify"), import("../../db.js"), import("./routes.js"), import("../../auth.js"),
-        import("../job-attempt/application.js"),
+        import("../job-attempt/application.js"), import("../event-ingestion/completion-receipt.js"),
       ]);
       const { sql, migrate } = dbModule;
       endSql = () => sql.end({ timeout: 5 });
@@ -44,9 +44,11 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
 
       const authorizationJob = randomUUID(), businessJob = randomUUID(), stoppedJob = randomUUID(), silentJob = randomUUID();
       const runningJob = randomUUID(), otherProjectJob = randomUUID();
+      const exhaustedJob = randomUUID(), spoofedJob = randomUUID();
       for (const [id, canvas] of [
         [authorizationJob, canvasId], [businessJob, canvasId], [stoppedJob, stoppedCanvas],
         [silentJob, canvasId], [runningJob, canvasId], [otherProjectJob, null],
+        [exhaustedJob, canvasId], [spoofedJob, canvasId],
       ] as const) {
         await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,started_at,lease_expires_at)
           VALUES(${id},${id === otherProjectJob ? otherProjectId : projectId},${canvas},'audit',
@@ -68,19 +70,46 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
           reason: `RECOVERY_TEST_REDACTIONS_NONSENSITIVE_${process.pid}`, subject: { type: "finding", kind: "business_decision" },
         })})`;
 
+      // #1036 A: 达到 COMPLETION_REPAIR_LIMIT 的拒绝回执只有在满足内核身份
+      // （事件 ID 派生 + event_dedup/Attempt 归属 + 4xx accepted:false）时才可判平台死路。
+      const limit = receiptModule.COMPLETION_REPAIR_LIMIT;
+      for (const [jobId, kernelValid] of [[exhaustedJob, true], [spoofedJob, false]] as const) {
+        const attempt = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, jobId));
+        for (let index = 0; index < limit; index += 1) {
+          const key = `diag-repair-${jobId}-${index}`;
+          const eventId = kernelValid ? receiptModule.completionReceiptId(jobId, key) : randomUUID();
+          const payload = {
+            v: 1, operation: "mark_job_done", idempotency_key: key,
+            input_digest: "a".repeat(64), snapshot_digest: "b".repeat(64), proposal_revision: index,
+            attempt_id: String(attempt.id), repair_token_limit: null,
+            status: "rejected", result: { statusCode: 409, body: { accepted: false } },
+          };
+          if (kernelValid) {
+            await sql`INSERT INTO event_dedup(event_id,job_id) VALUES(${eventId},${jobId}) ON CONFLICT DO NOTHING`;
+          }
+          await sql`INSERT INTO events(job_id,attempt_id,event_id,job_seq,type,payload_json)
+            VALUES(${jobId},${String(attempt.id)},${eventId},${index + 1},'control_receipt',${sql.json(payload)})`;
+        }
+      }
+
       const adminToken = authModule.generateToken();
       await sql`INSERT INTO api_tokens(name,project_id,token_prefix,token_hash,scopes)
         VALUES ('diag-admin',NULL,${adminToken.prefix},${adminToken.hash},${["admin"]})`;
       const projectToken = authModule.generateToken();
       await sql`INSERT INTO api_tokens(name,project_id,token_prefix,token_hash,scopes)
         VALUES ('diag-project',${projectId},${projectToken.prefix},${projectToken.hash},${["jobs:read","jobs:control"]})`;
+      // 项目内的 admin：用于证明多 project_id 时逐个做范围校验，而不是只看第一个。
+      const scopedAdminToken = authModule.generateToken();
+      await sql`INSERT INTO api_tokens(name,project_id,token_prefix,token_hash,scopes)
+        VALUES ('diag-scoped-admin',${projectId},${scopedAdminToken.prefix},${scopedAdminToken.hash},${["admin"]})`;
+      const scopedAdminHeaders = { authorization: `Bearer ${scopedAdminToken.plaintext}` };
       const adminHeaders = { authorization: `Bearer ${adminToken.plaintext}` };
       const projectHeaders = { authorization: `Bearer ${projectToken.plaintext}` };
 
       const list = await app.inject({ method: "GET", url: "/jobs/waiting-classification", headers: adminHeaders });
       assert.equal(list.statusCode, 200, list.body);
       const items = list.json().items as Array<Record<string, any>>;
-      assert.equal(items.length, 4, "running and other-project jobs stay outside");
+      assert.equal(items.length, 6, "running and other-project jobs stay outside");
       const byId = new Map(items.map((row) => [row.job_id, row] as const));
       assert.equal(byId.get(authorizationJob)?.category, "unknown_effects");
       assert.deepEqual(byId.get(authorizationJob)?.signals.unresolved_effect_kinds, ["gateway_model_request", "agent_run"]);
@@ -89,6 +118,13 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
       assert.equal(byId.get(businessJob)?.category, "human_decision");
       assert.equal(byId.get(stoppedJob)?.category, "confirmed_platform_dead_end");
       assert.equal(byId.get(stoppedJob)?.signals.plan_objective_stopped, true);
+      assert.equal(byId.get(exhaustedJob)?.category, "confirmed_platform_dead_end",
+        "内核身份齐全的连续拒绝回执才构成平台死路");
+      assert.equal(byId.get(exhaustedJob)?.signals.rejected_completion_verified, true);
+      assert.equal(byId.get(spoofedJob)?.category, "no_signal",
+        "只有回执形状、没有 event_dedup/派生事件 ID/Attempt 归属时不得判死路");
+      assert.equal(byId.get(spoofedJob)?.signals.rejected_completion_verified, false);
+      assert.equal(byId.get(spoofedJob)?.signals.rejected_completion_count, limit);
       assert.equal(byId.get(silentJob)?.category, "no_signal");
       const serialized = list.body;
       assert.ok(!serialized.includes(`RECOVERY_TEST_REDACTIONS_NONSENSITIVE_${process.pid}`),
@@ -99,7 +135,24 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
         method: "GET", url: `/jobs/waiting-classification?project_id=${projectId}`, headers: adminHeaders,
       });
       assert.equal(scoped.statusCode, 200, scoped.body);
-      assert.equal((scoped.json().items as unknown[]).length, 3, "other-project filtered out");
+      const scopedItems = scoped.json().items as Array<Record<string, any>>;
+      assert.equal(scopedItems.length, 6, "the six target-project waiting jobs stay, running/other-project excluded");
+      assert.ok(scopedItems.every((row) => row.project_id === projectId),
+        "?project_id is an inclusion filter: every returned row belongs to that project");
+      assert.ok(!scopedItems.some((row) => row.job_id === otherProjectJob), "other-project job never appears");
+      const inScopeAdmin = await app.inject({
+        method: "GET", url: `/jobs/waiting-classification?project_id=${projectId}`, headers: scopedAdminHeaders,
+      });
+      assert.equal(inScopeAdmin.statusCode, 200, inScopeAdmin.body);
+      const wrongProject = await app.inject({
+        method: "GET", url: `/jobs/waiting-classification?project_id=${otherProjectId}`, headers: scopedAdminHeaders,
+      });
+      assert.equal(wrongProject.statusCode, 403, wrongProject.body);
+      const multiProject = await app.inject({
+        method: "GET", url: `/jobs/waiting-classification?project_id=${projectId},${otherProjectId}`, headers: scopedAdminHeaders,
+      });
+      assert.equal(multiProject.statusCode, 403, "every requested project id is scope-checked, not only the first");
+      assert.equal(multiProject.json().error_code, "PROJECT_MISMATCH", multiProject.body);
       const filtered = await app.inject({
         method: "GET", url: "/jobs/waiting-classification?status=failed,timeout", headers: adminHeaders,
       });

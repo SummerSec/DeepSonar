@@ -56,7 +56,9 @@ export function registerRecoveryDiagnosticsRoutes(app: FastifyInstance): void {
       return fail(reply, 400, "WAITING_CLASSIFICATION_INVALID", "status must be a subset of waiting/terminal recovery set");
     }
     const projectIds = parsed.data.project_id;
-    if (projectIds.length && !projectScopeAllows(actor.projectId, projectIds[0])) {
+    // Every requested project must be in the actor's scope: the list is an
+    // inclusion filter, so validating only the first id would leak the rest.
+    if (projectIds.some((id: string) => !projectScopeAllows(actor.projectId, id))) {
       return fail(reply, 403, PROJECT_MISMATCH, "project mismatch");
     }
     // List-only read: audit noise would exceed the ledger design; denial path
