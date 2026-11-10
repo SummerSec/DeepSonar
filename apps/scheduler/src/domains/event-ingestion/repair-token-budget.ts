@@ -21,7 +21,11 @@ export function configuredRepairTokenLimit(): number | null {
 
 type BudgetReceipt = { event_id: string; payload_json: RepairReceiptPayload };
 /** Only the fields this projection reads; the rest of the receipt is not our contract. */
-type RepairReceiptPayload = { repair_token_limit?: unknown; execution_deadline?: unknown; attempt_id?: unknown };
+type RepairReceiptPayload = {
+  repair_token_limit?: number | null;
+  execution_deadline?: string | null;
+  attempt_id?: string;
+};
 type BudgetUsageRow = { status: string; settlement_status: string | null; total_tokens: unknown };
 type BudgetOwner = { attempt_id: string | null; generation_ref: string | null; deadline: string | null };
 
@@ -45,7 +49,7 @@ function composeRepairTokenBudget(
       else known += count;
     }
   }
-  const cap = Number.isSafeInteger(limit) && limit >= 0 ? limit : null;
+  const cap = typeof limit === "number" && Number.isSafeInteger(limit) && limit >= 0 ? limit : null;
   return { receipt_ref: String(receipt.event_id), attempt_id: owner.attempt_id ?? "",
     generation_ref: owner.generation_ref, deadline: owner.deadline ?? payload.execution_deadline ?? null, limit_tokens: cap, known_tokens: known,
     remaining_tokens: state === "known" && cap !== null && cap > 0 ? Math.max(0, cap - known) : null, usage_status: state };
@@ -53,16 +57,16 @@ function composeRepairTokenBudget(
 
 /** Caller holds the Job lock. Costs are a projection of the existing ledger, never a second balance. */
 export async function readRepairTokenBudget(db: typeof sql, jobId: string): Promise<RepairTokenBudget | null> {
-  const [first] = await db`SELECT event_id,payload_json FROM events WHERE job_id=${jobId}
+  const [first] = await db<BudgetReceipt[]>`SELECT event_id,payload_json FROM events WHERE job_id=${jobId}
     AND type='control_receipt' AND payload_json->>'operation'='mark_job_done'
     AND payload_json->>'status'='rejected' ORDER BY job_seq LIMIT 1`;
   if (!first) return null;
-  const rows = await db`SELECT e.status,l.settlement_status,l.total_tokens FROM job_attempt_effects e
+  const rows = await db<BudgetUsageRow[]>`SELECT e.status,l.settlement_status,l.total_tokens FROM job_attempt_effects e
     LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
     WHERE e.job_id=${jobId} AND e.effect_kind='gateway_model_request'
     AND e.intent_json->>'repair_receipt_ref'=${String(first.event_id)}`;
   const owner = await readRepairGenerationOwner(db, jobId, String(first.payload_json.attempt_id));
-  return composeRepairTokenBudget(first as BudgetReceipt, rows as BudgetUsageRow[], owner);
+  return composeRepairTokenBudget(first, rows, owner);
 }
 
 /**

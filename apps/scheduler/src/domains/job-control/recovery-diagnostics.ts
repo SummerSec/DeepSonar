@@ -281,7 +281,8 @@ export async function readRecoveryDiagnostics(db0: Database, jobId: string): Pro
     classification: entry ? { category: entry.category, signals: entry.signals } : {
       category: "no_signal" as WaitingCategory,
       signals: { unresolved_effect_count: unresolved.length, unresolved_effect_kinds: unresolved.map((r: UnresolvedEffectDiagnosticRow) => r.effect_kind),
-        human_subject_kind: null, rejected_completion_count: 0, completion_accepted: false, plan_objective_stopped: false },
+        human_subject_kind: null, rejected_completion_count: 0, rejected_completion_verified: null,
+        completion_accepted: false, plan_objective_stopped: false },
     },
     unresolved_effects: unresolved,
     repair_budget: budget ? {
@@ -310,9 +311,23 @@ type UnresolvedEffectDiagnosticRaw = {
  * 拒绝的 control_receipt 必须同时具备事件 ID 派生、event_dedup/Attempt 归属、
  * 4xx/5xx 且 accepted:false，才允许计入"平台死路"。任一条不满足即整组不算。
  */
+type ControlReceiptHistoryRow = {
+  event_id: string;
+  attempt_id: string | null;
+  attempt_job_id: string | null;
+  dedup_job_id: string | null;
+  payload_json: ControlReceiptHistoryPayload;
+};
+
+/** 只读回执身份核对需要的字段；其余 payload 不是本投影的契约。 */
+type ControlReceiptHistoryPayload = {
+  v?: number; status?: string; operation?: string; idempotency_key?: string; proposal_revision?: number;
+  input_digest?: string; snapshot_digest?: string; attempt_id?: string | null;
+  result?: { statusCode?: number; body?: { accepted?: boolean } };
+};
+
 async function verifyCompletionRepairExhausted(db: Database, jobId: string): Promise<boolean> {
-  const history = await db<Array<{ event_id: string; attempt_id: string | null; attempt_job_id: string | null;
-    dedup_job_id: string | null; payload_json: Record<string, any> }>>`
+  const history = await db<ControlReceiptHistoryRow[]>`
     SELECT e.event_id,e.attempt_id,e.payload_json,a.job_id AS attempt_job_id,d.job_id AS dedup_job_id
     FROM events e LEFT JOIN job_attempts a ON a.id=e.attempt_id LEFT JOIN event_dedup d ON d.event_id=e.event_id
     WHERE e.job_id=${jobId} AND e.type='control_receipt' AND e.payload_json->>'operation'='mark_job_done'
