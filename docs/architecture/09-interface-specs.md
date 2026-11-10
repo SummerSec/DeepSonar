@@ -200,6 +200,10 @@ Hub `complete` 被现有分析完成门拒绝时，保持 `invalid_payload` / `c
 
 成功只确认 effect 的持久人工见证，不写 usage、预算、恢复根、Job 状态或全局升级许可；历史已结清证据不可改写。字段、鉴权、稳定错误与注意力边界见[部署入口说明](../../deploy/README.md#管理-api-的单条效果结清1002-p1-9)。实际 HTTP/Postgres 回归已接 recovery，路由/权限/OpenAPI 清单随同更新；最终 SHA Actions 待验。
 
+## 等待盘点与恢复诊断读取面（#1036 A/D）
+
+`GET /jobs/waiting-classification` 与 `GET /jobs/{id}/recovery-diagnostics` 是两条 admin-only 只读投影（[路由](../../apps/scheduler/src/domains/job-control/recovery-diagnostics-routes.ts)），服务于人工结清（上一节）和人业决策的取证分工：前者把 waiting_human/failed/timeout/orphan 跨 Job 按内核可判事实分类为未知效果 / 平台死路（objective stopped，或被拒完成达上限且逐条通过内核回执身份核对：派生事件 ID、event_dedup/Attempt 归属、4xx 且 accepted:false）/ 业务决定 / 授权等待 / 无信号；人工等待主题先看 subject `type`（`finding` 作为整体主题投影，`platform_blocker` 才按合法 kind，其余不猜）。`?project_id` 是包含条件并对每个 id 做范围校验，任一越界整体 403，且项目限定 admin 即使不带 project_id 也会被强制收敛到自身项目（过滤值不是授权）；后者给出单 Job 未结清效果（含账本结算态与用量是否已知）、修正预算状态与既有动作入口引用（不新增动作，结清仍走上一节 POST），并单列 `settled_usage_unknown`：已人工结清但用量账本仍缺失/未知的效果，只给读取入口，不再建议重复结清、不补零也不放宽预算。两端的响应只含枚举/UUID/计数/戳，不携带 summary、message 或 effect error 原文；业务文本经证据端点人工读取。分块扫描、优先级、脱敏边界与负例（活动清单/无效 query/权限拒绝）见对应集成回归与 [核心分类](../../apps/scheduler/src/domains/job-control/recovery-diagnostics.ts)。这是投影，不改变 Gate 语义，也不把无信号等待自动恢复为可执行。最终 SHA Actions 待验。
+
 ## 宿主维护升级接口
 
 平台版本发现 API 保持只读，不能触发 Compose 变更。宿主维护控制器使用固定目标、结构计划 hash、generation 和部署绑定推进；风险计划需要明确批准，角色身份清除不是维护许可的隐含动作。目标 schema CLI 以 stdin 接收连接及动作，plan 使用只读事务，apply 只接受归属明确的候选库；返回结构化错误，不输出驱动原始错误或秘密。管理入口在 preparing 或身份不匹配时拒绝业务请求；当前宿主动作包括 `check`、`apply`、`rollback`、`resume-rollback`，风险批准使用 `--approve-plan-hash`，受管清单使用 `--nodes`。`--reset-role-identity` 已接 #758 目标重建，只在明确选择并批准对应 hash 时清角色 CLI 与项目 model，保留全局 model 和历史快照。`resume-rollback` 已接本地回执与维护源代的受管节点恢复；旧源没有维护契约且含远程节点时仍保持隔离。最终组合基线的多节点升级、第二代失败回滚和显式恢复已有隔离演练证据，范围见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)；不等同于 Windows Docker 或真实模型验收。具体参数以 [部署说明](../../deploy/README.md) 为准。[ADR 0008](adr/0008-maintenance-candidate-upgrade.md) 规定了激活未知不得回旧的恢复边界。
