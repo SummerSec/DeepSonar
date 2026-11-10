@@ -38,6 +38,24 @@ interface AuthContextValue {
 
 const AuthCtx = createContext<AuthContextValue | null>(null);
 
+const AUTH_STATUS_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(task: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    task.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [status, setStatus] = useState<AuthStatus | null>(null);
@@ -52,7 +70,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
-      const st = await api.authStatus();
+      // 鉴权探针没有超时会把用户永久留在「检查登录状态…」；超时后走已有错误态并提供重试。
+      const st = await withTimeout(api.authStatus(), AUTH_STATUS_TIMEOUT_MS, "auth status timeout");
       setStatus(st);
       setStatusError(null);
       if (!st.auth_required) {

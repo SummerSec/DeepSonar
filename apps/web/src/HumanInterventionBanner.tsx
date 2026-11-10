@@ -37,20 +37,29 @@ export function HumanInterventionBanner({
   const pendingCount = countVisiblePendingHumanInterventions(items, prefs.repliedIds, prefs.hiddenIds);
   const visible = visibleHumanInterventions(items, prefs.hideProcessed, prefs.repliedIds, prefs.hiddenIds);
   const hiddenCount = items.length - visible.length;
+  const collapsed = prefs.bannerCollapsed || (pendingCount === 0 && undisplayedPendingCount === 0);
   if (items.length === 0) return null;
 
+  // 只有历史、没有待处理项时不该继续占用一条端到端琥珀横幅抢注意力：降级为一行轻量状态。
+  const needsAttention = pendingCount > 0 || undisplayedPendingCount > 0;
+
   return (
-    <section className="relative z-20 mx-3 mb-2 rounded-2xl bg-amber-400/[.06] px-3 py-2 ring-1 ring-amber-300/20 sm:px-4" aria-label="人工介入">
+    <section
+      className={`relative z-20 mx-3 mb-2 rounded-2xl px-3 sm:px-4 ${
+        needsAttention ? "bg-amber-400/[.06] py-2 ring-1 ring-amber-300/20" : "bg-white/[.015] py-1 ring-1 ring-[var(--line)]"
+      }`}
+      aria-label="人工介入"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           className="inline-flex items-center gap-2 text-left"
-          aria-expanded={!prefs.bannerCollapsed}
+          aria-expanded={!collapsed}
           onClick={() => onPrefsChange({ ...prefs, bannerCollapsed: !prefs.bannerCollapsed })}
         >
           {prefs.bannerCollapsed ? <CaretRight size={12} className="text-amber-300" /> : <CaretDown size={12} className="text-amber-300" />}
-          <HandPalm size={14} className="text-amber-300" />
-          <h2 className="text-[12px] font-medium text-zinc-300">人工介入</h2>
+          <HandPalm size={14} className={needsAttention ? "text-amber-300" : "text-zinc-600"} />
+          <h2 className={`text-[12px] font-medium ${needsAttention ? "text-zinc-300" : "text-zinc-500"}`}>人工介入</h2>
         </button>
         <span className="font-mono text-[9px] text-zinc-600">
           {pendingCount} 条待处理{undisplayedPendingCount > 0 ? ` · 另有 ${undisplayedPendingCount} 条待处理未展示` : hiddenCount > 0 ? ` · 已隐藏 ${hiddenCount} 条历史` : items.length > pendingCount ? ` · 共 ${items.length} 条` : ""}
@@ -64,7 +73,7 @@ export function HumanInterventionBanner({
           {prefs.hideProcessed ? "显示历史" : "隐藏已处理"}
         </button>
       </div>
-      {!prefs.bannerCollapsed && (
+      {!collapsed && (
         <div className="mt-2 flex gap-2 overflow-x-auto pb-1">
           {visible.length === 0 ? (
             <p className="px-1 py-2 font-mono text-[10px] text-zinc-600">介入项已隐藏，可显示历史恢复查看。</p>

@@ -13,7 +13,6 @@ export function TaskWorkbenchHeader({
   findingProtocol,
   decisionLabel,
   message,
-  taskArchived,
   createdAt,
   startExecValue,
   startExecTitle,
@@ -31,7 +30,6 @@ export function TaskWorkbenchHeader({
   findingProtocol?: EffectiveFindingProtocol | null;
   decisionLabel?: string | null;
   message?: string | null;
-  taskArchived: boolean;
   createdAt?: string;
   startExecValue: string;
   startExecTitle?: string;
@@ -52,7 +50,6 @@ export function TaskWorkbenchHeader({
       </Link>
       <div className="order-3 min-w-0 w-full flex-none sm:order-none sm:w-auto sm:flex-1">
         <span className="block break-words text-[13px] font-medium text-zinc-200 sm:truncate">{title}</span>
-        <p className="mt-1 line-clamp-2 text-[12px] leading-5 text-zinc-500">{outcome.objective}</p>
         <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
           <StatusChip label="执行" value={statusLines.execution.label} />
           <StatusChip label="认知" value={statusLines.cognition.label} />
@@ -68,7 +65,11 @@ export function TaskWorkbenchHeader({
         </div>
         <span className="mt-1 block font-mono text-[10px] text-zinc-600">
           {[
-            decisionLabel,
+            decisionLabel
+              ? lifecycleActive
+                ? decisionLabel
+                : `${decisionLabel}（本任务已无活动执行）`
+              : null,
             `已确认 ${outcome.confirmed_count}`,
             `待验证 ${outcome.pending_verification_count}`,
             `待人工 ${outcome.needs_human_count}`,
@@ -78,11 +79,6 @@ export function TaskWorkbenchHeader({
             .join(" · ")}
           {message ? ` · ${message}` : ""}
         </span>
-        {!taskArchived && (
-          <span className="mt-1 block text-[10px] leading-4 text-zinc-600">
-            暂停会阻止该任务领取和派生新 Job；已运行 Job 会安全收尾，不会强制中断。
-          </span>
-        )}
         {createdAt && (
           <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[9px] text-zinc-600 sm:grid-cols-4">
             <LifecycleDatum label="创建" value={formatDate(createdAt)} title={formatTime(createdAt)} />

@@ -101,7 +101,7 @@ export function TaskOverview({
         className={actions.length > 0 ? "max-w-5xl border-l-2 border-amber-400/70" : "max-w-5xl"}
       >
         {actions.length === 0 ? (
-          <p className="text-[13px] leading-6 text-zinc-400">当前没有待处理事项。后台刷新不会把你带离当前视图。</p>
+          <p className="text-[13px] leading-6 text-zinc-400">当前没有待处理事项。</p>
         ) : (
           <div className="grid max-w-5xl gap-3 lg:grid-cols-2">
             {actions.slice(0, 4).map((action) => (
@@ -119,8 +119,8 @@ export function TaskOverview({
         <OverviewStat label="冲突" value={outcome.conflict_count} hint="支持与反驳并存" />
       </section>
 
-      <div className="grid max-w-5xl gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
-        <div className="flex flex-col gap-4">
+      {/* 两栏都放真实内容：过去这层网格只塞了一个子列，0.8fr 那一路永远空白。 */}
+      <div className="grid max-w-5xl gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
           <OverviewBlock
             title="得到了什么"
             action={onOpenView ? <ViewLink onClick={() => onOpenView("findings")}>全部发现</ViewLink> : null}
@@ -164,7 +164,6 @@ export function TaskOverview({
               </p>
             )}
           </OverviewBlock>
-        </div>
       </div>
 
       <div className="grid max-w-5xl gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
