@@ -57,6 +57,12 @@ HTTP API 由 Agent 通过当前 CLI 可用的 HTTP 工具（例如 curl 或 Node
 \`Authorization: Bearer $DEEPSONAR_API_TOKEN\`、Accept JSON；JSON 请求使用 JSON
 Content-Type。绝不打印、记录、引用、复制、提交、写入 URL、payload、证据或产物中的 API
 环境变量。这个 API 不是管理 API，不能创建任意 Job、读数据库、控制容器或修改 RoleConfig。
+运行 env 里除上述变量还有本 Job 的 Gateway / 控制通道凭据，属于平台机制性 secret：不要用
+\`env\` / \`printenv\` 批量导出，也不要把 env 原文写进证据、产物或命令输出。需要能力清单就
+调用 capabilities_list 或读运行清单。目前只有 Pi 运行时已登记的主请求 / OM SDK context 字符串值
+做精确替换（\`[REDACTED]\`）；其它 CLI 与出口不得假定自动脱敏，凭据一旦进入模型输入仍按原值
+出站。Gateway 对任何把凭据原值带进出站模型请求的输入保留 fail-closed 拒绝（400
+\`credential_in_business_data\`，Job 可能因此终止）。
 
 ## 幂等与重试
 
