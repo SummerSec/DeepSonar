@@ -112,7 +112,8 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
       assert.equal(items.length, 7, "unfiltered: the six target-project waits plus the other-project wait; running stays outside");
       const byId = new Map(items.map((row) => [row.job_id, row] as const));
       assert.equal(byId.get(authorizationJob)?.category, "unknown_effects");
-      assert.deepEqual(byId.get(authorizationJob)?.signals.unresolved_effect_kinds, ["gateway_model_request", "agent_run"]);
+      assert.deepEqual(byId.get(authorizationJob)?.signals.unresolved_effect_kinds, ["agent_run", "gateway_model_request"],
+        "kind list is sorted so the projection does not depend on array_agg order");
       assert.equal(byId.get(authorizationJob)?.signals.human_subject_kind, "authorization",
         "unknown effects win precedence, human signal stays populated");
       assert.equal(byId.get(businessJob)?.category, "human_decision");

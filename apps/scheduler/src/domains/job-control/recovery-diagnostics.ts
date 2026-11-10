@@ -94,7 +94,10 @@ export function waitingRowToEntry(
   /** 只在计数达到阈值时由调用方做内核身份核对；不足阈值时为 null。 */
   rejectedCompletionVerified: boolean | null = null,
 ): WaitingClassificationEntry {
-  const unresolvedKinds = Array.isArray(row.unresolved_effect_kinds) ? [...new Set(row.unresolved_effect_kinds)] : [];
+  // array_agg(DISTINCT ...) has no stable order; sort so the projection is deterministic.
+  const unresolvedKinds = Array.isArray(row.unresolved_effect_kinds)
+    ? [...new Set(row.unresolved_effect_kinds)].sort()
+    : [];
   const completed = row.last_completion_receipt === "persisted_deferred";
   const deadlineElapsed = Boolean(budget?.deadline && Date.parse(budget.deadline) <= Date.now());
   const budgetExhausted = budget
