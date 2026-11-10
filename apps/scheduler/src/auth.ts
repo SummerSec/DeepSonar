@@ -75,7 +75,6 @@ export function generateToken(): { plaintext: string; prefix: string; hash: stri
 const ROUTE_SCOPES: Record<string, string> = {
   "GET /projects/:id/knowledge": "projects:read",
   "GET /projects/:id/knowledge/backfill": "projects:read",
-  "POST /projects/:id/knowledge/backfill": "projects:write",
   "GET /projects/:id/knowledge/receipts": "projects:read",
   "GET /projects/:id/knowledge/receipts/:receiptId": "projects:read",
   "GET /projects/:id/knowledge/:itemId": "projects:read",

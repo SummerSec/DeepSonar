@@ -188,6 +188,6 @@ quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/
 
 任务队列由 Scheduler 持有，模型/插件没有队列控制 operation。入队、暂停、明确继续和 claim 共用事务锁，不能扩大项目、凭据、镜像、网络、预算或 Attempt 身份。当前任务未知效果保留位置，继续队列不构成效果重放或结算授权。失败恢复绑定操作员确认的队首 ID，旧页面不能跳过新失败。队列诊断读取与控制分别依赖 tasks:read 和 jobs:control。
 
-## 自动知识整理的来源边界
+## 来源登记与历史预览边界（#1035）
 
-成功结算只允许 Scheduler 登记整理，不代表观察已经验证。来源 Job 必须具有冻结整理权限、最新 Attempt 已成功且无未知外部效果；异步来源准备只读取自己的 Fact/Evidence，并在入库前复核归属与内容hash。补做通过项目管理授权，不能修改旧快照、扩大来源项目、重置已存在work预算或复活旧token。新知识画布从来源Job冻结网络策略继承外联许可，缺失时关闭，不使用项目默认值扩权。治理/trial Job 排除，防止自动根链递归。见[ADR-0020](adr/0020-scheduler-knowledge-triggers.md)。
+成功来源登记仅含 Scheduler 审计元数据；冻结权限、成功最新 Attempt、未结算效果、项目状态及来源存在性均需校验。GET 历史预览重新检查当前资格并限制项目和分页，不授予历史执行权限、不创建知识 Job，也不宣称登记保留了来源内容。 见[ADR-0021](adr/0021-knowledge-source-preview.md)。

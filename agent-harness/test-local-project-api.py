@@ -9,7 +9,6 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timedelta, timezone
 
 BASE = os.environ.get("DEEPSONAR_BASE", "http://127.0.0.1:3100").rstrip("/")
 
@@ -97,7 +96,7 @@ def main():
     assert code in (200, 409), f"priority 改动返回 {code}"
     print("优先级:", code, "(200=改成功 / 409=已被认领，均合法)")
 
-    # 7. 已沉淀任务保留原历史；无治理留存的任务仍可安全硬重试。
+    # 7. 等整个 Hub 编排链收敛后硬重试：复用原画布，清空旧运行历史
     # fake hub 每轮派多角色 + finding 必验 + followup 回收，链长已到 ~8 分钟，窗口放宽到 15 分钟
     final = None
     for _ in range(450):
@@ -157,56 +156,18 @@ def main():
         item["id"] for item in req("GET", f"/jobs?project_id={pid}")
         if item.get("canvas_id") == cid
     }
-    before_work = {
-        item["work"]["id"]: item["work"]["job_count"]
-        for item in req("GET", f"/projects/{pid}/knowledge/backfill?limit=20")["items"]
-        if item["job_id"] in old_job_ids and item.get("work")
-    }
-    assert before_work, "成功业务任务应留下自动治理 work"
-    retained = req("POST", f"/tasks/{cid}/retry", None, 409)
-    assert retained["error_code"] == "TASK_DELETE_KNOWLEDGE_RETAINED", retained
-    assert retained["retained"].get("work", 0) > 0, retained
-    preserved_job_ids = {
+    retry = req("POST", f"/tasks/{cid}/retry", None, 201)
+    assert retry["canvas_id"] == cid and retry["status"] == "pending"
+    current_job_ids = {
         item["id"] for item in req("GET", f"/jobs?project_id={pid}")
         if item.get("canvas_id") == cid
     }
-    assert old_job_ids == preserved_job_ids, "治理历史保留拒绝不得删除原 Job"
-    after_work = {
-        item["work"]["id"]: item["work"]["job_count"]
-        for item in req("GET", f"/projects/{pid}/knowledge/backfill?limit=20")["items"]
-        if item["job_id"] in old_job_ids and item.get("work")
-    }
-    assert before_work.keys() <= after_work.keys(), "硬重试拒绝不得删除既有 work"
-    assert all(after_work[work_id] >= count for work_id, count in before_work.items()), "硬重试拒绝不得重置知识预算"
-    print("已沉淀任务硬重试拒绝 OK，原 Job 与治理记录保留")
-
-    # 冻结到未来，确保这个独立任务不会产生执行或知识记录；取消 pending 入口后验证干净重试。
-    clean = req("POST", f"/projects/{pid}/tasks", {
-        "title": "无治理留存的硬重试",
-        "content": "仅验证未来调度任务的取消与硬重试，不执行模型任务",
-        "allow_egress": False,
-        "scheduled_start_at": (datetime.now(timezone.utc) + timedelta(days=1)).isoformat().replace("+00:00", "Z"),
-    }, 201)
-    clean_cid, clean_job = clean["canvas_id"], clean["job"]
-    clean_current = req("GET", f"/jobs/{clean_job['id']}")["job"]
-    assert clean_current["status"] == "pending", clean_current
-    cancelled = req("POST", f"/jobs/{clean_job['id']}/cancel", None)
-    assert cancelled["status"] == "cancelled", cancelled
-    clean_row = next(r for r in req("GET", f"/projects/{pid}/canvases") if r["id"] == clean_cid)
-    assert clean_row["active_count"] == 0, clean_row
-    # Hub不在业务Job补做目录中；后续201会经过统一保留门，证明该干净任务没有治理留存。
-    retry = req("POST", f"/tasks/{clean_cid}/retry", None, 201)
-    assert retry["canvas_id"] == clean_cid and retry["status"] == "pending", retry
-    current_job_ids = {
-        item["id"] for item in req("GET", f"/jobs?project_id={pid}")
-        if item.get("canvas_id") == clean_cid
-    }
     assert retry["id"] in current_job_ids, "硬重试创建的新入口 Job 应属于原画布"
-    assert clean_job["id"] not in current_job_ids, "无治理留存的硬重试应清空其原 Job"
+    assert old_job_ids.isdisjoint(current_job_ids), "硬重试应清空原画布的旧 Job"
     rows = req("GET", f"/projects/{pid}/canvases")
-    row = next(r for r in rows if r["id"] == clean_cid)
+    row = next(r for r in rows if r["id"] == cid)
     assert row["job_count"] >= 1, row
-    print(f"干净硬重试 OK: 新 job {retry['id'][:8]}，新一轮 job 数 {row['job_count']}")
+    print(f"硬重试 OK: 首跑 {final} → 新 job {retry['id'][:8]}，新一轮 job 数 {row['job_count']}")
 
     # 8. 外部事件触发：进入 Hub，且 source + event_id 幂等
     event_body = {
