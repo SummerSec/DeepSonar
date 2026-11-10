@@ -109,7 +109,7 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
       const list = await app.inject({ method: "GET", url: "/jobs/waiting-classification", headers: adminHeaders });
       assert.equal(list.statusCode, 200, list.body);
       const items = list.json().items as Array<Record<string, any>>;
-      assert.equal(items.length, 6, "running and other-project jobs stay outside");
+      assert.equal(items.length, 7, "unfiltered: the six target-project waits plus the other-project wait; running stays outside");
       const byId = new Map(items.map((row) => [row.job_id, row] as const));
       assert.equal(byId.get(authorizationJob)?.category, "unknown_effects");
       assert.deepEqual(byId.get(authorizationJob)?.signals.unresolved_effect_kinds, ["gateway_model_request", "agent_run"]);
