@@ -176,6 +176,7 @@ import {
   openSandboxCreateCircuitStatus,
   recordOpenSandboxProvisionFailure,
   recordOpenSandboxProvisionSuccess,
+  createCircuitProbeFor, shouldLogCreateCircuitPause, type CreateCircuitProbe,
 } from "./opensandbox-create-circuit.js";
 import {
   OPENSANDBOX_UPLOAD_CIRCUIT_OPEN,
@@ -668,7 +669,8 @@ function logPlatformClaimsPaused(reason: string | null): void {
  * 在调度器 advisory lock 下抢占 pending Job，但不执行 provision 或 Agent。
  * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
-export async function claimPendingJobs(): Promise<{ id: string }[]> {
+export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCircuitProbe | null }[]> {
+  let createProbe: CreateCircuitProbe | null = null; // claim-time half-open probe identity
   if (managesHostDockerRuntime()) {
     const disk = await refreshHostDiskPressure();
     if (!hostDiskAllowsDispatch(disk)) {
@@ -705,17 +707,23 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       }
     }
     const createCircuit = openSandboxCreateCircuitStatus();
-    if (!openSandboxCreateCircuitAllowsClaim(createCircuit).allowed) {
-      console.error(
-        `[dispatcher] ${OPENSANDBOX_CREATE_CIRCUIT_OPEN} state=${createCircuit.state} reason=${createCircuit.lastTripReason ?? "unknown"}: new claims paused`,
-      );
+    const createAdmission = openSandboxCreateCircuitAllowsClaim(createCircuit);
+    if (!createAdmission.allowed) {
+      // #1046: the reason is a fixed failure code, and the line is throttled at the circuit
+      // so a paused claim path cannot log once per call.
+      if (shouldLogCreateCircuitPause()) {
+        console.error(
+          `[dispatcher] ${OPENSANDBOX_CREATE_CIRCUIT_OPEN} state=${createCircuit.state} reason=${createCircuit.lastTripReason ?? "unknown"}: new claims paused`,
+        );
+      }
       return [];
     }
+    createProbe = createCircuitProbeFor(createAdmission); // bound here, not sampled at outcome time
   }
   type ClaimCursor = { priority: number; createdAt: string; id: string };
   type ClaimPage = { claimed: { id: string }[]; cursor: ClaimCursor | null; more: boolean };
   const pendingPageSize = 500;
-  const claimedJobs: { id: string }[] = [];
+  const claimedJobs: { id: string; probe: CreateCircuitProbe | null }[] = [];
   let cursor: ClaimCursor | null = null;
   // Each bounded page commits before discovering another Canvas. Only actual
   // claims consume quota; skipped busy rows cannot reserve the remaining slots.
@@ -854,7 +862,7 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
       console.error("[dispatcher] 后续分页领取失败，返回此前已提交的 Job:", error);
       break;
     }
-    claimedJobs.push(...page.claimed);
+    claimedJobs.push(...page.claimed.map((job) => ({ ...job, probe: createProbe })));
     if (!page.more) break;
     cursor = page.cursor;
   }
@@ -868,7 +876,7 @@ export async function dispatchOnce(): Promise<number> {
   const claimedJobs = await claimPendingJobs();
 
   for (const job of claimedJobs) {
-    const p = runJob(job.id).catch((e) => console.error(`[dispatcher] job ${job.id} 异常:`, e));
+    const p = runJob(job.id, job.probe).catch((e) => console.error(`[dispatcher] job ${job.id} 异常:`, e));
     inFlight.add(p);
     void p.finally(() => inFlight.delete(p));
   }
@@ -1004,7 +1012,7 @@ export async function lockCurrentProvisioningAttempt(
   }
 }
 
-async function runJob(jobId: string) {
+async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = null) {
   let stopLease: (() => void) | null = null;
   let handle: { sandboxId: string } | null = null;
   let sharedAssetsVolumeName: string | null = null;
@@ -1240,16 +1248,13 @@ async function runJob(jobId: string) {
           );
           inc("deepsonar_sandbox_provision_seconds_sum", { provider }, Math.max(1, Math.round((Date.now() - provisionStarted) / 1000)));
           inc("deepsonar_sandbox_provision_seconds_count", { provider });
-          if (provider === "opensandbox") recordOpenSandboxProvisionSuccess();
+          if (provider === "opensandbox") recordOpenSandboxProvisionSuccess(createProbe);
         } catch (error) {
           inc("deepsonar_sandbox_provision_failed_total", { provider });
           // #1046: only the retryable service-level shapes (create/sidecar 5xx) feed the
           // create-path circuit; ordinary configuration failures must not pause claims.
           if (provider === "opensandbox" && isRetryableProvisionFailure(error)) {
-            recordOpenSandboxProvisionFailure(
-              formatDispatcherFailureMessage(error),
-              openSandboxCreateCircuitStatus().state === "half_open",
-            );
+            recordOpenSandboxProvisionFailure(formatDispatcherFailureMessage(error), createProbe);
           }
           throw error;
         }
