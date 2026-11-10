@@ -13,6 +13,9 @@
  * cooldown exactly one half-open canary claim is admitted; a successful provision
  * closes the circuit, a failed canary reopens it. No new server endpoint, config knob
  * or persisted state is introduced; counts live only in this process.
+ *
+ * State and logs carry only a fixed failure code (`classifyProvisionFailure`), never the
+ * dispatcher error text: that text can contain provider bodies, headers or a credential.
  */
 import { inc, setGauge } from "./metrics.js";
 
@@ -79,18 +82,17 @@ export function openSandboxCreateCircuitAllowsClaim(
 /** Record a dispatcher-observed provision failure; trip once the window threshold is reached. */
 export function recordOpenSandboxProvisionFailure(reason: string, canary = false): OpenSandboxCreateCircuitStatus {
   const now = clock();
-  if (canary) {
-    // A failed half-open canary proves the backend is still unstable: reopen immediately.
-    reTrip(now, reason);
-    return openSandboxCreateCircuitStatus();
-  }
+  const code = classifyProvisionFailure(reason);
+  // #1046: every observed failure counts, including a failed half-open canary. Accounting
+  // must not depend on which branch the trip decision takes.
   failureTimes.push(now);
   prune(now);
   inc("deepsonar_opensandbox_create_failures_total");
-  if (state === "closed" && failureTimes.length >= CREATE_CIRCUIT_FAILURES_TO_TRIP) {
-    reTrip(now, reason);
-  } else if (state === "half_open") {
-    reTrip(now, reason);
+  if (canary || state === "half_open") {
+    // A failed half-open canary proves the backend is still unstable: reopen immediately.
+    reTrip(now, code);
+  } else if (state === "closed" && failureTimes.length >= CREATE_CIRCUIT_FAILURES_TO_TRIP) {
+    reTrip(now, code);
   }
   return openSandboxCreateCircuitStatus();
 }
@@ -108,13 +110,40 @@ export function recordOpenSandboxProvisionSuccess(): void {
   setGauge("deepsonar_opensandbox_create_circuit", 0);
 }
 
-function reTrip(now: number, reason: string): void {
+function reTrip(now: number, code: string): void {
   state = "open";
   openedAtMs = now;
-  lastTripReason = reason.slice(0, 300);
+  lastTripReason = code;
   setGauge("deepsonar_opensandbox_create_circuit", 1);
   inc("deepsonar_opensandbox_create_circuit_open_total");
-  console.error(`[opensandbox-create-circuit] ${OPENSANDBOX_CREATE_CIRCUIT_OPEN} reason=${lastTripReason}`);
+  console.error(`[opensandbox-create-circuit] ${OPENSANDBOX_CREATE_CIRCUIT_OPEN} reason=${code}`);
+}
+
+// Protocol-qualified code first (the shape real dispatcher errors carry), then a bare
+// upper-case identifier with underscores; free text, base64/mixed-case secrets and
+// provider prose never match either alternative.
+const PROVISION_FAILURE_CODE_RE = /\b(?:OPENSANDBOX|OPEN_SANDBOX|SANDBOX|DOCKER)::[A-Z][A-Z0-9_]{1,63}\b|\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,4}\b/u;
+/** One pause log per minute per process: a denial path must not log once per claim call. */
+const CREATE_CIRCUIT_PAUSE_LOG_INTERVAL_MS = 60 * 1000;
+let lastPauseLogAtMs: number | null = null;
+
+/**
+ * Fixed projection of a dispatcher provision error (#1046).
+ *
+ * Only a protocol-style code survives. Free text — which can carry provider bodies,
+ * headers or a leaked credential — is never truncated into state or logs, because
+ * truncation is not a secret-safe boundary.
+ */
+export function classifyProvisionFailure(reason: string): string {
+  const match = PROVISION_FAILURE_CODE_RE.exec(reason);
+  return match ? match[0] : "unclassified";
+}
+
+export function shouldLogCreateCircuitPause(): boolean {
+  const now = clock();
+  if (lastPauseLogAtMs != null && now - lastPauseLogAtMs < CREATE_CIRCUIT_PAUSE_LOG_INTERVAL_MS) return false;
+  lastPauseLogAtMs = now;
+  return true;
 }
 
 /** Test-only: reset all state and optionally pin the clock. */
@@ -123,5 +152,6 @@ export function resetOpenSandboxCreateCircuitForTests(clockOverride?: () => numb
   openedAtMs = null;
   lastTripReason = null;
   failureTimes = [];
+  lastPauseLogAtMs = null;
   clock = clockOverride ?? (() => Date.now());
 }

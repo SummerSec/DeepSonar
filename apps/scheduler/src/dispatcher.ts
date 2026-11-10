@@ -171,6 +171,7 @@ import { openSandboxAllowsDispatch, refreshOpenSandboxServerStatus } from "./ope
 import {
   OPENSANDBOX_CREATE_CIRCUIT_OPEN,
   openSandboxCreateCircuitAllowsClaim,
+  shouldLogCreateCircuitPause,
   openSandboxCreateCircuitStatus,
   recordOpenSandboxProvisionFailure,
   recordOpenSandboxProvisionSuccess,
@@ -703,9 +704,13 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
     }
     const createCircuit = openSandboxCreateCircuitStatus();
     if (!openSandboxCreateCircuitAllowsClaim(createCircuit).allowed) {
-      console.error(
-        `[dispatcher] ${OPENSANDBOX_CREATE_CIRCUIT_OPEN} state=${createCircuit.state} reason=${createCircuit.lastTripReason ?? "unknown"}: new claims paused`,
-      );
+      // #1046: the reason is a fixed failure code, and the line is throttled at the circuit
+      // so a paused claim path cannot log once per call.
+      if (shouldLogCreateCircuitPause()) {
+        console.error(
+          `[dispatcher] ${OPENSANDBOX_CREATE_CIRCUIT_OPEN} state=${createCircuit.state} reason=${createCircuit.lastTripReason ?? "unknown"}: new claims paused`,
+        );
+      }
       return [];
     }
   }
