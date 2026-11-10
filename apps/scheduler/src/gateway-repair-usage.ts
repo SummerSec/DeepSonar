@@ -42,6 +42,21 @@ function usage(value: unknown, protocol: "chat" | "responses" | "anthropic"): Us
   return { input, output, total, cacheRead, cacheWrite };
 }
 
+/**
+ * #1059: anthropic-compatible group aggregates commonly send
+ * `message_start.usage` without `output_tokens`, reporting only the
+ * cumulative input/cache snapshot, and deliver the cumulative output with
+ * `message_delta`. Validate every supplied field now; a pending-output
+ * snapshot is not the usable evidence yet — the stream must still provide a
+ * complete usage and merge before `message_stop` (checking `observed`).
+ */
+function anthropicStartUsage(value: unknown): { valid: boolean; pendingOutput: boolean } {
+  const u = record(value);
+  if (!u) return { valid: false, pendingOutput: false };
+  if (u.output_tokens === undefined) return { valid: usage({ ...u, output_tokens: 0 }, "anthropic") !== null, pendingOutput: true };
+  return { valid: usage(u, "anthropic") !== null, pendingOutput: false };
+}
+
 /** Strict protocol fixtures, never assistant/tool text or regex usage guesses.
  * null means unknown/incomplete, including unsupported protocols and size limits.
  */
@@ -104,7 +119,12 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
         const message = record(value.message);
         if (anthropicStart || !message || message.type !== "message" || message.role !== "assistant") { failed = true; return; }
         anthropicStart = record(message.usage);
-        observe(usage(anthropicStart, "anthropic"));
+        // #1059: an aggregated start snapshot without output_tokens is the
+        // documented compat shape, not a reason to distrust the whole stream;
+        // supplied fields still validate here, and the delta must complete it.
+        const start = anthropicStartUsage(anthropicStart);
+        if (!anthropicStart || !start.valid) { failed = true; return; }
+        if (!start.pendingOutput) observe(usage(anthropicStart, "anthropic"));
       } else if (value.type === "message_delta") {
         const deltaUsage = record(value.usage);
         if (!anthropicStart || !deltaUsage || count(deltaUsage.output_tokens) === null) { failed = true; return; }

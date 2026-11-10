@@ -81,6 +81,43 @@ test("Anthropic SSE joins start input and final cumulative output with stop", ()
   assert.equal(scan("messages", event({ type: "error", error: { type: "overloaded_error" } }) + antStream, true), null);
 });
 
+test("#1059: start snapshot without output_tokens defers to the cumulative delta, supplied fields still validate", () => {
+  // 现场形态：聚合路由的 `message_start.usage` 只带 input/cache 字段，output 在 message_delta。
+  const pendingStart = event(
+    { type: "message_start", message: { ...anthropic, stop_reason: null, usage: { input_tokens: 10, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 } } },
+    "message_start",
+  );
+  const expected = scan("messages", anthropic);
+  assert.deepEqual(scan("messages", pendingStart + event(antDelta, "message_delta") + event(antStop, "message_stop"), true), expected);
+  assert.deepEqual(
+    scan("messages", pendingStart + event({ ...antDelta, usage: { output_tokens: 4, input_tokens: 10 } }, "message_delta") + event(antStop, "message_stop"), true),
+    expected,
+  );
+  // 补到 delta 之前只许 ping / content_block / message_delta，未知帧仍拒信。
+  assert.equal(scan("messages", pendingStart + event({ type: "response.completed" }) + event(antDelta) + event(antStop), true), null);
+  // partial snapshot 缺 output 只是暂缓，不是免校准：非法 input/cache 字段仍拒信。
+  for (const usageShape of [
+    { input_tokens: -1, cache_read_input_tokens: 3 },
+    { input_tokens: 1.5 },
+    { input_tokens: 10, cache_creation: { ephemeral_5m_input_tokens: "x" } } as unknown as Record<string, unknown>,
+    {} as Record<string, unknown>,
+  ]) {
+    assert.equal(
+      scan("messages", event({ type: "message_start", message: { ...anthropic, stop_reason: null, usage: usageShape } }, "message_start") + event(antDelta) + event(antStop), true),
+      null,
+      JSON.stringify(usageShape),
+    );
+  }
+  // 缺 usage 对象与「pending 后无 delta 收尾」仍然 fail closed。
+  assert.equal(
+    scan("messages", event({ type: "message_start", message: { ...anthropic, stop_reason: null, usage: undefined } }, "message_start") + event(antDelta) + event(antStop), true),
+    null,
+  );
+  assert.equal(scan("messages", pendingStart + event(antStop, "message_stop"), true), null);
+  // 连续两个 message_start 依旧拒绝。
+  assert.equal(scan("messages", pendingStart + pendingStart + event(antDelta) + event(antStop), true), null);
+});
+
 test("truncated SSE, malformed UTF8, mismatched events and bounded input fail closed", () => {
   assert.equal(scan("messages", antStream.slice(0, -2), true), null);
   assert.equal(scan("messages", "event: error\n\n" + antStream, true), null);
