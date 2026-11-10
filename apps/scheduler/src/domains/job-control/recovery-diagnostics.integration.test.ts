@@ -53,7 +53,7 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
         await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,started_at,lease_expires_at)
           VALUES(${id},${id === otherProjectJob ? otherProjectId : projectId},${canvas},'audit',
           ${id === runningJob ? 'running' : 'waiting_human'},${sql.json({ name: 'audit' })},
-          ${id === otherProjectJob ? null : 'now()'},${id === otherProjectJob ? null : sql`now() + interval '1 hour'`})`;
+          ${id === otherProjectJob ? null : sql`now()`},${id === otherProjectJob ? null : sql`now() + interval '1 hour'`})`;
       }
       const authorizationAttempt = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, authorizationJob));
       await sql`INSERT INTO events(job_id,attempt_id,event_id,job_seq,type,payload_json)
