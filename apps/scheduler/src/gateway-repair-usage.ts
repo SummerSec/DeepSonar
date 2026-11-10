@@ -46,9 +46,10 @@ function usage(value: unknown, protocol: "chat" | "responses" | "anthropic"): Us
  * #1059: anthropic-compatible group aggregates commonly send
  * `message_start.usage` without `output_tokens`, reporting only the
  * cumulative input/cache snapshot, and deliver the cumulative output with
- * `message_delta`. Validate every supplied field now; a pending-output
- * snapshot is not the usable evidence yet — the stream must still provide a
- * complete usage and merge before `message_stop` (checking `observed`).
+ * `message_delta`. Validate every supplied field now; the supplied snapshot
+ * still seeds the monotonic baseline (with output 0) so a later delta may not
+ * report lower input/cache, and the stream must still deliver a complete
+ * usage before `message_stop`.
  */
 function anthropicStartUsage(value: unknown): { valid: boolean; pendingOutput: boolean } {
   const u = record(value);
@@ -124,7 +125,10 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
         // supplied fields still validate here, and the delta must complete it.
         const start = anthropicStartUsage(anthropicStart);
         if (!anthropicStart || !start.valid) { failed = true; return; }
-        if (!start.pendingOutput) observe(usage(anthropicStart, "anthropic"));
+        // A pending output is not final evidence, but the announced input/cache
+        // already forms the monotonic baseline: observing it with output 0 keeps
+        // `observe`'s undercount guard armed for the first delta.
+        observe(usage(start.pendingOutput ? { ...anthropicStart, output_tokens: 0 } : anthropicStart, "anthropic"));
       } else if (value.type === "message_delta") {
         const deltaUsage = record(value.usage);
         if (!anthropicStart || !deltaUsage || count(deltaUsage.output_tokens) === null) { failed = true; return; }

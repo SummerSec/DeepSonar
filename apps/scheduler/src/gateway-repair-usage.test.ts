@@ -114,6 +114,18 @@ test("#1059: start snapshot without output_tokens defers to the cumulative delta
     null,
   );
   assert.equal(scan("messages", pendingStart + event(antStop, "message_stop"), true), null);
+  // 评审 #1061：pending start 已公布的 input/cache 是单调性基线，后续 delta 不得回退。
+  for (const undercount of [
+    { input_tokens: 0, output_tokens: 4, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    { output_tokens: 4, cache_read_input_tokens: 0 },
+    { output_tokens: 4, cache_creation_input_tokens: 1 },
+  ]) {
+    assert.equal(
+      scan("messages", pendingStart + event({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: undercount }, "message_delta") + event(antStop, "message_stop"), true),
+      null,
+      JSON.stringify(undercount),
+    );
+  }
   // 连续两个 message_start 依旧拒绝。
   assert.equal(scan("messages", pendingStart + pendingStart + event(antDelta) + event(antStop), true), null);
 });
