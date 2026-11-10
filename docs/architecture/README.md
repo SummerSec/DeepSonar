@@ -4,6 +4,8 @@
 > 同步日期：2026-11-09
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
+#1032 的 [Pi context 首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)映射 FR-CRED-003 / NFR-SEC-003、06/10 与追溯：主请求/OM 的 SDK 生成前精确替换和双源码镜像 guard，保持 Gateway 原字节、认证及历史；同 UID 隔离和完整诊断/审计未交付，最终 SHA Actions 待验。
+
 #1002 P1-8 的同项目同质多账号池与内核恢复账号偏好映射 [FR-CRED-002](01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)、[运行时选择](06-runtime-view.md#凭据与-cli-解析757)及安全视图；复用现有白名单/默认账号操作，不新增池状态或配置。双账号真实 Gateway 的隔离回归接 role-config，最终 SHA Actions 待验。
 
 2026-11-09 可行动人工请求同步到 [FR-CTRL-004 / FR-WEB-003 / NFR-UX-001](01-system-specification.md)、06/09 视图与[生命周期专题](../AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。新请求完整保存 guidance，L0 保持有界并按需读取 L1；waiting_human Job 当前状态用于待办合并，unknown effect 对账仍单独优先。实现行为与最终 SHA Actions 尚待验收，不宣称注意力收益已测量。

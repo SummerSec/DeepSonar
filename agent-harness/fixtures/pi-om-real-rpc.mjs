@@ -13,6 +13,7 @@ import { resolvePiPackage } from "../pi-image-packaging.mjs";
 const IMAGE_OM_ROOT = "/opt/deepsonar/pi-extensions/node_modules/pi-observational-memory";
 const IMAGE_WRAPPER = "/opt/deepsonar/pi-extensions/deepsonar-observational-memory.ts";
 const REPO = fileURLToPath(new URL("../../", import.meta.url));
+const HOST_CONTEXT_POLICY = path.join(REPO, "packages/runtime-sandbox/src/pi-main-request-budget.ts").replaceAll("\\", "/");
 const observationId = createHash("sha256").update(OBSERVATION).digest("hex").slice(0, 12);
 const privateProse = new RegExp(`${OBSERVATION}|${REFLECTION}`, "u");
 // The real Scheduler route regression asserts both exact wire payloads, including
@@ -237,7 +238,9 @@ export async function runRealPiRpc() {
       wrapper = path.join(root, "tested-wrapper.ts");
       // Host-only testing relocates the immutable canonical package. Image
       // acceptance always imports the installed production wrapper directly.
-      writeFileSync(wrapper, readFileSync(originalWrapper, "utf8").replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`));
+      writeFileSync(wrapper, readFileSync(originalWrapper, "utf8")
+        .replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`)
+        .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(HOST_CONTEXT_POLICY)));
     }
     for (const scenario of PI_RPC_SCENARIOS) {
       const scenarioRoot = path.join(root, scenario);
@@ -417,7 +420,9 @@ export async function runGrowthProbe({ rounds = 4, resumeRounds = 3 } = {}) {
     } else {
       const originalWrapper = existsSync(IMAGE_WRAPPER) ? IMAGE_WRAPPER : path.join(REPO, "agent-harness/pi-observational-memory-governed.ts");
       wrapper = path.join(root, "tested-wrapper.ts");
-      writeFileSync(wrapper, readFileSync(originalWrapper, "utf8").replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`));
+      writeFileSync(wrapper, readFileSync(originalWrapper, "utf8")
+        .replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`)
+        .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(HOST_CONTEXT_POLICY)));
     }
     const scenarioRoot = path.join(root, "growth");
     mkdirSync(scenarioRoot);

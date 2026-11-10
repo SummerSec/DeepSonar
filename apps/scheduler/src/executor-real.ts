@@ -287,13 +287,25 @@ export function isSemanticAgentRunError(result: {
 const ACCEPTED_COMPLETION_REFUSAL =
   /^(?:Pi message ended: error: )?(?:409:? )?(?:COMPLETION_ALREADY_ACCEPTED|Completion already accepted; reconcile its receipt|A completion is already durably accepted; read its receipt)$/i;
 
+/** Locally generated exit framing from resolveTerminalProcessOutcome; never provider text. */
+const LOCAL_PROCESS_EXIT_FRAMING = /^agent CLI 退出码 ([1-9][0-9]*): (.+)$/;
+
 export function acceptedCompletionSupersedesRunnerFailure(
   result: Pick<RealAgentResult, "error" | "errorKind" | "terminalOutcome" | "runnerErrorSource">,
   hasAcceptedTerminal: boolean,
 ): boolean {
-  if (!hasAcceptedTerminal || result.runnerErrorSource !== "structured_terminal") return false;
+  if (!hasAcceptedTerminal) return false;
   if (!isFinalAgentRunnerError(result)) return false;
-  return typeof result.error === "string" && ACCEPTED_COMPLETION_REFUSAL.test(result.error);
+  if (typeof result.error !== "string") return false;
+  if (result.runnerErrorSource === "structured_terminal") return ACCEPTED_COMPLETION_REFUSAL.test(result.error);
+  // #1045: a CLI that exits nonzero after the SDK's exact completion refusal cannot
+  // undo a completion the host already durably accepted. Only an error carrying our
+  // own exit framing qualifies; bare diagnostic text with process provenance stays a
+  // failure (#1016), as do signal-style exits (>=128) and any contaminated remainder.
+  if (result.runnerErrorSource !== "process") return false;
+  const framed = LOCAL_PROCESS_EXIT_FRAMING.exec(result.error);
+  if (!framed || Number(framed[1]) >= 128) return false;
+  return ACCEPTED_COMPLETION_REFUSAL.test(framed[2]);
 }
 
 export function isFinalAgentRunnerError(result: {
@@ -1851,7 +1863,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
         void emit("progress", { message }).catch(() => {});
       },
       onWarning: (warning) => {
-        inc("deepsonar_control_input_warnings_total", { reason: warning.code });
+        inc("deepsonar_control_input_warnings_total", { reason: warning.code }, warning.occurrences ?? 1);
         console.warn(`[real-agent] ${warning.code} in job ${jobId}: ${warning.detail ?? ""}`);
       },
       onRuntimeArtifact: (artifact) => evidenceWriter.appendRuntimeArtifact(artifact),

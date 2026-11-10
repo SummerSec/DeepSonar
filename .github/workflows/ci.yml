@@ -1001,10 +1001,11 @@ jobs:
       - name: Load reused runtime for offline validation
         if: ${{ steps.resolve.outputs.skip == 'true' }}
         env:
-          SOURCE_IMAGE: ${{ steps.resolve.outputs.src_ref }}
+          SOURCE_IMAGE: ${{ steps.resolve.outputs.source_image }}
         run: |
           set -euo pipefail
-          test -n "$SOURCE_IMAGE"
+          suffix="${SOURCE_IMAGE##*@sha256:}"
+          [[ ${#suffix} == 64 && "$suffix" != *[!0-9a-f]* ]] || exit 1
           docker pull "$SOURCE_IMAGE"
           docker tag "$SOURCE_IMAGE" "deepsonar-${{ matrix.toolset }}:ci"
           docker image inspect "deepsonar-${{ matrix.toolset }}:ci" >/dev/null

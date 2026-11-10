@@ -91,9 +91,12 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
       const hooks = new Map<string, (...args: any[]) => void>(); let stream: any;
       const ids: string[] = [];
       const context = { messages: [] };
+      let sdkContext: unknown;
       extension.createPiMainRequestBudgetExtension({ DEEPSONAR_REQUEST_POLICY_UPSTREAM: base, DEEPSONAR_GATEWAY_TOKEN: token },
         async function* (_model: unknown, ctx: unknown, options: any) {
-          assert.equal(ctx, context, "recovery uses the same context, not a restarted/replayed Agent session");
+          assert.deepEqual(ctx, context, "the safe projection preserves non-secret context");
+          if (ids.length) assert.equal(ctx, sdkContext, "recovery reuses the same projection without restarting/replaying the session");
+          else sdkContext = ctx;
           assert.equal(options.maxRetries, 0);
           const id = options.headers["x-deepsonar-request-id"]; ids.push(id);
           assert.equal(options.headers["x-deepsonar-retry-of"], ids.length === 1 ? undefined : ids.at(-2));
@@ -104,7 +107,7 @@ test("Job-scoped model recovery uses durable no-start proof without replaying th
             yield { type: "error", reason: "error", error: { role: "assistant", content: [], stopReason: "error", errorMessage: "model request failed" } };
           } else yield { type: "done", message: { role: "assistant", content: [{ type: "text", text: "ok" }], stopReason: "stop" } };
         })({ on: (event: string, callback: any) => hooks.set(event, callback), registerProvider: (_name: string, config: any) => { stream = config.streamSimple; } });
-      hooks.get("session_start")!({}, { model, modelRegistry: {} });
+      hooks.get("session_start")!({}, { model, modelRegistry: { getAll: () => [] } });
       const events: any[] = [];
       for await (const event of stream(model, context, { maxTokens: 1 })) events.push(event);
       return { ids, events };

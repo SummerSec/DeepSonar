@@ -169,6 +169,13 @@ import { canClaimQueuedTask, markQueuedTaskClaimed, reconcileProjectTaskQueues }
 import { hostDiskAllowsDispatch, refreshHostDiskPressure } from "./host-disk.js";
 import { openSandboxAllowsDispatch, refreshOpenSandboxServerStatus } from "./opensandbox-health.js";
 import {
+  OPENSANDBOX_CREATE_CIRCUIT_OPEN,
+  openSandboxCreateCircuitAllowsClaim,
+  openSandboxCreateCircuitStatus,
+  recordOpenSandboxProvisionFailure,
+  recordOpenSandboxProvisionSuccess,
+} from "./opensandbox-create-circuit.js";
+import {
   OPENSANDBOX_UPLOAD_CIRCUIT_OPEN,
   openSandboxUploadCircuitAllowsDispatch,
   openSandboxUploadCircuitStatus,
@@ -693,6 +700,13 @@ export async function claimPendingJobs(): Promise<{ id: string }[]> {
         console.error(`[dispatcher] OPENSANDBOX_UPLOAD_PROBE failed: ${probe.error ?? "unknown"}`);
         return [];
       }
+    }
+    const createCircuit = openSandboxCreateCircuitStatus();
+    if (!openSandboxCreateCircuitAllowsClaim(createCircuit).allowed) {
+      console.error(
+        `[dispatcher] ${OPENSANDBOX_CREATE_CIRCUIT_OPEN} state=${createCircuit.state} reason=${createCircuit.lastTripReason ?? "unknown"}: new claims paused`,
+      );
+      return [];
     }
   }
   type ClaimCursor = { priority: number; createdAt: string; id: string };
@@ -1223,8 +1237,17 @@ async function runJob(jobId: string) {
           );
           inc("deepsonar_sandbox_provision_seconds_sum", { provider }, Math.max(1, Math.round((Date.now() - provisionStarted) / 1000)));
           inc("deepsonar_sandbox_provision_seconds_count", { provider });
+          if (provider === "opensandbox") recordOpenSandboxProvisionSuccess();
         } catch (error) {
           inc("deepsonar_sandbox_provision_failed_total", { provider });
+          // #1046: only the retryable service-level shapes (create/sidecar 5xx) feed the
+          // create-path circuit; ordinary configuration failures must not pause claims.
+          if (provider === "opensandbox" && isRetryableProvisionFailure(error)) {
+            recordOpenSandboxProvisionFailure(
+              formatDispatcherFailureMessage(error),
+              openSandboxCreateCircuitStatus().state === "half_open",
+            );
+          }
           throw error;
         }
       } finally {
