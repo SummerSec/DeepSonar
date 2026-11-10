@@ -46,7 +46,6 @@
 - 在宿主分配的独立 worktree 中开发，不直接在共享主线目录混入其他任务的改动，不直接推送主线绕过 PR。
 - **分支命名（#931）**：按改动用途命名，例如 `feat/<简短主题>`、`fix/<简短主题>`、`docs/<简短主题>`、`refactor/<简短主题>`、`test/<简短主题>`、`chore/<简短主题>`；有 issue 时可写 `fix/123-short-topic`。禁止以 AI / Agent 工具名作为分支名开头（不区分大小写的 `agent`、`codex`、`cursor`、`claude`、`copilot`、`chatgpt`、`gemini`、`openai`，含 `/`、`-`、`_` 与嵌套路径形式）。校验规则以 [`agent-harness/branch-name-policy.mjs`](agent-harness/branch-name-policy.mjs) 为唯一实现，`pnpm ci:unit:ci-routing` 会跑其回归；推送前可用 `node -e "import('./agent-harness/branch-name-policy.mjs').then(m=>m.assertBranchName(process.argv[1]))" <branchname>` 自检。GitHub 的 [Block AI tool branch prefixes](https://github.com/SummerSec/DeepSonar/rules/20986002) ruleset 负责服务端拦截，其模式列表与上述 token 清单一致；仓库外宿主若自行拼分支名前缀，需按同一规则修改。
 - **合并条件**：PR 非 Draft、`ci-summary` 与全部适用专项在最终 head 全绿、评审通过且无阻塞意见、非重大功能变更（API/schema 契约增删、安全与权限边界、运行时/镜像准入、发布流程、跨模块重构）时，主 Agent 可自主合并，bug 类修复优先，不等逐 PR 人工授权；否则仍由用户人工合并。不得启用无人值守 `--auto`、自动批准 PR、直推 `main` 或降低 ruleset / required check；合并须绑定全绿 head SHA 并保存 merged 证据。下文主 Agent 的“合并结果”指整合子 Agent 的工作。
-- **本轮有限授权（2026-11-08，#1002 / #1011 → v0.6.17）**：用户在当前会话明确授权主 Agent 自主做技术决策并合并本轮对应交付 PR，不逐 PR 等待人工合并。执行前必须核查最新 diff、处理实质阻塞评审，确认最终 head 的完整核心与全部适用专项实际全绿，并绑定该 SHA 合并；保存真实 merged/commit 证据。此记录不代替真实会话授权，不扩展其他任务的权限，不启用 `--auto`、自动批准、直推 main 或降低保护规则；生产部署不在授权内。
 - 继续遵守本文件的工程、文档同步和验收规则。交付摘要区分已通过、失败和未执行的验证；没有真实 GitHub 请求到 PR 的端到端运行证据时，不宣称该流程已经实测通过。生产部署、发版和其他不可逆外部操作仍需各自的明确授权。
 
 ## 设计事实入口
