@@ -63,12 +63,15 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
         VALUES(${authorizationJob},${String(authorizationAttempt.id)},${randomUUID()},1,'human',${sql.json({
           reason: `RECOVERY_TEST_REDACTIONS_NONSENSITIVE_${process.pid}`, subject: { type: "platform_blocker", kind: "authorization" },
         })})`;
+      // 诊断面与 operator settlement 都以 job_attempt_effects.id 为准，effect_id 只是外部标识。
       const authorizationEffectOne = randomUUID();
       const authorizationEffectTwo = randomUUID();
-      await sql`INSERT INTO job_attempt_effects(job_id,attempt_id,effect_id,effect_kind,status,replay_policy)
-        VALUES(${authorizationJob},${String(authorizationAttempt.id)},${authorizationEffectOne},'gateway_model_request','unknown','never')`;
-      await sql`INSERT INTO job_attempt_effects(job_id,attempt_id,effect_id,effect_kind,status,replay_policy)
-        VALUES(${authorizationJob},${String(authorizationAttempt.id)},${authorizationEffectTwo},'agent_run','effect_pending','never')`;
+      const [{ id: authorizationEffectRowOne }] = await sql<{ id: string }[]>`INSERT INTO job_attempt_effects(job_id,attempt_id,effect_id,effect_kind,status,replay_policy)
+        VALUES(${authorizationJob},${String(authorizationAttempt.id)},${authorizationEffectOne},'gateway_model_request','unknown','never')
+        RETURNING id::text AS id`;
+      const [{ id: authorizationEffectRowTwo }] = await sql<{ id: string }[]>`INSERT INTO job_attempt_effects(job_id,attempt_id,effect_id,effect_kind,status,replay_policy)
+        VALUES(${authorizationJob},${String(authorizationAttempt.id)},${authorizationEffectTwo},'agent_run','effect_pending','never')
+        RETURNING id::text AS id`;
       const businessAttempt = await sql.begin(tx => createAttempt(tx as unknown as typeof sql, businessJob));
       await sql`INSERT INTO events(job_id,attempt_id,event_id,job_seq,type,payload_json)
         VALUES(${businessJob},${String(businessAttempt.id)},${randomUUID()},1,'human',${sql.json({
@@ -224,7 +227,7 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
       await sql`UPDATE job_attempts SET status='failed' WHERE id=${String(authorizationAttempt.id)}`;
       const { settleEffectByOperator } = await import("../job-attempt/reconcile-effects-runner.js");
       const settled = await settleEffectByOperator(sql as unknown as never, {
-        effect_id: authorizationEffectOne, outcome: "not_applied",
+        effect_id: authorizationEffectRowOne, outcome: "not_applied",
         evidence: `recovery diagnostics regression ${process.pid}`,
         operation_id: `diag-settle-${process.pid}`,
       });
@@ -240,16 +243,16 @@ test("waiting classification and recovery diagnostics expose the #1036 A/D opera
       };
       assert.deepEqual(
         [...after.unresolved_effects.map((row) => row.effect_id)].sort(),
-        [authorizationEffectOne, authorizationEffectTwo].filter((id) => id !== authorizationEffectOne).sort(),
+        [authorizationEffectRowTwo],
         "the settled effect leaves the pending list while the other stays (order-safe)",
       );
-      assert.deepEqual(after.settled_usage_unknown.map((row) => row.effect_id), [authorizationEffectOne],
+      assert.deepEqual(after.settled_usage_unknown.map((row) => row.effect_id), [authorizationEffectRowOne],
         "operator-settled effect with a missing usage ledger stays visible");
       assert.equal(after.settled_usage_unknown[0]?.settled_via, "operator-settlement");
       assert.equal(after.settled_usage_unknown[0]?.ledger_settlement_status, null, "no usage ledger row was written by settlement");
-      assert.ok(!after.next_actions.some((a) => a.action === "settle_effect" && a.path.includes(authorizationEffectOne)),
+      assert.ok(!after.next_actions.some((a) => a.action === "settle_effect" && a.path.includes(authorizationEffectRowOne)),
         "一个已人工结清的效果不再出现在结清建议里");
-      assert.ok(after.next_actions.some((a) => a.action === "settle_effect" && a.path.includes(authorizationEffectTwo)),
+      assert.ok(after.next_actions.some((a) => a.action === "settle_effect" && a.path.includes(authorizationEffectRowTwo)),
         "still-unsettled effects keep their settlement action");
       assert.ok(after.next_actions.some((a) => a.action === "inspect_usage"), "missing usage gets its own safe read entry");
     } finally {
