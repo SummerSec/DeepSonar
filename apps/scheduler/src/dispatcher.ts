@@ -102,6 +102,8 @@ export function classifyDispatcherFailure(error: unknown): { reason: string; mes
   if (isPiStreamTruncationMessage(message)) {
     return { reason: PI_STREAM_TRUNCATED_REASON, message };
   }
+  // #1032 P1-3：凭据守卫拒绝是平台永久失败，早于 fallback，且不被任何自动重试路径消费。
+  if (isCredentialInBusinessDataMessage(message)) return { reason: CREDENTIAL_IN_BUSINESS_DATA_REASON, message: formatCredentialInBusinessDataMessage(message) };
   return { reason: "exception", message };
 }
 
@@ -201,6 +203,7 @@ import {
   isContextWindowExceededMessage,
   planAutomaticContextWindowRetry,
 } from "./context-window-exceeded.js";
+import { CREDENTIAL_IN_BUSINESS_DATA_REASON, formatCredentialInBusinessDataMessage, isCredentialInBusinessDataMessage } from "./credential-refusal.js";
 import { recordSystemAudit } from "./audit.js";
 import { recordProvisionFailureEvidence } from "./provision-failure-evidence.js";
 
@@ -1372,6 +1375,8 @@ async function runJob(jobId: string) {
       ? `${rawMessage} (code=event_rate_limited bucket=${String(details.metadata?.bucket ?? "unknown")} retry_after_sec=${String(details.metadata?.retry_after_sec ?? "unknown")} limit=${String(details.metadata?.limit ?? "unknown")})`
       : rawMessage;
     let msg = formatted.trim() || classified.message.trim() || DISPATCHER_EXCEPTION_FALLBACK;
+    // #1032 P1-3：终态失败以平台稳定错误码开头，不再以 CLI 进程退出文案收尾。
+    if (classified.reason === CREDENTIAL_IN_BUSINESS_DATA_REASON) msg = classified.message;
     if (!provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)) {
       const retried = await retryProvisioningJob(jobId, activeAttempt, msg).catch((retryError) => {
         console.error(`[dispatcher] provision retry scheduling failed for ${jobId}:`, retryError);
