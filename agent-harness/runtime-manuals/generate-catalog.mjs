@@ -53,9 +53,9 @@ const baseApt = [
   ["npx", "bundled with Node 22 base image", ["npx"], "Invoke a package binary only when it is already present in the frozen image.", "Do not let npx download from the network; use a declared image package.", "npx --no-install --help", ["--no-install", "--package"]],
   ["claude-code", "2.1.312", ["claude"], "Run the declared Claude Code Agent runtime within the Scheduler-controlled job.", "Use the CLI selected in the job snapshot; the CLI is an Agent runtime, not an audit result generator.", "claude --version", ["--version", "working directory", "job runtime options"]],
   ["pi-coding-agent", "1.5.2", ["pi"], "Run the declared Pi Agent runtime for an image-compatible job.", "Use Pi when the frozen snapshot selects it; its web extension is available only in the audit variant.", "pi --version", ["--version", "working directory", "session options"]],
-  ["dsh", "0.2.1-rc.2", ["dsh"], "Run the official DSH Agent runtime and its governed control surface.", "Use DSH only through the Scheduler-provided job token and control API; ordinary text or shell output is not a control event.", "dsh --help", ["--help", "workspace", "session"]],
+  ["dsh", "0.2.2-rc.1", ["dsh"], "Run the official DSH Agent runtime and its governed control surface.", "Use DSH only through the Scheduler-provided job token and control API; ordinary text or shell output is not a control event.", "dsh --help", ["--help", "workspace", "session"]],
   ["ca-certificates", "20230311+deb12u1", [], "Provide TLS trust for permitted HTTPS operations.", "This is a runtime dependency; it is not a substitute for the Scheduler network policy.", "not directly callable", [], true],
-  ["dsh-runtime-modules", "0.2.1-rc.2", [], "Support the DSH CLI's protocol, skill, sandbox, subprocess, filesystem, session, PTC, and compaction modules.", "These packages are implementation dependencies; Agents use the dsh entrypoint and governed operations.", "not directly callable", [], true]
+  ["dsh-runtime-modules", "0.2.2-rc.1", [], "Support the DSH CLI's protocol, skill, sandbox, subprocess, filesystem, session, PTC, and compaction modules.", "These packages are implementation dependencies; Agents use the dsh entrypoint and governed operations.", "not directly callable", [], true]
 ];
 
 const baseSourcePointers = {

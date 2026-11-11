@@ -28,7 +28,7 @@
 | deepsonar-audit | `sha256:3dfc2b472d084c972432a1ae0a7d7e8ba622e6fc4d5ce6f79f2bc06c2bbc1476` | 509713393 |
 | deepsonar-kali-minimal | `sha256:ccee63dc1692c22df9d048ca8ac8db7b7a207266e8ba81910a243f68d1b1bda8` | 1682960610 |
 
-这六份镜像内 DSH helper 的实际 SHA-256 与 manifest、当前源码字符串相同，为 `c1f1f425fa085b70ece08df84c36fbb139e5f69cb4f5354378ec3f247cfdae92`。DSH plugin 版本为 `0.2.1-rc.2`，其 SDK 为 `1.4.0`。六份 OM wrapper 的 SHA-256 为 `a1facb1ceb9d6b985443cd6bd5c534607638e5973fdfdedb8a4485c659a92761`，包含 allowance、request-id 与 settlement 契约。OM 自身的独立 SDK 不与 DSH SDK 混同。
+这六份镜像内 DSH helper 的实际 SHA-256 与 manifest、当前源码字符串相同，为 `00764ed150d7df44e6e1e381f87f2008afaca94288f58297189ae640f8103be2`。DSH plugin 版本为 `0.2.2-rc.1`，其 SDK 为 `1.5.2`（随 #1069/#1070 联合 runtime 升级；base 镜像 Node 24.22.2 满足 DSH 的 Node ≥24.9）。六份 OM wrapper 的 SHA-256 为 `a1facb1ceb9d6b985443cd6bd5c534607638e5973fdfdedb8a4485c659a92761`，包含 allowance、request-id 与 settlement 契约。OM 自身的独立 SDK 不与 DSH SDK 混同。
 
 手册摘要须使用经过 layer 验证的 `tool-manifest.manual.sha256` / `index.manual_sha256`，不能使用 `index.json` 的文件字节哈希。三款 manual version 均为 `2026-10-28`：
 

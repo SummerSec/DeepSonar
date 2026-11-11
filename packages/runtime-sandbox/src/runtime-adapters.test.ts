@@ -200,7 +200,7 @@ test("DSH adapter uses the official unattended JSON-RPC runtime", async () => {
   assert.match(startCommand, /DSH_SYSTEM_PROMPT="\$\( \{ printf '%s\\n\\n' 'You are an expert coding assistant operating inside pi, a coding agent harness\. You help users by reading files, executing commands, editing code, and writing new files\.'; cat '\/workspace\/\.deepsonar\/system-prompt\.txt'; \} \)" node \/opt\/deepsonar\/dsh\/node_modules\/@deepseek-ai\/dsh\/lib\/bin\.js --profile deepsonar/);
   assert.match(startCommand, /operating inside pi/);
   assert.doesNotMatch(startCommand, /DSH_SYSTEM_PROMPT="\$\(cat /);
-  assert.equal(adapter.version, "0.2.1-rc.2");
+  assert.equal(adapter.version, "0.2.2-rc.1");
   assert.deepEqual(adapter.compatibleImageKeys, ["deepsonar-base", "deepsonar-audit", "deepsonar-kali-minimal"]);
   assert.equal(fake.envs[0]?.DSH_HOME, "/workspace/.deepsonar-home/.dsh");
   assert.equal(fake.envs[0]?.DSH_CORDIS_CONFIG, undefined);
@@ -319,7 +319,8 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.match(config, /@deepseek-ai\/dsh-session-persistence-jsonl/);
   assert.match(config, /@deepseek-ai\/dsh-compaction-basic/);
   assert.match(config, /@deepseek-ai\/dsh-subprocess-local/);
-  assert.match(config, /mode: native/);
+  assert.match(config, /@deepseek-ai\/dsh-tool-executor-native/);
+  assert.doesNotMatch(config, /mode: (?:native|ptc)/, "0.2.2-rc.1 移除了 tools.mode，执行器改由插件承担");
   assert.match(config, /enableRunInBackground: true/);
   assert.match(config, /includeDefaultRoots: false/);
   assert.match(config, /customSkillDirs:/);
@@ -331,7 +332,8 @@ test("DSH materializes a governed UI-less Cordis composition", async () => {
   assert.doesNotMatch(config, /dsh-(?:agent-spine-demo|code-runtime|app-tui|app-web|web-search|ask-user|credentials|settings|plugin-manager|session-log-deepseek)|telemetry-otel/);
   await adapter.materialize?.({ ...context, dshTaskMode: "ptc", reasoning: "max", dshProvider: testDshProvider("max") });
   const ptcConfig = fake.uploads[5]?.content ?? "";
-  assert.match(ptcConfig, /mode: ptc/);
+  assert.match(ptcConfig, /@deepseek-ai\/dsh-tool-executor-ptc/);
+  assert.doesNotMatch(ptcConfig, /@deepseek-ai\/dsh-tool-executor-native/);
   assert.match(ptcConfig, /@deepseek-ai\/dsh-ptc-runtime-node/);
   assert.match(ptcConfig, /reasoning: max/);
   await adapter.materialize?.({ ...context, reasoning: "high", dshProvider: testDshProvider("high") });
@@ -828,7 +830,7 @@ test("Pi terminal-error runtime fixture covers required decode fields and unknow
 
 test("DSH runtime fixture（录制于 0.2.0-rc.2）covers required decode fields and unknown frames", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.dsh;
-  assert.equal(adapter.version, "0.2.1-rc.2");
+  assert.equal(adapter.version, "0.2.2-rc.1");
   const state = {
     sessionId: "session-dsh-020rc2",
     dshInitializeRequestId: "deepsonar-initialize-1",

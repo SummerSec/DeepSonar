@@ -3,7 +3,7 @@ import { DSH_REQUEST_BUDGET_PLUGIN, DSH_REQUEST_BUDGET_SOURCE, DSH_REQUEST_BUDGE
 
 // Scheduler-owned pin for the installer output at the canonical image path.
 // The real-install regression must match this pin when the installer changes.
-export const DSH_REQUEST_BUDGET_ARTIFACT_SHA256 = "0094b38a945c2b689810d99ee14b36130413bdbe5014ba1e5866ad60485150a3";
+export const DSH_REQUEST_BUDGET_ARTIFACT_SHA256 = "ea08fa53518d27cce8d02835ff676b417ace045856024373318bb5d6702609d6";
 
 /** Check the installed contract before Cordis can swallow a plugin-load error. */
 export const DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE = `
@@ -14,9 +14,9 @@ try {
   const root = ${JSON.stringify(DSH_REQUEST_BUDGET_PLUGIN.slice(0, -"/lib/deepsonar-index.js".length))};
   const pkg = JSON.parse(fs.readFileSync(root + "/package.json", "utf8"));
   const manifest = JSON.parse(fs.readFileSync(root + "/lib/deepsonar-request-budget.manifest.json", "utf8"));
-  if (pkg.name !== "@deepseek-ai/dsh-llm-pi-ai" || pkg.version !== "0.2.1-rc.2"
+  if (pkg.name !== "@deepseek-ai/dsh-llm-pi-ai" || pkg.version !== "0.2.2-rc.1"
     || manifest.version !== 1 || manifest.vendorVersion !== pkg.version
-    || manifest.sdkVersion !== "1.4.0"
+    || manifest.sdkVersion !== "1.5.2"
     || manifest.vendorSha256 !== ${JSON.stringify(DSH_REQUEST_BUDGET_VENDOR_SHA256)}
     || manifest.artifactSha256 !== ${JSON.stringify(DSH_REQUEST_BUDGET_ARTIFACT_SHA256)}
     || manifest.helperSha256 !== ${JSON.stringify(createHash("sha256").update(DSH_REQUEST_BUDGET_SOURCE).digest("hex"))}) {

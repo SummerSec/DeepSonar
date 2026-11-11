@@ -1,5 +1,5 @@
 // Structural parity with production dsh-profile.ts is checked by runtime-adapters.test.ts.
-export const DSH_VERSION = "0.2.1-rc.2";
+export const DSH_VERSION = "0.2.2-rc.1";
 export const DSH_HOME = "/workspace/.deepsonar-home/.dsh";
 export const DSH_PROFILE = "deepsonar";
 export const DSH_BIN = "/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js";
@@ -24,7 +24,8 @@ export function buildDshProfilePatch(options) {
   add("system-prompt", "system-prompt", {
     includeHarnessIdentity: false, includeRuntimeContext: false, personaPrefix: "__DEEPSONAR_DSH_SYSTEM_PROMPT__",
   });
-  add("tools", "tools", { mode: options.taskMode === "ptc" ? "ptc" : "native" });
+  add("tools");
+  add(options.taskMode === "ptc" ? "ptc-tool-executor" : "native-tool-executor", options.taskMode === "ptc" ? "tool-executor-ptc" : "tool-executor-native");
   add("agent-loop", "agent-loop", { agents: [] });
   add("llm-pi-ai", "llm-pi-ai", options.providerConfig);
   add("sandbox", "sandbox-local");

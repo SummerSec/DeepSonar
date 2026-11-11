@@ -15,7 +15,7 @@ import { installDshRequestBudget } from './dsh-request-budget-install.mjs';
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const installRoot = resolve(process.env.DSH_REQUEST_BUDGET_INSTALL_ROOT ?? join(repository, 'agent-harness/dsh-runtime'));
 const bin = join(installRoot, 'node_modules/@deepseek-ai/dsh/lib/bin.js');
-assert.equal(JSON.parse(await readFile(join(installRoot, 'node_modules/@deepseek-ai/dsh/package.json'), 'utf8')).version, '0.2.1-rc.2');
+assert.equal(JSON.parse(await readFile(join(installRoot, 'node_modules/@deepseek-ai/dsh/package.json'), 'utf8')).version, '0.2.2-rc.1');
 const artifact = await installDshRequestBudget(installRoot, join(repository, 'packages/runtime-sandbox/src'));
 // #979: execute the production preflight against the real, pinned installation,
 // without a model request. The installer embeds two absolute SDK paths: adapt
