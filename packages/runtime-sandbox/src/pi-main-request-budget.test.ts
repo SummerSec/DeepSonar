@@ -330,3 +330,32 @@ test("main recovery buffers only an empty failed generation and requires the aut
     } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   }
 });
+test("clamp 解析按镜像布局选择 pi-ai 根：kali 嵌套优先、base 平铺兜底（#1069 评审 P1）", async () => {
+  const source = PI_MAIN_REQUEST_BUDGET_SOURCE;
+  const snippet = source.slice(source.indexOf("import { existsSync } from 'node:fs';"), source.indexOf("let contextClamp;"));
+  assert.ok(snippet.includes("piAiCandidateRoots") && snippet.includes("'1.5.2'"), "clamp 源码必须包含候选解析与 1.5.2 身份校验");
+  const moduleSource = [
+    "import { existsSync } from 'node:fs';",
+    "import { readFile } from 'node:fs/promises';",
+    "import { pathToFileURL } from 'node:url';",
+    "function fail(code) { throw new Error(code); }",
+    snippet.replace("import { existsSync } from 'node:fs';", ""),
+  ].join("\n");
+  const mod = await import(`data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`);
+  const nested = "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai";
+  assert.deepEqual(
+    mod.piAiCandidateRoots("/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"),
+    [nested, "/usr/local/lib/node_modules/@earendil-works/pi-ai"],
+    "kali 的嵌套传递依赖必须在平铺根之前",
+  );
+  assert.deepEqual(mod.piAiCandidateRoots("/bare/path"), ["/usr/local/lib/node_modules/@earendil-works/pi-ai"]);
+  assert.deepEqual(mod.piAiCandidateRoots(""), ["/usr/local/lib/node_modules/@earendil-works/pi-ai"]);
+  // 两个候选都不存在时必须结构化失败，而不是静默使用错误 SDK。
+  const original = process.argv[1];
+  process.argv[1] = "/nonexistent/prefix/bin/pi";
+  try {
+    await assert.rejects(mod.loadPiContextClamp(), /PI_MAIN_BUDGET_SDK_VERSION/u);
+  } finally {
+    process.argv[1] = original;
+  }
+});

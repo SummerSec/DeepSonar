@@ -45,7 +45,22 @@ ${PI_ANTHROPIC_THINKING_POLICY_SOURCE}
 
 // Resolve the SDK's declared public export from the fixed, lockfile-installed runtime.
 // createRequire.resolve cannot resolve this package's import-only export conditions.
-export async function loadPiContextClamp(root = '/usr/local/lib/node_modules/@earendil-works/pi-ai') {
+// base 镜像把依赖平铺进 npm 全局根；kali-minimal 只全局安装 CLI，pi-ai 嵌在其包目录下。
+// 先从运行中的 pi bundle 反推嵌套根，再回退平铺根；两者都要过 1.5.2 身份校验。
+import { existsSync } from 'node:fs';
+export function piAiCandidateRoots(cliEntry = process.argv[1] ?? '') {
+  const roots = [];
+  const marker = '/node_modules/@earendil-works/pi-coding-agent/';
+  const cut = cliEntry.indexOf(marker);
+  if (cut > 0) roots.push(cliEntry.slice(0, cut + marker.length - 1) + '/node_modules/@earendil-works/pi-ai');
+  roots.push('/usr/local/lib/node_modules/@earendil-works/pi-ai');
+  return roots;
+}
+export async function loadPiContextClamp(root) {
+  const candidates = root ? [root] : piAiCandidateRoots().filter((candidate) => existsSync(candidate + '/package.json'));
+  const resolved = candidates[0];
+  if (!resolved) fail('PI_MAIN_BUDGET_SDK_VERSION');
+  root = resolved;
   const manifest = JSON.parse(await readFile(root + '/package.json', 'utf8'));
   if (manifest.name !== '@earendil-works/pi-ai' || manifest.version !== '1.5.2') fail('PI_MAIN_BUDGET_SDK_VERSION');
   const entry = manifest.exports?.['./api/*']?.import;
