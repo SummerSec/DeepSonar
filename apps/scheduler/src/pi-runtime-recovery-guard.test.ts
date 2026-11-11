@@ -8,7 +8,7 @@ import { registerRuntimeHandler, unregisterRuntimeHandler } from "./domains/plat
 type State = NonNullable<Parameters<typeof piRecoveryPermission>[0]>;
 const attemptId = randomUUID();
 const live = (): State => ({ authority: "scheduler", status: "running", active_attempt_id: attemptId,
-  accepted_terminal: null, human_wait_kind: null, wait_owner: null, allowed_actions: ["correct_proposal"], blocker: null,
+  accepted_terminal: null, accepted_history_ref: null, human_wait_kind: null, wait_owner: null, allowed_actions: ["correct_proposal"], blocker: null,
   next_proposal_revision: 0, remaining_attempts: 3, current_state_ref: "/control/v1/jobs/fixture/operations/mark_job_done",
   recovery_requires_admission: true, receipt_is_historical: true });
 

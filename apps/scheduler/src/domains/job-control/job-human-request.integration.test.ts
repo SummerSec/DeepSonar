@@ -223,7 +223,7 @@ test("Job human detail uses durable history, latest Attempt and existing HTTP au
         for (const secret of ["quoted-private-example", "bare-private-example", "bearer-private-example"]) {
           assert.equal(page.body.includes(secret), false);
         }
-        const body = page.json();
+        const body: { items: Array<{ payload_json: { subject: unknown; plan_basis: unknown } }>; next_cursor: string | null } = page.json();
         count += body.items.length;
         assert.ok(count <= 3, "pagination must advance without repeating a human event");
         assert.deepEqual(body.items[0].payload_json.subject, payload.subject);
