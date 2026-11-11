@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
-import { TaskContract, TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { HumanRequestGuidance, TaskContract, TaskGoalReviewRequest } from "@deepsonar/shared-types";
 import { PlanGoalReviewBinding } from "./domains/plan-protocol/criterion-model.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1523,9 +1523,35 @@ const OPS: Op[] = [
     path: "/jobs/{id}",
     summary: "Job 详情（含事件）",
     description:
-      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。provision_diagnostics 为清理前已持久化的 host 失败诊断，通过原 Attempt 的不可变 system-audit 引用按当前 Job/项目重新验证，仅返回固定阶段/状态/布尔信号及来源；不含 audit 元数据、env、SDK 原文或容器日志，不证明 no-start/用量结算。历史无引用不猜测或回填，条数上限见 provision-failure-evidence.ts。plan_gaps 提供当前 Plan 内容 SHA、判据 ID 与文本（未加载绑定）；权威绑定状态由冻结报告与 Fact 详情读取。",
+      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。human_request 独立有界读取最近持久 human 事件，不受首批 50 条事件影响；无事件为 null，旧 Attempt 或终态的请求只作历史。execution_state.accepted_history_ref 引用持久接受事件；历史接受不授予当前等待、修正或恢复权限。provision_diagnostics 为清理前已持久化的 host 失败诊断，通过原 Attempt 的不可变 system-audit 引用按当前 Job/项目重新验证，仅返回固定阶段/状态/布尔信号及来源；不含 audit 元数据、env、SDK 原文或容器日志，不证明 no-start/用量结算。历史无引用不猜测或回填，条数上限见 provision-failure-evidence.ts。plan_gaps 提供当前 Plan 内容 SHA、判据 ID 与文本（未加载绑定）；权威绑定状态由冻结报告与 Fact 详情读取。",
     scope: "tasks:read",
     tags: ["Jobs"],
+    responses: {
+      "200": {
+        type: "object",
+        required: ["human_request"],
+        properties: {
+          human_request: {
+            type: "object", nullable: true, additionalProperties: false,
+            required: ["event_id", "attempt_id", "created_at", "current", "payload"],
+            properties: {
+              event_id: { type: "string", format: "uuid" },
+              attempt_id: { type: "string", format: "uuid", nullable: true },
+              created_at: { type: "string", format: "date-time" },
+              current: { type: "boolean", description: "仅最新活动且未取消 Attempt 的运行中或人工等待请求可为 true；不授予回复或恢复权限。" },
+              payload: {
+                type: "object", additionalProperties: false,
+                properties: {
+                  reason: { type: "string" },
+                  subject: { type: "object" },
+                  guidance: z.toJSONSchema(HumanRequestGuidance, { target: "openapi-3.0" }),
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   },
   {
     method: "get",

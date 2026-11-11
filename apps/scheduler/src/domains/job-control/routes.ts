@@ -1,5 +1,6 @@
 import { readCompletionExecutionState } from "../platform-api/completion-state.js";
 import { withWaitingExecutionStates } from "./list-execution-state.js";
+import { readJobHumanRequest, redactJobHumanRequestText } from "./job-human-request.js";
 import { TaskGoalReviewRequest, normalizeTaskContract } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -516,7 +517,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
         : [];
     const safeJob = {
       ...job,
-      execution_state: await readCompletionExecutionState(sql, id),
+      execution_state: await readCompletionExecutionState(sql, String(job.id)),
       error: projectCredentialProviderError(job.error),
       payload_json: projectJobPayload(job.payload_json),
       plan_gaps: projectPlanGaps(String(job.id), job.payload_json),
@@ -549,10 +550,12 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       query_plane: "current",
       provenance: jobProvenance(String(job.status), job.payload_json),
       job: safeJob,
+      human_request: await readJobHumanRequest(sql, String(job.id)),
       dispatched_prompt: dispatchedPrompt || null,
       events: events.map((event) => ({
         ...event,
-        payload_json: projectJobEventPayload(event.payload_json),
+        payload_json: event.type === "human" ? redactJobHumanRequestText(projectJobEventPayload(event.payload_json))
+          : projectJobEventPayload(event.payload_json),
       })),
       findings,
       attempts,
@@ -587,7 +590,8 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       LIMIT ${limit + 1}`;
     const items = rows.slice(0, limit).map((event) => ({
       ...event,
-      payload_json: projectJobEventPayload(event.payload_json),
+      payload_json: event.type === "human" ? redactJobHumanRequestText(projectJobEventPayload(event.payload_json))
+        : projectJobEventPayload(event.payload_json),
     }));
     const last = items.at(-1) as { id: string; created_at: string | Date } | undefined;
     return page(items, {

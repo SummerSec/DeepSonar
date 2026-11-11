@@ -1,11 +1,13 @@
 # DeepSonar 文档索引
 
+#1074 第一切片的[人工请求历史与当前动作](AGENT_REPAIR_LIFECYCLE.md#人工请求历史与当前动作1074-第一切片)修正终态等待建议，并让 Job 详情独立读取完整持久请求。schema/超时/恢复权限不变；断点续做仍待后续切片，最终 SHA Actions 待验。
+
 #1032 的 [Pi 模型上下文凭据投影首片](MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)共用主执行/OM 的 SDK 生成前精确替换与镜像双源码准入；原字节 Gateway 守卫不变。映射 FR-CRED-003、NFR-SEC-003；回归接既有核心/原生 Reverse Actions，最终 SHA 待验，同 UID 隔离、诊断/审计与生产验证未交付。
 
 #1002 P1-8：[同项目多账号池](architecture/06-runtime-view.md#凭据与-cli-解析757)仅为新 Job 在显式授权、同 Provider/CLI/模型的账号间选择并冻结，沿用默认优先及原 Job 恢复身份/预算门；readiness 不消费轮次，不能借故障自动换 key。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
 > **可行动人工请求（2026-11-09）**：严格 guidance、完整 body_json、L0/L1 按需读取、waiting_human 当前 Scheduler 投影及同 Job 待办去重已同步到 [FR-CTRL-004 / FR-WEB-003 / NFR-UX-001](architecture/01-system-specification.md)、[接口/运行时视图](architecture/09-interface-specs.md#可行动人工请求2026-11-09)和[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。消息账本、恢复准入、ACK 和完成仍独立；最终 SHA Actions 待验，注意力收益未测量。
 > **同 Job 模型失败恢复（#1002 P1-9）**：[契约](MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)记录 Pi SDK 的 scoped no-start→新关联模型调用、原 live owner/预算重新准入与跨代际恢复许可。没有 Agent 重启、旧效果重放或退款，unknown/partial/无来源历史拒绝；受控 SDK 与真实 SQL/HTTP 回归保留，#1036 D 的[固定 Pi 同进程原生回归](MODEL_GATEWAY_TRANSPARENCY.md#1036-d原生-pi-恢复链的离线回归)新增至核心 base 镜像 smoke，Gateway 为合成服务，最终 SHA Actions 待验。
 > **#1002 P2-10 清理前诊断读回**：[OpenSandbox 专题](OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)记录原 append-only audit/Attempt 引用同事务及 Job GET 有界重验投影。无新通知/设置/状态/重放或失败容器保留；SQL/HTTP/受控 Provider 回归已接 Actions，最终 SHA 待验，原始 Engine 日志与现场因果不冒充恢复。

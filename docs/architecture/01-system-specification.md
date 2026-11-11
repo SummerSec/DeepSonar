@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -300,6 +300,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 ### FR-CTRL-006 失败分类与无控制通道回退
 
 - **规范要求**：Scheduler 必须区分 `model_correctable`、`transient_retryable`、`unknown_external_effect`、`permanent_failure`；未知外部效果必须停止自动重放，权限/快照/版本错误必须 fail closed，不得回退到 MCP、普通文本或另一套控制通道。
+- **当前动作与历史接受事实**：终态 Job 的历史人工请求不得被投影为仍在等待人工/平台或可修正提案。完整请求须可在权限范围内独立于首批事件读取，缺少待办项不表示请求缺失；历史读取不授权恢复。#1074 第一切片只修正读投影，断点续做保持待交付；HTTP/PG 与 Web 回归的最终 SHA Actions 另验。
 - **决策来源**：不同失败的安全动作不同，回退通道会绕过 Job scope 和审计。
 - **实现状态**：as-built（分类与 API 失败路径）；完整 Receipt/Settlement 目标尚未全部落地。 Knowledge/Skill 领域分类及行动建议通过 runtime/HTTP 反馈保留；终态/权限/撤销拒绝与可修正输入分开，见[#903 切片边界](../PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。
 - **代码入口**：[trusted kernel 文档](../AI_NATIVE_TRUSTED_KERNEL.md)、[Control input](../../apps/scheduler/src/control-input.ts)、[Job recovery](../../apps/scheduler/src/domains/job-lifecycle/application.ts)。

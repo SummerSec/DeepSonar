@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -136,6 +136,8 @@ Control operation 分为两类：能力发现、graph 查询和 Skill 拉取返�
 新的 `request_human` 必须在现有 `reason`、`subject` 和适用的 `plan_basis` 之外提供严格的 `guidance` 对象。对象只允许以下四个必填字符串字段；各值按 trim 后校验非空并满足长度范围：`question` 8–240、`required_action` 8–2000、`reply_instructions` 8–2000、`after_reply` 8–1000。`reason` 维持现有 trim 后非空、8–2000 范围。未知字段、缺失字段、超界或 trim 后为空均拒绝，不为旧提案提供兼容转换。
 
 完整接受的人工请求内容写入 human 节点 `body_json`。L0 Canvas 继续提供有界投影，`reason` 在 L0 保持 500 字符上限；授权范围内的 Web 详情按需经现有 L1 节点读取取得完整 guidance 和 reason，不把正文扩展到全图或默认 Agent 上下文。任何节点缺少 `guidance` 时（包括历史请求和自动生成的平台等待项）都明确显示“未提供处理指引”；不自动迁移、补写或根据 reason 生成操作建议。
+
+#1074 第一切片为 `GET /jobs/:id` 增加独立有界的 `human_request`：查询该 Job 最近的持久 human 事件，返回事件和 Attempt 引用、时间、`current` 与原因/subject/guidance 投影。只有没有持久事件才返回 null，不能以首批事件未加载或 Canvas 无 pending intervention 判请求缺失；历史请求可读，旧 Attempt 不成为当前请求。Job 详情仍受既有 tasks:read 与项目范围校验。终态 `execution_state` 保留接受历史引用，但不再返回等待人工/平台或修正提案的当前动作；未决效果仍先对账。读取历史不授予恢复权限，超时停机和晚回复续做仍待后续切片。
 
 Hub 动态提示、固定 Control Skill 和内置角色请求示例都必须把 `question`、具体动作、回复方式/选项和回复后的业务计划说清。凭据类阻塞只能说明沿现有安全配置或授权路径处理；不得让用户把凭据粘贴到聊天，也不得发明配置入口。`request_human` 接纳、Web 回复/忽略、host message ledger、恢复准入、`ack_human_message` 和 Job 完成继续是独立语义：回复不授予凭据/目标授权，不证明 Agent 已 ACK，不证明 Dispatcher 已恢复或 Job 已完成。
 

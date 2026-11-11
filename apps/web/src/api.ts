@@ -8,6 +8,8 @@ import type {
   CurrentAgentCli,
   EffectiveFindingProtocol,
   FindingProtocolConfig,
+  HumanPayload,
+  HumanRequestGuidance,
   ProviderAccountCatalogItem,
   PlatformToolConfig,
   ReadinessResponse,
@@ -639,6 +641,19 @@ export interface JobExecutionState {
   allowed_actions: string[];
   blocker: string | null;
   accepted_terminal?: string | null;
+  accepted_history_ref?: string | null;
+}
+
+export interface JobHumanRequest {
+  event_id: string;
+  attempt_id: string | null;
+  created_at: string;
+  current: boolean;
+  payload: {
+    reason?: string;
+    subject?: HumanPayload["subject"] | null;
+    guidance?: HumanRequestGuidance | null;
+  };
 }
 
 export interface JobDetail {
@@ -658,6 +673,7 @@ export interface JobDetail {
     context_window_tokens?: number | null;
   };
   events: JobEvent[];
+  human_request: JobHumanRequest | null;
   findings: { id: string; severity: string; title: string; verify_status: string }[];
   attempts: JobAttemptSummary[];
   effects: JobEffectSummary[];
