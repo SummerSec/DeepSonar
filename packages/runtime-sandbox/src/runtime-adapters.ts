@@ -563,6 +563,13 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     }
     return [];
   }
+  if (type === "auto_retry_start" && state.piPendingMessageError && !state.failed) {
+    // Reset current output projection; session/stream evidence stays immutable.
+    state.finalText = undefined;
+    state.streamedText = undefined;
+    state.streamedReasoning = undefined;
+    return [];
+  }
   if (type === "agent_start") return [{ type: "system", subtype: "init", ...(state.sessionId ? { session_id: state.sessionId } : {}) }];
   if (type === "entry_appended") {
     const entry = line.entry as Record<string, unknown> | undefined;

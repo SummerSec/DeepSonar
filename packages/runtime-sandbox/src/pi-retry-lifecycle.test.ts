@@ -156,6 +156,45 @@ test("#1072 Pi 假 retry success 没有成功 assistant 消息时不能清除原
   assert.match(String(settled[0]?.result), /terminated/u);
 });
 
+function retryAfterPartialMessage() {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  adapter.decodeOutput({ type: "agent_start" }, state);
+  adapter.decodeOutput({ type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "partial" } }, state);
+  adapter.decodeOutput({ type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "partial-reasoning" } }, state);
+  adapter.decodeOutput({ type: "message_update", assistantMessageEvent: { type: "error", error: failedMessage } }, state);
+  adapter.decodeOutput({ type: "message_end", message: failedMessage }, state);
+  adapter.decodeOutput({ type: "agent_end", willRetry: true }, state);
+  adapter.decodeOutput({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1, errorMessage: "terminated" }, state);
+  adapter.decodeOutput({ type: "agent_start" }, state);
+  return { adapter, state };
+}
+
+test("#1072 失败消息残留 partial 不能使原生重试的空响应变成成功", () => {
+  const { adapter, state } = retryAfterPartialMessage();
+  const empty = adapter.decodeOutput({ type: "message_end", message: { role: "assistant", stopReason: "stop",
+    content: [], usage: { input: 0, output: 0 } } }, state);
+  assert.ok(empty.some(event => event.is_error === true && event.result === "PI_EMPTY_MODEL_RESPONSE"));
+  adapter.decodeOutput({ type: "auto_retry_end", success: true, attempt: 1 }, state);
+  const settled = adapter.decodeOutput({ type: "agent_settled", aborted: false }, state);
+  assert.equal(settled[0]?.is_error, true);
+  assert.equal(settled[0]?.result, "PI_EMPTY_MODEL_RESPONSE");
+});
+
+test("#1072 原生重试成功返回相同文本时重新投影全文，不沿用失败消息去重记录", () => {
+  const { adapter, state } = retryAfterPartialMessage();
+  const reasoning = adapter.decodeOutput({ type: "message_update", assistantMessageEvent: { type: "thinking_end", content: "partial-reasoning" } }, state);
+  assert.deepEqual(reasoning, [{ type: "assistant", message: { content: [{ type: "thinking", thinking: "partial-reasoning" }] } }]);
+  const completed = adapter.decodeOutput({ type: "message_end", message: { role: "assistant", stopReason: "stop",
+    content: [{ type: "text", text: "partial" }], usage: { input: 12, output: 1 } } }, state);
+  assert.deepEqual(completed, [{ type: "assistant", message: { content: [{ type: "text", text: "partial" }] } }]);
+  adapter.decodeOutput({ type: "auto_retry_end", success: true, attempt: 1 }, state);
+  const settled = adapter.decodeOutput({ type: "agent_settled", aborted: false }, state);
+  assert.equal(settled[0]?.type, "agent_settled");
+  assert.notEqual(settled[0]?.is_error, true);
+  assert.equal(settled[0]?.result, "partial");
+});
+
 for (const record of [
   { type: "agent_start" },
   { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "partial retry" } },

@@ -30,3 +30,6 @@
 - Draft-fast 当前只跑路径映射套件，不包含 runtime-sandbox。为在 Actions 观察新增回归的 RED，测试提交 1afd5d1e 以 Ready PR #1073 触发完整核心；未修改路由或门禁。修复提交后必须重新验证最新 SHA。
 - 初始 terminated 定位为 Undici 响应体异常终止；Pi-AI 1.4.0 只保留 message/status/body，已丢失 cause/code。无法从历史记录证明这次是空闲超时还是socket断链；不据此扩大重试权限。宿主过早终态化另由源码及现场新请求/终态时间线证实。
 - RED 证据：提交 1afd5d1e、Actions 42999636017、gate-runtime job 130452361311 的 Runtime sandbox semantic tool unit 在2026-11-11T10:03:11Z失败。两条新测试均命中预期：message_end过早result；message_update消费后stdinClosed=true。该SHA的typecheck/build已通过。为避免在已确认失败的候选上继续重型CI，主线程取消剩余core/reverse；最终修复SHA重新完整验收。
+- 独立评审追加 P2：失败消息的 partial 文本残留可使重试空响应误判为非空。补充同进程 partial→terminated→retry→empty 负例及同文本有效重试，原生重试开始时仅清理当前输出缓存，原 Session/Evidence/已接受效果不变；最终 SHA 需重新 Actions。
+- 14bc4125 的 gate-runtime 已通过 typecheck/build，随后 executor-real-terminal-race 旧测试 helper 在 message_end 立即解构结果而失败（TypeError，测试入口加载阶段）。同步 helper 等待 agent_settled，继续使用真实解码结果验证原已接受完成唯一结算；不修改 executor 放行逻辑。
+- 独立窄复核确认 partial 缓存 P2 已修复，未发现新增 P1/P2；新增 partial 两例是 adapter 级，真实 runner 回归由原成功/完成门/退出场景覆盖。
