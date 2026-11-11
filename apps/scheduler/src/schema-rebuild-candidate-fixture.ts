@@ -158,6 +158,8 @@ export async function runCandidateSchemaRebuildFixture(testUrl: string): Promise
     await assertNoCandidates(backup);
     assert.deepEqual(await captureHistory(backup), history, "actual v64 backup preserves source and C generation history");
     assert.equal((await db`SELECT version FROM schema_meta WHERE id='global'`)[0].version, SCHEMA_VERSION);
+    const deadlines=await db`SELECT pg_typeof(execution_deadline_at)::text AS type,execution_deadline_at FROM jobs`;
+    assert.ok(deadlines.length>0&&deadlines.every(row=>row.type==='timestamp with time zone'&&row.execution_deadline_at===null));
     assert.deepEqual(await captureHistory(db), history);
     assert.equal((await db`SELECT indisunique FROM pg_index WHERE indexrelid='findings_project_scan_idx'::regclass`)[0].indisunique, true);
     for (const name of [...NEW_TABLES, ...CANDIDATE_INDEXES]) {

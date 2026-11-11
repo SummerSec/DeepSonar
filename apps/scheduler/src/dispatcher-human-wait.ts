@@ -66,7 +66,7 @@ export async function destroyAndSettleHumanWaitRun(
       checkpoint_error_code=CASE WHEN manifest_json IS NULL THEN COALESCE(checkpoint_error_code,'HUMAN_CHECKPOINT_UNAVAILABLE') ELSE checkpoint_error_code END
       WHERE job_id=${input.jobId} AND attempt_id=${input.attemptId}`;
     await pauseHumanExecutionClock(tx,input.jobId,input.attemptId);
-    await markAttemptInterrupted(tx,input.jobId,"human_wait_checkpoint_sealed");
+    await markAttemptInterrupted(tx,input.jobId,"human_wait_checkpoint_sealed",{preservePendingGatewayRequests:true});
     await tx`UPDATE jobs SET sandbox_id=NULL,lease_expires_at=NULL,heartbeat_at=NULL
       WHERE id=${input.jobId} AND status='waiting_human'`;
     // Ownership must outlive a failed settlement commit, then disappear atomically

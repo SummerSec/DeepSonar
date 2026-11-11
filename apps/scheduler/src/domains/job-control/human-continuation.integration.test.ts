@@ -126,20 +126,28 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       await core.ingestEvent(fixture.jobId,{v:1,event_id:completionDoneEventId(fixture.jobId,key),type:'done',payload:{summary}});
       assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,'succeeded');
     });
-    await context.test('late usage settlement closes an unanswered wait at the durable boundary, even after scheduler downtime',async()=>{
+    for(const latest of ['release','exit','effect','usage','second_effect']) await context.test(`unanswered wait closes at the latest durable ${latest} boundary after downtime`,async()=>{
       const fixture=await setup();await fixture.seal();
       const effectId='gateway.delayed';
       await attempts.beginEffect(sql,fixture.attemptId,{effectId,kind:'gateway_model_request',replayPolicy:'never'});
+      await attempts.beginEffect(sql,fixture.attemptId,{effectId:'gateway.second',kind:'gateway_model_request',replayPolicy:'never'});
       await fixture.close();
-      const released=new Date(Date.now()-2*86400_000),started=new Date(released.getTime()-10_000),settled=new Date(released.getTime()+5_000);
-      await sql`UPDATE human_requests SET resources_released_at=${released},process_exited_at=${released} WHERE id=${fixture.requestId}`;
+      assert.equal((await sql`SELECT status FROM job_attempt_effects WHERE attempt_id=${fixture.attemptId} AND effect_id=${effectId}`)[0].status,'effect_pending',
+        'sandbox release leaves Scheduler-owned in-flight Gateway work for its original settlement writer');
+      const base=Date.now()-2*86400_000,started=new Date(base-10_000);
+      const boundary=(kind:string)=>new Date(base+(kind===latest?5000:0));
+      await sql`UPDATE human_requests SET resources_released_at=${boundary('release')},process_exited_at=${boundary('exit')} WHERE id=${fixture.requestId}`;
       await sql`UPDATE job_execution_clocks SET active_since=${started},used_ms=0 WHERE job_id=${fixture.jobId}`;
       await pumpHumanContinuations();
       assert.ok((await sql`SELECT active_since FROM job_execution_clocks WHERE job_id=${fixture.jobId}`)[0].active_since,'unsettled requests remain conservative');
       await attempts.settleEffect(sql,fixture.attemptId,effectId,{status:'settled',outcome:{result:'fixture'}});
-      await sql`UPDATE job_attempt_effects SET settled_at=${settled} WHERE attempt_id=${fixture.attemptId} AND effect_id=${effectId}`;
+      await sql`UPDATE job_attempt_effects SET settled_at=${boundary('effect')} WHERE attempt_id=${fixture.attemptId} AND effect_id=${effectId}`;
       await sql`INSERT INTO job_usage_ledger(job_id,project_id,attempt_id,effect_id,request_no,provider,observed_at)
-        VALUES(${fixture.jobId},${projectId},${fixture.attemptId},${effectId},1,'fixture',${settled})`;
+        VALUES(${fixture.jobId},${projectId},${fixture.attemptId},${effectId},1,'fixture',${boundary('usage')})`;
+      await attempts.settleEffect(sql,fixture.attemptId,'gateway.second',{status:'settled',outcome:{result:'fixture'}});
+      await sql`UPDATE job_attempt_effects SET settled_at=${boundary('second_effect')} WHERE attempt_id=${fixture.attemptId} AND effect_id='gateway.second'`;
+      await sql`INSERT INTO job_usage_ledger(job_id,project_id,attempt_id,effect_id,request_no,provider,observed_at)
+        VALUES(${fixture.jobId},${projectId},${fixture.attemptId},'gateway.second',2,'fixture',${new Date(base)})`;
       await pumpHumanContinuations();await pumpHumanContinuations();
       assert.equal((await sql`SELECT status FROM human_requests WHERE id=${fixture.requestId}`)[0].status,'open');
       const [closed]=await sql`SELECT active_since,used_ms FROM job_execution_clocks WHERE job_id=${fixture.jobId}`;
@@ -185,8 +193,76 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       const unregisterThird=await humans.registerHumanMessageRuntime(fixture.jobId,{sendMessage:async()=>{replayed++;},writeWorkspaceFile:async()=>{}},String(third.id));
       unregisterThird();assert.equal(replayed,0,'ACK history is not injected a second time');
       await sql`UPDATE human_message_attachments SET content_sha256=${'0'.repeat(64)} WHERE message_id=${messageId}`;
+      await assert.rejects(checkpoints.assertHumanContinuationOwner(sql,fixture.jobId,String(third.id)),/HUMAN_CHECKPOINT_INBOX_HASH_MISMATCH/);
       await assert.rejects(checkpoints.restoreHumanCheckpoint({jobId:fixture.jobId,attemptNo:3,snapshot:snapshot.agent_snapshot_json,host:fixture.host}),/HUMAN_CHECKPOINT_INBOX_HASH_MISMATCH/);
       await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+    });
+    await context.test('two human waits preserve cumulative time, request identity and the newest workspace',async()=>{
+      const fixture=await setup();await fixture.seal();await fixture.close();
+      const {createSharedAsset}=await import('../shared-assets/index.js');
+      const inputBytes=[Buffer.from('first authorized input'),Buffer.from('second authorized input')];
+      const versions:string[]=[];
+      for(const bytes of inputBytes) versions.push(String((await createSharedAsset({scope:'project',projectId,key:`input-${randomUUID()}.txt`,
+        contentType:'text/plain',bytes,origin:'human',actor:'fixture'})).version_id));
+      const firstUsed=Number((await sql`SELECT used_ms FROM job_execution_clocks WHERE job_id=${fixture.jobId}`)[0].used_ms);
+      const reply=await fixture.reply(randomUUID(),0,'Use the first reference.',[versions[0]!]);assert.equal(reply.statusCode,202,reply.body);
+      await pumpHumanContinuations(1,fixture.requestId);await claimPendingJobs();
+      const [second]=await sql`SELECT id FROM job_attempts WHERE job_id=${fixture.jobId} AND status='active'`;
+      const sandboxId=`second-${fixture.jobId}`;
+      await sql`UPDATE jobs SET status='running',started_at=now(),sandbox_id=${sandboxId},lease_expires_at=now()+interval '1 hour' WHERE id=${fixture.jobId}`;
+      await attempts.updateAttemptResource(sql,String(second.id),{sandboxId,phase:'provisioned'});
+      await clock.humanExecutionStartedAt(sql,fixture.jobId,String(second.id));
+      const unregister=await humans.registerHumanMessageRuntime(fixture.jobId,{sendMessage:async()=>{},writeWorkspaceFile:async()=>{}},String(second.id));
+      await humans.acknowledgeHumanMessage(fixture.jobId,String(reply.json().id));unregister();
+      await sql`UPDATE job_execution_clocks SET active_since=clock_timestamp()-interval '5 seconds' WHERE job_id=${fixture.jobId}`;
+      await attempts.beginEffect(sql,String(second.id),{effectId:'agent_run:2',kind:'agent_run',replayPolicy:'never',
+        resourceIdentity:{job_id:fixture.jobId,attempt_id:String(second.id),sandbox_id:sandboxId}});
+      const secondRequest=randomUUID();
+      const [original]=await sql`SELECT payload_json FROM human_requests WHERE id=${fixture.requestId}`;
+      await core.ingestEvent(fixture.jobId,{v:1,event_id:secondRequest,type:'human',payload:original.payload_json});
+      assert.equal((await fixture.reply(randomUUID(),0)).statusCode,409,'the old request cannot release a new wait');
+      const progressed=Buffer.from('progress after the first reply\n');
+      const host={...fixture.host,run:async()=>({exitCode:0,stdout:JSON.stringify([{path:'src/work.txt',bytes:progressed.length,sha256:checkpointHash(progressed)}]),stderr:''}),
+        readWorkspaceFile:async()=>progressed} as RuntimeHost;
+      await checkpoints.sealHumanCheckpoint({jobId:fixture.jobId,attemptId:String(second.id),host,excludedPaths:[],secrets:[],processBaseline:[]});
+      await destroyAndSettleHumanWaitRun(sql,{destroy:async()=>{}},{jobId:fixture.jobId,attemptId:String(second.id),sandboxId});
+      const cumulative=Number((await sql`SELECT used_ms FROM job_execution_clocks WHERE job_id=${fixture.jobId}`)[0].used_ms);
+      assert.ok(cumulative>=firstUsed+5000,'second wait adds time instead of resetting the clock');
+      const secondReply=await app.inject({method:'POST',url:`/canvases/${fixture.canvasId}/messages`,payload:{message_id:randomUUID(),
+        target:{kind:'request',request_id:secondRequest,expected_revision:0},body:'Continue the second preserved segment.',attachment_version_ids:[versions[1]!]}});
+      assert.equal(secondReply.statusCode,202,secondReply.body);await pumpHumanContinuations(1,secondRequest);await claimPendingJobs();
+      const [third]=await sql`SELECT id,attempt_no FROM job_attempts WHERE job_id=${fixture.jobId} AND status='active'`;
+      assert.equal(third.attempt_no,3);await checkpoints.assertHumanContinuationOwner(sql,fixture.jobId,String(third.id));
+      const [snapshot]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
+      const prompt=await checkpoints.restoreHumanCheckpoint({jobId:fixture.jobId,attemptNo:3,snapshot:snapshot.agent_snapshot_json,host:fixture.host});
+      assert.deepEqual(fixture.restored.get('/workspace/src/work.txt'),progressed,'the second checkpoint supersedes the first workspace');
+      const inputs=await sql`SELECT message_id,workspace_path FROM human_message_attachments WHERE message_id IN (${String(reply.json().id)},${String(secondReply.json().id)}) ORDER BY message_id`;
+      const oldInput=inputs.find(input=>input.message_id===String(reply.json().id))!,newInput=inputs.find(input=>input.message_id===String(secondReply.json().id))!;
+      assert.deepEqual(fixture.restored.get(String(oldInput.workspace_path)),inputBytes[0],'earlier ACK attachment survives the next human wait');
+      assert.ok(prompt.includes(String(oldInput.workspace_path)),'bounded startup index points to prior immutable inputs');
+      assert.equal(fixture.restored.has(String(newInput.workspace_path)),false,'pending reply attachments still use governed delivery');
+      let deliveries=0;
+      const unregisterThird=await humans.registerHumanMessageRuntime(fixture.jobId,{sendMessage:async()=>{deliveries++;},
+        writeWorkspaceFile:async(destination,bytes)=>{fixture.restored.set(destination,bytes);}},String(third.id));
+      assert.equal(deliveries,1,'only the new reply is delivered');
+      assert.deepEqual(fixture.restored.get(String(newInput.workspace_path)),inputBytes[1]);
+      await humans.acknowledgeHumanMessage(fixture.jobId,String(secondReply.json().id));unregisterThird();
+      assert.equal(await clock.remainingHumanExecutionMs(sql,fixture.jobId),3600_000-cumulative);
+      await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+    });
+    await context.test('an unsettled oldest wait cannot starve more than one batch of released clocks',async()=>{
+      const jobIds:string[]=[];
+      for(let index=0;index<66;index++) {
+        const fixture=await setup();jobIds.push(fixture.jobId);
+        if(index===0) await attempts.beginEffect(sql,fixture.attemptId,{effectId:'gateway.unknown',kind:'gateway_model_request',replayPolicy:'never'});
+        await sql`UPDATE human_requests SET resources_released_at=clock_timestamp(),process_exited_at=clock_timestamp() WHERE id=${fixture.requestId}`;
+      }
+      await clock.reconcileReleasedHumanClocks(sql,64);
+      const pending=async()=>Number((await sql`SELECT count(*)::int AS n FROM job_execution_clocks WHERE job_id=ANY(${jobIds}::uuid[]) AND active_since IS NOT NULL`)[0].n);
+      assert.equal(await pending(),2,'64 eligible waits finish despite the older in-flight request');
+      await clock.reconcileReleasedHumanClocks(sql,64);assert.equal(await pending(),1);
+      assert.ok((await sql`SELECT active_since FROM job_execution_clocks WHERE job_id=${jobIds[0]!}`)[0].active_since);
+      await sql`UPDATE jobs SET status='cancelled' WHERE id=ANY(${jobIds}::uuid[])`;
     });
     await context.test('a paused project queue preserves unmanaged execution and its already active head',async()=>{
       await sql`INSERT INTO project_task_queues(project_id) VALUES(${projectId}) ON CONFLICT DO NOTHING`;

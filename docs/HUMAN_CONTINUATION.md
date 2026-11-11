@@ -16,7 +16,7 @@ schema 73 新增 human_requests 和 job_execution_clocks；human_messages 以 re
 
 manifest 绑定 Job、Attempt、请求、冻结快照摘要和 structured 模式。销毁沙箱必须由原 worker/Attempt 精确归属证明；随后原子撤销旧 Gateway/Control grants、结算确切 agent_run、记录 process_exited_at/resources_released_at、关闭旧 Attempt 为 interrupted 并暂停有效执行时钟，Job 保持 waiting_human。失败提交保留原 owner/effect/lease，现有恢复循环重核，不用 interrupted 反推销毁成功。未决的其他外部效果不被这一步结算。
 
-Dispatcher 正常 finally 立即回收等待资源；重启后现有 reconciliation 在 manifest 可用、封存 blocked 或准备超过 90 秒时执行相同回收。保存失败也有界回收并保留具体 blocker；不无限保留沙箱。设备租约/共享资产沿既有 finally 和 Reaper 清理。waitingHumanSec 的 0 关闭 overdue 计时；它不关闭必要的有限封存/资源清理。
+Dispatcher 正常 finally 立即回收等待资源；重启后现有 reconciliation 在 manifest 可用、封存 blocked 或准备超过 90 秒时执行相同回收。人工等待回收不会把 Scheduler 仍在途的 Gateway 请求仅因沙箱销毁改成 unknown：保留原 pending 效果由原请求结算，未知效果仍需对账且不重放。保存失败也有界回收并保留具体 blocker；不无限保留沙箱。设备租约/共享资产沿既有 finally 和 Reaper 清理。waitingHumanSec 的 0 关闭 overdue 计时；它不关闭必要的有限封存/资源清理。
 
 断点保留 30 天。现有循环在删除文件前先持久标记 HUMAN_CHECKPOINT_EXPIRED，删除失败继续重试，不能保持 ready 后静默删文件。请求和历史证据不随断点文件过期而抹除；无法续做时明确显示原因。
 
@@ -32,7 +32,7 @@ Dispatcher 在 provision 和 agent_run 前再核对确切 successor 与文件；
 
 本片使用明确的 structured 新会话：恢复验证后的业务文件、原问题、用户回复和有界文件索引，再依既有 Hub/Canvas 按需读取当前事实/计划。CLI Session 仍按现有机制归档作证据，**未实现 Pi/Claude/DSH 原生会话恢复**，不声称跨进程 Session 原样续接。不得重放已接受业务效果；只有新执行的合法完成门和结算证明完成。
 
-启动提示只携带待处理回复的引用与状态，正文只经 inbox 投递，unknown 投递不从启动提示旁路再发。已 ACK 的历史可作为只读上下文供显式后继恢复使用，不再次投递。完成门要求当前回复已 ACK，否则返回可修正反馈；已知失败后的单 Job resume 重核原断点并追加下一 owner，不被首次 target_attempt_no 永久锁定。更换配置和任务批量恢复不能绕过断点身份门。
+启动提示只携带待处理回复的引用与状态，正文只经 inbox 投递，unknown 投递不从启动提示旁路再发。已 ACK 的历史可作为只读上下文供显式后继恢复使用，不再次投递。同 Job 累计已 ACK 的不可变附件单独校验并恢复到各消息原 inbox 路径，启动索引列出这些历史输入；上限 256 个、单文件 8 MiB、总计 64 MiB，超限明确阻断，不静默丢弃较早轮次输入。待处理回复附件仍只随原投递入口提供。完成门要求当前回复已 ACK，否则返回可修正反馈；已知失败后的单 Job resume 重核原断点并追加下一 owner，不被首次 target_attempt_no 永久锁定。更换配置和任务批量恢复不能绕过断点身份门。
 
 ## 预算与边界
 

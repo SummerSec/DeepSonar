@@ -403,11 +403,15 @@ ORDER BY e.created_at, e.id`;
 export async function settleInterruptedEffects(
   db: AttemptDatabase,
   attemptId: string,
+  options: { preservePendingGatewayRequests?: boolean } = {},
 ): Promise<{ settled: number; unknown: number }> {
   const rows = (await db.unsafe(INTERRUPTED_EFFECT_EVIDENCE, [attemptId])) as Array<Record<string, unknown>>;
   let settled = 0;
   let unknown = 0;
   for (const row of rows) {
+    // Human-wait sandbox destruction does not stop a Scheduler-owned upstream
+    // request. Its original writer can still settle it after the run exits.
+    if(options.preservePendingGatewayRequests && row.effect_kind==='gateway_model_request') continue;
     const evidence = {
       id: String(row.id),
       effectKind: String(row.effect_kind),
@@ -438,7 +442,8 @@ export async function settleInterruptedEffects(
   return { settled, unknown };
 }
 
-export async function markAttemptInterrupted(db: AttemptDatabase, jobId: string, reason: unknown): Promise<AttemptRow | null> {
+export async function markAttemptInterrupted(db: AttemptDatabase, jobId: string, reason: unknown,
+  options: { preservePendingGatewayRequests?: boolean } = {}): Promise<AttemptRow | null> {
   const safeReason = sanitizeError(reason);
   const [attempt] = await db`SELECT * FROM job_attempts WHERE job_id = ${jobId} AND status = 'active' ORDER BY attempt_no DESC LIMIT 1 FOR UPDATE`;
   if (!attempt) return null;
@@ -453,6 +458,6 @@ export async function markAttemptInterrupted(db: AttemptDatabase, jobId: string,
     WHERE id = ${attempt.id} AND status = 'active'
     RETURNING *`;
   if (!updated) return null;
-  await settleInterruptedEffects(db, String(attempt.id));
+  await settleInterruptedEffects(db, String(attempt.id),options);
   return updated as AttemptRow;
 }

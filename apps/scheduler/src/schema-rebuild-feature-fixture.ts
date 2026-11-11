@@ -117,6 +117,8 @@ export async function runFeatureSchemaRebuildFixture(testUrl: string): Promise<v
     await assertNoFeatures(backup);
     assert.deepEqual(await capture(backup), history, "the actual on-disk v63 backup restores every source row");
     assert.equal((await db`SELECT version FROM schema_meta WHERE id='global'`)[0].version, SCHEMA_VERSION);
+    const deadlines=await db`SELECT pg_typeof(execution_deadline_at)::text AS type,execution_deadline_at FROM jobs`;
+    assert.ok(deadlines.length>0&&deadlines.every(row=>row.type==='timestamp with time zone'&&row.execution_deadline_at===null));
     assert.deepEqual(await capture(db), history, "rebuild preserves full history including source_digest and Verify state");
     for (const name of [...DERIVED_TABLES, ...FEATURE_INDEXES]) {
       assert.equal((await db`SELECT to_regclass(${'public.' + name})::text AS name`)[0].name, name);
