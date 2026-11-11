@@ -12,6 +12,36 @@ import { captureCheckpointFiles, checkpointHash, HumanCheckpointManifest, putChe
 import { checkpointQuiescenceScript } from "./human-checkpoint-process.js";
 import { CHECKPOINT_MUTATION_GUARD } from "./human-checkpoint-mutation.js";
 import { checkpointGuardFixture } from "./human-checkpoint-fixture.js";
+import { checkpointManagedSecrets } from "./human-checkpoint.js";
+
+test("fork chains must converge to a stable stopped set or fail closed",{skip:process.platform==='win32'},()=>{
+  for(const unbounded of [false,true]) {
+    const script=`import os,json,io,signal
+from unittest.mock import patch
+processes={1:['S',0,11],20:['S',1,200],30:['S',1,300]}
+stopped=[]
+def read_stat(filename,*arguments,**keywords):
+ pid=int(filename.split('/')[2])
+ state,parent,start=processes[pid]
+ return io.StringIO(str(pid)+' (worker) '+state+' '+str(parent)+' '+'0 '*17+str(start))
+def stop_process(pid,action):
+ assert action==signal.SIGSTOP
+ if ${unbounded?'True':'False'} or pid<38: processes[pid+1]=['S',1,(pid+1)*10]
+ stopped.append(pid)
+ processes[pid][0]='T'
+blocked=False
+with patch('builtins.open',read_stat),patch('os.listdir',side_effect=lambda directory:[str(pid) for pid in processes]),patch('os.getpid',return_value=20),patch('os.kill',stop_process):
+ try: exec(${JSON.stringify(checkpointQuiescenceScript(['1:11']))})
+ except RuntimeError as failure:
+  assert str(failure)=='HUMAN_CHECKPOINT_PROCESS_NOT_QUIESCENT'
+  blocked=True
+assert blocked==${unbounded?'True':'False'}
+if not blocked: assert set(stopped)==set(range(30,39)),stopped
+`;
+    const result=spawnSync('python3',['-c',script],{encoding:'utf8',timeout:5000});
+    assert.equal(result.status,0,result.stderr);
+  }
+});
 
 test("Linux kernel watch rejects a file added after candidate discovery",{skip:process.platform==='win32'},async()=>{
   const directory=await mkdtemp(path.join(os.tmpdir(),'human-watch-'));
@@ -89,6 +119,12 @@ test("capture checks source hashes and secrets; reads reject corruption and miss
     assert.equal(files.length, 1);
     assert.deepEqual(await readCheckpointFile(requestId, files[0]), bytes);
     await assert.rejects(captureCheckpointFiles(host, randomUUID(), [], ["retained"], []), /SECRET_DETECTED/);
+    const backgroundToken='independent-om-fixture-token',backgroundBytes=Buffer.from(backgroundToken),backgroundRequest=randomUUID();
+    const backgroundHost={...host,run:async()=>({exitCode:0,stderr:'',stdout:JSON.stringify([
+      {path:filePath,bytes:backgroundBytes.length,sha256:checkpointHash(backgroundBytes)}])}),readWorkspaceFile:async()=>backgroundBytes};
+    const managed=checkpointManagedSecrets({DEEPSONAR_GATEWAY_TOKEN:'different-main-fixture-token'},{},[backgroundToken]);
+    await assert.rejects(captureCheckpointFiles(backgroundHost,backgroundRequest,[],managed,[]),/SECRET_DETECTED/);
+    await assert.rejects(readCheckpointFile(backgroundRequest,{bytes:backgroundBytes.length,sha256:checkpointHash(backgroundBytes)}),/FILE_UNAVAILABLE/);
     const changed = { ...host, readWorkspaceFile: async () => Buffer.alloc(bytes.length) };
     await assert.rejects(captureCheckpointFiles(changed, randomUUID(), [], [], []), /FILE_CHANGED/);
     const hostile = { ...host, run: async () => ({ exitCode: 0, stdout: JSON.stringify([

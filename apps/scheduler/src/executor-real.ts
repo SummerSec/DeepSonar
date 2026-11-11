@@ -1617,7 +1617,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   let platformToken: string | null = platformCapability.token;
   let platformRuntimeRegistered = false;
   try {
-  registerJobEvidenceSecrets(jobId, [platformToken, gatewayToken].filter((value): value is string => Boolean(value)));
+  registerJobEvidenceSecrets(jobId, [platformToken, gatewayToken,observationalMemoryGatewayToken].filter((value): value is string => Boolean(value)));
 
   const knowledgeRuntime = createKnowledgeRuntime({ db: sql, governanceHash: PROJECT_KNOWLEDGE_GOVERNANCE_HASH });
   const runtimePlatformHandler = completionDiagnostics.wrapControlHandler(async (context: PlatformRuntimeHandlerContext): Promise<Record<string, unknown>> => {
@@ -1834,7 +1834,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       subAgents: snapshot.subagents as never,
       piExtensions: piExtensionInjection.paths,
       workspaceFiles,
-      secretValues: [platformToken, gatewayToken].filter((value): value is string => Boolean(value)),
+      secretValues: [platformToken, gatewayToken,observationalMemoryGatewayToken].filter((value): value is string => Boolean(value)),
       onRunReady: async ({ sendMessage, readWorkspaceFile, writeWorkspaceFile }) => {
         readSandboxWorkspaceFileForRuntime = readWorkspaceFile;
         if (platformApiEnabled) {
@@ -1947,7 +1947,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   if (semanticState.human) {
     await persistHumanWaitCheckpoint(jobId,semanticState.human,{
       attemptId:attemptId!,host:()=>runner.ensureHost({sandboxId:job.sandbox_id as string}),
-      workspaceFiles,env,processBaseline:checkpointContext?.processBaseline,
+      workspaceFiles,env,processBaseline:checkpointContext?.processBaseline,managedSecrets:[platformToken,gatewayToken,observationalMemoryGatewayToken],
     },ingestSemanticEventObserved);
     return;
   }

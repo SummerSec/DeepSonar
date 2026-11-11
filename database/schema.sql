@@ -237,6 +237,7 @@ CREATE TABLE job_execution_clocks (
 
 CREATE TABLE human_requests (
   id uuid PRIMARY KEY,
+  source_event_id text NOT NULL,
   project_id uuid NOT NULL REFERENCES projects(id),
   canvas_id text REFERENCES canvases(id) ON DELETE CASCADE,
   job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -261,7 +262,8 @@ CREATE TABLE human_requests (
   resumed_at timestamptz,
   closed_at timestamptz,
   close_reason text,
-  CONSTRAINT human_request_event_fk FOREIGN KEY (job_id,id) REFERENCES events(job_id,event_id) ON DELETE CASCADE,
+  CONSTRAINT human_request_event_fk FOREIGN KEY (job_id,source_event_id) REFERENCES events(job_id,event_id) ON DELETE CASCADE,
+  UNIQUE(job_id,source_event_id),
   CONSTRAINT human_request_ready_check CHECK (checkpoint_status <> 'ready' OR manifest_json IS NOT NULL),
   UNIQUE(job_id,attempt_id)
 );

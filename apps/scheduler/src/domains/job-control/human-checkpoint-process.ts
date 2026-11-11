@@ -35,11 +35,16 @@ while ancestor>0:
  info=process_info(ancestor)
  if info is None: raise RuntimeError('HUMAN_CHECKPOINT_PROCESS_CHANGED')
  ancestor=info[2]
-for pass_number in range(3):
+previous_candidates=None
+deadline=time.monotonic()+10
+for pass_number in range(32):
+ candidates=set()
  for name in os.listdir('/proc'):
   if not name.isdigit() or int(name) in ancestors: continue
   info=process_info(int(name))
   if info is None or info[0] in baseline or info[1] in ['Z','X']: continue
+  candidates.add(info[0])
+  if info[1] in ['T','t']: continue
   try: os.kill(int(name),signal.SIGSTOP)
   except ProcessLookupError: continue
   for check_number in range(100):
@@ -47,5 +52,17 @@ for pass_number in range(3):
    if current is None or current[0]!=info[0] or current[1] in ['T','t','Z','X']: break
    time.sleep(0.01)
   else: raise RuntimeError('HUMAN_CHECKPOINT_PROCESS_NOT_QUIESCENT')
+ verified=set()
+ stable=True
+ for name in os.listdir('/proc'):
+  if not name.isdigit() or int(name) in ancestors: continue
+  info=process_info(int(name))
+  if info is None or info[0] in baseline or info[1] in ['Z','X']: continue
+  verified.add(info[0])
+  if info[1] not in ['T','t']: stable=False
+ if stable and candidates==verified and verified==previous_candidates: break
+ if time.monotonic()>deadline: raise RuntimeError('HUMAN_CHECKPOINT_PROCESS_NOT_QUIESCENT')
+ previous_candidates=verified if stable else None
+else: raise RuntimeError('HUMAN_CHECKPOINT_PROCESS_NOT_QUIESCENT')
 `;
 }

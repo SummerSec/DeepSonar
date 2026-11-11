@@ -45,8 +45,8 @@ export function isCurrentJobHumanRequest(
 export async function readJobHumanRequest(db: typeof sql, jobId: string) {
   const [row] = await db`SELECT human.event_id,human.attempt_id,human.created_at,human.payload_json,
       j.status AS job_status,latest.id AS latest_attempt_id,latest.status AS attempt_status,latest.cancel_requested,
-      EXISTS(SELECT 1 FROM human_requests r WHERE r.id=human.event_id AND r.job_id=j.id) AS managed_exists,
-      EXISTS(SELECT 1 FROM human_requests r WHERE r.id=human.event_id AND r.job_id=j.id
+      EXISTS(SELECT 1 FROM human_requests r WHERE r.source_event_id=human.event_id AND r.job_id=j.id) AS managed_exists,
+      EXISTS(SELECT 1 FROM human_requests r WHERE r.source_event_id=human.event_id AND r.job_id=j.id
         AND r.attempt_id=latest.id AND latest.status IN ('active','interrupted') AND NOT latest.cancel_requested
         AND r.status IN ('open','answered') AND r.resumed_at IS NULL
         AND j.status='waiting_human') AS managed_wait

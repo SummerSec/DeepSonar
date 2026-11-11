@@ -5,6 +5,12 @@ import { humanSnapshotDigest } from "./human-continuation-store.js";
 import { projectJobHumanRequestPayload } from "./job-human-request.js";
 import type { HumanPayload } from "@deepsonar/shared-types";
 import { readCheckpointProcessBaseline } from "./human-checkpoint-process.js";
+import { collectSecretValues } from "../../credential-secret-projection.js";
+
+export function checkpointManagedSecrets(env:Record<string,unknown>,files:Record<string,unknown>,direct:readonly(string|null|undefined)[]) {
+  return [...new Set([...direct.filter((value):value is string=>typeof value==='string'&&value.length>0),
+    ...collectSecretValues(env),...Object.values(files).flatMap(config=>collectSecretValues({config}))])];
+}
 
 export async function prepareHumanCheckpointContext(input:{jobId:string;attemptNo:number;snapshot:unknown;host:RuntimeHost}) {
   const continuationInput=await restoreHumanCheckpoint(input);
@@ -13,12 +19,12 @@ export async function prepareHumanCheckpointContext(input:{jobId:string;attemptN
 }
 
 export async function persistHumanWaitCheckpoint(jobId:string,human:{eventId:string;payload:HumanPayload},
-  input:{attemptId:string;host:()=>Promise<RuntimeHost>;workspaceFiles:Record<string,unknown>;env:Record<string,unknown>;processBaseline?:readonly string[]},
+  input:{attemptId:string;host:()=>Promise<RuntimeHost>;workspaceFiles:Record<string,unknown>;env:Record<string,unknown>;
+    processBaseline?:readonly string[];managedSecrets:readonly(string|null|undefined)[]},
   persist:(jobId:string,event:{v:1;event_id:string;type:"human";payload:HumanPayload})=>Promise<unknown>) {
   await persist(jobId,{v:1,event_id:human.eventId,type:"human",payload:human.payload});
   await sealHumanCheckpoint({jobId,attemptId:input.attemptId,host:await input.host(),processBaseline:input.processBaseline,
-    excludedPaths:Object.keys(input.workspaceFiles),secrets:Object.entries(input.env)
-      .filter(([name,value])=>/TOKEN|SECRET|PASSWORD|API_KEY/i.test(name)&&typeof value==='string').map(([,value])=>String(value))});
+    excludedPaths:Object.keys(input.workspaceFiles),secrets:checkpointManagedSecrets(input.env,input.workspaceFiles,input.managedSecrets)});
 }
 
 export async function sealHumanCheckpoint(input:{jobId:string;attemptId:string;host:RuntimeHost;

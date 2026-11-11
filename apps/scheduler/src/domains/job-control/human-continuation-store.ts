@@ -7,8 +7,8 @@ export function humanSnapshotDigest(snapshot: unknown) {
 }
 
 export async function recordHumanRequest(db: typeof sql, jobId: string, eventId: string, payload: unknown) {
-  await db`INSERT INTO human_requests(id,project_id,canvas_id,job_id,attempt_id,payload_json)
-    SELECT ${eventId},j.project_id,j.canvas_id,j.id,a.id,${db.json(payload as never)} FROM jobs j
+  await db`INSERT INTO human_requests(id,source_event_id,project_id,canvas_id,job_id,attempt_id,payload_json)
+    SELECT ${eventId},${eventId},j.project_id,j.canvas_id,j.id,a.id,${db.json(payload as never)} FROM jobs j
     JOIN LATERAL(SELECT id FROM job_attempts WHERE job_id=j.id AND status='active'
       ORDER BY attempt_no DESC LIMIT 1) a ON true WHERE j.id=${jobId}
     ON CONFLICT(id) DO NOTHING`;
