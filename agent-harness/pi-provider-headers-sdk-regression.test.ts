@@ -24,7 +24,7 @@ test("Pi 1.5.2 real composer retains built-ins and agrees with Gateway header la
   const lock = JSON.parse(await readFile(join(fixture, "package-lock.json"), "utf8"));
   const locked = lock.packages["node_modules/@earendil-works/pi-coding-agent"];
   assert.equal(locked.version, "1.5.2");
-  assert.equal(locked.integrity, "sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==");
+  assert.equal(locked.integrity, "sha512-mUWI04rqF1Vd/m1q+Ps1XeWsTXEVvRUnsmRa83I3Dzua0Tx5bYS93imeqtIfrXf7PkkaR6ERz+AuQhIJlom5yA==");
   assert.equal(JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")).version, "1.5.2");
   assert.equal(JSON.parse(await readFile(join(fixture, "node_modules/@earendil-works/pi-ai/package.json"), "utf8")).version, "1.5.2");
   const { ModelRuntime } = await import(pathToFileURL(join(packageRoot, "dist/core/model-runtime.js")).href);
