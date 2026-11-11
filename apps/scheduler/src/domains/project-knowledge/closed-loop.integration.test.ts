@@ -89,8 +89,8 @@ async function trialEvidence(db: TestSql, jobId: string, attemptId: string, proj
 for (const kind of ["memory", "skill"] as const) test(`registered source activates ${kind}, a later Job reads its exact version and feedback stays attributable`, async () => {
   await withKnowledgeDatabase(async db => {
     const origin = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
-    await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
-      VALUES(${origin.canvasId},${origin.jobId},'fact','raw input','succeeded','{"input":"raw fixture"}'::jsonb)`;
+    await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,verification_status,body_json)
+      VALUES(${origin.canvasId},${origin.jobId},'fact','raw input','succeeded','unverified','{"input":"raw fixture"}'::jsonb)`;
     await db`UPDATE jobs SET status='succeeded' WHERE id=${origin.jobId}`;
     await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${origin.attemptId}`;
     await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, origin.jobId, "succeeded"));
@@ -182,8 +182,8 @@ for (const kind of ["memory", "skill"] as const) test(`registered source activat
     if (kind === "memory") assert.equal(read.content, "fixture guidance");
     else assert.match(JSON.stringify(read.skill), /Fixture guidance/);
     assert.ok(read.usage_ref);
-    const [fact] = await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
-      VALUES(${consumer.canvasId},${consumer.jobId},'fact','reuse observation','succeeded','{"reuse":"observed"}'::jsonb)
+    const [fact] = await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,verification_status,body_json)
+      VALUES(${consumer.canvasId},${consumer.jobId},'fact','reuse observation','succeeded','unverified','{"reuse":"observed"}'::jsonb)
       RETURNING id,body_json,verification_status`;
     const feedbackRef = { kind: "fact", ref: fact!.id, content_hash: sha256(canonical({ kind: "fact",
       id: fact!.id, body: fact!.body_json, verification_status: fact!.verification_status })) };

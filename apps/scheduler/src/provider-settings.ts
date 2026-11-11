@@ -72,6 +72,8 @@ export interface MaterializedConfigFile {
 
 export interface ProviderSettingsOverrides {
   model?: string | null;
+  /** Preserve an already-admitted Pi provider when model IDs are shared by multiple routes. */
+  frozen_provider?: string | null;
   reasoning?: ReasoningValue | null;
   /** 通用客户端上下文预算；不会改变上游模型能力。 */
   context_window_tokens?: number | null;
@@ -518,7 +520,10 @@ export function materializeProviderSettings(input: {
     const selectedRaw = input.overrides?.model?.trim() || extractModelFromSettings("pi", settings);
     const maxOutputTokens = input.overrides?.max_output_tokens == null ? null
       : resolveModelTokenBudget({ nativeMaxTokens: input.overrides.max_output_tokens }).max_output_tokens.effective;
-    const selected = selectedRaw ? resolvePiCliLaunchSelection({ model: selectedRaw, settingsConfig: settings }) : null;
+    const selected = selectedRaw ? resolvePiCliLaunchSelection({ model: selectedRaw, settingsConfig: settings,
+      frozenProvider: input.overrides?.frozen_provider }) : null;
+    if (input.overrides?.frozen_provider && selected?.provider !== input.overrides.frozen_provider)
+      throw new Error("PI_FROZEN_PROVIDER_UNAVAILABLE");
     const selectedModelId = selected?.cliModel;
     const preferredProvider = selected?.provider || official?.route || null;
     const providerIds = Object.keys(providerSource);

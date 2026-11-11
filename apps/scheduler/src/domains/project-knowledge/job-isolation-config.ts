@@ -17,11 +17,13 @@ export function isolateKnowledgeConfiguration(snapshot: AgentRuntimeSnapshot) {
   } : settings;
   let configFiles = hasProviderSettingsConfig(settings)
     ? materializeProviderSettings({ agentCli: snapshot.agent_cli, settingsConfig: cleanSettings,
-      overrides: { model: snapshot.model, reasoning: snapshot.reasoning, context_window_tokens: snapshot.context_window_tokens } }) : [];
+      overrides: { model: snapshot.model, frozen_provider: snapshot.pi_provider,
+        reasoning: snapshot.reasoning, context_window_tokens: snapshot.context_window_tokens } }) : [];
   if (snapshot.agent_cli === "pi" && !configFiles.length) {
     const models = snapshot.config_files.find(file => file.path === ".pi/agent/models.json");
     if (models) configFiles = materializeProviderSettings({ agentCli: "pi",
-      settingsConfig: { providers: object(JSON.parse(models.content)).providers }, overrides: { model: snapshot.model } });
+      settingsConfig: { providers: object(JSON.parse(models.content)).providers },
+      overrides: { model: snapshot.model, frozen_provider: snapshot.pi_provider } });
   }
   const { profile_fingerprint: _fingerprint, ...body } = snapshot.runtime_profile;
   const runtimeProfile = freezeAgentRuntimeProfile({ ...body, extensions: [], system_prompt_ref: null,

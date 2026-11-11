@@ -24,9 +24,10 @@ test("prepared Job creation joins caller transaction and freezes Scheduler assig
 test("knowledge Pi Jobs remove business extension launches while preserving the provider model route", async () => {
   await withKnowledgeDatabase(async db => {
     const seed = await seedKnowledgeJob(db);
-    const snapshot = { agent_cli: "pi", model: "model", reasoning: null, context_window_tokens: null,
+    const snapshot = { agent_cli: "pi", model: "model", pi_provider: "route", reasoning: null, context_window_tokens: null,
       runtime_image: { image_key: "deepsonar-base" }, shared_assets: [], platform_tools: ["mark_job_done"],
-      settings_config_json: { providers: { route: { baseUrl: "https://gateway.invalid", api: "openai-responses", models: [{ id: "model" }] } } },
+      settings_config_json: { providers: { route: { baseUrl: "https://gateway.invalid", api: "openai-responses", models: [{ id: "model" }] },
+        alternate: { baseUrl: "https://alternate.invalid", api: "openai-responses", models: [{ id: "model" }] } } },
       config_files: [{ path: ".pi/agent/extensions/business.ts", content: "business-only execution" }],
       pi_extensions: [{ id: "business", package: "business", version: "1", integrity: "sha256:business" }],
       runtime_profile: freezeAgentRuntimeProfile({ schema: "deepsonar.agent-runtime-profile/v1", profile_version: 1,

@@ -113,7 +113,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 本轮用户明确授权自动项目整理，[ADR 0022](architecture/adr/0022-project-knowledge-collection.md) 取代 [0021](architecture/adr/0021-knowledge-source-preview.md) 中项目批处理暂缓的限制；0021 的历史决定保留。成功业务 Job 的登记仍仅在原终态事务/savepoint 中向 append-only `audit_logs` 写 `project_knowledge.source_registered`（`system/scheduler`、`result=ok`），记录 Job/Attempt/Canvas 与 Fact/Evidence 存在标记；不在终态事务中复制正文或创建模型 Job。登记失败隔离并告警，不回滚业务成功。登记不保证来源正文保留，不是候选或产物。
 
-[collector.ts](../apps/scheduler/src/domains/project-knowledge/collector.ts) 由既有 Dispatcher tick 调用，[knowledge-wake.ts](../apps/scheduler/src/knowledge-wake.ts) 从持久未处理登记计算下一次唤醒，不新增轮询执行器。每批至多 4 个来源 Job、合计至多 19 个原始 Fact/Evidence inputs，另可带一个冻结 governor 版本；保留原观察的 verification_status，不把采集变为验证。collector 在项目已有非旧自动 `pending/running` work 时等待，不再建立并行项目批次；这不是给全部 Agent 显式请求新增数据库唯一约束。完成/阻断批次不会重新构造同一来源来重置预算。旧 `knowledge:auto:` work 仍不自动开始后续阶段，其在途执行和历史记录不被取消或改写。
+[collector.ts](../apps/scheduler/src/domains/project-knowledge/collector.ts) 由既有 Dispatcher tick 调用，[knowledge-wake.ts](../apps/scheduler/src/knowledge-wake.ts) 从持久未处理登记计算下一次唤醒，不新增轮询执行器。每批至多 4 个来源 Job、合计至多 19 个来源输入（Fact、Evidence 及其授权资产），另可带一个冻结 governor 版本；保留原观察的 verification_status，不把采集变为验证。collector 在项目已有非旧自动 `pending/running` work 时等待，不再建立并行项目批次；这不是给全部 Agent 显式请求新增数据库唯一约束。完成/阻断批次不会重新构造同一来源来重置预算。旧 `knowledge:auto:` work 仍不自动开始后续阶段，其在途执行和历史记录不被取消或改写。
 
 来源解析与 CAS 字节准备在短 SQL 事务外进行；项目行锁下重新检查项目活动、最新成功 Attempt、冻结 `request_project_knowledge` 权限、未结算效果、当前来源/hash、既有处理及 governor 版本，再原子建立 `knowledge:project:` work 和逐来源 `project_knowledge.source_collected` 审计链接。链接保存 `registration_id`、`work_ref`、`attempt_id`、`input_count`、`manifest_sha256`，最后一项为该来源冻结 manifest 的 canonical SHA-256，保留来源执行身份与输入摘要而不在审计中复制正文。无新 schema、迁移或第二份经验账本。
 
@@ -138,6 +138,8 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 ### 故障退避、试验上下文与修订
 
 单条来源的永久拒绝只记录该来源的跳过，不吞掉同批正常来源。CAS/数据库准备的瞬态失败通过 `project_knowledge.source_collection_retry` 保存代次和下次时间，间隔 30 秒，最多 3 次；耗尽后明确跳过。既有 knowledge-wake 从同一审计恢复最早到期时间，不另设轮询。失权、未知外部效果和预算耗尽不按瞬态重放，已创建/阻断的 work 不因此重建。
+
+自动采集产生治理引用后，原任务按既有 `TASK_DELETE_KNOWLEDGE_RETAINED` 守卫保留：清空历史的硬重试/删除可能被拒绝，不能为重跑而删除来源、工作或回执。后续执行使用保留历史的受治理入口或新任务；这一保留成本不能被“自动积累”隐藏。
 
 trial 保留可信的 `deepsonar-control` 与专用执行 Skill，不携带评分答案。共存用例为各 arm 分配相同的平台授权中性 trace Memory；这是固定工程用例上下文，不是项目积累或模型收益。自动批次与 trial 清理业务扩展、角色环境与手工配置，只重新物化连接必需的 Provider 配置，并重新冻结 Runtime Profile/launch。资产型 Evidence 同时冻结原 Job 有权读取的真实资产版本字节，不能只给 maker 描述和 hash。
 

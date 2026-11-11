@@ -75,8 +75,8 @@ test("a newly committed Agent knowledge request notifies the existing Dispatcher
 test("registered sources survive missed notifications and wake collection after restart", async () => {
   await withKnowledgeDatabase(async db => {
     const source = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
-    await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
-      VALUES(${source.canvasId},${source.jobId},'fact','input','succeeded','{"input":"bounded"}'::jsonb)`;
+    await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,verification_status,body_json)
+      VALUES(${source.canvasId},${source.jobId},'fact','input','succeeded','unverified','{"input":"bounded"}'::jsonb)`;
     await db`UPDATE jobs SET status='succeeded' WHERE id=${source.jobId}`;
     await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${source.attemptId}`;
     await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, source.jobId, "succeeded"));
@@ -93,8 +93,8 @@ test("source wake uses the latest persisted retry deadline and retains the pendi
     const first = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
     const second = await seedKnowledgeJob(db, first.projectId, ["request_project_knowledge"]);
     for (const job of [first, second]) {
-      await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
-        VALUES(${job.canvasId},${job.jobId},'fact','input','succeeded','{"input":"bounded"}'::jsonb)`;
+      await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,verification_status,body_json)
+        VALUES(${job.canvasId},${job.jobId},'fact','input','succeeded','unverified','{"input":"bounded"}'::jsonb)`;
       await db`UPDATE jobs SET status='succeeded' WHERE id=${job.jobId}`;
       await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${job.attemptId}`;
       await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, job.jobId, "succeeded"));

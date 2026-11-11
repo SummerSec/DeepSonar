@@ -13,7 +13,7 @@
 ## 决策
 
 1. 本决定仅取代 0021 的“项目批量整理暂缓”限制。保留原来源元数据登记和历史预览只读边界；旧 `knowledge:auto:` work 仍不自动推进，不恢复旧快照或重置预算。整链 token 预算和 schema 改动仍不在本轮范围。0021 正文保留为历史决定，当前取代关系在本条与 ADR 索引登记。
-2. Dispatcher 的既有 tick 与 knowledge-wake 必须读取 durable 未处理来源审计；collector 每批最多 4 个来源 Job、合计 19 个原始 Fact/Evidence inputs，再可附加一个冻结 governor。collector 在项目已有非旧自动 pending/running work 时不得再准入批次；不将其宣称为全部显式请求的新唯一约束。
+2. Dispatcher 的既有 tick 与 knowledge-wake 必须读取 durable 未处理来源审计；collector 每批最多 4 个来源 Job、合计 19 个来源输入（Fact、Evidence 及其授权资产），再可附加一个冻结 governor。collector 在项目已有非旧自动 pending/running work 时不得再准入批次；不将其宣称为全部显式请求的新唯一约束。
 3. 来源正文/CAS 准备必须在短 SQL 事务外执行。项目行锁下复核项目、最新成功 Attempt、冻结权限、来源/hash、未结算效果、已处理记录和 governor，再同事务写入 work 与逐来源采集链接。source_registered 仅是元数据；source_collected 表示纳入整理，包含排队，不能表示激活。超大/失权/未知效果等永久拒绝必须留下 skipped error 审计并停止坏源热重试。逐来源链接持久保存 registration_id/work_ref/attempt_id/input_count/manifest_sha256，摘要绑定该来源的冻结 manifest，不在审计中复制正文。
 4. 自动批次所有阶段及全部 trial 的创建期快照必须收紧已准入 stage 工具、关闭出网，清角色预加载 skills/modules/MCP/命令/子 Agent/指令与共享资产；trial 再清空普通知识目录，独立分配 case×arm 输入，只注入专用试验 Skill。不得扩大角色原 allowlist，不得改写旧 Job 快照。
 5. 非 reuse 的行为评测必须覆盖六类 case×两个 arm 的全部 12 次独立试验；创建时为 evaluator/reviewer 预留 2 个 Job，仍受累计 32 Jobs/1800 秒/2 次候选修订约束。每例 task_inputs 必须显式选择同一冻结任务材料，不自动复制全部来源或把原结论、候选正文、治理方法当共同答案；rubric 只给 evaluator/reviewer。引用可读性由代码验证，语义可比性与答案泄漏由审查核对，不能冒充模型质量已验证。
