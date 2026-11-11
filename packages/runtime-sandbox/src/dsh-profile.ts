@@ -65,7 +65,7 @@ export function buildDshProfilePatch(options: {
   add("subagent-fork-in-process", "subagent-fork-in-process", { providerName: "fork" });
   add("tool-subagent", "tool-subagent", { provider: "spawn", toolName: "subagent", backgroundMode: "continuable" });
   add("tool-subagent-control");
-  add("tool-subagent-list-agents", "tool-subagent-control/list-agents");
+  // 0.2.2-rc.1：`list_agents` 并入 tool-subagent-control 主入口，子路径插件已不可导入。
   add("tool-subagent-fork", "tool-subagent", { provider: "fork", toolName: "subagent_fork", backgroundMode: "one-shot" });
   add("sessions", "session-persistence-jsonl", { root: `${home}/sessions`, compression: "none" });
   add("session-checkpoints", "session-checkpoint-policy");
