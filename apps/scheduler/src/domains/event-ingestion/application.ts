@@ -1,4 +1,5 @@
 import { readControlReceiptByKey, planSettlementDigest, controlInputDigest } from "./control-receipt.js";
+import { scrubPostgresJson } from "./pg-text-safety.js";
 import { hasPrepaidCompletion } from "./completion-receipt.js";
 import {
   EventEnvelope as EventEnvelopeSchema,
@@ -375,7 +376,7 @@ async function appendAndApplyBundle(
           job_seq: next,
           attempt_id: ingest.attemptId,
           type: envelope.type,
-          payload_json: (envelope.payload ?? {}) as never,
+          payload_json: scrubPostgresJson(envelope.payload ?? {}) as never,
         })}`;
 
       // The callback runs before this transaction commits.  A thrown side

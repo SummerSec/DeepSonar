@@ -86,12 +86,8 @@ function nonEmptyDispatcherFailureMessage(error: unknown, composed: string): str
 
 export function classifyDispatcherFailure(error: unknown): { reason: string; message: string } {
   if (error instanceof TaskContractBlockedError) return { reason: error.code, message: error.message };
-  if (error instanceof RuntimeImageNotReadyError) {
-    return { reason: "runtime_image_not_ready", message: `runtime_image_not_ready: ${error.imageRef}` };
-  }
-  if (error instanceof DeviceNotAuthorizedError) {
-    return { reason: "device_not_authorized", message: `device_not_authorized: ${error.message}` };
-  }
+  if (error instanceof RuntimeImageNotReadyError) return { reason: "runtime_image_not_ready", message: `runtime_image_not_ready: ${error.imageRef}` };
+  if (error instanceof DeviceNotAuthorizedError) return { reason: "device_not_authorized", message: `device_not_authorized: ${error.message}` };
   if (error instanceof DeviceNotAvailableError) {
     return { reason: "device_not_available", message: `device_not_available: ${error.message}` };
   }
@@ -104,6 +100,8 @@ export function classifyDispatcherFailure(error: unknown): { reason: string; mes
   }
   // #1032 P1-3：凭据守卫拒绝是平台永久失败，早于 fallback，且不被任何自动重试路径消费。
   if (isCredentialInBusinessDataMessage(message)) return { reason: CREDENTIAL_IN_BUSINESS_DATA_REASON, message: formatCredentialInBusinessDataMessage(message) };
+  // #1066：事件载荷 NUL 导致的 PG 输入拒绝是确定性输入错误，错误文本不得回显 DB 原文。
+  if (isPgInputErrorMessage(message)) return { reason: EVENT_PAYLOAD_CONTROL_CHARACTERS_REASON, message: EVENT_PAYLOAD_CONTROL_CHARACTERS_MESSAGE };
   return { reason: "exception", message };
 }
 
@@ -205,6 +203,7 @@ import {
   planAutomaticContextWindowRetry,
 } from "./context-window-exceeded.js";
 import { CREDENTIAL_IN_BUSINESS_DATA_REASON, formatCredentialInBusinessDataMessage, isCredentialInBusinessDataMessage } from "./credential-refusal.js";
+import { EVENT_PAYLOAD_CONTROL_CHARACTERS_MESSAGE, EVENT_PAYLOAD_CONTROL_CHARACTERS_REASON, isPgInputErrorMessage } from "./pg-input-error.js";
 import { recordSystemAudit } from "./audit.js";
 import { recordProvisionFailureEvidence } from "./provision-failure-evidence.js";
 
@@ -1382,6 +1381,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     let msg = formatted.trim() || classified.message.trim() || DISPATCHER_EXCEPTION_FALLBACK;
     // #1032 P1-3：终态失败以平台稳定错误码开头，不再以 CLI 进程退出文案收尾。
     if (classified.reason === CREDENTIAL_IN_BUSINESS_DATA_REASON) msg = classified.message;
+    if (classified.reason === EVENT_PAYLOAD_CONTROL_CHARACTERS_REASON) msg = classified.message;
     if (!provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)) {
       const retried = await retryProvisioningJob(jobId, activeAttempt, msg).catch((retryError) => {
         console.error(`[dispatcher] provision retry scheduling failed for ${jobId}:`, retryError);
