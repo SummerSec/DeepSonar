@@ -224,20 +224,6 @@ if (!testDatabaseUrl) {
       assert.deepEqual(duplicate, { deduped: true });
       assert.equal(callbackCount, 1, "duplicate event must not invoke semantic side effects");
 
-      // #1066：载荷里的 U+0000 会在 JSONB 文本转换时触发 22P05；主插入必须清洗，
-      // 且清洗只发生在存储面，接收方 payload 保持原值供回执/去重 digest 校验。
-      const nulEventId = randomUUID();
-      fixture.eventIds.push(nulEventId);
-      await app.ingestEvent(jobId, {
-        v: 1,
-        event_id: nulEventId,
-        type: "progress",
-        payload: { message: "chunk\u0000with nul\nnext line" },
-      });
-      const [nulRow] = await sql<{ payload_json: { message: string } }[]>`
-        SELECT payload_json FROM events WHERE job_id = ${jobId} AND event_id = ${nulEventId}`;
-      assert.equal(nulRow.payload_json.message, "chunk\\0with nul\nnext line");
-
       // Verification binding failures must reject the whole fact event.  The
       // fact node, event row and dedup marker are all inside one transaction;
       // no ordinary fact may survive a failed evidence attachment.
@@ -773,6 +759,20 @@ if (!testDatabaseUrl) {
       const [progressResult, nodeResult] = lockRace;
       assert.equal(progressResult.status, "fulfilled", "progress ingest must settle without 40P01");
       assert.equal(nodeResult.status, "fulfilled", "canvas-first node UPDATE must settle without 40P01");
+
+      // #1066：载荷里的 U+0000 会在 JSONB 文本转换时触发 22P05；主插入必须清洗，
+      // 且清洗只发生在存储面，接收方 payload 保持原值供回执/去重 digest 校验。
+      const nulEventId = randomUUID();
+      fixture.eventIds.push(nulEventId);
+      await app.ingestEvent(jobId, {
+        v: 1,
+        event_id: nulEventId,
+        type: "progress",
+        payload: { message: "chunk\u0000with nul\nnext line" },
+      });
+      const [nulRow] = await sql<{ payload_json: { message: string } }[]>`
+        SELECT payload_json FROM events WHERE job_id = ${jobId} AND event_id = ${nulEventId}`;
+      assert.equal(nulRow.payload_json.message, "chunk\\0with nul\nnext line");
     } finally {
       for (const eventId of fixture.eventIds) {
         await sql`DELETE FROM event_dedup WHERE event_id = ${eventId}`;
