@@ -5,6 +5,7 @@ import path from "node:path";
 import { config } from "../../config.js";
 import type { RuntimeHost } from "@deepsonar/runtime-sandbox";
 import { checkpointQuiescenceScript } from "./human-checkpoint-process.js";
+import { guardCheckpointMutations } from "./human-checkpoint-mutation.js";
 
 export const HUMAN_CHECKPOINT_MAX_FILES = 256;
 export const HUMAN_CHECKPOINT_MAX_BYTES = 64*1024*1024;
@@ -52,8 +53,10 @@ export async function readCheckpointFile(requestId:string,file:{bytes:number;sha
 }
 export async function captureCheckpointFiles(host:RuntimeHost,requestId:string,excludedPaths:readonly string[],secrets:readonly string[],processBaseline?:readonly string[]) {
   if(!processBaseline) throw new Error("HUMAN_CHECKPOINT_PROCESS_BASELINE_UNAVAILABLE");
+  const guard=await guardCheckpointMutations(host);
+  try {
   const script=`import os,json,stat,hashlib
-${checkpointQuiescenceScript(processBaseline)}
+${checkpointQuiescenceScript([...processBaseline,guard.identity])}
 root='/workspace'
 files=[]
 total=0
@@ -69,7 +72,7 @@ for directory,dirs,names in os.walk(root,followlinks=False):
   if relative in excluded: continue
   if name=='.env' or name.startswith('.env.') or name.lower().split('.')[0] in ['credential','credentials','token','tokens','secret','secrets']: continue
   info=os.lstat(full)
-  if not stat.S_ISREG(info.st_mode): raise RuntimeError('HUMAN_CHECKPOINT_UNSAFE_FILE')
+  if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1: raise RuntimeError('HUMAN_CHECKPOINT_UNSAFE_FILE')
   if info.st_size>${HUMAN_CHECKPOINT_FILE_BYTES}: raise RuntimeError('HUMAN_CHECKPOINT_SIZE_LIMIT')
   with open(full,'rb') as source: digest=hashlib.sha256(source.read(${HUMAN_CHECKPOINT_FILE_BYTES}+1)).hexdigest()
   files.append({'path':relative,'bytes':info.st_size,'sha256':digest})
@@ -88,5 +91,7 @@ print(json.dumps(files))`;
     if(files.reduce((total,entry)=>total+entry.bytes,0)+bytes.length>HUMAN_CHECKPOINT_MAX_BYTES) throw new Error("HUMAN_CHECKPOINT_SIZE_LIMIT");
     files.push({path:file.path,...await putCheckpointFile(requestId,bytes)});
   }
+  await guard.assertUnchanged();
   return files;
+  } finally {await guard.close();}
 }

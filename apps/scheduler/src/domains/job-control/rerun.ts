@@ -393,7 +393,12 @@ export async function requeueJob(
       if(admission.blocker) return {kind:"not_resumable" as const,status,provenance,
         error_code:admission.blocker.code,reason:admission.blocker.reason};
     }
-    const continuation=humanRequestId?await humanContinuationAdmission(tx,job,humanRequestId):null;
+    const [previousContinuation]=!humanRequestId&&['failed','timeout','orphan'].includes(status)
+      ?await tx`SELECT id FROM human_requests WHERE job_id=${jobId} AND resumed_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1`:[];
+    const continuationId=humanRequestId??previousContinuation?.id;
+    const continuation=continuationId?await humanContinuationAdmission(tx,job,String(continuationId),!humanRequestId):null;
+    if(continuation&&mode==='rerun-current') return {kind:'not_resumable' as const,status,provenance,
+      error_code:'HUMAN_CONTINUATION_REQUIRES_FROZEN',reason:'已封存续做只接受原冻结快照；更换配置须另建任务。'};
     if(continuation?.blocker||(status==='waiting_human'&&!humanRequestId)) return {
       kind:"not_resumable" as const,status,provenance,error_code:continuation?.blocker??"HUMAN_REPLY_REQUIRED",
       reason:"人工回复和可校验断点均须通过当前续做准入。",
@@ -507,19 +512,20 @@ export async function requeueJob(
       heartbeat_at: null,
     });
     if (!transitioned) throw new RecoveryTransitionError(jobId, status, provenance);
+    await tx`UPDATE jobs SET execution_deadline_at=NULL WHERE id=${jobId}`;
     if(continuation?.request) {
-      const [latest]=await tx`SELECT attempt_no FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no DESC LIMIT 1`;
+      const [latest]=await tx`SELECT id,attempt_no FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no DESC LIMIT 1`;
       const generationId=randomUUID();
       const [{next}]=await tx`SELECT COALESCE(MAX(job_seq),0)+1 AS next FROM events WHERE job_id=${jobId}`;
       await tx`INSERT INTO event_dedup(event_id,job_id) VALUES(${generationId},${jobId})`;
       await tx`INSERT INTO events(job_id,event_id,job_seq,attempt_id,type,payload_json)
         VALUES(${jobId},${generationId},${next},${continuation.request.attempt_id},'control_receipt',${tx.json({
           v:1,authority:"scheduler",subtype:"human_continuation",request_id:String(continuation.request.id),
-          reply_ref:String(continuation.request.reply_message_id),supersedes_attempt_id:String(continuation.request.attempt_id),
+          reply_ref:String(continuation.request.reply_message_id),supersedes_attempt_id:String(latest.id),
           target_attempt_no:Number(latest.attempt_no)+1,mode:"structured",remaining_execution_ms:continuation.remainingMs,
         })})`;
       await tx`UPDATE human_requests SET resumed_at=clock_timestamp(),target_attempt_no=${Number(latest.attempt_no)+1},
-        resume_error_code=NULL WHERE id=${continuation.request.id} AND resumed_at IS NULL AND status='answered'`;
+        resume_error_code=NULL WHERE id=${continuation.request.id}`;
     }
     const updated = {
       id: job.id,

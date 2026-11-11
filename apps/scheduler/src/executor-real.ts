@@ -1843,7 +1843,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
             : semanticState.done ? "done" : semanticState.hub ? "hub_decision" : null, () => semanticState.human?.payload.subject ?? null);
           platformRuntimeRegistered = true;
         }
-        const disposeHumanMessages = await registerHumanMessageRuntime(jobId, { sendMessage, writeWorkspaceFile });
+        const disposeHumanMessages = await registerHumanMessageRuntime(jobId, { sendMessage, writeWorkspaceFile },attemptId!);
         const disposeCanvas = canvasId && snapshot.agent_runtime?.capabilities.incrementalMessages === true
           ? await subscribeCanvasUpdates(canvasId, jobId, sendMessage)
           : undefined;

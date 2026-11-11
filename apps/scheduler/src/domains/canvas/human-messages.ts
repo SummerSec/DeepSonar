@@ -145,9 +145,9 @@ export async function deliverHumanMessage(messageId: string, control?: HumanMess
   }
 }
 
-export async function registerHumanMessageRuntime(jobId: string, control: HumanMessageRuntimeControl): Promise<() => void> {
+export async function registerHumanMessageRuntime(jobId: string, control: HumanMessageRuntimeControl, expectedAttemptId?:string): Promise<() => void> {
   const [attempt]=await sql`SELECT id FROM job_attempts WHERE job_id=${jobId} AND status='active'`;
-  if(!attempt) throw new Error("HUMAN_MESSAGE_ATTEMPT_NOT_ACTIVE");
+  if(!attempt||(expectedAttemptId&&attempt.id!==expectedAttemptId)) throw new Error("HUMAN_MESSAGE_ATTEMPT_NOT_ACTIVE");
   const registration={control,attemptId:String(attempt.id)};
   runtimeControls.set(jobId, registration);
   const planned = await sql`
@@ -195,10 +195,11 @@ export async function createHumanMessage(input: {
       const [locator]=await tx`SELECT job_id FROM human_requests WHERE id=${input.target.request_id} AND canvas_id=${input.canvasId}`;
       if(!locator) throw new HumanInterventionError(404,"HUMAN_REQUEST_NOT_FOUND","人工请求不存在或不属于当前任务。");
       [targetJob]=await tx`SELECT id,status FROM jobs WHERE id=${locator.job_id} AND canvas_id=${input.canvasId} FOR UPDATE`;
-      await tx`SELECT id FROM job_attempts WHERE job_id=${locator.job_id} ORDER BY attempt_no FOR UPDATE`;
+      const attempts=await tx`SELECT id,cancel_requested FROM job_attempts WHERE job_id=${locator.job_id} ORDER BY attempt_no FOR UPDATE`;
       [request]=await tx`SELECT * FROM human_requests WHERE id=${input.target.request_id} FOR UPDATE`;
       if(!targetJob||targetJob.status!=='waiting_human'||!request||request.status!=='open'
-        ||Number(request.revision)!==input.target.expected_revision)
+        ||Number(request.revision)!==input.target.expected_revision||request.resumed_at
+        ||attempts.at(-1)?.id!==request.attempt_id||attempts.at(-1)?.cancel_requested)
         throw new HumanInterventionError(409,"HUMAN_REQUEST_CHANGED","请求已处理或状态已变化，请读取最新请求后再回复。");
       [targetNode]=await tx`SELECT id FROM canvas_nodes WHERE job_id=${locator.job_id} AND node_type='job' ORDER BY created_at DESC LIMIT 1`;
     } else if (input.target.kind === "job") {
@@ -255,7 +256,7 @@ export async function createHumanMessage(input: {
       VALUES
         (${input.id}, ${input.canvasId}, ${String(humanNode.id)}, ${input.target.kind==='request'?'job':input.target.kind},
          ${targetNode?.id ? String(targetNode.id) : null}, ${String(targetJob.id)}, ${input.body},
-         ${request?.id??null},${input.target.kind==='request'?input.target.expected_revision:null})
+         ${request?String(request.id):null},${input.target.kind==='request'?input.target.expected_revision:null})
       RETURNING *`;
     for (const version of versions) {
       const filename = safeHumanMessageFilename(String(version.logical_key));
@@ -269,8 +270,8 @@ export async function createHumanMessage(input: {
     }
     if(request) {
       await tx`UPDATE human_requests SET status='answered',revision=revision+1,reply_message_id=${input.id},answered_at=clock_timestamp()
-        WHERE id=${request.id} AND status='open'`;
-      await tx`UPDATE canvas_nodes SET status='answered',updated_at=now() WHERE job_id=${targetJob.id}
+        WHERE id=${String(request.id)} AND status='open'`;
+      await tx`UPDATE canvas_nodes SET status='answered',updated_at=now() WHERE job_id=${String(targetJob.id)}
         AND node_type='human' AND body_json->>'message_id' IS NULL AND status='open'`;
     } else if (String(targetJob.status) === "waiting_human") {
       throw new HumanInterventionError(409,"HUMAN_REQUEST_REFERENCE_REQUIRED","请在对应人工请求中回复，携带请求引用和版本；消息尚未保存。");

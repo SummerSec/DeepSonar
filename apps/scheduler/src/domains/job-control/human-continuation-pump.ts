@@ -1,6 +1,7 @@
 import { sql } from "../../db.js";
 import { requeueJob } from "./rerun.js";
 import { HumanCheckpointManifest, readCheckpointFile, deleteCheckpointFiles } from "./human-checkpoint-files.js";
+import { pauseHumanExecutionClock } from "./human-continuation-clock.js";
 
 export async function pumpHumanContinuations(limit=16,requestId?:string) {
   // Publish unavailability before deleting immutable bytes. A failed deletion
@@ -13,7 +14,7 @@ export async function pumpHumanContinuations(limit=16,requestId?:string) {
       await sql`UPDATE human_requests SET checkpoint_deleted_at=clock_timestamp() WHERE id=${request.id}`;
     } catch { /* State is already blocked; retry physical reclamation next tick. */ }
   }
-  const requests=await sql`SELECT r.id,r.job_id,r.manifest_json,r.checkpoint_status FROM human_requests r
+  const requests=await sql`SELECT r.id,r.job_id,r.attempt_id,r.manifest_json,r.checkpoint_status,r.resources_released_at FROM human_requests r
     JOIN jobs j ON j.id=r.job_id WHERE r.status='answered' AND r.resumed_at IS NULL AND j.status='waiting_human'
       AND(${requestId??null}::uuid IS NULL OR r.id=${requestId??null}::uuid)
     ORDER BY r.resume_checked_at NULLS FIRST,r.answered_at,r.id LIMIT ${Math.min(64,Math.max(1,limit))}`;
@@ -23,6 +24,7 @@ export async function pumpHumanContinuations(limit=16,requestId?:string) {
       if(request.checkpoint_status!=="ready") continue;
       const manifest=HumanCheckpointManifest.parse(request.manifest_json);
       for(const file of manifest.files) await readCheckpointFile(String(request.id),file);
+      if(request.resources_released_at) await pauseHumanExecutionClock(sql,String(request.job_id),String(request.attempt_id));
       const result=await requeueJob(String(request.job_id),"resume-frozen",String(request.id));
       const code=result.kind==='ok'?null:result.kind==='not_resumable'?result.error_code??'HUMAN_CONTINUATION_BLOCKED':
         result.kind==='snapshot_stale'?'SNAPSHOT_STALE':'HUMAN_CONTINUATION_AUTHORIZATION_BLOCKED';

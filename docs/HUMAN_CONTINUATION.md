@@ -10,9 +10,9 @@
 
 schema 73 新增 human_requests 和 job_execution_clocks；human_messages 以 request_id/request_revision 精确关联请求。human 事件、请求、waiting_human 和 preparing 意图在同一原语义事务保存。历史事件仍不可变；Canvas 节点和 UI 不是恢复 authority。
 
-真实执行在 CLI 退出后、Dispatcher finally 销毁沙箱前保存断点。宿主在启动 CLI 前记录 Linux 沙箱 PID/start-time 基线，封存时排除宿主命令及祖先进程，暂停基线以外的新进程并确认停止。无法读取、暂停或验证时封存 blocked；后台进程不会在文件扫描时继续修改工作区。仅适用于隔离的 Linux 沙箱 PID namespace，不提供主机进程扫描入口。
+真实执行在 CLI 退出后、Dispatcher finally 销毁沙箱前保存断点。宿主在启动 CLI 前记录 Linux 沙箱 PID/start-time 基线，封存时排除宿主命令及祖先进程，暂停观察到的本轮新进程。另以 Linux inotify 在发现文件候选前建立目录监视，覆盖整个扫描/读取区间；修改、新文件、目录变化、事件溢出或监视失效均阻断本次保存，不把有限 PID 扫描本身当作一致性证明。复制后只有监视明确通过、所有 hash 核对且原沙箱可信销毁后才可 ready。仅适用于隔离 Linux 沙箱，不提供主机进程扫描入口。
 
-文件先扫描路径、大小和 SHA-256，再读取并核对。符号链接目录/特殊文件拒绝；平台注入文件、控制目录、CLI 私有配置、凭据缓存与敏感路径不保存。与已知受管秘密匹配的文件阻断封存；这不保证任意用户文件不存在未知秘密。上限为 256 文件、单文件 8 MiB、总计 64 MiB，封存 60 秒超时。hash 寻址文件保存到已有 BLOB_DIR 下 human-checkpoints/request_id/hash，读取必须重新校验，跨副本不可见不视为空恢复。
+文件先扫描路径、大小和 SHA-256，再读取并核对。符号链接目录、硬链接与特殊文件拒绝；平台注入文件、控制目录、CLI 私有配置、凭据缓存与敏感路径不保存。与已知受管秘密匹配的文件阻断封存；这不保证任意用户文件不存在未知秘密。上限为 256 文件、单文件 8 MiB、总计 64 MiB，封存 60 秒超时。hash 寻址文件保存到已有 BLOB_DIR 下 human-checkpoints/request_id/hash，读取必须重新校验，跨副本不可见不视为空恢复。
 
 manifest 绑定 Job、Attempt、请求、冻结快照摘要和 structured 模式。销毁沙箱必须由原 worker/Attempt 精确归属证明；随后原子撤销旧 Gateway/Control grants、结算确切 agent_run、记录 process_exited_at/resources_released_at、关闭旧 Attempt 为 interrupted 并暂停有效执行时钟，Job 保持 waiting_human。失败提交保留原 owner/effect/lease，现有恢复循环重核，不用 interrupted 反推销毁成功。未决的其他外部效果不被这一步结算。
 
@@ -32,9 +32,11 @@ Dispatcher 在 provision 和 agent_run 前再核对确切 successor 与文件；
 
 本片使用明确的 structured 新会话：恢复验证后的业务文件、原问题、用户回复和有界文件索引，再依既有 Hub/Canvas 按需读取当前事实/计划。CLI Session 仍按现有机制归档作证据，**未实现 Pi/Claude/DSH 原生会话恢复**，不声称跨进程 Session 原样续接。不得重放已接受业务效果；只有新执行的合法完成门和结算证明完成。
 
+启动提示只携带待处理回复的引用与状态，正文只经 inbox 投递，unknown 投递不从启动提示旁路再发。已 ACK 的历史可作为只读上下文供显式后继恢复使用，不再次投递。完成门要求当前回复已 ACK，否则返回可修正反馈；已知失败后的单 Job resume 重核原断点并追加下一 owner，不被首次 target_attempt_no 永久锁定。更换配置和任务批量恢复不能绕过断点身份门。
+
 ## 预算与边界
 
-有效执行时间由 job_execution_clocks 累计，可信回收后暂停，续做使用原剩余毫秒；排队和人工思考不耗执行时间。重复清理幂等，不重复扣时。崩溃未完成暂停的区间保守计费，不凭推测减去。请求次数、主 token、repair token、修正次数及 Plan lifetime 沿原累计账本；unknown usage 不按零消耗，原 repair deadline 不延长。
+有效执行时间由 job_execution_clocks 从首个受理 human 的原运行区间累计；可信回收且在途 Gateway 效果/用量结算后暂停，等待期间仍有未决模型调用则保守继续计时。jobs.started_at 保留本次实际开始时间用于停滞检测，execution_deadline_at 单独保存原剩余有效时间与 repair 硬期限的较早值；Control token、Gateway、完成/Plan 门与 Reaper 共同使用它。排队和纯人工等待不耗有效执行时间，重复清理不重复扣时。请求数、主/repair token、修正次数与 Plan lifetime 沿原账本，unknown 不按零消耗，原 repair deadline 不延长。
 
 封存等待保留当前 FIFO 占位，不占活跃执行槽。暂停/取消/归档和授权撤销仍由既有门控制。普通 failed 历史无合法新断点不自动续做；历史失败关联新 Job、原生 Session 继续和补充回复的专用编辑体验是剩余范围，不冒充本片已交付。
 

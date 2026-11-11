@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { spawnSync, spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +9,54 @@ import type { RuntimeHost } from "@deepsonar/runtime-sandbox";
 import { config } from "../../config.js";
 import { captureCheckpointFiles, checkpointHash, HumanCheckpointManifest, putCheckpointFile, readCheckpointFile,
   HUMAN_CHECKPOINT_FILE_BYTES } from "./human-checkpoint-files.js";
+import { checkpointQuiescenceScript } from "./human-checkpoint-process.js";
+import { CHECKPOINT_MUTATION_GUARD } from "./human-checkpoint-mutation.js";
+import { checkpointGuardFixture } from "./human-checkpoint-fixture.js";
+
+test("Linux kernel watch rejects a file added after candidate discovery",{skip:process.platform==='win32'},async()=>{
+  const directory=await mkdtemp(path.join(os.tmpdir(),'human-watch-'));
+  try {
+    for(const change of [false,true]) {
+      const child=spawn('python3',['-c',CHECKPOINT_MUTATION_GUARD,directory],{stdio:['pipe','pipe','pipe']});
+      let stdout='',stderr='',readyResolve!:()=>void;
+      const ready=new Promise<void>(resolve=>{readyResolve=resolve;});
+      child.stdout.on('data',chunk=>{stdout+=String(chunk);if(stdout.includes('\n')) readyResolve();});
+      child.stderr.on('data',chunk=>{stderr+=String(chunk);});
+      const closed=new Promise<number|null>((resolve,reject)=>{child.once('error',reject);child.once('exit',resolve);});
+      const timer=setTimeout(()=>child.kill(),5000);
+      try {
+        await Promise.race([ready,closed.then(()=>{throw new Error(stderr||'watch unavailable');})]);
+        if(change) await writeFile(path.join(directory,'late-business-file.txt'),'new progress');
+        child.stdin.end('seal\n');assert.equal(await closed,0,stderr);
+        const result=JSON.parse(stdout.trim().split('\n').at(-1)!);
+        assert.equal(result.sealed,!change,'kernel events must catch files absent from the manifest candidates');
+      } finally {clearTimeout(timer);child.kill();}
+    }
+  } finally {await rm(directory,{recursive:true,force:true});}
+});
+
+test("host quiescence protects baseline and ancestor identities, but freezes a reused PID", {skip:process.platform==='win32'},()=>{
+  const script=`import os,json,io,signal,types
+from unittest.mock import patch
+processes={1:['S',0,11],10:['S',1,999],20:['S',1,200],30:['S',1,300]}
+stopped=[]
+def read_stat(filename,*arguments,**keywords):
+ pid=int(filename.split('/')[2])
+ state,parent,start=processes[pid]
+ return io.StringIO(str(pid)+' (worker) '+state+' '+str(parent)+' '+'0 '*17+str(start))
+def stop_process(pid,action):
+ assert action==signal.SIGSTOP
+ stopped.append(pid)
+ processes[pid][0]='T'
+with patch('builtins.open',read_stat),patch('os.listdir',return_value=['1','10','20','30']),patch('os.getpid',return_value=20),patch('os.kill',stop_process):
+ exec(${JSON.stringify(checkpointQuiescenceScript(['1:11','10:100']))})
+assert set(stopped)=={10,30},stopped
+assert processes[10][0]=='T' and processes[30][0]=='T'
+`;
+  const result=spawnSync('python3',['-c',script],{encoding:'utf8',timeout:5000});
+  assert.equal(result.status,0,result.stderr);
+  assert.throws(()=>checkpointQuiescenceScript(['1:11;unsafe']),/./);
+});
 
 test("structured checkpoints reject unsafe paths, duplicate names and excessive bytes", () => {
   const manifest = { v: 1, job_id: randomUUID(), attempt_id: randomUUID(), request_id: randomUUID(),
@@ -31,9 +80,11 @@ test("capture checks source hashes and secrets; reads reject corruption and miss
   const requestId = randomUUID(), bytes = Buffer.from("retained work\0\xff"), filePath = "src/result.bin";
   const host = { run: async () => ({ exitCode: 0, stdout: JSON.stringify([
     { path: filePath, bytes: bytes.length, sha256: checkpointHash(bytes) }]), stderr: "" }),
+    runAsync:async()=>checkpointGuardFixture(),
     readWorkspaceFile: async (requested: string) => { assert.equal(requested, `/workspace/${filePath}`); return bytes; },
   } as unknown as RuntimeHost;
   try {
+    await assert.rejects(captureCheckpointFiles(host, requestId, [], []), /PROCESS_BASELINE_UNAVAILABLE/);
     const files = await captureCheckpointFiles(host, requestId, [], [], []);
     assert.equal(files.length, 1);
     assert.deepEqual(await readCheckpointFile(requestId, files[0]), bytes);

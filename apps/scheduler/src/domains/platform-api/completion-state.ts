@@ -11,7 +11,7 @@ export async function readCompletionExecutionState(db: typeof sql, jobId: string
   return db.begin(async transaction => {
     const tx = transaction as unknown as typeof sql;
     const [job] = await tx`SELECT id,status,lease_expires_at>clock_timestamp() AS leased,
-      started_at+timeout_sec*interval '1 second'>clock_timestamp() AS within_time
+      COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second')>clock_timestamp() AS within_time
       FROM jobs WHERE id=${jobId} FOR SHARE`;
     if (!job) return null;
     jobId = String(job.id);

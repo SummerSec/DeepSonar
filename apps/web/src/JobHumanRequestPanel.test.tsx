@@ -5,6 +5,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { JSDOM } from "jsdom";
 import type { JobDetail, JobExecutionState, JobHumanRequest } from "./api";
 import { JobHumanRequestPanel, JobHumanRequestSection } from "./JobHumanRequestPanel";
+import { api, type HumanContinuation, type CreateCanvasHumanMessage } from "./api";
+import { HumanContinuationReply } from "./HumanContinuationReply";
 
 const guidance = {
   question: "是否允许按已核对的范围继续验证？",
@@ -13,6 +15,24 @@ const guidance = {
   after_reply: "收到核对结果后，按平台允许的范围决定下一步。",
 };
 const reason = `${"需要人工核对的完整背景。".repeat(70)}原因正文末尾。`;
+const continuation:HumanContinuation={id:"11111111-1111-4111-8111-111111111111",revision:0,status:"open",
+  checkpoint_status:"ready",checkpoint_error_code:null,resume_error_code:null,overdue_at:"2026-11-11T00:00:00Z",
+  answered_at:null,resumed_at:null,mode:"structured",remaining_execution_ms:30000};
+
+test("overdue current requests offer a precise reply; saved or historical requests never ask twice",()=>{
+  const current=renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="waiting_human"
+    continuation={continuation} canvasId="canvas" onSendMessage={()=>{}}/>);
+  assert.match(current,/回复并继续/);assert.match(current,/仍可回复此请求/);assert.match(current,/新会话继续/);
+  assert.doesNotMatch(current,/打开任务人工消息/);
+  const answered=renderToStaticMarkup(<HumanContinuationReply continuation={{...continuation,status:"answered",
+    resume_error_code:"REPAIR_PAUSED"}} canvasId="canvas" canReply={true}/>);
+  assert.match(answered,/回复已保存/);assert.match(answered,/REPAIR_PAUSED/);assert.doesNotMatch(answered,/<textarea|<button/);
+  const readonly=renderToStaticMarkup(<HumanContinuationReply continuation={continuation} canvasId="canvas" canReply={false}/>);
+  assert.doesNotMatch(readonly,/<textarea|<button/);
+  const historical=renderToStaticMarkup(<JobHumanRequestPanel request={request()} status="failed"
+    continuation={continuation} canvasId="canvas" onSendMessage={()=>{}}/>);
+  assert.doesNotMatch(historical,/<textarea|<button/);
+});
 
 function request(overrides: Partial<JobHumanRequest> = {}): JobHumanRequest {
   return {
@@ -144,5 +164,39 @@ test("the current request opens the existing message entry and loses that action
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
       else Reflect.deleteProperty(globalThis, key);
     }
+  }
+});
+
+test("reply transport retry preserves the request revision, UUID and draft then reports saved",async()=>{
+  const dom=new JSDOM("<!doctype html><div id='reply'></div>",{url:"http://127.0.0.1"});
+  const replacements={window:dom.window,document:dom.window.document,HTMLElement:dom.window.HTMLElement,
+    Node:dom.window.Node,IS_REACT_ACT_ENVIRONMENT:true};
+  const previous=new Map(Object.keys(replacements).map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  for(const [key,value] of Object.entries(replacements)) Object.defineProperty(globalThis,key,{value,configurable:true,writable:true});
+  const savedMethod=api.createCanvasMessage,calls:CreateCanvasHumanMessage[]=[];
+  Reflect.set(api,"createCanvasMessage",async (_canvasId:string,payload:CreateCanvasHumanMessage)=>{
+    calls.push(payload);if(calls.length===1) throw new Error("保存结果未确认，请重试。");
+    return {id:payload.message_id,status:"planned"};
+  });
+  const {createRoot}=await import("react-dom/client");
+  const root=createRoot(dom.window.document.getElementById("reply")!);
+  try {
+    await act(async()=>root.render(<HumanContinuationReply continuation={continuation} canvasId="canvas" canReply={true}/>));
+    const textarea=dom.window.document.querySelector("textarea")!;
+    const setter=Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype,"value")!.set!;
+    await act(async()=>{setter.call(textarea,"Original authorized reference.");textarea.dispatchEvent(new dom.window.Event("input",{bubbles:true}));});
+    const form=dom.window.document.querySelector("form")!;
+    await act(async()=>{form.dispatchEvent(new dom.window.Event("submit",{bubbles:true,cancelable:true}));});
+    assert.match(dom.window.document.body.textContent!,/保存结果未确认/);
+    assert.equal(textarea.value,"Original authorized reference.");
+    await act(async()=>{form.dispatchEvent(new dom.window.Event("submit",{bubbles:true,cancelable:true}));});
+    assert.equal(calls.length,2);assert.deepEqual(calls[1],calls[0]);
+    assert.deepEqual(calls[0].target,{kind:"request",request_id:continuation.id,expected_revision:0});
+    assert.match(dom.window.document.body.textContent!,/回复已保存/);
+    assert.equal(dom.window.document.querySelector("textarea"),null);
+  } finally {
+    Reflect.set(api,"createCanvasMessage",savedMethod);
+    await act(async()=>root.unmount());dom.window.close();
+    for(const [key,descriptor] of previous) {if(descriptor) Object.defineProperty(globalThis,key,descriptor);else Reflect.deleteProperty(globalThis,key);}
   }
 });

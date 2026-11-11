@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import test from "node:test";
 import postgres from "postgres";
 import type { RuntimeHost } from "@deepsonar/runtime-sandbox";
+import { checkpointGuardFixture } from "./domains/job-control/human-checkpoint-fixture.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL?.trim();
 
@@ -280,6 +281,12 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
     const humans = await import("./domains/canvas/human-messages.js");
     const {pumpHumanContinuations}=await import("./domains/job-control/human-continuation-pump.js");
     const {sealHumanCheckpoint}=await import("./domains/job-control/human-checkpoint.js");
+    const acknowledgeReply=async(jobId:string)=>{
+      const [request]=await sql`SELECT reply_message_id FROM human_requests WHERE job_id=${jobId} ORDER BY created_at DESC LIMIT 1`;
+      assert.ok(request?.reply_message_id);
+      const dispose=await humans.registerHumanMessageRuntime(jobId,{sendMessage:async()=>{},writeWorkspaceFile:async()=>{}});
+      try {await humans.acknowledgeHumanMessage(jobId,String(request.reply_message_id));} finally {dispose();}
+    };
     const { destroyAndSettleHumanWaitRun, reconcileHumanWaitRuns } = await import("./dispatcher-human-wait.js");
     const acceptedHumanWait = async (accepted = true, withRepairRoot = true, exhaustTokens = false) => {
       const f = await setup(30, undefined, {}, 40, withRepairRoot), sandboxId = `synthetic-old-${f.jobId}`, humanEvent = randomUUID();
@@ -315,7 +322,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         AND attempt_id=${String(f.oldAttempt.id)} AND type='human'`;
       assert.ok(acceptedEvent);
       await sealHumanCheckpoint({jobId:f.jobId,attemptId:String(f.oldAttempt.id),
-        host:{run:async()=>({exitCode:0,stdout:'[]',stderr:''})} as unknown as RuntimeHost,
+        host:{run:async()=>({exitCode:0,stdout:'[]',stderr:''}),runAsync:async()=>checkpointGuardFixture()} as unknown as RuntimeHost,
         excludedPaths:[],secrets:[],processBaseline:[]});
       return { ...f, sandboxId, humanEvent: String(acceptedEvent.event_id), humanNode: String(human.id) };
     };
@@ -426,6 +433,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           if(mode==="ignore") { assert.equal(response.statusCode,409,response.body); await assertNoGeneration(f.jobId); return; }
           assert.equal(response.statusCode,202,response.body); await pumpHumanContinuations(1,f.humanEvent); await assertNoGeneration(f.jobId);
           const { next, token } = await f.start(); assert.notEqual(String(next.id), String(f.oldAttempt.id));
+          await acknowledgeReply(f.jobId);
           assert.equal((await request(token.plaintext)).statusCode, 200); await settled(f.jobId, 2);
           const key = randomUUID(), summary = "Synthetic successor after reachable cleanup reconciliation.";
           const completed = await f.propose(key, 0, summary); assert.equal(completed.statusCode, 200, completed.body);
@@ -809,8 +817,10 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       };
       await t.test(`#1012 ordinary ${mode}: shared gates and grant fencing without a repair generation`, async () => {
         const f = await acceptedHumanWait(true, false), send = await continuation(f);
-        const initial=await send();
-        assert.equal(initial.statusCode,mode==="reply"?202:409,initial.body);
+        const [target]=await sql`SELECT id FROM canvas_nodes WHERE job_id=${f.jobId} AND node_type='job'`;
+        const initial=mode==='reply'?await app.inject({method:'POST',url:`/canvases/${f.canvasId}/messages`,
+          payload:{message_id:randomUUID(),target:{kind:'job',node_id:String(target.id)},body:'Unreferenced wait cannot resume.'}}):await send();
+        assert.equal(initial.statusCode,409,initial.body);
         await closeWait(f);
         await restoreActiveGrantsFixture(f);
         const [frozen] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${f.jobId}`;
@@ -825,6 +835,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         const [fenced] = await sql`SELECT count(*)::int AS count FROM job_tokens WHERE job_id=${f.jobId} AND status='active'`;
         assert.equal(fenced.count, 0);
         const { token } = await f.start();
+        await acknowledgeReply(f.jobId);
         assert.equal(await readBudget(f.jobId), null);
         const calls = upstreamCalls;
         assert.notEqual((await request(f.oldGateway.plaintext)).statusCode, 200);
@@ -839,13 +850,15 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
         await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
       });
       for (const blocker of ["tokens", "requests", "effect_pending", "unknown", "usage", "paused", "policy", "transition"] as const) {
-        await t.test(`#1012 ordinary ${mode} ${blocker}: full transaction rollback without a repair root`, async () => {
+        await t.test(`#1074 ordinary ${mode} ${blocker}: reply persists while unsafe execution stays blocked`, async () => {
           const f = await acceptedHumanWait(true, false, blocker === "tokens");
           await closeWait(f);
           if (blocker === "requests") await sql`UPDATE job_tokens SET max_requests=used_requests WHERE job_id=${f.jobId}`;
           if (blocker === "effect_pending" || blocker === "unknown") {
-            await attempts.beginEffect(sql, String(f.oldAttempt.id), { effectId: "ordinary-unresolved", kind: "gateway_model_request", intent: { fixture: true } });
-            if (blocker === "unknown") await attempts.markEffectUnknown(sql, String(f.oldAttempt.id), "ordinary-unresolved", { fixture: "unknown external result" });
+            // A historical unresolved row is a fixture, never a new effect authorized on the closed owner.
+            await sql`INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status,replay_policy)
+              VALUES(${String(f.oldAttempt.id)},${f.jobId},'ordinary-unresolved','gateway_model_request',
+                ${blocker==='unknown'?'unknown':'effect_pending'},'never')`;
           }
           if (blocker === "usage") await sql`UPDATE job_usage_ledger SET settlement_status='unknown' WHERE job_id=${f.jobId}`;
           if (blocker === "paused") await sql`UPDATE canvases SET target_json=target_json || ${sql.json({ execution_control: { paused: true } })} WHERE id=${f.canvasId}`;
@@ -858,9 +871,6 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
           }
           try {
             const send = await continuation(f), before = await captureBatch(f.canvasId, [f.jobId]), calls = upstreamCalls;
-            const code = { tokens: "JOB_TOKEN_EXHAUSTED", requests: "REPAIR_REQUESTS_EXHAUSTED",
-              effect_pending: "REPAIR_EFFECT_UNRESOLVED", unknown: "REPAIR_EFFECT_UNRESOLVED", usage: "JOB_TOKEN_USAGE_UNKNOWN",
-              paused: "REPAIR_PAUSED", policy: "GATEWAY_REQUEST_BUDGET_INVALID", transition: "REPAIR_REQUEUE_CHANGED" }[blocker];
             for (let retry = 0; retry < 2; retry++) {
               const response = await send(); assert.equal(response.statusCode,mode==="reply"?202:409,response.body);
               if(mode==="ignore") { assert.equal(response.json().error_code,"HUMAN_REPLY_REQUIRED"); assert.deepEqual(await captureBatch(f.canvasId,[f.jobId]),before); }

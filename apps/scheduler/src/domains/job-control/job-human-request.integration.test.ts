@@ -103,9 +103,9 @@ test("Job human detail uses durable history, latest Attempt and existing HTTP au
         const request = terminal.json().human_request;
         assert.equal(request.event_id, eventId);
         assert.deepEqual(request.payload, payload);
-        const live = ["running", "waiting_human"].includes(status);
+        const live = status === "waiting_human";
         assert.equal(request.current, live);
-        if (!live) {
+        if (!["running", "waiting_human"].includes(status)) {
           const state = terminal.json().job.execution_state;
           assert.equal(state.blocker, "human_request_closed");
           assert.equal(state.accepted_history_ref, eventId);

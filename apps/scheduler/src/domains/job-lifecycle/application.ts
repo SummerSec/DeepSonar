@@ -225,7 +225,7 @@ export function createSqlJobLifecycleApplication(
                           error = COALESCE(error, '') || '超时（Reaper 判定）'
           WHERE status IN ('claimed','provisioning','running')
             AND started_at IS NOT NULL
-            AND started_at + (timeout_sec * interval '1 second') < now()
+            AND COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second') < now()
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "timeout", { reason: "reaper_timeout" }, "超时（Reaper 判定）");

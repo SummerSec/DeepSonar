@@ -76,7 +76,7 @@ export async function invokeDurableCompletion(input: {
     const [active] = await database`SELECT a.id FROM job_attempts a JOIN jobs j ON j.id=a.job_id
       WHERE a.id=${result.receipt.attempt_id} AND a.job_id=${principal.jobId} AND a.status='active'
       AND NOT a.cancel_requested AND j.status='running' AND j.lease_expires_at>clock_timestamp()
-      AND j.started_at+j.timeout_sec*interval '1 second'>clock_timestamp()
+      AND COALESCE(j.execution_deadline_at,j.started_at+j.timeout_sec*interval '1 second')>clock_timestamp()
       AND NOT EXISTS (SELECT 1 FROM job_attempt_effects e WHERE e.job_id=j.id AND (e.status='unknown'
         OR (e.status='effect_pending' AND NOT (e.attempt_id=a.id AND e.effect_kind IN ('agent_run','agent_resume')))))`;
     if (active) {

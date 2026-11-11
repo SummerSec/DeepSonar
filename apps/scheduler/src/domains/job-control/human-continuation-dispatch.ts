@@ -1,7 +1,13 @@
 import { sql } from "../../db.js";
 import { assertHumanContinuationOwner } from "./human-checkpoint.js";
 import { frozenSnapshotStaleDetail } from "./rerun.js";
-import { assertRepairExecutionOwner } from "../event-ingestion/repair-token-budget.js";
+import { assertRepairExecutionOwner, readRepairTokenBudget } from "../event-ingestion/repair-token-budget.js";
+
+export async function hasHumanOrRepairBoundary(db:typeof sql,jobId:string) {
+  if(await readRepairTokenBudget(db,jobId)) return true;
+  const [request]=await db`SELECT id FROM human_requests WHERE job_id=${jobId} LIMIT 1`;
+  return !!request;
+}
 
 export async function assertContinuationExecutionOwner(db:typeof sql,jobId:string,attemptId:string) {
   await assertRepairExecutionOwner(db,jobId,attemptId);

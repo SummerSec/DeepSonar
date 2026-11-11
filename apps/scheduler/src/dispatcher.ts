@@ -1,7 +1,6 @@
 import { cleanupDispatcherSandbox } from "./dispatcher-human-wait.js";
 import { humanExecutionStartedAt } from "./domains/job-control/human-continuation-clock.js";
-import { preflightHumanContinuation, assertContinuationExecutionOwner } from "./domains/job-control/human-continuation-dispatch.js";
-import { readRepairTokenBudget } from "./domains/event-ingestion/repair-token-budget.js";
+import { preflightHumanContinuation, assertContinuationExecutionOwner, hasHumanOrRepairBoundary } from "./domains/job-control/human-continuation-dispatch.js";
 import { frozenGatewayRequestBudget, GatewayRequestBudgetError } from "./gateway-request-policy.js";
 import { recordGatewaySnapshotNoStart } from "./gateway-snapshot-no-start.js";
 import { frozenTaskContract, taskContractPreflight, TaskContractBlockedError } from "./task-contract-preflight.js";
@@ -909,7 +908,7 @@ export async function retryProvisioningJob(
     // A repair-bearing Job needs explicit safe generation admission; ordinary
     // automatic retries must not strand it on an unauthorized successor Attempt.
     await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
-    if (await readRepairTokenBudget(tx, jobId)) return false;
+    if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
     const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
       SELECT status, outcome_json, state_json
       FROM job_attempts
@@ -941,7 +940,7 @@ async function retryTruncatedExecutionJob(
     // A repair-bearing Job needs explicit safe generation admission; ordinary
     // automatic retries must not strand it on an unauthorized successor Attempt.
     await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
-    if (await readRepairTokenBudget(tx, jobId)) return false;
+    if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
     const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
       SELECT status, outcome_json, state_json
       FROM job_attempts
@@ -973,7 +972,7 @@ async function retryContextWindowExceededJob(
     // A repair-bearing Job needs explicit safe generation admission; ordinary
     // automatic retries must not strand it on an unauthorized successor Attempt.
     await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
-    if (await readRepairTokenBudget(tx, jobId)) return false;
+    if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
     const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
       SELECT status, outcome_json, state_json
       FROM job_attempts

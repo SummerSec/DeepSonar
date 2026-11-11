@@ -19,7 +19,10 @@ export async function recordHumanRequest(db: typeof sql, jobId: string, eventId:
 }
 
 export async function readHumanContinuation(db: typeof sql, jobId: string) {
-  const [request] = await db`SELECT id,attempt_id,revision,status,checkpoint_status,checkpoint_error_code,
+  const [request] = await db<Array<{id:string;attempt_id:string;revision:number;status:string;checkpoint_status:string;
+    checkpoint_error_code:string|null;process_exited_at:Date|null;resources_released_at:Date|null;overdue_at:Date|null;
+    reply_message_id:string|null;target_attempt_no:number|null;resume_error_code:string|null;created_at:Date;
+    answered_at:Date|null;resumed_at:Date|null;checkpoint_expires_at:Date}>>`SELECT id,attempt_id,revision,status,checkpoint_status,checkpoint_error_code,
     process_exited_at,resources_released_at,overdue_at,reply_message_id,target_attempt_no,resume_error_code,
     created_at,answered_at,resumed_at,checkpoint_expires_at FROM human_requests WHERE job_id=${jobId} ORDER BY created_at DESC,id DESC LIMIT 1`;
   if (!request) return null;

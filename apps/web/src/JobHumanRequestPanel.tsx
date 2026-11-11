@@ -37,7 +37,8 @@ export function JobHumanRequestPanel({ request, status, onSendMessage, continuat
       </div>
       <p className="mt-2 text-[12px] leading-5 text-zinc-400">
         {current
-          ? "请按以下指引处理，可通过任务中的人工消息入口回复。回复是否被接受及后续执行以平台核验结果为准。"
+          ? continuation ? "请按以下指引处理，并在下方回复。回复保存和后续执行分别以平台核验结果为准。"
+            : "请按以下指引处理，可通过任务中的人工消息入口回复。回复是否被接受及后续执行以平台核验结果为准。"
           : terminal
             ? "本次运行已结束；以下为已保存的人工请求，仅供查看，不再等待此请求的回复。"
             : "此请求属于历史执行，当前运行不再等待此请求的回复，仅供查看。"}
