@@ -49,13 +49,13 @@ test("#958 accepted or prepared terminal prevents even a recovery SQL read", asy
 function storage(onRead: () => void, override: Record<string, unknown> = {}) {
   const db = Object.assign(async (strings: TemplateStringsArray,...parameters:unknown[]) => {
     const query = strings.join("?").replace(/\s+/g, " ");
+    if (query.includes("AS revision")) return [{ count: 0, revision: null, ...override }];
+    if (query.includes("FROM events")||query.includes("FROM human_requests")) return [];
     if (query.includes("SELECT id,status,lease_expires_at")) {
       onRead(); return [{ id:String(parameters[0]),status: "running", leased: true, within_time: true, ...override }];
     }
     if (query.includes("SELECT id,status,cancel_requested")) return [{ id: attemptId, status: "active", cancel_requested: false, ...override }];
-    if (query.includes("AS revision")) return [{ count: 0, revision: null, ...override }];
     if (query.includes("SELECT COUNT(*)::int AS count FROM job_attempt_effects")) return [{ count: override.effect_count ?? 0 }];
-    if (query.includes("FROM events")||query.includes("FROM human_requests")) return [];
     throw new Error(`unexpected query: ${query}`);
   }, { begin: async (callback: (tx: unknown) => Promise<unknown>) => callback(db) }) as unknown as typeof sql;
   return db;

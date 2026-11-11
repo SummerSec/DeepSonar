@@ -61,11 +61,11 @@ export async function destroyAndSettleHumanWaitRun(
       runtime_grants_revoked: true,
     } });
     if (!settled) throw new Error("HUMAN_WAIT_RUN_SETTLEMENT_CHANGED");
-    await pauseHumanExecutionClock(tx,input.jobId,input.attemptId);
-    await tx`UPDATE human_requests SET resources_released_at=now(),process_exited_at=now(),
+    await tx`UPDATE human_requests SET resources_released_at=clock_timestamp(),process_exited_at=clock_timestamp(),
       checkpoint_status=CASE WHEN manifest_json IS NULL THEN 'blocked' WHEN checkpoint_status='preparing' THEN 'ready' ELSE checkpoint_status END,
       checkpoint_error_code=CASE WHEN manifest_json IS NULL THEN COALESCE(checkpoint_error_code,'HUMAN_CHECKPOINT_UNAVAILABLE') ELSE checkpoint_error_code END
       WHERE job_id=${input.jobId} AND attempt_id=${input.attemptId}`;
+    await pauseHumanExecutionClock(tx,input.jobId,input.attemptId);
     await markAttemptInterrupted(tx,input.jobId,"human_wait_checkpoint_sealed");
     await tx`UPDATE jobs SET sandbox_id=NULL,lease_expires_at=NULL,heartbeat_at=NULL
       WHERE id=${input.jobId} AND status='waiting_human'`;

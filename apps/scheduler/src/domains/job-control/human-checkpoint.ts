@@ -6,6 +6,7 @@ import { projectJobHumanRequestPayload } from "./job-human-request.js";
 import type { HumanPayload } from "@deepsonar/shared-types";
 import { readCheckpointProcessBaseline } from "./human-checkpoint-process.js";
 import { collectSecretValues } from "../../credential-secret-projection.js";
+import { restoreAcknowledgedHumanAttachments } from "./human-continuation-inbox.js";
 
 export function checkpointManagedSecrets(env:Record<string,unknown>,files:Record<string,unknown>,direct:readonly(string|null|undefined)[]) {
   const materialized=Object.values(files).flatMap(config=>{
@@ -99,6 +100,7 @@ export async function restoreHumanCheckpoint(input:{jobId:string;attemptNo:numbe
   for(const file of saved.manifest.files) files.push({file,bytes:await readCheckpointFile(String(saved.request.id),file)});
   // The successor is a fresh sandbox; no old process can mutate these paths.
   for(const {file,bytes} of files) await input.host.uploadFile(bytes,`/workspace/${file.path}`);
+  if(saved.message.delivery_status==='acknowledged') await restoreAcknowledgedHumanAttachments(input.jobId,String(saved.message.id),input.host);
   const acknowledgedHistory=saved.message.delivery_status==='acknowledged'
     ? `Previously acknowledged reply history (already processed; do not execute it twice): ${String(saved.message.body)}\n` : '';
   return `[Scheduler continuation: structured new session]\nContinue the same authorized task from the restored workspace and existing Canvas facts. Do not replay accepted effects. Recheck changing external prerequisites.\nPrevious request: ${JSON.stringify(projectJobHumanRequestPayload(saved.request.payload_json))}\nSaved reply reference: ${String(saved.message.id)}; delivery status: ${String(saved.message.delivery_status)}. Pending reply contents are delivered only through the governed inbox. Never replay unknown delivery.\n${acknowledgedHistory}Process delivered input and ack_human_message before completing; reading a reference alone is not an ACK.\nRestored file count: ${files.length}; sample: ${JSON.stringify(files.slice(0,24).map(entry=>entry.file.path))}\n`;

@@ -58,12 +58,13 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       const host = { run: async () => ({ exitCode: 0, stdout: JSON.stringify([{path:'src/work.txt',bytes:bytes.length,sha256:checkpointHash(bytes)}]), stderr:'' }),
         runAsync:async()=>checkpointGuardFixture(),
         readWorkspaceFile: async () => bytes, uploadFile: async (content: Buffer, destination: string) => { restored.set(destination, content); },
+        writeHumanInboxFile: async (destination:string,content:Buffer) => {restored.set(destination,content);},
       } as unknown as RuntimeHost;
       const seal = () => checkpoints.sealHumanCheckpoint({ jobId, attemptId, host, excludedPaths: [], secrets: [], processBaseline: [] });
       const close = (destroy = async () => {}) => destroyAndSettleHumanWaitRun(sql, { destroy }, { jobId, attemptId, sandboxId });
-      const reply = (messageId = randomUUID(), expectedRevision = 0, body = 'Use the original authorized reference.') => app.inject({
+      const reply = (messageId = randomUUID(), expectedRevision = 0, body = 'Use the original authorized reference.', attachmentVersionIds:string[]=[]) => app.inject({
         method: 'POST', url: `/canvases/${canvasId}/messages`, payload: { message_id: messageId,
-          target: { kind: 'request', request_id: requestId, expected_revision: expectedRevision }, body },
+          target: { kind: 'request', request_id: requestId, expected_revision: expectedRevision }, body, attachment_version_ids:attachmentVersionIds },
       });
       return { jobId, canvasId, attemptId, requestId, host, bytes, restored, seal, close, reply };
     };
@@ -125,9 +126,36 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       await core.ingestEvent(fixture.jobId,{v:1,event_id:completionDoneEventId(fixture.jobId,key),type:'done',payload:{summary}});
       assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,'succeeded');
     });
+    await context.test('late usage settlement closes an unanswered wait at the durable boundary, even after scheduler downtime',async()=>{
+      const fixture=await setup();await fixture.seal();
+      const effectId='gateway.delayed';
+      await attempts.beginEffect(sql,fixture.attemptId,{effectId,kind:'gateway_model_request',replayPolicy:'never'});
+      await fixture.close();
+      const released=new Date(Date.now()-2*86400_000),started=new Date(released.getTime()-10_000),settled=new Date(released.getTime()+5_000);
+      await sql`UPDATE human_requests SET resources_released_at=${released},process_exited_at=${released} WHERE id=${fixture.requestId}`;
+      await sql`UPDATE job_execution_clocks SET active_since=${started},used_ms=0 WHERE job_id=${fixture.jobId}`;
+      await pumpHumanContinuations();
+      assert.ok((await sql`SELECT active_since FROM job_execution_clocks WHERE job_id=${fixture.jobId}`)[0].active_since,'unsettled requests remain conservative');
+      await attempts.settleEffect(sql,fixture.attemptId,effectId,{status:'settled',outcome:{result:'fixture'}});
+      await sql`UPDATE job_attempt_effects SET settled_at=${settled} WHERE attempt_id=${fixture.attemptId} AND effect_id=${effectId}`;
+      await sql`INSERT INTO job_usage_ledger(job_id,project_id,attempt_id,effect_id,request_no,provider,observed_at)
+        VALUES(${fixture.jobId},${projectId},${fixture.attemptId},${effectId},1,'fixture',${settled})`;
+      await pumpHumanContinuations();await pumpHumanContinuations();
+      assert.equal((await sql`SELECT status FROM human_requests WHERE id=${fixture.requestId}`)[0].status,'open');
+      const [closed]=await sql`SELECT active_since,used_ms FROM job_execution_clocks WHERE job_id=${fixture.jobId}`;
+      assert.equal(closed.active_since,null);assert.equal(Number(closed.used_ms),15_000,'poll/downtime delay is not execution time; pause is idempotent');
+      assert.equal(await clock.remainingHumanExecutionMs(sql,fixture.jobId),3600_000-15_000);
+      assert.equal((await fixture.reply()).statusCode,202);await pumpHumanContinuations(1,fixture.requestId);
+      assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,'pending');
+      await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+    });
     await context.test('explicit recovery after a known successor failure admits Attempt 3 using the same checkpoint',async()=>{
       const fixture=await setup();await fixture.seal();await fixture.close();
-      const response=await fixture.reply();assert.equal(response.statusCode,202,response.body);
+      const {createSharedAsset}=await import('../shared-assets/index.js');
+      const attachmentBytes=Buffer.from('immutable authorized reference');
+      const asset=await createSharedAsset({scope:'project',projectId,key:`reference-${randomUUID()}.txt`,contentType:'text/plain',
+        bytes:attachmentBytes,origin:'human',actor:'fixture'});
+      const response=await fixture.reply(randomUUID(),0,'Use the attached authorized reference.',[String(asset.version_id)]);assert.equal(response.statusCode,202,response.body);
       const messageId=String(response.json().id);await pumpHumanContinuations(1,fixture.requestId);
       assert.ok((await claimPendingJobs()).some(job=>job.id===fixture.jobId));
       const [second]=await sql`SELECT id FROM job_attempts WHERE job_id=${fixture.jobId} AND status='active'`;
@@ -148,6 +176,16 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       const [generation]=await sql`SELECT payload_json FROM events WHERE job_id=${fixture.jobId}
         AND payload_json->>'subtype'='human_continuation' ORDER BY job_seq DESC LIMIT 1`;
       assert.equal(generation.payload_json.supersedes_attempt_id,String(second.id));
+      const [snapshot]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
+      const [attachment]=await sql`SELECT workspace_path FROM human_message_attachments WHERE message_id=${messageId}`;
+      const prompt=await checkpoints.restoreHumanCheckpoint({jobId:fixture.jobId,attemptNo:3,snapshot:snapshot.agent_snapshot_json,host:fixture.host});
+      assert.match(prompt,/Previously acknowledged reply history/);
+      assert.deepEqual(fixture.restored.get(String(attachment.workspace_path)),attachmentBytes,'acknowledged immutable input remains available in a fresh sandbox');
+      let replayed=0;
+      const unregisterThird=await humans.registerHumanMessageRuntime(fixture.jobId,{sendMessage:async()=>{replayed++;},writeWorkspaceFile:async()=>{}},String(third.id));
+      unregisterThird();assert.equal(replayed,0,'ACK history is not injected a second time');
+      await sql`UPDATE human_message_attachments SET content_sha256=${'0'.repeat(64)} WHERE message_id=${messageId}`;
+      await assert.rejects(checkpoints.restoreHumanCheckpoint({jobId:fixture.jobId,attemptNo:3,snapshot:snapshot.agent_snapshot_json,host:fixture.host}),/HUMAN_CHECKPOINT_INBOX_HASH_MISMATCH/);
       await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
     });
     await context.test('a paused project queue preserves unmanaged execution and its already active head',async()=>{

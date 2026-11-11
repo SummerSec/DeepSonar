@@ -1,9 +1,10 @@
 import { sql } from "../../db.js";
 import { requeueJob } from "./rerun.js";
 import { HumanCheckpointManifest, readCheckpointFile, deleteCheckpointFiles } from "./human-checkpoint-files.js";
-import { pauseHumanExecutionClock } from "./human-continuation-clock.js";
+import { pauseHumanExecutionClock, reconcileReleasedHumanClocks } from "./human-continuation-clock.js";
 
 export async function pumpHumanContinuations(limit=16,requestId?:string) {
+  await reconcileReleasedHumanClocks(sql);
   // Publish unavailability before deleting immutable bytes. A failed deletion
   // remains retryable; it never restores the request's ready status.
   const expired=await sql`UPDATE human_requests SET checkpoint_status='blocked',checkpoint_error_code='HUMAN_CHECKPOINT_EXPIRED'

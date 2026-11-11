@@ -30,7 +30,7 @@ async function capture(db: ReturnType<typeof postgres>) {
   const result: Record<string, unknown> = {};
   for (const table of ["projects", "canvases", "jobs", "job_attempts", "credentials", "job_tokens", "job_usage_ledger"]) {
     const rows = await db.unsafe(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY to_jsonb(t)::text`);
-    result[table] = rows.map(row => row.row);
+    result[table] = rows.map(row => table === 'jobs' ? { execution_deadline_at: null, ...row.row } : row.row);
   }
   return result;
 }

@@ -22,7 +22,7 @@ test("schema baseline declares SCHEMA_VERSION and has no migration ledger", asyn
   );
   assert.ok(match, "schema.sql must declare schema_meta version");
   assert.equal(Number(match[1]), SCHEMA_VERSION);
-  assert.equal(SCHEMA_VERSION, 72);
+  assert.equal(SCHEMA_VERSION, 73);
   for (const definition of [
     "CREATE INDEX project_finding_candidate_sources_finding_idx ON project_finding_candidate_sources(project_id, finding_id)",
     "CREATE INDEX project_finding_candidate_edges_left_finding_idx ON project_finding_candidate_edges(project_id, left_id)",

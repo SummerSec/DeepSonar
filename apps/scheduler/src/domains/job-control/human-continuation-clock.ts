@@ -22,13 +22,35 @@ export async function beginHumanExecutionClock(db: typeof sql, jobId: string, at
 }
 
 export async function pauseHumanExecutionClock(db: typeof sql, jobId: string, attemptId: string) {
-  await db`UPDATE job_execution_clocks SET used_ms=used_ms+GREATEST(0,
-    FLOOR(EXTRACT(EPOCH FROM(clock_timestamp()-active_since))*1000)::bigint),
+  // Reconciliation can run long after release or the final usage settlement.
+  // Close at those durable facts, never at the time a reply/poll arrives.
+  await db`WITH boundary AS (SELECT GREATEST(r.resources_released_at,r.process_exited_at,
+      (SELECT MAX(GREATEST(e.settled_at,u.observed_at)) FROM job_attempt_effects e
+        JOIN job_usage_ledger u ON u.job_id=e.job_id AND u.attempt_id=e.attempt_id AND u.effect_id=e.effect_id
+        WHERE e.job_id=${jobId} AND e.attempt_id=${attemptId} AND e.effect_kind='gateway_model_request')) AS stopped_at
+    FROM human_requests r WHERE r.job_id=${jobId} AND r.attempt_id=${attemptId}
+      AND r.resources_released_at IS NOT NULL AND r.process_exited_at IS NOT NULL)
+    UPDATE job_execution_clocks SET used_ms=used_ms+GREATEST(0,
+    FLOOR(EXTRACT(EPOCH FROM(COALESCE((SELECT stopped_at FROM boundary),clock_timestamp())-active_since))*1000)::bigint),
     active_since=NULL,updated_at=now() WHERE job_id=${jobId} AND attempt_id=${attemptId} AND active_since IS NOT NULL
       AND NOT EXISTS(SELECT 1 FROM job_attempt_effects e LEFT JOIN job_usage_ledger usage
         ON usage.job_id=e.job_id AND usage.attempt_id=e.attempt_id AND usage.effect_id=e.effect_id
         WHERE e.job_id=${jobId} AND e.effect_kind='gateway_model_request'
-          AND (e.status<>'settled' OR usage.settlement_status IS DISTINCT FROM 'settled'))`;
+          AND (e.status<>'settled' OR e.settled_at IS NULL OR usage.settlement_status IS DISTINCT FROM 'settled'))`;
+}
+
+/** Independent of replies; unresolved rows cannot starve settled open waits. */
+export async function reconcileReleasedHumanClocks(db:typeof sql,limit=64) {
+  const clocks=await db`SELECT c.job_id,c.attempt_id FROM job_execution_clocks c
+    WHERE c.active_since IS NOT NULL AND EXISTS(SELECT 1 FROM human_requests r
+      WHERE r.job_id=c.job_id AND r.attempt_id=c.attempt_id AND r.resumed_at IS NULL
+        AND r.resources_released_at IS NOT NULL AND r.process_exited_at IS NOT NULL)
+      AND NOT EXISTS(SELECT 1 FROM job_attempt_effects e LEFT JOIN job_usage_ledger u
+        ON u.job_id=e.job_id AND u.attempt_id=e.attempt_id AND u.effect_id=e.effect_id
+        WHERE e.job_id=c.job_id AND e.effect_kind='gateway_model_request'
+          AND(e.status<>'settled' OR e.settled_at IS NULL OR u.settlement_status IS DISTINCT FROM 'settled'))
+    ORDER BY c.active_since,c.job_id LIMIT ${Math.min(64,Math.max(1,limit))}`;
+  for(const clock of clocks) await pauseHumanExecutionClock(db,String(clock.job_id),String(clock.attempt_id));
 }
 
 export async function remainingHumanExecutionMs(db: typeof sql, jobId: string): Promise<number | null> {
