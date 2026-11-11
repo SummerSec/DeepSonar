@@ -93,7 +93,7 @@ for (const mode of ["progress-only", "unknown", "unknown-failure"]) {
     for (const warning of warnings) {
       assert.equal(warning.code, "unknown_runtime_event");
       const detail = JSON.parse(warning.detail!);
-      assert.equal(detail.adapter, "pi"); assert.equal(detail.version, "1.4.0");
+      assert.equal(detail.adapter, "pi"); assert.equal(detail.version, "1.5.2");
       assert.equal(detail.count, detail.phase === "first" ? 1 : 25);
       assert.match(detail.types[0].hash, /^[a-f0-9]{16}$/u);
     }
@@ -104,7 +104,7 @@ for (const mode of ["progress-only", "unknown", "unknown-failure"]) {
 test("#1038 type summaries are bounded, redact before hashing and retain total warning occurrences", () => {
   const warnings: RuntimeWarning[] = [];
   const secret = "synthetic-warning-type-token";
-  const report = createRuntimeWarningReporter({ id: "pi", version: "1.4.0" }, w => warnings.push(w),
+  const report = createRuntimeWarningReporter({ id: "pi", version: "1.5.2" }, w => warnings.push(w),
     text => String(redactRuntimeSecrets(text, [secret])));
   for (let i = 0; i < 100; i++) for (let n = 0; n < 2; n++) report.warn(
     { code: "unknown_runtime_event", detail: "unrecognized_stream_type" }, { type: `${secret}-${i}`, body: "PRIVATE BODY" });

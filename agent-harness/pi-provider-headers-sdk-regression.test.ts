@@ -20,13 +20,13 @@ const selectedHeaders = (headers: Record<string, unknown>) => Object.fromEntries
   Object.entries(headers).filter(([key]) => key.startsWith("x-synthetic-")).sort(([a], [b]) => a.localeCompare(b)),
 );
 
-test("Pi 1.4.0 real composer retains built-ins and agrees with Gateway header layers", { timeout: 60000 }, async () => {
+test("Pi 1.5.2 real composer retains built-ins and agrees with Gateway header layers", { timeout: 60000 }, async () => {
   const lock = JSON.parse(await readFile(join(fixture, "package-lock.json"), "utf8"));
   const locked = lock.packages["node_modules/@earendil-works/pi-coding-agent"];
-  assert.equal(locked.version, "1.4.0");
+  assert.equal(locked.version, "1.5.2");
   assert.equal(locked.integrity, "sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==");
-  assert.equal(JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")).version, "1.4.0");
-  assert.equal(JSON.parse(await readFile(join(fixture, "node_modules/@earendil-works/pi-ai/package.json"), "utf8")).version, "1.4.0");
+  assert.equal(JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")).version, "1.5.2");
+  assert.equal(JSON.parse(await readFile(join(fixture, "node_modules/@earendil-works/pi-ai/package.json"), "utf8")).version, "1.5.2");
   const { ModelRuntime } = await import(pathToFileURL(join(packageRoot, "dist/core/model-runtime.js")).href);
   const { ModelRegistry } = await import(pathToFileURL(join(packageRoot, "dist/core/model-registry.js")).href);
   const directory = await mkdtemp(join(tmpdir(), "deepsonar-pi-composer-"));

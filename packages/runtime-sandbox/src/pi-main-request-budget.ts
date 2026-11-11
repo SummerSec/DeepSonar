@@ -33,7 +33,7 @@ export function assertPiAnthropicThinkingBudget(model, options, effectiveMaxToke
 }
 `;
 
-/** Pi 1.4.0's public provider streamSimple extension runs before SDK HTTP generation. */
+/** Pi 1.5.2's public provider streamSimple extension runs before SDK HTTP generation. */
 export const PI_MAIN_REQUEST_BUDGET_SOURCE = String.raw`
 import { createAssistantMessageEventStream, streamSimple as sdkStreamSimple } from '@earendil-works/pi-ai/compat';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -45,9 +45,9 @@ ${PI_ANTHROPIC_THINKING_POLICY_SOURCE}
 
 // Resolve the SDK's declared public export from the fixed, lockfile-installed runtime.
 // createRequire.resolve cannot resolve this package's import-only export conditions.
-export async function loadPiContextClamp(root = '/opt/deepsonar/dsh/node_modules/@earendil-works/pi-ai') {
+export async function loadPiContextClamp(root = '/usr/local/lib/node_modules/@earendil-works/pi-ai') {
   const manifest = JSON.parse(await readFile(root + '/package.json', 'utf8'));
-  if (manifest.name !== '@earendil-works/pi-ai' || manifest.version !== '1.4.0') fail('PI_MAIN_BUDGET_SDK_VERSION');
+  if (manifest.name !== '@earendil-works/pi-ai' || manifest.version !== '1.5.2') fail('PI_MAIN_BUDGET_SDK_VERSION');
   const entry = manifest.exports?.['./api/*']?.import;
   if (typeof entry !== 'string' || !entry.startsWith('./') || entry.includes('..')) fail('PI_MAIN_BUDGET_SDK_EXPORT');
   const sdk = await import(pathToFileURL(root + '/' + entry.replace('*','simple-options')).href);

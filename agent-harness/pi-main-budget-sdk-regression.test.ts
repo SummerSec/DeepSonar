@@ -8,15 +8,15 @@ import test from "node:test";
 import { PI_MAIN_REQUEST_BUDGET_SOURCE } from "../packages/runtime-sandbox/src/pi-main-request-budget.js";
 
 // Actions installs the existing dsh-runtime lockfile; no credentials or external model calls.
-const root = path.resolve(process.env.PI_MAIN_BUDGET_SDK_ROOT ?? fileURLToPath(new URL("./dsh-runtime/node_modules/@earendil-works/pi-ai", import.meta.url)));
+const root = path.resolve(process.env.PI_MAIN_BUDGET_SDK_ROOT ?? fileURLToPath(new URL("./base-cli-runtime/node_modules/@earendil-works/pi-ai", import.meta.url)));
 async function loadRealSdkExtension() {
   const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
   assert.equal(manifest.name, "@earendil-works/pi-ai");
-  assert.equal(manifest.version, "1.4.0", "test the locked production SDK, never an ambient dependency");
+  assert.equal(manifest.version, "1.5.2", "test the locked production SDK, never an ambient dependency");
   const compatUrl = pathToFileURL(path.join(root, manifest.exports["./compat"].import)).href;
   const source = PI_MAIN_REQUEST_BUDGET_SOURCE
     .replace("'@earendil-works/pi-ai/compat'", JSON.stringify(compatUrl))
-    .replace("'/opt/deepsonar/dsh/node_modules/@earendil-works/pi-ai'", JSON.stringify(root));
+    .replace("'/usr/local/lib/node_modules/@earendil-works/pi-ai'", JSON.stringify(root));
   return import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 }
 
@@ -81,7 +81,7 @@ test("#1032 locked pi-ai sends a credential-free context while preserving reques
   } finally { await f.close(); }
 });
 
-test("real pi-ai 1.4.0 nonadaptive thinking refuses insufficient allowance and context before HTTP", async () => {
+test("real pi-ai 1.5.2 nonadaptive thinking refuses insufficient allowance and context before HTTP", async () => {
   const f = await fixture();
   try {
     for (const cap of [32, 1024, 1025, 2047]) {

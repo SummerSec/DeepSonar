@@ -810,7 +810,7 @@ function loadJsonlFixture(name: string): Record<string, unknown>[] {
 
 test("Pi terminal-error runtime fixture covers required decode fields and unknown frames", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
-  assert.equal(adapter.version, "1.4.0");
+  assert.equal(adapter.version, "1.5.2");
   const state: Record<string, unknown> = {};
   const decoded = loadJsonlFixture("pi-0.84.4.runtime.jsonl").flatMap((line) => adapter.decodeOutput(line, state));
   assert.equal(state.sessionId, "pi-sess-0844");

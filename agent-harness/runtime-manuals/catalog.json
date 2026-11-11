@@ -586,7 +586,7 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "1.4.0",
+          "version": "1.5.2",
           "version_source": "agent-harness/runtime-images.json#npm.@earendil-works/pi-coding-agent",
           "commands": [
             "pi"
@@ -2767,7 +2767,7 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "1.4.0",
+          "version": "1.5.2",
           "version_source": "agent-harness/runtime-images.json#npm.@earendil-works/pi-coding-agent",
           "commands": [
             "pi"
@@ -5291,7 +5291,7 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "1.4.0",
+          "version": "1.5.2",
           "version_source": "agent-harness/kali-minimal-runtime.json#/npm.@earendil-works/pi-coding-agent",
           "commands": [
             "pi"
@@ -7880,7 +7880,7 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "1.4.0",
+          "version": "1.5.2",
           "version_source": "agent-harness/runtime-images.json#npm.@earendil-works/pi-coding-agent",
           "commands": [
             "pi"
@@ -10309,7 +10309,7 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "1.4.0",
+          "version": "1.5.2",
           "version_source": "agent-harness/runtime-images.json#npm.@earendil-works/pi-coding-agent",
           "commands": [
             "pi"
@@ -12746,7 +12746,7 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "1.4.0",
+          "version": "1.5.2",
           "version_source": "agent-harness/runtime-images.json#npm.@earendil-works/pi-coding-agent",
           "commands": [
             "pi"
@@ -15468,7 +15468,7 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "1.4.0",
+          "version": "1.5.2",
           "version_source": "agent-harness/runtime-images.json#npm.@earendil-works/pi-coding-agent",
           "commands": [
             "pi"
@@ -18268,7 +18268,7 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "1.4.0",
+          "version": "1.5.2",
           "version_source": "agent-harness/runtime-images.json#npm.@earendil-works/pi-coding-agent",
           "commands": [
             "pi"
@@ -21331,7 +21331,7 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "1.4.0",
+          "version": "1.5.2",
           "version_source": "agent-harness/runtime-images.json#npm.@earendil-works/pi-coding-agent",
           "commands": [
             "pi"
@@ -24376,7 +24376,7 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "1.4.0",
+          "version": "1.5.2",
           "version_source": "agent-harness/runtime-images.json#npm.@earendil-works/pi-coding-agent",
           "commands": [
             "pi"
@@ -28176,7 +28176,7 @@
           "kind": "tool",
           "agent_visible": true,
           "implementation_only": false,
-          "version": "1.4.0",
+          "version": "1.5.2",
           "version_source": "agent-harness/runtime-images.json#npm.@earendil-works/pi-coding-agent",
           "commands": [
             "pi"
