@@ -1321,10 +1321,10 @@ export function CanvasView({
             >
         {filtersOpen ? (
           <div className="surface-core rounded-[16px] px-4 py-3">
-            <div className="mb-3 flex items-center gap-2 border-b border-[var(--line)] pb-2.5">
-              <Funnel size={15} className="text-acc-400" />
-              <span className="text-[12px] font-medium text-[var(--text)]">筛选过程节点</span>
-              <span className="font-mono text-[10px] text-[var(--muted)]">
+            <div className="mb-3 flex flex-wrap items-center gap-2 border-b border-[var(--line)] pb-2.5">
+              <Funnel size={15} className="shrink-0 text-acc-400" />
+              <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-[var(--text)]">筛选过程节点</span>
+              <span className="min-w-0 font-mono text-[10px] text-[var(--muted)]">
                 {filterActive
                   ? `命中 ${matchedCount} / ${totalNodeCount}`
                   : `显示 ${visibleNodes.length} / ${totalNodeCount}`}
