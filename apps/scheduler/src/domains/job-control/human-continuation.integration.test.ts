@@ -241,13 +241,16 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.deepEqual(fixture.restored.get(String(oldInput.workspace_path)),inputBytes[0],'earlier ACK attachment survives the next human wait');
       assert.ok(prompt.includes(String(oldInput.workspace_path)),'bounded startup index points to prior immutable inputs');
       assert.equal(fixture.restored.has(String(newInput.workspace_path)),false,'pending reply attachments still use governed delivery');
+      assert.equal(await clock.remainingHumanExecutionMs(sql,fixture.jobId),3600_000-cumulative);
+      await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '1 hour' WHERE id=${fixture.jobId}`;
+      await clock.humanExecutionStartedAt(sql,fixture.jobId,String(third.id));
       let deliveries=0;
       const unregisterThird=await humans.registerHumanMessageRuntime(fixture.jobId,{sendMessage:async()=>{deliveries++;},
         writeWorkspaceFile:async(destination,bytes)=>{fixture.restored.set(destination,bytes);}},String(third.id));
       assert.equal(deliveries,1,'only the new reply is delivered');
       assert.deepEqual(fixture.restored.get(String(newInput.workspace_path)),inputBytes[1]);
       await humans.acknowledgeHumanMessage(fixture.jobId,String(secondReply.json().id));unregisterThird();
-      assert.equal(await clock.remainingHumanExecutionMs(sql,fixture.jobId),3600_000-cumulative);
+      assert.equal(Number((await sql`SELECT used_ms FROM job_execution_clocks WHERE job_id=${fixture.jobId}`)[0].used_ms),cumulative);
       await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
     });
     await context.test('an unsettled oldest wait cannot starve more than one batch of released clocks',async()=>{
