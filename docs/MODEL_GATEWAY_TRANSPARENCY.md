@@ -17,7 +17,7 @@
 
 OM 直接加载镜像内现有 request-budget 源码的共享函数，启动 guard 同时核验 wrapper 与该源码的完整 SHA-256；旧/缺损/被替换内容拒绝，不能只核 wrapper 或沿用旧镜像声明。没有新增依赖、配置、状态机、数据库或授权通道，不增加用户操作。Pi 专属替换函数位于 DSH installer 复用的 SDK 政策前缀之外，避免不同 TypeScript 加载器的函数序列化改变 DSH helper 内容身份；不修改 DSH 的固定 vendor/artifact pin。
 
-验收分层：`pnpm ci:unit:runtime-sandbox` 覆盖三协议 SDK 边界、无限/有限政策、env/文件/错误/OM 文本、Unicode、前缀重叠、原历史不变与双内容 guard；`pnpm ci:integration:request-budget-sdk` 用锁定 Pi AI 1.4.0 到 loopback 对照真正生成的请求与认证；已有 `pnpm ci:integration:om-provider-headers` 原生双架构专项改由真实 Pi bash 读取真实物化 env 和 `auth.json`，要求 main/observer 只收到替换结果、原 Gateway/Control 完成及用量归属仍通过。相关脚本已在核心/Reverse Actions 接线，未本机测试/build/typecheck，最终 SHA Actions 待验；未执行生产、真实厂商模型或声明质量收益。
+验收分层：`pnpm ci:unit:runtime-sandbox` 覆盖三协议 SDK 边界、无限/有限政策、env/文件/错误/OM 文本、Unicode、前缀重叠、原历史不变与双内容 guard；`pnpm ci:integration:request-budget-sdk` 用锁定 Pi AI 1.5.2 到 loopback 对照真正生成的请求与认证；已有 `pnpm ci:integration:om-provider-headers` 原生双架构专项改由真实 Pi bash 读取真实物化 env 和 `auth.json`，要求 main/observer 只收到替换结果、原 Gateway/Control 完成及用量归属仍通过。相关脚本已在核心/Reverse Actions 接线，未本机测试/build/typecheck，最终 SHA Actions 待验；未执行生产、真实厂商模型或声明质量收益。
 
 ### 凭据拒绝的审计留痕（#1032 观测片）
 
@@ -37,7 +37,7 @@ Pi 的 SDK 生成前扩展为每次 main 调用签发独立 UUID，并禁用不�
 
 ### #1036 D：原生 Pi 恢复链的离线回归
 
-2026-11-09 新增[原生 RPC 夹具](../agent-harness/fixtures/pi-main-recovery-rpc.mjs)，接入既有 `pnpm ci:smoke:pi-rpc` 的 built-image 分支；核心 `runtime-images (base)` 的 `Pi RPC real Docker smoke` 在原生 amd64 执行，镜像缓存命中也不跳过。先验证镜像内 main policy 与当前 checkout 的完整 SHA，再原样物化其生成扩展，由固定 Pi 1.4.0 的真实 loader/SDK 调用 loopback。无 host SDK delegate、导入替换或关闭 Pi 原生 retry；容器沿用断网、只读根、受限资源与定向清理。
+2026-11-09 新增[原生 RPC 夹具](../agent-harness/fixtures/pi-main-recovery-rpc.mjs)，接入既有 `pnpm ci:smoke:pi-rpc` 的 built-image 分支；核心 `runtime-images (base)` 的 `Pi RPC real Docker smoke` 在原生 amd64 执行，镜像缓存命中也不跳过。先验证镜像内 main policy 与当前 checkout 的完整 SHA，再原样物化其生成扩展，由固定 Pi 1.5.2 的真实 loader/SDK 调用 loopback。无 host SDK delegate、导入替换或关闭 Pi 原生 retry；容器沿用断网、只读根、受限资源与定向清理。
 
 新增场景要求：同一存活 PID/Session 内 503 → 带原认证及精确请求 UUID 的 no-start 查询 → 新 UUID/原 retry-of → 唯一成功助手 message_start/message_end；再将测试 allowance 设为耗尽，下一轮不得新增模型 HTTP 请求。相同 503 正文在查询 unknown、错误 reason 或查询拒绝时都不能授权第二个模型请求；原 SDK 失败必须成为 CLI 的首个助手失败，allowance 查询次数必须等于首次请求加显式 `auto_retry_start` 次数，不能被后续 allowance 拒绝掩盖错误的内部恢复。输出仅保留版本/源码摘要、场景状态、计数和请求关联，不输出消息正文。
 
@@ -109,7 +109,7 @@ usage scanner 只观察副本，压缩响应仍按原压缩字节转发；无法
 
 | CLI / 锁定版本 | 已接能力 | 边界 |
 | --- | --- | --- |
-| Pi `@earendil-works/pi-coding-agent` 1.4.0、pi-ai 1.4.0 | runtime-owned [扩展](../packages/runtime-sandbox/src/pi-main-request-budget.ts)通过正式 `registerProvider(provider,{api,streamSimple})`，在 SDK 构造请求前逐次读取 allowance，设置请求局部 `options.maxTokens` 与 `model.maxTokens`；由 SDK 生成 Chat usage。start/resume 均加载 | 不使用已有 payload 的 `before_provider_request`；显式不支持 streaming usage、Responses 最小输出不满足或 sampling 冲突则拒绝。非 adaptive Anthropic thinking 必须在额度及 SDK 上下文夹紧后仍至少有 2048 token，否则生成前拒绝，不关闭 thinking。Gateway 始终原字节重验。已新增锁定真实 SDK 到 loopback 上游的非 adaptive/adaptive 阈值回归，真实 Pi 进程加载链仍待验收 |
+| Pi `@earendil-works/pi-coding-agent` 1.5.2、pi-ai 1.5.2 | runtime-owned [扩展](../packages/runtime-sandbox/src/pi-main-request-budget.ts)通过正式 `registerProvider(provider,{api,streamSimple})`，在 SDK 构造请求前逐次读取 allowance，设置请求局部 `options.maxTokens` 与 `model.maxTokens`；由 SDK 生成 Chat usage。start/resume 均加载 | 不使用已有 payload 的 `before_provider_request`；显式不支持 streaming usage、Responses 最小输出不满足或 sampling 冲突则拒绝。非 adaptive Anthropic thinking 必须在额度及 SDK 上下文夹紧后仍至少有 2048 token，否则生成前拒绝，不关闭 thinking。Gateway 始终原字节重验。已新增锁定真实 SDK 到 loopback 上游的非 adaptive/adaptive 阈值回归，真实 Pi 进程加载链仍待验收 |
 | Claude Code `@anthropic-ai/claude-code` 2.1.312 | start/resume 启动器先读取 allowance，再通过原生 `CLAUDE_CODE_MAX_OUTPUT_TOKENS` 与 `--settings` 设置正整数上限，保留更严格既有设置；零余额不启动 | 只保证启动时配置。stdin `update_environment_variables` 白名单不包含该变量；settings 热更新无逐请求同步屏障。用户已接受工具循环、压缩及子任务不逐请求自动适配余额；运行中余额不足时明确拒绝并提示，不修改已形成 body。managed settings 优先级更高，冲突由 Gateway 拒绝。启动读取与逐请求准入共用同一次有界 allowance 查询（15 秒预算，`JOB_TOKEN_USAGE_PENDING`／`REPAIR_USAGE_PENDING` 只重读该投影）；生成前上限只有一个推导入口 `claudeOutputCap`，只在 start/resume 边界重算。单进程内的工具循环、自动压缩与继承环境变量的子任务沿用该上限；余额已下降时由准入层本地零出站拒绝，不改写 body、不中途重启 CLI |
 | DSH / dsh-llm / dsh-llm-pi-ai / dsh-agent-loop 0.2.1-rc.2、pi-ai 1.4.0 | 镜像构建期验证锁定 vendor bundle SHA256，生成独立 `deepsonar-index.js`，保留官方 apply/Config/消息/附件/签名/usage 转换；唯一 llm-pi-ai profile 条目指向该产物。共用 streamWithSnapshot 的 SDK 调用前读取 allowance 并使用与 Pi 相同的 SDK 输入政策 | 原包不改，运行时不安装或写包。导入时校验 artifact/helper/vendor 摘要及 SDK 版本；认证应用后的真实 provider 分派再次核对冻结目标与 token。prepared 主调用与 direct stream（compaction/子调用所用服务）走同一 adapter。预算内的调用按引用透传调用方消息/工具与原上限，只有超预算调用被夹到余额并显式要求 Chat usage（合成回归覆盖两种情形）；跨进程 resume 仍明确不支持；真实 Cordis/SDK 合成上游回归待 Actions |
 
@@ -152,6 +152,6 @@ Reverse 工作流将 Claude、Pi/OM 和 Reverse/REA 分为三个独立原生双�
 
 ### Pi 原生模型覆盖与配置头对照
 
-`ci:integration:provider-headers-sdk` 使用独立测试 lockfile 的 Pi coding-agent/pi-ai 1.4.0，通过真实 ModelRuntime、ModelRegistry、内置 catalog 和 SDK 到 loopback 上游对照配置头；不改变生产 DSH 依赖。覆盖单个 override 仍保留其他内置模型、追加 custom model 后内置模型可调用、provider/override/definition 优先级，以及独立 Gateway 冻结模型 guard 对未授权模型的拒绝。测试源码为[原生对照回归](../agent-harness/pi-provider-headers-sdk-regression.test.ts)，已接入核心 Actions，新增行为的工程证据归属下述 main 验收基线。配置解析器负责生成默认值，不以局部覆盖集合取代模型授权。
+`ci:integration:provider-headers-sdk` 使用独立测试 lockfile 的 Pi coding-agent/pi-ai 1.5.2，通过真实 ModelRuntime、ModelRegistry、内置 catalog 和 SDK 到 loopback 上游对照配置头；不改变生产 DSH 依赖。覆盖单个 override 仍保留其他内置模型、追加 custom model 后内置模型可调用、provider/override/definition 优先级，以及独立 Gateway 冻结模型 guard 对未授权模型的拒绝。测试源码为[原生对照回归](../agent-harness/pi-provider-headers-sdk-regression.test.ts)，已接入核心 Actions，新增行为的工程证据归属下述 main 验收基线。配置解析器负责生成默认值，不以局部覆盖集合取代模型授权。
 
 2026-11-06 工程证据：发布协调者已验收 main `616d7a3651c0e0b89d9457f4f435c02f51f8561b` 的核心与五项专项 Actions 日志，链接集中见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)。后续提交仍须独立检查，不证明正式发布、生产或真实模型结果。

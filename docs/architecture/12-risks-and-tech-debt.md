@@ -146,4 +146,4 @@ Scheduler-owned 的只读 target-authorization protocol 已接线：authority/ac
 
 ### #923 原生 CLI 生成前预算兼容
 
-Pi 1.4.0 已接公开 provider streamSimple 入口，Claude Code 2.1.312 只支持本次 launch/resume 的原生输出上限；DSH 0.2.1-rc.2 的 agent/request 不覆盖 compaction，也不暴露请求局部 model.maxTokens。DSH 现已通过锁版本/摘要的独立 vendor adapter 在共用 SDK 调用前接入，待 Actions 验收；用户已接受 Claude Code 2.1.312 保留 start/resume 原生启动输出上限、运行中余额不足时明确拒绝并提示的兼容限制，不要求逐请求自动适配；该范围决定不再是发布阻塞。需要自动适配时，必须使用请求形成前的受支持 SDK/CLI 入口或明确维护完整 adapter；不得用 HTTP body 改写或放宽预算消除缺口。具体版本、入口与静态证据见[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)。新合成回归不等于真实 CLI 运行通过，最终 SHA Actions 待验。
+Pi 1.5.2 已接公开 provider streamSimple 入口，Claude Code 2.1.312 只支持本次 launch/resume 的原生输出上限；DSH 0.2.1-rc.2 的 agent/request 不覆盖 compaction，也不暴露请求局部 model.maxTokens。DSH 现已通过锁版本/摘要的独立 vendor adapter 在共用 SDK 调用前接入，待 Actions 验收；用户已接受 Claude Code 2.1.312 保留 start/resume 原生启动输出上限、运行中余额不足时明确拒绝并提示的兼容限制，不要求逐请求自动适配；该范围决定不再是发布阻塞。需要自动适配时，必须使用请求形成前的受支持 SDK/CLI 入口或明确维护完整 adapter；不得用 HTTP body 改写或放宽预算消除缺口。具体版本、入口与静态证据见[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)。新合成回归不等于真实 CLI 运行通过，最终 SHA Actions 待验。
