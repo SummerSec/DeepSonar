@@ -3,6 +3,7 @@ import { taskContractPrompt } from "./task-contract-preflight.js";
 import { prepareCompletionPayload } from "./completion-payload.js";
 import { createCompletionFailureDiagnostics } from "./completion-failure-diagnostic.js";
 import { createPiRuntimeRecoveryGuard } from "./pi-runtime-recovery-guard.js";
+import { createSharedAssetPublisher } from "./shared-asset-publish-control.js";
 import { normalizeArchivedReaFact } from "./domains/cli-capability/rea-cli-fact.js";
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -23,7 +24,6 @@ import {
   FindingPayload,
   HumanPayload,
   ProgressPayload,
-  PublishSharedAssetPayload,
   AckHumanMessagePayload,
   allowedPlatformTools,
   CAPABILITY_DISCOVERY_TOOLS_LIST,
@@ -117,7 +117,6 @@ import { frozenClaudeLaunchModel, snapshotUpstreamModel } from "./provider-effec
 import {
   buildJobSharedAssetCatalog,
   SHARED_ASSETS_READONLY_ROOT,
-  createSharedAsset,
   SHARED_ASSETS_WORKSPACE_CATALOG,
 } from "./domains/shared-assets/index.js";
 import {
@@ -1394,10 +1393,16 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   const semanticState: DeferredSemanticState = { done: null, hub: null, human: null };
   let completionReservation: string | null = null;
   let planReservation: {eventId:string;type:string} | null = null;
+  const publishSharedAsset = createSharedAssetPublisher({
+    jobId, attemptId, projectId: job.project_id as string,
+    sandboxId: (job.sandbox_id as string | null) ?? null, findingId: (job.finding_id as string | null) ?? null,
+    assertCanPublish: assertJobCanPublishSharedAsset,
+    sourceReadError: sharedAssetSourceReadControlError, classifyError: sharedAssetPublishControlError,
+  });
 
   const onSemanticEvent = async (
     raw: Record<string, unknown>,
-    runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer>; completionPhase?: "prepare" | "commit"; planPhase?: "validate" | "prepare" | "commit" },
+    runtimeControl: { readWorkspaceFile(filePath: string, maxBytes: number): Promise<Buffer>; idempotencyKey?: string | null; completionPhase?: "prepare" | "commit"; planPhase?: "validate" | "prepare" | "commit" },
   ) => {
     let event: ControlEventEnvelope;
     try {
@@ -1440,41 +1445,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     }
     if (event.type === "shared_asset_publish") {
       // 授权只认冻结快照 platform_tools（上方已校验 publish_shared_asset）。
-      const proposal = PublishSharedAssetPayload.parse(event.payload);
-      const findingId = proposal.scope === "finding" ? (job.finding_id as string | null) : null;
-      if (proposal.scope === "finding" && !findingId) {
-        throw invalidToolPayload("publish_shared_asset", "本 Job 未绑定 Finding，不能发布 Finding 资产", "scope");
-      }
-      // The host owns this authorization. A database trigger repeats the
-      // check while inserting the version to linearize terminal transitions.
-      await assertJobCanPublishSharedAsset(jobId, (job.sandbox_id as string | null) ?? null);
-      let bytes: Buffer;
-      try {
-        bytes = await runtimeControl.readWorkspaceFile(proposal.source_path, config.sharedAssets.maxFileBytes);
-      } catch (error) {
-        throw sharedAssetSourceReadControlError(error);
-      }
-      await assertJobCanPublishSharedAsset(jobId, (job.sandbox_id as string | null) ?? null);
-      try {
-        await createSharedAsset({
-          scope: proposal.scope,
-          projectId: job.project_id as string,
-          findingId,
-          key: proposal.key,
-          contentType: proposal.content_type,
-          bytes,
-          origin: "agent",
-          actor: `job:${jobId}`,
-          jobId,
-          labels: proposal.labels,
-        });
-      } catch (error) {
-        if (error instanceof ControlInputError) throw error;
-        const controlError = sharedAssetPublishControlError(error);
-        if (controlError) throw controlError;
-        throw error;
-      }
-      return;
+      return publishSharedAsset(event.payload, runtimeControl.idempotencyKey, runtimeControl.readWorkspaceFile);
     }
     if (event.type === "human_message_ack") {
       const payload = AckHumanMessagePayload.parse(event.payload);
@@ -1698,18 +1669,20 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     }
     const eventType = CONTROL_SEMANTIC_EVENT_TYPES[operation as keyof typeof CONTROL_SEMANTIC_EVENT_TYPES];
     if (!eventType) throw new Error("unknown platform operation");
+    let semanticResult: Awaited<ReturnType<typeof onSemanticEvent>>;
     try {
       if (operation === "submit_hub_decision" && context.input && typeof context.input === "object"
         && "recovery" in context.input && (!context.planPhase || context.planPhase === "validate")) {
         await validateCompletionRecoveryDecision(sql, job, (context.input as { recovery: unknown }).recovery, { tokenId: context.tokenId });
       }
-      await onSemanticEvent({
+      semanticResult = await onSemanticEvent({
         v: 1,
         event_id: context.eventId || randomUUID(),
         type: eventType,
         payload: context.input,
       }, {
         readWorkspaceFile: (filePath, maxBytes) => readSandboxWorkspaceFileForRuntime(filePath, maxBytes),
+        idempotencyKey: context.idempotencyKey,
         completionPhase: context.completionPhase,
         planPhase: context.planPhase === "resolve" ? undefined : context.planPhase,
       });
@@ -1744,7 +1717,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       return { completion_prepared: true };
     }
     if (operation === "mark_job_done" && context.completionPhase === "commit") completionReservation = null;
-    return { accepted: true, operation, completion_ready: Boolean(semanticState.done) };
+    return { accepted: true, operation, completion_ready: Boolean(semanticState.done), ...(semanticResult ?? {}) };
   });
 
   // Runtime callback 使用与平台语义事件相同的沙箱安全文件读取器；

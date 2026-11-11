@@ -4,6 +4,8 @@ import test from "node:test";
 import { readNextKnowledgeWake } from "./knowledge-wake.js";
 import { enqueueKnowledgeWork } from "./domains/project-knowledge/requests.js";
 import { seedKnowledgeJob, withKnowledgeDatabase } from "./domains/project-knowledge/test-support.js";
+import { registerKnowledgeSourceAfterTerminal } from "./domains/project-knowledge/automatic.js";
+import { collectProjectKnowledgeSources } from "./domains/project-knowledge/collector.js";
 
 test("historical automatic work never wakes a new stage; explicit work still observes busy-project admission", async () => {
   await withKnowledgeDatabase(async (db) => {
@@ -67,5 +69,21 @@ test("a newly committed Agent knowledge request notifies the existing Dispatcher
       })]);
       assert.equal((await db`SELECT id FROM project_knowledge_work WHERE id=${workId}`).length, 1);
     } finally { if (timeout) clearTimeout(timeout); await listener.unlisten(); }
+  });
+});
+
+test("registered sources survive missed notifications and wake collection after restart", async () => {
+  await withKnowledgeDatabase(async db => {
+    const source = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
+    await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
+      VALUES(${source.canvasId},${source.jobId},'fact','input','succeeded','{"input":"bounded"}'::jsonb)`;
+    await db`UPDATE jobs SET status='succeeded' WHERE id=${source.jobId}`;
+    await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${source.attemptId}`;
+    await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, source.jobId, "succeeded"));
+    assert.ok(await readNextKnowledgeWake(db));
+    assert.equal(await collectProjectKnowledgeSources(db, "a".repeat(64)), 1);
+    assert.ok(await readNextKnowledgeWake(db), "created work now owns the durable deadline");
+    await db`UPDATE project_knowledge_work SET state='blocked',reason='job_timeout'`;
+    assert.equal(await readNextKnowledgeWake(db), null, "consumed source does not revive an exhausted work");
   });
 });

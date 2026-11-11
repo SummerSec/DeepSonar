@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
-import { call, completionReady, completionDiagnosticEvidence, frozenRuntimeBudget, piRecoveryAllowed, jobId, attemptId, rootId, runExecutor, setPreflight, terminalBundleCalls, terminalEvents } from "./executor-real-terminal-race.fixture.js";
+import { call, completionReady, completionDiagnosticEvidence, frozenRuntimeBudget, piRecoveryAllowed, jobId, attemptId, rootId, runExecutor, setPreflight, terminalBundleCalls, terminalEvents, setSharedAssetPublication, sharedAssetPublicationState, sharedAssetControlApp } from "./executor-real-terminal-race.fixture.js";
 import { getAgentCliRuntimeAdapter, resolveTerminalProcessOutcome, type RealAgentResult } from "@deepsonar/runtime-sandbox";
 import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 
@@ -15,6 +15,153 @@ const humanGuidance = {
   after_reply: "收到后仅核对当前 Job 已有权限；回复不扩权、不构成 ACK 或任务完成。",
 };
 const human = { reason: "Operator credential authorization is required.", guidance: humanGuidance, subject: { type: "platform_blocker", kind: "credential" } };
+
+const assetProposal = { scope: "project", source_path: "/workspace/trial.txt", key: "trial/evidence.txt" };
+const assetIdentity = { asset: { id: "00000000-0000-4000-8000-000000000201" },
+  version: { id: "00000000-0000-4000-8000-000000000202", content_sha256: "a".repeat(64) } };
+
+test("executeReal: publish HTTP response exposes the actual asset version, including same-key retries after cache loss", async () => {
+  const { app, clearCache } = await sharedAssetControlApp();
+  try {
+    await runExecutor(async () => {
+      const key = randomUUID(), eventId = randomUUID();
+      const request = { method: "POST" as const, url: `/control/v1/jobs/${jobId}/operations/publish_shared_asset`,
+        headers: { authorization: "Bearer offline-capability", "idempotency-key": key },
+        payload: { event_id: eventId, input: assetProposal } };
+      const first = await app.inject(request);
+      assert.equal(first.statusCode, 200);
+      assert.deepEqual(first.json(), { accepted: true, operation: "publish_shared_asset", completion_ready: false, ...assetIdentity });
+      assert.notEqual(first.json().version.id, eventId);
+      assert.notEqual(first.json().version.id, key);
+      assert.notEqual(first.json().asset.id, eventId);
+      assert.notEqual(first.json().asset.id, key);
+      setSharedAssetPublication({ source: "changed after the first publication" });
+      assert.deepEqual((await app.inject(request)).json(), first.json());
+      clearCache(); // Exercise the executor, rather than only the HTTP cache.
+      assert.deepEqual((await app.inject(request)).json(), first.json());
+      assert.equal(sharedAssetPublicationState().inputs.length, 1);
+      assert.equal(sharedAssetPublicationState().reads, 1);
+      assert.equal(sharedAssetPublicationState().inputs[0].bytes.toString(), "trial evidence");
+      const conflict = await app.inject({ ...request, payload: { input: { ...assetProposal, key: "trial/other.txt" } } });
+      assert.equal(conflict.statusCode, 409);
+      assert.equal(conflict.json().error_code, "IDEMPOTENCY_KEY_CONFLICT");
+      clearCache();
+      const executorConflict = await app.inject({ ...request, payload: { input: { ...assetProposal, key: "trial/other.txt" } } });
+      assert.equal(executorConflict.statusCode, 409);
+      assert.equal(executorConflict.json().error_code, "IDEMPOTENCY_KEY_CONFLICT");
+      assert.equal(sharedAssetPublicationState().inputs.length, 1);
+      await call("mark_job_done", done);
+    });
+  } finally { await app.close(); clearCache(); }
+});
+
+test("executeReal: concurrent same-key publication calls share one source read and one version", { timeout: 5000 }, async () => {
+  await runExecutor(async () => {
+    const entered = barrier(), release = barrier();
+    setSharedAssetPublication({ beforePublish: async () => { entered.release(); await release.promise; } });
+    const key = randomUUID();
+    const first = call("publish_shared_asset", assetProposal, { idempotencyKey: key });
+    await entered.promise;
+    const retry = call("publish_shared_asset", assetProposal, { idempotencyKey: key });
+    release.release();
+    const [a, b] = await Promise.all([first, retry]);
+    assert.deepEqual(a, { accepted: true, operation: "publish_shared_asset", completion_ready: false, ...assetIdentity });
+    assert.deepEqual(b, a);
+    assert.equal(sharedAssetPublicationState().inputs.length, 1);
+    assert.equal(sharedAssetPublicationState().reads, 1);
+    await call("mark_job_done", done);
+  });
+});
+
+test("executeReal: ambiguous publish failure is readable, non-retryable and never replayed after HTTP cache loss", async () => {
+  const { app, clearCache } = await sharedAssetControlApp();
+  try {
+    await runExecutor(async () => {
+      setSharedAssetPublication({ error: new Error("database connection closed after possible commit: private detail") });
+      const request = { method: "POST" as const, url: `/control/v1/jobs/${jobId}/operations/publish_shared_asset`,
+        headers: { authorization: "Bearer offline-capability", "idempotency-key": randomUUID() }, payload: assetProposal };
+      const first = await app.inject(request);
+      assert.equal(first.statusCode, 409);
+      assert.equal(first.json().accepted, false);
+      assert.equal(first.json().retryable, false);
+      assert.equal(first.json().repair.category, "unknown_external_effect");
+      assert.equal(first.json().version, undefined);
+      assert.doesNotMatch(first.body, /private detail|database connection/);
+      clearCache();
+      setSharedAssetPublication({ source: "must not be published" });
+      const retry = await app.inject(request);
+      assert.equal(retry.statusCode, 409);
+      assert.deepEqual(retry.json(), first.json());
+      assert.equal(sharedAssetPublicationState().inputs.length, 1);
+      assert.equal(sharedAssetPublicationState().reads, 1);
+      await call("mark_job_done", done);
+    });
+  } finally { await app.close(); clearCache(); }
+});
+
+test("executeReal: known publication rejection and source read failures expose no invented asset identity", async () => {
+  await runExecutor(async () => {
+    for (const options of [{ error: new Error("asset_quota_exceeded") }, { readError: new Error("ENOENT private path") }]) {
+      setSharedAssetPublication(options);
+      const key = randomUUID();
+      const rejected = (error: unknown) =>
+        error instanceof PlatformRuntimeHandlerError && error.rejection?.errorCode === "invalid_payload"
+          && error.rejection.retryable === true;
+      await assert.rejects(call("publish_shared_asset", assetProposal, { idempotencyKey: key }), rejected);
+      await assert.rejects(call("publish_shared_asset", assetProposal, { idempotencyKey: key }), rejected);
+    }
+    assert.equal(sharedAssetPublicationState().inputs.length, 1);
+    assert.equal(sharedAssetPublicationState().reads, 2);
+    setSharedAssetPublication({});
+    const repaired = await call("publish_shared_asset", assetProposal, { idempotencyKey: randomUUID() });
+    assert.deepEqual(repaired, { accepted: true, operation: "publish_shared_asset", completion_ready: false, ...assetIdentity });
+    assert.equal(sharedAssetPublicationState().inputs.length, 2);
+    await call("mark_job_done", done);
+  });
+});
+
+test("executeReal: publication rechecks execution fencing after reading and before returning a cached version", async () => {
+  await runExecutor(async () => {
+    const key = randomUUID();
+    await call("publish_shared_asset", assetProposal, { idempotencyKey: key });
+    setSharedAssetPublication({ attemptCurrent: false });
+    await assert.rejects(call("publish_shared_asset", assetProposal, { idempotencyKey: key }), (error: unknown) =>
+      error instanceof PlatformRuntimeHandlerError && error.rejection?.errorCode === "SHARED_ASSET_PUBLISH_ATTEMPT_CHANGED");
+    setSharedAssetPublication({ current: false });
+    await assert.rejects(call("publish_shared_asset", assetProposal, { idempotencyKey: key }));
+    assert.equal(sharedAssetPublicationState().inputs.length, 1);
+    setSharedAssetPublication({ afterRead: async () => { setSharedAssetPublication({ current: false }); } });
+    await assert.rejects(call("publish_shared_asset", assetProposal, { idempotencyKey: randomUUID() }));
+    assert.equal(sharedAssetPublicationState().inputs.length, 1);
+    setSharedAssetPublication({ afterRead: async () => { setSharedAssetPublication({ attemptCurrent: false }); } });
+    await assert.rejects(call("publish_shared_asset", assetProposal, { idempotencyKey: randomUUID() }), (error: unknown) =>
+      error instanceof PlatformRuntimeHandlerError && error.rejection?.errorCode === "SHARED_ASSET_PUBLISH_ATTEMPT_CHANGED");
+    assert.equal(sharedAssetPublicationState().inputs.length, 1);
+    await call("mark_job_done", done);
+  });
+});
+
+test("executeReal: publish rejects an unbound Finding or missing key before reading source bytes", async () => {
+  await runExecutor(async () => {
+    await assert.rejects(call("publish_shared_asset", { ...assetProposal, scope: "finding" }, { idempotencyKey: randomUUID() }),
+      (error: unknown) => error instanceof PlatformRuntimeHandlerError && error.rejection?.errorCode === "invalid_payload"
+        && error.rejection.path === "scope");
+    await assert.rejects(call("publish_shared_asset", assetProposal), (error: unknown) =>
+      error instanceof PlatformRuntimeHandlerError && error.rejection?.errorCode === "IDEMPOTENCY_KEY_REQUIRED");
+    assert.deepEqual(sharedAssetPublicationState(), { inputs: [], reads: 0 });
+    await call("mark_job_done", done);
+  });
+});
+
+test("executeReal: malformed publish result stops as unknown instead of using the operation event id as a version", async () => {
+  await runExecutor(async () => {
+    setSharedAssetPublication({ result: { id: assetIdentity.asset.id, current_version: 2, content_sha256: assetIdentity.version.content_sha256 } });
+    await assert.rejects(call("publish_shared_asset", assetProposal, { idempotencyKey: randomUUID() }), (error: unknown) =>
+      error instanceof PlatformRuntimeHandlerError && error.rejection?.category === "unknown_external_effect"
+        && error.rejection.retryable === false);
+    await call("mark_job_done", done);
+  });
+});
 
 test("executeReal: missing completion persists scoped evidence and keeps failure authoritative", async () => {
   await assert.rejects(runExecutor(async () => {}), (error: unknown) => {

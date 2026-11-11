@@ -5,6 +5,7 @@ import type { AgentRuntimeSnapshot } from "./domains/role-runtime-snapshot/index
 import { freezeJobRuntimeConfiguration } from "./job-runtime-freeze.js";
 import { recordJobSharedAssets } from "./domains/shared-assets/index.js";
 import { sha256 } from "./domains/project-knowledge/types.js";
+import { isolateKnowledgeJob } from "./domains/project-knowledge/job-isolation.js";
 
 /** Shared insert primitive. The caller owns snapshot admission and the complete transaction. */
 export async function persistPreparedJob(
@@ -14,7 +15,7 @@ export async function persistPreparedJob(
   const { snapshot, payload, priority, assignment } = prepared;
   const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(tx, input, snapshot);
   const snapshotWithKnobs = {
-    ...runtimeSnapshot,
+    ...isolateKnowledgeJob(runtimeSnapshot, assignment),
     ...(assignment ? { knowledge_assignment: assignment } : {}),
     // Trial arms receive their exact versions only through their assignment.
     ...(assignment?.stage === "trial" ? { project_knowledge_catalog: { entries: [], hash: sha256("[]") }, shared_assets: [] } : {}),

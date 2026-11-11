@@ -16,3 +16,14 @@ test("governance Skill requires the platform baseline frozen in an assigned Job"
   assert.ok(injectKnowledgePlatformSkills([], assignment).some((skill) => skill.name === "deepsonar-project-knowledge"));
   assert.throws(() => injectKnowledgePlatformSkills([], { ...assignment, governance_hash: "0".repeat(64) }), /baseline/);
 });
+
+test("trial injection contains execution guidance but neither grading answers nor discovery Skills", () => {
+  const trial = injectKnowledgePlatformSkills([{ name: "business", files: { "SKILL.md": "unrelated private answer" } }], {
+    work_id: "work", stage: "trial", inputs: [], governance_hash: PROJECT_KNOWLEDGE_GOVERNANCE_HASH,
+  });
+  assert.equal(trial.length, 1);
+  assert.ok(trial[0]!.files!["SKILL.md"]!.includes("publish_shared_asset"));
+  assert.ok(!JSON.stringify(trial).includes("unrelated private answer"));
+  assert.ok(!JSON.stringify(trial).includes("evaluation-cases.json"));
+  assert.ok(!JSON.stringify(trial).includes("KNOWLEDGE_SCOPE_DENIED"));
+});
