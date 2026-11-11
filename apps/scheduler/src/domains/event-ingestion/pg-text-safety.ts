@@ -11,14 +11,18 @@
 export const NUL_REPLACEMENT = "\\0";
 
 /** 深拷贝式清洗：只改字符串叶子，不改变对象身份语义之外的字段集合。 */
+export function scrubPostgresText(value: string): string {
+  return value.replace(/\u0000/gu, NUL_REPLACEMENT);
+}
+
 export function scrubPostgresJson<T>(value: T): T {
-  if (typeof value === "string") return value.replace(/\u0000/gu, NUL_REPLACEMENT) as T;
+  if (typeof value === "string") return scrubPostgresText(value) as T;
   if (Array.isArray(value)) return value.map((entry) => scrubPostgresJson(entry)) as T;
   if (value && typeof value === "object") {
     const proto = Object.getPrototypeOf(value);
     if (proto === Object.prototype || proto === null) {
       return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, scrubPostgresJson(entry)]),
+        Object.entries(value as Record<string, unknown>).map(([key, entry]) => [scrubPostgresText(key), scrubPostgresJson(entry)]),
       ) as T;
     }
   }
