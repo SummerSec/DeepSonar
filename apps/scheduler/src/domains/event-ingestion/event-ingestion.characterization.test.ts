@@ -25,6 +25,13 @@ test("event-ingestion owns semantic side effects behind explicit ports", () => {
     "running guard must use ingest lock-time status so same-turn follow-ups do not roll back a close",
   );
   assert.match(applicationSource, /orderSemanticIngestBundle/);
+  // #1066：NUL 策略在产生任何效果（去重/限额/插入/侧效应）之前拒绝键与 plan 值。
+  assert.match(applicationSource, /payloadNulPolicy\(envelope\.type, envelope\.payload \?\? \{\}\)/);
+  assert.ok(
+    applicationSource.indexOf("payloadNulPolicy(envelope.type") < applicationSource.indexOf("INSERT INTO events"),
+    "NUL 策略必须先于 events 主插入（键与 plan 值在产生效果前拒绝）",
+  );
+  assert.match(applicationSource, /scrubPostgresJson\(envelope\.payload \?\? \{\}\)/);
   assert.match(applicationSource, /attempt_id: ingest\.attemptId/);
   assert.match(applicationSource, /status = 'active'/);
   assert.match(applicationSource, /finalizedInThisIngest && envelope\.type === "done"/);
