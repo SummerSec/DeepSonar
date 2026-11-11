@@ -2,7 +2,7 @@ import { PublishSharedAssetPayload } from "@deepsonar/shared-types";
 import { config } from "./config.js";
 import { ControlInputError, controlInputCodeForOperation } from "./control-input.js";
 import { sql } from "./db.js";
-import { createSharedAsset } from "./domains/shared-assets/index.js";
+import { createSharedAsset, normalizeAssetKey } from "./domains/shared-assets/index.js";
 import { controlInputDigest } from "./domains/event-ingestion/control-receipt.js";
 import { PlatformRuntimeHandlerError } from "./domains/platform-api/registry.js";
 
@@ -26,6 +26,7 @@ function unknownPublication() {
  * One publisher per live executor/Attempt. HTTP's cache drops opaque failures;
  * retain the original promise here, including unknown outcomes, so a transport
  * retry cannot re-read changed source bytes and create another version.
+ * Different keys queue by canonical asset identity; unknown seals that asset.
  * This is NOT a durable receipt or a restart/recovery execution path.
  */
 export function createSharedAssetPublisher(scope: {
@@ -35,6 +36,7 @@ export function createSharedAssetPublisher(scope: {
   classifyError: (error: unknown) => ControlInputError | null;
 }) {
   const invocations = new Map<string, { digest: string; result: Promise<PublishedIdentity> }>();
+  const assets = new Map<string, { tail: Promise<void>; unknown: boolean }>();
   const assertCurrent = async () => {
     await scope.assertCanPublish(scope.jobId, scope.sandboxId);
     const [attempt] = await sql`
@@ -59,17 +61,30 @@ export function createSharedAssetPublisher(scope: {
       if (previous.digest !== digest) throw reject("IDEMPOTENCY_KEY_CONFLICT", "同一 key 已用于不同的发布参数。");
       return previous.result;
     }
-    const result = Promise.resolve().then(async (): Promise<PublishedIdentity> => {
+    let assetKey: string;
+    try { assetKey = normalizeAssetKey(proposal.key); }
+    catch (error) { throw scope.classifyError(error) ?? error; }
+    const assetIdentity = canonicalAssetIdentity(proposal.scope, scope.projectId, scope.findingId, assetKey);
+    let asset = assets.get(assetIdentity);
+    if (!asset) { asset = { tail: Promise.resolve(), unknown: false }; assets.set(assetIdentity, asset); }
+    const state = asset;
+    const result = state.tail.then(async (): Promise<PublishedIdentity> => {
+      // Check inside the queue: an earlier in-flight publication may have
+      // become unknown after this request arrived with a different key.
+      if (state.unknown) throw unknownPublication();
       let bytes: Buffer;
       try { bytes = await read(proposal.source_path, config.sharedAssets.maxFileBytes); }
       catch (error) { throw scope.sourceReadError(error); }
       await assertCurrent();
+      const sandboxId = scope.sandboxId;
+      if (!sandboxId) throw reject("SHARED_ASSET_PUBLISH_ATTEMPT_CHANGED", "当前发布执行已失效，停止提交。");
       try {
         const created = await createSharedAsset({
           scope: proposal.scope, projectId: scope.projectId,
           findingId: proposal.scope === "finding" ? scope.findingId : null,
-          key: proposal.key, contentType: proposal.content_type, bytes, origin: "agent",
+          key: assetKey, contentType: proposal.content_type, bytes, origin: "agent",
           actor: `job:${scope.jobId}`, jobId: scope.jobId, labels: proposal.labels,
+          attemptId: scope.attemptId, sandboxId,
         });
         // Whitelist actual persistence fields. Neither numeric current_version
         // nor the operation event UUID can stand in for a version row's UUID.
@@ -78,15 +93,27 @@ export function createSharedAssetPublisher(scope: {
           || typeof content_sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(content_sha256)) throw unknownPublication();
         return { asset: { id }, version: { id: version_id, content_sha256 } };
       } catch (error) {
-        if (error instanceof PlatformRuntimeHandlerError || error instanceof ControlInputError) throw error;
+        if (error instanceof PlatformRuntimeHandlerError) {
+          if (error.rejection?.category === "unknown_external_effect") state.unknown = true;
+          throw error;
+        }
+        if (error instanceof ControlInputError) throw error;
+        if (error instanceof Error && ["shared_asset_publish_job_not_running", "shared_asset_publish_attempt_changed"].includes(error.message))
+          throw reject("SHARED_ASSET_PUBLISH_ATTEMPT_CHANGED", "当前发布执行已失效，停止提交。");
         const known = scope.classifyError(error);
         if (known) throw known;
         // A thrown persistence call does not establish rollback/no effect.
+        state.unknown = true;
         throw unknownPublication();
       }
     });
     // Reserve before yielding; concurrent invocations share the entire operation.
     invocations.set(key, { digest, result });
+    state.tail = result.then(() => {}, () => {});
     return result;
   };
+}
+
+function canonicalAssetIdentity(kind: "project" | "finding", projectId: string, findingId: string | null, key: string): string {
+  return JSON.stringify([kind, projectId.toLowerCase(), kind === "finding" ? findingId?.toLowerCase() : null, key]);
 }

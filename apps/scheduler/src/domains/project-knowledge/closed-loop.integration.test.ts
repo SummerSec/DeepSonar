@@ -11,9 +11,14 @@ import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { canonical, sha256 } from "./types.js";
 import { KNOWLEDGE_FIXED_CASES } from "./case-policy.js";
 import { seedKnowledgeJob, withKnowledgeDatabase, type TestSql } from "./test-support.js";
+import { persistPreparedJob } from "../../job-creation.js";
+import { freezeAgentRuntimeProfile } from "../../agent-runtime-profile.js";
+import type { AgentRuntimeSnapshot } from "../role-runtime-snapshot/index.js";
+import { injectKnowledgePlatformSkills, PROJECT_KNOWLEDGE_GOVERNANCE_HASH } from "./platform-skills.js";
 
-const GOVERNANCE = "a".repeat(64);
-const tools = ["read_knowledge_input", "propose_project_knowledge", "submit_knowledge_evaluation", "review_project_knowledge"];
+const GOVERNANCE = PROJECT_KNOWLEDGE_GOVERNANCE_HASH;
+const tools = ["read_knowledge_input", "propose_project_knowledge", "submit_knowledge_evaluation", "review_project_knowledge",
+  "publish_shared_asset", "emit_fact", "emit_progress", "mark_job_done"];
 
 async function invoke(db: TestSql, runtime: ReturnType<typeof createKnowledgeRuntime>, jobId: string, operationId: string, input: unknown) {
   const [job] = await db`SELECT project_id,canvas_id FROM jobs WHERE id=${jobId}`;
@@ -29,10 +34,17 @@ function scheduler(db: TestSql) {
       return String(canvas!.id);
     },
     createJobInTransaction: async (tx, input, assignment?: KnowledgeJobAssignment) => {
-      const [job] = await tx`INSERT INTO jobs(project_id,canvas_id,type,status,payload_json,agent_snapshot_json)
-        VALUES(${input.projectId},${input.canvasId ?? null},${input.type},'pending',${tx.json(input.payload as never)},
-          ${tx.json({ platform_tools: tools, knowledge_assignment: assignment })}) RETURNING *`;
-      return { created: job! };
+      const snapshot = { agent_cli: "claude-code", runtime_image: { image_key: "deepsonar-base" },
+        settings_config_json: {}, config_files: [], pi_extensions: [], platform_tools: tools,
+        shared_assets: [], skills: [], commands: [], mcps: [], subagents: [],
+        job_skill_catalog: { project_id: input.projectId, sources: [], extensions: [] },
+        runtime_profile: freezeAgentRuntimeProfile({ schema: "deepsonar.agent-runtime-profile/v1", profile_version: 1,
+          agent_cli: "claude-code", provider_ref: null, model_ref: null, reasoning_effort: null, context_window_tokens: null,
+          extensions: [], system_prompt_ref: null, env_refs: [],
+          native_options: { claude_code: { model_env: null, effort_level: null }, pi: null, dsh: null },
+          resolution_order: ["global", "project", "role", "task", "job"] }),
+      } as unknown as AgentRuntimeSnapshot;
+      return persistPreparedJob(tx, input, { snapshot, payload: input.payload ?? {}, priority: 0, assignment });
     },
   });
 }
@@ -74,7 +86,7 @@ async function trialEvidence(db: TestSql, jobId: string, attemptId: string, proj
   return String(evidence!.id);
 }
 
-test("registered source reaches independent activation, a later Job reads its exact version and feedback stays attributable", async () => {
+for (const kind of ["memory", "skill"] as const) test(`registered source activates ${kind}, a later Job reads its exact version and feedback stays attributable`, async () => {
   await withKnowledgeDatabase(async db => {
     const origin = await seedKnowledgeJob(db, undefined, ["request_project_knowledge"]);
     await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
@@ -98,7 +110,8 @@ test("registered source reaches independent activation, a later Job reads its ex
     }));
     const proposed = await invoke(db, runtime, makerId, "propose_project_knowledge", {
       work_ref: workId, action: "create", revision: 1, base_refs: [], source_refs: [ref], reason: "fixture grounded in registered source",
-      candidate: { kind: "memory", logical_key: "fixture/closed-loop", title: "Reusable memory", content: "fixture guidance" }, evaluation_plan: plan,
+      candidate: { kind, logical_key: "fixture/closed-loop", title: "Reusable knowledge",
+        ...(kind === "memory" ? { content: "fixture guidance" } : { files: { "SKILL.md": "# Fixture guidance\nUse for the fixture task; keep unsupported inputs unknown." } }) }, evaluation_plan: plan,
     });
     await finish(db, runner, makerId);
     const results: Array<Record<string, unknown>> = [];
@@ -118,10 +131,25 @@ test("registered source reaches independent activation, a later Job reads its ex
           revision: 1, input_digest: proposed.input_digest, case_results: results });
       } else {
         assert.equal(assignment!.stage, "trial");
+        const [job] = await db`SELECT agent_snapshot_json FROM jobs WHERE id=${jobId}`;
+        const snapshot = job!.agent_snapshot_json as AgentRuntimeSnapshot;
+        assert.equal(snapshot.network_policy!.allow_egress, false);
+        assert.ok(!snapshot.platform_tools.includes("search_skills"));
+        const injected = injectKnowledgePlatformSkills(snapshot.skills, snapshot.knowledge_assignment);
+        assert.ok(injected.some(skill => skill.name === "deepsonar-control"));
+        assert.ok(!injected.some(skill => skill.name === "deepsonar-project-knowledge"));
         const inputs = assignment!.input_manifest_json as Array<{ input_ref: string; content_hash: string }>;
         assert.ok(!inputs.some(entry => entry.input_ref.startsWith("evaluation:")));
         if (assignment!.case_id === "target") assert.ok(inputs.some(entry => entry.input_ref === first.input_ref));
         if (assignment!.arm === "without") assert.ok(!inputs.some(entry => entry.input_ref.startsWith("candidate:")));
+        if (assignment!.case_id === "coexistence") {
+          const unrelated = inputs.find(entry => entry.input_ref === "trial-context:coexistence");
+          assert.ok(unrelated, "each arm receives the same independently authorized neutral memory");
+          const read = await invoke(db, runtime, jobId, "read_knowledge_input", {
+            work_ref: workId, input_ref: unrelated.input_ref, expected_hash: unrelated.content_hash,
+          });
+          assert.match(String(read.content_fragment), /trace_tag=knowledge-coexistence/);
+        }
         const probe = inputs.find(entry => entry.input_ref.startsWith("platform-probe:"));
         if (probe) await assert.rejects(invoke(db, runtime, jobId, "read_knowledge_input", {
           work_ref: workId, input_ref: probe.input_ref, expected_hash: probe.content_hash,
@@ -141,15 +169,18 @@ test("registered source reaches independent activation, a later Job reads its ex
       evidence_refs: [], remaining_checks: [] });
     await finish(db, runner, reviewerId);
     assert.equal((await db`SELECT state FROM project_knowledge_work WHERE id=${workId}`)[0]!.state, "completed");
-    const consumer = await seedKnowledgeJob(db, origin.projectId, ["read_project_memory", "record_knowledge_feedback"]);
+    const readOperation = kind === "memory" ? "read_project_memory" : "pull_skill";
+    const consumer = await seedKnowledgeJob(db, origin.projectId, [readOperation, "record_knowledge_feedback"]);
     const catalog = await freezeProjectKnowledgeCatalog(db, origin.projectId);
-    await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: ["read_project_memory", "record_knowledge_feedback"], project_knowledge_catalog: catalog })}
+    await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: [readOperation, "record_knowledge_feedback"], project_knowledge_catalog: catalog } as never)}
       WHERE id=${consumer.jobId}`;
     const [item] = await db`SELECT id FROM project_knowledge_items WHERE active_version_id=${String(proposed.candidate_version_ref)}`;
     const version = await db`SELECT version,content_sha256 FROM project_knowledge_versions WHERE id=${String(proposed.candidate_version_ref)}`;
-    const read = await invoke(db, runtime, consumer.jobId, "read_project_memory", {
-      item_ref: item!.id, version: version[0]!.version, expected_hash: version[0]!.content_sha256 });
-    assert.equal(read.content, "fixture guidance");
+    const read = await invoke(db, runtime, consumer.jobId, readOperation, kind === "memory" ? {
+      item_ref: item!.id, version: version[0]!.version, expected_hash: version[0]!.content_sha256,
+    } : { selector: `project:${item!.id}@${version[0]!.version}`, expected_content_hash: version[0]!.content_sha256 });
+    if (kind === "memory") assert.equal(read.content, "fixture guidance");
+    else assert.match(JSON.stringify(read.skill), /Fixture guidance/);
     assert.ok(read.usage_ref);
     const [fact] = await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,body_json)
       VALUES(${consumer.canvasId},${consumer.jobId},'fact','reuse observation','succeeded','{"reuse":"observed"}'::jsonb)

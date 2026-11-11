@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
@@ -485,4 +485,4 @@ RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-o
 
 发布恢复仅复用经 GitHub 原运行/成功阶段/artifact 归档摘要绑定的冻结载荷和原签名回执，默认分支恢复身份与原 tag 发布身份分离；不重建镜像、不移动 tag、不重新签名。两阶段独立恢复及拒绝条件见[发布专题](docs/RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)。
 
-成功任务的知识来源仅登记元数据，历史补做仅只读预览；当前不自动启动整理 Agent。边界见 [项目知识](docs/PROJECT_KNOWLEDGE.md)。
+成功任务终态只登记知识来源元数据，后续Dispatcher从持久审计自动归集项目批次：每批最多4个来源Job、19个原始inputs及可选governor，项目已有pending/running工作时不再准入批次。CAS在短事务外准备，项目行锁下重验并原子写work与逐源attempt/manifest摘要链接；坏源持久跳过，不热重试。自动批次及全部trial快照收紧工具、关闭出网、清角色预加载能力；非reuse完整6×2独立试验，显式共同task_inputs、评分rubric隔离到eval/review，Job预算预留后两阶段。允许target comparator fail作对照，目标arm及全部安全组仍须pass，unexecuted不可激活；治理hash变化阻断旧work，不改历史。知识页区分登记、纳入整理、候选、生效、拉取与模型反馈，不能把来源数当产物或反馈当质量证明。历史预览仍只读，旧knowledge:auto仍不自动推进，无schema或整链token预算变更。当前共享工作树已接线，本轮Actions尚未运行、未合并未部署，真实模型与注意力收益未验证。取代范围见[ADR0022](docs/architecture/adr/0022-project-knowledge-collection.md)，流程、证据与注意力成本见[项目知识](docs/PROJECT_KNOWLEDGE.md)。

@@ -59,7 +59,7 @@ import { listHubAgentCliCatalog, listHubProviderCatalog } from "./domains/projec
 import { listHubSkillSourceCatalog } from "./domains/project-skill-allowlist/index.js";
 import { JobSkillCatalogError } from "./job-skill-catalog.js";
 import { createKnowledgeRuntime } from "./domains/project-knowledge/runtime.js";
-import { PROJECT_KNOWLEDGE_GOVERNANCE_HASH, injectKnowledgePlatformSkills } from "./domains/project-knowledge/platform-skills.js";
+import { PROJECT_KNOWLEDGE_GOVERNANCE_HASH, injectKnowledgePlatformSkills, projectKnowledgeReuseHint } from "./domains/project-knowledge/platform-skills.js";
 import {
   PROVIDER_ENV_MAP,
   UNKNOWN_PROVIDER_ERROR,
@@ -1128,6 +1128,8 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   }
   initialInput += `\n\n${findingProtocolGuide}\n\n平台为本 Job 动态下发的系统接口：\n${contract}\n可用工具：${controlToolNames.join(", ")}。每个工具的参数、调用时机和示例见 /workspace/AGENTS.md 或 /workspace/CLAUDE.md 的“动态系统工具与结果契约”。`;
   initialInput += `\n\n${CONTROL_TRANSPORT_POINTER} 完整调用规则见 /workspace/AGENTS.md「调用规则」与 deepsonar-control Skill。`;
+  const knowledgeReuseHint = projectKnowledgeReuseHint(snapshot, type);
+  if (knowledgeReuseHint) initialInput += `\n\n${knowledgeReuseHint}`;
   if (snapshot.knowledge_assignment) {
     initialInput += "\n\nScheduler 分配的知识工作（只读冻结引用）：" + JSON.stringify(snapshot.knowledge_assignment);
   }

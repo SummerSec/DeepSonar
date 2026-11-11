@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -190,4 +190,8 @@ quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/
 
 ## 来源登记与历史预览边界（#1035）
 
-成功来源登记仅含 Scheduler 审计元数据；冻结权限、成功最新 Attempt、未结算效果、项目状态及来源存在性均需校验。GET 历史预览重新检查当前资格并限制项目和分页，不授予历史执行权限、不创建知识 Job，也不宣称登记保留了来源内容。 见[ADR-0021](adr/0021-knowledge-source-preview.md)。
+成功来源登记仅含Scheduler审计元数据；GET历史预览重新检查资格并限制项目和分页，不授予历史执行权限、不创建知识Job，也不保证保留正文。本轮用户授权的collector按[ADR 0022](adr/0022-project-knowledge-collection.md)取代0021对批量整理的暂缓：CAS准备在短事务外，项目行锁下重新核验冻结整理权限、最新成功Attempt、未结算效果、项目/来源/hash与已处理记录，work和逐来源采集链接原子提交。不复活来源Job token，不把旧knowledge:auto工作迁移为新批次。超大、失权、未知效果或准备失败留下持久skipped，不自动重放外部效果或坏源热重试。
+
+自动批次与全部trial经[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)收紧stage工具与原授权交集、关闭出网、清角色预加载skills/modules/MCP等内容及共享资产；trial再清空普通知识/全局Skill目录。assignment.source_mode只标识治理来源，不授予权限。共同task_inputs必须显式选冻结材料，不能自动复制全部来源或把原结论当共同答案；平台核验引用，maker/reviewer承担语义泄漏审查。trial只接收专用Skill与当前arm，rubric限定eval/review audience，不以沙箱隔离宣称模型独立性或质量已证明。完整6×2矩阵、真实资产版本/hash和独立Job/Attempt证据门保留；只有target comparator fail可作对照，目标arm及全部安全组须pass，unexecuted/缺项/重复/未知效果不能激活，治理hash变化阻断旧work且不改历史。
+
+activity读面同时要求项目scope和projects:read；计数仅来自本项目审计和知识，usage还要求owner_project_id为本项目。错误原因白名单化、来源正文/manifest/模型反馈正文不返回，Job/Canvas导航仍需原接口授权。登记、采集、候选、生效、拉取和模型反馈必须分层；不得用反馈success认证收益。本轮权限/隔离回归已接Actions入口但尚未执行，未合并、未部署，真实模型收益仍未知。实现与证据边界见[项目知识专题](../PROJECT_KNOWLEDGE.md)。

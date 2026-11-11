@@ -30,7 +30,7 @@ export async function prepareKnowledgeSource(db: KnowledgeDb, projectId: string,
     attemptId: String(inspected.attempt_id), snapshot: job.agent_snapshot_json as Record<string, unknown> };
   const facts = await db`SELECT id,body_json,verification_status FROM canvas_nodes
     WHERE job_id=${jobId} AND canvas_id=${actor.canvasId} AND node_type='fact' ORDER BY id LIMIT 20`;
-  const evidence = await db`SELECT e.id,e.statement,e.payload_json,e.sha256 FROM artifact_evidence e
+  const evidence = await db`SELECT e.id,e.statement,e.payload_json,e.sha256,e.uri FROM artifact_evidence e
     JOIN artifacts a ON a.id=e.artifact_id WHERE a.job_id=${jobId} AND a.project_id=${projectId}
     ORDER BY e.id LIMIT 20`;
   if (facts.length + evidence.length > COLLECTION_MAX_INPUTS) throw new SourceCollectionError("source_input_limit");
@@ -42,6 +42,15 @@ export async function prepareKnowledgeSource(db: KnowledgeDb, projectId: string,
       kind: "evidence", id: row.id, statement: row.statement, payload: row.payload_json, sha256: row.sha256,
     })) })),
   ];
+  // Evidence may only describe an asset; freeze its actual authorized bytes as a separate exact input.
+  for (const row of evidence) {
+    if (typeof row.uri !== "string" || !row.uri.startsWith("asset:")) continue;
+    const match = /^asset:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(row.uri);
+    if (!match || typeof row.sha256 !== "string") throw new SourceCollectionError("source_asset_unavailable");
+    const ref = { kind: "asset" as const, ref: match[1]!, content_hash: String(row.sha256) };
+    if (!refs.some(existing => existing.kind === "asset" && existing.ref === ref.ref)) refs.push(ref);
+  }
+  if (refs.length > COLLECTION_MAX_INPUTS) throw new SourceCollectionError("source_input_limit");
   if (!refs.length) throw new SourceCollectionError("no_sources");
   const manifest: KnowledgeInputManifestEntry[] = [];
   for (const ref of refs) manifest.push(await resolveKnowledgeSource(db, actor, ref));

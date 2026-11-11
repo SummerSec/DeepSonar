@@ -1,6 +1,7 @@
 import type { KnowledgeJobAssignment, PlatformToolName } from "@deepsonar/shared-types";
 import type { AgentRuntimeSnapshot } from "../role-runtime-snapshot/index.js";
 import { canonical, sha256 } from "./types.js";
+import { isolateKnowledgeConfiguration } from "./job-isolation-config.js";
 
 const baseTools = ["emit_progress", "mark_job_done", "request_human", "read_knowledge_input", "get_knowledge_receipt"];
 const stageTools = {
@@ -11,7 +12,7 @@ const stageTools = {
 };
 
 /** Creation-time restriction only. Existing immutable Jobs are never rewritten. */
-export function isolateKnowledgeJob(snapshot: AgentRuntimeSnapshot, assignment?: KnowledgeJobAssignment): AgentRuntimeSnapshot {
+export function isolateKnowledgeJob<T extends AgentRuntimeSnapshot>(snapshot: T, assignment?: KnowledgeJobAssignment): T {
   if (!assignment || (assignment.stage !== "trial" && assignment.source_mode !== "project_collection")) return snapshot;
   const tools = new Set([...baseTools, ...stageTools[assignment.stage]]);
   const emptyCatalog = { entries: [], hash: sha256("[]") };
@@ -22,6 +23,8 @@ export function isolateKnowledgeJob(snapshot: AgentRuntimeSnapshot, assignment?:
     network_policy: { allow_egress: false }, shared_assets: [],
     modules: [], module_selectors: [], expanded_modules: [], missing_modules: [],
     skills: [], commands: [], mcps: [], subagents: [], instructions_markdown: null,
+    env_vars: {}, env_keys: [],
+    ...isolateKnowledgeConfiguration(snapshot),
     ...(assignment.stage === "trial" ? {
       project_knowledge_catalog: emptyCatalog,
       job_skill_catalog: { schema: "deepsonar.job-skill-catalog/v1" as const,

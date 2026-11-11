@@ -20,6 +20,10 @@ const safeSkipReasons = new Set([
   "existing_knowledge_work", "source_input_limit", "source_ineligible", "source_preparation_failed",
   "KNOWLEDGE_SCOPE_DENIED", "KNOWLEDGE_REVOKED", "KNOWLEDGE_SNAPSHOT_INVALID", "KNOWLEDGE_INPUT_LIMIT",
   "KNOWLEDGE_INPUT_TOO_LARGE", "KNOWLEDGE_HASH_MISMATCH",
+  "source_asset_unavailable",
+  "source_collection_retry_exhausted",
+  "source_database_permission_denied",
+  "source_attempt_changed", "source_governor_revoked",
 ]);
 
 interface ActivityWork {

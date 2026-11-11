@@ -92,11 +92,62 @@ test("executeReal: ambiguous publish failure is readable, non-retryable and neve
       const retry = await app.inject(request);
       assert.equal(retry.statusCode, 409);
       assert.deepEqual(retry.json(), first.json());
+      const newKey = await app.inject({ ...request,
+        headers: { ...request.headers, "idempotency-key": randomUUID() },
+        payload: { ...assetProposal, key: " /trial\\evidence.txt " } });
+      assert.equal(newKey.statusCode, 409);
+      assert.equal(newKey.json().repair.category, "unknown_external_effect");
       assert.equal(sharedAssetPublicationState().inputs.length, 1);
       assert.equal(sharedAssetPublicationState().reads, 1);
       await call("mark_job_done", done);
     });
   } finally { await app.close(); clearCache(); }
+});
+
+test("executeReal: same canonical asset serializes different keys and fences a queued call after unknown", { timeout: 5000 }, async () => {
+  await runExecutor(async () => {
+    const entered = barrier(), release = barrier();
+    setSharedAssetPublication({ error: new Error("unknown commit"),
+      beforePublish: async () => { entered.release(); await release.promise; } });
+    const unknown = (error: unknown) => error instanceof PlatformRuntimeHandlerError
+      && error.rejection?.category === "unknown_external_effect";
+    const first = assert.rejects(call("publish_shared_asset", assetProposal, { idempotencyKey: randomUUID() }), unknown);
+    await entered.promise;
+    const queued = assert.rejects(call("publish_shared_asset", { ...assetProposal, key: " /trial\\evidence.txt " },
+      { idempotencyKey: randomUUID() }), unknown);
+    release.release();
+    await Promise.all([first, queued]);
+    setSharedAssetPublication({ source: "new bytes must not create a second version" });
+    await assert.rejects(call("publish_shared_asset", assetProposal, { idempotencyKey: randomUUID() }), unknown);
+    assert.equal(sharedAssetPublicationState().inputs.length, 1);
+    assert.equal(sharedAssetPublicationState().reads, 1);
+    // A different asset identity remains independent.
+    await call("publish_shared_asset", { ...assetProposal, key: "trial/independent.txt" }, { idempotencyKey: randomUUID() });
+    assert.equal(sharedAssetPublicationState().inputs.length, 2);
+    await call("mark_job_done", done);
+  });
+});
+
+test("executeReal: successful same-asset publications with different keys wait before reading changed source", { timeout: 5000 }, async () => {
+  await runExecutor(async () => {
+    const entered = barrier(), release = barrier();
+    setSharedAssetPublication({ beforePublish: async () => { entered.release(); await release.promise; } });
+    const first = call("publish_shared_asset", assetProposal, { idempotencyKey: randomUUID() });
+    await entered.promise;
+    const second = call("publish_shared_asset", { ...assetProposal, key: "/trial/evidence.txt" }, { idempotencyKey: randomUUID() });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(sharedAssetPublicationState().inputs.length, 1);
+    assert.equal(sharedAssetPublicationState().reads, 1);
+    setSharedAssetPublication({ source: "second version bytes" });
+    release.release();
+    await Promise.all([first, second]);
+    const state = sharedAssetPublicationState();
+    assert.equal(state.inputs.length, 2);
+    assert.equal(state.inputs[0].bytes.toString(), "trial evidence");
+    assert.equal(state.inputs[1].bytes.toString(), "second version bytes");
+    assert.equal(state.inputs[1].key, "trial/evidence.txt");
+    await call("mark_job_done", done);
+  });
 });
 
 test("executeReal: known publication rejection and source read failures expose no invented asset identity", async () => {

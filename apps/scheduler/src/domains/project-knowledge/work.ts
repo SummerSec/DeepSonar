@@ -9,6 +9,8 @@ import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { canonical, sha256 } from "./types.js";
 import { automaticPreparationPredicate, isAutomaticWork } from "./automatic-marker.js";
 import { PROJECT_COLLECTION_PREFIX } from "./collector-sources.js";
+import { COEXISTENCE_INPUT_REF, prepareTrialSupport } from "./trial-support.js";
+import { prepareKnowledgeRevisionFeedback } from "./revision-feedback.js";
 
 type Db = typeof sql;
 type Row = Record<string, unknown>;
@@ -246,7 +248,8 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     return jobId;
   }
 
-  async function drive(workId: string, prepared?: PreparedEvidence): Promise<boolean> {
+  async function drive(workId: string, prepared?: PreparedEvidence, support?: {hash: string; bytes: number},
+    revisionFeedback?: KnowledgeInputManifestEntry): Promise<boolean> {
     return db.begin(async (txRaw) => {
       const tx = txRaw as unknown as Db;
       const [before] = await tx`SELECT * FROM project_knowledge_work WHERE id=${workId}`;
@@ -307,6 +310,13 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
         const manifest = prior
           ? [...entries(work.input_manifest_json), ...await baselineEntries(tx, prior), ...await candidateEntry(tx, prior)]
           : entries(work.input_manifest_json);
+        if (prior) {
+          if (!revisionFeedback || revisionFeedback.project_id !== work.project_id
+            || revisionFeedback.input_ref !== `revision-feedback:${prior.id}:${prior.revision}:${prior.input_digest}`)
+            throw new Error("knowledge_revision_feedback_changed");
+          await registerKnowledgeBlob(tx, revisionFeedback.blob_hash, revisionFeedback.bytes);
+          manifest.push(revisionFeedback);
+        }
         await createAssignedJob(tx, work, "maker", manifest, prior);
         return true;
       }
@@ -366,6 +376,12 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
               if (!entry) throw new Error("knowledge_trial_task_input_missing");
               return { ...entry, audience: ["trial" as const] };
             });
+            if (pair.testCase.kind === "coexistence") {
+              if (!support) throw new Error("knowledge_trial_support_missing");
+              await registerKnowledgeBlob(tx, support.hash, support.bytes);
+              common.push({ input_ref: COEXISTENCE_INPUT_REF, kind: "candidate", project_id: String(work.project_id),
+                content_hash: support.hash, blob_hash: support.hash, bytes: support.bytes, audience: ["trial"] });
+            }
             const trialInputs: KnowledgeInputManifestEntry[] = [...common, ...armInputs, ...probe];
             await createAssignedJob(tx, work, "trial", trialInputs, proposal, pair);
             return true;
@@ -439,7 +455,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     if (stopped()) return 0;
     await claimPending(stopped);
     if (stopped()) return 0;
-    const rows = await db`SELECT id,trigger_key,origin_job_id FROM project_knowledge_work WHERE state='running'
+    const rows = await db`SELECT id,trigger_key,origin_job_id,stage,active_job_id FROM project_knowledge_work WHERE state='running'
       ORDER BY (active_job_id IS NULL) DESC,updated_at,id LIMIT 16`;
     let progressed = 0;
     for (const row of rows) {
@@ -455,8 +471,11 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
           continue;
         }
         const prepared = await prepareTrialEvidence(workId);
+        const support = row.stage === "evaluator" && !row.active_job_id ? await prepareTrialSupport(db) : undefined;
+        const revisionFeedback = row.stage === "maker" && !row.active_job_id
+          ? await prepareKnowledgeRevisionFeedback(db, workId) : undefined;
         if (stopped()) break;
-        if (await drive(workId, prepared)) progressed++;
+        if (await drive(workId, prepared, support, revisionFeedback)) progressed++;
       } catch (error) {
         if (stopped()) break;
         const marker = typeof (error as { code?: unknown } | null)?.code === "string"

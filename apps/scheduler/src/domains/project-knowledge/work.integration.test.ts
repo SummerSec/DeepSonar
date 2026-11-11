@@ -194,7 +194,8 @@ test("each required case arm is a separate trial Job; evaluator and reviewer wai
       else if (testCase.kind === "revocation") assert.deepEqual(probes.map((entry) => entry.input_ref), ["platform-probe:revoked"]);
       else assert.equal(probes.length, 0);
       const resources = manifest.filter((entry) => !entry.input_ref.startsWith("platform-probe:"));
-      const common = testCase.kind === "target" ? [`fact:${sourceRef.ref}`] : [];
+      const common = testCase.kind === "target" ? [`fact:${sourceRef.ref}`]
+        : testCase.kind === "coexistence" ? ["trial-context:coexistence"] : [];
       assert.deepEqual(resources.map(entry => entry.input_ref), [...common, ...(row.arm === "candidate" ? [`candidate:${version!.id}`] : [])]);
       const [job] = await db`SELECT payload_json FROM jobs WHERE id=${String(row.job_id)}`;
       assert.ok(!JSON.stringify(job!.payload_json).includes(testCase.expected), "trial prompt must not disclose grading expectations");

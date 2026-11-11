@@ -86,6 +86,10 @@ mock.module(new URL("./core.js", import.meta.url), { namedExports: { ...core,
 const sharedAssets = await import("./domains/shared-assets/index.js");
 mock.module(new URL("./domains/shared-assets/index.js", import.meta.url), { namedExports: { ...sharedAssets,
   createSharedAsset: async (input: Parameters<typeof sharedAssets.createSharedAsset>[0]) => {
+    assert.equal(input.origin, "agent");
+    assert.equal(input.jobId, jobId);
+    assert.equal(input.attemptId, attemptId);
+    assert.equal(input.sandboxId, "offline-sandbox");
     publishedInputs.push(input);
     await publication.beforePublish?.();
     if (publication.error) throw publication.error;

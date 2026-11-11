@@ -13,9 +13,9 @@ export async function persistPreparedJob(
   prepared: { snapshot: AgentRuntimeSnapshot; payload: Record<string, unknown>; priority: number; assignment?: KnowledgeJobAssignment },
 ) {
   const { snapshot, payload, priority, assignment } = prepared;
-  const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(tx, input, snapshot);
+  const { snapshotWithKnobs: runtimeSnapshot, knobs } = await freezeJobRuntimeConfiguration(tx, input, isolateKnowledgeJob(snapshot, assignment));
   const snapshotWithKnobs = {
-    ...isolateKnowledgeJob(runtimeSnapshot, assignment),
+    ...runtimeSnapshot,
     ...(assignment ? { knowledge_assignment: assignment } : {}),
     // Trial arms receive their exact versions only through their assignment.
     ...(assignment?.stage === "trial" ? { project_knowledge_catalog: { entries: [], hash: sha256("[]") }, shared_assets: [] } : {}),

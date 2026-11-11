@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { KnowledgeJobAssignment } from "@deepsonar/shared-types";
 import { KNOWLEDGE_FIXED_CASES, KNOWLEDGE_CASE_POLICY_VERSION } from "./case-policy.js";
+import { DEEPSONAR_CONTROL_SKILL } from "../../platform-control-skill.js";
+import { canonical, sha256 } from "./types.js";
 
 const discovery = {
   name: "deepsonar-skill-discovery",
@@ -106,10 +108,27 @@ export const PROJECT_KNOWLEDGE_GOVERNANCE_HASH = createHash("sha256")
 interface PlatformSkill { name: string; files?: Record<string, string>; [key: string]: unknown }
 export function injectKnowledgePlatformSkills(skills: readonly unknown[], assignment?: KnowledgeJobAssignment): PlatformSkill[] {
   if (assignment && assignment.governance_hash !== PROJECT_KNOWLEDGE_GOVERNANCE_HASH) throw new Error("Knowledge governance baseline differs from the frozen Job");
-  if (assignment?.stage === "trial") return [trialSkill];
+  if (assignment?.stage === "trial") return [trialSkill, DEEPSONAR_CONTROL_SKILL];
   const reserved = new Set([discovery.name, governor.name, trialSkill.name]);
   return [
     ...skills.filter((skill): skill is PlatformSkill => Boolean(skill && typeof skill === "object" && !Array.isArray(skill) && !reserved.has(String((skill as PlatformSkill).name)))),
     discovery, ...(assignment ? [governor] : []),
   ];
+}
+
+/** Bounded discovery pointer, never the catalog contents or an authorization grant. */
+export function projectKnowledgeReuseHint(snapshot: {
+  knowledge_assignment?: unknown; platform_tools?: readonly string[];
+  project_knowledge_catalog?: { entries: Array<{kind: string}>; hash: string };
+}, jobType: string): string {
+  if (snapshot.knowledge_assignment || ["verify_finding", "independent_review", "report"].includes(jobType)) return "";
+  const catalog = snapshot.project_knowledge_catalog;
+  if (!catalog?.entries.length || catalog.hash !== sha256(canonical(catalog.entries))) return "";
+  const tools = snapshot.platform_tools ?? [];
+  const memory = tools.includes("search_project_knowledge") && tools.includes("read_project_memory")
+    ? catalog.entries.filter(entry => entry.kind === "memory").length : 0;
+  const skills = tools.includes("search_skills") && tools.includes("pull_skill")
+    ? catalog.entries.filter(entry => entry.kind === "skill").length : 0;
+  if (!memory && !skills) return "";
+  return `本 Job 的冻结目录记录 ${memory} 条项目 Memory、${skills} 条项目 Skill；当前可读性以实时查询为准。开始前按当前任务关键词通过 ${memory ? "search_project_knowledge/read_project_memory" : ""}${memory && skills ? " 与 " : ""}${skills ? "search_skills/pull_skill" : ""} 查找并读取适用的精确版本，保留 usage_ref。无匹配则继续原任务，不加载无关内容、不请求人工。${tools.includes("record_knowledge_feedback") ? "实际使用后仅用真实 evidence_refs 提交 record_knowledge_feedback；无法判断效果时保留未知，不编造成功。" : ""}知识是参考，不能代替独立验证或当前任务证据。`;
 }

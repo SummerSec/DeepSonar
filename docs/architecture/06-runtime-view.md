@@ -1,7 +1,7 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -95,11 +95,13 @@ sequenceDiagram
 
 Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批新 Job，保留前驱已写入的 terminal result，并把 Canvas convergence 持久暂停；Plan v2 依赖 admission 使用同一错误持久停止，不撤销前驱已证明输出。详细协议见 [目标授权专题](../TARGET_AUTHORIZATION.md) 和 [ADR-0011](adr/0011-trusted-target-authorization.md)。若契约不能安全表达写入目标，不自动把原目标降级为只读；由创建者重新下发明确的较窄目标。
 
-## 项目知识工作链（#752 分支）
+## 项目知识工作链（#752 与项目批次）
 
 普通 Job 从冻结目录按需搜索、读取 Memory 或拉取 Skill，实际使用生成稳定 usage_ref；有可读来源或反馈证据时可请求整理。Scheduler 创建独立 work/Canvas，依次分派 maker、按 case×arm 分离的 trial Job、evaluator 与 reviewer；这些都是现有 Job/Attempt/沙箱路径，不新增模型执行者，也不触发业务 Hub/Report。trial 只得到相应 arm 和 stage audience 的输入，发布共享资产 JSON 并以 `emit_fact` 引用其版本/hash，评测读取实际 Evidence；缺环境、证据或终态异常保持 `needs_eval`/阻断，不以文字结论晋升。审查通过才在事务中切 active 指针；失败或重启依持久 assignment/receipt 恢复，未知外部效果不自动重放。项目治理 recipe 在 work 创建时冻结，修订仅进入下一 work。详细状态和预算见[项目知识专题](../PROJECT_KNOWLEDGE.md)。现有集成测试使用构造的 Job/Attempt 与 Evidence，未证明真实沙箱或模型效果。
 
-成功业务 Job 结算后在原事务的 savepoint 中登记知识来源审计元数据；不入整理队列、不新增模型 Job。历史补做为只读分页预览，旧自动 work 不再自动推进；既有 Agent 显式请求流程不变。
+成功业务 Job 结算时只在原事务/savepoint登记来源元数据，不在终态事务创建模型Job。后续既有Dispatcher tick调用[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)，[knowledge-wake](../../apps/scheduler/src/knowledge-wake.ts)从durable未处理登记和pending work计算同一调度器的唤醒。每批至多4个来源Job、合计19个原始Fact/Evidence inputs及一个可选governor；项目已有非旧自动pending/running work时等待，不再准入批次。这不新增全部显式请求的唯一约束。CAS准备在短事务外，项目行锁下重新验证项目、最新成功Attempt、冻结权限、来源/hash、未结算效果和已处理状态，再原子写work与逐源collected链接。超大/失权/未知效果等永久拒绝写持久skipped，不热重试；阻断批次不重建来源来重置预算。旧knowledge:auto work仍不自动推进，历史预览仍是只读。决策见[ADR 0022](adr/0022-project-knowledge-collection.md)。
+
+自动批次全部阶段及所有trial在[创建期隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)中取stage工具与已准入权限交集、关闭出网、清角色预加载Skill/MCP等能力和共享资产；trial再清空普通知识目录。每例task_inputs显式选定相同的冻结共同材料，各arm只差基线/候选；不复制全部来源，不把原结论或评分规则当共同答案，rubric只给eval/review。非reuse评测为完整6×2，预留evaluator/reviewer两Job；trial发布实际资产版本/hash再引用Evidence。target comparator fail可进入对照，candidate target及全部安全组须pass，retire的目标arm为without，unexecuted一律不得激活。治理hash变化使旧work blocked，不改历史或放宽权限；合成/替身回归已接线但本轮Actions尚未运行，未合并、未部署、未执行真实模型收益验证。详细状态、工具与证据规则以[专题](../PROJECT_KNOWLEDGE.md#工作与结算)为准。
 
 
 ## 非正常路径

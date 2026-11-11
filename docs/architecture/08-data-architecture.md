@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
@@ -132,6 +132,12 @@ flowchart LR
 Artifact、Finding、Verify、Research 和 Report 不是同一张“结果表”：Artifact 是内部写入真相，Finding 是去重和处置实体，Verify 消费结构化事实和证据，Research 只生成语义组织结果，Report 是可重建的用户投影。Projection 失败不能改写上游事实。
 
 #752 的知识目录在 Job 创建时冻结版本/hash/授权身份；读取时再检查当前撤销。全局 Skill 源额外冻结 source instance 与 source/project revocation epoch，避免禁用后重新启用扩张旧快照。知识 mutation 的事件 ID 由 Job ID 与幂等键派生，领域结果和持久 receipt 与事件在同一事务；相同输入重放原结果，不同输入冲突。试验 Evidence 必须绑定独立 trial Job/Attempt、asset 版本/hash 与 case×arm，不能把模型文字当事实。数据细节和保留根见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
+
+### 项目知识来源审计与只读投影
+
+本轮复用audit_logs与现有project_knowledge_*基线，无新表、schema bump或增量迁移。system/scheduler的source_registered成功审计仅存Job/Attempt/Canvas及来源存在标记，不存正文。collector事务外准备有界CAS，项目行锁下重验后原子写work及逐Job source_collected链接；after_json保存registration_id/work_ref/attempt_id/input_count/manifest_sha256，摘要为单个来源冻结manifest的canonical SHA-256。source_collection_skipped记录error与安全原因，来源被collected/skipped持久消费后不再自动重建；坏源正文与Provider错误不进入原因投影。来源输入保留原verification_status，采集不等于验证。assignment.source_mode持久于Job冻结assignment；rubric为`evaluation:proposal:<id>`，绑定revision/input_digest/plan/base_refs，reviewer另获behavior记录，仅eval/review audience可读。事实入口见[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)、[来源准备](../../apps/scheduler/src/domains/project-knowledge/collector-sources.ts)与[work](../../apps/scheduler/src/domains/project-knowledge/work.ts)。
+
+[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)同一SQL快照汇总并分页：登记按resource_id去重，采集按同项目work_ref关联，待采集排除collected/skipped并集；工作source_count按采集链接去重，没有链接的显式work仅在有origin_job_id时回退1。项目active版本仍要求非revoked；usage/feedback要求project_id和owner_project_id均为本项目，排除全局/跨项目记录。skipped元数据最多10个去重来源，原因脱敏，不返回正文。登记、采集、流程完成、激活及模型报告分层，不新增效果账本。trial证据仍需真实资产版本/hash与独立Attempt绑定；治理hash变化不重绑历史。当前源码、未运行Actions与真实模型收益未知分开，取舍见[ADR 0022](adr/0022-project-knowledge-collection.md)。
 
 ## 关键状态机
 
