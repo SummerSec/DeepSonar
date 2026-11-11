@@ -1032,10 +1032,21 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 }
 .react-flow__background { opacity: .5; }
 .react-flow__attribution, .react-flow__attribution a { color: #3e464a; background: transparent; }
-.react-flow__controls { overflow: hidden; border: 1px solid var(--line-strong); background: var(--surface-control); }
-.react-flow__controls-button { border: 0; border-bottom: 1px solid var(--line); background: transparent; fill: var(--text-muted); }
-.react-flow__controls-button:hover { background: var(--surface-hover); }
-.react-flow__controls-button svg { fill: var(--text-muted); }
+/*
+ * xyflow 自带的 style.css 在 CanvasView 里 import，晚于本文件，同级选择器的白色
+ * 背景会把缩放控件顶回亮色药丸；提高一级特异性，别再去赌加载顺序。
+ */
+.react-flow .react-flow__controls {
+  overflow: hidden;
+  margin-bottom: 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-control);
+  box-shadow: 0 8px 22px rgb(0 0 0 / .32);
+}
+.react-flow .react-flow__controls-button { border: 0; border-bottom: 1px solid var(--line); background: var(--surface-control); fill: var(--text-muted); }
+.react-flow .react-flow__controls-button:hover { background: var(--surface-hover); }
+.react-flow .react-flow__controls-button svg { fill: var(--text-muted); }
 .react-flow__minimap {
   z-index: 20;
   overflow: hidden;
@@ -1197,6 +1208,17 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
   overflow: visible;
 }
 .canvas-filter-panel .surface-core { overflow: visible; }
+/*
+ * 展开态不再吃满整行：右侧要给缩略图（top-right 140×90）留出通道，
+ * 否则 768 这类宽度下筛选面板会直接盖住缩略图。
+ */
+@media (min-width: 640px) {
+  .canvas-filter-panel.is-open { width: min(760px, calc(100% - 200px)); }
+}
+/* 窄视口里 140×90 的缩略图只剩挤压：按优先级隐藏，而不是让它和筛选面板/Sidebar 抢角落。 */
+@media (max-width: 639px) {
+  .react-flow__minimap { display: none; }
+}
 .canvas-filter-toggle {
   min-width: 8.5rem;
   color: var(--text);
@@ -1259,7 +1281,8 @@ html[data-color-scheme="light"] .table-head-cell { color: #65707c; }
 .broadcast-status-panel {
   position: absolute;
   right: 16px;
-  top: 112px;
+  /* 右上角让给筛选面板与缩略图：广播账本改为叠在右下缩放控件上方，展开也不会盖住画布工具。 */
+  bottom: 104px;
   z-index: 10;
   width: min(390px, calc(100% - 32px));
   overflow: hidden;
