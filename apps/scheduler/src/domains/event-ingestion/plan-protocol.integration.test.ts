@@ -36,3 +36,30 @@ test("ingestion retains the exact current route/result, refuses worker ownership
     assert.deepEqual(immutable.agent_snapshot_json, child.agent_snapshot_json);
   } finally { await h.close(); }
 });
+
+test("plan 语义字段含 U+0000 在产生任何效果前结构化拒绝；修正后同 key 可接受（#1066）", { skip: !process.env.TEST_DATABASE_URL }, async () => {
+  const h = await createPlanExecutionFixture();
+  try {
+    const f = await h.fixture(), base = h.proposal(f);
+    const key = "3f1c2d9e-6a4b-4c8d-9e2f-1a3b5c7d9e01";
+    const beforeEvents = (await h.sql`SELECT count(*)::int AS n FROM events WHERE job_id=${f.hub}`)[0].n;
+    const beforeChildren = (await h.children(f.hub)).length;
+
+    const rejected = await h.invoke(f.hub, "submit_plan",
+      { ...base, revision: { ...base.revision, rationale: "why\u0000now" } }, key);
+    const body = rejected.json() as { accepted?: boolean; error?: string; error_code?: string };
+    assert.ok(rejected.statusCode >= 400 && rejected.statusCode < 500, rejected.payload);
+    assert.equal(body.accepted, false, rejected.payload);
+    assert.equal(body.error_code, "invalid_payload", rejected.payload);
+    assert.match(String(body.error ?? ""), /U\+0000/u);
+    assert.equal((await h.sql`SELECT count(*)::int AS n FROM events WHERE job_id=${f.hub}`)[0].n, beforeEvents,
+      "rejected plan must not leave an event row");
+    assert.equal((await h.children(f.hub)).length, beforeChildren, "rejected plan must not create derived tasks");
+    const [dedup] = await h.sql`SELECT event_id FROM event_dedup WHERE event_id=${key}::uuid`;
+    assert.ok(!dedup, "rejected plan must not consume the idempotency key");
+
+    const accepted = await h.invoke(f.hub, "submit_plan",
+      { ...base, revision: { ...base.revision, rationale: "why now" } }, key);
+    assert.equal(accepted.statusCode, 200, accepted.payload);
+  } finally { await h.close(); }
+});
