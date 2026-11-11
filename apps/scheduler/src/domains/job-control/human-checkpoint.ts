@@ -8,8 +8,12 @@ import { readCheckpointProcessBaseline } from "./human-checkpoint-process.js";
 import { collectSecretValues } from "../../credential-secret-projection.js";
 
 export function checkpointManagedSecrets(env:Record<string,unknown>,files:Record<string,unknown>,direct:readonly(string|null|undefined)[]) {
+  const materialized=Object.values(files).flatMap(config=>{
+    if(typeof config==='string') {try{return collectSecretValues(JSON.parse(config));}catch{/* Native text configuration. */}}
+    return collectSecretValues({config});
+  });
   return [...new Set([...direct.filter((value):value is string=>typeof value==='string'&&value.length>0),
-    ...collectSecretValues(env),...Object.values(files).flatMap(config=>collectSecretValues({config}))])];
+    ...collectSecretValues(env),...materialized])];
 }
 
 export async function prepareHumanCheckpointContext(input:{jobId:string;attemptNo:number;snapshot:unknown;host:RuntimeHost}) {

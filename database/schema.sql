@@ -264,7 +264,8 @@ CREATE TABLE human_requests (
   close_reason text,
   CONSTRAINT human_request_event_fk FOREIGN KEY (job_id,source_event_id) REFERENCES events(job_id,event_id) ON DELETE CASCADE,
   UNIQUE(job_id,source_event_id),
-  CONSTRAINT human_request_ready_check CHECK (checkpoint_status <> 'ready' OR manifest_json IS NOT NULL),
+  CONSTRAINT human_request_ready_check CHECK (checkpoint_status <> 'ready'
+    OR (manifest_json IS NOT NULL AND process_exited_at IS NOT NULL AND resources_released_at IS NOT NULL)),
   UNIQUE(job_id,attempt_id)
 );
 CREATE INDEX human_requests_pending_idx ON human_requests(status,created_at) WHERE resumed_at IS NULL;

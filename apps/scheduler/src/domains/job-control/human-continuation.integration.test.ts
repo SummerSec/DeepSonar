@@ -35,7 +35,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
     await sql`INSERT INTO projects(id,name) VALUES(${projectId},'continuation fixture')`;
     const setup = async () => {
       const jobId = randomUUID(), canvasId = randomUUID(), sandboxId = `checkpoint-${jobId}`;
-      await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${projectId},'checkpoint','{}')`;
+      await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${projectId},'checkpoint',${sql.json({network_policy:{allow_egress:false}})})`;
       await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status) VALUES(${canvasId},'root','root','active')`;
       const resolved = await snapshots.freezeAgentSnapshotNetworkPolicy(sql, canvasId,
         await core.resolveAgentSnapshotForJob(sql, projectId, 'audit'));
@@ -138,6 +138,8 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       await humans.acknowledgeHumanMessage(fixture.jobId,messageId);unregister();
       await attempts.settleAttemptTerminal(sql,fixture.jobId,'failed',{reason:'known fixture failure'});
       await sql`UPDATE jobs SET status='failed' WHERE id=${fixture.jobId}`;
+      const state=await import('../platform-api/completion-state.js');
+      assert.ok((await state.readCompletionExecutionState(sql,fixture.jobId))?.allowed_actions.includes('request_recovery'));
       assert.equal((await requeueJob(fixture.jobId,'resume-frozen')).kind,'ok');
       assert.ok((await claimPendingJobs()).some(job=>job.id===fixture.jobId));
       const [third]=await sql`SELECT id,attempt_no FROM job_attempts WHERE job_id=${fixture.jobId} AND status='active'`;
@@ -148,27 +150,33 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.equal(generation.payload_json.supersedes_attempt_id,String(second.id));
       await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
     });
-    await context.test('an existing project queue does not enroll an unmanaged waiting Job',async()=>{
+    await context.test('a paused project queue preserves unmanaged execution and its already active head',async()=>{
       await sql`INSERT INTO project_task_queues(project_id) VALUES(${projectId}) ON CONFLICT DO NOTHING`;
+      for(const enrolled of [false,true]) {
       const fixture=await setup();await fixture.seal();await fixture.close();
+      await sql`UPDATE project_task_queues SET paused=true WHERE project_id=${projectId}`;
+      if(enrolled) await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state) VALUES(${projectId},${fixture.canvasId},'active')`;
       assert.equal((await fixture.reply()).statusCode,202);await pumpHumanContinuations(1,fixture.requestId);
       assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,'pending');
       await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+      await sql`DELETE FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`;
+      }
+      await sql`UPDATE project_task_queues SET paused=false WHERE project_id=${projectId}`;
     });
-    for (const blocker of ['preparing','missing_files','unknown_effect','paused','exhausted','cancelled','queue_wait','queue_paused','expired'] as const) {
+    for (const blocker of ['preparing','missing_files','unknown_effect','paused','exhausted','cancelled','queue_wait','queue_paused_future','expired'] as const) {
       await context.test(`saved response survives ${blocker} without unauthorized execution`, async () => {
         const fixture = await setup();
         if (blocker !== 'preparing') { await fixture.seal(); await fixture.close(); }
         if (blocker === 'missing_files') await rm(path.join(directory,'human-checkpoints',fixture.requestId),{recursive:true,force:true});
         if (blocker === 'unknown_effect') await sql`INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status,replay_policy)
           VALUES(${fixture.attemptId},${fixture.jobId},'unsettled-external','gateway_model_request','unknown','never')`;
-        if (blocker === 'paused') await sql`UPDATE canvases SET target_json=${sql.json({execution_control:{paused:true}})} WHERE id=${fixture.canvasId}`;
+        if (blocker === 'paused') await sql`UPDATE canvases SET target_json=target_json || ${sql.json({execution_control:{paused:true}})} WHERE id=${fixture.canvasId}`;
         if (blocker === 'exhausted') await sql`UPDATE job_execution_clocks SET used_ms=budget_ms WHERE job_id=${fixture.jobId}`;
         if (blocker === 'cancelled') await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
-        if(blocker==='queue_wait'||blocker==='queue_paused') {
+        if(blocker==='queue_wait'||blocker==='queue_paused_future') {
           await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
-            VALUES(${projectId},${fixture.canvasId},${blocker==='queue_wait'?'queued':'active'})`;
-          await sql`UPDATE project_task_queues SET paused=${blocker==='queue_paused'} WHERE project_id=${projectId}`;
+            VALUES(${projectId},${fixture.canvasId},'queued')`;
+          await sql`UPDATE project_task_queues SET paused=${blocker==='queue_paused_future'} WHERE project_id=${projectId}`;
         }
         if(blocker==='expired') await sql`UPDATE human_requests SET checkpoint_expires_at=now()-interval '1 second' WHERE id=${fixture.requestId}`;
         const response=await fixture.reply();

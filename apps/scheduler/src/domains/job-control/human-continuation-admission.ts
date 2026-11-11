@@ -17,6 +17,8 @@ export async function humanContinuationAdmission(db:typeof sql,job:Record<string
     ||(recovering&&(latest.attempt_no!==request.target_attempt_no||latest.status==='active'))) return deny("HUMAN_CHECKPOINT_OWNER_CHANGED");
   if(request.checkpoint_status!=="ready"||!request.process_exited_at||!request.resources_released_at)
     return deny(request.checkpoint_error_code??"HUMAN_CHECKPOINT_NOT_READY");
+  const [resource]=await db`SELECT id FROM device_leases WHERE job_id=${String(job.id)} AND state IN ('pending','active') LIMIT 1`;
+  if(resource) return deny("HUMAN_CONTINUATION_RESOURCES_PENDING");
   const manifest=HumanCheckpointManifest.safeParse(request.manifest_json);
   if(!manifest.success||manifest.data.job_id!==job.id||manifest.data.request_id!==request.id
     ||manifest.data.attempt_id!==request.attempt_id||manifest.data.snapshot_sha256!==humanSnapshotDigest(job.agent_snapshot_json))
@@ -35,6 +37,6 @@ export async function humanContinuationAdmission(db:typeof sql,job:Record<string
   const [queue]=await db`SELECT q.paused,i.state FROM project_task_queues q
     LEFT JOIN project_task_queue_items i ON i.project_id=q.project_id AND i.canvas_id=${String(job.canvas_id)}
     WHERE q.project_id=${String(job.project_id)}`;
-  if(queue?.state&&(queue.paused||queue.state!=="active")) return deny("HUMAN_CONTINUATION_WAITING_TURN");
+  if(queue?.state&&queue.state!=="active") return deny("HUMAN_CONTINUATION_WAITING_TURN");
   return {request,remainingMs,blocker:null};
 }

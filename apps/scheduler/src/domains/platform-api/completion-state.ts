@@ -37,8 +37,9 @@ export async function readCompletionExecutionState(db: typeof sql, jobId: string
     const liveAttempt = liveJob && attempt?.status === "active" && !attempt.cancel_requested;
     const localTerminal = liveAttempt ? readRuntimeTerminalState(jobId, String(attempt.id)) : null;
     const terminalJob = ["failed", "timeout", "cancelled", "orphan", "succeeded"].includes(job.status);
+    const terminalHumanOwner=humanRequest&&(!attempt||humanRequest.attempt_id===attempt.id);
     const acceptedTerminal = accepted?.type === "human" ? "human" : accepted ? "done"
-      : localTerminal ?? (job.status === "waiting_human" || (terminalJob && humanRequest) ? "human" : null);
+      : localTerminal ?? (job.status === "waiting_human" || (terminalJob && terminalHumanOwner) ? "human" : null);
     const currentHuman = acceptedTerminal === "human" && (liveAttempt||humanRequest?.current)
       && (humanRequest?.current || localTerminal === "human" || (job.status === "waiting_human" && !humanRequest));
     const subject = humanRequest?.current ? humanRequest.payload.subject

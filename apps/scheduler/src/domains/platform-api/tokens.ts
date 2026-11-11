@@ -255,7 +255,7 @@ export async function mintJobCapabilityToken(
   const expiresAt = capabilityExpiryForJob({
     now,
     startedAt: job.started_at,
-    executionDeadlineAt:job.execution_deadline_at,
+    executionDeadlineAt:job.started_at?job.execution_deadline_at:null,
     timeoutSec: job.timeout_sec,
     leaseExpiresAt: job.lease_expires_at,
     ttlSec: options.ttlSec,

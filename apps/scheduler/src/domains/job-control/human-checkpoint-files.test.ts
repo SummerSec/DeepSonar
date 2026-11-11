@@ -123,6 +123,7 @@ test("capture checks source hashes and secrets; reads reject corruption and miss
     const backgroundHost={...host,run:async()=>({exitCode:0,stderr:'',stdout:JSON.stringify([
       {path:filePath,bytes:backgroundBytes.length,sha256:checkpointHash(backgroundBytes)}])}),readWorkspaceFile:async()=>backgroundBytes};
     const managed=checkpointManagedSecrets({DEEPSONAR_GATEWAY_TOKEN:'different-main-fixture-token'},{},[backgroundToken]);
+    assert.ok(checkpointManagedSecrets({}, {'auth.json':JSON.stringify({api_key:'config-only-secret'})},[]).includes('config-only-secret'));
     await assert.rejects(captureCheckpointFiles(backgroundHost,backgroundRequest,[],managed,[]),/SECRET_DETECTED/);
     await assert.rejects(readCheckpointFile(backgroundRequest,{bytes:backgroundBytes.length,sha256:checkpointHash(backgroundBytes)}),/FILE_UNAVAILABLE/);
     const changed = { ...host, readWorkspaceFile: async () => Buffer.alloc(bytes.length) };
