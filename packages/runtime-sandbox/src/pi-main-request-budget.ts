@@ -47,12 +47,16 @@ ${PI_ANTHROPIC_THINKING_POLICY_SOURCE}
 // createRequire.resolve cannot resolve this package's import-only export conditions.
 // base 镜像把依赖平铺进 npm 全局根；kali-minimal 只全局安装 CLI，pi-ai 嵌在其包目录下。
 // 先从运行中的 pi bundle 反推嵌套根，再回退平铺根；两者都要过 1.5.2 身份校验。
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 export function piAiCandidateRoots(cliEntry = process.argv[1] ?? '') {
   const roots = [];
   const marker = '/node_modules/@earendil-works/pi-coding-agent/';
-  const cut = cliEntry.indexOf(marker);
-  if (cut > 0) roots.push(cliEntry.slice(0, cut + marker.length - 1) + '/node_modules/@earendil-works/pi-ai');
+  // 全局安装把 pi 暴露为符号链接（Kali 为 /usr/local/bin/pi），argv[1] 保留链接路径；
+  // 先解析 realpath 才能看到真实的 bundle 位置。
+  let entry = cliEntry;
+  try { entry = realpathSync(cliEntry); } catch {}
+  const cut = entry.indexOf(marker);
+  if (cut > 0) roots.push(entry.slice(0, cut + marker.length - 1) + '/node_modules/@earendil-works/pi-ai');
   roots.push('/usr/local/lib/node_modules/@earendil-works/pi-ai');
   return roots;
 }
