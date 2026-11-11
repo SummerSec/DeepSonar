@@ -1,6 +1,6 @@
 # DeepSonar 文档索引
 
-#1074 第一切片的[人工请求历史与当前动作](AGENT_REPAIR_LIFECYCLE.md#人工请求历史与当前动作1074-第一切片)修正终态等待建议，并让 Job 详情独立读取完整持久请求。schema/超时/恢复权限不变；断点续做仍待后续切片，最终 SHA Actions 待验。
+#1074 的[人工断点续做](HUMAN_CONTINUATION.md)覆盖持久请求、有限封存与资源回收、晚回复保存和受治理的新执行；当前模式为 structured 新会话，原生 Session 与历史 failed Job 关联接续另列剩余范围。最终 SHA Actions 待验。
 
 #1032 的 [Pi 模型上下文凭据投影首片](MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)共用主执行/OM 的 SDK 生成前精确替换与镜像双源码准入；原字节 Gateway 守卫不变。映射 FR-CRED-003、NFR-SEC-003；回归接既有核心/原生 Reverse Actions，最终 SHA 待验，同 UID 隔离、诊断/审计与生产验证未交付。
 

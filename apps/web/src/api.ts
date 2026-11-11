@@ -415,7 +415,8 @@ export interface CanvasHumanMessagePage {
 
 export interface CreateCanvasHumanMessage {
   message_id: string;
-  target: { kind: "hub" } | { kind: "job"; node_id: string };
+  target: { kind: "hub" } | { kind: "job"; node_id: string }
+    | { kind: "request"; request_id: string; expected_revision: number };
   body: string;
   attachment_version_ids: string[];
 }
@@ -656,12 +657,27 @@ export interface JobHumanRequest {
   };
 }
 
+export interface HumanContinuation {
+  id: string;
+  revision: number;
+  status: "open" | "answered" | "dismissed" | "closed";
+  checkpoint_status: "preparing" | "ready" | "blocked";
+  checkpoint_error_code: string | null;
+  resume_error_code: string | null;
+  overdue_at: string | null;
+  answered_at: string | null;
+  resumed_at: string | null;
+  mode: "structured";
+  remaining_execution_ms: number | null;
+}
+
 export interface JobDetail {
   job: {
     execution_state?: JobExecutionState | null;
     id: string;
     /** Returned by the Job detail API; older projections may omit it. */
     project_id?: string;
+    canvas_id?: string | null;
     type: string;
     status: string;
     error: string | null;
@@ -674,6 +690,7 @@ export interface JobDetail {
   };
   events: JobEvent[];
   human_request: JobHumanRequest | null;
+  human_continuation?: HumanContinuation | null;
   findings: { id: string; severity: string; title: string; verify_status: string }[];
   attempts: JobAttemptSummary[];
   effects: JobEffectSummary[];

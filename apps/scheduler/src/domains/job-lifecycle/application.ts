@@ -17,8 +17,6 @@ import {
   settleAttemptTerminal,
 } from "../job-attempt/index.js";
 import { CHROME_JOB_STALL_SEC, HUB_JOB_STALL_SEC, TOOL_CALL_STARTED_PREFIX } from "./stall-policy.js";
-import { reconcileJobEffects } from "../job-attempt/reconcile-effects-runner.js";
-import type { MigrationConnection } from "../../migration-runner.js";
 
 export type {
   JobLifecycleDatabase,
@@ -362,73 +360,19 @@ export function createSqlJobLifecycleApplication(
     },
 
     /**
-     * waiting_human 独立预算（#536）：最近一次 human 事件到期且效果已结清时才 failed。
-     * 0 关闭；未结清效果或本轮对账进展保留等待，不重放也不刷新期限。
+     * #1074: the human response window is an overdue marker, never an execution
+     * deadline. Resource destruction is separately fenced by the owning Attempt.
      */
     async reapWaitingHumanTimeout(waitingHumanSec) {
       const budget = Number.isSafeInteger(waitingHumanSec) ? waitingHumanSec : 0;
       if (budget <= 0) return [];
-      return atomically(async (tx) => {
-        // Reconciliation and the timeout verdict share Job -> Attempt locks.
-        // An active writer must not create a new effect between inspection and verdict.
-        const candidates = await tx`
-          SELECT jobs.id::text AS id FROM jobs
-          WHERE status = 'waiting_human'
-            AND ${budget}::int > 0
-            AND COALESCE(
-              (SELECT max(e.created_at) FROM events e WHERE e.job_id = jobs.id AND e.type = 'human'),
-              started_at,
-              claimed_at,
-              created_at
-            ) + (${budget}::int * interval '1 second') < now()
-          FOR UPDATE`;
-        const result: Array<{ id: string; sandbox_id: string | null }> = [];
-        for (const candidate of candidates as unknown as Array<{ id: string }>) {
-          const jobId = String(candidate.id);
-          await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no FOR UPDATE`;
-          const outcome = await reconcileJobEffects(
-            tx as unknown as MigrationConnection,
-            jobId,
-            `reaper-timeout:${jobId}`,
-          ).catch(() => null);
-          if (!outcome) continue;
-          // Unknown effects are a platform reconciliation blocker, not a human fault.
-          // Any reconciliation progress gets a tick for the existing completion/reply path.
-          if (outcome.remaining > 0 || outcome.applied > 0) continue;
-          const updated = await tx`
-            UPDATE jobs SET status = 'failed', finished_at = now(),
-                            error = COALESCE(error, '') || ${"人工等待超时（Reaper 判定）"},
-                            lease_expires_at = NULL, heartbeat_at = NULL
-            WHERE id = ${jobId}
-              AND status = 'waiting_human'
-              -- Reconciliation excludes active Attempts and planned effects; their
-              -- absence from its result is not proof that the whole Job is settled.
-              AND NOT EXISTS (
-                SELECT 1 FROM job_attempt_effects e
-                WHERE e.job_id=jobs.id AND e.status <> 'settled'
-              )
-              -- Re-check the deadline: a human reply during this batch resets the
-              -- budget and this Job must not be killed for the earlier wait.
-              AND COALESCE(
-                (SELECT max(e.created_at) FROM events e WHERE e.job_id = jobs.id AND e.type = 'human'),
-                started_at,
-                claimed_at,
-                created_at
-              ) + (${budget}::int * interval '1 second') < now()
-            RETURNING id, sandbox_id`;
-          result.push(...(updated as unknown as Array<{ id: string; sandbox_id: string | null }>));
-        }
-        for (const row of result) {
-          await settleAttemptTerminal(
-            tx,
-            String(row.id),
-            "failed",
-            { reason: "human_timeout" },
-            "人工等待超时（Reaper 判定）",
-          );
-        }
-        return rows(result as unknown as JobLifecycleRow[]);
+      await atomically(async (tx) => {
+        await tx`UPDATE human_requests r SET overdue_at=clock_timestamp()
+          FROM jobs j WHERE j.id=r.job_id AND j.status='waiting_human'
+            AND r.status='open' AND r.overdue_at IS NULL
+            AND r.created_at+(${budget}::int*interval '1 second')<clock_timestamp()`;
       });
+      return [];
     },
 
     /**

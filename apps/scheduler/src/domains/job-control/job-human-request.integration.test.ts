@@ -218,12 +218,12 @@ test("Job human detail uses durable history, latest Attempt and existing HTTP au
       let cursor: string | null = null;
       let count = 0;
       do {
-        const page = await app.inject({ method: "GET", url: `/jobs/${jobId}/events?limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, headers });
+        const page: {statusCode:number;body:string;json:()=>unknown} = await app.inject({ method: "GET", url: `/jobs/${jobId}/events?limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, headers });
         assert.equal(page.statusCode, 200, page.body);
         for (const secret of ["quoted-private-example", "bare-private-example", "bearer-private-example"]) {
           assert.equal(page.body.includes(secret), false);
         }
-        const body: { items: Array<{ payload_json: { subject: unknown; plan_basis: unknown } }>; next_cursor: string | null } = page.json();
+        const body = page.json() as { items: Array<{ payload_json: { subject: unknown; plan_basis: unknown } }>; next_cursor: string | null };
         count += body.items.length;
         assert.ok(count <= 3, "pagination must advance without repeating a human event");
         assert.deepEqual(body.items[0].payload_json.subject, payload.subject);

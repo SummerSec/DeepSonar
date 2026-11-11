@@ -283,6 +283,7 @@ export function registerCanvasRoutes(app: FastifyInstance): void {
       target: z.discriminatedUnion("kind", [
         z.object({ kind: z.literal("hub") }).strict(),
         z.object({ kind: z.literal("job"), node_id: z.string().uuid() }).strict(),
+        z.object({kind:z.literal("request"),request_id:z.string().uuid(),expected_revision:z.number().int().min(0)}).strict(),
       ]),
       body: z.string().min(1).max(8_000).regex(/\S/u),
       attachment_version_ids: z.array(z.string().uuid()).max(20).default([]),

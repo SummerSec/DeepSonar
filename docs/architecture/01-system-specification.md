@@ -211,7 +211,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-008 Reaper 与终态幂等
 
-- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与 `waiting_human` 超时，不得信任 Agent 自报；取消、超时、迟到回调、容器创建与销毁必须走幂等路径，不得 resurrect 终态 Job。
+- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与人工响应阈值，不得信任 Agent 自报。#1074 的响应超时仅标 overdue，等待保留、执行资源有界回收；晚回复必须通过可验证断点、累计预算与当前授权准入。取消、超时、迟到回调、创建与销毁必须幂等，不得复活终态 Job。
 - **决策来源**：运维判定和外部清理是平台责任，迟到回调不能重新取得执行权。
 - **实现状态**：as-built；Reaper 和状态条件更新复用 Job/Attempt effect identity。终态 model token 与 Control token 撤销在同一 Job 终态事务内完成，不另取 Job lock，也不吞掉撤销异常；回滚夹具保持 Job/model token/Control token/audit 原子性，终态后的真实 HTTP 请求返回 401。
 - **代码入口**：[Dispatcher/Reaper](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[token revocation](../../apps/scheduler/src/gateway-token-revocation.ts)、[配置](../../apps/scheduler/src/config.ts)。
@@ -300,7 +300,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 ### FR-CTRL-006 失败分类与无控制通道回退
 
 - **规范要求**：Scheduler 必须区分 `model_correctable`、`transient_retryable`、`unknown_external_effect`、`permanent_failure`；未知外部效果必须停止自动重放，权限/快照/版本错误必须 fail closed，不得回退到 MCP、普通文本或另一套控制通道。
-- **当前动作与历史接受事实**：终态 Job 的历史人工请求不得被投影为仍在等待人工/平台或可修正提案。完整请求须可在权限范围内独立于首批事件读取，缺少待办项不表示请求缺失；历史读取不授权恢复。#1074 第一切片只修正读投影，断点续做保持待交付；HTTP/PG 与 Web 回归的最终 SHA Actions 另验。
+- **当前动作与历史接受事实**：终态历史请求只读，不授予恢复。#1074 以专属 human_requests、有效执行时钟和可验证文件断点支持人工超时后回复；回复先保存，最新请求/断点/旧执行退出/累计预算/当前授权/队列席位全部通过才续做，未知效果不重放。见[人工续做](../HUMAN_CONTINUATION.md)；HTTP/PG 与 Web 回归最终 SHA Actions 另验。
 - **决策来源**：不同失败的安全动作不同，回退通道会绕过 Job scope 和审计。
 - **实现状态**：as-built（分类与 API 失败路径）；完整 Receipt/Settlement 目标尚未全部落地。 Knowledge/Skill 领域分类及行动建议通过 runtime/HTTP 反馈保留；终态/权限/撤销拒绝与可修正输入分开，见[#903 切片边界](../PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。
 - **代码入口**：[trusted kernel 文档](../AI_NATIVE_TRUSTED_KERNEL.md)、[Control input](../../apps/scheduler/src/control-input.ts)、[Job recovery](../../apps/scheduler/src/domains/job-lifecycle/application.ts)。

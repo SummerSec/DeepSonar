@@ -1,5 +1,6 @@
-import type { JobDetail, JobHumanRequest } from "./api";
+import type { JobDetail, JobHumanRequest, HumanContinuation } from "./api";
 import { HumanRequestDetails } from "./HumanRequestDetails";
+import { HumanContinuationReply } from "./HumanContinuationReply";
 
 const SUBJECT_LABELS = {
   credential: "凭据配置",
@@ -8,10 +9,12 @@ const SUBJECT_LABELS = {
   business_decision: "业务决定",
 };
 
-export function JobHumanRequestPanel({ request, status, onSendMessage }: {
+export function JobHumanRequestPanel({ request, status, onSendMessage, continuation, canvasId }: {
   request: JobHumanRequest | null;
   status: string;
   onSendMessage?: () => void;
+  continuation?: HumanContinuation | null;
+  canvasId?: string | null;
 }) {
   if (request === null) {
     return <section aria-label="人工请求" className="theme-surface rounded-2xl p-4 ring-1">
@@ -46,7 +49,9 @@ export function JobHumanRequestPanel({ request, status, onSendMessage }: {
         detailStatus="loaded"
         detailVersionMatches={true}
       />
-      {current && onSendMessage && <button type="button" onClick={onSendMessage}
+      {current && continuation && canvasId && <HumanContinuationReply key={continuation.id}
+        continuation={continuation} canvasId={canvasId} canReply={!!onSendMessage} />}
+      {current && !continuation && onSendMessage && <button type="button" onClick={onSendMessage}
         className="human-message-inline-action mt-3 min-h-11 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-acc-300">
         打开任务人工消息
       </button>}
@@ -55,11 +60,12 @@ export function JobHumanRequestPanel({ request, status, onSendMessage }: {
 }
 
 export function JobHumanRequestSection({ detail, onSendMessage }: {
-  detail: Pick<JobDetail, "job" | "human_request">;
+  detail: Pick<JobDetail, "job" | "human_request" | "human_continuation">;
   onSendMessage?: () => void;
 }) {
   if (detail.human_request === null && detail.job.execution_state?.accepted_terminal !== "human" && detail.job.status !== "waiting_human") return null;
   return <div className="m-4">
-    <JobHumanRequestPanel request={detail.human_request} status={detail.job.status} onSendMessage={onSendMessage} />
+    <JobHumanRequestPanel request={detail.human_request} status={detail.job.status} onSendMessage={onSendMessage}
+      continuation={detail.human_continuation} canvasId={detail.job.canvas_id} />
   </div>;
 }

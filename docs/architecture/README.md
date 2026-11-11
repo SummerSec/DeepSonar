@@ -2,7 +2,7 @@
 
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
 > 同步日期：2026-11-11
-> #1074 第一切片：终态等待建议与完整请求读取见[生命周期契约](../AGENT_REPAIR_LIFECYCLE.md#人工请求历史与当前动作1074-第一切片)、FR-CTRL-006 和接口视图。只读投影已接线，晚回复续做尚未交付，最终 SHA Actions 另验。
+> #1074 的[人工断点续做](../HUMAN_CONTINUATION.md)与[ADR 0022](adr/0022-human-continuation.md)扩展 FR-JOB-008/FR-CTRL-006；schema 73、超时 overdue、有限封存回收和晚回复受治理续做已接线，最终 SHA Actions 另验。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
 #1032 的 [Pi context 首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)映射 FR-CRED-003 / NFR-SEC-003、06/10 与追溯：主请求/OM 的 SDK 生成前精确替换和双源码镜像 guard，保持 Gateway 原字节、认证及历史；同 UID 隔离和完整诊断/审计未交付，最终 SHA Actions 待验。
@@ -39,7 +39,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 
 #871/#873 的数据库事务重试、Canvas-first 锁序与跨 Attempt 共享卷边界见[运行时](06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)及[资产专题](../SHARED_ASSET_BLOB_STORE.md#跨-attempt-共享卷生命周期871)。#874 的持久宿主恢复、去重 Hub 和严格对账/停止决策见 [FR-CTRL-010](01-system-specification.md#fr-ctrl-010-完成未知效果的受治理恢复)、[ADR 0015](adr/0015-governed-completion-recovery.md)及[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。已合入主线已接回归入口，main 616d7a36 工程验收见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验；显式恢复的新执行代际与 stale Hub 退出见 [#903 生命周期](../AGENT_REPAIR_LIFECYCLE.md)，最终 SHA 工程验收单独记录。
 
-#923 将模型数据面与结算确认分离，关联 FR-CRED-003/004、FR-CAP-009 和 NFR-PERF-004；[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)拥有原始字节、HTTP 边界、预算拒绝及 OM 查询契约，[ADR 0017](adr/0017-transparent-gateway-settlement.md)记录迁移。#928 已合入 main 616d7a36，工程证据见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
+#923 将模型数据面与结算确认分离，关联 FR-CRED-003/004、FR-CAP-009 和 NFR-PERF-004；[透明传输专题](../MODEL_GATEWAY_TRANSPARENCY.md)拥有原始字节、HTTP 边界、预算拒绝及 OM 查询契约，[ADR 0022](adr/0017-transparent-gateway-settlement.md)记录迁移。#928 已合入 main 616d7a36，工程证据见[发布基线](../RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)；后续 SHA 另验。
 
 #954/#960 的全局 Skill 源修复映射 [IR-007](01-system-specification.md#ir-007-git-skill-source)、[FR-CAP-003](01-system-specification.md#fr-cap-003-受治理-skill-拉取)、[FR-KNOW-002](01-system-specification.md#fr-know-002-跨项目-skill-精确授权)：sync 只候选、全局管理员精确 hash+epoch 审批、跨实例同源锁、旧 Job CAS/撤销边界不变。schema68 的已批准/候选元数据见[数据](08-data-architecture.md#skill-源已批准目录与候选960)，管理授权与全局启用影响见[接口](09-interface-specs.md#全局-skill-源候选审批960)，健康观测/既有画布节点 warning 见[运行时](06-runtime-view.md#skill-源检查审批与-job-观察954960)。回归已编写接线但本次未运行，本地测试/构建/typecheck/DB 均未执行，最终 SHA Actions 待验；[风险](12-risks-and-tech-debt.md#skill-源修复与剩余证据边界960)只保留实际证据缺口，不把已修复核心重新列作未来设计。
 

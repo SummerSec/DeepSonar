@@ -1,8 +1,9 @@
 import type { SandboxRunner } from "@deepsonar/runtime-sandbox";
 import { lockCanvasForConvergence } from "./core.js";
 import { sql } from "./db.js";
-import { settleEffect } from "./domains/job-attempt/application.js";
+import { markAttemptInterrupted, settleEffect } from "./domains/job-attempt/application.js";
 import { revokeOldRuntimeGrants } from "./domains/job-control/rerun.js";
+import { pauseHumanExecutionClock } from "./domains/job-control/human-continuation-clock.js";
 
 /** Preserve ordinary finally cleanup; a refused human-wait close is never a fallback authorization. */
 export async function cleanupDispatcherSandbox(
@@ -16,6 +17,7 @@ export async function cleanupDispatcherSandbox(
     return;
   }
   await runner.destroy({ sandboxId: input.sandboxId });
+  if (input.attemptId) await pauseHumanExecutionClock(db,input.jobId,input.attemptId);
 }
 
 /** Host-only close: a wait label or an interrupted Attempt is not proof that the run stopped. */
@@ -59,12 +61,20 @@ export async function destroyAndSettleHumanWaitRun(
       runtime_grants_revoked: true,
     } });
     if (!settled) throw new Error("HUMAN_WAIT_RUN_SETTLEMENT_CHANGED");
+    await pauseHumanExecutionClock(tx,input.jobId,input.attemptId);
+    await tx`UPDATE human_requests SET resources_released_at=now(),process_exited_at=now(),
+      checkpoint_status=CASE WHEN manifest_json IS NULL THEN 'blocked' WHEN checkpoint_status='preparing' THEN 'ready' ELSE checkpoint_status END,
+      checkpoint_error_code=CASE WHEN manifest_json IS NULL THEN COALESCE(checkpoint_error_code,'HUMAN_CHECKPOINT_UNAVAILABLE') ELSE checkpoint_error_code END
+      WHERE job_id=${input.jobId} AND attempt_id=${input.attemptId}`;
+    await markAttemptInterrupted(tx,input.jobId,"human_wait_checkpoint_sealed");
+    await tx`UPDATE jobs SET sandbox_id=NULL,lease_expires_at=NULL,heartbeat_at=NULL
+      WHERE id=${input.jobId} AND status='waiting_human'`;
     // Ownership must outlive a failed settlement commit, then disappear atomically
     // with the run/grants. Never release a foreign Job/Attempt's lease.
     await tx`DELETE FROM worker_sandbox_leases WHERE sandbox_id=${input.sandboxId}
       AND (job_id IS NULL OR job_id=${input.jobId})
       AND (attempt_id IS NULL OR attempt_id=${input.attemptId})`;
-    // Keep the waiting Job/Attempt and all historical counters and usage unchanged.
+    // The Job stays waiting; its interrupted Attempt and cumulative usage remain historical truth.
     return true;
   });
 }
@@ -76,6 +86,9 @@ export async function reconcileHumanWaitRuns(db: typeof sql, runner: Pick<Sandbo
       WHERE job_id=j.id ORDER BY attempt_no DESC LIMIT 1) a ON true
     WHERE j.status='waiting_human' AND j.sandbox_id IS NOT NULL
       AND a.status='active' AND NOT a.cancel_requested AND a.sandbox_id=j.sandbox_id
+      AND EXISTS (SELECT 1 FROM human_requests r WHERE r.job_id=j.id AND r.attempt_id=a.id
+        AND (r.manifest_json IS NOT NULL OR r.checkpoint_status='blocked'
+          OR r.created_at+interval '90 seconds'<now()))
       AND EXISTS (SELECT 1 FROM events e WHERE e.job_id=j.id AND e.attempt_id=a.id AND e.type='human')
       AND EXISTS (SELECT 1 FROM job_attempt_effects x WHERE x.job_id=j.id AND x.attempt_id=a.id
         AND x.effect_kind='agent_run' AND x.effect_id='agent_run:' || a.attempt_no

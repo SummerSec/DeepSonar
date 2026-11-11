@@ -1,7 +1,11 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-12
+
+## 人工等待断点与累计时钟（#1074）
+
+schema 73 新增 human_requests（原 human 事件/Attempt、revision、断点 manifest、退出/回收、回复与唯一 successor）和 job_execution_clocks（冻结时间预算、累计 active 毫秒和精确 owner）。human_messages 用请求与版本关联回复；accepted 事件、回复已保存、注入、ACK、完成分别记账。文件使用现有 BLOB_DIR 下有界 CAS，30 天到期先持久阻断再删除；不可见/缺失/hash 不符不视为空文件。请求表是管理当前状态，不覆盖历史事件。见[人工续做](../HUMAN_CONTINUATION.md)。
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 

@@ -1,5 +1,6 @@
 import { readCompletionExecutionState } from "../platform-api/completion-state.js";
 import { withWaitingExecutionStates } from "./list-execution-state.js";
+import { readHumanContinuation } from "./human-continuation-store.js";
 import { readJobHumanRequest, redactJobHumanRequestText } from "./job-human-request.js";
 import { TaskGoalReviewRequest, normalizeTaskContract } from "@deepsonar/shared-types";
 import { ControlInputError } from "../../control-input.js";
@@ -551,6 +552,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       provenance: jobProvenance(String(job.status), job.payload_json),
       job: safeJob,
       human_request: await readJobHumanRequest(sql, String(job.id)),
+      human_continuation:await readHumanContinuation(sql,String(job.id)),
       dispatched_prompt: dispatchedPrompt || null,
       events: events.map((event) => ({
         ...event,

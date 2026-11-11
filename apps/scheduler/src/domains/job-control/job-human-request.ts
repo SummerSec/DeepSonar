@@ -44,7 +44,11 @@ export function isCurrentJobHumanRequest(
 
 export async function readJobHumanRequest(db: typeof sql, jobId: string) {
   const [row] = await db`SELECT human.event_id,human.attempt_id,human.created_at,human.payload_json,
-      j.status AS job_status,latest.id AS latest_attempt_id,latest.status AS attempt_status,latest.cancel_requested
+      j.status AS job_status,latest.id AS latest_attempt_id,latest.status AS attempt_status,latest.cancel_requested,
+      EXISTS(SELECT 1 FROM human_requests r WHERE r.id=human.event_id AND r.job_id=j.id
+        AND r.attempt_id=latest.id AND latest.status IN ('active','interrupted') AND NOT latest.cancel_requested
+        AND r.status IN ('open','answered') AND r.resumed_at IS NULL
+        AND j.status='waiting_human') AS managed_wait
     FROM jobs j
     JOIN LATERAL (SELECT event_id,attempt_id,created_at,payload_json FROM events
       WHERE job_id=j.id AND type='human' ORDER BY job_seq DESC LIMIT 1) human ON true
@@ -57,7 +61,7 @@ export async function readJobHumanRequest(db: typeof sql, jobId: string) {
     event_id: String(row.event_id),
     attempt_id: attemptId,
     created_at: new Date(row.created_at).toISOString(),
-    current: isCurrentJobHumanRequest(String(row.job_status), row.latest_attempt_id ? {
+    current: row.managed_wait===true || isCurrentJobHumanRequest(String(row.job_status), row.latest_attempt_id ? {
       id: String(row.latest_attempt_id), status: String(row.attempt_status), cancel_requested: row.cancel_requested === true,
     } : null, attemptId),
     payload: projectJobHumanRequestPayload(row.payload_json),

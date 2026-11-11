@@ -727,15 +727,16 @@ if (!testDatabaseUrl) {
         status: "settled", outcome: { fixture: "fake runner exit observed" },
       });
       const waitingResponse = await post(waitingJobId, "rerun-current");
-      assert.equal(waitingResponse.statusCode, 200, waitingResponse.payload);
+      assert.equal(waitingResponse.statusCode, 409, waitingResponse.payload);
+      assert.equal(waitingResponse.json().error_code,"HUMAN_REPLY_REQUIRED");
       const [waitingAfter] = await sql`SELECT status, sandbox_id FROM jobs WHERE id = ${waitingJobId}`;
       const [waitingAttemptAfter] = await sql`
         SELECT status, phase FROM job_attempts WHERE id = ${String(waitingAttempt.id)}`;
       const [waitingEffectAfter] = await sql`
         SELECT status, replay_policy FROM job_attempt_effects
         WHERE attempt_id = ${String(waitingAttempt.id)} AND effect_id = 'waiting-agent-run'`;
-      assert.deepEqual(waitingAfter, { status: "pending", sandbox_id: null });
-      assert.deepEqual(waitingAttemptAfter, { status: "interrupted", phase: "interrupted" });
+      assert.deepEqual(waitingAfter, { status: "waiting_human", sandbox_id: "waiting-human-sandbox" });
+      assert.equal(waitingAttemptAfter.status,"active");
       assert.deepEqual(waitingEffectAfter, { status: "settled", replay_policy: "never" });
       await sql`UPDATE jobs SET status = 'cancelled', finished_at = now() WHERE id = ${waitingJobId}`;
 
@@ -776,13 +777,13 @@ if (!testDatabaseUrl) {
         method: "POST",
         url: `/tasks/${taskWaitingCanvasId}/resume-session`,
       });
-      assert.equal(taskWaitingResume.statusCode, 200, taskWaitingResume.payload);
-      assert.equal(taskWaitingResume.json().action, "resume_job");
+      assert.equal(taskWaitingResume.statusCode, 409, taskWaitingResume.payload);
+      assert.equal(taskWaitingResume.json().error_code,"HUMAN_REPLY_REQUIRED");
       const [taskWaitingAfter] = await sql`SELECT status FROM jobs WHERE id = ${taskWaitingJobId}`;
       const [taskWaitingAttemptAfter] = await sql`
         SELECT status FROM job_attempts WHERE id = ${String(taskWaitingAttempt.id)}`;
-      assert.equal(taskWaitingAfter.status, "pending");
-      assert.equal(taskWaitingAttemptAfter.status, "interrupted");
+      assert.equal(taskWaitingAfter.status, "waiting_human");
+      assert.equal(taskWaitingAttemptAfter.status, "active");
       await sql`UPDATE jobs SET status = 'cancelled', finished_at = now() WHERE id = ${taskWaitingJobId}`;
       // #490: a terminal Job must answer with a stable error_code, not a bare 409.
       const terminalCancel = await app.inject({
