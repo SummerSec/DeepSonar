@@ -1,4 +1,5 @@
 import { readControlReceiptByKey, controlInputDigest } from "./control-receipt.js";
+import { scrubPostgresJson } from "./pg-text-safety.js";
 import { createHash } from "node:crypto";
 import { DonePayload, projectCompletionRecovery, type RepairFeedback } from "@deepsonar/shared-types";
 import { sql } from "../../db.js";
@@ -80,6 +81,7 @@ export async function recordCompletionProposal(input: {
   const db = input.db ?? sql;
   const digest = completionInputDigest(input.rawInput);
   return db.begin(async transaction => {
+    // SAFETY: postgres.js 事务回调的事务对象与 sql 标签函数同形，接收端只做结构化使用。
     const tx = transaction as unknown as typeof sql;
     const [job] = await tx`SELECT id,project_id,canvas_id,status,agent_snapshot_json,started_at,timeout_sec,
       lease_expires_at > clock_timestamp() AS leased,
@@ -184,7 +186,8 @@ export async function recordCompletionProposal(input: {
     const [{ next }] = await tx`SELECT COALESCE(MAX(job_seq),0)+1 AS next FROM events WHERE job_id=${input.jobId}`;
     await tx`INSERT INTO event_dedup(event_id,job_id) VALUES(${receiptRef},${input.jobId})`;
     await tx`INSERT INTO events(job_id,event_id,job_seq,attempt_id,type,payload_json)
-      VALUES(${input.jobId},${receiptRef},${next},${attempt.id},'control_receipt',${tx.json(receipt as never)})`;
+      VALUES(${input.jobId},${receiptRef},${next},${attempt.id},'control_receipt',${tx.json(scrubPostgresJson(receipt) as never)})`;
     return { ...result, receipt };
+    // SAFETY: db.begin 的返回类型不携带回调收窄信息；本函数返回值只按 CompletionResult 消费。
   }) as unknown as Promise<CompletionResult & { receipt?: CompletionReceipt }>;
 }

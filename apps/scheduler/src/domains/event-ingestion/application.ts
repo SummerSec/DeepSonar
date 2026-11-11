@@ -1,4 +1,5 @@
 import { readControlReceiptByKey, planSettlementDigest, controlInputDigest } from "./control-receipt.js";
+import { payloadNulPolicy, scrubPostgresJson } from "./pg-text-safety.js";
 import { hasPrepaidCompletion } from "./completion-receipt.js";
 import {
   EventEnvelope as EventEnvelopeSchema,
@@ -321,6 +322,12 @@ async function appendAndApplyBundle(
         results.push({ deduped: true });
         continue;
       }
+      // #1066 评审：键重命名会与既有键碰撞并静默丢字段，plan 的存储清洗会破坏原样重放的幂等身份，
+      // 这两类都在产生任何效果前结构化拒绝；其余字符串值由存储面清洗。
+      const nul = payloadNulPolicy(envelope.type, envelope.payload ?? {});
+      if (nul) throw new ControlInputError("invalid_payload", nul.kind === "key"
+        ? `事件载荷的对象键含 U+0000（${nul.path}）；请重命名该键后重试，平台不会静默丢弃字段。`
+        : "plan 载荷的语义字段含 U+0000；请改写为可打印文本后重提，以保持已接受提案的幂等身份。", nul.path);
       if (envelope.type === "plan" && envelope.payload.revision) {
         const [knowledge] = await tx`SELECT id FROM project_knowledge_receipts WHERE job_id=${jobId} AND idempotency_key=${envelope.event_id}`;
         if (knowledge) throw new ControlInputError("invalid_payload", "Plan event key belongs to a knowledge receipt");
@@ -375,7 +382,7 @@ async function appendAndApplyBundle(
           job_seq: next,
           attempt_id: ingest.attemptId,
           type: envelope.type,
-          payload_json: (envelope.payload ?? {}) as never,
+          payload_json: scrubPostgresJson(envelope.payload ?? {}) as never,
         })}`;
 
       // The callback runs before this transaction commits.  A thrown side
