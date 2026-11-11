@@ -326,7 +326,7 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
 
-运行器失败保留结构化终态与宿主进程/传输来源；Pi 主请求 allowance 只通过私有宿主错误身份保留 Gateway 精确完成拒绝码，隔离 SDK 抛出的同名异常并等待 SDK 的结构化 message_end，不由 streaming update 制造终态或重放模型请求。真实进程失败不因已接受完成被吞掉；唯一窄例外（#1045）是 CLI 在宿主已持久接受完成后以普通非零码退出、且终态错误精确等于完成拒绝身份，仅剥离本机生成的退出码前缀，信号退出（≥128）、stderr 尾文与其它文本仍失败。限定放行与测试契约见 [CLI adapters](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)。
+Pi 单次模型错误先等待原进程内部重试与执行结算，不在消息错误时提前结束 Job；实际后续成功消息才清除待判定错误，最终失败与完成回执边界见 [#1072](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)。运行器失败保留结构化终态与宿主进程/传输来源；Pi 主请求 allowance 只通过私有宿主错误身份保留 Gateway 精确完成拒绝码，隔离 SDK 抛出的同名异常并等待 SDK 的结构化 message_end，不由 streaming update 制造终态或重放模型请求。真实进程失败不因已接受完成被吞掉；唯一窄例外（#1045）是 CLI 在宿主已持久接受完成后以普通非零码退出、且终态错误精确等于完成拒绝身份，仅剥离本机生成的退出码前缀，信号退出（≥128）、stderr 尾文与其它文本仍失败。限定放行与测试契约见 [CLI adapters](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)。
 
 #1032 首片在 Pi 主执行与 OM 的 SDK 调用前共用精确凭据替换，覆盖工具 env/认证文件/错误与来源文本，不修改原 Session 或认证选项；OM 内容准入同时绑定 wrapper 与共享源码。Gateway 原字节守卫保持，尚未实现同 UID 认证隔离或整个 Issue 的诊断/审计要求；[范围与验收](docs/MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)区分源码、待验 Actions 与未执行生产。
 

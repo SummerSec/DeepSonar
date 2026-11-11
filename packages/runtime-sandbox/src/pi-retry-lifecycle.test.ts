@@ -44,6 +44,7 @@ class PiProcess implements RuntimeProcess {
   private queue: Frame[] = [];
   private ended = false;
   private wake?: () => void;
+  constructor(private readonly options: { requireNudge?: boolean; exitBeforeSettled?: number } = {}) {}
 
   async write(data: string) {
     const command = JSON.parse(data) as Record<string, unknown>;
@@ -53,6 +54,17 @@ class PiProcess implements RuntimeProcess {
         data: { sessionId: "pi-retry-1072", sessionFile, isStreaming: false, isCompacting: false,
           pendingMessageCount: 0, messageCount: 0, autoCompactionEnabled: true } } });
     } else if (command.type === "prompt") {
+      if (this.options.requireNudge && this.commands.filter(record => record.type === "prompt").length > 1) {
+        this.queue.push(
+          { record: { type: "response", id: command.id, command: "prompt", success: true, data: { disposition: "started" } } },
+          { record: { type: "agent_start" } },
+          { record: { type: "message_end", message: { ...successMessage, content: [{ type: "text", text: "host-completed" }] } } },
+          { record: { type: "agent_end", willRetry: false } },
+          { record: { type: "agent_settled", aborted: false } },
+        );
+        this.wake?.();
+        return;
+      }
       this.queue.push(
         { record: { type: "response", id: command.id, command: "prompt", success: true, data: { disposition: "started" } } },
         { record: { type: "agent_start" } },
@@ -78,21 +90,30 @@ class PiProcess implements RuntimeProcess {
       if (!frame) { await new Promise<void>(resolve => { this.wake = resolve; }); continue; }
       yield { type: "stdout", chunk: `${JSON.stringify(frame.record)}\n` };
       if (frame.checkpoint) this.checkpoints.push({ event: frame.checkpoint, stdinClosed: this.stdinClosed });
+      if (frame.record.type === "auto_retry_end" && this.options.exitBeforeSettled !== undefined) {
+        this.checkpoints.push({ event: "auto_retry_end", stdinClosed: this.stdinClosed });
+        break;
+      }
       if (this.stdinClosed) break;
     }
-    yield { type: "exit", exitCode: 0 };
+    yield { type: "exit", exitCode: this.options.exitBeforeSettled ?? 0 };
   }
 }
 
-test("#1072 runRealAgent 在 terminated 原生重试前保持 stdin，单进程成功且清除错误", { timeout: 5_000 }, async () => {
+function fakeRuntime(options: ConstructorParameters<typeof PiProcess>[0] = {}) {
   const processes: PiProcess[] = [];
   const runtime: RuntimeHost = {
     run: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
-    runAsync: async () => { const process = new PiProcess(); processes.push(process); return process; },
+    runAsync: async () => { const process = new PiProcess(options); processes.push(process); return process; },
     uploadFile: async () => {},
     readWorkspaceFile: async () => Buffer.from(""),
     writeHumanInboxFile: async () => {},
   };
+  return { runtime, processes };
+}
+
+test("#1072 runRealAgent 在 terminated 原生重试前保持 stdin，单进程成功且清除错误", { timeout: 5_000 }, async () => {
+  const { runtime, processes } = fakeRuntime();
   const result = await runRealAgent(runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true });
   assert.deepEqual(processes[0]!.checkpoints, [
     { event: "message_update", stdinClosed: false },
@@ -105,4 +126,159 @@ test("#1072 runRealAgent 在 terminated 原生重试前保持 stdin，单进程�
   assert.equal(result.runnerErrorSource, undefined);
   assert.equal(result.terminalOutcome, "success");
   assert.equal(result.text, "recovered");
+});
+
+test("#1072 Pi 重试耗尽保留 terminated 原因并明确失败", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  adapter.decodeOutput({ type: "message_end", message: failedMessage }, state);
+  adapter.decodeOutput({ type: "agent_end", willRetry: true }, state);
+  adapter.decodeOutput({ type: "auto_retry_start", attempt: 3, maxAttempts: 3, delayMs: 1, errorMessage: "terminated" }, state);
+  const exhausted = adapter.decodeOutput({ type: "auto_retry_end", success: false, attempt: 3, finalError: "terminated" }, state);
+  const settled = adapter.decodeOutput({ type: "agent_settled", aborted: false }, state);
+  assert.ok([...exhausted, ...settled].some(event => event.is_error === true));
+  assert.equal(settled[0]?.is_error, true);
+  assert.equal(settled[0]?.runnerErrorSource, undefined, "真实 message_end 保留 structured_terminal 来源");
+  assert.match(String(settled[0]?.result), /terminated/u, "耗尽摘要不能覆盖原模型错误");
+});
+
+test("#1072 Pi 假 retry success 没有成功 assistant 消息时不能清除原错误", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  // 只有结构化 update、没有 message_end 时，也必须保留 SDK 的原错误。
+  adapter.decodeOutput({ type: "message_update", assistantMessageEvent: { type: "error", error: failedMessage } }, state);
+  adapter.decodeOutput({ type: "agent_end", willRetry: true }, state);
+  adapter.decodeOutput({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1, errorMessage: "terminated" }, state);
+  adapter.decodeOutput({ type: "agent_start" }, state);
+  adapter.decodeOutput({ type: "auto_retry_end", success: true, attempt: 1 }, state);
+  const settled = adapter.decodeOutput({ type: "agent_settled", aborted: false }, state);
+  assert.equal(settled[0]?.is_error, true);
+  assert.match(String(settled[0]?.result), /terminated/u);
+});
+
+for (const record of [
+  { type: "agent_start" },
+  { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "partial retry" } },
+  { type: "message_end", message: { role: "toolResult", content: [{ type: "text", text: "tool output" }] } },
+]) {
+  test(`#1072 Pi ${record.type}/${String(record.message?.role ?? record.assistantMessageEvent?.type ?? "start")} 不能冒充成功消息清除 pending`, () => {
+    const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+    const state = {};
+    adapter.decodeOutput({ type: "message_end", message: failedMessage }, state);
+    adapter.decodeOutput(record, state);
+    adapter.decodeOutput({ type: "auto_retry_end", success: true, attempt: 1 }, state);
+    const settled = adapter.decodeOutput({ type: "agent_settled", aborted: false }, state);
+    assert.equal(settled[0]?.is_error, true);
+    assert.match(String(settled[0]?.result), /terminated/u);
+  });
+}
+
+test("#1072 结构化 update 独自到达结算时保留模型错误来源和脱敏", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  const message = { ...failedMessage, errorMessage: '{"message":"unauthorized","api_key":"synthetic-private-key"}' };
+  assert.deepEqual(adapter.decodeOutput({ type: "message_update", assistantMessageEvent: { type: "error", error: message } }, state), []);
+  adapter.decodeOutput({ type: "agent_end", willRetry: false }, state);
+  const settled = adapter.decodeOutput({ type: "agent_settled", aborted: false }, state);
+  assert.equal(settled[0]?.is_error, true);
+  assert.equal(settled[0]?.runnerErrorSource, "process", "仅 update 不能升级为 structured_terminal");
+  assert.equal(settled[0]?.result, "Pi message ended: error: unauthorized");
+  assert.equal(settled[0]?.detail, undefined);
+  assert.doesNotMatch(JSON.stringify(settled), /synthetic-private-key|api_key/u);
+});
+
+test("#1072 error 后原生重试产生 length 消息转入截断状态，不残留旧 terminated", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  adapter.decodeOutput({ type: "message_end", message: failedMessage }, state);
+  adapter.decodeOutput({ type: "agent_end", willRetry: true }, state);
+  adapter.decodeOutput({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1, errorMessage: "terminated" }, state);
+  adapter.decodeOutput({ type: "agent_start" }, state);
+  const truncated = adapter.decodeOutput({ type: "message_end", message: { role: "assistant", stopReason: "length",
+    content: [{ type: "text", text: "truncated retry" }], usage: { input: 12, output: 1 } } }, state);
+  assert.ok(truncated.some(event => event.code === "PI_RESPONSE_TRUNCATED"));
+  adapter.decodeOutput({ type: "auto_retry_end", success: true, attempt: 1 }, state);
+  const settled = adapter.decodeOutput({ type: "agent_settled", aborted: false }, state);
+  assert.equal(settled[0]?.type, "agent_settled");
+  assert.equal(settled[0]?.truncated, true);
+  assert.equal(settled[0]?.stop_reason, "length");
+  assert.notEqual(settled[0]?.is_error, true);
+  assert.doesNotMatch(JSON.stringify(settled), /terminated/u);
+});
+
+for (const finalError of ["terminated", "COMPLETION_ALREADY_ACCEPTED"]) {
+  test(`#1072 没有模型消息的 retry 耗尽 ${finalError} 保留 process 来源`, () => {
+    const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+    const state = {};
+    const exhausted = adapter.decodeOutput({ type: "auto_retry_end", success: false, attempt: 3, finalError }, state);
+    assert.equal(exhausted[0]?.is_error, true);
+    assert.equal(exhausted[0]?.runnerErrorSource, "process");
+    assert.equal(exhausted[0]?.result, finalError);
+    const settled = adapter.decodeOutput({ type: "agent_settled", aborted: false }, state);
+    assert.equal(settled[0]?.is_error, true);
+    assert.equal(settled[0]?.runnerErrorSource, "process");
+    assert.equal(settled[0]?.result, finalError);
+  });
+}
+
+for (const hard of [
+  { label: "aborted message_end", record: { type: "message_end", message: { ...failedMessage, stopReason: "aborted", errorMessage: "explicit-user-abort" } }, reason: /explicit-user-abort/u },
+  { label: "aborted message_update", record: { type: "message_update", assistantMessageEvent: { type: "error", error: { ...failedMessage, stopReason: "aborted", errorMessage: "explicit-user-abort" } } }, reason: /explicit-user-abort/u },
+  { label: "extension_error", record: { type: "extension_error", error: "extension-protocol-failure" }, reason: /extension-protocol-failure/u },
+  { label: "RPC failure", record: { type: "response", command: "prompt", success: false, error: "rpc-protocol-failure" }, reason: /rpc-protocol-failure/u },
+  { label: "process error", record: { type: "error", error: "process-stream-failure" }, reason: /process-stream-failure/u },
+]) {
+  for (const hardFirst of [false, true]) {
+    test(`#1072 Pi ${hard.label} 在模型错误${hardFirst ? "之前" : "之后"}发生均不能被重试成功覆盖`, () => {
+      const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+      const state = {};
+      const modelError = { type: "message_end", message: failedMessage };
+      for (const record of hardFirst ? [hard.record, modelError] : [modelError, hard.record]) adapter.decodeOutput(record, state);
+      adapter.decodeOutput({ type: "agent_end", willRetry: true }, state);
+      adapter.decodeOutput({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1, errorMessage: "terminated" }, state);
+      adapter.decodeOutput({ type: "agent_start" }, state);
+      adapter.decodeOutput({ type: "message_end", message: successMessage }, state);
+      adapter.decodeOutput({ type: "auto_retry_end", success: true, attempt: 1 }, state);
+      const settled = adapter.decodeOutput({ type: "agent_settled", aborted: false }, state);
+      assert.equal(settled[0]?.is_error, true);
+      assert.equal(settled[0]?.runnerErrorSource, "process");
+      assert.match(String(settled[0]?.result), hard.reason, "可恢复模型错误不能覆盖硬错误的身份和原因");
+    });
+  }
+}
+
+test("#1072 原生重试成功仍须 completionGate 通过，宿主发送 nudge 后才能完成", { timeout: 5_000 }, async () => {
+  const { runtime, processes } = fakeRuntime({ requireNudge: true });
+  let refusedCompletion = 0;
+  const result = await runRealAgent(runtime, { provider: "pi", env: {}, input: "initial", nudgeMessage: "host completion required",
+    completionGate: () => {
+      const accepted = processes[0]!.commands.filter(command => command.type === "prompt").length >= 2;
+      if (!accepted) refusedCompletion++;
+      return accepted;
+    } });
+  assert.ok(refusedCompletion > 0, "原生重试结束时宿主完成门仍为 false");
+  assert.equal(processes.length, 1);
+  assert.deepEqual(processes[0]!.commands.map(command => command.type), ["get_state", "prompt", "prompt"]);
+  assert.equal(processes[0]!.commands[2]?.message, "host completion required");
+  assert.equal(result.text, "host-completed");
+  assert.equal(result.terminalOutcome, "success");
+  assert.equal(result.error, undefined);
+});
+
+test("#1072 原生重试成功但结算前非零退出仍是进程失败", { timeout: 5_000 }, async () => {
+  const { runtime, processes } = fakeRuntime({ exitBeforeSettled: 23 });
+  const events: Record<string, unknown>[] = [];
+  const result = await runRealAgent(runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true,
+    onEvent: event => events.push(event) });
+  assert.deepEqual(processes[0]!.checkpoints, [
+    { event: "message_update", stdinClosed: false },
+    { event: "message_end", stdinClosed: false },
+    { event: "agent_end", stdinClosed: false },
+    { event: "auto_retry_end", stdinClosed: false },
+  ], "必须实际走到原生重试成功之后再验证非零退出");
+  assert.equal(processes.length, 1);
+  assert.equal(events.some(event => event.type === "run.settled"), false);
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(result.runnerErrorSource, "process");
+  assert.match(result.error ?? "", /退出码 23/u);
 });

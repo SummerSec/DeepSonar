@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -717,7 +717,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：新 Job 只能使用当前登记的治理 CLI adapter（Claude Code、Pi、DSH）及其受支持配置；每个 adapter 必须有 runtime、session archive、Web parser、测试和原始归档路径，不支持的 CLI/config 必须 fail closed。
 - **决策来源**：CLI 方言和归档结构是运行时契约，静默 fallback 会损坏执行和查看。
-- **实现状态**：as-built（当前新执行集合）；历史归档 viewer 兼容不构成新运行时能力。
+- **实现状态**：as-built（当前新执行集合）；历史归档 viewer 兼容不构成新运行时能力。 #1072 将 Pi 单次模型消息错误与最终 `agent_settled` 分开；同进程重试不提前关闭 stdin，实际后续成功消息才清除待判定错误，取消/协议/进程失败与完成回执边界不变；最终 SHA Actions 待验。
 - **代码入口**：[CLI adapters](../../packages/runtime-sandbox/src)、[Agent CLI 文档](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[adapter tests](../../apps/scheduler/src/agent-cli-convergence.test.ts)。
 - **验证证据**：`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:web-session-viewer`。
 

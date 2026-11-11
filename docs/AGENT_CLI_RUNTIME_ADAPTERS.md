@@ -4,7 +4,7 @@
 > CLI versions live in `agent-harness/runtime-images.json` and
 > `packages/runtime-sandbox/src/runtime-adapters.ts`. New CLI onboarding must also
 > cover Session archive + Web session viewer (below). Index: [`README.md`](README.md).
-> Synchronization: 2026-11-09; #1038 warning classification/aggregation added; final-SHA Actions are pending.
+> Synchronization: 2026-11-11; #1072 Pi retry settlement; final-SHA Actions are pending.
 
 Issue #100 defines the boundary between Scheduler-owned execution policy and
 provider-specific CLI protocols.
@@ -54,6 +54,14 @@ never scraped.
 
 未知事件只是诊断，不制造 Control 语义、接受回执、成功/失败或恢复授权。原终态、非零退出、取消、未知效果和完成门不变；现场完成未观测与噪音的因果仍未确认。既有 runtime-sandbox 入口新增真实 runner 的 decode→map→warning 替身回归，覆盖正常进度零告警、真实未知摘要/计数、错误终态、脱敏、overflow 和重复 flush；最终 SHA Actions 待验，不宣称生产频率改善。只减少误报/重复告警，不新增通知、设置或用户操作。
 
+### Pi 单次模型失败与内部重试边界（#1072）
+
+Pi 的模型消息失败与整个 RPC 执行结束是两个边界。`message_update` 中结构化 assistant 错误和 `message_end(stopReason=error)` 只保留当前模型消息失败，等待同一进程的重试结果和 `agent_settled`，不能据此关闭 stdin 或提前返回执行失败。后续成功 assistant 消息才能清除这笔待判定错误；仅 `auto_retry_end(success=true)`、`context_edit` 删除失败消息或新请求已发出都不能证明恢复成功。
+
+`agent_settled` 时仍有待判定错误则失败；重试耗尽、aborted、RPC/扩展错误以及进程非零退出或传输中断继续失败，后续模型成功不能清除独立进程/协议错误。恢复后的运行仍经过原完成门，只有 Scheduler 接受的 durable receipt 决定业务完成；原 Session/Attempt、累计预算、lease/deadline 与未知效果边界不变。本修复不新增模型请求、持久会话重启或 Job 自动重跑，也不将裸 `terminated` 认定为无条件可重试错误。
+
+现场 Job `c76115f3-3d90-4c11-a56a-f2efe2b82a73` 的原始会话记录 `terminated`，随后可见新的模型请求，宿主却在该请求返回前结束执行；单次消息被提前终态化的适配缺陷已定位。镜像内 Pi 1.4.0 使用 Undici；其响应体异常终止产生 `TypeError("terminated", { cause })`，但 Pi-AI provider 错误转换只保留 message/status/body，丢弃嵌套 cause/code。故已保存记录无法区分本次 body 空闲超时与 socket 断链，不能把约 595 秒当作特定超时的证明。HTTP 200 收尾和历史用量结算均不证明响应完整交付。回归覆盖实际 runner 的 decode/driver/map 路径、stdin 保持及成功/失败与完成门；最终 SHA 的 GitHub Actions 结果另行记录，未重跑现场 Job、未做生产部署。
+
 ### Runner failure provenance (#919)
 
 `RealAgentResult.runnerErrorSource` distinguishes `structured_terminal` failures
@@ -91,7 +99,7 @@ result, its locally framed variant, exit-137 refusals, unrelated process text
 and trailing-diagnostic text in `executor-real-terminal-race.test.ts`; final-SHA
 Actions and production-frequency confirmation remain unverified.
 
-本轮原生 Pi/OM 归档同时记录宿主 `persisted_deferred` 完成回执和 `PI_MAIN_BUDGET_ALLOWANCE_DENIED`。原失败 allowance 的 HTTP 状态/error.type 未保留，不能把精确 `409 / COMPLETION_ALREADY_ACCEPTED` 定为已证实根因。代码复核确认扩展原先会泛化此固定完成拒绝码，现有窄例外修正该反馈与 SDK 终态时序。现在只有私有宿主 Error 身份匹配才透传这一个固定码，SDK 抛出的同名 Error 保留普通请求失败；不透传 Gateway/Provider 原文、不请求模型；其他状态、未知用量、额度或执行归属拒绝仍 fail closed。Pi SDK 的完整 assistant error update 只在该精确码时等待后续 `message_end`，单独 update 不制造终态；非零退出、传输、取消和缺失终态仍保留 process 来源。最终结算仍要求宿主实际接受原完成回执并通过既有 `executeReal` 限定门，不能由 CLI 文本宣称完成。新增 SDK 边界与生产 runner 回放接既有 runtime-sandbox；新 SHA 原生双架构 Pi/OM 与完整 Actions 尚待执行。
+本轮原生 Pi/OM 归档同时记录宿主 `persisted_deferred` 完成回执和 `PI_MAIN_BUDGET_ALLOWANCE_DENIED`。原失败 allowance 的 HTTP 状态/error.type 未保留，不能把精确 `409 / COMPLETION_ALREADY_ACCEPTED` 定为已证实根因。代码复核确认扩展原先会泛化此固定完成拒绝码，现有窄例外修正该反馈与 SDK 终态时序。现在只有私有宿主 Error 身份匹配才透传这一个固定码，SDK 抛出的同名 Error 保留普通请求失败；不透传 Gateway/Provider 原文、不请求模型；其他状态、未知用量、额度或执行归属拒绝仍 fail closed。Pi SDK 的完整 assistant error update 先等待后续 `message_end`；#1072 再将单次模型消息失败保留到 `agent_settled`，单独 update 不制造执行终态，该精确完成拒绝码的来源及完成覆盖限定不变。非零退出、传输、取消和缺失终态仍保留 process 来源。最终结算仍要求宿主实际接受原完成回执并通过既有 `executeReal` 限定门，不能由 CLI 文本宣称完成。新增 SDK 边界与生产 runner 回放接既有 runtime-sandbox；新 SHA 原生双架构 Pi/OM 与完整 Actions 尚待执行。
 
 回归入口为 `ci:unit:runtime-sandbox` 与 `ci:unit:executor-real`；为离线工程夹具，不代替真实 CLI/模型或最终 SHA Actions 验收。#1045 的进程退出窄口仅复用上述精确拒绝集合与已接受完成条件，不新增恢复通道或 success 伪造。
 
