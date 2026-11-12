@@ -265,6 +265,9 @@ function runtimeErrorText(error: unknown, depth = 0): string {
 export function classifyCliSessionResumeError(error: unknown): CliSessionResumeReason | undefined {
   const text = runtimeErrorText(error);
   if (!text) return undefined;
+  // Request recovery belongs to the live SDK owner and its kernel no-start
+  // receipt. Diagnostic causes must never grant a second CLI process/prompt.
+  if (/\bPI_MAIN_BUDGET_REQUEST_FAILED\b/u.test(text)) return undefined;
   // Context window exceeds are distinct from generic 400s so callers can compact
   // before any same-session resume; do not treat them as transient http.
   if (CONTEXT_WINDOW_EXCEEDED_RE.test(text)) {

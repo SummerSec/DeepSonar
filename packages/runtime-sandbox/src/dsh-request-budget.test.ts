@@ -124,6 +124,51 @@ test("DSH shared allowance preserves exact accepted completion and rejects other
   } finally { await upstream.close(); }
 });
 
+test("#1083 DSH shared allowance transport errors retain safe diagnostics without changing stop signals", async () => {
+  // Module-local fetch boundary: no process-global fetch mutation or real gateway.
+  const source = String.raw`
+    let failure;
+    export function setFailure(error) { failure = error; }
+    export let queries = 0;
+    async function fetch() { queries++; throw failure; }
+  ` + DSH_REQUEST_BUDGET_SOURCE;
+  const policy = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+  const root = "http://127.0.0.1:3100/gateway";
+  const model = { provider: "fixture", id: "model", api: "openai-completions", baseUrl: root, maxTokens: 256 };
+  const options = { apiKey: "synthetic-main-token", maxTokens: 128 };
+  const identity = { ...model, gatewayRoot: root, token: options.apiKey };
+  const call = () => policy.prepareSdkCall({ model, options, frozenIdentity: identity });
+  policy.setFailure(Object.assign(new TypeError("private transport synthetic-main-token"), {
+    cause: Object.assign(new Error("private socket"), { code: "ECONNRESET" }),
+  }));
+  await assert.rejects(call(), (error: Error) => {
+    assert.match(error.message, /^PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=\{/u);
+    assert.deepEqual(JSON.parse(error.message.split("; diagnostic=")[1]!), {
+      version: 1, stage: "allowance", category: "transient_retryable", name: "TypeError",
+      cause: { name: "Error", code: "ECONNRESET" },
+    });
+    assert.doesNotMatch(error.message, /private|synthetic-main-token/u);
+    return true;
+  });
+  assert.equal(policy.queries, 1, "DSH reader adds neither polling nor SDK retry on transport failure");
+  policy.setFailure(new Error("COMPLETION_ALREADY_ACCEPTED"));
+  await assert.rejects(call(), (error: Error) => {
+    assert.match(error.message, /^PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=/u);
+    assert.doesNotMatch(error.message, /COMPLETION_ALREADY_ACCEPTED/u);
+    return true;
+  });
+  policy.setFailure(new Error("PI_MAIN_BUDGET_ALLOWANCE_DENIED synthetic-main-token"));
+  await assert.rejects(call(), (error: Error) => {
+    assert.match(error.message, /^PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=/u);
+    assert.doesNotMatch(error.message, /ALLOWANCE_DENIED|synthetic-main-token/u);
+    return true;
+  });
+  assert.equal(policy.queries, 3);
+  await assert.rejects(policy.prepareSdkCall({ model, options: { ...options, apiKey: "wrong" }, frozenIdentity: identity }),
+    { message: "DSH_BUDGET_AUTH_MISMATCH" });
+  assert.equal(policy.queries, 3, "identity rejection precedes the shared reader");
+});
+
 test("DSH request generation reads each allowance, preserves frozen inputs and rejects identities", async () => {
   const policy = await policyFixture();
   let remaining = 64;

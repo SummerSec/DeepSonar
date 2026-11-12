@@ -13,6 +13,10 @@ let fixtureId = 0;
 async function fixture(options: {
   failure?: Error;
   allowanceFailure?: Error;
+  settlementFailure?: Error;
+  settlementStatus?: number;
+  settlementBody?: string;
+  sdkErrorEvent?: boolean;
   synchronous?: boolean;
   visible?: boolean;
   alwaysFail?: boolean;
@@ -21,15 +25,20 @@ async function fixture(options: {
   const boundary = `
     // Isolate mutable boundary state between generated modules: ${fixtureId++}
     let transportFailure;
+    let settlementFailure;
     export function setTransportFailure(error) { transportFailure = error; }
+    export function setSettlementFailure(error) { settlementFailure = error; }
     export const queries = [];
     export async function fetch(url, options) {
       queries.push({ url, options });
       if (transportFailure) throw transportFailure;
+      if (!url.endsWith('/_allowance') && settlementFailure) throw settlementFailure;
       const body = url.endsWith('/_allowance')
         ? { policy_required:true, remaining_tokens:100 }
         : { status:${JSON.stringify(options.settlement ?? "unknown")}, reason:'gateway_transient' };
-      return new Response(JSON.stringify(body), { status:200 });
+      return new Response(url.endsWith('/_allowance') ? JSON.stringify(body)
+        : ${JSON.stringify(options.settlementBody)} ?? JSON.stringify(body),
+        { status:url.endsWith('/_allowance') ? 200 : ${options.settlementStatus ?? 200} });
     }
     export function createAssistantMessageEventStream() {
       const queue = []; let ended = false, wake;
@@ -43,6 +52,7 @@ async function fixture(options: {
   const boundaryUrl = `data:text/javascript;base64,${Buffer.from(boundary).toString("base64")}`;
   const io = await import(boundaryUrl);
   io.setTransportFailure(options.allowanceFailure);
+  io.setSettlementFailure(options.settlementFailure);
   const source = `import { fetch } from ${JSON.stringify(boundaryUrl)};\n` +
     PI_MAIN_REQUEST_BUDGET_SOURCE.replace("'@earendil-works/pi-ai/compat'", JSON.stringify(boundaryUrl));
   const extension = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
@@ -64,6 +74,7 @@ async function fixture(options: {
       yield { type: "start", partial: { content: [] } };
       if (fail) {
         if (options.visible) yield { type: "text_delta", delta: "visible answer" };
+        if (options.sdkErrorEvent) { yield { type: "error", reason: "error", error: failure }; return; }
         throw failure;
       }
       yield { type: "done", message: { stopReason: "stop" } };
@@ -72,9 +83,9 @@ async function fixture(options: {
     registerProvider: (_provider: string, config: any) => { stream = config.streamSimple; } });
   start({}, { model, modelRegistry: { getAll: () => [] } });
   return { calls, queries: io.queries as Array<{ url: string; options: any }>,
-    async request(signal?: AbortSignal) {
+    async request(signal?: AbortSignal, overrides: Record<string, unknown> = {}, selected = model) {
       const events: any[] = [];
-      for await (const event of stream(model, { messages: [] }, { signal })) events.push(event);
+      for await (const event of stream(selected, { messages: [] }, { signal, ...overrides })) events.push(event);
       return events;
     } };
 }
@@ -185,4 +196,112 @@ test("#1083 SDK text and unallowlisted fields cannot impersonate host budget or 
   assert.equal(detail.status, undefined, "HTTP text is not a typed status");
   assert.doesNotMatch(JSON.stringify(events), /COMPLETION_ALREADY_ACCEPTED|PI_MAIN_BUDGET_EXHAUSTED|synthetic-(?:main|control)-token|127\.0\.0\.1\/private|HTTP 401|HTTP 503/u);
   assert.equal(f.calls.length, 1);
+});
+
+test("#1083 nested causes preserve safe transport facts and nested permanent refusals take priority", async () => {
+  const network = Object.assign(new Error("private transport"), { code: "ETIMEDOUT" });
+  const failure = new TypeError("private wrapper", { cause: new Error("private middle", { cause: network }) });
+  const f = await fixture({ failure });
+  const detail = diagnostic(await f.request());
+  assert.equal(detail.category, "transient_retryable");
+  assert.deepEqual(detail.cause, { name: "Error", cause: { name: "Error", code: "ETIMEDOUT" } });
+  for (const permanent of [{ status: 401 }, { statusCode: 403 }, { status: 503, statusCode: 401 },
+    { status: 501 }, { name: "AbortError" }, { code: "ABORT_ERR" }]) {
+    const nested = Object.assign(new Error("private permanent"), permanent);
+    const refusal = Object.assign(new Error("private network"), { code: "ECONNRESET", cause: nested });
+    const stopped = await fixture({ failure: refusal, settlement: "not_started" });
+    assert.equal(diagnostic(await stopped.request()).category, "permanent_failure");
+    assert.equal(stopped.calls.length, 1);
+    assert.equal(stopped.queries.length, 1, "permanent failures never consult settlement for recovery");
+  }
+});
+
+test("#1083 circular, deep and accessor causes stay bounded without evaluating untrusted getters", async () => {
+  const circular = Object.assign(new Error("private circular"), { code: "ECONNRESET", cause: undefined as unknown });
+  circular.cause = circular;
+  let deep: Error = Object.assign(new Error("private root"), { code: "ETIMEDOUT" });
+  for (let index = 0; index < 100; index++) deep = new Error("private deep", { cause: deep });
+  let getterCalls = 0;
+  const accessor = new Error("private accessor");
+  for (const key of ["code", "status", "cause"]) Object.defineProperty(accessor, key, {
+    get() { getterCalls++; throw new Error("synthetic-control-token"); },
+  });
+  for (const failure of [circular, deep, accessor]) {
+    const f = await fixture({ failure, settlement: "not_started" });
+    const events = await f.request();
+    const detail = diagnostic(events);
+    assert.equal(detail.category, "permanent_failure", "incomplete provenance cannot permit retry");
+    assert.ok(JSON.stringify(detail).length < 512);
+    assert.doesNotMatch(JSON.stringify(events), /private|synthetic-control-token/u);
+    assert.equal(f.calls.length, 1);
+  }
+  assert.equal(getterCalls, 0);
+});
+
+for (const status of [408, 429, 500, 502, 503, 504]) {
+  test(`#1083 typed HTTP ${status} is diagnostic only until authenticated no-start permission`, async () => {
+    for (const settlement of ["unknown", "not_started"] as const) {
+      const f = await fixture({ failure: Object.assign(new Error("private HTTP body"), { status }), settlement });
+      const events = await f.request();
+      if (settlement === "unknown") {
+        const detail = diagnostic(events);
+        assert.equal(detail.status, status);
+        assert.equal(detail.category, "transient_retryable");
+      } else assert.equal(events.at(-1).type, "done");
+      assert.equal(f.calls.length, settlement === "not_started" ? 2 : 1);
+    }
+  });
+}
+
+for (const status of [418, 501, 599, 0, 600, NaN, Infinity, 503.5, "503"]) {
+  test(`#1083 unknown or invalid HTTP status ${status} cannot authorize SDK recovery`, async () => {
+    const f = await fixture({ failure: Object.assign(new Error("network timeout 503"), { status }), settlement: "not_started" });
+    const detail = diagnostic(await f.request());
+    assert.equal(detail.category, "permanent_failure");
+    assert.equal(detail.status, typeof status === "number" && Number.isInteger(status) && status >= 100 && status <= 599 ? status : undefined);
+    assert.equal(f.calls.length, 1);
+  });
+}
+
+test("#1083 settlement transport, HTTP and parsing failures retain their own safe stage and stop", async () => {
+  for (const scenario of [
+    { settlementFailure: Object.assign(new TypeError("private URL synthetic-main-token"), {
+      cause: Object.assign(new Error("private cause"), { code: "ECONNREFUSED" }),
+    }), category: "transient_retryable", name: "TypeError", status: undefined },
+    { settlementStatus: 503, category: "transient_retryable", name: undefined, status: 503 },
+    { settlementStatus: 403, category: "permanent_failure", name: undefined, status: 403 },
+    { settlementBody: "private malformed body synthetic-control-token", category: "permanent_failure", name: "SyntaxError", status: undefined },
+  ]) {
+    const f = await fixture(scenario);
+    const events = await f.request();
+    const detail = diagnostic(events);
+    assert.equal(detail.stage, "settlement");
+    assert.equal(detail.category, scenario.category);
+    assert.equal(detail.name, scenario.name);
+    assert.equal(detail.status, scenario.status);
+    assert.equal(f.calls.length, 1);
+    assert.equal(f.queries.length, 2, "failed settlement query is not polled or replayed");
+    assert.doesNotMatch(JSON.stringify(events), /private|synthetic-(?:main|control)-token/u);
+  }
+});
+
+test("#1083 genuine host identity failures keep fixed codes before any allowance or SDK generation", async () => {
+  const f = await fixture();
+  const auth = await f.request(undefined, { apiKey: "synthetic-wrong-key" });
+  assert.equal(auth[0].error.errorMessage, "PI_MAIN_BUDGET_AUTH_MISMATCH");
+  const changed = await f.request(undefined, {}, { provider: "other", id: "model", api: "openai-completions",
+    baseUrl: "http://127.0.0.1:3100/gateway", maxTokens: 256, compat: {} });
+  assert.equal(changed[0].error.errorMessage, "PI_MAIN_BUDGET_MODEL_CHANGED");
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.queries.length, 0);
+});
+
+test("#1083 SDK error-event permanent status beats a network cause and permissive no-start reply", async () => {
+  const f = await fixture({ sdkErrorEvent: true, settlement: "not_started", failure: Object.assign(new Error("private"), {
+    status: 401, cause: Object.assign(new Error("private socket"), { code: "ECONNRESET" }),
+  }) });
+  const events = await f.request();
+  assert.equal(events.filter(event => event.type === "error").length, 1);
+  assert.equal(f.calls.length, 1);
+  assert.equal(f.queries.length, 1);
 });
