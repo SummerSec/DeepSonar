@@ -41,6 +41,7 @@ import {
   assertSharedAssetsContainerMount,
   assertSharedAssetsGuestMount,
   assertSharedAssetsVolumeOwnership,
+  RuntimeImageContractError,
   bindProvisionAbortSignal,
   buildTerminalShellCommand,
   sharedAssetsVolumeBinds,
@@ -845,6 +846,20 @@ test("guest shared-assets mount requires /proc/mounts, not just a directory", ()
     () => assertSharedAssetsGuestMount("overlay / overlay rw 0 0\n"),
     /shared assets volume was not mounted/,
   );
+});
+
+test("guest shared-assets mount accepts only one exact read-only target", () => {
+  const target = "/workspace/.deepsonar/shared";
+  assert.doesNotThrow(() => assertSharedAssetsGuestMount(`/dev/sda ${target} ext4 ro,nosuid,nodev 0 0\n`));
+  for (const options of ["rw", "ro,rw", "rw,ro", "errors=remount-ro", "nosuid", ""]) {
+    assert.throws(() => assertSharedAssetsGuestMount(`/dev/sda ${target} ext4 ${options} 0 0\n`),
+      RuntimeImageContractError, `must reject mount options: ${options}`);
+  }
+  for (const mounts of [
+    `/dev/sda ${target} ext4 ro 0 0\n/dev/sdb ${target} ext4 ro 0 0\n`,
+    `/dev/sda ${target} ext4 ro 0 0\n/dev/sdb ${target} ext4 rw 0 0\n`,
+    `/dev/sda ${target}-other ext4 ro 0 0\n`,
+  ]) assert.throws(() => assertSharedAssetsGuestMount(mounts), RuntimeImageContractError);
 });
 
 test("rate-limit error details keep only server-owned bounded metadata", () => {

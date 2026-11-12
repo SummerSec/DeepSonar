@@ -810,6 +810,38 @@ test("OpenSandbox provision fail-closes when the shared assets volume is not mou
   }), /shared assets volume was not mounted/);
 });
 
+for (const mounts of [
+  "/dev/sda /workspace/.deepsonar/shared ext4 rw 0 0\n",
+  "/dev/sda /workspace/.deepsonar/shared ext4 ro,rw 0 0\n",
+  "/dev/sda /workspace/.deepsonar/shared ext4 ro 0 0\n/dev/sdb /workspace/.deepsonar/shared ext4 ro 0 0\n",
+]) {
+  test(`OpenSandbox rejects an unsafe guest mount and cleans the created sandbox: ${mounts.trim()}`, async () => {
+    const session = fakeSession();
+    const run = session.run.bind(session);
+    session.run = (command, options) => command === "cat /proc/mounts"
+      ? Promise.resolve({ exitCode: 0, stdout: mounts, stderr: "" }) : run(command, options);
+    let killed = 0;
+    let closed = 0;
+    session.kill = async () => { killed += 1; };
+    session.close = async () => { closed += 1; };
+    const client = fakeClient(session);
+    client.list = async () => [];
+    const runner = new OpenSandboxRunner(client, undefined, { kubernetesResources: true,
+      inspectSharedAssetsVolume: async () => { assert.fail("guest checks must not inspect the Scheduler's Docker Engine"); } });
+    await assert.rejects(runner.provision({
+      jobId: "11111111-1111-4111-8111-111111111111",
+      attemptId: "22222222-2222-4222-8222-222222222222",
+      image: "img@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      network: "none", limits,
+      sharedAssetsMount: { volumeName: "deepsonar-assets-11111111-1111-4111-8111-111111111111" },
+    }), RuntimeImageContractError);
+    assert.equal(client.created.length, 1);
+    assert.equal(killed, 1);
+    assert.equal(closed, 1);
+    assert.equal(runner.hostOf({ sandboxId: session.id }), undefined);
+  });
+}
+
 function sharedAssetsSession(options: { writableAfterRepair: boolean; initiallyWritable?: boolean }) {
   const session = fakeSession();
   let writable = Boolean(options.initiallyWritable);

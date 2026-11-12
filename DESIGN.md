@@ -402,6 +402,8 @@ Session 查看器按 CLI 方言解析 reasoning、message、tool call/result、u
 
 选中的 `tab` / `panel` 写入 URL，后台刷新不能强制切换视图。Canvas 是高级审计视图，默认只读；Web 对当前可见投影使用 elkjs 布局，超阈值或计算失败时使用固定列布局。服务端 `x/y` 只作 placement/exchange hint，全图服务端权威布局仍按 #148 暂缓，见 [布局边界](docs/architecture/12-risks-and-tech-debt.md#31-全图服务端权威布局148)。列表筛选使用服务端分页和可搜索多选；不同维度按 AND，同一维度按 OR。项目账本与「风险与报告」是独立项目视图，不塞进任务工作台的运行列表。
 
+自动沙箱清理须用本库 Job/Attempt 与 sandbox 绑定证明归属，双 UUID 标签或本库不存在都不是删除授权；共享资产 guest 挂载必须唯一且明确只读。实现与证据限制见[运行时视图](docs/architecture/06-runtime-view.md#自动清理归属与共享资产只读探针307-评审补齐)。
+
 ## 11. 安全与授权硬门
 
 - 被审计代码、仓库内容、外部事件和模型输入均视为不可信，必须防 prompt injection、路径越界和凭据外泄。

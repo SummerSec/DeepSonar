@@ -15,12 +15,12 @@ import { revokeJobCapabilityTokens } from "./domains/platform-api/tokens.js";
 import { finalizeReportJob } from "./report.js";
 import { config } from "./config.js";
 import { cleanupManagedResourcesOnce } from "./resource-cleanup.js";
-import { cleanupSharedAssetsForJob } from "./shared-asset-lifecycle.js";
+import { cleanupSharedAssetsForJob, cleanupScannedSharedAssetsForJob, cleanupSandboxResourceForJob } from "./shared-asset-lifecycle.js";
 import { releaseOrphanSandboxLeases } from "./domains/worker-nodes/registry.js";
 
 /**
  * 重启 reconcile（JOB-04）：进程重启后内存沙箱注册表清空，DB 与 docker 引擎可能不一致：
- * 1. 容器在、job 非活动（终态/不存在）→ 孤儿容器强删（INC-01 防线：凭据不留滞在容器里）
+ * 1. 非活动容器只有本库 Job/Attempt 的精确资源绑定可证明归属时才回收；未知归属保留。
  * 2. 只有 Attempt 仍处于 preparing 且没有效果记录时才可重置回 pending；
  *    provision effect_pending/unknown 无法证明外部效果未发生，必须标记 orphan，禁止重放
  * 3. job running → 执行上下文随进程丢失 → orphan（可人工 resume），残留容器一并销毁
@@ -47,11 +47,30 @@ export async function reconcileOnBoot(): Promise<void> {
      WHERE j.status IN ('claimed','provisioning','running')`;
   const activeJobIds = new Set(activeJobs.map((j) => j.id as string));
   const activeAttemptIds = new Map(activeJobs.map((j) => [String(j.id), j.attempt_id ? String(j.attempt_id) : null]));
-  const containerByJob = new Map(containers.map((c) => [c.jobId, c.containerId]));
+  const destroyOwned = async (resourceId: string, jobId: string, attemptId?: string) =>
+    cleanupSandboxResourceForJob({ jobId, attemptId, resourceId }, async (assertCurrent) => {
+      await assertCurrent();
+      await runner.destroyResource({ resourceId, jobId, attemptId: attemptId ?? "" });
+    });
+  const cleanupOrphanSandboxes = async (job: Record<string, unknown>) => {
+    const jobId = String(job.id);
+    // A Job pointer is a candidate, not a substitute for the locked DB binding check.
+    const candidates = new Map<string, string | undefined>();
+    if (job.sandbox_id) candidates.set(String(job.sandbox_id), undefined);
+    for (const container of containers) {
+      if (container.jobId === jobId && !candidates.has(container.containerId)) {
+        candidates.set(container.containerId, container.attemptId);
+      }
+    }
+    for (const [resourceId, attemptId] of candidates) {
+      await destroyOwned(resourceId, jobId, attemptId)
+        .catch((e) => console.error(`[reconcile] 容器回收失败 ${resourceId}:`, e instanceof Error ? e.message : e));
+    }
+  };
 
   for (const volume of await sharedAssetsVolumeManager.listManaged()) {
     if (activeJobIds.has(volume.jobId)) continue;
-    await cleanupSharedAssetsForJob({ jobId: volume.jobId },
+    await cleanupScannedSharedAssetsForJob({ jobId: volume.jobId },
       (assertCurrent) => sharedAssetsVolumeManager.removeForJob(volume.jobId, volume.generation, assertCurrent))
       .then((removed) => { if (removed) console.warn(`[reconcile] 回收孤儿共享资产卷 ${volume.volumeName}`); })
       .catch((e) => {
@@ -63,8 +82,8 @@ export async function reconcileOnBoot(): Promise<void> {
   // 1. 孤儿容器（标签指向的 job 已非活动）
   for (const c of containers) {
     if (activeJobIds.has(c.jobId) && activeAttemptIds.get(c.jobId) === c.attemptId) continue;
-    await runner.destroyResource({ resourceId: c.containerId, jobId: c.jobId, attemptId: c.attemptId })
-      .then(() => console.warn(`[reconcile] 回收孤儿容器 ${c.containerId}（job/attempt 不匹配）`))
+    await destroyOwned(c.containerId, c.jobId, c.attemptId)
+      .then((removed) => { if (removed) console.warn(`[reconcile] 回收本库孤儿容器 ${c.containerId}`); })
       .catch((e) => console.error(`[reconcile] 容器回收失败 ${c.containerId}:`, e instanceof Error ? e.message : e));
   }
 
@@ -84,8 +103,7 @@ export async function reconcileOnBoot(): Promise<void> {
   // orphan 相同的资源、Token、画布、报告收口，禁止它们静默留在半终态。
   for (const job of provisionRecovery.orphaned) {
     const jobId = String(job.id);
-    const cid = (job.sandbox_id as string | null) ?? containerByJob.get(jobId);
-    if (cid) await runner.destroyResource({ resourceId: cid, jobId, attemptId: "" }).catch(() => {});
+    await cleanupOrphanSandboxes(job);
     await cleanupSharedAssetsForJob({ jobId }, (assertCurrent) => sharedAssetsVolumeManager.removeForJob(jobId, undefined, assertCurrent)).catch(() => {
       inc("deepsonar_shared_assets_cleanup_failed_total");
     });
@@ -106,11 +124,7 @@ export async function reconcileOnBoot(): Promise<void> {
   const orphaned = await lifecycle.reconcileRunning();
   for (const j of orphaned) {
     const jobId = j.id as string;
-    const cid = (j.sandbox_id as string | null) ?? containerByJob.get(jobId);
-    if (cid) {
-      await runner.destroyResource({ resourceId: cid, jobId, attemptId: "" })
-        .catch((e) => console.error(`[reconcile] 容器回收失败 ${cid}:`, e instanceof Error ? e.message : e));
-    }
+    await cleanupOrphanSandboxes(j);
     await cleanupSharedAssetsForJob({ jobId }, (assertCurrent) => sharedAssetsVolumeManager.removeForJob(jobId, undefined, assertCurrent)).catch(() => {
       inc("deepsonar_shared_assets_cleanup_failed_total");
     });
