@@ -55,7 +55,9 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 删除终态历史凭据时（#1002 P1-7A），服务在同一事务撤销全部 Gateway token、删除秘密凭据并置空 token 的 credential 外键；保留 token 与 usage ledger 的身份、累计额度和精确用量，不重置预算或改写冻结 Job。无凭据 token 仅允许 revoked，不能再授权请求。`revoked_job_token_count` 继续只统计本次原 active token，重复删除仍为 404；未结束 Job、扫描和项目引用的既有 409 拒绝不变。详见[历史预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)。
 
-行为入口是 `pnpm ci:integration:credential-delete`：包括实际 HTTP 两项目负例与 PostgreSQL 双会话 delete-first/write-first 屏障，覆盖仅白名单、仅缺省及同时引用。测试接线不代表最终 SHA Actions 已通过。注意力成本：在删除前显示阻塞与既有修复位置，不增加编辑器、设置或自动修复决策；不以减少打扰扩大授权。
+`POST /runtime-images/import` 在创建镜像、版本和扫描的同一事务内锁定并校验所选 OCI 凭据，持锁至扫描提交，与 DELETE 的凭据行锁互斥。导入先提交时，DELETE 看到活动扫描并返回 `409 CREDENTIAL_SCAN_IN_USE`；删除先提交时，导入返回原有凭据不可用的 400，事务不遗留镜像、版本或扫描。无凭据的公开镜像导入保持原契约，不新增权限、错误协议或 Job 效果账本。
+
+行为入口是 `pnpm ci:integration:credential-delete`：包括实际 HTTP 两项目负例与 PostgreSQL 双会话 delete-first/write-first 屏障，覆盖仅白名单、仅缺省、同时引用及 OCI 导入与删除的两种交错。测试接线不代表最终 SHA Actions 已通过。注意力成本：在删除前显示阻塞与既有修复位置，不增加编辑器、设置或自动修复决策；不以减少打扰扩大授权。
 
 管理认证入口有明确的健康、schema、bootstrap、Worker 注册和 WS ticket 例外；`/gateway` 与 `/control/v1/jobs` 使用独立的 Job-scoped 凭据。认证失败和授权拒绝会审计但不记录 token、Provider 原文或内部堆栈。旧配置不通过转换继续运行，不能用另一个认证面绕过当前契约。
 

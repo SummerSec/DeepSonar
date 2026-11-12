@@ -24,7 +24,7 @@
 
 > **全局 Skill 源发布隔离（#954/#960，2026-11-07）**：当前源码将手动/boot/周期 sync 限为候选，只有全局管理主体按候选 hash+epoch 显式批准才发布；既有 live 授权和旧 Job CAS 不迁移，显式撤销 epoch 保持。schema68 元数据、同源 session 锁与 CAS/事务 fence 见[数据归属](architecture/08-data-architecture.md#skill-源已批准目录与候选960)，管理员/项目边界与全局启用影响见[审批接口](architecture/09-interface-specs.md#全局-skill-源候选审批960)。同 hash 有效 live 健康核验可续鲜，不同候选不替 A 续鲜；从未成功为 null/+Inf，既有 Job/Intent 节点原位更新 warning。IR-007/FR-CAP-003/FR-KNOW-002、trace 和视图已同步；回归仅编写/静态核对，schema68 rebuild/恢复与最终 SHA Actions 待验，未运行本地测试、构建、typecheck 或数据库。风险与验收证据分离见[风险登记](architecture/12-risks-and-tech-debt.md#skill-源修复与剩余证据边界960)。
 
-#914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由 #925 交付，UI 由 #929 交付；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，不代表自动重跑或快照改写。
+#914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由 #925 交付，UI 由 #929 交付；OCI 导入与凭据删除共用事务行锁，双向并发回归接 credential-delete，最终 SHA Actions 待验；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，不代表自动重跑或快照改写。
 
 > **数据库直接重建授权（#1002 P2-13）**：[数据库说明](../database/README.md#重建授权保全1002-p2-13)记录源有效 ACL 与默认授权保全、基线/原对象权限同事务发布及触发器/提交前失败拒绝，不猜测角色、不无条件扩大 PUBLIC CREATE；CON-003、数据/工程视图及既有 migrations PostgreSQL 回归已同步，最终 SHA Actions 待验。本地与生产数据库未执行。
 

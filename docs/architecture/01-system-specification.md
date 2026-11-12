@@ -682,6 +682,8 @@ Plan 可选显式关联目标评审已接线：plan_binding.goal_review 记录�
 - **代码入口**：[credentials schema](../../database/schema.sql)、[credential projection](../../apps/scheduler/src/domains/credential/projection.ts)、[secret projection](../../apps/scheduler/src/credential-secret-projection.ts)。
 - **验证证据**：`pnpm ci:unit:credential-compatibility`、`pnpm ci:integration:credential-delete`、`pnpm ci:unit:authz`；#1002 的真实账本删除、各 token 状态、预算不重置与 HTTP 拒绝沿用 credential-delete，精确历史基线重建/PGDMP 恢复接 `pnpm ci:unit:migrations`；最终 SHA Actions 待验。
 
+OCI 扫描创建与凭据删除共用凭据行锁；导入事务内重验 active OCI 凭据，删除先提交时整笔拒绝，导入先提交时活动扫描阻止删除。HTTP/PG 双会话回归沿用 `pnpm ci:integration:credential-delete`，最终 SHA Actions 待验；无 schema 或权限变更。
+
 ### FR-CRED-002 Provider/model catalog 与兼容性
 
 - **规范要求**：Hub 选择 Provider/model 必须来自当前 Job 可见、active 且 CLI 兼容的 catalog；Provider 健康、模型目录和 alias policy 必须在快照解析时校验，不兼容或未知值必须 fail closed。
