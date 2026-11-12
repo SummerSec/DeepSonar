@@ -1,5 +1,36 @@
 ## [Unreleased]
 
+## [0.6.20] - 2026-11-12
+
+### 修复
+
+- **Pi 原生重试与宿主结算衔接（#1072，#1073）**：单条模型消息失败（如传输层 `terminated`）不再立即把 Attempt 终态化，Pi 自身的 `auto_retry` 仍有机会恢复；只有后续成功消息能清除待定错误，`auto_retry_end(success)` 与新请求都不构成恢复证据，进程退出/彻底不可恢复才 fail closed。保留 `Pi message ended: <原因>: <原文>` 文案形状，既有完成回执与截断分类不受影响。
+- **Pi 请求异常来源与恢复分类（#1083，#1084）**：保留安全的请求失败原因与作用域内的重试分类，恢复判定不再丢失来源信息；错误分类逻辑拆分以守住文件体量棘轮。
+- **OpenSandbox PTY 退出与传输中断可区分（#1088，#1089）**：只有合法 exit frame（0..255）才产生 CLI 退出码，WebSocket close/error 与宿主终止投影为带原因的传输中断并保留有界脱敏证据；不再用伪造的退出码 0/1 表示连接异常，不做自动重连、不重放效果。
+- **PTY 积压消费让出 I/O（#1092，#1093）**：消费循环在 chunk 与 RPC record 边界按时间/数量有界让出事件循环，多行进度洪峰下 WebSocket 保活与 Ping/Pong 不再被饿死；输出内容与顺序不变。
+- **事件载荷 U+0000 与 22P05 稳定分类（#1066，#1068）**：语义事件与控制回执写库前清洗 U+0000（替换为字面 `\0`）；对象键含 U+0000 以及 plan 载荷字符串值含 U+0000 改为结构化 `invalid_payload` 拒绝，避免用有损改写破坏重放摘要一致性；`22P05`/无效 Unicode 转义归为稳定原因 `event_payload_control_characters`，`jobs.error` 不再回显数据库原文。
+- **Gateway 逐跳连接头隔离（#1097，#1098）**：反向代理错误与流式转发不再透传 hop-by-hop 连接头，代理声明自身连接寿命，避免下游按错误存活期提前断开。
+- **控制面 HTTP operation 引导（#1094，#1095）**：启动提示与完成提示明确平台 operation 是 HTTP 调用而非 CLI 原生工具（原生工具 `not found` 不代表拒绝）；保留治理重试，遇到不支持的 receipt 查询不再报错退出。
+- **进程基线读取失败闭合（#1091）**：`readCheckpointProcessBaseline` 对非 JSON 输出回稳定码 `HUMAN_CHECKPOINT_PROCESS_BASELINE_UNAVAILABLE`，不再抛裸 `SyntaxError`。
+- **凭据按并发余量选择，冻结恢复身份优先（#1078，#1080，#1103）**：同一 `[provider, agent_cli, model]` 身份的授权池内，先保持自身仍有余量的恢复身份（冻结快照凭据），再保持仍有余量的显式缺省，其余按 `metadata.max_concurrent` 余量比例并在平局时依次比较缺省、恢复身份、在途数、历史分配数与稳定 ID；「缺省满额时选了同伴并冻结、缺省之后腾出容量」不再把恢复 Job 换回缺省而制造 `SNAPSHOT_STALE`。授权、模型/CLI 约束与准入判定均未放宽，全池满额仍取缺省且不新增失败码。
+- **Gateway 凭据拒绝审计与 create 熔断计数（#1053，#1054）**：五个 `credential_in_business_data` 拒绝点写入 `gateway.credential_denied` 审计（固定字段、不回显凭据）；OpenSandbox create 熔断按探针 episode 计数并只接受已知失败码，私有值不进入熔断状态。
+
+### 新增
+
+- **人工等待断点封存与晚回复续做（#1074 第一切片，#1075）**：人工请求落地为可查询的持久状态，等待超时释放资源时封存断点与文件清单，晚到回复按幂等与 fencing 续做；历史人工请求与当前执行建议分离，终态 Job 不再给出「继续等待」的错误建议。
+- **管理面等待分类与恢复诊断只读投影（#1036 A/D，#1051）**：`GET /jobs/waiting-classification` 与 `GET /jobs/{id}/recovery-diagnostics` 以纯 SELECT 投影分类 `unknown_effects` / `confirmed_platform_dead_end` / `authorized_operator` / `human_decision` / `no_signal`，暴露未结算效果、修正预算与可用的既有操作入口；人工结算但用量未知的效果显式列出 `settled_usage_unknown` 并给出 `inspect_usage`，不复述业务文本、不触发任何副作用。
+
+### 升级
+
+- **Pi 1.4.0 → Pi 1.5.2（#1069，#1071）**：CLI 版本与完整性摘要、三份 lockfile、镜像清单与一致性检查同步；SDK 上下文钳制的 `pi-ai` 根按镜像布局重新推导（base 扁平全局树、kali 嵌套树并 realpath 解析符号链接），版本身份校验改为 1.5.2；`cacheWarming` 显式置 `off`，禁止守卫预算之外的后台模型请求；`clampMaxTokensToContext` 新保证金公式与 RPC 行为核对后写入文档。
+- **DSH 0.2.1-rc.2 → 0.2.2-rc.1 与 Node 24（#1070，#1071）**：DSH 及 42 个 `@deepseek-ai/dsh*` 依赖、隔离 lockfile、镜像清单与检查器同步；基础镜像升到 `node:24-bookworm-slim`（满足 `engines: >=24.9`），kali-minimal 的 Node 版本与双架构校验和同步；`tools` 插件的 `mode` 在 0.2.2 被移除，profile 改挂 `tool-executor-native` / `tool-executor-ptc`，并移除已不再导出的 `tool-subagent-control/list-agents` 子路径；DSH 预算补丁的 vendor/artifact/helper 摘要按实际包内容重算。
+- **镜像必须重建**：本版包含运行时 CLI 与基础镜像升级，不能沿用 v0.6.19 镜像；`deploy/.env.example` 的 `DEEPSONAR_VERSION` 与 `deploy/runtime-image-registry.json` 由发布工作流的回写步骤更新。
+
+### 升级与未验证范围
+
+- **数据库 schema 72 → 73（#1074/#1075）**：新增 `job_execution_clocks`（执行时钟治理）与 `human_requests`（人工等待的持久状态：status `open/answered/dismissed/closed`、载荷、断点与资源释放标记）。仓库无增量 ALTER 链，升级按既有基线重建路径执行：`pnpm db:rebuild -- --plan` 预演后 `--apply`，非空库先备份；scheduler 空库启动自动套用新基线，版本不匹配 fail closed。Control/Management API 只新增上述只读诊断端点，无破坏性契约变更。
+- 本版验收只认 Actions：核心 `ci`、`gate-*` 分片、`runtime-images` 与 `reverse-runtime-images`、`pi-om-acceptance` 双架构、`chrome-*` / `openharmony-*` / `mobile-*` 镜像专项、`crash-recovery`、`lexical-pressure` 等在最终 SHA 全绿。未做真实模型质量验证、未做生产部署、未重跑历史 Job；`#1078` 跨 provider 等价判据与 `#1082` start-only 结算 A/B 仍需维护者决策，`#1032` 剩余 A2 不透明句柄与 Claude/DSH 侧令牌迁移仍未交付。
+
 ## [0.6.19] - 2026-11-10
 
 ### 修复
@@ -1711,3 +1742,4 @@
 [0.6.17]: https://github.com/SummerSec/DeepSonar/compare/v0.6.16...v0.6.17
 [0.6.18]: https://github.com/SummerSec/DeepSonar/compare/v0.6.17...v0.6.18
 [0.6.19]: https://github.com/SummerSec/DeepSonar/compare/v0.6.18...v0.6.19
+[0.6.20]: https://github.com/SummerSec/DeepSonar/compare/v0.6.19...v0.6.20
