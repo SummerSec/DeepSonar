@@ -1515,3 +1515,26 @@ test("Job runtime refuses repo skill dynamic install (#615)", () => {
   assert.match(source, /component_materialization_failed: runtime_install_forbidden/);
   assert.doesNotMatch(source, /npx -y skills add/);
 });
+
+test("control capability token moves from env to a 0600 file before the CLI spawns (#1032 P0-2 A1)", async () => {
+  const { CONTROL_TOKEN_FILE, prepareControlTokenFile } = await import("./control-token-channel.js");
+  const calls: string[] = [];
+  const uploads: Array<{ content: string; path: string }> = [];
+  const host = {
+    run: async (script: string) => { calls.push(script); },
+    uploadFile: async (content: string, path: string) => { uploads.push({ content, path }); },
+  };
+  const env: Record<string, string | undefined> = { DEEPSONAR_API_TOKEN: "job-control-token" };
+  await prepareControlTokenFile(host as never, env);
+  assert.deepEqual(uploads, [{ content: "job-control-token\n", path: CONTROL_TOKEN_FILE }]);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0]!, /mkdir -p -m 0700 -- .*\.deepsonar/);
+  assert.match(calls[1]!, /chmod 0600 -- .*control-token/);
+  assert.equal(env.DEEPSONAR_CONTROL_TOKEN_FILE, CONTROL_TOKEN_FILE);
+  assert.equal(env.DEEPSONAR_API_TOKEN, undefined);
+
+  const untouched: Record<string, string | undefined> = {};
+  await prepareControlTokenFile(host as never, untouched);
+  assert.deepEqual(untouched, {});
+  assert.equal(calls.length, 2, "no token means no sandbox writes");
+});
