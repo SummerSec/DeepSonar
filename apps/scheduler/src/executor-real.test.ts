@@ -398,7 +398,8 @@ test("OpenSandbox Platform API PoC source-text contract injects capability env a
   assert.match(source, /host\.run\("python3 \/workspace\/poc-emit-fact\.py"/);
   assert.doesNotMatch(source, /mintJobCapabilityToken/);
   assert.doesNotMatch(source, /host\.run\([\s\S]*DEEPSONAR_API_TOKEN/);
-  assert.match(source, /os\.environ\["DEEPSONAR_API_TOKEN"\]/);
+  assert.match(source, /open\("\/workspace\/\.deepsonar\/control-token"\)/);
+  assert.match(source, /\/ENV_TOKEN:0\//);
   assert.match(source, /submit_hub_decision/);
 });
 

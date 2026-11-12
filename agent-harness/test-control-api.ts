@@ -49,7 +49,7 @@ assert.equal(DEEPSONAR_CONTROL_SKILL_NAME, "deepsonar-control");
 // Reviewed Plan v2, complete-objective bootstrap, governed completion-recovery guidance,
 // including #903 stale-grant exit, actionable human-request guidance and the #1032 P2-5
 // env-dump guard.
-const expectedSkillSha256 = "61fdf232e879b9a591203df0a6b2eafdefe896ad78f8301a35f115d27cbc9932";
+const expectedSkillSha256 = "bbd387cf164e0ac51ba6fe56a08a682034d3c99f3bbafe2145c2802036ee46cb";
 const canonicalSkillBytes = Buffer.from(
   `{"name":"deepsonar-control","files":{"SKILL.md":${JSON.stringify(skillContent)}}}`,
   "utf8",
@@ -74,7 +74,9 @@ assert.match(skillContent, /Agent 通过当前 CLI 可用的 HTTP 工具/);
 assert.match(skillContent, /GET \$DEEPSONAR_API_BASE_URL\/agent\/capabilities_list/);
 assert.match(skillContent, /GET \$DEEPSONAR_API_BASE_URL\/openapi\.json/);
 assert.match(skillContent, /POST \$DEEPSONAR_API_BASE_URL\/operations\/:operationId/);
-assert.match(skillContent, /Authorization: Bearer \$DEEPSONAR_API_TOKEN/);
+assert.match(skillContent, /Authorization: Bearer "\$\(cat \/workspace\/\.deepsonar\/control-token\)"/);
+assert.match(skillContent, /\/workspace\/\.deepsonar\/control-token/);
+assert.doesNotMatch(skillContent, /Bearer \$DEEPSONAR_API_TOKEN/);
 assert.match(skillContent, /Idempotency-Key/);
 assert.match(skillContent, /不要先尝试 MCP，也不要在 API 失败后回退到 MCP/);
 assert.match(skillContent, /graph_query\(\{kind:"plan_objective"\}\)/);
