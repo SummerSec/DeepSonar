@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   CHROME_JOB_STALL_SEC,
   HUB_JOB_STALL_SEC,
+  INFLIGHT_TOOL_BUDGET_MIN_SEC,
+  inflightToolBudgetSec,
   inflightToolFromPayload,
   resolveJobStallSec,
   runtimeImageKeyFromSnapshot,
@@ -140,4 +142,35 @@ test("tool.call activity patch and progress message stay paired", () => {
   assert.equal(toolCallPhaseFromProgressMessage("tool.call.started Bash clang-tidy"), "started");
   assert.equal(toolCallPhaseFromProgressMessage("tool.call.completed Bash"), "completed");
   assert.equal(toolCallPhaseFromProgressMessage("scanning files"), null);
+});
+
+test("#1086: in-flight tool budgets derive from the same per-image floor", () => {
+  assert.equal(inflightToolBudgetSec("deepsonar-audit", 900), INFLIGHT_TOOL_BUDGET_MIN_SEC);
+  assert.equal(inflightToolBudgetSec(null, 900), INFLIGHT_TOOL_BUDGET_MIN_SEC);
+  assert.equal(inflightToolBudgetSec("deepsonar-chrome-audit", 900), CHROME_JOB_STALL_SEC["deepsonar-chrome-audit"] * 2);
+  assert.equal(inflightToolBudgetSec("deepsonar-chrome-fuzz", 900), CHROME_JOB_STALL_SEC["deepsonar-chrome-fuzz"] * 2);
+  assert.equal(inflightToolBudgetSec("deepsonar-base", 900, "hub_reason"), HUB_JOB_STALL_SEC * 2);
+  assert.equal(inflightToolBudgetSec("deepsonar-audit", 7_200), 14_400, "a larger frozen stall_sec raises the budget too");
+  assert.equal(inflightToolBudgetSec("deepsonar-audit", 0), 0, "stall off stays off");
+});
+
+test("#1086: an in-flight tool is exempt only up to its budget", () => {
+  const inflight = { inflightTool: "bash" };
+  const withinBudget = new Date(startedAt.getTime() + INFLIGHT_TOOL_BUDGET_MIN_SEC * 1000 - 1);
+  const overBudget = new Date(startedAt.getTime() + INFLIGHT_TOOL_BUDGET_MIN_SEC * 1000 + 1);
+  const leaseAt = (at: Date) => new Date(at.getTime() + 60_000);
+  assert.equal(shouldReapStalledJob({ now: withinBudget, startedAt, stallSec: 900, imageKey: "deepsonar-audit", leaseExpiresAt: leaseAt(withinBudget), ...inflight }), false);
+  assert.equal(shouldReapStalledJob({ now: overBudget, startedAt, stallSec: 900, imageKey: "deepsonar-audit", leaseExpiresAt: leaseAt(overBudget), ...inflight }), true);
+  // 进度事件把 last activity 推后，预算按最近活动重新计时。
+  const recentEvent = new Date(withinBudget.getTime() + 60_000);
+  assert.equal(shouldReapStalledJob({ now: withinBudget, startedAt, lastEventAt: recentEvent, stallSec: 900, imageKey: "deepsonar-audit", leaseExpiresAt: leaseAt(withinBudget), ...inflight }), false);
+  // chrome-fuzz 的 3h 合法长工具仍在预算内。
+  const fuzzNow = new Date(startedAt.getTime() + CHROME_JOB_STALL_SEC["deepsonar-chrome-fuzz"] * 1000 + 60_000);
+  assert.equal(shouldReapStalledJob({
+    now: fuzzNow,
+    startedAt, stallSec: 900, imageKey: "deepsonar-chrome-fuzz", leaseExpiresAt: leaseAt(fuzzNow),
+    latestToolCallPhase: "started",
+  }), false);
+  // 租约失效时不再走豁免分支，普通停滞判定照旧。
+  assert.equal(shouldReapStalledJob({ now: withinBudget, startedAt, stallSec: 900, imageKey: "deepsonar-audit", leaseExpiresAt: expiredLease, ...inflight }), true);
 });
