@@ -173,6 +173,10 @@ The 2026-11-01 [SDK binding](../../packages/runtime-sandbox/src/opensandbox-sdk-
 
 中断续做读取固定目标 journal，重复步骤前核对实际回执。激活前失败回源并保持暂停；激活成功或结果不明时不允许自动回旧数据。维护状态机、宿主/受管 SSH 和显式恢复领取已有实现；schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。具体历史基线与隔离环境见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)，不能据此推定 Windows Docker 全流程、断电或真实模型验证已完成。
 
+## Pi 请求失败诊断与恢复分类（#1083）
+
+Pi 请求包装层保留有界、允许名单化的错误来源与阶段，区分 allowance、SDK 和内核 no-start 见证查询。错误类别不授予恢复权；已接受完成仍仅由私有宿主身份证明，取消、权限、预算、partial/unknown 或缺少见证均停止。SDK 内恢复沿用原 live owner、冻结预算和持久 `not_started` 见证，不能通过恢复分类触发额外 CLI 进程重启。诊断不输出任意异常原文、URL、凭据或堆栈；共享 DSH reader 与生成扩展的测试、未验证边界见 [CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-请求失败诊断与分类1083)。本轮最终 SHA Actions 待验。
+
 ## Pi 预算与截断恢复（#958）
 
 创建期保留同账号、同模型的 Provider 声明限制与来源，显式配置优先，逐字段冻结 `model_budget` 并投影 Pi `contextWindow/maxTokens`。原生 `get_state` 的实际限制只与冻结输入并列诊断，不修改快照或额度。`length` 不触发通用完成催促；runner 在精确同 Session 内先检查状态，再按压力作必要 compact 和短续写，恢复次数累计有界。
