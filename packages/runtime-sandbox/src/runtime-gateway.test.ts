@@ -6,6 +6,7 @@ import http from "node:http";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { gzipSync } from "node:zlib";
 import test from "node:test";
 import { isNoSuchContainerError } from "./runtime-docker.js";
 import {
@@ -408,8 +409,10 @@ async function headerProxyExchange(port: number, options: {
   trailers?: Array<[string, string]>; onData?: (chunk: Buffer) => void;
 } = {}) {
   return await new Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer; trailers: string[] }>((resolve, reject) => {
+    const requestHeaders = Array.isArray(options.headers)
+      ? ["Host", "127.0.0.1:" + port, ...options.headers] : options.headers;
     const req = http.request({ host: "127.0.0.1", port, path: "/gateway/responses",
-      method: options.method ?? "POST", headers: options.headers, agent: false }, res => {
+      method: options.method ?? "POST", headers: requestHeaders, agent: false }, res => {
       const chunks: Buffer[] = [];
       res.on("error", reject);
       res.on("data", (chunk: Buffer) => { chunks.push(chunk); options.onData?.(chunk); });
@@ -427,6 +430,7 @@ test("#1097 proxy advertises its own connection lifetime, never the upstream hop
   const port = await liveHeaderProxy(t, (_req, res) => {
     res.writeHead(200, { connection: "keep-alive, X-Reply-Hop", "keep-alive": "timeout=73, max=19",
       "x-reply-hop": "must-stay-upstream", "x-reply-hop-safe": "end-to-end",
+      "proxy-authenticate": "Basic realm=local-hop", "www-authenticate": "Bearer realm=job",
       "set-cookie": ["a=1", "b=2"] }).end("same body");
   });
   const reply = await headerProxyExchange(port, { headers: { connection: "keep-alive" } });
@@ -435,6 +439,8 @@ test("#1097 proxy advertises its own connection lifetime, never the upstream hop
   assert.doesNotMatch(String(reply.headers["keep-alive"]), /73|max=19/);
   assert.equal(reply.headers["x-reply-hop"], undefined);
   assert.equal(reply.headers["x-reply-hop-safe"], "end-to-end");
+  assert.equal(reply.headers["proxy-authenticate"], undefined);
+  assert.equal(reply.headers["www-authenticate"], "Bearer realm=job");
   assert.deepEqual(reply.headers["set-cookie"], ["a=1", "b=2"]);
 });
 
@@ -453,4 +459,89 @@ test("#1097 proxy consumes all Connection tokens while retaining Scheduler authe
   assert.equal(seen.authorization, "Bearer synthetic-job-token");
   assert.equal(seen["x-deepsonar-request-id"], "00000000-0000-4000-8000-000000000001");
   assert.equal(seen["x-first-hop-safe"], "preserved");
+  await headerProxyExchange(port, { headers: { connection: "authorization, x-deepsonar-request-id",
+    authorization: "must-not-forward", "x-deepsonar-request-id": "nominated-hop" } });
+  assert.equal(seen.authorization, undefined);
+  assert.equal(seen["x-deepsonar-request-id"], undefined);
+});
+
+test("#1097 hop filtering preserves content bytes and framing for every supported method", { timeout: 20000 }, async t => {
+  const observed: Array<{ method: string; headers: http.IncomingHttpHeaders; bytes: Buffer }> = [];
+  const port = await liveHeaderProxy(t, (req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", chunk => chunks.push(chunk));
+    req.on("end", () => {
+      const bytes = Buffer.concat(chunks);
+      observed.push({ method: req.method!, headers: req.headers, bytes });
+      if (req.headers["content-encoding"]) res.setHeader("content-encoding", req.headers["content-encoding"]);
+      res.end(bytes);
+    });
+  });
+  const binary = Buffer.from([0, 255, 13, 10, 65, 0, 66]);
+  const cases = [
+    { method: "POST", body: binary, headers: { "content-length": String(binary.length) } },
+    { method: "GET", body: binary, headers: { "transfer-encoding": "chunked" } },
+    { method: "HEAD", body: binary, headers: { "transfer-encoding": "chunked" } },
+    { method: "POST", body: gzipSync(binary), headers: { "transfer-encoding": "chunked", "content-encoding": "gzip" } },
+  ];
+  for (const value of cases) {
+    const reply = await headerProxyExchange(port, value);
+    const incoming = observed.at(-1)!;
+    assert.equal(reply.status, 200);
+    assert.equal(incoming.method, value.method);
+    assert.deepEqual(incoming.bytes, value.body);
+    assert.deepEqual(reply.body, value.method === "HEAD" ? Buffer.alloc(0) : value.body);
+    assert.equal(incoming.headers["content-encoding"], value.headers["content-encoding"]);
+    assert.equal(reply.headers["content-encoding"], value.headers["content-encoding"]);
+  }
+});
+
+test("#1097 declared trailers preserve duplicates and consume dynamic hop and forbidden fields", { timeout: 10000 }, async t => {
+  let seen: string[] = [];
+  let declaration: string | undefined;
+  const port = await liveHeaderProxy(t, (req, res) => {
+    req.resume();
+    req.on("end", () => {
+      seen = req.rawTrailers;
+      declaration = req.headers.trailer;
+      res.writeHead(200, { "transfer-encoding": "chunked", connection: "keep-alive, X-Reply-Hop",
+        trailer: "X-Response-Digest, X-Reply-Hop, Authorization" });
+      res.write("first-");
+      res.addTrailers([["X-Response-Digest", "first"], ["X-Response-Digest", "second"],
+        ["X-Reply-Hop", "private-hop"], ["Authorization", "private-trailer"]]);
+      res.end("last");
+    });
+  });
+  const reply = await headerProxyExchange(port, { headers: { "transfer-encoding": "chunked",
+    connection: "keep-alive, X-Request-Hop", trailer: "X-Request-Digest, X-Request-Hop, Authorization" },
+    body: Buffer.from("request"), trailers: [["X-Request-Digest", "first"], ["X-Request-Digest", "second"],
+      ["X-Request-Hop", "private-hop"], ["Authorization", "private-trailer"]] });
+  const lowerNames = (raw: string[]) => raw.map((value, i) => i % 2 === 0 ? value.toLowerCase() : value);
+  assert.deepEqual(lowerNames(seen), ["x-request-digest", "first", "x-request-digest", "second"]);
+  assert.equal(declaration?.toLowerCase(), "x-request-digest");
+  assert.deepEqual(lowerNames(reply.trailers), ["x-response-digest", "first", "x-response-digest", "second"]);
+  assert.equal(reply.headers.trailer?.toLowerCase(), "x-response-digest");
+  assert.equal(reply.body.toString(), "first-last");
+});
+
+test("#1097 proxy streams the first bytes before upstream finishes", { timeout: 10000 }, async t => {
+  let release!: () => void;
+  const clientSawFirst = new Promise<void>(resolve => { release = resolve; });
+  const port = await liveHeaderProxy(t, (_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write("data: first\n\n");
+    void clientSawFirst.then(() => res.end("data: last\n\n"));
+  });
+  const reply = await headerProxyExchange(port, { onData: () => release() });
+  assert.equal(reply.body.toString(), "data: first\n\ndata: last\n\n");
+});
+
+test("#1097 unsupported transfer coding fails closed without killing the proxy", { timeout: 10000 }, async t => {
+  const port = await liveHeaderProxy(t, (_req, res) => {
+    res.writeHead(200, { "transfer-encoding": "gzip, chunked" }).end("not ordinary content bytes");
+  });
+  const rejected = await headerProxyExchange(port, { method: "GET", headers: { "transfer-encoding": "gzip, chunked" } });
+  assert.equal(rejected.status, 400);
+  assert.equal((await headerProxyExchange(port)).status, 502);
+  assert.equal((await proxyRequest(port, "GET", "/_deepsonar_health")).status, 200);
 });

@@ -16,6 +16,8 @@
 
 #1094 的[平台 HTTP bootstrap](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#平台-operation-的-http-bootstrap1094)消除 operation allowlist 与 CLI 原生工具的提示歧义；不增加工具代理、控制通道或权限，历史 Job 不自动重跑，模型效果仍未验证。
 
+#1097 的[代理逐跳连接策略](docs/MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的逐跳连接策略1097)让 managed proxy 声明自身连接寿命；保留内容、认证与流式边界，不增加透明重试或恢复权限，历史 Pi 错误归因仍有证据缺口。
+
 ## 1. 设计判断
 
 DeepSonar 的产品形态是“可信执行内核 + 可组合能力”。模型负责理解目标、选择能力、提出计划、读取状态、修正错误和判断业务收敛；内核负责把这些提案变成有权限、有预算、有证据、有账本的执行。
