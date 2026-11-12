@@ -33,7 +33,7 @@ runner `onEvent` 进入现有 normalized Evidence，关闭码缺失明确未知�
 
 ### Pi 模型消息错误与执行结算（#1072）
 
-Pi RPC 的单次模型错误先等待同进程内部重试与 `agent_settled`，不立即关闭 stdin。实际后续成功消息可清除待判定模型错误，重试成功事件本身不能证明完成；耗尽、取消、RPC/扩展/进程错误继续失败，原完成门、Session/Attempt 和累计预算不变。实现与现场证据边界见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)；最终 SHA Actions 待验，未重跑现场 Job。
+Pi RPC 的单次模型错误先等待同进程内部重试与 `agent_settled`，不立即关闭 stdin。重试仅回滚失败消息的输出，保留先前已完成消息；去重与空响应判断限定当前消息，新 RPC turn 清除消息基线。实际后续成功消息可清除待判定模型错误，重试成功事件本身不能证明完成；耗尽、取消、RPC/扩展/进程错误继续失败，原完成门、Session/Attempt 和累计预算不变。实现与现场证据边界见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)；最终 SHA Actions 待验，未重跑现场 Job。
 
 ## 基础镜像构建输入（#992 前置切片）
 
