@@ -247,7 +247,7 @@ test("#1094 every result contract requires HTTP submission rather than a same-na
   for (const flags of [[true, false, false, false], [false, true, false, false],
     [false, false, true, false], [false, false, false, true], [false, false, false, false]] as const) {
     for (const tools of [[], ["emit_fact", "emit_finding", "mark_job_done"]] as const) {
-      const contract = resultContract([...tools], ...flags);
+      const contract = resultContract([...tools], flags[0], flags[1], flags[2], flags[3]);
       assert.match(contract, /HTTP/);
       assert.doesNotMatch(contract, /平台只认工具调用|工具参数/);
     }
