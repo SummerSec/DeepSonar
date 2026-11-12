@@ -287,4 +287,6 @@
 
 项目知识的来源登记→有界项目批次→独立试验/审查→后续拉取与模型反馈，以及积累/复用只读投影见[专题](PROJECT_KNOWLEDGE.md)。[ADR0023](architecture/adr/0023-project-knowledge-collection.md)在用户本轮授权内取代0021的项目批处理暂缓限制，保留历史预览只读和旧knowledge:auto禁用；无schema或整链token预算变化。审计绑定来源Attempt/manifest摘要，trial隔离评分输入，完整6×2与候选/安全组硬门保持。collector/闭环/activity/快照隔离、behavior-policy与Web回归已接Actions入口；`6d96df59` 的主CI与Reverse专项已通过，同步main后的候选仍须独立验收，未合并未部署。模型反馈不是收益认证，注意力和质量收益未知；证据见[专题验收记录](PROJECT_KNOWLEDGE.md#验证与运维)。
 
+自动清理归属与共享资产只读探针的 #307 评审补齐见[运行时视图](architecture/06-runtime-view.md#自动清理归属与共享资产只读探针307-评审补齐)；扫描清理不删除未知 owner，guest 探针不冒充远端来源证明，最终 SHA Actions 待验。
+
 > **Pi 内部重试结算（#1072）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)区分单次模型消息错误与 `agent_settled`，按消息回滚失败输出并保留此前成功文本，空响应判断与去重不跨消息；保留完成门、取消和进程失败边界；镜像内原始错误 cause 丢失的证据限制单独记录。回归接既有 runtime-sandbox Actions，最终 SHA 待验；现场 Job 未重跑。

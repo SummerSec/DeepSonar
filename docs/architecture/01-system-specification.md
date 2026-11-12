@@ -179,7 +179,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Job 超时、取消或 Reaper 判停滞时必须先原子化状态/账本，再中止 provision、撤销 token、释放设备并清理沙箱；清理操作必须幂等。
 - **决策来源**：外部进程和数据库状态可能以不同顺序完成，清理不能依赖单个网络回调成功。
-- **实现状态**：as-built；取消、超时、停滞和设备释放复用统一路径。
+- **实现状态**：as-built；取消、超时、停滞和设备释放复用统一路径。扫描沙箱清理以本库 Job/Attempt 与 sandbox 绑定证明归属，未知或冲突不删除；扫描卷要求本库 Job 及既有卷归属校验，显式生命周期清理保留原语义。双 UUID 标签不是部署归属证明。共享资产 guest 探针要求唯一只读挂载，回归接既有 Actions，最终 SHA 待验。
 - **代码入口**：[Job lifecycle recovery](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[资源清理](../../apps/scheduler/src/resource-cleanup.ts)、[Attempt cancellation](../../apps/scheduler/src/domains/job-attempt/provision-cancellation.ts)。
 - **验证证据**：`pnpm ci:unit:job-lifecycle`、`pnpm ci:unit:runtime-cleanup`、`pnpm ci:smoke:opensandbox-reaper`。
 

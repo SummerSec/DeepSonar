@@ -252,13 +252,15 @@ export function sharedAssetsVolumeBinds(mount?: { volumeName: string }): string[
   return [`${mount.volumeName}:${SHARED_ASSETS_MOUNT_PATH}:ro`];
 }
 
-/** Guest /proc/mounts must contain the frozen shared-assets path; an empty host dir is not enough. */
+/** Verify the guest's unique read-only mount; this does not authenticate its backing source. */
 export function assertSharedAssetsGuestMount(procMounts: string, mountPath = SHARED_ASSETS_MOUNT_PATH): void {
-  const found = procMounts.split("\n").some((line) => {
-    const fields = line.trim().split(/\s+/);
-    return fields[1] === mountPath;
-  });
-  if (!found) throw new RuntimeImageContractError("shared assets volume was not mounted");
+  const mounts = procMounts.split("\n").map((line) => line.trim().split(/\s+/))
+    .filter((fields) => fields[1] === mountPath);
+  if (mounts.length === 0) throw new RuntimeImageContractError("shared assets volume was not mounted");
+  const options = mounts[0]![3]?.split(",") ?? [];
+  if (mounts.length !== 1 || !options.includes("ro") || options.includes("rw")) {
+    throw new RuntimeImageContractError("shared assets volume must have one read-only guest mount");
+  }
 }
 
 export function assertSharedAssetsContainerMount(

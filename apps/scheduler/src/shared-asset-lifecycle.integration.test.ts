@@ -67,7 +67,8 @@ if (!testDatabaseUrl) {
       const recovery = await import("./domains/job-attempt/recovery.js");
       const { renewCurrentAttemptLease } = await import("./attempt-lease.js");
       const { claimPendingJobs, lockCurrentProvisioningAttempt, retryProvisioningJob } = await import("./dispatcher.js");
-      const { acquireSharedAssetPreparation, cleanupSharedAssetsForJob, SharedAssetLifecycleConflictError } = await import("./shared-asset-lifecycle.js");
+      const { acquireSharedAssetPreparation, cleanupSharedAssetsForJob, cleanupSandboxResourceForJob,
+        SharedAssetLifecycleConflictError } = await import("./shared-asset-lifecycle.js");
       const { beginEffect, createAttempt, markEffectUnknown, requestAttemptCancel, settleAttemptTerminal,
         settleEffect, settleUnstartedProvisionEffect, updateAttemptResource } = await import("./domains/job-attempt/index.js");
       const control = postgres(targetUrl.toString(), { max: 2, connection: { statement_timeout: 10_000 } });
@@ -128,6 +129,145 @@ if (!testDatabaseUrl) {
       await migrate();
       await sql`INSERT INTO projects (id, name) VALUES (${projectId}, 'shared-asset serialization integration')`;
       await sql`INSERT INTO canvases (id, project_id, title) VALUES (${canvasId}, ${projectId}, 'shared-asset serialization')`;
+
+      await t.test("boot and periodic cleanup reject foreign UUIDs and copied labels, but remove DB-bound terminal and old resources", async () => {
+        const scope = await fixture(false);
+        await sql`UPDATE job_attempts SET sandbox_id='owned-terminal' WHERE id=${scope.oldAttempt}`;
+        const older = await fixture(false);
+        await sql`UPDATE job_attempts SET sandbox_id='owned-old' WHERE id=${older.oldAttempt}`;
+        const next = await sql.begin(async (txRaw) => {
+          const tx = txRaw as unknown as typeof sql;
+          const attempt = await createAttempt(tx, older.jobId);
+          await updateAttemptResource(tx, String(attempt.id), { sandboxId: "owned-next" });
+          await settleAttemptTerminal(tx, older.jobId, "failed");
+          return String(attempt.id);
+        });
+        const { runner, sharedAssetsVolumeManager } = await import("./runtime.js");
+        const { reconcileOnBoot } = await import("./reconcile.js");
+        const { cleanupManagedResourcesOnce } = await import("./resource-cleanup.js");
+        const original = { list: runner.listResources, destroy: runner.destroyResource,
+          volumes: sharedAssetsVolumeManager.listManaged, remove: sharedAssetsVolumeManager.removeForJob,
+          mode: config.runtime.agentMode };
+        const foreignJob = randomUUID();
+        try {
+          assert.equal(Reflect.set(config.runtime, "agentMode", "real"), true);
+          for (const run of [() => cleanupManagedResourcesOnce(), reconcileOnBoot]) {
+            let resources = [
+              { resourceId: "foreign", jobId: foreignJob, attemptId: randomUUID() },
+              { resourceId: "copied-labels", jobId: scope.jobId, attemptId: scope.oldAttempt },
+              { resourceId: "wrong-attempt", jobId: scope.jobId, attemptId: next },
+              { resourceId: "owned-terminal", jobId: scope.jobId, attemptId: scope.oldAttempt },
+              { resourceId: "owned-old", jobId: older.jobId, attemptId: older.oldAttempt },
+              { resourceId: "owned-next", jobId: older.jobId, attemptId: next },
+            ];
+            const destroyed: string[] = [], removedVolumes: string[] = [];
+            runner.listResources = async () => resources;
+            runner.destroyResource = async (resource) => {
+              destroyed.push(resource.resourceId);
+              resources = resources.filter(item => item.resourceId !== resource.resourceId);
+            };
+            sharedAssetsVolumeManager.listManaged = async () => [
+              { volumeName: `deepsonar-assets-${foreignJob}`, jobId: foreignJob },
+              { volumeName: `deepsonar-assets-${scope.jobId}`, jobId: scope.jobId },
+            ];
+            sharedAssetsVolumeManager.removeForJob = async (id, _generation, assertCurrent) => {
+              await assertCurrent?.();
+              removedVolumes.push(id);
+            };
+            await run();
+            assert.deepEqual([...new Set(destroyed)].sort(), ["owned-next", "owned-old", "owned-terminal"]);
+            assert.deepEqual([...new Set(removedVolumes)], [scope.jobId]);
+            assert.ok(!destroyed.some(id => ["foreign", "copied-labels", "wrong-attempt"].includes(id)));
+          }
+        } finally {
+          runner.listResources = original.list;
+          runner.destroyResource = original.destroy;
+          sharedAssetsVolumeManager.listManaged = original.volumes;
+          sharedAssetsVolumeManager.removeForJob = original.remove;
+          assert.equal(Reflect.set(config.runtime, "agentMode", original.mode), true);
+        }
+      });
+
+      await t.test("settled provision proves the exact leftover even before Attempt sandbox binding", async () => {
+        const scope = await fixture(false);
+        await sql`INSERT INTO job_attempt_effects (attempt_id,job_id,effect_id,effect_kind,status,settlement_json)
+          VALUES (${scope.oldAttempt},${scope.jobId},'provision:1','provision','settled','{"sandbox_id":"settled-leftover"}')`;
+        const removed: string[] = [];
+        for (const id of ["settled-leftover", "copied-labels"]) {
+          const accepted = await cleanupSandboxResourceForJob({ jobId: scope.jobId, attemptId: scope.oldAttempt, resourceId: id },
+            async (assertCurrent) => { await assertCurrent(); removed.push(id); });
+          assert.equal(accepted, id === "settled-leftover");
+        }
+        assert.deepEqual(removed, ["settled-leftover"]);
+        await sql`UPDATE job_attempt_effects SET status='unknown' WHERE attempt_id=${scope.oldAttempt}`;
+        assert.equal(await cleanupSandboxResourceForJob({ jobId: scope.jobId, resourceId: "settled-leftover" },
+          async () => { assert.fail("an unknown provision is not resource ownership proof"); }), false);
+      });
+
+      await t.test("old bound sandbox can be reclaimed while a different current Attempt stays active", async () => {
+        const scope = await fixture();
+        await sql`UPDATE job_attempts SET sandbox_id='old-bound' WHERE id=${scope.oldAttempt}`;
+        await sql`UPDATE job_attempts SET sandbox_id='current-bound' WHERE id=${scope.newAttempt}`;
+        await sql`UPDATE jobs SET status='running',sandbox_id='current-bound' WHERE id=${scope.jobId}`;
+        const removed: string[] = [];
+        for (const [attemptId, resourceId] of [[scope.oldAttempt, "old-bound"], [scope.newAttempt, "current-bound"]] as const) {
+          assert.equal(await cleanupSandboxResourceForJob({ jobId: scope.jobId, attemptId, resourceId },
+            async (assertCurrent) => { await assertCurrent(); removed.push(resourceId); }), attemptId === scope.oldAttempt);
+        }
+        assert.deepEqual(removed, ["old-bound"]);
+        await sql.begin(tx => settleAttemptTerminal(tx as unknown as typeof sql, scope.jobId, "failed"));
+        await sql`UPDATE jobs SET status='failed' WHERE id=${scope.jobId}`;
+      });
+
+      await t.test("the latest Attempt can use the persisted Job sandbox pointer, but not a foreign Attempt", async () => {
+        const scope = await fixture(false);
+        await sql`UPDATE jobs SET sandbox_id='job-bound-only' WHERE id=${scope.jobId}`;
+        let removed = 0;
+        assert.equal(await cleanupSandboxResourceForJob({ jobId: scope.jobId, resourceId: "job-bound-only" },
+          async (assertCurrent) => { await assertCurrent(); removed += 1; }), true);
+        assert.equal(await cleanupSandboxResourceForJob({ jobId: scope.jobId, attemptId: randomUUID(), resourceId: "job-bound-only" },
+          async () => { assert.fail("the pointer does not authorize an unrelated Attempt"); }), false);
+        assert.equal(removed, 1);
+      });
+
+      await t.test("sandbox cleanup waits for preparation and checks the binding after acquiring the Job lock", async () => {
+        const scope = await fixture();
+        await sql`UPDATE job_attempts SET sandbox_id='old-scanned' WHERE id=${scope.oldAttempt}`;
+        const preparingActor = actor("sandbox-prepare");
+        const cleanupActor = actor("sandbox-inventory");
+        const lease = await acquireSharedAssetPreparation({ jobId: scope.jobId, attemptId: scope.newAttempt }, preparingActor.connect);
+        let removed = false;
+        const cleanup = cleanupSandboxResourceForJob({ jobId: scope.jobId, attemptId: scope.oldAttempt, resourceId: "old-scanned" },
+          async (assertCurrent) => { await assertCurrent(); removed = true; }, cleanupActor.connect);
+        void cleanup.catch(() => {});
+        try {
+          await bounded(cleanupActor.opened, "sandbox cleanup session did not open");
+          await waitBlocked(cleanupActor.pid());
+          assert.equal(removed, false);
+          await control`UPDATE job_attempts SET sandbox_id='replaced-before-lock' WHERE id=${scope.oldAttempt}`;
+          await lease.release();
+          assert.equal(await cleanup, false);
+          assert.equal(removed, false);
+        } finally {
+          await lease.release();
+          await cleanup.catch(() => {});
+          await sql.begin(tx => settleAttemptTerminal(tx as unknown as typeof sql, scope.jobId, "failed"));
+          await sql`UPDATE jobs SET status='failed' WHERE id=${scope.jobId}`;
+        }
+      });
+
+      await t.test("sandbox permit re-reads the DB binding and backend before destruction", async () => {
+        const scope = await fixture(false);
+        await sql`UPDATE job_attempts SET sandbox_id='before-rebind' WHERE id=${scope.oldAttempt}`;
+        let destroyed = false;
+        await assert.rejects(cleanupSandboxResourceForJob({ jobId: scope.jobId, attemptId: scope.oldAttempt, resourceId: "before-rebind" },
+          async (assertCurrent) => {
+            await control`UPDATE job_attempts SET sandbox_id='after-rebind' WHERE id=${scope.oldAttempt}`;
+            await assertCurrent();
+            destroyed = true;
+          }), (error: unknown) => error instanceof SharedAssetLifecycleConflictError);
+        assert.equal(destroyed, false);
+      });
 
       await t.test("old finally is blocked during new prepare + runner handoff, then stale cleanup skips", async () => {
         const scope = await fixture();

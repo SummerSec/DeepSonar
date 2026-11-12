@@ -90,6 +90,8 @@ The 2026-11-01 upgrade preserves Scheduler authority: [connectionConfig](../../p
 
 #1002 P2-10 的 [provision 诊断读回](09-interface-specs.md#job-provision-诊断读回1002-p2-10)只提供有界、固定字段的宿主失败事实。来源引用与 append-only 审计同事务，读回仍逐一核 scheduler/schema/项目/Job/Attempt；有引用不等于可信，坏/外来引用拒绝，不扩大 audit 权限或采集不归属的 Engine 日志。无 handle、空日志、诊断或 cleanup 尝试都不证明 no-start；不改变 unknown/replay policy、预算和执行终态。SQL/HTTP/受控 Provider 回归已接线，最终 SHA Actions 待验。
 
+资源标签只用于发现，不授予销毁权限。扫描沙箱清理须核对本库 Job/Attempt 与 sandbox 绑定，缺失、冲突或查询失败均不删除；扫描卷须有本库 Job 并沿用卷归属校验，未知外部资源保留对账。显式生命周期中的精确共享资产清理保留既有语义，不供扫描追认未知归属。共享资产 guest 探针要求唯一的只读挂载，不能以目录存在或可写挂载冒充已落实冻结的 read-only 约束；此探针不认证远端来源。
+
 OCI 镜像导入在创建扫描的事务内校验并锁定凭据，与删除互斥；凭据检查通过但未提交的导入不能在删除之后留下悬空扫描引用。既有活动扫描阻止删除，导入失去凭据时原子回滚，不依赖 JSON 引用存在外键，也不扩大准入权限。
 
 权限校验不能替代资源隔离。沙箱网络、文件、设备、共享资产配额、Job 并发和事件预算仍由 Scheduler 和运行时 host 强制；镜像准入只回答“该摘要能否被选择”，不能让镜像取得平台管理权限。涉及 Job/Attempt 的沙箱 provision、Agent run、Gateway 和清理效果按各自 effect/settlement 与对账规则记录；Management 配置、image-admission 扫描和 Registry 发布使用自己的数据库状态与审计，不虚构 Job Attempt 账本。

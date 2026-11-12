@@ -6,7 +6,7 @@ import {
 import { sql } from "./db.js";
 import { inc, setGauge } from "./metrics.js";
 import { runner, sharedAssetsVolumeManager } from "./runtime.js";
-import { cleanupSharedAssetsForJob } from "./shared-asset-lifecycle.js";
+import { cleanupSandboxResourceForJob, cleanupScannedSharedAssetsForJob } from "./shared-asset-lifecycle.js";
 
 const ACTIVE_JOB_STATUSES = ["claimed", "provisioning", "running", "waiting_human"] as const;
 
@@ -61,13 +61,13 @@ function defaultDependencies(volumeManager: SharedAssetsVolumeManager): DesiredS
     })),
     // Initial scans are only hints. Hold the same Job lifecycle boundary as
     // prepare/mount and re-read active ownership before destructive cleanup.
-    removeContainer: (containerId, jobId, attemptId) => cleanupSharedAssetsForJob({ jobId },
+    removeContainer: (containerId, jobId, attemptId) => cleanupSandboxResourceForJob({ jobId, attemptId, resourceId: containerId },
       async (assertCurrent) => {
         await assertCurrent();
         await runner.destroyResource({ resourceId: containerId, jobId, attemptId });
       }),
     listVolumes: () => volumeManager.listManaged(),
-    removeVolumeForJob: (jobId, generation) => cleanupSharedAssetsForJob({ jobId },
+    removeVolumeForJob: (jobId, generation) => cleanupScannedSharedAssetsForJob({ jobId },
       (assertCurrent) => volumeManager.removeForJob(jobId, generation, assertCurrent)),
   };
 }
