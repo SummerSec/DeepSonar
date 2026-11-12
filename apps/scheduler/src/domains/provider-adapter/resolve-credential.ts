@@ -327,6 +327,10 @@ export async function resolveProviderCredentialForJob(
     const byCapacity = (a: (typeof pool)[number], b: (typeof pool)[number]): number =>
       ratio(b) - ratio(a) || tieBreak(a, b)
         || score(a).active - score(b).active || score(a).total - score(b).total || a.id.localeCompare(b.id);
+    // #1002/#1078 P1（评审）：仍有余量的冻结恢复身份与显式缺省都先保持，只有自身满额才让位，
+    // 否则负载变化会换账号并制造 SNAPSHOT_STALE；余量比例只用于没有这两种优先项的池。
+    if (preferred && score(preferred).room > 0) return preferred;
+    if (existing && score(existing).room > 0) return existing;
     const withRoom = pool.filter((row) => score(row).room > 0);
     const best = [...withRoom].sort(byCapacity)[0];
     if (best) return best;

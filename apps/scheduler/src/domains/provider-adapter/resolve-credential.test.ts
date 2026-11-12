@@ -492,13 +492,13 @@ test("#1078 resolve: a full default credential yields to a roomy same-identity p
 test("#1078 resolve: default with headroom, all-full and ratio ordering contracts (#1078 slice 1)", async () => {
   const defaultRow = { ...baseRow(CRED_A), meta_json: { max_concurrent: 3 } };
   const peer = baseRow(CRED_B);
-  // 缺省只剩 1/3 余量、peer 全空 → 按余量比例分布到 peer，缺省不再一票决定（#1078 诉求 1）。
+  // 缺省仍有余量 → 保持缺省（评审 P1：负载变化不得换账号）。
   const headroom = await resolveProviderCredentialForJob({
     db: dbWith([defaultRow, peer], [{ credential_id: CRED_A, active_jobs: 2, total_jobs: 5 }]) as never,
     projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_A }),
     provider: "anthropic",
   });
-  assert.equal(headroom?.id, CRED_B, "free-capacity ratio beats a default that is nearly saturated");
+  assert.equal(headroom?.id, CRED_A, "a default with remaining capacity keeps the frozen identity");
   // 两个候选都满额 → 保持既有行为，无新增失败码。
   const crowded = { ...peer, meta_json: { max_concurrent: 2 } };
   const full = await resolveProviderCredentialForJob({
@@ -517,9 +517,9 @@ test("#1078 resolve: default with headroom, all-full and ratio ordering contract
       { credential_id: CRED_A, active_jobs: 1, total_jobs: 2 },
       { credential_id: CRED_B, active_jobs: 2, total_jobs: 2 },
     ]) as never, projectId: "project-1", agentCli: "claude-code",
-    allowlist: allowlist({ default_credential_id: CRED_A }), provider: "anthropic",
+    allowlist: allowlist({ default_credential_id: null }), provider: "anthropic",
   });
-  assert.equal(byRatio?.id, CRED_B, "free-capacity ratio orders same-identity candidates");
+  assert.equal(byRatio?.id, CRED_B, "free-capacity ratio orders a pool without default or recovery identity");
 });
 
 test("#1078 resolve: recovery identity does not bypass capacity limits", async () => {
@@ -531,4 +531,18 @@ test("#1078 resolve: recovery identity does not bypass capacity limits", async (
     provider: "anthropic", existingCredentialId: CRED_A,
   });
   assert.equal(recovered?.id, CRED_B, "an existing identity at its own limit does not rotate back inside it");
+});
+
+test("#1078 P1 评审：仍有余量的恢复身份不因负载比例被替换", async () => {
+  const left = { ...baseRow(CRED_A), meta_json: { max_concurrent: 3 } };
+  const right = { ...baseRow(CRED_B), meta_json: { max_concurrent: 3 } };
+  const kept = await resolveProviderCredentialForJob({
+    db: dbWith([left, right], [
+      { credential_id: CRED_A, active_jobs: 2, total_jobs: 2 },
+      { credential_id: CRED_B, active_jobs: 0, total_jobs: 0 },
+    ]) as never, projectId: "project-1", agentCli: "claude-code",
+    allowlist: allowlist({ default_credential_id: null }), provider: "anthropic",
+    existingCredentialId: CRED_A,
+  });
+  assert.equal(kept?.id, CRED_A, "an authorized recovery identity with room must not rotate to a roomier peer");
 });
