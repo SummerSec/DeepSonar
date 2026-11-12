@@ -62,6 +62,25 @@ Pi 的模型消息失败与整个 RPC 执行结束是两个边界。`message_upd
 
 现场 Job `c76115f3-3d90-4c11-a56a-f2efe2b82a73` 的原始会话记录 `terminated`，随后可见新的模型请求，宿主却在该请求返回前结束执行；单次消息被提前终态化的适配缺陷已定位。镜像内 Pi 1.4.0 使用 Undici；其响应体异常终止产生 `TypeError("terminated", { cause })`，但 Pi-AI provider 错误转换只保留 message/status/body，丢弃嵌套 cause/code。故已保存记录无法区分本次 body 空闲超时与 socket 断链，不能把约 595 秒当作特定超时的证明。HTTP 200 收尾和历史用量结算均不证明响应完整交付。回归覆盖实际 runner 的 decode/driver/map 路径、stdin 保持及成功/失败与完成门；最终 SHA 的 GitHub Actions 结果另行记录，未重跑现场 Job、未做生产部署。
 
+### OpenSandbox PTY 退出诊断（#1088）
+
+只有包含整数 `exit_code` 的 execd `exit` 帧能产生 CLI 退出码。WebSocket
+`close`（包括 `1000`）、`error`、握手失败和宿主主动终止分别留证；没有退出帧时
+进程状态未知，不能伪造退出码 1 或成功 0。首个终止原因保持不变，随后观察到的
+退出帧或关闭事件仅补诊断，不把传输失败改成成功。
+
+RuntimeProcess 的可选终止诊断经 OpenSandbox wrapper 和 runner 写入既有
+`runtime.diagnostic` normalized Evidence。保留允许字段投影：退出帧有效性/退出码、
+WebSocket 关闭码/原因/wasClean、错误 name/code/message 和有界 cause、握手阶段、
+宿主 kill/close 请求。字符串先脱敏再限长，不保存原始帧、URL、headers、堆栈或
+任意错误对象。退出/错误后最多等待 50ms 收集伴随的 close；未观察到时明确为 null，
+不推定远端关闭码，随后关闭本地连接。所有监听在等待 open 前安装。
+
+诊断不授权重连、CLI 重开或未知效果重放。成功结构化终态后的宿主主动终止可按
+原完成协议收尾；意外传输中断仍为 process 失败，已接受效果仍由 Scheduler 结算。
+回归接 `ci:unit:runtime-sandbox` / `ci:unit:recovery`，最终 SHA Actions 待验。
+历史 Job 的底层退出原因仍未知，本修复不重写历史证据、不重跑任务或部署。
+
 ### Runner failure provenance (#919)
 
 `RealAgentResult.runnerErrorSource` distinguishes `structured_terminal` failures

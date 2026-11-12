@@ -3,6 +3,17 @@
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
 > 同步日期：2026-11-12
 
+## OpenSandbox PTY 退出与传输中断（#1088）
+
+有效 execd 退出帧、WebSocket close/error、握手失败和宿主主动终止分开记录；
+没有退出帧不生成 CLI 退出码。首个终止原因与有界后续关闭观察经 RuntimeProcess、
+runner `onEvent` 进入现有 normalized Evidence，关闭码缺失明确未知。
+成功终态后的主动终止沿原协议收尾，意外传输失败不因完成文本而被吞掉，也不触发
+自动重连或新 CLI。诊断投影、脱敏与 50ms 收集界限见
+[CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)。
+该变更补齐 IR-001 工程诊断，不新增 Job 状态、控制 API、权限或效果结算通道；
+最终 SHA Actions 待验，历史现场原因仍未知。
+
 ## 人工等待后的新执行（#1074）
 
 人工响应超时只记 overdue。CLI 退出后宿主暂停本轮新进程，有限保存工作文件；原 worker/Attempt 可信销毁并原子结算 agent_run、撤销 grants 后，Attempt interrupted，Job 保持 waiting_human，无执行槽占用。回复先持久化，再经原准入写唯一 successor；Dispatcher 重验 owner/断点/快照与实时目标授权。当前模式是恢复业务文件和有界上下文的 structured 新会话，原 Session 仅作归档证据。累计有效执行时间暂停于可信回收，不扩展原 repair deadline。完整边界见[人工续做](../HUMAN_CONTINUATION.md)和[ADR 0022](adr/0022-human-continuation.md)。

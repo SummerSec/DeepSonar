@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+#1088 的 [OpenSandbox PTY 退出诊断](AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)区分有效退出帧、WebSocket 中断与宿主主动终止，经原 Evidence 通路保留有界脱敏关闭码和错误原因；不新增重连或任务重跑权限。最终 SHA Actions 待验，历史现场底层原因仍未知。
+
 #1074 的[人工断点续做](HUMAN_CONTINUATION.md)覆盖持久请求、有限封存与资源回收、晚回复保存和受治理的新执行；当前模式为 structured 新会话，原生 Session 与历史 failed Job 关联接续另列剩余范围。最终 SHA Actions 待验。
 
 #1032 的 [Pi 模型上下文凭据投影首片](MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)共用主执行/OM 的 SDK 生成前精确替换与镜像双源码准入；原字节 Gateway 守卫不变。映射 FR-CRED-003、NFR-SEC-003；回归接既有核心/原生 Reverse Actions，最终 SHA 待验，同 UID 隔离、诊断/审计与生产验证未交付。

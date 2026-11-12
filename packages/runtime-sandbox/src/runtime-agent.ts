@@ -32,6 +32,7 @@ import { PiRpcChunkAssembler, isPiRpcChunkFrame, piRpcChunkingEnabled, type PiRp
 import { createStdinCloseKiller } from "./runtime-stdin-close.js";
 import { PiObservationalMemoryTextRedactor } from "./pi-observational-memory.js";
 import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
+import { isUnexpectedProcessFailure, observeRuntimeProcesses } from "./runtime-process-diagnostic.js";
 import { MODEL_REQUEST_POLICY_PATH, MODEL_REQUEST_POLICY_SOURCE } from "./model-request-policy.js";
 import { PI_MAIN_REQUEST_BUDGET_PATH, PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
 import { createRuntimeWarningReporter, type RuntimeWarning } from "./runtime-warnings.js";
@@ -1335,7 +1336,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     }
   };
   const adapterContext = {
-    host,
+    host: observeRuntimeProcesses(host, secretValues, spec.onEvent),
     cwd: "/workspace",
     env: cliEnv,
     model: spec.model,
@@ -1741,7 +1742,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
         : undefined;
       const attemptOutcome: TerminalProcessOutcome = semanticError
         ? { observed: false }
-        : processError && !(attemptTerminalResult?.isError === false && attemptCloseReason === "terminal_result")
+        : processError && !(attemptTerminalResult?.isError === false && attemptCloseReason === "terminal_result" && !isUnexpectedProcessFailure(processError))
           ? {
               observed: true,
               error: piRecoveryStopped && attemptTerminalResult?.errorDetail
@@ -1837,7 +1838,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     // failure. Keep semanticError separate so host validation remains
     // fail-closed even if the session emitted ordinary text afterwards.
     // Only a successful terminal permits ignoring intentional-close transport errors.
-    if (!semanticError && !(attemptTerminalResult?.isError === false && attemptCloseReason === "terminal_result")) {
+    if (!semanticError && !(attemptTerminalResult?.isError === false && attemptCloseReason === "terminal_result" && !isUnexpectedProcessFailure(e))) {
       runError = e instanceof Error ? e.message : String(e);
       terminalOutcome = "failure";
       runnerErrorSource = "process";
