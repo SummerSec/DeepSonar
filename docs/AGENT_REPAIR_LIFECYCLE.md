@@ -1,7 +1,19 @@
 # Agent 错误反馈与执行恢复（#903）
 
 > 状态：as-built；#930/#928 的历史 main 616d7a36 工程证据见下文；#1012 人工等待修正链交接与本轮可行动请求投影已接线，最终 SHA Actions 待验
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
+
+## 人工请求历史与当前动作（#1074 第一切片）
+
+Job 的历史 `human` 接受事实与当前执行许可分开。已结束的 Job 不得因历史请求或残留运行器登记继续提示 `wait_for_human` / `wait_for_platform`，也不得据此推荐回复旧执行或同会话修正；未决效果仍优先对账。终态请求可供查看，不授予恢复、重新排队或完成权限。
+
+`GET /jobs/:id` 的 `human_request` 独立查询当前 Job 最后一条持久 `human` 事件，返回事件/Attempt 引用、时间、当前性与既有事件投影的原因、subject、guidance；无事件才返回 null。当前性要求 Job 与最新 Attempt 仍可等待、事件归属该 Attempt 且未取消，旧 Attempt 的请求只作历史。请求读取不依赖首批 50 条事件，不补造历史缺少的 guidance。`execution_state.accepted_history_ref` 标明可查询的持久接受事件，纯内存接受尚未落盘时为空。
+
+Web 在运行详情直接显示完整问题、具体动作、回复方式及回复后的计划；历史请求明确标为历史并且仅供查看。任务待办缺少请求详情时只提示读取详情，不能声称请求内容丢失。此切片对应 FR-CTRL-006、FR-WEB-003、NFR-UX-001；HTTP/PG 与 Web 回归接既有 Actions，最终 SHA 验证另记。
+
+新增详情与 Job 附带事件、事件分页中的 human 正文使用一致的秘密赋值投影，覆盖带引号/无引号赋值及 Authorization Bearer；只改变管理读投影，不修改持久事件。已接受完成的持久事实优先于更早的人工请求，包括其他 Attempt 或未记录 Attempt 归属的历史完成；历史 human 仍可查看，不得遮蔽完成接受引用与结算建议。
+
+#1074 后续实现以 schema 73、可验证断点和累计有效执行时间支持晚回复续做；人工响应超时只记 overdue，不直接失败。原执行可信销毁后 Attempt interrupted、Job 仍等待；回复先保存，再经原门核定唯一新执行。当前只支持 structured 新会话，不自动复活历史 failed Job；边界、回归与注意力成本见[人工续做](HUMAN_CONTINUATION.md)及[ADR 0022](architecture/adr/0022-human-continuation.md)。最终 SHA Actions 另验。
 
 这是 [完成回执](REPAIR_FEEDBACK_DONE_REPAIR.md)的生命周期扩展。设计取舍见 [ADR 0016](architecture/adr/0016-repair-execution-generations.md)。#911 已合入 Knowledge/Skill 分类透传；#919（#913）已合入仅在宿主接受完成后识别结构化 Gateway 拒绝的运行器处理。本次不重复这两片，也不把工程证据写成真实模型试验。
 
@@ -80,7 +92,7 @@ Worker-plane 清理只向 SQL lease 记录的 owner 发起 destroy，然后使�
 
 `resume` 的 `GATEWAY_REQUEST_BUDGET_INVALID` 仍带 `missing_fields`。只有核验上述 rerun-current 条件通过时，诊断返回 `next_action=rerun-current`；否则 `inspect-job-recovery`。诊断本身没有写入效果。显式恢复缺少完整可信预算或执行前证明时为 `GATEWAY_REQUEST_BUDGET_HISTORY_MISSING`，包括未部署此 checkpoint 的历史缺损 Job；不能为使它们恢复补造证明。Web 只展示宿主下一步，让用户明确选择，不增加轮询/通知/配置、不自动补冻或重跑、不跳转无关账号设置。批量 resume 仍按旧快照保守准入，不借单 Job 显式操作绕过全批事务。
 
-实现入口为 [`gateway-request-policy.ts`](../apps/scheduler/src/gateway-request-policy.ts)、[`gateway-snapshot-no-start.ts`](../apps/scheduler/src/gateway-snapshot-no-start.ts)、[`dispatcher.ts`](../apps/scheduler/src/dispatcher.ts)、[`rerun.ts`](../apps/scheduler/src/domains/job-control/rerun.ts)和 [`useJobRerun.tsx`](../apps/web/src/useJobRerun.tsx)。遵循 [ADR 0016](architecture/adr/0016-repair-execution-generations.md) 与 [ADR 0017](architecture/adr/0017-transparent-gateway-settlement.md) 的现有回执/累计预算决定，不新增 schema、状态或执行通道。preflight no-start 不是 Gateway transport settlement、Agent ACK 或模型成功。
+实现入口为 [`gateway-request-policy.ts`](../apps/scheduler/src/gateway-request-policy.ts)、[`gateway-snapshot-no-start.ts`](../apps/scheduler/src/gateway-snapshot-no-start.ts)、[`dispatcher.ts`](../apps/scheduler/src/dispatcher.ts)、[`rerun.ts`](../apps/scheduler/src/domains/job-control/rerun.ts)和 [`useJobRerun.tsx`](../apps/web/src/useJobRerun.tsx)。遵循 [ADR 0016](architecture/adr/0016-repair-execution-generations.md) 与 [ADR 0022](architecture/adr/0017-transparent-gateway-settlement.md) 的现有回执/累计预算决定，不新增 schema、状态或执行通道。preflight no-start 不是 Gateway transport settlement、Agent ACK 或模型成功。
 
 回归扩展既有 `job-rerun.integration.test.ts` / Web 测试：真实 Dispatcher 的执行前拒绝（runtime sentinel 不得调用）与 checkpoint helper 的持久去重 → 真实 HTTP 只读反馈 → 显式补冻 → 真实领取/新 Attempt → 生产 Gateway mint；完整历史预算恢复和原 Attempt/receipt 不变；无证明、错误宿主身份、快照变化、多 Attempt、pending/unknown effect 及撤销 token 的已耗尽上限拒绝后比较完整原状态。此链不调用上游模型，mint 成功不表示 Agent 完成。入口已接 `ci:integration:recovery` / `ci:unit:credential-compatibility`，最终 SHA Actions 待验；本机未运行测试/构建/typecheck，不声称生产旧 Job 已恢复或模型效果收益。
 

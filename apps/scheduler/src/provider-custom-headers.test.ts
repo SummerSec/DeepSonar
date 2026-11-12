@@ -228,7 +228,7 @@ test("compose keeps authentication final and lets configured headers ride below 
   const final = composeUpstreamRequestHeaders({ configured: sanitized, auth: { authorization: "Bearer real" } });
   assert.equal(final.authorization, "Bearer real");
 });
-test("Pi 1.4.0 inference layers are provider then override then selected definition; catalog is provider only", () => {
+test("Pi 1.5.2 inference layers are provider then override then selected definition; catalog is provider only", () => {
   const settings = { providers: { fixture: { baseUrl: "http://127.0.0.1/v1",
     headers: { "X-Route": "provider", "x-provider": "p" },
     modelOverrides: { selected: { headers: { "x-route": "override", "x-override": "o" } } },

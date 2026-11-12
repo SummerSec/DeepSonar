@@ -308,6 +308,8 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
     rewritten.push(file(".pi/agent/auth.json", `${JSON.stringify(auth, null, 2)}\n`));
     const agentSettings: Record<string, unknown> = {
       retry: { enabled: true, maxRetries: 2, provider: { maxRetries: 2 } },
+      // Pi 1.5.1 起 idle 预热默认开启，最长 30 分钟在运行间隙发后台请求；受治理沙箱固定关闭。
+      cacheWarming: "off",
     };
     if (input.observationalMemory) {
       agentSettings[PI_OBSERVATIONAL_MEMORY_SETTINGS_KEY] = piObservationalMemorySettings(input.observationalMemory.config);

@@ -19,7 +19,7 @@ export async function assertGatewayRecoveryAllowed(db: Database, input: {
     reject("gateway_recovery_budget_missing");
   }
   const [job] = await db`SELECT status, project_id, lease_expires_at>clock_timestamp() AS leased,
-    started_at + timeout_sec * interval '1 second'>clock_timestamp() AS timely
+    COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second')>clock_timestamp() AS timely
     FROM jobs WHERE id=${input.jobId}`;
   const attempts = await db`SELECT id,status,cancel_requested FROM job_attempts
     WHERE job_id=${input.jobId} ORDER BY attempt_no DESC FOR UPDATE`;

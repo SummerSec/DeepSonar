@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
-import { TaskContract, TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { HumanRequestGuidance, TaskContract, TaskGoalReviewRequest } from "@deepsonar/shared-types";
 import { PlanGoalReviewBinding } from "./domains/plan-protocol/criterion-model.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1177,8 +1177,8 @@ const OPS: Op[] = [
   {
     method: "post",
     path: "/canvases/{id}/messages",
-    summary: "向 Hub 或运行节点发送人工消息",
-    description: "message_id 是客户端 UUID 幂等键。无附件只需 tasks:write；attachment_version_ids 非空时还需 assets:read（assets:manage/admin 隐式满足），且只接受同项目 active project-scope 资产。消息先持久化；所有 waiting_human 回复在同一事务核对原冻结请求策略和累计额度、暂停、已接受完成及全部效果门；仅有修正根时额外核原期限并建立 resume-frozen 代际，再关闭旧 Attempt、原子撤销旧 Gateway/Control grants 并入队；拒绝返回具体 409 error_code，消息与状态一起回滚。同 message_id 重复提交不建立第二代际。sendMessage 前确定失败记 failed，sendMessage 已尝试后的不确定结果记 unknown 且不会自动重发。",
+    summary: "发送人工消息或回复指定人工请求",
+    description: "message_id 是客户端 UUID 幂等键；同 ID 更改目标、版本、正文或附件返回 409。target.kind=request 须携带 request_id/expected_revision，先保存回复并返回 202/reply_saved；断点准备、暂停或外部效果阻塞时回复仍保留。Scheduler 经文件完整性、旧进程退出、预算、快照、授权及队列准入后分配唯一新执行；泛 job/hub 消息不能恢复 waiting_human。附件仍需同项目 active project-scope 与 assets:read。注入 unknown 不自动重发，ACK 与完成分别记账。",
     scope: "tasks:write",
     tags: ["Tasks"],
     body: {
@@ -1192,8 +1192,10 @@ const OPS: Op[] = [
           additionalProperties: false,
           required: ["kind"],
           properties: {
-            kind: { type: "string", enum: ["hub", "job"] },
+            kind: { type: "string", enum: ["hub", "job", "request"] },
             node_id: { type: "string", format: "uuid", description: "kind=job 时必填" },
+            request_id: { type: "string", format: "uuid", description: "kind=request 时必填，精确绑定当前人工请求" },
+            expected_revision: { type: "integer", minimum: 0, description: "kind=request 时必填，请求当前 revision" },
           },
         },
         body: { type: "string", minLength: 1, maxLength: 8000 },
@@ -1205,7 +1207,7 @@ const OPS: Op[] = [
     method: "post",
     path: "/canvases/{id}/human-nodes/{nodeId}/ignore",
     summary: "忽略未处理的人工介入",
-    description: "将 open 的 human 节点标为 ignored。若对应 Job 仍为 waiting_human，则关闭旧 Attempt 并恢复为 pending；所有 waiting_human Job 先核原冻结请求策略并通过累计额度、暂停、已接受完成与效果门，仅有修正根时核原期限并建立 resume-frozen 代际，旧运行 grants 与入队原子撤销，拒绝返回具体 409 error_code 且节点和状态一起回滚。已忽略的请求幂等返回；忽略不表示 Agent ACK 或任务完成。",
+    description: "只忽略非等待执行的 open human 节点。waiting_human 返回 409 HUMAN_REPLY_REQUIRED，须回复对应请求或明确取消；忽略不授权新执行。已忽略节点幂等返回，不表示 Agent ACK 或任务完成。",
     scope: "jobs:control",
     tags: ["Tasks"],
   },
@@ -1523,9 +1525,50 @@ const OPS: Op[] = [
     path: "/jobs/{id}",
     summary: "Job 详情（含事件）",
     description:
-      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。provision_diagnostics 为清理前已持久化的 host 失败诊断，通过原 Attempt 的不可变 system-audit 引用按当前 Job/项目重新验证，仅返回固定阶段/状态/布尔信号及来源；不含 audit 元数据、env、SDK 原文或容器日志，不证明 no-start/用量结算。历史无引用不猜测或回填，条数上限见 provision-failure-evidence.ts。plan_gaps 提供当前 Plan 内容 SHA、判据 ID 与文本（未加载绑定）；权威绑定状态由冻结报告与 Fact 详情读取。",
+      "current 平面快照：Job 行、provenance（native/import）与同请求附带的近期事件。导入 Job 默认 historical/readonly。完整事件时间线请走 GET /jobs/{id}/events。human_request 独立有界读取最近持久 human 事件，不受首批 50 条事件影响；无事件为 null，旧 Attempt 或终态的请求只作历史。execution_state.accepted_history_ref 引用持久接受事件；历史接受不授予当前等待、修正或恢复权限。provision_diagnostics 为清理前已持久化的 host 失败诊断，通过原 Attempt 的不可变 system-audit 引用按当前 Job/项目重新验证，仅返回固定阶段/状态/布尔信号及来源；不含 audit 元数据、env、SDK 原文或容器日志，不证明 no-start/用量结算。历史无引用不猜测或回填，条数上限见 provision-failure-evidence.ts。plan_gaps 提供当前 Plan 内容 SHA、判据 ID 与文本（未加载绑定）；权威绑定状态由冻结报告与 Fact 详情读取。",
     scope: "tasks:read",
     tags: ["Jobs"],
+    responses: {
+      "200": {
+        type: "object",
+        required: ["human_request", "human_continuation"],
+        properties: {
+          human_continuation: {
+            type: "object", nullable: true,
+            description: "请求和断点的管理摘要，不含文件正文、路径、密钥或运行权限；回复保存不代表已启动或完成。",
+            properties: {
+              id: { type: "string", format: "uuid" }, revision: { type: "integer", minimum: 0 },
+              status: { type: "string", enum: ["open", "answered", "dismissed", "closed"] },
+              checkpoint_status: { type: "string", enum: ["preparing", "ready", "blocked"] },
+              checkpoint_error_code: { type: "string", nullable: true }, resume_error_code: { type: "string", nullable: true },
+              mode: { type: "string", enum: ["structured"] },
+              overdue_at: { type: "string", nullable: true, format: "date-time" },
+              resumed_at: { type: "string", nullable: true, format: "date-time" },
+              checkpoint_expires_at: { type: "string", format: "date-time" },
+              remaining_execution_ms: { type: "number", nullable: true, minimum: 0 },
+            },
+          },
+          human_request: {
+            type: "object", nullable: true, additionalProperties: false,
+            required: ["event_id", "attempt_id", "created_at", "current", "payload"],
+            properties: {
+              event_id: { type: "string", format: "uuid" },
+              attempt_id: { type: "string", format: "uuid", nullable: true },
+              created_at: { type: "string", format: "date-time" },
+              current: { type: "boolean", description: "仅最新活动且未取消 Attempt 的运行中或人工等待请求可为 true；不授予回复或恢复权限。" },
+              payload: {
+                type: "object", additionalProperties: false,
+                properties: {
+                  reason: { type: "string" },
+                  subject: { type: "object" },
+                  guidance: z.toJSONSchema(HumanRequestGuidance, { target: "openapi-3.0" }),
+                },
+              },
+            },
+          },
+        },
+      },
+    },
   },
   {
     method: "get",

@@ -1,7 +1,33 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-12
+
+## 进度积压消费与保活（#1092）
+
+runtime-sandbox 在 PTY chunk 和内层 RPC record 边界按时间/项数协作让出 Node
+事件循环，使自动 Pong 与终止/取消观察不被纯微任务消费长期推迟；不暂停 socket、
+不丢弃/去重进度。shared-types 的 OM 文本策略仍服务运行时、归档和 Web，普通
+多行输出跳过无意义的 JSON 解析异常，转义和畸形 OM 内容继续脱敏。
+IR-001 的传输和权限归属不变，单次同步工作不能被协作预算预占，队列容量上限
+也不是本次交付。机制、独立线程保活夹具与历史证据限制见
+[CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)，
+最终 head 的 Actions 见 PR #1093；无生产重跑或部署。
+
+## OpenSandbox PTY 退出与传输中断（#1088）
+
+有效 execd 退出帧、WebSocket close/error、握手失败和宿主主动终止分开记录；
+没有退出帧不生成 CLI 退出码。首个终止原因与有界后续关闭观察经 RuntimeProcess、
+runner `onEvent` 进入现有 normalized Evidence，关闭码缺失明确未知。
+成功终态后的主动终止沿原协议收尾，意外传输失败不因完成文本而被吞掉，也不触发
+自动重连或新 CLI。诊断投影、脱敏与 50ms 收集界限见
+[CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)。
+该变更补齐 IR-001 工程诊断，不新增 Job 状态、控制 API、权限或效果结算通道；
+最终 SHA Actions 待验，历史现场原因仍未知。
+
+## 人工等待后的新执行（#1074）
+
+人工响应超时只记 overdue。CLI 退出后宿主暂停本轮新进程，有限保存工作文件；原 worker/Attempt 可信销毁并原子结算 agent_run、撤销 grants 后，Attempt interrupted，Job 保持 waiting_human，无执行槽占用。回复先持久化，再经原准入写唯一 successor；Dispatcher 重验 owner/断点/快照与实时目标授权。当前模式是恢复业务文件和有界上下文的 structured 新会话，原 Session 仅作归档证据。累计有效执行时间暂停于可信回收，不扩展原 repair deadline。完整边界见[人工续做](../HUMAN_CONTINUATION.md)和[ADR 0022](adr/0022-human-continuation.md)。
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -29,7 +55,7 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 1. Hub 的 Provider/model 需求、项目默认模型和全局角色模型按既有优先级形成模型要求；模型按每张凭据的 CLI 方言核对配置清单。
 2. Hub 显式 CLI 是硬约束，与候选冲突继续 `provider_credential_cli_mismatch`（`permanent_failure`）；不能通过改选 CLI 绕过排他绑定。
-3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致且没有默认账号，则按同项目非终态 Job 数、历史分配数、稳定 ID 顺序选择新 Job；其他歧义仍返回 `provider_credential_multi_match`。
+3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致，则先按 `metadata.max_concurrent` 与该负载投影算出的余量比例排序（未设置视为不限），并列时依次按显式缺省凭据、恢复身份、同项目非终态 Job 数、历史分配数、稳定 ID 决定；显式缺省因此是同条件下优先，不再命中即固定（#1078 切片 1），全部候选都达上限时仍取缺省且不新增失败码。这个余量只用于偏好排序，不占位、不放宽授权、也不改变准入判定；跨 provider 的候选等价判据仍需决策，其他歧义仍返回 `provider_credential_multi_match`。
 4. 未配置凭据白名单时动态读取当前作用域候选，不在读取时写入 ID。显式白名单及默认凭据的删除、停用或不可访问引用返回 `provider_credential_allowlist_stale`（`permanent_failure`），RepairFeedback 指向管理员修复名单；既不扩大授权，也不把权限修复交给模型。
 5. 池选择是现有 Job 历史的只读投影，readiness 不消费分配轮次，不承诺并发创建严格 round-robin，也不表示账号余额或容量。已有 Job 恢复向内核 resolver 提供原冻结账号偏好，只能在当前合法候选内生效；显式当前默认账号仍优先，身份漂移及累计预算校验不变。运行中不换 key、不因故障重选账号或重置预算。
 6. 选中的账号、CLI、Provider/model 按原规则进入新 Job 快照。账号 × CLI 1:1、并发计账和 Gateway 密钥隔离不变；不修改任何已有 Job 快照或镜像准入。
@@ -103,7 +129,7 @@ Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批�
 
 普通 Job 从冻结目录按需搜索、读取 Memory 或拉取 Skill，实际使用生成稳定 usage_ref；有可读来源或反馈证据时可请求整理。Scheduler 创建独立 work/Canvas，依次分派 maker、按 case×arm 分离的 trial Job、evaluator 与 reviewer；这些都是现有 Job/Attempt/沙箱路径，不新增模型执行者，也不触发业务 Hub/Report。trial 只得到相应 arm 和 stage audience 的输入，发布共享资产 JSON 并以 `emit_fact` 引用其版本/hash，评测读取实际 Evidence；缺环境、证据或终态异常保持 `needs_eval`/阻断，不以文字结论晋升。审查通过才在事务中切 active 指针；失败或重启依持久 assignment/receipt 恢复，未知外部效果不自动重放。项目治理 recipe 在 work 创建时冻结，修订仅进入下一 work。详细状态和预算见[项目知识专题](../PROJECT_KNOWLEDGE.md)。现有集成测试使用构造的 Job/Attempt 与 Evidence，未证明真实沙箱或模型效果。
 
-成功业务 Job 结算时只在原事务/savepoint登记来源元数据，不在终态事务创建模型Job。后续既有Dispatcher tick调用[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)，[knowledge-wake](../../apps/scheduler/src/knowledge-wake.ts)从durable未处理登记和pending work计算同一调度器的唤醒。每批至多4个来源Job、合计19个来源输入（Fact、Evidence及其授权资产）及一个可选governor；项目已有非旧自动pending/running work时等待，不再准入批次。这不新增全部显式请求的唯一约束。CAS准备在短事务外，项目行锁下重新验证项目、最新成功Attempt、冻结权限、来源/hash、未结算效果和已处理状态，再原子写work与逐源collected链接。超大/失权/未知效果等永久拒绝写持久skipped，不热重试；阻断批次不重建来源来重置预算。旧knowledge:auto work仍不自动推进，历史预览仍是只读。决策见[ADR 0022](adr/0022-project-knowledge-collection.md)。
+成功业务 Job 结算时只在原事务/savepoint登记来源元数据，不在终态事务创建模型Job。后续既有Dispatcher tick调用[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)，[knowledge-wake](../../apps/scheduler/src/knowledge-wake.ts)从durable未处理登记和pending work计算同一调度器的唤醒。每批至多4个来源Job、合计19个来源输入（Fact、Evidence及其授权资产）及一个可选governor；项目已有非旧自动pending/running work时等待，不再准入批次。这不新增全部显式请求的唯一约束。CAS准备在短事务外，项目行锁下重新验证项目、最新成功Attempt、冻结权限、来源/hash、未结算效果和已处理状态，再原子写work与逐源collected链接。超大/失权/未知效果等永久拒绝写持久skipped，不热重试；阻断批次不重建来源来重置预算。旧knowledge:auto work仍不自动推进，历史预览仍是只读。决策见[ADR 0023](adr/0023-project-knowledge-collection.md)。
 
 自动批次全部阶段及所有trial在[创建期隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)中取stage工具与已准入权限交集、关闭出网、清角色预加载Skill/MCP等能力和共享资产；trial再清空普通知识目录。每例task_inputs显式选定相同的冻结共同材料，各arm只差基线/候选；不复制全部来源，不把原结论或评分规则当共同答案，rubric只给eval/review。非reuse评测为完整6×2，预留evaluator/reviewer两Job；trial发布实际资产版本/hash再引用Evidence。target comparator fail可进入对照，candidate target及全部安全组须pass，retire的目标arm为without，unexecuted一律不得激活。治理hash变化使旧work blocked，不改历史或放宽权限；合成/替身回归已接线但本轮Actions尚未运行，未合并、未部署、未执行真实模型收益验证。详细状态、工具与证据规则以[专题](../PROJECT_KNOWLEDGE.md#工作与结算)为准。
 
@@ -170,6 +196,10 @@ The 2026-11-01 [SDK binding](../../packages/runtime-sandbox/src/opensandbox-sdk-
 普通平台暂停仍允许入队；[维护升级](adr/0008-maintenance-candidate-upgrade.md) 增加真正的数据库身份隔离。顺序是只读核验 → 暂停/排空 → 旧身份 NOLOGIN 与会话清退 → 验证备份 → 候选重建 → preparing 服务与节点验证 → 激活。不能通过中止 Job 来伪造排空。目标 preparing 状态关闭业务 HTTP/WebSocket 与后台任务，世代或版本不匹配也保持关闭；数据库隔离仍是旧节点不能写入的依据。
 
 中断续做读取固定目标 journal，重复步骤前核对实际回执。激活前失败回源并保持暂停；激活成功或结果不明时不允许自动回旧数据。维护状态机、宿主/受管 SSH 和显式恢复领取已有实现；schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。具体历史基线与隔离环境见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)，不能据此推定 Windows Docker 全流程、断电或真实模型验证已完成。
+
+## Pi 请求失败诊断与恢复分类（#1083）
+
+Pi 请求包装层保留有界、允许名单化的错误来源与阶段，区分 allowance、SDK 和内核 no-start 见证查询。错误类别不授予恢复权；已接受完成仍仅由私有宿主身份证明，取消、权限、预算、partial/unknown 或缺少见证均停止。SDK 内恢复沿用原 live owner、冻结预算和持久 `not_started` 见证，不能通过恢复分类触发额外 CLI 进程重启。诊断不输出任意异常原文、URL、凭据或堆栈；共享 DSH reader 与生成扩展的测试、未验证边界见 [CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-请求失败诊断与分类1083)。本轮最终 SHA Actions 待验。
 
 ## Pi 预算与截断恢复（#958）
 

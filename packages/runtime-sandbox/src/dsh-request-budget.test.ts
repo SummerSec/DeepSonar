@@ -3,6 +3,8 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import { runInNewContext } from "node:vm";
 import { DSH_REQUEST_BUDGET_SOURCE, DSH_REQUEST_BUDGET_VENDOR_SHA256 } from "./dsh-request-budget.js";
 import { DSH_REQUEST_BUDGET_ARTIFACT_SHA256, DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from "./dsh-runtime-image-guard.js";
@@ -13,14 +15,14 @@ test("DSH image preflight rejects old, incomplete and mismatched governed plugin
   const vendor = "synthetic pinned vendor";
   const artifact = "synthetic governed artifact";
   const manifestPath = root + "/lib/deepsonar-request-budget.manifest.json";
-  const manifest = { version: 1, vendorVersion: "0.2.1-rc.2", sdkVersion: "1.4.0",
+  const manifest = { version: 1, vendorVersion: "0.2.2-rc.1", sdkVersion: "1.5.2",
     vendorSha256: hash(vendor), artifactSha256: hash(artifact), helperSha256: hash(DSH_REQUEST_BUDGET_SOURCE) };
   const valid = new Map([
-    [root + "/package.json", JSON.stringify({ name: "@deepseek-ai/dsh-llm-pi-ai", version: "0.2.1-rc.2" })],
+    [root + "/package.json", JSON.stringify({ name: "@deepseek-ai/dsh-llm-pi-ai", version: "0.2.2-rc.1" })],
     [manifestPath, JSON.stringify(manifest)],
     [root + "/lib/index.js", vendor], [root + "/lib/deepsonar-index.js", artifact],
     [root + "/lib/deepsonar-request-budget.mjs", DSH_REQUEST_BUDGET_SOURCE],
-    ["/opt/deepsonar/dsh/node_modules/@earendil-works/pi-ai/package.json", JSON.stringify({ name: "@earendil-works/pi-ai", version: "1.4.0" })],
+    ["/opt/deepsonar/dsh/node_modules/@earendil-works/pi-ai/package.json", JSON.stringify({ name: "@earendil-works/pi-ai", version: "1.5.2" })],
   ]);
   const check = (files: Map<string, string>) => {
     const output = { stdout: "", stderr: "", exitCode: 0 };
@@ -76,6 +78,36 @@ async function policyFixture() {
   return policy;
 }
 
+test("#1083 raw TypeScript policy loads through DSH installer and OM data-module boundaries", async () => {
+  const dataModule = (source: string) => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+  // Match the installer's raw source -> strip -> data import chain. A regular
+  // TypeScript import resolves sibling modules and conceals broken image inputs.
+  const mainSource = readFileSync(new URL("./pi-main-request-budget.ts", import.meta.url), "utf8");
+  const mainUrl = dataModule(stripTypeScriptTypes(mainSource));
+  const dshSource = stripTypeScriptTypes(readFileSync(new URL("./dsh-request-budget.ts", import.meta.url), "utf8"))
+    .replace('"./pi-main-request-budget.js"', JSON.stringify(mainUrl));
+  const generated = await import(dataModule(dshSource));
+  const policy = await import(dataModule(generated.DSH_REQUEST_BUDGET_SOURCE));
+  const model = { provider: "fixture", id: "model", api: "openai-completions", maxTokens: 256,
+    baseUrl: "http://127.0.0.1:3100/gateway" };
+  const prepared = policy.preparePiMainSdkRequest(model, { maxTokens: 128 }, { policy_required: true, remaining_tokens: 32 });
+  assert.equal(prepared.model.maxTokens, 32);
+  assert.equal(prepared.options.maxTokens, 32);
+  assert.equal(prepared.options.maxRetries, 0);
+  await assert.rejects(policy.prepareSdkCall({ model, options: { apiKey: "wrong" },
+    frozenIdentity: { ...model, gatewayRoot: model.baseUrl, token: "synthetic-main-token" } }),
+  { message: "DSH_BUDGET_AUTH_MISMATCH" });
+
+  const contextPolicy = await import(mainUrl);
+  assert.deepEqual(contextPolicy.redactPiContextSecrets({ messages: [{ text: "task synthetic-main-token" }] },
+    ["synthetic-main-token"]), { messages: [{ text: "task [REDACTED]" }] });
+  // The existing OM fixture loads the real governed wrapper and the same raw
+  // context policy via data URLs, substituting only external plugin/SDK imports.
+  const boundary = await import(new URL("../../../agent-harness/fixtures/pi-om-boundary-unit.mjs", import.meta.url).href);
+  const om = await boundary.loadGovernedBoundary();
+  assert.equal(typeof om.createGovernedObservationalMemoryExtension, "function");
+});
+
 async function allowanceServer(state: { remaining: number | null; policyRequired: boolean;
   denial?: { status: number; type?: string; message: string } }) {
   const server = http.createServer((request, response) => {
@@ -122,6 +154,51 @@ test("DSH shared allowance preserves exact accepted completion and rejects other
     assert.equal(model.maxTokens, 256);
     assert.equal(options.maxTokens, 128);
   } finally { await upstream.close(); }
+});
+
+test("#1083 DSH shared allowance transport errors retain safe diagnostics without changing stop signals", async () => {
+  // Module-local fetch boundary: no process-global fetch mutation or real gateway.
+  const source = String.raw`
+    let failure;
+    export function setFailure(error) { failure = error; }
+    export let queries = 0;
+    async function fetch() { queries++; throw failure; }
+  ` + DSH_REQUEST_BUDGET_SOURCE;
+  const policy = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
+  const root = "http://127.0.0.1:3100/gateway";
+  const model = { provider: "fixture", id: "model", api: "openai-completions", baseUrl: root, maxTokens: 256 };
+  const options = { apiKey: "synthetic-main-token", maxTokens: 128 };
+  const identity = { ...model, gatewayRoot: root, token: options.apiKey };
+  const call = () => policy.prepareSdkCall({ model, options, frozenIdentity: identity });
+  policy.setFailure(Object.assign(new TypeError("private transport synthetic-main-token"), {
+    cause: Object.assign(new Error("private socket"), { code: "ECONNRESET" }),
+  }));
+  await assert.rejects(call(), (error: Error) => {
+    assert.match(error.message, /^PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=\{/u);
+    assert.deepEqual(JSON.parse(error.message.split("; diagnostic=")[1]!), {
+      version: 1, stage: "allowance", category: "transient_retryable", name: "TypeError",
+      cause: { name: "Error", code: "ECONNRESET" },
+    });
+    assert.doesNotMatch(error.message, /private|synthetic-main-token/u);
+    return true;
+  });
+  assert.equal(policy.queries, 1, "DSH reader adds neither polling nor SDK retry on transport failure");
+  policy.setFailure(new Error("COMPLETION_ALREADY_ACCEPTED"));
+  await assert.rejects(call(), (error: Error) => {
+    assert.match(error.message, /^PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=/u);
+    assert.doesNotMatch(error.message, /COMPLETION_ALREADY_ACCEPTED/u);
+    return true;
+  });
+  policy.setFailure(new Error("PI_MAIN_BUDGET_ALLOWANCE_DENIED synthetic-main-token"));
+  await assert.rejects(call(), (error: Error) => {
+    assert.match(error.message, /^PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=/u);
+    assert.doesNotMatch(error.message, /ALLOWANCE_DENIED|synthetic-main-token/u);
+    return true;
+  });
+  assert.equal(policy.queries, 3);
+  await assert.rejects(policy.prepareSdkCall({ model, options: { ...options, apiKey: "wrong" }, frozenIdentity: identity }),
+    { message: "DSH_BUDGET_AUTH_MISMATCH" });
+  assert.equal(policy.queries, 3, "identity rejection precedes the shared reader");
 });
 
 test("DSH request generation reads each allowance, preserves frozen inputs and rejects identities", async () => {

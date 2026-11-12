@@ -12,6 +12,10 @@
 
 > **#979 运行镜像治理**：DSH 与 Pi OM 在启动前核对镜像内治理代码，旧快照保持不可变；[诊断与恢复](docs/RUNTIME_IMAGE_GOVERNANCE_979.md)区分代码修复、OCI 内容证据与正式发布。
 
+#1074 的[人工断点续做](docs/HUMAN_CONTINUATION.md)以持久请求和累计执行时钟区分等待、封存与执行：人工超时只记 overdue，旧资源经可信回收后关闭 Attempt；晚回复先保存，准入后恢复业务文件并在 structured 新会话继续。终态历史不授权复活，原额度/硬期限/未决效果不豁免，最终 SHA Actions 另验。
+
+#1094 的[平台 HTTP bootstrap](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#平台-operation-的-http-bootstrap1094)消除 operation allowlist 与 CLI 原生工具的提示歧义；不增加工具代理、控制通道或权限，历史 Job 不自动重跑，模型效果仍未验证。
+
 ## 1. 设计判断
 
 DeepSonar 的产品形态是“可信执行内核 + 可组合能力”。模型负责理解目标、选择能力、提出计划、读取状态、修正错误和判断业务收敛；内核负责把这些提案变成有权限、有预算、有证据、有账本的执行。
@@ -334,11 +338,17 @@ Pi 单次模型错误先等待原进程内部重试与执行结算，不在消�
 
 OpenSandbox provision 失败在正常清理前追加 Job/Attempt 关联的 `job.provision_failed` 宿主审计（#1002）：首次审计与原 Attempt 的只读来源引用同事务持久化，Job GET 以现有项目/Job 权限通过主键引用重新核 scheduler/schema/归属后提供有界 `provision_diagnostics`；不扩大审计权限或回填旧引用，不把诊断当效果结算。只保存实际阶段、已观察会话/取消、合法 HTTP 状态和固定传输信号，不保存 SDK 原文、堆栈或环境。未拿到句柄仍不是未启动证明；审计失败不替代原错误，也不停止清理或放开未知效果重试。详见[诊断边界](docs/OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)；SQL/HTTP/原 runner 清理前读回回归已接既有 Actions，最终 SHA 待验；受控 Provider 不是实机 Engine，现场 execd 原始日志和并发根因仍未验证。
 
+进度积压消费在 PTY chunk 与内层 RPC record 边界协作让出事件循环，避免纯微任务推迟 socket 自动 Pong；共享 OM 文本脱敏跳过普通文本的逐行 JSON 异常，保留全部进度与隐私边界。机制和合成保活回归见 [进度消费与保活](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)，历史具体 CPU/队列成因不冒充已还原。
+
+OpenSandbox PTY 仅凭有效退出帧确定 CLI 退出码，WebSocket 关闭/错误和宿主主动终止单独留证；有界脱敏诊断进入原 Evidence，不授权重连、CLI 重开或未知效果重放。见 [PTY 退出诊断](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)；历史现场底层原因仍未知，最终 SHA Actions 待验。
+
 OpenSandbox upgrade baseline (2026-11-01): installed SDK 1.2 and canonical server/execd/egress pins are updated, with explicit SDK `wakeRetryEnabled=false` preserving Scheduler recovery. All deployed TOMLs remain direct; existing isolation/resources/TTL/renew/DNS/IPv6/PVC policy is unchanged. Local SDK regression does not prove new pinned-server parsing, actual PTY, native execution or final-SHA CI; see the [single upgrade record](docs/OPENSANDBOX_1_2_UPGRADE.md). #1002 P2-11 adds a same-Engine declaration init gate for managed Docker/Worker dependency starts, not per-container enforcement or remote-host attestation; rejection/evidence and remaining D-10 are recorded in the [resource preflight section](docs/OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11).
 
 **DSH 当前 as-built（2026-10-10）：** 新执行版本是官方 `@deepseek-ai/dsh@0.2.1-rc.2`，选择官方 [`dsh-v0.2.1-rc.2`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-rc.2)；`0.2.1-alpha.2`（Oct 9）未选。版本与完整 npm closure 锁在 `agent-harness/dsh-runtime/package-lock.json`，镜像在 `/opt/deepsonar/dsh` 以 `npm ci --omit=dev --ignore-scripts --no-audit --no-fund` 安装，唯一 launcher 是官方 `dsh --profile`。`packages/runtime-sandbox/src/dsh-profile.ts` 为 `deepsonar` profile 写入 `bundles: []` 和显式 plugin allowlist，移除 spine、UI/web、settings/credential discovery、native DeepSeek routes、plugin-manager、telemetry 与 home overrides；安装包内 dormant UI 依赖不会启动服务。Standard 使用 native tools，PTC 使用 `ptc` 与 `@deepseek-ai/dsh-ptc-runtime-node` 的 `run_code`。Provider route/model 强制经 Model Gateway，沙箱只得到短期 token；skills 只从 Scheduler home 的 `${DSH_HOME}/skills` 根发现。`session.v4.jsonl` 是当前精确归档路径，历史 v0–v3 仅供 viewer 读取。父会话 idle 时只要受认证谱系下仍有活跃子代理就不催促或关闭；子代理 finished 后等待父处理回传并再次 idle 才进入完成门。官方 JSON-RPC 只提供 initialize/prompt/shutdown；同进程 follow-up 可用，跨进程持久 resume 不支持，adapter 以 `persistentSessionResume: false` 返回 `CONTEXT_RESUME_UNSUPPORTED`，不静默新建或重试。
 
 **Model Gateway 目录校验与 alias 语义（#570 / #656 / #679 / #707）：** 选模准入只认账号 `settings_config_json` 按其 Agent CLI 方言解析的模型 ID，探测 `model_catalog_json` 不授予选模资格。Job 先解析 Hub/runtime profile 的 `model_ref`、项目缺省和全局角色模型，并应用受治理的候选、能力与 fallback 规则；未指定时优先取账号已配置模型首项，再由 Provider/CLI 投影补缺省。显式模型没有符合账号配置清单的候选时以 `provider_credential_no_match` 返回结构化 RepairFeedback；选中后的模型准入继续 fail closed。仅无显式模型且名单为空的 CLI 缺省路径允许软降级。应急直通只可由平台 env `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH=true` 或管理员级项目 Agent allowlist `allow_model_catalog_passthrough` 授权，RoleConfig 字段不再授权。真正使用 CLI 内置缺省时，快照以 `cli-default:<name>` 标记，运行时 concurrency / CLI 请求生成层剥掉前缀；`job_usage_ledger.model`、`model_catalog_match` 与尽力读取的 `upstream_reporting_model` 保持各自口径，无上游报告字段不伪造。
+
+#1083 的 [Pi 请求失败诊断与分类](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-请求失败诊断与分类1083)保留有界脱敏的错误阶段与原因类别，防止通用错误码掩盖故障；分类不授予额外恢复权，不触发额外 CLI 重启，模型请求仍要求原生命周期/预算及持久 no-start 见证，未知效果停止。本轮最终 SHA Actions 待验。
 
 **#1002 P1-9 同 Job 模型失败恢复：** Pi 的 SDK 生成前扩展在同存活 Job/Attempt/Session 内，只对无内容且有 scoped Kernel no-start 证明的失败准备新关联请求。内核在原 admission 事务复查 owner/lease/deadline/原预算，并用现有 effect intent 跨 token/Attempt 消费创建期冻结的恢复许可；历史缺许可/计数来源、重复引用、partial/unknown 或 Provider 文案均不授权继续。空失败不留下重复 message_start；原快照、已接受效果和 never replay policy 不改、不退请求额度，不重启 Agent。Gateway 单次原字节传输不变；SDK/SQL 回归保留，#1036 D 新增固定 Pi 的同进程原生回归（受控 Gateway，不冒充真实账本），最终 SHA Actions 待验，详见[契约](docs/MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。
 
@@ -485,4 +495,4 @@ RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-o
 
 发布恢复仅复用经 GitHub 原运行/成功阶段/artifact 归档摘要绑定的冻结载荷和原签名回执，默认分支恢复身份与原 tag 发布身份分离；不重建镜像、不移动 tag、不重新签名。两阶段独立恢复及拒绝条件见[发布专题](docs/RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)。
 
-成功任务终态只登记知识来源元数据，后续Dispatcher从持久审计自动归集项目批次：每批最多4个来源Job、19个原始inputs及可选governor，项目已有pending/running工作时不再准入批次。CAS在短事务外准备，项目行锁下重验并原子写work与逐源attempt/manifest摘要链接；永久无效来源持久跳过；瞬态准备故障持久退避30秒、第三次失败才终止，未知提交先对账。自动批次及全部trial快照收紧工具、关闭出网、清角色预加载能力；非reuse完整6×2独立试验，显式共同task_inputs、评分rubric隔离到eval/review，Job预算预留后两阶段。允许target comparator fail作对照，目标arm及全部安全组仍须pass，unexecuted不可激活；治理hash变化阻断旧work，不改历史。知识页区分登记、纳入整理、候选、生效、拉取与模型反馈，不能把来源数当产物或反馈当质量证明。历史预览仍只读，旧knowledge:auto仍不自动推进，无schema或整链token预算变更。原候选6d96df59已通过主CI与Reverse专项，同步main后的候选须独立验收；未合并未部署，真实模型与注意力收益未验证，证据见[专题验收记录](docs/PROJECT_KNOWLEDGE.md#验证与运维)。取代范围见[ADR0022](docs/architecture/adr/0022-project-knowledge-collection.md)，流程、证据与注意力成本见[项目知识](docs/PROJECT_KNOWLEDGE.md)。
+成功任务终态只登记知识来源元数据，后续Dispatcher从持久审计自动归集项目批次：每批最多4个来源Job、19个原始inputs及可选governor，项目已有pending/running工作时不再准入批次。CAS在短事务外准备，项目行锁下重验并原子写work与逐源attempt/manifest摘要链接；永久无效来源持久跳过；瞬态准备故障持久退避30秒、第三次失败才终止，未知提交先对账。自动批次及全部trial快照收紧工具、关闭出网、清角色预加载能力；非reuse完整6×2独立试验，显式共同task_inputs、评分rubric隔离到eval/review，Job预算预留后两阶段。允许target comparator fail作对照，目标arm及全部安全组仍须pass，unexecuted不可激活；治理hash变化阻断旧work，不改历史。知识页区分登记、纳入整理、候选、生效、拉取与模型反馈，不能把来源数当产物或反馈当质量证明。历史预览仍只读，旧knowledge:auto仍不自动推进，无schema或整链token预算变更。原候选6d96df59已通过主CI与Reverse专项，同步main后的候选须独立验收；未合并未部署，真实模型与注意力收益未验证，证据见[专题验收记录](docs/PROJECT_KNOWLEDGE.md#验证与运维)。取代范围见[ADR0023](docs/architecture/adr/0023-project-knowledge-collection.md)，流程、证据与注意力成本见[项目知识](docs/PROJECT_KNOWLEDGE.md)。

@@ -190,7 +190,7 @@ quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/
 
 ## 来源登记与历史预览边界（#1035）
 
-成功来源登记仅含Scheduler审计元数据；GET历史预览重新检查资格并限制项目和分页，不授予历史执行权限、不创建知识Job，也不保证保留正文。本轮用户授权的collector按[ADR 0022](adr/0022-project-knowledge-collection.md)取代0021对批量整理的暂缓：CAS准备在短事务外，项目行锁下重新核验冻结整理权限、最新成功Attempt、未结算效果、项目/来源/hash与已处理记录，work和逐来源采集链接原子提交。不复活来源Job token，不把旧knowledge:auto工作迁移为新批次。超大、失权、未知效果或准备失败留下持久skipped，不自动重放外部效果或坏源热重试。
+成功来源登记仅含Scheduler审计元数据；GET历史预览重新检查资格并限制项目和分页，不授予历史执行权限、不创建知识Job，也不保证保留正文。本轮用户授权的collector按[ADR 0023](adr/0023-project-knowledge-collection.md)取代0021对批量整理的暂缓：CAS准备在短事务外，项目行锁下重新核验冻结整理权限、最新成功Attempt、未结算效果、项目/来源/hash与已处理记录，work和逐来源采集链接原子提交。不复活来源Job token，不把旧knowledge:auto工作迁移为新批次。超大、失权、未知效果或准备失败留下持久skipped，不自动重放外部效果或坏源热重试。
 
 自动批次与全部trial经[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)收紧stage工具与原授权交集、关闭出网、清角色预加载skills/modules/MCP等内容及共享资产；trial再清空普通知识/全局Skill目录。assignment.source_mode只标识治理来源，不授予权限。共同task_inputs必须显式选冻结材料，不能自动复制全部来源或把原结论当共同答案；平台核验引用，maker/reviewer承担语义泄漏审查。trial只接收专用Skill与当前arm，rubric限定eval/review audience，不以沙箱隔离宣称模型独立性或质量已证明。完整6×2矩阵、真实资产版本/hash和独立Job/Attempt证据门保留；只有target comparator fail可作对照，目标arm及全部安全组须pass，unexecuted/缺项/重复/未知效果不能激活，治理hash变化阻断旧work且不改历史。
 

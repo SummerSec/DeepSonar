@@ -4,7 +4,7 @@
 > 同步日期：2026-11-03
 
 This slice integrates the pinned `pi-observational-memory@3.1.4` source with
-Pi 1.4.0. Memory is session context, never a DeepSonar Fact, independent
+Pi 1.5.2 (#1069). Memory is session context, never a DeepSonar Fact, independent
 Evaluation, or permission to submit semantic control events.
 
 ## #873 当前修复与待执行验收
@@ -129,8 +129,7 @@ source metadata/content projection and memory identity. Reused array references
 do not erase source/support ids. Renderers receive a second redacted projection.
 The upstream `/om:view` clipboard export is replaced by a generic notice.
 
-Pi 1.4.0 has `hasUI=true` in RPC mode; `ui.notify` creates
-`extension_ui_request`. OM's notification subprotocol is suppressed in RPC
+Pi 1.5.2 的 RPC 模式 `ui.notify` 仍直接产生 `extension_ui_request`（fire-and-forget，携带 notifyType）。 OM's notification subprotocol is suppressed in RPC
 mode. Status uses the ordinary message API above, without a new model turn.
 The explicitly admitted official `entry_appended` frame exposes only OM ledger
 identity to normalized telemetry. Unknown frames, invalid JSON/UTF-8,

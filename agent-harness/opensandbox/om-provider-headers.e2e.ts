@@ -67,7 +67,7 @@ try {
   assert.equal(packageVersions.wrapper, createHash("sha256").update(await readFile(path.join(root, "agent-harness/pi-observational-memory-governed.ts"))).digest("hex"),
     "installed production wrapper must match this checkout");
   const piVersion = execFileSync("docker", ["run", "--rm", "--network", "none", "--entrypoint", "pi", imageRef, "--version"], { encoding: "utf8" }).trim();
-  assert.match(piVersion, /\b1\.4\.0\b/u, "installed Pi CLI version");
+  assert.match(piVersion, /\b1\.5\.2\b/u, "installed Pi CLI version");
   report.image = { ref: imageRef, manifest_digest: imageDigest, config_id: image.Id, architecture: arch,
     catalog_fixture_version: declaredVersion, catalog_fixture_version_source: "current-om-contract-not-release-metadata",
     installed: { ...packageVersions, pi: piVersion } };

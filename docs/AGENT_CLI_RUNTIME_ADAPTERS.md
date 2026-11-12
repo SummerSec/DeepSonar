@@ -4,10 +4,18 @@
 > CLI versions live in `agent-harness/runtime-images.json` and
 > `packages/runtime-sandbox/src/runtime-adapters.ts`. New CLI onboarding must also
 > cover Session archive + Web session viewer (below). Index: [`README.md`](README.md).
-> Synchronization: 2026-11-11; #1072 Pi retry settlement; final-SHA Actions are pending.
+> Synchronization: 2026-11-12; #1083 Pi request error diagnosis/classification; final-SHA Actions are pending.
 
 Issue #100 defines the boundary between Scheduler-owned execution policy and
 provider-specific CLI protocols.
+
+## 平台 operation 的 HTTP bootstrap（#1094）
+
+Scheduler 生成的系统提示、工作区指令、启动消息与完成门催促统一区分 CLI 原生工具和 Job-scoped HTTP operation。冻结 `platform_tools` 是 operation allowlist，不注册同名 CLI 工具；角色指令中的 `mark_job_done({...})` 等写法只表达 operation 与 JSON payload，不能作为原生函数或 Shell 命令执行。
+
+首次平台操作先由 Agent 自身的 HTTP 工具读取 `$DEEPSONAR_API_BASE_URL/agent/capabilities_list`，再按返回 schema 向 `/operations/:operationId` POST。启动可见的短 bootstrap 说明认证、幂等 key 与完成 revision；完整反馈、回执和未知效果规则仍由平台固定 `deepsonar-control` Skill 维护。原生工具分派返回 not found 不代表 Control API 拒绝或权限缺失，不能改用另一控制通道，也不能将此错误记作完成。Runtime Adapter 不代发 HTTP，不把 CLI 输出转换成语义提交。
+
+提示渲染回归覆盖含函数式业务示例的 Test 指令、各角色结果契约、启动消息和完成门催促，接既有 `pnpm ci:unit:verify-eligibility` / `pnpm ci:unit:executor-real`；固定 Skill 由 `pnpm ci:unit:canvas-facts` 核对。最终 SHA 的 Actions 结果另验；本变更不宣称模型遵循率改善或历史 Job 已恢复，不改写冻结快照，不要求生产重跑或部署。
 
 ### DSH 异步子代理完成边界（#766）
 
@@ -61,6 +69,49 @@ Pi 的模型消息失败与整个 RPC 执行结束是两个边界。`message_upd
 `agent_settled` 时仍有待判定错误则失败；重试耗尽、aborted、RPC/扩展错误以及进程非零退出或传输中断继续失败，后续模型成功不能清除独立进程/协议错误。恢复后的运行仍经过原完成门，只有 Scheduler 接受的 durable receipt 决定业务完成；原 Session/Attempt、累计预算、lease/deadline 与未知效果边界不变。本修复不新增模型请求、持久会话重启或 Job 自动重跑，也不将裸 `terminated` 认定为无条件可重试错误。
 
 现场 Job `c76115f3-3d90-4c11-a56a-f2efe2b82a73` 的原始会话记录 `terminated`，随后可见新的模型请求，宿主却在该请求返回前结束执行；单次消息被提前终态化的适配缺陷已定位。镜像内 Pi 1.4.0 使用 Undici；其响应体异常终止产生 `TypeError("terminated", { cause })`，但 Pi-AI provider 错误转换只保留 message/status/body，丢弃嵌套 cause/code。故已保存记录无法区分本次 body 空闲超时与 socket 断链，不能把约 595 秒当作特定超时的证明。HTTP 200 收尾和历史用量结算均不证明响应完整交付。回归覆盖实际 runner 的 decode/driver/map 路径、stdin 保持及成功/失败与完成门；最终 SHA 的 GitHub Actions 结果另行记录，未重跑现场 Job、未做生产部署。
+
+### 进度消费与 WebSocket 保活（#1092）
+
+PTY 的排队 chunk 与 runner 的 JSONL/RPC record 消费分别设置协作检查点：连续
+工作达到 8ms 或 32 项时用 Node `setImmediate` 让出事件循环，让 socket 读取、
+Undici 自动 Pong、关闭和取消计时器获得执行机会。一个 chunk 可包含多条 RPC，
+因此只有外层让出不足；已完成 Promise 不代替真实 I/O 让出。该预算不预占单次
+同步回调，也不是延迟 SLA 或队列容量上限。
+
+所有输出、进度记录、顺序和退出诊断继续保留，不去重、采样或暂停 socket 读取。
+共享 OM 文本脱敏只对 JSON 候选尝试解析，避免普通多行 ASAN 输出逐行产生解析
+异常；JSON/JSONL、转义的 OM 标识及畸形 memory 文本仍按原隐私边界处理。
+该共享策略也用于归档/Web；没有新增字段、API、设置、权限或恢复通道。
+
+回归接 `ci:unit:runtime-sandbox`：普通文本解析次数、队列 I/O 哨兵，以及独立
+Worker 中的回环服务端、真实 Undici 和 Pi RPC/runner 链路。服务端在首条进度被
+消费后才发 nonce Ping，独立执行 deadline；慢消费时必须在积压清空前收到 Pong，
+并验证全部进度和一次 prompt。夹具只生成合成数据，不执行真实模型或工具。
+最终 head 验收见 PR #1093。
+
+历史 Job 的代理保活超时和进度处理变慢已有日志证据；消费饥饿是可复现代码机制，
+不能据此补造当时的 CPU/GC、队列长度或 Ping/Pong 抓包。修复不重写历史证据、
+不重跑 Job、不部署，不延长心跳超时或重放外部效果。
+
+### OpenSandbox PTY 退出诊断（#1088）
+
+只有包含整数 `exit_code` 的 execd `exit` 帧能产生 CLI 退出码。WebSocket
+`close`（包括 `1000`）、`error`、握手失败和宿主主动终止分别留证；没有退出帧时
+进程状态未知，不能伪造退出码 1 或成功 0。首个终止原因保持不变，随后观察到的
+退出帧或关闭事件仅补诊断，不把传输失败改成成功。
+
+RuntimeProcess 的可选终止诊断经 OpenSandbox wrapper 和 runner 写入既有
+`runtime.diagnostic` normalized Evidence。保留允许字段投影：退出帧有效性/退出码、
+WebSocket 关闭码/原因/wasClean、错误 name/code/message 和有界 cause、握手阶段、
+宿主 kill/close 请求。字符串先脱敏再限长，不保存原始帧、URL、headers、堆栈或
+任意错误对象。退出/错误后最多等待 50ms 收集伴随的 close；未观察到时明确为 null，
+不推定远端关闭码，随后关闭本地连接。所有监听在等待 open 前安装。
+
+诊断不授权重连、CLI 重开或未知效果重放。成功结构化终态后的宿主主动终止可按
+原完成协议收尾；失败终态后的主动 kill 保留该失败原因，意外传输中断仍为 process
+失败，已接受效果仍由 Scheduler 结算。
+回归接 `ci:unit:runtime-sandbox` / `ci:unit:recovery`，最终 SHA Actions 待验。
+历史 Job 的底层退出原因仍未知，本修复不重写历史证据、不重跑任务或部署。
 
 ### Runner failure provenance (#919)
 
@@ -418,6 +469,14 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 夹具覆盖文本/增量、工具调用结果、错误、usage、Session 身份、未知/损坏帧，以及伪造 `mcp__deepsonar-control__*` 工具名。普通输出或伪造 tool call **不会**变成控制语义事件；语义写入只走 Job 级 HTTP API。不承诺识别任意上游私有客户端策略。
 
 运行时 smoke：本地 `agent-harness/dsh-sdk-smoke-driver.mjs` 已用官方 package 验证 native bash、PTC `run_code`、原生子代理的 Gateway/model/reasoning 继承、Gateway token、同进程 follow-up、v4 capture、跨进程 resume 拒绝和 shutdown；`agent-harness/dsh-cordis-smoke-config.mjs` 是 profile smoke helper，`agent-harness/check-dsh-runtime.mjs`、`agent-harness/test-dsh-cordis.mjs` 与 `packages/runtime-sandbox/src/runtime-adapters.test.ts` 验证 lock/profile/Docker 与 adapter 契约。Docker 在当前环境不可用，因此容器启动与既有镜像 size budgets 仍由 CI gate 负责；本地只记录 npm closure 约 505 MiB unpacked、约 139 MiB gzip，不把它们写成镜像体积。完整 `pnpm ci:smoke:opensandbox-cli-control` 仍需要对应 Provider 凭据。
+
+### Pi 请求失败诊断与分类（#1083）
+
+请求包装层的诊断必须区分 allowance、SDK 调用与 no-start 见证查询，不把所有未知异常只投影成 `PI_MAIN_BUDGET_REQUEST_FAILED`。仅保留有界允许名单化的错误类型、传输 code、HTTP status 与 cause 线索；任意异常原文、Provider 正文、URL、凭据与堆栈不进入错误消息。取消、权限/身份与预算拒绝继续停止，异常文案不能伪造私有宿主完成信号。
+
+生成用的 `pi-main-request-budget.ts` 保持自包含，以供现有 DSH installer 与 OM 边界加载器直接转换为 `data:` 模块；OM 内容守卫继续严格绑定该源码的当前摘要，改动源码时同步摘要并保留正负回归。
+
+错误类别用于诊断，不等于恢复许可。Pi 模型请求继续只在原存活 Job/Attempt/Session、原有界许可及内核持久 `not_started/gateway_transient` 见证下恢复；partial/unknown、缺少见证与取消不重放。请求包装错误不能因重新识别为 timeout/network 而转入通用 CLI 进程重启。共享 DSH reader 的错误与完成身份须同步核对。生成扩展、runner 与共享 reader 回归接 `pnpm ci:unit:runtime-sandbox`；真实锁版本 SDK 接 `pnpm ci:integration:request-budget-sdk`。本轮最终 SHA Actions 待验，现场原失败的底层原因和真实模型恢复效果仍未知；没有重跑历史 Job。
 
 ### 主模型请求准入适配器（#923）
 

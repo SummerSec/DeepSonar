@@ -4,7 +4,7 @@
  * RoleConfig.role_credentials is gone — no dual-read / fallback.
  */
 import { buildRepairFeedback, isCurrentAgentCli, type RepairFeedback } from "@deepsonar/shared-types";
-import { validateCredentialCompatibility } from "../../credentials.js";
+import { credentialConcurrencyPolicy, validateCredentialCompatibility } from "../../credentials.js";
 import { extractModelsFromSettings, resolveEffectiveModel, resolvePiCliModelSelection } from "../../provider-settings.js";
 import type { ProjectAgentAllowlist } from "../project-agent-allowlist/policy.js";
 import type { RoleRuntimeSnapshotTransaction } from "../role-runtime-snapshot/ports.js";
@@ -266,20 +266,17 @@ export async function resolveProviderCredentialForJob(
     if (preferred.length > 0) pool = preferred;
   }
 
+  // #707/#1078: default_credential_id 只在 pool 内查找，不再侧路回退到 candidates；
+  // 它是同条件下的优先项，不是一票决定 —— 达到自身并发上限时让位给仍有余量的同身份候选。
   const defaultId = input.allowlist.default_credential_id;
-  if (defaultId) {
-    // #707: default_credential_id 只在 pool 内查找，不再侧路回退到 candidates。
-    const preferred = pool.find((row) => row.id === defaultId);
-    if (preferred) return preferred;
-  }
+  const preferred = defaultId ? pool.find((row) => row.id === defaultId) : undefined;
 
   if (pool.length === 1) return pool[0]!;
 
   // Recovery does not rotate keys because another Job changed the load. The
   // old identity is only a preference within current authorization/model/CLI
-  // constraints; an explicit configured default above still takes precedence.
+  // constraints; an explicit configured default still takes precedence.
   const existing = input.existingCredentialId ? pool.find(row => row.id === input.existingCredentialId) : undefined;
-  if (existing) return existing;
 
   const identities = pool.map(row => {
     const models = extractModelsFromSettings(row.settings_config_json, row.agent_cli!);
@@ -307,11 +304,46 @@ export async function resolveProviderCredentialForJob(
       }
       counts.set(load.credential_id, { active, total });
     }
-    return [...pool].sort((a, b) => {
-      const left = counts.get(a.id) ?? { active: 0, total: 0 }, right = counts.get(b.id) ?? { active: 0, total: 0 };
-      return left.active - right.active || left.total - right.total || a.id.localeCompare(b.id);
-    })[0]!;
+    // #1078 切片 1：并发余量来自 metadata.max_concurrent 与同一负载投影，
+    // 只用于偏好排序：先余量比例、后在途数、再历史总量，缺省与凭据 ID 只作并列裁决；
+    // 不占位、不放宽授权，也不改变准入判定（未设置视为不限）。
+    const score = (row: (typeof pool)[number]): { room: number; active: number; total: number } => {
+      const limit = credentialConcurrencyPolicy(row.meta_json).maxConcurrent;
+      const active = counts.get(row.id)?.active ?? 0;
+      const total = counts.get(row.id)?.total ?? 0;
+      const room = limit === null ? Number.POSITIVE_INFINITY : Math.max(0, limit - active);
+      return { room, active, total };
+    };
+    const ratio = (row: (typeof pool)[number]): number => {
+      const limit = credentialConcurrencyPolicy(row.meta_json).maxConcurrent;
+      const { room } = score(row);
+      if (limit === null) return 1;
+      return limit === 0 ? 0 : room / limit;
+    };
+    // 并列裁决顺序：#707/#1002 的显式缺省先于 #1002 的恢复身份，再退回 ID 稳定序。
+    const tieBreak = (a: (typeof pool)[number], b: (typeof pool)[number]): number =>
+      Number(b.id === preferred?.id) - Number(a.id === preferred?.id)
+        || Number(b.id === existing?.id) - Number(a.id === existing?.id);
+    const byCapacity = (a: (typeof pool)[number], b: (typeof pool)[number]): number =>
+      ratio(b) - ratio(a) || tieBreak(a, b)
+        || score(a).active - score(b).active || score(a).total - score(b).total || a.id.localeCompare(b.id);
+    // #1002/#1078 P1（评审）：仍有余量的冻结恢复身份与显式缺省都先保持，只有自身满额才让位，
+    // 否则负载变化会换账号并制造 SNAPSHOT_STALE；余量比例只用于没有这两种优先项的池。
+    if (preferred && score(preferred).room > 0) return preferred;
+    if (existing && score(existing).room > 0) return existing;
+    const withRoom = pool.filter((row) => score(row).room > 0);
+    const best = [...withRoom].sort(byCapacity)[0];
+    if (best) return best;
+    // 全部满额时保持既有行为：缺省优先，其次恢复身份，最后沿用容量排序，不新增失败码。
+    if (preferred) return preferred;
+    if (existing) return existing;
+    return [...pool].sort(byCapacity)[0];
   }
+
+  // 非单一身份（含跨 provider）与未显式授权白名单的场景保持原语义；跨 provider 候选等价
+  // 判据仍待 #1078 的明确决策，不在本切片内放开。
+  if (preferred) return preferred;
+  if (existing) return existing;
 
   throwResolve("provider_credential_multi_match", {
     message: `项目授权目录内有 ${pool.length} 个匹配 Provider 凭据，无法唯一解析；请设置项目缺省凭据或收窄白名单`,

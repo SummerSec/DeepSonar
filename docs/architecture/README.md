@@ -2,6 +2,7 @@
 
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
 > 同步日期：2026-11-12
+> #1074 的[人工断点续做](../HUMAN_CONTINUATION.md)与[ADR 0022](adr/0022-human-continuation.md)扩展 FR-JOB-008/FR-CTRL-006；schema 73、超时 overdue、有限封存回收和晚回复受治理续做已接线，最终 SHA Actions 另验。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
 #1032 的 [Pi context 首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)映射 FR-CRED-003 / NFR-SEC-003、06/10 与追溯：主请求/OM 的 SDK 生成前精确替换和双源码镜像 guard，保持 Gateway 原字节、认证及历史；同 UID 隔离和完整诊断/审计未交付，最终 SHA Actions 待验。
@@ -48,6 +49,10 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 
 #1002 P1-9 的同 Job 模型失败恢复关联 FR-CRED-003/004、FR-JOB-014 的重跑区别与 06/09/10：[透明契约](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)拥有 scoped no-start 与关联请求/冻结许可边界，[生命周期](../AGENT_REPAIR_LIFECYCLE.md#job-scoped-model-recovery-1002-p1-9)记录不重启 Agent、不重放/退款及历史拒绝。原 effect intent 跨 token/Attempt 计数，未运行那次的空 start/error 不发布；SDK/真实 SQL 回归保留，#1036 D 新增[原生 Pi RPC 链](../MODEL_GATEWAY_TRANSPARENCY.md#1036-d原生-pi-恢复链的离线回归)至核心 base 镜像 smoke。Gateway 为受控服务，不冒充真实账本或通用 Job 重启；最终 SHA Actions 待验。
 #1002 P2-10 关联 FR-JOB-006 与 06/08/09/10：原失败诊断与首次 Attempt 来源引用同事务、Job GET 有界按 scheduler/schema/归属重验，复用原 audit 和读权限，不改变生命周期或未知效果。权威边界见[OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)，SQL/HTTP/受控 Provider 回归已接线，最终 SHA Actions 待验。
+
+#1092 的 [进度消费与保活](../AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)映射 IR-001 与[运行时视图](06-runtime-view.md#进度积压消费与保活1092)：runtime-sandbox 协作让出 I/O、shared-types 保持隐私的 JSON 候选解析优化；Scheduler/Evidence 仍为原落盘通路，最终 head 验收见 PR #1093。
+
+#1088 补齐 IR-001 的 [PTY 退出诊断](../AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)，[运行时视图](06-runtime-view.md#opensandbox-pty-退出与传输中断1088)与追溯矩阵沿用原 Evidence/权限边界；最终 SHA Actions 待验。
 
 ## 1. 阅读路径与目录
 
@@ -97,7 +102,7 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 | Model Gateway 透明传输 | [透明传输契约](../MODEL_GATEWAY_TRANSPARENCY.md)、[OM 结算](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)；06/08/09/10 | 历史代理描述不作为现行契约 | #923 单次原始传输、准入拒绝与 scoped 持久确认；#1002 凭据删除保留 token/账本与历史额度，最终 SHA Actions 待验 |
 | 安全与隔离 | 10；[设备边界](../DEVICE_ACCESS.md)、[共享资产](../SHARED_ASSET_BLOB_STORE.md) | §9.1 | 概览已迁入，专题保留细则 |
 | 全局 Git Skill 源发布与新鲜度 | IR-007、FR-CAP-003/FR-KNOW-002；[候选数据](08-data-architecture.md#skill-源已批准目录与候选960)、[审批接口](09-interface-specs.md#全局-skill-源候选审批960)；06/10 | 旧 §8.4 仅历史对照 | #960 schema68：既有 live 不迁移，sync 只候选，精确 hash+epoch 显式批准；旧 Job 不改，健康检查与 pending 分离；最终 Actions 待验 |
-| 项目 Memory / Skill | 01 中 FR-KNOW；05–10 相关视图；[项目知识专题](../PROJECT_KNOWLEDGE.md)；[ADR0022](adr/0022-project-knowledge-collection.md) | 当前共享工作树 | 专题拥有采集/隔离评测/积累复用口径；6d96df59的Actions已通过，同步main后的候选另验；模型收益未知，证据见专题 |
+| 项目 Memory / Skill | 01 中 FR-KNOW；05–10 相关视图；[项目知识专题](../PROJECT_KNOWLEDGE.md)；[ADR0023](adr/0023-project-knowledge-collection.md) | 当前共享工作树 | 专题拥有采集/隔离评测/积累复用口径；6d96df59的Actions已通过，同步main后的候选另验；模型收益未知，证据见专题 |
 | 可信目标执行授权 | FR-TASK-006；06/09/10；[ADR-0011](adr/0011-trusted-target-authorization.md)、[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md) | 本期新增 | 只读 authority、immutable grant、中央继承、实时重核；不执行目标动作 |
 | 管理员单条效果见证 | FR-JOB-005；06/08/09/10；[部署说明](../../deploy/README.md#管理-api-的单条效果结清1002-p1-9) | #1002 P1-9 | admin 与同项目/Job/Attempt 准入，精确重试、不覆盖已结清证据；不补写 unknown 用量、不退还预算或入队；现有 recovery 的实际 HTTP/SQL 回归已接，最终 SHA Actions 待验 |
 | Plan v2 有界执行 | FR-CAP-006、FR-HUB-002/003/004/005；06/08/09；[ADR-0012](adr/0012-plan-v2-execution.md)、[Plan 专题](../PLAN_GAP_PROJECTION.md) | 本期新增 | 当前写入只接收 v2；objective CAS、lifetime 预算与实际输出来源；writer 已物理删除（2026-10-31），历史本地 replay/negative gate 保留原范围，本轮工程已随 #831 Actions 验收，后续修复 SHA 另验 |
@@ -148,4 +153,4 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 #1018 的[项目任务队列](../PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 72 与验收边界，最终 SHA Actions 待验。
 #1019 的[事实用途与待处理投影](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。
 
-知识来源登记与历史只读预览的历史收敛见[ADR0021](adr/0021-knowledge-source-preview.md)；用户本轮明确授权的有界项目批次由[ADR0022](adr/0022-project-knowledge-collection.md)取代其中批处理暂缓限制，保留旧knowledge:auto禁用、历史只读与无schema变化。FR-KNOW-001/002、06/08/09/10和trace已同步到collector、Attempt/manifest审计、trial隔离、6×2比较门及activity投影；注意力成本在[专题](../PROJECT_KNOWLEDGE.md#注意力成本)。原候选6d96df59的主CI与Reverse专项已通过，同步main后的候选须独立验收，证据见[专题](../PROJECT_KNOWLEDGE.md#验证与运维)；未合并未部署，真实模型与质量收益未知。
+知识来源登记与历史只读预览的历史收敛见[ADR0021](adr/0021-knowledge-source-preview.md)；用户本轮明确授权的有界项目批次由[ADR0023](adr/0023-project-knowledge-collection.md)取代其中批处理暂缓限制，保留旧knowledge:auto禁用、历史只读与无schema变化。FR-KNOW-001/002、06/08/09/10和trace已同步到collector、Attempt/manifest审计、trial隔离、6×2比较门及activity投影；注意力成本在[专题](../PROJECT_KNOWLEDGE.md#注意力成本)。原候选6d96df59的主CI与Reverse专项已通过，同步main后的候选须独立验收，证据见[专题](../PROJECT_KNOWLEDGE.md#验证与运维)；未合并未部署，真实模型与质量收益未知。

@@ -1,5 +1,5 @@
 // Structural parity with production dsh-profile.ts is checked by runtime-adapters.test.ts.
-export const DSH_VERSION = "0.2.1-rc.2";
+export const DSH_VERSION = "0.2.2-rc.1";
 export const DSH_HOME = "/workspace/.deepsonar-home/.dsh";
 export const DSH_PROFILE = "deepsonar";
 export const DSH_BIN = "/opt/deepsonar/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js";
@@ -24,7 +24,8 @@ export function buildDshProfilePatch(options) {
   add("system-prompt", "system-prompt", {
     includeHarnessIdentity: false, includeRuntimeContext: false, personaPrefix: "__DEEPSONAR_DSH_SYSTEM_PROMPT__",
   });
-  add("tools", "tools", { mode: options.taskMode === "ptc" ? "ptc" : "native" });
+  add("tools");
+  add(options.taskMode === "ptc" ? "ptc-tool-executor" : "native-tool-executor", options.taskMode === "ptc" ? "tool-executor-ptc" : "tool-executor-native");
   add("agent-loop", "agent-loop", { agents: [] });
   add("llm-pi-ai", "llm-pi-ai", options.providerConfig);
   add("sandbox", "sandbox-local");
@@ -51,7 +52,7 @@ export function buildDshProfilePatch(options) {
   add("subagent-fork-in-process", "subagent-fork-in-process", { providerName: "fork" });
   add("tool-subagent", "tool-subagent", { provider: "spawn", toolName: "subagent", backgroundMode: "continuable" });
   add("tool-subagent-control");
-  add("tool-subagent-list-agents", "tool-subagent-control/list-agents");
+  // 0.2.2-rc.1：`list_agents` 并入 tool-subagent-control 主入口，子路径插件已不可导入。
   add("tool-subagent-fork", "tool-subagent", { provider: "fork", toolName: "subagent_fork", backgroundMode: "one-shot" });
   add("sessions", "session-persistence-jsonl", { root: `${home}/sessions`, compression: "none" });
   add("session-checkpoints", "session-checkpoint-policy");

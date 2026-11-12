@@ -161,6 +161,7 @@ export interface CapabilityExpiryInput {
   startedAt: Date | string | null | undefined;
   timeoutSec: number | string | null | undefined;
   leaseExpiresAt?: Date | string | null;
+  executionDeadlineAt?: Date | string | null;
   ttlSec?: number;
 }
 
@@ -168,7 +169,7 @@ export interface CapabilityExpiryInput {
 export function capabilityExpiryForJob(input: CapabilityExpiryInput): Date {
   const startedAt = asDate(input.startedAt, input.now);
   const timeoutSec = typeof input.timeoutSec === "number" ? input.timeoutSec : Number(input.timeoutSec);
-  const absoluteDeadline = Number.isFinite(timeoutSec) && timeoutSec > 0
+  const absoluteDeadline = input.executionDeadlineAt ? asDate(input.executionDeadlineAt,new Date(NaN)) : Number.isFinite(timeoutSec) && timeoutSec > 0
     ? new Date(startedAt.getTime() + timeoutSec * 1000)
     : input.leaseExpiresAt
       ? asDate(input.leaseExpiresAt, new Date(input.now.getTime() + DEFAULT_CAPABILITY_TTL_SEC * 1000))
@@ -234,7 +235,7 @@ export async function mintJobCapabilityToken(
   const options = resolveMintOptions(typeof jobIdOrInput === "string" ? input : jobIdOrInput);
   const [job] = await sql`
     SELECT id, project_id, canvas_id, type, status, agent_snapshot_json,
-           started_at, timeout_sec, lease_expires_at
+           started_at, timeout_sec, lease_expires_at,execution_deadline_at
     FROM jobs
     WHERE id = ${jobId}`;
   if (!job) throw new CapabilityTokenError("CAPABILITY_JOB_NOT_FOUND", "Job not found", 404);
@@ -254,6 +255,7 @@ export async function mintJobCapabilityToken(
   const expiresAt = capabilityExpiryForJob({
     now,
     startedAt: job.started_at,
+    executionDeadlineAt:job.started_at?job.execution_deadline_at:null,
     timeoutSec: job.timeout_sec,
     leaseExpiresAt: job.lease_expires_at,
     ttlSec: options.ttlSec,
@@ -285,7 +287,7 @@ export async function mintJobCapabilityToken(
 /** Align grants minted during provisioning to the real deadline once the Job starts. */
 export async function activateProvisionedJobCapabilityTokens(jobId: string, now = new Date()): Promise<number> {
   const [job] = await sql`
-    SELECT status, started_at, timeout_sec, lease_expires_at
+    SELECT status, started_at, timeout_sec, lease_expires_at,execution_deadline_at
     FROM jobs
     WHERE id = ${jobId}`;
   if (!job) throw new CapabilityTokenError("CAPABILITY_JOB_NOT_FOUND", "Job not found", 404);
@@ -295,6 +297,7 @@ export async function activateProvisionedJobCapabilityTokens(jobId: string, now 
   const expiresAt = capabilityExpiryForJob({
     now,
     startedAt: job.started_at,
+    executionDeadlineAt:job.execution_deadline_at,
     timeoutSec: job.timeout_sec,
     leaseExpiresAt: job.lease_expires_at,
   });

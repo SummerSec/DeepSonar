@@ -255,8 +255,11 @@ try {
           interrupted = true;
           if (mode === "cancel") await cancelJobWithCleanup(id, "rea-acceptance");
           else {
-            // Expire the real Scheduler deadline only after durable checkpoint.
-            await sql`UPDATE jobs SET timeout_sec=1,started_at=now()-interval '5 minutes' WHERE id=${id}`;
+            // Expire the effective deadline only after the live checkpoint.
+            // started_at remains the actual run start used by stall detection.
+            const [expired] = await sql`UPDATE jobs SET execution_deadline_at=clock_timestamp()-interval '1 second'
+              WHERE id=${id} AND status='running' RETURNING execution_deadline_at<clock_timestamp() AS expired`;
+            assert.equal(expired?.expired, true, 'timeout fixture must expire the running Job deadline');
             await reapOnce();
           }
         }

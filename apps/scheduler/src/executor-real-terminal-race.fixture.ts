@@ -60,6 +60,7 @@ const fakeSql = Object.assign(async (strings: TemplateStringsArray, ...values: u
     assert.match(query, /j\.status='running' AND j\.lease_expires_at > now\(\)/);
     return publication.attemptCurrent === false ? [] : [{ id: attemptId }];
   }
+  if (query.includes("FROM human_requests")) return []; // This fixture has no durable continuation checkpoint.
   throw new Error(`Unexpected executor database access: ${query}`);
 }, { json: (value: unknown) => value });
 mock.module(new URL("./db.js", import.meta.url), { namedExports: { ...database, sql: fakeSql } });

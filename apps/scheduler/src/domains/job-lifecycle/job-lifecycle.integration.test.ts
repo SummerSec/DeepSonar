@@ -131,12 +131,12 @@ if (!testDatabaseUrl) {
       assert.equal(keptFreshBefore.status, "waiting_human");
       const humanTimedOut = await app.reapWaitingHumanTimeout(2);
       const humanTimedOutIds = new Set(humanTimedOut.map((row) => row.id));
-      assert.equal(humanTimedOutIds.has(waitingStaleId), true, "stale waiting_human is failed after independent budget");
+      assert.equal(humanTimedOutIds.has(waitingStaleId), false, "human response latency cannot fail a Job");
       assert.equal(humanTimedOutIds.has(waitingFreshId), false, "fresh human event is kept");
       const [staleHuman] = await sql`SELECT status, error FROM jobs WHERE id = ${waitingStaleId}`;
       const [freshHuman] = await sql`SELECT status FROM jobs WHERE id = ${waitingFreshId}`;
-      assert.equal(staleHuman.status, "failed");
-      assert.match(String(staleHuman.error), /人工等待超时/);
+      assert.equal(staleHuman.status, "waiting_human");
+      assert.equal(staleHuman.error, null);
       assert.equal(freshHuman.status, "waiting_human");
 
       // The reconcile scan omits active Attempts and planned effects. They must
@@ -167,8 +167,8 @@ if (!testDatabaseUrl) {
           // Explicit kernel/operator settlement, not the timeout, removes the blocker.
           await sql`UPDATE job_attempt_effects SET status='settled',settlement_json=${sql.json({ outcome: "not_applied", evidence: "isolated test fixture" })}
             WHERE id=${effectId}`;
-          assert.equal((await app.reapWaitingHumanTimeout(2)).some(row => row.id === blockedId), true);
-          assert.equal((await sql`SELECT status FROM jobs WHERE id=${blockedId}`)[0].status, "failed");
+          assert.equal((await app.reapWaitingHumanTimeout(2)).some(row => row.id === blockedId), false);
+          assert.equal((await sql`SELECT status FROM jobs WHERE id=${blockedId}`)[0].status, "waiting_human");
         }
       }
 

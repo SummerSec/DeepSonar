@@ -990,6 +990,9 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
       const repairAdmissions = new Map<string, Awaited<ReturnType<typeof readRepairRequeueAdmission>>>();
       for (const worker of interruptedWorkers) {
         await tx`SELECT id FROM job_attempts WHERE job_id=${String(worker.id)} ORDER BY attempt_no FOR UPDATE`;
+        const [continuation]=await tx`SELECT id FROM human_requests WHERE job_id=${String(worker.id)} AND resumed_at IS NOT NULL LIMIT 1`;
+        if(continuation) return {jobs:[],active:[],stale:[],convergence:null,repairBlocked:{job_id:String(worker.id),
+          code:'HUMAN_CONTINUATION_REQUIRES_JOB_RESUME',reason:'人工断点后继须通过该 Job 的 resume 核验断点与唯一执行归属，不能整批空白重排。'}};
         try { await inspectGatewayRequestBudget(tx, String(worker.id), worker.agent_snapshot_json); }
         catch (error) {
           if (!(error instanceof GatewayRequestBudgetError)) throw error;

@@ -4,7 +4,7 @@
  * Gateway 在凭据进入模型请求 body / target / trailers 时以 400
  * `credential_in_business_data` fail-closed，此时不产生任何用量；
  * Pi CLI 把该拒绝折叠成进程退出短语，文本形态取决于 provider 适配：
- * Anthropic 路径是 `error: 400: Job credential in body`；锁定的 Pi 1.4.0
+ * Anthropic 路径是 `error: 400: Job credential in body`；锁定的 Pi 1.5.2
  * 对 `openai-responses`（非 Anthropic Pi 配置的默认 provider）经
  * `formatProviderError` 产出 `<provider> API error (400): <body>`。两种
  * 封装都识别回平台的稳定错误码，使 Job 失败不再是 CLI 黑话，并且该失败

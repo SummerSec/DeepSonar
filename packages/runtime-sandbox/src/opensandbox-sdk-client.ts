@@ -245,6 +245,9 @@ function wrapSandbox(sandbox: Sandbox, connection: OpenSandboxConnection): OpenS
         cwd: options?.cwd ?? "/workspace",
         command: commandWithEnv(command, options?.env),
         pty: Boolean(options?.pty),
+        diagnosticSecrets: [...(options?.diagnosticSecrets ?? []), ...Object.entries(options?.env ?? {})
+          .filter(([key]) => /token|secret|api_?key|password|authorization|cookie|credential/iu.test(key))
+          .map(([, value]) => value)],
       }, {
         openWebSocket: (url, wsHeaders) => new UndiciWebSocket(url, { headers: wsHeaders }) as unknown as import("./opensandbox-pty.js").WebSocketLike,
       });

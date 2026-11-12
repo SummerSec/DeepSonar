@@ -64,6 +64,29 @@ function host(factory: (index: number) => PiProcess, nonempty = true) {
   return { runtime, processes };
 }
 
+test("#1083 request-wrapper diagnostic survives the Pi runner without process resume or tool replay", async () => {
+  // Fixed output contract of the generated request wrapper, not arbitrary SDK prose.
+  // Its transient category is diagnostic only: SDK recovery already consulted the
+  // kernel settlement, so the generic process-resume branch must not retry it.
+  const diagnostic = 'PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic={"version":1,"stage":"sdk","category":"transient_retryable","name":"TypeError","cause":{"name":"Error","code":"ECONNRESET"}}';
+  const events: Record<string, unknown>[] = [];
+  const fake = host(() => new PiProcess((command, process) => {
+    if (command.type === "get_state") state(process, command);
+    else if (command.type === "prompt") turn(process, command, diagnostic);
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "original task",
+    completionGate: () => false, recoveryGuard: () => ({ allowed: false, reason: "unknown_external_effect" }),
+    onEvent: event => events.push(event) });
+  assert.equal(result.error, `Pi message ended: error: ${diagnostic}`);
+  assert.equal(result.runnerErrorSource, "structured_terminal");
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(fake.processes.length, 1, "network cause in the diagnostic must not reopen the persisted Pi session");
+  assert.equal(fake.processes[0]!.commands.filter(command => command.type === "prompt").length, 1);
+  assert.equal(fake.processes[0]!.commands.some(command => command.type === "compact"), false);
+  assert.equal(events.some(event => event.type === "run.retrying"), false);
+  assert.doesNotMatch(result.error ?? "", /CONTEXT_RESUME_UNSUPPORTED/u);
+});
+
 for (const mode of ["progress-only", "unknown", "unknown-failure"]) {
   test(`#1038 real runner decode/map/warning path: ${mode}`, async () => {
     const secret = "synthetic-warning-secret";
@@ -93,7 +116,7 @@ for (const mode of ["progress-only", "unknown", "unknown-failure"]) {
     for (const warning of warnings) {
       assert.equal(warning.code, "unknown_runtime_event");
       const detail = JSON.parse(warning.detail!);
-      assert.equal(detail.adapter, "pi"); assert.equal(detail.version, "1.4.0");
+      assert.equal(detail.adapter, "pi"); assert.equal(detail.version, "1.5.2");
       assert.equal(detail.count, detail.phase === "first" ? 1 : 25);
       assert.match(detail.types[0].hash, /^[a-f0-9]{16}$/u);
     }
@@ -104,7 +127,7 @@ for (const mode of ["progress-only", "unknown", "unknown-failure"]) {
 test("#1038 type summaries are bounded, redact before hashing and retain total warning occurrences", () => {
   const warnings: RuntimeWarning[] = [];
   const secret = "synthetic-warning-type-token";
-  const report = createRuntimeWarningReporter({ id: "pi", version: "1.4.0" }, w => warnings.push(w),
+  const report = createRuntimeWarningReporter({ id: "pi", version: "1.5.2" }, w => warnings.push(w),
     text => String(redactRuntimeSecrets(text, [secret])));
   for (let i = 0; i < 100; i++) for (let n = 0; n < 2; n++) report.warn(
     { code: "unknown_runtime_event", detail: "unrecognized_stream_type" }, { type: `${secret}-${i}`, body: "PRIVATE BODY" });

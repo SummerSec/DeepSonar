@@ -211,7 +211,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-008 Reaper 与终态幂等
 
-- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与 `waiting_human` 超时，不得信任 Agent 自报；取消、超时、迟到回调、容器创建与销毁必须走幂等路径，不得 resurrect 终态 Job。
+- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与人工响应阈值，不得信任 Agent 自报。#1074 的响应超时仅标 overdue，等待保留、执行资源有界回收；晚回复必须通过可验证断点、累计预算与当前授权准入。取消、超时、迟到回调、创建与销毁必须幂等，不得复活终态 Job。
 - **决策来源**：运维判定和外部清理是平台责任，迟到回调不能重新取得执行权。
 - **实现状态**：as-built；Reaper 和状态条件更新复用 Job/Attempt effect identity。终态 model token 与 Control token 撤销在同一 Job 终态事务内完成，不另取 Job lock，也不吞掉撤销异常；回滚夹具保持 Job/model token/Control token/audit 原子性，终态后的真实 HTTP 请求返回 401。
 - **代码入口**：[Dispatcher/Reaper](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[token revocation](../../apps/scheduler/src/gateway-token-revocation.ts)、[配置](../../apps/scheduler/src/config.ts)。
@@ -239,7 +239,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **决策来源**：控制面是 Agent 提案边界，结构化拒绝才能保持 Job scope、审计和修复闭环。
 - **实现状态**：部分达标（Phase 1）；部分 Control schema/语义 payload 拒绝路径已返回 RepairFeedback，但 Hub、Verify、Completion Gate 和完整 Proposal/Receipt/Settlement 尚未统一，不把覆盖缺口写成 as-built。
 - **代码入口**：[RepairFeedback 类型](../../packages/shared-types/src/repair-feedback.ts)、[平台修复构造](../../apps/scheduler/src/domains/platform-api/repair.ts)、[Control routes](../../apps/scheduler/src/domains/platform-api/routes.ts)。
-- **验证证据**：`pnpm ci:smoke:control-api`、`pnpm ci:integration:platform-api`、`pnpm ci:unit:capability-pack`；人工提交 MCP/文本回退应被拒绝。
+- **验证证据**：`pnpm ci:smoke:control-api`、`pnpm ci:integration:platform-api`、`pnpm ci:unit:capability-pack`；人工提交 MCP/文本回退应被拒绝。#1094 的 [HTTP bootstrap](../AGENT_CLI_RUNTIME_ADAPTERS.md#平台-operation-的-http-bootstrap1094)明确 operation 与原生工具的区别，系统/工作区/启动/完成门提示渲染回归接既有 `pnpm ci:unit:verify-eligibility` / `pnpm ci:unit:executor-real`；最终 SHA Actions 另验，不代替模型效果验证。
 
 ### FR-CTRL-002 RepairFeedback 失败分类
 
@@ -300,6 +300,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 ### FR-CTRL-006 失败分类与无控制通道回退
 
 - **规范要求**：Scheduler 必须区分 `model_correctable`、`transient_retryable`、`unknown_external_effect`、`permanent_failure`；未知外部效果必须停止自动重放，权限/快照/版本错误必须 fail closed，不得回退到 MCP、普通文本或另一套控制通道。
+- **当前动作与历史接受事实**：终态历史请求只读，不授予恢复。#1074 以专属 human_requests、有效执行时钟和可验证文件断点支持人工超时后回复；回复先保存，最新请求/断点/旧执行退出/累计预算/当前授权/队列席位全部通过才续做，未知效果不重放。见[人工续做](../HUMAN_CONTINUATION.md)；HTTP/PG 与 Web 回归最终 SHA Actions 另验。
 - **决策来源**：不同失败的安全动作不同，回退通道会绕过 Job scope 和审计。
 - **实现状态**：as-built（分类与 API 失败路径）；完整 Receipt/Settlement 目标尚未全部落地。 Knowledge/Skill 领域分类及行动建议通过 runtime/HTTP 反馈保留；终态/权限/撤销拒绝与可修正输入分开，见[#903 切片边界](../PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。
 - **代码入口**：[trusted kernel 文档](../AI_NATIVE_TRUSTED_KERNEL.md)、[Control input](../../apps/scheduler/src/control-input.ts)、[Job recovery](../../apps/scheduler/src/domains/job-lifecycle/application.ts)。
@@ -386,10 +387,10 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-KNOW-001 项目知识的受治理生命周期
 
-成功来源登记和历史资格预览只保留有界元数据，预览不创建 work/Job。本轮用户授权的自动项目批次由 [ADR 0022](adr/0022-project-knowledge-collection.md) 取代 [0021](adr/0021-knowledge-source-preview.md) 的项目批处理暂缓限制；不新增 schema 或整链 token 预算，旧 knowledge:auto work 仍禁用自动推进。
+成功来源登记和历史资格预览只保留有界元数据，预览不创建 work/Job。本轮用户授权的自动项目批次由 [ADR 0023](adr/0023-project-knowledge-collection.md) 取代 [0021](adr/0021-knowledge-source-preview.md) 的项目批处理暂缓限制；不新增 schema 或整链 token 预算，旧 knowledge:auto work 仍禁用自动推进。
 
 - **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理来自当前 Job 的合法有源请求，或 Scheduler 对成功业务 Job 持久登记的有界批量采集；必须复核最新成功 Attempt、冻结整理权限、来源/hash 和未结算效果，不复活原 Job token。collector 每批至多4个来源Job、19个原始inputs及可选governor，项目已有非旧自动pending/running work时不得再准入批次。失败来源持久跳过、不热重试。非reuse提案经maker、完整六类×两个arm独立trial、evaluator/reviewer后才可原子激活；target comparator fail可以保留为对照，目标arm及全部安全组必须pass，unexecuted/缺证/未知效果不得晋升，旧active保留。每例共同材料显式选择冻结task_inputs，trial不得读取rubric或其他arm，所有trial及自动批次快照收紧工具/网络和角色预加载能力。累计预算为后两阶段预留2个Job，治理hash变化阻断旧work，不重置历史。只读activity分别呈现登记/采集/跳过、候选、生效、拉取与模型反馈；实际使用保留usage/provenance和receipt，反馈不得冒充质量结论。
-- **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；用户本轮明确授权自动项目整理，见 [ADR 0022](adr/0022-project-knowledge-collection.md) 与[专题](../PROJECT_KNOWLEDGE.md)。
+- **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；用户本轮明确授权自动项目整理，见 [ADR 0023](adr/0023-project-knowledge-collection.md) 与[专题](../PROJECT_KNOWLEDGE.md)。
 - **实现状态**：#752 生命周期保持既有实现；本轮collector、隔离试验、真实资产版本回执及activity已接入共享工作树，无schema变更。source_collected保存registration_id/work_ref/attempt_id/input_count/manifest_sha256，assignment.source_mode标识批次；评分输入绑定proposal/revision/input_digest且trial不可读。合成Job/Attempt/Evidence及behavior-policy独立回归已接Actions入口，但本轮尚未执行；未合并、未部署，真实模型及注意力/质量收益未验证。
 - **代码入口**：[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)；[工作链](../../apps/scheduler/src/domains/project-knowledge/work.ts)；[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)；[评测/结算](../../apps/scheduler/src/domains/project-knowledge/settlement.ts)；[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)；[Control 契约](../../packages/shared-types/src/project-knowledge.ts)。
 - **验证证据**：Actions的`pnpm ci:unit:project-knowledge`、独立`TEST_DATABASE_URL`下`pnpm ci:integration:project-knowledge`和`pnpm ci:unit:web-facts`已接collector/closed-loop/activity、Job隔离及唤醒回归，本轮尚未运行。全部测试/构建/typecheck仅Actions执行；#777真实模型收益仍需独立证据，不改变#752历史验收范围。
@@ -1066,7 +1067,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：OpenSandbox/SandboxRunner 的创建、销毁、列表和状态同步必须经 Scheduler runtime adapter；沙箱不得持有长期 Provider 密钥；模型请求必须经 Scheduler-owned Model Gateway 与短期 Job token。
 - **决策来源**：外部执行器和 Provider 都是不可信外部效果，Scheduler 需要统一凭据、预算、审计和清理。
-- **实现状态**：as-built；runtime adapter 和 Gateway 是唯一受治理出口，长期密钥不写入快照/沙箱。
+- **实现状态**：as-built；runtime adapter 和 Gateway 是唯一受治理出口，长期密钥不写入快照/沙箱。 #1092 的 [进度消费与保活](../AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)在 chunk/RPC 边界协作让出 I/O，完整保留进度及 OM 隐私策略，不新增重连/重放 authority。 #1088 仅有效 PTY 退出帧决定 CLI 退出码；传输与宿主终止诊断经原 Evidence 留证，不授予新执行或效果重放。详见 [CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)。
 - **代码入口**：[runtime-sandbox](../../packages/runtime-sandbox/src)、[Scheduler runtime adapter](../../apps/scheduler/src/runtime.ts)、[Gateway](../../apps/scheduler/src/gateway.ts)、[Provider 凭据解析](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:smoke:opensandbox`；人工核对 Sandbox/Provider 请求不绕过 Scheduler。
 

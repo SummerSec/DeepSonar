@@ -1,7 +1,11 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-12
+
+## 人工等待断点与累计时钟（#1074）
+
+schema 73 新增 human_requests（原 human 事件/Attempt、revision、断点 manifest、退出/回收、回复与唯一 successor）和 job_execution_clocks（冻结时间预算、累计 active 毫秒和精确 owner）。human_messages 用请求与版本关联回复；accepted 事件、回复已保存、注入、ACK、完成分别记账。文件使用现有 BLOB_DIR 下有界 CAS，30 天到期先持久阻断再删除；不可见/缺失/hash 不符不视为空文件。请求表是管理当前状态，不覆盖历史事件。见[人工续做](../HUMAN_CONTINUATION.md)。
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
 
@@ -21,7 +25,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 ## Schema 基线纪律
 
-[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v72 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
+[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v73 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
 
 
 ### 直接重建的授权保全（#1002 P2-13）
@@ -58,7 +62,7 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及质量协议/观察账本；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。#831 合入的工程基线 `fdb55a01` 已在 [Actions CI](https://github.com/SummerSec/DeepSonar/actions/runs/41298113058) 完成真实 schema67 rebuild、PGDMP 备份/pg_restore 恢复及 Finding-quality PostgreSQL/HTTP/worker 验收；历史本地结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，不能代替后续 SHA 的检查。
 
-保鲜门禁的单处编号核对：当前 schema v72，#1018 在 main `396fadab` 的基线71之上增加项目任务队列；该候选最终 SHA Actions 待验。主线已包含凭据历史保全、Canvas 引用索引、stopped Hub 准入及 Finding 候选引用的完整外键前缀索引。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替队列候选及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
+保鲜门禁的单处编号核对：当前 schema v73，#1074 增加人工请求与累计时钟；历史 schema72 的 #1018 在 main `396fadab` 的基线71之上增加项目任务队列；该候选最终 SHA Actions 待验。主线已包含凭据历史保全、Canvas 引用索引、stopped Hub 准入及 Finding 候选引用的完整外键前缀索引。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替队列候选及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
 
 ### Canvas 节点引用索引（#1002 P1-6）
 
@@ -137,7 +141,7 @@ Artifact、Finding、Verify、Research 和 Report 不是同一张“结果表”
 
 本轮复用audit_logs与现有project_knowledge_*基线，无新表、schema bump或增量迁移。system/scheduler的source_registered成功审计仅存Job/Attempt/Canvas及来源存在标记，不存正文。collector事务外准备有界CAS，项目行锁下重验后原子写work及逐Job source_collected链接；after_json保存registration_id/work_ref/attempt_id/input_count/manifest_sha256，摘要为单个来源冻结manifest的canonical SHA-256。source_collection_skipped记录error与安全原因，来源被collected/skipped持久消费后不再自动重建；坏源正文与Provider错误不进入原因投影。来源输入保留原verification_status，采集不等于验证。assignment.source_mode持久于Job冻结assignment；rubric为`evaluation:proposal:<id>`，绑定revision/input_digest/plan/base_refs，reviewer另获behavior记录，仅eval/review audience可读。事实入口见[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)、[来源准备](../../apps/scheduler/src/domains/project-knowledge/collector-sources.ts)与[work](../../apps/scheduler/src/domains/project-knowledge/work.ts)。
 
-[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)同一SQL快照汇总并分页：登记按resource_id去重，采集按同项目work_ref关联，待采集排除collected/skipped并集；工作source_count按采集链接去重，没有链接的显式work仅在有origin_job_id时回退1。项目active版本仍要求非revoked；usage/feedback要求project_id和owner_project_id均为本项目，排除全局/跨项目记录。skipped元数据最多10个去重来源，原因脱敏，不返回正文。登记、采集、流程完成、激活及模型报告分层，不新增效果账本。trial证据仍需真实资产版本/hash与独立Attempt绑定；治理hash变化不重绑历史。当前源码、未运行Actions与真实模型收益未知分开，取舍见[ADR 0022](adr/0022-project-knowledge-collection.md)。
+[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)同一SQL快照汇总并分页：登记按resource_id去重，采集按同项目work_ref关联，待采集排除collected/skipped并集；工作source_count按采集链接去重，没有链接的显式work仅在有origin_job_id时回退1。项目active版本仍要求非revoked；usage/feedback要求project_id和owner_project_id均为本项目，排除全局/跨项目记录。skipped元数据最多10个去重来源，原因脱敏，不返回正文。登记、采集、流程完成、激活及模型报告分层，不新增效果账本。trial证据仍需真实资产版本/hash与独立Attempt绑定；治理hash变化不重绑历史。当前源码、未运行Actions与真实模型收益未知分开，取舍见[ADR 0023](adr/0023-project-knowledge-collection.md)。
 
 ## 关键状态机
 
