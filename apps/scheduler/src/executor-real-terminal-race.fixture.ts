@@ -143,7 +143,7 @@ export async function runExecutor(act: () => Promise<void | RealAgentResult>, ro
   events = []; diagnosticRows = []; runnerCalls = 0; bundleCalls = 0; preflight = async () => {}; gate = undefined; scenario = act;
   const token = "offline-capability";
   try { await executeReal(jobId, "audit", { jobId, token, operationIds: operations, env: {
-    DEEPSONAR_JOB_ID: jobId, DEEPSONAR_API_TOKEN: token,
+    DEEPSONAR_JOB_ID: jobId, DEEPSONAR_CONTROL_TOKEN_FILE: "/workspace/.deepsonar/control-token",
     DEEPSONAR_API_BASE_URL: `${config.platformApi.sandboxUrl.replace(/\/$/, "")}/jobs/${jobId}`,
   } } as Parameters<typeof executeReal>[2]);
   } finally {

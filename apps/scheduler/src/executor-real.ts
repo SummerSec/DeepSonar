@@ -7,7 +7,7 @@ import { normalizeArchivedReaFact } from "./domains/cli-capability/rea-cli-fact.
 import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  MODEL_REQUEST_POLICY_BASE_URL,
+  MODEL_REQUEST_POLICY_BASE_URL, CONTROL_TOKEN_FILE,
   contextIdentity,
   normalizeRuntimeErrorDetails,
   requireAgentCliRuntimeAdapter,
@@ -648,7 +648,7 @@ export interface PreparedPlatformCapability {
   token: string;
   env: {
     DEEPSONAR_API_BASE_URL: string;
-    DEEPSONAR_API_TOKEN: string;
+    DEEPSONAR_CONTROL_TOKEN_FILE: string;
     DEEPSONAR_JOB_ID: string;
   };
 }
@@ -671,7 +671,7 @@ export async function preparePlatformCapability(
     token: grant.token,
     env: {
       DEEPSONAR_API_BASE_URL: baseUrl,
-      DEEPSONAR_API_TOKEN: grant.token,
+      DEEPSONAR_CONTROL_TOKEN_FILE: CONTROL_TOKEN_FILE,
       DEEPSONAR_JOB_ID: jobId,
     },
   };
@@ -719,7 +719,7 @@ export async function executeReal(
     platformCapability.jobId !== jobId
     || platformCapability.env.DEEPSONAR_JOB_ID !== jobId
     || platformCapability.env.DEEPSONAR_API_BASE_URL !== platformApiDiscoveryUrl
-    || platformCapability.env.DEEPSONAR_API_TOKEN !== platformCapability.token
+    || platformCapability.env.DEEPSONAR_CONTROL_TOKEN_FILE !== CONTROL_TOKEN_FILE
     || platformCapability.operationIds.length !== platformOperations.length
     || platformCapability.operationIds.some((operation, index) => operation !== platformOperations[index])
   ) {
@@ -906,7 +906,7 @@ emit_finding 必须遵守以上范围；Scheduler 会校验 profile、重算受�
   }
   env.DEEPSONAR_ALLOW_EGRESS = allowEgress ? "1" : "0";
   env.DEEPSONAR_CONTROL_TOOL_NAMES = JSON.stringify(controlToolNames);
-  if (platformApiDiscoveryUrl) Object.assign(env, platformCapability.env);
+  if (platformApiDiscoveryUrl) Object.assign(env, platformCapability.env, { DEEPSONAR_API_TOKEN: platformCapability.token });
   // Verify Job 必须在 mark_job_done 中提交 verdict；通过 API 参数约束让
   // CLI 在宿主软失败循环前拒绝缺少 verdict 的请求。
   if (isVerify) env.DEEPSONAR_CONTROL_REQUIRE_DONE_VERDICT = "1";

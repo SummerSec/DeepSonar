@@ -409,7 +409,8 @@ test("real executor passes the reserved Skill to the sandbox without putting the
   assert.match(source, /skills:\s*runtimeSkills as never/);
   assert.match(source, /preparePlatformCapability[\s\S]*mintJobCapabilityToken\(jobId, \{ operationIds \}\)/);
   assert.match(source, /DEEPSONAR_API_BASE_URL: baseUrl/);
-  assert.match(source, /DEEPSONAR_API_TOKEN: grant\.token/);
+  assert.match(source, /DEEPSONAR_API_TOKEN: platformCapability\.token/);
+  assert.match(source, /DEEPSONAR_CONTROL_TOKEN_FILE: CONTROL_TOKEN_FILE/);
   assert.match(source, /DEEPSONAR_JOB_ID: jobId/);
   assert.match(dispatcher, /platformCapability = await preparePlatformCapability\(jobId, snapshot\)/);
   assert.match(dispatcher, /DEEPSONAR_ALLOW_EGRESS:[\s\S]*\.\.\.platformCapability!\.env/);
