@@ -36,7 +36,7 @@ async function ptyFixture() {
 for (const code of [1000, 1006]) {
   test(`PTY close ${code} without exit frame must not manufacture a CLI exit code`, async () => {
     const { handle, emit } = await ptyFixture();
-    const observed = [];
+    const observed: Array<{ type: string }> = [];
     emit("close", { code, reason: "connection lost", wasClean: code === 1000 });
     await assert.rejects(async () => { for await (const chunk of handle) observed.push(chunk); }, /OPENSANDBOX_PTY_/);
     assert.deepEqual(observed, []);
