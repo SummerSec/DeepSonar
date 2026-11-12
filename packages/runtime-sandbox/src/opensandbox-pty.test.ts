@@ -12,6 +12,43 @@ import {
   type WebSocketLike,
 } from "./opensandbox-pty.js";
 
+type PtyEvent = { data?: unknown; message?: string; code?: number; reason?: string; wasClean?: boolean; error?: unknown };
+
+async function ptyFixture() {
+  const listeners = new Map<string, Array<(event: PtyEvent) => void>>();
+  const emit = (type: string, event: PtyEvent = {}) => listeners.get(type)?.forEach(listener => listener(event));
+  const ws: WebSocketLike = {
+    readyState: 1, binaryType: "arraybuffer",
+    send() {}, close() { emit("close", { code: 1000, reason: "host close", wasClean: true }); },
+    addEventListener(type, listener) {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+      if (type === "open") queueMicrotask(() => emit("open"));
+    },
+  };
+  const handle = await openOpenSandboxPty(
+    { httpUrl: "http://localhost:44772", headers: { "OPEN-SANDBOX-API-KEY": "endpoint-secret" } },
+    { command: "pi --mode rpc", pty: false },
+    { openWebSocket: () => ws, fetchImpl: async () => new Response(JSON.stringify({ session_id: "test-pty" })) },
+  );
+  return { handle, emit };
+}
+
+for (const code of [1000, 1006]) {
+  test(`PTY close ${code} without exit frame must not manufacture a CLI exit code`, async () => {
+    const { handle, emit } = await ptyFixture();
+    const observed = [];
+    emit("close", { code, reason: "connection lost", wasClean: code === 1000 });
+    await assert.rejects(async () => { for await (const chunk of handle) observed.push(chunk); }, /OPENSANDBOX_PTY_/);
+    assert.deepEqual(observed, []);
+  });
+}
+
+test("PTY exit frame without an integer exit_code must not default to success", async () => {
+  const { handle, emit } = await ptyFixture();
+  emit("message", { data: JSON.stringify({ type: "exit" }) });
+  await assert.rejects(async () => { for await (const _chunk of handle) { /* drain */ } }, /OPENSANDBOX_PTY_/);
+});
+
 test("OpenSandbox PTY framing encodes stdin and decodes stdout/stderr", () => {
   const encoded = encodePtyStdin("hello");
   assert.equal(encoded[0], PTY_BIN_STDIN);
