@@ -76,7 +76,7 @@ test("Anthropic SSE joins start input and final cumulative output with stop", ()
   assert.deepEqual(scan("messages", antStream, true), expected);
   assert.deepEqual(scan("messages", event(antStart) + event(antDelta) + event(antDelta) + event(antStop), true), expected);
   assert.equal(scan("messages", event(antStart) + event(antDelta), true), null);
-  assert.equal(scan("messages", event(antStart) + event(antStop), true), null);
+  assert.deepEqual(scan("messages", event(antStart) + event(antStop), true), { input: 10, output: 1, total: 16, cacheRead: 3, cacheWrite: 2 });
   assert.equal(scan("messages", event(antStart) + event(antDelta) + event({ ...antDelta, usage: { output_tokens: 2 } }) + event(antStop), true), null);
   assert.equal(scan("messages", event({ type: "error", error: { type: "overloaded_error" } }) + antStream, true), null);
 });
@@ -181,4 +181,23 @@ test("stream zero usage is known, and fractional usage is unknown across protoco
   assert.deepEqual(scan("messages", event(zeroStart) + event(zeroDelta) + event(zeroDelta) + event(antStop), true), zero);
   assert.equal(scan("chat/completions", event(chatEnd) + event({ ...zeroChat, usage: { ...zeroChat.usage, prompt_tokens: 0.5 } }) + event("[DONE]"), true), null);
   assert.equal(scan("responses", event({ type: "response.completed", response: { ...zeroResponse, usage: { ...zeroResponse.usage, output_tokens: 0.5 } } }), true), null);
+});
+
+test("#1082: complete message_start usage settles without any message_delta", () => {
+  // 现场形态：聚合路由把完整 usage 放在 message_start，全流不发 message_delta。
+  const completeStart = event({ type: "message_start", message: { ...anthropic, stop_reason: null } }, "message_start");
+  const expected = scan("messages", anthropic);
+  assert.deepEqual(scan("messages", completeStart + event(antStop, "message_stop"), true), expected);
+  // 只承载 stop_reason、不带 usage 的 delta 是协议合法形状，不得拒信。
+  const deltaWithoutUsage = { type: "message_delta", delta: { stop_reason: "end_turn" } };
+  assert.deepEqual(scan("messages", completeStart + event(deltaWithoutUsage, "message_delta") + event(antStop, "message_stop"), true), expected);
+  // pending output（缺 output_tokens）没有 delta 补全时仍然 fail-closed。
+  const pendingStart = event(
+    { type: "message_start", message: { ...anthropic, stop_reason: null, usage: { input_tokens: 10, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 } } },
+    "message_start",
+  );
+  assert.equal(scan("messages", pendingStart + event(deltaWithoutUsage, "message_delta") + event(antStop, "message_stop"), true), null);
+  assert.equal(scan("messages", pendingStart + event(antStop, "message_stop"), true), null);
+  // usage 存在但缺 output_tokens 的 delta 依旧拒信。
+  assert.equal(scan("messages", completeStart + event({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { input_tokens: 10 } }, "message_delta") + event(antStop, "message_stop"), true), null);
 });

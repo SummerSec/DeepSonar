@@ -75,6 +75,7 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
   let buffer = "", eventName = "", data: string[] = [], frameBytes = 0;
   const chatChoices = new Map<number, boolean>();
   let observed: UsageBreakdown | null = null, anthropicStart: RecordValue | null = null, anthropicDelta = false;
+  let anthropicPendingOutput = false;
   const observe = (next: UsageBreakdown | null): void => {
     if (!next) { failed = true; return; }
     if (observed && (next.input < observed.input || next.output < observed.output || next.cacheRead < observed.cacheRead || next.cacheWrite < observed.cacheWrite)) { failed = true; return; }
@@ -129,9 +130,13 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
         // already forms the monotonic baseline: observing it with output 0 keeps
         // `observe`'s undercount guard armed for the first delta.
         observe(usage(start.pendingOutput ? { ...anthropicStart, output_tokens: 0 } : anthropicStart, "anthropic"));
+        anthropicPendingOutput = start.pendingOutput;
       } else if (value.type === "message_delta") {
         const deltaUsage = record(value.usage);
-        if (!anthropicStart || !deltaUsage || count(deltaUsage.output_tokens) === null) { failed = true; return; }
+        // #1082: `message_delta` 允许只承载 stop_reason 而不带 usage；没有 usage 就没有新证据，
+        // 帧本身不是拒信理由（此时仍要求 start 合法，pending output 不许借这条路径放行）。
+        if (!deltaUsage) { if (!anthropicStart) failed = true; return; }
+        if (!anthropicStart || count(deltaUsage.output_tokens) === null) { failed = true; return; }
         // Usage fields are cumulative snapshots. Preserve omitted fields from
         // the last snapshot, but validate every supplied input/cache update too:
         // ignoring them would undercount providers reporting revised totals.
@@ -140,7 +145,10 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
         if (!failed) anthropicStart = nextUsage;
         anthropicDelta = true;
       } else if (value.type === "message_stop") {
-        if (!anthropicStart || !anthropicDelta || !observed) failed = true;
+        // #1082: start 已带完整 usage（含 output_tokens）时，聚合路由可以整条流都不发
+        // message_delta，此时以已 observe 的 start 快照落账；仍缺 output 的 pending 形状
+        // 必须由 delta 补全，否则继续 fail-closed（#1059 契约不外扩）。
+        if (!anthropicStart || !observed || (!anthropicDelta && anthropicPendingOutput)) failed = true;
         ended = true;
       } else if (value.type !== "ping" && (!anthropicStart || !["content_block_start", "content_block_delta", "content_block_stop"].includes(value.type))) failed = true;
     }
