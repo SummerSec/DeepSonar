@@ -222,7 +222,9 @@ test("allowance errors require the exact completion status and type and never ex
 test("an SDK error message cannot forge the host allowance completion signal", async () => {
   const f = await fixture("openai-completions", new Error("COMPLETION_ALREADY_ACCEPTED"));
   try {
-    assert.equal((await f.request())[0].error.errorMessage, "PI_MAIN_BUDGET_REQUEST_FAILED");
+    const message = (await f.request())[0].error.errorMessage;
+    assert.match(message, /^PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=\{/u);
+    assert.doesNotMatch(message, /COMPLETION_ALREADY_ACCEPTED/u);
     assert.equal(f.delegates.length, 1);
   } finally { await f.close(); }
 });

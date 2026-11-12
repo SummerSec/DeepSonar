@@ -99,11 +99,17 @@ async function gatewayFixture(scenario) {
     close: () => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); } };
 }
 
-function assertNativeSettlementRefusal(records, allowanceReads) {
+function assertNativeSettlementRefusal(records, allowanceReads, scenario) {
   const first = records.find(record => record.type === "message_end" && record.message?.role === "assistant");
   assert.equal(first?.message.stopReason, "error");
-  assert.match(first.message.errorMessage, /synthetic no-start claim/u,
-    "the original SDK failure must reach the CLI, not be replaced by an internal allowance rejection");
+  const message = "settlement refusal must preserve its production diagnostic, not an internal allowance rejection";
+  if (scenario === "lookup-denied") {
+    const prefix = "PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=";
+    assert.ok(first.message.errorMessage.startsWith(prefix), message);
+    assert.deepEqual(JSON.parse(first.message.errorMessage.slice(prefix.length)), {
+      version: 1, stage: "settlement", category: "permanent_failure", status: 403,
+    }, message);
+  } else assert.match(first.message.errorMessage, /synthetic no-start claim/u, message);
   const nativeRetries = records.filter(record => record.type === "auto_retry_start").length;
   assert.equal(allowanceReads, 1 + nativeRetries,
     "only an explicit native retry may read another allowance after settlement refusal");
@@ -132,7 +138,7 @@ export async function runNativePiMainRecovery() {
     // This copy is NEVER the production-path proof above or an installed file.
     let mutantSource = PI_MAIN_REQUEST_BUDGET_SOURCE;
     for (const [from, to] of [
-      ["if (response.status !== 200) { await response.body?.cancel(); return false; }",
+      ["if (response.status !== 200) { await response.body?.cancel(); throw { status: response.status }; }",
         "if (response.status !== 200) { await response.body?.cancel(); return true; }"],
       ["return value?.status === 'not_started' && value.reason === 'gateway_transient';", "return true;"],
     ]) {
@@ -184,12 +190,12 @@ export async function runNativePiMainRecovery() {
         } else {
           assert.equal(gateway.calls.length, 1, "unconfirmed no-start cannot issue another model request");
           if (mutated) {
-            assert.throws(() => assertNativeSettlementRefusal(client.records, gateway.allowances()), {
-              code: "ERR_ASSERTION", message: /original SDK failure must reach the CLI/u,
+            assert.throws(() => assertNativeSettlementRefusal(client.records, gateway.allowances(), scenario), {
+              code: "ERR_ASSERTION", message: /settlement refusal must preserve its production diagnostic/u,
             }, "a permissive settlement mutation must not pass the native refusal oracle");
             const nativeRetries = client.records.filter(record => record.type === "auto_retry_start").length;
             assert.ok(gateway.allowances() > 1 + nativeRetries, "mutation must expose the hidden internal recovery request");
-          } else assertNativeSettlementRefusal(client.records, gateway.allowances());
+          } else assertNativeSettlementRefusal(client.records, gateway.allowances(), scenario);
         }
         const after = await client.command("get_state");
         assert.equal(after.success, true); assert.equal(after.data.sessionId, before.data.sessionId);

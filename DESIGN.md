@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-12
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
@@ -341,6 +341,8 @@ OpenSandbox upgrade baseline (2026-11-01): installed SDK 1.2 and canonical serve
 **DSH 当前 as-built（2026-10-10）：** 新执行版本是官方 `@deepseek-ai/dsh@0.2.1-rc.2`，选择官方 [`dsh-v0.2.1-rc.2`](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-rc.2)；`0.2.1-alpha.2`（Oct 9）未选。版本与完整 npm closure 锁在 `agent-harness/dsh-runtime/package-lock.json`，镜像在 `/opt/deepsonar/dsh` 以 `npm ci --omit=dev --ignore-scripts --no-audit --no-fund` 安装，唯一 launcher 是官方 `dsh --profile`。`packages/runtime-sandbox/src/dsh-profile.ts` 为 `deepsonar` profile 写入 `bundles: []` 和显式 plugin allowlist，移除 spine、UI/web、settings/credential discovery、native DeepSeek routes、plugin-manager、telemetry 与 home overrides；安装包内 dormant UI 依赖不会启动服务。Standard 使用 native tools，PTC 使用 `ptc` 与 `@deepseek-ai/dsh-ptc-runtime-node` 的 `run_code`。Provider route/model 强制经 Model Gateway，沙箱只得到短期 token；skills 只从 Scheduler home 的 `${DSH_HOME}/skills` 根发现。`session.v4.jsonl` 是当前精确归档路径，历史 v0–v3 仅供 viewer 读取。父会话 idle 时只要受认证谱系下仍有活跃子代理就不催促或关闭；子代理 finished 后等待父处理回传并再次 idle 才进入完成门。官方 JSON-RPC 只提供 initialize/prompt/shutdown；同进程 follow-up 可用，跨进程持久 resume 不支持，adapter 以 `persistentSessionResume: false` 返回 `CONTEXT_RESUME_UNSUPPORTED`，不静默新建或重试。
 
 **Model Gateway 目录校验与 alias 语义（#570 / #656 / #679 / #707）：** 选模准入只认账号 `settings_config_json` 按其 Agent CLI 方言解析的模型 ID，探测 `model_catalog_json` 不授予选模资格。Job 先解析 Hub/runtime profile 的 `model_ref`、项目缺省和全局角色模型，并应用受治理的候选、能力与 fallback 规则；未指定时优先取账号已配置模型首项，再由 Provider/CLI 投影补缺省。显式模型没有符合账号配置清单的候选时以 `provider_credential_no_match` 返回结构化 RepairFeedback；选中后的模型准入继续 fail closed。仅无显式模型且名单为空的 CLI 缺省路径允许软降级。应急直通只可由平台 env `DEEPSONAR_ALLOW_MODEL_CATALOG_PASSTHROUGH=true` 或管理员级项目 Agent allowlist `allow_model_catalog_passthrough` 授权，RoleConfig 字段不再授权。真正使用 CLI 内置缺省时，快照以 `cli-default:<name>` 标记，运行时 concurrency / CLI 请求生成层剥掉前缀；`job_usage_ledger.model`、`model_catalog_match` 与尽力读取的 `upstream_reporting_model` 保持各自口径，无上游报告字段不伪造。
+
+#1083 的 [Pi 请求失败诊断与分类](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-请求失败诊断与分类1083)保留有界脱敏的错误阶段与原因类别，防止通用错误码掩盖故障；分类不授予额外恢复权，不触发额外 CLI 重启，模型请求仍要求原生命周期/预算及持久 no-start 见证，未知效果停止。本轮最终 SHA Actions 待验。
 
 **#1002 P1-9 同 Job 模型失败恢复：** Pi 的 SDK 生成前扩展在同存活 Job/Attempt/Session 内，只对无内容且有 scoped Kernel no-start 证明的失败准备新关联请求。内核在原 admission 事务复查 owner/lease/deadline/原预算，并用现有 effect intent 跨 token/Attempt 消费创建期冻结的恢复许可；历史缺许可/计数来源、重复引用、partial/unknown 或 Provider 文案均不授权继续。空失败不留下重复 message_start；原快照、已接受效果和 never replay policy 不改、不退请求额度，不重启 Agent。Gateway 单次原字节传输不变；SDK/SQL 回归保留，#1036 D 新增固定 Pi 的同进程原生回归（受控 Gateway，不冒充真实账本），最终 SHA Actions 待验，详见[契约](docs/MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。
 
