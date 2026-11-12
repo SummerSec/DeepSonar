@@ -92,6 +92,8 @@
 
 > **运行镜像治理（#979）**：[旧镜像诊断与恢复](RUNTIME_IMAGE_GOVERNANCE_979.md)记录 DSH 插件缺失、Pi OM 旧 wrapper、已推送产物核验与尚未完成的正式 Release；启动检查不等于线上目录已修复。
 
+#1094 的[平台 HTTP bootstrap](AGENT_CLI_RUNTIME_ADAPTERS.md#平台-operation-的-http-bootstrap1094)统一区分平台 operation 与 CLI 原生工具；只修提示，不改权限或恢复历史 Job，最终 SHA Actions 与模型效果分别记录。
+
 ## 状态图例
 
 | 标记 | 含义 |

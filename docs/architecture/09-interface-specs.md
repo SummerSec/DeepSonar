@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-12
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -124,6 +124,8 @@ Payload preParsing commits holdout access separately before decoding JSON, media
 Report GET uses one caller repeatable-read snapshot to reconstruct completed work, immutable observations, actual evaluation and current source/identity bindings, then recompute metrics/digests. Its explicit allowlist exposes bindings, aggregate ratios/counts and blockers, not report.input, raw labels or selector traces. Review checks durable chain/account conflicts and this current report in the same snapshot. Both still return quality_status=not_evaluated; structural review/revoke is not external human verification, a current certificate, promotion or public strong-relation authority.
 
 ## Job-scoped Control API
+
+#1094 的平台提示统一把冻结清单标为 HTTP operation allowlist，明确它们不是 CLI 原生工具，函数式角色示例仅描述 JSON payload。系统提示、工作区指令、启动消息与完成门催促提供一致的能力发现/HTTP 提交入口，不能因同名原生工具不存在而推断 API 不可用或改走另一通道。发现、认证、幂等与回执仍受现有契约约束，Runtime Adapter 不代发 HTTP；工程回归与模型效果边界见[运行时专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#平台-operation-的-http-bootstrap1094)。
 
 Control API 由 Scheduler 动态注册 operation、schema 和当前 Job 的 allowlist。Agent 持有短期 capability Bearer token，调用 `/control/v1/jobs/{jobId}/capabilities`、`/openapi.json` 和 operation 入口。宿主依次校验 token hash/Job/project/canvas、Job active 状态、过期/撤销、snapshot hash、operation allowlist、共享 Zod schema、可见引用和业务状态；Job 终态后 token 失效。只读 graph/capability/Skill 查询也受 Job 预算和脱敏约束。
 

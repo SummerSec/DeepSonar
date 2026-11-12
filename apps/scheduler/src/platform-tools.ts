@@ -1,4 +1,5 @@
 import { SHARED_ASSETS_READONLY_ROOT } from "./domains/shared-assets/catalog.js";
+import { PLATFORM_CONTROL_HTTP_BOOTSTRAP } from "./platform-control-skill.js";
 
 const PLATFORM_TOOL_USAGE: Record<string, string> = {
   list_available_roles: [
@@ -93,7 +94,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "- 无 Finding 的工程交付或有界阴性结果用 artifact.task_result：schema_version:1、kind(delivery/negative_result/blocked/not_executed)、task_contract_sha256、target、与契约一致的baseline、criterion_ids、method、observed、limitations、evidence_refs。先保存本 Job/Attempt 含留存文件 URI/hash 的原始证据，再引用其 Fact；delivery/negative_result 必须有证据，未执行或受阻写对应 kind 和限制。结果是待评声明，不是成功；不得将预算耗尽、工具失败写成阴性，也不必创建假 Finding。不能混用 goal_review/verification 或自选 artifact_key。",
     "- 独立目标评审使用冻结 task_goal_review 指派，通过 artifact.goal_review 提交整个指定判据的 expected/actual/rationale、限制和本 Job Fact 引用；先保存含本 Attempt 保留文件 URI/hash 的独立证据。没有指派不能自评，satisfied 不等于整体完成或赏金资格。",
     "- 直接参数：`title`（至少 2 个非空白字符）；`description`（至少 16 个非空白字符）；`quantities`（可选，最多 20 条 `{value, unit, basis, ref?}` 数值口径，承重数字必须声明）；`artifact`（可选，通用 Artifact：kind/schema_version/claims/evidence/relations/extensions）；`verification`（可选，仅 Hub 回弹补证 Job 接受）。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
-    "- 长内容或收到 HTTP 错误响应/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",
+    "- 长内容先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；明确大小/截断拒绝按 repair 修正，结果未知按该 operation 契约查询回执或状态；禁止用故意缩短的语义内容重试。",
     "- `verification` 字段：`finding_id`、`evidence_kind`（review|test）、`outcome`（supports|refutes|inconclusive）、`subject_revision` 必填；test 还应含 `steps`、`expected`、`actual`（或 artifact_refs）。review/test 用 `attempted_refutation` 字符串数组记录实际尝试的反例或阴性对照；不得从 limitations 推断反证尝试。没有目标 Finding 的普通测试提交普通 Fact，不传 verification、不编造 finding_id。",
     "- 时机：每得到一个不在画布中的原子事实立即调用；单 Job 最多 100 条。description 写明证据、来源、推理边界和仍未知内容。",
     '- 普通示例：`{"title":"登录接口使用独立限流键","description":"证据：apps/api/login.ts:42 以 IP 生成键；来源：本地源码；未知：反向代理是否覆盖客户端 IP。"}`',
@@ -104,7 +105,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "- 已冻结任务契约时，先 emit_fact 保存观察，再提交 outcome_claim（schema_version:1、task_contract_sha256、target、可选baseline、criterion_assessments、evidence_refs；赏金附加rule_assessments）。criterion_assessments 使用 criterion_id、result(matches/does_not_match/unknown) 和同任务 Fact UUID。目标、范围、证据及排除项必须评估，至少关联一项 acceptance 判据；matches 仅表示贡献关联，不代表完成全部判据。未知补证，无关或排除只留观察；准入仅产生研究候选。高置信提交资格另需独立复核、可复现证据、攻击链和已知问题适用性，不能用分数替代。",
     "- 来源身份限定在本 Job 的 profile/title/location/rule_id；相同来源重复提交须保持内容一致，内容冲突明确拒绝。当前不支持修订，补充验证证据请用 emit_fact 引用已有 Finding；不要改标题伪造修订或继承其它 Job 的验证状态。",
     "- 直接参数：`title` 至少 8 个非空白字符、`summary` 至少 32 个非空白字符；severity 只能是 `low|medium|high|critical`。`location`、`rule_id`、`quantities`（可选数值口径）可选。安全 Finding 确认需要结构化 `impact`（attacker_entry / victim_resource / impact_flow 或有依据的 impact_waiver），不能只把影响写进 summary。也可只传 `payload_file`，值为 /workspace 下的安全相对路径。",
-    "- 长内容或收到 HTTP 错误响应/截断后，先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；禁止用故意缩短的语义内容重试。",
+    "- 长内容先 Write 完整 JSON 到 /workspace，再只传 `payload_file`；明确大小/截断拒绝按 repair 修正，结果未知按该 operation 契约查询回执或状态；禁止用故意缩短的语义内容重试。",
     "- 时机：有具体位置、触发路径和证据的安全问题一经确认就调用；单 Job 最多 20 条。是否派生 verify 由调度器按冻结规则决定，请求里不要带建议字段。",
     '- 示例：`{"title":"重置令牌可重复使用","severity":"high","location":"src/auth/reset.ts:88","summary":"成功重置密码后令牌仍未失效，使用同一令牌再次提交请求可修改目标账户密码，导致账户可被重复接管。","rule_id":"AUTH-RESET-REPLAY","impact":{"attacker_entry":"持有已使用重置令牌的攻击者","victim_resource":"目标账户密码与会话","impact_flow":"重放未失效令牌再次修改密码并接管账户"}}`',
   ].join("\n"),
@@ -115,7 +116,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "- 参数只能三选一：`complete: {from, description}`，或 `intents: [{from, role, description, prompt}]`，或 `payload_file: \"相对路径\"`（读取 /workspace 下预先 Write 的 JSON）。",
     "- `from` 只能填写本 Job 已投影的 root/fact/finding id（YAML 注入或 `graph_query` 返回的 `referable_ids`）；`role` 只能原样选择本轮 `list_available_roles` 的 name（英文 id）；可选 `runtime_image_key` / `agent_cli` / `credential_id` 只能原样来自本轮对应 list_available_* 目录；`description` ≥8 字符；`prompt` ≥32 字符且必须让全新 Worker 可独立执行。",
     '- 多意图或长 prompt 时**必须**用 `payload_file`：先 Write 完整 JSON（根对象含 complete 或 intents），再 `{"payload_file":"hub_decision_payload.json"}`。直接塞大 JSON 可能截断并返回 HTTP 错误响应。',
-    "- 成功提交后每个 Job 只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可重试。不要在成功后为“补全”再次调用；不要与 `request_human` 混用。",
+    "- 已接受决策每个 Job 只能一个；不得用新 key 或改内容新建另一提案，契约明确支持时可原样传输恢复。拒绝按 repair.category/next_action 处理，结果未知按该 operation 契约查询回执或状态；不要与 `request_human` 混用。",
     '- 完成示例：`{"complete":{"from":["<fact-id>"],"description":"目标已由引用证据完整覆盖。"}}`',
     '- 派发示例：`{"intents":[{"from":["<root-id>"],"role":"explore","description":"确认目标材料与版本","prompt":"定位任务目标的权威材料，记录版本、来源和仍缺失的信息；只提交新增事实。"}]}`',
     '- 大 payload 示例：Write `/workspace/hub_decision_payload.json` 后调用 `{"payload_file":"hub_decision_payload.json"}`',
@@ -154,7 +155,7 @@ const PLATFORM_TOOL_USAGE: Record<string, string> = {
     "- 平台阻塞：`subject={type:\"platform_blocker\",kind}`；kind 只能是 authorization|credential|high_risk_action|business_decision。",
     "- 先写清问题、缺少的输入、它对当前任务的影响和需要人作出的具体决定；`required_action` 逐项说明可执行操作和已核实的位置，未知时说明未知；`reply_instructions` 给出回复格式及拒绝或暂不提供的选择；`after_reply` 说明收到不同回复后的业务计划。",
     "- 凭据只请求使用当前已知治理配置中的非秘密引用；不得回显、索取或让人粘贴秘密，也不得捏造配置入口。回复不扩权、不能代替 ACK 或表示任务完成，恢复仍需原权限、预算、期限及效果准入；平台可对账故障不得伪装成用户业务决策。",
-    "- 调用后停止执行，不再调用 `mark_job_done` 或 `submit_hub_decision`。",
+    "- 接纳后停止业务执行，不再提交完成或冲突终态；契约支持的原样传输恢复不授权继续业务，明确拒绝时按 repair 处理。",
     '- 平台阻塞示例：`{"reason":"缺少当前 Job 已授权的隔离测试凭据引用，无法安全连接测试环境。","subject":{"type":"platform_blocker","kind":"credential"},"guidance":{"question":"能否通过已知的治理配置提供经授权的只读凭据引用？","required_action":"在组织已知的凭据治理配置中核对并准备最小只读引用；若没有已知配置入口或引用，请明确说明无法配置，不要猜测入口或粘贴秘密。","reply_instructions":"按“结果：已配置/未配置；凭据引用：非秘密引用或无；用途：隔离测试”回复，不要发送密钥、令牌或密码。","after_reply":"收到后按原 Job 权限复核该引用与任务范围；符合才继续验证，否则保留阻塞。回复不扩权、不构成 ACK 或任务完成。"}}`',
   ].join("\n"),
   graph_query: [
@@ -206,25 +207,39 @@ const PLATFORM_TOOL_CAUTIONS: Record<string, string> = {
   describe_capability: "注意：id 必须来自本轮 list/search；version/digest 不匹配会返回 RepairFeedback。",
   validate_composition: "注意：组合不能扩大冻结 Job 的 platform_tools、凭据、镜像或出网；失败时按 RepairFeedback 修正后重提。",
   preview_materialization: "注意：只预览冻结 digest 与模块集合；成功预览不等于已经激活 Pack。",
-  emit_progress: "注意：只用于增量进度，可按需多次调用；不能代替最终结果，仅在 HTTP 请求失败或参数校验失败后修正并重试。",
-  emit_fact: "注意：每个新增可验证事实提交一次，禁止用故意缩短的内容重试；遇到 HTTP 错误响应或截断时，写入完整 JSON 后使用 payload_file。",
-  emit_finding: "注意：只提交有证据支撑的 Finding；验证是否派生由 Scheduler 决定；遇到 HTTP 错误响应或截断时用 payload_file 提交完整内容。",
-  submit_hub_decision: "注意：Hub 在 mark_job_done 前调用，complete、intents、payload_file 必须三选一；成功后只允许一次，仅在 HTTP 请求失败或参数校验失败后重试。",
+  emit_progress: "注意：只用于增量进度，可按需多次调用；不能代替最终结果，拒绝按 repair.category/next_action 处理，传输恢复保持原 key 和 payload。",
+  emit_fact: "注意：每个新增可验证事实提交一次，禁止用故意缩短的内容重试；明确大小/截断拒绝按 repair 修正为 payload_file，结果未知按该 operation 契约查询回执或状态。",
+  emit_finding: "注意：只提交有证据支撑的 Finding；验证是否派生由 Scheduler 决定；明确大小/截断拒绝按 repair 修正为 payload_file，结果未知按该 operation 契约查询回执或状态。",
+  submit_hub_decision: "注意：Hub 在 mark_job_done 前调用，complete、intents、payload_file 必须三选一；已接受决策不得用新 key 或修改 payload/revision 新建提案；契约明确支持时可原样传输恢复；拒绝按 repair.category/next_action 处理，结果未知按该 operation 契约查询回执或状态。",
   submit_plan: "注意：v1 只读历史审计；新执行使用 v2 objective/route identity。Scheduler 会在 Hub owner 事务内复用既有 Intent 准入、Job/Attempt 和 Evidence 路径。拒绝后按 RepairFeedback 修正；不要用新 key 重置预算。",
   submit_plan_result: "注意：v2 结果必须匹配当前 objective、route 和 Plan SHA；模型 execution 不能代替成功 Job 输出。blocked/needs_human 走既有停止路径，complete 仍受 Verify/报告门禁。",
-  mark_job_done: "注意：仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；首次合法 summary 为权威结果，迟到的重复调用会被忽略且不会覆盖，因此只调用一次，成功后不得重试。",
-  request_human: "注意：这是终态人工阻塞请求；reason、subject 和四字段 guidance 均必填。先说明缺失输入、影响和具体决定，再写逐项操作、回复格式/可选决定与回复后的业务计划。凭据只引用已知治理配置，不回显秘密或捏造入口；回复不扩权、不代表 ACK 或完成，平台问题不能伪装为业务决定。成功后停止；仅 HTTP 请求失败或参数校验失败后按原规则重试。",
+  mark_job_done: "注意：仅主协调 Agent 在所有子代理结束后调用，子代理不得调用；完成提案按持久回执处理；响应丢失先用原 key 查询，persisted_deferred 仅在原 Job/执行器仍活动时按 Skill 用原 key、revision、payload 恢复本地门；明确可修正拒绝才用新 key/下一 revision。",
+  request_human: "注意：这是终态人工阻塞请求；reason、subject 和四字段 guidance 均必填。先说明缺失输入、影响和具体决定，再写逐项操作、回复格式/可选决定与回复后的业务计划。凭据只引用已知治理配置，不回显秘密或捏造入口；回复不扩权、不代表 ACK 或完成，平台问题不能伪装为业务决定。接纳后停止；拒绝按 repair.category/next_action 处理，结果未知按该 operation 契约查询回执或状态。",
   graph_query: "注意：先 overview 再收窄；不要用多次查询拼回全图。from 只能引用返回的 referable_ids。超限后收窄查询或改用 overview，不要换 canvas。",
   list_shared_assets: "注意：只读取返回的冻结挂载路径；不得修改共享挂载，也不得通过 HTTP、curl 或 S3 另行获取。",
-  publish_shared_asset: "注意：只发布普通 /workspace 工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，仅在 HTTP 请求失败或参数校验失败后重试。",
-  ack_human_message: "注意：只有显式 ACK 才算已确认；message_id 必须来自注入文本，不得用自然语言替代；仅在 HTTP 请求失败或参数校验失败后重试。",
+  publish_shared_asset: "注意：只发布普通 /workspace 工作文件；不得发布平台运行目录或 CLI 用户/配置目录中的内容，拒绝按 repair.category/next_action 处理，结果未知按该 operation 契约查询回执或状态。",
+  ack_human_message: "注意：只有显式 ACK 才算已确认；message_id 必须来自注入文本，不得用自然语言替代；拒绝按 repair.category/next_action 处理，结果未知按该 operation 契约查询回执或状态。",
 };
 
 /**
  * Worker 面向的短调用规则——唯一短文案源。传输/发现/幂等/修复细节见 DEEPSONAR_CONTROL_SKILL。
  */
 export const PLATFORM_CONTROL_CALLING_RULES =
-  "调用规则：只能按静态 `deepsonar-control` Skill，通过 Agent 自身 HTTP 工具直接调用本 Job 已声明并注入的 Job-scoped control API（Runtime Adapter 不代发 HTTP）。决策/Finding/事实/摘要仅以实际 API 调用为准，普通文本不算提交。不得使用其他控制通道、shell 写控制文件或猜测管理路由，也不得在 API 失败后回退。API 返回 `accepted` 只表示 Scheduler 已接收，仍会重验并记账；HTTP/参数错误须修正后重试，不得把失败当作已上报。结束前核对契约要求的每次调用都已返回 accepted。详情见 deepsonar-control Skill。";
+  "调用规则：只能按静态 `deepsonar-control` Skill，通过 Agent 自身 HTTP 工具直接调用本 Job 已声明并注入的 Job-scoped control API（Runtime Adapter 不代发 HTTP）。决策/Finding/事实/摘要仅以实际 API 调用为准，普通文本不算提交。不得使用其他控制通道、shell 写控制文件或猜测管理路由，也不得在 API 失败后回退。API 返回 `accepted` 只表示 Scheduler 已接收，仍会重验并记账；不得把失败或结果未知当作已上报。结束前核对本轮契约与回执状态。\n\n" + PLATFORM_CONTROL_HTTP_BOOTSTRAP;
+
+/** Startup and completion nudges use the same HTTP transport and exact frozen operations. */
+export function platformControlPrompt(operationIds: readonly string[], contract: string): string {
+  return [PLATFORM_CONTROL_CALLING_RULES, `已授权 HTTP operation：${operationIds.join(", ")}`,
+    "只按此 allowlist 与能力发现结果调用；业务指令中的示例不增加授权。", contract].join("\n\n");
+}
+
+export function platformControlNudge(operationIds: readonly string[], role: "hub" | "verify" | "worker"): string {
+  const decision = role === "hub" && operationIds.includes("submit_hub_decision")
+    ? "仅决策尚未接受时创建 submit_hub_decision 提案（complete、intents 或 payload_file 三选一）；已接受决策不得用新 key 或修改 payload/revision 新建提案，契约支持时按原回执原样恢复。" : "";
+  const completion = role === "verify" ? "summary 和 verdict（confirmed/rework/needs_human/refuted）" : "summary";
+  return platformControlPrompt(operationIds,
+    `先核对本轮结果、执行状态与原回执，按原结果契约补交尚未接受且已授权的 operation。${decision}仅首次提案尚未提交时通过 HTTP 提交 mark_job_done，带上 ${completion}；明确可修正拒绝按 repair 用新 key/下一 revision 修正。已接受提案按原回执处理；persisted_deferred 只按 Skill 恢复原活动执行器的本地门。已接受人工请求则停止业务执行；原样传输恢复不授权继续业务；结果未知按该 operation 契约查询回执或状态，不换 key 或重复已接受效果。`);
+}
 
 export function platformToolGuide(toolNames: string[]): string {
   const enabled = new Set(toolNames);

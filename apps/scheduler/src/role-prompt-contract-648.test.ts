@@ -12,8 +12,8 @@ import {
   allowedPlatformTools,
   resolvePlatformTools,
 } from "@deepsonar/shared-types";
-import { instructionDocument, resultContract } from "./executor-real.js";
-import { platformToolGuide } from "./platform-tools.js";
+import { instructionDocument, resultContract, PLATFORM_SYSTEM_PROMPT } from "./executor-real.js";
+import { platformControlNudge, platformControlPrompt, platformToolGuide } from "./platform-tools.js";
 import { buildVerifyJobPrompt } from "./verify-prompt.js";
 import { RUNTIME_TEST_TOOLCHAIN_POLICY, withRuntimeTestToolchainPolicy, runtimeEvidencePolicy, SPECIALTY_RUNTIME_IMAGE_POLICIES } from "./domains/role-runtime-snapshot/application.js";
 
@@ -225,4 +225,75 @@ test("Report composition permits bounded summary and deterministic large-report 
   assert.doesNotMatch(composed, /summary` 为\*\*完整 Markdown 正文/);
   assert.doesNotMatch(executorSource, /尽量引用 Finding id 或标题/);
   assert.match(executorSource, /不能容纳时只提交有界摘要，Scheduler 从冻结 report-input\.json/);
+});
+
+test("#1094 startup and composed Test instructions distinguish HTTP operations from native tools", () => {
+  // Seeded business instructions deliberately retain operation(payload) examples.
+  // The platform-owned prompt must resolve their transport before the first call.
+  const composed = composedInstructions("test", "deepsonar-base");
+  assert.match(composed, /mark_job_done\(/);
+  for (const prompt of [PLATFORM_SYSTEM_PROMPT, composed, platformToolGuide(["emit_fact", "mark_job_done"])]) {
+    assert.match(prompt, /不是 CLI 原生工具/);
+    assert.match(prompt, /GET \$DEEPSONAR_API_BASE_URL\/agent\/capabilities_list/);
+    assert.match(prompt, /POST \$DEEPSONAR_API_BASE_URL\/operations\/:operationId/);
+    assert.match(prompt, /Authorization: Bearer \$\(cat \/workspace\/\.deepsonar\/control-token\)/);
+    assert.match(prompt, /Idempotency-Key/);
+    assert.match(prompt, /X-DeepSonar-Proposal-Revision/);
+    assert.doesNotMatch(prompt, /平台只认工具调用|Agent CLI 实际显示的同名工具/);
+  }
+});
+
+test("#1094 every result contract requires HTTP submission rather than a same-name CLI call", () => {
+  for (const flags of [[true, false, false, false], [false, true, false, false],
+    [false, false, true, false], [false, false, false, true], [false, false, false, false]] as const) {
+    for (const tools of [[], ["emit_fact", "emit_finding", "mark_job_done"]] as const) {
+      const contract = resultContract([...tools], flags[0], flags[1], flags[2], flags[3]);
+      assert.match(contract, /HTTP/);
+      assert.doesNotMatch(contract, /平台只认工具调用|工具参数/);
+    }
+  }
+  assert.doesNotMatch(executorSource, /可用工具：\$\{controlToolNames/);
+});
+
+test("#1094 startup and completion nudges share HTTP bootstrap without expanding the frozen allowlist", () => {
+  const operations = ["mark_job_done"];
+  const prompt = platformControlPrompt(operations, "提交最终摘要，结果未知先查原回执。");
+  assert.deepEqual(operations, ["mark_job_done"]);
+  assert.match(prompt, /已授权 HTTP operation：mark_job_done/);
+  assert.match(prompt, /不是 CLI 原生工具/);
+  assert.match(prompt, /capabilities_list/);
+  assert.match(prompt, /结果未知先查原回执/);
+  assert.doesNotMatch(prompt, /emit_fact|emit_finding|request_human|submit_hub_decision/);
+  assert.match(executorSource, /initialInput \+=.*platformControlPrompt\(controlToolNames, contract\)/);
+  assert.match(executorSource, /nudgeMessage: platformControlNudge\(controlToolNames, isHub/);
+  assert.doesNotMatch(executorSource, /你还没有通过平台工具提交|请通过 emit_fact\/emit_finding/);
+  for (const role of ["hub", "verify", "worker"] as const) {
+    const nudge = platformControlNudge(operations, role);
+    assert.ok(nudge.startsWith(PLATFORM_SYSTEM_PROMPT.slice(PLATFORM_SYSTEM_PROMPT.indexOf("调用规则："))));
+    assert.match(nudge, /已接受人工请求则停止业务执行/);
+    assert.match(nudge, /明确可修正拒绝.*新 key\/下一 revision/);
+    assert.doesNotMatch(nudge, /emit_fact|emit_finding|request_human|submit_hub_decision/);
+    assert.equal(nudge.includes("verdict（confirmed/rework/needs_human/refuted）"), role === "verify");
+  }
+  assert.match(platformControlNudge(["submit_hub_decision", "mark_job_done"], "hub"), /仅决策尚未接受.*已接受决策不得用新 key.*原样恢复/);
+});
+
+test("#1094 HTTP guidance preserves receipt recovery rather than replaying accepted proposals", () => {
+  const guide = platformToolGuide(["submit_hub_decision", "mark_job_done", "request_human"]);
+  assert.match(guide, /repair\.category.*next_action/);
+  assert.match(guide, /原 key.*revision.*payload/);
+  assert.match(guide, /persisted_deferred/);
+  assert.match(guide, /已接受提案不得用新 key 或修改 payload\/revision 新建另一提案/);
+  assert.doesNotMatch(guide, /迟到的重复调用会被忽略|成功后不得重试|HTTP\/参数错误须修正后重试|仅当上一次 HTTP 请求失败或参数校验失败时才可重试/);
+});
+
+
+test("#1094 receipt guidance preserves governed exact retries without inventing unsupported queries", () => {
+  const guide = platformToolGuide(["emit_fact", "emit_progress", "publish_shared_asset", "ack_human_message"]);
+  assert.match(guide, /不支持查询时保留未知并停止/);
+  assert.match(guide, /禁止猜测查询路由或换 key 重放/);
+  assert.match(guide, /只有 operation 明确支持回执恢复.*原 persisted_deferred.*原 Job\/Attempt\/执行器满足恢复条件/);
+  assert.match(guide, /文件输入保持原路径与内容/);
+  assert.match(guide, /原样传输恢复不授权继续业务/);
+  assert.doesNotMatch(guide, /结果未知先查原回执|已接受的决策或人工请求不得重提/);
 });

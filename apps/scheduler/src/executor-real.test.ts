@@ -443,7 +443,7 @@ test("平台工具说明只引导 Agent 直接调用 Job-scoped HTTP API", () =>
   assert.match(guide, /只能按静态 `deepsonar-control` Skill/);
   assert.match(guide, /Agent 自身 HTTP 工具直接调用/);
   assert.match(guide, /API 返回 `accepted`/);
-  assert.match(guide, /HTTP\/参数错误/);
+  assert.match(guide, /repair\.category.*next_action/);
   assert.doesNotMatch(guide, /schema_validated|pending_scheduler_validation|MCP/);
 });
 

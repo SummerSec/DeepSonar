@@ -48,8 +48,8 @@ const skillContent = DEEPSONAR_CONTROL_SKILL.files["SKILL.md"];
 assert.equal(DEEPSONAR_CONTROL_SKILL_NAME, "deepsonar-control");
 // Reviewed Plan v2, complete-objective bootstrap, governed completion-recovery guidance,
 // including #903 stale-grant exit, actionable human-request guidance and the #1032 P2-5
-// env-dump guard.
-const expectedSkillSha256 = "bbd387cf164e0ac51ba6fe56a08a682034d3c99f3bbafe2145c2802036ee46cb";
+// env-dump guard and #1094 HTTP-operation bootstrap.
+const expectedSkillSha256 = "9ae110ecdd12b713731c37861fe394e976464e0ee5fa614d9da45bfa58ff686e";
 const canonicalSkillBytes = Buffer.from(
   `{"name":"deepsonar-control","files":{"SKILL.md":${JSON.stringify(skillContent)}}}`,
   "utf8",
@@ -128,7 +128,9 @@ for (const expected of [
   "Job-scoped control API",
   "Agent 自身 HTTP 工具直接调用",
   "API 返回 `accepted`",
-  "HTTP/参数错误",
+  "repair.category",
+  "next_action",
+  "不是 CLI 原生工具",
   "emit_progress",
   "emit_fact",
   "mark_job_done",
