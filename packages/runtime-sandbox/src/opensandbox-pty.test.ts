@@ -42,6 +42,20 @@ async function ptyFixture(
   return { handle, emit };
 }
 
+test("PTY queued stdout yields to socket I/O before the backlog is exhausted", async () => {
+  const { handle, emit } = await ptyFixture();
+  for (let n = 0; n < 128; n++) emit("message", {
+    data: Buffer.concat([Buffer.from([PTY_BIN_STDOUT]), Buffer.from(String(n))]),
+  });
+  emit("message", { data: JSON.stringify({ type: "exit", exit_code: 0 }) });
+  const observed: number[] = [];
+  let ioServicedAt = -1;
+  setImmediate(() => { ioServicedAt = observed.length; });
+  for await (const chunk of handle) if (chunk.type === "stdout") observed.push(Number(chunk.chunk));
+  assert.deepEqual(observed, Array.from({ length: 128 }, (_, n) => n));
+  assert.ok(ioServicedAt >= 0 && ioServicedAt < 128, `I/O first serviced after ${ioServicedAt} chunks`);
+});
+
 for (const code of [1000, 1006]) {
   test(`PTY close ${code} without exit frame must not manufacture a CLI exit code`, async () => {
     const { handle, emit } = await ptyFixture();
