@@ -39,3 +39,7 @@ PR 提交后继续 Job `3f413574-89f9-4d4e-b0a0-838aba4118ae` 的 CLI 退出调�
 候选 `0e5b7868` 独立评审指出：新增相对 import 不在既有 data-module/COPY 依赖闭包中，OM guard 仍绑定旧 policy 摘要。已核对 DSH installer、OM boundary loader、Docker COPY 和严格 hash 回归，按原单文件加载契约收回外部 helper、同步源码摘要并补加载边界回归；不降低镜像内容门。修复后的最终 SHA 与实际 Actions 结果另报。
 
 候选 `e2e89b67` 的 Actions `43171304410` 中，完整 gate-runtime 已通过（runtime-sandbox 636/636，锁版本 SDK 与 DSH/OM 加载回归通过）。gate-contract 仅因 runner 2003 行超过 2000 行硬上限失败；将纯分类函数原样抽出为 `runtime-error-classification.ts`，保留既有导出，runner 降至 1921 行，不改门禁或行为。拆分后的最终提交仍需自身完整 Actions。
+
+## 原生镜像冒烟续接（2026-11-12）
+
+候选 `4c3ffb36` 的核心单测、集成与 Reverse 专项通过，但 base 镜像原生 Pi 冒烟的测试用负对照仍查找旧 `return false` 拒绝分支，未适配 #1083 的 settlement 诊断，导致定位断言失败。更新负对照到当前严格拒绝分支；真实 lookup-denied 要求精确的 settlement/permanent_failure/403 诊断，unknown/wrong-reason 仍保留原 SDK 失败。负对照必须被同一拒绝 oracle 拒绝，原 native retry 与 allowance 数量、单 CLI/Session 和请求次数检查保持不变。未修改生产策略或 CI 门禁，验证仅在 Actions。
