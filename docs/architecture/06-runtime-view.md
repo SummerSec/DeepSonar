@@ -55,7 +55,7 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 1. Hub 的 Provider/model 需求、项目默认模型和全局角色模型按既有优先级形成模型要求；模型按每张凭据的 CLI 方言核对配置清单。
 2. Hub 显式 CLI 是硬约束，与候选冲突继续 `provider_credential_cli_mismatch`（`permanent_failure`）；不能通过改选 CLI 绕过排他绑定。
-3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致，则先按 `metadata.max_concurrent` 与该负载投影算出的余量比例排序（未设置视为不限），并列时依次按显式缺省凭据、恢复身份、同项目非终态 Job 数、历史分配数、稳定 ID 决定；显式缺省因此是同条件下优先，不再命中即固定（#1078 切片 1），全部候选都达上限时仍取缺省且不新增失败码。这个余量只用于偏好排序，不占位、不放宽授权、也不改变准入判定；跨 provider 的候选等价判据仍需决策，其他歧义仍返回 `provider_credential_multi_match`。
+3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致，则先保持自身仍有余量的恢复身份（冻结快照已授权的那个凭据），再保持仍有余量的显式缺省凭据，其余候选按 `metadata.max_concurrent` 与该负载投影算出的余量比例排序（未设置视为不限），并列时依次按显式缺省凭据、恢复身份、同项目非终态 Job 数、历史分配数、稳定 ID 决定；因此「缺省满额时选了同伴并冻结、缺省之后腾出容量」不会把恢复 Job 换回缺省而制造 `SNAPSHOT_STALE`（#1096），恢复身份自身满额或已不在授权池内时仍让位给缺省，全部候选都达上限时仍取缺省且不新增失败码。这个余量只用于偏好排序，不占位、不放宽授权、也不改变准入判定；跨 provider 的候选等价判据仍需决策，其他歧义仍返回 `provider_credential_multi_match`。
 4. 未配置凭据白名单时动态读取当前作用域候选，不在读取时写入 ID。显式白名单及默认凭据的删除、停用或不可访问引用返回 `provider_credential_allowlist_stale`（`permanent_failure`），RepairFeedback 指向管理员修复名单；既不扩大授权，也不把权限修复交给模型。
 5. 池选择是现有 Job 历史的只读投影，readiness 不消费分配轮次，不承诺并发创建严格 round-robin，也不表示账号余额或容量。已有 Job 恢复向内核 resolver 提供原冻结账号偏好，只能在当前合法候选内生效；显式当前默认账号仍优先，身份漂移及累计预算校验不变。运行中不换 key、不因故障重选账号或重置预算。
 6. 选中的账号、CLI、Provider/model 按原规则进入新 Job 快照。账号 × CLI 1:1、并发计账和 Gateway 密钥隔离不变；不修改任何已有 Job 快照或镜像准入。
