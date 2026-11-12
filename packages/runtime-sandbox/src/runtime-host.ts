@@ -8,7 +8,9 @@
 export type RuntimeProcessChunk =
   | { type: "stdout"; chunk: string }
   | { type: "stderr"; chunk: string }
-  | { type: "exit"; exitCode: number };
+  | { type: "exit"; exitCode: number }
+  // #1088：只有合法退出帧才允许产生 CLI 退出码；传输中断单独成类，不得伪造成 exit 1。
+  | { type: "process-failure"; reason: string };
 
 export interface RuntimeCommandResult {
   exitCode: number;

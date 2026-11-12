@@ -44,7 +44,7 @@ class PiProcess implements RuntimeProcess {
   private queue: Frame[] = [];
   private ended = false;
   private wake?: () => void;
-  constructor(private readonly options: { requireNudge?: boolean; exitBeforeSettled?: number } = {}) {}
+  constructor(private readonly options: { requireNudge?: boolean; exitBeforeSettled?: number; transportFailure?: string } = {}) {}
 
   async write(data: string) {
     const command = JSON.parse(data) as Record<string, unknown>;
@@ -54,6 +54,14 @@ class PiProcess implements RuntimeProcess {
         data: { sessionId: "pi-retry-1072", sessionFile, isStreaming: false, isCompacting: false,
           pendingMessageCount: 0, messageCount: 0, autoCompactionEnabled: true } } });
     } else if (command.type === "prompt") {
+      if (this.options.transportFailure) {
+        // #1088：会话在运行中断开——没有终态结果，只有传输异常。
+        this.queue.push({ record: { type: "response", id: command.id, command: "prompt", success: true, data: { disposition: "started" } } },
+          { record: { type: "agent_start" } });
+        this.ended = true;
+        this.wake?.();
+        return;
+      }
       if (this.options.requireNudge && this.commands.filter(record => record.type === "prompt").length > 1) {
         this.queue.push(
           { record: { type: "response", id: command.id, command: "prompt", success: true, data: { disposition: "started" } } },
@@ -96,6 +104,11 @@ class PiProcess implements RuntimeProcess {
       }
       if (this.stdinClosed) break;
     }
+    if (this.options.transportFailure) {
+      // #1088：会话中断只有终态原因，没有 CLI 退出码。
+      yield { type: "process-failure", reason: this.options.transportFailure };
+      return;
+    }
     yield { type: "exit", exitCode: this.options.exitBeforeSettled ?? 0 };
   }
 }
@@ -126,6 +139,18 @@ test("#1072 runRealAgent 在 terminated 原生重试前保持 stdin，单进程�
   assert.equal(result.runnerErrorSource, undefined);
   assert.equal(result.terminalOutcome, "success");
   assert.equal(result.text, "recovered");
+});
+
+test("#1088 传输中断不伪造成 CLI 退出码，runRealAgent 以稳定原因失败", { timeout: 5_000 }, async () => {
+  const { runtime, processes } = fakeRuntime({
+    transportFailure: "OPENSANDBOX_PTY_TRANSPORT_CLOSED cause=ws-close exit_frame=absent close_code=1006 clean=false",
+  });
+  const result = await runRealAgent(runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true });
+  assert.equal(processes.length, 1);
+  assert.equal(result.terminalOutcome, "failure", "连接中断不能结算成成功");
+  assert.equal(result.runnerErrorSource, "process");
+  assert.match(String(result.error), /OPENSANDBOX_PTY_TRANSPORT_CLOSED/u);
+  assert.match(String(result.error), /exit_frame=absent close_code=1006/u);
 });
 
 test("#1072 Pi 重试耗尽保留 terminated 原因并明确失败", () => {

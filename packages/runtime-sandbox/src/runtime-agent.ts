@@ -1536,8 +1536,12 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
             }
             continue;
           }
+          if (chunk.type === "process-failure") {
+            processError ??= new Error(chunk.reason);
+            continue;
+          }
           if (chunk.type === "exit") {
-            attemptExitCode = chunk.exitCode ?? 0;
+            attemptExitCode = chunk.exitCode;
             continue;
           }
           if (adapter.outputMode === "plain-final") {
