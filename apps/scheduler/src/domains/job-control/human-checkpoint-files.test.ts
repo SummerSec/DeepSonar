@@ -137,3 +137,16 @@ test("capture checks source hashes and secrets; reads reject corruption and miss
     await assert.rejects(readCheckpointFile(randomUUID(), stored), /FILE_UNAVAILABLE/);
   } finally { Reflect.set(config.storage, "blobDir", previous); await rm(directory, { recursive: true, force: true }); }
 });
+
+test("进程基线读取遇到不可解析输出时失败闭合并返回稳定码", async () => {
+  const { readCheckpointProcessBaseline } = await import("./human-checkpoint-process.js");
+  const hostWith = (result: { exitCode: number; stdout: string }) =>
+    ({ run: async () => ({ ...result, stderr: "" }) }) as unknown as RuntimeHost;
+  assert.deepEqual(await readCheckpointProcessBaseline(hostWith({ exitCode: 0, stdout: '["1:2"]' })), ["1:2"]);
+  await assert.rejects(readCheckpointProcessBaseline(hostWith({ exitCode: 0, stdout: "not-json secret-bytes" })),
+    /HUMAN_CHECKPOINT_PROCESS_BASELINE_UNAVAILABLE/u);
+  // 形状合法但语义非法（非数组）同样失败闭合，稳定码由 JSON 解析分支负责。
+  await assert.rejects(readCheckpointProcessBaseline(hostWith({ exitCode: 0, stdout: '{"pid":1}' })));
+  await assert.rejects(readCheckpointProcessBaseline(hostWith({ exitCode: 2, stdout: "" })),
+    /HUMAN_CHECKPOINT_PROCESS_BASELINE_UNAVAILABLE/u);
+});
