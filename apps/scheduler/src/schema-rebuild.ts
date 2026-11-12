@@ -208,6 +208,22 @@ async function readActiveJobs(db: MigrationConnection): Promise<RebuildPlan["act
     WHERE table_schema = 'public' AND table_name = 'jobs'
   `;
   if (!exists || exists.count === 0) return [];
+  const [requests] = await db<CountRow>`SELECT count(*)::int AS count FROM information_schema.tables
+    WHERE table_schema='public' AND table_name='human_requests'`;
+  if(requests?.count) return db<JobRow>`SELECT j.id::text,j.status,j.type FROM jobs j
+    WHERE j.status IN ('claimed','provisioning','running','waiting_human')
+      AND (j.status<>'waiting_human' OR j.sandbox_id IS NOT NULL OR NOT EXISTS (
+        SELECT 1 FROM human_requests r JOIN job_attempts a ON a.id=r.attempt_id AND a.job_id=r.job_id
+        WHERE r.job_id=j.id AND r.status IN ('open','answered') AND r.resumed_at IS NULL
+          AND r.checkpoint_status='ready' AND r.process_exited_at IS NOT NULL AND r.resources_released_at IS NOT NULL
+          AND a.status='interrupted' AND NOT a.cancel_requested
+          AND a.attempt_no=(SELECT MAX(attempt_no) FROM job_attempts WHERE job_id=j.id)
+          AND NOT EXISTS(SELECT 1 FROM job_attempt_effects WHERE job_id=j.id AND status<>'settled')
+          AND NOT EXISTS(SELECT 1 FROM job_tokens WHERE job_id=j.id AND status='active')
+          AND NOT EXISTS(SELECT 1 FROM job_capability_tokens WHERE job_id=j.id AND revoked_at IS NULL)
+          AND NOT EXISTS(SELECT 1 FROM worker_sandbox_leases WHERE job_id=j.id::text)
+          AND NOT EXISTS(SELECT 1 FROM device_leases WHERE job_id=j.id AND state IN ('pending','active'))))
+    ORDER BY j.created_at`;
   return db<JobRow>`
     SELECT id::text, status, type
     FROM jobs

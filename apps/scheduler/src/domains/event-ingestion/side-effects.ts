@@ -1,3 +1,5 @@
+import { recordHumanRequest } from "../job-control/human-continuation-store.js";
+import type { sql } from "../../db.js";
 import { freezeJobRuntimeConfiguration } from "../../job-runtime-freeze.js";
 import { freezeGoalReviewAssignment } from "../../task-goal-review-source.js";
 import { prepareTaskGoalReview } from "../../task-goal-review.js";
@@ -1768,6 +1770,7 @@ export function createEventIngestionSideEffectApplication(
       await validateHumanSubject(tx, job as Record<string, unknown>, p);
       await validatePlanDecision(tx,jobId,job,p.plan_basis,'human',{eventId:services.eventId,final:true});
       await markJobWaitingHuman(tx, jobId);
+      await recordHumanRequest(tx as unknown as typeof sql,jobId,String(services.eventId),p);
       const [jobNode] = await tx`
       SELECT id, canvas_id, x, y FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
       if (jobNode) {

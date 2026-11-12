@@ -198,9 +198,11 @@ const structuredRefusal: RealAgentResult = { text: "", files: {}, errorKind: "ru
 function piMessageFailure(errorMessage: string, state = {}): RealAgentResult {
   const adapter = getAgentCliRuntimeAdapter("pi");
   assert.ok(adapter);
-  const [terminal] = adapter.decodeOutput({ type: "message_end", message: {
+  assert.deepEqual(adapter.decodeOutput({ type: "message_end", message: {
     role: "assistant", stopReason: "error", errorMessage,
-  } }, state);
+  } }, state), [], "Pi model-message failure waits for the native retry/settlement boundary");
+  const [terminal] = adapter.decodeOutput({ type: "agent_settled", aborted: false }, state);
+  assert.ok(terminal);
   assert.equal(terminal.type, "result");
   assert.equal(terminal.is_error, true);
   assert.ok(typeof terminal.result === "string");

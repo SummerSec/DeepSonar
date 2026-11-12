@@ -1,9 +1,17 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-12
+
+## 人工等待后的新执行（#1074）
+
+人工响应超时只记 overdue。CLI 退出后宿主暂停本轮新进程，有限保存工作文件；原 worker/Attempt 可信销毁并原子结算 agent_run、撤销 grants 后，Attempt interrupted，Job 保持 waiting_human，无执行槽占用。回复先持久化，再经原准入写唯一 successor；Dispatcher 重验 owner/断点/快照与实时目标授权。当前模式是恢复业务文件和有界上下文的 structured 新会话，原 Session 仅作归档证据。累计有效执行时间暂停于可信回收，不扩展原 repair deadline。完整边界见[人工续做](../HUMAN_CONTINUATION.md)和[ADR 0022](adr/0022-human-continuation.md)。
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
+
+### Pi 模型消息错误与执行结算（#1072）
+
+Pi RPC 的单次模型错误先等待同进程内部重试与 `agent_settled`，不立即关闭 stdin。实际后续成功消息可清除待判定模型错误，重试成功事件本身不能证明完成；耗尽、取消、RPC/扩展/进程错误继续失败，原完成门、Session/Attempt 和累计预算不变。实现与现场证据边界见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)；最终 SHA Actions 待验，未重跑现场 Job。
 
 ## 基础镜像构建输入（#992 前置切片）
 
@@ -254,7 +262,7 @@ Scheduler 将取消、超时、失败、缺失输出、无进展、预算耗尽�
 
 #1032 首片将当前 Job 的 main/Control/OM 凭据在 Pi 主请求与 OM 的 SDK context 字符串投影中精确替换，不改原历史或认证选项；Gateway 原字节拒绝、预算和 settlement 仍独立执行。工具读取 env/认证文件与 OM 来源使用同一函数，镜像 guard 同时绑定 wrapper 和其共享源码。此举不隔离同 UID 工具与认证客户端，完整边界和待验的原生回归见[模型上下文凭据投影](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)。
 
-#1011 原生 Pi/OM 归档同时观察到已接受完成与 PI_MAIN_BUDGET_ALLOWANCE_DENIED；原失败 HTTP 状态/error.type 未保留，不能断言其精确根因。候选修正主 allowance 对固定完成拒绝码的保留和 SDK 终态时序。主扩展只以私有宿主错误身份保留 HTTP409 / COMPLETION_ALREADY_ACCEPTED，SDK 抛出的同名异常不升级为可信拒绝，既有 yielded event 转发保持其独立信任边界；SDK 的完整 assistant error update 等待 message_end 后才建立终态来源；实际持久完成回执与既有 executor 门共同决定原结算。缺终态、非零退出、未知用量和其他预算拒绝不放行，不重放模型/效果；离线回放、原生双架构与最终 SHA 验收见[CLI 契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)，当前新 SHA Actions 待验。
+#1011 原生 Pi/OM 归档同时观察到已接受完成与 PI_MAIN_BUDGET_ALLOWANCE_DENIED；原失败 HTTP 状态/error.type 未保留，不能断言其精确根因。候选修正主 allowance 对固定完成拒绝码的保留和 SDK 终态时序。主扩展只以私有宿主错误身份保留 HTTP409 / COMPLETION_ALREADY_ACCEPTED，SDK 抛出的同名异常不升级为可信拒绝，既有 yielded event 转发保持其独立信任边界；SDK 的完整 assistant error update 等待 message_end 保留结构化消息错误来源，#1072 的执行终态延至 agent_settled；实际持久完成回执与既有 executor 门共同决定原结算。缺终态、非零退出、未知用量和其他预算拒绝不放行，不重放模型/效果；离线回放、原生双架构与最终 SHA 验收见[CLI 契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)，当前新 SHA Actions 待验。
 
 ## 操作员效果结清（#899）
 

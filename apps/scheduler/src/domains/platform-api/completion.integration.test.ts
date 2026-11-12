@@ -126,6 +126,82 @@ test("durable completion: real HTTP, PostgreSQL, repair/replay/restart/cancel/fa
         assert.equal(current?.allowed_actions.includes("wait_for_platform"), ["credential", "authorization"].includes(kind));
       }
     });
+    await t.test("HTTP accepted human becomes closed history in every terminal Job even with a live registry and Attempt", async () => {
+      const { ingestEvent } = await import("../../core.js");
+      const { readCompletionExecutionState } = await import("./completion-state.js");
+      const { registerRuntimeTerminalState } = await import("./registry.js");
+      for (const status of ["failed", "timeout", "cancelled", "orphan", "succeeded"]) {
+        for (const kind of ["credential", "business_decision"] as const) {
+          const runner = await setup();
+          api.registerRuntimeHandler(runner.jobId, async context => {
+            await ingestEvent(runner.jobId, { v: 1, event_id: context.eventId, type: "human", payload: context.input });
+            return { accepted: true, event_id: context.eventId };
+          }, ["request_human"]);
+          const accepted = await app.inject({ method: "POST", url: runner.endpoint.replace("mark_job_done", "request_human"),
+            headers: { ...runner.headers, "idempotency-key": randomUUID() }, payload: {
+              reason: "A governed prerequisite is required before work can continue.", subject: { type: "platform_blocker", kind },
+              guidance: {
+                question: "Is the governed prerequisite available for this task?",
+                required_action: "Confirm the prerequisite within the existing Job authorization.",
+                reply_instructions: "Reply with a non-secret reference or state that it is unavailable.",
+                after_reply: "The Scheduler checks the original scope before any continuation.",
+              },
+            } });
+          assert.equal(accepted.statusCode, 200, accepted.body);
+          const [human] = await sql`SELECT event_id FROM events WHERE job_id=${runner.jobId} AND type='human'`;
+          assert.ok(human);
+          const [waiting] = await sql`SELECT status FROM jobs WHERE id=${runner.jobId}`;
+          assert.equal(waiting.status, "waiting_human");
+          assert.equal((await readCompletionExecutionState(sql, runner.jobId))?.allowed_actions.includes(
+            kind === "credential" ? "wait_for_platform" : "wait_for_human"), true);
+          registerRuntimeTerminalState(runner.jobId, runner.attemptId, () => "human", () => ({ type: "platform_blocker", kind }));
+          await sql`UPDATE jobs SET status=${status},finished_at=now() WHERE id=${runner.jobId}`;
+          const current = await readCompletionExecutionState(sql, runner.jobId);
+          assert.equal(current?.accepted_terminal, "human");
+          assert.equal(current?.accepted_history_ref, human.event_id);
+          assert.equal(current?.active_attempt_id, null);
+          assert.equal(current?.human_wait_kind, null);
+          assert.equal(current?.wait_owner, null);
+          assert.equal(current?.blocker, "human_request_closed");
+          assert.deepEqual(current?.allowed_actions, ["inspect_state", "read_receipt"]);
+          api.unregisterRuntimeHandler(runner.jobId);
+          assert.deepEqual(await readCompletionExecutionState(sql, runner.jobId), current);
+          await sql`INSERT INTO job_attempt_effects(job_id,attempt_id,effect_id,effect_kind,status)
+            VALUES(${runner.jobId},${runner.attemptId},'closed-human-unknown','gateway_model_request','unknown')`;
+          const unresolved = await readCompletionExecutionState(sql, runner.jobId);
+          assert.equal(unresolved?.blocker, "effects_require_reconciliation");
+          assert.deepEqual(unresolved?.allowed_actions, ["reconcile_effects"]);
+          await sql`UPDATE job_attempt_effects SET status='effect_pending' WHERE job_id=${runner.jobId}`;
+          const pending = await readCompletionExecutionState(sql, runner.jobId);
+          assert.equal(pending?.blocker, "effects_require_reconciliation");
+          assert.equal(pending?.wait_owner, null);
+          assert.deepEqual(pending?.allowed_actions, ["reconcile_effects"]);
+        }
+      }
+    });
+    await t.test("local-only terminal cannot authorize a terminal Job and durable done retains settlement advice", async () => {
+      const { readCompletionExecutionState } = await import("./completion-state.js");
+      const { registerRuntimeTerminalState } = await import("./registry.js");
+      const runner = await setup();
+      registerRuntimeTerminalState(runner.jobId, runner.attemptId, () => "human",
+        () => ({ type: "platform_blocker", kind: "credential" }));
+      await sql`UPDATE jobs SET status='cancelled',finished_at=now() WHERE id=${runner.jobId}`;
+      const localOnly = await readCompletionExecutionState(sql, runner.jobId);
+      assert.equal(localOnly?.accepted_terminal, null);
+      assert.equal(localOnly?.accepted_history_ref, null);
+      assert.equal(localOnly?.active_attempt_id, null);
+      assert.equal(localOnly?.wait_owner, null);
+      assert.deepEqual(localOnly?.allowed_actions, ["inspect_state"]);
+      api.unregisterRuntimeHandler(runner.jobId);
+      const done = await setup();
+      const accepted = await done.post(randomUUID(), 0, { summary: "Completion was durably accepted before settlement." });
+      assert.equal(accepted.statusCode, 200, accepted.body);
+      await sql`UPDATE jobs SET status='succeeded',finished_at=now() WHERE id=${done.jobId}`;
+      const current = await readCompletionExecutionState(sql, done.jobId);
+      assert.equal(current?.accepted_terminal, "done");
+      assert.equal(current?.blocker, "completion_already_accepted");
+      assert.deepEqual(current?.allowed_actions, ["read_receipt", "wait_for_settlement"]);
+    });
     // Real adapter/framer + HTTP/PostgreSQL; synthetic process and controlled handler.
     // This matrix tests protocol plumbing, not model understanding or executeReal semantics.
     for (const cli of COMPLETION_TEST_CLIS) {

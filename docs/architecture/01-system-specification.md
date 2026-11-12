@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -211,7 +211,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-008 Reaper 与终态幂等
 
-- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与 `waiting_human` 超时，不得信任 Agent 自报；取消、超时、迟到回调、容器创建与销毁必须走幂等路径，不得 resurrect 终态 Job。
+- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与人工响应阈值，不得信任 Agent 自报。#1074 的响应超时仅标 overdue，等待保留、执行资源有界回收；晚回复必须通过可验证断点、累计预算与当前授权准入。取消、超时、迟到回调、创建与销毁必须幂等，不得复活终态 Job。
 - **决策来源**：运维判定和外部清理是平台责任，迟到回调不能重新取得执行权。
 - **实现状态**：as-built；Reaper 和状态条件更新复用 Job/Attempt effect identity。终态 model token 与 Control token 撤销在同一 Job 终态事务内完成，不另取 Job lock，也不吞掉撤销异常；回滚夹具保持 Job/model token/Control token/audit 原子性，终态后的真实 HTTP 请求返回 401。
 - **代码入口**：[Dispatcher/Reaper](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[token revocation](../../apps/scheduler/src/gateway-token-revocation.ts)、[配置](../../apps/scheduler/src/config.ts)。
@@ -300,6 +300,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 ### FR-CTRL-006 失败分类与无控制通道回退
 
 - **规范要求**：Scheduler 必须区分 `model_correctable`、`transient_retryable`、`unknown_external_effect`、`permanent_failure`；未知外部效果必须停止自动重放，权限/快照/版本错误必须 fail closed，不得回退到 MCP、普通文本或另一套控制通道。
+- **当前动作与历史接受事实**：终态历史请求只读，不授予恢复。#1074 以专属 human_requests、有效执行时钟和可验证文件断点支持人工超时后回复；回复先保存，最新请求/断点/旧执行退出/累计预算/当前授权/队列席位全部通过才续做，未知效果不重放。见[人工续做](../HUMAN_CONTINUATION.md)；HTTP/PG 与 Web 回归最终 SHA Actions 另验。
 - **决策来源**：不同失败的安全动作不同，回退通道会绕过 Job scope 和审计。
 - **实现状态**：as-built（分类与 API 失败路径）；完整 Receipt/Settlement 目标尚未全部落地。 Knowledge/Skill 领域分类及行动建议通过 runtime/HTTP 反馈保留；终态/权限/撤销拒绝与可修正输入分开，见[#903 切片边界](../PROJECT_KNOWLEDGE.md#knowledgeskill-拒绝反馈903-切片)。
 - **代码入口**：[trusted kernel 文档](../AI_NATIVE_TRUSTED_KERNEL.md)、[Control input](../../apps/scheduler/src/control-input.ts)、[Job recovery](../../apps/scheduler/src/domains/job-lifecycle/application.ts)。
@@ -717,7 +718,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：新 Job 只能使用当前登记的治理 CLI adapter（Claude Code、Pi、DSH）及其受支持配置；每个 adapter 必须有 runtime、session archive、Web parser、测试和原始归档路径，不支持的 CLI/config 必须 fail closed。
 - **决策来源**：CLI 方言和归档结构是运行时契约，静默 fallback 会损坏执行和查看。
-- **实现状态**：as-built（当前新执行集合）；历史归档 viewer 兼容不构成新运行时能力。
+- **实现状态**：as-built（当前新执行集合）；历史归档 viewer 兼容不构成新运行时能力。 #1072 将 Pi 单次模型消息错误与最终 `agent_settled` 分开；同进程重试不提前关闭 stdin，实际后续成功消息才清除待判定错误，取消/协议/进程失败与完成回执边界不变；最终 SHA Actions 待验。
 - **代码入口**：[CLI adapters](../../packages/runtime-sandbox/src)、[Agent CLI 文档](../AGENT_CLI_RUNTIME_ADAPTERS.md)、[adapter tests](../../apps/scheduler/src/agent-cli-convergence.test.ts)。
 - **验证证据**：`pnpm ci:unit:credential-compatibility`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:unit:web-session-viewer`。
 
