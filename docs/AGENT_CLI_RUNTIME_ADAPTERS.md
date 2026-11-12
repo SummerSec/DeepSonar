@@ -138,7 +138,9 @@ MCP tool call 映射为语义事件。DSH 的 `dsh_task_mode` 不是 JSON-RPC �
 Job 启动前按冻结值物化 `deepsonar` profile，`standard` 配置 native tools，`ptc` 配置 PTC
 并挂载 `@deepseek-ai/dsh-ptc-runtime-node`，使用 `run_code`。Provider YAML 按官方
 `settings.yaml` 形状解析为一个 Gateway route/model，沙箱只得到短期
-`DEEPSONAR_GATEWAY_TOKEN`；原生 DeepSeek routes、设置/credential discovery、plugin-manager
+`DEEPSONAR_GATEWAY_TOKEN`（DSH 与 Claude 仍走环境注入；Pi 侧已改为
+`DEEPSONAR_GATEWAY_TOKEN_FILE` 指向的 0600 私有文件，见
+[MODEL_GATEWAY_TRANSPARENCY](MODEL_GATEWAY_TRANSPARENCY.md)）；原生 DeepSeek routes、设置/credential discovery、plugin-manager
 和遥测不进入治理 profile。Skills 只从 Scheduler 物化的 `${DSH_HOME}/skills` 根发现，仓库
 不能添加 discovery root。
 
