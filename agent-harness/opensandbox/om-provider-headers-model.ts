@@ -20,6 +20,8 @@ export async function startOmHeaderModel() {
   const checkCredentialProjection = (text: string, stage: string) => {
     const envLine = text.match(/OM_CREDENTIAL_ENV (\{[^\n]+\})/u)?.[1];
     if (!envLine) return;
+    const modeLine = text.match(/CONTROL_TOKEN_MODE (0o[0-7]+)/u)?.[1];
+    if (modeLine) assert.equal(modeLine, "0o600", "control-token file must be readable only by its owner");
     const authLine = text.match(/OM_CREDENTIAL_AUTH (\{[^\n]+\})/u)?.[1];
     assert.ok(authLine, "actual auth-file tool output must accompany env output");
     const env = JSON.parse(envLine), auth = JSON.parse(authLine);
@@ -163,7 +165,7 @@ export async function startOmHeaderModel() {
           assert.ok(bash, "installed Pi must expose its real bash tool");
           // Fits Pi's normal 50 KiB tool-output limit while exceeding OM's
           // unmodified 10k-token observation threshold with diverse source text.
-          tool = { name: bash, arguments: { command: "python3 - <<'PY'\nimport hashlib,json,os\nassert os.environ.get('DEEPSONAR_GATEWAY_TOKEN')\nassert not os.environ.get('DEEPSONAR_API_TOKEN')\nassert not os.environ.get('DEEPSONAR_OM_GATEWAY_TOKEN')\npath=os.environ.get('DEEPSONAR_CONTROL_TOKEN_FILE') or '/workspace/.deepsonar/control-token'\nassert (os.stat(path).st_mode & 0o777)==0o600\nprint('OM_CREDENTIAL_ENV '+json.dumps({'DEEPSONAR_GATEWAY_TOKEN':os.environ['DEEPSONAR_GATEWAY_TOKEN'],'control_token':open(path).read().strip()}))\nwith open('/workspace/.deepsonar-home/.pi/agent/auth.json') as f:\n print('OM_CREDENTIAL_AUTH '+json.dumps(json.load(f)))\nfor i in range(580):\n print('OM_HEADER_SOURCE_'+str(i)+' '+hashlib.sha256(str(i).encode()).hexdigest())\nPY" } };
+          tool = { name: bash, arguments: { command: "python3 - <<'PY'\nimport hashlib,json,os\nassert os.environ.get('DEEPSONAR_GATEWAY_TOKEN')\nassert not os.environ.get('DEEPSONAR_API_TOKEN')\nassert not os.environ.get('DEEPSONAR_OM_GATEWAY_TOKEN')\npath=os.environ.get('DEEPSONAR_CONTROL_TOKEN_FILE') or '/workspace/.deepsonar/control-token'\nmode=oct(os.stat(path).st_mode & 0o777)\nprint('CONTROL_TOKEN_MODE '+mode)\nprint('OM_CREDENTIAL_ENV '+json.dumps({'DEEPSONAR_GATEWAY_TOKEN':os.environ['DEEPSONAR_GATEWAY_TOKEN'],'control_token':open(path).read().strip()}))\nwith open('/workspace/.deepsonar-home/.pi/agent/auth.json') as f:\n print('OM_CREDENTIAL_AUTH '+json.dumps(json.load(f)))\nfor i in range(580):\n print('OM_HEADER_SOURCE_'+str(i)+' '+hashlib.sha256(str(i).encode()).hexdigest())\nPY" } };
         } else if (!completionAllowed) {
           assert.ok(bash);
           tool = { name: bash, arguments: { command: "sleep 1" } };
