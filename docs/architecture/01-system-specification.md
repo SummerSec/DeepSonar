@@ -1066,7 +1066,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：OpenSandbox/SandboxRunner 的创建、销毁、列表和状态同步必须经 Scheduler runtime adapter；沙箱不得持有长期 Provider 密钥；模型请求必须经 Scheduler-owned Model Gateway 与短期 Job token。
 - **决策来源**：外部执行器和 Provider 都是不可信外部效果，Scheduler 需要统一凭据、预算、审计和清理。
-- **实现状态**：as-built；runtime adapter 和 Gateway 是唯一受治理出口，长期密钥不写入快照/沙箱。
+- **实现状态**：as-built；runtime adapter 和 Gateway 是唯一受治理出口，长期密钥不写入快照/沙箱。 #1092 的 [进度消费与保活](../AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)在 chunk/RPC 边界协作让出 I/O，完整保留进度及 OM 隐私策略，不新增重连/重放 authority。 #1088 仅有效 PTY 退出帧决定 CLI 退出码；传输与宿主终止诊断经原 Evidence 留证，不授予新执行或效果重放。详见 [CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)。
 - **代码入口**：[runtime-sandbox](../../packages/runtime-sandbox/src)、[Scheduler runtime adapter](../../apps/scheduler/src/runtime.ts)、[Gateway](../../apps/scheduler/src/gateway.ts)、[Provider 凭据解析](../../apps/scheduler/src/domains/provider-adapter/resolve-credential.ts)。
 - **验证证据**：`pnpm ci:unit:executor-real`、`pnpm ci:unit:runtime-sandbox`、`pnpm ci:smoke:opensandbox`；人工核对 Sandbox/Provider 请求不绕过 Scheduler。
 

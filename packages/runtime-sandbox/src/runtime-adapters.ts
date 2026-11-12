@@ -689,7 +689,7 @@ async function sandboxPi(host: RuntimeHost, context: AdapterStartContext, sessio
 
 const pi = Object.freeze<RuntimeAdapter>({
   id: "pi",
-  version: "1.4.0",
+  version: "1.5.2",
   outputMode: "jsonl",
   capabilities: fixedCapabilities({
     streamEvents: true,

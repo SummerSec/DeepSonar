@@ -82,7 +82,7 @@ test("the ack memory stays bounded", () => {
 });
 
 test("an unacknowledged prompt is never retransmitted", async () => {
-  // Pi 1.4.0 hands every `prompt` frame to `session.prompt` and never keys it by
+  // Pi 1.5.2 hands every `prompt` frame to `session.prompt` and never keys it by
   // request id, so a resend could run the same turn twice. Only read-only
   // commands may be retried; prompt stays fail closed.
   const proc = new SilentProcess();

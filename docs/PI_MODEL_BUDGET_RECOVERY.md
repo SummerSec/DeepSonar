@@ -37,7 +37,7 @@ Dispatcher/Executor 不读取当前发现或配置来修补历史 Job；历史�
 不会回写或伪造当时 CLI 默认值。运行中 `get_state` 观测到的模型限制与冻结输入并列诊断，
 不修改模型、快照或 Gateway 额度。
 
-原生 RPC 契约核对 [Pi 1.4.0 `rpc-mode.ts`](https://github.com/earendil-works/pi/blob/v1.4.0/packages/coding-agent/src/modes/rpc/rpc-mode.ts)：
+原生 RPC 契约核对 [Pi 1.5.2 `rpc-mode.ts`](https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/src/modes/rpc/rpc-mode.ts)：
 `get_state` 返回当前 Session、模型、streaming/compacting 状态及待处理输入计数，
 `compact` 直接传递 `customInstructions`；此源码核对不是实际沙箱或上游容量验收。
 
@@ -96,7 +96,7 @@ Dispatcher/Executor 不读取当前发现或配置来修补历史 Job；历史�
 | 发现限制、缺失/非法值、显式覆盖、完整 Job 创建/冻结与 Pi 投影 | `pnpm ci:unit:credential-compatibility`（实际 `gate-contract` 入口）；`pnpm ci:unit:provider-settings` 可定向执行同一预算回归。配置模型授权不被发现扩大，显式路由及未选中同名条目均覆盖 |
 | text/tool/thinking-only length、有界继续、压缩无进展、身份和完成竞争 | `pnpm ci:unit:runtime-sandbox`；生产 runner + 确定性 Pi RPC 替身 |
 | 精确 Attempt、lease/deadline/cancel/未知效果、终态读取竞争 | `pnpm ci:unit:executor-real`；复用真实完成状态规则，存储边界替身 |
-| OpenAI 两种输出字段、实际 SDK 上下文 clamp 和 length | `pnpm ci:integration:request-budget-sdk`；锁定 Pi 1.4.0 SDK + loopback HTTP，不是真实厂商 |
+| OpenAI 两种输出字段、实际 SDK 上下文 clamp 和 length | `pnpm ci:integration:request-budget-sdk`；锁定 Pi 1.5.2 SDK + loopback HTTP，不是真实厂商 |
 | 生成后请求的原字节/字段保存、最终 Gateway 准入 | `pnpm ci:integration:platform-api`；隔离 PostgreSQL + HTTP 回归 |
 
 入口已接既有 Actions 分片；命令存在不表示本次运行通过。工程验收以最终提交的全部适用检查为准。

@@ -3,6 +3,28 @@
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
 > 同步日期：2026-11-12
 
+## 进度积压消费与保活（#1092）
+
+runtime-sandbox 在 PTY chunk 和内层 RPC record 边界按时间/项数协作让出 Node
+事件循环，使自动 Pong 与终止/取消观察不被纯微任务消费长期推迟；不暂停 socket、
+不丢弃/去重进度。shared-types 的 OM 文本策略仍服务运行时、归档和 Web，普通
+多行输出跳过无意义的 JSON 解析异常，转义和畸形 OM 内容继续脱敏。
+IR-001 的传输和权限归属不变，单次同步工作不能被协作预算预占，队列容量上限
+也不是本次交付。机制、独立线程保活夹具与历史证据限制见
+[CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)，
+最终 head 的 Actions 见 PR #1093；无生产重跑或部署。
+
+## OpenSandbox PTY 退出与传输中断（#1088）
+
+有效 execd 退出帧、WebSocket close/error、握手失败和宿主主动终止分开记录；
+没有退出帧不生成 CLI 退出码。首个终止原因与有界后续关闭观察经 RuntimeProcess、
+runner `onEvent` 进入现有 normalized Evidence，关闭码缺失明确未知。
+成功终态后的主动终止沿原协议收尾，意外传输失败不因完成文本而被吞掉，也不触发
+自动重连或新 CLI。诊断投影、脱敏与 50ms 收集界限见
+[CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)。
+该变更补齐 IR-001 工程诊断，不新增 Job 状态、控制 API、权限或效果结算通道；
+最终 SHA Actions 待验，历史现场原因仍未知。
+
 ## 人工等待后的新执行（#1074）
 
 人工响应超时只记 overdue。CLI 退出后宿主暂停本轮新进程，有限保存工作文件；原 worker/Attempt 可信销毁并原子结算 agent_run、撤销 grants 后，Attempt interrupted，Job 保持 waiting_human，无执行槽占用。回复先持久化，再经原准入写唯一 successor；Dispatcher 重验 owner/断点/快照与实时目标授权。当前模式是恢复业务文件和有界上下文的 structured 新会话，原 Session 仅作归档证据。累计有效执行时间暂停于可信回收，不扩展原 repair deadline。完整边界见[人工续做](../HUMAN_CONTINUATION.md)和[ADR 0022](adr/0022-human-continuation.md)。
@@ -33,7 +55,7 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 1. Hub 的 Provider/model 需求、项目默认模型和全局角色模型按既有优先级形成模型要求；模型按每张凭据的 CLI 方言核对配置清单。
 2. Hub 显式 CLI 是硬约束，与候选冲突继续 `provider_credential_cli_mismatch`（`permanent_failure`）；不能通过改选 CLI 绕过排他绑定。
-3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致且没有默认账号，则按同项目非终态 Job 数、历史分配数、稳定 ID 顺序选择新 Job；其他歧义仍返回 `provider_credential_multi_match`。
+3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致，则先按 `metadata.max_concurrent` 与该负载投影算出的余量比例排序（未设置视为不限），并列时依次按显式缺省凭据、恢复身份、同项目非终态 Job 数、历史分配数、稳定 ID 决定；显式缺省因此是同条件下优先，不再命中即固定（#1078 切片 1），全部候选都达上限时仍取缺省且不新增失败码。这个余量只用于偏好排序，不占位、不放宽授权、也不改变准入判定；跨 provider 的候选等价判据仍需决策，其他歧义仍返回 `provider_credential_multi_match`。
 4. 未配置凭据白名单时动态读取当前作用域候选，不在读取时写入 ID。显式白名单及默认凭据的删除、停用或不可访问引用返回 `provider_credential_allowlist_stale`（`permanent_failure`），RepairFeedback 指向管理员修复名单；既不扩大授权，也不把权限修复交给模型。
 5. 池选择是现有 Job 历史的只读投影，readiness 不消费分配轮次，不承诺并发创建严格 round-robin，也不表示账号余额或容量。已有 Job 恢复向内核 resolver 提供原冻结账号偏好，只能在当前合法候选内生效；显式当前默认账号仍优先，身份漂移及累计预算校验不变。运行中不换 key、不因故障重选账号或重置预算。
 6. 选中的账号、CLI、Provider/model 按原规则进入新 Job 快照。账号 × CLI 1:1、并发计账和 Gateway 密钥隔离不变；不修改任何已有 Job 快照或镜像准入。

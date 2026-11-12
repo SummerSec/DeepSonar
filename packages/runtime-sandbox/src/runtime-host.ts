@@ -4,6 +4,7 @@
  * CLI adapters, runRealAgent, session archive and human inbox may only depend
  * on these types. Provider SDKs stay inside their own adapter modules.
  */
+import type { RuntimeProcessDiagnostic } from "./runtime-process-diagnostic.js";
 
 export type RuntimeProcessChunk =
   | { type: "stdout"; chunk: string }
@@ -24,10 +25,13 @@ export interface RuntimeRunOptions {
 
 export interface RuntimeAsyncRunOptions extends RuntimeRunOptions {
   pty?: boolean;
+  /** Host-only redaction inputs; never serialize into command, env or provider HTTP input. */
+  diagnosticSecrets?: readonly string[];
 }
 
 export interface RuntimeProcess extends AsyncIterable<RuntimeProcessChunk> {
   readonly id?: string;
+  getTerminationDiagnostic?(): RuntimeProcessDiagnostic | undefined;
   write(data: string): Promise<void>;
   closeStdin(): Promise<void>;
   kill(): Promise<void>;

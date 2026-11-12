@@ -32,7 +32,7 @@ test("#1032: 凭据守卫拒绝被识别为平台稳定错误码，而非 CLI �
     assert.equal(isCredentialInBusinessDataMessage(observed), true, denial);
     // 裸 400 摘要（无进程框）同样识别，避免依赖 CLI 退出短语的具体措辞。
     assert.equal(isCredentialInBusinessDataMessage(`error: 400: ${denial}`), true, denial);
-    // openai-responses（非 Anthropic Pi 配置的默认 provider）经 Pi 1.4.0
+    // openai-responses（非 Anthropic Pi 配置的默认 provider）经 Pi 1.5.2
     // formatProviderError 产出 `<provider> API error (400): <body>`。
     const providerWrapped =
       `agent 运行失败: agent CLI 退出码 1: Pi message ended: error: OpenAI API error (400): ${denial}`;

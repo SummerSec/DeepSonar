@@ -1,7 +1,7 @@
 # DeepSonar 系统架构设计
 
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-12
 > #1074 的[人工断点续做](../HUMAN_CONTINUATION.md)与[ADR 0022](adr/0022-human-continuation.md)扩展 FR-JOB-008/FR-CTRL-006；schema 73、超时 overdue、有限封存回收和晚回复受治理续做已接线，最终 SHA Actions 另验。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
@@ -49,6 +49,10 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 
 #1002 P1-9 的同 Job 模型失败恢复关联 FR-CRED-003/004、FR-JOB-014 的重跑区别与 06/09/10：[透明契约](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)拥有 scoped no-start 与关联请求/冻结许可边界，[生命周期](../AGENT_REPAIR_LIFECYCLE.md#job-scoped-model-recovery-1002-p1-9)记录不重启 Agent、不重放/退款及历史拒绝。原 effect intent 跨 token/Attempt 计数，未运行那次的空 start/error 不发布；SDK/真实 SQL 回归保留，#1036 D 新增[原生 Pi RPC 链](../MODEL_GATEWAY_TRANSPARENCY.md#1036-d原生-pi-恢复链的离线回归)至核心 base 镜像 smoke。Gateway 为受控服务，不冒充真实账本或通用 Job 重启；最终 SHA Actions 待验。
 #1002 P2-10 关联 FR-JOB-006 与 06/08/09/10：原失败诊断与首次 Attempt 来源引用同事务、Job GET 有界按 scheduler/schema/归属重验，复用原 audit 和读权限，不改变生命周期或未知效果。权威边界见[OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)，SQL/HTTP/受控 Provider 回归已接线，最终 SHA Actions 待验。
+
+#1092 的 [进度消费与保活](../AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)映射 IR-001 与[运行时视图](06-runtime-view.md#进度积压消费与保活1092)：runtime-sandbox 协作让出 I/O、shared-types 保持隐私的 JSON 候选解析优化；Scheduler/Evidence 仍为原落盘通路，最终 head 验收见 PR #1093。
+
+#1088 补齐 IR-001 的 [PTY 退出诊断](../AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)，[运行时视图](06-runtime-view.md#opensandbox-pty-退出与传输中断1088)与追溯矩阵沿用原 Evidence/权限边界；最终 SHA Actions 待验。
 
 ## 1. 阅读路径与目录
 

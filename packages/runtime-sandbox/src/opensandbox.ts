@@ -18,6 +18,7 @@ import {
   parseToolManifest,
 } from "./runtime-shared.js";
 import { docker } from "./runtime-docker.js";
+import type { RuntimeProcessDiagnostic } from "./runtime-process-diagnostic.js";
 import type { ProvisionFailureDiagnostic, ProvisionInput, RunHandle, SandboxLimits, SandboxRunner, SandboxTerminalSession, TerminalOpenInput } from "./index.js";
 import { isManagedRuntimeResource, OPENSANDBOX_ATTEMPT_META, OPENSANDBOX_JOB_META, type OpenSandboxPin } from "./opensandbox-version.js";
 import {
@@ -90,6 +91,7 @@ export interface OpenSandboxCreateInput {
 
 export interface OpenSandboxExecHandle {
   id?: string;
+  getTerminationDiagnostic?(): RuntimeProcessDiagnostic | undefined;
   write(data: string): Promise<void>;
   closeStdin(): Promise<void>;
   kill(): Promise<void>;
@@ -115,7 +117,7 @@ export interface OpenSandboxSession {
     stderr: string;
     stdoutBytes?: Buffer;
   }>;
-  runAsync(command: string, options?: { cwd?: string; env?: Record<string, string>; pty?: boolean }): Promise<OpenSandboxExecHandle>;
+  runAsync(command: string, options?: { cwd?: string; env?: Record<string, string>; pty?: boolean; diagnosticSecrets?: readonly string[] }): Promise<OpenSandboxExecHandle>;
   writeFile(destPath: string, content: string | Buffer): Promise<void>;
   readFile(filePath: string): Promise<Buffer>;
   getState(): Promise<string>;
@@ -284,6 +286,7 @@ function wrapOpenSandboxProcess(handle: OpenSandboxExecHandle): RuntimeProcess {
   let closed = false;
   const process: RuntimeProcess = {
     id: handle.id,
+    ...(handle.getTerminationDiagnostic ? { getTerminationDiagnostic: () => handle.getTerminationDiagnostic!() } : {}),
     get stdinClosed() {
       return closed;
     },
@@ -294,7 +297,7 @@ function wrapOpenSandboxProcess(handle: OpenSandboxExecHandle): RuntimeProcess {
       } catch (error) {
         closed = true;
         const msg = error instanceof Error ? error.message : String(error);
-        throw new Error(`agent stdin 写入失败: ${msg}`);
+        throw new Error(`agent stdin 写入失败: ${msg}`, { cause: error });
       }
     },
     async closeStdin() {
