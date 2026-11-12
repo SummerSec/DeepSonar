@@ -1,5 +1,7 @@
 # Database schema
 
+schema 73 增加人工请求与有效执行时钟，以及人工消息的请求版本关联。不可变历史事件和快照不改写；新表不从旧 failed Job 猜测断点或授权。数据与文件保留规则见[人工续做](../docs/HUMAN_CONTINUATION.md)。
+
 `schema.sql` 是唯一 schema 真相源；当前集成版本以 [`SCHEMA_VERSION`](../apps/scheduler/src/schema-version.ts) 为准，数据库基线必须与之同步。Scheduler 启动时在 reserved
 PostgreSQL session 上持有 session advisory lock：
 

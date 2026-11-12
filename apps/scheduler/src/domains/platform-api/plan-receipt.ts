@@ -36,7 +36,7 @@ async function canRestore(db:typeof sql, jobId:string, attemptId:string, checkEf
   const [row]=await db`SELECT a.id FROM job_attempts a JOIN jobs j ON j.id=a.job_id
     WHERE j.id=${jobId} AND a.id=${attemptId} AND a.status='active' AND NOT a.cancel_requested
       AND j.status='running' AND j.lease_expires_at>clock_timestamp()
-      AND j.started_at+j.timeout_sec*interval '1 second'>clock_timestamp()
+      AND COALESCE(j.execution_deadline_at,j.started_at+j.timeout_sec*interval '1 second')>clock_timestamp()
       AND (${notCheck} OR NOT EXISTS (SELECT 1 FROM job_attempt_effects e JOIN jobs source ON source.id=e.job_id
         WHERE source.canvas_id=j.canvas_id AND source.project_id=j.project_id
         AND NOT (${recovery} AND e.job_id=${targetJob} AND e.attempt_id=${targetAttempt})

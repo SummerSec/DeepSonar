@@ -74,7 +74,7 @@ test("legacy recovery exceptions are modeled behind the lifecycle application se
   assert.match(lifecycleSource, /runtime_knobs,stall_sec/);
   assert.match(lifecycleSource, /status IN \('claimed','provisioning','running'\)/);
   assert.match(lifecycleSource, /started_at\s+IS\s+NOT\s+NULL/);
-  assert.match(lifecycleSource, /started_at\s+\+\s+\(timeout_sec\s+\*\s+interval\s+'1 second'\)\s+<\s+now\(\)/);
+  assert.match(lifecycleSource, /COALESCE\(execution_deadline_at,started_at\+timeout_sec\*interval '1 second'\)\s+<\s+now\(\)/);
   assert.match(reaperSource, /createSqlJobLifecycleApplication\(\)/);
   assert.match(lifecycleSource, /reapLeaseOrphans/);
   assert.match(lifecycleSource, /COALESCE\(heartbeat_at, '-infinity'::timestamptz\) < lease_expires_at/);
