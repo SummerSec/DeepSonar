@@ -366,7 +366,13 @@ function correlatedHeaders(value: unknown, requestId: string): Record<string, st
 
 function guardedRegistry(registry: unknown, config: FrozenConfig, state: GuardState, assertConfig: () => void): AnyRecord {
   if (!isRecord(registry)) fail("PI_OM_MODEL_REGISTRY_MISSING");
-  const secrets = [process.env.DEEPSONAR_GATEWAY_TOKEN, process.env.DEEPSONAR_API_TOKEN]
+  // Pi 的网关令牌走 0600 私有文件通道；环境里的路径本身不是秘密。
+  const tokenFile = process.env.DEEPSONAR_GATEWAY_TOKEN_FILE;
+  let fileToken = "";
+  if (tokenFile) {
+    try { fileToken = readFileSync(tokenFile, "utf8").trim(); } catch { fileToken = ""; }
+  }
+  const secrets = [process.env.DEEPSONAR_GATEWAY_TOKEN, fileToken, process.env.DEEPSONAR_API_TOKEN]
     .filter((value): value is string => typeof value === "string" && value.length > 0);
   const assertModel: (model: unknown) => asserts model is AnyRecord = (model) => {
     try {

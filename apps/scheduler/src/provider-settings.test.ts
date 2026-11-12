@@ -147,7 +147,12 @@ test("Pi models.json 支持 provider、模型解析和网关改写", () => {
   assert.equal(routed[0]?.path, ".pi/agent/models.json");
   assert.equal(routed[1]?.path, ".pi/agent/auth.json");
   assert.equal(routed[2]?.path, ".pi/agent/settings.json");
-  assert.match(routed[0]!.content, /DEEPSONAR_GATEWAY_TOKEN/);
+  const modelsContent = JSON.parse(routed[0]!.content) as { providers: Record<string, { apiKey?: string }> };
+  const authContent = JSON.parse(routed[1]!.content) as Record<string, { key: string }>;
+  const jobTokenValue = Object.values(authContent)[0]!.key;
+  for (const provider of Object.values(modelsContent.providers)) {
+    assert.equal(provider.apiKey, jobTokenValue);
+  }
   assert.doesNotMatch(routed[0]!.content, /long-lived|api\.openai\.com/);
   assert.doesNotMatch(routed[0]!.content, /"authHeader": true/);
   assert.match(routed[1]!.content, /deepsonarjob_12345678_test-token-value/);
@@ -334,7 +339,8 @@ test("Pi anthropic-messages 网关改写补 authHeader 以便现网 Gateway 认 
   };
   assert.equal(models.providers.anthropic.api, "anthropic-messages");
   assert.equal(models.providers.anthropic.authHeader, true);
-  assert.equal(models.providers.anthropic.apiKey, "$DEEPSONAR_GATEWAY_TOKEN");
+  const authContent = JSON.parse(routed[1]!.content) as Record<string, { key: string }>;
+  assert.equal(models.providers.anthropic.apiKey, authContent.anthropic.key);
 });
 
 test("Pi official multi-provider settings keep the default model on its declared route", () => {

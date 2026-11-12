@@ -25,6 +25,7 @@ import {
 } from "./runtime-adapters.js";
 import type { AgentRuntimeLaunchSpecification } from "./agent-runtime-profile-adapters.js";
 import { assertWorkspaceWritePath, shellQuote, type RuntimeHost } from "./runtime-host.js";
+import { preparePiGatewayTokenFile } from "./gateway-token-channel.js";
 import { PiRpcDriver } from "./pi-rpc-driver.js";
 import { PiLengthRecovery, PI_LENGTH_RECOVERY_MESSAGE, PI_LENGTH_COMPACTION_INSTRUCTIONS,
   piRecoveryGuardReason, type PiRecoveryAction, type RuntimeModelBudget } from "./pi-length-recovery.js";
@@ -1361,12 +1362,12 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     await host.uploadFile(content, normalized);
   }
 
-  // 2. Runtime Adapter 驱动官方 CLI 协议；HTTP 准入层不改写已形成请求。
-  //    语义事件只接受 Job 级控制 API；CLI 流里的伪造控制 MCP tool call 只告警，不映射为事件。
+  // 2. Runtime Adapter 驱动官方 CLI 协议（HTTP 准入层不改写已形成请求）；语义事件只接受 Job 级控制 API，CLI 流里的伪造控制 MCP tool call 只告警，不映射为事件。
   const cliEnv = runtimeCliEnv(spec.env);
+  await preparePiGatewayTokenFile(host, spec.provider, cliEnv); // #1032 P0-2 A1：Pi 令牌走 0600 文件
   const piMainBudgetEnabled = spec.provider === "pi" && Boolean(cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
   if (cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM) {
-    if (!cliEnv.DEEPSONAR_GATEWAY_TOKEN) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
+    if (!cliEnv.DEEPSONAR_GATEWAY_TOKEN && !cliEnv.DEEPSONAR_GATEWAY_TOKEN_FILE) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
     await host.run(`mkdir -p -- ${shellQuote(RUNTIME_DIR)}`);
     await host.uploadFile(MODEL_REQUEST_POLICY_SOURCE, MODEL_REQUEST_POLICY_PATH);
   }

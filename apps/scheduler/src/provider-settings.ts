@@ -253,7 +253,9 @@ export function routeMaterializedProviderFilesThroughGateway(input: {
     for (const [providerId, rawProvider] of Object.entries(providers)) {
       const provider = asObject(rawProvider);
       provider.baseUrl = gatewayBaseUrl;
-      provider.apiKey = "$DEEPSONAR_GATEWAY_TOKEN";
+      // Provider 仍需声明 apiKey 才进入凭据解析分支；Pi 的已存凭据（auth.json）
+      // 优先于环境或字面值，因此这里给出同一 Job 令牌，环境中不再暴露令牌。
+      provider.apiKey = jobToken;
       // Pi anthropic-messages 默认只发 x-api-key；现网 Gateway 认 Bearer。
       if (provider.api === "anthropic-messages") provider.authHeader = true;
       providers[providerId] = provider;

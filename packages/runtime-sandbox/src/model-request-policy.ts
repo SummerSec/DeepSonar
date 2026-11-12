@@ -6,7 +6,7 @@ export const MODEL_REQUEST_POLICY_PATH = "/workspace/.deepsonar/model-request-po
 /** Explicit client admission policy; formed HTTP requests are never rewritten. */
 export function modelRequestPolicyCommand(command: string, env: Record<string, string>, cli?: "claude-code"): string {
   if (!env.DEEPSONAR_REQUEST_POLICY_UPSTREAM) return command;
-  if (!env.DEEPSONAR_GATEWAY_TOKEN) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
+  if (!env.DEEPSONAR_GATEWAY_TOKEN && !env.DEEPSONAR_GATEWAY_TOKEN_FILE) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
   return `node ${shellQuote(MODEL_REQUEST_POLICY_PATH)}${cli ? " --claude-launch-budget" : ""} -- ${shellQuote(command)}`;
 }
 
@@ -24,6 +24,15 @@ import path from 'node:path';
 const LIMIT = 16 * 1024 * 1024;
 const AUTH = new Set(['authorization','x-api-key','anthropic-api-key','proxy-authorization']);
 const HOP = new Set(['connection','keep-alive','proxy-authenticate','proxy-authorization','te','trailer','transfer-encoding','upgrade']);
+// 明文令牌优先取环境（Claude 等仍走环境），Pi 走 0600 私有文件通道。
+async function launchToken() {
+  const injected = process.env.DEEPSONAR_GATEWAY_TOKEN;
+  if (typeof injected === 'string' && injected) return injected;
+  const file = process.env.DEEPSONAR_GATEWAY_TOKEN_FILE;
+  if (!file) fail('MODEL_REQUEST_POLICY_TOKEN_MISSING');
+  try { return (await readFile(file,'utf8')).trim(); }
+  catch { fail('MODEL_REQUEST_POLICY_TOKEN_MISSING'); }
+}
 function fail(code, status = 409) { throw Object.assign(new Error(code), { status }); }
 function headers(raw, request = false) {
   const removed = new Set(HOP);
@@ -307,7 +316,7 @@ export async function prepareClaudeLaunch(command, environment, settings = []) {
 async function launch() {
   const delimiter = process.argv.indexOf('--');
   if (delimiter < 0 || !process.argv[delimiter + 1]) fail('MODEL_REQUEST_POLICY_COMMAND');
-  const policy = await startModelRequestPolicy({ upstream: process.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token: process.env.DEEPSONAR_GATEWAY_TOKEN });
+  const policy = await startModelRequestPolicy({ upstream: process.env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token: await launchToken() });
   let launchCommand = process.argv.slice(delimiter+1).join(' '), launchEnv = process.env;
   if (process.argv.slice(2,delimiter).includes('--claude-launch-budget')) {
     try {

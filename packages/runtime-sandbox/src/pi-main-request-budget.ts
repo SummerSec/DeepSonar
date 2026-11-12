@@ -39,6 +39,7 @@ import { createAssistantMessageEventStream, streamSimple as sdkStreamSimple } fr
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 ${PI_ANTHROPIC_THINKING_POLICY_SOURCE}
@@ -135,9 +136,18 @@ export function preparePiMainSdkRequest(model, options, allowance) {
   return { model: selected, options: { ...options, maxTokens: limit, maxRetries: 0 } };
 }
 
+// Pi 侧明文令牌走 0600 私有文件通道，环境里只留路径；显式注入的环境值仍优先（测试与其他 CLI）。
+export function sandboxToken(env = process.env) {
+  const injected = env.DEEPSONAR_GATEWAY_TOKEN;
+  if (typeof injected === 'string' && injected) return injected;
+  const file = env.DEEPSONAR_GATEWAY_TOKEN_FILE;
+  if (!file) return undefined;
+  try { return readFileSync(file, 'utf8').trim() || undefined; } catch { return undefined; }
+}
+
 export function createPiMainRequestBudgetExtension(env = process.env, delegate = sdkStreamSimple) {
   const gateway = endpoint(env.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
-  const token = env.DEEPSONAR_GATEWAY_TOKEN;
+  const token = sandboxToken(env);
   if (typeof token !== 'string' || !token) fail('PI_MAIN_BUDGET_TOKEN_MISSING');
   const secrets = [token, env.DEEPSONAR_API_TOKEN]
     .filter(value => typeof value === 'string' && value.length > 0);
