@@ -1,7 +1,7 @@
 # 项目 Memory 与 Skill
 
-> 状态：#752 生命周期已有实现；本轮项目批量整理、隔离试验和积累/复用投影已进入共享工作树，尚未运行本轮 Actions、合并或部署。代码、[schema 基线](../database/schema.sql)和测试是事实入口；模型效果不能由状态机夹具推定。
-> 同步日期：2026-11-11
+> 状态：#752 生命周期已有实现；本轮项目批量整理、隔离试验和积累/复用投影已进入共享工作树，原候选 `6d96df59` 已通过主 CI 与 Reverse 专项，同步 main 后的候选须独立验收；尚未合并或部署。代码、[schema 基线](../database/schema.sql)和测试是事实入口；模型效果不能由状态机夹具推定。
+> 同步日期：2026-11-12
 
 项目知识分为 Memory（有来源的简短事实）和 Skill（触发条件、步骤、输入输出、不适用边界）。两者有稳定身份、不可变版本和 active 指针。草稿、候选和评测资料不进入普通 Job 目录。
 
@@ -83,7 +83,13 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 ## 验证与运维
 
-全部测试、构建、typecheck 仅在 GitHub Actions 执行。本轮静态核对 [package.json](../package.json) 与 [ci.yml](../.github/workflows/ci.yml)：`pnpm ci:unit:project-knowledge`、独立 `TEST_DATABASE_URL` 下的 `pnpm ci:integration:project-knowledge`、`pnpm ci:unit:web-facts` 已有工作流入口；新增 [collector](../apps/scheduler/src/domains/project-knowledge/collector.integration.test.ts)、[闭环合成记录](../apps/scheduler/src/domains/project-knowledge/closed-loop.integration.test.ts)、[activity](../apps/scheduler/src/domains/project-knowledge/activity.integration.test.ts)、[快照隔离](../apps/scheduler/src/job-creation.integration.test.ts)、[调度唤醒](../apps/scheduler/src/knowledge-wake.integration.test.ts) 和 [Web 交互](../apps/web/src/ProjectKnowledgeApi.test.ts) 回归已接线。[behavior-policy 独立单测](../apps/scheduler/src/domains/project-knowledge/behavior-policy.test.ts)覆盖允许 target comparator fail，以及 candidate 失败、安全任一 arm 失败、unexecuted、重复/缺项仍拒绝的边界。当前本轮尚未运行，未合并、未部署。集成 helper 为每例创建临时数据库并套当前基线，不能指向业务默认数据库。历史记录中的通过结果不代表本轮最终 SHA 通过。
+全部测试、构建、typecheck 仅在 GitHub Actions 执行。本轮静态核对 [package.json](../package.json) 与 [ci.yml](../.github/workflows/ci.yml)：`pnpm ci:unit:project-knowledge`、独立 `TEST_DATABASE_URL` 下的 `pnpm ci:integration:project-knowledge`、`pnpm ci:unit:web-facts` 已有工作流入口；新增 [collector](../apps/scheduler/src/domains/project-knowledge/collector.integration.test.ts)、[闭环合成记录](../apps/scheduler/src/domains/project-knowledge/closed-loop.integration.test.ts)、[activity](../apps/scheduler/src/domains/project-knowledge/activity.integration.test.ts)、[快照隔离](../apps/scheduler/src/job-creation.integration.test.ts)、[调度唤醒](../apps/scheduler/src/knowledge-wake.integration.test.ts) 和 [Web 交互](../apps/web/src/ProjectKnowledgeApi.test.ts) 回归已接线。[behavior-policy 独立单测](../apps/scheduler/src/domains/project-knowledge/behavior-policy.test.ts)覆盖允许 target comparator fail，以及 candidate 失败、安全任一 arm 失败、unexecuted、重复/缺项仍拒绝的边界。原候选的 Actions 证据见下文；同步 main 后的候选仍须独立验收，未合并、未部署。集成 helper 为每例创建临时数据库并套当前基线，不能指向业务默认数据库。历史记录中的通过结果不代表本轮最终 SHA 通过。
+
+### PR #1076 的候选验收记录（2026-11-12 核对）
+
+提交 `6d96df59119739becffd31a59696451167366af7` 的[主 CI](https://github.com/SummerSec/DeepSonar/actions/runs/43012390072)和 [Reverse 专项](https://github.com/SummerSec/DeepSonar/actions/runs/43012390067)已成功；包含工作区 typecheck/build、知识单元与 PostgreSQL 集成、Web 回归和适用运行时检查。collector 回归覆盖瞬态故障保留待处理资格、持久退避与重启后唤醒、恢复时并发仅创建一个 work、第三次失败明确终止及提交响应丢失先对账。闭环使用合成执行证据，不证明真实模型收益。
+
+上述通过结果只属于该提交；本次同步 main 的 Pi 重试结算变更并解决文档冲突后，必须重新核对最终 head 的主 CI 和所有适用专项。本机仅静态复核与 `git diff --check`，不运行测试、构建或 typecheck，不合并 PR、不部署，也不做真实模型试验。
 
 早期分支曾由 v59 升为 v60，使用基线重建；当时已在独立 PostgreSQL 16 容器执行 `pnpm db:rebuild -- --plan` / `--apply`，验证备份可恢复为 v59、列交集回填保留项目记录且目标为 v60。生产部署、生产库重建和长期模型效果试验均应在单独授权的环境进行。
 
@@ -117,7 +123,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 来源解析与 CAS 字节准备在短 SQL 事务外进行；项目行锁下重新检查项目活动、最新成功 Attempt、冻结 `request_project_knowledge` 权限、未结算效果、当前来源/hash、既有处理及 governor 版本，再原子建立 `knowledge:project:` work 和逐来源 `project_knowledge.source_collected` 审计链接。链接保存 `registration_id`、`work_ref`、`attempt_id`、`input_count`、`manifest_sha256`，最后一项为该来源冻结 manifest 的 canonical SHA-256，保留来源执行身份与输入摘要而不在审计中复制正文。无新 schema、迁移或第二份经验账本。
 
-超大来源、失权、未知效果或来源准备失败写 `project_knowledge.source_collection_skipped`（`system/scheduler`、`result=error`，安全 `error_code`/`after_json.reason`）。坏源不热重试；登记经 collected/skipped 消费后不再被 collector 自动重建。未结算/unknown 效果仍走原对账边界，跳过不是已解决，也不授予重放权限。各项目间隔离，项目行锁和同事务链接用于并发/restart 去重；具体实现见 [collector-sources.ts](../apps/scheduler/src/domains/project-knowledge/collector-sources.ts) 与 [scheduler](../apps/scheduler/src/project-knowledge-scheduler.ts)。
+超大来源、失权、未知效果等永久拒绝，以及瞬态来源准备失败累计三次耗尽后写 `project_knowledge.source_collection_skipped`（`system/scheduler`、`result=error`，安全 `error_code`/`after_json.reason`）。瞬态故障按下文持久退避，不能因一次准备失败永久消费来源；登记经 collected/skipped 消费后不再被 collector 自动重建。未结算/unknown 效果仍走原对账边界，跳过不是已解决，也不授予重放权限。各项目间隔离，项目行锁和同事务链接用于并发/restart 去重；具体实现见 [collector-sources.ts](../apps/scheduler/src/domains/project-knowledge/collector-sources.ts) 与 [scheduler](../apps/scheduler/src/project-knowledge-scheduler.ts)。
 
 `GET /projects/:id/knowledge/backfill` 保留项目读权限内的历史资格只读预览；不返回正文、不登记历史来源、不启动整理，没有 POST 历史执行入口。自动 collector 只消费已经持久登记的来源，不把预览自动升级为下发授权。整链 token 预算和 schema 改动仍不在本轮范围。
 

@@ -5,7 +5,7 @@
 #1002 P1-8：[同项目多账号池](architecture/06-runtime-view.md#凭据与-cli-解析757)仅为新 Job 在显式授权、同 Provider/CLI/模型的账号间选择并冻结，沿用默认优先及原 Job 恢复身份/预算门；readiness 不消费轮次，不能借故障自动换 key。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
 
 > 状态：工程实现、最终 SHA 验收与正式发行分别记录；当前修复涵盖 #871/#873/#874，#834 仍暂缓。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-12
 > **可行动人工请求（2026-11-09）**：严格 guidance、完整 body_json、L0/L1 按需读取、waiting_human 当前 Scheduler 投影及同 Job 待办去重已同步到 [FR-CTRL-004 / FR-WEB-003 / NFR-UX-001](architecture/01-system-specification.md)、[接口/运行时视图](architecture/09-interface-specs.md#可行动人工请求2026-11-09)和[生命周期专题](AGENT_REPAIR_LIFECYCLE.md#可行动人工请求与待办投影)。消息账本、恢复准入、ACK 和完成仍独立；最终 SHA Actions 待验，注意力收益未测量。
 > **同 Job 模型失败恢复（#1002 P1-9）**：[契约](MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)记录 Pi SDK 的 scoped no-start→新关联模型调用、原 live owner/预算重新准入与跨代际恢复许可。没有 Agent 重启、旧效果重放或退款，unknown/partial/无来源历史拒绝；受控 SDK 与真实 SQL/HTTP 回归保留，#1036 D 的[固定 Pi 同进程原生回归](MODEL_GATEWAY_TRANSPARENCY.md#1036-d原生-pi-恢复链的离线回归)新增至核心 base 镜像 smoke，Gateway 为合成服务，最终 SHA Actions 待验。
 > **#1002 P2-10 清理前诊断读回**：[OpenSandbox 专题](OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)记录原 append-only audit/Attempt 引用同事务及 Job GET 有界重验投影。无新通知/设置/状态/重放或失败容器保留；SQL/HTTP/受控 Provider 回归已接 Actions，最终 SHA 待验，原始 Engine 日志与现场因果不冒充恢复。
@@ -274,4 +274,6 @@
 #1018 的[项目任务队列](PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 72 与验收边界，最终 SHA Actions 待验。
 #1019 的[事实用途与待处理投影](EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。
 
-项目知识的来源登记→有界项目批次→独立试验/审查→后续拉取与模型反馈，以及积累/复用只读投影见[专题](PROJECT_KNOWLEDGE.md)。[ADR0022](architecture/adr/0022-project-knowledge-collection.md)在用户本轮授权内取代0021的项目批处理暂缓限制，保留历史预览只读和旧knowledge:auto禁用；无schema或整链token预算变化。审计绑定来源Attempt/manifest摘要，trial隔离评分输入，完整6×2与候选/安全组硬门保持。collector/闭环/activity/快照隔离、behavior-policy与Web回归已接Actions入口，本轮尚未运行、未合并未部署；模型反馈不是收益认证，注意力和质量收益未知。
+项目知识的来源登记→有界项目批次→独立试验/审查→后续拉取与模型反馈，以及积累/复用只读投影见[专题](PROJECT_KNOWLEDGE.md)。[ADR0022](architecture/adr/0022-project-knowledge-collection.md)在用户本轮授权内取代0021的项目批处理暂缓限制，保留历史预览只读和旧knowledge:auto禁用；无schema或整链token预算变化。审计绑定来源Attempt/manifest摘要，trial隔离评分输入，完整6×2与候选/安全组硬门保持。collector/闭环/activity/快照隔离、behavior-policy与Web回归已接Actions入口；`6d96df59` 的主CI与Reverse专项已通过，同步main后的候选仍须独立验收，未合并未部署。模型反馈不是收益认证，注意力和质量收益未知；证据见[专题验收记录](PROJECT_KNOWLEDGE.md#验证与运维)。
+
+> **Pi 内部重试结算（#1072）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)区分单次模型消息错误与 `agent_settled`，保留完成门、取消和进程失败边界；镜像内原始错误 cause 丢失的证据限制单独记录。回归接既有 runtime-sandbox Actions，最终 SHA 待验；现场 Job 未重跑。

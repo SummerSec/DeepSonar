@@ -1,8 +1,8 @@
 # 0022. 以持久来源审计驱动有界项目知识批次和隔离评测
 
-> 状态：**已采纳**；共享工作树实现待最终 SHA Actions，未合并、未部署。
+> 状态：**已采纳**；原候选 `6d96df59` 已通过 Actions，同步 main 后的候选另验，未合并、未部署。
 > 决策日期：2026-11-11
-> 同步日期：2026-11-11
+> 同步日期：2026-11-12
 > 来源：用户本轮明确授权自动项目整理；[collector](../../../apps/scheduler/src/domains/project-knowledge/collector.ts)、[工作链](../../../apps/scheduler/src/domains/project-knowledge/work.ts)。
 > 关联需求：FR-KNOW-001、FR-KNOW-002、NFR-UX-001。
 
@@ -24,7 +24,7 @@
 
 ## 状态
 
-2026-11-11：用户明确扩大到自动项目批量整理，采纳本决定；0021 关于批处理暂缓的限制在该范围内被取代。当前共享工作树包含 collector、隔离试验、真实版本回执与只读可见性实现，测试入口已接线但本轮 Actions 尚未运行。未执行真实模型验证、合并或部署，质量收益保持 unknown/not_evaluated。
+2026-11-11：用户明确扩大到自动项目批量整理，采纳本决定；0021 关于批处理暂缓的限制在该范围内被取代。实现包含 collector、隔离试验、真实版本回执与只读可见性，测试入口已接线。2026-11-12 核对：原候选 `6d96df59` 的主 CI 与 Reverse 专项已通过；同步 main 后的候选须独立验收，运行链接见[专题记录](../../PROJECT_KNOWLEDGE.md#验证与运维)。未执行真实模型验证、合并或部署，质量收益保持 unknown/not_evaluated。
 
 ## 后果
 
@@ -33,7 +33,7 @@
 - 减少逐 Job 人工整理与状态猜测；紧凑汇总、阻塞链接和按需展开复用现有知识页刷新，不新增通知、设置或轮询。具体注意力成本见[专题表格](../../PROJECT_KNOWLEDGE.md#注意力成本)，尚无收益实测。
 - 自动执行消耗既有预算；独立矩阵有真实 Job 成本。坏源停止自动重试，可能需要原来源问题修复和后续明确处理，不能暗中放宽权限或重建旧批次。
 - 无新 schema 或经验账本；现有审计、manifest、assignment、receipt 和 usage 承担来源与使用追溯。`assignment.source_mode`标识项目批次，评分输入以`evaluation:proposal:<id>`绑定revision/input_digest/plan及reviewer的behavior，audience排除trial。
-- 验收入口为 Actions 中的 `pnpm ci:unit:project-knowledge`、`pnpm ci:integration:project-knowledge`、`pnpm ci:unit:web-facts`、路由/权限与文档门禁。[behavior-policy 单测](../../../apps/scheduler/src/domains/project-knowledge/behavior-policy.test.ts)独立保护允许对照失败与candidate/安全失败、unexecuted/重复缺项拒绝的边界。collector/activity/闭环与隔离回归为合成或替身工程证据，不能替代独立真实模型收益研究。本轮未运行任何测试、构建或 typecheck。
+- 验收入口为 Actions 中的 `pnpm ci:unit:project-knowledge`、`pnpm ci:integration:project-knowledge`、`pnpm ci:unit:web-facts`、路由/权限与文档门禁。[behavior-policy 单测](../../../apps/scheduler/src/domains/project-knowledge/behavior-policy.test.ts)独立保护允许对照失败与candidate/安全失败、unexecuted/重复缺项拒绝的边界。collector/activity/闭环与隔离回归为合成或替身工程证据，不能替代独立真实模型收益研究。本机不运行测试、构建或 typecheck；上述 Actions 证据仅覆盖原候选，不替代同步 main 后的最终 SHA。
 
 ## 替代方案
 
