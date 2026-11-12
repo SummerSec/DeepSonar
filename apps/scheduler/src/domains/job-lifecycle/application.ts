@@ -16,7 +16,15 @@ import {
   requestAttemptCancel,
   settleAttemptTerminal,
 } from "../job-attempt/index.js";
-import { CHROME_JOB_STALL_SEC, HUB_JOB_STALL_SEC, TOOL_CALL_STARTED_PREFIX } from "./stall-policy.js";
+import {
+  CHROME_JOB_STALL_SEC,
+  HUB_JOB_STALL_SEC,
+  INFLIGHT_TOOL_BUDGET_MIN_SEC,
+  INFLIGHT_TOOL_BUDGET_MULTIPLIER,
+  INFLIGHT_TOOL_STALL_ERROR,
+  INFLIGHT_TOOL_STALL_REASON,
+  TOOL_CALL_STARTED_PREFIX,
+} from "./stall-policy.js";
 
 export type {
   JobLifecycleDatabase,
@@ -298,44 +306,38 @@ export function createSqlJobLifecycleApplication(
       const chromeTestStall = CHROME_JOB_STALL_SEC["deepsonar-chrome-test"];
       const chromeFuzzStall = CHROME_JOB_STALL_SEC["deepsonar-chrome-fuzz"];
       const hubStall = HUB_JOB_STALL_SEC;
+      const inflightMin = INFLIGHT_TOOL_BUDGET_MIN_SEC;
+      const inflightMultiplier = INFLIGHT_TOOL_BUDGET_MULTIPLIER;
       return atomically(async (tx) => {
-        const result = await tx`
-          UPDATE jobs SET status = 'failed', finished_at = now(),
-                          error = COALESCE(error, '') || '产出停滞（Reaper 判定）'
-          WHERE status = 'running'
-            AND started_at IS NOT NULL
-            AND COALESCE(
-              (agent_snapshot_json #>> '{runtime_knobs,stall_sec}')::int,
-              ${platformStall}::int
-            ) > 0
-            AND GREATEST(
-              started_at,
-              COALESCE((SELECT max(e.created_at) FROM events e WHERE e.job_id = jobs.id), started_at)
-            ) + (
-              GREATEST(
-                COALESCE(
+        // #1086：stall 下限与 in-flight tool 预算共用同一 floor 表达式，避免第二套阈值漂移。
+        const floorSec = tx`GREATEST(
+              COALESCE(
+                (agent_snapshot_json #>> '{runtime_knobs,stall_sec}')::int,
+                ${platformStall}::int
+              ),
+              CASE agent_snapshot_json #>> '{runtime_image,image_key}'
+                WHEN 'deepsonar-chrome-fuzz' THEN ${chromeFuzzStall}::int
+                WHEN 'deepsonar-chrome-audit' THEN ${chromeAuditStall}::int
+                WHEN 'deepsonar-chrome-test' THEN ${chromeTestStall}::int
+                ELSE COALESCE(
                   (agent_snapshot_json #>> '{runtime_knobs,stall_sec}')::int,
                   ${platformStall}::int
-                ),
-                CASE agent_snapshot_json #>> '{runtime_image,image_key}'
-                  WHEN 'deepsonar-chrome-fuzz' THEN ${chromeFuzzStall}::int
-                  WHEN 'deepsonar-chrome-audit' THEN ${chromeAuditStall}::int
-                  WHEN 'deepsonar-chrome-test' THEN ${chromeTestStall}::int
-                  ELSE COALESCE(
-                    (agent_snapshot_json #>> '{runtime_knobs,stall_sec}')::int,
-                    ${platformStall}::int
-                  )
-                END,
-                CASE type
-                  WHEN 'hub_reason' THEN ${hubStall}::int
-                  ELSE 0
-                END
-              )::int * interval '1 second'
-            ) < now()
-            AND NOT (
+                )
+              END,
+              CASE type
+                WHEN 'hub_reason' THEN ${hubStall}::int
+                ELSE 0
+              END
+            )`;
+        const lastActivity = tx`GREATEST(
+              started_at,
+              COALESCE((SELECT max(e.created_at) FROM events e WHERE e.job_id = jobs.id), started_at)
+            )`;
+        const leaseLive = tx`(
               lease_expires_at IS NOT NULL
               AND lease_expires_at > now()
-              AND (
+            )`;
+        const inflightTool = tx`(
                 NULLIF(payload_json #>> '{runtime_activity,inflight_tool}', '') IS NOT NULL
                 OR COALESCE(
                   (
@@ -349,13 +351,40 @@ export function createSqlJobLifecycleApplication(
                   ),
                   ''
                 ) LIKE ${`${TOOL_CALL_STARTED_PREFIX}%`}
-              )
-            )
+              )`;
+        const inflightBudget = tx`GREATEST(
+              ${floorSec}::int * ${inflightMultiplier}::int,
+              ${inflightMin}::int
+            )::int * interval '1 second'`;
+        // 先收口超出 in-flight 预算的挂死工具（独立稳定原因），再走普通停滞判定；
+        // 已 failed 的行不会在第二条 UPDATE 里再次匹配 status='running'。
+        const inflightStalled = await tx`
+          UPDATE jobs SET status = 'failed', finished_at = now(),
+                          error = COALESCE(error, '') || ${INFLIGHT_TOOL_STALL_ERROR}
+          WHERE status = 'running'
+            AND started_at IS NOT NULL
+            AND ${floorSec}::int > 0
+            AND ${leaseLive}
+            AND ${inflightTool}
+            AND ${lastActivity} + ${inflightBudget} < now()
+          RETURNING id, sandbox_id`;
+        for (const row of inflightStalled) {
+          await settleAttemptTerminal(tx, String(row.id), "failed",
+            { reason: INFLIGHT_TOOL_STALL_REASON }, INFLIGHT_TOOL_STALL_ERROR);
+        }
+        const result = await tx`
+          UPDATE jobs SET status = 'failed', finished_at = now(),
+                          error = COALESCE(error, '') || '产出停滞（Reaper 判定）'
+          WHERE status = 'running'
+            AND started_at IS NOT NULL
+            AND ${floorSec}::int > 0
+            AND ${lastActivity} + ${floorSec}::int * interval '1 second' < now()
+            AND NOT (${leaseLive} AND ${inflightTool})
           RETURNING id, sandbox_id`;
         for (const row of result) {
           await settleAttemptTerminal(tx, String(row.id), "failed", { reason: "reaper_stall" }, "产出停滞（Reaper 判定）");
         }
-        return rows(result as unknown as JobLifecycleRow[]);
+        return rows([...inflightStalled, ...result] as unknown as JobLifecycleRow[]);
       });
     },
 

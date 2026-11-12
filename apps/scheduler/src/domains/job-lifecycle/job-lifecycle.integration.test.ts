@@ -260,6 +260,11 @@ if (!testDatabaseUrl) {
       const longToolAudit = await insertRunning("deepsonar-audit", {
         payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
       });
+      // #1086：in-flight 豁免不再无上限；把一次活动的 started_at 推到 1h in-flight 预算之外。
+      const hungToolAudit = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${hungToolAudit}`;
 
       const stalled = await app.reapStalledExecution(900);
       const stalledIds = new Set(stalled.map((row) => row.id));
@@ -268,6 +273,12 @@ if (!testDatabaseUrl) {
       assert.equal(stalledIds.has(chromeFuzzInflight), false, "chrome-fuzz with in-flight tool + live lease is kept");
       assert.equal(stalledIds.has(silentChromeNoTool), false, "chrome-audit uses the 5400s stall floor");
       assert.equal(stalledIds.has(longToolAudit), false, "non-chrome in-flight tool + live lease is kept");
+      assert.equal(stalledIds.has(hungToolAudit), true, "an in-flight tool beyond its 1h budget is reaped");
+      const [hungRow] = await sql`SELECT status, error FROM jobs WHERE id = ${hungToolAudit}`;
+      assert.equal(hungRow.status, "failed");
+      assert.match(String(hungRow.error), /in-flight tool 超出预算/);
+      const [hungAttempt] = await sql`SELECT outcome_json->>'reason' AS reason FROM job_attempts WHERE job_id = ${hungToolAudit} ORDER BY created_at DESC LIMIT 1`;
+      assert.equal(hungAttempt.reason, "reaper_inflight_tool_stalled");
 
       const [silentRow] = await sql`SELECT status, error FROM jobs WHERE id = ${silentAudit}`;
       assert.equal(silentRow.status, "failed");
