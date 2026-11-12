@@ -15,14 +15,14 @@ test("DSH image preflight rejects old, incomplete and mismatched governed plugin
   const vendor = "synthetic pinned vendor";
   const artifact = "synthetic governed artifact";
   const manifestPath = root + "/lib/deepsonar-request-budget.manifest.json";
-  const manifest = { version: 1, vendorVersion: "0.2.1-rc.2", sdkVersion: "1.4.0",
+  const manifest = { version: 1, vendorVersion: "0.2.2-rc.1", sdkVersion: "1.5.2",
     vendorSha256: hash(vendor), artifactSha256: hash(artifact), helperSha256: hash(DSH_REQUEST_BUDGET_SOURCE) };
   const valid = new Map([
-    [root + "/package.json", JSON.stringify({ name: "@deepseek-ai/dsh-llm-pi-ai", version: "0.2.1-rc.2" })],
+    [root + "/package.json", JSON.stringify({ name: "@deepseek-ai/dsh-llm-pi-ai", version: "0.2.2-rc.1" })],
     [manifestPath, JSON.stringify(manifest)],
     [root + "/lib/index.js", vendor], [root + "/lib/deepsonar-index.js", artifact],
     [root + "/lib/deepsonar-request-budget.mjs", DSH_REQUEST_BUDGET_SOURCE],
-    ["/opt/deepsonar/dsh/node_modules/@earendil-works/pi-ai/package.json", JSON.stringify({ name: "@earendil-works/pi-ai", version: "1.4.0" })],
+    ["/opt/deepsonar/dsh/node_modules/@earendil-works/pi-ai/package.json", JSON.stringify({ name: "@earendil-works/pi-ai", version: "1.5.2" })],
   ]);
   const check = (files: Map<string, string>) => {
     const output = { stdout: "", stderr: "", exitCode: 0 };

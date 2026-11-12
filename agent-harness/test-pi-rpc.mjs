@@ -33,7 +33,7 @@ if (process.argv.includes("--inside")) {
     // relocates a wrapper for local smoke testing.
     const reports = await piFixture.runRealPiRpc();
     assert.equal(reports.length, piFixture.PI_RPC_SCENARIOS.length);
-    console.log(`Pi 1.4.0 + canonical OM 3.1.4: ${reports.length} offline real-RPC image scenarios passed`);
+    console.log(`Pi 1.5.2 + canonical OM 3.1.4: ${reports.length} offline real-RPC image scenarios passed`);
     console.log(JSON.stringify({ image_identity: identity, native_main_recovery: await runNativePiMainRecovery() }));
   }
 } else if (process.env.DEEPSONAR_PI_BINARY) {
@@ -44,7 +44,7 @@ if (process.argv.includes("--inside")) {
   } else {
     const reports = await piFixture.runRealPiRpc();
     assert.equal(reports.length, piFixture.PI_RPC_SCENARIOS.length);
-    console.log(`HOST-ONLY Pi 1.4.0 + canonical OM 3.1.4: ${reports.length} offline real-RPC scenarios passed; not image evidence`);
+    console.log(`HOST-ONLY Pi 1.5.2 + canonical OM 3.1.4: ${reports.length} offline real-RPC scenarios passed; not image evidence`);
   }
 } else {
   const repo = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));

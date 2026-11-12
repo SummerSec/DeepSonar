@@ -332,3 +332,56 @@ test("main recovery buffers only an empty failed generation and requires the aut
     } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   }
 });
+test("clamp 解析按镜像布局选择 pi-ai 根：kali 嵌套优先、base 平铺兜底（#1069 评审 P1）", async () => {
+  const source = PI_MAIN_REQUEST_BUDGET_SOURCE;
+  const snippet = source.slice(source.indexOf("// Resolve the SDK's declared public export"), source.indexOf("let contextClamp;"));
+  assert.ok(snippet.includes("piAiCandidateRoots") && snippet.includes("'1.5.2'"), "clamp 源码必须包含候选解析与 1.5.2 身份校验");
+  const moduleSource = [
+    "import { existsSync, realpathSync } from 'node:fs';",
+    "import { readFile } from 'node:fs/promises';",
+    "import { pathToFileURL } from 'node:url';",
+    "function fail(code) { throw new Error(code); }",
+    snippet.replace("import { existsSync, realpathSync } from 'node:fs';", ""),
+  ].join("\n");
+  const mod = await import(`data:text/javascript;base64,${Buffer.from(moduleSource).toString("base64")}`);
+  const nested = "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai";
+  assert.deepEqual(
+    mod.piAiCandidateRoots("/usr/local/lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"),
+    [nested, "/usr/local/lib/node_modules/@earendil-works/pi-ai"],
+    "kali 的嵌套传递依赖必须在平铺根之前",
+  );
+  assert.deepEqual(mod.piAiCandidateRoots("/bare/path"), ["/usr/local/lib/node_modules/@earendil-works/pi-ai"]);
+  assert.deepEqual(mod.piAiCandidateRoots(""), ["/usr/local/lib/node_modules/@earendil-works/pi-ai"]);
+  // 全局安装的 /usr/local/bin/pi 是符号链接：argv[1] 保留链接路径，必须先 realpath 再推导。
+  const { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const fake = mkdtempSync(path.join(tmpdir(), "pi-cli-link-"));
+  try {
+    const nestedDir = path.join(fake, "lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai");
+    mkdirSync(nestedDir, { recursive: true });
+    writeFileSync(path.join(nestedDir, "package.json"), JSON.stringify({ name: "@earendil-works/pi-ai", version: "9.9.9" }));
+    const bundle = path.join(fake, "lib/node_modules/@earendil-works/pi-coding-agent/dist/bundle");
+    mkdirSync(bundle, { recursive: true });
+    writeFileSync(path.join(bundle, "cli.js"), "// stub");
+    const bin = path.join(fake, "bin/pi");
+    mkdirSync(path.dirname(bin), { recursive: true });
+    symlinkSync(path.join(bundle, "cli.js"), bin);
+    const roots = mod.piAiCandidateRoots(bin);
+    assert.deepEqual(
+      (await import("node:fs")).realpathSync(roots[0]),
+      (await import("node:fs")).realpathSync(nestedDir),
+      "符号链接启动路径必须解析到嵌套 SDK",
+    );
+  } finally {
+    rmSync(fake, { recursive: true, force: true });
+  }
+  // 两个候选都不存在时必须结构化失败，而不是静默使用错误 SDK。
+  const original = process.argv[1];
+  process.argv[1] = "/nonexistent/prefix/bin/pi";
+  try {
+    await assert.rejects(mod.loadPiContextClamp(), /PI_MAIN_BUDGET_SDK_VERSION/u);
+  } finally {
+    process.argv[1] = original;
+  }
+});
