@@ -364,9 +364,20 @@ function correlatedHeaders(value: unknown, requestId: string): Record<string, st
   return Object.fromEntries(headers.entries());
 }
 
+/** 控制通道 token 改由 0600 文件提供（#1032 P0-2 A1），其内容同样需要精确脱敏。 */
+function controlChannelToken(): string | undefined {
+  const file = process.env.DEEPSONAR_CONTROL_TOKEN_FILE;
+  if (!file) return undefined;
+  try {
+    return readFileSync(file, "utf8").trim();
+  } catch {
+    return undefined;
+  }
+}
+
 function guardedRegistry(registry: unknown, config: FrozenConfig, state: GuardState, assertConfig: () => void): AnyRecord {
   if (!isRecord(registry)) fail("PI_OM_MODEL_REGISTRY_MISSING");
-  const secrets = [process.env.DEEPSONAR_GATEWAY_TOKEN, process.env.DEEPSONAR_API_TOKEN]
+  const secrets = [process.env.DEEPSONAR_GATEWAY_TOKEN, process.env.DEEPSONAR_API_TOKEN, controlChannelToken()]
     .filter((value): value is string => typeof value === "string" && value.length > 0);
   const assertModel: (model: unknown) => asserts model is AnyRecord = (model) => {
     try {
