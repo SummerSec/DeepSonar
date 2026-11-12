@@ -294,12 +294,12 @@ for (const imageDockerfile of [dockerfile, kaliDockerfile]) {
 }
 const piPackage = "@earendil-works/pi-coding-agent";
 const piManifest = config.npm[piPackage];
-expect(piManifest?.version === "1.4.0", "Pi Coding Agent version must remain pinned");
-expect(piManifest?.integrity === "sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==", "Pi Coding Agent integrity drift");
+expect(piManifest?.version === "1.5.2", "Pi Coding Agent version must remain pinned");
+expect(piManifest?.integrity === "sha512-mUWI04rqF1Vd/m1q+Ps1XeWsTXEVvRUnsmRa83I3Dzua0Tx5bYS93imeqtIfrXf7PkkaR6ERz+AuQhIJlom5yA==", "Pi Coding Agent integrity drift");
 const piInstallRef = `${piPackage}@\${PI_CODING_AGENT_VERSION}`;
 const piIntegrityCheck = `npm view ${piInstallRef} dist.integrity`;
 expect(dockerfile.includes(`ARG PI_CODING_AGENT_VERSION=${piManifest.version}`), "base Pi Coding Agent Docker ARG must remain pinned");
-expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_VERSION=1.4.0") && kaliDockerfile.includes(piInstallRef), "Kali Pi Coding Agent must be installed from the pinned Docker ARG");
+expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_VERSION=1.5.2") && kaliDockerfile.includes(piInstallRef), "Kali Pi Coding Agent must be installed from the pinned Docker ARG");
 expect(dockerfile.includes(`ARG PI_CODING_AGENT_INTEGRITY=${piManifest.integrity}`), "base Pi Coding Agent Docker ARG integrity must remain pinned");
 const expectBaseLock = (manifest, lock, name, entry) => {
   const locked = lock.packages?.[`node_modules/${name}`];
@@ -346,7 +346,7 @@ if (cliLockCommand) {
     expect(rejected, `base CLI install predicate must reject changed Docker ARG ${index + 1}`);
   }
 }
-expect(kaliDockerfile.includes("ARG PI_CODING_AGENT_INTEGRITY=sha512-Z41LpZ3yYHSC/UUps6Mr39UMFPwH8elhJBG9DY1P7kuzsE5qSK/6eMj2EHzO5evJRQWLbKSqUMw+4nCNtIyiQg==") && kaliDockerfile.includes(piIntegrityCheck), "Kali Pi Coding Agent integrity must be verified during the image build");
+expect(kaliDockerfile.includes(`ARG PI_CODING_AGENT_INTEGRITY=${piManifest.integrity}`) && kaliDockerfile.includes(piIntegrityCheck), "Kali Pi Coding Agent integrity must be verified during the image build");
 const sharedPiExtensions = readFileSync(new URL("../packages/shared-types/src/pi-extensions.ts", import.meta.url), "utf8");
 const basePiWeb = config.piExtensions?.["pi-web-access"];
 const kaliPiWeb = kaliConfig.piExtensions?.["pi-web-access"];

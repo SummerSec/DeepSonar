@@ -27,7 +27,7 @@ function canonicalEndpoint(value: string): string | null {
 
 export type ProviderHeaderPurpose = { purpose: "catalog" } | { purpose: "inference"; model: string; provider?: string };
 
-/** Pi 1.4.0 provider-composer rawModelHeaders: overrides precede model definitions. */
+/** Pi 1.5.2 provider-composer rawModelHeaders: overrides precede model definitions. */
 function profileHeaders(profile: Record<string, unknown>, selection: ProviderHeaderPurpose,
   endpoint?: string): ProviderCustomHeaderResolution {
   const provider = sanitizeProviderCustomHeaders(profile.headers);
