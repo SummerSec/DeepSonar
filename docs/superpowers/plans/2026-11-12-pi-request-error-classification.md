@@ -33,3 +33,7 @@ PR 提交后继续 Job `3f413574-89f9-4d4e-b0a0-838aba4118ae` 的 CLI 退出调�
 已核对第二个 Job 的完整压缩归档与 manifest SHA256：`465f48d02acbb83e193930fc35f834eadaa994c199b44f310dbd25ef5e1cc0bb`，1,670 条记录，展开约 30 MB。末次 bash 没有 toolResult；ASAN 的 285 次进度更新只有两份不同文本快照，不能累计为独立输出量，也不能证明 OOM。完整流没有 runtime.stderr；历史容器已移除，Docker 历史事件查询未返回该窗口记录。
 
 `opensandbox-pty.ts` 的 v0.6.19 与调查时 main 为相同 blob `5030b0278d1d77214625a811b71eae3cd5f1d816`：收到真实退出帧、WebSocket 关闭/错误分别都可投影为退出码；未收到退出帧的关闭与错误会合成为 1。因此现有历史证据无法区分真实 CLI exit 1 和通道中断，不能将退出码 1 或 ASAN 快照认作 CLI 自身崩溃的证明。此通道诊断缺口不混入 #1083 请求异常修复；任务未重跑。
+
+## 独立评审修复记录
+
+候选 `0e5b7868` 独立评审指出：新增相对 import 不在既有 data-module/COPY 依赖闭包中，OM guard 仍绑定旧 policy 摘要。已核对 DSH installer、OM boundary loader、Docker COPY 和严格 hash 回归，按原单文件加载契约收回外部 helper、同步源码摘要并补加载边界回归；不降低镜像内容门。修复后的最终 SHA 与实际 Actions 结果另报。

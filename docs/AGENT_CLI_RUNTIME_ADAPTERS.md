@@ -423,6 +423,8 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 
 请求包装层的诊断必须区分 allowance、SDK 调用与 no-start 见证查询，不把所有未知异常只投影成 `PI_MAIN_BUDGET_REQUEST_FAILED`。仅保留有界允许名单化的错误类型、传输 code、HTTP status 与 cause 线索；任意异常原文、Provider 正文、URL、凭据与堆栈不进入错误消息。取消、权限/身份与预算拒绝继续停止，异常文案不能伪造私有宿主完成信号。
 
+生成用的 `pi-main-request-budget.ts` 保持自包含，以供现有 DSH installer 与 OM 边界加载器直接转换为 `data:` 模块；OM 内容守卫继续严格绑定该源码的当前摘要，改动源码时同步摘要并保留正负回归。
+
 错误类别用于诊断，不等于恢复许可。Pi 模型请求继续只在原存活 Job/Attempt/Session、原有界许可及内核持久 `not_started/gateway_transient` 见证下恢复；partial/unknown、缺少见证与取消不重放。请求包装错误不能因重新识别为 timeout/network 而转入通用 CLI 进程重启。共享 DSH reader 的错误与完成身份须同步核对。生成扩展、runner 与共享 reader 回归接 `pnpm ci:unit:runtime-sandbox`；真实锁版本 SDK 接 `pnpm ci:integration:request-budget-sdk`。本轮最终 SHA Actions 待验，现场原失败的底层原因和真实模型恢复效果仍未知；没有重跑历史 Job。
 
 ### 主模型请求准入适配器（#923）

@@ -3,6 +3,8 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import { runInNewContext } from "node:vm";
 import { DSH_REQUEST_BUDGET_SOURCE, DSH_REQUEST_BUDGET_VENDOR_SHA256 } from "./dsh-request-budget.js";
 import { DSH_REQUEST_BUDGET_ARTIFACT_SHA256, DSH_REQUEST_BUDGET_IMAGE_GUARD_SOURCE } from "./dsh-runtime-image-guard.js";
@@ -75,6 +77,36 @@ async function policyFixture() {
   const policy = await import(`data:text/javascript;base64,${Buffer.from(DSH_REQUEST_BUDGET_SOURCE).toString("base64")}`);
   return policy;
 }
+
+test("#1083 raw TypeScript policy loads through DSH installer and OM data-module boundaries", async () => {
+  const dataModule = (source: string) => `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+  // Match the installer's raw source -> strip -> data import chain. A regular
+  // TypeScript import resolves sibling modules and conceals broken image inputs.
+  const mainSource = readFileSync(new URL("./pi-main-request-budget.ts", import.meta.url), "utf8");
+  const mainUrl = dataModule(stripTypeScriptTypes(mainSource));
+  const dshSource = stripTypeScriptTypes(readFileSync(new URL("./dsh-request-budget.ts", import.meta.url), "utf8"))
+    .replace('"./pi-main-request-budget.js"', JSON.stringify(mainUrl));
+  const generated = await import(dataModule(dshSource));
+  const policy = await import(dataModule(generated.DSH_REQUEST_BUDGET_SOURCE));
+  const model = { provider: "fixture", id: "model", api: "openai-completions", maxTokens: 256,
+    baseUrl: "http://127.0.0.1:3100/gateway" };
+  const prepared = policy.preparePiMainSdkRequest(model, { maxTokens: 128 }, { policy_required: true, remaining_tokens: 32 });
+  assert.equal(prepared.model.maxTokens, 32);
+  assert.equal(prepared.options.maxTokens, 32);
+  assert.equal(prepared.options.maxRetries, 0);
+  await assert.rejects(policy.prepareSdkCall({ model, options: { apiKey: "wrong" },
+    frozenIdentity: { ...model, gatewayRoot: model.baseUrl, token: "synthetic-main-token" } }),
+  { message: "DSH_BUDGET_AUTH_MISMATCH" });
+
+  const contextPolicy = await import(mainUrl);
+  assert.deepEqual(contextPolicy.redactPiContextSecrets({ messages: [{ text: "task synthetic-main-token" }] },
+    ["synthetic-main-token"]), { messages: [{ text: "task [REDACTED]" }] });
+  // The existing OM fixture loads the real governed wrapper and the same raw
+  // context policy via data URLs, substituting only external plugin/SDK imports.
+  const boundary = await import(new URL("../../../agent-harness/fixtures/pi-om-boundary-unit.mjs", import.meta.url).href);
+  const om = await boundary.loadGovernedBoundary();
+  assert.equal(typeof om.createGovernedObservationalMemoryExtension, "function");
+});
 
 async function allowanceServer(state: { remaining: number | null; policyRequired: boolean;
   denial?: { status: number; type?: string; message: string } }) {
