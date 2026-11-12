@@ -14,6 +14,7 @@ import {
 } from "./cosign-verify.js";
 import { normalizePreferredRegistry, pullAdmissionRuntimeImage, selectAdmissionImageRef } from "./registry-ref.js";
 import { resolveScannerImages, type ScannerName } from "./scanner-config.js";
+import { SCAN_VOLUME_MOUNT, sweepScanVolume } from "./scan-volume-hygiene.js";
 import {
   evaluateVulnerabilityAdmissionPolicy,
   isOfficialSource,
@@ -32,6 +33,7 @@ const workerId = process.env.DEEPSONAR_IMAGE_ADMISSION_WORKER_ID ?? `admission-$
 const pollMs = Math.max(1_000, Number(process.env.DEEPSONAR_IMAGE_ADMISSION_POLL_MS ?? 5_000));
 const updateCheckMs = Math.max(60_000, Number(process.env.DEEPSONAR_IMAGE_UPDATE_CHECK_SEC ?? 21_600) * 1_000);
 const continuousRescanMs = Math.max(60_000, Number(process.env.DEEPSONAR_IMAGE_RESCAN_SEC ?? 86_400) * 1_000);
+const scanSweepMs = Math.max(60_000, Number(process.env.DEEPSONAR_IMAGE_SCAN_SWEEP_SEC ?? 3_600) * 1_000);
 const preferredRegistry = normalizePreferredRegistry(process.env.DEEPSONAR_IMAGE_REGISTRY ?? "");
 const allowedRegistries = new Set((process.env.DEEPSONAR_ALLOWED_IMAGE_REGISTRIES ?? "ghcr.io,docker.io,registry-1.docker.io").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean));
 const scannerImages = resolveScannerImages();
@@ -254,9 +256,11 @@ async function inspectAndScanAuthorized(row: Record<string, unknown>) {
     "--label", `deepsonar.scan=${scanId}`,
     resolvedRef,
   ]);
-  const archivePath = `/scan/${scanId}.tar`;
+  const archivePath = `${SCAN_VOLUME_MOUNT}/${scanId}.tar`;
   let probeError: unknown;
   try {
+    // 同一 scanId 的历史残留先清掉（export 中途被杀会留下同名或 CLI 临时文件）。
+    await unlink(archivePath).catch(() => {});
     await docker(["export", "-o", archivePath, probeId]);
     await docker([
       "run", "--rm", "--network", "none", "-v", `${scanVolume}:/scan:ro`,
@@ -477,6 +481,15 @@ async function checkTrackedTags() {
   }
 }
 
+/** 扫描卷死数据清扫（#1109）：export 中断留下的 `.tmp-*` 与 worker 死亡留下的陈旧归档
+ * 都不会被 finally 的 unlink 覆盖，按 mtime 陈旧阈值定期清掉并记录回收量。 */
+async function sweepScanVolumeTask() {
+  const result = await sweepScanVolume();
+  if (result.removed > 0 || result.failed > 0) {
+    console.warn(`[image-admission] scan volume sweep removed=${result.removed} bytes=${result.bytes} skipped=${result.skipped} failed=${result.failed}`);
+  }
+}
+
 /** 可信版本周期复扫。第三方扫描失败会自动 revoked；官方 catalog 只记失败与告警，不自动吊销。 */
 async function queueContinuousRescans() {
   await sql`
@@ -517,11 +530,12 @@ const maintenance = createAdmissionMaintenanceGate({
     for (const [task, interval] of [
       [tick, pollMs], [checkTrackedTags, updateCheckMs],
       [queueContinuousRescans, continuousRescanMs], [cleanupAdmissionProbes, 5 * 60_000],
+      [sweepScanVolumeTask, scanSweepMs],
     ] as const) {
       const timer = setInterval(() => launch(task), interval);
       registerStop(() => clearInterval(timer));
     }
-    launch(tick); launch(queueContinuousRescans); launch(cleanupAdmissionProbes);
+    launch(tick); launch(queueContinuousRescans); launch(cleanupAdmissionProbes); launch(sweepScanVolumeTask);
   },
 });
 console.log(`[image-admission] worker=${workerId} poll=${pollMs}ms`);
