@@ -13,11 +13,14 @@
 - **控制面 HTTP operation 引导（#1094，#1095）**：启动提示与完成提示明确平台 operation 是 HTTP 调用而非 CLI 原生工具（原生工具 `not found` 不代表拒绝）；保留治理重试，遇到不支持的 receipt 查询不再报错退出。
 - **进程基线读取失败闭合（#1091）**：`readCheckpointProcessBaseline` 对非 JSON 输出回稳定码 `HUMAN_CHECKPOINT_PROCESS_BASELINE_UNAVAILABLE`，不再抛裸 `SyntaxError`。
 - **凭据按并发余量选择，冻结恢复身份优先（#1078，#1080，#1103）**：同一 `[provider, agent_cli, model]` 身份的授权池内，先保持自身仍有余量的恢复身份（冻结快照凭据），再保持仍有余量的显式缺省，其余按 `metadata.max_concurrent` 余量比例并在平局时依次比较缺省、恢复身份、在途数、历史分配数与稳定 ID；「缺省满额时选了同伴并冻结、缺省之后腾出容量」不再把恢复 Job 换回缺省而制造 `SNAPSHOT_STALE`。授权、模型/CLI 约束与准入判定均未放宽，全池满额仍取缺省且不新增失败码。
+- **Pi 原生重试保留已完成消息（#1072 后续，#1099）**：重试按消息粒度回滚，重试前的成功文本与已完成消息保留在上下文与最终结果里，不再被后续重试覆盖或丢弃。
+- **凭据删除与 OCI 扫描导入串行化（#1100）**：凭据删除与镜像扫描创建在同一锁/事务边界内串行，避免扫描记录与凭据状态竞争产生悬空引用。
 - **Gateway 凭据拒绝审计与 create 熔断计数（#1053，#1054）**：五个 `credential_in_business_data` 拒绝点写入 `gateway.credential_denied` 审计（固定字段、不回显凭据）；OpenSandbox create 熔断按探针 episode 计数并只接受已知失败码，私有值不进入熔断状态。
 
 ### 新增
 
 - **人工等待断点封存与晚回复续做（#1074 第一切片，#1075）**：人工请求落地为可查询的持久状态，等待超时释放资源时封存断点与文件清单，晚到回复按幂等与 fencing 续做；历史人工请求与当前执行建议分离，终态 Job 不再给出「继续等待」的错误建议。
+- **项目知识闭环（#1076）**：受治理的项目自动积累、隔离评测与复用追踪，复用既有 Dispatcher / Work / CAS 与追加式审计，按项目有界批次并冻结 `task_inputs`，隔离试验不泄漏评分标准；新增项目只读活动 API，不新增 schema 表。
 - **管理面等待分类与恢复诊断只读投影（#1036 A/D，#1051）**：`GET /jobs/waiting-classification` 与 `GET /jobs/{id}/recovery-diagnostics` 以纯 SELECT 投影分类 `unknown_effects` / `confirmed_platform_dead_end` / `authorized_operator` / `human_decision` / `no_signal`，暴露未结算效果、修正预算与可用的既有操作入口；人工结算但用量未知的效果显式列出 `settled_usage_unknown` 并给出 `inspect_usage`，不复述业务文本、不触发任何副作用。
 
 ### 升级
