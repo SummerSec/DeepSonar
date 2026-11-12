@@ -476,3 +476,73 @@ test("#914 disabled and cross-project references remain stale despite a healthy 
     }
   }
 });
+
+test("#1078 resolve: a full default credential yields to a roomy same-identity peer", async () => {
+  const full = { ...baseRow(CRED_A), meta_json: { max_concurrent: 3 } };
+  const roomy = baseRow(CRED_B);
+  const resolved = await resolveProviderCredentialForJob({
+    db: dbWith([full, roomy], [{ credential_id: CRED_A, active_jobs: 3, total_jobs: 3 }]) as never,
+    projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_A }),
+    provider: "anthropic",
+  });
+  assert.equal(resolved?.id, CRED_B, "max_concurrent capacity is respected even for the configured default");
+  assert.deepEqual([full, roomy].map((row) => row.meta_json), [{ max_concurrent: 3 }, {}], "selection does not mutate credentials");
+});
+
+test("#1078 resolve: default with headroom, all-full and ratio ordering contracts (#1078 slice 1)", async () => {
+  const defaultRow = { ...baseRow(CRED_A), meta_json: { max_concurrent: 3 } };
+  const peer = baseRow(CRED_B);
+  // 缺省仍有余量 → 保持缺省（评审 P1：负载变化不得换账号）。
+  const headroom = await resolveProviderCredentialForJob({
+    db: dbWith([defaultRow, peer], [{ credential_id: CRED_A, active_jobs: 2, total_jobs: 5 }]) as never,
+    projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_A }),
+    provider: "anthropic",
+  });
+  assert.equal(headroom?.id, CRED_A, "a default with remaining capacity keeps the frozen identity");
+  // 两个候选都满额 → 保持既有行为，无新增失败码。
+  const crowded = { ...peer, meta_json: { max_concurrent: 2 } };
+  const full = await resolveProviderCredentialForJob({
+    db: dbWith([defaultRow, crowded], [
+      { credential_id: CRED_A, active_jobs: 3, total_jobs: 3 },
+      { credential_id: CRED_B, active_jobs: 2, total_jobs: 2 },
+    ]) as never, projectId: "project-1", agentCli: "claude-code",
+    allowlist: allowlist({ default_credential_id: CRED_A }), provider: "anthropic",
+  });
+  assert.equal(full?.id, CRED_A, "an all-full pool keeps the existing default preference without a new error");
+  // 余量比例：pair(1/2=0.5) vs peer(2/5=0.4) —— 缺省已满，peer 比例更高者胜。
+  const tight = { ...defaultRow, meta_json: { max_concurrent: 2 } };
+  const spread = { ...peer, meta_json: { max_concurrent: 5 } };
+  const byRatio = await resolveProviderCredentialForJob({
+    db: dbWith([tight, spread], [
+      { credential_id: CRED_A, active_jobs: 1, total_jobs: 2 },
+      { credential_id: CRED_B, active_jobs: 2, total_jobs: 2 },
+    ]) as never, projectId: "project-1", agentCli: "claude-code",
+    allowlist: allowlist({ default_credential_id: null }), provider: "anthropic",
+  });
+  assert.equal(byRatio?.id, CRED_B, "free-capacity ratio orders a pool without default or recovery identity");
+});
+
+test("#1078 resolve: recovery identity does not bypass capacity limits", async () => {
+  const full = { ...baseRow(CRED_A), meta_json: { max_concurrent: 2 } };
+  const roomy = baseRow(CRED_B);
+  const recovered = await resolveProviderCredentialForJob({
+    db: dbWith([full, roomy], [{ credential_id: CRED_A, active_jobs: 2, total_jobs: 2 }]) as never,
+    projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_A }),
+    provider: "anthropic", existingCredentialId: CRED_A,
+  });
+  assert.equal(recovered?.id, CRED_B, "an existing identity at its own limit does not rotate back inside it");
+});
+
+test("#1078 P1 评审：仍有余量的恢复身份不因负载比例被替换", async () => {
+  const left = { ...baseRow(CRED_A), meta_json: { max_concurrent: 3 } };
+  const right = { ...baseRow(CRED_B), meta_json: { max_concurrent: 3 } };
+  const kept = await resolveProviderCredentialForJob({
+    db: dbWith([left, right], [
+      { credential_id: CRED_A, active_jobs: 2, total_jobs: 2 },
+      { credential_id: CRED_B, active_jobs: 0, total_jobs: 0 },
+    ]) as never, projectId: "project-1", agentCli: "claude-code",
+    allowlist: allowlist({ default_credential_id: null }), provider: "anthropic",
+    existingCredentialId: CRED_A,
+  });
+  assert.equal(kept?.id, CRED_A, "an authorized recovery identity with room must not rotate to a roomier peer");
+});
