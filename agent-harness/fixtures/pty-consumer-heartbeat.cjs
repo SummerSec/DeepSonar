@@ -7,6 +7,7 @@ const app = load('fastify')({ logger: false });
 const nonce = Buffer.from('pty-consumer-heartbeat');
 const count = 24;
 const deadlineMs = 4000;
+const progressConsumed = new Int32Array(workerData.progressConsumed);
 let socket;
 let deadline;
 let pingAt;
@@ -51,7 +52,7 @@ parentPort.on('message', message => {
       if (elapsed >= deadlineMs) return;
       clearTimeout(deadline);
       pong = true;
-      parentPort.postMessage({ type: 'pong', elapsed, prompts });
+      parentPort.postMessage({ type: 'pong', elapsed, prompts, progressConsumed: Atomics.load(progressConsumed, 0) });
       finish();
     });
     ws.on('close', () => { clearTimeout(deadline); });
