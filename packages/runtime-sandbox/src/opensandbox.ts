@@ -286,7 +286,7 @@ function wrapOpenSandboxProcess(handle: OpenSandboxExecHandle): RuntimeProcess {
   let closed = false;
   const process: RuntimeProcess = {
     id: handle.id,
-    getTerminationDiagnostic: () => handle.getTerminationDiagnostic?.(),
+    ...(handle.getTerminationDiagnostic ? { getTerminationDiagnostic: () => handle.getTerminationDiagnostic!() } : {}),
     get stdinClosed() {
       return closed;
     },

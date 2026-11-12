@@ -16,6 +16,7 @@ export interface RuntimeProcessDiagnostic {
   websocket_close: { code: number | null; reason: string; was_clean: boolean | null } | null;
   websocket_error: ProcessErrorDiagnostic | null;
   server_error?: string;
+  server_error_code?: string;
   host_kill_requested: boolean;
   close_requested: boolean;
 }
@@ -66,9 +67,20 @@ export function runtimeProcessFailure(error: unknown, depth = 0): RuntimeProcess
   return undefined;
 }
 
-export function isUnexpectedProcessFailure(error: unknown): boolean {
+export function canRetainTerminalResult(
+  error: unknown,
+  terminalResult: { isError?: boolean } | undefined,
+  closeReason: string | undefined,
+  diagnosticTransport: boolean,
+): boolean {
+  if (!terminalResult || closeReason !== "terminal_result") return false;
   const failure = runtimeProcessFailure(error);
-  return Boolean(failure && failure.diagnostic.termination !== "host_kill");
+  // An intentional kill is cleanup of the observed terminal, including an
+  // unsuccessful one. Preserve that failure's reason instead of replacing it
+  // with a fabricated exit or a host-kill transport error. Other hosts retain
+  // their existing successful-terminal shutdown behavior.
+  return failure ? failure.diagnostic.termination === "host_kill"
+    : !diagnosticTransport && terminalResult.isError === false;
 }
 
 function redactDiagnosticValues(value: unknown, secrets: readonly string[]): unknown {
@@ -114,7 +126,7 @@ export function observeRuntimeProcesses(
       return {
         id: exec.id,
         get stdinClosed() { return exec.stdinClosed; },
-        getTerminationDiagnostic: () => exec.getTerminationDiagnostic?.(),
+        ...(exec.getTerminationDiagnostic ? { getTerminationDiagnostic: () => exec.getTerminationDiagnostic!() } : {}),
         async write(data) {
           try { await exec.write(data); }
           catch (error) {

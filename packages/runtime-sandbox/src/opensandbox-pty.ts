@@ -71,13 +71,14 @@ export function decodePtyBinary(data: Uint8Array): RuntimeProcessChunk | undefin
   return undefined;
 }
 
-export function parsePtyTextFrame(text: string): { type: string; exitCode?: number; error?: string } {
+export function parsePtyTextFrame(text: string): { type: string; exitCode?: number; error?: string; errorCode?: string } {
   const value: unknown = JSON.parse(text);
   if (!value || typeof value !== "object" || Array.isArray(value)) return { type: "" };
   const frame = value as Record<string, unknown>;
   return { type: typeof frame.type === "string" ? frame.type : "",
     ...(Number.isSafeInteger(frame.exit_code) ? { exitCode: frame.exit_code as number } : {}),
-    ...(typeof frame.error === "string" ? { error: frame.error } : {}) };
+    ...(typeof frame.error === "string" ? { error: frame.error } : {}),
+    ...(typeof frame.code === "string" ? { errorCode: frame.code } : {}) };
 }
 
 function joinUrl(base: string, path: string): string {
@@ -105,12 +106,15 @@ export async function openOpenSandboxPty(
   let websocketClose: RuntimeProcessDiagnostic["websocket_close"] = null;
   let websocketError: RuntimeProcessDiagnostic["websocket_error"] = null;
   let serverError: string | undefined;
+  let serverErrorCode: string | undefined;
   let hostKillRequested = false;
   let closeRequested = false;
-  const diagnostic = (): RuntimeProcessDiagnostic => structuredClone<RuntimeProcessDiagnostic>({
+  let finalDiagnostic: RuntimeProcessDiagnostic | undefined;
+  const diagnostic = (): RuntimeProcessDiagnostic => structuredClone<RuntimeProcessDiagnostic>(finalDiagnostic ?? {
     source: "opensandbox_pty", phase, termination: termination!, exit_frame: exitFrame,
     websocket_close: websocketClose, websocket_error: websocketError,
     ...(serverError !== undefined ? { server_error: serverError } : {}),
+    ...(serverErrorCode !== undefined ? { server_error_code: serverErrorCode } : {}),
     host_kill_requested: hostKillRequested, close_requested: closeRequested,
   });
   const failure = (code?: string) => new RuntimeProcessFailure(
@@ -187,6 +191,7 @@ export async function openOpenSandboxPty(
     if (termination === "process_exit") chunks.push({ type: "exit", exitCode: exitFrame!.exit_code! });
     // Freeze observations before local close; its event must not impersonate a peer close.
     closeSocket();
+    finalDiagnostic = diagnostic();
     wake();
     if (!opened) rejectOpen(failure());
   };
@@ -213,7 +218,9 @@ export async function openOpenSandboxPty(
         terminate(frame.exitCode === undefined ? "protocol_error" : "process_exit");
       } else if (frame.type === "error" && serverError === undefined) {
         serverError = safeProcessDiagnosticText(frame.error, secrets);
-        terminate("protocol_error");
+        serverErrorCode = safeProcessDiagnosticText(frame.errorCode, secrets, 128);
+        // execd also uses error frames for rejected control operations. Preserve
+        // the reason without inventing process termination before exit/close.
       }
       return;
     }
@@ -246,7 +253,7 @@ export async function openOpenSandboxPty(
 
   return {
     id: sessionId,
-    getTerminationDiagnostic: () => termination ? diagnostic() : undefined,
+    getTerminationDiagnostic: () => finalDiagnostic ? diagnostic() : undefined,
     async write(data) {
       if (termination) {
         if (!done) await new Promise<void>(resolve => waiters.add(resolve));
@@ -268,8 +275,8 @@ export async function openOpenSandboxPty(
     },
     async kill() {
       stdinClosed = true;
-      hostKillRequested = true;
       if (!done) {
+        hostKillRequested = true;
         terminate("host_kill");
         try { ws.send(JSON.stringify({ type: "signal", signal: "SIGTERM" })); } catch { /* already closed */ }
         closeSocket();

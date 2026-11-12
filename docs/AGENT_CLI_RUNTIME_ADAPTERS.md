@@ -77,7 +77,8 @@ WebSocket 关闭码/原因/wasClean、错误 name/code/message 和有界 cause�
 不推定远端关闭码，随后关闭本地连接。所有监听在等待 open 前安装。
 
 诊断不授权重连、CLI 重开或未知效果重放。成功结构化终态后的宿主主动终止可按
-原完成协议收尾；意外传输中断仍为 process 失败，已接受效果仍由 Scheduler 结算。
+原完成协议收尾；失败终态后的主动 kill 保留该失败原因，意外传输中断仍为 process
+失败，已接受效果仍由 Scheduler 结算。
 回归接 `ci:unit:runtime-sandbox` / `ci:unit:recovery`，最终 SHA Actions 待验。
 历史 Job 的底层退出原因仍未知，本修复不重写历史证据、不重跑任务或部署。
 

@@ -187,8 +187,8 @@ test("PTY close then exit retains the late frame without reversing transport fai
   assert.equal(diagnostic?.exit_frame?.observed_after_termination, true);
 });
 
-for (const intentional of [false, true]) {
-  test(`PTY successful terminal followed by ${intentional ? "host kill succeeds" : "transport loss fails"}`, async () => {
+for (const intentional of [false, true]) for (const terminalError of [false, true]) {
+  test(`PTY terminal error=${terminalError} followed by ${intentional ? "host kill retains terminal" : "transport loss fails"}`, async () => {
     let handle: Awaited<ReturnType<typeof openOpenSandboxPty>>;
     let prompted = false;
     const fixture = await ptyFixture((data, emit) => {
@@ -196,7 +196,7 @@ for (const intentional of [false, true]) {
       prompted = true;
       const output = [
         { type: "system", subtype: "init", session_id: "session-pty" },
-        { type: "result", is_error: false, result: "complete" },
+        { type: "result", subtype: terminalError ? "error" : "success", is_error: terminalError, result: terminalError ? "fixture model failed" : "complete" },
       ].map(record => JSON.stringify(record) + "\n").join("");
       emit("message", { data: Buffer.concat([Buffer.from([PTY_BIN_STDOUT]), Buffer.from(output)]) });
       if (intentional) setTimeout(() => { void handle.kill(); }, 20);
@@ -214,8 +214,10 @@ for (const intentional of [false, true]) {
     const result = await runRealAgent(createOpenSandboxRuntimeHost(session), {
       provider: "claude-code", env: {}, input: "test", onEvent: event => events.push(event),
     });
-    assert.equal(result.terminalOutcome, intentional ? "success" : "failure");
-    assert.equal(Boolean(result.error), !intentional);
+    assert.equal(result.terminalOutcome, intentional && !terminalError ? "success" : "failure");
+    assert.equal(Boolean(result.error), !intentional || terminalError);
+    if (!intentional) assert.equal(result.runnerErrorSource, "process");
+    if (intentional && terminalError) assert.match(result.error ?? "", /fixture model failed/);
     assert.equal(starts, 1);
     const diagnostic = events.find(event => event.code === "OPENSANDBOX_PTY_TERMINATION");
     assert.equal(diagnostic?.termination, intentional ? "host_kill" : "transport_closed");
@@ -250,6 +252,17 @@ test("PTY server error control frame is projected, not exposed as raw stderr", a
   await assert.rejects(async () => { for await (const chunk of handle) observed.push(chunk); });
   assert.deepEqual(observed, []);
   assert.match(handle.getTerminationDiagnostic?.()?.server_error ?? "", /REDACTED.*execd refused/);
+});
+
+test("PTY rejected control operation does not terminate a live process", async () => {
+  const { handle, emit } = await ptyFixture();
+  emit("message", { data: JSON.stringify({ type: "error", code: "INVALID_FRAME", error: "control rejected" }) });
+  emit("message", { data: Uint8Array.of(PTY_BIN_STDOUT, 65) });
+  emit("message", { data: JSON.stringify({ type: "exit", exit_code: 0 }) });
+  const observed: Array<{ type: string }> = [];
+  for await (const chunk of handle) observed.push(chunk);
+  assert.deepEqual(observed, [{ type: "stdout", chunk: "A" }, { type: "exit", exitCode: 0 }]);
+  assert.equal(handle.getTerminationDiagnostic?.()?.server_error_code, "INVALID_FRAME");
 });
 
 test("PTY initial stdin send failure is persisted before run initialization rethrows", async () => {
@@ -298,6 +311,47 @@ test("PTY connect timeout is bounded and ignores a late open", async context => 
   context.mock.timers.tick(PTY_TERMINATION_OBSERVATION_MS);
   await rejected;
   listeners.get("open")?.({});
+});
+
+test("PTY terminal diagnostic is immutable across subsequent cleanup kills", async () => {
+  const { handle, emit } = await ptyFixture();
+  emit("close", { code: 1006, reason: "peer lost", wasClean: false });
+  let errorDiagnostic: unknown;
+  await assert.rejects(async () => { for await (const _chunk of handle) { /* drain */ } }, (error: unknown) => {
+    errorDiagnostic = (error as { diagnostic?: unknown }).diagnostic;
+    return true;
+  });
+  const before = handle.getTerminationDiagnostic?.();
+  await handle.kill();
+  await handle.kill();
+  assert.deepEqual(before, errorDiagnostic);
+  assert.deepEqual(handle.getTerminationDiagnostic?.(), before);
+  assert.equal(before?.host_kill_requested, false);
+});
+
+test("PTY ordinary callback failure after a successful terminal is not intentional shutdown", async () => {
+  let prompted = false;
+  const { handle } = await ptyFixture((data, emit) => {
+    if (!(data instanceof Uint8Array) || prompted) return;
+    prompted = true;
+    const output = [
+      { type: "result", subtype: "success", is_error: false, result: "complete" },
+      { type: "assistant", message: { content: [{ type: "text", text: "late delta" }] } },
+    ].map(record => JSON.stringify(record) + "\n").join("");
+    emit("message", { data: Buffer.concat([Buffer.from([PTY_BIN_STDOUT]), Buffer.from(output)]) });
+  });
+  const session: OpenSandboxSession = {
+    id: "callback-failure", async run() { return { exitCode: 0, stdout: "", stderr: "" }; },
+    async runAsync() { return handle; }, async writeFile() {}, async readFile() { return Buffer.from(""); },
+    async getState() { return "Running"; }, async kill() {}, async close() {},
+  };
+  const result = await runRealAgent(createOpenSandboxRuntimeHost(session), {
+    provider: "claude-code", env: {}, input: "test",
+    onEvent: event => { if (event.type === "text.delta") throw new Error("fixture callback failure"); },
+  });
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(result.runnerErrorSource, "process");
+  assert.match(result.error ?? "", /fixture callback failure/);
 });
 
 test("OpenSandbox PTY framing encodes stdin and decodes stdout/stderr", () => {
