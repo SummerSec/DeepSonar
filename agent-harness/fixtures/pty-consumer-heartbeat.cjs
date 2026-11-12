@@ -59,7 +59,12 @@ parentPort.on('message', message => {
     ws.on('message', data => {
       if (data[0] !== 0) return;
       for (const line of data.subarray(1).toString().split('\n').filter(Boolean)) {
-        const command = JSON.parse(line);
+        let command;
+        try {
+          command = JSON.parse(line);
+        } catch {
+          continue; // 客户端只受自造合法帧；坏行直接跳过，不让 worker 因单行解析崩溃。
+        }
         if (command.type === 'get_state') {
           stdout([{ type: 'response', id: command.id, command: 'get_state', success: true,
             data: { sessionId: 'heartbeat-session', sessionFile: '/workspace/.deepsonar-home/.pi/agent/heartbeat.jsonl',

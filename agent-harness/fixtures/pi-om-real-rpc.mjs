@@ -18,7 +18,14 @@ const observationId = createHash("sha256").update(OBSERVATION).digest("hex").sli
 const privateProse = new RegExp(`${OBSERVATION}|${REFLECTION}`, "u");
 // The real Scheduler route regression asserts both exact wire payloads, including
 // the message carrier produced by the host. Never repair an SDK message here.
-const dbConflictResponse = JSON.parse(readFileSync(new URL("./pi-om-db-conflict.json", import.meta.url), "utf8"));
+const dbConflictRaw = readFileSync(new URL("./pi-om-db-conflict.json", import.meta.url), "utf8");
+let dbConflictResponse;
+try {
+  dbConflictResponse = JSON.parse(dbConflictRaw);
+} catch (error) {
+  // 灯具必须显式失败：拒绝把坏 JSON 当成默认值继续跑测试。
+  throw new Error(`pi-om-db-conflict.json fixture is not valid JSON: ${String(error)}`);
+}
 export const PI_RPC_TRANSPORT_TRANSIENT_RESPONSE = Object.freeze({
   error: {
     type: "gateway_transient", effect_status: "not_started",
