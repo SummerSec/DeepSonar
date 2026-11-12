@@ -54,7 +54,7 @@ Management API `GET /jobs/:id/evidence/runtime` 沿用 `tasks:read` 和现有项
 
 ## 4. 输入确认重传（仅只读命令）
 
-固定的 Pi 1.4.0 对每个 `prompt` 帧都调用 `session.prompt`，**不按请求 id 去重**，`id` 只用于关联响应。因此重发 `prompt` 可能让同一轮模型调用与工具副作用执行两次。
+固定的 Pi 1.5.2（#1069）对每个 `prompt` 帧仍调用 `session.prompt`，**不按请求 id 去重**，`id` 只用于关联响应。因此重发 `prompt` 可能让同一轮模型调用与工具副作用执行两次。
 
 - 只有 `RETRYABLE_COMMANDS`（当前仅 `get_state`）允许重传：未在 `timeoutMs` 内收到 ACK 时，用**完全相同的字节与 id** 重传，最多 3 次，退避为 `timeoutMs * 2^n`（上限 4 倍）。
 - `prompt` 不重传，首次 ACK/start 超时即终止，报 `PI_RPC_ACK_TIMEOUT: prompt` 或 `PI_RPC_START_TIMEOUT`。这也消除了「先注册的 start 截止时间会先杀掉进程、让承诺的重传一次都跑不到」的冲突。

@@ -20,7 +20,7 @@ const sourcePackage = sourceConfig.piExtensions["pi-observational-memory"];
 const fakePi = () => ({
   executable: "/usr/local/bin/pi",
   metadata: { name: "@earendil-works/pi-coding-agent", version: sourceConfig.npm["@earendil-works/pi-coding-agent"].version },
-  versionOutput: "pi 1.4.0",
+  versionOutput: `pi ${sourceConfig.npm["@earendil-works/pi-coding-agent"].version}`,
 });
 
 function hash(value) {
@@ -122,7 +122,7 @@ test("accepts only the canonical installed OM package, wrapper, manifest and Pi 
   try {
     const identity = assertInstalledPiImage({ ...paths, sourceRoot, expectedWrapperSha256: hash(sourceWrapper), resolvePi: fakePi });
     assert.equal(identity.package.version, "3.1.4");
-    assert.equal(identity.pi.version, "1.4.0");
+    assert.equal(identity.pi.version, sourceConfig.npm["@earendil-works/pi-coding-agent"].version);
     assert.equal(identity.wrapper.sha256, hash(sourceWrapper));
   } finally {
     rmSync(paths.root, { recursive: true, force: true });
@@ -205,7 +205,7 @@ test("rejects wrapper digest and Pi executable identity drift", () => {
   try {
     expectReject(versionPaths, /pi --version does not match/u, () => ({
       executable: "/usr/local/bin/pi",
-      metadata: { name: "@earendil-works/pi-coding-agent", version: "1.4.0" },
+      metadata: { name: "@earendil-works/pi-coding-agent", version: sourceConfig.npm["@earendil-works/pi-coding-agent"].version },
       versionOutput: "pi 1.3.9",
     }));
   } finally {
@@ -228,7 +228,7 @@ test("the Docker smoke mounts harness code only and never replaces the installed
   assert.match(source, /--name/);
   assert.match(source, /DEEPSONAR_PI_RPC_TIMEOUT_MS/);
   assert.match(source, /DEEPSONAR_PI_IMAGE_PROOF=1/);
-  assert.match(source, /HOST-ONLY Pi 1\.4\.0/);
+  assert.match(source, /HOST-ONLY Pi 1\.5\.2/);
   assert.match(source, /image proof forbids a host Pi binary override/);
   assert.match(source, /DEEPSONAR_PI_WRAPPER_SHA256/);
   assert.doesNotMatch(source, /path\.join\(repo, "agent-harness"\)/u);

@@ -22,9 +22,82 @@ import {
 import { config } from "./config.js";
 import { encodeCursor } from "./pagination.js";
 import { readRuntimeArtifact } from "./runtime-evidence.js";
+import { runRealAgent, type OpenSandboxSession } from "@deepsonar/runtime-sandbox";
 
 const gzipP = promisify(gzip);
 const gunzipP = promisify(gunzip);
+
+test("PTY transport diagnosis survives wrapper, runner and finalized Evidence without replay", async () => {
+  // Exercise the built private adapters without exposing test-only package API.
+  const { openOpenSandboxPty } = await import(new URL("../../../packages/runtime-sandbox/dist/opensandbox-pty.js", import.meta.url).href);
+  const { createOpenSandboxRuntimeHost } = await import(new URL("../../../packages/runtime-sandbox/dist/opensandbox.js", import.meta.url).href);
+  const jobId = "00000000-0000-4000-8000-000000001088";
+  const root = path.join(config.storage.blobDir, "jobs", jobId);
+  const writer = new JobEvidenceWriter(jobId, "test", "attempt-pty");
+  const pending: Promise<unknown>[] = [];
+  const endpointSecret = "pty-endpoint-sensitive";
+  const jobSecret = "pty-job-sensitive";
+  let starts = 0;
+  const session: OpenSandboxSession = {
+    id: "sandbox-pty-test",
+    async run() { return { exitCode: 0, stdout: "", stderr: "" }; },
+    async runAsync() {
+      starts++;
+      const listeners = new Map<string, Array<(event: Record<string, unknown>) => void>>();
+      const emit = (type: string, event: Record<string, unknown> = {}) => listeners.get(type)?.forEach(listener => listener(event));
+      let prompted = false;
+      return openOpenSandboxPty(
+        { httpUrl: "http://localhost:44772", headers: { "OPEN-SANDBOX-API-KEY": endpointSecret } },
+        { command: "claude", pty: false },
+        {
+          fetchImpl: async () => new Response(JSON.stringify({ session_id: "pty-evidence" })),
+          openWebSocket: () => ({
+            readyState: 1, binaryType: "arraybuffer",
+            addEventListener(type: string, listener: (event: Record<string, unknown>) => void) {
+              listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+              if (type === "open") queueMicrotask(() => emit("open"));
+            },
+            send(data: unknown) {
+              if (!(data instanceof Uint8Array) || prompted) return;
+              prompted = true;
+              const frame = JSON.stringify({ type: "system", subtype: "init", session_id: "session-pty" }) + "\n";
+              emit("message", { data: Buffer.concat([Buffer.from([1]), Buffer.from(frame)]) });
+              emit("error", { error: Object.assign(new Error(`network timeout ${endpointSecret} ${jobSecret} https://host/?token=private`), { code: "ECONNRESET" }) });
+              emit("close", { code: 1006, reason: `${endpointSecret} ${jobSecret}`, wasClean: false });
+            },
+            close() {},
+          }),
+        },
+      );
+    },
+    async writeFile() {}, async readFile() { return Buffer.from(""); },
+    async getState() { return "Running"; }, async kill() {}, async close() {},
+  };
+  try {
+    const result = await runRealAgent(createOpenSandboxRuntimeHost(session), {
+      provider: "claude-code", env: {}, input: "test", secretValues: [jobSecret],
+      onEvent: event => { pending.push(writer.appendNormalized(event)); },
+    });
+    assert.equal(result.terminalOutcome, "failure");
+    assert.equal(result.runnerErrorSource, "process");
+    assert.match(result.error ?? "", /OPENSANDBOX_PTY_/);
+    assert.equal(starts, 1, "diagnostic network/timeout must not reopen a CLI");
+    await Promise.all(pending);
+    await writer.finalize();
+    const records = await readNormalizedStream(jobId);
+    const diagnostic = records.find(record => record.type === "runtime.diagnostic" && record.code === "OPENSANDBOX_PTY_TERMINATION");
+    assert.ok(diagnostic, "diagnostic must be readable after finalization");
+    assert.equal(diagnostic.process_sequence, 1);
+    assert.equal(diagnostic.termination, "transport_error");
+    assert.equal((diagnostic.websocket_close as Record<string, unknown>).code, 1006);
+    assert.equal(diagnostic.exit_frame, null);
+    assert.equal(records.some(record => record.type === "run.retrying"), false);
+    assert.doesNotMatch(JSON.stringify(records), /pty-endpoint-sensitive|pty-job-sensitive|https:|token=private/);
+  } finally {
+    await Promise.allSettled(pending);
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("runtime capability secrets are redacted from normalized and OTLP evidence", async () => {
   const jobId = "00000000-0000-0000-0000-000000000091";

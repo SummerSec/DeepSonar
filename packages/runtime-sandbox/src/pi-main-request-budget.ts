@@ -113,7 +113,7 @@ export function assertPiAnthropicThinkingBudget(model, options, effectiveMaxToke
 }
 `;
 
-/** Pi 1.4.0's public provider streamSimple extension runs before SDK HTTP generation. */
+/** Pi 1.5.2's public provider streamSimple extension runs before SDK HTTP generation. */
 export const PI_MAIN_REQUEST_BUDGET_SOURCE = String.raw`
 import { createAssistantMessageEventStream, streamSimple as sdkStreamSimple } from '@earendil-works/pi-ai/compat';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -127,9 +127,28 @@ ${PI_REQUEST_ERROR_DIAGNOSTIC_SOURCE}
 
 // Resolve the SDK's declared public export from the fixed, lockfile-installed runtime.
 // createRequire.resolve cannot resolve this package's import-only export conditions.
-export async function loadPiContextClamp(root = '/opt/deepsonar/dsh/node_modules/@earendil-works/pi-ai') {
+// base 镜像把依赖平铺进 npm 全局根；kali-minimal 只全局安装 CLI，pi-ai 嵌在其包目录下。
+// 先从运行中的 pi bundle 反推嵌套根，再回退平铺根；两者都要过 1.5.2 身份校验。
+import { existsSync, realpathSync } from 'node:fs';
+export function piAiCandidateRoots(cliEntry = process.argv[1] ?? '') {
+  const roots = [];
+  const marker = '/node_modules/@earendil-works/pi-coding-agent/';
+  // 全局安装把 pi 暴露为符号链接（Kali 为 /usr/local/bin/pi），argv[1] 保留链接路径；
+  // 先解析 realpath 才能看到真实的 bundle 位置。
+  let entry = cliEntry;
+  try { entry = realpathSync(cliEntry); } catch {}
+  const cut = entry.indexOf(marker);
+  if (cut > 0) roots.push(entry.slice(0, cut + marker.length - 1) + '/node_modules/@earendil-works/pi-ai');
+  roots.push('/usr/local/lib/node_modules/@earendil-works/pi-ai');
+  return roots;
+}
+export async function loadPiContextClamp(root) {
+  const candidates = root ? [root] : piAiCandidateRoots().filter((candidate) => existsSync(candidate + '/package.json'));
+  const resolved = candidates[0];
+  if (!resolved) fail('PI_MAIN_BUDGET_SDK_VERSION');
+  root = resolved;
   const manifest = JSON.parse(await readFile(root + '/package.json', 'utf8'));
-  if (manifest.name !== '@earendil-works/pi-ai' || manifest.version !== '1.4.0') fail('PI_MAIN_BUDGET_SDK_VERSION');
+  if (manifest.name !== '@earendil-works/pi-ai' || manifest.version !== '1.5.2') fail('PI_MAIN_BUDGET_SDK_VERSION');
   const entry = manifest.exports?.['./api/*']?.import;
   if (typeof entry !== 'string' || !entry.startsWith('./') || entry.includes('..')) fail('PI_MAIN_BUDGET_SDK_EXPORT');
   const sdk = await import(pathToFileURL(root + '/' + entry.replace('*','simple-options')).href);

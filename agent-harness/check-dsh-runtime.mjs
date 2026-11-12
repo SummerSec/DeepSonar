@@ -40,7 +40,11 @@ for (const taskMode of ["standard", "ptc"]) {
   for (const row of rows) {
     assert.doesNotMatch(row.name, /dsh-(?:client|web|app-web|app-tui|tool-ask-user|credentials|authorization|settings|config-editor|plugin-manager|hmr|session-log-deepseek|session-telemetry|llm-deepseek)/u);
   }
-  assert.deepEqual(rows.find((row) => row.id === "tools").config, { mode: taskMode === "ptc" ? "ptc" : "native" });
+  // 0.2.2-rc.1：`tools.mode` 已移除，执行器改为独立插件（native 或 ptc）按 scope 挂载。
+  assert.equal(rows.find((row) => row.id === "tools").config, undefined);
+  const executor = rows.find((row) => row.id === `${taskMode === "ptc" ? "ptc" : "native"}-tool-executor`);
+  assert.equal(executor?.name, `@deepseek-ai/dsh-tool-executor-${taskMode === "ptc" ? "ptc" : "native"}`);
+  assert.equal(rows.filter((row) => String(row.name ?? "").startsWith("@deepseek-ai/dsh-tool-executor-")).length, 1, "exactly one executor plugin");
   assert.equal(rows.some((row) => row.id === "ptc-runtime"), taskMode === "ptc");
   assert.deepEqual(rows.filter((row) => row.name.startsWith("@deepseek-ai/dsh-llm-")).map((row) => row.id).sort(), ["llm-pi-ai", "llm-retry"]);
   assert.equal(rows.find((row) => row.id === "skill-filesystem").config.includeDefaultRoots, false);

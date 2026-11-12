@@ -118,7 +118,7 @@ function assertNativeSettlementRefusal(records, allowanceReads, scenario) {
 export async function runNativePiMainRecovery() {
   assert.equal(process.env.DEEPSONAR_PI_IMAGE_PROOF, "1", "native recovery must use the built image, not a host SDK delegate");
   const { executable, metadata } = resolvePiPackage();
-  assert.equal(metadata.version, "1.4.0");
+  assert.equal(metadata.version, "1.5.2");
   const source = readFileSync(IMAGE_POLICY, "utf8");
   const expected = readFileSync(path.join(process.env.DEEPSONAR_RPC_BOUNDARY_DIR, "pi-main-request-budget.ts"), "utf8");
   assert.equal(sha256(source), sha256(expected), "installed main policy must match the current checkout");

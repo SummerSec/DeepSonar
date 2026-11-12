@@ -5,7 +5,7 @@ export const MAX_ACK_RETRIES = 3;
 /**
  * #944: only idempotent, read-only commands may be retransmitted.
  *
- * The pinned Pi 1.4.0 RPC handler calls `session.prompt` for every `prompt`
+ * The pinned Pi 1.5.2 RPC handler calls `session.prompt` for every `prompt`
  * frame and never keys it by request id, so "same id" only correlates the
  * reply. Resending a prompt can therefore run the model (and its tools) twice.
  * Anything not listed here fails closed on the first missed ACK.
@@ -57,7 +57,7 @@ export class PiRpcDriver {
    * then fail.
    *
    * Only `RETRYABLE_COMMANDS` qualifies. A `prompt` is not retransmitted: the
-   * pinned Pi 1.4.0 does not dedupe by request id, so a resend could execute the
+   * pinned Pi 1.5.2 does not dedupe by request id, so a resend could execute the
    * same turn twice. For prompt the ACK deadline stays terminal, which also
    * removes the old conflict where the earlier `watchStart` deadline killed the
    * process before any retry could run.
