@@ -211,7 +211,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-008 Reaper 与终态幂等
 
-- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与人工响应阈值，不得信任 Agent 自报。#1074 的响应超时仅标 overdue，等待保留、执行资源有界回收；晚回复必须通过可验证断点、累计预算与当前授权准入。取消、超时、迟到回调、创建与销毁必须幂等，不得复活终态 Job。
+- **规范要求**：Reaper 必须由 Scheduler 判定 timeout、stall、orphan 与人工响应阈值，不得信任 Agent 自报。stall 的在飞 `tool.call` 豁免不是无上限：豁免仅持续到同一 per-image floor 派生的 in-flight 预算（`max(floor×2, 3600)`，#1086；数值入口仍为 [stall policy](../../apps/scheduler/src/domains/job-lifecycle/stall-policy.ts)），超龄按稳定原因 `reaper_inflight_tool_stalled` 收口。#1074 的响应超时仅标 overdue，等待保留、执行资源有界回收；晚回复必须通过可验证断点、累计预算与当前授权准入。取消、超时、迟到回调、创建与销毁必须幂等，不得复活终态 Job。
 - **决策来源**：运维判定和外部清理是平台责任，迟到回调不能重新取得执行权。
 - **实现状态**：as-built；Reaper 和状态条件更新复用 Job/Attempt effect identity。终态 model token 与 Control token 撤销在同一 Job 终态事务内完成，不另取 Job lock，也不吞掉撤销异常；回滚夹具保持 Job/model token/Control token/audit 原子性，终态后的真实 HTTP 请求返回 401。
 - **代码入口**：[Dispatcher/Reaper](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[token revocation](../../apps/scheduler/src/gateway-token-revocation.ts)、[配置](../../apps/scheduler/src/config.ts)。
