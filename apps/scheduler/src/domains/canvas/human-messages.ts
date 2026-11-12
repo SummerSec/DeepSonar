@@ -1,14 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
-import { maybeTriggerHub, normalizePendingJobPriority } from "../../core.js";
+import { maybeTriggerHub } from "../../core.js";
 import { sql } from "../../db.js";
-import { beginEffect, markAttemptInterrupted, markEffectUnknown, settleEffect } from "../job-attempt/index.js";
-import { createSqlJobLifecycleApplication } from "../job-lifecycle/index.js";
+import { beginEffect, markEffectUnknown, settleEffect } from "../job-attempt/index.js";
 import { readSharedAssetBlob } from "../shared-assets/index.js";
-import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
-import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
-import { admitRepairGeneration } from "../job-attempt/repair-generation.js";
-import { revokeOldRuntimeGrants } from "../job-control/rerun.js";
+import { pumpHumanContinuations } from "../job-control/human-continuation-pump.js";
 
 export type HumanMessageStatus = "planned" | "injected" | "acknowledged" | "unknown" | "failed";
 
@@ -27,7 +23,7 @@ export interface HumanMessageRuntimeControl {
 }
 
 const ACTIVE_STATUSES = ["pending", "claimed", "provisioning", "running", "waiting_human"];
-const runtimeControls = new Map<string, HumanMessageRuntimeControl>();
+const runtimeControls = new Map<string, {control:HumanMessageRuntimeControl;attemptId:string}>();
 
 export function safeHumanMessageFilename(value: string): string {
   const base = path.posix.basename(value.replaceAll("\\", "/"));
@@ -68,18 +64,21 @@ export async function deliverHumanMessage(messageId: string, control?: HumanMess
   let sendAttempted = false;
   try {
     [message] = await sql`
-      SELECT m.*, a.id AS attempt_id
+      SELECT m.*, a.id AS attempt_id,a.attempt_no,r.target_attempt_no,r.resumed_at
       FROM human_messages m
       JOIN jobs j ON j.id = m.target_job_id
       LEFT JOIN job_attempts a ON a.job_id = j.id AND a.status = 'active'
+      LEFT JOIN human_requests r ON r.id=m.request_id
       WHERE m.id = ${messageId}`;
     if (!message || message.delivery_status !== "planned") return (message?.delivery_status ?? "failed") as HumanMessageStatus;
     if (message.delivery_started_at) {
       await sql`UPDATE human_messages SET delivery_status='unknown', error='delivery settlement missing; never replayed', updated_at=now() WHERE id=${messageId} AND delivery_status='planned'`;
       return "unknown";
     }
-    const activeControl = control ?? runtimeControls.get(String(message.target_job_id));
-    if (!activeControl || !message.attempt_id) return "planned";
+    const registered=runtimeControls.get(String(message.target_job_id));
+    const activeControl = control ?? registered?.control;
+    if (!activeControl || !message.attempt_id || ((!control || message.request_id) && registered?.attemptId!==String(message.attempt_id))) return "planned";
+    if(message.request_id&&(!message.resumed_at||message.attempt_no!==message.target_attempt_no)) return "planned";
     attemptId = String(message.attempt_id);
     effectId = `human_message:${messageId}`;
     const attachments = await loadAttachments(messageId);
@@ -146,22 +145,26 @@ export async function deliverHumanMessage(messageId: string, control?: HumanMess
   }
 }
 
-export async function registerHumanMessageRuntime(jobId: string, control: HumanMessageRuntimeControl): Promise<() => void> {
-  runtimeControls.set(jobId, control);
+export async function registerHumanMessageRuntime(jobId: string, control: HumanMessageRuntimeControl, expectedAttemptId?:string): Promise<() => void> {
+  const [attempt]=await sql`SELECT id FROM job_attempts WHERE job_id=${jobId} AND status='active'`;
+  if(!attempt||(expectedAttemptId&&attempt.id!==expectedAttemptId)) throw new Error("HUMAN_MESSAGE_ATTEMPT_NOT_ACTIVE");
+  const registration={control,attemptId:String(attempt.id)};
+  runtimeControls.set(jobId, registration);
   const planned = await sql`
     SELECT id FROM human_messages
     WHERE target_job_id=${jobId} AND delivery_status='planned'
     ORDER BY planned_at, id`;
   for (const message of planned) await deliverHumanMessage(String(message.id), control);
   return () => {
-    if (runtimeControls.get(jobId) === control) runtimeControls.delete(jobId);
+    if (runtimeControls.get(jobId) === registration) runtimeControls.delete(jobId);
   };
 }
 
 export async function createHumanMessage(input: {
   id: string;
   canvasId: string;
-  target: { kind: "hub" } | { kind: "job"; node_id: string };
+  target: { kind: "hub" } | { kind: "job"; node_id: string }
+    | {kind:"request";request_id:string;expected_revision:number};
   body: string;
   attachmentVersionIds: string[];
 }): Promise<Record<string, unknown>> {
@@ -171,8 +174,10 @@ export async function createHumanMessage(input: {
     if (!canvas) throw Object.assign(new Error("canvas not found"), { statusCode: 404 });
     const [existing] = await tx`SELECT * FROM human_messages WHERE id=${input.id}`;
     if (existing) {
-      const sameTarget = existing.target_kind === input.target.kind &&
-        (input.target.kind === "hub" || String(existing.target_node_id ?? "") === input.target.node_id);
+      const sameTarget = input.target.kind==='request'
+        ? existing.request_id===input.target.request_id&&Number(existing.request_revision)===input.target.expected_revision
+        : !existing.request_id && existing.target_kind === input.target.kind &&
+          (input.target.kind === "hub" || String(existing.target_node_id ?? "") === input.target.node_id);
       if (String(existing.canvas_id) !== input.canvasId || String(existing.body) !== input.body || !sameTarget) {
         throw Object.assign(new Error("message_id 已用于不同消息"), { statusCode: 409 });
       }
@@ -185,7 +190,19 @@ export async function createHumanMessage(input: {
     }
     let targetNode: Record<string, unknown> | undefined;
     let targetJob: Record<string, unknown> | undefined;
-    if (input.target.kind === "job") {
+    let request:Record<string,unknown>|undefined;
+    if(input.target.kind==='request') {
+      const [locator]=await tx`SELECT job_id FROM human_requests WHERE id=${input.target.request_id} AND canvas_id=${input.canvasId}`;
+      if(!locator) throw new HumanInterventionError(404,"HUMAN_REQUEST_NOT_FOUND","人工请求不存在或不属于当前任务。");
+      [targetJob]=await tx`SELECT id,status FROM jobs WHERE id=${locator.job_id} AND canvas_id=${input.canvasId} FOR UPDATE`;
+      const attempts=await tx`SELECT id,cancel_requested FROM job_attempts WHERE job_id=${locator.job_id} ORDER BY attempt_no FOR UPDATE`;
+      [request]=await tx`SELECT * FROM human_requests WHERE id=${input.target.request_id} FOR UPDATE`;
+      if(!targetJob||targetJob.status!=='waiting_human'||!request||request.status!=='open'
+        ||Number(request.revision)!==input.target.expected_revision||request.resumed_at
+        ||attempts.at(-1)?.id!==request.attempt_id||attempts.at(-1)?.cancel_requested)
+        throw new HumanInterventionError(409,"HUMAN_REQUEST_CHANGED","请求已处理或状态已变化，请读取最新请求后再回复。");
+      [targetNode]=await tx`SELECT id FROM canvas_nodes WHERE job_id=${locator.job_id} AND node_type='job' ORDER BY created_at DESC LIMIT 1`;
+    } else if (input.target.kind === "job") {
       [targetNode] = await tx`
         SELECT n.id, n.job_id, n.title, n.node_type
         FROM canvas_nodes n JOIN jobs j ON j.id=n.job_id
@@ -235,10 +252,11 @@ export async function createHumanMessage(input: {
 
     const [message] = await tx`
       INSERT INTO human_messages
-        (id, canvas_id, human_node_id, target_kind, target_node_id, target_job_id, body)
+        (id, canvas_id, human_node_id, target_kind, target_node_id, target_job_id, body,request_id,request_revision)
       VALUES
-        (${input.id}, ${input.canvasId}, ${String(humanNode.id)}, ${input.target.kind},
-         ${targetNode?.id ? String(targetNode.id) : null}, ${String(targetJob.id)}, ${input.body})
+        (${input.id}, ${input.canvasId}, ${String(humanNode.id)}, ${input.target.kind==='request'?'job':input.target.kind},
+         ${targetNode?.id ? String(targetNode.id) : null}, ${String(targetJob.id)}, ${input.body},
+         ${request?String(request.id):null},${input.target.kind==='request'?input.target.expected_revision:null})
       RETURNING *`;
     for (const version of versions) {
       const filename = safeHumanMessageFilename(String(version.logical_key));
@@ -250,18 +268,23 @@ export async function createHumanMessage(input: {
           (${input.id}, ${String(version.id)}, ${filename}, ${humanMessageWorkspacePath(input.id, workspaceFilename)},
            ${String(version.content_sha256)}, ${Number(version.bytes)})`;
     }
-    if (String(targetJob.status) === "waiting_human") {
-      const resumed = await resumeWaitingHumanJob(tx as unknown as typeof sql, String(targetJob.id), "人工回复后继续");
-      if (!resumed) throw Object.assign(new Error("恢复等待人工的 Job 失败"), { statusCode: 409 });
+    if(request) {
+      await tx`UPDATE human_requests SET status='answered',revision=revision+1,reply_message_id=${input.id},answered_at=clock_timestamp()
+        WHERE id=${String(request.id)} AND status='open'`;
+      await tx`UPDATE canvas_nodes SET status='answered',updated_at=now() WHERE job_id=${String(targetJob.id)}
+        AND node_type='human' AND body_json->>'message_id' IS NULL AND status='open'`;
+    } else if (String(targetJob.status) === "waiting_human") {
+      throw new HumanInterventionError(409,"HUMAN_REQUEST_REFERENCE_REQUIRED","请在对应人工请求中回复，携带请求引用和版本；消息尚未保存。");
     }
     return { message, created: true };
   });
   if (result.created) {
+    if(result.message.request_id) void pumpHumanContinuations(1,String(result.message.request_id)).catch(()=>{});
     void deliverHumanMessage(input.id).catch((error) => {
       console.error(`[human-message] unexpected delivery rejection message=${input.id}:`, boundedError(error));
     });
   }
-  return result.message;
+  return result.message.request_id ? {...result.message,reply_state:"reply_saved"} : result.message;
 }
 
 export async function acknowledgeHumanMessage(jobId: string, messageId: string, summary?: string): Promise<Record<string, unknown>> {
@@ -308,46 +331,6 @@ export class HumanInterventionError extends Error {
 export function isAlreadyIgnoredHumanNode(node: { status?: unknown; body_json?: unknown }): boolean {
   const body = (node.body_json ?? {}) as Record<string, unknown>;
   return String(node.status ?? "") === "ignored" || body.resolution === "ignored";
-}
-
-async function resumeWaitingHumanJob(
-  tx: typeof sql,
-  jobId: string,
-  reason: string,
-): Promise<boolean> {
-  const [job] = await tx`SELECT id, status, agent_snapshot_json FROM jobs WHERE id=${jobId} FOR UPDATE`;
-  if (!job || String(job.status) !== "waiting_human") return false;
-  await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no FOR UPDATE`;
-  try {
-    await inspectGatewayRequestBudget(tx, jobId, job.agent_snapshot_json);
-  } catch (error) {
-    if (!(error instanceof GatewayRequestBudgetError)) throw error;
-    throw new HumanInterventionError(409, error.code, error.message);
-  }
-  // Ordinary waits share all safety gates; only repair generation needs a root.
-  const repair = await readRepairRequeueAdmission(tx, jobId);
-  if (repair.blocker) throw new HumanInterventionError(409, repair.blocker.code, repair.blocker.reason);
-  await ensureGatewayRequestBudget(tx, jobId, job.agent_snapshot_json);
-  if (repair.budget && repair.deadline) {
-    await admitRepairGeneration(tx, jobId, repair.budget.receipt_ref, repair.deadline, "resume-frozen");
-  }
-  await markAttemptInterrupted(tx as unknown as typeof sql, jobId, reason);
-  await revokeOldRuntimeGrants(tx, jobId, reason);
-  const resumed = await createSqlJobLifecycleApplication(tx as unknown as typeof sql).transitionJob(jobId, "pending", {
-    error: null,
-    lease_expires_at: null,
-    claimed_at: null,
-    started_at: null,
-    finished_at: null,
-    heartbeat_at: null,
-  });
-  if (!resumed) throw new HumanInterventionError(409, "REPAIR_REQUEUE_CHANGED", "Human continuation could not enter pending; no handoff was committed");
-  await normalizePendingJobPriority(jobId, tx as unknown as typeof sql);
-  await tx`
-    UPDATE canvas_nodes SET status='pending', updated_at=now()
-    WHERE job_id=${jobId} AND node_type IN ('job', 'intent', 'report')`;
-  await tx`SELECT pg_notify('deepsonar_jobs', 'human_reply')`;
-  return true;
 }
 
 export function canIgnoreHumanNode(node: { node_type?: unknown; status?: unknown; body_json?: unknown }): boolean {
@@ -410,9 +393,7 @@ export async function ignoreHumanIntervention(input: {
     if (jobId) {
       const [job] = await tx`SELECT id, status FROM jobs WHERE id=${jobId} AND canvas_id=${input.canvasId} FOR UPDATE`;
       if (job && String(job.status) === "waiting_human") {
-        const resumed = await resumeWaitingHumanJob(tx as unknown as typeof sql, jobId, "人工忽略介入请求");
-        if (!resumed) throw new HumanInterventionError(409, "JOB_RESUME_FAILED", "恢复等待人工的 Job 失败");
-        jobResumed = true;
+        throw new HumanInterventionError(409,"HUMAN_REPLY_REQUIRED","请回复对应人工请求或取消任务；忽略节点不授权重新执行。");
       }
     }
     return { node_id: String(node.id), status: "ignored" as const, job_id: jobId, job_resumed: jobResumed, already_ignored: false };

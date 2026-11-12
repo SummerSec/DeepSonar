@@ -10,7 +10,7 @@ export interface PreparedSuggestions { catalogHash: string; candidates: Array<{ 
 async function currentSuggestionScope(db: KnowledgeDb, actor: KnowledgeActor, entries: KnowledgeCatalogEntry[]) {
   const local = entries.filter(e => e.owner_project_id === actor.projectId && e.kind === "skill");
   const ids = local.map(e => e.version_id);
-  const rows = await db`SELECT j.started_at,j.timeout_sec,j.agent_snapshot_json,
+  const rows = await db`SELECT j.started_at,j.timeout_sec,j.execution_deadline_at,j.agent_snapshot_json,
       v.id,v.item_id,v.version,v.content_sha256
     FROM jobs j JOIN LATERAL (SELECT id,status,cancel_requested FROM job_attempts
       WHERE job_id=j.id ORDER BY attempt_no DESC LIMIT 1) a ON true
@@ -66,7 +66,8 @@ export async function computeSkillSuggestions(db: KnowledgeDb, actor: KnowledgeA
     runtime_digest: typeof image?.image_digest === "string" && /^sha256:[a-f0-9]{64}$/.test(image.image_digest) ? image.image_digest : null,
     tools: Array.isArray(snapshot.platform_tools) && snapshot.platform_tools.every(t => typeof t === "string") ? snapshot.platform_tools as string[] : null,
     allow_egress: typeof network?.allow_egress === "boolean" ? network.allow_egress : null,
-    remaining_seconds: Number.isFinite(start) && start <= now && Number.isSafeInteger(seconds) && seconds > 0 ? Math.max(0, seconds - (now - start) / 1000) : null,
+    remaining_seconds: job.execution_deadline_at ? Math.max(0,(new Date(job.execution_deadline_at as string).getTime()-now)/1000)
+      : Number.isFinite(start) && start <= now && Number.isSafeInteger(seconds) && seconds > 0 ? Math.max(0, seconds - (now - start) / 1000) : null,
   };
   const visible = prepared.candidates.filter(c => entries.includes(c.entry));
   const assessments = visible.map(({ entry, raw }) => ({ selector: projectSkillSelector(entry), content_hash: entry.hash,

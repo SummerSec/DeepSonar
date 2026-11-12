@@ -1,7 +1,9 @@
 # AI-native 可信执行内核与插件组合工作流
 
 > 状态：长期设计提案，尚未整体落地。当前实现按 [DESIGN.md](../DESIGN.md)、[架构归属表](architecture/README.md)、代码、schema 与 OpenAPI 核对；旧 `docs/ARCHITECTURE.md` 仅作历史对照。
-> 同步日期：2026-11-03
+> 同步日期：2026-11-12
+
+#1074 的[人工断点续做](HUMAN_CONTINUATION.md)仍由 Scheduler 持有请求、进程静止/退出、文件完整性、代际和累计额度 authority。回复仅是持久输入，未决效果不重放，忽略不授权，终态历史不复活。structured 新会话不冒充原生 Session 续接；决定见[ADR 0022](architecture/adr/0022-human-continuation.md)，最终 SHA Actions 另验。
 > 关联：[#443](https://github.com/SummerSec/DeepSonar/issues/443)、[#444](https://github.com/SummerSec/DeepSonar/issues/444)、[#445](https://github.com/SummerSec/DeepSonar/issues/445)、[#446](https://github.com/SummerSec/DeepSonar/issues/446)。
 
 ## 1. 设计判断

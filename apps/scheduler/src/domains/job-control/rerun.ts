@@ -1,4 +1,7 @@
 import { freezeJobRuntimeConfiguration } from "../../job-runtime-freeze.js";
+import { humanContinuationAdmission } from "./human-continuation-admission.js";
+import { pauseHumanExecutionClock } from "./human-continuation-clock.js";
+import { randomUUID } from "node:crypto";
 import { parseFrozenPiExtensions } from "../../pi-extensions.js";
 import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, inspectRerunGatewayRequestBudget, ensureRerunGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
 import { readRepairRequeueAdmission } from "./repair-admission.js";
@@ -326,6 +329,7 @@ export async function requeueTargetAuthorizationBlockers(tx: typeof sql, job: Re
 export async function requeueJob(
   jobId: string,
   mode: "resume-frozen" | "rerun-current",
+  humanRequestId?: string,
 ): Promise<RequeueJobResult> {
   const result = await sql.begin(async (rawTx) => {
     // SAFETY: postgres.js hands the transaction handle the same tagged-template
@@ -383,6 +387,22 @@ export async function requeueJob(
     if (!resumableStatuses.has(status)) {
       return { kind: "not_resumable" as const, status, provenance };
     }
+    await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no FOR UPDATE`;
+    if(status==='waiting_human'&&!humanRequestId) {
+      const admission=await readRepairRequeueAdmission(tx,jobId);
+      if(admission.blocker) return {kind:"not_resumable" as const,status,provenance,
+        error_code:admission.blocker.code,reason:admission.blocker.reason};
+    }
+    const [previousContinuation]=!humanRequestId&&['failed','timeout','orphan'].includes(status)
+      ?await tx`SELECT id FROM human_requests WHERE job_id=${jobId} AND resumed_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1`:[];
+    const continuationId=humanRequestId??previousContinuation?.id;
+    const continuation=continuationId?await humanContinuationAdmission(tx,job,String(continuationId),!humanRequestId):null;
+    if(continuation&&mode==='rerun-current') return {kind:'not_resumable' as const,status,provenance,
+      error_code:'HUMAN_CONTINUATION_REQUIRES_FROZEN',reason:'已封存续做只接受原冻结快照；更换配置须另建任务。'};
+    if(continuation?.blocker||(status==='waiting_human'&&!humanRequestId)) return {
+      kind:"not_resumable" as const,status,provenance,error_code:continuation?.blocker??"HUMAN_REPLY_REQUIRED",
+      reason:"人工回复和可校验断点均须通过当前续做准入。",
+    };
 
     let currentSnapshot: AgentRuntimeSnapshot;
     try {
@@ -429,7 +449,6 @@ export async function requeueJob(
 
     // Fence effect intent writers before inspecting the old ledger. An idle DB
     // observation alone cannot prove that a concurrent old runner stayed idle.
-    await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no FOR UPDATE`;
     try {
       if (mode === "rerun-current") await inspectRerunGatewayRequestBudget(tx, jobId, job.agent_snapshot_json, currentSnapshot);
       else await inspectGatewayRequestBudget(tx, jobId, job.agent_snapshot_json);
@@ -460,6 +479,10 @@ export async function requeueJob(
     if (repairAdmission.budget && repairAdmission.deadline) {
       await admitRepairGeneration(tx, jobId, repairAdmission.budget.receipt_ref, repairAdmission.deadline, mode);
     }
+    // A stopped ordinary run may have lost its finally hook. Carry its elapsed
+    // time conservatively; never transfer an active clock to another owner.
+    const [previous] = await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no DESC LIMIT 1`;
+    if (previous) await pauseHumanExecutionClock(tx,jobId,String(previous.id));
 
     // waiting_human may still own the previous active Attempt. Close it as an
     // interrupted execution and preserve every settled/unknown effect; the
@@ -489,6 +512,21 @@ export async function requeueJob(
       heartbeat_at: null,
     });
     if (!transitioned) throw new RecoveryTransitionError(jobId, status, provenance);
+    await tx`UPDATE jobs SET execution_deadline_at=NULL WHERE id=${jobId}`;
+    if(continuation?.request) {
+      const [latest]=await tx`SELECT id,attempt_no FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no DESC LIMIT 1`;
+      const generationId=randomUUID();
+      const [{next}]=await tx`SELECT COALESCE(MAX(job_seq),0)+1 AS next FROM events WHERE job_id=${jobId}`;
+      await tx`INSERT INTO event_dedup(event_id,job_id) VALUES(${generationId},${jobId})`;
+      await tx`INSERT INTO events(job_id,event_id,job_seq,attempt_id,type,payload_json)
+        VALUES(${jobId},${generationId},${next},${continuation.request.attempt_id},'control_receipt',${tx.json({
+          v:1,authority:"scheduler",subtype:"human_continuation",request_id:String(continuation.request.id),
+          reply_ref:String(continuation.request.reply_message_id),supersedes_attempt_id:String(latest.id),
+          target_attempt_no:Number(latest.attempt_no)+1,mode:"structured",remaining_execution_ms:continuation.remainingMs,
+        })})`;
+      await tx`UPDATE human_requests SET resumed_at=clock_timestamp(),target_attempt_no=${Number(latest.attempt_no)+1},
+        resume_error_code=NULL WHERE id=${continuation.request.id}`;
+    }
     const updated = {
       id: job.id,
       project_id: job.project_id,

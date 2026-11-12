@@ -208,6 +208,9 @@ test("capability expiry covers the Job deadline but explicit TTL can only shorte
   assert.equal(shortened.toISOString(), "2030-01-01T00:10:00.000Z");
   const capped = capabilityExpiryForJob({ now, startedAt: now, timeoutSec: 600, ttlSec: 7200 });
   assert.equal(capped.toISOString(), "2030-01-01T00:10:00.000Z");
+  const continuation=capabilityExpiryForJob({now,startedAt:now,timeoutSec:7200,
+    executionDeadlineAt:new Date('2030-01-01T00:02:00Z')});
+  assert.equal(continuation.toISOString(),'2030-01-01T00:02:00.000Z');
 });
 
 test("canonical input hashing distinguishes changed idempotent payloads", () => {

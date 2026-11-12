@@ -171,7 +171,7 @@ export function assertRepairTokenBudget(budget: RepairTokenBudget | null, newReq
 /** The Job lock also serializes admission against the first rejection and terminal acceptance. */
 export async function admitGatewayRepair(db: typeof sql, jobId: string, attemptId: string): Promise<RepairTokenBudget | null> {
   const [job] = await db`SELECT status,lease_expires_at>clock_timestamp() AS leased,
-    started_at+timeout_sec*interval '1 second'>clock_timestamp() AS within_time
+    COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second')>clock_timestamp() AS within_time
     FROM jobs WHERE id=${jobId} FOR UPDATE`;
   const budget = await readRepairTokenBudget(db, jobId);
   if (!budget) return null;
