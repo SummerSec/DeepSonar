@@ -150,7 +150,7 @@ if (!testDatabaseUrl) {
           mode: config.runtime.agentMode };
         const foreignJob = randomUUID();
         try {
-          config.runtime.agentMode = "real";
+          assert.equal(Reflect.set(config.runtime, "agentMode", "real"), true);
           for (const run of [() => cleanupManagedResourcesOnce(), reconcileOnBoot]) {
             let resources = [
               { resourceId: "foreign", jobId: foreignJob, attemptId: randomUUID() },
@@ -184,7 +184,7 @@ if (!testDatabaseUrl) {
           runner.destroyResource = original.destroy;
           sharedAssetsVolumeManager.listManaged = original.volumes;
           sharedAssetsVolumeManager.removeForJob = original.remove;
-          config.runtime.agentMode = original.mode;
+          assert.equal(Reflect.set(config.runtime, "agentMode", original.mode), true);
         }
       });
 
