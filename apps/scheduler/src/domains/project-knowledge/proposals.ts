@@ -3,6 +3,7 @@ import { requireKnowledgeCasePolicy } from "./case-policy.js";
 import type { KnowledgeActor } from "./inputs.js";
 import { registerKnowledgeBlob } from "./blobs.js";
 import { canonical, KnowledgeOperationError, reject, sha256, type KnowledgeDb } from "./types.js";
+import { requiredArms } from "./evaluation.js";
 
 export interface PreparedCandidate { hash: string; bytes: number }
 
@@ -32,8 +33,15 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
     if (!manifests.some((entry) => entry.input_ref === `${source.kind}:${source.ref}` && entry.content_hash === source.content_hash))
       return reject("KNOWLEDGE_SCOPE_DENIED", "Source was not frozen in this work", "source_refs");
   }
+  for (const testCase of input.evaluation_plan) for (const ref of testCase.task_inputs) {
+    if (!manifests.some(entry => entry.input_ref === `${ref.kind}:${ref.ref}` && entry.content_hash === ref.content_hash))
+      return reject("KNOWLEDGE_SCOPE_DENIED", "Trial task input was not frozen in this work", "evaluation_plan.task_inputs");
+  }
   if (input.action !== "reuse") {
     requireKnowledgeCasePolicy(input.evaluation_plan);
+    const requiredJobs = input.evaluation_plan.length * requiredArms(input.action).length + 2;
+    if (Number(assignment.job_count) + requiredJobs > 32)
+      return reject("KNOWLEDGE_BUDGET_EXHAUSTED", "Remaining Jobs cannot complete independent trials, evaluation and review");
   }
   const bases: Array<{ item_id: string; version_id: string; generation: number; hash: string }> = [];
   for (const base of [...input.base_refs].sort((a, b) => a.item_ref.localeCompare(b.item_ref))) {

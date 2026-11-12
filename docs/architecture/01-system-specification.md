@@ -387,19 +387,20 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-KNOW-001 项目知识的受治理生命周期
 
-成功来源登记与历史补做预览仅保留有界元数据：成功最新 Attempt、冻结整理权限和无未结算效果是资格前提；预览不创建 work/Job。项目批处理、整链 token 预算、schema 变更暂缓，见 [ADR 0021](adr/0021-knowledge-source-preview.md)。
+成功来源登记和历史资格预览只保留有界元数据，预览不创建 work/Job。本轮用户授权的自动项目批次由 [ADR 0023](adr/0023-project-knowledge-collection.md) 取代 [0021](adr/0021-knowledge-source-preview.md) 的项目批处理暂缓限制；不新增 schema 或整链 token 预算，旧 knowledge:auto work 仍禁用自动推进。
 
-- **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理必须由有来源的当前 Job 请求，经 maker 提案、独立 case×arm Job 试验、evaluator 与 reviewer 审查后才可原子激活；失败、缺证或未知效果不得晋升，旧 active 保留。每阶段只读取冻结且适合其 audience 的输入，实际使用须留下 usage/feedback 与持久 receipt；治理方法的项目 Skill 版本只影响后续 work，不得修改平台硬门。
-- **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；详见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
-- **实现状态**：#752 独立试验分支已接线，schema v61；领域集成测试使用构造的 Job/Attempt 与证据，真实沙箱运行和模型效果尚无本条验收证据，不能推定通过。
-- **代码入口**：[知识域](../../apps/scheduler/src/domains/project-knowledge/)；[schema 基线](../../database/schema.sql)；[Control 契约](../../packages/shared-types/src/project-knowledge.ts)。
-- **验证证据**：`pnpm ci:unit:project-knowledge`、配置独立 `TEST_DATABASE_URL` 后 `pnpm ci:integration:project-knowledge`；真实沙箱和长期模型效果需 #777 独立试验记录，离线协议/预检已提供；不改变 #752 已完成的实现验收范围。
+- **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理来自当前 Job 的合法有源请求，或 Scheduler 对成功业务 Job 持久登记的有界批量采集；必须复核最新成功 Attempt、冻结整理权限、来源/hash 和未结算效果，不复活原 Job token。collector 每批至多4个来源Job、19个原始inputs及可选governor，项目已有非旧自动pending/running work时不得再准入批次。失败来源持久跳过、不热重试。非reuse提案经maker、完整六类×两个arm独立trial、evaluator/reviewer后才可原子激活；target comparator fail可以保留为对照，目标arm及全部安全组必须pass，unexecuted/缺证/未知效果不得晋升，旧active保留。每例共同材料显式选择冻结task_inputs，trial不得读取rubric或其他arm，所有trial及自动批次快照收紧工具/网络和角色预加载能力。累计预算为后两阶段预留2个Job，治理hash变化阻断旧work，不重置历史。只读activity分别呈现登记/采集/跳过、候选、生效、拉取与模型反馈；实际使用保留usage/provenance和receipt，反馈不得冒充质量结论。
+- **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；用户本轮明确授权自动项目整理，见 [ADR 0023](adr/0023-project-knowledge-collection.md) 与[专题](../PROJECT_KNOWLEDGE.md)。
+- **实现状态**：#752 生命周期保持既有实现；本轮collector、隔离试验、真实资产版本回执及activity已接入共享工作树，无schema变更。source_collected保存registration_id/work_ref/attempt_id/input_count/manifest_sha256，assignment.source_mode标识批次；评分输入绑定proposal/revision/input_digest且trial不可读。合成Job/Attempt/Evidence及behavior-policy独立回归已接Actions入口，但本轮尚未执行；未合并、未部署，真实模型及注意力/质量收益未验证。
+- **代码入口**：[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)；[工作链](../../apps/scheduler/src/domains/project-knowledge/work.ts)；[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)；[评测/结算](../../apps/scheduler/src/domains/project-knowledge/settlement.ts)；[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)；[Control 契约](../../packages/shared-types/src/project-knowledge.ts)。
+- **验证证据**：Actions的`pnpm ci:unit:project-knowledge`、独立`TEST_DATABASE_URL`下`pnpm ci:integration:project-knowledge`和`pnpm ci:unit:web-facts`已接collector/closed-loop/activity、Job隔离及唤醒回归，本轮尚未运行。全部测试/构建/typecheck仅Actions执行；#777真实模型收益仍需独立证据，不改变#752历史验收范围。
 
 ### FR-KNOW-002 跨项目 Skill 精确授权
 
 - **规范要求**：项目知识默认私有；来源项目有 `projects:write` 权限的管理者只能授予接收项目已审批的精确 Skill 版本。授权不得审批草稿/候选、扩及未来版本，亦不得传递来源 Memory、Evidence、凭据或执行权限。Job 创建时冻结精确目录，读取时与当前版本/授权撤销及全局源和项目禁用的不可逆 epoch、源 instance 身份取交集；重新启用或重新授权不得扩大旧 Job 的冻结范围。
 - **决策来源**：发现目录不是授权，跨项目复用只能以最小范围、可撤销的内容许可实现；详见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
 - **实现状态**：#752 独立试验分支已实现精确 grant、批准版本校验、冻结目录和读取复核。#960 的全局源候选不继承 live 授权；批准 B 只影响后续 Job，旧 Job A 保留原 CAS；显式禁用/撤信任仍按不可逆 epoch 拒读，恢复同 hash 也须当前 epoch 候选审批，不能恢复旧 epoch Job。真实多副本和生产权限试验尚未执行，本次服务/PG 回归只编写未运行。
+  本轮自动批次与trial不扩大这些授权；activity只汇总本项目拥有且在本项目消费的usage，不把全局源或跨项目grant使用数视为本项目积累。字段与投影边界见[接口视图](09-interface-specs.md#项目知识来源与历史资格1035)，本轮最终SHA Actions待验。
 - **代码入口**：[授权策略](../../apps/scheduler/src/domains/project-knowledge/grant-policy.ts)、[目录冻结](../../apps/scheduler/src/domains/project-knowledge/catalog-snapshot.ts)、[全局源快照](../../apps/scheduler/src/job-skill-catalog.ts)。
 - **验证证据**：`pnpm ci:integration:project-knowledge`；人工以两个项目核对未审批版本拒授、旧 Job 不见新授权、撤销后拒读（生产环境未执行）。
 

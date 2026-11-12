@@ -499,4 +499,4 @@ RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-o
 
 发布恢复仅复用经 GitHub 原运行/成功阶段/artifact 归档摘要绑定的冻结载荷和原签名回执，默认分支恢复身份与原 tag 发布身份分离；不重建镜像、不移动 tag、不重新签名。两阶段独立恢复及拒绝条件见[发布专题](docs/RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)。
 
-成功任务的知识来源仅登记元数据，历史补做仅只读预览；当前不自动启动整理 Agent。边界见 [项目知识](docs/PROJECT_KNOWLEDGE.md)。
+成功任务终态只登记知识来源元数据，后续Dispatcher从持久审计自动归集项目批次：每批最多4个来源Job、19个原始inputs及可选governor，项目已有pending/running工作时不再准入批次。CAS在短事务外准备，项目行锁下重验并原子写work与逐源attempt/manifest摘要链接；永久无效来源持久跳过；瞬态准备故障持久退避30秒、第三次失败才终止，未知提交先对账。自动批次及全部trial快照收紧工具、关闭出网、清角色预加载能力；非reuse完整6×2独立试验，显式共同task_inputs、评分rubric隔离到eval/review，Job预算预留后两阶段。允许target comparator fail作对照，目标arm及全部安全组仍须pass，unexecuted不可激活；治理hash变化阻断旧work，不改历史。知识页区分登记、纳入整理、候选、生效、拉取与模型反馈，不能把来源数当产物或反馈当质量证明。历史预览仍只读，旧knowledge:auto仍不自动推进，无schema或整链token预算变更。原候选6d96df59已通过主CI与Reverse专项，同步main后的候选须独立验收；未合并未部署，真实模型与注意力收益未验证，证据见[专题验收记录](docs/PROJECT_KNOWLEDGE.md#验证与运维)。取代范围见[ADR0023](docs/architecture/adr/0023-project-knowledge-collection.md)，流程、证据与注意力成本见[项目知识](docs/PROJECT_KNOWLEDGE.md)。

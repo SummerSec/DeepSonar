@@ -135,6 +135,14 @@ test("knowledge work claims once and freezes an isolated maker Job/Canvas", asyn
 test("each required case arm is a separate trial Job; evaluator and reviewer wait for prior stage", async () => {
   await withKnowledgeDatabase(async (db) => {
     const fixture = await workFixture(db);
+    const sourceRef = { kind: "fact" as const, ref: randomUUID(), content_hash: "c".repeat(64) };
+    const sourceBlob = await writeKnowledgeBlob(db, { input: "raw task input without candidate or scoring answer" });
+    await registerKnowledgeBlob(db, sourceBlob.hash, sourceBlob.bytes);
+    await db`UPDATE project_knowledge_work SET input_manifest_json=${db.json([{
+      input_ref: `fact:${sourceRef.ref}`, kind: "fact", project_id: fixture.projectId,
+      content_hash: sourceRef.content_hash, blob_hash: sourceBlob.hash, bytes: sourceBlob.bytes,
+      audience: ["maker", "evaluator", "reviewer"],
+    }])} WHERE id=${fixture.workId}`;
     const scheduler = schedulerFor(db);
     await scheduler.tick();
     const maker = (await assigned(db, fixture.workId, "maker"))[0]!;
@@ -153,6 +161,7 @@ test("each required case arm is a separate trial Job; evaluator and reviewer wai
       id: `case-${n}`, kind,
       ...(kind === "target" ? { prompt: "Execute the target behavior", expected: "Observable safe result" } : KNOWLEDGE_FIXED_CASES[kind]),
       critical: true,
+      task_inputs: kind === "target" ? [sourceRef] : [],
     }));
     const digest = "b".repeat(64);
     const [proposal] = await db`INSERT INTO project_knowledge_proposals
@@ -185,8 +194,11 @@ test("each required case arm is a separate trial Job; evaluator and reviewer wai
       else if (testCase.kind === "revocation") assert.deepEqual(probes.map((entry) => entry.input_ref), ["platform-probe:revoked"]);
       else assert.equal(probes.length, 0);
       const resources = manifest.filter((entry) => !entry.input_ref.startsWith("platform-probe:"));
-      if (row.arm === "without") assert.equal(resources.length, 0);
-      if (row.arm === "candidate") assert.deepEqual(resources.map((entry) => entry.input_ref), [`candidate:${version!.id}`]);
+      const common = testCase.kind === "target" ? [`fact:${sourceRef.ref}`]
+        : testCase.kind === "coexistence" ? ["trial-context:coexistence"] : [];
+      assert.deepEqual(resources.map(entry => entry.input_ref), [...common, ...(row.arm === "candidate" ? [`candidate:${version!.id}`] : [])]);
+      const [job] = await db`SELECT payload_json FROM jobs WHERE id=${String(row.job_id)}`;
+      assert.ok(!JSON.stringify(job!.payload_json).includes(testCase.expected), "trial prompt must not disclose grading expectations");
     }
     const evaluator = (await assigned(db, fixture.workId, "evaluator"))[0]!;
     assert.equal(evaluator.job_id, evaluatorId);
