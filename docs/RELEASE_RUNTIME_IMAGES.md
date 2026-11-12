@@ -1,7 +1,7 @@
 # 运行时镜像发布（Issue #70 Slice B）
 
-> 状态：**运维 as-built；最新正式版 v0.6.19，于 2026-11-10T16:37:04Z 正式发布；v0.6.18 及更早的失败 tag/已有镜像保持不可变**。
-> 同步日期：2026-11-10
+> 状态：**运维 as-built；最新正式版 v0.6.19，于 2026-11-10T16:37:04Z 正式发布；v0.6.20 发布准备中（未打 tag）；v0.6.18 及更早的失败 tag/已有镜像保持不可变**。
+> 同步日期：2026-11-12
 >
 > **v0.6.17 发布准备（2026-11-08）**。用户要求先完成 #1002，再发布新版本。最新正式 [v0.6.16](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.16) 于 2026-11-07T16:21:03Z 发布，元数据列出 registry/v2、签名证据、Reverse 证据与 Management Skill 附件；这里核对元数据，不重新声明附件内容/签名/各通道镜像已逐项复验。远端 v0.6.17 已创建并推送（annotated tag `598dabe9`，解引用到 `24ba6a4fbff00190527da2923e7b644c387c6aa6`），compare 为 `v0.6.16...v0.6.17`。
 >
@@ -24,6 +24,7 @@
 > **v0.6.19 发布结果（2026-11-10，dsh-superagent 自主发布闭环）**。发布准备 PR [#1062](https://github.com/SummerSec/DeepSonar/pull/1062)（docs-only）合并后（`490a6919`）在 `push@main` 未触发核心 CI（paths-ignore 覆盖纯文档）；按门禁手动 dispatch [ci run 42849663811](https://github.com/SummerSec/DeepSonar/actions/runs/42849663811) 于同一 SHA，conclusion **success** 后才创建 annotated tag `v0.6.19`（本地解引用 = `490a691993f493ad497e0b955be9dea9865cf7a6`，与 run 的 `head_sha` / 实际 checkout 一致，compare `v0.6.18...v0.6.19`）。tag 触发 [release run 42851650415](https://github.com/SummerSec/DeepSonar/actions/runs/42851650415)，结论 **success**：`base-image`、双平台 `reverse-images`、chrome/mobile/openharmony 矩阵、`prepare-release`（含双平台 payload 门禁）、`platform-signatures` 与 `release-publish` 均 success；唯一 failure 是 `release-writeback`，`WRITEBACK_RUN_AWAITING_APPROVAL`（[release run 的 writeback job](https://github.com/SummerSec/DeepSonar/actions/runs/42851650415)）：回写 PR [#1063](https://github.com/SummerSec/DeepSonar/pull/1063)（bot 分支 `cb7c3f86`）的 [ci run 42856351634](https://github.com/SummerSec/DeepSonar/actions/runs/42856351634) 等待批准；经 Actions API 批准该 run（非绕过 required checks，运行仍完整执行），该 PR 的 `ci-summary` 与全部适用检查全绿后按正常合并门禁 merge（`e82f28ec`），`deploy/.env.example` `DEEPSONAR_VERSION=0.6.19` 与 bundled registry（`platform_version: 0.6.19`，registry manifest `schema_version: 2`，与 DB schema72 无关）已落默认分支，回写必须通过必需检查的门禁未绕过。
 >
 > [Release v0.6.19](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.19) 已正式发布（非 draft / prerelease，`publishedAt=2026-11-10T16:37:04Z`），附件含 `runtime-image-registry.json`、`runtime-image-registry-v2.json`、`platform-signature-evidence.json`、`deepsonar-reverse-evidence-0.6.19.tar.gz` 与 `deepsonar-management-skill-0.6.19.tar.gz`。这里核对 Release 元数据、run 各阶段结论与回写落地；未逐通道重拉镜像复验 digest payload，生产部署未执行（按 AGENTS「验收边界」豁免）。
+> **v0.6.20 发布准备（2026-11-12）**。上一正式版仍是 [v0.6.19](https://github.com/SummerSec/DeepSonar/releases/tag/v0.6.19)，最高既有 tag 为 `v0.6.19`，远端无 `v0.6.20`；准备基线为 main `9a1d25c6`（2026-11-12 核对），compare 为 `v0.6.19...v0.6.20`，schema 由 72 升至 73（#1074/#1075 新增 `job_execution_clocks` 与 `human_requests`，无增量 ALTER，非空库须先备份并按 `pnpm db:rebuild` 的既有基线重建路径升级，scheduler 对旧版本 fail closed）。本版范围：Pi 1.4.0 → 1.5.2、DSH 0.2.1-rc.2 → 0.2.2-rc.1 与基础镜像 Node 24 的联合升级（#1069/#1070/#1071，含 DSH `tools` 插件改挂 `tool-executor-native`/`tool-executor-ptc`、预算补丁摘要重算、`cacheWarming=off`）；Pi 原生重试与宿主结算衔接（#1072/#1073）、Pi 请求异常来源分类（#1083/#1084）、OpenSandbox PTY 退出与传输中断区分（#1088/#1089）、PTY 积压消费让出 I/O（#1092/#1093）、事件载荷 U+0000 与 22P05 稳定分类（#1066/#1068）、Gateway 逐跳连接头隔离（#1097/#1098）、控制面 HTTP operation 引导（#1094/#1095）、进程基线读取失败闭合（#1091）、凭据按并发余量选择且冻结恢复身份优先（#1078/#1080/#1103）、Gateway 凭据拒绝审计与 create 熔断计数（#1053/#1054）、人工等待断点封存与晚回复续做第一切片（#1074/#1075）、管理面等待分类与恢复诊断只读投影（#1036 A/D，#1051）。**本版包含运行时 CLI 与基础镜像升级，不能复用 v0.6.19 镜像**；打 tag 前须最终 main 的完整适用 Actions（含 `ci:images`、`runtime-images`、`reverse-runtime-images`、`pi-om-acceptance` 双架构）全绿，本段是准备状态，不是发布完成。
 
 > #1018 的项目任务队列已随 #1030 合入并把基线推进到 schema72（2026-11-10 核对 [`schema-version.ts`](../apps/scheduler/src/schema-version.ts)），新增 `project_task_queues`、`project_task_queue_items` 及索引；v0.6.19 沿用 schema72，非空库无升级动作，改动仅覆盖用量 scanner、失败终态码与静态 Skill 文本。
 >
@@ -98,13 +99,13 @@ CI 和 Release 的 Chrome Fuzz ARM64 cache miss 构建前调用[磁盘准备脚�
 
 生产变更记录维护在根目录 [CHANGELOG.md](../CHANGELOG.md)。产品版本的唯一来源是不可变的 `vX.Y.Z` Git tag；根目录和第一方 workspace 的私有 package 版本是内部元数据，不参与 Release 版本解析。每个正式版本必须有一个非空、日期有效的 changelog 区段，并带有精确匹配 `vPrevious...vCurrent` 的 compare link。
 
-发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-10 已发布 v0.6.19（compare `v0.6.18...v0.6.19`，最近正式升级基线 v0.6.18，schema 版本只按源码核对为 72）；下一次发布须重新核对除目标外最高 `v*` tag 与 schema 基线后再替换此候选值，不沿用本轮：
+发布前在干净的合并提交上验收。按本轮用户要求，下面的测试、构建及校验全部只在 GitHub Actions 执行；`ci` 的 docs-freshness job 同时调用既有 changelog 校验器回归，并验证实际最新版本区段及其前一版本 compare link。打 tag 前须再次核对前一版本与 Release workflow 实际选择的**除目标版本外最高 Git `v*` tag**一致，而不是最近成功的 GitHub Release；失败发布留下的 tag 也参与比较。2026-11-10 已发布 v0.6.19（compare `v0.6.18...v0.6.19`）；2026-11-12 准备 v0.6.20（compare `v0.6.19...v0.6.20`，除目标外最高 `v*` tag 为 v0.6.19，schema 版本只按源码核对仍为 72，且本版含运行时 CLI 与基础镜像升级、必须重建镜像）；下一次发布须重新核对除目标外最高 `v*` tag 与 schema 基线后再替换此候选值，不沿用本轮：
 
 ```bash
 pnpm ci:unit:docs-freshness
 pnpm ci:unit:changelog
 # 本轮真实 changelog 区段（仅在 Actions 执行）：
-node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.19 --previous-version 0.6.18 --tag v0.6.19
+node agent-harness/validate-changelog.mjs --file CHANGELOG.md --version 0.6.20 --previous-version 0.6.19 --tag v0.6.20
 pnpm typecheck
 pnpm build
 pnpm ci:images
