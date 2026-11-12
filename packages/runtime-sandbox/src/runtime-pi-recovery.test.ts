@@ -137,7 +137,7 @@ for (const refusal of [completionRefusal, "COMPLETION_ALREADY_ACCEPTED"]) {
   });
 }
 
-test("Pi SDK completion-refusal update waits for message_end and retains its terminal provenance", async () => {
+test("Pi SDK completion-refusal update waits for settlement and retains its terminal provenance", async () => {
   const fake = host(() => new PiProcess((record, process) => {
     if (record.type === "get_state") state(process, record);
     else if (record.type === "prompt") {
@@ -173,6 +173,26 @@ test("an SDK completion-refusal update alone cannot manufacture a terminal resul
   assert.equal(result.runnerErrorSource, "process");
   assert.equal(result.terminalOutcome, "failure");
   assert.match(result.error!, /without a structured terminal result/u);
+});
+
+test("#1072 update-only completion refusal with settlement retains process provenance despite accepted completion", async () => {
+  const fake = host(() => new PiProcess((record, process) => {
+    if (record.type === "get_state") state(process, record);
+    else if (record.type === "prompt") {
+      process.emit({ type: "response", id: record.id, command: "prompt", success: true, data: { disposition: "started" } });
+      process.emit({ type: "agent_start" });
+      process.emit({ type: "message_update", assistantMessageEvent: { type: "error", error: {
+        role: "assistant", stopReason: "error", errorMessage: "COMPLETION_ALREADY_ACCEPTED", content: [],
+      } } });
+      process.emit({ type: "agent_end", willRetry: false });
+      process.emit({ type: "agent_settled", aborted: false });
+    }
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true });
+  assert.equal(result.runnerErrorSource, "process");
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(result.error, "Pi message ended: error: COMPLETION_ALREADY_ACCEPTED");
+  assert.equal(fake.processes.length, 1);
 });
 
 for (const exitCode of [0, 137]) {
