@@ -41,7 +41,7 @@ runner `onEvent` 进入现有 normalized Evidence，关闭码缺失明确未知�
 
 ### Pi 模型消息错误与执行结算（#1072）
 
-Pi RPC 的单次模型错误先等待同进程内部重试与 `agent_settled`，不立即关闭 stdin。实际后续成功消息可清除待判定模型错误，重试成功事件本身不能证明完成；耗尽、取消、RPC/扩展/进程错误继续失败，原完成门、Session/Attempt 和累计预算不变。实现与现场证据边界见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)；最终 SHA Actions 待验，未重跑现场 Job。
+Pi RPC 的单次模型错误先等待同进程内部重试与 `agent_settled`，不立即关闭 stdin。重试仅回滚失败消息的输出，保留先前已完成消息；去重与空响应判断限定当前消息，新 RPC turn 清除消息基线。实际后续成功消息可清除待判定模型错误，重试成功事件本身不能证明完成；耗尽、取消、RPC/扩展/进程错误继续失败，原完成门、Session/Attempt 和累计预算不变。实现与现场证据边界见 [CLI adapters](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)；最终 SHA Actions 待验，未重跑现场 Job。
 
 ## 基础镜像构建输入（#992 前置切片）
 
@@ -63,7 +63,7 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 1. Hub 的 Provider/model 需求、项目默认模型和全局角色模型按既有优先级形成模型要求；模型按每张凭据的 CLI 方言核对配置清单。
 2. Hub 显式 CLI 是硬约束，与候选冲突继续 `provider_credential_cli_mismatch`（`permanent_failure`）；不能通过改选 CLI 绕过排他绑定。
-3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致，则先按 `metadata.max_concurrent` 与该负载投影算出的余量比例排序（未设置视为不限），并列时依次按显式缺省凭据、恢复身份、同项目非终态 Job 数、历史分配数、稳定 ID 决定；显式缺省因此是同条件下优先，不再命中即固定（#1078 切片 1），全部候选都达上限时仍取缺省且不新增失败码。这个余量只用于偏好排序，不占位、不放宽授权、也不改变准入判定；跨 provider 的候选等价判据仍需决策，其他歧义仍返回 `provider_credential_multi_match`。
+3. 唯一候选直接决定 CLI。只有跨 CLI 多候选才用项目 `default_agent_cli` > 全局 RoleConfig 显式 CLI 作软偏好；全局种子 NULL 不构成偏好，用户显式 `claude-code` 构成偏好。项目默认凭据只在剩余候选内查找，不能绕过模型/CLI/授权条件。显式授权白名单内的多账号池，若 Provider、CLI 和解析后的模型全部一致，则先保持自身仍有余量的恢复身份（冻结快照已授权的那个凭据），再保持仍有余量的显式缺省凭据，其余候选按 `metadata.max_concurrent` 与该负载投影算出的余量比例排序（未设置视为不限），并列时依次按显式缺省凭据、恢复身份、同项目非终态 Job 数、历史分配数、稳定 ID 决定；因此「缺省满额时选了同伴并冻结、缺省之后腾出容量」不会把恢复 Job 换回缺省而制造 `SNAPSHOT_STALE`（#1096），恢复身份自身满额或已不在授权池内时仍让位给缺省，全部候选都达上限时仍取缺省且不新增失败码。这个余量只用于偏好排序，不占位、不放宽授权、也不改变准入判定；跨 provider 的候选等价判据仍需决策，其他歧义仍返回 `provider_credential_multi_match`。
 4. 未配置凭据白名单时动态读取当前作用域候选，不在读取时写入 ID。显式白名单及默认凭据的删除、停用或不可访问引用返回 `provider_credential_allowlist_stale`（`permanent_failure`），RepairFeedback 指向管理员修复名单；既不扩大授权，也不把权限修复交给模型。
 5. 池选择是现有 Job 历史的只读投影，readiness 不消费分配轮次，不承诺并发创建严格 round-robin，也不表示账号余额或容量。已有 Job 恢复向内核 resolver 提供原冻结账号偏好，只能在当前合法候选内生效；显式当前默认账号仍优先，身份漂移及累计预算校验不变。运行中不换 key、不因故障重选账号或重置预算。
 6. 选中的账号、CLI、Provider/model 按原规则进入新 Job 快照。账号 × CLI 1:1、并发计账和 Gateway 密钥隔离不变；不修改任何已有 Job 快照或镜像准入。
@@ -133,11 +133,13 @@ sequenceDiagram
 
 Hub/Report follow-on admission 在 savepoint 内处理该拒绝：回滚本批新 Job，保留前驱已写入的 terminal result，并把 Canvas convergence 持久暂停；Plan v2 依赖 admission 使用同一错误持久停止，不撤销前驱已证明输出。详细协议见 [目标授权专题](../TARGET_AUTHORIZATION.md) 和 [ADR-0011](adr/0011-trusted-target-authorization.md)。若契约不能安全表达写入目标，不自动把原目标降级为只读；由创建者重新下发明确的较窄目标。
 
-## 项目知识工作链（#752 分支）
+## 项目知识工作链（#752 与项目批次）
 
 普通 Job 从冻结目录按需搜索、读取 Memory 或拉取 Skill，实际使用生成稳定 usage_ref；有可读来源或反馈证据时可请求整理。Scheduler 创建独立 work/Canvas，依次分派 maker、按 case×arm 分离的 trial Job、evaluator 与 reviewer；这些都是现有 Job/Attempt/沙箱路径，不新增模型执行者，也不触发业务 Hub/Report。trial 只得到相应 arm 和 stage audience 的输入，发布共享资产 JSON 并以 `emit_fact` 引用其版本/hash，评测读取实际 Evidence；缺环境、证据或终态异常保持 `needs_eval`/阻断，不以文字结论晋升。审查通过才在事务中切 active 指针；失败或重启依持久 assignment/receipt 恢复，未知外部效果不自动重放。项目治理 recipe 在 work 创建时冻结，修订仅进入下一 work。详细状态和预算见[项目知识专题](../PROJECT_KNOWLEDGE.md)。现有集成测试使用构造的 Job/Attempt 与 Evidence，未证明真实沙箱或模型效果。
 
-成功业务 Job 结算后在原事务的 savepoint 中登记知识来源审计元数据；不入整理队列、不新增模型 Job。历史补做为只读分页预览，旧自动 work 不再自动推进；既有 Agent 显式请求流程不变。
+成功业务 Job 结算时只在原事务/savepoint登记来源元数据，不在终态事务创建模型Job。后续既有Dispatcher tick调用[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)，[knowledge-wake](../../apps/scheduler/src/knowledge-wake.ts)从durable未处理登记和pending work计算同一调度器的唤醒。每批至多4个来源Job、合计19个来源输入（Fact、Evidence及其授权资产）及一个可选governor；项目已有非旧自动pending/running work时等待，不再准入批次。这不新增全部显式请求的唯一约束。CAS准备在短事务外，项目行锁下重新验证项目、最新成功Attempt、冻结权限、来源/hash、未结算效果和已处理状态，再原子写work与逐源collected链接。超大/失权/未知效果等永久拒绝写持久skipped，不热重试；阻断批次不重建来源来重置预算。旧knowledge:auto work仍不自动推进，历史预览仍是只读。决策见[ADR 0023](adr/0023-project-knowledge-collection.md)。
+
+自动批次全部阶段及所有trial在[创建期隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)中取stage工具与已准入权限交集、关闭出网、清角色预加载Skill/MCP等能力和共享资产；trial再清空普通知识目录。每例task_inputs显式选定相同的冻结共同材料，各arm只差基线/候选；不复制全部来源，不把原结论或评分规则当共同答案，rubric只给eval/review。非reuse评测为完整6×2，预留evaluator/reviewer两Job；trial发布实际资产版本/hash再引用Evidence。target comparator fail可进入对照，candidate target及全部安全组须pass，retire的目标arm为without，unexecuted一律不得激活。治理hash变化使旧work blocked，不改历史或放宽权限；合成/替身回归已接线但本轮Actions尚未运行，未合并、未部署、未执行真实模型收益验证。详细状态、工具与证据规则以[专题](../PROJECT_KNOWLEDGE.md#工作与结算)为准。
 
 
 ## 非正常路径

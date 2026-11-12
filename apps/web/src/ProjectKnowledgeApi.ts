@@ -49,6 +49,39 @@ export interface KnowledgeVersionDetail extends KnowledgeVersion {
 
 type Page<T> = { items: T[]; next_offset: number | null };
 
+export interface KnowledgeActivityWork {
+  id: string;
+  state: string;
+  stage: string;
+  reason: string | null;
+  job_count: number;
+  run_seconds: number;
+  active_job_id: string | null;
+  canvas_id: string | null;
+  created_at: string;
+  updated_at: string;
+  latest_proposal_state?: string | null;
+  source_count: number;
+}
+
+export interface KnowledgeActivity extends Page<KnowledgeActivityWork> {
+  summary: {
+    registered_sources: number;
+    collected_sources: number;
+    skipped_sources: number;
+    pending_sources: number;
+    active_memory: number;
+    active_skills: number;
+    draft_items: number;
+    completed_work: number;
+    blocked_work: number;
+    usage_count: number;
+    feedback_count: number;
+    successful_feedback: number;
+  };
+  skipped_sources: Array<{ job_id: string; reason: string; at: string }>;
+}
+
 async function request<T>(path: string, method = "GET", body?: unknown): Promise<T> {
   const token = getLocalToken();
   const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
@@ -64,6 +97,8 @@ async function request<T>(path: string, method = "GET", body?: unknown): Promise
 const base = (projectId: string) => `/projects/${encodeURIComponent(projectId)}/knowledge`;
 
 export const projectKnowledgeApi = {
+  activity: (projectId: string, input: { limit?: number; offset?: number } = {}) =>
+    request<KnowledgeActivity>(`${base(projectId)}/activity?limit=${input.limit ?? 10}&offset=${input.offset ?? 0}`),
   list: (projectId: string, input: { kind?: string; status?: string; query?: string; offset?: number }) => {
     const params = new URLSearchParams();
     if (input.kind) params.set("kind", input.kind);

@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -91,6 +91,8 @@ The 2026-11-01 upgrade preserves Scheduler authority: [connectionConfig](../../p
 #1002 P2-10 的 [provision 诊断读回](09-interface-specs.md#job-provision-诊断读回1002-p2-10)只提供有界、固定字段的宿主失败事实。来源引用与 append-only 审计同事务，读回仍逐一核 scheduler/schema/项目/Job/Attempt；有引用不等于可信，坏/外来引用拒绝，不扩大 audit 权限或采集不归属的 Engine 日志。无 handle、空日志、诊断或 cleanup 尝试都不证明 no-start；不改变 unknown/replay policy、预算和执行终态。SQL/HTTP/受控 Provider 回归已接线，最终 SHA Actions 待验。
 
 资源标签只用于发现，不授予销毁权限。扫描沙箱清理须核对本库 Job/Attempt 与 sandbox 绑定，缺失、冲突或查询失败均不删除；扫描卷须有本库 Job 并沿用卷归属校验，未知外部资源保留对账。显式生命周期中的精确共享资产清理保留既有语义，不供扫描追认未知归属。共享资产 guest 探针要求唯一的只读挂载，不能以目录存在或可写挂载冒充已落实冻结的 read-only 约束；此探针不认证远端来源。
+
+OCI 镜像导入在创建扫描的事务内校验并锁定凭据，与删除互斥；凭据检查通过但未提交的导入不能在删除之后留下悬空扫描引用。既有活动扫描阻止删除，导入失去凭据时原子回滚，不依赖 JSON 引用存在外键，也不扩大准入权限。
 
 权限校验不能替代资源隔离。沙箱网络、文件、设备、共享资产配额、Job 并发和事件预算仍由 Scheduler 和运行时 host 强制；镜像准入只回答“该摘要能否被选择”，不能让镜像取得平台管理权限。涉及 Job/Attempt 的沙箱 provision、Agent run、Gateway 和清理效果按各自 effect/settlement 与对账规则记录；Management 配置、image-admission 扫描和 Registry 发布使用自己的数据库状态与审计，不虚构 Job Attempt 账本。
 
@@ -192,4 +194,8 @@ quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/
 
 ## 来源登记与历史预览边界（#1035）
 
-成功来源登记仅含 Scheduler 审计元数据；冻结权限、成功最新 Attempt、未结算效果、项目状态及来源存在性均需校验。GET 历史预览重新检查当前资格并限制项目和分页，不授予历史执行权限、不创建知识 Job，也不宣称登记保留了来源内容。 见[ADR-0021](adr/0021-knowledge-source-preview.md)。
+成功来源登记仅含Scheduler审计元数据；GET历史预览重新检查资格并限制项目和分页，不授予历史执行权限、不创建知识Job，也不保证保留正文。本轮用户授权的collector按[ADR 0023](adr/0023-project-knowledge-collection.md)取代0021对批量整理的暂缓：CAS准备在短事务外，项目行锁下重新核验冻结整理权限、最新成功Attempt、未结算效果、项目/来源/hash与已处理记录，work和逐来源采集链接原子提交。不复活来源Job token，不把旧knowledge:auto工作迁移为新批次。超大、失权、未知效果或准备失败留下持久skipped，不自动重放外部效果或坏源热重试。
+
+自动批次与全部trial经[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)收紧stage工具与原授权交集、关闭出网、清角色预加载skills/modules/MCP等内容及共享资产；trial再清空普通知识/全局Skill目录。assignment.source_mode只标识治理来源，不授予权限。共同task_inputs必须显式选冻结材料，不能自动复制全部来源或把原结论当共同答案；平台核验引用，maker/reviewer承担语义泄漏审查。trial只接收专用Skill与当前arm，rubric限定eval/review audience，不以沙箱隔离宣称模型独立性或质量已证明。完整6×2矩阵、真实资产版本/hash和独立Job/Attempt证据门保留；只有target comparator fail可作对照，目标arm及全部安全组须pass，unexecuted/缺项/重复/未知效果不能激活，治理hash变化阻断旧work且不改历史。
+
+activity读面同时要求项目scope和projects:read；计数仅来自本项目审计和知识，usage还要求owner_project_id为本项目。错误原因白名单化、来源正文/manifest/模型反馈正文不返回，Job/Canvas导航仍需原接口授权。登记、采集、候选、生效、拉取和模型反馈必须分层；不得用反馈success认证收益。本轮权限/隔离回归已接Actions入口但尚未执行，未合并、未部署，真实模型收益仍未知。实现与证据边界见[项目知识专题](../PROJECT_KNOWLEDGE.md)。

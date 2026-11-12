@@ -151,7 +151,10 @@ function findTemplateLiteralEnd(source: string, start: number): number {
 function directStatusUpdateSegments(source: string): { index: number; text: string }[] {
   const starts = [...source.matchAll(/\bUPDATE\s+(?:(?:[a-z_][a-z0-9_$]*)\.)?jobs\b/gi)]
     .map((match) => match.index ?? -1)
-    .filter((index) => index >= 0);
+    .filter((index) => index >= 0)
+    // A transport fixture may compare SQL text; those string predicates do not execute SQL.
+    // Keep unsafe("UPDATE ...") and actual template/string SQL in the inventory.
+    .filter((index) => !/\.\s*(?:startsWith|includes|endsWith)\s*\(\s*["']$/.test(source.slice(Math.max(0, index - 80), index)));
   return starts.flatMap((index) => {
     const statementEnd = findTemplateLiteralEnd(source, index);
     const text = source.slice(index, statementEnd);
@@ -179,6 +182,9 @@ test("direct status scanner handles qualified, aliased, nested, and unguarded SQ
     ),
   );
   assert.equal(directStatusUpdateSegments("await sql`UPDATE jobs SET ${db(sets)}`").length, 1);
+  assert.equal(directStatusUpdateSegments('query.startsWith("UPDATE jobs SET payload_json"); assert.match(query, /j.status=\'running\'/);').length, 0);
+  assert.equal(directStatusUpdateSegments('await sql.unsafe("UPDATE jobs SET status=\'failed\'")').length, 1,
+    "quoted SQL execution must not be exempted with comparison literals");
 });
 
 test("direct Job status writers stay enumerated by semantic bounded-context inventory", () => {

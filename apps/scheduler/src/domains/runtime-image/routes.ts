@@ -86,6 +86,12 @@ class RevokedRuntimeImageVersionError extends Error {
   }
 }
 
+class RegistryCredentialUnavailableError extends Error {
+  constructor() {
+    super("registry Credential 不存在或不可用");
+  }
+}
+
 const ManualRuntimeImageDigestBody = RuntimeImageImportBody.omit({ registry_credential_id: true }).extend({
   image_ref: z.string().trim().min(3).max(500),
 });
@@ -802,16 +808,18 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
     if (!config.images.isRegistryAllowed(body.image_ref)) {
       return reply.code(400).send({ error: `registry 不在允许列表: ${body.image_ref.split("/")[0]}` });
     }
-    if (body.registry_credential_id) {
-      const [credential] = await sql`
-        SELECT id FROM credentials WHERE id = ${body.registry_credential_id}
-          AND kind = 'oci_registry' AND status = 'active'`;
-      if (!credential) return reply.code(400).send({ error: "registry Credential 不存在或不可用" });
-    }
     const digest = immutableDigest(body.image_ref);
     const versionName = body.version ?? (digest ? digest.slice(7, 19) : body.image_ref.split(":").at(-1) ?? "imported");
     try {
       const result = await sql.begin(async (tx) => {
+        // Match credential DELETE's credential -> scan order. Hold the row lock
+        // through scan creation; never acquire the dispatch lock after this lock.
+        if (body.registry_credential_id) {
+          const [credential] = await tx`
+            SELECT id FROM credentials WHERE id = ${body.registry_credential_id}
+              AND kind = 'oci_registry' AND status = 'active' FOR UPDATE`;
+          if (!credential) throw new RegistryCredentialUnavailableError();
+        }
         const [existing] = await tx`SELECT id, official FROM runtime_images WHERE image_key = ${body.image_key}`;
         if (existing?.official) throw new Error("不能通过第三方导入 API 覆盖官方镜像");
         const visibleUpdate = body.visible_project_ids;
@@ -867,6 +875,9 @@ export function registerRuntimeImageRoutes(app: FastifyInstance): void {
       });
       return reply.code(202).send(result);
     } catch (error) {
+      if (error instanceof RegistryCredentialUnavailableError) {
+        return reply.code(400).send({ error: error.message });
+      }
       if (error instanceof Error && "code" in error && (error as { code: string }).code === "23505") {
         return reply.code(409).send({ error: "该镜像版本或 digest 已导入" });
       }

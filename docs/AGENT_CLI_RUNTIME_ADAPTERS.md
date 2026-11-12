@@ -64,7 +64,7 @@ never scraped.
 
 ### Pi 单次模型失败与内部重试边界（#1072）
 
-Pi 的模型消息失败与整个 RPC 执行结束是两个边界。`message_update` 中结构化 assistant 错误和 `message_end(stopReason=error)` 只保留当前模型消息失败，等待同一进程的重试结果和 `agent_settled`，不能据此关闭 stdin 或提前返回执行失败。原生重试开始时清理当前输出缓存，避免失败的 partial 文本使重试空响应误判成功或被去重吞掉；原始 Session/Evidence 不改写。后续成功 assistant 消息才能清除这笔待判定错误；仅 `auto_retry_end(success=true)`、`context_edit` 删除失败消息或新请求已发出都不能证明恢复成功。
+Pi 的模型消息失败与整个 RPC 执行结束是两个边界。`message_update` 中结构化 assistant 错误和 `message_end(stopReason=error)` 只保留当前模型消息失败，等待同一进程的重试结果和 `agent_settled`，不能据此关闭 stdin 或提前返回执行失败。原生重试只回滚失败消息贡献的文本，保留此前已完成消息的合法输出；文本与思考去重按消息隔离，空响应判定只使用当前消息，不能因历史成功文本非空而放行。新 RPC turn 清除消息基线；原始 Session/Evidence 不改写。后续成功 assistant 消息才能清除这笔待判定错误；仅 `auto_retry_end(success=true)`、`context_edit` 删除失败消息或新请求已发出都不能证明恢复成功。
 
 `agent_settled` 时仍有待判定错误则失败；重试耗尽、aborted、RPC/扩展错误以及进程非零退出或传输中断继续失败，后续模型成功不能清除独立进程/协议错误。恢复后的运行仍经过原完成门，只有 Scheduler 接受的 durable receipt 决定业务完成；原 Session/Attempt、累计预算、lease/deadline 与未知效果边界不变。本修复不新增模型请求、持久会话重启或 Job 自动重跑，也不将裸 `terminated` 认定为无条件可重试错误。
 

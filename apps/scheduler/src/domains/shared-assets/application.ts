@@ -66,18 +66,19 @@ export function mountPathFor(scope: SharedAssetScope, findingId: string | null, 
   return `${SHARED_ASSETS_READONLY_ROOT}/${prefix}/${normalizeAssetKey(key)}`;
 }
 
-export async function createSharedAsset(input: {
+export type CreateSharedAssetInput = {
   scope: SharedAssetScope;
   projectId?: string | null;
   findingId?: string | null;
   key: string;
   contentType: string;
   bytes: Buffer;
-  origin: SharedAssetOrigin;
   actor: string;
-  jobId?: string | null;
   labels?: Record<string, string>;
-}): Promise<Record<string, unknown>> {
+} & ({ origin: "agent"; jobId: string; attemptId: string; sandboxId: string }
+  | { origin: "human" | "system"; jobId?: string | null; attemptId?: never; sandboxId?: never });
+
+export async function createSharedAsset(input: CreateSharedAssetInput): Promise<Record<string, unknown>> {
   const key = normalizeAssetKey(input.key);
   const contentType = validateAssetContentType(input.contentType, key);
   if (input.bytes.byteLength > config.sharedAssets.maxFileBytes) throw new Error("asset_file_too_large");
@@ -91,6 +92,27 @@ export async function createSharedAsset(input: {
   }
   try {
     const result = await sql.begin(async (tx) => {
+      if (input.origin === "agent") {
+        // Resolve without a lock, then acquire Canvas -> Job -> Attempt. Refuse
+        // a changed Canvas rather than acquiring a second Canvas out of order.
+        const [hint] = await tx`SELECT canvas_id FROM jobs WHERE id=${input.jobId}`;
+        if (!hint) throw new Error("shared_asset_publish_job_not_running");
+        if (hint.canvas_id !== null) {
+          const [canvas] = await tx`SELECT id FROM canvases WHERE id=${hint.canvas_id} FOR UPDATE`;
+          if (!canvas) throw new Error("shared_asset_publish_job_not_running");
+        }
+        const [job] = await tx`SELECT id,canvas_id FROM jobs
+          WHERE id=${input.jobId} AND project_id=${input.projectId ?? null}
+            AND status='running' AND lease_expires_at > clock_timestamp()
+            AND sandbox_id=${input.sandboxId} AND sandbox_id IS NOT NULL
+          FOR UPDATE`;
+        if (!job || job.canvas_id !== hint.canvas_id) throw new Error("shared_asset_publish_job_not_running");
+        const [attempt] = await tx`SELECT id,status,cancel_requested FROM job_attempts
+          WHERE job_id=${input.jobId} ORDER BY attempt_no DESC LIMIT 1 FOR UPDATE`;
+        if (!attempt || attempt.id !== input.attemptId || attempt.status !== "active" || attempt.cancel_requested !== false)
+          throw new Error("shared_asset_publish_attempt_changed");
+        // All three row locks remain held until the asset version commits.
+      }
       if (input.scope === "platform") {
         if (input.projectId || input.findingId || input.origin === "agent") throw new Error("asset_scope_forbidden");
       } else if (!input.projectId) throw new Error("asset_project_required");
@@ -102,20 +124,6 @@ export async function createSharedAsset(input: {
 
       const quotaScopeKey = input.scope === "platform" ? "platform" : input.scope === "finding" ? `finding:${input.findingId}` : `project:${input.projectId}`;
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`shared-assets:${quotaScopeKey}`}, 0))`;
-
-      if (input.origin === "agent") {
-        const [job] = await tx`
-          SELECT id
-            FROM jobs
-           WHERE id=${input.jobId ?? null}
-             AND status='running'
-             AND lease_expires_at IS NOT NULL
-             AND lease_expires_at > now()
-             AND sandbox_id IS NOT NULL
-           FOR UPDATE
-        `;
-        if (!job) throw new Error("shared_asset_publish_job_not_running");
-      }
 
       const [existing] = input.scope === "platform"
         ? await tx`SELECT * FROM shared_assets WHERE scope_type='platform' AND logical_key=${key} AND status='active' FOR UPDATE`

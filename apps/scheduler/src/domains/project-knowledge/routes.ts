@@ -9,6 +9,7 @@ import { readKnowledgeBlob } from "./blobs.js";
 import type { KnowledgeDb } from "./types.js";
 import { approvedKnowledgeVersion } from "./grant-policy.js";
 import { registerAutomaticKnowledgeRoutes } from "./automatic-routes.js";
+import { registerKnowledgeActivityRoutes } from "./activity-routes.js";
 
 const Id = z.string().uuid();
 const Page = z.object({
@@ -89,6 +90,7 @@ export function registerProjectKnowledgeRoutes(
   deps: { db?: Db; recordAudit?: typeof audit } = {},
 ): void {
   registerAutomaticKnowledgeRoutes(app, deps);
+  registerKnowledgeActivityRoutes(app, deps);
   const db = deps.db ?? sql;
   const recordAudit = deps.recordAudit ?? audit;
   app.get("/projects/:id/knowledge", async (req, reply) => {

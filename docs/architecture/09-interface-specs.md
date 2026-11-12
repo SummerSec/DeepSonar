@@ -55,7 +55,9 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 
 删除终态历史凭据时（#1002 P1-7A），服务在同一事务撤销全部 Gateway token、删除秘密凭据并置空 token 的 credential 外键；保留 token 与 usage ledger 的身份、累计额度和精确用量，不重置预算或改写冻结 Job。无凭据 token 仅允许 revoked，不能再授权请求。`revoked_job_token_count` 继续只统计本次原 active token，重复删除仍为 404；未结束 Job、扫描和项目引用的既有 409 拒绝不变。详见[历史预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#删除凭据与历史预算1002-p1-7a)。
 
-行为入口是 `pnpm ci:integration:credential-delete`：包括实际 HTTP 两项目负例与 PostgreSQL 双会话 delete-first/write-first 屏障，覆盖仅白名单、仅缺省及同时引用。测试接线不代表最终 SHA Actions 已通过。注意力成本：在删除前显示阻塞与既有修复位置，不增加编辑器、设置或自动修复决策；不以减少打扰扩大授权。
+`POST /runtime-images/import` 在创建镜像、版本和扫描的同一事务内锁定并校验所选 OCI 凭据，持锁至扫描提交，与 DELETE 的凭据行锁互斥。导入先提交时，DELETE 看到活动扫描并返回 `409 CREDENTIAL_SCAN_IN_USE`；删除先提交时，导入返回原有凭据不可用的 400，事务不遗留镜像、版本或扫描。无凭据的公开镜像导入保持原契约，不新增权限、错误协议或 Job 效果账本。
+
+行为入口是 `pnpm ci:integration:credential-delete`：包括实际 HTTP 两项目负例与 PostgreSQL 双会话 delete-first/write-first 屏障，覆盖仅白名单、仅缺省、同时引用及 OCI 导入与删除的两种交错。测试接线不代表最终 SHA Actions 已通过。注意力成本：在删除前显示阻塞与既有修复位置，不增加编辑器、设置或自动修复决策；不以减少打扰扩大授权。
 
 管理认证入口有明确的健康、schema、bootstrap、Worker 注册和 WS ticket 例外；`/gateway` 与 `/control/v1/jobs` 使用独立的 Job-scoped 凭据。认证失败和授权拒绝会审计但不记录 token、Provider 原文或内部堆栈。旧配置不通过转换继续运行，不能用另一个认证面绕过当前契约。
 
@@ -153,7 +155,7 @@ Job 列表只为 `waiting_human` 项附加 Scheduler 当前 `execution_state`，
 
 合法 action 为 `reconcile_effects` / `stop` / `release_stale`（后者用原 grant 无目标效果退出）；reason 不作为证据。200 `persisted_deferred` 仅证明提案持久接纳，不表示对账执行、Job 成功或模型理解。稳定拒绝码 `recovery_not_authorized`、`recovery_paused`、`recovery_stale`、`recovery_inactive` 默认 fail closed，不能靠自动重试扩大权限。原 completion key 的负回执保持不可变；活动原 Attempt 在证据修复后需用新 revision/key 重新走完成门。详见 [ADR 0015](adr/0015-governed-completion-recovery.md)及[专题](../REPAIR_FEEDBACK_DONE_REPAIR.md#completion-recovery-v1)。当前分支最终 SHA 的 Actions 尚待验收。
 
-## 项目知识接口（#752 分支）
+## 项目知识接口（#752 与项目批次）
 
 Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、版本、work、评测、usage/feedback、receipt 查询，以及来源项目管理者的精确 Skill 授权和不可逆撤销；grant 入口还要校验该版本已经审批，不能以授权激活 candidate。Job-scoped Control 增加知识搜索/读取、请求整理、提案、评测、审查和反馈；平台推导 project、Job、Attempt 与 stage，不接受调用方自报身份。只读输入受冻结 manifest、audience 和当前权限约束；mutation 经 shared schema、宿主和领域事务校验，返回 `accepted`、operation、`receipt_ref`，同 Job 同 key 同输入返回持久结果，同 key 异输入冲突。当前 Job 可用 `get_knowledge_receipt`，终态历史由项目管理入口查询。接口字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 与[项目知识专题](../PROJECT_KNOWLEDGE.md)；领域 receipt 不等于全平台通用回执。
 
@@ -280,6 +282,8 @@ Job-scoped `submit_plan` 当前严格要求 `{plan: PlanV2, revision: execution_
 
 #958 不新增管理或 Control 路由、Role/Job 输出配置字段：`maxTokens` 仍由 Pi 选定模型原生配置提供。发现目录描述增加逐字段来源/有效性，Job JSON 快照冻结 `model_budget` 的 configured/declared/effective/source；发现不扩大配置名单，实际 CLI 限制只作运行诊断。输入 schema 与历史快照不因新增诊断自动放宽或回写，详见[预算与恢复契约](../PI_MODEL_BUDGET_RECOVERY.md)。OpenAI 两种输出字段的生成和透传分别接实际 SDK 与 HTTP/PG 回归，最终 SHA Actions 待验。
 
+#1097 的 [managed proxy 逐跳隔离](../MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的逐跳连接策略1097)消费 Connection 动态字段，连接寿命与 framing 由各跳生成；业务内容、认证/控制字段及流式边界保持，历史错误归因与协议修复证据分别记录。
+
 Model Gateway 支持原始方法/相对路径/query、未知端到端头及原始 body；保留上游状态、错误、头和 SSE，不隐式重试或重定向。Host、认证及必要逐跳/framing 在内核边界处理。`x-deepsonar-request-id` 与 `x-deepsonar-retry-of` 是被消费的精确控制字段，后者仅在原 scoped no-start 证明、最新 live owner、冻结跨代际恢复许可及原累计预算全部通过时准入新的关联 main 调用，不授予重放；详见[同 Job 模型恢复](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)。`GET /gateway/_settlement/:id` 是当前 Job/Attempt/token/workload 范围内、不可缓存的只读结算查询，不是上游路由或模型调用。返回 settled、not_started、policy_rejected、pending、unknown 或 not_found，不泄露其他 scope 的 ledger。预算准入可返回 `GATEWAY_OUTPUT_BUDGET_REQUIRED`，客户端须显式提供受预算约束的输出参数。原始请求流有界缓冲、HEAD/OPTIONS、编码及升级限制见[契约](../MODEL_GATEWAY_TRANSPARENCY.md)，实现见[Gateway](../../apps/scheduler/src/gateway.ts)。
 
 `GET /gateway/_allowance` 接受当前有效的 main 或 observational_memory token 与活动 Attempt，返回 `{ remaining_tokens: null | number, policy_required: boolean }`，禁止缓存。查询在 Job 锁内读取原预算，不预留、不增加模型请求计数；main 取 Job 总量或 OM main-workload 额度与修正链余额的交集，后台保持自身额度。pending/unknown 拒绝；返回提示后最终出站仍须锁内重验，不能扩大授权。主执行由沙箱请求生成适配器处理输出参数，OM 由受审 wrapper 处理；两者都不替代 Gateway 准入。
@@ -296,3 +300,9 @@ Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_con
 ## 项目知识来源与历史资格（#1035）
 
 `GET /projects/:id/knowledge/backfill` 要求 `projects:read` 与项目作用域，每页默认10、最多20条，返回当前资格/原因、来源登记及已有 work；不返回来源正文。无对应 POST 补做入口，不创建或恢复执行。
+
+本轮自动collector只消费持久登记，不改变backfill只读语义。`GET /projects/:id/knowledge/activity?limit=10&offset=0`沿用`projects:read`并在handler中严格核验项目scope；分页默认10、最多50，未知字段拒绝，授权范围内项目不存在返回404。返回summary、分页work items/next_offset与最近最多10条去重skipped_sources元数据；不返回来源正文、manifest、反馈正文或跨项目链接。字段机器入口为[知识OpenAPI](../../apps/scheduler/src/domains/project-knowledge/openapi.ts)、[路由](../../apps/scheduler/src/domains/project-knowledge/activity-routes.ts)和[Web类型](../../apps/web/src/ProjectKnowledgeApi.ts)，完整口径见[专题](../PROJECT_KNOWLEDGE.md#积累与复用可见性)。
+
+summary分别计登记、已纳入整理、跳过、待采集、active Memory/Skill、draft、completed/blocked work及本项目拥有并消费的usage/feedback；pending排除collected/skipped去重并集。反馈success仅为模型报告；来源登记不等于产物，collected含排队不等于生效。items只含工作状态/安全原因、累计Job/时间、当前Job/Canvas、时间戳、最新提案状态和source_count；来源数按采集审计关联work_ref，显式work在无链接且有originJob时回退1。页面在目录前紧凑展示，详情按需展开、复用原刷新、隔离迟到响应，不新增轮询或人工激活入口。注意力成本见[专题表格](../PROJECT_KNOWLEDGE.md#注意力成本)。
+
+Control的evaluation_plan增加每例显式task_inputs，平台校验引用已在work冻结；assignment.source_mode标识project_collection，工具/网络隔离只可收紧。trial不接收评分rubric；evaluator/reviewer读取精确proposal绑定的evaluation输入。publish_shared_asset返回真实version.id/content_sha256用于Evidence引用，不能以operation ID代替版本。target comparator fail的容许不放宽candidate或安全组的pass门，也不允许unexecuted激活。契约见[共享schema](../../packages/shared-types/src/project-knowledge.ts)与[发布回执](../../apps/scheduler/src/shared-asset-publish-control.ts)。本轮源码与回归已接线，Actions尚未运行，未合并、未部署、未执行真实模型收益验证。

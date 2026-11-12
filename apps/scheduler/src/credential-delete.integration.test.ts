@@ -10,7 +10,7 @@ if (!testDatabaseUrl) {
     skip: "TEST_DATABASE_URL is not set; refusing to use the scheduler default database",
   }, () => {});
 } else {
-  test("DELETE /credentials/:id revokes tokens and refuses live jobs", async () => {
+  test("DELETE /credentials/:id revokes tokens and refuses live jobs", async (t) => {
     const adminUrl = new URL(testDatabaseUrl);
     adminUrl.pathname = "/postgres";
     const admin = postgres(adminUrl.toString(), { max: 1 });
@@ -29,6 +29,7 @@ if (!testDatabaseUrl) {
       process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
       process.env.AGENT_MODE = "fake";
       process.env.DEEPSONAR_AUTH_REQUIRED = "false";
+      process.env.DEEPSONAR_ALLOWED_IMAGE_REGISTRIES = "127.0.0.1:5000";
       // Cover the accepted DEEPSONAR_DB_POOL_MAX=1 config: impact queries must
       // reuse the DELETE transaction connection or this test deadlocks.
       process.env.DEEPSONAR_DB_POOL_MAX = "1";
@@ -55,8 +56,8 @@ if (!testDatabaseUrl) {
       closeApp = () => app.close();
 
       type InjectResponse = { statusCode: number; payload: string };
-      const request = async (method: "GET" | "POST" | "DELETE", url: string): Promise<InjectResponse> =>
-        await (app.inject({ method, url }) as unknown as Promise<InjectResponse>);
+      const request = async (method: "GET" | "POST" | "DELETE", url: string, payload?: Record<string, unknown>): Promise<InjectResponse> =>
+        await (app.inject({ method, url, payload }) as unknown as Promise<InjectResponse>);
       const json = (response: InjectResponse) => JSON.parse(response.payload) as Record<string, unknown>;
 
       const insertCredential = async (
@@ -311,6 +312,168 @@ if (!testDatabaseUrl) {
       await sql`UPDATE runtime_image_scans SET status = 'succeeded' WHERE id = ${scanId}`;
       const scanOk = await request("DELETE", `/credentials/${ociId}`);
       assert.equal(scanOk.statusCode, 200, scanOk.payload);
+
+      await t.test("OCI registry import and credential deletion serialize on the credential row", async (t) => {
+        // Keep the preceding pool=1 regression. Only these concurrent transactions
+        // use a separate real pool; route handlers, SQL and HTTP remain unchanged.
+        const transactions = postgres(targetUrl.toString(), { max: 2, connection: {
+          application_name: "credential-scan-race", statement_timeout: 5_000,
+        } });
+        const observer = postgres(targetUrl.toString(), { max: 2, connection: { statement_timeout: 5_000 } });
+        const originalBegin = sql.begin;
+        const withinDeadline = async <T>(pending: Promise<T>): Promise<T> => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            return await Promise.race([pending, new Promise<never>((_, reject) => {
+              timer = setTimeout(() => reject(new Error("registry scan race did not settle")), 10_000);
+            })]);
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        };
+        const waitForBlocked = async (fragment: string, blocker: number, pending: Promise<InjectResponse>) => {
+          const outcome: { response?: InjectResponse; failure?: unknown } = {};
+          void pending.then((response) => { outcome.response = response; }, (error: unknown) => { outcome.failure = error; });
+          const deadline = Date.now() + 5_000;
+          while (Date.now() < deadline) {
+            const rows = await observer<{ pid: number }[]>`SELECT pid FROM pg_stat_activity
+              WHERE datname = ${databaseName} AND application_name = 'credential-scan-race'
+                AND query LIKE ${`%${fragment}%`} AND wait_event_type = 'Lock'
+                AND ${blocker}::int = ANY(pg_blocking_pids(pid))`;
+            if (rows.length) return Number(rows[0].pid);
+            if (outcome.failure) throw outcome.failure;
+            assert.equal(outcome.response, undefined, `${fragment} completed before the lock barrier: ${outcome.response?.payload}`);
+          }
+          assert.fail(`did not observe ${fragment} blocked by backend ${blocker}`);
+        };
+        const importBody = (imageKey: string, credentialId?: string) => ({
+          image_key: imageKey, name: "registry race fixture", publisher: "fixture",
+          image_ref: "127.0.0.1:5000/fixture/image:scan-test", version: "0.0.1",
+          ...(credentialId ? { registry_credential_id: credentialId } : {}),
+        });
+        const assertNoImport = async (imageKey: string, credentialId: string) => {
+          const images = await sql`SELECT id FROM runtime_images WHERE image_key = ${imageKey}`;
+          const versions = await sql`SELECT v.id FROM runtime_image_versions v
+            JOIN runtime_images i ON i.id = v.runtime_image_id WHERE i.image_key = ${imageKey}`;
+          const scans = await sql`SELECT id FROM runtime_image_scans
+            WHERE result_json->>'registry_credential_id' = ${credentialId}`;
+          assert.equal(images.length, 0, "failed import must not leave an image");
+          assert.equal(versions.length, 0, "failed import must not leave a version");
+          assert.equal(scans.length, 0, "failed import must not leave a dangling scan");
+        };
+        sql.begin = transactions.begin;
+        try {
+          for (const direction of ["import-first", "delete-first"] as const) {
+            await t.test(direction, async () => {
+              const credentialId = await insertCredential(`registry-${direction}`, { kind: "oci_registry" });
+              const imageKey = `scan-race-${randomUUID().slice(0, 8)}`;
+              const table = direction === "import-first" ? "runtime_image_scans" : "credentials";
+              const control = await observer.reserve();
+              const [backend] = await control<{ pid: number }[]>`SELECT pg_backend_pid() AS pid`;
+              const gate = 182;
+              let held = false;
+              let first: Promise<InjectResponse> | undefined;
+              let second: Promise<InjectResponse> | undefined;
+              try {
+                await control`SELECT pg_advisory_lock(${gate})`;
+                held = true;
+                // Test-only database trigger: pause the actual route transaction
+                // after credential admission (import) or zero-reference check (DELETE).
+                await observer.unsafe(`CREATE FUNCTION registry_scan_race_barrier() RETURNS trigger LANGUAGE plpgsql AS $$
+                  BEGIN PERFORM pg_advisory_xact_lock(${gate}); RETURN ${direction === "import-first" ? "NEW" : "OLD"}; END $$`);
+                await observer.unsafe(`CREATE TRIGGER registry_scan_race BEFORE ${direction === "import-first" ? "INSERT" : "DELETE"}
+                  ON ${table} FOR EACH ROW WHEN (${direction === "import-first"
+                    ? `NEW.result_json->>'registry_credential_id' = '${credentialId}'`
+                    : `OLD.id = '${credentialId}'::uuid`}) EXECUTE FUNCTION registry_scan_race_barrier()`);
+                const importImage = () => request("POST", "/runtime-images/import", importBody(imageKey, credentialId));
+                const remove = () => request("DELETE", `/credentials/${credentialId}`);
+                first = direction === "import-first" ? importImage() : remove();
+                const firstPid = await waitForBlocked(direction === "import-first"
+                  ? "INSERT INTO runtime_image_scans" : "DELETE FROM credentials", Number(backend.pid), first);
+                second = direction === "import-first" ? remove() : importImage();
+                const secondPid = await waitForBlocked("SELECT id FROM credentials", firstPid, second);
+                assert.notEqual(firstPid, secondPid, "both HTTP requests must reach distinct PostgreSQL backends");
+                await control`SELECT pg_advisory_unlock(${gate})`;
+                held = false;
+                const [firstResponse, secondResponse] = await withinDeadline(Promise.all([first, second]));
+                if (direction === "import-first") {
+                  assert.equal(firstResponse.statusCode, 202, firstResponse.payload);
+                  assert.equal(secondResponse.statusCode, 409, secondResponse.payload);
+                  assert.equal(json(secondResponse).error_code, "CREDENTIAL_SCAN_IN_USE");
+                  const imported = json(firstResponse) as { scan: { id: string; status: string } };
+                  assert.equal(imported.scan.status, "queued");
+                  assert.equal((await sql`SELECT id FROM credentials WHERE id = ${credentialId}`).length, 1);
+                  const [scan] = await sql`SELECT status, result_json FROM runtime_image_scans WHERE id = ${imported.scan.id}`;
+                  assert.equal(scan.status, "queued");
+                  assert.equal(scan.result_json.registry_credential_id, credentialId);
+                } else {
+                  assert.equal(firstResponse.statusCode, 200, firstResponse.payload);
+                  assert.equal(secondResponse.statusCode, 400, secondResponse.payload);
+                  assert.deepEqual(json(secondResponse), { error: "registry Credential 不存在或不可用" });
+                  assert.equal((await sql`SELECT id FROM credentials WHERE id = ${credentialId}`).length, 0);
+                  await assertNoImport(imageKey, credentialId);
+                }
+                for (const response of [firstResponse, secondResponse]) {
+                  assert.equal(/ciphertext|nonce|auth_tag|-secret/.test(response.payload), false);
+                }
+              } finally {
+                try {
+                  if (held) await control`SELECT pg_advisory_unlock(${gate})`;
+                  await withinDeadline(Promise.allSettled([first, second]));
+                } finally {
+                  control.release();
+                  await observer.unsafe(`DROP TRIGGER IF EXISTS registry_scan_race ON ${table}`);
+                  await observer.unsafe("DROP FUNCTION IF EXISTS registry_scan_race_barrier()");
+                }
+              }
+            });
+          }
+
+          await t.test("invalid registry credentials keep the 400 response without creating import rows", async () => {
+            const disabled = await insertCredential("disabled-registry", { kind: "oci_registry" });
+            await sql`UPDATE credentials SET status = 'disabled' WHERE id = ${disabled}`;
+            const wrongKind = await insertCredential("wrong-kind-registry");
+            for (const credentialId of [randomUUID(), disabled, wrongKind]) {
+              const imageKey = `scan-invalid-${randomUUID().slice(0, 8)}`;
+              const response = await request("POST", "/runtime-images/import", importBody(imageKey, credentialId));
+              assert.equal(response.statusCode, 400, response.payload);
+              assert.deepEqual(json(response), { error: "registry Credential 不存在或不可用" });
+              await assertNoImport(imageKey, credentialId);
+            }
+          });
+
+          await t.test("scan insertion failure rolls back the imported image and version", async () => {
+            const credentialId = await insertCredential("rollback-registry", { kind: "oci_registry" });
+            const imageKey = `scan-rollback-${randomUUID().slice(0, 8)}`;
+            try {
+              await observer.unsafe(`CREATE FUNCTION registry_scan_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN RAISE EXCEPTION 'scan insertion fixture failure' USING ERRCODE = '23514'; END $$`);
+              await observer.unsafe(`CREATE TRIGGER registry_scan_failure BEFORE INSERT ON runtime_image_scans
+                FOR EACH ROW WHEN (NEW.result_json->>'registry_credential_id' = '${credentialId}')
+                EXECUTE FUNCTION registry_scan_failure()`);
+              const response = await request("POST", "/runtime-images/import", importBody(imageKey, credentialId));
+              assert.equal(response.statusCode, 500, response.payload);
+              await assertNoImport(imageKey, credentialId);
+              assert.equal((await sql`SELECT id FROM credentials WHERE id = ${credentialId}`).length, 1);
+            } finally {
+              await observer.unsafe("DROP TRIGGER IF EXISTS registry_scan_failure ON runtime_image_scans");
+              await observer.unsafe("DROP FUNCTION IF EXISTS registry_scan_failure()");
+            }
+          });
+
+          await t.test("import without a registry credential still queues a scan", async () => {
+            const response = await request("POST", "/runtime-images/import", importBody(`scan-public-${randomUUID().slice(0, 8)}`));
+            assert.equal(response.statusCode, 202, response.payload);
+            const imported = json(response) as { scan: { status: string; result_json: unknown } };
+            assert.equal(imported.scan.status, "queued");
+            assert.deepEqual(imported.scan.result_json, {});
+          });
+        } finally {
+          sql.begin = originalBegin;
+          await transactions.end({ timeout: 5 });
+          await observer.end({ timeout: 5 });
+        }
+      });
 
       const missing = await request("DELETE", `/credentials/${randomUUID()}`);
       assert.equal(missing.statusCode, 404, missing.payload);

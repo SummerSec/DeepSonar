@@ -45,6 +45,9 @@ if (!testDatabaseUrl) {
         (${jobId},${projectId},${canvasId},'audit','succeeded',${sql.json({})}),
         (${agentJobId},${projectId},${canvasId},'audit','running',${sql.json({})})`;
       await sql`UPDATE jobs SET sandbox_id=${"issue41-agent-sandbox"}, lease_expires_at=now() + interval '10 minutes' WHERE id=${agentJobId}`;
+      const agentIdentity = { attemptId: randomUUID(), sandboxId: "issue41-agent-sandbox" };
+      await sql`INSERT INTO job_attempts(id,job_id,attempt_no,status,phase)
+        VALUES(${agentIdentity.attemptId},${agentJobId},1,'active','agent.ready')`;
       await sql`INSERT INTO findings (id,project_id,job_id,fingerprint,title) VALUES (${findingId},${projectId},${jobId},'asset-finding','Asset finding')`;
 
       const token = authModule.generateToken();
@@ -81,10 +84,10 @@ if (!testDatabaseUrl) {
       assert.ok(relatedRefs.some((row) => row.version_id === findingVersionId));
 
       await assert.rejects(
-        sharedModule.createSharedAsset({ scope: "project", projectId, key: "scripts/reproduce.sh", contentType: "text/plain", bytes: Buffer.from("poison"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId }),
+        sharedModule.createSharedAsset({ scope: "project", projectId, key: "scripts/reproduce.sh", contentType: "text/plain", bytes: Buffer.from("poison"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId, ...agentIdentity }),
         /immutable_asset_key_exists/,
       );
-      const agentFirst = await sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v1"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId });
+      const agentFirst = await sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v1"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId, ...agentIdentity });
 
       const frozen = await sharedModule.resolveSharedAssetSelection(sql, projectId, [findingId]);
       assert.deepEqual(new Set(frozen.assets.map((asset) => asset.scope)), new Set(["platform", "project", "finding"]));
@@ -94,15 +97,15 @@ if (!testDatabaseUrl) {
       const [frozenJob] = await sql`INSERT INTO jobs (project_id,canvas_id,finding_id,type,status,agent_snapshot_json) VALUES (${projectId},${canvasId},${findingId},'test','pending',${sql.json(frozenSnapshot)}) RETURNING id`;
       await sharedModule.recordJobSharedAssets(sql, frozenJob.id as string, frozen.assets);
 
-      const second = await sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v2"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId });
+      const second = await sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v2"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId, ...agentIdentity });
       assert.equal(second.current_version, 2);
-      const duplicate = await sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v2"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId });
+      const duplicate = await sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v2"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId, ...agentIdentity });
       assert.equal(duplicate.current_version, 2);
       assert.equal(duplicate.version_id, second.version_id);
       assert.equal(duplicate.content_sha256, second.content_sha256);
       assert.equal((await sql`SELECT count(*)::int AS count FROM shared_asset_versions WHERE asset_id=${second.id as string}`)[0].count, 2);
       await assert.rejects(
-        sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v1"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId }),
+        sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v1"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId, ...agentIdentity }),
         /asset_content_version_exists/,
       );
       assert.equal((await sql`SELECT count(*)::int AS count FROM shared_asset_versions WHERE asset_id=${second.id as string}`)[0].count, 2);
@@ -116,9 +119,58 @@ if (!testDatabaseUrl) {
       const audits = await sql`SELECT action FROM audit_logs WHERE action IN ('shared_asset.upload','shared_asset.publish') ORDER BY action`;
       assert.deepEqual(new Set(audits.map((row) => row.action)), new Set(["shared_asset.publish", "shared_asset.upload"]));
 
+      const store = blobStoreModule.getSharedAssetBlobStore();
+      const raceInput = { scope: "project" as const, projectId, key: "race/identity.txt", contentType: "text/plain",
+        bytes: Buffer.from("identity race"), origin: "agent" as const, actor: `job:${agentJobId}`, jobId: agentJobId, ...agentIdentity };
+      const wrapStore = (exists: typeof store.exists) => blobStoreModule.setSharedAssetBlobStoreForTests({
+        kind: store.kind, exists, put: store.put.bind(store), get: store.get.bind(store), materializeLocal: store.materializeLocal.bind(store),
+      });
+      // Pause at the second CAS existence check, inside the publication transaction.
+      let entered!: () => void, release!: () => void;
+      const inTransaction = new Promise<void>(resolve => { entered = resolve; });
+      const continueCommit = new Promise<void>(resolve => { release = resolve; });
+      let checks = 0;
+      wrapStore(async key => { const exists = await store.exists(key); if (++checks === 2) { entered(); await continueCommit; } return exists; });
+      const held = sharedModule.createSharedAsset({ ...raceInput, key: "race/locks.txt" });
+      const heldResult = held.then(value => ({ value }), error => ({ error }));
+      try {
+        await Promise.race([inTransaction, heldResult.then(result => {
+          if ("error" in result) throw result.error;
+          throw new Error("publication committed before reaching the transactional lock probe");
+        })]);
+        const locked = (error: unknown) => (error as { code?: string }).code === "55P03";
+        await assert.rejects(sql.begin(async tx => { await tx`SELECT id FROM canvases WHERE id=${canvasId} FOR UPDATE NOWAIT`; }), locked);
+        await assert.rejects(sql.begin(async tx => { await tx`SELECT id FROM jobs WHERE id=${agentJobId} FOR UPDATE NOWAIT`; }), locked);
+        await assert.rejects(sql.begin(async tx => { await tx`SELECT id FROM job_attempts WHERE id=${agentIdentity.attemptId} FOR UPDATE NOWAIT`; }), locked);
+      } finally { release(); blobStoreModule.setSharedAssetBlobStoreForTests(store); }
+      const committed = await heldResult;
+      if ("error" in committed) throw committed.error;
+      assert.ok(committed.value.version_id);
+
+      // Change identity after the executor's preflight but before the DB fence.
+      const rejectIdentityChange = async (change: () => Promise<void>, expected: RegExp) => {
+        await coreModule.assertJobCanPublishSharedAsset(agentJobId, agentIdentity.sandboxId);
+        let changed = false;
+        wrapStore(async key => { const exists = await store.exists(key); if (!changed) { changed = true; await change(); } return exists; });
+        try { await assert.rejects(sharedModule.createSharedAsset(raceInput), expected); }
+        finally { blobStoreModule.setSharedAssetBlobStoreForTests(store); }
+        assert.equal((await sql`SELECT id FROM shared_assets WHERE project_id=${projectId} AND logical_key=${raceInput.key}`).length, 0);
+      };
+      try {
+        await rejectIdentityChange(async () => { await sql`UPDATE jobs SET sandbox_id='replacement-sandbox' WHERE id=${agentJobId}`; }, /shared_asset_publish_job_not_running/);
+      } finally { await sql`UPDATE jobs SET sandbox_id=${agentIdentity.sandboxId} WHERE id=${agentJobId}`; }
+      await rejectIdentityChange(async () => {
+        await sql.begin(async tx => {
+          await tx`SELECT id FROM canvases WHERE id=${canvasId} FOR UPDATE`;
+          await tx`SELECT id FROM jobs WHERE id=${agentJobId} FOR UPDATE`;
+          await tx`UPDATE job_attempts SET status='interrupted' WHERE id=${agentIdentity.attemptId}`;
+          await tx`INSERT INTO job_attempts(job_id,attempt_no,status,phase) VALUES(${agentJobId},2,'active','agent.ready')`;
+        });
+      }, /shared_asset_publish_attempt_changed/);
+
       await sql`UPDATE jobs SET status='succeeded', finished_at=now(), lease_expires_at=NULL WHERE id=${agentJobId}`;
       await assert.rejects(
-        sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/late.jar", contentType: "application/java-archive", bytes: Buffer.from("late"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId }),
+        sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/late.jar", contentType: "application/java-archive", bytes: Buffer.from("late"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId, ...agentIdentity }),
         /shared_asset_publish_job_not_running/,
       );
 

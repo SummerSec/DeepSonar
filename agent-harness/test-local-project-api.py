@@ -156,18 +156,27 @@ def main():
         item["id"] for item in req("GET", f"/jobs?project_id={pid}")
         if item.get("canvas_id") == cid
     }
-    retry = req("POST", f"/tasks/{cid}/retry", None, 201)
-    assert retry["canvas_id"] == cid and retry["status"] == "pending"
+    # Automatic collection may have retained these source Jobs before hard retry.
+    # Retention must win over destructive reset; a request before collection still resets normally.
+    retry_code, retry = req("POST", f"/tasks/{cid}/retry", None, expect=None)
     current_job_ids = {
         item["id"] for item in req("GET", f"/jobs?project_id={pid}")
         if item.get("canvas_id") == cid
     }
-    assert retry["id"] in current_job_ids, "硬重试创建的新入口 Job 应属于原画布"
-    assert old_job_ids.isdisjoint(current_job_ids), "硬重试应清空原画布的旧 Job"
+    if retry_code == 409:
+        assert retry["error_code"] == "TASK_DELETE_KNOWLEDGE_RETAINED", retry
+        assert sum(retry["retained"].values()) > 0, retry
+        assert old_job_ids == current_job_ids, "知识来源保留时不得删除旧 Job"
+        assert req("GET", f"/canvases/{cid}")["nodes"], "来源画布必须保留"
+    else:
+        assert retry_code == 201, retry
+        assert retry["canvas_id"] == cid and retry["status"] == "pending"
+        assert retry["id"] in current_job_ids, "硬重试创建的新入口 Job 应属于原画布"
+        assert old_job_ids.isdisjoint(current_job_ids), "无保留记录时硬重试应清空原画布的旧 Job"
     rows = req("GET", f"/projects/{pid}/canvases")
     row = next(r for r in rows if r["id"] == cid)
     assert row["job_count"] >= 1, row
-    print(f"硬重试 OK: 首跑 {final} → 新 job {retry['id'][:8]}，新一轮 job 数 {row['job_count']}")
+    print(f"硬重试/知识来源保留 OK: 首跑 {final}，HTTP {retry_code}，当前 job 数 {row['job_count']}")
 
     # 8. 外部事件触发：进入 Hub，且 source + event_id 幂等
     event_body = {
