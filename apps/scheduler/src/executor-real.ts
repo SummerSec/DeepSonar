@@ -81,7 +81,7 @@ import { publishStream } from "./stream-bus.js";
 import { CONTROL_MCP_NAME, CONTROL_SEMANTIC_EVENT_TYPES } from "./platform-control.js";
 import { subscribeCanvasUpdates } from "./canvas-updates.js";
 import { persistJobToolProgress } from "./domains/canvas/job-tool-progress.js";
-import { platformToolGuide, PLATFORM_CONTROL_CALLING_RULES } from "./platform-tools.js";
+import { platformControlNudge, platformControlPrompt, platformToolGuide, PLATFORM_CONTROL_CALLING_RULES } from "./platform-tools.js";
 import {
   filterFrozenSharedAssets,
   frozenPlatformOperations,
@@ -530,22 +530,22 @@ export function resultContract(
 ): string {
   const enabled = new Set(toolNames);
   if (isHub) {
-    return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete、intents 或 payload_file 三选一。from 必须填写当前 YAML root_id/fact/finding 的 UUID 值（不要写字段名 root_id、别名或占位符），role 必须原样命中工具结果（英文 name，禁止缩写），每个 intent 的 description≥8、prompt≥32 且完整自包含。可选 role_prompt 是该 Worker Job 的业务提示词覆盖，只冻结到新 Job，不修改持久化 RoleConfig；省略时继承选中角色的 RoleConfig。需要临时业务身份时，在 intent 添加 role_definition（仅 scope=job，随本 Job 快照冻结，不写 agent_roles）：name/title/description/instructions_markdown 只能定义业务身份和提示词，role 仍是平台权限与工具边界，不能借此增加凭据、工具、镜像或出网权限；跨任务复用写成受治理 Skill 源里的 SKILL.md，由 Agent search_skills → pull_skill 取用；role_definition 与 role_prompt 不能同时使用。intent 可选 runtime_image_key 必须原样来自本轮 list_available_runtime_images（按 purpose/capabilities/selection_hints 匹配任务后复制 image_key），且须与该角色 CLI 兼容、readiness=ready；省略时按角色缺省镜像解析，目录之外或 CLI 不兼容的值会被整单拒绝（invalid_runtime_image），未就绪镜像拒绝（runtime_image_not_ready）且不创建 Worker。findings_index 中 verify_required=false 的 Finding 已被 minVerifySeverity 策略豁免，不得为它派 review/test 或 request_human。多意图/长 prompt 时必须先 Write 完整 JSON 到 /workspace（如 hub_decision_payload.json），再 submit_hub_decision({"payload_file":"hub_decision_payload.json"})，禁止在 tool 参数里塞超大 JSON 导致截断。submit_hub_decision 每个 Job 成功提交后只能一次；仅当上一次 HTTP 请求失败或参数校验失败时才可修正参数后重试。随后调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认工具调用。`;
+    return `需要派发时先调用 list_available_roles 获取本轮数据库角色；调用 submit_hub_decision 时只允许 complete、intents 或 payload_file 三选一。from 必须填写当前 YAML root_id/fact/finding 的 UUID 值（不要写字段名 root_id、别名或占位符），role 必须原样命中工具结果（英文 name，禁止缩写），每个 intent 的 description≥8、prompt≥32 且完整自包含。可选 role_prompt 是该 Worker Job 的业务提示词覆盖，只冻结到新 Job，不修改持久化 RoleConfig；省略时继承选中角色的 RoleConfig。需要临时业务身份时，在 intent 添加 role_definition（仅 scope=job，随本 Job 快照冻结，不写 agent_roles）：name/title/description/instructions_markdown 只能定义业务身份和提示词，role 仍是平台权限与工具边界，不能借此增加凭据、工具、镜像或出网权限；跨任务复用写成受治理 Skill 源里的 SKILL.md，由 Agent search_skills → pull_skill 取用；role_definition 与 role_prompt 不能同时使用。intent 可选 runtime_image_key 必须原样来自本轮 list_available_runtime_images（按 purpose/capabilities/selection_hints 匹配任务后复制 image_key），且须与该角色 CLI 兼容、readiness=ready；省略时按角色缺省镜像解析，目录之外或 CLI 不兼容的值会被整单拒绝（invalid_runtime_image），未就绪镜像拒绝（runtime_image_not_ready）且不创建 Worker。findings_index 中 verify_required=false 的 Finding 已被 minVerifySeverity 策略豁免，不得为它派 review/test 或 request_human。多意图/长 prompt 时必须先 Write 完整 JSON 到 /workspace（如 hub_decision_payload.json），再 submit_hub_decision({"payload_file":"hub_decision_payload.json"})，禁止在 HTTP JSON payload 中直接塞超大内容导致截断。submit_hub_decision 每个 Job 只接受一个决策；已接受决策不得用新 key 或改内容新建提案；契约明确支持时才可原样恢复。仅明确可修正拒绝才按 repair 修正；结果未知按 operation 契约查询回执或状态，不换 key 猜测重放。随后在尚未提交完成提案时调用 mark_job_done 提交本轮摘要。只在文本里写出决策内容不等于提交，平台只认 Job-scoped HTTP Control API 接纳的 operation。`;
   }
   if (isVerify) {
-    return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human、refuted。confirmed 必须通过冻结策略的完整组合硬门且 required_missing 为空，只认当前修订、成功来源 Job、独立结构化 Fact（finding_id / subject_revision / ownership / expected / actual / outcome）；安全 profile 还要求独立 review/test 配对、显式 attempted_refutation 与 Finding impact 或有依据的 impact_waiver。不要重读源码、制品或 maker 结论做第二次复核；门禁失败时调度器会记为 rework 并回弹 Hub，提案 rework 必须带非空 missing_evidence 数组。全量匹配修订的 refutes 可提案 refuted，终态仍由 Scheduler 硬门写入。只在文本里给出结论不等于提交，平台只认工具调用。`;
+    return `验证结束后调用 mark_job_done，必须同时提交 summary 与 verdict；verdict 只能是 confirmed、rework、needs_human、refuted。confirmed 必须通过冻结策略的完整组合硬门且 required_missing 为空，只认当前修订、成功来源 Job、独立结构化 Fact（finding_id / subject_revision / ownership / expected / actual / outcome）；安全 profile 还要求独立 review/test 配对、显式 attempted_refutation 与 Finding impact 或有依据的 impact_waiver。不要重读源码、制品或 maker 结论做第二次复核；门禁失败时调度器会记为 rework 并回弹 Hub，提案 rework 必须带非空 missing_evidence 数组。全量匹配修订的 refutes 可提案 refuted，终态仍由 Scheduler 硬门写入。只在文本里给出结论不等于提交，平台只认 Job-scoped HTTP Control API 接纳的 operation。`;
   }
   if (isRole) {
     return enabled.has("emit_fact")
-      ? `每得到一个新的、可验证事实就调用 emit_fact，可调用多次；直接提交时 title≥2、description≥16，长内容或收到 HTTP 错误响应/截断后先 Write 完整 JSON 到 /workspace，再只传 payload_file，禁止用故意缩短的事实重试。执行结束后调用 mark_job_done。不要等到最后才批量上报事实；只在文本里列出事实或摘要不等于提交，平台只认工具调用。`
-      : `本 Job 已关闭 emit_fact；不要尝试提交事实。执行结束后调用 mark_job_done，在 summary 中概括完成范围与限制。只在文本里写摘要不等于提交，平台只认工具调用。`;
+      ? `每得到一个新的、可验证事实就调用 emit_fact，可调用多次；直接提交时 title≥2、description≥16，长内容先 Write 完整 JSON 到 /workspace，再只传 payload_file；收到明确的大小/截断拒绝时按 repair 修正，结果未知按 operation 契约查询回执或状态，禁止用故意缩短的事实重试。执行结束后调用 mark_job_done。不要等到最后才批量上报事实；只在文本里列出事实或摘要不等于提交，平台只认 Job-scoped HTTP Control API 接纳的 operation。`
+      : `本 Job 已关闭 emit_fact；不要尝试提交事实。执行结束后调用 mark_job_done，在 summary 中概括完成范围与限制。只在文本里写摘要不等于提交，平台只认 Job-scoped HTTP Control API 接纳的 operation。`;
   }
   if (isAudit) {
     return enabled.has("emit_finding")
-      ? `每确认一个有证据的安全问题就调用 emit_finding，可调用多次；直接提交时 title≥8、summary≥32，长内容或收到 HTTP 错误响应/截断后先 Write 完整 JSON 到 /workspace，再只传 payload_file，禁止用故意缩短的 Finding 重试。执行结束后调用 mark_job_done。不要等到最后才批量上报 Finding；只在文本里列出 Finding 或摘要不等于提交，平台只认工具调用。`
-      : `本 Job 已关闭 emit_finding；不要尝试提交 Finding。执行结束后调用 mark_job_done，在 summary 中概括完成范围与限制。只在文本里写摘要不等于提交，平台只认工具调用。`;
+      ? `每确认一个有证据的安全问题就调用 emit_finding，可调用多次；直接提交时 title≥8、summary≥32，长内容先 Write 完整 JSON 到 /workspace，再只传 payload_file；收到明确的大小/截断拒绝时按 repair 修正，结果未知按 operation 契约查询回执或状态，禁止用故意缩短的 Finding 重试。执行结束后调用 mark_job_done。不要等到最后才批量上报 Finding；只在文本里列出 Finding 或摘要不等于提交，平台只认 Job-scoped HTTP Control API 接纳的 operation。`
+      : `本 Job 已关闭 emit_finding；不要尝试提交 Finding。执行结束后调用 mark_job_done，在 summary 中概括完成范围与限制。只在文本里写摘要不等于提交，平台只认 Job-scoped HTTP Control API 接纳的 operation。`;
   }
-  return `执行结束后调用 mark_job_done 提交最终摘要。只在文本里写摘要不等于提交，平台只认工具调用。`;
+  return `执行结束后调用 mark_job_done 提交最终摘要。只在文本里写摘要不等于提交，平台只认 Job-scoped HTTP Control API 接纳的 operation。`;
 }
 
 /** 只公开组件的可发现标识，不把运行时配置参数、环境值或其他潜在密钥写进工作区。 */
@@ -628,18 +628,18 @@ ${custom ? `## 角色长期指令
 
 ${custom}
 
-` : ""}## 动态系统工具与结果契约（本 Job 最终授权）
+` : ""}## 动态系统工具与结果契约（本 Job 最终授权的 HTTP operation）
 
-- 已启用：${input.enabledTools.join(", ")}
-- 已关闭：${input.disabledTools.length > 0 ? input.disabledTools.join(", ") : "无"}
-- 只有“已启用”列表和 Agent CLI 实际显示的同名工具可以调用；长期指令中的工具示例不构成授权。
+- 已启用 HTTP operation：${input.enabledTools.join(", ")}
+- 已关闭 HTTP operation：${input.disabledTools.length > 0 ? input.disabledTools.join(", ") : "无"}
+- 平台 operation 不要求 CLI 展示同名原生工具；只能通过 Job-scoped HTTP Control API 调用已启用 operation。长期指令中的函数式示例只描述 JSON payload，不构成原生工具或额外授权。
 
 ${input.contract}
 
 ${input.toolGuide}
 
-系统工具只提交提案和证据，真正的派生、记账与终态由调度器决定。不要依赖跨 Job 状态，每个 Worker 都是全新的独立沙箱。
-输出内容与任务完成要求：本 Job 的最终输出内容就是系统工具实际提交的事件（fact/finding/decision/summary）；回合中打印的普通文本只作过程展示、不计入结果。缺少契约要求的 API 调用，平台即视为未完成。调用规则见上文「调用规则」与 deepsonar-control Skill。
+HTTP operation 只提交提案和证据，真正的派生、记账与终态由调度器决定。不要依赖跨 Job 状态，每个 Worker 都是全新的独立沙箱。
+输出内容与任务完成要求：本 Job 的最终输出内容就是 HTTP operation 实际提交的事件（fact/finding/decision/summary）；回合中打印的普通文本只作过程展示、不计入结果。缺少契约要求的 API 调用，平台即视为未完成。调用规则见上文「调用规则」与 deepsonar-control Skill。
 `;
 }
 
@@ -1128,7 +1128,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       initialInput += `\n\n${composeWorkerInstruction(composeScopeForPrompt(frozenTaskSeeds(taskTarget)).locations)}`;
     }
   }
-  initialInput += `\n\n${findingProtocolGuide}\n\n平台为本 Job 动态下发的系统接口：\n${contract}\n可用工具：${controlToolNames.join(", ")}。每个工具的参数、调用时机和示例见 /workspace/AGENTS.md 或 /workspace/CLAUDE.md 的“动态系统工具与结果契约”。`;
+  initialInput += `\n\n${findingProtocolGuide}\n\n${platformControlPrompt(controlToolNames, contract)}`;
   initialInput += `\n\n${CONTROL_TRANSPORT_POINTER} 完整调用规则见 /workspace/AGENTS.md「调用规则」与 deepsonar-control Skill。`;
   if (snapshot.knowledge_assignment) {
     initialInput += "\n\nScheduler 分配的知识工作（只读冻结引用）：" + JSON.stringify(snapshot.knowledge_assignment);
@@ -1858,11 +1858,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       },
       // 协议完成门禁：mark_job_done 未到时由驱动层催促同一会话补齐（最多 3 次）
       completionGate: () => Boolean(semanticState.done),
-      nudgeMessage: isHub
-        ? "你还没有通过平台工具提交本轮决策，只输出文本不算完成。请立即调用 submit_hub_decision（complete、intents 或 payload_file 三选一），然后调用 mark_job_done 提交本轮摘要。"
-        : isVerify
-          ? "你还没有通过平台工具提交最终结论，只输出文本不算完成。请立即调用 mark_job_done，带上 summary 和 verdict（confirmed/rework/needs_human/refuted）。"
-          : "你还没有通过平台工具提交最终结果，只输出文本不算完成。请通过 emit_fact/emit_finding 提交发现（如有），然后调用 mark_job_done 提交最终摘要。",
+      nudgeMessage: platformControlNudge(controlToolNames, isHub ? "hub" : isVerify ? "verify" : "worker"),
       onProgress: (message) => {
         void emit("progress", { message }).catch(() => {});
       },
