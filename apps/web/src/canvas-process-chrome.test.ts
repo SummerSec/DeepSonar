@@ -148,3 +148,20 @@ test("edge strokes keep size, pane var, z-index, and light-theme contrast", () =
   assert.match(css, /\.canvas-filter-toggle\b/);
   assert.match(css, /\.canvas-hidden-edge-hint\b/);
 });
+
+test("窄视口浮层不再互相叠压（#1065）", () => {
+  const css = readFileSync(new URL("./styles.css", import.meta.url), "utf8");
+  // 缩略图在 <640 隐藏：140×90 的 MiniMap 会压住筛选面板与广播账本
+  assert.match(css, /@media \(max-width: 639px\) \{\s*\.react-flow__minimap \{ display: none; \}/);
+  // 展开态右侧给缩略图留通道，否则 768 下筛选面板直接盖住它
+  assert.match(css, /@media \(min-width: 640px\) \{\s*\.canvas-filter-panel\.is-open \{ width: min\(760px, calc\(100% - 200px\)\); \}/);
+  // 广播账本从右上角改到右下缩放控件上方
+  const panelStart = css.indexOf(".broadcast-status-panel {");
+  assert.ok(panelStart > 0);
+  const panelBlock = css.slice(panelStart, css.indexOf("}", panelStart));
+  assert.match(panelBlock, /bottom: 104px;/);
+  assert.doesNotMatch(panelBlock, /top: 112px;/);
+  // 缩放控件必须压过 xyflow 自带白底（其 style.css 加载顺序在本文件之后）
+  assert.match(css, /\.react-flow \.react-flow__controls \{[\s\S]*?background: var\(--surface-control\)/);
+  assert.match(css, /\.react-flow \.react-flow__controls \{[\s\S]*?margin-bottom: 22px/);
+});

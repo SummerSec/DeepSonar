@@ -8,7 +8,7 @@ import { canvasExecutionIsPaused } from "../../task-execution-control.js";
 export async function readRepairRequeueAdmission(db: typeof sql, jobId: string) {
   const budget = await readRepairTokenBudget(db, jobId);
   const deny = (code: string, reason: string) => ({ budget, deadline: null, blocker: { code, reason } });
-  const [job] = await db`SELECT j.started_at,j.timeout_sec,j.agent_snapshot_json,c.target_json FROM jobs j
+  const [job] = await db`SELECT j.started_at,j.timeout_sec,j.execution_deadline_at,j.agent_snapshot_json,c.target_json FROM jobs j
     LEFT JOIN canvases c ON c.id=j.canvas_id WHERE j.id=${jobId}`;
   if (canvasExecutionIsPaused(job?.target_json)) return deny("REPAIR_PAUSED", "任务已暂停；恢复修复前需由操作员解除暂停。");
   const [effects] = await db`SELECT id FROM job_attempt_effects WHERE job_id=${jobId} AND status<>'settled' LIMIT 1`;
@@ -37,7 +37,7 @@ export async function readRepairRequeueAdmission(db: typeof sql, jobId: string) 
   // Only repair revision/deadline accounting requires a rejected-completion root.
   if (!budget) return { budget: null, deadline: null, blocker: null };
   if (Number(history.count) >= COMPLETION_REPAIR_LIMIT) return deny("COMPLETION_REPAIR_EXHAUSTED", "Job 累计修正次数已耗尽；不创建新代际。");
-  const deadline = budget.deadline ?? (job?.started_at
+  const deadline = budget.deadline ?? (job?.execution_deadline_at?new Date(job.execution_deadline_at).toISOString():null) ?? (job?.started_at
     ? new Date(new Date(job.started_at).getTime() + Number(job.timeout_sec) * 1000).toISOString() : null);
   if (!deadline || Date.parse(deadline) <= Date.now()) return deny("REPAIR_DEADLINE_EXHAUSTED", "原修复期限已耗尽或无法确认；不能刷新期限继续执行。");
   try { assertRepairTokenBudget({ ...budget, deadline }, true); }

@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 72);
+INSERT INTO schema_meta (id, version) VALUES ('global', 73);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -101,6 +101,7 @@ CREATE TABLE jobs (
   transcript_uri text,
   error text,
   started_at timestamptz,
+  execution_deadline_at timestamptz,
   finished_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT jobs_status_check CHECK (
@@ -224,6 +225,64 @@ CREATE TABLE events (
 );
 CREATE INDEX events_job_idx ON events (job_id, id);
 CREATE INDEX events_attempt_idx ON events (attempt_id, job_seq);
+
+CREATE TABLE job_execution_clocks (
+  job_id uuid PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+  budget_ms bigint NOT NULL CHECK (budget_ms > 0),
+  used_ms bigint NOT NULL DEFAULT 0 CHECK (used_ms >= 0),
+  active_since timestamptz,
+  attempt_id uuid REFERENCES job_attempts(id),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE human_requests (
+  id uuid PRIMARY KEY,
+  source_event_id text NOT NULL,
+  project_id uuid NOT NULL REFERENCES projects(id),
+  canvas_id text REFERENCES canvases(id) ON DELETE CASCADE,
+  job_id uuid NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  attempt_id uuid NOT NULL REFERENCES job_attempts(id),
+  revision integer NOT NULL DEFAULT 0 CHECK (revision >= 0),
+  status text NOT NULL DEFAULT 'open' CHECK (status IN ('open','answered','dismissed','closed')),
+  payload_json jsonb NOT NULL,
+  checkpoint_status text NOT NULL DEFAULT 'preparing' CHECK (checkpoint_status IN ('preparing','ready','blocked')),
+  manifest_json jsonb,
+  checkpoint_error_code text,
+  checkpoint_expires_at timestamptz NOT NULL DEFAULT now()+interval '30 days',
+  checkpoint_deleted_at timestamptz,
+  process_exited_at timestamptz,
+  resources_released_at timestamptz,
+  overdue_at timestamptz,
+  reply_message_id uuid,
+  target_attempt_no integer,
+  resume_error_code text,
+  resume_checked_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  answered_at timestamptz,
+  resumed_at timestamptz,
+  closed_at timestamptz,
+  close_reason text,
+  CONSTRAINT human_request_event_fk FOREIGN KEY (job_id,source_event_id) REFERENCES events(job_id,event_id) ON DELETE CASCADE,
+  UNIQUE(job_id,source_event_id),
+  CONSTRAINT human_request_ready_check CHECK (checkpoint_status <> 'ready'
+    OR (manifest_json IS NOT NULL AND process_exited_at IS NOT NULL AND resources_released_at IS NOT NULL)),
+  UNIQUE(job_id,attempt_id)
+);
+CREATE INDEX human_requests_pending_idx ON human_requests(status,created_at) WHERE resumed_at IS NULL;
+CREATE INDEX human_requests_job_idx ON human_requests(job_id,created_at DESC);
+CREATE INDEX human_requests_expiry_idx ON human_requests(checkpoint_expires_at) WHERE checkpoint_status <> 'blocked';
+
+-- Closing a Job never leaves an open management request, even when it has no
+-- active Attempt after resource reclamation. Historical payloads stay immutable.
+CREATE FUNCTION close_job_human_requests() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  UPDATE human_requests SET status='closed',revision=revision+1,closed_at=clock_timestamp(),close_reason=NEW.status
+    WHERE job_id=NEW.id AND status IN ('open','answered');
+  RETURN NEW;
+END $$;
+CREATE TRIGGER jobs_close_human_requests AFTER UPDATE OF status ON jobs FOR EACH ROW
+  WHEN (NEW.status IN ('succeeded','failed','timeout','cancelled','orphan') AND OLD.status IS DISTINCT FROM NEW.status)
+  EXECUTE FUNCTION close_job_human_requests();
 
 -- Durable per-Job fixed-window semantic-event budgets.  Scheduler ingestion
 -- locks one row instead of scanning events; progress and terminal/control
@@ -1167,6 +1226,8 @@ CREATE UNIQUE INDEX canvas_nodes_root_uniq
 -- distinct: injected means transport into the session only.
 CREATE TABLE human_messages (
   id uuid PRIMARY KEY,
+  request_id uuid REFERENCES human_requests(id),
+  request_revision integer,
   canvas_id text NOT NULL REFERENCES canvases(id) ON DELETE CASCADE,
   human_node_id uuid NOT NULL REFERENCES canvas_nodes(id) ON DELETE CASCADE,
   target_kind text NOT NULL,
@@ -1183,6 +1244,8 @@ CREATE TABLE human_messages (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT human_messages_target_kind_check CHECK (target_kind IN ('hub', 'job')),
+  CONSTRAINT human_messages_request_revision_check CHECK ((request_id IS NULL AND request_revision IS NULL)
+    OR (request_id IS NOT NULL AND request_revision IS NOT NULL AND request_revision >= 0)),
   CONSTRAINT human_messages_body_check CHECK (char_length(body) BETWEEN 1 AND 8000),
   CONSTRAINT human_messages_status_check CHECK (delivery_status IN ('planned','injected','acknowledged','unknown','failed')),
   CONSTRAINT human_messages_ack_check CHECK (

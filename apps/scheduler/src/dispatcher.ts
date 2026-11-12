@@ -1,5 +1,6 @@
 import { cleanupDispatcherSandbox } from "./dispatcher-human-wait.js";
-import { readRepairTokenBudget, assertRepairExecutionOwner } from "./domains/event-ingestion/repair-token-budget.js";
+import { humanExecutionStartedAt } from "./domains/job-control/human-continuation-clock.js";
+import { preflightHumanContinuation, assertContinuationExecutionOwner, hasHumanOrRepairBoundary } from "./domains/job-control/human-continuation-dispatch.js";
 import { frozenGatewayRequestBudget, GatewayRequestBudgetError } from "./gateway-request-policy.js";
 import { recordGatewaySnapshotNoStart } from "./gateway-snapshot-no-start.js";
 import { frozenTaskContract, taskContractPreflight, TaskContractBlockedError } from "./task-contract-preflight.js";
@@ -907,7 +908,7 @@ export async function retryProvisioningJob(
     // A repair-bearing Job needs explicit safe generation admission; ordinary
     // automatic retries must not strand it on an unauthorized successor Attempt.
     await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
-    if (await readRepairTokenBudget(tx, jobId)) return false;
+    if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
     const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
       SELECT status, outcome_json, state_json
       FROM job_attempts
@@ -939,7 +940,7 @@ async function retryTruncatedExecutionJob(
     // A repair-bearing Job needs explicit safe generation admission; ordinary
     // automatic retries must not strand it on an unauthorized successor Attempt.
     await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
-    if (await readRepairTokenBudget(tx, jobId)) return false;
+    if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
     const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
       SELECT status, outcome_json, state_json
       FROM job_attempts
@@ -971,7 +972,7 @@ async function retryContextWindowExceededJob(
     // A repair-bearing Job needs explicit safe generation admission; ordinary
     // automatic retries must not strand it on an unauthorized successor Attempt.
     await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
-    if (await readRepairTokenBudget(tx, jobId)) return false;
+    if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
     const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
       SELECT status, outcome_json, state_json
       FROM job_attempts
@@ -1039,6 +1040,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     const useReal = config.runtime.agentMode === "real" && (await isRealType(job.type as string));
     const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
+    await preflightHumanContinuation(job,attemptId);
     // First pre-call checkpoint: establish durable no-start authority before any
     // runtime IO. The failed admission never starts an Agent or guesses a budget.
     if (useReal) {
@@ -1138,7 +1140,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     await sql.begin(async (tx) => {
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       await lockCurrentProvisioningAttempt(tx as unknown as typeof sql, jobId, attemptId!, "preparing");
-      await assertRepairExecutionOwner(tx as unknown as typeof sql, jobId, attemptId!);
+      await assertContinuationExecutionOwner(tx as unknown as typeof sql, jobId, attemptId!);
       const admitted = await beginEffect(tx as unknown as typeof sql, attemptId!, {
         effectId: provisionEffectId!,
         kind: "provision",
@@ -1292,10 +1294,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
       const [bound] = await tx`UPDATE jobs SET sandbox_id = ${handle?.sandboxId ?? null}
         WHERE id = ${jobId} AND status = 'provisioning' RETURNING id`;
       if (!bound) throw new SharedAssetLifecycleConflictError("stale_attempt");
-      const repairBudget = await readRepairTokenBudget(tx, jobId);
-      const [timing] = await tx`SELECT timeout_sec FROM jobs WHERE id=${jobId}`;
-      const startedAt = repairBudget?.deadline
-        ? new Date(Date.parse(repairBudget.deadline) - Number(timing.timeout_sec) * 1000) : new Date();
+      const startedAt = await humanExecutionStartedAt(tx,jobId,attemptId!);
       if (!(await createSqlJobLifecycleApplication(tx).transitionJob(jobId, "running", { started_at: startedAt, lease_expires_at: lease }))) {
         throw new SharedAssetLifecycleConflictError("stale_attempt");
       }
@@ -1311,7 +1310,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     kickDispatcher();
     await sql.begin(async (tx) => {
       await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
-      await assertRepairExecutionOwner(tx as unknown as typeof sql, jobId, attemptId!);
+      await assertContinuationExecutionOwner(tx as unknown as typeof sql, jobId, attemptId!);
       const started = await beginEffect(tx as unknown as typeof sql, attemptId!, {
         effectId: `agent_run:${String(attempt.attempt_no)}`,
         kind: "agent_run",

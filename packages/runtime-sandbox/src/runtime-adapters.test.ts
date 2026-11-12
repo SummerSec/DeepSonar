@@ -666,20 +666,24 @@ test("Pi message_end error 保留脱敏后的上游 errorMessage", () => {
     type: "message_end",
     message: { stopReason: "error", errorMessage: PI_ISSUE_320_SAMPLE },
   }, state);
-  assert.deepEqual(failed, [
+  assert.deepEqual(failed, [], "模型消息错误须等原生重试或结算");
+  const settled = adapter.decodeOutput({ type: "agent_settled", result: "" }, state);
+  assert.deepEqual(settled, [
     { type: "result", subtype: "error", is_error: true, result: expected, detail: `Pi message ended: error: ${PI_ISSUE_320_SAMPLE}` },
   ]);
-  const mapped = mapCliEvent(failed[0]!, () => {});
+  const mapped = mapCliEvent(settled[0]!, () => {});
   assert.equal(mapped.isError, true);
   assert.equal(mapped.errorDetail, expected);
-  const settled = adapter.decodeOutput({ type: "agent_settled", result: "" }, state);
+  assert.equal(mapped.runnerErrorSource, undefined, "模型拒绝保持 structured_terminal 来源");
   assert.equal(settled[0]?.is_error, true);
   assert.equal(settled[0]?.result, expected);
 
-  const secret = adapter.decodeOutput({
+  const secretState = {};
+  assert.deepEqual(adapter.decodeOutput({
     type: "message_end",
     message: { stopReason: "error", errorMessage: "{\"message\":\"unauthorized\",\"api_key\":\"sk-secret-value\"}" },
-  }, {});
+  }, secretState), []);
+  const secret = adapter.decodeOutput({ type: "agent_settled" }, secretState);
   assert.equal(secret[0]?.is_error, true);
   assert.equal(secret[0]?.result, "Pi message ended: error: unauthorized");
   assert.equal(secret[0]?.detail, undefined);

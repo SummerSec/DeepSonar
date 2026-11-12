@@ -134,6 +134,8 @@ export interface AdapterRuntimeState {
   dshActiveChildren?: Set<string>;
   failed?: boolean;
   piLengthTruncated?: boolean;
+  /** Model-message rejection awaiting native retry or settlement; never a hard runtime failure. */
+  piPendingMessageError?: Record<string, unknown>;
   errorDetail?: string;
   runnerErrorSource?: "structured_terminal" | "process";
 }
@@ -561,6 +563,13 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     }
     return [];
   }
+  if (type === "auto_retry_start" && state.piPendingMessageError && !state.failed) {
+    // Reset current output projection; session/stream evidence stays immutable.
+    state.finalText = undefined;
+    state.streamedText = undefined;
+    state.streamedReasoning = undefined;
+    return [];
+  }
   if (type === "agent_start") return [{ type: "system", subtype: "init", ...(state.sessionId ? { session_id: state.sessionId } : {}) }];
   if (type === "entry_appended") {
     const entry = line.entry as Record<string, unknown> | undefined;
@@ -575,10 +584,12 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     if (String(event.type ?? "") === "error") {
       const message = event.error && typeof event.error === "object" && !Array.isArray(event.error)
         ? event.error as Record<string, unknown> : undefined;
-      // The SDK emits this update before message_end. Wait for the final structured
-      // refusal instead of shutting down while that same message is still streaming.
-      if (message?.role === "assistant" && message.stopReason === "error"
-        && message.errorMessage === "COMPLETION_ALREADY_ACCEPTED") return [];
+      if (message?.role === "assistant" && ["error", "aborted"].includes(String(message.stopReason))) {
+        const events = decodePi({ type: "message_end", message }, state);
+        // An update alone is process evidence; only message_end establishes structured provenance.
+        if (message.stopReason === "error" && state.piPendingMessageError) state.piPendingMessageError.runnerErrorSource = "process";
+        return events;
+      }
       return fail(textFrom(event.error ?? event.message) ?? "Pi assistant message failed", "process");
     }
     return piTextFromMessageEvent(line, state);
@@ -600,12 +611,15 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     if (stopReason === "error" || stopReason === "aborted") {
       const raw = piMessageEndErrorRaw(line, message);
       const fallback = `Pi message ended: ${stopReason}`;
-      return failRuntime(raw ? `${fallback}: ${raw}` : undefined, fallback, stopReason === "aborted" ? "process" : undefined);
+      if (stopReason === "aborted") return failRuntime(raw ? `${fallback}: ${raw}` : undefined, fallback, "process");
+      state.piPendingMessageError = runtimeErrorResult(raw ? `${fallback}: ${raw}` : undefined, fallback);
+      return [];
     }
     const text = piMessageText(message);
     const unseen = text ? unseenCompleteText(state, "text", text) : undefined;
     if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
     if (stopReason === "length") {
+      state.piPendingMessageError = undefined;
       state.piLengthTruncated = true;
       return [{ type: "runtime.diagnostic", code: "PI_RESPONSE_TRUNCATED", stop_reason: "length" },
         ...(unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [])];
@@ -613,12 +627,14 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     if (!unseen && isEmptyPiModelResponse(message, state)) {
       return fail("PI_EMPTY_MODEL_RESPONSE");
     }
+    state.piPendingMessageError = undefined;
     return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
   }
   if (type === "agent_settled") {
     if (line.aborted === true) return fail("Pi agent aborted", "process");
     if (state.failed) return [{ type: "result", subtype: "error", is_error: true, result: state.errorDetail ?? "Pi runtime failed",
       ...(state.runnerErrorSource ? { runnerErrorSource: state.runnerErrorSource } : {}) }];
+    if (state.piPendingMessageError) return [state.piPendingMessageError];
     return [{ type: "agent_settled", session_id: state.sessionId, session_file: state.sessionFile, result: state.finalText ?? "",
       ...(state.piLengthTruncated ? { truncated: true, stop_reason: "length" } : {}) }];
   }
@@ -641,7 +657,9 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     }
     return [{ type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, is_error: Boolean(line.isError ?? tool.isError ?? tool.error), content: line.result ?? tool.result ?? tool.output ?? "" }] } }];
   }
-  if (type === "auto_retry_end" && line.success === false) return fail("Pi automatic retry exhausted");
+  if (type === "auto_retry_end" && line.success === false && !state.failed && !state.piPendingMessageError) {
+    return failRuntime(textFrom(line.finalError), "Pi automatic retry exhausted", "process");
+  }
   return ["turn_start", "turn_end", "queue_update", "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end", "model_select", "model_change"].includes(type)
     ? []
     : unknownRuntimeEvent();

@@ -281,3 +281,88 @@ test("credential and authorization blockers merge with the accepted human reques
     assert.equal(blockers[0]?.recommended_action, "reply_to_agent");
   }
 });
+
+test("a human wait without a pending intervention asks to read details instead of claiming missing content", () => {
+  const rows = projectTaskActions({ jobs: [{ id: "job-details", status: "waiting_human", execution_state: {
+    authority: "scheduler", status: "waiting_human", allowed_actions: ["wait_for_human"], blocker: "human_already_accepted",
+  } }], interventions: [{ id: "old-human", jobId: "job-details", reason: "已处理的历史问题", pending: false }] });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].title, "需要读取人工请求详情");
+  assert.equal(rows[0].recommended_action, "inspect_recovery");
+  assert.doesNotMatch(rows[0].title, /缺少|缺失/);
+});
+
+test("a pending intervention whose details have not loaded does not claim its instructions are absent", () => {
+  for (const detailStatus of ["loading", "error"] as const) {
+    const rows = projectTaskActions({ interventions: [{ id: "unread", pending: true, reason: "摘要", detailStatus }] });
+    assert.doesNotMatch(rows[0].impact, /没有完整操作指引|缺少|缺失/);
+    assert.equal(rows[0].human_request?.guidanceStatus, detailStatus);
+  }
+});
+
+test("terminal human history never becomes a pending reply even with a stale intervention and wait permission", () => {
+  for (const status of ["succeeded", "failed", "timeout", "cancelled", "orphan"]) {
+    for (const allowed_actions of [["inspect_state", "read_receipt"], ["wait_for_human", "request_recovery"]]) {
+      const rows = projectTaskActions({ jobs: [{ id: "job-closed", status, execution_state: {
+        authority: "scheduler", status, allowed_actions, blocker: "human_request_closed",
+      } }], interventions: [{ id: "stale-human", jobId: "job-closed", reason: "原请求", pending: true }] });
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].kind, "platform_blocker");
+      assert.match(rows[0].title, /历史人工请求/);
+      assert.equal(rows[0].recommended_action, "inspect_recovery");
+      assert.equal(rows[0].next_state, status);
+      assert.equal(rows[0].human_request, undefined);
+      assert.doesNotMatch(rows[0].title, /等待处理|等待人工|等待配置/);
+    }
+  }
+});
+
+test("terminal wait_for_human projection cannot create a human action even when the blocker is stale", () => {
+  const rows = projectTaskActions({ jobs: [{ id: "ended", status: "failed", execution_state: {
+    authority: "scheduler", status: "failed", allowed_actions: ["wait_for_human"], blocker: "human_already_accepted",
+  } }] });
+  assert.equal(rows[0]?.kind, "platform_blocker");
+  assert.equal(rows[0]?.recommended_action, "inspect_recovery");
+  assert.match(rows[0]?.title ?? "", /历史人工请求/);
+});
+
+test("terminal stale correct_proposal permission and an error cannot suggest model correction", () => {
+  for (const status of ["succeeded", "failed", "timeout", "cancelled", "orphan"]) {
+    for (const blocker of [null, "execution_inactive"]) {
+      const rows = projectTaskActions({ jobs: [{ id: "ended-correction", status, error: "schema mismatch", execution_state: {
+        authority: "scheduler", status, allowed_actions: ["correct_proposal"], blocker,
+      } }] });
+      assert.ok(rows.every((row) => row.recommended_action !== "correct_proposal" && row.kind !== "model_repair"));
+    }
+  }
+});
+
+test("terminal stale platform waits describe historical requests instead of waiting for configuration", () => {
+  for (const status of ["succeeded", "failed", "timeout", "cancelled", "orphan"]) {
+    const rows = projectTaskActions({ jobs: [{ id: "ended-platform", status, execution_state: {
+      authority: "scheduler", status, allowed_actions: ["wait_for_platform"], blocker: "platform_blocker_accepted",
+    } }] });
+    assert.equal(rows[0]?.recommended_action, "inspect_recovery");
+    assert.match(rows[0]?.title ?? "", /历史人工请求/);
+    assert.doesNotMatch(rows[0]?.title ?? "", /等待配置|等待处理/);
+  }
+});
+
+test("terminal human history keeps unresolved effects ahead of read-only history", () => {
+  for (const status of ["unknown", "effect_pending"]) {
+    const result = projectJobActions({ job: { id: "job-effects", status: "failed", execution_state: {
+      authority: "scheduler", status: "failed", allowed_actions: ["inspect_state", "read_receipt"], blocker: "human_request_closed",
+    } }, effects: [{ effect_id: "outstanding", effect_kind: "agent_run", status }] });
+    assert.equal(result.actions[0]?.kind, "unknown_effect");
+    assert.equal(result.actions[0]?.recommended_action, "confirm_unknown_effect");
+    assert.match(result.actions[0]?.title ?? "", /对账/);
+    assert.equal(result.repair?.category, "unknown_external_effect");
+  }
+  const rows = projectTaskActions({ jobs: [{ id: "job-reconcile", status: "timeout", execution_state: {
+    authority: "scheduler", status: "timeout", allowed_actions: ["wait_for_human", "reconcile_effects"], blocker: "effects_require_reconciliation",
+  } }], interventions: [{ id: "stale", jobId: "job-reconcile", reason: "原请求", pending: true }] });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, "unknown_effect");
+  assert.equal(rows[0].recommended_action, "confirm_unknown_effect");
+  assert.doesNotMatch(rows[0].title, /等待人工|等待处理/);
+});

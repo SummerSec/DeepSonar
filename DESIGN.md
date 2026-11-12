@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-11
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
@@ -11,6 +11,8 @@
 #945 工具活动进度保持 Canvas-first；Job/Canvas 创建和 deferred 预检沿用纯数据库有界冲突重试。Task/Finding Report 的精确输入字节与摘要现随 Job/Report SQL 原子提交，领取后、runtime IO 前才投影输入文件，不覆盖冲突历史；Verify/orphan 收口因此只重试 SQL，按 Canvas → Job → 全部 Attempts 重核终态归属。成功报告输出仍含文件 I/O，不纳入整体重试；原始 SQLSTATE 保留，`25P02` 和未知外部效果不是安全重放依据。历史缺少新冻结字节不重建或补写，详见[运行时视图](docs/architecture/06-runtime-view.md#数据库锁序共享卷与完成恢复871873874)及[数据契约](docs/architecture/08-data-architecture.md#report-输入与文件投影945)。最终 SHA Actions 待验。
 
 > **#979 运行镜像治理**：DSH 与 Pi OM 在启动前核对镜像内治理代码，旧快照保持不可变；[诊断与恢复](docs/RUNTIME_IMAGE_GOVERNANCE_979.md)区分代码修复、OCI 内容证据与正式发布。
+
+#1074 的[人工断点续做](docs/HUMAN_CONTINUATION.md)以持久请求和累计执行时钟区分等待、封存与执行：人工超时只记 overdue，旧资源经可信回收后关闭 Attempt；晚回复先保存，准入后恢复业务文件并在 structured 新会话继续。终态历史不授权复活，原额度/硬期限/未决效果不豁免，最终 SHA Actions 另验。
 
 ## 1. 设计判断
 
@@ -326,7 +328,7 @@ Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`
 
 运行时由 `packages/runtime-sandbox` 的 `SandboxRunner` / `RuntimeHost` 抽象，当前有 Noop 和 OpenSandbox 实现。每个 Job 使用新的 `/workspace`、独立可写 HOME、冻结的 CLI/provider/model、治理后的 Gateway、镜像 key + digest、工具清单和网络策略。Pi 快照的 `model` 是 CLI `--model` 接受的目录 id，`pi_provider` 是已认证 `models.json` 路由；`deepsonar/<id>` 只表示 Provider 路由，adapter 必须映射为 `--provider <route> --model <id>` 后再启动。目录 id 在多个已认证路由间有歧义且无法唯一确定时，快照解析 / claim 启动在 provision 前以 `PI_MODEL_UNAVAILABLE` 失败。real Job 的模型请求经 Scheduler-owned Model Gateway（实现注释中的历史 §6.3）；长期 Provider 密钥不进入 Job 快照、Session 或工作区。
 
-运行器失败保留结构化终态与宿主进程/传输来源；Pi 主请求 allowance 只通过私有宿主错误身份保留 Gateway 精确完成拒绝码，隔离 SDK 抛出的同名异常并等待 SDK 的结构化 message_end，不由 streaming update 制造终态或重放模型请求。真实进程失败不因已接受完成被吞掉；唯一窄例外（#1045）是 CLI 在宿主已持久接受完成后以普通非零码退出、且终态错误精确等于完成拒绝身份，仅剥离本机生成的退出码前缀，信号退出（≥128）、stderr 尾文与其它文本仍失败。限定放行与测试契约见 [CLI adapters](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)。
+Pi 单次模型错误先等待原进程内部重试与执行结算，不在消息错误时提前结束 Job；实际后续成功消息才清除待判定错误，最终失败与完成回执边界见 [#1072](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)。运行器失败保留结构化终态与宿主进程/传输来源；Pi 主请求 allowance 只通过私有宿主错误身份保留 Gateway 精确完成拒绝码，隔离 SDK 抛出的同名异常并等待 SDK 的结构化 message_end，不由 streaming update 制造终态或重放模型请求。真实进程失败不因已接受完成被吞掉；唯一窄例外（#1045）是 CLI 在宿主已持久接受完成后以普通非零码退出、且终态错误精确等于完成拒绝身份，仅剥离本机生成的退出码前缀，信号退出（≥128）、stderr 尾文与其它文本仍失败。限定放行与测试契约见 [CLI adapters](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#runner-failure-provenance-919)。
 
 #1032 首片在 Pi 主执行与 OM 的 SDK 调用前共用精确凭据替换，覆盖工具 env/认证文件/错误与来源文本，不修改原 Session 或认证选项；OM 内容准入同时绑定 wrapper 与共享源码。Gateway 原字节守卫保持，尚未实现同 UID 认证隔离或整个 Issue 的诊断/审计要求；[范围与验收](docs/MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)区分源码、待验 Actions 与未执行生产。
 
