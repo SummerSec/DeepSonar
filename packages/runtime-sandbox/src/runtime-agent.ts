@@ -1447,6 +1447,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     await exec.write(encoded);
   };
   const resetPiTurn = () => {
+    adapterState.piPendingMessageError = undefined;
     adapterState.failed = false;
     adapterState.errorDetail = undefined;
     adapterState.runnerErrorSource = undefined;
