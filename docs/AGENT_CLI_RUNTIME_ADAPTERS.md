@@ -62,6 +62,29 @@ Pi 的模型消息失败与整个 RPC 执行结束是两个边界。`message_upd
 
 现场 Job `c76115f3-3d90-4c11-a56a-f2efe2b82a73` 的原始会话记录 `terminated`，随后可见新的模型请求，宿主却在该请求返回前结束执行；单次消息被提前终态化的适配缺陷已定位。镜像内 Pi 1.4.0 使用 Undici；其响应体异常终止产生 `TypeError("terminated", { cause })`，但 Pi-AI provider 错误转换只保留 message/status/body，丢弃嵌套 cause/code。故已保存记录无法区分本次 body 空闲超时与 socket 断链，不能把约 595 秒当作特定超时的证明。HTTP 200 收尾和历史用量结算均不证明响应完整交付。回归覆盖实际 runner 的 decode/driver/map 路径、stdin 保持及成功/失败与完成门；最终 SHA 的 GitHub Actions 结果另行记录，未重跑现场 Job、未做生产部署。
 
+### 进度消费与 WebSocket 保活（#1092）
+
+PTY 的排队 chunk 与 runner 的 JSONL/RPC record 消费分别设置协作检查点：连续
+工作达到 8ms 或 32 项时用 Node `setImmediate` 让出事件循环，让 socket 读取、
+Undici 自动 Pong、关闭和取消计时器获得执行机会。一个 chunk 可包含多条 RPC，
+因此只有外层让出不足；已完成 Promise 不代替真实 I/O 让出。该预算不预占单次
+同步回调，也不是延迟 SLA 或队列容量上限。
+
+所有输出、进度记录、顺序和退出诊断继续保留，不去重、采样或暂停 socket 读取。
+共享 OM 文本脱敏只对 JSON 候选尝试解析，避免普通多行 ASAN 输出逐行产生解析
+异常；JSON/JSONL、转义的 OM 标识及畸形 memory 文本仍按原隐私边界处理。
+该共享策略也用于归档/Web；没有新增字段、API、设置、权限或恢复通道。
+
+回归接 `ci:unit:runtime-sandbox`：普通文本解析次数、队列 I/O 哨兵，以及独立
+Worker 中的回环服务端、真实 Undici 和 Pi RPC/runner 链路。服务端在首条进度被
+消费后才发 nonce Ping，独立执行 deadline；慢消费时必须在积压清空前收到 Pong，
+并验证全部进度和一次 prompt。夹具只生成合成数据，不执行真实模型或工具。
+最终 head 验收见 PR #1093。
+
+历史 Job 的代理保活超时和进度处理变慢已有日志证据；消费饥饿是可复现代码机制，
+不能据此补造当时的 CPU/GC、队列长度或 Ping/Pong 抓包。修复不重写历史证据、
+不重跑 Job、不部署，不延长心跳超时或重放外部效果。
+
 ### OpenSandbox PTY 退出诊断（#1088）
 
 只有包含整数 `exit_code` 的 execd `exit` 帧能产生 CLI 退出码。WebSocket

@@ -50,6 +50,8 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 #1002 P1-9 的同 Job 模型失败恢复关联 FR-CRED-003/004、FR-JOB-014 的重跑区别与 06/09/10：[透明契约](../MODEL_GATEWAY_TRANSPARENCY.md#job-scoped-model-recovery-1002-p1-9)拥有 scoped no-start 与关联请求/冻结许可边界，[生命周期](../AGENT_REPAIR_LIFECYCLE.md#job-scoped-model-recovery-1002-p1-9)记录不重启 Agent、不重放/退款及历史拒绝。原 effect intent 跨 token/Attempt 计数，未运行那次的空 start/error 不发布；SDK/真实 SQL 回归保留，#1036 D 新增[原生 Pi RPC 链](../MODEL_GATEWAY_TRANSPARENCY.md#1036-d原生-pi-恢复链的离线回归)至核心 base 镜像 smoke。Gateway 为受控服务，不冒充真实账本或通用 Job 重启；最终 SHA Actions 待验。
 #1002 P2-10 关联 FR-JOB-006 与 06/08/09/10：原失败诊断与首次 Attempt 来源引用同事务、Job GET 有界按 scheduler/schema/归属重验，复用原 audit 和读权限，不改变生命周期或未知效果。权威边界见[OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)，SQL/HTTP/受控 Provider 回归已接线，最终 SHA Actions 待验。
 
+#1092 的 [进度消费与保活](../AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)映射 IR-001 与[运行时视图](06-runtime-view.md#进度积压消费与保活1092)：runtime-sandbox 协作让出 I/O、shared-types 保持隐私的 JSON 候选解析优化；Scheduler/Evidence 仍为原落盘通路，最终 head 验收见 PR #1093。
+
 #1088 补齐 IR-001 的 [PTY 退出诊断](../AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)，[运行时视图](06-runtime-view.md#opensandbox-pty-退出与传输中断1088)与追溯矩阵沿用原 Evidence/权限边界；最终 SHA Actions 待验。
 
 ## 1. 阅读路径与目录

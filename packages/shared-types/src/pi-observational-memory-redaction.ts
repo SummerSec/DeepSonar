@@ -114,28 +114,37 @@ export function redactPiObservationalMemory(value: unknown): PiMemoryRedactedVal
   return redactTree(value, false, new WeakSet<object>());
 }
 
+const JSON_TEXT_START_RE = /^\s*(?:\{|\[|")/u;
+const MEMORY_PROSE_RE = /om\.(?:observations|reflections|folded)|pi[-_ ]observational[-_ ]memory|tool(?:_name)?\s*[:=]\s*["']?recall\b/iu;
+
 /** Redact JSONL session/RPC text. Ordinary Pi compaction remains unchanged. */
 export function redactPiObservationalMemoryText(text: string): string {
-  try {
-    const parsed: unknown = JSON.parse(text);
-    if (containsOmEnvelope(parsed, new WeakSet<object>())) {
-      return JSON.stringify(redactPiObservationalMemory(parsed)) + text.slice(text.trimEnd().length);
-    }
-  } catch {
-    if (/^\s*[{[]/u.test(text) && /om\.(?:observations|reflections|folded)/u.test(text)) {
-      try { JSON.parse(text.split(/\r?\n/u)[0]!); }
-      catch { return REDACTED + (text.endsWith("\n") ? "\n" : ""); }
+  // Plain multiline tool output is common. JSON.parse exceptions for every
+  // non-JSON line amplify synchronous work at each telemetry boundary. Keep
+  // parsing all JSON candidates (including escaped OM keys/types) and keep the
+  // same conservative marker handling for malformed/non-JSON memory prose.
+  if (JSON_TEXT_START_RE.test(text)) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (containsOmEnvelope(parsed, new WeakSet<object>())) {
+        return JSON.stringify(redactPiObservationalMemory(parsed)) + text.slice(text.trimEnd().length);
+      }
+    } catch {
+      if (/^\s*[{[]/u.test(text) && /om\.(?:observations|reflections|folded)/u.test(text)) {
+        try { JSON.parse(text.split(/\r?\n/u)[0]!); }
+        catch { return REDACTED + (text.endsWith("\n") ? "\n" : ""); }
+      }
     }
   }
   return text.split(/(\r?\n)/u).map((part) => {
     if (!part || /^\r?\n$/u.test(part)) return part;
+    if (!JSON_TEXT_START_RE.test(part)) return MEMORY_PROSE_RE.test(part) ? REDACTED : part;
     try {
       const parsed = JSON.parse(part) as unknown;
       if (!containsOmEnvelope(parsed, new WeakSet<object>())) return part;
       return JSON.stringify(redactPiObservationalMemory(parsed));
     } catch {
-      return /om\.(?:observations|reflections|folded)|pi[-_ ]observational[-_ ]memory|tool(?:_name)?\s*[:=]\s*["']?recall\b/iu.test(part)
-        ? REDACTED : part;
+      return MEMORY_PROSE_RE.test(part) ? REDACTED : part;
     }
   }).join("");
 }

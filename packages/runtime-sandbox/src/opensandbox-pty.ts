@@ -5,6 +5,7 @@
 import type { OpenSandboxExecHandle } from "./opensandbox.js";
 import type { RuntimeProcessChunk } from "./runtime-host.js";
 import { projectProcessError, RuntimeProcessFailure, safeProcessDiagnosticText, type RuntimeProcessDiagnostic } from "./runtime-process-diagnostic.js";
+import { createRuntimeStreamCheckpoint } from "./runtime-stream-fairness.js";
 
 export const PTY_BIN_STDIN = 0x00;
 export const PTY_BIN_STDOUT = 0x01;
@@ -289,7 +290,9 @@ export async function openOpenSandboxPty(
       ws.send(JSON.stringify({ type: "resize", cols, rows }));
     },
     async *[Symbol.asyncIterator](): AsyncIterator<RuntimeProcessChunk> {
+      const checkpoint = createRuntimeStreamCheckpoint();
       while (true) {
+        await checkpoint();
         if (chunks.length) { yield chunks.shift()!; continue; }
         if (done) {
           if (termination !== "process_exit") throw failure();
