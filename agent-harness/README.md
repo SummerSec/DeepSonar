@@ -54,7 +54,7 @@ ARCHITECTURE §8：harness 已收缩为「镜像定义 + Job-scoped HTTP API 控
 每个真实 Job 都注入同一份平台内置、不可由 RoleConfig 同名覆盖的静态 `deepsonar-control` Skill。Job 创建时冻结角色允许的 operation，运行时只提供对应的 Job-scoped HTTP API 和短期 capability token：
 
 - Agent 通过自身可用的 HTTP 工具调用 `$DEEPSONAR_API_BASE_URL/agent/capabilities_list` 发现当前 Job 的精确 operation allowlist；需要完整机器可读描述时读取 `$DEEPSONAR_API_BASE_URL/openapi.json`。
-- 语义操作统一调用 `$DEEPSONAR_API_BASE_URL/operations/:operationId`，使用 `Authorization: Bearer $DEEPSONAR_API_TOKEN`、JSON `Content-Type` 和规范 UUID `Idempotency-Key`。
+- 语义操作统一调用 `$DEEPSONAR_API_BASE_URL/operations/:operationId`，使用 `Authorization: Bearer "$(cat /workspace/.deepsonar/control-token)"`（控制通道 token 由运行时以 0600 文件提供，不作为 env 值存在）、JSON `Content-Type` 和规范 UUID `Idempotency-Key`。
 - `emit_progress`、`emit_fact`、`emit_finding`、`submit_hub_decision`、`mark_job_done`、`request_human` 等 operation 仍按角色裁剪，分别提交进度、事实、Finding、Hub 决策、完成或人工阻塞提案。
 - API 返回 `accepted` 只表示 Scheduler 已接收输入，仍会按 Job 状态、冻结 operation 和严格 payload 契约重验并记账；HTTP 错误响应按返回的稳定错误码处理，临时错误使用相同幂等键重试。
 

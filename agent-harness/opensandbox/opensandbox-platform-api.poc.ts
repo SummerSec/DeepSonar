@@ -180,9 +180,10 @@ print("LEAK:" + ("1" if leaked() else "0"))
 print("ENV_BASE:" + os.environ.get("DEEPSONAR_API_BASE_URL", ""))
 print("ENV_JOB:" + os.environ.get("DEEPSONAR_JOB_ID", ""))
 print("ENV_TOKEN:" + ("1" if os.environ.get("DEEPSONAR_API_TOKEN") else "0"))
+print("CONTROL_FILE:" + ("1" if os.path.isfile("/workspace/.deepsonar/control-token") else "0"))
 print("ENV_OS_KEY:" + ("1" if os.environ.get("OPEN_SANDBOX_API_KEY") else "0"))
 if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
-    token = os.environ["DEEPSONAR_API_TOKEN"]
+    token = open("/workspace/.deepsonar/control-token").read().strip()
     proxy = os.environ["DEEPSONAR_GATEWAY_PROXY_HOST"]
     for name, payload in OPS:
         print(f"CALL:{name}=" + str(post(name, payload, token)))
@@ -233,7 +234,7 @@ if os.environ.get("DEEPSONAR_POC_MODE") == "submit":
     DEEPSONAR_GATEWAY_PROXY_HOST,
     ...capability.env,
   }, config.gateway.proxyUpstreamUrl);
-  const provisionedEnv = /ENV_TOKEN:1/.test(allowed.stdout)
+  const provisionedEnv = /ENV_TOKEN:0/.test(allowed.stdout) && /CONTROL_FILE:1/.test(allowed.stdout)
     && allowed.stdout.includes(`ENV_BASE:${expectedBase}`)
     && allowed.stdout.includes(`ENV_JOB:${jobId}`)
     && /ENV_OS_KEY:0/.test(allowed.stdout);

@@ -232,7 +232,7 @@ def run_http(base_url, token, budget_seconds=90):
 
 def main():
     try:
-        result = run_http(os.environ["DEEPSONAR_API_BASE_URL"], os.environ["DEEPSONAR_API_TOKEN"])
+        result = run_http(os.environ["DEEPSONAR_API_BASE_URL"], open("/workspace/.deepsonar/control-token").read().strip())
     except Exception:
         result = stopped("OM_COMPLETION_CLIENT_ERROR")
     print(json.dumps(result, separators=(",", ":")))

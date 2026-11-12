@@ -397,7 +397,7 @@ try {
       await host.uploadFile(`#!/bin/sh
 set -eu
 base=$(printf '%s' "$DEEPSONAR_API_BASE_URL" | sed 's:/*$::')
-token=$DEEPSONAR_API_TOKEN
+token=$(cat /workspace/.deepsonar/control-token)
 post() {
   python3 - "$base" "$token" "$1" "$2" <<'PY'
 import sys, urllib.error, urllib.request, uuid
