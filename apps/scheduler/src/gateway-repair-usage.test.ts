@@ -188,9 +188,14 @@ test("#1082: complete message_start usage settles without any message_delta", ()
   const completeStart = event({ type: "message_start", message: { ...anthropic, stop_reason: null } }, "message_start");
   const expected = scan("messages", anthropic);
   assert.deepEqual(scan("messages", completeStart + event(antStop, "message_stop"), true), expected);
-  // 只承载 stop_reason、不带 usage 的 delta 是协议合法形状，不得拒信。
+  // 出现过 delta 帧却没带来 usage 时不能凭 start 快照落账（评审 P1/P2）：
+  // message_stop 不能证明早期快照就是最终计数。
   const deltaWithoutUsage = { type: "message_delta", delta: { stop_reason: "end_turn" } };
-  assert.deepEqual(scan("messages", completeStart + event(deltaWithoutUsage, "message_delta") + event(antStop, "message_stop"), true), expected);
+  assert.equal(scan("messages", completeStart + event(deltaWithoutUsage, "message_delta") + event(antStop, "message_stop"), true), null);
+  // 显式损坏的 usage（数组/字符串/数字/null）即使先前已有正常 delta 也必须拒信。
+  for (const broken of [[], "bad", 7, null]) {
+    assert.equal(scan("messages", completeStart + event(antDelta, "message_delta") + event({ type: "message_delta", usage: broken }, "message_delta") + event(antStop, "message_stop"), true), null);
+  }
   // pending output（缺 output_tokens）没有 delta 补全时仍然 fail-closed。
   const pendingStart = event(
     { type: "message_start", message: { ...anthropic, stop_reason: null, usage: { input_tokens: 10, cache_read_input_tokens: 3, cache_creation_input_tokens: 2 } } },
