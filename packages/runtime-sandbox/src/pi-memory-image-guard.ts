@@ -7,7 +7,7 @@ import {
 
 // Binds the image-owned wrapper to the allowance/request-id/settlement contract.
 // Kept in sync with agent-harness/pi-observational-memory-governed.ts by regression.
-export const PI_MEMORY_GOVERNED_WRAPPER_SHA256 = "bff5f3f32e94457cfc7ecf3ff40d65bf74dafe51ff0df5648829ec1d93a08e5b";
+export const PI_MEMORY_GOVERNED_WRAPPER_SHA256 = "097adfc983bc08def0e1ebc6c8140ef6d0516e0716bb7936f5ce1aa1e0c0aab3";
 // OM imports this image-owned SDK context policy; bind its bytes as well as the wrapper.
 export const PI_MEMORY_CONTEXT_POLICY_SHA256 = "1e8079d990dcdeec4ba8d93f12e97971c9f7addbcc872992b3e20b777025a052";
 
