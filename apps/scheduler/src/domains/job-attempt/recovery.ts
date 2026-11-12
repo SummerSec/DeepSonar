@@ -123,7 +123,7 @@ export async function recordCompletionRecovery(db: typeof sql, job: Job, attempt
   const prior = await readCompletionRecovery(db, String(job.id), attemptId);
   if (prior && ["stop_requested", "closed", "completion_accepted"].includes(prior.status)) return prior;
   const [{ observed_at, deadline }] = await db`SELECT clock_timestamp() AS observed_at,
-    started_at+timeout_sec*interval '1 second' AS deadline FROM jobs WHERE id=${String(job.id)}`;
+    COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second') AS deadline FROM jobs WHERE id=${String(job.id)}`;
   if (!deadline) throw new Error("completion recovery requires the original execution deadline");
   const state: CompletionRecoveryState = {
     v: 1, authority: "scheduler", subtype, kind: "state", recovery_ref: completionRecoveryIdentity(String(job.id), attemptId),
@@ -293,7 +293,7 @@ export async function validateCompletionRecoveryDecision(db: typeof sql, hub: Jo
     if (!state || options.pendingClaim) throw new ControlInputError("recovery_not_authorized", "Stale release requires an existing directed recovery execution", "recovery");
     await assertRecoveryWake(db, hub, grant, state);
     const [liveHub] = await db`SELECT id FROM jobs j WHERE j.id=${String(hub.id)} AND j.status='running'
-      AND j.lease_expires_at>clock_timestamp() AND j.started_at+j.timeout_sec*interval '1 second'>clock_timestamp()
+      AND j.lease_expires_at>clock_timestamp() AND COALESCE(j.execution_deadline_at,j.started_at+j.timeout_sec*interval '1 second')>clock_timestamp()
       AND EXISTS (SELECT 1 FROM job_attempts a WHERE a.job_id=j.id AND a.status='active' AND NOT a.cancel_requested)`;
     if (!liveHub) throw new ControlInputError("recovery_inactive", "Stale release requires this Hub's active Attempt, lease and deadline", "recovery");
     const evidence = await readCompletionRecoveryEvidence(db, target, grant.target_attempt_id);
@@ -313,7 +313,7 @@ export async function validateCompletionRecoveryDecision(db: typeof sql, hub: Jo
     throw new ControlInputError("recovery_inactive", "Recovery cannot revive an exited, cancelled, terminal or expired execution", "recovery");
   }
   const [lease] = await db`SELECT id FROM jobs WHERE id=${grant.target_job_id} AND lease_expires_at>clock_timestamp()
-    AND started_at+timeout_sec*interval '1 second'>clock_timestamp()`;
+    AND COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second')>clock_timestamp()`;
   if (!lease) throw new ControlInputError("recovery_inactive", "Original execution lease or deadline expired", "recovery");
   const [human] = await db`SELECT payload_json FROM events WHERE job_id=${grant.target_job_id} AND type='human' ORDER BY job_seq DESC LIMIT 1`;
   if (target.status === "waiting_human" && human?.payload_json?.subject?.type !== "platform_blocker") {
@@ -330,7 +330,7 @@ export async function validateCompletionRecoveryDecision(db: typeof sql, hub: Jo
   const [hubGate] = await db`SELECT id FROM jobs j WHERE j.id=${String(hub.id)}
     AND ((${pendingClaim} AND j.status='pending' AND NOT EXISTS (SELECT 1 FROM job_attempts a WHERE a.job_id=j.id AND a.status='active'))
       OR (NOT ${pendingClaim} AND j.status='running' AND j.lease_expires_at>clock_timestamp()
-        AND j.started_at+j.timeout_sec*interval '1 second'>clock_timestamp()
+        AND COALESCE(j.execution_deadline_at,j.started_at+j.timeout_sec*interval '1 second')>clock_timestamp()
         AND EXISTS (SELECT 1 FROM job_attempts a WHERE a.job_id=j.id AND a.status='active' AND NOT a.cancel_requested)))
     AND NOT EXISTS (SELECT 1 FROM job_attempt_effects e JOIN jobs owner ON owner.id=e.job_id
       WHERE owner.canvas_id=j.canvas_id AND owner.project_id=j.project_id
@@ -445,7 +445,7 @@ export async function completionRecoveryCanWake(db: typeof sql, job: Job, reques
     || controlInputDigest(target.agent_snapshot_json) !== state.snapshot_sha256 || Date.parse(state.deadline) <= Date.now()
     || !["running", "waiting_human"].includes(String(target.status))) return false;
   const [lease] = await db`SELECT id FROM jobs WHERE id=${state.target_job_id} AND lease_expires_at>clock_timestamp()
-    AND started_at+timeout_sec*interval '1 second'>clock_timestamp()`;
+    AND COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second')>clock_timestamp()`;
   if (!lease) return false;
   const [human] = await db`SELECT payload_json FROM events WHERE job_id=${state.target_job_id} AND type='human' ORDER BY job_seq DESC LIMIT 1`;
   if (target.status === "waiting_human" && human?.payload_json?.subject?.type !== "platform_blocker") return false;

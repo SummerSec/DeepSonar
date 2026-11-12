@@ -50,6 +50,7 @@ const fakeSql = Object.assign(async (strings: TemplateStringsArray, ...values: u
   if (query.startsWith("SELECT j.id FROM jobs j JOIN job_attempts")) { assert.deepEqual(values, [jobId, attemptId]); return [{ id: jobId }]; }
   if (query.includes("AS artifacts")) return [{ artifacts: "0", findings: "0", facts: "0", unattributed_job_artifacts: "0" }];
   if (query.startsWith("SELECT event_id,payload_json FROM events")) return [];
+  if (query.includes("FROM human_requests")) return []; // This fixture has no durable continuation checkpoint.
   throw new Error(`Unexpected executor database access: ${query}`);
 }, { json: (value: unknown) => value });
 mock.module(new URL("./db.js", import.meta.url), { namedExports: { ...database, sql: fakeSql } });

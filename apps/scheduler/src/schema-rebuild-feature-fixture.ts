@@ -18,7 +18,7 @@ const FEATURE_TABLES = ["project_finding_feature_scan", "project_finding_feature
 const CANDIDATE_TABLES = ["project_finding_candidate_scan", "project_finding_candidate_work", "project_finding_candidate_sources", "project_finding_candidate_edges"];
 const RELATION_TABLES = ["project_finding_identity_sources", "project_finding_identity_source_revisions", "project_finding_identity_mappings", "project_finding_relation_scan", "project_finding_relation_sources", "project_finding_relation_work", "project_finding_relations"];
 const QUALITY_TABLES = ["project_finding_quality_protocols", "project_finding_quality_records", "project_finding_quality_heads", "project_finding_quality_current", "project_finding_quality_work", "project_finding_quality_observations"];
-const DERIVED_TABLES = [...FEATURE_TABLES, ...CANDIDATE_TABLES, ...RELATION_TABLES, ...QUALITY_TABLES, "project_task_queues", "project_task_queue_items"];
+const DERIVED_TABLES = [...FEATURE_TABLES, ...CANDIDATE_TABLES, ...RELATION_TABLES, ...QUALITY_TABLES, "project_task_queues", "project_task_queue_items", "human_requests", "job_execution_clocks"];
 const FEATURE_INDEXES = ["project_finding_feature_work_due", "project_finding_features_project", "findings_project_scan_idx"];
 
 function schemaV63(): string {
@@ -92,7 +92,7 @@ export async function runFeatureSchemaRebuildFixture(testUrl: string): Promise<v
       const records: Record<string, unknown> = {};
       for (const table of ["projects", "canvases", "jobs", "findings", "finding_verification_rounds", "artifacts", "artifact_claims", "artifact_evidence", "canvas_nodes", "canvas_edges", "events", "event_dedup"]) {
         const rows = await source.unsafe(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY to_jsonb(t)::text`);
-        records[table] = rows.map(row => row.row);
+        records[table] = rows.map(row => table === 'jobs' ? { execution_deadline_at: null, ...row.row } : row.row);
       }
       return records;
     };
@@ -117,6 +117,8 @@ export async function runFeatureSchemaRebuildFixture(testUrl: string): Promise<v
     await assertNoFeatures(backup);
     assert.deepEqual(await capture(backup), history, "the actual on-disk v63 backup restores every source row");
     assert.equal((await db`SELECT version FROM schema_meta WHERE id='global'`)[0].version, SCHEMA_VERSION);
+    const deadlines=await db`SELECT pg_typeof(execution_deadline_at)::text AS type,execution_deadline_at FROM jobs`;
+    assert.ok(deadlines.length>0&&deadlines.every(row=>row.type==='timestamp with time zone'&&row.execution_deadline_at===null));
     assert.deepEqual(await capture(db), history, "rebuild preserves full history including source_digest and Verify state");
     for (const name of [...DERIVED_TABLES, ...FEATURE_INDEXES]) {
       assert.equal((await db`SELECT to_regclass(${'public.' + name})::text AS name`)[0].name, name);

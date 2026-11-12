@@ -1261,7 +1261,7 @@ export function registerGateway(app: FastifyInstance): void {
       if (!token || !m) return deny(reply, 401, "缺少或非法 DEEPSONAR_JOB_TOKEN", "invalid_token");
 
       const [jt] = await sql`
-        SELECT jt.*, j.status AS job_status, j.started_at, j.timeout_sec,
+        SELECT jt.*, j.status AS job_status, j.started_at, j.timeout_sec,j.execution_deadline_at,
                j.agent_snapshot_json,
                a.id AS attempt_id, a.attempt_no
         FROM job_tokens jt JOIN jobs j ON j.id = jt.job_id
@@ -1659,7 +1659,7 @@ export function registerGateway(app: FastifyInstance): void {
         return deny(reply, 429, "request quota exhausted", "quota_exhausted");
       }
       const { requestNo, effectId: gatewayEffectId } = requestIntent;
-      const jobDeadlineMs = gatewayJobDeadlineMs(
+      const jobDeadlineMs = jt.execution_deadline_at ? new Date(jt.execution_deadline_at).getTime() : gatewayJobDeadlineMs(
         jt.started_at as Date | string | number | null,
         jt.timeout_sec as number | null,
       );

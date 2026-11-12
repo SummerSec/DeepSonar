@@ -12,6 +12,7 @@ import { useConfirmDialog } from "./components/ConfirmDialog";
 import { MarkdownView } from "./MarkdownView";
 import { SearchableMultiSelect } from "./SearchableSelect";
 import { HumanMessageList } from "./HumanMessageList";
+import { JobHumanRequestSection } from "./JobHumanRequestPanel";
 import { SEVERITY_COLOR, STATUS_COLOR } from "./semantics";
 import { SessionViewer } from "./session-viewer/SessionViewer";
 import { extractDispatchPrompt } from "./job-dispatch-prompt";
@@ -717,6 +718,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
           {!error && !detail && (
             <div className="p-8 font-mono text-sm text-zinc-600">正在读取运行账本…</div>
           )}
+          {detail && <JobHumanRequestSection detail={detail} onSendMessage={onSendMessage} />}
           {/* 非「结果」页：顶栏展示一次 Job 终态错误；结果页内已有带标题的错误卡片，避免双份 */}
           {detail && (jobProjection.actions.length > 0 || jobProjection.repair) && tab !== "result" && (
             <div className="m-4 space-y-2">

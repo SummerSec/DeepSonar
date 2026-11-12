@@ -1,7 +1,11 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-12
+
+## 人工等待后的新执行（#1074）
+
+人工响应超时只记 overdue。CLI 退出后宿主暂停本轮新进程，有限保存工作文件；原 worker/Attempt 可信销毁并原子结算 agent_run、撤销 grants 后，Attempt interrupted，Job 保持 waiting_human，无执行槽占用。回复先持久化，再经原准入写唯一 successor；Dispatcher 重验 owner/断点/快照与实时目标授权。当前模式是恢复业务文件和有界上下文的 structured 新会话，原 Session 仅作归档证据。累计有效执行时间暂停于可信回收，不扩展原 repair deadline。完整边界见[人工续做](../HUMAN_CONTINUATION.md)和[ADR 0022](adr/0022-human-continuation.md)。
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -168,6 +172,10 @@ The 2026-11-01 [SDK binding](../../packages/runtime-sandbox/src/opensandbox-sdk-
 普通平台暂停仍允许入队；[维护升级](adr/0008-maintenance-candidate-upgrade.md) 增加真正的数据库身份隔离。顺序是只读核验 → 暂停/排空 → 旧身份 NOLOGIN 与会话清退 → 验证备份 → 候选重建 → preparing 服务与节点验证 → 激活。不能通过中止 Job 来伪造排空。目标 preparing 状态关闭业务 HTTP/WebSocket 与后台任务，世代或版本不匹配也保持关闭；数据库隔离仍是旧节点不能写入的依据。
 
 中断续做读取固定目标 journal，重复步骤前核对实际回执。激活前失败回源并保持暂停；激活成功或结果不明时不允许自动回旧数据。维护状态机、宿主/受管 SSH 和显式恢复领取已有实现；schema 61 → 62 的 16 项 Compose 场景及独立知识后台停写场景已通过并清理。具体历史基线与隔离环境见 [升级演练](../../deploy/UPGRADE_REHEARSAL.md)，不能据此推定 Windows Docker 全流程、断电或真实模型验证已完成。
+
+## Pi 请求失败诊断与恢复分类（#1083）
+
+Pi 请求包装层保留有界、允许名单化的错误来源与阶段，区分 allowance、SDK 和内核 no-start 见证查询。错误类别不授予恢复权；已接受完成仍仅由私有宿主身份证明，取消、权限、预算、partial/unknown 或缺少见证均停止。SDK 内恢复沿用原 live owner、冻结预算和持久 `not_started` 见证，不能通过恢复分类触发额外 CLI 进程重启。诊断不输出任意异常原文、URL、凭据或堆栈；共享 DSH reader 与生成扩展的测试、未验证边界见 [CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-请求失败诊断与分类1083)。本轮最终 SHA Actions 待验。
 
 ## Pi 预算与截断恢复（#958）
 

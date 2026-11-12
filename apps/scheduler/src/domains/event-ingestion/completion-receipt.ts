@@ -7,6 +7,7 @@ import { ControlInputError } from "../../control-input.js";
 import { consumeEventRateLimit } from "./rate-limit.js";
 import { configuredRepairTokenLimit, readRepairTokenBudget, assertRepairTokenBudget, RepairTokenBudgetError } from "./repair-token-budget.js";
 import { readCompletionRecovery, readCompletionRecoveryEvidence, recordCompletionRecovery, recordCompletionRecoveryAccepted, completionRecoveryFeedback } from "../job-attempt/recovery.js";
+import { controlRuntimeRejection } from "../platform-api/repair.js";
 
 export const COMPLETION_REPAIR_LIMIT = 8;
 export type CompletionResult = { statusCode: number; body: Record<string, unknown> };
@@ -83,9 +84,9 @@ export async function recordCompletionProposal(input: {
   return db.begin(async transaction => {
     // SAFETY: postgres.js 事务回调的事务对象与 sql 标签函数同形，接收端只做结构化使用。
     const tx = transaction as unknown as typeof sql;
-    const [job] = await tx`SELECT id,project_id,canvas_id,status,agent_snapshot_json,started_at,timeout_sec,
+    const [job] = await tx`SELECT id,project_id,canvas_id,status,agent_snapshot_json,started_at,timeout_sec,execution_deadline_at,
       lease_expires_at > clock_timestamp() AS leased,
-      started_at + timeout_sec * interval '1 second' > clock_timestamp() AS within_time
+      COALESCE(execution_deadline_at,started_at+timeout_sec*interval '1 second') > clock_timestamp() AS within_time
       FROM jobs WHERE id=${input.jobId} FOR UPDATE`;
     if (!job || job.project_id !== input.projectId) return reject("COMPLETION_SCOPE_INVALID", "Completion Job scope is invalid");
     if (completionInputDigest(job.agent_snapshot_json) !== input.snapshotDigest) {
@@ -104,7 +105,7 @@ export async function recordCompletionProposal(input: {
     if (job.status !== "running" || !job.leased || !job.within_time) {
       return reject("job_not_running", "Completion repair stopped: Job, lease or time budget is no longer active");
     }
-    const [attempt] = await tx`SELECT id,cancel_requested FROM job_attempts
+    const [attempt] = await tx`SELECT id,attempt_no,cancel_requested FROM job_attempts
       WHERE job_id=${input.jobId} AND status='active' FOR UPDATE`;
     if (!attempt || attempt.cancel_requested) return reject("COMPLETION_ATTEMPT_INACTIVE", "Completion repair requires the active, uncancelled Attempt");
     const [knowledgeOwner] = await tx`SELECT id FROM project_knowledge_receipts
@@ -135,6 +136,14 @@ export async function recordCompletionProposal(input: {
     const recovery = await readCompletionRecovery(tx, input.jobId, String(attempt.id));
     if (recovery?.status === "stop_requested" || recovery?.status === "closed") return reject("COMPLETION_RECOVERY_STOPPED", "Recovery has a durable stop request; do not resume completion");
     const evidence = await readCompletionRecoveryEvidence(tx, job, String(attempt.id));
+    const [reply]=await tx`SELECT r.reply_message_id,m.delivery_status FROM human_requests r
+      LEFT JOIN human_messages m ON m.id=r.reply_message_id AND m.request_id=r.id
+      WHERE r.job_id=${input.jobId} AND r.target_attempt_no=${attempt.attempt_no} AND r.resumed_at IS NOT NULL`;
+    if(reply) evidence.sha256=controlInputDigest({execution:evidence.sha256,human_reply_status:reply.delivery_status??'missing'});
+    const replyFailure=reply&&reply.delivery_status!=='acknowledged'?{statusCode:409,body:{...controlRuntimeRejection({
+      operation:'mark_job_done',code:'HUMAN_REPLY_ACK_REQUIRED',message:'先读取并处理对应人工消息，再调用 ack_human_message；当前未确认处理，不可完成。',
+      category:'model_correctable',retryable:true,idempotencyKey:input.key,next_action:'处理 inbox 消息并 ACK 后，以累计下一 revision 提交完成。',
+    })}}:undefined;
     // An unchanged valid done becomes legitimate after authoritative evidence changes.
     if (history.filter(row => row.payload_json.input_digest === digest && row.payload_json.evidence_sha256 === evidence.sha256).length >= 2) {
       return reject("COMPLETION_NO_PROGRESS", "Repeated unchanged invalid completion and evidence; stop repair");
@@ -151,7 +160,7 @@ export async function recordCompletionProposal(input: {
         remainingTokens: tokenBudget ? tokenBudget.remaining_tokens : (configuredRepairTokenLimit() || null),
         remainingWallTime: Math.floor((Date.parse(recoveryState.deadline) - Date.now()) / 1000),
       }),
-    } } : input.schemaFailure ?? await input.prepare(String(attempt.id));
+    } } : input.schemaFailure ?? replyFailure ?? await input.prepare(String(attempt.id));
     if (result.statusCode >= 500 || result.statusCode === 429) return result;
     const accepted = result.statusCode === 200 && result.body.completion_prepared === true;
     if (result.statusCode === 200 && !accepted) return reject("COMPLETION_PREPARE_UNSUPPORTED", "Runtime does not support durable completion preparation");
@@ -178,7 +187,8 @@ export async function recordCompletionProposal(input: {
       ...(accepted ? { settlement_digest: completionSettlementDigest(input.rawInput) } : {}),
       snapshot_digest: input.snapshotDigest, status: accepted ? "persisted_deferred" : "rejected", result,
       repair_token_limit: tokenBudget ? tokenBudget.limit_tokens : configuredRepairTokenLimit(),
-      execution_deadline: tokenBudget?.deadline ?? new Date(new Date(job.started_at).getTime() + Number(job.timeout_sec) * 1000).toISOString(),
+      execution_deadline: tokenBudget?.deadline ?? (job.execution_deadline_at ? new Date(job.execution_deadline_at).toISOString()
+        : new Date(new Date(job.started_at).getTime() + Number(job.timeout_sec) * 1000).toISOString()),
       evidence_sha256: evidence.sha256, ...(recoveryState ? { recovery_ref: recoveryState.recovery_ref } : {}) };
     // Accepted completion must remain available when ordinary semantic output exhausts its bucket.
     // Rejected proposals stay bounded by the standard bucket and persistent repair limit.

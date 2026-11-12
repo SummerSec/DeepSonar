@@ -1,3 +1,83 @@
+/** Embedded in both generated Pi and DSH policies; never serializes error prose. */
+const PI_REQUEST_ERROR_DIAGNOSTIC_SOURCE = String.raw`
+const hostFailures = new WeakMap();
+function fail(code) {
+  const error = new Error(code);
+  hostFailures.set(error, code);
+  throw error;
+}
+const diagnosticNames = new Set(['Error','TypeError','RangeError','SyntaxError','AbortError','TimeoutError',
+  'APIError','APIConnectionError','APIConnectionTimeoutError','APIUserAbortError','AuthenticationError',
+  'PermissionDeniedError','BadRequestError','NotFoundError','ConflictError','UnprocessableEntityError',
+  'RateLimitError','InternalServerError']);
+const transientCodes = new Set(['ECONNRESET','ECONNREFUSED','ECONNABORTED','ENETUNREACH','EHOSTUNREACH',
+  'EAI_AGAIN','ETIMEDOUT','EPIPE','ERR_NETWORK','UND_ERR_CONNECT_TIMEOUT','UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT','UND_ERR_SOCKET']);
+const cancellationCodes = new Set(['ABORT_ERR','ERR_CANCELED']);
+const transientStatuses = new Set([408,429,500,502,503,504]);
+// Read only data properties. Untrusted accessors/proxies must not break error reporting.
+function diagnosticField(value, key) {
+  try {
+    for (let depth = 0; value && (typeof value === 'object' || typeof value === 'function') && depth < 4; depth++) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor) return 'value' in descriptor ? descriptor.value : undefined;
+      value = Object.getPrototypeOf(value);
+    }
+  } catch {}
+}
+function permanentRequestDiagnostic(detail, signal) {
+  if (signal?.aborted) return true;
+  for (let current = detail; current; current = current.cause) {
+    if (['AbortError','APIUserAbortError','AuthenticationError','PermissionDeniedError'].includes(current.name)
+      || cancellationCodes.has(current.code)
+      || current.status !== undefined && !transientStatuses.has(current.status)) return true;
+  }
+  return false;
+}
+function requestDiagnostic(error, stage, signal) {
+  const seen = new Set();
+  let incomplete = false;
+  function project(value, depth) {
+    if (!value || typeof value !== 'object') return undefined;
+    if (depth >= 4 || seen.has(value)) { incomplete = true; return undefined; }
+    seen.add(value);
+    const result = {};
+    const name = diagnosticField(value, 'name');
+    const code = diagnosticField(value, 'code');
+    if (diagnosticNames.has(name)) result.name = name;
+    if (transientCodes.has(code) || cancellationCodes.has(code)) result.code = code;
+    const status = diagnosticField(value, 'status');
+    const statusCode = diagnosticField(value, 'statusCode');
+    const validStatus = value => Number.isInteger(value) && value >= 100 && value <= 599;
+    const statuses = [status, statusCode].filter(validStatus);
+    const selectedStatus = statuses.find(value => !transientStatuses.has(value)) ?? statuses[0];
+    if (selectedStatus !== undefined) result.status = selectedStatus;
+    const cause = project(diagnosticField(value, 'cause'), depth + 1);
+    if (cause && Object.keys(cause).length) result.cause = cause;
+    return result;
+  }
+  const detail = project(error, 0) ?? {};
+  let transient = false;
+  for (let current = detail; current; current = current.cause) {
+    if (transientCodes.has(current.code) || ['TimeoutError','APIConnectionError','APIConnectionTimeoutError',
+      'RateLimitError','InternalServerError'].includes(current.name)
+      || transientStatuses.has(current.status)) transient = true;
+  }
+  return { version:1, stage, category:!incomplete && !permanentRequestDiagnostic(detail, signal) && transient
+    ? 'transient_retryable' : 'permanent_failure', ...detail };
+}
+function requestFailureMessage(error, stage, signal) {
+  if (error === completionAlreadyAccepted) return 'COMPLETION_ALREADY_ACCEPTED';
+  const hostCode = error && typeof error === 'object' ? hostFailures.get(error) : undefined;
+  return hostCode ?? 'PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic=' + JSON.stringify(requestDiagnostic(error, stage, signal));
+}
+function failRequest(error, stage, signal) {
+  // Host identities and already projected diagnostics survive shared-reader catches.
+  if (error === completionAlreadyAccepted || error && typeof error === 'object' && hostFailures.has(error)) throw error;
+  fail(requestFailureMessage(error, stage, signal));
+}
+`;
+
 export const PI_MAIN_REQUEST_BUDGET_PATH = "/workspace/.deepsonar-home/.pi/agent/extensions/deepsonar-main-request-budget.mjs";
 
 /** SDK context projection only; never mutate stored history or authentication options.
@@ -29,7 +109,7 @@ export function assertPiAnthropicThinkingBudget(model, options, effectiveMaxToke
   // The SDK reserves 1024 answer tokens, then uses budget || 1024 in the payload.
   // Reject before generation rather than disabling thinking or repairing its payload.
   if (!Number.isSafeInteger(budget) || budget < 1024 || effectiveMaxTokens < 2048)
-    throw new Error('PI_MAIN_BUDGET_THINKING_MINIMUM');
+    fail('PI_MAIN_BUDGET_THINKING_MINIMUM');
 }
 `;
 
@@ -43,6 +123,7 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 ${PI_ANTHROPIC_THINKING_POLICY_SOURCE}
+${PI_REQUEST_ERROR_DIAGNOSTIC_SOURCE}
 
 // Resolve the SDK's declared public export from the fixed, lockfile-installed runtime.
 // createRequire.resolve cannot resolve this package's import-only export conditions.
@@ -62,7 +143,6 @@ const SUPPORTED = new Set(['anthropic-messages','openai-completions','openai-res
 const OM_PROVIDER = '__deepsonar_observational_memory';
 // Only the host allowance response can create this signal; SDK error text cannot.
 const completionAlreadyAccepted = new Error('COMPLETION_ALREADY_ACCEPTED');
-function fail(code) { throw new Error(code); }
 function endpoint(value) {
   const url = new URL(value);
   if (!['http:','https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) fail('PI_MAIN_BUDGET_ROUTE_INVALID');
@@ -70,28 +150,30 @@ function endpoint(value) {
 }
 
 export async function readMainAllowance(baseUrl, token, requestSignal) {
-  const signal = AbortSignal.any([...(requestSignal ? [requestSignal] : []), AbortSignal.timeout(15_000)]);
-  for (;;) {
-    const response = await fetch(endpoint(baseUrl) + '/_allowance', {
-      headers: { authorization: 'Bearer ' + token }, redirect: 'manual', signal,
-    });
-    const chunks = []; let size = 0;
-    if (response.body) for await (const chunk of response.body) {
-      size += chunk.length;
-      if (size > 65536) { await response.body.cancel().catch(() => {}); fail('PI_MAIN_BUDGET_ALLOWANCE_INVALID'); }
-      chunks.push(chunk);
+  try {
+    const signal = AbortSignal.any([...(requestSignal ? [requestSignal] : []), AbortSignal.timeout(15_000)]);
+    for (;;) {
+      const response = await fetch(endpoint(baseUrl) + '/_allowance', {
+        headers: { authorization: 'Bearer ' + token }, redirect: 'manual', signal,
+      });
+      const chunks = []; let size = 0;
+      if (response.body) for await (const chunk of response.body) {
+        size += chunk.length;
+        if (size > 65536) { await response.body.cancel().catch(() => {}); fail('PI_MAIN_BUDGET_ALLOWANCE_INVALID'); }
+        chunks.push(chunk);
+      }
+      let value;
+      try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail('PI_MAIN_BUDGET_ALLOWANCE_INVALID'); }
+      if (response.status === 409 && ['JOB_TOKEN_USAGE_PENDING','REPAIR_USAGE_PENDING'].includes(value?.error?.type)) {
+        await delay(100, undefined, { signal }); continue;
+      }
+      if (response.status === 409 && value?.error?.type === 'COMPLETION_ALREADY_ACCEPTED') throw completionAlreadyAccepted;
+      if (response.status !== 200) fail('PI_MAIN_BUDGET_ALLOWANCE_DENIED');
+      if (typeof value?.policy_required !== 'boolean' || (value.remaining_tokens !== null
+        && (!Number.isSafeInteger(value.remaining_tokens) || value.remaining_tokens < 0))) fail('PI_MAIN_BUDGET_ALLOWANCE_INVALID');
+      return value;
     }
-    let value;
-    try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail('PI_MAIN_BUDGET_ALLOWANCE_INVALID'); }
-    if (response.status === 409 && ['JOB_TOKEN_USAGE_PENDING','REPAIR_USAGE_PENDING'].includes(value?.error?.type)) {
-      await delay(100, undefined, { signal }); continue;
-    }
-    if (response.status === 409 && value?.error?.type === 'COMPLETION_ALREADY_ACCEPTED') throw completionAlreadyAccepted;
-    if (response.status !== 200) fail('PI_MAIN_BUDGET_ALLOWANCE_DENIED');
-    if (typeof value?.policy_required !== 'boolean' || (value.remaining_tokens !== null
-      && (!Number.isSafeInteger(value.remaining_tokens) || value.remaining_tokens < 0))) fail('PI_MAIN_BUDGET_ALLOWANCE_INVALID');
-    return value;
-  }
+  } catch (error) { failRequest(error, 'allowance', requestSignal); }
 }
 
 // This authenticated, host-owned route never forwards a provider response. Error
@@ -102,16 +184,16 @@ export async function readGatewayNoStart(baseUrl, token, requestId, requestSigna
     const response = await fetch(endpoint(baseUrl) + '/_settlement/' + requestId, {
       headers: { authorization: 'Bearer ' + token }, redirect: 'manual', signal,
     });
-    if (response.status !== 200) { await response.body?.cancel(); return false; }
+    if (response.status !== 200) { await response.body?.cancel(); throw { status: response.status }; }
     const chunks = []; let size = 0;
     if (response.body) for await (const chunk of response.body) {
       size += chunk.length;
-      if (size > 65536) return false;
+      if (size > 65536) { await response.body.cancel().catch(() => {}); throw new RangeError(); }
       chunks.push(chunk);
     }
     const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     return value?.status === 'not_started' && value.reason === 'gateway_transient';
-  } catch { return false; }
+  } catch (error) { failRequest(error, 'settlement', requestSignal); }
 }
 
 /** SDK inputs only: no onPayload callback, fetch interception or serialized body editing. */
@@ -163,6 +245,12 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
       registered ??= (requestedModel, context, options) => {
         const output = createAssistantMessageEventStream();
         void (async () => {
+          let stage = 'prepare';
+          const failureEvent = error => ({ type: 'error', reason: 'error', error: {
+            role: 'assistant', content: [], api: requestedModel.api, provider: requestedModel.provider, model: requestedModel.id,
+            usage: { input:0, output:0, cacheRead:0, cacheWrite:0, totalTokens:0, cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0} },
+            stopReason:'error', errorMessage:requestFailureMessage(error, stage, options?.signal), timestamp:Date.now(),
+          } });
           try {
             if (requestedModel.provider !== identity.provider || requestedModel.id !== identity.id
               || requestedModel.api !== identity.api || endpoint(requestedModel.baseUrl) !== identity.baseUrl) fail('PI_MAIN_BUDGET_MODEL_CHANGED');
@@ -181,7 +269,9 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
             // Local loop bound is not a grant: admission enforces the original
             // frozen Job-wide cap across requests, tokens and Attempts.
             for (let retries = 0; retries <= 2; retries++) {
+              stage = 'allowance';
               const allowance = await readMainAllowance(gateway, token, options?.signal);
+              stage = 'prepare';
               const prepared = preparePiMainSdkRequest(requestedModel, options, allowance);
               if (allowance.policy_required && requestedModel.api === 'anthropic-messages' && requestedModel.reasoning && options?.reasoning
                 && requestedModel.compat?.forceAdaptiveThinking !== true && requestedModel.compat?.supportsMidConvoEffort !== true) {
@@ -194,27 +284,43 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
                 .filter(([name]) => !['x-deepsonar-request-id','x-deepsonar-retry-of'].includes(name.toLowerCase())));
               headers['x-deepsonar-request-id'] = requestId;
               if (retryOf) headers['x-deepsonar-retry-of'] = retryOf;
-              let failure, pendingStart, visible = false;
-              for await (const event of delegate(prepared.model, safeContext,
-                { ...prepared.options, headers, maxRetries: 0, apiKey: token })) {
-                if (event.type === 'error') {
-                  if (event.error?.content?.length) visible = true;
-                  if (failure) {
-                    if (pendingStart) { output.push(pendingStart); pendingStart = undefined; }
-                    visible = true; output.push(failure);
+              let failure, pendingStart, thrownDiagnostic, visible = false;
+              stage = 'sdk';
+              try {
+                options?.signal?.throwIfAborted();
+                for await (const event of delegate(prepared.model, safeContext,
+                  { ...prepared.options, headers, maxRetries: 0, apiKey: token })) {
+                  if (event.type === 'error') {
+                    if (event.error?.content?.length) visible = true;
+                    if (failure) {
+                      if (pendingStart) { output.push(pendingStart); pendingStart = undefined; }
+                      visible = true; output.push(failure);
+                    }
+                    failure = event; continue;
                   }
-                  failure = event; continue;
+                  if (event.type === 'start' && !visible && !failure && !pendingStart && !event.partial?.content?.length) {
+                    pendingStart = event; continue;
+                  }
+                  if (pendingStart) { output.push(pendingStart); pendingStart = undefined; }
+                  if (failure) { output.push(failure); failure = undefined; visible = true; }
+                  if (event.type !== 'start' || event.partial?.content?.length) visible = true;
+                  output.push(event);
                 }
-                if (event.type === 'start' && !visible && !failure && !pendingStart && !event.partial?.content?.length) {
-                  pendingStart = event; continue;
+              } catch (error) {
+                // Throws join the same visibility/settlement loop as SDK error events.
+                // A prior failure is already observable and cannot be replayed.
+                if (failure) {
+                  if (pendingStart) { output.push(pendingStart); pendingStart = undefined; }
+                  output.push(failure); visible = true;
                 }
-                if (pendingStart) { output.push(pendingStart); pendingStart = undefined; }
-                if (failure) { output.push(failure); failure = undefined; visible = true; }
-                if (event.type !== 'start' || event.partial?.content?.length) visible = true;
-                output.push(event);
+                thrownDiagnostic = requestDiagnostic(error, 'sdk', options?.signal);
+                failure = failureEvent(error);
               }
               if (!failure) { if (pendingStart) output.push(pendingStart); break; }
               if (visible || retries >= 2 || options?.signal?.aborted
+                || thrownDiagnostic && thrownDiagnostic.category !== 'transient_retryable'
+                || failure.reason === 'aborted' || failure.error?.stopReason === 'aborted'
+                || permanentRequestDiagnostic(requestDiagnostic(failure.error, 'sdk', options?.signal), options?.signal)
                 || !await readGatewayNoStart(gateway, token, requestId, options?.signal)) {
                 if (pendingStart) output.push(pendingStart);
                 output.push(failure); break;
@@ -224,13 +330,7 @@ export function createPiMainRequestBudgetExtension(env = process.env, delegate =
               await delay(100 * (2 ** retries), undefined, { signal: options?.signal });
             }
           } catch (error) {
-            const code = error === completionAlreadyAccepted ? completionAlreadyAccepted.message
-              : /^PI_MAIN_BUDGET_/.test(error?.message ?? '') ? error.message : 'PI_MAIN_BUDGET_REQUEST_FAILED';
-            output.push({ type: 'error', reason: 'error', error: {
-              role: 'assistant', content: [], api: requestedModel.api, provider: requestedModel.provider, model: requestedModel.id,
-              usage: { input:0, output:0, cacheRead:0, cacheWrite:0, totalTokens:0, cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0} },
-              stopReason:'error', errorMessage:code, timestamp:Date.now(),
-            } });
+            output.push(failureEvent(error));
           } finally { output.end(); }
         })();
         return output;

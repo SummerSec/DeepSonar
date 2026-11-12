@@ -1,0 +1,45 @@
+# Pi 请求异常诊断与恢复分类修复计划
+
+> 范围：用户已授权修复已确认缺陷、补回归并以 Barry04 创建 Issue/PR。平台 Job 不重跑；不合并、不部署。追踪：#1083。
+
+**目标**：Pi 请求包装层在拒绝请求时保留安全、可分类的错误来源，避免通用错误码掩盖实际故障。
+
+**实现边界**：复用当前 SDK 扩展、runner 和内核 no-start 见证；不扩大恢复预算，不引入进程重启或工具重放。未知外部效果、权限/身份失败、取消及已接受终态继续遵守现有治理。
+
+## 任务与验证
+
+- [x] 测试提交 `ea133ce4` 在 Actions run `43166271952` 的 `gate-runtime` 实证 RED：614 项中 603 通过，11 项失败均为新增 #1083 回归。当前 runtime-sandbox 无 Draft 快检路由，因此 PR #1084 使用 Ready 获取真实回归结果。
+- [x] 最小修复请求错误投影和分类消费。仅保留有界允许名单字段，不输出任意 Provider 原文、URL、凭据、堆栈；cause 遍历有界且支持循环输入。
+- [x] 已补上述边界测试源码，核对共享 DSH reader；新实现仍待 Actions 运行。
+- [x] 已核对生成扩展到 runner 的源码链路，并接入生成扩展/runner 回归；分类不等于恢复许可。
+- [x] 同步 CLI adapter 专题、运行时视图、NFR-REL-008/NFR-SEC-003 追溯和顶层索引；内部诊断修复不新增 UI/设置/通知。
+- [ ] 独立评审最终 diff，处理具体缺陷；本机只执行 git diff --check 等静态检查。
+- [ ] 以最终提交的 Actions 结果报告通过、失败和未完成项。测试/build/typecheck 均仅在 Actions 执行。
+
+## 评审重点
+
+1. 异常字符串不能伪造宿主错误身份或永久状态/恢复许可。
+2. allowance/SDK/settlement 的失败阶段必须准确，未知阶段不得假定未执行。
+3. 取消优先于嵌套 timeout/network，永久拒绝不能因伴随网络文本恢复。
+4. 错误原因允许名单与长度上限必须先于序列化；未知值保持 unknown。
+5. 已接受完成拒绝沿用私有宿主信号，不能被 SDK 同名错误冒充。
+
+## 后续只读调查
+
+PR 提交后继续 Job `3f413574-89f9-4d4e-b0a0-838aba4118ae` 的 CLI 退出调查。ASAN 工具输出、CLI 进程退出、资源耗尽分别取证，不能相互替代；不重跑任务。
+
+## 只读调查结果（2026-11-12）
+
+已核对第二个 Job 的完整压缩归档与 manifest SHA256：`465f48d02acbb83e193930fc35f834eadaa994c199b44f310dbd25ef5e1cc0bb`，1,670 条记录，展开约 30 MB。末次 bash 没有 toolResult；ASAN 的 285 次进度更新只有两份不同文本快照，不能累计为独立输出量，也不能证明 OOM。完整流没有 runtime.stderr；历史容器已移除，Docker 历史事件查询未返回该窗口记录。
+
+`opensandbox-pty.ts` 的 v0.6.19 与调查时 main 为相同 blob `5030b0278d1d77214625a811b71eae3cd5f1d816`：收到真实退出帧、WebSocket 关闭/错误分别都可投影为退出码；未收到退出帧的关闭与错误会合成为 1。因此现有历史证据无法区分真实 CLI exit 1 和通道中断，不能将退出码 1 或 ASAN 快照认作 CLI 自身崩溃的证明。此通道诊断缺口不混入 #1083 请求异常修复；任务未重跑。
+
+## 独立评审修复记录
+
+候选 `0e5b7868` 独立评审指出：新增相对 import 不在既有 data-module/COPY 依赖闭包中，OM guard 仍绑定旧 policy 摘要。已核对 DSH installer、OM boundary loader、Docker COPY 和严格 hash 回归，按原单文件加载契约收回外部 helper、同步源码摘要并补加载边界回归；不降低镜像内容门。修复后的最终 SHA 与实际 Actions 结果另报。
+
+候选 `e2e89b67` 的 Actions `43171304410` 中，完整 gate-runtime 已通过（runtime-sandbox 636/636，锁版本 SDK 与 DSH/OM 加载回归通过）。gate-contract 仅因 runner 2003 行超过 2000 行硬上限失败；将纯分类函数原样抽出为 `runtime-error-classification.ts`，保留既有导出，runner 降至 1921 行，不改门禁或行为。拆分后的最终提交仍需自身完整 Actions。
+
+## 原生镜像冒烟续接（2026-11-12）
+
+候选 `4c3ffb36` 的核心单测、集成与 Reverse 专项通过，但 base 镜像原生 Pi 冒烟的测试用负对照仍查找旧 `return false` 拒绝分支，未适配 #1083 的 settlement 诊断，导致定位断言失败。更新负对照到当前严格拒绝分支；真实 lookup-denied 要求精确的 settlement/permanent_failure/403 诊断，unknown/wrong-reason 仍保留原 SDK 失败。负对照必须被同一拒绝 oracle 拒绝，原 native retry 与 allowance 数量、单 CLI/Session 和请求次数检查保持不变。未修改生产策略或 CI 门禁，验证仅在 Actions。

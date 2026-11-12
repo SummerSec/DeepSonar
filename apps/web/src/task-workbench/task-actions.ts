@@ -18,6 +18,8 @@ const KIND_RANK: Record<TaskActionKind, number> = {
   transient_retry: 3,
 };
 
+const TERMINAL_JOB_STATUSES = new Set(["succeeded", "failed", "timeout", "cancelled", "orphan"]);
+
 export type ActionJobEffect = {
   id?: string;
   effect_id: string;
@@ -42,6 +44,7 @@ export type ActionJob = {
     allowed_actions: readonly string[];
     blocker: string | null;
     accepted_terminal?: string | null;
+    accepted_history_ref?: string | null;
   } | null;
   unknown_effects?: readonly ActionJobEffect[];
 };
@@ -170,9 +173,10 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
   const findings = input.findings ?? [];
   const facts = input.facts ?? [];
   const jobs = input.jobs ?? [];
-  const interventions = input.interventions ?? [];
-  const humanRequestJobs = new Set(interventions.filter((item) => item.pending && item.jobId).map((item) => item.jobId!));
-  const humanRequestFindings = new Set(interventions.filter((item) => item.pending && item.findingId).map((item) => item.findingId!));
+  const terminalJobs = new Set(jobs.filter((job) => TERMINAL_JOB_STATUSES.has((job.status ?? "").toLowerCase())).map((job) => job.id));
+  const interventions = (input.interventions ?? []).filter((item) => item.pending && !terminalJobs.has(item.jobId ?? ""));
+  const humanRequestJobs = new Set(interventions.filter((item) => item.jobId).map((item) => item.jobId!));
+  const humanRequestFindings = new Set(interventions.filter((item) => item.findingId).map((item) => item.findingId!));
   const actions: TaskAction[] = [];
   const conflicts = conflictFindingIds(facts);
   const findingTitle = new Map(findings.map((finding) => [finding.id, finding.title?.trim() || finding.id]));
@@ -227,7 +231,6 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
   }
 
   for (const item of interventions) {
-    if (!item.pending) continue;
     const platformRequest = ["credential", "authorization", "high_risk_action"].includes(item.subjectKind ?? "");
     actions.push({
       id: `human:${item.id}`,
@@ -236,7 +239,9 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
       reason: item.guidance?.question || "请查看完整请求原因与关联证据",
       impact: item.guidance
         ? "回复只写入消息账本；恢复仍须宿主重新准入，Agent 确认与任务完成分别记录"
-        : "此请求没有完整操作指引；请查看完整原因或关联证据，不要推测缺失步骤",
+        : item.guidanceStatus === "missing"
+          ? "此请求没有完整操作指引；请查看完整原因或关联证据，不要推测缺失步骤"
+          : "需要读取完整人工请求后，再核对所需操作与关联证据",
       evidence_refs: [
         ...(item.findingId ? [findingRef(item.findingId)] : []),
         ...(item.jobId ? [`job:${item.jobId}`] : []),
@@ -249,7 +254,7 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
       human_request: {
         reason: item.reason,
         guidance: item.guidance ?? null,
-        guidanceStatus: item.guidance ? "available" : item.guidanceStatus ?? "missing",
+        guidanceStatus: item.guidance ? "available" : item.guidanceStatus ?? (item.detailStatus === "loaded" ? "missing" : item.detailStatus === "error" ? "error" : "loading"),
         detailStatus: item.detailStatus ?? "loading",
         detailVersionMatches: item.detailVersionMatches === true,
         detailError: item.detailError,
@@ -264,19 +269,26 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
     const current = job.execution_state?.authority === "scheduler" && job.execution_state.status === status
       ? job.execution_state : null;
     if (current && (current.blocker || current.allowed_actions.includes("correct_proposal"))) {
-      const unknown = current.allowed_actions.includes("reconcile_effects") || current.blocker === "effects_require_reconciliation";
-      const human = current.allowed_actions.includes("wait_for_human");
-      const platformWait = current.allowed_actions.includes("wait_for_platform");
-      const correct = current.allowed_actions.includes("correct_proposal") && Boolean(job.error);
+      const terminal = TERMINAL_JOB_STATUSES.has(status);
+      const unknown = current.allowed_actions.includes("reconcile_effects") || current.blocker === "effects_require_reconciliation"
+        || jobUnknownEffects(job.unknown_effects).length > 0;
+      const closedHuman = current.blocker === "human_request_closed"
+        || (terminal && current.allowed_actions.some((action) => action === "wait_for_human" || action === "wait_for_platform"));
+      const human = !terminal && !closedHuman && current.allowed_actions.includes("wait_for_human");
+      const platformWait = !terminal && !closedHuman && current.allowed_actions.includes("wait_for_platform");
+      const correct = !terminal && !closedHuman && current.allowed_actions.includes("correct_proposal") && Boolean(job.error);
       const humanRequestExists = humanRequestJobs.has(job.id);
       if (humanRequestExists && (human || platformWait) && !unknown && !correct) continue;
       if (current.blocker || correct) actions.push({
         id: `job:${job.id}:current`, kind: unknown ? "unknown_effect" : human ? "human_decision" : correct ? "model_repair" : "platform_blocker",
-        title: human ? humanRequestExists ? "已接受人工请求，等待处理" : "运行等待人工，但缺少可核对的请求内容" : platformWait ? "已接受平台阻塞，等待配置或授权修复" : correct ? "当前执行可修正提案" : "按宿主当前恢复状态处理",
-        reason: current.blocker ?? "当前 Attempt 可提交修正；提交时仍会重新准入",
+        title: unknown ? "运行存在未决效果，需先对账" : closedHuman ? "历史人工请求已关闭，仅供查看"
+          : human ? humanRequestExists ? "已接受人工请求，等待处理" : "需要读取人工请求详情" : platformWait ? "已接受平台阻塞，等待配置或授权修复" : correct ? "当前执行可修正提案" : "按宿主当前恢复状态处理",
+        reason: unknown ? "运行仍有未结清或结果未知的外部效果，需先核对执行账本"
+          : closedHuman ? "运行已结束，历史请求不再等待回复；查看详情不会恢复原会话"
+          : human ? "已受理人工请求；请查看已保存的原问题和完整操作指引" : current.blocker ?? "当前 Attempt 可提交修正；提交时仍会重新准入",
         impact: unknown ? "未决效果必须先对账" : "历史回执不授予继续执行权限",
         evidence_refs: [`job:${job.id}`],
-        recommended_action: unknown ? "confirm_unknown_effect" : human ? humanRequestExists ? "reply_to_agent" : "inspect_recovery" : correct ? "correct_proposal"
+        recommended_action: unknown ? "confirm_unknown_effect" : closedHuman ? "inspect_recovery" : human ? humanRequestExists ? "reply_to_agent" : "inspect_recovery" : correct ? "correct_proposal"
           : platformWait ? "inspect_recovery" : current.allowed_actions.includes("request_recovery") ? "request_recovery" : "inspect_recovery",
         reversible: !unknown, next_state: status, priority: unknown ? "critical" : "high",
       });

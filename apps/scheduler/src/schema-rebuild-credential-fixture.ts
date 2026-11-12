@@ -30,7 +30,7 @@ async function capture(db: ReturnType<typeof postgres>) {
   const result: Record<string, unknown> = {};
   for (const table of ["projects", "canvases", "jobs", "job_attempts", "credentials", "job_tokens", "job_usage_ledger"]) {
     const rows = await db.unsafe(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY to_jsonb(t)::text`);
-    result[table] = rows.map(row => row.row);
+    result[table] = rows.map(row => table === 'jobs' ? { execution_deadline_at: null, ...row.row } : row.row);
   }
   return result;
 }
@@ -85,6 +85,8 @@ export async function runCredentialSchemaRebuildFixture(testUrl: string): Promis
     assert.equal((await backup`SELECT version FROM schema_meta WHERE id='global'`)[0].version, 68);
     assert.deepEqual(await capture(backup), history, "restored schema68 backup retains exact token and ledger identities");
     assert.equal((await db`SELECT version FROM schema_meta WHERE id='global'`)[0].version, SCHEMA_VERSION);
+    const deadlines=await db`SELECT pg_typeof(execution_deadline_at)::text AS type,execution_deadline_at FROM jobs`;
+    assert.ok(deadlines.length>0&&deadlines.every(row=>row.type==='timestamp with time zone'&&row.execution_deadline_at===null));
     assert.deepEqual(await capture(db), history, "column-intersection refill preserves snapshots, token counts and ledger references");
     const [column] = await db`SELECT is_nullable FROM information_schema.columns WHERE table_schema='public'
       AND table_name='job_tokens' AND column_name='credential_id'`;

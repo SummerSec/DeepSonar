@@ -147,11 +147,17 @@ if (!databaseUrl) {
             const jobId = await createReviewer(entry), oldAttempt = await makeRecoverable(jobId, status);
             const [before] = await sql`SELECT agent_snapshot_json,payload_json FROM jobs WHERE id=${jobId}`;
             if (entry === "hub") assert.equal(before.payload_json.goal_review, undefined);
-            const response = await rerun(jobId); assert.equal(response.statusCode, 200, response.payload);
+            const response = await rerun(jobId);
+            if(status==='waiting_human') {
+              assert.equal(response.statusCode,409,response.payload);
+              assert.equal(response.json().error_code,"HUMAN_REPLY_REQUIRED");
+              await sql`UPDATE jobs SET status='cancelled' WHERE id=${jobId}`;
+              return;
+            }
+            assert.equal(response.statusCode, 200, response.payload);
             const [after] = await sql`SELECT status,agent_snapshot_json FROM jobs WHERE id=${jobId}`;
             assert.equal(after.status, "pending");
             assert.deepEqual(after.agent_snapshot_json.task_goal_review, before.agent_snapshot_json.task_goal_review);
-            if (status === "waiting_human") assert.equal((await sql`SELECT status FROM job_attempts WHERE id=${oldAttempt}`)[0].status, "interrupted");
             const attemptId = randomUUID();
             await sql`UPDATE jobs SET status='running' WHERE id=${jobId}`;
             await sql`INSERT INTO job_attempts(id,job_id,attempt_no,status,phase) VALUES(${attemptId},${jobId},2,'active','agent.ready')`;

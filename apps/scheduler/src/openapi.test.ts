@@ -2,6 +2,25 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildOpenApiDocument } from "./openapi.js";
 
+test("Job detail documents a nullable durable human request outside event paging", () => {
+  const document = buildOpenApiDocument();
+  const paths = document.paths as Record<string, Record<string, any>>;
+  const operation = paths["/jobs/{id}"].get;
+  assert.equal(operation["x-deepsonar-scope"], "tasks:read");
+  const detail = operation.responses["200"].content["application/json"].schema;
+  assert.ok(detail.required.includes("human_request"));
+  const request = detail.properties.human_request;
+  assert.equal(request.nullable, true);
+  assert.equal(request.additionalProperties, false);
+  assert.deepEqual(request.required, ["event_id", "attempt_id", "created_at", "current", "payload"]);
+  assert.equal(request.properties.attempt_id.nullable, true);
+  assert.equal(request.properties.current.type, "boolean");
+  assert.equal(request.properties.payload.additionalProperties, false);
+  assert.deepEqual(request.properties.payload.properties.guidance.required,
+    ["question", "required_action", "reply_instructions", "after_reply"]);
+  assert.match(operation.description, /首批 50 条事件/);
+});
+
 test("canvas delta OpenAPI exposes a required since query parameter", () => {
   const document = buildOpenApiDocument();
   const operation = (document.paths as Record<string, Record<string, unknown>>)["/canvases/{id}/delta"]?.get as Record<string, unknown>;

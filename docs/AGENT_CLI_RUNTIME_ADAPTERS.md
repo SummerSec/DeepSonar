@@ -4,7 +4,7 @@
 > CLI versions live in `agent-harness/runtime-images.json` and
 > `packages/runtime-sandbox/src/runtime-adapters.ts`. New CLI onboarding must also
 > cover Session archive + Web session viewer (below). Index: [`README.md`](README.md).
-> Synchronization: 2026-11-11; #1072 Pi retry settlement; final-SHA Actions are pending.
+> Synchronization: 2026-11-12; #1083 Pi request error diagnosis/classification; final-SHA Actions are pending.
 
 Issue #100 defines the boundary between Scheduler-owned execution policy and
 provider-specific CLI protocols.
@@ -418,6 +418,14 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 夹具覆盖文本/增量、工具调用结果、错误、usage、Session 身份、未知/损坏帧，以及伪造 `mcp__deepsonar-control__*` 工具名。普通输出或伪造 tool call **不会**变成控制语义事件；语义写入只走 Job 级 HTTP API。不承诺识别任意上游私有客户端策略。
 
 运行时 smoke：本地 `agent-harness/dsh-sdk-smoke-driver.mjs` 已用官方 package 验证 native bash、PTC `run_code`、原生子代理的 Gateway/model/reasoning 继承、Gateway token、同进程 follow-up、v4 capture、跨进程 resume 拒绝和 shutdown；`agent-harness/dsh-cordis-smoke-config.mjs` 是 profile smoke helper，`agent-harness/check-dsh-runtime.mjs`、`agent-harness/test-dsh-cordis.mjs` 与 `packages/runtime-sandbox/src/runtime-adapters.test.ts` 验证 lock/profile/Docker 与 adapter 契约。Docker 在当前环境不可用，因此容器启动与既有镜像 size budgets 仍由 CI gate 负责；本地只记录 npm closure 约 505 MiB unpacked、约 139 MiB gzip，不把它们写成镜像体积。完整 `pnpm ci:smoke:opensandbox-cli-control` 仍需要对应 Provider 凭据。
+
+### Pi 请求失败诊断与分类（#1083）
+
+请求包装层的诊断必须区分 allowance、SDK 调用与 no-start 见证查询，不把所有未知异常只投影成 `PI_MAIN_BUDGET_REQUEST_FAILED`。仅保留有界允许名单化的错误类型、传输 code、HTTP status 与 cause 线索；任意异常原文、Provider 正文、URL、凭据与堆栈不进入错误消息。取消、权限/身份与预算拒绝继续停止，异常文案不能伪造私有宿主完成信号。
+
+生成用的 `pi-main-request-budget.ts` 保持自包含，以供现有 DSH installer 与 OM 边界加载器直接转换为 `data:` 模块；OM 内容守卫继续严格绑定该源码的当前摘要，改动源码时同步摘要并保留正负回归。
+
+错误类别用于诊断，不等于恢复许可。Pi 模型请求继续只在原存活 Job/Attempt/Session、原有界许可及内核持久 `not_started/gateway_transient` 见证下恢复；partial/unknown、缺少见证与取消不重放。请求包装错误不能因重新识别为 timeout/network 而转入通用 CLI 进程重启。共享 DSH reader 的错误与完成身份须同步核对。生成扩展、runner 与共享 reader 回归接 `pnpm ci:unit:runtime-sandbox`；真实锁版本 SDK 接 `pnpm ci:integration:request-budget-sdk`。本轮最终 SHA Actions 待验，现场原失败的底层原因和真实模型恢复效果仍未知；没有重跑历史 Job。
 
 ### 主模型请求准入适配器（#923）
 

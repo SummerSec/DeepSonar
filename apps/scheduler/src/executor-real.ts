@@ -1,4 +1,5 @@
 import { registerRuntimeTerminalState } from "./domains/platform-api/registry.js";
+import { prepareHumanCheckpointContext, persistHumanWaitCheckpoint } from "./domains/job-control/human-checkpoint.js";
 import { taskContractPrompt } from "./task-contract-preflight.js";
 import { prepareCompletionPayload } from "./completion-payload.js";
 import { createCompletionFailureDiagnostics } from "./completion-failure-diagnostic.js";
@@ -1616,7 +1617,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   let platformToken: string | null = platformCapability.token;
   let platformRuntimeRegistered = false;
   try {
-  registerJobEvidenceSecrets(jobId, [platformToken, gatewayToken].filter((value): value is string => Boolean(value)));
+  registerJobEvidenceSecrets(jobId, [platformToken, gatewayToken,observationalMemoryGatewayToken].filter((value): value is string => Boolean(value)));
 
   const knowledgeRuntime = createKnowledgeRuntime({ db: sql, governanceHash: PROJECT_KNOWLEDGE_GOVERNANCE_HASH });
   const runtimePlatformHandler = completionDiagnostics.wrapControlHandler(async (context: PlatformRuntimeHandlerContext): Promise<Record<string, unknown>> => {
@@ -1775,8 +1776,11 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   if (provider === "dsh" && !dshProvider) throw new Error("DSH_RUNTIME_PROJECTION_UNSUPPORTED");
 
   let result: Awaited<ReturnType<typeof runRealAgent>>;
+  let checkpointContext: Awaited<ReturnType<typeof prepareHumanCheckpointContext>> | undefined;
   try {
     const host = await runner.ensureHost({ sandboxId: job.sandbox_id as string });
+    checkpointContext=await prepareHumanCheckpointContext({jobId,attemptNo:Number(activeAttempt.attempt_no),snapshot,host});
+    if(checkpointContext.continuationInput) initialInput=`${checkpointContext.continuationInput}\n${initialInput}`;
     result = await runRealAgent(
     host,
     {
@@ -1830,7 +1834,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
       subAgents: snapshot.subagents as never,
       piExtensions: piExtensionInjection.paths,
       workspaceFiles,
-      secretValues: [platformToken, gatewayToken].filter((value): value is string => Boolean(value)),
+      secretValues: [platformToken, gatewayToken,observationalMemoryGatewayToken].filter((value): value is string => Boolean(value)),
       onRunReady: async ({ sendMessage, readWorkspaceFile, writeWorkspaceFile }) => {
         readSandboxWorkspaceFileForRuntime = readWorkspaceFile;
         if (platformApiEnabled) {
@@ -1839,7 +1843,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
             : semanticState.done ? "done" : semanticState.hub ? "hub_decision" : null, () => semanticState.human?.payload.subject ?? null);
           platformRuntimeRegistered = true;
         }
-        const disposeHumanMessages = await registerHumanMessageRuntime(jobId, { sendMessage, writeWorkspaceFile });
+        const disposeHumanMessages = await registerHumanMessageRuntime(jobId, { sendMessage, writeWorkspaceFile },attemptId!);
         const disposeCanvas = canvasId && snapshot.agent_runtime?.capabilities.incrementalMessages === true
           ? await subscribeCanvasUpdates(canvasId, jobId, sendMessage)
           : undefined;
@@ -1939,15 +1943,12 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   );
   await sql`UPDATE jobs SET transcript_uri = ${evidence.uri} WHERE id = ${jobId}`;
 
-  // An accepted request_human is the terminal close. Persist it even when a
-  // later exclusive tool or runner error would otherwise fail the Job.
+  // Preserve the accepted wait before sealing; later runner errors cannot revoke it.
   if (semanticState.human) {
-    await ingestSemanticEventObserved(jobId, {
-      v: 1,
-      event_id: semanticState.human.eventId,
-      type: "human",
-      payload: semanticState.human.payload,
-    });
+    await persistHumanWaitCheckpoint(jobId,semanticState.human,{
+      attemptId:attemptId!,host:()=>runner.ensureHost({sandboxId:job.sandbox_id as string}),
+      workspaceFiles,env,processBaseline:checkpointContext?.processBaseline,managedSecrets:[platformToken,gatewayToken,observationalMemoryGatewayToken],
+    },ingestSemanticEventObserved);
     return;
   }
   // Host semantic validation is fail-closed. A transient Provider/CLI error
