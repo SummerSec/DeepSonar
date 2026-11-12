@@ -64,6 +64,29 @@ function host(factory: (index: number) => PiProcess, nonempty = true) {
   return { runtime, processes };
 }
 
+test("#1083 request-wrapper diagnostic survives the Pi runner without process resume or tool replay", async () => {
+  // Fixed output contract of the generated request wrapper, not arbitrary SDK prose.
+  // Its transient category is diagnostic only: SDK recovery already consulted the
+  // kernel settlement, so the generic process-resume branch must not retry it.
+  const diagnostic = 'PI_MAIN_BUDGET_REQUEST_FAILED; diagnostic={"version":1,"stage":"sdk","category":"transient_retryable","name":"TypeError","cause":{"name":"Error","code":"ECONNRESET"}}';
+  const events: Record<string, unknown>[] = [];
+  const fake = host(() => new PiProcess((command, process) => {
+    if (command.type === "get_state") state(process, command);
+    else if (command.type === "prompt") turn(process, command, diagnostic);
+  }));
+  const result = await runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "original task",
+    completionGate: () => false, recoveryGuard: () => ({ allowed: false, reason: "unknown_external_effect" }),
+    onEvent: event => events.push(event) });
+  assert.equal(result.error, `Pi message ended: error: ${diagnostic}`);
+  assert.equal(result.runnerErrorSource, "structured_terminal");
+  assert.equal(result.terminalOutcome, "failure");
+  assert.equal(fake.processes.length, 1, "network cause in the diagnostic must not reopen the persisted Pi session");
+  assert.equal(fake.processes[0]!.commands.filter(command => command.type === "prompt").length, 1);
+  assert.equal(fake.processes[0]!.commands.some(command => command.type === "compact"), false);
+  assert.equal(events.some(event => event.type === "run.retrying"), false);
+  assert.doesNotMatch(result.error ?? "", /CONTEXT_RESUME_UNSUPPORTED/u);
+});
+
 for (const mode of ["progress-only", "unknown", "unknown-failure"]) {
   test(`#1038 real runner decode/map/warning path: ${mode}`, async () => {
     const secret = "synthetic-warning-secret";
