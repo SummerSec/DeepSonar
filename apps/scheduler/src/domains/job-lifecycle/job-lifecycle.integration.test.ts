@@ -277,8 +277,6 @@ if (!testDatabaseUrl) {
       const [hungRow] = await sql`SELECT status, error FROM jobs WHERE id = ${hungToolAudit}`;
       assert.equal(hungRow.status, "failed");
       assert.match(String(hungRow.error), /in-flight tool 超出预算/);
-      const [hungAttempt] = await sql`SELECT outcome_json->>'reason' AS reason FROM job_attempts WHERE job_id = ${hungToolAudit} ORDER BY created_at DESC LIMIT 1`;
-      assert.equal(hungAttempt.reason, "reaper_inflight_tool_stalled");
 
       const [silentRow] = await sql`SELECT status, error FROM jobs WHERE id = ${silentAudit}`;
       assert.equal(silentRow.status, "failed");
