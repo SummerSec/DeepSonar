@@ -15,7 +15,15 @@ for name in os.listdir('/proc'):
  except FileNotFoundError: pass
 print(json.dumps(identities))` )}`, { timeoutMs: 5000 });
   if (result.exitCode !== 0) throw new Error("HUMAN_CHECKPOINT_PROCESS_BASELINE_UNAVAILABLE");
-  return ProcessBaseline.parse(JSON.parse(result.stdout));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    // 宿主 stdout 不可解析时与采集失败同一稳定码；不回显原始字节（可能含未脱敏进程信息），
+    // 调用方 human-checkpoint.ts 已按失败降级（processBaseline=undefined）。
+    throw new Error("HUMAN_CHECKPOINT_PROCESS_BASELINE_UNAVAILABLE");
+  }
+  return ProcessBaseline.parse(parsed);
 }
 
 /** Linux sandbox PID namespace only. New business processes stay stopped until destroy. */
