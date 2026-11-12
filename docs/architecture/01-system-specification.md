@@ -239,7 +239,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **决策来源**：控制面是 Agent 提案边界，结构化拒绝才能保持 Job scope、审计和修复闭环。
 - **实现状态**：部分达标（Phase 1）；部分 Control schema/语义 payload 拒绝路径已返回 RepairFeedback，但 Hub、Verify、Completion Gate 和完整 Proposal/Receipt/Settlement 尚未统一，不把覆盖缺口写成 as-built。
 - **代码入口**：[RepairFeedback 类型](../../packages/shared-types/src/repair-feedback.ts)、[平台修复构造](../../apps/scheduler/src/domains/platform-api/repair.ts)、[Control routes](../../apps/scheduler/src/domains/platform-api/routes.ts)。
-- **验证证据**：`pnpm ci:smoke:control-api`、`pnpm ci:integration:platform-api`、`pnpm ci:unit:capability-pack`；人工提交 MCP/文本回退应被拒绝。
+- **验证证据**：`pnpm ci:smoke:control-api`、`pnpm ci:integration:platform-api`、`pnpm ci:unit:capability-pack`；人工提交 MCP/文本回退应被拒绝。#1094 的 [HTTP bootstrap](../AGENT_CLI_RUNTIME_ADAPTERS.md#平台-operation-的-http-bootstrap1094)明确 operation 与原生工具的区别，系统/工作区/启动/完成门提示渲染回归接既有 `pnpm ci:unit:verify-eligibility` / `pnpm ci:unit:executor-real`；最终 SHA Actions 另验，不代替模型效果验证。
 
 ### FR-CTRL-002 RepairFeedback 失败分类
 

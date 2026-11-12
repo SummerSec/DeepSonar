@@ -9,6 +9,14 @@
 Issue #100 defines the boundary between Scheduler-owned execution policy and
 provider-specific CLI protocols.
 
+## 平台 operation 的 HTTP bootstrap（#1094）
+
+Scheduler 生成的系统提示、工作区指令、启动消息与完成门催促统一区分 CLI 原生工具和 Job-scoped HTTP operation。冻结 `platform_tools` 是 operation allowlist，不注册同名 CLI 工具；角色指令中的 `mark_job_done({...})` 等写法只表达 operation 与 JSON payload，不能作为原生函数或 Shell 命令执行。
+
+首次平台操作先由 Agent 自身的 HTTP 工具读取 `$DEEPSONAR_API_BASE_URL/agent/capabilities_list`，再按返回 schema 向 `/operations/:operationId` POST。启动可见的短 bootstrap 说明认证、幂等 key 与完成 revision；完整反馈、回执和未知效果规则仍由平台固定 `deepsonar-control` Skill 维护。原生工具分派返回 not found 不代表 Control API 拒绝或权限缺失，不能改用另一控制通道，也不能将此错误记作完成。Runtime Adapter 不代发 HTTP，不把 CLI 输出转换成语义提交。
+
+提示渲染回归覆盖含函数式业务示例的 Test 指令、各角色结果契约、启动消息和完成门催促，接既有 `pnpm ci:unit:verify-eligibility` / `pnpm ci:unit:executor-real`；固定 Skill 由 `pnpm ci:unit:canvas-facts` 核对。最终 SHA 的 Actions 结果另验；本变更不宣称模型遵循率改善或历史 Job 已恢复，不改写冻结快照，不要求生产重跑或部署。
+
 ### DSH 异步子代理完成边界（#766）
 
 DSH 0.2.1-rc.2 的 `subagent` 立即返回 activation，父会话首次 idle 不表示任务结束。适配器只接受已知父会话的 `subagent.started`，并记录子会话谱系；活跃子会话的 `session.status=idle` 不能释放完成门，必须收到对应父子关系的 `subagent.finished`。可继续的子会话再次 running 会重新进入活跃集合。全部子代理完成后，仍等待父会话处理回传并再次 idle，才允许执行 `mark_job_done` 完成门及最多三次催促。父会话显式错误仍立即失败；取消、超时与清理由原 Job/RuntimeHost 边界负责。

@@ -13,7 +13,7 @@ import {
   resolvePlatformTools,
 } from "@deepsonar/shared-types";
 import { instructionDocument, resultContract, PLATFORM_SYSTEM_PROMPT } from "./executor-real.js";
-import { platformToolGuide } from "./platform-tools.js";
+import { platformControlNudge, platformControlPrompt, platformToolGuide } from "./platform-tools.js";
 import { buildVerifyJobPrompt } from "./verify-prompt.js";
 import { RUNTIME_TEST_TOOLCHAIN_POLICY, withRuntimeTestToolchainPolicy, runtimeEvidencePolicy, SPECIALTY_RUNTIME_IMAGE_POLICIES } from "./domains/role-runtime-snapshot/application.js";
 
@@ -253,4 +253,36 @@ test("#1094 every result contract requires HTTP submission rather than a same-na
     }
   }
   assert.doesNotMatch(executorSource, /可用工具：\$\{controlToolNames/);
+});
+
+test("#1094 startup and completion nudges share HTTP bootstrap without expanding the frozen allowlist", () => {
+  const operations = ["mark_job_done"];
+  const prompt = platformControlPrompt(operations, "提交最终摘要，结果未知先查原回执。");
+  assert.deepEqual(operations, ["mark_job_done"]);
+  assert.match(prompt, /已授权 HTTP operation：mark_job_done/);
+  assert.match(prompt, /不是 CLI 原生工具/);
+  assert.match(prompt, /capabilities_list/);
+  assert.match(prompt, /结果未知先查原回执/);
+  assert.doesNotMatch(prompt, /emit_fact|emit_finding|request_human|submit_hub_decision/);
+  assert.match(executorSource, /initialInput \+=.*platformControlPrompt\(controlToolNames, contract\)/);
+  assert.match(executorSource, /nudgeMessage: platformControlNudge\(controlToolNames, isHub/);
+  assert.doesNotMatch(executorSource, /你还没有通过平台工具提交|请通过 emit_fact\/emit_finding/);
+  for (const role of ["hub", "verify", "worker"] as const) {
+    const nudge = platformControlNudge(operations, role);
+    assert.ok(nudge.startsWith(PLATFORM_SYSTEM_PROMPT.slice(PLATFORM_SYSTEM_PROMPT.indexOf("调用规则："))));
+    assert.match(nudge, /已接受人工请求则停止/);
+    assert.match(nudge, /明确可修正拒绝.*新 key\/下一 revision/);
+    assert.doesNotMatch(nudge, /emit_fact|emit_finding|request_human|submit_hub_decision/);
+    assert.equal(nudge.includes("verdict（confirmed/rework/needs_human/refuted）"), role === "verify");
+  }
+  assert.match(platformControlNudge(["submit_hub_decision", "mark_job_done"], "hub"), /仅决策尚未接受.*已接受决策不得重提/);
+});
+
+test("#1094 HTTP guidance preserves receipt recovery rather than replaying accepted proposals", () => {
+  const guide = platformToolGuide(["submit_hub_decision", "mark_job_done", "request_human"]);
+  assert.match(guide, /repair\.category.*next_action/);
+  assert.match(guide, /原 key.*revision.*payload/);
+  assert.match(guide, /persisted_deferred/);
+  assert.match(guide, /已接受.*不.*重提/);
+  assert.doesNotMatch(guide, /迟到的重复调用会被忽略|成功后不得重试|HTTP\/参数错误须修正后重试|仅当上一次 HTTP 请求失败或参数校验失败时才可重试/);
 });
