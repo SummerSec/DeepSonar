@@ -9,7 +9,7 @@ export const PLATFORM_CONTROL_HTTP_BOOTSTRAP = [
   "首次平台操作前读取平台注入的 deepsonar-control Skill，并用 CLI 已有的 HTTP 工具（例如通过 bash 运行 curl 或 Node）调用 GET $DEEPSONAR_API_BASE_URL/agent/capabilities_list。BASE_URL 已包含本 Job 路径，不要再次拼接 Job ID。",
   "按发现返回的 schema 构造 JSON，调用 POST $DEEPSONAR_API_BASE_URL/operations/:operationId（用已授权 operation 替换占位符）。GET/POST 均带 Authorization: Bearer $DEEPSONAR_API_TOKEN；POST 带 Content-Type: application/json 和 UUID Idempotency-Key；仅 mark_job_done 还必须带 X-DeepSonar-Proposal-Revision，首次为 0，修正按反馈递增。只在请求进程中使用凭据，禁止打印或写入任务文件。",
   "原生工具返回 not found 不代表 Control API 拒绝，也不代表缺少授权；重读控制 Skill 后使用上述 HTTP 入口，不增加同名工具或改走其他通道。",
-  "拒绝按 repair.category 与 next_action 处理；结果未知先查原回执，不换 key 猜测重放。传输恢复保持原 key、revision 和完全相同 payload；仅明确允许修正时才用新 key；完成提案还需反馈要求的下一 revision。已接受的决策或人工请求不得重提，已接受人工等待后不再提完成；accepted/persisted_deferred 不等于 Job 成功。完整回执查询及原活动执行器恢复规则见 deepsonar-control Skill。",
+  "拒绝按 repair.category 与 next_action 处理；结果未知按该 operation 契约查询原回执或当前状态，不支持查询时保留未知并停止，禁止猜测查询路由或换 key 重放。已接受提案不得用新 key 或修改 payload/revision 新建另一提案。只有 operation 明确支持回执恢复、查得原 persisted_deferred 且原 Job/Attempt/执行器满足恢复条件时，才允许原 key、适用的原 revision 和完全相同 payload 再 POST，仅恢复原执行器本地提案，不重放外部效果；文件输入保持原路径与内容。明确可修正拒绝才用新 key，完成提案还需反馈要求的下一 revision。人工请求接纳后停止业务执行，不提完成或冲突终态；原样传输恢复不授权继续业务。accepted/persisted_deferred 不等于 Job 成功，详情见 deepsonar-control Skill。",
 ].join("\n");
 
 /** 平台注入的固定控制说明，RoleConfig 不能按同名替换。 */

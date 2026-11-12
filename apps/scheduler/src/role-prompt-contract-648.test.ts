@@ -270,12 +270,12 @@ test("#1094 startup and completion nudges share HTTP bootstrap without expanding
   for (const role of ["hub", "verify", "worker"] as const) {
     const nudge = platformControlNudge(operations, role);
     assert.ok(nudge.startsWith(PLATFORM_SYSTEM_PROMPT.slice(PLATFORM_SYSTEM_PROMPT.indexOf("调用规则："))));
-    assert.match(nudge, /已接受人工请求则停止/);
+    assert.match(nudge, /已接受人工请求则停止业务执行/);
     assert.match(nudge, /明确可修正拒绝.*新 key\/下一 revision/);
     assert.doesNotMatch(nudge, /emit_fact|emit_finding|request_human|submit_hub_decision/);
     assert.equal(nudge.includes("verdict（confirmed/rework/needs_human/refuted）"), role === "verify");
   }
-  assert.match(platformControlNudge(["submit_hub_decision", "mark_job_done"], "hub"), /仅决策尚未接受.*已接受决策不得重提/);
+  assert.match(platformControlNudge(["submit_hub_decision", "mark_job_done"], "hub"), /仅决策尚未接受.*已接受决策不得用新 key.*原样恢复/);
 });
 
 test("#1094 HTTP guidance preserves receipt recovery rather than replaying accepted proposals", () => {
@@ -283,6 +283,17 @@ test("#1094 HTTP guidance preserves receipt recovery rather than replaying accep
   assert.match(guide, /repair\.category.*next_action/);
   assert.match(guide, /原 key.*revision.*payload/);
   assert.match(guide, /persisted_deferred/);
-  assert.match(guide, /已接受.*不.*重提/);
+  assert.match(guide, /已接受提案不得用新 key 或修改 payload\/revision 新建另一提案/);
   assert.doesNotMatch(guide, /迟到的重复调用会被忽略|成功后不得重试|HTTP\/参数错误须修正后重试|仅当上一次 HTTP 请求失败或参数校验失败时才可重试/);
+});
+
+
+test("#1094 receipt guidance preserves governed exact retries without inventing unsupported queries", () => {
+  const guide = platformToolGuide(["emit_fact", "emit_progress", "publish_shared_asset", "ack_human_message"]);
+  assert.match(guide, /不支持查询时保留未知并停止/);
+  assert.match(guide, /禁止猜测查询路由或换 key 重放/);
+  assert.match(guide, /只有 operation 明确支持回执恢复.*原 persisted_deferred.*原 Job\/Attempt\/执行器满足恢复条件/);
+  assert.match(guide, /文件输入保持原路径与内容/);
+  assert.match(guide, /原样传输恢复不授权继续业务/);
+  assert.doesNotMatch(guide, /结果未知先查原回执|已接受的决策或人工请求不得重提/);
 });
