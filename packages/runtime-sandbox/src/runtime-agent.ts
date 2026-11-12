@@ -33,6 +33,7 @@ import { createStdinCloseKiller } from "./runtime-stdin-close.js";
 import { PiObservationalMemoryTextRedactor } from "./pi-observational-memory.js";
 import { redactPiObservationalMemory, redactPiObservationalMemoryText } from "@deepsonar/shared-types";
 import { canRetainTerminalResult, observeRuntimeProcesses } from "./runtime-process-diagnostic.js";
+import { createRuntimeStreamCheckpoint } from "./runtime-stream-fairness.js";
 import { MODEL_REQUEST_POLICY_PATH, MODEL_REQUEST_POLICY_SOURCE } from "./model-request-policy.js";
 import { PI_MAIN_REQUEST_BUDGET_PATH, PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
 import { createRuntimeWarningReporter, type RuntimeWarning } from "./runtime-warnings.js";
@@ -1409,6 +1410,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   let semanticError: string | undefined;
   const semanticToolState = createSemanticToolState();
   const runtimeWarnings = createRuntimeWarningReporter(adapter, spec.onWarning, value => redactSecretValues(value, secretValues));
+  const streamCheckpoint = createRuntimeStreamCheckpoint();
   // 3. 事件流 → 全量事件回调（实时流）+ 节流进度回调（§6.2：原始流不进 events 表）
   let lastPush = 0;
   let progressBuffer = "";
@@ -1520,6 +1522,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
         : undefined;
       try {
         for await (const chunk of exec) {
+          await streamCheckpoint();
           if (chunk.type === "stderr") {
             const stderrChunk = chunk.chunk ?? "";
             attemptStderrTail = (attemptStderrTail + stderrEvidence.push(stderrChunk)).slice(-2000);
@@ -1561,6 +1564,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
           }
           const frames = piFramer ? piFramer.frames(chunk.chunk ?? "") : lines.map((line) => ({ line, bytes: Buffer.byteLength(line) }));
           for (const frame of frames) {
+            await streamCheckpoint();
             const rawLine = frame.line;
             const line = piFramer ? rawLine : rawLine.trim();
             if (!line) continue;

@@ -336,6 +336,8 @@ Pi 单次模型错误先等待原进程内部重试与执行结算，不在消�
 
 OpenSandbox provision 失败在正常清理前追加 Job/Attempt 关联的 `job.provision_failed` 宿主审计（#1002）：首次审计与原 Attempt 的只读来源引用同事务持久化，Job GET 以现有项目/Job 权限通过主键引用重新核 scheduler/schema/归属后提供有界 `provision_diagnostics`；不扩大审计权限或回填旧引用，不把诊断当效果结算。只保存实际阶段、已观察会话/取消、合法 HTTP 状态和固定传输信号，不保存 SDK 原文、堆栈或环境。未拿到句柄仍不是未启动证明；审计失败不替代原错误，也不停止清理或放开未知效果重试。详见[诊断边界](docs/OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)；SQL/HTTP/原 runner 清理前读回回归已接既有 Actions，最终 SHA 待验；受控 Provider 不是实机 Engine，现场 execd 原始日志和并发根因仍未验证。
 
+进度积压消费在 PTY chunk 与内层 RPC record 边界协作让出事件循环，避免纯微任务推迟 socket 自动 Pong；共享 OM 文本脱敏跳过普通文本的逐行 JSON 异常，保留全部进度与隐私边界。机制和合成保活回归见 [进度消费与保活](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#进度消费与-websocket-保活1092)，历史具体 CPU/队列成因不冒充已还原。
+
 OpenSandbox PTY 仅凭有效退出帧确定 CLI 退出码，WebSocket 关闭/错误和宿主主动终止单独留证；有界脱敏诊断进入原 Evidence，不授权重连、CLI 重开或未知效果重放。见 [PTY 退出诊断](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)；历史现场底层原因仍未知，最终 SHA Actions 待验。
 
 OpenSandbox upgrade baseline (2026-11-01): installed SDK 1.2 and canonical server/execd/egress pins are updated, with explicit SDK `wakeRetryEnabled=false` preserving Scheduler recovery. All deployed TOMLs remain direct; existing isolation/resources/TTL/renew/DNS/IPv6/PVC policy is unchanged. Local SDK regression does not prove new pinned-server parsing, actual PTY, native execution or final-SHA CI; see the [single upgrade record](docs/OPENSANDBOX_1_2_UPGRADE.md). #1002 P2-11 adds a same-Engine declaration init gate for managed Docker/Worker dependency starts, not per-container enforcement or remote-host attestation; rejection/evidence and remaining D-10 are recorded in the [resource preflight section](docs/OPENSANDBOX_1_2_UPGRADE.md#managed-docker-resource-preflight-1002-p2-11).

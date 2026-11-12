@@ -24,6 +24,24 @@ test("plain multiline progress does not throw a JSON parse error for every line"
   assert.ok(attempts <= 1, `ordinary progress caused ${attempts} speculative JSON parses`);
 });
 
+test("JSON candidate optimization preserves escaped and malformed OM redaction", () => {
+  const escaped = String.raw`{"customType":"\u006fm.folded","data":{"text":"private-escaped-memory"}}`;
+  const mixed = "ordinary tool output\r\n" + escaped + "\r\n";
+  for (const input of [escaped, mixed, "\n" + escaped]) {
+    const redacted = redactPiObservationalMemoryText(input);
+    assert.doesNotMatch(redacted, /private-escaped-memory/);
+    assert.match(redacted, /REDACTED/);
+  }
+  for (const input of [
+    '{"customType":"om.folded","content":"private-malformed',
+    'tool_name=recall private-malformed',
+    'om.observations private-malformed',
+  ]) {
+    assert.doesNotMatch(redactPiObservationalMemoryText(input), /private-malformed/);
+  }
+  assert.equal(redactPiObservationalMemoryText('{"type":"text","text":"ordinary"}'), '{"type":"text","text":"ordinary"}');
+});
+
 test("OM image guard requires the current governed wrapper, not only a nonempty file", () => {
   const source = readFileSync(new URL("../../../agent-harness/pi-observational-memory-governed.ts", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.equal(createHash("sha256").update(source).digest("hex"), PI_MEMORY_GOVERNED_WRAPPER_SHA256,
