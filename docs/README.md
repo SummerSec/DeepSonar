@@ -94,6 +94,8 @@
 
 #1094 的[平台 HTTP bootstrap](AGENT_CLI_RUNTIME_ADAPTERS.md#平台-operation-的-http-bootstrap1094)统一区分平台 operation 与 CLI 原生工具；只修提示，不改权限或恢复历史 Job，最终 SHA Actions 与模型效果分别记录。
 
+#1097 的[managed proxy 逐跳隔离](MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的逐跳连接策略1097)修复连接寿命误广告；协议修复与历史 Pi 错误归因分开，最终 SHA Actions 另验，不重跑生产 Job 或部署。
+
 ## 状态图例
 
 | 标记 | 含义 |

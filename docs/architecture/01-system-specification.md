@@ -704,6 +704,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 #1032 的 [Pi context 凭据投影首片](../MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)在 SDK 生成前共用当前 main/Control/OM token 的精确替换，不改已生成请求、认证、预算与回执。工具读取 env 和认证文件、错误及 OM 来源的回归接上述 runtime-sandbox、锁版本 request-budget-sdk 与原生 om-provider-headers；最终 SHA Actions 待验，同 UID 凭据隔离和 deny 诊断/审计仍未交付。
 
+#1097 的 [managed proxy 逐跳隔离](../MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的逐跳连接策略1097)回归接现有 `pnpm ci:unit:runtime-sandbox`，覆盖连接广告归属与内容/流式边界；最终 SHA Actions 另验，不回填历史模型错误原因。
+
 ### FR-CRED-004 Token 额度与终态撤销
 
 - **规范要求**：Job Gateway token 和 Control capability token 必须具有独立身份、有效期、请求/Token额度和撤销原因；Job 进入任何终态后必须撤销，不得跨 Job 复用。
