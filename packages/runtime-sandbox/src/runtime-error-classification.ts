@@ -46,6 +46,9 @@ export function classifyCliSessionResumeError(error: unknown): CliSessionResumeR
   // Request recovery belongs to the live SDK owner and its kernel no-start
   // receipt. Diagnostic causes must never grant a second CLI process/prompt.
   if (/\bPI_MAIN_BUDGET_REQUEST_FAILED\b/u.test(text)) return undefined;
+  // A lost PTY connection leaves the external CLI/effects unknown. Diagnostic
+  // network/timeout text never grants a new process, even after stringification.
+  if (/\bOPENSANDBOX_PTY_[A-Z_]+\b/u.test(text)) return undefined;
   // Context window exceeds are distinct from generic 400s so callers can compact
   // before any same-session resume; do not treat them as transient http.
   if (CONTEXT_WINDOW_EXCEEDED_RE.test(text)) {
