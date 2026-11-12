@@ -310,6 +310,12 @@ export function createSqlJobLifecycleApplication(
       const inflightMultiplier = INFLIGHT_TOOL_BUDGET_MULTIPLIER;
       return atomically(async (tx) => {
         // #1086：stall 下限与 in-flight tool 预算共用同一 floor 表达式，避免第二套阈值漂移。
+        // 开关语义只看未叠加 floor 的配置值：runtime_knobs.stall_sec=0（或平台默认 0）
+        // 仍明确关闭 watchdog，Chrome/Hub floor 不越权打开（评审 P1，SQL 与 TS 对齐）。
+        const configuredSec = tx`COALESCE(
+              (agent_snapshot_json #>> '{runtime_knobs,stall_sec}')::int,
+              ${platformStall}::int
+            )`;
         const floorSec = tx`GREATEST(
               COALESCE(
                 (agent_snapshot_json #>> '{runtime_knobs,stall_sec}')::int,
@@ -363,7 +369,7 @@ export function createSqlJobLifecycleApplication(
                           error = COALESCE(error, '') || ${INFLIGHT_TOOL_STALL_ERROR}
           WHERE status = 'running'
             AND started_at IS NOT NULL
-            AND ${floorSec}::int > 0
+            AND ${configuredSec}::int > 0
             AND ${leaseLive}
             AND ${inflightTool}
             AND ${lastActivity} + ${inflightBudget} < now()
@@ -377,7 +383,7 @@ export function createSqlJobLifecycleApplication(
                           error = COALESCE(error, '') || '产出停滞（Reaper 判定）'
           WHERE status = 'running'
             AND started_at IS NOT NULL
-            AND ${floorSec}::int > 0
+            AND ${configuredSec}::int > 0
             AND ${lastActivity} + ${floorSec}::int * interval '1 second' < now()
             AND NOT (${leaseLive} AND ${inflightTool})
           RETURNING id, sandbox_id`;

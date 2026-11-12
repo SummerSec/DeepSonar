@@ -265,6 +265,13 @@ if (!testDatabaseUrl) {
         payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
       });
       await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${hungToolAudit}`;
+      // Reaper 通过 settleAttemptTerminal 收口：必须先有 active Attempt，否则 reason 无处落库。
+      await createAttempt(sql, hungToolAudit, { agent_cli: "claude-code" });
+      // 评审 P1：stall_sec=0 是明确关闭；Chrome/Hub floor 不得把它重新打开。
+      const disabledChrome = await insertRunning("deepsonar-chrome-audit");
+      await sql`UPDATE jobs SET started_at = now() - interval '6000 seconds',
+          agent_snapshot_json = agent_snapshot_json || ${sql.json({ runtime_knobs: { stall_sec: 0 } } as never)}
+        WHERE id = ${disabledChrome}`;
 
       const stalled = await app.reapStalledExecution(900);
       const stalledIds = new Set(stalled.map((row) => row.id));
@@ -277,6 +284,14 @@ if (!testDatabaseUrl) {
       const [hungRow] = await sql`SELECT status, error FROM jobs WHERE id = ${hungToolAudit}`;
       assert.equal(hungRow.status, "failed");
       assert.match(String(hungRow.error), /in-flight tool 超出预算/);
+      const [hungAttempt] = await sql`SELECT status, outcome_json->>'reason' AS reason
+        FROM job_attempts WHERE job_id = ${hungToolAudit} ORDER BY attempt_no DESC LIMIT 1`;
+      assert.deepEqual({ status: hungAttempt.status, reason: hungAttempt.reason },
+        { status: "failed", reason: "reaper_inflight_tool_stalled" });
+
+      assert.equal(stalledIds.has(disabledChrome), false,
+        "runtime_knobs.stall_sec=0 的 chrome Job 保持关闭，不被 per-image floor 重新启用");
+      assert.deepEqual(await app.reapStalledExecution(0), [], "平台 stall=0 同样关闭 watchdog");
 
       const [silentRow] = await sql`SELECT status, error FROM jobs WHERE id = ${silentAudit}`;
       assert.equal(silentRow.status, "failed");
