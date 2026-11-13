@@ -784,10 +784,13 @@ if (!testDatabaseUrl) {
         type: "done",
         payload: { summary: "accepted\u0000summary\nnext" },
       });
-      const [nulDoneNode] = await sql<{ status: string; body_json: { summary?: string } }[]>`
-        SELECT status, body_json FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
-      assert.equal(nulDoneNode?.status, "succeeded");
-      assert.equal(nulDoneNode?.body_json.summary, "accepted\\0summary\nnext");
+      const [nulDoneJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
+      assert.equal(nulDoneJob?.status, "succeeded");
+      const nulDoneNodes = await sql<{ status: string; summary: string | null }[]>`
+        SELECT status, body_json->>'summary' AS summary FROM canvas_nodes
+        WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
+      const nulSummaries = nulDoneNodes.map((node) => node.summary).filter((value) => value !== null);
+      assert.deepEqual(nulSummaries, ["accepted\\0summary\nnext"]);
     } finally {
       for (const eventId of fixture.eventIds) {
         await sql`DELETE FROM event_dedup WHERE event_id = ${eventId}`;
