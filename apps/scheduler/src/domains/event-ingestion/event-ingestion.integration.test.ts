@@ -774,23 +774,25 @@ if (!testDatabaseUrl) {
         SELECT payload_json FROM events WHERE job_id = ${jobId} AND event_id = ${nulEventId}`;
       assert.equal(nulRow.payload_json.message, "chunk\\0with nul\nnext line");
 
-      // #1066 残留补片：done 摘要同样会写进 canvas 节点 JSONB，终态写入必须同源清洗，
+      // #1066 残留补片：done 摘要同样会写进 canvas 节点 JSONB；终态写入必须同源清洗，
       // 否则同一个 22P05 会回滚整笔终态事务并让已接受的回执看起来像执行失败。
-      const nulDoneId = randomUUID();
-      fixture.eventIds.push(nulDoneId);
-      await app.ingestEvent(jobId, {
-        v: 1,
-        event_id: nulDoneId,
-        type: "done",
-        payload: { summary: "accepted\u0000summary\nnext" },
+      // （本测试的 app 使用自定义回调取代真实 sideEffects，因此直接驱动 finalizeJob。）
+      const nulSummaryJobId = randomUUID();
+      await sql`
+        INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json, payload_json)
+        VALUES (${nulSummaryJobId}, ${projectId}, ${canvasId}, 'audit', 'running',
+          ${sql.json({ agent_cli: "claude-code", credential_id: null, model: null })}, ${sql.json({})})`;
+      await sql`
+        INSERT INTO canvas_nodes (canvas_id, job_id, node_type, title, status, body_json)
+        VALUES (${canvasId}, ${nulSummaryJobId}, 'job', 'nul summary', 'running', ${sql.json({})})`;
+      await sql.begin(async (tx) => {
+        await finalizeJob(tx as unknown as typeof sql, nulSummaryJobId, "succeeded", { summary: "accepted\u0000summary\nnext" });
       });
-      const [nulDoneJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${jobId}`;
+      const [nulDoneJob] = await sql<{ status: string }[]>`SELECT status FROM jobs WHERE id = ${nulSummaryJobId}`;
       assert.equal(nulDoneJob?.status, "succeeded");
-      const nulDoneNodes = await sql<{ status: string; summary: string | null }[]>`
-        SELECT status, body_json->>'summary' AS summary FROM canvas_nodes
-        WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
-      const nulSummaries = nulDoneNodes.map((node) => node.summary).filter((value) => value !== null);
-      assert.deepEqual(nulSummaries, ["accepted\\0summary\nnext"]);
+      const [nulSummaryNode] = await sql<{ summary: string | null }[]>`
+        SELECT body_json->>'summary' AS summary FROM canvas_nodes WHERE job_id = ${nulSummaryJobId}`;
+      assert.equal(nulSummaryNode?.summary, "accepted\\0summary\nnext");
     } finally {
       for (const eventId of fixture.eventIds) {
         await sql`DELETE FROM event_dedup WHERE event_id = ${eventId}`;
