@@ -49,6 +49,10 @@ function validPlan(cases: PlanCase[]): boolean {
     && cases.every((item) => item.critical === true &&
       (item.kind === "target" || (item.prompt === fixed[item.kind]?.prompt && item.expected === fixed[item.kind]?.expected)));
 }
+/** knowledge Job 的最小可执行预算：低于它的 Job 连 provision 与一轮模型请求都跑不完，必然被 Reaper
+ * 判 timeout（#1111 现场 60/68/88 秒）。work 预算（KNOWLEDGE_LIMITS.seconds）是累计上限，不是单
+ * Job 的超时：余额不足以支撑一个可执行 Job 时显式阻断 work，而不是派发注定失败的短命 Job。 */
+export const KNOWLEDGE_MIN_JOB_TIMEOUT_SEC = 300;
 function roleFor(stage: Stage): string {
   return stage === "trial" ? "test" : stage === "reviewer" ? "review" : "analyze";
 }
@@ -286,7 +290,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
         await block(tx, workId, "job_budget_exhausted");
         return true;
       }
-      if (Number(work.run_seconds) >= KNOWLEDGE_LIMITS.seconds || Number(work.revision_count) > KNOWLEDGE_LIMITS.revisions) {
+      if (Number(work.revision_count) > KNOWLEDGE_LIMITS.revisions) {
         await block(tx, workId, "work_budget_exhausted");
         return true;
       }
@@ -296,6 +300,12 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
         if (!active) { await block(tx, workId, "active_job_missing"); return true; }
         if (!isTerminal(active.status)) return false;
         await onKnowledgeJobTerminal(tx, active as { id: unknown; project_id?: unknown; canvas_id?: unknown; started_at?: unknown; finished_at?: unknown }, active.status);
+        return true;
+      }
+      // 最小可执行预算准入（#1111）：只在准备派发下一个 Job 时判定。放在 active Job 对账之后，
+      // 升级时仍在运行/待对账的旧短余额 Job 不会被提前解绑，其耗时与真实终态仍能累计一次。
+      if (KNOWLEDGE_LIMITS.seconds - Number(work.run_seconds) < KNOWLEDGE_MIN_JOB_TIMEOUT_SEC) {
+        await block(tx, workId, "work_budget_exhausted");
         return true;
       }
       if (work.stage === "maker") {

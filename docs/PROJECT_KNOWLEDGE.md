@@ -65,7 +65,7 @@ trial 实际执行后发布 JSON，再以返回的真实 `version.id`、`version
 
 首次 create 候选进入 `needs_eval` 后，修订必须引用此前提案并沿用其隔离草稿身份，追加新版本；不能覆盖评测中的候选、其他工作链的草稿或已激活身份。旧版本正文与来源保持不变。
 
-预算为累计 32 Jobs、1800 秒、最多 2 次候选修订。提案准入和试验派发都计算完整剩余 case×arm，并为 evaluator/reviewer 预留 2 个 Job；不足则拒绝或阻断，不先创建无法收敛的部分矩阵。工作领取短事务完成；创建与关联 Job 使用现有事务内创建原语，保持 Canvas → Job → work 的锁顺序。重启扫描已持久的 assignment 和 Job 终态；unknown/orphan 不自动重放。治理 hash 改变时旧 work 保持 `blocked/governance_baseline_changed`，不改历史快照、回执或累计预算。整链 token 预算未在本轮新增，不能把 Job/时间预算写成共享 token 额度。
+预算为累计 32 Jobs、1800 秒、最多 2 次候选修订；1800 秒是 work 级累计执行预算，不是单个 Job 的超时——派发时 Job 超时不超过余额，余额低于最小可执行预算（`KNOWLEDGE_MIN_JOB_TIMEOUT_SEC`，见 `apps/scheduler/src/domains/project-knowledge/work.ts`，#1111）时直接按 `work_budget_exhausted` 阻断 work，既不派发注定被 Reaper 判 timeout 的短命 Job，也不授予终态路径会用不到的预算。提案准入和试验派发都计算完整剩余 case×arm，并为 evaluator/reviewer 预留 2 个 Job；不足则拒绝或阻断，不先创建无法收敛的部分矩阵。工作领取短事务完成；创建与关联 Job 使用现有事务内创建原语，保持 Canvas → Job → work 的锁顺序。重启扫描已持久的 assignment 和 Job 终态；unknown/orphan 不自动重放。治理 hash 改变时旧 work 保持 `blocked/governance_baseline_changed`，不改历史快照、回执或累计预算。整链 token 预算未在本轮新增，不能把 Job/时间预算写成共享 token 额度。
 
 自动项目批次的全部阶段以 `assignment.source_mode=project_collection` 标识，与所有 trial 一起在创建期经 [job-isolation.ts](../apps/scheduler/src/domains/project-knowledge/job-isolation.ts) 收紧快照：工具取已准入 allowlist 与 stage 工具的交集，`allow_egress=false`，清除角色预加载 skills/modules/commands/MCP/subagents/instructions 和共享资产；不授予角色本来没有的 operation。trial 再清空冻结知识/全局 Skill 目录，仅保留专用试验指导与分配输入。原有 Job 快照不可改写。隔离环境不能满足任务时如实记录 unexecuted，不能为得到结果自动放宽网络或工具。
 
