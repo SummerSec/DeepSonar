@@ -773,6 +773,21 @@ if (!testDatabaseUrl) {
       const [nulRow] = await sql<{ payload_json: { message: string } }[]>`
         SELECT payload_json FROM events WHERE job_id = ${jobId} AND event_id = ${nulEventId}`;
       assert.equal(nulRow.payload_json.message, "chunk\\0with nul\nnext line");
+
+      // #1066 残留补片：done 摘要同样会写进 canvas 节点 JSONB，终态写入必须同源清洗，
+      // 否则同一个 22P05 会回滚整笔终态事务并让已接受的回执看起来像执行失败。
+      const nulDoneId = randomUUID();
+      fixture.eventIds.push(nulDoneId);
+      await app.ingestEvent(jobId, {
+        v: 1,
+        event_id: nulDoneId,
+        type: "done",
+        payload: { summary: "accepted\u0000summary\nnext" },
+      });
+      const [nulDoneNode] = await sql<{ status: string; body_json: { summary?: string } }[]>`
+        SELECT status, body_json FROM canvas_nodes WHERE job_id = ${jobId} AND node_type = 'job'`;
+      assert.equal(nulDoneNode?.status, "succeeded");
+      assert.equal(nulDoneNode?.body_json.summary, "accepted\\0summary\nnext");
     } finally {
       for (const eventId of fixture.eventIds) {
         await sql`DELETE FROM event_dedup WHERE event_id = ${eventId}`;
