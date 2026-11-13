@@ -266,3 +266,20 @@ test("exhausted work budgets survive restart without creating another Job", asyn
     assert.equal((await assigned(db, fixture.workId, "maker")).length, 0);
   });
 });
+
+test("knowledge Jobs keep a viable timeout when the work budget is nearly spent", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const scheduler = schedulerFor(db);
+    // 余额充足时按余额封顶，余额不足最小可行值时按 900 秒下限派发；两者都不得出现 60/68/88 秒这类注定
+    // timeout 的 Job（#1111 现场：work 预算只当单 Job 超时用）。
+    for (const [runSeconds, expected] of [[200, 1600], [1750, 900]] as const) {
+      const fixture = await workFixture(db);
+      await db`UPDATE project_knowledge_work SET run_seconds=${runSeconds} WHERE id=${fixture.workId}`;
+      assert.equal(await scheduler.tick(), 1);
+      const maker = (await assigned(db, fixture.workId, "maker"))[0]!;
+      const [job] = await db`SELECT timeout_sec FROM jobs WHERE id=${String(maker.job_id)}`;
+      assert.equal(Number(job!.timeout_sec), expected,
+        `run_seconds=${runSeconds} 时 Job 超时应为 ${expected} 秒，实际 ${String(job!.timeout_sec)}`);
+    }
+  });
+});
