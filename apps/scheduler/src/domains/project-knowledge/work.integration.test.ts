@@ -55,7 +55,7 @@ async function beginJob(db: TestSql, jobId: string) {
 }
 
 async function finishJob(db: TestSql, scheduler: ReturnType<typeof schedulerFor>, jobId: string,
-  status: "succeeded" | "orphan" = "succeeded") {
+  status: "succeeded" | "orphan" | "timeout" = "succeeded") {
   const [existing] = await db`SELECT id FROM job_attempts WHERE job_id=${jobId} ORDER BY attempt_no DESC LIMIT 1`;
   const attemptId = existing ? String(existing.id) : await beginJob(db, jobId);
   const [assignment] = await db`SELECT stage,case_id,arm,project_id FROM project_knowledge_job_assignments WHERE job_id=${jobId}`;
@@ -289,5 +289,32 @@ test("knowledge Job timeout stays within the remaining budget and short balances
     assert.equal(work!.reason, "work_budget_exhausted");
     assert.equal(work!.active_job_id, null);
     assert.equal((await assigned(db, short.workId, "maker")).length, 0);
+  });
+});
+
+test("short-balance admission waits for the active Job instead of unbinding it (upgrade window)", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const fixture = await workFixture(db);
+    const scheduler = schedulerFor(db);
+    await scheduler.tick();
+    const maker = (await assigned(db, fixture.workId, "maker"))[0]!;
+    // 模拟升级窗口：旧版本已派出短余额 Job，work 余额只剩 100 秒且 Job 正在运行。
+    await db`UPDATE project_knowledge_work SET run_seconds=1700 WHERE id=${fixture.workId}`;
+    await db`INSERT INTO job_attempts(job_id,attempt_no,status,phase,started_at)
+      VALUES(${String(maker.job_id)},1,'active','agent.ready',now() - interval '30 seconds')`;
+    await db`UPDATE jobs SET status='running',started_at=now() - interval '30 seconds' WHERE id=${String(maker.job_id)}`;
+    await scheduler.tick();
+    let [work] = await db`SELECT state,active_job_id,run_seconds FROM project_knowledge_work WHERE id=${fixture.workId}`;
+    assert.equal(work!.state, "running", "运行中的旧 Job 不得被最小预算门禁提前解绑");
+    assert.equal(String(work!.active_job_id), String(maker.job_id));
+    assert.equal(Number(work!.run_seconds), 1700);
+    // 终态对账：真实终态（timeout）先记录，耗时只累计一次，之后再不派发新 Job。
+    await finishJob(db, scheduler, String(maker.job_id), "timeout");
+    [work] = await db`SELECT state,run_seconds,reason,active_job_id FROM project_knowledge_work WHERE id=${fixture.workId}`;
+    assert.equal(work!.state, "blocked");
+    assert.equal(work!.reason, "job_timeout");
+    assert.ok(Number(work!.run_seconds) >= 1730, `耗时应对账累计一次（>=1730），实际 ${String(work!.run_seconds)}`);
+    assert.equal(work!.active_job_id, null);
+    assert.equal((await assigned(db, fixture.workId, "maker")).length, 1);
   });
 });
