@@ -49,10 +49,10 @@ function validPlan(cases: PlanCase[]): boolean {
     && cases.every((item) => item.critical === true &&
       (item.kind === "target" || (item.prompt === fixed[item.kind]?.prompt && item.expected === fixed[item.kind]?.expected)));
 }
-/** knowledge Job 的最小可行超时：低于它的 Job 连 provision 与一轮模型请求都跑不完，必然被 Reaper
+/** knowledge Job 的最小可执行预算：低于它的 Job 连 provision 与一轮模型请求都跑不完，必然被 Reaper
  * 判 timeout（#1111 现场 60/68/88 秒）。work 预算（KNOWLEDGE_LIMITS.seconds）是累计上限，不是单
- * Job 的超时；余额不足时按该下限派发，超支由 run_seconds 的派发门禁在下一个 Job 前收敛。 */
-export const KNOWLEDGE_MIN_JOB_TIMEOUT_SEC = 900;
+ * Job 的超时：余额不足以支撑一个可执行 Job 时显式阻断 work，而不是派发注定失败的短命 Job。 */
+export const KNOWLEDGE_MIN_JOB_TIMEOUT_SEC = 300;
 function roleFor(stage: Stage): string {
   return stage === "trial" ? "test" : stage === "reviewer" ? "review" : "analyze";
 }
@@ -228,7 +228,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     if (remaining <= 0) throw new Error("knowledge_run_budget_exhausted");
     const created = await createJobInTransaction(tx, {
       projectId, canvasId, parentJobId: (work.origin_job_id as string | null) ?? undefined,
-      type: roleFor(stage), timeoutSec: Math.max(remaining, KNOWLEDGE_MIN_JOB_TIMEOUT_SEC), payload: {
+      type: roleFor(stage), timeoutSec: remaining, payload: {
         knowledge_work_id: workId, knowledge_stage: stage,
         intent: { description: `项目知识 ${stage}`, prompt, from: [] },
       },
@@ -290,7 +290,9 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
         await block(tx, workId, "job_budget_exhausted");
         return true;
       }
-      if (Number(work.run_seconds) >= KNOWLEDGE_LIMITS.seconds || Number(work.revision_count) > KNOWLEDGE_LIMITS.revisions) {
+      const remainingSeconds = KNOWLEDGE_LIMITS.seconds - Number(work.run_seconds);
+      if (remainingSeconds < KNOWLEDGE_MIN_JOB_TIMEOUT_SEC
+        || Number(work.revision_count) > KNOWLEDGE_LIMITS.revisions) {
         await block(tx, workId, "work_budget_exhausted");
         return true;
       }

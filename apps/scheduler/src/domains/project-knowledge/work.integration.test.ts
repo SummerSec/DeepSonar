@@ -267,19 +267,27 @@ test("exhausted work budgets survive restart without creating another Job", asyn
   });
 });
 
-test("knowledge Jobs keep a viable timeout when the work budget is nearly spent", async () => {
+test("knowledge Job timeout stays within the remaining budget and short balances block the work", async () => {
   await withKnowledgeDatabase(async (db) => {
     const scheduler = schedulerFor(db);
-    // 余额充足时按余额封顶，余额不足最小可行值时按 900 秒下限派发；两者都不得出现 60/68/88 秒这类注定
-    // timeout 的 Job（#1111 现场：work 预算只当单 Job 超时用）。
-    for (const [runSeconds, expected] of [[200, 1600], [1750, 900]] as const) {
+    // 获准派发的 Job 超时不得超过余额；余额恰好等于最小可执行预算时仍按余额派发。
+    for (const [runSeconds, expected] of [[200, 1600], [1500, 300]] as const) {
       const fixture = await workFixture(db);
       await db`UPDATE project_knowledge_work SET run_seconds=${runSeconds} WHERE id=${fixture.workId}`;
-      assert.equal(await scheduler.tick(), 1);
+      await scheduler.tick();
       const maker = (await assigned(db, fixture.workId, "maker"))[0]!;
       const [job] = await db`SELECT timeout_sec FROM jobs WHERE id=${String(maker.job_id)}`;
       assert.equal(Number(job!.timeout_sec), expected,
-        `run_seconds=${runSeconds} 时 Job 超时应为 ${expected} 秒，实际 ${String(job!.timeout_sec)}`);
+        `run_seconds=${runSeconds} 时 Job 超时不得超过余额 ${expected} 秒`);
     }
+    // 余额低于最小可执行预算（#1111 现场的 60/68/88 秒级余额）：显式阻断，不创建 Job/assignment。
+    const short = await workFixture(db);
+    await db`UPDATE project_knowledge_work SET run_seconds=1700 WHERE id=${short.workId}`;
+    await scheduler.tick();
+    const [work] = await db`SELECT state,reason,active_job_id FROM project_knowledge_work WHERE id=${short.workId}`;
+    assert.equal(work!.state, "blocked");
+    assert.equal(work!.reason, "work_budget_exhausted");
+    assert.equal(work!.active_job_id, null);
+    assert.equal((await assigned(db, short.workId, "maker")).length, 0);
   });
 });
