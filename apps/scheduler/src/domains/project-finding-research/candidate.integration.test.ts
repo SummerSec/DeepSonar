@@ -88,9 +88,11 @@ test('durable candidate generations, bounded pages, invalidation, recovery and m
     await finish();
     assert.ok((await quietSeconds())>6*24*3600,'after the rebuild the work sleeps again: no 30s loop');
     // New work keeps the complete prior generation visible until atomic publication.
-    await rebuild();const newGeneration=(await work()).generation;assert.notEqual(newGeneration,initialGeneration);
+    // #1122 的漂移重建已发布过一代，这里以「当前已发布代」为准，而不是最初的 initialGeneration。
+    const publishedBeforeRebuild=(await work()).active_generation;
+    await rebuild();const newGeneration=(await work()).generation;assert.notEqual(newGeneration,publishedBeforeRebuild);
     await store.processCandidateBatch(sql);const building=(await readCandidatePage(subject,undefined))!;
-    assert.equal(building.active_generation,initialGeneration);assert.equal(building.rebuilding,true);assert.equal(building.items.length,25);
+    assert.equal(building.active_generation,publishedBeforeRebuild);assert.equal(building.rebuilding,true);assert.equal(building.items.length,25);
     await finish();assert.equal((await work()).active_generation,newGeneration);
     await assert.rejects(readCandidatePage(subject,page.next_cursor),error=>error instanceof CursorError&&error.code==='CURSOR_GAP');
     // Transaction rollback does not lose the published generation or checkpoint.
