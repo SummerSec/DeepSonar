@@ -85,10 +85,9 @@ def main():
     # 6. 优先级：pending 可改（job 可能已被 fake 调度跑掉，两种结果都合法）
     r = req("PATCH", f"/jobs/{job['id']}/priority", {"priority": 99}, expect=None) if False else None
     # 用专门断言：可能 200（还 pending）或 409（已被认领）
-    # 冒烟要验证「任务→Hub→报告」链路，不验证排队公平；默认优先级 500 会在其他项目积压时
-    # 排到队尾（claim 顺序 priority DESC, created_at ASC），实测可被饿死 30 分钟。
-    # 提到 999 让本 Job 直接排到队首，避免把别的冒烟遗留积压误判成链路挂起。
-    data = json.dumps({"priority": 999}).encode()
+    # 上一版把 priority 提到 999 是错的：hub_reason 是调度类固定优先级（500），PATCH 会
+    # 409 PRIORITY_FIXED，既置不了顶也会掩盖拒绝。恢复原步骤，只验证 pending 可改/已认领冲突。
+    data = json.dumps({"priority": 99}).encode()
     request = urllib.request.Request(BASE + f"/jobs/{job['id']}/priority", data=data, method="PATCH",
                                      headers={"content-type": "application/json"})
     try:

@@ -767,8 +767,8 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       provisionSlots(rules.maxConcurrentProvisioning, activeProvisioning),
     );
     if (slots <= 0) {
-      const holders = await tx<{ id: string; status: string; claimed_at: string | null }[]>`SELECT id, status, claimed_at::text AS claimed_at FROM jobs WHERE status IN ('claimed','provisioning') ORDER BY claimed_at NULLS FIRST, id LIMIT 5`;
-      logClaimStarved({ totalActive, activeProvisioning, maxGlobalJobs: rules.maxGlobalJobs, maxConcurrentProvisioning: rules.maxConcurrentProvisioning, holders: holders.map((row) => `${String(row.claimed_at ?? "-").slice(0, 10)}:${row.status}:${String(row.id).slice(0, 8)}`) });
+      const holders = await tx<{ id: string; status: string; claimed_at: string | null; project_id: string; type: string }[]>`SELECT id, status, claimed_at::text AS claimed_at, project_id::text, type FROM jobs WHERE status IN ('claimed','provisioning') ORDER BY claimed_at NULLS FIRST, id LIMIT 5`;
+      logClaimStarved({ totalActive, activeProvisioning, maxGlobalJobs: rules.maxGlobalJobs, maxConcurrentProvisioning: rules.maxConcurrentProvisioning, holders: holders.map((row) => `${String(row.claimed_at ?? "-").slice(0, 10)}:${row.status}:${String(row.id).slice(0, 8)}@${String(row.project_id).slice(0, 8)}:${row.type}`) });
       return stop;
     }
 

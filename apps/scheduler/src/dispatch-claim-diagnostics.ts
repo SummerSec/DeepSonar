@@ -11,7 +11,7 @@ export function logClaimStarved(input: {
   activeProvisioning: number;
   maxGlobalJobs: number;
   maxConcurrentProvisioning: number;
-  /** 占住槽位的 Job 摘要：`<claimed_at 日期>:<status>:<短 id>`，用于线上定位。 */
+  /** 占住槽位的 Job 摘要：`<claimed_at 日期>:<status>:<短id>@<短项目id>:<type>`，用于线上定位积压归属。 */
   holders?: readonly string[];
   now?: number;
 }): void {
