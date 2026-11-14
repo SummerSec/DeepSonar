@@ -668,6 +668,7 @@ function logPlatformClaimsPaused(reason: string | null): void {
  * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
 import { logClaimSkip, logClaimStarved } from "./dispatch-claim-diagnostics.js";
+import { provisionFailureProvesNeverStarted } from "./provision-retry-admission.js";
 export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCircuitProbe | null }[]> {
   let createProbe: CreateCircuitProbe | null = null; // claim-time half-open probe identity
   if (managesHostDockerRuntime()) {
@@ -723,8 +724,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
   const pendingPageSize = 500;
   const claimedJobs: { id: string; probe: CreateCircuitProbe | null }[] = [];
   let cursor: ClaimCursor | null = null;
-  // Each bounded page commits before discovering another Canvas. Only actual
-  // claims consume quota; skipped busy rows cannot reserve the remaining slots.
+  // Each bounded page commits before discovering another Canvas. Only actual claims consume quota; skipped busy rows cannot reserve the remaining slots.
   const claimPage = (): Promise<ClaimPage> => sql.begin(async (tx): Promise<ClaimPage> => {
     const stop: ClaimPage = { claimed: [], cursor: null, more: false };
     await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
@@ -738,8 +738,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
     platformClaimsPauseLogged = null;
     await reconcileProjectTaskQueues(tx as unknown as typeof sql);
     const lifecycle = createSqlJobLifecycleApplication(tx as unknown as typeof sql);
-    // global_settings is the scheduler-wide hard cap; per-project
-    // maxConcurrentJobs may only tighten maxJobsPerProject at claim time.
+    // global_settings is the scheduler-wide hard cap; per-project maxConcurrentJobs may only tighten maxJobsPerProject at claim time.
     // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
     const rules = await globalRules(tx as unknown as typeof sql);
     const active = await tx`
@@ -899,14 +898,18 @@ export async function retryProvisioningJob(
     const current = await getActiveAttempt(tx, jobId, true);
     if (!owner || owner.canvas_id !== (locator?.canvas_id ?? null) || owner.latest_attempt_id !== attempt.id
       || !current || typeof current.id !== "string" || current.id !== attempt.id || current.cancel_requested !== false) return false;
-    // Error text/missing handle cannot authorize replay. Only no effect or an
-    // explicit host never_started settlement is admissible under this owner lock.
-    const [blocked] = await tx`SELECT id FROM job_attempt_effects WHERE attempt_id = ${current.id}
-      AND NOT (effect_kind = 'provision' AND status = 'settled'
-         AND COALESCE(settlement_json @> '{"result":"never_started","external_effect":false}'::jsonb, false)) LIMIT 1`;
-    if (blocked) return false;
-    // A repair-bearing Job needs explicit safe generation admission; ordinary
-    // automatic retries must not strand it on an unauthorized successor Attempt.
+    // 错误文本/传输信息不能授权重放。仅当无 effect、宿主明确 never_started 结算，或 —
+    // #1119 方案 C — 结构化 host 诊断证明首轮从未真正运行（create/runtime_contract 阶段、
+    // 无会话、非取消、5xx），作为与 never_started 等价的严格白名单，其余一律 fail closed。
+    const [blocked] = await tx<{ id: string; evidence_json: unknown }[]>`SELECT
+        e.id,
+        (SELECT state_json FROM job_attempts WHERE id = ${current.id}) AS evidence_json
+      FROM job_attempt_effects e WHERE e.attempt_id = ${current.id}
+        AND NOT (effect_kind = 'provision' AND status = 'settled'
+           AND COALESCE(settlement_json @> '{"result":"never_started","external_effect":false}'::jsonb, false))
+      LIMIT 1`;
+    if (blocked && !provisionFailureProvesNeverStarted(blocked.evidence_json)) return false;
+    // A repair-bearing Job needs explicit safe generation admission; ordinary automatic retries must not strand it on an unauthorized successor Attempt.
     await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
     if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
     const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
@@ -937,8 +940,7 @@ async function retryTruncatedExecutionJob(
     const [locator] = await tx<{ canvas_id: string | null }[]>`
       SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
     await lockCanvasForConvergence(tx, locator?.canvas_id ?? null);
-    // A repair-bearing Job needs explicit safe generation admission; ordinary
-    // automatic retries must not strand it on an unauthorized successor Attempt.
+    // A repair-bearing Job needs explicit safe generation admission; ordinary automatic retries must not strand it on an unauthorized successor Attempt.
     await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
     if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
     const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
@@ -969,8 +971,7 @@ async function retryContextWindowExceededJob(
     const [locator] = await tx<{ canvas_id: string | null }[]>`
       SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
     await lockCanvasForConvergence(tx, locator?.canvas_id ?? null);
-    // A repair-bearing Job needs explicit safe generation admission; ordinary
-    // automatic retries must not strand it on an unauthorized successor Attempt.
+    // A repair-bearing Job needs explicit safe generation admission; ordinary automatic retries must not strand it on an unauthorized successor Attempt.
     await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
     if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
     const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
@@ -1035,8 +1036,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     activeAttempt = attempt;
     attemptId = String(attempt.id);
 
-    // provisioning：起沙箱（real 模式注入 agent 凭据 + 放行 LLM 端点出网）
-    // provision 纳入同一异常保护 + 独立超时（§8.3：provision 异常不得让 job 永久卡住）
+    // provisioning：起沙箱（real 模式注入 agent 凭据 + 放行 LLM 端点出网） provision 纳入同一异常保护 + 独立超时（§8.3：provision 异常不得让 job 永久卡住）
     const useReal = config.runtime.agentMode === "real" && (await isRealType(job.type as string));
     const snapshot = job.agent_snapshot_json as AgentRuntimeSnapshot | null;
     if (!snapshot) throw new Error(`job ${jobId} 缺少冻结的 Agent 运行快照`);
@@ -1113,8 +1113,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
           relativePath: asset.mount_path.replace(`${SHARED_ASSETS_READONLY_ROOT}/`, ""),
         });
       }
-      // Blob IO above holds no SQL transaction/asset lock; the private session
-      // below stays reserved through helper prepare, runner mount and binding.
+      // Blob IO above holds no SQL transaction/asset lock; the private session below stays reserved through helper prepare, runner mount and binding.
       sharedAssetsGeneration = randomUUID();
       sharedAssetsPreparation = await acquireSharedAssetPreparation({ jobId, attemptId: attemptId!, canvasId: job.canvas_id as string | null });
       sharedAssetsVolumeName = await sharedAssetsVolumeManager.prepare({
