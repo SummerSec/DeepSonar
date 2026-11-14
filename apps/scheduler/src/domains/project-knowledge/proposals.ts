@@ -1,8 +1,9 @@
-import type { ProposeProjectKnowledgePayload } from "@deepsonar/shared-types";
+import { KNOWLEDGE_LIMITS, type ProposeProjectKnowledgePayload } from "@deepsonar/shared-types";
 import { requireKnowledgeCasePolicy } from "./case-policy.js";
 import type { KnowledgeActor } from "./inputs.js";
 import { registerKnowledgeBlob } from "./blobs.js";
 import { canonical, KnowledgeOperationError, reject, sha256, type KnowledgeDb } from "./types.js";
+import { requiredArms } from "./evaluation.js";
 
 export interface PreparedCandidate { hash: string; bytes: number }
 
@@ -14,7 +15,7 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
   if (!assignment || assignment.stage !== "maker" || assignment.state !== "running" || assignment.work_stage !== "maker" || assignment.active_job_id !== actor.jobId)
     return reject("KNOWLEDGE_SCOPE_DENIED", "Maker assignment does not own this active work");
   if (assignment.governance_hash !== governanceHash) throw new KnowledgeOperationError("KNOWLEDGE_BASE_CONFLICT", "Governance baseline changed", "permanent_failure", "Stop this knowledge work and report the governance baseline change to Scheduler; input correction cannot replace the frozen governance grant.");
-  if (Number(assignment.job_count) > 32 || Number(assignment.run_seconds) > 1800 || Number(assignment.revision_count) > 2)
+  if (Number(assignment.job_count) > 32 || Number(assignment.run_seconds) > KNOWLEDGE_LIMITS.seconds || Number(assignment.revision_count) > 2)
     return reject("KNOWLEDGE_BUDGET_EXHAUSTED", "Knowledge work budget is exhausted");
   let parentCandidateVersion: string | null = null;
   if (input.revision > 1) {
@@ -32,8 +33,15 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
     if (!manifests.some((entry) => entry.input_ref === `${source.kind}:${source.ref}` && entry.content_hash === source.content_hash))
       return reject("KNOWLEDGE_SCOPE_DENIED", "Source was not frozen in this work", "source_refs");
   }
+  for (const testCase of input.evaluation_plan) for (const ref of testCase.task_inputs) {
+    if (!manifests.some(entry => entry.input_ref === `${ref.kind}:${ref.ref}` && entry.content_hash === ref.content_hash))
+      return reject("KNOWLEDGE_SCOPE_DENIED", "Trial task input was not frozen in this work", "evaluation_plan.task_inputs");
+  }
   if (input.action !== "reuse") {
     requireKnowledgeCasePolicy(input.evaluation_plan);
+    const requiredJobs = input.evaluation_plan.length * requiredArms(input.action).length + 2;
+    if (Number(assignment.job_count) + requiredJobs > 32)
+      return reject("KNOWLEDGE_BUDGET_EXHAUSTED", "Remaining Jobs cannot complete independent trials, evaluation and review");
   }
   const bases: Array<{ item_id: string; version_id: string; generation: number; hash: string }> = [];
   for (const base of [...input.base_refs].sort((a, b) => a.item_ref.localeCompare(b.item_ref))) {

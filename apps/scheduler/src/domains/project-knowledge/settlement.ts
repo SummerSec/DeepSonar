@@ -1,6 +1,6 @@
 import type { ReviewProjectKnowledgePayload } from "@deepsonar/shared-types";
 import type { KnowledgeActor } from "./inputs.js";
-import { requiredArms } from "./evaluation.js";
+import { requirePassingKnowledgeBehavior } from "./behavior-policy.js";
 import { reject, type KnowledgeDb } from "./types.js";
 import { requireKnowledgeCasePolicy } from "./case-policy.js";
 
@@ -30,9 +30,7 @@ export async function reviewKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, in
     const plan = proposal.evaluation_plan_json as Array<{ id: string; kind: string; critical: boolean }>;
     requireKnowledgeCasePolicy(plan as never);
     const results = (behavior.result_json as { case_results?: Array<{ case_id: string; arm: string; outcome: string }> }).case_results ?? [];
-    const expected = new Set(plan.flatMap((item) => requiredArms(String(proposal.action)).map((arm) => `${item.id}:${arm}`)));
-    if (results.length !== expected.size || results.some((result) => !expected.delete(`${result.case_id}:${result.arm}`) || result.outcome !== "pass") || expected.size)
-      return reject("KNOWLEDGE_EVALUATION_REQUIRED", "Behavior trial matrix has missing, duplicate, or failing cases");
+    requirePassingKnowledgeBehavior(plan, String(proposal.action), results);
   }
   const [review] = await tx`INSERT INTO project_knowledge_evaluations(project_id,proposal_id,proposal_revision,kind,actor_job_id,actor_attempt_id,input_digest,result_json)
     VALUES(${actor.projectId},${input.proposal_ref},${input.revision},'review',${actor.jobId},${actor.attemptId},${input.input_digest},${tx.json({ decision: input.decision, reason: input.reason, evidence_refs: input.evidence_refs, remaining_checks: input.remaining_checks })}) RETURNING id`;

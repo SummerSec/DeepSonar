@@ -8,6 +8,78 @@ const failedMessage = { role: "assistant", stopReason: "error", errorMessage: "t
 const successMessage = { role: "assistant", stopReason: "stop", content: [{ type: "text", text: "recovered" }] };
 const sessionFile = "/workspace/.deepsonar-home/.pi/agent/session.jsonl";
 
+function messageRetryFrames(options: { empty?: boolean; previous?: boolean; starts?: boolean } = {}): Record<string, unknown>[] {
+  const start = options.starts ? [{ type: "message_start", message: { role: "assistant", content: [] } }] : [];
+  return [
+    ...(options.previous !== false ? [
+      ...start,
+      { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "recovered" } },
+      { type: "message_update", assistantMessageEvent: { type: "thinking_end", content: "same-reasoning" } },
+      { type: "message_end", message: successMessage },
+      { type: "message_end", message: { role: "toolResult", content: [{ type: "text", text: "tool output" }] } },
+    ] : []),
+    ...start,
+    { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "failed-partial" } },
+    { type: "message_update", assistantMessageEvent: { type: "thinking_delta", delta: "failed-reasoning" } },
+    { type: "message_update", assistantMessageEvent: { type: "error", error: failedMessage } },
+    { type: "message_end", message: failedMessage },
+    { type: "message_end", message: failedMessage },
+    { type: "agent_end", willRetry: true },
+    { type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1, errorMessage: "terminated" },
+    { type: "agent_start" },
+    ...start,
+    ...(!options.empty ? [
+      { type: "message_update", assistantMessageEvent: { type: "thinking_end", content: "same-reasoning" } },
+    ] : []),
+    { type: "message_end", message: options.empty
+      ? { role: "assistant", stopReason: "stop", content: [], usage: { input: 0, output: 0 } }
+      : successMessage },
+    { type: "auto_retry_end", success: true, attempt: 1 },
+    { type: "agent_settled", aborted: false },
+  ];
+}
+
+for (const starts of [false, true]) {
+  test(`#1073 Pi 按消息回滚失败贡献，保留前序成功且相同文本/推理不跨消息去重 starts=${starts}`, () => {
+    const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+    const state = {};
+    const frames = messageRetryFrames({ starts });
+    const retryStart = frames.findIndex(frame => frame.type === "auto_retry_start");
+    for (const frame of frames.slice(0, retryStart + 1)) adapter.decodeOutput(frame, state);
+    const events = frames.slice(retryStart + 1).flatMap(frame => adapter.decodeOutput(frame, state));
+    assert.deepEqual(events.filter(event => event.type === "assistant"), [
+      { type: "assistant", message: { content: [{ type: "thinking", thinking: "same-reasoning" }] } },
+      { type: "assistant", message: { content: [{ type: "text", text: "recovered" }] } },
+    ]);
+    assert.equal(events.at(-1)?.result, "recoveredrecovered");
+    assert.notEqual(events.at(-1)?.is_error, true);
+  });
+
+  test(`#1073 Pi 保留前序成功消息时空 retry 仍失败 starts=${starts}`, () => {
+    const state = {};
+    const events = messageRetryFrames({ starts, empty: true }).flatMap(frame => AGENT_CLI_RUNTIME_ADAPTERS.pi.decodeOutput(frame, state));
+    assert.equal(events.at(-1)?.is_error, true);
+    assert.equal(events.at(-1)?.result, "PI_EMPTY_MODEL_RESPONSE");
+  });
+}
+
+test("#1073 Pi 相邻成功消息的相同文本和推理分别输出，消息内完整帧仍去重", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  for (let message = 0; message < 2; message++) {
+    const events = [
+      { type: "message_update", assistantMessageEvent: { type: "text_end", content: "recovered" } },
+      { type: "message_update", assistantMessageEvent: { type: "thinking_end", content: "same-reasoning" } },
+      { type: "message_end", message: successMessage },
+    ].flatMap(frame => adapter.decodeOutput(frame, state));
+    assert.deepEqual(events, [
+      { type: "assistant", message: { content: [{ type: "text", text: "recovered" }] } },
+      { type: "assistant", message: { content: [{ type: "thinking", thinking: "same-reasoning" }] } },
+    ]);
+  }
+  assert.equal(adapter.decodeOutput({ type: "agent_settled", aborted: false }, state)[0]?.result, "recoveredrecovered");
+});
+
 test("#1072 Pi 错误 message_end 等待结算，原生重试成功后不残留错误", () => {
   const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
   const state = {};
@@ -44,7 +116,9 @@ class PiProcess implements RuntimeProcess {
   private queue: Frame[] = [];
   private ended = false;
   private wake?: () => void;
-  constructor(private readonly options: { requireNudge?: boolean; exitBeforeSettled?: number } = {}) {}
+  constructor(private readonly options: {
+    requireNudge?: boolean; exitBeforeSettled?: number; turnFrames?: readonly (readonly Record<string, unknown>[])[];
+  } = {}) {}
 
   async write(data: string) {
     const command = JSON.parse(data) as Record<string, unknown>;
@@ -54,6 +128,17 @@ class PiProcess implements RuntimeProcess {
         data: { sessionId: "pi-retry-1072", sessionFile, isStreaming: false, isCompacting: false,
           pendingMessageCount: 0, messageCount: 0, autoCompactionEnabled: true } } });
     } else if (command.type === "prompt") {
+      if (this.options.turnFrames) {
+        const frames = this.options.turnFrames[this.commands.filter(record => record.type === "prompt").length - 1];
+        assert.ok(frames, "不能意外发送额外 prompt");
+        this.queue.push(
+          { record: { type: "response", id: command.id, command: "prompt", success: true, data: { disposition: "started" } } },
+          { record: { type: "agent_start" } },
+          ...frames.map(record => ({ record })),
+        );
+        this.wake?.();
+        return;
+      }
       if (this.options.requireNudge && this.commands.filter(record => record.type === "prompt").length > 1) {
         this.queue.push(
           { record: { type: "response", id: command.id, command: "prompt", success: true, data: { disposition: "started" } } },
@@ -110,6 +195,37 @@ function fakeRuntime(options: ConstructorParameters<typeof PiProcess>[0] = {}) {
     writeHumanInboxFile: async () => {},
   };
   return { runtime, processes };
+}
+
+for (const empty of [false, true]) {
+  test(`#1073 runRealAgent 消息级回滚保留前序输出，空 retry 不借旧消息成功 empty=${empty}`, { timeout: 5_000 }, async () => {
+    const { runtime, processes } = fakeRuntime({ turnFrames: [messageRetryFrames({ empty, starts: true })] });
+    const result = await runRealAgent(runtime, { provider: "pi", env: {}, input: "initial", completionGate: () => true });
+    assert.equal(processes.length, 1);
+    assert.deepEqual(processes[0]!.commands.map(command => command.type), ["get_state", "prompt"]);
+    assert.equal(result.terminalOutcome, empty ? "failure" : "success");
+    if (empty) assert.match(result.error ?? "", /PI_EMPTY_MODEL_RESPONSE/u);
+    else {
+      assert.equal(result.text, "recoveredrecovered");
+      assert.equal(result.error, undefined);
+    }
+  });
+
+  test(`#1073 runRealAgent 真实新 turn 清理消息基线，重试不复活旧输出 empty=${empty}`, { timeout: 5_000 }, async () => {
+    const { runtime, processes } = fakeRuntime({ turnFrames: [
+      messageRetryFrames({ starts: true }), messageRetryFrames({ empty, previous: false }),
+    ] });
+    const result = await runRealAgent(runtime, { provider: "pi", env: {}, input: "initial", nudgeMessage: "next turn",
+      completionGate: () => processes[0]!.commands.filter(command => command.type === "prompt").length >= 2 });
+    assert.equal(processes.length, 1);
+    assert.deepEqual(processes[0]!.commands.map(command => command.type), ["get_state", "prompt", "prompt"]);
+    assert.equal(result.terminalOutcome, empty ? "failure" : "success");
+    if (empty) assert.match(result.error ?? "", /PI_EMPTY_MODEL_RESPONSE/u);
+    else {
+      assert.equal(result.text, "recovered");
+      assert.equal(result.error, undefined);
+    }
+  });
 }
 
 test("#1072 runRealAgent 在 terminated 原生重试前保持 stdin，单进程成功且清除错误", { timeout: 5_000 }, async () => {

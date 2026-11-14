@@ -8,6 +8,9 @@ const get = (path: string, summary: string, query?: Record<string, unknown>): Op
 const post = (path: string, summary: string, body: Record<string, unknown>): Op =>
   ({ method: "post", path, summary, tags: ["Project knowledge"], scope: "projects:write", body });
 export const KNOWLEDGE_MANAGEMENT_OPERATIONS: Op[] = [
+  get(prefix + "/activity", "项目知识来源、积累、复用/反馈摘要及分页整理工作；反馈不是质量认证", {
+    limit: { type: "integer", minimum: 1, maximum: 50, default: 10 }, offset: page.offset,
+  }),
   get(prefix + "/backfill", "只读预览历史任务来源登记、当前补做资格与已有整理记录；不启动整理", {
     limit: { type: "integer", minimum: 1, maximum: 20, default: 10 }, offset: page.offset,
   }),

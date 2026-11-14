@@ -1,3 +1,4 @@
+import { KNOWLEDGE_LIMITS } from "@deepsonar/shared-types";
 import type { sql } from "../../db.js";
 
 type Db = typeof sql;
@@ -45,7 +46,7 @@ export async function onKnowledgeJobTerminal(tx: Db, job: Job, status: Terminal)
         WHERE id=${String(assignment.proposal_id)} AND state IN ('evaluating','review_pending')`;
     }
     const reason = status === "orphan" ? "unknown_external_effect" : "job_" + status;
-    if (assignment.stage === "trial" && status !== "orphan" && runSeconds < 1800 && Number(work.revision_count) < 2) {
+    if (assignment.stage === "trial" && status !== "orphan" && runSeconds < KNOWLEDGE_LIMITS.seconds && Number(work.revision_count) < 2) {
       await tx`UPDATE project_knowledge_work SET state='pending',stage='maker',active_job_id=NULL,
         claim_expires_at=NULL,next_attempt_at=now(),run_seconds=${runSeconds},
         reason=${reason},updated_at=now() WHERE id=${workId}`;

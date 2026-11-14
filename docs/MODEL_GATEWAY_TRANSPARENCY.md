@@ -1,7 +1,17 @@
 # Model Gateway 透明传输（#923）
 
 > 状态：as-built；#928 已合入 main 616d7a36，工程证据见下文；后续 SHA 另验，不代表真实模型、生产或性能验收。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-12
+
+## Managed proxy 的逐跳连接策略（#1097）
+
+Sandbox → managed proxy → Scheduler 是不同 HTTP 连接。代理双向消费固定逐跳字段和 `Connection` 动态点名字段，由各跳生成自身 Host、连接策略与 framing；不能把后端 `Keep-Alive` 的寿命广告送给客户端。普通 Job Authorization 和 `x-deepsonar-*` 字段仍须到达 Scheduler，除非被入站 Connection 明确点名；此边界不同于 Scheduler → Provider 对认证和控制字段的消费。
+
+内容字节与 Content-Encoding 保持不变，流式及背压使用原生 HTTP 管道。支持的 chunked framing 在每跳重建，合法 trailers 在正常结束时过滤转发；禁止把连接级字段或认证/路由/内容处理字段夹进 trailer。未知 Transfer-Encoding 在请求侧拒绝、响应侧返回网关错误，不删除编码头后把仍带 transfer coding 的字节当普通内容。发头前失败为 502，发头后中断销毁响应，不生成成功结束或透明重试；既有固定路由及 CONNECT 限制不扩展。
+
+历史现场只读诊断曾观察到代理响应 `Keep-Alive: timeout=72`，而连接在响应结束后约 6000ms 关闭；实际 Node v22.23.2 的默认 keep-alive 与 buffer 合计与之吻合。两个旧 Pi Job 的 allowance/工具结束/error 时间与该窗口高度相关，但原异常 cause/phase 已丢失，不能认定实际命中关闭/复用竞态；第三个 Job 缺对应宿主日志。修复已确认的协议缺陷，不回填历史根因，也不承诺消除所有正常连接关闭竞态。旧诊断丢失由 #1083 单独治理。
+
+回归直接运行真实 `GATEWAY_PROXY_SCRIPT`，覆盖广告归属、双向动态字段、认证/控制头、定长/chunked/GET/HEAD/gzip 内容、trailers、首段流式与异常中断，接既有 `pnpm ci:unit:runtime-sandbox`。最终 SHA Actions 另验；未重跑生产 Job、未部署或重建现场代理。
 
 ## 边界与入口
 

@@ -78,6 +78,7 @@ export async function registerKnowledgeSourceAfterTerminal(tx: Db, jobId: string
           version: 1, canvas_id: source.canvas_id, attempt_id: source.attempt_id,
           has_facts: source.has_facts, has_evidence: source.has_evidence,
         } }, nested);
+      await nested`SELECT pg_notify('deepsonar_jobs','knowledge_source')`;
     });
   } catch {
     // No provider/database payload in logs; preview can still discover the original Job.

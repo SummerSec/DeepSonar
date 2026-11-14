@@ -136,6 +136,8 @@ export interface AdapterRuntimeState {
   piLengthTruncated?: boolean;
   /** Model-message rejection awaiting native retry or settlement; never a hard runtime failure. */
   piPendingMessageError?: Record<string, unknown>;
+  /** Turn output before the current assistant message; dedupe ledgers are message-local. */
+  piMessageOutput?: { baseline?: string; complete: boolean };
   errorDetail?: string;
   runnerErrorSource?: "structured_terminal" | "process";
 }
@@ -434,6 +436,17 @@ const claude = Object.freeze<RuntimeAdapter>({
   },
 });
 
+function beginPiMessageOutput(state: AdapterRuntimeState) {
+  if (!state.piMessageOutput || state.piMessageOutput.complete) {
+    if (state.piMessageOutput) {
+      state.streamedText = undefined;
+      state.streamedReasoning = undefined;
+    }
+    state.piMessageOutput = { baseline: state.finalText, complete: false };
+  }
+  return state.piMessageOutput;
+}
+
 function piTextFromMessageEvent(line: Record<string, unknown>, state: AdapterRuntimeState): Record<string, unknown>[] {
   const event = line.assistantMessageEvent && typeof line.assistantMessageEvent === "object" && !Array.isArray(line.assistantMessageEvent)
     ? line.assistantMessageEvent as Record<string, unknown>
@@ -510,7 +523,7 @@ function piUsageTokens(value: unknown): { input: number; output: number } {
 }
 
 function isEmptyPiModelResponse(message: unknown, state: AdapterRuntimeState): boolean {
-  if (state.finalText || state.streamedText) return false;
+  if (state.streamedText) return false;
   const text = piMessageText(message);
   if (text) return false;
   if (message && typeof message === "object" && !Array.isArray(message)) {
@@ -564,10 +577,15 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     return [];
   }
   if (type === "auto_retry_start" && state.piPendingMessageError && !state.failed) {
-    // Reset current output projection; session/stream evidence stays immutable.
-    state.finalText = undefined;
+    // Roll back only the failed message; session/stream evidence stays immutable.
+    if (state.piMessageOutput) state.finalText = state.piMessageOutput.baseline;
+    state.piMessageOutput = undefined;
     state.streamedText = undefined;
     state.streamedReasoning = undefined;
+    return [];
+  }
+  if (type === "message_start" && (line.message as Record<string, unknown> | undefined)?.role === "assistant") {
+    beginPiMessageOutput(state);
     return [];
   }
   if (type === "agent_start") return [{ type: "system", subtype: "init", ...(state.sessionId ? { session_id: state.sessionId } : {}) }];
@@ -592,6 +610,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
       }
       return fail(textFrom(event.error ?? event.message) ?? "Pi assistant message failed", "process");
     }
+    beginPiMessageOutput(state);
     return piTextFromMessageEvent(line, state);
   }
   if (type === "message_end") {
@@ -607,6 +626,8 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
       return fail("PI_OM_PROTOCOL_STATUS_INVALID");
     }
     if (message?.role && message.role !== "assistant") return [];
+    // Error updates recurse here; repeated error message_end must keep the original baseline.
+    const messageOutput = beginPiMessageOutput(state);
     const stopReason = String(message?.stopReason ?? line.stopReason ?? "");
     if (stopReason === "error" || stopReason === "aborted") {
       const raw = piMessageEndErrorRaw(line, message);
@@ -619,6 +640,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     const unseen = text ? unseenCompleteText(state, "text", text) : undefined;
     if (unseen) state.finalText = `${state.finalText ?? ""}${unseen}`;
     if (stopReason === "length") {
+      messageOutput.complete = true;
       state.piPendingMessageError = undefined;
       state.piLengthTruncated = true;
       return [{ type: "runtime.diagnostic", code: "PI_RESPONSE_TRUNCATED", stop_reason: "length" },
@@ -627,6 +649,7 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     if (!unseen && isEmptyPiModelResponse(message, state)) {
       return fail("PI_EMPTY_MODEL_RESPONSE");
     }
+    messageOutput.complete = true;
     state.piPendingMessageError = undefined;
     return unseen ? [{ type: "assistant", message: { content: [{ type: "text", text: unseen }] } }] : [];
   }

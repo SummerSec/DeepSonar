@@ -5,6 +5,7 @@ import { useAuth } from "../auth";
 import { canAccessAnyScope } from "../permissions";
 import { SearchableSelect } from "../SearchableSelect";
 import { PageHeader } from "../ui";
+import { ProjectKnowledgeActivity } from "./ProjectKnowledgeActivity";
 import {
   projectKnowledgeApi,
   type KnowledgeDetail,
@@ -167,6 +168,8 @@ export function ProjectKnowledgePage() {
   return <div className="h-full overflow-y-auto px-5 pb-10 pt-7 sm:px-9 sm:pt-9">
     <PageHeader title="项目知识" eyebrow="PROJECT KNOWLEDGE" />
     <p className="mb-6 text-sm text-zinc-500">只读查看 Agent 沉淀的记忆与 Skill。版本晋升由受治理的评测和审查流程完成。</p>
+    <ProjectKnowledgeActivity key={projectId} projectId={projectId} refresh={refresh}
+      onRefresh={() => setRefresh((value) => value + 1)} />
     <div className="grid gap-5 xl:grid-cols-[minmax(280px,360px)_minmax(0,1fr)]">
       <section className="space-y-3" aria-label="知识目录">
         <div className={card + " space-y-3"}>

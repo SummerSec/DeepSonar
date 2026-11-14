@@ -48,6 +48,7 @@ export const KnowledgeCandidate = z.object({
 export type KnowledgeCandidate = z.infer<typeof KnowledgeCandidate>;
 export const KnowledgeEvaluationCase = z.object({
   id: text(80), kind: KnowledgeCaseKind, prompt: text(6000), expected: text(2000), critical: z.boolean().default(true),
+  task_inputs: z.array(KnowledgeSourceRef).max(20).default([]),
 }).strict();
 export type KnowledgeEvaluationCase = z.infer<typeof KnowledgeEvaluationCase>;
 export const KnowledgeCaseResult = z.object({
@@ -152,6 +153,7 @@ export interface KnowledgeJobAssignment {
   work_id: string; stage: "maker" | "evaluator" | "reviewer" | "trial";
   proposal_id?: string; input_digest?: string; case_id?: string; arm?: KnowledgeArm;
   inputs: KnowledgeInputManifestEntry[]; governance_hash: string;
+  source_mode?: "project_collection";
 }
 export interface KnowledgeReceipt {
   id: string; project_id: string; job_id: string; operation: string; idempotency_key: string;

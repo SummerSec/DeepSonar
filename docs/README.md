@@ -24,7 +24,7 @@
 
 > **全局 Skill 源发布隔离（#954/#960，2026-11-07）**：当前源码将手动/boot/周期 sync 限为候选，只有全局管理主体按候选 hash+epoch 显式批准才发布；既有 live 授权和旧 Job CAS 不迁移，显式撤销 epoch 保持。schema68 元数据、同源 session 锁与 CAS/事务 fence 见[数据归属](architecture/08-data-architecture.md#skill-源已批准目录与候选960)，管理员/项目边界与全局启用影响见[审批接口](architecture/09-interface-specs.md#全局-skill-源候选审批960)。同 hash 有效 live 健康核验可续鲜，不同候选不替 A 续鲜；从未成功为 null/+Inf，既有 Job/Intent 节点原位更新 warning。IR-007/FR-CAP-003/FR-KNOW-002、trace 和视图已同步；回归仅编写/静态核对，schema68 rebuild/恢复与最终 SHA Actions 待验，未运行本地测试、构建、typecheck 或数据库。风险与验收证据分离见[风险登记](architecture/12-risks-and-tech-debt.md#skill-源修复与剩余证据边界960)。
 
-#914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由 #925 交付，UI 由 #929 交付；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，不代表自动重跑或快照改写。
+#914 的项目默认账号 UI 切片映射 [FR-CRED-002](architecture/01-system-specification.md#fr-cred-002-providermodel-catalog-与兼容性)及[接口语义](architecture/09-interface-specs.md#项目默认-provider-账号选择914)：显式选择、更换、清除与服务端保存结果，不自动选择替代账号；后端引用一致性由 #925 交付，UI 由 #929 交付；OCI 导入与凭据删除共用事务行锁，双向并发回归接 credential-delete，最终 SHA Actions 待验；工程证据见[发布基线](RELEASE_RUNTIME_IMAGES.md#v0615-集成证据与升级边界)，不代表自动重跑或快照改写。
 
 > **数据库直接重建授权（#1002 P2-13）**：[数据库说明](../database/README.md#重建授权保全1002-p2-13)记录源有效 ACL 与默认授权保全、基线/原对象权限同事务发布及触发器/提交前失败拒绝，不猜测角色、不无条件扩大 PUBLIC CREATE；CON-003、数据/工程视图及既有 migrations PostgreSQL 回归已同步，最终 SHA Actions 待验。本地与生产数据库未执行。
 
@@ -92,6 +92,10 @@
 
 > **运行镜像治理（#979）**：[旧镜像诊断与恢复](RUNTIME_IMAGE_GOVERNANCE_979.md)记录 DSH 插件缺失、Pi OM 旧 wrapper、已推送产物核验与尚未完成的正式 Release；启动检查不等于线上目录已修复。
 
+#1094 的[平台 HTTP bootstrap](AGENT_CLI_RUNTIME_ADAPTERS.md#平台-operation-的-http-bootstrap1094)统一区分平台 operation 与 CLI 原生工具；只修提示，不改权限或恢复历史 Job，最终 SHA Actions 与模型效果分别记录。
+
+#1097 的[managed proxy 逐跳隔离](MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的逐跳连接策略1097)修复连接寿命误广告；协议修复与历史 Pi 错误归因分开，最终 SHA Actions 另验，不重跑生产 Job 或部署。
+
 ## 状态图例
 
 | 标记 | 含义 |
@@ -144,7 +148,7 @@
 | [Agent Runtime Profiles](AGENT_RUNTIME_PROFILES.md) | #613 Provider / 模型 / CLI 统一运行时 Profile（`deepsonar.agent-runtime-profile/v1`，phase 1） |
 | [项目默认模型与创建冲突](architecture/09-interface-specs.md#项目默认模型与创建冲突966) | **#966 候选，最终 SHA 待验** | 启用范围与显式默认模型分开；预检/POST 同源诊断、项目隔离，不自动重试。 |
 | [SHARED_ASSET_BLOB_STORE.md](SHARED_ASSET_BLOB_STORE.md) | **as-built**（#41；#1039 修复候选） | 共享资产 BlobStore fs\|s3；精确 helper 缺失继续清卷，最终 SHA Actions 待验 |
-| [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维 as-built（2026-11-10）** | v0.6.19 于 2026-11-10T16:37:04Z 正式发布（tag 指向 `490a6919`，release run 42851650415 success；schema72 不变）。回写等待批准后按正常门禁合并 `e82f28ec`（`DEEPSONAR_VERSION=0.6.19`，catalog `platform_version=0.6.19`）；未逐通道复验 digest，未部署生产 |
+| [RELEASE_RUNTIME_IMAGES.md](RELEASE_RUNTIME_IMAGES.md) | **运维 as-built（2026-11-12）** | **v0.6.20 正式发布**：tag 指向 `cf1812668`（打 tag 前手动 dispatch [ci 43239097695](https://github.com/SummerSec/DeepSonar/actions/runs/43239097695) 同 SHA success），[release run 43243132668](https://github.com/SummerSec/DeepSonar/actions/runs/43243132668) success，唯一 failure `release-writeback`（等待批准）→ 批准后首跑 gate-e2e 收敛计时 flake，重跑全绿并按门禁合并 [#1107](https://github.com/SummerSec/DeepSonar/pull/1107)（main `50ad6e9b`，`DEEPSONAR_VERSION=0.6.20`，catalog `platform_version=0.6.20`）；schema 72 → 73；镜像全部重建；未逐通道复验 digest，未部署生产 |
 | [runtime-image-pull-partial-failure.md](runbooks/runtime-image-pull-partial-failure.md) | **运维 runbook**（#724） | 拉取部分失败：真实尝试计数、定向重拉、本地对账/修复与远端 unsupported 边界、readiness 复核 |
 | [ONE_CLICK_DEPLOYMENT.md](ONE_CLICK_DEPLOYMENT.md) | **运维/发布** | Compose 一键部署、真实 readiness 门禁与有界失败诊断；实机兼容性需单独验证 |
 | [OPENSANDBOX_1_2_UPGRADE.md](OPENSANDBOX_1_2_UPGRADE.md) | **源码升级/资源 init/失败诊断读回（2026-11-09）** | SDK/image 与既有恢复边界不变；same-Engine 声明拒绝和正常清理前的非秘密 Job/Attempt 审计均已接线；组合最终 SHA Actions 待验，逐容器/远端 enforcement、现场并发因果及 D-10 分开保留 |
@@ -281,6 +285,8 @@
 #1018 的[项目任务队列](PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 72 与验收边界，最终 SHA Actions 待验。
 #1019 的[事实用途与待处理投影](EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。
 
-知识来源登记与只读历史补做预览见 [项目知识](PROJECT_KNOWLEDGE.md)；当前收敛范围见 [ADR 0021](architecture/adr/0021-knowledge-source-preview.md)。
+项目知识的来源登记→有界项目批次→独立试验/审查→后续拉取与模型反馈，以及积累/复用只读投影见[专题](PROJECT_KNOWLEDGE.md)。[ADR0023](architecture/adr/0023-project-knowledge-collection.md)在用户本轮授权内取代0021的项目批处理暂缓限制，保留历史预览只读和旧knowledge:auto禁用；无schema或整链token预算变化。审计绑定来源Attempt/manifest摘要，trial隔离评分输入，完整6×2与候选/安全组硬门保持。collector/闭环/activity/快照隔离、behavior-policy与Web回归已接Actions入口；`6d96df59` 的主CI与Reverse专项已通过，同步main后的候选仍须独立验收，未合并未部署。模型反馈不是收益认证，注意力和质量收益未知；证据见[专题验收记录](PROJECT_KNOWLEDGE.md#验证与运维)。
 
-> **Pi 内部重试结算（#1072）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)区分单次模型消息错误与 `agent_settled`，保留完成门、取消和进程失败边界；镜像内原始错误 cause 丢失的证据限制单独记录。回归接既有 runtime-sandbox Actions，最终 SHA 待验；现场 Job 未重跑。
+自动清理归属与共享资产只读探针的 #307 评审补齐见[运行时视图](architecture/06-runtime-view.md#自动清理归属与共享资产只读探针307-评审补齐)；扫描清理不删除未知 owner，guest 探针不冒充远端来源证明，最终 SHA Actions 待验。
+
+> **Pi 内部重试结算（#1072）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)区分单次模型消息错误与 `agent_settled`，按消息回滚失败输出并保留此前成功文本，空响应判断与去重不跨消息；保留完成门、取消和进程失败边界；镜像内原始错误 cause 丢失的证据限制单独记录。回归接既有 runtime-sandbox Actions，最终 SHA 待验；现场 Job 未重跑。

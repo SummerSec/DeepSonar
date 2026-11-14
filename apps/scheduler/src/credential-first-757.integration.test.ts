@@ -202,6 +202,20 @@ if (!testDatabaseUrl) {
           await new Promise<void>((resolve, reject) => upstream.close(error => error ? reject(error) : resolve()));
         }
       });
+      // #1096：缺省满额时选了余量同伴并冻结，缺省之后腾出容量也不得把恢复 Job 换回缺省。
+      const defaultFull = await insertCredential("claude-code");
+      const frozenPeer = await insertCredential("claude-code");
+      await sql`UPDATE credentials SET meta_json=${sql.json({ max_concurrent: 1 })} WHERE id=${defaultFull}`;
+      await setConfig({ enabled_credential_ids: [defaultFull, frozenPeer], default_agent_cli: "claude-code",
+        default_model_ref: "claude-sonnet-4", default_credential_id: defaultFull });
+      const fillDefault = await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
+        VALUES (${randomUUID()}, ${projectId}, ${canvasId}, 'audit', 'running', ${sql.json({ credential_id: defaultFull } as never)}) RETURNING id`;
+      assert.equal((await snapshot()).credential_id, frozenPeer, "a full default yields the roomy peer");
+      await sql`UPDATE jobs SET status='succeeded' WHERE id=${fillDefault[0].id}`;
+      assert.equal((await snapshot({ existingCredentialId: frozenPeer })).credential_id, frozenPeer,
+        "a freed default must not rotate the frozen recovery identity");
+      assert.equal((await snapshot()).credential_id, defaultFull, "without a frozen identity the freed default is used again");
+      await sql`UPDATE credentials SET status='disabled' WHERE id IN (${defaultFull}, ${frozenPeer})`;
       const { HubIntentPayload } = await import("@deepsonar/shared-types");
       const intent = { from: [], role: "audit", description: "Inspect the test fixture", prompt: "Inspect this isolated test fixture and record structured evidence." };
       assert.equal(HubIntentPayload.safeParse(intent).success, true);

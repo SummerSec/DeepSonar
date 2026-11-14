@@ -320,17 +320,18 @@ export async function resolveProviderCredentialForJob(
       if (limit === null) return 1;
       return limit === 0 ? 0 : room / limit;
     };
-    // 并列裁决顺序：#707/#1002 的显式缺省先于 #1002 的恢复身份，再退回 ID 稳定序。
+    // 并列裁决顺序：显式缺省先于无余量的恢复身份，再退回 ID 稳定序（两者都无余量时）。
     const tieBreak = (a: (typeof pool)[number], b: (typeof pool)[number]): number =>
       Number(b.id === preferred?.id) - Number(a.id === preferred?.id)
         || Number(b.id === existing?.id) - Number(a.id === existing?.id);
     const byCapacity = (a: (typeof pool)[number], b: (typeof pool)[number]): number =>
       ratio(b) - ratio(a) || tieBreak(a, b)
         || score(a).active - score(b).active || score(a).total - score(b).total || a.id.localeCompare(b.id);
-    // #1002/#1078 P1（评审）：仍有余量的冻结恢复身份与显式缺省都先保持，只有自身满额才让位，
-    // 否则负载变化会换账号并制造 SNAPSHOT_STALE；余量比例只用于没有这两种优先项的池。
-    if (preferred && score(preferred).room > 0) return preferred;
+    // #1078/#1096：仍有余量的冻结恢复身份先于显式缺省，否则「缺省满额时选了同伴并冻结、缺省之后
+    // 腾出容量」会让恢复 Job 被换回缺省并触发 SNAPSHOT_STALE；缺省与余量比例只服务没有恢复身份的池，
+    // 恢复身份自身满额或已不在授权池内时仍让位（授权与并发准入不因偏好排序放宽）。
     if (existing && score(existing).room > 0) return existing;
+    if (preferred && score(preferred).room > 0) return preferred;
     const withRoom = pool.filter((row) => score(row).room > 0);
     const best = [...withRoom].sort(byCapacity)[0];
     if (best) return best;

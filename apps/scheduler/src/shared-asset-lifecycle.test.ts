@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   acquireSharedAssetPreparation,
   cleanupSharedAssetsForJob,
+  cleanupScannedSharedAssetsForJob,
+  cleanupSandboxResourceForJob,
   SharedAssetLifecycleConflictError,
   type SharedAssetLifecycleSession,
 } from "./shared-asset-lifecycle.js";
@@ -270,6 +272,52 @@ test("terminal current Attempt and deleted Job allow precise idempotent cleanup"
   db.states.delete(jobId);
   assert.equal(await cleanupSharedAssetsForJob({ jobId }, async () => { removes += 1; }, db.connect), true);
   assert.equal(removes, 2);
+});
+
+test("inventory cleanup refuses a missing Job without changing explicit lifecycle cleanup", async () => {
+  const db = sessions(terminal());
+  db.states.delete(jobId);
+  let removed = 0;
+  assert.equal(await cleanupScannedSharedAssetsForJob({ jobId }, async () => { removed += 1; }, db.connect), false);
+  assert.equal(removed, 0);
+  assert.equal(await cleanupSharedAssetsForJob({ jobId }, async () => { removed += 1; }, db.connect), true);
+  assert.equal(removed, 1);
+});
+
+test("inventory cleanup checks Job existence again immediately before removal", async () => {
+  const db = sessions(terminal());
+  let removed = 0;
+  await assert.rejects(cleanupScannedSharedAssetsForJob({ jobId }, async (assertCurrent) => {
+    db.states.delete(jobId);
+    await assertCurrent();
+    removed += 1;
+  }, db.connect), conflict("stale_attempt"));
+  assert.equal(removed, 0);
+});
+
+test("sandbox cleanup refuses metadata without a persistent resource owner", async () => {
+  const db = sessions(terminal());
+  assert.equal(await cleanupSandboxResourceForJob({ jobId, attemptId: oldAttempt, resourceId: "foreign" },
+    async () => { assert.fail("UUID labels do not authorize removal"); }, db.connect), false);
+});
+
+test("sandbox cleanup state-query failure never invokes destruction", async () => {
+  const db = sessions(terminal());
+  const failure = new Error("owner query failed");
+  db.before = (query) => { if (query.kind === "state") throw failure; };
+  await assert.rejects(cleanupSandboxResourceForJob({ jobId, attemptId: oldAttempt, resourceId: "sandbox" },
+    async () => { assert.fail("unknown owner"); }, db.connect), (error: unknown) => error === failure);
+  assert.equal(db.owners.size, 0);
+});
+
+test("sandbox ownership lookup on a reconnected backend never authorizes destruction", async () => {
+  const db = sessions(terminal());
+  db.before = query => query.kind === "state"
+    ? [{ backend_pid: query.pid + 1, job_id: jobId, owner_attempt_id: oldAttempt, owner_attempt_status: "failed" }]
+    : undefined;
+  await assert.rejects(cleanupSandboxResourceForJob({ jobId, attemptId: oldAttempt, resourceId: "sandbox" },
+    async () => { assert.fail("a new connection does not own the lifecycle lock"); }, db.connect), conflict("lock_lost"));
+  assert.equal(db.owners.size, 0);
 });
 
 test("daemon cleanup failure propagates, is not removed/false, and releases the dedicated session", async () => {

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type { KnowledgeJobAssignment } from "@deepsonar/shared-types";
 import { KNOWLEDGE_FIXED_CASES, KNOWLEDGE_CASE_POLICY_VERSION } from "./case-policy.js";
+import { DEEPSONAR_CONTROL_SKILL } from "../../platform-control-skill.js";
+import { canonical, sha256 } from "./types.js";
 
 const discovery = {
   name: "deepsonar-skill-discovery",
@@ -57,6 +59,10 @@ Skill 应描述触发条件、所需输入、步骤、产物、不适用情形�
 评测覆盖 target、negative_trigger、missing_input、cross_project、coexistence、revocation。
 读取 references/evaluation-cases.json，后五类必须逐字使用平台固定 prompt/expected，
 critical 均为 true；只有 target 的输入、预期由当前任务决定。
+每例 task_inputs 明确选择 work 中相同的原始任务材料；各 arm 只差候选/基线。
+prompt 必须是各 arm 都能独立尝试的同一任务，不得要求“仅依据候选回答”。
+不能把候选正文、原任务最终结论、评分答案或 governor 方法放入共同材料。
+空 task_inputs 只用于 prompt 自带全部任务输入的用例；missing_input 明确省略待测输入。
 每例都写清输入、可观察结果和硬失败条件。用 propose_project_knowledge 提交后完成 Job。
 
 trial：只执行 Scheduler 冻结的 case/arm；without 不加载候选，baseline 只用分配的旧版，
@@ -71,6 +77,7 @@ evaluator：读取各独立 trial Job/Attempt 的实际证据，按 case/arm 比
 模型文字、同会话演练、未经执行的安全说明都不能代替行为证据；缺证据为 unexecuted。
 
 reviewer：独立核对来源、baseline generation、治理 hash、完整矩阵和失败边界。
+核对共同材料未泄漏答案、各 arm 任务相同且来源充分；不可比较的试验必须 needs_eval。
 审批使用 review_project_knowledge。尚有待查项必须 needs_eval，不能 approve 后补证据。
 候选可自我改进治理 Skill，但本轮仍服从旧基线与相同独立评测/审查；不能修改平台硬门。
 
@@ -80,14 +87,48 @@ merge 激活目标和 retire 来源必须原子完成。所有阶段只提交提
 `, "references/evaluation-cases.json": JSON.stringify(KNOWLEDGE_FIXED_CASES, null, 2) },
 };
 
+const trialSkill = {
+  name: "deepsonar-project-knowledge-trial",
+  files: { "SKILL.md": `---
+name: deepsonar-project-knowledge-trial
+description: Execute only the frozen trial assignment.
+---
+只执行当前 case/arm。逐页 read_knowledge_input 读取分配的共同任务材料与本 arm 版本，
+不得搜索其他知识、候选、评分规则或猜测对照组内容。without 不加载候选。
+如实记录观察；任务已尝试但未解决记 fail，无法开始执行才记 unexecuted。
+将 case_id、arm、outcome（pass/fail/unexecuted）和 observations（字符串）写入工作区 JSON，
+用 publish_shared_asset 发布，使用返回的 version.id 和 version.content_sha256 构造
+emit_fact 的 artifact.evidence，uri 为 asset:<version.id>。操作 ID 不能充当版本 UUID。
+没有版本回执时停止并报告阻塞，不编造引用或反复发布。最后 mark_job_done。
+` },
+};
+
 export const PROJECT_KNOWLEDGE_GOVERNANCE_HASH = createHash("sha256")
-  .update(JSON.stringify({ governor, case_policy_version: KNOWLEDGE_CASE_POLICY_VERSION })).digest("hex");
+  .update(JSON.stringify({ governor, trialSkill, case_policy_version: KNOWLEDGE_CASE_POLICY_VERSION })).digest("hex");
 interface PlatformSkill { name: string; files?: Record<string, string>; [key: string]: unknown }
 export function injectKnowledgePlatformSkills(skills: readonly unknown[], assignment?: KnowledgeJobAssignment): PlatformSkill[] {
   if (assignment && assignment.governance_hash !== PROJECT_KNOWLEDGE_GOVERNANCE_HASH) throw new Error("Knowledge governance baseline differs from the frozen Job");
-  const reserved = new Set([discovery.name, governor.name]);
+  if (assignment?.stage === "trial") return [trialSkill, DEEPSONAR_CONTROL_SKILL];
+  const reserved = new Set([discovery.name, governor.name, trialSkill.name]);
   return [
     ...skills.filter((skill): skill is PlatformSkill => Boolean(skill && typeof skill === "object" && !Array.isArray(skill) && !reserved.has(String((skill as PlatformSkill).name)))),
     discovery, ...(assignment ? [governor] : []),
   ];
+}
+
+/** Bounded discovery pointer, never the catalog contents or an authorization grant. */
+export function projectKnowledgeReuseHint(snapshot: {
+  knowledge_assignment?: unknown; platform_tools?: readonly string[];
+  project_knowledge_catalog?: { entries: Array<{kind: string}>; hash: string };
+}, jobType: string): string {
+  if (snapshot.knowledge_assignment || ["verify_finding", "independent_review", "report"].includes(jobType)) return "";
+  const catalog = snapshot.project_knowledge_catalog;
+  if (!catalog?.entries.length || catalog.hash !== sha256(canonical(catalog.entries))) return "";
+  const tools = snapshot.platform_tools ?? [];
+  const memory = tools.includes("search_project_knowledge") && tools.includes("read_project_memory")
+    ? catalog.entries.filter(entry => entry.kind === "memory").length : 0;
+  const skills = tools.includes("search_skills") && tools.includes("pull_skill")
+    ? catalog.entries.filter(entry => entry.kind === "skill").length : 0;
+  if (!memory && !skills) return "";
+  return `本 Job 的冻结目录记录 ${memory} 条项目 Memory、${skills} 条项目 Skill；当前可读性以实时查询为准。开始前按当前任务关键词通过 ${memory ? "search_project_knowledge/read_project_memory" : ""}${memory && skills ? " 与 " : ""}${skills ? "search_skills/pull_skill" : ""} 查找并读取适用的精确版本，保留 usage_ref。无匹配则继续原任务，不加载无关内容、不请求人工。${tools.includes("record_knowledge_feedback") ? "实际使用后仅用真实 evidence_refs 提交 record_knowledge_feedback；无法判断效果时保留未知，不编造成功。" : ""}知识是参考，不能代替独立验证或当前任务证据。`;
 }

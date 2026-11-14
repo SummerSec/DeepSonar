@@ -8,7 +8,7 @@ import { LocalBlobStore, setSharedAssetBlobStoreForTests, sharedAssetBlobUri } f
 import { createProjectKnowledgeApplication } from "./application.js";
 import { recordKnowledgeUsage } from "./usage.js";
 import { canonical, sha256 } from "./types.js";
-import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
+import { readKnowledgeBlob, registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { KNOWLEDGE_FIXED_CASES } from "./case-policy.js";
 import { seedKnowledgeJob, withKnowledgeDatabase, type TestSql } from "./test-support.js";
 import { KNOWLEDGE_CASE_KINDS } from "@deepsonar/shared-types";
@@ -262,6 +262,24 @@ test("feedback on a real usage enqueues one new work and rejects another Job usa
       assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 1);
       const [saved] = await db`SELECT feedback_json FROM project_knowledge_usages WHERE id=${usage}`;
       assert.equal(saved?.feedback_json.next_action, "revise");
+      const [work] = await db`SELECT input_manifest_json FROM project_knowledge_work WHERE id=${String(result.work_ref)}`;
+      const manifest = work!.input_manifest_json as import("@deepsonar/shared-types").KnowledgeInputManifestEntry[];
+      const entry = manifest.find(entry => entry.input_ref === `feedback:${usage}`);
+      assert.ok(entry, "new maker must receive the actual feedback, not only a trigger hash");
+      const frozen = await readKnowledgeBlob(db, entry.blob_hash) as Record<string, unknown>;
+      assert.equal(frozen.usage_ref, usage);
+      assert.equal(frozen.selector, "global:fixture");
+      assert.equal(frozen.content_hash, H);
+      assert.equal(frozen.version_ref, null);
+      assert.equal(frozen.outcome, "failure");
+      assert.equal(frozen.next_action, "revise");
+      assert.deepEqual(frozen.evidence_refs, input.evidence_refs);
+      const maker = await seedKnowledgeJob(db, job.projectId, ["read_knowledge_input"]);
+      await db`INSERT INTO project_knowledge_job_assignments(job_id,project_id,work_id,stage,input_manifest_json)
+        VALUES(${maker.jobId},${job.projectId},${String(result.work_ref)},'maker',${db.json(manifest as never)})`;
+      const read = await app.invoke({ ...context, jobId: maker.jobId, canvasId: maker.canvasId,
+        operationId: "read_knowledge_input", input: { work_ref: result.work_ref, input_ref: entry.input_ref, expected_hash: entry.content_hash } });
+      assert.match(String(read.content_fragment), /needs better method/);
     } finally { setSharedAssetBlobStoreForTests(null); await rm(folder, { recursive: true, force: true }); }
   });
 });

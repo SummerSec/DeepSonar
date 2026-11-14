@@ -260,6 +260,18 @@ if (!testDatabaseUrl) {
       const longToolAudit = await insertRunning("deepsonar-audit", {
         payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
       });
+      // #1086：in-flight 豁免不再无上限；把一次活动的 started_at 推到 1h in-flight 预算之外。
+      const hungToolAudit = await insertRunning("deepsonar-audit", {
+        payload: { runtime_activity: { inflight_tool: "Bash", phase: "started" } },
+      });
+      await sql`UPDATE jobs SET started_at = now() - interval '4000 seconds' WHERE id = ${hungToolAudit}`;
+      // Reaper 通过 settleAttemptTerminal 收口：必须先有 active Attempt，否则 reason 无处落库。
+      await createAttempt(sql, hungToolAudit, { agent_cli: "claude-code" });
+      // 评审 P1：stall_sec=0 是明确关闭；Chrome/Hub floor 不得把它重新打开。
+      const disabledChrome = await insertRunning("deepsonar-chrome-audit");
+      await sql`UPDATE jobs SET started_at = now() - interval '6000 seconds',
+          agent_snapshot_json = agent_snapshot_json || ${sql.json({ runtime_knobs: { stall_sec: 0 } } as never)}
+        WHERE id = ${disabledChrome}`;
 
       const stalled = await app.reapStalledExecution(900);
       const stalledIds = new Set(stalled.map((row) => row.id));
@@ -268,6 +280,18 @@ if (!testDatabaseUrl) {
       assert.equal(stalledIds.has(chromeFuzzInflight), false, "chrome-fuzz with in-flight tool + live lease is kept");
       assert.equal(stalledIds.has(silentChromeNoTool), false, "chrome-audit uses the 5400s stall floor");
       assert.equal(stalledIds.has(longToolAudit), false, "non-chrome in-flight tool + live lease is kept");
+      assert.equal(stalledIds.has(hungToolAudit), true, "an in-flight tool beyond its 1h budget is reaped");
+      const [hungRow] = await sql`SELECT status, error FROM jobs WHERE id = ${hungToolAudit}`;
+      assert.equal(hungRow.status, "failed");
+      assert.match(String(hungRow.error), /in-flight tool 超出预算/);
+      const [hungAttempt] = await sql`SELECT status, outcome_json->>'reason' AS reason
+        FROM job_attempts WHERE job_id = ${hungToolAudit} ORDER BY attempt_no DESC LIMIT 1`;
+      assert.deepEqual({ status: hungAttempt.status, reason: hungAttempt.reason },
+        { status: "failed", reason: "reaper_inflight_tool_stalled" });
+
+      assert.equal(stalledIds.has(disabledChrome), false,
+        "runtime_knobs.stall_sec=0 的 chrome Job 保持关闭，不被 per-image floor 重新启用");
+      assert.deepEqual(await app.reapStalledExecution(0), [], "平台 stall=0 同样关闭 watchdog");
 
       const [silentRow] = await sql`SELECT status, error FROM jobs WHERE id = ${silentAudit}`;
       assert.equal(silentRow.status, "failed");

@@ -28,6 +28,7 @@ import {
 } from "./runtime-knobs.js";
 import { isProviderKnown } from "./credentials.js";
 import { sql } from "./db.js";
+import { scrubPostgresText } from "./domains/event-ingestion/pg-text-safety.js";
 import { inc } from "./metrics.js";
 import { withOperationConflictRetry } from "./db-conflict-retry.js";
 import { recordSystemAudit } from "./audit.js";
@@ -1447,7 +1448,7 @@ export async function finalizeJob(
     throw new Error(`job ${jobId} canvas changed while finalizing`);
   }
   await tx`
-    UPDATE canvas_nodes SET status = ${status}, body_json = body_json || ${tx.json({ summary: result?.summary ?? null })}, updated_at = now()
+    UPDATE canvas_nodes SET status = ${status}, body_json = body_json || ${tx.json(result?.summary === undefined ? { summary: null } : { summary: scrubPostgresText(result.summary) })}, updated_at = now()
     WHERE job_id = ${jobId} AND node_type = ANY(${["job", "intent", "report"]})`;
 
   // §6.3：job 终态立即吊销短期模型 Token（容器残留也调不动模型；网关另按 job 状态逐请求兜底）

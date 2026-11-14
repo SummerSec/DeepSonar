@@ -1,4 +1,4 @@
-import type { KnowledgeArm, KnowledgeInputManifestEntry, KnowledgeJobAssignment } from "@deepsonar/shared-types";
+import type { KnowledgeArm, KnowledgeInputManifestEntry, KnowledgeJobAssignment, KnowledgeSourceRef } from "@deepsonar/shared-types";
 import { KNOWLEDGE_CASE_KINDS, KNOWLEDGE_LIMITS } from "@deepsonar/shared-types";
 import { requiredArms } from "./evaluation.js";
 import { KNOWLEDGE_FIXED_CASES } from "./case-policy.js";
@@ -8,6 +8,9 @@ import { onKnowledgeJobTerminal } from "./recovery.js";
 import { registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
 import { canonical, sha256 } from "./types.js";
 import { automaticPreparationPredicate, isAutomaticWork } from "./automatic-marker.js";
+import { PROJECT_COLLECTION_PREFIX } from "./collector-sources.js";
+import { COEXISTENCE_INPUT_REF, prepareTrialSupport } from "./trial-support.js";
+import { prepareKnowledgeRevisionFeedback } from "./revision-feedback.js";
 
 type Db = typeof sql;
 type Row = Record<string, unknown>;
@@ -15,9 +18,10 @@ type Terminal = "succeeded" | "failed" | "timeout" | "cancelled" | "orphan";
 type CreateJob = (tx: Db, input: CreateJobInput, assignment?: KnowledgeJobAssignment) => Promise<{ created: Row }>;
 type EnsureCanvas = (tx: Db, input: EnsureCanvasInput) => Promise<string>;
 type Stage = "maker" | "evaluator" | "reviewer" | "trial";
-type PlanCase = { id: string; kind: string; prompt: string; expected: string; critical: boolean };
+type PlanCase = { id: string; kind: string; prompt: string; expected: string; critical: boolean; task_inputs?: KnowledgeSourceRef[] };
 type TrialIndex = { jobId: string; projectId: string; payload: Record<string, unknown>; evidence: Row[] };
-type PreparedEvidence = { proposalId: string; generation: number; blobs: Map<string, { hash: string; bytes: number }> };
+type PreparedEvidence = { proposalId: string; generation: number; blobs: Map<string, { hash: string; bytes: number }>;
+  rubric: { hash: string; bytes: number } };
 
 export interface KnowledgeWorkSchedulerInput {
   db: Db;
@@ -45,13 +49,17 @@ function validPlan(cases: PlanCase[]): boolean {
     && cases.every((item) => item.critical === true &&
       (item.kind === "target" || (item.prompt === fixed[item.kind]?.prompt && item.expected === fixed[item.kind]?.expected)));
 }
+/** knowledge Job 的最小可执行预算：低于它的 Job 连 provision 与一轮模型请求都跑不完，必然被 Reaper
+ * 判 timeout（#1111 现场 60/68/88 秒）。work 预算（KNOWLEDGE_LIMITS.seconds）是累计上限，不是单
+ * Job 的超时：余额不足以支撑一个可执行 Job 时显式阻断 work，而不是派发注定失败的短命 Job。 */
+export const KNOWLEDGE_MIN_JOB_TIMEOUT_SEC = 300;
 function roleFor(stage: Stage): string {
   return stage === "trial" ? "test" : stage === "reviewer" ? "review" : "analyze";
 }
 function promptFor(stage: Stage, work: Row, proposal?: Row, trial?: { testCase: PlanCase; arm: string }): string {
   const reference = `work=${work.id}`;
   if (stage === "maker") return `整理当前 Job 冻结的项目证据，提出项目知识候选。${reference}。${proposal ? `前一提案=${proposal.id} revision=${proposal.revision} state=${proposal.state}；仅可提交 parent_proposal_ref 为该提案、revision=${Number(proposal.revision) + 1} 的修订。` : "首次提案 revision=1。"}逐项使用 read_knowledge_input，调用 propose_project_knowledge；不得自行批准或激活。`;
-  if (stage === "trial" && trial) return `执行独立知识试验。${reference} proposal=${proposal?.id} case=${trial.testCase.id} kind=${trial.testCase.kind} arm=${trial.arm}。任务：${trial.testCase.prompt}。预期：${trial.testCase.expected}。cross_project/revocation case 必须用 read_knowledge_input 实际请求冻结的 platform-probe 并记录拒绝码。实际执行后，在工作区写 JSON，至少含 case_id=${JSON.stringify(trial.testCase.id)}、arm=${JSON.stringify(trial.arm)}、outcome（pass/fail/unexecuted）和实际 observations；用 publish_shared_asset 发布为当前项目资产，取得 asset version UUID 与 content hash；随后 emit_fact，artifact.evidence 中填 uri='asset:<version_uuid>'、sha256=<相同内容 hash>，并描述真实观察。不得只提交文字或预期结果；无环境则记录 unexecuted，禁止编造成功。最后 mark_job_done。`;
+  if (stage === "trial" && trial) return `执行独立知识试验。${reference} proposal=${proposal?.id} case=${trial.testCase.id} kind=${trial.testCase.kind} arm=${trial.arm}。任务：${trial.testCase.prompt}。先读取当前 assignment 的共同任务输入，再读取本 arm 内容；不得猜测其他组或评分规则。cross_project/revocation case 必须用 read_knowledge_input 实际请求冻结的 platform-probe 并记录拒绝码。实际执行后，在工作区写 JSON，至少含 case_id=${JSON.stringify(trial.testCase.id)}、arm=${JSON.stringify(trial.arm)}、outcome（pass/fail/unexecuted）和实际 observations；用 publish_shared_asset 发布为当前项目资产，取得 asset version UUID 与 content hash；随后 emit_fact，artifact.evidence 中填 uri='asset:<version_uuid>'、sha256=<相同内容 hash>，并描述真实观察。不得只提交文字或预期结果；无环境则记录 unexecuted，禁止编造成功。最后 mark_job_done。`;
   if (stage === "evaluator") return `独立评测项目知识候选。${reference} proposal=${proposal?.id} input_digest=${proposal?.input_digest}。核对每个 case×arm 的独立 Job/Attempt、证据和结果，调用 submit_knowledge_evaluation；缺项或不可验证时明确 needs_eval。`;
   return `独立审查项目知识候选。${reference} proposal=${proposal?.id} input_digest=${proposal?.input_digest}。核对冻结输入、评测、安全用例、来源、基线和治理 hash，调用 review_project_knowledge；maker/evaluator 结论不能代替独立审查。`;
 }
@@ -137,6 +145,10 @@ async function trialEvidenceEntries(tx: Db, proposalId: string, inputDigest: str
   if (prepared.proposalId !== proposalId || indexes.length !== prepared.blobs.size)
     throw new Error("knowledge_trial_index_changed");
   const result: KnowledgeInputManifestEntry[] = [];
+  await registerKnowledgeBlob(tx, prepared.rubric.hash, prepared.rubric.bytes);
+  result.push({ input_ref: `evaluation:proposal:${proposalId}`, kind: "evaluation",
+    project_id: String(indexes[0]!.projectId), content_hash: prepared.rubric.hash,
+    blob_hash: prepared.rubric.hash, bytes: prepared.rubric.bytes, audience: ["evaluator", "reviewer"] });
   for (const item of indexes) {
     const expected = prepared.blobs.get(item.jobId);
     const bytes = Buffer.from(canonical(item.payload), "utf8");
@@ -167,9 +179,9 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
   const { db, createJobInTransaction, ensureCanvasForTaskInTransaction } = input;
 
   async function prepareTrialEvidence(workId: string): Promise<PreparedEvidence | undefined> {
-    const [work] = await db`SELECT w.generation,w.stage,p.id AS proposal_id,p.action,p.input_digest,p.evaluation_plan_json
+    const [work] = await db`SELECT w.generation,w.stage,p.id AS proposal_id,p.action,p.revision,p.input_digest,p.evaluation_plan_json,p.base_refs_json
       FROM project_knowledge_work w JOIN LATERAL (
-        SELECT id,action,input_digest,evaluation_plan_json FROM project_knowledge_proposals
+        SELECT id,action,revision,input_digest,evaluation_plan_json,base_refs_json FROM project_knowledge_proposals
         WHERE work_id=w.id ORDER BY revision DESC,created_at DESC,id DESC LIMIT 1
       ) p ON true WHERE w.id=${workId} AND w.state='running' AND w.active_job_id IS NULL
         AND w.stage IN ('evaluator','reviewer')`;
@@ -190,7 +202,12 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
         throw new Error("knowledge_trial_index_too_large");
       blobs.set(item.jobId, await writeKnowledgeBlob(db, item.payload));
     }
-    return { proposalId: String(work.proposal_id), generation: Number(work.generation), blobs };
+    const behavior = work.stage === "reviewer" ? await db`SELECT id,result_json FROM project_knowledge_evaluations
+      WHERE proposal_id=${String(work.proposal_id)} AND input_digest=${String(work.input_digest)} AND kind='behavior' ORDER BY created_at DESC LIMIT 1` : [];
+    const rubric = await writeKnowledgeBlob(db, { proposal_ref: work.proposal_id, action: work.action,
+      revision: work.revision, input_digest: work.input_digest, evaluation_plan: work.evaluation_plan_json,
+      base_refs: work.base_refs_json, behavior: behavior[0] ?? null });
+    return { proposalId: String(work.proposal_id), generation: Number(work.generation), blobs, rubric };
   }
 
   async function createAssignedJob(
@@ -203,6 +220,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     const prompt = promptFor(stage, work, proposal, trial);
     const assignment: KnowledgeJobAssignment = {
       work_id: workId, stage, inputs: manifest, governance_hash: String(work.governance_hash),
+      ...(String(work.trigger_key).startsWith(PROJECT_COLLECTION_PREFIX) ? { source_mode: "project_collection" as const } : {}),
       ...(proposal && stage !== "maker" ? { proposal_id: String(proposal.id), input_digest: String(proposal.input_digest) } : {}),
       ...(trial ? { case_id: trial.testCase.id, arm: trial.arm } : {}),
     };
@@ -234,7 +252,8 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     return jobId;
   }
 
-  async function drive(workId: string, prepared?: PreparedEvidence): Promise<boolean> {
+  async function drive(workId: string, prepared?: PreparedEvidence, support?: {hash: string; bytes: number},
+    revisionFeedback?: KnowledgeInputManifestEntry): Promise<boolean> {
     return db.begin(async (txRaw) => {
       const tx = txRaw as unknown as Db;
       const [before] = await tx`SELECT * FROM project_knowledge_work WHERE id=${workId}`;
@@ -252,7 +271,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
           title: `项目知识整理 ${workId}`,
           target: { kind: "standard", title: `项目知识整理 ${workId}`,
             goal: "受治理的项目知识整理与独立评测", knowledge_work_id: workId,
-            network_policy: { allow_egress: originNetwork.allow_egress === true } },
+            network_policy: { allow_egress: !String(before.trigger_key).startsWith(PROJECT_COLLECTION_PREFIX) && originNetwork.allow_egress === true } },
           triggerSource: "project_knowledge", triggerEventId: workId,
         });
       }
@@ -271,7 +290,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
         await block(tx, workId, "job_budget_exhausted");
         return true;
       }
-      if (Number(work.run_seconds) >= KNOWLEDGE_LIMITS.seconds || Number(work.revision_count) > KNOWLEDGE_LIMITS.revisions) {
+      if (Number(work.revision_count) > KNOWLEDGE_LIMITS.revisions) {
         await block(tx, workId, "work_budget_exhausted");
         return true;
       }
@@ -281,6 +300,12 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
         if (!active) { await block(tx, workId, "active_job_missing"); return true; }
         if (!isTerminal(active.status)) return false;
         await onKnowledgeJobTerminal(tx, active as { id: unknown; project_id?: unknown; canvas_id?: unknown; started_at?: unknown; finished_at?: unknown }, active.status);
+        return true;
+      }
+      // 最小可执行预算准入（#1111）：只在准备派发下一个 Job 时判定。放在 active Job 对账之后，
+      // 升级时仍在运行/待对账的旧短余额 Job 不会被提前解绑，其耗时与真实终态仍能累计一次。
+      if (KNOWLEDGE_LIMITS.seconds - Number(work.run_seconds) < KNOWLEDGE_MIN_JOB_TIMEOUT_SEC) {
+        await block(tx, workId, "work_budget_exhausted");
         return true;
       }
       if (work.stage === "maker") {
@@ -295,6 +320,13 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
         const manifest = prior
           ? [...entries(work.input_manifest_json), ...await baselineEntries(tx, prior), ...await candidateEntry(tx, prior)]
           : entries(work.input_manifest_json);
+        if (prior) {
+          if (!revisionFeedback || revisionFeedback.project_id !== work.project_id
+            || revisionFeedback.input_ref !== `revision-feedback:${prior.id}:${prior.revision}:${prior.input_digest}`)
+            throw new Error("knowledge_revision_feedback_changed");
+          await registerKnowledgeBlob(tx, revisionFeedback.blob_hash, revisionFeedback.bytes);
+          manifest.push(revisionFeedback);
+        }
         await createAssignedJob(tx, work, "maker", manifest, prior);
         return true;
       }
@@ -323,7 +355,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
         const cases = plan(proposal.evaluation_plan_json);
         if (!validPlan(cases)) { await block(tx, workId, "evaluation_plan_incomplete", proposalId); return true; }
         const pairs = cases.flatMap((testCase) => requiredArms(String(proposal.action)).map((arm) => ({ testCase, arm: arm as KnowledgeArm })));
-        if (Number(work.job_count) + pairs.length - Number((await tx`SELECT COUNT(*)::int AS n FROM project_knowledge_job_assignments WHERE proposal_id=${proposalId} AND stage='trial'`)[0]?.n ?? 0) + 1 > KNOWLEDGE_LIMITS.jobs) {
+        if (Number(work.job_count) + pairs.length - Number((await tx`SELECT COUNT(*)::int AS n FROM project_knowledge_job_assignments WHERE proposal_id=${proposalId} AND stage='trial'`)[0]?.n ?? 0) + 2 > KNOWLEDGE_LIMITS.jobs) {
           await block(tx, workId, "trial_job_budget_exhausted", proposalId);
           return true;
         }
@@ -348,7 +380,19 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
               project_id: String(work.project_id), content_hash: "0".repeat(64),
               blob_hash: "0".repeat(64), bytes: 0, audience: ["trial" as const],
             }] : [];
-            const trialInputs: KnowledgeInputManifestEntry[] = [...armInputs, ...probe];
+            const common = (pair.testCase.task_inputs ?? []).map(ref => {
+              const entry = entries(work.input_manifest_json).find(item => item.input_ref === `${ref.kind}:${ref.ref}`
+                && item.content_hash === ref.content_hash && ["fact", "evidence", "asset"].includes(item.kind));
+              if (!entry) throw new Error("knowledge_trial_task_input_missing");
+              return { ...entry, audience: ["trial" as const] };
+            });
+            if (pair.testCase.kind === "coexistence") {
+              if (!support) throw new Error("knowledge_trial_support_missing");
+              await registerKnowledgeBlob(tx, support.hash, support.bytes);
+              common.push({ input_ref: COEXISTENCE_INPUT_REF, kind: "candidate", project_id: String(work.project_id),
+                content_hash: support.hash, blob_hash: support.hash, bytes: support.bytes, audience: ["trial"] });
+            }
+            const trialInputs: KnowledgeInputManifestEntry[] = [...common, ...armInputs, ...probe];
             await createAssignedJob(tx, work, "trial", trialInputs, proposal, pair);
             return true;
           }
@@ -421,7 +465,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     if (stopped()) return 0;
     await claimPending(stopped);
     if (stopped()) return 0;
-    const rows = await db`SELECT id,trigger_key,origin_job_id FROM project_knowledge_work WHERE state='running'
+    const rows = await db`SELECT id,trigger_key,origin_job_id,stage,active_job_id FROM project_knowledge_work WHERE state='running'
       ORDER BY (active_job_id IS NULL) DESC,updated_at,id LIMIT 16`;
     let progressed = 0;
     for (const row of rows) {
@@ -437,8 +481,11 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
           continue;
         }
         const prepared = await prepareTrialEvidence(workId);
+        const support = row.stage === "evaluator" && !row.active_job_id ? await prepareTrialSupport(db) : undefined;
+        const revisionFeedback = row.stage === "maker" && !row.active_job_id
+          ? await prepareKnowledgeRevisionFeedback(db, workId) : undefined;
         if (stopped()) break;
-        if (await drive(workId, prepared)) progressed++;
+        if (await drive(workId, prepared, support, revisionFeedback)) progressed++;
       } catch (error) {
         if (stopped()) break;
         const marker = typeof (error as { code?: unknown } | null)?.code === "string"

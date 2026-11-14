@@ -101,9 +101,16 @@ test("#1002 resolve: an existing authorized Job identity does not rotate with lo
     [{ credential_id: CRED_A, active_jobs: 20, total_jobs: 20 }]) as never, projectId: "project-1", agentCli: "claude-code",
     allowlist: allowlist({ default_credential_id: null }), provider: "anthropic", existingCredentialId: CRED_A });
   assert.equal(result?.id, CRED_A);
+  // #1078/#1096：显式缺省只在恢复身份自身满额（或不在池内）时生效；恢复身份有余量时保持，
+  // 不再把缺省变化当成切换凭据的授权。
   const overridden = await resolveProviderCredentialForJob({ db: dbWith([baseRow(CRED_A), baseRow(CRED_B)]) as never,
     projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_B }), existingCredentialId: CRED_A });
-  assert.equal(overridden?.id, CRED_B, "an explicit current configuration still takes precedence");
+  assert.equal(overridden?.id, CRED_A, "a recovery identity with room beats even an explicit default");
+  const frozenFull = { ...baseRow(CRED_A), meta_json: { max_concurrent: 2 } };
+  const fallbackToDefault = await resolveProviderCredentialForJob({ db: dbWith([frozenFull, baseRow(CRED_B)],
+    [{ credential_id: CRED_A, active_jobs: 2, total_jobs: 2 }]) as never,
+    projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_B }), existingCredentialId: CRED_A });
+  assert.equal(fallbackToDefault?.id, CRED_B, "an explicit default applies once the frozen identity is full");
 });
 
 test("#1002 resolve: heterogeneous model defaults and unconfigured pools retain ambiguity refusal", async () => {
@@ -487,6 +494,24 @@ test("#1078 resolve: a full default credential yields to a roomy same-identity p
   });
   assert.equal(resolved?.id, CRED_B, "max_concurrent capacity is respected even for the configured default");
   assert.deepEqual([full, roomy].map((row) => row.meta_json), [{ max_concurrent: 3 }, {}], "selection does not mutate credentials");
+});
+
+test("#1078/#1096 冻结的是满额缺省下的余量同伴，缺省腾出容量后保持冻结身份", async () => {
+  const defaultRow = { ...baseRow(CRED_A), meta_json: { max_concurrent: 2 } };
+  // 首次解析：缺省满额 → 按余量选同伴并冻结（existing 进快照）。
+  const firstPick = await resolveProviderCredentialForJob({
+    db: dbWith([defaultRow, baseRow(CRED_B)], [{ credential_id: CRED_A, active_jobs: 2, total_jobs: 2 }]) as never,
+    projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_A }),
+    provider: "anthropic",
+  });
+  assert.equal(firstPick?.id, CRED_B, "a full default yields the roomy peer first");
+  // 恢复：缺省已腾出容量，恢复身份仍保持同伴，不切回缺省（避免 SNAPSHOT_STALE）。
+  const resumed = await resolveProviderCredentialForJob({
+    db: dbWith([defaultRow, baseRow(CRED_B)], [{ credential_id: CRED_A, active_jobs: 0, total_jobs: 5 }]) as never,
+    projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_A }),
+    provider: "anthropic", existingCredentialId: CRED_B,
+  });
+  assert.equal(resumed?.id, CRED_B, "a freed default must not rotate the frozen recovery identity");
 });
 
 test("#1078 resolve: default with headroom, all-full and ratio ordering contracts (#1078 slice 1)", async () => {

@@ -39,6 +39,41 @@ const controlPrefix = "/control/v1";
 // cannot misroute or fail the Scheduler hop.
 const socketPath = process.env.DEEPSONAR_GATEWAY_UPSTREAM_SOCKET || "";
 const client = socketPath ? http : upstream.protocol === "https:" ? https : http;
+const hopHeaders = new Set(["connection", "keep-alive", "proxy-connection", "proxy-authenticate",
+  "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
+const forbiddenTrailers = new Set([...hopHeaders, "host", "content-length", "content-encoding",
+  "content-type", "content-range", "authorization", "www-authenticate", "cookie", "set-cookie",
+  "cache-control", "expect", "range", "max-forwards", "location", "retry-after", "vary"]);
+const fieldName = /^[!#$%&'*+.^_\x60|~0-9a-z-]+$/i;
+function tokens(value) {
+  return String(value || "").split(",").map(name => name.trim().toLowerCase()).filter(Boolean);
+}
+function connectionFields(source) {
+  return new Set([...hopHeaders, ...tokens(source.headers.connection)]);
+}
+function forwardHeaders(source, removed, allowTrailers) {
+  const result = Object.create(null);
+  for (const [name, value] of Object.entries(source.headers)) if (!removed.has(name)) result[name] = value;
+  if (allowTrailers && result["content-length"] === undefined) {
+    const names = tokens(source.headers.trailer).filter(name => fieldName.test(name)
+      && !removed.has(name) && !forbiddenTrailers.has(name));
+    if (names.length) result.trailer = [...new Set(names)].join(", ");
+  }
+  return result;
+}
+function forwardTrailers(source, target, removed, allowed) {
+  if (!allowed) return;
+  const pairs = [];
+  for (let i = 0; i < source.rawTrailers.length; i += 2) {
+    const name = source.rawTrailers[i], lower = name.toLowerCase();
+    if (fieldName.test(name) && !removed.has(lower) && !forbiddenTrailers.has(lower)) pairs.push([name, source.rawTrailers[i + 1]]);
+  }
+  if (pairs.length) target.addTrailers(pairs);
+}
+function supportedTransferCoding(source) {
+  return source.headers["transfer-encoding"] === undefined
+    || String(source.headers["transfer-encoding"]).trim().toLowerCase() === "chunked";
+}
 const server = http.createServer((req, res) => {
   const incoming = new URL(req.url || "/", "http://proxy.local");
   if (incoming.pathname === "/_deepsonar_health") {
@@ -54,9 +89,18 @@ const server = http.createServer((req, res) => {
     res.writeHead(404).end("not found");
     return;
   }
-  const headers = { ...req.headers, host: upstream.host };
-  delete headers.connection;
-  delete headers["proxy-authorization"];
+  if (!supportedTransferCoding(req)) {
+    req.resume();
+    res.writeHead(400).end("unsupported transfer coding");
+    return;
+  }
+  const requestRemoved = connectionFields(req);
+  const headers = forwardHeaders(req, requestRemoved, req.headers["transfer-encoding"] !== undefined);
+  headers.host = upstream.host;
+  // IncomingMessage has decoded chunk framing. Reframe GET/HEAD bodies too:
+  // ClientRequest does not automatically choose chunked for those methods.
+  if (headers["content-length"] === undefined && (req.headers["transfer-encoding"] !== undefined
+    || req.headers["content-length"] !== undefined)) headers["transfer-encoding"] = "chunked";
   const fail = () => {
     if (res.headersSent || res.destroyed) {
       res.destroy();
@@ -77,18 +121,41 @@ const server = http.createServer((req, res) => {
     path: incoming.pathname + incoming.search,
     headers,
   }, (reply) => {
-    res.writeHead(reply.statusCode || 502, reply.headers);
     reply.on("error", fail);
-    reply.pipe(res);
+    if (!supportedTransferCoding(reply)) {
+      reply.destroy();
+      fail();
+      return;
+    }
+    const responseRemoved = connectionFields(reply);
+    const status = reply.statusCode || 502;
+    const bodyAllowed = req.method !== "HEAD" && status !== 204 && status !== 304 && status >= 200;
+    const trailersAllowed = bodyAllowed && req.httpVersionMajor === 1 && req.httpVersionMinor >= 1;
+    const responseHeaders = forwardHeaders(reply, responseRemoved, trailersAllowed);
+    // Node generates this hop's Connection/Keep-Alive and response framing.
+    res.writeHead(status, responseHeaders);
+    reply.on("end", () => {
+      if (res.destroyed) return;
+      forwardTrailers(reply, res, responseRemoved, trailersAllowed && responseHeaders["content-length"] === undefined);
+      res.end();
+    });
+    reply.pipe(res, { end: false });
   });
   target.on("error", fail);
+  target.on("upgrade", (_reply, socket) => { socket.destroy(); fail(); });
   const abort = () => {
     target.destroy();
     res.destroy();
   };
   req.on("error", abort);
   req.on("aborted", abort);
-  req.pipe(target);
+  res.on("close", () => { if (!res.writableFinished) target.destroy(); });
+  req.on("end", () => {
+    if (target.destroyed) return;
+    forwardTrailers(req, target, requestRemoved, headers["transfer-encoding"] === "chunked");
+    target.end();
+  });
+  req.pipe(target, { end: false });
 });
 server.on("connect", (_req, socket) => socket.destroy());
 server.listen(3100, "0.0.0.0");

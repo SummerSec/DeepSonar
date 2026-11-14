@@ -36,6 +36,7 @@ test("REA archive guard rejects forged scope/provenance, stale attempts and corr
         VALUES (${jid},${pid},'audit','running',${`fixture-${jid}`},now()+interval '1 hour',${sql.json(snapshot)})`;
     }
     const attempt = await createAttempt(sql, jobId);
+    const otherAttempt = await createAttempt(sql, otherJob);
     const archive = {
       schema: "deepsonar.rea-observation/v1", job_id: jobId, attempt_id: String(attempt.id), operation: "function",
       sample_path: "/workspace/sample", sample_sha256: "a".repeat(64), image_digest: digest,
@@ -45,6 +46,7 @@ test("REA archive guard rejects forged scope/provenance, stale attempts and corr
     };
     const publish = (key: string, body: unknown = archive, owner = jobId, pid = project) => assets.createSharedAsset({
       scope: "project", projectId: pid, jobId: owner, key, contentType: "application/json", bytes: Buffer.from(JSON.stringify(body)), origin: "agent", actor: `job:${owner}`,
+      attemptId: String(owner === jobId ? attempt.id : otherAttempt.id), sandboxId: `fixture-${owner}`,
     });
     const payload = (key: string) => ({ title: "REA guard fixture", description: "Archive admission test; not a real tool execution.", artifact: { extensions: { "binary.rea-cli": { evidence_key: key } } } });
     const valid = await publish("guard/valid.json");

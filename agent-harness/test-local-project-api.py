@@ -85,6 +85,8 @@ def main():
     # 6. 优先级：pending 可改（job 可能已被 fake 调度跑掉，两种结果都合法）
     r = req("PATCH", f"/jobs/{job['id']}/priority", {"priority": 99}, expect=None) if False else None
     # 用专门断言：可能 200（还 pending）或 409（已被认领）
+    # 上一版把 priority 提到 999 是错的：hub_reason 是调度类固定优先级（500），PATCH 会
+    # 409 PRIORITY_FIXED，既置不了顶也会掩盖拒绝。恢复原步骤，只验证 pending 可改/已认领冲突。
     data = json.dumps({"priority": 99}).encode()
     request = urllib.request.Request(BASE + f"/jobs/{job['id']}/priority", data=data, method="PATCH",
                                      headers={"content-type": "application/json"})
@@ -97,17 +99,36 @@ def main():
     print("优先级:", code, "(200=改成功 / 409=已被认领，均合法)")
 
     # 7. 等整个 Hub 编排链收敛后硬重试：复用原画布，清空旧运行历史
-    # fake hub 每轮派多角色 + finding 必验 + followup 回收，链长已到 ~8 分钟，窗口放宽到 15 分钟
+    # fake hub 每轮派多角色 + finding 必验 + followup 回收，链长已到 ~8 分钟；本 job 在同一
+    # runner 上连续跑多个冒烟、共享一个 Scheduler 与数据库，实测长时间抖动会超过 15 分钟窗口
+    # （2026-11-14 连续复现）。窗口放宽到 30 分钟，并每 30 轮打印一次进度，让真实挂起仍然可见。
     final = None
-    for _ in range(450):
+    state = {"root": None, "job": None, "nodes": 0}
+    for attempt in range(900):
         j = req("GET", f"/jobs/{job['id']}")["job"]
         graph = req("GET", f"/canvases/{cid}")
         root = next(n for n in graph["nodes"] if n["node_type"] == "root")
+        state = {"root": root["status"], "job": j["status"], "nodes": len(graph["nodes"])}
         if root["status"] == "succeeded":
             final = j["status"]
             break
+        if attempt and attempt % 30 == 0:
+            print(f"[{attempt * 2}s] waiting hub chain: {state}", flush=True)
         time.sleep(2)
-    assert final, "Hub 编排链未在 15 分钟内收敛"
+    if not final:
+        # 失败现场取证：Job 长期 pending 时，需要区分「调度器没认领」与「镜像/容量不就绪」。
+        for name, path in (
+            ("health", "/health"),
+            ("pending jobs", f"/jobs?project_id={pid}&status=pending"),
+            ("claimed jobs", "/jobs?status=claimed"),
+            ("provisioning jobs", "/jobs?status=provisioning"),
+            ("project canvases", f"/projects/{pid}/canvases"),
+        ):
+            try:
+                print(f"诊断 {name}: {json.dumps(req('GET', path), ensure_ascii=False)[:800]}", flush=True)
+            except Exception as exc:  # 诊断不得掩盖原始失败
+                print(f"诊断 {name} 失败: {exc}", flush=True)
+    assert final, f"Hub 编排链未在 30 分钟内收敛（最后观测 {state}）"
 
     # 边断言需轮询：root 可能先于后续验收轮的 next 边到达 succeeded（链仍在演进）
     def hub_chain_ok():
@@ -156,18 +177,27 @@ def main():
         item["id"] for item in req("GET", f"/jobs?project_id={pid}")
         if item.get("canvas_id") == cid
     }
-    retry = req("POST", f"/tasks/{cid}/retry", None, 201)
-    assert retry["canvas_id"] == cid and retry["status"] == "pending"
+    # Automatic collection may have retained these source Jobs before hard retry.
+    # Retention must win over destructive reset; a request before collection still resets normally.
+    retry_code, retry = req("POST", f"/tasks/{cid}/retry", None, expect=None)
     current_job_ids = {
         item["id"] for item in req("GET", f"/jobs?project_id={pid}")
         if item.get("canvas_id") == cid
     }
-    assert retry["id"] in current_job_ids, "硬重试创建的新入口 Job 应属于原画布"
-    assert old_job_ids.isdisjoint(current_job_ids), "硬重试应清空原画布的旧 Job"
+    if retry_code == 409:
+        assert retry["error_code"] == "TASK_DELETE_KNOWLEDGE_RETAINED", retry
+        assert sum(retry["retained"].values()) > 0, retry
+        assert old_job_ids == current_job_ids, "知识来源保留时不得删除旧 Job"
+        assert req("GET", f"/canvases/{cid}")["nodes"], "来源画布必须保留"
+    else:
+        assert retry_code == 201, retry
+        assert retry["canvas_id"] == cid and retry["status"] == "pending"
+        assert retry["id"] in current_job_ids, "硬重试创建的新入口 Job 应属于原画布"
+        assert old_job_ids.isdisjoint(current_job_ids), "无保留记录时硬重试应清空原画布的旧 Job"
     rows = req("GET", f"/projects/{pid}/canvases")
     row = next(r for r in rows if r["id"] == cid)
     assert row["job_count"] >= 1, row
-    print(f"硬重试 OK: 首跑 {final} → 新 job {retry['id'][:8]}，新一轮 job 数 {row['job_count']}")
+    print(f"硬重试/知识来源保留 OK: 首跑 {final}，HTTP {retry_code}，当前 job 数 {row['job_count']}")
 
     # 8. 外部事件触发：进入 Hub，且 source + event_id 幂等
     event_body = {

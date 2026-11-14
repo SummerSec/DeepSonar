@@ -9,6 +9,14 @@
 Issue #100 defines the boundary between Scheduler-owned execution policy and
 provider-specific CLI protocols.
 
+## 平台 operation 的 HTTP bootstrap（#1094）
+
+Scheduler 生成的系统提示、工作区指令、启动消息与完成门催促统一区分 CLI 原生工具和 Job-scoped HTTP operation。冻结 `platform_tools` 是 operation allowlist，不注册同名 CLI 工具；角色指令中的 `mark_job_done({...})` 等写法只表达 operation 与 JSON payload，不能作为原生函数或 Shell 命令执行。
+
+首次平台操作先由 Agent 自身的 HTTP 工具读取 `$DEEPSONAR_API_BASE_URL/agent/capabilities_list`，再按返回 schema 向 `/operations/:operationId` POST。启动可见的短 bootstrap 说明认证、幂等 key 与完成 revision；完整反馈、回执和未知效果规则仍由平台固定 `deepsonar-control` Skill 维护。原生工具分派返回 not found 不代表 Control API 拒绝或权限缺失，不能改用另一控制通道，也不能将此错误记作完成。Runtime Adapter 不代发 HTTP，不把 CLI 输出转换成语义提交。
+
+提示渲染回归覆盖含函数式业务示例的 Test 指令、各角色结果契约、启动消息和完成门催促，接既有 `pnpm ci:unit:verify-eligibility` / `pnpm ci:unit:executor-real`；固定 Skill 由 `pnpm ci:unit:canvas-facts` 核对。最终 SHA 的 Actions 结果另验；本变更不宣称模型遵循率改善或历史 Job 已恢复，不改写冻结快照，不要求生产重跑或部署。
+
 ### DSH 异步子代理完成边界（#766）
 
 DSH 0.2.1-rc.2 的 `subagent` 立即返回 activation，父会话首次 idle 不表示任务结束。适配器只接受已知父会话的 `subagent.started`，并记录子会话谱系；活跃子会话的 `session.status=idle` 不能释放完成门，必须收到对应父子关系的 `subagent.finished`。可继续的子会话再次 running 会重新进入活跃集合。全部子代理完成后，仍等待父会话处理回传并再次 idle，才允许执行 `mark_job_done` 完成门及最多三次催促。父会话显式错误仍立即失败；取消、超时与清理由原 Job/RuntimeHost 边界负责。
@@ -56,7 +64,7 @@ never scraped.
 
 ### Pi 单次模型失败与内部重试边界（#1072）
 
-Pi 的模型消息失败与整个 RPC 执行结束是两个边界。`message_update` 中结构化 assistant 错误和 `message_end(stopReason=error)` 只保留当前模型消息失败，等待同一进程的重试结果和 `agent_settled`，不能据此关闭 stdin 或提前返回执行失败。原生重试开始时清理当前输出缓存，避免失败的 partial 文本使重试空响应误判成功或被去重吞掉；原始 Session/Evidence 不改写。后续成功 assistant 消息才能清除这笔待判定错误；仅 `auto_retry_end(success=true)`、`context_edit` 删除失败消息或新请求已发出都不能证明恢复成功。
+Pi 的模型消息失败与整个 RPC 执行结束是两个边界。`message_update` 中结构化 assistant 错误和 `message_end(stopReason=error)` 只保留当前模型消息失败，等待同一进程的重试结果和 `agent_settled`，不能据此关闭 stdin 或提前返回执行失败。原生重试只回滚失败消息贡献的文本，保留此前已完成消息的合法输出；文本与思考去重按消息隔离，空响应判定只使用当前消息，不能因历史成功文本非空而放行。新 RPC turn 清除消息基线；原始 Session/Evidence 不改写。后续成功 assistant 消息才能清除这笔待判定错误；仅 `auto_retry_end(success=true)`、`context_edit` 删除失败消息或新请求已发出都不能证明恢复成功。
 
 `agent_settled` 时仍有待判定错误则失败；重试耗尽、aborted、RPC/扩展错误以及进程非零退出或传输中断继续失败，后续模型成功不能清除独立进程/协议错误。恢复后的运行仍经过原完成门，只有 Scheduler 接受的 durable receipt 决定业务完成；原 Session/Attempt、累计预算、lease/deadline 与未知效果边界不变。本修复不新增模型请求、持久会话重启或 Job 自动重跑，也不将裸 `terminated` 认定为无条件可重试错误。
 
