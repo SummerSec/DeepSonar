@@ -28,21 +28,35 @@ export function logClaimStarved(input: {
 }
 
 const skipLoggedAt = new Map<string, number>();
-/** 缓存上限：state 只用于 60 秒去重，过期即无价值，不能让历史 Job 无限累积。 */
-const SKIP_CACHE_LIMIT = 1_024;
+/** 去重窗口：每个窗口最多打印 SKIP_LOG_BUDGET 条明细，其余只计数并在下一窗口汇总一条。 */
+const SKIP_LOG_WINDOW_MS = 60_000;
+const SKIP_LOG_BUDGET = 20;
+let skipWindowStart = 0;
+let skipWindowLogged = 0;
+let skipWindowSuppressed = 0;
 
-function pruneSkipCache(now: number): void {
-  if (skipLoggedAt.size < SKIP_CACHE_LIMIT) return;
-  for (const [key, at] of skipLoggedAt) if (now - at >= 60_000) skipLoggedAt.delete(key);
-  // 仍然超限说明 60 秒内出现超过上限的不同 Job/原因：整体清空，最坏退化为一轮重复打印。
-  if (skipLoggedAt.size >= SKIP_CACHE_LIMIT) skipLoggedAt.clear();
+function rotateSkipWindow(now: number): void {
+  if (now - skipWindowStart < SKIP_LOG_WINDOW_MS) return;
+  if (skipWindowSuppressed > 0) {
+    console.error(`[dispatcher] CLAIM_SKIP suppressed=${skipWindowSuppressed} in last ${SKIP_LOG_WINDOW_MS / 1000}s`);
+  }
+  skipWindowStart = now;
+  skipWindowLogged = 0;
+  skipWindowSuppressed = 0;
+  for (const [key, at] of skipLoggedAt) if (now - at >= SKIP_LOG_WINDOW_MS) skipLoggedAt.delete(key);
 }
 
 export function logClaimSkip(jobId: string, reason: string, now = Date.now()): void {
-  const key = `${jobId}:${reason}`;
-  if (now - (skipLoggedAt.get(key) ?? 0) < 60_000) return;
-  pruneSkipCache(now);
-  skipLoggedAt.set(key, now);
+  if (skipWindowStart === 0) skipWindowStart = now;
+  rotateSkipWindow(now);
+  if (now - (skipLoggedAt.get(`${jobId}:${reason}`) ?? 0) < SKIP_LOG_WINDOW_MS) return;
+  // 明细预算用尽后只计数：缓存只保存已打印过的 key，因此容量与预算同阶，不随历史 Job 增长。
+  if (skipWindowLogged >= SKIP_LOG_BUDGET) {
+    skipWindowSuppressed += 1;
+    return;
+  }
+  skipLoggedAt.set(`${jobId}:${reason}`, now);
+  skipWindowLogged += 1;
   console.error(`[dispatcher] CLAIM_SKIP job=${jobId} reason=${reason}`);
 }
 
@@ -53,6 +67,9 @@ export function claimSkipCacheSizeForTests(): number {
 
 export function resetClaimDiagnosticsForTests(): void {
   skipLoggedAt.clear();
+  skipWindowStart = 0;
+  skipWindowLogged = 0;
+  skipWindowSuppressed = 0;
   lastSignature = "";
   lastLoggedAt = 0;
 }

@@ -250,16 +250,28 @@ test("#1114 claim skip log names the blocked Job and reason once per minute", ()
   }
 });
 
-test("#1114 claim skip cache stays bounded across many historical Jobs", () => {
-  const spy = mock.method(console, "error", () => {});
+test("#1114 claim skip logging keeps throttle and a bounded log volume under backlog scans", () => {
+  const calls: string[] = [];
+  const spy = mock.method(console, "error", (...args: unknown[]) => { calls.push(args.map(String).join(" ")); });
   try {
     resetClaimDiagnosticsForTests();
-    for (let index = 0; index < 5_000; index += 1) logClaimSkip(`job-${index}`, "project_concurrency", 3_000_000);
-    assert.ok(claimSkipCacheSizeForTests() <= 1_024, `缓存必须保持在 1024 以内，实际 ${claimSkipCacheSizeForTests()}`);
-    // 时间推进 30 天后，旧条目应被回收，新 Job 仍可打印
-    logClaimSkip("job-later", "graph_ineligible", 3_000_000 + 30 * 86_400_000);
-    assert.ok(claimSkipCacheSizeForTests() <= 1_024);
+    // 1025 个持续不合格 Job、同 9ms 内连扫 10 轮：60 秒窗口内明细必须有上限，不能逐轮重打印。
+    for (let round = 0; round < 10; round += 1) {
+      for (let index = 0; index < 1_025; index += 1) logClaimSkip(`job-${index}`, "project_concurrency", 3_000_000 + round);
+    }
+    assert.ok(calls.length <= 20, `同一窗口明细上限 20，实际 ${calls.length}`);
+    assert.ok(claimSkipCacheSizeForTests() <= 20, `缓存必须与预算同阶，实际 ${claimSkipCacheSizeForTests()}`);
+    // 同一 Job/原因仍在窗口内：即使预算已用尽，也不得重复打印。
+    const beforeSecondRound = calls.length;
+    logClaimSkip("job-0", "project_concurrency", 3_000_030);
+    assert.equal(calls.length, beforeSecondRound);
+    // 窗口推进后输出一条被压制的汇总，而不是把积压全部重打。
+    logClaimSkip("job-later", "graph_ineligible", 3_000_000 + 60_001);
+    const suppressed = calls.filter((line) => /CLAIM_SKIP suppressed=\d+/.test(line));
+    assert.equal(suppressed.length, 1, "跨窗口必须给出一条 suppressed 汇总");
+    assert.ok(calls.length <= 22, `跨窗口后总量仍应有界，实际 ${calls.length}`);
   } finally {
+    spy.mock.resetCalls();
     spy.mock.restore();
     resetClaimDiagnosticsForTests();
   }
