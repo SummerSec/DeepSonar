@@ -669,6 +669,7 @@ function logPlatformClaimsPaused(reason: string | null): void {
  * 在调度器 advisory lock 下抢占 pending Job，但不执行 provision 或 Agent。
  * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
+import { logClaimStarved } from "./dispatch-claim-starved.js";
 export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCircuitProbe | null }[]> {
   let createProbe: CreateCircuitProbe | null = null; // claim-time half-open probe identity
   if (managesHostDockerRuntime()) {
@@ -730,9 +731,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
   const claimPage = (): Promise<ClaimPage> => sql.begin(async (tx): Promise<ClaimPage> => {
     const stop: ClaimPage = { claimed: [], cursor: null, more: false };
     await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
-    // #740 platform-wide claim pause: read under the same advisory lock the
-    // pause API takes, so every replica observes a committed pause before
-    // claiming. A missing singleton row fails closed.
+    // #740 平台级认领暂停：与暂停 API 取同一把 advisory 锁，任何副本都先看到已提交的暂停；缺行则 fail closed。
     // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
     const platformClaims = await readPlatformClaimsControl(tx as unknown as typeof sql);
     if (platformClaims.paused) {
@@ -770,7 +769,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       dispatchSlots(rules.maxGlobalJobs, totalActive),
       provisionSlots(rules.maxConcurrentProvisioning, activeProvisioning),
     );
-    if (slots <= 0) return stop;
+    if (slots <= 0) { logClaimStarved({ totalActive, activeProvisioning, maxGlobalJobs: rules.maxGlobalJobs, maxConcurrentProvisioning: rules.maxConcurrentProvisioning }); return stop; }
 
     const counts = accumulateDispatchCounts(active as unknown as ActiveDispatchRow[]);
     type PendingCandidate = DispatchCandidate & { id: string; priority: number; created_at_key: string; canvas_project_id: string | null };

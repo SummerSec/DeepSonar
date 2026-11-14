@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import { mock, test } from "node:test";
 import {
   CREATE_CIRCUIT_COOLDOWN_MS,
   CREATE_CIRCUIT_FAILURES_TO_TRIP,
@@ -13,6 +13,7 @@ import {
   shouldLogCreateCircuitPause,
   classifyProvisionFailure,
 } from "./opensandbox-create-circuit.js";
+import { logClaimStarved } from "./dispatch-claim-starved.js";
 
 function clockAt(start = 1_000_000) {
   let now = start;
@@ -200,3 +201,30 @@ test("#1046 an outcome from a claim admitted before the trip cannot close or own
 function readDispatcher(): string {
   return readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
 }
+
+test("#1114 claim starvation log is throttled per signature", () => {
+  const calls: string[] = [];
+  const spy = mock.method(console, "error", (...args: unknown[]) => {
+    calls.push(args.map(String).join(" "));
+  });
+  try {
+    logClaimStarved({ totalActive: 5, activeProvisioning: 2, maxGlobalJobs: 20, maxConcurrentProvisioning: 2, now: 1_000_000 });
+    logClaimStarved({ totalActive: 5, activeProvisioning: 2, maxGlobalJobs: 20, maxConcurrentProvisioning: 2, now: 1_030_000 });
+    assert.equal(calls.length, 1, "同一签名 60 秒内只打印一次");
+    logClaimStarved({ totalActive: 6, activeProvisioning: 2, maxGlobalJobs: 20, maxConcurrentProvisioning: 2, now: 1_035_000 });
+    assert.equal(calls.length, 2, "签名变化立即再次打印");
+    logClaimStarved({ totalActive: 6, activeProvisioning: 2, maxGlobalJobs: 20, maxConcurrentProvisioning: 2, now: 1_100_000 });
+    assert.equal(calls.length, 3, "同一签名超过 60 秒再次打印");
+    assert.match(calls[0]!, /CLAIM_STARVED active=5\/20 provisioning=2\/2/);
+  } finally {
+    spy.mock.restore();
+  }
+});
+
+test("#1114 dispatcher logs starvation where slots run out before claiming", () => {
+  const source = readDispatcher();
+  assert.match(source, /logClaimStarved\(\{ totalActive, activeProvisioning/);
+  const gate = source.indexOf("if (slots <= 0)");
+  const log = source.indexOf("logClaimStarved({");
+  assert.ok(gate >= 0 && log > gate, "日志必须挂在 slots<=0 分支上");
+});

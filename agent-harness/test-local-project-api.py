@@ -118,6 +118,8 @@ def main():
         for name, path in (
             ("health", "/health"),
             ("pending jobs", f"/jobs?project_id={pid}&status=pending"),
+            ("claimed jobs", "/jobs?status=claimed"),
+            ("provisioning jobs", "/jobs?status=provisioning"),
             ("project canvases", f"/projects/{pid}/canvases"),
         ):
             try:
