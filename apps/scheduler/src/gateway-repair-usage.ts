@@ -75,6 +75,7 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
   let buffer = "", eventName = "", data: string[] = [], frameBytes = 0;
   const chatChoices = new Map<number, boolean>();
   let observed: UsageBreakdown | null = null, anthropicStart: RecordValue | null = null, anthropicDelta = false;
+  let anthropicPendingOutput = false, anthropicDeltaFrame = false;
   const observe = (next: UsageBreakdown | null): void => {
     if (!next) { failed = true; return; }
     if (observed && (next.input < observed.input || next.output < observed.output || next.cacheRead < observed.cacheRead || next.cacheWrite < observed.cacheWrite)) { failed = true; return; }
@@ -129,9 +130,14 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
         // already forms the monotonic baseline: observing it with output 0 keeps
         // `observe`'s undercount guard armed for the first delta.
         observe(usage(start.pendingOutput ? { ...anthropicStart, output_tokens: 0 } : anthropicStart, "anthropic"));
+        anthropicPendingOutput = start.pendingOutput;
       } else if (value.type === "message_delta") {
+        anthropicDeltaFrame = true;
+        // 只有真正缺省（undefined）的 usage 才是协议允许的「无新证据」形状；
+        // null/数组/字符串/数字等显式损坏的账务证据一律 fail-closed。
+        if (value.usage === undefined) { if (!anthropicStart) failed = true; return; }
         const deltaUsage = record(value.usage);
-        if (!anthropicStart || !deltaUsage || count(deltaUsage.output_tokens) === null) { failed = true; return; }
+        if (!deltaUsage || !anthropicStart || count(deltaUsage.output_tokens) === null) { failed = true; return; }
         // Usage fields are cumulative snapshots. Preserve omitted fields from
         // the last snapshot, but validate every supplied input/cache update too:
         // ignoring them would undercount providers reporting revised totals.
@@ -140,7 +146,12 @@ export function createRepairUsageScanner(path: string, isSse: boolean): {
         if (!failed) anthropicStart = nextUsage;
         anthropicDelta = true;
       } else if (value.type === "message_stop") {
-        if (!anthropicStart || !anthropicDelta || !observed) failed = true;
+        // #1082: 聚合路由可以在 message_start 报完整 usage 且整条流不发 message_delta；
+        // 只在「start 完整且一个 delta 帧都没出现」时以该快照落账。出现过 delta 帧却没带来
+        // 完整 usage（pending output、或 usage 缺失/损坏）仍 fail-closed：message_stop 本身
+        // 不证明早期快照已是最终计数，无法区分「缺 delta 的合法契约」与「最终计数帧丢失」，
+        // 后者只能靠上游帧审计事后归证（#1082 建议 3）。
+        if (!anthropicStart || !observed || (!anthropicDelta && (anthropicPendingOutput || anthropicDeltaFrame))) failed = true;
         ended = true;
       } else if (value.type !== "ping" && (!anthropicStart || !["content_block_start", "content_block_delta", "content_block_stop"].includes(value.type))) failed = true;
     }
