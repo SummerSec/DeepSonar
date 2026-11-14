@@ -9,7 +9,9 @@ export interface PreparedCandidate { hash: string; bytes: number }
 
 export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, input: ProposeProjectKnowledgePayload,
   candidate: PreparedCandidate | undefined, governanceHash: string, idempotencyKey: string, requestDigest: string): Promise<Record<string, unknown>> {
-  const [assignment] = await tx`SELECT a.work_id,a.stage,w.state,w.stage AS work_stage,w.active_job_id,w.governance_hash,w.input_manifest_json,w.revision_count,w.job_count,w.run_seconds
+  // #1130：读写两侧必须用同一份 manifest。读侧（read_knowledge_input / prompt）用的是随 Job 冻结的
+  // assignment manifest，写侧此前误取 work 的 manifest（现场 18 vs 16 条），导致「读得到、引用不了」。
+  const [assignment] = await tx`SELECT a.work_id,a.stage,w.state,w.stage AS work_stage,w.active_job_id,w.governance_hash,a.input_manifest_json,w.revision_count,w.job_count,w.run_seconds
     FROM project_knowledge_job_assignments a JOIN project_knowledge_work w ON w.id=a.work_id AND w.project_id=a.project_id
     WHERE a.job_id=${actor.jobId} AND a.project_id=${actor.projectId} AND a.work_id=${input.work_ref} FOR UPDATE OF w`;
   if (!assignment || assignment.stage !== "maker" || assignment.state !== "running" || assignment.work_stage !== "maker" || assignment.active_job_id !== actor.jobId)

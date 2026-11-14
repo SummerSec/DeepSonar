@@ -172,3 +172,14 @@ test("#1128 read_knowledge_input 四类失败各自可行动，hash 混淆有明
   await expectRejected(readManifestInput(dbWith([reviewerOnly]), actor, { work_ref: "work-1", input_ref: "fact:case-1", expected_hash: "a".repeat(64) }),
     "KNOWLEDGE_INPUT_AUDIENCE_DENIED", /visible to audience \[reviewer\], current stage is maker/, "input_ref");
 });
+
+test("#1130 读写两侧使用同一份 assignment manifest", async () => {
+  const { readFileSync } = await import("node:fs");
+  const proposals = readFileSync(new URL("./proposals.ts", import.meta.url), "utf8");
+  const inputs = readFileSync(new URL("./inputs.ts", import.meta.url), "utf8");
+  // 写侧（propose/evaluation_plan 校验）必须取 job_assignments 的冻结快照，而不是 work 的总清单。
+  assert.match(proposals, /SELECT a\.work_id,a\.stage,w\.state,a\.input_manifest_json|SELECT a\.work_id,a\.stage,w\.state[\s\S]{0,80}a\.input_manifest_json/);
+  assert.doesNotMatch(proposals, /w\.input_manifest_json/);
+  // 读侧（read_knowledge_input）沿用 assignment 行本身。
+  assert.match(inputs, /SELECT a\.\*,w\.governance_hash FROM project_knowledge_job_assignments a/);
+});
