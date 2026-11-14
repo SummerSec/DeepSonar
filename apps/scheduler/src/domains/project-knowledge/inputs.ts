@@ -62,13 +62,33 @@ export async function recheckKnowledgeSources(tx: KnowledgeDb, actor: KnowledgeA
 }
 
 export async function readManifestInput(db: KnowledgeDb, actor: KnowledgeActor, input: { work_ref: string; input_ref: string; expected_hash: string; cursor?: string }) {
-  const [assignment] = await db`SELECT a.*,w.governance_hash FROM project_knowledge_job_assignments a
+  // #1128：查询本 Job 的全部 assignment，失败时能回显可用 work_ref，而不是一句不可行动的 SCOPE_DENIED。
+  const assignments = await db`SELECT a.*,w.governance_hash FROM project_knowledge_job_assignments a
     JOIN project_knowledge_work w ON w.id=a.work_id AND w.project_id=a.project_id
-    WHERE a.job_id=${actor.jobId} AND a.project_id=${actor.projectId} AND a.work_id=${input.work_ref}`;
-  if (!assignment) return reject("KNOWLEDGE_SCOPE_DENIED", "No assignment to this knowledge work");
+    WHERE a.job_id=${actor.jobId} AND a.project_id=${actor.projectId}`;
+  const assignment = assignments.find((row) => String(row.work_id) === input.work_ref);
+  if (!assignment) {
+    const availableWorkRefs = assignments.slice(0, 8).map((row) => `${String(row.work_id)} (stage=${String(row.stage)})`);
+    return reject("KNOWLEDGE_WORK_NOT_ASSIGNED",
+      `work_ref ${input.work_ref} is not assigned to this Job; assigned work_refs: ${availableWorkRefs.join(", ") || "(none)"}`, "work_ref");
+  }
   const manifest = assignment.input_manifest_json as KnowledgeInputManifestEntry[];
-  const entry = manifest.find((item) => item.input_ref === input.input_ref && item.content_hash === input.expected_hash && item.audience.includes(assignment.stage as never));
-  if (!entry) return reject("KNOWLEDGE_SCOPE_DENIED", "Input reference is outside this assignment");
+  const entry = manifest.find((item) => item.input_ref === input.input_ref);
+  if (!entry) {
+    const availableRefs = manifest.slice(0, 12).map((item) => item.input_ref);
+    return reject("KNOWLEDGE_INPUT_REF_UNKNOWN",
+      `input_ref ${input.input_ref} is not in this work manifest; available input_refs: ${availableRefs.join(", ") || "(none)"}`, "input_ref");
+  }
+  if (entry.content_hash !== input.expected_hash) {
+    // #1128：input_ref 尾部可能内嵌另一个 hex，必须明确要求逐字复制 manifest[].content_hash。
+    return reject("KNOWLEDGE_INPUT_HASH_MISMATCH",
+      `expected_hash must be manifest[].content_hash of ${entry.input_ref}, which starts with ${entry.content_hash.slice(0, 8)} `
+      + `(len ${entry.content_hash.length}); any hex embedded in input_ref is NOT the expected hash`, "expected_hash");
+  }
+  if (!entry.audience.includes(assignment.stage as never)) {
+    return reject("KNOWLEDGE_INPUT_AUDIENCE_DENIED",
+      `input ${entry.input_ref} is visible to audience [${entry.audience.join(",")}], current stage is ${String(assignment.stage)}`, "input_ref");
+  }
   if (entry.input_ref === "platform-probe:foreign-scope" || entry.input_ref === "platform-probe:revoked") {
     const errorCode = entry.input_ref.endsWith("foreign-scope") ? "KNOWLEDGE_SCOPE_DENIED" : "KNOWLEDGE_REVOKED";
     await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,error_code)
