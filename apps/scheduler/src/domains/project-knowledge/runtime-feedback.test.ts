@@ -177,10 +177,10 @@ test("#1130 读写两侧使用同一份 assignment manifest（历史行才回退
   const { readFileSync } = await import("node:fs");
   const proposals = readFileSync(new URL("./proposals.ts", import.meta.url), "utf8");
   const inputs = readFileSync(new URL("./inputs.ts", import.meta.url), "utf8");
-  // 写侧同时取两份并优先 assignment 快照：随 Job 冻结的清单与 prompt/读侧同源。
+  // 写侧同时取两份并优先非空的 assignment 快照（列默认是 []），与 prompt/读侧同源。
   assert.match(proposals, /a\.input_manifest_json AS assignment_manifest/);
   assert.match(proposals, /w\.input_manifest_json AS work_manifest/);
-  assert.match(proposals, /assignment\.assignment_manifest \?\? assignment\.work_manifest/);
+  assert.match(proposals, /assignmentManifest\.length \? assignmentManifest : workManifest/);
   // 读侧（read_knowledge_input）沿用 assignment 行本身。
   assert.match(inputs, /SELECT a\.\*,w\.governance_hash FROM project_knowledge_job_assignments a/);
 });

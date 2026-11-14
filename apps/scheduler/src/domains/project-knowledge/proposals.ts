@@ -30,7 +30,10 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
 
   // 随 Job 冻结的 assignment manifest 是唯一真相；历史行没有该快照时才回退 work 总清单
   //（历史冻结数据是不可变事实，不按新契约重写）。
-  const frozenManifest = (assignment.assignment_manifest ?? assignment.work_manifest) as
+  // 列默认是 '[]'（不是 NULL）：空数组等于「没有随 Job 冻结的清单」，必须回退 work 清单。
+  const assignmentManifest = assignment.assignment_manifest as Array<{ input_ref: string }>;
+  const workManifest = assignment.work_manifest as Array<{ input_ref: string }>;
+  const frozenManifest = (assignmentManifest.length ? assignmentManifest : workManifest) as
     Array<{ input_ref: string; content_hash: string; blob_hash?: string }>;
   const manifests = frozenManifest;
   if (["create", "revise", "merge"].includes(input.action) && input.source_refs.length === 0)
