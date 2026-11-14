@@ -11,7 +11,7 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
   candidate: PreparedCandidate | undefined, governanceHash: string, idempotencyKey: string, requestDigest: string): Promise<Record<string, unknown>> {
   // #1130：读写两侧必须用同一份 manifest。读侧（read_knowledge_input / prompt）用的是随 Job 冻结的
   // assignment manifest，写侧此前误取 work 的 manifest（现场 18 vs 16 条），导致「读得到、引用不了」。
-  const [assignment] = await tx`SELECT a.work_id,a.stage,w.state,w.stage AS work_stage,w.active_job_id,w.governance_hash,a.input_manifest_json,w.revision_count,w.job_count,w.run_seconds
+  const [assignment] = await tx`SELECT a.work_id,a.stage,w.state,w.stage AS work_stage,w.active_job_id,w.governance_hash,a.input_manifest_json AS assignment_manifest,w.input_manifest_json AS work_manifest,w.revision_count,w.job_count,w.run_seconds
     FROM project_knowledge_job_assignments a JOIN project_knowledge_work w ON w.id=a.work_id AND w.project_id=a.project_id
     WHERE a.job_id=${actor.jobId} AND a.project_id=${actor.projectId} AND a.work_id=${input.work_ref} FOR UPDATE OF w`;
   if (!assignment || assignment.stage !== "maker" || assignment.state !== "running" || assignment.work_stage !== "maker" || assignment.active_job_id !== actor.jobId)
@@ -28,7 +28,11 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
     if (Number(assignment.revision_count) >= 2) return reject("KNOWLEDGE_BUDGET_EXHAUSTED", "Maximum candidate revisions reached");
   } else if (input.parent_proposal_ref) return reject("KNOWLEDGE_BASE_CONFLICT", "Initial proposal cannot have a parent");
 
-  const manifests = assignment.input_manifest_json as Array<{ input_ref: string; content_hash: string }>;
+  // 随 Job 冻结的 assignment manifest 是唯一真相；历史行没有该快照时才回退 work 总清单
+  //（历史冻结数据是不可变事实，不按新契约重写）。
+  const frozenManifest = (assignment.assignment_manifest ?? assignment.work_manifest) as
+    Array<{ input_ref: string; content_hash: string; blob_hash?: string }>;
+  const manifests = frozenManifest;
   if (["create", "revise", "merge"].includes(input.action) && input.source_refs.length === 0)
     return reject("KNOWLEDGE_SOURCE_REQUIRED", "Candidate requires at least one frozen source", "source_refs");
   for (const source of input.source_refs) {
@@ -59,7 +63,7 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
   const inputDigest = sha256(canonical({ project_id: actor.projectId, work_id: input.work_ref, action: input.action,
     revision: input.revision, bases, candidate_hash: candidate?.hash ?? null, source_refs: input.source_refs,
     evaluation_plan: input.evaluation_plan, governance_hash: governanceHash,
-    manifest_hash: sha256(canonical((assignment.input_manifest_json as Array<{ input_ref: string; blob_hash: string }>).map((entry) => ({ input_ref: entry.input_ref, blob_hash: entry.blob_hash })))) }));
+    manifest_hash: sha256(canonical(frozenManifest.map((entry) => ({ input_ref: entry.input_ref, blob_hash: entry.blob_hash })))) }));
   let candidateVersionId: string | null = null;
   if (candidate && input.candidate) {
     await registerKnowledgeBlob(tx, candidate.hash, candidate.bytes);
