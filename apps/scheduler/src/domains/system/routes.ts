@@ -7,6 +7,7 @@ import {
   refreshOpenSandboxServerStatus,
   type OpenSandboxServerStatus,
 } from "../../opensandbox-health.js";
+import { openSandboxCreateCircuitStatus } from "../../opensandbox-create-circuit.js";
 import { openSandboxUploadCircuitStatus } from "../../opensandbox-upload-circuit.js";
 import { runtimeImageWarmupStatus } from "../../runtime-image-warmup.js";
 import { dispatcherRuntimeStatus } from "../../startup-status.js";
@@ -100,6 +101,8 @@ export function registerSystemRoutes(
         domain: openSandbox.domain,
         ready: openSandboxAllowsDispatch(openSandbox),
         upload_circuit: openSandboxUploadCircuitStatus(),
+        // #1119 方案 A 的可观测面：create 熔断状态（state/episode/openedAt/lastTripReason/recentFailures）
+        create_circuit: openSandboxCreateCircuitStatus(),
       },
       ts: Date.now(),
     };
