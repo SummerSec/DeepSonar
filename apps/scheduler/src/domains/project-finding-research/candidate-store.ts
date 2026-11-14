@@ -21,6 +21,13 @@ export async function scanCandidateProjects(tx: TransactionSql): Promise<number>
       ON CONFLICT(project_id) DO UPDATE SET generation=gen_random_uuid(),rule_version=EXCLUDED.rule_version,
         cursor_id=NULL,status='pending',attempts=0,error_code=NULL,next_run_at=now(),updated_at=now()
       WHERE project_finding_candidate_work.rule_version IS DISTINCT FROM EXCLUDED.rule_version`;
+    // #1122：只在来源集合变化时唤醒已发布的项目，取代「succeeded 后每 30 秒无条件全量重建」。
+    // 用 findings 行数与已发布 generation 的 sources 行数比较，两次都是走索引的计数，代价与项目规模线性。
+    await tx`UPDATE project_finding_candidate_work w SET next_run_at=now(),updated_at=now()
+      WHERE w.project_id=${project.id}::uuid AND w.status='succeeded'
+        AND (SELECT count(*) FROM findings f WHERE f.project_id=w.project_id)
+          IS DISTINCT FROM (SELECT count(*) FROM project_finding_candidate_sources s
+            WHERE s.project_id=w.project_id AND s.generation=w.active_generation)`;
   }
   await tx`UPDATE project_finding_candidate_scan SET cursor_id=${projects.length<CANDIDATE_PROJECT_SCAN_SIZE ? null : projects.at(-1)?.id}::uuid WHERE id='global'`;
   return projects.length;
@@ -59,7 +66,11 @@ async function computeSource(tx: TransactionSql, project: string, generation: st
       rank_truncated=EXCLUDED.rank_truncated,processed_at=now()`;
 }
 
-/** Durable checkpoint and atomic generation publication; no source mutation. */
+/**
+ * Durable checkpoint and atomic generation publication; no source mutation.
+ * #1122：一轮发布后不再 30 秒无条件重建；下一次重建只由 rule_version 变化或来源集合变化
+ * （count 漂移）触发，另有 7 天兜底刷新，避免无变化时无限全量重算。
+ */
 export async function processCandidateBatch(db: Db = sql, enabled=()=>true): Promise<number> {
   if (!enabled()) return 0;
   return db.begin(async tx=>{
@@ -88,7 +99,7 @@ export async function processCandidateBatch(db: Db = sql, enabled=()=>true): Pro
         const done=ids.length<CANDIDATE_BATCH_SIZE;
         await batch`UPDATE project_finding_candidate_work SET cursor_id=${done?null:ids.at(-1)?.id}::uuid,
           status=${done?'succeeded':'running'},active_generation=CASE WHEN ${done} THEN generation ELSE active_generation END,
-          attempts=0,error_code=NULL,updated_at=now(),next_run_at=now()+${done?30:0}*interval '1 second'
+          attempts=0,error_code=NULL,updated_at=now(),next_run_at=now()+${done?604800:0}*interval '1 second'
           WHERE project_id=${project}::uuid AND generation=${work.generation}::uuid`;
         return ids.length;
       });

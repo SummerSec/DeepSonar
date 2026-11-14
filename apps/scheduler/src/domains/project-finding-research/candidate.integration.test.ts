@@ -58,6 +58,24 @@ test('durable candidate generations, bounded pages, invalidation, recovery and m
     assert.equal((await work()).active_generation,null);
     await Promise.all([store.processCandidateBatch(sql),store.processCandidateBatch(sql)]);
     const completed=await finish();assert.equal(completed.active_generation,initialGeneration);
+    // #1122：发布后不再 30 秒无条件全量重建——next_run_at 推远，且来源未变时不被重选。
+    const publishedWork=await work();
+    const quietSeconds=async()=>Number((await sql`SELECT EXTRACT(EPOCH FROM (next_run_at-now()))::int AS s
+      FROM project_finding_candidate_work WHERE project_id=${project}`)[0].s);
+    assert.ok((await quietSeconds())>6*24*3600,'published work must sleep instead of re-queueing every 30s');
+    await sql.begin(tx=>store.scanCandidateProjects(tx));
+    assert.equal((await work()).generation,publishedWork.generation,'无来源变化时不得换 generation');
+    // 来源集合变化（新增 finding）→ 扫描期唤醒一次，且只重建一代。
+    const extraJob=randomUUID(),extraFinding=randomUUID();
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json) VALUES (${extraJob},${project},${canvas},'audit','succeeded','{}')`;
+    await sql`INSERT INTO findings(id,project_id,job_id,fingerprint,title,summary,profile,verify_status,disposition)
+      VALUES (${extraFinding},${project},${extraJob},${extraFinding},'中文 搜索 参数 注入','相同的声明','security.vulnerability','confirmed','resolved')`;
+    await sql.begin(tx=>store.scanCandidateProjects(tx));
+    assert.ok((await quietSeconds())<=0,'source drift must wake the pending work');
+    await store.processCandidateBatch(sql);
+    assert.notEqual((await work()).generation,publishedWork.generation,'drift triggers exactly one new generation');
+    await finish();
+    assert.ok((await quietSeconds())>6*24*3600,'after the rebuild the work sleeps again: no 30s loop');
     const page=(await readCandidatePage(subject,undefined))!;
     assert.equal(page.status,'succeeded');assert.equal(page.items.length,25);assert.ok(page.next_cursor);
     assert.equal(page.source_window.examined,36);assert.equal(page.source_window.rank_truncated,true);
