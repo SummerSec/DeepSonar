@@ -152,6 +152,15 @@ test("#1128 read_knowledge_input 四类失败各自可行动，hash 混淆有明
   // ① work_ref 不属于本 Job：回显可用 work_ref 与 stage
   await expectRejected(readManifestInput(dbWith([assignment()]), actor, { work_ref: "work-other", input_ref: "fact:case-1", expected_hash: "a".repeat(64) }),
     "KNOWLEDGE_WORK_NOT_ASSIGNED", /assigned work_refs: work-1 \(stage=maker\)/, "work_ref");
+  // ①' 大小写/混合大小写 UUID 等价于 SQL 的 uuid 比较（不得误报未分配）
+  const uuidWork = "11111111-2222-3333-4444-555555555555";
+  const uuidAssignment = assignment({ work_id: uuidWork });
+  await expectRejected(readManifestInput(dbWith([uuidAssignment]), actor,
+    { work_ref: uuidWork.toUpperCase(), input_ref: "fact:case-1", expected_hash: "d".repeat(64) }),
+    "KNOWLEDGE_INPUT_HASH_MISMATCH", /must be manifest\[\]\.content_hash of fact:case-1/, "expected_hash");
+  await expectRejected(readManifestInput(dbWith([uuidAssignment]), actor,
+    { work_ref: uuidWork.slice(0, 18).toUpperCase() + uuidWork.slice(18), input_ref: "fact:case-1", expected_hash: "d".repeat(64) }),
+    "KNOWLEDGE_INPUT_HASH_MISMATCH", /must be manifest\[\]\.content_hash of fact:case-1/, "expected_hash");
   // ② input_ref 不在 manifest：回显可用 input_ref
   await expectRejected(readManifestInput(dbWith([assignment()]), actor, { work_ref: "work-1", input_ref: "fact:missing", expected_hash: "a".repeat(64) }),
     "KNOWLEDGE_INPUT_REF_UNKNOWN", /available input_refs: fact:case-1, revision-feedback:p:2/, "input_ref");

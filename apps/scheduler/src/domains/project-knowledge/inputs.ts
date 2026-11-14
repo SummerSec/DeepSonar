@@ -66,7 +66,10 @@ export async function readManifestInput(db: KnowledgeDb, actor: KnowledgeActor, 
   const assignments = await db`SELECT a.*,w.governance_hash FROM project_knowledge_job_assignments a
     JOIN project_knowledge_work w ON w.id=a.work_id AND w.project_id=a.project_id
     WHERE a.job_id=${actor.jobId} AND a.project_id=${actor.projectId}`;
-  const assignment = assignments.find((row) => String(row.work_id) === input.work_ref);
+  // #1128 评审：PostgreSQL 的 uuid 比较与大小写无关，这里用 JS 比较必须同样规范化，
+  // 否则合法的全大写/混合大小写 work_ref 会被误报为未分配。
+  const workRef = input.work_ref.toLowerCase();
+  const assignment = assignments.find((row) => String(row.work_id).toLowerCase() === workRef);
   if (!assignment) {
     const availableWorkRefs = assignments.slice(0, 8).map((row) => `${String(row.work_id)} (stage=${String(row.stage)})`);
     return reject("KNOWLEDGE_WORK_NOT_ASSIGNED",
