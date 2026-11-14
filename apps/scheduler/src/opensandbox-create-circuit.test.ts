@@ -13,7 +13,7 @@ import {
   shouldLogCreateCircuitPause,
   classifyProvisionFailure,
 } from "./opensandbox-create-circuit.js";
-import { logClaimSkip, logClaimStarved } from "./dispatch-claim-diagnostics.js";
+import { claimSkipCacheSizeForTests, logClaimSkip, logClaimStarved, resetClaimDiagnosticsForTests } from "./dispatch-claim-diagnostics.js";
 
 function clockAt(start = 1_000_000) {
   let now = start;
@@ -247,5 +247,20 @@ test("#1114 claim skip log names the blocked Job and reason once per minute", ()
     assert.match(calls[0]!, /CLAIM_SKIP job=job-a reason=project_concurrency/);
   } finally {
     spy.mock.restore();
+  }
+});
+
+test("#1114 claim skip cache stays bounded across many historical Jobs", () => {
+  const spy = mock.method(console, "error", () => {});
+  try {
+    resetClaimDiagnosticsForTests();
+    for (let index = 0; index < 5_000; index += 1) logClaimSkip(`job-${index}`, "project_concurrency", 3_000_000);
+    assert.ok(claimSkipCacheSizeForTests() <= 1_024, `缓存必须保持在 1024 以内，实际 ${claimSkipCacheSizeForTests()}`);
+    // 时间推进 30 天后，旧条目应被回收，新 Job 仍可打印
+    logClaimSkip("job-later", "graph_ineligible", 3_000_000 + 30 * 86_400_000);
+    assert.ok(claimSkipCacheSizeForTests() <= 1_024);
+  } finally {
+    spy.mock.restore();
+    resetClaimDiagnosticsForTests();
   }
 });

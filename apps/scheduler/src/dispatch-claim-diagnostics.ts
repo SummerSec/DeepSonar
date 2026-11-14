@@ -28,10 +28,31 @@ export function logClaimStarved(input: {
 }
 
 const skipLoggedAt = new Map<string, number>();
+/** 缓存上限：state 只用于 60 秒去重，过期即无价值，不能让历史 Job 无限累积。 */
+const SKIP_CACHE_LIMIT = 1_024;
+
+function pruneSkipCache(now: number): void {
+  if (skipLoggedAt.size < SKIP_CACHE_LIMIT) return;
+  for (const [key, at] of skipLoggedAt) if (now - at >= 60_000) skipLoggedAt.delete(key);
+  // 仍然超限说明 60 秒内出现超过上限的不同 Job/原因：整体清空，最坏退化为一轮重复打印。
+  if (skipLoggedAt.size >= SKIP_CACHE_LIMIT) skipLoggedAt.clear();
+}
 
 export function logClaimSkip(jobId: string, reason: string, now = Date.now()): void {
   const key = `${jobId}:${reason}`;
   if (now - (skipLoggedAt.get(key) ?? 0) < 60_000) return;
+  pruneSkipCache(now);
   skipLoggedAt.set(key, now);
   console.error(`[dispatcher] CLAIM_SKIP job=${jobId} reason=${reason}`);
+}
+
+/** 供回归观察缓存容量；生产路径不读取。 */
+export function claimSkipCacheSizeForTests(): number {
+  return skipLoggedAt.size;
+}
+
+export function resetClaimDiagnosticsForTests(): void {
+  skipLoggedAt.clear();
+  lastSignature = "";
+  lastLoggedAt = 0;
 }
