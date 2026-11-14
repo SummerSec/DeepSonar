@@ -669,7 +669,7 @@ function logPlatformClaimsPaused(reason: string | null): void {
  * 在调度器 advisory lock 下抢占 pending Job，但不执行 provision 或 Agent。
  * 集成测试通过这个窄入口独立验证数据库侧配额决策。
  */
-import { logClaimStarved } from "./dispatch-claim-starved.js";
+import { logClaimSkip, logClaimStarved } from "./dispatch-claim-diagnostics.js";
 export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCircuitProbe | null }[]> {
   let createProbe: CreateCircuitProbe | null = null; // claim-time half-open probe identity
   if (managesHostDockerRuntime()) {
@@ -789,11 +789,13 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       LEFT JOIN credentials c ON c.id = NULLIF(j.agent_snapshot_json->>'credential_id', '')::uuid
       LEFT JOIN canvases cv ON cv.id = j.canvas_id`;
     const eligible = async (job: PendingCandidate, graphBatch: GraphEligibilityBatch): Promise<boolean> => {
-      if (job.canvas_id && (job.canvas_project_id !== job.project_id || canvasExecutionIsPaused(job.canvas_target_json))) return false;
-      if (canvasScheduleBlocksDispatch(job.canvas_target_json)) return false;
+      const skip = (reason: string): false => { logClaimSkip(String(job.id), reason); return false; };
+      if (job.canvas_id && (job.canvas_project_id !== job.project_id || canvasExecutionIsPaused(job.canvas_target_json))) return skip("canvas_paused");
+      if (canvasScheduleBlocksDispatch(job.canvas_target_json)) return skip("canvas_schedule");
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
-      if (await graphEligibilityReasonFromDb(tx as unknown as typeof sql, job, graphBatch)) return false;
-      return !dispatchSkipReason(job, counts, rules, projectJobLimitForCandidate(job, rules.maxJobsPerProject));
+      if (await graphEligibilityReasonFromDb(tx as unknown as typeof sql, job, graphBatch)) return skip("graph_ineligible");
+      const dispatchSkip = dispatchSkipReason(job, counts, rules, projectJobLimitForCandidate(job, rules.maxJobsPerProject));
+      return dispatchSkip ? skip(dispatchSkip) : true;
     };
     // Freeze only this page's identity hints. Eligibility is authoritative after
     // the sorted Canvas/project locks and Job SKIP LOCKED re-read below.

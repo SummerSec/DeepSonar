@@ -13,7 +13,7 @@ import {
   shouldLogCreateCircuitPause,
   classifyProvisionFailure,
 } from "./opensandbox-create-circuit.js";
-import { logClaimStarved } from "./dispatch-claim-starved.js";
+import { logClaimSkip, logClaimStarved } from "./dispatch-claim-diagnostics.js";
 
 function clockAt(start = 1_000_000) {
   let now = start;
@@ -227,4 +227,23 @@ test("#1114 dispatcher logs starvation where slots run out before claiming", () 
   const gate = source.indexOf("if (slots <= 0)");
   const log = source.indexOf("logClaimStarved({");
   assert.ok(gate >= 0 && log > gate, "日志必须挂在 slots<=0 分支上");
+});
+
+test("#1114 claim skip log names the blocked Job and reason once per minute", () => {
+  const calls: string[] = [];
+  const spy = mock.method(console, "error", (...args: unknown[]) => {
+    calls.push(args.map(String).join(" "));
+  });
+  try {
+    logClaimSkip("job-a", "project_concurrency", 2_000_000);
+    logClaimSkip("job-a", "project_concurrency", 2_030_000);
+    assert.equal(calls.length, 1, "同一 Job 同一原因 60 秒内只打印一次");
+    logClaimSkip("job-a", "graph_ineligible", 2_035_000);
+    assert.equal(calls.length, 2, "同一 Job 不同原因立即打印");
+    logClaimSkip("job-b", "project_concurrency", 2_036_000);
+    assert.equal(calls.length, 3, "不同 Job 互不影响");
+    assert.match(calls[0]!, /CLAIM_SKIP job=job-a reason=project_concurrency/);
+  } finally {
+    spy.mock.restore();
+  }
 });
