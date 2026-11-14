@@ -199,7 +199,12 @@ test("revision maker reads only the latest same-project proposal feedback with i
       }
       const read = { work_ref: String(work.id), input_ref: entry.input_ref, expected_hash: entry.content_hash };
       assert.match((await readManifestInput(db, { ...nextMaker, snapshot: {} }, read)).content_fragment, /rerun both arms/);
-      await assert.rejects(readManifestInput(db, { ...trial, snapshot: {} }, read), /assignment/i);
+      // #1128：跨 stage 读不再是笼统的 assignment 拒绝，而是可行动的 audience 拒绝。
+      await assert.rejects(readManifestInput(db, { ...trial, snapshot: {} }, read), (error: unknown) => {
+        assert.equal((error as { error_code?: string }).error_code, "KNOWLEDGE_INPUT_AUDIENCE_DENIED");
+        assert.match(String((error as Error).message), /audience \[maker\], current stage is trial/);
+        return true;
+      });
       await db`UPDATE project_knowledge_work SET reason=${"x".repeat(140000)} WHERE id=${work.id}`;
       await assert.rejects(prepareKnowledgeRevisionFeedback(db, String(work.id)), /bounded/i);
       await db`UPDATE project_knowledge_work SET reason='review_needs_eval' WHERE id=${work.id}`;

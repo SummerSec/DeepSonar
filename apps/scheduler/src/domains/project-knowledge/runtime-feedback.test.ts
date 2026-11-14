@@ -130,3 +130,45 @@ test("usage identity mismatch refuses replacement without inventing a receipt fo
   assert.match(statements[1]!, /ON CONFLICT.*DO NOTHING/);
   assert.ok(statements.every(statement => !/UPDATE|DELETE/.test(statement)), "existing usage is never rewritten");
 });
+
+test("#1128 read_knowledge_input 四类失败各自可行动，hash 混淆有明确提示", async () => {
+  const { readManifestInput } = await import("./inputs.js");
+  const actor = { jobId: "job-1", projectId: "project-1", attemptId: "attempt-1", canvasId: null, snapshot: {} };
+  const entry = (input_ref: string, content_hash: string, audience: string[]) => ({ input_ref, kind: "evaluation", project_id: actor.projectId,
+    content_hash, bytes: 10, blob_hash: "b".repeat(64), audience });
+  const assignment = (overrides: Record<string, unknown> = {}) => ({ work_id: "work-1", stage: "maker", governance_hash: "g".repeat(64),
+    input_manifest_json: [entry("fact:case-1", "a".repeat(64), ["maker"]), entry("revision-feedback:p:2", "c".repeat(64), ["maker"])], ...overrides });
+  const dbWith = (rows: unknown[]) => (async () => rows) as unknown as Parameters<typeof readManifestInput>[0];
+  const expectRejected = async (run: Promise<unknown>, code: string, pattern: RegExp, path: string) => {
+    await assert.rejects(run as Promise<never>, (error: unknown) => {
+      assert.ok(error instanceof KnowledgeOperationError);
+      assert.equal(error.error_code, code);
+      assert.equal(error.category, "model_correctable", `${code} 必须让 Agent 能自行修正`);
+      assert.equal(error.path, path);
+      assert.match(error.message, pattern);
+      return true;
+    });
+  };
+  // ① work_ref 不属于本 Job：回显可用 work_ref 与 stage
+  await expectRejected(readManifestInput(dbWith([assignment()]), actor, { work_ref: "work-other", input_ref: "fact:case-1", expected_hash: "a".repeat(64) }),
+    "KNOWLEDGE_WORK_NOT_ASSIGNED", /assigned work_refs: work-1 \(stage=maker\)/, "work_ref");
+  // ①' 大小写/混合大小写 UUID 等价于 SQL 的 uuid 比较（不得误报未分配）
+  const uuidWork = "abcdef01-2345-4678-9abc-def012345678"; // 含 a-f 字母，能真正检验大小写规范化
+  const uuidAssignment = assignment({ work_id: uuidWork });
+  await expectRejected(readManifestInput(dbWith([uuidAssignment]), actor,
+    { work_ref: uuidWork.toUpperCase(), input_ref: "fact:case-1", expected_hash: "d".repeat(64) }),
+    "KNOWLEDGE_INPUT_HASH_MISMATCH", /must be manifest\[\]\.content_hash of fact:case-1/, "expected_hash");
+  await expectRejected(readManifestInput(dbWith([uuidAssignment]), actor,
+    { work_ref: uuidWork.slice(0, 18).toUpperCase() + uuidWork.slice(18), input_ref: "fact:case-1", expected_hash: "d".repeat(64) }),
+    "KNOWLEDGE_INPUT_HASH_MISMATCH", /must be manifest\[\]\.content_hash of fact:case-1/, "expected_hash");
+  // ② input_ref 不在 manifest：回显可用 input_ref
+  await expectRejected(readManifestInput(dbWith([assignment()]), actor, { work_ref: "work-1", input_ref: "fact:missing", expected_hash: "a".repeat(64) }),
+    "KNOWLEDGE_INPUT_REF_UNKNOWN", /available input_refs: fact:case-1, revision-feedback:p:2/, "input_ref");
+  // ③ hash 用成 input_ref 尾部的 hex：必须指出去取 manifest[].content_hash
+  await expectRejected(readManifestInput(dbWith([assignment()]), actor, { work_ref: "work-1", input_ref: "revision-feedback:p:2", expected_hash: "d".repeat(64) }),
+    "KNOWLEDGE_INPUT_HASH_MISMATCH", /must be manifest\[\]\.content_hash of revision-feedback:p:2, which starts with cccccccc[\s\S]*NOT the expected hash/, "expected_hash");
+  // ④ audience 不含当前 stage：两侧都要回显
+  const reviewerOnly = assignment({ input_manifest_json: [entry("fact:case-1", "a".repeat(64), ["reviewer"])] });
+  await expectRejected(readManifestInput(dbWith([reviewerOnly]), actor, { work_ref: "work-1", input_ref: "fact:case-1", expected_hash: "a".repeat(64) }),
+    "KNOWLEDGE_INPUT_AUDIENCE_DENIED", /visible to audience \[reviewer\], current stage is maker/, "input_ref");
+});
