@@ -108,6 +108,11 @@ test("/health ready fails closed when OpenSandbox server is down", async () => {
   assert.equal(body.opensandbox.domain, "127.0.0.1:8080");
   assert.equal(body.opensandbox.ready, false);
   assert.equal(body.opensandbox.upload_circuit.state, "closed");
+  // #1119：/health 必须同时暴露 create 熔断状态，让失稳窗可由运维与冒烟直接读取。
+  assert.equal(body.opensandbox.create_circuit.state, "closed");
+  assert.equal(body.opensandbox.create_circuit.episode, 0);
+  assert.equal(body.opensandbox.create_circuit.lastTripReason, null);
+  assert.equal(body.opensandbox.create_circuit.recentFailures, 0);
   assert.equal(JSON.stringify(body).includes("timed out"), false);
   await app.close();
 });

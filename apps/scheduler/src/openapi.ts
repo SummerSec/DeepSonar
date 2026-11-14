@@ -443,6 +443,11 @@ const OPS: Op[] = [
               domain: { type: "string" },
               ready: { type: "boolean" },
               upload_circuit: { type: "object", additionalProperties: true },
+              create_circuit: {
+                type: "object",
+                additionalProperties: true,
+                description: "沙箱 create 熔断状态（#1046/#1119）：closed | open | half_open，含 episode 与 lastTripReason；open 期间新 claim 暂停，冷却后半开只放行一个试探。",
+              },
             },
           },
           ts: { type: "integer" },
