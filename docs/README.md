@@ -4,7 +4,7 @@
 
 #1074 的[人工断点续做](HUMAN_CONTINUATION.md)覆盖持久请求、有限封存与资源回收、晚回复保存和受治理的新执行；当前模式为 structured 新会话，原生 Session 与历史 failed Job 关联接续另列剩余范围。最终 SHA Actions 待验。
 
-#1032 的 [Pi 模型上下文凭据投影首片](MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)共用主执行/OM 的 SDK 生成前精确替换与镜像双源码准入；原字节 Gateway 守卫不变。映射 FR-CRED-003、NFR-SEC-003；回归接既有核心/原生 Reverse Actions，最终 SHA 待验，同 UID 隔离、诊断/审计与生产验证未交付。
+#1032 的 [Pi 模型上下文凭据投影首片](MODEL_GATEWAY_TRANSPARENCY.md#pi-模型上下文凭据投影1032-首片)共用主执行/OM 的 SDK 生成前精确替换与镜像双源码准入；原字节 Gateway 守卫不变。映射 FR-CRED-003、NFR-SEC-003；回归接既有核心/原生 Reverse Actions，最终 SHA 待验，同 UID 隔离、诊断/审计与生产验证未交付。Pi 侧网关令牌已从环境移到 0600 私有文件通道（#1032 P0-2 A1 片），Claude/DSH 与 Control 令牌仍在环境，同 UID 读取未消除。
 
 #1002 P1-8：[同项目多账号池](architecture/06-runtime-view.md#凭据与-cli-解析757)仅为新 Job 在显式授权、同 Provider/CLI/模型的账号间选择并冻结，沿用默认优先及原 Job 恢复身份/预算门；readiness 不消费轮次，不能借故障自动换 key。隔离 SQL/真实 Gateway 回归已接现有 role-config，最终 SHA Actions 待验。
 

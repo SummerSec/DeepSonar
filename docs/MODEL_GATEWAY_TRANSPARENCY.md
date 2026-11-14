@@ -23,13 +23,30 @@ Sandbox → managed proxy → Scheduler 是不同 HTTP 连接。代理双向消�
 
 2026-11-09 源码候选：Pi 主请求在已有 provider `streamSimple` 中，OM 在受审 registry 的 SDK 调用前，共用 [精确替换函数](../packages/runtime-sandbox/src/pi-main-request-budget.ts)。它只投影本次 SDK context 内的字符串值，把当前 main Gateway、Control、OM Gateway token 替换为 `[REDACTED]`；main/Control 取实际运行 env，OM 不在 env 中，主请求与 OM worker 均经现有模型注册表解析其认证值。主请求无法读取已配置 OM 的认证时明确拒绝，不为方便脱敏新增可继承的 secret env。工具 stdout、认证文件内容、工具错误、历史消息和 OM 来源文本因此走同一出口。原 Session 对象、认证选项、工具 ID、错误状态、额度、回执及冻结快照不改写；同次恢复调用重用同一个安全投影，而不是要求该投影与原 Session 对象引用相同。Gateway 的原字节 `credential_in_business_data` 守卫保留，不在代理、`onPayload` 或已序列化 body 上静默修复。
 
-这是模型输入防泄漏，不是操作系统身份隔离：凭据仍用于 CLI 认证，工具进程仍能读取同身份的 env / `auth.json`；搬到同 UID 的 0600 文件不能冒充隔离。任意编码、二进制/图像携密、字段名携密，以及扩展绕过已登记 SDK 出口不在本片替换保证内；现有 Gateway 拒绝边界仍独立生效（拒绝留痕见下节）。#1032 的 A1/A2 认证隔离、稳定终态诊断与 deny 指标、Skill 提示仍未由此片交付，Issue 不据此关闭。
+这是模型输入防泄漏，不是操作系统身份隔离：凭据仍用于 CLI 认证，工具进程仍能读取同身份的 `auth.json` 与 0600 令牌文件（Pi 侧 env 令牌已移走，见下节）；搬到同 UID 的 0600 文件不能冒充隔离。任意编码、二进制/图像携密、字段名携密，以及扩展绕过已登记 SDK 出口不在本片替换保证内；现有 Gateway 拒绝边界仍独立生效（拒绝留痕见下节）。#1032 的 A1/A2 认证隔离、稳定终态诊断与 deny 指标、Skill 提示仍未由此片交付，Issue 不据此关闭。
 
 OM 直接加载镜像内现有 request-budget 源码的共享函数，启动 guard 同时核验 wrapper 与该源码的完整 SHA-256；旧/缺损/被替换内容拒绝，不能只核 wrapper 或沿用旧镜像声明。没有新增依赖、配置、状态机、数据库或授权通道，不增加用户操作。Pi 专属替换函数位于 DSH installer 复用的 SDK 政策前缀之外，避免不同 TypeScript 加载器的函数序列化改变 DSH helper 内容身份；不修改 DSH 的固定 vendor/artifact pin。
 
 验收分层：`pnpm ci:unit:runtime-sandbox` 覆盖三协议 SDK 边界、无限/有限政策、env/文件/错误/OM 文本、Unicode、前缀重叠、原历史不变与双内容 guard；`pnpm ci:integration:request-budget-sdk` 用锁定 Pi AI 1.5.2 到 loopback 对照真正生成的请求与认证；已有 `pnpm ci:integration:om-provider-headers` 原生双架构专项改由真实 Pi bash 读取真实物化 env 和 `auth.json`，要求 main/observer 只收到替换结果、原 Gateway/Control 完成及用量归属仍通过。相关脚本已在核心/Reverse Actions 接线，未本机测试/build/typecheck，最终 SHA Actions 待验；未执行生产、真实厂商模型或声明质量收益。
 
-### 凭据拒绝的审计留痕（#1032 观测片）
+### Pi 主请求令牌的沙箱私有通道（#1032 P0-2 A1 片，Pi 侧）
+
+2026-11-11 源码候选：Pi Job 不再把明文网关令牌放进 CLI 环境，而是写入
+`/workspace/.deepsonar/gateway-token`（目录 `0700`、文件 `0600`），环境中只保留不含密文的
+`DEEPSONAR_GATEWAY_TOKEN_FILE` 路径。Pi 认证继续由已存凭据承担：锁定 CLI 的认证解析是
+"已存凭据拥有 provider，仅在无凭据时才读 ambient/env"，因此 `models.json` 的 `provider.apiKey`
+仍声明以进入凭据分支，取值与 `auth.json` 中的同一 Job 令牌一致，不再依赖环境占位符。
+读取方同步转换：主请求预算扩展（`sandboxToken()`）、模型请求准入策略进程（`launchToken()`）
+与镜像内 OM 扩展的脱敏秘密集合都改读该文件。
+
+范围与残留：Claude Code 与 DSH 仍以环境注入令牌（DSH 的 `apiKeyEnv` 是其 profile schema
+唯一的认证声明方式），`DEEPSONAR_API_TOKEN` 仍在环境中；同 UID 的工具进程仍能读取该 0600
+文件，因此这只是环境明文去除，不是操作系统身份隔离，也不构成 A2 的短期不透明句柄方案。
+验收：`pnpm ci:unit:runtime-sandbox` 覆盖文件通道解析、令牌缺失与文件缺失的明确失败；
+`pnpm ci:integration:om-provider-headers` 的原生双架构专项改为在真实 Pi bash 中核对
+`os.environ` 无网关明文、令牌文件模式为 `0600` 且认证与用量归属仍成立。最终 SHA Actions 待验。
+
+## 凭据拒绝的审计留痕（#1032 观测片）
 
 Gateway 原有的原字节 `credential_in_business_data` 拒绝保留，行为不变；新增的是每次拒绝都写一条审计。审计走 `recordSystemAudit`（request_id / IP / User-Agent 一律为空），而不是会持久化请求元数据的 `audit()`：最多 300 字符的原始 User-Agent 和 IP 都可能正好携带被拒绝的凭据。`action=gateway.credential_denied`、`result=denied`、`error_code=credential_in_business_data`，`resource_type=job_token`、`resource_id` 为该 token 行 ID，`after_json` 只含固定键 `surface`（`request_target` / `body` / `upstream_target` / `upstream_data` / `trailers`）、`job_id`、`attempt_id`。不写请求体、错误原文、header 原文或任何凭据片段。
 

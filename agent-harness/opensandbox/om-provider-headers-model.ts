@@ -15,14 +15,19 @@ export async function startOmHeaderModel() {
   const probeCalls: Array<{ model: string; providerHeader: string; modelHeader: string; status: number }> = [];
   const errors: string[] = [];
   const credentialProjectionStages = new Set<string>();
-  const credentialNames = ["DEEPSONAR_GATEWAY_TOKEN", "DEEPSONAR_API_TOKEN"];
+  // Pi 侧网关令牌走 0600 私有文件通道：env 里的明文字段必须消失，
+  // 文件路径必须出现，文件内容仍被投影脱敏为 [REDACTED]。
+  const credentialNames = ["DEEPSONAR_API_TOKEN", "gateway_token"];
   const checkCredentialProjection = (text: string, stage: string) => {
     const envLine = text.match(/OM_CREDENTIAL_ENV (\{[^\n]+\})/u)?.[1];
     if (!envLine) return;
     const authLine = text.match(/OM_CREDENTIAL_AUTH (\{[^\n]+\})/u)?.[1];
     assert.ok(authLine, "actual auth-file tool output must accompany env output");
     const env = JSON.parse(envLine), auth = JSON.parse(authLine);
-    for (const key of credentialNames) assert.equal(env[key], "[REDACTED]", "model-visible env credential must be redacted");
+    assert.equal(env.DEEPSONAR_GATEWAY_TOKEN, undefined, "Pi job env must not carry the plaintext gateway token");
+    assert.ok(typeof env.DEEPSONAR_GATEWAY_TOKEN_FILE === "string" && env.DEEPSONAR_GATEWAY_TOKEN_FILE.endsWith("gateway-token"),
+      "Pi job env must expose the token file path");
+    for (const key of credentialNames) assert.equal(env[key], "[REDACTED]", "model-visible credential must be redacted");
     assert.equal(auth[OM_HEADERS_PROVIDER]?.key, "[REDACTED]", "main auth-file credential must be redacted");
     assert.equal(auth.__deepsonar_observational_memory?.key, "[REDACTED]", "OM auth-file credential must be redacted");
     credentialProjectionStages.add(stage);
@@ -162,7 +167,7 @@ export async function startOmHeaderModel() {
           assert.ok(bash, "installed Pi must expose its real bash tool");
           // Fits Pi's normal 50 KiB tool-output limit while exceeding OM's
           // unmodified 10k-token observation threshold with diverse source text.
-          tool = { name: bash, arguments: { command: "python3 - <<'PY'\nimport hashlib,json,os\nkeys=['DEEPSONAR_GATEWAY_TOKEN','DEEPSONAR_API_TOKEN']\nassert all(os.environ.get(k) for k in keys)\nassert not os.environ.get('DEEPSONAR_OM_GATEWAY_TOKEN')\nprint('OM_CREDENTIAL_ENV '+json.dumps({k:os.environ[k] for k in keys}))\nwith open('/workspace/.deepsonar-home/.pi/agent/auth.json') as f:\n print('OM_CREDENTIAL_AUTH '+json.dumps(json.load(f)))\nfor i in range(580):\n print('OM_HEADER_SOURCE_'+str(i)+' '+hashlib.sha256(str(i).encode()).hexdigest())\nPY" } };
+          tool = { name: bash, arguments: { command: "python3 - <<'PY'\nimport hashlib,json,os\nassert os.environ.get('DEEPSONAR_API_TOKEN')\nassert not os.environ.get('DEEPSONAR_GATEWAY_TOKEN')\nassert not os.environ.get('DEEPSONAR_OM_GATEWAY_TOKEN')\ntoken_file=os.environ['DEEPSONAR_GATEWAY_TOKEN_FILE']\nassert oct(os.stat(token_file).st_mode & 0o777)=='0o600'\nprint('OM_CREDENTIAL_ENV '+json.dumps({'DEEPSONAR_API_TOKEN':os.environ['DEEPSONAR_API_TOKEN'],'DEEPSONAR_GATEWAY_TOKEN_FILE':token_file,'gateway_token':open(token_file).read().strip()}))\nwith open('/workspace/.deepsonar-home/.pi/agent/auth.json') as f:\n print('OM_CREDENTIAL_AUTH '+json.dumps(json.load(f)))\nfor i in range(580):\n print('OM_HEADER_SOURCE_'+str(i)+' '+hashlib.sha256(str(i).encode()).hexdigest())\nPY" } };
         } else if (!completionAllowed) {
           assert.ok(bash);
           tool = { name: bash, arguments: { command: "sleep 1" } };

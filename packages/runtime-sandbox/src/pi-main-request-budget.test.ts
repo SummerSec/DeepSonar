@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PI_MAIN_REQUEST_BUDGET_SOURCE, redactPiContextSecrets } from "./pi-main-request-budget.js";
 
 // This is an SDK-boundary double, not evidence of a real Pi process or provider run.
@@ -332,6 +335,27 @@ test("main recovery buffers only an empty failed generation and requires the aut
     } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   }
 });
+
+test("Pi 令牌走 0600 私有文件通道：预算扩展从文件读令牌，环境缺令牌不再直接失败", async () => {
+  const module = await load();
+  const dir = mkdtempSync(join(tmpdir(), "pi-token-file-"));
+  const tokenFile = join(dir, "gateway-token");
+  writeFileSync(tokenFile, "synthetic-main-token\n", { mode: 0o600 });
+  try {
+    const install = module.createPiMainRequestBudgetExtension({
+      DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://127.0.0.1:1/gateway",
+      DEEPSONAR_GATEWAY_TOKEN_FILE: tokenFile });
+    assert.equal(typeof install, "function");
+    assert.throws(() => module.createPiMainRequestBudgetExtension({
+      DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://127.0.0.1:1/gateway" }), /PI_MAIN_BUDGET_TOKEN_MISSING/);
+    assert.throws(() => module.createPiMainRequestBudgetExtension({
+      DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://127.0.0.1:1/gateway",
+      DEEPSONAR_GATEWAY_TOKEN_FILE: join(dir, "absent") }), /PI_MAIN_BUDGET_TOKEN_MISSING/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("clamp 解析按镜像布局选择 pi-ai 根：kali 嵌套优先、base 平铺兜底（#1069 评审 P1）", async () => {
   const source = PI_MAIN_REQUEST_BUDGET_SOURCE;
   const snippet = source.slice(source.indexOf("// Resolve the SDK's declared public export"), source.indexOf("let contextClamp;"));
