@@ -85,6 +85,8 @@ def main():
     # 6. 优先级：pending 可改（job 可能已被 fake 调度跑掉，两种结果都合法）
     r = req("PATCH", f"/jobs/{job['id']}/priority", {"priority": 99}, expect=None) if False else None
     # 用专门断言：可能 200（还 pending）或 409（已被认领）
+    # 上一版把 priority 提到 999 是错的：hub_reason 是调度类固定优先级（500），PATCH 会
+    # 409 PRIORITY_FIXED，既置不了顶也会掩盖拒绝。恢复原步骤，只验证 pending 可改/已认领冲突。
     data = json.dumps({"priority": 99}).encode()
     request = urllib.request.Request(BASE + f"/jobs/{job['id']}/priority", data=data, method="PATCH",
                                      headers={"content-type": "application/json"})

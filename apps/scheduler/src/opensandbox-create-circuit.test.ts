@@ -13,7 +13,7 @@ import {
   shouldLogCreateCircuitPause,
   classifyProvisionFailure,
 } from "./opensandbox-create-circuit.js";
-import { logClaimStarved } from "./dispatch-claim-starved.js";
+import { claimSkipCacheSizeForTests, logClaimSkip, logClaimStarved, resetClaimDiagnosticsForTests } from "./dispatch-claim-diagnostics.js";
 
 function clockAt(start = 1_000_000) {
   let now = start;
@@ -216,6 +216,8 @@ test("#1114 claim starvation log is throttled per signature", () => {
     logClaimStarved({ totalActive: 6, activeProvisioning: 2, maxGlobalJobs: 20, maxConcurrentProvisioning: 2, now: 1_100_000 });
     assert.equal(calls.length, 3, "同一签名超过 60 秒再次打印");
     assert.match(calls[0]!, /CLAIM_STARVED active=5\/20 provisioning=2\/2/);
+    logClaimStarved({ totalActive: 7, activeProvisioning: 2, maxGlobalJobs: 20, maxConcurrentProvisioning: 2, now: 1_200_000, holders: ["2026-11-14:provisioning:abcd1234"] });
+    assert.match(calls[calls.length - 1]!, /holders=2026-11-14:provisioning:abcd1234/, "饥饿日志必须点名占位 Job");
   } finally {
     spy.mock.restore();
   }
@@ -227,4 +229,50 @@ test("#1114 dispatcher logs starvation where slots run out before claiming", () 
   const gate = source.indexOf("if (slots <= 0)");
   const log = source.indexOf("logClaimStarved({");
   assert.ok(gate >= 0 && log > gate, "日志必须挂在 slots<=0 分支上");
+});
+
+test("#1114 claim skip log names the blocked Job and reason once per minute", () => {
+  const calls: string[] = [];
+  const spy = mock.method(console, "error", (...args: unknown[]) => {
+    calls.push(args.map(String).join(" "));
+  });
+  try {
+    logClaimSkip("job-a", "project_concurrency", 2_000_000);
+    logClaimSkip("job-a", "project_concurrency", 2_030_000);
+    assert.equal(calls.length, 1, "同一 Job 同一原因 60 秒内只打印一次");
+    logClaimSkip("job-a", "graph_ineligible", 2_035_000);
+    assert.equal(calls.length, 2, "同一 Job 不同原因立即打印");
+    logClaimSkip("job-b", "project_concurrency", 2_036_000);
+    assert.equal(calls.length, 3, "不同 Job 互不影响");
+    assert.match(calls[0]!, /CLAIM_SKIP job=job-a reason=project_concurrency/);
+  } finally {
+    spy.mock.restore();
+  }
+});
+
+test("#1114 claim skip logging keeps throttle and a bounded log volume under backlog scans", () => {
+  const calls: string[] = [];
+  const spy = mock.method(console, "error", (...args: unknown[]) => { calls.push(args.map(String).join(" ")); });
+  try {
+    resetClaimDiagnosticsForTests();
+    // 1025 个持续不合格 Job、同 9ms 内连扫 10 轮：60 秒窗口内明细必须有上限，不能逐轮重打印。
+    for (let round = 0; round < 10; round += 1) {
+      for (let index = 0; index < 1_025; index += 1) logClaimSkip(`job-${index}`, "project_concurrency", 3_000_000 + round);
+    }
+    assert.ok(calls.length <= 20, `同一窗口明细上限 20，实际 ${calls.length}`);
+    assert.ok(claimSkipCacheSizeForTests() <= 20, `缓存必须与预算同阶，实际 ${claimSkipCacheSizeForTests()}`);
+    // 同一 Job/原因仍在窗口内：即使预算已用尽，也不得重复打印。
+    const beforeSecondRound = calls.length;
+    logClaimSkip("job-0", "project_concurrency", 3_000_030);
+    assert.equal(calls.length, beforeSecondRound);
+    // 窗口推进后输出一条被压制的汇总，而不是把积压全部重打。
+    logClaimSkip("job-later", "graph_ineligible", 3_000_000 + 60_001);
+    const suppressed = calls.filter((line) => /CLAIM_SKIP suppressed=\d+/.test(line));
+    assert.equal(suppressed.length, 1, "跨窗口必须给出一条 suppressed 汇总");
+    assert.ok(calls.length <= 22, `跨窗口后总量仍应有界，实际 ${calls.length}`);
+  } finally {
+    spy.mock.resetCalls();
+    spy.mock.restore();
+    resetClaimDiagnosticsForTests();
+  }
 });
