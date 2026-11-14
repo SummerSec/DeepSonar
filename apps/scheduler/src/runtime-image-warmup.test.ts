@@ -15,6 +15,12 @@ import {
 } from "./runtime-images.js";
 import type { sql } from "./db.js";
 import { classifyDispatcherFailure } from "./dispatcher.js";
+import {
+  CREATE_CIRCUIT_COOLDOWN_MS,
+  openSandboxCreateCircuitAllowsClaim,
+  recordOpenSandboxProvisionFailure,
+  resetOpenSandboxCreateCircuitForTests,
+} from "./opensandbox-create-circuit.js";
 import { RuntimeImageNotReadyError } from "./runtime-images.js";
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -422,4 +428,32 @@ test("startup warmup 解析结果包含共享资产 helper", async () => {
   assert.equal(refs.at(-1)?.image_key, "shared-assets-helper");
   assert.equal(refs.at(-1)?.image_ref, helper);
   assert.equal(new Set(refs.map((item) => item.image_ref)).size, 4);
+});
+
+test("#1119 /health surfaces create circuit open and half_open states", async () => {
+  let now = 1_000_000;
+  resetOpenSandboxCreateCircuitForTests(() => now);
+  const app = Fastify();
+  registerSystemRoutes(app, {
+    runtimeImageStatus: () => ({ status: "ready", ready: true, attempt: 1, required: 0, error: null, retry_at: null }),
+    dispatcherStatus: () => ({ enabled: true, started_at: "2026-01-01T00:00:00.000Z" }),
+    officialImageWarnings: () => [],
+    openSandboxStatus: () => ({ level: "ok", domain: "127.0.0.1:8080", checkedAt: "2026-01-01T00:00:00.000Z", error: null }),
+  });
+  try {
+    recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED");
+    recordOpenSandboxProvisionFailure("DOCKER::SANDBOX_START_FAILED");
+    const open = (await app.inject({ method: "GET", url: "/health" })).json();
+    assert.equal(open.opensandbox.create_circuit.state, "open");
+    assert.match(String(open.opensandbox.create_circuit.lastTripReason), /SANDBOX_START_FAILED/);
+    assert.ok(open.opensandbox.create_circuit.openedAt);
+    // 冷却后 half_open：/health 必须如实反映 canary 放行状态。
+    now += CREATE_CIRCUIT_COOLDOWN_MS;
+    assert.equal(openSandboxCreateCircuitAllowsClaim().canary, true);
+    const half = (await app.inject({ method: "GET", url: "/health" })).json();
+    assert.equal(half.opensandbox.create_circuit.state, "half_open");
+  } finally {
+    resetOpenSandboxCreateCircuitForTests();
+    await app.close();
+  }
 });

@@ -446,7 +446,7 @@ const OPS: Op[] = [
               create_circuit: {
                 type: "object",
                 additionalProperties: true,
-                description: "沙箱 create 熔断状态（#1046/#1119）：closed | open | half_open，含 episode 与 lastTripReason；open 期间新 claim 暂停，冷却后半开只放行一个试探。",
+                description: "沙箱 create 熔断状态（#1046/#1119）：closed | open | half_open，含 episode、openedAt、lastTripReason 与窗口内 recentFailures。open 期间新 claim 暂停；冷却后转 half_open，按 canary 放行认领（并发仍受 maxConcurrentProvisioning 约束，不是严格的单试探）；任一 canary 成功即 closed，失败立即重新 open。",
               },
             },
           },
