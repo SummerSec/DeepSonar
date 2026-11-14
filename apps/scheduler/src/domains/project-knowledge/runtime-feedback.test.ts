@@ -153,7 +153,7 @@ test("#1128 read_knowledge_input 四类失败各自可行动，hash 混淆有明
   await expectRejected(readManifestInput(dbWith([assignment()]), actor, { work_ref: "work-other", input_ref: "fact:case-1", expected_hash: "a".repeat(64) }),
     "KNOWLEDGE_WORK_NOT_ASSIGNED", /assigned work_refs: work-1 \(stage=maker\)/, "work_ref");
   // ①' 大小写/混合大小写 UUID 等价于 SQL 的 uuid 比较（不得误报未分配）
-  const uuidWork = "11111111-2222-3333-4444-555555555555";
+  const uuidWork = "abcdef01-2345-4678-9abc-def012345678"; // 含 a-f 字母，能真正检验大小写规范化
   const uuidAssignment = assignment({ work_id: uuidWork });
   await expectRejected(readManifestInput(dbWith([uuidAssignment]), actor,
     { work_ref: uuidWork.toUpperCase(), input_ref: "fact:case-1", expected_hash: "d".repeat(64) }),
