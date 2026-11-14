@@ -119,6 +119,7 @@ import { createAssistantMessageEventStream, streamSimple as sdkStreamSimple } fr
 import { setTimeout as delay } from 'node:timers/promises';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 ${PI_ANTHROPIC_THINKING_POLICY_SOURCE}
@@ -236,11 +237,18 @@ export function preparePiMainSdkRequest(model, options, allowance) {
   return { model: selected, options: { ...options, maxTokens: limit, maxRetries: 0 } };
 }
 
+/** Job control token now arrives as a 0600 file (#1032 P0-2 A1): it can reach tool output, so it must be redacted too. */
+export function controlChannelToken(env = process.env) {
+  const file = env.DEEPSONAR_CONTROL_TOKEN_FILE;
+  if (typeof file !== 'string' || !file) return undefined;
+  try { return readFileSync(file, 'utf8').trim(); } catch { return undefined; }
+}
+
 export function createPiMainRequestBudgetExtension(env = process.env, delegate = sdkStreamSimple) {
   const gateway = endpoint(env.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
   const token = env.DEEPSONAR_GATEWAY_TOKEN;
   if (typeof token !== 'string' || !token) fail('PI_MAIN_BUDGET_TOKEN_MISSING');
-  const secrets = [token, env.DEEPSONAR_API_TOKEN]
+  const secrets = [token, env.DEEPSONAR_API_TOKEN, controlChannelToken(env)]
     .filter(value => typeof value === 'string' && value.length > 0);
   return function install(pi) {
     let identity;

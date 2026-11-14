@@ -143,6 +143,7 @@ export type {
   RuntimeRunOptions,
 } from "./runtime-host.js";
 export { assertWorkspaceWritePath, shellQuote } from "./runtime-host.js";
+export { CONTROL_TOKEN_FILE, prepareControlTokenFile } from "./control-token-channel.js";
 export { MODEL_REQUEST_POLICY_BASE_URL, MODEL_REQUEST_POLICY_PATH, MODEL_REQUEST_POLICY_SOURCE, modelRequestPolicyCommand } from "./model-request-policy.js";
 export type {
   AgentCommandConfig,

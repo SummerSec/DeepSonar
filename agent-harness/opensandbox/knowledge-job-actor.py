@@ -7,6 +7,9 @@ import urllib.request
 import uuid
 
 root = Path('/workspace')
+def control_token():
+    with open(os.environ.get('DEEPSONAR_CONTROL_TOKEN_FILE') or '/workspace/.deepsonar/control-token') as handle:
+        return handle.read().strip()
 config = json.loads((root / 'knowledge-job-input.json').read_text())
 runtime = json.loads((root / '.deepsonar/runtime-manifest.json').read_text())
 assert runtime['job_id'] == config['job_id']
@@ -16,7 +19,7 @@ def invoke(operation, payload, accepted=True):
         os.environ['DEEPSONAR_API_BASE_URL'].rstrip('/') + '/operations/' + operation,
         data=json.dumps(payload).encode(), method='POST',
         headers={'Content-Type': 'application/json',
-                 'Authorization': 'Bearer ' + os.environ['DEEPSONAR_API_TOKEN'],
+                 'Authorization': 'Bearer ' + control_token(),
                  'Idempotency-Key': str(uuid.uuid4())})
     if operation == 'mark_job_done':
         request.add_header('X-DeepSonar-Proposal-Revision', '0')

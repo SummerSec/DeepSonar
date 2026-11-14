@@ -60,7 +60,7 @@ export async function startReaJobModel() {
         const reportPy = [
           "import base64,json,os,urllib.request,uuid",
           `msg=base64.b64decode('${encoded}').decode()`,
-          "req=urllib.request.Request(os.environ['DEEPSONAR_API_BASE_URL'].rstrip('/')+'/operations/emit_progress', data=json.dumps({'message': msg[:1500]}).encode(), method='POST', headers={'Content-Type':'application/json','Authorization':'Bearer '+os.environ['DEEPSONAR_API_TOKEN'],'Idempotency-Key':str(uuid.uuid4())})",
+          "req=urllib.request.Request(os.environ['DEEPSONAR_API_BASE_URL'].rstrip('/')+'/operations/emit_progress', data=json.dumps({'message': msg[:1500]}).encode(), method='POST', headers={'Content-Type':'application/json','Authorization':'Bearer '+open('/workspace/.deepsonar/control-token').read().strip(),'Idempotency-Key':str(uuid.uuid4())})",
           "try:",
           " urllib.request.urlopen(req, timeout=15)",
           "except Exception as exc:",

@@ -25,6 +25,7 @@ import {
 } from "./runtime-adapters.js";
 import type { AgentRuntimeLaunchSpecification } from "./agent-runtime-profile-adapters.js";
 import { assertWorkspaceWritePath, shellQuote, type RuntimeHost } from "./runtime-host.js";
+import { prepareControlTokenFile } from "./control-token-channel.js";
 import { PiRpcDriver } from "./pi-rpc-driver.js";
 import { PiLengthRecovery, PI_LENGTH_RECOVERY_MESSAGE, PI_LENGTH_COMPACTION_INSTRUCTIONS,
   piRecoveryGuardReason, type PiRecoveryAction, type RuntimeModelBudget } from "./pi-length-recovery.js";
@@ -1275,8 +1276,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   )) {
     throw new Error(`AGENT_CLI_SNAPSHOT_MISMATCH: ${adapter.id}`);
   }
-  // 1. 从冻结快照生成本 Job 的完整 /workspace。目标内容不由 Scheduler 预下载，
-  // Worker 根据 Hub prompt 与网络策略自行决定如何取材。
+  // 1. 从冻结快照生成本 Job 的完整 /workspace；目标内容由 Worker 按 Hub prompt 与网络策略自行取材。
   for (const [filePath, content] of Object.entries(spec.workspaceFiles ?? {})) {
     const normalized = assertWorkspaceWritePath(filePath);
     const dir = path.posix.dirname(normalized);
@@ -1284,9 +1284,9 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
     await host.uploadFile(content, normalized);
   }
 
-  // 2. Runtime Adapter 驱动官方 CLI 协议；HTTP 准入层不改写已形成请求。
-  //    语义事件只接受 Job 级控制 API；CLI 流里的伪造控制 MCP tool call 只告警，不映射为事件。
+  // 2. Runtime Adapter 驱动官方 CLI 协议；语义事件只接受 Job 级控制 API，伪造 MCP tool call 只告警。
   const cliEnv = runtimeCliEnv(spec.env);
+  await prepareControlTokenFile(host, cliEnv); // #1032：控制通道 token 走 0600 文件，不留在 env
   const piMainBudgetEnabled = spec.provider === "pi" && Boolean(cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
   if (cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM) {
     if (!cliEnv.DEEPSONAR_GATEWAY_TOKEN) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");

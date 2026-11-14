@@ -116,7 +116,10 @@ test("sandbox actors and PoCs send revision zero only on initial completion", ()
 import ast, contextlib, io, json, os, pathlib, sys, urllib.error, urllib.request, uuid
 root = pathlib.Path(sys.argv[1])
 os.environ['DEEPSONAR_API_BASE_URL'] = 'http://offline.invalid/control/v1/jobs/test'
-os.environ['DEEPSONAR_API_TOKEN'] = 'offline-contract-token'
+import tempfile
+token_dir = pathlib.Path(tempfile.mkdtemp(prefix='control-token-'))
+os.environ['DEEPSONAR_CONTROL_TOKEN_FILE'] = str(token_dir / 'control-token')
+(token_dir / 'control-token').write_text('offline-contract-token\n')
 requests = []
 class Response(io.BytesIO):
     status = 200
@@ -130,7 +133,8 @@ for source in ['rea-job-actor.py', 'knowledge-job-actor.py', 'opensandbox-platfo
     namespace = dict(globals())
     if source.endswith('.py'):
         tree = ast.parse(text)
-        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'invoke']
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name in {'invoke', 'control_token'}]
         exec(compile(ast.Module(body=functions, type_ignores=[]), source, 'exec'), namespace)
         namespace['invoke']('emit_progress', {'message': 'offline contract'})
         namespace['invoke']('mark_job_done', {'summary': 'Offline completion contract.'})

@@ -17,6 +17,9 @@ import urllib.request
 import uuid
 
 ROOT = Path('/workspace')
+def control_token():
+    with open(os.environ.get('DEEPSONAR_CONTROL_TOKEN_FILE') or '/workspace/.deepsonar/control-token') as handle:
+        return handle.read().strip()
 context = json.loads((ROOT / 'rea-job-input.json').read_text())
 runtime = json.loads((ROOT / '.deepsonar/runtime-manifest.json').read_text())
 mode = context['mode']
@@ -26,7 +29,7 @@ def invoke(operation, payload, accepted=True):
         os.environ['DEEPSONAR_API_BASE_URL'] + '/operations/' + operation,
         data=json.dumps(payload).encode(), method='POST',
         headers={'Content-Type': 'application/json',
-                 'Authorization': 'Bearer ' + os.environ['DEEPSONAR_API_TOKEN'],
+                 'Authorization': 'Bearer ' + control_token(),
                  'Idempotency-Key': str(uuid.uuid4())})
     if operation == 'mark_job_done':
         request.add_header('X-DeepSonar-Proposal-Revision', '0')
@@ -165,11 +168,13 @@ def checkpoint(exit_code=None):
     stdout = output.read_bytes()
     stderr = error_output.read_bytes()
     # Never archive our short-lived runtime authentication tokens.
-    for name in ['DEEPSONAR_API_TOKEN', 'DEEPSONAR_GATEWAY_TOKEN']:
-        secret = os.environ.get(name, '').encode()
-        if secret:
-            stdout = stdout.replace(secret, b'[REDACTED]')
-            stderr = stderr.replace(secret, b'[REDACTED]')
+    secrets = [os.environ.get('DEEPSONAR_GATEWAY_TOKEN', '').encode()]
+    token_path = os.environ.get('DEEPSONAR_CONTROL_TOKEN_FILE') or ''
+    if token_path and os.path.isfile(token_path):
+        secrets.append(control_token().encode())
+    for secret in [value for value in secrets if value]:
+        stdout = stdout.replace(secret, b'[REDACTED]')
+        stderr = stderr.replace(secret, b'[REDACTED]')
     archive = {
         'schema': 'deepsonar.rea-observation/v1',
         'job_id': runtime['job_id'], 'attempt_id': runtime['attempt_id'],

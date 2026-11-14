@@ -7,7 +7,7 @@ export const DEEPSONAR_CONTROL_SKILL_NAME = "deepsonar-control" as const;
 export const PLATFORM_CONTROL_HTTP_BOOTSTRAP = [
   "平台清单中的 HTTP operation 不是 CLI 原生工具，也不是 Shell 命令；角色示例 operation({...}) 只描述 operation 和 JSON payload，不可当作同名工具调用。",
   "首次平台操作前读取平台注入的 deepsonar-control Skill，并用 CLI 已有的 HTTP 工具（例如通过 bash 运行 curl 或 Node）调用 GET $DEEPSONAR_API_BASE_URL/agent/capabilities_list。BASE_URL 已包含本 Job 路径，不要再次拼接 Job ID。",
-  "按发现返回的 schema 构造 JSON，调用 POST $DEEPSONAR_API_BASE_URL/operations/:operationId（用已授权 operation 替换占位符）。GET/POST 均带 Authorization: Bearer $DEEPSONAR_API_TOKEN；POST 带 Content-Type: application/json 和 UUID Idempotency-Key；仅 mark_job_done 还必须带 X-DeepSonar-Proposal-Revision，首次为 0，修正按反馈递增。只在请求进程中使用凭据，禁止打印或写入任务文件。",
+  "按发现返回的 schema 构造 JSON，调用 POST $DEEPSONAR_API_BASE_URL/operations/:operationId（用已授权 operation 替换占位符）。GET/POST 均带 Authorization: Bearer $(cat /workspace/.deepsonar/control-token)；POST 带 Content-Type: application/json 和 UUID Idempotency-Key；仅 mark_job_done 还必须带 X-DeepSonar-Proposal-Revision，首次为 0，修正按反馈递增。只在请求进程中使用凭据，禁止打印或写入任务文件。",
   "原生工具返回 not found 不代表 Control API 拒绝，也不代表缺少授权；重读控制 Skill 后使用上述 HTTP 入口，不增加同名工具或改走其他通道。",
   "拒绝按 repair.category 与 next_action 处理；结果未知按该 operation 契约查询原回执或当前状态，不支持查询时保留未知并停止，禁止猜测查询路由或换 key 重放。已接受提案不得用新 key 或修改 payload/revision 新建另一提案。只有 operation 明确支持回执恢复、查得原 persisted_deferred 且原 Job/Attempt/执行器满足恢复条件时，才允许原 key、适用的原 revision 和完全相同 payload 再 POST，仅恢复原执行器本地提案，不重放外部效果；文件输入保持原路径与内容。明确可修正拒绝才用新 key，完成提案还需反馈要求的下一 revision。人工请求接纳后停止业务执行，不提完成或冲突终态；原样传输恢复不授权继续业务。accepted/persisted_deferred 不等于 Job 成功，详情见 deepsonar-control Skill。",
 ].join("\n");
@@ -65,10 +65,12 @@ HTTP API 由 Agent 通过当前 CLI 可用的 HTTP 工具（例如 curl 或 Node
 \`POST $DEEPSONAR_API_BASE_URL/operations/:operationId\`。
 
 能力发现只用于选择调用，服务端每次仍按 Job token、Job 状态和精确白名单鉴权。请求使用
-\`Authorization: Bearer $DEEPSONAR_API_TOKEN\`、Accept JSON；JSON 请求使用 JSON
-Content-Type。绝不打印、记录、引用、复制、提交、写入 URL、payload、证据或产物中的 API
-环境变量。这个 API 不是管理 API，不能创建任意 Job、读数据库、控制容器或修改 RoleConfig。
-运行 env 里除上述变量还有本 Job 的 Gateway / 控制通道凭据，属于平台机制性 secret：不要用
+\`Authorization: Bearer "$(cat /workspace/.deepsonar/control-token)"\`、Accept JSON；JSON 请求使用 JSON
+Content-Type。控制通道 token 由运行时以 0600 文件放在固定路径
+\`/workspace/.deepsonar/control-token\`，不作为 env 值存在；只在请求头里按需读取，绝不
+打印、记录、引用、复制、提交、写入 URL、payload、证据或产物。这个 API 不是管理 API，
+不能创建任意 Job、读数据库、控制容器或修改 RoleConfig。
+运行 env 里还可能有本 Job 的 Gateway 凭据，属于平台机制性 secret：不要用
 \`env\` / \`printenv\` 批量导出，也不要把 env 原文写进证据、产物或命令输出。需要能力清单就
 调用 capabilities_list 或读运行清单。目前只有 Pi 运行时已登记的主请求 / OM SDK context 字符串值
 做精确替换（\`[REDACTED]\`）；其它 CLI 与出口不得假定自动脱敏，凭据一旦进入模型输入仍按原值

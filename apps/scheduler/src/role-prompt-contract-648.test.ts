@@ -236,7 +236,7 @@ test("#1094 startup and composed Test instructions distinguish HTTP operations f
     assert.match(prompt, /不是 CLI 原生工具/);
     assert.match(prompt, /GET \$DEEPSONAR_API_BASE_URL\/agent\/capabilities_list/);
     assert.match(prompt, /POST \$DEEPSONAR_API_BASE_URL\/operations\/:operationId/);
-    assert.match(prompt, /Authorization: Bearer \$DEEPSONAR_API_TOKEN/);
+    assert.match(prompt, /Authorization: Bearer \$\(cat \/workspace\/\.deepsonar\/control-token\)/);
     assert.match(prompt, /Idempotency-Key/);
     assert.match(prompt, /X-DeepSonar-Proposal-Revision/);
     assert.doesNotMatch(prompt, /平台只认工具调用|Agent CLI 实际显示的同名工具/);
