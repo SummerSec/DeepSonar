@@ -111,7 +111,7 @@ def main():
             final = j["status"]
             break
         if attempt and attempt % 30 == 0:
-            print(f"[{attempt * 2}s] waiting hub chain: {state}")
+            print(f"[{attempt * 2}s] waiting hub chain: {state}", flush=True)
         time.sleep(2)
     assert final, f"Hub 编排链未在 30 分钟内收敛（最后观测 {state}）"
 
