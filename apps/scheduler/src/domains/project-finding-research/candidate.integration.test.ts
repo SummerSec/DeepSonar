@@ -58,6 +58,17 @@ test('durable candidate generations, bounded pages, invalidation, recovery and m
     assert.equal((await work()).active_generation,null);
     await Promise.all([store.processCandidateBatch(sql),store.processCandidateBatch(sql)]);
     const completed=await finish();assert.equal(completed.active_generation,initialGeneration);
+    const page=(await readCandidatePage(subject,undefined))!;
+    assert.equal(page.status,'succeeded');assert.equal(page.items.length,25);assert.ok(page.next_cursor);
+    assert.equal(page.source_window.examined,36);assert.equal(page.source_window.rank_truncated,true);
+    const next=(await readCandidatePage(subject,page.next_cursor))!;
+    assert.equal(next.items.length,9);assert.equal(next.next_cursor,null);
+    assert.equal(new Set([...page.items,...next.items].map(x=>x.finding_id)).size,34,'incoming edges remain accessible');
+    assert.equal((await readCandidatePage(ids[35],undefined))?.status,'succeeded');
+    assert.equal((await readCandidatePage(ids[35],undefined))?.items.length,0,'successfully computed zero differs from pending');
+    const duplicates=await sql`SELECT left_id,right_id,count(*) FROM project_finding_candidate_edges GROUP BY generation,left_id,right_id HAVING count(*)>1`;
+    assert.equal(duplicates.length,0);
+    assert.equal(Number((await sql`SELECT count(*) AS n FROM project_finding_candidate_edges WHERE left_id>=right_id`)[0].n),0);
     // #1122：发布后不再 30 秒无条件全量重建——next_run_at 推远，且来源未变时不被重选。
     const publishedWork=await work();
     const quietSeconds=async()=>Number((await sql`SELECT EXTRACT(EPOCH FROM (next_run_at-now()))::int AS s
@@ -76,17 +87,6 @@ test('durable candidate generations, bounded pages, invalidation, recovery and m
     assert.notEqual((await work()).generation,publishedWork.generation,'drift triggers exactly one new generation');
     await finish();
     assert.ok((await quietSeconds())>6*24*3600,'after the rebuild the work sleeps again: no 30s loop');
-    const page=(await readCandidatePage(subject,undefined))!;
-    assert.equal(page.status,'succeeded');assert.equal(page.items.length,25);assert.ok(page.next_cursor);
-    assert.equal(page.source_window.examined,36);assert.equal(page.source_window.rank_truncated,true);
-    const next=(await readCandidatePage(subject,page.next_cursor))!;
-    assert.equal(next.items.length,9);assert.equal(next.next_cursor,null);
-    assert.equal(new Set([...page.items,...next.items].map(x=>x.finding_id)).size,34,'incoming edges remain accessible');
-    assert.equal((await readCandidatePage(ids[35],undefined))?.status,'succeeded');
-    assert.equal((await readCandidatePage(ids[35],undefined))?.items.length,0,'successfully computed zero differs from pending');
-    const duplicates=await sql`SELECT left_id,right_id,count(*) FROM project_finding_candidate_edges GROUP BY generation,left_id,right_id HAVING count(*)>1`;
-    assert.equal(duplicates.length,0);
-    assert.equal(Number((await sql`SELECT count(*) AS n FROM project_finding_candidate_edges WHERE left_id>=right_id`)[0].n),0);
     // New work keeps the complete prior generation visible until atomic publication.
     await rebuild();const newGeneration=(await work()).generation;assert.notEqual(newGeneration,initialGeneration);
     await store.processCandidateBatch(sql);const building=(await readCandidatePage(subject,undefined))!;
