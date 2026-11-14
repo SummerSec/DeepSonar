@@ -69,30 +69,10 @@ test('durable candidate generations, bounded pages, invalidation, recovery and m
     const duplicates=await sql`SELECT left_id,right_id,count(*) FROM project_finding_candidate_edges GROUP BY generation,left_id,right_id HAVING count(*)>1`;
     assert.equal(duplicates.length,0);
     assert.equal(Number((await sql`SELECT count(*) AS n FROM project_finding_candidate_edges WHERE left_id>=right_id`)[0].n),0);
-    // #1122：发布后不再 30 秒无条件全量重建——next_run_at 推远，且来源未变时不被重选。
-    const publishedWork=await work();
-    const quietSeconds=async()=>Number((await sql`SELECT EXTRACT(EPOCH FROM (next_run_at-now()))::int AS s
-      FROM project_finding_candidate_work WHERE project_id=${project}`)[0].s);
-    assert.ok((await quietSeconds())>6*24*3600,'published work must sleep instead of re-queueing every 30s');
-    await sql.begin(tx=>store.scanCandidateProjects(tx));
-    assert.equal((await work()).generation,publishedWork.generation,'无来源变化时不得换 generation');
-    // 来源集合变化（新增 finding）→ 扫描期唤醒一次，且只重建一代。
-    const extraJob=randomUUID(),extraFinding=randomUUID();
-    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json) VALUES (${extraJob},${project},${canvas},'audit','succeeded','{}')`;
-    await sql`INSERT INTO findings(id,project_id,job_id,fingerprint,title,summary,profile,verify_status,disposition)
-      VALUES (${extraFinding},${project},${extraJob},${extraFinding},'中文 搜索 参数 注入','相同的声明','security.vulnerability','confirmed','resolved')`;
-    await sql.begin(tx=>store.scanCandidateProjects(tx));
-    assert.ok((await quietSeconds())<=0,'source drift must wake the pending work');
-    await store.processCandidateBatch(sql);
-    assert.notEqual((await work()).generation,publishedWork.generation,'drift triggers exactly one new generation');
-    await finish();
-    assert.ok((await quietSeconds())>6*24*3600,'after the rebuild the work sleeps again: no 30s loop');
     // New work keeps the complete prior generation visible until atomic publication.
-    // #1122 的漂移重建已发布过一代，这里以「当前已发布代」为准，而不是最初的 initialGeneration。
-    const publishedBeforeRebuild=(await work()).active_generation;
-    await rebuild();const newGeneration=(await work()).generation;assert.notEqual(newGeneration,publishedBeforeRebuild);
+    await rebuild();const newGeneration=(await work()).generation;assert.notEqual(newGeneration,initialGeneration);
     await store.processCandidateBatch(sql);const building=(await readCandidatePage(subject,undefined))!;
-    assert.equal(building.active_generation,publishedBeforeRebuild);assert.equal(building.rebuilding,true);assert.equal(building.items.length,25);
+    assert.equal(building.active_generation,initialGeneration);assert.equal(building.rebuilding,true);assert.equal(building.items.length,25);
     await finish();assert.equal((await work()).active_generation,newGeneration);
     await assert.rejects(readCandidatePage(subject,page.next_cursor),error=>error instanceof CursorError&&error.code==='CURSOR_GAP');
     // Transaction rollback does not lose the published generation or checkpoint.
@@ -196,5 +176,24 @@ test('durable candidate generations, bounded pages, invalidation, recovery and m
     assert.equal(registry.cursor_id,twentyFifth.id);
     assert.equal(await sql.begin(tx=>store.scanCandidateProjects(tx)),5);
     assert.equal((await sql`SELECT cursor_id FROM project_finding_candidate_scan WHERE id='global'`)[0].cursor_id,null);
+    // #1122：无来源变化时，一轮发布后必须长睡眠，不再每 30 秒无条件全量重建。
+    await rebuild();await finish();
+    const publishedWork=await work();
+    const quietSeconds=async()=>Number((await sql`SELECT EXTRACT(EPOCH FROM (next_run_at-now()))::int AS s
+      FROM project_finding_candidate_work WHERE project_id=${project}`)[0].s);
+    assert.ok((await quietSeconds())>6*24*3600,'published work must sleep instead of re-queueing every 30s');
+    await sql.begin(tx=>store.scanCandidateProjects(tx));
+    assert.equal((await work()).generation,publishedWork.generation,'无来源变化时不得换 generation');
+    // 来源集合变化（新增 finding）→ 扫描期唤醒一次，且只重建一代。
+    const extraJob=randomUUID(),extraFinding=randomUUID();
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json) VALUES (${extraJob},${project},${canvas},'audit','succeeded','{}')`;
+    await sql`INSERT INTO findings(id,project_id,job_id,fingerprint,title,summary,profile,verify_status,disposition)
+      VALUES (${extraFinding},${project},${extraJob},${extraFinding},'中文 搜索 参数 注入','相同的声明','security.vulnerability','confirmed','resolved')`;
+    await sql.begin(tx=>store.scanCandidateProjects(tx));
+    assert.ok((await quietSeconds())<=0,'source drift must wake the pending work');
+    await store.processCandidateBatch(sql);
+    assert.notEqual((await work()).generation,publishedWork.generation,'drift triggers exactly one new generation');
+    await finish();
+    assert.ok((await quietSeconds())>6*24*3600,'after the rebuild the work sleeps again: no 30s loop');
   }finally{await appClose?.();await close?.();await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);await admin.end({timeout:5});}
 });
