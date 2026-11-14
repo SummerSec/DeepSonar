@@ -11,6 +11,8 @@ export function logClaimStarved(input: {
   activeProvisioning: number;
   maxGlobalJobs: number;
   maxConcurrentProvisioning: number;
+  /** 占住槽位的 Job 摘要：`<claimed_at 日期>:<status>:<短 id>`，用于线上定位。 */
+  holders?: readonly string[];
   now?: number;
 }): void {
   const signature = `${input.totalActive}/${input.activeProvisioning}`;
@@ -18,9 +20,10 @@ export function logClaimStarved(input: {
   if (signature === lastSignature && now - lastLoggedAt < 60_000) return;
   lastSignature = signature;
   lastLoggedAt = now;
+  const holders = input.holders?.length ? ` holders=${input.holders.join(",")}` : "";
   console.error(
     `[dispatcher] CLAIM_STARVED active=${input.totalActive}/${input.maxGlobalJobs} ` +
-      `provisioning=${input.activeProvisioning}/${input.maxConcurrentProvisioning}: new claims paused`,
+      `provisioning=${input.activeProvisioning}/${input.maxConcurrentProvisioning}: new claims paused${holders}`,
   );
 }
 

@@ -557,8 +557,7 @@ async function graphEligibilityReasonFromDb(
   batch?: GraphEligibilityBatch,
 ): Promise<string | null> {
   const type = String(job.type ?? "");
-  // Ordinary role/discovery Jobs are eligible once resource quotas pass; do
-  // not pay the graph-state query cost for them on every pending scan.
+  // 普通角色/发现 Job 只在资源配额通过后就合格；不必每一次 pending 扫描都支付图状态查询开销。
   if (type !== "hub_reason" && type !== "verify_finding" && type !== "report") return null;
   const canvasId = String(job.canvas_id ?? "").trim();
   if (!canvasId) return null;
@@ -611,8 +610,7 @@ async function graphEligibilityReasonFromDb(
     );
   }
 
-  // Read the persisted directed grant on both the selection and locked claim pass.
-  // Only its exact target can be excluded; every other graph and quota gate remains.
+  // 在筛选与锁定认领两遍上都读持久化的定向授权；只有它的精确目标可被排除，其余图与配额门保持不变。
   const recoveryTarget = await pendingCompletionRecoveryClaimTarget(tx, job);
   const [otherWork] = recoveryTarget ? await tx`SELECT
       COALESCE(bool_or(type NOT IN ('hub_reason','verify_finding','report') AND status = ANY(${activeStatuses})), false) AS active_role,
@@ -710,8 +708,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
     const createCircuit = openSandboxCreateCircuitStatus();
     const createAdmission = openSandboxCreateCircuitAllowsClaim(createCircuit);
     if (!createAdmission.allowed) {
-      // #1046: the reason is a fixed failure code, and the line is throttled at the circuit
-      // so a paused claim path cannot log once per call.
+      // #1046：原因是固定失败码，该行在熔断处限流，暂停认领的路径不会每轮都打日志。
       if (shouldLogCreateCircuitPause()) {
         console.error(
           `[dispatcher] ${OPENSANDBOX_CREATE_CIRCUIT_OPEN} state=${createCircuit.state} reason=${createCircuit.lastTripReason ?? "unknown"}: new claims paused`,
@@ -769,7 +766,11 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       dispatchSlots(rules.maxGlobalJobs, totalActive),
       provisionSlots(rules.maxConcurrentProvisioning, activeProvisioning),
     );
-    if (slots <= 0) { logClaimStarved({ totalActive, activeProvisioning, maxGlobalJobs: rules.maxGlobalJobs, maxConcurrentProvisioning: rules.maxConcurrentProvisioning }); return stop; }
+    if (slots <= 0) {
+      const holders = await tx<{ id: string; status: string; claimed_at: string | null }[]>`SELECT id, status, claimed_at::text AS claimed_at FROM jobs WHERE status IN ('claimed','provisioning') ORDER BY claimed_at NULLS FIRST, id LIMIT 5`;
+      logClaimStarved({ totalActive, activeProvisioning, maxGlobalJobs: rules.maxGlobalJobs, maxConcurrentProvisioning: rules.maxConcurrentProvisioning, holders: holders.map((row) => `${String(row.claimed_at ?? "-").slice(0, 10)}:${row.status}:${String(row.id).slice(0, 8)}`) });
+      return stop;
+    }
 
     const counts = accumulateDispatchCounts(active as unknown as ActiveDispatchRow[]);
     type PendingCandidate = DispatchCandidate & { id: string; priority: number; created_at_key: string; canvas_project_id: string | null };
@@ -797,8 +798,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       const dispatchSkip = dispatchSkipReason(job, counts, rules, projectJobLimitForCandidate(job, rules.maxJobsPerProject));
       return dispatchSkip ? skip(dispatchSkip) : true;
     };
-    // Freeze only this page's identity hints. Eligibility is authoritative after
-    // the sorted Canvas/project locks and Job SKIP LOCKED re-read below.
+    // 只冻结本页的身份提示；资格判定在排好序的画布/项目锁与 Job SKIP LOCKED 复读之后以权威结果为准。
     const selected: PendingCandidate[] = await tx<PendingCandidate[]>`${projection}
       WHERE j.status = 'pending'
       ${cursor ? tx`AND (
@@ -811,8 +811,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
     if (selected.length === 0) return stop;
     const last: PendingCandidate = selected[selected.length - 1]!;
     const nextCursor: ClaimCursor = { priority: Number(last.priority), createdAt: String(last.created_at_key), id: String(last.id) };
-    // Lock every candidate Canvas before any Job/Attempt. Never refill from a
-    // later page until this transaction has committed and released all locks.
+    // 在任何 Job/Attempt 之前先锁所有候选 Canvas；本事务提交并释放锁之前不从后页补充。
     const canvasIds = [...new Set(selected.map((job) => job.canvas_id).filter(Boolean))] as string[];
     const lockedCanvases = await tx<{ id: string }[]>`
       SELECT id FROM canvases WHERE id = ANY(${canvasIds}::text[])

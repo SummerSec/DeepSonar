@@ -216,6 +216,8 @@ test("#1114 claim starvation log is throttled per signature", () => {
     logClaimStarved({ totalActive: 6, activeProvisioning: 2, maxGlobalJobs: 20, maxConcurrentProvisioning: 2, now: 1_100_000 });
     assert.equal(calls.length, 3, "同一签名超过 60 秒再次打印");
     assert.match(calls[0]!, /CLAIM_STARVED active=5\/20 provisioning=2\/2/);
+    logClaimStarved({ totalActive: 7, activeProvisioning: 2, maxGlobalJobs: 20, maxConcurrentProvisioning: 2, now: 1_200_000, holders: ["2026-11-14:provisioning:abcd1234"] });
+    assert.match(calls[calls.length - 1]!, /holders=2026-11-14:provisioning:abcd1234/, "饥饿日志必须点名占位 Job");
   } finally {
     spy.mock.restore();
   }
