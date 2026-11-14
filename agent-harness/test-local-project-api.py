@@ -113,6 +113,17 @@ def main():
         if attempt and attempt % 30 == 0:
             print(f"[{attempt * 2}s] waiting hub chain: {state}", flush=True)
         time.sleep(2)
+    if not final:
+        # 失败现场取证：Job 长期 pending 时，需要区分「调度器没认领」与「镜像/容量不就绪」。
+        for name, path in (
+            ("health", "/health"),
+            ("pending jobs", f"/jobs?project_id={pid}&status=pending"),
+            ("project canvases", f"/projects/{pid}/canvases"),
+        ):
+            try:
+                print(f"诊断 {name}: {json.dumps(req('GET', path), ensure_ascii=False)[:800]}", flush=True)
+            except Exception as exc:  # 诊断不得掩盖原始失败
+                print(f"诊断 {name} 失败: {exc}", flush=True)
     assert final, f"Hub 编排链未在 30 分钟内收敛（最后观测 {state}）"
 
     # 边断言需轮询：root 可能先于后续验收轮的 next 边到达 succeeded（链仍在演进）
