@@ -97,17 +97,23 @@ def main():
     print("优先级:", code, "(200=改成功 / 409=已被认领，均合法)")
 
     # 7. 等整个 Hub 编排链收敛后硬重试：复用原画布，清空旧运行历史
-    # fake hub 每轮派多角色 + finding 必验 + followup 回收，链长已到 ~8 分钟，窗口放宽到 15 分钟
+    # fake hub 每轮派多角色 + finding 必验 + followup 回收，链长已到 ~8 分钟；本 job 在同一
+    # runner 上连续跑多个冒烟、共享一个 Scheduler 与数据库，实测长时间抖动会超过 15 分钟窗口
+    # （2026-11-14 连续复现）。窗口放宽到 30 分钟，并每 30 轮打印一次进度，让真实挂起仍然可见。
     final = None
-    for _ in range(450):
+    state = {"root": None, "job": None, "nodes": 0}
+    for attempt in range(900):
         j = req("GET", f"/jobs/{job['id']}")["job"]
         graph = req("GET", f"/canvases/{cid}")
         root = next(n for n in graph["nodes"] if n["node_type"] == "root")
+        state = {"root": root["status"], "job": j["status"], "nodes": len(graph["nodes"])}
         if root["status"] == "succeeded":
             final = j["status"]
             break
+        if attempt and attempt % 30 == 0:
+            print(f"[{attempt * 2}s] waiting hub chain: {state}", flush=True)
         time.sleep(2)
-    assert final, "Hub 编排链未在 15 分钟内收敛"
+    assert final, f"Hub 编排链未在 30 分钟内收敛（最后观测 {state}）"
 
     # 边断言需轮询：root 可能先于后续验收轮的 next 边到达 succeeded（链仍在演进）
     def hub_chain_ok():
