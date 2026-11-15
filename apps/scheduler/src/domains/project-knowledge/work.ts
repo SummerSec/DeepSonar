@@ -52,10 +52,24 @@ function validPlan(cases: PlanCase[]): boolean {
 /** knowledge Job 的最小可执行预算：低于它的 Job 连 provision 与一轮模型请求都跑不完，必然被 Reaper
  * 判 timeout（#1111 现场 60/68/88 秒）。work 预算（KNOWLEDGE_LIMITS.seconds）是累计上限，不是单
  * Job 的超时：余额不足以支撑一个可执行 Job 时显式阻断 work，而不是派发注定失败的短命 Job。 */
-export const KNOWLEDGE_MIN_JOB_TIMEOUT_SEC = 300;
+const KNOWLEDGE_MIN_JOB_TIMEOUT_SEC = 300;
 function roleFor(stage: Stage): string {
   return stage === "trial" ? "test" : stage === "reviewer" ? "review" : "analyze";
 }
+// #1132：revise 要求精确 base_refs（item/version/generation/hash），而 maker 的 manifest 不含
+// 这些字段，Agent 只能在「自造」与「放弃」之间二选一（现场两个 Job 都被 cancel）。派发时由
+// 上一提案的候选版本解析出唯一基线三元组，作为可复制块写进 prompt，防"自造"。
+async function baseRefsHint(tx: Db, proposal: Row): Promise<string> {
+  if (!proposal.candidate_version_id) return "";
+  const [row] = await tx`SELECT v.id AS version_ref, v.content_sha256 AS content_hash, v.item_id AS item_ref, i.generation
+    FROM project_knowledge_versions v JOIN project_knowledge_items i ON i.id=v.item_id
+    WHERE v.id=${String(proposal.candidate_version_id)} AND v.revoked_at IS NULL`;
+  if (!row) return "";
+  return `可复制 base_refs（上一候选的精确基线，revise/merge 提案的 parent_proposal_ref=${String(proposal.id)}；内容逐字复制，禁止自造）：`+
+    JSON.stringify([{ item_ref: String(row.item_ref), version_ref: String(row.version_ref),
+      generation: Number(row.generation), content_hash: String(row.content_hash) }]);
+}
+
 function promptFor(stage: Stage, work: Row, proposal?: Row, trial?: { testCase: PlanCase; arm: string }): string {
   const reference = `work=${work.id}`;
   if (stage === "maker") return `整理当前 Job 冻结的项目证据，提出项目知识候选。${reference}。${proposal ? `前一提案=${proposal.id} revision=${proposal.revision} state=${proposal.state}；仅可提交 parent_proposal_ref 为该提案、revision=${Number(proposal.revision) + 1} 的修订。` : "首次提案 revision=1。"}逐项使用 read_knowledge_input，调用 propose_project_knowledge；不得自行批准或激活。`;
@@ -217,7 +231,9 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     const workId = String(work.id);
     const projectId = String(work.project_id);
     const canvasId = String(work.canvas_id);
-    const prompt = promptFor(stage, work, proposal, trial);
+    const prompt = stage === "maker" && proposal
+      ? `${promptFor(stage, work, proposal, trial)}${await baseRefsHint(tx, proposal)}`
+      : promptFor(stage, work, proposal, trial);
     const assignment: KnowledgeJobAssignment = {
       work_id: workId, stage, inputs: manifest, governance_hash: String(work.governance_hash),
       ...(String(work.trigger_key).startsWith(PROJECT_COLLECTION_PREFIX) ? { source_mode: "project_collection" as const } : {}),
