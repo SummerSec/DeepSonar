@@ -58,22 +58,32 @@ function roleFor(stage: Stage): string {
 }
 // #1132：revise/merge 要求精确 base_refs，而 maker 的输入清单不含 item_ref/version_ref/generation，
 // Agent 只能在「自造」与「放弃」之间二选一（现场两个 Job 因此被 cancel）。派发修订轮时在 prompt 里
-// 给出**规则 + 可复制的当前 active 版本目录**，与 proposals.ts 的校验口径一致：
-// create（含对 create 候选的修订）base_refs 必须为空；revise 恰好 1 个；merge 至少 2 个；
-// 基线只能取当前 active 版本（未激活的候选、自造三元组都会被 KNOWLEDGE_BASE_CONFLICT 拒绝）。
+// 给出与 proposals.ts 完全同口径的规则与可复制基线：
+// - create（含对 create 候选的修订）→ base_refs 必须为空数组；
+// - revise/retire/reuse/merge → 精确沿用上一提案 base_refs_json 指向的版本，并核验它仍是该项当前
+//   active 版本（未激活/已过期都不可用，此时明确告知需要重新获取，而不是给出任意目录）。
 async function baseRefsHint(tx: Db, projectId: string, proposal: Row): Promise<string> {
-  const bases = await tx`SELECT i.id AS item_ref, v.id AS version_ref, i.generation, v.content_sha256 AS content_hash
-    FROM project_knowledge_items i JOIN project_knowledge_versions v ON v.id=i.active_version_id
-    WHERE i.project_id=${projectId} AND v.revoked_at IS NULL ORDER BY i.id LIMIT 3`;
   const action = String(proposal.action);
-  const rule = action === "create"
-    ? "本次是对 create 候选的修订（revision 递增，parent_proposal_ref 指向该提案）：action 仍为 create，base_refs 必须为空数组。"
-    : "revise 需恰好 1 个 base、merge 至少 2 个 base，且只能取下列当前 active 版本（未激活候选或自造三元组会被拒绝）：";
-  const catalog = bases.length
-    ? JSON.stringify(bases.map((row) => ({ item_ref: String(row.item_ref), version_ref: String(row.version_ref),
-        generation: Number(row.generation), content_hash: String(row.content_hash) })))
-    : "（当前没有可引用的 active 版本）";
-  return `上一提案=${String(proposal.id)} revision=${String(proposal.revision)} action=${action}；${rule}${catalog}`;
+  const head = `上一提案=${String(proposal.id)} revision=${String(proposal.revision)} action=${action}；`;
+  if (action === "create") {
+    return `${head}本次是对 create 候选的修订（revision 递增，parent_proposal_ref 指向该提案）：action 仍为 create，base_refs 必须为空数组。`;
+  }
+  const expected = Array.isArray(proposal.base_refs_json)
+    ? (proposal.base_refs_json as Array<{ version_ref?: string }>).map((ref) => String(ref.version_ref ?? "")).filter(Boolean)
+    : [];
+  const rows = expected.length
+    ? await tx`SELECT i.id AS item_ref, v.id AS version_ref, i.generation, v.content_sha256 AS content_hash
+        FROM project_knowledge_items i JOIN project_knowledge_versions v ON v.id=i.active_version_id
+        WHERE i.project_id=${projectId} AND v.id=ANY(${expected}::uuid[]) AND v.revoked_at IS NULL ORDER BY i.id`
+    : [];
+  const bases = rows.map((row) => ({ item_ref: String(row.item_ref), version_ref: String(row.version_ref),
+    generation: Number(row.generation), content_hash: String(row.content_hash) }));
+  const need = action === "merge" ? "至少 2 个" : "恰好 1 个";
+  if (bases.length !== expected.length || bases.length === 0) {
+    return `${head}${action} 需要${need}基线，但上一提案的基线已不是当前 active 版本（或已撤销）——本次修订不可行；`
+      + "请改用 create 或带说明转人工，禁止自造或改用其它项目的版本。";
+  }
+  return `${head}${action} 需${need} base，必须逐字复制下列当前 active 基线（不得自造）：${JSON.stringify(bases)}`;
 }
 
 function promptFor(stage: Stage, work: Row, proposal?: Row, trial?: { testCase: PlanCase; arm: string }): string {

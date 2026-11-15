@@ -360,3 +360,54 @@ test("#1132 修订轮 maker 的 prompt 给出与 proposals 校验一致的基础
     assert.ok(prompt.includes(`"content_hash":"${blob.hash}"`), "必须给出 content_hash");
   });
 });
+
+test("#1134 revise 的提示精确取自上一提案的 base_refs（不会被前 3 项截断），过期基线明确不可行", async () => {
+  await withKnowledgeDatabase(async (db) => {
+    const fixture = await workFixture(db);
+    const scheduler = schedulerFor(db);
+    assert.equal(await scheduler.tick(), 1);
+    const firstMaker = (await assigned(db, fixture.workId, "maker"))[0]!;
+    const firstMakerId = String(firstMaker.job_id);
+    const firstAttempt = await beginJob(db, firstMakerId);
+    // 四个 active 项：目标基线排在第四位（按 id 排序会被 LIMIT 3 截断）。
+    const versions: string[] = [];
+    for (let n = 0; n < 4; n += 1) {
+      const blob = await writeKnowledgeBlob(db as never, { content: `baseline ${n}` });
+      await registerKnowledgeBlob(db as never, blob.hash, blob.bytes);
+      const [item] = await db`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title,generation)
+        VALUES(${fixture.projectId},'memory',${`baseline-${n}`},${`Baseline ${n}`},${n}) RETURNING id`;
+      const [version] = await db`INSERT INTO project_knowledge_versions
+        (project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash)
+        VALUES(${fixture.projectId},${String(item!.id)},1,${blob.hash},${firstMakerId},${firstAttempt},${db.json([])},${GOVERNANCE})
+        RETURNING id`;
+      await db`UPDATE project_knowledge_items SET status='active',active_version_id=${String(version!.id)} WHERE id=${String(item!.id)}`;
+      versions.push(String(version!.id));
+    }
+    const target = versions[3]!;
+    const [proposal] = await db`INSERT INTO project_knowledge_proposals(project_id,work_id,action,state,revision,
+      candidate_version_id,maker_job_id,idempotency_key,request_digest,input_digest,base_refs_json,evaluation_plan_json,reason)
+      VALUES(${fixture.projectId},${fixture.workId},'revise','needs_eval',1,${target},${firstMakerId},
+        ${randomUUID()},${"e".repeat(64)},${"e".repeat(64)},${db.json([{ version_ref: target }])},${db.json([])},'fixture')
+      RETURNING id`;
+    await finishJob(db, scheduler, firstMakerId);
+    await db`UPDATE project_knowledge_work SET stage='maker',state='running',active_job_id=NULL WHERE id=${fixture.workId}`;
+    await scheduler.tick();
+    const makerJobs = await assigned(db, fixture.workId, "maker");
+    const revisionJobId = String(makerJobs.find((row) => String(row.job_id) !== firstMakerId)!.job_id);
+    const [job] = await db`SELECT payload_json FROM jobs WHERE id=${revisionJobId}`;
+    const prompt = String((job!.payload_json as { intent?: { prompt?: string } }).intent?.prompt ?? "");
+    assert.match(prompt, /revise 需恰好 1 个 base/);
+    assert.ok(prompt.includes(target), "第四位的目标基线必须出现在提示里");
+    for (const other of versions.slice(0, 3)) assert.ok(!prompt.includes(other), "不得把非目标基线放进可复制集合");
+    // 基线过期（不再是 active）时，提示必须明确不可行，而不是给出替代目录。
+    await db`UPDATE project_knowledge_items SET active_version_id=NULL,status='draft' WHERE active_version_id=${target}`;
+    await finishJob(db, scheduler, revisionJobId);
+    await db`UPDATE project_knowledge_work SET stage='maker',state='running',active_job_id=NULL WHERE id=${fixture.workId}`;
+    await db`UPDATE project_knowledge_proposals SET state='needs_eval' WHERE id=${String(proposal!.id)}`;
+    await scheduler.tick();
+    const third = (await assigned(db, fixture.workId, "maker")).filter((row) => ![firstMakerId, revisionJobId].includes(String(row.job_id)))[0];
+    const [thirdJob] = await db`SELECT payload_json FROM jobs WHERE id=${String(third!.job_id)}`;
+    const stalePrompt = String((thirdJob!.payload_json as { intent?: { prompt?: string } }).intent?.prompt ?? "");
+    assert.match(stalePrompt, /已不是当前 active 版本[\s\S]*本次修订不可行/);
+  });
+});
