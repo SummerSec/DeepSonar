@@ -56,18 +56,24 @@ const KNOWLEDGE_MIN_JOB_TIMEOUT_SEC = 300;
 function roleFor(stage: Stage): string {
   return stage === "trial" ? "test" : stage === "reviewer" ? "review" : "analyze";
 }
-// #1132：revise 要求精确 base_refs（item/version/generation/hash），而 maker 的 manifest 不含
-// 这些字段，Agent 只能在「自造」与「放弃」之间二选一（现场两个 Job 都被 cancel）。派发时由
-// 上一提案的候选版本解析出唯一基线三元组，作为可复制块写进 prompt，防"自造"。
-async function baseRefsHint(tx: Db, proposal: Row): Promise<string> {
-  if (!proposal.candidate_version_id) return "";
-  const [row] = await tx`SELECT v.id AS version_ref, v.content_sha256 AS content_hash, v.item_id AS item_ref, i.generation
-    FROM project_knowledge_versions v JOIN project_knowledge_items i ON i.id=v.item_id
-    WHERE v.id=${String(proposal.candidate_version_id)} AND v.revoked_at IS NULL`;
-  if (!row) return "";
-  return `可复制 base_refs（上一候选的精确基线，revise/merge 提案的 parent_proposal_ref=${String(proposal.id)}；内容逐字复制，禁止自造）：`+
-    JSON.stringify([{ item_ref: String(row.item_ref), version_ref: String(row.version_ref),
-      generation: Number(row.generation), content_hash: String(row.content_hash) }]);
+// #1132：revise/merge 要求精确 base_refs，而 maker 的输入清单不含 item_ref/version_ref/generation，
+// Agent 只能在「自造」与「放弃」之间二选一（现场两个 Job 因此被 cancel）。派发修订轮时在 prompt 里
+// 给出**规则 + 可复制的当前 active 版本目录**，与 proposals.ts 的校验口径一致：
+// create（含对 create 候选的修订）base_refs 必须为空；revise 恰好 1 个；merge 至少 2 个；
+// 基线只能取当前 active 版本（未激活的候选、自造三元组都会被 KNOWLEDGE_BASE_CONFLICT 拒绝）。
+async function baseRefsHint(tx: Db, projectId: string, proposal: Row): Promise<string> {
+  const bases = await tx`SELECT i.id AS item_ref, v.id AS version_ref, i.generation, v.content_sha256 AS content_hash
+    FROM project_knowledge_items i JOIN project_knowledge_versions v ON v.id=i.active_version_id
+    WHERE i.project_id=${projectId} AND v.revoked_at IS NULL ORDER BY i.id LIMIT 3`;
+  const action = String(proposal.action);
+  const rule = action === "create"
+    ? "本次是对 create 候选的修订（revision 递增，parent_proposal_ref 指向该提案）：action 仍为 create，base_refs 必须为空数组。"
+    : "revise 需恰好 1 个 base、merge 至少 2 个 base，且只能取下列当前 active 版本（未激活候选或自造三元组会被拒绝）：";
+  const catalog = bases.length
+    ? JSON.stringify(bases.map((row) => ({ item_ref: String(row.item_ref), version_ref: String(row.version_ref),
+        generation: Number(row.generation), content_hash: String(row.content_hash) })))
+    : "（当前没有可引用的 active 版本）";
+  return `上一提案=${String(proposal.id)} revision=${String(proposal.revision)} action=${action}；${rule}${catalog}`;
 }
 
 function promptFor(stage: Stage, work: Row, proposal?: Row, trial?: { testCase: PlanCase; arm: string }): string {
@@ -232,7 +238,7 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     const projectId = String(work.project_id);
     const canvasId = String(work.canvas_id);
     const prompt = stage === "maker" && proposal
-      ? `${promptFor(stage, work, proposal, trial)}${await baseRefsHint(tx, proposal)}`
+      ? `${promptFor(stage, work, proposal, trial)}${await baseRefsHint(tx, projectId, proposal)}`
       : promptFor(stage, work, proposal, trial);
     const assignment: KnowledgeJobAssignment = {
       work_id: workId, stage, inputs: manifest, governance_hash: String(work.governance_hash),
