@@ -47,6 +47,12 @@ test("#1133 verify 只在判定回弹后、写终态前调用刹车，并落稳�
   assert.ok(source.indexOf("maxVerificationRounds > 0") < brake, "轮次上限先于无进展刹车");
   assert.ok(brake < source.indexOf("await finishRound(tx, round.id as string, {\n    status: roundStatus,"), "刹车必须先于 round 终态写入");
   assert.ok(source.indexOf("import { VERIFY_NO_PROGRESS_REASON, shouldStopForNoProgress }") > 0, "刹车经 verify-no-progress 模块复用");
+  // 口径一致（评审 P1）：历史轮次读的是「本次决策缺失集合」，由 finishRound 持久化，不是原始 evidence.missing。
+  assert.ok(source.includes("decisionMissing: missing"), "成功路径把本次决策缺失集合交给 finishRound 持久化");
+  assert.ok(source.includes("decisionMissing: evidence.missing"), "失败路径同样落决策缺失集合，口径统一");
+  const module = readFileSync(new URL("./verify-no-progress.ts", import.meta.url), "utf8");
+  assert.ok(module.includes("evidence_snapshot_json->'decision_missing'"), "查询必须读 decision_missing 而不是原始 missing");
+  assert.ok(!/evidence_snapshot_json->'missing'/.test(module), "不得回退到原始 missing 口径（门禁缺项会被漏判）");
   // 收口原因与 round error 都带稳定码，便于看板/日志聚合。
   assert.ok(source.includes("noProgress ? VERIFY_NO_PROGRESS_REASON"), "needs_human 结算原因使用稳定码");
   assert.equal(VERIFY_NO_PROGRESS_REASON, "verify_no_progress");

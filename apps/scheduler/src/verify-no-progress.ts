@@ -1,13 +1,21 @@
 /**
  * #1133：Verify 补证缺少「连续无进展」刹车。
  *
- * 现场形态是「派了 test、Job succeeded、但 missing 没减少」——现有刹车都不覆盖：
- * `maxNoProgressRounds` 只在 plan 协议预算内，`wait_evidence`（#574）只看 `waiting_evidence`
- * 状态，`maxVerificationRounds` 只在轮次耗尽时转 inconclusive。于是同一 Finding 被反复派
- * test/review 6–9 次（多数 succeeded）仍停在 pending，每轮真实起沙箱并消耗模型请求。
+ * 现场形态是「派了 test、Job succeeded、但 missing 没减少」：同一 Finding 被反复派 test/review
+ * 6–9 次（多数 succeeded）仍停在 pending，每轮真实起沙箱并消耗模型请求。
  *
- * 本模块只提供**判定**（纯函数），不碰终态写入：把「连续 N 次回弹时缺失证据集合完全相同」
- * 视作无进展，由 verify.ts 据此收口到 needs_human（带可读原因），而不是继续派注定无用的补证。
+ * 与既有刹车的关系（本片只补 verify_finding 回弹路径，不替换任何既有机制）：
+ * - 补证完成路径（`maybeReverifyAfterFollowup`）已有 gate 指纹 + `rules.maxNoProgressRounds`
+ *   的收口（settle 到 inconclusive），本模块不参与；
+ * - `wait_evidence`（#574）只看 `waiting_evidence` 状态；
+ * - `maxVerificationRounds` 只在轮次耗尽时转 inconclusive；
+ * - 因此 verify_finding 轮次在**门禁缺项不变**时仍会一轮轮回弹补证——本模块补的就是这条：
+ *   连续 N 轮回弹的「本次决策缺失集合」完全相同即收口 `needs_human`。
+ *
+ * 口径约定（评审 P1）：历史轮次可能用门禁替换后的缺失集合（如 `structured_supporting_fact`），
+ * 与 `evidence.missing` 的原始集合不同，所以只在轮次快照里持久化本次决策集合
+ * （`evidence_snapshot_json.decision_missing`）并按同一口径比较；没有该字段的历史轮次
+ * 视为不可比、直接中断 streak（宁可少收口，也不误收口）。
  */
 
 /** 连续多少次「同一 missing 指纹的回弹」即判定无进展（含本次判定，故 2 表示第 2 次就收口）。 */
@@ -75,7 +83,7 @@ export async function shouldStopForNoProgress(
   missing: readonly string[] | null | undefined,
 ): Promise<boolean> {
   const recentRounds = await tx<Array<VerifyRoundProgress>>`
-    SELECT final_outcome, evidence_snapshot_json->'missing' AS missing
+    SELECT final_outcome, evidence_snapshot_json->'decision_missing' AS missing
     FROM finding_verification_rounds
     WHERE finding_id = ${findingId} AND id <> ${roundId} AND final_outcome IS NOT NULL
     ORDER BY attempt DESC, id DESC
