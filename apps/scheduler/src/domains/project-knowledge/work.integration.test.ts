@@ -326,13 +326,14 @@ test("#1132 修订轮 maker 的 prompt 对 create 修订给出「base_refs 必�
     assert.equal(await scheduler.tick(), 1);
     const firstMaker = (await assigned(db, fixture.workId, "maker"))[0]!;
     const firstMakerId = String(firstMaker.job_id);
+    const firstAttempt = await beginJob(db, firstMakerId);
     const blob = await writeKnowledgeBlob(db as never, { content: "candidate body for baseline hint" });
     await registerKnowledgeBlob(db as never, blob.hash, blob.bytes);
     const [item] = await db`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title,generation)
       VALUES(${fixture.projectId},'memory','base-ref-hint','Base ref hint',3) RETURNING id`;
     const [version] = await db`INSERT INTO project_knowledge_versions
       (project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash)
-      VALUES(${fixture.projectId},${String(item!.id)},1,${blob.hash},${firstMakerId},'attempt-fixture',${db.json([])},${GOVERNANCE})
+      VALUES(${fixture.projectId},${String(item!.id)},1,${blob.hash},${firstMakerId},${firstAttempt},${db.json([])},${GOVERNANCE})
       RETURNING id`;
     await db`INSERT INTO project_knowledge_proposals(project_id,work_id,action,state,revision,candidate_version_id,
       maker_job_id,idempotency_key,request_digest,input_digest,base_refs_json,evaluation_plan_json,reason)
