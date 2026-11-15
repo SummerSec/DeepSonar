@@ -11,7 +11,7 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
   candidate: PreparedCandidate | undefined, governanceHash: string, idempotencyKey: string, requestDigest: string): Promise<Record<string, unknown>> {
   // #1130：读写两侧必须用同一份 manifest。读侧（read_knowledge_input / prompt）用的是随 Job 冻结的
   // assignment manifest，写侧此前误取 work 的 manifest（现场 18 vs 16 条），导致「读得到、引用不了」。
-  const [assignment] = await tx`SELECT a.work_id,a.stage,w.state,w.stage AS work_stage,w.active_job_id,w.governance_hash,a.input_manifest_json AS assignment_manifest,w.input_manifest_json AS work_manifest,w.revision_count,w.job_count,w.run_seconds
+  const [assignment] = await tx`SELECT a.work_id,a.stage,w.state,w.stage AS work_stage,w.active_job_id,w.governance_hash,a.input_manifest_json,w.revision_count,w.job_count,w.run_seconds
     FROM project_knowledge_job_assignments a JOIN project_knowledge_work w ON w.id=a.work_id AND w.project_id=a.project_id
     WHERE a.job_id=${actor.jobId} AND a.project_id=${actor.projectId} AND a.work_id=${input.work_ref} FOR UPDATE OF w`;
   if (!assignment || assignment.stage !== "maker" || assignment.state !== "running" || assignment.work_stage !== "maker" || assignment.active_job_id !== actor.jobId)
@@ -30,10 +30,9 @@ export async function proposeKnowledge(tx: KnowledgeDb, actor: KnowledgeActor, i
 
   // 随 Job 冻结的 assignment manifest 是唯一真相；历史行没有该快照时才回退 work 总清单
   //（历史冻结数据是不可变事实，不按新契约重写）。
-  // 列默认是 '[]'（不是 NULL）：空数组等于「没有随 Job 冻结的清单」，必须回退 work 清单。
-  const assignmentManifest = assignment.assignment_manifest as Array<{ input_ref: string }>;
-  const workManifest = assignment.work_manifest as Array<{ input_ref: string }>;
-  const frozenManifest = (assignmentManifest.length ? assignmentManifest : workManifest) as
+  // 唯一真相：随 Job 冻结的 assignment manifest（与 prompt/read_knowledge_input 同源）。
+  // 派发时 work.ts 必定写入该快照；不回退 work 清单，避免读写两侧各自承认不同来源集合。
+  const frozenManifest = assignment.input_manifest_json as
     Array<{ input_ref: string; content_hash: string; blob_hash?: string }>;
   const manifests = frozenManifest;
   if (["create", "revise", "merge"].includes(input.action) && input.source_refs.length === 0)

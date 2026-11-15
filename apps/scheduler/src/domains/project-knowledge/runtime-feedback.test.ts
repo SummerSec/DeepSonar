@@ -173,14 +173,14 @@ test("#1128 read_knowledge_input 四类失败各自可行动，hash 混淆有明
     "KNOWLEDGE_INPUT_AUDIENCE_DENIED", /visible to audience \[reviewer\], current stage is maker/, "input_ref");
 });
 
-test("#1130 读写两侧使用同一份 assignment manifest（历史行才回退 work 清单）", async () => {
+test("#1130 读写两侧只认 assignment 冻结清单（不各自回退 work 清单）", async () => {
   const { readFileSync } = await import("node:fs");
   const proposals = readFileSync(new URL("./proposals.ts", import.meta.url), "utf8");
   const inputs = readFileSync(new URL("./inputs.ts", import.meta.url), "utf8");
-  // 写侧同时取两份并优先非空的 assignment 快照（列默认是 []），与 prompt/读侧同源。
-  assert.match(proposals, /a\.input_manifest_json AS assignment_manifest/);
-  assert.match(proposals, /w\.input_manifest_json AS work_manifest/);
-  assert.match(proposals, /assignmentManifest\.length \? assignmentManifest : workManifest/);
-  // 读侧（read_knowledge_input）沿用 assignment 行本身。
+  // 写侧：只取 assignment 快照，不再让 work 清单参与校验。
+  assert.match(proposals, /SELECT a\.work_id,a\.stage,w\.state,w\.stage AS work_stage,w\.active_job_id,w\.governance_hash,a\.input_manifest_json/);
+  assert.doesNotMatch(proposals, /w\.input_manifest_json/);
+  assert.doesNotMatch(proposals, /workManifest|work_manifest/);
+  // 读侧（read_knowledge_input）沿用 assignment 行本身，两侧同源。
   assert.match(inputs, /SELECT a\.\*,w\.governance_hash FROM project_knowledge_job_assignments a/);
 });
