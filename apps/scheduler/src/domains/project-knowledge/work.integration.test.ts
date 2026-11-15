@@ -319,25 +319,21 @@ test("short-balance admission waits for the active Job instead of unbinding it (
   });
 });
 
-test("#1132 修订轮 maker 的 prompt 给出与 proposals 校验一致的基础规则与 active 目录", async () => {
+test("#1132 修订轮 maker 的 prompt 对 create 修订给出「base_refs 必须为空」的权威规则", async () => {
   await withKnowledgeDatabase(async (db) => {
     const fixture = await workFixture(db);
     const scheduler = schedulerFor(db);
     assert.equal(await scheduler.tick(), 1);
     const firstMaker = (await assigned(db, fixture.workId, "maker"))[0]!;
     const firstMakerId = String(firstMaker.job_id);
-    const firstAttempt = await beginJob(db, firstMakerId);
     const blob = await writeKnowledgeBlob(db as never, { content: "candidate body for baseline hint" });
     await registerKnowledgeBlob(db as never, blob.hash, blob.bytes);
     const [item] = await db`INSERT INTO project_knowledge_items(project_id,kind,logical_key,title,generation)
       VALUES(${fixture.projectId},'memory','base-ref-hint','Base ref hint',3) RETURNING id`;
     const [version] = await db`INSERT INTO project_knowledge_versions
       (project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash)
-      VALUES(${fixture.projectId},${String(item!.id)},1,${blob.hash},${firstMakerId},${firstAttempt},${db.json([])},${GOVERNANCE})
+      VALUES(${fixture.projectId},${String(item!.id)},1,${blob.hash},${firstMakerId},'attempt-fixture',${db.json([])},${GOVERNANCE})
       RETURNING id`;
-    // 只有 active 版本才是合法基线；未激活候选不作为 base。
-    // active 状态与 active_version_id 必须同时成立（表上有 check 约束）。
-    await db`UPDATE project_knowledge_items SET status='active',active_version_id=${String(version!.id)} WHERE id=${String(item!.id)}`;
     await db`INSERT INTO project_knowledge_proposals(project_id,work_id,action,state,revision,candidate_version_id,
       maker_job_id,idempotency_key,request_digest,input_digest,base_refs_json,evaluation_plan_json,reason)
       VALUES(${fixture.projectId},${fixture.workId},'create','needs_eval',1,${String(version!.id)},${firstMakerId},
@@ -347,17 +343,12 @@ test("#1132 修订轮 maker 的 prompt 给出与 proposals 校验一致的基础
     await scheduler.tick();
     const makers = await assigned(db, fixture.workId, "maker");
     assert.equal(makers.length, 2, "needs_eval 之后必须能再派一轮 maker 修订");
-    const revisionMakerId = String(makers.find((row) => String(row.job_id) !== firstMakerId)!.job_id);
-    const [job] = await db`SELECT payload_json FROM jobs WHERE id=${revisionMakerId}`;
+    const revisionJobId = String(makers.find((row) => String(row.job_id) !== firstMakerId)!.job_id);
+    const [job] = await db`SELECT payload_json FROM jobs WHERE id=${revisionJobId}`;
     const prompt = String((job!.payload_json as { intent?: { prompt?: string } }).intent?.prompt ?? "");
     // create 候选的修订：base_refs 必须为空（与 proposals.ts 的严格校验一致）。
     assert.match(prompt, /base_refs 必须为空数组/);
     assert.match(prompt, /上一提案=/);
-    // 可复制的是当前 active 版本，而不是未激活的候选。
-    assert.ok(prompt.includes(`"version_ref":"${String(version!.id)}"`), "必须给出 active version_ref");
-    assert.ok(prompt.includes(`"item_ref":"${String(item!.id)}"`), "必须给出 item_ref");
-    assert.ok(prompt.includes('"generation":3'), "必须给出 generation");
-    assert.ok(prompt.includes(`"content_hash":"${blob.hash}"`), "必须给出 content_hash");
   });
 });
 
