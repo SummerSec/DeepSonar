@@ -79,6 +79,24 @@ test("four fresh sources trigger one merged batch without waiting a day", async 
   });
 });
 
+test("the fourth source retry deadline delays batch readiness without an expired wake", async () => {
+  await withKnowledgeDatabase(async db => {
+    const first = await source(db);
+    await source(db, first.projectId);
+    await source(db, first.projectId);
+    const fourth = await source(db, first.projectId);
+    await db`UPDATE audit_logs SET at=now() WHERE action='project_knowledge.source_registered'`;
+    const next = new Date(Date.now() + 60_000).toISOString();
+    await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,after_json)
+      VALUES('system','scheduler','project_knowledge.source_collection_retry',${first.projectId},'job',${fourth.jobId},
+        'error',${db.json({ attempt: 1, next_attempt_at: next })})`;
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
+    assert.equal((await readNextKnowledgeWake(db))!.getTime(), Date.parse(next));
+    assert.equal((await readProjectCollectionStatus(db, first.projectId)).pending_sources, 4);
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0);
+  });
+});
+
 test("an input that does not fit stays queued while later small input fills the bounded batch", async () => {
   await withKnowledgeDatabase(async db => {
     const large = await source(db, undefined, 18), deferred = await source(db, large.projectId, 2);
