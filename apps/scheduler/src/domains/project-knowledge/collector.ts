@@ -6,6 +6,7 @@ import { registerKnowledgeBlob } from "./blobs.js";
 import { recheckKnowledgeSources } from "./inputs.js";
 import { frozenGovernorRecipe } from "./recipe.js";
 import { canonical, sha256, type KnowledgeDb } from "./types.js";
+import { lockKnowledgeFeedbackBatch } from "./feedback.js";
 import { recordSourceFailure, recordSourceFailureInTransaction, sourceHandled, sourceRetryJoin, sourceRetryWake,
   type CollectionSourceRef } from "./source-retry.js";
 import { COLLECTION_MAX_INPUTS, prepareKnowledgeSource, recheckKnowledgeSourceFeedback, PROJECT_COLLECTION_PREFIX, SOURCE_COLLECTED_ACTION,
@@ -62,6 +63,9 @@ export async function collectProjectKnowledgeSources(db: KnowledgeDb, governance
       // Only a project metadata row is locked: no Canvas/Job lock is acquired in this transaction.
       const [active] = await tx`SELECT id FROM projects WHERE id=${projectId} AND status='active' FOR UPDATE`;
       if (!active || stopped() || !await canCollect(tx, projectId)) return 0;
+      // Lock all versions before any item: per-source locking can deadlock with a
+      // revocation that owns a later version and is waiting for the shared item.
+      await lockKnowledgeFeedbackBatch(tx, projectId, prepared.flatMap(item => item.feedbacks.map(feedback => feedback.input.usage_ref)));
       const valid: Prepared[] = [];
       for (const item of prepared) {
         if (await sourceHandled(tx, projectId, item.jobId)) continue;
@@ -75,7 +79,7 @@ export async function collectProjectKnowledgeSources(db: KnowledgeDb, governance
             const now = await inspectAutomaticKnowledgeJob(nested, projectId, item.jobId);
             if (now.status !== "eligible") throw new SourceCollectionError(now.reason ?? "source_ineligible");
             if (String(now.attempt_id) !== item.actor.attemptId) throw new SourceCollectionError("source_attempt_changed");
-            if (now.existing_work) throw new SourceCollectionError("existing_knowledge_work");
+            if (now.existing_work && !now.has_feedback) throw new SourceCollectionError("existing_knowledge_work");
             await recheckKnowledgeSources(nested, item.actor, item.refs);
             await recheckKnowledgeSourceFeedback(nested, item);
             if (item.recipe) {

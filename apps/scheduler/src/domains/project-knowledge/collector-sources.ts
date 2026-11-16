@@ -27,6 +27,21 @@ async function acceptedFeedback(db: KnowledgeDb, actor: KnowledgeActor): Promise
   });
 }
 
+async function hasUnrepresentedFeedback(db: KnowledgeDb, source: Pick<PreparedKnowledgeSource, "actor" | "feedbacks">): Promise<boolean> {
+  const { actor, feedbacks } = source;
+  const [existing] = await db`SELECT id FROM project_knowledge_work
+    WHERE project_id=${actor.projectId} AND origin_job_id=${actor.jobId} LIMIT 1`;
+  if (!existing) return true;
+  for (const feedback of feedbacks) {
+    const entry = feedback.prepared.entries.find(item => item.input_ref === `feedback:${feedback.input.usage_ref}`)!;
+    const [represented] = await db`SELECT id FROM project_knowledge_work
+      WHERE project_id=${actor.projectId} AND origin_job_id=${actor.jobId}
+        AND input_manifest_json @> ${db.json([{ input_ref: entry.input_ref, content_hash: entry.content_hash }] as never)} LIMIT 1`;
+    if (!represented) return true;
+  }
+  return false;
+}
+
 /** Transaction-only proof recheck; all source resolution and CAS IO happened during preparation. */
 export async function recheckKnowledgeSourceFeedback(tx: KnowledgeDb, source: PreparedKnowledgeSource): Promise<void> {
   const current = await acceptedFeedback(tx, source.actor);
@@ -34,6 +49,7 @@ export async function recheckKnowledgeSourceFeedback(tx: KnowledgeDb, source: Pr
     return reject("KNOWLEDGE_BASE_CONFLICT", "Accepted feedback set changed before collection");
   for (const feedback of source.feedbacks)
     await validatePreparedKnowledgeFeedback(tx, source.actor, feedback.input, feedback.prepared, true);
+  if (!await hasUnrepresentedFeedback(tx, source)) throw new SourceCollectionError("existing_knowledge_work");
 }
 
 export class SourceCollectionError extends Error {
@@ -45,7 +61,9 @@ export async function prepareKnowledgeSource(db: KnowledgeDb, projectId: string,
   registrationId: string): Promise<PreparedKnowledgeSource> {
   const inspected = await inspectAutomaticKnowledgeJob(db, projectId, jobId);
   if (inspected.status !== "eligible") throw new SourceCollectionError(inspected.reason ?? "source_ineligible");
-  if (inspected.existing_work) throw new SourceCollectionError("existing_knowledge_work");
+  // An explicit request freezes its inputs before this Job may submit later usage
+  // feedback. That feedback must still join project collection after the work settles.
+  if (inspected.existing_work && !inspected.has_feedback) throw new SourceCollectionError("existing_knowledge_work");
   const [job] = await db`SELECT canvas_id,agent_snapshot_json FROM jobs WHERE id=${jobId} AND project_id=${projectId}`;
   if (!job) throw new SourceCollectionError("job_not_found");
   const actor: KnowledgeActor = { jobId, projectId, canvasId: String(job.canvas_id),
@@ -89,6 +107,7 @@ export async function prepareKnowledgeSource(db: KnowledgeDb, projectId: string,
     for (const entry of prepared.entries) feedbackEntries.set(entry.input_ref, entry);
     if (refs.length + feedbackEntries.size > COLLECTION_MAX_INPUTS) throw new SourceCollectionError("source_input_limit");
   }
+  if (!await hasUnrepresentedFeedback(db, { actor, feedbacks })) throw new SourceCollectionError("existing_knowledge_work");
   const manifest: KnowledgeInputManifestEntry[] = [];
   for (const ref of refs) manifest.push(await resolveKnowledgeSource(db, actor, ref));
   manifest.push(...feedbackEntries.values());

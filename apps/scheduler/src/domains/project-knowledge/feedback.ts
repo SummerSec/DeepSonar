@@ -73,29 +73,46 @@ export async function validateFeedbackUsage(db: KnowledgeDb, actor: KnowledgeAct
 const feedbackValue = (input: RecordKnowledgeFeedbackPayload) => ({ outcome: input.outcome, evidence_refs: input.evidence_refs,
   next_action: input.next_action, reason: input.reason });
 
+/** Lock the whole batch before validating any source: usages, all versions, then all items.
+ * Taking an item lock before a later version would invert version revocation's lock order. */
+export async function lockKnowledgeFeedbackBatch(tx: KnowledgeDb, projectId: string, usageRefs: readonly string[]): Promise<void> {
+  if (!usageRefs.length) return;
+  const refs = [...new Set(usageRefs)];
+  const usages = await tx`SELECT id FROM project_knowledge_usages
+    WHERE project_id=${projectId} AND id IN ${tx(refs)} ORDER BY id FOR UPDATE`;
+  if (!usages.length) return;
+  const ownedRefs = usages.map(usage => String(usage.id));
+  const versions = await tx`SELECT v.id,v.item_id FROM project_knowledge_versions v
+    WHERE EXISTS(SELECT 1 FROM project_knowledge_usages u WHERE u.project_id=${projectId}
+      AND u.id IN ${tx(ownedRefs)} AND u.version_id=v.id AND u.owner_project_id=v.project_id)
+    ORDER BY v.id FOR SHARE OF v`;
+  if (!versions.length) return;
+  const itemIds = [...new Set(versions.map(version => String(version.item_id)))];
+  await tx`SELECT id FROM project_knowledge_items WHERE id IN ${tx(itemIds)} ORDER BY id FOR SHARE`;
+}
+
 /** SQL-only settlement validation. Locks keep usage identity and live grants stable until commit. */
 export async function validatePreparedKnowledgeFeedback(tx: KnowledgeDb, actor: KnowledgeActor,
   input: RecordKnowledgeFeedbackPayload, prepared: PreparedKnowledgeFeedback | undefined, requireAccepted = false): Promise<void> {
+  // Collectors must first call the helper with every usage in their transaction;
+  // reacquiring these locks also gives a single-feedback caller the same order.
+  await lockKnowledgeFeedbackBatch(tx, actor.projectId, [input.usage_ref]);
   const [owned] = await tx`SELECT id,version_id,owner_project_id,content_sha256 FROM project_knowledge_usages
-    WHERE id=${input.usage_ref} AND project_id=${actor.projectId} AND job_id=${actor.jobId} AND attempt_id=${actor.attemptId} FOR UPDATE`;
+    WHERE id=${input.usage_ref} AND project_id=${actor.projectId} AND job_id=${actor.jobId} AND attempt_id=${actor.attemptId}`;
   if (!owned) return reject("KNOWLEDGE_SCOPE_DENIED", "Usage is not owned by this Job and Attempt");
-  if (owned.version_id) {
-    await tx`SELECT v.id FROM project_knowledge_versions v JOIN project_knowledge_items i ON i.id=v.item_id AND i.project_id=v.project_id
-      WHERE v.id=${owned.version_id} AND v.project_id=${owned.owner_project_id} FOR SHARE OF v,i`;
-    if (owned.owner_project_id !== actor.projectId) {
-      const catalog = actor.snapshot.project_knowledge_catalog as FrozenKnowledgeCatalog | undefined;
-      const entries = catalog?.entries;
-      const entry = Array.isArray(entries) ? entries.find(item => item.version_id === owned.version_id
-        && item.owner_project_id === owned.owner_project_id && item.hash === owned.content_sha256) : undefined;
-      if (entry?.grant_id) await tx`SELECT id FROM project_knowledge_grants WHERE id=${entry.grant_id} FOR SHARE`;
-    }
+  if (owned.version_id && owned.owner_project_id !== actor.projectId) {
+    const catalog = actor.snapshot.project_knowledge_catalog as FrozenKnowledgeCatalog | undefined;
+    const entries = catalog?.entries;
+    const entry = Array.isArray(entries) ? entries.find(item => item.version_id === owned.version_id
+      && item.owner_project_id === owned.owner_project_id && item.hash === owned.content_sha256) : undefined;
+    if (entry?.grant_id) await tx`SELECT id FROM project_knowledge_grants WHERE id=${entry.grant_id} FOR SHARE`;
   }
   await validateFeedbackUsage(tx, actor, input.usage_ref);
   const current = await feedbackUsage(tx, actor, input.usage_ref);
   if (!prepared || prepared.usage_identity !== usageIdentity(current) || prepared.feedback_digest !== sha256(canonical(input)))
     return reject("KNOWLEDGE_BASE_CONFLICT", "Feedback preparation no longer matches this usage and request");
   const feedback = feedbackValue(input);
-  const [usage] = await tx`SELECT feedback_json FROM project_knowledge_usages WHERE id=${input.usage_ref} FOR UPDATE`;
+  const [usage] = await tx`SELECT feedback_json FROM project_knowledge_usages WHERE id=${input.usage_ref}`;
   if (!usage) return reject("KNOWLEDGE_SCOPE_DENIED", "Usage is unavailable");
   if (requireAccepted && (!usage.feedback_json || canonical(usage.feedback_json) !== canonical(feedback)))
     return reject("KNOWLEDGE_BASE_CONFLICT", "Accepted feedback changed before collection");

@@ -35,3 +35,7 @@
 2026-11-16：基于 origin/main 4de76ccb；仅静态检查在本机执行。用户已明确授权上述修复方向，具体阈值为实现选择。
 
 独立评审发现 feedback 入口逐条创建自动 work 可绕过新策略，已纳入本轮修复。首轮 Actions b471163d 被新增 UI 测试 TS7022 阻断，已补显式 number 标注；未执行到行为回归，不宣称通过。
+
+反馈链补充评审核实同源显式 work 会挡住后续反馈，以及跨来源逐条锁 version/item 可与版本撤销死锁；已补反馈资格例外和整批 usage→versions→items 的统一锁序及回归，旧无反馈来源的 existing_work 守卫保留。
+
+3bd27fc7 的知识 PostgreSQL 套件实际通过 97/98；唯一失败是 runtime-feedback 旧 fixture 仍期待每次反馈立即创建一个 work，已改验 recorded、无 work_ref、无新 work，同时保留原回执与冲突不可覆盖断言。最终 head 的完整 Actions 尚待验证。

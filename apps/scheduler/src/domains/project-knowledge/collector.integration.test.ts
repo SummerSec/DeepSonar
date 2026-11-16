@@ -256,6 +256,36 @@ test("successful feedback-only Jobs join one governed project batch with exact f
   }); } finally { setSharedAssetBlobStoreForTests(null); }
 });
 
+test("a settled explicit request does not discard later accepted feedback from the same source Job", async () => {
+  memoryCas();
+  try { await withKnowledgeDatabase(async db => {
+    const job = await feedbackSource(db);
+    const [explicit] = await db`INSERT INTO project_knowledge_work(project_id,origin_job_id,trigger_key,
+      governance_hash,state,input_manifest_json)
+      VALUES(${job.projectId},${job.jobId},${randomUUID()},${GOVERNANCE},'completed','[]') RETURNING id`;
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
+    const [batch] = await db`SELECT input_manifest_json FROM project_knowledge_work WHERE id<>${explicit!.id}`;
+    assert.ok(batch!.input_manifest_json.some((entry: { input_ref: string }) => entry.input_ref === `feedback:${job.usage}`));
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 2);
+    assert.equal((await db`SELECT input_manifest_json FROM project_knowledge_work WHERE id=${explicit!.id}`)[0]!.input_manifest_json.length, 0,
+      "the earlier explicit input snapshot stays unchanged");
+  }); } finally { setSharedAssetBlobStoreForTests(null); }
+});
+
+test("feedback already frozen in an earlier work cannot reset that work's budget through collection", async () => {
+  memoryCas();
+  try { await withKnowledgeDatabase(async db => {
+    const job = await feedbackSource(db);
+    const prepared = await prepareKnowledgeFeedback(db, job.actor, job.input);
+    await db`INSERT INTO project_knowledge_work(project_id,origin_job_id,trigger_key,governance_hash,state,input_manifest_json)
+      VALUES(${job.projectId},${job.jobId},${randomUUID()},${GOVERNANCE},'blocked',${db.json(prepared.entries as never)})`;
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 1);
+    assert.equal((await db`SELECT error_code FROM audit_logs WHERE action='project_knowledge.source_collection_skipped'`)[0]!.error_code,
+      "existing_knowledge_work");
+  }); } finally { setSharedAssetBlobStoreForTests(null); }
+});
+
 test("collector transaction rejects feedback identity, accepted payload, version and grant changes during CAS preparation", async () => {
   for (const change of ["identity", "payload", "version", "grant"] as const) {
     let mutate: (() => Promise<void>) | undefined;
