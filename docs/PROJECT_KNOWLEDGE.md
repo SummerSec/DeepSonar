@@ -31,8 +31,10 @@ Job 创建时冻结两类目录：
 | `propose_project_knowledge` | maker 提出 reuse/revise/create/merge/retire |
 | `submit_knowledge_evaluation` | evaluator 提交独立 trial 的结构化结果 |
 | `review_project_knowledge` | 独立 reviewer 审查并原子结算 |
-| `record_knowledge_feedback` | 用实际 usage 和来源证据触发后续整理 |
+| `record_knowledge_feedback` | 仅持久反馈，结果为 `{usage_ref,state:"recorded"}`；不返回 work_ref、不创建 work，自动整理经来源登记和项目 collector |
 | `get_knowledge_receipt` | 查询当前 Job 的持久操作回执 |
+
+`record_knowledge_feedback` 仅持久化已接受的 usage 反馈，操作结果为 `{usage_ref,state:"recorded"}`，不返回 `work_ref`，也不入队或启动知识 work。成功业务 Job 的已接受反馈经普通来源登记进入项目 collector，冻结精确 usage/反馈、target 版本/hash 基线及 evidence refs；同样受 4 来源或等待 24 小时、自动批次间隔 24 小时和连续两批无产出停发约束。原 Job 没有冻结 `request_project_knowledge` 权限时，不因提交反馈获得自动整理权限。显式 `request_project_knowledge` 仍按原有授权、来源、预算与幂等约束请求整理，不被自动策略替代；不得把仅反馈记录当作显式整理。
 
 project、Job、Attempt、actor 和 assignment 均由平台推导，不接受请求自行声明。契约拒绝未知字段。变更经 shared Zod、宿主 handler 和 event-ingestion/application transaction 三层校验，领域写入、事件和 receipt 同事务提交。相同 key + 相同输入返回原结果；变更操作或输入返回冲突。候选 CAS 写入在短事务外完成，失败后的无引用字节保守保留。
 
@@ -85,7 +87,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 ## 验证与运维
 
-2026-11-16 本轮只按 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 同步目标契约，代码由共享工作树并行整合；未取得最终 SHA Actions 结果，不宣称已通过或运行实例已修复。Actions 应覆盖：少量来源积累、4 来源合批、24 小时等待与批次间隔、32 候选在 19 inputs 上限内装箱并保留放不下者、跨项目隔离、blocked/cancelled/无产出的 completed 连续两次停发、重启与治理 hash 变化不恢复、显式成功整理恢复、CAS 期间准入变化、未知提交去重、未来 retry 不造成热循环，以及 activity 与既有知识页状态。原最小 Job 预算、独立评测和权限边界继续验收；本机不运行测试/build/typecheck，不部署、不重跑历史生产任务、不做真实模型收益试验。
+2026-11-16 本轮只按 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 同步目标契约，代码由共享工作树并行整合；未取得最终 SHA Actions 结果，不宣称已通过或运行实例已修复。Actions 应覆盖：少量来源积累、4 来源合批、24 小时等待与批次间隔、32 候选在 19 inputs 上限内装箱并保留放不下者、跨项目隔离、blocked/cancelled/无产出的 completed 连续两次停发、重启与治理 hash 变化不恢复、显式成功整理恢复、CAS 期间准入变化、未知提交去重、未来 retry 不造成热循环，以及 activity 与既有知识页状态。本轮反馈修正还须在 Actions 验证 recorded 结果无 work_ref/无新 work、成功 Job 的 feedback-only 来源登记、精确 target/证据冻结、collector 积累/间隔/停发不可绕过、原 Job 无整理权限不扩权，以及显式请求入口保持原语义。原最小 Job 预算、独立评测和权限边界继续验收；本机不运行测试/build/typecheck，不部署、不重跑历史生产任务、不做真实模型收益试验。
 
 全部测试、构建、typecheck 仅在 GitHub Actions 执行。本轮静态核对 [package.json](../package.json) 与 [ci.yml](../.github/workflows/ci.yml)：`pnpm ci:unit:project-knowledge`、独立 `TEST_DATABASE_URL` 下的 `pnpm ci:integration:project-knowledge`、`pnpm ci:unit:web-facts` 已有工作流入口；新增 [collector](../apps/scheduler/src/domains/project-knowledge/collector.integration.test.ts)、[闭环合成记录](../apps/scheduler/src/domains/project-knowledge/closed-loop.integration.test.ts)、[activity](../apps/scheduler/src/domains/project-knowledge/activity.integration.test.ts)、[快照隔离](../apps/scheduler/src/job-creation.integration.test.ts)、[调度唤醒](../apps/scheduler/src/knowledge-wake.integration.test.ts) 和 [Web 交互](../apps/web/src/ProjectKnowledgeApi.test.ts) 回归已接线。[behavior-policy 独立单测](../apps/scheduler/src/domains/project-knowledge/behavior-policy.test.ts)覆盖允许 target comparator fail，以及 candidate 失败、安全任一 arm 失败、unexecuted、重复/缺项仍拒绝的边界。原候选的 Actions 证据见下文；同步 main 后的候选仍须独立验收，未合并、未部署。集成 helper 为每例创建临时数据库并套当前基线，不能指向业务默认数据库。历史记录中的通过结果不代表本轮最终 SHA 通过。
 
@@ -121,7 +123,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 ## 来源登记与项目批量整理
 
-本轮用户明确授权自动项目整理，[ADR 0023](architecture/adr/0023-project-knowledge-collection.md) 取代 [0021](architecture/adr/0021-knowledge-source-preview.md) 中项目批处理暂缓的限制；0021 的历史决定保留。成功业务 Job 的登记仍仅在原终态事务/savepoint 中向 append-only `audit_logs` 写 `project_knowledge.source_registered`（`system/scheduler`、`result=ok`），记录 Job/Attempt/Canvas 与 Fact/Evidence 存在标记；不在终态事务中复制正文或创建模型 Job。登记失败隔离并告警，不回滚业务成功。登记不保证来源正文保留，不是候选或产物。
+本轮用户明确授权自动项目整理，[ADR 0023](architecture/adr/0023-project-knowledge-collection.md) 取代 [0021](architecture/adr/0021-knowledge-source-preview.md) 中项目批处理暂缓的限制；0021 的历史决定保留。成功业务 Job 的登记仍仅在原终态事务/savepoint 中向 append-only `audit_logs` 写 `project_knowledge.source_registered`（`system/scheduler`、`result=ok`），记录 Job/Attempt/Canvas 与 Fact/Evidence 或已接受反馈的存在标记；不在终态事务中复制正文或创建模型 Job。登记失败隔离并告警，不回滚业务成功。登记不保证来源正文保留，不是候选或产物。
 
 [collector.ts](../apps/scheduler/src/domains/project-knowledge/collector.ts) 由既有 Dispatcher tick 调用，[knowledge-wake.ts](../apps/scheduler/src/knowledge-wake.ts) 计算同一调度器的持久唤醒，不新增轮询执行器。数值阈值是本轮实现取舍，不追认为用户逐字指定参数。本轮 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 替代 0023 的来源数量及自动准入规则：项目至少积累 **4 个未处理来源，或最老待处理来源等待满 24 小时**，并且距上次自动批次创建满 **24 小时**，才可准入。来源数按源 Job 去重，已 collected/skipped 的来源不再计入；retry 未到期的来源仍待处理，但不得提前准备。项目已有非旧自动 `pending/running` work 时等待，不再建立并行项目批次；这不是给全部 Agent 显式请求新增数据库唯一约束。
 
@@ -156,7 +158,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 | `collected_sources` / `skipped_sources` / `pending_sources` | 采集通过同项目 `after_json.work_ref` 关联 work；跳过来自 error 审计。待采集排除已采集或已跳过的去重并集，重叠不重复扣减；已采集含排队批次，仅表示已纳入整理 |
 | `active_memory` / `active_skills` / `draft_items` | 本项目 active 且未撤销的版本与本项目草稿；不把全局源或其他项目 grant 当成本项目新产物 |
 | `completed_work` / `blocked_work` | 工作流程状态，不是激活产物数或质量通过数 |
-| `usage_count` / `feedback_count` / `successful_feedback` | 消费项目与 `owner_project_id` 都是本项目；排除全局和跨项目使用。拉取不证明实际采用，反馈及 success 仅为模型报告，保留 usage/provenance，不宣称效果已证明 |
+| `usage_count` / `feedback_count` / `successful_feedback` | 反馈 recorded 仅表示已保存，不等于 source_registered/source_collected、work 已创建或知识已生效；同 Job 多条 usage 反馈不变成多个来源。消费项目与 `owner_project_id` 都是本项目；排除全局和跨项目使用。拉取不证明实际采用，反馈及 success 仅为模型报告，保留 usage/provenance，不宣称效果已证明 |
 
 工作项只含 id/state/stage/reason、Job 数、累计运行秒、当前 Job/Canvas 引用、创建/更新时间、可选最新提案状态及 `source_count`。来源数按 source_collected 的 work_ref 关联去重；没有采集链接的显式 work 仅在存在 origin Job 时按 1 回退。Job/Canvas 链接继续受原接口权限控制。
 
@@ -168,7 +170,7 @@ reviewer 与 maker/evaluator 必须不同 Job，绑定 proposal revision、输�
 
 trial 保留可信的 `deepsonar-control` 与专用执行 Skill，不携带评分答案。共存用例为各 arm 分配相同的平台授权中性 trace Memory；这是固定工程用例上下文，不是项目积累或模型收益。自动批次与 trial 清理业务扩展、角色环境与手工配置，只重新物化连接必需的 Provider 配置，并重新冻结 Runtime Profile/launch。资产型 Evidence 同时冻结原 Job 有权读取的真实资产版本字节，不能只给 maker 描述和 hash。
 
-实际 usage 的反馈 work 还冻结精确 usage/版本与 outcome/next_action，修订 maker 读取绑定上一 proposal/revision/input_digest 的评测、审查意见和失败原因。普通 Job 启动时只获得有界的冻结知识数量与按需查询指引；不把知识正文或整目录默认注入。独立 Verify/Review、报告和治理 Job 不接收该复用指引。读取、模型反馈与真实质量收益继续分开报告。
+实际 usage 的反馈先保存为记录，不逐 usage 另启自动 work；只有成功 Job 的合格来源经 collector 准入后，才在项目批次中冻结精确 usage/版本/hash、反馈 outcome/next_action/reason、target 基线及 evidence refs。反馈引用仍须属于原 Job/Attempt 并满足原项目/版本授权；不得复制跨项目来源正文或扩大原 grant。这些输入计入原 manifest 上限，放不下仍保留，不能另起 work 绕过限额或停发。修订 maker 继续读取绑定上一 proposal/revision/input_digest 的评测、审查意见和失败原因。普通 Job 启动时只获得有界的冻结知识数量与按需查询指引；不把知识正文或整目录默认注入。独立 Verify/Review、报告和治理 Job 不接收该复用指引。读取、模型反馈与真实质量收益继续分开报告。
 
 ### 注意力成本
 

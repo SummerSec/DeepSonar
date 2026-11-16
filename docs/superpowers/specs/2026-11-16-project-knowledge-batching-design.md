@@ -11,12 +11,14 @@
 - 连续 2 个自动批次无产出即停止自动收集。blocked/cancelled，以及 completed 但没有 active/retired 提案的批次均不算成功。成功的显式知识工作可清除连续失败；重启、时间流逝、治理 hash 变化不能清零。
 - 准入、事务内重验和 durable wake 共用同一数据库查询，停止/繁忙项目不生成立即过期的 wake。
 - 在已有知识页显示积累、冷却、执行中或连续失败停发以及下次时间；无新增通知或恢复按钮。原始来源、旧任务、预算和审计保持不变。
+- usage 反馈只持久登记，返回 recorded，不再逐条创建 work；有原冻结整理权限的成功来源把已接受反馈及精确基线纳入同一项目合批。显式 request_project_knowledge 继续保留，反馈不会变成该显式请求。
+- 反馈响应与输入冻结：`record_knowledge_feedback` 仅持久化已接受的 usage 反馈，操作结果为 `{usage_ref,state:"recorded"}`，不返回 `work_ref`，也不入队或启动知识 work。成功业务 Job 的已接受反馈经普通来源登记进入项目 collector，冻结精确 usage/反馈、target 版本/hash 基线及 evidence refs；同样受 4 来源或等待 24 小时、自动批次间隔 24 小时和连续两批无产出停发约束。原 Job 没有冻结 `request_project_knowledge` 权限时，不因提交反馈获得自动整理权限。显式 `request_project_knowledge` 仍按原有授权、来源、预算与幂等约束请求整理，不被自动策略替代；不得把仅反馈记录当作显式整理。同一源 Job 的多条 usage 反馈不重复增加来源数，反馈记录/来源登记/采集/生效保持分层，不复制跨项目来源正文，不改写旧 work/回执或累计预算。
 - 保持已有最小 Job 预算拦截、独立试验和审查。不承诺真实模型收益，也不通过增大预算掩盖失败。
 
 ## 取舍与验收
 
 选择持久历史推导准入，避免额外开关和重启重置计数。仅隐藏任务不能减少执行成本；无限扩大单次 manifest 会破坏有界输入，均不采用。
 
-回归覆盖：小量来源积累、4 来源合批、24 小时超时刷新、批次间隔、跨项目隔离、两次无产出停发、重启不恢复、成功显式整理恢复、未知提交去重、CAS 期间准入变化、未来 retry 不造成热循环。
+回归覆盖：小量来源积累、4 来源合批、24 小时超时刷新、批次间隔、跨项目隔离、两次无产出停发、重启不恢复、成功显式整理恢复、未知提交去重、CAS 期间准入变化、未来 retry 不造成热循环；record_knowledge_feedback 返回 recorded 且无 work_ref/无新 work、成功 Job 的 feedback-only 来源登记与精确反馈/target/证据冻结、反馈不绕过 collector 门、无原 Job 整理权限不扩权，以及显式 request_project_knowledge 语义保留。
 
 只在 GitHub Actions 运行测试/build/typecheck；不部署、不重跑历史生产任务。代码交付不表示当前运行实例已修复。

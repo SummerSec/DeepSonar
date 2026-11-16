@@ -3,7 +3,10 @@ import test from "node:test";
 import { randomUUID } from "node:crypto";
 import { collectProjectKnowledgeSources } from "./collector.js";
 import { registerKnowledgeSourceAfterTerminal } from "./automatic.js";
-import { readKnowledgeBlob } from "./blobs.js";
+import { readKnowledgeBlob, registerKnowledgeBlob, writeKnowledgeBlob } from "./blobs.js";
+import { prepareKnowledgeFeedback, recordKnowledgeFeedback } from "./feedback.js";
+import { recordKnowledgeUsage } from "./usage.js";
+import { freezeProjectKnowledgeCatalog } from "./catalog-snapshot.js";
 import { seedKnowledgeJob, withKnowledgeDatabase, type TestSql } from "./test-support.js";
 import { setSharedAssetBlobStoreForTests, type BlobStore } from "../../blob-store/index.js";
 import { readNextKnowledgeWake } from "../../knowledge-wake.js";
@@ -11,7 +14,7 @@ import { sha256 } from "./types.js";
 import { readProjectCollectionStatus } from "./collection-policy.js";
 
 const GOVERNANCE = "a".repeat(64);
-async function source(db: TestSql, projectId?: string, count = 1, label = "source") {
+async function source(db: TestSql, projectId?: string, count = 1, label = "source", fresh = false) {
   const job = await seedKnowledgeJob(db, projectId, ["request_project_knowledge"]);
   for (let i = 0; i < count; i++) await db`INSERT INTO canvas_nodes
     (canvas_id,job_id,node_type,title,status,verification_status,body_json)
@@ -19,17 +22,16 @@ async function source(db: TestSql, projectId?: string, count = 1, label = "sourc
       ${db.json({ observation: `${label} ${i}`, confidence: "unverified" })})`;
   await db`UPDATE jobs SET status='succeeded',finished_at=now() WHERE id=${job.jobId}`;
   await db`UPDATE job_attempts SET status='succeeded',phase='terminal',finished_at=now() WHERE id=${job.attemptId}`;
+  // Historical fixtures choose their timestamp at INSERT; audit history is never rewritten.
+  if (!fresh) await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
+    VALUES('system','scheduler','project_knowledge.source_registered',${job.projectId},'job',${job.jobId},'ok',now()-interval '25 hours')`;
   await db.begin(async tx => { await registerKnowledgeSourceAfterTerminal(tx as never, job.jobId, "succeeded"); });
-  // Existing preparation tests deliberately start after the accumulation deadline.
-  await db`UPDATE audit_logs SET at=now()-interval '25 hours'
-    WHERE action='project_knowledge.source_registered' AND resource_id=${job.jobId}`;
   return job;
 }
 
 test("a fresh small project accumulates sources without creating work or an immediate wake", async () => {
   await withKnowledgeDatabase(async db => {
-    const job = await source(db);
-    await db`UPDATE audit_logs SET at=now() WHERE resource_id=${job.jobId}`;
+    await source(db, undefined, 1, "source", true);
     assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
     assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0);
     assert.equal((await db`SELECT id FROM audit_logs WHERE action='project_knowledge.source_registered'`).length, 1);
@@ -69,9 +71,8 @@ test("a bounded batch combines more than four small sources and preserves the da
 
 test("four fresh sources trigger one merged batch without waiting a day", async () => {
   await withKnowledgeDatabase(async db => {
-    const first = await source(db);
-    for (let n = 0; n < 3; n++) await source(db, first.projectId);
-    await db`UPDATE audit_logs SET at=now() WHERE action='project_knowledge.source_registered'`;
+    const first = await source(db, undefined, 1, "source", true);
+    for (let n = 0; n < 3; n++) await source(db, first.projectId, 1, "source", true);
     assert.equal((await readProjectCollectionStatus(db, first.projectId)).state, "ready");
     await Promise.all([collectProjectKnowledgeSources(db, GOVERNANCE), collectProjectKnowledgeSources(db, GOVERNANCE)]);
     assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 1);
@@ -81,11 +82,10 @@ test("four fresh sources trigger one merged batch without waiting a day", async 
 
 test("the fourth source retry deadline delays batch readiness without an expired wake", async () => {
   await withKnowledgeDatabase(async db => {
-    const first = await source(db);
-    await source(db, first.projectId);
-    await source(db, first.projectId);
-    const fourth = await source(db, first.projectId);
-    await db`UPDATE audit_logs SET at=now() WHERE action='project_knowledge.source_registered'`;
+    const first = await source(db, undefined, 1, "source", true);
+    await source(db, first.projectId, 1, "source", true);
+    await source(db, first.projectId, 1, "source", true);
+    const fourth = await source(db, first.projectId, 1, "source", true);
     const next = new Date(Date.now() + 60_000).toISOString();
     await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,after_json)
       VALUES('system','scheduler','project_knowledge.source_collection_retry',${first.projectId},'job',${fourth.jobId},
@@ -150,7 +150,7 @@ test("only a settled successful explicit knowledge work clears project failures 
       WHERE id=${String(manual!.id)}`;
     assert.equal((await readProjectCollectionStatus(db, first.projectId)).state, "halted",
       "historical automatic work cannot authorize a new chain");
-    await db`UPDATE project_knowledge_work SET trigger_key=${randomUUID()} WHERE id=${String(manual!.id)}`;
+    await db`UPDATE project_knowledge_work SET trigger_key=${randomUUID()},origin_job_id=NULL WHERE id=${String(manual!.id)}`;
     assert.equal((await readProjectCollectionStatus(db, first.projectId)).consecutive_failures, 0);
     assert.equal((await readProjectCollectionStatus(db, other.projectId)).state, "halted");
     assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
@@ -183,14 +183,121 @@ test("registered Jobs are collected in one project batch, once across concurrent
   });
 });
 
-function memoryCas(onPut: (bytes: Buffer) => Promise<void> = async () => {}) {
+function memoryCas(onPut: (bytes: Buffer) => Promise<void> = async () => {}, onGet: () => Promise<void> = async () => {}) {
   const blobs = new Map<string, Buffer>();
   const store: BlobStore = { kind: "fs", exists: async key => blobs.has(key),
     put: async (key, bytes) => { await onPut(bytes); blobs.set(key, bytes); },
-    get: async key => { const value = blobs.get(key); if (!value) throw new Error("missing fixture blob"); return value; },
+    get: async key => { await onGet(); const value = blobs.get(key); if (!value) throw new Error("missing fixture blob"); return value; },
     materializeLocal: async () => { throw new Error("unused"); } };
   setSharedAssetBlobStoreForTests(store);
 }
+
+async function feedbackSource(db: TestSql, projectId?: string, foreign = false) {
+  const job = await seedKnowledgeJob(db, projectId, ["request_project_knowledge", "record_knowledge_feedback"]);
+  const owner = foreign ? await seedKnowledgeJob(db) : job;
+  const item = randomUUID(), version = randomUUID();
+  const target = await writeKnowledgeBlob(db, { kind: foreign ? "skill" : "memory", logical_key: item,
+    title: "exact feedback target", keywords: [], ...(foreign ? { files: { "SKILL.md": "foreign method body" } }
+      : { content: "local baseline content" }) });
+  const raw = await writeKnowledgeBlob(db, { observation: "feedback execution evidence", job: job.jobId });
+  for (const blob of [target, raw]) await registerKnowledgeBlob(db, blob.hash, blob.bytes);
+  await db`INSERT INTO project_knowledge_items(id,project_id,kind,logical_key,title)
+    VALUES(${item},${owner.projectId},${foreign ? "skill" : "memory"},${item},'exact feedback target')`;
+  await db`INSERT INTO project_knowledge_versions(id,project_id,item_id,version,content_sha256,creator_job_id,creator_attempt_id,sources_json,governance_hash)
+    VALUES(${version},${owner.projectId},${item},1,${target.hash},${owner.jobId},${owner.attemptId},'[]',${GOVERNANCE})`;
+  await db`UPDATE project_knowledge_items SET status='active',active_version_id=${version} WHERE id=${item}`;
+  const grant = randomUUID();
+  if (foreign) await db`INSERT INTO project_knowledge_grants(id,owner_project_id,item_id,version_id,grantee_project_id,granted_by)
+    VALUES(${grant},${owner.projectId},${item},${version},${job.projectId},'fixture')`;
+  const snapshot = { platform_tools: ["request_project_knowledge", "record_knowledge_feedback"],
+    project_knowledge_catalog: await freezeProjectKnowledgeCatalog(db, job.projectId) };
+  await db`UPDATE jobs SET agent_snapshot_json=${db.json(snapshot as never)} WHERE id=${job.jobId}`;
+  const [asset] = await db`INSERT INTO shared_assets(scope_type,project_id,logical_key,origin,created_by_job_id)
+    VALUES('project',${job.projectId},${job.jobId},'system',${job.jobId}) RETURNING id`;
+  const [assetVersion] = await db`INSERT INTO shared_asset_versions(asset_id,version,content_sha256,bytes,content_type,origin,created_by_job_id)
+    VALUES(${asset!.id},1,${raw.hash},${raw.bytes},'application/json','system',${job.jobId}) RETURNING id`;
+  const usage = await recordKnowledgeUsage(db, { ...job, selector: `project:${item}@1`, contentHash: target.hash,
+    ownerProjectId: owner.projectId, versionId: version });
+  const input = { usage_ref: usage, outcome: "failure" as const, next_action: "revise" as const, reason: "repair the exact method",
+    evidence_refs: [{ kind: "asset" as const, ref: String(assetVersion!.id), content_hash: raw.hash }] };
+  const actor = { ...job, snapshot };
+  const prepared = await prepareKnowledgeFeedback(db, actor, input);
+  assert.deepEqual(await db.begin(tx => recordKnowledgeFeedback(tx as never, actor, input, prepared)), { usage_ref: usage, state: "recorded" });
+  await db`UPDATE jobs SET status='succeeded' WHERE id=${job.jobId}`;
+  await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${job.attemptId}`;
+  // Construct the persisted historical timestamp; audit history itself is append-only.
+  await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
+    VALUES('system','scheduler','project_knowledge.source_registered',${job.projectId},'job',${job.jobId},'ok',now()-interval '25 hours')`;
+  return { ...job, actor, input, usage, version, grant, target };
+}
+
+test("successful feedback-only Jobs join one governed project batch with exact feedback, baseline and real evidence", async () => {
+  memoryCas();
+  try { await withKnowledgeDatabase(async db => {
+    const one = await feedbackSource(db), two = await feedbackSource(db, one.projectId);
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0);
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
+    const [work] = await db`SELECT trigger_key,input_manifest_json FROM project_knowledge_work`;
+    assert.match(String(work!.trigger_key), /^knowledge:project:/);
+    const manifest = work!.input_manifest_json as Array<{ input_ref: string; blob_hash: string }>;
+    assert.equal(manifest.length, 6);
+    for (const source of [one, two]) {
+      assert.ok(manifest.some(entry => entry.input_ref === `baseline:${source.version}`));
+      assert.ok(manifest.some(entry => entry.input_ref === `asset:${source.input.evidence_refs[0]!.ref}`));
+      const entry = manifest.find(entry => entry.input_ref === `feedback:${source.usage}`)!;
+      const payload = await readKnowledgeBlob(db, entry.blob_hash) as Record<string, unknown>;
+      assert.equal(payload.version_ref, source.version);
+      assert.equal(payload.content_hash, source.target.hash);
+      assert.equal(payload.next_action, "revise");
+      assert.deepEqual(payload.evidence_refs, source.input.evidence_refs);
+    }
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 1);
+  }); } finally { setSharedAssetBlobStoreForTests(null); }
+});
+
+test("collector transaction rejects feedback identity, accepted payload, version and grant changes during CAS preparation", async () => {
+  for (const change of ["identity", "payload", "version", "grant"] as const) {
+    let mutate: (() => Promise<void>) | undefined;
+    memoryCas(async () => {}, async () => { const action = mutate; mutate = undefined; await action?.(); });
+    try { await withKnowledgeDatabase(async db => {
+      const job = await feedbackSource(db, undefined, change === "grant");
+      mutate = async () => {
+        if (change === "identity") await db`UPDATE project_knowledge_usages SET selector='changed-target' WHERE id=${job.usage}`;
+        if (change === "payload") await db`UPDATE project_knowledge_usages SET feedback_json=feedback_json||'{"reason":"changed accepted payload"}' WHERE id=${job.usage}`;
+        if (change === "version") await db`UPDATE project_knowledge_versions SET revoked_at=now() WHERE id=${job.version}`;
+        if (change === "grant") await db`UPDATE project_knowledge_grants SET revoked_at=now() WHERE id=${job.grant}`;
+      };
+      assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0, change);
+      assert.equal(mutate, undefined, "mutation happens during external source preparation");
+      assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0, change);
+      assert.equal((await db`SELECT id FROM audit_logs WHERE action='project_knowledge.source_collected'`).length, 0);
+      const [skip] = await db`SELECT error_code FROM audit_logs WHERE action='project_knowledge.source_collection_skipped'`;
+      assert.equal(skip!.error_code, change === "grant" ? "KNOWLEDGE_SCOPE_DENIED" : change === "version"
+        ? "KNOWLEDGE_REVOKED" : "KNOWLEDGE_BASE_CONFLICT");
+    }); } finally { setSharedAssetBlobStoreForTests(null); }
+  }
+});
+
+test("feedback input count and total source manifest fail closed without truncating accepted feedback", async () => {
+  for (const overflow of ["feedback", "manifest"] as const) {
+    memoryCas();
+    try { await withKnowledgeDatabase(async db => {
+      const job = await feedbackSource(db);
+      if (overflow === "feedback") for (let index = 0; index < 20; index++) {
+        await db`INSERT INTO project_knowledge_usages(project_id,job_id,attempt_id,selector,content_sha256,feedback_json)
+          VALUES(${job.projectId},${job.jobId},${job.attemptId},${`global:overflow-${index}`},${GOVERNANCE},
+            ${db.json({ outcome: "failure", next_action: "revise", reason: "overflow fixture", evidence_refs: job.input.evidence_refs })})`;
+      }
+      else for (let index = 0; index < 17; index++) await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,verification_status,body_json)
+        VALUES(${job.canvasId},${job.jobId},'fact','additional source','succeeded','unverified','{}')`;
+      assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
+      assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0);
+      assert.equal((await db`SELECT error_code FROM audit_logs WHERE action='project_knowledge.source_collection_skipped'`)[0]!.error_code, "source_input_limit");
+      assert.equal((await db`SELECT id FROM project_knowledge_usages WHERE feedback_json IS NOT NULL`).length, overflow === "feedback" ? 21 : 1);
+    }); } finally { setSharedAssetBlobStoreForTests(null); }
+  }
+});
 
 test("one transient source keeps its durable backoff while a good source is collected", async () => {
   await withKnowledgeDatabase(async db => {

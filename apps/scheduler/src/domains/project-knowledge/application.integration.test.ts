@@ -12,6 +12,7 @@ import { readKnowledgeBlob, registerKnowledgeBlob, writeKnowledgeBlob } from "./
 import { KNOWLEDGE_FIXED_CASES } from "./case-policy.js";
 import { seedKnowledgeJob, withKnowledgeDatabase, type TestSql } from "./test-support.js";
 import { KNOWLEDGE_CASE_KINDS } from "@deepsonar/shared-types";
+import { collectProjectKnowledgeSources } from "./collector.js";
 
 const H = "a".repeat(64);
 const allowed = ["request_project_knowledge", "get_knowledge_receipt"];
@@ -238,12 +239,12 @@ test("independent reviewer atomically activates evaluated draft", async () => {
   });
 });
 
-test("feedback on a real usage enqueues one new work and rejects another Job usage", async () => {
+test("feedback on a real usage is recorded, later joins project collection and rejects another Job usage", async () => {
   await withKnowledgeDatabase(async (db) => {
     const folder = await mkdtemp(join(tmpdir(), "knowledge-feedback-"));
     setSharedAssetBlobStoreForTests(new LocalBlobStore(folder));
     try {
-      const job = await seedKnowledgeJob(db, undefined, ["record_knowledge_feedback"]);
+      const job = await seedKnowledgeJob(db, undefined, ["record_knowledge_feedback", "request_project_knowledge"]);
       const other = await seedKnowledgeJob(db, job.projectId, ["record_knowledge_feedback"]);
       const id = randomUUID();
       const body = { observation: "usable" };
@@ -260,12 +261,19 @@ test("feedback on a real usage enqueues one new work and rejects another Job usa
         operationId: "record_knowledge_feedback", input, eventId: key, tokenId: randomUUID(), idempotencyKey: key };
       await assert.rejects(app.invoke({ ...context, jobId: other.jobId, canvasId: other.canvasId }), /SCOPE|usage/i);
       const result = await app.invoke(context);
-      assert.equal(typeof result.work_ref, "string");
+      assert.equal(result.state, "recorded");
+      assert.equal(Object.hasOwn(result, "work_ref"), false);
       assert.deepEqual(await app.invoke(context), result);
-      assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 1);
+      assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0);
       const [saved] = await db`SELECT feedback_json FROM project_knowledge_usages WHERE id=${usage}`;
       assert.equal(saved?.feedback_json.next_action, "revise");
-      const [work] = await db`SELECT input_manifest_json FROM project_knowledge_work WHERE id=${String(result.work_ref)}`;
+      await db`UPDATE jobs SET status='succeeded' WHERE id=${job.jobId}`;
+      await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${job.attemptId}`;
+      await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
+        VALUES('system','scheduler','project_knowledge.source_registered',${job.projectId},'job',${job.jobId},'ok',
+          now()-interval '25 hours')`;
+      assert.equal(await collectProjectKnowledgeSources(db, H), 1);
+      const [work] = await db`SELECT id,input_manifest_json FROM project_knowledge_work WHERE project_id=${job.projectId}`;
       const manifest = work!.input_manifest_json as import("@deepsonar/shared-types").KnowledgeInputManifestEntry[];
       const entry = manifest.find(entry => entry.input_ref === `feedback:${usage}`);
       assert.ok(entry, "new maker must receive the actual feedback, not only a trigger hash");
@@ -279,9 +287,9 @@ test("feedback on a real usage enqueues one new work and rejects another Job usa
       assert.deepEqual(frozen.evidence_refs, input.evidence_refs);
       const maker = await seedKnowledgeJob(db, job.projectId, ["read_knowledge_input"]);
       await db`INSERT INTO project_knowledge_job_assignments(job_id,project_id,work_id,stage,input_manifest_json)
-        VALUES(${maker.jobId},${job.projectId},${String(result.work_ref)},'maker',${db.json(manifest as never)})`;
+        VALUES(${maker.jobId},${job.projectId},${String(work!.id)},'maker',${db.json(manifest as never)})`;
       const read = await app.invoke({ ...context, jobId: maker.jobId, canvasId: maker.canvasId,
-        operationId: "read_knowledge_input", input: { work_ref: result.work_ref, input_ref: entry.input_ref, expected_hash: entry.content_hash } });
+        operationId: "read_knowledge_input", input: { work_ref: String(work!.id), input_ref: entry.input_ref, expected_hash: entry.content_hash } });
       assert.match(String(read.content_fragment), /needs better method/);
     } finally { setSharedAssetBlobStoreForTests(null); await rm(folder, { recursive: true, force: true }); }
   });

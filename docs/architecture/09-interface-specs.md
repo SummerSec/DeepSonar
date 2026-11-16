@@ -159,6 +159,8 @@ Job 列表只为 `waiting_human` 项附加 Scheduler 当前 `execution_state`，
 
 Management API 的 `/projects/:id/knowledge` 提供按项目授权的目录、版本、work、评测、usage/feedback、receipt 查询，以及来源项目管理者的精确 Skill 授权和不可逆撤销；grant 入口还要校验该版本已经审批，不能以授权激活 candidate。Job-scoped Control 增加知识搜索/读取、请求整理、提案、评测、审查和反馈；平台推导 project、Job、Attempt 与 stage，不接受调用方自报身份。只读输入受冻结 manifest、audience 和当前权限约束；mutation 经 shared schema、宿主和领域事务校验，返回 `accepted`、operation、`receipt_ref`，同 Job 同 key 同输入返回持久结果，同 key 异输入冲突。当前 Job 可用 `get_knowledge_receipt`，终态历史由项目管理入口查询。接口字段见 [OpenAPI](../../apps/scheduler/src/openapi.ts) 与[项目知识专题](../PROJECT_KNOWLEDGE.md)；领域 receipt 不等于全平台通用回执。
 
+本轮反馈响应修正：`record_knowledge_feedback` 仅持久化已接受的 usage 反馈，操作结果为 `{usage_ref,state:"recorded"}`，不返回 `work_ref`，也不入队或启动知识 work。成功业务 Job 的已接受反馈经普通来源登记进入项目 collector，冻结精确 usage/反馈、target 版本/hash 基线及 evidence refs；同样受 4 来源或等待 24 小时、自动批次间隔 24 小时和连续两批无产出停发约束。原 Job 没有冻结 `request_project_knowledge` 权限时，不因提交反馈获得自动整理权限。显式 `request_project_knowledge` 仍按原有授权、来源、预算与幂等约束请求整理，不被自动策略替代；不得把仅反馈记录当作显式整理。外层 accepted/receipt_ref 继续表示反馈持久接纳，不表示新 work、试验或激活；旧持久回执保持历史原样，不作为新调用返回旧 work_ref 的兼容分支。反馈记录也不清除 collector 连续失败。契约实现与最终 SHA Actions 仍须独立核对，不表示已部署。
+
 ## Gateway、流和导入接口
 
 Gateway 的请求次数额度在 Job 锁内跨 token/Attempt 累计；撤销/过期 token 仍参与用量与有限上限求交，普通 main 与 OM 均不能通过恢复、换 token 或新配置的 0/未配置重置额度。首次 mint 用内核 `control_receipt/gateway_request_budget` 冻结包括未签发 workload 的完整策略，后续只可追加收紧；恢复必须在替换旧快照前同事务保存旧策略。缺失或损坏的冻结策略明确拒绝，mint 固化交集，`_allowance` 在请求额度耗尽时返回 `JOB_REQUEST_EXHAUSTED`，最终 dispatch 仍重新准入；拒绝无模型出站、模型 effect 或请求计数变化。策略无效/历史缺失的模型准入拒绝保存 scoped `policy_rejected` settlement 回执，OM 仅凭可信回执分类为不可重试策略硬失败，不使用 quota/transient 软降级路径。详见[透明预算契约](../MODEL_GATEWAY_TRANSPARENCY.md#预算与-om-迁移)。

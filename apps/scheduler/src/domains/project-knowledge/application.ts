@@ -137,7 +137,7 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
       const suggestions = operation === "record_skill_choice" ? await prepareSkillSuggestions(db, actor) : undefined;
       let prepared: { manifest?: KnowledgeInputManifestEntry[] } = {};
       let feedbackInput: PreparedKnowledgeFeedback | undefined;
-      const recipe = operation === "request_project_knowledge" || operation === "record_knowledge_feedback"
+      const recipe = operation === "request_project_knowledge"
         ? await frozenGovernorRecipe(db, actor) : undefined;
       let candidate: PreparedCandidate | undefined;
       let reviewCandidate: { hash: string; title: string; keywords: string[] } | undefined;
@@ -148,7 +148,7 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
       }
       if (operation === "record_knowledge_feedback") {
         feedbackInput = await prepareKnowledgeFeedback(db, actor, input as never);
-        prepared = { manifest: await Promise.all((input.evidence_refs as Array<{ kind: "asset" | "fact" | "evidence"; ref: string; content_hash: string }>).map((ref) => resolveKnowledgeSource(db, actor, ref))) };
+        await Promise.all((input.evidence_refs as Array<{ kind: "asset" | "fact" | "evidence"; ref: string; content_hash: string }>).map((ref) => resolveKnowledgeSource(db, actor, ref)));
       }
       if (operation === "propose_project_knowledge" && input.candidate) candidate = await writeKnowledgeBlob(db, input.candidate);
       if (operation === "submit_knowledge_evaluation") trialEvidence = await prepareTrialEvidence(db, input as never);
@@ -192,7 +192,7 @@ export function createProjectKnowledgeApplication({ db, governanceHash }: Knowle
           result = await reviewKnowledge(tx, actor, input as never, reviewCandidate);
         } else if (operation === "record_knowledge_feedback") {
           await recheckKnowledgeSources(tx, actor, input.evidence_refs as never);
-          result = await recordKnowledgeFeedback(tx, actor, input as never, prepared.manifest!, governanceHash, recipe, feedbackInput);
+          result = await recordKnowledgeFeedback(tx, actor, input as never, feedbackInput);
         } else return reject("KNOWLEDGE_OPERATION_INVALID", "Knowledge mutation is not implemented");
         result = { accepted: true, operation, receipt_ref: receiptId, ...result };
         await tx`INSERT INTO project_knowledge_receipts(id,project_id,job_id,attempt_id,operation,idempotency_key,input_digest,event_id,result_json)

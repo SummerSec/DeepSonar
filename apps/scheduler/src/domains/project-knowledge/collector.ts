@@ -8,7 +8,7 @@ import { frozenGovernorRecipe } from "./recipe.js";
 import { canonical, sha256, type KnowledgeDb } from "./types.js";
 import { recordSourceFailure, recordSourceFailureInTransaction, sourceHandled, sourceRetryJoin, sourceRetryWake,
   type CollectionSourceRef } from "./source-retry.js";
-import { COLLECTION_MAX_INPUTS, prepareKnowledgeSource, PROJECT_COLLECTION_PREFIX, SOURCE_COLLECTED_ACTION,
+import { COLLECTION_MAX_INPUTS, prepareKnowledgeSource, recheckKnowledgeSourceFeedback, PROJECT_COLLECTION_PREFIX, SOURCE_COLLECTED_ACTION,
   SOURCE_SKIPPED_ACTION, SourceCollectionError, type PreparedKnowledgeSource } from "./collector-sources.js";
 
 async function canCollect(db: KnowledgeDb, projectId: string): Promise<boolean> {
@@ -77,6 +77,7 @@ export async function collectProjectKnowledgeSources(db: KnowledgeDb, governance
             if (String(now.attempt_id) !== item.actor.attemptId) throw new SourceCollectionError("source_attempt_changed");
             if (now.existing_work) throw new SourceCollectionError("existing_knowledge_work");
             await recheckKnowledgeSources(nested, item.actor, item.refs);
+            await recheckKnowledgeSourceFeedback(nested, item);
             if (item.recipe) {
               const recipe = item.recipe;
               const [version] = await nested`SELECT id FROM project_knowledge_versions WHERE id=${recipe.input_ref.slice("governor:".length)}

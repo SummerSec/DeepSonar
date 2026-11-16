@@ -1,6 +1,5 @@
 import { KNOWLEDGE_LIMITS, type RecordKnowledgeFeedbackPayload, type KnowledgeInputManifestEntry } from "@deepsonar/shared-types";
 import type { KnowledgeActor } from "./inputs.js";
-import { enqueueKnowledgeWork } from "./requests.js";
 import { canonical, KnowledgeOperationError, reject, sha256, type KnowledgeDb } from "./types.js";
 import { readKnowledgeVersionContent, writeKnowledgeBlob } from "./blobs.js";
 import { knowledgeEntryAvailable, type FrozenKnowledgeCatalog } from "./catalog-snapshot.js";
@@ -71,20 +70,43 @@ export async function validateFeedbackUsage(db: KnowledgeDb, actor: KnowledgeAct
   if (assignment) return reject("KNOWLEDGE_SCOPE_DENIED", "Governance Job cannot create a feedback root chain");
 }
 
-export async function recordKnowledgeFeedback(tx: KnowledgeDb, actor: KnowledgeActor, input: RecordKnowledgeFeedbackPayload,
-  manifest: KnowledgeInputManifestEntry[], governanceHash: string, recipe?: KnowledgeInputManifestEntry,
-  prepared?: PreparedKnowledgeFeedback): Promise<Record<string, unknown>> {
+const feedbackValue = (input: RecordKnowledgeFeedbackPayload) => ({ outcome: input.outcome, evidence_refs: input.evidence_refs,
+  next_action: input.next_action, reason: input.reason });
+
+/** SQL-only settlement validation. Locks keep usage identity and live grants stable until commit. */
+export async function validatePreparedKnowledgeFeedback(tx: KnowledgeDb, actor: KnowledgeActor,
+  input: RecordKnowledgeFeedbackPayload, prepared: PreparedKnowledgeFeedback | undefined, requireAccepted = false): Promise<void> {
+  const [owned] = await tx`SELECT id,version_id,owner_project_id,content_sha256 FROM project_knowledge_usages
+    WHERE id=${input.usage_ref} AND project_id=${actor.projectId} AND job_id=${actor.jobId} AND attempt_id=${actor.attemptId} FOR UPDATE`;
+  if (!owned) return reject("KNOWLEDGE_SCOPE_DENIED", "Usage is not owned by this Job and Attempt");
+  if (owned.version_id) {
+    await tx`SELECT v.id FROM project_knowledge_versions v JOIN project_knowledge_items i ON i.id=v.item_id AND i.project_id=v.project_id
+      WHERE v.id=${owned.version_id} AND v.project_id=${owned.owner_project_id} FOR SHARE OF v,i`;
+    if (owned.owner_project_id !== actor.projectId) {
+      const catalog = actor.snapshot.project_knowledge_catalog as FrozenKnowledgeCatalog | undefined;
+      const entries = catalog?.entries;
+      const entry = Array.isArray(entries) ? entries.find(item => item.version_id === owned.version_id
+        && item.owner_project_id === owned.owner_project_id && item.hash === owned.content_sha256) : undefined;
+      if (entry?.grant_id) await tx`SELECT id FROM project_knowledge_grants WHERE id=${entry.grant_id} FOR SHARE`;
+    }
+  }
   await validateFeedbackUsage(tx, actor, input.usage_ref);
   const current = await feedbackUsage(tx, actor, input.usage_ref);
   if (!prepared || prepared.usage_identity !== usageIdentity(current) || prepared.feedback_digest !== sha256(canonical(input)))
     return reject("KNOWLEDGE_BASE_CONFLICT", "Feedback preparation no longer matches this usage and request");
-  const feedback = { outcome: input.outcome, evidence_refs: input.evidence_refs, next_action: input.next_action, reason: input.reason };
+  const feedback = feedbackValue(input);
   const [usage] = await tx`SELECT feedback_json FROM project_knowledge_usages WHERE id=${input.usage_ref} FOR UPDATE`;
   if (!usage) return reject("KNOWLEDGE_SCOPE_DENIED", "Usage is unavailable");
+  if (requireAccepted && (!usage.feedback_json || canonical(usage.feedback_json) !== canonical(feedback)))
+    return reject("KNOWLEDGE_BASE_CONFLICT", "Accepted feedback changed before collection");
   if (usage.feedback_json && canonical(usage.feedback_json) !== canonical(feedback))
     throw new KnowledgeOperationError("KNOWLEDGE_IDEMPOTENCY_CONFLICT", "Usage already has different feedback", "permanent_failure", "Stop this feedback submission; this usage already has accepted feedback that cannot be overwritten. Preserve the original feedback and its request; this rejected request need not have a receipt. Do not change keys to replay or replace accepted feedback.");
-  if (!usage.feedback_json) await tx`UPDATE project_knowledge_usages SET feedback_json=${tx.json(feedback)} WHERE id=${input.usage_ref}`;
-  const workRef = await enqueueKnowledgeWork(tx, { actor, governanceHash,
-    trigger: { usage_ref: input.usage_ref, feedback }, manifest: [...manifest, ...prepared.entries], recipe, reason: input.reason });
-  return { usage_ref: input.usage_ref, work_ref: workRef, state: "pending" };
+}
+
+export async function recordKnowledgeFeedback(tx: KnowledgeDb, actor: KnowledgeActor, input: RecordKnowledgeFeedbackPayload,
+  prepared?: PreparedKnowledgeFeedback): Promise<Record<string, unknown>> {
+  await validatePreparedKnowledgeFeedback(tx, actor, input, prepared);
+  await tx`UPDATE project_knowledge_usages SET feedback_json=${tx.json(feedbackValue(input))}
+    WHERE id=${input.usage_ref} AND feedback_json IS NULL`;
+  return { usage_ref: input.usage_ref, state: "recorded" };
 }

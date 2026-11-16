@@ -19,6 +19,12 @@
 5. collector 选项目、CAS 准备后的项目行锁事务重验、durable wake 及 activity 必须共用同一数据库准入规则。事务内重新检查来源门槛、间隔、连续失败与繁忙状态，以及原权限、最新 Attempt、来源/hash、未结算效果、重试代次及 governor。不得用 CAS 准备前的 ready 状态越过新出现的停发、冷却或繁忙；work 和逐来源 collected 审计仍原子提交。wake 计算同时尊重项目门槛、批次间隔和来源 retry 的未来时间，繁忙或停发项目不产生立即过期的采集 wake，不新增轮询执行器。
 6. 原 activity 响应新增 `collection:{state,pending_sources,consecutive_failures,next_collection_at}`，state 限于 `idle|busy|accumulating|cooldown|ready|halted`。它是只读调度投影，不是新持久生命周期；与 summary 分别查询，并发及异常损坏数据不保证计数同值或同一快照。accumulating 可表示来源积累或 retry 等待，cooldown 仅表示自动批次间隔为最后限制，下次时间始终尊重 retry。现有知识页展示积累、冷却、执行中、停发及下次可准入时间；无新增通知、开关、恢复按钮或轮询。完整字段口径由[项目知识专题](../../PROJECT_KNOWLEDGE.md#积累与复用可见性)维护。
 
+## 本轮评审修正（2026-11-16）
+
+评审发现原 feedback.ts 对每条 usage 反馈直接 enqueue work，可绕过项目 collector 的积累、间隔及停发门。本轮决定补充：`record_knowledge_feedback` 仅持久化已接受的 usage 反馈，操作结果为 `{usage_ref,state:"recorded"}`，不返回 `work_ref`，也不入队或启动知识 work。成功业务 Job 的已接受反馈经普通来源登记进入项目 collector，冻结精确 usage/反馈、target 版本/hash 基线及 evidence refs；同样受 4 来源或等待 24 小时、自动批次间隔 24 小时和连续两批无产出停发约束。原 Job 没有冻结 `request_project_knowledge` 权限时，不因提交反馈获得自动整理权限。显式 `request_project_knowledge` 仍按原有授权、来源、预算与幂等约束请求整理，不被自动策略替代；不得把仅反馈记录当作显式整理。反馈记录不构成 active/retired 产出，也不重置连续失败；usage/反馈数、源 Job 登记、批次采集及知识生效保持分层。精确输入须满足原项目、版本撤销和 evidence 读取权限，并占用原有界 manifest，不另建反馈自动通道。旧 work、已持久回执和预算保留；新反馈结果不提供 work_ref 兼容返回。
+
+本修正追加到本轮决定，既有历史 ADR 决定段不改写；实现按上述目标整合，最终 SHA Actions 待验，不宣称生产已部署。Actions 应覆盖 feedback-only 成功来源、recorded 无新 work、精确反馈/基线/证据冻结、自动准入不可绕过、原权限不扩展与显式请求保持独立。
+
 ## 状态
 
 2026-11-16：在用户授权修复自动整理的范围内采纳上述实现取舍；文档与并行代码修改在共享工作树整合，不能由决策采纳推定实现或验收通过。最终 SHA 的全部适用 Actions 仍须实际核对；本轮不部署、不重跑历史生产任务、不执行真实模型收益试验。

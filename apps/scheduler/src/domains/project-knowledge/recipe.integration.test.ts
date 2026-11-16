@@ -9,6 +9,7 @@ import { recordKnowledgeUsage } from "./usage.js";
 import { frozenGovernorRecipe, GOVERNOR_LOGICAL_KEY } from "./recipe.js";
 import { freezeProjectKnowledgeCatalog } from "./catalog-snapshot.js";
 import { readManifestInput } from "./inputs.js";
+import { enqueueKnowledgeWork } from "./requests.js";
 import { setSharedAssetBlobStoreForTests, sharedAssetBlobUri, type BlobStore } from "../../blob-store/index.js";
 
 test("project governor revision applies to the next frozen work and revoked old recipe is denied", async () => {
@@ -97,22 +98,27 @@ test("feedback freezes local target content with live revocation, and foreign fe
       assert.ok(target);
       assert.equal((await db`SELECT content_sha256 FROM shared_asset_blobs WHERE content_sha256=${metadata.blob_hash}`).length, 0);
       await assert.rejects(db.begin(tx => recordKnowledgeFeedback(tx as never, actor, { ...input, reason: "changed after preparation" },
-        [], hash, undefined, prepared)), /preparation/i);
+        prepared)), /preparation/i);
       assert.equal((await db`SELECT feedback_json FROM project_knowledge_usages WHERE id=${input.usage_ref}`)[0]!.feedback_json, null);
       assert.equal((await db`SELECT id FROM project_knowledge_work WHERE project_id=${consumer.projectId}`).length, 0);
       const result = await db.begin(async raw => {
         inTransaction = true;
-        try { return await recordKnowledgeFeedback(raw as never, actor, input, [], hash, undefined, prepared); }
+        try { return await recordKnowledgeFeedback(raw as never, actor, input, prepared); }
         finally { inTransaction = false; }
       });
+      assert.deepEqual(result, { usage_ref: input.usage_ref, state: "recorded" });
+      assert.deepEqual(await db.begin(tx => recordKnowledgeFeedback(tx as never, actor, input, prepared)), result);
+      assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0, "recording feedback never schedules a root work");
+      const workRef = await db.begin(tx => enqueueKnowledgeWork(tx as never, { actor, governanceHash: hash,
+        trigger: { fixture: input.usage_ref }, manifest: prepared.entries, reason: "explicit governed input fixture" }));
       const frozen = await readKnowledgeBlob(db, metadata.blob_hash) as Record<string, unknown>;
       assert.equal(frozen.version_ref, local.version);
       assert.equal(frozen.target_input_ref, target.input_ref);
       assert.equal(frozen.content_hash, local.blob.hash);
       const maker = await seedKnowledgeJob(db, consumer.projectId);
       await db`INSERT INTO project_knowledge_job_assignments(job_id,project_id,work_id,stage,input_manifest_json)
-        VALUES(${maker.jobId},${consumer.projectId},${String(result.work_ref)},'maker',${db.json(prepared.entries as never)})`;
-      const read = { work_ref: String(result.work_ref), input_ref: target.input_ref, expected_hash: target.content_hash };
+        VALUES(${maker.jobId},${consumer.projectId},${workRef},'maker',${db.json(prepared.entries as never)})`;
+      const read = { work_ref: workRef, input_ref: target.input_ref, expected_hash: target.content_hash };
       assert.match((await readManifestInput(db, { ...maker, snapshot: {} }, read)).content_fragment, /local-only memory body/);
       await db`UPDATE project_knowledge_versions SET revoked_at=now(),revoked_reason='fixture' WHERE id=${local.version}`;
       await assert.rejects(readManifestInput(db, { ...maker, snapshot: {} }, read), /revoked/i);
@@ -129,7 +135,7 @@ test("feedback freezes local target content with live revocation, and foreign fe
       const foreignPayload = await readKnowledgeBlob(db, foreignPrepared.entries[0]!.blob_hash);
       assert.doesNotMatch(JSON.stringify(foreignPayload), /foreign private skill body|local-only memory body/);
       await db`UPDATE project_knowledge_grants SET revoked_at=now() WHERE id=${grant!.id}`;
-      await assert.rejects(db.begin(tx => recordKnowledgeFeedback(tx as never, actor, input, [], hash, undefined, foreignPrepared)), /grant/i);
+      await assert.rejects(db.begin(tx => recordKnowledgeFeedback(tx as never, actor, input, foreignPrepared)), /grant/i);
       const forbidden = await makeVersion(owner, "memory");
       const [forged] = await db`INSERT INTO project_knowledge_usages(project_id,job_id,attempt_id,selector,content_sha256,owner_project_id,version_id)
         VALUES(${consumer.projectId},${consumer.jobId},${consumer.attemptId},'forbidden-memory',${forbidden.blob.hash},${owner.projectId},${forbidden.version}) RETURNING id`;

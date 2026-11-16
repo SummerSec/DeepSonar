@@ -155,7 +155,7 @@ test("activity keeps evidence boundaries, Chinese blockers, working links and pr
       ["idle", "暂无待整理来源", null], ["busy", "已有知识工作待执行或整理中", null],
       ["cooldown", "自动整理冷却中", nextCollection], ["ready", "已达到收集条件，等待调度", nextCollection],
     ] as const) {
-      const requestIndex = requests.length;
+      const requestIndex: number = requests.length;
       await render("b", requestIndex);
       await act(async () => requests[requestIndex].resolve({ ...page(`work-${state}`), collection: {
         state, pending_sources: state === "idle" ? 0 : 4, consecutive_failures: state === "cooldown" ? 1 : 0,

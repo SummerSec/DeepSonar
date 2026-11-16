@@ -72,7 +72,7 @@ ADR 记录**已定案**的架构决策及其理由，让「为什么这样建」
 | [0021](0021-knowledge-source-preview.md) | 只登记成功来源并只读预览历史资格 | 项目批处理暂缓限制由 [0023](0023-project-knowledge-collection.md) 取代；历史正文保留 | #1035，FR-KNOW-001；来源登记、历史只读与其余范围边界仍保留 |
 | [0022](0022-human-continuation.md) | 持久人工请求与有界结构化续做 | 已采纳；最终 SHA Actions 结果单独登记 | #1074，FR-JOB-008、FR-CTRL-006 |
 | [0023](0023-project-knowledge-collection.md) | 持久来源审计驱动有界项目批次和隔离评测 | 来源数量及自动准入由 [0024](0024-project-knowledge-batching-admission.md) 替代，事务重验/投影扩展；历史决定段保留 | 用户 2026-11-11 明确授权 / FR-KNOW-001/002 / NFR-UX-001；来源、权限、预算及独立评测边界保留 |
-| [0024](0024-project-knowledge-batching-admission.md) | 持久工作历史驱动项目合批、24 小时间隔与连续无产出停发 | 已采纳；最终 SHA Actions 待验，不表示已部署 | 用户授权修复自动整理，阈值为 2026-11-16 实现取舍 / FR-KNOW-001 / NFR-UX-001；4 来源或 24 小时、32 候选保持 19 inputs+governor、两次无产出停发及显式成功恢复 |
+| [0024](0024-project-knowledge-batching-admission.md) | 持久工作历史驱动项目合批、24 小时间隔与连续无产出停发 | 已采纳；最终 SHA Actions 待验，不表示已部署 | 用户授权修复自动整理，阈值为 2026-11-16 实现取舍 / FR-KNOW-001 / NFR-UX-001；4 来源或 24 小时、32 候选保持 19 inputs+governor、两次无产出停发及显式成功恢复；本轮评审追加反馈仅 recorded、不另启 work，自动反馈归 collector，显式请求保留 |
 
 ---
 

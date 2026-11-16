@@ -93,9 +93,9 @@ for (const kind of ["memory", "skill"] as const) test(`registered source activat
       VALUES(${origin.canvasId},${origin.jobId},'fact','raw input','succeeded','unverified','{"input":"raw fixture"}'::jsonb)`;
     await db`UPDATE jobs SET status='succeeded' WHERE id=${origin.jobId}`;
     await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${origin.attemptId}`;
+    await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,at)
+      VALUES('system','scheduler','project_knowledge.source_registered',${origin.projectId},'job',${origin.jobId},'ok',now()-interval '25 hours')`;
     await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, origin.jobId, "succeeded"));
-    await db`UPDATE audit_logs SET at=now()-interval '25 hours'
-      WHERE action='project_knowledge.source_registered' AND resource_id=${origin.jobId}`;
     assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
     const [work] = await db`SELECT id,input_manifest_json FROM project_knowledge_work WHERE project_id=${origin.projectId}`;
     const workId = String(work!.id);
@@ -172,9 +172,9 @@ for (const kind of ["memory", "skill"] as const) test(`registered source activat
     await finish(db, runner, reviewerId);
     assert.equal((await db`SELECT state FROM project_knowledge_work WHERE id=${workId}`)[0]!.state, "completed");
     const readOperation = kind === "memory" ? "read_project_memory" : "pull_skill";
-    const consumer = await seedKnowledgeJob(db, origin.projectId, [readOperation, "record_knowledge_feedback"]);
+    const consumer = await seedKnowledgeJob(db, origin.projectId, [readOperation, "record_knowledge_feedback", "request_project_knowledge"]);
     const catalog = await freezeProjectKnowledgeCatalog(db, origin.projectId);
-    await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: [readOperation, "record_knowledge_feedback"], project_knowledge_catalog: catalog } as never)}
+    await db`UPDATE jobs SET agent_snapshot_json=${db.json({ platform_tools: [readOperation, "record_knowledge_feedback", "request_project_knowledge"], project_knowledge_catalog: catalog } as never)}
       WHERE id=${consumer.jobId}`;
     const [item] = await db`SELECT id FROM project_knowledge_items WHERE active_version_id=${String(proposed.candidate_version_ref)}`;
     const version = await db`SELECT version,content_sha256 FROM project_knowledge_versions WHERE id=${String(proposed.candidate_version_ref)}`;
@@ -189,11 +189,32 @@ for (const kind of ["memory", "skill"] as const) test(`registered source activat
       RETURNING id,body_json,verification_status`;
     const feedbackRef = { kind: "fact", ref: fact!.id, content_hash: sha256(canonical({ kind: "fact",
       id: fact!.id, body: fact!.body_json, verification_status: fact!.verification_status })) };
-    await invoke(db, runtime, consumer.jobId, "record_knowledge_feedback", { usage_ref: read.usage_ref,
+    const feedback = await invoke(db, runtime, consumer.jobId, "record_knowledge_feedback", { usage_ref: read.usage_ref,
       outcome: "success", evidence_refs: [feedbackRef], next_action: "reuse", reason: "fixture confirms the exact version was read" });
+    assert.equal(feedback.state, "recorded");
+    assert.equal(Object.hasOwn(feedback, "work_ref"), false);
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 1, "feedback does not create another work");
     const [usage] = await db`SELECT version_id,job_id,feedback_json FROM project_knowledge_usages WHERE id=${String(read.usage_ref)}`;
     assert.equal(usage!.version_id, proposed.candidate_version_ref);
     assert.equal(usage!.job_id, consumer.jobId);
     assert.equal((usage!.feedback_json as { outcome: string }).outcome, "success");
+    await db`UPDATE jobs SET status='succeeded' WHERE id=${consumer.jobId}`;
+    await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${consumer.attemptId}`;
+    await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, consumer.jobId, "succeeded"));
+    for (let index = 0; index < 3; index++) {
+      const extra = await seedKnowledgeJob(db, origin.projectId, ["request_project_knowledge"]);
+      await db`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status,verification_status,body_json)
+        VALUES(${extra.canvasId},${extra.jobId},'fact','batch companion','succeeded','unverified','{}')`;
+      await db`UPDATE jobs SET status='succeeded' WHERE id=${extra.jobId}`;
+      await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${extra.attemptId}`;
+      await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, extra.jobId, "succeeded"));
+    }
+    await db`UPDATE project_knowledge_work SET created_at=now()-interval '25 hours' WHERE id=${workId}`;
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
+    const [batch] = await db`SELECT input_manifest_json FROM project_knowledge_work WHERE id<>${workId}`;
+    const feedbackInputs = batch!.input_manifest_json as Array<{ input_ref: string }>;
+    assert.ok(feedbackInputs.some(entry => entry.input_ref === `feedback:${String(read.usage_ref)}`));
+    assert.ok(feedbackInputs.some(entry => entry.input_ref === `baseline:${String(proposed.candidate_version_ref)}`));
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 2);
   });
 });

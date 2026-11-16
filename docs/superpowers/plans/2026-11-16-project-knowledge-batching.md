@@ -27,8 +27,11 @@
 - [x] 新增 collection-policy.ts 统一 SQL；修改 collector.ts 和 knowledge-wake.ts；扩大有界候选扫描并跳过放不下的来源。更新已有场景 fixture 的明确等待时间。
 - [x] 知识 activity 返回 collection 状态，已有 React 面板呈现状态和下次时间，补充项目隔离和停发展示测试。
 - [x] 同步 FR-KNOW、trace、runtime/接口视图、专题、ADR 和索引。
+- [x] 修复独立评审发现的 usage 反馈自动建 work 绕过：仅保存反馈，成功来源合批时冻结并重验反馈/目标基线；补停止状态下反馈不建 work 的回归。
 - [ ] 独立评审，处理发现，最终 head 的核心与适用专项在 Actions 验证；遵守重大调度行为变更的人工合并边界。
 
 ## Execution record
 
 2026-11-16：基于 origin/main 4de76ccb；仅静态检查在本机执行。用户已明确授权上述修复方向，具体阈值为实现选择。
+
+独立评审发现 feedback 入口逐条创建自动 work 可绕过新策略，已纳入本轮修复。首轮 Actions b471163d 被新增 UI 测试 TS7022 阻断，已补显式 number 标注；未执行到行为回归，不宣称通过。
