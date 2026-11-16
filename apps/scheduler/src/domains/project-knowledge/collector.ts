@@ -1,7 +1,7 @@
 import type { KnowledgeInputManifestEntry } from "@deepsonar/shared-types";
 import { recordSystemAudit } from "../../audit.js";
 import { inspectAutomaticKnowledgeJob, SOURCE_REGISTERED_ACTION } from "./automatic.js";
-import { automaticPreparationPredicate } from "./automatic-marker.js";
+import { COLLECTION_SCAN_LIMIT, projectCollectionPolicyQuery } from "./collection-policy.js";
 import { registerKnowledgeBlob } from "./blobs.js";
 import { recheckKnowledgeSources } from "./inputs.js";
 import { frozenGovernorRecipe } from "./recipe.js";
@@ -11,10 +11,9 @@ import { recordSourceFailure, recordSourceFailureInTransaction, sourceHandled, s
 import { COLLECTION_MAX_INPUTS, prepareKnowledgeSource, PROJECT_COLLECTION_PREFIX, SOURCE_COLLECTED_ACTION,
   SOURCE_SKIPPED_ACTION, SourceCollectionError, type PreparedKnowledgeSource } from "./collector-sources.js";
 
-async function hasWork(db: KnowledgeDb, projectId: string): Promise<boolean> {
-  const [work] = await db`SELECT id FROM project_knowledge_work WHERE project_id=${projectId}
-    AND state IN ('pending','running') AND NOT ${automaticPreparationPredicate(db)} LIMIT 1`;
-  return Boolean(work);
+async function canCollect(db: KnowledgeDb, projectId: string): Promise<boolean> {
+  const [policy] = await projectCollectionPolicyQuery(db, projectId);
+  return policy?.state === "ready";
 }
 
 type Prepared = PreparedKnowledgeSource & CollectionSourceRef & { recipe?: KnowledgeInputManifestEntry };
@@ -24,23 +23,13 @@ type SavepointDb = KnowledgeDb & { savepoint<T>(callback: (nested: KnowledgeDb) 
 export async function collectProjectKnowledgeSources(db: KnowledgeDb, governanceHash: string,
   stopped: () => boolean = () => false): Promise<number> {
   if (stopped()) return 0;
-  const projects = await db`SELECT a.project_id,MIN(a.id) AS first_id FROM audit_logs a
-    JOIN projects p ON p.id=a.project_id AND p.status='active'
-    ${sourceRetryJoin(db)}
-    WHERE a.action=${SOURCE_REGISTERED_ACTION} AND a.actor_type='system' AND a.actor_id='scheduler'
-      AND a.result='ok' AND a.resource_type='job'
-      AND ${sourceRetryWake(db)} <= now()
-      AND NOT EXISTS(SELECT 1 FROM audit_logs used WHERE used.project_id=a.project_id
-        AND used.resource_type='job' AND used.resource_id=a.resource_id AND used.actor_type='system'
-        AND used.actor_id='scheduler' AND used.action IN (${SOURCE_COLLECTED_ACTION},${SOURCE_SKIPPED_ACTION}))
-      AND NOT EXISTS(SELECT 1 FROM project_knowledge_work w WHERE w.project_id=a.project_id
-        AND w.state IN ('pending','running') AND NOT ${automaticPreparationPredicate(db)})
-    GROUP BY a.project_id ORDER BY first_id LIMIT 4`;
+  const projects = await db`SELECT project_id FROM (${projectCollectionPolicyQuery(db)}) policy
+    WHERE state='ready' ORDER BY wake_at,project_id LIMIT 4`;
   let created = 0;
   for (const project of projects) {
     if (stopped()) break;
     const projectId = String(project.project_id);
-    if (await hasWork(db, projectId)) continue;
+    if (!await canCollect(db, projectId)) continue;
     const sources = await db`SELECT * FROM (SELECT DISTINCT ON(a.resource_id) a.id,a.resource_id,retry.id AS retry_id FROM audit_logs a
       ${sourceRetryJoin(db)}
       WHERE a.project_id=${projectId} AND a.action=${SOURCE_REGISTERED_ACTION}
@@ -49,7 +38,7 @@ export async function collectProjectKnowledgeSources(db: KnowledgeDb, governance
         AND NOT EXISTS(SELECT 1 FROM audit_logs used WHERE used.project_id=a.project_id
           AND used.resource_type='job' AND used.resource_id=a.resource_id AND used.actor_type='system'
           AND used.actor_id='scheduler' AND used.action IN (${SOURCE_COLLECTED_ACTION},${SOURCE_SKIPPED_ACTION}))
-      ORDER BY a.resource_id,a.id) candidates ORDER BY id LIMIT 4`;
+      ORDER BY a.resource_id,a.id) candidates ORDER BY id LIMIT ${COLLECTION_SCAN_LIMIT}`;
     const prepared: Prepared[] = [];
     let inputCount = 0;
     for (const source of sources) {
@@ -58,7 +47,7 @@ export async function collectProjectKnowledgeSources(db: KnowledgeDb, governance
         retryId: source.retry_id == null ? null : String(source.retry_id) };
       try {
         const item = await prepareKnowledgeSource(db, projectId, ref.jobId, ref.registrationId);
-        if (inputCount + item.manifest.length > COLLECTION_MAX_INPUTS) break;
+        if (inputCount + item.manifest.length > COLLECTION_MAX_INPUTS) continue;
         const recipe = await frozenGovernorRecipe(db, item.actor);
         prepared.push({ ...item, ...ref, recipe });
         inputCount += item.manifest.length;
@@ -72,7 +61,7 @@ export async function collectProjectKnowledgeSources(db: KnowledgeDb, governance
       const tx = raw as unknown as KnowledgeDb;
       // Only a project metadata row is locked: no Canvas/Job lock is acquired in this transaction.
       const [active] = await tx`SELECT id FROM projects WHERE id=${projectId} AND status='active' FOR UPDATE`;
-      if (!active || stopped() || await hasWork(tx, projectId)) return 0;
+      if (!active || stopped() || !await canCollect(tx, projectId)) return 0;
       const valid: Prepared[] = [];
       for (const item of prepared) {
         if (await sourceHandled(tx, projectId, item.jobId)) continue;

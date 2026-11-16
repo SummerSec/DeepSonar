@@ -94,6 +94,8 @@ for (const kind of ["memory", "skill"] as const) test(`registered source activat
     await db`UPDATE jobs SET status='succeeded' WHERE id=${origin.jobId}`;
     await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${origin.attemptId}`;
     await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, origin.jobId, "succeeded"));
+    await db`UPDATE audit_logs SET at=now()-interval '25 hours'
+      WHERE action='project_knowledge.source_registered' AND resource_id=${origin.jobId}`;
     assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
     const [work] = await db`SELECT id,input_manifest_json FROM project_knowledge_work WHERE project_id=${origin.projectId}`;
     const workId = String(work!.id);

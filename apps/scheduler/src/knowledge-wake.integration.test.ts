@@ -80,6 +80,8 @@ test("registered sources survive missed notifications and wake collection after 
     await db`UPDATE jobs SET status='succeeded' WHERE id=${source.jobId}`;
     await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${source.attemptId}`;
     await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, source.jobId, "succeeded"));
+    await db`UPDATE audit_logs SET at=now()-interval '25 hours'
+      WHERE action='project_knowledge.source_registered' AND resource_id=${source.jobId}`;
     assert.ok(await readNextKnowledgeWake(db));
     assert.equal(await collectProjectKnowledgeSources(db, "a".repeat(64)), 1);
     assert.ok(await readNextKnowledgeWake(db), "created work now owns the durable deadline");
@@ -98,6 +100,8 @@ test("source wake uses the latest persisted retry deadline and retains the pendi
       await db`UPDATE jobs SET status='succeeded' WHERE id=${job.jobId}`;
       await db`UPDATE job_attempts SET status='succeeded',phase='terminal' WHERE id=${job.attemptId}`;
       await db.begin(tx => registerKnowledgeSourceAfterTerminal(tx as never, job.jobId, "succeeded"));
+      await db`UPDATE audit_logs SET at=now()-interval '25 hours'
+        WHERE action='project_knowledge.source_registered' AND resource_id=${job.jobId}`;
     }
     const soon = new Date(Date.now() + 60_000).toISOString(), later = new Date(Date.now() + 90_000).toISOString();
     for (const [job, attempt, next] of [[first, 1, "2000-01-01T00:00:00Z"], [first, 2, soon], [second, 1, later]] as const) {

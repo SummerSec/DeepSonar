@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { randomUUID } from "node:crypto";
 import { collectProjectKnowledgeSources } from "./collector.js";
 import { registerKnowledgeSourceAfterTerminal } from "./automatic.js";
 import { readKnowledgeBlob } from "./blobs.js";
@@ -7,6 +8,7 @@ import { seedKnowledgeJob, withKnowledgeDatabase, type TestSql } from "./test-su
 import { setSharedAssetBlobStoreForTests, type BlobStore } from "../../blob-store/index.js";
 import { readNextKnowledgeWake } from "../../knowledge-wake.js";
 import { sha256 } from "./types.js";
+import { readProjectCollectionStatus } from "./collection-policy.js";
 
 const GOVERNANCE = "a".repeat(64);
 async function source(db: TestSql, projectId?: string, count = 1, label = "source") {
@@ -65,6 +67,74 @@ test("a bounded batch combines more than four small sources and preserves the da
   });
 });
 
+test("four fresh sources trigger one merged batch without waiting a day", async () => {
+  await withKnowledgeDatabase(async db => {
+    const first = await source(db);
+    for (let n = 0; n < 3; n++) await source(db, first.projectId);
+    await db`UPDATE audit_logs SET at=now() WHERE action='project_knowledge.source_registered'`;
+    assert.equal((await readProjectCollectionStatus(db, first.projectId)).state, "ready");
+    await Promise.all([collectProjectKnowledgeSources(db, GOVERNANCE), collectProjectKnowledgeSources(db, GOVERNANCE)]);
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 1);
+    assert.equal((await db`SELECT id FROM audit_logs WHERE action='project_knowledge.source_collected'`).length, 4);
+  });
+});
+
+test("an input that does not fit stays queued while later small input fills the bounded batch", async () => {
+  await withKnowledgeDatabase(async db => {
+    const large = await source(db, undefined, 18), deferred = await source(db, large.projectId, 2);
+    const small = await source(db, large.projectId, 1);
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
+    const [work] = await db`SELECT input_manifest_json FROM project_knowledge_work`;
+    assert.equal(work!.input_manifest_json.length, 19);
+    const links = await db`SELECT resource_id FROM audit_logs WHERE action='project_knowledge.source_collected'`;
+    assert.deepEqual(new Set(links.map(row => row.resource_id)), new Set([large.jobId, small.jobId]));
+    assert.equal((await db`SELECT id FROM audit_logs WHERE resource_id=${deferred.jobId}
+      AND action IN ('project_knowledge.source_collected','project_knowledge.source_collection_skipped')`).length, 0);
+  });
+});
+
+test("the project-lock recheck observes failures committed during external CAS preparation", async () => {
+  await withKnowledgeDatabase(async db => {
+    const job = await source(db);
+    let inserted = false;
+    memoryCas(async () => {
+      if (inserted) return;
+      inserted = true;
+      for (const n of [2, 3]) await db`INSERT INTO project_knowledge_work
+        (project_id,trigger_key,governance_hash,state,created_at,updated_at)
+        VALUES(${job.projectId},${`knowledge:project:concurrent-fail-${n}`},${GOVERNANCE},'blocked',
+          now()-${n}*interval '1 day',now()-${n}*interval '1 day')`;
+    });
+    try {
+      assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
+      assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 2);
+      assert.equal((await db`SELECT id FROM audit_logs WHERE action='project_knowledge.source_collected'`).length, 0);
+      assert.equal(await readNextKnowledgeWake(db), null);
+    } finally { setSharedAssetBlobStoreForTests(null); }
+  });
+});
+
+test("only a settled successful explicit knowledge work clears project failures and preserves other projects", async () => {
+  await withKnowledgeDatabase(async db => {
+    const first = await source(db), other = await source(db);
+    for (const project of [first.projectId, other.projectId]) for (const n of [2, 3]) await db`INSERT INTO project_knowledge_work
+      (project_id,trigger_key,governance_hash,state,created_at,updated_at)
+      VALUES(${project},${`knowledge:project:failed-${n}`},${GOVERNANCE},'blocked',
+        now()-${n}*interval '1 day',now()-${n}*interval '1 day')`;
+    const [manual] = await db`INSERT INTO project_knowledge_work(project_id,trigger_key,governance_hash,state)
+      VALUES(${first.projectId},${randomUUID()},${GOVERNANCE},'completed') RETURNING id`;
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0, "completed without output does not clear failures");
+    await db`INSERT INTO project_knowledge_proposals(project_id,work_id,action,state,revision,maker_job_id,
+      idempotency_key,request_digest,input_digest,reason)
+      VALUES(${first.projectId},${String(manual!.id)},'reuse','active',1,${first.jobId},
+        ${randomUUID()},${GOVERNANCE},${GOVERNANCE},'settled fixture')`;
+    assert.equal((await readProjectCollectionStatus(db, first.projectId)).consecutive_failures, 0);
+    assert.equal((await readProjectCollectionStatus(db, other.projectId)).state, "halted");
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
+    assert.equal((await db`SELECT id FROM project_knowledge_work WHERE project_id=${other.projectId}`).length, 2);
+  });
+});
+
 test("registered Jobs are collected in one project batch, once across concurrent collectors and restarts", async () => {
   await withKnowledgeDatabase(async db => {
     const one = await source(db), two = await source(db, one.projectId);
@@ -112,7 +182,7 @@ test("one transient source keeps its durable backoff while a good source is coll
       assert.ok(new Date(retries[0]!.after_json.next_attempt_at).getTime() > Date.now());
       assert.equal((await db`SELECT resource_id FROM audit_logs WHERE action='project_knowledge.source_collected'`)[0]!.resource_id, good.jobId);
       assert.equal((await db`SELECT id FROM audit_logs WHERE action='project_knowledge.source_collection_skipped'`).length, 0);
-      await db`UPDATE project_knowledge_work SET state='completed' WHERE project_id=${bad.projectId}`;
+      await db`UPDATE project_knowledge_work SET state='completed',created_at=now()-interval '25 hours' WHERE project_id=${bad.projectId}`;
       const wake = await readNextKnowledgeWake(db);
       assert.equal(wake!.getTime(), new Date(retries[0]!.after_json.next_attempt_at).getTime());
       assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0, "new collector instance honors persisted future retry");
@@ -235,7 +305,7 @@ test("project grouping, active work and archived projects preserve isolation", a
     assert.ok(works.every(row => (row.input_manifest_json as Array<{project_id: string}>).every(entry => entry.project_id === row.project_id)));
     await source(db, one.projectId);
     assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0, "a pending/running work keeps the new sources queued");
-    await db`UPDATE project_knowledge_work SET state='completed' WHERE project_id=${one.projectId}`;
+    await db`UPDATE project_knowledge_work SET state='completed',created_at=now()-interval '25 hours' WHERE project_id=${one.projectId}`;
     assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
     assert.equal((await db`SELECT id FROM project_knowledge_work WHERE project_id=${other.projectId}`).length, 1);
   });
