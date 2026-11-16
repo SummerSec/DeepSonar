@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-11-12
+> 同步日期：2026-11-16
 
 ## 人工等待断点与累计时钟（#1074）
 
@@ -139,9 +139,11 @@ Artifact、Finding、Verify、Research 和 Report 不是同一张“结果表”
 
 ### 项目知识来源审计与只读投影
 
+[ADR 0024](adr/0024-project-knowledge-batching-admission.md) 将自动准入从来源数量限制改为项目级持久历史推导：未处理来源取登记减 collected/skipped 的去重并集，门槛为 4 来源或最老等待 24 小时；上次自动批次创建时间决定 24 小时间隔。连续失败只计 knowledge:project 自动 work 的 blocked/cancelled 或 completed 但无 active/retired 提案产出；成功自动或显式整理须 completed 且有该产出，才截断失败链。两次即停发；失败显式整理不改变计数，旧 knowledge:auto 不作为成功/恢复，重启、时间流逝和治理 hash 变化不清零。不新增表、持久计数或开关，不覆盖历史 work/proposal、预算和回执。collector、锁内重验、wake 与 activity 共用[准入查询](../../apps/scheduler/src/domains/project-knowledge/collection-policy.ts)。32 候选中本批放不下者保持未处理，不写 collected/skipped；retry 仍从原审计推导，不提前到期。
+
 本轮复用audit_logs与现有project_knowledge_*基线，无新表、schema bump或增量迁移。system/scheduler的source_registered成功审计仅存Job/Attempt/Canvas及来源存在标记，不存正文。collector事务外准备有界CAS，项目行锁下重验后原子写work及逐Job source_collected链接；after_json保存registration_id/work_ref/attempt_id/input_count/manifest_sha256，摘要为单个来源冻结manifest的canonical SHA-256。source_collection_skipped记录error与安全原因，来源被collected/skipped持久消费后不再自动重建；坏源正文与Provider错误不进入原因投影。来源输入保留原verification_status，采集不等于验证。assignment.source_mode持久于Job冻结assignment；rubric为`evaluation:proposal:<id>`，绑定revision/input_digest/plan/base_refs，reviewer另获behavior记录，仅eval/review audience可读。事实入口见[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)、[来源准备](../../apps/scheduler/src/domains/project-knowledge/collector-sources.ts)与[work](../../apps/scheduler/src/domains/project-knowledge/work.ts)。
 
-[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)同一SQL快照汇总并分页：登记按resource_id去重，采集按同项目work_ref关联，待采集排除collected/skipped并集；工作source_count按采集链接去重，没有链接的显式work仅在有origin_job_id时回退1。项目active版本仍要求非revoked；usage/feedback要求project_id和owner_project_id均为本项目，排除全局/跨项目记录。skipped元数据最多10个去重来源，原因脱敏，不返回正文。登记、采集、流程完成、激活及模型报告分层，不新增效果账本。trial证据仍需真实资产版本/hash与独立Attempt绑定；治理hash变化不重绑历史。当前源码、未运行Actions与真实模型收益未知分开，取舍见[ADR 0023](adr/0023-project-knowledge-collection.md)。
+[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)的 summary 与工作分页保持同一语句快照；collection 另作一次只读查询，从共用准入规则派生 state/pending_sources/consecutive_failures/next_collection_at，不能宣称整个响应来自同一快照。collection.pending_sources 按可信源登记审计去重并排除已处理；summary 的采集审计还核验 work 存在。正常数据下口径一致，并发变更可能漂移，异常损坏数据不保证同值。六态及时间只作读投影，不是持久状态机，不由分页 items 或进程缓存推导连续失败。summary 登记按resource_id去重，采集按同项目work_ref关联，待采集排除collected/skipped并集；工作source_count按采集链接去重，没有链接的显式work仅在有origin_job_id时回退1。项目active版本仍要求非revoked；usage/feedback要求project_id和owner_project_id均为本项目，排除全局/跨项目记录。skipped元数据最多10个去重来源，原因脱敏，不返回正文。登记、采集、流程完成、激活及模型报告分层，不新增效果账本。trial证据仍需真实资产版本/hash与独立Attempt绑定；治理hash变化不重绑历史。当前源码、未运行Actions与真实模型收益未知分开，取舍见[ADR 0023](adr/0023-project-knowledge-collection.md)。
 
 ## 关键状态机
 

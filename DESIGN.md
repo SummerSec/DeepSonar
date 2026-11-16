@@ -1,7 +1,7 @@
 # DeepSonar Design
 
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
-> 同步日期：2026-11-12
+> 同步日期：2026-11-16
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
 >
 > 本文为执行摘要，展开正文按 [架构归属表](docs/architecture/README.md) 定位。实现事实以代码、`database/schema.sql`、OpenAPI、测试为准；规范违约记录为缺陷，不能改需求迎合 bug。专题文档状态见 [`docs/README.md`](docs/README.md)。长期 AI-native 方案见 [`docs/AI_NATIVE_TRUSTED_KERNEL.md`](docs/AI_NATIVE_TRUSTED_KERNEL.md)。
@@ -501,4 +501,4 @@ RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-o
 
 发布恢复仅复用经 GitHub 原运行/成功阶段/artifact 归档摘要绑定的冻结载荷和原签名回执，默认分支恢复身份与原 tag 发布身份分离；不重建镜像、不移动 tag、不重新签名。两阶段独立恢复及拒绝条件见[发布专题](docs/RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)。
 
-成功任务终态只登记知识来源元数据，后续Dispatcher从持久审计自动归集项目批次：每批最多4个来源Job、19个原始inputs及可选governor，项目已有pending/running工作时不再准入批次。CAS在短事务外准备，项目行锁下重验并原子写work与逐源attempt/manifest摘要链接；永久无效来源持久跳过；瞬态准备故障持久退避30秒、第三次失败才终止，未知提交先对账。自动批次及全部trial快照收紧工具、关闭出网、清角色预加载能力；非reuse完整6×2独立试验，显式共同task_inputs、评分rubric隔离到eval/review，Job预算预留后两阶段。允许target comparator fail作对照，目标arm及全部安全组仍须pass，unexecuted不可激活；治理hash变化阻断旧work，不改历史。知识页区分登记、纳入整理、候选、生效、拉取与模型反馈，不能把来源数当产物或反馈当质量证明。历史预览仍只读，旧knowledge:auto仍不自动推进，无schema或整链token预算变更。原候选6d96df59已通过主CI与Reverse专项，同步main后的候选须独立验收；未合并未部署，真实模型与注意力收益未验证，证据见[专题验收记录](docs/PROJECT_KNOWLEDGE.md#验证与运维)。取代范围见[ADR0023](docs/architecture/adr/0023-project-knowledge-collection.md)，流程、证据与注意力成本见[项目知识](docs/PROJECT_KNOWLEDGE.md)。
+成功任务终态只登记知识来源元数据，后续 Dispatcher 按项目积累：至少 4 个未处理来源或最老来源等待满 24 小时，且自动批次间隔至少 24 小时。按 [ADR 0024](docs/architecture/adr/0024-project-knowledge-batching-admission.md) 扫描最多 32 个候选来源，保持 19 个原始 inputs 及可选 governor，放不下者留给后续，不因队首较大终止装箱。连续 2 个自动批次无 active/retired 提案产出即停发；计数与成功显式整理后的恢复从持久 work/proposal 历史跨重启推导，时间或治理 hash 变化不清零。collector、项目行锁事务重验、durable wake 与 activity 共用准入规则，繁忙或停发不生成立即过期的采集 wake。原 CAS/权限/Attempt/未知效果校验、来源审计、旧任务、累计预算与最小 Job 预算拦截、隔离及完整 6×2 独立试验/审查保留；不重建旧批次重置预算。知识页从 activity 新增的 collection 展示积累、冷却、执行中、停发和下次时间，无新通知、配置、恢复按钮或轮询。该字段是只读投影，模型反馈不代表收益认证。0024 仅取代 0023 的来源数量与自动准入并扩展重验/投影，历史预览只读、旧 knowledge:auto 不自动推进、无 schema 或整链 token 预算变化。当前为本轮目标契约与共享工作树整合，最终 SHA Actions 待验；不部署、不重跑历史生产任务，不宣称真实模型或注意力收益。细则及历史验收见[项目知识](docs/PROJECT_KNOWLEDGE.md)。

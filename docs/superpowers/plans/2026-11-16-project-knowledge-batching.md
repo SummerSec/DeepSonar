@@ -26,7 +26,7 @@
 - [x] 先添加真实数据库回归：少量来源不立即建 work；连续两批失败后新来源仍保留且没有 wake。接到已有 project-knowledge Actions 入口；未独立运行红灯阶段，最终实现统一在 Actions 验证。
 - [x] 新增 collection-policy.ts 统一 SQL；修改 collector.ts 和 knowledge-wake.ts；扩大有界候选扫描并跳过放不下的来源。更新已有场景 fixture 的明确等待时间。
 - [x] 知识 activity 返回 collection 状态，已有 React 面板呈现状态和下次时间，补充项目隔离和停发展示测试。
-- [ ] 同步 FR-KNOW、trace、runtime/接口视图、专题、ADR 和索引。
+- [x] 同步 FR-KNOW、trace、runtime/接口视图、专题、ADR 和索引。
 - [ ] 独立评审，处理发现，最终 head 的核心与适用专项在 Actions 验证；遵守重大调度行为变更的人工合并边界。
 
 ## Execution record

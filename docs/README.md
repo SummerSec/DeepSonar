@@ -285,7 +285,7 @@
 #1018 的[项目任务队列](PROJECT_TASK_QUEUE.md)集中说明项目 FIFO、占位、失败确认继续、schema 72 与验收边界，最终 SHA Actions 待验。
 #1019 的[事实用途与待处理投影](EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。
 
-项目知识的来源登记→有界项目批次→独立试验/审查→后续拉取与模型反馈，以及积累/复用只读投影见[专题](PROJECT_KNOWLEDGE.md)。[ADR0023](architecture/adr/0023-project-knowledge-collection.md)在用户本轮授权内取代0021的项目批处理暂缓限制，保留历史预览只读和旧knowledge:auto禁用；无schema或整链token预算变化。审计绑定来源Attempt/manifest摘要，trial隔离评分输入，完整6×2与候选/安全组硬门保持。collector/闭环/activity/快照隔离、behavior-policy与Web回归已接Actions入口；`6d96df59` 的主CI与Reverse专项已通过，同步main后的候选仍须独立验收，未合并未部署。模型反馈不是收益认证，注意力和质量收益未知；证据见[专题验收记录](PROJECT_KNOWLEDGE.md#验证与运维)。
+项目知识的来源登记→有界项目批次→独立试验/审查→后续拉取与模型反馈见[专题](PROJECT_KNOWLEDGE.md)。2026-11-16 [ADR 0024](architecture/adr/0024-project-knowledge-batching-admission.md) 替代 0023 的来源数量与自动准入规则：4 来源或等待 24 小时、自动间隔 24 小时，扫描 32 候选但仍限 19 inputs+可选 governor，放不下者保留。连续两自动批次无 active/retired 提案产出停发，从持久 work/proposal 历史跨重启推导；显式成功整理可恢复，时间/hash 变化不清零。collector 事务重验、wake 和 activity 共用准入规则；原知识页以新增 collection 展示状态与下次时间，不新增通知、设置、恢复按钮或轮询。来源、旧任务/预算、最小 Job 预算拦截和完整独立评测不变，历史预览仍只读，旧 knowledge:auto 仍不自动推进；无 schema 或整链 token 预算变化。最终 SHA Actions 待验，本机不运行测试/build/typecheck，不部署或重跑历史生产任务；历史验收见[专题记录](PROJECT_KNOWLEDGE.md#验证与运维)，真实模型与注意力收益未验证。
 
 自动清理归属与共享资产只读探针的 #307 评审补齐见[运行时视图](architecture/06-runtime-view.md#自动清理归属与共享资产只读探针307-评审补齐)；扫描清理不删除未知 owner，guest 探针不冒充远端来源证明，最终 SHA Actions 待验。
 

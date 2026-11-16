@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-16
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -387,13 +387,13 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-KNOW-001 项目知识的受治理生命周期
 
-成功来源登记和历史资格预览只保留有界元数据，预览不创建 work/Job。本轮用户授权的自动项目批次由 [ADR 0023](adr/0023-project-knowledge-collection.md) 取代 [0021](adr/0021-knowledge-source-preview.md) 的项目批处理暂缓限制；不新增 schema 或整链 token 预算，旧 knowledge:auto work 仍禁用自动推进。
+成功来源登记和历史资格预览只保留有界元数据，预览不创建 work/Job。本轮用户授权的自动项目批次由 [ADR 0023](adr/0023-project-knowledge-collection.md) 取代 [0021](adr/0021-knowledge-source-preview.md) 的项目批处理暂缓限制；不新增 schema 或整链 token 预算，旧 knowledge:auto work 仍禁用自动推进。本轮 [ADR 0024](adr/0024-project-knowledge-batching-admission.md) 替代 0023 的来源数量及自动准入，扩展事务重验和只读状态投影。
 
-- **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理来自当前 Job 的合法有源请求，或 Scheduler 对成功业务 Job 持久登记的有界批量采集；必须复核最新成功 Attempt、冻结整理权限、来源/hash 和未结算效果，不复活原 Job token。collector 每批至多4个来源Job、19个原始inputs及可选governor，项目已有非旧自动pending/running work时不得再准入批次。失败来源持久跳过、不热重试。非reuse提案经maker、完整六类×两个arm独立trial、evaluator/reviewer后才可原子激活；target comparator fail可以保留为对照，目标arm及全部安全组必须pass，unexecuted/缺证/未知效果不得晋升，旧active保留。每例共同材料显式选择冻结task_inputs，trial不得读取rubric或其他arm，所有trial及自动批次快照收紧工具/网络和角色预加载能力。累计预算为后两阶段预留2个Job，治理hash变化阻断旧work，不重置历史。只读activity分别呈现登记/采集/跳过、候选、生效、拉取与模型反馈；实际使用保留usage/provenance和receipt，反馈不得冒充质量结论。
-- **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；用户本轮明确授权自动项目整理，见 [ADR 0023](adr/0023-project-knowledge-collection.md) 与[专题](../PROJECT_KNOWLEDGE.md)。
-- **实现状态**：#752 生命周期保持既有实现；本轮collector、隔离试验、真实资产版本回执及activity已接入共享工作树，无schema变更。source_collected保存registration_id/work_ref/attempt_id/input_count/manifest_sha256，assignment.source_mode标识批次；评分输入绑定proposal/revision/input_digest且trial不可读。合成Job/Attempt/Evidence及behavior-policy独立回归已接Actions入口，但本轮尚未执行；未合并、未部署，真实模型及注意力/质量收益未验证。
-- **代码入口**：[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)；[工作链](../../apps/scheduler/src/domains/project-knowledge/work.ts)；[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)；[评测/结算](../../apps/scheduler/src/domains/project-knowledge/settlement.ts)；[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)；[Control 契约](../../packages/shared-types/src/project-knowledge.ts)。
-- **验证证据**：Actions的`pnpm ci:unit:project-knowledge`、独立`TEST_DATABASE_URL`下`pnpm ci:integration:project-knowledge`和`pnpm ci:unit:web-facts`已接collector/closed-loop/activity、Job隔离及唤醒回归，本轮尚未运行。全部测试/构建/typecheck仅Actions执行；#777真实模型收益仍需独立证据，不改变#752历史验收范围。
+- **规范要求**：项目 Memory/Skill 必须保持稳定身份和不可变版本；草稿、候选和评测输入不得进入普通 Job 目录。整理来自当前 Job 的合法有源请求，或 Scheduler 对成功业务 Job 持久登记的有界批量采集；必须复核最新成功 Attempt、冻结整理权限、来源/hash 和未结算效果，不复活原 Job token。collector 必须在项目积累至少 4 个未处理来源或最老来源等待满 24 小时，且距上次自动批次创建满 24 小时后准入；项目已有非旧自动 pending/running work 时等待。有界扫描 32 个候选，保持 19 个原始 inputs 及可选 governor，放不下者保留并继续扫描，不永久消费。连续 2 个自动批次 blocked/cancelled 或 completed 但无 active/retired 提案产出即停发；持久 work/proposal 历史跨重启推导，成功自动批次或成功显式整理可截断失败链，时间和治理 hash 变化不得清零。collector 选项目、项目锁事务重验、durable wake 和 activity 必须共用数据库准入规则，忙碌/停发不生成立即过期采集 wake，未来 retry 不热循环。来源永久拒绝及瞬态准备失败耗尽才持久跳过，不热重试。非reuse提案经maker、完整六类×两个arm独立trial、evaluator/reviewer后才可原子激活；target comparator fail可以保留为对照，目标arm及全部安全组必须pass，unexecuted/缺证/未知效果不得晋升，旧active保留。每例共同材料显式选择冻结task_inputs，trial不得读取rubric或其他arm，所有trial及自动批次快照收紧工具/网络和角色预加载能力。累计预算为后两阶段预留2个Job，治理hash变化阻断旧work，不重置历史。只读activity分别呈现登记/采集/跳过、候选、生效、拉取与模型反馈；实际使用保留usage/provenance和receipt，反馈不得冒充质量结论。activity 新增 collection 的六态、待处理数、连续无产出数和下次时间是只读投影，现有知识页展示，不新增恢复按钮或配置。
+- **决策来源**：Agent 只能提案，Scheduler 拥有权限、预算、证据、结算和恢复；用户本轮明确授权自动项目整理，见 [ADR 0023](adr/0023-project-knowledge-collection.md)、[ADR 0024](adr/0024-project-knowledge-batching-admission.md) 与[专题](../PROJECT_KNOWLEDGE.md)。
+- **实现状态**：#752 生命周期、来源审计、独立评测/审查及最小 Job 预算拦截保留。本轮合批、节流、停发与 collection 投影按上述目标在共享工作树整合，无新 schema 或持久计数；历史 Job/Attempt、work、快照、回执和预算不改写。决策采纳不等于代码/最终 SHA Actions 验收通过，不表示运行实例已修复；不部署、不重跑历史生产任务，真实模型与注意力/质量收益未验证。
+- **代码入口**：[collector](../../apps/scheduler/src/domains/project-knowledge/collector.ts)；[准入查询](../../apps/scheduler/src/domains/project-knowledge/collection-policy.ts)；[调度唤醒](../../apps/scheduler/src/knowledge-wake.ts)；[工作链](../../apps/scheduler/src/domains/project-knowledge/work.ts)；[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)；[评测/结算](../../apps/scheduler/src/domains/project-knowledge/settlement.ts)；[activity](../../apps/scheduler/src/domains/project-knowledge/activity.ts)；[Control 契约](../../packages/shared-types/src/project-knowledge.ts)。
+- **验证证据**：Actions 的 `pnpm ci:unit:project-knowledge`、独立 `TEST_DATABASE_URL` 下 `pnpm ci:integration:project-knowledge` 和 `pnpm ci:unit:web-facts` 为既有入口；本轮待验来源门槛/间隔、32 候选装箱保留、跨项目、两次无产出、跨重启与治理变更、显式成功恢复、CAS 期间准入变化、未来 retry 与 activity/Web 投影。原去重/未知提交、6×2 评测及预算硬门继续保留。全部测试/build/typecheck 仅 Actions，最终 SHA 未验；#777 模型收益仍需独立证据，不改变 #752 历史验收。
 
 ### FR-KNOW-002 跨项目 Skill 精确授权
 

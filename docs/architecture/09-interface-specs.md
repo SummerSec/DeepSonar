@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-12
+> 同步日期：2026-11-16
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -301,8 +301,10 @@ Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_con
 
 `GET /projects/:id/knowledge/backfill` 要求 `projects:read` 与项目作用域，每页默认10、最多20条，返回当前资格/原因、来源登记及已有 work；不返回来源正文。无对应 POST 补做入口，不创建或恢复执行。
 
-本轮自动collector只消费持久登记，不改变backfill只读语义。`GET /projects/:id/knowledge/activity?limit=10&offset=0`沿用`projects:read`并在handler中严格核验项目scope；分页默认10、最多50，未知字段拒绝，授权范围内项目不存在返回404。返回summary、分页work items/next_offset与最近最多10条去重skipped_sources元数据；不返回来源正文、manifest、反馈正文或跨项目链接。字段机器入口为[知识OpenAPI](../../apps/scheduler/src/domains/project-knowledge/openapi.ts)、[路由](../../apps/scheduler/src/domains/project-knowledge/activity-routes.ts)和[Web类型](../../apps/web/src/ProjectKnowledgeApi.ts)，完整口径见[专题](../PROJECT_KNOWLEDGE.md#积累与复用可见性)。
+本轮自动collector只消费持久登记，不改变backfill只读语义。`GET /projects/:id/knowledge/activity?limit=10&offset=0`沿用`projects:read`并在handler中严格核验项目scope；分页默认10、最多50，未知字段拒绝，授权范围内项目不存在返回404。保留 summary、分页 work items/next_offset 与最近最多 10 条去重 skipped_sources 元数据，新增 `collection:{state,pending_sources,consecutive_failures,next_collection_at}`；不返回来源正文、manifest、反馈正文或跨项目链接。字段机器入口为[知识OpenAPI](../../apps/scheduler/src/domains/project-knowledge/openapi.ts)、[路由](../../apps/scheduler/src/domains/project-knowledge/activity-routes.ts)和[Web类型](../../apps/web/src/ProjectKnowledgeApi.ts)，完整口径见[专题](../PROJECT_KNOWLEDGE.md#积累与复用可见性)。
 
-summary分别计登记、已纳入整理、跳过、待采集、active Memory/Skill、draft、completed/blocked work及本项目拥有并消费的usage/feedback；pending排除collected/skipped去重并集。反馈success仅为模型报告；来源登记不等于产物，collected含排队不等于生效。items只含工作状态/安全原因、累计Job/时间、当前Job/Canvas、时间戳、最新提案状态和source_count；来源数按采集审计关联work_ref，显式work在无链接且有originJob时回退1。页面在目录前紧凑展示，详情按需展开、复用原刷新、隔离迟到响应，不新增轮询或人工激活入口。注意力成本见[专题表格](../PROJECT_KNOWLEDGE.md#注意力成本)。
+本轮 collection 由与 collector 事务重验及 durable wake 共用的数据库准入查询派生；`state` 仅为 `idle|busy|accumulating|cooldown|ready|halted`，分别表达无待处理、在途工作、等待来源积累或源 retry、自动批次最小间隔限制、已可准入、连续无产出停发。cooldown 仅当 cooldown_until 大于当前时间且不早于 accumulated_at，即自动间隔是最后限制；否则来源 retry 可表现为 accumulating，下次时间仍尊重 retry。`collection.pending_sources` 按可信源登记审计去重并排除已处理，而 summary 的采集审计另核验 work 存在；正常数据下口径一致，但 collection 与 summary 是两次只读查询，并发或损坏数据不保证同值，不承诺响应同一快照；`consecutive_failures` 从持久 work/proposal 历史计算自动批次无产出次数，不是源准备 retry；`next_collection_at` 为时间戳或 null，busy/halted/idle 不预告立即采集。4 来源或 24 小时、自动间隔 24 小时与两次无产出停发/显式成功恢复见 [ADR 0024](adr/0024-project-knowledge-batching-admission.md) 和[专题字段口径](../PROJECT_KNOWLEDGE.md#积累与复用可见性)。这是只读调度投影，不新增路由、持久生命周期、权限或恢复按钮；ready 不等于已派发或完成，最终 SHA Actions 待验。
+
+summary分别计登记、已纳入整理、跳过、待采集、active Memory/Skill、draft、completed/blocked work及本项目拥有并消费的usage/feedback；pending排除collected/skipped去重并集。反馈success仅为模型报告；来源登记不等于产物，collected含排队不等于生效。items只含工作状态/安全原因、累计Job/时间、当前Job/Canvas、时间戳、最新提案状态和source_count；来源数按采集审计关联work_ref，显式work在无链接且有originJob时回退1。页面在目录前紧凑展示，详情按需展开、复用原刷新、隔离迟到响应，同一知识页展示积累/冷却/执行中/停发和下次时间，不新增通知、设置、恢复按钮、轮询或人工激活入口。注意力成本见[专题表格](../PROJECT_KNOWLEDGE.md#注意力成本)。
 
 Control的evaluation_plan增加每例显式task_inputs，平台校验引用已在work冻结；assignment.source_mode标识project_collection，工具/网络隔离只可收紧。trial不接收评分rubric；evaluator/reviewer读取精确proposal绑定的evaluation输入。publish_shared_asset返回真实version.id/content_sha256用于Evidence引用，不能以operation ID代替版本。target comparator fail的容许不放宽candidate或安全组的pass门，也不允许unexecuted激活。契约见[共享schema](../../packages/shared-types/src/project-knowledge.ts)与[发布回执](../../apps/scheduler/src/shared-asset-publish-control.ts)。本轮源码与回归已接线，Actions尚未运行，未合并、未部署、未执行真实模型收益验证。
