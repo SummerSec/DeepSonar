@@ -128,6 +128,11 @@ test("only a settled successful explicit knowledge work clears project failures 
       idempotency_key,request_digest,input_digest,reason)
       VALUES(${first.projectId},${String(manual!.id)},'reuse','active',1,${first.jobId},
         ${randomUUID()},${GOVERNANCE},${GOVERNANCE},'settled fixture')`;
+    await db`UPDATE project_knowledge_work SET origin_job_id=${first.jobId},trigger_key=${`knowledge:auto:${first.jobId}`}
+      WHERE id=${String(manual!.id)}`;
+    assert.equal((await readProjectCollectionStatus(db, first.projectId)).state, "halted",
+      "historical automatic work cannot authorize a new chain");
+    await db`UPDATE project_knowledge_work SET trigger_key=${randomUUID()} WHERE id=${String(manual!.id)}`;
     assert.equal((await readProjectCollectionStatus(db, first.projectId)).consecutive_failures, 0);
     assert.equal((await readProjectCollectionStatus(db, other.projectId)).state, "halted");
     assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);

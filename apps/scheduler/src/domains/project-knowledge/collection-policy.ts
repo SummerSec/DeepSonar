@@ -54,6 +54,7 @@ export function projectCollectionPolicyQuery(db: KnowledgeDb, projectId?: string
       WHERE w.project_id=p.id AND w.trigger_key LIKE ${PROJECT_COLLECTION_PREFIX + "%"}) latest ON true
     LEFT JOIN LATERAL (SELECT MAX(w.updated_at) AS updated_at FROM project_knowledge_work w
       WHERE w.project_id=p.id AND w.state='completed'
+        AND NOT ${automaticPreparationPredicate(db)}
         AND EXISTS(SELECT 1 FROM project_knowledge_proposals proposal WHERE proposal.project_id=p.id
           AND proposal.work_id=w.id AND proposal.state IN ('active','retired'))) success ON true
     WHERE p.status='active' ${projectId ? db`AND p.id=${projectId}` : db``}
