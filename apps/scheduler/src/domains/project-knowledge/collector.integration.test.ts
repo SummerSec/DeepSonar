@@ -18,8 +18,52 @@ async function source(db: TestSql, projectId?: string, count = 1, label = "sourc
   await db`UPDATE jobs SET status='succeeded',finished_at=now() WHERE id=${job.jobId}`;
   await db`UPDATE job_attempts SET status='succeeded',phase='terminal',finished_at=now() WHERE id=${job.attemptId}`;
   await db.begin(async tx => { await registerKnowledgeSourceAfterTerminal(tx as never, job.jobId, "succeeded"); });
+  // Existing preparation tests deliberately start after the accumulation deadline.
+  await db`UPDATE audit_logs SET at=now()-interval '25 hours'
+    WHERE action='project_knowledge.source_registered' AND resource_id=${job.jobId}`;
   return job;
 }
+
+test("a fresh small project accumulates sources without creating work or an immediate wake", async () => {
+  await withKnowledgeDatabase(async db => {
+    const job = await source(db);
+    await db`UPDATE audit_logs SET at=now() WHERE resource_id=${job.jobId}`;
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0);
+    assert.equal((await db`SELECT id FROM audit_logs WHERE action='project_knowledge.source_registered'`).length, 1);
+    const wake = await readNextKnowledgeWake(db);
+    assert.ok(wake && wake.getTime() > Date.now() + 23 * 3600_000);
+  });
+});
+
+test("new sources stay queued after two unproductive automatic batches, across restarts and governance changes", async () => {
+  for (const state of ["blocked", "cancelled", "completed"]) await withKnowledgeDatabase(async db => {
+    const job = await source(db);
+    for (const n of [2, 3]) await db`INSERT INTO project_knowledge_work
+      (project_id,trigger_key,governance_hash,state,created_at,updated_at)
+      VALUES(${job.projectId},${`knowledge:project:failed-${n}`},${GOVERNANCE},${state},
+        now()-${n}*interval '1 day',now()-${n}*interval '1 day')`;
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
+    assert.equal(await collectProjectKnowledgeSources(db, "b".repeat(64)), 0);
+    assert.equal(await readNextKnowledgeWake(db), null, "halted projects must not spin the Dispatcher timer");
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 2);
+    assert.equal((await db`SELECT id FROM audit_logs WHERE action='project_knowledge.source_collected'`).length, 0);
+  });
+});
+
+test("a bounded batch combines more than four small sources and preserves the daily project cooldown", async () => {
+  await withKnowledgeDatabase(async db => {
+    const first = await source(db);
+    for (let n = 0; n < 5; n++) await source(db, first.projectId);
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
+    assert.equal((await db`SELECT id FROM audit_logs WHERE action='project_knowledge.source_collected'`).length, 6);
+    await db`UPDATE project_knowledge_work SET state='blocked',reason='job_timeout'`;
+    await source(db, first.projectId);
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
+    const wake = await readNextKnowledgeWake(db);
+    assert.ok(wake && wake.getTime() > Date.now() + 23 * 3600_000);
+  });
+});
 
 test("registered Jobs are collected in one project batch, once across concurrent collectors and restarts", async () => {
   await withKnowledgeDatabase(async db => {
