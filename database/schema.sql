@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 73);
+INSERT INTO schema_meta (id, version) VALUES ('global', 74);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -117,6 +117,8 @@ CREATE TABLE jobs (
 CREATE UNIQUE INDEX jobs_ingress_key_uniq ON jobs (project_id, ingress_key)
   WHERE ingress_key IS NOT NULL;
 CREATE INDEX jobs_list_idx ON jobs (project_id, status, created_at DESC);
+-- #1136：不带 status 的列表（工作台默认视图）走该索引；带 status 的仍用 jobs_list_idx
+CREATE INDEX jobs_project_created_idx ON jobs (project_id, created_at DESC, id DESC);
 CREATE INDEX jobs_pending_idx ON jobs (status, priority DESC, created_at)
   WHERE status = 'pending';
 CREATE INDEX jobs_lease_idx ON jobs (lease_expires_at) WHERE status = 'running';

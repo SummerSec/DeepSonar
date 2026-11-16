@@ -50,3 +50,13 @@ test("job stream HTTP envelope no longer duplicates items as events", () => {
   assert.doesNotMatch(source, /events: result\.items/);
   assert.doesNotMatch(source, /compatibility alias while `items`/);
 });
+
+test("#1136 不带 status 的 Job 列表有匹配排序的索引基线", () => {
+  const schema = readFileSync(new URL("../../../../../database/schema.sql", import.meta.url), "utf8");
+  assert.match(schema, /CREATE INDEX jobs_project_created_idx ON jobs \(project_id, created_at DESC, id DESC\);/u);
+  const routes = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  // 列表查询仍按 (project_id 等值, created_at DESC, id DESC) 形状，与新索引一致；
+  // 带 status 的查询继续用 jobs_list_idx（两索引并存）。
+  assert.match(routes, /ORDER BY j\.created_at DESC, j\.id DESC/u);
+  assert.match(schema, /CREATE INDEX jobs_list_idx ON jobs \(project_id, status, created_at DESC\);/u);
+});
