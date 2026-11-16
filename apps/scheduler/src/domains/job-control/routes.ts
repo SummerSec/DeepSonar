@@ -1,3 +1,4 @@
+import { observe } from "../../metrics.js";
 import { readCompletionExecutionState } from "../platform-api/completion-state.js";
 import { withWaitingExecutionStates } from "./list-execution-state.js";
 import { readHumanContinuation } from "./human-continuation-store.js";
@@ -281,6 +282,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       return reply.code(400).send({ error: "invalid jobs cursor", error_code: "INVALID_CURSOR" });
     }
     const limit = paginated ? pageLimit(q.limit) : 200;
+    const queryStartedAt = performance.now();
     const rows = await sql<Array<Record<string, unknown> & { id: string; status: string }>>`
       SELECT j.id, j.project_id, j.canvas_id, j.type, j.status, j.priority, j.error,
              j.started_at, j.finished_at, j.created_at,
@@ -302,6 +304,8 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
           OR (j.created_at = ${cursor?.created_at ?? null}::timestamptz AND j.id < ${cursor?.id ?? null}::uuid))
       ORDER BY j.created_at DESC, j.id DESC
       LIMIT ${paginated ? limit + 1 : limit}`;
+    // #1136：列表查询耗时分布（P50/P95），只记 SQL 段，标签为低基数
+    observe("deepsonar_api_list_query_seconds", (performance.now() - queryStartedAt) / 1000, { endpoint: "jobs", paginated: paginated ? "yes" : "no" });
     const items = await withWaitingExecutionStates(rows.slice(0, limit), id => readCompletionExecutionState(sql, id))
       .then(items => items.map(row => projectJobProviderFields(row as Record<string, unknown>)));
     if (!paginated) return items;

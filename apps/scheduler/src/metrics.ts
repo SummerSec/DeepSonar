@@ -21,6 +21,35 @@ export function inc(name: string, labels?: Record<string, string>, n = 1): void 
   counters.set(k, (counters.get(k) ?? 0) + n);
 }
 
+/** 直方图桶（秒）：覆盖列表查询从毫秒级到退化到数十秒的区间，桶边界保持低基数。 */
+const OBSERVE_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30] as const;
+
+interface ObserveSample {
+  counts: number[];
+  sum: number;
+  count: number;
+}
+
+const observes = new Map<string, { name: string; labels?: Record<string, string>; sample: ObserveSample }>();
+
+/**
+ * 记录一次耗时观测（秒），Prometheus histogram 语义（#1136：列表 P50/P95）。
+ * 只允许低基数标签；进程内累计，重启清零，和既有 counter 口径一致。
+ */
+export function observe(name: string, seconds: number, labels?: Record<string, string>): void {
+  if (!Number.isFinite(seconds) || seconds < 0) return;
+  if (!(name in OBSERVE_HELP)) throw new Error(`未登记的直方图：${name}`);
+  const k = key(name, labels);
+  const entry = observes.get(k) ?? { name, labels, sample: { counts: OBSERVE_BUCKETS.map(() => 0), sum: 0, count: 0 } };
+  const sample = entry.sample;
+  OBSERVE_BUCKETS.forEach((bound, index) => {
+    if (seconds <= bound) sample.counts[index] += 1;
+  });
+  sample.sum += seconds;
+  sample.count += 1;
+  observes.set(k, entry);
+}
+
 /** 更新由后台对账维护的进程内 gauge；抓取路径不得在这里访问 Docker 等外部系统。 */
 export function setGauge(name: string, value: number): void {
   if (!Number.isFinite(value) || value < 0) throw new Error(`无效的 gauge 值：${name}`);
@@ -149,6 +178,10 @@ const HELP: Record<string, string> = {
   deepsonar_skill_catalog_changed_total: "Skill source syncs whose catalog commit/content actually changed, by source",
 };
 
+const OBSERVE_HELP: Record<string, string> = {
+  deepsonar_api_list_query_seconds: "Job 列表查询（GET /jobs）耗时分布，按是否分页区分（#1136）",
+};
+
 const PROCESS_GAUGE_HELP: Record<string, string> = {
   deepsonar_shared_assets_orphan_volumes: "对应 Job 已非活跃状态的受管共享资产卷数量",
   deepsonar_shared_assets_orphan_volume_age_seconds: "对应 Job 已非活跃状态的受管共享资产卷最大年龄秒数",
@@ -188,6 +221,19 @@ export async function renderMetrics(): Promise<string> {
       }
     } catch {
       // Scrape failure must not invent zero-age samples; no enabled sources also legitimately yields no samples.
+    }
+  }
+  for (const [name, help] of Object.entries(OBSERVE_HELP)) {
+    const samples = [...observes.values()].filter((entry) => entry.name === name);
+    if (samples.length === 0) continue; // 无观测即不输出，避免虚构 0 样本
+    out.push(`# HELP ${name} ${help}`, `# TYPE ${name} histogram`);
+    for (const { labels, sample } of samples) {
+      OBSERVE_BUCKETS.forEach((bound, index) => {
+        out.push(`${key(`${name}_bucket`, { ...labels, le: String(bound) })} ${sample.counts[index]}`);
+      });
+      out.push(`${key(`${name}_bucket`, { ...labels, le: "+Inf" })} ${sample.count}`);
+      out.push(`${key(`${name}_sum`, labels)} ${sample.sum}`);
+      out.push(`${key(`${name}_count`, labels)} ${sample.count}`);
     }
   }
   for (const [name, help] of Object.entries(PROCESS_GAUGE_HELP)) {
