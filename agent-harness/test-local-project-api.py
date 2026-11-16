@@ -28,8 +28,34 @@ def req(method, path, body=None, expect=200):
     return payload
 
 
+def wait_for_claim_quiescence(max_seconds=900, interval=30):
+    """创建 hub Job 前等全局认领面空闲（#1118 观测的测试缓解）。
+
+    gate-e2e 的 smoke 顺序里，前一个脚本（如 test-hub-loop）遗留的
+    claimed/provisioning Job 会占满 maxConcurrentProvisioning 槽位，本脚本的
+    新 pending Job 会被饿满整个收敛窗口。fail-open：超时后打警告继续，
+    不打断链路验收——多租户公平性本身由 #1118 的人工决策处理。
+    """
+    deadline = time.time() + max_seconds
+    warned = False
+    while time.time() < deadline:
+        claimed = req("GET", "/jobs?status=claimed", expect=None)[1]
+        provisioning = req("GET", "/jobs?status=provisioning", expect=None)[1]
+        if not claimed and not provisioning:
+            if warned:
+                print("全局认领面已空闲，继续创建 hub Job")
+            return
+        if not warned:
+            print(f"全局认领面忙：claimed={len(claimed)} provisioning={len(provisioning)}，最多等 {max_seconds}s")
+            warned = True
+        time.sleep(interval)
+    print(f"警告:{max_seconds}s 内认领面未空闲（claimed={len(claimed)} provisioning={len(provisioning)}），继续执行（多租户公平性由 #1118 人工决策处理）")
+
+
 def main():
     tag = uuid.uuid4().hex[:6]
+    # 0. 前序 smoke 的认领残留会占满 provisioning 槽位（#1118）；先等它们离开
+    wait_for_claim_quiescence(600, 20)
 
     # 1. 创建项目
     p = req("POST", "/projects", {"name": f"本地项目-{tag}", "description": "阶段A验收"}, 201)
