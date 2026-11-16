@@ -12,6 +12,7 @@
 | 修正 token | `DEEPSONAR_REPAIR_MAX_TOKENS` 默认 0，正数上限 2000000；首次拒绝冻结 0 为无限，正数为有限；历史 null/缺失保持关闭 | `domains/event-ingestion/repair-token-budget.ts` |
 | Hub 总轮数 | `DEEPSONAR_HUB_MAX_ROUNDS` 默认 0；支持 `unlimited`，正数上限 10000 | `config.ts` |
 | Finding 验证轮数 | `maxVerificationRounds` 默认 0；显式 1–20 限制，非法值拒绝；无进展检测单独保留 | `core.ts`、`verify.ts` |
+| Verify 补证无进展 | 补证回弹连续 `VERIFY_NO_PROGRESS_LIMIT`（2）次缺失集合完全相同即收口 `needs_human`（稳定码 `verify_no_progress`）；不依赖配置，轮次不重置 | `verify-no-progress.ts` |
 | 图查询累计调用/字节 | `DEEPSONAR_GRAPH_QUERY_MAX_CALLS` / `DEEPSONAR_GRAPH_QUERY_MAX_BYTES` 默认 0；返回剩余值 null 表示不限，继续记录使用量；已 blocked 的会话不解封；独立单响应 512000 UTF-8 bytes 硬上限包含引用与元数据，超限不写授权状态 | `graph-query.ts` |
 | LSP / CLI 能力调用 | 缺失或 0 不限，正数上限 10000；内置目录不再默认有限；LSP adapter 执行显式调用上限，CLI 字段目前为声明，不冒充已执行计数 | `language-server-adapter.mjs`、能力目录与共享 schema |
 | 内置 Capability Pack token | 不填 `max_tokens`，保留显式声明能力；不是新增的消费计量器 | `domains/capability-pack/catalog.ts` |
