@@ -35,9 +35,10 @@ export interface VerifyRoundProgress {
   missing: unknown;
 }
 
-function roundMissing(value: unknown): string[] {
-  if (Array.isArray(value)) return value.filter((entry): entry is string => typeof entry === "string");
-  return [];
+/** 只有数组才是可比的历史缺失集合；null/缺字段表示「无该口径」→ 不可比（不能当作空集合）。 */
+function comparableRoundMissing(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.filter((entry): entry is string => typeof entry === "string");
 }
 
 /**
@@ -52,7 +53,9 @@ export function noProgressStreak(rounds: readonly VerifyRoundProgress[], missing
   let streak = 0;
   for (const round of rounds) {
     if (round.final_outcome !== "rework") break;
-    if (missingFingerprint(roundMissing(round.missing)) !== current) break;
+    const historical = comparableRoundMissing(round.missing);
+    if (historical === null) break; // 旧快照没有 decision_missing：不可比，直接中断（宁可少收口）
+    if (missingFingerprint(historical) !== current) break;
     streak += 1;
   }
   return streak;

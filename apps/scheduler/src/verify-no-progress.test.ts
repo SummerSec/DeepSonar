@@ -26,6 +26,12 @@ test("#1133 连续同指纹的回弹才计数，缺失集合一旦缩小即视�
   assert.equal(noProgressStreak([{ final_outcome: "rework", missing: ["runtime_test", "independent_review"] }, ...runtime], ["runtime_test"]), 0);
   // 其它终态（已收口）不参与计数。
   assert.equal(noProgressStreak([{ final_outcome: "needs_human", missing: ["runtime_test"] }], ["runtime_test"]), 0);
+  // 旧快照（无 decision_missing）不可比：即便本次缺失集合为空也不能算无进展（评审 P2）。
+  assert.equal(noProgressStreak([{ final_outcome: "rework", missing: null }], []), 0);
+  assert.equal(reachedNoProgressLimit([{ final_outcome: "rework", missing: null }], []), false);
+  assert.equal(reachedNoProgressLimit([{ final_outcome: "rework", missing: null }, { final_outcome: "rework", missing: null }], []), false);
+  // 真正的空集合是可比的：连续空集合仍按无进展计数。
+  assert.equal(noProgressStreak([{ final_outcome: "rework", missing: [] }], []), 1);
   // 顺序差异不算进展。
   assert.equal(noProgressStreak([{ final_outcome: "rework", missing: ["independent_review", "runtime_test"] }], ["runtime_test", "independent_review"]), 1);
 });
