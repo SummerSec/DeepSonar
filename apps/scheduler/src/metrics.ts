@@ -179,7 +179,7 @@ const HELP: Record<string, string> = {
 };
 
 const OBSERVE_HELP: Record<string, string> = {
-  deepsonar_api_list_query_seconds: "Job 列表查询（GET /jobs）耗时分布，按是否分页区分（#1136）",
+  deepsonar_api_list_query_seconds: "Job 列表查询（GET /jobs）耗时分布，按分页与结果（success/error）区分；失败查询同样计入（#1136）",
 };
 
 const PROCESS_GAUGE_HELP: Record<string, string> = {

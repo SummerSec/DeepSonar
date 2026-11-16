@@ -283,7 +283,8 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
     }
     const limit = paginated ? pageLimit(q.limit) : 200;
     const queryStartedAt = performance.now();
-    const rows = await sql<Array<Record<string, unknown> & { id: string; status: string }>>`
+    let queryResult: "success" | "error" = "success";
+    const rows = await (async () => sql<Array<Record<string, unknown> & { id: string; status: string }>>`
       SELECT j.id, j.project_id, j.canvas_id, j.type, j.status, j.priority, j.error,
              j.started_at, j.finished_at, j.created_at,
              p.name AS project_name, c.title AS canvas_title,
@@ -303,9 +304,19 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
           OR j.created_at < ${cursor?.created_at ?? null}::timestamptz
           OR (j.created_at = ${cursor?.created_at ?? null}::timestamptz AND j.id < ${cursor?.id ?? null}::uuid))
       ORDER BY j.created_at DESC, j.id DESC
-      LIMIT ${paginated ? limit + 1 : limit}`;
-    // #1136：列表查询耗时分布（P50/P95），只记 SQL 段，标签为低基数
-    observe("deepsonar_api_list_query_seconds", (performance.now() - queryStartedAt) / 1000, { endpoint: "jobs", paginated: paginated ? "yes" : "no" });
+      LIMIT ${paginated ? limit + 1 : limit}`)()
+      .catch((error: unknown) => {
+        queryResult = "error";
+        throw error;
+      })
+      .finally(() => {
+        // #1136：只记 SQL 段；失败也记（否则最慢的失败样本会从分位数里消失），异常照常透传
+        observe("deepsonar_api_list_query_seconds", (performance.now() - queryStartedAt) / 1000, {
+          endpoint: "jobs",
+          paginated: paginated ? "yes" : "no",
+          result: queryResult,
+        });
+      });
     const items = await withWaitingExecutionStates(rows.slice(0, limit), id => readCompletionExecutionState(sql, id))
       .then(items => items.map(row => projectJobProviderFields(row as Record<string, unknown>)));
     if (!paginated) return items;

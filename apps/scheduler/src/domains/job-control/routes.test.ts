@@ -55,6 +55,9 @@ test("GET /jobs 的查询耗时必须进指标直方图（#1136 建议 D）", ()
   const source = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
   assert.match(source, /import \{ observe \} from "\.\.\/\.\.\/metrics\.js"/);
   assert.match(source, /observe\("deepsonar_api_list_query_seconds", \(performance\.now\(\) - queryStartedAt\) \/ 1000/);
+  // 评审 P2：失败查询也必须进样本，异常照常透传
+  assert.match(source, /\.catch\(\(error: unknown\) => \{\s*queryResult = "error";\s*throw error;/);
+  assert.match(source, /result: queryResult/);
   // 只覆盖 SQL 段：测量起点在 limit 计算之后、SELECT 之前
   assert.ok(source.indexOf("const queryStartedAt = performance.now();") < source.indexOf("SELECT j.id, j.project_id"));
 });
