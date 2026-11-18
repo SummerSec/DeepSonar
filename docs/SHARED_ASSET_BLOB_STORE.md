@@ -1,7 +1,7 @@
 # Shared Asset BlobStore
 
 > 状态：**as-built（#41/#158）与 #871 当前修复边界**。最终修复 SHA 的 Actions 尚待验收；Index: [`README.md`](README.md)。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-18
 
 Shared assets keep **metadata in PostgreSQL** and **bytes in a pluggable BlobStore**.
 
@@ -102,6 +102,19 @@ export BLOB_S3_FORCE_PATH_STYLE=true
 3. Job provision → BlobStore `materializeLocal` (S3 downloads into `BLOB_S3_CACHE_DIR`) → read-only named volume `:ro` at `/workspace/.deepsonar/shared`  
 
 `blob_uri` in the database stays the logical CAS path. Object keys in the bucket are `BLOB_S3_PREFIX` + that path when a prefix is set.
+
+### 逻辑键不能「既当文件又当目录」（#1144）
+
+挂载是普通目录树：`a/b.json` 与 `a/b.json/c.csv` 并存时，`cp` 先写出文件、再为子路径
+`mkdir` 就会 `EEXIST`，一条冲突会让整个 Job 在 provision 之前失败（现场一次 2898 条资产全灭）。
+
+- 发布期：`createSharedAsset` 在 scope 级 advisory lock / transaction 内做前缀检查。命名空间与挂载
+  命名空间一致（`platform` / 单个 `project` / 单个 `finding`），因此不同 Finding 的同名前缀不算冲突。
+  命中即返回 `shared_asset_path_conflict`，消息给出**两个冲突键**；Agent 发布侧把它转为可重试的
+  `invalid_payload`（`path` 为 `key`），HTTP 上传返回 409。
+- 物化侧（纵深防御）：`assertSharedAssetManifestPaths` 在 staging 之前检查同一挂载根的清单前缀，
+  以及保留名 `catalog.json`，抛出 `shared_assets_manifest_conflict`（含两个键），不再把原始
+  `EEXIST` + 随机 staging 路径冒到 Job 终态。存量冲突数据仍需人工改名或归档后重派。
 
 ### Agent tools vs storage backend
 

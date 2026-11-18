@@ -58,6 +58,18 @@ if (!testDatabaseUrl) {
       assert.equal(upload.statusCode, 201, upload.payload);
       const first = upload.json() as { id: string; version_id: string; content_sha256: string };
       assert.equal(first.content_sha256, createHash("sha256").update(firstBytes).digest("hex"));
+      // #1144：同一作用域内「文件又当目录」在发布期就被拒绝，并具名两个冲突键。
+      const childConflict = await app.inject({ method: "POST", url: `/projects/${projectId}/shared-assets`, headers: { ...headers, "x-asset-key": "scripts/reproduce.sh/nested/child.csv" }, payload: Buffer.from("child") });
+      assert.equal(childConflict.statusCode, 409, childConflict.payload);
+      assert.match(String(childConflict.json().error), /shared_asset_path_conflict/);
+      assert.match(String(childConflict.json().error), /scripts\/reproduce\.sh/);
+      assert.match(String(childConflict.json().error), /scripts\/reproduce\.sh\/nested\/child\.csv/);
+      const parentTarget = await app.inject({ method: "POST", url: `/projects/${projectId}/shared-assets`, headers: { ...headers, "x-asset-key": "tree/leaf.md" }, payload: Buffer.from("leaf") });
+      assert.equal(parentTarget.statusCode, 201, parentTarget.payload);
+      const parentConflict = await app.inject({ method: "POST", url: `/projects/${projectId}/shared-assets`, headers: { ...headers, "x-asset-key": "tree" }, payload: Buffer.from("tree") });
+      assert.equal(parentConflict.statusCode, 409, parentConflict.payload);
+      assert.match(String(parentConflict.json().error), /shared_asset_path_conflict/);
+      assert.match(String(parentConflict.json().error), /tree\/leaf\.md/);
       assert.equal((await app.inject({ method: "POST", url: `/projects/${projectId}/shared-assets`, headers, payload: firstBytes })).statusCode, 409);
       const invalidBody = await app.inject({ method: "POST", url: `/projects/${projectId}/shared-assets`, headers: { ...headers, "content-type": "application/json", "x-asset-key": "docs/not-binary.json" }, payload: { injected: true } });
       assert.equal(invalidBody.statusCode, 400, invalidBody.payload);
@@ -67,6 +79,9 @@ if (!testDatabaseUrl) {
       assert.equal(findingUpload.statusCode, 201, findingUpload.payload);
       const findingVersionId = (findingUpload.json() as { version_id: string }).version_id;
       assert.equal((await app.inject({ method: "GET", url: `/findings/${findingId}/shared-assets`, headers: { authorization: `Bearer ${token.plaintext}` } })).json().items.length, 1);
+      // Finding 与 project 是不同挂载命名空间：同名前缀不构成冲突。
+      const crossNamespace = await app.inject({ method: "POST", url: `/projects/${projectId}/shared-assets`, headers: { ...headers, "x-asset-key": "poc/request.txt/child.txt" }, payload: Buffer.from("project child") });
+      assert.equal(crossNamespace.statusCode, 201, crossNamespace.payload);
 
       const platformUpload = await app.inject({ method: "POST", url: "/platform/shared-assets", headers: { authorization: "Bearer issue41-admin", "content-type": "application/octet-stream", "x-asset-key": "docs/baseline.md", "x-asset-content-type": "text/markdown" }, payload: Buffer.from("baseline") });
       assert.equal(platformUpload.statusCode, 201, platformUpload.payload);
@@ -88,6 +103,10 @@ if (!testDatabaseUrl) {
         /immutable_asset_key_exists/,
       );
       const agentFirst = await sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar", contentType: "application/java-archive", bytes: Buffer.from("agent-v1"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId, ...agentIdentity });
+      await assert.rejects(
+        sharedModule.createSharedAsset({ scope: "project", projectId, key: "dist/build.jar/nested.bin", contentType: "application/octet-stream", bytes: Buffer.from("nested"), origin: "agent", actor: `job:${agentJobId}`, jobId: agentJobId, ...agentIdentity }),
+        /shared_asset_path_conflict/,
+      );
 
       const frozen = await sharedModule.resolveSharedAssetSelection(sql, projectId, [findingId]);
       assert.deepEqual(new Set(frozen.assets.map((asset) => asset.scope)), new Set(["platform", "project", "finding"]));
