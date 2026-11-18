@@ -18,11 +18,12 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
   process.env.DEEPSONAR_AUTH_REQUIRED = "false"; process.env.DEEPSONAR_MASTER_KEY = "24".repeat(32);
   process.env.DEEPSONAR_REPAIR_MAX_TOKENS = "30";
   const [{ default: Fastify }, { default: websocket }, { sql, migrate }, { registerRoutes }, core,
-    snapshots, attempts, dispatcher, gateway, api, receipts, budgets, { encryptSecret }, { renewCurrentAttemptLease }, { config }, { createSqlJobLifecycleApplication }] = await Promise.all([
+    snapshots, attempts, dispatcher, gateway, api, receipts, budgets, { encryptSecret }, { renewCurrentAttemptLease }, { config }, { createSqlJobLifecycleApplication }, retry] = await Promise.all([
     import("fastify"), import("@fastify/websocket"), import("./db.js"), import("./routes.js"), import("./core.js"),
     import("./domains/role-runtime-snapshot/index.js"), import("./domains/job-attempt/index.js"), import("./dispatcher.js"),
     import("./gateway.js"), import("./domains/platform-api/index.js"), import("./domains/event-ingestion/completion-receipt.js"),
     import("./domains/event-ingestion/repair-token-budget.js"), import("./credentials.js"), import("./attempt-lease.js"), import("./config.js"), import("./domains/job-lifecycle/index.js"),
+    import("./job-execution-retry.js"),
   ]);
   const upstream = Fastify(), app = Fastify();
   let upstreamCalls = 0;
@@ -970,7 +971,7 @@ test("manual repair generation: HTTP admission, Gateway accounting and final set
       const claims = await dispatcher.claimPendingJobs(); assert.ok(claims.some(row => row.id === successor.jobId));
       const [attempt] = await sql`SELECT * FROM job_attempts WHERE job_id=${successor.jobId} AND status='active'`;
       await sql`UPDATE jobs SET status='provisioning',started_at=NULL WHERE id=${successor.jobId}`;
-      assert.equal(await dispatcher.retryProvisioningJob(successor.jobId, attempt, "synthetic preparation failure"), false);
+      assert.equal(await retry.retryProvisioningJob(successor.jobId, attempt, "synthetic preparation failure"), false);
       const [state] = await sql`SELECT count(*)::int AS count,MAX(attempt_no) AS last FROM job_attempts WHERE job_id=${successor.jobId}`;
       assert.equal(state.count, 2); assert.equal(state.last, 2);
       assert.equal((await readBudget(successor.jobId))?.attempt_id, String(attempt.id));

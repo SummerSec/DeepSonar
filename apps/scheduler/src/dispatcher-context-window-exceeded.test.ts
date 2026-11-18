@@ -43,8 +43,9 @@ test("pi stream truncation and auth errors stay distinct from context_window_exc
 
 test("dispatcher retries context window exceeded once via compact+requeue, then terminals", () => {
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
-  assert.match(source, /planAutomaticContextWindowRetry\(countConsumedContextWindowRetries\(previous\)\)/);
-  assert.match(source, /txLifecycle\.retryContextWindowExceeded\(/);
+  const retrySource = readFileSync(new URL("./job-execution-retry.ts", import.meta.url), "utf8");
+  assert.match(retrySource, /planAutomaticContextWindowRetry\(countConsumedContextWindowRetries\(previous\)\)/);
+  assert.match(retrySource, /txLifecycle\.retryContextWindowExceeded\(/);
   assert.match(source, /handle && attemptId && activeAttempt && isRetryableContextWindowExceeded/);
   assert.match(source, /inc\("deepsonar_agent_context_window_exceeded_total"\)/);
   assert.match(source, /inc\("deepsonar_context_window_exceeded_retry_total"\)/);

@@ -440,7 +440,7 @@ test("Dispatcher contract: bounded keyset pages keep Canvas → Job → Attempt 
   const source = await readFile(new URL("./dispatcher.ts", import.meta.url), "utf8");
   const start = source.indexOf("export async function claimPendingJobs");
   assert.ok(start >= 0);
-  const claim = source.slice(start, source.indexOf("async function retryProvisioningJob", start));
+  const claim = source.slice(start, source.indexOf("export async function dispatchOnce"));
   const canvasLock = claim.indexOf("ORDER BY id FOR SHARE SKIP LOCKED");
   const jobLock = claim.indexOf("FOR UPDATE OF j SKIP LOCKED");
   assert.ok(canvasLock >= 0 && jobLock > canvasLock);

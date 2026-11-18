@@ -38,8 +38,9 @@ test("schema, auth, and empty-model errors stay fail closed", () => {
 
 test("dispatcher retries truncation from running via a new Attempt, not provision CAS", () => {
   const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
-  assert.match(source, /planAutomaticPiStreamTruncationRetry\(countConsumedPiStreamTruncationRetries\(previous\)\)/);
-  assert.match(source, /txLifecycle\.retryTruncatedExecution\(/);
+  const retrySource = readFileSync(new URL("./job-execution-retry.ts", import.meta.url), "utf8");
+  assert.match(retrySource, /planAutomaticPiStreamTruncationRetry\(countConsumedPiStreamTruncationRetries\(previous\)\)/);
+  assert.match(retrySource, /txLifecycle\.retryTruncatedExecution\(/);
   assert.match(source, /handle && attemptId && activeAttempt && isRetryablePiStreamTruncation/);
   assert.match(source, /inc\("deepsonar_pi_stream_truncation_retry_total"\)/);
   assert.doesNotMatch(source, /attempt_no\s*>\s*MAX_AUTOMATIC_PI_STREAM_TRUNCATION_RETRIES/);

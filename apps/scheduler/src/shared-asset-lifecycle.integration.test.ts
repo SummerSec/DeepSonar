@@ -66,7 +66,8 @@ if (!testDatabaseUrl) {
       const { config } = await import("./config.js");
       const recovery = await import("./domains/job-attempt/recovery.js");
       const { renewCurrentAttemptLease } = await import("./attempt-lease.js");
-      const { claimPendingJobs, lockCurrentProvisioningAttempt, retryProvisioningJob } = await import("./dispatcher.js");
+      const { claimPendingJobs, lockCurrentProvisioningAttempt } = await import("./dispatcher.js");
+      const { retryProvisioningJob } = await import("./job-execution-retry.js");
       const { acquireSharedAssetPreparation, cleanupSharedAssetsForJob, cleanupSandboxResourceForJob,
         SharedAssetLifecycleConflictError } = await import("./shared-asset-lifecycle.js");
       const { beginEffect, createAttempt, markEffectUnknown, requestAttemptCancel, settleAttemptTerminal,

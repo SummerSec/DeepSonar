@@ -66,7 +66,8 @@ test("sidecar retry after a non-provision attempt still has budget", () => {
 });
 
 test("dispatcher provision retry budget is counted attempts, not attempt_no", () => {
-  const source = readFileSync(new URL("./dispatcher.ts", import.meta.url), "utf8");
+  // #1143 把这几个重派函数拆到 job-execution-retry.ts；预算与 attempt_no 的契约在那里核。
+  const source = readFileSync(new URL("./job-execution-retry.ts", import.meta.url), "utf8");
   assert.match(source, /planAutomaticProvisionRetry\(countConsumedProvisionRetries\(previous\)\)/);
   assert.match(source, /FROM job_attempts/);
   assert.doesNotMatch(source, /attempt_no\s*>\s*MAX_AUTOMATIC_PROVISION_RETRIES/);
@@ -81,7 +82,8 @@ test("source contract: opaque started failure stays unknown; retry requires curr
   assert.match(failure, /await lockCurrentProvisioningAttempt/);
   assert.match(failure, /throw new AggregateError\(\[error, settlementError\]/);
   assert.doesNotMatch(failure, /\.catch\(\(\) => \{\}\)/);
-  const retry = source.slice(source.indexOf("export async function retryProvisioningJob"), source.indexOf("async function retryTruncatedExecutionJob"));
+  const retrySource = readFileSync(new URL("./job-execution-retry.ts", import.meta.url), "utf8");
+  const retry = retrySource.slice(retrySource.indexOf("export async function retryProvisioningJob"), retrySource.indexOf("export async function retryTruncatedExecutionJob"));
   assert.match(retry, /owner\.latest_attempt_id !== attempt\.id/);
   assert.match(retry, /typeof current\.id !== "string" \|\| current\.id !== attempt\.id/);
   assert.match(retry, /COALESCE\(settlement_json @> '\{"result":"never_started","external_effect":false\}'::jsonb, false\)/);

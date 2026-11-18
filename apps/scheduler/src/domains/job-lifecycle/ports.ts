@@ -25,6 +25,7 @@ export interface JobLifecycleOperations {
   claimPendingJob: (jobId: string) => Promise<JobLifecycleRow | null>;
   retryProvisioning: (jobId: string, error: string, snapshotIdentity: Record<string, string>, resourceLabels: Record<string, string>, reason?: "provision_retry" | "provision_admission_deferred") => Promise<JobLifecycleRow | null>;
   retryTruncatedExecution: (jobId: string, error: string, snapshotIdentity: Record<string, string>, resourceLabels: Record<string, string>) => Promise<JobLifecycleRow | null>;
+  retryPtyTransportExecution: (jobId: string, error: string, snapshotIdentity: Record<string, string>, resourceLabels: Record<string, string>) => Promise<JobLifecycleRow | null>;
   retryContextWindowExceeded: (jobId: string, error: string, snapshotIdentity: Record<string, string>, resourceLabels: Record<string, string>) => Promise<JobLifecycleRow | null>;
   failExecution: (jobId: string, error: string) => Promise<JobLifecycleRow | null>;
   reapExecutionTimeout: () => Promise<JobLifecycleRow[]>;

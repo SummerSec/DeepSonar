@@ -1,6 +1,6 @@
 import { cleanupDispatcherSandbox } from "./dispatcher-human-wait.js";
 import { humanExecutionStartedAt } from "./domains/job-control/human-continuation-clock.js";
-import { preflightHumanContinuation, assertContinuationExecutionOwner, hasHumanOrRepairBoundary } from "./domains/job-control/human-continuation-dispatch.js";
+import { preflightHumanContinuation, assertContinuationExecutionOwner } from "./domains/job-control/human-continuation-dispatch.js";
 import { frozenGatewayRequestBudget, GatewayRequestBudgetError } from "./gateway-request-policy.js";
 import { recordGatewaySnapshotNoStart } from "./gateway-snapshot-no-start.js";
 import { frozenTaskContract, taskContractPreflight, TaskContractBlockedError } from "./task-contract-preflight.js";
@@ -45,6 +45,12 @@ import {
 } from "./shared-asset-lifecycle.js";
 import { isOfficialRuntimeImageKey, RuntimeImageNotReadyError } from "./runtime-images.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
+import {
+  retryContextWindowExceededJob,
+  retryProvisioningJob,
+  retryPtyTransportJob,
+  retryTruncatedExecutionJob,
+} from "./job-execution-retry.js";
 import { pendingCompletionRecoveryClaimTarget } from "./domains/job-attempt/recovery.js";
 import { createAttemptLeaseRenewals, renewCurrentAttemptLease } from "./attempt-lease.js";
 import {
@@ -99,6 +105,10 @@ export function classifyDispatcherFailure(error: unknown): { reason: string; mes
   if (isPiStreamTruncationMessage(message)) {
     return { reason: PI_STREAM_TRUNCATED_REASON, message };
   }
+  // #1143：PTY 传输中断与 Pi 流截断同族；Host kill 来源未确认，保持 exception 直接失败。
+  if (isPtyTransportFailureMessage(message)) {
+    return { reason: PTY_TRANSPORT_REASON, message };
+  }
   // #1032 P1-3：凭据守卫拒绝是平台永久失败，早于 fallback，且不被任何自动重试路径消费。
   if (isCredentialInBusinessDataMessage(message)) return { reason: CREDENTIAL_IN_BUSINESS_DATA_REASON, message: formatCredentialInBusinessDataMessage(message) };
   // #1066：事件载荷 NUL 导致的 PG 输入拒绝是确定性输入错误，错误文本不得回显 DB 原文。
@@ -150,6 +160,14 @@ export function isRetryablePiStreamTruncation(error: unknown): boolean {
   return classifyDispatcherFailure(error).reason === PI_STREAM_TRUNCATED_REASON;
 }
 
+/**
+ * #1143 OpenSandbox PTY 传输中断（provision 之后）：与 Pi 流截断同族的瞬态。
+ * Host kill 不重试，schema/auth/凭据等确定性失败也不在分类里。
+ */
+export function isRetryablePtyTransportFailure(error: unknown): boolean {
+  return isPtyTransportFailureMessage(formatDispatcherFailureMessage(error));
+}
+
 /** Provider context window exceeded after provision; one-shot compact+requeue. */
 export function isRetryableContextWindowExceeded(error: unknown): boolean {
   return classifyDispatcherFailure(error).reason === CONTEXT_WINDOW_EXCEEDED_REASON;
@@ -188,21 +206,18 @@ import {
   shouldProbeOpenSandboxUpload,
   createOpenSandboxUploadCircuitError,
 } from "./opensandbox-upload-circuit.js";
-import { countConsumedProvisionRetries, planAutomaticProvisionRetry } from "./provision-retry-budget.js";
+import {
+  PTY_TRANSPORT_REASON,
+  isPtyTransportFailureMessage,
+} from "./pty-transport-retry.js";
 import {
   PI_STREAM_TRUNCATED_REASON,
-  countConsumedPiStreamTruncationRetries,
   isPiStreamTruncationMessage,
-  planAutomaticPiStreamTruncationRetry,
 } from "./pi-stream-truncation.js";
 import {
-  CONTEXT_WINDOW_COMPACT_RETRY_PAYLOAD_KEY,
   CONTEXT_WINDOW_EXCEEDED_REASON,
-  buildContextWindowCompactRetryMarker,
-  countConsumedContextWindowRetries,
   formatContextWindowExceededMessage,
   isContextWindowExceededMessage,
-  planAutomaticContextWindowRetry,
 } from "./context-window-exceeded.js";
 import { CREDENTIAL_IN_BUSINESS_DATA_REASON, formatCredentialInBusinessDataMessage, isCredentialInBusinessDataMessage } from "./credential-refusal.js";
 import { EVENT_PAYLOAD_CONTROL_CHARACTERS_MESSAGE, EVENT_PAYLOAD_CONTROL_CHARACTERS_REASON, isPgInputErrorMessage } from "./pg-input-error.js";
@@ -867,123 +882,6 @@ export async function dispatchOnce(): Promise<number> {
   return claimedJobs.length;
 }
 
-export async function retryProvisioningJob(
-  jobId: string,
-  attempt: Record<string, unknown>,
-  errorMessage: string,
-  reason: "provision_retry" | "provision_admission_deferred" = "provision_retry",
-): Promise<boolean> {
-  const retried = await sql.begin(async (txRaw) => {
-    const tx = txRaw as unknown as typeof sql;
-    const [locator] = await tx<{ canvas_id: string | null }[]>`
-      SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
-    await lockCanvasForConvergence(tx, locator?.canvas_id ?? null);
-    const [owner] = await tx`
-      SELECT j.canvas_id, (SELECT id FROM job_attempts WHERE job_id = j.id ORDER BY attempt_no DESC LIMIT 1) AS latest_attempt_id
-      FROM jobs j WHERE j.id = ${jobId} FOR UPDATE OF j`;
-    const current = await getActiveAttempt(tx, jobId, true);
-    if (!owner || owner.canvas_id !== (locator?.canvas_id ?? null) || owner.latest_attempt_id !== attempt.id
-      || !current || typeof current.id !== "string" || current.id !== attempt.id || current.cancel_requested !== false) return false;
-    // Error text/missing handle cannot authorize replay. Only no effect or an
-    // explicit host never_started settlement is admissible under this owner lock.
-    const [blocked] = await tx`SELECT id FROM job_attempt_effects WHERE attempt_id = ${current.id}
-      AND NOT (effect_kind = 'provision' AND status = 'settled'
-         AND COALESCE(settlement_json @> '{"result":"never_started","external_effect":false}'::jsonb, false)) LIMIT 1`;
-    if (blocked) return false;
-    // A repair-bearing Job needs explicit safe generation admission; ordinary
-    // automatic retries must not strand it on an unauthorized successor Attempt.
-    await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
-    if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
-    const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
-      SELECT status, outcome_json, state_json
-      FROM job_attempts
-      WHERE job_id = ${jobId} AND status <> 'active'`;
-    const plan = planAutomaticProvisionRetry(countConsumedProvisionRetries(previous));
-    if (reason === "provision_retry" && !plan.retry) return false;
-    const txLifecycle = createSqlJobLifecycleApplication(tx);
-    return txLifecycle.retryProvisioning(
-      jobId,
-      errorMessage,
-      (attempt.snapshot_identity_json ?? {}) as Record<string, string>,
-      (attempt.resource_labels_json ?? {}) as Record<string, string>,
-      reason,
-    );
-  });
-  if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'provision_retry')`;
-  return Boolean(retried);
-}
-
-async function retryTruncatedExecutionJob(
-  jobId: string,
-  attempt: Record<string, unknown>,
-  errorMessage: string,
-): Promise<boolean> {
-  const retried = await sql.begin(async (txRaw) => {
-    const tx = txRaw as unknown as typeof sql;
-    const [locator] = await tx<{ canvas_id: string | null }[]>`
-      SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
-    await lockCanvasForConvergence(tx, locator?.canvas_id ?? null);
-    // A repair-bearing Job needs explicit safe generation admission; ordinary
-    // automatic retries must not strand it on an unauthorized successor Attempt.
-    await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
-    if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
-    const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
-      SELECT status, outcome_json, state_json
-      FROM job_attempts
-      WHERE job_id = ${jobId} AND status <> 'active'`;
-    const plan = planAutomaticPiStreamTruncationRetry(countConsumedPiStreamTruncationRetries(previous));
-    if (!plan.retry) return false;
-    const txLifecycle = createSqlJobLifecycleApplication(tx);
-    return txLifecycle.retryTruncatedExecution(
-      jobId,
-      errorMessage,
-      (attempt.snapshot_identity_json ?? {}) as Record<string, string>,
-      (attempt.resource_labels_json ?? {}) as Record<string, string>,
-    );
-  });
-  if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'pi_stream_truncation_retry')`;
-  return Boolean(retried);
-}
-
-async function retryContextWindowExceededJob(
-  jobId: string,
-  attempt: Record<string, unknown>,
-  errorMessage: string,
-): Promise<boolean> {
-  const retried = await sql.begin(async (txRaw) => {
-    const tx = txRaw as unknown as typeof sql;
-    const [locator] = await tx<{ canvas_id: string | null }[]>`
-      SELECT canvas_id FROM jobs WHERE id = ${jobId}`;
-    await lockCanvasForConvergence(tx, locator?.canvas_id ?? null);
-    // A repair-bearing Job needs explicit safe generation admission; ordinary
-    // automatic retries must not strand it on an unauthorized successor Attempt.
-    await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
-    if (await hasHumanOrRepairBoundary(tx, jobId)) return false;
-    const previous = await tx<{ status: string; outcome_json: unknown; state_json: unknown }[]>`
-      SELECT status, outcome_json, state_json
-      FROM job_attempts
-      WHERE job_id = ${jobId} AND status <> 'active'`;
-    const plan = planAutomaticContextWindowRetry(countConsumedContextWindowRetries(previous));
-    if (!plan.retry) return false;
-    const marker = buildContextWindowCompactRetryMarker(errorMessage);
-    await tx`
-      UPDATE jobs
-      SET payload_json = COALESCE(payload_json, '{}'::jsonb) || ${tx.json({
-        [CONTEXT_WINDOW_COMPACT_RETRY_PAYLOAD_KEY]: marker,
-      } as never)}
-      WHERE id = ${jobId}`;
-    const txLifecycle = createSqlJobLifecycleApplication(tx);
-    return txLifecycle.retryContextWindowExceeded(
-      jobId,
-      errorMessage,
-      (attempt.snapshot_identity_json ?? {}) as Record<string, string>,
-      (attempt.resource_labels_json ?? {}) as Record<string, string>,
-    );
-  });
-  if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'context_window_exceeded_retry')`;
-  return Boolean(retried);
-}
-
 /** Job before Attempt; both provision admission and mount settlement fence the same owner. */
 export async function lockCurrentProvisioningAttempt(
   db: typeof sql, jobId: string, attemptId: string, phase: "preparing" | "provision.effect_pending",
@@ -1387,6 +1285,22 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
       });
       if (retried) {
         inc("deepsonar_pi_stream_truncation_retry_total");
+        return;
+      }
+    }
+    if (handle && attemptId && activeAttempt && isRetryablePtyTransportFailure(e)) {
+      const retried = await retryPtyTransportJob(jobId, activeAttempt, msg).catch((retryError) => {
+        console.error(`[dispatcher] pty transport retry scheduling failed for ${jobId}:`, retryError);
+        return false;
+      });
+      if (retried) {
+        inc("deepsonar_sandbox_pty_transport_retry_total");
+        void recordSystemAudit({
+          action: "job.pty_transport_retry",
+          resourceType: "job",
+          resourceId: jobId,
+          after: { reason: PTY_TRANSPORT_REASON, retry_scheduled: true, error: msg.slice(0, 500) },
+        });
         return;
       }
     }

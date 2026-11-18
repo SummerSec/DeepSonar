@@ -147,6 +147,7 @@ const HELP: Record<string, string> = {
   deepsonar_sandbox_provision_failed_total: "Sandbox provision failures by provider",
   deepsonar_sandbox_provision_retry_total: "Automatic sandbox provision retries",
   deepsonar_pi_stream_truncation_retry_total: "Automatic Job retries after Pi Anthropic stream truncation",
+  deepsonar_sandbox_pty_transport_retry_total: "Automatic Job retries after an OpenSandbox PTY transport interruption",
   deepsonar_agent_context_window_exceeded_total: "Agent runs that hit provider context window limits (Prompt is too long)",
   deepsonar_context_window_exceeded_retry_total: "Automatic Job retries after context_window_exceeded with prompt compaction",
   deepsonar_sandbox_cleanup_failed_total: "Sandbox destroy/cleanup failures",
