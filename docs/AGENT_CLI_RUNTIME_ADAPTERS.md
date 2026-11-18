@@ -467,6 +467,20 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 - 历史 DSH 夹具 `dsh-0.1.1-rc.2.*` 仅用于旧归档/解码回归，不代表当前 launcher 或 live capture。
 
 夹具覆盖文本/增量、工具调用结果、错误、usage、Session 身份、未知/损坏帧，以及伪造 `mcp__deepsonar-control__*` 工具名。普通输出或伪造 tool call **不会**变成控制语义事件；语义写入只走 Job 级 HTTP API。不承诺识别任意上游私有客户端策略。
+### Pi 1.5.2 的消息起始事件（#1141）
+
+Pi 1.5.2 对 `assistant` / `user` / `toolResult` 都发顶层 `message_start`（`core/agent-session.js`
+按角色分别处理，`modes/json-event.js` 原样透传）。`decodePi` 只用 assistant 起始打开消息输出基线，
+其它角色按已知会话边界返回空；工具结果仍由 `tool_execution_end` 产生宿主事件。
+
+该缺口此前被兜成 `unknown_runtime`，随后由 reporter 以**原始** Pi 行的 `type` 记成
+`unrecognized_stream_type`，于是升级后每个 Job 的每条 user/toolResult 消息都会刷告警
+（现场 337 次/12h，`chars=13`、`hash=b25782c0643f9ee7` 即 `SHA256("message_start")[:16]`）。
+
+诊断仍只输出 `hash`（先脱敏再哈希）与 `chars`，不回显原始 type：这是 #1038 的有界摘要契约，
+`runtime-pi-recovery.test.ts` 明确禁止把原始类型名带进告警。定位流程是拿 `chars` 与 16 位哈希
+对 `PI_RPC_EVENT_TYPES` / Claude stream 名单做离线匹配，再补解码分支。
+
 
 运行时 smoke：本地 `agent-harness/dsh-sdk-smoke-driver.mjs` 已用官方 package 验证 native bash、PTC `run_code`、原生子代理的 Gateway/model/reasoning 继承、Gateway token、同进程 follow-up、v4 capture、跨进程 resume 拒绝和 shutdown；`agent-harness/dsh-cordis-smoke-config.mjs` 是 profile smoke helper，`agent-harness/check-dsh-runtime.mjs`、`agent-harness/test-dsh-cordis.mjs` 与 `packages/runtime-sandbox/src/runtime-adapters.test.ts` 验证 lock/profile/Docker 与 adapter 契约。Docker 在当前环境不可用，因此容器启动与既有镜像 size budgets 仍由 CI gate 负责；本地只记录 npm closure 约 505 MiB unpacked、约 139 MiB gzip，不把它们写成镜像体积。完整 `pnpm ci:smoke:opensandbox-cli-control` 仍需要对应 Provider 凭据。
 
