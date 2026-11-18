@@ -9,6 +9,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { SHARED_ASSETS_JOB_LABEL, SHARED_ASSETS_VOLUME_LABEL } from "./runtime-shared.js";
 import {
+  assertSharedAssetManifestPaths,
   managedSharedAssetsVolumeName,
   type SharedAssetVolumeFile,
   type SharedAssetsVolumeManager,
@@ -88,6 +89,7 @@ export class KubernetesSharedAssetsVolumeManager implements SharedAssetsVolumeMa
 
   async prepare(input: { jobId: string; files: SharedAssetVolumeFile[]; catalog: unknown }): Promise<string | null> {
     if (input.files.length === 0) return null;
+    assertSharedAssetManifestPaths(input.files.map((file) => file.relativePath));
     const name = managedSharedAssetsVolumeName(input.jobId);
     const jobId = name.slice("deepsonar-assets-".length);
     const seed = seederName(jobId);

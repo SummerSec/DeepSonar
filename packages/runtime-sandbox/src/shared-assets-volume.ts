@@ -141,12 +141,41 @@ function isMissingResourceError(error: unknown, kind: "volume" | "container", na
   return patterns.some((pattern) => new RegExp(pattern, "i").test(detail.trim()));
 }
 
+const CATALOG_FILE = "catalog.json";
+
 function safeRelativePath(input: string): string {
   const normalized = input.replaceAll("\\", "/").replace(/^\/+/, "");
   if (!normalized || normalized.length > 320 || normalized.split("/").some((part) => !part || part === "." || part === "..")) {
     throw new Error("invalid shared-assets volume path");
   }
   return normalized;
+}
+
+/**
+ * #1144: 物化前先查清单自身的「同一路径既当文件又当目录」。
+ * `a/b.json` 与 `a/b.json/c.csv` 并存时 cp 先写出文件，再为子路径 mkdir → 原始 EEXIST
+ * （含随机 staging 路径）直接冒到 Job 终态。这里改成具名两个键的可执行错误。
+ * 相对路径已包含作用域前缀（platform / project / finding/<id>），无需另外推导命名空间。
+ */
+export function assertSharedAssetManifestPaths(relativePaths: readonly string[]): void {
+  const paths = relativePaths.map((input) => safeRelativePath(input));
+  const files = new Set(paths);
+  for (const relative of paths) {
+    const segments = relative.split("/");
+    for (let index = 1; index < segments.length; index += 1) {
+      const ancestor = segments.slice(0, index).join("/");
+      if (!files.has(ancestor)) continue;
+      throw new Error(
+        `shared_assets_manifest_conflict: 键 ${ancestor} 与 ${relative} 在同一挂载根下同时作为文件与目录（mkdir 冲突）；`
+        + "请归档或改名冲突键后重派 Job（本轮未产生外部效果）。",
+      );
+    }
+  }
+  if (files.has(CATALOG_FILE)) {
+    throw new Error(
+      `shared_assets_manifest_conflict: 键 ${CATALOG_FILE} 与 Scheduler 自动生成的目录清单同名；请改名后重试。`,
+    );
+  }
 }
 
 export class NoopSharedAssetsVolumeManager implements SharedAssetsVolumeManager {
@@ -175,6 +204,7 @@ export class DockerSharedAssetsVolumeManager implements SharedAssetsVolumeManage
     const helper = helperName(generation);
     const permit = input.assertCurrent;
     await this.executeDocker("image", "inspect", this.helperImage);
+    assertSharedAssetManifestPaths(input.files.map((file) => file.relativePath));
     const labels = [
       "--label", `${SHARED_ASSETS_VOLUME_LABEL}=true`,
       "--label", `${SHARED_ASSETS_JOB_LABEL}=${canonicalJobId}`,
