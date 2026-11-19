@@ -38,6 +38,7 @@ test("PTY transport diagnosis survives wrapper, runner and finalized Evidence wi
   const endpointSecret = "pty-endpoint-sensitive";
   const jobSecret = "pty-job-sensitive";
   let starts = 0;
+  const observations: import("@deepsonar/runtime-sandbox").RuntimeProcessObservation[] = [];
   const session: OpenSandboxSession = {
     id: "sandbox-pty-test",
     async run() { return { exitCode: 0, stdout: "", stderr: "" }; },
@@ -76,12 +77,16 @@ test("PTY transport diagnosis survives wrapper, runner and finalized Evidence wi
   try {
     const result = await runRealAgent(createOpenSandboxRuntimeHost(session), {
       provider: "claude-code", env: {}, input: "test", secretValues: [jobSecret],
+      onProcessDiagnostic: async observation => { observations.push(observation); },
       onEvent: event => { pending.push(writer.appendNormalized(event)); },
     });
     assert.equal(result.terminalOutcome, "failure");
     assert.equal(result.runnerErrorSource, "process");
     assert.match(result.error ?? "", /OPENSANDBOX_PTY_/);
     assert.equal(starts, 1, "diagnostic network/timeout must not reopen a CLI");
+    assert.equal(observations.length, 1);
+    assert.equal(observations[0].process_id, "pty-evidence");
+    assert.equal(observations[0].cleanup?.outcome, "confirmed");
     await Promise.all(pending);
     await writer.finalize();
     const records = await readNormalizedStream(jobId);

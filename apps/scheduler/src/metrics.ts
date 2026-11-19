@@ -147,6 +147,7 @@ const HELP: Record<string, string> = {
   deepsonar_opensandbox_upload_probe_failures_total: "OpenSandbox pre-dispatch upload probe failures",
   deepsonar_skill_source_sync_failures_total: "Skill source sync failures by source; scheduled failures include a bounded safe reason code",
   deepsonar_skill_catalog_changed_total: "Skill source syncs whose catalog commit/content actually changed, by source",
+  deepsonar_runtime_process_terminations_total: "Host-observed PTY terminations by fixed termination, actual caller and DELETE result; not an OOM diagnosis",
 };
 
 const PROCESS_GAUGE_HELP: Record<string, string> = {

@@ -17,14 +17,10 @@ const evidence = (overrides: Partial<EffectEvidence> = {}): EffectEvidence => ({
   ...overrides,
 });
 
-test("a terminal attempt proves an agent_run outcome", () => {
+test("a terminal attempt cannot prove an agent_run process exited", () => {
   for (const status of ["succeeded", "failed", "cancelled", "timeout", "orphan", "interrupted"]) {
     const result = classifyEffect(evidence({ attemptStatus: status }));
-    if (status === "interrupted") {
-      assert.equal(result.decision, "undecided", "interrupted is not terminal: the attempt may resume");
-      continue;
-    }
-    assert.deepEqual(result, { decision: "auto", rule: "attempt_terminal", settlement: { outcome: "applied_run_terminated", attempt_status: status } });
+    assert.deepEqual(result, { decision: "undecided", rule: "run_exit_unproven", missing: ["exact_host_destroy_receipt"] });
   }
 });
 
@@ -76,15 +72,14 @@ test("the summary compresses hundreds of rows into few lines and lists only the 
   ];
   const summary = summarizeEvidence(rows);
   assert.equal(summary.unknown_total, 324);
-  assert.equal(summary.auto_count, 322);
-  assert.equal(summary.undecided_count, 2, "a human reads two decisions, not 324 rows");
-  assert.deepEqual(summary.undecided.map((row) => row.effect_id), ["undecided-usage", "undecided-kind"]);
-  assert.deepEqual(summary.undecided[0].missing, ["job_usage_ledger_row"]);
-  assert.equal(summary.groups.length, 4, "one line per kind/rule/outcome");
+  assert.equal(summary.auto_count, 72);
+  assert.equal(summary.undecided_count, 252, "old unknown runs require exact host evidence");
+  assert.deepEqual(summary.undecided.slice(-2).map((row) => row.effect_id), ["undecided-usage", "undecided-kind"]);
+  assert.deepEqual(summary.undecided[0].missing, ["exact_host_destroy_receipt"]);
+  assert.equal(summary.groups.length, 3, "one line per kind/rule/outcome");
   assert.deepEqual(
     summary.groups.map((group) => [group.effect_kind, group.outcome, group.count]),
     [
-      ["agent_run", "applied_run_terminated", 250],
       ["canvas_delivery", "delivered", 15],
       ["gateway_model_request", "applied_with_usage", 31],
       ["provision", "not_applied", 26],

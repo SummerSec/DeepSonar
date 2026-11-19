@@ -508,8 +508,10 @@ export async function releaseSandboxLease(sandboxId: string): Promise<void> {
   // restarted Scheduler must never infer disappearance from a missing API key.
   await sql`DELETE FROM worker_sandbox_leases l WHERE l.sandbox_id = ${sandboxId}
     AND NOT EXISTS (SELECT 1 FROM jobs j JOIN job_attempt_effects e ON e.job_id=j.id
-      WHERE j.status='waiting_human' AND j.sandbox_id=l.sandbox_id
-        AND e.effect_kind='agent_run' AND e.status<>'settled'
+      WHERE ((j.status='waiting_human' AND e.status<>'settled')
+          OR (e.intent_json->'host_cleanup'->>'schema'='deepsonar.runtime-cleanup/v1'
+            AND e.intent_json->'host_cleanup'->>'state'='pending')) AND j.sandbox_id=l.sandbox_id
+        AND e.effect_kind='agent_run'
         AND e.resource_identity_json->>'sandbox_id'=l.sandbox_id
         AND (l.attempt_id IS NULL OR e.attempt_id::text=l.attempt_id))`;
 }
@@ -530,7 +532,12 @@ export const SANDBOX_LEASE_HOLDING_JOB_STATUSES = [
 export async function releaseOrphanSandboxLeases(): Promise<number> {
   const rows = await sql<{ sandbox_id: string }[]>`
     DELETE FROM worker_sandbox_leases l
-     WHERE NOT EXISTS (
+     WHERE NOT EXISTS (SELECT 1 FROM job_attempt_effects e
+       WHERE e.effect_kind='agent_run' AND e.resource_identity_json->>'sandbox_id'=l.sandbox_id
+         AND e.attempt_id::text=l.attempt_id AND e.job_id::text=l.job_id
+         AND jsonb_array_length(COALESCE(e.intent_json->'host_process_audits','[]'::jsonb))>0
+         AND COALESCE(e.intent_json->'host_cleanup'->>'state','pending')='pending')
+     AND NOT EXISTS (
        SELECT 1 FROM jobs j
         WHERE j.status = ANY(${SANDBOX_LEASE_HOLDING_JOB_STATUSES as unknown as string[]})
           AND (

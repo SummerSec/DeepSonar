@@ -1554,6 +1554,14 @@ const OPS: Op[] = [
         type: "object",
         required: ["human_request", "human_continuation"],
         properties: {
+          process_diagnostics: {
+            type: "array", maxItems: 64,
+            description: "精确绑定 Job/Attempt/Sandbox/Process/原 agent_run 的宿主审计。固定终止类别、实际宿主 kill caller、PTY DELETE 结果和已核验沙箱销毁结果，不含原始日志、命令、URL 或凭据。退出码未知保持 null，host_kill 不证明 OOM。失败或超时保留 unknown 与旧凭据撤销状态，无合法断点的自动整 Job 恢复尚未交付。",
+            items: { type: "object", properties: {
+              audit_id: { type: "string" }, observed_at: { type: "string", format: "date-time" },
+              observation: { type: "object" }, sandbox_cleanup: { type: "object", nullable: true },
+            } },
+          },
           human_continuation: {
             type: "object", nullable: true,
             description: "请求和断点的管理摘要，不含文件正文、路径、密钥或运行权限；回复保存不代表已启动或完成。",

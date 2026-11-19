@@ -4,6 +4,7 @@ import { sql } from "./db.js";
 import { markAttemptInterrupted, settleEffect } from "./domains/job-attempt/application.js";
 import { revokeOldRuntimeGrants } from "./domains/job-control/rerun.js";
 import { pauseHumanExecutionClock } from "./domains/job-control/human-continuation-clock.js";
+import { destroyObservedRuntime } from "./runtime-process-cleanup.js";
 
 /** Preserve ordinary finally cleanup; a refused human-wait close is never a fallback authorization. */
 export async function cleanupDispatcherSandbox(
@@ -11,9 +12,16 @@ export async function cleanupDispatcherSandbox(
   runner: Pick<SandboxRunner, "destroy">,
   input: { jobId: string; attemptId?: string | null; sandboxId: string },
 ): Promise<void> {
-  const [job] = await db`SELECT status FROM jobs WHERE id=${input.jobId}`;
+  const [job] = await db`SELECT status,EXISTS(SELECT 1 FROM job_attempt_effects e
+    WHERE e.job_id=jobs.id AND e.attempt_id=${input.attemptId ?? null}::uuid
+      AND e.effect_kind='agent_run' AND jsonb_array_length(COALESCE(e.intent_json->'host_process_audits','[]'::jsonb))>0) AS observed
+    FROM jobs WHERE id=${input.jobId}`;
   if (job?.status === "waiting_human") {
     if (input.attemptId) await destroyAndSettleHumanWaitRun(db, runner, { ...input, attemptId: input.attemptId });
+    return;
+  }
+  if (job?.observed && input.attemptId) {
+    await destroyObservedRuntime(db, runner, { ...input, attemptId: input.attemptId });
     return;
   }
   await runner.destroy({ sandboxId: input.sandboxId });

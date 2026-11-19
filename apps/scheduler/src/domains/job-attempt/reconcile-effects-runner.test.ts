@@ -51,16 +51,16 @@ test("scan is read-only and reports the residue instead of hundreds of rows", as
   assert.equal(result.action, "scan");
   assert.equal(result.applied, 0);
   assert.equal(result.remaining_unknown, 4);
-  assert.equal(result.summary.auto_count, 3);
-  assert.equal(result.summary.undecided_count, 1);
-  assert.deepEqual(result.summary.undecided[0].missing, ["job_usage_ledger_row"]);
+  assert.equal(result.summary.auto_count, 0);
+  assert.equal(result.summary.undecided_count, 4);
+  assert.deepEqual(result.summary.undecided[0].missing, ["exact_host_destroy_receipt"]);
   assert.equal(result.ok, false, "an undecided residue keeps the gate closed");
   assert.equal(statements.some((sql) => sql.includes("UPDATE")), false, "scan must never write");
 });
 
 test("apply settles only provable effects, records audit fields and stays idempotent", async () => {
   const { db, statements, remaining } = fakeDb([
-    ...agentRuns(4),
+    ...agentRuns(4).map(row => ({ ...row, effect_kind: "canvas_delivery", canvas_node_id: `node-${row.id}` })),
     { id: uuid(50), effect_kind: "gateway_model_request", attempt_status: "failed", sandbox_id: null, usage_rows: 2, canvas_node_id: null },
     { id: uuid(60), effect_kind: "gateway_model_request", attempt_status: "failed", sandbox_id: null, usage_rows: 0, canvas_node_id: null },
   ]);

@@ -46,9 +46,6 @@ export type EffectClassification =
   | { readonly decision: "auto"; readonly rule: string; readonly settlement: EffectSettlement }
   | { readonly decision: "undecided"; readonly rule: string; readonly missing: readonly string[] };
 
-const isTerminal = (status: string | null): boolean =>
-  typeof status === "string" && (TERMINAL_ATTEMPT_STATUSES as readonly string[]).includes(status);
-
 const hasText = (value: string | null): boolean => typeof value === "string" && value.trim().length > 0;
 
 /**
@@ -68,9 +65,8 @@ const hasText = (value: string | null): boolean => typeof value === "string" && 
 export function classifyEffect(effect: EffectEvidence): EffectClassification {
   switch (effect.effectKind) {
     case "agent_run":
-      return isTerminal(effect.attemptStatus)
-        ? { decision: "auto", rule: "attempt_terminal", settlement: { outcome: "applied_run_terminated", attempt_status: effect.attemptStatus as string } }
-        : { decision: "undecided", rule: "attempt_not_terminal", missing: ["terminal_attempt_status"] };
+    case "agent_resume":
+      return { decision: "undecided", rule: "run_exit_unproven", missing: ["exact_host_destroy_receipt"] };
     case "gateway_model_request":
       return Number.isSafeInteger(effect.usageRows) && effect.usageRows > 0
         ? { decision: "auto", rule: "usage_ledger_recorded", settlement: { outcome: "applied_with_usage", usage_rows: effect.usageRows } }
