@@ -178,10 +178,25 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
     });
     await context.test('late response resumes preserved files with one durable generation and a new owner', async () => {
       const fixture = await setup(); await fixture.seal();
+      const { recordRuntimeProcessEvidence } = await import("../../runtime-process-evidence.js");
+      const [owner] = await sql`SELECT sandbox_id FROM jobs WHERE id=${fixture.jobId}`;
+      await recordRuntimeProcessEvidence(sql, { jobId: fixture.jobId, attemptId: fixture.attemptId, sandboxId: owner.sandbox_id }, {
+        process_sequence: 1, process_id: "human-wait-observed", diagnostic: { source: "opensandbox_pty", phase: "stream",
+          termination: "process_exit", exit_frame: { type: "exit", exit_code: 0, valid: true, observed_after_termination: false }, websocket_close: null, websocket_error: null,
+          host_kill_requested: false, close_requested: true },
+        cleanup: { outcome: "http_error", http_status: 503, requested_at: new Date().toISOString(), completed_at: new Date().toISOString() },
+      });
+      const cleanupState = async () => (await sql`SELECT intent_json->'host_cleanup' AS cleanup FROM job_attempt_effects
+        WHERE job_id=${fixture.jobId} AND attempt_id=${fixture.attemptId} AND effect_id='agent_run:1'`)[0].cleanup;
       assert.equal((await sql`SELECT checkpoint_status FROM human_requests WHERE id=${fixture.requestId}`)[0].checkpoint_status, 'preparing');
       await assert.rejects(fixture.close(async () => { throw new Error('destroy failed'); }), /destroy failed/);
       assert.equal((await sql`SELECT resources_released_at FROM human_requests WHERE id=${fixture.requestId}`)[0].resources_released_at, null);
+      assert.equal(await cleanupState(), null, "failed destroy cannot confirm observed cleanup");
       assert.equal(await fixture.close(), true);
+      assert.deepEqual(await cleanupState(), {
+        schema: "deepsonar.runtime-cleanup/v1", state: "confirmed", sandbox_id: owner.sandbox_id,
+        attempt_id: fixture.attemptId, human_event_id: fixture.requestId, reconciled_by: "dispatcher-human-wait-cleanup",
+      });
       const [sealed] = await sql`SELECT * FROM human_requests WHERE id=${fixture.requestId}`;
       assert.equal(sealed.checkpoint_status, 'ready'); assert.ok(sealed.process_exited_at); assert.ok(sealed.resources_released_at);
       assert.equal(sealed.manifest_json.v,2);
