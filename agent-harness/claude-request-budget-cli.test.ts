@@ -10,6 +10,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 
 const run = promisify(execFile);
 const token = "synthetic-claude-budget-token";
@@ -59,6 +60,15 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
     res.end();
   })().catch(error=>{console.error("native-fixture-request",req.url,String(error));res.writeHead(500).end();});});
   const url=await listen(server);
+  const readArchive=async(home:string,sessionId:string)=>{
+    const projects=path.join(home,".claude/projects");
+    let directories:string[];
+    try {directories=await readdir(projects);} catch {return undefined;}
+    const archives=await Promise.all(directories.map(async directory=>{
+      try {return await readFile(path.join(projects,directory,`${sessionId}.jsonl`),"utf8");} catch {return undefined;}
+    }));
+    return archives.find(Boolean);
+  };
   const launch=async(home:string,resume?:string)=>{
     await mkdir(home,{recursive:true});
     const args=["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-mode","bypassPermissions","--model","claude-sonnet-4-5","--tools","Bash","--append-system-prompt",resume?"CURRENT_SYSTEM_BOUNDARY":"OLD_SYSTEM_BOUNDARY",...(resume?["--resume",resume]:[])];
@@ -76,20 +86,26 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
     try {
       if(!resume) {
         await Promise.race([waitAccepted,done.then(()=>{throw new Error('CLI exited before accepting human wait');})]);
-        assert.equal(acceptedWaits,1);stop();await done;
+        assert.equal(acceptedWaits,1);
+        // Storage is asynchronous. Keep the accepted tool blocked while its
+        // proposal reaches the transcript, then stop before any tool result.
+        const deadline=Date.now()+10_000;
+        let archivedTool=false;
+        while(Date.now()<deadline && !archivedTool) {
+          const archive=await readArchive(home,session);
+          try {archivedTool=archive?.trim().split("\n").some(line=>JSON.parse(line).message?.content?.some?.((block:any)=>block.type==='tool_use'))===true;} catch {}
+          if(!archivedTool)await delay(25);
+        }
+        assert.ok(archivedTool,'accepted tool proposal must be durably archived before stopping');
+        stop();await done;
       } else {assert.equal(await done,0,output.slice(-1000));assert.equal(failed,false);}
       assert.ok(session);return session;
-    }finally{clearTimeout(timer);}
+    }finally{clearTimeout(timer);stop();}
 
   };
   try {
     const home=path.join(root,"old-home"),sessionId=await launch(home);
-    const projects=path.join(home,".claude/projects");
-    const directories=await readdir(projects);
-    const archives=await Promise.all(directories.map(async directory=>{
-      try{return await readFile(path.join(projects,directory,`${sessionId}.jsonl`),"utf8");}catch{return null;}
-    }));
-    const original=archives.find(Boolean);assert.ok(original);
+    const original=await readArchive(home,sessionId);assert.ok(original);
     const originalRows=original.trim().split("\n").map(line=>JSON.parse(line));
     assert.ok(originalRows.some(row=>row.message?.content?.some?.((block:any)=>block.type==='tool_use')));
     assert.ok(!originalRows.some(row=>row.message?.content?.some?.((block:any)=>block.type==='tool_result')),'stop before tool result is written');

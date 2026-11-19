@@ -24,6 +24,13 @@ test("human native import keeps conversation identities but excludes old runtime
     assert.equal(projectNativeHumanSession("pi","1.5.2",id,source+"\n"+JSON.stringify({type,id:"extra",parentId:"user"})).status,"unsupported");
   const claude=JSON.stringify({type:"future_state",uuid:id,sessionId:id});
   assert.equal(projectNativeHumanSession("claude-code","2.1.312",id,claude).reason,"unknown_session_record_type");
+  for (const type of ["image", "future_context_block"]) {
+    const content = [{type:"text",text:"Known text"},{type,data:"Context must not disappear"}];
+    const pi = source + "\n" + JSON.stringify({type:"message",id:"next",parentId:"user",message:{role:"user",content}});
+    assert.equal(projectNativeHumanSession("pi","1.5.2",id,pi).reason,"unverified_session_content_block");
+    const claudeMessage = {type:"user",uuid:"user",parentUuid:null,sessionId:id,message:{role:"user",content}};
+    assert.equal(projectNativeHumanSession("claude-code","2.1.312",id,JSON.stringify(claudeMessage)).reason,"unverified_session_content_block");
+  }
 });
 test("Claude pinned storage metadata and execution attachments cannot import old authority",()=>{
   const id="75e625d4-ed23-46b3-a4ca-a82bdb1d6022";

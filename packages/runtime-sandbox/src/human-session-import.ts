@@ -36,10 +36,14 @@ function textContent(content: unknown): string {
   // Tools are retained as inert historical descriptions, never as pending native calls.
   return content.map(block => {
     const value = record(block);
-    if (value.type === "text") return String(value.text ?? "");
+    if (value.type === "text") {
+      if (typeof value.text !== "string") throw new Error("invalid_text_content");
+      return value.text;
+    }
     if (value.type === "tool_use" || value.type === "toolCall") return `[Historical tool proposal] ${JSON.stringify(value.input ?? value.arguments ?? {})}`;
     if (value.type === "tool_result") return `[Historical tool result] ${textContent(value.content ?? "")}`;
-    return "";
+    if (value.type === "thinking" || value.type === "redacted_thinking") return "";
+    throw new Error("unverified_session_content_block");
   }).filter(Boolean).join("\n");
 }
 function safeText(value: string) {
@@ -125,7 +129,9 @@ export function projectNativeHumanSession(cli: string, version: string, sessionI
     const content = output.map(value => JSON.stringify(value)).join("\n") + "\n";
     if (Buffer.byteLength(content) > HUMAN_SESSION_MAX_BYTES) throw new Error("projection_size");
     return {status:"supported",reason:"text_history_only",content};
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === "unverified_session_content_block")
+      return {status:"unsupported",reason:error.message};
     return {status:"rejected",reason:"invalid_or_unsupported_session_format"};
   }
 }

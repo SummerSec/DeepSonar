@@ -14,6 +14,8 @@ Scheduler 在旧 Attempt 证据归档后、文件封存前读取该 Attempt 唯�
 
 导入保留会话和消息 ID，将工具提案/结果转换为历史文字。旧 system 消息、思考签名、扩展状态、私有配置、路径来源和待执行工具调用被排除。受管秘密按原执行的精确值过滤，同时复用人工请求的结构化秘密投影，含旧 Control 路径、身份或秘密标记的文本行排除。新沙箱重新生成当前 Control/Gateway token、系统提示、配置和冻结扩展，仅导入主会话文字。新 Attempt 先持久化导入的 session 身份，再调用现有 adapter.resume；Pi get_state 和后续会话观测必须匹配，所有原预算/准入继续生效。
 
+消息正文中的图片和未知内容块返回 `unverified_session_content_block`，使用 structured 并保留原因。仅明确的 thinking/redacted_thinking 思考块可排除，不能静默丢弃未知上下文后仍声明原生导入成功。
+
 导入上限 8 MiB、20,000 行。固定 Pi 原生链接入核心 base 镜像 smoke，固定 Claude 原生链接入 Reverse Claude request-budget acceptance，均使用隔离网络与合成 Provider，检查旧 home→归档→过滤→新 home→原生恢复及旧身份不再进入请求。SQL 绑定/跨身份拒绝接入既有 platform-api 集成测试。当前实现等待最终 SHA Actions，生产续跑未执行。
 
 ### 固定格式核对与受限范围
