@@ -216,6 +216,7 @@ async function readActiveJobs(db: MigrationConnection): Promise<RebuildPlan["act
         SELECT 1 FROM human_requests r JOIN job_attempts a ON a.id=r.attempt_id AND a.job_id=r.job_id
         WHERE r.job_id=j.id AND r.status IN ('open','answered') AND r.resumed_at IS NULL
           AND r.checkpoint_status='ready' AND r.process_exited_at IS NOT NULL AND r.resources_released_at IS NOT NULL
+          AND r.checkpoint_expires_at>clock_timestamp()
           AND a.status='interrupted' AND NOT a.cancel_requested
           AND a.attempt_no=(SELECT MAX(attempt_no) FROM job_attempts WHERE job_id=j.id)
           AND NOT EXISTS(SELECT 1 FROM job_attempt_effects WHERE job_id=j.id AND status<>'settled')

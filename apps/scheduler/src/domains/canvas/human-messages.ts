@@ -1,3 +1,5 @@
+import { DISPATCH_CLAIM_ADVISORY_KEY } from "../../core.js";
+import { requeueYieldedHumanReply } from "../project-task/task-queue-yield.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { maybeTriggerHub } from "../../core.js";
@@ -170,6 +172,7 @@ export async function createHumanMessage(input: {
 }): Promise<Record<string, unknown>> {
   const attachmentVersionIds = [...new Set(input.attachmentVersionIds)].sort();
   const result = await sql.begin(async (tx) => {
+    if (input.target.kind === "request") await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
     const [canvas] = await tx`SELECT id, project_id FROM canvases WHERE id=${input.canvasId} FOR UPDATE`;
     if (!canvas) throw Object.assign(new Error("canvas not found"), { statusCode: 404 });
     const [existing] = await tx`SELECT * FROM human_messages WHERE id=${input.id}`;
@@ -271,6 +274,7 @@ export async function createHumanMessage(input: {
     if(request) {
       await tx`UPDATE human_requests SET status='answered',revision=revision+1,reply_message_id=${input.id},answered_at=clock_timestamp()
         WHERE id=${String(request.id)} AND status='open'`;
+      await requeueYieldedHumanReply(tx as unknown as typeof sql, String(request.id));
       await tx`UPDATE canvas_nodes SET status='answered',updated_at=now() WHERE job_id=${String(targetJob.id)}
         AND node_type='human' AND body_json->>'message_id' IS NULL AND status='open'`;
     } else if (String(targetJob.status) === "waiting_human") {

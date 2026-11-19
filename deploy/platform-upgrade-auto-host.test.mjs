@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
+import {findPowerShell, spawnPowerShellSync} from './powershell-test-host.mjs';
 import {runHostAutomatic} from './platform-upgrade-auto-host.mjs';
 import {durablePrivateWrite} from './platform-upgrade-maintenance-transport.mjs';
 import {AUTO_POLICY_SCHEMA} from './platform-upgrade-auto-policy.mjs';
@@ -13,7 +14,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const host = resolve(root, 'deploy/platform-upgrade-host.mjs');
 const disabled = {schema: AUTO_POLICY_SCHEMA, enabled: false};
 const env = {...process.env, DOCKER_HOST: 'tcp://127.0.0.1:1'};
-const command = (bin, args) => spawnSync(bin, args, {cwd: root, env, encoding: 'utf8', timeout: 30_000});
+const command = (bin, args) => (bin === 'pwsh' ? spawnPowerShellSync : spawnSync)(bin, args, {cwd: root, env, encoding: 'utf8', timeout: 30_000});
 
 test('real Node CLI auto defaults disabled without Docker or policy file', () => {
   const result = command(process.execPath, [host, 'auto']);
@@ -23,7 +24,9 @@ test('real Node CLI auto defaults disabled without Docker or policy file', () =>
 });
 
 const shells = [['sh', ['deploy/deploy.sh', 'upgrade', 'auto']], ['pwsh', ['-NoProfile', '-File', 'deploy/deploy.ps1', 'upgrade', 'auto']]];
-for (const [shell, args] of shells) test(`real ${shell} wrapper invokes Node auto with disabled policy`, {skip: spawnSync(shell, shell === 'pwsh' ? ['-NoProfile', '-Command', 'exit 0'] : ['-c', 'exit 0']).status !== 0 ? `${shell} unavailable` : false}, async () => {
+for (const [shell, args] of shells) test(`real ${shell} wrapper invokes Node auto with disabled policy`, async t => {
+  const available = shell === 'pwsh' ? findPowerShell({commands: ['pwsh']}) : spawnSync(shell, ['-c', 'exit 0']).status === 0;
+  if (!available) {t.skip(`${shell} unavailable`);return;}
   const dir = await mkdtemp(join(tmpdir(), 'auto-cli-'));
   try {
     const policy = join(dir, 'policy.json');await durablePrivateWrite(policy, JSON.stringify(disabled));

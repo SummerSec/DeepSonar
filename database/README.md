@@ -1,5 +1,7 @@
 # Database schema
 
+schema 74 仅新增列表索引 `jobs_project_created_idx (project_id, created_at DESC, id DESC)`（#1136：不带 status 的列表原先顺序扫描 `jobs`）。
+
 schema 73 增加人工请求与有效执行时钟，以及人工消息的请求版本关联。不可变历史事件和快照不改写；新表不从旧 failed Job 猜测断点或授权。数据与文件保留规则见[人工续做](../docs/HUMAN_CONTINUATION.md)。
 
 `schema.sql` 是唯一 schema 真相源；当前集成版本以 [`SCHEMA_VERSION`](../apps/scheduler/src/schema-version.ts) 为准，数据库基线必须与之同步。Scheduler 启动时在 reserved
@@ -98,3 +100,5 @@ Neon、RDS Query Editor 等 PostgreSQL SQL 控制台执行。仅适配 PostgreSQ
 ## 项目任务队列基线（#1018）
 
 schema 72 增加项目队列与条目，Canvas 的项目复合唯一键支持队列归属外键，active 部分唯一索引约束单任务占位。条目使用现有重建支持的序列默认值。新基线仍通过备份、列交集回填和序列校准重建，旧库结构不匹配时启动拒绝；最终 Actions 的迁移与 SQL 行为证据另记。调度语义见[队列专题](../docs/PROJECT_TASK_QUEUE.md)。
+
+schema 75 增加人工等待 yielded 队列状态与 project_task_queue_yields，绑定显式操作、请求版本与已消费回复。回复原子回队尾保留原完成代际，唯一基线重建及最终 Actions 另验。

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -579,6 +580,36 @@ test("Pi RPC response failures remain failed through settlement", () => {
   const settled = adapter.decodeOutput({ type: "agent_settled", result: "" }, state);
   assert.equal(settled[0]?.type, "result");
   assert.equal(settled[0]?.is_error, true);
+});
+
+test("#1141 Pi 1.5.2 的 user/toolResult message_start 是已知会话边界，不再记成 unrecognized_stream_type", () => {
+  const adapter = AGENT_CLI_RUNTIME_ADAPTERS.pi;
+  const state = {};
+  for (const role of ["assistant", "user", "toolResult", "custom"]) {
+    assert.deepEqual(
+      adapter.decodeOutput({ type: "message_start", message: { role } }, state),
+      [],
+      `message_start(role=${role}) 必须按已知会话边界解码，不能兜成 unknown_runtime`,
+    );
+  }
+  // 现场证据对齐：告警里的 chars=13 / hash=b25782c0643f9ee7 正是原始 type message_start
+  // （reporter 以原始 Pi 行取 type，因此非 assistant 起始会以该哈希刷 unrecognized_stream_type）。
+  assert.equal(createHash("sha256").update("message_start").digest("hex").slice(0, 16), "b25782c0643f9ee7");
+
+  const warnings: unknown[] = [];
+  const sequence = [
+    { type: "agent_start" },
+    { type: "message_start", message: { role: "assistant", content: [] } },
+    { type: "message_start", message: { role: "toolResult", toolCallId: "call-1", content: [] } },
+    { type: "message_start", message: { role: "user", content: [{ type: "text", text: "next" }] } },
+    { type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }] } },
+  ];
+  for (const line of sequence) {
+    for (const event of adapter.decodeOutput(line, state)) {
+      warnings.push(...mapCliEvent(event, () => {}).warnings);
+    }
+  }
+  assert.deepEqual(warnings, [], "1.5.2 的会话边界序列不应产生任何 unknown_runtime_event");
 });
 
 test("适配器只接受带完整身份的压缩事件，缺字段时记录未知", () => {

@@ -306,3 +306,7 @@ Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_con
 summary分别计登记、已纳入整理、跳过、待采集、active Memory/Skill、draft、completed/blocked work及本项目拥有并消费的usage/feedback；pending排除collected/skipped去重并集。反馈success仅为模型报告；来源登记不等于产物，collected含排队不等于生效。items只含工作状态/安全原因、累计Job/时间、当前Job/Canvas、时间戳、最新提案状态和source_count；来源数按采集审计关联work_ref，显式work在无链接且有originJob时回退1。页面在目录前紧凑展示，详情按需展开、复用原刷新、隔离迟到响应，不新增轮询或人工激活入口。注意力成本见[专题表格](../PROJECT_KNOWLEDGE.md#注意力成本)。
 
 Control的evaluation_plan增加每例显式task_inputs，平台校验引用已在work冻结；assignment.source_mode标识project_collection，工具/网络隔离只可收紧。trial不接收评分rubric；evaluator/reviewer读取精确proposal绑定的evaluation输入。publish_shared_asset返回真实version.id/content_sha256用于Evidence引用，不能以operation ID代替版本。target comparator fail的容许不放宽candidate或安全组的pass门，也不允许unexecuted激活。契约见[共享schema](../../packages/shared-types/src/project-knowledge.ts)与[发布回执](../../apps/scheduler/src/shared-asset-publish-control.ts)。本轮源码与回归已接线，Actions尚未运行，未合并、未部署、未执行真实模型收益验证。
+
+## 人工等待显式让位入口（#1074）
+
+POST /projects/{id}/task-queue/yield 使用 jobs:control 与项目范围，输入取共享 ProjectTaskQueueYieldInput 严格契约。mutation_id 绑定 expected_item_id、request_id 与 expected_revision，同编号内容冲突 409。响应沿原有界队列投影，新增 yielded 和 yield_request。Web 队列提供显式按钮及暂存分组。回复仍走既有消息 API，保存后原子排队尾，202 只证明回复保存，执行等待原准入。具体限制与注意力成本见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。

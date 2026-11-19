@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁竞争后的认领唤醒)覆盖临时跳过后没有新通知的恢复，保留默认轮询关闭；真实 PostgreSQL 红测已复现，修复最终 SHA 的 Actions 另验，不把它当作历史 CI 持锁者的证据。
+
 #1088 的 [OpenSandbox PTY 退出诊断](AGENT_CLI_RUNTIME_ADAPTERS.md#opensandbox-pty-退出诊断1088)区分有效退出帧、WebSocket 中断与宿主主动终止，经原 Evidence 通路保留有界脱敏关闭码和错误原因；不新增重连或任务重跑权限。最终 SHA Actions 待验，历史现场底层原因仍未知。
 
 #1074 的[人工断点续做](HUMAN_CONTINUATION.md)覆盖持久请求、有限封存与资源回收、晚回复保存和受治理的新执行；当前模式为 structured 新会话，原生 Session 与历史 failed Job 关联接续另列剩余范围。最终 SHA Actions 待验。
@@ -290,3 +292,7 @@
 自动清理归属与共享资产只读探针的 #307 评审补齐见[运行时视图](architecture/06-runtime-view.md#自动清理归属与共享资产只读探针307-评审补齐)；扫描清理不删除未知 owner，guest 探针不冒充远端来源证明，最终 SHA Actions 待验。
 
 > **Pi 内部重试结算（#1072）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)区分单次模型消息错误与 `agent_settled`，按消息回滚失败输出并保留此前成功文本，空响应判断与去重不跨消息；保留完成门、取消和进程失败边界；镜像内原始错误 cause 丢失的证据限制单独记录。回归接既有 runtime-sandbox Actions，最终 SHA 待验；现场 Job 未重跑。
+
+#1074 的[项目队列显式人工让位](PROJECT_TASK_QUEUE.md#人工等待显式让位1074)已接 UI/API、持久决定与回复原子回队尾，默认保留席位，首片限定单一人工等待。最终 SHA Actions 另验。
+
+#1126 的[Job 恢复提示](architecture/05-building-blocks.md#job-恢复提示1126)显示运行结论、折叠技术诊断，并同时核对当前动作和权限；真实组件回归已接现有 Actions，最终 SHA 待验。

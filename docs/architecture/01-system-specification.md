@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-19
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -31,11 +31,13 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-TASK-008 项目任务串行队列
 
-- **规范要求**：用户可将任务加入项目 FIFO 队列，同队列最多一个任务占据执行位置。前驱完整收敛且无活动 Job 或未结清效果时才可启动下一任务。当前任务内部 Job 仍使用既有并发与权限；失败/取消需明确确认具体队首后继续，未知效果、人工等待与任务暂停保留占位。
+- **规范要求**：用户可将任务加入项目 FIFO 队列，同队列最多一个任务占据执行位置。前驱完整收敛且无活动 Job 或未结清效果时才可启动下一任务。当前任务内部 Job 仍使用既有并发与权限；失败/取消需明确确认具体队首后继续，未知效果与任务暂停保留占位。人工等待默认保留占位，操作员显式暂存让位后释放，回复再排队尾。
 - **决策来源**：#1018 减少逐个观察并手动启动任务的操作；项目单队列和失败暂停为本次实施默认值。
 - **实现状态**：schema 72 持久队列与全局 claim 锁接线；创建时原子入队、重启读取和任务页控制已实现，最终候选 Actions 待验。治理恢复后完整成功按成功策略推进，旧成功不能代表新重试完成。硬重试原子建立新队尾位置且保留暂停；独立 Finding 报告再生成不重置任务完成代际。
 - **代码入口**：[队列存储](../../apps/scheduler/src/domains/project-task/task-queue-store.ts)、[队列路由](../../apps/scheduler/src/domains/project-task/task-queue-routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[基线](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:web-facts`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:migrations`。场景与边界见[项目任务队列](../PROJECT_TASK_QUEUE.md)。
+
+- **#1074 显式让位**。默认保留人工占位，操作员可让唯一已安全封存的人工等待任务暂存让位，回复保存事务原子回队尾一次，保留完成代际且不得抢占 active。轮到后重验原断点/权限/预算。实现见[队列让位](../../apps/scheduler/src/domains/project-task/task-queue-yield.ts)，SQL/HTTP 回归接既有 `pnpm ci:integration:platform-api`，最终 SHA Actions 另验。
 
 ### FR-TASK-005 更新任务意图与冻结运行
 
@@ -745,6 +747,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 ### FR-WEB-003 Fact/Finding/Job 详情和人工动作
 
+#1126 的 Job 结果先显示一句运行结论，技术字段折叠到维护者诊断。分类只读取当前 Scheduler 动作和效果记录，历史错误文字不决定恢复能力。恢复按钮同时要求 jobs:control 权限、匹配当前状态的 request_recovery，提交时由原入口重新准入。只读诊断 no_signal 仅表示该分类器没有信号，不表示无需处理或允许重跑。
+
 - **规范要求**：Web 必须分别展示 Fact 证据信任态、Finding verify/disposition/证据链、Job Attempt/Session/工具流/人工消息/用量，并为需要权限的动作显示稳定错误；不得用一个“成功”标签合并这些状态。人工待办和回复界面须显示完整的具体动作、回复方式/选项及回复后的业务计划。L0 维持有界摘要，详细面板按需读取完整 L1 人工节点；任何节点缺少 guidance（包括历史请求和自动生成的平台等待项）时明确显示未提供，不从 reason 猜测或自动回填。Job 列表对 `waiting_human` 投影 Scheduler 当前 `execution_state`；同 Job 的人工节点与等待投影合并为一个人工待办，独立的 unknown effect 对账项仍保持优先并单独可见。凭据说明必须指向已有的安全处理方式，不能要求贴入聊天或虚构配置入口。
 - **决策来源**：不同状态机的责任方不同，用户需要知道执行完成、证据成立和业务处置是否分别完成；一次明确的人工请求应减少用户判断下一步和反复追问所需的注意力。
 - **实现状态**：已有工作台、消息账本、恢复入口和 Scheduler execution-state 投影。本轮补充完整指导读取/呈现、等待项去重与提示约束；最终 SHA 行为及 Actions 验收待核对。
@@ -885,9 +889,9 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：调度必须主要依赖 `pg_notify('deepsonar_jobs')` 唤醒，兜底轮询默认关闭；Lease 由 Scheduler 续期与判定，不得信任 Agent 自报存活。
 - **决策来源**：实时唤醒减少无界轮询，Lease 判定必须由平台掌握。
-- **实现状态**：as-built；notify/lease 路径已接线，默认值不等于可用性或恢复时间目标。
+- **实现状态**：as-built；notify/lease 路径已接线。认领 `SKIP LOCKED` 跳过候选时合并延后唤醒，解锁后无新通知也能重新核验；停止清理，不开启全局轮询。见[行锁竞争唤醒](06-runtime-view.md#行锁竞争后的认领唤醒)。默认值不等于可用性或恢复时间目标。
 - **代码入口**：[Scheduler 配置](../../apps/scheduler/src/config.ts)（`LEASE_TTL_SEC`、`DEEPSONAR_DISPATCH_POLL_SEC`）、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)。
-- **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`；人工核对无 notify 时仅使用显式轮询配置。
+- **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`；覆盖 Canvas/Job 解锁无通知时的认领、其他画布进展、停止与定时器合并；核心 API 冒烟保留原完整断言，最终 SHA Actions 另验。
 
 ### NFR-REL-006 写操作幂等与去重
 

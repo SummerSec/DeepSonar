@@ -61,3 +61,13 @@ test("GET /jobs 的查询耗时必须进指标直方图（#1136 建议 D）", ()
   // 只覆盖 SQL 段：测量起点在 limit 计算之后、SELECT 之前
   assert.ok(source.indexOf("const queryStartedAt = performance.now();") < source.indexOf("SELECT j.id, j.project_id"));
 });
+
+test("#1136 不带 status 的 Job 列表有匹配排序的索引基线", () => {
+  const schema = readFileSync(new URL("../../../../../database/schema.sql", import.meta.url), "utf8");
+  assert.match(schema, /CREATE INDEX jobs_project_created_idx ON jobs \(project_id, created_at DESC, id DESC\);/u);
+  const routes = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+  // 列表查询仍按 (project_id 等值, created_at DESC, id DESC) 形状，与新索引一致；
+  // 带 status 的查询继续用 jobs_list_idx（两索引并存）。
+  assert.match(routes, /ORDER BY j\.created_at DESC, j\.id DESC/u);
+  assert.match(schema, /CREATE INDEX jobs_list_idx ON jobs \(project_id, status, created_at DESC\);/u);
+});
