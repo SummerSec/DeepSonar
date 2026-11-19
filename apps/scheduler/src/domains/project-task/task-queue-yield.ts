@@ -1,6 +1,7 @@
 import type { ProjectTaskQueueYieldInput } from "@deepsonar/shared-types";
 import { recordSystemAudit } from "../../audit.js";
 import type { sql } from "../../db.js";
+import { lockContinuationBudget } from "../job-control/continuation-budget.js";
 import { HumanCheckpointManifest } from "../job-control/human-checkpoint-files.js";
 import { remainingHumanExecutionMs } from "../job-control/human-continuation-clock.js";
 import { humanSnapshotDigest } from "../job-control/human-continuation-store.js";
@@ -29,6 +30,7 @@ export async function yieldProjectTaskQueue(db: typeof sql, projectId: string, i
   const [locator] = await db`SELECT job_id FROM human_requests WHERE id=${input.request_id}
     AND project_id=${projectId} AND canvas_id=${input.canvas_id}`;
   if (!locator) throw new TaskQueueError("QUEUE_HUMAN_REQUEST_CHANGED", "人工请求不属于当前任务");
+  await lockContinuationBudget(db, String(locator.job_id));
   const [job] = await db`SELECT * FROM jobs WHERE id=${locator.job_id} FOR UPDATE`;
   const attempts = await db`SELECT id,status,cancel_requested FROM job_attempts WHERE job_id=${locator.job_id}
     ORDER BY attempt_no FOR UPDATE`;

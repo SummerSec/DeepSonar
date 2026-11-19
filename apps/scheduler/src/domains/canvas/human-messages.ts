@@ -1,4 +1,5 @@
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../../core.js";
+import { lockContinuationBudget } from "../job-control/continuation-budget.js";
 import { requeueYieldedHumanReply } from "../project-task/task-queue-yield.js";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -169,6 +170,7 @@ export async function createHumanMessage(input: {
     | {kind:"request";request_id:string;expected_revision:number};
   body: string;
   attachmentVersionIds: string[];
+  historicalContinuation?: boolean;
 }): Promise<Record<string, unknown>> {
   const attachmentVersionIds = [...new Set(input.attachmentVersionIds)].sort();
   const result = await sql.begin(async (tx) => {
@@ -197,10 +199,14 @@ export async function createHumanMessage(input: {
     if(input.target.kind==='request') {
       const [locator]=await tx`SELECT job_id FROM human_requests WHERE id=${input.target.request_id} AND canvas_id=${input.canvasId}`;
       if(!locator) throw new HumanInterventionError(404,"HUMAN_REQUEST_NOT_FOUND","人工请求不存在或不属于当前任务。");
+      await lockContinuationBudget(tx as unknown as typeof sql, String(locator.job_id), false);
       [targetJob]=await tx`SELECT id,status FROM jobs WHERE id=${locator.job_id} AND canvas_id=${input.canvasId} FOR UPDATE`;
       const attempts=await tx`SELECT id,cancel_requested FROM job_attempts WHERE job_id=${locator.job_id} ORDER BY attempt_no FOR UPDATE`;
       [request]=await tx`SELECT * FROM human_requests WHERE id=${input.target.request_id} FOR UPDATE`;
       const historical = targetJob?.status === 'failed' && request?.status === 'closed' && request.close_reason === 'failed';
+      if (input.historicalContinuation && !historical) {
+        throw new HumanInterventionError(409, "CONTINUATION_SOURCE_NOT_FAILED", "历史续做只接受已失败并关闭的原人工请求。");
+      }
       if(!targetJob||(!historical && targetJob.status!=='waiting_human')||!request||(!historical && request.status!=='open')
         ||Number(request.revision)!==input.target.expected_revision||request.resumed_at
         ||(historical && request.reply_message_id)

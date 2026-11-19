@@ -9,7 +9,7 @@ import { readHistoricalRequestBudget } from "../../gateway-request-budget.js";
 import { readRepairTokenBudget, readRepairTokenBudgets } from "../event-ingestion/repair-token-budget.js";
 import { readCompletionExecutionState } from "../platform-api/completion-state.js";
 import { humanExecutionStartedAt, remainingHumanExecutionMs } from "./human-continuation-clock.js";
-import { restoreHumanCheckpoint } from "./human-checkpoint.js";
+import { prepareHumanCheckpointContext, restoreHumanCheckpoint } from "./human-checkpoint.js";
 
 type Fixture = { jobId: string; canvasId: string; attemptId: string; requestId: string; host: RuntimeHost;
   seal: () => Promise<void>; close: () => Promise<boolean> };
@@ -28,6 +28,24 @@ export async function historicalContinuationCases(context: TestContext, sql: typ
   };
   const body = (f: Awaited<ReturnType<typeof failed>>) => ({ mutation_id: randomUUID(), request_id: f.requestId,
     expected_revision: f.revision, reply: { message_id: randomUUID(), body: "Continue the original authorized unfinished work." } });
+  await context.test("historical HTTP rejects ordinary human waits atomically without saving or pumping a reply", async () => {
+    const f = await setup(); await f.seal(); await f.close();
+    const [before] = await sql`SELECT status,revision,reply_message_id,resumed_at FROM human_requests WHERE id=${f.requestId}`;
+    const messageId = randomUUID();
+    const [eventsBefore] = await sql`SELECT count(*)::int AS n FROM events WHERE job_id=${f.jobId}`;
+    const response = await app.inject({ method: "POST", url: `/jobs/${f.jobId}/continuations`, payload: {
+      mutation_id: randomUUID(), request_id: f.requestId, expected_revision: Number(before.revision),
+      reply: { message_id: messageId, body: "Must remain an ordinary waiting request" } } });
+    assert.equal(response.statusCode, 409, response.body);
+    assert.equal(response.json().error_code, "CONTINUATION_SOURCE_NOT_FAILED");
+    assert.equal(response.json().reply_state, "reply_not_saved");
+    assert.deepEqual((await sql`SELECT status,revision,reply_message_id,resumed_at FROM human_requests WHERE id=${f.requestId}`)[0], before);
+    assert.equal((await sql`SELECT count(*)::int AS n FROM human_messages WHERE id=${messageId}`)[0].n, 0);
+    assert.equal((await sql`SELECT count(*)::int AS n FROM events WHERE job_id=${f.jobId}`)[0].n, eventsBefore.n);
+    assert.equal((await sql`SELECT status FROM jobs WHERE id=${f.jobId}`)[0].status, "waiting_human");
+    assert.equal((await sql`SELECT count(*)::int AS n FROM job_continuations WHERE source_job_id=${f.jobId}`)[0].n, 0);
+    await sql`UPDATE jobs SET status='cancelled' WHERE id=${f.jobId}`;
+  });
   await context.test("history HTTP saves terminal reply, creates one new execution, preserves root and retries old revision", async () => {
     const f = await failed(), payload = body(f);
     const before = await remainingHumanExecutionMs(sql, f.jobId);
@@ -98,6 +116,48 @@ export async function historicalContinuationCases(context: TestContext, sql: typ
     const retried = await app.inject({ method: "POST", url: `/jobs/${f.jobId}/continuations`, payload });
     assert.equal(retried.statusCode, 202, retried.body);
     assert.equal((await sql`SELECT revision FROM human_requests WHERE id=${f.requestId}`)[0].revision, f.revision + 1);
+  });
+  await context.test("historical HTTP restores the exact source native archive under the new Job execution identity", async () => {
+    const f = await setup();
+    const { JobEvidenceWriter } = await import("../../evidence.js");
+    const { captureHumanSession, loadHumanSession } = await import("./human-checkpoint-session.js");
+    const sessionId = randomUUID();
+    const [source] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${f.jobId}`;
+    assert.equal(source.agent_snapshot_json.agent_cli, "claude-code");
+    assert.equal(source.agent_snapshot_json.agent_runtime.adapter_version, "2.1.312");
+    await sql`UPDATE job_attempts SET session_id=${sessionId} WHERE id=${f.attemptId}`;
+    const writer = new JobEvidenceWriter(f.jobId, "claude-code", f.attemptId);
+    writer.setSession({ cli: "claude-code", sessionId, artifacts: [{ name: `${sessionId}.jsonl`, sourcePath: "/unused", kind: "main",
+      content: JSON.stringify({ type: "user", uuid: "history-source", parentUuid: null, sessionId, cwd: "/workspace", version: "2.1.312",
+        timestamp: new Date().toISOString(), message: { role: "user", content: "Retain the authorized historical decision" } }) }] });
+    await writer.finalize();
+    await captureHumanSession(f.jobId, f.attemptId, []);
+    await f.seal(); await f.close();
+    await ensureGatewayRequestBudget(sql, f.jobId, source.agent_snapshot_json);
+    await sql`UPDATE jobs SET status='failed',finished_at=now() WHERE id=${f.jobId}`;
+    const [request] = await sql`SELECT revision FROM human_requests WHERE id=${f.requestId}`;
+    const response = await app.inject({ method: "POST", url: `/jobs/${f.jobId}/continuations`, payload: body({ ...f, revision: Number(request.revision) }) });
+    assert.equal(response.statusCode, 202, response.body);
+    const target = String(response.json().job_id);
+    const { claimPendingJobs } = await import("../../dispatcher.js");
+    assert.ok((await claimPendingJobs()).some(job => job.id === target));
+    const prepared = await prepareHumanCheckpointContext({ jobId: target, attemptNo: 1, snapshot: source.agent_snapshot_json, host: f.host });
+    assert.equal(prepared.nativeStatus?.status, "supported");
+    assert.equal(prepared.nativeSession?.sessionId, sessionId);
+    assert.match(prepared.nativeSession!.content, /authorized historical decision/);
+    assert.match(prepared.continuationInput, /new execution identity/);
+    assert.match(prepared.continuationInput, new RegExp(String(response.json().execution_reply_id)));
+    assert.equal((await readCompletionExecutionState(sql, target))?.accepted_terminal, null);
+    const [binding] = await sql`SELECT checkpoint_sha256 FROM job_continuations WHERE target_job_id=${target}`;
+    await sql`UPDATE job_continuations SET checkpoint_sha256=${"0".repeat(64)} WHERE target_job_id=${target}`;
+    await assert.rejects(loadHumanSession(target, 1, source.agent_snapshot_json), /HUMAN_CHECKPOINT_IDENTITY_CHANGED/);
+    await sql`UPDATE job_continuations SET checkpoint_sha256=${binding.checkpoint_sha256} WHERE target_job_id=${target}`;
+    const [native] = await sql`SELECT state_json->'human_session' AS binding FROM job_attempts WHERE id=${f.attemptId}`;
+    await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json({ ...native.binding, request_id: randomUUID() })}) WHERE id=${f.attemptId}`;
+    await assert.rejects(loadHumanSession(target, 1, source.agent_snapshot_json), /HUMAN_NATIVE_SESSION_IDENTITY/);
+    await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json(native.binding)}) WHERE id=${f.attemptId}`;
+    assert.equal((await loadHumanSession(target, 1, source.agent_snapshot_json)).status, "supported");
+    await sql`UPDATE jobs SET status='cancelled' WHERE id=${target}`;
   });
   for (const operation of ["archive", "delete"] as const) await context.test(`Canvas ${operation} locks budget roots before a smaller child during settlement`, async () => {
     const postgres = (await import("postgres")).default;

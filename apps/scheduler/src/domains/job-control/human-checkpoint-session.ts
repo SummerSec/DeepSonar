@@ -64,11 +64,21 @@ export async function captureHumanSession(jobId:string,attemptId:string,secrets:
 export async function loadHumanSession(jobId:string,attemptNo:number,snapshot:unknown):Promise<{
   session?:NativeHumanSession;status:string;reason:string;
 }> {
-  const [source]=await sql`SELECT a.state_json,r.id AS request_id,r.attempt_id FROM human_requests r
+  let [source]=await sql`SELECT a.state_json,a.session_id,r.job_id,r.id AS request_id,r.attempt_id FROM human_requests r
     JOIN job_attempts a ON a.id=r.attempt_id AND a.job_id=r.job_id
     WHERE r.job_id=${jobId} AND r.target_attempt_no=${attemptNo} AND r.resumed_at IS NOT NULL
       AND r.checkpoint_status='ready' AND r.resources_released_at IS NOT NULL AND r.process_exited_at IS NOT NULL
       AND r.checkpoint_expires_at>now() ORDER BY r.created_at DESC,r.id DESC LIMIT 1`;
+  if (!source && attemptNo === 1) {
+    // Use the checkpoint loader's immutable continuation binding. Never search other Jobs by session ID.
+    const { loadHumanCheckpoint } = await import("./human-checkpoint.js");
+    const checkpoint = await loadHumanCheckpoint(sql, jobId, attemptNo, snapshot);
+    if (checkpoint && "crossJob" in checkpoint && checkpoint.crossJob) {
+      [source] = await sql`SELECT a.state_json,a.session_id,a.job_id,${String(checkpoint.request.id)}::uuid AS request_id,
+        a.id AS attempt_id FROM job_attempts a WHERE a.id=${checkpoint.manifest.attempt_id}
+        AND a.job_id=${checkpoint.manifest.job_id}`;
+    }
+  }
   if(!source?.state_json?.human_session) return {status:"unsupported",reason:"checkpoint_has_no_native_archive"};
   const parsed=Binding.safeParse(source.state_json.human_session);
   if(!parsed.success) {
@@ -77,11 +87,12 @@ export async function loadHumanSession(jobId:string,attemptNo:number,snapshot:un
   }
   const binding=parsed.data;
   const frozen=snapshot as {agent_cli?:string;agent_runtime?:{adapter_version?:string}};
-  if(binding.job_id!==jobId || binding.attempt_id!==source.attempt_id || binding.request_id!==source.request_id
+  if(binding.job_id!==source.job_id || binding.attempt_id!==source.attempt_id || binding.request_id!==source.request_id
     ||binding.snapshot_sha256!==humanSnapshotDigest(snapshot) || binding.cli!==frozen.agent_cli
     ||binding.version!==(frozen.agent_runtime?.adapter_version ?? 'unknown')) throw new Error("HUMAN_NATIVE_SESSION_IDENTITY");
   if(binding.status!=="supported") return binding;
   if(!binding.session_id||!binding.bytes||!binding.sha256||binding.cli==='dsh') throw new Error("HUMAN_NATIVE_SESSION_INCOMPLETE");
+  if(binding.session_id!==source.session_id) throw new Error("HUMAN_NATIVE_SESSION_IDENTITY");
   const content=(await readCheckpointFile(binding.request_id,{bytes:binding.bytes,sha256:binding.sha256})).toString('utf8');
   const projected=projectNativeHumanSession(binding.cli,binding.version,binding.session_id,content);
   if(projected.status!=="supported"||!projected.content) throw new Error("HUMAN_NATIVE_SESSION_FORMAT");

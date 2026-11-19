@@ -166,10 +166,7 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
       assert.equal((await sql`SELECT count(*)::int AS n FROM job_execution_clocks WHERE job_id=ANY(${[f.jobId,first.jobId,second.jobId]}::uuid[])`)[0].n, 1);
     });
     for (const limit of ["tokens", "repairs", "deadline"] as const) await context.test(`real completion and Gateway enforce cumulative ${limit} after handoff`, async () => {
-      const { config } = await import("../../config.js");
-      const previousLimit = config.gateway.repairMaxTokens;
-      config.gateway.repairMaxTokens = limit === "tokens" ? 6 : 1000;
-      try {
+      {
         const f = await setup({ baseUrl, maxRequests: 100, deferHuman: true });
         const token = await issue(f, "main", 100);
         const grant = await control.mintJobCapabilityToken(f.jobId);
@@ -211,7 +208,7 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
             assert.equal(calls, callsBefore);
           } finally { Date.now = originalNow; }
         }
-      } finally { config.gateway.repairMaxTokens = previousLimit; }
+      }
     });
     await context.test("historical Job cannot reset real transient model recovery allowance", async () => {
       const net = await import("node:net");

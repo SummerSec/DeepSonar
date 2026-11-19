@@ -108,7 +108,7 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function taskContext(value: unknown): TaskContext | null {
+export function taskContext(value: unknown): TaskContext | null {
   const parsed = taskContextSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
@@ -121,7 +121,7 @@ function isActiveStatus(status: string): boolean {
   return ["pending", "claimed", "provisioning", "running", "waiting_human"].includes(status);
 }
 
-async function loadTaskRows(
+export async function loadTaskRows(
   tx: EventIngestionTransaction,
   canvasId: string,
   projectId: string,
@@ -210,6 +210,7 @@ function currentState(
     // monotonic. Same-revision route retries retain an existing stop.
     stop_reason: sameObjective ? existing?.stop_reason ?? null : null,
     stopped_at: sameObjective ? existing?.stopped_at ?? null : null,
+    ...(sameObjective && existing?.stopped_job_id ? { stopped_job_id: existing.stopped_job_id } : {}),
   });
 }
 
@@ -234,11 +235,13 @@ async function stop(
   state: PlanExecutionStateValue,
   reason: string,
   objective?: PersistedPlanObjective,
+  stoppedJobId?: string,
 ): Promise<PlanExecutionStateValue> {
   const next = PlanExecutionState.parse({
     ...state,
     stop_reason: state.stop_reason ?? reason,
     stopped_at: state.stopped_at ?? new Date().toISOString(),
+    ...(!state.stop_reason && stoppedJobId ? { stopped_job_id: stoppedJobId } : {}),
   });
   if (objective) {
     objective = {
@@ -495,11 +498,13 @@ export async function drivePlanExecution(
     return { createdJobIds: [], state: await stop(tx, input.canvasId, nextState, "no_progress", input.objective) };
   }
   if (failedDependency) {
-    return { createdJobIds: [], state: await stop(tx, input.canvasId, nextState, "dependency_failed", input.objective) };
+    const failedTasks = contexts.filter(({ row }) => ["failed", "timeout", "cancelled", "orphan"].includes(String(row.status)));
+    return { createdJobIds: [], state: await stop(tx, input.canvasId, nextState, "dependency_failed", input.objective,
+      failedTasks.length === 1 ? failedTasks[0]!.row.id : undefined) };
   }
   const failedTask = contexts.find(({ row }) => ["failed", "timeout", "cancelled", "orphan"].includes(String(row.status)));
   if (failedTask) {
-    return { createdJobIds: [], state: await stop(tx, input.canvasId, nextState, `task_${failedTask.row.status}`, input.objective) };
+    return { createdJobIds: [], state: await stop(tx, input.canvasId, nextState, `task_${failedTask.row.status}`, input.objective, failedTask.row.id) };
   }
   if (newlyReady.length > 0 && nextState.lifetime_tasks_dispatched >= input.objective.budget.max_tasks) {
     return { createdJobIds: [], state: await stop(tx, input.canvasId, nextState, "budget_exhausted", input.objective) };

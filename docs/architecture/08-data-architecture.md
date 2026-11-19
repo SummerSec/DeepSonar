@@ -67,7 +67,6 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 保鲜门禁的单处编号核对：当前 schema v76，#1074 增加人工请求与累计时钟；历史 schema72 的 #1018 在 main `396fadab` 的基线71之上增加项目任务队列；该候选最终 SHA Actions 待验。主线已包含凭据历史保全、Canvas 引用索引、stopped Hub 准入及 Finding 候选引用的完整外键前缀索引。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替队列候选及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
 
-保鲜门禁的单处编号核对：当前 schema v75，#1074 增加人工请求与累计时钟；历史 schema72 的 #1018 在 main `396fadab` 的基线71之上增加项目任务队列；该候选最终 SHA Actions 待验。主线已包含凭据历史保全、Canvas 引用索引、stopped Hub 准入及 Finding 候选引用的完整外键前缀索引。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替队列候选及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
 
 ### Canvas 节点引用索引（#1002 P1-6）
 

@@ -10,11 +10,12 @@ import { destroyAndSettleHumanWaitRun } from "./dispatcher-human-wait.js";
 import { updateAttemptResource, beginEffect } from "./domains/job-attempt/index.js";
 import { humanExecutionStartedAt } from "./domains/job-control/human-continuation-clock.js";
 import { ensureGatewayRequestBudget } from "./gateway-request-policy.js";
+import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 
 /** Start with a user HTTP objective and Control Plan dispatch, then continue its actual child. */
 export async function historicalPlanCases(h: Awaited<ReturnType<typeof createPlanExecutionFixture>>) {
   const sealAndFail = async (jobId: string) => {
-    const runtime = await h.start(jobId), sandboxId = `plan-history-${jobId}`;
+    const runtime = await h.start(jobId, true), sandboxId = `plan-history-${jobId}`;
     await updateAttemptResource(h.sql, runtime.attempt, { sandboxId, phase: "provisioned" });
     await h.sql`UPDATE jobs SET sandbox_id=${sandboxId} WHERE id=${jobId}`;
     await humanExecutionStartedAt(h.sql, jobId, runtime.attempt);
@@ -32,7 +33,13 @@ export async function historicalPlanCases(h: Awaited<ReturnType<typeof createPla
       runAsync: async () => checkpointGuardFixture(), readWorkspaceFile: async () => bytes } as unknown as RuntimeHost;
     await sealHumanCheckpoint({ jobId, attemptId: runtime.attempt, host, excludedPaths: [], secrets: [], processBaseline: [] });
     await destroyAndSettleHumanWaitRun(h.sql, { destroy: async () => {} }, { jobId, attemptId: runtime.attempt, sandboxId });
-    await h.sql`UPDATE jobs SET status='failed' WHERE id=${jobId}`;
+    await h.sql.begin(async raw => {
+      const tx = raw as unknown as typeof h.sql;
+      await tx`SELECT id FROM canvases WHERE id=(SELECT canvas_id FROM jobs WHERE id=${jobId}) FOR UPDATE`;
+      const lifecycle = createSqlJobLifecycleApplication(tx);
+      assert.ok(await lifecycle.transitionJob(jobId, "failed", { error: "sealed historical execution failed", finished_at: new Date() }));
+      await h.core.advancePlanTaskAfterTerminalJob(tx, jobId);
+    });
     const [closed] = await h.sql`SELECT revision FROM human_requests WHERE id=${saved.id}`;
     return { mutation_id: randomUUID(), request_id: String(saved.id), expected_revision: Number(closed.revision),
       reply: { message_id: randomUUID(), body: "Continue the authorized Plan work with the original reference" } };
@@ -44,6 +51,8 @@ export async function historicalPlanCases(h: Awaited<ReturnType<typeof createPla
     assert.equal(submitted.statusCode, 200, submitted.body);
     const child = String((await h.children(f.hub))[0].id);
     const payload = await sealAndFail(child);
+    assert.equal((await h.state(f.canvas)).plan_execution.stop_reason, "task_failed");
+    assert.equal((await h.state(f.canvas)).plan_execution.stopped_job_id, child);
     if (mode === "stopped") await h.sql`UPDATE canvases SET target_json=jsonb_set(target_json,'{plan_execution,stop_reason}', '"user_stop"'::jsonb) WHERE id=${f.canvas}`;
     const response = await h.app.inject({ method: "POST", url: `/jobs/${child}/continuations`, payload });
     if (mode !== "remaining") {

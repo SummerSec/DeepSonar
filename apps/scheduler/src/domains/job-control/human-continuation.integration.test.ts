@@ -18,6 +18,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
   process.env.DATABASE_URL = url.toString(); process.env.AGENT_MODE = "fake";
   process.env.DEEPSONAR_AUTH_REQUIRED = "false"; process.env.BLOB_DIR = directory;
   process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
+  process.env.DEEPSONAR_REPAIR_MAX_TOKENS = "6";
   const [{ default: Fastify }, { default: websocket }, { sql, migrate }, { registerRoutes }, core, attempts, api,
     snapshots, { freezeJobRuntimeConfiguration }, checkpoints, { checkpointHash }, clock, { pumpHumanContinuations },
     { destroyAndSettleHumanWaitRun }, { createSqlJobLifecycleApplication }, humans] = await Promise.all([

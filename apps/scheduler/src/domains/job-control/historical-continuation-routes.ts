@@ -30,7 +30,7 @@ export function registerHistoricalContinuationRoutes(app: FastifyInstance) {
       if (body.reply) {
         await createHumanMessage({ id: body.reply.message_id, canvasId: String(job.canvas_id),
           target: { kind: "request", request_id: body.request_id, expected_revision: body.expected_revision },
-          body: body.reply.body, attachmentVersionIds: body.reply.attachment_version_ids });
+          body: body.reply.body, attachmentVersionIds: body.reply.attachment_version_ids, historicalContinuation: true });
         replySaved = true;
       }
       const replyId = body.reply?.message_id ?? body.saved_reply_message_id!;
