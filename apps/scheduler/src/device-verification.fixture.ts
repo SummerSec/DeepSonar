@@ -30,7 +30,8 @@ export async function verifyDeviceEvidenceEntrypoints(projectId: string) {
         const target = { network_policy: { allow_egress: true }, device_requirement: requirement };
         await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES (${canvasId},${projectId},'设备补证正常入口',${sql.json(target)})`;
         await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status) VALUES (${canvasId},'root','root','active')`;
-        await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status) VALUES (${sourceId},${projectId},${canvasId},'audit','succeeded')`;
+        await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
+          VALUES (${sourceId},${projectId},${canvasId},'audit','succeeded','{}')`;
         await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
           VALUES (${nodeId},${canvasId},${sourceId},'finding','设备补证对象','open',${sql.json({severity:'medium'})})`;
         await sql`INSERT INTO findings(id,project_id,job_id,node_id,fingerprint,title,severity)
@@ -95,7 +96,8 @@ export async function verifyDeviceEvidenceEntrypoints(projectId: string) {
     const remoteFinding = randomUUID();
     const remoteNode = randomUUID();
     await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES (${remoteCanvas},${projectId},'远端补证',${sql.json({network_policy:{allow_egress:true}})})`;
-    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status) VALUES (${remoteSource},${projectId},${remoteCanvas},'audit','succeeded')`;
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
+      VALUES (${remoteSource},${projectId},${remoteCanvas},'audit','succeeded','{}')`;
     await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status) VALUES (${remoteNode},${remoteCanvas},${remoteSource},'finding','remote','open')`;
     await sql`INSERT INTO findings(id,project_id,job_id,node_id,fingerprint,title,severity) VALUES (${remoteFinding},${projectId},${remoteSource},${remoteNode},${remoteFinding},'remote','medium')`;
     const remote = await app.inject({ method: "POST", url: `/findings/${remoteFinding}/evidence-jobs`, payload: {role:"test"} });

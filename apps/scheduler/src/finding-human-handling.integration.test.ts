@@ -159,7 +159,8 @@ if (!testDatabaseUrl) {
       await sql.unsafe(`DROP TRIGGER reject_operator_audit ON audit_logs`);
 
       const activeId = randomUUID();
-      await sql`INSERT INTO jobs(id,project_id,canvas_id,finding_id,type,status) VALUES (${activeId},${projectId},${canvasId},${findingId},'test','pending')`;
+      await sql`INSERT INTO jobs(id,project_id,canvas_id,finding_id,type,status,agent_snapshot_json)
+        VALUES (${activeId},${projectId},${canvasId},${findingId},'test','pending','{}')`;
       assert.equal((await patch(closeBody)).json().error_code, "FINDING_VERIFICATION_ACTIVE");
       await sql`UPDATE jobs SET status='failed' WHERE id=${activeId}`;
       const { createAttempt } = await import("./domains/job-attempt/index.js");
@@ -265,7 +266,8 @@ if (!testDatabaseUrl) {
       // 没有关联画布的历史记录仍可读，人工结束则必须有有效画布。
       const detachedJobId = randomUUID();
       const detachedFindingId = randomUUID();
-      await sql`INSERT INTO jobs(id,project_id,type,status) VALUES (${detachedJobId},${projectId},'audit','succeeded')`;
+      await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json)
+        VALUES (${detachedJobId},${projectId},'audit','succeeded','{}')`;
       await sql`INSERT INTO findings(id,project_id,job_id,fingerprint,title,severity,verify_status)
         VALUES (${detachedFindingId},${projectId},${detachedJobId},${detachedFindingId},'无画布历史 Finding','medium','needs_human')`;
       const detachedDetail = await app.inject({ method: "GET", url: `/findings/${detachedFindingId}`, headers });
