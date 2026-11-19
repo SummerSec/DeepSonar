@@ -510,3 +510,5 @@ RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-o
 #1074 的人工等待可通过项目队列显式暂存让位，回复在保存事务中回队尾，轮到后沿原续做门创建唯一后继。默认仍保留占位。schema 75 的决定与回复消费持久幂等，当前限定唯一人工等待，详见[队列专题](docs/PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。最终 SHA Actions 另验。
 
 #1126 的 Job 恢复界面按当前 Scheduler 动作与用户权限呈现，结果结论优先，维护者技术诊断默认折叠，详见[构件视图](docs/architecture/05-building-blocks.md#job-恢复提示1126)。恢复提交仍重新准入，最终 SHA Actions 待验。
+
+#1143 的 [PTY 清理事实与精确对账](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存宿主专用观察与原运行绑定，先提交旧凭据撤销及清理记录，再有界销毁并重核收口。DELETE 拒绝、超时和独立 unknown 分别保留；宿主 caller 不证明 OOM。无合法断点的整 Job 自动恢复尚未交付，晚 usage 与历史跨 Job 预算组合另验。

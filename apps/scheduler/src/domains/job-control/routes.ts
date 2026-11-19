@@ -41,6 +41,7 @@ import { projectJobProviderFields, projectJobSnapshot } from "../credential/proj
 import { revokeJobCapabilityTokens } from "../platform-api/tokens.js";
 import { projectContextDiagnostics } from "../context/index.js";
 import { readProvisionFailureEvidence } from "../../provision-failure-evidence.js";
+import { readRuntimeProcessEvidence } from "../../runtime-process-evidence.js";
 import {
   JOB_NOT_CANCELLABLE,
   JOB_NOT_RESUMABLE,
@@ -562,6 +563,7 @@ export function registerJobControlRoutes(app: FastifyInstance): void {
       findings,
       attempts,
       provision_diagnostics: provisionDiagnostics,
+      process_diagnostics: await readRuntimeProcessEvidence(sql, String(job.id), String(job.project_id)),
       effects,
       broadcasts,
       usage,

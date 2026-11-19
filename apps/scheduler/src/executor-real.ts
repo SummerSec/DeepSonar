@@ -1,4 +1,5 @@
 import { registerRuntimeTerminalState } from "./domains/platform-api/registry.js";
+import { recordRuntimeProcessEvidence } from "./runtime-process-evidence.js";
 import { prepareHumanCheckpointContext, persistHumanWaitCheckpoint } from "./domains/job-control/human-checkpoint.js";
 import { taskContractPrompt } from "./task-contract-preflight.js";
 import { prepareCompletionPayload } from "./completion-payload.js";
@@ -1796,6 +1797,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
           session_id: storedSessionId,
           ...(typeof state?.session_file === "string" ? { session_file: state.session_file } : {}),
         };
+      },
+      onProcessDiagnostic: async (observation) => {
+        await recordRuntimeProcessEvidence(sql, { jobId, attemptId: evidenceAttemptId, sandboxId: String(job.sandbox_id) }, observation);
       },
       onContextEvent: async (event) => {
         runtimeContext = applyRuntimeContextEvent(runtimeContext, event);
