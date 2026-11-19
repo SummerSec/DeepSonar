@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { registerHooks } from "node:module";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { api, type JobDetail } from "./api";
@@ -9,6 +10,12 @@ import { ConfirmDialogProvider } from "./components/ConfirmDialog";
 type Submission = Parameters<typeof api.createHistoricalContinuation>[1];
 
 test("JobDetail historical continuation respects permission, immutable retries and editable unsaved rejection", async context => {
+  // Keep the real detail components. Stylesheets have no behavior in JSDOM.
+  const hooks = registerHooks({ load(url, options, nextLoad) {
+    if (url.endsWith(".css")) return { format: "module", source: "export {};", shortCircuit: true };
+    return nextLoad(url, options);
+  } });
+  context.after(() => hooks.deregister());
   const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
   const replacements = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
     Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true };

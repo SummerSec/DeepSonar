@@ -121,7 +121,8 @@ if (!testDatabaseUrl) {
       // Historical continuation uses the normal operator scope and exact project boundary.
       {
         const jobId = randomUUID(), requestId = randomUUID();
-        await sql`INSERT INTO jobs(id,project_id,type,status) VALUES(${jobId},${ownProjectId},'audit','failed')`;
+        await sql`INSERT INTO jobs(id,project_id,type,status,agent_snapshot_json)
+          VALUES(${jobId},${ownProjectId},'audit','failed','{}'::jsonb)`;
         const payload = { mutation_id: randomUUID(), request_id: requestId, expected_revision: 0,
           reply: { message_id: randomUUID(), body: "Check authorized saved progress" } };
         const viewer = await createUser({ username: `viewer-${randomUUID().slice(0,8)}`, password: `${randomUUID()}A!`, role: "viewer" });
