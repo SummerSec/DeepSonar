@@ -189,7 +189,7 @@ test("OpenSandbox production overlay is the default real deploy path", () => {
   assert.match(deploySh, /network connect bridge/);
   assert.match(overlay, /OPEN_SANDBOX_HOST_PORT:-18081/);
   assert.match(overlay, /condition: service_healthy/);
-  assert.match(overlay, /127\.0\.0\.1:8080\/health/);
+  assert.match(overlay, /\/etc\/opensandbox\/management-health\.py/);
   assert.match(overlay, /OPENSANDBOX_SERVER_API_KEY/);
   // #685: business network only; the managed proxy reaches Scheduler over the
   // gateway_upstream socket volume. Full topology lint: compose-network-topology.test.ts.
