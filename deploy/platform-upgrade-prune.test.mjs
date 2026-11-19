@@ -82,7 +82,23 @@ test('intent and durable host receipt precede DROP, then absence is audited', as
   const snapshot = pruneFixture(), plan = planGenerationPrune(snapshot), f = executor(snapshot);
   const result = await applyGenerationPrune(f.io, plan);
   assert.equal(result.dropped.length, 1);
-  assert.deepEqual(f.events, ['intent', 'audit:intent', 'dropping', 'drop', 'dropped', 'audit:dropped']);
+  assert.deepEqual(f.events, ['intent', 'audit:intent', 'dropping', 'drop', 'audit:dropped', 'dropped']);
+});
+
+test('failed final audit retains dropping receipt until original plan completes the audit', async () => {
+  const snapshot = pruneFixture(), plan = planGenerationPrune(snapshot), f = executor(snapshot);
+  const audit = f.io.audit;
+  f.io.audit = async (state, receipt) => {
+    if (receipt.phase === 'dropped') throw Error('fixture final audit unavailable');
+    await audit(state, receipt);
+  };
+  await assert.rejects(applyGenerationPrune(f.io, plan), /fixture final audit unavailable/);
+  assert.equal(f.receipt().phase, 'dropping');
+  f.io.audit = audit;
+  const result = await applyGenerationPrune(f.io, plan);
+  assert.equal(result.dropped[0].reconciled, true);
+  assert.equal(f.receipt().phase, 'dropped');
+  assert.equal(f.events.filter(event => event === 'drop').length, 1);
 });
 
 test('lost DROP response reconciles absence and refuses a same-name replacement OID', async () => {

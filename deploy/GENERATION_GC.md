@@ -37,7 +37,7 @@ ACL 仅允许维护 owner、PUBLIC 的 TEMPORARY 和已封禁且无角色成员�
 
 ## 删除响应丢失与重试
 
-每库依序持久化宿主 intent、向当前业务库追加 platform_upgrade.generation_prune_intent 审计、复验准入、持久化 dropping 凭据，再发送普通 DROP。无 FORCE 或会话终止。确证库已消失后记录 dropped 凭据和 platform_upgrade.generation_pruned 审计。审计按计划、数据库和动作去重。
+每库依序持久化宿主 intent、向当前业务库追加 platform_upgrade.generation_prune_intent 审计、复验准入、持久化 dropping 凭据，再发送普通 DROP。无 FORCE 或会话终止。确证库已消失后先记录 platform_upgrade.generation_pruned 审计，审计成功才记录 dropped 凭据。后置审计失败保留 dropping 凭据，禁止新预览覆盖计划，原 hash 重试幂等补齐审计。审计按计划、数据库和动作去重。
 
 响应丢失返回 PRUNE_DROP_UNCERTAIN，保留原预览与 receipt。使用原 hash 重试，只有同 cluster/deployment 的 dropping/dropped receipt 能解释的缺库才可完成对账。同名新 OID 返回 PRUNE_DATABASE_IDENTITY_CHANGED。未决时先用原计划完成对账或人工核查，再生成新预览。审计字节是删除前估算，实际磁盘回收受 PostgreSQL 和文件系统影响。
 

@@ -51,14 +51,19 @@ CREATE TABLE audit_logs(actor_type text,actor_id text,action text,resource_type 
       source: {database: source}, candidateDatabase: database, runtime: {role: `runtime_${i}`}, rollbackRuntime: {role: `rollback_${i}`}}));
   }
   const current = databases[3];
-  let lost = false;
+  let lost = false, finalAuditFailed = false;
   const transport = {rows: async ({database, sql: statement}) => {
     if (statement.startsWith('DROP DATABASE')) {
       sql(database, statement);
       if (!lost) {lost = true; throw Error('fixture lost committed DROP response');}
       return [];
     }
-    if (statement.startsWith('INSERT INTO audit_logs')) {sql(database, statement); return [];}
+    if (statement.startsWith('INSERT INTO audit_logs')) {
+      if (!finalAuditFailed && statement.includes("'platform_upgrade.generation_pruned'")) {
+        finalAuditFailed = true; throw Error('fixture final audit unavailable');
+      }
+      sql(database, statement); return [];
+    }
     return json(database, `SELECT coalesce(json_agg(t),'[]'::json) FROM (${statement}) t`);
   }};
   let runtimeReferences = [current];
@@ -98,6 +103,8 @@ CREATE TABLE audit_logs(actor_type text,actor_id text,action text,resource_type 
   sql('postgres', `CREATE DATABASE "${replacement}" TEMPLATE template0;`);
   await assert.rejects(run({apply: true, approvedPlanHash: preview.plan_hash}), /PRUNE_DATABASE_IDENTITY_CHANGED/);
   sql('postgres', `DROP DATABASE "${replacement}";`);
+  await assert.rejects(run({apply: true, approvedPlanHash: preview.plan_hash}), /fixture final audit unavailable/);
+  await assert.rejects(run(), /PRUNE_PLAN_RECOVERY_REQUIRED/);
   const result = await run({apply: true, approvedPlanHash: preview.plan_hash});
   assert.equal(result.dropped.length, 2);
   assert.equal(result.dropped[0].reconciled, true);

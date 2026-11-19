@@ -90,8 +90,8 @@ export async function applyGenerationPrune(io, plan) {
       if (await verify()) throw fail('PRUNE_DROP_UNCERTAIN');
     }
     receipt = {...receipt, phase: 'dropped'};
-    await io.writeReceipt(receipt);
     await io.audit(await io.snapshot(), receipt);
+    await io.writeReceipt(receipt);
     dropped.push({...candidate, reconciled: !snapshot});
   }
   return {schema: plan.schema, plan_hash: approvedHash, dropped};
