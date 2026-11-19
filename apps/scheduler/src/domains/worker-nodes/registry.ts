@@ -506,11 +506,16 @@ export async function lookupSandboxLease(sandboxId: string): Promise<string | nu
 export async function releaseSandboxLease(sandboxId: string): Promise<void> {
   // Retain the exact owner across destroy -> failed run-settlement commit. A
   // restarted Scheduler must never infer disappearance from a missing API key.
+  // Boot may destroy before the explicit cleanup intent is prepared. New host
+  // observations already require this owner to survive that release attempt.
   await sql`DELETE FROM worker_sandbox_leases l WHERE l.sandbox_id = ${sandboxId}
     AND NOT EXISTS (SELECT 1 FROM jobs j JOIN job_attempt_effects e ON e.job_id=j.id
       WHERE ((j.status='waiting_human' AND e.status<>'settled')
           OR (e.intent_json->'host_cleanup'->>'schema'='deepsonar.runtime-cleanup/v1'
-            AND e.intent_json->'host_cleanup'->>'state'='pending')) AND j.sandbox_id=l.sandbox_id
+            AND e.intent_json->'host_cleanup'->>'state'='pending')
+          OR (jsonb_array_length(COALESCE(e.intent_json->'host_process_audits','[]'::jsonb))>0
+            AND COALESCE(e.intent_json->'host_cleanup'->>'state','pending')='pending'
+            AND e.job_id::text=l.job_id AND e.attempt_id::text=l.attempt_id)) AND j.sandbox_id=l.sandbox_id
         AND e.effect_kind='agent_run'
         AND e.resource_identity_json->>'sandbox_id'=l.sandbox_id
         AND (l.attempt_id IS NULL OR e.attempt_id::text=l.attempt_id))`;

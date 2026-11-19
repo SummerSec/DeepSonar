@@ -63,26 +63,33 @@ test("apply settles only provable effects, records audit fields and stays idempo
     ...agentRuns(4).map(row => ({ ...row, effect_kind: "canvas_delivery", canvas_node_id: `node-${row.id}` })),
     { id: uuid(50), effect_kind: "gateway_model_request", attempt_status: "failed", sandbox_id: null, usage_rows: 2, canvas_node_id: null },
     { id: uuid(60), effect_kind: "gateway_model_request", attempt_status: "failed", sandbox_id: null, usage_rows: 0, canvas_node_id: null },
+    ...agentRuns(2).map((row, index) => ({ ...row, id: uuid(70 + index) })),
   ]);
   const first = await runEffectReconcile(db, { action: "apply", operation_id: "op-42" });
   assert.equal(first.applied, 5);
-  assert.equal(first.remaining_unknown, 1, "the unprovable request stays unknown");
-  assert.deepEqual(first.summary.undecided.map((row) => row.effect_id), [uuid(60)]);
+  assert.equal(first.remaining_unknown, 3, "the unprovable request and runs stay unknown");
+  assert.deepEqual(first.summary.undecided.map((row) => row.effect_id), [uuid(60), uuid(70), uuid(71)]);
   assert.equal(first.ok, false);
 
   const updates = statements.filter((sql) => sql.includes("UPDATE job_attempt_effects"));
-  assert.equal(updates.length, 2, "one statement per settlement group");
+  assert.equal(updates.length, 5, "four distinct canvas node receipts and one usage receipt form five settlement groups");
+  const deliveryUpdates = updates.filter(sql => sql.includes('"outcome":"delivered"'));
+  assert.equal(deliveryUpdates.length, 4);
+  for (const row of agentRuns(4)) {
+    assert.equal(deliveryUpdates.filter(sql => sql.includes(`"canvas_node_id":"node-${row.id}"`)).length, 1);
+  }
   for (const sql of updates) {
     assert.match(sql, /status IN \('unknown', 'effect_pending'\)/u, "a concurrent kernel settlement must win");
     assert.match(sql, /reconcile_operation_id/u);
     assert.match(sql, /"reconcile_operation_id":"op-42"/u, "the operation id is recorded on the row");
     assert.doesNotMatch(sql, /status = 'unknown'/u, "settling must never move a row back to unknown");
+    assert.ok(!sql.includes(uuid(70)) && !sql.includes(uuid(71)), "unproven runs never enter a settlement statement");
   }
 
   const second = await runEffectReconcile(db, { action: "apply", operation_id: "op-43" });
   assert.equal(second.applied, 0, "a re-run settles nothing new");
-  assert.equal(second.remaining_unknown, 1);
-  assert.deepEqual([...remaining.keys()], [uuid(60)]);
+  assert.equal(second.remaining_unknown, 3);
+  assert.deepEqual([...remaining.keys()], [uuid(60), uuid(70), uuid(71)]);
 });
 
 test("invalid requests are refused before any statement runs", async () => {
