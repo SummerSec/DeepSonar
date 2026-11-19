@@ -26,9 +26,10 @@ test("human native import uses the normal runner resume path with fresh executio
   const runtime:RuntimeHost={run:async()=>({exitCode:0,stdout:'',stderr:''}),runAsync:async(command,options)=>{
     if(command.startsWith("python3 -c ")) {
       if(command.includes(" create "))order.push("fresh-credentials");
-      return {stdinClosed:false,async write(value){protocolInputs.push(value);},
-        async closeStdin(){this.stdinClosed=true;},async kill(){this.stdinClosed=true;},
+      const writer:RuntimeProcess={stdinClosed:false,async write(value){protocolInputs.push(value);},
+        async closeStdin(){writer.stdinClosed=true;},async kill(){writer.stdinClosed=true;},
         async *[Symbol.asyncIterator](){yield {type:"stdout" as const,chunk:"ok\n"};yield {type:"exit" as const,exitCode:0};}};
+      return writer;
     }
     order.push("resume");launches.push(command);
     assert.equal(options?.env?.DEEPSONAR_GATEWAY_TOKEN,undefined);
