@@ -1178,7 +1178,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
         env: useReal
           ? {
               DEEPSONAR_ALLOW_EGRESS: allowEgress ? "1" : "0",
-              ...platformCapability!.env,
+              DEEPSONAR_API_BASE_URL: platformCapability!.env.DEEPSONAR_API_BASE_URL, DEEPSONAR_JOB_ID: jobId,
               ...(deviceLease?.env ?? {}),
             }
           : undefined,

@@ -247,7 +247,8 @@ export async function runRealPiRpc() {
       // acceptance always imports the installed production wrapper directly.
       writeFileSync(wrapper, readFileSync(originalWrapper, "utf8")
         .replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`)
-        .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(HOST_CONTEXT_POLICY)));
+        .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(HOST_CONTEXT_POLICY))
+        .replace('"/opt/deepsonar/dsh/deepsonar-private-reader.mjs"', JSON.stringify("data:text/javascript;base64," + Buffer.from(readFileSync(path.join(REPO, "packages/runtime-sandbox/src/private-credential-reader.ts"), "utf8").split("String.raw`\n")[1].split("`;")[0]).toString("base64"))));
     }
     for (const scenario of PI_RPC_SCENARIOS) {
       const scenarioRoot = path.join(root, scenario);
@@ -429,7 +430,8 @@ export async function runGrowthProbe({ rounds = 4, resumeRounds = 3 } = {}) {
       wrapper = path.join(root, "tested-wrapper.ts");
       writeFileSync(wrapper, readFileSync(originalWrapper, "utf8")
         .replaceAll(`${IMAGE_OM_ROOT}/src/`, `${omRoot.replaceAll("\\", "/")}/src/`)
-        .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(HOST_CONTEXT_POLICY)));
+        .replace('"/opt/deepsonar/request-budget-source/pi-main-request-budget.ts"', JSON.stringify(HOST_CONTEXT_POLICY))
+        .replace('"/opt/deepsonar/dsh/deepsonar-private-reader.mjs"', JSON.stringify("data:text/javascript;base64," + Buffer.from(readFileSync(path.join(REPO, "packages/runtime-sandbox/src/private-credential-reader.ts"), "utf8").split("String.raw`\n")[1].split("`;")[0]).toString("base64"))));
     }
     const scenarioRoot = path.join(root, "growth");
     mkdirSync(scenarioRoot);

@@ -1,7 +1,7 @@
 // #1036 D: installed Pi + production main extension + actual SDK over loopback.
 // The authenticated Gateway responses are fixtures, NOT SQL admission/effect proof.
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
@@ -129,7 +129,9 @@ export async function runNativePiMainRecovery() {
     // Materialize the unmodified production-generated extension from installed
     // source. Pi's real loader resolves the public compat SDK import itself.
     const policyModule = path.join(root, "policy.mjs");
-    writeFileSync(policyModule, stripTypeScriptTypes(source, { mode: "transform" }));
+    const readerModule = path.join(root, "private-credential-reader.mjs");
+    writeFileSync(readerModule, stripTypeScriptTypes(readFileSync("/opt/deepsonar/request-budget-source/private-credential-reader.ts", "utf8")));
+    writeFileSync(policyModule, stripTypeScriptTypes(source, { mode: "transform" }).replace('"./private-credential-reader.js"', JSON.stringify(pathToFileURL(readerModule).href)));
     const { PI_MAIN_REQUEST_BUDGET_SOURCE } = await import(pathToFileURL(policyModule).href);
     const extension = path.join(root, "main-request-budget.mjs");
     writeFileSync(extension, PI_MAIN_REQUEST_BUDGET_SOURCE);
@@ -155,6 +157,10 @@ export async function runNativePiMainRecovery() {
       mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
       const gateway = await gatewayFixture(scenario);
       let client;
+      const credentialDirectory = path.join(root, '.deepsonar-credentials-' + randomUUID());
+      mkdirSync(credentialDirectory, { mode: 0o700 });
+      const tokenFile = path.join(credentialDirectory, 'gateway-token');
+      writeFileSync(tokenFile, TOKEN, { mode: 0o600 });
       try {
         // Keep Pi's normal retry settings: the production wrapper's maxRetries=0
         // controls SDK HTTP retries; subsequent native retries must re-read allowance.
@@ -165,7 +171,7 @@ export async function runNativePiMainRecovery() {
         } } }));
         client = new RpcClient(executable, ["--provider", PROVIDER, "--model", MODEL, "-e", mutated ? mutantExtension : extension], {
           cwd: workspace, env: { ...process.env, HOME: home, USERPROFILE: home, PI_CODING_AGENT_DIR: home,
-            DEEPSONAR_GATEWAY_TOKEN: TOKEN, DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${gateway.url}/gateway` },
+            DEEPSONAR_GATEWAY_TOKEN_FILE: tokenFile, DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${gateway.url}/gateway` },
         }, boundary.PiJsonlFramer, line => boundary.parsePiJsonlRecord(line, 8 * 1024 * 1024));
         const before = await client.command("get_state");
         assert.equal(before.success, true); assert.ok(before.data.sessionId);

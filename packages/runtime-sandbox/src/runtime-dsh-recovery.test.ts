@@ -46,7 +46,7 @@ test("DSH transient error fails once without starting unsupported persisted resu
   const result = await runRealAgent(host, {
     provider: "dsh", env: {}, input: "original task", model: "smoke", onEvent: (event) => { events.push(event); },
     contextIdentity: { context_id: "ctx_dsh_recovery", context_revision: 0, adapter_id: "dsh", adapter_version: "0.2.1-rc.2", runtime_identity: "runtime", transform_chain_digest: `sha256:${"a".repeat(64)}` },
-    dshProvider: { provider: "gateway", model: "smoke", config: { providers: { gateway: { api: "openai-completions", apiKeyEnv: "DEEPSONAR_GATEWAY_TOKEN", baseURL: "http://127.0.0.1:1", models: [{ id: "smoke" }] } } } },
+    dshProvider: { provider: "gateway", model: "smoke", config: { providers: { gateway: { api: "openai-completions", apiKeyEnv: "DEEPSONAR_JOB_GATEWAY", baseURL: "http://127.0.0.1:1", models: [{ id: "smoke" }] } } } },
   });
   assert.equal(result.terminalOutcome, "failure");
   assert.match(result.error ?? "", /CONTEXT_RESUME_UNSUPPORTED/);
@@ -105,7 +105,7 @@ for (const gate of ["absent", "complete", "incomplete"] as const) {
     const result = await runRealAgent(host, {
       provider: "dsh", env: {}, input: "subagent smoke", model: "cordis-smoke", onEvent: (event) => { events.push(event); },
       contextIdentity: { context_id: "ctx_dsh_async", context_revision: 0, adapter_id: "dsh", adapter_version: "0.2.1-rc.2", runtime_identity: "runtime", transform_chain_digest: `sha256:${"a".repeat(64)}` },
-      dshProvider: { provider: "deepsonar-smoke", model: "cordis-smoke", config: { providers: { "deepsonar-smoke": { api: "openai-completions", apiKeyEnv: "DEEPSONAR_GATEWAY_TOKEN", baseURL: "http://127.0.0.1:1", models: [{ id: "cordis-smoke" }] } } } },
+      dshProvider: { provider: "deepsonar-smoke", model: "cordis-smoke", config: { providers: { "deepsonar-smoke": { api: "openai-completions", apiKeyEnv: "DEEPSONAR_JOB_GATEWAY", baseURL: "http://127.0.0.1:1", models: [{ id: "cordis-smoke" }] } } } },
       ...(gate === "absent" ? {} : { completionGate: () => {
         assert.ok(process.childFinished, "completion gate inspected an unfinished child turn");
         gateChecks++;
@@ -154,7 +154,7 @@ for (const interruption of ["job cancelled", "runtime deadline timeout"]) {
       provider: "dsh", env: {}, input: "slow child", model: "cordis-smoke",
       completionGate: () => { assert.fail("host interruption must not enter the completion gate"); },
       contextIdentity: { context_id: "ctx_dsh_interrupt", context_revision: 0, adapter_id: "dsh", adapter_version: "0.2.1-rc.2", runtime_identity: "runtime", transform_chain_digest: `sha256:${"a".repeat(64)}` },
-      dshProvider: { provider: "gateway", model: "cordis-smoke", config: { providers: { gateway: { api: "openai-completions", apiKeyEnv: "DEEPSONAR_GATEWAY_TOKEN", baseURL: "http://127.0.0.1:1", models: [{ id: "cordis-smoke" }] } } } },
+      dshProvider: { provider: "gateway", model: "cordis-smoke", config: { providers: { gateway: { api: "openai-completions", apiKeyEnv: "DEEPSONAR_JOB_GATEWAY", baseURL: "http://127.0.0.1:1", models: [{ id: "cordis-smoke" }] } } } },
     });
     assert.equal(result.terminalOutcome, "failure");
     assert.match(result.error ?? "", interruption.includes("timeout") ? /CONTEXT_RESUME_UNSUPPORTED/ : /job cancelled/);

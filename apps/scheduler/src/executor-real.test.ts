@@ -399,7 +399,7 @@ test("OpenSandbox Platform API PoC source-text contract injects capability env a
   assert.match(source, /host\.run\("python3 \/workspace\/poc-emit-fact\.py"/);
   assert.doesNotMatch(source, /mintJobCapabilityToken/);
   assert.doesNotMatch(source, /host\.run\([\s\S]*DEEPSONAR_API_TOKEN/);
-  assert.match(source, /os\.environ\["DEEPSONAR_API_TOKEN"\]/);
+  assert.match(source, /os\.environ\["DEEPSONAR_CONTROL_TOKEN_FILE"\]/);
   assert.match(source, /submit_hub_decision/);
 });
 
@@ -412,7 +412,7 @@ test("real executor passes the reserved Skill to the sandbox without putting the
   assert.match(source, /DEEPSONAR_API_TOKEN: grant\.token/);
   assert.match(source, /DEEPSONAR_JOB_ID: jobId/);
   assert.match(dispatcher, /platformCapability = await preparePlatformCapability\(jobId, snapshot\)/);
-  assert.match(dispatcher, /DEEPSONAR_ALLOW_EGRESS:[\s\S]*\.\.\.platformCapability!\.env/);
+  assert.match(dispatcher, /DEEPSONAR_ALLOW_EGRESS:[\s\S]*DEEPSONAR_API_BASE_URL: platformCapability!\.env/);
   assert.match(dispatcher, /transitionJob\(jobId, "running"[\s\S]*activateProvisionedJobCapabilityTokens\(jobId\)/);
   assert.match(dispatcher, /finally \{[\s\S]*revokeJobTokens\(jobId, "dispatcher_cleanup"\)/);
   assert.match(dispatcher, /finally \{[\s\S]*revokeJobCapabilityTokens\(jobId\)/);
@@ -429,7 +429,7 @@ test("real executor passes the reserved Skill to the sandbox without putting the
   assert.ok(manifestStart >= 0 && manifestEnd > manifestStart);
   const manifestSource = source.slice(manifestStart, manifestEnd);
   assert.match(manifestSource, /env_names:/);
-  assert.match(manifestSource, /DEEPSONAR_API_TOKEN/);
+  assert.match(manifestSource, /DEEPSONAR_CONTROL_TOKEN_FILE/);
   assert.doesNotMatch(manifestSource, /platformToken/);
   assert.doesNotMatch(manifestSource, /DEEPSONAR_API_TOKEN\s*:/);
   assert.match(manifestSource, /system_mcp:\s*null/);

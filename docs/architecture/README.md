@@ -158,3 +158,5 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 知识来源登记与历史只读预览的历史收敛见[ADR0021](adr/0021-knowledge-source-preview.md)；用户本轮明确授权的有界项目批次由[ADR0023](adr/0023-project-knowledge-collection.md)取代其中批处理暂缓限制，保留旧knowledge:auto禁用、历史只读与无schema变化。FR-KNOW-001/002、06/08/09/10和trace已同步到collector、Attempt/manifest审计、trial隔离、6×2比较门及activity投影；注意力成本在[专题](../PROJECT_KNOWLEDGE.md#注意力成本)。原候选6d96df59的主CI与Reverse专项已通过，同步main后的候选须独立验收，证据见[专题](../PROJECT_KNOWLEDGE.md#验证与运维)；未合并未部署，真实模型与质量收益未知。
 
 #1074 的[队列显式让位](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)同步 FR-TASK-008、FR-CTRL-006 及运行时/数据/API 视图。schema 75 新增 yielded 与持久请求/回复消费，最终 SHA Actions 另验。
+
+#1032 A1 三 CLI 凭据文件通道及未交付边界见[Gateway 专题](../MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。当前 PR 的 Actions 尚待验收。

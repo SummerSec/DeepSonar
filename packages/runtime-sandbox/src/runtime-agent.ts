@@ -38,6 +38,7 @@ import { MODEL_REQUEST_POLICY_PATH, MODEL_REQUEST_POLICY_SOURCE } from "./model-
 import { PI_MAIN_REQUEST_BUDGET_PATH, PI_MAIN_REQUEST_BUDGET_SOURCE } from "./pi-main-request-budget.js";
 import { createRuntimeWarningReporter, type RuntimeWarning } from "./runtime-warnings.js";
 import { classifyCliSessionResumeError, runtimeErrorText } from "./runtime-error-classification.js";
+import { materializePrivateJobFiles, privateCredentialEnvironment } from "./private-job-files.js";
 
 export { classifyCliSessionResumeError, type CliSessionResumeReason } from "./runtime-error-classification.js";
 export type ReasoningEffort = string;
@@ -60,6 +61,8 @@ export interface RealAgentSpec {
   /** DSH tool presentation preset; ignored by other providers. */
   dshTaskMode?: "standard" | "ptc";
   env: Record<string, string>;
+  /** Host-only current Job authentication. Never forwarded as CLI environment values. */
+  privateCredentials?: { controlToken?: string; gatewayToken?: string; observationalMemoryToken?: string };
   /** Hub 为本 Job 生成的本轮任务消息，等价于各 CLI 的非交互 prompt/input。 */
   input: string;
   /** 平台不可变安全边界；与 /workspace 下的角色说明文件分层。 */
@@ -1236,6 +1239,38 @@ export function mapCliEvent(
 }
 
 export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Promise<RealAgentResult> {
+  const credentials = spec.privateCredentials;
+  const files: Record<string, string> = {};
+  if (credentials?.controlToken) files["control-token"] = credentials.controlToken;
+  if (credentials?.gatewayToken) files["gateway-token"] = credentials.gatewayToken;
+  if (credentials?.observationalMemoryToken) files["om-token"] = credentials.observationalMemoryToken;
+  const workspaceFiles = { ...(spec.workspaceFiles ?? {}) };
+  for (const [filename, content] of Object.entries(workspaceFiles)) {
+    if (filename.endsWith("/.pi/agent/auth.json")) {
+      if (files["pi-auth.json"] && files["pi-auth.json"] !== content) throw new Error("PRIVATE_PI_AUTH_MISMATCH");
+      files["pi-auth.json"] = content;
+      delete workspaceFiles[filename];
+    }
+  }
+  if (!Object.keys(files).length) return runAgentWithPrivateFiles(host, spec);
+  const privateFiles = await materializePrivateJobFiles(host, files);
+  try {
+    await ensureRuntimeHome(host);
+    if (files["pi-auth.json"]) await privateFiles.installPiAuth();
+    await privateFiles.check();
+    const env = privateCredentialEnvironment(spec.env, privateFiles);
+    return await runAgentWithPrivateFiles(host, { ...spec, env, workspaceFiles });
+  } finally {
+    await privateFiles.cleanup().catch(() => {
+      // The dispatcher still destroys this Job's sandbox. Cleanup diagnostics
+      // cannot replace an accepted terminal result or the original startup error.
+      try { spec.onWarning?.({ code: "private_credentials_cleanup_failed", detail: "sandbox_teardown_required" }); }
+      catch { /* A diagnostic callback has no authority over the Job outcome. */ }
+    });
+  }
+}
+
+async function runAgentWithPrivateFiles(host: RuntimeHost, spec: RealAgentSpec): Promise<RealAgentResult> {
   const secretValues = [...new Set((spec.secretValues ?? []).filter((value): value is string => typeof value === "string" && value.length > 0))];
   const adapter = requireAgentCliRuntimeAdapter(spec.provider, spec.runtimeImageKey);
   if (spec.agentRuntimeLaunch) {
@@ -1289,7 +1324,7 @@ export async function runRealAgent(host: RuntimeHost, spec: RealAgentSpec): Prom
   const cliEnv = runtimeCliEnv(spec.env);
   const piMainBudgetEnabled = spec.provider === "pi" && Boolean(cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
   if (cliEnv.DEEPSONAR_REQUEST_POLICY_UPSTREAM) {
-    if (!cliEnv.DEEPSONAR_GATEWAY_TOKEN) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
+    if (!cliEnv.DEEPSONAR_GATEWAY_TOKEN_FILE) throw new Error("MODEL_REQUEST_POLICY_TOKEN_MISSING");
     await host.run(`mkdir -p -- ${shellQuote(RUNTIME_DIR)}`);
     await host.uploadFile(MODEL_REQUEST_POLICY_SOURCE, MODEL_REQUEST_POLICY_PATH);
   }

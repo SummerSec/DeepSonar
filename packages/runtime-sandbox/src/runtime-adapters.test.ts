@@ -74,7 +74,7 @@ function testDshProvider(reasoning?: string) {
       providers: {
         xxxx: {
           api: "openai-responses",
-          apiKeyEnv: "DEEPSONAR_GATEWAY_TOKEN",
+          apiKeyEnv: "DEEPSONAR_JOB_GATEWAY",
           baseURL: "http://deepsonar-gateway:3100/gateway",
           models: [{ id: "gpt-5.6", reasoningEfforts: { low: "low", high: "high", max: "thinking-v2.5" } }],
           ...(reasoning ? { reasoning } : {}),
@@ -349,14 +349,14 @@ test("governed DSH rejects an incompatible image before launching or registering
   for (const exitCode of [0, 78]) {
     const fake = fakeSandbox(exitCode);
     const context = { host: fake.host, env: { DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://gateway/gateway",
-      DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
+      DEEPSONAR_GATEWAY_TOKEN_FILE: "/workspace/.deepsonar-credentials-11111111-1111-4111-8111-111111111111/gateway-token" },
       cwd: "/workspace", input: "task", dshProvider: testDshProvider(),
       mcpConfigPath: "/workspace/.deepsonar/mcp.json" };
     if (exitCode === 0) {
       await adapter.start(context);
       assert.equal(fake.commands.length, 1);
       assert.match(fake.commands[0]!, /model-request-policy\.mjs/);
-      assert.equal(fake.envs[0]?.DEEPSONAR_GATEWAY_TOKEN, "synthetic-main-token");
+      assert.equal(fake.envs[0]?.DEEPSONAR_GATEWAY_TOKEN_FILE, context.env.DEEPSONAR_GATEWAY_TOKEN_FILE);
     } else {
       await assert.rejects(adapter.start(context), /DSH_REQUEST_BUDGET_IMAGE_CONTENT_INVALID: select a verified runtime image/);
       assert.equal(fake.commands.length, 0, "do not reach Cordis' misleading no-adapter error");

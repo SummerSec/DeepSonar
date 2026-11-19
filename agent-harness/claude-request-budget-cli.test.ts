@@ -1,8 +1,8 @@
 /** Real pinned Claude CLI, synthetic provider only; not a Scheduler/launch acceptance. */
 import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID, createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
@@ -42,6 +42,11 @@ async function bytes(req: http.IncomingMessage) {
 
 test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-budget tool turn", { timeout: 180_000 }, async t => {
   const dir = await mkdtemp(path.join(tmpdir(), "claude-native-budget-"));
+  const credentials = path.join(dir, '.deepsonar-credentials-' + randomUUID());
+  await mkdir(credentials, { mode: 0o700 });
+  const tokenFile = path.join(credentials, 'gateway-token');
+  await writeFile(tokenFile, token, { mode: 0o600 });
+  const privateAuth = { environment: { DEEPSONAR_GATEWAY_TOKEN_FILE: tokenFile } };
   let stage = "image-version";
   let output = "";
   let resultReceived = false;
@@ -217,10 +222,10 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     policy = await api.startModelRequestPolicy({ upstream: upstream + "/gateway", token, port: 0 });
     const captureUrl = await listen(capture);
     const prepared = await api.prepareClaudeLaunch(
-      "claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools Bash --no-session-persistence",
-      { DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway", DEEPSONAR_GATEWAY_TOKEN: token,
+      "claude -p --settings '{\"apiKeyHelper\":\"node /opt/deepsonar/dsh/deepsonar-claude-key.mjs\"}' --input-format stream-json --output-format stream-json --include-partial-messages --verbose --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools Bash --no-session-persistence",
+      { DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway", ...privateAuth.environment,
         HOME: "/tmp/claude-budget", CLAUDE_CONFIG_DIR: "/tmp/claude-budget/config",
-        ANTHROPIC_API_KEY: token, ANTHROPIC_BASE_URL: captureUrl + "/gateway",
+        ANTHROPIC_BASE_URL: captureUrl + "/gateway",
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
         MAX_THINKING_TOKENS: "0" });
     assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "4096");

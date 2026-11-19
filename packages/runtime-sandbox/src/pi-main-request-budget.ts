@@ -1,3 +1,5 @@
+import { PRIVATE_CREDENTIAL_READER_SOURCE } from "./private-credential-reader.js";
+
 /** Embedded in both generated Pi and DSH policies; never serializes error prose. */
 const PI_REQUEST_ERROR_DIAGNOSTIC_SOURCE = String.raw`
 const hostFailures = new WeakMap();
@@ -121,6 +123,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
+${PRIVATE_CREDENTIAL_READER_SOURCE}
 ${PI_ANTHROPIC_THINKING_POLICY_SOURCE}
 ${PI_REQUEST_ERROR_DIAGNOSTIC_SOURCE}
 
@@ -238,9 +241,9 @@ export function preparePiMainSdkRequest(model, options, allowance) {
 
 export function createPiMainRequestBudgetExtension(env = process.env, delegate = sdkStreamSimple) {
   const gateway = endpoint(env.DEEPSONAR_REQUEST_POLICY_UPSTREAM);
-  const token = env.DEEPSONAR_GATEWAY_TOKEN;
+  const token = readPrivateCredential(env.DEEPSONAR_GATEWAY_TOKEN_FILE);
   if (typeof token !== 'string' || !token) fail('PI_MAIN_BUDGET_TOKEN_MISSING');
-  const secrets = [token, env.DEEPSONAR_API_TOKEN]
+  const secrets = [token, readPrivateCredential(env.DEEPSONAR_CONTROL_TOKEN_FILE, true)]
     .filter(value => typeof value === 'string' && value.length > 0);
   return function install(pi) {
     let identity;

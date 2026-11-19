@@ -64,6 +64,40 @@ function host(factory: (index: number) => PiProcess, nonempty = true) {
   return { runtime, processes };
 }
 
+for (const outcome of ["success", "failure", "startup"] as const) {
+  test(`#1032 credential cleanup failure preserves the original ${outcome} outcome`, async () => {
+    const warnings: RuntimeWarning[] = [];
+    const fake = host(() => new PiProcess((command, process) => {
+      if (command.type === "get_state") state(process, command);
+      else if (command.type === "prompt") turn(process, command, outcome === "failure" ? "permanent fixture failure" : undefined);
+    }));
+    const originalStart = fake.runtime.runAsync;
+    fake.runtime.runAsync = async (command, options) => {
+      if (command.startsWith("python3 -c ")) return {
+        stdinClosed: false, write: async () => {}, closeStdin: async () => {}, kill: async () => {},
+        async *[Symbol.asyncIterator]() {
+          if (!command.includes(" cleanup ")) yield { type: "stdout" as const, chunk: "ok\n" };
+          yield { type: "exit" as const, exitCode: command.includes(" cleanup ") ? 1 : 0 };
+        },
+      };
+      if (outcome === "startup") throw new Error("original startup failure");
+      return originalStart(command, options);
+    };
+    const run = () => runRealAgent(fake.runtime, { provider: "pi", env: {}, input: "fixture",
+      privateCredentials: { controlToken: "synthetic-control-token" }, completionGate: () => true,
+      onWarning: warning => { warnings.push(warning); throw new Error("diagnostic observer failure"); } });
+    if (outcome === "startup") await assert.rejects(run(), /original startup failure/u);
+    else {
+      const result = await run();
+      assert.equal(result.terminalOutcome, outcome);
+      if (outcome === "success") assert.equal(result.error, undefined);
+      else assert.match(result.error!, /permanent fixture failure/u);
+      assert.equal(fake.processes.length, 1, "cleanup must not cause a new CLI attempt");
+    }
+    assert.ok(warnings.some(warning => warning.code === "private_credentials_cleanup_failed"));
+  });
+}
+
 test("#1083 request-wrapper diagnostic survives the Pi runner without process resume or tool replay", async () => {
   // Fixed output contract of the generated request wrapper, not arbitrary SDK prose.
   // Its transient category is diagnostic only: SDK recovery already consulted the

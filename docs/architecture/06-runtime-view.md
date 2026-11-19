@@ -323,3 +323,6 @@ Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freez
 ## 人工等待显式释放 FIFO 席位（#1074）
 
 默认人工等待占位，用户显式让位将唯一等待 Canvas 标记 yielded。回复保存事务持有 claim advisory 锁、Canvas→Job→Attempt→请求锁，原子回队尾一次，保留完成代际。轮到且无其他 active、队列未暂停才由原 requeueJob 准入取得席位和唯一后继，Dispatcher 再验。暂停、取消、断点过期、撤权、退出/效果/预算门仍生效，详见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。
+
+
+#1032 A1 的三 CLI 私有文件创建、认证读取、清理及现行 P0-1 / P1-3 / P1-4 覆盖边界见[凭据文件通道](../MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。同 UID 工具可读，A2 未交付。Actions 尚待本 PR 最终提交验收。

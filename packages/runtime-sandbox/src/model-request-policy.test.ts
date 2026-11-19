@@ -1,3 +1,5 @@
+import { after } from "node:test";
+import { privateJobFixture } from "./private-job-fixture.js";
 import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
@@ -13,6 +15,8 @@ import { MODEL_REQUEST_POLICY_BASE_URL, MODEL_REQUEST_POLICY_SOURCE, modelReques
 import { AGENT_CLI_RUNTIME_ADAPTERS } from "./runtime-adapters.js";
 import { shellQuote, type RuntimeHost } from "./runtime-host.js";
 
+const privateAuth = privateJobFixture();
+after(() => privateAuth.close());
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "request-policy-"));
   const script = path.join(dir, "policy.mjs");
@@ -169,7 +173,7 @@ test("Claude launch and resume prepare the native output option before the CLI f
     res.end(JSON.stringify({ remaining_tokens: remaining, policy_required: true }));
   });
   const base = await listen(server);
-  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" };
+  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, ...privateAuth.environment };
   try {
     for (const command of ["claude -p", "claude -p --resume fixture"]) {
       const prepared = await file.api.prepareClaudeLaunch(command, env);
@@ -202,7 +206,7 @@ test("Claude re-derives the native cap at each start and resume from a fresh bou
       ? { remaining_tokens: remaining, policy_required: true } : { error: { type: "JOB_TOKEN_USAGE_UNKNOWN" } }));
   });
   const base = await listen(server);
-  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" };
+  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, ...privateAuth.environment };
   try {
     const first = await file.api.prepareClaudeLaunch("claude -p", env);
     assert.equal(first.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "1000");
@@ -235,7 +239,7 @@ test("all three CLI starts and supported resumes use the explicit wrapper withou
     run: async () => ({ exitCode: 0, stdout: "", stderr: "" }), uploadFile: async () => {},
   } as unknown as RuntimeHost;
   const context = { host, cwd: "/workspace", input: "fixture", mcpConfigPath: "/workspace/mcp.json",
-    env: { DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://gateway.invalid/gateway", DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" },
+    env: { DEEPSONAR_REQUEST_POLICY_UPSTREAM: "http://gateway.invalid/gateway", ...privateAuth.environment },
     dshProvider: { provider: "fixture", model: "fixture", config: { providers: {} } } };
   for (const id of ["pi", "dsh", "claude-code"] as const) await AGENT_CLI_RUNTIME_ADAPTERS[id].start(context);
   for (const id of ["pi", "claude-code"] as const) await AGENT_CLI_RUNTIME_ADAPTERS[id].resume({ ...context, sessionId: "fixture", sessionFile: "/workspace/session.jsonl" });
@@ -251,7 +255,7 @@ test("wrapper preserves child stdin/exit, owns the fixed port and cleans up on s
   const remote = http.createServer((_req: http.IncomingMessage, res: http.ServerResponse) => res.end("unused"));
   const upstream = `${await listen(remote)}/gateway`;
   const start = (program: string): ChildProcess => spawn(process.execPath, [file.script, "--", `${shellQuote(process.execPath)} -e ${shellQuote(program)}`],
-    { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" } });
+    { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream, ...privateAuth.environment } });
   let active: ChildProcess | undefined;
   try {
     active = start("process.stdout.write('ready:'+process.pid+'\\n');process.stdin.on('data',chunk=>process.stdout.write(chunk));setInterval(()=>{},1000)");
@@ -299,8 +303,8 @@ test("accepted Claude scope keeps the launch cap static and refuses later insuff
     res.setHeader("content-type", "application/json"); res.end('{"content":[]}');
   });
   const base = await listen(remote);
-  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, DEEPSONAR_GATEWAY_TOKEN: "synthetic-main-token" };
-  const policy = await file.api.startModelRequestPolicy({ upstream: env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token: env.DEEPSONAR_GATEWAY_TOKEN, port: 0 });
+  const env = { DEEPSONAR_REQUEST_POLICY_UPSTREAM: `${base}/gateway`, ...privateAuth.environment };
+  const policy = await file.api.startModelRequestPolicy({ upstream: env.DEEPSONAR_REQUEST_POLICY_UPSTREAM, token: "synthetic-main-token", port: 0 });
   const endpoint = `http://127.0.0.1:${(policy.server.address() as AddressInfo).port}/gateway/v1/messages`;
   try {
     const launch = await file.api.prepareClaudeLaunch("claude -p", env);
