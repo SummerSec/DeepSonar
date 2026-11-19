@@ -10,9 +10,10 @@
  * This process-local circuit observes the failures the dispatcher itself sees on the
  * provision path. Trip -> new opensandbox claims pause (retry attempts land back in
  * `pending` through the existing retry lifecycle and simply are not claimed). After a
- * cooldown exactly one half-open canary claim is admitted; a successful provision
- * closes the circuit, a failed canary reopens it. No new server endpoint, config knob
- * or persisted state is introduced; counts live only in this process.
+ * cooldown half-open canary claims are admitted until a provision outcome arrives,
+ * bounded by the existing provisioning concurrency cap. A successful canary in the
+ * current episode closes the circuit; a failed canary reopens it. No new server
+ * endpoint, config knob or persisted state is introduced; counts live in this process.
  *
  * State and logs carry only a fixed failure code (`classifyProvisionFailure`), never the
  * dispatcher error text: that text can contain provider bodies, headers or a credential.
@@ -26,7 +27,7 @@ export const OPENSANDBOX_CREATE_CIRCUIT_OPEN = "opensandbox_create_circuit_open"
 export const CREATE_CIRCUIT_FAILURES_TO_TRIP = 2;
 /** Sliding window for the failure count (ms). */
 export const CREATE_CIRCUIT_WINDOW_MS = 5 * 60 * 1000;
-/** Minimum time to stay open before admitting one half-open canary (ms). */
+/** Minimum time to stay open before admitting half-open canary claims (ms). */
 export const CREATE_CIRCUIT_COOLDOWN_MS = 90 * 1000;
 
 export type OpenSandboxCreateCircuitState = "closed" | "open" | "half_open";
@@ -78,7 +79,7 @@ export function openSandboxCreateCircuitStatus(): OpenSandboxCreateCircuitStatus
 
 /**
  * Admit a claim on the opensandbox create path. `canary` tells the dispatcher this is
- * the single half-open probe whose success closes the circuit.
+ * a half-open probe whose success in the current episode closes the circuit.
  */
 export function openSandboxCreateCircuitAllowsClaim(
   status: OpenSandboxCreateCircuitStatus = openSandboxCreateCircuitStatus(),
