@@ -1,11 +1,13 @@
 # 07 部署视图
 
 > 状态：**as-built**（#741）。描述生产 Compose、运行时网络、镜像准入、远程 Worker/设备和多副本限制；地址与凭据由部署环境提供。
-> 同步日期：2026-11-08
+> 同步日期：2026-11-19
 
 部署事实来自 `deploy/` 下的 Compose 文件、运行时包和镜像准入代码。下图省略了环境变量值、镜像摘要和密钥，只保留拓扑和连接方向。当前 Compose 的 Scheduler、Web、image-admission 平台服务各由一个 Release 同步的完整不可变引用选择（`DEEPSONAR_SCHEDULER_IMAGE` / `DEEPSONAR_WEB_IMAGE` / `DEEPSONAR_IMAGE_ADMISSION_IMAGE=<registry>/<name>@sha256:...`，#740 P1 第 3 片），部署版本由显式 `DEEPSONAR_VERSION` 声明；`DEEPSONAR_IMAGE_TAG` 已删除，`deploy.sh` / `deploy.ps1` 对旧变量与非 digest 引用 fail closed。OpenSandbox/Worker 的基础服务同样由 Compose 使用摘要固定。Job runtime image 则必须经过准入并在快照中保存解析后的不可变 digest，二者不能混为一谈。#745 的 `platform` catalog 用于版本发现；发布路径还提供经 inspect 校验的平台 digest，宿主升级据此选择目标。原同 schema 路径保留，维护升级的身份隔离、候选库和受管节点路径已接线，不能由模块存在推定真实部署验收通过。平台镜像的 registry 通道由 `deploy/platform-release-catalog.mjs` 单点定义，升级沿用当前部署通道而不静默迁移，签名验证固定 GHCR（#842）。
 
 ## 生产 Compose 拓扑
+
+#1074 的人工等待仅在断点未过期、原执行可信退出并已释放资源、最新 Attempt 为 interrupted、效果全部结清且旧 token 与设备/Worker 租约均已撤销时，才可从数据库重建的活动任务阻塞项中排除。预检直接检查过期时间，清理循环尚未把过期断点标为 blocked 时也拒绝豁免。隔离 PostgreSQL 回归接既有 `pnpm ci:unit:migrations`，最终提交的 Actions 待验。文件在目标副本的可读性仍由恢复前的 blob/hash 核验判断。详见[人工续做](../HUMAN_CONTINUATION.md)。
 
 ```mermaid
 flowchart TB

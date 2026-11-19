@@ -44,6 +44,8 @@ Dispatcher 在 provision 和 agent_run 前再核对确切 successor 与文件；
 
 ## 注意力成本与验收
 
+维护预检直接重核断点过期时间，避免后台清理尚未执行时把已过期的 ready 记录当作可安全维护的等待任务。隔离 PostgreSQL 回归覆盖合法封存、过期窗口、退出证明缺失、沙箱残留、未决效果、旧 Control token 与新 Attempt 归属，接既有 `pnpm ci:unit:migrations`。本次最终 SHA 的 Actions 待验。
+
 | 触发 | 用户看到 | 需要的动作 | 失败反馈 |
 | --- | --- | --- | --- |
 | 当前请求 open | 完整问题、保存状态、超时仍可答 | 原位置回复一次 | 保存失败保留草稿与幂等 ID |
