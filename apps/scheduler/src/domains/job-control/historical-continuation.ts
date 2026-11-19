@@ -1,5 +1,6 @@
+import { enqueueProjectTask } from "../project-task/task-queue-store.js";
 import { recordDurableSystemAudit } from "../../audit.js";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { sql } from "../../db.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../../core.js";
@@ -88,6 +89,9 @@ export async function createHistoricalContinuation(sourceId: string, input: z.in
       WHERE t.job_id=ANY(${jobIds}::uuid[]) AND (t.used_requests<>ledger.count OR t.used_tokens<>ledger.tokens) LIMIT 1`;
     if (missingUsage) return deny("CONTINUATION_BUDGET_EVIDENCE_MISSING");
     const [clock] = await db`SELECT * FROM job_execution_clocks WHERE job_id=${rootId} FOR UPDATE`;
+    const knobs = snapshot.runtime_knobs as Record<string, unknown> | undefined;
+    if (!knobs || Number(knobs.timeout_sec) !== Number(source.timeout_sec)
+      || Number(clock?.budget_ms) !== Number(source.timeout_sec) * 1000) return deny("CONTINUATION_CLOCK_EVIDENCE_MISSING");
     if (!clock || clock.attempt_id !== latest.id) return deny("CONTINUATION_CLOCK_EVIDENCE_MISSING");
     if (clock.active_since) await pauseHumanExecutionClock(db, sourceId, String(latest.id));
     const remaining = await remainingHumanExecutionMs(db, sourceId);
@@ -106,7 +110,7 @@ export async function createHistoricalContinuation(sourceId: string, input: z.in
     await readAcknowledgedHumanAttachments(sourceId, db);
     const [queue] = await db`SELECT q.paused,i.state FROM project_task_queues q JOIN project_task_queue_items i
       ON i.project_id=q.project_id WHERE i.canvas_id=${source.canvas_id}`;
-    if (queue && (queue.paused || queue.state !== "active")) return deny("HUMAN_CONTINUATION_WAITING_TURN");
+    if (queue?.state === "yielded") return deny("HUMAN_CONTINUATION_WAITING_TURN");
     const targetId = randomUUID(), replyId = randomUUID(), nodeId = randomUUID();
     await reserveHistoricalPlanContinuation(db, source, canvas);
     await db`INSERT INTO jobs(id,project_id,canvas_id,parent_job_id,finding_id,type,status,priority,payload_json,
@@ -114,6 +118,9 @@ export async function createHistoricalContinuation(sourceId: string, input: z.in
       VALUES(${targetId},${source.project_id},${source.canvas_id},${source.parent_job_id},${source.finding_id},${source.type},
         'pending',${source.priority},${db.json(source.payload_json)},${db.json(source.agent_snapshot_json)},
         ${source.timeout_sec},${source.followup_depth},${rootId})`;
+    if (queue && !["active", "queued"].includes(String(queue.state))) {
+      await enqueueProjectTask(db, String(source.project_id), String(source.canvas_id));
+    }
     await recordJobSharedAssets(db, targetId, (source.agent_snapshot_json as AgentRuntimeSnapshot).shared_assets ?? []);
     await db`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
       VALUES(${nodeId},${source.canvas_id},${targetId},'job','历史断点续做','pending',${db.json({ source_job_id: sourceId })})`;
@@ -128,7 +135,7 @@ export async function createHistoricalContinuation(sourceId: string, input: z.in
     await db`INSERT INTO human_message_attachments(message_id,version_id,filename,workspace_path,content_sha256,bytes)
       SELECT ${replyId},version_id,filename,replace(workspace_path,${`/inbox/${String(message.id)}/`},${`/inbox/${replyId}/`}),content_sha256,bytes
       FROM human_message_attachments WHERE message_id=${message.id}`;
-    const checkpointDigest = createHash("sha256").update(JSON.stringify(manifest.data)).digest("hex");
+    const checkpointDigest = humanSnapshotDigest(manifest.data);
     // execution_deadline_at is an active-time projection. Repair receipts hold absolute hard deadlines.
     const hardDeadline = repair.deadline;
     const [binding] = await db`INSERT INTO job_continuations(target_job_id,source_job_id,source_attempt_id,budget_owner_job_id,

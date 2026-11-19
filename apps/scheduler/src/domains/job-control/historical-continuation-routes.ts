@@ -3,12 +3,16 @@ import { sql } from "../../db.js";
 import { z } from "zod";
 import { createHumanMessage, HumanInterventionError } from "../canvas/human-messages.js";
 import { HistoricalContinuationInput, HistoricalContinuationBlocked, createHistoricalContinuation } from "./historical-continuation.js";
+import { GatewayRequestBudgetError } from "../../gateway-request-policy.js";
+import { RepairTokenBudgetError } from "../event-ingestion/repair-token-budget.js";
 
 const Body = z.object({
   mutation_id: z.string().uuid(), request_id: z.string().uuid(), expected_revision: z.number().int().min(0),
   reply: z.object({ message_id: z.string().uuid(), body: z.string().min(1).max(8000).regex(/\S/),
-    attachment_version_ids: z.array(z.string().uuid()).max(32).default([]) }).strict(),
-}).strict();
+    attachment_version_ids: z.array(z.string().uuid()).max(32).default([]) }).strict().optional(),
+  saved_reply_message_id: z.string().uuid().optional(),
+}).strict().refine(body => Boolean(body.reply) !== Boolean(body.saved_reply_message_id),
+  "Provide a new reply or the immutable saved reply reference");
 
 export function registerHistoricalContinuationRoutes(app: FastifyInstance) {
   app.post("/jobs/:id/continuations", async (req, reply) => {
@@ -22,14 +26,16 @@ export function registerHistoricalContinuationRoutes(app: FastifyInstance) {
     if (!request) return reply.code(404).send({ error_code: "HUMAN_REQUEST_NOT_FOUND", error: "原任务没有此人工请求。" });
     try {
       // Commit the reply before admission. A stable blocker must never discard user input.
-      await createHumanMessage({ id: body.reply.message_id, canvasId: String(job.canvas_id),
+      if (body.reply) await createHumanMessage({ id: body.reply.message_id, canvasId: String(job.canvas_id),
         target: { kind: "request", request_id: body.request_id, expected_revision: body.expected_revision },
         body: body.reply.body, attachmentVersionIds: body.reply.attachment_version_ids });
+      const replyId = body.reply?.message_id ?? body.saved_reply_message_id!;
       const [saved] = await sql`SELECT revision FROM human_requests WHERE id=${body.request_id}
-        AND job_id=${id} AND reply_message_id=${body.reply.message_id}`;
-      if (!saved) throw new HistoricalContinuationBlocked("CONTINUATION_REQUEST_CHANGED");
+        AND job_id=${id} AND reply_message_id=${replyId}`;
+      if (!saved || (!body.reply && Number(saved.revision) !== body.expected_revision))
+        throw new HistoricalContinuationBlocked("CONTINUATION_REQUEST_CHANGED");
       const input = HistoricalContinuationInput.parse({ mutation_id: body.mutation_id, request_id: body.request_id,
-        expected_revision: Number(saved.revision), reply_message_id: body.reply.message_id });
+        expected_revision: Number(saved.revision), reply_message_id: replyId });
       const binding = await createHistoricalContinuation(id, input, req.actor?.name ?? "anonymous");
       return reply.code(202).send({ accepted: true, source_job_id: id, job_id: binding.target_job_id,
         budget_owner_job_id: binding.budget_owner_job_id, execution_reply_id: binding.execution_reply_id,
@@ -37,7 +43,8 @@ export function registerHistoricalContinuationRoutes(app: FastifyInstance) {
     } catch (error) {
       if (error instanceof HumanInterventionError) return reply.code(error.statusCode).send({
         accepted: false, error_code: error.errorCode, error: error.message });
-      const code = error instanceof HistoricalContinuationBlocked ? error.code
+      const code = error instanceof HistoricalContinuationBlocked || error instanceof GatewayRequestBudgetError
+        || error instanceof RepairTokenBudgetError ? error.code
         : error instanceof Error && /^(CONTINUATION_|HUMAN_CHECKPOINT_|GATEWAY_REQUEST_|REPAIR_|JOB_TOKEN_|PLAN_CONTINUATION_|EXECUTION_TIME_)[A-Z_]+$/.test(error.message)
           ? error.message : null;
       if (!code) throw error;

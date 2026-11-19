@@ -105,6 +105,7 @@ export async function assertHumanContinuationOwner(db:typeof sql,jobId:string,at
   if ("crossJob" in saved && saved.crossJob) {
     for (const file of saved.manifest.files) await readCheckpointFile(String(saved.request.id), file);
     await readAcknowledgedHumanAttachments(jobId, db);
+    await readAcknowledgedHumanHistory(jobId, db);
     return;
   }
   const [generation]=await db`SELECT event_id FROM events WHERE job_id=${jobId} AND type='control_receipt'

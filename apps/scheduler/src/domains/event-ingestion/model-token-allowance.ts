@@ -1,5 +1,4 @@
 import { continuationBudgetScope } from "../job-control/continuation-budget.js";
-import { continuationBudgetScope } from "../job-control/continuation-budget.js";
 import { sql } from "../../db.js";
 import type { GatewayWorkload } from "../../gateway-om-budget.js";
 import { observationalMemoryConfig, parseFrozenPiExtensions } from "../../pi-extensions.js";
@@ -14,7 +13,6 @@ export async function readWorkloadTokenAllowance(
   workload: GatewayWorkload,
   budget?: RepairTokenBudget | null,
 ): Promise<number | null> {
-  const { jobIds } = await continuationBudgetScope(db, jobId);
   const { jobIds } = await continuationBudgetScope(db, jobId);
   const [totalLimit] = await db`
     SELECT MIN(NULLIF(COALESCE(workload_max_tokens, max_tokens), 0)) AS cap
@@ -53,7 +51,6 @@ export async function readMainTokenAllowance(db: typeof sql, jobId: string, snap
   const frozen = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
     ? snapshot as Record<string, unknown> : {};
   const om = observationalMemoryConfig(parseFrozenPiExtensions(frozen.pi_extensions));
-  const { jobIds } = await continuationBudgetScope(db, jobId);
   const { jobIds } = await continuationBudgetScope(db, jobId);
   const [historicalOm] = om ? [] : await db`SELECT id FROM job_tokens
     WHERE job_id=ANY(${jobIds}::uuid[]) AND workload='observational_memory' LIMIT 1`;
