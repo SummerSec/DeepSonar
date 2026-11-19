@@ -16,7 +16,7 @@ test('normal prune host with isolated PostgreSQL, retained recovery source, audi
   const recovery = join(directory, '.upgrade');
   const docker = (args, input) => execFileSync('docker', args, {input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'], timeout: 30_000});
   const sql = (database, statement) => docker(['exec', '-i', name, 'psql', '-X', '-qAt', '-v', 'ON_ERROR_STOP=1', '-U', 'maintenance', '-d', database], statement).trim();
-  const json = (database, statement) => JSON.parse(sql(database, statement));
+  const json = (database, statement) => JSON.parse(sql(database, `SELECT coalesce(json_agg(t),'[]'::json) FROM (${statement}) t`));
   let created = false, session;
   t.after(async () => {if (session && session.exitCode === null) session.kill(); if (created) docker(['rm', '-f', name]); await rm(directory, {recursive: true, force: true});});
   docker(['run', '-d', '--name', name, '--label', `deepsonar.test=${name}`, '-e', 'POSTGRES_USER=maintenance', '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', 'postgres:16-alpine']);
@@ -72,7 +72,7 @@ CREATE TABLE audit_logs(actor_type text,actor_id text,action text,resource_type 
       }
       sql(database, statement); return [];
     }
-    return json(database, `SELECT coalesce(json_agg(t),'[]'::json) FROM (${statement}) t`);
+    return json(database, statement);
   }};
   let runtimeReferences = [current];
   const options = {recovery, binding: async () => binding, runtimeDatabases: async () => runtimeReferences,
