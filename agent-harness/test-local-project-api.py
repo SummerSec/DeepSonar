@@ -4,6 +4,7 @@
 """
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -50,6 +51,33 @@ def wait_for_claim_quiescence(max_seconds=900, interval=30):
             warned = True
         time.sleep(interval)
     print(f"警告:{max_seconds}s 内认领面未空闲（claimed={len(claimed)} provisioning={len(provisioning)}），继续执行（多租户公平性由 #1118 人工决策处理）")
+
+
+def diagnose_dispatch_connections():
+    """Read-only CI evidence; never print connection credentials or SQL payloads."""
+    database_url = os.environ.get("DATABASE_URL")
+    if not database_url:
+        return
+    query = """BEGIN READ ONLY;
+      SELECT COALESCE(json_agg(activity), '[]'::json) FROM (
+        SELECT pid, state, wait_event_type, wait_event,
+          EXTRACT(EPOCH FROM now() - query_start)::int AS query_age_sec,
+          pg_blocking_pids(pid) AS blockers,
+          CASE WHEN lower(ltrim(query)) LIKE 'listen %' THEN 'LISTEN'
+            ELSE upper(split_part(ltrim(query), ' ', 1)) END AS operation
+        FROM pg_stat_activity
+        WHERE datname=current_database() AND application_name='deepsonar-scheduler'
+        ORDER BY pid LIMIT 30
+      ) activity; ROLLBACK;"""
+    try:
+        result = subprocess.run(["psql", database_url, "-XAt", "-c", query],
+                                capture_output=True, text=True, timeout=10, check=False)
+        if result.returncode == 0:
+            print(f"诊断 dispatcher connections: {result.stdout[:12000]}", flush=True)
+        else:
+            print(f"诊断 dispatcher connections 不可用（退出码 {result.returncode}）", flush=True)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"诊断 dispatcher connections 不可用（{type(exc).__name__}）", flush=True)
 
 
 def main():
@@ -145,6 +173,7 @@ def main():
         # 失败现场取证：Job 长期 pending 时，需要区分「调度器没认领」与「镜像/容量不就绪」。
         for name, path in (
             ("health", "/health"),
+            ("platform claims", "/platform/claims"),
             ("pending jobs", f"/jobs?project_id={pid}&status=pending"),
             ("claimed jobs", "/jobs?status=claimed"),
             ("provisioning jobs", "/jobs?status=provisioning"),
@@ -154,6 +183,7 @@ def main():
                 print(f"诊断 {name}: {json.dumps(req('GET', path), ensure_ascii=False)[:800]}", flush=True)
             except Exception as exc:  # 诊断不得掩盖原始失败
                 print(f"诊断 {name} 失败: {exc}", flush=True)
+        diagnose_dispatch_connections()
     assert final, f"Hub 编排链未在 30 分钟内收敛（最后观测 {state}）"
 
     # 边断言需轮询：root 可能先于后续验收轮的 next 边到达 succeeded（链仍在演进）

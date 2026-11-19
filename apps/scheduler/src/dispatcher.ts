@@ -162,7 +162,7 @@ import {
   assertChromeRuntimeEgressAllowed,
   requireFrozenSnapshotAllowEgress,
 } from "./domains/role-runtime-snapshot/index.js";
-import { bindScheduleWake, unbindScheduleWake, refreshScheduleWakeFromDb } from "./schedule-wake.js";
+import { bindScheduleWake, unbindScheduleWake, refreshScheduleWakeFromDb, noteClaimContentionWake } from "./schedule-wake.js";
 import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
 import { canvasExecutionIsPaused } from "./task-execution-control.js";
 import { readPlatformClaimsControl } from "./domains/platform-claims/store.js";
@@ -830,6 +830,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
         )
       ORDER BY j.priority DESC, j.created_at ASC, j.id ASC
       FOR UPDATE OF j SKIP LOCKED`;
+    if (pending.length < selected.length) noteClaimContentionWake();
     const graphBatch = await loadGraphEligibilityBatch(tx as unknown as typeof sql, pending);
     for (const job of pending) {
       // Re-check scope, pause/schedule, graph and quotas from locked rows before CAS.
