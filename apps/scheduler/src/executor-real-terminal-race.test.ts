@@ -1,5 +1,5 @@
 import { after } from "node:test";
-import { privateJobFixture } from "../../../packages/runtime-sandbox/src/private-job-fixture.js";
+import { privateJobFixture } from "./private-job.fixture.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import http from "node:http";

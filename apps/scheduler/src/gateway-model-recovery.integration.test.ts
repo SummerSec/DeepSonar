@@ -1,4 +1,4 @@
-import { privateJobFixture } from "../../../packages/runtime-sandbox/src/private-job-fixture.js";
+import { privateJobFixture } from "./private-job.fixture.js";
 import assert from "node:assert/strict";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
