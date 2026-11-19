@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
+import {findPowerShell, spawnPowerShellSync} from './powershell-test-host.mjs';
 import {fileURLToPath} from 'node:url';
 import {mkdtemp, writeFile, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -18,10 +19,10 @@ test('systemd output cannot load until explicitly renamed/installed; quotes path
   assert.doesNotMatch(JSON.stringify(task), /ADMIN_TOKEN|Environment=|systemctl enable/);
 });
 
-test('Windows task disabled in XML and validated by real PowerShell XML parser', {skip: spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0']).status !== 0 ? 'pwsh unavailable' : false}, () => {
+test('Windows task disabled in XML and validated by real PowerShell XML parser', {skip: !findPowerShell({commands: ['pwsh']}) && 'pwsh unavailable'}, () => {
   const task = generateAutomaticTask({scheduler: 'windows', nodePath: 'C:\\Program Files\\nodejs\\node.exe', hostPath: 'C:\\Deep & Sonar\\host.mjs', policy: 'C:\\Config\\policy.json'});
   const value = task.files['deepsonar-auto-upgrade.xml'];
-  const result = spawnSync('pwsh', ['-NoProfile', '-Command', "$x=[xml][Console]::In.ReadToEnd(); if($x.Task.Settings.Enabled -ne 'false'){exit 2}; if($x.Task.Settings.ExecutionTimeLimit -ne 'PT0S'){exit 3}; if($x.Task.Actions.Exec.Command -ne 'C:\\Program Files\\nodejs\\node.exe'){exit 4}; [Console]::Write($x.Task.Actions.Exec.Arguments)"], {input: value, encoding: 'utf8'});
+  const result = spawnPowerShellSync('pwsh', ['-NoProfile', '-Command', "$x=[xml][Console]::In.ReadToEnd(); if($x.Task.Settings.Enabled -ne 'false'){exit 2}; if($x.Task.Settings.ExecutionTimeLimit -ne 'PT0S'){exit 3}; if($x.Task.Actions.Exec.Command -ne 'C:\\Program Files\\nodejs\\node.exe'){exit 4}; [Console]::Write($x.Task.Actions.Exec.Arguments)"], {input: value, encoding: 'utf8'});
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, '"C:\\Deep & Sonar\\host.mjs" "auto" "--policy" "C:\\Config\\policy.json"');
   assert.equal(task.enabled, false);

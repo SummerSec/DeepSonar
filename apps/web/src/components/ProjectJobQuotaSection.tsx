@@ -132,6 +132,12 @@ export function ProjectJobQuotaSection({
             来源：{rules.maxConcurrentJobsSource === "project" ? "项目设置" : "继承全局"}
             · 全局硬上限 {rules.maxJobsPerProject}
             · 有效上限 = min(项目设置, 全局硬上限)
+            {rules.maxConcurrentJobsSource === "project" && rules.maxConcurrentJobs < rules.maxJobsPerProject
+              ? " · 已被项目设置收紧（未达到全局硬上限）"
+              : ""}
+            {rules.maxConcurrentJobsSource === "project" && typeof storedQuota === "number" && storedQuota > rules.maxJobsPerProject
+              ? " · 项目设置超过全局硬上限，当前按全局硬上限运行"
+              : ""}
           </div>
         </div>
       </div>
