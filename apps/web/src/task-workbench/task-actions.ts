@@ -279,6 +279,8 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
       const correct = !terminal && !closedHuman && current.allowed_actions.includes("correct_proposal") && Boolean(job.error);
       const humanRequestExists = humanRequestJobs.has(job.id);
       if (humanRequestExists && (human || platformWait) && !unknown && !correct) continue;
+      if (terminal && current.blocker === "execution_inactive" && !unknown
+        && !current.allowed_actions.includes("request_recovery")) continue;
       if (current.blocker || correct) actions.push({
         id: `job:${job.id}:current`, kind: unknown ? "unknown_effect" : human ? "human_decision" : correct ? "model_repair" : "platform_blocker",
         title: unknown ? "运行存在未决效果，需先对账" : closedHuman ? "历史人工请求已关闭，仅供查看"
@@ -294,6 +296,7 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
       });
       continue;
     }
+    if (current) continue;
     if (status === "waiting_human") {
       if (humanRequestJobs.has(job.id)) continue;
       actions.push({ id: `job:${job.id}:waiting_human`, kind: "platform_blocker",

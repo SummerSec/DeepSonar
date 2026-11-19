@@ -12,6 +12,18 @@ import {
 } from "./task-actions";
 import type { TaskAction } from "./types";
 
+test("a current terminal projection suppresses guessed timeout work while preserving permitted recovery", () => {
+  const job = { id: "ended", status: "timeout", error: "timeout 503 retry", execution_state: {
+    authority: "scheduler" as const, status: "timeout", allowed_actions: ["inspect_state"], blocker: "execution_inactive",
+  } };
+  assert.deepEqual(projectJobActions({ job, effects: [] }).actions, []);
+  job.execution_state.allowed_actions = ["request_recovery"];
+  assert.equal(projectJobActions({ job, effects: [] }).actions[0]?.recommended_action, "request_recovery");
+  job.execution_state.allowed_actions = ["inspect_state"];
+  assert.equal(projectJobActions({ job, effects: [{ effect_id: "run", effect_kind: "agent_run", status: "unknown" }] })
+    .actions[0]?.kind, "unknown_effect");
+});
+
 function action(partial: Partial<TaskAction> & Pick<TaskAction, "id" | "kind" | "priority">): TaskAction {
   return {
     title: partial.id,
@@ -124,7 +136,7 @@ test("dashboard and job projectors keep unproven timeout in needs_confirmation",
     job: { id: "j7", type: "test", status: "timeout" },
     effects: [],
   });
-  assert.equal(provenJob.repair?.category, "transient_retryable");
+  assert.equal(provenJob.repair?.category, "permanent_failure");
   assert.equal(provenJob.actions[0]?.recommended_action, "inspect_recovery");
 
   assert.equal(projectFindingActions({
