@@ -35,11 +35,12 @@ export async function verifyDeviceEvidenceEntrypoints(projectId: string) {
         await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
           VALUES (${sourceId},${projectId},${canvasId},'audit','succeeded','{}')`;
         await sql`INSERT INTO canvas_nodes(id,canvas_id,job_id,node_type,title,status,body_json)
-          VALUES (${nodeId},${canvasId},${sourceId},'finding','设备补证对象','open',${sql.json({severity:'medium'})})`;
+          VALUES (${nodeId},${canvasId},${sourceId},'finding','设备补证对象','open',${sql.json({severity:'high'})})`;
         await sql`INSERT INTO findings(id,project_id,job_id,node_id,fingerprint,title,severity)
-          VALUES (${findingId},${projectId},${sourceId},${nodeId},${findingId},'设备补证对象','medium')`;
+          VALUES (${findingId},${projectId},${sourceId},${nodeId},${findingId},'设备补证对象','high')`;
         let hubId: string | null = null;
         let deviceRejections = 0;
+        let handlerFailure = "";
         let controlHeaders: Record<string, string> = {};
         if (mode === "hub") {
           hubId = randomUUID();
@@ -55,6 +56,7 @@ export async function verifyDeviceEvidenceEntrypoints(projectId: string) {
             try {
               await ingestEvent(context.jobId, { v: 1, event_id: context.eventId, type: "hub_decision", payload: context.input });
             } catch (error) {
+              handlerFailure = error instanceof Error ? error.message : String(error);
               if (error instanceof ControlInputError && error.code === "tool_not_allowed"
                 && error.message.includes("画布设备要求")) deviceRejections++;
               throw error;
@@ -75,7 +77,7 @@ export async function verifyDeviceEvidenceEntrypoints(projectId: string) {
             assert.equal(rejected.json().error_code, "device_not_authorized");
           } else {
             assert.ok(rejected.statusCode >= 400, rejected.payload);
-            assert.equal(deviceRejections, previousRejections + 1, rejected.payload);
+            assert.equal(deviceRejections, previousRejections + 1, `${rejected.payload}; fixture handler: ${handlerFailure}`);
           }
           assert.equal((await sql`SELECT count(*)::int AS n FROM jobs WHERE finding_id=${findingId}`)[0].n, 0);
         };
@@ -94,7 +96,7 @@ export async function verifyDeviceEvidenceEntrypoints(projectId: string) {
         await assertDeviceDenied();
         await sql`UPDATE projects SET config_json=jsonb_set(config_json,'{device_access_enabled}','true') WHERE id=${projectId}`;
         const response = await invoke();
-        assert.equal(response.statusCode, mode === "manual" ? 202 : 200, response.payload);
+        assert.equal(response.statusCode, mode === "manual" ? 202 : 200, `${response.payload}; fixture handler: ${handlerFailure}`);
         const [created] = await sql`SELECT id,agent_snapshot_json FROM jobs WHERE finding_id=${findingId} AND type='test'`;
         assert.ok(created, response.payload);
         assert.deepEqual(created.agent_snapshot_json.device_requirement, requirement);
