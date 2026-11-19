@@ -1,5 +1,6 @@
 import { recordSystemAudit } from "../../audit.js";
 import type { sql as Sql } from "../../db.js";
+import { reconcileYieldedTaskQueueItems } from "./task-queue-yield-reconciliation.js";
 import {
   canClaimQueuedTask as canClaimByModel,
   decideTaskQueueReconciliation,
@@ -112,6 +113,7 @@ export async function enqueueProjectTask(
     throw new TaskQueueError("QUEUE_CANVAS_ARCHIVED", "归档任务不能进入项目队列");
   }
 
+  await reconcileYieldedTaskQueueItems(tx, projectId, canvasId);
   const [existing] = await tx<QueueItemRow[]>`
     SELECT id::text, project_id::text, canvas_id, state, created_at, started_at, ended_at
     FROM project_task_queue_items WHERE canvas_id = ${canvasId} FOR UPDATE`;
@@ -374,7 +376,7 @@ export async function reconcileProjectTaskQueues(tx: Db, limit = 32): Promise<nu
     FROM project_task_queues q
     WHERE EXISTS (
       SELECT 1 FROM project_task_queue_items i
-      WHERE i.project_id = q.project_id AND i.state IN ('queued','active')
+      WHERE i.project_id = q.project_id AND i.state IN ('queued','active','yielded')
     )
     ORDER BY q.reconciled_at ASC, q.project_id ASC
     LIMIT ${boundedLimit}`;
@@ -383,6 +385,7 @@ export async function reconcileProjectTaskQueues(tx: Db, limit = 32): Promise<nu
     await tx`
       UPDATE project_task_queues SET reconciled_at = clock_timestamp()
       WHERE project_id = ${projectId}`;
+    await reconcileYieldedTaskQueueItems(tx, projectId);
     await reconcileQueueHead(tx, projectId);
   }
   return queues.length;
@@ -399,6 +402,7 @@ export async function canClaimQueuedTask(tx: Db, projectId: string, canvasId: st
     FROM canvases cv JOIN projects p ON p.id = cv.project_id WHERE cv.id = ${canvasId}`;
   if (!canvas || String(canvas.project_id) !== projectId || canvas.status !== "active" || canvas.archived_at
     || canvas.project_status !== "active" || canvas.project_archived_at) return false;
+  await reconcileYieldedTaskQueueItems(tx, projectId, canvasId);
   const [membership] = await tx<QueueItemRow[]>`
     SELECT id::text, project_id::text, canvas_id, state, created_at, started_at, ended_at
     FROM project_task_queue_items WHERE canvas_id = ${canvasId}`;
@@ -491,17 +495,24 @@ export async function readProjectTaskQueue(db: Db, projectId: string): Promise<P
     ),
     queued_items AS MATERIALIZED (
       SELECT i.id, i.project_id, i.canvas_id, i.state, i.created_at, i.started_at, i.ended_at,
-             0 AS bucket, i.id AS order_id
+             1 AS bucket, i.id AS order_id
       FROM project_task_queue_items i
-      WHERE i.project_id = ${projectId} AND i.state IN ('queued','yielded')
+      WHERE i.project_id = ${projectId} AND i.state = 'queued'
+      ORDER BY i.id LIMIT 101
+    ),
+    yielded_items AS MATERIALIZED (
+      SELECT i.id, i.project_id, i.canvas_id, i.state, i.created_at, i.started_at, i.ended_at,
+             2 AS bucket, i.id AS order_id
+      FROM project_task_queue_items i
+      WHERE i.project_id = ${projectId} AND i.state = 'yielded'
       ORDER BY i.id LIMIT 101
     ),
     live_items AS MATERIALIZED (
-      SELECT * FROM active_item UNION ALL SELECT * FROM queued_items
+      SELECT * FROM active_item UNION ALL SELECT * FROM queued_items UNION ALL SELECT * FROM yielded_items
     ),
     history_items AS MATERIALIZED (
       SELECT i.id, i.project_id, i.canvas_id, i.state, i.created_at, i.started_at, i.ended_at,
-             1 AS bucket, -i.id AS order_id
+             3 AS bucket, -i.id AS order_id
       FROM project_task_queue_items i
       WHERE i.project_id = ${projectId} AND i.state IN ('succeeded','failed','cancelled')
       ORDER BY i.id DESC LIMIT 101

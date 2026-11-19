@@ -376,6 +376,33 @@ test("project task queue serializes dispatcher claims and reconciles durable tas
     const livenessSecond = await claimPendingJobs();
     assert.deepEqual(livenessSecond.map((job) => job.id), [jobLivenessC]);
 
+    // Old yielded ids must never displace the current head from a bounded UI projection.
+    const crowdedProject=randomUUID();
+    await sql`INSERT INTO projects(id,name) VALUES(${crowdedProject},'Crowded yielded projection')`;
+    await sql`INSERT INTO project_task_queues(project_id) VALUES(${crowdedProject})`;
+    for(let index=0;index<100;index++) {
+      const canvas=randomUUID();
+      await sql`INSERT INTO canvases(id,project_id,title) VALUES(${canvas},${crowdedProject},'Old yielded task')`;
+      await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state) VALUES(${crowdedProject},${canvas},'yielded')`;
+    }
+    const currentCanvas=randomUUID(),waitingCanvas=randomUUID();
+    await sql`INSERT INTO canvases(id,project_id,title) VALUES
+      (${currentCanvas},${crowdedProject},'Current human wait'),(${waitingCanvas},${crowdedProject},'Next queued task')`;
+    const currentJob=await insertJob(crowdedProject,currentCanvas);
+    await sql`UPDATE jobs SET status='waiting_human' WHERE id=${currentJob}`;
+    const [currentItem]=await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
+      VALUES(${crowdedProject},${currentCanvas},'active') RETURNING id::text`;
+    await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state) VALUES(${crowdedProject},${waitingCanvas},'queued')`;
+    const crowded=await readProjectTaskQueue(sql,crowdedProject);
+    assert.equal(crowded.items.length,100);assert.equal(crowded.has_more,true);
+    assert.equal(crowded.items[0]?.id,currentItem.id);assert.equal(crowded.items[1]?.canvas_id,waitingCanvas);
+    assert.equal(crowded.items[0]?.block_reason,'waiting_human');
+    await sql`UPDATE jobs SET status='failed',finished_at=clock_timestamp() WHERE id=${currentJob}`;
+    await reconcile();
+    const failedCrowded=await readProjectTaskQueue(sql,crowdedProject);
+    assert.equal(failedCrowded.items[0]?.id,currentItem.id);assert.equal(failedCrowded.items[0]?.block_reason,'task_failed');
+    assert.equal(failedCrowded.paused,true,'failed head remains actionable ahead of 100 old yielded ids');
+
     // The real claim lock is shared by independent PostgreSQL sessions. Once
     // one transaction holds it, a contender cannot acquire the same key.
     lockSessionA = postgres(targetUrl.toString(), { max: 1 });

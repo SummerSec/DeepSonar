@@ -128,9 +128,12 @@ test("queue button sends one precise yield decision, retries its identity and re
     HTMLElement:dom.window.HTMLElement,Element:dom.window.Element,Node:dom.window.Node,IS_REACT_ACT_ENVIRONMENT:true};
   const previous=new Map(Object.keys(globals).map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
   for(const [key,value] of Object.entries(globals)) Object.defineProperty(globalThis,key,{value,configurable:true});
-  const original={authStatus:api.authStatus,projectTaskQueue:api.projectTaskQueue,yieldProjectTaskQueue:api.yieldProjectTaskQueue};
+  const original={authStatus:api.authStatus,projectTaskQueue:api.projectTaskQueue,yieldProjectTaskQueue:api.yieldProjectTaskQueue,
+    setProjectTaskQueuePaused:api.setProjectTaskQueuePaused};
   const item={...queue.items[0]!,id:"42",yield_request:{request_id:"11111111-1111-4111-8111-111111111111",expected_revision:3}};
-  let current:ProjectTaskQueue={...queue,items:[item]};
+  const oldYielded=Array.from({length:100},(_,index)=>({...queue.items[0]!,id:String(index+1),canvas_id:`old-${index}`,
+    state:"yielded" as const,yield_request:null}));
+  let current:ProjectTaskQueue={...queue,has_more:true,items:[item,...oldYielded.slice(0,99)]};
   const decisions:Array<Parameters<typeof api.yieldProjectTaskQueue>[1]>=[];
   let finish:((value:ProjectTaskQueue)=>void)|undefined;
   const container=dom.window.document.getElementById("root")!;
@@ -159,6 +162,20 @@ test("queue button sends one precise yield decision, retries its identity and re
     assert.equal(yieldButton(),undefined);
     assert.match(container.textContent??"",/暂存等待回复/);
     assert.match(container.textContent??"",/回复后排到队尾/);
+    let acknowledged:string|undefined;
+    current={...queue,paused:true,pause_reason:"task_failed",has_more:true,
+      items:[{...item,state:"active",block_reason:"task_failed",yield_request:null},...oldYielded.slice(0,99)]};
+    api.setProjectTaskQueuePaused=async(projectId,paused,headId)=>{
+      assert.equal(projectId,queue.project_id);assert.equal(paused,false);acknowledged=headId;
+      return {...current,paused:false,pause_reason:null,items:current.items.map(entry=>entry.id===item.id?{...entry,state:"failed",block_reason:null}:entry)};
+    };
+    await act(async()=>container.querySelector<HTMLButtonElement>('button[aria-label="刷新项目队列"]')!.click());
+    const skip=[...container.querySelectorAll("button")].find(button=>button.textContent==="确认后跳过并继续");
+    assert.ok(skip,"failed head remains actionable with a full yielded projection");
+    await act(async()=>skip.click());
+    const confirm=[...dom.window.document.querySelectorAll("button")].find(button=>button.textContent==="跳过并继续");
+    assert.ok(confirm);await act(async()=>confirm.click());
+    assert.equal(acknowledged,item.id,"skip uses the current head identity");
   } finally {
     act(()=>root.unmount());Object.assign(api,original);dom.window.close();
     for(const [key,descriptor] of previous) {if(descriptor) Object.defineProperty(globalThis,key,descriptor);else delete (globalThis as Record<string,unknown>)[key];}

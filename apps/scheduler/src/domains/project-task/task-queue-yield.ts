@@ -92,7 +92,9 @@ export async function requeueYieldedHumanReply(db: typeof sql, requestId: string
     SET id=nextval(pg_get_serial_sequence('project_task_queue_items','id')),state='queued'
     WHERE canvas_id=${decision.canvas_id} AND project_id=${decision.project_id}
       AND id=${decision.source_item_id} AND state='yielded' RETURNING id::text`;
-  if (!next) throw new TaskQueueError("QUEUE_HEAD_CHANGED", "已让位任务的队列身份已变化");
+  // Expiry/cancellation reconciliation or a later execution can have closed
+  // this membership. Keep the saved reply without reviving that old position.
+  if (!next) return;
   await db`UPDATE project_task_queue_yields SET reply_message_id=${decision.saved_reply},requeued_item_id=${next.id},
     requeued_at=clock_timestamp() WHERE mutation_id=${decision.mutation_id}`;
   await recordSystemAudit({ action: "task_queue.human_reply_requeued", projectId: String(decision.project_id),

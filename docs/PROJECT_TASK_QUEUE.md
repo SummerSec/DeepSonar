@@ -39,10 +39,12 @@ schema 72 在基线中增加 project_task_queues 与 project_task_queue_items。
 
 默认保留等待人工的当前占位。用户在项目队列点击「暂存并让下一项先做」，POST /projects/{id}/task-queue/yield 携带共享严格契约的 mutation_id、canvas_id、expected_item_id、request_id 和 expected_revision。权限沿 jobs:control 与项目隔离。仅当前 active 条目、唯一已封存并可信退出/释放资源的 open 请求可让位。其他 pending/claimed/provisioning/running/waiting_human、未结清效果/费用、取消、归档、任务暂停、过期与额度不足均拒绝。此切片暂只支持单个人工等待。
 
+已让位等待若被取消、关闭或归档，对账将原 yielded 条目持久结为 cancelled。断点到期则结为 failed；真实续做泵仍发布 HUMAN_CHECKPOINT_EXPIRED 并回收断点。对账也扫描只有 yielded 的项目，并按 project/canvas/source_item_id 与 yielded 状态核验，避免结算后继代际。收口写入同事务审计，不暂停其他已运行任务；取消归档后可由正常继续执行入口产生合法工作再入队。
+
 schema 75 的 yielded 状态不占执行席位，project_task_queue_yields 持久绑定原条目、请求版本、操作编号、消费回复及返回条目。相同操作编号和内容返回原决定，内容冲突返回 409。持有统一 claim advisory 锁后按 Canvas→Job→Attempt→请求锁序执行，状态与审计同事务提交。
 
 人工回复先保存，保存事务内将 yielded 条目原子改为 queued 并取得新序号，排在当时全部等待项之后。created_at 与 started_at 保留原完成代际。消息幂等重试、重复泵和并发回复不会二次移动位置。暂停队列时回复照常保存和回队，仍阻止执行。轮到且无其他 active 时，既有续做准入重新核断点、退出、权限、效果和预算，再与唯一后继同事务取得 active 席位。正在运行的下一任务始终优先。
 
-任务页单独显示「暂存等待回复」，默认等待显示「等待人工，未占运行资源，但阻挡串行队列」。按钮只在有控制权限及可引用的唯一请求时出现，服务端仍重验全部安全条件。普通刷新不新增通知，失败保留重试操作编号，用户无需重新输入已保存回复。
+队列有界列表按 active→queued→yielded→history 排序，当前占位与失败队首先返回，旧暂存条目不能挤掉其操作入口。任务页单独显示「暂存等待回复」，默认等待显示「等待人工，未占运行资源，但阻挡串行队列」。按钮只在有控制权限及可引用的唯一请求时出现，服务端仍重验全部安全条件。普通刷新不新增通知，失败保留重试操作编号，用户无需重新输入已保存回复。
 
-回归接现有 ci:integration:platform-api 的 human-continuation SQL/HTTP 套件，覆盖 A 默认占位→显式让位→B 唯一领取→A 回复仅回队一次→暂停阻止恢复→B 完成→A 唯一后继。队列 HTTP 套件验证读权限与跨项目拒绝，单测覆盖 yielded 禁止领取与 Web 分组。最终 SHA Actions 另验，本地仅静态检查。
+回归接现有 ci:integration:platform-api 的 human-continuation SQL/HTTP 套件，覆盖 A 默认占位→显式让位→B 唯一领取→A 回复仅回队一次→暂停阻止恢复→B 完成→A 唯一后继。队列 HTTP 套件验证读权限与跨项目拒绝，单测覆盖 yielded 禁止领取与 Web 分组，SQL/DOM 补 100 个旧暂存项时当前占位与失败队首仍可操作。正常 HTTP 取消/归档→取消归档/继续执行/重新入队与 Dispatcher、真实 pump 到期覆盖末态收口及原条目身份隔离。最终 SHA Actions 另验，本地仅静态检查。
