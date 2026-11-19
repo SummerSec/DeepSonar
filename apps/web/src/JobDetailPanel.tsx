@@ -724,7 +724,10 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
           {/* 非「结果」页：顶栏展示一次 Job 终态错误；结果页内已有带标题的错误卡片，避免双份 */}
           {detail && (jobProjection.actions.length > 0 || jobProjection.repair) && tab !== "result" && (
             <div className="m-4 space-y-2">
-              {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
+              {jobProjection.actions.length > 0 && <details>
+                <summary className="cursor-pointer py-2 text-[12px] text-zinc-400">执行状态详情（维护者）</summary>
+                {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
+              </details>}
               {jobProjection.repair && (
                 <RepairFeedbackPanel feedback={jobProjection.repair} recoveryActions={repairRecoveryActions} />
               )}
@@ -736,7 +739,10 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
             <div className="min-h-full min-w-0 space-y-4 p-4">
               {(jobProjection.actions.length > 0 || jobProjection.repair || detail.job.error) && (
                 <div className="space-y-2">
-                  {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
+                  {jobProjection.actions.length > 0 && <details>
+                    <summary className="cursor-pointer py-2 text-[12px] text-zinc-400">执行状态详情（维护者）</summary>
+                    {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
+                  </details>}
                   {jobProjection.repair
                     ? <RepairFeedbackPanel feedback={jobProjection.repair} recoveryActions={repairRecoveryActions} />
                     : detail.job.error && (
