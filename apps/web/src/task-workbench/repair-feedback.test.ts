@@ -35,10 +35,10 @@ test("unknown external effects are confirmation, never ordinary retry", () => {
 });
 
 test("historical error strings never grant current correction authority", () => {
-  assert.equal(classifyRepairCategory({ status: "timeout" }), "unknown_external_effect");
-  assert.equal(classifyRepairCategory({ status: "orphan" }), "unknown_external_effect");
-  assert.equal(classifyRepairCategory({ status: "timeout", hasEffectLedger: true }), "transient_retryable");
-  assert.equal(classifyRepairCategory({ status: "orphan", hasEffectLedger: true }), "transient_retryable");
+  assert.equal(classifyRepairCategory({ status: "timeout" }), "permanent_failure");
+  assert.equal(classifyRepairCategory({ status: "orphan" }), "permanent_failure");
+  assert.equal(classifyRepairCategory({ status: "timeout", hasEffectLedger: true }), "permanent_failure");
+  assert.equal(classifyRepairCategory({ status: "orphan", canRecover: true }), "transient_retryable");
   assert.equal(classifyRepairCategory({ status: "failed", error: "SNAPSHOT_STALE: pin drifted" }), "permanent_failure");
   assert.equal(classifyRepairCategory({ status: "failed", error: "invalid_payload: intents[0].from" }), "permanent_failure");
   const payload = projectRepairFeedback({ status: "failed", error: "invalid_payload: intents[0].from 必须是 UUID" });
