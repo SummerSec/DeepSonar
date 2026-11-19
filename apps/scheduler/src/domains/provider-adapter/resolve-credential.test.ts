@@ -383,7 +383,20 @@ test("#757 unconfigured scope follows replacement credentials without mutating p
   const policy = parseProjectAgentAllowlist(cfg);
   const input = { projectId: "project-1", allowlist: policy };
   assert.equal((await resolveProviderCredentialForJob({ ...input, db: dbWith([baseRow(CRED_A)]) as never }))?.id, CRED_A);
-  assert.equal((await resolveProviderCredentialForJob({ ...input, db: dbWith([{ ...baseRow(CRED_B), agent_cli: "dsh" }]) as never }))?.id, CRED_B);
+  const replacement = { ...baseRow(CRED_B), agent_cli: "dsh", settings_config_json: {
+    config: `llm-pi-ai:
+  providers:
+    anthropic:
+      api: anthropic-messages
+      baseURL: https://api.anthropic.com
+      models:
+        - id: claude-sonnet-4
+agent-default-model:
+  provider: anthropic
+  model: claude-sonnet-4
+`,
+  } };
+  assert.equal((await resolveProviderCredentialForJob({ ...input, db: dbWith([replacement]) as never }))?.id, CRED_B);
   assert.deepEqual(cfg, {});
   assert.equal(policy.credential_ids_configured, false);
 });
