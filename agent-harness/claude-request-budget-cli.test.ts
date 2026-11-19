@@ -146,6 +146,56 @@ async function bytes(req: http.IncomingMessage) {
   return Buffer.concat(chunks);
 }
 
+test("Claude unlimited empty settings authenticate through the trusted file helper", { timeout: 60_000 }, async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "claude-unlimited-auth-"));
+  const credentials = path.join(dir, `.deepsonar-credentials-${randomUUID()}`);
+  await mkdir(credentials, { mode: 0o700 });
+  const tokenFile = path.join(credentials, "gateway-token");
+  await writeFile(tokenFile, token, { mode: 0o600 });
+  let requests = 0;
+  const errors: string[] = [];
+  const server = http.createServer((req, res) => {
+    if (req.url === "/gateway/_allowance") {
+      if (req.headers.authorization !== `Bearer ${token}`) errors.push("allowance-authentication");
+      res.writeHead(200, { "content-type": "application/json" }).end('{"remaining_tokens":null,"policy_required":true}');
+      return;
+    }
+    if (req.headers["x-api-key"] !== token) errors.push("native-authentication");
+    requests++;
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const events = [
+      { type: "message_start", message: { id: "synthetic-unlimited", type: "message", role: "assistant", model: "claude-sonnet-4-5",
+        content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "UNLIMITED_AUTHENTICATED" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+      { type: "message_stop" },
+    ];
+    for (const event of events) res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    res.end();
+  });
+  try {
+    const upstream = await listen(server);
+    const fixture = JSON.parse(await readFile("/acceptance/runtime-fixture.json", "utf8"));
+    const script = path.join(dir, "policy.mjs");
+    await writeFile(script, fixture.policySource);
+    const api = await import(pathToFileURL(script).href);
+    const prepared = await api.prepareClaudeLaunch(
+      "claude -p --output-format json --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools '' --no-session-persistence",
+      { HOME: dir, CLAUDE_CONFIG_DIR: path.join(dir, ".claude"),
+        DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway", DEEPSONAR_GATEWAY_TOKEN_FILE: tokenFile,
+        ANTHROPIC_BASE_URL: upstream + "/gateway", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+        DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1", MAX_THINKING_TOKENS: "0" }, []);
+    assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, undefined);
+    const result = await run("/bin/bash", ["-c", prepared.command + " 'Return the synthetic authentication result.'"],
+      { cwd: dir, env: { ...process.env, ...prepared.env }, timeout: 45_000, maxBuffer: 1024 * 1024 });
+    assert.match(result.stdout, /UNLIMITED_AUTHENTICATED/u);
+    assert.ok(requests > 0);
+    assert.deepEqual(errors, []);
+  } finally { await close(server); await rm(dir, { recursive: true, force: true }); }
+});
+
 test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-budget tool turn", { timeout: 180_000 }, async t => {
   const dir = await mkdtemp(path.join(tmpdir(), "claude-native-budget-"));
   const credentials = path.join(dir, '.deepsonar-credentials-' + randomUUID());
