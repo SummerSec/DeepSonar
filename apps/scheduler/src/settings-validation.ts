@@ -40,8 +40,8 @@ const RulesPatch = z.record(z.string(), z.unknown()).superRefine((rules, ctx) =>
   for (const key of RULE_CONCURRENCY_KEYS) {
     if (!(key in rules)) continue;
     const value = rules[key];
-    if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 1000) {
-      ctx.addIssue({ code: "custom", path: [key], message: `${key} 必须是 1-1000 的整数` });
+    if (value !== null && (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 1000)) {
+      ctx.addIssue({ code: "custom", path: [key], message: `${key} 必须是 null（不限）或 1-1000 的整数；0 不合法，暂停调度请使用平台暂停` });
     }
   }
   for (const [key, bound] of Object.entries(RUNTIME_KNOB_RULE_KEYS)) {

@@ -94,7 +94,7 @@ export interface DashboardOps {
     concurrency: {
       active: number;
       waiting_human: number;
-      global_cap: number;
+      global_cap: number | null;
       utilization: number | null;
     };
     failure_reasons: DashboardStatusBucket[];
@@ -161,7 +161,7 @@ export function buildDashboardOps(input: {
     error?: string | null;
   }[];
   waitingHuman: number;
-  globalCap: number;
+  globalCap: number | null;
 }): DashboardOps {
   const window = dashboardWindow(input.now ?? new Date());
   const jobDist = fillDistribution(JOB_STATUS_KEYS, input.jobs);
@@ -261,7 +261,7 @@ export function buildDashboardOps(input: {
         active,
         waiting_human: input.waitingHuman,
         global_cap: input.globalCap,
-        utilization: rate(active, input.globalCap),
+        utilization: input.globalCap === null ? null : rate(active, input.globalCap),
       },
       failure_reasons: [...failureReasons.entries()]
         .map(([key, count]) => ({ key, count }))

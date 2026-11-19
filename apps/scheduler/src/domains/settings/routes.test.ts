@@ -125,8 +125,23 @@ test("全局规则 PATCH 拒绝已删除的验证别名", async () => {
 });
 
 test("全局上限降低后允许原项目配额随其他规则保存", () => {
+  assert.equal(projectJobQuotaPatchExceedsGlobal(undefined, 1000, null), false);
   assert.equal(projectJobQuotaPatchExceedsGlobal(4, 4, 2), false);
   assert.equal(projectJobQuotaPatchExceedsGlobal(4, 5, 2), true);
   assert.equal(projectJobQuotaPatchExceedsGlobal(undefined, 4, 2), true);
   assert.equal(projectJobQuotaPatchExceedsGlobal(4, null, 2), false);
+});
+
+test("全局三项并发拒绝零、小数和越界值并指出字段", async () => {
+  const app = Fastify({ logger: false });
+  registerSettingsRoutes(app);
+  try {
+    for (const key of ["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]) {
+      for (const value of [0, -1, 1.5, 1001, "3"]) {
+        const response = await app.inject({ method: "PATCH", url: "/global-settings", payload: { rules: { [key]: value } } });
+        assert.equal(response.statusCode, 400, response.body);
+        assert.ok(response.json().details.some((issue: { path: string[] }) => issue.path.includes(key)), response.body);
+      }
+    }
+  } finally { await app.close(); }
 });
