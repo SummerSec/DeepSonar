@@ -372,8 +372,10 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       await app.inject({method:'POST',url:`/jobs/${jobB}/cancel`});
       await sql`DELETE FROM project_task_queue_items WHERE canvas_id IN (${fixture.canvasId},${canvasB})`;
     });
-    for (const ending of ['cancel','archive','expired'] as const) {
+    for (const ending of ['cancel','archive','expired','expired_reply'] as const) {
       await context.test(`yielded membership closes through normal ${ending} entry and cannot strand new work`, async () => {
+        const expired=ending==='expired'||ending==='expired_reply';
+        const earlyReplyId=randomUUID();
         const fixture=await setup();await fixture.seal();await fixture.close();
         await sql`UPDATE project_task_queues SET paused=false,pause_reason=NULL WHERE project_id=${projectId}`;
         const [item]=await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
@@ -381,8 +383,13 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
         const input={mutation_id:randomUUID(),canvas_id:fixture.canvasId,expected_item_id:item.id,request_id:fixture.requestId,expected_revision:0};
         const decision=await app.inject({method:'POST',url:`/projects/${projectId}/task-queue/yield`,payload:input});
         assert.equal(decision.statusCode,200,decision.body);
-        if (ending==='expired') {
+        if (expired) {
           await sql`UPDATE human_requests SET checkpoint_expires_at=now()-interval '1 second' WHERE id=${fixture.requestId}`;
+          if (ending==='expired_reply') {
+            const reply=await fixture.reply(earlyReplyId);assert.equal(reply.statusCode,202,reply.body);
+            assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`)[0].state,'failed',
+              'reply before the next dispatcher tick saves content without returning an expired wait to FIFO');
+          }
           await pumpHumanContinuations(1,fixture.requestId);
           assert.equal((await sql`SELECT checkpoint_error_code FROM human_requests WHERE id=${fixture.requestId}`)[0].checkpoint_error_code,'HUMAN_CHECKPOINT_EXPIRED');
         } else {
@@ -395,12 +402,12 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
           WHERE project_id=${projectId} AND state IN ('queued','active')`)[0].n),0);
         await claimPendingJobs();
         const [closed]=await sql`SELECT state,ended_at FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`;
-        assert.equal(closed.state,ending==='expired'?'failed':'cancelled');assert.ok(closed.ended_at);
+        assert.equal(closed.state,expired?'failed':'cancelled');assert.ok(closed.ended_at);
         await claimPendingJobs();
         assert.equal(Number((await sql`SELECT count(*)::int AS n FROM audit_logs WHERE action='task_queue.human_yield_closed' AND resource_id=${item.id}`)[0].n),1);
         assert.equal((await sql`SELECT paused FROM project_task_queues WHERE project_id=${projectId}`)[0].paused,false);
-        if (ending==='expired') {
-          const reply=await fixture.reply();assert.equal(reply.statusCode,202,reply.body);
+        if (expired) {
+          const reply=await fixture.reply(earlyReplyId);assert.equal(reply.statusCode,202,reply.body);
           await pumpHumanContinuations(1,fixture.requestId);
           const resume=await app.inject({method:'POST',url:`/tasks/${fixture.canvasId}/resume-session`});
           assert.equal(resume.statusCode,409,resume.body);assert.equal(resume.json().error_code,'HUMAN_REPLY_REQUIRED');

@@ -39,7 +39,7 @@ schema 72 在基线中增加 project_task_queues 与 project_task_queue_items。
 
 默认保留等待人工的当前占位。用户在项目队列点击「暂存并让下一项先做」，POST /projects/{id}/task-queue/yield 携带共享严格契约的 mutation_id、canvas_id、expected_item_id、request_id 和 expected_revision。权限沿 jobs:control 与项目隔离。仅当前 active 条目、唯一已封存并可信退出/释放资源的 open 请求可让位。其他 pending/claimed/provisioning/running/waiting_human、未结清效果/费用、取消、归档、任务暂停、过期与额度不足均拒绝。此切片暂只支持单个人工等待。
 
-已让位等待若被取消、关闭或归档，对账将原 yielded 条目持久结为 cancelled。断点到期则结为 failed；真实续做泵仍发布 HUMAN_CHECKPOINT_EXPIRED 并回收断点。对账也扫描只有 yielded 的项目，并按 project/canvas/source_item_id 与 yielded 状态核验，避免结算后继代际。收口写入同事务审计，不暂停其他已运行任务；取消归档后可由正常继续执行入口产生合法工作再入队。
+已让位等待若被取消、关闭或归档，对账将原 yielded 条目持久结为 cancelled。断点到期则结为 failed；真实续做泵仍发布 HUMAN_CHECKPOINT_EXPIRED 并回收断点。对账也扫描只有 yielded 的项目，并按 project/canvas/source_item_id 与 yielded 状态核验，避免结算后继代际。回复先于下一轮对账到达时，保存回复的事务也先收口到期原条目，回复照常保留。收口写入同事务审计，不暂停其他已运行任务；取消归档后可由正常继续执行入口产生合法工作再入队。
 
 schema 75 的 yielded 状态不占执行席位，project_task_queue_yields 持久绑定原条目、请求版本、操作编号、消费回复及返回条目。相同操作编号和内容返回原决定，内容冲突返回 409。持有统一 claim advisory 锁后按 Canvas→Job→Attempt→请求锁序执行，状态与审计同事务提交。
 

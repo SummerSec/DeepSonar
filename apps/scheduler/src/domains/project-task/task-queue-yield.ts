@@ -6,6 +6,7 @@ import { remainingHumanExecutionMs } from "../job-control/human-continuation-clo
 import { humanSnapshotDigest } from "../job-control/human-continuation-store.js";
 import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
 import { TaskQueueError } from "./task-queue-store.js";
+import { reconcileYieldedTaskQueueItems } from "./task-queue-yield-reconciliation.js";
 
 /** Caller holds the claim advisory lock, before taking Canvas -> Job -> Attempt -> request. */
 export async function yieldProjectTaskQueue(db: typeof sql, projectId: string, input: ProjectTaskQueueYieldInput) {
@@ -88,6 +89,7 @@ export async function requeueYieldedHumanReply(db: typeof sql, requestId: string
   if (!decision || decision.requeued_at || decision.status !== "answered" || decision.resumed_at
     || decision.job_status !== "waiting_human" || !decision.saved_reply
     || Number(decision.revision) !== Number(decision.request_revision) + 1) return;
+  await reconcileYieldedTaskQueueItems(db, String(decision.project_id), String(decision.canvas_id));
   const [next] = await db`UPDATE project_task_queue_items
     SET id=nextval(pg_get_serial_sequence('project_task_queue_items','id')),state='queued'
     WHERE canvas_id=${decision.canvas_id} AND project_id=${decision.project_id}
