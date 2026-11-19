@@ -323,3 +323,11 @@ Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freez
 ## 人工等待显式释放 FIFO 席位（#1074）
 
 默认人工等待占位，用户显式让位将唯一等待 Canvas 标记 yielded。回复保存事务持有 claim advisory 锁、Canvas→Job→Attempt→请求锁，原子回队尾一次，保留完成代际。轮到且无其他 active、队列未暂停才由原 requeueJob 准入取得席位和唯一后继，Dispatcher 再验。暂停、取消、断点过期、撤权、退出/效果/预算门仍生效，详见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。
+
+## 默认不限的调度配额（#1123）
+
+三项全局规则 `maxGlobalJobs`、`maxJobsPerProject`、`maxConcurrentProvisioning` 接受 null 或 1–1000 整数。null 表示不限，0 拒绝。仅缺少持久键时读取显式环境变量，环境变量缺省或空白时为 null。已存数字及显式环境变量数字保留，缺省直接采用新契约，不固化旧 20/5/2 默认值。非法显式值阻止启动或领取，升级预检报告字段名。
+
+项目 `maxConcurrentJobs=null` 清除覆盖并继承全局，全局也不限时项目不限。0 暂停该项目后续领取。有限项目配额仍与有限全局上限取最小值。全局不限仅解除对应三个闸，Canvas、FIFO、暂停、图资格、Provider、账号、模型、CLI、lease、镜像及 provision 准入继续核验。计数仍为 claimed/provisioning/running，改配额不终止运行任务。仅内部剩余槽计算使用 Infinity，数据库和 JSON API 使用 null。
+
+设置页全局配额独立保存，仅提交用户修改的字段。输入来自已存值，生效值单独读取，避免把环境变量或其他硬上限推导值固化为覆盖。清空保存写 null，输入非法时显示错误并禁用保存。项目设置和项目列表将 null 展示为“不限”。该交互沿用配置中心入口，额外增加三个清空按钮及独立保存操作，以明确用户何时解除限制。行为证据来自 dispatch-limits、升级预检、配置子进程与 Web DOM 回归，最终 SHA Actions 待验。

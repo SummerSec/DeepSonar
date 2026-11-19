@@ -157,7 +157,7 @@ export interface DashboardOps {
     concurrency: {
       active: number;
       waiting_human: number;
-      global_cap: number;
+      global_cap: number | null;
       utilization: number | null;
     };
     failure_reasons: DashboardStatusBucket[];
@@ -215,7 +215,7 @@ export interface Project {
   updated_at?: string;
   archived_at?: string | null;
   active_jobs?: number;
-  max_concurrent_jobs?: number;
+  max_concurrent_jobs?: number | null;
   max_concurrent_jobs_source?: "project" | "global";
 }
 
@@ -948,13 +948,13 @@ export interface EffectiveRules {
   maxIntentsPerDecision: number;
   allowEgress: boolean;
   /** Scheduler-wide hard caps. Persisted global rules are authoritative; env only bootstraps defaults. */
-  maxGlobalJobs: number;
-  maxJobsPerProject: number;
+  maxGlobalJobs: number | null;
+  maxJobsPerProject: number | null;
   /** Claim-time effective active-job cap for this project. */
-  maxConcurrentJobs: number;
+  maxConcurrentJobs: number | null;
   maxConcurrentJobsSource: "project" | "global";
   /** Scheduler 全局 provisioning admission 上限，项目规则不得覆盖。 */
-  maxConcurrentProvisioning: number;
+  maxConcurrentProvisioning: number | null;
   /** Provider 总并发；优先级高于 Credential / Model / Agent CLI。 */
   maxConcurrentByProvider: Record<string, number>;
   /** 全局按 Agent CLI 的并发配额；项目层只读继承。 */
@@ -3072,6 +3072,8 @@ export const api = {
     version: string;
     runtime_images: { status: "idle" | "preparing" | "ready" | "failed"; error: string | null; retry_at: string | null };
     dispatcher: { enabled: boolean; started_at: string | null };
+    /** null object means unavailable; null individual limits mean unlimited. */
+    concurrency_limits?: Pick<EffectiveRules, "maxGlobalJobs" | "maxJobsPerProject" | "maxConcurrentProvisioning"> | null;
     opensandbox: { level: "ok" | "error" | "unconfigured" | "skipped"; domain: string; ready: boolean };
     ts: number;
   }>("/health"),

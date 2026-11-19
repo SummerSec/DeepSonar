@@ -10,6 +10,8 @@ import {
 import { openSandboxCreateCircuitStatus } from "../../opensandbox-create-circuit.js";
 import { openSandboxUploadCircuitStatus } from "../../opensandbox-upload-circuit.js";
 import { runtimeImageWarmupStatus } from "../../runtime-image-warmup.js";
+import { globalRules } from "../../core.js";
+import { sql } from "../../db.js";
 import { dispatcherRuntimeStatus } from "../../startup-status.js";
 
 async function defaultOfficialImageWarnings(): Promise<string[]> {
@@ -43,6 +45,7 @@ export function registerSystemRoutes(
   dependencies: {
     runtimeImageStatus?: typeof runtimeImageWarmupStatus;
     dispatcherStatus?: typeof dispatcherRuntimeStatus;
+    concurrencyLimits?: () => Promise<Pick<Awaited<ReturnType<typeof globalRules>>, "maxGlobalJobs" | "maxJobsPerProject" | "maxConcurrentProvisioning"> | null>;
     officialImageWarnings?: () => Promise<string[]> | string[];
     openSandboxStatus?: () => Promise<OpenSandboxServerStatus> | OpenSandboxServerStatus;
   } = {},
@@ -86,6 +89,15 @@ export function registerSystemRoutes(
     const openSandbox = await Promise.resolve(
       (dependencies.openSandboxStatus ?? refreshOpenSandboxServerStatus)(),
     );
+    const loadLimits = dependencies.concurrencyLimits ?? (async () => {
+      const rules = await globalRules(sql);
+      return {
+        maxGlobalJobs: rules.maxGlobalJobs,
+        maxJobsPerProject: rules.maxJobsPerProject,
+        maxConcurrentProvisioning: rules.maxConcurrentProvisioning,
+      };
+    });
+    const concurrencyLimits = await loadLimits().catch(() => null);
     return {
       ok: true,
       ready: runtimeImages.ready && dispatcher.enabled && openSandboxAllowsDispatch(openSandbox),
@@ -96,6 +108,7 @@ export function registerSystemRoutes(
         official_trust_warnings: officialTrustWarnings,
       },
       dispatcher,
+      concurrency_limits: concurrencyLimits,
       opensandbox: {
         level: openSandbox.level,
         domain: openSandbox.domain,

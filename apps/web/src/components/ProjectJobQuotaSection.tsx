@@ -111,13 +111,13 @@ export function ProjectJobQuotaSection({
         <div>
           <label className={labelCls}>
             最大同时运行 Job 数
-            <HelpTip>正整数收紧该项目预算；留空继承全局 {rules.maxJobsPerProject}。</HelpTip>
+            <HelpTip>正整数收紧该项目预算；留空继承全局 {rules.maxJobsPerProject ?? "不限"}。0 暂停领取。</HelpTip>
           </label>
           <input
             type="number"
             min={0}
-            max={rules.maxJobsPerProject}
-            placeholder={`继承全局 ${rules.maxJobsPerProject}`}
+            max={rules.maxJobsPerProject ?? 1000}
+            placeholder={`继承全局 ${rules.maxJobsPerProject ?? "不限"}`}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             className={inputCls}
@@ -126,16 +126,16 @@ export function ProjectJobQuotaSection({
         <div>
           <div className={labelCls}>当前运行 / 有效上限</div>
           <div className="font-mono text-[15px] text-zinc-200">
-            {settings.active_jobs} / {rules.maxConcurrentJobs}
+            {settings.active_jobs} / {rules.maxConcurrentJobs ?? "不限"}
           </div>
           <div className="mt-1 font-mono text-[10px] text-zinc-600">
             来源：{rules.maxConcurrentJobsSource === "project" ? "项目设置" : "继承全局"}
-            · 全局硬上限 {rules.maxJobsPerProject}
+            · 全局硬上限 {rules.maxJobsPerProject ?? "不限"}
             · 有效上限 = min(项目设置, 全局硬上限)
-            {rules.maxConcurrentJobsSource === "project" && rules.maxConcurrentJobs < rules.maxJobsPerProject
+            {rules.maxConcurrentJobsSource === "project" && rules.maxConcurrentJobs !== null && (rules.maxJobsPerProject === null || rules.maxConcurrentJobs < rules.maxJobsPerProject)
               ? " · 已被项目设置收紧（未达到全局硬上限）"
               : ""}
-            {rules.maxConcurrentJobsSource === "project" && typeof storedQuota === "number" && storedQuota > rules.maxJobsPerProject
+            {rules.maxConcurrentJobsSource === "project" && typeof storedQuota === "number" && rules.maxJobsPerProject !== null && storedQuota > rules.maxJobsPerProject
               ? " · 项目设置超过全局硬上限，当前按全局硬上限运行"
               : ""}
           </div>

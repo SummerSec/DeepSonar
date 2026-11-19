@@ -438,6 +438,12 @@ const OPS: Op[] = [
           },
           runtime_images: { type: "object", additionalProperties: true },
           dispatcher: { type: "object", additionalProperties: true },
+          concurrency_limits: {
+            type: ["object", "null"],
+            description: "当前生效并发配额；字段 null 表示不限，整个对象 null 表示读数不可用",
+            properties: Object.fromEntries(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]
+              .map(key => [key, { type: ["integer", "null"], minimum: 1, maximum: 1000 }])),
+          },
           opensandbox: {
             type: "object",
             additionalProperties: false,
@@ -2068,7 +2074,7 @@ const OPS: Op[] = [
         rules: {
           type: "object",
           additionalProperties: true,
-          description: "全局规则。maxGlobalJobs / maxJobsPerProject / maxConcurrentProvisioning 为 1–1000；stallSec / jobTokenMaxRequests 为 0–上限（0=不限制）；auditTimeoutSec / verifyTimeoutSec / provisionTimeoutSec 为配置中心第一批；maxConcurrentJobs 只能写在项目设置。",
+          description: "全局规则。maxGlobalJobs / maxJobsPerProject / maxConcurrentProvisioning 为 null（不限）或 1–1000 整数，拒绝 0；缺省使用显式环境变量，无环境配置则不限；stallSec / jobTokenMaxRequests 为 0–上限（0=不限制）；auditTimeoutSec / verifyTimeoutSec / provisionTimeoutSec 为配置中心第一批；maxConcurrentJobs 只能写在项目设置。",
         },
       },
     },
@@ -2178,7 +2184,7 @@ const OPS: Op[] = [
         rules: {
           type: "object",
           additionalProperties: true,
-          description: "项目规则覆盖。maxConcurrentJobs 为 0–1000 或 null（清除后继承全局 maxJobsPerProject）；不得修改全局并发键。",
+          description: "项目规则覆盖。maxConcurrentJobs 为 0–1000 或 null（清除后继承全局 maxJobsPerProject，全局不限则不限）；0 暂停该项目新 claim；不得修改全局并发键。",
         },
         device_access_enabled: {
           type: "boolean",

@@ -28,6 +28,7 @@ const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 test("/health remains live and reports ready=false while warmup is pending", async () => {
   const app = Fastify();
   registerSystemRoutes(app, {
+    concurrencyLimits: async () => ({ maxGlobalJobs: null, maxJobsPerProject: 3, maxConcurrentProvisioning: null }),
     runtimeImageStatus: () => ({
       status: "preparing", ready: false, attempt: 1, required: 3, error: null, retry_at: null,
     }),
@@ -37,6 +38,7 @@ test("/health remains live and reports ready=false while warmup is pending", asy
   const response = await app.inject({ method: "GET", url: "/health" });
   assert.equal(response.statusCode, 200);
   assert.equal(response.json().ok, true);
+  assert.deepEqual(response.json().concurrency_limits, { maxGlobalJobs: null, maxJobsPerProject: 3, maxConcurrentProvisioning: null });
   assert.equal(response.json().ready, false);
   assert.equal(typeof response.json().version, "string");
   assert.equal(response.json().runtime_images.status, "preparing");
@@ -49,6 +51,7 @@ test("/health version is DEEPSONAR_VERSION only and ignores DEEPSONAR_IMAGE_TAG 
   const previousVersion = process.env.DEEPSONAR_VERSION;
   const app = Fastify();
   registerSystemRoutes(app, {
+    concurrencyLimits: async () => ({ maxGlobalJobs: null, maxJobsPerProject: 3, maxConcurrentProvisioning: null }),
     runtimeImageStatus: () => ({
       status: "ready", ready: true, attempt: 1, required: 3, error: null, retry_at: null,
     }),
@@ -76,6 +79,7 @@ test("/health version is DEEPSONAR_VERSION only and ignores DEEPSONAR_IMAGE_TAG 
 test("/health ready requires both warmup and dispatcher", async () => {
   const app = Fastify();
   registerSystemRoutes(app, {
+    concurrencyLimits: async () => ({ maxGlobalJobs: null, maxJobsPerProject: 3, maxConcurrentProvisioning: null }),
     runtimeImageStatus: () => ({
       status: "ready", ready: true, attempt: 1, required: 3, error: null, retry_at: null,
     }),
@@ -93,6 +97,7 @@ test("/health ready requires both warmup and dispatcher", async () => {
 test("/health ready fails closed when OpenSandbox server is down", async () => {
   const app = Fastify();
   registerSystemRoutes(app, {
+    concurrencyLimits: async () => ({ maxGlobalJobs: null, maxJobsPerProject: 3, maxConcurrentProvisioning: null }),
     runtimeImageStatus: () => ({
       status: "ready", ready: true, attempt: 1, required: 3, error: null, retry_at: null,
     }),
@@ -346,6 +351,7 @@ test("/health.runtime_images.error 区分通道超时兜底与 digest not found"
   const digest = `sha256:${"a".repeat(64)}`;
   const app = Fastify();
   registerSystemRoutes(app, {
+    concurrencyLimits: async () => ({ maxGlobalJobs: null, maxJobsPerProject: 3, maxConcurrentProvisioning: null }),
     runtimeImageStatus: () => ({
       status: "failed",
       ready: false,
@@ -364,6 +370,7 @@ test("/health.runtime_images.error 区分通道超时兜底与 digest not found"
 
   const missing = Fastify();
   registerSystemRoutes(missing, {
+    concurrencyLimits: async () => null,
     runtimeImageStatus: () => ({
       status: "failed",
       ready: false,
@@ -384,6 +391,7 @@ test("/health.runtime_images.error 区分通道超时兜底与 digest not found"
 test("/health surfaces official default image revoked as a warning", async () => {
   const app = Fastify();
   registerSystemRoutes(app, {
+    concurrencyLimits: async () => ({ maxGlobalJobs: null, maxJobsPerProject: 3, maxConcurrentProvisioning: null }),
     runtimeImageStatus: () => ({
       status: "ready", ready: true, attempt: 1, required: 3, error: null, retry_at: null,
     }),
@@ -435,6 +443,7 @@ test("#1119 /health surfaces create circuit open and half_open states", async ()
   resetOpenSandboxCreateCircuitForTests(() => now);
   const app = Fastify();
   registerSystemRoutes(app, {
+    concurrencyLimits: async () => ({ maxGlobalJobs: null, maxJobsPerProject: 3, maxConcurrentProvisioning: null }),
     runtimeImageStatus: () => ({ status: "ready", ready: true, attempt: 1, required: 0, error: null, retry_at: null }),
     dispatcherStatus: () => ({ enabled: true, started_at: "2026-01-01T00:00:00.000Z" }),
     officialImageWarnings: () => [],

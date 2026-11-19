@@ -46,6 +46,7 @@ import { inferToastKind, showToast } from "./toast";
 import { SkillSourceCatalogActions } from "./components/SkillSourceCatalogActions";
 import { formatSkillSourceRegistrationFlash } from "./skill-source-sync-flash";
 import { useFlashMessage } from "./use-flash-message";
+import { GlobalJobQuotaSection } from "./components/GlobalJobQuotaSection";
 import { ProjectJobQuotaSection } from "./components/ProjectJobQuotaSection";
 
 /**
@@ -106,6 +107,7 @@ export function SettingsPanel({
   const [tab, setTab] = useState<Tab>(() => projectId ? "roles" : resolveSettingsSectionTab(globalSection, null));
   const [searchParams, setSearchParams] = useSearchParams();
   const [settings, setSettings] = useState<ProjectSettings | null>(null);
+  const [storedGlobalRules, setStoredGlobalRules] = useState<Record<string, unknown>>({});
   const [rules, setRules] = useState<EffectiveRules | null>(null);
   const [findingProtocol, setFindingProtocol] = useState<FindingProtocolConfig | null>(null);
   const [effectiveFindingProtocol, setEffectiveFindingProtocol] = useState<EffectiveFindingProtocol | null>(null);
@@ -183,6 +185,7 @@ export function SettingsPanel({
         .catch((error) => showAgentLoadError("内置 Agent", error));
     } else if (globalSection === "platform" && canLoadTab("rules")) {
       api.globalSettings().then((g) => {
+        setStoredGlobalRules(g.rules);
         setRules(g.effective_rules);
         setFindingProtocol(g.finding_protocol);
         setEffectiveFindingProtocol(g.effective_finding_protocol);
@@ -273,9 +276,6 @@ export function SettingsPanel({
     };
     // CLI / Provider 协议并发仅全局可写（#707 Phase 2 补入口）
     if (!projectId) {
-      ruleBody.maxGlobalJobs = rules.maxGlobalJobs;
-      ruleBody.maxJobsPerProject = rules.maxJobsPerProject;
-      ruleBody.maxConcurrentProvisioning = rules.maxConcurrentProvisioning;
       ruleBody.provisionTimeoutSec = rules.provisionTimeoutSec;
       ruleBody.maxConcurrentByAgentCli = rules.maxConcurrentByAgentCli ?? {};
       ruleBody.maxConcurrentByProvider = rules.maxConcurrentByProvider ?? {};
@@ -659,28 +659,13 @@ export function SettingsPanel({
               </section>
             )}
 
-            {!projectId && (
-              <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
-                <div className="border-b border-white/[.055] px-4 py-3">
-                  <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">
-                    <span>调度器总并发硬上限</span>
-                    <HelpTip>
-                      claim 使用本页规则的 effective 值；<code>.env</code> 只在数据库未配置时提供启动默认。
-                      全局上限是安全顶，每项目上限不能被项目配置放宽。修改只影响后续 claim，不终止已运行 Job。
-                    </HelpTip>
-                  </div>
-                </div>
-                <div className="px-4 py-4">
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    {numField("maxGlobalJobs", "全局活跃 Job 上限", "所有 claimed / provisioning / running Job 的总数。")}
-                    {numField("maxJobsPerProject", "每项目活跃 Job 上限", "单个项目的安全 cap；effective 值不会超过全局设置。")}
-                    {numField("maxConcurrentProvisioning", "Provisioning并发上限", "同时处于 claimed / provisioning 阶段的 Job 数量；超出的 Job 保持 pending。")}
-                  </div>
-                  <div className="mt-2 font-mono text-[10px] text-zinc-600">
-                      当前运行 {Object.values(cliActive).reduce((sum, value) => sum + Number(value || 0), 0)} / {rules?.maxGlobalJobs ?? "不限"}
-                  </div>
-                </div>
-              </section>
+            {!projectId && rules && (
+              <GlobalJobQuotaSection storedRules={storedGlobalRules} rules={rules}
+                activeJobs={Object.values(cliActive).reduce((sum, value) => sum + Number(value || 0), 0)}
+                onFlash={flash} onSaved={(saved) => {
+                  setStoredGlobalRules(saved.rules);
+                  setRules(saved.effective_rules);
+                }} />
             )}
 
             {projectId && settings && rules && (
