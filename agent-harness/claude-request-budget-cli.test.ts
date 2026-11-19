@@ -28,7 +28,7 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
   const calls:any[]=[];
   const server=http.createServer((req,res)=>{void(async()=>{
     if(req.url?.includes("count_tokens")) {res.writeHead(200,{"content-type":"application/json"}).end('{"input_tokens":10}');return;}
-    assert.equal(req.headers.authorization,"Bearer new-human-fixture-key");
+    assert.equal(req.headers["x-api-key"],"new-human-fixture-key");
     const body=JSON.parse((await bytes(req)).toString("utf8"));calls.push(body);
     res.writeHead(200,{"content-type":"text/event-stream"});
     const events=[
@@ -41,7 +41,7 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
     ];
     for(const event of events)res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     res.end();
-  })().catch(()=>res.writeHead(500).end());});
+  })().catch(error=>{console.error("native-fixture-request",req.url,String(error));res.writeHead(500).end();});});
   const url=await listen(server);
   const launch=async(home:string,resume?:string)=>{
     await mkdir(home,{recursive:true});
@@ -67,7 +67,7 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
     }));
     const original=archives.find(Boolean);assert.ok(original);
     const result=projectNativeHumanSession("claude-code","2.1.312",sessionId,original);
-    assert.equal(result.status,"supported");assert.doesNotMatch(result.content,/old-control-identity/);
+    assert.equal(result.status,"supported",JSON.stringify({result,records:original.trim().split("\n").map((line:string)=>{const row=JSON.parse(line);return {type:row.type,subtype:row.subtype};})}));assert.doesNotMatch(result.content,/old-control-identity/);
     const newHome=path.join(root,"new-home"),projectName=root.replace(/[^a-zA-Z0-9]/gu,"-");
     const destination=path.join(newHome,".claude/projects",projectName);await mkdir(destination,{recursive:true});
     await writeFile(path.join(destination,`${sessionId}.jsonl`),result.content);

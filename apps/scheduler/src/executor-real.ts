@@ -1756,6 +1756,13 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
   try {
     const host = await runner.ensureHost({ sandboxId: job.sandbox_id as string });
     checkpointContext=await prepareHumanCheckpointContext({jobId,attemptNo:Number(activeAttempt.attempt_no),snapshot,host});
+    if(checkpointContext.nativeStatus) {
+      const diagnostic={type:"runtime.diagnostic",code:"HUMAN_CONTINUATION_SESSION_MODE",
+        mode:checkpointContext.nativeSession ? "restricted_native" : "structured",
+        status:checkpointContext.nativeStatus.status,reason:checkpointContext.nativeStatus.reason};
+      const sequence=await evidenceWriter.appendNormalized(diagnostic);
+      publishStream(jobId,diagnostic,evidenceAttemptId,sequence);
+    }
     if(checkpointContext.continuationInput) initialInput=`${checkpointContext.continuationInput}\n${initialInput}`;
     result = await runRealAgent(
     host,

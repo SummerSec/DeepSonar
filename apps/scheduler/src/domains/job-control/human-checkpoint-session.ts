@@ -32,7 +32,7 @@ export async function captureHumanSession(jobId:string,attemptId:string,secrets:
     try {
     const manifest=await readEvidenceManifest(jobId);
     const candidates=manifest?.files.filter(file=>file.kind==='main' && file.path.startsWith(`attempts/${attemptId}/sessions/`)) ?? [];
-    if (manifest?.cli===cli && manifest.session_id===source.session_id && candidates.length===1 && !manifest.capture_error) {
+    if (manifest && manifest.cli===cli && manifest.session_id===source.session_id && candidates.length===1 && !manifest.capture_error) {
       const file=candidates[0]!;
       const archive=await readSessionArtifact(jobId,file.path);
       if (archive && !archive.projection && archive.content.length===file.bytes && checkpointHash(archive.content)===file.sha256) {

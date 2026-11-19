@@ -46,7 +46,13 @@ export function projectNativeHumanSession(cli: string, version: string, sessionI
     if (lines.length > 20_000) throw new Error("record_limit");
     const rows = lines.map(line => record(JSON.parse(line)));
     if (rows.some(row => row.isCompactSummary || row.subtype === "compact_boundary"
-      || typeof row.customType === "string" && row.customType.startsWith("om."))) throw new Error("transformed_context_requires_structured");
+      || typeof row.customType === "string" && row.customType.startsWith("om."))) return {status:"unsupported",reason:"transformed_context_requires_structured"};
+    const types = cli === "pi"
+      ? new Set(["session","message","model_change","thinking_level_change","usage","session_info","label"])
+      : new Set(["user","assistant","file-history-snapshot","progress","queue-operation"]);
+    if (rows.some(row => !types.has(row.type))) return {status:"unsupported",reason:"unknown_session_record_type"};
+    if (rows.some(row => row.type === "message" && !["system","user","assistant","toolResult"].includes(row.message?.role)))
+      return {status:"unsupported",reason:"unknown_session_message_role"};
     const output: Record<string, unknown>[] = [];
     if (cli === "pi") {
       const header = rows.shift();
@@ -65,7 +71,6 @@ export function projectNativeHumanSession(cli: string, version: string, sessionI
       if (cli === "pi") {
         if (row.parentId !== sourceParent) throw new Error("branched_history");
         sourceParent = id;
-        if (["compaction","branch_summary","context_edit"].includes(row.type)) throw new Error("context_transform_requires_structured");
       }
       if (cli === "claude-code") {
         if (row.isSidechain === true || row.parentUuid !== sourceParent) throw new Error("branched_history");

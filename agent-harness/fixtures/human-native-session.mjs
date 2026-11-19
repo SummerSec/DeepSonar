@@ -52,6 +52,8 @@ export async function runHumanNativePiImport() {
     writeFileSync(imported,projected.content);
     client=start(path.dirname(imported),imported);
     const after=await client.command("get_state");
+    console.log(JSON.stringify({human_native_identity:{before:before.data.sessionId,header:JSON.parse(projected.content.split('\n')[0]).id,after:after.data.sessionId,
+      expectedFile:imported,observedFile:after.data.sessionFile,records:projected.content.trim().split('\n').map(line=>JSON.parse(line).type),stderr:client.stderr.slice(-512)}}));
     assert.equal(after.data.sessionId,before.data.sessionId);assert.equal(after.data.sessionFile,imported);
     await client.turn("Continue after the human reply using the new execution identity.");
     assert.ok(JSON.stringify(calls.at(-1).messages).includes("ORIGINAL_NATIVE_DECISION"));

@@ -90,6 +90,14 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.doesNotMatch(loaded.session.content,/old-checkpoint-control/);
       assert.match(loaded.session.content,/Safe decision/);
       await assert.rejects(loadHumanSession(fixture.jobId,2,{...job.agent_snapshot_json,agent_cli:'dsh'}),/IDENTITY/);
+      const [stored]=await sql`SELECT state_json->'human_session' AS binding FROM job_attempts WHERE id=${fixture.attemptId}`;
+      for(const field of ['request_id','attempt_id','snapshot_sha256','sha256']) {
+        const changed={...stored.binding,[field]:field.endsWith('id')?randomUUID():'0'.repeat(64)};
+        await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json(changed)}) WHERE id=${fixture.attemptId}`;
+        await assert.rejects(loadHumanSession(fixture.jobId,2,job.agent_snapshot_json),/IDENTITY|UNAVAILABLE|MISMATCH/);
+      }
+      await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json(stored.binding)}) WHERE id=${fixture.attemptId}`;
+      assert.equal((await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json)).status,'supported');
       assert.equal((await loadHumanSession(fixture.jobId,3,job.agent_snapshot_json)).status,'unsupported');
       await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
     });

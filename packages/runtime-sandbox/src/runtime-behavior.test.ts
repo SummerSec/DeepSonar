@@ -7,8 +7,8 @@ test("human native import keeps conversation identities but excludes old runtime
   const source = [
     {type:"session",version:3,id,cwd:"/workspace",timestamp:"2026-11-19T00:00:00Z"},
     {type:"message",id:"system",parentId:null,timestamp:"2026-11-19T00:00:00Z",message:{role:"system",content:"old Control identity"}},
-    {type:"custom",id:"extension",parentId:"system",timestamp:"2026-11-19T00:00:00Z",customType:"old.extension",data:{token:"private"}},
-    {type:"message",id:"user",parentId:"extension",timestamp:"2026-11-19T00:00:00Z",message:{role:"user",content:"Keep the unfinished decision"}},
+    {type:"session_info",id:"metadata",parentId:"system",timestamp:"2026-11-19T00:00:00Z",name:"display name"},
+    {type:"message",id:"user",parentId:"metadata",timestamp:"2026-11-19T00:00:00Z",message:{role:"user",content:"Keep the unfinished decision"}},
   ].map(value=>JSON.stringify(value)).join("\n");
   const result=projectNativeHumanSession("pi","1.5.2",id,source);
   assert.equal(result.status,"supported");
@@ -20,6 +20,10 @@ test("human native import keeps conversation identities but excludes old runtime
   assert.equal(nativeHumanSessionCapability("dsh","0").status,"unsupported");
   assert.equal(projectNativeHumanSession("pi","0",id,source).status,"unsupported");
   assert.equal(projectNativeHumanSession("pi","1.5.2",id,source+"\n{bad").status,"rejected");
+  for(const type of ["custom","compaction","future_context_state"])
+    assert.equal(projectNativeHumanSession("pi","1.5.2",id,source+"\n"+JSON.stringify({type,id:"extra",parentId:"user"})).status,"unsupported");
+  const claude=JSON.stringify({type:"future_state",uuid:id,sessionId:id});
+  assert.equal(projectNativeHumanSession("claude-code","2.1.312",id,claude).reason,"unknown_session_record_type");
 });
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
