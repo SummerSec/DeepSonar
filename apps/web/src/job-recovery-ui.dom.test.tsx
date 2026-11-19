@@ -21,7 +21,7 @@ test("JobDetail recovery uses current actions and permission, with collapsed dia
       started_at: null, finished_at: null, payload_json: {}, agent_snapshot_json: {},
       execution_state: { authority: "scheduler", status: "timeout", allowed_actions: ["inspect_state"], blocker: "execution_inactive" } },
     events: [], findings: [], attempts: [], effects: [], broadcasts: [], usage: [], missing_modules: [],
-    dispatched_prompt: null, context_diagnostics: null,
+    dispatched_prompt: null, context_diagnostics: null, human_request: null,
   };
   Object.assign(api, {
     credentials: async () => [], authMe: async () => {
