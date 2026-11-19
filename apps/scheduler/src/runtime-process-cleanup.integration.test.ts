@@ -35,7 +35,7 @@ test("#1143 host observation → terminal finally → exact destroy → HTTP evi
     await sql`INSERT INTO api_tokens(name,project_id,token_prefix,token_hash,scopes)
       VALUES('process evidence',${projectId},${token.prefix},${token.hash},${['tasks:read']})`;
     const headers = { authorization: `Bearer ${token.plaintext}` };
-    const fixture = async (independent = false) => {
+    const fixture = async (independent = false, terminal = true) => {
       const jobId = randomUUID(), canvasId = randomUUID(), sandboxId = `controlled-${randomUUID()}`;
       await sql`INSERT INTO canvases(id,project_id,title,target_json)
         VALUES(${canvasId},${projectId},'controlled',${sql.json({ network_policy: { allow_egress: false } })})`;
@@ -61,8 +61,10 @@ test("#1143 host observation → terminal finally → exact destroy → HTTP evi
         cleanup: { outcome: "http_error", http_status: 503, requested_at: new Date().toISOString(), completed_at: new Date().toISOString() },
       });
       if (independent) await attempts.settleEffect(sql, attemptId, "agent_run:1", { status: "unknown", outcome: { independent: true } });
-      await attempts.settleAttemptTerminal(sql, jobId, "failed");
-      await sql`UPDATE jobs SET status='failed',finished_at=now() WHERE id=${jobId}`;
+      if (terminal) {
+        await attempts.settleAttemptTerminal(sql, jobId, "failed");
+        await sql`UPDATE jobs SET status='failed',finished_at=now() WHERE id=${jobId}`;
+      }
       return { jobId, attemptId, sandboxId };
     };
     const effect = async (jobId: string) => (await sql`SELECT * FROM job_attempt_effects WHERE job_id=${jobId} AND effect_kind='agent_run'`)[0];
@@ -193,6 +195,47 @@ test("#1143 host observation → terminal finally → exact destroy → HTTP evi
       assert.equal(await destroyObservedRuntime(sql, runner, owner), true);
       assert.equal(await workers.lookupSandboxLease(owner.sandboxId), null);
       assert.equal((await effect(owner.jobId)).status, "settled");
+    });
+    await t.test("boot destroy retains observed owner before the cleanup intent exists", async context => {
+      const owner = await fixture(false, false);
+      const workers = await import("./domains/worker-nodes/registry.js");
+      const { createWorkerPlaneOpenSandboxClient } = await import("./domains/worker-nodes/multiplex-client.js");
+      const { OpenSandboxRunner } = await import("@deepsonar/runtime-sandbox");
+      const { runner: bootRunner } = await import("./runtime.js");
+      const { reconcileOnBoot } = await import("./reconcile.js");
+      const workerId = `boot-${randomUUID()}`;
+      await sql`INSERT INTO worker_nodes(id,endpoint,api_key_fingerprint,node_token_hash,node_token_prefix)
+        VALUES(${workerId},'127.0.0.1:18082','controlled-fingerprint',${randomUUID()},'controlled')`;
+      await workers.recordSandboxLease({ ...owner, workerId });
+      workers.rememberWorkerApiKey(workerId, "controlled-boot-key");
+      let present = true, destroys = 0, releases = 0;
+      const runner = new OpenSandboxRunner(createWorkerPlaneOpenSandboxClient({
+        listWorkers: async () => { const node = await workers.getWorkerNode(workerId); return node ? [node] : []; },
+        releaseLease: async sandboxId => {
+          releases++;
+          await workers.releaseSandboxLease(sandboxId);
+          assert.equal(await workers.lookupSandboxLease(sandboxId), workerId);
+        },
+        createClient: () => ({ create: async () => { throw new Error("must not provision"); }, connect: async () => undefined,
+          destroy: async () => { destroys++; present = false; },
+          list: async () => present ? [{ resourceId: owner.sandboxId, jobId: owner.jobId, attemptId: owner.attemptId, state: "running" }] : [],
+        }),
+      }));
+      const bootDestroy = context.mock.method(bootRunner, "destroyResource", async (resource: Parameters<typeof bootRunner.destroyResource>[0]) => {
+        assert.equal(resource.resourceId, owner.sandboxId);
+        assert.equal((await effect(owner.jobId)).intent_json.host_cleanup, undefined);
+        await runner.destroyResource(resource);
+      });
+      try { await reconcileOnBoot(); } finally { bootDestroy.mock.restore(); }
+      assert.equal(destroys, 1); assert.equal(releases, 1); assert.equal(present, false);
+      assert.equal((await effect(owner.jobId)).intent_json.host_cleanup, undefined);
+      assert.equal(await workers.lookupSandboxLease(owner.sandboxId), workerId);
+      assert.equal((await effect(owner.jobId)).status, "unknown");
+      assert.equal(await destroyObservedRuntime(sql, runner, owner), true);
+      assert.equal(destroys, 2); assert.equal(releases, 2);
+      assert.equal((await effect(owner.jobId)).status, "settled");
+      assert.equal((await effect(owner.jobId)).intent_json.host_cleanup.state, "confirmed");
+      assert.equal(await workers.lookupSandboxLease(owner.sandboxId), null);
     });
   } finally {
     await app.close(); await sql.end({ timeout: 5 });
