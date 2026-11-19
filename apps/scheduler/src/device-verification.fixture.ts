@@ -6,6 +6,7 @@ import { sql } from "./db.js";
 import { registerRoutes } from "./routes.js";
 import { ingestEvent } from "./core.js";
 import { createAttempt } from "./domains/job-attempt/index.js";
+import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { acquireDeviceLeaseForJob, releaseDeviceLeasesForJob } from "./domains/device/index.js";
 import { mintJobCapabilityToken, registerRuntimeHandler, unregisterRuntimeHandler } from "./domains/platform-api/index.js";
 
@@ -79,7 +80,9 @@ export async function verifyDeviceEvidenceEntrypoints(projectId: string) {
         const [created] = await sql`SELECT id,agent_snapshot_json FROM jobs WHERE finding_id=${findingId} AND type='test'`;
         assert.ok(created, response.payload);
         assert.deepEqual(created.agent_snapshot_json.device_requirement, requirement);
-        await sql`UPDATE jobs SET status='provisioning' WHERE id=${String(created.id)}`;
+        const lifecycle = createSqlJobLifecycleApplication(sql);
+        assert.ok(await lifecycle.claimPendingJob(String(created.id)));
+        assert.ok(await lifecycle.transitionJob(String(created.id), "provisioning"));
         const attempt = await createAttempt(sql, String(created.id));
         const lease = await acquireDeviceLeaseForJob({ jobId: String(created.id), attemptId: String(attempt.id), projectId,
           roleName: "test", snapshot: created.agent_snapshot_json });
