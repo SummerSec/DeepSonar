@@ -5,6 +5,20 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {findPowerShell, spawnPowerShellSync} from './powershell-test-host.mjs';
+import {collectRuntimeDatabaseReferences} from './platform-upgrade-prune-host.mjs';
+
+test('actual running and stopped Compose container environments retain databases without sessions', () => {
+  const containers = ['running', 'exited'].map((status, index) => ({State: {Status: status}, Config: {
+    Labels: {'com.docker.compose.project': 'fixture'}, Env: [`DATABASE_URL=postgres://runtime:private@postgres:5432/database_${index}`]}}));
+  const references = () => collectRuntimeDatabaseReferences({projectName: 'fixture', source: {host: 'postgres', port: 5432},
+    dc: args => {assert.deepEqual(args, ['ps', '--all', '-q']); return Buffer.from(`${'a'.repeat(64)}\n${'b'.repeat(64)}`);},
+    run: args => {assert.deepEqual(args, ['inspect', 'a'.repeat(64), 'b'.repeat(64)]); return Buffer.from(JSON.stringify(containers));}});
+  assert.deepEqual(references(), ['database_0', 'database_1']);
+  containers[1].Config.Env = ['DATABASE_URL=postgres://runtime:private@elsewhere:5432/database_1'];
+  assert.throws(references, /PRUNE_CONTAINER_DATABASE_UNBOUND/);
+  containers[1].Config.Labels['com.docker.compose.project'] = 'another';
+  assert.throws(references, /PRUNE_CONTAINER_BINDING_INVALID/);
+});
 
 test('both deployment entry points forward explicit prune apply and approved hash', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'prune-entry-'));

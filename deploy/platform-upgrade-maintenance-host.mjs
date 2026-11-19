@@ -181,8 +181,9 @@ FROM runtime_image_scans WHERE status IN ('claimed','running')`});
   };
   const adapter = {
     async pruneGenerations() {
-      const {runHostGenerationPrune} = await import('./platform-upgrade-prune-host.mjs');
+      const {runHostGenerationPrune, collectRuntimeDatabaseReferences} = await import('./platform-upgrade-prune-host.mjs');
       return runHostGenerationPrune({recovery, binding: () => adapter.deploymentBinding(), source, transport,
+        runtimeDatabases: async () => collectRuntimeDatabaseReferences({dc, run, projectName, source: await source()}),
         apply: options.pruneApply === true, approvedPlanHash: options.approvedPlanHash});
     },
     async lock(fn) {

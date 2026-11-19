@@ -109,4 +109,4 @@ Compose 测试保证业务服务只加入 `deepsonar`、共享网关 socket 不�
 
 ## 显式历史候选库回收（#1124）
 
-IR-013 的[宿主回收](../../deploy/GENERATION_GC.md)复用 upgrade.lock 和独立管理员，两个 deploy 脚本路由同一实现。默认预览保存 cluster/部署/OID 计划，显式 apply 与 hash 才删除。保留当前和最近完成当前升级的 saved.source.database、所有未决操作 source/candidate。旧完成归档只证明归属，source 不永久全保留。大小为估算，生产收益未测，最终 SHA Actions 待验。
+IR-013 的[宿主回收](../../deploy/GENERATION_GC.md)复用 upgrade.lock 和独立管理员，两个 deploy 脚本路由同一实现。默认预览保存 cluster/部署/OID 计划，显式 apply 与 hash 才删除。保留配置当前库、绑定项目运行中和已停止容器实际引用的数据库、最近完成当前升级的 saved.source.database、所有未决操作 source/candidate。旧完成归档只证明归属，source 不永久全保留。大小为估算，生产收益未测，最终 SHA Actions 待验。

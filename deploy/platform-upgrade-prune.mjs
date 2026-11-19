@@ -11,8 +11,9 @@ export function planGenerationPrune(snapshot) {
   const {current, operations, databases, roles, admin} = snapshot;
   if (!/^\d+$/.test(snapshot.cluster) || !/^[a-f0-9]{64}$/.test(snapshot.binding)
       || !/^[a-z][a-z0-9_]{0,62}$/.test(current) || !Array.isArray(operations)
-      || !Array.isArray(databases) || !Array.isArray(roles) || !admin?.marker) throw fail('PRUNE_INVENTORY_INVALID');
-  const retained = [], candidates = [], references = new Set([current]);
+      || !Array.isArray(databases) || !Array.isArray(roles) || !admin?.marker || !Array.isArray(snapshot.runtimeDatabases)
+      || snapshot.runtimeDatabases.some(database => !/^[a-z][a-z0-9_]{0,62}$/.test(database))) throw fail('PRUNE_INVENTORY_INVALID');
+  const retained = [], candidates = [], references = new Set([current, ...snapshot.runtimeDatabases]);
   const active = operations.filter(operation => !operation.archived && operation.status === 'complete' && operation.candidate === current);
   // No authoritative completed current journal means no historical delete authority.
   const authority = active.length === 1;

@@ -8,7 +8,7 @@ export function pruneFixture() {
   const operations = ['1', '2', '3'].map((digit, index) => ({generation: generation(digit), status: 'complete', archived: index < 2,
     source: index === 0 ? 'deepsonar' : database(String(index)), candidate: database(digit), cluster: '123',
     backup: 'a'.repeat(64), runtime: `runtime_${digit}`, rollbackRuntime: `rollback_${digit}`}));
-  return {cluster: '123', binding: 'b'.repeat(64), current: database('3'), operations,
+  return {cluster: '123', binding: 'b'.repeat(64), current: database('3'), runtimeDatabases: [database('3')], operations,
     databases: operations.map((operation, index) => ({name: operation.candidate, oid: String(100 + index), bytes: 1024,
       owner: 'maintenance', ownerMarker: 'deepsonar-upgrade:admin-operation', sessions: 0, references: 0, template: false,
       marker: JSON.stringify({operation_id: operation.generation.replaceAll('-', ''), source_database: operation.source,
@@ -56,6 +56,15 @@ test('unfinished and orphan operations protect both source and candidate', () =>
   const snapshot = pruneFixture(); snapshot.operations[2].status = 'rollback_resumed';
   snapshot.current = snapshot.operations[2].source;
   assert.equal(planGenerationPrune(snapshot).retained.some(row => row.name === snapshot.current), true);
+});
+
+test('configured current D with container referencing A and no sessions retains A', () => {
+  const snapshot = pruneFixture();
+  snapshot.runtimeDatabases.push(database('1'));
+  assert.equal(snapshot.databases[0].sessions, 0);
+  const plan = planGenerationPrune(snapshot);
+  assert.equal(plan.candidates.length, 0);
+  assert.equal(plan.retained.find(row => row.name === database('1')).reason, 'RECOVERY_REFERENCE');
 });
 
 function executor(snapshot) {

@@ -58,7 +58,9 @@ CREATE TABLE audit_logs(actor_type text,actor_id text,action text,resource_type 
     if (statement.startsWith('INSERT INTO audit_logs')) {sql(database, statement); return [];}
     return json(database, `SELECT coalesce(json_agg(t),'[]'::json) FROM (${statement}) t`);
   }};
-  const options = {recovery, binding: async () => binding, source: async () => ({database: current, port: 5432, values: {DEEPSONAR_SCHEDULER_IMAGE: 'fixture'}}), transport};
+  let runtimeReferences = [current];
+  const options = {recovery, binding: async () => binding, runtimeDatabases: async () => runtimeReferences,
+    source: async () => ({database: current, port: 5432, values: {DEEPSONAR_SCHEDULER_IMAGE: 'fixture'}}), transport};
   const run = extra => withUpgradeLock(join(recovery, 'upgrade.lock'), () => runHostGenerationPrune({...options, ...extra}));
   const preview = await run();
   assert.equal(preview.dry_run, true);
@@ -66,6 +68,9 @@ CREATE TABLE audit_logs(actor_type text,actor_id text,action text,resource_type 
   assert.equal(json('postgres', `SELECT count(*)::int FROM pg_database WHERE datname LIKE 'ds_upgrade_%'`)[0].count, 4);
   assert.equal(json(current, 'SELECT count(*)::int FROM audit_logs')[0].count, 0);
   await assert.rejects(run({apply: true}), /PRUNE_PLAN_APPROVAL_REQUIRED/);
+  runtimeReferences = [current, databases[0]];
+  await assert.rejects(run({apply: true, approvedPlanHash: preview.plan_hash}), /PRUNE_ELIGIBILITY_CHANGED/);
+  runtimeReferences = [current];
   sql('postgres', `CREATE ROLE foreign_reader NOLOGIN; GRANT CONNECT ON DATABASE "${databases[0]}" TO foreign_reader;`);
   await assert.rejects(run({apply: true, approvedPlanHash: preview.plan_hash}), /PRUNE_ELIGIBILITY_CHANGED/);
   sql('postgres', `REVOKE CONNECT ON DATABASE "${databases[0]}" FROM foreign_reader; DROP ROLE foreign_reader;`);

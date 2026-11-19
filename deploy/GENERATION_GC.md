@@ -3,7 +3,7 @@
 > 状态：实现与隔离回归已接线，最终提交的 GitHub Actions 待验。
 > 同步日期：2026-11-19
 
-维护升级每次创建独立候选库。显式维护入口回收退出恢复保留集且归属可证明的历史候选库。默认预览列出每库估算字节数、保留原因和可回收总量，在宿主私有恢复目录保存计划。
+维护升级每次创建独立候选库。显式维护入口回收退出恢复保留集且归属可证明的历史候选库。默认预览不写数据库业务状态，列出每库估算字节数、保留原因和可回收总量，在宿主私有恢复目录保存计划。
 
 ## 操作入口
 
@@ -25,7 +25,7 @@ Windows 使用相同宿主实现与恢复目录。
 
 ## 保留集与删除证明
 
-当前配置数据库始终保留。只有未归档 journal 为 complete 且其 candidate 等于当前配置，才能证明最近完成当前升级的恢复源。该 source 取绑定 identity 的 saved.source.database，始终保留。rollbackGeneration 是激活身份。
+当前配置数据库始终保留。每轮盘点通过绑定 Compose 项目的 `ps --all -q` 和真实容器 inspect，收集运行中及已停止待重启容器的 DATABASE_URL / DEEPSONAR_DATABASE_NAME 并加入保留集。端点、项目标记或环境无法核对时拒绝。即使旧容器指向 A 而当前配置为 D，且 A 没有连接，A 仍保留。只有未归档 journal 为 complete 且其 candidate 等于当前配置，才能证明最近完成当前升级的恢复源。该 source 取绑定 identity 的 saved.source.database，始终保留。rollbackGeneration 是激活身份。
 
 所有未结束、未知状态及孤立 identity 的 source/candidate 都加入保留集。旧归档完成记录提供历史归属，其 source 不自动成为永久保留引用。当前运行于已恢复源库、缺少当前完成权威或存在旧升级未决 journal 时，删除准入关闭。
 

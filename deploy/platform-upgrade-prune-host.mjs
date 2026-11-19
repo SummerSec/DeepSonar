@@ -31,8 +31,42 @@ shobj_description(r.oid,'pg_authid') AS marker,
 (SELECT count(*)::int FROM pg_auth_members m WHERE m.member=r.oid OR m.roleid=r.oid) AS memberships
 FROM pg_roles r`;
 
+/** Inspect even stopped containers, whose frozen environment survives a restart. */
+export function collectRuntimeDatabaseReferences({dc, run, projectName, source}) {
+  let ids, containers;
+  try {
+    ids = dc(['ps', '--all', '-q']).toString().trim().split(/\s+/).filter(Boolean);
+    if (!ids.length || ids.length > 1000 || ids.some(id => !/^[a-f0-9]{12,64}$/.test(id))) throw Error();
+    containers = JSON.parse(run(['inspect', ...ids]).toString());
+  } catch {throw Error('PRUNE_CONTAINER_REFERENCES_UNAVAILABLE');}
+  if (!Array.isArray(containers) || containers.length !== ids.length) throw Error('PRUNE_CONTAINER_REFERENCES_UNAVAILABLE');
+  const databases = new Set();
+  for (const container of containers) {
+    if (container.Config?.Labels?.['com.docker.compose.project'] !== projectName
+        || !Array.isArray(container.Config?.Env)) throw Error('PRUNE_CONTAINER_BINDING_INVALID');
+    const entries = container.Config.Env;
+    for (const key of ['DATABASE_URL', 'DEEPSONAR_DATABASE_NAME']) {
+      const values = entries.filter(entry => typeof entry === 'string' && entry.startsWith(`${key}=`));
+      if (values.length > 1) throw Error('PRUNE_CONTAINER_DATABASE_AMBIGUOUS');
+      if (!values.length) continue;
+      let database = values[0].slice(key.length + 1);
+      if (key === 'DATABASE_URL') {
+        try {
+          const url = new URL(database);
+          if (!['postgres:', 'postgresql:'].includes(url.protocol) || url.hostname !== source.host
+              || Number(url.port || 5432) !== source.port) throw Error();
+          database = decodeURIComponent(url.pathname.slice(1));
+        } catch {throw Error('PRUNE_CONTAINER_DATABASE_UNBOUND');}
+      }
+      if (!/^[a-z][a-z0-9_]{0,62}$/.test(database)) throw Error('PRUNE_CONTAINER_DATABASE_INVALID');
+      databases.add(database);
+    }
+  }
+  return [...databases].sort();
+}
+
 /** Uses only the upgrade host's bound Compose transport and independent admin. */
-export async function runHostGenerationPrune({recovery, binding, source, transport, apply = false, approvedPlanHash}) {
+export async function runHostGenerationPrune({recovery, binding, source, runtimeDatabases, transport, apply = false, approvedPlanHash}) {
   const cluster = await readPrivateJson(resolve(recovery, 'cluster-admin.json'));
   if (!cluster?.admin || !/^\d+$/.test(cluster.clusterId) || !new RegExp(`^${uuid}$`).test(cluster.operationId)) throw Error('PRUNE_CLUSTER_AUTHORITY_MISSING');
   const current = await source();
@@ -86,7 +120,9 @@ export async function runHostGenerationPrune({recovery, binding, source, transpo
         database.runtimeState = state.length === 1 ? state[0] : null;
       } catch {database.runtimeState = null;}
     }
+    const containerReferences = await runtimeDatabases();
     return {cluster: actualCluster, binding: currentBinding, current: current.database, databases, operations, roles,
+      runtimeDatabases: containerReferences,
       admin: {role: admin.name, marker: admin.marker}};
   };
   const planPath = resolve(recovery, 'generation-prune-plan.json');
