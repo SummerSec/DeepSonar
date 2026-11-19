@@ -8,6 +8,8 @@ import { ConfirmDialogProvider } from "./components/ConfirmDialog";
 
 test("JobDetail recovery uses current actions and permission, with collapsed diagnostics", async context => {
   const hooks = registerHooks({ load(url, options, nextLoad) {
+    // The browser terminal cannot be mounted for these ended Jobs.
+    if (url.endsWith("/TerminalPanel.tsx")) return { format: "module", source: "export function TerminalPanel() { return null; }", shortCircuit: true };
     if (url.endsWith(".css")) return { format: "module", source: "export {};", shortCircuit: true };
     return nextLoad(url, options);
   } });
