@@ -1,7 +1,9 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-19
+
+#1082 的[用量形态诊断](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)只投影固定分类、字段类型和有界计数，未知键及 event/type 原值丢弃，SHA-256 仅计算该非秘密投影。原始帧、业务文本、header、URL、秘密及其原文哈希不得持久化。诊断不授予用量可信度或重放权限，main/OM 真实 SQL/HTTP 回归由最终 SHA Actions 验收。
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 

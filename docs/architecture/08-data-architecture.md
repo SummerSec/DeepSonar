@@ -1,7 +1,7 @@
 # 08 数据架构与真相流
 
 > 状态：**as-built**（#741）。说明 schema 基线、核心实体、三类真相流和状态机；列定义以 `database/schema.sql` 与代码为准。
-> 同步日期：2026-11-12
+> 同步日期：2026-11-19
 
 ## 人工等待断点与累计时钟（#1074）
 
@@ -24,6 +24,8 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 沿用 append-only `audit_logs`，首次固定宿主诊断及原 `job_attempts.state_json.provision_failure_audit_id` 在同事务发布，引用重复不覆盖首份。只追加诊断来源，不改 snapshot、phase/status、effect/settlement/replay policy 或预算，不增加表/状态。Job GET 仅用有界合法引用做 audit 主键读取，重核 scheduler、项目/Job/Attempt 与 schema；不读取任意 audit 元数据，坏/外来/旧引用不猜测回填。诊断不是 no-start/用量证明或第二个效果账本。实现/SQL回归及边界见[专题](../OPENSANDBOX_1_2_UPGRADE.md#provision-失败诊断1002)，最终 SHA Actions 待验。
 
 ## Schema 基线纪律
+
+#1082 未确认用量诊断沿用 `audit_logs.after_json`。宿主绑定 Job/Attempt/token/effect，固定形态及形态哈希总计最多 2 KiB，权限复用原审计入口。诊断与账本独立、尽力写入，不作为用量证明或重试授权，数据边界见[专题](../MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)。最终 SHA Actions 待验。
 
 [`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v75 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
 

@@ -1806,6 +1806,17 @@ export function registerGateway(app: FastifyInstance): void {
         status: unknown ? "unknown" : trusted ? "settled" : "not_reported",
         source: isSse ? "gateway_stream" : "gateway_response", workload,
       }, unknown ? "unknown" : "settled", unknown ? "模型请求完整用量无法确认" : undefined);
+      if (!trusted) {
+        // Host-owned scope plus a fixed vocabulary projection. No response bytes,
+        // arbitrary event/key names or hashes of provider content enter the audit.
+        const shape = { job_id: String(jt.job_id), attempt_id: gatewayAttemptId, job_token_id: String(jt.id),
+          effect_id: gatewayEffectId, request_no: requestNo, workload, scan: scanner.diagnostic() };
+        if (Buffer.byteLength(JSON.stringify(shape), "utf8") <= 2048) {
+          await recordSystemAudit({ action: "gateway.usage_unconfirmed", projectId: String(jt.project_id),
+            resourceType: "job", resourceId: String(jt.job_id), result: "error",
+            errorCode: shape.scan.reason, after: shape });
+        }
+      }
       if (usage.total > 0 && !unknown) inc("deepsonar_model_tokens_total", { provider: safeProvider }, usage.total);
       reply.raw.off("close", abortClient);
       if (interrupted) reply.raw.destroy(); else reply.raw.end();
