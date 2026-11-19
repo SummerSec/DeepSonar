@@ -14,6 +14,8 @@
 
 #1074 的[人工断点续做](docs/HUMAN_CONTINUATION.md)以持久请求和累计执行时钟区分等待、封存与执行：人工超时只记 overdue，旧资源经可信回收后关闭 Attempt；晚回复先保存，准入后恢复业务文件与累计已 ACK 的有界文字决定，并在 structured 新会话继续。历史 failed 显式续做使用新 Job 与原预算链，原额度/硬期限/未决效果持续约束，最终 SHA Actions 另验。
 
+业务文件清单 v2 仅恢复所有者读写及原所有者执行能力（0600/0700），上传前校验路径、上传后核验内容与权限，失败阻断启动。
+
 #1094 的[平台 HTTP bootstrap](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#平台-operation-的-http-bootstrap1094)消除 operation allowlist 与 CLI 原生工具的提示歧义；不增加工具代理、控制通道或权限，历史 Job 不自动重跑，模型效果仍未验证。
 
 #1097 的[代理逐跳连接策略](docs/MODEL_GATEWAY_TRANSPARENCY.md#managed-proxy-的逐跳连接策略1097)让 managed proxy 声明自身连接寿命；保留内容、认证与流式边界，不增加透明重试或恢复权限，历史 Pi 错误归因仍有证据缺口。

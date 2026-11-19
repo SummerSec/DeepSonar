@@ -20,6 +20,16 @@ Dispatcher 正常 finally 立即回收等待资源；重启后现有 reconciliat
 
 断点保留 30 天。现有循环在删除文件前先持久标记 HUMAN_CHECKPOINT_EXPIRED，删除失败继续重试，不能保持 ready 后静默删文件。请求和历史证据不随断点文件过期而抹除；无法续做时明确显示原因。
 
+## 普通业务文件的权限契约
+
+文件清单使用 manifest v2，每个文件必须携带 `mode`，只接受 `0600`（所有者读写）或 `0700`（所有者读写执行）。捕获时按 `0600 | (source_mode & 0100)` 投影，只保留所有者执行能力。原始权限位不存储，组和其他用户的访问位以及 setuid、setgid、sticky 位全部舍弃。原先可由所有者直接运行的 `./script` 因此可在恢复后继续执行。
+
+v1、缺少 mode 或其他权限值均拒绝恢复。正常加载入口对不符合清单契约的记录返回稳定码 `HUMAN_CHECKPOINT_IDENTITY_CHANGED`，与准入检查保持一致。已经冻结的旧清单与历史证据保持原样，不能自动补字段或重写历史来取得恢复资格。该契约通过已有 JSON manifest 保存，无 SQL schema 变更。
+
+恢复在新 Linux 沙箱中、Agent 启动前执行。全部业务路径先逐层用目录文件描述符与 `O_NOFOLLOW` 检查，拒绝越界、秘密和平台目录、符号链接、硬链接及特殊文件，预检通过才上传。上传后重新安全打开普通文件，核对大小与 SHA-256，再通过 `fchmod` 设置精确权限并核验结果。目录只按需创建为 `0700`，现有目录不执行 chmod。Python 脚本与分批 JSON argv 均经 shell 安全引用，文件名中的引号或命令替换符号仅作为数据传递。任一步失败均阻断 Agent 启动。
+
+真实 Linux 文件回归执行生产扫描与恢复脚本，覆盖 capture → upload → chmod → 直接执行 shell 文件的往返，并核对非法 mode、旧版本、路径注入、秘密路径、符号链接、硬链接和上传内容损坏拒绝。进程静止与目录监视另由既有回归覆盖。测试接现有 `ci:unit:bounded-contexts`，普通恢复入口接线由 `ci:integration:platform-api` 覆盖，最终 SHA Actions 结果单独验收。
+
 ## 回复、准入与运行
 
 沿用 POST /canvases/:id/messages（tasks:write 与原项目隔离），target.kind=request 必须携带 request_id 和 expected_revision，message_id 是客户端幂等 UUID。相同 ID/目标/版本/正文/附件返回原消息，改正文或附件返回 409；旧版本或其他请求不能解除新一轮等待。
