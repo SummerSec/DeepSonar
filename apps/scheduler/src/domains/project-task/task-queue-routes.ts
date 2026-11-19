@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { ProjectTaskQueueYieldInput } from "@deepsonar/shared-types";
+import { yieldProjectTaskQueue } from "./task-queue-yield.js";
 import { DISPATCH_CLAIM_ADVISORY_KEY } from "../../core.js";
 import { sql } from "../../db.js";
 import { recordSystemAudit } from "../../audit.js";
@@ -64,6 +66,17 @@ async function mutateQueue(
 }
 
 export function registerProjectTaskQueueRoutes(app: FastifyInstance): void {
+  app.post("/projects/:id/task-queue/yield", async (req, reply) => {
+    const projectId = await projectForRequest(req, reply);
+    if (!projectId) return;
+    const body = ProjectTaskQueueYieldInput.safeParse(req.body);
+    if (!body.success) return reply.code(400).send({ error: "让位参数无效", error_code: "TASK_QUEUE_INPUT_INVALID" });
+    try {
+      return await mutateQueue(req, projectId, "task_queue.human_yield_requested",
+        (tx) => yieldProjectTaskQueue(tx, projectId, body.data), body.data.canvas_id);
+    } catch (error) { return queueError(reply, error); }
+  });
+
   app.get("/projects/:id/task-queue", async (req, reply) => {
     const projectId = await projectForRequest(req, reply);
     if (!projectId) return;

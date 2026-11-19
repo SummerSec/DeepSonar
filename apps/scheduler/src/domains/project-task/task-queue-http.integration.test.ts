@@ -65,6 +65,12 @@ test("project queue HTTP enforces permissions, strict input, ownership and durab
     assert.equal((await app.inject({ method: "PATCH", url: path, headers: reader, payload: { paused: true } })).statusCode, 403);
     assert.equal((await app.inject({ method: "PATCH", url: path, headers: controller, payload: { paused: true, unknown: true } })).statusCode, 400);
 
+    const yieldInput = { mutation_id: randomUUID(), canvas_id: canvasId, expected_item_id: "1", request_id: randomUUID(), expected_revision: 0 };
+    assert.equal((await app.inject({method:"POST",url:`${path}/yield`,headers:reader,payload:yieldInput})).statusCode,403);
+    assert.equal((await app.inject({method:"POST",url:`/projects/${otherProjectId}/task-queue/yield`,headers:controller,payload:yieldInput})).statusCode,403);
+    assert.equal((await app.inject({method:"POST",url:`${path}/yield`,headers:controller,payload:{...yieldInput,extra:true}})).statusCode,400);
+    assert.equal((await app.inject({method:"POST",url:`${path}/yield`,headers:controller,payload:{...yieldInput,canvas_id:otherCanvasId}})).statusCode,409);
+
     const enqueue = (id: string) => app.inject({ method: "POST", url: `${path}/items`, headers: controller, payload: { canvas_id: id } });
     const foreign = await enqueue(otherCanvasId);
     assert.equal(foreign.statusCode, 409, foreign.payload);

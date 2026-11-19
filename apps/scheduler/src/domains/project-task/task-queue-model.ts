@@ -1,4 +1,4 @@
-export type ProjectTaskQueueItemState = "queued" | "active" | "succeeded" | "failed" | "cancelled";
+export type ProjectTaskQueueItemState = "queued" | "active" | "yielded" | "succeeded" | "failed" | "cancelled";
 
 export type ProjectTaskQueuePauseReason = "manual" | "task_failed" | "task_cancelled";
 

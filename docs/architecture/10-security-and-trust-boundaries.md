@@ -201,3 +201,7 @@ quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/
 自动批次与全部trial经[快照隔离](../../apps/scheduler/src/domains/project-knowledge/job-isolation.ts)收紧stage工具与原授权交集、关闭出网、清角色预加载skills/modules/MCP等内容及共享资产；trial再清空普通知识/全局Skill目录。assignment.source_mode只标识治理来源，不授予权限。共同task_inputs必须显式选冻结材料，不能自动复制全部来源或把原结论当共同答案；平台核验引用，maker/reviewer承担语义泄漏审查。trial只接收专用Skill与当前arm，rubric限定eval/review audience，不以沙箱隔离宣称模型独立性或质量已证明。完整6×2矩阵、真实资产版本/hash和独立Job/Attempt证据门保留；只有target comparator fail可作对照，目标arm及全部安全组须pass，unexecuted/缺项/重复/未知效果不能激活，治理hash变化阻断旧work且不改历史。
 
 activity读面同时要求项目scope和projects:read；计数仅来自本项目审计和知识，usage还要求owner_project_id为本项目。错误原因白名单化、来源正文/manifest/模型反馈正文不返回，Job/Canvas导航仍需原接口授权。登记、采集、候选、生效、拉取和模型反馈必须分层；不得用反馈success认证收益。本轮权限/隔离回归已接Actions入口但尚未执行，未合并、未部署，真实模型收益仍未知。实现与证据边界见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
+
+## 人工等待队列让位（#1074）
+
+让位沿 jobs:control 和项目范围，客户端的条目/请求/revision 不构成权限或退出证明。宿主重验唯一等待、可信封存与回收、效果和费用、有效额度，统一 claim 锁内同事务审计。回复只重新排队，不授权扩额、切快照或抢占运行中任务。恢复仍实时核验授权，历史回复及旧 mutation 不复活取消的 Job。
