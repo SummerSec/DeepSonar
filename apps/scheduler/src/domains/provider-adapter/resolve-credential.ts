@@ -23,6 +23,8 @@ export type ResolveProviderCredentialInput = {
   allowPassthrough?: boolean;
   /** Kernel-only existing Job identity; never an Agent account selector. */
   existingCredentialId?: string | null;
+  /** Kernel-only current Job, excluded only from its own recovery capacity read. */
+  existingJobId?: string | null;
 };
 
 export type ResolvedProviderCredential = {
@@ -290,7 +292,8 @@ export async function resolveProviderCredentialForJob(
     // assignments remain a project-local distribution hint, never occupied slots.
     // This read does not reserve capacity; claim rechecks quotas under its lock.
     const loads = await input.db`SELECT agent_snapshot_json->>'credential_id' AS credential_id,
-      count(*) FILTER (WHERE status IN ('claimed','provisioning','running')) AS active_jobs,
+      count(*) FILTER (WHERE status IN ('claimed','provisioning','running')
+        AND id IS DISTINCT FROM ${input.existingJobId ?? null}::uuid) AS active_jobs,
       count(*) FILTER (WHERE project_id=${input.projectId}
         AND status IN ('pending','claimed','provisioning','running','waiting_human')) AS assigned_jobs,
       count(*) FILTER (WHERE project_id=${input.projectId}) AS total_jobs FROM jobs

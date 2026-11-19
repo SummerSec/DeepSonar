@@ -244,7 +244,17 @@ if (!testDatabaseUrl) {
           await sql`UPDATE jobs SET status=${status} WHERE id=${occupyingJob}`;
           assert.equal((await snapshot()).credential_id, frozenPeer, `${status} occupies the same credential slot as admission`);
         }
+        const { resolveCurrentSnapshotForExistingJob } = await import("./domains/job-control/rerun.js");
+        const frozenDefault = await snapshot({ existingCredentialId: defaultFull, existingJobId: occupyingJob });
         await sql`UPDATE jobs SET status='succeeded' WHERE id=${occupyingJob}`;
+        const ownJobId = randomUUID();
+        await sql`INSERT INTO jobs (id, project_id, canvas_id, type, status, agent_snapshot_json)
+          VALUES (${ownJobId}, ${projectId}, ${canvasId}, 'audit', 'claimed', ${sql.json(frozenDefault as never)})`;
+        const [ownJob] = await sql`SELECT * FROM jobs WHERE id=${ownJobId}`;
+        assert.equal((await resolveCurrentSnapshotForExistingJob(sql, ownJob)).credential_id, defaultFull,
+          "post-claim recovery excludes its own occupied slot without excluding other Jobs");
+        assert.equal((await snapshot()).credential_id, frozenPeer, "new Jobs still count that claimed slot");
+        await sql`UPDATE jobs SET status='succeeded' WHERE id=${ownJobId}`;
         assert.equal((await snapshot({ existingCredentialId: frozenPeer })).credential_id, frozenPeer,
           "freeing the global default keeps the still-authorized frozen peer");
       });

@@ -252,7 +252,7 @@ export async function resolveCurrentSnapshotForExistingJob(
       String(job.project_id),
       String(job.type),
       findingIds,
-      { ...frozenRuntimeImageOverride(job.agent_snapshot_json),
+      { ...frozenRuntimeImageOverride(job.agent_snapshot_json), existingJobId: String(job.id),
         existingCredentialId: typeof objectValue(job.agent_snapshot_json).credential_id === "string"
           ? String(objectValue(job.agent_snapshot_json).credential_id) : null },
     ),
