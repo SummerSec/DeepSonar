@@ -240,6 +240,15 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       const oldInput=inputs.find(input=>input.message_id===String(reply.json().id))!,newInput=inputs.find(input=>input.message_id===String(secondReply.json().id))!;
       assert.deepEqual(fixture.restored.get(String(oldInput.workspace_path)),inputBytes[0],'earlier ACK attachment survives the next human wait');
       assert.ok(prompt.includes(String(oldInput.workspace_path)),'bounded startup index points to prior immutable inputs');
+      const historyPath=`/workspace/.deepsonar/inbox/${secondRequest}/acknowledged-history.json`;
+      assert.ok(prompt.includes(historyPath),'startup context points to the cumulative acknowledged decisions');
+      const history=JSON.parse(fixture.restored.get(historyPath)!.toString('utf8'));
+      assert.deepEqual(history.map((message:{id:string;body:string})=>({id:message.id,body:message.body})),
+        [{id:String(reply.json().id),body:'Use the first reference.'}]);
+      assert.equal(history[0].request_id,fixture.requestId);
+      assert.equal(history[0].request.guidance.question,'Which authorized reference applies?');
+      assert.equal(history.some((message:{id:string})=>message.id===String(secondReply.json().id)),false,
+        'the unacknowledged reply is delivered only through its original inbox operation');
       assert.equal(fixture.restored.has(String(newInput.workspace_path)),false,'pending reply attachments still use governed delivery');
       assert.equal(await clock.remainingHumanExecutionMs(sql,fixture.jobId),3600_000-cumulative);
       await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '1 hour' WHERE id=${fixture.jobId}`;
@@ -266,6 +275,28 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       await clock.reconcileReleasedHumanClocks(sql,64);assert.equal(await pending(),1);
       assert.ok((await sql`SELECT active_since FROM job_execution_clocks WHERE job_id=${jobIds[0]!}`)[0].active_since);
       await sql`UPDATE jobs SET status='cancelled' WHERE id=ANY(${jobIds}::uuid[])`;
+    });
+    await context.test('acknowledged decision history is job-scoped and rejects overflow before resuming',async()=>{
+      const {readAcknowledgedHumanHistory}=await import('./human-continuation-history.js');
+      for(const [count,body] of [[257,'previous decision'],[40,'😀'.repeat(8000)]] as const) {
+        const fixture=await setup();await fixture.seal();await fixture.close();
+        await sql`WITH nodes AS (
+          INSERT INTO canvas_nodes(canvas_id,node_type,title,status)
+          SELECT ${fixture.canvasId},'human','previous reply','acknowledged' FROM generate_series(1,${count})
+          RETURNING id
+        ) INSERT INTO human_messages(id,canvas_id,human_node_id,target_kind,target_job_id,body,delivery_status,acknowledged_at)
+          SELECT gen_random_uuid(),${fixture.canvasId},id,'job',${fixture.jobId},${body},'acknowledged',now() FROM nodes`;
+        await assert.rejects(readAcknowledgedHumanHistory(fixture.jobId),/HUMAN_CHECKPOINT_HISTORY_LIMIT/);
+        assert.equal((await fixture.reply()).statusCode,202);
+        await pumpHumanContinuations(1,fixture.requestId);
+        const [request]=await sql`SELECT resume_error_code,resumed_at FROM human_requests WHERE id=${fixture.requestId}`;
+        assert.equal(request.resume_error_code,'HUMAN_CHECKPOINT_HISTORY_LIMIT');assert.equal(request.resumed_at,null);
+        assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,'waiting_human');
+        const unrelated=await setup();
+        assert.deepEqual(JSON.parse((await readAcknowledgedHumanHistory(unrelated.jobId)).toString('utf8')),[],
+          'decisions from another Job must never enter the restored history');
+        await sql`UPDATE jobs SET status='cancelled' WHERE id IN (${fixture.jobId},${unrelated.jobId})`;
+      }
     });
     await context.test('a paused project queue preserves unmanaged execution and its already active head',async()=>{
       await sql`INSERT INTO project_task_queues(project_id) VALUES(${projectId}) ON CONFLICT DO NOTHING`;

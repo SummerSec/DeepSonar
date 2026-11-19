@@ -3,6 +3,7 @@ import { requeueJob } from "./rerun.js";
 import { HumanCheckpointManifest, readCheckpointFile, deleteCheckpointFiles } from "./human-checkpoint-files.js";
 import { pauseHumanExecutionClock, reconcileReleasedHumanClocks } from "./human-continuation-clock.js";
 import { readAcknowledgedHumanAttachments } from "./human-continuation-inbox.js";
+import { readAcknowledgedHumanHistory } from "./human-continuation-history.js";
 
 export async function pumpHumanContinuations(limit=16,requestId?:string) {
   await reconcileReleasedHumanClocks(sql);
@@ -27,6 +28,7 @@ export async function pumpHumanContinuations(limit=16,requestId?:string) {
       const manifest=HumanCheckpointManifest.parse(request.manifest_json);
       for(const file of manifest.files) await readCheckpointFile(String(request.id),file);
       await readAcknowledgedHumanAttachments(String(request.job_id));
+      await readAcknowledgedHumanHistory(String(request.job_id));
       if(request.resources_released_at) await pauseHumanExecutionClock(sql,String(request.job_id),String(request.attempt_id));
       const result=await requeueJob(String(request.job_id),"resume-frozen",String(request.id));
       const code=result.kind==='ok'?null:result.kind==='not_resumable'?result.error_code??'HUMAN_CONTINUATION_BLOCKED':
