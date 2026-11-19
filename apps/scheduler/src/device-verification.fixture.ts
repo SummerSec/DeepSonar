@@ -5,6 +5,7 @@ import websocket from "@fastify/websocket";
 import { sql } from "./db.js";
 import { registerRoutes } from "./routes.js";
 import { ingestEvent } from "./core.js";
+import { ControlInputError } from "./control-input.js";
 import { createAttempt } from "./domains/job-attempt/index.js";
 import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.js";
 import { acquireDeviceLeaseForJob, releaseDeviceLeasesForJob } from "./domains/device/index.js";
@@ -38,6 +39,7 @@ export async function verifyDeviceEvidenceEntrypoints(projectId: string) {
         await sql`INSERT INTO findings(id,project_id,job_id,node_id,fingerprint,title,severity)
           VALUES (${findingId},${projectId},${sourceId},${nodeId},${findingId},'设备补证对象','medium')`;
         let hubId: string | null = null;
+        let deviceRejections = 0;
         let controlHeaders: Record<string, string> = {};
         if (mode === "hub") {
           hubId = randomUUID();
@@ -50,7 +52,13 @@ export async function verifyDeviceEvidenceEntrypoints(projectId: string) {
           const grant = await mintJobCapabilityToken(hubId);
           controlHeaders = { authorization: `Bearer ${grant.token}`, "idempotency-key": randomUUID() };
           registerRuntimeHandler(hubId, async (context) => {
-            await ingestEvent(context.jobId, { v: 1, event_id: context.eventId, type: "hub_decision", payload: context.input });
+            try {
+              await ingestEvent(context.jobId, { v: 1, event_id: context.eventId, type: "hub_decision", payload: context.input });
+            } catch (error) {
+              if (error instanceof ControlInputError && error.code === "tool_not_allowed"
+                && error.message.includes("画布设备要求")) deviceRejections++;
+              throw error;
+            }
             return { accepted: true };
           }, ["submit_hub_decision"]);
         }
@@ -58,7 +66,19 @@ export async function verifyDeviceEvidenceEntrypoints(projectId: string) {
           ? app.inject({ method: "POST", url: `/findings/${findingId}/evidence-jobs`, payload: { role: "test" } })
           : app.inject({ method: "POST", url: `/control/v1/jobs/${hubId}/operations/submit_hub_decision`,
             headers: { ...controlHeaders, "idempotency-key": randomUUID() },
-            payload: { intents: [{ from: [nodeId], role: "test", description: "在授权设备上补证", prompt: "读取已冻结的设备要求并提交结构化运行测试证据。" }] } });
+            payload: { intents: [{ from: [nodeId], role: "test", description: "在授权设备上补证", prompt: "读取当前 Job 已冻结的设备要求，在授权设备上完成隔离运行测试，记录实际步骤与结果并提交结构化证据。" }] } });
+        const assertDeviceDenied = async () => {
+          const previousRejections = deviceRejections;
+          const rejected = await invoke();
+          if (mode === "manual") {
+            assert.equal(rejected.statusCode, 403, rejected.payload);
+            assert.equal(rejected.json().error_code, "device_not_authorized");
+          } else {
+            assert.ok(rejected.statusCode >= 400, rejected.payload);
+            assert.equal(deviceRejections, previousRejections + 1, rejected.payload);
+          }
+          assert.equal((await sql`SELECT count(*)::int AS n FROM jobs WHERE finding_id=${findingId}`)[0].n, 0);
+        };
         // 两入口均须拒绝未授权项目、禁止出网、未知 rig/transport 与非独占请求。
         for (const denied of [
           { ...target, network_policy: { allow_egress: false } },
@@ -67,13 +87,11 @@ export async function verifyDeviceEvidenceEntrypoints(projectId: string) {
           { ...target, device_requirement: { ...requirement, exclusive: false } },
         ]) {
           await sql`UPDATE canvases SET target_json=${sql.json(denied)} WHERE id=${canvasId}`;
-          const rejected = await invoke();
-          assert.ok(rejected.statusCode >= 400, rejected.payload);
-          assert.equal((await sql`SELECT count(*)::int AS n FROM jobs WHERE finding_id=${findingId}`)[0].n, 0);
+          await assertDeviceDenied();
         }
         await sql`UPDATE canvases SET target_json=${sql.json(target)} WHERE id=${canvasId}`;
         await sql`UPDATE projects SET config_json=jsonb_set(config_json,'{device_access_enabled}','false') WHERE id=${projectId}`;
-        assert.ok((await invoke()).statusCode >= 400);
+        await assertDeviceDenied();
         await sql`UPDATE projects SET config_json=jsonb_set(config_json,'{device_access_enabled}','true') WHERE id=${projectId}`;
         const response = await invoke();
         assert.equal(response.statusCode, mode === "manual" ? 202 : 200, response.payload);
