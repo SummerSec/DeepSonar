@@ -156,12 +156,13 @@ test('current official ACR references are accepted but mismatched service reposi
 
 // Exercise the real entrypoint parsing without loading Docker or a deployment .env.
 import { spawnSync } from 'node:child_process';
+import {findPowerShell, spawnPowerShellSync} from './powershell-test-host.mjs';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 const deployDirectory = dirname(fileURLToPath(import.meta.url));
-const pwshAvailable = spawnSync('pwsh', ['-NoProfile', '-Command', 'exit 0']).status === 0;
+const pwshAvailable = findPowerShell({commands: ['pwsh']}) !== null;
 for (const shell of ['sh', 'pwsh']) for (const mode of ['apply', 'resume-rollback']) {
   test(`${shell} ${mode} upgrade wrapper forwards target/API/Web and failure status to shared engine`, { skip: shell === 'pwsh' && !pwshAvailable ? 'pwsh unavailable' : false }, () => {
     const temp = mkdtempSync(join(tmpdir(), 'ds upgrade entry '));
@@ -174,7 +175,7 @@ for (const shell of ['sh', 'pwsh']) for (const mode of ['apply', 'resume-rollbac
       const args = shell === 'sh'
         ? [entry, 'upgrade', mode, '--to', 'v1.2.3', '--api', 'http://127.0.0.1:3100', '--web-url', 'http://127.0.0.1:8080', '--approve-plan-hash', 'abc', '--nodes', 'node inventory.json', '--reset-role-identity']
         : ['-NoProfile', '-File', entry, 'upgrade', mode, '-UpgradeVersion', 'v1.2.3', '-ApiUrl', 'http://127.0.0.1:3100', '-WebUrl', 'http://127.0.0.1:8080', '-ApprovePlanHash', 'abc', '-Nodes', 'node inventory.json', '-ResetRoleIdentity'];
-      const result = spawnSync(shell, args, { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, UPGRADE_ARG_LOG: log }, encoding: 'utf8' });
+      const result = (shell === 'pwsh' ? spawnPowerShellSync : spawnSync)(shell, args, { env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, UPGRADE_ARG_LOG: log }, encoding: 'utf8' });
       assert.equal(result.status, 17, result.stderr);
       assert.deepEqual(readFileSync(log, 'utf8').trim().split('\n'), [join(temp, 'platform-upgrade-host.mjs'), mode, '--to', 'v1.2.3', '--api', 'http://127.0.0.1:3100', '--web-url', 'http://127.0.0.1:8080', '--approve-plan-hash', 'abc', '--nodes', 'node inventory.json', '--reset-role-identity']);
     } finally { rmSync(temp, { recursive: true, force: true }); }
