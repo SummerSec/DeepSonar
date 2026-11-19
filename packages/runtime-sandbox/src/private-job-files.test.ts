@@ -98,6 +98,46 @@ test("#1032 private credentials are created 0600 inside a fresh 0700 directory a
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("#1032 first write already has private permissions and Pi auth copies use exclusive creation", { skip: !linux }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "deepsonar-private-window-"));
+  const auth = JSON.stringify({ fixture: { type: "api_key", key: token } });
+  const payload = { "gateway-token": token, "pi-auth.json": auth };
+  const inspect = String.raw`
+import os, stat
+real_write = os.write
+def inspect_write(fd, data):
+    info = os.fstat(fd)
+    assert stat.S_IMODE(info.st_mode) == 0o600
+    assert info.st_uid == os.geteuid() and info.st_nlink == 1
+    return real_write(fd, data)
+os.write = inspect_write
+`;
+  try {
+    await protocol(root, "create", payload, inspect + PRIVATE_JOB_FILES_SCRIPT);
+    await protocol(root, "pi-auth", payload, inspect + PRIVATE_JOB_FILES_SCRIPT);
+    const copy = path.join(root, ".deepsonar-home/.pi/agent/auth.json");
+    assert.equal(await readFile(copy, "utf8"), auth);
+    assert.equal((await stat(copy)).mode & 0o777, 0o600);
+    await assert.rejects(protocol(root, "pi-auth", payload), "an existing auth file must not be overwritten");
+    assert.equal(await readFile(copy, "utf8"), auth);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("#1032 Linux trusted reader rejects changed file permissions and links", { skip: !linux }, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "deepsonar-private-reader-"));
+  const reader = await import(`data:text/javascript;base64,${Buffer.from(PRIVATE_CREDENTIAL_READER_SOURCE).toString("base64")}`);
+  try {
+    await protocol(root, "create");
+    const file = path.join(root, `.deepsonar-credentials-${identity}`, "gateway-token");
+    assert.equal(reader.readPrivateCredential(file), token);
+    await chmod(file, 0o644);
+    assert.throws(() => reader.readPrivateCredential(file), /PRIVATE_CREDENTIAL_REJECTED/u);
+    await chmod(file, 0o600);
+    await link(file, path.join(root, "linked"));
+    assert.throws(() => reader.readPrivateCredential(file), /PRIVATE_CREDENTIAL_REJECTED/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("#1032 private writes reject symlink parents and preexisting private directories", { skip: !linux }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "deepsonar-private-links-"));
   try {
@@ -157,6 +197,7 @@ test("#1032 credential payload travels only through live stdin and writer failur
       return {
         stdinClosed: false,
         async write(value: string) { inputs.push(value); },
+        async closeStdin() {},
         async kill() {},
         async *[Symbol.asyncIterator]() {
           yield { type: "stdout", chunk: "ok\n" };

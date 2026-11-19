@@ -685,7 +685,7 @@ test("restricted Claude config replaces direct credentials with the Job Gateway"
     gatewayBaseUrl: "http://deepsonar-gateway-proxy:3100/gateway/",
     jobToken: "deepsonarjob_12345678_test-token-value",
   });
-  const settings = JSON.parse(routed!.content) as { env: Record<string, string> };
+  const settings = JSON.parse(routed!.content) as { env: Record<string, string>; apiKeyHelper?: string };
   assert.equal(settings.env.ANTHROPIC_API_KEY, undefined);
   assert.equal(settings.env.ANTHROPIC_AUTH_TOKEN, undefined);
   assert.equal(settings.apiKeyHelper, "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs");

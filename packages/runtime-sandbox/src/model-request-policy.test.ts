@@ -35,6 +35,36 @@ async function close(server: http.Server) {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
+test("#1032 Claude telemetry uses only fixed local routes and preserves bytes with upstream Job authentication", async () => {
+  const file = await fixture();
+  const received: Array<{ url: string; auth: string | undefined; body: Buffer }> = [];
+  const remote = http.createServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    received.push({ url: req.url!, auth: req.headers.authorization, body: Buffer.concat(chunks) });
+    res.end("ok");
+  });
+  const upstream = await listen(remote);
+  const policy = await file.api.startModelRequestPolicy({ upstream: upstream + "/gateway", token: "synthetic-main-token", port: 0 });
+  const local = `http://127.0.0.1:${(policy.server.address() as AddressInfo).port}`;
+  const raw = Buffer.from([0, 1, 127, 255, 42]);
+  try {
+    for (const route of ["logs", "metrics", "traces"]) {
+      const response = await fetch(`${local}/gateway/otel/v1/${route}`, { method: "POST", body: raw });
+      assert.equal(response.status, 200); await response.arrayBuffer();
+    }
+    for (const url of ["/gateway/v1/messages", "/gateway/_allowance", "/gateway/otel/v1/logs?extra=1"]) {
+      const response = await fetch(local + url, { method: "POST", body: raw });
+      assert.equal(response.status, 401); await response.arrayBuffer();
+    }
+    assert.equal(received.length, 3);
+    for (const request of received) {
+      assert.equal(request.auth, "Bearer synthetic-main-token");
+      assert.deepEqual(request.body, raw);
+    }
+  } finally { await policy.close(); await close(remote); await file.close(); }
+});
+
 test("three CLI request shapes preserve compliant bytes and refuse requests needing generation changes", { timeout: 20_000 }, async () => {
   const file = await fixture();
   let remaining = 20;

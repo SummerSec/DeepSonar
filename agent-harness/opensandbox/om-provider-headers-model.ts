@@ -15,7 +15,7 @@ export async function startOmHeaderModel() {
   const probeCalls: Array<{ model: string; providerHeader: string; modelHeader: string; status: number }> = [];
   const errors: string[] = [];
   const credentialProjectionStages = new Set<string>();
-  const credentialNames = ["DEEPSONAR_GATEWAY_TOKEN", "DEEPSONAR_API_TOKEN"];
+  const credentialNames = ["DEEPSONAR_GATEWAY_TOKEN_FILE", "DEEPSONAR_CONTROL_TOKEN_FILE"];
   const checkCredentialProjection = (text: string, stage: string) => {
     const envLine = text.match(/OM_CREDENTIAL_ENV (\{[^\n]+\})/u)?.[1];
     if (!envLine) return;
