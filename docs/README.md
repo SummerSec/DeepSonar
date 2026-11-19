@@ -296,3 +296,5 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 #1074 的[项目队列显式人工让位](PROJECT_TASK_QUEUE.md#人工等待显式让位1074)已接 UI/API、持久决定与回复原子回队尾，默认保留席位，首片限定单一人工等待。最终 SHA Actions 另验。
 
 #1124 的[显式历史候选库回收](../deploy/GENERATION_GC.md)说明两 shell 入口、恢复保留集、权限与 OID 证明、宿主 receipt 和 Actions 隔离 PG 验收边界。
+
+#1126 的[Job 恢复提示](architecture/05-building-blocks.md#job-恢复提示1126)显示运行结论、折叠技术诊断，并同时核对当前动作和权限；真实组件回归已接现有 Actions，最终 SHA 待验。
