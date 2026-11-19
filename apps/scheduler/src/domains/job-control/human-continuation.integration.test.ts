@@ -404,7 +404,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
           await pumpHumanContinuations(1,fixture.requestId);
           const resume=await app.inject({method:'POST',url:`/tasks/${fixture.canvasId}/resume-session`});
           assert.equal(resume.statusCode,409,resume.body);assert.equal(resume.json().error_code,'HUMAN_REPLY_REQUIRED');
-          assert.equal((await sql`SELECT resume_error_code FROM human_requests WHERE id=${fixture.requestId}`)[0].resume_error_code,'HUMAN_CHECKPOINT_EXPIRED');
+          assert.equal((await sql`SELECT checkpoint_error_code FROM human_requests WHERE id=${fixture.requestId}`)[0].checkpoint_error_code,'HUMAN_CHECKPOINT_EXPIRED');
           assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,'waiting_human');
           assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`)[0].state,'failed');
         } else {
