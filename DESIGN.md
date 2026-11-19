@@ -1,5 +1,7 @@
 # DeepSonar Design
 
+#1133 补齐人工技术收口与设备冻结。Finding 详情允许有 findings:write 权限的操作者对 needs_human 显式记录无定论决定，按对象修订、状态、最后轮次做 CAS，新增终结轮次并同事务写审计。补证两个入口复用画布设备要求冻结与授权，远端测试按明确目标执行。工程验收以最终 SHA Actions 为准，详见[接口边界](docs/architecture/09-interface-specs.md#人工结束技术验证1133)。
+
 > 状态：当前集成分支的 as-built 摘要与演进边界；实现、验证和未交付质量项分别记录。
 > 同步日期：2026-11-16
 > **v0.6.3 本轮发布范围（2026-11-01）**：按[最新用户范围决定](<AGENTS.md#豁免范围>)，独立质量验证、脱敏人工标注与家族/资产分离调参/留出，以及后续质量门、Host 外部证据认证/当前证书、CAS 晋升和公开强关系建议均暂缓，不作为本轮 PR 合并、工程 issue 收口或发布前置条件。保留已实现软件、现有测试与权限/CAS/不可变/发布抑制边界；工程验收只认最终 SHA 在现有 GitHub Actions 适用检查实际全绿，所有测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；下文历史非豁免要求不表示本轮追加质量卡点，工程完成不等于质量通过。
@@ -284,6 +286,8 @@ pending → claimed → provisioning → running → succeeded
 
 Lease 和 Reaper 由 Scheduler 判定超时与孤儿，不能信任 Agent 自报。`pg_notify('deepsonar_jobs')` 是主要调度唤醒；可以关闭轮询。
 
+认领的 `SKIP LOCKED` 可能跳过临时锁定的 Canvas/Job；解锁本身不保证新通知。此时 Dispatcher 合并一次延后唤醒，重新检查当前资格，继续遇锁才续约；停止时清理，不覆盖未来任务/知识的定时唤醒。普通空队列、资格或配额拒绝不因此变成轮询。见[运行时视图](docs/architecture/06-runtime-view.md#行锁竞争后的认领唤醒)。
+
 每个 Job 领取建立 Scheduler-owned Attempt。claim 按有界 keyset 候选页使用独立事务，每页按 advisory lock → 排序 Canvas → project → Job → Attempt 取锁并重新核验暂停、scope 与配额；只计真实领取，忙锁候选不耗槽位，提交释放本页锁后才检查后续页。外部动作先写 `job_attempt_effects` 的 intent/`effect_pending`，观察到结果后再写 settlement。启动对账按 Attempt phase 和 effect 分类：只有尚未开始且无效果的准备阶段可以回到 `pending`；未知效果统一进入 `orphan`，清理 Token、沙箱、画布同步和租约，禁止自动重放。只有明确宿主证据证明尚未调用外部创建，才可显式把 provision 结算为 `never_started`；缺少 `sandbox_id` 或未见迟到句柄不能证明未开始。已调用 runner 的 opaque 失败、timeout/cancel/orphan 及 pending provision 在终态收口时保持 `unknown`，既有真实 settlement 不改写。自动 provision 重试在 Canvas → Job → 当前最新 Attempt 锁下重核，只接纳无效果或明确 settled/never_started 的原 Attempt；`replay_policy` 不变。 OpenSandbox create 路径另有进程内熔断（#1046）：只统计 dispatcher 自己观测到的可重试 provision 失败（如 `SANDBOX_START_FAILED` / egress sidecar 5xx），5 分钟窗口内 2 次即暂停新 claim；90s 冷却后进入半开：不预留座位，期间放行的 claim 都按 canary 处理，实际并发由既有 provisioning 上限约束（先占座再找 Job 会在没有 pending 工作时空转死锁）；每次 trip 递增 episode，claim 在准入时绑定自己的 canary/episode，provision 结果按该绑定归因——早于本次 trip 启动的 provision 既不算 canary，也不能关闭后来打开的熔断；当前 episode 的 canary 成功才关闭、失败立即重开。熔断状态与日志只保留固定失败码（`classifyProvisionFailure` 的协议码，否则 `unclassified`），不截断保存错误原文——原文可能携带 header、provider body 或凭据；失败的 canary 与普通失败一样计入窗口，claim 暂停日志每进程每分钟最多一条。list-only 探针仍不能证明 create 可用，该熔断不新增 server 端点、配置或持久状态，也不自动重放已失败 Attempt。规则与本轮待验收边界见 [ADR 0015](docs/architecture/adr/0015-governed-completion-recovery.md)。 运行期不得让 `unknown` 效果把已完成的工作拖死（#874）：attempt 中断时先按既有证据规则结清可判定的在途效果（`gateway_model_request` 有 `job_usage_ledger` 行、`canvas_delivery` 依节点存在性），只把证据不足的保留为 `unknown`；`interrupted` 不加入全局终态枚举（该 attempt 仍可被后续 attempt 续跑），中断数据库状态不证明 runner 已退出，`agent_run` 保持未知。Scheduler 内置周期性效果对账（`runtime-reconcile:` operation_id、5 分钟、上限 500），复用同一 `runEffectReconcile` 语义：只结清 `auto`、`undecided` 维持 `unknown`、从不重放；Reaper 判定 `waiting_human` 超时前先对该 Job 定向对账；存在未结清效果或本轮对账进展时保留等待，最终 UPDATE 也检查对账扫描排除的 active/planned 效果，不把平台待对账记为 human_timeout。该 [#946 切片](docs/AGENT_REPAIR_LIFECYCLE.md#人工等待超时与未结清效果946)的最终 SHA Actions 待验，实际通知投递计时仍未实现。
 
 Gateway 的 503 只有在内核已证实请求尚未启动时才允许降级；`unknown`/`pending` 保持硬失败，不能以 provider 5xx 文案替代效果 authority。#873 的 OM admission 回滚耗尽与已持久结算的请求前 transport 使用同一个宿主 error.message carrier，覆盖 SDK 只保留内层消息的路径；上游请求与结算不作为可重试 admission 重放。
@@ -502,3 +506,9 @@ RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-o
 发布恢复仅复用经 GitHub 原运行/成功阶段/artifact 归档摘要绑定的冻结载荷和原签名回执，默认分支恢复身份与原 tag 发布身份分离；不重建镜像、不移动 tag、不重新签名。两阶段独立恢复及拒绝条件见[发布专题](docs/RELEASE_RUNTIME_IMAGES.md#恢复身份与原发布证据)。
 
 成功任务终态只登记知识来源元数据，后续 Dispatcher 按项目积累：至少 4 个未处理来源或最老来源等待满 24 小时，且自动批次间隔至少 24 小时。按 [ADR 0024](docs/architecture/adr/0024-project-knowledge-batching-admission.md) 扫描最多 32 个候选来源，保持 19 个原始 inputs 及可选 governor，放不下者留给后续，不因队首较大终止装箱。连续 2 个自动批次无 active/retired 提案产出即停发；计数与成功显式整理后的恢复从持久 work/proposal 历史跨重启推导，时间或治理 hash 变化不清零。collector、项目行锁事务重验、durable wake 与 activity 共用准入规则，繁忙或停发不生成立即过期的采集 wake。原 CAS/权限/Attempt/未知效果校验、来源审计、旧任务、累计预算与最小 Job 预算拦截、隔离及完整 6×2 独立试验/审查保留；不重建旧批次重置预算。本轮评审修正 record_knowledge_feedback 为仅持久反馈，返回 {usage_ref,state:"recorded"}，无 work_ref、无新 work；成功 Job 的已接受反馈经普通来源登记/collector 冻结精确反馈、target 基线与 evidence refs，仍受上述自动门和原 Job 整理权限约束。显式 request_project_knowledge 保留原授权、来源、预算及幂等语义，不被自动策略替代；反馈/usage、来源、采集与生效继续分层。知识页从 activity 新增的 collection 展示积累、冷却、执行中、停发和下次时间，无新通知、配置、恢复按钮或轮询。该字段是只读投影，模型反馈不代表收益认证。0024 仅取代 0023 的来源数量与自动准入并扩展重验/投影，历史预览只读、旧 knowledge:auto 不自动推进、无 schema 或整链 token 预算变化。当前为本轮目标契约与共享工作树整合，最终 SHA Actions 待验；不部署、不重跑历史生产任务，不宣称真实模型或注意力收益。细则及历史验收见[项目知识](docs/PROJECT_KNOWLEDGE.md)。
+
+#1074 的人工等待可通过项目队列显式暂存让位，回复在保存事务中回队尾，轮到后沿原续做门创建唯一后继。默认仍保留占位。schema 75 的决定与回复消费持久幂等，当前限定唯一人工等待，详见[队列专题](docs/PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。最终 SHA Actions 另验。
+
+#1126 的 Job 恢复界面按当前 Scheduler 动作与用户权限呈现，结果结论优先，维护者技术诊断默认折叠，详见[构件视图](docs/architecture/05-building-blocks.md#job-恢复提示1126)。恢复提交仍重新准入，最终 SHA Actions 待验。
+
+#1143 的 [PTY 清理事实与精确对账](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存宿主专用观察与原运行绑定，先提交旧凭据撤销及清理记录，再有界销毁并重核收口。DELETE 拒绝、超时和独立 unknown 分别保留；宿主 caller 不证明 OOM。无合法断点的整 Job 自动恢复尚未交付，晚 usage 与历史跨 Job 预算组合另验。

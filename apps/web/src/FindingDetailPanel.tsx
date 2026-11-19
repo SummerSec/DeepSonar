@@ -22,6 +22,7 @@ import {
   type FindingReport,
 } from "./api";
 import { MarkdownView } from "./MarkdownView";
+import { FindingVerificationClose } from "./FindingVerificationClose";
 import { useFlashMessage } from "./use-flash-message";
 import { FindingCandidates } from "./FindingCandidates";
 import { FindingLexicalSearch } from "./FindingLexicalSearch";
@@ -528,8 +529,8 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                   </section>
                 )}
 
-                {f.id.toLowerCase() === findingId.toLowerCase() && <FindingCandidates key={f.id} findingId={f.id} />}
-                {f.id.toLowerCase() === findingId.toLowerCase() && <FindingLexicalSearch key={f.id} findingId={f.id} />}
+                {f.id.toLowerCase() === findingId.toLowerCase() && <FindingCandidates key={`candidates:${f.id}`} findingId={f.id} />}
+                {f.id.toLowerCase() === findingId.toLowerCase() && <FindingLexicalSearch key={`lexical:${f.id}`} findingId={f.id} />}
                 {reportEligible && (
                   <section className="theme-surface mt-6 rounded-xl ring-1" aria-label="Finding 报告">
                     <div className="theme-divider flex flex-wrap items-center gap-2 border-b px-4 py-3">
@@ -919,6 +920,7 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
 
                 <SidebarField label="技术验证">
                   <StatusBadge status={f.verify_status} />
+                  <FindingVerificationClose key={findingId} findingId={findingId} control={detail.verification_control} onChanged={reload} />
                   <p className="mt-1.5 text-[11px] leading-4 text-zinc-600">
                     技术 confirmed 只能由 Scheduler Verify 根据独立证据产生。
                   </p>

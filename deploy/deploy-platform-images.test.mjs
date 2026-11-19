@@ -3,6 +3,7 @@
 // fake `docker`, so .env handling and fail-closed messages are exercised end to end.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { findPowerShell as firstPwsh, spawnPowerShellSync } from "./powershell-test-host.mjs";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -94,14 +95,6 @@ function baseEnv(overrides = {}) {
   return [...map.values(), ""].join("\n");
 }
 
-function firstPwsh() {
-  for (const cmd of ["pwsh", "powershell"]) {
-    const probe = spawnSync(cmd, ["-NoProfile", "-Command", "exit 0"], { encoding: "utf8" });
-    if (!probe.error && probe.status === 0) return cmd;
-  }
-  return null;
-}
-
 const RUNNERS = {
   sh: { available: () => true, argv: (dir, args) => ["sh", [join(dir, "deploy.sh"), ...args]] },
   ps1: {
@@ -116,7 +109,7 @@ function run(kind, copy, args, extraEnv = {}) {
   for (const key of ["DEEPSONAR_IMAGE_TAG", "DEEPSONAR_VERSION", ...Object.keys(REPOS)]) {
     if (!(key in extraEnv)) delete env[key];
   }
-  const result = spawnSync(cmd, argv, { encoding: "utf8", env, timeout: 60_000 });
+  const result = (kind === "ps1" ? spawnPowerShellSync : spawnSync)(cmd, argv, { encoding: "utf8", env, timeout: 60_000 });
   const pulls = existsSync(copy.log)
     ? readFileSync(copy.log, "utf8").split("\n").filter((l) => l.startsWith("pull ")).map((l) => l.slice(5))
     : [];

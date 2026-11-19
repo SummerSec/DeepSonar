@@ -100,3 +100,5 @@ Neon、RDS Query Editor 等 PostgreSQL SQL 控制台执行。仅适配 PostgreSQ
 ## 项目任务队列基线（#1018）
 
 schema 72 增加项目队列与条目，Canvas 的项目复合唯一键支持队列归属外键，active 部分唯一索引约束单任务占位。条目使用现有重建支持的序列默认值。新基线仍通过备份、列交集回填和序列校准重建，旧库结构不匹配时启动拒绝；最终 Actions 的迁移与 SQL 行为证据另记。调度语义见[队列专题](../docs/PROJECT_TASK_QUEUE.md)。
+
+schema 75 增加人工等待 yielded 队列状态与 project_task_queue_yields，绑定显式操作、请求版本与已消费回复。回复原子回队尾保留原完成代际，唯一基线重建及最终 Actions 另验。

@@ -30,7 +30,7 @@ function errorReply(reply: FastifyReply, error: unknown) {
   const status = code.includes("not_in_project") || code.includes("forbidden") ? 403
     : code.includes("not_found") ? 404
       : code.includes("quota") || code.includes("too_large") ? 413
-        : code.includes("exists") ? 409 : 400;
+        : code.includes("exists") || code.includes("path_conflict") ? 409 : 400;
   return reply.code(status).send({ error: code });
 }
 

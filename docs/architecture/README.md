@@ -1,7 +1,11 @@
 # DeepSonar 系统架构设计
 
+#1133 将 FR-VERIFY-005 / FR-DEV-002 的人工技术决定与补证设备冻结接到[接口视图](09-interface-specs.md#人工结束技术验证1133)、运行时视图及既有设备专题，新增轮次与持久审计使用现有数据结构。最终 SHA Actions 待验。
+
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
-> 同步日期：2026-11-16
+> 同步日期：2026-11-19
+
+NFR-REL-001 的[行锁竞争认领唤醒](06-runtime-view.md#行锁竞争后的认领唤醒)合并 `SKIP LOCKED` 后的延后重试，保留默认轮询关闭与所有资格门；真实 PostgreSQL 红测已复现，修复后的最终 SHA Actions 另验，历史 CI 的具体持锁时序仍未证实。
 > #1074 的[人工断点续做](../HUMAN_CONTINUATION.md)与[ADR 0022](adr/0022-human-continuation.md)扩展 FR-JOB-008/FR-CTRL-006；schema 73、超时 overdue、有限封存回收和晚回复受治理续做已接线，最终 SHA Actions 另验。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
@@ -154,3 +158,7 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 #1019 的[事实用途与待处理投影](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)区分过程记录、当前验证引用与需要处理的证据事项，列表统计限定已加载范围，最终 SHA Actions 待验。
 
 知识来源登记与历史只读预览的历史收敛见[ADR 0021](adr/0021-knowledge-source-preview.md)；[0023](adr/0023-project-knowledge-collection.md) 取代其中批处理暂缓限制。2026-11-16 [ADR 0024](adr/0024-project-knowledge-batching-admission.md) 进一步替代 0023 的来源数量及自动准入，扩展事务重验和 collection 只读投影；旧 ADR 决定段保留，历史预览只读、旧 knowledge:auto 不自动推进、无 schema/整链 token 预算变化。FR-KNOW-001 与 NFR-UX-001、06/08/09/10 和 trace 同步项目积累、24 小时间隔、连续两自动批次无 active/retired 提案产出停发、持久历史跨重启推导及显式成功恢复；collector 选项目/锁内重验、wake 和 activity 共用数据库规则，32 候选仍守 19 inputs+governor，放不下者保留。本轮反馈评审修正追加到 0024：record_knowledge_feedback 仅返回 {usage_ref,state:"recorded"}，不含 work_ref、不另启 work；成功 Job 反馈经普通来源登记及 collector 冻结精确反馈/target 基线/evidence refs，自动门与原 Job 权限不得绕过；显式 request_project_knowledge 保持原契约，source/usage/生效分层。知识页沿原入口展示状态和下次时间，无新通知、配置、恢复按钮或轮询，注意力成本见[专题](../PROJECT_KNOWLEDGE.md#注意力成本)。旧任务/审计/预算、最小 Job 预算拦截及独立评测保持；本轮最终 SHA Actions 待验，不部署、不重跑历史生产任务，真实模型与注意力收益未验证，历史证据见[专题记录](../PROJECT_KNOWLEDGE.md#验证与运维)。
+
+#1074 的[队列显式让位](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)同步 FR-TASK-008、FR-CTRL-006 及运行时/数据/API 视图。schema 75 新增 yielded 与持久请求/回复消费，最终 SHA Actions 另验。
+
+#1143 的 [PTY 清理事实与精确对账](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)扩展 FR-JOB-005 与既有 Job 详情投影。新宿主证据、先撤销凭据再销毁、精确 owner 和失败保留已接线，自动整 Job 恢复与 #1159 组合另列剩余范围，最终 SHA Actions 待验。

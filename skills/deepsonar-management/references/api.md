@@ -81,9 +81,10 @@ Scope 列以 `apps/scheduler/src/auth.ts` 的 `ROUTE_SCOPES` 为准；未列出�
 | 方法 | 路径 | Scope | 说明 |
 | --- | --- | --- | --- |
 | POST | /projects/:id/tasks | tasks:write | 创建任务 `{title, content, kind?, seed_finding_ids?, allow_egress?, schedule_beijing_8am?, scheduled_start_at?, device?, task_contract?}`；`device` = 真实设备需求 `{transport, key?, model?, exclusive?, ttl_sec?, roles?}`（缺省 `roles:["test"]`），冻结进 Job 快照并需要项目先 `device_access_enabled=true`，否则 `409 device_not_authorized`；`kind` 缺省为 `standard` 且禁止种子，`compose` 必须显式提交同项目 1–8 个当前可代入（未否定处置，含未确认）Finding UUID；省略出网字段时继承项目默认值；`scheduled_start_at`（ISO）优先于北京时间 08:00 快捷项 |
-| GET | /projects/:id/task-queue | tasks:read | 项目 FIFO 队列返回 `{project_id, paused, pause_reason, items, has_more}`；`items[].state` 为 `active/queued/succeeded/failed/cancelled`，活动/等待优先、历史随后，最多 100 项，`has_more` 表示截断；只读投影，不改变 Job 状态 |
+| GET | /projects/:id/task-queue | tasks:read | 项目 FIFO 队列返回 `{project_id, paused, pause_reason, items, has_more}`；`items[].state` 为 `active/queued/yielded/succeeded/failed/cancelled`，活动/等待优先、历史随后，最多 100 项，`has_more` 表示截断；只读投影，不改变 Job 状态 |
 | PATCH | /projects/:id/task-queue | jobs:control | `{paused:true}` 暂停推进；恢复为 `{paused:false}`，队列因当前队首失败/取消暂停时，须提交 `{paused:false, acknowledge_failed_head:"当前条目ID"}` 确认跳过；`paused:true` 携带确认被严格 schema 拒绝，旧条目 ID 拒绝；不自动重试、不改写历史 |
 | POST | /projects/:id/task-queue/items | jobs:control | `{canvas_id}` 把同项目已有且含合法 pending 工作的任务追加到队尾；已 queued/active 的重复入队幂等成功，保留条目 ID/位置；终态 membership 的新执行排尾，状态/归属不符时拒绝；等待项获得资格前不启动执行 Job |
+| POST | /projects/:id/task-queue/yield | jobs:control | `{mutation_id,canvas_id,expected_item_id,request_id,expected_revision}` 显式暂存唯一已安全封存的人工等待并让下一项先做；相同操作编号和内容幂等，冲突或治理阻塞返回 409。回复沿原消息入口保存并原子回队尾一次，轮到后才沿原准入续做，保留创建时间及累计额度 |
 | PATCH | /tasks/:canvasId | tasks:write | 就地更新 `{title?, content?, plan_objective?}`（至少一项）；`plan_objective` 只能由授权用户提交 `{expected_revision, goal, completion, budget}`，在 Canvas 行锁内做当前目标 revision CAS，冲突返回 `409 plan_stale_revision`，不接受 Agent 的 Plan payload。同步 `canvases.title` 与 `target_json.title/content/goal/plan_objective` 及 root 节点；只影响后续 Hub 读图 / 新派生 Job / 显式重试，不改写已冻结 Job `agent_snapshot_json`、Attempt 或事件。归档返回 `409 TASK_ARCHIVED`。`200` 返回当前 `plan_objective` 与 `snapshot_rewritten:false` |
 | POST | /tasks/:canvasId/pause | jobs:control | 幂等 drain pause；阻止该 Canvas 继续 claim，已在 claimed/provisioning/running/waiting_human 的 Job 安全收尾。返回 `execution_state/active_count/pending_count/changed` |
 | POST | /tasks/:canvasId/start | jobs:control | 幂等解除执行门禁并 `pg_notify`；不清 schedule，不重试 failed/orphan/cancelled；归档任务返回 `409 TASK_ARCHIVED` |
@@ -193,7 +194,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | GET | /findings/:id/lexical-search | findings:read | 字面检索（非语义关联）；同上 cursor 与 `no-store` 约束；预算超限 503 `SEARCH_BUDGET_EXCEEDED` |
 | GET | /findings/:id/evidence-trace | findings:read | Fact↔Evidence 可追溯性只读视图；`runtime_proof=false`、`replay.kind=evidence_integrity_check`，不改变 verify verdict。详见 [EVIDENCE_TRACE](../../../docs/EVIDENCE_TRACE.md) |
 | GET | /canvases/:id/finding-research | findings:read | 研究运行与去重簇投影：最近 50 次 `finding_research_runs`（含 `error`）+ canvas 内簇及其 canonical Finding（最多 1000 条）；只读，不改变 severity / verify 门 / 报告收敛 |
-| PATCH | /findings/:id/verify-status | findings:write | 人工收口 verify 状态 `{status, reason?}`；非法结构 `400 FINDING_VERIFY_STATUS_INVALID`；写 Finding 的 `verify_status` 与人工处置，不重放 `unknown` 外部效果 |
+| PATCH | /findings/:id/verify-status | findings:write | 严格 verify_status 判别请求。needs_human 沿用等待 Hub 的人工处理。inconclusive 仅允许 needs_human 且无活动执行、未决效果和开放轮次，必须 reason、expected（verify_status/subject_revision/latest_round_id）与 UUID mutation_id。CAS 过期或同编号异决定409，同决定重试返回原结果；新增终结轮次和同事务请求身份审计，业务 disposition 独立 |
 
 ### Finding 身份与关系（#819）
 

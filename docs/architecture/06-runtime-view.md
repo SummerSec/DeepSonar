@@ -1,7 +1,17 @@
 # 06 运行时视图
 
 > 状态：**as-built**（#741；#767/#775 同步）。描述任务从入口到报告的正常链路，以及越权、超时、取消、重启、未知效果和人工路径。
-> 同步日期：2026-11-16
+> 同步日期：2026-11-19
+
+#1133 的自动 Hub worker intent 与人工 Finding 补证入口，在冻结网络策略后、运行配置前统一调用设备要求冻结。显式 adb/hdc 要求重核项目 opt-in、已配置 rig、已启用 transport、独占及出网授权，进入 Job snapshot 后由既有设备租约入口再次授权并发放短期 grant。无显式设备要求的目标继续远端路径，镜像缺 SDK 或固件不用于推断设备能力。人工无定论事务、CAS 和审计见[接口边界](09-interface-specs.md#人工结束技术验证1133)。
+
+## 行锁竞争后的认领唤醒
+
+Dispatcher 的有界候选页先读身份，再以 `SKIP LOCKED` 取得 Canvas/Job 行锁。锁定复读结果少于选中的候选时，现有 [schedule-wake](../../apps/scheduler/src/schedule-wake.ts) 绑定登记一个可合并的延后认领唤醒；候选也可能已变化或消失，下一轮仍完整复读与核验，不凭旧身份授予执行资格。重试延迟以代码为准，不新增用户设置。
+
+该唤醒只由一次未完整取得候选的认领扫描触发，后续仍遇竞争才续约，不开启全局轮询；与未来任务/知识的定时器分开，数据库刷新不会误清理，Dispatcher 停止会清理两者。暂停、配额、队列、图阶段和未知效果边界不变。本修复不改变 #1118 的多项目公平性策略。
+
+NFR-REL-001 的 PostgreSQL 回归分别持有 Canvas 与 Job 行锁，验证其他画布仍可认领、解锁且无通知时自动重试；单测验证合并、停止及没有竞争时不自循环。红测提交 `eacab795` 的 [Actions](https://github.com/SummerSec/DeepSonar/actions/runs/44492076844/job/135450035484) 已确认旧实现的 Canvas 解锁断言失败，修复提交的最终 Actions 另验。历史 run `44479265231` 缺少逐轮锁快照，不能据此断言当次持锁者；本轮旧实现的冒烟亦可通过，历史具体触发时序未证实。API 冒烟失败时额外记录只读连接/等待/阻塞者摘要及平台认领暂停状态，不输出连接凭据或 SQL 业务内容。
 
 ## 自动清理归属与共享资产只读探针（#307 评审补齐）
 
@@ -311,3 +321,11 @@ Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freez
 ## 项目队列领取与恢复（#1018）
 
 项目 FIFO 队列在 Dispatcher 的全局 claim 事务锁内判定执行资格，实际 claim 后才标记当前占位。当前 Canvas 的内部 Job 可并行，下一 Canvas 等待治理 root/report 收敛、所有活动 Job 结束与效果结清。失败/取消保留队首并暂停，恢复必须确认当前失败项 ID；手动暂停只挡后续任务。Scheduler 按有界公平轮转对账，重启读取持久记录，硬重试在同一 claim 事务中以新条目 ID 排尾，保留暂停且废止旧失败项确认。Finding 报告再生成不创建任务新代际；终态 membership 保持不变，原报告权限和资源门不变。详见[队列专题](../PROJECT_TASK_QUEUE.md)。
+
+## 人工等待显式释放 FIFO 席位（#1074）
+
+默认人工等待占位，用户显式让位将唯一等待 Canvas 标记 yielded。回复保存事务持有 claim advisory 锁、Canvas→Job→Attempt→请求锁，原子回队尾一次，保留完成代际。轮到且无其他 active、队列未暂停才由原 requeueJob 准入取得席位和唯一后继，Dispatcher 再验。暂停、取消、断点过期、撤权、退出/效果/预算门仍生效，详见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。
+
+## PTY 清理事实与精确对账（#1143）
+
+宿主专用回调把退出/连接观察与 PTY DELETE 结果绑定原 Job/Attempt/Sandbox/Process/agent_run 审计引用。先提交旧凭据撤销与 pending 清理记录，再以相同锁序重核并有界销毁；持久指定 worker 的消失确认才可结清精确原终态 marker。失败、超时和提交失败保留归属，独立 unknown 与历史无证据 run 不泛清。实际 caller 与 OOM 未核实分开，现有 Job 详情按需展示证据和恢复限制。详细字段、测试入口及剩余范围见 [CLI 专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)，最终 SHA Actions 待验。

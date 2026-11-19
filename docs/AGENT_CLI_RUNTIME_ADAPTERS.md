@@ -467,6 +467,20 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 - 历史 DSH 夹具 `dsh-0.1.1-rc.2.*` 仅用于旧归档/解码回归，不代表当前 launcher 或 live capture。
 
 夹具覆盖文本/增量、工具调用结果、错误、usage、Session 身份、未知/损坏帧，以及伪造 `mcp__deepsonar-control__*` 工具名。普通输出或伪造 tool call **不会**变成控制语义事件；语义写入只走 Job 级 HTTP API。不承诺识别任意上游私有客户端策略。
+### Pi 1.5.2 的消息起始事件（#1141）
+
+Pi 1.5.2 对 `assistant` / `user` / `toolResult` 都发顶层 `message_start`（`core/agent-session.js`
+按角色分别处理，`modes/json-event.js` 原样透传）。`decodePi` 只用 assistant 起始打开消息输出基线，
+其它角色按已知会话边界返回空；工具结果仍由 `tool_execution_end` 产生宿主事件。
+
+该缺口此前被兜成 `unknown_runtime`，随后由 reporter 以**原始** Pi 行的 `type` 记成
+`unrecognized_stream_type`，于是升级后每个 Job 的每条 user/toolResult 消息都会刷告警
+（现场 337 次/12h，`chars=13`、`hash=b25782c0643f9ee7` 即 `SHA256("message_start")[:16]`）。
+
+诊断仍只输出 `hash`（先脱敏再哈希）与 `chars`，不回显原始 type：这是 #1038 的有界摘要契约，
+`runtime-pi-recovery.test.ts` 明确禁止把原始类型名带进告警。定位流程是拿 `chars` 与 16 位哈希
+对 `PI_RPC_EVENT_TYPES` / Claude stream 名单做离线匹配，再补解码分支。
+
 
 运行时 smoke：本地 `agent-harness/dsh-sdk-smoke-driver.mjs` 已用官方 package 验证 native bash、PTC `run_code`、原生子代理的 Gateway/model/reasoning 继承、Gateway token、同进程 follow-up、v4 capture、跨进程 resume 拒绝和 shutdown；`agent-harness/dsh-cordis-smoke-config.mjs` 是 profile smoke helper，`agent-harness/check-dsh-runtime.mjs`、`agent-harness/test-dsh-cordis.mjs` 与 `packages/runtime-sandbox/src/runtime-adapters.test.ts` 验证 lock/profile/Docker 与 adapter 契约。Docker 在当前环境不可用，因此容器启动与既有镜像 size budgets 仍由 CI gate 负责；本地只记录 npm closure 约 505 MiB unpacked、约 139 MiB gzip，不把它们写成镜像体积。完整 `pnpm ci:smoke:opensandbox-cli-control` 仍需要对应 Provider 凭据。
 
@@ -481,3 +495,17 @@ separately from adapter or parser failures. Mock LLM is not a substitute.
 ### 主模型请求准入适配器（#923）
 
 [model-request-policy](../packages/runtime-sandbox/src/model-request-policy.ts)由 runtime-agent 上传并包装三 CLI 的 start/resume；Scheduler 将运行时主配置/DSH/env 指向沙箱 loopback，OM 仍直连真实 Gateway。适配器查询当前 Job token 的 allowance，仅检查已形成请求的 cap 与 Chat SSE usage，合规原字节转发，否则明确拒绝，不重试/重定向。Pi 已接原生 provider streamSimple 生成前选项；Claude Code 2.1.312 保留 start/resume 原生启动输出上限，运行中余额不足时明确拒绝并提示，不修改已形成 body；用户已接受此兼容限制，不要求逐请求自动适配，范围决定不再阻塞发布；DSH 已接独立受治理 vendor adapter，最终 Actions 待验，不能宣称 #923 全部完成。opaque 受限请求和未知 allowance 拒绝；Gateway 继续最终原字节准入。生命周期、范围与持久拒绝回执见[透明传输专题](MODEL_GATEWAY_TRANSPARENCY.md)。CLI 形状合成测试已接 Actions，运行结果待最终 SHA 验收，不代表实际 CLI 或真实模型通过。
+
+## PTY 清理事实与精确对账（#1143）
+
+execd DELETE 分别记录成功、HTTP 拒绝、传输失败及一秒超时。它与最初的退出/连接终止观察分开保存，清理不会覆盖最初原因。宿主主动结束附固定 caller，正常结果收尾、RPC 失败、输出采集失败、执行异常和终端关闭各自区分；没有宿主 OOM 证据时不诊断内存耗尽。固定低基数指标 `deepsonar_runtime_process_terminations_total` 由新审计记录计数，普通 CLI 诊断事件不能写入该证据通路。
+
+Scheduler 的宿主专用回调把 Job、Attempt、Sandbox、Process、时间和原 agent_run 绑定到追加系统审计，并在 effect 中保存精确引用。GET Job 详情和现有执行账本折叠区读取最多 64 条，通过项目、Job、Attempt、effect、sandbox 及 process 引用重新校验。持久投影只含固定类型、状态、HTTP 状态码和受管身份，不保存命令、URL、Provider 原文、错误正文或秘密。
+
+正常 finally 与现有对账 tick 仅处理具有这类新宿主观察的终态原 owner。首事务按 Canvas→Job→Attempt→effect→worker lease 核对当前身份，撤销旧 Control/Gateway grant 并提交 pending 清理记录。第二事务重核原 owner，最多等待销毁 25 秒；Worker plane 必须在持久指定 worker 上确认资源消失，缺 key、owner 冲突和不可达都拒绝。失败/超时或最终提交失败保留旧 grant 撤销、清理记录与 worker 归属，恢复准入继续阻塞。晚完成的销毁仍指向原 sandbox，不能据此在事务外补写成功。
+
+只有原终态收口生成、内容精确等于该 Attempt 状态的 unknown marker 可在确认销毁后结清。独立 unknown、其他效果和没有新宿主观察的历史 run 继续等待原有单条对账。通用对账不再把终态 Attempt 当作进程退出证明。清理成功仅确认资源收回，无合法 checkpoint 时自动整 Job 恢复尚未交付。历史失败原因不回填，旧 #1147 的 settled 后自动重派不采用；#1159 原 owner 晚 usage 结算组合另做有限集成，本切片不引入跨 Job 预算修改。
+
+启动清理可能在显式 pending 清理记录写入前销毁沙箱。worker lease 的释放同时检查精确 Job/Attempt/effect 上的新宿主观察，清理状态缺省视为 pending，保留原 worker 直到清理事务确认成功。受控回归实际调用 `reconcileOnBoot`，覆盖先销毁并尝试释放、再精确对账确认的顺序。
+
+受控回归沿用 `ci:unit:runtime-sandbox`、`ci:unit:recovery`、`ci:unit:job-lifecycle`、`ci:unit:web-facts` 与 `ci:integration:recovery`。覆盖真实 DELETE HTTP、Runtime wrapper、PG 原凭据先撤销、失败/超时、独立 unknown、新 Attempt、worker key 丢失/恢复、精确 worker 销毁和提交失败归属保留。仅 Actions 执行测试、build 和 typecheck，最终 SHA 待验；未执行生产部署或历史 Job 重跑。

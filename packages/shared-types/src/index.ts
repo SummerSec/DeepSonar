@@ -1,4 +1,5 @@
 import { TaskGoalReviewRequest, TaskGoalReviewResult } from "./task-goal-review.js";
+export * from "./finding-verification.js";
 export * from "./task-goal-review.js";
 export * from "./runtime-image-retirement.js";
 import { TaskResultProposal } from "./task-result.js";
@@ -1880,3 +1881,4 @@ export async function computeFingerprint(
 
 export * from "./task-contract.js";
 export * from "./program-eligibility.js";
+export * from "./task-queue.js";

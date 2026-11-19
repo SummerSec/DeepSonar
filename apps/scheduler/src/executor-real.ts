@@ -1,4 +1,5 @@
 import { registerRuntimeTerminalState } from "./domains/platform-api/registry.js";
+import { recordRuntimeProcessEvidence } from "./runtime-process-evidence.js";
 import { prepareHumanCheckpointContext, persistHumanWaitCheckpoint } from "./domains/job-control/human-checkpoint.js";
 import { taskContractPrompt } from "./task-contract-preflight.js";
 import { prepareCompletionPayload } from "./completion-payload.js";
@@ -199,6 +200,7 @@ const SHARED_ASSET_RETRYABLE_ERROR_CODES = new Set([
   "invalid_asset_content_type",
   "immutable_asset_key_exists",
   "asset_content_version_exists",
+  "shared_asset_path_conflict",
 ]);
 
 const SHARED_ASSET_UNIQUE_CONSTRAINTS = new Set([
@@ -232,7 +234,7 @@ export function sharedAssetPublishControlError(error: unknown): ControlInputErro
   const errorCode = detail.split(":", 1)[0];
   if (!SHARED_ASSET_RETRYABLE_ERROR_CODES.has(errorCode)) return null;
   const path = detail.includes("content_type") ? "content_type"
-    : detail.includes("key") || detail.includes("exists") ? "key"
+    : detail.includes("key") || detail.includes("exists") || detail.includes("path_conflict") ? "key"
       : detail.includes("source") ? "source_path" : undefined;
   return invalidToolPayload("publish_shared_asset", detail, path);
 }
@@ -1795,6 +1797,9 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
           session_id: storedSessionId,
           ...(typeof state?.session_file === "string" ? { session_file: state.session_file } : {}),
         };
+      },
+      onProcessDiagnostic: async (observation) => {
+        await recordRuntimeProcessEvidence(sql, { jobId, attemptId: evidenceAttemptId, sandboxId: String(job.sandbox_id) }, observation);
       },
       onContextEvent: async (event) => {
         runtimeContext = applyRuntimeContextEvent(runtimeContext, event);

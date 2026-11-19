@@ -1,5 +1,6 @@
 import { recordSystemAudit } from "../../audit.js";
 import type { sql as Sql } from "../../db.js";
+import { reconcileYieldedTaskQueueItems } from "./task-queue-yield-reconciliation.js";
 import {
   canClaimQueuedTask as canClaimByModel,
   decideTaskQueueReconciliation,
@@ -35,6 +36,7 @@ export interface ProjectTaskQueueItemView {
   started_at: string | null;
   ended_at: string | null;
   block_reason: ProjectTaskQueueBlockReason | null;
+  yield_request: { request_id: string; expected_revision: number } | null;
 }
 
 export interface ProjectTaskQueueView {
@@ -111,6 +113,7 @@ export async function enqueueProjectTask(
     throw new TaskQueueError("QUEUE_CANVAS_ARCHIVED", "归档任务不能进入项目队列");
   }
 
+  await reconcileYieldedTaskQueueItems(tx, projectId, canvasId);
   const [existing] = await tx<QueueItemRow[]>`
     SELECT id::text, project_id::text, canvas_id, state, created_at, started_at, ended_at
     FROM project_task_queue_items WHERE canvas_id = ${canvasId} FOR UPDATE`;
@@ -119,6 +122,10 @@ export async function enqueueProjectTask(
       id: String(existing.id), project_id: String(existing.project_id), canvas_id: String(existing.canvas_id),
       state: existing.state,
     };
+  }
+
+  if (existing?.state === "yielded") {
+    throw new TaskQueueError("QUEUE_HUMAN_YIELDED", "已让位任务须回复原人工请求后回队尾");
   }
 
   const [safety] = await tx`
@@ -369,7 +376,7 @@ export async function reconcileProjectTaskQueues(tx: Db, limit = 32): Promise<nu
     FROM project_task_queues q
     WHERE EXISTS (
       SELECT 1 FROM project_task_queue_items i
-      WHERE i.project_id = q.project_id AND i.state IN ('queued','active')
+      WHERE i.project_id = q.project_id AND i.state IN ('queued','active','yielded')
     )
     ORDER BY q.reconciled_at ASC, q.project_id ASC
     LIMIT ${boundedLimit}`;
@@ -378,6 +385,7 @@ export async function reconcileProjectTaskQueues(tx: Db, limit = 32): Promise<nu
     await tx`
       UPDATE project_task_queues SET reconciled_at = clock_timestamp()
       WHERE project_id = ${projectId}`;
+    await reconcileYieldedTaskQueueItems(tx, projectId);
     await reconcileQueueHead(tx, projectId);
   }
   return queues.length;
@@ -394,6 +402,7 @@ export async function canClaimQueuedTask(tx: Db, projectId: string, canvasId: st
     FROM canvases cv JOIN projects p ON p.id = cv.project_id WHERE cv.id = ${canvasId}`;
   if (!canvas || String(canvas.project_id) !== projectId || canvas.status !== "active" || canvas.archived_at
     || canvas.project_status !== "active" || canvas.project_archived_at) return false;
+  await reconcileYieldedTaskQueueItems(tx, projectId, canvasId);
   const [membership] = await tx<QueueItemRow[]>`
     SELECT id::text, project_id::text, canvas_id, state, created_at, started_at, ended_at
     FROM project_task_queue_items WHERE canvas_id = ${canvasId}`;
@@ -462,6 +471,7 @@ function readBlockReason(
   pauseReason: unknown,
 ): ProjectTaskQueueBlockReason | null {
   if (isTerminalState(state)) return null;
+  if (state === "yielded") return "waiting_human";
   if (!isHead) return snapshot.queuePaused ? "queue_paused" : "waiting_turn";
   const decision = decideTaskQueueReconciliation(snapshot);
   if (decision.kind === "pause") return decision.pauseReason;
@@ -485,17 +495,24 @@ export async function readProjectTaskQueue(db: Db, projectId: string): Promise<P
     ),
     queued_items AS MATERIALIZED (
       SELECT i.id, i.project_id, i.canvas_id, i.state, i.created_at, i.started_at, i.ended_at,
-             0 AS bucket, i.id AS order_id
+             1 AS bucket, i.id AS order_id
       FROM project_task_queue_items i
       WHERE i.project_id = ${projectId} AND i.state = 'queued'
       ORDER BY i.id LIMIT 101
     ),
+    yielded_items AS MATERIALIZED (
+      SELECT i.id, i.project_id, i.canvas_id, i.state, i.created_at, i.started_at, i.ended_at,
+             2 AS bucket, i.id AS order_id
+      FROM project_task_queue_items i
+      WHERE i.project_id = ${projectId} AND i.state = 'yielded'
+      ORDER BY i.id LIMIT 101
+    ),
     live_items AS MATERIALIZED (
-      SELECT * FROM active_item UNION ALL SELECT * FROM queued_items
+      SELECT * FROM active_item UNION ALL SELECT * FROM queued_items UNION ALL SELECT * FROM yielded_items
     ),
     history_items AS MATERIALIZED (
       SELECT i.id, i.project_id, i.canvas_id, i.state, i.created_at, i.started_at, i.ended_at,
-             1 AS bucket, -i.id AS order_id
+             3 AS bucket, -i.id AS order_id
       FROM project_task_queue_items i
       WHERE i.project_id = ${projectId} AND i.state IN ('succeeded','failed','cancelled')
       ORDER BY i.id DESC LIMIT 101
@@ -520,6 +537,14 @@ export async function readProjectTaskQueue(db: Db, projectId: string): Promise<P
     )
     SELECT n.id::text, n.project_id::text, n.canvas_id, c.title, n.state,
            n.created_at, n.started_at, n.ended_at,
+           (SELECT jsonb_build_object('request_id',r.id,'expected_revision',r.revision)
+            FROM human_requests r JOIN jobs j ON j.id=r.job_id
+            WHERE r.canvas_id=n.canvas_id AND r.status='open' AND r.resumed_at IS NULL
+              AND j.status='waiting_human' AND r.checkpoint_status='ready'
+              AND r.checkpoint_expires_at>clock_timestamp()
+              AND NOT EXISTS(SELECT 1 FROM jobs other WHERE other.canvas_id=n.canvas_id AND other.id<>j.id
+                AND other.status IN ('pending','claimed','provisioning','running','waiting_human'))
+            ORDER BY r.created_at DESC LIMIT 1) AS yield_request,
            (head.canvas_id = n.canvas_id) AS is_head,
            c.status AS canvas_status, c.archived_at AS canvas_archived_at,
            p.status AS project_status, p.archived_at AS project_archived_at,
@@ -606,6 +631,7 @@ export async function readProjectTaskQueue(db: Db, projectId: string): Promise<P
       started_at: dateText(row.started_at),
       ended_at: dateText(row.ended_at),
       block_reason: readBlockReason(snapshot, state, row.is_head === true, pauseReason),
+      yield_request: state === "active" ? row.yield_request ?? null : null,
     } satisfies ProjectTaskQueueItemView;
   });
   return {

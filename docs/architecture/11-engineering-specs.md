@@ -1,7 +1,7 @@
 # 11. 工程规范
 
 > 状态：**as-built（#741 PR 5 回填）**。本文记录当前仓库开发、验证和文档治理必须遵守的工程规则；实现冲突时以代码、schema、OpenAPI 和测试为准。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-19
 
 本文是 DeepSonar 的开发规范视图。它把可重复的工程约束、测试分层、文档保鲜和发布前核查集中在一个位置；新架构事实以 [`docs/architecture/README.md`](README.md)、相关架构视图、追溯矩阵和 ADR 为准，`DESIGN.md`、`docs/README.md` 与其他专题文档提供摘要或专题证据。
 
@@ -129,6 +129,12 @@ Control API 的每个 operation 必须经过三层校验：
 | 文档与发布门 | 版本字面量、脚本和链接、已删机制、架构文档结构 | `pnpm ci:unit:docs-freshness`；CI 已在 `.github/workflows/ci.yml` 的 docs-freshness job 接线 |
 
 单元测试不替代 PostgreSQL 集成，typecheck 不替代行为测试，fake 模式冒烟不替代真实沙箱或多架构镜像证据。`ci:unit:ci-test-hook` 维护 `*.test.ts` 的脚本接线棘轮；它不能证明对应 script 已被 workflow 调用，workflow 仍需人工核对。测试数据库或真实沙箱不可用时保留跳过/未执行事实，不改写为成功。
+
+### PowerShell 测试进程的启动缓存
+
+部署测试通过 [`powershell-test-host.mjs`](../../deploy/powershell-test-host.mjs) 启动 PowerShell。Unix 上每次调用（含可用性探测）使用独立临时 `XDG_CACHE_HOME`，进程结束或超时后清理自己的目录，不修改父进程环境或用户缓存；Windows 保持原缓存路径。`-NoProfile` 只关闭用户脚本配置，并不关闭 .NET 启动优化缓存。并行启动共享缓存可能损坏程序集名称并在脚本运行前崩溃，见 [PowerShell #26528](https://github.com/PowerShell/PowerShell/issues/26528) 与 [.NET #121977](https://github.com/dotnet/runtime/issues/121977)。
+
+探测只把 `ENOENT` 视为未安装；已安装但启动失败、被信号终止或未执行探测命令均报错，CI 缺少 PowerShell 也失败，不以跳过或重试掩盖问题。[真实进程回归](../../deploy/powershell-test-host.test.mjs)覆盖并行缓存隔离、损坏继承缓存、退出码/输入/超时和探测错误，接入 `ci:unit:deploy-ps1`（Draft 定向检查及完整 `gate-contract`）。损坏缓存的对照输出用于机制诊断，不要求上游永远保持崩溃；历史运行器未留存缓存，不能仅凭相同错误认定历史文件已损坏。最终提交的 Actions 结果单独验收。
 
 当前 CI 在单 workflow 内分类 PR：只有新增/修改且位于 [明确文件白名单](../../agent-harness/classify-ci-changes.mjs) 内的纯文本文件可跳过核心重活；不按 Markdown 后缀或 docs/skills 目录前缀放行。运行时手册、Skill、提示、配置、未知路径、混合改动、删除及重命名不能获得 docs-only。分类器使用 NUL 分隔的 Git diff 保留文件名身份。文档保鲜与 `pnpm ci:unit:ci-routing` 始终执行，ci-summary 验证分类结果、文档与每个应运行 job，失败、取消或意外跳过不能通过。分类失败/缺失输出不允许走文档路径；已触发的 push 与 workflow_dispatch 强制 full。
 

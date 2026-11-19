@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { findPowerShell as firstPwsh, spawnPowerShellSync as spawnSync } from "./powershell-test-host.mjs";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -11,17 +11,6 @@ const bytes = readFileSync(scriptPath);
 const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
 const SMART_OR_FULLWIDTH = /[\u00ab\u00bb\u2018\u2019\u201c\u201d\u201e\u201f\u300c\u300d\u300e\u300f\u3002\uff01\uff02\uff08\uff09\uff0c\uff1a\uff1b\uff1f]/u;
-
-function firstPwsh() {
-  for (const cmd of ["pwsh", "powershell"]) {
-    const probe = spawnSync(cmd, ["-NoProfile", "-Command", "exit 0"], {
-      encoding: "utf8",
-    });
-    if (probe.error) continue;
-    if (probe.status === 0) return cmd;
-  }
-  return null;
-}
 
 test("deploy.ps1 is UTF-8 with BOM so Windows PowerShell 5.1 can parse it", () => {
   assert.ok(bytes.length > 3, "deploy.ps1 is empty");

@@ -659,7 +659,7 @@ export function SettingsPanel({
               </section>
             )}
 
-            {false && !projectId && (
+            {!projectId && (
               <section className="overflow-hidden rounded-[18px] bg-white/[.022] ring-1 ring-white/[.06]">
                 <div className="border-b border-white/[.055] px-4 py-3">
                   <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.16em] text-acc-400">

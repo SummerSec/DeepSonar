@@ -1,3 +1,4 @@
+import type { ProjectTaskQueueYieldInput, FindingInconclusiveBody, FindingVerificationControl } from "@deepsonar/shared-types";
 /** 调度器 API 类型与请求（vite proxy /api → :3100） */
 
 import type { PlatformClaimsStatus } from "./platform-claims";
@@ -218,7 +219,7 @@ export interface Project {
   max_concurrent_jobs_source?: "project" | "global";
 }
 
-export type ProjectTaskQueueItemState = "queued" | "active" | "succeeded" | "failed" | "cancelled";
+export type ProjectTaskQueueItemState = "queued" | "active" | "yielded" | "succeeded" | "failed" | "cancelled";
 
 export interface ProjectTaskQueueItem {
   id: string;
@@ -229,6 +230,7 @@ export interface ProjectTaskQueueItem {
   started_at: string | null;
   ended_at: string | null;
   block_reason: string | null;
+  yield_request?: { request_id: string; expected_revision: number } | null;
 }
 
 export interface ProjectTaskQueue {
@@ -672,6 +674,7 @@ export interface HumanContinuation {
 }
 
 export interface JobDetail {
+  process_diagnostics?: import("./RuntimeProcessEvidence").RuntimeProcessEvidence[];
   job: {
     execution_state?: JobExecutionState | null;
     id: string;
@@ -1015,6 +1018,7 @@ export interface WsTicket {
 }
 
 export interface FindingDetail {
+  verification_control: FindingVerificationControl | null;
   finding: FindingSummary & {
     raw_json: Record<string, unknown>;
     source_job_type: string;
@@ -2342,6 +2346,8 @@ export const api = {
     send<Project>("POST", "/projects", p),
   updateProject: (id: string, p: { name?: string; description?: string; status?: "active" | "archived" }) =>
     send<Project>("PATCH", `/projects/${id}`, p),
+  yieldProjectTaskQueue: (projectId: string, input: ProjectTaskQueueYieldInput) =>
+    send<ProjectTaskQueue>("POST", `/projects/${projectId}/task-queue/yield`, input),
   projectTaskQueue: (projectId: string, signal?: AbortSignal) =>
     get<ProjectTaskQueue>(`/projects/${projectId}/task-queue`, signal),
   setProjectTaskQueuePaused: (projectId: string, paused: boolean, failedHeadId?: string) =>
@@ -2660,6 +2666,8 @@ export const api = {
   ) => send<FindingSummary>("PATCH", `/findings/${id}/disposition`, body),
   setFindingNeedsHuman: (id: string, body?: { verify_status: "needs_human"; reason?: string }) =>
     send<FindingSummary>("PATCH", `/findings/${id}/verify-status`, body ?? { verify_status: "needs_human" }),
+  closeFindingInconclusive: (id: string, body: FindingInconclusiveBody) =>
+    send<{ finding_id: string; verify_status: string; round_id: string; mutation_id: string }>("PATCH", `/findings/${id}/verify-status`, body),
   forceFindingVerify: (id: string, body?: { reason?: string }) =>
     send<{
       finding_id: string;
