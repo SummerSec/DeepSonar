@@ -4,6 +4,7 @@ import { canAccessAnyScope } from "./permissions";
 export interface ProjectTaskQueueGroups {
   active: ProjectTaskQueueItem[];
   queued: ProjectTaskQueueItem[];
+  yielded: ProjectTaskQueueItem[];
   history: ProjectTaskQueueItem[];
 }
 
@@ -17,6 +18,7 @@ export function groupProjectTaskQueue(queue: ProjectTaskQueue): ProjectTaskQueue
   return {
     active: queue.items.filter((item) => item.state === "active"),
     queued: queue.items.filter((item) => item.state === "queued"),
+    yielded: queue.items.filter((item) => item.state === "yielded"),
     history: queue.items.filter((item) => item.state === "succeeded" || item.state === "failed" || item.state === "cancelled"),
   };
 }
@@ -38,6 +40,7 @@ export function projectTaskQueueStateLabel(state: ProjectTaskQueueItem["state"])
   switch (state) {
     case "queued": return "等待中";
     case "active": return "当前占位";
+    case "yielded": return "已暂存让位，回复后排到队尾";
     case "succeeded": return "已完成";
     case "failed": return "失败";
     case "cancelled": return "已取消";
