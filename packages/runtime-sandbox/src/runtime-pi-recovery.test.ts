@@ -6,6 +6,35 @@ import { runRealAgent, redactRuntimeSecrets } from "./runtime-agent.js";
 import { createRuntimeWarningReporter, type RuntimeWarning } from "./runtime-warnings.js";
 import { PiRpcDriver } from "./pi-rpc-driver.js";
 import type { RuntimeHost, RuntimeProcess, RuntimeProcessChunk } from "./runtime-host.js";
+import { createContextState, contextIdentity, contextTextDigest } from "./context-contract.js";
+import { nativeHumanSessionPath, type NativeHumanSession } from "./human-session-import.js";
+
+test("human native import uses the normal runner resume path with fresh execution inputs",async()=>{
+  const id="75e625d4-ed23-46b3-a4ca-a82bdb1d6022";
+  const humanSession:NativeHumanSession={cli:"pi",version:"1.5.2",sessionId:id,content:[
+    {type:"session",version:3,id,cwd:"/workspace",timestamp:"2026-11-19T00:00:00Z"},
+    {type:"message",id:"user",parentId:null,timestamp:"2026-11-19T00:00:00Z",message:{role:"user",content:"Keep decision"}},
+  ].map(row=>JSON.stringify(row)).join("\n")};
+  const importedPath=nativeHumanSessionPath(humanSession),uploads=new Map<string,string>(),launches:string[]=[],bindings:unknown[]=[];
+  const process=new PiProcess((command,proc)=>{
+    if(command.type==='get_state')proc.emit({type:'response',id:command.id,command:'get_state',success:true,data:{sessionId:id,sessionFile:importedPath,
+      isStreaming:false,isCompacting:false,pendingMessageCount:0,messageCount:1,autoCompactionEnabled:true}});
+    else if(command.type==='prompt')turn(proc,command);
+  });
+  const runtime:RuntimeHost={run:async()=>({exitCode:0,stdout:'',stderr:''}),runAsync:async(command,options)=>{
+    launches.push(command);assert.equal(options?.env?.DEEPSONAR_GATEWAY_TOKEN,'new-gateway');return process;
+  },uploadFile:async(content,destination)=>{uploads.set(destination,String(content));},readWorkspaceFile:async()=>Buffer.from(''),writeHumanInboxFile:async()=>{}};
+  const identity=contextIdentity(createContextState({attempt_id:'new-attempt',adapter_id:'pi',adapter_version:'1.5.2',
+    runtime_identity:'sha256:'+'a'.repeat(64),policy:'automatic',input_digest:contextTextDigest('new input')}));
+  const extension='/workspace/.deepsonar-home/.pi/agent/extensions/current.ts';
+  const result=await runRealAgent(runtime,{provider:'pi',env:{DEEPSONAR_GATEWAY_TOKEN:'new-gateway'},input:'human reply',systemPrompt:'CURRENT_SYSTEM_BOUNDARY',
+    contextIdentity:identity,humanSession,piExtensions:[extension],onSessionIdentity:value=>{bindings.push(value);},completionGate:()=>true});
+  assert.equal(result.error,undefined);assert.equal(launches.length,1);
+  assert.ok(launches[0]!.includes(`--session '${importedPath}'`));assert.ok(launches[0]!.includes(extension));
+  assert.equal(uploads.get('/workspace/.deepsonar/system-prompt.txt'),'CURRENT_SYSTEM_BOUNDARY');
+  assert.match(uploads.get(importedPath)!,/Keep decision/);assert.doesNotMatch(uploads.get(importedPath)!,/new-gateway/);
+  assert.ok(bindings.length>=1);assert.equal(process.commands.filter(command=>command.type==='prompt').length,1);
+});
 
 const sessionFile = "/workspace/.deepsonar-home/.pi/agent/session.jsonl";
 class PiProcess implements RuntimeProcess {

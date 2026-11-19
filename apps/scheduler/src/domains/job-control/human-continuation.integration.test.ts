@@ -87,6 +87,70 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       });
       return { projectId: fixtureProjectId, jobId, canvasId, attemptId, requestId, host, bytes, restored, seal, close, reply, commands, wait };
     };
+    await context.test('native checkpoint pins exact source archive and rejects changed successor identity',async()=>{
+      const fixture=await setup();
+      const {JobEvidenceWriter}=await import('../../evidence.js');
+      const {captureHumanSession,loadHumanSession}=await import('./human-checkpoint-session.js');
+      const sessionId=randomUUID();
+      const [job]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
+      assert.equal(job.agent_snapshot_json.agent_cli,'claude-code');
+      assert.equal(job.agent_snapshot_json.agent_runtime.adapter_version,'2.1.312');
+      await sql`UPDATE job_attempts SET session_id=${sessionId} WHERE id=${fixture.attemptId}`;
+      const writer=new JobEvidenceWriter(fixture.jobId,'claude-code',fixture.attemptId);
+      writer.setSession({cli:'claude-code',sessionId,artifacts:[{name:`${sessionId}.jsonl`,sourcePath:'/unused',kind:'main',content:[
+        {type:'user',uuid:'entry',parentUuid:null,sessionId,cwd:'/workspace',version:'2.1.312',
+          timestamp:new Date().toISOString(),message:{role:'user',content:'Safe decision\nAuthorization: Bearer old-checkpoint-control'}},
+      ].map(value=>JSON.stringify(value)).join('\n')}]});
+      await writer.finalize();
+      await captureHumanSession(fixture.jobId,fixture.attemptId,['old-checkpoint-control']);
+      const [captured]=await sql`SELECT state_json->'human_session' AS binding FROM job_attempts WHERE id=${fixture.attemptId}`;
+      assert.equal(captured.binding.status,'supported',JSON.stringify(captured.binding));
+      assert.equal(captured.binding.request_id,fixture.requestId);
+      await fixture.seal();await fixture.close();await fixture.reply();
+      await pumpHumanContinuations(1,fixture.requestId);
+      const [resumed]=await sql`SELECT resumed_at,resume_error_code,target_attempt_no FROM human_requests WHERE id=${fixture.requestId}`;
+      assert.ok(resumed.resumed_at);assert.equal(resumed.resume_error_code,null);assert.equal(resumed.target_attempt_no,2);
+      const loaded=await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json);
+      assert.equal(loaded.status,'supported');assert.ok(loaded.session);
+      assert.doesNotMatch(loaded.session.content,/old-checkpoint-control/);
+      assert.match(loaded.session.content,/Safe decision/);
+      await assert.rejects(loadHumanSession(fixture.jobId,2,{...job.agent_snapshot_json,agent_cli:'dsh'}),/IDENTITY/);
+      const [stored]=await sql`SELECT state_json->'human_session' AS binding FROM job_attempts WHERE id=${fixture.attemptId}`;
+      for(const field of ['request_id','attempt_id','snapshot_sha256','sha256']) {
+        const changed={...stored.binding,[field]:field.endsWith('id')?randomUUID():'0'.repeat(64)};
+        await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json(changed)}) WHERE id=${fixture.attemptId}`;
+        await assert.rejects(loadHumanSession(fixture.jobId,2,job.agent_snapshot_json),/IDENTITY|UNAVAILABLE|MISMATCH/);
+      }
+      await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json(stored.binding)}) WHERE id=${fixture.attemptId}`;
+      assert.equal((await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json)).status,'supported');
+      assert.equal((await loadHumanSession(fixture.jobId,3,job.agent_snapshot_json)).status,'unsupported');
+      await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+    });
+    await context.test('old snapshot without adapter version records an explicit structured mode',async()=>{
+      const fixture=await setup();
+      const {captureHumanSession,loadHumanSession}=await import('./human-checkpoint-session.js');
+      await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(agent_snapshot_json,'{agent_cli}','"pi"')-'agent_runtime'
+        WHERE id=${fixture.jobId}`;
+      await captureHumanSession(fixture.jobId,fixture.attemptId,[]);
+      const [stored]=await sql`SELECT state_json->'human_session' AS binding FROM job_attempts WHERE id=${fixture.attemptId}`;
+      assert.equal(stored.binding.status,'unsupported');
+      assert.equal(stored.binding.reason,'unverified_adapter_version');
+      assert.equal(stored.binding.version,'unknown');
+      await fixture.seal();await fixture.close();await fixture.reply();
+      await pumpHumanContinuations(1,fixture.requestId);
+      const [blocked]=await sql`SELECT resumed_at,resume_error_code FROM human_requests WHERE id=${fixture.requestId}`;
+      assert.equal(blocked.resumed_at,null);assert.equal(blocked.resume_error_code,'SNAPSHOT_STALE');
+      await sql`UPDATE human_requests SET resumed_at=now(),target_attempt_no=2 WHERE id=${fixture.requestId}`;
+      const [job]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
+      const loaded=await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json);
+      assert.equal(loaded.status,'unsupported');assert.equal(loaded.reason,'unverified_adapter_version');
+      await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json({status:'unsupported'})})
+        WHERE id=${fixture.attemptId}`;
+      assert.deepEqual(await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json),{status:'rejected',reason:'invalid_native_binding'});
+      await sql`UPDATE job_attempts SET state_json=state_json-'human_session' WHERE id=${fixture.attemptId}`;
+      assert.deepEqual(await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json),{status:'unsupported',reason:'checkpoint_has_no_native_archive'});
+      await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+    });
     await context.test('late response resumes preserved files with one durable generation and a new owner', async () => {
       const fixture = await setup(); await fixture.seal();
       assert.equal((await sql`SELECT checkpoint_status FROM human_requests WHERE id=${fixture.requestId}`)[0].checkpoint_status, 'preparing');

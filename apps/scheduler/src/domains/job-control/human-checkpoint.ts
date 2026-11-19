@@ -8,6 +8,7 @@ import { readCheckpointProcessBaseline } from "./human-checkpoint-process.js";
 import { collectSecretValues } from "../../credential-secret-projection.js";
 import { readAcknowledgedHumanAttachments, restoreAcknowledgedHumanAttachments } from "./human-continuation-inbox.js";
 import { readAcknowledgedHumanHistory } from "./human-continuation-history.js";
+import { captureHumanSession, loadHumanSession } from "./human-checkpoint-session.js";
 
 export function checkpointManagedSecrets(env:Record<string,unknown>,files:Record<string,unknown>,direct:readonly(string|null|undefined)[]) {
   const materialized=Object.values(files).flatMap(config=>{
@@ -20,8 +21,11 @@ export function checkpointManagedSecrets(env:Record<string,unknown>,files:Record
 
 export async function prepareHumanCheckpointContext(input:{jobId:string;attemptNo:number;snapshot:unknown;host:RuntimeHost}) {
   const continuationInput=await restoreHumanCheckpoint(input);
+  const native=continuationInput ? await loadHumanSession(input.jobId,input.attemptNo,input.snapshot) : undefined;
   const processBaseline=await readCheckpointProcessBaseline(input.host).catch(()=>undefined);
-  return {continuationInput,processBaseline};
+  return {continuationInput: native?.session ? continuationInput.replace('[Scheduler continuation: structured new session]',
+    '[Scheduler continuation: restricted native conversation; new execution identity]') : continuationInput,
+    processBaseline,nativeSession:native?.session,nativeStatus:native};
 }
 
 export async function persistHumanWaitCheckpoint(jobId:string,human:{eventId:string;payload:HumanPayload},
@@ -29,6 +33,7 @@ export async function persistHumanWaitCheckpoint(jobId:string,human:{eventId:str
     processBaseline?:readonly string[];managedSecrets:readonly(string|null|undefined)[]},
   persist:(jobId:string,event:{v:1;event_id:string;type:"human";payload:HumanPayload})=>Promise<unknown>) {
   await persist(jobId,{v:1,event_id:human.eventId,type:"human",payload:human.payload});
+  await captureHumanSession(jobId,input.attemptId,checkpointManagedSecrets(input.env,input.workspaceFiles,input.managedSecrets));
   await sealHumanCheckpoint({jobId,attemptId:input.attemptId,host:await input.host(),processBaseline:input.processBaseline,
     excludedPaths:Object.keys(input.workspaceFiles),secrets:checkpointManagedSecrets(input.env,input.workspaceFiles,input.managedSecrets)});
 }
@@ -66,6 +71,10 @@ export async function loadHumanCheckpoint(db:typeof sql,jobId:string,attemptNo:n
     const [request] = await db`SELECT * FROM human_requests WHERE id=${binding.request_id} AND job_id=${binding.source_job_id}`;
     if (!request || request.checkpoint_status !== "ready" || !request.process_exited_at || !request.resources_released_at
       || new Date(request.checkpoint_expires_at).getTime() <= Date.now()) throw new Error("HUMAN_CHECKPOINT_NOT_READY");
+    if (request.attempt_id !== binding.source_attempt_id || Number(request.revision) !== Number(binding.request_revision)
+      || request.reply_message_id !== binding.reply_message_id || request.status !== "closed" || request.close_reason !== "failed") {
+      throw new Error("HUMAN_CHECKPOINT_IDENTITY_CHANGED");
+    }
     const parsed = HumanCheckpointManifest.safeParse(request.manifest_json);
     if (!parsed.success) throw new Error("HUMAN_CHECKPOINT_IDENTITY_CHANGED");
     const manifest = parsed.data;
