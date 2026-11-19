@@ -1,6 +1,6 @@
 import type { RuntimeHost } from "@deepsonar/runtime-sandbox";
 import { sql } from "../../db.js";
-import { captureCheckpointFiles, HumanCheckpointManifest, readCheckpointFile } from "./human-checkpoint-files.js";
+import { captureCheckpointFiles, HUMAN_CHECKPOINT_MANIFEST_VERSION, HumanCheckpointManifest, readCheckpointFile, restoreCheckpointFiles } from "./human-checkpoint-files.js";
 import { humanSnapshotDigest } from "./human-continuation-store.js";
 import { projectJobHumanRequestPayload } from "./job-human-request.js";
 import type { HumanPayload } from "@deepsonar/shared-types";
@@ -44,7 +44,7 @@ export async function sealHumanCheckpoint(input:{jobId:string;attemptId:string;h
       captureCheckpointFiles(input.host,String(request.id),input.excludedPaths,input.secrets,input.processBaseline),
       new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(new Error("HUMAN_CHECKPOINT_TIMEOUT")),60_000);}),
     ]);
-    const manifest=HumanCheckpointManifest.parse({v:1,job_id:input.jobId,attempt_id:input.attemptId,
+    const manifest=HumanCheckpointManifest.parse({v:HUMAN_CHECKPOINT_MANIFEST_VERSION,job_id:input.jobId,attempt_id:input.attemptId,
       request_id:String(request.id),snapshot_sha256:humanSnapshotDigest(request.agent_snapshot_json),mode:"structured",files});
     await sql`UPDATE human_requests SET manifest_json=${sql.json(manifest)},
       checkpoint_status=CASE WHEN resources_released_at IS NOT NULL THEN 'ready' ELSE 'preparing' END
@@ -97,10 +97,7 @@ export async function assertHumanContinuationOwner(db:typeof sql,jobId:string,at
 export async function restoreHumanCheckpoint(input:{jobId:string;attemptNo:number;snapshot:unknown;host:RuntimeHost}) {
   const saved=await loadHumanCheckpoint(sql,input.jobId,input.attemptNo,input.snapshot);
   if(!saved) return "";
-  const files=[];
-  for(const file of saved.manifest.files) files.push({file,bytes:await readCheckpointFile(String(saved.request.id),file)});
-  // The successor is a fresh sandbox; no old process can mutate these paths.
-  for(const {file,bytes} of files) await input.host.uploadFile(bytes,`/workspace/${file.path}`);
+  const files=await restoreCheckpointFiles(input.host,String(saved.request.id),saved.manifest.files);
   const knownInputs=await restoreAcknowledgedHumanAttachments(input.jobId,input.host);
   const acknowledgedHistory=saved.message.delivery_status==='acknowledged'
     ? `Previously acknowledged reply history (already processed; do not execute it twice): ${String(saved.message.body)}\n` : '';

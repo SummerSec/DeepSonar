@@ -18,9 +18,9 @@
 
 ## 实施步骤
 
-- [ ] 先提交真实 Linux 捕获权限回归，在 Draft PR 的现有 Actions 中观察缺少 mode 的红测。
-- [ ] 提取复用文件 schema，捕获最小权限，封存 v2，加载时拒绝旧版本。
-- [ ] 实现安全恢复 helper 并接回普通恢复入口，补旧版本/非法 mode、注入文件名、链接与秘密目录拒绝回归。
+- [x] 先提交真实 Linux 捕获权限回归，在 Draft PR 的现有 Actions 中观察缺少 mode 的红测。
+- [x] 提取复用文件 schema，捕获最小权限，封存 v2，加载时拒绝旧版本。
+- [x] 实现安全恢复 helper 并接回普通恢复入口，补旧版本/非法 mode、注入文件名、链接与秘密目录拒绝回归。
 - [ ] 同步权威文档，静态核对、git diff --check，集中推送并转 Ready。
 - [ ] 持续监控最终 SHA 全部适用 CI，失败按日志修复，交付独立 PR，Refs #1074。
 
@@ -35,3 +35,5 @@
 ## 运行记录
 
 规划与契约由本轮 Agent 在用户授权内选择。测试隔离真实文件系统，进程静止使用受控夹具，既有进程与 inotify 测试继续覆盖其独立边界。
+
+红测提交 `03a11f6058170cac8cbf8442d29c3966d4ef4782` 的 Actions [44501221534](https://github.com/SummerSec/DeepSonar/actions/runs/44501221534) 在 gate-db-core 的真实 Linux scanner 回归失败。文件路径、长度与内容摘要匹配，仅缺少期望的 mode，确认是实现缺陷。实现后的最终提交完整 Actions 待验。

@@ -12,7 +12,7 @@
 
 > **#979 运行镜像治理**：DSH 与 Pi OM 在启动前核对镜像内治理代码，旧快照保持不可变；[诊断与恢复](docs/RUNTIME_IMAGE_GOVERNANCE_979.md)区分代码修复、OCI 内容证据与正式发布。
 
-#1074 的[人工断点续做](docs/HUMAN_CONTINUATION.md)以持久请求和累计执行时钟区分等待、封存与执行：人工超时只记 overdue，旧资源经可信回收后关闭 Attempt；晚回复先保存，准入后恢复业务文件并在 structured 新会话继续。终态历史不授权复活，原额度/硬期限/未决效果不豁免，最终 SHA Actions 另验。
+#1074 的[人工断点续做](docs/HUMAN_CONTINUATION.md)以持久请求和累计执行时钟区分等待、封存与执行：人工超时只记 overdue，旧资源经可信回收后关闭 Attempt；晚回复先保存，准入后恢复业务文件并在 structured 新会话继续。终态历史不授权复活，原额度/硬期限/未决效果不豁免。业务文件清单 v2 只恢复所有者读写及原所有者执行能力，权限与安全路径契约见该专题，最终 SHA Actions 另验。
 
 #1094 的[平台 HTTP bootstrap](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#平台-operation-的-http-bootstrap1094)消除 operation allowlist 与 CLI 原生工具的提示歧义；不增加工具代理、控制通道或权限，历史 Job 不自动重跑，模型效果仍未验证。
 

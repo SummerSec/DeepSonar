@@ -55,7 +55,8 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
           reply_instructions: 'Send its non-secret reference.', after_reply: 'Recheck authorization and continue unfinished work.' },
       } });
       const bytes = Buffer.from('unfinished work\n'), restored = new Map<string, Buffer>();
-      const host = { run: async () => ({ exitCode: 0, stdout: JSON.stringify([{path:'src/work.txt',bytes:bytes.length,sha256:checkpointHash(bytes)}]), stderr:'' }),
+      const commands:string[]=[];
+      const host = { run: async (command:string) => {commands.push(command);return { exitCode: 0, stdout: JSON.stringify([{path:'src/work.txt',bytes:bytes.length,sha256:checkpointHash(bytes),mode:0o600}]), stderr:'' };},
         runAsync:async()=>checkpointGuardFixture(),
         readWorkspaceFile: async () => bytes, uploadFile: async (content: Buffer, destination: string) => { restored.set(destination, content); },
         writeHumanInboxFile: async (destination:string,content:Buffer) => {restored.set(destination,content);},
@@ -66,7 +67,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
         method: 'POST', url: `/canvases/${canvasId}/messages`, payload: { message_id: messageId,
           target: { kind: 'request', request_id: requestId, expected_revision: expectedRevision }, body, attachment_version_ids:attachmentVersionIds },
       });
-      return { jobId, canvasId, attemptId, requestId, host, bytes, restored, seal, close, reply };
+      return { jobId, canvasId, attemptId, requestId, host, bytes, restored, seal, close, reply, commands };
     };
     await context.test('late response resumes preserved files with one durable generation and a new owner', async () => {
       const fixture = await setup(); await fixture.seal();
@@ -76,6 +77,8 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.equal(await fixture.close(), true);
       const [sealed] = await sql`SELECT * FROM human_requests WHERE id=${fixture.requestId}`;
       assert.equal(sealed.checkpoint_status, 'ready'); assert.ok(sealed.process_exited_at); assert.ok(sealed.resources_released_at);
+      assert.equal(sealed.manifest_json.v,2);
+      assert.equal(sealed.manifest_json.files[0].mode,0o600);
       assert.equal((await sql`SELECT status FROM job_attempts WHERE id=${fixture.attemptId}`)[0].status, 'interrupted');
       const remaining = await clock.remainingHumanExecutionMs(sql, fixture.jobId);
       assert.ok(remaining! < 3600_000 && remaining! > 3500_000);
@@ -105,6 +108,8 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.match(prompt, /structured new session/); assert.ok(prompt.includes(messageId));
       assert.equal(prompt.includes('Use the original authorized reference.'),false,'planned body is delivered only through inbox');
       assert.deepEqual(fixture.restored.get('/workspace/src/work.txt'), fixture.bytes);
+      assert.ok(fixture.commands.some(command=>command.endsWith(' prepare')), 'normal restore must preflight destination paths');
+      assert.ok(fixture.commands.some(command=>command.endsWith(' finalize')), 'normal restore must verify bytes and apply mode');
       let delivered = 0;
       const grant = await api.mintJobCapabilityToken(fixture.jobId);
       api.registerRuntimeHandler(fixture.jobId, async runtimeContext => runtimeContext.completionPhase === 'prepare' ? {completion_prepared:true} : {}, ['mark_job_done']);
@@ -222,7 +227,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       await core.ingestEvent(fixture.jobId,{v:1,event_id:secondRequest,type:'human',payload:original.payload_json});
       assert.equal((await fixture.reply(randomUUID(),0)).statusCode,409,'the old request cannot release a new wait');
       const progressed=Buffer.from('progress after the first reply\n');
-      const host={...fixture.host,run:async()=>({exitCode:0,stdout:JSON.stringify([{path:'src/work.txt',bytes:progressed.length,sha256:checkpointHash(progressed)}]),stderr:''}),
+      const host={...fixture.host,run:async()=>({exitCode:0,stdout:JSON.stringify([{path:'src/work.txt',bytes:progressed.length,sha256:checkpointHash(progressed),mode:0o600}]),stderr:''}),
         readWorkspaceFile:async()=>progressed} as RuntimeHost;
       await checkpoints.sealHumanCheckpoint({jobId:fixture.jobId,attemptId:String(second.id),host,excludedPaths:[],secrets:[],processBaseline:[]});
       await destroyAndSettleHumanWaitRun(sql,{destroy:async()=>{}},{jobId:fixture.jobId,attemptId:String(second.id),sandboxId});
