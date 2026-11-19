@@ -1,3 +1,4 @@
+import { lockContinuationBudget } from "./domains/job-control/continuation-budget.js";
 import { cleanupDispatcherSandbox } from "./dispatcher-human-wait.js";
 import { humanExecutionStartedAt } from "./domains/job-control/human-continuation-clock.js";
 import { preflightHumanContinuation, assertContinuationExecutionOwner, hasHumanOrRepairBoundary } from "./domains/job-control/human-continuation-dispatch.js";
@@ -819,8 +820,14 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
     // Project settings also linearize before the authoritative Job re-read.
     await tx`SELECT id FROM projects WHERE id = ANY(${selected.map((job) => String(job.project_id))}::uuid[])
       ORDER BY id FOR SHARE`;
+    // Budget roots precede every child Job. SKIP LOCKED retains the claim pump's contention behavior.
+    const budgetRoots = await tx<{ id: string }[]>`SELECT root.id FROM jobs root
+      WHERE root.id IN (SELECT COALESCE(budget_owner_job_id,id) FROM jobs
+        WHERE id=ANY(${selected.map(job => job.id)}::uuid[])) ORDER BY root.id FOR UPDATE SKIP LOCKED`;
     const pending = await tx<PendingCandidate[]>`${projection}
       WHERE j.status = 'pending' AND j.id = ANY(${selected.map((job) => job.id)}::uuid[])
+        AND COALESCE(j.budget_owner_job_id,j.id)=ANY(${budgetRoots.map(row => row.id)}::uuid[])
+        AND COALESCE((SELECT budget_execution_job_id FROM jobs WHERE id=COALESCE(j.budget_owner_job_id,j.id)),j.id)=j.id
         AND (j.canvas_id IS NULL OR j.canvas_id = ANY(${lockedCanvases.map((canvas) => canvas.id)}::text[]))
         AND EXISTS (
           SELECT 1 FROM jsonb_to_recordset(${tx.json(selected.map((job) => ({
@@ -1003,6 +1010,7 @@ async function retryContextWindowExceededJob(
 export async function lockCurrentProvisioningAttempt(
   db: typeof sql, jobId: string, attemptId: string, phase: "preparing" | "provision.effect_pending",
 ): Promise<void> {
+  await lockContinuationBudget(db, jobId);
   const [job] = await db`
     SELECT j.status, (SELECT id FROM job_attempts WHERE job_id = j.id ORDER BY attempt_no DESC LIMIT 1) AS latest_attempt_id
     FROM jobs j WHERE j.id = ${jobId} FOR UPDATE OF j`;
@@ -1310,7 +1318,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     // 立即唤醒 dispatcher，让 pending Job 无需等待轮询或终态事件即可占用槽位。
     kickDispatcher();
     await sql.begin(async (tx) => {
-      await tx`SELECT id FROM jobs WHERE id=${jobId} FOR UPDATE`;
+      await lockContinuationBudget(tx as unknown as typeof sql, jobId);
       await assertContinuationExecutionOwner(tx as unknown as typeof sql, jobId, attemptId!);
       const started = await beginEffect(tx as unknown as typeof sql, attemptId!, {
         effectId: `agent_run:${String(attempt.attempt_no)}`,

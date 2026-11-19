@@ -1,3 +1,4 @@
+import { continuationBudgetScope } from "./continuation-budget.js";
 import { createHash } from "node:crypto";
 import type { sql } from "../../db.js";
 import { remainingHumanExecutionMs } from "./human-continuation-clock.js";
@@ -12,8 +13,9 @@ export async function recordHumanRequest(db: typeof sql, jobId: string, eventId:
     JOIN LATERAL(SELECT id FROM job_attempts WHERE job_id=j.id AND status='active'
       ORDER BY attempt_no DESC LIMIT 1) a ON true WHERE j.id=${jobId}
     ON CONFLICT(id) DO NOTHING`;
+  const { rootId } = await continuationBudgetScope(db, jobId);
   await db`INSERT INTO job_execution_clocks(job_id,budget_ms,active_since,attempt_id)
-    SELECT j.id,j.timeout_sec::bigint*1000,j.started_at,r.attempt_id FROM jobs j
+    SELECT ${rootId}::uuid,j.timeout_sec::bigint*1000,j.started_at,r.attempt_id FROM jobs j
     JOIN human_requests r ON r.job_id=j.id AND r.id=${eventId} WHERE j.id=${jobId}
     ON CONFLICT(job_id) DO NOTHING`;
 }

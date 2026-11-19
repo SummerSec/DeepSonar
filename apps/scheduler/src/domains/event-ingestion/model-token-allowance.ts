@@ -1,3 +1,5 @@
+import { continuationBudgetScope } from "../job-control/continuation-budget.js";
+import { continuationBudgetScope } from "../job-control/continuation-budget.js";
 import { sql } from "../../db.js";
 import type { GatewayWorkload } from "../../gateway-om-budget.js";
 import { observationalMemoryConfig, parseFrozenPiExtensions } from "../../pi-extensions.js";
@@ -12,10 +14,12 @@ export async function readWorkloadTokenAllowance(
   workload: GatewayWorkload,
   budget?: RepairTokenBudget | null,
 ): Promise<number | null> {
+  const { jobIds } = await continuationBudgetScope(db, jobId);
+  const { jobIds } = await continuationBudgetScope(db, jobId);
   const [totalLimit] = await db`
     SELECT MIN(NULLIF(COALESCE(workload_max_tokens, max_tokens), 0)) AS cap
     FROM job_tokens
-    WHERE job_id = ${jobId} AND workload = ${workload}`;
+    WHERE job_id = ANY(${jobIds}::uuid[]) AND workload = ${workload}`;
   const [usage] = await db`
     SELECT COALESCE(SUM(l.total_tokens) FILTER (WHERE l.settlement_status='settled'),0) AS total,
            COUNT(*) FILTER (WHERE e.status='effect_pending' AND l.id IS NULL) AS pending,
@@ -23,7 +27,7 @@ export async function readWorkloadTokenAllowance(
              AND NOT (e.status='effect_pending' AND l.id IS NULL)) AS unresolved
     FROM job_attempt_effects e
     LEFT JOIN job_usage_ledger l ON l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
-    WHERE e.job_id=${jobId} AND e.effect_kind='gateway_model_request'
+    WHERE e.job_id=ANY(${jobIds}::uuid[]) AND e.effect_kind='gateway_model_request'
       AND COALESCE(l.workload, e.intent_json->>'workload', 'main') = ${workload}`;
   const total = Number(usage.total), cap = Number(totalLimit.cap), unresolved = Number(usage.unresolved);
   const pending = Number(usage.pending);
@@ -49,8 +53,10 @@ export async function readMainTokenAllowance(db: typeof sql, jobId: string, snap
   const frozen = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
     ? snapshot as Record<string, unknown> : {};
   const om = observationalMemoryConfig(parseFrozenPiExtensions(frozen.pi_extensions));
+  const { jobIds } = await continuationBudgetScope(db, jobId);
+  const { jobIds } = await continuationBudgetScope(db, jobId);
   const [historicalOm] = om ? [] : await db`SELECT id FROM job_tokens
-    WHERE job_id=${jobId} AND workload='observational_memory' LIMIT 1`;
+    WHERE job_id=ANY(${jobIds}::uuid[]) AND workload='observational_memory' LIMIT 1`;
   return om || historicalOm
     ? readWorkloadTokenAllowance(db, jobId, "main", budget)
     : readJobTokenAllowance(db, jobId, budget ?? undefined);

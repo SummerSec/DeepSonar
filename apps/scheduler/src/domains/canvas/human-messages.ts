@@ -197,8 +197,10 @@ export async function createHumanMessage(input: {
       [targetJob]=await tx`SELECT id,status FROM jobs WHERE id=${locator.job_id} AND canvas_id=${input.canvasId} FOR UPDATE`;
       const attempts=await tx`SELECT id,cancel_requested FROM job_attempts WHERE job_id=${locator.job_id} ORDER BY attempt_no FOR UPDATE`;
       [request]=await tx`SELECT * FROM human_requests WHERE id=${input.target.request_id} FOR UPDATE`;
-      if(!targetJob||targetJob.status!=='waiting_human'||!request||request.status!=='open'
+      const historical = targetJob?.status === 'failed' && request?.status === 'closed' && request.close_reason === 'failed';
+      if(!targetJob||(!historical && targetJob.status!=='waiting_human')||!request||(!historical && request.status!=='open')
         ||Number(request.revision)!==input.target.expected_revision||request.resumed_at
+        ||(historical && request.reply_message_id)
         ||attempts.at(-1)?.id!==request.attempt_id||attempts.at(-1)?.cancel_requested)
         throw new HumanInterventionError(409,"HUMAN_REQUEST_CHANGED","请求已处理或状态已变化，请读取最新请求后再回复。");
       [targetNode]=await tx`SELECT id FROM canvas_nodes WHERE job_id=${locator.job_id} AND node_type='job' ORDER BY created_at DESC LIMIT 1`;
@@ -269,8 +271,8 @@ export async function createHumanMessage(input: {
            ${String(version.content_sha256)}, ${Number(version.bytes)})`;
     }
     if(request) {
-      await tx`UPDATE human_requests SET status='answered',revision=revision+1,reply_message_id=${input.id},answered_at=clock_timestamp()
-        WHERE id=${String(request.id)} AND status='open'`;
+      await tx`UPDATE human_requests SET status=CASE WHEN status='closed' THEN 'closed' ELSE 'answered' END,revision=revision+1,reply_message_id=${input.id},answered_at=clock_timestamp()
+        WHERE id=${String(request.id)} AND status IN ('open','closed')`;
       await tx`UPDATE canvas_nodes SET status='answered',updated_at=now() WHERE job_id=${String(targetJob.id)}
         AND node_type='human' AND body_json->>'message_id' IS NULL AND status='open'`;
     } else if (String(targetJob.status) === "waiting_human") {

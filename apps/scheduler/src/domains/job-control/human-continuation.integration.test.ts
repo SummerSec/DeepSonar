@@ -309,6 +309,8 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
         await sql`UPDATE project_task_queues SET paused=false WHERE project_id=${projectId}`;
       });
     }
+    const { historicalContinuationCases } = await import("./historical-continuation-fixture.js");
+    await historicalContinuationCases(context, sql, app, setup);
   } finally {
     await app.close(); await sql.end({timeout:5});
     await admin.unsafe(`DROP DATABASE "${databaseName}" WITH (FORCE)`); await admin.end();

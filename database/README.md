@@ -1,5 +1,7 @@
 # Database schema
 
+schema76 增加历史 continuation 的可信前驱/预算 owner 关联，累计额度复用原账本。正常管理入口、单 owner、时钟和证据保留见[人工续做](../docs/HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。schema75 FIFO 的最终变更组合后保留。
+
 schema 74 仅新增列表索引 `jobs_project_created_idx (project_id, created_at DESC, id DESC)`（#1136：不带 status 的列表原先顺序扫描 `jobs`）。
 
 schema 73 增加人工请求与有效执行时钟，以及人工消息的请求版本关联。不可变历史事件和快照不改写；新表不从旧 failed Job 猜测断点或授权。数据与文件保留规则见[人工续做](../docs/HUMAN_CONTINUATION.md)。

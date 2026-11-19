@@ -306,3 +306,7 @@ Hub Intent 的 OM 配额冻结遇到已知宿主配置错误时返回 `pi_om_con
 summary分别计登记、已纳入整理、跳过、待采集、active Memory/Skill、draft、completed/blocked work及本项目拥有并消费的usage/feedback；pending排除collected/skipped去重并集。反馈success仅为模型报告；来源登记不等于产物，collected含排队不等于生效。items只含工作状态/安全原因、累计Job/时间、当前Job/Canvas、时间戳、最新提案状态和source_count；来源数按采集审计关联work_ref，显式work在无链接且有originJob时回退1。页面在目录前紧凑展示，详情按需展开、复用原刷新、隔离迟到响应，不新增轮询或人工激活入口。注意力成本见[专题表格](../PROJECT_KNOWLEDGE.md#注意力成本)。
 
 Control的evaluation_plan增加每例显式task_inputs，平台校验引用已在work冻结；assignment.source_mode标识project_collection，工具/网络隔离只可收紧。trial不接收评分rubric；evaluator/reviewer读取精确proposal绑定的evaluation输入。publish_shared_asset返回真实version.id/content_sha256用于Evidence引用，不能以operation ID代替版本。target comparator fail的容许不放宽candidate或安全组的pass门，也不允许unexecuted激活。契约见[共享schema](../../packages/shared-types/src/project-knowledge.ts)与[发布回执](../../apps/scheduler/src/shared-asset-publish-control.ts)。本轮源码与回归已接线，Actions尚未运行，未合并、未部署、未执行真实模型收益验证。
+
+## 历史 failed 新 Job 与预算归属
+
+#1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。

@@ -56,6 +56,7 @@ export type TaskRow = {
   canvas_id: string;
   status: string;
   payload_json: unknown;
+  continuation_source_id?: string | null;
   attempt_id: string | null;
   attempt_status: string | null;
 };
@@ -129,8 +130,10 @@ async function loadTaskRows(
 ): Promise<TaskRow[]> {
   const rows = await tx<TaskRow[]>`
     SELECT j.id,j.project_id,j.canvas_id,j.status,j.payload_json,
+           continuation.source_job_id AS continuation_source_id,
            attempt.id AS attempt_id,attempt.status AS attempt_status
     FROM jobs j
+    LEFT JOIN job_continuations continuation ON continuation.target_job_id=j.id
     LEFT JOIN LATERAL (
       SELECT id,status FROM job_attempts
       WHERE job_id=j.id ORDER BY attempt_no DESC LIMIT 1
@@ -396,7 +399,8 @@ export async function drivePlanExecution(
   }
   // Historical Jobs remain immutable and count against lifetime limits. Their
   // outputs cannot satisfy the newly authorized objective revision.
-  const contexts = allContexts.filter(({ context }) => context.objective_revision === input.objective.revision);
+  const superseded = new Set(allContexts.map(item => item.row.continuation_source_id).filter(Boolean));
+  const contexts = allContexts.filter(({ context }) => context.objective_revision === input.objective.revision).filter(item => !superseded.has(item.row.id));
   if (await unknownEffectForJob(tx, input.planJobId)) {
     const state = currentState(canvas.target_json, input.objective, input.planJobId, input.plan.route_revision, allContexts.length);
     return { createdJobIds: [], state: await stop(tx, input.canvasId, state, "unknown_external_effect", input.objective) };

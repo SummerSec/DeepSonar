@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 74);
+INSERT INTO schema_meta (id, version) VALUES ('global', 76);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -85,6 +85,8 @@ CREATE TABLE jobs (
   project_id uuid NOT NULL REFERENCES projects(id),
   canvas_id text REFERENCES canvases(id),
   parent_job_id uuid REFERENCES jobs(id),
+  budget_owner_job_id uuid REFERENCES jobs(id),
+  budget_execution_job_id uuid,
   finding_id uuid,
   type text NOT NULL,
   status text NOT NULL DEFAULT 'pending',
@@ -123,6 +125,8 @@ CREATE INDEX jobs_pending_idx ON jobs (status, priority DESC, created_at)
   WHERE status = 'pending';
 CREATE INDEX jobs_lease_idx ON jobs (lease_expires_at) WHERE status = 'running';
 CREATE INDEX jobs_canvas_idx ON jobs (canvas_id);
+ALTER TABLE jobs ADD CONSTRAINT jobs_budget_execution_fk FOREIGN KEY (budget_execution_job_id) REFERENCES jobs(id);
+CREATE INDEX jobs_budget_owner_idx ON jobs (budget_owner_job_id);
 -- 同一 Finding 同时最多一个活跃 Verify Job（多轮验证业务轮次与 Job 重试分离）
 CREATE UNIQUE INDEX jobs_one_active_verify_per_finding
   ON jobs (finding_id)
@@ -1279,6 +1283,25 @@ CREATE TABLE human_message_attachments (
   CONSTRAINT human_message_attachments_bytes_check CHECK (bytes >= 0)
 );
 CREATE INDEX human_message_attachments_version_idx ON human_message_attachments (version_id);
+
+-- Trusted cross-Job handoff. No public Job payload can select a budget owner.
+CREATE TABLE job_continuations (
+  target_job_id uuid PRIMARY KEY REFERENCES jobs(id),
+  source_job_id uuid NOT NULL UNIQUE REFERENCES jobs(id),
+  source_attempt_id uuid NOT NULL REFERENCES job_attempts(id),
+  budget_owner_job_id uuid NOT NULL REFERENCES jobs(id),
+  request_id uuid NOT NULL REFERENCES human_requests(id),
+  request_revision integer NOT NULL CHECK (request_revision >= 0),
+  mutation_id uuid NOT NULL UNIQUE,
+  input_sha256 text NOT NULL,
+  checkpoint_sha256 text NOT NULL,
+  reply_message_id uuid NOT NULL REFERENCES human_messages(id),
+  execution_reply_id uuid NOT NULL UNIQUE REFERENCES human_messages(id),
+  hard_deadline_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (target_job_id <> source_job_id AND target_job_id <> budget_owner_job_id)
+);
+CREATE INDEX job_continuations_root_idx ON job_continuations(budget_owner_job_id,created_at);
 
 CREATE TABLE canvas_edges (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

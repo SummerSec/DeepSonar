@@ -287,3 +287,7 @@ OM 客户端请求 UUID 保存在现有 `job_attempt_effects.intent_json.gateway
 ## 项目任务队列基线（#1018）
 
 schema 72 增加 project_task_queues 与 project_task_queue_items，保存项目级暂停、核查时间、单调序号、占位状态和时间戳。Canvas 复合唯一键与队列外键共同约束项目归属，active 部分唯一索引约束单占位。新任务的队列记录与首 pending Job 同事务，重排与结清追加审计。既有 Job/Attempt、效果和报告仍各自权威，冻结历史不改写。基线不匹配继续 fail closed，通过既有备份及列交集重建验证，最终 Actions 待验。
+
+## 历史 failed 新 Job 与预算归属
+
+#1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。

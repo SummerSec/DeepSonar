@@ -143,6 +143,8 @@ async function canvasKnowledgeRetention(tx: any, canvasId: string): Promise<Reco
   const [row] = await tx`
     WITH canvas_jobs AS (SELECT id FROM jobs WHERE canvas_id = ${canvasId})
     SELECT
+      (SELECT count(*)::int FROM job_continuations WHERE source_job_id IN (SELECT id FROM canvas_jobs)
+        OR target_job_id IN (SELECT id FROM canvas_jobs)) AS continuation_budget_chain,
       (SELECT count(*)::int FROM project_knowledge_work w
         WHERE w.canvas_id = ${canvasId}
            OR w.origin_job_id IN (SELECT id FROM canvas_jobs)

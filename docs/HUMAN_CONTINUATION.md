@@ -38,7 +38,7 @@ Dispatcher 在 provision 和 agent_run 前再核对确切 successor 与文件；
 
 有效执行时间由 job_execution_clocks 从首个受理 human 的原运行区间累计；可信回收且在途 Gateway 效果/用量结算后暂停，等待期间仍有未决模型调用则保守继续计时。资源释放后的时钟收敛独立于回复，以持久化的退出、回收与最后 Gateway 结算/用量观察时间的较晚值关闭区间；用户尚未回复、轮询延迟或 Scheduler 停机不会在结清后额外扣时。jobs.started_at 保留本次实际开始时间用于停滞检测，execution_deadline_at 单独保存原剩余有效时间与 repair 硬期限的较早值；Control token、Gateway、完成/Plan 门与 Reaper 共同使用它。排队和纯人工等待不耗有效执行时间，重复清理不重复扣时。请求数、主/repair token、修正次数与 Plan lifetime 沿原账本，unknown 不按零消耗，原 repair deadline 不延长。
 
-封存等待保留当前 FIFO 占位，不占活跃执行槽。暂停/取消/归档和授权撤销仍由既有门控制。普通 failed 历史无合法新断点不自动续做；历史失败关联新 Job、原生 Session 继续和补充回复的专用编辑体验是剩余范围，不冒充本片已交付。
+封存等待保留当前 FIFO 占位，不占活跃执行槽。暂停/取消/归档和授权撤销仍由既有门控制。普通 failed 历史无合法新断点不自动续做；原生 Session 继续和补充回复的专用编辑体验另按对应切片核验，不冒充本片已交付。
 
 ## 注意力成本与验收
 
@@ -49,3 +49,17 @@ Dispatcher 在 provision 和 agent_run 前再核对确切 successor 与文件；
 | 历史终态请求 | 只读问题及历史 | 无恢复按钮 | 不把历史接受当当前权限 |
 
 本片回归接既有 Actions 的 ci:unit:bounded-contexts、ci:unit:web-facts、ci:integration:platform-api 和恢复/生命周期套件；同时核 OpenAPI、schema、文件体量与文档保鲜。仅 Actions 执行测试/build/typecheck；本地只静态核对和 git diff --check。HTTP/PG 与可控 RuntimeHost 支撑工程状态机证据，不证明真实模型理解、原生恢复率、生产效果或 SLA。
+
+## 历史 failed 显式续做与原预算链
+
+管理接口 `POST /jobs/:id/continuations` 要求 jobs:control 和原项目归属，严格接收 mutation_id、request_id、expected_revision 与 reply（message_id、body、attachment_version_ids）。首先按消息 ID 和原请求版本幂等保存回复，再独立事务准入。原终态请求保持 closed，拒绝续做仍保留回复。相同输入重试返回同一新 Job，不能覆盖原回复。
+
+仅 failed 的当前合法检查点、可信退出和资源回收、完整冻结请求策略与全部主/OM 消费账本、原累计时钟允许续做。缺失检查点、账本、时间证据、未知效果、已接受完成、过期和剩余额度耗尽返回稳定 409。原生会话能否接续仍依对应适配器的精确身份门。Verify、Report、verification_followup、goal_review 和知识分配带独立 Job owner，当前返回 CONTINUATION_ASSIGNMENT_OWNER_UNSUPPORTED，不能复制其分配到新身份。历史事件不能拼成检查点。
+
+schema76 的 jobs.budget_owner_job_id 指向第一 Job，第一 Job 的 budget_execution_job_id 指向唯一当前执行者。job_continuations 保存直接前驱、源 Attempt/请求/版本、检查点摘要、原回复、新接收回复及 mutation。原 failed、快照、历史回执和消费记录保持来源身份，新 Token、Effect、Usage、ACK 和完成回执属于新 Job。预算从整条可信链的现有账本累计，不复制余额。单条/批量修正预算读取共用原根，列表仍保持三次批量 SQL。
+
+原 root 行先于执行 Job、Attempt、请求和 Token 加锁，管理与 Canvas 语义操作先取 Canvas，dispatch admission advisory 在管理和领取之前。Gateway 准入/结算、完成门和执行前检查使用同一 root owner。交接和持久恢复审计同事务提交。被替代的执行不能 resume/rerun 或再获得执行权限，迟到结算仍记录原实际身份。硬删除和 wipe retry 保留整条预算证据。
+
+累计有效执行时钟留在原 root，新 Job 使用剩余有效时间。原 rejected-completion 的绝对 deadline 与修正次数/revision 沿链累计，后继交接不能延长。Plan 同 Canvas/objective 的全部已派发 Job 计入 lifetime_tasks_dispatched，新 continuation 另扣一名额。仅可信直接后继覆盖该 task 当前执行投影，原 failed 仍保留计数。停止目标不自动重开。
+
+202 只表示新 Job 已排队，响应含 source_job_id、job_id、budget_owner_job_id、execution_reply_id 与 mutation_id。新增接口减少重新录入回复的负担，同时要求显式选择历史请求和版本。回归通过原 ci:integration:platform-api 调用历史场景，测试/build/typecheck 仅在 Actions，最终组合 SHA 验收单独登记。

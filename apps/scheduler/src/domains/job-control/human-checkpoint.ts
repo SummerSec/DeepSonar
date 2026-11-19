@@ -2,7 +2,7 @@ import type { RuntimeHost } from "@deepsonar/runtime-sandbox";
 import { sql } from "../../db.js";
 import { captureCheckpointFiles, HumanCheckpointManifest, readCheckpointFile } from "./human-checkpoint-files.js";
 import { humanSnapshotDigest } from "./human-continuation-store.js";
-import { projectJobHumanRequestPayload } from "./job-human-request.js";
+import { projectJobHumanRequestPayload, redactJobHumanRequestText } from "./job-human-request.js";
 import type { HumanPayload } from "@deepsonar/shared-types";
 import { readCheckpointProcessBaseline } from "./human-checkpoint-process.js";
 import { collectSecretValues } from "../../credential-secret-projection.js";
@@ -58,6 +58,22 @@ export async function sealHumanCheckpoint(input:{jobId:string;attemptId:string;h
 }
 
 export async function loadHumanCheckpoint(db:typeof sql,jobId:string,attemptNo:number,snapshot:unknown) {
+  const [binding] = await db`SELECT * FROM job_continuations WHERE target_job_id=${jobId}`;
+  const [ownRequest] = await db`SELECT id FROM human_requests WHERE job_id=${jobId} AND resumed_at IS NOT NULL LIMIT 1`;
+  if (binding && !ownRequest) {
+    if (attemptNo !== 1) throw new Error("HUMAN_CONTINUATION_OWNER_CHANGED");
+    const [request] = await db`SELECT * FROM human_requests WHERE id=${binding.request_id} AND job_id=${binding.source_job_id}`;
+    if (!request || request.checkpoint_status !== "ready" || !request.process_exited_at || !request.resources_released_at
+      || new Date(request.checkpoint_expires_at).getTime() <= Date.now()) throw new Error("HUMAN_CHECKPOINT_NOT_READY");
+    const manifest = HumanCheckpointManifest.parse(request.manifest_json);
+    if (humanSnapshotDigest(manifest) !== binding.checkpoint_sha256 || manifest.job_id !== binding.source_job_id
+      || manifest.attempt_id !== binding.source_attempt_id || manifest.request_id !== binding.request_id
+      || manifest.snapshot_sha256 !== humanSnapshotDigest(snapshot)) throw new Error("HUMAN_CHECKPOINT_IDENTITY_CHANGED");
+    const [message] = await db`SELECT id,body,delivery_status FROM human_messages
+      WHERE id=${binding.execution_reply_id} AND target_job_id=${jobId}`;
+    if (!message || !["planned","acknowledged"].includes(message.delivery_status)) throw new Error("HUMAN_CONTINUATION_DELIVERY_UNRESOLVED");
+    return { request, manifest, message, crossJob: true };
+  }
   const [request]=await db`SELECT * FROM human_requests WHERE job_id=${jobId}
     AND resumed_at IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1`;
   if(!request) return null;
@@ -85,6 +101,11 @@ export async function assertHumanContinuationOwner(db:typeof sql,jobId:string,at
   if(!saved) return;
   if(!['claimed','provisioning','running'].includes(owner.status)||owner.attempt_status!=='active'||owner.cancel_requested)
     throw new Error("HUMAN_CONTINUATION_OWNER_CHANGED");
+  if ("crossJob" in saved && saved.crossJob) {
+    for (const file of saved.manifest.files) await readCheckpointFile(String(saved.request.id), file);
+    await readAcknowledgedHumanAttachments(jobId, db);
+    return;
+  }
   const [generation]=await db`SELECT event_id FROM events WHERE job_id=${jobId} AND type='control_receipt'
     AND payload_json->>'authority'='scheduler' AND payload_json->>'subtype'='human_continuation'
     AND payload_json->>'request_id'=${String(saved.request.id)}
@@ -103,6 +124,6 @@ export async function restoreHumanCheckpoint(input:{jobId:string;attemptNo:numbe
   for(const {file,bytes} of files) await input.host.uploadFile(bytes,`/workspace/${file.path}`);
   const knownInputs=await restoreAcknowledgedHumanAttachments(input.jobId,input.host);
   const acknowledgedHistory=saved.message.delivery_status==='acknowledged'
-    ? `Previously acknowledged reply history (already processed; do not execute it twice): ${String(saved.message.body)}\n` : '';
+    ? `Previously acknowledged reply history (already processed; do not execute it twice): ${String(redactJobHumanRequestText(saved.message.body))}\n` : '';
   return `[Scheduler continuation: structured new session]\nContinue the same authorized task from the restored workspace and existing Canvas facts. Do not replay accepted effects. Recheck changing external prerequisites.\nPrevious request: ${JSON.stringify(projectJobHumanRequestPayload(saved.request.payload_json))}\nSaved reply reference: ${String(saved.message.id)}; delivery status: ${String(saved.message.delivery_status)}. Pending reply contents are delivered only through the governed inbox. Never replay unknown delivery.\n${acknowledgedHistory}Previously acknowledged input files (read-only history; not new delivery): ${JSON.stringify(knownInputs)}\nProcess delivered input and ack_human_message before completing; reading a reference alone is not an ACK.\nRestored file count: ${files.length}; sample: ${JSON.stringify(files.slice(0,24).map(entry=>entry.file.path))}\n`;
 }

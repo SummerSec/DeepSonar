@@ -1,14 +1,16 @@
+import { continuationBudgetScope } from "../job-control/continuation-budget.js";
 import { randomUUID } from "node:crypto";
 import { sql } from "../../db.js";
 
 /** Append-only Scheduler handoff. Neither a receipt nor a runtime-supplied grant. */
 export async function readRepairGenerationOwner(db: typeof sql, jobId: string, originalAttemptId: string) {
+  const { jobIds } = await continuationBudgetScope(db, jobId);
   const [row] = await db`SELECT e.event_id,e.payload_json,a.id AS owner FROM events e
-    LEFT JOIN job_attempts a ON a.job_id=e.job_id
+    LEFT JOIN job_attempts a ON a.job_id=COALESCE((e.payload_json->>'target_job_id')::uuid,e.job_id)
       AND a.attempt_no=(e.payload_json->>'target_attempt_no')::int
-    WHERE e.job_id=${jobId} AND e.type='control_receipt'
+    WHERE e.job_id=ANY(${jobIds}::uuid[]) AND e.type='control_receipt'
       AND e.payload_json->>'authority'='scheduler' AND e.payload_json->>'subtype'='repair_generation'
-    ORDER BY e.job_seq DESC LIMIT 1`;
+    ORDER BY e.created_at DESC,e.id DESC LIMIT 1`;
   return row ? { attempt_id: row.owner ? String(row.owner) : null,
     generation_ref: String(row.event_id), deadline: String(row.payload_json.deadline) }
     : { attempt_id: originalAttemptId, generation_ref: null, deadline: null };
