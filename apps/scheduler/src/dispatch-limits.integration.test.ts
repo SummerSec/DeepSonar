@@ -322,6 +322,9 @@ if (!testDatabaseUrl) {
           await sql`DELETE FROM jobs WHERE id = ANY(${[lockedId, unrelatedId]}::uuid[])`;
         }
       }
+      await sql`DELETE FROM jobs WHERE id = ANY(${jobIds}::uuid[])`;
+      const { runDispatchFairnessFixture } = await import("./dispatch-fairness.fixture.js");
+      await runDispatchFairnessFixture(sql, claimPendingJobs, credentialId);
     } finally {
       if (!databaseClosed) {
         await sql`UPDATE global_settings SET rules_json = ${sql.json(originalRules as never)}, updated_at = now() WHERE id = 'global'`;

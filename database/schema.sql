@@ -14,7 +14,7 @@ CREATE TABLE schema_meta (
   applied_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT schema_meta_id_check CHECK (id = 'global')
 );
-INSERT INTO schema_meta (id, version) VALUES ('global', 76);
+INSERT INTO schema_meta (id, version) VALUES ('global', 77);
 
 CREATE TABLE projects (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -22,11 +22,19 @@ CREATE TABLE projects (
   description text NOT NULL DEFAULT '',
   status text NOT NULL DEFAULT 'active',
   config_json jsonb NOT NULL DEFAULT '{}',
+  dispatch_last_served bigint NOT NULL DEFAULT 0 CHECK (dispatch_last_served >= 0),
+  dispatch_scan_priority int,
+  dispatch_scan_created_at timestamptz,
+  dispatch_scan_job_id uuid,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   archived_at timestamptz,
-  CONSTRAINT projects_status_check CHECK (status IN ('active', 'archived'))
+  CONSTRAINT projects_status_check CHECK (status IN ('active', 'archived')),
+  CONSTRAINT projects_dispatch_scan_check CHECK (
+    num_nonnulls(dispatch_scan_priority, dispatch_scan_created_at, dispatch_scan_job_id) IN (0, 3)
+  )
 );
+CREATE INDEX projects_dispatch_fairness_idx ON projects (dispatch_last_served, id) WHERE status = 'active';
 
 CREATE TABLE canvases (
   id text PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -121,6 +129,8 @@ CREATE UNIQUE INDEX jobs_ingress_key_uniq ON jobs (project_id, ingress_key)
 CREATE INDEX jobs_list_idx ON jobs (project_id, status, created_at DESC);
 -- #1136：不带 status 的列表（工作台默认视图）走该索引；带 status 的仍用 jobs_list_idx
 CREATE INDEX jobs_project_created_idx ON jobs (project_id, created_at DESC, id DESC);
+CREATE INDEX jobs_project_pending_fairness_idx ON jobs (project_id, priority DESC, created_at, id)
+  WHERE status = 'pending';
 CREATE INDEX jobs_pending_idx ON jobs (status, priority DESC, created_at)
   WHERE status = 'pending';
 CREATE INDEX jobs_lease_idx ON jobs (lease_expires_at) WHERE status = 'running';
@@ -1475,6 +1485,10 @@ INSERT INTO platform_upgrade_state (id) VALUES ('global');
 
 CREATE TABLE global_settings (
   id text PRIMARY KEY DEFAULT 'global',
+  -- Claim advisory lock serializes service numbering and bounded scan progress.
+  dispatch_service_sequence bigint NOT NULL DEFAULT 0 CHECK (dispatch_service_sequence >= 0),
+  dispatch_scan_served bigint,
+  dispatch_scan_project_id uuid,
   rules_json jsonb NOT NULL DEFAULT '{}',
   updated_at timestamptz NOT NULL DEFAULT now(),
   runtime_registry_channel text NOT NULL DEFAULT 'aliyun-acr',
@@ -1484,6 +1498,9 @@ CREATE TABLE global_settings (
   claims_paused_by text,
   claims_paused_at timestamptz,
   CONSTRAINT global_settings_id_check CHECK (id = 'global'),
+  CONSTRAINT global_settings_dispatch_scan_check CHECK (
+    num_nonnulls(dispatch_scan_served, dispatch_scan_project_id) IN (0, 2)
+  ),
   CONSTRAINT global_settings_runtime_registry_channel_check
     CHECK (runtime_registry_channel IN ('github', 'dockerhub', 'aliyun-acr')),
   CONSTRAINT global_settings_claims_pause_check CHECK (
