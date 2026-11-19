@@ -137,6 +137,8 @@ if (!testDatabaseUrl) {
       const patch = (payload: unknown, finding = findingId, authHeaders = headers) => app.inject({
         method: "PATCH", url: `/findings/${finding}/verify-status`, headers: authHeaders, payload: payload as Record<string, unknown>,
       });
+      assert.equal((await patch(closeBody, findingId, { authorization: "" })).statusCode, 401);
+      assert.equal((await patch(closeBody, findingId, { authorization: "Bearer invalid-token" })).statusCode, 401);
       const stale = await patch({ ...closeBody, expected: { ...expected, subject_revision: "stale@revision" } });
       assert.equal(stale.statusCode, 409, stale.payload);
       assert.equal(stale.json().error_code, "FINDING_VERIFICATION_STALE");

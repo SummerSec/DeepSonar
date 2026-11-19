@@ -38,6 +38,12 @@ test("人工无定论按钮按权限、原因和真实确认发送 CAS，409 刷
   try {
     await render("readonly");
     assert.equal(dom.window.document.querySelector("button"), null, "jobs:control 不授予 findings:write");
+    const authorizedMe = api.authMe;
+    api.authMe = async () => { throw new Error("authentication unavailable"); };
+    await render("auth-failed");
+    assert.equal(dom.window.document.querySelector("button"), null, "认证读取失败不能显示写操作");
+    assert.equal(calls.length, 0);
+    api.authMe = authorizedMe;
     scopes = ["findings:write"];
     hasControl = false;
     await render("detached");
