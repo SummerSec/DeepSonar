@@ -1,5 +1,26 @@
 import test from "node:test";
+import { projectNativeHumanSession, nativeHumanSessionCapability } from "./human-session-import.js";
 import assert from "node:assert/strict";
+
+test("human native import keeps conversation identities but excludes old runtime authority", () => {
+  const id = "75e625d4-ed23-46b3-a4ca-a82bdb1d6022";
+  const source = [
+    {type:"session",version:3,id,cwd:"/workspace",timestamp:"2026-11-19T00:00:00Z"},
+    {type:"message",id:"system",parentId:null,timestamp:"2026-11-19T00:00:00Z",message:{role:"system",content:"old Control identity"}},
+    {type:"custom",id:"extension",parentId:"system",timestamp:"2026-11-19T00:00:00Z",customType:"old.extension",data:{token:"private"}},
+    {type:"message",id:"user",parentId:"extension",timestamp:"2026-11-19T00:00:00Z",message:{role:"user",content:"Keep the unfinished decision"}},
+  ].map(value=>JSON.stringify(value)).join("\n");
+  const result=projectNativeHumanSession("pi","1.5.2",id,source);
+  assert.equal(result.status,"supported");
+  assert.ok(result.content?.includes("unfinished decision"));
+  assert.ok(!result.content?.includes("old Control identity"));
+  assert.ok(!result.content?.includes("private"));
+  const records=result.content!.trim().split("\n").map(line=>JSON.parse(line));
+  assert.equal(records[1].parentId,null);
+  assert.equal(nativeHumanSessionCapability("dsh","0").status,"unsupported");
+  assert.equal(projectNativeHumanSession("pi","0",id,source).status,"unsupported");
+  assert.equal(projectNativeHumanSession("pi","1.5.2",id,source+"\n{bad").status,"rejected");
+});
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";

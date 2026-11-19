@@ -2,7 +2,7 @@
 // Docker network namespace with no external interfaces. Never mount the socket.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { chmod, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rename, rm, writeFile, copyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,7 @@ try {
   execFileSync("pnpm", ["exec", "tsc", "-p", "agent-harness/tsconfig.claude-budget.json", "--noEmit", "false",
     "--declaration", "false", "--sourceMap", "false", "--rootDir", "agent-harness", "--outDir", dir], { cwd: root, stdio: "inherit" });
   await rename(path.join(dir, "claude-request-budget-cli.test.js"), path.join(dir, "claude-request-budget-cli.test.mjs"));
+  await copyFile(path.join(root,"packages/runtime-sandbox/dist/human-session-import.js"),path.join(dir,"human-session-import.mjs"));
   await writeFile(path.join(dir, "runtime-fixture.json"), JSON.stringify({
     policySource: MODEL_REQUEST_POLICY_SOURCE,
     encodedInput: AGENT_CLI_RUNTIME_ADAPTERS["claude-code"].encodeInput("Run the supplied synthetic Bash tool once, then report its result."),

@@ -6,6 +6,16 @@
 
 人工等待超过响应阈值只记 overdue，Job 保持 waiting_human。有权限的用户可在 Job 详情读取完整问题并「回复并继续」。2026-11-11 的两个历史 failed Job 不自动复活，也不据历史回执重放外部效果。此实现不部署现场，不更换用户运行配置。
 
+## 原生会话受限导入（#1074 独立切片）
+
+Scheduler 在旧 Attempt 证据归档后、文件封存前读取该 Attempt 唯一主会话，核对 job、attempt、session、归档 bytes/SHA-256 和冻结快照。仅支持 Pi 1.5.2 的 v3 JSONL 与 Claude 2.1.312 的主会话 JSONL。投影后的内容在原 request 的 checkpoint blob 下保存，精确身份、摘要、能力结果和原因写入原 Attempt 的 state_json.human_session。到期与删除复用原 request 的文件清理。没有新增数据库表或公开 API。
+
+能力矩阵由 runtime-sandbox 的 nativeHumanSessionCapability 拥有。Pi/Claude 为 supported + restricted_conversation，表示可导入符合条件的文字历史。DSH 明确 unsupported + structured，原因是 adapter 没有持久 resume 协议。未核对版本、没有归档、压缩/分支/上下文编辑、OM 记忆状态、格式或摘要不满足条件时记录具体原因并使用 structured。已绑定的导入 blob 缺失、损坏或身份变化则拒绝执行。
+
+导入保留会话和消息 ID，将工具提案/结果转换为历史文字。旧 system 消息、思考签名、扩展状态、私有配置、路径来源和待执行工具调用被排除。受管秘密按原执行的精确值过滤，同时复用人工请求的结构化秘密投影，含旧 Control 路径、身份或秘密标记的文本行排除。新沙箱重新生成当前 Control/Gateway token、系统提示、配置和冻结扩展，仅导入主会话文字。新 Attempt 先持久化导入的 session 身份，再调用现有 adapter.resume；Pi get_state 和后续会话观测必须匹配，所有原预算/准入继续生效。
+
+导入上限 8 MiB、20,000 行。固定 Pi 原生链接入核心 base 镜像 smoke，固定 Claude 原生链接入 Reverse Claude request-budget acceptance，均使用隔离网络与合成 Provider，检查旧 home→归档→过滤→新 home→原生恢复及旧身份不再进入请求。SQL 绑定/跨身份拒绝接入既有 platform-api 集成测试。当前实现等待最终 SHA Actions，生产续跑未执行。
+
 ## 持久记录与封存
 
 schema 73 新增 human_requests 和 job_execution_clocks；human_messages 以 request_id/request_revision 精确关联请求。human 事件、请求、waiting_human 和 preparing 意图在同一原语义事务保存。历史事件仍不可变；Canvas 节点和 UI 不是恢复 authority。

@@ -1762,6 +1762,7 @@ ${graph ? `\n任务画布（YAML）：\n${graph.yaml}` : taskGoal ? `\n任务目
     {
       provider,
       adapter: snapshot.agent_runtime,
+      humanSession: checkpointContext.nativeSession,
       agentRuntimeLaunch: snapshot.agent_runtime_launch,
       runtimeImageKey: snapshot.runtime_image.image_key,
       model: runtimeModel,

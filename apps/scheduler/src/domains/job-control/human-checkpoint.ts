@@ -7,6 +7,7 @@ import type { HumanPayload } from "@deepsonar/shared-types";
 import { readCheckpointProcessBaseline } from "./human-checkpoint-process.js";
 import { collectSecretValues } from "../../credential-secret-projection.js";
 import { readAcknowledgedHumanAttachments, restoreAcknowledgedHumanAttachments } from "./human-continuation-inbox.js";
+import { captureHumanSession, loadHumanSession } from "./human-checkpoint-session.js";
 
 export function checkpointManagedSecrets(env:Record<string,unknown>,files:Record<string,unknown>,direct:readonly(string|null|undefined)[]) {
   const materialized=Object.values(files).flatMap(config=>{
@@ -19,8 +20,11 @@ export function checkpointManagedSecrets(env:Record<string,unknown>,files:Record
 
 export async function prepareHumanCheckpointContext(input:{jobId:string;attemptNo:number;snapshot:unknown;host:RuntimeHost}) {
   const continuationInput=await restoreHumanCheckpoint(input);
+  const native=continuationInput ? await loadHumanSession(input.jobId,input.attemptNo,input.snapshot) : undefined;
   const processBaseline=await readCheckpointProcessBaseline(input.host).catch(()=>undefined);
-  return {continuationInput,processBaseline};
+  return {continuationInput: native?.session ? continuationInput.replace('[Scheduler continuation: structured new session]',
+    '[Scheduler continuation: restricted native conversation; new execution identity]') : continuationInput,
+    processBaseline,nativeSession:native?.session,nativeStatus:native};
 }
 
 export async function persistHumanWaitCheckpoint(jobId:string,human:{eventId:string;payload:HumanPayload},
@@ -28,6 +32,7 @@ export async function persistHumanWaitCheckpoint(jobId:string,human:{eventId:str
     processBaseline?:readonly string[];managedSecrets:readonly(string|null|undefined)[]},
   persist:(jobId:string,event:{v:1;event_id:string;type:"human";payload:HumanPayload})=>Promise<unknown>) {
   await persist(jobId,{v:1,event_id:human.eventId,type:"human",payload:human.payload});
+  await captureHumanSession(jobId,input.attemptId,checkpointManagedSecrets(input.env,input.workspaceFiles,input.managedSecrets));
   await sealHumanCheckpoint({jobId,attemptId:input.attemptId,host:await input.host(),processBaseline:input.processBaseline,
     excludedPaths:Object.keys(input.workspaceFiles),secrets:checkpointManagedSecrets(input.env,input.workspaceFiles,input.managedSecrets)});
 }

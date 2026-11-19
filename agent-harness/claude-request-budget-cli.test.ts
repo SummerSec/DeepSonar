@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, mkdir, readdir } from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
@@ -20,6 +20,62 @@ const keptReminderBeta = "mid-conversation-system-clear-at-2026-08-21";
 // Locked CLI's native total_tokens reminder: 15,000,000 minus the first
 // synthetic response's 100 input + 32 output tokens. This is not Gateway allowance.
 const expectedModelToolText = `${sentinel}\n\n<system-reminder>\n<total_tokens>14999868 tokens left</total_tokens>\n</system-reminder>`;
+
+test("Claude pinned native import retains filtered history in a fresh home", {timeout:120_000},async()=>{
+  const root=await mkdtemp(path.join(tmpdir(),"claude-human-native-"));
+  const modulePath="/acceptance/human-session-import.mjs";
+  const {projectNativeHumanSession}=await import(modulePath);
+  const calls:any[]=[];
+  const server=http.createServer((req,res)=>{void(async()=>{
+    if(req.url?.includes("count_tokens")) {res.writeHead(200,{"content-type":"application/json"}).end('{"input_tokens":10}');return;}
+    assert.equal(req.headers.authorization,"Bearer new-human-fixture-key");
+    const body=JSON.parse((await bytes(req)).toString("utf8"));calls.push(body);
+    res.writeHead(200,{"content-type":"text/event-stream"});
+    const events=[
+      {type:"message_start",message:{id:`human-${calls.length}`,type:"message",role:"assistant",model:body.model,content:[],stop_reason:null,stop_sequence:null,usage:{input_tokens:10,output_tokens:0}}},
+      {type:"content_block_start",index:0,content_block:{type:"text",text:""}},
+      {type:"content_block_delta",index:0,delta:{type:"text_delta",text:"HUMAN_NATIVE_CLAUDE_OK"}},
+      {type:"content_block_stop",index:0},
+      {type:"message_delta",delta:{stop_reason:"end_turn",stop_sequence:null},usage:{output_tokens:10}},
+      {type:"message_stop"},
+    ];
+    for(const event of events)res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    res.end();
+  })().catch(()=>res.writeHead(500).end());});
+  const url=await listen(server);
+  const launch=async(home:string,resume?:string)=>{
+    await mkdir(home,{recursive:true});
+    const args=["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-mode","bypassPermissions","--model","claude-sonnet-4-5",...(resume?["--resume",resume]:[])];
+    const child=spawn("claude",args,{cwd:root,env:{...process.env,HOME:home,CLAUDE_CONFIG_DIR:path.join(home,".claude"),
+      ANTHROPIC_API_KEY:"new-human-fixture-key",ANTHROPIC_BASE_URL:url,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1",DISABLE_TELEMETRY:"1",DISABLE_ERROR_REPORTING:"1",MAX_THINKING_TOKENS:"0"},stdio:["pipe","pipe","pipe"]});
+    let output="",pending="",session="";let failed=false;
+    child.stdout!.on("data",chunk=>{output+=chunk;pending+=chunk;const lines=pending.split("\n");pending=lines.pop()!;
+      for(const line of lines){try{const event=JSON.parse(line);if(event.session_id)session=event.session_id;if(event.type==="result"){failed=event.is_error===true;child.stdin!.end();}}catch{}}
+    });
+    child.stderr!.on("data",chunk=>{output+=chunk;});
+    const timer=setTimeout(()=>child.kill("SIGKILL"),50_000);
+    const done=new Promise<number|null>((resolve,reject)=>{child.once("error",reject);child.once("close",resolve);});
+    child.stdin!.write(JSON.stringify({type:"user",message:{role:"user",content:resume?"Continue with the new human decision":"Remember ORIGINAL_CLAUDE_DECISION.\nAuthorization: Bearer old-control-identity"}})+"\n");
+    try {assert.equal(await done,0,output.slice(-1000));assert.equal(failed,false);return session;}finally{clearTimeout(timer);}
+  };
+  try {
+    const home=path.join(root,"old-home"),sessionId=await launch(home);
+    const projects=path.join(home,".claude/projects");
+    const directories=await readdir(projects);
+    const archives=await Promise.all(directories.map(async directory=>{
+      try{return await readFile(path.join(projects,directory,`${sessionId}.jsonl`),"utf8");}catch{return null;}
+    }));
+    const original=archives.find(Boolean);assert.ok(original);
+    const result=projectNativeHumanSession("claude-code","2.1.312",sessionId,original);
+    assert.equal(result.status,"supported");assert.doesNotMatch(result.content,/old-control-identity/);
+    const newHome=path.join(root,"new-home"),projectName=root.replace(/[^a-zA-Z0-9]/gu,"-");
+    const destination=path.join(newHome,".claude/projects",projectName);await mkdir(destination,{recursive:true});
+    await writeFile(path.join(destination,`${sessionId}.jsonl`),result.content);
+    assert.equal(await launch(newHome,sessionId),sessionId);
+    assert.match(JSON.stringify(calls.at(-1).messages),/ORIGINAL_CLAUDE_DECISION/);
+    assert.doesNotMatch(JSON.stringify(calls.at(-1)),/old-control-identity/);
+  }finally{await close(server);await rm(root,{recursive:true,force:true});}
+});
 async function listen(server: http.Server) {
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
