@@ -73,13 +73,14 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       const {JobEvidenceWriter}=await import('../../evidence.js');
       const {captureHumanSession,loadHumanSession}=await import('./human-checkpoint-session.js');
       const sessionId=randomUUID();
-      await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(jsonb_set(agent_snapshot_json,'{agent_cli}','"pi"'),
-        '{agent_runtime}',${sql.json({adapter_version:'1.5.2'})}) WHERE id=${fixture.jobId}`;
+      const [job]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
+      assert.equal(job.agent_snapshot_json.agent_cli,'claude-code');
+      assert.equal(job.agent_snapshot_json.agent_runtime.adapter_version,'2.1.312');
       await sql`UPDATE job_attempts SET session_id=${sessionId} WHERE id=${fixture.attemptId}`;
-      const writer=new JobEvidenceWriter(fixture.jobId,'pi',fixture.attemptId);
-      writer.setSession({cli:'pi',sessionId,artifacts:[{name:`${sessionId}.jsonl`,sourcePath:'/unused',kind:'main',content:[
-        {type:'session',version:3,id:sessionId,cwd:'/workspace',timestamp:new Date().toISOString()},
-        {type:'message',id:'entry',parentId:null,timestamp:new Date().toISOString(),message:{role:'user',content:'Safe decision\nAuthorization: Bearer old-checkpoint-control'}},
+      const writer=new JobEvidenceWriter(fixture.jobId,'claude-code',fixture.attemptId);
+      writer.setSession({cli:'claude-code',sessionId,artifacts:[{name:`${sessionId}.jsonl`,sourcePath:'/unused',kind:'main',content:[
+        {type:'user',uuid:'entry',parentUuid:null,sessionId,cwd:'/workspace',version:'2.1.312',
+          timestamp:new Date().toISOString(),message:{role:'user',content:'Safe decision\nAuthorization: Bearer old-checkpoint-control'}},
       ].map(value=>JSON.stringify(value)).join('\n')}]});
       await writer.finalize();
       await captureHumanSession(fixture.jobId,fixture.attemptId,['old-checkpoint-control']);
@@ -88,13 +89,8 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.equal(captured.binding.request_id,fixture.requestId);
       await fixture.seal();await fixture.close();await fixture.reply();
       await pumpHumanContinuations(1,fixture.requestId);
-      const [blocked]=await sql`SELECT resumed_at,resume_error_code FROM human_requests WHERE id=${fixture.requestId}`;
-      assert.equal(blocked.resumed_at,null);assert.equal(blocked.resume_error_code,'SNAPSHOT_STALE');
-      // This fixture pins a synthetic native snapshot. Admission separately
-      // rejects drift from the configured role, so establish the exact load
-      // boundary without asking admission to accept that deliberate drift.
-      await sql`UPDATE human_requests SET resumed_at=now(),target_attempt_no=2 WHERE id=${fixture.requestId}`;
-      const [job]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
+      const [resumed]=await sql`SELECT resumed_at,resume_error_code,target_attempt_no FROM human_requests WHERE id=${fixture.requestId}`;
+      assert.ok(resumed.resumed_at);assert.equal(resumed.resume_error_code,null);assert.equal(resumed.target_attempt_no,2);
       const loaded=await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json);
       assert.equal(loaded.status,'supported');assert.ok(loaded.session);
       assert.doesNotMatch(loaded.session.content,/old-checkpoint-control/);
