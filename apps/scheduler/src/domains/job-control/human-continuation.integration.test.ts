@@ -375,7 +375,6 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
     for (const ending of ['cancel','archive','expired'] as const) {
       await context.test(`yielded membership closes through normal ${ending} entry and cannot strand new work`, async () => {
         const fixture=await setup();await fixture.seal();await fixture.close();
-        const queue=await import('../project-task/task-queue-store.js');
         await sql`UPDATE project_task_queues SET paused=false,pause_reason=NULL WHERE project_id=${projectId}`;
         const [item]=await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
           VALUES(${projectId},${fixture.canvasId},'active') RETURNING id::text`;
@@ -404,7 +403,9 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
           const reply=await fixture.reply();assert.equal(reply.statusCode,202,reply.body);
           await pumpHumanContinuations(1,fixture.requestId);
           const resume=await app.inject({method:'POST',url:`/tasks/${fixture.canvasId}/resume-session`});
-          assert.equal(resume.statusCode,409,resume.body);assert.equal(resume.json().error_code,'HUMAN_CHECKPOINT_EXPIRED');
+          assert.equal(resume.statusCode,409,resume.body);assert.equal(resume.json().error_code,'HUMAN_REPLY_REQUIRED');
+          assert.equal((await sql`SELECT resume_error_code FROM human_requests WHERE id=${fixture.requestId}`)[0].resume_error_code,'HUMAN_CHECKPOINT_EXPIRED');
+          assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,'waiting_human');
           assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`)[0].state,'failed');
         } else {
           if (ending==='archive') {
