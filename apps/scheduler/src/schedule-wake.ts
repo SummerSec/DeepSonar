@@ -14,8 +14,10 @@ import { readNextKnowledgeWake } from "./knowledge-wake.js";
 const MAX_TIMER_MS = 2_147_483_647;
 /** Fire slightly after the wall time so claim sees start_at <= now(). */
 const WAKE_SLACK_MS = 25;
+const CLAIM_CONTENTION_RETRY_MS = 250;
 
 let timer: ReturnType<typeof setTimeout> | null = null;
+let claimContentionTimer: ReturnType<typeof setTimeout> | null = null;
 let armedUntilMs: number | null = null;
 let refreshInFlight: Promise<void> | null = null;
 let refreshRequestsDueKick = false;
@@ -30,10 +32,24 @@ export function bindScheduleWake(kickDispatcher: () => void): void {
 export function unbindScheduleWake(): void {
   kick = null;
   clearArmedTimer();
+  if (claimContentionTimer) clearTimeout(claimContentionTimer);
+  claimContentionTimer = null;
 }
 
 function fireKick(): void {
   kick?.();
+}
+
+/** SKIP LOCKED consumes a wake without guaranteeing another NOTIFY on unlock.
+ * Retry only an observed incomplete claim scan, coalescing into one timer.
+ * Keep it separate from future task/knowledge deadlines, which DB refresh owns. */
+export function noteClaimContentionWake(): void {
+  if (!kick || claimContentionTimer) return;
+  claimContentionTimer = setTimeout(() => {
+    claimContentionTimer = null;
+    fireKick();
+  }, CLAIM_CONTENTION_RETRY_MS);
+  claimContentionTimer.unref?.();
 }
 
 export function noteScheduleWakeAt(at: Date | number | string | null | undefined): void {
