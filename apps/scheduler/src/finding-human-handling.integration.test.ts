@@ -202,6 +202,7 @@ if (!testDatabaseUrl) {
       assert.equal((await sql`SELECT status FROM canvas_nodes WHERE id=${unrelatedHumanId}`)[0].status, "open");
       const { canvasFindingsConverged } = await import("./verify.js");
       assert.equal((await canvasFindingsConverged(sql, canvasId)).ok, true);
+      await sql`UPDATE jobs SET status='pending' WHERE id=${hubJobId}`;
 
       const confirmedFindingId = randomUUID();
       await sql`
@@ -260,6 +261,22 @@ if (!testDatabaseUrl) {
       assert.equal(scopeFinding.verify_status, "verifying");
       assert.equal(scopeHub.status, "waiting_human");
       assert.equal((await patch({ ...closeBody, mutation_id: randomUUID() }, otherFindingId)).statusCode, 403);
+
+      // 没有关联画布的历史记录仍可读，人工结束则必须有有效画布。
+      const detachedJobId = randomUUID();
+      const detachedFindingId = randomUUID();
+      await sql`INSERT INTO jobs(id,project_id,type,status) VALUES (${detachedJobId},${projectId},'audit','succeeded')`;
+      await sql`INSERT INTO findings(id,project_id,job_id,fingerprint,title,severity,verify_status)
+        VALUES (${detachedFindingId},${projectId},${detachedJobId},${detachedFindingId},'无画布历史 Finding','medium','needs_human')`;
+      const detachedDetail = await app.inject({ method: "GET", url: `/findings/${detachedFindingId}`, headers });
+      assert.equal(detachedDetail.statusCode, 200, detachedDetail.payload);
+      assert.deepEqual(detachedDetail.json().verification_control, {
+        verify_status: "needs_human", subject_revision: null, latest_round_id: null,
+      });
+      const detachedClose = await patch({ ...closeBody, mutation_id: randomUUID(),
+        expected: detachedDetail.json().verification_control }, detachedFindingId);
+      assert.equal(detachedClose.statusCode, 409, detachedClose.payload);
+      assert.equal(detachedClose.json().error_code, "FINDING_CANVAS_INVALID");
     } finally {
       if (stopListening) await stopListening().catch(() => undefined);
       if (closeApp) await closeApp().catch(() => undefined);

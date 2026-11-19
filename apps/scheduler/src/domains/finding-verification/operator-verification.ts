@@ -26,7 +26,9 @@ export async function readFindingVerificationSnapshot(id: string) {
     const [origin] = await tx`
       SELECT j.canvas_id FROM findings f JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
       WHERE f.id = ${id}`;
-    if (!origin || !origin.canvas_id || !(await lockCanvasForConvergence(tx, String(origin.canvas_id)))) return null;
+    if (!origin) return null;
+    const canvasId = origin.canvas_id ? String(origin.canvas_id) : null;
+    if (canvasId && !(await lockCanvasForConvergence(tx, canvasId))) return null;
     const [finding] = await tx`
       SELECT f.*, p.name AS project_name, j.canvas_id, j.type AS source_job_type,
         j.status AS source_job_status, c.title AS canvas_title,
@@ -34,8 +36,8 @@ export async function readFindingVerificationSnapshot(id: string) {
           AND waiting_job.status = 'waiting_human' AND waiting_job.type = 'hub_reason') AS has_waiting_human
       FROM findings f JOIN projects p ON p.id = f.project_id
       JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
-      JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
-      WHERE f.id = ${id} AND j.canvas_id = ${String(origin.canvas_id)} FOR UPDATE OF f`;
+      LEFT JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
+      WHERE f.id = ${id} AND j.canvas_id IS NOT DISTINCT FROM ${canvasId}::text FOR UPDATE OF f`;
     if (!finding) return null;
     return { finding, control: await readVerificationControl(tx, finding) };
   });
@@ -57,7 +59,9 @@ export async function closeFindingInconclusive(req: FastifyRequest, id: string, 
     if (!canvasId || !(await lockCanvasForConvergence(tx, canvasId))) {
       return conflict("FINDING_CANVAS_INVALID", "Finding 缺少有效画布");
     }
-    const [finding] = await tx`SELECT * FROM findings WHERE id = ${id} FOR UPDATE`;
+    const [finding] = await tx`
+      SELECT f.* FROM findings f JOIN jobs j ON j.id = f.job_id AND j.project_id = f.project_id
+      WHERE f.id = ${id} AND j.canvas_id = ${canvasId} FOR UPDATE OF f`;
     if (!finding) return { status: 404, body: { error_code: "FINDING_NOT_FOUND", error: "Finding 不存在" } };
     const actor = { type: req.actor?.type ?? "anonymous", id: req.actor?.id ?? req.actor?.name ?? "anonymous" };
     const reason = String(redactJobHumanRequestText(input.reason));
