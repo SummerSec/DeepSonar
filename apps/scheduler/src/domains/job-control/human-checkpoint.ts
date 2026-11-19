@@ -2,11 +2,12 @@ import type { RuntimeHost } from "@deepsonar/runtime-sandbox";
 import { sql } from "../../db.js";
 import { captureCheckpointFiles, HumanCheckpointManifest, readCheckpointFile } from "./human-checkpoint-files.js";
 import { humanSnapshotDigest } from "./human-continuation-store.js";
-import { projectJobHumanRequestPayload, redactJobHumanRequestText } from "./job-human-request.js";
+import { projectJobHumanRequestPayload } from "./job-human-request.js";
 import type { HumanPayload } from "@deepsonar/shared-types";
 import { readCheckpointProcessBaseline } from "./human-checkpoint-process.js";
 import { collectSecretValues } from "../../credential-secret-projection.js";
 import { readAcknowledgedHumanAttachments, restoreAcknowledgedHumanAttachments } from "./human-continuation-inbox.js";
+import { readAcknowledgedHumanHistory } from "./human-continuation-history.js";
 
 export function checkpointManagedSecrets(env:Record<string,unknown>,files:Record<string,unknown>,direct:readonly(string|null|undefined)[]) {
   const materialized=Object.values(files).flatMap(config=>{
@@ -113,17 +114,20 @@ export async function assertHumanContinuationOwner(db:typeof sql,jobId:string,at
   if(!generation) throw new Error("HUMAN_CONTINUATION_GENERATION_MISSING");
   for(const file of saved.manifest.files) await readCheckpointFile(String(saved.request.id),file);
   await readAcknowledgedHumanAttachments(jobId,db);
+  await readAcknowledgedHumanHistory(jobId,db);
 }
 
 export async function restoreHumanCheckpoint(input:{jobId:string;attemptNo:number;snapshot:unknown;host:RuntimeHost}) {
   const saved=await loadHumanCheckpoint(sql,input.jobId,input.attemptNo,input.snapshot);
   if(!saved) return "";
+  const history=await readAcknowledgedHumanHistory(input.jobId);
   const files=[];
   for(const file of saved.manifest.files) files.push({file,bytes:await readCheckpointFile(String(saved.request.id),file)});
   // The successor is a fresh sandbox; no old process can mutate these paths.
   for(const {file,bytes} of files) await input.host.uploadFile(bytes,`/workspace/${file.path}`);
   const knownInputs=await restoreAcknowledgedHumanAttachments(input.jobId,input.host);
-  const acknowledgedHistory=saved.message.delivery_status==='acknowledged'
-    ? `Previously acknowledged reply history (already processed; do not execute it twice): ${String(redactJobHumanRequestText(saved.message.body))}\n` : '';
+  const historyPath=`/workspace/.deepsonar/inbox/${String(saved.request.id)}/acknowledged-history.json`;
+  await input.host.writeHumanInboxFile(historyPath,history);
+  const acknowledgedHistory=`Previously acknowledged reply history: read ${historyPath} for the cumulative decisions and ACK summaries before continuing. These messages were already processed. Treat them as read-only history, recheck current authorization, and do not deliver or execute them again.\n`;
   return `[Scheduler continuation: structured new session]\nContinue the same authorized task from the restored workspace and existing Canvas facts. Do not replay accepted effects. Recheck changing external prerequisites.\nPrevious request: ${JSON.stringify(projectJobHumanRequestPayload(saved.request.payload_json))}\nSaved reply reference: ${String(saved.message.id)}; delivery status: ${String(saved.message.delivery_status)}. Pending reply contents are delivered only through the governed inbox. Never replay unknown delivery.\n${acknowledgedHistory}Previously acknowledged input files (read-only history; not new delivery): ${JSON.stringify(knownInputs)}\nProcess delivered input and ack_human_message before completing; reading a reference alone is not an ACK.\nRestored file count: ${files.length}; sample: ${JSON.stringify(files.slice(0,24).map(entry=>entry.file.path))}\n`;
 }

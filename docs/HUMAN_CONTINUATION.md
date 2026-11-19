@@ -1,7 +1,7 @@
 # 人工等待的断点与续做（#1074）
 
 > 状态：as-built 代码契约；最终提交的 GitHub Actions 验收另验
-> 同步日期：2026-11-12
+> 同步日期：2026-11-19
 > 需求：FR-JOB-008、FR-CTRL-006；决策：[ADR 0022](architecture/adr/0022-human-continuation.md)
 
 人工等待超过响应阈值只记 overdue，Job 保持 waiting_human。有权限的用户可在 Job 详情读取完整问题并「回复并继续」。2026-11-11 的两个历史 failed Job 不自动复活，也不据历史回执重放外部效果。此实现不部署现场，不更换用户运行配置。
@@ -34,6 +34,8 @@ Dispatcher 在 provision 和 agent_run 前再核对确切 successor 与文件；
 
 启动提示只携带待处理回复的引用与状态，正文只经 inbox 投递，unknown 投递不从启动提示旁路再发。已 ACK 的历史可作为只读上下文供显式后继恢复使用，不再次投递。同 Job 累计已 ACK 的不可变附件单独校验并恢复到各消息原 inbox 路径，启动索引列出这些历史输入；上限 256 个、单文件 8 MiB、总计 64 MiB，超限明确阻断，不静默丢弃较早轮次输入。待处理回复附件仍只随原投递入口提供。完成门要求当前回复已 ACK，否则返回可修正反馈；已知失败后的单 Job resume 重核原断点并追加下一 owner，不被首次 target_attempt_no 永久锁定。更换配置和任务批量恢复不能绕过断点身份门。
 
+多轮等待同时恢复本 Job 累计已 ACK 的文字回复、请求引用和 ACK 摘要，按消息保存顺序写入当前请求 inbox 下只读的 `acknowledged-history.json`，启动提示提供读取路径。该历史最多 256 条、序列化后最多 1 MiB，准入扫描与执行前重核均检查上限，超过时返回 `HUMAN_CHECKPOINT_HISTORY_LIMIT` 并保留已保存的新回复。历史不包含尚未 ACK 或投递未知的消息，不产生新的投递或 ACK，不替代当前授权核验。正文从持久消息账本恢复，避免仅恢复较早轮次附件却遗漏文字决定。
+
 ## 预算与边界
 
 有效执行时间由 job_execution_clocks 从首个受理 human 的原运行区间累计；可信回收且在途 Gateway 效果/用量结算后暂停，等待期间仍有未决模型调用则保守继续计时。资源释放后的时钟收敛独立于回复，以持久化的退出、回收与最后 Gateway 结算/用量观察时间的较晚值关闭区间；用户尚未回复、轮询延迟或 Scheduler 停机不会在结清后额外扣时。jobs.started_at 保留本次实际开始时间用于停滞检测，execution_deadline_at 单独保存原剩余有效时间与 repair 硬期限的较早值；Control token、Gateway、完成/Plan 门与 Reaper 共同使用它。排队和纯人工等待不耗有效执行时间，重复清理不重复扣时。请求数、主/repair token、修正次数与 Plan lifetime 沿原账本，unknown 不按零消耗，原 repair deadline 不延长。
@@ -63,3 +65,35 @@ schema76 的 jobs.budget_owner_job_id 指向第一 Job，第一 Job 的 budget_e
 累计有效执行时钟留在原 root，新 Job 使用剩余有效时间。原 rejected-completion 的绝对 deadline 与修正次数/revision 沿链累计，后继交接不能延长。Plan 同 Canvas/objective 的全部已派发 Job 计入 lifetime_tasks_dispatched，新 continuation 另扣一名额。仅可信直接后继覆盖该 task 当前执行投影，原 failed 仍保留计数。停止目标不自动重开。
 
 202 只表示新 Job 已排队，响应含 source_job_id、job_id、budget_owner_job_id、execution_reply_id 与 mutation_id。新增接口减少重新录入回复的负担，同时要求显式选择历史请求和版本。回归通过原 ci:integration:platform-api 调用历史场景，测试/build/typecheck 仅在 Actions，最终组合 SHA 验收单独登记。
+
+## 完整验收对照（2026-11-19）
+
+本次静态核对以 main `2664b134`、已合并 PR #1075 和本次文字历史修复为依据。#1075 的最终候选 Actions 记录在其 PR 中，本次最终 SHA 仍须独立验收。以下“已实现”表示找到正常调用路径和代码，只有实际 Actions 结果才能证明相应工程回归通过。#1074 保持开放。
+
+1. **超过响应期限后晚回复**。已实现 overdue、持久请求、有限封存、可信销毁后 interrupted、Job 保持 waiting_human 和唯一后继 Attempt。依据 `dispatcher-human-wait.ts`、`human-checkpoint.ts` 和 `human-continuation.integration.test.ts`。停止失败与未决效果继续阻断，响应阈值 0 关闭 overdue 而不关闭资源回收。已有隔离 SQL/HTTP/可控宿主回归，真实生产等待未执行。
+
+2. **多轮请求、重复回复和并发竞争**。已实现 request/revision、同 UUID 同内容幂等、不同内容拒绝、旧请求不能解除新等待、原 token 撤销和新 owner 检查。依据 `domains/canvas/human-messages.ts`、`rerun.ts`、`human-continuation-admission.ts`。两轮等待与双击有回归，任意崩溃点和每种取消/封存交错尚无穷尽证据。本 PR 补累计已 ACK 文字与原问题恢复，待最终 Actions。
+
+3. **主额度与计时**。已实现本 Job 跨 Attempt 的主/repair token、请求数、修正代际与有效执行时钟累计，未知 usage 不按零，原 repair deadline 保持。依据 `human-continuation-clock.ts`、`repair-admission.ts` 和 `gateway-request-budget.ts`。现有回归覆盖迟到结算、两轮等待和已知失败后第 3 次执行。独立绝对业务硬期限及单独追加预算的管理操作没有作为完整新契约交付，不能用普通回复扩额。
+
+4. **Pi 原生会话**。底层 adapter 已有 `persistentSessionResume=true`、精确 `sessionFile` 检查及 `--session`，运行器也有同沙箱错误后的受治理 resume。依据 `packages/runtime-sandbox/src/runtime-adapters.ts`、`runtime-agent.ts` 及其测试。人工等待路径只恢复 structured 文件和上下文，没有把 Session 归档导入新沙箱并绑定新身份后调用原生恢复。可独立补齐受限导入、格式/版本/身份校验及固定版本原生 Actions 链，无需生产权限。现有源码不证明人工等待后的原生恢复已通过。
+
+5. **Claude 原生会话与 DSH**。Claude adapter 已有 `--resume`，归档器能发现主/子会话，但人工后继没有跨沙箱导入接线。Pi/Claude 的 supported、unsupported、missing_archive 人工续做结果矩阵尚未交付。DSH adapter 明确 `persistentSessionResume=false`，不能把其 JSONL 导出视作可恢复状态。可独立补 capability/阻断投影与 Claude 导入验证，真实供应商认证或计费模型试验另需对应外部输入/授权。
+
+6. **历史 failed 显式关联 continuation Job**。未实现 issue 第 10 节要求的新关联 Job、source_job/source_attempt/request/checkpoint 与跨 Job 原预算根。当前 `rerun.ts` 支持的是已经有合法断点且后继已知失败时，同 Job 再建 Attempt，不能替代历史失败新 Job。需要独立 schema/API/预算归属切片，当前不存在可安全复用的完整跨 Job 预算根。实现与隔离夹具在本任务授权内，生产历史导入、追加预算和现场续跑需各自明确授权。缺失断点不得合成。
+
+7. **项目 FIFO**。默认等待保留队首、后继不能抢占已经实现。依据 `domains/project-task/task-queue-model.ts`、`task-queue-store.ts` 和 `human-continuation-admission.ts`。尚无“暂存并让下一项先做”的专用管理入口、让位审计与回复后排队尾闭环。现有 enqueue 对 active 条目直接返回，不构成让位。可独立实现显式让位与队尾恢复，须同时修正目前仅允许 active membership 续做的准入，补 A 等待→B 执行→A 回队尾的 SQL/HTTP 竞争回归。开发已授权，实际改变生产队列另行授权。
+
+8. **维护预检**。已实现两层判断。`domains/platform-claims/model.ts` 的排空不因 waiting_human 标签单独阻塞，pending/unknown 效果仍阻塞。`schema-rebuild.ts` 的 `readActiveJobs` 仅对 ready、可信退出/回收、最新 interrupted owner、无效果/旧 grants/worker 与设备 lease 的等待豁免，`platform-upgrade-schema-plan.ts` 复用它。封存 blocked 或缺证据的等待仍阻塞。该豁免有代码，未找到覆盖人工断点完整组合的专项重建回归，可独立补 fixture。文件/blob 在目标副本可读与 hash 正确不由数据库预检证明，实际维护执行不在本次授权内。
+
+9. **工作文件完整恢复**。已实现有界普通文件的路径/大小/hash manifest、受管秘密阻断、危险链接/特殊文件拒绝、进程停驻和内核目录变更监视，恢复重新校验 blob 并写入原相对路径。已 ACK 附件单独累积。依据 `human-checkpoint-files.ts`、`human-checkpoint-process.ts`、`human-checkpoint-mutation.ts`。尚未保存执行权限、空目录等文件系统属性，也没有任务级“必需文件清单”证明被排除的文件对续做不必要。当前不能宣称完整文件系统原样恢复。普通文件权限保全及真实宿主多文件往返可独立补，放开私有控制目录或秘密保存需要新边界设计。
+
+10. **断点过期、损坏与跨副本**。已实现 30 天先标 blocked 再删、文件缺失/hash 错误拒绝，泵循环保留明确 blocker，旧回复已保存。未提供跨副本 blob 复制或任意保留期后恢复保证，现有本地 BLOB_DIR 读取失败会阻断。可独立补多副本不可见与删除/读取竞争夹具，存储部署调整和真实删除另行授权。
+
+11. **设备与资源**。正常 Dispatcher finally 释放设备租约，恢复准入拒绝残留 pending/active device lease，后继仍走原 provision/设备准入。依据 `dispatcher.ts`、`human-continuation-admission.ts`。暂无人工等待→设备释放→版本变化→重新准入的专用全链证据，可独立补可控执行端夹具。真实设备接管或实际外部操作另需授权。
+
+12. **可读请求、API 和界面**。已实现独立于首批事件分页读取最新完整人工事件，终态历史不提示继续等待，回复先保存与后续阻塞区分，原请求 guidance 直读。依据 `job-human-request.ts`、`domains/platform-api/completion-state.ts`、`apps/web/src/JobHumanRequestPanel.tsx`。补充回复的专用编辑/有序恢复体验仍未交付。完整请求历史按 request_id 列表/直读契约与全部 blocker 的用户可读说明仍需逐项补齐，不能由最新请求详情推定已经完成。
+
+13. **完整工程验收**。已接正常请求→封存→销毁→晚回复→文件恢复→inbox→ACK→合法完成的 SQL/HTTP/可控 RuntimeHost 链，以及既有文件/进程回归。尚缺 issue 要求的固定原生 CLI 跨沙箱人工续做、历史新 Job 预算根、FIFO 让位、完整文件属性与维护人工等待专项链。全部在 GitHub Actions 执行。真实模型理解/恢复率、生产重跑、部署与历史失败任务操作均未验证。
+
+后续可独立切片依次为原生恢复能力/导入验证、历史新 Job 预算根、FIFO 显式让位、文件属性与维护/设备恢复夹具。当前 PR 仅交付累计文字历史保全，不能据其 CI 全绿关闭完整 issue。涉及新增安全边界或预算授权的未决设计先给可审查方案，现有权限内的实现与隔离验证继续由 Agent 负责。
