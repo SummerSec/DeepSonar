@@ -20,6 +20,7 @@ export interface RepairUnknownEffect {
 }
 
 export interface RepairFeedback {
+  summary: string;
   category: RepairCategory;
   stage: string | null;
   field_path: string | null;
@@ -44,7 +45,7 @@ export const REPAIR_CATEGORY_META: Record<
     allowUnconditionalRetry: false,
   },
   transient_retryable: {
-    label: "需检查恢复条件",
+    label: "可申请重新执行",
     tone: "#e8bd70",
     confirmRequired: false,
     allowUnconditionalRetry: false,
@@ -56,15 +57,13 @@ export const REPAIR_CATEGORY_META: Record<
     allowUnconditionalRetry: false,
   },
   permanent_failure: {
-    label: "需人工处理",
+    label: "运行已结束或无法继续",
     tone: "#ed6a7f",
     confirmRequired: true,
     allowUnconditionalRetry: false,
   },
 };
 
-const MODEL_CORRECTABLE = /invalid_payload|unknown_field|invalid_node_ref|invalid_role|invalid_done|invalid_human|invalid_verification|invalid_progress|invalid_reference|schema|INVALID_TASK_INTENT/i;
-const TRANSIENT = /timeout|orphan|econnreset|etimedout|429|502|503|504|temporar|retry|unreachable|rate_limited/i;
 const FIELD_PATH = /(?:field|path|at)\s+[`'"]?([A-Za-z_][\w.[\]]*)|[A-Za-z_][\w]*\[[0-9]+\](?:\.[A-Za-z_][\w]*)+/;
 
 export function parseErrorCode(error: string | null | undefined): { code: string | null; message: string } {
@@ -106,16 +105,11 @@ export function classifyRepairCategory(input: {
   hasUnknownEffects?: boolean;
   hasEffectLedger?: boolean;
   canCorrect?: boolean;
+  canRecover?: boolean;
 }): RepairCategory {
   if (input.hasUnknownEffects) return "unknown_external_effect";
-  const status = (input.status ?? "").trim().toLowerCase();
-  const { code, message } = parseErrorCode(input.error);
-  const haystack = `${code ?? ""} ${message}`;
-  if (input.canCorrect && status === "running" && MODEL_CORRECTABLE.test(haystack)) return "model_correctable";
-  const looksTransient = status === "timeout" || status === "orphan" || TRANSIENT.test(haystack);
-  if (looksTransient) {
-    return input.hasEffectLedger ? "transient_retryable" : "unknown_external_effect";
-  }
+  if (input.canCorrect && input.status === "running") return "model_correctable";
+  if (input.canRecover) return "transient_retryable";
   return "permanent_failure";
 }
 
@@ -131,13 +125,15 @@ export function projectRepairFeedback(input: {
 }): RepairFeedback {
   const unknownEffects = input.unknownEffects ?? [];
   const hasUnknownEffects = unknownEffects.length > 0;
+  const current = input.currentState?.authority === "scheduler" && input.currentState.status === input.status
+    ? input.currentState : null;
   const category = classifyRepairCategory({
     status: input.status,
     error: input.error,
-    hasUnknownEffects,
+    hasUnknownEffects: hasUnknownEffects || current?.allowed_actions.includes("reconcile_effects"),
     hasEffectLedger: input.hasEffectLedger,
-    canCorrect: input.currentState?.authority === "scheduler" && input.currentState.status === input.status
-      && input.currentState.allowed_actions.includes("correct_proposal"),
+    canCorrect: current?.allowed_actions.includes("correct_proposal"),
+    canRecover: current?.allowed_actions.includes("request_recovery"),
   });
   const { code, message } = parseErrorCode(input.error);
   const unknownViews: RepairUnknownEffect[] = unknownEffects.map((effect) => ({
@@ -147,6 +143,13 @@ export function projectRepairFeedback(input: {
     summary: describeUnknownEffect(effect.effect_kind),
   }));
   return {
+    summary: hasUnknownEffects || current?.allowed_actions.includes("reconcile_effects")
+      ? "这次运行还有未核实的执行结果，需要维护者检查。"
+      : input.status === "running" && current?.allowed_actions.includes("correct_proposal") ? "当前执行可以提交修正。"
+      : input.status === "timeout" ? "这次运行因超时结束。"
+      : input.status === "orphan" ? "这次运行失去连接，已经结束。"
+      : ["failed", "cancelled", "succeeded"].includes(input.status ?? "") ? "这次运行已结束。"
+      : "当前执行遇到了问题，请查看运行记录。",
     category,
     stage: input.stage ?? (input.status ? `job.${input.status}` : null),
     field_path: extractFieldPath(input.error),

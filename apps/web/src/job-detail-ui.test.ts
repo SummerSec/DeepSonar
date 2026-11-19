@@ -95,10 +95,10 @@ test("运行详情把错误投影为 RepairFeedback，未知效果不提供无�
   assert.match(panel, /RepairFeedbackPanel/);
   assert.match(panel, /projectJobActions/);
   assert.match(panel, /allowJobRetry/);
-  assert.match(panel, /unknown_external_effect/);
+  assert.match(panel, /terminalAllowed && detail\?\.job\.execution_state/);
   assert.match(panel, /repairRecoveryActions/);
   assert.match(panel, /recoveryActions=\{repairRecoveryActions\}/);
-  assert.match(panel, /确认后 · 旧快照重跑/);
+  assert.match(panel, /使用原配置重新执行/);
   assert.match(panel, /RESUMABLE\.has\(detail\.job\.status\) && allowJobRetry/);
 });
 
