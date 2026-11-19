@@ -21,8 +21,11 @@ const evaluationPlan = () => KNOWLEDGE_CASE_KINDS.map((kind) => ({ id: kind, kin
   expected: kind === "target" ? "Task succeeds safely" : KNOWLEDGE_FIXED_CASES[kind].expected, critical: true }));
 async function attachFixtureSource(db: TestSql, workId: string, projectId: string) {
   const source = { kind: "fact" as const, ref: randomUUID(), content_hash: H };
-  await db`UPDATE project_knowledge_work SET input_manifest_json=${db.json([{ input_ref: `fact:${source.ref}`, kind: "fact",
-    project_id: projectId, content_hash: H, bytes: 1, blob_hash: H, audience: ["maker", "evaluator", "reviewer"] }])} WHERE id=${workId}`;
+  const manifest = [{ input_ref: `fact:${source.ref}`, kind: "fact", project_id: projectId, content_hash: H,
+    bytes: 1, blob_hash: H, audience: ["maker", "evaluator", "reviewer"] }];
+  // #1130：读写两侧都以 assignment 冻结快照为准，夹具也必须同时写 assignment（派发时的真实形态）。
+  await db`UPDATE project_knowledge_work SET input_manifest_json=${db.json(manifest)} WHERE id=${workId}`;
+  await db`UPDATE project_knowledge_job_assignments SET input_manifest_json=${db.json(manifest)} WHERE work_id=${workId}`;
   return source;
 }
 

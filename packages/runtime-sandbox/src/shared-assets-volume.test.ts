@@ -224,6 +224,57 @@ test("相对路径和 catalog 冲突在任何卷副作用之前拒绝", async ()
   });
 });
 
+test("#1144 清单内文件/目录前缀冲突在任何卷副作用之前以具名键拒绝", async () => {
+  await withSource(async (sourcePath) => {
+    const state = daemon();
+    await assert.rejects(
+      manager(state).prepare({
+        ...prepareInput(sourcePath),
+        files: [
+          { sourcePath, relativePath: "project/poc/round74-scope.json" },
+          { sourcePath, relativePath: "project/poc/round74-scope.json/pool.csv" },
+        ],
+      }),
+      (error: unknown) => {
+        const detail = error instanceof Error ? error.message : String(error);
+        // 结构化错误必须给出两个冲突键，且不泄露随机 staging 路径。
+        assert.match(detail, /shared_assets_manifest_conflict/);
+        assert.match(detail, /project\/poc\/round74-scope\.json/);
+        assert.match(detail, /project\/poc\/round74-scope\.json\/pool\.csv/);
+        assert.doesNotMatch(detail, /deepsonar-assets-/);
+        assert.doesNotMatch(detail, /EEXIST/);
+        return true;
+      },
+    );
+    assert.deepEqual(state.calls, [["image", "inspect", helperImage]]);
+    assert.equal(state.volume, null);
+    assert.equal(state.helper, null);
+
+    // 冲突键反向（后到的是父路径）同样拒绝，且不同作用域的同名前缀不算冲突。
+    await assert.rejects(
+      manager(daemon(volumeInspection())).prepare({
+        ...prepareInput(sourcePath),
+        files: [
+          { sourcePath, relativePath: "project/poc/round74-scope.json/pool.csv" },
+          { sourcePath, relativePath: "project/poc/round74-scope.json" },
+        ],
+      }),
+      /shared_assets_manifest_conflict/,
+    );
+    const namespaced = daemon(volumeInspection());
+    assert.equal(
+      await manager(namespaced).prepare({
+        ...prepareInput(sourcePath),
+        files: [
+          { sourcePath, relativePath: "project/poc/a.json" },
+          { sourcePath, relativePath: "finding/123e4567-e89b-12d3-a456-426614174000/poc/a.json/b.csv" },
+        ],
+      }),
+      volumeName,
+    );
+  });
+});
+
 test("docker create 超时后按已 inspect 的身份补偿可能已创建的 helper 和卷", async () => {
   await withSource(async (sourcePath) => {
     const state = daemon();

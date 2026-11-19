@@ -176,5 +176,34 @@ test('durable candidate generations, bounded pages, invalidation, recovery and m
     assert.equal(registry.cursor_id,twentyFifth.id);
     assert.equal(await sql.begin(tx=>store.scanCandidateProjects(tx)),5);
     assert.equal((await sql`SELECT cursor_id FROM project_finding_candidate_scan WHERE id='global'`)[0].cursor_id,null);
+    // #1122：无来源变化时，一轮发布后必须长睡眠，不再每 30 秒无条件全量重建。
+    await rebuild();await finish();
+    const publishedWork=await work();
+    const quietSeconds=async()=>Number((await sql`SELECT EXTRACT(EPOCH FROM (next_run_at-now()))::int AS s
+      FROM project_finding_candidate_work WHERE project_id=${project}`)[0].s);
+    assert.ok((await quietSeconds())>6*24*3600,'published work must sleep instead of re-queueing every 30s');
+    // 扫描每次最多 25 个项目，此时库里已有 30+ 个项目；重置游标并扫到一圈结束，保证本项目被探测。
+    const scanWholeRegistry=async()=>{
+      await sql`UPDATE project_finding_candidate_scan SET cursor_id=NULL WHERE id='global'`;
+      for(let n=0;n<8;n+=1){
+        await sql.begin(tx=>store.scanCandidateProjects(tx));
+        const [scan]=await sql`SELECT cursor_id FROM project_finding_candidate_scan WHERE id='global'`;
+        if(scan.cursor_id===null&&n>0)return;
+      }
+      assert.fail('registry scan did not wrap');
+    };
+    await scanWholeRegistry();
+    assert.equal((await work()).generation,publishedWork.generation,'无来源变化时不得换 generation');
+    // 来源集合变化（新增 finding）→ 扫描期唤醒一次，且只重建一代。
+    const extraJob=randomUUID(),extraFinding=randomUUID();
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json) VALUES (${extraJob},${project},${canvas},'audit','succeeded','{}')`;
+    await sql`INSERT INTO findings(id,project_id,job_id,fingerprint,title,summary,profile,verify_status,disposition)
+      VALUES (${extraFinding},${project},${extraJob},${extraFinding},'中文 搜索 参数 注入','相同的声明','security.vulnerability','confirmed','resolved')`;
+    await scanWholeRegistry();
+    assert.ok((await quietSeconds())<=0,'source drift must wake the pending work');
+    await store.processCandidateBatch(sql);
+    assert.notEqual((await work()).generation,publishedWork.generation,'drift triggers exactly one new generation');
+    await finish();
+    assert.ok((await quietSeconds())>6*24*3600,'after the rebuild the work sleeps again: no 30s loop');
   }finally{await appClose?.();await close?.();await admin.unsafe(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);await admin.end({timeout:5});}
 });

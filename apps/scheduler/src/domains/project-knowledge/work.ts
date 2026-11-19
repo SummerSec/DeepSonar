@@ -52,10 +52,40 @@ function validPlan(cases: PlanCase[]): boolean {
 /** knowledge Job 的最小可执行预算：低于它的 Job 连 provision 与一轮模型请求都跑不完，必然被 Reaper
  * 判 timeout（#1111 现场 60/68/88 秒）。work 预算（KNOWLEDGE_LIMITS.seconds）是累计上限，不是单
  * Job 的超时：余额不足以支撑一个可执行 Job 时显式阻断 work，而不是派发注定失败的短命 Job。 */
-export const KNOWLEDGE_MIN_JOB_TIMEOUT_SEC = 300;
+const KNOWLEDGE_MIN_JOB_TIMEOUT_SEC = 300;
 function roleFor(stage: Stage): string {
   return stage === "trial" ? "test" : stage === "reviewer" ? "review" : "analyze";
 }
+// #1132：revise/merge 要求精确 base_refs，而 maker 的输入清单不含 item_ref/version_ref/generation，
+// Agent 只能在「自造」与「放弃」之间二选一（现场两个 Job 因此被 cancel）。派发修订轮时在 prompt 里
+// 给出与 proposals.ts 完全同口径的规则与可复制基线：
+// - create（含对 create 候选的修订）→ base_refs 必须为空数组；
+// - revise/retire/reuse/merge → 精确沿用上一提案 base_refs_json 指向的版本，并核验它仍是该项当前
+//   active 版本（未激活/已过期都不可用，此时明确告知需要重新获取，而不是给出任意目录）。
+async function baseRefsHint(tx: Db, projectId: string, proposal: Row): Promise<string> {
+  const action = String(proposal.action);
+  const head = `上一提案=${String(proposal.id)} revision=${String(proposal.revision)} action=${action}；`;
+  if (action === "create") {
+    return `${head}本次是对 create 候选的修订（revision 递增，parent_proposal_ref 指向该提案）：action 仍为 create，base_refs 必须为空数组。`;
+  }
+  const expected = Array.isArray(proposal.base_refs_json)
+    ? (proposal.base_refs_json as Array<{ version_ref?: string }>).map((ref) => String(ref.version_ref ?? "")).filter(Boolean)
+    : [];
+  const rows = expected.length
+    ? await tx`SELECT i.id AS item_ref, v.id AS version_ref, i.generation, v.content_sha256 AS content_hash
+        FROM project_knowledge_items i JOIN project_knowledge_versions v ON v.id=i.active_version_id
+        WHERE i.project_id=${projectId} AND v.id=ANY(${expected}::uuid[]) AND v.revoked_at IS NULL ORDER BY i.id`
+    : [];
+  const bases = rows.map((row) => ({ item_ref: String(row.item_ref), version_ref: String(row.version_ref),
+    generation: Number(row.generation), content_hash: String(row.content_hash) }));
+  const need = action === "merge" ? "至少 2 个" : "恰好 1 个";
+  if (bases.length !== expected.length || bases.length === 0) {
+    return `${head}${action} 需要${need}基线，但上一提案的基线已不是当前 active 版本（或已撤销）——本次修订不可行；`
+      + "请改用 create 或带说明转人工，禁止自造或改用其它项目的版本。";
+  }
+  return `${head}${action} 需${need} base，必须逐字复制下列当前 active 基线（不得自造）：${JSON.stringify(bases)}`;
+}
+
 function promptFor(stage: Stage, work: Row, proposal?: Row, trial?: { testCase: PlanCase; arm: string }): string {
   const reference = `work=${work.id}`;
   if (stage === "maker") return `整理当前 Job 冻结的项目证据，提出项目知识候选。${reference}。${proposal ? `前一提案=${proposal.id} revision=${proposal.revision} state=${proposal.state}；仅可提交 parent_proposal_ref 为该提案、revision=${Number(proposal.revision) + 1} 的修订。` : "首次提案 revision=1。"}逐项使用 read_knowledge_input，调用 propose_project_knowledge；不得自行批准或激活。`;
@@ -217,7 +247,9 @@ export function createKnowledgeWorkScheduler(input: KnowledgeWorkSchedulerInput)
     const workId = String(work.id);
     const projectId = String(work.project_id);
     const canvasId = String(work.canvas_id);
-    const prompt = promptFor(stage, work, proposal, trial);
+    const prompt = stage === "maker" && proposal
+      ? `${promptFor(stage, work, proposal, trial)}${await baseRefsHint(tx, projectId, proposal)}`
+      : promptFor(stage, work, proposal, trial);
     const assignment: KnowledgeJobAssignment = {
       work_id: workId, stage, inputs: manifest, governance_hash: String(work.governance_hash),
       ...(String(work.trigger_key).startsWith(PROJECT_COLLECTION_PREFIX) ? { source_mode: "project_collection" as const } : {}),

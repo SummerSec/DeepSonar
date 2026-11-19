@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ListSharedAssetsPayload, PublishSharedAssetPayload } from "@deepsonar/shared-types";
-import { mountPathFor, normalizeAssetKey, validateAssetContentType } from "./domains/shared-assets/index.js";
+import {
+  findSharedAssetPathConflict,
+  mountPathFor,
+  normalizeAssetKey,
+  sharedAssetPathConflictMessage,
+  validateAssetContentType,
+} from "./domains/shared-assets/index.js";
 import { MAX_RELATED_FINDING_IDS, parseRelatedFindingIds } from "./core.js";
 
 test("shared asset keys and mount paths reject traversal and host paths", () => {
@@ -14,6 +20,25 @@ test("shared asset keys and mount paths reject traversal and host paths", () => 
     mountPathFor("finding", "123e4567-e89b-12d3-a456-426614174000", "poc/run.sh"),
     "/workspace/.deepsonar/shared/finding/123e4567-e89b-12d3-a456-426614174000/poc/run.sh",
   );
+});
+
+test("#1144 同一挂载命名空间内的文件/目录前缀冲突在发布期即可判定", () => {
+  // 子路径先到：`a/b.json/c.csv` 命中已发布文件 `a/b.json`。
+  const descendant = findSharedAssetPathConflict("a/b.json/c.csv", ["a/b.json", "other/x.csv"]);
+  assert.deepEqual(descendant, { key: "a/b.json", direction: "ancestor" });
+  assert.match(sharedAssetPathConflictMessage("a/b.json/c.csv", descendant!), /shared_asset_path_conflict/);
+  assert.match(sharedAssetPathConflictMessage("a/b.json/c.csv", descendant!), /a\/b\.json/);
+
+  // 文件后到：新键 `a/b.json` 会成为既有 `a/b.json/c.csv` 的目录。
+  const ancestor = findSharedAssetPathConflict("a/b.json", ["a/b.json/c.csv"]);
+  assert.deepEqual(ancestor, { key: "a/b.json/c.csv", direction: "descendant" });
+  assert.match(sharedAssetPathConflictMessage("a/b.json", ancestor!), /a\/b\.json\/c\.csv/);
+
+  // 同键（版本追加场景）、仅仅共享字符串前缀、以及不同命名空间的同名前缀都不算冲突。
+  assert.equal(findSharedAssetPathConflict("a/b.json", ["a/b.json"]), null);
+  assert.equal(findSharedAssetPathConflict("a/b.json", ["a/b.json2", "a/b.json.bak"]), null);
+  assert.equal(findSharedAssetPathConflict("project/a/b.json", ["finding/x/a/b.json"]), null);
+  assert.equal(findSharedAssetPathConflict("a", ["b/c"]), null);
 });
 
 test("Agent publish schema is strict and cannot publish platform-owned runtime files", () => {

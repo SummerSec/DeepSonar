@@ -154,6 +154,7 @@ test("共享资产已知业务与唯一冲突转换为可重试控制错误，�
     new Error("asset_content_version_exists"),
     new Error("invalid_asset_key"),
     new Error("asset_quota_exceeded"),
+    new Error("shared_asset_path_conflict: 键 poc/run.json 与已发布键 poc/run.json/child.csv 冲突：poc/run.json/child.csv 位于 poc/run.json/ 之下，同一路径不能既当文件又当目录。请改名，或把文件放进独立目录后重试。"),
     Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505", constraint: "shared_asset_versions_asset_id_content_sha256_key" }),
     Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505", constraint: "shared_assets_active_project_key_uniq" }),
   ]) {

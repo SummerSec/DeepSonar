@@ -27,7 +27,7 @@ function row(kind: string, verification: Record<string, unknown> = {}, status = 
     } },
   };
 }
-function transaction(rows: ReturnType<typeof row>[], opts: { explicit?: boolean; attempt?: number; maxRounds?: number | null; priorRounds?: string[]; subject?: typeof finding } = {}) {
+function transaction(rows: ReturnType<typeof row>[], opts: { explicit?: boolean; attempt?: number; maxRounds?: number | null; priorRounds?: string[]; priorDecisionMissing?: string[][]; subject?: typeof finding } = {}) {
   const subject = opts.subject ?? structuredClone(finding);
   const writes: Array<{ query: string; values: unknown[] }> = [];
   const round = { id: "round", finding_id: FINDING, status: opts.explicit ? "running" : "pending", attempt: opts.attempt ?? 1, verify_job_id: opts.explicit ? "verify-job" : null };
@@ -36,6 +36,8 @@ function transaction(rows: ReturnType<typeof row>[], opts: { explicit?: boolean;
     const query = parts.join("?").replace(/\s+/g, " ").trim();
     if (query.startsWith("SELECT status FROM finding_verification_rounds")) return Promise.resolve((opts.priorRounds ?? []).slice(0, Number(values[2])).map(status => ({ status })));
     if (query.startsWith("SELECT n.id")) return Promise.resolve(rows);
+    // #1133：历史轮次的「本次决策缺失集合」（由 finishRound 写入 decision_missing）。
+    if (query.includes("decision_missing")) return Promise.resolve((opts.priorDecisionMissing ?? []).map((missing) => ({ final_outcome: "rework", missing })));
     if (query.includes("SELECT config_json FROM projects")) return Promise.resolve([{ config_json: { rules: { minVerifySeverity: "high", maxFollowupDepth: 9, ...(opts.maxRounds === null ? {} : { maxVerificationRounds: opts.maxRounds ?? 3 }), maxNoProgressRounds: 3 } } }]);
     if (query.includes("SELECT rules_json")) return Promise.resolve([]);
     if (query.startsWith("SELECT id FROM canvases")) return Promise.resolve([{ id: "canvas" }]);
@@ -253,4 +255,28 @@ test("unlimited verification still stops cancellation immediately", async () => 
   const result = await closeVerifyRound(tx, "verify-job", { jobStatus: "cancelled" });
   assert.equal(result.outcome, "inconclusive");
   assert.equal(result.forceHub, false);
+});
+
+test("#1133 门禁缺项连续不变时 closeVerifyRound 收口 needs_human（经真实写入的 decision_missing 往返）", async () => {
+  const rows = [row("review")];
+  // 第一轮：缺项由门禁给出（如 structured_supporting_fact），closeVerifyRound 回弹并写入 decision_missing。
+  const first = transaction(rows, { explicit: true });
+  const firstResult = await closeVerifyRound(first.tx, "verify-job", { jobStatus: "succeeded", proposedVerdict: "confirmed" });
+  assert.equal(firstResult.outcome, "rework");
+  const snapshot = first.writes
+    .map(({ values }) => values.find((value) => value && typeof value === "object" && "decision_missing" in (value as object)))
+    .find(Boolean) as { decision_missing?: string[] } | undefined;
+  assert.ok(snapshot?.decision_missing?.length, "回弹轮次必须持久化本次决策缺失集合");
+  const decisionMissing = snapshot.decision_missing!;
+
+  // 第二轮：历史两轮的 decision_missing 与本次完全相同 → 无进展，收口 needs_human。
+  const second = transaction(rows, { explicit: true, priorDecisionMissing: [decisionMissing, decisionMissing] });
+  const secondResult = await closeVerifyRound(second.tx, "verify-job", { jobStatus: "succeeded", proposedVerdict: "confirmed" });
+  assert.equal(secondResult.outcome, "needs_human");
+  assert.ok(second.writes.some(({ values }) => JSON.stringify(values).includes("needs_human")), "收口必须落 needs_human 终态写入");
+
+  // 缺失集合一旦变化（历史与本次不同）→ 视为有进展，继续回弹。
+  const third = transaction(rows, { explicit: true, priorDecisionMissing: [["independent_review", "runtime_test"]] });
+  const thirdResult = await closeVerifyRound(third.tx, "verify-job", { jobStatus: "succeeded", proposedVerdict: "confirmed" });
+  assert.equal(thirdResult.outcome, "rework");
 });

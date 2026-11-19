@@ -584,8 +584,12 @@ function decodePi(line: Record<string, unknown>, state: AdapterRuntimeState): Re
     state.streamedReasoning = undefined;
     return [];
   }
-  if (type === "message_start" && (line.message as Record<string, unknown> | undefined)?.role === "assistant") {
-    beginPiMessageOutput(state);
+  if (type === "message_start") {
+    // #1141: Pi 1.5.2 对 assistant / user / toolResult 都发 message_start。只有 assistant
+    // 起始用来打开消息输出基线；其它角色是纯会话边界，没有独立的 DeepSonar 语义事件
+    // （工具结果仍由 tool_execution_end 产生）。未覆盖时它们会被兜成 unknown_runtime，
+    // 并以原始 type 记成 unrecognized_stream_type，升级后每个 Job 都会刷大量告警。
+    if ((line.message as Record<string, unknown> | undefined)?.role === "assistant") beginPiMessageOutput(state);
     return [];
   }
   if (type === "agent_start") return [{ type: "system", subtype: "init", ...(state.sessionId ? { session_id: state.sessionId } : {}) }];

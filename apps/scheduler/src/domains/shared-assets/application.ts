@@ -61,6 +61,34 @@ export function validateAssetContentType(contentType: string, _key?: string): st
   return normalized;
 }
 
+/**
+ * #1144: 同一挂载命名空间内「同一路径既当文件又当目录」的冲突。
+ * `a/b.json` 与 `a/b.json/c.csv` 并存时物化会先写出文件、再为子路径 mkdir → EEXIST，
+ * 一条冲突就会让整轮 Job 在 provision 之前失败。
+ */
+export type SharedAssetPathConflict = { key: string; direction: "ancestor" | "descendant" };
+
+/** 纯集合检查：`existingKeys` 是同作用域（platform / 单个 project / 单个 finding）的既有键。 */
+export function findSharedAssetPathConflict(key: string, existingKeys: Iterable<string>): SharedAssetPathConflict | null {
+  const existing = new Set(existingKeys);
+  if (existing.has(key)) return null; // 同一键由 immutable/version 规则处理，不是前缀冲突。
+  const segments = key.split("/");
+  for (let index = 1; index < segments.length; index += 1) {
+    const ancestor = segments.slice(0, index).join("/");
+    if (existing.has(ancestor)) return { key: ancestor, direction: "ancestor" };
+  }
+  for (const other of existing) {
+    if (other.startsWith(`${key}/`)) return { key: other, direction: "descendant" };
+  }
+  return null;
+}
+
+export function sharedAssetPathConflictMessage(key: string, conflict: SharedAssetPathConflict): string {
+  return conflict.direction === "ancestor"
+    ? `shared_asset_path_conflict: 键 ${key} 与已发布键 ${conflict.key} 冲突：${conflict.key} 已是文件，键 ${key} 又把它当目录。请改名后重试。`
+    : `shared_asset_path_conflict: 键 ${key} 与已发布键 ${conflict.key} 冲突：${conflict.key} 位于 ${key}/ 之下，同一路径不能既当文件又当目录。请改名，或把文件放进独立目录后重试。`;
+}
+
 export function mountPathFor(scope: SharedAssetScope, findingId: string | null, key: string): string {
   const prefix = scope === "finding" ? `finding/${findingId}` : scope;
   return `${SHARED_ASSETS_READONLY_ROOT}/${prefix}/${normalizeAssetKey(key)}`;
@@ -131,6 +159,17 @@ export async function createSharedAsset(input: CreateSharedAssetInput): Promise<
           ? await tx`SELECT * FROM shared_assets WHERE scope_type='finding' AND finding_id=${input.findingId!} AND logical_key=${key} AND status='active' FOR UPDATE`
           : await tx`SELECT * FROM shared_assets WHERE scope_type='project' AND project_id=${input.projectId!} AND logical_key=${key} AND status='active' FOR UPDATE`;
       if (existing && (input.origin !== "agent" || existing.origin !== "agent")) throw new Error("immutable_asset_key_exists");
+
+      // #1144: 发布期就该拦住「文件又当目录」，而不是等物化 EEXIST 毁掉整轮 Job。
+      // 命名空间与 resolveSharedAssetSelection 的挂载命名空间一致（platform / project / 单个 finding），
+      // 因此不同 Finding 下的同名前缀不会被误判。
+      const prefixCandidates = input.scope === "platform"
+        ? await tx`SELECT logical_key FROM shared_assets WHERE status='active' AND scope_type='platform' AND logical_key<>${key} AND (left(logical_key, ${key.length + 1})=${`${key}/`} OR left(${key}, char_length(logical_key)+1)=logical_key||'/')`
+        : input.scope === "finding"
+          ? await tx`SELECT logical_key FROM shared_assets WHERE status='active' AND scope_type='finding' AND finding_id=${input.findingId!} AND logical_key<>${key} AND (left(logical_key, ${key.length + 1})=${`${key}/`} OR left(${key}, char_length(logical_key)+1)=logical_key||'/')`
+          : await tx`SELECT logical_key FROM shared_assets WHERE status='active' AND scope_type='project' AND project_id=${input.projectId!} AND logical_key<>${key} AND (left(logical_key, ${key.length + 1})=${`${key}/`} OR left(${key}, char_length(logical_key)+1)=logical_key||'/')`;
+      const pathConflict = findSharedAssetPathConflict(key, prefixCandidates.map((row) => String(row.logical_key)));
+      if (pathConflict) throw new Error(sharedAssetPathConflictMessage(key, pathConflict));
 
       if (existing) {
         const [sameContentVersion] = await tx`

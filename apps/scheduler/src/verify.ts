@@ -44,6 +44,7 @@ import {
 export { attachVerificationEvidence } from "./verify-attach-evidence.js";
 import { normalizeFindingImpact } from "./finding-impact.js";
 import { evaluateConfirmGate } from "./verify-confirm-gate.js";
+import { VERIFY_NO_PROGRESS_REASON, shouldStopForNoProgress } from "./verify-no-progress.js";
 export { evaluateConfirmGate };
 export type { ConfirmGateOptions, ConfirmGateResult } from "./verify-confirm-gate.js";
 import {
@@ -1088,6 +1089,7 @@ export async function closeVerifyRound(
       proposed: null,
       final: "rework",
       evidence,
+      decisionMissing: evidence.missing,
       summary: opts.summary ?? null,
       error: opts.error ?? `verify_${opts.jobStatus}`,
     });
@@ -1149,6 +1151,10 @@ export async function closeVerifyRound(
     final = "inconclusive";
   }
 
+  // #1133：连续无进展刹车 —— 最近回弹的「决策缺失集合」完全相同（第 2 次即收口）→ needs_human，不再派注定无用的补证。
+  const noProgress = final === "rework" && await shouldStopForNoProgress(tx, findingId, round.id as string, missing);
+  if (noProgress) final = "needs_human";
+
   const roundStatus =
     final === "confirmed" ? "confirmed"
     : final === "needs_human" ? "needs_human"
@@ -1160,9 +1166,10 @@ export async function closeVerifyRound(
     proposed,
     final,
     evidence,
+    decisionMissing: missing,
     summary: opts.summary ?? null,
     error: gateFailed ? gate.reasons.join(";") || evidence.reason || "fact_first_gate_failed" : (
-      final === "inconclusive" ? "max_verification_rounds" : null
+      noProgress ? VERIFY_NO_PROGRESS_REASON : (final === "inconclusive" ? "max_verification_rounds" : null)
     ),
   });
 
@@ -1205,7 +1212,7 @@ export async function closeVerifyRound(
   if (final === "needs_human" || final === "refuted" || final === "inconclusive") {
     const settleReason =
       final === "needs_human"
-        ? (proposed === "needs_human" ? "verify_needs_human" : "verification_limit")
+        ? (noProgress ? VERIFY_NO_PROGRESS_REASON : (proposed === "needs_human" ? "verify_needs_human" : "verification_limit"))
         : final === "refuted"
           ? factFirstSettlementReason(gate)
           : (final === "inconclusive" && proposed === "rework" ? "max_verification_rounds" : factFirstSettlementReason(gate));
@@ -1682,16 +1689,19 @@ async function finishRound(
     proposed: ProposedVerdict | null;
     final: RoundOutcome;
     evidence: EvidenceSnapshot;
+    decisionMissing?: string[];
+
     summary: string | null;
     error: string | null;
   },
 ) {
+  const snapshot = opts.decisionMissing ? { ...opts.evidence, decision_missing: opts.decisionMissing } : opts.evidence; // #1133
   await tx`
     UPDATE finding_verification_rounds SET
       status = ${opts.status},
       proposed_verdict = ${opts.proposed},
       final_outcome = ${opts.final},
-      evidence_snapshot_json = ${tx.json(opts.evidence as never)},
+      evidence_snapshot_json = ${tx.json(snapshot as never)},
       summary = ${opts.summary},
       error = ${opts.error},
       finished_at = now()
