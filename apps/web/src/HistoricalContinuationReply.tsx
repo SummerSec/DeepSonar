@@ -2,6 +2,14 @@ import { useRef, useState } from "react";
 import { api, type HumanContinuation } from "./api";
 import { ApiRequestError } from "./login-error";
 
+function submissionId(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 export function HistoricalContinuationReply({ jobId, continuation }: {
   jobId: string; continuation: HumanContinuation;
 }) {
@@ -17,16 +25,16 @@ export function HistoricalContinuationReply({ jobId, continuation }: {
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     if (sending.current || target || (!saved && !body.trim())) return;
-    // Keep the exact IDs, revision and input through a lost response or a saved-reply blocker.
-    submission.current ??= {
-      mutation_id: crypto.randomUUID(), request_id: continuation.id, expected_revision: continuation.revision,
-      ...(continuation.reply_message_id ? { saved_reply_message_id: continuation.reply_message_id }
-        : { reply: { message_id: crypto.randomUUID(), body: body.trim(), attachment_version_ids: [] } }),
-    };
     sending.current = true;
     setBusy(true);
     setError(null);
     try {
+      // Keep the exact IDs, revision and input through a lost response or a saved-reply blocker.
+      submission.current ??= {
+        mutation_id: submissionId(), request_id: continuation.id, expected_revision: continuation.revision,
+        ...(continuation.reply_message_id ? { saved_reply_message_id: continuation.reply_message_id }
+          : { reply: { message_id: submissionId(), body: body.trim(), attachment_version_ids: [] } }),
+      };
       const result = await api.createHistoricalContinuation(jobId, submission.current);
       setSaved(true);
       setTarget(result.job_id);
@@ -34,7 +42,7 @@ export function HistoricalContinuationReply({ jobId, continuation }: {
       const replyState = cause instanceof ApiRequestError
         ? (cause.taskContractFeedback as Record<string, unknown>).reply_state : null;
       if (replyState === "reply_saved") setSaved(true);
-      else if (replyState === "reply_not_saved" || (cause instanceof ApiRequestError && cause.status === 400)) {
+      else if (!submission.current || replyState === "reply_not_saved" || (cause instanceof ApiRequestError && cause.status === 400)) {
         submission.current = null;
         setUncertain(false);
       } else setUncertain(true);

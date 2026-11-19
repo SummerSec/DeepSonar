@@ -19,8 +19,14 @@ test("JobDetail historical continuation respects permission, immutable retries a
   } });
   context.after(() => hooks.deregister());
   const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
+  const originalCrypto = globalThis.crypto;
+  let randomFailure = false;
   const replacements = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
-    Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true };
+    Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true,
+    crypto: { getRandomValues: (bytes: Uint8Array) => {
+      if (randomFailure) throw new Error("Random source unavailable");
+      return originalCrypto.getRandomValues(bytes);
+    } } };
   const previous = new Map(Object.keys(replacements).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(replacements)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
   // Import React DOM after installing the browser so React registers input events normally.
@@ -80,8 +86,22 @@ test("JobDetail historical continuation respects permission, immutable retries a
       assert.equal(calls.at(-1)?.jobId, jobId);
       assert.equal(calls.at(-1)?.payload.expected_revision, 4);
       assert.equal(calls.at(-1)?.payload.reply?.body, "Original reference");
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+      assert.match(calls.at(-1)!.payload.mutation_id, uuid);
+      assert.match(calls.at(-1)!.payload.reply!.message_id, uuid);
       assert.equal(dom.window.document.querySelector('a[href="/jobs?job=new-history-job"]')?.textContent, "查看续做运行");
       assert.equal(dom.window.document.querySelector("textarea"), null);
+    });
+    await context.test("random source failure leaves an editable draft and releases submission state", async () => {
+      await mount(); await type("Draft before random source failure");
+      const count = calls.length;
+      randomFailure = true;
+      try { await submit(); } finally { randomFailure = false; }
+      assert.equal(calls.length, count);
+      assert.match(dom.window.document.querySelector('[role="alert"]')!.textContent!, /Random source unavailable/);
+      await type("Corrected draft after random source failure"); await submit();
+      assert.equal(calls.length, count + 1);
+      assert.equal(calls.at(-1)?.payload.reply?.body, "Corrected draft after random source failure");
     });
     for (const status of [400, 409]) await context.test(`explicit unsaved ${status} permits correcting the draft and a new proposal`, async () => {
       reject = rejection(status, status === 409 ? "reply_not_saved" : undefined);
