@@ -21,9 +21,17 @@ test('normal prune host with isolated PostgreSQL, retained recovery source, audi
   t.after(async () => {if (session && session.exitCode === null) session.kill(); if (created) docker(['rm', '-f', name]); await rm(directory, {recursive: true, force: true});});
   docker(['run', '-d', '--name', name, '--label', `deepsonar.test=${name}`, '-e', 'POSTGRES_USER=maintenance', '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', 'postgres:16-alpine']);
   created = true;
+  let ready = false;
   for (let i = 0; i < 100; i++) {
-    try {sql('postgres', 'SELECT 1'); break;} catch {if (i === 99) throw Error('fixture PostgreSQL did not start'); await new Promise(done => setTimeout(done, 100));}
+    try {
+      // The image's initialization server accepts sockets before restarting.
+      // TCP readiness identifies the final server, as in the fencing fixture.
+      docker(['exec', name, 'pg_isready', '-h', '127.0.0.1', '-U', 'maintenance']);
+      if (sql('postgres', 'SELECT 1') === '1') {ready = true; break;}
+    } catch {}
+    await new Promise(done => setTimeout(done, 100));
   }
+  assert.equal(ready, true, 'isolated database started with TCP enabled');
   const clusterId = sql('postgres', 'SELECT system_identifier::text FROM pg_control_system()');
   const generations = ['1', '2', '3', '4'].map(digit => `${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`);
   const databases = generations.map(generation => `ds_upgrade_${generation.replaceAll('-', '')}`);
