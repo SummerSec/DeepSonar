@@ -32,6 +32,7 @@ export function planGenerationPrune(snapshot) {
     const allowedRoles = operation ? new Set([operation.runtime, operation.rollbackRuntime]) : new Set();
     const roleSafe = name => roles.some(role => role.name === name && role.login === false && role.memberships === 0
       && role.superuser === false && role.createdb === false && role.createrole === false && role.replication === false
+      && role.bypassrls === false
       && role.marker?.replace(/:revoked$/, '') === `deepsonar-upgrade:${operation.generation}:runtime:${row.name}`);
     const aclSafe = Array.isArray(row.acl) && row.acl.every(acl => acl.grantor === admin.role && (acl.role === admin.role
       || (acl.role === 'PUBLIC' && acl.privilege === 'TEMPORARY' && acl.grantable === false)

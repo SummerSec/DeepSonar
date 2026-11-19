@@ -26,7 +26,7 @@ shobj_description(r.oid,'pg_authid') AS "ownerMarker",shobj_description(d.oid,'p
  FROM aclexplode(coalesce(d.datacl,acldefault('d',d.datdba))) a) AS acl
 FROM pg_database d JOIN pg_roles r ON r.oid=d.datdba ORDER BY d.datname`;
 export const PRUNE_ROLES_SQL = `SELECT r.rolname AS name,r.rolcanlogin AS login,r.rolsuper AS superuser,
-r.rolcreatedb AS createdb,r.rolcreaterole AS createrole,r.rolreplication AS replication,
+r.rolcreatedb AS createdb,r.rolcreaterole AS createrole,r.rolreplication AS replication,r.rolbypassrls AS bypassrls,
 shobj_description(r.oid,'pg_authid') AS marker,
 (SELECT count(*)::int FROM pg_auth_members m WHERE m.member=r.oid OR m.roleid=r.oid) AS memberships
 FROM pg_roles r`;
@@ -88,9 +88,15 @@ export async function runHostGenerationPrune({recovery, binding, source, runtime
       if (!saved || saved.generation !== state.generation || saved.bindingHash !== hash(state.binding)
           || saved.clusterId !== cluster.clusterId || !saved.source?.database || !saved.candidateDatabase) throw Error('PRUNE_IDENTITY_BINDING_INVALID');
       seen.add(state.generation);
+      const backup = state.receipts.backup, candidate = state.receipts.candidate;
+      const operationId = state.generation.replaceAll('-', '');
+      const ownedReceipt = backup?.operation_id === operationId && backup.source_database === saved.source.database
+        && backup.fence_epoch === state.generation && candidate?.operation_id === operationId
+        && candidate.database === saved.candidateDatabase && candidate.backup_sha256 === backup.sha256
+        && candidate.fence_epoch === state.generation;
       operations.push({generation: state.generation, status: state.status, archived: name !== 'maintenance.json',
         source: saved.source.database, candidate: saved.candidateDatabase, cluster: saved.clusterId,
-        backup: state.receipts.backup?.sha256, runtime: saved.runtime?.role, rollbackRuntime: saved.rollbackRuntime?.role});
+        backup: ownedReceipt ? backup.sha256 : undefined, runtime: saved.runtime?.role, rollbackRuntime: saved.rollbackRuntime?.role});
     }
     // An identity left without a journal is a recovery obligation, never delete authority.
     for (const name of names.filter(name => new RegExp(`^identity-${uuid}\\.json$`).test(name))) {

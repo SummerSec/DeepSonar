@@ -42,7 +42,10 @@ GRANT CONNECT ON DATABASE "${database}" TO runtime_${i};`);
     sql(database, `CREATE TABLE platform_upgrade_state(id text, phase text, generation text, runtime_role text);
 INSERT INTO platform_upgrade_state VALUES('global','active','${generation}','runtime_${i}');
 CREATE TABLE audit_logs(actor_type text,actor_id text,action text,resource_type text,resource_id text,request_id text,after_json jsonb);`);
-    const state = {schema: 'deepsonar.maintenance-upgrade/v1', generation, status: 'complete', binding, receipts: {backup: {sha256: 'a'.repeat(64)}}};
+    const operation = generation.replaceAll('-', '');
+    const state = {schema: 'deepsonar.maintenance-upgrade/v1', generation, status: 'complete', binding, receipts: {
+      backup: {sha256: 'a'.repeat(64), operation_id: operation, source_database: source, fence_epoch: generation},
+      candidate: {database, operation_id: operation, backup_sha256: 'a'.repeat(64), fence_epoch: generation}}};
     await durablePrivateWrite(join(recovery, i === 3 ? 'maintenance.json' : `maintenance-${generation}.completed.json`), JSON.stringify(state));
     await durablePrivateWrite(join(recovery, `identity-${generation}.json`), JSON.stringify({generation, bindingHash, clusterId,
       source: {database: source}, candidateDatabase: database, runtime: {role: `runtime_${i}`}, rollbackRuntime: {role: `rollback_${i}`}}));

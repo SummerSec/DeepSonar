@@ -17,7 +17,7 @@ export function pruneFixture() {
       runtimeState: {phase: 'active', generation: operation.generation, runtime_role: operation.runtime}})),
     admin: {role: 'maintenance', marker: 'deepsonar-upgrade:admin-operation'},
     roles: operations.flatMap(operation => [operation.runtime, operation.rollbackRuntime].map(name => ({name, login: false,
-      memberships: 0, superuser: false, createdb: false, createrole: false, replication: false,
+      memberships: 0, superuser: false, createdb: false, createrole: false, replication: false, bypassrls: false,
       marker: `deepsonar-upgrade:${operation.generation}:runtime:${operation.candidate}`})))};
 }
 
