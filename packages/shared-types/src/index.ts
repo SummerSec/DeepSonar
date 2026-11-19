@@ -1,4 +1,5 @@
 import { TaskGoalReviewRequest, TaskGoalReviewResult } from "./task-goal-review.js";
+export * from "./finding-verification.js";
 export * from "./task-goal-review.js";
 export * from "./runtime-image-retirement.js";
 import { TaskResultProposal } from "./task-result.js";

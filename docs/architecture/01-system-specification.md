@@ -576,6 +576,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-VERIFY-005 Verify 终态与无进展收口
 
+#1133 补齐人工 `needs_human → inconclusive` 决定，权限为 `findings:write`，对象修订/技术状态/最后轮次 CAS、持久 mutation 幂等、新终结轮次和请求身份审计同事务。活动执行、未决效果和开放轮次拒绝，业务 disposition 独立。行为回归接 `pnpm ci:integration:verify-eligibility` 和 `pnpm ci:unit:web-facts`，最终 SHA Actions 待验。
+
 - **规范要求**：Verify 必须将通过、否定、冲突、证据不足、不可判定和需人工映射为明确终态/缺项；否定 evidence 只能在完整结构化证据和成功来源 Job 下进入 refuted，冲突进入 inconclusive，不得用 needs_human 混淆。
 - **决策来源**：终态决定 Hub、Report 和人工动作，错误映射会产生虚假确认或无限循环。
 - **实现状态**：as-built；无进展护栏与默认值见[配置](../../apps/scheduler/src/config.ts)中的 `DEEPSONAR_MAX_NO_PROGRESS_ROUNDS`。#1133 后，Verify 补证回弹另有独立刹车：连续 `VERIFY_NO_PROGRESS_LIMIT`（2）次回弹的缺失证据集合完全相同即收口 `needs_human`，round error 与结算 reason 落稳定码 `verify_no_progress`（`apps/scheduler/src/verify-no-progress.ts`）。
@@ -770,6 +772,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **验证证据**：`pnpm ci:unit:device-lease`、`pnpm ci:integration:device-lease`、`pnpm ci:smoke:device`。
 
 ### FR-DEV-002 创建时冻结设备需求并重新授权
+
+#1133 将统一冻结接入自动 Hub worker intent 与人工 Finding evidence-jobs 两入口，真实 HTTP → Job snapshot → broker grant 回归接 `pnpm ci:integration:device-lease`。无显式设备要求的远端目标继续其受治理路径。
 
 - **规范要求**：Job 创建必须把合法 device_requirement、rig、transport、项目 opt-in 和 allow_egress 冻结到 snapshot；申请租约时必须重新验证目录/配置，缺失或不兼容必须 fail closed，不得回落到其它 rig/transport。
 - **决策来源**：执行期配置可能改变，设备需求和出网是安全前置条件。

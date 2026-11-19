@@ -159,6 +159,7 @@ test("Finding detail keeps one candidate entry and its state across conditional 
   let showResearch = false;
   function detail(id: string): FindingDetail {
     return {
+      verification_control: { verify_status: needsHuman ? "needs_human" : "pending", subject_revision: null, latest_round_id: null },
       finding: { ...finding(id), verify_status: needsHuman ? "needs_human" : "pending",
         raw_json: {}, source_job_type: "analyze", source_job_status: "succeeded" },
       verification_jobs: [], verification_rounds: [], source_events: [],

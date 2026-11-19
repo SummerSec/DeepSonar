@@ -1,4 +1,4 @@
-import type { ProjectTaskQueueYieldInput } from "@deepsonar/shared-types";
+import type { ProjectTaskQueueYieldInput, FindingInconclusiveBody, FindingVerificationControl } from "@deepsonar/shared-types";
 /** 调度器 API 类型与请求（vite proxy /api → :3100） */
 
 import type { PlatformClaimsStatus } from "./platform-claims";
@@ -1017,6 +1017,7 @@ export interface WsTicket {
 }
 
 export interface FindingDetail {
+  verification_control: FindingVerificationControl;
   finding: FindingSummary & {
     raw_json: Record<string, unknown>;
     source_job_type: string;
@@ -2664,6 +2665,8 @@ export const api = {
   ) => send<FindingSummary>("PATCH", `/findings/${id}/disposition`, body),
   setFindingNeedsHuman: (id: string, body?: { verify_status: "needs_human"; reason?: string }) =>
     send<FindingSummary>("PATCH", `/findings/${id}/verify-status`, body ?? { verify_status: "needs_human" }),
+  closeFindingInconclusive: (id: string, body: FindingInconclusiveBody) =>
+    send<{ finding_id: string; verify_status: string; round_id: string; mutation_id: string }>("PATCH", `/findings/${id}/verify-status`, body),
   forceFindingVerify: (id: string, body?: { reason?: string }) =>
     send<{
       finding_id: string;
