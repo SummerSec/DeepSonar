@@ -346,13 +346,37 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
       await sql`DELETE FROM project_task_queue_items WHERE canvas_id IN (${fixture.canvasId},${canvasB})`;
     });
+    for(const blocker of ['unknown','paused','expired','cancelled'] as const) {
+      await context.test(`yielded reply never bypasses a later ${blocker} guard`,async()=>{
+        const fixture=await setup();await fixture.seal();await fixture.close();
+        const [item]=await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
+          VALUES(${projectId},${fixture.canvasId},'active') RETURNING id::text`;
+        const decision=await app.inject({method:'POST',url:`/projects/${projectId}/task-queue/yield`,payload:{
+          mutation_id:randomUUID(),canvas_id:fixture.canvasId,expected_item_id:item.id,request_id:fixture.requestId,expected_revision:0}});
+        assert.equal(decision.statusCode,200,decision.body);
+        if(blocker==='unknown') await sql`INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status,replay_policy)
+          VALUES(${fixture.attemptId},${fixture.jobId},'later-unknown','gateway_model_request','unknown','never')`;
+        if(blocker==='paused') await sql`UPDATE canvases SET target_json=target_json || ${sql.json({execution_control:{paused:true}})} WHERE id=${fixture.canvasId}`;
+        if(blocker==='expired') await sql`UPDATE human_requests SET checkpoint_expires_at=now()-interval '1 second' WHERE id=${fixture.requestId}`;
+        if(blocker==='cancelled') await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+        const reply=await fixture.reply();assert.equal(reply.statusCode,blocker==='cancelled'?409:202,reply.body);
+        await Promise.all([pumpHumanContinuations(1,fixture.requestId),pumpHumanContinuations(1,fixture.requestId)]);
+        assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,blocker==='cancelled'?'cancelled':'waiting_human');
+        const [request]=await sql`SELECT status,resumed_at FROM human_requests WHERE id=${fixture.requestId}`;
+        assert.equal(request.status,blocker==='cancelled'?'closed':'answered');assert.equal(request.resumed_at,null);
+        assert.equal((await sql`SELECT count(*)::int AS n FROM events WHERE job_id=${fixture.jobId}
+          AND payload_json->>'subtype'='human_continuation'`)[0].n,0);
+        await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+        await sql`DELETE FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`;
+      });
+    }
     for (const blocker of ['other_pending','other_wait','unknown','paused','expired','cancelled','closed','budget','exit','checkpoint','revision'] as const) {
       await context.test(`human yield rejects ${blocker} and preserves seat`, async () => {
         const fixture=await setup();await fixture.seal();await fixture.close();
         const [item]=await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
           VALUES(${projectId},${fixture.canvasId},'active') RETURNING id::text`;
-        if(blocker==='other_pending'||blocker==='other_wait') await sql`INSERT INTO jobs(project_id,canvas_id,type,status)
-          VALUES(${projectId},${fixture.canvasId},'audit',${blocker==='other_wait'?'waiting_human':'pending'})`;
+        if(blocker==='other_pending'||blocker==='other_wait') await sql`INSERT INTO jobs(project_id,canvas_id,type,status,agent_snapshot_json)
+          VALUES(${projectId},${fixture.canvasId},'audit',${blocker==='other_wait'?'waiting_human':'pending'},'{}')`;
         if(blocker==='unknown') await sql`INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status,replay_policy)
           VALUES(${fixture.attemptId},${fixture.jobId},'yield-unknown','gateway_model_request','unknown','never')`;
         if(blocker==='paused') await sql`UPDATE canvases SET target_json=target_json || ${sql.json({execution_control:{paused:true}})} WHERE id=${fixture.canvasId}`;

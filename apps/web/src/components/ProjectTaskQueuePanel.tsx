@@ -67,7 +67,7 @@ function TaskQueueRow({ projectId, item, order, onYield, busy }: {
           <span className="font-mono text-zinc-600">加入 {formatTime(item.created_at)}</span>
           {reason && <span className="text-amber-300/90">{reason}</span>}
           {item.state === "active" && item.block_reason === "waiting_human" &&
-            <span className="text-zinc-500">等待人工，未占运行资源，但阻挡串行队列</span>}
+            <span className="text-zinc-500">等待人工，未占运行资源，但阻挡串行队列。暂存让位后，回复将排到队尾。</span>}
         </div>
       </div>
       {onYield && item.state === "active" && item.yield_request && (

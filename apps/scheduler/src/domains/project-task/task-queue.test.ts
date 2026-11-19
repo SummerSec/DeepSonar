@@ -178,3 +178,14 @@ test("yielded membership never grants execution, even if incorrectly presented a
   assert.equal(canClaimQueuedTask({queuePaused:false,itemState:"yielded",isHead:true}),false);
   assert.equal(canClaimQueuedTask({queuePaused:false,itemState:"yielded",isHead:false}),false);
 });
+
+test("human yield input requires exact CAS identity and rejects malformed or extra fields", async () => {
+  const {ProjectTaskQueueYieldInput}=await import("@deepsonar/shared-types");
+  const input={mutation_id:"11111111-1111-4111-8111-111111111111",canvas_id:"canvas",expected_item_id:"42",
+    request_id:"22222222-2222-4222-8222-222222222222",expected_revision:0};
+  assert.equal(ProjectTaskQueueYieldInput.safeParse(input).success,true);
+  for(const invalid of [{...input,expected_revision:-1},{...input,expected_revision:0.5},{...input,expected_item_id:"0"},
+    {...input,mutation_id:"invalid"},{...input,request_id:"invalid"},{...input,extra:true}]) {
+    assert.equal(ProjectTaskQueueYieldInput.safeParse(invalid).success,false);
+  }
+});
