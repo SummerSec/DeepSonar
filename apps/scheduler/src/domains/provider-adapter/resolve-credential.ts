@@ -274,8 +274,8 @@ export async function resolveProviderCredentialForJob(
   if (pool.length === 1) return pool[0]!;
 
   // Recovery does not rotate keys because another Job changed the load. The
-  // old identity is only a preference within current authorization/model/CLI
-  // constraints; an explicit configured default still takes precedence.
+  // old identity remains a preference within current authorization/model/CLI
+  // constraints and must have room before it takes precedence over the default.
   const existing = input.existingCredentialId ? pool.find(row => row.id === input.existingCredentialId) : undefined;
 
   const identities = pool.map(row => {
@@ -286,36 +286,40 @@ export async function resolveProviderCredentialForJob(
   });
   if (input.projectId && input.allowlist.credential_ids_configured && identities.every(identity => identity !== null)
     && new Set(identities).size === 1) {
-    // Readiness does not consume a turn or mutate an allocation ledger. Each
-    // creation freezes its selected identity; load is a projection of the
-    // existing same-project Jobs, not credential quota or a retry permission.
+    // Capacity follows dispatcher occupancy across projects. Pending/human-wait
+    // assignments remain a project-local distribution hint, never occupied slots.
+    // This read does not reserve capacity; claim rechecks quotas under its lock.
     const loads = await input.db`SELECT agent_snapshot_json->>'credential_id' AS credential_id,
-      count(*) FILTER (WHERE status IN ('pending','claimed','provisioning','running','waiting_human')) AS active_jobs,
-      count(*) AS total_jobs FROM jobs WHERE project_id=${input.projectId}
-      AND agent_snapshot_json->>'credential_id'=ANY(${pool.map(row => row.id)}::text[])
-      GROUP BY agent_snapshot_json->>'credential_id'` as Array<{ credential_id: string; active_jobs: unknown; total_jobs: unknown }>;
-    const counts = new Map<string, { active: number; total: number }>();
+      count(*) FILTER (WHERE status IN ('claimed','provisioning','running')) AS active_jobs,
+      count(*) FILTER (WHERE project_id=${input.projectId}
+        AND status IN ('pending','claimed','provisioning','running','waiting_human')) AS assigned_jobs,
+      count(*) FILTER (WHERE project_id=${input.projectId}) AS total_jobs FROM jobs
+      WHERE agent_snapshot_json->>'credential_id'=ANY(${pool.map(row => row.id)}::text[])
+        AND (project_id=${input.projectId} OR status IN ('claimed','provisioning','running'))
+      GROUP BY agent_snapshot_json->>'credential_id'` as Array<{
+        credential_id: string; active_jobs: unknown; assigned_jobs: unknown; total_jobs: unknown;
+      }>;
+    const counts = new Map<string, { active: number; assigned: number; total: number }>();
     for (const load of loads) {
-      const active = Number(load.active_jobs), total = Number(load.total_jobs);
-      if (!Number.isSafeInteger(active) || !Number.isSafeInteger(total) || active < 0 || total < active) {
+      const active = Number(load.active_jobs), assigned = Number(load.assigned_jobs), total = Number(load.total_jobs);
+      if (![active, assigned, total].every(value => Number.isSafeInteger(value) && value >= 0) || total < assigned) {
         throwResolve("provider_credential_load_unknown", { message: "凭据 Job 负载无法确认；请重试或核对当前账本",
-          path: "credential", expected: { kind: "known_same_project_job_counts" }, observed: { kind: "invalid_counts" },
+          path: "credential", expected: { kind: "known_credential_occupancy_and_project_job_counts" }, observed: { kind: "invalid_counts" },
           next_action: "inspect_current_job_history", category: "permanent_failure" });
       }
-      counts.set(load.credential_id, { active, total });
+      counts.set(load.credential_id, { active, assigned, total });
     }
-    // #1078 切片 1：并发余量来自 metadata.max_concurrent 与同一负载投影，
-    // 只用于偏好排序：先余量比例、后在途数、再历史总量，缺省与凭据 ID 只作并列裁决；
-    // 不占位、不放宽授权，也不改变准入判定（未设置视为不限）。
-    const score = (row: (typeof pool)[number]): { room: number; active: number; total: number } => {
-      const limit = credentialConcurrencyPolicy(row.meta_json).maxConcurrent;
+    // Use the same managed metadata as dispatchSkipReason, not free-form meta_json.
+    const score = (row: (typeof pool)[number]): { room: number; assigned: number; total: number } => {
+      const limit = credentialConcurrencyPolicy(row.public_metadata_json).maxConcurrent;
       const active = counts.get(row.id)?.active ?? 0;
+      const assigned = counts.get(row.id)?.assigned ?? 0;
       const total = counts.get(row.id)?.total ?? 0;
       const room = limit === null ? Number.POSITIVE_INFINITY : Math.max(0, limit - active);
-      return { room, active, total };
+      return { room, assigned, total };
     };
     const ratio = (row: (typeof pool)[number]): number => {
-      const limit = credentialConcurrencyPolicy(row.meta_json).maxConcurrent;
+      const limit = credentialConcurrencyPolicy(row.public_metadata_json).maxConcurrent;
       const { room } = score(row);
       if (limit === null) return 1;
       return limit === 0 ? 0 : room / limit;
@@ -326,7 +330,7 @@ export async function resolveProviderCredentialForJob(
         || Number(b.id === existing?.id) - Number(a.id === existing?.id);
     const byCapacity = (a: (typeof pool)[number], b: (typeof pool)[number]): number =>
       ratio(b) - ratio(a) || tieBreak(a, b)
-        || score(a).active - score(b).active || score(a).total - score(b).total || a.id.localeCompare(b.id);
+        || score(a).assigned - score(b).assigned || score(a).total - score(b).total || a.id.localeCompare(b.id);
     // #1078/#1096：仍有余量的冻结恢复身份先于显式缺省，否则「缺省满额时选了同伴并冻结、缺省之后
     // 腾出容量」会让恢复 Job 被换回缺省并触发 SNAPSHOT_STALE；缺省与余量比例只服务没有恢复身份的池，
     // 恢复身份自身满额或已不在授权池内时仍让位（授权与并发准入不因偏好排序放宽）。
