@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
-import { HumanRequestGuidance, TaskContract, TaskGoalReviewRequest } from "@deepsonar/shared-types";
+import { HumanRequestGuidance, TaskContract, TaskGoalReviewRequest, FindingVerifyStatusBody } from "@deepsonar/shared-types";
 import { PlanGoalReviewBinding } from "./domains/plan-protocol/criterion-model.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1560,6 +1560,14 @@ const OPS: Op[] = [
         type: "object",
         required: ["human_request", "human_continuation"],
         properties: {
+          process_diagnostics: {
+            type: "array", maxItems: 64,
+            description: "精确绑定 Job/Attempt/Sandbox/Process/原 agent_run 的宿主审计。固定终止类别、实际宿主 kill caller、PTY DELETE 结果和已核验沙箱销毁结果，不含原始日志、命令、URL 或凭据。退出码未知保持 null，host_kill 不证明 OOM。失败或超时保留 unknown 与旧凭据撤销状态，无合法断点的自动整 Job 恢复尚未交付。",
+            items: { type: "object", properties: {
+              audit_id: { type: "string" }, observed_at: { type: "string", format: "date-time" },
+              observation: { type: "object" }, sandbox_cleanup: { type: "object", nullable: true },
+            } },
+          },
           human_continuation: {
             type: "object", nullable: true,
             description: "请求和断点的管理摘要，不含文件正文、路径、密钥或运行权限；回复保存不代表已启动或完成。",
@@ -1800,19 +1808,11 @@ const OPS: Op[] = [
   {
     method: "patch",
     path: "/findings/{id}/verify-status",
-    summary: "人工将等待中的 Finding 收口为 needs_human",
-    description: "仅允许同画布存在 waiting_human Hub Job 且尚未 confirmed 的 Finding；confirmed 只能由 Scheduler Verify 收口。",
+    summary: "人工处理等待中的 Finding 技术验证",
+    description: "needs_human 分支要求等待人工的 Hub。inconclusive 分支仅接受 needs_human 且无活动执行、未决效果或开放轮次，必须提交原因、当前 subject revision/状态/最后轮次和 mutation_id。同编号同决定重放，同编号不同决定或过期状态返回409。新增独立终结轮次，审计与状态同事务。",
     scope: "findings:write",
     tags: ["Findings"],
-    body: {
-      type: "object",
-      required: ["verify_status"],
-      additionalProperties: false,
-      properties: {
-        verify_status: { type: "string", enum: ["needs_human"] },
-        reason: { type: "string", minLength: 1, maxLength: 2000 },
-      },
-    },
+    body: z.toJSONSchema(FindingVerifyStatusBody, { target: "openapi-3.0", io: "input" }) as Record<string, unknown>,
   },
   {
     method: "post",

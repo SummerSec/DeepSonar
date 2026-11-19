@@ -3,6 +3,8 @@
 > 状态：**设计（#494）+ Phase 1 MVP as-built（#495 / #504 / #506）**。已落地 adb 与 hdc 两条 transport、设备租约、项目 opt-in + 任务级授权与审计，以及「设备任务必须允许出网」的 fail-closed 前置（#506）；Phase 2（串口/SSH、电源与复位控制、多设备池、危险操作确认、设备视图）仍为提案。真机全链路仍需在 rig + 真机上验收。
 > 事实入口：本文描述设计契约；实现细节以代码、`database/schema.sql`、OpenAPI 与测试为准。
 
+#1133 补齐自动 Hub worker intent 与人工 Finding 补证两入口的画布设备要求冻结，沿用 `freezeSnapshotDeviceRequirement` 的项目 opt-in、rig、transport、独占和出网检查。快照仍由设备租约入口重新授权，支持 adb/hdc。远端目标没有显式设备要求时按现有网络授权执行，镜像缺工具不能单独证明 runtime_test 不可行。正常 HTTP 到 broker grant 的工程回归接现有 device-lease Actions，真实物理设备效果仍未验证。
+
 DeepSonar 的 Job 跑在硬化容器沙箱里，沙箱内**没有任何物理设备可达路径**。真机漏洞挖掘/复现（固件、IoT、路由、移动端、嵌入式）必须让 Agent 与真实设备交互。本文给出「设备如何被平台调度、隔离、授权与记账」这一层的设计。
 
 镜像层已经预埋了设备工具链（`agent-harness/mobile-runtime.json` 的 `adb`+`hdc`、`agent-harness/openharmony-test-runtime.json` 的 `hdc`，capabilities 标记 `device-protocol`），缺的不是工具，而是调度与治理。

@@ -92,9 +92,10 @@ export interface OpenSandboxCreateInput {
 export interface OpenSandboxExecHandle {
   id?: string;
   getTerminationDiagnostic?(): RuntimeProcessDiagnostic | undefined;
+  getCleanupDiagnostic?(): import("./runtime-process-diagnostic.js").RuntimeCleanupDiagnostic | undefined;
   write(data: string): Promise<void>;
   closeStdin(): Promise<void>;
-  kill(): Promise<void>;
+  kill(caller?: import("./runtime-process-diagnostic.js").RuntimeKillCaller): Promise<void>;
   resize?(cols: number, rows: number): Promise<void>;
   [Symbol.asyncIterator](): AsyncIterator<RuntimeProcessChunk>;
 }
@@ -287,6 +288,7 @@ function wrapOpenSandboxProcess(handle: OpenSandboxExecHandle): RuntimeProcess {
   const process: RuntimeProcess = {
     id: handle.id,
     ...(handle.getTerminationDiagnostic ? { getTerminationDiagnostic: () => handle.getTerminationDiagnostic!() } : {}),
+    ...(handle.getCleanupDiagnostic ? { getCleanupDiagnostic: () => handle.getCleanupDiagnostic!() } : {}),
     get stdinClosed() {
       return closed;
     },
@@ -304,7 +306,7 @@ function wrapOpenSandboxProcess(handle: OpenSandboxExecHandle): RuntimeProcess {
       closed = true;
       await handle.closeStdin();
     },
-    kill: () => handle.kill(),
+    kill: (caller) => handle.kill(caller),
     resize: handle.resize ? (cols, rows) => handle.resize!(cols, rows) : undefined,
     async *[Symbol.asyncIterator](): AsyncIterator<RuntimeProcessChunk> {
       for await (const event of { [Symbol.asyncIterator]: () => handle[Symbol.asyncIterator]() }) {
@@ -876,7 +878,7 @@ export class OpenSandboxRunner implements SandboxRunner {
         if (closed) return;
         closed = true;
         this.terminals.get(handle.sandboxId)?.delete(session);
-        await process.kill().catch(() => undefined);
+        await process.kill("terminal_close").catch(() => undefined);
       },
     };
     const sessions = this.terminals.get(handle.sandboxId) ?? new Set<SandboxTerminalSession>();

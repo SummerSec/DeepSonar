@@ -194,7 +194,7 @@ Agent 不调用这些 HTTP 上传接口；运行中使用 Job 按 RoleConfig 冻
 | GET | /findings/:id/lexical-search | findings:read | 字面检索（非语义关联）；同上 cursor 与 `no-store` 约束；预算超限 503 `SEARCH_BUDGET_EXCEEDED` |
 | GET | /findings/:id/evidence-trace | findings:read | Fact↔Evidence 可追溯性只读视图；`runtime_proof=false`、`replay.kind=evidence_integrity_check`，不改变 verify verdict。详见 [EVIDENCE_TRACE](../../../docs/EVIDENCE_TRACE.md) |
 | GET | /canvases/:id/finding-research | findings:read | 研究运行与去重簇投影：最近 50 次 `finding_research_runs`（含 `error`）+ canvas 内簇及其 canonical Finding（最多 1000 条）；只读，不改变 severity / verify 门 / 报告收敛 |
-| PATCH | /findings/:id/verify-status | findings:write | 人工收口 verify 状态 `{status, reason?}`；非法结构 `400 FINDING_VERIFY_STATUS_INVALID`；写 Finding 的 `verify_status` 与人工处置，不重放 `unknown` 外部效果 |
+| PATCH | /findings/:id/verify-status | findings:write | 严格 verify_status 判别请求。needs_human 沿用等待 Hub 的人工处理。inconclusive 仅允许 needs_human 且无活动执行、未决效果和开放轮次，必须 reason、expected（verify_status/subject_revision/latest_round_id）与 UUID mutation_id。CAS 过期或同编号异决定409，同决定重试返回原结果；新增终结轮次和同事务请求身份审计，业务 disposition 独立 |
 
 ### Finding 身份与关系（#819）
 

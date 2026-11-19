@@ -1,4 +1,5 @@
 import { recordHumanRequest } from "../job-control/human-continuation-store.js";
+import { DeviceNotAuthorizedError, freezeSnapshotDeviceRequirement } from "../device/index.js";
 import type { sql } from "../../db.js";
 import { freezeJobRuntimeConfiguration } from "../../job-runtime-freeze.js";
 import { freezeGoalReviewAssignment } from "../../task-goal-review-source.js";
@@ -951,7 +952,11 @@ export function createEventIngestionSideEffectApplication(
           },
         ),
       );
+      snapshot = await freezeSnapshotDeviceRequirement(tx, String(job.project_id), canvasId, snapshot);
     } catch (error) {
+      if (error instanceof DeviceNotAuthorizedError) {
+        throw new ControlInputError("tool_not_allowed", "画布设备要求尚未获得平台授权，请由管理员核对设备接入配置。", "intents");
+      }
       if (error instanceof ControlInputError) throw error;
       if (isHubRuntimeImageResolutionError(error)) {
         throw invalidRuntimeImage("intents.runtime_image_key", allowedImageKeys);

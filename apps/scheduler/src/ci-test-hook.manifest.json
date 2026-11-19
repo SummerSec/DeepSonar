@@ -20,7 +20,6 @@
     "apps/scheduler/src/domains/dashboard/ops.test.ts",
     "apps/scheduler/src/domains/role-runtime-snapshot/sandbox-limits.test.ts",
     "apps/scheduler/src/event-attribution.test.ts",
-    "apps/scheduler/src/finding-human-handling.integration.test.ts",
     "apps/scheduler/src/finding-trace.integration.test.ts",
     "apps/scheduler/src/finding-trace.test.ts",
     "apps/scheduler/src/gateway-body-limit.test.ts",

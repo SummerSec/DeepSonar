@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createServer } from "node:http";
 import { runRealAgent } from "./runtime-agent.js";
 import { createOpenSandboxRuntimeHost, type OpenSandboxSession } from "./opensandbox.js";
 import { classifyCliSessionResumeError } from "./runtime-error-classification.js";
@@ -23,6 +24,7 @@ async function ptyFixture(
   onSend?: (data: string | ArrayBuffer | Uint8Array, emit: (type: string, event?: PtyEvent) => void) => void,
   onOpen?: (emit: (type: string, event?: PtyEvent) => void) => void,
   diagnosticSecrets?: readonly string[],
+  cleanupResponse?: () => Promise<Response>,
 ) {
   const listeners = new Map<string, Array<(event: PtyEvent) => void>>();
   const emit = (type: string, event: PtyEvent = {}) => listeners.get(type)?.forEach(listener => listener(event));
@@ -37,10 +39,61 @@ async function ptyFixture(
   const handle = await openOpenSandboxPty(
     { httpUrl: "http://localhost:44772", headers: { "OPEN-SANDBOX-API-KEY": "endpoint-secret" } },
     { command: "pi --mode rpc", pty: false, diagnosticSecrets },
-    { openWebSocket: () => ws, fetchImpl: async () => new Response(JSON.stringify({ session_id: "test-pty" })) },
+    { openWebSocket: () => ws, fetchImpl: async (_url, options) => options?.method === "DELETE" && cleanupResponse
+      ? cleanupResponse() : new Response(JSON.stringify({ session_id: "test-pty" })) },
   );
   return { handle, emit };
 }
+
+test("PTY cleanup records HTTP success, rejection, transport failure and timeout without changing first termination", async () => {
+  for (const [expected, request] of [
+    ["confirmed", async () => new Response(null, { status: 204 })],
+    ["http_error", async () => new Response("sensitive body", { status: 503 })],
+    ["transport_error", async () => { throw new Error("sensitive transport"); }],
+    ["timeout", async () => new Promise<Response>(() => {})],
+  ] as const) {
+    const { handle, emit } = await ptyFixture(undefined, undefined, undefined, request);
+    emit("close", { code: 1006, reason: "peer lost" });
+    await assert.rejects(async () => { for await (const _ of handle) { /* drain */ } });
+    const terminal = handle.getTerminationDiagnostic!();
+    await handle.kill("transport_cleanup");
+    assert.deepEqual(handle.getTerminationDiagnostic!(), terminal);
+    assert.equal(handle.getCleanupDiagnostic!()!.outcome, expected);
+    assert.equal(handle.getCleanupDiagnostic!()!.http_status, expected === "confirmed" ? 204 : expected === "http_error" ? 503 : null);
+    assert.doesNotMatch(JSON.stringify(handle.getCleanupDiagnostic!()), /sensitive/);
+  }
+});
+
+test("host kill records the actual caller without claiming OOM", async () => {
+  const { handle } = await ptyFixture();
+  await handle.kill("terminal_result");
+  assert.equal(handle.getTerminationDiagnostic!()!.termination, "host_kill");
+  assert.equal(handle.getTerminationDiagnostic!()!.host_kill_caller, "terminal_result");
+  assert.doesNotMatch(JSON.stringify(handle.getTerminationDiagnostic!()), /oom|out.of.memory/iu);
+});
+
+test("PTY cleanup uses real HTTP DELETE and preserves its rejected status", async () => {
+  const methods: string[] = [];
+  const server = createServer((request, response) => {
+    request.resume(); methods.push(`${request.method} ${request.url}`);
+    if (request.method === "POST") response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ session_id: "http-pty" }));
+    else response.writeHead(503).end("private failure body");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  try {
+    const handle = await openOpenSandboxPty({ httpUrl: `http://127.0.0.1:${address.port}`, headers: {} }, { pty: false }, {
+      openWebSocket: () => ({ readyState: 1, binaryType: "arraybuffer", send() {}, close() {},
+        addEventListener(type, listener) { if (type === "open") queueMicrotask(() => listener({})); },
+      }),
+    });
+    await handle.kill("runtime_exception");
+    assert.deepEqual(methods, ["POST /pty", "DELETE /pty/http-pty"]);
+    assert.equal(handle.getCleanupDiagnostic!()!.outcome, "http_error");
+    assert.equal(handle.getCleanupDiagnostic!()!.http_status, 503);
+    assert.doesNotMatch(JSON.stringify(handle.getCleanupDiagnostic!()), /private/);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
 
 test("PTY queued stdout yields to socket I/O before the backlog is exhausted", async () => {
   const { handle, emit } = await ptyFixture();

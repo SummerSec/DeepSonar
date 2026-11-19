@@ -187,6 +187,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-005 未知外部效果禁止重放
 
+#1143 首片补充 [PTY 宿主清理证据](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)。通用对账不以 Attempt 终态证明运行退出，新观察仅在精确 owner、先提交凭据撤销、受管销毁确认后结清原终态 marker。独立 unknown 继续闭锁，无合法断点的整 Job 自动恢复未交付。真实 HTTP/PG/Runtime 受控回归接既有 Actions，最终 SHA 待验。
+
 - **规范要求**：当外部效果无法证明未发生（`effect_pending` / `unknown`，含崩溃、超时、取消后的未证实窗口）时，系统必须将 Attempt/Job 标为不可自动重放路径，通常进入 `orphan`/对账/人工路径，清理 Token、沙箱、画布同步和租约；`replay_policy` 不得被本次结算改宽。
 - **决策来源**：未知效果是事实状态，不是普通 transient error；猜测重放可能重复创建资源或修改目标。
 - **实现状态**：as-built；`effect_pending`/`unknown` 与 `replay_policy=never` 被单独处理并进入清理/对账路径。#899 允许对非 active 历史效果提供受审计单条人工证据，CLI 单条成功与全局残留分开，未核验计数不报零；#1002 P1-9 在同一结清内核新增 admin/项目归属限定 Management 单条入口，精确重试与活动/排队/覆盖拒绝；不扩大重放、恢复预算或维护权限。#1036 A/D 新增两条 admin-only 只读投影（[等待分类](../../apps/scheduler/src/domains/job-control/recovery-diagnostics.ts)与[恢复诊断路由](../../apps/scheduler/src/domains/job-control/recovery-diagnostics-routes.ts)）：把历史等待按内核事实分类（未知效果／平台死路／业务决定／授权等待／无信号），并列出单 Job 未结清效果与既有动作入口；投影不改变结清/恢复 gate，不以无信号等待启动恢复。#1012 正常人工等待的 pending agent_run 仅在宿主已确认原 sandbox 消失且同一活动 Attempt/持久 human 事件仍匹配时，先原子撤销旧运行 grants 再结清；等待标签或中断状态不是退出证明，unknown/清理失败/取消与其他效果仍闭锁。
@@ -576,6 +578,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-VERIFY-005 Verify 终态与无进展收口
 
+#1133 补齐人工 `needs_human → inconclusive` 决定，权限为 `findings:write`，对象修订/技术状态/最后轮次 CAS、持久 mutation 幂等、新终结轮次和请求身份审计同事务。活动执行、未决效果和开放轮次拒绝，业务 disposition 独立。行为回归接 `pnpm ci:integration:verify-eligibility` 和 `pnpm ci:unit:web-facts`，最终 SHA Actions 待验。
+
 - **规范要求**：Verify 必须将通过、否定、冲突、证据不足、不可判定和需人工映射为明确终态/缺项；否定 evidence 只能在完整结构化证据和成功来源 Job 下进入 refuted，冲突进入 inconclusive，不得用 needs_human 混淆。
 - **决策来源**：终态决定 Hub、Report 和人工动作，错误映射会产生虚假确认或无限循环。
 - **实现状态**：as-built；无进展护栏与默认值见[配置](../../apps/scheduler/src/config.ts)中的 `DEEPSONAR_MAX_NO_PROGRESS_ROUNDS`。#1133 后，Verify 补证回弹另有独立刹车：连续 `VERIFY_NO_PROGRESS_LIMIT`（2）次回弹的缺失证据集合完全相同即收口 `needs_human`，round error 与结算 reason 落稳定码 `verify_no_progress`（`apps/scheduler/src/verify-no-progress.ts`）。
@@ -772,6 +776,8 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **验证证据**：`pnpm ci:unit:device-lease`、`pnpm ci:integration:device-lease`、`pnpm ci:smoke:device`。
 
 ### FR-DEV-002 创建时冻结设备需求并重新授权
+
+#1133 将统一冻结接入自动 Hub worker intent 与人工 Finding evidence-jobs 两入口，真实 HTTP → Job snapshot → broker grant 回归接 `pnpm ci:integration:device-lease`。无显式设备要求的远端目标继续其受治理路径。
 
 - **规范要求**：Job 创建必须把合法 device_requirement、rig、transport、项目 opt-in 和 allow_egress 冻结到 snapshot；申请租约时必须重新验证目录/配置，缺失或不兼容必须 fail closed，不得回落到其它 rig/transport。
 - **决策来源**：执行期配置可能改变，设备需求和出网是安全前置条件。
