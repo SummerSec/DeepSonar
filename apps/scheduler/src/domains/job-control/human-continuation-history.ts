@@ -1,5 +1,5 @@
 import { sql } from "../../db.js";
-import { projectJobHumanRequestPayload } from "./job-human-request.js";
+import { projectJobHumanRequestPayload, redactJobHumanRequestText } from "./job-human-request.js";
 
 const MAX_HISTORY_MESSAGES = 256;
 const MAX_HISTORY_BYTES = 1024 * 1024;
@@ -12,6 +12,8 @@ export async function readAcknowledgedHumanHistory(jobId: string, db: typeof sql
     ORDER BY m.planned_at,m.id LIMIT ${MAX_HISTORY_MESSAGES + 1}`;
   const history = messages.map(({ payload_json, ...message }) => ({
     ...message,
+    body: redactJobHumanRequestText(message.body),
+    ack_summary: redactJobHumanRequestText(message.ack_summary),
     request: payload_json ? projectJobHumanRequestPayload(payload_json) : null,
   }));
   const bytes = Buffer.from(JSON.stringify(history), "utf8");

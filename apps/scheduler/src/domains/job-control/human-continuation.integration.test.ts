@@ -249,6 +249,16 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.equal(history[0].request.guidance.question,'Which authorized reference applies?');
       assert.equal(history.some((message:{id:string})=>message.id===String(secondReply.json().id)),false,
         'the unacknowledged reply is delivered only through its original inbox operation');
+      const secretBody='Use the first reference. api_key="history-body-private"';
+      const secretSummary='Reference read. Authorization: Bearer history-summary-private';
+      await sql`UPDATE human_messages SET body=${secretBody},ack_summary=${secretSummary} WHERE id=${String(reply.json().id)}`;
+      await checkpoints.restoreHumanCheckpoint({jobId:fixture.jobId,attemptNo:3,snapshot:snapshot.agent_snapshot_json,host:fixture.host});
+      const restoredHistory=fixture.restored.get(historyPath)!.toString('utf8');
+      assert.equal(restoredHistory.includes('history-body-private'),false,'history bodies use the existing secret projection');
+      assert.equal(restoredHistory.includes('history-summary-private'),false,'ACK summaries use the same secret projection');
+      assert.match(restoredHistory,/已保存密钥/);
+      const [originalMessage]=await sql`SELECT body,ack_summary FROM human_messages WHERE id=${String(reply.json().id)}`;
+      assert.equal(originalMessage.body,secretBody);assert.equal(originalMessage.ack_summary,secretSummary);
       assert.equal(fixture.restored.has(String(newInput.workspace_path)),false,'pending reply attachments still use governed delivery');
       assert.equal(await clock.remainingHumanExecutionMs(sql,fixture.jobId),3600_000-cumulative);
       await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '1 hour' WHERE id=${fixture.jobId}`;
