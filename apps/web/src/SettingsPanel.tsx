@@ -664,7 +664,14 @@ export function SettingsPanel({
                 activeJobs={Object.values(cliActive).reduce((sum, value) => sum + Number(value || 0), 0)}
                 onFlash={flash} onSaved={(saved) => {
                   setStoredGlobalRules(saved.rules);
-                  setRules(saved.effective_rules);
+                  setRules(current => current ? {
+                    ...current,
+                    maxGlobalJobs: saved.effective_rules.maxGlobalJobs,
+                    maxJobsPerProject: saved.effective_rules.maxJobsPerProject,
+                    maxConcurrentJobs: saved.effective_rules.maxConcurrentJobs,
+                    maxConcurrentJobsSource: saved.effective_rules.maxConcurrentJobsSource,
+                    maxConcurrentProvisioning: saved.effective_rules.maxConcurrentProvisioning,
+                  } : current);
                 }} />
             )}
 
