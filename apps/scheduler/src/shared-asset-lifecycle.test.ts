@@ -447,11 +447,15 @@ test("Dispatcher contract: bounded keyset pages keep Canvas → Job → Attempt 
   assert.equal(claim.slice(0, canvasLock).includes("FOR UPDATE"), false);
   assert.ok(claim.indexOf("createOrGetActiveAttempt", jobLock) > jobLock);
   assert.match(claim, /j\.created_at::text AS created_at_key/);
-  assert.match(claim, /j\.created_at > \$\{sql\.typed\(cursor\.createdAt, 25\)\}::timestamptz/);
+  assert.match(claim, /j\.created_at > \$\{sql\.typed\(project\.scan_created_at!, 25\)\}::timestamptz/);
+  assert.match(claim, /LIMIT \$\{FAIR_PENDING_PAGE_SIZE\}/);
+  assert.match(claim, /visits < FAIR_PROJECT_VISITS_PER_TICK/);
   assert.match(claim, /hint\.canvas_id IS NOT DISTINCT FROM j\.canvas_id/);
   const claimCas = claim.indexOf("const row = await lifecycle.claimPendingJob(job.id)");
   const quotaCharge = claim.indexOf("accumulateDispatchCounts([{ ...job, count: 1 }], counts)");
   assert.ok(claimCas > jobLock && quotaCharge > claimCas, "candidate hints must not reserve quota before the actual claim CAS");
+  assert.ok(claim.indexOf("await finishFairProjectVisit", claimCas) > quotaCharge,
+    "durable project service must follow the actual Job claim");
 });
 
 test("Dispatcher contract: Job ownership fence precedes provision Attempt admission/settlement", async () => {
