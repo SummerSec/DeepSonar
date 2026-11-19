@@ -153,7 +153,7 @@ for source in ['rea-job-actor.py', 'knowledge-job-actor.py', 'opensandbox-platfo
     else:
         code = text.split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]
         for operation in ['emit_fact', 'mark_job_done']:
-            sys.argv = ['offline', os.environ['DEEPSONAR_API_BASE_URL'], 'offline-contract-token', operation,
+            sys.argv = ['offline', os.environ['DEEPSONAR_API_BASE_URL'], operation,
                         '{"summary":"Offline completion contract."}']
             with contextlib.redirect_stdout(io.StringIO()):
                 exec(code, namespace)
