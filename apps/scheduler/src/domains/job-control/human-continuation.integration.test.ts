@@ -104,6 +104,23 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.ok(new Date(timing.execution_deadline_at).getTime()<Date.now()+3600_000-9000,'execution deadline carries cumulative time');
       await checkpoints.assertHumanContinuationOwner(sql, fixture.jobId, String(next.id));
       const [frozen] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
+      for(const invalid of [
+        {...sealed.manifest_json,v:1},
+        {...sealed.manifest_json,files:sealed.manifest_json.files.map(({path,bytes,sha256}:{path:string;bytes:number;sha256:string})=>({path,bytes,sha256}))},
+        {...sealed.manifest_json,files:sealed.manifest_json.files.map((file:Record<string,unknown>)=>({...file,mode:0o777}))},
+      ]) {
+        await sql`UPDATE human_requests SET manifest_json=${sql.json(invalid)} WHERE id=${fixture.requestId}`;
+        const commandCount=fixture.commands.length;
+        await assert.rejects(checkpoints.loadHumanCheckpoint(sql,fixture.jobId,2,frozen.agent_snapshot_json),
+          /^Error: HUMAN_CHECKPOINT_IDENTITY_CHANGED$/);
+        await assert.rejects(checkpoints.restoreHumanCheckpoint({jobId:fixture.jobId,attemptNo:2,snapshot:frozen.agent_snapshot_json,host:fixture.host}),
+          /^Error: HUMAN_CHECKPOINT_IDENTITY_CHANGED$/);
+        assert.equal(fixture.commands.length,commandCount,'invalid manifest must fail before any sandbox command');
+        assert.equal(fixture.restored.size,0,'invalid manifest must fail before upload');
+        const [unchanged]=await sql`SELECT manifest_json FROM human_requests WHERE id=${fixture.requestId}`;
+        assert.deepEqual(unchanged.manifest_json,invalid,'loading must preserve the frozen invalid manifest');
+      }
+      await sql`UPDATE human_requests SET manifest_json=${sql.json(sealed.manifest_json)} WHERE id=${fixture.requestId}`;
       const prompt = await checkpoints.restoreHumanCheckpoint({jobId:fixture.jobId,attemptNo:2,snapshot:frozen.agent_snapshot_json,host:fixture.host});
       assert.match(prompt, /structured new session/); assert.ok(prompt.includes(messageId));
       assert.equal(prompt.includes('Use the original authorized reference.'),false,'planned body is delivered only through inbox');

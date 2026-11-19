@@ -65,7 +65,9 @@ export async function loadHumanCheckpoint(db:typeof sql,jobId:string,attemptNo:n
   if(request.target_attempt_no!==attemptNo) throw new Error("HUMAN_CONTINUATION_OWNER_CHANGED");
   if(request.checkpoint_status!=="ready"||!request.resources_released_at||!request.process_exited_at)
     throw new Error("HUMAN_CHECKPOINT_NOT_READY");
-  const manifest=HumanCheckpointManifest.parse(request.manifest_json);
+  const parsed=HumanCheckpointManifest.safeParse(request.manifest_json);
+  if(!parsed.success) throw new Error("HUMAN_CHECKPOINT_IDENTITY_CHANGED");
+  const manifest=parsed.data;
   if(manifest.job_id!==jobId||manifest.attempt_id!==request.attempt_id||manifest.request_id!==request.id
     ||manifest.snapshot_sha256!==humanSnapshotDigest(snapshot)) throw new Error("HUMAN_CHECKPOINT_IDENTITY_CHANGED");
   const [message]=await db`SELECT id,body,delivery_status FROM human_messages WHERE id=${request.reply_message_id}
