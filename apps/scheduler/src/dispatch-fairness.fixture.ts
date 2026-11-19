@@ -75,7 +75,7 @@ export async function runDispatchFairnessFixture(db: typeof sql, claim: Claim, c
     await rules(1);
     await pending(projects[0]!, 1000, 513, false);
     const eligibleTail = (await pending(projects[0]!, -1000))[0]!;
-    const otherTail = (await pending(projects[1]!, -2000))[0]!;
+    const otherTail = (await pending(projects[1]!, -1000))[0]!;
     assert.deepEqual((await claim()).map(row => row.id), [otherTail]);
     await release();
     const initialService = (await db`SELECT dispatch_last_served::text AS value FROM projects WHERE id = ${projects[0]!}`)[0]!.value;
