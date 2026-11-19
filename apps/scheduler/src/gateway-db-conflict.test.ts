@@ -116,6 +116,7 @@ function makeSql(current: () => Store, onAdmission = () => {}) {
         effect.settlement_json = values[1];
         return [{ effect_kind: "gateway_model_request" }];
       }
+      if (query.startsWith("UPDATE job_attempt_effects e SET status='settled'")) return [];
       if (query.startsWith("SELECT job_id FROM job_attempts")) return [{ job_id: jobId }];
       if (query.startsWith("UPDATE job_tokens SET used_tokens")) { state.usedTokens += Number(values[0]); return []; }
       if (query.startsWith("SELECT COUNT(*)::int AS n")) return [{ n: 0 }];

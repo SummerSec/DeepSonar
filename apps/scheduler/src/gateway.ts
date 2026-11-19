@@ -749,6 +749,30 @@ async function trySettleGatewayUsage(
             source: input.source,
           },
         });
+        if (ledgerInserted && input.status === "settled" && input.source !== "gateway_error"
+          && input.effectId === `gateway_model_request:${input.jobTokenId}:${input.requestNo}`) {
+          // A terminal callback can fence the original in-flight request as unknown.
+          // Only this original response writer, with its newly inserted exact usage
+          // row, can close that terminal marker. Other unknown outcomes stay blocked.
+          await tx`UPDATE job_attempt_effects e SET status='settled',
+            settlement_json=jsonb_build_object('response_status',${input.status}::text,'total_tokens',${input.usage.total}::bigint,
+              'source',${input.source}::text,'reconciled_by','original_gateway_response','terminal_marker',e.settlement_json),
+            evidence_ref=l.id::text,error=NULL,settled_at=clock_timestamp(),updated_at=clock_timestamp()
+            FROM job_usage_ledger l,job_attempts a,job_tokens t,jobs j
+            WHERE e.job_id=${input.jobId} AND e.attempt_id=${input.attemptId} AND e.effect_id=${input.effectId}
+              AND e.effect_kind='gateway_model_request' AND e.status='unknown'
+              AND a.id=e.attempt_id AND a.job_id=e.job_id AND a.status IN ('succeeded','failed','cancelled','timeout','orphan')
+              AND j.id=e.job_id AND j.status=a.status
+              AND e.settlement_json=jsonb_build_object('job_status',a.status)
+              AND t.id=${input.jobTokenId} AND t.job_id=e.job_id AND t.project_id=${input.projectId}
+              AND t.workload=${input.workload} AND t.used_requests>=${input.requestNo}
+              AND e.resource_identity_json=jsonb_build_object('job_token_id',t.id::text,'request_no',${input.requestNo}::int)
+              AND e.intent_json->>'provider'=${input.provider} AND e.intent_json->>'model'=${input.model.slice(0, 200)}
+              AND e.intent_json->>'workload'=${input.workload}
+              AND l.job_id=e.job_id AND l.project_id=t.project_id AND l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
+              AND l.job_token_id=t.id AND l.request_no=${input.requestNo} AND l.workload=t.workload
+              AND l.total_tokens=${input.usage.total} AND l.settlement_status='settled' AND l.source=${input.source}`;
+        }
         if (ledgerInserted && input.usage.total > 0) {
           await tx`
             UPDATE job_tokens

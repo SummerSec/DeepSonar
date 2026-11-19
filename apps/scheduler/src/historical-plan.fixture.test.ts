@@ -58,10 +58,11 @@ export async function historicalPlanCases(h: Awaited<ReturnType<typeof createPla
     return { mutation_id: randomUUID(), request_id: String(saved.id), expected_revision: Number(closed.revision),
       reply: { message_id: randomUUID(), body: "Continue the authorized Plan work with the original reference" } };
   };
-  for (const mode of ["remaining", "exhausted", "stopped", "dependent"] as const) {
+  for (const mode of ["remaining", "exhausted", "stopped", "dependent", "wrong_source", "multiple_failed"] as const) {
     const objective = executionObjective(); objective.budget.max_tasks = mode === "exhausted" ? 1 : mode === "dependent" ? 3 : 2;
     const f = await h.fixture(objective), proposal = h.proposal(f, mode === "dependent"
-      ? [h.task("collect", f.root), h.task("verify", f.root, ["collect"])] : [h.task("collect", f.root)]);
+      ? [h.task("collect", f.root), h.task("verify", f.root, ["collect"])] : mode === "multiple_failed"
+        ? [h.task("collect", f.root), h.task("independent", f.root)] : [h.task("collect", f.root)]);
     const submitted = await h.invoke(f.hub, "submit_plan", proposal);
     assert.equal(submitted.statusCode, 200, submitted.body);
     const child = String((await h.children(f.hub))[0].id);
@@ -69,12 +70,27 @@ export async function historicalPlanCases(h: Awaited<ReturnType<typeof createPla
     assert.equal((await h.state(f.canvas)).plan_execution.stop_reason, mode === "dependent" ? "dependency_failed" : "task_failed");
     assert.equal((await h.state(f.canvas)).plan_execution.stopped_job_id, child);
     if (mode === "stopped") await h.sql`UPDATE canvases SET target_json=jsonb_set(target_json,'{plan_execution,stop_reason}', '"user_stop"'::jsonb) WHERE id=${f.canvas}`;
+    if (mode === "wrong_source") await h.sql`UPDATE canvases SET target_json=jsonb_set(target_json,'{plan_execution,stopped_job_id}',${h.sql.json(randomUUID())}) WHERE id=${f.canvas}`;
+    if (mode === "multiple_failed") {
+      // Add a separately admitted current task, then fail it through lifecycle.
+      // This is an admission guard fixture, not a second normal Plan dispatch.
+      const [source] = await h.sql`SELECT * FROM jobs WHERE id=${child}`;
+      const sibling = randomUUID(), task = proposal.plan.tasks[1]!;
+      const { contentSha256 } = await import("./domains/plan-protocol/criterion-model.js");
+      await h.sql`INSERT INTO jobs(id,project_id,canvas_id,parent_job_id,type,status,payload_json,agent_snapshot_json,timeout_sec)
+        VALUES(${sibling},${source.project_id},${source.canvas_id},${source.parent_job_id},${source.type},'pending',
+          ${h.sql.json({ ...source.payload_json, plan_context: { ...source.payload_json.plan_context, task_id: task.id, task_sha256: contentSha256(task) } })},
+          ${h.sql.json(source.agent_snapshot_json)},${source.timeout_sec})`;
+      const lifecycle = createSqlJobLifecycleApplication(h.sql);
+      assert.ok(await lifecycle.claimPendingJob(sibling));
+      assert.ok(await lifecycle.failExecution(sibling, "independent failed task"));
+    }
     const response = await h.app.inject({ method: "POST", url: `/jobs/${child}/continuations`, payload });
-    if (mode === "exhausted" || mode === "stopped") {
+    if (["exhausted", "stopped", "wrong_source", "multiple_failed"].includes(mode)) {
       assert.equal(response.statusCode, 409, response.body);
       assert.equal(response.json().error_code, mode === "exhausted" ? "PLAN_CONTINUATION_TASK_BUDGET_EXHAUSTED" : "PLAN_CONTINUATION_OBJECTIVE_INACTIVE");
       assert.equal(response.json().reply_state, "reply_saved");
-      assert.equal((await h.children(f.hub)).length, 1);
+      assert.equal((await h.children(f.hub)).length, mode === "multiple_failed" ? 2 : 1);
       await createSqlJobLifecycleApplication(h.sql).cancelJobsOnCanvas(f.canvas, "synthetic Plan fixture finished");
       continue;
     }

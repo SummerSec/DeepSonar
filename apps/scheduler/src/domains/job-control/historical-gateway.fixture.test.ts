@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import type { TestContext } from "node:test";
 import type { FastifyInstance } from "fastify";
+import type { LightMyRequestResponse } from "fastify";
 import type { RuntimeHost } from "@deepsonar/runtime-sandbox";
 import type { sql as database } from "../../db.js";
 import { mintJobToken } from "../../gateway.js";
@@ -265,15 +266,17 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
         // Child-first Canvas locking would deadlock with this owner.
         await tx`SELECT id FROM jobs WHERE id=${target.jobId} FOR UPDATE`;
       });
-      let mutation: Promise<Awaited<ReturnType<typeof app.inject>>> | undefined;
+      let mutation: Promise<LightMyRequestResponse> | undefined;
       try {
         const rootPid = await locked;
         mutation = app.inject({ method: operation === "archive" ? "POST" : "DELETE",
           url: `/tasks/${f.canvasId}${operation === "archive" ? "/archive" : ""}` }).then(response => response);
         let blocked = false;
         for (let i = 0; i < 100; i++) {
-          const [state] = await sql`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database()
-            AND ${rootPid}=ANY(pg_blocking_pids(pid)) AND wait_event_type='Lock' AND query LIKE '%jobs%'`;
+          const [state] = await sql`WITH RECURSIVE blocked(pid) AS (
+            SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND ${rootPid}=ANY(pg_blocking_pids(pid))
+            UNION SELECT a.pid FROM pg_stat_activity a JOIN blocked b ON b.pid=ANY(pg_blocking_pids(a.pid))
+            WHERE a.datname=current_database()) SELECT count(*)::int AS n FROM blocked`;
           if (state.n > 0) { blocked = true; break; }
           await new Promise(resolve => setTimeout(resolve, 10));
         }
@@ -281,8 +284,10 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
         releaseUpstream();
         let settlementBlocked = false;
         for (let i = 0; i < 100; i++) {
-          const [state] = await sql`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database()
-            AND ${rootPid}=ANY(pg_blocking_pids(pid)) AND wait_event_type='Lock' AND query LIKE '%jobs%'`;
+          const [state] = await sql`WITH RECURSIVE blocked(pid) AS (
+            SELECT pid FROM pg_stat_activity WHERE datname=current_database() AND ${rootPid}=ANY(pg_blocking_pids(pid))
+            UNION SELECT a.pid FROM pg_stat_activity a JOIN blocked b ON b.pid=ANY(pg_blocking_pids(a.pid))
+            WHERE a.datname=current_database()) SELECT count(*)::int AS n FROM blocked`;
           if (state.n >= 2) { settlementBlocked = true; break; }
           await new Promise(resolve => setTimeout(resolve, 10));
         }
@@ -311,6 +316,54 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
         await Promise.allSettled([owner, request, ...(mutation ? [mutation] : [])]);
         await connection.end(); entered = undefined; release = undefined; unblockPending = undefined;
         if (operation === "delete") await app.inject({ method: "POST", url: `/tasks/${f.canvasId}/archive` });
+      }
+    });
+    await context.test("archive terminal unknown closes only from its original late Gateway response and exact usage", async () => {
+      const f = await setup({ baseUrl, deferHuman: true }); await issue(f); await fail(f);
+      const target = await continueJob(f.jobId, f.requestId); await start(f, target);
+      const token = await issue({ jobId: target.jobId, projectId: f.projectId });
+      let releaseUpstream!: () => void;
+      release = new Promise(resolve => { releaseUpstream = resolve; unblockPending = resolve; });
+      const arrived = new Promise<void>(resolve => { entered = resolve; });
+      const request = send(token.plaintext).then(response => response);
+      await arrived;
+      try {
+        const archived = await app.inject({ method: "POST", url: `/tasks/${f.canvasId}/archive` });
+        assert.equal(archived.statusCode, 200, archived.body);
+        const [unknown] = await sql`SELECT status,settlement_json FROM job_attempt_effects
+          WHERE job_id=${target.jobId} AND effect_kind='gateway_model_request'`;
+        assert.equal(unknown.status, "unknown"); assert.deepEqual(unknown.settlement_json, { job_status: "cancelled" });
+        assert.equal((await sql`SELECT count(*)::int AS n FROM job_usage_ledger WHERE job_id=${target.jobId}`)[0].n, 0);
+        releaseUpstream(); assert.equal((await request).statusCode, 200); await settled(target.jobId, 1);
+        const [effect] = await sql`SELECT e.status,e.evidence_ref,l.id::text AS ledger_id,l.total_tokens,l.settlement_status
+          FROM job_attempt_effects e JOIN job_usage_ledger l ON l.job_id=e.job_id AND l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
+          WHERE e.job_id=${target.jobId} AND e.effect_kind='gateway_model_request'`;
+        assert.equal(effect.status, "settled"); assert.equal(effect.settlement_status, "settled");
+        assert.equal(effect.evidence_ref, effect.ledger_id); assert.equal(effect.total_tokens, 3);
+        const [grant] = await sql`SELECT used_requests,used_tokens,status FROM job_tokens WHERE id=${token.id}`;
+        assert.equal(grant.used_requests, 1); assert.equal(grant.used_tokens, 3); assert.equal(grant.status, "revoked");
+      } finally {
+        releaseUpstream(); await request; entered = undefined; release = undefined; unblockPending = undefined;
+      }
+    });
+    await context.test("late usage never clears an unknown carrying an independent reconciliation decision", async () => {
+      const f = await setup({ baseUrl, deferHuman: true });
+      const token = await issue(f);
+      let releaseUpstream!: () => void;
+      release = new Promise(resolve => { releaseUpstream = resolve; unblockPending = resolve; });
+      const arrived = new Promise<void>(resolve => { entered = resolve; });
+      const request = send(token.plaintext).then(response => response);
+      await arrived;
+      try {
+        const { markEffectUnknown } = await import("../job-attempt/index.js");
+        const [effect] = await sql`SELECT effect_id FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_kind='gateway_model_request'`;
+        await markEffectUnknown(sql, f.attemptId, String(effect.effect_id), "independent unknown outcome");
+        releaseUpstream(); assert.equal((await request).statusCode, 200); await settled(f.jobId, 1);
+        const [kept] = await sql`SELECT status,settlement_json FROM job_attempt_effects WHERE job_id=${f.jobId} AND effect_id=${effect.effect_id}`;
+        assert.equal(kept.status, "unknown"); assert.deepEqual(kept.settlement_json, { result: "unknown_effect" });
+      } finally {
+        releaseUpstream(); await request; entered = undefined; release = undefined; unblockPending = undefined;
+        await app.inject({ method: "POST", url: `/tasks/${f.canvasId}/archive` });
       }
     });
     await context.test("two authorized mutations race for one root owner and one transactional audit", async () => {
