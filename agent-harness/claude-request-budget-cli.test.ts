@@ -67,7 +67,7 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
     }));
     const original=archives.find(Boolean);assert.ok(original);
     const result=projectNativeHumanSession("claude-code","2.1.312",sessionId,original);
-    assert.equal(result.status,"supported",JSON.stringify({result,records:original.trim().split("\n").map((line:string)=>{const row=JSON.parse(line);return {type:row.type,subtype:row.subtype};})}));assert.doesNotMatch(result.content,/old-control-identity/);
+    assert.equal(result.status,"supported",JSON.stringify({status:result.status,reason:result.reason,records:original.trim().split("\n").map((line:string)=>{const row=JSON.parse(line);return {type:row.type,subtype:row.subtype,attachmentType:row.attachment?.type,attachmentKeys:row.attachment?Object.keys(row.attachment):undefined};})}));assert.doesNotMatch(result.content,/old-control-identity/);
     const newHome=path.join(root,"new-home"),projectName=root.replace(/[^a-zA-Z0-9]/gu,"-");
     const destination=path.join(newHome,".claude/projects",projectName);await mkdir(destination,{recursive:true});
     await writeFile(path.join(destination,`${sessionId}.jsonl`),result.content);

@@ -74,7 +74,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       const {captureHumanSession,loadHumanSession}=await import('./human-checkpoint-session.js');
       const sessionId=randomUUID();
       await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(jsonb_set(agent_snapshot_json,'{agent_cli}','"pi"'),
-        '{agent_runtime,adapter_version}','"1.5.2"') WHERE id=${fixture.jobId}`;
+        '{agent_runtime}',${sql.json({adapter_version:'1.5.2'})}) WHERE id=${fixture.jobId}`;
       await sql`UPDATE job_attempts SET session_id=${sessionId} WHERE id=${fixture.attemptId}`;
       const writer=new JobEvidenceWriter(fixture.jobId,'pi',fixture.attemptId);
       writer.setSession({cli:'pi',sessionId,artifacts:[{name:`${sessionId}.jsonl`,sourcePath:'/unused',kind:'main',content:[
@@ -99,6 +99,27 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json(stored.binding)}) WHERE id=${fixture.attemptId}`;
       assert.equal((await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json)).status,'supported');
       assert.equal((await loadHumanSession(fixture.jobId,3,job.agent_snapshot_json)).status,'unsupported');
+      await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+    });
+    await context.test('old snapshot without adapter version records an explicit structured mode',async()=>{
+      const fixture=await setup();
+      const {captureHumanSession,loadHumanSession}=await import('./human-checkpoint-session.js');
+      await sql`UPDATE jobs SET agent_snapshot_json=jsonb_set(agent_snapshot_json,'{agent_cli}','"pi"')-'agent_runtime'
+        WHERE id=${fixture.jobId}`;
+      await captureHumanSession(fixture.jobId,fixture.attemptId,[]);
+      const [stored]=await sql`SELECT state_json->'human_session' AS binding FROM job_attempts WHERE id=${fixture.attemptId}`;
+      assert.equal(stored.binding.status,'unsupported');
+      assert.equal(stored.binding.reason,'unverified_adapter_version');
+      assert.equal(stored.binding.version,'unknown');
+      await fixture.seal();await fixture.close();await fixture.reply();await pumpHumanContinuations(1,fixture.requestId);
+      const [job]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
+      const loaded=await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json);
+      assert.equal(loaded.status,'unsupported');assert.equal(loaded.reason,'unverified_adapter_version');
+      await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json({status:'unsupported'})})
+        WHERE id=${fixture.attemptId}`;
+      assert.deepEqual(await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json),{status:'rejected',reason:'invalid_native_binding'});
+      await sql`UPDATE job_attempts SET state_json=state_json-'human_session' WHERE id=${fixture.attemptId}`;
+      assert.deepEqual(await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json),{status:'unsupported',reason:'checkpoint_has_no_native_archive'});
       await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
     });
     await context.test('late response resumes preserved files with one durable generation and a new owner', async () => {

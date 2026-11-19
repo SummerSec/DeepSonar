@@ -48,9 +48,12 @@ export async function runHumanNativePiImport() {
     const projected=projectNativeHumanSession("pi","1.5.2",before.data.sessionId,original);
     assert.equal(projected.status,"supported");
     assert.doesNotMatch(projected.content,/old-control-identity/);
-    const imported=path.join(root,"new-home","imported.jsonl");mkdirSync(path.dirname(imported),{recursive:true});
+    // Pi migrates agent-root JSONL files before resolving --session. Use the
+    // production session directory so startup cannot move the imported file.
+    const newHome=path.join(root,"new-home");
+    const imported=path.join(newHome,"sessions","--workspace--",`${before.data.sessionId}.jsonl`);mkdirSync(path.dirname(imported),{recursive:true});
     writeFileSync(imported,projected.content);
-    client=start(path.dirname(imported),imported);
+    client=start(newHome,imported);
     const after=await client.command("get_state");
     console.log(JSON.stringify({human_native_identity:{before:before.data.sessionId,header:JSON.parse(projected.content.split('\n')[0]).id,after:after.data.sessionId,
       expectedFile:imported,observedFile:after.data.sessionFile,records:projected.content.trim().split('\n').map(line=>JSON.parse(line).type),stderr:client.stderr.slice(-512)}}));

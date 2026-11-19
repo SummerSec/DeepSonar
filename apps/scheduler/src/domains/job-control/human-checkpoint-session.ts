@@ -22,7 +22,8 @@ export async function captureHumanSession(jobId:string,attemptId:string,secrets:
       AND r.checkpoint_status='preparing' AND r.status IN ('open','answered') AND r.manifest_json IS NULL`;
   if (!source || source.state_json?.human_session) return;
   const snapshot=source.agent_snapshot_json;
-  const cli=snapshot.agent_cli,version=snapshot.agent_runtime?.adapter_version;
+  const cli=snapshot.agent_cli,version=typeof snapshot.agent_runtime?.adapter_version === 'string'
+    ? snapshot.agent_runtime.adapter_version : 'unknown';
   const capability=nativeHumanSessionCapability(cli,version);
   const binding:Record<string,unknown>={v:1,request_id:String(source.request_id),job_id:jobId,attempt_id:attemptId,
     snapshot_sha256:humanSnapshotDigest(snapshot),cli,version,...capability};
@@ -69,11 +70,16 @@ export async function loadHumanSession(jobId:string,attemptNo:number,snapshot:un
       AND r.checkpoint_status='ready' AND r.resources_released_at IS NOT NULL AND r.process_exited_at IS NOT NULL
       AND r.checkpoint_expires_at>now() ORDER BY r.created_at DESC,r.id DESC LIMIT 1`;
   if(!source?.state_json?.human_session) return {status:"unsupported",reason:"checkpoint_has_no_native_archive"};
-  const binding=Binding.parse(source.state_json.human_session);
+  const parsed=Binding.safeParse(source.state_json.human_session);
+  if(!parsed.success) {
+    if(source.state_json.human_session.status==='supported') throw new Error('HUMAN_NATIVE_SESSION_BINDING_INVALID');
+    return {status:'rejected',reason:'invalid_native_binding'};
+  }
+  const binding=parsed.data;
   const frozen=snapshot as {agent_cli?:string;agent_runtime?:{adapter_version?:string}};
   if(binding.job_id!==jobId || binding.attempt_id!==source.attempt_id || binding.request_id!==source.request_id
     ||binding.snapshot_sha256!==humanSnapshotDigest(snapshot) || binding.cli!==frozen.agent_cli
-    ||binding.version!==frozen.agent_runtime?.adapter_version) throw new Error("HUMAN_NATIVE_SESSION_IDENTITY");
+    ||binding.version!==(frozen.agent_runtime?.adapter_version ?? 'unknown')) throw new Error("HUMAN_NATIVE_SESSION_IDENTITY");
   if(binding.status!=="supported") return binding;
   if(!binding.session_id||!binding.bytes||!binding.sha256||binding.cli==='dsh') throw new Error("HUMAN_NATIVE_SESSION_INCOMPLETE");
   const content=(await readCheckpointFile(binding.request_id,{bytes:binding.bytes,sha256:binding.sha256})).toString('utf8');

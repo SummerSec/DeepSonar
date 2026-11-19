@@ -58,6 +58,8 @@ OpenSandbox 1.2 source upgrade maps IR-001/003 to 06/07/08/10 and the [upgrade r
 
 ## 1. 阅读路径与目录
 
+#1074 的 [ADR 0024](adr/0024-restricted-human-session-import.md)在原持久请求与预算边界内增加 Pi/Claude 受限主会话文字导入，DSH unsupported + structured；具体能力矩阵与原生 Actions 接线见[人工续做专题](../HUMAN_CONTINUATION.md)。
+
 | 文件 | 回答的问题 | 状态 |
 | --- | --- | --- |
 | [01 系统规格](01-system-specification.md) | 必须满足哪些功能、质量、接口和约束？ | as-built 基线；逐需求声明实现状态 |
