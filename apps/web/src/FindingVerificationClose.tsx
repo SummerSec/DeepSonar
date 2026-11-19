@@ -41,11 +41,18 @@ function ScopedVerificationClose({ findingId, control, onChanged }: {
     inFlight.current = true;
     setBusy(true);
     setError(null);
-    // 传输失败后再次点击保留同一编号和原始决定，先核对原请求结果。
-    const body = pending.current ?? {
-      verify_status: "inconclusive" as const, reason: reason.trim(), expected: control, mutation_id: crypto.randomUUID(),
-    };
     try {
+      // getRandomValues 也可用于普通 HTTP。生成失败仍由 finally 释放按钮。
+      let body = pending.current;
+      if (!body) {
+        const bytes = crypto.getRandomValues(new Uint8Array(16));
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+        const mutationId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+        // 传输失败后保留同一编号和原始决定，先核对原请求结果。
+        body = { verify_status: "inconclusive", reason: reason.trim(), expected: control, mutation_id: mutationId };
+      }
       const confirmed = await confirm({
         title: "以无定论结束技术验证？",
         description: "这会记录你的原因并新增一条无定论验证记录，结束本次证据不足的技术验证。",

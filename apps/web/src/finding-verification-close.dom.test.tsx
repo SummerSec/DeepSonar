@@ -10,7 +10,8 @@ import { ConfirmDialogProvider } from "./components/ConfirmDialog";
 test("人工无定论按钮按权限、原因和真实确认发送 CAS，409 刷新且不重发", async () => {
   const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
   const replacements = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
-    Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true };
+    Node: dom.window.Node, crypto: dom.window.crypto, IS_REACT_ACT_ENVIRONMENT: true };
+  Object.defineProperty(dom.window.crypto, "randomUUID", { value: undefined, configurable: true });
   const saved = new Map(Object.keys(replacements).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(replacements)) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
   const { createRoot } = await import("react-dom/client");
@@ -48,6 +49,15 @@ test("人工无定论按钮按权限、原因和真实确认发送 CAS，409 刷
       textarea.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
     });
     assert.equal(button.disabled, false);
+    const getRandomValues = dom.window.crypto.getRandomValues.bind(dom.window.crypto);
+    Object.defineProperty(dom.window.crypto, "getRandomValues", {
+      value: () => { throw new Error("random fixture failure"); }, configurable: true,
+    });
+    await act(async () => button.click());
+    assert.equal(button.disabled, false, "生成请求编号失败后按钮必须恢复");
+    assert.equal(calls.length, 0);
+    assert.match(dom.window.document.querySelector('[role="alert"]')!.textContent!, /random fixture failure/);
+    Object.defineProperty(dom.window.crypto, "getRandomValues", { value: getRandomValues, configurable: true });
     await act(async () => { button.click(); button.click(); });
     const dialog = dom.window.document.querySelector('[role="dialog"]')!;
     assert.ok(dialog);
@@ -57,7 +67,7 @@ test("人工无定论按钮按权限、原因和真实确认发送 CAS，409 刷
     assert.equal(calls[0][0], "finding-a");
     assert.deepEqual(calls[0][1].expected, control);
     assert.equal(calls[0][1].reason, "授权设备暂不可用");
-    assert.match(calls[0][1].mutation_id, /^[a-f0-9-]{36}$/);
+    assert.match(calls[0][1].mutation_id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
     assert.equal(changed, 1);
     assert.match(dom.window.document.querySelector('[role="alert"]')!.textContent!, /验证轮次已变化/);
 
