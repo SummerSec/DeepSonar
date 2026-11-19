@@ -70,7 +70,7 @@ test("人工无定论按钮按权限、原因和真实确认发送 CAS，409 刷
     assert.match(dom.window.document.querySelector('[role="alert"]')!.textContent!, /random fixture failure/);
     Object.defineProperty(dom.window.crypto, "getRandomValues", { value: getRandomValues, configurable: true });
     await act(async () => { button.click(); button.click(); });
-    const dialog = dom.window.document.querySelector('[role="dialog"]')!;
+    const dialog = dom.window.document.querySelector('[role="alertdialog"]')!;
     assert.ok(dialog);
     const confirm = [...dialog.querySelectorAll("button")].find((candidate) => candidate.textContent === "以无定论结束")!;
     await act(async () => confirm.click());
@@ -85,14 +85,14 @@ test("人工无定论按钮按权限、原因和真实确认发送 CAS，409 刷
     // 响应丢失后的幂等决定只能绑定原 Finding。原确认框在切换后也不能发送。
     api.closeFindingInconclusive = async (...args) => { calls.push(args); throw new Error("response lost"); };
     await act(async () => button.click());
-    await act(async () => [...dom.window.document.querySelector('[role="dialog"]')!.querySelectorAll("button")]
+    await act(async () => [...dom.window.document.querySelector('[role="alertdialog"]')!.querySelectorAll("button")]
       .find((candidate) => candidate.textContent === "以无定论结束")!.click());
     assert.equal(calls.length, 2);
     assert.equal(textarea.disabled, true);
     await act(async () => button.click());
     findingId = "finding-b";
     await render("operator");
-    await act(async () => [...dom.window.document.querySelector('[role="dialog"]')!.querySelectorAll("button")]
+    await act(async () => [...dom.window.document.querySelector('[role="alertdialog"]')!.querySelectorAll("button")]
       .find((candidate) => candidate.textContent === "以无定论结束")!.click());
     assert.equal(calls.length, 2, "切换后旧确认不能发送请求");
     const newTextarea = dom.window.document.querySelector("textarea")!;
@@ -104,7 +104,7 @@ test("人工无定论按钮按权限、原因和真实确认发送 CAS，409 刷
     });
     const newButton = dom.window.document.querySelector("button")!;
     await act(async () => newButton.click());
-    await act(async () => [...dom.window.document.querySelector('[role="dialog"]')!.querySelectorAll("button")]
+    await act(async () => [...dom.window.document.querySelector('[role="alertdialog"]')!.querySelectorAll("button")]
       .find((candidate) => candidate.textContent === "以无定论结束")!.click());
     assert.equal(calls.length, 3);
     assert.equal(calls[2][0], "finding-b");
