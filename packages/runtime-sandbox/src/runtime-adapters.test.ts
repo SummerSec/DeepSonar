@@ -982,7 +982,9 @@ test("DSH Docker smoke uses the production allowlisted profile tree", async () =
   const smoke = await import(new URL("../../../agent-harness/dsh-cordis-smoke-config.mjs", import.meta.url).href);
   for (const taskMode of ["standard", "ptc"] as const) {
     const providerConfig = { providers: { smoke: { api: "openai-completions" } } };
-    const options = { taskMode, cwd: "/workspace", providerConfig };
+    const options = { taskMode, cwd: "/workspace", providerConfig,
+      privateCredentialPath: "/workspace/.deepsonar-credentials-11111111-1111-4111-8111-111111111111/gateway-token",
+      credentialProvider: "smoke" };
     const production = parse(buildDshProfilePatch(options).replace(/^\s+personaPrefix:.*$/mu, "        personaPrefix: DeepSonar isolated SDK smoke"));
     assert.deepEqual(production, JSON.parse(smoke.buildDshProfilePatch(options)));
     const governed = parse(buildDshProfilePatch({ ...options, governedRequestBudget: true })
