@@ -83,7 +83,11 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       ].map(value=>JSON.stringify(value)).join('\n')}]});
       await writer.finalize();
       await captureHumanSession(fixture.jobId,fixture.attemptId,['old-checkpoint-control']);
-      await fixture.seal();await fixture.close();await fixture.reply();await pumpHumanContinuations(1,fixture.requestId);
+      await fixture.seal();await fixture.close();await fixture.reply();
+      // This fixture pins a synthetic native snapshot. Admission separately
+      // rejects drift from the configured role, so establish the exact load
+      // boundary without asking admission to accept that deliberate drift.
+      await sql`UPDATE human_requests SET resumed_at=now(),target_attempt_no=2 WHERE id=${fixture.requestId}`;
       const [job]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
       const loaded=await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json);
       assert.equal(loaded.status,'supported');assert.ok(loaded.session);
@@ -111,7 +115,8 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.equal(stored.binding.status,'unsupported');
       assert.equal(stored.binding.reason,'unverified_adapter_version');
       assert.equal(stored.binding.version,'unknown');
-      await fixture.seal();await fixture.close();await fixture.reply();await pumpHumanContinuations(1,fixture.requestId);
+      await fixture.seal();await fixture.close();await fixture.reply();
+      await sql`UPDATE human_requests SET resumed_at=now(),target_attempt_no=2 WHERE id=${fixture.requestId}`;
       const [job]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
       const loaded=await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json);
       assert.equal(loaded.status,'unsupported');assert.equal(loaded.reason,'unverified_adapter_version');

@@ -25,6 +25,21 @@ test("human native import keeps conversation identities but excludes old runtime
   const claude=JSON.stringify({type:"future_state",uuid:id,sessionId:id});
   assert.equal(projectNativeHumanSession("claude-code","2.1.312",id,claude).reason,"unknown_session_record_type");
 });
+test("Claude pinned storage metadata and execution attachments cannot import old authority",()=>{
+  const id="75e625d4-ed23-46b3-a4ca-a82bdb1d6022";
+  const user={type:"user",uuid:"user",parentUuid:null,sessionId:id,message:{role:"user",content:"Keep decision"}};
+  const attachment={type:"attachment",uuid:"config",parentUuid:"user",sessionId:id,attachment:{type:"prompt_snapshot",systemPrompt:"OLD_SYSTEM"}};
+  const assistant={type:"assistant",uuid:"answer",parentUuid:"config",sessionId:id,message:{role:"assistant",content:"Saved answer"}};
+  const rows=[user,attachment,assistant,{type:"last-prompt",sessionId:id,leafUuid:"answer"},
+    ...["atis-latch","cost-state","api-request-shape","api-request-blob","api-request"].map(type=>({type,sessionId:id,secret:"OLD_AUTHORITY"}))];
+  const project=(values:unknown[])=>projectNativeHumanSession("claude-code","2.1.312",id,values.map(row=>JSON.stringify(row)).join("\n"));
+  const imported=project(rows);assert.equal(imported.status,"supported");
+  assert.doesNotMatch(imported.content!,/OLD_SYSTEM|OLD_AUTHORITY/);
+  assert.equal(JSON.parse(imported.content!.trim().split("\n")[1]!).parentUuid,"user");
+  assert.equal(project([...rows,{type:"last-prompt",sessionId:id,leafUuid:"user",rewound:true}]).reason,"transformed_context_requires_structured");
+  for(const type of ["queued_command","file","invoked_skills","future_context"])
+    assert.equal(project([user,{...attachment,attachment:{type,content:"must not disappear"}}]).reason,"unverified_context_attachment");
+});
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";

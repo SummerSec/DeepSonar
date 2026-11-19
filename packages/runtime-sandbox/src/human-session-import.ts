@@ -6,6 +6,18 @@ export interface NativeHumanSession {
   content: string;
 }
 export const HUMAN_SESSION_MAX_BYTES = 8 * 1024 * 1024;
+// Claude 2.1.312 rebuilds these execution inputs for the new process. The
+// pinned attachment converter renders them as system/configuration context.
+const CLAUDE_EXECUTION_ATTACHMENTS = new Set([
+  "environment", "model", "deferred_tools_delta", "agent_listing_delta", "skill_listing",
+  "total_tokens_reminder", "session_context", "date", "remote_session_change", "prompt_snapshot",
+]);
+// Pinned transcript storage reads these into request replay/CLI accounting or
+// conversation latches. They are deliberately absent from the imported file.
+const CLAUDE_STORAGE_METADATA = new Set([
+  "file-history-snapshot", "progress", "queue-operation", "atis-latch", "cost-state",
+  "api-request-shape", "api-request-blob", "api-request",
+]);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
 export function nativeHumanSessionCapability(cli: string, version: string) {
   const supported = cli === "pi" && version === "1.5.2" || cli === "claude-code" && version === "2.1.312";
@@ -49,7 +61,7 @@ export function projectNativeHumanSession(cli: string, version: string, sessionI
       || typeof row.customType === "string" && row.customType.startsWith("om."))) return {status:"unsupported",reason:"transformed_context_requires_structured"};
     const types = cli === "pi"
       ? new Set(["session","message","model_change","thinking_level_change","usage","session_info","label"])
-      : new Set(["user","assistant","file-history-snapshot","progress","queue-operation"]);
+      : new Set(["user","assistant","attachment","last-prompt",...CLAUDE_STORAGE_METADATA]);
     if (rows.some(row => !types.has(row.type))) return {status:"unsupported",reason:"unknown_session_record_type"};
     if (rows.some(row => row.type === "message" && !["system","user","assistant","toolResult"].includes(row.message?.role)))
       return {status:"unsupported",reason:"unknown_session_message_role"};
@@ -63,7 +75,19 @@ export function projectNativeHumanSession(cli: string, version: string, sessionI
     let parent: string | null = null;
     let sourceParent: string | null = null;
     for (const row of rows) {
-      if (cli === "claude-code" && !["user","assistant"].includes(row.type)) continue;
+      if (cli === "claude-code") {
+        if (row.sessionId !== undefined && row.sessionId !== sessionId) throw new Error("claude_identity");
+        if (CLAUDE_STORAGE_METADATA.has(row.type)) continue;
+        // last-prompt can select a different branch or clear the active leaf.
+        // A linear history may only checkpoint the leaf already observed.
+        if (row.type === "last-prompt") {
+          if (row.rewound || row.leafUuid !== undefined && row.leafUuid !== sourceParent)
+            return {status:"unsupported",reason:"transformed_context_requires_structured"};
+          continue;
+        }
+        if (row.type === "attachment" && !CLAUDE_EXECUTION_ATTACHMENTS.has(row.attachment?.type))
+          return {status:"unsupported",reason:"unverified_context_attachment"};
+      }
       const id = cli === "pi" ? row.id : row.uuid;
       if (cli === "claude-code" && row.sessionId !== sessionId) throw new Error("claude_identity");
       if (typeof id !== "string" || !/^[a-zA-Z0-9-]{1,128}$/u.test(id) || seen.has(id)) throw new Error("entry_identity");
@@ -76,6 +100,7 @@ export function projectNativeHumanSession(cli: string, version: string, sessionI
         if (row.isSidechain === true || row.parentUuid !== sourceParent) throw new Error("branched_history");
         sourceParent = id;
       }
+      if (row.type === "attachment") continue;
       const message = row.message;
       if (cli === "pi" ? row.type !== "message" : !["user","assistant"].includes(row.type)) continue;
       if (!message || !["user","assistant","toolResult"].includes(message.role)) continue;

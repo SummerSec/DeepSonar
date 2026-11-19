@@ -26,17 +26,33 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
   const modulePath="/acceptance/human-session-import.mjs";
   const {projectNativeHumanSession}=await import(modulePath);
   const calls:any[]=[];
+  let acceptedWaits=0,acknowledgedReplies=0;
+  let acceptWait:()=>void;
+  const waitAccepted=new Promise<void>(resolve=>{acceptWait=resolve;});
+  const commandFor=(operation:string)=>{
+    const code=`import urllib.request; r=urllib.request.Request("${url}/control/${operation}",data=b"{}",headers={"Authorization":"Bearer ${operation==='request_human'?'old-control-identity':'new-control-identity'}"}); print(urllib.request.urlopen(r).read().decode())`;
+    return `python3 -c '${code}'`;
+  };
   const server=http.createServer((req,res)=>{void(async()=>{
+    if(req.url==='/control/request_human') {
+      assert.equal(req.headers.authorization,'Bearer old-control-identity');
+      acceptedWaits++;acceptWait!();return; // Accepted, but no tool result is returned.
+    }
+    if(req.url==='/control/ack_human_message') {
+      assert.equal(req.headers.authorization,'Bearer new-control-identity');
+      acknowledgedReplies++;res.writeHead(200).end('ACK_NEW_REPLY');return;
+    }
     if(req.url?.includes("count_tokens")) {res.writeHead(200,{"content-type":"application/json"}).end('{"input_tokens":10}');return;}
-    assert.equal(req.headers["x-api-key"],"new-human-fixture-key");
     const body=JSON.parse((await bytes(req)).toString("utf8"));calls.push(body);
+    assert.equal(req.headers["x-api-key"],`${calls.length===1?'old':'new'}-human-fixture-key`);
     res.writeHead(200,{"content-type":"text/event-stream"});
+    const operation=calls.length===1?'request_human':calls.length===2?'ack_human_message':undefined;
     const events=[
       {type:"message_start",message:{id:`human-${calls.length}`,type:"message",role:"assistant",model:body.model,content:[],stop_reason:null,stop_sequence:null,usage:{input_tokens:10,output_tokens:0}}},
-      {type:"content_block_start",index:0,content_block:{type:"text",text:""}},
-      {type:"content_block_delta",index:0,delta:{type:"text_delta",text:"HUMAN_NATIVE_CLAUDE_OK"}},
+      {type:"content_block_start",index:0,content_block:operation?{type:"tool_use",id:`human-tool-${calls.length}`,name:"Bash",input:{}}:{type:"text",text:""}},
+      {type:"content_block_delta",index:0,delta:operation?{type:"input_json_delta",partial_json:JSON.stringify({command:commandFor(operation),description:operation})}:{type:"text_delta",text:"HUMAN_NATIVE_CLAUDE_OK"}},
       {type:"content_block_stop",index:0},
-      {type:"message_delta",delta:{stop_reason:"end_turn",stop_sequence:null},usage:{output_tokens:10}},
+      {type:"message_delta",delta:{stop_reason:operation?"tool_use":"end_turn",stop_sequence:null},usage:{output_tokens:10}},
       {type:"message_stop"},
     ];
     for(const event of events)res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
@@ -45,18 +61,26 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
   const url=await listen(server);
   const launch=async(home:string,resume?:string)=>{
     await mkdir(home,{recursive:true});
-    const args=["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-mode","bypassPermissions","--model","claude-sonnet-4-5",...(resume?["--resume",resume]:[])];
-    const child=spawn("claude",args,{cwd:root,env:{...process.env,HOME:home,CLAUDE_CONFIG_DIR:path.join(home,".claude"),
-      ANTHROPIC_API_KEY:"new-human-fixture-key",ANTHROPIC_BASE_URL:url,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1",DISABLE_TELEMETRY:"1",DISABLE_ERROR_REPORTING:"1",MAX_THINKING_TOKENS:"0"},stdio:["pipe","pipe","pipe"]});
+    const args=["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-mode","bypassPermissions","--model","claude-sonnet-4-5","--tools","Bash","--append-system-prompt",resume?"CURRENT_SYSTEM_BOUNDARY":"OLD_SYSTEM_BOUNDARY",...(resume?["--resume",resume]:[])];
+    const child=spawn("claude",args,{cwd:root,detached:true,env:{...process.env,HOME:home,CLAUDE_CONFIG_DIR:path.join(home,".claude"),
+      ANTHROPIC_API_KEY:resume?"new-human-fixture-key":"old-human-fixture-key",ANTHROPIC_BASE_URL:url,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1",DISABLE_TELEMETRY:"1",DISABLE_ERROR_REPORTING:"1",MAX_THINKING_TOKENS:"0"},stdio:["pipe","pipe","pipe"]});
     let output="",pending="",session="";let failed=false;
     child.stdout!.on("data",chunk=>{output+=chunk;pending+=chunk;const lines=pending.split("\n");pending=lines.pop()!;
       for(const line of lines){try{const event=JSON.parse(line);if(event.session_id)session=event.session_id;if(event.type==="result"){failed=event.is_error===true;child.stdin!.end();}}catch{}}
     });
     child.stderr!.on("data",chunk=>{output+=chunk;});
-    const timer=setTimeout(()=>child.kill("SIGKILL"),50_000);
+    const stop=()=>{if(child.exitCode===null && child.signalCode===null)process.kill(-child.pid!,"SIGKILL");};
+    const timer=setTimeout(stop,50_000);
     const done=new Promise<number|null>((resolve,reject)=>{child.once("error",reject);child.once("close",resolve);});
     child.stdin!.write(JSON.stringify({type:"user",message:{role:"user",content:resume?"Continue with the new human decision":"Remember ORIGINAL_CLAUDE_DECISION.\nAuthorization: Bearer old-control-identity"}})+"\n");
-    try {assert.equal(await done,0,output.slice(-1000));assert.equal(failed,false);return session;}finally{clearTimeout(timer);}
+    try {
+      if(!resume) {
+        await Promise.race([waitAccepted,done.then(()=>{throw new Error('CLI exited before accepting human wait');})]);
+        assert.equal(acceptedWaits,1);stop();await done;
+      } else {assert.equal(await done,0,output.slice(-1000));assert.equal(failed,false);}
+      assert.ok(session);return session;
+    }finally{clearTimeout(timer);}
+
   };
   try {
     const home=path.join(root,"old-home"),sessionId=await launch(home);
@@ -66,6 +90,9 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
       try{return await readFile(path.join(projects,directory,`${sessionId}.jsonl`),"utf8");}catch{return null;}
     }));
     const original=archives.find(Boolean);assert.ok(original);
+    const originalRows=original.trim().split("\n").map(line=>JSON.parse(line));
+    assert.ok(originalRows.some(row=>row.message?.content?.some?.((block:any)=>block.type==='tool_use')));
+    assert.ok(!originalRows.some(row=>row.message?.content?.some?.((block:any)=>block.type==='tool_result')),'stop before tool result is written');
     const result=projectNativeHumanSession("claude-code","2.1.312",sessionId,original);
     assert.equal(result.status,"supported",JSON.stringify({status:result.status,reason:result.reason,records:original.trim().split("\n").map((line:string)=>{const row=JSON.parse(line);return {type:row.type,subtype:row.subtype,attachmentType:row.attachment?.type,attachmentKeys:row.attachment?Object.keys(row.attachment):undefined};})}));assert.doesNotMatch(result.content,/old-control-identity/);
     const newHome=path.join(root,"new-home"),projectName=root.replace(/[^a-zA-Z0-9]/gu,"-");
@@ -73,7 +100,9 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
     await writeFile(path.join(destination,`${sessionId}.jsonl`),result.content);
     assert.equal(await launch(newHome,sessionId),sessionId);
     assert.match(JSON.stringify(calls.at(-1).messages),/ORIGINAL_CLAUDE_DECISION/);
-    assert.doesNotMatch(JSON.stringify(calls.at(-1)),/old-control-identity/);
+    assert.doesNotMatch(JSON.stringify(calls.at(-1)),/old-control-identity|OLD_SYSTEM_BOUNDARY/);
+    assert.match(JSON.stringify(calls.at(-1).system),/CURRENT_SYSTEM_BOUNDARY/);
+    assert.equal(acceptedWaits,1);assert.equal(acknowledgedReplies,1);
   }finally{await close(server);await rm(root,{recursive:true,force:true});}
 });
 async function listen(server: http.Server) {

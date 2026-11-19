@@ -1,7 +1,7 @@
 # 人工等待的断点与续做（#1074）
 
 > 状态：as-built 代码契约；最终提交的 GitHub Actions 验收另验
-> 同步日期：2026-11-12
+> 同步日期：2026-11-19
 > 需求：FR-JOB-008、FR-CTRL-006；决策：[ADR 0022](architecture/adr/0022-human-continuation.md)
 
 人工等待超过响应阈值只记 overdue，Job 保持 waiting_human。有权限的用户可在 Job 详情读取完整问题并「回复并继续」。2026-11-11 的两个历史 failed Job 不自动复活，也不据历史回执重放外部效果。此实现不部署现场，不更换用户运行配置。
@@ -15,6 +15,19 @@ Scheduler 在旧 Attempt 证据归档后、文件封存前读取该 Attempt 唯�
 导入保留会话和消息 ID，将工具提案/结果转换为历史文字。旧 system 消息、思考签名、扩展状态、私有配置、路径来源和待执行工具调用被排除。受管秘密按原执行的精确值过滤，同时复用人工请求的结构化秘密投影，含旧 Control 路径、身份或秘密标记的文本行排除。新沙箱重新生成当前 Control/Gateway token、系统提示、配置和冻结扩展，仅导入主会话文字。新 Attempt 先持久化导入的 session 身份，再调用现有 adapter.resume；Pi get_state 和后续会话观测必须匹配，所有原预算/准入继续生效。
 
 导入上限 8 MiB、20,000 行。固定 Pi 原生链接入核心 base 镜像 smoke，固定 Claude 原生链接入 Reverse Claude request-budget acceptance，均使用隔离网络与合成 Provider，检查旧 home→归档→过滤→新 home→原生恢复及旧身份不再进入请求。SQL 绑定/跨身份拒绝接入既有 platform-api 集成测试。当前实现等待最终 SHA Actions，生产续跑未执行。
+
+### 固定格式核对与受限范围
+
+Pi 1.5.2 的 `dist/main.js` 按路径打开 `SessionManager.open`，v3 header 的 id 是会话身份。`dist/migrations.js` 会先移动 agent 根目录内的 JSONL，因此导入和原生夹具均使用 `sessions/--workspace--/` 子目录。已保留的消息重接 parentId，未知记录、自定义扩展、压缩和分支拒绝原生导入。
+
+Claude 2.1.312 Linux x64 固定 npm 包的原生二进制内含版本化源码。核对 transcript storage 的 `appendRequestReplay`、`last-prompt` 读取和附件转换器 `nLe`/`_ft` 后，逐类处理如下。
+
+- `api-request-shape`、`api-request-blob`、`api-request` 保存旧请求的 system/tools/messages 重放诊断，全部排除。`atis-latch` 是旧会话请求锁存，`cost-state` 是 CLI 显示与本地成本状态，也排除。平台预算继续使用原账本。
+- `last-prompt` 可以选择 leaf 或清空上下文。只有 leaf 与已核对线性链一致才可省略，rewound、不同 leaf 或显式清空使用 `transformed_context_requires_structured`。
+- 附件不是普通元数据。已核对的 `environment`、`model`、`deferred_tools_delta`、`agent_listing_delta`、`skill_listing`、`total_tokens_reminder`、`session_context`、`date`、`remote_session_change` 是旧执行配置、能力、额度和环境提示，随新执行重建。`prompt_snapshot` 在固定转换器中不产生消息，保存旧系统提示和工具快照，排除。
+- 文件、排队指令、已调用 Skill 和未知附件可能含任务上下文，明确返回 `unverified_context_attachment` 并使用 structured。保留附件链的 UUID 校验后重接导入文字的 parentUuid，不能无提示吞掉未知语义。
+
+原生验收还覆盖合成上游实际发出 Bash 工具调用，通过隔离 HTTP 宿主夹具接受 `request_human`，在工具结果返回前停止 CLI。断言原归档有 tool call 且无 tool result，再投影至新 home，恢复后调用新身份的 ACK 夹具。旧等待接受次数必须为 1，新系统提示和 Provider 身份生效。HTTP 夹具证明原生工具协议与该中断位置，真实 Scheduler 的持久回复、ACK 和完成门由 PostgreSQL 集成回归另外验证。
 
 ## 持久记录与封存
 
@@ -40,7 +53,7 @@ Dispatcher 正常 finally 立即回收等待资源；重启后现有 reconciliat
 
 Dispatcher 在 provision 和 agent_run 前再核对确切 successor 与文件；开始前重新核冻结身份，目标授权仍走现有实时门。取消、过期、文件丢失或 owner 漂移不能空白启动。原 token 被撤销，旧执行不能收到新请求的回复。新执行通过原 inbox 注入消息并显式 ack_human_message；已保存、已注入、已 ACK 与已完成分别记账，注入 unknown 不自动再发。
 
-本片使用明确的 structured 新会话：恢复验证后的业务文件、原问题、用户回复和有界文件索引，再依既有 Hub/Canvas 按需读取当前事实/计划。CLI Session 仍按现有机制归档作证据，**未实现 Pi/Claude/DSH 原生会话恢复**，不声称跨进程 Session 原样续接。不得重放已接受业务效果；只有新执行的合法完成门和结算证明完成。
+structured 模式恢复验证后的业务文件、原问题、用户回复和有界文件索引，再依既有 Hub/Canvas 按需读取当前事实/计划。满足上述受限条件的 Pi/Claude 可导入主会话文字，DSH 使用 structured。只有新执行的合法完成门和结算证明完成。
 
 启动提示只携带待处理回复的引用与状态，正文只经 inbox 投递，unknown 投递不从启动提示旁路再发。已 ACK 的历史可作为只读上下文供显式后继恢复使用，不再次投递。同 Job 累计已 ACK 的不可变附件单独校验并恢复到各消息原 inbox 路径，启动索引列出这些历史输入；上限 256 个、单文件 8 MiB、总计 64 MiB，超限明确阻断，不静默丢弃较早轮次输入。待处理回复附件仍只随原投递入口提供。完成门要求当前回复已 ACK，否则返回可修正反馈；已知失败后的单 Job resume 重核原断点并追加下一 owner，不被首次 target_attempt_no 永久锁定。更换配置和任务批量恢复不能绕过断点身份门。
 
@@ -48,7 +61,7 @@ Dispatcher 在 provision 和 agent_run 前再核对确切 successor 与文件；
 
 有效执行时间由 job_execution_clocks 从首个受理 human 的原运行区间累计；可信回收且在途 Gateway 效果/用量结算后暂停，等待期间仍有未决模型调用则保守继续计时。资源释放后的时钟收敛独立于回复，以持久化的退出、回收与最后 Gateway 结算/用量观察时间的较晚值关闭区间；用户尚未回复、轮询延迟或 Scheduler 停机不会在结清后额外扣时。jobs.started_at 保留本次实际开始时间用于停滞检测，execution_deadline_at 单独保存原剩余有效时间与 repair 硬期限的较早值；Control token、Gateway、完成/Plan 门与 Reaper 共同使用它。排队和纯人工等待不耗有效执行时间，重复清理不重复扣时。请求数、主/repair token、修正次数与 Plan lifetime 沿原账本，unknown 不按零消耗，原 repair deadline 不延长。
 
-封存等待保留当前 FIFO 占位，不占活跃执行槽。暂停/取消/归档和授权撤销仍由既有门控制。普通 failed 历史无合法新断点不自动续做；历史失败关联新 Job、原生 Session 继续和补充回复的专用编辑体验是剩余范围，不冒充本片已交付。
+封存等待保留当前 FIFO 占位，不占活跃执行槽。暂停/取消/归档和授权撤销仍由既有门控制。普通 failed 历史无合法新断点不自动续做。历史失败关联新 Job、FIFO 让位和文件权限恢复由独立切片验收，补充回复的专用编辑体验仍为剩余范围。
 
 ## 注意力成本与验收
 
