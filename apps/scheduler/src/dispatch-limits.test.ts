@@ -21,6 +21,7 @@ import {
   type DispatchCounts,
 } from "./dispatcher.js";
 import { sql } from "./db.js";
+import { bindScheduleWake, clearScheduleWake, noteClaimContentionWake, noteScheduleWakeAt, unbindScheduleWake } from "./schedule-wake.js";
 import { parseConcurrencyRulesPatch } from "./domains/settings/routes.js";
 
 function emptyCounts(): DispatchCounts {
@@ -32,6 +33,32 @@ function emptyCounts(): DispatchCounts {
     cli: new Map(),
   };
 }
+
+test("claim contention wake coalesces, stays separate from schedules and stops with Dispatcher", t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let wakes = 0;
+  try {
+    noteClaimContentionWake(); // No Dispatcher owns a timer before bind.
+    bindScheduleWake(() => { wakes++; });
+    t.mock.timers.tick(1_000);
+    assert.equal(wakes, 0);
+    noteScheduleWakeAt(Date.now() + 60_000);
+    for (let index = 0; index < 100; index++) noteClaimContentionWake();
+    clearScheduleWake(); // Refreshing task deadlines must not erase a lock retry.
+    t.mock.timers.tick(1_000);
+    assert.equal(wakes, 1);
+    t.mock.timers.tick(60_000);
+    assert.equal(wakes, 1, "an idle queue does not become a polling loop");
+    noteClaimContentionWake();
+    unbindScheduleWake();
+    bindScheduleWake(() => { wakes++; });
+    t.mock.timers.tick(1_000);
+    assert.equal(wakes, 1, "stopped generation cannot wake a replacement Dispatcher");
+    noteClaimContentionWake();
+    t.mock.timers.tick(1_000);
+    assert.equal(wakes, 2);
+  } finally { unbindScheduleWake(); }
+});
 
 function fakeDb(result: unknown, projectResult?: unknown) {
   return ((strings: TemplateStringsArray) => {

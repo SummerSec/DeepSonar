@@ -1,7 +1,7 @@
 # DeepSonar 系统规格
 
 > 状态：**as-built + 规范缺口登记**（#741 PR 2）。正文把规范要求、当前代码事实和验收入口分开；“进行中/实现违约”不表示已达标。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-19
 
 本文是编号需求的唯一权威位置。规范要求使用“必须/不得”；“代码入口”指向实际代码、schema 或 OpenAPI，“决策来源”记录约束依据，“实现状态”描述当前实现是否满足该陈述，“验证证据”是可复现入口或人工核查方法，不是本次已经执行的结果。schema 主线版本以 [schema-version.ts](../../apps/scheduler/src/schema-version.ts) 和 [database/schema.sql](../../database/schema.sql) 为准。
 
@@ -885,9 +885,9 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 
 - **规范要求**：调度必须主要依赖 `pg_notify('deepsonar_jobs')` 唤醒，兜底轮询默认关闭；Lease 由 Scheduler 续期与判定，不得信任 Agent 自报存活。
 - **决策来源**：实时唤醒减少无界轮询，Lease 判定必须由平台掌握。
-- **实现状态**：as-built；notify/lease 路径已接线，默认值不等于可用性或恢复时间目标。
+- **实现状态**：as-built；notify/lease 路径已接线。认领 `SKIP LOCKED` 跳过候选时合并延后唤醒，解锁后无新通知也能重新核验；停止清理，不开启全局轮询。见[行锁竞争唤醒](06-runtime-view.md#行锁竞争后的认领唤醒)。默认值不等于可用性或恢复时间目标。
 - **代码入口**：[Scheduler 配置](../../apps/scheduler/src/config.ts)（`LEASE_TTL_SEC`、`DEEPSONAR_DISPATCH_POLL_SEC`）、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)。
-- **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`；人工核对无 notify 时仅使用显式轮询配置。
+- **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:job-lifecycle`、`pnpm ci:integration:dispatch-limits`；覆盖 Canvas/Job 解锁无通知时的认领、其他画布进展、停止与定时器合并；核心 API 冒烟保留原完整断言，最终 SHA Actions 另验。
 
 ### NFR-REL-006 写操作幂等与去重
 

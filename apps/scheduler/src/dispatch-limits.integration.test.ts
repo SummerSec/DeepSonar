@@ -274,6 +274,54 @@ if (!testDatabaseUrl) {
       await sql`UPDATE projects SET config_json = '{}'::jsonb WHERE id = ${projectIds[0]}`;
       const clearedClaim = await claimPendingJobs();
       assert.equal(clearedClaim.some((job) => job.id === pausedId), true);
+
+      await sql`DELETE FROM jobs WHERE id = ANY(${jobIds}::uuid[])`;
+      jobIds.length = 0;
+      const { bindScheduleWake, unbindScheduleWake } = await import("./schedule-wake.js");
+      for (const lockTarget of ["canvas", "job"] as const) {
+        const lockedId = await insertJob(projectIds[0]);
+        const unrelatedId = await insertJob(projectIds[1]);
+        let release!: () => void;
+        let locked!: () => void;
+        const holding = new Promise<void>(resolve => { release = resolve; });
+        const ready = new Promise<void>(resolve => { locked = resolve; });
+        // Independent transaction: releasing a read-only row lock emits no jobs NOTIFY.
+        const locker = sql.begin(async tx => {
+          if (lockTarget === "canvas") await tx`SELECT id FROM canvases WHERE id=${canvasIds[0]} FOR UPDATE`;
+          else await tx`SELECT id FROM jobs WHERE id=${lockedId} FOR UPDATE`;
+          locked();
+          await holding;
+        });
+        const retries: Promise<unknown>[] = [];
+        const automaticallyClaimed = new Set<string>();
+        let retryError: unknown;
+        bindScheduleWake(() => {
+          retries.push(claimPendingJobs().then(rows => {
+            for (const row of rows) automaticallyClaimed.add(row.id);
+          }).catch(error => { retryError = error; }));
+        });
+        try {
+          await ready;
+          const first = await claimPendingJobs();
+          assert.deepEqual(first.map(row => row.id), [unrelatedId], `${lockTarget} lock must not block another canvas`);
+          release();
+          await locker;
+          const deadline = Date.now() + 3_000;
+          while (!automaticallyClaimed.has(lockedId) && !retryError && Date.now() < deadline) {
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          assert.ifError(retryError);
+          assert.ok(automaticallyClaimed.has(lockedId), `${lockTarget} lock released without NOTIFY: skipped pending Job must wake automatically`);
+          const [claimed] = await sql`SELECT status FROM jobs WHERE id=${lockedId}`;
+          assert.equal(claimed.status, "claimed");
+        } finally {
+          release();
+          await locker;
+          unbindScheduleWake();
+          await Promise.all(retries);
+          await sql`DELETE FROM jobs WHERE id = ANY(${[lockedId, unrelatedId]}::uuid[])`;
+        }
+      }
     } finally {
       if (!databaseClosed) {
         await sql`UPDATE global_settings SET rules_json = ${sql.json(originalRules as never)}, updated_at = now() WHERE id = 'global'`;
