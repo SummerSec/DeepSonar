@@ -302,16 +302,15 @@ export function claudeOutputCap(allowance, ceilings = []) {
 export async function prepareClaudeLaunch(command, environment, settings = []) {
   const allowance = await readLaunchAllowance(new URL(environment.DEEPSONAR_REQUEST_POLICY_UPSTREAM), readPrivateCredential(environment.DEEPSONAR_GATEWAY_TOKEN_FILE));
   const cap = claudeOutputCap(allowance, [environment.CLAUDE_CODE_MAX_OUTPUT_TOKENS, ...settings.map(setting => setting?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS)]);
-  if (cap === null) return { command, env: environment };
   const configuration = JSON.stringify({
     apiKeyHelper: ${JSON.stringify("node " + CLAUDE_PRIVATE_HELPER_PATH)},
-    env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) },
+    ...(cap === null ? {} : { env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } }),
   });
   // The CLI keeps only the final --settings argument. Keep the trusted file
   // helper in the same generated override as the numeric launch cap.
   // Neither value contains business-controlled shell text.
   return { command: command + " --settings '" + configuration + "'",
-    env: { ...environment, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } };
+    env: cap === null ? environment : { ...environment, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } };
 }
 
 async function launch() {
