@@ -50,6 +50,14 @@ test("Claude pinned storage metadata and execution attachments cannot import old
   assert.equal(project([queue,user,{...queue,operation:"dequeue"}]).status,"supported");
   assert.equal(project([user,{...queue,content:"Unconsumed task instruction"}]).reason,"unverified_queued_prompt");
   assert.equal(project([user,{...queue,operation:"future_queue_operation"}]).reason,"unverified_queued_prompt");
+  const queued={...queue,content:"Keep decision"};
+  const dequeue={...queue,operation:"dequeue"};
+  assert.equal(project([queued,dequeue,user]).status,"supported");
+  assert.equal(project([queued,dequeue,{...user,message:{role:"user",content:[{type:"text",text:"Keep decision"}]}}]).status,"supported");
+  for(const values of [[queued,user],[queued,dequeue],[user,queued,dequeue],
+    [queued,dequeue,{...user,message:{role:"user",content:"Different decision"}}],
+    [queued,queued,dequeue,user],[queued,queue,dequeue,user]])
+    assert.equal(project(values).reason,"unverified_queued_prompt");
 });
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";

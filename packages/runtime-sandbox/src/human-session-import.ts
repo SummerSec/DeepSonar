@@ -78,12 +78,25 @@ export function projectNativeHumanSession(cli: string, version: string, sessionI
     const seen = new Set<string>();
     let parent: string | null = null;
     let sourceParent: string | null = null;
+    let queuedPrompt: string | undefined;
+    let dequeuedPrompt: string | undefined;
     for (const row of rows) {
       if (cli === "claude-code") {
         if (row.sessionId !== undefined && row.sessionId !== sessionId) throw new Error("claude_identity");
         if (row.type === "queue-operation") {
-          if (row.content !== undefined || !["enqueue","dequeue"].includes(row.operation))
+          if (!["enqueue","dequeue"].includes(row.operation) || dequeuedPrompt !== undefined)
             return {status:"unsupported",reason:"unverified_queued_prompt"};
+          if (row.operation === "enqueue") {
+            // Only a single queued text followed by dequeue and an identical
+            // user record proves consumption. Overlapping queues are ambiguous.
+            if (queuedPrompt !== undefined || row.content !== undefined && typeof row.content !== "string")
+              return {status:"unsupported",reason:"unverified_queued_prompt"};
+            queuedPrompt = row.content;
+          } else {
+            if (row.content !== undefined) return {status:"unsupported",reason:"unverified_queued_prompt"};
+            dequeuedPrompt = queuedPrompt;
+            queuedPrompt = undefined;
+          }
           continue;
         }
         if (CLAUDE_STORAGE_METADATA.has(row.type)) continue;
@@ -111,6 +124,15 @@ export function projectNativeHumanSession(cli: string, version: string, sessionI
       }
       if (row.type === "attachment") continue;
       const message = row.message;
+      if (cli === "claude-code" && dequeuedPrompt !== undefined) {
+        const content = message?.content;
+        const consumedText = typeof content === "string" ? content
+          : Array.isArray(content) && content.every(block => block?.type === "text" && typeof block.text === "string")
+            ? content.map(block => block.text).join("\n") : undefined;
+        if (row.type !== "user" || message?.role !== "user" || consumedText !== dequeuedPrompt)
+          return {status:"unsupported",reason:"unverified_queued_prompt"};
+        dequeuedPrompt = undefined;
+      }
       if (cli === "pi" ? row.type !== "message" : !["user","assistant"].includes(row.type)) continue;
       if (!message || !["user","assistant","toolResult"].includes(message.role)) continue;
       const text = safeText(textContent(message.content));
@@ -130,6 +152,7 @@ export function projectNativeHumanSession(cli: string, version: string, sessionI
       }
       parent = id;
     }
+    if (queuedPrompt !== undefined || dequeuedPrompt !== undefined) return {status:"unsupported",reason:"unverified_queued_prompt"};
     if (!parent) throw new Error("empty_history");
     const content = output.map(value => JSON.stringify(value)).join("\n") + "\n";
     if (Buffer.byteLength(content) > HUMAN_SESSION_MAX_BYTES) throw new Error("projection_size");
