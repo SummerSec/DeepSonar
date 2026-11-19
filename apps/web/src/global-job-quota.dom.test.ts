@@ -69,9 +69,15 @@ test("global quota DOM preserves stored drafts, validates input and saves explic
     await act(async () => { save().click(); });
     assert.deepEqual(writes[1], { maxJobsPerProject: null });
     const projectWrites: unknown[] = [];
-    let project = { rules: { maxConcurrentJobs: 3 }, effective_rules: {
+    let project: ProjectSettings = { rules: { maxConcurrentJobs: 3 }, effective_rules: {
       ...rules, maxJobsPerProject: null, maxConcurrentJobs: 3, maxConcurrentJobsSource: "project",
-    }, active_jobs: 2 } as ProjectSettings;
+    }, active_jobs: 2, finding_protocol: null,
+    effective_finding_protocol: { mode: "fixed", default_profile: "security", allowed_profiles: ["security"],
+      scoring: { default_standard: "CVSS", default_version: "3.1", accepted_versions: ["3.1"], require_scoring_for_profiles: [] },
+      display_name: "Security", source: "global" },
+    enabled_agent_clis: ["claude-code"], enabled_credential_ids: [], credential_ids_configured: false,
+    default_agent_cli: "claude-code", default_credential_id: null, default_model_ref: null,
+    fallback_model_refs: [], allow_model_catalog_passthrough: false };
     api.patchSettings = async (_id, body) => {
       projectWrites.push(body.rules);
       const value = body.rules?.maxConcurrentJobs;
@@ -131,8 +137,11 @@ test("global quota DOM preserves stored drafts, validates input and saves explic
     await act(async () => {
       Array.from(container.querySelectorAll("button")).find(button => button.textContent?.trim() === "保存规则")!.click();
     });
-    assert.equal(writes.at(-1)!.allowEgress, false);
-    assert.deepEqual(writes.at(-1)!.maxConcurrentByAgentCli, { "claude-code": 2 });
+    // assert.deepEqual above narrows writes to the quota shape. Read the main
+    // request through its declared record type after the asynchronous save.
+    const mainWrite: Record<string, unknown> = writes.at(-1)!;
+    assert.equal(mainWrite.allowEgress, false);
+    assert.deepEqual(mainWrite.maxConcurrentByAgentCli, { "claude-code": 2 });
     assert.equal(Object.hasOwn(writes.at(-1)!, "maxGlobalJobs"), false, "main save does not persist quota effective values");
   } finally {
     await act(async () => root.unmount());
