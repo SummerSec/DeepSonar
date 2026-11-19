@@ -380,6 +380,11 @@ if (!testDatabaseUrl) {
           await sql`DELETE FROM jobs WHERE id = ANY(${[lockedId, unrelatedId]}::uuid[])`;
         }
       }
+      await sql`DELETE FROM jobs WHERE id = ANY(${jobIds}::uuid[])`;
+      await setRules({ maxGlobalJobs: null, maxJobsPerProject: null, maxConcurrentProvisioning: null });
+      const recoveryPending = await Promise.all(Array.from({ length: 6 }, () => insertJob(projectIds[0])));
+      const { runUnlimitedCreateCircuitFixture } = await import("./dispatch-create-circuit.fixture.js");
+      await runUnlimitedCreateCircuitFixture(sql, claimPendingJobs, recoveryPending);
     } finally {
       if (!databaseClosed) {
         await sql`UPDATE global_settings SET rules_json = ${sql.json(originalRules as never)}, updated_at = now() WHERE id = 'global'`;

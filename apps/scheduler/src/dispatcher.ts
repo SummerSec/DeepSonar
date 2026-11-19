@@ -175,7 +175,7 @@ import {
   openSandboxCreateCircuitStatus,
   recordOpenSandboxProvisionFailure,
   recordOpenSandboxProvisionSuccess,
-  createCircuitProbeFor, shouldLogCreateCircuitPause, type CreateCircuitProbe,
+  createCircuitProbeFor, createCircuitClaimSlots, shouldLogCreateCircuitPause, type CreateCircuitProbe,
 } from "./opensandbox-create-circuit.js";
 import {
   OPENSANDBOX_UPLOAD_CIRCUIT_OPEN,
@@ -765,6 +765,7 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
     const slots = Math.min(
       dispatchSlots(rules.maxGlobalJobs, totalActive),
       provisionSlots(rules.maxConcurrentProvisioning, activeProvisioning),
+      createCircuitClaimSlots(createProbe, activeProvisioning),
     );
     if (slots <= 0) {
       const holders = await tx<{ id: string; status: string; claimed_at: string | null; project_id: string; type: string }[]>`SELECT id, status, claimed_at::text AS claimed_at, project_id::text, type FROM jobs WHERE status IN ('claimed','provisioning') ORDER BY claimed_at NULLS FIRST, id LIMIT 5`;

@@ -43,6 +43,11 @@ export function createCircuitProbeFor(admission: { canary: boolean; episode: num
   return admission.canary ? { canary: true, episode: admission.episode } : null;
 }
 
+/** All claimed/provisioning work shares the recovery seat, across schedulers. */
+export function createCircuitClaimSlots(probe: CreateCircuitProbe | null, activeProvisioning: number): number {
+  return probe?.canary ? Math.max(0, 1 - activeProvisioning) : Number.POSITIVE_INFINITY;
+}
+
 export type OpenSandboxCreateCircuitStatus = {
   state: OpenSandboxCreateCircuitState;
   episode: number;
@@ -83,9 +88,8 @@ export function openSandboxCreateCircuitAllowsClaim(
   status: OpenSandboxCreateCircuitStatus = openSandboxCreateCircuitStatus(),
 ): { allowed: boolean; canary: boolean; episode: number | null } {
   if (status.state === "closed") return { allowed: true, canary: false, episode: null };
-  // Half-open admits claims as canaries until a provision outcome arrives. No seat is
-  // reserved here: an admitted claim that finds no pending Job must not deadlock the
-  // gate, and the existing provisioning concurrency cap bounds concurrent canaries.
+  // No seat is reserved before finding work. The dispatcher enforces a separate
+  // single creation seat under its DB advisory lock, including unlimited quotas.
   if (status.state === "half_open") return { allowed: true, canary: true, episode };
   const openedAt = openedAtMs;
   if (openedAt != null && clock() - openedAt >= CREATE_CIRCUIT_COOLDOWN_MS) {

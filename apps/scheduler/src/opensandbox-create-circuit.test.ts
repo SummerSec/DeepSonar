@@ -12,6 +12,7 @@ import {
   resetOpenSandboxCreateCircuitForTests,
   shouldLogCreateCircuitPause,
   classifyProvisionFailure,
+  createCircuitClaimSlots,
 } from "./opensandbox-create-circuit.js";
 import { claimSkipCacheSizeForTests, logClaimSkip, logClaimStarved, resetClaimDiagnosticsForTests } from "./dispatch-claim-diagnostics.js";
 
@@ -20,6 +21,14 @@ function clockAt(start = 1_000_000) {
   const advance = (ms: number) => { now += ms; };
   return { clock: () => now, advance };
 }
+
+test("unlimited quotas retain a single half-open creation seat", () => {
+  const probe = { canary: true, episode: 1 };
+  assert.equal(createCircuitClaimSlots(probe, 0), 1);
+  assert.equal(createCircuitClaimSlots(probe, 1), 0);
+  assert.equal(createCircuitClaimSlots(probe, 500), 0);
+  assert.equal(createCircuitClaimSlots(null, 0), Infinity);
+});
 
 test("#1046 create circuit stays closed below the failure threshold and admits claims", () => {
   resetOpenSandboxCreateCircuitForTests(() => 1_000_000);
