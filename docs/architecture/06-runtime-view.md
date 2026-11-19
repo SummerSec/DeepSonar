@@ -75,7 +75,7 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 
 #1078 的容量读取与 Dispatcher 使用同一凭据 UUID 和运行状态范围，全局凭据在其他项目的活动 Job 也计入占用。`pending` / `waiting_human` 不占运行名额，只与本项目非终态分配数、历史分配数一起服务并列排序。配额读取管理 API 保存的 `public_metadata_json`，自由元信息 `meta_json` 不授予或限制容量。选择只读，实际领取仍由 Dispatcher 在 `DISPATCH_CLAIM_ADVISORY_KEY` 锁内复核 Provider、凭据和模型上限；并发解析不预留名额。单候选、全满排队、恢复身份满额后让位并由 `resume-frozen` 身份比较拒绝的现有语义保留。健康过滤、跨 Provider 等价、全满新错误码与冻结候选审计仍属于 #1078 未交付边界。管理 API 配额保存、跨项目占用、三种运行状态、排队/人工等待与释放后恢复回归接既有 `ci:unit:capability-pack` / `ci:integration:role-config`，最终提交的 Actions 结果另验。
 4. 未配置凭据白名单时动态读取当前作用域候选，不在读取时写入 ID。显式白名单及默认凭据的删除、停用或不可访问引用返回 `provider_credential_allowlist_stale`（`permanent_failure`），RepairFeedback 指向管理员修复名单；既不扩大授权，也不把权限修复交给模型。
-5. 池选择是现有 Job 历史的只读投影，readiness 不消费分配轮次，不承诺并发创建严格 round-robin，也不表示账号余额或容量。已有 Job 恢复向内核 resolver 提供原冻结账号偏好，只能在当前合法候选内生效；显式当前默认账号仍优先，身份漂移及累计预算校验不变。运行中不换 key、不因故障重选账号或重置预算。
+5. 池选择是现有 Job 历史的只读投影，readiness 不消费分配轮次，不承诺并发创建严格 round-robin，也不表示账号余额或容量。已有 Job 恢复向内核 resolver 提供原冻结账号偏好，只能在当前合法候选内生效；同身份授权池内有余量的冻结账号先于显式当前默认账号，满额或失去资格时仍走第 3 条的候选选择及身份漂移校验，累计预算校验保留。运行中不换 key、不因故障重选账号或重置预算。
 6. 选中的账号、CLI、Provider/model 按原规则进入新 Job 快照。账号 × CLI 1:1、并发计账和 Gateway 密钥隔离不变；不修改任何已有 Job 快照或镜像准入。
 
 项目 CLI/Provider 管理页独立加载账号列表，区分加载中、加载失败与成功空列表。只有成功读取当前项目可见账号后才判定默认账号和白名单引用失效；未加载成功时保存 CLI 不能清除默认账号或写入空凭据白名单。Pi 模型快照对账号目录中含 `/` 的完整模型 ID 保持一致，CLI 路由单独冻结，详见 [CLI 运行时契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-coding-agent-rpc140)。
