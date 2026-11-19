@@ -7,7 +7,7 @@ import type { RuntimeHost } from "@deepsonar/runtime-sandbox";
 import type { sql as database } from "../../db.js";
 import { mintJobToken } from "../../gateway.js";
 import { readHistoricalRequestBudget } from "../../gateway-request-budget.js";
-import { readRepairTokenBudget, readRepairTokenBudgets } from "../event-ingestion/repair-token-budget.js";
+import { assertRepairTokenBudget, readRepairTokenBudget, readRepairTokenBudgets } from "../event-ingestion/repair-token-budget.js";
 import { readWorkloadTokenAllowance } from "../event-ingestion/model-token-allowance.js";
 import { readCompletionExecutionState } from "../platform-api/completion-state.js";
 import { humanExecutionStartedAt, remainingHumanExecutionMs } from "./human-continuation-clock.js";
@@ -205,7 +205,11 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
           try {
             const callsBefore = calls;
             assert.equal((await send(childToken.plaintext)).json().error.type, "REPAIR_DEADLINE_EXHAUSTED");
-            assert.equal((await owner.propose(1, "Valid after original deadline")).json().error_code, "REPAIR_DEADLINE_EXHAUSTED");
+            // Control capability expiry fences the HTTP caller before repair admission.
+            assert.equal((await owner.propose(1, "Valid after original deadline")).json().error_code, "CAPABILITY_TOKEN_EXPIRED");
+            const budget = await readRepairTokenBudget(sql, target.jobId);
+            assert.equal(budget?.deadline, rootBudget.deadline);
+            assert.throws(() => assertRepairTokenBudget(budget, true), { code: "REPAIR_DEADLINE_EXHAUSTED" });
             assert.equal(calls, callsBefore);
           } finally { Date.now = originalNow; }
         }
@@ -305,9 +309,9 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
           FROM job_usage_ledger l JOIN job_attempts a ON a.id=l.attempt_id JOIN job_attempt_effects e
           ON e.job_id=l.job_id AND e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id WHERE l.job_token_id=${token.id}`;
         assert.equal(ledger.job_id, target.jobId); assert.equal(ledger.attempt_job_id, target.jobId);
-        assert.equal(ledger.total_tokens, 3); assert.equal(ledger.settlement_status, "settled"); assert.equal(ledger.effect_status, "settled");
+        assert.equal(Number(ledger.total_tokens), 3); assert.equal(ledger.settlement_status, "settled"); assert.equal(ledger.effect_status, "settled");
         const [grant] = await sql`SELECT used_tokens,used_requests,revoked_at FROM job_tokens WHERE id=${token.id}`;
-        assert.equal(grant.used_tokens, 3); assert.equal(grant.used_requests, 1);
+        assert.equal(Number(grant.used_tokens), 3); assert.equal(grant.used_requests, 1);
         if (operation === "archive") assert.ok(grant.revoked_at);
         assert.equal((await sql`SELECT status FROM jobs WHERE id=${rootId}`)[0].status, "failed");
         assert.equal((await sql`SELECT count(*)::int AS n FROM job_continuations WHERE target_job_id=${target.jobId}`)[0].n, 1);
@@ -339,9 +343,9 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
           FROM job_attempt_effects e JOIN job_usage_ledger l ON l.job_id=e.job_id AND l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
           WHERE e.job_id=${target.jobId} AND e.effect_kind='gateway_model_request'`;
         assert.equal(effect.status, "settled"); assert.equal(effect.settlement_status, "settled");
-        assert.equal(effect.evidence_ref, effect.ledger_id); assert.equal(effect.total_tokens, 3);
+        assert.equal(effect.evidence_ref, effect.ledger_id); assert.equal(Number(effect.total_tokens), 3);
         const [grant] = await sql`SELECT used_requests,used_tokens,status FROM job_tokens WHERE id=${token.id}`;
-        assert.equal(grant.used_requests, 1); assert.equal(grant.used_tokens, 3); assert.equal(grant.status, "revoked");
+        assert.equal(grant.used_requests, 1); assert.equal(Number(grant.used_tokens), 3); assert.equal(grant.status, "revoked");
       } finally {
         releaseUpstream(); await request; entered = undefined; release = undefined; unblockPending = undefined;
       }

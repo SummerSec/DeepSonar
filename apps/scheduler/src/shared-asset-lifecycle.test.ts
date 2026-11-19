@@ -456,8 +456,12 @@ test("Dispatcher contract: bounded keyset pages keep Canvas → Job → Attempt 
 
 test("Dispatcher contract: Job ownership fence precedes provision Attempt admission/settlement", async () => {
   const source = await readFile(new URL("./dispatcher.ts", import.meta.url), "utf8");
-  const helper = source.slice(source.indexOf("export async function lockCurrentProvisioningAttempt"), source.indexOf("async function runJob"));
-  assert.ok(helper.indexOf("FOR UPDATE OF j") < helper.indexOf("getActiveAttempt(db, jobId, true)"));
+  const dispatch = await readFile(new URL("./domains/job-control/human-continuation-dispatch.ts", import.meta.url), "utf8");
+  const helper = dispatch.slice(dispatch.indexOf("export async function lockCurrentProvisioningAttempt"));
+  const rootLock = helper.indexOf("lockContinuationBudget(db, jobId)");
+  const jobLock = helper.indexOf("FOR UPDATE OF j");
+  const attemptLock = helper.indexOf("getActiveAttempt(db, jobId, true)");
+  assert.ok(rootLock >= 0 && jobLock > rootLock && attemptLock > jobLock);
   assert.match(helper, /job\.latest_attempt_id !== attemptId/);
   const run = source.slice(source.indexOf("async function runJob"), source.indexOf("export async function withProvisionTimeout"));
   assert.ok(run.indexOf('lockCurrentProvisioningAttempt(tx as unknown as typeof sql, jobId, attemptId!, "preparing")') < run.indexOf("const admitted = await beginEffect"));
