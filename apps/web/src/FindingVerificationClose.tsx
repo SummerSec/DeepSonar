@@ -7,9 +7,10 @@ import { useConfirmDialog } from "./components/ConfirmDialog";
 
 export function FindingVerificationClose({ findingId, control, onChanged }: {
   findingId: string;
-  control: FindingVerificationControl;
+  control: FindingVerificationControl | null;
   onChanged: () => Promise<unknown>;
 }) {
+  if (!control) return null;
   const scope = JSON.stringify([findingId, control.verify_status, control.subject_revision, control.latest_round_id]);
   return <ScopedVerificationClose key={scope} findingId={findingId} control={control} onChanged={onChanged} />;
 }

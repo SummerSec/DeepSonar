@@ -9,7 +9,7 @@ Fact 列表、详情和人工动作响应的只读 `usage` 投影分别描述用
 
 ## 人工结束技术验证（#1133）
 
-`PATCH /findings/:id/verify-status` 的 `inconclusive` 分支复用 `findings:write` 和项目隔离。原因必填，`expected` 必须包含用户实际看到的 `verify_status`、`subject_revision` 和 `latest_round_id`，未知修订或无轮次显式为 null。共享严格契约位于 [finding-verification.ts](../../packages/shared-types/src/finding-verification.ts)，详情返回 `verification_control` 提供这组比较值。
+`PATCH /findings/:id/verify-status` 的 `inconclusive` 分支复用 `findings:write` 和项目隔离。原因必填，`expected` 必须包含用户实际看到的 `verify_status`、`subject_revision` 和 `latest_round_id`，未知修订或无轮次显式为 null。共享严格契约位于 [finding-verification.ts](../../packages/shared-types/src/finding-verification.ts)，详情返回 `verification_control` 提供这组比较值。无画布的历史详情仍可读，其 `verification_control` 为 null，界面隐藏结束按钮，写操作拒绝为 `FINDING_CANVAS_INVALID`。
 
 仅 `needs_human` 且无活动 Job/Attempt、未决效果和开放验证轮次允许结束。Canvas 锁下先识别持久 mutation 重试，再检查 CAS。同编号同操作者同决定返回原结果，异内容或过期值返回 409。成功新增 `attempt=max+1`、无 Verify Job 的终结轮次，记录操作者、脱敏原因、对象修订和来源轮次，保留旧轮次及业务 disposition。状态、同 Finding verification blocker、轮次和请求身份审计同事务提交，审计失败整体回滚。
 

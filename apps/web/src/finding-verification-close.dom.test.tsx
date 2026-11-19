@@ -21,6 +21,7 @@ test("人工无定论按钮按权限、原因和真实确认发送 CAS，409 刷
   const control = { verify_status: "needs_human", subject_revision: "target@frozen", latest_round_id: "00000000-0000-4000-8000-000000000001" };
   let scopes = ["jobs:control"];
   let status = "needs_human";
+  let hasControl = true;
   let findingId = "finding-a";
   let changed = 0;
   const calls: Array<Parameters<typeof api.closeFindingInconclusive>> = [];
@@ -32,12 +33,16 @@ test("人工无定论按钮按权限、原因和真实确认发送 CAS，409 刷
       errorCode: "FINDING_VERIFICATION_STALE", serverMessage: "验证轮次已变化，请刷新后决定" });
   };
   const render = (key: string) => act(async () => root.render(<ConfirmDialogProvider>
-    <FindingVerificationClose key={key} findingId={findingId} control={{ ...control, verify_status: status }} onChanged={async () => { changed++; }} />
+    <FindingVerificationClose key={key} findingId={findingId} control={hasControl ? { ...control, verify_status: status } : null} onChanged={async () => { changed++; }} />
   </ConfirmDialogProvider>));
   try {
     await render("readonly");
     assert.equal(dom.window.document.querySelector("button"), null, "jobs:control 不授予 findings:write");
     scopes = ["findings:write"];
+    hasControl = false;
+    await render("detached");
+    assert.equal(dom.window.document.querySelector("button"), null, "无有效画布的只读详情没有结束按钮");
+    hasControl = true;
     await render("operator");
     const button = dom.window.document.querySelector("button")!;
     assert.equal(button.textContent, "以无定论结束");

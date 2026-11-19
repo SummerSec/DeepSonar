@@ -39,7 +39,7 @@ export async function readFindingVerificationSnapshot(id: string) {
       LEFT JOIN canvases c ON c.id = j.canvas_id AND c.project_id = f.project_id
       WHERE f.id = ${id} AND j.canvas_id IS NOT DISTINCT FROM ${canvasId}::text FOR UPDATE OF f`;
     if (!finding) return null;
-    return { finding, control: await readVerificationControl(tx, finding) };
+    return { finding, control: canvasId ? await readVerificationControl(tx, finding) : null };
   });
 }
 

@@ -272,11 +272,9 @@ if (!testDatabaseUrl) {
         VALUES (${detachedFindingId},${projectId},${detachedJobId},${detachedFindingId},'无画布历史 Finding','medium','needs_human')`;
       const detachedDetail = await app.inject({ method: "GET", url: `/findings/${detachedFindingId}`, headers });
       assert.equal(detachedDetail.statusCode, 200, detachedDetail.payload);
-      assert.deepEqual(detachedDetail.json().verification_control, {
-        verify_status: "needs_human", subject_revision: null, latest_round_id: null,
-      });
+      assert.equal(detachedDetail.json().verification_control, null);
       const detachedClose = await patch({ ...closeBody, mutation_id: randomUUID(),
-        expected: detachedDetail.json().verification_control }, detachedFindingId);
+        expected: { verify_status: "needs_human", subject_revision: null, latest_round_id: null } }, detachedFindingId);
       assert.equal(detachedClose.statusCode, 409, detachedClose.payload);
       assert.equal(detachedClose.json().error_code, "FINDING_CANVAS_INVALID");
     } finally {

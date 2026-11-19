@@ -1017,7 +1017,7 @@ export interface WsTicket {
 }
 
 export interface FindingDetail {
-  verification_control: FindingVerificationControl;
+  verification_control: FindingVerificationControl | null;
   finding: FindingSummary & {
     raw_json: Record<string, unknown>;
     source_job_type: string;
