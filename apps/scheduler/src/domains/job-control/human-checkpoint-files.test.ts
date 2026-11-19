@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { spawnSync, spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -13,6 +13,40 @@ import { checkpointQuiescenceScript } from "./human-checkpoint-process.js";
 import { CHECKPOINT_MUTATION_GUARD } from "./human-checkpoint-mutation.js";
 import { checkpointGuardFixture } from "./human-checkpoint-fixture.js";
 import { checkpointManagedSecrets } from "./human-checkpoint.js";
+
+test("Linux checkpoint scanner retains only owner execute with owner read/write", {skip:process.platform==='win32'},async()=>{
+  const directory=await mkdtemp(path.join(os.tmpdir(),'checkpoint-mode-'));
+  const previous=config.storage.blobDir;
+  Reflect.set(config.storage,'blobDir',path.join(directory,'blobs'));
+  const workspace=path.join(directory,'workspace');
+  await mkdir(workspace);
+  const content=Buffer.from('#!/bin/sh\nprintf checkpoint-restored');
+  const sourceModes=[0o644,0o755,0o777,0o4755,0o2755,0o1777,0o650,0o641];
+  const host={
+    run:async(command:string)=>{
+      // Process isolation has its own regressions. Execute the real scanner on a private directory.
+      const scanner=command.replace(checkpointQuiescenceScript(['90001:12345']),'').replaceAll('/workspace',workspace);
+      const result=spawnSync('/bin/sh',['-c',scanner],{encoding:'utf8',timeout:5000});
+      return {exitCode:result.status??1,stdout:result.stdout,stderr:result.stderr};
+    },
+    runAsync:async()=>checkpointGuardFixture(),
+    readWorkspaceFile:async(filename:string)=>readFile(filename.replace('/workspace',workspace)),
+  } as unknown as RuntimeHost;
+  try {
+    for(const mode of sourceModes) {
+      const name=`file-${mode.toString(8)}.sh`;
+      await writeFile(path.join(workspace,name),content);
+      await chmod(path.join(workspace,name),mode);
+    }
+    const captured=await captureCheckpointFiles(host,randomUUID(),[],[],[]);
+    assert.deepEqual(captured.map(file=>({...file,sha256:'digest'})).sort((a,b)=>a.path.localeCompare(b.path)),
+      sourceModes.map(mode=>({path:`file-${mode.toString(8)}.sh`,bytes:content.length,sha256:'digest',mode:0o600|(mode&0o100)}))
+        .sort((a,b)=>a.path.localeCompare(b.path)));
+  } finally {
+    Reflect.set(config.storage,'blobDir',previous);
+    await rm(directory,{recursive:true,force:true});
+  }
+});
 
 test("fork chains must converge to a stable stopped set or fail closed",{skip:process.platform==='win32'},()=>{
   for(const unbounded of [false,true]) {
