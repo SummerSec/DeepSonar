@@ -398,6 +398,7 @@ test("project task queue serializes dispatcher claims and reconciles durable tas
     assert.equal(crowded.items[0]?.id,currentItem.id);assert.equal(crowded.items[1]?.canvas_id,waitingCanvas);
     assert.equal(crowded.items[0]?.block_reason,'waiting_human');
     await sql`UPDATE jobs SET status='failed',finished_at=clock_timestamp() WHERE id=${currentJob}`;
+    await sql`UPDATE project_task_queues SET reconciled_at='-infinity'::timestamptz WHERE project_id=${crowdedProject}`;
     await reconcile();
     const failedCrowded=await readProjectTaskQueue(sql,crowdedProject);
     assert.equal(failedCrowded.items[0]?.id,currentItem.id);assert.equal(failedCrowded.items[0]?.block_reason,'task_failed');
