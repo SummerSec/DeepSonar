@@ -83,7 +83,13 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       ].map(value=>JSON.stringify(value)).join('\n')}]});
       await writer.finalize();
       await captureHumanSession(fixture.jobId,fixture.attemptId,['old-checkpoint-control']);
+      const [captured]=await sql`SELECT state_json->'human_session' AS binding FROM job_attempts WHERE id=${fixture.attemptId}`;
+      assert.equal(captured.binding.status,'supported',JSON.stringify(captured.binding));
+      assert.equal(captured.binding.request_id,fixture.requestId);
       await fixture.seal();await fixture.close();await fixture.reply();
+      await pumpHumanContinuations(1,fixture.requestId);
+      const [blocked]=await sql`SELECT resumed_at,resume_error_code FROM human_requests WHERE id=${fixture.requestId}`;
+      assert.equal(blocked.resumed_at,null);assert.equal(blocked.resume_error_code,'SNAPSHOT_STALE');
       // This fixture pins a synthetic native snapshot. Admission separately
       // rejects drift from the configured role, so establish the exact load
       // boundary without asking admission to accept that deliberate drift.
@@ -116,6 +122,9 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.equal(stored.binding.reason,'unverified_adapter_version');
       assert.equal(stored.binding.version,'unknown');
       await fixture.seal();await fixture.close();await fixture.reply();
+      await pumpHumanContinuations(1,fixture.requestId);
+      const [blocked]=await sql`SELECT resumed_at,resume_error_code FROM human_requests WHERE id=${fixture.requestId}`;
+      assert.equal(blocked.resumed_at,null);assert.equal(blocked.resume_error_code,'SNAPSHOT_STALE');
       await sql`UPDATE human_requests SET resumed_at=now(),target_attempt_no=2 WHERE id=${fixture.requestId}`;
       const [job]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
       const loaded=await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json);
