@@ -274,4 +274,147 @@ export async function createHumanMessage(input: {
            ${String(version.content_sha256)}, ${Number(version.bytes)})`;
     }
     if(request) {
+      await tx`UPDATE human_requests SET status=CASE WHEN status='closed' THEN 'closed' ELSE 'answered' END,revision=revision+1,reply_message_id=${input.id},answered_at=clock_timestamp()
+        WHERE id=${String(request.id)} AND status IN ('open','closed')`;
       if (request.status !== "closed") await requeueYieldedHumanReply(tx as unknown as typeof sql, String(request.id));
+      await tx`UPDATE canvas_nodes SET status='answered',updated_at=now() WHERE job_id=${String(targetJob.id)}
+        AND node_type='human' AND body_json->>'message_id' IS NULL AND status='open'`;
+    } else if (String(targetJob.status) === "waiting_human") {
+      throw new HumanInterventionError(409,"HUMAN_REQUEST_REFERENCE_REQUIRED","请在对应人工请求中回复，携带请求引用和版本；消息尚未保存。");
+    }
+    return { message, created: true };
+  });
+  if (result.created) {
+    if(result.message.request_id) void pumpHumanContinuations(1,String(result.message.request_id)).catch(()=>{});
+    void deliverHumanMessage(input.id).catch((error) => {
+      console.error(`[human-message] unexpected delivery rejection message=${input.id}:`, boundedError(error));
+    });
+  }
+  return result.message.request_id ? {...result.message,reply_state:"reply_saved"} : result.message;
+}
+
+export async function acknowledgeHumanMessage(jobId: string, messageId: string, summary?: string): Promise<Record<string, unknown>> {
+  return sql.begin(async (tx) => {
+    const [job] = await tx`SELECT id, status FROM jobs WHERE id=${jobId} FOR UPDATE`;
+    const [message] = await tx`SELECT * FROM human_messages WHERE id=${messageId} FOR UPDATE`;
+    if (!message || String(message.target_job_id) !== jobId) throw Object.assign(new Error("消息不属于当前 Job"), { code: "HUMAN_MESSAGE_NOT_TARGET" });
+    if (message.delivery_status === "acknowledged") return message;
+    if (!job || !["running", "waiting_human"].includes(String(job.status))) {
+      throw Object.assign(new Error("目标 Job 已非可确认状态"), { code: "HUMAN_MESSAGE_JOB_NOT_ACTIVE" });
+    }
+    const [attempt] = await tx`SELECT id FROM job_attempts WHERE job_id=${jobId} AND status='active' FOR UPDATE`;
+    if (!attempt) throw Object.assign(new Error("目标 Job 没有活动 Attempt"), { code: "HUMAN_MESSAGE_ATTEMPT_NOT_ACTIVE" });
+    if (message.delivery_status !== "injected") throw Object.assign(new Error("消息尚未注入，不能确认"), { code: "HUMAN_MESSAGE_NOT_INJECTED" });
+    const [eventSeq] = await tx`SELECT COALESCE(MAX(job_seq),0)+1 AS next FROM events WHERE job_id=${jobId}`;
+    await tx`INSERT INTO events ${tx({
+      job_id: jobId,
+      event_id: randomUUID(),
+      job_seq: Number(eventSeq.next),
+      type: "human_message_acknowledged",
+      payload_json: { message_id: messageId, summary: summary ?? null } as never,
+    })}`;
+    const [updated] = await tx`
+      UPDATE human_messages SET delivery_status='acknowledged', acknowledged_at=now(), ack_summary=${summary ?? null}, updated_at=now()
+      WHERE id=${messageId} RETURNING *`;
+    await tx`UPDATE canvas_nodes SET status='acknowledged', updated_at=now() WHERE id=${message.human_node_id}`;
+    return updated;
+  });
+}
+
+export const HUMAN_IGNORE_CONTINUE_HINT =
+  "用户已忽略此次人工介入。请在没有额外人工授权的情况下继续推进，不要再次为同一事项调用 request_human。";
+
+export class HumanInterventionError extends Error {
+  constructor(
+    readonly statusCode: number,
+    readonly errorCode: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export function isAlreadyIgnoredHumanNode(node: { status?: unknown; body_json?: unknown }): boolean {
+  const body = (node.body_json ?? {}) as Record<string, unknown>;
+  return String(node.status ?? "") === "ignored" || body.resolution === "ignored";
+}
+
+export function canIgnoreHumanNode(node: { node_type?: unknown; status?: unknown; body_json?: unknown }): boolean {
+  if (node.node_type !== "human") return false;
+  if (isAlreadyIgnoredHumanNode(node)) return false;
+  const body = (node.body_json ?? {}) as Record<string, unknown>;
+  if (String(node.status ?? "") === "expired" || body.resolution === "expired") return false;
+  const status = String(node.status ?? "open");
+  return status === "open" || status === "";
+}
+
+export function humanIgnoreBodyPatch(ignoredAt: string, actorName: string | null): {
+  resolution: "ignored";
+  ignored_at: string;
+  ignored_by: string | null;
+  instruction: string;
+} {
+  return {
+    resolution: "ignored",
+    ignored_at: ignoredAt,
+    ignored_by: actorName,
+    instruction: HUMAN_IGNORE_CONTINUE_HINT,
+  };
+}
+
+export async function ignoreHumanIntervention(input: {
+  canvasId: string;
+  nodeId: string;
+  actorName: string | null;
+}): Promise<{
+  node_id: string;
+  status: "ignored";
+  job_id: string | null;
+  job_resumed: boolean;
+  already_ignored: boolean;
+}> {
+  return sql.begin(async (tx) => {
+    const [canvas] = await tx`SELECT id FROM canvases WHERE id=${input.canvasId} FOR UPDATE`;
+    if (!canvas) throw new HumanInterventionError(404, "CANVAS_NOT_FOUND", "canvas not found");
+    const [node] = await tx`
+      SELECT id, node_type, status, job_id, body_json
+      FROM canvas_nodes WHERE id=${input.nodeId} AND canvas_id=${input.canvasId}
+      FOR UPDATE`;
+    if (!node) throw new HumanInterventionError(404, "HUMAN_NODE_NOT_FOUND", "human node not found");
+    if (node.node_type !== "human") {
+      throw new HumanInterventionError(409, "NOT_HUMAN_NODE", "节点不是人工介入请求");
+    }
+    const jobId = node.job_id ? String(node.job_id) : null;
+    if (isAlreadyIgnoredHumanNode(node)) {
+      return { node_id: String(node.id), status: "ignored" as const, job_id: jobId, job_resumed: false, already_ignored: true };
+    }
+    if (!canIgnoreHumanNode(node)) {
+      throw new HumanInterventionError(409, "HUMAN_NOT_IGNORABLE", "只有未处理的人工介入可以忽略");
+    }
+    await tx`
+      UPDATE canvas_nodes
+      SET status='ignored', body_json = body_json || ${tx.json(humanIgnoreBodyPatch(new Date().toISOString(), input.actorName))}, updated_at=now()
+      WHERE id=${input.nodeId}`;
+    let jobResumed = false;
+    if (jobId) {
+      const [job] = await tx`SELECT id, status FROM jobs WHERE id=${jobId} AND canvas_id=${input.canvasId} FOR UPDATE`;
+      if (job && String(job.status) === "waiting_human") {
+        throw new HumanInterventionError(409,"HUMAN_REPLY_REQUIRED","请回复对应人工请求或取消任务；忽略节点不授权重新执行。");
+      }
+    }
+    return { node_id: String(node.id), status: "ignored" as const, job_id: jobId, job_resumed: jobResumed, already_ignored: false };
+  });
+}
+
+export async function listHumanMessages(canvasId: string, limit: number): Promise<{ items: unknown[]; total: number; truncated: boolean }> {
+  const [count] = await sql`SELECT COUNT(*)::int AS total FROM human_messages WHERE canvas_id=${canvasId}`;
+  const items = await sql`
+    SELECT m.*, COALESCE(jsonb_agg(jsonb_build_object(
+      'version_id', a.version_id, 'filename', a.filename, 'workspace_path', a.workspace_path,
+      'content_sha256', a.content_sha256, 'bytes', a.bytes
+    ) ORDER BY a.workspace_path) FILTER (WHERE a.version_id IS NOT NULL), '[]'::jsonb) AS attachments
+    FROM human_messages m LEFT JOIN human_message_attachments a ON a.message_id=m.id
+    WHERE m.canvas_id=${canvasId} GROUP BY m.id ORDER BY m.planned_at DESC, m.id DESC LIMIT ${limit}`;
+  const total = Number(count?.total ?? 0);
+  return { items, total, truncated: total > items.length };
+}

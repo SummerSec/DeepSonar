@@ -90,3 +90,218 @@ test("rebuild plan treats catalog tables as baseline-owned when source is empty"
      CREATE TABLE role_configs (id uuid);`,
   );
   assert.equal(manifest.has("schema_meta"), true);
+  assert.equal(SCHEMA_VERSION, 76);
+});
+
+test("role prompt backfill accepts LF and Windows CRLF baselines", async () => {
+  const body = (await readFile(SCHEMA_FILE, "utf8")).replace(/\r\n/g, "\n");
+  assert.deepEqual(roleConfigBackfillSql(body.replace(/\n/g, "\r\n")), roleConfigBackfillSql(body));
+});
+
+/** 基线 CREATE TABLE 里声明了 serial / IDENTITY 的列（information_schema 投影）。 */
+function ownedSequenceDeclarations(schemaSql: string): Array<{
+  table: string;
+  column: string;
+  kind: "serial" | "identity";
+}> {
+  const found: Array<{ table: string; column: string; kind: "serial" | "identity" }> = [];
+  const tableRe = /CREATE TABLE (\w+)\s*\(/g;
+  let match: RegExpExecArray | null;
+  while ((match = tableRe.exec(schemaSql))) {
+    const table = match[1] ?? "";
+    const open = match.index + match[0].length - 1;
+    let depth = 0;
+    let close = -1;
+    for (let i = open; i < schemaSql.length; i += 1) {
+      const ch = schemaSql[i];
+      if (ch === "(") depth += 1;
+      else if (ch === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          close = i;
+          break;
+        }
+      }
+    }
+    if (close < 0) continue;
+    for (const raw of schemaSql.slice(open + 1, close).split("\n")) {
+      const line = raw.replace(/--.*$/, "").trim().replace(/,$/, "");
+      if (!line || /^(CONSTRAINT|PRIMARY|UNIQUE|CHECK|FOREIGN)\b/i.test(line)) continue;
+      const col = /^(\w+)\s+(.+)$/.exec(line);
+      if (!col) continue;
+      const column = col[1] ?? "";
+      const rest = col[2] ?? "";
+      if (/\bGENERATED\s+(?:ALWAYS|BY DEFAULT)\s+AS\s+IDENTITY\b/i.test(rest)) {
+        found.push({ table, column, kind: "identity" });
+      } else if (/\b(?:BIGSERIAL|SMALLSERIAL|SERIAL)\b/i.test(rest)) {
+        found.push({ table, column, kind: "serial" });
+      }
+    }
+  }
+  return found;
+}
+
+function catalogForDeclaration(table: string, column: string, kind: "serial" | "identity") {
+  return kind === "identity"
+    ? { isIdentity: "YES", columnDefault: null }
+    : { isIdentity: "NO", columnDefault: `nextval('${table}_${column}_seq'::regclass)` };
+}
+
+test("owned sequence reset includes bigserial nextval defaults and IDENTITY", () => {
+  assert.equal(
+    isOwnedSequenceColumn({
+      isIdentity: "NO",
+      columnDefault: "nextval('events_id_seq'::regclass)",
+    }),
+    true,
+  );
+  assert.equal(
+    isOwnedSequenceColumn({
+      isIdentity: "YES",
+      columnDefault: null,
+    }),
+    true,
+  );
+  assert.equal(
+    isOwnedSequenceColumn({
+      isIdentity: "NO",
+      columnDefault: null,
+    }),
+    false,
+  );
+  assert.equal(
+    isOwnedSequenceColumn({
+      isIdentity: "NO",
+      columnDefault: "now()",
+    }),
+    false,
+  );
+  const sql = ownedSequenceResetSql("events", "id");
+  const lookup = ownedSequenceLookupSql("events", "id");
+  const maxSql = ownedSequenceMaxSql("events", "id");
+  assert.equal(maxSql, '(SELECT MAX("id") FROM public."events")');
+  assert.match(lookup, /tbl_ns\.nspname = 'public'/);
+  assert.match(lookup, /seq_ns\.nspname = 'public'/);
+  assert.match(lookup, /dep\.deptype IN \('a', 'i'\)/);
+  assert.doesNotMatch(lookup, /pg_get_serial_sequence/);
+  assert.match(sql, /setval\(\(/);
+  assert.match(sql, /GREATEST\(COALESCE\(\(SELECT MAX\("id"\) FROM public\."events"\), 1\), 1\)/);
+  assert.match(sql, /\(SELECT MAX\("id"\) FROM public\."events"\) IS NOT NULL/);
+  assert.doesNotMatch(sql, /pg_get_serial_sequence/);
+  assert.equal(ownedSequenceSetvalIsCalled(null), false);
+  assert.equal(ownedSequenceSetvalIsCalled(1), true);
+  assert.equal(ownedSequenceSetvalIsCalled(42), true);
+});
+
+test("schema baseline serial and IDENTITY primary keys are all in the rebuild reset set", async () => {
+  const body = await readFile(SCHEMA_FILE, "utf8");
+  const declared = ownedSequenceDeclarations(body);
+  assert.deepEqual(
+    declared,
+    [
+      { table: "project_task_queue_items", column: "id", kind: "serial" },
+      { table: "events", column: "id", kind: "serial" },
+      { table: "audit_logs", column: "id", kind: "identity" },
+      { table: "device_events", column: "id", kind: "serial" },
+    ],
+  );
+  for (const item of declared) {
+    assert.equal(
+      isOwnedSequenceColumn(catalogForDeclaration(item.table, item.column, item.kind)),
+      true,
+      `${item.table}.${item.column} (${item.kind}) must be reset after rebuild`,
+    );
+  }
+});
+
+test("owned sequence reset is over all public base tables after official seeds", async () => {
+  const source = await readFile(new URL("./schema-rebuild.ts", import.meta.url), "utf8");
+  assert.match(source, /await ensureOfficialSeeds\(db, schemaSql\);\s*\n\s*await reconcileOwnedSequences\(db\);/);
+  assert.match(source, /await assertOwnedSequencesAligned\(db\);/);
+  assert.doesNotMatch(source, /resetOwnedSequences\(db, copiedTables\)/);
+  assert.doesNotMatch(source, /pg_get_serial_sequence/);
+});
+
+test("Finding backup restore uses private connection environment and redacts child-process failures", async () => {
+  const { restoreFindingSourceBackup } = await import("./schema-rebuild-finding-fixture.js");
+  const target = new URL("postgres://fixture-user:fixture%3Asecret@127.0.0.1:55471/fixture-backup?sslmode=require");
+  let called = false;
+  restoreFindingSourceBackup(target, "/tmp/fixture.dump", (command, args, options) => {
+    called = true;
+    assert.equal(command, "pg_restore");
+    assert.deepEqual(args, ["--exit-on-error", "--dbname", "fixture-backup", "/tmp/fixture.dump"]);
+    assert.equal(options.env?.PGHOST, "127.0.0.1");
+    assert.equal(options.env?.PGPORT, "55471");
+    assert.equal(options.env?.PGUSER, "fixture-user");
+    assert.equal(options.env?.PGPASSWORD, "fixture:secret");
+    assert.equal(options.env?.PGSSLMODE, "require");
+    assert.equal(options.stdio, "pipe");
+    assert.equal(options.timeout, 30_000);
+  });
+  assert.equal(called, true);
+  assert.throws(() => restoreFindingSourceBackup(target, "/tmp/fixture.dump", () => {
+    throw Object.assign(new Error(`Command failed: ${target}`), { stderr: "fixture:secret", stdout: "fixture-user" });
+  }), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.match(error.message, /backup restore failed/);
+    assert.doesNotMatch(error.message, /fixture|postgres:\/\//);
+    assert.equal(error.cause, undefined);
+    assert.deepEqual(Object.keys(error), []);
+    return true;
+  });
+});
+
+test("CI dump and restore clients are pinned to the PostgreSQL 16 service", async () => {
+  const workflow = await readFile(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  // #972: the serial `gate` job is now four bounded shards. Every shard that
+  // starts the PostgreSQL service must still pin the PG16 client, so assert the
+  // DB-bearing shards instead of one monolithic job name.
+  for (const shard of ["gate-db-core", "gate-db-domain", "gate-e2e"]) {
+    assert.match(
+      workflow,
+      new RegExp(`\\n  ${shard}:\\n    runs-on: ubuntu-24\\.04`),
+      `${shard} must run on the pinned Ubuntu image`,
+    );
+  }
+  assert.match(workflow, /image: postgres:16-alpine/);
+  assert.match(workflow, /apt-get install -y postgresql-client-16\b/);
+  assert.match(workflow, /echo "\/usr\/lib\/postgresql\/16\/bin" >> "\$GITHUB_PATH"/);
+  assert.doesNotMatch(workflow, /apt-get install -y postgresql-client\s*$/m);
+});
+
+
+test("CI uses installed PG16 without apt and rejects mismatched clients", async () => {
+  const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { spawnSync } = await import("node:child_process");
+  const workflow = await readFile(new URL("../../../.github/workflows/ci.yml", import.meta.url), "utf8");
+  // After the #972 split this step may be followed directly by another step
+  // (no blank line), so end the capture at the next step marker or blank line.
+  const block = workflow.match(/      - name: Select PostgreSQL 16 client[^\n]*\n        run: \|\n([\s\S]*?)(?=\n      - |\n\n)/);
+  assert.ok(block, "execute the actual CI setup script");
+  const directory = await mkdtemp(join(tmpdir(), "deepsonar-pg16-setup-"));
+  try {
+    const script = block[1].split("\n").map(line => line.slice(10)).join("\n")
+      .replaceAll("/usr/lib/postgresql/16/bin", directory);
+    const pathFile = join(directory, "github-path");
+    const aptMarker = join(directory, "apt-called");
+    await writeFile(join(directory, "pg_dump"), '#!/bin/sh\necho "pg_dump (PostgreSQL) 16.15"\n', { mode: 0o755 });
+    await writeFile(join(directory, "pg_restore"), '#!/bin/sh\necho "pg_restore (PostgreSQL) 16.15"\n', { mode: 0o755 });
+    await writeFile(join(directory, "sudo"), `#!/bin/sh\ntouch "${aptMarker}"\nexit 19\n`, { mode: 0o755 });
+    const run = () => spawnSync("bash", ["-e", "-c", script], {
+      encoding: "utf8", env: { ...process.env, PATH: `${directory}:${process.env.PATH}`, GITHUB_PATH: pathFile },
+    });
+    assert.equal(run().status, 0);
+    assert.equal((await readFile(pathFile, "utf8")).trim(), directory);
+    await assert.rejects(readFile(aptMarker), { code: "ENOENT" });
+    await writeFile(join(directory, "pg_restore"), '#!/bin/sh\necho "pg_restore (PostgreSQL) 17.1"\n', { mode: 0o755 });
+    assert.notEqual(run().status, 0, "existing but wrong-major tools must not pass");
+    await assert.rejects(readFile(aptMarker), { code: "ENOENT" });
+    await rm(join(directory, "pg_restore"));
+    assert.notEqual(run().status, 0, "missing tools try installation and fail closed when installation fails");
+    assert.equal(await readFile(aptMarker, "utf8"), "");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
