@@ -35,7 +35,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
     const {requeueJob}=await import('./rerun.js');
     const projectId = randomUUID();
     await sql`INSERT INTO projects(id,name) VALUES(${projectId},'continuation fixture')`;
-    const setup = async (gateway?: { baseUrl: string; om?: boolean; maxRequests?: number; deferHuman?: boolean }) => {
+    const setup = async (gateway?: { baseUrl: string; om?: boolean; maxRequests?: number; deferHuman?: boolean; jobId?: string }) => {
       const fixtureProjectId = gateway ? randomUUID() : projectId;
       if (gateway) {
         const { encryptSecret } = await import("../../credentials.js");
@@ -52,7 +52,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
         process.env.DEEPSONAR_PI_OM_BACKGROUND_MAX_REQUESTS = "2";
         process.env.DEEPSONAR_PI_OM_BACKGROUND_TOKEN_LIMIT = "6";
       }
-      const jobId = randomUUID(), canvasId = randomUUID(), sandboxId = `checkpoint-${jobId}`;
+      const jobId = gateway?.jobId ?? randomUUID(), canvasId = randomUUID(), sandboxId = `checkpoint-${jobId}`;
       await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${fixtureProjectId},'checkpoint',${sql.json({network_policy:{allow_egress:false}})})`;
       await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status) VALUES(${canvasId},'root','root','active')`;
       const resolved = await snapshots.freezeAgentSnapshotNetworkPolicy(sql, canvasId,

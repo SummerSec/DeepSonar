@@ -5,7 +5,7 @@ import type { createPlanExecutionFixture } from "./plan-execution-test-fixture.j
 import { executionObjective } from "./plan-execution-test-fixture.js";
 import { checkpointGuardFixture } from "./domains/job-control/human-checkpoint-fixture.js";
 import { checkpointHash } from "./domains/job-control/human-checkpoint-files.js";
-import { sealHumanCheckpoint } from "./domains/job-control/human-checkpoint.js";
+import { prepareHumanCheckpointContext, sealHumanCheckpoint } from "./domains/job-control/human-checkpoint.js";
 import { destroyAndSettleHumanWaitRun } from "./dispatcher-human-wait.js";
 import { updateAttemptResource, beginEffect } from "./domains/job-attempt/index.js";
 import { humanExecutionStartedAt } from "./domains/job-control/human-continuation-clock.js";
@@ -14,8 +14,25 @@ import { createSqlJobLifecycleApplication } from "./domains/job-lifecycle/index.
 
 /** Start with a user HTTP objective and Control Plan dispatch, then continue its actual child. */
 export async function historicalPlanCases(h: Awaited<ReturnType<typeof createPlanExecutionFixture>>) {
+  const bytes = Buffer.from("unfinished Plan child output");
+  const host = { run: async () => ({ exitCode: 0, stdout: JSON.stringify([{ path: "plan.txt", bytes: bytes.length, sha256: checkpointHash(bytes), mode: 0o600 }]), stderr: "" }),
+    runAsync: async () => checkpointGuardFixture(), readWorkspaceFile: async () => bytes,
+    uploadFile: async () => {}, writeHumanInboxFile: async () => {} } as unknown as RuntimeHost;
+  const start = async (jobId: string) => {
+    const runtime = await h.start(jobId, true);
+    const [binding] = await h.sql`SELECT execution_reply_id FROM job_continuations WHERE target_job_id=${jobId}`;
+    if (binding) {
+      const [job] = await h.sql`SELECT agent_snapshot_json FROM jobs WHERE id=${jobId}`;
+      const prepared = await prepareHumanCheckpointContext({ jobId, attemptNo: 1, snapshot: job.agent_snapshot_json, host });
+      assert.match(prepared.continuationInput, new RegExp(String(binding.execution_reply_id)));
+      const humans = await import("./domains/canvas/human-messages.js");
+      const unregister = await humans.registerHumanMessageRuntime(jobId, { sendMessage: async () => {}, writeWorkspaceFile: async () => {} }, runtime.attempt);
+      try { await humans.acknowledgeHumanMessage(jobId, String(binding.execution_reply_id)); } finally { unregister(); }
+    }
+    return runtime;
+  };
   const sealAndFail = async (jobId: string) => {
-    const runtime = await h.start(jobId, true), sandboxId = `plan-history-${jobId}`;
+    const runtime = await start(jobId), sandboxId = `plan-history-${jobId}`;
     await updateAttemptResource(h.sql, runtime.attempt, { sandboxId, phase: "provisioned" });
     await h.sql`UPDATE jobs SET sandbox_id=${sandboxId} WHERE id=${jobId}`;
     await humanExecutionStartedAt(h.sql, jobId, runtime.attempt);
@@ -28,9 +45,6 @@ export async function historicalPlanCases(h: Awaited<ReturnType<typeof createPla
     assert.equal(request.statusCode, 200, request.body);
     const [saved] = await h.sql`SELECT id FROM human_requests WHERE job_id=${jobId}`;
     assert.ok(saved, "normal request_human must persist its checkpoint owner");
-    const bytes = Buffer.from("unfinished Plan child output");
-    const host = { run: async () => ({ exitCode: 0, stdout: JSON.stringify([{ path: "plan.txt", bytes: bytes.length, sha256: checkpointHash(bytes), mode: 0o600 }]), stderr: "" }),
-      runAsync: async () => checkpointGuardFixture(), readWorkspaceFile: async () => bytes } as unknown as RuntimeHost;
     await sealHumanCheckpoint({ jobId, attemptId: runtime.attempt, host, excludedPaths: [], secrets: [], processBaseline: [] });
     await destroyAndSettleHumanWaitRun(h.sql, { destroy: async () => {} }, { jobId, attemptId: runtime.attempt, sandboxId });
     await h.sql.begin(async raw => {
@@ -44,22 +58,24 @@ export async function historicalPlanCases(h: Awaited<ReturnType<typeof createPla
     return { mutation_id: randomUUID(), request_id: String(saved.id), expected_revision: Number(closed.revision),
       reply: { message_id: randomUUID(), body: "Continue the authorized Plan work with the original reference" } };
   };
-  for (const mode of ["remaining", "exhausted", "stopped"] as const) {
-    const objective = executionObjective(); objective.budget.max_tasks = mode === "exhausted" ? 1 : 2;
-    const f = await h.fixture(objective), proposal = h.proposal(f, [h.task("collect", f.root)]);
+  for (const mode of ["remaining", "exhausted", "stopped", "dependent"] as const) {
+    const objective = executionObjective(); objective.budget.max_tasks = mode === "exhausted" ? 1 : mode === "dependent" ? 3 : 2;
+    const f = await h.fixture(objective), proposal = h.proposal(f, mode === "dependent"
+      ? [h.task("collect", f.root), h.task("verify", f.root, ["collect"])] : [h.task("collect", f.root)]);
     const submitted = await h.invoke(f.hub, "submit_plan", proposal);
     assert.equal(submitted.statusCode, 200, submitted.body);
     const child = String((await h.children(f.hub))[0].id);
     const payload = await sealAndFail(child);
-    assert.equal((await h.state(f.canvas)).plan_execution.stop_reason, "task_failed");
+    assert.equal((await h.state(f.canvas)).plan_execution.stop_reason, mode === "dependent" ? "dependency_failed" : "task_failed");
     assert.equal((await h.state(f.canvas)).plan_execution.stopped_job_id, child);
     if (mode === "stopped") await h.sql`UPDATE canvases SET target_json=jsonb_set(target_json,'{plan_execution,stop_reason}', '"user_stop"'::jsonb) WHERE id=${f.canvas}`;
     const response = await h.app.inject({ method: "POST", url: `/jobs/${child}/continuations`, payload });
-    if (mode !== "remaining") {
+    if (mode === "exhausted" || mode === "stopped") {
       assert.equal(response.statusCode, 409, response.body);
       assert.equal(response.json().error_code, mode === "exhausted" ? "PLAN_CONTINUATION_TASK_BUDGET_EXHAUSTED" : "PLAN_CONTINUATION_OBJECTIVE_INACTIVE");
       assert.equal(response.json().reply_state, "reply_saved");
       assert.equal((await h.children(f.hub)).length, 1);
+      await createSqlJobLifecycleApplication(h.sql).cancelJobsOnCanvas(f.canvas, "synthetic Plan fixture finished");
       continue;
     }
     assert.equal(response.statusCode, 202, response.body);
@@ -74,10 +90,27 @@ export async function historicalPlanCases(h: Awaited<ReturnType<typeof createPla
     const [source] = await h.sql`SELECT payload_json,parent_job_id FROM jobs WHERE id=${child}`;
     const [successor] = await h.sql`SELECT payload_json,parent_job_id FROM jobs WHERE id=${target}`;
     assert.deepEqual(successor, source, "continuation retains scheduler Plan assignment and parent");
+    if (mode === "dependent") {
+      await start(target);
+      await h.sql.begin(tx => h.core.advancePlanTaskAfterTerminalJob(tx as unknown as typeof h.sql, child));
+      assert.equal((await h.children(f.hub)).length, 2, "B remains undispatched while replacement A has no successful output");
+      await h.emit(target);
+      assert.equal((await h.children(f.hub)).length, 2, "retained bytes alone cannot release B before A succeeds");
+      await h.finish(target);
+      const children = await h.children(f.hub);
+      assert.equal(children.length, 3);
+      const next = children.find(row => row.payload_json.plan_context.task_id === "verify");
+      assert.ok(next);
+      assert.equal(next.payload_json.plan_context.dependency_outputs[0].job_id, target, "B binds the replacement A output");
+      assert.equal((await h.state(f.canvas)).plan_execution.lifetime_tasks_dispatched, 3);
+      await createSqlJobLifecycleApplication(h.sql).cancelJobsOnCanvas(f.canvas, "synthetic dependency fixture finished");
+      continue;
+    }
     const exhausted = await sealAndFail(target);
     const denied = await h.app.inject({ method: "POST", url: `/jobs/${target}/continuations`, payload: exhausted });
     assert.equal(denied.statusCode, 409, denied.body);
     assert.equal(denied.json().error_code, "PLAN_CONTINUATION_TASK_BUDGET_EXHAUSTED");
     assert.equal((await h.state(f.canvas)).plan_execution.lifetime_tasks_dispatched, 2);
+    await createSqlJobLifecycleApplication(h.sql).cancelJobsOnCanvas(f.canvas, "synthetic Plan fixture finished");
   }
 }

@@ -23,7 +23,7 @@ type Fixture = { projectId: string; jobId: string; canvasId: string; attemptId: 
 
 /** Real SQL and HTTP consumers. Only the upstream model response and sandbox IO are synthetic. */
 export async function historicalGatewayCases(context: TestContext, sql: typeof database, app: FastifyInstance,
-  setup: (options: { baseUrl: string; om?: boolean; maxRequests?: number; deferHuman?: boolean }) => Promise<Fixture>) {
+  setup: (options: { baseUrl: string; om?: boolean; maxRequests?: number; deferHuman?: boolean; jobId?: string }) => Promise<Fixture>) {
   const { default: Fastify } = await import("fastify");
   const upstream = Fastify();
   let calls = 0, entered: (() => void) | undefined, release: Promise<void> | undefined;
@@ -236,6 +236,82 @@ export async function historicalGatewayCases(context: TestContext, sql: typeof d
       assert.equal(denied.json().error.type, "gateway_recovery_budget_exhausted");
       assert.equal((await sql`SELECT count(*)::int AS n FROM job_attempt_effects WHERE job_id=${target.jobId}
         AND intent_json ? 'gateway_retry_of'`)[0].n, 0);
+    });
+    for (const operation of ["archive", "delete"] as const) await context.test(`real delayed Gateway settlement survives Canvas ${operation} root-before-child locking`, async () => {
+      // These roots sort above every generated child in this isolated fixture.
+      const rootId = operation === "archive" ? "ffffffff-ffff-4fff-bfff-fffffffffff0" : "ffffffff-ffff-4fff-bfff-fffffffffff1";
+      const f = await setup({ baseUrl, deferHuman: true, jobId: rootId });
+      await issue(f); await fail(f);
+      const target = await continueJob(f.jobId, f.requestId); await start(f, target);
+      assert.ok(target.jobId < rootId, "regression requires a child UUID that sorts before its budget root");
+      assert.equal((await sql`SELECT source_job_id FROM job_continuations WHERE target_job_id=${target.jobId}`)[0].source_job_id, rootId);
+      const token = await issue({ jobId: target.jobId, projectId: f.projectId });
+      let releaseUpstream!: () => void;
+      release = new Promise(resolve => { releaseUpstream = resolve; unblockPending = resolve; });
+      const arrived = new Promise<void>(resolve => { entered = resolve; });
+      const request = send(token.plaintext).then(response => response);
+      await arrived;
+      const postgres = (await import("postgres")).default;
+      const connection = postgres(process.env.DATABASE_URL!, { max: 1 });
+      let rootLocked!: (pid: number) => void, releaseRoot!: () => void;
+      const locked = new Promise<number>(resolve => { rootLocked = resolve; });
+      const proceed = new Promise<void>(resolve => { releaseRoot = resolve; });
+      const owner = connection.begin(async tx => {
+        const [backend] = await tx`SELECT pg_backend_pid() AS pid`;
+        await tx`SELECT id FROM jobs WHERE id=${rootId} FOR UPDATE`;
+        rootLocked(Number(backend.pid));
+        await proceed;
+        // Exercise the same root -> child boundary while the HTTP mutation waits.
+        // Child-first Canvas locking would deadlock with this owner.
+        await tx`SELECT id FROM jobs WHERE id=${target.jobId} FOR UPDATE`;
+      });
+      let mutation: Promise<Awaited<ReturnType<typeof app.inject>>> | undefined;
+      try {
+        const rootPid = await locked;
+        mutation = app.inject({ method: operation === "archive" ? "POST" : "DELETE",
+          url: `/tasks/${f.canvasId}${operation === "archive" ? "/archive" : ""}` }).then(response => response);
+        let blocked = false;
+        for (let i = 0; i < 100; i++) {
+          const [state] = await sql`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database()
+            AND ${rootPid}=ANY(pg_blocking_pids(pid)) AND wait_event_type='Lock' AND query LIKE '%jobs%'`;
+          if (state.n > 0) { blocked = true; break; }
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.ok(blocked, "normal Canvas HTTP transaction must wait on this exact budget root owner");
+        releaseUpstream();
+        let settlementBlocked = false;
+        for (let i = 0; i < 100; i++) {
+          const [state] = await sql`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database()
+            AND ${rootPid}=ANY(pg_blocking_pids(pid)) AND wait_event_type='Lock' AND query LIKE '%jobs%'`;
+          if (state.n >= 2) { settlementBlocked = true; break; }
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.ok(settlementBlocked, "real Gateway settlement and Canvas mutation must overlap at the held budget root");
+        releaseRoot(); await owner;
+        const result = await mutation;
+        assert.equal(result.statusCode, operation === "archive" ? 200 : 409, result.body);
+        if (operation === "delete") {
+          assert.equal(result.json().error_code, "TASK_DELETE_KNOWLEDGE_RETAINED");
+          assert.equal(result.json().retained.continuation_budget_chain, 1);
+        }
+        assert.equal((await request).statusCode, 200);
+        await settled(target.jobId, 1);
+        const [ledger] = await sql`SELECT l.total_tokens,l.settlement_status,l.job_id,a.job_id AS attempt_job_id,e.status AS effect_status
+          FROM job_usage_ledger l JOIN job_attempts a ON a.id=l.attempt_id JOIN job_attempt_effects e
+          ON e.job_id=l.job_id AND e.attempt_id=l.attempt_id AND e.effect_id=l.effect_id WHERE l.job_token_id=${token.id}`;
+        assert.equal(ledger.job_id, target.jobId); assert.equal(ledger.attempt_job_id, target.jobId);
+        assert.equal(ledger.total_tokens, 3); assert.equal(ledger.settlement_status, "settled"); assert.equal(ledger.effect_status, "settled");
+        const [grant] = await sql`SELECT used_tokens,used_requests,revoked_at FROM job_tokens WHERE id=${token.id}`;
+        assert.equal(grant.used_tokens, 3); assert.equal(grant.used_requests, 1);
+        if (operation === "archive") assert.ok(grant.revoked_at);
+        assert.equal((await sql`SELECT status FROM jobs WHERE id=${rootId}`)[0].status, "failed");
+        assert.equal((await sql`SELECT count(*)::int AS n FROM job_continuations WHERE target_job_id=${target.jobId}`)[0].n, 1);
+      } finally {
+        releaseUpstream(); releaseRoot();
+        await Promise.allSettled([owner, request, ...(mutation ? [mutation] : [])]);
+        await connection.end(); entered = undefined; release = undefined; unblockPending = undefined;
+        if (operation === "delete") await app.inject({ method: "POST", url: `/tasks/${f.canvasId}/archive` });
+      }
     });
     await context.test("two authorized mutations race for one root owner and one transactional audit", async () => {
       const f = await setup({ baseUrl, deferHuman: true }); await issue(f); await fail(f);

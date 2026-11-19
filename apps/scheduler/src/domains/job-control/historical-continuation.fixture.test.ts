@@ -159,49 +159,6 @@ export async function historicalContinuationCases(context: TestContext, sql: typ
     assert.equal((await loadHumanSession(target, 1, source.agent_snapshot_json)).status, "supported");
     await sql`UPDATE jobs SET status='cancelled' WHERE id=${target}`;
   });
-  for (const operation of ["archive", "delete"] as const) await context.test(`Canvas ${operation} locks budget roots before a smaller child during settlement`, async () => {
-    const postgres = (await import("postgres")).default;
-    const connection = postgres(process.env.DATABASE_URL!, { max: 1 });
-    const f = await failed();
-    const rootId = "ffffffff-ffff-4fff-afff-fffffffffff0";
-    const childId = "00000000-0000-4000-8000-000000000001";
-    const [source] = await sql`SELECT project_id FROM jobs WHERE id=${f.jobId}`;
-    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status) VALUES(${rootId},${source.project_id},${f.canvasId},'audit','failed')`;
-    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,budget_owner_job_id)
-      VALUES(${childId},${source.project_id},${f.canvasId},'audit','failed',${rootId})`;
-    let rootLocked!: () => void, release!: () => void;
-    const locked = new Promise<void>(resolve => { rootLocked = resolve; });
-    const proceed = new Promise<void>(resolve => { release = resolve; });
-    const settlement = connection.begin(async tx => {
-      await tx`SELECT id FROM jobs WHERE id=${rootId} FOR UPDATE`;
-      rootLocked(); await proceed;
-      // A cancellation that locks the child first would deadlock here.
-      await tx`SELECT id FROM jobs WHERE id=${childId} FOR UPDATE`;
-      await tx`UPDATE jobs SET error='late settlement fixture' WHERE id=${childId}`;
-    });
-    try {
-      await locked;
-      const response = app.inject({ method: operation === "archive" ? "POST" : "DELETE",
-        url: `/tasks/${f.canvasId}${operation === "archive" ? "/archive" : ""}` }).then(result => result);
-      // Observe the actual database lock wait before allowing settlement to take its child.
-      let waiting = false;
-      for (let i = 0; i < 100; i++) {
-        const [state] = await sql`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database()
-          AND wait_event_type='Lock' AND query LIKE '%jobs%' AND pid<>pg_backend_pid()`;
-        if (state.n > 0) { waiting = true; break; }
-        await new Promise(resolve => setTimeout(resolve, 10));
-      }
-      assert.ok(waiting, "normal HTTP mutation must reach a database lock wait");
-      release(); await settlement;
-      const result = await response;
-      assert.equal(result.statusCode, operation === "archive" ? 200 : 409, result.body);
-      assert.equal((await sql`SELECT error FROM jobs WHERE id=${childId}`)[0].error, 'late settlement fixture');
-    } finally {
-      release(); await settlement; await connection.end();
-      await sql`UPDATE jobs SET budget_owner_job_id=NULL WHERE id=${childId}`;
-      await sql`DELETE FROM jobs WHERE id=ANY(${[childId,rootId]}::uuid[])`;
-    }
-  });
   await context.test("normal Verify round Job keeps its original assignment owner and cannot be copied as history", async () => {
     const f = await failed();
     const [job] = await sql`SELECT project_id FROM jobs WHERE id=${f.jobId}`;
