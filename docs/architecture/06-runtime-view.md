@@ -334,7 +334,7 @@ Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freez
 
 Scheduler 在现有 claim advisory 锁内，先按项目 dispatch_last_served、项目 ID 选项目，再按项目内 priority 降序、created_at 与 Job ID 升序选候选。成功 claim 与项目服务序号更新同事务，序号来自 global_settings 的单调计数器。多个 Scheduler 与重启共用数据库顺序。资格拒绝不计服务，项目内优先级不能持续压住其他合格项目。
 
-每个 tick 最多访问 32 个项目，每次最多读取 64 个 pending Job。global_settings 保存项目扫描位置，projects 保存项目内 keyset 位置，分页跨 tick 与进程推进。扫描项目行遇锁时同样推进全局扫描位置，保留已有延后唤醒。成功领取后重新从最久未服务项目比较，未成功项目在当前 tick 内跳过。下一轮继续未完成页，页尾后回绕，资格变化会重新核验。有限项目持续合格、席位持续释放且行锁最终可用时，所有项目都能获得服务。该条件性活性不构成吞吐或等待时间 SLA。
+每个 tick 最多访问 32 个项目，每次最多读取 64 个 pending Job。global_settings 保存项目扫描位置，projects 保存项目内 keyset 位置，分页跨 tick 与进程推进。扫描项目行遇锁时同样推进全局扫描位置，保留已有延后唤醒。成功领取后重新从最久未服务项目比较，未成功项目在当前 tick 内跳过。下一轮继续未完成页，页尾后回绕，资格变化会重新核验。项目内优先级限定在沿当前持久游标的扫描顺序。前页任务在扫描期间恢复资格或新增高优先级任务时，当前页仍先完成，回绕或成功领取重置游标后重新考虑前缀。此暂时越过前缀的行为保证有限页能持续推进。有限项目持续合格、席位持续释放且行锁最终可用时，所有项目都能获得服务。该条件性活性不构成吞吐或等待时间 SLA。
 
 锁序沿用 claim advisory → Canvas → Project → budget root → Job → Attempt。Project 以 SKIP LOCKED 取得写锁后重核 active，取消、暂停、FIFO、图资格、账号、CLI、预算 owner、lease 与 provision 门保持权威。每个事务最多成功领取一个 Job，提交释放已有锁后再发现下一项目。扫描只读身份提示，不提前占用轮次。没有新增配置、管理 API 或 Web 操作。
 

@@ -89,6 +89,18 @@ export async function runDispatchFairnessFixture(db: typeof sql, claim: Claim, c
     }
     assert.ok(tailClaimed, "in-project page progress survives process replacement and reaches the eligible tail");
 
+    // Circular priority scan deliberately completes its current bounded pass.
+    // A prefix that becomes eligible mid-pass is reconsidered after wrap.
+    await clear();
+    await rules(1);
+    const blockedPrefix = await pending(projects[0]!, 1000, 64, false);
+    const lowAfterCursor = (await pending(projects[0]!, -1000))[0]!;
+    assert.deepEqual(await claim(), []);
+    await db`UPDATE jobs SET agent_snapshot_json = ${db.json(snapshot)} WHERE id = ${blockedPrefix[0]!}`;
+    assert.deepEqual((await claim()).map(row => row.id), [lowAfterCursor], "current pass advances before prefix reconsideration");
+    await release();
+    assert.deepEqual((await claim()).map(row => row.id), [blockedPrefix[0]!], "successful visit resets the scan and rechecks the high-priority prefix");
+
     // More projects than the visit budget. Persisted project cursor advances
     // past 32 paused projects, even when the next call is another scheduler.
     await clear();

@@ -173,7 +173,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Scheduler 必须在持久化 claim、全局/项目并发和 lease 约束内领取 Job；Lease 续期必须绑定有效 Job/Attempt，过期或迟到回调不得重新取得执行权。
 - **决策来源**：多 Scheduler 副本、重试和迟到网络回调不能造成双执行或跨项目资源占用。
-- **实现状态**：as-built；claim 使用持久状态和锁，跨项目按持久服务序号公平轮转，项目内按优先级；有界扫描位置跨 Scheduler 与重启推进，拒绝资格不消耗服务轮次（#1118）。Lease TTL 以[配置](../../apps/scheduler/src/config.ts)为准。
+- **实现状态**：as-built；claim 使用持久状态和锁，跨项目按持久服务序号公平轮转，项目内沿持久游标按优先级循环扫描，前页资格变化在回绕后重新核验；有界扫描位置跨 Scheduler 与重启推进，拒绝资格不消耗服务轮次（#1118）。Lease TTL 以[配置](../../apps/scheduler/src/config.ts)为准。
 - **代码入口**：[Dispatch 控制](../../apps/scheduler/src/task-execution-control.ts)、[Job lifecycle](../../apps/scheduler/src/domains/job-lifecycle/application.ts)、[全局设置](../../apps/scheduler/src/config.ts)。
 - **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:integration:dispatch-limits`；人工并发抢同一 Job 并核对最多一个 Attempt。
 
