@@ -9,7 +9,7 @@ import { assertFrozenCliCapabilities } from "./domains/cli-capability/frozen.js"
 import { materializeReportInput } from "./report-input.js";
 import { assertCurrentRuntimeImageKey } from "@deepsonar/shared-types";
 import { randomUUID } from "node:crypto";
-import { createHash } from "node:crypto";
+import { attemptSnapshotIdentity } from "./domains/job-attempt/snapshot-identity.js";
 import { config, managesHostDockerRuntime } from "./config.js";
 import {
   advanceCanvasAfterTerminalJob,
@@ -176,6 +176,7 @@ import {
   recordOpenSandboxProvisionFailure,
   recordOpenSandboxProvisionSuccess,
   createCircuitProbeFor, createCircuitClaimSlots, shouldLogCreateCircuitPause, type CreateCircuitProbe,
+  assertOpenSandboxCreateAdmission, OpenSandboxCreateAdmissionExpiredError,
 } from "./opensandbox-create-circuit.js";
 import {
   OPENSANDBOX_UPLOAD_CIRCUIT_OPEN,
@@ -244,30 +245,6 @@ export type DispatchCandidate = {
   credential_metadata: unknown;
   agent_snapshot_json?: unknown;
 };
-
-function attemptSnapshotIdentity(snapshot: unknown): Record<string, string> {
-  const value = snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
-    ? snapshot as Record<string, unknown>
-    : {};
-  const runtimeImage = value.runtime_image && typeof value.runtime_image === "object" && !Array.isArray(value.runtime_image)
-    ? value.runtime_image as Record<string, unknown>
-    : {};
-  const adapter = value.agent_runtime && typeof value.agent_runtime === "object" && !Array.isArray(value.agent_runtime)
-    ? value.agent_runtime as Record<string, unknown>
-    : {};
-  const identity = {
-    ...(typeof value.agent_cli === "string" ? { agent_cli: value.agent_cli } : {}),
-    ...(typeof value.snapshot_sha256 === "string" ? { snapshot_sha256: value.snapshot_sha256 } : {}),
-    ...(typeof adapter.adapter_id === "string" ? { adapter_id: adapter.adapter_id } : {}),
-    ...(typeof adapter.adapter_version === "string" ? { adapter_version: adapter.adapter_version } : {}),
-    ...(typeof runtimeImage.image_ref === "string" ? { runtime_image_ref: runtimeImage.image_ref } : {}),
-    ...(typeof runtimeImage.image_key === "string" ? { runtime_image_key: runtimeImage.image_key } : {}),
-  };
-  if (!identity.snapshot_sha256) {
-    identity.snapshot_sha256 = createHash("sha256").update(JSON.stringify(value)).digest("hex");
-  }
-  return identity;
-}
 
 export interface GraphEligibilityState {
   activeHub?: boolean;
@@ -762,6 +739,11 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       (n, row) => n + (["claimed", "provisioning"].includes(String(row.status)) ? Number(row.count) : 0),
       0,
     );
+    if (config.runtime.agentMode === "real" && config.runtime.provider === "opensandbox") {
+      const admission = openSandboxCreateCircuitAllowsClaim();
+      if (!admission.allowed) return stop;
+      createProbe = createCircuitProbeFor(admission);
+    }
     const slots = Math.min(
       dispatchSlots(rules.maxGlobalJobs, totalActive),
       provisionSlots(rules.maxConcurrentProvisioning, activeProvisioning),
@@ -1232,6 +1214,7 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
         const provisionStarted = Date.now();
         try {
           await sharedAssetsPreparation?.assertCurrent();
+          if (provider === "opensandbox") assertOpenSandboxCreateAdmission(createProbe);
           provisionAttempted = true;
           handle = await withProvisionTimeout(
             runner.provision(provisionInput),
@@ -1383,7 +1366,8 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     // #1032 P1-3：终态失败以平台稳定错误码开头，不再以 CLI 进程退出文案收尾。
     if (classified.reason === CREDENTIAL_IN_BUSINESS_DATA_REASON) msg = classified.message;
     if (classified.reason === EVENT_PAYLOAD_CONTROL_CHARACTERS_REASON) msg = classified.message;
-    if (!provisionAttempted && !handle && attemptId && activeAttempt && isRetryableProvisionFailure(e)) {
+    if (!provisionAttempted && !handle && attemptId && activeAttempt &&
+      (isRetryableProvisionFailure(e) || e instanceof OpenSandboxCreateAdmissionExpiredError)) {
       const retried = await retryProvisioningJob(jobId, activeAttempt, msg).catch((retryError) => {
         console.error(`[dispatcher] provision retry scheduling failed for ${jobId}:`, retryError);
         return false;

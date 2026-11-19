@@ -43,9 +43,21 @@ export function createCircuitProbeFor(admission: { canary: boolean; episode: num
   return admission.canary ? { canary: true, episode: admission.episode } : null;
 }
 
-/** All claimed/provisioning work shares the recovery seat, across schedulers. */
+/** A process observing half-open counts all DB claimed/provisioning work. */
 export function createCircuitClaimSlots(probe: CreateCircuitProbe | null, activeProvisioning: number): number {
   return probe?.canary ? Math.max(0, 1 - activeProvisioning) : Number.POSITIVE_INFINITY;
+}
+
+export class OpenSandboxCreateAdmissionExpiredError extends Error {
+  readonly code = OPENSANDBOX_CREATE_CIRCUIT_OPEN;
+  constructor() { super(`${OPENSANDBOX_CREATE_CIRCUIT_OPEN}: create admission expired before outbound`); }
+}
+
+/** Synchronous fence immediately before invoking the external create path. */
+export function assertOpenSandboxCreateAdmission(probe: CreateCircuitProbe | null): void {
+  if (state === "closed") return;
+  if (state === "half_open" && probe?.canary && probe.episode === episode) return;
+  throw new OpenSandboxCreateAdmissionExpiredError();
 }
 
 export type OpenSandboxCreateCircuitStatus = {
