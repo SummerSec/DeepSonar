@@ -37,6 +37,8 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 - **代码入口**：[队列存储](../../apps/scheduler/src/domains/project-task/task-queue-store.ts)、[队列路由](../../apps/scheduler/src/domains/project-task/task-queue-routes.ts)、[Dispatcher](../../apps/scheduler/src/dispatcher.ts)、[基线](../../database/schema.sql)。
 - **验证证据**：`pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:credential-compatibility`、`pnpm ci:integration:dispatch-limits`、`pnpm ci:unit:web-facts`、`pnpm ci:unit:bounded-contexts`、`pnpm ci:unit:migrations`。场景与边界见[项目任务队列](../PROJECT_TASK_QUEUE.md)。
 
+- **#1074 显式让位**。默认保留人工占位，操作员可让唯一已安全封存的人工等待任务暂存让位，回复保存事务原子回队尾一次，保留完成代际且不得抢占 active。轮到后重验原断点/权限/预算。实现见[队列让位](../../apps/scheduler/src/domains/project-task/task-queue-yield.ts)，SQL/HTTP 回归接既有 `pnpm ci:integration:platform-api`，最终 SHA Actions 另验。
+
 ### FR-TASK-005 更新任务意图与冻结运行
 
 - **规范要求**：系统必须允许更新空闲任务的标题/内容并供后续 Hub 和新 Job 使用；进行中的 Job 必须继续使用创建时的冻结快照，不得被 PATCH 静默改写。

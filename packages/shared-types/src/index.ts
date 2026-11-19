@@ -1880,3 +1880,4 @@ export async function computeFingerprint(
 
 export * from "./task-contract.js";
 export * from "./program-eligibility.js";
+export * from "./task-queue.js";

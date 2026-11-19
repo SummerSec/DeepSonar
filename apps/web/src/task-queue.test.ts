@@ -105,3 +105,11 @@ test("task creation and project page expose queue controls without adding a proj
   assert.match(panel, /setReloadKey\(\(key\) => key \+ 1\)/);
   assert.match(panel, /has_more \? "还有更多项目未显示/);
 });
+
+test("yielded tasks remain visible separately from execution order and terminal history", () => {
+  const yielded={...queue.items[0],id:"500",state:"yielded" as const};
+  const grouped=groupProjectTaskQueue({...queue,items:[yielded]});
+  assert.deepEqual(grouped.yielded,[yielded]);
+  assert.deepEqual(grouped.queued,[]);
+  assert.deepEqual(grouped.history,[]);
+});

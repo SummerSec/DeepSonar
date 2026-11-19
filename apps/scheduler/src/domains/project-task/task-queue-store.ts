@@ -35,6 +35,7 @@ export interface ProjectTaskQueueItemView {
   started_at: string | null;
   ended_at: string | null;
   block_reason: ProjectTaskQueueBlockReason | null;
+  yield_request: { request_id: string; expected_revision: number } | null;
 }
 
 export interface ProjectTaskQueueView {
@@ -119,6 +120,10 @@ export async function enqueueProjectTask(
       id: String(existing.id), project_id: String(existing.project_id), canvas_id: String(existing.canvas_id),
       state: existing.state,
     };
+  }
+
+  if (existing?.state === "yielded") {
+    throw new TaskQueueError("QUEUE_HUMAN_YIELDED", "已让位任务须回复原人工请求后回队尾");
   }
 
   const [safety] = await tx`
@@ -462,6 +467,7 @@ function readBlockReason(
   pauseReason: unknown,
 ): ProjectTaskQueueBlockReason | null {
   if (isTerminalState(state)) return null;
+  if (state === "yielded") return "waiting_human";
   if (!isHead) return snapshot.queuePaused ? "queue_paused" : "waiting_turn";
   const decision = decideTaskQueueReconciliation(snapshot);
   if (decision.kind === "pause") return decision.pauseReason;
@@ -487,7 +493,7 @@ export async function readProjectTaskQueue(db: Db, projectId: string): Promise<P
       SELECT i.id, i.project_id, i.canvas_id, i.state, i.created_at, i.started_at, i.ended_at,
              0 AS bucket, i.id AS order_id
       FROM project_task_queue_items i
-      WHERE i.project_id = ${projectId} AND i.state = 'queued'
+      WHERE i.project_id = ${projectId} AND i.state IN ('queued','yielded')
       ORDER BY i.id LIMIT 101
     ),
     live_items AS MATERIALIZED (
@@ -520,6 +526,14 @@ export async function readProjectTaskQueue(db: Db, projectId: string): Promise<P
     )
     SELECT n.id::text, n.project_id::text, n.canvas_id, c.title, n.state,
            n.created_at, n.started_at, n.ended_at,
+           (SELECT jsonb_build_object('request_id',r.id,'expected_revision',r.revision)
+            FROM human_requests r JOIN jobs j ON j.id=r.job_id
+            WHERE r.canvas_id=n.canvas_id AND r.status='open' AND r.resumed_at IS NULL
+              AND j.status='waiting_human' AND r.checkpoint_status='ready'
+              AND r.checkpoint_expires_at>clock_timestamp()
+              AND NOT EXISTS(SELECT 1 FROM jobs other WHERE other.canvas_id=n.canvas_id AND other.id<>j.id
+                AND other.status IN ('pending','claimed','provisioning','running','waiting_human'))
+            ORDER BY r.created_at DESC LIMIT 1) AS yield_request,
            (head.canvas_id = n.canvas_id) AS is_head,
            c.status AS canvas_status, c.archived_at AS canvas_archived_at,
            p.status AS project_status, p.archived_at AS project_archived_at,
@@ -606,6 +620,7 @@ export async function readProjectTaskQueue(db: Db, projectId: string): Promise<P
       started_at: dateText(row.started_at),
       ended_at: dateText(row.ended_at),
       block_reason: readBlockReason(snapshot, state, row.is_head === true, pauseReason),
+      yield_request: state === "active" ? row.yield_request ?? null : null,
     } satisfies ProjectTaskQueueItemView;
   });
   return {

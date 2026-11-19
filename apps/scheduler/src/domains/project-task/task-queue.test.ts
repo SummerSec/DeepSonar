@@ -173,3 +173,8 @@ test("manual queue pause still permits the active task to converge", () => {
   });
   assert.deepEqual(decision, { kind: "succeed" });
 });
+
+test("yielded membership never grants execution, even if incorrectly presented as head", () => {
+  assert.equal(canClaimQueuedTask({queuePaused:false,itemState:"yielded",isHead:true}),false);
+  assert.equal(canClaimQueuedTask({queuePaused:false,itemState:"yielded",isHead:false}),false);
+});

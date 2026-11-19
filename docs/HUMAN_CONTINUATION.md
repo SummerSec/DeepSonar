@@ -49,3 +49,7 @@ Dispatcher 在 provision 和 agent_run 前再核对确切 successor 与文件；
 | 历史终态请求 | 只读问题及历史 | 无恢复按钮 | 不把历史接受当当前权限 |
 
 本片回归接既有 Actions 的 ci:unit:bounded-contexts、ci:unit:web-facts、ci:integration:platform-api 和恢复/生命周期套件；同时核 OpenAPI、schema、文件体量与文档保鲜。仅 Actions 执行测试/build/typecheck；本地只静态核对和 git diff --check。HTTP/PG 与可控 RuntimeHost 支撑工程状态机证据，不证明真实模型理解、原生恢复率、生产效果或 SLA。
+
+## 项目队列显式让位（#1074 第 8 节）
+
+默认人工等待保留席位。用户可在项目队列显式暂存让位，限单一已安全封存的人工等待。回复持久保存事务内原子回队尾一次，保留原完成代际。未轮到、项目暂停或其他任务仍 active 时只保存回复；轮到后沿原断点、授权、退出、效果和预算准入创建唯一后继。状态、API 与验证边界见[队列专题](PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。

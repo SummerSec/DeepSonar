@@ -202,11 +202,15 @@ const ProjectTaskQueueSchema = {
       required: ["id", "canvas_id", "title", "state", "created_at", "started_at", "ended_at", "block_reason"],
       properties: {
         id: { type: "string" }, canvas_id: { type: "string" }, title: { type: "string" },
-        state: { type: "string", enum: ["queued", "active", "succeeded", "failed", "cancelled"] },
+        state: { type: "string", enum: ["queued", "active", "yielded", "succeeded", "failed", "cancelled"] },
         created_at: { type: "string", format: "date-time" },
         started_at: { type: "string", format: "date-time", nullable: true },
         ended_at: { type: "string", format: "date-time", nullable: true },
         block_reason: { type: "string", nullable: true },
+        yield_request: { type: "object", nullable: true, additionalProperties: false,
+          required: ["request_id", "expected_revision"], properties: {
+            request_id: { type: "string", format: "uuid" }, expected_revision: { type: "integer", minimum: 0 },
+          } },
       },
     } },
   },
@@ -1004,6 +1008,18 @@ const OPS: Op[] = [
       paused: { type: "boolean" },
       acknowledge_failed_head: { type: "string", pattern: "^[1-9][0-9]{0,18}$", description: "恢复失败/取消队首时明确确认的队列条目 ID；当前队首变化时拒绝，不能跳过未确认的新失败。" },
     } },
+    responses: { "200": ProjectTaskQueueSchema },
+  },
+  {
+    method: "post", path: "/projects/{id}/task-queue/yield", scope: "jobs:control", tags: ["Tasks"],
+    summary: "暂存人工等待任务并让下一项先做",
+    description: "绑定当前条目、人工请求版本和幂等操作编号。仅唯一已安全封存的人工等待可让位；回复保存后原子回队尾，轮到后重新执行原续做准入。",
+    body: { type: "object", additionalProperties: false,
+      required: ["mutation_id", "canvas_id", "expected_item_id", "request_id", "expected_revision"], properties: {
+        mutation_id: { type: "string", format: "uuid" }, canvas_id: { type: "string", minLength: 1, maxLength: 200 },
+        expected_item_id: { type: "string", pattern: "^[1-9][0-9]{0,18}$" },
+        request_id: { type: "string", format: "uuid" }, expected_revision: { type: "integer", minimum: 0, maximum: 2147483647 },
+      } },
     responses: { "200": ProjectTaskQueueSchema },
   },
   {

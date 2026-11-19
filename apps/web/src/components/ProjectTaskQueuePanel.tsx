@@ -42,7 +42,10 @@ export function projectTaskQueueCreatedMessage(requestedQueue: boolean, enqueued
   return "任务已入队，Hub 正在决定执行路径";
 }
 
-function TaskQueueRow({ projectId, item, order }: { projectId: string; item: ProjectTaskQueue["items"][number]; order?: number }) {
+function TaskQueueRow({ projectId, item, order, onYield, busy }: {
+  projectId: string; item: ProjectTaskQueue["items"][number]; order?: number;
+  onYield?: (item: ProjectTaskQueue["items"][number]) => void; busy?: boolean;
+}) {
   const reason = projectTaskQueueBlockReasonLabel(item.block_reason);
   const tone = item.state === "succeeded"
     ? "text-run-400"
@@ -63,8 +66,16 @@ function TaskQueueRow({ projectId, item, order }: { projectId: string; item: Pro
           <span className={`font-mono ${tone}`}>{projectTaskQueueStateLabel(item.state)}</span>
           <span className="font-mono text-zinc-600">加入 {formatTime(item.created_at)}</span>
           {reason && <span className="text-amber-300/90">{reason}</span>}
+          {item.state === "active" && item.block_reason === "waiting_human" &&
+            <span className="text-zinc-500">等待人工，未占运行资源，但阻挡串行队列</span>}
         </div>
       </div>
+      {onYield && item.state === "active" && item.yield_request && (
+        <button type="button" disabled={busy} onClick={() => onYield(item)}
+          className="shrink-0 rounded-lg border border-white/10 px-3 py-2 text-[11px] text-zinc-200 disabled:opacity-45">
+          暂存并让下一项先做
+        </button>
+      )}
     </li>
   );
 }
@@ -75,9 +86,10 @@ export function ProjectTaskQueuePanel({ projectId }: { projectId: string }) {
   const [snapshot, setSnapshot] = useState<{ projectId: string; queue: ProjectTaskQueue } | null>(null);
   const [errorState, setErrorState] = useState<ProjectQueueError | null>(null);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<"pause" | "resume" | null>(null);
+  const [busy, setBusy] = useState<"pause" | "resume" | "yield" | null>(null);
   const mutationLock = useRef(false);
   const queueGeneration = useRef(0);
+  const yieldMutations = useRef(new Map<string, string>());
   const currentProjectId = useRef(projectId);
   const [reloadKey, setReloadKey] = useState(0);
   currentProjectId.current = projectId;
@@ -167,6 +179,33 @@ export function ProjectTaskQueuePanel({ projectId }: { projectId: string }) {
     }
   };
 
+  const yieldItem = async (item: ProjectTaskQueue["items"][number]) => {
+    if (!item.yield_request || mutationLock.current) return;
+    mutationLock.current = true;
+    queueGeneration.current++;
+    setBusy("yield");
+    const identity = `${projectId}/${item.id}/${item.yield_request.request_id}/${item.yield_request.expected_revision}`;
+    const mutationId = yieldMutations.current.get(identity) ?? crypto.randomUUID();
+    yieldMutations.current.set(identity, mutationId);
+    try {
+      const next = await api.yieldProjectTaskQueue(projectId, {
+        mutation_id: mutationId, canvas_id: item.canvas_id, expected_item_id: item.id,
+        request_id: item.yield_request.request_id, expected_revision: item.yield_request.expected_revision,
+      });
+      if (currentProjectId.current !== projectId) return;
+      if (next.project_id !== projectId) throw new Error("响应项目与当前项目不匹配");
+      setSnapshot({ projectId, queue: next });
+      setErrorState(null);
+    } catch (cause) {
+      if (currentProjectId.current === projectId) setErrorState({ projectId, source: "mutation",
+        message: `暂存让位失败，可重试本次操作。${cause instanceof Error ? cause.message : String(cause)}` });
+    } finally {
+      mutationLock.current = false;
+      setBusy(null);
+      setReloadKey((key) => key + 1);
+    }
+  };
+
   return (
     <section className="surface-shell mb-5" aria-labelledby="project-task-queue-title">
       <div className="surface-core p-4 sm:p-5">
@@ -208,8 +247,9 @@ export function ProjectTaskQueuePanel({ projectId }: { projectId: string }) {
             </div>
             {unknownEffect && <p role="status" className="mt-3 rounded-lg bg-amber-400/[.06] px-3 py-2 text-[11px] leading-5 text-amber-200/90">存在未结清的外部效果；系统不会跳过当前任务，请先按效果对账流程处理。{queue.paused ? "队列继续按钮已停用。" : "当前任务仍占用队首。"}</p>}
             <div className="mt-4 space-y-4">
-              <QueueSection title="当前占位" items={groups!.active.map((item) => ({ item }))} projectId={projectId} emptyLabel="当前没有占位任务" />
+              <QueueSection title="当前占位" items={groups!.active.map((item) => ({ item }))} projectId={projectId} onYield={canControl ? (item) => void yieldItem(item) : undefined} busy={busy !== null} emptyLabel="当前没有占位任务" />
               <QueueSection title="等待顺序" items={groups!.queued.map((item, index) => ({ item, order: index + 1 }))} projectId={projectId} emptyLabel="当前没有等待任务" />
+              <QueueSection title="暂存等待回复" items={groups!.yielded.map((item) => ({ item }))} projectId={projectId} emptyLabel="没有已让位任务" />
               <QueueSection title="已结束历史" items={groups!.history.map((item) => ({ item }))} projectId={projectId} emptyLabel="尚无已结束任务" />
             </div>
             <p className="mt-3 text-[10px] leading-5 text-zinc-600">
@@ -222,18 +262,20 @@ export function ProjectTaskQueuePanel({ projectId }: { projectId: string }) {
   );
 }
 
-function QueueSection({ title, items, projectId, emptyLabel }: {
+function QueueSection({ title, items, projectId, emptyLabel, onYield, busy }: {
   title: string;
   items: Array<{ item: ProjectTaskQueue["items"][number]; order?: number }>;
   projectId: string;
   emptyLabel: string;
+  onYield?: (item: ProjectTaskQueue["items"][number]) => void;
+  busy?: boolean;
 }) {
   return (
     <section aria-label={title}>
       <h3 className="mb-2 font-mono text-[9px] uppercase tracking-[.14em] text-zinc-500">{title} · {items.length}</h3>
       {items.length ? (
         <ol className="grid gap-1.5">
-          {items.map(({ item, order }) => <TaskQueueRow key={item.id} projectId={projectId} item={item} order={order} />)}
+          {items.map(({ item, order }) => <TaskQueueRow key={item.id} projectId={projectId} item={item} order={order} onYield={onYield} busy={busy} />)}
         </ol>
       ) : <p className="text-[10px] text-zinc-700">{emptyLabel}</p>}
     </section>
