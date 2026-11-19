@@ -1137,8 +1137,8 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", description: "每项投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
-  { method: "get", path: "/canvases/{id}", summary: "画布节点与边", description: "canvas 投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", description: "每项投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/yielded/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/canvases/{id}", summary: "画布节点与边", description: "canvas 投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/yielded/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
   {
     method: "get",
     path: "/canvases/{id}/broadcasts",
@@ -1232,7 +1232,7 @@ const OPS: Op[] = [
     scope: "jobs:control",
     tags: ["Tasks"],
   },
-  { method: "get", path: "/canvases/{id}/summary", summary: "画布 L0 骨架（带 durable revision）", description: "canvas 包含可空 queue_state（queued/active/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/canvases/{id}/summary", summary: "画布 L0 骨架（带 durable revision）", description: "canvas 包含可空 queue_state（queued/active/yielded/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
   {
     method: "get",
     path: "/canvases/{id}/delta",

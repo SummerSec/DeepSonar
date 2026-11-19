@@ -304,7 +304,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.equal((await claimPendingJobs()).some(job=>job.id===jobB),false,'default human wait retains A seat');
       const input={mutation_id:randomUUID(),canvas_id:fixture.canvasId,expected_item_id:a.id,
         request_id:fixture.requestId,expected_revision:0};
-      const yieldHttp=(payload:unknown=input)=>app.inject({method:'POST',url:`/projects/${projectId}/task-queue/yield`,payload});
+      const yieldHttp=(payload:Record<string,unknown>=input)=>app.inject({method:'POST',url:`/projects/${projectId}/task-queue/yield`,payload});
       assert.equal((await yieldHttp({...input,extra:true})).statusCode,400);
       assert.equal((await yieldHttp({...input,expected_item_id:'999999999'})).statusCode,409);
       const decisions=await Promise.all([yieldHttp(),yieldHttp()]);
