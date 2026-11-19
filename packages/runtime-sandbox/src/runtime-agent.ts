@@ -1403,7 +1403,7 @@ async function runAgentWithPrivateFiles(host: RuntimeHost, spec: RealAgentSpec):
     if (checked.status !== "supported" || !checked.content) throw new Error("HUMAN_NATIVE_SESSION_FORMAT");
     importedSessionFile = nativeHumanSessionPath(importedSession);
     await host.run(`mkdir -p -- ${shellQuote(path.posix.dirname(importedSessionFile))}`);
-    await host.uploadFile(checked.content, importedSessionFile);
+    await host.uploadFile(redactSecretValues(checked.content, secretValues), importedSessionFile);
     await spec.onSessionIdentity({sessionId:importedSession.sessionId,
       ...(spec.provider === "pi" ? {sessionFile:importedSessionFile} : {})});
   }

@@ -177,4 +177,4 @@ Pi 使用 auth store，models.json 不含 key 或环境占位符。Claude 使用
 
 现行 P0-1 在 Pi 主 SDK 与 OM SDK 调用前，对已登记秘密值做精确替换，覆盖工具结果、认证文件内容和错误文本，原 Session 与认证参数保持各自用途。此覆盖不能推定为 Claude / DSH 所有模型上下文出口均已脱敏。P1-3 已有 `credential-refusal.ts` 分类和 dispatcher 不可重试分支。P1-4 的五种拒绝已由 `gateway.ts` 记录 `gateway.credential_denied`，仅固定 surface、已核验资源 ID 和稳定错误码，相关 SQL/HTTP 回归位于 gateway-transparent.integration.test.ts。
 
-同 UID 工具仍能读 0600 文件。A2 的执行身份隔离和兑换约束未交付，Issue #1032 保持 open。跨进程 human session 恢复与 #1157 的组合仍需在其合入基线后联合验证，不能以本片启动测试冒充恢复验收。新 Linux 文件安全回归接现有 runtime-sandbox 门禁，固定 CLI 回归沿用 request-budget-sdk、Pi RPC / OM 和 Claude native 专项。所有行为、build 和 typecheck 仅由本 PR 最终 SHA 的 GitHub Actions 验证，当前尚无通过结论。
+同 UID 工具仍能读 0600 文件。A2 的执行身份隔离和兑换约束未交付，Issue #1032 保持 open。与 #1159（含 #1157）及 #1168 的组合按业务检查点恢复、新执行凭据文件、脱敏历史导入、原生 resume 的顺序接线。正常 runner 回归核对该顺序及新文件引用，Pi / Claude 固定 CLI 回归使用私有文件认证继续原会话。历史恢复保持首 Job 的预算根，清理锁序为 Canvas、预算根、执行 Job、Attempt，清理未确认或独立 unknown 继续阻止恢复。组合工程验收仍须由最终 SHA 的 Actions 证明。新 Linux 文件安全回归接现有 runtime-sandbox 门禁，固定 CLI 回归沿用 request-budget-sdk、Pi RPC / OM 和 Claude native 专项。所有行为、build 和 typecheck 仅由本 PR 最终 SHA 的 GitHub Actions 验证，当前尚无通过结论。

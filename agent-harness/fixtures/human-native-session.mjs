@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
@@ -23,7 +24,7 @@ export async function runHumanNativePiImport() {
   let acceptWait;
   const waitAccepted=new Promise(resolve=>{acceptWait=resolve;});
   const commandFor=operation=>{
-    const code=`import urllib.request; r=urllib.request.Request("http://127.0.0.1:${server.address().port}/control/${operation}",data=b"{}",headers={"Authorization":"Bearer ${operation==='request_human'?'old-control-identity':'new-control-identity'}"}); print(urllib.request.urlopen(r).read().decode())`;
+    const code=`import os,urllib.request; token=open(os.environ["DEEPSONAR_CONTROL_TOKEN_FILE"]).read(); r=urllib.request.Request("http://127.0.0.1:${server.address().port}/control/${operation}",data=b"{}",headers={"Authorization":"Bearer "+token}); print(urllib.request.urlopen(r).read().decode())`;
     return `python3 -c '${code}'`;
   };
   const server=createServer(async(req,res)=>{
@@ -54,11 +55,16 @@ export async function runHumanNativePiImport() {
   let client;
   try {
     const start=(home,sessionFile)=>{
-      mkdirSync(home,{recursive:true});
-      writeFileSync(path.join(home,"models.json"),JSON.stringify({providers:{fixture:{baseUrl:`http://127.0.0.1:${server.address().port}`,api:"openai-completions",apiKey:sessionFile?"new-native-fixture-key":"old-native-fixture-key",
+      mkdirSync(home,{recursive:true,mode:0o700});
+      const credentials=path.join(home,`.deepsonar-credentials-${randomUUID()}`);
+      mkdirSync(credentials,{mode:0o700});
+      const controlFile=path.join(credentials,"control-token");
+      writeFileSync(controlFile,sessionFile?"new-control-identity":"old-control-identity",{mode:0o600});
+      writeFileSync(path.join(home,"auth.json"),JSON.stringify({fixture:{type:"api_key",key:sessionFile?"new-native-fixture-key":"old-native-fixture-key"}}),{mode:0o600,flag:"wx"});
+      writeFileSync(path.join(home,"models.json"),JSON.stringify({providers:{fixture:{baseUrl:`http://127.0.0.1:${server.address().port}`,api:"openai-completions",
         models:[{id:"human-native",name:"human-native",reasoning:false,input:["text"],maxTokens:128,contextWindow:100000,cost:{input:0,output:0,cacheRead:0,cacheWrite:0}}]}}}));
       return new RpcClient(executable,["--provider","fixture","--model","human-native","--system-prompt",sessionFile?"CURRENT_SYSTEM_BOUNDARY":"OLD_SYSTEM_BOUNDARY",...(sessionFile?["--session",sessionFile]:[])],{
-        cwd:"/workspace",detached:true,env:{...process.env,HOME:home,PI_CODING_AGENT_DIR:home},
+        cwd:"/workspace",detached:true,env:{...process.env,HOME:home,PI_CODING_AGENT_DIR:home,DEEPSONAR_CONTROL_TOKEN_FILE:controlFile},
       },boundary.PiJsonlFramer,line=>boundary.parsePiJsonlRecord(line,8*1024*1024));
     };
     client=start(path.join(root,"old-home"));

@@ -111,6 +111,21 @@ test("#1143 host observation → terminal finally → exact destroy → HTTP evi
         assert.equal((await effect(owner.jobId)).status, "settled");
       }
     });
+    await t.test("continuation family admission waits for exact source cleanup confirmation", async () => {
+      const owner = await fixture();
+      const childId = randomUUID();
+      await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,timeout_sec,budget_owner_job_id)
+        SELECT ${childId},project_id,canvas_id,type,'pending',agent_snapshot_json,timeout_sec,id FROM jobs WHERE id=${owner.jobId}`;
+      await sql`UPDATE jobs SET budget_execution_job_id=${childId} WHERE id=${owner.jobId}`;
+      const { readRepairRequeueAdmission } = await import("./domains/job-control/repair-admission.js");
+      assert.equal(await destroyObservedRuntime(sql, { destroy: async () => { throw new Error("controlled destroy failure"); } }, owner), false);
+      assert.equal((await readRepairRequeueAdmission(sql, childId)).blocker?.code, "RUNTIME_CLEANUP_PENDING");
+      assert.equal(await destroyObservedRuntime(sql, { destroy: async () => { await assertFenced(owner.jobId); } }, owner), true);
+      assert.equal((await effect(owner.jobId)).status, "settled");
+      assert.equal((await effect(owner.jobId)).intent_json.host_cleanup.state, "confirmed");
+      assert.notEqual((await readRepairRequeueAdmission(sql, childId)).blocker?.code, "RUNTIME_CLEANUP_PENDING");
+      assert.equal((await sql`SELECT status FROM jobs WHERE id=${childId}`)[0].status, "pending");
+    });
     await t.test("independent unknown and old runs without host evidence cannot be swept", async () => {
       const owner = await fixture(true);
       await cleanupDispatcherSandbox(sql, { destroy: async () => {} }, owner);

@@ -163,4 +163,4 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 
 #1032 A1 三 CLI 凭据文件通道及未交付边界见[Gateway 专题](../MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。当前 PR 的 Actions 尚待验收。
 
-#1143 的 [PTY 清理事实与精确对账](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)扩展 FR-JOB-005 与既有 Job 详情投影。新宿主证据、先撤销凭据再销毁、精确 owner 和失败保留已接线，自动整 Job 恢复与 #1159 组合另列剩余范围，最终 SHA Actions 待验。
+#1143 的 [PTY 清理事实与精确对账](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)扩展 FR-JOB-005 与既有 Job 详情投影。新宿主证据、先撤销凭据再销毁、精确 owner 和失败保留已接线，无合法检查点的自动整 Job 恢复未交付，#1159 + #1167 + #1168 组合按人工续接专题核对，最终 SHA Actions 待验。

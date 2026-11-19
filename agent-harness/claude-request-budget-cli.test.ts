@@ -31,7 +31,7 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
   let acceptWait:()=>void;
   const waitAccepted=new Promise<void>(resolve=>{acceptWait=resolve;});
   const commandFor=(operation:string)=>{
-    const code=`import urllib.request; r=urllib.request.Request("${url}/control/${operation}",data=b"{}",headers={"Authorization":"Bearer ${operation==='request_human'?'old-control-identity':'new-control-identity'}"}); print(urllib.request.urlopen(r).read().decode())`;
+    const code=`import os,urllib.request; token=open(os.environ["DEEPSONAR_CONTROL_TOKEN_FILE"]).read(); r=urllib.request.Request("${url}/control/${operation}",data=b"{}",headers={"Authorization":"Bearer "+token}); print(urllib.request.urlopen(r).read().decode())`;
     return `python3 -c '${code}'`;
   };
   const server=http.createServer((req,res)=>{void(async()=>{
@@ -71,9 +71,14 @@ test("Claude pinned native import retains filtered history in a fresh home", {ti
   };
   const launch=async(home:string,resume?:string)=>{
     await mkdir(home,{recursive:true});
-    const args=["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-mode","bypassPermissions","--model","claude-sonnet-4-5","--tools","Bash","--append-system-prompt",resume?"CURRENT_SYSTEM_BOUNDARY":"OLD_SYSTEM_BOUNDARY",...(resume?["--resume",resume]:[])];
+    const credentials=path.join(home,`.deepsonar-credentials-${randomUUID()}`);
+    await mkdir(credentials,{mode:0o700});
+    const gatewayFile=path.join(credentials,"gateway-token"),controlFile=path.join(credentials,"control-token");
+    await writeFile(gatewayFile,resume?"new-human-fixture-key":"old-human-fixture-key",{mode:0o600});
+    await writeFile(controlFile,resume?"new-control-identity":"old-control-identity",{mode:0o600});
+    const args=["-p","--input-format","stream-json","--output-format","stream-json","--verbose","--permission-mode","bypassPermissions","--model","claude-sonnet-4-5","--tools","Bash","--settings",JSON.stringify({apiKeyHelper:"node /opt/deepsonar/dsh/deepsonar-claude-key.mjs"}),"--append-system-prompt",resume?"CURRENT_SYSTEM_BOUNDARY":"OLD_SYSTEM_BOUNDARY",...(resume?["--resume",resume]:[])];
     const child=spawn("claude",args,{cwd:root,detached:true,env:{...process.env,HOME:home,CLAUDE_CONFIG_DIR:path.join(home,".claude"),
-      ANTHROPIC_API_KEY:resume?"new-human-fixture-key":"old-human-fixture-key",ANTHROPIC_BASE_URL:url,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1",DISABLE_TELEMETRY:"1",DISABLE_ERROR_REPORTING:"1",MAX_THINKING_TOKENS:"0"},stdio:["pipe","pipe","pipe"]});
+      DEEPSONAR_GATEWAY_TOKEN_FILE:gatewayFile,DEEPSONAR_CONTROL_TOKEN_FILE:controlFile,ANTHROPIC_BASE_URL:url,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:"1",DISABLE_TELEMETRY:"1",DISABLE_ERROR_REPORTING:"1",MAX_THINKING_TOKENS:"0"},stdio:["pipe","pipe","pipe"]});
     let output="",pending="",session="";let failed=false;
     child.stdout!.on("data",chunk=>{output+=chunk;pending+=chunk;const lines=pending.split("\n");pending=lines.pop()!;
       for(const line of lines){try{const event=JSON.parse(line);if(event.session_id)session=event.session_id;if(event.type==="result"){failed=event.is_error===true;child.stdin!.end();}}catch{}}

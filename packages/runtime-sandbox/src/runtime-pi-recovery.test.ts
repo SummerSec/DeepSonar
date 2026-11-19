@@ -16,23 +16,36 @@ test("human native import uses the normal runner resume path with fresh executio
     {type:"message",id:"user",parentId:null,timestamp:"2026-11-19T00:00:00Z",message:{role:"user",content:"Keep decision"}},
   ].map(row=>JSON.stringify(row)).join("\n")};
   const importedPath=nativeHumanSessionPath(humanSession),uploads=new Map<string,string>(),launches:string[]=[],bindings:unknown[]=[];
+  const order:string[]=["business-restored"];
+  const protocolInputs:string[]=[];
   const process=new PiProcess((command,proc)=>{
     if(command.type==='get_state')proc.emit({type:'response',id:command.id,command:'get_state',success:true,data:{sessionId:id,sessionFile:importedPath,
       isStreaming:false,isCompacting:false,pendingMessageCount:0,messageCount:1,autoCompactionEnabled:true}});
     else if(command.type==='prompt')turn(proc,command);
   });
   const runtime:RuntimeHost={run:async()=>({exitCode:0,stdout:'',stderr:''}),runAsync:async(command,options)=>{
-    launches.push(command);assert.equal(options?.env?.DEEPSONAR_GATEWAY_TOKEN,'new-gateway');return process;
-  },uploadFile:async(content,destination)=>{uploads.set(destination,String(content));},readWorkspaceFile:async()=>Buffer.from(''),writeHumanInboxFile:async()=>{}};
+    if(command.startsWith("python3 -c ")) {
+      if(command.includes(" create "))order.push("fresh-credentials");
+      return {stdinClosed:false,async write(value){protocolInputs.push(value);},
+        async closeStdin(){this.stdinClosed=true;},async kill(){this.stdinClosed=true;},
+        async *[Symbol.asyncIterator](){yield {type:"stdout" as const,chunk:"ok\n"};yield {type:"exit" as const,exitCode:0};}};
+    }
+    order.push("resume");launches.push(command);
+    assert.equal(options?.env?.DEEPSONAR_GATEWAY_TOKEN,undefined);
+    assert.match(options?.env?.DEEPSONAR_GATEWAY_TOKEN_FILE??"",/\.deepsonar-credentials-[a-f0-9-]{36}\/gateway-token$/u);
+    assert.ok(protocolInputs.some(value=>JSON.parse(value)["gateway-token"]==="new-gateway"));
+    return process;
+  },uploadFile:async(content,destination)=>{if(destination===importedPath)order.push("redacted-history");uploads.set(destination,String(content));},readWorkspaceFile:async()=>Buffer.from(''),writeHumanInboxFile:async()=>{}};
   const identity=contextIdentity(createContextState({attempt_id:'new-attempt',adapter_id:'pi',adapter_version:'1.5.2',
     runtime_identity:'sha256:'+'a'.repeat(64),policy:'automatic',input_digest:contextTextDigest('new input')}));
   const extension='/workspace/.deepsonar-home/.pi/agent/extensions/current.ts';
-  const result=await runRealAgent(runtime,{provider:'pi',env:{DEEPSONAR_GATEWAY_TOKEN:'new-gateway'},input:'human reply',systemPrompt:'CURRENT_SYSTEM_BOUNDARY',
+  const result=await runRealAgent(runtime,{provider:'pi',env:{},privateCredentials:{gatewayToken:'new-gateway',controlToken:'new-control'},secretValues:['new-gateway','new-control'],input:'human reply',systemPrompt:'CURRENT_SYSTEM_BOUNDARY',
     contextIdentity:identity,humanSession,piExtensions:[extension],onSessionIdentity:value=>{bindings.push(value);},completionGate:()=>true});
   assert.equal(result.error,undefined);assert.equal(launches.length,1);
   assert.ok(launches[0]!.includes(`--session '${importedPath}'`));assert.ok(launches[0]!.includes(extension));
   assert.equal(uploads.get('/workspace/.deepsonar/system-prompt.txt'),'CURRENT_SYSTEM_BOUNDARY');
   assert.match(uploads.get(importedPath)!,/Keep decision/);assert.doesNotMatch(uploads.get(importedPath)!,/new-gateway/);
+  assert.deepEqual(order,['business-restored','fresh-credentials','redacted-history','resume']);
   assert.ok(bindings.length>=1);assert.equal(process.commands.filter(command=>command.type==='prompt').length,1);
 });
 
