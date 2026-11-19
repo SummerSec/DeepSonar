@@ -37,7 +37,8 @@ test("#1143 host observation → terminal finally → exact destroy → HTTP evi
     const headers = { authorization: `Bearer ${token.plaintext}` };
     const fixture = async (independent = false) => {
       const jobId = randomUUID(), canvasId = randomUUID(), sandboxId = `controlled-${randomUUID()}`;
-      await sql`INSERT INTO canvases(id,project_id,title) VALUES(${canvasId},${projectId},'controlled')`;
+      await sql`INSERT INTO canvases(id,project_id,title,target_json)
+        VALUES(${canvasId},${projectId},'controlled',${sql.json({ network_policy: { allow_egress: false } })})`;
       const resolved = await freezeAgentSnapshotNetworkPolicy(sql, canvasId,
         await resolveAgentSnapshotForJob(sql, projectId, "audit"));
       const { snapshotWithKnobs: snapshot } = await freezeJobRuntimeConfiguration(sql,
