@@ -38,7 +38,7 @@ test("Claude pinned storage metadata and execution attachments cannot import old
   const attachment={type:"attachment",uuid:"config",parentUuid:"user",sessionId:id,attachment:{type:"prompt_snapshot",systemPrompt:"OLD_SYSTEM"}};
   const assistant={type:"assistant",uuid:"answer",parentUuid:"config",sessionId:id,message:{role:"assistant",content:"Saved answer"}};
   const rows=[user,attachment,assistant,{type:"last-prompt",sessionId:id,leafUuid:"answer"},
-    ...["atis-latch","cost-state","api-request-shape","api-request-blob","api-request"].map(type=>({type,sessionId:id,secret:"OLD_AUTHORITY"}))];
+    ...["atis-latch","cost-state","api-request-shape","api-request-blob","api-request","tools-used"].map(type=>({type,sessionId:id,secret:"OLD_AUTHORITY"}))];
   const project=(values:unknown[])=>projectNativeHumanSession("claude-code","2.1.312",id,values.map(row=>JSON.stringify(row)).join("\n"));
   const imported=project(rows);assert.equal(imported.status,"supported");
   assert.doesNotMatch(imported.content!,/OLD_SYSTEM|OLD_AUTHORITY/);

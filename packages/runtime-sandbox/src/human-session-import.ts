@@ -16,7 +16,7 @@ const CLAUDE_EXECUTION_ATTACHMENTS = new Set([
 // conversation latches. They are deliberately absent from the imported file.
 const CLAUDE_STORAGE_METADATA = new Set([
   "file-history-snapshot", "progress", "queue-operation", "atis-latch", "cost-state",
-  "api-request-shape", "api-request-blob", "api-request",
+  "api-request-shape", "api-request-blob", "api-request", "tools-used",
 ]);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
 export function nativeHumanSessionCapability(cli: string, version: string) {
