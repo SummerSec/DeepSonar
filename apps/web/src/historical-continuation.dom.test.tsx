@@ -10,8 +10,10 @@ import { ConfirmDialogProvider } from "./components/ConfirmDialog";
 type Submission = Parameters<typeof api.createHistoricalContinuation>[1];
 
 test("JobDetail historical continuation respects permission, immutable retries and editable unsaved rejection", async context => {
-  // Keep the real detail components. Stylesheets have no behavior in JSDOM.
+  // The terminal is outside this failed-Job flow and requires a browser bundler.
+  // Keep the real JobDetail and continuation components, omitting CSS in JSDOM.
   const hooks = registerHooks({ load(url, options, nextLoad) {
+    if (url.endsWith("/TerminalPanel.tsx")) return { format: "module", source: "export function TerminalPanel() { return null; }", shortCircuit: true };
     if (url.endsWith(".css")) return { format: "module", source: "export {};", shortCircuit: true };
     return nextLoad(url, options);
   } });
