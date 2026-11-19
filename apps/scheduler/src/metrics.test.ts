@@ -87,7 +87,16 @@ test("Prometheus exports list query latency histogram with cumulative buckets (#
   assert.match(output, /^deepsonar_api_list_query_seconds_count\{endpoint="jobs",paginated="yes"\} 1$/mu);
   // 失败查询单独成组（评审 P2：最慢的失败样本不能被静默排除）
   observe("deepsonar_api_list_query_seconds", 30, { endpoint: "jobs", paginated: "no", result: "error" });
+  observe("deepsonar_api_list_query_seconds", 45, { endpoint: "jobs", paginated: "no", result: "error" });
+  observe("deepsonar_api_list_query_seconds", 90, { endpoint: "jobs", paginated: "no", result: "error" });
+  observe("deepsonar_api_list_query_seconds", 180, { endpoint: "jobs", paginated: "no", result: "error" });
+  observe("deepsonar_api_list_query_seconds", 360, { endpoint: "jobs", paginated: "no", result: "error" });
   const withError = await renderMetrics();
-  assert.match(withError, /^deepsonar_api_list_query_seconds_count\{endpoint="jobs",paginated="no",result="error"\} 1$/mu);
-  assert.match(withError, /^deepsonar_api_list_query_seconds_bucket\{endpoint="jobs",paginated="no",result="error",le="\+Inf"\} 1$/mu);
+  assert.match(withError, /^deepsonar_api_list_query_seconds_bucket\{endpoint="jobs",paginated="no",result="error",le="30"\} 1$/mu);
+  assert.match(withError, /^deepsonar_api_list_query_seconds_bucket\{endpoint="jobs",paginated="no",result="error",le="60"\} 2$/mu);
+  assert.match(withError, /^deepsonar_api_list_query_seconds_bucket\{endpoint="jobs",paginated="no",result="error",le="120"\} 3$/mu);
+  assert.match(withError, /^deepsonar_api_list_query_seconds_bucket\{endpoint="jobs",paginated="no",result="error",le="300"\} 4$/mu);
+  assert.match(withError, /^deepsonar_api_list_query_seconds_bucket\{endpoint="jobs",paginated="no",result="error",le="\+Inf"\} 5$/mu);
+  assert.match(withError, /^deepsonar_api_list_query_seconds_count\{endpoint="jobs",paginated="no",result="error"\} 5$/mu);
+  assert.match(withError, /^deepsonar_api_list_query_seconds_sum\{endpoint="jobs",paginated="no",result="error"\} 705$/mu);
 });

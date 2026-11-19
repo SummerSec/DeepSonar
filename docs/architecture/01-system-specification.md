@@ -1134,6 +1134,7 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **规范要求**：系统必须提供健康、就绪和 metrics 端点，端点返回的指标/状态只含受控计数、错误类别和组件 readiness，不得输出 token、Provider secret、完整 prompt 或沙箱原文。
 - **决策来源**：运维探针和监控系统需要机器可读状态而不是秘密副本。
 - **实现状态**：as-built；health/readiness/metrics 路由已注册并有 route surface 约束。
+- **列表延迟尾部（#1136）**：`deepsonar_api_list_query_seconds` 按分页和成功/失败保留样本，有限累积桶包含 30/60/120/300 秒。超过 300 秒的观测仍计入 `+Inf`、`_count` 和 `_sum`；排障时用同标签的 `+Inf` 与 `le="300"` 累积桶在同一时间窗内的增量差监控溢出，不把处于溢出范围的分位数当作准确耗时。
 - **代码入口**：[system routes](../../apps/scheduler/src/domains/system/routes.ts)、[metrics](../../apps/scheduler/src/metrics.ts)、[readiness](../../apps/scheduler/src/readiness.ts)。
 - **验证证据**：`pnpm ci:unit:runtime-cleanup`、`pnpm ci:unit:scheduler-characterization`、`pnpm ci:unit:authz`。
 

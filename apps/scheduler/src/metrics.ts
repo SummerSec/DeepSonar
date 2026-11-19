@@ -21,8 +21,8 @@ export function inc(name: string, labels?: Record<string, string>, n = 1): void 
   counters.set(k, (counters.get(k) ?? 0) + n);
 }
 
-/** 直方图桶（秒）：覆盖列表查询从毫秒级到退化到数十秒的区间，桶边界保持低基数。 */
-const OBSERVE_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30] as const;
+/** 直方图桶（秒）：保留原边界，并细分超过 30 秒的尾部；超过 300 秒仍进入 +Inf。 */
+const OBSERVE_BUCKETS = [0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300] as const;
 
 interface ObserveSample {
   counts: number[];
