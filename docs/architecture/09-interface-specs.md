@@ -1,11 +1,19 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-12
+> 同步日期：2026-11-19
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
 Fact 列表、详情和人工动作响应的只读 `usage` 投影分别描述用途、当前 Finding 实际引用及待处理原因（#1019）。列表采用有界范围查询，详情再读取既有留存证据与当前 Plan 判据；截断与无法确认明确呈现未知。投影不提供写入权限，人工信任、技术验证与完成判据仍走原契约。详见[证据追踪](../EVIDENCE_TRACE.md#事实用途与待处理投影1019)。
+
+## 人工结束技术验证（#1133）
+
+`PATCH /findings/:id/verify-status` 的 `inconclusive` 分支复用 `findings:write` 和项目隔离。原因必填，`expected` 必须包含用户实际看到的 `verify_status`、`subject_revision` 和 `latest_round_id`，未知修订或无轮次显式为 null。共享严格契约位于 [finding-verification.ts](../../packages/shared-types/src/finding-verification.ts)，详情返回 `verification_control` 提供这组比较值。无画布的历史详情仍可读，其 `verification_control` 为 null，界面隐藏结束按钮，写操作拒绝为 `FINDING_CANVAS_INVALID`。
+
+仅 `needs_human` 且无活动 Job/Attempt、未决效果和开放验证轮次允许结束。Canvas 锁下先识别持久 mutation 重试，再检查 CAS。同编号同操作者同决定返回原结果，异内容或过期值返回 409。成功新增 `attempt=max+1`、无 Verify Job 的终结轮次，记录操作者、脱敏原因、对象修订和来源轮次，保留旧轮次及业务 disposition。状态、同 Finding verification blocker、轮次和请求身份审计同事务提交，审计失败整体回滚。
+
+界面只给 `findings:write` 展示“以无定论结束”，原因必填并确认，409 刷新后由人重新决定。Finding 或比较版本变化时清除旧草稿、待确认请求和幂等编号，旧确认/响应不能操作新对象。详情状态与比较值在同 scope Canvas/Finding 锁下读取。收口不重新排队 Hub 或重置执行时钟，后续执行沿既有受治理人工/修复准入路径，无合法 checkpoint 时只保存 Finding 决定。工程回归接入 `ci:integration:verify-eligibility` 与 `ci:unit:web-facts`，最终 SHA Actions 验证另行记录。
 
 ## 任务下发契约（#767）
 
@@ -310,3 +318,7 @@ Control的evaluation_plan增加每例显式task_inputs，平台校验引用已�
 ## 人工等待显式让位入口（#1074）
 
 POST /projects/{id}/task-queue/yield 使用 jobs:control 与项目范围，输入取共享 ProjectTaskQueueYieldInput 严格契约。mutation_id 绑定 expected_item_id、request_id 与 expected_revision，同编号内容冲突 409。响应沿原有界队列投影，新增 yielded 和 yield_request。Web 队列提供显式按钮及暂存分组。回复仍走既有消息 API，保存后原子排队尾，202 只证明回复保存，执行等待原准入。具体限制与注意力成本见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。
+
+## PTY 清理证据详情（#1143）
+
+GET `/jobs/{id}` 增加可选 `process_diagnostics`，沿用 `tasks:read` 与项目归属权限，上限 64 条。它通过原 effect 的宿主审计引用读取精确进程终止、DELETE 与 sandbox 销毁结果。`host_kill_caller` 表示实际宿主调用来源，退出码未知保持 null。字段与恢复限制见 [PTY 清理专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)，最终 SHA Actions 待验。

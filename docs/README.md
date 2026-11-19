@@ -1,5 +1,7 @@
 # DeepSonar 文档索引
 
+#1133 的[人工技术收口](architecture/09-interface-specs.md#人工结束技术验证1133)新增受权限、CAS、持久幂等与同事务审计保护的无定论终结轮次，并补齐[设备要求冻结](DEVICE_ACCESS.md)的自动和人工补证入口。既有 #1138 无进展刹车继续复用，最终 SHA Actions 待验。
+
 #1082 的[最终用量与安全形态诊断](MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)保留最终 usage 门槛，诊断摘要最多 2 KiB，形态哈希不含原始帧或秘密。真实 scanner/main/OM 账本回归已接原 Actions，最终 SHA 待验，历史根因及诊断看板仍未交付。
 
 NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁竞争后的认领唤醒)覆盖临时跳过后没有新通知的恢复，保留默认轮询关闭；真实 PostgreSQL 红测已复现，修复最终 SHA 的 Actions 另验，不把它当作历史 CI 持锁者的证据。
@@ -296,3 +298,7 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 > **Pi 内部重试结算（#1072）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)区分单次模型消息错误与 `agent_settled`，按消息回滚失败输出并保留此前成功文本，空响应判断与去重不跨消息；保留完成门、取消和进程失败边界；镜像内原始错误 cause 丢失的证据限制单独记录。回归接既有 runtime-sandbox Actions，最终 SHA 待验；现场 Job 未重跑。
 
 #1074 的[项目队列显式人工让位](PROJECT_TASK_QUEUE.md#人工等待显式让位1074)已接 UI/API、持久决定与回复原子回队尾，默认保留席位，首片限定单一人工等待。最终 SHA Actions 另验。
+
+#1126 的[Job 恢复提示](architecture/05-building-blocks.md#job-恢复提示1126)显示运行结论、折叠技术诊断，并同时核对当前动作和权限；真实组件回归已接现有 Actions，最终 SHA 待验。
+
+#1143 [PTY 清理事实与精确对账](AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存 DELETE 真实结果和宿主 caller，以先撤销凭据、再受管销毁并重核原 owner 的链路收口。独立 unknown 与旧无证据 run 保留，自动整 Job 恢复未交付，最终 SHA Actions 待验。

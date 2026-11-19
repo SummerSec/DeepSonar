@@ -103,3 +103,7 @@ Pi 的现行运行时所有权落在 `packages/shared-types/src/pi-extensions.ts
 当前根 checkout 已包含 `pi-observational-memory` 的 registry row、wrapper loader、冻结配置、Gateway workload、用量账本和 RPC/archive 边界；新 Job 仍须由 Hub 能力组合显式 opt-in，默认不启用。扩展及 wrapper 预装路径、Job snapshot 和 `--no-extensions` + 显式 `-e` 物化由 Scheduler/runtime-sandbox 共同持有。观测内存只属于 Job/current-session 上下文治理，不是 Fact、Evidence、Artifact、Finding 或报告的 authority，也不得形成跨 Job 读取路径；[ADR 0013](adr/0013-governed-pi-memory.md) 记录条件准入和独立启用门禁。
 
 当前实现固定 canonical npm 包与入口，`requires_egress=false`、`requires_gateway=true`；冻结的 provider/model、私有设置、独立 `observational_memory` workload token、显式有限 `total_requests`/`main_requests`/`background_requests` 分配、pending/unknown 结算、终态撤销、可见降级和多出口脱敏由内核或 wrapper 守卫。新 Job 从所选 `runtimeImage.image_version` 校验 OM 专属下限，运行时由 [pi-memory-image-guard](../../packages/runtime-sandbox/src/pi-memory-image-guard.ts) 在 Pi 启动/恢复前独立检查 installed package/entry/wrapper。实际本地 base 镜像的封装/RPC/guard 正负例及回归已通过，身份、场景和分母集中见 [RPC 专题](../PI_OBSERVATIONAL_MEMORY_RPC.md#2026-10-31-主线程-built-image-验收)；请求前 transport 与持久结算见 [Gateway 专题](../PI_OBSERVATIONAL_MEMORY_GATEWAY.md)。本轮工程已随 [#831 在 fdb55a01 主线 Actions 验收](<../TASK_DISPATCH_ACCEPTANCE.md#831-engineering-acceptance-2026-11-01>)；后续修复 SHA 与正式发布仍另验，质量/成本收益保持 `unknown`。
+
+## Job 恢复提示（#1126）
+
+Web 的 Job 详情复用当前 execution_state 和效果记录，先显示运行结论，将字段路径、账本计数和错误原文收在默认折叠的维护者诊断。恢复入口需要当前允许动作与操作者权限同时成立，权限或详情读取失败时不显示执行按钮。管理专用 recovery-diagnostics 保持原权限，no_signal 不决定普通用户的动作。真实组件回归接 ci:unit:web-facts，最终 SHA Actions 待验。

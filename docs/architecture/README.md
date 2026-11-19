@@ -1,5 +1,7 @@
 # DeepSonar 系统架构设计
 
+#1133 将 FR-VERIFY-005 / FR-DEV-002 的人工技术决定与补证设备冻结接到[接口视图](09-interface-specs.md#人工结束技术验证1133)、运行时视图及既有设备专题，新增轮次与持久审计使用现有数据结构。最终 SHA Actions 待验。
+
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
 > 同步日期：2026-11-19
 
@@ -160,3 +162,5 @@ FR-FACT-003 的[Finding 证据追踪](../EVIDENCE_TRACE.md)修复管理诊断的
 知识来源登记与历史只读预览的历史收敛见[ADR0021](adr/0021-knowledge-source-preview.md)；用户本轮明确授权的有界项目批次由[ADR0023](adr/0023-project-knowledge-collection.md)取代其中批处理暂缓限制，保留旧knowledge:auto禁用、历史只读与无schema变化。FR-KNOW-001/002、06/08/09/10和trace已同步到collector、Attempt/manifest审计、trial隔离、6×2比较门及activity投影；注意力成本在[专题](../PROJECT_KNOWLEDGE.md#注意力成本)。原候选6d96df59的主CI与Reverse专项已通过，同步main后的候选须独立验收，证据见[专题](../PROJECT_KNOWLEDGE.md#验证与运维)；未合并未部署，真实模型与质量收益未知。
 
 #1074 的[队列显式让位](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)同步 FR-TASK-008、FR-CTRL-006 及运行时/数据/API 视图。schema 75 新增 yielded 与持久请求/回复消费，最终 SHA Actions 另验。
+
+#1143 的 [PTY 清理事实与精确对账](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)扩展 FR-JOB-005 与既有 Job 详情投影。新宿主证据、先撤销凭据再销毁、精确 owner 和失败保留已接线，自动整 Job 恢复与 #1159 组合另列剩余范围，最终 SHA Actions 待验。
