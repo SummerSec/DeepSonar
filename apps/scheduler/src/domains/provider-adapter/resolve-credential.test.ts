@@ -155,6 +155,15 @@ test("#690 resolve: default credential wins among multi-match", async () => {
   assert.equal(resolved?.id, CRED_B);
 });
 
+test("#1078 heterogeneous identities retain the configured default instead of ranking another model", async () => {
+  const chosen = await resolveProviderCredentialForJob({ db: dbWith([
+    { ...baseRow(CRED_A), public_metadata_json: { max_concurrent: 3 } },
+    { ...baseRow(CRED_B), settings_config_json: { env: { ANTHROPIC_MODEL: "another-model" } } },
+  ], [{ credential_id: CRED_A, active_jobs: 2, total_jobs: 2 }]) as never,
+  projectId: "project-1", allowlist: allowlist({ default_credential_id: CRED_A }) });
+  assert.equal(chosen?.id, CRED_A, "spare capacity does not authorize switching model identity");
+});
+
 test("#690 resolve: cross-project credential excluded", async () => {
   await assert.rejects(
     () => resolveProviderCredentialForJob({
@@ -521,16 +530,16 @@ test("#1078/#1096 冻结的是满额缺省下的余量同伴，缺省腾出容�
   assert.equal(resumed?.id, CRED_B, "a freed default must not rotate the frozen recovery identity");
 });
 
-test("#1078 resolve: default with headroom, all-full and ratio ordering contracts (#1078 slice 1)", async () => {
+test("#1078 resolve: new Jobs rank spare capacity before the default; all-full remains explicit", async () => {
   const defaultRow = { ...baseRow(CRED_A), public_metadata_json: { max_concurrent: 3 } };
-  const peer = baseRow(CRED_B);
-  // 缺省仍有余量 → 保持缺省（评审 P1：负载变化不得换账号）。
+  const peer = { ...baseRow(CRED_B), public_metadata_json: { max_concurrent: 10 } };
+  // 新 Job 的默认 A 剩 1/3，B 剩 10/10，优先 B。恢复身份单独固定。
   const headroom = await resolveProviderCredentialForJob({
     db: dbWith([defaultRow, peer], [{ credential_id: CRED_A, active_jobs: 2, total_jobs: 5 }]) as never,
     projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_A }),
     provider: "anthropic",
   });
-  assert.equal(headroom?.id, CRED_A, "a default with remaining capacity keeps the frozen identity");
+  assert.equal(headroom?.id, CRED_B, "10/10 spare capacity beats the default's 1/3");
   // 创建路径显式允许等待，全满仍冻结默认身份，同时记录稳定容量错误。
   const crowded = { ...peer, public_metadata_json: { max_concurrent: 2 } };
   const full = await resolveProviderCredentialForJob({
@@ -542,7 +551,7 @@ test("#1078 resolve: default with headroom, all-full and ratio ordering contract
   });
   assert.equal(full?.id, CRED_A);
   assert.equal(full?.selection?.error_code, "provider_credential_all_at_capacity");
-  // 余量比例：pair(1/2=0.5) vs peer(2/5=0.4) —— 缺省已满，peer 比例更高者胜。
+  // A 剩 1/2，B 剩 3/5，B 比例更高。
   const tight = { ...defaultRow, public_metadata_json: { max_concurrent: 2 } };
   const spread = { ...peer, public_metadata_json: { max_concurrent: 5 } };
   const byRatio = await resolveProviderCredentialForJob({
@@ -553,6 +562,26 @@ test("#1078 resolve: default with headroom, all-full and ratio ordering contract
     allowlist: allowlist({ default_credential_id: null }), provider: "anthropic",
   });
   assert.equal(byRatio?.id, CRED_B, "free-capacity ratio orders a pool without default or recovery identity");
+});
+
+test("#1078 new Job ties use in-flight, total, assigned, default, then stable ID", async () => {
+  const rows = [baseRow(CRED_B), baseRow(CRED_A)];
+  for (const [loads, expected] of [
+    [[{ credential_id: CRED_A, active_jobs: 1, total_jobs: 1 }, { credential_id: CRED_B, active_jobs: 0, total_jobs: 9 }], CRED_B],
+    [[{ credential_id: CRED_A, active_jobs: 0, total_jobs: 2 }, { credential_id: CRED_B, active_jobs: 0, total_jobs: 1 }], CRED_B],
+    [[{ credential_id: CRED_A, active_jobs: 0, total_jobs: 2, assigned_jobs: 2 }, { credential_id: CRED_B, active_jobs: 0, total_jobs: 2, assigned_jobs: 1 }], CRED_B],
+    [[{ credential_id: CRED_A, active_jobs: 0, total_jobs: 2, assigned_jobs: 1 }, { credential_id: CRED_B, active_jobs: 0, total_jobs: 2, assigned_jobs: 1 }], CRED_A],
+  ] as const) {
+    const chosen = await resolveProviderCredentialForJob({ db: dbWith(rows, [...loads]) as never,
+      projectId: "project-1", allowlist: allowlist({ default_credential_id: CRED_A }) });
+    assert.equal(chosen?.id, expected);
+  }
+  const tied = rows.map(row => ({ ...row, public_metadata_json: { max_concurrent: 3 } }));
+  const chosen = await resolveProviderCredentialForJob({ db: dbWith(tied, [
+    { credential_id: CRED_A, active_jobs: 1, total_jobs: 2 },
+    { credential_id: CRED_B, active_jobs: 1, total_jobs: 2 },
+  ]) as never, projectId: "project-1", allowlist: allowlist({ default_credential_id: CRED_B }) });
+  assert.equal(chosen?.id, CRED_B, "equal 2/3 ratios and load prefer the default over stable ID");
 });
 
 test("#1078 resolve: recovery identity does not bypass capacity limits", async () => {

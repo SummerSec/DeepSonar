@@ -1,4 +1,5 @@
 import { freezeGatewayProviderBinding } from "../../gateway-provider-binding.js";
+import { PLATFORM_DEFAULT_AGENT_CLI } from "./default-cli.js";
 import {
   buildRepairFeedback,
   PlatformToolName,
@@ -92,7 +93,7 @@ export type { RoleRuntimeSnapshotApplication, RoleRuntimeSnapshotResult, RoleRun
 export type AgentRuntimeSnapshot = RoleRuntimeSnapshotResult;
 export type ReasoningEffort = ReasoningValue;
 
-export const PLATFORM_DEFAULT_AGENT_CLI = "claude-code";
+export { PLATFORM_DEFAULT_AGENT_CLI } from "./default-cli.js";
 export const PLATFORM_DEFAULT_AGENT_MODEL: string | null = null;
 export const SNAPSHOT_STALE = "SNAPSHOT_STALE" as const;
 

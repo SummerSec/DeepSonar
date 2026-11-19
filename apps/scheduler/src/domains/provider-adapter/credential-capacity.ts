@@ -1,4 +1,4 @@
-import { credentialConcurrencyPolicy } from "../../credentials.js";
+import { credentialConcurrencyPolicy, providerConcurrencyLimits } from "../../credentials.js";
 import { accumulateDispatchCounts, dispatchModelKey, queryActiveDispatchRows } from "../../dispatch-active-concurrency.js";
 import type { sql } from "../../db.js";
 import type { RoleRuntimeSnapshotTransaction } from "../role-runtime-snapshot/ports.js";
@@ -18,12 +18,12 @@ export async function readCredentialCapacities(
   existingJobId?: string | null,
 ): Promise<Map<string, CredentialCapacity>> {
   const query = db as typeof sql;
-  // Resolve after module initialization: core constructs the snapshot application.
-  const { globalRules } = await import("../../core.js");
   // Exclude self in the same SQL statement, including all three quota levels.
-  const [rows, rules] = await Promise.all([
-    queryActiveDispatchRows(query, { excludeJobId: existingJobId }), globalRules(query),
+  const [rows, settings] = await Promise.all([
+    queryActiveDispatchRows(query, { excludeJobId: existingJobId }),
+    query`SELECT rules_json FROM global_settings WHERE id = 'global'`,
   ]);
+  const providerLimits = providerConcurrencyLimits(settings[0]?.rules_json?.maxConcurrentByProvider, {});
   if (rows.some(row => !Number.isSafeInteger(Number(row.count)) || Number(row.count) < 0)) {
     throw new Error("provider_credential_occupancy_unknown");
   }
@@ -38,7 +38,7 @@ export async function readCredentialCapacities(
     };
     const provider = {
       in_use: counts.provider.get(row.provider) ?? 0,
-      limit: rules.maxConcurrentByProvider[row.provider] ?? null,
+      limit: providerLimits[row.provider] ?? null,
     };
     const levels = { credential, model, provider };
     const blocked_by = (Object.keys(levels) as Array<keyof typeof levels>).filter(key => {

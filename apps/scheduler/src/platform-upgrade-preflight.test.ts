@@ -46,6 +46,11 @@ test("offline defaults use the complete credential-first resolver and never muta
   const before = JSON.stringify(snapshot);
   assert.equal((await validatePlatformUpgradeConfiguration(snapshot)).ok, true); // preference is not a hard CLI restriction
   assert.equal(JSON.stringify(snapshot), before);
+  snapshot.credentials[0].public_metadata_json = { max_concurrent: 0 };
+  const pausedCapacity = await validatePlatformUpgradeConfiguration(snapshot);
+  assert.equal(pausedCapacity.ok, true, "offline configuration validation does not reject a temporary capacity pause");
+  assert.ok(pausedCapacity.not_checked.includes("live_credential_capacity"));
+  snapshot.credentials[0].public_metadata_json = {};
   snapshot.credentials[0].status = "disabled";
   assert.equal((await validatePlatformUpgradeConfiguration(snapshot)).ok, false);
   snapshot.credentials[0].status = "active";

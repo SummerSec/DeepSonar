@@ -4,9 +4,9 @@
  * by agent_snapshot credential_id / upstream_model (via snapshotUpstreamModel).
  */
 import { credentialConcurrencyPolicy } from "./credentials.js";
-import { PLATFORM_DEFAULT_AGENT_CLI } from "./domains/role-runtime-snapshot/index.js";
+import { PLATFORM_DEFAULT_AGENT_CLI } from "./domains/role-runtime-snapshot/default-cli.js";
 import { snapshotUpstreamModel } from "./provider-effective-model.js";
-import { sql } from "./db.js";
+import type { sql } from "./db.js";
 
 export const ACTIVE_DISPATCH_JOB_STATUSES = ["claimed", "provisioning", "running"] as const;
 

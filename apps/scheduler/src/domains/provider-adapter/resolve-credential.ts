@@ -9,7 +9,7 @@ import { extractModelsFromSettings, resolveEffectiveModel, resolvePiCliModelSele
 import type { ProjectAgentAllowlist } from "../project-agent-allowlist/policy.js";
 import { readCredentialCapacities, type CredentialCapacity } from "./credential-capacity.js";
 import type { RoleRuntimeSnapshotTransaction } from "../role-runtime-snapshot/ports.js";
-import { bareUpstreamModelId } from "../../provider-effective-model.js";
+import { bareUpstreamModelId, ModelCatalogMismatchError } from "../../provider-effective-model.js";
 
 export type ResolveProviderCredentialInput = {
   db: RoleRuntimeSnapshotTransaction;
@@ -44,7 +44,7 @@ export type CredentialSelection = {
     credential_id: string;
     health: string | null;
     health_error_category: string | null;
-    skipped: "health_error" | "identity_not_selected" | "at_capacity" | null;
+    skipped: "health_error" | "model_incompatible" | "identity_not_selected" | "at_capacity" | null;
     capacity: CredentialCapacity | null;
   }>;
 };
@@ -309,11 +309,27 @@ export async function resolveProviderCredentialForJob(
     observed: { unavailable_count: beforeHealth.filter(credentialHealthUnavailable).length }, next_action: "check_provider_health_and_retry",
     category: "transient_retryable",
   });
+  const selectedModels = new Map<string, string | null>();
+  const modelErrors = new Map<string, ModelCatalogMismatchError>();
+  if (input.selectModel) {
+    for (const row of pool) {
+      try {
+        selectedModels.set(row.id, input.selectModel(row));
+      } catch (error) {
+        if (!(error instanceof ModelCatalogMismatchError)) throw error;
+        modelErrors.set(row.id, error);
+      }
+    }
+    const frozenModelError = modelErrors.get(input.existingCredentialId ?? "");
+    if (frozenModelError) throw frozenModelError;
+    pool = pool.filter(row => !modelErrors.has(row.id));
+    if (pool.length === 0) throw modelErrors.values().next().value!;
+  }
   const defaultId = input.allowlist.default_credential_id;
   const preferred = pool.find(row => row.id === defaultId);
   const existing = pool.find(row => row.id === input.existingCredentialId);
   const models = new Map(pool.map(row => {
-    const selectedModel = input.selectModel ? input.selectModel(row) : modelNeed;
+    const selectedModel = input.selectModel ? selectedModels.get(row.id) : modelNeed;
     const requested = resolveRequestedModel({ roleModel: selectedModel, agentCli: row.agent_cli!,
       settingsConfig: row.settings_config_json, includeCliDefault: true });
     const cliModel = requested && row.agent_cli === "pi"
@@ -364,6 +380,7 @@ export async function resolveProviderCredentialForJob(
       candidates: beforeHealth.map(candidate => ({ credential_id: candidate.id, health: candidate.health_status,
         health_error_category: candidate.health_error_category ?? null,
         skipped: credentialHealthUnavailable(candidate) ? "health_error"
+          : modelErrors.has(candidate.id) ? "model_incompatible"
           : !selectable.some(allowed => allowed.id === candidate.id) ? "identity_not_selected"
           : capacities.get(candidate.id)?.blocked_by.length ? "at_capacity" : null,
         capacity: capacities.get(candidate.id) ?? null })),
@@ -371,8 +388,10 @@ export async function resolveProviderCredentialForJob(
   });
   const withRoom = selectable.filter(row => capacities.get(row.id)!.blocked_by.length === 0);
   if (existing && withRoom.includes(existing)) return select(existing, "existing");
-  if (preferred && withRoom.includes(preferred)) return select(preferred, "default");
-  if (withRoom.length === 1) return select(withRoom[0]!, pool.length === 1 ? "single" : "capacity");
+  if (withRoom.length === 1) {
+    const chosen = withRoom[0]!;
+    return select(chosen, chosen.id === preferred?.id ? "default" : pool.length === 1 ? "single" : "capacity");
+  }
   const loads = withRoom.length > 1 ? await input.db`SELECT agent_snapshot_json->>'credential_id' AS credential_id,
     count(*) FILTER (WHERE status IN ('pending','claimed','provisioning','running','waiting_human')) AS assigned_jobs,
     count(*) AS total_jobs FROM jobs WHERE project_id=${input.projectId}
@@ -389,9 +408,12 @@ export async function resolveProviderCredentialForJob(
     counts.set(load.credential_id, { assigned, total });
   }
   const ranked = [...withRoom].sort((a, b) => capacities.get(b.id)!.room_ratio - capacities.get(a.id)!.room_ratio
+    || capacities.get(a.id)!.credential.in_use - capacities.get(b.id)!.credential.in_use
+    || (counts.get(a.id)?.total ?? 0) - (counts.get(b.id)?.total ?? 0)
     || (counts.get(a.id)?.assigned ?? 0) - (counts.get(b.id)?.assigned ?? 0)
-    || (counts.get(a.id)?.total ?? 0) - (counts.get(b.id)?.total ?? 0) || a.id.localeCompare(b.id));
-  if (ranked[0]) return select(ranked[0], pool.length === 1 ? "single" : "capacity");
+    || Number(b.id === defaultId) - Number(a.id === defaultId)
+    || a.id.localeCompare(b.id));
+  if (ranked[0]) return select(ranked[0], ranked[0].id === defaultId ? "default" : "capacity");
   if (input.allowCapacityWait) {
     const waiting = existing ?? preferred ?? [...selectable].sort((a, b) => a.id.localeCompare(b.id))[0]!;
     return select(waiting, "capacity_wait");
