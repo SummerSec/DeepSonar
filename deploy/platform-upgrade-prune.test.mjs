@@ -29,6 +29,7 @@ test('retains current and its completed source, without retaining every archived
   assert.equal(plan.retained.find(row => row.name === database('3')).reason, 'CURRENT_DATABASE');
   snapshot.databases[0].name += '00000001';
   snapshot.operations[0].candidate += '00000001';
+  for (const role of snapshot.roles.slice(0, 2)) role.marker += '00000001';
   assert.equal(planGenerationPrune(snapshot).candidates.length, 1);
 });
 

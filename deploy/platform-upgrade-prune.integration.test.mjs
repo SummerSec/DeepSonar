@@ -80,6 +80,10 @@ CREATE TABLE audit_logs(actor_type text,actor_id text,action text,resource_type 
   assert.equal(session.exitCode, null);
   // Only the fixture's own connection is ended, outside the implementation.
   sql('postgres', `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${databases[0]}';`);
+  for (let i = 0; i < 100; i++) {
+    if (json('postgres', `SELECT count(*)::int FROM pg_stat_activity WHERE datname='${databases[0]}'`)[0].count === 0) break;
+    await new Promise(done => setTimeout(done, 50));
+  }
   await assert.rejects(run({apply: true, approvedPlanHash: preview.plan_hash}), /PRUNE_DROP_UNCERTAIN/);
   await assert.rejects(run(), /PRUNE_PLAN_RECOVERY_REQUIRED/);
   const replacement = databases[0];
