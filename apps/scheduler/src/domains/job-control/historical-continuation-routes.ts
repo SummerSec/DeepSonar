@@ -24,15 +24,22 @@ export function registerHistoricalContinuationRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error_code: "PROJECT_MISMATCH", error: "当前令牌不能操作此项目。" });
     const [request] = await sql`SELECT id FROM human_requests WHERE id=${body.request_id} AND job_id=${id}`;
     if (!request) return reply.code(404).send({ error_code: "HUMAN_REQUEST_NOT_FOUND", error: "原任务没有此人工请求。" });
+    let replySaved = false;
     try {
       // Commit the reply before admission. A stable blocker must never discard user input.
-      if (body.reply) await createHumanMessage({ id: body.reply.message_id, canvasId: String(job.canvas_id),
-        target: { kind: "request", request_id: body.request_id, expected_revision: body.expected_revision },
-        body: body.reply.body, attachmentVersionIds: body.reply.attachment_version_ids });
+      if (body.reply) {
+        await createHumanMessage({ id: body.reply.message_id, canvasId: String(job.canvas_id),
+          target: { kind: "request", request_id: body.request_id, expected_revision: body.expected_revision },
+          body: body.reply.body, attachmentVersionIds: body.reply.attachment_version_ids });
+        replySaved = true;
+      }
       const replyId = body.reply?.message_id ?? body.saved_reply_message_id!;
-      const [saved] = await sql`SELECT revision FROM human_requests WHERE id=${body.request_id}
-        AND job_id=${id} AND reply_message_id=${replyId}`;
-      if (!saved || (!body.reply && Number(saved.revision) !== body.expected_revision))
+      const [saved] = await sql`SELECT r.revision FROM human_requests r JOIN human_messages m
+        ON m.id=r.reply_message_id AND m.request_id=r.id AND m.target_job_id=r.job_id WHERE r.id=${body.request_id}
+        AND r.job_id=${id} AND r.reply_message_id=${replyId}`;
+      if (!saved) throw new HistoricalContinuationBlocked("CONTINUATION_REPLY_REFERENCE_MISMATCH");
+      replySaved = true;
+      if (!body.reply && Number(saved.revision) !== body.expected_revision)
         throw new HistoricalContinuationBlocked("CONTINUATION_REQUEST_CHANGED");
       const input = HistoricalContinuationInput.parse({ mutation_id: body.mutation_id, request_id: body.request_id,
         expected_revision: Number(saved.revision), reply_message_id: replyId });
@@ -42,14 +49,18 @@ export function registerHistoricalContinuationRoutes(app: FastifyInstance) {
         execution_state: "queued", mutation_id: binding.mutation_id });
     } catch (error) {
       if (error instanceof HumanInterventionError) return reply.code(error.statusCode).send({
-        accepted: false, error_code: error.errorCode, error: error.message });
+        accepted: false, error_code: error.errorCode, error: error.message, reply_state: "reply_not_saved" });
+      if (error instanceof Error && "statusCode" in error && error.statusCode === 409)
+        return reply.code(409).send({ accepted: false, error_code: "CONTINUATION_REPLY_CONFLICT",
+          error: error.message, reply_state: "reply_not_saved" });
       const code = error instanceof HistoricalContinuationBlocked || error instanceof GatewayRequestBudgetError
         || error instanceof RepairTokenBudgetError ? error.code
         : error instanceof Error && /^(CONTINUATION_|HUMAN_CHECKPOINT_|GATEWAY_REQUEST_|REPAIR_|JOB_TOKEN_|PLAN_CONTINUATION_|EXECUTION_TIME_)[A-Z_]+$/.test(error.message)
           ? error.message : null;
       if (!code) throw error;
       return reply.code(409).send({ accepted: false, error_code: code,
-        error: "续做证据或剩余额度不满足要求，请查看原请求、检查点和执行账本。", reply_state: "reply_saved" });
+        error: "续做证据或剩余额度不满足要求，请查看原请求、检查点和执行账本。",
+        reply_state: replySaved ? "reply_saved" : "reply_not_saved" });
     }
   });
 }

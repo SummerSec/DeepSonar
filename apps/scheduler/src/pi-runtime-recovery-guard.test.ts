@@ -46,9 +46,12 @@ test("#958 accepted or prepared terminal prevents even a recovery SQL read", asy
   }
 });
 
-function storage(onRead: () => void, override: Record<string, unknown> = {}) {
+function storage(onRead: () => void, override: Record<string, unknown> = {}, members: string[] = []) {
   const db = Object.assign(async (strings: TemplateStringsArray,...parameters:unknown[]) => {
     const query = strings.join("?").replace(/\s+/g, " ");
+    if (query.includes("COALESCE(budget_owner_job_id,id) AS root")) return [{ root: String(parameters[0]) }];
+    if (query.includes("SELECT id FROM jobs WHERE id=")) return (members.length ? members : [String(parameters[0])]).map(id => ({ id }));
+    if (query.includes("FROM job_continuations")) return [];
     if (query.includes("AS revision")) return [{ count: 0, revision: null, ...override }];
     if (query.includes("FROM events")||query.includes("FROM human_requests")) return [];
     if (query.includes("SELECT id,status,lease_expires_at")) {
@@ -67,6 +70,8 @@ test("#958 recovery rereads live lease/deadline/cancel and terminal after awaiti
   registerRuntimeHandler(jobId, async () => ({}), ["mark_job_done"]);
   try {
     assert.deepEqual(await createPiRuntimeRecoveryGuard(storage(() => {}), jobId, attemptId, () => terminal)(), { allowed: true });
+    assert.deepEqual(await createPiRuntimeRecoveryGuard(storage(() => {}, {}, [randomUUID(),jobId]), jobId, attemptId, () => terminal)(), { allowed: true },
+      "trusted multi-member budget reads preserve live execution checks");
     for (const override of [{ leased: false }, { within_time: false }, { cancel_requested: true }, { status: "cancelled" }]) {
       assert.equal((await createPiRuntimeRecoveryGuard(storage(() => {}, override), jobId, attemptId, () => terminal)()).allowed, false);
     }

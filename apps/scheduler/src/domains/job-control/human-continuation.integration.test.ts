@@ -17,6 +17,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
   const url = new URL(databaseUrl!); url.pathname = `/${databaseName}`;
   process.env.DATABASE_URL = url.toString(); process.env.AGENT_MODE = "fake";
   process.env.DEEPSONAR_AUTH_REQUIRED = "false"; process.env.BLOB_DIR = directory;
+  process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
   const [{ default: Fastify }, { default: websocket }, { sql, migrate }, { registerRoutes }, core, attempts, api,
     snapshots, { freezeJobRuntimeConfiguration }, checkpoints, { checkpointHash }, clock, { pumpHumanContinuations },
     { destroyAndSettleHumanWaitRun }, { createSqlJobLifecycleApplication }, humans] = await Promise.all([
@@ -33,15 +34,31 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
     const {requeueJob}=await import('./rerun.js');
     const projectId = randomUUID();
     await sql`INSERT INTO projects(id,name) VALUES(${projectId},'continuation fixture')`;
-    const setup = async () => {
+    const setup = async (gateway?: { baseUrl: string; om?: boolean; maxRequests?: number; deferHuman?: boolean }) => {
+      const fixtureProjectId = gateway ? randomUUID() : projectId;
+      if (gateway) {
+        const { encryptSecret } = await import("../../credentials.js");
+        const encrypted = encryptSecret("synthetic-historical-gateway-key");
+        const credentialId = randomUUID();
+        const settings = { providers: { openai: { api: "openai-completions", models: [{ id: "main-model" }] } } };
+        await sql`INSERT INTO projects(id,name,config_json) VALUES(${fixtureProjectId},'historical gateway',${sql.json({
+          enabled_agent_clis: ["pi"], default_agent_cli: "pi", default_credential_id: credentialId,
+          enabled_credential_ids: [credentialId], default_model_ref: "openai/main-model", allow_model_catalog_passthrough: true })})`;
+        await sql`INSERT INTO credentials(id,project_id,name,kind,provider,agent_cli,ciphertext,nonce,auth_tag,fingerprint,last4,
+          settings_config_json,public_metadata_json) VALUES(${credentialId},${fixtureProjectId},'history','llm_provider','openai','pi',
+          ${encrypted.ciphertext},${encrypted.nonce},${encrypted.auth_tag},'history','only',${sql.json(settings)},${sql.json({base_url:gateway.baseUrl})})`;
+        process.env.DEEPSONAR_PI_OM_MAIN_MAX_REQUESTS = "4";
+        process.env.DEEPSONAR_PI_OM_BACKGROUND_MAX_REQUESTS = "2";
+        process.env.DEEPSONAR_PI_OM_BACKGROUND_TOKEN_LIMIT = "6";
+      }
       const jobId = randomUUID(), canvasId = randomUUID(), sandboxId = `checkpoint-${jobId}`;
-      await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${projectId},'checkpoint',${sql.json({network_policy:{allow_egress:false}})})`;
+      await sql`INSERT INTO canvases(id,project_id,title,target_json) VALUES(${canvasId},${fixtureProjectId},'checkpoint',${sql.json({network_policy:{allow_egress:false}})})`;
       await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status) VALUES(${canvasId},'root','root','active')`;
       const resolved = await snapshots.freezeAgentSnapshotNetworkPolicy(sql, canvasId,
-        await core.resolveAgentSnapshotForJob(sql, projectId, 'audit'));
-      const { snapshotWithKnobs: snapshot } = await freezeJobRuntimeConfiguration(sql, { projectId, type: 'audit', timeoutSec: 3600 }, resolved);
+        await core.resolveAgentSnapshotForJob(sql, fixtureProjectId, 'audit', [], gateway ? { agentCli: 'pi', modelRef: 'openai/main-model', piExtensionIds: gateway.om ? ['pi-observational-memory'] : [] } : undefined));
+      const { snapshotWithKnobs: snapshot } = await freezeJobRuntimeConfiguration(sql, { projectId: fixtureProjectId, type: 'audit', timeoutSec: 3600, ...(gateway ? { maxRequests: gateway.maxRequests ?? 6 } : {}) }, resolved);
       await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json,started_at,timeout_sec,lease_expires_at,sandbox_id)
-        VALUES(${jobId},${projectId},${canvasId},'audit','running',${sql.json(snapshot as never)},now()-interval '10 seconds',3600,now()+interval '1 hour',${sandboxId})`;
+        VALUES(${jobId},${fixtureProjectId},${canvasId},'audit','running',${sql.json(snapshot as never)},now()-interval '10 seconds',3600,now()+interval '1 hour',${sandboxId})`;
       await sql`INSERT INTO canvas_nodes(canvas_id,job_id,node_type,title,status) VALUES(${canvasId},${jobId},'job','work','running')`;
       const attempt = await sql.begin(transaction => attempts.createAttempt(transaction as unknown as typeof sql, jobId));
       const attemptId = String(attempt.id);
@@ -49,11 +66,12 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       await attempts.beginEffect(sql, attemptId, { effectId: 'agent_run:1', kind: 'agent_run', replayPolicy: 'never',
         resourceIdentity: { job_id: jobId, attempt_id: attemptId, sandbox_id: sandboxId } });
       const requestId = randomUUID();
-      await core.ingestEvent(jobId, { v: 1, event_id: requestId, type: 'human', payload: {
+      const wait = () => core.ingestEvent(jobId, { v: 1, event_id: requestId, type: 'human', payload: {
         reason: 'Confirm the previously authorized reference before continuing.', subject: { type: 'platform_blocker', kind: 'authorization' },
         guidance: { question: 'Which authorized reference applies?', required_action: 'Check the existing grant.',
           reply_instructions: 'Send its non-secret reference.', after_reply: 'Recheck authorization and continue unfinished work.' },
       } });
+      if (!gateway?.deferHuman) await wait();
       const bytes = Buffer.from('unfinished work\n'), restored = new Map<string, Buffer>();
       const commands:string[]=[];
       const host = { run: async (command:string) => {commands.push(command);return { exitCode: 0, stdout: JSON.stringify([{path:'src/work.txt',bytes:bytes.length,sha256:checkpointHash(bytes),mode:0o600}]), stderr:'' };},
@@ -67,7 +85,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
         method: 'POST', url: `/canvases/${canvasId}/messages`, payload: { message_id: messageId,
           target: { kind: 'request', request_id: requestId, expected_revision: expectedRevision }, body, attachment_version_ids:attachmentVersionIds },
       });
-      return { jobId, canvasId, attemptId, requestId, host, bytes, restored, seal, close, reply, commands };
+      return { projectId: fixtureProjectId, jobId, canvasId, attemptId, requestId, host, bytes, restored, seal, close, reply, commands, wait };
     };
     await context.test('late response resumes preserved files with one durable generation and a new owner', async () => {
       const fixture = await setup(); await fixture.seal();
@@ -372,8 +390,11 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
         await sql`UPDATE project_task_queues SET paused=false WHERE project_id=${projectId}`;
       });
     }
-    const { historicalContinuationCases } = await import("./historical-continuation-fixture.js");
+    await sql`UPDATE jobs SET status='cancelled' WHERE status IN ('pending','claimed','provisioning','running','waiting_human')`;
+    const { historicalContinuationCases } = await import("./historical-continuation.fixture.test.js");
     await historicalContinuationCases(context, sql, app, setup);
+    const { historicalGatewayCases } = await import("./historical-gateway.fixture.test.js");
+    await historicalGatewayCases(context, sql, app, setup);
   } finally {
     await app.close(); await sql.end({timeout:5});
     await admin.unsafe(`DROP DATABASE "${databaseName}" WITH (FORCE)`); await admin.end();

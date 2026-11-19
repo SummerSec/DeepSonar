@@ -1,3 +1,4 @@
+import { lockCanvasContinuationBudgets } from "../job-control/continuation-budget.js";
 import { inspectGatewayRequestBudget, ensureGatewayRequestBudget, GatewayRequestBudgetError } from "../../gateway-request-policy.js";
 import { registerProjectTaskQueueRoutes } from "./task-queue-routes.js";
 import { TaskQueueError, restartProjectTaskQueue } from "./task-queue-store.js";
@@ -231,7 +232,7 @@ async function cancelCanvasJobsInTransaction(tx: any, canvasId: string): Promise
   await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
   await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
   // Serialize FK-backed knowledge writes before checking retention at DELETE.
-  await tx`SELECT id FROM jobs WHERE canvas_id = ${canvasId} ORDER BY id FOR UPDATE`;
+  await lockCanvasContinuationBudgets(tx, canvasId);
   const active = await createSqlJobLifecycleApplication(tx, { deferProvisionInterruption: true }).cancelJobsOnCanvas(
     canvasId,
     "task archived/deleted",
@@ -1536,7 +1537,7 @@ export function registerProjectTaskRoutes(app: FastifyInstance): void {
         await tx`SELECT pg_advisory_xact_lock(hashtext(${DISPATCH_CLAIM_ADVISORY_KEY}))`;
         const [locked] = await tx`SELECT id FROM canvases WHERE id = ${canvasId} FOR UPDATE`;
         if (!locked) throw new TaskDeleteRefused("canvas_not_found", {});
-        await tx`SELECT id FROM jobs WHERE canvas_id = ${canvasId} ORDER BY id FOR UPDATE`;
+        await lockCanvasContinuationBudgets(tx as unknown as typeof sql, canvasId);
         retained = await canvasKnowledgeRetention(tx, canvasId);
         if (Object.keys(retained).length > 0) throw new TaskDeleteRefused("retained", retained);
         cancelled = await cancelCanvasJobsInTransaction(tx, canvasId);

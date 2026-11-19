@@ -46,7 +46,15 @@ export async function historicalContinuationCases(context: TestContext, sql: typ
     const [audit] = await sql`SELECT count(*)::int AS n FROM audit_logs WHERE action='job.historical_continuation' AND resource_id=${target}`;
     assert.equal(audit.n, 1);
     const { claimPendingJobs } = await import("../../dispatcher.js");
-    assert.ok((await claimPendingJobs()).some(job => job.id === target));
+    const claimed = await claimPendingJobs();
+    if (!claimed.some(job => job.id === target)) {
+      context.diagnostic(JSON.stringify({ target, claimed, jobs: await sql`SELECT id,project_id,canvas_id,status,
+        agent_snapshot_json->>'agent_cli' AS cli,budget_owner_job_id,budget_execution_job_id FROM jobs
+        WHERE id=${target} OR status IN ('claimed','provisioning','running')`,
+        queue: await sql`SELECT * FROM project_task_queue_items WHERE canvas_id=${f.canvasId}`,
+        settings: await sql`SELECT rules_json FROM global_settings WHERE id='global'` }));
+    }
+    assert.ok(claimed.some(job => job.id === target));
     const [attempt] = await sql`SELECT id FROM job_attempts WHERE job_id=${target} AND status='active'`;
     await sql`UPDATE jobs SET status='running',started_at=now(),lease_expires_at=now()+interval '1 hour' WHERE id=${target}`;
     await humanExecutionStartedAt(sql, target, String(attempt.id));
@@ -63,6 +71,98 @@ export async function historicalContinuationCases(context: TestContext, sql: typ
     const clash = await app.inject({ method: "POST", url: `/jobs/${f.jobId}/continuations`, payload: {
       ...payload, reply: { ...payload.reply, body: "changed" } } });
     assert.equal(clash.statusCode, 409);
+  });
+  await context.test("unknown saved reply reference is explicitly unsaved and never creates a continuation", async () => {
+    const f = await failed();
+    const response = await app.inject({ method: "POST", url: `/jobs/${f.jobId}/continuations`, payload: {
+      mutation_id: randomUUID(), request_id: f.requestId, expected_revision: f.revision, saved_reply_message_id: randomUUID() } });
+    assert.equal(response.statusCode, 409, response.body);
+    assert.equal(response.json().error_code, "CONTINUATION_REPLY_REFERENCE_MISMATCH");
+    assert.equal(response.json().reply_state, "reply_not_saved");
+  });
+  await context.test("handoff audit failure rolls back execution owner, keeps the independently saved reply and can retry", async () => {
+    const f = await failed(), payload = body(f);
+    await sql.unsafe(`CREATE FUNCTION fail_historical_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF NEW.action='job.historical_continuation' THEN RAISE EXCEPTION 'synthetic historical audit failure'; END IF;
+      RETURN NEW; END $$`);
+    await sql.unsafe("CREATE TRIGGER fail_historical_audit BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION fail_historical_audit()");
+    try {
+      const response = await app.inject({ method: "POST", url: `/jobs/${f.jobId}/continuations`, payload });
+      assert.equal(response.statusCode, 500);
+      assert.equal((await sql`SELECT count(*)::int AS n FROM job_continuations WHERE source_job_id=${f.jobId}`)[0].n, 0);
+      assert.equal((await sql`SELECT budget_execution_job_id FROM jobs WHERE id=${f.jobId}`)[0].budget_execution_job_id, null);
+      assert.equal((await sql`SELECT body FROM human_messages WHERE id=${payload.reply.message_id}`)[0].body, payload.reply.body);
+    } finally {
+      await sql.unsafe("DROP TRIGGER fail_historical_audit ON audit_logs"); await sql.unsafe("DROP FUNCTION fail_historical_audit()");
+    }
+    const retried = await app.inject({ method: "POST", url: `/jobs/${f.jobId}/continuations`, payload });
+    assert.equal(retried.statusCode, 202, retried.body);
+    assert.equal((await sql`SELECT revision FROM human_requests WHERE id=${f.requestId}`)[0].revision, f.revision + 1);
+  });
+  for (const operation of ["archive", "delete"] as const) await context.test(`Canvas ${operation} locks budget roots before a smaller child during settlement`, async () => {
+    const postgres = (await import("postgres")).default;
+    const connection = postgres(process.env.DATABASE_URL!, { max: 1 });
+    const f = await failed();
+    const rootId = "ffffffff-ffff-4fff-afff-fffffffffff0";
+    const childId = "00000000-0000-4000-8000-000000000001";
+    const [source] = await sql`SELECT project_id FROM jobs WHERE id=${f.jobId}`;
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status) VALUES(${rootId},${source.project_id},${f.canvasId},'audit','failed')`;
+    await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,budget_owner_job_id)
+      VALUES(${childId},${source.project_id},${f.canvasId},'audit','failed',${rootId})`;
+    let rootLocked!: () => void, release!: () => void;
+    const locked = new Promise<void>(resolve => { rootLocked = resolve; });
+    const proceed = new Promise<void>(resolve => { release = resolve; });
+    const settlement = connection.begin(async tx => {
+      await tx`SELECT id FROM jobs WHERE id=${rootId} FOR UPDATE`;
+      rootLocked(); await proceed;
+      // A cancellation that locks the child first would deadlock here.
+      await tx`SELECT id FROM jobs WHERE id=${childId} FOR UPDATE`;
+      await tx`UPDATE jobs SET error='late settlement fixture' WHERE id=${childId}`;
+    });
+    try {
+      await locked;
+      const response = app.inject({ method: operation === "archive" ? "POST" : "DELETE",
+        url: `/tasks/${f.canvasId}${operation === "archive" ? "/archive" : ""}` }).then(result => result);
+      // Observe the actual database lock wait before allowing settlement to take its child.
+      let waiting = false;
+      for (let i = 0; i < 100; i++) {
+        const [state] = await sql`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname=current_database()
+          AND wait_event_type='Lock' AND query LIKE '%jobs%' AND pid<>pg_backend_pid()`;
+        if (state.n > 0) { waiting = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      assert.ok(waiting, "normal HTTP mutation must reach a database lock wait");
+      release(); await settlement;
+      const result = await response;
+      assert.equal(result.statusCode, operation === "archive" ? 200 : 409, result.body);
+      assert.equal((await sql`SELECT error FROM jobs WHERE id=${childId}`)[0].error, 'late settlement fixture');
+    } finally {
+      release(); await settlement; await connection.end();
+      await sql`UPDATE jobs SET budget_owner_job_id=NULL WHERE id=${childId}`;
+      await sql`DELETE FROM jobs WHERE id=ANY(${[childId,rootId]}::uuid[])`;
+    }
+  });
+  await context.test("normal Verify round Job keeps its original assignment owner and cannot be copied as history", async () => {
+    const f = await failed();
+    const [job] = await sql`SELECT project_id FROM jobs WHERE id=${f.jobId}`;
+    const findingId = randomUUID();
+    const [node] = await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status) VALUES(${f.canvasId},'finding','history verification','pending') RETURNING id`;
+    await sql`INSERT INTO findings(id,project_id,job_id,node_id,fingerprint,title,severity,summary,profile)
+      VALUES(${findingId},${job.project_id},${f.jobId},${node.id},${findingId},'History verification','high','Bounded verification fixture','security.vulnerability')`;
+    const [finding] = await sql`SELECT * FROM findings WHERE id=${findingId}`;
+    const { createVerifyRound } = await import("../../verify.js");
+    const round = await sql.begin(tx => createVerifyRound(tx as unknown as typeof sql, {
+      projectId: String(job.project_id), canvasId: f.canvasId, finding, parentJobId: f.jobId,
+      followupDepth: 0, priorityBase: 0, manualOverride: true, reason: "explicit fixture verification" }));
+    assert.ok(round);
+    await sql`UPDATE jobs SET status='failed' WHERE id=${round.jobId}`;
+    const [verify] = await sql`SELECT type,payload_json FROM jobs WHERE id=${round.jobId}`;
+    assert.equal(verify.type, "verify_finding"); assert.equal(verify.payload_json.verification_followup, undefined);
+    const { createHistoricalContinuation } = await import("./historical-continuation.js");
+    await assert.rejects(createHistoricalContinuation(round.jobId, { mutation_id: randomUUID(), request_id: randomUUID(),
+      expected_revision: 0, reply_message_id: randomUUID() }), /CONTINUATION_ASSIGNMENT_OWNER_UNSUPPORTED/);
+    assert.equal((await sql`SELECT verify_job_id FROM finding_verification_rounds WHERE id=${round.roundId}`)[0].verify_job_id, round.jobId);
+    assert.equal((await sql`SELECT count(*)::int AS n FROM job_continuations WHERE source_job_id=${round.jobId}`)[0].n, 0);
   });
   for (const blocker of ["clock", "policy", "expired", "usage"] as const) await context.test(`history ${blocker} blocker retains the reply without a new Job`, async () => {
     const f = await failed(), payload = body(f);

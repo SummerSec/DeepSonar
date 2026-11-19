@@ -27,3 +27,11 @@ export async function assertContinuationBudgetOwner(db: typeof sql, jobId: strin
     WHERE j.id=${jobId} AND COALESCE(root.budget_execution_job_id,root.id)=j.id`;
   if (!owner) throw new Error("CONTINUATION_EXECUTION_SUPERSEDED");
 }
+
+/** Canvas is already locked. Lock every budget root before any member, including unrelated Jobs. */
+export async function lockCanvasContinuationBudgets(db: typeof sql, canvasId: string) {
+  await db`SELECT root.id FROM jobs root WHERE root.id IN (
+    SELECT COALESCE(budget_owner_job_id,id) FROM jobs WHERE canvas_id=${canvasId})
+    ORDER BY root.id FOR UPDATE`;
+  await db`SELECT id FROM jobs WHERE canvas_id=${canvasId} ORDER BY id FOR UPDATE`;
+}

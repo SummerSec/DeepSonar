@@ -53,7 +53,7 @@ export async function createHistoricalContinuation(sourceId: string, input: z.in
     const snapshot = source.agent_snapshot_json as Record<string, unknown>;
     // These assignments have their own immutable Job owner and settlement protocol.
     // Reusing their payload under another identity would replay or misattribute downstream work.
-    if (["hub_reason", "verify", "report"].includes(String(source.type)) || payload.verification_followup
+    if (["hub_reason", "verify", "verify_finding", "report"].includes(String(source.type)) || payload.verification_followup
       || payload.hub_followup || payload.goal_review || snapshot.task_goal_review || snapshot.knowledge_assignment)
       return deny("CONTINUATION_ASSIGNMENT_OWNER_UNSUPPORTED");
     const attempts = await db`SELECT * FROM job_attempts WHERE job_id=${sourceId} ORDER BY attempt_no FOR UPDATE`;

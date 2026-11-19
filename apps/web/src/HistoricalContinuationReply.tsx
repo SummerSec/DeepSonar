@@ -10,6 +10,7 @@ export function HistoricalContinuationReply({ jobId, continuation }: {
   const [saved, setSaved] = useState(Boolean(continuation.reply_message_id));
   const [error, setError] = useState<string | null>(null);
   const [target, setTarget] = useState<string | null>(null);
+  const [uncertain, setUncertain] = useState(false);
   const submission = useRef<Parameters<typeof api.createHistoricalContinuation>[1] | null>(null);
   const sending = useRef(false);
 
@@ -30,8 +31,13 @@ export function HistoricalContinuationReply({ jobId, continuation }: {
       setSaved(true);
       setTarget(result.job_id);
     } catch (cause) {
-      if (cause instanceof ApiRequestError
-        && (cause.taskContractFeedback as Record<string, unknown>).reply_state === "reply_saved") setSaved(true);
+      const replyState = cause instanceof ApiRequestError
+        ? (cause.taskContractFeedback as Record<string, unknown>).reply_state : null;
+      if (replyState === "reply_saved") setSaved(true);
+      else if (replyState === "reply_not_saved" || (cause instanceof ApiRequestError && cause.status === 400)) {
+        submission.current = null;
+        setUncertain(false);
+      } else setUncertain(true);
       setError(cause instanceof Error ? cause.message : "续做结果尚未确认，请重试查询。");
     } finally {
       sending.current = false;
@@ -40,12 +46,12 @@ export function HistoricalContinuationReply({ jobId, continuation }: {
   }
 
   return <div className="mt-3 text-[12px] leading-5 text-zinc-400">
-    <p>平台会核对保存的进度、当前权限和原剩余额度，并创建新的运行继续处理。新运行也占用任务名额。</p>
+    <p>平台会核对保存的进度、当前权限和原剩余额度，并创建新的运行继续处理。属于 Plan 的续做会占用一个剩余任务名额。</p>
     {target ? <p role="status">续做已排队。<a className="human-message-inline-action" href={`/jobs?job=${encodeURIComponent(target)}`}>查看续做运行</a></p>
       : <form onSubmit={submit}>
         {saved ? <p role="status">回复已保存，可重试核验续做条件。</p>
           : <label className="mt-3 block">回复历史人工请求
-            <textarea value={body} maxLength={8000} disabled={busy || Boolean(submission.current)}
+            <textarea value={body} maxLength={8000} disabled={busy || uncertain}
               onChange={event => setBody(event.target.value)}
               className="mt-1 block min-h-24 w-full rounded-lg bg-zinc-950 p-3 text-zinc-200 ring-1 ring-zinc-700"
               placeholder="说明核对结果或配置引用，请勿粘贴密钥。" />
@@ -56,5 +62,6 @@ export function HistoricalContinuationReply({ jobId, continuation }: {
         </button>
       </form>}
     {error && <p role="alert">{error}</p>}
+    {uncertain && !saved && <p role="status">回复保存结果尚未确认，请用原内容重试。</p>}
   </div>;
 }
