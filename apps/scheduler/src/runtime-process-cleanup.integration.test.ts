@@ -14,10 +14,12 @@ test("#1143 host observation → terminal finally → exact destroy → HTTP evi
   process.env.DEEPSONAR_AUTH_REQUIRED = "true"; process.env.DEEPSONAR_MASTER_KEY = "34".repeat(32);
   const [{ default: Fastify }, { default: websocket }, { sql, migrate }, { registerRoutes }, attempts,
     { recordRuntimeProcessEvidence }, { cleanupDispatcherSandbox }, { destroyObservedRuntime, reconcileObservedRuntimeCleanup },
-    { generateToken }, { releaseOrphanSandboxLeases }] = await Promise.all([
+    { generateToken }, { releaseOrphanSandboxLeases }, { resolveAgentSnapshotForJob },
+    { freezeAgentSnapshotNetworkPolicy }, { freezeJobRuntimeConfiguration }] = await Promise.all([
     import("fastify"), import("@fastify/websocket"), import("./db.js"), import("./routes.js"), import("./domains/job-attempt/index.js"),
     import("./runtime-process-evidence.js"), import("./dispatcher-human-wait.js"), import("./runtime-process-cleanup.js"),
-    import("./auth.js"), import("./domains/worker-nodes/registry.js"),
+    import("./auth.js"), import("./domains/worker-nodes/registry.js"), import("./core.js"),
+    import("./domains/role-runtime-snapshot/index.js"), import("./job-runtime-freeze.js"),
   ]);
   const app = Fastify({ logger: false });
   try {
@@ -36,7 +38,12 @@ test("#1143 host observation → terminal finally → exact destroy → HTTP evi
     const fixture = async (independent = false) => {
       const jobId = randomUUID(), canvasId = randomUUID(), sandboxId = `controlled-${randomUUID()}`;
       await sql`INSERT INTO canvases(id,project_id,title) VALUES(${canvasId},${projectId},'controlled')`;
-      await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,sandbox_id) VALUES(${jobId},${projectId},${canvasId},'audit','running',${sandboxId})`;
+      const resolved = await freezeAgentSnapshotNetworkPolicy(sql, canvasId,
+        await resolveAgentSnapshotForJob(sql, projectId, "audit"));
+      const { snapshotWithKnobs: snapshot } = await freezeJobRuntimeConfiguration(sql,
+        { projectId, type: "audit", timeoutSec: 3600 }, resolved);
+      await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,sandbox_id,agent_snapshot_json,started_at,timeout_sec,lease_expires_at)
+        VALUES(${jobId},${projectId},${canvasId},'audit','running',${sandboxId},${sql.json(snapshot as never)},now(),3600,now()+interval '1 hour')`;
       const attempt = await attempts.createAttempt(sql, jobId);
       const attemptId = String(attempt.id);
       await attempts.updateAttemptResource(sql, attemptId, { sandboxId, phase: "provisioned" });
