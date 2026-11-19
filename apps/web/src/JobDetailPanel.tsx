@@ -19,6 +19,7 @@ import { extractDispatchPrompt } from "./job-dispatch-prompt";
 import { RepairFeedbackPanel } from "./task-workbench/RepairFeedbackPanel";
 import { TaskActionCard } from "./task-workbench/TaskActionCard";
 import { projectJobActions } from "./task-workbench/task-actions";
+import { canAccessAnyScope } from "./permissions";
 import { SeverityBadge, StatusBadge, formatTime } from "./ui";
 
 /**
@@ -233,11 +234,11 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
     setEventTypeFilter([]);
     setEventQuery("");
     setExpandedMessageIds([]);
+    setTerminalAllowed(false);
     api.credentials().then((list) => alive && setCredentials(list)).catch(() => {});
     api.authMe().then((me) => {
       if (!alive) return;
-      const scopes = me.actor?.scopes ?? [];
-      setTerminalAllowed(scopes.includes("admin") || scopes.includes("jobs:control"));
+      setTerminalAllowed(canAccessAnyScope(me, ["jobs:control"]));
     }).catch(() => alive && setTerminalAllowed(false));
 
     const loadCore = () =>
@@ -359,7 +360,8 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
       effects: detail.effects,
     })
     : { actions: [], repair: null };
-  const allowJobRetry = detail?.job.execution_state?.authority === "scheduler"
+  const allowJobRetry = terminalAllowed && detail?.job.execution_state?.authority === "scheduler"
+    && detail.job.execution_state.status === detail.job.status
     && detail.job.execution_state.allowed_actions.includes("request_recovery") === true;
   const archivedBlocks = useMemo(() => recordsToStreamBlocks(stream), [stream]);
 
@@ -449,7 +451,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
     }
   };
   const rerun = async (mode: "resume" | "current") => {
-    if (!detail || !RESUMABLE.has(detail.job.status) || forceBusy) return;
+    if (!detail || !RESUMABLE.has(detail.job.status) || !allowJobRetry || forceBusy) return;
     setForceMsg(null);
     await rerunAction.run({ jobId, projectId: detail.job.project_id ?? null, mode, onSuccess: async (isCurrent) => {
       const next = await api.job(jobId);
@@ -457,11 +459,11 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
     } });
   };
   const resumable = Boolean(detail && RESUMABLE.has(detail.job.status));
-  const repairRecoveryActions = resumable && jobProjection.repair?.category === "unknown_external_effect"
+  const repairRecoveryActions = resumable && allowJobRetry
     ? [
       {
         id: "resume",
-        label: rerunBusy === "resume" ? "入队中…" : "确认后 · 旧快照重跑",
+        label: rerunBusy === "resume" ? "入队中…" : "使用原配置重新执行",
         title: "确认未决效果后，使用该 Job 创建时的旧冻结快照；身份漂移时拒绝",
         busy: rerunBusy !== null,
         disabled: rerunBusy !== null,
@@ -469,7 +471,7 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
       },
       {
         id: "current",
-        label: rerunBusy === "current" ? "入队中…" : "确认后 · 当前配置重跑",
+        label: rerunBusy === "current" ? "入队中…" : "使用当前配置重新执行",
         title: "确认未决效果后，按当前 RoleConfig、凭据和运行镜像重冻快照",
         busy: rerunBusy !== null,
         disabled: rerunBusy !== null,
@@ -722,7 +724,10 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
           {/* 非「结果」页：顶栏展示一次 Job 终态错误；结果页内已有带标题的错误卡片，避免双份 */}
           {detail && (jobProjection.actions.length > 0 || jobProjection.repair) && tab !== "result" && (
             <div className="m-4 space-y-2">
-              {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
+              {jobProjection.actions.length > 0 && <details>
+                <summary className="cursor-pointer py-2 text-[12px] text-zinc-400">执行状态详情（维护者）</summary>
+                {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
+              </details>}
               {jobProjection.repair && (
                 <RepairFeedbackPanel feedback={jobProjection.repair} recoveryActions={repairRecoveryActions} />
               )}
@@ -734,7 +739,10 @@ export function JobDetailPanel({ jobId, onClose, messages = [], onSendMessage }:
             <div className="min-h-full min-w-0 space-y-4 p-4">
               {(jobProjection.actions.length > 0 || jobProjection.repair || detail.job.error) && (
                 <div className="space-y-2">
-                  {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
+                  {jobProjection.actions.length > 0 && <details>
+                    <summary className="cursor-pointer py-2 text-[12px] text-zinc-400">执行状态详情（维护者）</summary>
+                    {jobProjection.actions.map((action) => <TaskActionCard key={action.id} action={action} />)}
+                  </details>}
                   {jobProjection.repair
                     ? <RepairFeedbackPanel feedback={jobProjection.repair} recoveryActions={repairRecoveryActions} />
                     : detail.job.error && (
