@@ -1,7 +1,7 @@
 # 09 接口与协议边界
 
 > 状态：**as-built**（#741）。说明 Management、Control、Gateway、流和导入接口的认证、幂等、错误和修复反馈边界；字段细节以 OpenAPI 与 shared schema 为准。
-> 同步日期：2026-11-12
+> 同步日期：2026-11-19
 
 完整 HTTP 路由和字段只在 [`openapi.ts`](../../apps/scheduler/src/openapi.ts) 及其 shared Zod schema 中维护；路由面和 OpenAPI 一致性由 [`route-surface.test.ts`](../../apps/scheduler/src/route-surface.test.ts) 与 [`openapi.test.ts`](../../apps/scheduler/src/openapi.test.ts) 覆盖。本文解释协议语义，不复制全部请求字段。
 
@@ -60,6 +60,12 @@ Management API 面向用户、Web 和受信任自动化，包含项目/任务、
 行为入口是 `pnpm ci:integration:credential-delete`：包括实际 HTTP 两项目负例与 PostgreSQL 双会话 delete-first/write-first 屏障，覆盖仅白名单、仅缺省、同时引用及 OCI 导入与删除的两种交错。测试接线不代表最终 SHA Actions 已通过。注意力成本：在删除前显示阻塞与既有修复位置，不增加编辑器、设置或自动修复决策；不以减少打扰扩大授权。
 
 管理认证入口有明确的健康、schema、bootstrap、Worker 注册和 WS ticket 例外；`/gateway` 与 `/control/v1/jobs` 使用独立的 Job-scoped 凭据。认证失败和授权拒绝会审计但不记录 token、Provider 原文或内部堆栈。旧配置不通过转换继续运行，不能用另一个认证面绕过当前契约。
+
+### 凭据容量与健康反馈（#1078）
+
+readiness 与严格 resolver 对全满候选返回稳定 `provider_credential_all_at_capacity`，RepairFeedback 为 `transient_retryable`，下一步 `wait_for_provider_capacity`，预检展示 `CREDENTIAL_AT_CAPACITY` 警告。临时健康排除后全部不可用或冻结账号不健康返回 `provider_credential_health_unavailable`，预检展示 `CREDENTIAL_HEALTH_UNAVAILABLE`，下一步检查连接。显式授权引用失效仍整次返回 stale 错误。Job 创建内部允许保存容量等待决定并保持 pending，领取按固定间隔重读，没有新增最大排队时长或取消策略。
+
+新快照可选 `credential_selection` 保存版本、观测时刻、选择理由及候选三层容量，`capacity_wait` 是选择理由枚举，仅在创建时容量阻挡时出现；没有同名无条件字段、等待 deadline 或执行 timeout 预算。字段语义、健康探测 unknown 的例外及跨 Provider 未交付边界统一见[运行时视图](06-runtime-view.md#凭据与-cli-解析757)。历史快照保持冻结。
 
 ### 项目默认 Provider 账号选择（#914）
 

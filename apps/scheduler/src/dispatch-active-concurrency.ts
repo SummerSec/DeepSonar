@@ -79,7 +79,7 @@ export function accumulateDispatchCounts(
  */
 export async function queryActiveDispatchRows(
   query: typeof sql,
-  opts: { projectId?: string | null } = {},
+  opts: { projectId?: string | null; excludeJobId?: string | null } = {},
 ): Promise<ActiveDispatchRow[]> {
   const projectId = opts.projectId ?? null;
   return query`
@@ -93,6 +93,7 @@ export async function queryActiveDispatchRows(
     FROM jobs
     WHERE status IN ('claimed','provisioning','running')
       AND (${projectId}::uuid IS NULL OR project_id = ${projectId})
+      AND id IS DISTINCT FROM ${opts.excludeJobId ?? null}::uuid
     GROUP BY status, project_id,
              agent_snapshot_json->>'agent_cli',
              agent_snapshot_json->>'credential_id',

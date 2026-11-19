@@ -258,6 +258,53 @@ if (!testDatabaseUrl) {
         assert.equal((await snapshot({ existingCredentialId: frozenPeer })).credential_id, frozenPeer,
           "freeing the global default keeps the still-authorized frozen peer");
       });
+      await t.test("#1078 health, model/Provider capacity and frozen audit use real SQL", async () => {
+        await sql`UPDATE credentials SET health_status='error',health_error_category='network' WHERE id=${defaultFull}`;
+        const healthy = await snapshot();
+        assert.equal(healthy.credential_id, frozenPeer);
+        assert.equal(healthy.credential_selection?.candidates.find(row => row.credential_id === defaultFull)?.skipped, "health_error");
+        await sql`UPDATE credentials SET health_status='ok', public_metadata_json=${sql.json({ model_concurrency: { "claude-sonnet-4": 1 } })}
+          WHERE id=${defaultFull}`;
+        const activeId = randomUUID();
+        await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
+          VALUES(${activeId},${projectId},${canvasId},'audit','running',
+            ${sql.json({ credential_id: defaultFull, credential_provider: "anthropic", model: "sonnet", upstream_model: "claude-sonnet-4" })})`;
+        const modelSelected = await snapshot();
+        assert.equal(modelSelected.credential_id, frozenPeer);
+        assert.deepEqual(modelSelected.credential_selection?.candidates.find(row => row.credential_id === defaultFull)?.capacity?.blocked_by, ["model"]);
+        const [beforeRules] = await sql`SELECT rules_json FROM global_settings WHERE id='global'`;
+        try {
+          await sql`UPDATE global_settings SET rules_json=${sql.json({ ...beforeRules.rules_json, maxConcurrentByProvider: { anthropic: 1 } })} WHERE id='global'`;
+          const waiting = await snapshot();
+          assert.equal(waiting.credential_selection?.error_code, "provider_credential_all_at_capacity");
+          const { createJob } = await import("./core.js");
+          const queued = (await createJob({ projectId, canvasId, type: "audit" })).job!;
+          assert.equal(queued.status, "pending", "capacity does not drop the Job");
+          const decision = structuredClone(queued.agent_snapshot_json.credential_selection);
+          assert.equal(decision.error_code, "provider_credential_all_at_capacity");
+          assert.equal(JSON.stringify(decision).includes("757-fake-test-secret"), false);
+          await sql`UPDATE jobs SET status='succeeded' WHERE id=${activeId}`;
+          const [stored] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${queued.id}`;
+          assert.deepEqual(stored.agent_snapshot_json.credential_selection, decision, "release never rewrites the frozen decision");
+        } finally {
+          await sql`UPDATE global_settings SET rules_json=${sql.json(beforeRules.rules_json)} WHERE id='global'`;
+          await sql`UPDATE jobs SET status='succeeded' WHERE id=${activeId}`;
+        }
+      });
+      await t.test("#1078 fallback model capacity matches the final frozen upstream model", async () => {
+        const fallbackSettings = { env: { ANTHROPIC_MODEL: "primary", ANTHROPIC_DEFAULT_SONNET_MODEL: "fallback" } };
+        await sql`UPDATE credentials SET settings_config_json=${sql.json(fallbackSettings)},
+          public_metadata_json=${sql.json({ model_concurrency: { fallback: 0 } })} WHERE id=${defaultFull}`;
+        await sql`UPDATE credentials SET settings_config_json=${sql.json(fallbackSettings)}, public_metadata_json='{}'::jsonb
+          WHERE id=${frozenPeer}`;
+        await setConfig({ enabled_credential_ids: [defaultFull, frozenPeer], default_agent_cli: "claude-code",
+          default_credential_id: defaultFull, fallback_model_refs: ["fallback"] });
+        const selected = await snapshot();
+        assert.equal(selected.credential_id, frozenPeer);
+        assert.equal(selected.upstream_model, "fallback");
+        assert.equal(selected.credential_selection?.candidates.find(row => row.credential_id === defaultFull)?.capacity?.model.id, "fallback");
+        assert.deepEqual(selected.credential_selection?.candidates.find(row => row.credential_id === defaultFull)?.capacity?.blocked_by, ["model"]);
+      });
       await sql`UPDATE credentials SET status='disabled' WHERE id IN (${defaultFull}, ${frozenPeer})`;
       const { HubIntentPayload } = await import("@deepsonar/shared-types");
       const intent = { from: [], role: "audit", description: "Inspect the test fixture", prompt: "Inspect this isolated test fixture and record structured evidence." };

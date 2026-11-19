@@ -21,6 +21,7 @@ export type RoleRuntimeSnapshotTransaction = ((strings: TemplateStringsArray, ..
 };
 
 export interface RoleRuntimeSnapshotResult {
+  credential_selection?: import("../provider-adapter/resolve-credential.js").CredentialSelection;
   task_contract?: import("@deepsonar/shared-types").TaskContract;
   name: string;
   role_kind: "role" | "hub" | "system";

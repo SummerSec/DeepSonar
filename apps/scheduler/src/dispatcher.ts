@@ -162,7 +162,7 @@ import {
   assertChromeRuntimeEgressAllowed,
   requireFrozenSnapshotAllowEgress,
 } from "./domains/role-runtime-snapshot/index.js";
-import { bindScheduleWake, unbindScheduleWake, refreshScheduleWakeFromDb, noteClaimContentionWake } from "./schedule-wake.js";
+import { bindScheduleWake, unbindScheduleWake, refreshScheduleWakeFromDb, noteClaimContentionWake, noteCredentialCapacityWake } from "./schedule-wake.js";
 import { canvasScheduleBlocksDispatch } from "./task-schedule.js";
 import { canvasExecutionIsPaused } from "./task-execution-control.js";
 import { readPlatformClaimsControl } from "./domains/platform-claims/store.js";
@@ -795,7 +795,10 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       if (canvasScheduleBlocksDispatch(job.canvas_target_json)) return skip("canvas_schedule");
       // SAFETY: postgres.js transaction handle exposes the same tagged-template interface as sql.
       if (await graphEligibilityReasonFromDb(tx as unknown as typeof sql, job, graphBatch)) return skip("graph_ineligible");
+      if (job.canvas_id && !await canClaimQueuedTask(/* SAFETY: same postgres.js transaction handle. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id), job.type === "report" && parseDispatchPayload(job.payload_json).kind === "finding_report")) return skip("project_task_queue");
       const dispatchSkip = dispatchSkipReason(job, counts, rules, projectJobLimitForCandidate(job, rules.maxJobsPerProject));
+      if (["provider", "credential", "model"].includes(dispatchSkip ?? "")
+        && (job.agent_snapshot_json as AgentRuntimeSnapshot | undefined)?.credential_selection) noteCredentialCapacityWake();
       return dispatchSkip ? skip(dispatchSkip) : true;
     };
     // 只冻结本页的身份提示；资格判定在排好序的画布/项目锁与 Job SKIP LOCKED 复读之后以权威结果为准。
@@ -836,7 +839,6 @@ export async function claimPendingJobs(): Promise<{ id: string; probe: CreateCir
       // Re-check scope, pause/schedule, graph and quotas from locked rows before CAS.
       if (claimed.length >= slots) break;
       if (!(await eligible(job, graphBatch))) continue;
-      if (job.canvas_id && !await canClaimQueuedTask(/* SAFETY: postgres.js tx handle exposes the same tagged-template interface as sql. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id), job.type === "report" && parseDispatchPayload(job.payload_json).kind === "finding_report")) continue;
       const row = await lifecycle.claimPendingJob(job.id);
       if (!row) continue;
       if (job.canvas_id && !(job.type === "report" && parseDispatchPayload(job.payload_json).kind === "finding_report")) await markQueuedTaskClaimed(/* SAFETY: same postgres.js tx handle; the store only uses the tagged template interface. */ tx as unknown as typeof sql, String(job.project_id), String(job.canvas_id));

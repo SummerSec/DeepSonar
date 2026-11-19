@@ -9,16 +9,22 @@ import { parseProjectAgentAllowlist } from "../project-agent-allowlist/policy.js
 const CRED_A = "11111111-1111-4111-8111-111111111111";
 const CRED_B = "22222222-2222-4222-8222-222222222222";
 
-function dbWith(rows: Array<Record<string, unknown>>, loads: Array<Record<string, unknown>> = []) {
+function dbWith(rows: Array<Record<string, unknown>>, loads: Array<Record<string, unknown>> = [], rules: Record<string, unknown> = {}) {
   const query = async (strings: TemplateStringsArray) => {
     const sql = strings.join("?");
+    if (sql.includes("FROM global_settings")) return [{ rules_json: rules }];
     if (sql.includes("FROM credentials")) {
       return rows.filter((row) => {
         if (sql.includes("status = 'active'") && row.status !== "active") return false;
         return true;
       });
     }
-    if (sql.includes("FROM jobs")) return loads.map((load) => ({ assigned_jobs: load.active_jobs, ...load }));
+    if (sql.includes("COUNT(*)::int AS count")) return loads.map(load => ({
+      status: "running", project_id: "project-1", credential_provider: "anthropic", agent_cli: "claude-code",
+      model: "claude-sonnet-4", count: load.active_jobs, ...load,
+    }));
+    if (sql.includes("FROM jobs")) return loads.filter(load => load.total_jobs !== 0)
+      .map((load) => ({ assigned_jobs: load.active_jobs, ...load }));
     return [];
   };
   return Object.assign(query, { json: (value: unknown) => value });
@@ -101,7 +107,7 @@ test("#1002 resolve: an existing authorized Job identity does not rotate with lo
     [{ credential_id: CRED_A, active_jobs: 20, total_jobs: 20 }]) as never, projectId: "project-1", agentCli: "claude-code",
     allowlist: allowlist({ default_credential_id: null }), provider: "anthropic", existingCredentialId: CRED_A });
   assert.equal(result?.id, CRED_A);
-  // #1078/#1096：显式缺省只在恢复身份自身满额（或不在池内）时生效；恢复身份有余量时保持，
+  // #1078/#1096：合法恢复身份始终保持，满额时等待原账号，
   // 不再把缺省变化当成切换凭据的授权。
   const overridden = await resolveProviderCredentialForJob({ db: dbWith([baseRow(CRED_A), baseRow(CRED_B)]) as never,
     projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_B }), existingCredentialId: CRED_A });
@@ -109,8 +115,10 @@ test("#1002 resolve: an existing authorized Job identity does not rotate with lo
   const frozenFull = { ...baseRow(CRED_A), public_metadata_json: { max_concurrent: 2 } };
   const fallbackToDefault = await resolveProviderCredentialForJob({ db: dbWith([frozenFull, baseRow(CRED_B)],
     [{ credential_id: CRED_A, active_jobs: 2, total_jobs: 2 }]) as never,
-    projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_B }), existingCredentialId: CRED_A });
-  assert.equal(fallbackToDefault?.id, CRED_B, "an explicit default applies once the frozen identity is full");
+    projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_B }), existingCredentialId: CRED_A,
+    allowCapacityWait: true });
+  assert.equal(fallbackToDefault?.id, CRED_A, "a full frozen identity waits without switching accounts");
+  assert.equal(fallbackToDefault?.selection?.reason, "capacity_wait");
 });
 
 test("#1002 resolve: heterogeneous model defaults and unconfigured pools retain ambiguity refusal", async () => {
@@ -523,16 +531,17 @@ test("#1078 resolve: default with headroom, all-full and ratio ordering contract
     provider: "anthropic",
   });
   assert.equal(headroom?.id, CRED_A, "a default with remaining capacity keeps the frozen identity");
-  // 两个候选都满额 → 保持既有行为，无新增失败码。
+  // 创建路径显式允许等待，全满仍冻结默认身份，同时记录稳定容量错误。
   const crowded = { ...peer, public_metadata_json: { max_concurrent: 2 } };
   const full = await resolveProviderCredentialForJob({
     db: dbWith([defaultRow, crowded], [
       { credential_id: CRED_A, active_jobs: 3, total_jobs: 3 },
       { credential_id: CRED_B, active_jobs: 2, total_jobs: 2 },
     ]) as never, projectId: "project-1", agentCli: "claude-code",
-    allowlist: allowlist({ default_credential_id: CRED_A }), provider: "anthropic",
+    allowlist: allowlist({ default_credential_id: CRED_A }), provider: "anthropic", allowCapacityWait: true,
   });
-  assert.equal(full?.id, CRED_A, "an all-full pool keeps the existing default preference without a new error");
+  assert.equal(full?.id, CRED_A);
+  assert.equal(full?.selection?.error_code, "provider_credential_all_at_capacity");
   // 余量比例：pair(1/2=0.5) vs peer(2/5=0.4) —— 缺省已满，peer 比例更高者胜。
   const tight = { ...defaultRow, public_metadata_json: { max_concurrent: 2 } };
   const spread = { ...peer, public_metadata_json: { max_concurrent: 5 } };
@@ -552,9 +561,10 @@ test("#1078 resolve: recovery identity does not bypass capacity limits", async (
   const recovered = await resolveProviderCredentialForJob({
     db: dbWith([full, roomy], [{ credential_id: CRED_A, active_jobs: 2, total_jobs: 2 }]) as never,
     projectId: "project-1", agentCli: "claude-code", allowlist: allowlist({ default_credential_id: CRED_A }),
-    provider: "anthropic", existingCredentialId: CRED_A,
+    provider: "anthropic", existingCredentialId: CRED_A, allowCapacityWait: true,
   });
-  assert.equal(recovered?.id, CRED_B, "an existing identity at its own limit does not rotate back inside it");
+  assert.equal(recovered?.id, CRED_A, "recovery preserves the full frozen identity for claim to recheck");
+  assert.equal(recovered?.selection?.reason, "capacity_wait");
 });
 
 test("#1078 P1 评审：仍有余量的恢复身份不因负载比例被替换", async () => {
@@ -589,4 +599,94 @@ test("#1078 resolve: a managed zero limit yields even with no running Jobs", asy
     allowlist: allowlist({ default_credential_id: CRED_A }),
   });
   assert.equal(result?.id, CRED_B);
+});
+
+
+test("#1078 temporary health failure is excluded after stale authorization validation", async () => {
+  const failed = { ...baseRow(CRED_A), health_status: "error" };
+  const chosen = await resolveProviderCredentialForJob({ db: dbWith([failed, baseRow(CRED_B)]) as never,
+    projectId: "project-1", allowlist: allowlist({ default_credential_id: CRED_A }) });
+  assert.equal(chosen?.id, CRED_B);
+  assert.equal(chosen?.selection?.candidates.find(row => row.credential_id === CRED_A)?.skipped, "health_error");
+  await assert.rejects(() => resolveProviderCredentialForJob({ db: dbWith([failed]) as never,
+    projectId: "project-1", allowlist: allowlist({ enabled_credential_ids: [CRED_A] }) }),
+  error => error instanceof ProviderCredentialResolveError && error.code === "provider_credential_health_unavailable"
+    && error.repair.category === "transient_retryable");
+  await assert.rejects(() => resolveProviderCredentialForJob({ db: dbWith([failed, { ...baseRow(CRED_B), status: "disabled" }]) as never,
+    projectId: "project-1", allowlist: allowlist({}) }),
+  error => error instanceof ProviderCredentialResolveError && error.code === "provider_credential_allowlist_stale");
+});
+
+test("#1078 single full credential returns stable capacity feedback or an explicit waiting decision", async () => {
+  const db = dbWith([{ ...baseRow(CRED_A), public_metadata_json: { max_concurrent: 0 } }]) as never;
+  const input = { db, projectId: "project-1", allowlist: allowlist({ enabled_credential_ids: [CRED_A] }) };
+  await assert.rejects(() => resolveProviderCredentialForJob(input), error => error instanceof ProviderCredentialResolveError
+    && error.code === "provider_credential_all_at_capacity" && error.repair.category === "transient_retryable"
+    && error.repair.next_action === "wait_for_provider_capacity");
+  const waiting = await resolveProviderCredentialForJob({ ...input, allowCapacityWait: true });
+  assert.equal(waiting?.selection?.reason, "capacity_wait");
+  assert.equal(waiting?.selection?.error_code, "provider_credential_all_at_capacity");
+  assert.deepEqual(waiting?.selection?.candidates[0]?.capacity?.blocked_by, ["credential"]);
+});
+
+test("#1078 model quota excludes a roomy credential whose selected upstream model is full", async () => {
+  const fullModel = { ...baseRow(CRED_A), public_metadata_json: { max_concurrent: 10, model_concurrency: { "claude-sonnet-4": 1 } } };
+  const chosen = await resolveProviderCredentialForJob({
+    db: dbWith([fullModel, baseRow(CRED_B)], [{ credential_id: CRED_A, active_jobs: 1, total_jobs: 1 }]) as never,
+    projectId: "project-1", allowlist: allowlist({ default_credential_id: CRED_A }), modelRef: "claude-sonnet-4",
+  });
+  assert.equal(chosen?.id, CRED_B);
+  assert.deepEqual(chosen?.selection?.candidates.find(row => row.credential_id === CRED_A)?.capacity?.blocked_by, ["model"]);
+});
+
+
+test("#1078 Provider capacity is global across credentials and returns retryable feedback", async () => {
+  await assert.rejects(() => resolveProviderCredentialForJob({
+    db: dbWith([baseRow(CRED_A), baseRow(CRED_B)], [{ credential_id: "third-account", active_jobs: 1, total_jobs: 1 }],
+      { maxConcurrentByProvider: { anthropic: 1 } }) as never,
+    projectId: "project-1", allowlist: allowlist({ default_credential_id: CRED_A }),
+  }), error => error instanceof ProviderCredentialResolveError && error.code === "provider_credential_all_at_capacity");
+});
+
+
+test("#1078 unknown health and catalog-only probe failure remain eligible", async () => {
+  for (const health of [{ health_status: "unknown" }, { health_status: "error", health_error_category: "unknown" }]) {
+    const result = await resolveProviderCredentialForJob({ db: dbWith([{ ...baseRow(CRED_A), ...health }]) as never,
+      projectId: "project-1", allowlist: allowlist({ enabled_credential_ids: [CRED_A] }) });
+    assert.equal(result?.id, CRED_A);
+    assert.equal(result?.selection?.error_code, null);
+    assert.equal(Object.hasOwn(result!.selection!, "capacity_wait"), false);
+  }
+});
+
+test("#1078 an unhealthy frozen account cannot rotate to a healthy peer", async () => {
+  await assert.rejects(() => resolveProviderCredentialForJob({
+    db: dbWith([{ ...baseRow(CRED_A), health_status: "error", health_error_category: "network" }, baseRow(CRED_B)]) as never,
+    projectId: "project-1", allowlist: allowlist({ default_credential_id: CRED_B }), existingCredentialId: CRED_A,
+  }), error => error instanceof ProviderCredentialResolveError && error.code === "provider_credential_health_unavailable");
+});
+
+test("#1078 a single credential obeys zero model and Provider limits", async () => {
+  for (const [metadata, rules] of [
+    [{ model_concurrency: { "claude-sonnet-4": 0 } }, {}],
+    [{}, { maxConcurrentByProvider: { anthropic: 0 } }],
+  ]) {
+    await assert.rejects(() => resolveProviderCredentialForJob({
+      db: dbWith([{ ...baseRow(CRED_A), public_metadata_json: metadata }], [], rules) as never,
+      projectId: "project-1", allowlist: allowlist({ enabled_credential_ids: [CRED_A] }),
+    }), error => error instanceof ProviderCredentialResolveError && error.code === "provider_credential_all_at_capacity");
+  }
+});
+
+test("#1078 capacity normalizes Claude aliases and Pi routes to the admitted upstream model", async () => {
+  for (const row of [
+    { ...baseRow(CRED_A), settings_config_json: { env: { ANTHROPIC_MODEL: "sonnet", ANTHROPIC_DEFAULT_SONNET_MODEL: "upstream" } } },
+    { ...baseRow(CRED_A), agent_cli: "pi", settings_config_json: { providers: { deepsonar: { models: [{ id: "upstream" }] } } } },
+  ]) {
+    await assert.rejects(() => resolveProviderCredentialForJob({
+      db: dbWith([{ ...row, public_metadata_json: { model_concurrency: { upstream: 0 } } }]) as never,
+      projectId: "project-1", allowlist: allowlist({ enabled_credential_ids: [CRED_A] }),
+      modelRef: row.agent_cli === "pi" ? "deepsonar/upstream" : "sonnet",
+    }), error => error instanceof ProviderCredentialResolveError && error.code === "provider_credential_all_at_capacity");
+  }
 });

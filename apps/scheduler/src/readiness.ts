@@ -442,6 +442,7 @@ const ROLE_CONFIG_FIX_CODES = new Set([
 const CREDENTIAL_FIX_CODES = new Set([
   "CREDENTIAL_PROVIDER_UNKNOWN",
   "CREDENTIAL_NOT_ACTIVE",
+  "CREDENTIAL_HEALTH_UNAVAILABLE",
   "CREDENTIAL_TEST_FAILED",
   "CREDENTIAL_TEST_FAILED_FAKE",
   "CREDENTIAL_TEST_EVIDENCE_STALE",
@@ -634,7 +635,9 @@ export function evaluateReadiness(input: ReadinessEvaluationInput): ReadinessRes
       : [];
     const resolution = input.credentialResolutions?.find((item) => item.roleId === role.role_id);
     if (resolution?.error) {
-      checks.push({ ...fail(resolution.code, resolution.error.message, roleBindingFix(input.scope), { role: summary }), repair: resolution.error.repair });
+      checks.push({ ...(resolution.code === "CREDENTIAL_AT_CAPACITY"
+        ? attention(resolution.code, resolution.error.message, null, { role: summary })
+        : fail(resolution.code, resolution.error.message, roleBindingFix(input.scope), { role: summary })), repair: resolution.error.repair });
     }
     if (bindings.length > 1) {
       checks.push(fail(
