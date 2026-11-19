@@ -1,3 +1,4 @@
+import { lockContinuationBudget } from "../job-control/continuation-budget.js";
 import { readControlReceiptByKey, planSettlementDigest, controlInputDigest } from "./control-receipt.js";
 import { payloadNulPolicy, scrubPostgresJson } from "./pg-text-safety.js";
 import { hasPrepaidCompletion } from "./completion-receipt.js";
@@ -281,6 +282,7 @@ async function appendAndApplyBundle(
       if (!canvas) throw new Error(`canvas ${hint.canvasId} does not exist`);
     }
 
+    await lockContinuationBudget(tx, jobId, false);
     const [job] = await tx<{ id: string; canvas_id: string | null; status: string }[]>`
       SELECT id, canvas_id, status FROM jobs WHERE id = ${jobId} FOR UPDATE`;
     if (!job) throw new Error(`job ${jobId} does not exist`);

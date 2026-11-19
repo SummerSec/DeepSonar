@@ -7,6 +7,8 @@ import { createPlanExecutionFixture, executionObjective } from "./plan-execution
 test("Plan v2 Control -> ingestion -> admitted Intent/Job -> fake Attempt/bytes -> graph projection", { skip: !process.env.TEST_DATABASE_URL }, async () => {
   const h = await createPlanExecutionFixture();
   try {
+    const { historicalPlanCases } = await import("./historical-plan.fixture.test.js");
+    await historicalPlanCases(h);
     const { frozenRuntimeKnobsFromSnapshot } = await import("./runtime-knobs.js");
     const { buildAgentRuntimeLaunchSpecification } = await import("@deepsonar/runtime-sandbox");
     const assertFrozenChild = async (job: Awaited<ReturnType<typeof h.children>>[number]) => {

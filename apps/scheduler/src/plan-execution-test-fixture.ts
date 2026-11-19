@@ -53,13 +53,19 @@ export async function createPlanExecutionFixture() {
     const app: FastifyInstance = Fastify({ logger: false }); await app.register(websocket); registerRoutes(app); await app.ready();
     closeApp = () => app.close();
     const runtimes = new Map<string, { token: string; attempt: string }>();
+    const admitted = new Set<string>();
     const holdPlanCommit = new Set<string>();
     const handlers = new Map<string, PlatformRuntimeHandler>();
     const operations = ["submit_plan", "submit_plan_result", "submit_hub_decision", "graph_query", "emit_fact", "mark_job_done", "request_human"];
-    const start = async (job: string) => {
-      assert.ok(await lifecycle.claimPendingJob(job), "fixture start must claim a pending Job once");
+    const start = async (job: string, normalClaim = false) => {
+      if (normalClaim) {
+        const { claimPendingJobs } = await import("./dispatcher.js");
+        if (!admitted.has(job)) for (const row of await claimPendingJobs()) admitted.add(String(row.id));
+        assert.ok(admitted.delete(job), "normal dispatcher must admit the Plan execution once");
+      } else assert.ok(await lifecycle.claimPendingJob(job), "fixture start must claim a pending Job once");
       assert.ok(await lifecycle.transitionJob(job, "provisioning"), "fixture provisioning must pass lifecycle CAS");
-      const attempt = String((await createAttempt(sql, job)).id);
+      const [claimedAttempt] = normalClaim ? await sql`SELECT id FROM job_attempts WHERE job_id=${job} AND status='active'` : [];
+      const attempt = String(claimedAttempt?.id ?? (await createAttempt(sql, job)).id);
       const grant = await api.mintJobCapabilityToken(job);
       const startedAt = new Date();
       assert.ok(await lifecycle.transitionJob(job, "running", {

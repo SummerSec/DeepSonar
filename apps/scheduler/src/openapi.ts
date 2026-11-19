@@ -1702,6 +1702,21 @@ const OPS: Op[] = [
   },
   {
     method: "post",
+    path: "/jobs/{id}/continuations",
+    summary: "保存历史失败任务回复并创建受原预算约束的新任务",
+    description: "显式管理入口先幂等保存回复，再校验合法检查点、原始账本、有效执行时钟、原修正期限、当前授权和 Plan 剩余派发名额。202 表示新 Job 已排队，409 返回稳定 blocker 且已保存回复可查询。原 failed 与历史执行身份保留。",
+    scope: "jobs:control", tags: ["Jobs"], successStatus: "202",
+    body: { type: "object", additionalProperties: false, required: ["mutation_id", "request_id", "expected_revision"],
+      oneOf: [{ required: ["reply"] }, { required: ["saved_reply_message_id"] }],
+      properties: { mutation_id: { type: "string", format: "uuid" }, request_id: { type: "string", format: "uuid" },
+        expected_revision: { type: "integer", minimum: 0 }, saved_reply_message_id: { type: "string", format: "uuid" },
+        reply: { type: "object", additionalProperties: false,
+          required: ["message_id", "body"], properties: { message_id: { type: "string", format: "uuid" },
+            body: { type: "string", minLength: 1, maxLength: 8000 }, attachment_version_ids: {
+              type: "array", maxItems: 32, items: { type: "string", format: "uuid" } } } } } },
+  },
+  {
+    method: "post",
     path: "/jobs/{id}/resume",
     summary: "使用旧冻结快照重新执行（同 Job、新 Attempt）",
     description:

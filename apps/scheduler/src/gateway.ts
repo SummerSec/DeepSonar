@@ -1,3 +1,4 @@
+import { lockContinuationBudget } from "./domains/job-control/continuation-budget.js";
 /**
  * Model Gateway（§6.3）：沙箱不持有长期 Provider Key。
  *
@@ -324,6 +325,7 @@ export async function mintJobToken(input: {
   let expectedModel: string | null = null;
   let expectedRoute: string | null = null;
 
+  await lockContinuationBudget(tx as unknown as typeof sql, input.jobId);
   // OM scope is derived from immutable Job state and the Credential row.
   // Mint arguments cannot enlarge the model, route, or workload budget.
   const [job] = await tx`
@@ -734,7 +736,7 @@ async function trySettleGatewayUsage(
     await sql.begin(async (tx) => {
       // Serialize against admission and revocation. An already-started
       // request still owns a durable usage record after Job termination.
-      await tx`SELECT id FROM jobs WHERE id = ${input.jobId} FOR UPDATE`;
+      await lockContinuationBudget(tx as unknown as typeof sql, input.jobId, false);
       const ledgerInserted = await appendUsageLedger(tx as unknown as typeof sql, input);
       if (effectStatus === "unknown") {
         await markEffectUnknown(tx as unknown as typeof sql, input.attemptId, input.effectId, error ?? "模型请求结果无法确认");
@@ -747,6 +749,30 @@ async function trySettleGatewayUsage(
             source: input.source,
           },
         });
+        if (ledgerInserted && input.status === "settled" && input.source !== "gateway_error"
+          && input.effectId === `gateway_model_request:${input.jobTokenId}:${input.requestNo}`) {
+          // A terminal callback can fence the original in-flight request as unknown.
+          // Only this original response writer, with its newly inserted exact usage
+          // row, can close that terminal marker. Other unknown outcomes stay blocked.
+          await tx`UPDATE job_attempt_effects e SET status='settled',
+            settlement_json=jsonb_build_object('response_status',${input.status}::text,'total_tokens',${input.usage.total}::bigint,
+              'source',${input.source}::text,'reconciled_by','original_gateway_response','terminal_marker',e.settlement_json),
+            evidence_ref=l.id::text,error=NULL,settled_at=clock_timestamp(),updated_at=clock_timestamp()
+            FROM job_usage_ledger l,job_attempts a,job_tokens t,jobs j
+            WHERE e.job_id=${input.jobId} AND e.attempt_id=${input.attemptId} AND e.effect_id=${input.effectId}
+              AND e.effect_kind='gateway_model_request' AND e.status='unknown'
+              AND a.id=e.attempt_id AND a.job_id=e.job_id AND a.status IN ('succeeded','failed','cancelled','timeout','orphan')
+              AND j.id=e.job_id AND j.status=a.status
+              AND e.settlement_json=jsonb_build_object('job_status',a.status)
+              AND t.id=${input.jobTokenId} AND t.job_id=e.job_id AND t.project_id=${input.projectId}
+              AND t.workload=${input.workload} AND t.used_requests>=${input.requestNo}
+              AND e.resource_identity_json=jsonb_build_object('job_token_id',t.id::text,'request_no',${input.requestNo}::int)
+              AND e.intent_json->>'provider'=${input.provider} AND e.intent_json->>'model'=${input.model.slice(0, 200)}
+              AND e.intent_json->>'workload'=${input.workload}
+              AND l.job_id=e.job_id AND l.project_id=t.project_id AND l.attempt_id=e.attempt_id AND l.effect_id=e.effect_id
+              AND l.job_token_id=t.id AND l.request_no=${input.requestNo} AND l.workload=t.workload
+              AND l.total_tokens=${input.usage.total} AND l.settlement_status='settled' AND l.source=${input.source}`;
+        }
         if (ledgerInserted && input.usage.total > 0) {
           await tx`
             UPDATE job_tokens
@@ -775,7 +801,7 @@ async function trySettleGatewayUsage(
 async function trySettleGatewayNoExternalUsage(input: GatewayUsageLedgerInput): Promise<boolean> {
   try {
     await sql.begin(async (tx) => {
-      await tx`SELECT id FROM jobs WHERE id = ${input.jobId} FOR UPDATE`;
+      await lockContinuationBudget(tx as unknown as typeof sql, input.jobId, false);
       const [effect] = await tx`
         SELECT job_id, effect_kind, status
         FROM job_attempt_effects
@@ -1086,6 +1112,7 @@ async function admitGatewayRequest(
     onRepairBody: (remaining: number | null, budget: Awaited<ReturnType<typeof admitGatewayRepair>>) => void;
   },
 ): Promise<GatewayRequestAdmission> {
+  const { jobIds } = await lockContinuationBudget(tx, input.jobId);
   const [job] = await tx`SELECT status, project_id, agent_snapshot_json FROM jobs WHERE id=${input.jobId} FOR UPDATE`;
   if (!job || !JOB_ACTIVE.includes(String(job.status))) {
     await tx`UPDATE job_tokens SET status='revoked', revoked_at=now(), revoke_reason=${`job_${String(job?.status ?? "missing")}`} WHERE job_id=${input.jobId} AND status='active'`;
@@ -1107,7 +1134,7 @@ async function admitGatewayRequest(
            used_tokens, workload_max_tokens, status, credential_id, project_id,
            expires_at > clock_timestamp() AS unexpired
     FROM job_tokens
-    WHERE job_id=${input.jobId}
+    WHERE job_id=ANY(${jobIds}::uuid[])
     ORDER BY id
     FOR UPDATE`;
   const token = tokens.find((row) => String(row.id) === input.tokenId);
@@ -1331,6 +1358,7 @@ export function registerGateway(app: FastifyInstance): void {
             // Advisory request-generation policy, never a reservation. Admission
             // rechecks the same budget under this Job lock before any external call.
             const db = tx as unknown as typeof sql;
+            await lockContinuationBudget(db, String(jt.job_id));
             const [job] = await db`SELECT status, agent_snapshot_json FROM jobs WHERE id=${jt.job_id} FOR UPDATE`;
             if (!job || !JOB_ACTIVE.includes(String(job.status))) throw new RepairTokenBudgetError("REPAIR_JOB_INACTIVE", "Job is no longer active");
             const workload = gatewayWorkload(jt.workload);

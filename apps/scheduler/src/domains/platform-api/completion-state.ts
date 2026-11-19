@@ -1,3 +1,4 @@
+import { continuationBudgetScope } from "../job-control/continuation-budget.js";
 import { readRepairRequeueAdmission } from "../job-control/repair-admission.js";
 import { readJobHumanRequest } from "../job-control/job-human-request.js";
 import { readHumanContinuation } from "../job-control/human-continuation-store.js";
@@ -18,8 +19,9 @@ export async function readCompletionExecutionState(db: typeof sql, jobId: string
     const [attempt] = await tx`SELECT id,status,cancel_requested FROM job_attempts
       WHERE job_id=${jobId} ORDER BY attempt_no DESC LIMIT 1`;
     const budget = await readRepairTokenBudget(tx, jobId);
+    const { jobIds } = await continuationBudgetScope(tx, jobId);
     const [history] = await tx`SELECT COUNT(*)::int AS count,MAX((payload_json->>'proposal_revision')::int) AS revision
-      FROM events WHERE job_id=${jobId} AND type='control_receipt' AND payload_json->>'operation'='mark_job_done'`;
+      FROM events WHERE job_id=ANY(${jobIds}::uuid[]) AND type='control_receipt' AND payload_json->>'operation'='mark_job_done'`;
     const [accepted] = await tx`SELECT event_id,type FROM events WHERE job_id=${jobId}
       AND (type='done' OR (type='control_receipt' AND payload_json->>'operation'='mark_job_done'
         AND payload_json->>'status'='persisted_deferred') OR (type='human' AND attempt_id=${attempt?.id ?? null}))

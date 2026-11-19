@@ -43,7 +43,9 @@ runner `onEvent` 进入现有 normalized Evidence，关闭码缺失明确未知�
 
 ## 人工等待后的新执行（#1074）
 
-人工响应超时只记 overdue。CLI 退出后宿主暂停本轮新进程，有限保存工作文件；原 worker/Attempt 可信销毁并原子结算 agent_run、撤销 grants 后，Attempt interrupted，Job 保持 waiting_human，无执行槽占用。回复先持久化，再经原准入写唯一 successor；Dispatcher 重验 owner/断点/快照与实时目标授权。当前模式是恢复业务文件和有界上下文的 structured 新会话，原 Session 仅作归档证据。累计有效执行时间暂停于可信回收，不扩展原 repair deadline。完整边界见[人工续做](../HUMAN_CONTINUATION.md)和[ADR 0022](adr/0022-human-continuation.md)。
+人工响应超时只记 overdue。CLI 退出后宿主暂停本轮新进程，有限保存工作文件；原 worker/Attempt 可信销毁并原子结算 agent_run、撤销 grants 后，Attempt interrupted，Job 保持 waiting_human，无执行槽占用。回复先持久化，再经原准入写唯一 successor；Dispatcher 重验 owner/断点/快照与实时目标授权。当前模式是恢复业务文件、累计已 ACK 文字决定和有界上下文的 structured 新会话，原 Session 仅作归档证据。累计有效执行时间暂停于可信回收，不扩展原 repair deadline。完整边界见[人工续做](../HUMAN_CONTINUATION.md)和[ADR 0022](adr/0022-human-continuation.md)。
+
+业务文件清单 v2 仅恢复所有者读写及原所有者执行能力（0600/0700），上传前校验路径、上传后核验内容与权限，失败阻断启动。
 
 运行时主线由 Scheduler 编排，Hub 和 Agent 都通过有界上下文和 Job-scoped Control 操作参与。Canvas 是过程/观察真相，Artifact 是结构化内部写入真相，Evidence 是沙箱执行与原始证据真相，报告是冻结输入后的投影；不能用制造者文本互相替代。Job/Attempt 状态的完整规则见 [ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md](../ARCHITECTURE_SCHEDULER_BOUNDED_CONTEXTS.md)。
 
@@ -319,6 +321,10 @@ Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freez
 ## 项目队列领取与恢复（#1018）
 
 项目 FIFO 队列在 Dispatcher 的全局 claim 事务锁内判定执行资格，实际 claim 后才标记当前占位。当前 Canvas 的内部 Job 可并行，下一 Canvas 等待治理 root/report 收敛、所有活动 Job 结束与效果结清。失败/取消保留队首并暂停，恢复必须确认当前失败项 ID；手动暂停只挡后续任务。Scheduler 按有界公平轮转对账，重启读取持久记录，硬重试在同一 claim 事务中以新条目 ID 排尾，保留暂停且废止旧失败项确认。Finding 报告再生成不创建任务新代际；终态 membership 保持不变，原报告权限和资源门不变。详见[队列专题](../PROJECT_TASK_QUEUE.md)。
+
+## 历史 failed 新 Job 与预算归属
+
+#1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。
 
 ## 人工等待显式释放 FIFO 席位（#1074）
 

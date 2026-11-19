@@ -172,6 +172,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /jobs/:id/recovery-diagnostics": "admin",
   "GET /jobs/waiting-classification": "admin",
   "POST /canvases/:id/jobs/cancel-active": "jobs:control",
+  "POST /jobs/:id/continuations": "jobs:control",
   "POST /jobs/:id/resume": "jobs:control",
   "POST /jobs/:id/rerun-current": "jobs:control",
   "GET /findings": "findings:read",

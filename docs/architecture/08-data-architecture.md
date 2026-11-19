@@ -5,6 +5,8 @@
 
 ## 人工等待断点与累计时钟（#1074）
 
+原生会话受限导入的精确绑定与能力结果保存在原 job_attempts.state_json.human_session，过滤内容保存于同 request 的 checkpoint CAS，复用原过期删除。无 schema 变更，字段契约见[人工续做](../HUMAN_CONTINUATION.md)。
+
 schema 74 仅新增列表索引 `jobs_project_created_idx (project_id, created_at DESC, id DESC)`，服务不带 `status` 的 Job 列表（#1136）。schema 73 新增 human_requests（原 human 事件/Attempt、revision、断点 manifest、退出/回收、回复与唯一 successor）和 job_execution_clocks（冻结时间预算、累计 active 毫秒和精确 owner）。human_messages 用请求与版本关联回复；accepted 事件、回复已保存、注入、ACK、完成分别记账。文件使用现有 BLOB_DIR 下有界 CAS，30 天到期先持久阻断再删除；不可见/缺失/hash 不符不视为空文件。请求表是管理当前状态，不覆盖历史事件。见[人工续做](../HUMAN_CONTINUATION.md)。
 
 mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件、Job 锁、Attempt 关联与原 key/digest；不新建平行效果账本或修改 schema。回执与最终 done 分别派生 Job/key 范围内的不同事件身份，持久接受不代表结算，详见 [#776 B](../REPAIR_FEEDBACK_DONE_REPAIR.md)。
@@ -25,7 +27,8 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 ## Schema 基线纪律
 
-[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v75 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
+[`database/schema.sql`](../../database/schema.sql) 是唯一基线；[`schema-version.ts`](../../apps/scheduler/src/schema-version.ts) 必须与基线的版本字面量同步，当前 schema v76 是本分支的集成基线，不代表已发布版本。空库启动直接套用基线；非空库的版本或结构不匹配时 fail closed。改表必须先改基线、同步版本、执行 rebuild plan/apply 并验证备份和列交集回填，不能建立未经审计的增量 ALTER 链。稳定状态、外键、幂等键和权限骨架使用定列；开放内容使用 JSONB；状态字段保持可演进字符串而非被数据库 enum 锁死。
+
 
 
 ### 直接重建的授权保全（#1002 P2-13）
@@ -62,7 +65,8 @@ mark_job_done 修正回执复用 events 的宿主 control_receipt 语义事件�
 
 本批从已发布 v0.6.2 的基线推进一次集成基线，纳入身份 manifest、mapping、关系计算及质量协议/观察账本；最终编号与 DDL 只按 [`SCHEMA_VERSION`](../../apps/scheduler/src/schema-version.ts) 和 [`database/schema.sql`](../../database/schema.sql)核对，不为并行未发布编号建立增量迁移链。#831 合入的工程基线 `fdb55a01` 已在 [Actions CI](https://github.com/SummerSec/DeepSonar/actions/runs/41298113058) 完成真实 schema67 rebuild、PGDMP 备份/pg_restore 恢复及 Finding-quality PostgreSQL/HTTP/worker 验收；历史本地结果见[验收矩阵](../TASK_DISPATCH_ACCEPTANCE.md)，不能代替后续 SHA 的检查。
 
-保鲜门禁的单处编号核对：当前 schema v75，#1074 增加人工请求与累计时钟；历史 schema72 的 #1018 在 main `396fadab` 的基线71之上增加项目任务队列；该候选最终 SHA Actions 待验。主线已包含凭据历史保全、Canvas 引用索引、stopped Hub 准入及 Finding 候选引用的完整外键前缀索引。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替队列候选及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
+保鲜门禁的单处编号核对：当前 schema v76，#1074 增加人工请求与累计时钟；历史 schema72 的 #1018 在 main `396fadab` 的基线71之上增加项目任务队列；该候选最终 SHA Actions 待验。主线已包含凭据历史保全、Canvas 引用索引、stopped Hub 准入及 Finding 候选引用的完整外键前缀索引。此前 main `1b2a2fca1bb4c43b8c8530c503c0084392bf1619` 的核心 [Actions 42449025632](https://github.com/SummerSec/DeepSonar/actions/runs/42449025632) 成功，不能代替队列候选及最终主线提交的工程验收；本机未执行 rebuild、测试、构建或 typecheck。已验收历史工程基线 `fdb55a01b1e02b5b9078586923a8d506ce5bb096` 为 schema67；`ca7d841c` 的 schema66 重建/恢复也只代表历史切片。精确 schema68 → 当前基线的回归固定 main `5bed5018cb8064cd67973efa8713eb2d344f7fb5`，核对 plan 无写入、列交集回填和真实 PGDMP/pg_restore 备份；不自动升级非空库或改写历史用量。
+
 
 ### Canvas 节点引用索引（#1002 P1-6）
 
@@ -288,6 +292,6 @@ OM 客户端请求 UUID 保存在现有 `job_attempt_effects.intent_json.gateway
 
 schema 72 增加 project_task_queues 与 project_task_queue_items，保存项目级暂停、核查时间、单调序号、占位状态和时间戳。Canvas 复合唯一键与队列外键共同约束项目归属，active 部分唯一索引约束单占位。新任务的队列记录与首 pending Job 同事务，重排与结清追加审计。既有 Job/Attempt、效果和报告仍各自权威，冻结历史不改写。基线不匹配继续 fail closed，通过既有备份及列交集重建验证，最终 Actions 待验。
 
-## 人工等待让位持久身份（#1074）
+## 历史 failed 新 Job 与预算归属
 
-schema 75 增加 project_task_queue_yields，绑定 mutation_id、原条目、请求 revision、消费回复和返回条目。membership 增加 yielded 状态，不参与队首选择。回复保存事务只更新序号及 queued 状态，保留 created_at/started_at 的完成代际。原请求唯一约束防止重复决定，审计和状态同事务。重建仍沿唯一基线与备份流程。
+#1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。
