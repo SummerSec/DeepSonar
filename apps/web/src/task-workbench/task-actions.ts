@@ -268,7 +268,9 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
     const status = (job.status ?? "").toLowerCase();
     const current = job.execution_state?.authority === "scheduler" && job.execution_state.status === status
       ? job.execution_state : null;
-    if (current && (current.blocker || current.allowed_actions.includes("correct_proposal"))) {
+    if (current && (current.blocker || current.allowed_actions.includes("correct_proposal")
+      || current.allowed_actions.includes("reconcile_effects") || current.allowed_actions.includes("request_recovery")
+      || jobUnknownEffects(job.unknown_effects).length > 0)) {
       const terminal = TERMINAL_JOB_STATUSES.has(status);
       const unknown = current.allowed_actions.includes("reconcile_effects") || current.blocker === "effects_require_reconciliation"
         || jobUnknownEffects(job.unknown_effects).length > 0;
@@ -279,7 +281,9 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
       const correct = !terminal && !closedHuman && current.allowed_actions.includes("correct_proposal") && Boolean(job.error);
       const humanRequestExists = humanRequestJobs.has(job.id);
       if (humanRequestExists && (human || platformWait) && !unknown && !correct) continue;
-      if (current.blocker || correct) actions.push({
+      if (terminal && current.blocker === "execution_inactive" && !unknown
+        && !current.allowed_actions.includes("request_recovery")) continue;
+      if (current.blocker || correct || unknown || current.allowed_actions.includes("request_recovery")) actions.push({
         id: `job:${job.id}:current`, kind: unknown ? "unknown_effect" : human ? "human_decision" : correct ? "model_repair" : "platform_blocker",
         title: unknown ? "运行存在未决效果，需先对账" : closedHuman ? "历史人工请求已关闭，仅供查看"
           : human ? humanRequestExists ? "已接受人工请求，等待处理" : "需要读取人工请求详情" : platformWait ? "已接受平台阻塞，等待配置或授权修复" : correct ? "当前执行可修正提案" : "按宿主当前恢复状态处理",
@@ -294,6 +298,7 @@ export function projectTaskActions(input: TaskActionInput): TaskAction[] {
       });
       continue;
     }
+    if (current) continue;
     if (status === "waiting_human") {
       if (humanRequestJobs.has(job.id)) continue;
       actions.push({ id: `job:${job.id}:waiting_human`, kind: "platform_blocker",
