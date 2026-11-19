@@ -12,6 +12,7 @@ import { startReaper } from "./reaper.js";
 import { reconcileOnBoot } from "./reconcile.js";
 import { DEFAULT_EFFECT_RECONCILE_LIMIT, startEffectReconcileLoop } from "./effect-reconcile-loop.js";
 import { reconcileHumanWaitRuns } from "./dispatcher-human-wait.js";
+import { reconcileObservedRuntimeCleanup } from "./runtime-process-cleanup.js";
 import { pumpHumanContinuations } from "./domains/job-control/human-continuation-pump.js";
 import { runner } from "./runtime.js";
 import { registerRoutes } from "./routes.js";
@@ -157,6 +158,7 @@ async function main() {
     db: sql as unknown as Parameters<typeof startEffectReconcileLoop>[0]["db"],
     humanWaitReconcile: async () => {
       if (!humanWaitCleanupReady) return;
+      await reconcileObservedRuntimeCleanup(sql, runner, 4);
       const result = await reconcileHumanWaitRuns(sql, runner, DEFAULT_EFFECT_RECONCILE_LIMIT, humanWaitCleanupCursor);
       humanWaitCleanupCursor = result.nextJobId;
       await pumpHumanContinuations();

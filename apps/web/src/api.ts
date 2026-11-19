@@ -675,6 +675,7 @@ export interface HumanContinuation {
 }
 
 export interface JobDetail {
+  process_diagnostics?: import("./RuntimeProcessEvidence").RuntimeProcessEvidence[];
   job: {
     execution_state?: JobExecutionState | null;
     id: string;

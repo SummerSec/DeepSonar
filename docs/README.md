@@ -298,3 +298,5 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 #1074 的[项目队列显式人工让位](PROJECT_TASK_QUEUE.md#人工等待显式让位1074)已接 UI/API、持久决定与回复原子回队尾，默认保留席位，首片限定单一人工等待。最终 SHA Actions 另验。
 
 #1032 A1 三 CLI 凭据文件通道及未交付边界见[Gateway 专题](MODEL_GATEWAY_TRANSPARENCY.md#三-cli-私有凭据文件通道1032-a1)。当前 PR 的 Actions 尚待验收。
+
+#1143 [PTY 清理事实与精确对账](AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存 DELETE 真实结果和宿主 caller，以先撤销凭据、再受管销毁并重核原 owner 的链路收口。独立 unknown 与旧无证据 run 保留，自动整 Job 恢复未交付，最终 SHA Actions 待验。
