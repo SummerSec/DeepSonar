@@ -88,12 +88,12 @@ test("global quota DOM preserves stored drafts, validates input and saves explic
       element.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
     });
     await projectFill("");
-    await act(async () => { Array.from(container.querySelectorAll("button")).find(button => button.textContent?.includes("保存项目配额"))!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>("button.bg-acc-500")!.click(); });
     await renderProject();
     assert.deepEqual(projectWrites[0], { maxConcurrentJobs: null });
     assert.match(container.textContent!, /2 \/ 不限/);
     await projectFill("0");
-    await act(async () => { Array.from(container.querySelectorAll("button")).find(button => button.textContent?.includes("保存项目配额"))!.click(); });
+    await act(async () => { container.querySelector<HTMLButtonElement>("button.bg-acc-500")!.click(); });
     assert.deepEqual(projectWrites[1], { maxConcurrentJobs: 0 });
   } finally {
     await act(async () => root.unmount());
