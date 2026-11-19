@@ -101,6 +101,20 @@ export async function runDispatchFairnessFixture(db: typeof sql, claim: Claim, c
     await release();
     assert.deepEqual((await claim()).map(row => row.id), [blockedPrefix[0]!], "successful visit resets the scan and rechecks the high-priority prefix");
 
+    // Tail exhaustion also wraps without a successful claim. A replacement
+    // scheduler must clear the persisted scan before reconsidering the prefix.
+    await clear();
+    await rules(1);
+    const wrapPrefix = await pending(projects[0]!, 1000, 64, false);
+    assert.deepEqual(await claim(), []);
+    await db`UPDATE jobs SET agent_snapshot_json = ${db.json(snapshot)} WHERE id = ${wrapPrefix[0]!}`;
+    assert.deepEqual(await childClaim(), [], "bounded tail visit does not jump backwards mid-pass");
+    const [wrapped] = await db`SELECT dispatch_scan_job_id, dispatch_last_served::text AS served
+      FROM projects WHERE id = ${projects[0]!}`;
+    assert.equal(wrapped!.dispatch_scan_job_id, null, "exhausted tail clears the durable scan");
+    assert.equal(wrapped!.served, "0", "empty tail consumes no service turn");
+    assert.deepEqual((await claim()).map(row => row.id), [wrapPrefix[0]!], "next pass claims the newly eligible prefix after process replacement");
+
     // More projects than the visit budget. Persisted project cursor advances
     // past 32 paused projects, even when the next call is another scheduler.
     await clear();
