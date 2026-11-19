@@ -145,7 +145,7 @@ export function projectRepairFeedback(input: {
   return {
     summary: hasUnknownEffects || current?.allowed_actions.includes("reconcile_effects")
       ? "这次运行还有未核实的执行结果，需要维护者检查。"
-      : current?.allowed_actions.includes("correct_proposal") ? "当前执行可以提交修正。"
+      : input.status === "running" && current?.allowed_actions.includes("correct_proposal") ? "当前执行可以提交修正。"
       : input.status === "timeout" ? "这次运行因超时结束。"
       : input.status === "orphan" ? "这次运行失去连接，已经结束。"
       : ["failed", "cancelled", "succeeded"].includes(input.status ?? "") ? "这次运行已结束。"

@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { registerHooks } from "node:module";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { api, type JobDetail } from "./api";
 import { ConfirmDialogProvider } from "./components/ConfirmDialog";
 
 test("JobDetail recovery uses current actions and permission, with collapsed diagnostics", async context => {
+  const hooks = registerHooks({ load(url, options, nextLoad) {
+    if (url.endsWith(".css")) return { format: "module", source: "export {};", shortCircuit: true };
+    return nextLoad(url, options);
+  } });
+  context.after(() => hooks.deregister());
   const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
   const globals = { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement,
     Node: dom.window.Node, IS_REACT_ACT_ENVIRONMENT: true };

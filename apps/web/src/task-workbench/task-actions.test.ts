@@ -22,6 +22,8 @@ test("a current terminal projection suppresses guessed timeout work while preser
   job.execution_state.allowed_actions = ["inspect_state"];
   assert.equal(projectJobActions({ job, effects: [{ effect_id: "run", effect_kind: "agent_run", status: "unknown" }] })
     .actions[0]?.kind, "unknown_effect");
+  assert.equal(projectJobActions({ job: { ...job, execution_state: { ...job.execution_state, blocker: null } },
+    effects: [{ effect_id: "run", effect_kind: "agent_run", status: "unknown" }] }).actions[0]?.kind, "unknown_effect");
 });
 
 function action(partial: Partial<TaskAction> & Pick<TaskAction, "id" | "kind" | "priority">): TaskAction {
