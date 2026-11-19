@@ -16,6 +16,8 @@ Scheduler 在旧 Attempt 证据归档后、文件封存前读取该 Attempt 唯�
 
 消息正文中的图片和未知内容块返回 `unverified_session_content_block`，使用 structured 并保留原因。仅明确的 thinking/redacted_thinking 思考块可排除，不能静默丢弃未知上下文后仍声明原生导入成功。
 
+归档 JSON 解析后先在字符串叶子上按原始受管秘密的完整值替换，再做通用脱敏，防止多行秘密被首行改写后残留正文。PostgreSQL capture→load 回归覆盖未加引号的多行私钥文本。
+
 导入上限 8 MiB、20,000 行。固定 Pi 原生链接入核心 base 镜像 smoke，固定 Claude 原生链接入 Reverse Claude request-budget acceptance，均使用隔离网络与合成 Provider，检查旧 home→归档→过滤→新 home→原生恢复及旧身份不再进入请求。SQL 绑定/跨身份拒绝接入既有 platform-api 集成测试。当前实现等待最终 SHA Actions，生产续跑未执行。
 
 ### 固定格式核对与受限范围
@@ -26,6 +28,7 @@ Claude 2.1.312 Linux x64 固定 npm 包的原生二进制内含版本化源码�
 
 - `api-request-shape`、`api-request-blob`、`api-request` 保存旧请求的 system/tools/messages 重放诊断，全部排除。`atis-latch` 是旧会话请求锁存，`cost-state` 是 CLI 显示与本地成本状态，也排除。平台预算继续使用原账本。
 - `tools-used` 由 transcript writer 从 `j_().names()` 写入，读取时恢复旧 conversationToolsUsed 集合，用于工具使用清单和请求头。旧工具状态排除，新执行重新记录工具使用；工具提案与结果的历史文字仍由对应消息保留。
+- `queue-operation` 仅已核对无 content 的 enqueue/dequeue 可省略。含正文或未知操作无法证明任务提示已消费，返回 `unverified_queued_prompt` 使用 structured，保留原始归档供核查。
 - `last-prompt` 可以选择 leaf 或清空上下文。只有 leaf 与已核对线性链一致才可省略，rewound、不同 leaf 或显式清空使用 `transformed_context_requires_structured`。
 - 附件不是普通元数据。已核对的 `environment`、`model`、`deferred_tools_delta`、`agent_listing_delta`、`skill_listing`、`total_tokens_reminder`、`session_context`、`date`、`remote_session_change` 是旧执行配置、能力、额度和环境提示，随新执行重建。`prompt_snapshot` 在固定转换器中不产生消息，保存旧系统提示和工具快照，排除。
 - 文件、排队指令、已调用 Skill 和未知附件可能含任务上下文，明确返回 `unverified_context_attachment` 并使用 structured。保留附件链的 UUID 校验后重接导入文字的 parentUuid，不能无提示吞掉未知语义。

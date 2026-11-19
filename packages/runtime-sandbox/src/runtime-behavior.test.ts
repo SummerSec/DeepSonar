@@ -46,6 +46,10 @@ test("Claude pinned storage metadata and execution attachments cannot import old
   assert.equal(project([...rows,{type:"last-prompt",sessionId:id,leafUuid:"user",rewound:true}]).reason,"transformed_context_requires_structured");
   for(const type of ["queued_command","file","invoked_skills","future_context"])
     assert.equal(project([user,{...attachment,attachment:{type,content:"must not disappear"}}]).reason,"unverified_context_attachment");
+  const queue={type:"queue-operation",sessionId:id,operation:"enqueue"};
+  assert.equal(project([queue,user,{...queue,operation:"dequeue"}]).status,"supported");
+  assert.equal(project([user,{...queue,content:"Unconsumed task instruction"}]).reason,"unverified_queued_prompt");
+  assert.equal(project([user,{...queue,operation:"future_queue_operation"}]).reason,"unverified_queued_prompt");
 });
 import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";

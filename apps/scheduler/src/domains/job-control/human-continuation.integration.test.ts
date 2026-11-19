@@ -76,14 +76,15 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       const [job]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
       assert.equal(job.agent_snapshot_json.agent_cli,'claude-code');
       assert.equal(job.agent_snapshot_json.agent_runtime.adapter_version,'2.1.312');
+      const privateKey='-----BEGIN PRIVATE KEY-----\nMANAGED_PEM_BODY_MUST_DISAPPEAR\n-----END PRIVATE KEY-----';
       await sql`UPDATE job_attempts SET session_id=${sessionId} WHERE id=${fixture.attemptId}`;
       const writer=new JobEvidenceWriter(fixture.jobId,'claude-code',fixture.attemptId);
       writer.setSession({cli:'claude-code',sessionId,artifacts:[{name:`${sessionId}.jsonl`,sourcePath:'/unused',kind:'main',content:[
         {type:'user',uuid:'entry',parentUuid:null,sessionId,cwd:'/workspace',version:'2.1.312',
-          timestamp:new Date().toISOString(),message:{role:'user',content:'Safe decision\nAuthorization: Bearer old-checkpoint-control'}},
+          timestamp:new Date().toISOString(),message:{role:'user',content:`Safe decision\nAuthorization: Bearer old-checkpoint-control\nprivate_key=${privateKey}`}},
       ].map(value=>JSON.stringify(value)).join('\n')}]});
       await writer.finalize();
-      await captureHumanSession(fixture.jobId,fixture.attemptId,['old-checkpoint-control']);
+      await captureHumanSession(fixture.jobId,fixture.attemptId,['old-checkpoint-control',privateKey]);
       const [captured]=await sql`SELECT state_json->'human_session' AS binding FROM job_attempts WHERE id=${fixture.attemptId}`;
       assert.equal(captured.binding.status,'supported',JSON.stringify(captured.binding));
       assert.equal(captured.binding.request_id,fixture.requestId);
@@ -94,6 +95,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       const loaded=await loadHumanSession(fixture.jobId,2,job.agent_snapshot_json);
       assert.equal(loaded.status,'supported');assert.ok(loaded.session);
       assert.doesNotMatch(loaded.session.content,/old-checkpoint-control/);
+      assert.doesNotMatch(loaded.session.content,/MANAGED_PEM_BODY_MUST_DISAPPEAR|END PRIVATE KEY/);
       assert.match(loaded.session.content,/Safe decision/);
       await assert.rejects(loadHumanSession(fixture.jobId,2,{...job.agent_snapshot_json,agent_cli:'dsh'}),/IDENTITY/);
       const [stored]=await sql`SELECT state_json->'human_session' AS binding FROM job_attempts WHERE id=${fixture.attemptId}`;
