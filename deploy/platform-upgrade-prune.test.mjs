@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {collectRuntimeDatabaseReferences} from './platform-upgrade-prune-host.mjs';
 import {planGenerationPrune, applyGenerationPrune} from './platform-upgrade-prune.mjs';
 
 const generation = digit => `${digit.repeat(8)}-${digit.repeat(4)}-4${digit.repeat(3)}-8${digit.repeat(3)}-${digit.repeat(12)}`;
@@ -65,6 +67,35 @@ test('configured current D with container referencing A and no sessions retains 
   const plan = planGenerationPrune(snapshot);
   assert.equal(plan.candidates.length, 0);
   assert.equal(plan.retained.find(row => row.name === database('1')).reason, 'RECOVERY_REFERENCE');
+});
+
+// Collection + pure planning only: no transport, SQL, apply or database deletion.
+test('official backup PGDATABASE protects a zero-session generation even when stopped', () => {
+  const compose = readFileSync(new URL('./docker-compose.prod.yml', import.meta.url), 'utf8');
+  const backup = compose.split('\n  backup:')[1].split('\n  silo:')[0];
+  assert.match(backup, /PGDATABASE: \$\{DEEPSONAR_DATABASE_NAME:-deepsonar\}/);
+  assert.match(backup, /pg_dump -h postgres/);
+  const snapshot = pruneFixture();
+  assert.equal(planGenerationPrune(snapshot).candidates.length, 1, 'fixture is otherwise eligible');
+  const id = 'a'.repeat(64);
+  for (const status of ['running', 'exited']) {
+    const container = {State: {Status: status}, Config: {
+      Labels: {'com.docker.compose.project': 'fixture', 'com.docker.compose.service': 'backup'},
+      Env: ['PGPASSWORD=synthetic', 'PGUSER=deepsonar', `PGDATABASE=${database('1')}`]}};
+    const references = () => collectRuntimeDatabaseReferences({projectName: 'fixture',
+      source: {host: 'postgres', port: 5432},
+      dc: args => {assert.deepEqual(args, ['ps', '--all', '-q']); return Buffer.from(id);},
+      run: args => {assert.deepEqual(args, ['inspect', id]); return Buffer.from(JSON.stringify([container]));}});
+    assert.deepEqual(references(), [database('1')]);
+    const plan = planGenerationPrune({...snapshot, runtimeDatabases: references()});
+    assert.equal(snapshot.databases[0].sessions, 0);
+    assert.equal(plan.candidates.length, 0);
+    assert.equal(plan.retained.find(row => row.name === database('1')).reason, 'RECOVERY_REFERENCE');
+    container.Config.Env.push('PGDATABASE=another');
+    assert.throws(references, /PRUNE_CONTAINER_DATABASE_AMBIGUOUS/);
+    container.Config.Env = ['PGDATABASE='];
+    assert.throws(references, /PRUNE_CONTAINER_DATABASE_INVALID/);
+  }
 });
 
 function executor(snapshot) {

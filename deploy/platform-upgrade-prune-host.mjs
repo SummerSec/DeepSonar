@@ -45,7 +45,9 @@ export function collectRuntimeDatabaseReferences({dc, run, projectName, source})
     if (container.Config?.Labels?.['com.docker.compose.project'] !== projectName
         || !Array.isArray(container.Config?.Env)) throw Error('PRUNE_CONTAINER_BINDING_INVALID');
     const entries = container.Config.Env;
-    for (const key of ['DATABASE_URL', 'DEEPSONAR_DATABASE_NAME']) {
+    // The official backup service freezes its target in PGDATABASE, including
+    // while stopped between backups. Retain it even without live DB sessions.
+    for (const key of ['DATABASE_URL', 'DEEPSONAR_DATABASE_NAME', 'PGDATABASE']) {
       const values = entries.filter(entry => typeof entry === 'string' && entry.startsWith(`${key}=`));
       if (values.length > 1) throw Error('PRUNE_CONTAINER_DATABASE_AMBIGUOUS');
       if (!values.length) continue;
