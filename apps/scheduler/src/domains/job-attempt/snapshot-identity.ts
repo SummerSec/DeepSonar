@@ -23,4 +23,3 @@ export function attemptSnapshotIdentity(snapshot: unknown): Record<string, strin
   }
   return identity;
 }
-

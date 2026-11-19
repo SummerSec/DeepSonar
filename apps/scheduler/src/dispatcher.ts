@@ -871,6 +871,7 @@ export async function retryProvisioningJob(
   jobId: string,
   attempt: Record<string, unknown>,
   errorMessage: string,
+  reason: "provision_retry" | "provision_admission_deferred" = "provision_retry",
 ): Promise<boolean> {
   const retried = await sql.begin(async (txRaw) => {
     const tx = txRaw as unknown as typeof sql;
@@ -898,13 +899,14 @@ export async function retryProvisioningJob(
       FROM job_attempts
       WHERE job_id = ${jobId} AND status <> 'active'`;
     const plan = planAutomaticProvisionRetry(countConsumedProvisionRetries(previous));
-    if (!plan.retry) return false;
+    if (reason === "provision_retry" && !plan.retry) return false;
     const txLifecycle = createSqlJobLifecycleApplication(tx);
     return txLifecycle.retryProvisioning(
       jobId,
       errorMessage,
       (attempt.snapshot_identity_json ?? {}) as Record<string, string>,
       (attempt.resource_labels_json ?? {}) as Record<string, string>,
+      reason,
     );
   });
   if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'provision_retry')`;
@@ -1368,7 +1370,8 @@ async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = nu
     if (classified.reason === EVENT_PAYLOAD_CONTROL_CHARACTERS_REASON) msg = classified.message;
     if (!provisionAttempted && !handle && attemptId && activeAttempt &&
       (isRetryableProvisionFailure(e) || e instanceof OpenSandboxCreateAdmissionExpiredError)) {
-      const retried = await retryProvisioningJob(jobId, activeAttempt, msg).catch((retryError) => {
+      const reason = e instanceof OpenSandboxCreateAdmissionExpiredError ? "provision_admission_deferred" : "provision_retry";
+      const retried = await retryProvisioningJob(jobId, activeAttempt, msg, reason).catch((retryError) => {
         console.error(`[dispatcher] provision retry scheduling failed for ${jobId}:`, retryError);
         return false;
       });
