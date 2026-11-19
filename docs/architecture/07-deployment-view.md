@@ -7,6 +7,8 @@
 
 ## 生产 Compose 拓扑
 
+#1119/#1046 的生产及远程 Worker OpenSandbox healthcheck 共用只读 Python 脚本，以容器环境中的管理 key 发鉴权 List 请求，并对超时、认证与响应格式失败返回固定码。脚本按分页大小 1 有界读取，不进行 create。Podman `service_started` overlay 沿用原配置，部署成功仍受最终 readiness 检查约束。契约、接线及 Actions 验收入口见[OpenSandbox 专题](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)。
+
 #1074 的人工等待仅在断点未过期、原执行可信退出并已释放资源、最新 Attempt 为 interrupted、效果全部结清且旧 token 与设备/Worker 租约均已撤销时，才可从数据库重建的活动任务阻塞项中排除。预检直接检查过期时间，清理循环尚未把过期断点标为 blocked 时也拒绝豁免。隔离 PostgreSQL 回归接既有 `pnpm ci:unit:migrations`，最终提交的 Actions 待验。文件在目标副本的可读性仍由恢复前的 blob/hash 核验判断。详见[人工续做](../HUMAN_CONTINUATION.md)。
 
 ```mermaid

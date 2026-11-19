@@ -1,11 +1,21 @@
 # OpenSandbox 1.2 upgrade and recovery boundaries
 
 > 状态：**源码升级、受管资源声明预检与 provision 失败诊断已接线；当前组合待最终 SHA Actions**。历史验收、逐容器执行、远端/live/native 证据分别保留，不推导现场因果。
-> 同步日期：2026-11-09
+> 同步日期：2026-11-19
 
 Verification baseline: the 2026-11-01 integration worktree, not a released or native-validated deployment. This updates [IR-001](architecture/01-system-specification.md#ir-001-scheduler-runtime-adapter-与-model-gateway) and [IR-003](architecture/01-system-specification.md#ir-003-opensandbox-与-worker-node) without changing Scheduler recovery or execution authority; see [runtime](architecture/06-runtime-view.md), [deployment](architecture/07-deployment-view.md) and [security](architecture/10-security-and-trust-boundaries.md).
 
 Independent SDK provenance (historical): sibling worktree `DeepSonar-opensandbox-1.2`, branch `agent/opensandbox-1.2-upgrade`, clean main base `e219b53f1e4101b1b64fc97537c15f8eb582d87f` (2026-11-01). Only SDK/pin/config/tests/OpenSandbox documentation hunks were ported there from mixed source commit `7f9241f2373bb25f73f230ab7580eab19803678d`; no earlier ancestry, Plan, Finding research, authorization or Pi packaging changes were imported into that independent worktree. This does not describe the later integrated tree's scope.
+
+## 创建熔断与鉴权管理探测（#1119 / #1046）
+
+Dispatcher 在真实 provision 的失败出口独立记录服务故障。受控诊断中的 `stage=create`、未取消的 HTTP 5xx，以及 `Failed to create directory /opt/opensandbox in sandbox: 500 ...` 错误形状会计入现有 create 熔断。目录故障和结构化服务故障分别投影为固定码 `SANDBOX_CREATE_DIRECTORY_FAILED`、`SANDBOX_CREATE_SERVER_ERROR`，状态、指标与暂停日志只保存固定分类。窗口阈值、冷却和 claim 时绑定的 canary/episode 沿用现有实现。
+
+熔断计数与重放权限分别判断。无会话、无句柄和 HTTP 500 均不构成无副作用证明。调用过 runner 的不确定结果继续记 `unknown`，自动重试仍要求当前 owner 和原有的显式 `never_started` / `external_effect=false` 证据。取消和普通配置错误不进入新增服务故障分类。
+
+生产与远程 Worker Compose 共用只读挂载的 `deploy/opensandbox/management-health.py`，由容器内固定 Python 路径执行。它与 Scheduler 探测同用 `GET /v1/sandboxes?page=1&pageSize=1` 和 `OPEN-SANDBOX-API-KEY`，只接受 HTTP 200 且包含 `items` 数组的有界 JSON。超时、缺 key、认证失败、重定向与坏响应按固定码拒绝，错误正文和 key 不输出。管理 List 成功仅表示鉴权管理接口可用，实际 create 故障仍可独立暂停 claim，List 成功不会关闭 create 熔断。Podman 的 `service_started` overlay 与部署入口最终 readiness 检查继续按既有流程执行。
+
+回归入口包括 `pnpm ci:unit:runtime-cleanup`（本机合成 HTTP、List 200/create 500 正交、半开与固定码）、`pnpm ci:unit:runtime-sandbox`（Compose 与隔离 harness 的脚本接线）、`pnpm ci:integration:dispatch-limits`（真实 PostgreSQL 的 unknown/pending/无结果等拒绝与明确未开始证据准入）。`gate-runtime` 还显式执行 `python3 deploy/opensandbox/management-health.test.py`，验证实际脚本的本机 HTTP 鉴权、重定向拒绝和脱敏。上述回归全部仅在 GitHub Actions 执行，最终 SHA 待验，生产与目标 server 未执行。
 
 ## Managed Docker resource preflight (#1002 P2-11)
 

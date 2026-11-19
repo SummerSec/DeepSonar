@@ -18,6 +18,7 @@
  * dispatcher error text: that text can contain provider bodies, headers or a credential.
  */
 import { inc, setGauge } from "./metrics.js";
+import type { ProvisionFailureDiagnostic } from "@deepsonar/runtime-sandbox";
 
 export const OPENSANDBOX_CREATE_CIRCUIT_OPEN = "opensandbox_create_circuit_open";
 
@@ -118,6 +119,25 @@ export function recordOpenSandboxProvisionFailure(
   return openSandboxCreateCircuitStatus();
 }
 
+/** A transient error is only a retry candidate. Effect/owner checks still decide replay. */
+export function isOpenSandboxTransientProvisionFailure(text: string): boolean {
+  return /CONTAINER_START_FAILED|SANDBOX_START_FAILED|Egress sidecar (?:container failed to start|did not become ready)|bind:\s*(?:.*\b(?:socket|port)|An attempt was made to access a socket)|Sandbox health check timed out|Server disconnected without sending a response|Upload failed\s*\(\s*status\s*=\s*5\d\d\s*\)|UNEXPECTED_RESPONSE|An internal error occurred in the proxy|websocket proxy failure/i.test(text);
+}
+
+/** Observe service health independently of whether the failed effect can be replayed. */
+export function recordOpenSandboxProvisionError(reason: string, diagnostic?: ProvisionFailureDiagnostic,
+  probe: CreateCircuitProbe | null = null): void {
+  if (diagnostic?.cancelled) return;
+  if (CREATE_DIRECTORY_5XX.test(reason)) {
+    recordOpenSandboxProvisionFailure("SANDBOX_CREATE_DIRECTORY_FAILED", probe);
+  } else if (diagnostic?.stage === "create" && diagnostic.http_status != null
+    && diagnostic.http_status >= 500 && diagnostic.http_status <= 599) {
+    recordOpenSandboxProvisionFailure("SANDBOX_CREATE_SERVER_ERROR", probe);
+  } else if (isOpenSandboxTransientProvisionFailure(reason)) {
+    recordOpenSandboxProvisionFailure(reason, probe);
+  }
+}
+
 /** A successful provision closes the circuit (including a successful half-open canary). */
 export function recordOpenSandboxProvisionSuccess(probe: CreateCircuitProbe | null = null): void {
   if (state !== "closed" && (probe?.episode == null || probe.episode !== episode)) {
@@ -147,8 +167,8 @@ function reTrip(now: number, code: string): void {
   console.error(`[opensandbox-create-circuit] ${OPENSANDBOX_CREATE_CIRCUIT_OPEN} reason=${code}`);
 }
 
-// Known create-path failure codes only (#1046 review): the dispatcher's retryable
-// shapes are these three identifiers (bare or protocol-qualified). Any other value —
+// Known create-path failure codes only (#1046 review), including the #1119 fixed
+// directory/server projections (bare or protocol-qualified). Any other value —
 // including arbitrary upper-case/underscore shapes, private labels or long tails —
 // falls back to "unclassified" so the circuit never promotes error content into
 // state or logs.
@@ -156,7 +176,10 @@ const KNOWN_PROVISION_FAILURE_CODES = Object.freeze([
   "SANDBOX_START_FAILED",
   "CONTAINER_START_FAILED",
   "UNEXPECTED_RESPONSE",
+  "SANDBOX_CREATE_DIRECTORY_FAILED",
+  "SANDBOX_CREATE_SERVER_ERROR",
 ] as const satisfies readonly string[]);
+const CREATE_DIRECTORY_5XX = /Failed to create directory \/opt\/opensandbox(?:\/[^\s:]*)? in sandbox:\s*5\d\d\b/iu;
 const PROTOCOL_FAILURE_CODE_RE = /\b(OPENSANDBOX|OPEN_SANDBOX|SANDBOX|DOCKER)::([A-Z][A-Z0-9_]{1,63})\b/u;
 const BARE_FAILURE_CODE_RE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){1,4}\b/gu;
 const isKnownProvisionCode = (code: unknown): code is (typeof KNOWN_PROVISION_FAILURE_CODES)[number] =>
@@ -168,11 +191,12 @@ let lastPauseLogAtMs: number | null = null;
 /**
  * Fixed projection of a dispatcher provision error (#1046).
  *
- * Only a protocol-style code survives. Free text — which can carry provider bodies,
+ * Only an allowlisted code survives. Free text — which can carry provider bodies,
  * headers or a leaked credential — is never truncated into state or logs, because
  * truncation is not a secret-safe boundary.
  */
 export function classifyProvisionFailure(reason: string): string {
+  if (CREATE_DIRECTORY_5XX.test(reason)) return "SANDBOX_CREATE_DIRECTORY_FAILED";
   // Allowlist only: protocol-qualified candidates win when their code itself is known
   // (a private value after the namespace must not promote); otherwise the first known
   // bare code anywhere in the text. Any other content falls back to "unclassified".

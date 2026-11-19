@@ -67,6 +67,7 @@ if (!testDatabaseUrl) {
       const recovery = await import("./domains/job-attempt/recovery.js");
       const { renewCurrentAttemptLease } = await import("./attempt-lease.js");
       const { claimPendingJobs, lockCurrentProvisioningAttempt, retryProvisioningJob } = await import("./dispatcher.js");
+      const { recordProvisionFailureEvidence } = await import("./provision-failure-evidence.js");
       const { acquireSharedAssetPreparation, cleanupSharedAssetsForJob, cleanupSandboxResourceForJob,
         SharedAssetLifecycleConflictError } = await import("./shared-asset-lifecycle.js");
       const { beginEffect, createAttempt, markEffectUnknown, requestAttemptCancel, settleAttemptTerminal,
@@ -456,9 +457,13 @@ if (!testDatabaseUrl) {
                 }) },
             });
           });
+          await recordProvisionFailureEvidence(sql, { jobId: scope.jobId, projectId, attemptId: scope.newAttempt,
+            diagnostic: { stage: "create", session_observed: false, cancelled: false, http_status: 500,
+              signals: { execd_distribution_failed: false, broken_pipe: false, connection_reset: false, timeout: false } } });
           const [attempt] = await sql`SELECT * FROM job_attempts WHERE id = ${scope.newAttempt}`;
           const admitted = evidence === "never_started" || evidence === "none";
-          assert.equal(await retryProvisioningJob(scope.jobId, attempt!, "transient container startup failure"), admitted);
+          assert.equal(await retryProvisioningJob(scope.jobId, attempt!,
+            "Failed to create directory /opt/opensandbox in sandbox: 500 Server Error"), admitted);
           const [job] = await sql`SELECT status FROM jobs WHERE id = ${scope.jobId}`;
           const [active] = await sql`SELECT id, phase FROM job_attempts WHERE job_id = ${scope.jobId} AND status = 'active'`;
           const [count] = await sql`SELECT count(*)::int AS attempts FROM job_attempts WHERE job_id = ${scope.jobId}`;

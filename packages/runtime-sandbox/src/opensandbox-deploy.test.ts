@@ -152,6 +152,33 @@ test("isolated OpenSandbox production smoke stages the exact preflight reader in
   }
 });
 
+test("production and worker healthchecks share authenticated List readiness and stage the script", () => {
+  for (const file of ["deploy/docker-compose.opensandbox.prod.yml", "deploy/docker-compose.worker.yml"]) {
+    const compose = readFileSync(join(root, file), "utf8");
+    assert.match(compose, /management-health\.py:\/etc\/opensandbox\/management-health\.py:ro/);
+    assert.match(compose, /test: \["CMD", "\/app\/\.venv\/bin\/python3", "\/etc\/opensandbox\/management-health\.py"\]/);
+    assert.doesNotMatch(compose, /8080\/health/);
+  }
+  for (const file of ["agent-harness/test-opensandbox-poc.ts", "agent-harness/opensandbox/opensandbox-prod-official.poc.ts"]) {
+    const source = readFileSync(join(root, file), "utf8");
+    const copy = source.split("\n").find(line => line.includes('writeFileSync(join(dir, "opensandbox/management-health.py")'));
+    assert.ok(copy, `${file} must stage the mounted health reader`);
+    const dir = mkdtempSync(join(tmpdir(), "opensandbox-health-input-"));
+    try {
+      mkdirSync(join(dir, "opensandbox"));
+      runInNewContext(copy, { dir, repoRoot: root, deployDir: join(root, "deploy"), join, readFileSync, writeFileSync }, { timeout: 1000 });
+      assert.deepEqual(readFileSync(join(dir, "opensandbox/management-health.py")),
+        readFileSync(join(root, "deploy/opensandbox/management-health.py")));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const compat = readFileSync(join(root, "deploy/docker-compose.podman-compat.opensandbox.yml"), "utf8");
+  assert.match(compat, /condition: service_started/);
+  const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  assert.match(workflow, /python3 deploy\/opensandbox\/management-health\.test\.py/);
+});
+
 test("OpenSandbox production overlay is the default real deploy path", () => {
   const overlay = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod.yml"), "utf8");
   const deploySh = readFileSync(join(root, "deploy/deploy.sh"), "utf8");

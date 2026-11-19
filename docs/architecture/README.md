@@ -3,6 +3,8 @@
 > 状态：**as-built 与规范索引**。#871/#873/#874 在已合入主线收敛；历史工程验收、后续最终 SHA 检查、暂缓质量与正式发行分开，不以代码存在宣称通过。
 > 同步日期：2026-11-19
 
+#1119/#1046 的[创建故障与鉴权管理探测](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)归入 NFR-OPS-001 / IR-001，由运行时与部署视图记录计数、重放及 List/create 分层契约，最终 SHA Actions 待验。
+
 NFR-REL-001 的[行锁竞争认领唤醒](06-runtime-view.md#行锁竞争后的认领唤醒)合并 `SKIP LOCKED` 后的延后重试，保留默认轮询关闭与所有资格门；真实 PostgreSQL 红测已复现，修复后的最终 SHA Actions 另验，历史 CI 的具体持锁时序仍未证实。
 > #1074 的[人工断点续做](../HUMAN_CONTINUATION.md)与[ADR 0022](adr/0022-human-continuation.md)扩展 FR-JOB-008/FR-CTRL-006；schema 73、超时 overdue、有限封存回收和晚回复受治理续做已接线，最终 SHA Actions 另验。
 > **v0.6.3 本轮范围（2026-11-01）**：独立质量验证/人工标注与家族/资产分离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开强关系建议均暂缓，不作为本轮 PR、工程 issue 收口或发布前置条件。现有规格/ADR 不删，已实现工程、测试与权限/CAS/不可变/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；历史质量条款不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。

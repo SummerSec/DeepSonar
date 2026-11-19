@@ -37,13 +37,14 @@ services:
     volumes:
       - ${DEEPSONAR_DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock
       - ./opensandbox/config.toml:/etc/opensandbox/config.toml:ro
+      - ./opensandbox/management-health.py:/etc/opensandbox/management-health.py:ro
       # Official server only checks /.dockerenv; Podman needs this marker (#422).
       - ./opensandbox/dockerenv:/.dockerenv:ro
       - opensandbox-data:/var/lib/opensandbox
     ports:
       - "${OPEN_SANDBOX_BIND:-0.0.0.0}:${OPEN_SANDBOX_HOST_PORT:-18081}:8080"
     healthcheck:
-      test: ["CMD", "/app/.venv/bin/python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
+      test: ["CMD", "/app/.venv/bin/python3", "/etc/opensandbox/management-health.py"]
       interval: 5s
       timeout: 3s
       retries: 20
