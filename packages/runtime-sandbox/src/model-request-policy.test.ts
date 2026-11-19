@@ -208,7 +208,7 @@ test("Claude launch and resume prepare the native output option before the CLI f
     for (const command of ["claude -p", "claude -p --resume fixture"]) {
       const prepared = await file.api.prepareClaudeLaunch(command, env);
       assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, String(remaining));
-      assert.equal(prepared.command, command + ` --settings '{"env":{"CLAUDE_CODE_MAX_OUTPUT_TOKENS":"${remaining}"}}'`);
+      assert.equal(prepared.command, command + ` --settings '{"apiKeyHelper":"node /opt/deepsonar/dsh/deepsonar-claude-key.mjs","env":{"CLAUDE_CODE_MAX_OUTPUT_TOKENS":"${remaining}"}}'`);
       remaining = 10;
     }
     const lower = await file.api.prepareClaudeLaunch("claude -p", { ...env, CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8" },
@@ -245,7 +245,7 @@ test("Claude re-derives the native cap at each start and resume from a fresh bou
     remaining = 700;
     const resumed = await file.api.prepareClaudeLaunch("claude -p --resume fixture", env);
     assert.equal(resumed.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "700", "the next generation boundary follows the shrunken allowance");
-    assert.equal(resumed.command, "claude -p --resume fixture --settings '{\"env\":{\"CLAUDE_CODE_MAX_OUTPUT_TOKENS\":\"700\"}}'");
+    assert.equal(resumed.command, "claude -p --resume fixture --settings '{\"apiKeyHelper\":\"node /opt/deepsonar/dsh/deepsonar-claude-key.mjs\",\"env\":{\"CLAUDE_CODE_MAX_OUTPUT_TOKENS\":\"700\"}}'");
     assert.equal(durable, "1000", "the live process cap is never rewritten in place");
     status = 409;
     const before = queries;

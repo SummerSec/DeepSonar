@@ -221,13 +221,18 @@ test("Claude 2.1.312 native launch cap preserves bytes and refuses a later over-
     const upstream = await listen(remote);
     policy = await api.startModelRequestPolicy({ upstream: upstream + "/gateway", token, port: 0 });
     const captureUrl = await listen(capture);
+    const home = path.join(dir, "home");
+    const config = path.join(home, ".claude");
+    await mkdir(config, { recursive: true });
+    const settings = { apiKeyHelper: "node /opt/deepsonar/dsh/deepsonar-claude-key.mjs" };
+    await writeFile(path.join(config, "settings.json"), JSON.stringify(settings));
     const prepared = await api.prepareClaudeLaunch(
-      "claude -p --settings '{\"apiKeyHelper\":\"node /opt/deepsonar/dsh/deepsonar-claude-key.mjs\"}' --input-format stream-json --output-format stream-json --include-partial-messages --verbose --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools Bash --no-session-persistence",
+      "claude -p --input-format stream-json --output-format stream-json --include-partial-messages --verbose --permission-mode bypassPermissions --model claude-sonnet-4-5 --tools Bash --no-session-persistence",
       { DEEPSONAR_REQUEST_POLICY_UPSTREAM: upstream + "/gateway", ...privateAuth.environment,
-        HOME: "/tmp/claude-budget", CLAUDE_CONFIG_DIR: "/tmp/claude-budget/config",
+        HOME: home, CLAUDE_CONFIG_DIR: config,
         ANTHROPIC_BASE_URL: captureUrl + "/gateway",
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1", DISABLE_TELEMETRY: "1", DISABLE_ERROR_REPORTING: "1",
-        MAX_THINKING_TOKENS: "0" });
+        MAX_THINKING_TOKENS: "0" }, [settings]);
     assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, "4096");
     stage = "native-cli-tool-loop";
     cli = spawn("/bin/bash", ["-c", `mkdir -p "$CLAUDE_CONFIG_DIR" && exec ${prepared.command}`], {

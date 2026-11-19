@@ -173,7 +173,7 @@ Reverse 工作流将 Claude、Pi/OM 和 Reverse/REA 分为三个独立原生双�
 
 `private-job-files.ts` 通过 RuntimeProcess live stdin 写入每 Job 全新随机私有子目录。逐级以目录描述符和 NOFOLLOW 打开，目录创建为 0700，文件使用 O_EXCL / O_NOFOLLOW 并在创建时设置 0600，校验 owner、regular file、单链接及进程退出。Pi auth.json 副本采用同样的独占创建规则。创建中途失败时依据持有的文件描述符清除本次文件中的秘密，只移除身份仍匹配的目录项，不递归删除替换目录。正常清理失败仅产生固定诊断，保留原执行结果，随后使用现有 Dispatcher sandbox teardown。
 
-Pi 使用 auth store，models.json 不含 key 或环境占位符。Claude 使用镜像内固定 apiKeyHelper，OTLP 仅可通过当前 Job loopback 的固定 POST telemetry 路由补充认证。DSH 使用官方 CredentialProvider / credentials.resolve 服务，引用固定 Job credential，核对冻结 provider，插件或文件缺失即拒绝。helper 与插件纳入镜像内容守卫。
+Pi 使用 auth store，models.json 不含 key 或环境占位符。Claude 使用镜像内固定 apiKeyHelper，start/resume 生成的同一份 `--settings` 同时携带可信 helper 与数值输出上限，避免重复参数覆盖认证配置。OTLP 仅可通过当前 Job loopback 的固定 POST telemetry 路由补充认证。DSH 使用官方 CredentialProvider / credentials.resolve 服务，引用固定 Job credential，核对冻结 provider，插件或文件缺失即拒绝。helper 与插件纳入镜像内容守卫。
 
 现行 P0-1 在 Pi 主 SDK 与 OM SDK 调用前，对已登记秘密值做精确替换，覆盖工具结果、认证文件内容和错误文本，原 Session 与认证参数保持各自用途。此覆盖不能推定为 Claude / DSH 所有模型上下文出口均已脱敏。P1-3 已有 `credential-refusal.ts` 分类和 dispatcher 不可重试分支。P1-4 的五种拒绝已由 `gateway.ts` 记录 `gateway.credential_denied`，仅固定 surface、已核验资源 ID 和稳定错误码，相关 SQL/HTTP 回归位于 gateway-transparent.integration.test.ts。
 

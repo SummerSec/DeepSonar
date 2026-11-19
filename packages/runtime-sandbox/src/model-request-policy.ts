@@ -1,5 +1,5 @@
 import { shellQuote } from "./runtime-host.js";
-import { PRIVATE_CREDENTIAL_READER_SOURCE } from "./private-credential-reader.js";
+import { CLAUDE_PRIVATE_HELPER_PATH, PRIVATE_CREDENTIAL_READER_SOURCE } from "./private-credential-reader.js";
 
 export const MODEL_REQUEST_POLICY_BASE_URL = "http://127.0.0.1:38127/gateway";
 export const MODEL_REQUEST_POLICY_PATH = "/workspace/.deepsonar/model-request-policy.mjs";
@@ -303,8 +303,13 @@ export async function prepareClaudeLaunch(command, environment, settings = []) {
   const allowance = await readLaunchAllowance(new URL(environment.DEEPSONAR_REQUEST_POLICY_UPSTREAM), readPrivateCredential(environment.DEEPSONAR_GATEWAY_TOKEN_FILE));
   const cap = claudeOutputCap(allowance, [environment.CLAUDE_CODE_MAX_OUTPUT_TOKENS, ...settings.map(setting => setting?.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS)]);
   if (cap === null) return { command, env: environment };
-  const configuration = JSON.stringify({ env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } });
-  // Only generated numeric settings are appended, never user-controlled shell text.
+  const configuration = JSON.stringify({
+    apiKeyHelper: ${JSON.stringify("node " + CLAUDE_PRIVATE_HELPER_PATH)},
+    env: { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) },
+  });
+  // The CLI keeps only the final --settings argument. Keep the trusted file
+  // helper in the same generated override as the numeric launch cap.
+  // Neither value contains business-controlled shell text.
   return { command: command + " --settings '" + configuration + "'",
     env: { ...environment, CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(cap) } };
 }
