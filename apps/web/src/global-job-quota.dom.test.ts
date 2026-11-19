@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { JSDOM } from "jsdom";
 import { act, createElement } from "react";
-import { api, type EffectiveRules, type GlobalSettings } from "./api";
+import { api, type EffectiveRules, type GlobalSettings, type ProjectSettings } from "./api";
 import { GlobalJobQuotaSection } from "./components/GlobalJobQuotaSection";
+import { ProjectJobQuotaSection } from "./components/ProjectJobQuotaSection";
 
 test("global quota DOM preserves stored drafts, validates input and saves explicit null without freezing env caps", async () => {
   const dom = new JSDOM("<!doctype html><div id='root'></div>", { url: "http://127.0.0.1" });
@@ -12,6 +13,7 @@ test("global quota DOM preserves stored drafts, validates input and saves explic
   const previous = new Map(Object.keys(globals).map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   for (const [key, value] of Object.entries(globals)) Object.defineProperty(globalThis, key, { value, writable: true, configurable: true });
   const original = api.patchGlobalSettings;
+  const originalProjectPatch = api.patchSettings;
   const { createRoot } = await import("react-dom/client");
   const container = dom.window.document.getElementById("root")!;
   const root = createRoot(container);
@@ -61,9 +63,42 @@ test("global quota DOM preserves stored drafts, validates input and saves explic
     });
     await act(async () => { save().click(); });
     assert.deepEqual(writes[1], { maxJobsPerProject: null });
+    const projectWrites: unknown[] = [];
+    let project = { rules: { maxConcurrentJobs: 3 }, effective_rules: {
+      ...rules, maxJobsPerProject: null, maxConcurrentJobs: 3, maxConcurrentJobsSource: "project",
+    }, active_jobs: 2 } as ProjectSettings;
+    api.patchSettings = async (_id, body) => {
+      projectWrites.push(body.rules);
+      const value = body.rules?.maxConcurrentJobs;
+      project = { ...project, rules: body.rules!, effective_rules: {
+        ...project.effective_rules, maxConcurrentJobs: value as number | null,
+        maxConcurrentJobsSource: value === null ? "global" : "project",
+      } };
+      return project;
+    };
+    const renderProject = () => act(async () => root.render(createElement(ProjectJobQuotaSection, {
+      projectId: "fixture", settings: project, rules: project.effective_rules,
+      storedQuota: project.rules.maxConcurrentJobs, onFlash: () => {}, onSettingsSaved: saved => { project = saved; },
+    })));
+    await renderProject();
+    assert.equal(container.querySelector<HTMLInputElement>("input")!.placeholder, "继承全局 不限");
+    const projectFill = async (value: string) => act(async () => {
+      const element = container.querySelector<HTMLInputElement>("input")!;
+      Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value")!.set!.call(element, value);
+      element.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    });
+    await projectFill("");
+    await act(async () => { Array.from(container.querySelectorAll("button")).find(button => button.textContent?.includes("保存项目配额"))!.click(); });
+    await renderProject();
+    assert.deepEqual(projectWrites[0], { maxConcurrentJobs: null });
+    assert.match(container.textContent!, /2 \/ 不限/);
+    await projectFill("0");
+    await act(async () => { Array.from(container.querySelectorAll("button")).find(button => button.textContent?.includes("保存项目配额"))!.click(); });
+    assert.deepEqual(projectWrites[1], { maxConcurrentJobs: 0 });
   } finally {
     await act(async () => root.unmount());
     api.patchGlobalSettings = original;
+    api.patchSettings = originalProjectPatch;
     dom.window.close();
     for (const [key, descriptor] of previous) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);

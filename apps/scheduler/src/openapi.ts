@@ -2074,6 +2074,8 @@ const OPS: Op[] = [
         rules: {
           type: "object",
           additionalProperties: true,
+          properties: Object.fromEntries(["maxGlobalJobs", "maxJobsPerProject", "maxConcurrentProvisioning"]
+            .map(key => [key, { type: ["integer", "null"], minimum: 1, maximum: 1000 }])),
           description: "全局规则。maxGlobalJobs / maxJobsPerProject / maxConcurrentProvisioning 为 null（不限）或 1–1000 整数，拒绝 0；缺省使用显式环境变量，无环境配置则不限；stallSec / jobTokenMaxRequests 为 0–上限（0=不限制）；auditTimeoutSec / verifyTimeoutSec / provisionTimeoutSec 为配置中心第一批；maxConcurrentJobs 只能写在项目设置。",
         },
       },

@@ -56,6 +56,10 @@ export function ProjectJobQuotaSection({
     setBaseline(next.baseline);
   }, [storedQuota, projectId]);
 
+  let draftError: string | null = null;
+  try { parseProjectJobQuotaDraft(draft); }
+  catch (error) { draftError = error instanceof Error ? error.message : String(error); }
+
   const save = async () => {
     let maxConcurrentJobs: number | null;
     try {
@@ -109,19 +113,25 @@ export function ProjectJobQuotaSection({
       </div>
       <div className="grid grid-cols-1 gap-3 px-4 py-4 sm:grid-cols-2">
         <div>
-          <label className={labelCls}>
+          <label htmlFor={`project-quota-${projectId}`} className={labelCls}>
             最大同时运行 Job 数
             <HelpTip>正整数收紧该项目预算；留空继承全局 {rules.maxJobsPerProject ?? "不限"}。0 暂停领取。</HelpTip>
           </label>
           <input
+            id={`project-quota-${projectId}`}
             type="number"
             min={0}
             max={rules.maxJobsPerProject ?? 1000}
+            step={1}
+            disabled={busy}
+            aria-invalid={Boolean(draftError)}
+            aria-describedby={draftError ? `project-quota-error-${projectId}` : undefined}
             placeholder={`继承全局 ${rules.maxJobsPerProject ?? "不限"}`}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             className={inputCls}
           />
+          {draftError && <p id={`project-quota-error-${projectId}`} role="alert" className="text-[12px] text-red-400">{draftError}</p>}
         </div>
         <div>
           <div className={labelCls}>当前运行 / 有效上限</div>
@@ -145,7 +155,7 @@ export function ProjectJobQuotaSection({
         <button
           type="button"
           onClick={() => void save()}
-          disabled={busy || draft === baseline}
+          disabled={busy || draft === baseline || Boolean(draftError)}
           className="flex w-fit items-center gap-1.5 rounded-md bg-acc-500 px-3 py-1.5 text-[14px] font-medium text-ink-950 transition-colors hover:bg-acc-400 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <FloppyDisk size={13} /> {busy ? "保存中…" : saved ? "已保存" : failed ? "保存失败" : "保存项目配额"}
