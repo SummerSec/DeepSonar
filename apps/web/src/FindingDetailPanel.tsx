@@ -528,8 +528,8 @@ export function FindingDetailPanel({ findingId, onClose }: { findingId: string; 
                   </section>
                 )}
 
-                {f.id.toLowerCase() === findingId.toLowerCase() && <FindingCandidates key={f.id} findingId={f.id} />}
-                {f.id.toLowerCase() === findingId.toLowerCase() && <FindingLexicalSearch key={f.id} findingId={f.id} />}
+                {f.id.toLowerCase() === findingId.toLowerCase() && <FindingCandidates key={`candidates:${f.id}`} findingId={f.id} />}
+                {f.id.toLowerCase() === findingId.toLowerCase() && <FindingLexicalSearch key={`lexical:${f.id}`} findingId={f.id} />}
                 {reportEligible && (
                   <section className="theme-surface mt-6 rounded-xl ring-1" aria-label="Finding 报告">
                     <div className="theme-divider flex flex-wrap items-center gap-2 border-b px-4 py-3">

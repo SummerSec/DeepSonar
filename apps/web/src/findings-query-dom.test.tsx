@@ -3,8 +3,10 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import { act, Profiler } from "react";
 import { createRoot } from "react-dom/client";
-import { createMemoryRouter, RouterProvider } from "react-router-dom";
-import { api, type FindingSummary, type PageEnvelope, type ProjectFindingsSummary } from "./api";
+import { createMemoryRouter, MemoryRouter, RouterProvider } from "react-router-dom";
+import { api, type FindingDetail, type FindingSummary, type PageEnvelope, type ProjectFindingsSummary } from "./api";
+import { FindingDetailPanel } from "./FindingDetailPanel";
+import { ConfirmDialogProvider } from "./components/ConfirmDialog";
 import { FindingsPage } from "./pages/FindingsPage";
 import { useFindingsQuery } from "./useFindingsQuery";
 
@@ -138,5 +140,88 @@ test("useFindingsQuery keeps the pending rows identity stable across parent rere
     assert.match(latest!.error!, /403 revoked/);
   } finally {
     await env.cleanup();
+  }
+});
+
+test("Finding detail keeps one candidate entry and its state across conditional sections and reloads", async () => {
+  const env = setup();
+  const original = {
+    finding: api.finding, findingSharedAssets: api.findingSharedAssets,
+    findingCandidates: api.findingCandidates, setFindingDisposition: api.setFindingDisposition,
+  };
+  const originalError = console.error;
+  const keyWarnings: string[] = [];
+  console.error = (...args: unknown[]) => {
+    if (String(args[0]).includes("same key")) keyWarnings.push(args.map(String).join(" "));
+    else originalError(...args);
+  };
+  let needsHuman = false;
+  let showResearch = false;
+  function detail(id: string): FindingDetail {
+    return {
+      finding: { ...finding(id), verify_status: needsHuman ? "needs_human" : "pending",
+        raw_json: {}, source_job_type: "analyze", source_job_status: "succeeded" },
+      verification_jobs: [], verification_rounds: [], source_events: [],
+      cluster_members: showResearch ? [{ finding_id: id, is_canonical: true,
+        canonical_finding_id: null, dedupe_reason: null, priority_score: null,
+        title: id, verify_status: "pending", severity: "high", job_id: "job-a" }] : [],
+      trace: {
+        source: { job_id: "job-a", job_type: "analyze", job_status: "succeeded", node_id: null,
+          job_node_id: null, canvas_id: "task-a", at: "2026-01-01T00:00:00.000Z" },
+        evidence: { review: [], test: [] }, rounds: [], intents: [], hubs: [],
+        flow: { nodes: [], edges: [] }, gaps: [], node_ids: [], edge_ids: [],
+      },
+    };
+  }
+  const candidateRequests: Array<{ id: string; signal?: AbortSignal }> = [];
+  api.finding = async id => detail(id);
+  api.findingSharedAssets = async () => ({ items: [], limit: 50, offset: 0 });
+  api.setFindingDisposition = async id => detail(id).finding;
+  api.findingCandidates = (id, _cursor, signal) => {
+    candidateRequests.push({ id, signal });
+    return deferred<Awaited<ReturnType<typeof api.findingCandidates>>>().promise;
+  };
+  // Use the actual drawer composition: isolated candidate tests cannot catch sibling key collisions.
+  async function render(id: string) {
+    await act(async () => env.root.render(<MemoryRouter><ConfirmDialogProvider>
+      <FindingDetailPanel findingId={id} onClose={() => {}} />
+    </ConfirmDialogProvider></MemoryRouter>));
+  }
+  async function click(label: string) {
+    const button = Array.from(env.container.querySelectorAll("button")).find(item => item.textContent === label);
+    assert.ok(button, `${label} exists`);
+    await act(async () => button.click());
+  }
+  function entries() {
+    assert.equal(env.container.querySelectorAll('[aria-label="已计算的词法候选"]').length, 1);
+    assert.equal(env.container.querySelectorAll('[aria-label="相似文本检索"]').length, 1);
+  }
+  try {
+    await render("subject-a");
+    entries();
+    assert.equal(candidateRequests.length, 0, "candidate reads stay opt-in");
+    await click("查看已计算候选");
+    const expandedEntry = env.container.querySelector('[aria-label="已计算的词法候选"]');
+    for (let index = 0; index < 6; index++) {
+      needsHuman = index % 2 === 0;
+      showResearch = index % 3 === 0;
+      await click("待处置");
+      entries();
+      assert.equal(env.container.querySelector('[aria-label="已计算的词法候选"]'), expandedEntry);
+      assert.equal(expandedEntry?.querySelector("button")?.getAttribute("aria-expanded"), "true");
+      assert.equal(candidateRequests.length, 1, "reload must not remount or refetch candidates");
+      assert.equal(candidateRequests[0].signal?.aborted, false);
+    }
+    await render("subject-b");
+    entries();
+    assert.equal(candidateRequests[0].signal?.aborted, true);
+    assert.equal(env.container.querySelector('[aria-label="已计算的词法候选"] button')?.getAttribute("aria-expanded"), "false");
+    await click("查看已计算候选");
+    assert.equal(candidateRequests[1].id, "subject-b");
+    assert.deepEqual(keyWarnings, [], "drawer siblings must have unique keys");
+  } finally {
+    await env.cleanup();
+    Object.assign(api, original);
+    console.error = originalError;
   }
 });
