@@ -15,7 +15,7 @@ const CLAUDE_EXECUTION_ATTACHMENTS = new Set([
 // Pinned transcript storage reads these into request replay/CLI accounting or
 // conversation latches. They are deliberately absent from the imported file.
 const CLAUDE_STORAGE_METADATA = new Set([
-  "file-history-snapshot", "progress", "queue-operation", "atis-latch", "cost-state",
+  "file-history-snapshot", "progress", "atis-latch", "cost-state",
   "api-request-shape", "api-request-blob", "api-request", "tools-used",
 ]);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
@@ -65,7 +65,7 @@ export function projectNativeHumanSession(cli: string, version: string, sessionI
       || typeof row.customType === "string" && row.customType.startsWith("om."))) return {status:"unsupported",reason:"transformed_context_requires_structured"};
     const types = cli === "pi"
       ? new Set(["session","message","model_change","thinking_level_change","usage","session_info","label"])
-      : new Set(["user","assistant","attachment","last-prompt",...CLAUDE_STORAGE_METADATA]);
+      : new Set(["user","assistant","attachment","last-prompt","queue-operation",...CLAUDE_STORAGE_METADATA]);
     if (rows.some(row => !types.has(row.type))) return {status:"unsupported",reason:"unknown_session_record_type"};
     if (rows.some(row => row.type === "message" && !["system","user","assistant","toolResult"].includes(row.message?.role)))
       return {status:"unsupported",reason:"unknown_session_message_role"};
@@ -81,6 +81,11 @@ export function projectNativeHumanSession(cli: string, version: string, sessionI
     for (const row of rows) {
       if (cli === "claude-code") {
         if (row.sessionId !== undefined && row.sessionId !== sessionId) throw new Error("claude_identity");
+        if (row.type === "queue-operation") {
+          if (row.content !== undefined || !["enqueue","dequeue"].includes(row.operation))
+            return {status:"unsupported",reason:"unverified_queued_prompt"};
+          continue;
+        }
         if (CLAUDE_STORAGE_METADATA.has(row.type)) continue;
         // last-prompt can select a different branch or clear the active leaf.
         // A linear history may only checkpoint the leaf already observed.

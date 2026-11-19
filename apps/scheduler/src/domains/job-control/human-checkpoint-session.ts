@@ -14,6 +14,13 @@ const Binding = z.object({
   sha256:z.string().regex(/^[a-f0-9]{64}$/u).optional(),
 }).strict();
 
+function excludeManagedSecrets(value:unknown,secrets:readonly string[]):unknown {
+  if(typeof value==='string') return secrets.reduce((text,secret)=>text.split(secret).join('[Excluded secret]'),value);
+  if(Array.isArray(value)) return value.map(entry=>excludeManagedSecrets(entry,secrets));
+  if(!value || typeof value!=='object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key,entry])=>[key,excludeManagedSecrets(entry,secrets)]));
+}
+
 /** Bind once to the exact exported source Attempt. Files share checkpoint expiry/deletion. */
 export async function captureHumanSession(jobId:string,attemptId:string,secrets:readonly string[]) {
   const [source]=await sql`SELECT r.id AS request_id,j.agent_snapshot_json,a.session_id,a.state_json
@@ -40,12 +47,9 @@ export async function captureHumanSession(jobId:string,attemptId:string,secrets:
         const text=archive.content.toString('utf8');
         // Project each parsed record so redaction cannot corrupt JSON framing.
         try {
-          const redacted=text.trim().split('\n').map(line=>{
-            let projected=JSON.stringify(redactJobHumanRequestText(JSON.parse(line)));
-            for(const secret of [...secrets].sort((a,b)=>b.length-a.length)) if(secret)
-              projected=projected.split(JSON.stringify(secret).slice(1,-1)).join('[Excluded secret]');
-            return projected;
-          }).join('\n');
+          const managedSecrets=secrets.filter(Boolean).sort((a,b)=>b.length-a.length);
+          const redacted=text.trim().split('\n').map(line=>JSON.stringify(redactJobHumanRequestText(
+            excludeManagedSecrets(JSON.parse(line),managedSecrets)))).join('\n');
           const projected=projectNativeHumanSession(cli,version,String(source.session_id),redacted);
           binding.status=projected.status;binding.reason=projected.reason;
           if(projected.status==='supported' && projected.content) {
