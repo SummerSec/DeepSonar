@@ -220,7 +220,7 @@ test("Claude launch and resume prepare the native output option before the CLI f
     for (const command of ["claude -p", "claude -p --resume fixture"]) {
       const prepared = await file.api.prepareClaudeLaunch(command, env, []);
       assert.deepEqual(prepared, { command: command + ` --settings '{"apiKeyHelper":"node /opt/deepsonar/dsh/deepsonar-claude-key.mjs"}'`, env });
-      assert.equal(prepared.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, undefined);
+      assert.equal(Object.hasOwn(prepared.env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS"), false);
     }
   } finally { await close(server); await file.close(); }
 });
