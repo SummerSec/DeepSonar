@@ -112,6 +112,7 @@ const ROUTE_SCOPES: Record<string, string> = {
   "GET /projects/:id/task-queue": "tasks:read",
   "PATCH /projects/:id/task-queue": "jobs:control",
   "POST /projects/:id/task-queue/items": "jobs:control",
+  "POST /projects/:id/task-queue/yield": "jobs:control",
   "POST /projects/:id/events": "tasks:write",
   "GET /projects/:id/canvases": "tasks:read",
   "GET /projects/:id/settings": "agents:read",

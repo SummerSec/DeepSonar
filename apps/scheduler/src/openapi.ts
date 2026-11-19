@@ -202,11 +202,15 @@ const ProjectTaskQueueSchema = {
       required: ["id", "canvas_id", "title", "state", "created_at", "started_at", "ended_at", "block_reason"],
       properties: {
         id: { type: "string" }, canvas_id: { type: "string" }, title: { type: "string" },
-        state: { type: "string", enum: ["queued", "active", "succeeded", "failed", "cancelled"] },
+        state: { type: "string", enum: ["queued", "active", "yielded", "succeeded", "failed", "cancelled"] },
         created_at: { type: "string", format: "date-time" },
         started_at: { type: "string", format: "date-time", nullable: true },
         ended_at: { type: "string", format: "date-time", nullable: true },
         block_reason: { type: "string", nullable: true },
+        yield_request: { type: "object", nullable: true, additionalProperties: false,
+          required: ["request_id", "expected_revision"], properties: {
+            request_id: { type: "string", format: "uuid" }, expected_revision: { type: "integer", minimum: 0 },
+          } },
       },
     } },
   },
@@ -1007,6 +1011,18 @@ const OPS: Op[] = [
     responses: { "200": ProjectTaskQueueSchema },
   },
   {
+    method: "post", path: "/projects/{id}/task-queue/yield", scope: "jobs:control", tags: ["Tasks"],
+    summary: "暂存人工等待任务并让下一项先做",
+    description: "绑定当前条目、人工请求版本和幂等操作编号。仅唯一已安全封存的人工等待可让位；回复保存后原子回队尾，轮到后重新执行原续做准入。",
+    body: { type: "object", additionalProperties: false,
+      required: ["mutation_id", "canvas_id", "expected_item_id", "request_id", "expected_revision"], properties: {
+        mutation_id: { type: "string", format: "uuid" }, canvas_id: { type: "string", minLength: 1, maxLength: 200 },
+        expected_item_id: { type: "string", pattern: "^[1-9][0-9]{0,18}$" },
+        request_id: { type: "string", format: "uuid" }, expected_revision: { type: "integer", minimum: 0, maximum: 2147483647 },
+      } },
+    responses: { "200": ProjectTaskQueueSchema },
+  },
+  {
     method: "post", path: "/projects/{id}/task-queue/items", scope: "jobs:control", tags: ["Tasks"],
     summary: "将尚未执行的任务加入项目串行队列",
     description: "同一任务重复入队保持原顺序，已在执行或有未决效果的任务不能通过入队抢占执行身份。",
@@ -1121,8 +1137,8 @@ const OPS: Op[] = [
       },
     },
   },
-  { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", description: "每项投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
-  { method: "get", path: "/canvases/{id}", summary: "画布节点与边", description: "canvas 投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/projects/{id}/canvases", summary: "画布列表", description: "每项投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/yielded/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/canvases/{id}", summary: "画布节点与边", description: "canvas 投影 execution_state、execution_active_count、pending_count 与可空 queue_state（queued/active/yielded/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
   {
     method: "get",
     path: "/canvases/{id}/broadcasts",
@@ -1216,7 +1232,7 @@ const OPS: Op[] = [
     scope: "jobs:control",
     tags: ["Tasks"],
   },
-  { method: "get", path: "/canvases/{id}/summary", summary: "画布 L0 骨架（带 durable revision）", description: "canvas 包含可空 queue_state（queued/active/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
+  { method: "get", path: "/canvases/{id}/summary", summary: "画布 L0 骨架（带 durable revision）", description: "canvas 包含可空 queue_state（queued/active/yielded/succeeded/failed/cancelled）。", scope: "tasks:read", tags: ["Tasks"] },
   {
     method: "get",
     path: "/canvases/{id}/delta",

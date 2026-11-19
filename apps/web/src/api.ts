@@ -1,3 +1,4 @@
+import type { ProjectTaskQueueYieldInput } from "@deepsonar/shared-types";
 /** 调度器 API 类型与请求（vite proxy /api → :3100） */
 
 import type { PlatformClaimsStatus } from "./platform-claims";
@@ -218,7 +219,7 @@ export interface Project {
   max_concurrent_jobs_source?: "project" | "global";
 }
 
-export type ProjectTaskQueueItemState = "queued" | "active" | "succeeded" | "failed" | "cancelled";
+export type ProjectTaskQueueItemState = "queued" | "active" | "yielded" | "succeeded" | "failed" | "cancelled";
 
 export interface ProjectTaskQueueItem {
   id: string;
@@ -229,6 +230,7 @@ export interface ProjectTaskQueueItem {
   started_at: string | null;
   ended_at: string | null;
   block_reason: string | null;
+  yield_request?: { request_id: string; expected_revision: number } | null;
 }
 
 export interface ProjectTaskQueue {
@@ -2343,6 +2345,8 @@ export const api = {
     send<Project>("POST", "/projects", p),
   updateProject: (id: string, p: { name?: string; description?: string; status?: "active" | "archived" }) =>
     send<Project>("PATCH", `/projects/${id}`, p),
+  yieldProjectTaskQueue: (projectId: string, input: ProjectTaskQueueYieldInput) =>
+    send<ProjectTaskQueue>("POST", `/projects/${projectId}/task-queue/yield`, input),
   projectTaskQueue: (projectId: string, signal?: AbortSignal) =>
     get<ProjectTaskQueue>(`/projects/${projectId}/task-queue`, signal),
   setProjectTaskQueuePaused: (projectId: string, paused: boolean, failedHeadId?: string) =>

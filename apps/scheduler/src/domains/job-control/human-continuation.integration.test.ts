@@ -361,6 +361,270 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       }
       await sql`UPDATE project_task_queues SET paused=false WHERE project_id=${projectId}`;
     });
+    await context.test('FIFO human yield: durable HTTP decision, B runs, reply returns A to tail, unique successor after B', async () => {
+      const fixture = await setup(); await fixture.seal(); await fixture.close();
+      const queue = await import('../project-task/task-queue-store.js');
+      await sql`INSERT INTO project_task_queues(project_id) VALUES(${projectId}) ON CONFLICT DO NOTHING`;
+      await sql`UPDATE project_task_queues SET paused=false,pause_reason=NULL WHERE project_id=${projectId}`;
+      const [a] = await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state,created_at,started_at)
+        VALUES(${projectId},${fixture.canvasId},'active',now()-interval '1 hour',now()-interval '30 minutes')
+        RETURNING id::text,created_at,started_at`;
+      const canvasB = randomUUID(), jobB = randomUUID();
+      await sql`INSERT INTO canvases(id,project_id,title,target_json)
+        VALUES(${canvasB},${projectId},'B after human A',${sql.json({network_policy:{allow_egress:false}})})`;
+      await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status) VALUES(${canvasB},'root','B root','active')`;
+      const [owner] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
+      await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
+        VALUES(${jobB},${projectId},${canvasB},'audit','pending',${sql.json(owner.agent_snapshot_json)})`;
+      const withLock = async (work:(tx:typeof sql)=>Promise<unknown>) => sql.begin(async transaction => {
+        const tx=transaction as unknown as typeof sql;
+        await tx`SELECT pg_advisory_xact_lock(hashtext(${core.DISPATCH_CLAIM_ADVISORY_KEY}))`;
+        return work(tx);
+      });
+      await withLock(tx=>queue.enqueueProjectTask(tx,projectId,canvasB));
+      assert.equal((await claimPendingJobs()).some(job=>job.id===jobB),false,'default human wait retains A seat');
+      const input={mutation_id:randomUUID(),canvas_id:fixture.canvasId,expected_item_id:a.id,
+        request_id:fixture.requestId,expected_revision:0};
+      const yieldHttp=(payload:Record<string,unknown>=input)=>app.inject({method:'POST',url:`/projects/${projectId}/task-queue/yield`,payload});
+      assert.equal((await yieldHttp({...input,extra:true})).statusCode,400);
+      assert.equal((await yieldHttp({...input,expected_item_id:'999999999'})).statusCode,409);
+      const decisions=await Promise.all([yieldHttp(),yieldHttp()]);
+      for(const response of decisions) assert.equal(response.statusCode,200,response.body);
+      assert.equal((await yieldHttp({...input,expected_revision:1})).statusCode,409,'same mutation cannot change payload');
+      assert.equal((await sql`SELECT count(*)::int AS count FROM audit_logs WHERE project_id=${projectId}
+        AND action='task_queue.human_yield' AND resource_id=${a.id}`)[0].count,1);
+      const held=(await queue.readProjectTaskQueue(sql,projectId)).items.find(item=>item.canvas_id===fixture.canvasId)!;
+      assert.equal(held.state,'yielded');
+      const claimedB=(await Promise.all([claimPendingJobs(),claimPendingJobs()])).flat().filter(job=>job.id===jobB);
+      assert.equal(claimedB.length,1,'B receives exactly one claim after A yields');
+      await sql`UPDATE jobs SET status='running',started_at=clock_timestamp() WHERE id=${jobB}`;
+      const messageId=randomUUID();
+      for(const response of await Promise.all([fixture.reply(messageId),fixture.reply(messageId)])) assert.equal(response.statusCode,202,response.body);
+      await pumpHumanContinuations(1,fixture.requestId);
+      const [returned]=await sql`SELECT id::text,state,created_at,started_at FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`;
+      assert.equal(returned.state,'queued');assert.notEqual(returned.id,a.id);
+      assert.equal(new Date(returned.created_at).getTime(),new Date(a.created_at).getTime(),'reply must retain completion generation');
+      assert.equal(new Date(returned.started_at).getTime(),new Date(a.started_at).getTime());
+      assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,'waiting_human','A never preempts B');
+      assert.equal((await sql`SELECT reply_message_id,requeued_item_id::text FROM project_task_queue_yields WHERE request_id=${fixture.requestId}`)[0].reply_message_id,messageId);
+      await pumpHumanContinuations(1,fixture.requestId);
+      assert.equal((await sql`SELECT id::text FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`)[0].id,returned.id,'pump/reply retries never move the tail twice');
+      await sql`UPDATE jobs SET status='succeeded',finished_at=clock_timestamp() WHERE id=${jobB}`;
+      await sql`UPDATE job_attempts SET status='succeeded',finished_at=clock_timestamp() WHERE job_id=${jobB} AND status='active'`;
+      await sql`UPDATE canvas_nodes SET status='succeeded',updated_at=clock_timestamp() WHERE canvas_id=${canvasB} AND node_type='root'`;
+      await withLock(tx=>queue.setProjectTaskQueuePaused(tx,projectId,true));
+      await pumpHumanContinuations(1,fixture.requestId);
+      assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,'waiting_human','project pause blocks returning A');
+      await withLock(tx=>queue.setProjectTaskQueuePaused(tx,projectId,false));
+      await Promise.all([pumpHumanContinuations(1,fixture.requestId),pumpHumanContinuations(1,fixture.requestId)]);
+      assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,'pending');
+      assert.equal((await sql`SELECT count(*)::int AS count FROM events WHERE job_id=${fixture.jobId}
+        AND payload_json->>'subtype'='human_continuation'`)[0].count,1);
+      assert.equal((await Promise.all([claimPendingJobs(),claimPendingJobs()])).flat().filter(job=>job.id===fixture.jobId).length,1);
+      assert.equal((await sql`SELECT count(*)::int AS count FROM job_attempts WHERE job_id=${fixture.jobId}`)[0].count,2);
+      assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`)[0].state,'active');
+      assert.equal((await yieldHttp()).statusCode,200,'original mutation still reads its accepted decision after return');
+      await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+      await sql`DELETE FROM project_task_queue_items WHERE canvas_id IN (${fixture.canvasId},${canvasB})`;
+    });
+    for(const paused of [false,true]) {
+      await context.test(`answered FIFO wait expires behind B without blocking C (paused=${paused})`,async()=>{
+        const fixture=await setup();await fixture.seal();await fixture.close();
+        await sql`UPDATE project_task_queues SET paused=false,pause_reason=NULL WHERE project_id=${projectId}`;
+        const [item]=await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
+          VALUES(${projectId},${fixture.canvasId},'active') RETURNING id::text`;
+        const yielded=await app.inject({method:'POST',url:`/projects/${projectId}/task-queue/yield`,payload:{
+          mutation_id:randomUUID(),canvas_id:fixture.canvasId,expected_item_id:item.id,request_id:fixture.requestId,expected_revision:0}});
+        assert.equal(yielded.statusCode,200,yielded.body);
+        const [owner]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
+        const enqueue=async(title:string)=>{
+          const canvasId=randomUUID(),jobId=randomUUID();
+          await sql`INSERT INTO canvases(id,project_id,title) VALUES(${canvasId},${projectId},${title})`;
+          await sql`INSERT INTO canvas_nodes(canvas_id,node_type,title,status) VALUES(${canvasId},'root',${title},'active')`;
+          await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
+            VALUES(${jobId},${projectId},${canvasId},'audit','pending',${sql.json(owner.agent_snapshot_json)})`;
+          const response=await app.inject({method:'POST',url:`/projects/${projectId}/task-queue/items`,payload:{canvas_id:canvasId}});
+          assert.equal(response.statusCode,200,response.body);return {canvasId,jobId};
+        };
+        const b=await enqueue('B before answered A');
+        assert.ok((await claimPendingJobs()).some(job=>job.id===b.jobId));
+        await sql`UPDATE jobs SET status='running',started_at=clock_timestamp() WHERE id=${b.jobId}`;
+        const messageId=randomUUID(),reply=await fixture.reply(messageId);
+        assert.equal(reply.statusCode,202,reply.body);
+        const [returned]=await sql`SELECT id::text,state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`;
+        assert.equal(returned.state,'queued');assert.notEqual(returned.id,item.id);
+        const c=await enqueue('C after answered A');
+        if(paused) {
+          const response=await app.inject({method:'PATCH',url:`/projects/${projectId}/task-queue`,payload:{paused:true}});
+          assert.equal(response.statusCode,200,response.body);
+        }
+        await sql`UPDATE human_requests SET checkpoint_expires_at=now()-interval '1 second' WHERE id=${fixture.requestId}`;
+        await pumpHumanContinuations(1,fixture.requestId);await claimPendingJobs();
+        const [closed]=await sql`SELECT id::text,state,ended_at FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`;
+        assert.equal(closed.id,returned.id);assert.equal(closed.state,'failed');assert.ok(closed.ended_at);
+        const [request]=await sql`SELECT resumed_at,reply_message_id,checkpoint_error_code FROM human_requests WHERE id=${fixture.requestId}`;
+        assert.equal(request.resumed_at,null);assert.equal(request.reply_message_id,messageId);
+        assert.equal(request.checkpoint_error_code,'HUMAN_CHECKPOINT_EXPIRED');
+        assert.equal((await sql`SELECT status FROM jobs WHERE id=${b.jobId}`)[0].status,'running');
+        assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${b.canvasId}`)[0].state,'active');
+        assert.equal((await sql`SELECT paused FROM project_task_queues WHERE project_id=${projectId}`)[0].paused,paused);
+        await sql`UPDATE jobs SET status='succeeded',finished_at=clock_timestamp() WHERE id=${b.jobId}`;
+        await sql`UPDATE job_attempts SET status='succeeded',finished_at=clock_timestamp() WHERE job_id=${b.jobId} AND status='active'`;
+        await sql`UPDATE canvas_nodes SET status='succeeded',updated_at=clock_timestamp() WHERE canvas_id=${b.canvasId} AND node_type='root'`;
+        if(paused) {
+          assert.equal((await claimPendingJobs()).some(job=>job.id===c.jobId),false,'expiry preserves the manual pause');
+          const response=await app.inject({method:'PATCH',url:`/projects/${projectId}/task-queue`,payload:{paused:false}});
+          assert.equal(response.statusCode,200,response.body);
+        }
+        assert.ok((await claimPendingJobs()).some(job=>job.id===c.jobId),'expired answered A cannot strand C');
+        assert.equal((await fixture.reply(messageId)).statusCode,202,'reply retry stays idempotent after reclamation');
+        assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`)[0].state,'failed');
+        assert.equal(Number((await sql`SELECT count(*)::int AS n FROM job_attempts WHERE job_id=${fixture.jobId}`)[0].n),1);
+        assert.equal(Number((await sql`SELECT count(*)::int AS n FROM audit_logs WHERE action='task_queue.human_yield_closed' AND resource_id=${returned.id}`)[0].n),1);
+        for(const canvasId of [fixture.canvasId,b.canvasId,c.canvasId]) {
+          await app.inject({method:'POST',url:`/canvases/${canvasId}/jobs/cancel-active`});
+        }
+        await sql`DELETE FROM project_task_queue_items WHERE canvas_id IN (${fixture.canvasId},${b.canvasId},${c.canvasId})`;
+      });
+    }
+    await context.test('cancelling a yielded A leaves the already running B and its seat unchanged',async()=>{
+      const fixture=await setup();await fixture.seal();await fixture.close();
+      await sql`UPDATE project_task_queues SET paused=false,pause_reason=NULL WHERE project_id=${projectId}`;
+      const [item]=await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
+        VALUES(${projectId},${fixture.canvasId},'active') RETURNING id::text`;
+      const yielded=await app.inject({method:'POST',url:`/projects/${projectId}/task-queue/yield`,payload:{
+        mutation_id:randomUUID(),canvas_id:fixture.canvasId,expected_item_id:item.id,request_id:fixture.requestId,expected_revision:0}});
+      assert.equal(yielded.statusCode,200,yielded.body);
+      const canvasB=randomUUID(),jobB=randomUUID();
+      await sql`INSERT INTO canvases(id,project_id,title) VALUES(${canvasB},${projectId},'B keeps running')`;
+      const [owner]=await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${fixture.jobId}`;
+      await sql`INSERT INTO jobs(id,project_id,canvas_id,type,status,agent_snapshot_json)
+        VALUES(${jobB},${projectId},${canvasB},'audit','pending',${sql.json(owner.agent_snapshot_json)})`;
+      const enrolled=await app.inject({method:'POST',url:`/projects/${projectId}/task-queue/items`,payload:{canvas_id:canvasB}});
+      assert.equal(enrolled.statusCode,200,enrolled.body);
+      assert.ok((await claimPendingJobs()).some(job=>job.id===jobB));
+      await sql`UPDATE jobs SET status='running',started_at=clock_timestamp() WHERE id=${jobB}`;
+      const cancelled=await app.inject({method:'POST',url:`/jobs/${fixture.jobId}/cancel`});
+      assert.equal(cancelled.statusCode,200,cancelled.body);await claimPendingJobs();
+      assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`)[0].state,'cancelled');
+      assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${canvasB}`)[0].state,'active');
+      assert.equal((await sql`SELECT status FROM jobs WHERE id=${jobB}`)[0].status,'running');
+      assert.equal((await sql`SELECT paused FROM project_task_queues WHERE project_id=${projectId}`)[0].paused,false);
+      await app.inject({method:'POST',url:`/jobs/${jobB}/cancel`});
+      await sql`DELETE FROM project_task_queue_items WHERE canvas_id IN (${fixture.canvasId},${canvasB})`;
+    });
+    for (const ending of ['cancel','archive','expired','expired_reply'] as const) {
+      await context.test(`yielded membership closes through normal ${ending} entry and cannot strand new work`, async () => {
+        const expired=ending==='expired'||ending==='expired_reply';
+        const earlyReplyId=randomUUID();
+        const fixture=await setup();await fixture.seal();await fixture.close();
+        await sql`UPDATE project_task_queues SET paused=false,pause_reason=NULL WHERE project_id=${projectId}`;
+        const [item]=await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
+          VALUES(${projectId},${fixture.canvasId},'active') RETURNING id::text`;
+        const input={mutation_id:randomUUID(),canvas_id:fixture.canvasId,expected_item_id:item.id,request_id:fixture.requestId,expected_revision:0};
+        const decision=await app.inject({method:'POST',url:`/projects/${projectId}/task-queue/yield`,payload:input});
+        assert.equal(decision.statusCode,200,decision.body);
+        if (expired) {
+          await sql`UPDATE human_requests SET checkpoint_expires_at=now()-interval '1 second' WHERE id=${fixture.requestId}`;
+          if (ending==='expired_reply') {
+            const reply=await fixture.reply(earlyReplyId);assert.equal(reply.statusCode,202,reply.body);
+            assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`)[0].state,'failed',
+              'reply before the next dispatcher tick saves content without returning an expired wait to FIFO');
+          }
+          await pumpHumanContinuations(1,fixture.requestId);
+          assert.equal((await sql`SELECT checkpoint_error_code FROM human_requests WHERE id=${fixture.requestId}`)[0].checkpoint_error_code,'HUMAN_CHECKPOINT_EXPIRED');
+        } else {
+          const response=await app.inject({method:'POST',url:ending==='cancel'?`/jobs/${fixture.jobId}/cancel`:`/tasks/${fixture.canvasId}/archive`});
+          assert.equal(response.statusCode,200,response.body);
+          assert.equal((await sql`SELECT status FROM human_requests WHERE id=${fixture.requestId}`)[0].status,'closed');
+        }
+        // No queued/active membership remains. Dispatcher must still select this project.
+        assert.equal(Number((await sql`SELECT count(*)::int AS n FROM project_task_queue_items
+          WHERE project_id=${projectId} AND state IN ('queued','active')`)[0].n),0);
+        await claimPendingJobs();
+        const [closed]=await sql`SELECT state,ended_at FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`;
+        assert.equal(closed.state,expired?'failed':'cancelled');assert.ok(closed.ended_at);
+        await claimPendingJobs();
+        assert.equal(Number((await sql`SELECT count(*)::int AS n FROM audit_logs WHERE action='task_queue.human_yield_closed' AND resource_id=${item.id}`)[0].n),1);
+        assert.equal((await sql`SELECT paused FROM project_task_queues WHERE project_id=${projectId}`)[0].paused,false);
+        if (expired) {
+          const reply=await fixture.reply(earlyReplyId);assert.equal(reply.statusCode,202,reply.body);
+          await pumpHumanContinuations(1,fixture.requestId);
+          const resume=await app.inject({method:'POST',url:`/tasks/${fixture.canvasId}/resume-session`});
+          assert.equal(resume.statusCode,409,resume.body);assert.equal(resume.json().error_code,'HUMAN_REPLY_REQUIRED');
+          assert.equal((await sql`SELECT checkpoint_error_code FROM human_requests WHERE id=${fixture.requestId}`)[0].checkpoint_error_code,'HUMAN_CHECKPOINT_EXPIRED');
+          assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,'waiting_human');
+          assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`)[0].state,'failed');
+        } else {
+          if (ending==='archive') {
+            const restored=await app.inject({method:'POST',url:`/tasks/${fixture.canvasId}/unarchive`});
+            assert.equal(restored.statusCode,200,restored.body);
+          }
+          const resume=await app.inject({method:'POST',url:`/tasks/${fixture.canvasId}/resume-session`});
+          assert.equal(resume.statusCode,200,resume.body);assert.ok(resume.json().job?.id,'normal resume creates a governed Hub');
+          const enqueued=await app.inject({method:'POST',url:`/projects/${projectId}/task-queue/items`,payload:{canvas_id:fixture.canvasId}});
+          assert.equal(enqueued.statusCode,200,enqueued.body);
+          const [next]=await sql`SELECT id::text,state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`;
+          assert.notEqual(next.id,item.id);assert.equal(next.state,'queued');
+          assert.equal((await fixture.reply()).statusCode,409,'closed request cannot revive an old queue generation');
+          await claimPendingJobs();
+          assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`)[0].state,'active','old source id cannot close the new execution');
+          assert.equal((await app.inject({method:'POST',url:`/projects/${projectId}/task-queue/yield`,payload:input})).statusCode,200);
+        }
+        await app.inject({method:'POST',url:`/canvases/${fixture.canvasId}/jobs/cancel-active`});
+        await sql`DELETE FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`;
+      });
+    }
+    for(const blocker of ['unknown','paused','expired','cancelled'] as const) {
+      await context.test(`yielded reply never bypasses a later ${blocker} guard`,async()=>{
+        const fixture=await setup();await fixture.seal();await fixture.close();
+        const [item]=await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
+          VALUES(${projectId},${fixture.canvasId},'active') RETURNING id::text`;
+        const decision=await app.inject({method:'POST',url:`/projects/${projectId}/task-queue/yield`,payload:{
+          mutation_id:randomUUID(),canvas_id:fixture.canvasId,expected_item_id:item.id,request_id:fixture.requestId,expected_revision:0}});
+        assert.equal(decision.statusCode,200,decision.body);
+        if(blocker==='unknown') await sql`INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status,replay_policy)
+          VALUES(${fixture.attemptId},${fixture.jobId},'later-unknown','gateway_model_request','unknown','never')`;
+        if(blocker==='paused') await sql`UPDATE canvases SET target_json=target_json || ${sql.json({execution_control:{paused:true}})} WHERE id=${fixture.canvasId}`;
+        if(blocker==='expired') await sql`UPDATE human_requests SET checkpoint_expires_at=now()-interval '1 second' WHERE id=${fixture.requestId}`;
+        if(blocker==='cancelled') await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+        const reply=await fixture.reply();assert.equal(reply.statusCode,blocker==='cancelled'?409:202,reply.body);
+        await Promise.all([pumpHumanContinuations(1,fixture.requestId),pumpHumanContinuations(1,fixture.requestId)]);
+        assert.equal((await sql`SELECT status FROM jobs WHERE id=${fixture.jobId}`)[0].status,blocker==='cancelled'?'cancelled':'waiting_human');
+        const [request]=await sql`SELECT status,resumed_at FROM human_requests WHERE id=${fixture.requestId}`;
+        assert.equal(request.status,blocker==='cancelled'?'closed':'answered');assert.equal(request.resumed_at,null);
+        assert.equal((await sql`SELECT count(*)::int AS n FROM events WHERE job_id=${fixture.jobId}
+          AND payload_json->>'subtype'='human_continuation'`)[0].n,0);
+        await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+        await sql`DELETE FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`;
+      });
+    }
+    for (const blocker of ['other_pending','other_wait','unknown','paused','expired','cancelled','closed','budget','exit','checkpoint','revision'] as const) {
+      await context.test(`human yield rejects ${blocker} and preserves seat`, async () => {
+        const fixture=await setup();await fixture.seal();await fixture.close();
+        const [item]=await sql`INSERT INTO project_task_queue_items(project_id,canvas_id,state)
+          VALUES(${projectId},${fixture.canvasId},'active') RETURNING id::text`;
+        if(blocker==='other_pending'||blocker==='other_wait') await sql`INSERT INTO jobs(project_id,canvas_id,type,status,agent_snapshot_json)
+          VALUES(${projectId},${fixture.canvasId},'audit',${blocker==='other_wait'?'waiting_human':'pending'},'{}')`;
+        if(blocker==='unknown') await sql`INSERT INTO job_attempt_effects(attempt_id,job_id,effect_id,effect_kind,status,replay_policy)
+          VALUES(${fixture.attemptId},${fixture.jobId},'yield-unknown','gateway_model_request','unknown','never')`;
+        if(blocker==='paused') await sql`UPDATE canvases SET target_json=target_json || ${sql.json({execution_control:{paused:true}})} WHERE id=${fixture.canvasId}`;
+        if(blocker==='expired') await sql`UPDATE human_requests SET checkpoint_expires_at=now()-interval '1 second' WHERE id=${fixture.requestId}`;
+        if(blocker==='cancelled') await sql`UPDATE jobs SET status='cancelled' WHERE id=${fixture.jobId}`;
+        if(blocker==='closed') await sql`UPDATE human_requests SET status='closed' WHERE id=${fixture.requestId}`;
+        if(blocker==='budget') await sql`UPDATE job_execution_clocks SET used_ms=budget_ms WHERE job_id=${fixture.jobId}`;
+        if(blocker==='exit') await sql`UPDATE human_requests SET checkpoint_status='preparing',process_exited_at=NULL WHERE id=${fixture.requestId}`;
+        if(blocker==='checkpoint') await sql`UPDATE human_requests SET checkpoint_status='blocked' WHERE id=${fixture.requestId}`;
+        const response=await app.inject({method:'POST',url:`/projects/${projectId}/task-queue/yield`,payload:{
+          mutation_id:randomUUID(),canvas_id:fixture.canvasId,expected_item_id:item.id,request_id:fixture.requestId,
+          expected_revision:blocker==='revision'?1:0}});
+        assert.equal(response.statusCode,409,response.body);
+        assert.equal((await sql`SELECT state FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`)[0].state,'active');
+        assert.equal((await sql`SELECT count(*)::int AS count FROM project_task_queue_yields WHERE request_id=${fixture.requestId}`)[0].count,0);
+        await sql`UPDATE jobs SET status='cancelled' WHERE canvas_id=${fixture.canvasId} AND status IN ('pending','waiting_human')`;
+        await sql`DELETE FROM project_task_queue_items WHERE canvas_id=${fixture.canvasId}`;
+      });
+    }
     for (const blocker of ['preparing','missing_files','unknown_effect','paused','exhausted','cancelled','queue_wait','queue_paused_future','expired'] as const) {
       await context.test(`saved response survives ${blocker} without unauthorized execution`, async () => {
         const fixture = await setup();

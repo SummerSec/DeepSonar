@@ -322,6 +322,7 @@ Hub 普通 Intent 与 PlanTask 共用 `prepareHubIntent` 的只读 runtime freez
 
 项目 FIFO 队列在 Dispatcher 的全局 claim 事务锁内判定执行资格，实际 claim 后才标记当前占位。当前 Canvas 的内部 Job 可并行，下一 Canvas 等待治理 root/report 收敛、所有活动 Job 结束与效果结清。失败/取消保留队首并暂停，恢复必须确认当前失败项 ID；手动暂停只挡后续任务。Scheduler 按有界公平轮转对账，重启读取持久记录，硬重试在同一 claim 事务中以新条目 ID 排尾，保留暂停且废止旧失败项确认。Finding 报告再生成不创建任务新代际；终态 membership 保持不变，原报告权限和资源门不变。详见[队列专题](../PROJECT_TASK_QUEUE.md)。
 
-## 历史 failed 新 Job 与预算归属
 
-#1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。
+## 人工等待显式释放 FIFO 席位（#1074）
+
+默认人工等待占位，用户显式让位将唯一等待 Canvas 标记 yielded。回复保存事务持有 claim advisory 锁、Canvas→Job→Attempt→请求锁，原子回队尾一次，保留完成代际。轮到且无其他 active、队列未暂停才由原 requeueJob 准入取得席位和唯一后继，Dispatcher 再验。暂停、取消、断点过期、撤权、退出/效果/预算门仍生效，详见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。

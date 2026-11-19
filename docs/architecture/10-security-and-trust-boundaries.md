@@ -204,6 +204,7 @@ quota 与 DB admission 回滚的可见降级须由宿主持久 `control_receipt/
 
 activity读面同时要求项目scope和projects:read；计数仅来自本项目审计和知识，usage还要求owner_project_id为本项目。错误原因白名单化、来源正文/manifest/模型反馈正文不返回，Job/Canvas导航仍需原接口授权。登记、采集、候选、生效、拉取和模型反馈必须分层；不得用反馈success认证收益。本轮权限/隔离回归已接Actions入口但尚未执行，未合并、未部署，真实模型收益仍未知。实现与证据边界见[项目知识专题](../PROJECT_KNOWLEDGE.md)。
 
-## 历史 failed 新 Job 与预算归属
 
-#1074 的显式历史续做以原 Job 为唯一预算 owner，新的实际执行、回执和用量属于新 Job。全部跨 Job 请求/token、修正次数/revision、原硬期限和累计有效执行时间沿原账本。管理入口先幂等保存回复，交接与审计同事务，Plan 新派发额外占名额，缺证据稳定 409。根锁先于执行 Job，Canvas 操作先锁 Canvas。契约与当前支持范围见[人工续做](../HUMAN_CONTINUATION.md#历史-failed-显式续做与原预算链)。最终组合 SHA Actions 待验。
+## 人工等待队列让位（#1074）
+
+让位沿 jobs:control 和项目范围，客户端的条目/请求/revision 不构成权限或退出证明。宿主重验唯一等待、可信封存与回收、效果和费用、有效额度，统一 claim 锁内同事务审计。回复只重新排队，不授权扩额、切快照或抢占运行中任务。恢复仍实时核验授权，历史回复及旧 mutation 不复活取消的 Job。

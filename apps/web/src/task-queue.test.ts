@@ -105,3 +105,79 @@ test("task creation and project page expose queue controls without adding a proj
   assert.match(panel, /setReloadKey\(\(key\) => key \+ 1\)/);
   assert.match(panel, /has_more \? "还有更多项目未显示/);
 });
+
+test("yielded tasks remain visible separately from execution order and terminal history", () => {
+  const yielded={...queue.items[0],id:"500",state:"yielded" as const};
+  const grouped=groupProjectTaskQueue({...queue,items:[yielded]});
+  assert.deepEqual(grouped.yielded,[yielded]);
+  assert.deepEqual(grouped.queued,[]);
+  assert.deepEqual(grouped.history,[]);
+});
+
+test("queue button sends one precise yield decision, retries its identity and renders the yielded task", async () => {
+  const {JSDOM}=await import("jsdom");
+  const {act,createElement}=await import("react");
+  const {createRoot}=await import("react-dom/client");
+  const {MemoryRouter}=await import("react-router-dom");
+  const {api}=await import("./api");
+  const {AuthProvider}=await import("./auth");
+  const {ConfirmDialogProvider}=await import("./components/ConfirmDialog");
+  const {ProjectTaskQueuePanel}=await import("./components/ProjectTaskQueuePanel");
+  const dom=new JSDOM("<!doctype html><html><body><div id='root'></div></body></html>",{url:"http://127.0.0.1"});
+  const globals:Record<string,unknown>={window:dom.window,document:dom.window.document,localStorage:dom.window.localStorage,
+    HTMLElement:dom.window.HTMLElement,Element:dom.window.Element,Node:dom.window.Node,IS_REACT_ACT_ENVIRONMENT:true};
+  const previous=new Map(Object.keys(globals).map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  for(const [key,value] of Object.entries(globals)) Object.defineProperty(globalThis,key,{value,configurable:true});
+  const original={authStatus:api.authStatus,projectTaskQueue:api.projectTaskQueue,yieldProjectTaskQueue:api.yieldProjectTaskQueue,
+    setProjectTaskQueuePaused:api.setProjectTaskQueuePaused};
+  const item={...queue.items[0]!,id:"42",yield_request:{request_id:"11111111-1111-4111-8111-111111111111",expected_revision:3}};
+  const oldYielded=Array.from({length:100},(_,index)=>({...queue.items[0]!,id:String(index+1),canvas_id:`old-${index}`,
+    state:"yielded" as const,yield_request:null}));
+  let current:ProjectTaskQueue={...queue,has_more:true,items:[item,...oldYielded.slice(0,99)]};
+  const decisions:Array<Parameters<typeof api.yieldProjectTaskQueue>[1]>=[];
+  let finish:((value:ProjectTaskQueue)=>void)|undefined;
+  const container=dom.window.document.getElementById("root")!;
+  const root=createRoot(container);
+  const yieldButton=()=>[...container.querySelectorAll("button")].find(button=>button.textContent?.includes("暂存并让下一项先做"));
+  try {
+    api.authStatus=async()=>({auth_required:false,has_users:false,bootstrap_available:false,default_admin_credentials_active:false,session_ttl_days:1});
+    api.projectTaskQueue=async()=>current;
+    api.yieldProjectTaskQueue=async(projectId,input)=>{
+      assert.equal(projectId,queue.project_id);decisions.push(input);
+      if(decisions.length===1) throw new Error("connection closed after submission");
+      return new Promise<ProjectTaskQueue>(resolve=>{finish=resolve;});
+    };
+    await act(async()=>root.render(createElement(MemoryRouter,null,createElement(AuthProvider,null,
+      createElement(ConfirmDialogProvider,null,createElement(ProjectTaskQueuePanel,{projectId:queue.project_id}))))));
+    assert.ok(yieldButton());
+    await act(async()=>yieldButton()!.click());
+    assert.match(container.textContent??"",/暂存让位失败/);
+    await act(async()=>{yieldButton()!.click();yieldButton()!.click();});
+    assert.equal(decisions.length,2,"the pending retry blocks duplicate clicks");
+    assert.deepEqual(decisions[1],decisions[0],"network uncertainty retries the exact mutation");
+    assert.deepEqual({...decisions[0],mutation_id:"same"},{mutation_id:"same",canvas_id:item.canvas_id,expected_item_id:"42",
+      request_id:item.yield_request.request_id,expected_revision:3});
+    current={...queue,items:[{...item,state:"yielded",yield_request:null}]};
+    await act(async()=>{finish!(current);await Promise.resolve();});
+    assert.equal(yieldButton(),undefined);
+    assert.match(container.textContent??"",/暂存等待回复/);
+    assert.match(container.textContent??"",/回复后排到队尾/);
+    let acknowledged:string|undefined;
+    current={...queue,paused:true,pause_reason:"task_failed",has_more:true,
+      items:[{...item,state:"active",block_reason:"task_failed",yield_request:null},...oldYielded.slice(0,99)]};
+    api.setProjectTaskQueuePaused=async(projectId,paused,headId)=>{
+      assert.equal(projectId,queue.project_id);assert.equal(paused,false);acknowledged=headId;
+      return {...current,paused:false,pause_reason:null,items:current.items.map(entry=>entry.id===item.id?{...entry,state:"failed",block_reason:null}:entry)};
+    };
+    await act(async()=>container.querySelector<HTMLButtonElement>('button[aria-label="刷新项目队列"]')!.click());
+    const skip=[...container.querySelectorAll("button")].find(button=>button.textContent==="确认后跳过并继续");
+    assert.ok(skip,"failed head remains actionable with a full yielded projection");
+    await act(async()=>skip.click());
+    const confirm=[...dom.window.document.querySelectorAll("button")].find(button=>button.textContent==="跳过并继续");
+    assert.ok(confirm);await act(async()=>confirm.click());
+    assert.equal(acknowledged,item.id,"skip uses the current head identity");
+  } finally {
+    act(()=>root.unmount());Object.assign(api,original);dom.window.close();
+    for(const [key,descriptor] of previous) {if(descriptor) Object.defineProperty(globalThis,key,descriptor);else delete (globalThis as Record<string,unknown>)[key];}
+  }
+});
