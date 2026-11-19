@@ -389,13 +389,16 @@ test("OpenSandbox real runner source-text contract does not load Agentbox", () =
   assert.match(source, /provider !== ["']opensandbox["']/);
 });
 
-test("OpenSandbox Platform API PoC source-text contract injects capability env at provision", () => {
+test("OpenSandbox Platform API PoC source-text contract materializes private capability files", () => {
   const source = readFileSync(new URL("../../../agent-harness/opensandbox/opensandbox-platform-api.poc.ts", import.meta.url), "utf8");
   assert.match(source, /process\.env\.AGENT_MODE = "real"/);
   assert.match(source, /process\.env\.SANDBOX_PROVIDER = "opensandbox"/);
   assert.match(source, /import\("\.\.\/\.\.\/apps\/scheduler\/src\/runtime\.js"\)/);
   assert.match(source, /preparePlatformCapability\(jobId, snapshot/);
-  assert.match(source, /\.\.\.capability\.env/);
+  assert.match(source, /privateCredentialEnvironment\(capability\.env, \{ paths: \{\} \}\)/);
+  assert.match(source, /materializePrivateJobFiles\(host, \{ "control-token": capability\.token \}\)/);
+  assert.match(source, /Object\.assign\(env, privateCredentialEnvironment\(env, privateFiles\)\)/);
+  assert.doesNotMatch(source, /\.\.\.capability\.env/);
   assert.match(source, /host\.run\("python3 \/workspace\/poc-emit-fact\.py"/);
   assert.doesNotMatch(source, /mintJobCapabilityToken/);
   assert.doesNotMatch(source, /host\.run\([\s\S]*DEEPSONAR_API_TOKEN/);
