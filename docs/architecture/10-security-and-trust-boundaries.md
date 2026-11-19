@@ -1,7 +1,7 @@
 # 10 安全与信任边界
 
 > 状态：**as-built**（#741；#767/#775 同步）。标出用户、模型、执行环境、镜像、导入包和设备之间的信任边界及跨界校验点。
-> 同步日期：2026-11-11
+> 同步日期：2026-11-19
 
 DeepSonar 把用户输入、模型输出、第三方镜像、导入包、设备和外部 Provider 都当作不可信或可能失效的边界对象。Scheduler 是可信执行内核，持有最小必要的控制权；PostgreSQL、Canvas、Evidence 和 Sandbox 各自保存不同真相。安全设计事实见 [DESIGN.md](../../DESIGN.md)、[DEVICE_ACCESS.md](../DEVICE_ACCESS.md) 和 [AI_NATIVE_TRUSTED_KERNEL.md](../AI_NATIVE_TRUSTED_KERNEL.md)。
 
@@ -203,3 +203,7 @@ activity读面同时要求项目scope和projects:read；计数仅来自本项目
 ## 人工等待队列让位（#1074）
 
 让位沿 jobs:control 和项目范围，客户端的条目/请求/revision 不构成权限或退出证明。宿主重验唯一等待、可信封存与回收、效果和费用、有效额度，统一 claim 锁内同事务审计。回复只重新排队，不授权扩额、切快照或抢占运行中任务。恢复仍实时核验授权，历史回复及旧 mutation 不复活取消的 Job。
+
+## 历史候选库回收（#1124）
+
+IR-013 的[归属与恢复契约](../../deploy/GENERATION_GC.md)要求 operation/source/backup marker、cluster、OID、owner、ACL、已封禁 runtime 和恢复引用一致。未知授权/会话/prepared transaction/slot/subscription 保留，无 FORCE 或会话终止。删除前写当前业务库审计与宿主 intent/dropping receipt，响应丢失仅对账原 OID，同名替换拒绝。凭据沿用 stdin 传输，不进入输出，schema 无变更。共享升级锁和单一特权管理员约束 managed DDL，外部越权管理员操作不在并发保证内。

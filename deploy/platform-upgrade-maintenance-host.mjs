@@ -180,6 +180,11 @@ FROM runtime_image_scans WHERE status IN ('claimed','running')`});
     }
   };
   const adapter = {
+    async pruneGenerations() {
+      const {runHostGenerationPrune} = await import('./platform-upgrade-prune-host.mjs');
+      return runHostGenerationPrune({recovery, binding: () => adapter.deploymentBinding(), source, transport,
+        apply: options.pruneApply === true, approvedPlanHash: options.approvedPlanHash});
+    },
     async lock(fn) {
       await mkdir(recovery, {recursive: true, mode: 0o700}); await chmod(recovery, 0o700);
       await assertDirectoryDurability(root); await assertDirectoryDurability(recovery);
@@ -496,6 +501,7 @@ export async function runHostMaintenance(action, options = {}) {
   }
   const io = maintenanceHostAdapter(options);
   return io.lock(async () => {
+    if (action === 'prune-generations') return io.pruneGenerations();
     if (action === 'resume-rollback') {
       const state = await io.readJournal();
       if (!state || JSON.stringify(state.binding) !== JSON.stringify(await io.deploymentBinding())) throw new Error('rollback deployment binding mismatch');

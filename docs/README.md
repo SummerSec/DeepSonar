@@ -294,3 +294,5 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 > **Pi 内部重试结算（#1072）**：[CLI 专题](AGENT_CLI_RUNTIME_ADAPTERS.md#pi-单次模型失败与内部重试边界1072)区分单次模型消息错误与 `agent_settled`，按消息回滚失败输出并保留此前成功文本，空响应判断与去重不跨消息；保留完成门、取消和进程失败边界；镜像内原始错误 cause 丢失的证据限制单独记录。回归接既有 runtime-sandbox Actions，最终 SHA 待验；现场 Job 未重跑。
 
 #1074 的[项目队列显式人工让位](PROJECT_TASK_QUEUE.md#人工等待显式让位1074)已接 UI/API、持久决定与回复原子回队尾，默认保留席位，首片限定单一人工等待。最终 SHA Actions 另验。
+
+#1124 的[显式历史候选库回收](../deploy/GENERATION_GC.md)说明两 shell 入口、恢复保留集、权限与 OID 证明、宿主 receipt 和 Actions 隔离 PG 验收边界。

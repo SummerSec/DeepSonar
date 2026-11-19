@@ -1159,6 +1159,14 @@ Web 在现有项目 Provider 面板补显式默认账号选择/更换/清除；�
 - **代码入口**：[自动策略](../../deploy/platform-upgrade-auto-policy.mjs)、[自动状态机](../../deploy/platform-upgrade-auto.mjs)、[宿主接线](../../deploy/platform-upgrade-auto-host.mjs)、[签名验证](../../deploy/platform-upgrade-signature.mjs)、[签名运维](../../deploy/UPGRADE_AUTOMATION.md)。
 - **验证证据**：`pnpm ci:unit:platform-upgrade-maintenance`；临时密钥验签与生产 Fulcio/Rekor 身份验收分别记录，不能互相替代。同目标恢复依赖持久授权和实际激活回执；回滚及结果不明不自动开启新一代。
 
+### IR-013 显式历史候选库回收
+
+- **规范要求**：默认预览，显式 apply 和匹配审批 hash 才能删除，复用升级锁。保留当前库、最近完成当前升级的真实 source 和未结束操作引用。operation/source/backup marker、cluster、OID 与存储绑定共同证明归属，未知权限/会话/引用拒绝。删除前持久意图和审计，响应丢失按原 OID 对账，同名新 OID 拒绝。
+- **决策来源**：#1124 owner 选择 B，恢复源取 saved.source.database。
+- **实现状态**：显式宿主入口与回归接线，最终 SHA Actions 待验。
+- **代码入口**：[回收器](../../deploy/platform-upgrade-prune.mjs)、[宿主](../../deploy/platform-upgrade-prune-host.mjs)、[操作说明](../../deploy/GENERATION_GC.md)。
+- **验证证据**：`pnpm ci:unit:platform-upgrade-maintenance`、`pnpm ci:integration:platform-upgrade`，两 shell 与隔离 PostgreSQL 由既有 Actions 调用。
+
 ## 5. 设计约束
 
 ### CON-001 四层真相和唯一副作用执行者
