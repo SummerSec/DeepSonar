@@ -125,14 +125,24 @@ export async function historicalContinuationCases(context: TestContext, sql: typ
     const [source] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${f.jobId}`;
     assert.equal(source.agent_snapshot_json.agent_cli, "claude-code");
     assert.equal(source.agent_snapshot_json.agent_runtime.adapter_version, "2.1.312");
-    await sql`UPDATE job_attempts SET session_id=${sessionId} WHERE id=${f.attemptId}`;
+    const { updateAttemptResource } = await import("../job-attempt/index.js");
+    assert.ok(await updateAttemptResource(sql, f.attemptId, { sessionId }));
     const writer = new JobEvidenceWriter(f.jobId, "claude-code", f.attemptId);
     writer.setSession({ cli: "claude-code", sessionId, artifacts: [{ name: `${sessionId}.jsonl`, sourcePath: "/unused", kind: "main",
       content: JSON.stringify({ type: "user", uuid: "history-source", parentUuid: null, sessionId, cwd: "/workspace", version: "2.1.312",
         timestamp: new Date().toISOString(), message: { role: "user", content: "Retain the authorized historical decision" } }) }] });
     await writer.finalize();
     await captureHumanSession(f.jobId, f.attemptId, []);
+    const [captured] = await sql`SELECT session_id,state_json FROM job_attempts WHERE id=${f.attemptId}`;
+    assert.equal(captured.session_id, sessionId);
+    assert.equal(captured.state_json.session_id, sessionId);
+    assert.equal(captured.state_json.human_session.status, "supported");
+    assert.equal(captured.state_json.human_session.session_id, sessionId);
+    assert.equal(captured.state_json.human_session.version, source.agent_snapshot_json.agent_runtime.adapter_version);
     await f.seal(); await f.close();
+    const [closed] = await sql`SELECT session_id,state_json FROM job_attempts WHERE id=${f.attemptId}`;
+    assert.equal(closed.session_id, sessionId, "closing the source Attempt must retain its native session identity");
+    assert.equal(closed.state_json.session_id, sessionId);
     await ensureGatewayRequestBudget(sql, f.jobId, source.agent_snapshot_json);
     await sql`UPDATE jobs SET status='failed',finished_at=now() WHERE id=${f.jobId}`;
     const [request] = await sql`SELECT revision FROM human_requests WHERE id=${f.requestId}`;
@@ -141,7 +151,10 @@ export async function historicalContinuationCases(context: TestContext, sql: typ
     const target = String(response.json().job_id);
     const { claimPendingJobs } = await import("../../dispatcher.js");
     assert.ok((await claimPendingJobs()).some(job => job.id === target));
-    const prepared = await prepareHumanCheckpointContext({ jobId: target, attemptNo: 1, snapshot: source.agent_snapshot_json, host: f.host });
+    const [successor] = await sql`SELECT agent_snapshot_json FROM jobs WHERE id=${target}`;
+    assert.deepEqual(successor.agent_snapshot_json, source.agent_snapshot_json);
+    const snapshot = successor.agent_snapshot_json;
+    const prepared = await prepareHumanCheckpointContext({ jobId: target, attemptNo: 1, snapshot, host: f.host });
     assert.equal(prepared.nativeStatus?.status, "supported");
     assert.equal(prepared.nativeSession?.sessionId, sessionId);
     assert.match(prepared.nativeSession!.content, /authorized historical decision/);
@@ -150,13 +163,15 @@ export async function historicalContinuationCases(context: TestContext, sql: typ
     assert.equal((await readCompletionExecutionState(sql, target))?.accepted_terminal, null);
     const [binding] = await sql`SELECT checkpoint_sha256 FROM job_continuations WHERE target_job_id=${target}`;
     await sql`UPDATE job_continuations SET checkpoint_sha256=${"0".repeat(64)} WHERE target_job_id=${target}`;
-    await assert.rejects(loadHumanSession(target, 1, source.agent_snapshot_json), /HUMAN_CHECKPOINT_IDENTITY_CHANGED/);
+    await assert.rejects(loadHumanSession(target, 1, snapshot), /HUMAN_CHECKPOINT_IDENTITY_CHANGED/);
     await sql`UPDATE job_continuations SET checkpoint_sha256=${binding.checkpoint_sha256} WHERE target_job_id=${target}`;
     const [native] = await sql`SELECT state_json->'human_session' AS binding FROM job_attempts WHERE id=${f.attemptId}`;
-    await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json({ ...native.binding, request_id: randomUUID() })}) WHERE id=${f.attemptId}`;
-    await assert.rejects(loadHumanSession(target, 1, source.agent_snapshot_json), /HUMAN_NATIVE_SESSION_IDENTITY/);
+    for (const changed of [{ request_id: randomUUID() }, { session_id: randomUUID() }, { version: "unverified" }]) {
+      await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json({ ...native.binding, ...changed })}) WHERE id=${f.attemptId}`;
+      await assert.rejects(loadHumanSession(target, 1, snapshot), /HUMAN_NATIVE_SESSION_IDENTITY/);
+    }
     await sql`UPDATE job_attempts SET state_json=jsonb_set(state_json,'{human_session}',${sql.json(native.binding)}) WHERE id=${f.attemptId}`;
-    assert.equal((await loadHumanSession(target, 1, source.agent_snapshot_json)).status, "supported");
+    assert.equal((await loadHumanSession(target, 1, snapshot)).status, "supported");
     await sql`UPDATE jobs SET status='cancelled' WHERE id=${target}`;
   });
   await context.test("normal Verify round Job keeps its original assignment owner and cannot be copied as history", async () => {

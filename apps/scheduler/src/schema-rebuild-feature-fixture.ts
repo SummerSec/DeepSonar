@@ -92,7 +92,8 @@ export async function runFeatureSchemaRebuildFixture(testUrl: string): Promise<v
       const records: Record<string, unknown> = {};
       for (const table of ["projects", "canvases", "jobs", "findings", "finding_verification_rounds", "artifacts", "artifact_claims", "artifact_evidence", "canvas_nodes", "canvas_edges", "events", "event_dedup"]) {
         const rows = await source.unsafe(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY to_jsonb(t)::text`);
-        records[table] = rows.map(row => table === 'jobs' ? { execution_deadline_at: null, ...row.row } : row.row);
+        records[table] = rows.map(row => table === 'jobs'
+          ? { execution_deadline_at: null, budget_owner_job_id: null, budget_execution_job_id: null, ...row.row } : row.row);
       }
       return records;
     };

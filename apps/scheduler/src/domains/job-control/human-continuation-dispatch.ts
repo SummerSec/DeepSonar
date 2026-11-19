@@ -1,4 +1,6 @@
-import { assertContinuationBudgetOwner } from "./continuation-budget.js";
+import { assertContinuationBudgetOwner, lockContinuationBudget } from "./continuation-budget.js";
+import { getActiveAttempt } from "../job-attempt/index.js";
+import { SharedAssetLifecycleConflictError } from "../../shared-asset-lifecycle.js";
 import { sql } from "../../db.js";
 import { assertHumanContinuationOwner } from "./human-checkpoint.js";
 import { frozenSnapshotStaleDetail } from "./rerun.js";
@@ -25,4 +27,19 @@ export async function preflightHumanContinuation(job:Record<string,unknown>,atte
   if(!request && !binding) return;
   await assertHumanContinuationOwner(sql,jobId,attemptId);
   if(await frozenSnapshotStaleDetail(sql,job)) throw new Error("HUMAN_CONTINUATION_SNAPSHOT_CHANGED");
+}
+
+/** Job before Attempt; both provision admission and mount settlement fence the same owner. */
+export async function lockCurrentProvisioningAttempt(
+  db: typeof sql, jobId: string, attemptId: string, phase: "preparing" | "provision.effect_pending",
+): Promise<void> {
+  await lockContinuationBudget(db, jobId);
+  const [job] = await db`
+    SELECT j.status, (SELECT id FROM job_attempts WHERE job_id = j.id ORDER BY attempt_no DESC LIMIT 1) AS latest_attempt_id
+    FROM jobs j WHERE j.id = ${jobId} FOR UPDATE OF j`;
+  const attempt = await getActiveAttempt(db, jobId, true);
+  if (job?.status !== "provisioning" || job.latest_attempt_id !== attemptId || attempt?.id !== attemptId
+    || attempt.cancel_requested !== false || attempt.phase !== phase) {
+    throw new SharedAssetLifecycleConflictError("stale_attempt");
+  }
 }

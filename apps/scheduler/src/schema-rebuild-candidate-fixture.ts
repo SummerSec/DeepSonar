@@ -44,7 +44,8 @@ async function captureHistory(db: ReturnType<typeof postgres>): Promise<Record<s
   const records: Record<string, unknown> = {};
   for (const table of ["projects", "canvases", "jobs", "findings", "finding_verification_rounds", "artifacts", "artifact_claims", "artifact_evidence", "canvas_nodes", "canvas_edges", "events", "event_dedup", "project_finding_feature_scan", "project_finding_feature_work", "project_finding_features"]) {
     const rows = await db.unsafe(`SELECT to_jsonb(t) AS row FROM ${table} t ORDER BY to_jsonb(t)::text`);
-    records[table] = rows.map(row => table === 'jobs' ? { execution_deadline_at: null, ...row.row } : row.row);
+    records[table] = rows.map(row => table === 'jobs'
+      ? { execution_deadline_at: null, budget_owner_job_id: null, budget_execution_job_id: null, ...row.row } : row.row);
   }
   return records;
 }

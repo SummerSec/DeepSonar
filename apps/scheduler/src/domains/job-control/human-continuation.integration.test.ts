@@ -19,6 +19,17 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
   process.env.DEEPSONAR_AUTH_REQUIRED = "false"; process.env.BLOB_DIR = directory;
   process.env.DEEPSONAR_MASTER_KEY = "00".repeat(32);
   process.env.DEEPSONAR_REPAIR_MAX_TOKENS = "6";
+  // Synthetic image metadata is the fixture boundary. Keep real snapshot
+  // resolution and extension admission, including every later stale recheck.
+  const images = await import("../../runtime-images.js");
+  const { PI_EXTENSION_REGISTRY } = await import("@deepsonar/shared-types");
+  context.mock.module(new URL("../../runtime-images.js", import.meta.url), { namedExports: { ...images,
+    resolveRuntimeImageForJob: async (...args: Parameters<typeof images.resolveRuntimeImageForJob>) => {
+      const image = await images.resolveRuntimeImageForJob(...args);
+      assert.equal(image.source_kind, "fake");
+      return { ...image, image_version: PI_EXTENSION_REGISTRY["pi-observational-memory"].min_runtime_image_version };
+    },
+  } });
   const [{ default: Fastify }, { default: websocket }, { sql, migrate }, { registerRoutes }, core, attempts, api,
     snapshots, { freezeJobRuntimeConfiguration }, checkpoints, { checkpointHash }, clock, { pumpHumanContinuations },
     { destroyAndSettleHumanWaitRun }, { createSqlJobLifecycleApplication }, humans] = await Promise.all([
@@ -35,6 +46,17 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
     const {requeueJob}=await import('./rerun.js');
     const projectId = randomUUID();
     await sql`INSERT INTO projects(id,name) VALUES(${projectId},'continuation fixture')`;
+    context.afterEach(async () => {
+      // This database belongs only to this test. Release each subtest's Jobs
+      // and FIFO membership, including when an assertion stopped its cleanup.
+      // Otherwise old claims consume provisioning slots and old queue heads
+      // enter the next subtest's normal dispatcher reconciliation.
+      const active = await sql`SELECT id FROM jobs WHERE status IN ('pending','claimed','provisioning','running','waiting_human')`;
+      for (const job of active) await createSqlJobLifecycleApplication(sql).cancelJob(String(job.id), "synthetic subtest finished");
+      await sql`DELETE FROM project_task_queue_yields`;
+      await sql`DELETE FROM project_task_queue_items`;
+      await sql`UPDATE project_task_queues SET paused=false,pause_reason=NULL`;
+    });
     const setup = async (gateway?: { baseUrl: string; om?: boolean; maxRequests?: number; deferHuman?: boolean; jobId?: string }) => {
       const fixtureProjectId = gateway ? randomUUID() : projectId;
       if (gateway) {
@@ -97,7 +119,7 @@ test("human continuation: durable seal, resource release, overdue, late reply, s
       assert.equal(job.agent_snapshot_json.agent_cli,'claude-code');
       assert.equal(job.agent_snapshot_json.agent_runtime.adapter_version,'2.1.312');
       const privateKey='-----BEGIN PRIVATE KEY-----\nMANAGED_PEM_BODY_MUST_DISAPPEAR\n-----END PRIVATE KEY-----';
-      await sql`UPDATE job_attempts SET session_id=${sessionId} WHERE id=${fixture.attemptId}`;
+      await attempts.updateAttemptResource(sql,fixture.attemptId,{sessionId});
       const writer=new JobEvidenceWriter(fixture.jobId,'claude-code',fixture.attemptId);
       writer.setSession({cli:'claude-code',sessionId,artifacts:[{name:`${sessionId}.jsonl`,sourcePath:'/unused',kind:'main',content:[
         {type:'user',uuid:'entry',parentUuid:null,sessionId,cwd:'/workspace',version:'2.1.312',

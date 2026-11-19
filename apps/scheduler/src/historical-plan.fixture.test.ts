@@ -59,31 +59,26 @@ export async function historicalPlanCases(h: Awaited<ReturnType<typeof createPla
       reply: { message_id: randomUUID(), body: "Continue the authorized Plan work with the original reference" } };
   };
   for (const mode of ["remaining", "exhausted", "stopped", "dependent", "wrong_source", "multiple_failed"] as const) {
-    const objective = executionObjective(); objective.budget.max_tasks = mode === "exhausted" ? 1 : mode === "dependent" ? 3 : 2;
+    const objective = executionObjective(); objective.budget.max_tasks = mode === "exhausted" ? 1 : ["dependent", "multiple_failed"].includes(mode) ? 3 : 2;
+    if (mode === "multiple_failed") objective.budget.max_parallel_tasks = 2;
     const f = await h.fixture(objective), proposal = h.proposal(f, mode === "dependent"
       ? [h.task("collect", f.root), h.task("verify", f.root, ["collect"])] : mode === "multiple_failed"
         ? [h.task("collect", f.root), h.task("independent", f.root)] : [h.task("collect", f.root)]);
     const submitted = await h.invoke(f.hub, "submit_plan", proposal);
     assert.equal(submitted.statusCode, 200, submitted.body);
-    const child = String((await h.children(f.hub))[0].id);
+    const dispatched = await h.children(f.hub);
+    const child = String(dispatched.find(row => row.payload_json.plan_context.task_id === "collect")!.id);
+    const independent = dispatched.find(row => row.payload_json.plan_context.task_id === "independent");
+    if (mode === "multiple_failed") { assert.equal(dispatched.length, 2); assert.ok(independent); await start(String(independent.id)); }
     const payload = await sealAndFail(child);
     assert.equal((await h.state(f.canvas)).plan_execution.stop_reason, mode === "dependent" ? "dependency_failed" : "task_failed");
     assert.equal((await h.state(f.canvas)).plan_execution.stopped_job_id, child);
     if (mode === "stopped") await h.sql`UPDATE canvases SET target_json=jsonb_set(target_json,'{plan_execution,stop_reason}', '"user_stop"'::jsonb) WHERE id=${f.canvas}`;
     if (mode === "wrong_source") await h.sql`UPDATE canvases SET target_json=jsonb_set(target_json,'{plan_execution,stopped_job_id}',${h.sql.json(randomUUID())}) WHERE id=${f.canvas}`;
     if (mode === "multiple_failed") {
-      // Add a separately admitted current task, then fail it through lifecycle.
-      // This is an admission guard fixture, not a second normal Plan dispatch.
-      const [source] = await h.sql`SELECT * FROM jobs WHERE id=${child}`;
-      const sibling = randomUUID(), task = proposal.plan.tasks[1]!;
-      const { contentSha256 } = await import("./domains/plan-protocol/criterion-model.js");
-      await h.sql`INSERT INTO jobs(id,project_id,canvas_id,parent_job_id,type,status,payload_json,agent_snapshot_json,timeout_sec)
-        VALUES(${sibling},${source.project_id},${source.canvas_id},${source.parent_job_id},${source.type},'pending',
-          ${h.sql.json({ ...source.payload_json, plan_context: { ...source.payload_json.plan_context, task_id: task.id, task_sha256: contentSha256(task) } })},
-          ${h.sql.json(source.agent_snapshot_json)},${source.timeout_sec})`;
-      const lifecycle = createSqlJobLifecycleApplication(h.sql);
-      assert.ok(await lifecycle.claimPendingJob(sibling));
-      assert.ok(await lifecycle.failExecution(sibling, "independent failed task"));
+      assert.ok(await h.sql.begin(tx => h.core.finalizeJob(tx as unknown as typeof h.sql, String(independent!.id), "failed", { error: "independent task failed" })));
+      assert.equal((await h.children(f.hub)).filter(row => row.status === "failed").length, 2);
+      assert.equal((await h.state(f.canvas)).plan_execution.lifetime_tasks_dispatched, 2);
     }
     const response = await h.app.inject({ method: "POST", url: `/jobs/${child}/continuations`, payload });
     if (["exhausted", "stopped", "wrong_source", "multiple_failed"].includes(mode)) {

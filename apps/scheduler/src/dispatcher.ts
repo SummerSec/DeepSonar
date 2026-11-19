@@ -1,7 +1,7 @@
 import { lockContinuationBudget } from "./domains/job-control/continuation-budget.js";
 import { cleanupDispatcherSandbox } from "./dispatcher-human-wait.js";
 import { humanExecutionStartedAt } from "./domains/job-control/human-continuation-clock.js";
-import { preflightHumanContinuation, assertContinuationExecutionOwner, hasHumanOrRepairBoundary } from "./domains/job-control/human-continuation-dispatch.js";
+import { preflightHumanContinuation, assertContinuationExecutionOwner, hasHumanOrRepairBoundary, lockCurrentProvisioningAttempt } from "./domains/job-control/human-continuation-dispatch.js";
 import { frozenGatewayRequestBudget, GatewayRequestBudgetError } from "./gateway-request-policy.js";
 import { recordGatewaySnapshotNoStart } from "./gateway-snapshot-no-start.js";
 import { frozenTaskContract, taskContractPreflight, TaskContractBlockedError } from "./task-contract-preflight.js";
@@ -69,6 +69,8 @@ import {
   settleAttemptTerminal,
   updateAttemptResource,
 } from "./domains/job-attempt/index.js";
+
+export { lockCurrentProvisioningAttempt };
 
 const DISPATCHER_EXCEPTION_FALLBACK = "exception";
 
@@ -1004,21 +1006,6 @@ async function retryContextWindowExceededJob(
   });
   if (retried) await sql`SELECT pg_notify('deepsonar_jobs', 'context_window_exceeded_retry')`;
   return Boolean(retried);
-}
-
-/** Job before Attempt; both provision admission and mount settlement fence the same owner. */
-export async function lockCurrentProvisioningAttempt(
-  db: typeof sql, jobId: string, attemptId: string, phase: "preparing" | "provision.effect_pending",
-): Promise<void> {
-  await lockContinuationBudget(db, jobId);
-  const [job] = await db`
-    SELECT j.status, (SELECT id FROM job_attempts WHERE job_id = j.id ORDER BY attempt_no DESC LIMIT 1) AS latest_attempt_id
-    FROM jobs j WHERE j.id = ${jobId} FOR UPDATE OF j`;
-  const attempt = await getActiveAttempt(db, jobId, true);
-  if (job?.status !== "provisioning" || job.latest_attempt_id !== attemptId || attempt?.id !== attemptId
-    || attempt.cancel_requested !== false || attempt.phase !== phase) {
-    throw new SharedAssetLifecycleConflictError("stale_attempt");
-  }
 }
 
 async function runJob(jobId: string, createProbe: CreateCircuitProbe | null = null) {
