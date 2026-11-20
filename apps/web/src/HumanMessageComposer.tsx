@@ -54,15 +54,17 @@ export function HumanMessageComposer({
   const jobId = selectedNode?.job_id ?? (typeof selectedNode?.body_json.job_id === "string" ? selectedNode.body_json.job_id : null);
   const waitingJob = selectedNode?.status === "waiting_human"
     || jobs?.some(job => job.id === jobId && job.status === "waiting_human");
+  const [replyPurpose, setReplyPurpose] = useState(Boolean(waitingJob));
+  useEffect(() => { if (waitingJob) setReplyPurpose(true); }, [waitingJob]);
   const request = useHumanMessageRequest(canvasId, targetKind === "job" && waitingJob ? jobId : null, intervention?.node.updated_at);
   useEffect(() => {
     if (!draftRequest && request.target) setDraftRequest(request.target);
   }, [draftRequest, request.target]);
   const requestChanged = Boolean(request.target && draftRequest && (request.target.request_id !== draftRequest.request_id
     || request.target.expected_revision !== draftRequest.expected_revision));
-  const jobTarget = nodeEligible ? waitingJob || draftRequest ? request.target : humanMessageTargetForNode(selectedNode, jobs) : null;
+  const jobTarget = nodeEligible ? waitingJob || replyPurpose ? request.target : humanMessageTargetForNode(selectedNode, jobs) : null;
   const target = targetKind === "job" ? jobTarget : targetKind === "hub" ? { kind: "hub" as const } : null;
-  const waitingForCurrentRequest = targetKind === "job" && (Boolean(draftRequest && !waitingJob)
+  const waitingForCurrentRequest = targetKind === "job" && (Boolean(replyPurpose && !waitingJob)
     || Boolean(waitingJob && (!request.target || !draftRequest || requestChanged))
     || Boolean(intervention?.pending && (intervention.detailStatus !== "loaded" || intervention.detailVersionMatches !== true)));
   const canSubmit = Boolean(projectId && target && trimmed.length >= 1 && trimmed.length <= HUMAN_MESSAGE_MAX_LENGTH && !busy && !waitingForCurrentRequest);
@@ -155,7 +157,7 @@ export function HumanMessageComposer({
               </p>
             </section>
           )}
-          {targetKind === "job" && draftRequest && !waitingJob && <div className="human-message-feedback" role="alert">
+          {targetKind === "job" && replyPurpose && !waitingJob && <div className="human-message-feedback" role="alert">
             当前运行已不再等待人工回复，暂停发送。草稿和附件已保留，不会自动作为普通运行消息发送；请核对运行状态，或显式选择其他消息目标。
           </div>}
           {showCurrentRequest && requestChanged && <div className="human-message-feedback" role="alert">

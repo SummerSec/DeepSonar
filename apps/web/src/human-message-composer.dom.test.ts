@@ -275,6 +275,22 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     assert.equal(sendDisabled(), false, "only an explicit target change can repurpose the retained draft");
     await act(async () => { send(); await saved; });
     assert.deepEqual(createMessage.mock.calls[7]!.arguments[1].target, { kind: "hub" });
+
+    act(() => root.render(null));
+    let finishFirstRead!: (detail: typeof currentDetail) => void;
+    requestResult = new Promise(resolve => { finishFirstRead = resolve; });
+    renderWaiting(null, runningTarget, [{ id: "job-0", status: "waiting_human" }]);
+    type("首次请求读取期间写好的回复");
+    renderWaiting(null, runningTarget, [{ id: "job-0", status: "running" }]);
+    assert.equal(sendDisabled(), true, "reply purpose is fixed before the first request read completes");
+    assert.equal(container.querySelector("textarea")!.value, "首次请求读取期间写好的回复");
+    await act(async () => { finishFirstRead(currentDetail); await requestResult; });
+    assert.equal(sendDisabled(), true, "a late first read cannot undo the wait-ended guard");
+    act(() => [...container.querySelectorAll("button")].find(button => button.textContent?.trim() === "发送消息")!.click());
+    assert.equal(createMessage.mock.callCount(), 8);
+    act(() => container.querySelectorAll<HTMLInputElement>('input[type="radio"]')[0]!.click());
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[8]!.arguments[1].target, { kind: "hub" });
   } finally {
     act(() => root.unmount());
     createMessage.mock.restore();
