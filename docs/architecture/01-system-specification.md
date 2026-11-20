@@ -582,7 +582,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 - **规范要求**：Verify 必须将通过、否定、冲突、证据不足、不可判定和需人工映射为明确终态/缺项；否定 evidence 只能在完整结构化证据和成功来源 Job 下进入 refuted，冲突进入 inconclusive，不得用 needs_human 混淆。
 - **决策来源**：终态决定 Hub、Report 和人工动作，错误映射会产生虚假确认或无限循环。
-- **实现状态**：as-built；无进展护栏与默认值见[配置](../../apps/scheduler/src/config.ts)中的 `DEEPSONAR_MAX_NO_PROGRESS_ROUNDS`。#1133 后，Verify 补证回弹另有独立刹车：连续 `VERIFY_NO_PROGRESS_LIMIT`（2）次回弹的缺失证据集合完全相同即收口 `needs_human`，round error 与结算 reason 落稳定码 `verify_no_progress`（`apps/scheduler/src/verify-no-progress.ts`）。
+- **实现状态**：as-built；无进展护栏与默认值见[配置](../../apps/scheduler/src/config.ts)中的 `DEEPSONAR_MAX_NO_PROGRESS_ROUNDS`。#1133 后，Verify 补证回弹另有独立刹车：有效项目规则 `maxNoProgressRounds=0` 时关闭，正值仍按独立 `VERIFY_NO_PROGRESS_LIMIT`（2）判断，连续回弹的缺失证据集合完全相同即收口 `needs_human`，结算 reason 落稳定码 `verify_no_progress`。项目 → 全局 → env 的规则解析复用现有入口；真实 SQL 回归及待验边界见[运行时规则](06-runtime-view.md#verify-补证无进展开关1133)。
 - **代码入口**：[Fact-first follow-up](../../apps/scheduler/src/verify-fact-gate.ts)、[Finding state matrix](../../apps/scheduler/src/finding-state-matrix.ts)、[Verify terminal](../../apps/scheduler/src/verify-terminal.ts)。
 - **验证证据**：`pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:convergence-recovery`。
 

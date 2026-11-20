@@ -1,6 +1,6 @@
 # DeepSonar 文档索引
 
-#1133 的[人工技术收口](architecture/09-interface-specs.md#人工结束技术验证1133)新增受权限、CAS、持久幂等与同事务审计保护的无定论终结轮次，并补齐[设备要求冻结](DEVICE_ACCESS.md)的自动和人工补证入口。既有 #1138 无进展刹车继续复用，最终 SHA Actions 待验。
+#1133 的[人工技术收口](architecture/09-interface-specs.md#人工结束技术验证1133)新增受权限、CAS、持久幂等与同事务审计保护的无定论终结轮次，并补齐[设备要求冻结](DEVICE_ACCESS.md)的自动和人工补证入口。既有 #1138 无进展刹车继续复用，其关闭开关与真实 SQL 回归见[运行时规则](architecture/06-runtime-view.md#verify-补证无进展开关1133)，最终 SHA Actions 待验。
 
 #1082 的[最终用量与安全形态诊断](MODEL_GATEWAY_TRANSPARENCY.md#anthropic-最终用量与安全形态诊断1082)保留最终 usage 门槛，诊断摘要最多 2 KiB，形态哈希不含原始帧或秘密。真实 scanner/main/OM 账本回归已接原 Actions，最终 SHA 待验，看板按模型和主任务/记忆后台展示未上报与待对账请求，并单列最多 8 个待确认模型；历史根因仍未确认。
 

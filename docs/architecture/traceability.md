@@ -1,7 +1,7 @@
 # DeepSonar 需求追溯矩阵
 
 > 状态：**as-built + 追溯登记**。#871/#873/#874 的当前修复接线与历史验收分开；每行把规格编号接到视图、ADR、代码和可复验入口，测试命令不表示本次已执行通过。
-> 同步日期：2026-11-19
+> 同步日期：2026-11-20
 > **v0.6.3 本轮追溯口径（2026-11-01）**：强关系条目中的独立人工质量/隔离调参留出、后续质量门、Host 外部证据认证/当前证书、CAS 晋升及公开建议属于暂缓范围，不作本轮 PR 合并、工程 issue 收口或发布前置条件。原规格、需求行和 ADR 保留，现有工程测试/权限/CAS/发布抑制边界不减；最终 SHA 的现有 GitHub Actions 适用检查必须实际全绿，全部测试/构建/typecheck 仅在 Actions 执行。质量仍 `unknown` / `not_evaluated`、强关系 `published=false`；矩阵中的历史质量缺口不表示本轮追加卡点。见[最新范围决定](<../../AGENTS.md#豁免范围>)。
 
 矩阵首列是规格正文中定义的裸 ID，每个 ID 只出现一行。架构视图和 ADR 使用当前架构目录中的相对链接；代码入口直接复用规格正文来源；验收列复用同一编号的真实测试入口或人工核查。测试命令是入口，不代表当前文档同步重新执行或真实沙箱试验通过。
@@ -78,7 +78,7 @@
 | FR-VERIFY-002 | [质量属性](04-quality-attributes.md)；[运行时视图](06-runtime-view.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Verify gate](../../apps/scheduler/src/verify-fact-gate.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:finding-protocol`。 |
 | FR-VERIFY-003 | [运行时视图](06-runtime-view.md)；[数据架构](08-data-architecture.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Verify gate resolver](../../apps/scheduler/src/verify-fact-gate.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:verify-eligibility`。 |
 | FR-VERIFY-004 | [运行时视图](06-runtime-view.md)；[数据架构](08-data-architecture.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Verify routes](../../apps/scheduler/src/domains/finding-verification/routes.ts) | `pnpm ci:unit:dispatch-limits`、`pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:verify-eligibility`、`pnpm ci:unit:bounded-contexts`。 |
-| FR-VERIFY-005 | [质量属性](04-quality-attributes.md)；[运行时视图](06-runtime-view.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Fact-first follow-up](../../apps/scheduler/src/verify-fact-gate.ts)；[Operator decision](../../apps/scheduler/src/domains/finding-verification/operator-verification.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:integration:verify-eligibility`、`pnpm ci:unit:web-facts`。#1133 最终 SHA Actions 待验。 |
+| FR-VERIFY-005 | [质量属性](04-quality-attributes.md)；[运行时视图](06-runtime-view.md#verify-补证无进展开关1133) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Fact-first follow-up](../../apps/scheduler/src/verify-fact-gate.ts)；[Verify close](../../apps/scheduler/src/verify.ts)；[Operator decision](../../apps/scheduler/src/domains/finding-verification/operator-verification.ts) | `pnpm ci:unit:verify-eligibility`、`pnpm ci:integration:convergence-recovery`、`pnpm ci:integration:verify-eligibility`（真实 closeVerifyRound/SQL 覆盖 maxNoProgressRounds=0 关闭与正值固定阈值 2）、`pnpm ci:unit:web-facts`。#1133 最终 SHA Actions 待验。 |
 | FR-RSCH-001 | [构件视图](05-building-blocks.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Research policy](../../apps/scheduler/src/domains/finding-research/policy.ts) | `pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`。 |
 | FR-RSCH-002 | [质量属性](04-quality-attributes.md)；[数据架构](08-data-architecture.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Research ranking](../../apps/scheduler/src/domains/finding-research/policy.ts) | `pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`。 |
 | FR-RSCH-003 | [运行时视图](06-runtime-view.md)；[数据架构](08-data-architecture.md) | [ADR-0004](adr/0004-fact-and-finding-verification.md) | [Research best effort](../../apps/scheduler/src/domains/finding-research/application.ts) | `pnpm ci:unit:finding-research`、`pnpm ci:integration:finding-research`、`pnpm ci:unit:bounded-contexts`。 |
