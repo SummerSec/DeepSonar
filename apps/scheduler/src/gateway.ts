@@ -489,10 +489,10 @@ export function upstreamAuthHeaders(provider: string, secret: string): Record<st
   return { ...upstreamProtocolHeaders(provider), ...upstreamFinalAuthHeaders(provider, secret) };
 }
 
-/** 凭据 base_url 已带 /v1 时，不要把 Claude Code 的 /v1/messages 再拼成 /v1/v1/messages。 */
+/** Observe known ASCII credentials even when unrelated escapes are invalid. */
 function observeGatewayTarget(target: string): string {
-  if (/%(?![0-9a-f]{2})/iu.test(target)) throw new Error("invalid_target_escape");
-  // Tokens are ASCII. Decode octets without rejecting legal non-UTF-8 URI bytes.
+  // Decode only complete octets. Callers still reject invalid escapes after
+  // credential inspection, and legal non-UTF-8 URI bytes remain observable.
   return target.replace(/%([0-9a-f]{2})/giu, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
 }
 
@@ -1330,12 +1330,13 @@ export function registerGateway(app: FastifyInstance): void {
         return persistNoEffectReceipt(sql, { jobId: String(jt.job_id), attemptId: String(jt.attempt_id),
           tokenId: String(jt.id), workload: gatewayWorkload(jt.workload), requestId: clientRequestId, reason });
       };
-      let decodedTarget = req.url;
-      try { decodedTarget = observeGatewayTarget(req.url); }
-      catch { return deny(reply, 400, "Invalid request target encoding", "invalid_request_target"); }
+      const decodedTarget = observeGatewayTarget(req.url);
       if (req.url.includes(token) || decodedTarget.includes(token)) {
         auditCredentialDenial(jt, "request_target");
         return deny(reply, 400, "Job credential in request target", "credential_in_business_data");
+      }
+      if (/%(?![0-9a-f]{2})/iu.test(req.url)) {
+        return deny(reply, 400, "Invalid request target encoding", "invalid_request_target");
       }
       if (req.url === "/gateway/_allowance") {
         const [credential] = await sql`SELECT * FROM credentials WHERE id = ${jt.credential_id}`;
@@ -1561,12 +1562,13 @@ export function registerGateway(app: FastifyInstance): void {
       let requestTrailers: string[];
       try {
         url = joinGatewayUpstreamUrl(baseUrl, upstreamPath, qs);
-        let observedTarget = url;
-        try { observedTarget = observeGatewayTarget(url); }
-        catch { return deny(reply, 400, "Invalid upstream target encoding", "invalid_request_target"); }
+        const observedTarget = observeGatewayTarget(url);
         if (url.includes(token) || observedTarget.includes(token)) {
           auditCredentialDenial(jt, "upstream_target");
           return deny(reply, 400, "Job credential in upstream target", "credential_in_business_data");
+        }
+        if (/%(?![0-9a-f]{2})/iu.test(url)) {
+          return deny(reply, 400, "Invalid upstream target encoding", "invalid_request_target");
         }
         const frozenSnapshot = (jt.agent_snapshot_json ?? {}) as Record<string, unknown>;
         const om = workload === "observational_memory"

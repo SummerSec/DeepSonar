@@ -307,16 +307,14 @@ test("transparent Gateway preserves admitted HTTP requests and responses", { ski
         assertCredentialDenial(await via(`/v1/${value}`));
       }
       const partlyEncoded = `%${token.plaintext.charCodeAt(0).toString(16)}${token.plaintext.slice(1)}`;
-      for (const target of [`/v1/messages?debug=${partlyEncoded}`,
-        `/v1/messages?debug=ok&debug=${partlyEncoded}`, `/v1/${partlyEncoded}`]) {
+      for (const target of [`/v1/messages?debug=${partlyEncoded}&bad=%ZZ`,
+        `/v1/messages?bad=%ZZ&debug=ok&debug=${partlyEncoded}`, `/v1/${partlyEncoded}?bad=%ZZ`]) {
         assertCredentialDenial(await via(target));
       }
       const beforeInvalidTargets = counter(await renderMetrics());
-      assert.equal(beforeInvalidTargets, beforeMetric + 9, "valid encoded targets must reach the credential guard");
-      for (const target of [`/v1/messages?debug=${partlyEncoded}&bad=%ZZ`,
-        `/v1/messages?bad=%ZZ&debug=ok&debug=${partlyEncoded}`, `/v1/${partlyEncoded}?bad=%ZZ`]) {
-        // Invalid escapes are rejected before token inspection. A generic 400
-        // cannot prove that a credential guard ran or incremented its counter.
+      assert.equal(beforeInvalidTargets, beforeMetric + 9, "unrelated invalid escapes cannot bypass credential inspection");
+      for (const target of ["/v1/messages?bad=%ZZ", "/v1/messages?bad=%ZZ&debug=ok", "/v1/messages?debug=ok&bad=%ZZ"]) {
+        // Targets without credentials still undergo strict encoding validation.
         const response = await via(target);
         assert.equal(response.status, 400);
         assert.equal(JSON.parse(response.body.toString("utf8")).error.type, "invalid_request_target");
