@@ -1,7 +1,7 @@
 # 人工等待的断点与续做（#1074）
 
 > 状态：as-built 代码契约；最终提交的 GitHub Actions 验收另验
-> 同步日期：2026-11-12
+> 同步日期：2026-11-20
 > 需求：FR-JOB-008、FR-CTRL-006；决策：[ADR 0022](architecture/adr/0022-human-continuation.md)
 
 人工等待超过响应阈值只记 overdue，Job 保持 waiting_human。有权限的用户可在 Job 详情读取完整问题并「回复并继续」。2026-11-11 的两个历史 failed Job 不自动复活，也不据历史回执重放外部效果。此实现不部署现场，不更换用户运行配置。
@@ -23,6 +23,8 @@ Dispatcher 正常 finally 立即回收等待资源；重启后现有 reconciliat
 ## 回复、准入与运行
 
 沿用 POST /canvases/:id/messages（tasks:write 与原项目隔离），target.kind=request 必须携带 request_id 和 expected_revision，message_id 是客户端幂等 UUID。相同 ID/目标/版本/正文/附件返回原消息，改正文或附件返回 409；旧版本或其他请求不能解除新一轮等待。
+
+画布的人工消息窗口在回复 waiting_human 运行前，从既有 Job 详情读取当前持久请求、完整问题和版本，并用 request 目标发送正文及附件；不能仅凭画布节点详情改发普通 Job 消息。读取期间禁用发送；读取失败可在原窗口重试，草稿保留；请求缺失、已处理、历史请求或归属不一致时阻止提交。普通活动运行仍使用原 Job 目标；窗口不自动重发失败消息，不通过切换 Hub 目标替用户回答请求。回归接既有 ci:unit:web-facts，最终 SHA Actions 另验。
 
 回复先保存为 answered，返回 202/reply_state=reply_saved。即使准备中、暂停、缺文件或预算不足，回复仍持久存在，不要求重复输入。202 只证明保存，UI 通过 human_continuation 和 execution_state 展示后续阻塞。generic job/hub 消息和「忽略」都不能直接恢复 waiting_human。
 

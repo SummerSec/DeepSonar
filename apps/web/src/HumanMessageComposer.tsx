@@ -2,6 +2,7 @@ import { CheckCircle, File, PaperPlaneTilt, UploadSimple, X } from "@phosphor-ic
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, type CanvasHumanMessage, type CanvasNode } from "./api";
 import { HumanRequestDetails } from "./HumanRequestDetails";
+import { useHumanMessageRequest } from "./use-human-message-request";
 import {
   HUMAN_MESSAGE_MAX_LENGTH,
   humanMessageAssetKey,
@@ -49,14 +50,18 @@ export function HumanMessageComposer({
   const [progress, setProgress] = useState("");
   const [error, setError] = useState("");
   const trimmed = body.trim();
-  const jobTarget = nodeEligible ? humanMessageTargetForNode(selectedNode, jobs) : null;
-  const target = targetKind === "job" ? jobTarget : targetKind === "hub" ? { kind: "hub" as const } : null;
+  const jobId = selectedNode?.job_id ?? (typeof selectedNode?.body_json.job_id === "string" ? selectedNode.body_json.job_id : null);
   const waitingJob = selectedNode?.status === "waiting_human"
-    || jobs?.some(job => job.id === selectedNode?.job_id && job.status === "waiting_human");
-  const waitingForCurrentRequest = targetKind === "job" && (waitingJob || intervention?.pending)
-    && (!intervention || intervention.detailStatus !== "loaded" || intervention.detailVersionMatches !== true);
+    || jobs?.some(job => job.id === jobId && job.status === "waiting_human");
+  const request = useHumanMessageRequest(canvasId, targetKind === "job" && waitingJob ? jobId : null, intervention?.node.updated_at);
+  const jobTarget = nodeEligible ? waitingJob ? request.target : humanMessageTargetForNode(selectedNode, jobs) : null;
+  const target = targetKind === "job" ? jobTarget : targetKind === "hub" ? { kind: "hub" as const } : null;
+  const waitingForCurrentRequest = targetKind === "job" && (Boolean(waitingJob && !request.target)
+    || Boolean(intervention?.pending && (intervention.detailStatus !== "loaded" || intervention.detailVersionMatches !== true)));
   const canSubmit = Boolean(projectId && target && trimmed.length >= 1 && trimmed.length <= HUMAN_MESSAGE_MAX_LENGTH && !busy && !waitingForCurrentRequest);
-  const targetTitle = target?.kind === "hub" ? "Hub" : target?.kind === "job" ? selectedNode?.title ?? "当前运行" : "未选择";
+  const targetTitle = targetKind === "hub" ? "Hub" : targetKind === "job" ? selectedNode?.title ?? "当前运行" : "未选择";
+  const currentPayload = targetKind === "job" && waitingJob ? request.request?.payload : null;
+  const showCurrentRequest = targetKind === "job" && waitingJob;
   const totalBytes = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
 
   const addFiles = (incoming: FileList | null) => {
@@ -123,21 +128,18 @@ export function HumanMessageComposer({
         </header>
 
         <div className="human-message-composer-body">
-          {targetKind === "job" && waitingJob && !intervention && (
-            <p role="alert">尚未取得此运行的人工请求，请等待画布刷新后重新打开回复，核对完整问题再发送。</p>
-          )}
-          {intervention && (
+          {(intervention || showCurrentRequest) && (
             <section className="rounded-xl bg-amber-400/[.04] p-3 ring-1 ring-amber-300/15" aria-label="关联人工请求">
-              <div className="font-mono text-[10px] text-amber-300">关联请求 · {humanInterventionKindLabel(intervention.node)}</div>
+              <div className="font-mono text-[10px] text-amber-300">关联请求 · {intervention ? humanInterventionKindLabel(intervention.node) : "当前人工请求"}</div>
               <HumanRequestDetails
-                reason={intervention.reason}
-                guidance={intervention.guidance ?? null}
-                guidanceStatus={intervention.guidanceStatus ?? "loading"}
-                detailStatus={intervention.detailStatus ?? "loading"}
-                detailVersionMatches={intervention.detailVersionMatches === true}
-                detailError={intervention.detailError}
-                safetyMessage={humanInterventionSafetyMessage(intervention.node)}
-                onRetry={onRetryIntervention}
+                reason={currentPayload?.reason ?? intervention?.reason ?? ""}
+                guidance={currentPayload ? currentPayload.guidance ?? null : intervention?.guidance ?? null}
+                guidanceStatus={showCurrentRequest ? request.status === "loaded" ? currentPayload?.guidance ? "available" : "missing" : request.status : intervention?.guidanceStatus ?? "loading"}
+                detailStatus={showCurrentRequest ? request.status : intervention?.detailStatus ?? "loading"}
+                detailVersionMatches={showCurrentRequest ? request.status === "loaded" && (!intervention || intervention.detailVersionMatches === true) : intervention?.detailVersionMatches === true}
+                detailError={showCurrentRequest ? request.error : intervention?.detailError}
+                safetyMessage={intervention ? humanInterventionSafetyMessage(intervention.node) : null}
+                onRetry={() => { if (showCurrentRequest) request.retry(); onRetryIntervention?.(); }}
               />
               <p className="mt-2 text-[10px] leading-5 text-zinc-500">
                 本消息等待投递；若运行正在等待此回复，平台核验当前权限和恢复条件后，才会重新排队。消息送达、Agent 确认和任务完成分别更新。

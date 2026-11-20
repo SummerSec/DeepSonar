@@ -158,6 +158,24 @@ test("a reply saved after leaving and returning to a task cannot close its new d
     assert.equal(sendDisabled(), false);
     assert.equal(container.querySelector("textarea")!.value, "读取失败仍保留草稿");
     assert.equal(createMessage.mock.callCount(), 3, "loading, blocked and retry actions never send a message");
+
+    act(() => root.render(null));
+    let finishOldRead!: (detail: typeof currentDetail) => void;
+    const oldRead = new Promise<typeof currentDetail>(resolve => { finishOldRead = resolve; });
+    requestResult = oldRead;
+    renderWaiting(null);
+    act(() => root.render(null));
+    requestResult = Promise.resolve({ ...currentDetail,
+      human_request: { ...currentDetail.human_request!, event_id: "request-b" },
+      human_continuation: { ...currentDetail.human_continuation!, id: "request-b", revision: 7 },
+    });
+    await act(async () => { renderWaiting(null); await requestResult; });
+    type("重新打开后回复当前问题");
+    await act(async () => { finishOldRead(currentDetail); await oldRead; });
+    await act(async () => { send(); await saved; });
+    assert.deepEqual(createMessage.mock.calls[3]!.arguments[1].target, {
+      kind: "request", request_id: "request-b", expected_revision: 7,
+    }, "an old request read cannot overwrite the current composer's target");
   } finally {
     act(() => root.unmount());
     createMessage.mock.restore();
