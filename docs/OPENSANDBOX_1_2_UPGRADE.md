@@ -19,9 +19,9 @@ Dispatcher 在真实 provision 的失败出口独立记录服务故障。受控�
 
 试运行包的 `referenceFiles` 同时包含生产 Compose 挂载的 `management-health.py` 和 `resource-preflight.py`，按源码原字节复制，并在包内 `SHA256SUMS` 记录摘要。两个隔离生产 smoke 入口在各自项目目录复制同一脚本；回归执行实际复制语句并核对字节。`ci:unit:runtime-sandbox` 中的离线试运行 CLI 回归用合成镜像归档调用真实打包入口，核对两份脚本和摘要，无须启动 Docker。原 `issue-752-trial` 工作流的专用分支准入保持原契约，本分支不据其存在宣称已经执行试运行包验收。
 
-### #1176 覆盖与替代审计
+### #1176 覆盖与整合审计
 
-本地整合基线为固定 main `c3549c141e790f7745dd9ae0b622fcc596135ccc`。对照 PR #1176 的 `8646305726b4b77c2011a62292f33ff2da10c7c4`，本分支按范围吸收外置 Kubernetes 覆盖，复用 #1162 的探针、熔断与既有回归入口。以下是代码覆盖关系，工程验收仍等待本分支最终 SHA 的 Actions。
+前一轮本地实现以固定 main `c3549c141e790f7745dd9ae0b622fcc596135ccc` 为基线，按范围吸收 #1176 的外置 Kubernetes 覆盖。#1176 随后已由 SummerSec 合入 main，本轮将真实 merge commit `ee375858194c779f6e29e458e246dbf9725415d2` 合入本分支，其第二父提交为 `8646305726b4b77c2011a62292f33ff2da10c7c4`。两者均保留在本分支祖先链，冲突处理继续使用 #1162 的统一探针、熔断与回归入口。以下是代码覆盖关系，工程验收仍等待汇总 Draft #1177 最终 SHA 的 Actions。
 
 | #1176 改动面 | 本分支实现与证据入口 |
 | --- | --- |
@@ -31,7 +31,7 @@ Dispatcher 在真实 provision 的失败出口独立记录服务故障。受控�
 | 部署说明与契约断言 | 一键部署和部署视图覆盖三种拓扑，明确 List 与 Create 的证据边界，Kubernetes 的旧 `/health` 断言改为统一探针。 |
 | 额外打包与 smoke 缺口 | 试运行清单包含两份必需脚本，核心 runtime-sandbox 回归验证真实打包 CLI 及隔离 smoke 的实际复制语句。 |
 
-此实现语义覆盖上述 #1176 改动面，未纳入其原提交及 `readiness-probe.py`。本地整合不关闭或合并远端 PR，后续由主 Agent 按最终 SHA Actions 与评审结果决定 #1176 的替代收口。
+此实现保留 #1176 的真实提交历史及上述功能覆盖，当前运行入口统一为 `management-health.py`。合并带入的 `readiness-probe.py` 已移除，三种 Compose、部署说明和测试均使用正确的 `/v1/sandboxes` 与有界校验。试运行包及隔离 smoke 继续携带同一脚本，create 500 计数与未知效果重放边界保持原实现。该本地提交交由主 Agent 合入 #1177 统一推送和验收，来源 PR 的历史状态不代替汇总提交的 Actions 结果。
 
 回归入口包括 `pnpm ci:unit:runtime-cleanup`（本机合成 HTTP、List 200/create 500 正交、半开与固定码）、`pnpm ci:unit:runtime-sandbox`（三种 Compose、隔离 harness 的复制接线及离线试运行打包 CLI）、`pnpm ci:integration:dispatch-limits`（真实 PostgreSQL 的 unknown/pending/无结果等拒绝与明确未开始证据准入）。`gate-runtime` 还显式执行 `python3 deploy/opensandbox/management-health.test.py`，验证实际脚本的本机 HTTP 鉴权、端口、状态/慢响应、重定向拒绝和脱敏。`node --test deploy/issue752-package-trial.test.mjs` 是试运行包的额外 Actions 入口，需要 runner 提供 Docker Compose。上述回归全部仅在 GitHub Actions 执行，最终 SHA 待验，生产与目标 server 未执行。
 
