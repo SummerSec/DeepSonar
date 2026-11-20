@@ -187,7 +187,7 @@ DeepSonar 的四层真相是：PostgreSQL/API 保存管理与审计真相，Canv
 
 ### FR-JOB-005 未知外部效果禁止重放
 
-#1143 首片补充 [PTY 宿主清理证据](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)。通用对账不以 Attempt 终态证明运行退出，新观察仅在精确 owner、先提交凭据撤销、受管销毁确认后结清原终态 marker。独立 unknown 继续闭锁，无合法断点的整 Job 自动恢复未交付。真实 HTTP/PG/Runtime 受控回归接既有 Actions，最终 SHA 待验。
+#1143 首片补充 [PTY 宿主清理证据](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)。通用对账不以 Attempt 终态证明运行退出，新观察仅在精确 owner、先提交凭据撤销、受管销毁确认后结清原终态 marker。独立 unknown 继续闭锁，PTY 中断后的受治理自动恢复本轮未交付，由后续增强 [#1181](https://github.com/SummerSec/DeepSonar/issues/1181) 跟踪。真实 HTTP/PG/Runtime 受控回归接既有 Actions，最终 SHA 待验。
 
 - **规范要求**：当外部效果无法证明未发生（`effect_pending` / `unknown`，含崩溃、超时、取消后的未证实窗口）时，系统必须将 Attempt/Job 标为不可自动重放路径，通常进入 `orphan`/对账/人工路径，清理 Token、沙箱、画布同步和租约；`replay_policy` 不得被本次结算改宽。
 - **决策来源**：未知效果是事实状态，不是普通 transient error；猜测重放可能重复创建资源或修改目标。

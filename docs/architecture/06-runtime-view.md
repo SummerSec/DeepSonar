@@ -7,6 +7,8 @@
 
 ## Verify 补证无进展开关（#1133）
 
+用户于 2026-11-20 确认本轮收口无进展循环、关闭开关与人工技术收口。可信早期运行能力判定尚未交付，由后续增强 [#1179](https://github.com/SummerSec/DeepSonar/issues/1179) 跟踪。
+
 `closeVerifyRound` 复用 `rulesForProject` 的项目 → 全局 → env 有效规则。`maxNoProgressRounds=0` 关闭本入口的缺项重复刹车，正值继续采用独立阈值 `VERIFY_NO_PROGRESS_LIMIT=2`，第二次连续相同 `decision_missing` 回弹时收口 `needs_human`。每轮决策缺项仍写入 round 快照，业务轮数上限、证据门与基础设施失败处理继续分别执行。现有 PostgreSQL 生命周期夹具通过真实 `closeVerifyRound` 事务与轮次读写，覆盖 0 下连续三轮保持 `rework` 且无人工 blocker，以及 1、5 下第二轮收口并记录 `verify_no_progress`。回归接 `pnpm ci:integration:verify-eligibility`，本地未执行，最终 SHA Actions 待验。规则分类见[用量说明](../USAGE_LIMITS.md)。
 
 #1119/#1046 的[创建故障与管理探测](../OPENSANDBOX_1_2_UPGRADE.md#创建熔断与鉴权管理探测1119--1046)把服务故障计数与重放准入分别判断。真实 create 阶段 5xx 和目录创建 500 计入现有进程内熔断，未知效果仍拒绝重放。Scheduler 以带 `OPEN-SANDBOX-API-KEY` 的只读 List 探测管理面，List 成功与实际创建成功分别观测。半开单名额、出站前 episode 重查和过期准入延期沿用[默认不限调度配额的恢复边界](#默认不限的调度配额1123)。
@@ -87,7 +89,7 @@ Protocol freeze/declaration precede separately committed raw holdout exposure; l
 6. 严格解析及 readiness 在全部可选身份满额时返回 `provider_credential_all_at_capacity`，分类为 `transient_retryable`，下一步为等待容量。Job 创建显式允许持久化等待决定并保存 pending Job，防止派发输入丢失。Dispatcher 在暂停、定时、依赖及项目 FIFO 资格满足后观测容量阻挡，合并为单个 5 秒定时器，按既有每页最多 500 个候选的领取扫描重读，释放后再由领取锁准入。没有最大排队时长契约，pending 不因创建时间或执行 timeout 到期而取消。此计时器不创建预约或等待预算。
 7. 新快照的可选 `credential_selection` 使用 `deepsonar.credential-selection/v1`，记录观测时刻、选中 UUID、选择理由、稳定错误码，以及经过授权/模型/协议硬约束后的候选 UUID、健康状态、跳过原因及三层容量。健康排除的候选容量为 null。`reason=capacity_wait` 仅表示创建时容量已满的观测，其他选择的 `error_code=null`，不携带等待起点、deadline 或执行预算。 显式同质池全满时，新 Job 优先冻结凭据、模型、Provider 三层均未显式设为 0 的暂满账号；没有此类账号时保留原等待选择，恢复与异质池默认身份不轮换。该投影没有密钥、原生设置、账号名或地址。已有快照不补写，负载释放及恢复重验不改写原冻结决定。
 
-回归接既有 `ci:unit:capability-pack`、`ci:unit:runtime-cleanup`、并发单测、`ci:integration:role-config` 与 `ci:integration:dispatch-limits`。覆盖管理 API 配额、跨项目占用、三层零上限、健康与失效引用、默认仅平局优先、连续十次创建及领取不超 3/10 上限、冻结恢复、全满保留 pending、无通知释放唤醒和并发 claim。`role-config` 另接凭据选择及 Job 插入后的事务回滚、并发创建、重复 ingress 拒绝与释放后领取的组合回归，核对三层占用和原冻结审计。新增回归尚未执行，最终提交的 Actions 结果另验。跨 Provider 受治理等价映射、版本/能力约束与迁移规则尚未交付，当前 ModelDescriptor/FrozenModelDescriptor 没有此类身份字段，仍须独立设计。
+回归接既有 `ci:unit:capability-pack`、`ci:unit:runtime-cleanup`、并发单测、`ci:integration:role-config` 与 `ci:integration:dispatch-limits`。覆盖管理 API 配额、跨项目占用、三层零上限、健康与失效引用、默认仅平局优先、连续十次创建及领取不超 3/10 上限、冻结恢复、全满保留 pending、无通知释放唤醒和并发 claim。`role-config` 另接凭据选择及 Job 插入后的事务回滚、并发创建、重复 ingress 拒绝与释放后领取的组合回归，核对三层占用和原冻结审计。新增回归尚未执行，最终提交的 Actions 结果另验。跨 Provider 受治理等价映射、版本/能力约束与迁移规则尚未交付，当前 ModelDescriptor/FrozenModelDescriptor 没有此类身份字段。用户于 2026-11-20 确认本轮收口同 Provider 容量、恢复身份与创建回滚修复，跨 Provider 自动选择另由增强 [#1178](https://github.com/SummerSec/DeepSonar/issues/1178) 跟踪。
 
 项目 CLI/Provider 管理页独立加载账号列表，区分加载中、加载失败与成功空列表。只有成功读取当前项目可见账号后才判定默认账号和白名单引用失效；未加载成功时保存 CLI 不能清除默认账号或写入空凭据白名单。Pi 模型快照对账号目录中含 `/` 的完整模型 ID 保持一致，CLI 路由单独冻结，详见 [CLI 运行时契约](../AGENT_CLI_RUNTIME_ADAPTERS.md#pi-coding-agent-rpc140)。
 

@@ -173,4 +173,4 @@ IR-013 的[候选库回收](../../deploy/GENERATION_GC.md)映射规格、追溯�
 
 #1032 A1 三 CLI 凭据文件通道及[普通文本出口](../MODEL_GATEWAY_TRANSPARENCY.md#普通文本凭据出口1032)映射 NFR-SEC-003 / FR-CRED-003，DSH SDK 精确投影及 Claude 成功工具 PostToolUse 投影与本地拒绝沿原认证和请求入口实现，保留 helper 内容 hash 准入与 A2 边界。新增回归已接既有工作流，最终 SHA Actions 尚待验收；A2 仍待决定。
 
-#1143 的 [PTY 清理事实与精确对账](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)扩展 FR-JOB-005 与既有 Job 详情投影。新宿主证据、先撤销凭据再销毁、精确 owner 和失败保留已接线，无合法检查点的自动整 Job 恢复未交付，#1159 + #1167 + #1168 组合按人工续接专题核对，最终 SHA Actions 待验。
+#1143 的 [PTY 清理事实与精确对账](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)扩展 FR-JOB-005 与既有 Job 详情投影。新宿主证据、先撤销凭据再销毁、精确 owner 和失败保留已接线，PTY 中断后的受治理自动恢复本轮未交付，由后续增强 [#1181](https://github.com/SummerSec/DeepSonar/issues/1181) 跟踪，#1159 + #1167 + #1168 组合按人工续接专题核对，最终 SHA Actions 待验。

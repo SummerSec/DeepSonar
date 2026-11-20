@@ -523,4 +523,4 @@ RPC 完整帧按[帧与保存预算实现](packages/runtime-sandbox/src/pi-rpc-o
 
 #1126 的 Job 恢复界面按当前 Scheduler 动作与用户权限呈现，结果结论优先，维护者技术诊断默认折叠，详见[构件视图](docs/architecture/05-building-blocks.md#job-恢复提示1126)。恢复提交仍重新准入，最终 SHA Actions 待验。
 
-#1143 的 [PTY 清理事实与精确对账](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存宿主专用观察与原运行绑定，先提交旧凭据撤销及清理记录，再有界销毁并重核收口。DELETE 拒绝、超时和独立 unknown 分别保留；宿主 caller 不证明 OOM。无合法断点的整 Job 自动恢复尚未交付，晚 usage 与历史跨 Job 预算组合另验。
+#1143 的 [PTY 清理事实与精确对账](docs/AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存宿主专用观察与原运行绑定，先提交旧凭据撤销及清理记录，再有界销毁并重核收口。DELETE 拒绝、超时和独立 unknown 分别保留；宿主 caller 不证明 OOM。PTY 中断后的受治理自动恢复本轮未交付，由后续增强 [#1181](https://github.com/SummerSec/DeepSonar/issues/1181) 跟踪，晚 usage 与历史跨 Job 预算组合另验。

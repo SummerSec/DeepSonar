@@ -313,4 +313,4 @@ NFR-REL-001 的[行锁竞争认领唤醒](architecture/06-runtime-view.md#行锁
 
 #1126 的[Job 恢复提示](architecture/05-building-blocks.md#job-恢复提示1126)显示运行结论、折叠技术诊断，并同时核对当前动作和权限；真实组件回归已接现有 Actions，最终 SHA 待验。
 
-#1143 [PTY 清理事实与精确对账](AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存 DELETE 真实结果和宿主 caller，以先撤销凭据、再受管销毁并重核原 owner 的链路收口。独立 unknown 与旧无证据 run 保留，自动整 Job 恢复未交付，最终 SHA Actions 待验。
+#1143 [PTY 清理事实与精确对账](AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)保存 DELETE 真实结果和宿主 caller，以先撤销凭据、再受管销毁并重核原 owner 的链路收口。独立 unknown 与旧无证据 run 保留，PTY 中断后的受治理自动恢复本轮未交付，由后续增强 [#1181](https://github.com/SummerSec/DeepSonar/issues/1181) 跟踪，最终 SHA Actions 待验。

@@ -504,7 +504,7 @@ Scheduler 的宿主专用回调把 Job、Attempt、Sandbox、Process、时间和
 
 正常 finally 与现有对账 tick 仅处理具有这类新宿主观察的终态原 owner。首事务按 Canvas→Job→Attempt→effect→worker lease 核对当前身份，撤销旧 Control/Gateway grant 并提交 pending 清理记录。第二事务重核原 owner，最多等待销毁 25 秒；Worker plane 必须在持久指定 worker 上确认资源消失，缺 key、owner 冲突和不可达都拒绝。失败/超时或最终提交失败保留旧 grant 撤销、清理记录与 worker 归属，恢复准入继续阻塞。晚完成的销毁仍指向原 sandbox，不能据此在事务外补写成功。
 
-只有原终态收口生成、内容精确等于该 Attempt 状态的 unknown marker 可在确认销毁后结清。独立 unknown、其他效果和没有新宿主观察的历史 run 继续等待原有单条对账。通用对账不再把终态 Attempt 当作进程退出证明。清理成功仅确认资源收回，无合法 checkpoint 时自动整 Job 恢复尚未交付。历史失败原因不回填，旧 #1147 的 settled 后自动重派不采用；#1159 原 owner 晚 usage 结算组合另做有限集成，本切片不引入跨 Job 预算修改。
+只有原终态收口生成、内容精确等于该 Attempt 状态的 unknown marker 可在确认销毁后结清。独立 unknown、其他效果和没有新宿主观察的历史 run 继续等待原有单条对账。通用对账不再把终态 Attempt 当作进程退出证明。清理成功仅确认资源收回，PTY 中断后的受治理自动恢复本轮未交付，由后续增强 [#1181](https://github.com/SummerSec/DeepSonar/issues/1181) 跟踪。历史失败原因不回填，旧 #1147 的 settled 后自动重派不采用；#1159 原 owner 晚 usage 结算组合另做有限集成，本切片不引入跨 Job 预算修改。
 
 启动清理可能在显式 pending 清理记录写入前销毁沙箱。worker lease 的释放同时检查精确 Job/Attempt/effect 上的新宿主观察，清理状态缺省视为 pending，保留原 worker 直到清理事务确认成功。受控回归实际调用 `reconcileOnBoot`，覆盖先销毁并尝试释放、再精确对账确认的顺序。
 
