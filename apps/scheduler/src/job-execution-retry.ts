@@ -121,8 +121,8 @@ export async function retryPtyTransportJob(
     const current = await getActiveAttempt(tx, jobId, true);
     if (!owner || owner.canvas_id !== (locator?.canvas_id ?? null) || owner.latest_attempt_id !== attempt.id
       || !current || typeof current.id !== "string" || current.id !== attempt.id || current.cancel_requested !== false) return false;
-    const effects = await tx<{ status: string }[]>`
-      SELECT status FROM job_attempt_effects WHERE attempt_id = ${current.id}`;
+    const effects = await tx<{ kind: string; status: string }[]>`
+      SELECT effect_kind AS kind, status FROM job_attempt_effects WHERE attempt_id = ${current.id}`;
     if (!attemptEffectsAllowPtyRetry(effects)) return false;
     // A repair-bearing Job needs explicit safe generation admission; ordinary
     // automatic retries must not strand it on an unauthorized successor Attempt.

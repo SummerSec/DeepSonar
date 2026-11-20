@@ -59,9 +59,22 @@ export function planAutomaticPtyTransportRetry(consumedPtyTransportRetries: numb
 
 /**
  * 重派前置条件：本次 Attempt 不能在存在未收口外部效果时被重放。
- * 只有 `settled` 才算已收口；`planned` / `effect_pending` / `unknown` 一律拒绝
- * （比 Pi 流截断路径更严格，因为这里明确要求「无未知外部效果」）。
+ *
+ * #1181 评审修正：`agent_run` 效果是本次执行在启动时自己写入的 `effect_pending`，
+ * 只有 Attempt 终态收口才会结算，正常 dispatcher 入口永远看得到它在途——所以不能要求
+ * 「全部 settled」（那样重派永不可达）。这里允许且仅允许本次执行自己的 `agent_run`
+ * 处于 `effect_pending`（重派路径会随终态收口它），其余 `planned` / `effect_pending` /
+ * `unknown` 一律拒绝。
  */
-export function attemptEffectsAllowPtyRetry(rows: Array<{ status?: unknown }>): boolean {
-  return rows.every((row) => String(row.status ?? "") === "settled");
+export function attemptEffectsAllowPtyRetry(rows: Array<{ kind?: unknown; status?: unknown }>): boolean {
+  let inFlightAgentRun = 0;
+  for (const row of rows) {
+    if (String(row.status ?? "") === "settled") continue;
+    if (String(row.status ?? "") === "effect_pending" && String(row.kind ?? "") === "agent_run") {
+      inFlightAgentRun += 1;
+      continue;
+    }
+    return false;
+  }
+  return inFlightAgentRun <= 1;
 }

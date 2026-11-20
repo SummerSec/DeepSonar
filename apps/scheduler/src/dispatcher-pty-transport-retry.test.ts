@@ -39,12 +39,30 @@ test("#1143 PTY 传输中断归入 opensandbox_pty_transport，Host kill 保持 
   }
 });
 
-test("#1143 只有全部外部效果已 settled 才允许重派", () => {
+test("#1143 重派门禁允许本次执行自己的在途 agent_run，其余未收口效果一律拒绝（#1181 修正）", () => {
   assert.equal(attemptEffectsAllowPtyRetry([]), true, "没有登记效果时不存在未知外部效果");
-  assert.equal(attemptEffectsAllowPtyRetry([{ status: "settled" }, { status: "settled" }]), true);
-  for (const status of ["planned", "effect_pending", "unknown"]) {
-    assert.equal(attemptEffectsAllowPtyRetry([{ status: "settled" }, { status }]), false, status);
+  assert.equal(attemptEffectsAllowPtyRetry([
+    { kind: "provision", status: "settled" },
+    { kind: "agent_run", status: "effect_pending" },
+  ]), true, "正常 dispatcher 入口：provision 已结算、本次执行的 agent_run 仍在途");
+  assert.equal(attemptEffectsAllowPtyRetry([{ kind: "agent_run", status: "effect_pending" }]), true);
+  assert.equal(attemptEffectsAllowPtyRetry([{ kind: "settled", status: "settled" }]), true);
+  // 其它在途/未收口效果仍然拦：它们可能已经产生外部副作用。
+  assert.equal(attemptEffectsAllowPtyRetry([
+    { kind: "agent_run", status: "effect_pending" },
+    { kind: "gateway_model_request", status: "effect_pending" },
+  ]), false, "并发模型请求未收口时不能重放");
+  assert.equal(attemptEffectsAllowPtyRetry([
+    { kind: "agent_run", status: "effect_pending" },
+    { kind: "canvas_delivery", status: "unknown" },
+  ]), false, "未知外部效果不能重放");
+  for (const status of ["planned", "unknown", "effect_pending"]) {
+    assert.equal(attemptEffectsAllowPtyRetry([{ kind: "provision", status }]), false, `provision ${status}`);
   }
+  assert.equal(attemptEffectsAllowPtyRetry([
+    { kind: "agent_run", status: "effect_pending" },
+    { kind: "agent_run", status: "effect_pending" },
+  ]), false, "同一 Attempt 不该有两个在途 agent_run");
   assert.equal(attemptEffectsAllowPtyRetry([{ status: undefined }]), false, "无法确认的状态不能当已结算");
 });
 
