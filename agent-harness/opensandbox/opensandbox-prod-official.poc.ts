@@ -80,6 +80,7 @@ mkdirSync(join(dir, "opensandbox"), { recursive: true });
 writeFileSync(join(dir, "opensandbox/config.toml"), readFileSync(join(deployDir, "opensandbox/config.toml")));
 writeFileSync(join(dir, "opensandbox/resource-preflight.py"), readFileSync(join(deployDir, "opensandbox/resource-preflight.py")));
 writeFileSync(join(dir, "opensandbox/management-health.py"), readFileSync(join(deployDir, "opensandbox/management-health.py")));
+writeFileSync(join(dir, "opensandbox/dockerenv"), readFileSync(join(deployDir, "opensandbox/dockerenv")));
 writeFileSync(masterKeyFile, `${"00".repeat(32)}\n`, { mode: 0o600 });
 writeFileSync(envFile, [
   "POSTGRES_PASSWORD=poc-opensandbox-official",

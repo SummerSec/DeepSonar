@@ -167,6 +167,7 @@ async function runProdUpCase(): Promise<string> {
   writeFileSync(join(dir, "opensandbox/config.toml"), readFileSync(join(repoRoot, "deploy/opensandbox/config.toml")));
   writeFileSync(join(dir, "opensandbox/resource-preflight.py"), readFileSync(join(repoRoot, "deploy/opensandbox/resource-preflight.py")));
   writeFileSync(join(dir, "opensandbox/management-health.py"), readFileSync(join(repoRoot, "deploy/opensandbox/management-health.py")));
+  writeFileSync(join(dir, "opensandbox/dockerenv"), readFileSync(join(repoRoot, "deploy/opensandbox/dockerenv")));
   writeFileSync(envFile, [
     "POSTGRES_PASSWORD=poc-opensandbox",
     "BLOB_S3_ACCESS_KEY_ID=poc",

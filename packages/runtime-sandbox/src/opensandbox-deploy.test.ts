@@ -169,16 +169,20 @@ test("production, worker and external Kubernetes share authenticated List readin
   const port = external.match(/^port = (\d+)$/m)?.[1];
   assert.ok(port, "external server configuration declares its management port");
   assert.ok(k8sCompose.includes(`OPENSANDBOX_PROBE_PORT: "${port}"`));
+  const productionCompose = readFileSync(join(root, "deploy/docker-compose.opensandbox.prod.yml"), "utf8");
+  const mountedFiles = [...new Set([...productionCompose.matchAll(/\.\/(opensandbox\/[^:\s]+):/g)].map(match => match[1]!))];
+  assert.ok(mountedFiles.includes("opensandbox/dockerenv"));
   for (const file of ["agent-harness/test-opensandbox-poc.ts", "agent-harness/opensandbox/opensandbox-prod-official.poc.ts"]) {
     const source = readFileSync(join(root, file), "utf8");
-    const copy = source.split("\n").find(line => line.includes('writeFileSync(join(dir, "opensandbox/management-health.py")'));
-    assert.ok(copy, `${file} must stage the mounted health reader`);
     const dir = mkdtempSync(join(tmpdir(), "opensandbox-health-input-"));
     try {
       mkdirSync(join(dir, "opensandbox"));
-      runInNewContext(copy, { dir, repoRoot: root, deployDir: join(root, "deploy"), join, readFileSync, writeFileSync }, { timeout: 1000 });
-      assert.deepEqual(readFileSync(join(dir, "opensandbox/management-health.py")),
-        readFileSync(join(root, "deploy/opensandbox/management-health.py")));
+      for (const mountedFile of mountedFiles) {
+        const copy = source.split("\n").find(line => line.includes(`writeFileSync(join(dir, "${mountedFile}")`));
+        assert.ok(copy, `${file} must stage mounted file ${mountedFile}`);
+        runInNewContext(copy, { dir, repoRoot: root, deployDir: join(root, "deploy"), join, readFileSync, writeFileSync }, { timeout: 1000 });
+        assert.deepEqual(readFileSync(join(dir, mountedFile)), readFileSync(join(root, "deploy", mountedFile)));
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
