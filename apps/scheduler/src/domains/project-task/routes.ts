@@ -276,7 +276,7 @@ async function withProjectJobQuota<T extends Record<string, unknown>>(
   rows: T[],
 ): Promise<Array<T & {
   active_jobs: number;
-  max_concurrent_jobs: number;
+  max_concurrent_jobs: number | null;
   max_concurrent_jobs_source: "project" | "global";
 }>> {
   if (rows.length === 0) return [];

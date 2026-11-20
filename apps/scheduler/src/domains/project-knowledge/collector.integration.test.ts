@@ -97,6 +97,33 @@ test("the fourth source retry deadline delays batch readiness without an expired
   });
 });
 
+test("an old source in backoff does not admit an unrelated fresh source", async () => {
+  await withKnowledgeDatabase(async db => {
+    const old = await source(db, undefined, 1, "old");
+    const fresh = await source(db, old.projectId, 1, "fresh", true);
+    const next = new Date(Date.now() + 5 * 60_000).toISOString();
+    async function recordRetryDeadline(attempt: number, deadline: string) {
+      await db`INSERT INTO audit_logs(actor_type,actor_id,action,project_id,resource_type,resource_id,result,after_json)
+        VALUES('system','scheduler','project_knowledge.source_collection_retry',${old.projectId},'job',${old.jobId},
+          'error',${db.json({ attempt, next_attempt_at: deadline })})`;
+    }
+    await recordRetryDeadline(1, next);
+    const before = await readProjectCollectionStatus(db, old.projectId);
+    assert.equal(before.state, "accumulating");
+    assert.equal(before.next_collection_at, next);
+    assert.equal((await readNextKnowledgeWake(db))?.toISOString(), next);
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 0);
+    assert.equal((await db`SELECT id FROM project_knowledge_work`).length, 0);
+
+    // Represent a due retry without sleeping or rewriting audit history.
+    await recordRetryDeadline(2, new Date(Date.now() - 60_000).toISOString());
+    assert.equal((await readProjectCollectionStatus(db, old.projectId)).state, "ready");
+    assert.equal(await collectProjectKnowledgeSources(db, GOVERNANCE), 1);
+    const links = await db`SELECT resource_id FROM audit_logs WHERE action='project_knowledge.source_collected'`;
+    assert.deepEqual(new Set(links.map(row => row.resource_id)), new Set([old.jobId, fresh.jobId]));
+  });
+});
+
 test("an input that does not fit stays queued while later small input fills the bounded batch", async () => {
   await withKnowledgeDatabase(async db => {
     const large = await source(db, undefined, 18), deferred = await source(db, large.projectId, 2);

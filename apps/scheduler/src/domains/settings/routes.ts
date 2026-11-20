@@ -32,9 +32,10 @@ import { extractModelsFromSettings } from "../../provider-settings.js";
 export function projectJobQuotaPatchExceedsGlobal(
   currentQuota: unknown,
   nextQuota: unknown,
-  globalMaxJobsPerProject: number,
+  globalMaxJobsPerProject: number | null,
 ): boolean {
-  return typeof nextQuota === "number"
+  return globalMaxJobsPerProject !== null
+    && typeof nextQuota === "number"
     && nextQuota !== currentQuota
     && nextQuota > globalMaxJobsPerProject;
 }

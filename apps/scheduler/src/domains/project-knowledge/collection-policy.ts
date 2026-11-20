@@ -35,7 +35,7 @@ export function projectCollectionPolicyQuery(db: KnowledgeDb, projectId?: string
     ORDER BY a.project_id,a.resource_id,a.id
   ), backlog AS (
     SELECT project_id,count(*)::int AS pending_sources,
-      LEAST(GREATEST(MIN(at)+${COLLECTION_INTERVAL_HOURS}*interval '1 hour',MIN(ready_at)),
+      LEAST(MIN(GREATEST(at+${COLLECTION_INTERVAL_HOURS}*interval '1 hour',ready_at)),
         (array_agg(ready_at ORDER BY ready_at))[${COLLECTION_MIN_SOURCES}]) AS accumulated_at
     FROM sources GROUP BY project_id
   ), policy AS (

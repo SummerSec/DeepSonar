@@ -323,6 +323,12 @@ Control的evaluation_plan增加每例显式task_inputs，平台校验引用已�
 
 POST /projects/{id}/task-queue/yield 使用 jobs:control 与项目范围，输入取共享 ProjectTaskQueueYieldInput 严格契约。mutation_id 绑定 expected_item_id、request_id 与 expected_revision，同编号内容冲突 409。响应沿原有界队列投影，新增 yielded 和 yield_request。Web 队列提供显式按钮及暂存分组。回复仍走既有消息 API，保存后原子排队尾，202 只证明回复保存，执行等待原准入。具体限制与注意力成本见[队列专题](../PROJECT_TASK_QUEUE.md#人工等待显式让位1074)。
 
+## 不限配额接口（#1123）
+
+`PATCH /global-settings` 的三个并发键接受 null 或 1–1000 整数，0、负数、小数、字符串和越界数返回 400 并指出字段。`rules` 是已存声明，`effective_rules` 是含环境变量及有限全局上限约束的生效投影。未修改字段不应回写生效值。显式 null 持久化，覆盖环境变量限制。
+
+项目设置 `maxConcurrentJobs=null` 清除项目覆盖并继承，0 暂停新 claim。全局不限时允许显式有限项目值。项目列表 `max_concurrent_jobs`、Dashboard `global_cap` 均可为 null，Dashboard 无有限分母时 utilization 为 null。`GET /health` 的 `concurrency_limits` 提供三个当前全局生效值，各字段 null 为不限，整个对象 null 表示读数不可用。健康端点权限及就绪条件沿用既有规则。
+
 ## PTY 清理证据详情（#1143）
 
 GET `/jobs/{id}` 增加可选 `process_diagnostics`，沿用 `tasks:read` 与项目归属权限，上限 64 条。它通过原 effect 的宿主审计引用读取精确进程终止、DELETE 与 sandbox 销毁结果。`host_kill_caller` 表示实际宿主调用来源，退出码未知保持 null。字段与恢复限制见 [PTY 清理专题](../AGENT_CLI_RUNTIME_ADAPTERS.md#pty-清理事实与精确对账1143)，最终 SHA Actions 待验。

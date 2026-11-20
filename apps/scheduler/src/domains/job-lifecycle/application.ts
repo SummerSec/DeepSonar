@@ -140,7 +140,7 @@ export function createSqlJobLifecycleApplication(
     },
 
     /** Requeue a transient pre-running provision failure with a fresh Attempt. */
-    async retryProvisioning(jobId, error, snapshotIdentity, resourceLabels) {
+    async retryProvisioning(jobId, error, snapshotIdentity, resourceLabels, reason = "provision_retry") {
       return atomically(async (tx) => {
         const [row] = await tx`
           UPDATE jobs
@@ -150,7 +150,7 @@ export function createSqlJobLifecycleApplication(
           RETURNING id, status`;
         if (!row) return null;
         await settleAttemptTerminal(tx, jobId, "failed", {
-          reason: "provision_retry",
+          reason,
           retry_scheduled: true,
         }, error);
         await tx`
